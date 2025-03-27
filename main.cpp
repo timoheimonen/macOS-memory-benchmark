@@ -1,4 +1,4 @@
-// Version 0.1
+// Version 0.11
 // by Timo Heimonen <timo.heimonen@gmail.com>
 
 #include <iostream>       // For printing (cout)
@@ -14,7 +14,7 @@
 #include <mach/mach_time.h> // mach_absolute_time for high-resolution timer
 
 // --- Version Information ---
-#define SOFTVERSION 0.1f // Define the software version
+#define SOFTVERSION 0.11f // Define the software version
 
 // --- Assembly function declarations ---
 // Use extern "C" to prevent C++ name mangling,
