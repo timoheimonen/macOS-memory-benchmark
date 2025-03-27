@@ -91,7 +91,7 @@ int main(int argc, char *argv[]) {
     // IMPORTANT! The OS might not allocate physical memory pages
     // until they are first written to (demand paging).
     // Initializing ensures the memory is actually mapped and ready.
-    std::cout << "Initializing memory (touching every page)..." << std::endl;
+    std::cout << "Initializing memory..." << std::endl;
     char* src_ptr = static_cast<char*>(src_buffer);
     char* dst_ptr = static_cast<char*>(dst_buffer);
     size_t page_size = getpagesize(); // Get the system's page size
