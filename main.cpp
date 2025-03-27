@@ -1,3 +1,6 @@
+// Version 0.1
+// by Timo Heimonen <timo.heimonen@gmail.com>
+
 #include <iostream>       // For printing (cout)
 #include <vector>         // Easy way to manage smaller data sets (maybe not for main buffers)
 #include <chrono>         // Alternative timing, but mach_absolute_time is more precise on macOS
@@ -9,6 +12,9 @@
 #include <sys/mman.h>     // mmap / munmap for memory allocation
 #include <unistd.h>       // sysconf, getpagesize
 #include <mach/mach_time.h> // mach_absolute_time for high-resolution timer
+
+// --- Version Information ---
+#define SOFTVERSION 0.1f // Define the software version
 
 // --- Assembly function declarations ---
 // Use extern "C" to prevent C++ name mangling,
@@ -61,7 +67,7 @@ int main(int argc, char *argv[]) {
     size_t buffer_size = 512 * 1024 * 1024; // 512 MiB
     int iterations = 100; // How many times the core loop is run per measurement
 
-    std::cout << "--- Memory Speed Test ---" << std::endl;
+    std::cout << "--- Memory Speed Test v" << SOFTVERSION << " ---" << std::endl;
     std::cout << "Buffer size: " << buffer_size / (1024.0 * 1024.0) << " MiB" << std::endl;
     std::cout << "Iterations / measurement: " << iterations << std::endl;
 
