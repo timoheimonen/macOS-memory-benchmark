@@ -16,11 +16,9 @@ The benchmark performs the following steps:
 6.  Frees the allocated memory using `munmap`.  
 
 ## Target Platform  
-
-* **macOS** on **Apple Silicon (ARM64)** processors (e.g., M1, M2, M3, M4 series).  
-
-**Note:** This code is specific to macOS/ARM64 due to the use of `mach/mach_time.h` and ARM64 assembly (`loops.s`). It will **not** compile or run correctly on Intel-based Macs or other operating systems like Linux or Windows without significant modifications.  
-
+  
+macOS on Apple Silicon (ARM64) processors (e.g., M1, M2, M3, M4 series).  
+  
 ## Features  
 
 * Measures memory copy bandwidth (Read + Write).  
