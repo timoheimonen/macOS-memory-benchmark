@@ -70,13 +70,32 @@ In the Terminal, go to the directory with `main.cpp` and `loops.s`. Run these co
     ```
 This makes the program file named `memory_benchmark`.
 
+## Usage
+
+In the Terminal, go to the directory with `memory_benchmark` and use these commands:
+
+1. **Help**
+    ```bash
+    ./memory_benchmark -h
+    ```
+2. **Run with default parameters*
+    ```bash
+    ./memory_benchmark
+    ```
+3. **Run with custom parameters example**
+    ```bash
+    ./memory_benchmark -iterations 500 -buffersize 512
+    ```
+
 ## Example output (Mac Mini M4 24GB)
 ```text
------ macOS-memory-benchmark v0.19 -----
+----- macOS-memory-benchmark v0.2 -----
 Copyright 2025 Timo Heimonen <timo.heimonen@gmail.com>
 Program is licensed under GNU GPL v3. See <https://www.gnu.org/licenses/>
-Buffer Size: 512 MiB
-Found CPU cores: 10
+Buffer Size (per buffer): 512 MiB (512 MB requested)
+Total Allocation Size: ~1536 MiB (for 3 buffers)
+Iterations: 1000
+CPU Cores Detected: 10
 
 --- Allocating Buffers ---
 Allocating src buffer (512 MiB)...
@@ -84,7 +103,7 @@ Allocating dst buffer (512 MiB)...
 Allocating lat buffer (512 MiB)...
 Buffers allocated.
 
-Initializing src/dst buffers...
+Initializing src/dst buffers (touching pages)...
 Src/Dst buffers initialized.
 Setting up pointer chain (stride 128 bytes, 4194304 pointers)...
 Pointer chain setup complete.
@@ -98,32 +117,31 @@ Warm-up complete.
 
 --- Starting Measurements (10 threads, 1000 iterations each) ---
 Measuring Read Bandwidth...
-Read complete.
+Read complete. (Dummy checksum: 0)
 Measuring Write Bandwidth...
 Write complete.
 Measuring Copy Bandwidth...
 Copy complete.
-Measuring Latency...
+Measuring Latency (single thread)...
 Latency complete.
 
 --- Results ---
 Configuration:
-  Buffer Size: 512 MiB
+  Buffer Size (per buffer): 512 MiB (512 MB requested)
+  Total Allocation Size: ~1536 MiB
   Iterations: 1000
-  Threads: 10
+  Threads (Bandwidth Tests): 10
 
 Bandwidth Tests (multi-threaded):
-  Read : 110.801 GB/s
-         (Total time: 4.84538 s)
-  Write: 71.3647 GB/s
-         (Total time: 7.52292 s)
-  Copy : 105.19 GB/s
-         (Total time: 10.2076 s)
+  Read : 110.204 GB/s (Total time: 4.87159 s)
+  Write: 67.8076 GB/s (Total time: 7.91756 s)
+  Copy : 105.559 GB/s (Total time: 10.1719 s)
 
-Latency Test (single-threaded):
-  Total time: 19.6903 s
+Latency Test (single-threaded, pointer chase):
+  Total time: 19.6819 s
   Total accesses: 200000000
-  Average latency: 98.4514 ns
+  Stride: 128 bytes
+  Average latency: 98.4097 ns
 --------------
 
 Freeing memory...
