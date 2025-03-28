@@ -30,7 +30,7 @@ macOS on Apple Silicon (ARM64) processors (e.g., M1, M2, M3, M4 series).
 * Measures memory copy bandwidth (Read + Write).
 * Measures memory access latency.
 * Uses `mmap` for large memory allocation (intended to exceed caches).
-* Core copy loop and latency loop implemented in hand-written ARM64 assembly (`loops.s`).
+* Core copy loop and latency loop implemented in ARM64 assembly (`loops.s`).
 * Utilizes optimized non-temporal pair instructions (`ldnp`/`stnp`) for high-throughput copying in the assembly loop.
 * Latency measured via pointer chasing using dependent loads (`ldr x0, [x0]`) in assembly.
 * Employs `mach_absolute_time` for high-resolution timing.

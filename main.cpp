@@ -106,7 +106,7 @@ int main(int argc, char *argv[]) {
     // --- 1. Configuration ---
     // Bandwidth test config
     size_t bw_buffer_size = 512 * 1024 * 1024; // 512 MiB
-    int bw_iterations = 100;                   // Number of copy operations per measurement.
+    int bw_iterations = 500;                   // Number of copy operations per measurement.
 
     // Latency test config
     size_t lat_buffer_size = 512 * 1024 * 1024; // 512 MiB, should exceed L3 cache size.
