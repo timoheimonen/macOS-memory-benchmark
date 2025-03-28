@@ -38,7 +38,7 @@
 #include <mach/mach_host.h> // Added for host_statistics64
 
 // --- Version Information ---
-#define SOFTVERSION 0.20f // Updated version number
+#define SOFTVERSION 0.21f // Updated version number
 
 // --- Function Forward Declarations ---
 int get_total_logical_cores();
@@ -324,7 +324,7 @@ int main(int argc, char *argv[]) {
     lat_buffer = mmap(nullptr, buffer_size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
 
     if (src_buffer == MAP_FAILED || dst_buffer == MAP_FAILED || lat_buffer == MAP_FAILED) {
-        perror("mmap failed");
+        perror("Memory allocation failed");
         if (src_buffer != MAP_FAILED) munmap(src_buffer, buffer_size);
         if (dst_buffer != MAP_FAILED) munmap(dst_buffer, buffer_size);
         if (lat_buffer != MAP_FAILED) munmap(lat_buffer, buffer_size);
@@ -334,13 +334,11 @@ int main(int argc, char *argv[]) {
 
     // --- 3. Memory Initialization & Setup ---
     std::cout << "\nInitializing src/dst buffers..." << std::endl;
-    char* src_init = static_cast<char*>(src_buffer);
-    char* dst_init = static_cast<char*>(dst_buffer);
-    // Use page_size variable here, DO NOT redefine
-    for (size_t i = 0; i < buffer_size; i += page_size) {
-        src_init[i] = (char)(i & 0xFF);
-        dst_init[i] = 0;
+    for (size_t i = 0; i < buffer_size; ++i) {
+        static_cast<char*>(src_buffer)[i] = (char)(i % 256); // Example pattern
     }
+    // Initialize dst_buffer with zeros (using memset)
+    memset(dst_buffer, 0, buffer_size);
     std::cout << "Src/Dst buffers initialized." << std::endl;
 
     setup_latency_chain(lat_buffer, buffer_size, lat_stride);
