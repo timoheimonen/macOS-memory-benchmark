@@ -104,7 +104,7 @@ In the Terminal, go to the directory with `memory_benchmark` and use these comma
 
 ## Example output (Mac Mini M4 24GB)
 ```text
------ macOS-memory-benchmark v0.2 -----
+----- macOS-memory-benchmark v0.21 -----
 Copyright 2025 Timo Heimonen <timo.heimonen@gmail.com>
 Program is licensed under GNU GPL v3. See <https://www.gnu.org/licenses/>
 Buffer Size (per buffer): 512 MiB (512 MB requested)
@@ -148,15 +148,15 @@ Configuration:
   Threads (Bandwidth Tests): 10
 
 Bandwidth Tests (multi-threaded):
-  Read : 110.204 GB/s (Total time: 4.87159 s)
-  Write: 67.8076 GB/s (Total time: 7.91756 s)
-  Copy : 105.559 GB/s (Total time: 10.1719 s)
+  Read : 112.07 GB/s (Total time: 4.79051 s)
+  Write: 68.399 GB/s (Total time: 7.84911 s)
+  Copy : 105.368 GB/s (Total time: 10.1904 s)
 
 Latency Test (single-threaded, pointer chase):
-  Total time: 19.6819 s
+  Total time: 19.3946 s
   Total accesses: 200000000
   Stride: 128 bytes
-  Average latency: 98.4097 ns
+  Average latency: 96.9731 ns
 --------------
 
 Freeing memory...
