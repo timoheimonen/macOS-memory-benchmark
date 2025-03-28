@@ -4,7 +4,7 @@ A simple benchmark tool designed to measure memory copy bandwidth and memory acc
 
 ## Description
 
-This project provides a basic C++ program that measures:
+This project provides a C++/asm program that measures:
 1. The speed of copying data between two large memory buffers allocated using `mmap`.
 2. The average time (latency) for dependent memory reads across a large buffer, simulating random access patterns.
 
