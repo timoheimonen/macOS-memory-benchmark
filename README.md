@@ -69,7 +69,7 @@ by Timo Heimonen <timo.heimonen@gmail.com>
 
 --- Bandwidth Test Setup ---
 Buffer size: 512 MiB
-Iterations: 100
+Iterations: 500
 Allocating bandwidth buffers (1024 MiB total)...
 Bandwidth buffers allocated.
 
@@ -98,14 +98,14 @@ Latency measurement complete.
 
 --- Results ---
 Bandwidth Test:
-  Total time: 1.18811 s
-  Data copied: 107.374 GB
-  Memory bandwidth (copy): 90.3743 GB/s
+  Total time: 5.93758 s
+  Data copied: 536.871 GB
+  Memory bandwidth (copy): 90.4192 GB/s
 
 Latency Test:
-  Total time: 19.3736 s
+  Total time: 19.6515 s
   Total accesses: 200000000
-  Average latency: 96.8682 ns
+  Average latency: 98.2576 ns
 --------------
 
 Freeing memory...
