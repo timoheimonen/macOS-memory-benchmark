@@ -68,8 +68,9 @@ This makes the program file named `memory_benchmark`.
 
 ## Example output (Mac Mini M4 24GB)
 ```text
---- macOS-memory-benchmark v0.17 ---
-by Timo Heimonen <timo.heimonen@gmail.com>
+----- macOS-memory-benchmark v0.18 -----
+Copyright 2025 Timo Heimonen <timo.heimonen@gmail.com>
+Program is licensed under GNU GPL v3. See <https://www.gnu.org/licenses/>
 Buffer Size: 512 MiB
 Found CPU cores: 10
 
@@ -108,17 +109,17 @@ Configuration:
   Threads: 10
 
 Bandwidth Tests (multi-threaded):
-  Read : 112.143 GB/s
-         (Total time: 2.39369 s)
-  Write: 65.4454 GB/s
-         (Total time: 4.10167 s)
-  Copy : 105.528 GB/s
-         (Total time: 5.08745 s)
+  Read : 110.894 GB/s
+         (Total time: 2.42064 s)
+  Write: 71.3736 GB/s
+         (Total time: 3.76099 s)
+  Copy : 105.362 GB/s
+         (Total time: 5.09547 s)
 
 Latency Test (single-threaded):
-  Total time: 19.6304 s
+  Total time: 19.3236 s
   Total accesses: 200000000
-  Average latency: 98.152 ns
+  Average latency: 96.6182 ns
 --------------
 
 Freeing memory...

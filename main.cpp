@@ -1,4 +1,4 @@
-// Version 0.17
+// Version 0.18
 //
 // Copyright 2025 Timo Heimonen <timo.heimonen@gmail.com>
 //
@@ -35,7 +35,7 @@
 #include <sys/sysctl.h>   // sysctlbyname (for core count)
 
 // --- Version Information ---
-#define SOFTVERSION 0.17f // Updated version number
+#define SOFTVERSION 0.18f // Updated version number
 
 // Get total logical core count (P+E) via sysctl.
 int get_total_logical_cores() {
@@ -167,6 +167,7 @@ int main(int argc, char *argv[]) {
 
     std::cout << "----- macOS-memory-benchmark v" << SOFTVERSION << " -----" << std::endl;
     std::cout << "Copyright 2025 Timo Heimonen <timo.heimonen@gmail.com>" << std::endl;
+    std::cout << "Program is licensed under GNU GPL v3. See <https://www.gnu.org/licenses/>" << std::endl;
     std::cout << "Buffer Size: " << buffer_size / (1024.0*1024.0) << " MiB" << std::endl;
     std::cout << "Found CPU cores: " << num_threads << std::endl;
     
