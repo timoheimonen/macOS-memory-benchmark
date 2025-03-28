@@ -151,8 +151,8 @@ int main(int argc, char *argv[]) {
     size_t lat_stride = 128;                    // Latency test stride
     size_t lat_num_accesses = 200 * 1000 * 1000;// Latency test access count
 
-    std::cout << "--- macOS-memory-benchmark v" << SOFTVERSION << " ---" << std::endl;
-    std::cout << "by Timo Heimonen <timo.heimonen@gmail.com>" << std::endl;
+    std::cout << "----- macOS-memory-benchmark v" << SOFTVERSION << " -----" << std::endl;
+    std::cout << "Copyright 2025 Timo Heimonen <timo.heimonen@gmail.com>" << std::endl;
     std::cout << "Buffer Size: " << buffer_size / (1024.0*1024.0) << " MiB" << std::endl;
     std::cout << "Found CPU cores: " << num_threads << std::endl;
     
