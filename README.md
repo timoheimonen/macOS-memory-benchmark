@@ -78,6 +78,20 @@ In the Terminal, go to the directory with `memory_benchmark` and use these comma
     ```bash
     ./memory_benchmark -h
     ```
+    Example output:
+    ```text
+    Usage: ./memory_benchmark [options]
+    Version: 0.21
+
+    Options:
+    -iterations <count>   Number of iterations for R/W/Copy tests (default: 1000)
+    -buffersize <size_mb> Size for EACH of the 3 buffers in Megabytes (MB) as integer (default: 512).
+                            The maximum allowed <size_mb> is automatically determined such that
+                            3 * <size_mb> does not exceed ~80% of available system memory.
+    -h, --help            Show this help message and exit
+    ```
+
+Example: ./memory_benchmark -iterations 500 -buffersize 1024
 2. **Run with default parameters*
     ```bash
     ./memory_benchmark
