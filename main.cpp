@@ -1,4 +1,4 @@
-// Version 0.18
+// Version 0.19
 //
 // Copyright 2025 Timo Heimonen <timo.heimonen@gmail.com>
 //
@@ -35,7 +35,7 @@
 #include <sys/sysctl.h>   // sysctlbyname (for core count)
 
 // --- Version Information ---
-#define SOFTVERSION 0.18f // Updated version number
+#define SOFTVERSION 0.19f // Updated version number
 
 // Get total logical core count (P+E) via sysctl.
 int get_total_logical_cores() {
@@ -159,7 +159,7 @@ void setup_latency_chain(void* buffer, size_t buffer_size, size_t stride) {
 int main(int argc, char *argv[]) {
     // --- 1. Configuration ---
     size_t buffer_size = 512 * 1024 * 1024; // Common buffer size (src/dst/lat)
-    int iterations = 500;                   // Iterations for EACH R/W/Copy test
+    int iterations = 1000;                   // Iterations for EACH R/W/Copy test
     int num_threads = get_total_logical_cores(); // Use all logical cores for BW tests
 
     size_t lat_stride = 128;                    // Latency test stride
