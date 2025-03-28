@@ -1,66 +1,68 @@
-# macOS ARM64 Memory Bandwidth Test
+# macOS ARM64 Memory Performance Test
 
-A simple benchmark tool designed to measure memory copy bandwidth and memory access latency on macOS systems running on Apple Silicon (ARM64) processors.
+A simple tool to measure memory copy bandwidth and memory access latency on macOS with Apple Silicon (ARM64).
 
 ## Description
 
-This project provides a C++/asm program that measures:
-1. The speed of copying data between two large memory buffers allocated using `mmap`.
-2. The average time (latency) for dependent memory reads across a large buffer, simulating random access patterns.
+This C++/asm program measures:
+1. How fast data can be copied between two big memory blocks allocated using `mmap`.
+2. The average time (latency) it takes to do dependent memory reads in a large buffer, similar to random access.
 
-The core memory operations (copy and latency measurement) are implemented in a separate ARM64 assembly file (`loops.s`). The copy loop utilizes NEON instructions for potentially higher throughput, while the latency test uses dependent loads to measure access time accurately.
+The main copy and latency tests are done in a separate ARM64 assembly file (`loops.s`). The copy loop uses optimized non-temporal instructions (`ldnp`/`stnp`) for faster copying, and the latency test uses dependent loads (`ldr x0, [x0]`) to measure access time.
 
-The benchmark performs the following steps:
+The benchmark does these steps:
 
-1.  Allocates three large memory buffers using `mmap` (src, dst for bandwidth; lat for latency).
-2.  Initializes the bandwidth buffer memory ("touches" each page) to ensure physical pages are mapped by the OS.
-3.  Sets up a pseudo-random pointer chain within the latency buffer (also ensures page mapping).
-4.  Performs separate warm-up runs for both copy and latency tests to allow CPU frequency scaling and cache/TLB stabilization.
-5.  Bandwidth Test: Measures the time taken to copy the contents of the source buffer to the destination buffer repeatedly using a high-resolution timer (`mach_absolute_time`).
-6.  Latency Test: Measures the time taken to perform a large number of dependent pointer loads (chasing the chain) using `mach_absolute_time`.
-7.  Calculates and prints the effective memory bandwidth and the average memory access latency.
-8.  Frees all allocated memory using `munmap`.
+1.  Gets three large memory blocks using `mmap` (src, dst for bandwidth; lat for latency).
+2.  Writes to the bandwidth buffers to make sure the OS maps the memory.
+3.  Creates a random pointer chain inside the latency buffer (this also maps its memory).
+4.  Does warm-up runs for both copy and latency tests to let the CPU speed and caches settle.
+5.  Bandwidth Test: Times the copy from source to destination buffer multiple times using the precise `mach_absolute_time` timer.
+6.  Latency Test: Times doing many dependent pointer reads (following the chain) using `mach_absolute_time`.
+7.  Calculates and shows the memory bandwidth and the average memory access latency.
+8.  Releases the memory using `munmap`.
 
 ## Target Platform
 
-macOS on Apple Silicon (ARM64) processors (e.g., M1, M2, M3, M4 series).
+macOS on Apple Silicon (M1, M2, M3, M4, etc.).
 
 ## Features
 
-* Measures memory copy bandwidth (Read + Write).
-* Measures memory access latency.
-* Uses `mmap` for large memory allocation (intended to exceed caches).
-* Core copy loop and latency loop implemented in ARM64 assembly (`loops.s`).
-* Utilizes optimized non-temporal pair instructions (`ldnp`/`stnp`) for high-throughput copying in the assembly loop.
-* Latency measured via pointer chasing using dependent loads (`ldr x0, [x0]`) in assembly.
-* Employs `mach_absolute_time` for high-resolution timing.
-* Includes memory initialization/setup and warm-up phases for more stable results.
+* Checks memory copy speed (Read + Write).
+* Checks memory access latency.
+* Uses `mmap` for big memory blocks (bigger than CPU caches).
+* Main copy and latency loops are in ARM64 assembly (`loops.s`).
+* Uses optimized non-temporal pair instructions (`ldnp`/`stnp`) for high-throughput copying in the assembly loop.
+* Checks latency by pointer chasing with dependent loads (`ldr x0, [x0]`) in assembly.
+* Uses multiple threads (`std::thread`) for the bandwidth test.
+* Uses `mach_absolute_time` for precise timing.
+* Initializes memory and does warm-ups for more stable results.
 
 ## Prerequisites
 
 * macOS (Apple Silicon).
-* Xcode Command Line Tools: Provides the `clang++` compiler and `as` assembler.
-    * Install them by running: `xcode-select --install` in the Terminal.
+* Xcode Command Line Tools (includes `clang++` compiler and `as` assembler).
+    * Install with: `xcode-select --install` in the Terminal.
 
 ## Building
 
-Open your Terminal and navigate to the directory containing `main.cpp` and `loops.s`. Run the following commands step-by-step:
+In the Terminal, go to the directory with `main.cpp` and `loops.s`. Run these commands:
 
-1.  **Compile the C++ source file into an object file:** 
+1.  **Compile C++ code:**
     ```bash
     clang++ -O3 -std=c++17 -c main.cpp -o main.o -arch arm64
     ```
 
-2.  **Assemble the assembly code into an object file:** 
+2.  **Assemble assembly code:**
     ```bash
     as loops.s -o loops.o -arch arm64
     ```
 
-3.  **Link the object files into the final executable:** 
+3.  **Link to create the program:**
     ```bash
-    clang++ main.o loops.o -o memory_benchmark -arch arm64
+    # Note: -pthread might be needed on some systems, but often not with clang++ on macOS
+    clang++ main.o loops.o -o memory_benchmark -arch arm64 -pthread
     ```
-This sequence will create an executable file named `memory_benchmark`.
+This makes the program file named `memory_benchmark`.
 
 ## Example output (Mac Mini M4 24GB)
 ```text
