@@ -5,7 +5,7 @@ A simple tool to measure memory write/read/copy bandwidth and memory access late
 ## Description
 
 This C++/asm program measures:
-1. How fast data can be copied between two big memory blocks allocated using `mmap`.
+1. How fast data can be written/read/copied between two big memory blocks allocated using `mmap`.
 2. The average time (latency) it takes to do dependent memory reads in a large buffer, similar to random access.
 
 The main copy and latency tests are done in a separate ARM64 assembly file (`loops.s`). The copy loop uses optimized non-temporal instructions (`ldnp`/`stnp`) for faster copying, and the latency test uses dependent loads (`ldr x0, [x0]`) to measure access time.
