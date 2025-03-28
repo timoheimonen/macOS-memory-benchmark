@@ -188,31 +188,92 @@ int main(int argc, char *argv[]) {
         max_allowed_mb_per_buffer = max_total_allowed_mb / 3;
 
     } else {
-        std::cerr << "Warning: Could not determine available memory automatically. Using fallback limit." << std::endl;
+        std::cerr
+            << "Warning: Could not determine available memory automatically. "
+               "Using fallback limit."
+            << std::endl;
         max_allowed_mb_per_buffer = fallback_total_limit_mb / 3;
-        std::cout << "Info: Setting maximum allowed size PER buffer to fallback limit of " << max_allowed_mb_per_buffer << " MB (total fallback ~" << fallback_total_limit_mb << " MB)." << std::endl;
-    }
+        std::cout << "Info: Setting maximum allowed size PER buffer to fallback "
+                     "limit of "
+                  << max_allowed_mb_per_buffer << " MB (total fallback ~"
+                  << fallback_total_limit_mb << " MB)." << std::endl;
+      }
 
     if (max_allowed_mb_per_buffer < minimum_limit_mb_per_buffer) {
         max_allowed_mb_per_buffer = minimum_limit_mb_per_buffer;
     }
 
     // --- Parse Command Line Arguments ---
-    for (int i = 1; i < argc; ++i) {
-        std::string arg = argv[i];
-        if (arg == "-iterations") {
-             if (i + 1 < argc) { /* ... iterations parsing ... */
-                try { unsigned long val = std::stoul(argv[i + 1]); if (val == 0 || val > std::numeric_limits<int>::max()) { std::cerr << "Error: Invalid value for -iterations: " << argv[i + 1] << ". Must be a positive integer within int range." << std::endl; return EXIT_FAILURE; } iterations = static_cast<int>(val); i++; } catch (const std::invalid_argument& e) { std::cerr << "Error: Invalid number format for -iterations: " << argv[i + 1] << std::endl; return EXIT_FAILURE; } catch (const std::out_of_range& e) { std::cerr << "Error: Value out of range for -iterations: " << argv[i + 1] << std::endl; return EXIT_FAILURE; }
-             } else { std::cerr << "Error: Missing value after -iterations" << std::endl; print_usage(argv[0]); return EXIT_FAILURE; }
-        } else if (arg == "-buffersize") {
-             if (i + 1 < argc) { /* ... buffersize parsing using max_allowed_mb_per_buffer ... */
-                try { unsigned long val = std::stoul(argv[i + 1]); if (val == 0 || val > max_allowed_mb_per_buffer) { std::cerr << "Error: Invalid value for -buffersize: " << argv[i + 1] << ". Must be a positive integer between 1 and " << max_allowed_mb_per_buffer << " (inclusive, limit per buffer based on total available memory for 3 buffers)." << std::endl; return EXIT_FAILURE; } buffer_size_mb = val; i++; } catch (const std::invalid_argument& e) { std::cerr << "Error: Invalid number format for -buffersize (expecting integer MB): " << argv[i + 1] << std::endl; return EXIT_FAILURE; } catch (const std::out_of_range& e) { std::cerr << "Error: Value out of range for -buffersize: " << argv[i + 1] << std::endl; return EXIT_FAILURE; }
-             } else { std::cerr << "Error: Missing value after -buffersize" << std::endl; print_usage(argv[0]); return EXIT_FAILURE; }
-        } else if (arg == "-h" || arg == "--help") {
-             print_usage(argv[0]); return EXIT_SUCCESS;
-        } else { std::cerr << "Error: Unknown option: " << arg << std::endl; print_usage(argv[0]); return EXIT_FAILURE; }
+  for (int i = 1; i < argc; ++i) {
+    std::string arg = argv[i];
+    if (arg == "-iterations") {
+      if (i + 1 < argc) {
+        try {
+          unsigned long val = std::stoul(argv[i + 1]);
+          if (val == 0 || val > std::numeric_limits<int>::max()) {
+            std::cerr << "Error: Invalid value for -iterations: "
+                      << argv[i + 1]
+                      << ". Must be a positive integer within int range."
+                      << std::endl;
+            return EXIT_FAILURE;
+          }
+          iterations = static_cast<int>(val);
+          i++;
+        } catch (const std::invalid_argument& e) {
+          std::cerr << "Error: Invalid number format for -iterations: "
+                    << argv[i + 1] << std::endl;
+          return EXIT_FAILURE;
+        } catch (const std::out_of_range& e) {
+          std::cerr << "Error: Value out of range for -iterations: "
+                    << argv[i + 1] << std::endl;
+          return EXIT_FAILURE;
+        }
+      } else {
+        std::cerr << "Error: Missing value after -iterations" << std::endl;
+        print_usage(argv[0]);
+        return EXIT_FAILURE;
+      }
+    } else if (arg == "-buffersize") {
+      if (i + 1 < argc) {
+        try {
+          unsigned long val = std::stoul(argv[i + 1]);
+          if (val == 0 || val > max_allowed_mb_per_buffer) {
+            std::cerr << "Error: Invalid value for -buffersize: "
+                      << argv[i + 1]
+                      << ". Must be a positive integer between 1 and "
+                      << max_allowed_mb_per_buffer
+                      << " (inclusive, limit per buffer based on total "
+                         "available memory for 3 buffers)."
+                      << std::endl;
+            return EXIT_FAILURE;
+          }
+          buffer_size_mb = val;
+          i++;
+        } catch (const std::invalid_argument& e) {
+          std::cerr
+              << "Error: Invalid number format for -buffersize (expecting "
+                 "integer MB): "
+              << argv[i + 1] << std::endl;
+          return EXIT_FAILURE;
+        } catch (const std::out_of_range& e) {
+          std::cerr << "Error: Value out of range for -buffersize: "
+                    << argv[i + 1] << std::endl;
+          return EXIT_FAILURE;
+        }
+      } else {
+        std::cerr << "Error: Missing value after -buffersize" << std::endl;
+        print_usage(argv[0]);
+        return EXIT_FAILURE;
+      }
+    } else if (arg == "-h" || arg == "--help") {
+      print_usage(argv[0]);
+      return EXIT_SUCCESS;
+    } else {
+      std::cerr << "Error: Unknown option: " << arg << std::endl;
+      print_usage(argv[0]);
+      return EXIT_FAILURE;
     }
-
+  }
     // --- Calculate final buffer size in bytes ---
     const size_t bytes_per_mb = 1024 * 1024;
     size_t buffer_size = static_cast<size_t>(buffer_size_mb) * bytes_per_mb;
@@ -293,21 +354,59 @@ int main(int argc, char *argv[]) {
 
     // --- READ WARM-UP ---
     std::cout << "  Read warm-up..." << std::endl;
-    warmup_threads.clear(); size_t offset = 0; size_t chunk_base_size = buffer_size / num_threads; size_t chunk_remainder = buffer_size % num_threads;
-    for (int t = 0; t < num_threads; ++t) { size_t current_chunk_size = chunk_base_size + (t < chunk_remainder ? 1 : 0); if (current_chunk_size == 0) continue; char* src_chunk = static_cast<char*>(src_buffer) + offset; warmup_threads.emplace_back([src_chunk, current_chunk_size, &dummy_checksum_warmup_atomic](){ uint64_t checksum = memory_read_loop_asm(src_chunk, current_chunk_size); dummy_checksum_warmup_atomic.fetch_xor(checksum, std::memory_order_relaxed); }); offset += current_chunk_size; }
-    for (auto& t : warmup_threads) if (t.joinable()) t.join();
+    warmup_threads.clear();
+    size_t offset = 0;
+    size_t chunk_base_size = buffer_size / num_threads;
+    size_t chunk_remainder = buffer_size % num_threads;
+    for (int t = 0; t < num_threads; ++t) {
+        size_t current_chunk_size = chunk_base_size + (t < chunk_remainder ? 1 : 0);
+        if (current_chunk_size == 0) continue;
+        char* src_chunk = static_cast<char*>(src_buffer) + offset;
+        warmup_threads.emplace_back([src_chunk, current_chunk_size,
+                                    &dummy_checksum_warmup_atomic]() {
+        uint64_t checksum = memory_read_loop_asm(src_chunk, current_chunk_size);
+        dummy_checksum_warmup_atomic.fetch_xor(checksum,
+                                                std::memory_order_relaxed);
+        });
+        offset += current_chunk_size;
+    }
+    for (auto& t : warmup_threads)
+        if (t.joinable()) t.join();
 
     // --- WRITE WARM-UP ---
     std::cout << "  Write warm-up..." << std::endl;
-    warmup_threads.clear(); offset = 0; chunk_base_size = buffer_size / num_threads; chunk_remainder = buffer_size % num_threads; // Recalculate needed if changed
-    for (int t = 0; t < num_threads; ++t) { size_t current_chunk_size = chunk_base_size + (t < chunk_remainder ? 1 : 0); if (current_chunk_size == 0) continue; char* dst_chunk = static_cast<char*>(dst_buffer) + offset; warmup_threads.emplace_back(memory_write_loop_asm, dst_chunk, current_chunk_size); offset += current_chunk_size; }
-    for (auto& t : warmup_threads) if (t.joinable()) t.join();
+    warmup_threads.clear();
+    offset = 0;
+    chunk_base_size = buffer_size / num_threads;
+    chunk_remainder = buffer_size % num_threads; // Recalculate needed if changed
+    for (int t = 0; t < num_threads; ++t) {
+        size_t current_chunk_size = chunk_base_size + (t < chunk_remainder ? 1 : 0);
+        if (current_chunk_size == 0) continue;
+        char* dst_chunk = static_cast<char*>(dst_buffer) + offset;
+        warmup_threads.emplace_back(memory_write_loop_asm, dst_chunk,
+                                    current_chunk_size);
+        offset += current_chunk_size;
+    }
+    for (auto& t : warmup_threads)
+        if (t.joinable()) t.join();
 
     // --- COPY WARM-UP ---
     std::cout << "  Copy warm-up..." << std::endl;
-    warmup_threads.clear(); offset = 0; chunk_base_size = buffer_size / num_threads; chunk_remainder = buffer_size % num_threads;
-    for (int t = 0; t < num_threads; ++t) { size_t current_chunk_size = chunk_base_size + (t < chunk_remainder ? 1 : 0); if (current_chunk_size == 0) continue; char* src_chunk = static_cast<char*>(src_buffer) + offset; char* dst_chunk = static_cast<char*>(dst_buffer) + offset; warmup_threads.emplace_back(memory_copy_loop_asm, dst_chunk, src_chunk, current_chunk_size); offset += current_chunk_size; }
-    for (auto& t : warmup_threads) if (t.joinable()) t.join();
+    warmup_threads.clear();
+    offset = 0;
+    chunk_base_size = buffer_size / num_threads;
+    chunk_remainder = buffer_size % num_threads;
+    for (int t = 0; t < num_threads; ++t) {
+        size_t current_chunk_size = chunk_base_size + (t < chunk_remainder ? 1 : 0);
+        if (current_chunk_size == 0) continue;
+        char* src_chunk = static_cast<char*>(src_buffer) + offset;
+        char* dst_chunk = static_cast<char*>(dst_buffer) + offset;
+        warmup_threads.emplace_back(memory_copy_loop_asm, dst_chunk, src_chunk,
+                                    current_chunk_size);
+        offset += current_chunk_size;
+    }
+    for (auto& t : warmup_threads)
+        if (t.joinable()) t.join();
 
     // --- LATENCY WARM-UP ---
     std::cout << "  Latency warm-up (single thread)..." << std::endl;
@@ -316,24 +415,87 @@ int main(int argc, char *argv[]) {
     std::cout << "Warm-up complete." << std::endl;
 
     // --- 5. Measurements ---
-    std::cout << "\n--- Starting Measurements (" << num_threads << " threads, " << iterations << " iterations each) ---" << std::endl;
-    std::vector<std::thread> threads; threads.reserve(num_threads);
+    std::cout << "\n--- Starting Measurements (" << num_threads
+                << " threads, " << iterations << " iterations each) ---"
+                << std::endl;
+    std::vector<std::thread> threads;
+    threads.reserve(num_threads);
     HighResTimer timer;
 
     // --- READ TEST ---
-    std::cout << "Measuring Read Bandwidth..." << std::endl; total_read_checksum = 0; timer.start();
-    for (int i = 0; i < iterations; ++i) { threads.clear(); offset = 0; chunk_base_size = buffer_size / num_threads; chunk_remainder = buffer_size % num_threads; for (int t = 0; t < num_threads; ++t) { size_t current_chunk_size = chunk_base_size + (t < chunk_remainder ? 1 : 0); if (current_chunk_size == 0) continue; char* src_chunk = static_cast<char*>(src_buffer) + offset; threads.emplace_back([src_chunk, current_chunk_size, &total_read_checksum](){ uint64_t checksum = memory_read_loop_asm(src_chunk, current_chunk_size); total_read_checksum.fetch_xor(checksum, std::memory_order_relaxed); }); offset += current_chunk_size; } for (auto& t : threads) if (t.joinable()) t.join(); }
-    total_read_time = timer.stop(); std::cout << "Read complete." << std::endl;
+    std::cout << "Measuring Read Bandwidth..." << std::endl;
+    total_read_checksum = 0;
+    timer.start();
+    for (int i = 0; i < iterations; ++i) {
+        threads.clear();
+        offset = 0;
+        chunk_base_size = buffer_size / num_threads;
+        chunk_remainder = buffer_size % num_threads;
+        for (int t = 0; t < num_threads; ++t) {
+        size_t current_chunk_size =
+            chunk_base_size + (t < chunk_remainder ? 1 : 0);
+        if (current_chunk_size == 0) continue;
+        char* src_chunk = static_cast<char*>(src_buffer) + offset;
+        threads.emplace_back([src_chunk, current_chunk_size,
+                                &total_read_checksum]() {
+            uint64_t checksum = memory_read_loop_asm(src_chunk, current_chunk_size);
+            total_read_checksum.fetch_xor(checksum, std::memory_order_relaxed);
+        });
+        offset += current_chunk_size;
+        }
+        for (auto& t : threads)
+        if (t.joinable()) t.join();
+    }
+    total_read_time = timer.stop();
+    std::cout << "Read complete." << std::endl;
 
     // --- WRITE TEST ---
-    std::cout << "Measuring Write Bandwidth..." << std::endl; timer.start();
-    for (int i = 0; i < iterations; ++i) { threads.clear(); offset = 0; chunk_base_size = buffer_size / num_threads; chunk_remainder = buffer_size % num_threads; for (int t = 0; t < num_threads; ++t) { size_t current_chunk_size = chunk_base_size + (t < chunk_remainder ? 1 : 0); if (current_chunk_size == 0) continue; char* dst_chunk = static_cast<char*>(dst_buffer) + offset; threads.emplace_back(memory_write_loop_asm, dst_chunk, current_chunk_size); offset += current_chunk_size; } for (auto& t : threads) if (t.joinable()) t.join(); }
-    total_write_time = timer.stop(); std::cout << "Write complete." << std::endl;
+    std::cout << "Measuring Write Bandwidth..." << std::endl;
+    timer.start();
+    for (int i = 0; i < iterations; ++i) {
+        threads.clear();
+        offset = 0;
+        chunk_base_size = buffer_size / num_threads;
+        chunk_remainder = buffer_size % num_threads;
+        for (int t = 0; t < num_threads; ++t) {
+        size_t current_chunk_size =
+            chunk_base_size + (t < chunk_remainder ? 1 : 0);
+        if (current_chunk_size == 0) continue;
+        char* dst_chunk = static_cast<char*>(dst_buffer) + offset;
+        threads.emplace_back(memory_write_loop_asm, dst_chunk,
+                            current_chunk_size);
+        offset += current_chunk_size;
+        }
+        for (auto& t : threads)
+        if (t.joinable()) t.join();
+    }
+    total_write_time = timer.stop();
+    std::cout << "Write complete." << std::endl;
 
     // --- COPY TEST ---
-    std::cout << "Measuring Copy Bandwidth..." << std::endl; timer.start();
-    for (int i = 0; i < iterations; ++i) { threads.clear(); offset = 0; chunk_base_size = buffer_size / num_threads; chunk_remainder = buffer_size % num_threads; for (int t = 0; t < num_threads; ++t) { size_t current_chunk_size = chunk_base_size + (t < chunk_remainder ? 1 : 0); if (current_chunk_size == 0) continue; char* src_chunk = static_cast<char*>(src_buffer) + offset; char* dst_chunk = static_cast<char*>(dst_buffer) + offset; threads.emplace_back(memory_copy_loop_asm, dst_chunk, src_chunk, current_chunk_size); offset += current_chunk_size; } for (auto& t : threads) if (t.joinable()) t.join(); }
-    total_copy_time = timer.stop(); std::cout << "Copy complete." << std::endl;
+    std::cout << "Measuring Copy Bandwidth..." << std::endl;
+    timer.start();
+    for (int i = 0; i < iterations; ++i) {
+        threads.clear();
+        offset = 0;
+        chunk_base_size = buffer_size / num_threads;
+        chunk_remainder = buffer_size % num_threads;
+        for (int t = 0; t < num_threads; ++t) {
+        size_t current_chunk_size =
+            chunk_base_size + (t < chunk_remainder ? 1 : 0);
+        if (current_chunk_size == 0) continue;
+        char* src_chunk = static_cast<char*>(src_buffer) + offset;
+        char* dst_chunk = static_cast<char*>(dst_buffer) + offset;
+        threads.emplace_back(memory_copy_loop_asm, dst_chunk, src_chunk,
+                            current_chunk_size);
+        offset += current_chunk_size;
+        }
+        for (auto& t : threads)
+        if (t.joinable()) t.join();
+    }
+    total_copy_time = timer.stop();
+    std::cout << "Copy complete." << std::endl;
+
 
     // --- LATENCY TEST ---
     std::cout << "Measuring Latency (single thread)..." << std::endl; uintptr_t* lat_start_ptr = (uintptr_t*)lat_buffer; timer.start();
