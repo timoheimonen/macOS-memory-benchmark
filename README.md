@@ -55,7 +55,7 @@ Open your Terminal and navigate to the directory containing `main.cpp` and `loop
 This sequence will create an executable file named `memory_benchmark`.  
 
 ## Example output (Mac Mini M4 24GB)  
-'''text
+```text
 --- Memory Speed Test ---  
 Buffer size: 512 MiB  
 Iterations / measurement: 100  
