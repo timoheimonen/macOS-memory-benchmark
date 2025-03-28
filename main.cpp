@@ -272,7 +272,7 @@ int main(int argc, char *argv[]) {
     std::cout << "Buffers allocated." << std::endl;
 
     // --- 3. Memory Initialization & Setup ---
-    std::cout << "\nInitializing src/dst buffers (touching pages)..." << std::endl;
+    std::cout << "\nInitializing src/dst buffers..." << std::endl;
     char* src_init = static_cast<char*>(src_buffer);
     char* dst_init = static_cast<char*>(dst_buffer);
     // Use page_size variable here, DO NOT redefine
