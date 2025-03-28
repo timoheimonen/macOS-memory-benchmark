@@ -68,7 +68,7 @@ This makes the program file named `memory_benchmark`.
 
 ## Example output (Mac Mini M4 24GB)
 ```text
---- macOS-memory-benchmark v0.16 ---
+--- macOS-memory-benchmark v0.17 ---
 by Timo Heimonen <timo.heimonen@gmail.com>
 Buffer Size: 512 MiB
 Found CPU cores: 10

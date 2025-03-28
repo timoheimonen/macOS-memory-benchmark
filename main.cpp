@@ -1,5 +1,5 @@
 // Version 0.17
-// by Timo Heimonen <timo.heimonen@gmail.com>
+// Copyright 2025 Timo Heimonen <timo.heimonen@gmail.com>
 
 #include <iostream>       // cout
 #include <vector>         // std::vector
