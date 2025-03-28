@@ -66,21 +66,24 @@ This makes the program file named `memory_benchmark`.
 
 ## Example output (Mac Mini M4 24GB)
 ```text
---- macOS-memory-benchmark v0.14 ---
+--- macOS-memory-benchmark v0.15 ---
 by Timo Heimonen <timo.heimonen@gmail.com>
 
 --- Bandwidth Test Setup ---
 Buffer size: 512 MiB
 Iterations: 200
-Threads: 4
+Threads: 10
 Allocating bandwidth buffers (1024 MiB total)...
 Bandwidth buffers allocated.
 
 --- Latency Test Setup ---
+Buffer size: 512 MiB
+Stride: 128 bytes
+Accesses: 200000000
 Allocating latency buffer (512 MiB)...
 Latency buffer allocated.
 
-Initializing bandwidth buffers...
+Initializing bandwidth buffers (touching pages)...
 Bandwidth buffers initialized.
 Setting up pointer chain (stride 128 bytes, 4194304 pointers)...
 Pointer chain setup complete.
@@ -90,22 +93,22 @@ Bandwidth warm-up complete.
 Performing latency warm-up run...
 Latency warm-up complete.
 
-Starting multi-threaded bandwidth measurement (4 threads)...
+Starting multi-threaded bandwidth measurement (10 threads)...
 Bandwidth measurement complete.
 
 Starting latency measurement...
 Latency measurement complete.
 
 --- Results ---
-Bandwidth Test (4 threads):
-  Total time: 2.09598 s
+Bandwidth Test (10 threads):
+  Total time: 2.03149 s
   Data copied: 214.748 GB
-  Memory bandwidth (copy): 102.457 GB/s
+  Memory bandwidth (copy): 105.71 GB/s
 
 Latency Test:
-  Total time: 19.699 s
+  Total time: 19.6962 s
   Total accesses: 200000000
-  Average latency: 98.4948 ns
+  Average latency: 98.481 ns
 --------------
 
 Freeing memory...

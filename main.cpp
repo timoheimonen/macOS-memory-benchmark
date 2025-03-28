@@ -1,11 +1,11 @@
-// Version 0.14
+// Version 0.15
 // by Timo Heimonen <timo.heimonen@gmail.com>
 
 #include <iostream>       // cout
 #include <vector>         // std::vector
 #include <chrono>         // Timers (fallback)
 #include <numeric>        // std::iota, std::accumulate
-#include <cstdlib>        // exit, EXIT_FAILURE
+#include <cstdlib>        // exit, EXIT_FAILURE, perror
 #include <cstddef>        // size_t
 #include <random>         // std::shuffle, std::random_device, std::mt19937_64
 #include <algorithm>      // std::shuffle, std::min
@@ -20,30 +20,59 @@
 #include <sys/sysctl.h>   // sysctlbyname (for core count)
 
 // --- Version Information ---
-#define SOFTVERSION 0.14f
+#define SOFTVERSION 0.15f
 
-// --- Helper Function to Get Performance Core Count ---
-// Returns P-core count, falls back to total logical cores, then to 1.
-int get_p_core_count() {
-    int cores = 0;
-    size_t len = sizeof(cores);
-    // Try hw.perflevel0.logicalcpu_max first (P-cores)
-    if (sysctlbyname("hw.perflevel0.logicalcpu_max", &cores, &len, NULL, 0) == 0 && cores > 0) {
-        return cores;
+// Get total logical core count (P+E).
+int get_total_logical_cores() {
+    int p_cores = 0;
+    int e_cores = 0;
+    size_t len = sizeof(int);
+    bool p_core_ok = false;
+    bool e_core_ok = false;
+
+    // Try P-cores (perf level 0)
+    if (sysctlbyname("hw.perflevel0.logicalcpu_max", &p_cores, &len, NULL, 0) == 0 && p_cores > 0) {
+        p_core_ok = true;
+    } else {
+        p_cores = 0; // Ensure 0 on failure
     }
-    // Fallback: hw.logicalcpu_max (Total logical cores P+E)
-    len = sizeof(cores);
-    if (sysctlbyname("hw.logicalcpu_max", &cores, &len, NULL, 0) == 0 && cores > 0) {
-        return cores;
+
+    // Try E-cores (perf level 1)
+    len = sizeof(int); // Reset len for next call
+    if (sysctlbyname("hw.perflevel1.logicalcpu_max", &e_cores, &len, NULL, 0) == 0 && e_cores >= 0) {
+         e_core_ok = true;
+    } else {
+        e_cores = 0; // Ensure 0 on failure
     }
-    return 1; // Default to 1 on error
+
+    // Return sum if P & E detection was successful
+    if (p_core_ok && e_core_ok) {
+        return p_cores + e_cores;
+    }
+
+    // Fallback 1: Total logical cores via sysctl
+    int total_cores = 0;
+    len = sizeof(total_cores);
+     if (sysctlbyname("hw.logicalcpu_max", &total_cores, &len, NULL, 0) == 0 && total_cores > 0) {
+         return total_cores;
+     }
+
+     // Fallback 2: C++ hardware_concurrency()
+     unsigned int hc = std::thread::hardware_concurrency();
+     if (hc > 0) {
+        return hc;
+     }
+
+     // Fallback 3: Default to 1
+     std::cerr << "Warning: Failed to detect core count, defaulting to 1." << std::endl;
+    return 1;
 }
 
 
 // --- Assembly function declarations ---
 // Use extern "C" to prevent C++ name mangling.
 extern "C" {
-    // Optimized Bandwidth test (e.g., 128B non-temporal copy)
+    // Optimized Bandwidth test (128B non-temporal copy)
     void memory_copy_loop_asm(void* dst, const void* src, size_t byteCount);
 
     // Latency test (pointer chasing)
@@ -58,20 +87,26 @@ struct HighResTimer {
     HighResTimer() {
         // Get timer calibration info once.
         if (mach_timebase_info(&timebase_info) != KERN_SUCCESS) {
-            perror("mach_timebase_info failed"); // Use perror for system errors
+            perror("mach_timebase_info failed");
             exit(EXIT_FAILURE);
         }
     }
-    void start() { start_ticks = mach_absolute_time(); }
+    // Start the timer
+    void start() {
+        start_ticks = mach_absolute_time();
+    }
     // Return elapsed time in seconds.
     double stop() {
         uint64_t end = mach_absolute_time();
-        return static_cast<double>(end - start_ticks) * timebase_info.numer / timebase_info.denom / 1e9;
+        uint64_t elapsed_ticks = end - start_ticks;
+        double elapsed_nanos = static_cast<double>(elapsed_ticks) * timebase_info.numer / timebase_info.denom;
+        return elapsed_nanos / 1e9;
     }
     // Return elapsed time in nanoseconds.
     double stop_ns() {
         uint64_t end = mach_absolute_time();
-        return static_cast<double>(end - start_ticks) * timebase_info.numer / timebase_info.denom;
+        uint64_t elapsed_ticks = end - start_ticks;
+        return static_cast<double>(elapsed_ticks) * timebase_info.numer / timebase_info.denom;
     }
 };
 
@@ -106,13 +141,13 @@ void setup_latency_chain(void* buffer, size_t buffer_size, size_t stride) {
 
 int main(int argc, char *argv[]) {
     // --- 1. Configuration ---
-    size_t bw_buffer_size = 512 * 1024 * 1024; // 512 MiB (src/dst) - large to exceed L3 cache
-    int bw_iterations = 200;                   // Number of full buffer copies per measurement
-    int num_threads = get_p_core_count();      // Threads for bandwidth test (P-cores or total)
+    size_t bw_buffer_size = 512 * 1024 * 1024; // 512 MiB (src/dst) - should exceed L3 cache
+    int bw_iterations = 200;                   // Number of full buffer copies
+    int num_threads = get_total_logical_cores(); // Use all logical cores (P+E or fallback)
 
-    size_t lat_buffer_size = 512 * 1024 * 1024; // 512 MiB - large to exceed L3 cache
-    size_t lat_stride = 128;                    // Stride - match cache line size (e.g., 128B on Apple Silicon)
-    size_t lat_num_accesses = 200 * 1000 * 1000;// Number of dependent loads for latency average
+    size_t lat_buffer_size = 512 * 1024 * 1024; // 512 MiB - should exceed L3 cache
+    size_t lat_stride = 128;                    // Stride - aim for cache line size (e.g., 128B on Apple Silicon)
+    size_t lat_num_accesses = 200 * 1000 * 1000;// Number of dependent loads for latency avg
 
     std::cout << "--- macOS-memory-benchmark v" << SOFTVERSION << " ---" << std::endl;
     std::cout << "by Timo Heimonen <timo.heimonen@gmail.com>" << std::endl;
@@ -135,7 +170,6 @@ int main(int argc, char *argv[]) {
     dst_buffer = mmap(nullptr, bw_buffer_size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     if (src_buffer == MAP_FAILED || dst_buffer == MAP_FAILED) {
         perror("mmap failed for bandwidth buffers");
-        // Simple cleanup on failure
         if (src_buffer != MAP_FAILED) munmap(src_buffer, bw_buffer_size);
         return EXIT_FAILURE;
     }
@@ -149,7 +183,6 @@ int main(int argc, char *argv[]) {
     lat_buffer = mmap(nullptr, lat_buffer_size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
      if (lat_buffer == MAP_FAILED) {
         perror("mmap failed for latency buffer");
-        // Cleanup all allocated buffers
         if (src_buffer != MAP_FAILED) munmap(src_buffer, bw_buffer_size);
         if (dst_buffer != MAP_FAILED) munmap(dst_buffer, bw_buffer_size);
         return EXIT_FAILURE;
@@ -163,17 +196,17 @@ int main(int argc, char *argv[]) {
     size_t page_size = getpagesize();
     // Write to first byte of each page to ensure physical allocation
     for (size_t i = 0; i < bw_buffer_size; i += page_size) {
-        src_init[i] = (char)(i & 0xFF); // Write some data
+        src_init[i] = (char)(i & 0xFF);
         dst_init[i] = 0;
     }
     std::cout << "Bandwidth buffers initialized." << std::endl;
 
-    // Setup latency buffer (also touches pages)
+    // Setup latency buffer pointer chain (also touches pages)
     setup_latency_chain(lat_buffer, lat_buffer_size, lat_stride);
 
     // --- 4. Warm-up Runs ---
     HighResTimer timer;
-    // Single-threaded warm-up is simpler and usually sufficient
+    // Single-threaded warm-up for simplicity
     std::cout << "\nPerforming bandwidth warm-up run (single thread)..." << std::endl;
     memory_copy_loop_asm(dst_buffer, src_buffer, bw_buffer_size);
     std::cout << "Bandwidth warm-up complete." << std::endl;
@@ -188,43 +221,41 @@ int main(int argc, char *argv[]) {
     std::vector<std::thread> threads;
     threads.reserve(num_threads);
 
-    timer.start(); // Start timer before loop
+    timer.start(); // Start timer before iterations
 
     for (int i = 0; i < bw_iterations; ++i) {
-        threads.clear();
+        threads.clear(); // Reuse vector
         size_t offset = 0;
         size_t chunk_base_size = bw_buffer_size / num_threads;
         size_t chunk_remainder = bw_buffer_size % num_threads;
 
+        // Divide work and launch threads
         for (int t = 0; t < num_threads; ++t) {
-            // Distribute remainder across first 'chunk_remainder' threads
-            size_t current_chunk_size = chunk_base_size + (t < chunk_remainder ? 1 : 0);
-            if (current_chunk_size == 0) continue; // Safety check
+            size_t current_chunk_size = chunk_base_size + (t < chunk_remainder ? 1 : 0); // Distribute remainder
+            if (current_chunk_size == 0) continue;
 
             char* src_chunk = static_cast<char*>(src_buffer) + offset;
             char* dst_chunk = static_cast<char*>(dst_buffer) + offset;
 
-            // Launch thread for its chunk
             threads.emplace_back(memory_copy_loop_asm, dst_chunk, src_chunk, current_chunk_size);
-
             offset += current_chunk_size;
         }
 
-        // Wait for all threads in this iteration
+        // Wait for threads to finish this iteration
         for (auto& t : threads) {
             if (t.joinable()) {
                 t.join();
             }
         }
-        // Optional: Swap src/dst pointers here for next iteration if needed
+        // Optional: Swap src/dst pointers for next iteration
         // std::swap(src_buffer, dst_buffer);
     }
 
-    total_bw_time = timer.stop(); // Stop timer after loop
+    total_bw_time = timer.stop(); // Stop timer after all iterations
     std::cout << "Bandwidth measurement complete." << std::endl;
 
     // --- 6. Latency Measurement (Single-threaded) ---
-    // Latency test inherently benefits less from parallelization
+    // Latency test is inherently sequential
     std::cout << "\nStarting latency measurement..." << std::endl;
     uintptr_t* lat_start_ptr = (uintptr_t*)lat_buffer;
     timer.start();
@@ -233,7 +264,7 @@ int main(int argc, char *argv[]) {
     std::cout << "Latency measurement complete." << std::endl;
 
     // --- 7. Calculate Results ---
-    // Bandwidth: Copy is read + write, factor of 2
+    // Bandwidth: Copy = Read + Write => factor of 2
     total_bytes_copied = static_cast<size_t>(bw_iterations) * 2 * bw_buffer_size;
     if (total_bw_time > 0) {
         bandwidth_gb_per_sec = static_cast<double>(total_bytes_copied) / total_bw_time / 1e9; // GB/s (10^9)
@@ -249,8 +280,6 @@ int main(int argc, char *argv[]) {
     std::cout << "Bandwidth Test (" << num_threads << " threads):" << std::endl;
     std::cout << "  Total time: " << total_bw_time << " s" << std::endl;
     std::cout << "  Data copied: " << static_cast<double>(total_bytes_copied) / 1e9 << " GB" << std::endl;
-    // GiB/s = GB/s * 1e9 / (1024^3)
-    // std::cout << "  Memory bandwidth (copy): " << bandwidth_gb_per_sec * 1e9 / (1024.0*1024.0*1024.0) << " GiB/s" << std::endl;
     std::cout << "  Memory bandwidth (copy): " << bandwidth_gb_per_sec << " GB/s" << std::endl;
 
     std::cout << "\nLatency Test:" << std::endl;
