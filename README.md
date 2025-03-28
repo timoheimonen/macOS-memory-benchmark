@@ -1,6 +1,6 @@
 # macOS ARM64 Memory Performance Test
 
-A simple tool to measure memory copy bandwidth and memory access latency on macOS with Apple Silicon (ARM64).
+A simple tool to measure memory write/read/copy bandwidth and memory access latency on macOS with Apple Silicon (ARM64).
 
 ## Description
 
