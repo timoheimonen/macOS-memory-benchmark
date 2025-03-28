@@ -38,7 +38,7 @@
 #include <mach/mach_host.h> // Added for host_statistics64
 
 // --- Version Information ---
-#define SOFTVERSION 0.21f // Updated version number
+#define SOFTVERSION 0.21f
 
 // --- Function Forward Declarations ---
 int get_total_logical_cores();
