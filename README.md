@@ -5,6 +5,10 @@ License: GPL-3.0 license
   
 A simple tool to measure memory write/read/copy bandwidth and memory access latency on macOS with Apple Silicon (ARM64).  
 
+## Disclaimer
+
+**Use this software entirely at your own risk.** This tool performs intensive memory operations. The author(s) are not responsible for any potential system instability, data loss, or hardware issues resulting from its use.  
+  
 ## Description
 
 This C++/asm program measures:
