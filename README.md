@@ -59,7 +59,6 @@ In the Terminal, go to the directory with `main.cpp` and `loops.s`. Run these co
 
 3.  **Link to create the program:**
     ```bash
-    # Note: -pthread might be needed on some systems, but often not with clang++ on macOS
     clang++ main.o loops.o -o memory_benchmark -arch arm64 -pthread
     ```
 This makes the program file named `memory_benchmark`.
