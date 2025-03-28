@@ -71,6 +71,7 @@ This makes the program file named `memory_benchmark`.
 --- macOS-memory-benchmark v0.16 ---
 by Timo Heimonen <timo.heimonen@gmail.com>
 Buffer Size: 512 MiB
+Found CPU cores: 10
 
 --- Allocating Buffers ---
 Allocating src buffer (512 MiB)...
