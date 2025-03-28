@@ -1,63 +1,74 @@
 // loops.s
 // Assembly implementations for memory operations (ARM64 macOS / Apple Silicon)
 
-// --- Memory Copy Function (Bandwidth Test) ---
+// --- Memory Copy Function (Bandwidth Test - Optimized with Non-Temporal Stores) ---
 
 .global _memory_copy_loop_asm // Make visible to linker
 .align 4                      // Align function entry to 16-byte boundary
 
 // C++ Signature: void memory_copy_loop_asm(void* dst, const void* src, size_t byteCount);
 // AAPCS64 Arguments:
-// x0: dst (destination address)
-// x1: src (source address)
+// x0: dst (destination base address)
+// x1: src (source base address)
 // x2: byteCount (number of bytes)
+// Registers used: x3=offset, x4=step_size, x5=temp/remaining,
+//                 x6=src_addr_current_iter, x7=dst_addr_current_iter,
+//                 w5=byte_temp, q0-q3=data
 
 _memory_copy_loop_asm:
     mov x3, xzr     // x3 = current offset, start at 0
-    mov x4, #16     // x4 = step size (16 bytes via NEON q0)
-                    // NOTE: Larger steps (e.g., 64/128 bytes using q0-q3/q0-q7)
-                    // and loop unrolling are better for max bandwidth.
+    mov x4, #64     // x4 = step size (64 bytes)
 
-copy_loop_start:
-    cmp x3, x2      // Compare current offset (x3) with total byteCount (x2)
-    b.ge copy_loop_end // If offset >= byteCount, loop is done
+copy_loop_start_nt64:
+    // Calculate remaining bytes: byteCount - offset
+    subs x5, x2, x3
+    // Compare remaining bytes with step size (64)
+    cmp x5, x4
+    b.lt copy_loop_cleanup // If remaining < 64, go to cleanup
 
-    // Core copy operation (16 bytes)
-    ldr q0, [x1, x3] // Load 16B from src + offset into NEON register q0
-    str q0, [x0, x3] // Store 16B from q0 to dst + offset
+    // Calculate absolute source and destination addresses for this iteration
+    add x6, x1, x3  // x6 = src_base + offset (current src address)
+    add x7, x0, x3  // x7 = dst_base + offset (current dst address)
 
-    // Advance to next block
-    add x3, x3, x4  // offset += step_size
-    b copy_loop_start // Branch back to loop start
+    // Core non-temporal copy operation (64 bytes)
+    // Use non-temporal pairs to minimize cache pollution for large copies.
+    // Addressing mode: [calculated_base_address, #immediate_offset]
+    ldnp q0, q1, [x6, #0]       // Load pair non-temporal from [src_addr + 0]
+    ldnp q2, q3, [x6, #32]      // Load next pair non-temporal from [src_addr + 32]
+    stnp q0, q1, [x7, #0]       // Store pair non-temporal to [dst_addr + 0]
+    stnp q2, q3, [x7, #32]      // Store next pair non-temporal to [dst_addr + 32]
+
+    // Advance offset for the next 64-byte block
+    add x3, x3, x4  // offset += 64
+    b copy_loop_start_nt64 // Branch back to main loop start
+
+copy_loop_cleanup:
+    // Cleanup loop for remaining bytes (less than 64).
+    // This simple byte-by-byte loop uses [base, index_reg] addressing, which is valid for ldrb/strb.
+    cmp x3, x2      // Check if offset == byteCount already (nothing left to copy)
+    b.ge copy_loop_end // If offset >= byteCount, we are done
+
+cleanup_loop_byte:
+    ldrb w5, [x1, x3] // Load byte from src_base + offset
+    strb w5, [x0, x3] // Store byte to dst_base + offset
+    add x3, x3, #1    // offset++
+    cmp x3, x2
+    b.lt cleanup_loop_byte // Loop until offset == byteCount
 
 copy_loop_end:
     ret             // Return to caller
 
 // --- Memory Latency Function (Pointer Chasing) ---
+// (Tämä osa pysyy täysin ennallaan)
 
-.global _memory_latency_chase_asm // Make visible to linker
-.align 4                          // Align function entry
+.global _memory_latency_chase_asm
+.align 4
 
 // C++ Signature: void memory_latency_chase_asm(uintptr_t* start_pointer, size_t count);
-// AAPCS64 Arguments:
-// x0: Address of the first pointer in the chain (contains the address of the next element)
-// x1: Number of accesses/loads to perform (chain length to traverse)
-
+// Args: x0=start_pointer_addr, x1=count
 _memory_latency_chase_asm:
-    // x0 initially holds the address of the *first pointer*.
-    // The loop will load the value at that address (which is the *next pointer's address*)
-    // back into x0, creating a dependent load chain.
-
 latency_loop:
-    // Core latency measurement: Load the next address from the address in x0.
-    // The result (next address) is placed back in x0, making the next load dependent on this one.
-    ldr x0, [x0]      // x0 = [x0] (Load the next pointer address)
-
-    // Decrement loop counter and set flags.
+    ldr x0, [x0]      // x0 = [x0] (Load next pointer address)
     subs x1, x1, #1   // count--
-
-    // Continue loop if counter is not zero.
-    b.ne latency_loop // If (count != 0) branch to latency_loop
-
-    // Loop finished
-    ret               // Return to caller (x0 contains the last loaded address)
+    b.ne latency_loop // If (count != 0) branch
+ret

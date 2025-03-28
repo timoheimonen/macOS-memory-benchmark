@@ -1,4 +1,4 @@
-// Version 0.12
+// Version 0.13
 // by Timo Heimonen <timo.heimonen@gmail.com>
 
 #include <iostream>       // cout
@@ -17,7 +17,7 @@
 #include <mach/mach_time.h> // mach_absolute_time (high-resolution timer)
 
 // --- Version Information ---
-#define SOFTVERSION 0.12f
+#define SOFTVERSION 0.13f
 
 // --- Assembly function declarations ---
 // Use extern "C" to prevent C++ name mangling.
@@ -113,7 +113,9 @@ int main(int argc, char *argv[]) {
     size_t lat_stride = 128;                    // Stride between pointers. Try cache line size (e.g., 64, 128).
     size_t lat_num_accesses = 200 * 1000 * 1000; // Number of dependent loads (pointer chases).
 
-    std::cout << "--- Memory Performance Test v" << SOFTVERSION << " ---" << std::endl;
+    std::cout << "--- macOS-memory-benchmark v" << SOFTVERSION << " ---" << std::endl;
+    std::cout << "by Timo Heimonen <timo.heimonen@gmail.com>" << std::endl;
+    
 
     // --- Test Variables ---
     void* src_buffer = MAP_FAILED;

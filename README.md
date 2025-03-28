@@ -31,7 +31,7 @@ macOS on Apple Silicon (ARM64) processors (e.g., M1, M2, M3, M4 series).
 * Measures memory access latency.
 * Uses `mmap` for large memory allocation (intended to exceed caches).
 * Core copy loop and latency loop implemented in hand-written ARM64 assembly (`loops.s`).
-* Utilizes NEON vector instructions (`ldr`/`str` on `q` registers) in the copy loop.
+* Utilizes optimized non-temporal pair instructions (`ldnp`/`stnp`) for high-throughput copying in the assembly loop.
 * Latency measured via pointer chasing using dependent loads (`ldr x0, [x0]`) in assembly.
 * Employs `mach_absolute_time` for high-resolution timing.
 * Includes memory initialization/setup and warm-up phases for more stable results.
@@ -64,7 +64,8 @@ This sequence will create an executable file named `memory_benchmark`.
 
 ## Example output (Mac Mini M4 24GB)
 ```text
---- Memory Performance Test v0.12 ---
+--- macOS-memory-benchmark v0.13 ---
+by Timo Heimonen <timo.heimonen@gmail.com>
 
 --- Bandwidth Test Setup ---
 Buffer size: 512 MiB
@@ -97,14 +98,14 @@ Latency measurement complete.
 
 --- Results ---
 Bandwidth Test:
-  Total time: 1.23802 s
+  Total time: 1.18811 s
   Data copied: 107.374 GB
-  Memory bandwidth (copy): 86.7308 GB/s
+  Memory bandwidth (copy): 90.3743 GB/s
 
 Latency Test:
-  Total time: 19.4706 s
+  Total time: 19.3736 s
   Total accesses: 200000000
-  Average latency: 97.3529 ns
+  Average latency: 96.8682 ns
 --------------
 
 Freeing memory...
