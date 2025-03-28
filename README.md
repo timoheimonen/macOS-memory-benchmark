@@ -39,20 +39,23 @@ macOS on Apple Silicon (ARM64) processors (e.g., M1, M2, M3, M4 series).
 Open your Terminal and navigate to the directory containing `main.cpp` and `loops.s`. Run the following commands step-by-step:  
 
 1.  **Compile the C++ source file into an object file:**  
+    ```bash
     clang++ -O3 -std=c++17 -c main.cpp -o main.o -arch arm64
-
+    ```
 
 2.  **Assemble the assembly code into an object file:**  
+    ```bash
     as loops.s -o loops.o -arch arm64
-
+    ```
 
 3.  **Link the object files into the final executable:**  
+    ```bash
     clang++ main.o loops.o -o memory_benchmark -arch arm64
-
+    ```
 This sequence will create an executable file named `memory_benchmark`.  
 
 ## Example output (Mac Mini M4 24GB)  
-  
+'''text
 --- Memory Speed Test ---  
 Buffer size: 512 MiB  
 Iterations / measurement: 100  
@@ -71,3 +74,4 @@ Memory bandwidth (copy): 88.5178 GB/s
 --------------  
 Freeing memory...  
 Done.
+```
