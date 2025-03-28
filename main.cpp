@@ -323,7 +323,7 @@ int main(int argc, char *argv[]) {
     // --- READ TEST ---
     std::cout << "Measuring Read Bandwidth..." << std::endl; total_read_checksum = 0; timer.start();
     for (int i = 0; i < iterations; ++i) { threads.clear(); offset = 0; chunk_base_size = buffer_size / num_threads; chunk_remainder = buffer_size % num_threads; for (int t = 0; t < num_threads; ++t) { size_t current_chunk_size = chunk_base_size + (t < chunk_remainder ? 1 : 0); if (current_chunk_size == 0) continue; char* src_chunk = static_cast<char*>(src_buffer) + offset; threads.emplace_back([src_chunk, current_chunk_size, &total_read_checksum](){ uint64_t checksum = memory_read_loop_asm(src_chunk, current_chunk_size); total_read_checksum.fetch_xor(checksum, std::memory_order_relaxed); }); offset += current_chunk_size; } for (auto& t : threads) if (t.joinable()) t.join(); }
-    total_read_time = timer.stop(); std::cout << "Read complete. (Dummy checksum: " << total_read_checksum << ")" << std::endl;
+    total_read_time = timer.stop(); std::cout << "Read complete." << std::endl;
 
     // --- WRITE TEST ---
     std::cout << "Measuring Write Bandwidth..." << std::endl; timer.start();
