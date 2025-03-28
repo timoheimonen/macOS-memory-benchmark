@@ -71,7 +71,5 @@ Measurement complete.
 Total time: 1.21302 s  
 Data transferred: 107.374 GB  
 Memory bandwidth (copy): 88.5178 GB/s  
---------------  
 Freeing memory...  
 Done.
-```
