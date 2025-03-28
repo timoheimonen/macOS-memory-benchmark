@@ -66,49 +66,56 @@ This makes the program file named `memory_benchmark`.
 
 ## Example output (Mac Mini M4 24GB)
 ```text
---- macOS-memory-benchmark v0.15 ---
+--- macOS-memory-benchmark v0.16 ---
 by Timo Heimonen <timo.heimonen@gmail.com>
+Buffer Size: 512 MiB
 
---- Bandwidth Test Setup ---
-Buffer size: 512 MiB
-Iterations: 200
-Threads: 10
-Allocating bandwidth buffers (1024 MiB total)...
-Bandwidth buffers allocated.
+--- Allocating Buffers ---
+Allocating src buffer (512 MiB)...
+Allocating dst buffer (512 MiB)...
+Allocating lat buffer (512 MiB)...
+Buffers allocated.
 
---- Latency Test Setup ---
-Buffer size: 512 MiB
-Stride: 128 bytes
-Accesses: 200000000
-Allocating latency buffer (512 MiB)...
-Latency buffer allocated.
-
-Initializing bandwidth buffers (touching pages)...
-Bandwidth buffers initialized.
+Initializing src/dst buffers...
+Src/Dst buffers initialized.
 Setting up pointer chain (stride 128 bytes, 4194304 pointers)...
 Pointer chain setup complete.
 
-Performing bandwidth warm-up run (single thread)...
-Bandwidth warm-up complete.
-Performing latency warm-up run...
-Latency warm-up complete.
+Performing warm-up runs (10 threads for bandwidth)...
+  Read warm-up...
+  Write warm-up...
+  Copy warm-up...
+  Latency warm-up (single thread)...
+Warm-up complete.
 
-Starting multi-threaded bandwidth measurement (10 threads)...
-Bandwidth measurement complete.
-
-Starting latency measurement...
-Latency measurement complete.
+--- Starting Measurements (10 threads, 500 iterations each) ---
+Measuring Read Bandwidth...
+Read complete.
+Measuring Write Bandwidth...
+Write complete.
+Measuring Copy Bandwidth...
+Copy complete.
+Measuring Latency...
+Latency complete.
 
 --- Results ---
-Bandwidth Test (10 threads):
-  Total time: 2.03149 s
-  Data copied: 214.748 GB
-  Memory bandwidth (copy): 105.71 GB/s
+Configuration:
+  Buffer Size: 512 MiB
+  Iterations: 500
+  Threads: 10
 
-Latency Test:
-  Total time: 19.6962 s
+Bandwidth Tests (multi-threaded):
+  Read : 112.143 GB/s
+         (Total time: 2.39369 s)
+  Write: 65.4454 GB/s
+         (Total time: 4.10167 s)
+  Copy : 105.528 GB/s
+         (Total time: 5.08745 s)
+
+Latency Test (single-threaded):
+  Total time: 19.6304 s
   Total accesses: 200000000
-  Average latency: 98.481 ns
+  Average latency: 98.152 ns
 --------------
 
 Freeing memory...
