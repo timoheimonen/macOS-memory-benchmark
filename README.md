@@ -30,7 +30,7 @@ macOS on Apple Silicon (ARM64) processors (e.g., M1, M2, M3, M4 series).
 
 ## Prerequisites  
 
-* macOS (Apple Silicon recommended).  
+* macOS (Apple Silicon).  
 * Xcode Command Line Tools: Provides the `clang++` compiler and `as` assembler.  
     * Install them by running: `xcode-select --install` in the Terminal.  
 
