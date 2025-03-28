@@ -89,9 +89,10 @@ In the Terminal, go to the directory with `memory_benchmark` and use these comma
                             The maximum allowed <size_mb> is automatically determined such that
                             3 * <size_mb> does not exceed ~80% of available system memory.
     -h, --help            Show this help message and exit
-    ```
+    
 
-Example: ./memory_benchmark -iterations 500 -buffersize 1024
+    Example: ./memory_benchmark -iterations 500 -buffersize 1024
+    ```
 2. **Run with default parameters*
     ```bash
     ./memory_benchmark
