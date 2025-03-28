@@ -156,7 +156,8 @@ void setup_latency_chain(void* buffer, size_t buffer_size, size_t stride) {
 
 // --- Helper function to print usage instructions ---
 void print_usage(const char* prog_name) {
-     std::cerr << "Usage: " << prog_name << " [options]\n\n"
+     std::cerr << "Usage: " << prog_name << " [options]\n"
+              << "Version: " << SOFTVERSION << "\n\n"
               << "Options:\n"
               << "  -iterations <count>   Number of iterations for R/W/Copy tests (default: 1000)\n"
               << "  -buffersize <size_mb> Size for EACH of the 3 buffers in Megabytes (MB) as integer (default: 512).\n"
