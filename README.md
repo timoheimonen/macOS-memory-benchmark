@@ -15,8 +15,8 @@ The benchmark does these steps:
 1.  Gets three large memory blocks using `mmap` (src, dst for bandwidth; lat for latency).
 2.  Writes to the bandwidth buffers to make sure the OS maps the memory.
 3.  Creates a random pointer chain inside the latency buffer (this also maps its memory).
-4.  Does warm-up runs for both copy and latency tests to let the CPU speed and caches settle.
-5.  Bandwidth Test: Times the copy from source to destination buffer multiple times using the precise `mach_absolute_time` timer.
+4.  Does warm-up runs for write/read/copy and latency tests to let the CPU speed and caches settle.
+5.  Bandwidth Test: Times the wirte/read/copy from source to destination buffer multiple times using the precise `mach_absolute_time` timer.
 6.  Latency Test: Times doing many dependent pointer reads (following the chain) using `mach_absolute_time`.
 7.  Calculates and shows the memory bandwidth and the average memory access latency.
 8.  Releases the memory using `munmap`.
@@ -27,10 +27,10 @@ macOS on Apple Silicon (M1, M2, M3, M4, etc.).
 
 ## Features
 
-* Checks memory copy speed (Read + Write).
+* Checks memory write, read and copy speeds.
 * Checks memory access latency.
 * Uses `mmap` for big memory blocks (bigger than CPU caches).
-* Main copy and latency loops are in ARM64 assembly (`loops.s`).
+* Main write/read/copy and latency loops are in ARM64 assembly (`loops.s`).
 * Uses optimized non-temporal pair instructions (`ldnp`/`stnp`) for high-throughput copying in the assembly loop.
 * Checks latency by pointer chasing with dependent loads (`ldr x0, [x0]`) in assembly.
 * Uses multiple threads (`std::thread`) for the bandwidth test.
