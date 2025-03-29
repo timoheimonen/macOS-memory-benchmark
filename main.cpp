@@ -39,7 +39,7 @@
 #include <mach/mach_host.h> // Added for host_statistics64
 
 // --- Version Information ---
-#define SOFTVERSION 0.23f
+#define SOFTVERSION 0.24f
 
 // --- Function Forward Declarations ---
 int get_total_logical_cores();
@@ -80,7 +80,36 @@ struct HighResTimer {
     }
 };
 
-// --- Function Definitions ---
+// Get logical Performance core count
+int get_performance_cores() {
+    int p_cores = 0;
+    size_t len = sizeof(p_cores);
+    // hw.perflevel0.logicalcpu_max should return the number of P-cores
+    if (sysctlbyname("hw.perflevel0.logicalcpu_max", &p_cores, &len, NULL, 0) == 0 && p_cores > 0) {
+        return p_cores;
+    } else {
+        // Error occurred or value is not positive.
+        // perror("sysctlbyname failed for hw.perflevel0.logicalcpu_max"); // Optional detailed error
+        // Return 0 if P-cores not found or key not supported.
+        return 0;
+    }
+}
+
+// Get logical Efficiency core count
+int get_efficiency_cores() {
+    int e_cores = 0;
+    size_t len = sizeof(e_cores);
+    // hw.perflevel1.logicalcpu_max should return the number of E-cores.
+    // Check only for successful call (rc=0) and non-negative value, as 0 E-cores is valid.
+    if (sysctlbyname("hw.perflevel1.logicalcpu_max", &e_cores, &len, NULL, 0) == 0 && e_cores >= 0) {
+         return e_cores;
+    } else {
+        // Error occurred or value is negative (unlikely).
+        // perror("sysctlbyname failed for hw.perflevel1.logicalcpu_max"); // Optional detailed error
+        // Return 0 if E-cores not found or key not supported.
+        return 0;
+    }
+}
 
 // Get total logical core count (P+E) via sysctl or fallbacks.
 int get_total_logical_cores() {
@@ -100,6 +129,28 @@ int get_total_logical_cores() {
     if (hc > 0) return hc;
     std::cerr << "Warning: Failed to detect core count, defaulting to 1." << std::endl;
     return 1;
+}
+
+// Identify CPU Model
+std::string get_processor_name() {
+    size_t len = 0;
+    if (sysctlbyname("machdep.cpu.brand_string", NULL, &len, NULL, 0) == -1) {
+        perror("sysctlbyname (get size) failed for machdep.cpu.brand_string");
+        return ""; 
+    }
+
+    if (len > 0) {
+        std::vector<char> buffer(len);
+        // Hae varsinainen nimi puskuriin
+        if (sysctlbyname("machdep.cpu.brand_string", buffer.data(), &len, NULL, 0) == -1) {
+            perror("sysctlbyname (get data) failed for machdep.cpu.brand_string");
+            return "";
+        }
+
+        return std::string(buffer.data(), len - 1); 
+    }
+
+    return "";
 }
 
 // --- Function to query available system memory ---
@@ -178,6 +229,9 @@ int main(int argc, char *argv[]) {
     // --- 1. Configuration (Defaults) ---
     unsigned long buffer_size_mb = 512;
     int iterations = 1000;
+    std::string cpu_name = get_processor_name();
+    int perf_cores = get_performance_cores();
+    int eff_cores = get_efficiency_cores();
     int num_threads = get_total_logical_cores();
     size_t lat_stride = 128;
     size_t lat_num_accesses = 200 * 1000 * 1000;
@@ -368,8 +422,18 @@ int main(int argc, char *argv[]) {
     std::cout << "Buffer Size (per buffer): " << buffer_size / (1024.0*1024.0) << " MiB (" << buffer_size_mb << " MB requested)" << std::endl;
     std::cout << "Total Allocation Size: ~" << 3.0 * buffer_size / (1024.0*1024.0) << " MiB (for 3 buffers)" << std::endl;
     std::cout << "Iterations: " << iterations << std::endl;
-    std::cout << "CPU Cores Detected: " << num_threads << std::endl;
     std::cout << "Loop Count: " << loop_count << std::endl; 
+    if (!cpu_name.empty()) {
+        std::cout << "\nProcessor Name: " << cpu_name << std::endl;
+    } else {
+        std::cout << "Could not retrieve processor name." << std::endl;
+    }
+    if (perf_cores > 0 || eff_cores > 0) {
+        std::cout << "  Performance Cores: " << perf_cores << std::endl;
+        std::cout << "  Efficiency Cores: " << eff_cores << std::endl;
+   }
+    std::cout << "  Total CPU Cores Detected: " << num_threads << std::endl;
+    
 
     // --- Test Variables ---
     void* src_buffer = MAP_FAILED;

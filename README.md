@@ -110,8 +110,12 @@ Program is licensed under GNU GPL v3. See <https://www.gnu.org/licenses/>
 Buffer Size (per buffer): 512 MiB (512 MB requested)
 Total Allocation Size: ~1536 MiB (for 3 buffers)
 Iterations: 1000
-CPU Cores Detected: 10
 Loop Count: 1
+
+Processor Name: Apple M4
+  Performance Cores: 4
+  Efficiency Cores: 6
+  Total CPU Cores Detected: 10
 
 --- Allocating Buffers ---
 Allocating src buffer (512 MiB)...
