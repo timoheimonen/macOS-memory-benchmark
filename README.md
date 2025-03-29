@@ -104,13 +104,14 @@ In the Terminal, go to the directory with `memory_benchmark` and use these comma
 
 ## Example output (Mac Mini M4 24GB)
 ```text
------ macOS-memory-benchmark v0.21 -----
+----- macOS-memory-benchmark v0.22 -----
 Copyright 2025 Timo Heimonen <timo.heimonen@gmail.com>
 Program is licensed under GNU GPL v3. See <https://www.gnu.org/licenses/>
 Buffer Size (per buffer): 512 MiB (512 MB requested)
 Total Allocation Size: ~1536 MiB (for 3 buffers)
 Iterations: 1000
 CPU Cores Detected: 10
+Loop Count: 1
 
 --- Allocating Buffers ---
 Allocating src buffer (512 MiB)...
@@ -130,7 +131,7 @@ Performing warm-up runs (10 threads for bandwidth)...
   Latency warm-up (single thread)...
 Warm-up complete.
 
---- Starting Measurements (10 threads, 1000 iterations each) ---
+--- Starting Measurements (10 threads, 1000 iterations each, 1 loops) ---
 Measuring Read Bandwidth...
 Read complete.
 Measuring Write Bandwidth...
@@ -148,17 +149,17 @@ Configuration:
   Threads (Bandwidth Tests): 10
 
 Bandwidth Tests (multi-threaded):
-  Read : 112.07 GB/s (Total time: 4.79051 s)
-  Write: 68.399 GB/s (Total time: 7.84911 s)
-  Copy : 105.368 GB/s (Total time: 10.1904 s)
+  Read : 112.142 GB/s (Total time: 4.78743 s)
+  Write: 66.5877 GB/s (Total time: 8.06261 s)
+  Copy : 105.44 GB/s (Total time: 10.1835 s)
 
 Latency Test (single-threaded, pointer chase):
-  Total time: 19.3946 s
+  Total time: 19.6763 s
   Total accesses: 200000000
   Stride: 128 bytes
-  Average latency: 96.9731 ns
+  Average latency: 98.3817 ns
 --------------
 
 Freeing memory...
 Memory freed.
-Done.
+Done. Total time: 43.158 s
