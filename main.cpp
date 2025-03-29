@@ -42,6 +42,8 @@
 #define SOFTVERSION 0.24f
 
 // --- Function Forward Declarations ---
+int get_efficiency_cores();
+int get_efficiency_cores();
 int get_total_logical_cores();
 unsigned long get_available_memory_mb(); 
 void print_usage(const char* prog_name);
