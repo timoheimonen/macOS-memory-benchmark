@@ -39,7 +39,7 @@
 #include <mach/mach_host.h> // Added for host_statistics64
 
 // --- Version Information ---
-#define SOFTVERSION 0.22f
+#define SOFTVERSION 0.23f
 
 // --- Function Forward Declarations ---
 int get_total_logical_cores();
@@ -210,66 +210,137 @@ int main(int argc, char *argv[]) {
         max_allowed_mb_per_buffer = minimum_limit_mb_per_buffer;
     }
 
-    // --- Parse Command Line Arguments ---
+        // --- Parse Command Line Arguments ---
+
+    // Temporarily store the buffer size argument before validation against available memory
+    long long requested_buffer_size_mb_ll = -1; // Use long long, init to -1 (or other sentinel)
+
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
+        // --- Iterations ---
         if (arg == "-iterations") {
-        if (i + 1 < argc) {
-            i++;
-        } else {
-            std::cerr << "Error: Missing value after -iterations" << std::endl;
-            print_usage(argv[0]);
-            return EXIT_FAILURE;
+            if (i + 1 < argc) {
+                try {
+                    long long val_ll = std::stoll(argv[i + 1]);
+                    if (val_ll <= 0 || val_ll > std::numeric_limits<int>::max()) {
+                         std::cerr << "Error: Invalid value for -iterations: "
+                                   << argv[i+1]
+                                   << ". Must be a positive integer within int range."
+                                   << std::endl;
+                         print_usage(argv[0]);
+                         return EXIT_FAILURE;
+                    }
+                    iterations = static_cast<int>(val_ll);
+                    i++; // Increment i because we consumed argv[i+1]
+                } catch (const std::invalid_argument& e) {
+                    std::cerr << "Error: Invalid number format for -iterations: " << argv[i+1] << std::endl;
+                    print_usage(argv[0]);
+                    return EXIT_FAILURE;
+                } catch (const std::out_of_range& e) {
+                     std::cerr << "Error: Value out of range for -iterations: " << argv[i+1] << std::endl;
+                     print_usage(argv[0]);
+                     return EXIT_FAILURE;
+                }
+            } else {
+                std::cerr << "Error: Missing value after -iterations" << std::endl;
+                print_usage(argv[0]);
+                return EXIT_FAILURE;
+            }
         }
-        } else if (arg == "-buffersize") {
-        if (i + 1 < argc) {
-            i++;
-        } else {
-            // This else block now ONLY handles missing value for -buffersize
-            std::cerr << "Error: Missing value after -buffersize" << std::endl;
-            print_usage(argv[0]);
-            return EXIT_FAILURE;
+        // --- Buffersize ---
+        else if (arg == "-buffersize") {
+            if (i + 1 < argc) {
+                 try {
+                    long long val_ll = std::stoll(argv[i+1]);
+                     if (val_ll <= 0) { 
+                          std::cerr << "Error: Invalid value for -buffersize: "
+                                   << argv[i+1]
+                                   << ". Must be a positive integer." << std::endl;
+                         print_usage(argv[0]);
+                         return EXIT_FAILURE;
+                     }
+                     requested_buffer_size_mb_ll = val_ll;
+                    i++; 
+                } catch (const std::invalid_argument& e) {
+                    std::cerr << "Error: Invalid number format for -buffersize: " << argv[i+1] << std::endl;
+                    print_usage(argv[0]);
+                    return EXIT_FAILURE;
+                } catch (const std::out_of_range& e) {
+                     std::cerr << "Error: Value out of range for -buffersize: " << argv[i+1] << std::endl;
+                     print_usage(argv[0]);
+                     return EXIT_FAILURE;
+                }
+            } else {
+                std::cerr << "Error: Missing value after -buffersize" << std::endl;
+                print_usage(argv[0]);
+                return EXIT_FAILURE;
+            }
         }
-        } 
+        // --- Count ---
         else if (arg == "-count") {
             if (i + 1 < argc) {
                 try {
-                    unsigned long val = std::stoul(argv[i + 1]);
-                    if (val == 0 || val > std::numeric_limits<int>::max()) {
+                    long long val_ll = std::stoll(argv[i + 1]);
+                    if (val_ll <= 0 || val_ll > std::numeric_limits<int>::max()) { 
                         std::cerr << "Error: Invalid value for -count: "
                             << argv[i + 1]
                             << ". Must be a positive integer within int range."
                             << std::endl;
+                         print_usage(argv[0]); 
                         return EXIT_FAILURE;
                     }
-                    loop_count = static_cast<int>(val);
-                    i++; 
+                    loop_count = static_cast<int>(val_ll);
+                    i++;
                 }
                 catch (const std::invalid_argument& e) {
                     std::cerr << "Error: Invalid number format for -count: "
                         << argv[i + 1] << std::endl;
+                     print_usage(argv[0]);
                     return EXIT_FAILURE;
                 }
                 catch (const std::out_of_range& e) {
                     std::cerr << "Error: Value out of range for -count: "
                         << argv[i + 1] << std::endl;
+                     print_usage(argv[0]);
                     return EXIT_FAILURE;
                 }
-            } else { 
+            } else {
                 std::cerr << "Error: Missing value after -count" << std::endl;
                 print_usage(argv[0]);
                 return EXIT_FAILURE;
             }
-        } 
+        }
         else if (arg == "-h" || arg == "--help") {
-        print_usage(argv[0]);
-        return EXIT_SUCCESS;
-        } else { // Handles truly unknown options
-        std::cerr << "Error: Unknown option: " << arg << std::endl;
-        print_usage(argv[0]);
-        return EXIT_FAILURE;
+            print_usage(argv[0]);
+            return EXIT_SUCCESS;
+        } else { 
+            std::cerr << "Error: Unknown option: " << arg << std::endl;
+            print_usage(argv[0]);
+            return EXIT_FAILURE;
         }
     } 
+    // --- Validate and Finalize Buffer Size ---
+    if (requested_buffer_size_mb_ll != -1) { // If -buffersize was provided by user
+        unsigned long requested_ul = static_cast<unsigned long>(requested_buffer_size_mb_ll);
+
+        if (requested_ul > max_allowed_mb_per_buffer) {
+             std::cerr << "Warning: Requested buffer size (" << requested_buffer_size_mb_ll
+                      << " MB) exceeds the calculated limit (" << max_allowed_mb_per_buffer
+                      << " MB based on available memory)." << std::endl;
+             std::cerr << "         Using the maximum allowed size instead." << std::endl;
+             buffer_size_mb = max_allowed_mb_per_buffer; // Use max allowed
+        } else {
+             buffer_size_mb = requested_ul; // Use user requested size
+        }
+    } else { // If -buffersize was not provided, check if default exceeds limit
+         if (buffer_size_mb > max_allowed_mb_per_buffer) {
+             std::cout << "Info: Default buffer size (" << buffer_size_mb
+                       << " MB) exceeds calculated limit (" << max_allowed_mb_per_buffer
+                       << " MB). Using limit instead." << std::endl;
+             buffer_size_mb = max_allowed_mb_per_buffer; // Cap default if necessary
+         }
+         // If default is within limits, buffer_size_mb retains its default value (512)
+    }
     // --- Calculate final buffer size in bytes ---
     const size_t bytes_per_mb = 1024 * 1024;
     size_t buffer_size = static_cast<size_t>(buffer_size_mb) * bytes_per_mb;
@@ -310,6 +381,19 @@ int main(int argc, char *argv[]) {
     size_t total_bytes_read = 0, total_bytes_written = 0, total_bytes_copied_op = 0;
     double total_lat_time_ns = 0.0, average_latency_ns = 0.0;
     std::atomic<uint64_t> total_read_checksum = 0;
+
+    // --- For Averages ---
+    std::vector<double> all_read_bw_gb_s;
+    std::vector<double> all_write_bw_gb_s;
+    std::vector<double> all_copy_bw_gb_s;
+    std::vector<double> all_average_latency_ns;
+
+    if (loop_count > 0) {
+        all_read_bw_gb_s.reserve(loop_count);
+        all_write_bw_gb_s.reserve(loop_count);
+        all_copy_bw_gb_s.reserve(loop_count);
+        all_average_latency_ns.reserve(loop_count);
+    }
 
     // --- 2. Memory Allocation ---
     std::cout << "\n--- Allocating Buffers ---" << std::endl;
@@ -419,9 +503,15 @@ int main(int argc, char *argv[]) {
         threads.reserve(num_threads);
         HighResTimer timer;
 
+        // Reset per-loop variables
+        total_read_time = 0.0; read_bw_gb_s = 0.0;
+        total_write_time = 0.0; write_bw_gb_s = 0.0;
+        total_copy_time = 0.0; copy_bw_gb_s = 0.0;
+        total_lat_time_ns = 0.0; average_latency_ns = 0.0;
+        total_read_checksum = 0; 
+        
         // --- READ TEST ---
         std::cout << "Measuring Read Bandwidth..." << std::endl;
-        total_read_checksum = 0;
         timer.start();
         for (int i = 0; i < iterations; ++i) {
             threads.clear();
@@ -508,6 +598,12 @@ int main(int argc, char *argv[]) {
         if (total_copy_time > 0) copy_bw_gb_s = static_cast<double>(total_bytes_copied_op * 2) / total_copy_time / 1e9;
         if (lat_num_accesses > 0) average_latency_ns = total_lat_time_ns / static_cast<double>(lat_num_accesses);
 
+        // --- Store results for this loop ---
+        all_read_bw_gb_s.push_back(read_bw_gb_s);
+        all_write_bw_gb_s.push_back(write_bw_gb_s);
+        all_copy_bw_gb_s.push_back(copy_bw_gb_s);
+        all_average_latency_ns.push_back(average_latency_ns);
+
         // --- 8. Print Results ---
         std::cout << "\n--- Results ---" << std::endl;
         std::cout << "Configuration:" << std::endl;
@@ -526,6 +622,55 @@ int main(int argc, char *argv[]) {
         std::cout << "  Average latency: " << average_latency_ns << " ns" << std::endl;
         std::cout << "--------------" << std::endl;
     }
+
+    // Averages If Loop Count > 1
+    if (loop_count > 1) {
+        std::cout << "\n--- Statistics Across " << loop_count << " Loops ---" << std::endl;
+
+        // Calculate Averages
+        double avg_read_bw = std::accumulate(all_read_bw_gb_s.begin(), all_read_bw_gb_s.end(), 0.0) / loop_count;
+        double avg_write_bw = std::accumulate(all_write_bw_gb_s.begin(), all_write_bw_gb_s.end(), 0.0) / loop_count;
+        double avg_copy_bw = std::accumulate(all_copy_bw_gb_s.begin(), all_copy_bw_gb_s.end(), 0.0) / loop_count;
+        double avg_latency = std::accumulate(all_average_latency_ns.begin(), all_average_latency_ns.end(), 0.0) / loop_count;
+
+        // Calculate Min/Max
+        double min_read_bw = *std::min_element(all_read_bw_gb_s.begin(), all_read_bw_gb_s.end());
+        double max_read_bw = *std::max_element(all_read_bw_gb_s.begin(), all_read_bw_gb_s.end());
+
+        double min_write_bw = *std::min_element(all_write_bw_gb_s.begin(), all_write_bw_gb_s.end());
+        double max_write_bw = *std::max_element(all_write_bw_gb_s.begin(), all_write_bw_gb_s.end());
+
+        double min_copy_bw = *std::min_element(all_copy_bw_gb_s.begin(), all_copy_bw_gb_s.end());
+        double max_copy_bw = *std::max_element(all_copy_bw_gb_s.begin(), all_copy_bw_gb_s.end());
+
+        double min_latency = *std::min_element(all_average_latency_ns.begin(), all_average_latency_ns.end());
+        double max_latency = *std::max_element(all_average_latency_ns.begin(), all_average_latency_ns.end());
+
+        // Print Statistics
+        std::cout << std::fixed << std::setprecision(3); // Precision for GB/s
+        std::cout << "Read Bandwidth (GB/s):" << std::endl;
+        std::cout << "  Average: " << avg_read_bw << std::endl;
+        std::cout << "  Min:     " << min_read_bw << std::endl;
+        std::cout << "  Max:     " << max_read_bw << std::endl;
+
+        std::cout << "\nWrite Bandwidth (GB/s):" << std::endl;
+        std::cout << "  Average: " << avg_write_bw << std::endl;
+        std::cout << "  Min:     " << min_write_bw << std::endl;
+        std::cout << "  Max:     " << max_write_bw << std::endl;
+
+        std::cout << "\nCopy Bandwidth (GB/s):" << std::endl;
+        std::cout << "  Average: " << avg_copy_bw << std::endl;
+        std::cout << "  Min:     " << min_copy_bw << std::endl;
+        std::cout << "  Max:     " << max_copy_bw << std::endl;
+
+        std::cout << std::fixed << std::setprecision(2); // Precision for ns
+        std::cout << "\nLatency (ns):" << std::endl;
+        std::cout << "  Average: " << avg_latency << std::endl;
+        std::cout << "  Min:     " << min_latency << std::endl;
+        std::cout << "  Max:     " << max_latency << std::endl;
+        std::cout << "----------------------------------" << std::endl;
+    }
+
     // --- 9. Free Memory and Print Total Time---
     std::cout << "\nFreeing memory..." << std::endl;
     if (src_buffer != MAP_FAILED) munmap(src_buffer, buffer_size);
