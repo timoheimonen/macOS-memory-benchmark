@@ -88,8 +88,6 @@ int get_performance_cores() {
     if (sysctlbyname("hw.perflevel0.logicalcpu_max", &p_cores, &len, NULL, 0) == 0 && p_cores > 0) {
         return p_cores;
     } else {
-        // Error occurred or value is not positive.
-        // perror("sysctlbyname failed for hw.perflevel0.logicalcpu_max"); // Optional detailed error
         // Return 0 if P-cores not found or key not supported.
         return 0;
     }
@@ -104,8 +102,6 @@ int get_efficiency_cores() {
     if (sysctlbyname("hw.perflevel1.logicalcpu_max", &e_cores, &len, NULL, 0) == 0 && e_cores >= 0) {
          return e_cores;
     } else {
-        // Error occurred or value is negative (unlikely).
-        // perror("sysctlbyname failed for hw.perflevel1.logicalcpu_max"); // Optional detailed error
         // Return 0 if E-cores not found or key not supported.
         return 0;
     }
