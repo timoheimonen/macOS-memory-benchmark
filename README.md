@@ -81,7 +81,7 @@ In the Terminal, go to the directory with `memory_benchmark` and use these comma
     Example output:
     ```text
     Usage: ./memory_benchmark [options]
-    Version: 0.23
+    Version: 0.24
 
     Options:
       -iterations <count>   Number of iterations for R/W/Copy tests (default: 1000)
@@ -104,7 +104,7 @@ In the Terminal, go to the directory with `memory_benchmark` and use these comma
 
 ## Example output (Mac Mini M4 24GB)
 ```text
------ macOS-memory-benchmark v0.23 -----
+----- macOS-memory-benchmark v0.24 -----
 Copyright 2025 Timo Heimonen <timo.heimonen@gmail.com>
 Program is licensed under GNU GPL v3. See <https://www.gnu.org/licenses/>
 Buffer Size (per buffer): 512 MiB (512 MB requested)
