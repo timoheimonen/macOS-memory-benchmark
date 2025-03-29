@@ -93,7 +93,7 @@ In the Terminal, go to the directory with `memory_benchmark` and use these comma
 
     Example: ./memory_benchmark -iterations 500 -buffersize 1024
     ```
-2. **Run with default parameters*
+2. **Run with default parameters**
     ```bash
     ./memory_benchmark
     ```
