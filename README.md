@@ -149,17 +149,17 @@ Configuration:
   Threads (Bandwidth Tests): 10
 
 Bandwidth Tests (multi-threaded):
-  Read : 107.667 GB/s (Total time: 4.98639 s)
-  Write: 83.0572 GB/s (Total time: 6.46387 s)
-  Copy : 104.373 GB/s (Total time: 10.2875 s)
+  Read : 111.912 GB/s (Total time: 4.79725 s)
+  Write: 70.7554 GB/s (Total time: 7.5877 s)
+  Copy : 105.312 GB/s (Total time: 10.1958 s)
 
 Latency Test (single-threaded, pointer chase):
-  Total time: 19.7646 s
+  Total time: 19.3728 s
   Total accesses: 200000000
   Stride: 128 bytes
-  Average latency: 98.8232 ns
+  Average latency: 96.8639 ns
 --------------
 
 Freeing memory...
 Memory freed.
-Done. Total time: 41.936 s
+Done. Total time: 42.416 s
