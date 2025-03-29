@@ -81,15 +81,15 @@ In the Terminal, go to the directory with `memory_benchmark` and use these comma
     Example output:
     ```text
     Usage: ./memory_benchmark [options]
-    Version: 0.21
+    Version: 0.23
 
     Options:
-    -iterations <count>   Number of iterations for R/W/Copy tests (default: 1000)
-    -buffersize <size_mb> Size for EACH of the 3 buffers in Megabytes (MB) as integer (default: 512).
+      -iterations <count>   Number of iterations for R/W/Copy tests (default: 1000)
+      -buffersize <size_mb> Size for EACH of the 3 buffers in Megabytes (MB) as integer (default: 512).
                             The maximum allowed <size_mb> is automatically determined such that
                             3 * <size_mb> does not exceed ~80% of available system memory.
-    -h, --help            Show this help message and exit
-    
+      -count <count>        Number of full loops (read/write/copy/latency) (default: 1)
+      -h, --help            Show this help message and exit
 
     Example: ./memory_benchmark -iterations 500 -buffersize 1024
     ```
@@ -104,7 +104,7 @@ In the Terminal, go to the directory with `memory_benchmark` and use these comma
 
 ## Example output (Mac Mini M4 24GB)
 ```text
------ macOS-memory-benchmark v0.22 -----
+----- macOS-memory-benchmark v0.23 -----
 Copyright 2025 Timo Heimonen <timo.heimonen@gmail.com>
 Program is licensed under GNU GPL v3. See <https://www.gnu.org/licenses/>
 Buffer Size (per buffer): 512 MiB (512 MB requested)
@@ -149,17 +149,17 @@ Configuration:
   Threads (Bandwidth Tests): 10
 
 Bandwidth Tests (multi-threaded):
-  Read : 112.142 GB/s (Total time: 4.78743 s)
-  Write: 66.5877 GB/s (Total time: 8.06261 s)
-  Copy : 105.44 GB/s (Total time: 10.1835 s)
+  Read : 107.667 GB/s (Total time: 4.98639 s)
+  Write: 83.0572 GB/s (Total time: 6.46387 s)
+  Copy : 104.373 GB/s (Total time: 10.2875 s)
 
 Latency Test (single-threaded, pointer chase):
-  Total time: 19.6763 s
+  Total time: 19.7646 s
   Total accesses: 200000000
   Stride: 128 bytes
-  Average latency: 98.3817 ns
+  Average latency: 98.8232 ns
 --------------
 
 Freeing memory...
 Memory freed.
-Done. Total time: 43.158 s
+Done. Total time: 41.936 s
