@@ -29,6 +29,7 @@
 #include <stdexcept>
 #include <limits>
 #include <mach/mach_error.h> // For mach_error_string
+#include <iomanip>
 
 // macOS-specific headers
 #include <sys/mman.h>     // mmap / munmap
@@ -38,7 +39,7 @@
 #include <mach/mach_host.h> // Added for host_statistics64
 
 // --- Version Information ---
-#define SOFTVERSION 0.21f
+#define SOFTVERSION 0.22f
 
 // --- Function Forward Declarations ---
 int get_total_logical_cores();
@@ -163,6 +164,7 @@ void print_usage(const char* prog_name) {
               << "  -buffersize <size_mb> Size for EACH of the 3 buffers in Megabytes (MB) as integer (default: 512).\n"
               << "                        The maximum allowed <size_mb> is automatically determined such that\n"
               << "                        3 * <size_mb> does not exceed ~80% of available system memory.\n"
+              << "  -count <count>        Number of full loops (read/write/copy/latency) (default: 1)\n"
               << "  -h, --help            Show this help message and exit\n\n"
               << "Example: " << prog_name << " -iterations 500 -buffersize 1024\n";
 }
@@ -170,12 +172,16 @@ void print_usage(const char* prog_name) {
 
 // --- Main Function ---
 int main(int argc, char *argv[]) {
+    // Total Timer Start
+    HighResTimer total_execution_timer;
+    total_execution_timer.start();
     // --- 1. Configuration (Defaults) ---
     unsigned long buffer_size_mb = 512;
     int iterations = 1000;
     int num_threads = get_total_logical_cores();
     size_t lat_stride = 128;
     size_t lat_num_accesses = 200 * 1000 * 1000;
+    int loop_count = 1;
 
     // --- Get Available Memory for Limit ---
     unsigned long available_mem_mb = get_available_memory_mb();
@@ -205,76 +211,65 @@ int main(int argc, char *argv[]) {
     }
 
     // --- Parse Command Line Arguments ---
-  for (int i = 1; i < argc; ++i) {
-    std::string arg = argv[i];
-    if (arg == "-iterations") {
-      if (i + 1 < argc) {
-        try {
-          unsigned long val = std::stoul(argv[i + 1]);
-          if (val == 0 || val > std::numeric_limits<int>::max()) {
-            std::cerr << "Error: Invalid value for -iterations: "
-                      << argv[i + 1]
-                      << ". Must be a positive integer within int range."
-                      << std::endl;
+    for (int i = 1; i < argc; ++i) {
+        std::string arg = argv[i];
+        if (arg == "-iterations") {
+        if (i + 1 < argc) {
+            i++;
+        } else {
+            std::cerr << "Error: Missing value after -iterations" << std::endl;
+            print_usage(argv[0]);
             return EXIT_FAILURE;
-          }
-          iterations = static_cast<int>(val);
-          i++;
-        } catch (const std::invalid_argument& e) {
-          std::cerr << "Error: Invalid number format for -iterations: "
-                    << argv[i + 1] << std::endl;
-          return EXIT_FAILURE;
-        } catch (const std::out_of_range& e) {
-          std::cerr << "Error: Value out of range for -iterations: "
-                    << argv[i + 1] << std::endl;
-          return EXIT_FAILURE;
         }
-      } else {
-        std::cerr << "Error: Missing value after -iterations" << std::endl;
+        } else if (arg == "-buffersize") {
+        if (i + 1 < argc) {
+            i++;
+        } else {
+            // This else block now ONLY handles missing value for -buffersize
+            std::cerr << "Error: Missing value after -buffersize" << std::endl;
+            print_usage(argv[0]);
+            return EXIT_FAILURE;
+        }
+        } 
+        else if (arg == "-count") {
+            if (i + 1 < argc) {
+                try {
+                    unsigned long val = std::stoul(argv[i + 1]);
+                    if (val == 0 || val > std::numeric_limits<int>::max()) {
+                        std::cerr << "Error: Invalid value for -count: "
+                            << argv[i + 1]
+                            << ". Must be a positive integer within int range."
+                            << std::endl;
+                        return EXIT_FAILURE;
+                    }
+                    loop_count = static_cast<int>(val);
+                    i++; 
+                }
+                catch (const std::invalid_argument& e) {
+                    std::cerr << "Error: Invalid number format for -count: "
+                        << argv[i + 1] << std::endl;
+                    return EXIT_FAILURE;
+                }
+                catch (const std::out_of_range& e) {
+                    std::cerr << "Error: Value out of range for -count: "
+                        << argv[i + 1] << std::endl;
+                    return EXIT_FAILURE;
+                }
+            } else { 
+                std::cerr << "Error: Missing value after -count" << std::endl;
+                print_usage(argv[0]);
+                return EXIT_FAILURE;
+            }
+        } 
+        else if (arg == "-h" || arg == "--help") {
+        print_usage(argv[0]);
+        return EXIT_SUCCESS;
+        } else { // Handles truly unknown options
+        std::cerr << "Error: Unknown option: " << arg << std::endl;
         print_usage(argv[0]);
         return EXIT_FAILURE;
-      }
-    } else if (arg == "-buffersize") {
-      if (i + 1 < argc) {
-        try {
-          unsigned long val = std::stoul(argv[i + 1]);
-          if (val == 0 || val > max_allowed_mb_per_buffer) {
-            std::cerr << "Error: Invalid value for -buffersize: "
-                      << argv[i + 1]
-                      << ". Must be a positive integer between 1 and "
-                      << max_allowed_mb_per_buffer
-                      << " (inclusive, limit per buffer based on total "
-                         "available memory for 3 buffers)."
-                      << std::endl;
-            return EXIT_FAILURE;
-          }
-          buffer_size_mb = val;
-          i++;
-        } catch (const std::invalid_argument& e) {
-          std::cerr
-              << "Error: Invalid number format for -buffersize (expecting "
-                 "integer MB): "
-              << argv[i + 1] << std::endl;
-          return EXIT_FAILURE;
-        } catch (const std::out_of_range& e) {
-          std::cerr << "Error: Value out of range for -buffersize: "
-                    << argv[i + 1] << std::endl;
-          return EXIT_FAILURE;
         }
-      } else {
-        std::cerr << "Error: Missing value after -buffersize" << std::endl;
-        print_usage(argv[0]);
-        return EXIT_FAILURE;
-      }
-    } else if (arg == "-h" || arg == "--help") {
-      print_usage(argv[0]);
-      return EXIT_SUCCESS;
-    } else {
-      std::cerr << "Error: Unknown option: " << arg << std::endl;
-      print_usage(argv[0]);
-      return EXIT_FAILURE;
-    }
-  }
+    } 
     // --- Calculate final buffer size in bytes ---
     const size_t bytes_per_mb = 1024 * 1024;
     size_t buffer_size = static_cast<size_t>(buffer_size_mb) * bytes_per_mb;
@@ -303,6 +298,7 @@ int main(int argc, char *argv[]) {
     std::cout << "Total Allocation Size: ~" << 3.0 * buffer_size / (1024.0*1024.0) << " MiB (for 3 buffers)" << std::endl;
     std::cout << "Iterations: " << iterations << std::endl;
     std::cout << "CPU Cores Detected: " << num_threads << std::endl;
+    std::cout << "Loop Count: " << loop_count << std::endl; 
 
     // --- Test Variables ---
     void* src_buffer = MAP_FAILED;
@@ -415,126 +411,131 @@ int main(int argc, char *argv[]) {
 
     // --- 5. Measurements ---
     std::cout << "\n--- Starting Measurements (" << num_threads
-                << " threads, " << iterations << " iterations each) ---"
-                << std::endl;
-    std::vector<std::thread> threads;
-    threads.reserve(num_threads);
-    HighResTimer timer;
+    << " threads, " << iterations << " iterations each, " << loop_count << " loops) ---"
+    << std::endl;
 
-    // --- READ TEST ---
-    std::cout << "Measuring Read Bandwidth..." << std::endl;
-    total_read_checksum = 0;
-    timer.start();
-    for (int i = 0; i < iterations; ++i) {
-        threads.clear();
-        offset = 0;
-        chunk_base_size = buffer_size / num_threads;
-        chunk_remainder = buffer_size % num_threads;
-        for (int t = 0; t < num_threads; ++t) {
-        size_t current_chunk_size =
-            chunk_base_size + (t < chunk_remainder ? 1 : 0);
-        if (current_chunk_size == 0) continue;
-        char* src_chunk = static_cast<char*>(src_buffer) + offset;
-        threads.emplace_back([src_chunk, current_chunk_size,
-                                &total_read_checksum]() {
-            uint64_t checksum = memory_read_loop_asm(src_chunk, current_chunk_size);
-            total_read_checksum.fetch_xor(checksum, std::memory_order_relaxed);
-        });
-        offset += current_chunk_size;
+    for (int loop = 0; loop < loop_count; ++loop) {
+        std::vector<std::thread> threads;
+        threads.reserve(num_threads);
+        HighResTimer timer;
+
+        // --- READ TEST ---
+        std::cout << "Measuring Read Bandwidth..." << std::endl;
+        total_read_checksum = 0;
+        timer.start();
+        for (int i = 0; i < iterations; ++i) {
+            threads.clear();
+            offset = 0;
+            chunk_base_size = buffer_size / num_threads;
+            chunk_remainder = buffer_size % num_threads;
+            for (int t = 0; t < num_threads; ++t) {
+            size_t current_chunk_size =
+                chunk_base_size + (t < chunk_remainder ? 1 : 0);
+            if (current_chunk_size == 0) continue;
+            char* src_chunk = static_cast<char*>(src_buffer) + offset;
+            threads.emplace_back([src_chunk, current_chunk_size,
+                                    &total_read_checksum]() {
+                uint64_t checksum = memory_read_loop_asm(src_chunk, current_chunk_size);
+                total_read_checksum.fetch_xor(checksum, std::memory_order_relaxed);
+            });
+            offset += current_chunk_size;
+            }
+            for (auto& t : threads)
+            if (t.joinable()) t.join();
         }
-        for (auto& t : threads)
-        if (t.joinable()) t.join();
-    }
-    total_read_time = timer.stop();
-    std::cout << "Read complete." << std::endl;
+        total_read_time = timer.stop();
+        std::cout << "Read complete." << std::endl;
 
-    // --- WRITE TEST ---
-    std::cout << "Measuring Write Bandwidth..." << std::endl;
-    timer.start();
-    for (int i = 0; i < iterations; ++i) {
-        threads.clear();
-        offset = 0;
-        chunk_base_size = buffer_size / num_threads;
-        chunk_remainder = buffer_size % num_threads;
-        for (int t = 0; t < num_threads; ++t) {
-        size_t current_chunk_size =
-            chunk_base_size + (t < chunk_remainder ? 1 : 0);
-        if (current_chunk_size == 0) continue;
-        char* dst_chunk = static_cast<char*>(dst_buffer) + offset;
-        threads.emplace_back(memory_write_loop_asm, dst_chunk,
-                            current_chunk_size);
-        offset += current_chunk_size;
+        // --- WRITE TEST ---
+        std::cout << "Measuring Write Bandwidth..." << std::endl;
+        timer.start();
+        for (int i = 0; i < iterations; ++i) {
+            threads.clear();
+            offset = 0;
+            chunk_base_size = buffer_size / num_threads;
+            chunk_remainder = buffer_size % num_threads;
+            for (int t = 0; t < num_threads; ++t) {
+            size_t current_chunk_size =
+                chunk_base_size + (t < chunk_remainder ? 1 : 0);
+            if (current_chunk_size == 0) continue;
+            char* dst_chunk = static_cast<char*>(dst_buffer) + offset;
+            threads.emplace_back(memory_write_loop_asm, dst_chunk,
+                                current_chunk_size);
+            offset += current_chunk_size;
+            }
+            for (auto& t : threads)
+            if (t.joinable()) t.join();
         }
-        for (auto& t : threads)
-        if (t.joinable()) t.join();
-    }
-    total_write_time = timer.stop();
-    std::cout << "Write complete." << std::endl;
+        total_write_time = timer.stop();
+        std::cout << "Write complete." << std::endl;
 
-    // --- COPY TEST ---
-    std::cout << "Measuring Copy Bandwidth..." << std::endl;
-    timer.start();
-    for (int i = 0; i < iterations; ++i) {
-        threads.clear();
-        offset = 0;
-        chunk_base_size = buffer_size / num_threads;
-        chunk_remainder = buffer_size % num_threads;
-        for (int t = 0; t < num_threads; ++t) {
-        size_t current_chunk_size =
-            chunk_base_size + (t < chunk_remainder ? 1 : 0);
-        if (current_chunk_size == 0) continue;
-        char* src_chunk = static_cast<char*>(src_buffer) + offset;
-        char* dst_chunk = static_cast<char*>(dst_buffer) + offset;
-        threads.emplace_back(memory_copy_loop_asm, dst_chunk, src_chunk,
-                            current_chunk_size);
-        offset += current_chunk_size;
+        // --- COPY TEST ---
+        std::cout << "Measuring Copy Bandwidth..." << std::endl;
+        timer.start();
+        for (int i = 0; i < iterations; ++i) {
+            threads.clear();
+            offset = 0;
+            chunk_base_size = buffer_size / num_threads;
+            chunk_remainder = buffer_size % num_threads;
+            for (int t = 0; t < num_threads; ++t) {
+            size_t current_chunk_size =
+                chunk_base_size + (t < chunk_remainder ? 1 : 0);
+            if (current_chunk_size == 0) continue;
+            char* src_chunk = static_cast<char*>(src_buffer) + offset;
+            char* dst_chunk = static_cast<char*>(dst_buffer) + offset;
+            threads.emplace_back(memory_copy_loop_asm, dst_chunk, src_chunk,
+                                current_chunk_size);
+            offset += current_chunk_size;
+            }
+            for (auto& t : threads)
+            if (t.joinable()) t.join();
         }
-        for (auto& t : threads)
-        if (t.joinable()) t.join();
+        total_copy_time = timer.stop();
+        std::cout << "Copy complete." << std::endl;
+
+
+        // --- LATENCY TEST ---
+        std::cout << "Measuring Latency (single thread)..." << std::endl; uintptr_t* lat_start_ptr = (uintptr_t*)lat_buffer; timer.start();
+        memory_latency_chase_asm(lat_start_ptr, lat_num_accesses); total_lat_time_ns = timer.stop_ns();
+        std::cout << "Latency complete." << std::endl;
+
+        // --- 7. Calculate Results ---
+        total_bytes_read = static_cast<size_t>(iterations) * buffer_size;
+        total_bytes_written = static_cast<size_t>(iterations) * buffer_size;
+        total_bytes_copied_op = static_cast<size_t>(iterations) * buffer_size;
+        if (total_read_time > 0) read_bw_gb_s = static_cast<double>(total_bytes_read) / total_read_time / 1e9;
+        if (total_write_time > 0) write_bw_gb_s = static_cast<double>(total_bytes_written) / total_write_time / 1e9;
+        if (total_copy_time > 0) copy_bw_gb_s = static_cast<double>(total_bytes_copied_op * 2) / total_copy_time / 1e9;
+        if (lat_num_accesses > 0) average_latency_ns = total_lat_time_ns / static_cast<double>(lat_num_accesses);
+
+        // --- 8. Print Results ---
+        std::cout << "\n--- Results ---" << std::endl;
+        std::cout << "Configuration:" << std::endl;
+        std::cout << "  Buffer Size (per buffer): " << buffer_size / (1024.0*1024.0) << " MiB (" << buffer_size_mb << " MB requested)" << std::endl;
+        std::cout << "  Total Allocation Size: ~" << 3.0 * buffer_size / (1024.0*1024.0) << " MiB" << std::endl;
+        std::cout << "  Iterations: " << iterations << std::endl;
+        std::cout << "  Threads (Bandwidth Tests): " << num_threads << std::endl;
+        std::cout << "\nBandwidth Tests (multi-threaded):" << std::endl;
+        std::cout << "  Read : " << read_bw_gb_s << " GB/s (Total time: " << total_read_time << " s)" << std::endl;
+        std::cout << "  Write: " << write_bw_gb_s << " GB/s (Total time: " << total_write_time << " s)" << std::endl;
+        std::cout << "  Copy : " << copy_bw_gb_s << " GB/s (Total time: " << total_copy_time << " s)" << std::endl;
+        std::cout << "\nLatency Test (single-threaded, pointer chase):" << std::endl;
+        std::cout << "  Total time: " << total_lat_time_ns / 1e9 << " s" << std::endl;
+        std::cout << "  Total accesses: " << lat_num_accesses << std::endl;
+        std::cout << "  Stride: " << lat_stride << " bytes" << std::endl;
+        std::cout << "  Average latency: " << average_latency_ns << " ns" << std::endl;
+        std::cout << "--------------" << std::endl;
     }
-    total_copy_time = timer.stop();
-    std::cout << "Copy complete." << std::endl;
-
-
-    // --- LATENCY TEST ---
-    std::cout << "Measuring Latency (single thread)..." << std::endl; uintptr_t* lat_start_ptr = (uintptr_t*)lat_buffer; timer.start();
-    memory_latency_chase_asm(lat_start_ptr, lat_num_accesses); total_lat_time_ns = timer.stop_ns();
-    std::cout << "Latency complete." << std::endl;
-
-    // --- 7. Calculate Results ---
-    total_bytes_read = static_cast<size_t>(iterations) * buffer_size;
-    total_bytes_written = static_cast<size_t>(iterations) * buffer_size;
-    total_bytes_copied_op = static_cast<size_t>(iterations) * buffer_size;
-    if (total_read_time > 0) read_bw_gb_s = static_cast<double>(total_bytes_read) / total_read_time / 1e9;
-    if (total_write_time > 0) write_bw_gb_s = static_cast<double>(total_bytes_written) / total_write_time / 1e9;
-    if (total_copy_time > 0) copy_bw_gb_s = static_cast<double>(total_bytes_copied_op * 2) / total_copy_time / 1e9;
-    if (lat_num_accesses > 0) average_latency_ns = total_lat_time_ns / static_cast<double>(lat_num_accesses);
-
-    // --- 8. Print Results ---
-    std::cout << "\n--- Results ---" << std::endl;
-    std::cout << "Configuration:" << std::endl;
-    std::cout << "  Buffer Size (per buffer): " << buffer_size / (1024.0*1024.0) << " MiB (" << buffer_size_mb << " MB requested)" << std::endl;
-    std::cout << "  Total Allocation Size: ~" << 3.0 * buffer_size / (1024.0*1024.0) << " MiB" << std::endl;
-    std::cout << "  Iterations: " << iterations << std::endl;
-    std::cout << "  Threads (Bandwidth Tests): " << num_threads << std::endl;
-    std::cout << "\nBandwidth Tests (multi-threaded):" << std::endl;
-    std::cout << "  Read : " << read_bw_gb_s << " GB/s (Total time: " << total_read_time << " s)" << std::endl;
-    std::cout << "  Write: " << write_bw_gb_s << " GB/s (Total time: " << total_write_time << " s)" << std::endl;
-    std::cout << "  Copy : " << copy_bw_gb_s << " GB/s (Total time: " << total_copy_time << " s)" << std::endl;
-    std::cout << "\nLatency Test (single-threaded, pointer chase):" << std::endl;
-    std::cout << "  Total time: " << total_lat_time_ns / 1e9 << " s" << std::endl;
-    std::cout << "  Total accesses: " << lat_num_accesses << std::endl;
-    std::cout << "  Stride: " << lat_stride << " bytes" << std::endl;
-    std::cout << "  Average latency: " << average_latency_ns << " ns" << std::endl;
-    std::cout << "--------------" << std::endl;
-
-    // --- 9. Free Memory ---
+    // --- 9. Free Memory and Print Total Time---
     std::cout << "\nFreeing memory..." << std::endl;
     if (src_buffer != MAP_FAILED) munmap(src_buffer, buffer_size);
     if (dst_buffer != MAP_FAILED) munmap(dst_buffer, buffer_size);
     if (lat_buffer != MAP_FAILED) munmap(lat_buffer, buffer_size);
     std::cout << "Memory freed." << std::endl;
 
-    std::cout << "Done." << std::endl;
+    double total_elapsed_time_sec = total_execution_timer.stop();
+    std::cout << std::fixed << std::setprecision(3);
+    std::cout << "Done. Total time: " << total_elapsed_time_sec << " s" << std::endl;
+ 
     return EXIT_SUCCESS;
 }
