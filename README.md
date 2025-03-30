@@ -52,21 +52,11 @@ macOS on Apple Silicon (M1, M2, M3, M4, etc.).
 
 ## Building
 
-In the Terminal, go to the directory with `main.cpp` and `loops.s`. Run these commands:
+In the Terminal, go to the directory with source code. Run:
 
 1.  **Compile C++ code:**
     ```bash
-    clang++ -O3 -std=c++17 -c main.cpp -o main.o -arch arm64
-    ```
-
-2.  **Assemble assembly code:**
-    ```bash
-    as loops.s -o loops.o -arch arm64
-    ```
-
-3.  **Link to create the program:**
-    ```bash
-    clang++ main.o loops.o -o memory_benchmark -arch arm64 -pthread
+    make
     ```
 This makes the program file named `memory_benchmark`.
 
@@ -81,7 +71,7 @@ In the Terminal, go to the directory with `memory_benchmark` and use these comma
     Example output:
     ```text
     Usage: ./memory_benchmark [options]
-    Version: 0.24
+    Version: 0.25
 
     Options:
       -iterations <count>   Number of iterations for R/W/Copy tests (default: 1000)
@@ -104,13 +94,14 @@ In the Terminal, go to the directory with `memory_benchmark` and use these comma
 
 ## Example output (Mac Mini M4 24GB)
 ```text
------ macOS-memory-benchmark v0.24 -----
-Copyright 2025 Timo Heimonen <timo.heimonen@gmail.com>
+----- macOS-memory-benchmark v0.25 -----
 Program is licensed under GNU GPL v3. See <https://www.gnu.org/licenses/>
-Buffer Size (per buffer): 512 MiB (512 MB requested)
-Total Allocation Size: ~1536 MiB (for 3 buffers)
-Iterations: 1000
-Loop Count: 1
+Copyright 2025 Timo Heimonen <timo.heimonen@gmail.com>
+
+Buffer Size (per buffer): 512.00 MiB (512 MB requested/capped)
+Total Allocation Size: ~1536.00 MiB (for 3 buffers)
+Iterations (per R/W/Copy test per loop): 1000
+Loop Count (total benchmark repetitions): 1
 
 Processor Name: Apple M4
   Performance Cores: 4
@@ -118,24 +109,25 @@ Processor Name: Apple M4
   Total CPU Cores Detected: 10
 
 --- Allocating Buffers ---
-Allocating src buffer (512 MiB)...
-Allocating dst buffer (512 MiB)...
-Allocating lat buffer (512 MiB)...
+Allocating src buffer (512.00 MiB)...
+Allocating dst buffer (512.00 MiB)...
+Allocating lat buffer (512.00 MiB)...
 Buffers allocated.
-
 Initializing src/dst buffers...
 Src/Dst buffers initialized.
 Setting up pointer chain (stride 128 bytes, 4194304 pointers)...
 Pointer chain setup complete.
 
-Performing warm-up runs (10 threads for bandwidth)...
+Performing warm-up runs...
   Read warm-up...
   Write warm-up...
   Copy warm-up...
   Latency warm-up (single thread)...
 Warm-up complete.
 
---- Starting Measurements (10 threads, 1000 iterations each, 1 loops) ---
+--- Starting Measurements (1 loops) ---
+
+Starting Loop 1 of 1...
 Measuring Read Bandwidth...
 Read complete.
 Measuring Write Bandwidth...
@@ -145,25 +137,20 @@ Copy complete.
 Measuring Latency (single thread)...
 Latency complete.
 
---- Results ---
-Configuration:
-  Buffer Size (per buffer): 512 MiB (512 MB requested)
-  Total Allocation Size: ~1536 MiB
-  Iterations: 1000
-  Threads (Bandwidth Tests): 10
-
-Bandwidth Tests (multi-threaded):
-  Read : 111.912 GB/s (Total time: 4.79725 s)
-  Write: 70.7554 GB/s (Total time: 7.5877 s)
-  Copy : 105.312 GB/s (Total time: 10.1958 s)
+--- Results (Loop 1) ---
+Bandwidth Tests (multi-threaded, 10 threads):
+  Read : 111.822 GB/s (Total time: 4.801 s)
+  Write: 66.096 GB/s (Total time: 8.123 s)
+  Copy : 105.599 GB/s (Total time: 10.168 s)
 
 Latency Test (single-threaded, pointer chase):
-  Total time: 19.3728 s
+  Total time: 19.744 s
   Total accesses: 200000000
   Stride: 128 bytes
-  Average latency: 96.8639 ns
+  Average latency: 98.72 ns
 --------------
 
 Freeing memory...
 Memory freed.
-Done. Total time: 42.416 s
+
+Done. Total execution time: 43.273 s
