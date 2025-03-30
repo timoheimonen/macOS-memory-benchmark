@@ -54,7 +54,7 @@ macOS on Apple Silicon (M1, M2, M3, M4, etc.).
 
 In the Terminal, go to the directory with source code. Run:
 
-1.  **Compile C++ code:**
+1.  **Compile C++/ASM code:**
     ```bash
     make
     ```
