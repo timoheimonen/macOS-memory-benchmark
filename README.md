@@ -28,9 +28,13 @@ The benchmark does these steps:
 7.  Calculates and shows the memory bandwidth and the average memory access latency.
 8.  Releases the memory using `munmap`.
 
+## Why This Tool?
+
+The primary motivation for developing this tool was to provide a straightforward and reliable method for measuring and comparing the memory performance characteristics across different generations of Apple Silicon chips (M1, M2, M3, M4, etc.).
+
 ## Target Platform
 
-macOS on Apple Silicon (M1, M2, M3, M4, etc.).
+macOS on Apple Silicon.
 
 ## Features
 
