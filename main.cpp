@@ -15,14 +15,14 @@
 //
 // Include benchmark utilities
 #include "benchmark.h"
-// Standard C++ includes
+
 #include <iostream>
 #include <vector>
 #include <string>
 #include <atomic>
 #include <limits>
+#include <unistd.h>
 #include <stdexcept> // For argument errors
-// Standard C includes
 #include <cstdlib>   // Exit codes
 #include <cstdio>    // perror
 #include <iomanip>   // Output formatting
@@ -30,6 +30,24 @@
 // macOS specific memory management
 #include <sys/mman.h>     // mmap / munmap
 #include <unistd.h>       // getpagesize
+
+// Custom deleter for memory allocated with mmap
+struct MmapDeleter {
+    size_t allocation_size; // Store the size needed for munmap
+
+    // This function call operator is invoked by unique_ptr upon destruction
+    void operator()(void* ptr) const {
+        if (ptr && ptr != MAP_FAILED) {
+            if (munmap(ptr, allocation_size) == -1) {
+                // Log error if munmap fails, but don't throw from destructor
+                perror("munmap failed in MmapDeleter");
+            }
+        }
+    }
+};
+
+// Define a type alias for convenience
+using MmapPtr = std::unique_ptr<void, MmapDeleter>;
 
 // Main program entry
 int main(int argc, char *argv[]) {
@@ -165,27 +183,68 @@ int main(int argc, char *argv[]) {
     print_configuration(buffer_size, buffer_size_mb, iterations, loop_count, cpu_name, perf_cores, eff_cores, num_threads);
 
     // --- Allocate Memory ---
+    using MmapPtr = std::unique_ptr<void, MmapDeleter>; // mapDeleter is defined above
+    MmapPtr src_buffer_ptr(nullptr, MmapDeleter{0}); // Initialize with nullptr and size 0
+    MmapPtr dst_buffer_ptr(nullptr, MmapDeleter{0});
+    MmapPtr lat_buffer_ptr(nullptr, MmapDeleter{0});
+
+    // --- Allocate Memory ---
     std::cout << "\n--- Allocating Buffers ---" << std::endl;
+
     // Allocate source buffer using mmap
     std::cout << "Allocating src buffer (" << std::fixed << std::setprecision(2) << buffer_size / (1024.0*1024.0) << " MiB)..." << std::endl;
-    void* src_buffer = mmap(nullptr, buffer_size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    void* temp_src = mmap(nullptr, buffer_size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (temp_src == MAP_FAILED) {
+        perror("mmap failed for src_buffer");
+        // Cleanup of potentially successful previous allocations happens automatically via RAII on return.
+        return EXIT_FAILURE;
+    }
+    // Assign the allocated memory and correct deleter info to the unique_ptr
+    if (temp_src == MAP_FAILED) {
+        perror("mmap failed for src_buffer");
+        return EXIT_FAILURE;
+    }
+    src_buffer_ptr = MmapPtr(temp_src, MmapDeleter{buffer_size});
+
+
     // Allocate destination buffer
     std::cout << "Allocating dst buffer (" << std::fixed << std::setprecision(2) << buffer_size / (1024.0*1024.0) << " MiB)..." << std::endl;
-    void* dst_buffer = mmap(nullptr, buffer_size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    void* temp_dst = mmap(nullptr, buffer_size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (temp_dst == MAP_FAILED) {
+        perror("mmap failed for dst_buffer");
+        // src_buffer_ptr will be cleaned up automatically upon return
+        return EXIT_FAILURE;
+    }
+    if (temp_dst == MAP_FAILED) {
+        perror("mmap failed for dst_buffer");
+        // src_buffer_ptr cleans up automatically
+        return EXIT_FAILURE;
+    }
+    dst_buffer_ptr = MmapPtr(temp_dst, MmapDeleter{buffer_size});
+
+
     // Allocate latency buffer
     std::cout << "Allocating lat buffer (" << std::fixed << std::setprecision(2) << buffer_size / (1024.0*1024.0) << " MiB)..." << std::endl;
-    void* lat_buffer = mmap(nullptr, buffer_size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-
-    // Check for allocation failures
-    if (src_buffer == MAP_FAILED || dst_buffer == MAP_FAILED || lat_buffer == MAP_FAILED) {
-        perror("mmap failed"); // Print system error
-        // Clean up any successful allocations
-        if (src_buffer != MAP_FAILED) munmap(src_buffer, buffer_size);
-        if (dst_buffer != MAP_FAILED) munmap(dst_buffer, buffer_size);
-        if (lat_buffer != MAP_FAILED) munmap(lat_buffer, buffer_size);
-        return EXIT_FAILURE; // Exit on error
+    void* temp_lat = mmap(nullptr, buffer_size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (temp_lat == MAP_FAILED) {
+        perror("mmap failed for lat_buffer");
+        // src_buffer_ptr and dst_buffer_ptr will be cleaned up automatically upon return
+        return EXIT_FAILURE;
     }
-    std::cout << "Buffers allocated." << std::endl;
+    if (temp_lat == MAP_FAILED) {
+        perror("mmap failed for lat_buffer");
+        // src_buffer_ptr and dst_buffer_ptr clean up automatically
+        return EXIT_FAILURE;
+    }
+    lat_buffer_ptr = MmapPtr(temp_lat, MmapDeleter{buffer_size});
+
+    std::cout << "Buffers allocated." << std::endl; 
+
+    // --- Get raw pointers for functions that need them ---
+    // Use .get() method to access the raw pointer managed by unique_ptr
+    void* src_buffer = src_buffer_ptr.get(); // Get raw pointer from unique_ptr for function calls
+    void* dst_buffer = dst_buffer_ptr.get(); // Get raw pointer from unique_ptr
+    void* lat_buffer = lat_buffer_ptr.get(); // Get raw pointer from unique_ptr
 
     // --- Init Buffers & Latency Chain ---
     initialize_buffers(src_buffer, dst_buffer, buffer_size); // Fill buffers
@@ -270,11 +329,9 @@ int main(int argc, char *argv[]) {
 
     // --- Free Memory ---
     std::cout << "\nFreeing memory..." << std::endl;
-    // Release allocated buffers
-    if (src_buffer != MAP_FAILED) munmap(src_buffer, buffer_size);
-    if (dst_buffer != MAP_FAILED) munmap(dst_buffer, buffer_size);
-    if (lat_buffer != MAP_FAILED) munmap(lat_buffer, buffer_size);
-    std::cout << "Memory freed." << std::endl;
+    // Memory is freed automatically when src_buffer_ptr, dst_buffer_ptr,
+    // and lat_buffer_ptr go out of scope. No manual munmap needed.
+    std::cout << "Memory will be freed automatically." << std::endl;
 
     // --- Print Total Time ---
     double total_elapsed_time_sec = total_execution_timer.stop(); // Stop overall timer
