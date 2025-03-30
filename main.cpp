@@ -331,8 +331,6 @@ int main(int argc, char *argv[]) {
     std::cout << "\nFreeing memory..." << std::endl;
     // Memory is freed automatically when src_buffer_ptr, dst_buffer_ptr,
     // and lat_buffer_ptr go out of scope. No manual munmap needed.
-    std::cout << "Memory will be freed automatically." << std::endl;
-
     // --- Print Total Time ---
     double total_elapsed_time_sec = total_execution_timer.stop(); // Stop overall timer
     std::cout << std::fixed << std::setprecision(3); // Set output precision
