@@ -30,7 +30,7 @@ The benchmark does these steps:
 
 ## Why This Tool?
 
-The primary motivation for developing this tool was to provide a straightforward and reliable method for measuring and comparing the memory performance characteristics across different generations of Apple Silicon chips (M1, M2, M3, M4, etc.).
+The primary motivation for developing this tool is to provide a straightforward and reliable method for measuring and comparing the memory performance characteristics across different generations of Apple Silicon chips (M1, M2, M3, M4, etc.).
 
 ## Target Platform
 
