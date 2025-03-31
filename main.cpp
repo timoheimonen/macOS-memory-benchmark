@@ -30,6 +30,7 @@
 // macOS specific memory management
 #include <sys/mman.h>     // mmap / munmap
 #include <unistd.h>       // getpagesize
+#include <pthread/qos.h>
 
 // Custom deleter for memory allocated with mmap
 struct MmapDeleter {
@@ -181,6 +182,13 @@ int main(int argc, char *argv[]) {
     // --- Print Config ---
     // Show final settings being used
     print_configuration(buffer_size, buffer_size_mb, iterations, loop_count, cpu_name, perf_cores, eff_cores, num_threads);
+    
+    // --- Set QoS for the main thread (affects latency tests) ---
+    kern_return_t qos_ret = pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
+    if (qos_ret != KERN_SUCCESS) {
+        // Non-critical error, just print a warning
+        fprintf(stderr, "Warning: Failed to set QoS class for main thread (code: %d)\n", qos_ret);
+    }
 
     // --- Allocate Memory ---
     using MmapPtr = std::unique_ptr<void, MmapDeleter>; // mapDeleter is defined above

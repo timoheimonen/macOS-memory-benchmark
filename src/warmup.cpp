@@ -98,7 +98,14 @@ void warmup_write(void* buffer, size_t size, int num_threads) {
         char* chunk_start = static_cast<char*>(buffer) + offset;
 
         // Create a new thread to execute the assembly write loop function (defined elsewhere).
-        threads.emplace_back(memory_write_loop_asm, chunk_start, current_chunk_size);
+        threads.emplace_back([chunk_start, current_chunk_size]() {
+            // Set QoS for this worker thread
+            kern_return_t qos_ret = pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
+            if (qos_ret != KERN_SUCCESS) {
+                 fprintf(stderr, "Warning: Failed to set QoS class for write warmup worker thread (code: %d)\n", qos_ret);
+            }
+            memory_write_loop_asm(chunk_start, current_chunk_size);
+        });
         // Move the offset for the next thread's chunk.
         offset += current_chunk_size;
     }
@@ -132,7 +139,14 @@ void warmup_copy(void* dst, void* src, size_t size, int num_threads) {
         char* dst_chunk = static_cast<char*>(dst) + offset;
 
         // Create a new thread to execute the assembly copy loop function (defined elsewhere).
-        threads.emplace_back(memory_copy_loop_asm, dst_chunk, src_chunk, current_chunk_size);
+        threads.emplace_back([dst_chunk, src_chunk, current_chunk_size]() {
+             // Set QoS for this worker thread
+             kern_return_t qos_ret = pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
+             if (qos_ret != KERN_SUCCESS) {
+                  fprintf(stderr, "Warning: Failed to set QoS class for copy warmup worker thread (code: %d)\n", qos_ret);
+             }
+            memory_copy_loop_asm(dst_chunk, src_chunk, current_chunk_size);
+        });
         // Move the offset for the next thread's chunk.
         offset += current_chunk_size;
     }

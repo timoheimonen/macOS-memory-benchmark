@@ -64,6 +64,11 @@ double run_read_test(void* buffer, size_t size, int iterations, int num_threads,
 
             // Create thread executing the read loop lambda.
             threads.emplace_back([chunk_start, current_chunk_size, &checksum]() {
+                // Set QoS for this worker thread
+                kern_return_t qos_ret = pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
+                if (qos_ret != KERN_SUCCESS) {
+                     fprintf(stderr, "Warning: Failed to set QoS class for read worker thread (code: %d)\n", qos_ret);
+                }
                 // Call external assembly function for reading.
                 uint64_t thread_checksum = memory_read_loop_asm(chunk_start, current_chunk_size);
                 // Atomically combine result (relaxed order is sufficient).
@@ -104,7 +109,14 @@ double run_write_test(void* buffer, size_t size, int iterations, int num_threads
             char* chunk_start = static_cast<char*>(buffer) + offset;
 
             // Create thread executing the external assembly write function.
-            threads.emplace_back(memory_write_loop_asm, chunk_start, current_chunk_size);
+            threads.emplace_back([chunk_start, current_chunk_size]() { // Note: Lambda doesn't need checksum
+                 // Set QoS for this worker thread
+                 kern_return_t qos_ret = pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
+                 if (qos_ret != KERN_SUCCESS) {
+                      fprintf(stderr, "Warning: Failed to set QoS class for write worker thread (code: %d)\n", qos_ret);
+                 }
+                 memory_write_loop_asm(chunk_start, current_chunk_size);
+             });
             offset += current_chunk_size;
         }
         join_threads(threads); // Wait for iteration completion.
@@ -142,7 +154,14 @@ double run_copy_test(void* dst, void* src, size_t size, int iterations, int num_
             char* dst_chunk = static_cast<char*>(dst) + offset;
 
             // Create thread executing the external assembly copy function.
-            threads.emplace_back(memory_copy_loop_asm, dst_chunk, src_chunk, current_chunk_size);
+            threads.emplace_back([dst_chunk, src_chunk, current_chunk_size]() {
+                 // Set QoS for this worker thread
+                 kern_return_t qos_ret = pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
+                 if (qos_ret != KERN_SUCCESS) {
+                      fprintf(stderr, "Warning: Failed to set QoS class for copy worker thread (code: %d)\n", qos_ret);
+                 }
+                 memory_copy_loop_asm(dst_chunk, src_chunk, current_chunk_size);
+            });
             offset += current_chunk_size;
         }
         join_threads(threads); // Wait for iteration completion.
