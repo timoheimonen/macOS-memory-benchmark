@@ -258,16 +258,21 @@ write_loop_end:             // Function end
     ret                     // Return
 
 // --- Memory Latency Function (Pointer Chasing) ---
-// Measures latency via dependent loads. (NO CHANGES NEEDED HERE)
 
-.global _memory_latency_chase_asm // Make function visible
-.align 4                       // Align to 16 bytes
+.global _memory_latency_chase_asm
+.align 4
 
 // C++ Signature: void memory_latency_chase_asm(uintptr_t* start_pointer, size_t count);
 // Args: x0=ptr_addr, x1=count
 _memory_latency_chase_asm:
-latency_loop:               // Loop start
-    ldr x0, [x0]            // Load next ptr addr from current ptr addr (dependent)
-    subs x1, x1, #1         // count--
-    b.ne latency_loop       // If count != 0, loop again
-ret                         // Return
+    mov x2, x1              // Save count in x2 for unrolled loop
+
+latency_loop_unrolled:      // Unrolled loop start
+    ldr x0, [x0]            // Load next pointer (dependent)
+    ldr x0, [x0]            // Load next pointer (dependent)
+    ldr x0, [x0]            // Load next pointer (dependent)
+    ldr x0, [x0]            // Load next pointer (dependent)
+    subs x2, x2, #4         // Decrement count by 4
+    b.gt latency_loop_unrolled // If count > 0, loop again
+
+    ret                     // Return                       // Return
