@@ -105,6 +105,8 @@ copy_loop_end:              // Function end
 _memory_read_loop_asm:
     mov x3, xzr             // offset = 0
     mov x4, #512            // step = 512 bytes
+    mov x12, xzr            // Zero byte cleanup checksum accumulator
+
 
     // Zero accumulators (v8-v11)
     eor v8.16b, v8.16b, v8.16b
