@@ -17,16 +17,33 @@ This C++/asm program measures:
 
 The main write/read/copy and latency tests are done in a separate ARM64 assembly file (`loops.s`). The write/read/copy loop uses optimized non-temporal instructions (`ldnp`/`stnp`) for faster testing, and the latency test uses dependent loads (`ldr x0, [x0]`) to measure access time.
 
+### Assembly Implementation (`loops.s`)
+
+The performance-critical memory operations are implemented in ARM64 assembly for maximum efficiency:
+
+* **Core Functions:**
+    * `_memory_copy_loop_asm`: Copies data between buffers using non-temporal instructions (`stnp`) to minimize cache impact.
+    * `_memory_read_loop_asm`: Reads memory and calculates an XOR checksum to prevent optimization and ensure data is actually read.
+    * `_memory_write_loop_asm`: Writes zeros to memory using non-temporal instructions (`stnp`).
+    * `_memory_latency_chase_asm`: Measures memory access latency via pointer chasing with dependent loads (`ldr x0, [x0]`).  
+
+* **Key Optimizations:**
+    * Processing data in large 512-byte blocks.
+    * Extensive use of NEON SIMD registers (q0-q31) for high throughput.
+    * Non-temporal stores (`stnp`) to reduce cache pollution during bandwidth tests.
+    * Careful register management.
+    * 8-way loop unrolling in the latency test.  
+
 The benchmark does these steps:
 
 1.  Gets three large memory blocks using `mmap` (src, dst for bandwidth; lat for latency).
 2.  Writes to the bandwidth buffers to make sure the OS maps the memory.
 3.  Creates a random pointer chain inside the latency buffer (this also maps its memory).
 4.  Does warm-up runs for write/read/copy and latency tests to let the CPU speed and caches settle.
-5.  Bandwidth Test: Times the wirte/read/copy from source to destination buffer multiple times using the precise `mach_absolute_time` timer.
+5.  Bandwidth Test: Times the **write**/read/copy from source to destination buffer multiple times using the precise `mach_absolute_time` timer.
 6.  Latency Test: Times doing many dependent pointer reads (following the chain) using `mach_absolute_time`.
 7.  Calculates and shows the memory bandwidth and the average memory access latency.
-8.  Releases the memory using `munmap`.
+8.  Releases the memory using `munmap` (via RAII with `std::unique_ptr` and a custom deleter).
 
 ## Why This Tool?
 
