@@ -74,7 +74,6 @@ void print_configuration(size_t buffer_size, size_t buffer_size_mb, int iteratio
     std::cout << "  Total CPU Cores Detected: " << num_threads << std::endl;
 }
 
-
 // --- Print Results for a single loop ---
 // Outputs the performance results measured during one complete benchmark loop.
 // 'loop': Index of the loop being reported (0-based).
@@ -83,33 +82,29 @@ void print_configuration(size_t buffer_size, size_t buffer_size_mb, int iteratio
 // 'write_bw_gb_s', 'total_write_time': Results from the write test.
 // 'copy_bw_gb_s', 'total_copy_time': Results from the copy test.
 // 'average_latency_ns', 'total_lat_time_ns': Results from the latency test.
-// 'lat_num_accesses', 'lat_stride': Latency test configuration details.
 void print_results(int loop, size_t buffer_size, size_t buffer_size_mb, int iterations, int num_threads,
-                   double read_bw_gb_s, double total_read_time,
-                   double write_bw_gb_s, double total_write_time,
-                   double copy_bw_gb_s, double total_copy_time,
-                   double average_latency_ns, double total_lat_time_ns,
-                   size_t lat_num_accesses, size_t lat_stride)
+    double read_bw_gb_s, double total_read_time,
+    double write_bw_gb_s, double total_write_time,
+    double copy_bw_gb_s, double total_copy_time,
+    double average_latency_ns, double total_lat_time_ns)
 {
-    // Print a header indicating the current loop number.
-    std::cout << "\n--- Results (Loop " << loop + 1 << ") ---" << std::endl;
-    // Set output to fixed-point notation for consistent formatting.
-    std::cout << std::fixed;
+// Print a header indicating the current loop number.
+std::cout << "\n--- Results (Loop " << loop + 1 << ") ---" << std::endl;
+// Set output to fixed-point notation for consistent formatting.
+std::cout << std::fixed;
 
-    // Display bandwidth test results.
-    std::cout << "Bandwidth Tests (multi-threaded, " << num_threads << " threads):" << std::endl;
-    std::cout << "  Read : " << std::setprecision(3) << read_bw_gb_s << " GB/s (Total time: " << total_read_time << " s)" << std::endl;
-    std::cout << "  Write: " << std::setprecision(3) << write_bw_gb_s << " GB/s (Total time: " << total_write_time << " s)" << std::endl;
-    std::cout << "  Copy : " << std::setprecision(3) << copy_bw_gb_s << " GB/s (Total time: " << total_copy_time << " s)" << std::endl;
+// Display bandwidth test results.
+std::cout << "Bandwidth Tests (multi-threaded, " << num_threads << " threads):" << std::endl;
+std::cout << "  Read : " << std::setprecision(3) << read_bw_gb_s << " GB/s (Total time: " << total_read_time << " s)" << std::endl;
+std::cout << "  Write: " << std::setprecision(3) << write_bw_gb_s << " GB/s (Total time: " << total_write_time << " s)" << std::endl;
+std::cout << "  Copy : " << std::setprecision(3) << copy_bw_gb_s << " GB/s (Total time: " << total_copy_time << " s)" << std::endl;
 
-    // Display latency test results.
-    std::cout << "\nLatency Test (single-threaded, pointer chase):" << std::endl;
-    std::cout << "  Total time: " << std::setprecision(3) << total_lat_time_ns / 1e9 << " s" << std::endl; // Show latency test time in seconds
-    std::cout << "  Total accesses: " << lat_num_accesses << std::endl;
-    std::cout << "  Stride: " << lat_stride << " bytes" << std::endl;
-    std::cout << "  Average latency: " << std::setprecision(2) << average_latency_ns << " ns" << std::endl;
-    // Print a separator after the loop results.
-    std::cout << "--------------" << std::endl;
+// Display latency test results.
+std::cout << "\nLatency Test (single-threaded, pointer chase):" << std::endl;
+std::cout << "  Total time: " << std::setprecision(3) << total_lat_time_ns / 1e9 << " s" << std::endl; // Show latency test time in seconds
+std::cout << "  Average latency: " << std::setprecision(2) << average_latency_ns << " ns" << std::endl;
+// Print a separator after the loop results.
+std::cout << "--------------" << std::endl;
 }
 
 // --- Print Statistics across all loops ---

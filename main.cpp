@@ -323,11 +323,10 @@ int main(int argc, char *argv[]) {
 
         // Print results for this loop
         print_results(loop, buffer_size, buffer_size_mb, iterations, num_threads,
-                      read_bw_gb_s, total_read_time,
-                      write_bw_gb_s, total_write_time,
-                      copy_bw_gb_s, total_copy_time,
-                      average_latency_ns, total_lat_time_ns,
-                      lat_num_accesses, lat_stride);
+            read_bw_gb_s, total_read_time,
+            write_bw_gb_s, total_write_time,
+            copy_bw_gb_s, total_copy_time,
+            average_latency_ns, total_lat_time_ns);
 
     } // End loop
 
@@ -336,9 +335,10 @@ int main(int argc, char *argv[]) {
     print_statistics(loop_count, all_read_bw_gb_s, all_write_bw_gb_s, all_copy_bw_gb_s, all_average_latency_ns);
 
     // --- Free Memory ---
-    std::cout << "\nFreeing memory..." << std::endl;
+    //std::cout << "\nFreeing memory..." << std::endl;
     // Memory is freed automatically when src_buffer_ptr, dst_buffer_ptr,
     // and lat_buffer_ptr go out of scope. No manual munmap needed.
+
     // --- Print Total Time ---
     double total_elapsed_time_sec = total_execution_timer.stop(); // Stop overall timer
     std::cout << std::fixed << std::setprecision(3); // Set output precision

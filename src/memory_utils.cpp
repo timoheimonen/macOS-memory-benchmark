@@ -48,7 +48,7 @@ void setup_latency_chain(void* buffer, size_t buffer_size, size_t stride) {
     // Randomly shuffle the indices.
     std::shuffle(indices.begin(), indices.end(), g);
 
-    std::cout << "Setting up pointer chain (stride " << stride << " bytes, " << num_pointers << " pointers)..." << std::endl;
+    std::cout << "Setting up pointer chain   " << std::endl; //(stride " << stride << " bytes, " << num_pointers << " pointers)..." << std::endl;
     // Get a base pointer to the buffer.
     char* base_ptr = static_cast<char*>(buffer);
 
