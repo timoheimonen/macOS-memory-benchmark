@@ -275,4 +275,4 @@ latency_loop_unrolled:      // Unrolled loop start
     subs x2, x2, #4         // Decrement count by 4
     b.gt latency_loop_unrolled // If count > 0, loop again
 
-    ret                     // Return                       // Return
+    ret                     // Return
