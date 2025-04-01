@@ -107,7 +107,6 @@ _memory_read_loop_asm:
     mov x4, #512            // step = 512 bytes
     mov x12, xzr            // Zero byte cleanup checksum accumulator
 
-
     // Zero accumulators (v8-v11)
     eor v8.16b, v8.16b, v8.16b
     eor v9.16b, v9.16b, v9.16b
@@ -126,18 +125,21 @@ read_loop_start_512:        // Main loop start (512B blocks)
     ldp q2,  q3,  [x6, #32]
     ldp q4,  q5,  [x6, #64]
     ldp q6,  q7,  [x6, #96]
-    ldp q8,  q9,  [x6, #128]  // Note: Overlaps with accumulators, but load happens first
-    ldp q10, q11, [x6, #160] // Note: Overlaps with accumulators
+    // Store loaded values from q8-q11 temporarily in v24-v27 (these are available)
+    ldp q24, q25, [x6, #128]  // Load to temps instead of directly to accumulators
+    ldp q26, q27, [x6, #160]  // Load to temps instead of directly to accumulators  
     ldp q12, q13, [x6, #192]
     ldp q14, q15, [x6, #224]
     ldp q16, q17, [x6, #256]
     ldp q18, q19, [x6, #288]
     ldp q20, q21, [x6, #320]
     ldp q22, q23, [x6, #352]
-    ldp q24, q25, [x6, #384]
-    ldp q26, q27, [x6, #416]
-    ldp q28, q29, [x6, #448]
-    ldp q30, q31, [x6, #480]
+    // Repurpose upper registers that we already processed
+    ldp q28, q29, [x6, #384]
+    ldp q30, q31, [x6, #416]
+    // Last two loads directly to free scratch registers
+    ldp q0,  q1,  [x6, #448]  // Reuse q0,q1 as we already accumulated them
+    ldp q2,  q3,  [x6, #480]  // Reuse q2,q3 as we already accumulated them
 
     // Accumulate XOR sum into v8-v11 (sink operation)
     // Distribute q0-q31 across the 4 accumulators
@@ -145,19 +147,18 @@ read_loop_start_512:        // Main loop start (512B blocks)
     eor v10.16b, v10.16b, v2.16b   ; eor v11.16b, v11.16b, v3.16b
     eor v8.16b,  v8.16b,  v4.16b    ; eor v9.16b,  v9.16b,  v5.16b
     eor v10.16b, v10.16b, v6.16b   ; eor v11.16b, v11.16b, v7.16b
-    eor v8.16b,  v8.16b,  v8.16b    ; eor v9.16b,  v9.16b,  v9.16b   // Accumulate loaded v8/v9
-    eor v10.16b, v10.16b, v10.16b  ; eor v11.16b, v11.16b, v11.16b // Accumulate loaded v10/v11
+    eor v8.16b,  v8.16b,  v24.16b   ; eor v9.16b,  v9.16b,  v25.16b  // Use temps for v8/v9
+    eor v10.16b, v10.16b, v26.16b  ; eor v11.16b, v11.16b, v27.16b  // Use temps for v10/v11
     eor v8.16b,  v8.16b,  v12.16b   ; eor v9.16b,  v9.16b,  v13.16b
     eor v10.16b, v10.16b, v14.16b  ; eor v11.16b, v11.16b, v15.16b
     eor v8.16b,  v8.16b,  v16.16b   ; eor v9.16b,  v9.16b,  v17.16b
     eor v10.16b, v10.16b, v18.16b  ; eor v11.16b, v11.16b, v19.16b
     eor v8.16b,  v8.16b,  v20.16b   ; eor v9.16b,  v9.16b,  v21.16b
     eor v10.16b, v10.16b, v22.16b  ; eor v11.16b, v11.16b, v23.16b
-    eor v8.16b,  v8.16b,  v24.16b   ; eor v9.16b,  v9.16b,  v25.16b
-    eor v10.16b, v10.16b, v26.16b  ; eor v11.16b, v11.16b, v27.16b
     eor v8.16b,  v8.16b,  v28.16b   ; eor v9.16b,  v9.16b,  v29.16b
     eor v10.16b, v10.16b, v30.16b  ; eor v11.16b, v11.16b, v31.16b
-
+    eor v8.16b,  v8.16b,  v0.16b    ; eor v9.16b,  v9.16b,  v1.16b   // Reused q0-q3
+    eor v10.16b, v10.16b, v2.16b   ; eor v11.16b, v11.16b, v3.16b   // Reused q0-q3
 
     add x3, x3, x4          // offset += step
     b read_loop_start_512   // Loop again
@@ -185,7 +186,7 @@ read_loop_combine_sum:      // Combine final checksum
     eor x0, x0, x12         // Combine with byte checksum
 
     ret                     // Return checksum
-
+    
 // --- Memory Write Function (Bandwidth Test - 512B Non-Temporal Stores) ---
 // Writes zeros to memory using non-temporal stores.
 
