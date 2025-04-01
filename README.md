@@ -59,7 +59,7 @@ macOS on Apple Silicon.
 * Checks memory access latency.
 * Uses `mmap` for big memory blocks (bigger than CPU caches).
 * Main write/read/copy and latency loops are in ARM64 assembly (`loops.s`).
-* Uses optimized non-temporal pair instructions (`ldnp`/`stnp`) for high-throughput copying in the assembly loop.
+* Uses optimized non-temporal pair instructions (`ldnp`/`stnp`) for high-throughput **bandwidth tests** in the assembly loop.
 * Checks latency by pointer chasing with dependent loads (`ldr x0, [x0]`) in assembly.
 * Uses multiple threads (`std::thread`) for the bandwidth test.
 * Uses `mach_absolute_time` for precise timing.
