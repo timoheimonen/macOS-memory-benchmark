@@ -115,7 +115,7 @@ In the Terminal, go to the directory with `memory_benchmark` and use these comma
 
 ## Example output (Mac Mini M4 24GB)
 ```text
------ macOS-memory-benchmark v0.25 -----
+----- macOS-memory-benchmark v0.33 -----
 Program is licensed under GNU GPL v3. See <https://www.gnu.org/licenses/>
 Copyright 2025 Timo Heimonen <timo.heimonen@gmail.com>
 
@@ -136,7 +136,7 @@ Allocating lat buffer (512.00 MiB)...
 Buffers allocated.
 Initializing src/dst buffers...
 Src/Dst buffers initialized.
-Setting up pointer chain (stride 128 bytes, 4194304 pointers)...
+Setting up pointer chain
 Pointer chain setup complete.
 
 Performing warm-up runs...
@@ -160,18 +160,13 @@ Latency complete.
 
 --- Results (Loop 1) ---
 Bandwidth Tests (multi-threaded, 10 threads):
-  Read : 111.822 GB/s (Total time: 4.801 s)
-  Write: 66.096 GB/s (Total time: 8.123 s)
-  Copy : 105.599 GB/s (Total time: 10.168 s)
+  Read : 112.210 GB/s (Total time: 4.784 s)
+  Write: 67.672 GB/s (Total time: 7.933 s)
+  Copy : 105.385 GB/s (Total time: 10.189 s)
 
 Latency Test (single-threaded, pointer chase):
-  Total time: 19.744 s
-  Total accesses: 200000000
-  Stride: 128 bytes
-  Average latency: 98.72 ns
+  Total time: 19.343 s
+  Average latency: 96.72 ns
 --------------
 
-Freeing memory...
-Memory freed.
-
-Done. Total execution time: 43.273 s
+Done. Total execution time: 42.650 s
