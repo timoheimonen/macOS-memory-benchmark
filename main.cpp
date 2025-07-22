@@ -61,7 +61,7 @@ int main(int argc, char *argv[]) {
     int iterations = 1000;              // Default test iterations
     int loop_count = 1;                 // Default benchmark loops
     const size_t lat_stride = 128;      // Latency test access stride (bytes)
-    const size_t lat_num_accesses = 200 * 1000 * 1000; // Latency test access count
+    size_t lat_num_accesses = 200 * 1000 * 1000; // Latency test access count (will scale with buffer)
 
     // --- Get System Info ---
     std::string cpu_name = get_processor_name();    // Get CPU model
@@ -112,7 +112,7 @@ int main(int argc, char *argv[]) {
             } else if (arg == "-buffersize") {
                 if (++i < argc) {
                     long long val_ll = std::stoll(argv[i]); // Read value
-                    if (val_ll <= 0) throw std::out_of_range("buffersize must be > 0");
+                    if (val_ll <= 0 || val_ll > std::numeric_limits<unsigned long>::max()) throw std::out_of_range("buffersize invalid");
                     requested_buffer_size_mb_ll = val_ll; // Store requested size
                 } else throw std::invalid_argument("Missing value for -buffersize");
             // Handle -count N
@@ -179,6 +179,9 @@ int main(int argc, char *argv[]) {
          return EXIT_FAILURE;
     }
 
+    // Scale latency accesses proportionally to buffer size (e.g., ~200M for 512MB default)
+    lat_num_accesses = static_cast<size_t>(200 * 1000 * 1000 * (static_cast<double>(buffer_size_mb) / 512.0));
+
     // --- Print Config ---
     // Show final settings being used
     print_configuration(buffer_size, buffer_size_mb, iterations, loop_count, cpu_name, perf_cores, eff_cores, num_threads);
@@ -204,16 +207,12 @@ int main(int argc, char *argv[]) {
     void* temp_src = mmap(nullptr, buffer_size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     if (temp_src == MAP_FAILED) {
         perror("mmap failed for src_buffer");
-        // Cleanup of potentially successful previous allocations happens automatically via RAII on return.
-        return EXIT_FAILURE;
-    }
-    // Assign the allocated memory and correct deleter info to the unique_ptr
-    if (temp_src == MAP_FAILED) {
-        perror("mmap failed for src_buffer");
         return EXIT_FAILURE;
     }
     src_buffer_ptr = MmapPtr(temp_src, MmapDeleter{buffer_size});
-
+    if (madvise(temp_src, buffer_size, MADV_WILLNEED) == -1) {
+        perror("madvise failed for src_buffer");
+    }
 
     // Allocate destination buffer
     std::cout << "Allocating dst buffer (" << std::fixed << std::setprecision(2) << buffer_size / (1024.0*1024.0) << " MiB)..." << std::endl;
@@ -223,13 +222,10 @@ int main(int argc, char *argv[]) {
         // src_buffer_ptr will be cleaned up automatically upon return
         return EXIT_FAILURE;
     }
-    if (temp_dst == MAP_FAILED) {
-        perror("mmap failed for dst_buffer");
-        // src_buffer_ptr cleans up automatically
-        return EXIT_FAILURE;
-    }
     dst_buffer_ptr = MmapPtr(temp_dst, MmapDeleter{buffer_size});
-
+    if (madvise(temp_dst, buffer_size, MADV_WILLNEED) == -1) {
+        perror("madvise failed for dst_buffer");
+    }
 
     // Allocate latency buffer
     std::cout << "Allocating lat buffer (" << std::fixed << std::setprecision(2) << buffer_size / (1024.0*1024.0) << " MiB)..." << std::endl;
@@ -239,12 +235,10 @@ int main(int argc, char *argv[]) {
         // src_buffer_ptr and dst_buffer_ptr will be cleaned up automatically upon return
         return EXIT_FAILURE;
     }
-    if (temp_lat == MAP_FAILED) {
-        perror("mmap failed for lat_buffer");
-        // src_buffer_ptr and dst_buffer_ptr clean up automatically
-        return EXIT_FAILURE;
-    }
     lat_buffer_ptr = MmapPtr(temp_lat, MmapDeleter{buffer_size});
+    if (madvise(temp_lat, buffer_size, MADV_WILLNEED) == -1) {
+        perror("madvise failed for lat_buffer");
+    }
 
     std::cout << "Buffers allocated." << std::endl; 
 
@@ -297,11 +291,16 @@ int main(int argc, char *argv[]) {
         double total_lat_time_ns = 0.0, average_latency_ns = 0.0;
         std::atomic<uint64_t> total_read_checksum = 0; // Checksum for read test
 
-        // --- Run tests ---
-        total_read_time = run_read_test(src_buffer, buffer_size, iterations, num_threads, total_read_checksum, test_timer);
-        total_write_time = run_write_test(dst_buffer, buffer_size, iterations, num_threads, test_timer);
-        total_copy_time = run_copy_test(dst_buffer, src_buffer, buffer_size, iterations, num_threads, test_timer);
-        total_lat_time_ns = run_latency_test(lat_buffer, lat_num_accesses, test_timer);
+        try {
+            // --- Run tests ---
+            total_read_time = run_read_test(src_buffer, buffer_size, iterations, num_threads, total_read_checksum, test_timer);
+            total_write_time = run_write_test(dst_buffer, buffer_size, iterations, num_threads, test_timer);
+            total_copy_time = run_copy_test(dst_buffer, src_buffer, buffer_size, iterations, num_threads, test_timer);
+            total_lat_time_ns = run_latency_test(lat_buffer, lat_num_accesses, test_timer);
+        } catch (const std::exception& e) {
+            std::cerr << "Error during benchmark tests: " << e.what() << std::endl;
+            return EXIT_FAILURE;
+        }
 
         // --- Calculate results ---
         size_t total_bytes_read = static_cast<size_t>(iterations) * buffer_size;
@@ -311,7 +310,7 @@ int main(int argc, char *argv[]) {
         // Calculate Bandwidths (GB/s)
         if (total_read_time > 0) read_bw_gb_s = static_cast<double>(total_bytes_read) / total_read_time / 1e9;
         if (total_write_time > 0) write_bw_gb_s = static_cast<double>(total_bytes_written) / total_write_time / 1e9;
-        if (total_copy_time > 0) copy_bw_gb_s = static_cast<double>(total_bytes_copied_op * 2) / total_copy_time / 1e9; // Copy = read + write
+        if (total_copy_time > 0) copy_bw_gb_s = static_cast<double>(total_bytes_copied_op * 2) / total_copy_time / 1e9; // Copy = read + write (documented)
         // Calculate Latency (ns)
         if (lat_num_accesses > 0) average_latency_ns = total_lat_time_ns / static_cast<double>(lat_num_accesses);
 
