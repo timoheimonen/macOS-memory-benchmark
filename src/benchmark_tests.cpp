@@ -49,36 +49,37 @@ double run_read_test(void* buffer, size_t size, int iterations, int num_threads,
     std::vector<std::thread> threads;
     threads.reserve(num_threads); // Pre-allocate vector space for threads.
 
-    timer.start(); // Start timing before the loops.
-    for (int i = 0; i < iterations; ++i) {
-        // Divide work among threads for this iteration.
-        size_t offset = 0;
-        size_t chunk_base_size = size / num_threads;
-        size_t chunk_remainder = size % num_threads;
+    // Divide work among threads (chunks calculated once).
+    size_t offset = 0;
+    size_t chunk_base_size = size / num_threads;
+    size_t chunk_remainder = size % num_threads;
 
-        // Launch threads for the current iteration.
-        for (int t = 0; t < num_threads; ++t) {
-            size_t current_chunk_size = chunk_base_size + (t < chunk_remainder ? 1 : 0);
-            if (current_chunk_size == 0) continue; // Avoid launching threads for zero work.
-            char* chunk_start = static_cast<char*>(buffer) + offset;
+    timer.start(); // Start timing before launching threads.
 
-            // Create thread executing the read loop lambda.
-            threads.emplace_back([chunk_start, current_chunk_size, &checksum]() {
-                // Set QoS for this worker thread
-                kern_return_t qos_ret = pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
-                if (qos_ret != KERN_SUCCESS) {
-                     fprintf(stderr, "Warning: Failed to set QoS class for read worker thread (code: %d)\n", qos_ret);
-                }
+    // Launch threads once; each handles its chunk for all iterations.
+    for (int t = 0; t < num_threads; ++t) {
+        size_t current_chunk_size = chunk_base_size + (t < chunk_remainder ? 1 : 0);
+        if (current_chunk_size == 0) continue; // Avoid launching threads for zero work.
+        char* chunk_start = static_cast<char*>(buffer) + offset;
+
+        // iterations loop inside thread lambda for re-use (avoids per-iteration creation).
+        threads.emplace_back([chunk_start, current_chunk_size, &checksum, iterations]() {
+            // Set QoS for this worker thread
+            kern_return_t qos_ret = pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
+            if (qos_ret != KERN_SUCCESS) {
+                 fprintf(stderr, "Warning: Failed to set QoS class for read worker thread (code: %d)\n", qos_ret);
+            }
+            for (int i = 0; i < iterations; ++i) {
                 // Call external assembly function for reading.
                 uint64_t thread_checksum = memory_read_loop_asm(chunk_start, current_chunk_size);
                 // Atomically combine result (relaxed order is sufficient).
                 checksum.fetch_xor(thread_checksum, std::memory_order_relaxed);
-            });
-            offset += current_chunk_size; // Update offset for the next chunk.
-        }
-        join_threads(threads); // Wait for all threads in this iteration to finish.
+            }
+        });
+        offset += current_chunk_size; // Update offset for the next chunk.
     }
-    double duration = timer.stop(); // Stop timing after all iterations.
+    join_threads(threads); // Wait for all threads to finish (joined once after all iterations).
+    double duration = timer.stop(); // Stop timing after all work.
     std::cout << "Read complete." << std::endl;
     return duration; // Return total time elapsed.
 }
@@ -95,32 +96,33 @@ double run_write_test(void* buffer, size_t size, int iterations, int num_threads
     std::vector<std::thread> threads;
     threads.reserve(num_threads); // Pre-allocate vector space.
 
+    // Divide work among threads (chunks calculated once).
+    size_t offset = 0;
+    size_t chunk_base_size = size / num_threads;
+    size_t chunk_remainder = size % num_threads;
+
     timer.start(); // Start timing.
-    for (int i = 0; i < iterations; ++i) {
-        // Divide work among threads for this iteration.
-        size_t offset = 0;
-        size_t chunk_base_size = size / num_threads;
-        size_t chunk_remainder = size % num_threads;
 
-        // Launch threads for the current iteration.
-        for (int t = 0; t < num_threads; ++t) {
-            size_t current_chunk_size = chunk_base_size + (t < chunk_remainder ? 1 : 0);
-            if (current_chunk_size == 0) continue;
-            char* chunk_start = static_cast<char*>(buffer) + offset;
+    // Launch threads once; each handles its chunk for all iterations.
+    for (int t = 0; t < num_threads; ++t) {
+        size_t current_chunk_size = chunk_base_size + (t < chunk_remainder ? 1 : 0);
+        if (current_chunk_size == 0) continue;
+        char* chunk_start = static_cast<char*>(buffer) + offset;
 
-            // Create thread executing the external assembly write function.
-            threads.emplace_back([chunk_start, current_chunk_size]() { // Note: Lambda doesn't need checksum
-                 // Set QoS for this worker thread
-                 kern_return_t qos_ret = pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
-                 if (qos_ret != KERN_SUCCESS) {
-                      fprintf(stderr, "Warning: Failed to set QoS class for write worker thread (code: %d)\n", qos_ret);
-                 }
+        // iterations loop inside thread lambda for re-use.
+        threads.emplace_back([chunk_start, current_chunk_size, iterations]() { // Note: Lambda doesn't need checksum
+             // Set QoS for this worker thread
+             kern_return_t qos_ret = pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
+             if (qos_ret != KERN_SUCCESS) {
+                  fprintf(stderr, "Warning: Failed to set QoS class for write worker thread (code: %d)\n", qos_ret);
+             }
+             for (int i = 0; i < iterations; ++i) {
                  memory_write_loop_asm(chunk_start, current_chunk_size);
-             });
-            offset += current_chunk_size;
-        }
-        join_threads(threads); // Wait for iteration completion.
+             }
+         });
+        offset += current_chunk_size;
     }
+    join_threads(threads); // Wait for all threads to finish (joined once).
     double duration = timer.stop(); // Stop timing.
     std::cout << "Write complete." << std::endl;
     return duration; // Return total time elapsed.
@@ -139,33 +141,34 @@ double run_copy_test(void* dst, void* src, size_t size, int iterations, int num_
     std::vector<std::thread> threads;
     threads.reserve(num_threads); // Pre-allocate vector space.
 
+    // Divide work among threads (chunks calculated once).
+    size_t offset = 0;
+    size_t chunk_base_size = size / num_threads;
+    size_t chunk_remainder = size % num_threads;
+
     timer.start(); // Start timing.
-    for (int i = 0; i < iterations; ++i) {
-        // Divide work among threads for this iteration.
-        size_t offset = 0;
-        size_t chunk_base_size = size / num_threads;
-        size_t chunk_remainder = size % num_threads;
 
-        // Launch threads for the current iteration.
-        for (int t = 0; t < num_threads; ++t) {
-            size_t current_chunk_size = chunk_base_size + (t < chunk_remainder ? 1 : 0);
-            if (current_chunk_size == 0) continue;
-            char* src_chunk = static_cast<char*>(src) + offset;
-            char* dst_chunk = static_cast<char*>(dst) + offset;
+    // Launch threads once; each handles its chunk for all iterations.
+    for (int t = 0; t < num_threads; ++t) {
+        size_t current_chunk_size = chunk_base_size + (t < chunk_remainder ? 1 : 0);
+        if (current_chunk_size == 0) continue;
+        char* src_chunk = static_cast<char*>(src) + offset;
+        char* dst_chunk = static_cast<char*>(dst) + offset;
 
-            // Create thread executing the external assembly copy function.
-            threads.emplace_back([dst_chunk, src_chunk, current_chunk_size]() {
-                 // Set QoS for this worker thread
-                 kern_return_t qos_ret = pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
-                 if (qos_ret != KERN_SUCCESS) {
-                      fprintf(stderr, "Warning: Failed to set QoS class for copy worker thread (code: %d)\n", qos_ret);
-                 }
+        // iterations loop inside thread lambda for re-use.
+        threads.emplace_back([dst_chunk, src_chunk, current_chunk_size, iterations]() {
+             // Set QoS for this worker thread
+             kern_return_t qos_ret = pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
+             if (qos_ret != KERN_SUCCESS) {
+                  fprintf(stderr, "Warning: Failed to set QoS class for copy worker thread (code: %d)\n", qos_ret);
+             }
+             for (int i = 0; i < iterations; ++i) {
                  memory_copy_loop_asm(dst_chunk, src_chunk, current_chunk_size);
-            });
-            offset += current_chunk_size;
-        }
-        join_threads(threads); // Wait for iteration completion.
+             }
+        });
+        offset += current_chunk_size;
     }
+    join_threads(threads); // Wait for all threads to finish (joined once).
     double duration = timer.stop(); // Stop timing.
     std::cout << "Copy complete." << std::endl;
     return duration; // Return total time elapsed.
