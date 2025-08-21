@@ -3,7 +3,7 @@
 // Optimized loops for memory copy, read, write bandwidth tests (512B blocks),
 // and latency test.
 //
-// Copyright 2025 Timo Heimonen <timo.heimonen@gmail.com>
+// Copyright 2025 Timo Heimonen <timo.heimonen@proton.me>
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by

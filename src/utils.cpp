@@ -1,4 +1,4 @@
-// Copyright 2025 Timo Heimonen <timo.heimonen@gmail.com>
+// Copyright 2025 Timo Heimonen <timo.heimonen@proton.me>
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -51,7 +51,7 @@ void print_configuration(size_t buffer_size, size_t buffer_size_mb, int iteratio
     // Print benchmark header and copyright/license info.
     std::cout << "----- macOS-memory-benchmark v" << SOFTVERSION << " -----" << std::endl;
     std::cout << "Program is licensed under GNU GPL v3. See <https://www.gnu.org/licenses/>" << std::endl;
-    std::cout << "Copyright 2025 Timo Heimonen <timo.heimonen@gmail.com>\n" << std::endl;
+    std::cout << "Copyright 2025 Timo Heimonen <timo.heimonen@proton.me>\n" << std::endl;
     // Display buffer sizes (actual MiB and requested/capped MB).
     std::cout << "Buffer Size (per buffer): " << std::fixed << std::setprecision(2) << buffer_size / (1024.0*1024.0) << " MiB (" << buffer_size_mb << " MB requested/capped)" << std::endl;
     // Display total approximate memory allocated for the three buffers.

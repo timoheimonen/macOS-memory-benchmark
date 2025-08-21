@@ -1,6 +1,6 @@
 # macOS Apple Silicon Memory Performance Test
 
-Copyright 2025 Timo Heimonen <timo.heimonen@gmail.com>  
+Copyright 2025 Timo Heimonen <timo.heimonen@proton.me>  
 License: GPL-3.0 license  
   
 A simple tool to measure memory write/read/copy bandwidth and memory access latency on macOS with Apple Silicon (ARM64).  
@@ -117,7 +117,7 @@ In the Terminal, go to the directory with `memory_benchmark` and use these comma
 ```text
 ----- macOS-memory-benchmark v0.34 -----
 Program is licensed under GNU GPL v3. See <https://www.gnu.org/licenses/>
-Copyright 2025 Timo Heimonen <timo.heimonen@gmail.com>
+Copyright 2025 Timo Heimonen <timo.heimonen@proton.me>
 
 Buffer Size (per buffer): 512.00 MiB (512 MB requested/capped)
 Total Allocation Size: ~1536.00 MiB (for 3 buffers)
