@@ -1,7 +1,23 @@
 // loops.s
 // Assembly implementations for memory operations (ARM64 macOS / Apple Silicon)
-// Optimized loops for memory copy, read, write bandwidth tests (512B blocks),
-// and latency test.
+// Provides hot inner loops for:
+//   - Memory copy (bandwidth) using 512‑byte vector blocks
+//   - Memory read (bandwidth) with XOR reduction to keep loads live
+//   - Memory write (bandwidth) writing zeros using non‑temporal (STNP) hint
+//   - Memory latency (pointer chasing) with an 8x unrolled dependent chain
+//
+// Design Goals:
+//   * Saturate memory subsystem while minimizing loop overhead
+//   * Use large (512B) blocks for steady‑state bandwidth, tiered cleanup for tail
+//   * Keep a simple, predictable register footprint (no spills / stack usage)
+//   * Avoid introducing control dependencies that reduce ILP (besides latency test)
+//
+// Notes:
+//   * STNP is used as a non‑temporal hint; actual behavior is micro‑architecture dependent.
+//   * All routines assume pointers are valid and properly aligned for at least 16‑byte accesses.
+//   * No explicit prefetching is performed; modern Apple cores prefetch aggressively.
+//   * No stack frame / callee‑saved registers used (leaf functions).
+//   * These functions are intended to be called from C++ with matching prototypes.
 //
 // Copyright 2025 Timo Heimonen <timo.heimonen@proton.me>
 //
@@ -18,18 +34,33 @@
 // You should have received a copy of the GNU General Public License
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 
-.global _memory_copy_loop_asm // Make function visible
-.align 4                      // Align to 16 bytes
-
-// --- Memory Copy Function (512B Non-Temporal Stores) ---
-// C++ Signature: void memory_copy_loop_asm(void* dst, const void* src, size_t byteCount);
-// Args: x0=dst, x1=src, x2=byteCount
-// Uses q0-q31 for data
+// -----------------------------------------------------------------------------
+// memory_copy_loop_asm
+// -----------------------------------------------------------------------------
+// C++ Prototype:
+//   extern "C" void memory_copy_loop_asm(void* dst, const void* src, size_t byteCount);
+// Purpose:
+//   Copy 'byteCount' bytes from 'src' to 'dst' using wide (128‑bit) vector loads
+//   and pair stores, processing 512 bytes per iteration to maximize throughput.
+// Arguments:
+//   x0 = dst (void*)
+//   x1 = src (const void*)
+//   x2 = byteCount (size_t)
+// Returns:
+//   (none)
+// Clobbers:
+//   x3‑x8 (temporaries), q0‑q31 (data vectors)
+// Assumptions / Guarantees:
+//   * Undefined behavior if regions overlap (not a memmove replacement).
+//   * Tail handled with progressively smaller vector tiers then byte loop (<32B).
+// -----------------------------------------------------------------------------
+.global _memory_copy_loop_asm
+.align 4
 _memory_copy_loop_asm:
     mov x3, xzr             // offset = 0
     mov x4, #512            // step = 512 bytes
 
-copy_loop_start_nt512:      // Main loop start (512B blocks)
+copy_loop_start_nt512:      // Main 512B block loop
     subs x5, x2, x3         // remaining = count - offset
     cmp x5, x4              // remaining < step?
     b.lt copy_loop_cleanup  // If less, handle remaining bytes
@@ -78,7 +109,7 @@ copy_loop_start_nt512:      // Main loop start (512B blocks)
     add x3, x3, x4          // offset += step
     b copy_loop_start_nt512 // Loop again
 
-copy_loop_cleanup:          // Cleanup for <512B: vectorized for efficiency
+copy_loop_cleanup:          // Tail handling when <512B remain
     cmp x3, x2              // offset == count?
     b.ge copy_loop_end      // If done, exit
 
@@ -109,7 +140,7 @@ copy_loop_cleanup:          // Cleanup for <512B: vectorized for efficiency
     add x7, x7, #256
     sub x5, x5, #256
 
-cleanup_128:               // Handle 128B chunks (4 ldp/stnp pairs)
+cleanup_128:               // Handle 128B chunks (4 ldp + 4 stnp)
     cmp x5, #128
     b.lt cleanup_64
     ldp q0, q1, [x6, #0]
@@ -124,7 +155,7 @@ cleanup_128:               // Handle 128B chunks (4 ldp/stnp pairs)
     add x7, x7, #128
     sub x5, x5, #128
 
-cleanup_64:                // Handle 64B chunks (2 ldp/stnp pairs)
+cleanup_64:                // Handle 64B chunks (2 ldp + 2 stnp)
     cmp x5, #64
     b.lt cleanup_32
     ldp q0, q1, [x6, #0]
@@ -135,7 +166,7 @@ cleanup_64:                // Handle 64B chunks (2 ldp/stnp pairs)
     add x7, x7, #64
     sub x5, x5, #64
 
-cleanup_32:                // Handle 32B chunks (1 ldp/stnp pair)
+cleanup_32:                // Handle 32B chunk (1 ldp + 1 stnp)
     cmp x5, #32
     b.lt copy_cleanup_byte
     ldp q0, q1, [x6, #0]
@@ -144,7 +175,7 @@ cleanup_32:                // Handle 32B chunks (1 ldp/stnp pair)
     add x7, x7, #32
     sub x5, x5, #32
 
-copy_cleanup_byte:          // Byte-by-byte for final <32B
+copy_cleanup_byte:          // Byte tail for final <32B
     cmp x5, #0
     b.le copy_loop_end
     ldrb w8, [x6], #1       // Load byte, post-inc
@@ -152,14 +183,33 @@ copy_cleanup_byte:          // Byte-by-byte for final <32B
     subs x5, x5, #1
     b.gt copy_cleanup_byte
 
-copy_loop_end:              // Function end
+copy_loop_end:              // Return to caller
     ret                     // Return
 
-// --- Memory Read Function (Bandwidth Test - 512B block) ---
-// Reads memory, calculates XOR sum to prevent optimization.
+// -----------------------------------------------------------------------------
+// memory_read_loop_asm
+// -----------------------------------------------------------------------------
+// C++ Prototype:
+//   extern "C" uint64_t memory_read_loop_asm(const void* src, size_t byteCount);
+// Purpose:
+//   Read 'byteCount' bytes from 'src' to exercise memory read bandwidth.
+//   Accumulates an XOR checksum across all loaded data (and byte tail) to keep
+//   the loads architecturally visible and prevent dead‑code elimination.
+// Arguments:
+//   x0 = src (const void*)
+//   x1 = byteCount (size_t)
+// Returns:
+//   x0 = 64‑bit XOR checksum
+// Clobbers:
+//   x2‑x7, x12‑x13, q0‑q31 (data + accumulators)
+// Implementation Notes:
+//   * 512B main loop mirrors copy routine structure.
+//   * Distributes XOR into four accumulators (v8‑v11) to reduce dependency depth.
+//   * Tail path mirrors tiered size reductions (256/128/64/32/bytes).
+// -----------------------------------------------------------------------------
 
-.global _memory_read_loop_asm // Make function visible
-.align 4                      // Align to 16 bytes
+.global _memory_read_loop_asm
+.align 4
 
 // C++ Signature: uint64_t memory_read_loop_asm(const void* src, size_t byteCount);
 // Args: x0=src, x1=byteCount
@@ -176,14 +226,14 @@ _memory_read_loop_asm:
     eor v10.16b, v10.16b, v10.16b
     eor v11.16b, v11.16b, v11.16b
 
-read_loop_start_512:        // Main loop start (512B blocks)
+read_loop_start_512:        // Main 512B block loop
     subs x5, x1, x3         // remaining = count - offset
     cmp x5, x4              // remaining < step?
     b.lt read_loop_cleanup  // If less, handle remaining bytes
 
     add x6, x0, x3          // src_addr = base + offset
 
-    // Load 512 bytes from source (16 ldp pairs, q0-q31)
+    // Load 512 bytes from source (16 * 32B = 512B) using pair loads
     ldp q0,  q1,  [x6, #0]
     ldp q2,  q3,  [x6, #32]
     ldp q4,  q5,  [x6, #64]
@@ -204,8 +254,7 @@ read_loop_start_512:        // Main loop start (512B blocks)
     ldp q0,  q1,  [x6, #448]  // Reuse q0,q1 as we already accumulated them
     ldp q2,  q3,  [x6, #480]  // Reuse q2,q3 as we already accumulated them
 
-    // Accumulate XOR sum into v8-v11 (sink operation)
-    // Distribute q0-q31 across the 4 accumulators
+    // XOR fold loaded vectors into 4 accumulators (v8‑v11)
     eor v8.16b,  v8.16b,  v0.16b    ; eor v9.16b,  v9.16b,  v1.16b
     eor v10.16b, v10.16b, v2.16b   ; eor v11.16b, v11.16b, v3.16b
     eor v8.16b,  v8.16b,  v4.16b    ; eor v9.16b,  v9.16b,  v5.16b
@@ -226,14 +275,14 @@ read_loop_start_512:        // Main loop start (512B blocks)
     add x3, x3, x4          // offset += step
     b read_loop_start_512   // Loop again
 
-read_loop_cleanup:          // Cleanup for <512B: vectorized for efficiency
+read_loop_cleanup:          // Tail handling when <512B remain
     cmp x3, x1              // offset == count?
     b.ge read_loop_combine_sum // If done, combine sums
 
     subs x5, x1, x3         // Recalc remaining (x5)
     add x6, x0, x3          // src_addr = src + offset
 
-    // Handle 256B chunks (8 ldp pairs + eor)
+    // 256B chunk (8 pair loads + XOR fold)
     cmp x5, #256
     b.lt read_cleanup_128
     ldp q0, q1, [x6, #0]
@@ -255,7 +304,7 @@ read_loop_cleanup:          // Cleanup for <512B: vectorized for efficiency
     add x6, x6, #256
     sub x5, x5, #256
 
-read_cleanup_128:          // Handle 128B chunks
+read_cleanup_128:          // 128B chunk
     cmp x5, #128
     b.lt read_cleanup_64
     ldp q0, q1, [x6, #0]
@@ -269,7 +318,7 @@ read_cleanup_128:          // Handle 128B chunks
     add x6, x6, #128
     sub x5, x5, #128
 
-read_cleanup_64:           // Handle 64B chunks
+read_cleanup_64:           // 64B chunk
     cmp x5, #64
     b.lt read_cleanup_32
     ldp q0, q1, [x6, #0]
@@ -279,7 +328,7 @@ read_cleanup_64:           // Handle 64B chunks
     add x6, x6, #64
     sub x5, x5, #64
 
-read_cleanup_32:           // Handle 32B chunks
+read_cleanup_32:           // 32B chunk
     cmp x5, #32
     b.lt read_cleanup_byte
     ldp q0, q1, [x6, #0]
@@ -287,7 +336,7 @@ read_cleanup_32:           // Handle 32B chunks
     add x6, x6, #32
     sub x5, x5, #32
 
-read_cleanup_byte:          // Byte-by-byte for final <32B
+read_cleanup_byte:          // Byte tail (<32B)
     cmp x5, #0
     b.le read_loop_combine_sum
     ldrb w13, [x6], #1      // Load byte, post-inc
@@ -295,7 +344,7 @@ read_cleanup_byte:          // Byte-by-byte for final <32B
     subs x5, x5, #1
     b.gt read_cleanup_byte
 
-read_loop_combine_sum:      // Combine final checksum
+read_loop_combine_sum:      // Final reduction + result write‑back
     // Combine accumulators v8-v11 -> v8
     eor v8.16b, v8.16b, v9.16b
     eor v10.16b, v10.16b, v11.16b
@@ -307,11 +356,28 @@ read_loop_combine_sum:      // Combine final checksum
 
     ret                     // Return checksum
     
-// --- Memory Write Function (Bandwidth Test - 512B Non-Temporal Stores) ---
-// Writes zeros to memory using non-temporal stores.
+// -----------------------------------------------------------------------------
+// memory_write_loop_asm
+// -----------------------------------------------------------------------------
+// C++ Prototype:
+//   extern "C" void memory_write_loop_asm(void* dst, size_t byteCount);
+// Purpose:
+//   Write 'byteCount' bytes of zeros to 'dst' using 512B block stores
+//   to measure raw write bandwidth. Uses STNP as a non‑temporal hint.
+// Arguments:
+//   x0 = dst (void*)
+//   x1 = byteCount (size_t)
+// Returns:
+//   (none)
+// Clobbers:
+//   x3‑x7, q0‑q31 (zero vectors)
+// Implementation Notes:
+//   * Zero vectors are materialized once (movi) then reused.
+//   * Tiered tail mirrors copy/read for consistency.
+// -----------------------------------------------------------------------------
 
-.global _memory_write_loop_asm // Make function visible
-.align 4                       // Align to 16 bytes
+.global _memory_write_loop_asm
+.align 4
 
 // C++ Signature: void memory_write_loop_asm(void* dst, size_t byteCount);
 // Args: x0=dst, x1=byteCount
@@ -339,7 +405,7 @@ _memory_write_loop_asm:
     movi v30.16b, #0 ; movi v31.16b, #0
 
 
-write_loop_start_nt512:     // Main loop start (512B blocks)
+write_loop_start_nt512:     // Main 512B block loop
     subs x5, x1, x3         // remaining = count - offset
     cmp x5, x4              // remaining < step?
     b.lt write_loop_cleanup // If less, handle remaining bytes
@@ -367,7 +433,7 @@ write_loop_start_nt512:     // Main loop start (512B blocks)
     add x3, x3, x4          // offset += step
     b write_loop_start_nt512 // Loop again
 
-write_loop_cleanup:         // Cleanup for <512B: vectorized for efficiency
+write_loop_cleanup:         // Tail handling when <512B remain
     cmp x3, x1              // offset == count?
     b.ge write_loop_end     // If done, exit
 
@@ -388,7 +454,7 @@ write_loop_cleanup:         // Cleanup for <512B: vectorized for efficiency
     add x7, x7, #256
     sub x5, x5, #256
 
-write_cleanup_128:         // Handle 128B chunks
+write_cleanup_128:         // 128B chunk
     cmp x5, #128
     b.lt write_cleanup_64
     stnp q0, q1, [x7, #0]
@@ -398,7 +464,7 @@ write_cleanup_128:         // Handle 128B chunks
     add x7, x7, #128
     sub x5, x5, #128
 
-write_cleanup_64:          // Handle 64B chunks
+write_cleanup_64:          // 64B chunk
     cmp x5, #64
     b.lt write_cleanup_32
     stnp q0, q1, [x7, #0]
@@ -406,24 +472,44 @@ write_cleanup_64:          // Handle 64B chunks
     add x7, x7, #64
     sub x5, x5, #64
 
-write_cleanup_32:          // Handle 32B chunks
+write_cleanup_32:          // 32B chunk
     cmp x5, #32
     b.lt write_cleanup_byte
     stnp q0, q1, [x7, #0]
     add x7, x7, #32
     sub x5, x5, #32
 
-write_cleanup_byte:         // Byte-by-byte for final <32B
+write_cleanup_byte:         // Byte tail (<32B)
     cmp x5, #0
     b.le write_loop_end
     strb wzr, [x7], #1      // Store zero byte, post-inc
     subs x5, x5, #1
     b.gt write_cleanup_byte
 
-write_loop_end:             // Function end
+write_loop_end:             // Return to caller
     ret                     // Return
 
-// --- Memory Latency Function (Pointer Chasing) ---
+// -----------------------------------------------------------------------------
+// memory_latency_chase_asm
+// -----------------------------------------------------------------------------
+// C++ Prototype:
+//   extern "C" uint64_t memory_latency_chase_asm(uintptr_t* start_pointer, size_t count);
+// Purpose:
+//   Measure load‑to‑use latency via dependent pointer chasing. Each load feeds
+//   the address of the next, forming a serialized chain. Loop is unrolled by 8
+//   to reduce branch impact while preserving dependency.
+// Arguments:
+//   x0 = start_pointer (uintptr_t*)
+//   x1 = count (number of pointer dereferences)
+// Returns:
+//   x0 = final pointer value (acts as a sink to prevent DCE)
+// Clobbers:
+//   x2‑x5 (temporaries), x4 reused for iteration counts
+// Implementation Notes:
+//   * Uses barriers (dsb/isb/dmb) to isolate measurement window and reduce
+//     speculative side effects across the unrolled section.
+//   * No prefetching: intentional to keep strictly serialized accesses.
+// -----------------------------------------------------------------------------
 
 .global _memory_latency_chase_asm
 .align 4
@@ -448,7 +534,7 @@ _memory_latency_chase_asm:
 
     dmb sy                  // Barrier to prevent reordering before measurement
 
-latency_loop_unrolled:  // Unrolled loop for multiples of 8
+latency_loop_unrolled:      // 8 dependent loads per iteration
     ldr x0, [x0]
     ldr x0, [x0]
     ldr x0, [x0]
@@ -463,12 +549,12 @@ latency_loop_unrolled:  // Unrolled loop for multiples of 8
 
     dmb sy                  // Barrier after unrolled to ensure completion
 
-latency_remainder:      // Handle remaining accesses (0-7)
+latency_remainder:          // Handle remaining (0‑7) dereferences
     cbz x5, latency_end // Skip if no remainder
-latency_single:
+latency_single:             // Single dependent dereference
     ldr x0, [x0]
     subs x5, x5, #1
     b.gt latency_single
 
-latency_end:
+latency_end:                // Return final pointer value
     ret                 // Return final pointer to prevent optimizations
