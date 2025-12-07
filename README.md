@@ -71,6 +71,10 @@ macOS on Apple Silicon.
 * Xcode Command Line Tools (includes `clang++` compiler and `as` assembler).
     * Install with: `xcode-select --install` in the Terminal.
 
+## Install with Homebrew
+
+`brew install timoheimonen/macOS-memory-benchmark/memory-benchmark`
+
 ## Building
 
 In the Terminal, go to the directory with source code. Run:
