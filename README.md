@@ -73,6 +73,7 @@ macOS on Apple Silicon.
 
 ## Install with Homebrew
 
+In the Terminal, Run:
 `brew install timoheimonen/macOS-memory-benchmark/memory-benchmark`
 
 ## Building
