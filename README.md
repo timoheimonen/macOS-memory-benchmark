@@ -98,9 +98,11 @@ In the Terminal, go to the directory with `memory_benchmark` and use these comma
     ```
     Example output:
     ```text
-    Usage: ./memory_benchmark [options]
-    Version: 0.25
+    Version: 0.4 by Timo Heimonen <timo.heimonen@proton.me>
+    License: GNU GPL v3. See <https://www.gnu.org/licenses/>
+    Link: https://github.com/timoheimonen/macOS-memory-benchmark
 
+    Usage: ./memory_benchmark [options]
     Options:
       -iterations <count>   Number of iterations for R/W/Copy tests (default: 1000)
       -buffersize <size_mb> Size for EACH of the 3 buffers in Megabytes (MB) as integer (default: 512).
@@ -122,7 +124,7 @@ In the Terminal, go to the directory with `memory_benchmark` and use these comma
 
 ## Example output (Mac Mini M4 24GB)
 ```text
------ macOS-memory-benchmark v0.39 -----
+----- macOS-memory-benchmark v0.4 -----
 Program is licensed under GNU GPL v3. See <https://www.gnu.org/licenses/>
 Copyright 2025 Timo Heimonen <timo.heimonen@proton.me>
 
