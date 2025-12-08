@@ -40,7 +40,7 @@ auto join_threads = [](std::vector<std::thread>& threads) {
 // 'num_threads': Number of concurrent threads to use.
 // 'dummy_checksum': Atomic variable to accumulate a dummy result (prevents optimization).
 void warmup_read(void* buffer, size_t size, int num_threads, std::atomic<uint64_t>& dummy_checksum) {
-  std::cout << "  Read warm-up..." << std::endl;
+  std::cout << "Read warm-up..." << std::endl;
   // Vector to store thread objects.
   std::vector<std::thread> threads;
   // Pre-allocate space for efficiency.
@@ -81,7 +81,7 @@ void warmup_read(void* buffer, size_t size, int num_threads, std::atomic<uint64_
 // 'size': Total size of the buffer in bytes.
 // 'num_threads': Number of concurrent threads to use.
 void warmup_write(void* buffer, size_t size, int num_threads) {
-  std::cout << "  Write warm-up..." << std::endl;
+  std::cout << "Write warm-up..." << std::endl;
   // Vector to store thread objects.
   std::vector<std::thread> threads;
   threads.reserve(num_threads);
@@ -120,7 +120,7 @@ void warmup_write(void* buffer, size_t size, int num_threads) {
 // 'size': Total size of data to copy in bytes.
 // 'num_threads': Number of concurrent threads to use.
 void warmup_copy(void* dst, void* src, size_t size, int num_threads) {
-  std::cout << "  Copy warm-up..." << std::endl;
+  std::cout << "Copy warm-up..." << std::endl;
   // Vector to store thread objects.
   std::vector<std::thread> threads;
   threads.reserve(num_threads);
@@ -159,7 +159,7 @@ void warmup_copy(void* dst, void* src, size_t size, int num_threads) {
 // 'buffer': Memory region containing the pointer chain.
 // 'num_accesses': Total number of pointer dereferences planned for the actual test.
 void warmup_latency(void* buffer, size_t num_accesses) {
-  std::cout << "  Latency warm-up (single thread)..." << std::endl;
+  std::cout << "Latency warm-up (single thread)..." << std::endl;
   // Only perform warmup if there will be accesses in the main test.
   if (num_accesses > 0) {
     // Perform a small fraction of the total accesses for warmup (at least 1).

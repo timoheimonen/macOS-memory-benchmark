@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.39] - 2025-12-07
+
+### Fixed
+- **Critical bug fix in `memory_read_loop_asm` main loop**: Fixed double accumulation bug where registers q0-q3 were loaded twice (at offsets 0-96 and 448-480) and accumulated twice, causing incorrect XOR checksum calculation. Reordered code to accumulate q0-q7 immediately after first load, then safely reuse q0-q3 for final loads, ensuring each data block is accumulated exactly once.
+
+### Changed
+- Bandwidth timing now starts after worker threads are created and waiting, and stops after join; added a start gate so setup/QoS overhead is excluded from measurements.
+- Latency warm-up now runs immediately before each latency test loop to keep cache state consistent with the measurement that follows.
+- Warmups for read/write/copy now run immediately before their respective benchmarks each loop to align cache/TLB state with the measurement.
+
+
 ## [0.38] - 2025-12-07
 
 ### Fixed

@@ -245,12 +245,9 @@ read_loop_start_512:        // Main 512B block loop
     // Repurpose upper registers that we already processed
     ldp q28, q29, [x6, #384]      // Load pair 12 (offset 384)
     ldp q30, q31, [x6, #416]      // Load pair 13 (offset 416)
-    // Last two loads directly to free scratch registers (reuse q0-q3 after accumulation)
-    ldp q0,  q1,  [x6, #448]      // Load pair 14 (offset 448, reuse q0-q1)
-    ldp q2,  q3,  [x6, #480]      // Load pair 15 (offset 480, reuse q2-q3)
 
-    // XOR fold loaded vectors into 4 accumulators (v8-v11)
-    // First 8 vectors (q0-q7) into accumulators
+    // XOR fold first 8 vectors (q0-q7) into accumulators BEFORE loading final pairs
+    // This allows safe reuse of q0-q3 for the final loads
     eor v8.16b,  v8.16b,  v0.16b    // Accumulate q0 into v8
     eor v9.16b,  v9.16b,  v1.16b    // Accumulate q1 into v9
     eor v10.16b, v10.16b, v2.16b    // Accumulate q2 into v10
@@ -259,6 +256,10 @@ read_loop_start_512:        // Main 512B block loop
     eor v9.16b,  v9.16b,  v5.16b    // Accumulate q5 into v9
     eor v10.16b, v10.16b, v6.16b    // Accumulate q6 into v10
     eor v11.16b, v11.16b, v7.16b    // Accumulate q7 into v11
+
+    // Now safe to reuse q0-q3 for final two loads (offsets 448, 480)
+    ldp q0,  q1,  [x6, #448]      // Load pair 14 (offset 448, reuse q0-q1)
+    ldp q2,  q3,  [x6, #480]      // Load pair 15 (offset 480, reuse q2-q3)
     // Next 4 vectors (q24-q27, loaded to temps) into accumulators
     eor v8.16b,  v8.16b,  v24.16b   // Accumulate q24 into v8
     eor v9.16b,  v9.16b,  v25.16b   // Accumulate q25 into v9
@@ -282,11 +283,11 @@ read_loop_start_512:        // Main 512B block loop
     eor v9.16b,  v9.16b,  v29.16b   // Accumulate q29 into v9
     eor v10.16b, v10.16b, v30.16b   // Accumulate q30 into v10
     eor v11.16b, v11.16b, v31.16b   // Accumulate q31 into v11
-    // Final 4 vectors (reused q0-q3 from second load) into accumulators
-    eor v8.16b,  v8.16b,  v0.16b    // Accumulate reused q0 into v8
-    eor v9.16b,  v9.16b,  v1.16b    // Accumulate reused q1 into v9
-    eor v10.16b, v10.16b, v2.16b    // Accumulate reused q2 into v10
-    eor v11.16b, v11.16b, v3.16b    // Accumulate reused q3 into v11
+    // Final 4 vectors (q0-q3 from final load, offsets 448/480) into accumulators
+    eor v8.16b,  v8.16b,  v0.16b    // Accumulate q0 into v8
+    eor v9.16b,  v9.16b,  v1.16b    // Accumulate q1 into v9
+    eor v10.16b, v10.16b, v2.16b    // Accumulate q2 into v10
+    eor v11.16b, v11.16b, v3.16b    // Accumulate q3 into v11
 
     add x3, x3, x4          // offset += step
     b read_loop_start_512   // Loop again

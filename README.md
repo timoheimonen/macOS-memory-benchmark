@@ -122,7 +122,7 @@ In the Terminal, go to the directory with `memory_benchmark` and use these comma
 
 ## Example output (Mac Mini M4 24GB)
 ```text
------ macOS-memory-benchmark v0.38 -----
+----- macOS-memory-benchmark v0.39 -----
 Program is licensed under GNU GPL v3. See <https://www.gnu.org/licenses/>
 Copyright 2025 Timo Heimonen <timo.heimonen@proton.me>
 
@@ -146,34 +146,31 @@ Src/Dst buffers initialized.
 Setting up pointer chain
 Pointer chain setup complete.
 
-Performing warm-up runs...
-  Read warm-up...
-  Write warm-up...
-  Copy warm-up...
-  Latency warm-up (single thread)...
-Warm-up complete.
-
 --- Starting Measurements (1 loops) ---
 
 Starting Loop 1 of 1...
+Read warm-up...
 Measuring Read Bandwidth...
 Read complete.
+Write warm-up...
 Measuring Write Bandwidth...
 Write complete.
+Copy warm-up...
 Measuring Copy Bandwidth...
 Copy complete.
+Latency warm-up (single thread)...
 Measuring Latency (single thread)...
 Latency complete.
 
 --- Results (Loop 1) ---
 Bandwidth Tests (multi-threaded, 10 threads):
-  Read : 114.125 GB/s (Total time: 4.704 s)
-  Write: 66.333 GB/s (Total time: 8.094 s)
-  Copy : 106.418 GB/s (Total time: 10.090 s)
+  Read : 115.468 GB/s (Total time: 4.650 s)
+  Write: 68.775 GB/s (Total time: 7.806 s)
+  Copy : 105.967 GB/s (Total time: 10.133 s)
 
 Latency Test (single-threaded, pointer chase):
-  Total time: 19.477 s
-  Average latency: 97.38 ns
+  Total time: 19.520 s
+  Average latency: 97.60 ns
 --------------
 
-Done. Total execution time: 42.771 s
+Done. Total execution time: 42.544 s

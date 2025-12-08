@@ -262,15 +262,6 @@ int main(int argc, char *argv[]) {
   initialize_buffers(src_buffer, dst_buffer, buffer_size);   // Fill buffers
   setup_latency_chain(lat_buffer, buffer_size, lat_stride);  // Prepare latency test buffer
 
-  // --- Warm-up Runs ---
-  std::cout << "\nPerforming warm-up runs..." << std::endl;
-  std::atomic<uint64_t> dummy_checksum_warmup_atomic{0};                            // Dummy for read warmup
-  warmup_read(src_buffer, buffer_size, num_threads, dummy_checksum_warmup_atomic);  // Warmup read
-  warmup_write(dst_buffer, buffer_size, num_threads);                               // Warmup write
-  warmup_copy(dst_buffer, src_buffer, buffer_size, num_threads);                    // Warmup copy
-  warmup_latency(lat_buffer, lat_num_accesses);                                     // Warmup latency
-  std::cout << "Warm-up complete." << std::endl;
-
   // --- Measurement Loops ---
   std::cout << "\n--- Starting Measurements (" << loop_count << " loops) ---" << std::endl;
 
@@ -302,11 +293,18 @@ int main(int argc, char *argv[]) {
     std::atomic<uint64_t> total_read_checksum{0};  // Checksum for read test
 
     try {
-      // --- Run tests ---
+      // --- Run tests - warmups are done before each test ---
+      std::atomic<uint64_t> warmup_read_checksum{0};
+      warmup_read(src_buffer, buffer_size, num_threads, warmup_read_checksum);
       total_read_time =
           run_read_test(src_buffer, buffer_size, iterations, num_threads, total_read_checksum, test_timer);
+      warmup_write(dst_buffer, buffer_size, num_threads);
       total_write_time = run_write_test(dst_buffer, buffer_size, iterations, num_threads, test_timer);
+      warmup_copy(dst_buffer, src_buffer, buffer_size, num_threads);
       total_copy_time = run_copy_test(dst_buffer, src_buffer, buffer_size, iterations, num_threads, test_timer);
+
+      // Warm latency immediately before measuring it to keep cache state representative
+      warmup_latency(lat_buffer, lat_num_accesses);
       total_lat_time_ns = run_latency_test(lat_buffer, lat_num_accesses, test_timer);
     } catch (const std::exception &e) {
       std::cerr << "Error during benchmark tests: " << e.what() << std::endl;
