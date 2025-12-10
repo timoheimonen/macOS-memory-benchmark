@@ -98,9 +98,11 @@ In the Terminal, go to the directory with `memory_benchmark` and use these comma
     ```
     Example output:
     ```text
-    Usage: ./memory_benchmark [options]
-    Version: 0.25
+    Version: 0.4 by Timo Heimonen <timo.heimonen@proton.me>
+    License: GNU GPL v3. See <https://www.gnu.org/licenses/>
+    Link: https://github.com/timoheimonen/macOS-memory-benchmark
 
+    Usage: ./memory_benchmark [options]
     Options:
       -iterations <count>   Number of iterations for R/W/Copy tests (default: 1000)
       -buffersize <size_mb> Size for EACH of the 3 buffers in Megabytes (MB) as integer (default: 512).
@@ -122,7 +124,7 @@ In the Terminal, go to the directory with `memory_benchmark` and use these comma
 
 ## Example output (Mac Mini M4 24GB)
 ```text
------ macOS-memory-benchmark v0.39 -----
+----- macOS-memory-benchmark v0.4 -----
 Program is licensed under GNU GPL v3. See <https://www.gnu.org/licenses/>
 Copyright 2025 Timo Heimonen <timo.heimonen@proton.me>
 
@@ -164,13 +166,13 @@ Latency complete.
 
 --- Results (Loop 1) ---
 Bandwidth Tests (multi-threaded, 10 threads):
-  Read : 115.468 GB/s (Total time: 4.650 s)
-  Write: 68.775 GB/s (Total time: 7.806 s)
-  Copy : 105.967 GB/s (Total time: 10.133 s)
+  Read : 116.135 GB/s (Total time: 4.623 s)
+  Write: 66.072 GB/s (Total time: 8.126 s)
+  Copy : 106.020 GB/s (Total time: 10.128 s)
 
 Latency Test (single-threaded, pointer chase):
-  Total time: 19.520 s
-  Average latency: 97.60 ns
+  Total time: 19.382 s
+  Average latency: 96.91 ns
 --------------
 
-Done. Total execution time: 42.544 s
+Done. Total execution time: 42.650 s

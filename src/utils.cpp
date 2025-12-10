@@ -26,8 +26,10 @@
 // 'prog_name': The name of the executable (typically argv[0]).
 void print_usage(const char *prog_name) {
   // Output usage syntax, version, options, and an example to standard error.
-  std::cerr << "Usage: " << prog_name << " [options]\n"
-            << "Version: " << SOFTVERSION << "\n\n"  // SOFTVERSION defined in benchmark.h
+  std::cerr << "Version: " << SOFTVERSION << " by Timo Heimonen <timo.heimonen@proton.me>\n"  // SOFTVERSION defined in benchmark.h
+            << "License: GNU GPL v3. See <https://www.gnu.org/licenses/>\n"
+            << "Link: https://github.com/timoheimonen/macOS-memory-benchmark\n\n"
+            << "Usage: " << prog_name << " [options]\n"
             << "Options:\n"
             << "  -iterations <count>   Number of iterations for R/W/Copy tests (default: 1000)\n"
             << "  -buffersize <size_mb> Size for EACH of the 3 buffers in Megabytes (MB) as integer (default: 512).\n"

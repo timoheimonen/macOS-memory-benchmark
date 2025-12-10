@@ -49,7 +49,7 @@
 // Returns:
 //   (none)
 // Clobbers:
-//   x3‑x8 (temporaries), q0‑q31 (data vectors)
+//   x3‑x8 (temporaries), q0‑q7, q16‑q31 (data vectors, avoiding q8‑q15 per AAPCS64)
 // Assumptions / Guarantees:
 //   * Undefined behavior if regions overlap (not a memmove replacement).
 //   * Tail handled with progressively smaller vector tiers then byte loop (<32B).
@@ -70,41 +70,46 @@ copy_loop_start_nt512:      // Main 512B block loop
     add x7, x0, x3          // dst_addr = base + offset
 
     // Load 512 bytes from source (16 ldp pairs, 32B each)
+    // Using only caller-saved registers: q0-q7 and q16-q31 (avoiding q8-q15 per AAPCS64)
+    // Load first 8 pairs (0-7) into q0-q7 and q16-q23
     ldp q0,  q1,  [x6, #0]      // Load pair 0 (offset 0)
     ldp q2,  q3,  [x6, #32]     // Load pair 1 (offset 32)
     ldp q4,  q5,  [x6, #64]     // Load pair 2 (offset 64)
     ldp q6,  q7,  [x6, #96]     // Load pair 3 (offset 96)
-    ldp q8,  q9,  [x6, #128]    // Load pair 4 (offset 128)
-    ldp q10, q11, [x6, #160]    // Load pair 5 (offset 160)
-    ldp q12, q13, [x6, #192]    // Load pair 6 (offset 192)
-    ldp q14, q15, [x6, #224]    // Load pair 7 (offset 224)
-    ldp q16, q17, [x6, #256]    // Load pair 8 (offset 256)
-    ldp q18, q19, [x6, #288]    // Load pair 9 (offset 288)
-    ldp q20, q21, [x6, #320]    // Load pair 10 (offset 320)
-    ldp q22, q23, [x6, #352]    // Load pair 11 (offset 352)
-    ldp q24, q25, [x6, #384]    // Load pair 12 (offset 384)
-    ldp q26, q27, [x6, #416]    // Load pair 13 (offset 416)
-    ldp q28, q29, [x6, #448]    // Load pair 14 (offset 448)
-    ldp q30, q31, [x6, #480]    // Load pair 15 (offset 480)
-
-
-    // Store 512 bytes (non-temporal) - minimize cache pollution (16 stnp pairs)
-    stnp q0,  q1,  [x7, #0]      // Store pair 0 (offset 0, non-temporal)
-    stnp q2,  q3,  [x7, #32]     // Store pair 1 (offset 32, non-temporal)
-    stnp q4,  q5,  [x7, #64]     // Store pair 2 (offset 64, non-temporal)
-    stnp q6,  q7,  [x7, #96]     // Store pair 3 (offset 96, non-temporal)
-    stnp q8,  q9,  [x7, #128]    // Store pair 4 (offset 128, non-temporal)
-    stnp q10, q11, [x7, #160]    // Store pair 5 (offset 160, non-temporal)
-    stnp q12, q13, [x7, #192]    // Store pair 6 (offset 192, non-temporal)
-    stnp q14, q15, [x7, #224]    // Store pair 7 (offset 224, non-temporal)
-    stnp q16, q17, [x7, #256]    // Store pair 8 (offset 256, non-temporal)
-    stnp q18, q19, [x7, #288]    // Store pair 9 (offset 288, non-temporal)
-    stnp q20, q21, [x7, #320]    // Store pair 10 (offset 320, non-temporal)
-    stnp q22, q23, [x7, #352]    // Store pair 11 (offset 352, non-temporal)
-    stnp q24, q25, [x7, #384]    // Store pair 12 (offset 384, non-temporal)
-    stnp q26, q27, [x7, #416]    // Store pair 13 (offset 416, non-temporal)
-    stnp q28, q29, [x7, #448]    // Store pair 14 (offset 448, non-temporal)
-    stnp q30, q31, [x7, #480]    // Store pair 15 (offset 480, non-temporal)
+    ldp q16, q17, [x6, #128]    // Load pair 4 (offset 128)
+    ldp q18, q19, [x6, #160]    // Load pair 5 (offset 160)
+    ldp q20, q21, [x6, #192]    // Load pair 6 (offset 192)
+    ldp q22, q23, [x6, #224]    // Load pair 7 (offset 224)
+    
+    // Store first 8 pairs before loading next 8 (to avoid register pressure)
+    stnp q0,  q1,  [x7, #0]     // Store pair 0 (offset 0, non-temporal)
+    stnp q2,  q3,  [x7, #32]    // Store pair 1 (offset 32, non-temporal)
+    stnp q4,  q5,  [x7, #64]    // Store pair 2 (offset 64, non-temporal)
+    stnp q6,  q7,  [x7, #96]    // Store pair 3 (offset 96, non-temporal)
+    stnp q16, q17, [x7, #128]   // Store pair 4 (offset 128, non-temporal)
+    stnp q18, q19, [x7, #160]   // Store pair 5 (offset 160, non-temporal)
+    stnp q20, q21, [x7, #192]   // Store pair 6 (offset 192, non-temporal)
+    stnp q22, q23, [x7, #224]   // Store pair 7 (offset 224, non-temporal)
+    
+    // Load next 8 pairs (8-15) into q24-q31 and q0-q7 (reusing q0-q7)
+    ldp q24, q25, [x6, #256]    // Load pair 8 (offset 256)
+    ldp q26, q27, [x6, #288]    // Load pair 9 (offset 288)
+    ldp q28, q29, [x6, #320]    // Load pair 10 (offset 320)
+    ldp q30, q31, [x6, #352]    // Load pair 11 (offset 352)
+    ldp q0,  q1,  [x6, #384]    // Load pair 12 (offset 384, reuse q0-q1)
+    ldp q2,  q3,  [x6, #416]    // Load pair 13 (offset 416, reuse q2-q3)
+    ldp q4,  q5,  [x6, #448]    // Load pair 14 (offset 448, reuse q4-q5)
+    ldp q6,  q7,  [x6, #480]    // Load pair 15 (offset 480, reuse q6-q7)
+    
+    // Store next 8 pairs (8-15)
+    stnp q24, q25, [x7, #256]   // Store pair 8 (offset 256, non-temporal)
+    stnp q26, q27, [x7, #288]   // Store pair 9 (offset 288, non-temporal)
+    stnp q28, q29, [x7, #320]   // Store pair 10 (offset 320, non-temporal)
+    stnp q30, q31, [x7, #352]   // Store pair 11 (offset 352, non-temporal)
+    stnp q0,  q1,  [x7, #384]   // Store pair 12 (offset 384, non-temporal)
+    stnp q2,  q3,  [x7, #416]   // Store pair 13 (offset 416, non-temporal)
+    stnp q4,  q5,  [x7, #448]   // Store pair 14 (offset 448, non-temporal)
+    stnp q6,  q7,  [x7, #480]   // Store pair 15 (offset 480, non-temporal)
 
     add x3, x3, x4          // offset += step
     b copy_loop_start_nt512 // Loop again
@@ -124,18 +129,18 @@ copy_loop_cleanup:          // Tail handling when <512B remain
     ldp q2, q3, [x6, #32]     // Load second pair (32B)
     ldp q4, q5, [x6, #64]     // Load third pair (32B)
     ldp q6, q7, [x6, #96]     // Load fourth pair (32B)
-    ldp q8, q9, [x6, #128]    // Load fifth pair (32B)
-    ldp q10, q11, [x6, #160]  // Load sixth pair (32B)
-    ldp q12, q13, [x6, #192]  // Load seventh pair (32B)
-    ldp q14, q15, [x6, #224]  // Load eighth pair (32B)
+    ldp q16, q17, [x6, #128]  // Load fifth pair (32B)
+    ldp q18, q19, [x6, #160]  // Load sixth pair (32B)
+    ldp q20, q21, [x6, #192]  // Load seventh pair (32B)
+    ldp q22, q23, [x6, #224]  // Load eighth pair (32B)
     stnp q0, q1, [x7, #0]     // Store first pair (non-temporal)
     stnp q2, q3, [x7, #32]    // Store second pair (non-temporal)
     stnp q4, q5, [x7, #64]    // Store third pair (non-temporal)
     stnp q6, q7, [x7, #96]    // Store fourth pair (non-temporal)
-    stnp q8, q9, [x7, #128]   // Store fifth pair (non-temporal)
-    stnp q10, q11, [x7, #160] // Store sixth pair (non-temporal)
-    stnp q12, q13, [x7, #192] // Store seventh pair (non-temporal)
-    stnp q14, q15, [x7, #224] // Store eighth pair (non-temporal)
+    stnp q16, q17, [x7, #128] // Store fifth pair (non-temporal)
+    stnp q18, q19, [x7, #160] // Store sixth pair (non-temporal)
+    stnp q20, q21, [x7, #192] // Store seventh pair (non-temporal)
+    stnp q22, q23, [x7, #224] // Store eighth pair (non-temporal)
     add x6, x6, #256          // Advance source pointer by 256B
     add x7, x7, #256          // Advance destination pointer by 256B
     sub x5, x5, #256          // Decrement remaining count by 256B
@@ -201,10 +206,10 @@ copy_loop_end:              // Return to caller
 // Returns:
 //   x0 = 64‑bit XOR checksum
 // Clobbers:
-//   x2‑x7, x12‑x13, q0‑q31 (data + accumulators)
+//   x2‑x7, x12‑x13, q0‑q7, q16‑q31 (data + accumulators, avoiding q8‑q15 per AAPCS64)
 // Implementation Notes:
 //   * 512B main loop mirrors copy routine structure.
-//   * Distributes XOR into four accumulators (v8‑v11) to reduce dependency depth.
+//   * Distributes XOR into four accumulators (v0‑v3) to reduce dependency depth.
 //   * Tail path mirrors tiered size reductions (256/128/64/32/bytes).
 // -----------------------------------------------------------------------------
 
@@ -215,11 +220,11 @@ _memory_read_loop_asm:
     mov x4, #512            // step = 512 bytes
     mov x12, xzr            // Zero byte cleanup checksum accumulator
 
-    // Zero accumulators (v8-v11) using XOR self-operation
-    eor v8.16b, v8.16b, v8.16b   // Zero accumulator 0
-    eor v9.16b, v9.16b, v9.16b   // Zero accumulator 1
-    eor v10.16b, v10.16b, v10.16b // Zero accumulator 2
-    eor v11.16b, v11.16b, v11.16b // Zero accumulator 3
+    // Zero accumulators (v0-v3) using XOR self-operation (caller-saved, safe to use)
+    eor v0.16b, v0.16b, v0.16b   // Zero accumulator 0
+    eor v1.16b, v1.16b, v1.16b   // Zero accumulator 1
+    eor v2.16b, v2.16b, v2.16b   // Zero accumulator 2
+    eor v3.16b, v3.16b, v3.16b   // Zero accumulator 3
 
 read_loop_start_512:        // Main 512B block loop
     subs x5, x1, x3         // remaining = count - offset
@@ -229,65 +234,65 @@ read_loop_start_512:        // Main 512B block loop
     add x6, x0, x3          // src_addr = base + offset
 
     // Load 512 bytes from source (16 * 32B = 512B) using pair loads
-    ldp q0,  q1,  [x6, #0]        // Load pair 0 (offset 0)
-    ldp q2,  q3,  [x6, #32]       // Load pair 1 (offset 32)
-    ldp q4,  q5,  [x6, #64]       // Load pair 2 (offset 64)
-    ldp q6,  q7,  [x6, #96]       // Load pair 3 (offset 96)
-    // Store loaded values from q8-q11 temporarily in v24-v27 (these are available)
-    ldp q24, q25, [x6, #128]      // Load pair 4 to temps (offset 128, avoid overwriting accumulators)
-    ldp q26, q27, [x6, #160]      // Load pair 5 to temps (offset 160, avoid overwriting accumulators)
-    ldp q12, q13, [x6, #192]      // Load pair 6 (offset 192)
-    ldp q14, q15, [x6, #224]      // Load pair 7 (offset 224)
-    ldp q16, q17, [x6, #256]      // Load pair 8 (offset 256)
-    ldp q18, q19, [x6, #288]      // Load pair 9 (offset 288)
-    ldp q20, q21, [x6, #320]      // Load pair 10 (offset 320)
-    ldp q22, q23, [x6, #352]      // Load pair 11 (offset 352)
-    // Repurpose upper registers that we already processed
-    ldp q28, q29, [x6, #384]      // Load pair 12 (offset 384)
-    ldp q30, q31, [x6, #416]      // Load pair 13 (offset 416)
-
-    // XOR fold first 8 vectors (q0-q7) into accumulators BEFORE loading final pairs
-    // This allows safe reuse of q0-q3 for the final loads
-    eor v8.16b,  v8.16b,  v0.16b    // Accumulate q0 into v8
-    eor v9.16b,  v9.16b,  v1.16b    // Accumulate q1 into v9
-    eor v10.16b, v10.16b, v2.16b    // Accumulate q2 into v10
-    eor v11.16b, v11.16b, v3.16b    // Accumulate q3 into v11
-    eor v8.16b,  v8.16b,  v4.16b    // Accumulate q4 into v8
-    eor v9.16b,  v9.16b,  v5.16b    // Accumulate q5 into v9
-    eor v10.16b, v10.16b, v6.16b    // Accumulate q6 into v10
-    eor v11.16b, v11.16b, v7.16b    // Accumulate q7 into v11
-
-    // Now safe to reuse q0-q3 for final two loads (offsets 448, 480)
-    ldp q0,  q1,  [x6, #448]      // Load pair 14 (offset 448, reuse q0-q1)
-    ldp q2,  q3,  [x6, #480]      // Load pair 15 (offset 480, reuse q2-q3)
-    // Next 4 vectors (q24-q27, loaded to temps) into accumulators
-    eor v8.16b,  v8.16b,  v24.16b   // Accumulate q24 into v8
-    eor v9.16b,  v9.16b,  v25.16b   // Accumulate q25 into v9
-    eor v10.16b, v10.16b, v26.16b   // Accumulate q26 into v10
-    eor v11.16b, v11.16b, v27.16b   // Accumulate q27 into v11
-    // Next 8 vectors (q12-q23) into accumulators
-    eor v8.16b,  v8.16b,  v12.16b   // Accumulate q12 into v8
-    eor v9.16b,  v9.16b,  v13.16b   // Accumulate q13 into v9
-    eor v10.16b, v10.16b, v14.16b   // Accumulate q14 into v10
-    eor v11.16b, v11.16b, v15.16b   // Accumulate q15 into v11
-    eor v8.16b,  v8.16b,  v16.16b   // Accumulate q16 into v8
-    eor v9.16b,  v9.16b,  v17.16b   // Accumulate q17 into v9
-    eor v10.16b, v10.16b, v18.16b   // Accumulate q18 into v10
-    eor v11.16b, v11.16b, v19.16b   // Accumulate q19 into v11
-    eor v8.16b,  v8.16b,  v20.16b   // Accumulate q20 into v8
-    eor v9.16b,  v9.16b,  v21.16b   // Accumulate q21 into v9
-    eor v10.16b, v10.16b, v22.16b   // Accumulate q22 into v10
-    eor v11.16b, v11.16b, v23.16b   // Accumulate q23 into v11
-    // Next 4 vectors (q28-q31) into accumulators
-    eor v8.16b,  v8.16b,  v28.16b   // Accumulate q28 into v8
-    eor v9.16b,  v9.16b,  v29.16b   // Accumulate q29 into v9
-    eor v10.16b, v10.16b, v30.16b   // Accumulate q30 into v10
-    eor v11.16b, v11.16b, v31.16b   // Accumulate q31 into v11
-    // Final 4 vectors (q0-q3 from final load, offsets 448/480) into accumulators
-    eor v8.16b,  v8.16b,  v0.16b    // Accumulate q0 into v8
-    eor v9.16b,  v9.16b,  v1.16b    // Accumulate q1 into v9
-    eor v10.16b, v10.16b, v2.16b    // Accumulate q2 into v10
-    eor v11.16b, v11.16b, v3.16b    // Accumulate q3 into v11
+    // Using only caller-saved registers: q0-q7 and q16-q31 (avoiding q8-q15 per AAPCS64)
+    // Accumulators are v0-v3 (q0-q3), so we load data into q4-q7 and q16-q31 first
+    // Process in two chunks: first 8 pairs, then next 8 pairs
+    
+    // Load first 8 pairs (0-7) into q4-q7 and q16-q23
+    ldp q4,  q5,  [x6, #0]        // Load pair 0 (offset 0)
+    ldp q6,  q7,  [x6, #32]       // Load pair 1 (offset 32)
+    ldp q16, q17, [x6, #64]       // Load pair 2 (offset 64)
+    ldp q18, q19, [x6, #96]       // Load pair 3 (offset 96)
+    ldp q20, q21, [x6, #128]      // Load pair 4 (offset 128)
+    ldp q22, q23, [x6, #160]      // Load pair 5 (offset 160)
+    ldp q24, q25, [x6, #192]      // Load pair 6 (offset 192)
+    ldp q26, q27, [x6, #224]      // Load pair 7 (offset 224)
+    
+    // Accumulate first 8 pairs into v0-v3
+    eor v0.16b, v0.16b, v4.16b    // Accumulate q4 into v0
+    eor v1.16b, v1.16b, v5.16b    // Accumulate q5 into v1
+    eor v2.16b, v2.16b, v6.16b    // Accumulate q6 into v2
+    eor v3.16b, v3.16b, v7.16b    // Accumulate q7 into v3
+    eor v0.16b, v0.16b, v16.16b   // Accumulate q16 into v0
+    eor v1.16b, v1.16b, v17.16b   // Accumulate q17 into v1
+    eor v2.16b, v2.16b, v18.16b   // Accumulate q18 into v2
+    eor v3.16b, v3.16b, v19.16b   // Accumulate q19 into v3
+    eor v0.16b, v0.16b, v20.16b   // Accumulate q20 into v0
+    eor v1.16b, v1.16b, v21.16b   // Accumulate q21 into v1
+    eor v2.16b, v2.16b, v22.16b   // Accumulate q22 into v2
+    eor v3.16b, v3.16b, v23.16b   // Accumulate q23 into v3
+    eor v0.16b, v0.16b, v24.16b   // Accumulate q24 into v0
+    eor v1.16b, v1.16b, v25.16b   // Accumulate q25 into v1
+    eor v2.16b, v2.16b, v26.16b   // Accumulate q26 into v2
+    eor v3.16b, v3.16b, v27.16b   // Accumulate q27 into v3
+    
+    // Load next 8 pairs (8-15) into q4-q7 and q16-q31
+    ldp q4,  q5,  [x6, #256]      // Load pair 8 (offset 256, reuse q4-q5)
+    ldp q6,  q7,  [x6, #288]      // Load pair 9 (offset 288, reuse q6-q7)
+    ldp q16, q17, [x6, #320]      // Load pair 10 (offset 320, reuse q16-q17)
+    ldp q18, q19, [x6, #352]      // Load pair 11 (offset 352, reuse q18-q19)
+    ldp q20, q21, [x6, #384]      // Load pair 12 (offset 384, reuse q20-q21)
+    ldp q22, q23, [x6, #416]      // Load pair 13 (offset 416, reuse q22-q23)
+    ldp q24, q25, [x6, #448]      // Load pair 14 (offset 448, reuse q24-q25)
+    ldp q26, q27, [x6, #480]      // Load pair 15 (offset 480, reuse q26-q27)
+    
+    // Accumulate next 8 pairs into v0-v3
+    eor v0.16b, v0.16b, v4.16b    // Accumulate q4 into v0
+    eor v1.16b, v1.16b, v5.16b    // Accumulate q5 into v1
+    eor v2.16b, v2.16b, v6.16b    // Accumulate q6 into v2
+    eor v3.16b, v3.16b, v7.16b    // Accumulate q7 into v3
+    eor v0.16b, v0.16b, v16.16b   // Accumulate q16 into v0
+    eor v1.16b, v1.16b, v17.16b   // Accumulate q17 into v1
+    eor v2.16b, v2.16b, v18.16b   // Accumulate q18 into v2
+    eor v3.16b, v3.16b, v19.16b   // Accumulate q19 into v3
+    eor v0.16b, v0.16b, v20.16b   // Accumulate q20 into v0
+    eor v1.16b, v1.16b, v21.16b   // Accumulate q21 into v1
+    eor v2.16b, v2.16b, v22.16b   // Accumulate q22 into v2
+    eor v3.16b, v3.16b, v23.16b   // Accumulate q23 into v3
+    eor v0.16b, v0.16b, v24.16b   // Accumulate q24 into v0
+    eor v1.16b, v1.16b, v25.16b   // Accumulate q25 into v1
+    eor v2.16b, v2.16b, v26.16b   // Accumulate q26 into v2
+    eor v3.16b, v3.16b, v27.16b   // Accumulate q27 into v3
 
     add x3, x3, x4          // offset += step
     b read_loop_start_512   // Loop again
@@ -302,70 +307,70 @@ read_loop_cleanup:          // Tail handling when <512B remain
     // 256B chunk (8 pair loads + XOR fold)
     cmp x5, #256              // Check if >= 256 bytes remain
     b.lt read_cleanup_128     // If less, handle smaller chunks
-    ldp q0, q1, [x6, #0]      // Load first pair (32B)
-    ldp q2, q3, [x6, #32]     // Load second pair (32B)
-    ldp q4, q5, [x6, #64]     // Load third pair (32B)
-    ldp q6, q7, [x6, #96]     // Load fourth pair (32B)
-    ldp q16, q17, [x6, #128]  // Load fifth pair (32B) to temp registers
-    ldp q18, q19, [x6, #160]  // Load sixth pair (32B) to temp registers
-    ldp q12, q13, [x6, #192]  // Load seventh pair (32B)
-    ldp q14, q15, [x6, #224]  // Load eighth pair (32B)
-    // XOR fold into accumulators (use temp registers q16-q19 to avoid overwriting v8-v11)
-    eor v8.16b, v8.16b, v0.16b    // Accumulate q0 into v8
-    eor v9.16b, v9.16b, v1.16b    // Accumulate q1 into v9
-    eor v10.16b, v10.16b, v2.16b  // Accumulate q2 into v10
-    eor v11.16b, v11.16b, v3.16b  // Accumulate q3 into v11
-    eor v8.16b, v8.16b, v4.16b    // Accumulate q4 into v8
-    eor v9.16b, v9.16b, v5.16b    // Accumulate q5 into v9
-    eor v10.16b, v10.16b, v6.16b  // Accumulate q6 into v10
-    eor v11.16b, v11.16b, v7.16b  // Accumulate q7 into v11
-    eor v8.16b, v8.16b, v16.16b   // Accumulate q16 into v8
-    eor v9.16b, v9.16b, v17.16b   // Accumulate q17 into v9
-    eor v10.16b, v10.16b, v18.16b // Accumulate q18 into v10
-    eor v11.16b, v11.16b, v19.16b // Accumulate q19 into v11
-    eor v8.16b, v8.16b, v12.16b   // Accumulate q12 into v8
-    eor v9.16b, v9.16b, v13.16b   // Accumulate q13 into v9
-    eor v10.16b, v10.16b, v14.16b // Accumulate q14 into v10
-    eor v11.16b, v11.16b, v15.16b // Accumulate q15 into v11
+    ldp q4, q5, [x6, #0]      // Load first pair (32B)
+    ldp q6, q7, [x6, #32]     // Load second pair (32B)
+    ldp q16, q17, [x6, #64]   // Load third pair (32B)
+    ldp q18, q19, [x6, #96]   // Load fourth pair (32B)
+    ldp q20, q21, [x6, #128]  // Load fifth pair (32B)
+    ldp q22, q23, [x6, #160]  // Load sixth pair (32B)
+    ldp q24, q25, [x6, #192]  // Load seventh pair (32B)
+    ldp q26, q27, [x6, #224]  // Load eighth pair (32B)
+    // XOR fold into accumulators (v0-v3)
+    eor v0.16b, v0.16b, v4.16b    // Accumulate q4 into v0
+    eor v1.16b, v1.16b, v5.16b    // Accumulate q5 into v1
+    eor v2.16b, v2.16b, v6.16b    // Accumulate q6 into v2
+    eor v3.16b, v3.16b, v7.16b    // Accumulate q7 into v3
+    eor v0.16b, v0.16b, v16.16b   // Accumulate q16 into v0
+    eor v1.16b, v1.16b, v17.16b   // Accumulate q17 into v1
+    eor v2.16b, v2.16b, v18.16b   // Accumulate q18 into v2
+    eor v3.16b, v3.16b, v19.16b   // Accumulate q19 into v3
+    eor v0.16b, v0.16b, v20.16b   // Accumulate q20 into v0
+    eor v1.16b, v1.16b, v21.16b   // Accumulate q21 into v1
+    eor v2.16b, v2.16b, v22.16b   // Accumulate q22 into v2
+    eor v3.16b, v3.16b, v23.16b   // Accumulate q23 into v3
+    eor v0.16b, v0.16b, v24.16b   // Accumulate q24 into v0
+    eor v1.16b, v1.16b, v25.16b   // Accumulate q25 into v1
+    eor v2.16b, v2.16b, v26.16b   // Accumulate q26 into v2
+    eor v3.16b, v3.16b, v27.16b   // Accumulate q27 into v3
     add x6, x6, #256          // Advance source pointer by 256B
     sub x5, x5, #256          // Decrement remaining count by 256B
 
 read_cleanup_128:              // 128B chunk
     cmp x5, #128               // Check if >= 128 bytes remain
     b.lt read_cleanup_64        // If less, handle smaller chunks
-    ldp q0, q1, [x6, #0]        // Load first pair (32B)
-    ldp q2, q3, [x6, #32]       // Load second pair (32B)
-    ldp q4, q5, [x6, #64]       // Load third pair (32B)
-    ldp q6, q7, [x6, #96]       // Load fourth pair (32B)
-    eor v8.16b, v8.16b, v0.16b  // Accumulate q0 into v8
-    eor v9.16b, v9.16b, v1.16b  // Accumulate q1 into v9
-    eor v10.16b, v10.16b, v2.16b // Accumulate q2 into v10
-    eor v11.16b, v11.16b, v3.16b // Accumulate q3 into v11
-    eor v8.16b, v8.16b, v4.16b  // Accumulate q4 into v8
-    eor v9.16b, v9.16b, v5.16b  // Accumulate q5 into v9
-    eor v10.16b, v10.16b, v6.16b // Accumulate q6 into v10
-    eor v11.16b, v11.16b, v7.16b // Accumulate q7 into v11
+    ldp q4, q5, [x6, #0]        // Load first pair (32B)
+    ldp q6, q7, [x6, #32]       // Load second pair (32B)
+    ldp q16, q17, [x6, #64]     // Load third pair (32B)
+    ldp q18, q19, [x6, #96]     // Load fourth pair (32B)
+    eor v0.16b, v0.16b, v4.16b  // Accumulate q4 into v0
+    eor v1.16b, v1.16b, v5.16b  // Accumulate q5 into v1
+    eor v2.16b, v2.16b, v6.16b  // Accumulate q6 into v2
+    eor v3.16b, v3.16b, v7.16b  // Accumulate q7 into v3
+    eor v0.16b, v0.16b, v16.16b // Accumulate q16 into v0
+    eor v1.16b, v1.16b, v17.16b // Accumulate q17 into v1
+    eor v2.16b, v2.16b, v18.16b // Accumulate q18 into v2
+    eor v3.16b, v3.16b, v19.16b // Accumulate q19 into v3
     add x6, x6, #128            // Advance source pointer by 128B
     sub x5, x5, #128            // Decrement remaining count by 128B
 
 read_cleanup_64:               // 64B chunk
     cmp x5, #64                // Check if >= 64 bytes remain
     b.lt read_cleanup_32        // If less, handle smaller chunks
-    ldp q0, q1, [x6, #0]       // Load first pair (32B)
-    ldp q2, q3, [x6, #32]      // Load second pair (32B)
-    eor v8.16b, v8.16b, v0.16b // Accumulate q0 into v8
-    eor v9.16b, v9.16b, v1.16b // Accumulate q1 into v9
-    eor v10.16b, v10.16b, v2.16b // Accumulate q2 into v10
-    eor v11.16b, v11.16b, v3.16b // Accumulate q3 into v11
+    ldp q4, q5, [x6, #0]       // Load first pair (32B)
+    ldp q6, q7, [x6, #32]      // Load second pair (32B)
+    eor v0.16b, v0.16b, v4.16b // Accumulate q4 into v0
+    eor v1.16b, v1.16b, v5.16b // Accumulate q5 into v1
+    eor v2.16b, v2.16b, v6.16b // Accumulate q6 into v2
+    eor v3.16b, v3.16b, v7.16b // Accumulate q7 into v3
     add x6, x6, #64            // Advance source pointer by 64B
     sub x5, x5, #64            // Decrement remaining count by 64B
 
 read_cleanup_32:               // 32B chunk
     cmp x5, #32                // Check if >= 32 bytes remain
     b.lt read_cleanup_byte      // If less, handle byte tail
-    ldp q0, q1, [x6, #0]       // Load pair (32B)
-    eor v8.16b, v8.16b, v0.16b  // Accumulate q0 into v8
-    eor v9.16b, v9.16b, v1.16b  // Accumulate q1 into v9
+    ldp q4, q5, [x6, #0]       // Load pair (32B)
+    eor v0.16b, v0.16b, v4.16b  // Accumulate q4 into v0
+    eor v1.16b, v1.16b, v5.16b  // Accumulate q5 into v1
     add x6, x6, #32            // Advance source pointer by 32B
     sub x5, x5, #32            // Decrement remaining count by 32B
 
@@ -378,13 +383,13 @@ read_cleanup_byte:             // Byte tail (<32B)
     b.gt read_cleanup_byte     // Loop if more bytes remain
 
 read_loop_combine_sum:         // Final reduction + result write-back
-    // Combine accumulators v8-v11 -> v8
-    eor v8.16b, v8.16b, v9.16b  // Combine v8 and v9 into v8
-    eor v10.16b, v10.16b, v11.16b // Combine v10 and v11 into v10
-    eor v8.16b, v8.16b, v10.16b // Combine v8 and v10 into v8 (final vector)
+    // Combine accumulators v0-v3 -> v0
+    eor v0.16b, v0.16b, v1.16b  // Combine v0 and v1 into v0
+    eor v2.16b, v2.16b, v3.16b  // Combine v2 and v3 into v2
+    eor v0.16b, v0.16b, v2.16b  // Combine v0 and v2 into v0 (final vector)
 
-    // Combine byte checksum (x12) into final result (x0 from v8)
-    umov x0, v8.d[0]            // Extract lower 64 bits of combined vector sum
+    // Combine byte checksum (x12) into final result (x0 from v0)
+    umov x0, v0.d[0]            // Extract lower 64 bits of combined vector sum
     eor x0, x0, x12             // Combine with byte checksum accumulator
 
     ret                         // Return checksum in x0
@@ -403,7 +408,7 @@ read_loop_combine_sum:         // Final reduction + result write-back
 // Returns:
 //   (none)
 // Clobbers:
-//   x3‑x7, q0‑q31 (zero vectors)
+//   x3‑x7, q0‑q7, q16‑q31 (zero vectors, avoiding q8‑q15 per AAPCS64)
 // Implementation Notes:
 //   * Zero vectors are materialized once (movi) then reused.
 //   * Tiered tail mirrors copy/read for consistency.
@@ -415,7 +420,7 @@ _memory_write_loop_asm:
     mov x3, xzr             // offset = 0
     mov x4, #512            // step = 512 bytes
 
-    // Zero out data registers v0-v31 (full 128-bit vectors for consistent zero writes)
+    // Zero out data registers (using only caller-saved: v0-v7 and v16-v31, avoiding v8-v15 per AAPCS64)
     movi v0.16b, #0             // Zero vector 0
     movi v1.16b, #0             // Zero vector 1
     movi v2.16b, #0             // Zero vector 2
@@ -424,14 +429,6 @@ _memory_write_loop_asm:
     movi v5.16b, #0             // Zero vector 5
     movi v6.16b, #0             // Zero vector 6
     movi v7.16b, #0             // Zero vector 7
-    movi v8.16b, #0             // Zero vector 8
-    movi v9.16b, #0             // Zero vector 9
-    movi v10.16b, #0            // Zero vector 10
-    movi v11.16b, #0            // Zero vector 11
-    movi v12.16b, #0            // Zero vector 12
-    movi v13.16b, #0            // Zero vector 13
-    movi v14.16b, #0            // Zero vector 14
-    movi v15.16b, #0            // Zero vector 15
     movi v16.16b, #0            // Zero vector 16
     movi v17.16b, #0            // Zero vector 17
     movi v18.16b, #0            // Zero vector 18
@@ -458,22 +455,24 @@ write_loop_start_nt512:     // Main 512B block loop
     add x7, x0, x3          // dst_addr = base + offset
 
     // Store 512B zeros (non-temporal) (16 stnp pairs)
+    // Using only caller-saved registers: q0-q7 and q16-q31
     stnp q0,  q1,  [x7, #0]       // Store pair 0 (offset 0, non-temporal)
     stnp q2,  q3,  [x7, #32]      // Store pair 1 (offset 32, non-temporal)
     stnp q4,  q5,  [x7, #64]      // Store pair 2 (offset 64, non-temporal)
     stnp q6,  q7,  [x7, #96]      // Store pair 3 (offset 96, non-temporal)
-    stnp q8,  q9,  [x7, #128]     // Store pair 4 (offset 128, non-temporal)
-    stnp q10, q11, [x7, #160]     // Store pair 5 (offset 160, non-temporal)
-    stnp q12, q13, [x7, #192]     // Store pair 6 (offset 192, non-temporal)
-    stnp q14, q15, [x7, #224]     // Store pair 7 (offset 224, non-temporal)
-    stnp q16, q17, [x7, #256]     // Store pair 8 (offset 256, non-temporal)
-    stnp q18, q19, [x7, #288]     // Store pair 9 (offset 288, non-temporal)
-    stnp q20, q21, [x7, #320]     // Store pair 10 (offset 320, non-temporal)
-    stnp q22, q23, [x7, #352]     // Store pair 11 (offset 352, non-temporal)
-    stnp q24, q25, [x7, #384]     // Store pair 12 (offset 384, non-temporal)
-    stnp q26, q27, [x7, #416]     // Store pair 13 (offset 416, non-temporal)
-    stnp q28, q29, [x7, #448]     // Store pair 14 (offset 448, non-temporal)
-    stnp q30, q31, [x7, #480]     // Store pair 15 (offset 480, non-temporal)
+    stnp q16, q17, [x7, #128]     // Store pair 4 (offset 128, non-temporal)
+    stnp q18, q19, [x7, #160]     // Store pair 5 (offset 160, non-temporal)
+    stnp q20, q21, [x7, #192]     // Store pair 6 (offset 192, non-temporal)
+    stnp q22, q23, [x7, #224]     // Store pair 7 (offset 224, non-temporal)
+    stnp q24, q25, [x7, #256]     // Store pair 8 (offset 256, non-temporal)
+    stnp q26, q27, [x7, #288]     // Store pair 9 (offset 288, non-temporal)
+    stnp q28, q29, [x7, #320]     // Store pair 10 (offset 320, non-temporal)
+    stnp q30, q31, [x7, #352]     // Store pair 11 (offset 352, non-temporal)
+    // Reuse q0-q7 for remaining pairs (all zeros, so safe to reuse)
+    stnp q0,  q1,  [x7, #384]     // Store pair 12 (offset 384, non-temporal)
+    stnp q2,  q3,  [x7, #416]     // Store pair 13 (offset 416, non-temporal)
+    stnp q4,  q5,  [x7, #448]     // Store pair 14 (offset 448, non-temporal)
+    stnp q6,  q7,  [x7, #480]     // Store pair 15 (offset 480, non-temporal)
 
     add x3, x3, x4          // offset += step
     b write_loop_start_nt512 // Loop again
@@ -492,10 +491,10 @@ write_loop_cleanup:         // Tail handling when <512B remain
     stnp q2, q3, [x7, #32]    // Store second pair (non-temporal, 32B)
     stnp q4, q5, [x7, #64]    // Store third pair (non-temporal, 32B)
     stnp q6, q7, [x7, #96]    // Store fourth pair (non-temporal, 32B)
-    stnp q8, q9, [x7, #128]   // Store fifth pair (non-temporal, 32B)
-    stnp q10, q11, [x7, #160] // Store sixth pair (non-temporal, 32B)
-    stnp q12, q13, [x7, #192] // Store seventh pair (non-temporal, 32B)
-    stnp q14, q15, [x7, #224] // Store eighth pair (non-temporal, 32B)
+    stnp q16, q17, [x7, #128] // Store fifth pair (non-temporal, 32B)
+    stnp q18, q19, [x7, #160] // Store sixth pair (non-temporal, 32B)
+    stnp q20, q21, [x7, #192] // Store seventh pair (non-temporal, 32B)
+    stnp q22, q23, [x7, #224] // Store eighth pair (non-temporal, 32B)
     add x7, x7, #256          // Advance destination pointer by 256B
     sub x5, x5, #256          // Decrement remaining count by 256B
 
