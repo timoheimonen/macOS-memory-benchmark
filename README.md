@@ -29,9 +29,9 @@ The performance-critical memory operations are implemented in ARM64 assembly for
 
 * **Key Optimizations:**
     * Processing data in large 512-byte blocks.
-    * Extensive use of NEON SIMD registers (q0-q31) for high throughput.
+    * Extensive use of NEON SIMD registers (q0-q7 and q16-q31) for high throughput, avoiding callee-saved registers (q8-q15) per AAPCS64 for ABI compliance.
     * Non-temporal stores (`stnp`) to reduce cache pollution during bandwidth tests.
-    * Careful register management.
+    * Careful register management ensuring ABI compatibility without stack operations (leaf function optimization).
     * 8-way loop unrolling in the latency test.  
 
 The benchmark does these steps:
