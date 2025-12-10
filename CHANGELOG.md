@@ -5,7 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.4] - 2025-12-08
+## [0.4] - 2025-12-10
+
+### Fixed
+- **BI compatibility fix**: Fixed register corruption issue where all assembly functions (`memory_copy_loop_asm`, `memory_read_loop_asm`, `memory_write_loop_asm`) were using callee-saved registers q8-q15 (v8-v15) without preserving them, corrupting the calling C++ function's variables. All functions now use only caller-saved registers (q0-q7 and q16-q31) per AAPCS64, ensuring ABI compliance without requiring stack operations (maintaining leaf function optimization).
+  - `memory_copy_loop_asm`: Replaced q8-q15 with q16-q23 and q0-q7 (reusing q0-q7 for remaining pairs).
+  - `memory_read_loop_asm`: Moved accumulators from v8-v11 to v0-v3, and replaced all q8-q15 usage with q4-q7 and q16-q31 (data loaded first, then accumulated to avoid overwriting accumulators).
+  - `memory_write_loop_asm`: Replaced q8-q15 with q16-q23 and q0-q7 (reusing q0-q7 since all values are zeros).
 
 ### Changed
 - Help output (`-h`/`--help`) now includes author name, email, license, and link to GitHub page.

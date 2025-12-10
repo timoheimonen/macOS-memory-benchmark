@@ -166,13 +166,13 @@ Latency complete.
 
 --- Results (Loop 1) ---
 Bandwidth Tests (multi-threaded, 10 threads):
-  Read : 115.468 GB/s (Total time: 4.650 s)
-  Write: 68.775 GB/s (Total time: 7.806 s)
-  Copy : 105.967 GB/s (Total time: 10.133 s)
+  Read : 116.135 GB/s (Total time: 4.623 s)
+  Write: 66.072 GB/s (Total time: 8.126 s)
+  Copy : 106.020 GB/s (Total time: 10.128 s)
 
 Latency Test (single-threaded, pointer chase):
-  Total time: 19.520 s
-  Average latency: 97.60 ns
+  Total time: 19.382 s
+  Average latency: 96.91 ns
 --------------
 
-Done. Total execution time: 42.544 s
+Done. Total execution time: 42.650 s
