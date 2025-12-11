@@ -18,8 +18,20 @@
 #include <iostream>   // Required for std::cout, std::cerr
 #include <numeric>    // Required for std::accumulate (calculating sums)
 #include <vector>     // Required for std::vector
+#include <atomic>     // Required for std::atomic (progress indicator)
 
 #include "benchmark.h"  // Include common definitions/constants (e.g., SOFTVERSION)
+
+// --- Progress Indicator ---
+// Simple spinner for showing progress without affecting performance
+// Uses a static counter to cycle through spinner characters
+static std::atomic<int> spinner_counter{0};
+static const char spinner_chars[] = {'|', '/', '-', '\\'};
+
+void show_progress() {
+  int idx = spinner_counter.fetch_add(1, std::memory_order_relaxed) % 4;
+  std::cout << '\r' << spinner_chars[idx] << " Running tests... " << std::flush;
+}
 
 // --- Helper function to print usage instructions ---
 // Displays how to use the program via command-line arguments.
@@ -87,10 +99,19 @@ void print_configuration(size_t buffer_size, size_t buffer_size_mb, int iteratio
 // 'read_bw_gb_s', 'total_read_time': Results from the read test.
 // 'write_bw_gb_s', 'total_write_time': Results from the write test.
 // 'copy_bw_gb_s', 'total_copy_time': Results from the copy test.
-// 'average_latency_ns', 'total_lat_time_ns': Results from the latency test.
+// 'l1_latency_ns', 'l2_latency_ns': Results from cache latency tests.
+// 'l1_buffer_size', 'l2_buffer_size': Buffer sizes used for cache tests.
+// 'l1_read_bw_gb_s', 'l1_write_bw_gb_s', 'l1_copy_bw_gb_s': L1 cache bandwidth results.
+// 'l2_read_bw_gb_s', 'l2_write_bw_gb_s', 'l2_copy_bw_gb_s': L2 cache bandwidth results.
+// 'average_latency_ns', 'total_lat_time_ns': Results from the main memory latency test.
 void print_results(int loop, size_t buffer_size, size_t buffer_size_mb, int iterations, int num_threads,
                    double read_bw_gb_s, double total_read_time, double write_bw_gb_s, double total_write_time,
-                   double copy_bw_gb_s, double total_copy_time, double average_latency_ns, double total_lat_time_ns) {
+                   double copy_bw_gb_s, double total_copy_time, 
+                   double l1_latency_ns, double l2_latency_ns,
+                   size_t l1_buffer_size, size_t l2_buffer_size,
+                   double l1_read_bw_gb_s, double l1_write_bw_gb_s, double l1_copy_bw_gb_s,
+                   double l2_read_bw_gb_s, double l2_write_bw_gb_s, double l2_copy_bw_gb_s,
+                   double average_latency_ns, double total_lat_time_ns) {
   // Print a header indicating the current loop number.
   std::cout << "\n--- Results (Loop " << loop + 1 << ") ---" << std::endl;
   // Set output to fixed-point notation for consistent formatting.
@@ -105,8 +126,58 @@ void print_results(int loop, size_t buffer_size, size_t buffer_size_mb, int iter
   std::cout << "  Copy : " << std::setprecision(3) << copy_bw_gb_s << " GB/s (Total time: " << total_copy_time << " s)"
             << std::endl;
 
-  // Display latency test results.
-  std::cout << "\nLatency Test (single-threaded, pointer chase):" << std::endl;
+  // Display cache bandwidth test results.
+  std::cout << "\nCache Bandwidth Tests (single-threaded):" << std::endl;
+  if (l1_buffer_size > 0) {
+    std::cout << "  L1 Cache:" << std::endl;
+    std::cout << "    Read : " << std::setprecision(3) << l1_read_bw_gb_s << " GB/s";
+    if (l1_buffer_size < 1024) {
+      std::cout << " (Buffer size: " << l1_buffer_size << " B)" << std::endl;
+    } else if (l1_buffer_size < 1024 * 1024) {
+      std::cout << " (Buffer size: " << std::setprecision(2) << l1_buffer_size / 1024.0 << " KB)" << std::endl;
+    } else {
+      std::cout << " (Buffer size: " << std::setprecision(2) << l1_buffer_size / (1024.0 * 1024.0) << " MB)" << std::endl;
+    }
+    std::cout << "    Write: " << std::setprecision(3) << l1_write_bw_gb_s << " GB/s" << std::endl;
+    std::cout << "    Copy : " << std::setprecision(3) << l1_copy_bw_gb_s << " GB/s" << std::endl;
+  }
+  if (l2_buffer_size > 0) {
+    std::cout << "  L2 Cache:" << std::endl;
+    std::cout << "    Read : " << std::setprecision(3) << l2_read_bw_gb_s << " GB/s";
+    if (l2_buffer_size < 1024) {
+      std::cout << " (Buffer size: " << l2_buffer_size << " B)" << std::endl;
+    } else if (l2_buffer_size < 1024 * 1024) {
+      std::cout << " (Buffer size: " << std::setprecision(2) << l2_buffer_size / 1024.0 << " KB)" << std::endl;
+    } else {
+      std::cout << " (Buffer size: " << std::setprecision(2) << l2_buffer_size / (1024.0 * 1024.0) << " MB)" << std::endl;
+    }
+    std::cout << "    Write: " << std::setprecision(3) << l2_write_bw_gb_s << " GB/s" << std::endl;
+    std::cout << "    Copy : " << std::setprecision(3) << l2_copy_bw_gb_s << " GB/s" << std::endl;
+  }
+
+  // Display cache latency test results.
+  std::cout << "\nCache Latency Tests (single-threaded, pointer chase):" << std::endl;
+  if (l1_buffer_size > 0) {
+    if (l1_buffer_size < 1024) {
+      std::cout << "  L1 Cache: " << std::setprecision(2) << l1_latency_ns << " ns (Buffer size: " << l1_buffer_size << " B)" << std::endl;
+    } else if (l1_buffer_size < 1024 * 1024) {
+      std::cout << "  L1 Cache: " << std::setprecision(2) << l1_latency_ns << " ns (Buffer size: " << std::setprecision(2) << l1_buffer_size / 1024.0 << " KB)" << std::endl;
+    } else {
+      std::cout << "  L1 Cache: " << std::setprecision(2) << l1_latency_ns << " ns (Buffer size: " << std::setprecision(2) << l1_buffer_size / (1024.0 * 1024.0) << " MB)" << std::endl;
+    }
+  }
+  if (l2_buffer_size > 0) {
+    if (l2_buffer_size < 1024) {
+      std::cout << "  L2 Cache: " << std::setprecision(2) << l2_latency_ns << " ns (Buffer size: " << l2_buffer_size << " B)" << std::endl;
+    } else if (l2_buffer_size < 1024 * 1024) {
+      std::cout << "  L2 Cache: " << std::setprecision(2) << l2_latency_ns << " ns (Buffer size: " << std::setprecision(2) << l2_buffer_size / 1024.0 << " KB)" << std::endl;
+    } else {
+      std::cout << "  L2 Cache: " << std::setprecision(2) << l2_latency_ns << " ns (Buffer size: " << std::setprecision(2) << l2_buffer_size / (1024.0 * 1024.0) << " MB)" << std::endl;
+    }
+  }
+
+  // Display main memory latency test results.
+  std::cout << "\nMain Memory Latency Test (single-threaded, pointer chase):" << std::endl;
   std::cout << "  Total time: " << std::setprecision(3) << total_lat_time_ns / 1e9 << " s"
             << std::endl;  // Show latency test time in seconds
   std::cout << "  Average latency: " << std::setprecision(2) << average_latency_ns << " ns" << std::endl;
@@ -117,9 +188,19 @@ void print_results(int loop, size_t buffer_size, size_t buffer_size_mb, int iter
 // --- Print Statistics across all loops ---
 // Calculates and displays summary statistics (Avg/Min/Max) if more than one loop was run.
 // 'loop_count': The total number of loops that were executed.
-// 'all_read_bw', 'all_write_bw', 'all_copy_bw', 'all_latency': Vectors holding the results from each individual loop.
+// 'all_read_bw', 'all_write_bw', 'all_copy_bw': Vectors holding bandwidth results from each individual loop.
+// 'all_l1_latency', 'all_l2_latency': Vectors holding cache latency results from each loop.
+// 'all_l1_read_bw', 'all_l1_write_bw', 'all_l1_copy_bw': Vectors holding L1 cache bandwidth results from each loop.
+// 'all_l2_read_bw', 'all_l2_write_bw', 'all_l2_copy_bw': Vectors holding L2 cache bandwidth results from each loop.
+// 'all_main_mem_latency': Vector holding main memory latency results from each loop.
 void print_statistics(int loop_count, const std::vector<double> &all_read_bw, const std::vector<double> &all_write_bw,
-                      const std::vector<double> &all_copy_bw, const std::vector<double> &all_latency) {
+                      const std::vector<double> &all_copy_bw, 
+                      const std::vector<double> &all_l1_latency, const std::vector<double> &all_l2_latency,
+                      const std::vector<double> &all_l1_read_bw, const std::vector<double> &all_l1_write_bw,
+                      const std::vector<double> &all_l1_copy_bw,
+                      const std::vector<double> &all_l2_read_bw, const std::vector<double> &all_l2_write_bw,
+                      const std::vector<double> &all_l2_copy_bw,
+                      const std::vector<double> &all_main_mem_latency) {
   // Don't print statistics if only one loop ran or if there's no data.
   if (loop_count <= 1 || all_read_bw.empty()) return;
 
@@ -131,7 +212,15 @@ void print_statistics(int loop_count, const std::vector<double> &all_read_bw, co
   double avg_read_bw = std::accumulate(all_read_bw.begin(), all_read_bw.end(), 0.0) / loop_count;
   double avg_write_bw = std::accumulate(all_write_bw.begin(), all_write_bw.end(), 0.0) / loop_count;
   double avg_copy_bw = std::accumulate(all_copy_bw.begin(), all_copy_bw.end(), 0.0) / loop_count;
-  double avg_latency = std::accumulate(all_latency.begin(), all_latency.end(), 0.0) / loop_count;
+  
+  double avg_l1_latency = 0.0, avg_l2_latency = 0.0;
+  if (!all_l1_latency.empty()) {
+    avg_l1_latency = std::accumulate(all_l1_latency.begin(), all_l1_latency.end(), 0.0) / all_l1_latency.size();
+  }
+  if (!all_l2_latency.empty()) {
+    avg_l2_latency = std::accumulate(all_l2_latency.begin(), all_l2_latency.end(), 0.0) / all_l2_latency.size();
+  }
+  double avg_main_mem_latency = std::accumulate(all_main_mem_latency.begin(), all_main_mem_latency.end(), 0.0) / loop_count;
 
   // --- Calculate Min/Max ---
   // Find the minimum and maximum values recorded across all loops for each test type.
@@ -144,8 +233,18 @@ void print_statistics(int loop_count, const std::vector<double> &all_read_bw, co
   double min_copy_bw = *std::min_element(all_copy_bw.begin(), all_copy_bw.end());
   double max_copy_bw = *std::max_element(all_copy_bw.begin(), all_copy_bw.end());
 
-  double min_latency = *std::min_element(all_latency.begin(), all_latency.end());
-  double max_latency = *std::max_element(all_latency.begin(), all_latency.end());
+  double min_l1_latency = 0.0, max_l1_latency = 0.0;
+  double min_l2_latency = 0.0, max_l2_latency = 0.0;
+  if (!all_l1_latency.empty()) {
+    min_l1_latency = *std::min_element(all_l1_latency.begin(), all_l1_latency.end());
+    max_l1_latency = *std::max_element(all_l1_latency.begin(), all_l1_latency.end());
+  }
+  if (!all_l2_latency.empty()) {
+    min_l2_latency = *std::min_element(all_l2_latency.begin(), all_l2_latency.end());
+    max_l2_latency = *std::max_element(all_l2_latency.begin(), all_l2_latency.end());
+  }
+  double min_main_mem_latency = *std::min_element(all_main_mem_latency.begin(), all_main_mem_latency.end());
+  double max_main_mem_latency = *std::max_element(all_main_mem_latency.begin(), all_main_mem_latency.end());
 
   // --- Print Statistics ---
   // Set output to fixed-point notation.
@@ -168,11 +267,107 @@ void print_statistics(int loop_count, const std::vector<double> &all_read_bw, co
   std::cout << "  Min:     " << std::setprecision(3) << min_copy_bw << std::endl;
   std::cout << "  Max:     " << std::setprecision(3) << max_copy_bw << std::endl;
 
-  // Display Latency stats.
-  std::cout << "\nLatency (ns):" << std::endl;
-  std::cout << "  Average: " << std::setprecision(2) << avg_latency << std::endl;
-  std::cout << "  Min:     " << std::setprecision(2) << min_latency << std::endl;
-  std::cout << "  Max:     " << std::setprecision(2) << max_latency << std::endl;
+  // Display Cache Bandwidth stats.
+  if (!all_l1_read_bw.empty()) {
+    double avg_l1_read_bw = std::accumulate(all_l1_read_bw.begin(), all_l1_read_bw.end(), 0.0) / all_l1_read_bw.size();
+    double avg_l1_write_bw = std::accumulate(all_l1_write_bw.begin(), all_l1_write_bw.end(), 0.0) / all_l1_write_bw.size();
+    double avg_l1_copy_bw = std::accumulate(all_l1_copy_bw.begin(), all_l1_copy_bw.end(), 0.0) / all_l1_copy_bw.size();
+    double min_l1_read_bw = *std::min_element(all_l1_read_bw.begin(), all_l1_read_bw.end());
+    double max_l1_read_bw = *std::max_element(all_l1_read_bw.begin(), all_l1_read_bw.end());
+    double min_l1_write_bw = *std::min_element(all_l1_write_bw.begin(), all_l1_write_bw.end());
+    double max_l1_write_bw = *std::max_element(all_l1_write_bw.begin(), all_l1_write_bw.end());
+    double min_l1_copy_bw = *std::min_element(all_l1_copy_bw.begin(), all_l1_copy_bw.end());
+    double max_l1_copy_bw = *std::max_element(all_l1_copy_bw.begin(), all_l1_copy_bw.end());
+    
+    std::cout << "\nL1 Cache Bandwidth (GB/s):" << std::endl;
+    std::cout << "  Read:" << std::endl;
+    std::cout << "    Average: " << std::setprecision(3) << avg_l1_read_bw << std::endl;
+    std::cout << "    Min:     " << std::setprecision(3) << min_l1_read_bw << std::endl;
+    std::cout << "    Max:     " << std::setprecision(3) << max_l1_read_bw << std::endl;
+    std::cout << "  Write:" << std::endl;
+    std::cout << "    Average: " << std::setprecision(3) << avg_l1_write_bw << std::endl;
+    std::cout << "    Min:     " << std::setprecision(3) << min_l1_write_bw << std::endl;
+    std::cout << "    Max:     " << std::setprecision(3) << max_l1_write_bw << std::endl;
+    std::cout << "  Copy:" << std::endl;
+    std::cout << "    Average: " << std::setprecision(3) << avg_l1_copy_bw << std::endl;
+    std::cout << "    Min:     " << std::setprecision(3) << min_l1_copy_bw << std::endl;
+    std::cout << "    Max:     " << std::setprecision(3) << max_l1_copy_bw << std::endl;
+  }
+  
+  if (!all_l2_read_bw.empty()) {
+    double avg_l2_read_bw = std::accumulate(all_l2_read_bw.begin(), all_l2_read_bw.end(), 0.0) / all_l2_read_bw.size();
+    double avg_l2_write_bw = std::accumulate(all_l2_write_bw.begin(), all_l2_write_bw.end(), 0.0) / all_l2_write_bw.size();
+    double avg_l2_copy_bw = std::accumulate(all_l2_copy_bw.begin(), all_l2_copy_bw.end(), 0.0) / all_l2_copy_bw.size();
+    double min_l2_read_bw = *std::min_element(all_l2_read_bw.begin(), all_l2_read_bw.end());
+    double max_l2_read_bw = *std::max_element(all_l2_read_bw.begin(), all_l2_read_bw.end());
+    double min_l2_write_bw = *std::min_element(all_l2_write_bw.begin(), all_l2_write_bw.end());
+    double max_l2_write_bw = *std::max_element(all_l2_write_bw.begin(), all_l2_write_bw.end());
+    double min_l2_copy_bw = *std::min_element(all_l2_copy_bw.begin(), all_l2_copy_bw.end());
+    double max_l2_copy_bw = *std::max_element(all_l2_copy_bw.begin(), all_l2_copy_bw.end());
+    
+    std::cout << "\nL2 Cache Bandwidth (GB/s):" << std::endl;
+    std::cout << "  Read:" << std::endl;
+    std::cout << "    Average: " << std::setprecision(3) << avg_l2_read_bw << std::endl;
+    std::cout << "    Min:     " << std::setprecision(3) << min_l2_read_bw << std::endl;
+    std::cout << "    Max:     " << std::setprecision(3) << max_l2_read_bw << std::endl;
+    std::cout << "  Write:" << std::endl;
+    std::cout << "    Average: " << std::setprecision(3) << avg_l2_write_bw << std::endl;
+    std::cout << "    Min:     " << std::setprecision(3) << min_l2_write_bw << std::endl;
+    std::cout << "    Max:     " << std::setprecision(3) << max_l2_write_bw << std::endl;
+    std::cout << "  Copy:" << std::endl;
+    std::cout << "    Average: " << std::setprecision(3) << avg_l2_copy_bw << std::endl;
+    std::cout << "    Min:     " << std::setprecision(3) << min_l2_copy_bw << std::endl;
+    std::cout << "    Max:     " << std::setprecision(3) << max_l2_copy_bw << std::endl;
+  }
+
+  // Display Cache Latency stats.
+  std::cout << "\nCache Latency (ns):" << std::endl;
+  if (!all_l1_latency.empty()) {
+    std::cout << "  L1 Cache:" << std::endl;
+    std::cout << "    Average: " << std::setprecision(2) << avg_l1_latency << std::endl;
+    std::cout << "    Min:     " << std::setprecision(2) << min_l1_latency << std::endl;
+    std::cout << "    Max:     " << std::setprecision(2) << max_l1_latency << std::endl;
+  }
+  if (!all_l2_latency.empty()) {
+    std::cout << "  L2 Cache:" << std::endl;
+    std::cout << "    Average: " << std::setprecision(2) << avg_l2_latency << std::endl;
+    std::cout << "    Min:     " << std::setprecision(2) << min_l2_latency << std::endl;
+    std::cout << "    Max:     " << std::setprecision(2) << max_l2_latency << std::endl;
+  }
+
+  // Display Main Memory Latency stats.
+  std::cout << "\nMain Memory Latency (ns):" << std::endl;
+  std::cout << "  Average: " << std::setprecision(2) << avg_main_mem_latency << std::endl;
+  std::cout << "  Min:     " << std::setprecision(2) << min_main_mem_latency << std::endl;
+  std::cout << "  Max:     " << std::setprecision(2) << max_main_mem_latency << std::endl;
   // Print a final separator after statistics.
   std::cout << "----------------------------------" << std::endl;
+}
+
+// --- Print Cache Information ---
+// Outputs the detected cache sizes for L1 and L2 cache levels.
+// 'l1_cache_size': L1 data cache size in bytes (per P-core).
+// 'l2_cache_size': L2 cache size in bytes (per P-core cluster).
+void print_cache_info(size_t l1_cache_size, size_t l2_cache_size) {
+  std::cout << "\nDetected Cache Sizes:" << std::endl;
+  std::cout << std::fixed << std::setprecision(2);
+  
+  // Display L1 cache size.
+  if (l1_cache_size < 1024) {
+    std::cout << "  L1 Cache Size: " << l1_cache_size << " B (per P-core)" << std::endl;
+  } else if (l1_cache_size < 1024 * 1024) {
+    std::cout << "  L1 Cache Size: " << l1_cache_size / 1024.0 << " KB (per P-core)" << std::endl;
+  } else {
+    std::cout << "  L1 Cache Size: " << l1_cache_size / (1024.0 * 1024.0) << " MB (per P-core)" << std::endl;
+  }
+  
+  // Display L2 cache size.
+  if (l2_cache_size < 1024) {
+    std::cout << "  L2 Cache Size: " << l2_cache_size << " B (per P-core cluster)" << std::endl;
+  } else if (l2_cache_size < 1024 * 1024) {
+    std::cout << "  L2 Cache Size: " << l2_cache_size / 1024.0 << " KB (per P-core cluster)" << std::endl;
+  } else {
+    std::cout << "  L2 Cache Size: " << l2_cache_size / (1024.0 * 1024.0) << " MB (per P-core cluster)" << std::endl;
+  }
+  
 }

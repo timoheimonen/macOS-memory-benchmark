@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.41] - 2025-12-11
+
+### Added
+- L1 and L2 cache latency testing using pointer chasing methodology.
+- Cache latency results displayed with buffer size information.
+- Cache latency statistics (average, min, max) across multiple loops.
+- L1 and L2 cache bandwidth testing (read, write, copy) using cache-sized buffers.
+- Cache bandwidth results displayed with buffer size information.
+- Cache bandwidth statistics (average, min, max) across multiple loops.
+
+### Changed
+- Updated result printing functions to include cache latency results.
+- Simplified output: replaced verbose progress messages with a lightweight spinner indicator.
+- Removed detailed allocation, initialization, warmup, and test progress messages to reduce output clutter.
+- Added progress indicator that shows test execution status without affecting benchmark performance.
+
 ## [0.4] - 2025-12-10
 
 ### Fixed

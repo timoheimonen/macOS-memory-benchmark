@@ -48,7 +48,6 @@ auto join_threads = [](std::vector<std::thread> &threads) {
 // Returns: Total duration in seconds.
 double run_read_test(void *buffer, size_t size, int iterations, int num_threads, std::atomic<uint64_t> &checksum,
                      HighResTimer &timer) {
-  std::cout << "Measuring Read Bandwidth..." << std::endl;
   checksum = 0;  // Ensure checksum starts at 0 for the measurement pass.
   std::vector<std::thread> threads;
   threads.reserve(num_threads);  // Pre-allocate vector space for threads.
@@ -102,7 +101,6 @@ double run_read_test(void *buffer, size_t size, int iterations, int num_threads,
 
   join_threads(threads);           // Wait for all threads to finish (joined once after all iterations).
   double duration = timer.stop();  // Stop timing after all work.
-  std::cout << "Read complete." << std::endl;
   return duration;  // Return total time elapsed.
 }
 
@@ -114,7 +112,6 @@ double run_read_test(void *buffer, size_t size, int iterations, int num_threads,
 // 'timer': High-resolution timer for measuring execution time.
 // Returns: Total duration in seconds.
 double run_write_test(void *buffer, size_t size, int iterations, int num_threads, HighResTimer &timer) {
-  std::cout << "Measuring Write Bandwidth..." << std::endl;
   std::vector<std::thread> threads;
   threads.reserve(num_threads);  // Pre-allocate vector space.
 
@@ -163,7 +160,6 @@ double run_write_test(void *buffer, size_t size, int iterations, int num_threads
 
   join_threads(threads);           // Wait for all threads to finish (joined once).
   double duration = timer.stop();  // Stop timing.
-  std::cout << "Write complete." << std::endl;
   return duration;  // Return total time elapsed.
 }
 
@@ -176,7 +172,6 @@ double run_write_test(void *buffer, size_t size, int iterations, int num_threads
 // 'timer': High-resolution timer for measuring execution time.
 // Returns: Total duration in seconds.
 double run_copy_test(void *dst, void *src, size_t size, int iterations, int num_threads, HighResTimer &timer) {
-  std::cout << "Measuring Copy Bandwidth..." << std::endl;
   std::vector<std::thread> threads;
   threads.reserve(num_threads);  // Pre-allocate vector space.
 
@@ -226,7 +221,6 @@ double run_copy_test(void *dst, void *src, size_t size, int iterations, int num_
 
   join_threads(threads);           // Wait for all threads to finish (joined once).
   double duration = timer.stop();  // Stop timing.
-  std::cout << "Copy complete." << std::endl;
   return duration;  // Return total time elapsed.
 }
 
@@ -236,7 +230,6 @@ double run_copy_test(void *dst, void *src, size_t size, int iterations, int num_
 // 'timer': High-resolution timer for measuring execution time.
 // Returns: Total duration in nanoseconds.
 double run_latency_test(void *buffer, size_t num_accesses, HighResTimer &timer) {
-  std::cout << "Measuring Latency (single thread)..." << std::endl;
   // Get the starting address of the pointer chain.
   uintptr_t *lat_start_ptr = static_cast<uintptr_t *>(buffer);
   timer.start();  // Start timing.
@@ -244,6 +237,23 @@ double run_latency_test(void *buffer, size_t num_accesses, HighResTimer &timer) 
   memory_latency_chase_asm(lat_start_ptr, num_accesses);
   // Stop timing, getting result in nanoseconds for latency.
   double duration_ns = timer.stop_ns();
-  std::cout << "Latency complete." << std::endl;
+  return duration_ns;  // Return total time elapsed in nanoseconds.
+}
+
+// Executes the single-threaded cache latency benchmark for a specific cache level.
+// Uses the same pointer chasing methodology as the main memory latency test.
+// 'buffer': Pointer to the buffer containing the pointer chain (should fit in target cache).
+// 'buffer_size': Size of the buffer in bytes (for validation/future use).
+// 'num_accesses': Total number of pointer dereferences to perform.
+// 'timer': High-resolution timer for measuring execution time.
+// Returns: Total duration in nanoseconds.
+double run_cache_latency_test(void *buffer, size_t buffer_size, size_t num_accesses, HighResTimer &timer) {
+  // Get the starting address of the pointer chain.
+  uintptr_t *lat_start_ptr = static_cast<uintptr_t *>(buffer);
+  timer.start();  // Start timing.
+  // Call external assembly function to chase the pointer chain (same as main latency test).
+  memory_latency_chase_asm(lat_start_ptr, num_accesses);
+  // Stop timing, getting result in nanoseconds for latency.
+  double duration_ns = timer.stop_ns();
   return duration_ns;  // Return total time elapsed in nanoseconds.
 }
