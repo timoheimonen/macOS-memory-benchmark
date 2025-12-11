@@ -69,6 +69,9 @@ void warmup_write(void* buffer, size_t size, int num_threads); // Warmup for wri
 void warmup_copy(void* dst, void* src, size_t size, int num_threads); // Warmup for copy tests
 void warmup_latency(void* buffer, size_t num_accesses); // Warmup for latency tests
 void warmup_cache_latency(void* buffer, size_t num_accesses); // Warmup for cache latency tests
+void warmup_cache_read(void* src_buffer, size_t size, int num_threads, std::atomic<uint64_t>& dummy_checksum); // Warmup for cache read tests
+void warmup_cache_write(void* dst_buffer, size_t size, int num_threads); // Warmup for cache write tests
+void warmup_cache_copy(void* dst, void* src, size_t size, int num_threads); // Warmup for cache copy tests
 
 // --- Benchmark Test Functions (benchmark_tests.cpp) ---
 double run_read_test(void* buffer, size_t size, int iterations, int num_threads, std::atomic<uint64_t>& checksum, HighResTimer& timer); // Run read benchmark
@@ -86,6 +89,8 @@ void print_results(int loop, size_t buffer_size, size_t buffer_size_mb, int iter
     double copy_bw_gb_s, double total_copy_time,
     double l1_latency_ns, double l2_latency_ns,
     size_t l1_buffer_size, size_t l2_buffer_size,
+    double l1_read_bw_gb_s, double l1_write_bw_gb_s, double l1_copy_bw_gb_s,
+    double l2_read_bw_gb_s, double l2_write_bw_gb_s, double l2_copy_bw_gb_s,
     double average_latency_ns, double total_lat_time_ns); // Print results for one loop
 void print_statistics(int loop_count,
                       const std::vector<double>& all_read_bw,
@@ -93,8 +98,15 @@ void print_statistics(int loop_count,
                       const std::vector<double>& all_copy_bw,
                       const std::vector<double>& all_l1_latency,
                       const std::vector<double>& all_l2_latency,
+                      const std::vector<double>& all_l1_read_bw,
+                      const std::vector<double>& all_l1_write_bw,
+                      const std::vector<double>& all_l1_copy_bw,
+                      const std::vector<double>& all_l2_read_bw,
+                      const std::vector<double>& all_l2_write_bw,
+                      const std::vector<double>& all_l2_copy_bw,
                       const std::vector<double>& all_main_mem_latency); // Print summary statistics after all loops
 void print_cache_info(size_t l1_cache_size, size_t l2_cache_size); // Print cache size information
+void show_progress(); // Show progress indicator (spinner)
 
 
 // --- Assembly Function Declarations ---

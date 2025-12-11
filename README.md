@@ -147,57 +147,31 @@ Detected Cache Sizes:
   L1 Cache Size: 128.00 KB (per P-core)
   L2 Cache Size: 16.00 MB (per P-core cluster)
 
---- Allocating Buffers ---
-Allocating src buffer (512.00 MiB)...
-Allocating dst buffer (512.00 MiB)...
-Allocating lat buffer (512.00 MiB)...
-Allocating L1 cache test buffer (96.00 KB)...
-Allocating L2 cache test buffer (12.00 MB)...
-Buffers allocated.
-Initializing src/dst buffers...
-Src/Dst buffers initialized.
-Setting up pointer chain
-Pointer chain setup complete.
-Setting up pointer chain
-Pointer chain setup complete.
-Setting up pointer chain
-Pointer chain setup complete.
-
---- Starting Measurements (1 loops) ---
-
-Starting Loop 1 of 1...
-Read warm-up...
-Measuring Read Bandwidth...
-Read complete.
-Write warm-up...
-Measuring Write Bandwidth...
-Write complete.
-Copy warm-up...
-Measuring Copy Bandwidth...
-Copy complete.
-Measuring L1 Cache Latency...
-Cache latency warm-up (single thread)...
-L1 Cache Latency complete.
-Measuring L2 Cache Latency...
-Cache latency warm-up (single thread)...
-L2 Cache Latency complete.
-Latency warm-up (single thread)...
-Measuring Latency (single thread)...
-Latency complete.
-
+Running benchmarks...
+| Running tests...
 --- Results (Loop 1) ---
 Bandwidth Tests (multi-threaded, 10 threads):
-  Read : 115.188 GB/s (Total time: 4.661 s)
-  Write: 66.137 GB/s (Total time: 8.118 s)
-  Copy : 106.087 GB/s (Total time: 10.121 s)
+  Read : 115.639 GB/s (Total time: 4.643 s)
+  Write: 66.164 GB/s (Total time: 8.114 s)
+  Copy : 106.756 GB/s (Total time: 10.058 s)
+
+Cache Bandwidth Tests (single-threaded):
+  L1 Cache:
+    Read : 135.919 GB/s (Buffer size: 96.00 KB)
+    Write: 72.616 GB/s
+    Copy : 176.416 GB/s
+  L2 Cache:
+    Read : 112.459 GB/s (Buffer size: 12.00 MB)
+    Write: 37.651 GB/s
+    Copy : 122.726 GB/s
 
 Cache Latency Tests (single-threaded, pointer chase):
   L1 Cache: 0.68 ns (Buffer size: 96.00 KB)
-  L2 Cache: 8.53 ns (Buffer size: 12.00 MB)
+  L2 Cache: 9.64 ns (Buffer size: 12.00 MB)
 
 Main Memory Latency Test (single-threaded, pointer chase):
-  Total time: 19.644 s
-  Average latency: 98.22 ns
+  Total time: 19.797 s
+  Average latency: 98.99 ns
 --------------
 
-Done. Total execution time: 43.478 s
+Done. Total execution time: 50.122 s

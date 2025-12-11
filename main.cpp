@@ -235,15 +235,15 @@ int main(int argc, char *argv[]) {
   MmapPtr src_buffer_ptr(nullptr, MmapDeleter{0});  // Initialize with nullptr and size 0
   MmapPtr dst_buffer_ptr(nullptr, MmapDeleter{0});
   MmapPtr lat_buffer_ptr(nullptr, MmapDeleter{0});
-  MmapPtr l1_buffer_ptr(nullptr, MmapDeleter{0});  // Cache test buffers
+  MmapPtr l1_buffer_ptr(nullptr, MmapDeleter{0});  // Cache latency test buffers
   MmapPtr l2_buffer_ptr(nullptr, MmapDeleter{0});
+  MmapPtr l1_bw_src_ptr(nullptr, MmapDeleter{0});  // Cache bandwidth test buffers (source)
+  MmapPtr l1_bw_dst_ptr(nullptr, MmapDeleter{0});  // Cache bandwidth test buffers (destination)
+  MmapPtr l2_bw_src_ptr(nullptr, MmapDeleter{0});  // Cache bandwidth test buffers (source)
+  MmapPtr l2_bw_dst_ptr(nullptr, MmapDeleter{0});  // Cache bandwidth test buffers (destination)
 
   // --- Allocate Memory ---
-  std::cout << "\n--- Allocating Buffers ---" << std::endl;
-
   // Allocate source buffer using mmap
-  std::cout << "Allocating src buffer (" << std::fixed << std::setprecision(2) << buffer_size / (1024.0 * 1024.0)
-            << " MiB)..." << std::endl;
   void *temp_src = mmap(nullptr, buffer_size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
   if (temp_src == MAP_FAILED) {
     perror("mmap failed for src_buffer");
@@ -255,8 +255,6 @@ int main(int argc, char *argv[]) {
   }
 
   // Allocate destination buffer
-  std::cout << "Allocating dst buffer (" << std::fixed << std::setprecision(2) << buffer_size / (1024.0 * 1024.0)
-            << " MiB)..." << std::endl;
   void *temp_dst = mmap(nullptr, buffer_size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
   if (temp_dst == MAP_FAILED) {
     perror("mmap failed for dst_buffer");
@@ -269,8 +267,6 @@ int main(int argc, char *argv[]) {
   }
 
   // Allocate latency buffer
-  std::cout << "Allocating lat buffer (" << std::fixed << std::setprecision(2) << buffer_size / (1024.0 * 1024.0)
-            << " MiB)..." << std::endl;
   void *temp_lat = mmap(nullptr, buffer_size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
   if (temp_lat == MAP_FAILED) {
     perror("mmap failed for lat_buffer");
@@ -284,14 +280,6 @@ int main(int argc, char *argv[]) {
 
   // Allocate cache latency test buffers
   if (l1_buffer_size > 0) {
-    std::cout << "Allocating L1 cache test buffer (" << std::fixed << std::setprecision(2);
-    if (l1_buffer_size < 1024) {
-      std::cout << l1_buffer_size << " B)..." << std::endl;
-    } else if (l1_buffer_size < 1024 * 1024) {
-      std::cout << l1_buffer_size / 1024.0 << " KB)..." << std::endl;
-    } else {
-      std::cout << l1_buffer_size / (1024.0 * 1024.0) << " MB)..." << std::endl;
-    }
     void *temp_l1 = mmap(nullptr, l1_buffer_size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     if (temp_l1 == MAP_FAILED) {
       perror("mmap failed for l1_buffer");
@@ -304,14 +292,6 @@ int main(int argc, char *argv[]) {
   }
 
   if (l2_buffer_size > 0) {
-    std::cout << "Allocating L2 cache test buffer (" << std::fixed << std::setprecision(2);
-    if (l2_buffer_size < 1024) {
-      std::cout << l2_buffer_size << " B)..." << std::endl;
-    } else if (l2_buffer_size < 1024 * 1024) {
-      std::cout << l2_buffer_size / 1024.0 << " KB)..." << std::endl;
-    } else {
-      std::cout << l2_buffer_size / (1024.0 * 1024.0) << " MB)..." << std::endl;
-    }
     void *temp_l2 = mmap(nullptr, l2_buffer_size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     if (temp_l2 == MAP_FAILED) {
       perror("mmap failed for l2_buffer");
@@ -323,15 +303,64 @@ int main(int argc, char *argv[]) {
     }
   }
 
-  std::cout << "Buffers allocated." << std::endl;
+  // Allocate cache bandwidth test buffers
+  if (l1_buffer_size > 0) {
+    // Allocate source buffer for L1 bandwidth tests
+    void *temp_l1_bw_src = mmap(nullptr, l1_buffer_size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (temp_l1_bw_src == MAP_FAILED) {
+      perror("mmap failed for l1_bw_src_buffer");
+      return EXIT_FAILURE;
+    }
+    l1_bw_src_ptr = MmapPtr(temp_l1_bw_src, MmapDeleter{l1_buffer_size});
+    if (madvise(temp_l1_bw_src, l1_buffer_size, MADV_WILLNEED) == -1) {
+      perror("madvise failed for l1_bw_src_buffer");
+    }
+    // Allocate destination buffer for L1 bandwidth tests
+    void *temp_l1_bw_dst = mmap(nullptr, l1_buffer_size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (temp_l1_bw_dst == MAP_FAILED) {
+      perror("mmap failed for l1_bw_dst_buffer");
+      return EXIT_FAILURE;
+    }
+    l1_bw_dst_ptr = MmapPtr(temp_l1_bw_dst, MmapDeleter{l1_buffer_size});
+    if (madvise(temp_l1_bw_dst, l1_buffer_size, MADV_WILLNEED) == -1) {
+      perror("madvise failed for l1_bw_dst_buffer");
+    }
+  }
+
+  if (l2_buffer_size > 0) {
+    // Allocate source buffer for L2 bandwidth tests
+    void *temp_l2_bw_src = mmap(nullptr, l2_buffer_size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (temp_l2_bw_src == MAP_FAILED) {
+      perror("mmap failed for l2_bw_src_buffer");
+      return EXIT_FAILURE;
+    }
+    l2_bw_src_ptr = MmapPtr(temp_l2_bw_src, MmapDeleter{l2_buffer_size});
+    if (madvise(temp_l2_bw_src, l2_buffer_size, MADV_WILLNEED) == -1) {
+      perror("madvise failed for l2_bw_src_buffer");
+    }
+    // Allocate destination buffer for L2 bandwidth tests
+    void *temp_l2_bw_dst = mmap(nullptr, l2_buffer_size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (temp_l2_bw_dst == MAP_FAILED) {
+      perror("mmap failed for l2_bw_dst_buffer");
+      return EXIT_FAILURE;
+    }
+    l2_bw_dst_ptr = MmapPtr(temp_l2_bw_dst, MmapDeleter{l2_buffer_size});
+    if (madvise(temp_l2_bw_dst, l2_buffer_size, MADV_WILLNEED) == -1) {
+      perror("madvise failed for l2_bw_dst_buffer");
+    }
+  }
 
   // --- Get raw pointers for functions that need them ---
   // Use .get() method to access the raw pointer managed by unique_ptr
   void *src_buffer = src_buffer_ptr.get();  // Get raw pointer from unique_ptr for function calls
   void *dst_buffer = dst_buffer_ptr.get();  // Get raw pointer from unique_ptr
   void *lat_buffer = lat_buffer_ptr.get();  // Get raw pointer from unique_ptr
-  void *l1_buffer = l1_buffer_ptr.get();    // Get raw pointer for cache test buffers
+  void *l1_buffer = l1_buffer_ptr.get();    // Get raw pointer for cache latency test buffers
   void *l2_buffer = l2_buffer_ptr.get();
+  void *l1_bw_src = l1_bw_src_ptr.get();   // Get raw pointer for L1 cache bandwidth test buffers
+  void *l1_bw_dst = l1_bw_dst_ptr.get();
+  void *l2_bw_src = l2_bw_src_ptr.get();   // Get raw pointer for L2 cache bandwidth test buffers
+  void *l2_bw_dst = l2_bw_dst_ptr.get();
 
   // --- Init Buffers & Latency Chain ---
   initialize_buffers(src_buffer, dst_buffer, buffer_size);   // Fill buffers
@@ -344,9 +373,17 @@ int main(int argc, char *argv[]) {
   if (l2_buffer_size > 0) {
     setup_latency_chain(l2_buffer, l2_buffer_size, lat_stride);
   }
+  
+  // Initialize cache bandwidth test buffers (not pointer chains, regular data)
+  if (l1_buffer_size > 0 && l1_bw_src != nullptr && l1_bw_dst != nullptr) {
+    initialize_buffers(l1_bw_src, l1_bw_dst, l1_buffer_size);
+  }
+  if (l2_buffer_size > 0 && l2_bw_src != nullptr && l2_bw_dst != nullptr) {
+    initialize_buffers(l2_bw_src, l2_bw_dst, l2_buffer_size);
+  }
 
   // --- Measurement Loops ---
-  std::cout << "\n--- Starting Measurements (" << loop_count << " loops) ---" << std::endl;
+  std::cout << "\nRunning benchmarks..." << std::endl;
 
   // Vectors to store results from each loop
   std::vector<double> all_read_bw_gb_s;
@@ -355,6 +392,13 @@ int main(int argc, char *argv[]) {
   std::vector<double> all_l1_latency_ns;
   std::vector<double> all_l2_latency_ns;
   std::vector<double> all_average_latency_ns;
+  // Cache bandwidth result vectors
+  std::vector<double> all_l1_read_bw_gb_s;
+  std::vector<double> all_l1_write_bw_gb_s;
+  std::vector<double> all_l1_copy_bw_gb_s;
+  std::vector<double> all_l2_read_bw_gb_s;
+  std::vector<double> all_l2_write_bw_gb_s;
+  std::vector<double> all_l2_copy_bw_gb_s;
 
   // Pre-allocate vector space if needed
   if (loop_count > 0) {
@@ -364,13 +408,23 @@ int main(int argc, char *argv[]) {
     all_l1_latency_ns.reserve(loop_count);
     all_l2_latency_ns.reserve(loop_count);
     all_average_latency_ns.reserve(loop_count);
+    if (l1_buffer_size > 0) {
+      all_l1_read_bw_gb_s.reserve(loop_count);
+      all_l1_write_bw_gb_s.reserve(loop_count);
+      all_l1_copy_bw_gb_s.reserve(loop_count);
+    }
+    if (l2_buffer_size > 0) {
+      all_l2_read_bw_gb_s.reserve(loop_count);
+      all_l2_write_bw_gb_s.reserve(loop_count);
+      all_l2_copy_bw_gb_s.reserve(loop_count);
+    }
   }
 
   HighResTimer test_timer;  // Timer for individual tests
 
   // Main benchmark loop
   for (int loop = 0; loop < loop_count; ++loop) {
-    std::cout << "\nStarting Loop " << loop + 1 << " of " << loop_count << "..." << std::endl;
+    show_progress();
 
     // Per-loop result variables
     double total_read_time = 0.0, read_bw_gb_s = 0.0;
@@ -380,36 +434,74 @@ int main(int argc, char *argv[]) {
     double l2_lat_time_ns = 0.0, l2_latency_ns = 0.0;
     double total_lat_time_ns = 0.0, average_latency_ns = 0.0;
     std::atomic<uint64_t> total_read_checksum{0};  // Checksum for read test
+    // Cache bandwidth result variables
+    double l1_read_time = 0.0, l1_read_bw_gb_s = 0.0;
+    double l1_write_time = 0.0, l1_write_bw_gb_s = 0.0;
+    double l1_copy_time = 0.0, l1_copy_bw_gb_s = 0.0;
+    double l2_read_time = 0.0, l2_read_bw_gb_s = 0.0;
+    double l2_write_time = 0.0, l2_write_bw_gb_s = 0.0;
+    double l2_copy_time = 0.0, l2_copy_bw_gb_s = 0.0;
+    std::atomic<uint64_t> l1_read_checksum{0};
+    std::atomic<uint64_t> l2_read_checksum{0};
 
     try {
       // --- Run tests - warmups are done before each test ---
+      show_progress();
       std::atomic<uint64_t> warmup_read_checksum{0};
       warmup_read(src_buffer, buffer_size, num_threads, warmup_read_checksum);
       total_read_time =
           run_read_test(src_buffer, buffer_size, iterations, num_threads, total_read_checksum, test_timer);
+      show_progress();
       warmup_write(dst_buffer, buffer_size, num_threads);
       total_write_time = run_write_test(dst_buffer, buffer_size, iterations, num_threads, test_timer);
+      show_progress();
       warmup_copy(dst_buffer, src_buffer, buffer_size, num_threads);
       total_copy_time = run_copy_test(dst_buffer, src_buffer, buffer_size, iterations, num_threads, test_timer);
 
+      // --- Cache Bandwidth Tests (single-threaded) ---
+      // Use more iterations for cache tests since buffers are small (10x more for better timing accuracy)
+      int cache_iterations = iterations * 10;
+      const int single_thread = 1;  // Cache bandwidth tests use single thread
+      
+      if (l1_buffer_size > 0 && l1_bw_src != nullptr && l1_bw_dst != nullptr) {
+        show_progress();
+        std::atomic<uint64_t> l1_warmup_read_checksum{0};
+        warmup_cache_read(l1_bw_src, l1_buffer_size, single_thread, l1_warmup_read_checksum);
+        l1_read_time = run_read_test(l1_bw_src, l1_buffer_size, cache_iterations, single_thread, l1_read_checksum, test_timer);
+        warmup_cache_write(l1_bw_dst, l1_buffer_size, single_thread);
+        l1_write_time = run_write_test(l1_bw_dst, l1_buffer_size, cache_iterations, single_thread, test_timer);
+        warmup_cache_copy(l1_bw_dst, l1_bw_src, l1_buffer_size, single_thread);
+        l1_copy_time = run_copy_test(l1_bw_dst, l1_bw_src, l1_buffer_size, cache_iterations, single_thread, test_timer);
+      }
+      
+      if (l2_buffer_size > 0 && l2_bw_src != nullptr && l2_bw_dst != nullptr) {
+        show_progress();
+        std::atomic<uint64_t> l2_warmup_read_checksum{0};
+        warmup_cache_read(l2_bw_src, l2_buffer_size, single_thread, l2_warmup_read_checksum);
+        l2_read_time = run_read_test(l2_bw_src, l2_buffer_size, cache_iterations, single_thread, l2_read_checksum, test_timer);
+        warmup_cache_write(l2_bw_dst, l2_buffer_size, single_thread);
+        l2_write_time = run_write_test(l2_bw_dst, l2_buffer_size, cache_iterations, single_thread, test_timer);
+        warmup_cache_copy(l2_bw_dst, l2_bw_src, l2_buffer_size, single_thread);
+        l2_copy_time = run_copy_test(l2_bw_dst, l2_bw_src, l2_buffer_size, cache_iterations, single_thread, test_timer);
+      }
+
       // --- Cache Latency Tests (run before RAM latency test) ---
       if (l1_buffer_size > 0 && l1_buffer != nullptr) {
-        std::cout << "Measuring L1 Cache Latency..." << std::endl;
+        show_progress();
         warmup_cache_latency(l1_buffer, l1_num_accesses);
         l1_lat_time_ns = run_cache_latency_test(l1_buffer, l1_buffer_size, l1_num_accesses, test_timer);
         l1_latency_ns = l1_lat_time_ns / static_cast<double>(l1_num_accesses);
-        std::cout << "L1 Cache Latency complete." << std::endl;
       }
       
       if (l2_buffer_size > 0 && l2_buffer != nullptr) {
-        std::cout << "Measuring L2 Cache Latency..." << std::endl;
+        show_progress();
         warmup_cache_latency(l2_buffer, l2_num_accesses);
         l2_lat_time_ns = run_cache_latency_test(l2_buffer, l2_buffer_size, l2_num_accesses, test_timer);
         l2_latency_ns = l2_lat_time_ns / static_cast<double>(l2_num_accesses);
-        std::cout << "L2 Cache Latency complete." << std::endl;
       }
 
       // Warm latency immediately before measuring it to keep cache state representative
+      show_progress();
       warmup_latency(lat_buffer, lat_num_accesses);
       total_lat_time_ns = run_latency_test(lat_buffer, lat_num_accesses, test_timer);
     } catch (const std::exception &e) {
@@ -428,6 +520,26 @@ int main(int argc, char *argv[]) {
     if (total_copy_time > 0)
       copy_bw_gb_s =
           static_cast<double>(total_bytes_copied_op * 2) / total_copy_time / 1e9;  // Copy = read + write (documented)
+    
+    // Calculate Cache Bandwidths (GB/s)
+    int cache_iterations = iterations * 10;
+    if (l1_buffer_size > 0) {
+      size_t l1_total_bytes_read = static_cast<size_t>(cache_iterations) * l1_buffer_size;
+      size_t l1_total_bytes_written = static_cast<size_t>(cache_iterations) * l1_buffer_size;
+      size_t l1_total_bytes_copied_op = static_cast<size_t>(cache_iterations) * l1_buffer_size;
+      if (l1_read_time > 0) l1_read_bw_gb_s = static_cast<double>(l1_total_bytes_read) / l1_read_time / 1e9;
+      if (l1_write_time > 0) l1_write_bw_gb_s = static_cast<double>(l1_total_bytes_written) / l1_write_time / 1e9;
+      if (l1_copy_time > 0) l1_copy_bw_gb_s = static_cast<double>(l1_total_bytes_copied_op * 2) / l1_copy_time / 1e9;
+    }
+    if (l2_buffer_size > 0) {
+      size_t l2_total_bytes_read = static_cast<size_t>(cache_iterations) * l2_buffer_size;
+      size_t l2_total_bytes_written = static_cast<size_t>(cache_iterations) * l2_buffer_size;
+      size_t l2_total_bytes_copied_op = static_cast<size_t>(cache_iterations) * l2_buffer_size;
+      if (l2_read_time > 0) l2_read_bw_gb_s = static_cast<double>(l2_total_bytes_read) / l2_read_time / 1e9;
+      if (l2_write_time > 0) l2_write_bw_gb_s = static_cast<double>(l2_total_bytes_written) / l2_write_time / 1e9;
+      if (l2_copy_time > 0) l2_copy_bw_gb_s = static_cast<double>(l2_total_bytes_copied_op * 2) / l2_copy_time / 1e9;
+    }
+    
     // Calculate Latency (ns)
     if (lat_num_accesses > 0) average_latency_ns = total_lat_time_ns / static_cast<double>(lat_num_accesses);
 
@@ -435,15 +547,28 @@ int main(int argc, char *argv[]) {
     all_read_bw_gb_s.push_back(read_bw_gb_s);
     all_write_bw_gb_s.push_back(write_bw_gb_s);
     all_copy_bw_gb_s.push_back(copy_bw_gb_s);
-    if (l1_buffer_size > 0) all_l1_latency_ns.push_back(l1_latency_ns);
-    if (l2_buffer_size > 0) all_l2_latency_ns.push_back(l2_latency_ns);
+    if (l1_buffer_size > 0) {
+      all_l1_latency_ns.push_back(l1_latency_ns);
+      all_l1_read_bw_gb_s.push_back(l1_read_bw_gb_s);
+      all_l1_write_bw_gb_s.push_back(l1_write_bw_gb_s);
+      all_l1_copy_bw_gb_s.push_back(l1_copy_bw_gb_s);
+    }
+    if (l2_buffer_size > 0) {
+      all_l2_latency_ns.push_back(l2_latency_ns);
+      all_l2_read_bw_gb_s.push_back(l2_read_bw_gb_s);
+      all_l2_write_bw_gb_s.push_back(l2_write_bw_gb_s);
+      all_l2_copy_bw_gb_s.push_back(l2_copy_bw_gb_s);
+    }
     all_average_latency_ns.push_back(average_latency_ns);
 
     // Print results for this loop
+    std::cout << '\r' << std::flush;  // Clear progress indicator
     print_results(loop, buffer_size, buffer_size_mb, iterations, num_threads, read_bw_gb_s, total_read_time,
                   write_bw_gb_s, total_write_time, copy_bw_gb_s, total_copy_time,
                   l1_latency_ns, l2_latency_ns,
                   l1_buffer_size, l2_buffer_size,
+                  l1_read_bw_gb_s, l1_write_bw_gb_s, l1_copy_bw_gb_s,
+                  l2_read_bw_gb_s, l2_write_bw_gb_s, l2_copy_bw_gb_s,
                   average_latency_ns, total_lat_time_ns);
 
   }  // End loop
@@ -451,7 +576,10 @@ int main(int argc, char *argv[]) {
   // --- Print Stats ---
   // Print summary statistics if more than one loop was run
   print_statistics(loop_count, all_read_bw_gb_s, all_write_bw_gb_s, all_copy_bw_gb_s,
-                   all_l1_latency_ns, all_l2_latency_ns, all_average_latency_ns);
+                   all_l1_latency_ns, all_l2_latency_ns,
+                   all_l1_read_bw_gb_s, all_l1_write_bw_gb_s, all_l1_copy_bw_gb_s,
+                   all_l2_read_bw_gb_s, all_l2_write_bw_gb_s, all_l2_copy_bw_gb_s,
+                   all_average_latency_ns);
 
   // --- Free Memory ---
   // std::cout << "\nFreeing memory..." << std::endl;

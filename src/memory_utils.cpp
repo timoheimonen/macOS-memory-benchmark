@@ -50,7 +50,6 @@ void setup_latency_chain(void *buffer, size_t buffer_size, size_t stride)
     // Randomly shuffle the indices.
     std::shuffle(indices.begin(), indices.end(), g);
 
-    std::cout << "Setting up pointer chain   " << std::endl; //(stride " << stride << " bytes, " << num_pointers << " pointers)..." << std::endl;
     // Get a base pointer to the buffer.
     char *base_ptr = static_cast<char *>(buffer);
 
@@ -65,7 +64,6 @@ void setup_latency_chain(void *buffer, size_t buffer_size, size_t stride)
         // Write the address of the next element into the current location.
         *current_loc = next_addr;
     }
-    std::cout << "Pointer chain setup complete." << std::endl;
 }
 
 // --- Buffer Initialization ---
@@ -75,7 +73,6 @@ void setup_latency_chain(void *buffer, size_t buffer_size, size_t stride)
 // 'buffer_size': Size of each buffer in bytes.
 void initialize_buffers(void *src_buffer, void *dst_buffer, size_t buffer_size)
 {
-    std::cout << "Initializing src/dst buffers..." << std::endl;
     // Fill the source buffer with a repeating byte pattern (0-255).
     for (size_t i = 0; i < buffer_size; ++i)
     {
@@ -83,5 +80,4 @@ void initialize_buffers(void *src_buffer, void *dst_buffer, size_t buffer_size)
     }
     // Fill the destination buffer with zeros using memset.
     memset(dst_buffer, 0, buffer_size);
-    std::cout << "Src/Dst buffers initialized." << std::endl;
 }

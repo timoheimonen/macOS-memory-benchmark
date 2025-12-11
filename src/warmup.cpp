@@ -18,6 +18,10 @@
 #include <thread>    // For std::thread
 #include <vector>    // For std::vector
 
+// macOS specific QoS
+#include <mach/mach.h>    // For kern_return_t
+#include <pthread/qos.h>  // For pthread_set_qos_class_self_np
+
 #include "benchmark.h"  // Includes definitions for assembly loops etc.
 
 // Helper lambda to join all threads in a given vector.
@@ -40,7 +44,6 @@ auto join_threads = [](std::vector<std::thread>& threads) {
 // 'num_threads': Number of concurrent threads to use.
 // 'dummy_checksum': Atomic variable to accumulate a dummy result (prevents optimization).
 void warmup_read(void* buffer, size_t size, int num_threads, std::atomic<uint64_t>& dummy_checksum) {
-  std::cout << "Read warm-up..." << std::endl;
   // Vector to store thread objects.
   std::vector<std::thread> threads;
   // Pre-allocate space for efficiency.
@@ -81,7 +84,6 @@ void warmup_read(void* buffer, size_t size, int num_threads, std::atomic<uint64_
 // 'size': Total size of the buffer in bytes.
 // 'num_threads': Number of concurrent threads to use.
 void warmup_write(void* buffer, size_t size, int num_threads) {
-  std::cout << "Write warm-up..." << std::endl;
   // Vector to store thread objects.
   std::vector<std::thread> threads;
   threads.reserve(num_threads);
@@ -120,7 +122,6 @@ void warmup_write(void* buffer, size_t size, int num_threads) {
 // 'size': Total size of data to copy in bytes.
 // 'num_threads': Number of concurrent threads to use.
 void warmup_copy(void* dst, void* src, size_t size, int num_threads) {
-  std::cout << "Copy warm-up..." << std::endl;
   // Vector to store thread objects.
   std::vector<std::thread> threads;
   threads.reserve(num_threads);
@@ -159,7 +160,6 @@ void warmup_copy(void* dst, void* src, size_t size, int num_threads) {
 // 'buffer': Memory region containing the pointer chain.
 // 'num_accesses': Total number of pointer dereferences planned for the actual test.
 void warmup_latency(void* buffer, size_t num_accesses) {
-  std::cout << "Latency warm-up (single thread)..." << std::endl;
   // Only perform warmup if there will be accesses in the main test.
   if (num_accesses > 0) {
     // Perform a small fraction of the total accesses for warmup (at least 1).
@@ -177,7 +177,6 @@ void warmup_latency(void* buffer, size_t num_accesses) {
 // 'buffer': Memory region containing the pointer chain.
 // 'num_accesses': Total number of pointer dereferences planned for the actual test.
 void warmup_cache_latency(void* buffer, size_t num_accesses) {
-  std::cout << "Cache latency warm-up (single thread)..." << std::endl;
   // Only perform warmup if there will be accesses in the main test.
   if (num_accesses > 0) {
     // Perform a small fraction of the total accesses for warmup (at least 1).
@@ -188,4 +187,38 @@ void warmup_cache_latency(void* buffer, size_t num_accesses) {
     // Call the assembly latency chase function (same as main latency warmup).
     memory_latency_chase_asm(lat_warmup_ptr, warmup_accesses);
   }
+}
+
+// Warms up cache bandwidth test by reading from the buffer (single thread).
+// 'src_buffer': Source memory region to read from (cache-sized).
+// 'size': Total size of the buffer in bytes (cache size).
+// 'num_threads': Unused parameter (kept for API compatibility).
+// 'dummy_checksum': Atomic variable to accumulate a dummy result (prevents optimization).
+void warmup_cache_read(void* src_buffer, size_t size, int num_threads, std::atomic<uint64_t>& dummy_checksum) {
+  (void)num_threads;  // Unused parameter
+  // Call the assembly read loop function directly (single-threaded).
+  uint64_t checksum = memory_read_loop_asm(src_buffer, size);
+  // Store result to prevent optimization.
+  dummy_checksum.fetch_xor(checksum, std::memory_order_relaxed);
+}
+
+// Warms up cache bandwidth test by writing to the buffer (single thread).
+// 'dst_buffer': Destination memory region to write to (cache-sized).
+// 'size': Total size of the buffer in bytes (cache size).
+// 'num_threads': Unused parameter (kept for API compatibility).
+void warmup_cache_write(void* dst_buffer, size_t size, int num_threads) {
+  (void)num_threads;  // Unused parameter
+  // Call the assembly write loop function directly (single-threaded).
+  memory_write_loop_asm(dst_buffer, size);
+}
+
+// Warms up cache bandwidth test by copying data between buffers (single thread).
+// 'dst': Destination memory region (cache-sized).
+// 'src': Source memory region (cache-sized).
+// 'size': Total size of data to copy in bytes (cache size).
+// 'num_threads': Unused parameter (kept for API compatibility).
+void warmup_cache_copy(void* dst, void* src, size_t size, int num_threads) {
+  (void)num_threads;  // Unused parameter
+  // Call the assembly copy loop function directly (single-threaded).
+  memory_copy_loop_asm(dst, src, size);
 }
