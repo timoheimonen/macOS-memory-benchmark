@@ -171,3 +171,21 @@ void warmup_latency(void* buffer, size_t num_accesses) {
     memory_latency_chase_asm(lat_warmup_ptr, warmup_accesses);
   }
 }
+
+// Warms up memory for cache latency test by chasing pointers (single thread).
+// Similar to warmup_latency() but for cache-specific tests.
+// 'buffer': Memory region containing the pointer chain.
+// 'num_accesses': Total number of pointer dereferences planned for the actual test.
+void warmup_cache_latency(void* buffer, size_t num_accesses) {
+  std::cout << "Cache latency warm-up (single thread)..." << std::endl;
+  // Only perform warmup if there will be accesses in the main test.
+  if (num_accesses > 0) {
+    // Perform a small fraction of the total accesses for warmup (at least 1).
+    // This helps bring relevant cache lines into the target cache level.
+    size_t warmup_accesses = std::max(static_cast<size_t>(1), num_accesses / 100);
+    // Get the starting pointer from the buffer.
+    uintptr_t* lat_warmup_ptr = static_cast<uintptr_t*>(buffer);
+    // Call the assembly latency chase function (same as main latency warmup).
+    memory_latency_chase_asm(lat_warmup_ptr, warmup_accesses);
+  }
+}

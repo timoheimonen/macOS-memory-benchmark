@@ -72,6 +72,29 @@ int main(int argc, char *argv[]) {
   int eff_cores = get_efficiency_cores();       // Get E-core count
   int num_threads = get_total_logical_cores();  // Get total threads for BW tests
 
+  // --- Get Cache Sizes ---
+  size_t l1_cache_size = get_l1_cache_size();  // Get L1 cache size
+  size_t l2_cache_size = get_l2_cache_size();  // Get L2 cache size
+
+  // --- Calculate Cache Buffer Sizes ---
+  // Use 75% of cache size to ensure fits within target level
+  const double cache_size_factor = 0.75;
+  size_t l1_buffer_size = static_cast<size_t>(l1_cache_size * cache_size_factor);
+  size_t l2_buffer_size = static_cast<size_t>(l2_cache_size * cache_size_factor);
+  
+  // Ensure buffer sizes are multiples of stride (128 bytes) and at least page size
+  size_t page_size_check = getpagesize();
+  l1_buffer_size = ((l1_buffer_size / lat_stride) * lat_stride);
+  l2_buffer_size = ((l2_buffer_size / lat_stride) * lat_stride);
+  
+  // Ensure minimum size (at least 2 pointers worth)
+  if (l1_buffer_size < lat_stride * 2) l1_buffer_size = lat_stride * 2;
+  if (l2_buffer_size < lat_stride * 2) l2_buffer_size = lat_stride * 2;
+  
+  // Ensure buffer sizes are at least page size aligned
+  if (l1_buffer_size < page_size_check) l1_buffer_size = page_size_check;
+  if (l2_buffer_size < page_size_check) l2_buffer_size = page_size_check;
+
   // --- Calculate Memory Limit ---
   unsigned long available_mem_mb = get_available_memory_mb();  // Get free RAM (MB)
   unsigned long max_allowed_mb_per_buffer = 0;                 // Max size per buffer allowed
@@ -187,11 +210,18 @@ int main(int argc, char *argv[]) {
 
   // Scale latency accesses proportionally to buffer size (e.g., ~200M for 512MB default)
   lat_num_accesses = static_cast<size_t>(200 * 1000 * 1000 * (static_cast<double>(buffer_size_mb) / 512.0));
+  
+  // Scale cache latency test access counts based on buffer size
+  // More accesses for smaller buffers to get accurate timing
+  size_t l1_num_accesses = 100 * 1000 * 1000;  // 100M accesses
+  size_t l2_num_accesses = 50 * 1000 * 1000;   // 50M accesses
 
   // --- Print Config ---
   // Show final settings being used
   print_configuration(buffer_size, buffer_size_mb, iterations, loop_count, cpu_name, perf_cores, eff_cores,
                       num_threads);
+  // Print cache information right after processor information
+  print_cache_info(l1_cache_size, l2_cache_size);
 
   // --- Set QoS for the main thread (affects latency tests) ---
   kern_return_t qos_ret = pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
@@ -205,6 +235,8 @@ int main(int argc, char *argv[]) {
   MmapPtr src_buffer_ptr(nullptr, MmapDeleter{0});  // Initialize with nullptr and size 0
   MmapPtr dst_buffer_ptr(nullptr, MmapDeleter{0});
   MmapPtr lat_buffer_ptr(nullptr, MmapDeleter{0});
+  MmapPtr l1_buffer_ptr(nullptr, MmapDeleter{0});  // Cache test buffers
+  MmapPtr l2_buffer_ptr(nullptr, MmapDeleter{0});
 
   // --- Allocate Memory ---
   std::cout << "\n--- Allocating Buffers ---" << std::endl;
@@ -250,6 +282,47 @@ int main(int argc, char *argv[]) {
     perror("madvise failed for lat_buffer");
   }
 
+  // Allocate cache latency test buffers
+  if (l1_buffer_size > 0) {
+    std::cout << "Allocating L1 cache test buffer (" << std::fixed << std::setprecision(2);
+    if (l1_buffer_size < 1024) {
+      std::cout << l1_buffer_size << " B)..." << std::endl;
+    } else if (l1_buffer_size < 1024 * 1024) {
+      std::cout << l1_buffer_size / 1024.0 << " KB)..." << std::endl;
+    } else {
+      std::cout << l1_buffer_size / (1024.0 * 1024.0) << " MB)..." << std::endl;
+    }
+    void *temp_l1 = mmap(nullptr, l1_buffer_size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (temp_l1 == MAP_FAILED) {
+      perror("mmap failed for l1_buffer");
+      return EXIT_FAILURE;
+    }
+    l1_buffer_ptr = MmapPtr(temp_l1, MmapDeleter{l1_buffer_size});
+    if (madvise(temp_l1, l1_buffer_size, MADV_WILLNEED) == -1) {
+      perror("madvise failed for l1_buffer");
+    }
+  }
+
+  if (l2_buffer_size > 0) {
+    std::cout << "Allocating L2 cache test buffer (" << std::fixed << std::setprecision(2);
+    if (l2_buffer_size < 1024) {
+      std::cout << l2_buffer_size << " B)..." << std::endl;
+    } else if (l2_buffer_size < 1024 * 1024) {
+      std::cout << l2_buffer_size / 1024.0 << " KB)..." << std::endl;
+    } else {
+      std::cout << l2_buffer_size / (1024.0 * 1024.0) << " MB)..." << std::endl;
+    }
+    void *temp_l2 = mmap(nullptr, l2_buffer_size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (temp_l2 == MAP_FAILED) {
+      perror("mmap failed for l2_buffer");
+      return EXIT_FAILURE;
+    }
+    l2_buffer_ptr = MmapPtr(temp_l2, MmapDeleter{l2_buffer_size});
+    if (madvise(temp_l2, l2_buffer_size, MADV_WILLNEED) == -1) {
+      perror("madvise failed for l2_buffer");
+    }
+  }
+
   std::cout << "Buffers allocated." << std::endl;
 
   // --- Get raw pointers for functions that need them ---
@@ -257,10 +330,20 @@ int main(int argc, char *argv[]) {
   void *src_buffer = src_buffer_ptr.get();  // Get raw pointer from unique_ptr for function calls
   void *dst_buffer = dst_buffer_ptr.get();  // Get raw pointer from unique_ptr
   void *lat_buffer = lat_buffer_ptr.get();  // Get raw pointer from unique_ptr
+  void *l1_buffer = l1_buffer_ptr.get();    // Get raw pointer for cache test buffers
+  void *l2_buffer = l2_buffer_ptr.get();
 
   // --- Init Buffers & Latency Chain ---
   initialize_buffers(src_buffer, dst_buffer, buffer_size);   // Fill buffers
   setup_latency_chain(lat_buffer, buffer_size, lat_stride);  // Prepare latency test buffer
+  
+  // Setup cache latency chains
+  if (l1_buffer_size > 0) {
+    setup_latency_chain(l1_buffer, l1_buffer_size, lat_stride);
+  }
+  if (l2_buffer_size > 0) {
+    setup_latency_chain(l2_buffer, l2_buffer_size, lat_stride);
+  }
 
   // --- Measurement Loops ---
   std::cout << "\n--- Starting Measurements (" << loop_count << " loops) ---" << std::endl;
@@ -269,6 +352,8 @@ int main(int argc, char *argv[]) {
   std::vector<double> all_read_bw_gb_s;
   std::vector<double> all_write_bw_gb_s;
   std::vector<double> all_copy_bw_gb_s;
+  std::vector<double> all_l1_latency_ns;
+  std::vector<double> all_l2_latency_ns;
   std::vector<double> all_average_latency_ns;
 
   // Pre-allocate vector space if needed
@@ -276,6 +361,8 @@ int main(int argc, char *argv[]) {
     all_read_bw_gb_s.reserve(loop_count);
     all_write_bw_gb_s.reserve(loop_count);
     all_copy_bw_gb_s.reserve(loop_count);
+    all_l1_latency_ns.reserve(loop_count);
+    all_l2_latency_ns.reserve(loop_count);
     all_average_latency_ns.reserve(loop_count);
   }
 
@@ -289,6 +376,8 @@ int main(int argc, char *argv[]) {
     double total_read_time = 0.0, read_bw_gb_s = 0.0;
     double total_write_time = 0.0, write_bw_gb_s = 0.0;
     double total_copy_time = 0.0, copy_bw_gb_s = 0.0;
+    double l1_lat_time_ns = 0.0, l1_latency_ns = 0.0;
+    double l2_lat_time_ns = 0.0, l2_latency_ns = 0.0;
     double total_lat_time_ns = 0.0, average_latency_ns = 0.0;
     std::atomic<uint64_t> total_read_checksum{0};  // Checksum for read test
 
@@ -302,6 +391,23 @@ int main(int argc, char *argv[]) {
       total_write_time = run_write_test(dst_buffer, buffer_size, iterations, num_threads, test_timer);
       warmup_copy(dst_buffer, src_buffer, buffer_size, num_threads);
       total_copy_time = run_copy_test(dst_buffer, src_buffer, buffer_size, iterations, num_threads, test_timer);
+
+      // --- Cache Latency Tests (run before RAM latency test) ---
+      if (l1_buffer_size > 0 && l1_buffer != nullptr) {
+        std::cout << "Measuring L1 Cache Latency..." << std::endl;
+        warmup_cache_latency(l1_buffer, l1_num_accesses);
+        l1_lat_time_ns = run_cache_latency_test(l1_buffer, l1_buffer_size, l1_num_accesses, test_timer);
+        l1_latency_ns = l1_lat_time_ns / static_cast<double>(l1_num_accesses);
+        std::cout << "L1 Cache Latency complete." << std::endl;
+      }
+      
+      if (l2_buffer_size > 0 && l2_buffer != nullptr) {
+        std::cout << "Measuring L2 Cache Latency..." << std::endl;
+        warmup_cache_latency(l2_buffer, l2_num_accesses);
+        l2_lat_time_ns = run_cache_latency_test(l2_buffer, l2_buffer_size, l2_num_accesses, test_timer);
+        l2_latency_ns = l2_lat_time_ns / static_cast<double>(l2_num_accesses);
+        std::cout << "L2 Cache Latency complete." << std::endl;
+      }
 
       // Warm latency immediately before measuring it to keep cache state representative
       warmup_latency(lat_buffer, lat_num_accesses);
@@ -329,18 +435,23 @@ int main(int argc, char *argv[]) {
     all_read_bw_gb_s.push_back(read_bw_gb_s);
     all_write_bw_gb_s.push_back(write_bw_gb_s);
     all_copy_bw_gb_s.push_back(copy_bw_gb_s);
+    if (l1_buffer_size > 0) all_l1_latency_ns.push_back(l1_latency_ns);
+    if (l2_buffer_size > 0) all_l2_latency_ns.push_back(l2_latency_ns);
     all_average_latency_ns.push_back(average_latency_ns);
 
     // Print results for this loop
     print_results(loop, buffer_size, buffer_size_mb, iterations, num_threads, read_bw_gb_s, total_read_time,
-                  write_bw_gb_s, total_write_time, copy_bw_gb_s, total_copy_time, average_latency_ns,
-                  total_lat_time_ns);
+                  write_bw_gb_s, total_write_time, copy_bw_gb_s, total_copy_time,
+                  l1_latency_ns, l2_latency_ns,
+                  l1_buffer_size, l2_buffer_size,
+                  average_latency_ns, total_lat_time_ns);
 
   }  // End loop
 
   // --- Print Stats ---
   // Print summary statistics if more than one loop was run
-  print_statistics(loop_count, all_read_bw_gb_s, all_write_bw_gb_s, all_copy_bw_gb_s, all_average_latency_ns);
+  print_statistics(loop_count, all_read_bw_gb_s, all_write_bw_gb_s, all_copy_bw_gb_s,
+                   all_l1_latency_ns, all_l2_latency_ns, all_average_latency_ns);
 
   // --- Free Memory ---
   // std::cout << "\nFreeing memory..." << std::endl;

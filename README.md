@@ -14,6 +14,7 @@ A simple tool to measure memory write/read/copy bandwidth and memory access late
 This C++/asm program measures:
 1. How fast data can be written/read/copied between two big memory blocks allocated using `mmap`.
 2. The average time (latency) it takes to do dependent memory reads in a large buffer, similar to random access.
+3. L1 and L2 cache latency using pointer chasing methodology with buffers sized to fit within each cache level.
 
 The main write/read/copy and latency tests are done in a separate ARM64 assembly file (`loops.s`). The write/read/copy loop uses optimized non-temporal instructions (`ldnp`/`stnp`) for faster testing, and the latency test uses dependent loads (`ldr x0, [x0]`) to measure access time.
 
@@ -36,14 +37,16 @@ The performance-critical memory operations are implemented in ARM64 assembly for
 
 The benchmark does these steps:
 
-1.  Gets three large memory blocks using `mmap` (src, dst for bandwidth; lat for latency).
-2.  Writes to the bandwidth buffers to make sure the OS maps the memory.
-3.  Creates a random pointer chain inside the latency buffer (this also maps its memory).
-4.  Does warm-up runs for write/read/copy and latency tests to let the CPU speed and caches settle.
-5.  Bandwidth Test: Times the **write**/read/copy from source to destination buffer multiple times using the precise `mach_absolute_time` timer.
-6.  Latency Test: Times doing many dependent pointer reads (following the chain) using `mach_absolute_time`.
-7.  Calculates and shows the memory bandwidth and the average memory access latency.
-8.  Releases the memory using `munmap` (via RAII with `std::unique_ptr` and a custom deleter).
+1.  Detects L1 and L2 cache sizes using system calls (`sysctlbyname`).
+2.  Gets memory blocks using `mmap` (src, dst for bandwidth; lat for main memory latency; separate buffers for L1/L2 cache latency).
+3.  Writes to the bandwidth buffers to make sure the OS maps the memory.
+4.  Creates random pointer chains inside the latency buffers (this also maps their memory).
+5.  Does warm-up runs for write/read/copy and latency tests to let the CPU speed and caches settle.
+6.  Bandwidth Test: Times the **write**/read/copy from source to destination buffer multiple times using the precise `mach_absolute_time` timer.
+7.  Cache Latency Tests: Times doing many dependent pointer reads in buffers sized to fit within L1 and L2 cache levels.
+8.  Main Memory Latency Test: Times doing many dependent pointer reads (following the chain) using `mach_absolute_time`.
+9.  Calculates and shows the memory bandwidth, cache latencies, and the average main memory access latency.
+10. Releases the memory using `munmap` (via RAII with `std::unique_ptr` and a custom deleter).
 
 ## Why This Tool?
 
@@ -56,8 +59,10 @@ macOS on Apple Silicon.
 ## Features
 
 * Checks memory write, read and copy speeds.
-* Checks memory access latency.
-* Uses `mmap` for big memory blocks (bigger than CPU caches).
+* Checks L1 and L2 cache latency using pointer chasing methodology.
+* Checks main memory access latency.
+* Automatically detects cache sizes (L1, L2) for Apple Silicon processors.
+* Uses `mmap` for memory blocks (large blocks for bandwidth/main memory latency; cache-sized blocks for cache latency tests).
 * Main write/read/copy and latency loops are in ARM64 assembly (`loops.s`).
 * Uses optimized non-temporal pair instructions (`ldnp`/`stnp`) for high-throughput **bandwidth tests** in the assembly loop.
 * Checks latency by pointer chasing with dependent loads (`ldr x0, [x0]`) in assembly.
@@ -124,7 +129,7 @@ In the Terminal, go to the directory with `memory_benchmark` and use these comma
 
 ## Example output (Mac Mini M4 24GB)
 ```text
------ macOS-memory-benchmark v0.4 -----
+----- macOS-memory-benchmark v0.41 -----
 Program is licensed under GNU GPL v3. See <https://www.gnu.org/licenses/>
 Copyright 2025 Timo Heimonen <timo.heimonen@proton.me>
 
@@ -138,13 +143,23 @@ Processor Name: Apple M4
   Efficiency Cores: 6
   Total CPU Cores Detected: 10
 
+Detected Cache Sizes:
+  L1 Cache Size: 128.00 KB (per P-core)
+  L2 Cache Size: 16.00 MB (per P-core cluster)
+
 --- Allocating Buffers ---
 Allocating src buffer (512.00 MiB)...
 Allocating dst buffer (512.00 MiB)...
 Allocating lat buffer (512.00 MiB)...
+Allocating L1 cache test buffer (96.00 KB)...
+Allocating L2 cache test buffer (12.00 MB)...
 Buffers allocated.
 Initializing src/dst buffers...
 Src/Dst buffers initialized.
+Setting up pointer chain
+Pointer chain setup complete.
+Setting up pointer chain
+Pointer chain setup complete.
 Setting up pointer chain
 Pointer chain setup complete.
 
@@ -160,19 +175,29 @@ Write complete.
 Copy warm-up...
 Measuring Copy Bandwidth...
 Copy complete.
+Measuring L1 Cache Latency...
+Cache latency warm-up (single thread)...
+L1 Cache Latency complete.
+Measuring L2 Cache Latency...
+Cache latency warm-up (single thread)...
+L2 Cache Latency complete.
 Latency warm-up (single thread)...
 Measuring Latency (single thread)...
 Latency complete.
 
 --- Results (Loop 1) ---
 Bandwidth Tests (multi-threaded, 10 threads):
-  Read : 116.135 GB/s (Total time: 4.623 s)
-  Write: 66.072 GB/s (Total time: 8.126 s)
-  Copy : 106.020 GB/s (Total time: 10.128 s)
+  Read : 115.188 GB/s (Total time: 4.661 s)
+  Write: 66.137 GB/s (Total time: 8.118 s)
+  Copy : 106.087 GB/s (Total time: 10.121 s)
 
-Latency Test (single-threaded, pointer chase):
-  Total time: 19.382 s
-  Average latency: 96.91 ns
+Cache Latency Tests (single-threaded, pointer chase):
+  L1 Cache: 0.68 ns (Buffer size: 96.00 KB)
+  L2 Cache: 8.53 ns (Buffer size: 12.00 MB)
+
+Main Memory Latency Test (single-threaded, pointer chase):
+  Total time: 19.644 s
+  Average latency: 98.22 ns
 --------------
 
-Done. Total execution time: 42.650 s
+Done. Total execution time: 43.478 s

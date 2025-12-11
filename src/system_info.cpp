@@ -17,9 +17,10 @@
 #include <mach/mach_host.h>   // For host_statistics64, mach_host_self, host_page_size
 #include <sys/sysctl.h>       // For sysctlbyname
 
-#include <cstdio>  // For perror
-#include <thread>  // For std::thread::hardware_concurrency
-#include <vector>  // For std::vector
+#include <cstdio>   // For perror
+#include <iostream>  // For std::cerr
+#include <thread>   // For std::thread::hardware_concurrency
+#include <vector>   // For std::vector
 
 #include "benchmark.h"
 
@@ -141,4 +142,42 @@ unsigned long get_available_memory_mb() {
   // Convert bytes to MB.
   unsigned long available_mb = static_cast<unsigned long>(available_bytes / bytes_per_mb);
   return available_mb;
+}
+
+// Gets the L1 data cache size for performance cores using sysctl.
+// Returns size in bytes. Uses fallback if detection fails.
+size_t get_l1_cache_size() {
+  size_t l1_size = 0;
+  size_t len = sizeof(l1_size);
+  // Try reading L1 data cache size for performance cores (perflevel0).
+  if (sysctlbyname("hw.perflevel0.l1dcachesize", &l1_size, &len, NULL, 0) == 0 && l1_size > 0) {
+    return l1_size;  // Return detected size.
+  }
+  // Fallback: Use typical Apple Silicon P-core L1 size (128 KB).
+  std::cerr << "Warning: Could not detect L1 cache size, using fallback: 128 KB" << std::endl;
+  return 128 * 1024;  // 128 KB in bytes.
+}
+
+// Gets the L2 cache size for performance cores using sysctl.
+// Returns size in bytes. Uses fallback if detection fails.
+size_t get_l2_cache_size() {
+  size_t l2_size = 0;
+  size_t len = sizeof(l2_size);
+  // Try reading L2 cache size for performance cores (perflevel0).
+  if (sysctlbyname("hw.perflevel0.l2cachesize", &l2_size, &len, NULL, 0) == 0 && l2_size > 0) {
+    return l2_size;  // Return detected size.
+  }
+  // Fallback: Try to infer from processor name, otherwise use conservative estimate.
+  std::string cpu_name = get_processor_name();
+  if (cpu_name.find("M1") != std::string::npos) {
+    std::cerr << "Warning: Could not detect L2 cache size, using M1 fallback: 12 MB" << std::endl;
+    return 12 * 1024 * 1024;  // M1: 12 MB per P-core cluster.
+  } else if (cpu_name.find("M2") != std::string::npos || cpu_name.find("M3") != std::string::npos ||
+             cpu_name.find("M4") != std::string::npos || cpu_name.find("M5") != std::string::npos) {
+    std::cerr << "Warning: Could not detect L2 cache size, using M2/M3/M4/M5 fallback: 16 MB" << std::endl;
+    return 16 * 1024 * 1024;  // M2/M3/M4/M5: 16 MB per P-core cluster.
+  }
+  // Generic fallback.
+  std::cerr << "Warning: Could not detect L2 cache size, using generic fallback: 16 MB" << std::endl;
+  return 16 * 1024 * 1024;  // 16 MB in bytes.
 }
