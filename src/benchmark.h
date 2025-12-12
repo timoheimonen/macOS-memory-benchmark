@@ -91,7 +91,9 @@ void print_results(int loop, size_t buffer_size, size_t buffer_size_mb, int iter
     size_t l1_buffer_size, size_t l2_buffer_size,
     double l1_read_bw_gb_s, double l1_write_bw_gb_s, double l1_copy_bw_gb_s,
     double l2_read_bw_gb_s, double l2_write_bw_gb_s, double l2_copy_bw_gb_s,
-    double average_latency_ns, double total_lat_time_ns); // Print results for one loop
+    double average_latency_ns, double total_lat_time_ns,
+    bool use_custom_cache_size, double custom_latency_ns, size_t custom_buffer_size,
+    double custom_read_bw_gb_s, double custom_write_bw_gb_s, double custom_copy_bw_gb_s); // Print results for one loop
 void print_statistics(int loop_count,
                       const std::vector<double>& all_read_bw,
                       const std::vector<double>& all_write_bw,
@@ -104,8 +106,13 @@ void print_statistics(int loop_count,
                       const std::vector<double>& all_l2_read_bw,
                       const std::vector<double>& all_l2_write_bw,
                       const std::vector<double>& all_l2_copy_bw,
-                      const std::vector<double>& all_main_mem_latency); // Print summary statistics after all loops
-void print_cache_info(size_t l1_cache_size, size_t l2_cache_size); // Print cache size information
+                      const std::vector<double>& all_main_mem_latency,
+                      bool use_custom_cache_size,
+                      const std::vector<double>& all_custom_latency,
+                      const std::vector<double>& all_custom_read_bw,
+                      const std::vector<double>& all_custom_write_bw,
+                      const std::vector<double>& all_custom_copy_bw); // Print summary statistics after all loops
+void print_cache_info(size_t l1_cache_size, size_t l2_cache_size, bool use_custom_cache_size, size_t custom_cache_size_bytes); // Print cache size information
 void show_progress(); // Show progress indicator (spinner)
 
 
