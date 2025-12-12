@@ -129,7 +129,7 @@ In the Terminal, go to the directory with `memory_benchmark` and use these comma
 
 ## Example output (Mac Mini M4 24GB)
 ```text
------ macOS-memory-benchmark v0.41 -----
+----- macOS-memory-benchmark v0.42 -----
 Program is licensed under GNU GPL v3. See <https://www.gnu.org/licenses/>
 Copyright 2025 Timo Heimonen <timo.heimonen@proton.me>
 
@@ -167,7 +167,7 @@ Cache Bandwidth Tests (single-threaded):
 
 Cache Latency Tests (single-threaded, pointer chase):
   L1 Cache: 0.68 ns (Buffer size: 96.00 KB)
-  L2 Cache: 9.64 ns (Buffer size: 12.00 MB)
+  L2 Cache: 4.83 ns (Buffer size: 1.60 MB)
 
 Main Memory Latency Test (single-threaded, pointer chase):
   Total time: 19.797 s
