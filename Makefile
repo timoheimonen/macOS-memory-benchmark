@@ -35,8 +35,8 @@ CPP_SRCS_SRC_FULL = $(addprefix $(SRC_DIR)/, $(CPP_SRCS_SRC))
 # All C++ source files with correct paths
 ALL_CPP_SRCS = $(CPP_SRCS_ROOT) $(CPP_SRCS_SRC_FULL)
 
-# Assembly source files (in root)
-ASM_SRCS = memory_copy.s memory_read.s memory_write.s memory_latency.s
+# Assembly source files (in src/asm)
+ASM_SRCS = src/asm/memory_copy.s src/asm/memory_read.s src/asm/memory_write.s src/asm/memory_latency.s
 
 # Object files (derived from source files, maintaining directory structure)
 # main.cpp -> main.o
@@ -74,9 +74,8 @@ $(SRC_DIR)/%.o: $(SRC_DIR)/%.cpp $(HEADERS)
 	@echo "Compiling (src) $< -> $@..."
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
-# Rule for assembling assembly source files (in root) into object files
-# Handles memory_copy.s, memory_read.s, memory_write.s, memory_latency.s
-%.o: %.s
+# Rule for assembling assembly source files in src/asm into object files
+$(SRC_DIR)/asm/%.o: $(SRC_DIR)/asm/%.s
 	@echo "Assembling $< -> $@..."
 	$(AS) $(ASFLAGS) $< -o $@
 
