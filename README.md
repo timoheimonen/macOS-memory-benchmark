@@ -12,21 +12,22 @@ A simple tool to measure memory write/read/copy bandwidth and memory access late
 ## Description
 
 This C++/asm program measures:
-1. How fast data can be written/read/copied between two big memory blocks allocated using `mmap`.
-2. The average time (latency) it takes to do dependent memory reads in a large buffer, similar to random access.
-3. L1 and L2 cache latency using pointer chasing methodology with buffers sized to fit within each cache level.
+1. How fast data can be read/written/copied between two big memory blocks allocated using `mmap` (main memory bandwidth).
+2. How fast data can be read/written/copied in buffers sized to fit within L1 and L2 cache levels (cache bandwidth).
+3. The average time (latency) it takes to do dependent memory reads in a large buffer, similar to random access (main memory latency).
+4. L1 and L2 cache latency using pointer chasing methodology with buffers sized to fit within each cache level.
 
-The main write/read/copy and latency tests are done in a separate ARM64 assembly file (`loops.s`). The write/read/copy loop uses optimized non-temporal instructions (`ldnp`/`stnp`) for faster testing, and the latency test uses dependent loads (`ldr x0, [x0]`) to measure access time.
+The main read/write/copy and latency tests are done in separate ARM64 assembly files located in `src/asm/`. The read/write/copy loops use optimized non-temporal instructions (`ldnp`/`stnp`) for faster testing, and the latency test uses dependent loads (`ldr x0, [x0]`) to measure access time.
 
-### Assembly Implementation (`loops.s`)
+### Assembly Implementation (`src/asm/`)
 
-The performance-critical memory operations are implemented in ARM64 assembly for maximum efficiency:
+The performance-critical memory operations are implemented in ARM64 assembly for maximum efficiency across four separate source files:
 
 * **Core Functions:**
-    * `_memory_copy_loop_asm`: Copies data between buffers using non-temporal instructions (`stnp`) to minimize cache impact.
-    * `_memory_read_loop_asm`: Reads memory and calculates an XOR checksum to prevent optimization and ensure data is actually read.
-    * `_memory_write_loop_asm`: Writes zeros to memory using non-temporal instructions (`stnp`).
-    * `_memory_latency_chase_asm`: Measures memory access latency via pointer chasing with dependent loads (`ldr x0, [x0]`).  
+    * `memory_copy.s` - `_memory_copy_loop_asm`: Copies data between buffers using non-temporal instructions (`stnp`) to minimize cache impact.
+    * `memory_read.s` - `_memory_read_loop_asm`: Reads memory and calculates an XOR checksum to prevent optimization and ensure data is actually read.
+    * `memory_write.s` - `_memory_write_loop_asm`: Writes zeros to memory using non-temporal instructions (`stnp`).
+    * `memory_latency.s` - `_memory_latency_chase_asm`: Measures memory access latency via pointer chasing with dependent loads (`ldr x0, [x0]`).  
 
 * **Key Optimizations:**
     * Processing data in large 512-byte blocks.
@@ -41,16 +42,17 @@ The benchmark does these steps:
 2.  Gets memory blocks using `mmap` (src, dst for bandwidth; lat for main memory latency; separate buffers for L1/L2 cache latency).
 3.  Writes to the bandwidth buffers to make sure the OS maps the memory.
 4.  Creates random pointer chains inside the latency buffers (this also maps their memory).
-5.  Does warm-up runs for write/read/copy and latency tests to let the CPU speed and caches settle.
-6.  Bandwidth Test: Times the **write**/read/copy from source to destination buffer multiple times using the precise `mach_absolute_time` timer.
-7.  Cache Latency Tests: Times doing many dependent pointer reads in buffers sized to fit within L1 and L2 cache levels.
-8.  Main Memory Latency Test: Times doing many dependent pointer reads (following the chain) using `mach_absolute_time`.
-9.  Calculates and shows the memory bandwidth, cache latencies, and the average main memory access latency.
-10. Releases the memory using `munmap` (via RAII with `std::unique_ptr` and a custom deleter).
+5.  Does warm-up runs for read/write/copy and latency tests to let the CPU speed and caches settle.
+6.  Main Memory Bandwidth Tests: Times the read/write/copy from source to destination buffer multiple times using the precise `mach_absolute_time` timer (multi-threaded).
+7.  Cache Bandwidth Tests: Times read/write/copy operations in buffers sized to fit within L1 and L2 cache levels (single-threaded, using 10x more iterations for accuracy).
+8.  Cache Latency Tests: Times doing many dependent pointer reads in buffers sized to fit within L1 and L2 cache levels.
+9.  Main Memory Latency Test: Times doing many dependent pointer reads (following the chain) using `mach_absolute_time`.
+10. Calculates and shows the memory bandwidth, cache latencies, and the average main memory access latency.
+11. Releases the memory using `munmap` (via RAII with `std::unique_ptr` and a custom deleter).
 
 ## Why This Tool?
 
-The primary motivation for developing this tool is to provide a straightforward and reliable method for measuring and comparing the memory performance characteristics across different generations of Apple Silicon chips (M1, M2, M3, M4, etc.).
+The primary motivation for developing this tool is to provide a straightforward and reliable method for measuring and comparing the memory performance characteristics across different generations of Apple Silicon chips (M1, M2, M3, M4, M5, etc.).
 
 ## Target Platform
 
@@ -58,23 +60,18 @@ macOS on Apple Silicon.
 
 ## Features
 
-* Checks memory write, read and copy speeds.
+* Checks main memory read, write and copy speeds (multi-threaded).
+* Checks L1 and L2 cache bandwidth (read/write/copy) using single-threaded tests.
 * Checks L1 and L2 cache latency using pointer chasing methodology.
 * Checks main memory access latency.
 * Automatically detects cache sizes (L1, L2) for Apple Silicon processors.
-* Uses `mmap` for memory blocks (large blocks for bandwidth/main memory latency; cache-sized blocks for cache latency tests).
-* Main write/read/copy and latency loops are in ARM64 assembly (`loops.s`).
-* Uses optimized non-temporal pair instructions (`ldnp`/`stnp`) for high-throughput **bandwidth tests** in the assembly loop.
+* Uses `mmap` for memory blocks (large blocks for bandwidth/main memory latency; cache-sized blocks for cache bandwidth and latency tests).
+* Main read/write/copy and latency loops are in ARM64 assembly files (`src/asm/memory_copy.s`, `src/asm/memory_read.s`, `src/asm/memory_write.s`, `src/asm/memory_latency.s`).
+* Uses optimized non-temporal pair instructions (`ldnp`/`stnp`) for high-throughput bandwidth tests in the assembly loop.
 * Checks latency by pointer chasing with dependent loads (`ldr x0, [x0]`) in assembly.
-* Uses multiple threads (`std::thread`) for the bandwidth test.
+* Uses multiple threads (`std::thread`) for main memory bandwidth tests (single-threaded for cache tests).
 * Uses `mach_absolute_time` for precise timing.
 * Initializes memory and does warm-ups for more stable results.
-
-## Prerequisites
-
-* macOS (Apple Silicon).
-* Xcode Command Line Tools (includes `clang++` compiler and `as` assembler).
-    * Install with: `xcode-select --install` in the Terminal.
 
 ## Install with Homebrew
 
@@ -82,6 +79,12 @@ In the Terminal, Run:
 ```bash
 brew install timoheimonen/macOS-memory-benchmark/memory-benchmark
 ```
+
+## Prerequisites
+
+* macOS (Apple Silicon).
+* Xcode Command Line Tools (includes `clang++` compiler and `as` assembler).
+    * Install with: `xcode-select --install` in the Terminal.
 
 ## Building
 
@@ -156,7 +159,7 @@ Detected Cache Sizes:
 Running benchmarks...
 | Running tests...
 --- Results (Loop 1) ---
-Bandwidth Tests (multi-threaded, 10 threads):
+Main Memory Bandwidth Tests (multi-threaded, 10 threads):
   Read : 115.639 GB/s (Total time: 4.643 s)
   Write: 66.164 GB/s (Total time: 8.114 s)
   Copy : 106.756 GB/s (Total time: 10.058 s)
