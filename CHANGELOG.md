@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 - split loop.s to separate files; memory_read.s, memory_copy.s, memory_write.s and memory_latency.s.
 - moved assembly sources to src/asm -directory.
+- main memory latency is printed after main memory bandwidth results and before cache results.
 
 ## [0.42] - 2025-12-12
 

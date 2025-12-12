@@ -127,14 +127,20 @@ void print_results(int loop, size_t buffer_size, size_t buffer_size_mb, int iter
   // Set output to fixed-point notation for consistent formatting.
   std::cout << std::fixed;
 
-  // Display bandwidth test results.
-  std::cout << "Bandwidth Tests (multi-threaded, " << num_threads << " threads):" << std::endl;
+  // Display Main Memory Bandwidth test results.
+  std::cout << "Main Memory Bandwidth Tests (multi-threaded, " << num_threads << " threads):" << std::endl;
   std::cout << "  Read : " << std::setprecision(3) << read_bw_gb_s << " GB/s (Total time: " << total_read_time << " s)"
             << std::endl;
   std::cout << "  Write: " << std::setprecision(3) << write_bw_gb_s << " GB/s (Total time: " << total_write_time
             << " s)" << std::endl;
   std::cout << "  Copy : " << std::setprecision(3) << copy_bw_gb_s << " GB/s (Total time: " << total_copy_time << " s)"
             << std::endl;
+  
+  // Display main memory latency test results.
+  std::cout << "\nMain Memory Latency Test (single-threaded, pointer chase):" << std::endl;
+  std::cout << "  Total time: " << std::setprecision(3) << total_lat_time_ns / 1e9 << " s"
+            << std::endl;  // Show latency test time in seconds
+  std::cout << "  Average latency: " << std::setprecision(2) << average_latency_ns << " ns" << std::endl;
 
   // Display cache bandwidth test results.
   std::cout << "\nCache Bandwidth Tests (single-threaded):" << std::endl;
@@ -217,12 +223,6 @@ void print_results(int loop, size_t buffer_size, size_t buffer_size_mb, int iter
       }
     }
   }
-
-  // Display main memory latency test results.
-  std::cout << "\nMain Memory Latency Test (single-threaded, pointer chase):" << std::endl;
-  std::cout << "  Total time: " << std::setprecision(3) << total_lat_time_ns / 1e9 << " s"
-            << std::endl;  // Show latency test time in seconds
-  std::cout << "  Average latency: " << std::setprecision(2) << average_latency_ns << " ns" << std::endl;
   // Print a separator after the loop results.
   std::cout << "--------------" << std::endl;
 }

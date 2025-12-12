@@ -161,6 +161,10 @@ Bandwidth Tests (multi-threaded, 10 threads):
   Write: 66.164 GB/s (Total time: 8.114 s)
   Copy : 106.756 GB/s (Total time: 10.058 s)
 
+Main Memory Latency Test (single-threaded, pointer chase):
+  Total time: 19.797 s
+  Average latency: 98.99 ns
+
 Cache Bandwidth Tests (single-threaded):
   L1 Cache:
     Read : 135.919 GB/s (Buffer size: 96.00 KB)
@@ -174,10 +178,6 @@ Cache Bandwidth Tests (single-threaded):
 Cache Latency Tests (single-threaded, pointer chase):
   L1 Cache: 0.68 ns (Buffer size: 96.00 KB)
   L2 Cache: 4.83 ns (Buffer size: 1.60 MB)
-
-Main Memory Latency Test (single-threaded, pointer chase):
-  Total time: 19.797 s
-  Average latency: 98.99 ns
 --------------
 
 Done. Total execution time: 50.122 s
