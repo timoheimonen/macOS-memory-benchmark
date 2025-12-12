@@ -103,7 +103,7 @@ In the Terminal, go to the directory with `memory_benchmark` and use these comma
     ```
     Example output:
     ```text
-    Version: 0.4 by Timo Heimonen <timo.heimonen@proton.me>
+    Version: 0.43 by Timo Heimonen <timo.heimonen@proton.me>
     License: GNU GPL v3. See <https://www.gnu.org/licenses/>
     Link: https://github.com/timoheimonen/macOS-memory-benchmark
 
@@ -114,9 +114,14 @@ In the Terminal, go to the directory with `memory_benchmark` and use these comma
                             The maximum allowed <size_mb> is automatically determined such that
                             3 * <size_mb> does not exceed ~80% of available system memory.
       -count <count>        Number of full loops (read/write/copy/latency) (default: 1)
+      -cache-size <size_kb> Custom cache size in Kilobytes (KB) as integer (16 KB to 524288 KB).
+                            Minimum is 16 KB (system page size). When set, skips automatic
+                            L1/L2 cache size detection and only performs bandwidth and latency
+                            tests for the custom cache size.
       -h, --help            Show this help message and exit
 
     Example: ./memory_benchmark -iterations 500 -buffersize 1024
+    Example: ./memory_benchmark -cache-size 256
     ```
 2. **Run with default parameters**
     ```bash
@@ -125,11 +130,12 @@ In the Terminal, go to the directory with `memory_benchmark` and use these comma
 3. **Run with custom parameters example**
     ```bash
     ./memory_benchmark -iterations 500 -buffersize 512
+    ./memory_benchmark -cache-size 1024
     ```
 
 ## Example output (Mac Mini M4 24GB)
 ```text
------ macOS-memory-benchmark v0.42 -----
+----- macOS-memory-benchmark v0.43 -----
 Program is licensed under GNU GPL v3. See <https://www.gnu.org/licenses/>
 Copyright 2025 Timo Heimonen <timo.heimonen@proton.me>
 
@@ -155,6 +161,10 @@ Bandwidth Tests (multi-threaded, 10 threads):
   Write: 66.164 GB/s (Total time: 8.114 s)
   Copy : 106.756 GB/s (Total time: 10.058 s)
 
+Main Memory Latency Test (single-threaded, pointer chase):
+  Total time: 19.797 s
+  Average latency: 98.99 ns
+
 Cache Bandwidth Tests (single-threaded):
   L1 Cache:
     Read : 135.919 GB/s (Buffer size: 96.00 KB)
@@ -168,10 +178,6 @@ Cache Bandwidth Tests (single-threaded):
 Cache Latency Tests (single-threaded, pointer chase):
   L1 Cache: 0.68 ns (Buffer size: 96.00 KB)
   L2 Cache: 4.83 ns (Buffer size: 1.60 MB)
-
-Main Memory Latency Test (single-threaded, pointer chase):
-  Total time: 19.797 s
-  Average latency: 98.99 ns
 --------------
 
 Done. Total execution time: 50.122 s

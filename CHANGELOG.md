@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.43] - 2025-12-12
+
+### Added
+- Cache-size parameter to set up custom cache testing size in KB.
+
+### Changed
+- split loop.s to separate files; memory_read.s, memory_copy.s, memory_write.s and memory_latency.s.
+- moved assembly sources to src/asm -directory.
+- main memory latency is printed after main memory bandwidth results and before cache results.
+
 ## [0.42] - 2025-12-12
 
 ### Changed
