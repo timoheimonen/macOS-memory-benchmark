@@ -77,10 +77,9 @@ int main(int argc, char *argv[]) {
   size_t l2_cache_size = get_l2_cache_size();  // Get L2 cache size
 
   // --- Calculate Cache Buffer Sizes ---
-  // Use 75% of cache size to ensure fits within target level
-  const double cache_size_factor = 0.75;
-  size_t l1_buffer_size = static_cast<size_t>(l1_cache_size * cache_size_factor);
-  size_t l2_buffer_size = static_cast<size_t>(l2_cache_size * cache_size_factor);
+  // Use 75% of cache size for L1 and 10% for L2 to ensure fits within target level
+  size_t l1_buffer_size = static_cast<size_t>(l1_cache_size * 0.75);
+  size_t l2_buffer_size = static_cast<size_t>(l2_cache_size * 0.10);
   
   // Ensure buffer sizes are multiples of stride (128 bytes) and at least page size
   size_t page_size_check = getpagesize();

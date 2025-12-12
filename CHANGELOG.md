@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.42] - 2025-12-12
+
+### Changed
+- L2 cache test buffer now 10% of reported L2 size (for example targets ~1–2 MB on detected 16MB) to better match observed cache behavior. 
+
 ## [0.41] - 2025-12-11
 
 ### Added
