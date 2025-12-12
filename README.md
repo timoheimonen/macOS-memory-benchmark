@@ -16,17 +16,17 @@ This C++/asm program measures:
 2. The average time (latency) it takes to do dependent memory reads in a large buffer, similar to random access.
 3. L1 and L2 cache latency using pointer chasing methodology with buffers sized to fit within each cache level.
 
-The main write/read/copy and latency tests are done in a separate ARM64 assembly file (`loops.s`). The write/read/copy loop uses optimized non-temporal instructions (`ldnp`/`stnp`) for faster testing, and the latency test uses dependent loads (`ldr x0, [x0]`) to measure access time.
+The main write/read/copy and latency tests are done in separate ARM64 assembly files located in `src/asm/`. The write/read/copy loops use optimized non-temporal instructions (`ldnp`/`stnp`) for faster testing, and the latency test uses dependent loads (`ldr x0, [x0]`) to measure access time.
 
-### Assembly Implementation (`loops.s`)
+### Assembly Implementation (`src/asm/`)
 
-The performance-critical memory operations are implemented in ARM64 assembly for maximum efficiency:
+The performance-critical memory operations are implemented in ARM64 assembly for maximum efficiency across four separate source files:
 
 * **Core Functions:**
-    * `_memory_copy_loop_asm`: Copies data between buffers using non-temporal instructions (`stnp`) to minimize cache impact.
-    * `_memory_read_loop_asm`: Reads memory and calculates an XOR checksum to prevent optimization and ensure data is actually read.
-    * `_memory_write_loop_asm`: Writes zeros to memory using non-temporal instructions (`stnp`).
-    * `_memory_latency_chase_asm`: Measures memory access latency via pointer chasing with dependent loads (`ldr x0, [x0]`).  
+    * `memory_copy.s` - `_memory_copy_loop_asm`: Copies data between buffers using non-temporal instructions (`stnp`) to minimize cache impact.
+    * `memory_read.s` - `_memory_read_loop_asm`: Reads memory and calculates an XOR checksum to prevent optimization and ensure data is actually read.
+    * `memory_write.s` - `_memory_write_loop_asm`: Writes zeros to memory using non-temporal instructions (`stnp`).
+    * `memory_latency.s` - `_memory_latency_chase_asm`: Measures memory access latency via pointer chasing with dependent loads (`ldr x0, [x0]`).  
 
 * **Key Optimizations:**
     * Processing data in large 512-byte blocks.
@@ -50,7 +50,7 @@ The benchmark does these steps:
 
 ## Why This Tool?
 
-The primary motivation for developing this tool is to provide a straightforward and reliable method for measuring and comparing the memory performance characteristics across different generations of Apple Silicon chips (M1, M2, M3, M4, etc.).
+The primary motivation for developing this tool is to provide a straightforward and reliable method for measuring and comparing the memory performance characteristics across different generations of Apple Silicon chips (M1, M2, M3, M4, M5, etc.).
 
 ## Target Platform
 
@@ -63,18 +63,12 @@ macOS on Apple Silicon.
 * Checks main memory access latency.
 * Automatically detects cache sizes (L1, L2) for Apple Silicon processors.
 * Uses `mmap` for memory blocks (large blocks for bandwidth/main memory latency; cache-sized blocks for cache latency tests).
-* Main write/read/copy and latency loops are in ARM64 assembly (`loops.s`).
+* Main write/read/copy and latency loops are in ARM64 assembly files (`src/asm/memory_copy.s`, `src/asm/memory_read.s`, `src/asm/memory_write.s`, `src/asm/memory_latency.s`).
 * Uses optimized non-temporal pair instructions (`ldnp`/`stnp`) for high-throughput **bandwidth tests** in the assembly loop.
 * Checks latency by pointer chasing with dependent loads (`ldr x0, [x0]`) in assembly.
 * Uses multiple threads (`std::thread`) for the bandwidth test.
 * Uses `mach_absolute_time` for precise timing.
 * Initializes memory and does warm-ups for more stable results.
-
-## Prerequisites
-
-* macOS (Apple Silicon).
-* Xcode Command Line Tools (includes `clang++` compiler and `as` assembler).
-    * Install with: `xcode-select --install` in the Terminal.
 
 ## Install with Homebrew
 
@@ -82,6 +76,12 @@ In the Terminal, Run:
 ```bash
 brew install timoheimonen/macOS-memory-benchmark/memory-benchmark
 ```
+
+## Prerequisites
+
+* macOS (Apple Silicon).
+* Xcode Command Line Tools (includes `clang++` compiler and `as` assembler).
+    * Install with: `xcode-select --install` in the Terminal.
 
 ## Building
 
