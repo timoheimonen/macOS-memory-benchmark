@@ -36,12 +36,12 @@ CPP_SRCS_SRC_FULL = $(addprefix $(SRC_DIR)/, $(CPP_SRCS_SRC))
 ALL_CPP_SRCS = $(CPP_SRCS_ROOT) $(CPP_SRCS_SRC_FULL)
 
 # Assembly source files (in root)
-ASM_SRCS = loops.s
+ASM_SRCS = memory_copy.s memory_read.s memory_write.s memory_latency.s
 
 # Object files (derived from source files, maintaining directory structure)
 # main.cpp -> main.o
 # src/timer.cpp -> src/timer.o
-# loops.s -> loops.o
+# memory_copy.s / memory_read.s / memory_write.s / memory_latency.s -> *.o
 OBJ_FILES = $(ALL_CPP_SRCS:.cpp=.o) $(ASM_SRCS:.s=.o)
 
 # Target executable name
@@ -75,7 +75,7 @@ $(SRC_DIR)/%.o: $(SRC_DIR)/%.cpp $(HEADERS)
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
 # Rule for assembling assembly source files (in root) into object files
-# This handles loops.s -> loops.o
+# Handles memory_copy.s, memory_read.s, memory_write.s, memory_latency.s
 %.o: %.s
 	@echo "Assembling $< -> $@..."
 	$(AS) $(ASFLAGS) $< -o $@

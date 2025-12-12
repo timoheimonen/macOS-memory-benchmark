@@ -37,7 +37,7 @@
 #include <mach/mach_time.h>
 
 // --- Version Information ---
-#define SOFTVERSION 0.42f // Software version
+#define SOFTVERSION 0.43f // Software version
 
 // --- High-resolution timer helper ---
 struct HighResTimer {
