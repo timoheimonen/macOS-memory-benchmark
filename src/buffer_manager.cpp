@@ -16,6 +16,7 @@
 #include "buffer_manager.h"
 #include "config.h"  // BenchmarkConfig
 #include "benchmark.h"  // initialize_buffers, setup_latency_chain
+#include "constants.h"
 #include <cstdlib>  // EXIT_SUCCESS, EXIT_FAILURE
 
 int allocate_all_buffers(const BenchmarkConfig& config, BenchmarkBuffers& buffers) {
@@ -127,23 +128,21 @@ int allocate_all_buffers(const BenchmarkConfig& config, BenchmarkBuffers& buffer
 }
 
 int initialize_all_buffers(BenchmarkBuffers& buffers, const BenchmarkConfig& config) {
-  const size_t lat_stride = 128;  // Latency test access stride (bytes)
-  
   // Initialize main memory buffers
   initialize_buffers(buffers.src_buffer(), buffers.dst_buffer(), config.buffer_size);
-  setup_latency_chain(buffers.lat_buffer(), config.buffer_size, lat_stride);
+  setup_latency_chain(buffers.lat_buffer(), config.buffer_size, Constants::LATENCY_STRIDE_BYTES);
   
   // Setup cache latency chains
   if (config.use_custom_cache_size) {
     if (config.custom_buffer_size > 0 && buffers.custom_buffer() != nullptr) {
-      setup_latency_chain(buffers.custom_buffer(), config.custom_buffer_size, lat_stride);
+      setup_latency_chain(buffers.custom_buffer(), config.custom_buffer_size, Constants::LATENCY_STRIDE_BYTES);
     }
   } else {
     if (config.l1_buffer_size > 0 && buffers.l1_buffer() != nullptr) {
-      setup_latency_chain(buffers.l1_buffer(), config.l1_buffer_size, lat_stride);
+      setup_latency_chain(buffers.l1_buffer(), config.l1_buffer_size, Constants::LATENCY_STRIDE_BYTES);
     }
     if (config.l2_buffer_size > 0 && buffers.l2_buffer() != nullptr) {
-      setup_latency_chain(buffers.l2_buffer(), config.l2_buffer_size, lat_stride);
+      setup_latency_chain(buffers.l2_buffer(), config.l2_buffer_size, Constants::LATENCY_STRIDE_BYTES);
     }
   }
   

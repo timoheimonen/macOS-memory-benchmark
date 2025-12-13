@@ -15,6 +15,7 @@
 //
 #include "config.h"
 #include "benchmark.h"
+#include "constants.h"
 #include <iostream>
 #include <limits>
 #include <stdexcept>
@@ -30,9 +31,8 @@ int parse_arguments(int argc, char* argv[], BenchmarkConfig& config) {
       if (arg == "-cache-size") {
         if (++i < argc) {
           long long val_ll = std::stoll(argv[i]);
-          const long long min_cache_size_kb = 16;  // Minimum is page size (16 KB on macOS)
-          if (val_ll <= 0 || val_ll < min_cache_size_kb || val_ll > 524288)
-            throw std::out_of_range("cache-size invalid (must be between " + std::to_string(min_cache_size_kb) + " KB and 524288 KB (512 MB))");
+          if (val_ll <= 0 || val_ll < Constants::MIN_CACHE_SIZE_KB || val_ll > Constants::MAX_CACHE_SIZE_KB)
+            throw std::out_of_range("cache-size invalid (must be between " + std::to_string(Constants::MIN_CACHE_SIZE_KB) + " KB and " + std::to_string(Constants::MAX_CACHE_SIZE_KB) + " KB (512 MB))");
           config.custom_cache_size_kb_ll = val_ll;
         } else
           throw std::invalid_argument("Missing value for -cache-size");
@@ -59,11 +59,16 @@ int parse_arguments(int argc, char* argv[], BenchmarkConfig& config) {
   
   // Get cache sizes
   if (config.use_custom_cache_size) {
-    config.custom_cache_size_bytes = static_cast<size_t>(config.custom_cache_size_kb_ll) * 1024;
+    config.custom_cache_size_bytes = static_cast<size_t>(config.custom_cache_size_kb_ll) * Constants::BYTES_PER_KB;
   } else {
     config.l1_cache_size = get_l1_cache_size();
     config.l2_cache_size = get_l2_cache_size();
   }
+  
+  // Set default access counts from constants
+  config.l1_num_accesses = Constants::L1_LATENCY_ACCESSES;
+  config.l2_num_accesses = Constants::L2_LATENCY_ACCESSES;
+  config.custom_num_accesses = Constants::CUSTOM_LATENCY_ACCESSES;
 
   // Second pass: parse all other arguments
   for (int i = 1; i < argc; ++i) {
@@ -128,23 +133,20 @@ int validate_config(BenchmarkConfig& config) {
   // Calculate memory limit
   unsigned long available_mem_mb = get_available_memory_mb();
   unsigned long max_allowed_mb_per_buffer = 0;
-  const double memory_limit_factor = 0.80;
-  const unsigned long fallback_total_limit_mb = 2048;
-  const unsigned long minimum_limit_mb_per_buffer = 64;
 
   if (available_mem_mb > 0) {
-    unsigned long max_total_allowed_mb = static_cast<unsigned long>(available_mem_mb * memory_limit_factor);
+    unsigned long max_total_allowed_mb = static_cast<unsigned long>(available_mem_mb * Constants::MEMORY_LIMIT_FACTOR);
     max_allowed_mb_per_buffer = max_total_allowed_mb / 3;
   } else {
     std::cerr << "Warning: Cannot get available memory. Using fallback limit." << std::endl;
-    max_allowed_mb_per_buffer = fallback_total_limit_mb / 3;
+    max_allowed_mb_per_buffer = Constants::FALLBACK_TOTAL_LIMIT_MB / 3;
     std::cout << "Info: Setting max per buffer to fallback: " << max_allowed_mb_per_buffer << " MB." << std::endl;
   }
   
-  if (max_allowed_mb_per_buffer < minimum_limit_mb_per_buffer) {
-    std::cout << "Info: Calculated max (" << max_allowed_mb_per_buffer << " MB) < min (" << minimum_limit_mb_per_buffer
+  if (max_allowed_mb_per_buffer < Constants::MINIMUM_LIMIT_MB_PER_BUFFER) {
+    std::cout << "Info: Calculated max (" << max_allowed_mb_per_buffer << " MB) < min (" << Constants::MINIMUM_LIMIT_MB_PER_BUFFER
               << " MB). Using min." << std::endl;
-    max_allowed_mb_per_buffer = minimum_limit_mb_per_buffer;
+    max_allowed_mb_per_buffer = Constants::MINIMUM_LIMIT_MB_PER_BUFFER;
   }
 
   // Validate and cap buffer size
@@ -155,19 +157,17 @@ int validate_config(BenchmarkConfig& config) {
   }
 
   // Calculate final buffer size in bytes
-  const size_t bytes_per_mb = 1024 * 1024;
-  config.buffer_size = static_cast<size_t>(config.buffer_size_mb) * bytes_per_mb;
+  config.buffer_size = static_cast<size_t>(config.buffer_size_mb) * Constants::BYTES_PER_MB;
 
   // Sanity checks
   size_t page_size = getpagesize();
-  const size_t lat_stride = 128;  // Latency test access stride (bytes)
   
-  if (config.buffer_size_mb > 0 && (config.buffer_size == 0 || config.buffer_size / bytes_per_mb != config.buffer_size_mb)) {
+  if (config.buffer_size_mb > 0 && (config.buffer_size == 0 || config.buffer_size / Constants::BYTES_PER_MB != config.buffer_size_mb)) {
     std::cerr << "Error: Buffer size calculation error (" << config.buffer_size_mb << " MB)." << std::endl;
     return EXIT_FAILURE;
   }
   
-  if (config.buffer_size < page_size || config.buffer_size < lat_stride * 2) {
+  if (config.buffer_size < page_size || config.buffer_size < Constants::MIN_LATENCY_BUFFER_SIZE) {
     std::cerr << "Error: Final buffer size (" << config.buffer_size << " bytes) is too small." << std::endl;
     return EXIT_FAILURE;
   }
@@ -176,23 +176,22 @@ int validate_config(BenchmarkConfig& config) {
 }
 
 void calculate_buffer_sizes(BenchmarkConfig& config) {
-  const size_t lat_stride = 128;  // Latency test access stride (bytes)
   size_t page_size_check = getpagesize();
   
   if (config.use_custom_cache_size) {
     // Use 100% of custom cache size
     config.custom_buffer_size = config.custom_cache_size_bytes;
     
-    // Ensure buffer size is multiple of stride (128 bytes)
-    config.custom_buffer_size = ((config.custom_buffer_size / lat_stride) * lat_stride);
+    // Ensure buffer size is multiple of stride
+    config.custom_buffer_size = ((config.custom_buffer_size / Constants::LATENCY_STRIDE_BYTES) * Constants::LATENCY_STRIDE_BYTES);
     
     // Ensure minimum size (at least 2 pointers worth)
-    if (config.custom_buffer_size < lat_stride * 2) config.custom_buffer_size = lat_stride * 2;
+    if (config.custom_buffer_size < Constants::MIN_LATENCY_BUFFER_SIZE) config.custom_buffer_size = Constants::MIN_LATENCY_BUFFER_SIZE;
     
     // Ensure buffer size is at least page size aligned
     if (config.custom_buffer_size < page_size_check) {
-      size_t original_size_kb = config.custom_cache_size_bytes / 1024;
-      size_t rounded_size_kb = page_size_check / 1024;
+      size_t original_size_kb = config.custom_cache_size_bytes / Constants::BYTES_PER_KB;
+      size_t rounded_size_kb = page_size_check / Constants::BYTES_PER_KB;
       if (original_size_kb < rounded_size_kb) {
         std::cout << "Info: Custom cache size (" << original_size_kb << " KB) rounded up to " 
                   << rounded_size_kb << " KB (system page size)" << std::endl;
@@ -200,17 +199,17 @@ void calculate_buffer_sizes(BenchmarkConfig& config) {
       config.custom_buffer_size = page_size_check;
     }
   } else {
-    // Use 75% of cache size for L1 and 10% for L2 to ensure fits within target level
-    config.l1_buffer_size = static_cast<size_t>(config.l1_cache_size * 0.75);
-    config.l2_buffer_size = static_cast<size_t>(config.l2_cache_size * 0.10);
+    // Use configured factors for L1 and L2 to ensure fits within target level
+    config.l1_buffer_size = static_cast<size_t>(config.l1_cache_size * Constants::L1_BUFFER_SIZE_FACTOR);
+    config.l2_buffer_size = static_cast<size_t>(config.l2_cache_size * Constants::L2_BUFFER_SIZE_FACTOR);
     
-    // Ensure buffer sizes are multiples of stride (128 bytes)
-    config.l1_buffer_size = ((config.l1_buffer_size / lat_stride) * lat_stride);
-    config.l2_buffer_size = ((config.l2_buffer_size / lat_stride) * lat_stride);
+    // Ensure buffer sizes are multiples of stride
+    config.l1_buffer_size = ((config.l1_buffer_size / Constants::LATENCY_STRIDE_BYTES) * Constants::LATENCY_STRIDE_BYTES);
+    config.l2_buffer_size = ((config.l2_buffer_size / Constants::LATENCY_STRIDE_BYTES) * Constants::LATENCY_STRIDE_BYTES);
     
     // Ensure minimum size (at least 2 pointers worth)
-    if (config.l1_buffer_size < lat_stride * 2) config.l1_buffer_size = lat_stride * 2;
-    if (config.l2_buffer_size < lat_stride * 2) config.l2_buffer_size = lat_stride * 2;
+    if (config.l1_buffer_size < Constants::MIN_LATENCY_BUFFER_SIZE) config.l1_buffer_size = Constants::MIN_LATENCY_BUFFER_SIZE;
+    if (config.l2_buffer_size < Constants::MIN_LATENCY_BUFFER_SIZE) config.l2_buffer_size = Constants::MIN_LATENCY_BUFFER_SIZE;
     
     // Ensure buffer sizes are at least page size aligned
     if (config.l1_buffer_size < page_size_check) config.l1_buffer_size = page_size_check;
@@ -219,8 +218,8 @@ void calculate_buffer_sizes(BenchmarkConfig& config) {
 }
 
 void calculate_access_counts(BenchmarkConfig& config) {
-  // Scale latency accesses proportionally to buffer size (e.g., ~200M for 512MB default)
-  config.lat_num_accesses = static_cast<size_t>(200 * 1000 * 1000 * (static_cast<double>(config.buffer_size_mb) / 512.0));
+  // Scale latency accesses proportionally to buffer size
+  config.lat_num_accesses = static_cast<size_t>(Constants::BASE_LATENCY_ACCESSES * (static_cast<double>(config.buffer_size_mb) / Constants::DEFAULT_BUFFER_SIZE_MB));
   
   // Cache latency test access counts are already set in struct defaults
   // (l1_num_accesses, l2_num_accesses, custom_num_accesses)

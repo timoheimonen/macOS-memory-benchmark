@@ -35,10 +35,10 @@ struct BenchmarkConfig {
   size_t custom_buffer_size = 0;                // Custom cache buffer size
   
   // Access counts
-  size_t lat_num_accesses = 0;                  // Main memory latency test access count
-  size_t l1_num_accesses = 100 * 1000 * 1000;  // L1 cache latency test access count
-  size_t l2_num_accesses = 50 * 1000 * 1000;   // L2 cache latency test access count
-  size_t custom_num_accesses = 100 * 1000 * 1000;  // Custom cache latency test access count
+  size_t lat_num_accesses = 0;                  // Main memory latency test access count (calculated)
+  size_t l1_num_accesses = 0;                   // L1 cache latency test access count (set from constants)
+  size_t l2_num_accesses = 0;                   // L2 cache latency test access count (set from constants)
+  size_t custom_num_accesses = 0;               // Custom cache latency test access count (set from constants)
   
   // System info
   std::string cpu_name;
