@@ -22,6 +22,7 @@
 #include <thread>     // Required for std::thread
 
 #include "benchmark.h"  // Include common definitions/constants (e.g., SOFTVERSION)
+#include "constants.h"  // Include constants for default values
 
 // --- Progress Indicator ---
 // Simple spinner for showing progress without affecting performance
@@ -56,11 +57,11 @@ void print_usage(const char *prog_name) {
             << "Link: https://github.com/timoheimonen/macOS-memory-benchmark\n\n"
             << "Usage: " << prog_name << " [options]\n"
             << "Options:\n"
-            << "  -iterations <count>   Number of iterations for R/W/Copy tests (default: 1000)\n"
-            << "  -buffersize <size_mb> Size for EACH of the 3 buffers in Megabytes (MB) as integer (default: 512).\n"
+            << "  -iterations <count>   Number of iterations for R/W/Copy tests (default: " << Constants::DEFAULT_ITERATIONS << ")\n"
+            << "  -buffersize <size_mb> Size for EACH of the 3 buffers in Megabytes (MB) as integer (default: " << Constants::DEFAULT_BUFFER_SIZE_MB << ").\n"
             << "                        The maximum allowed <size_mb> is automatically determined such that\n"
             << "                        3 * <size_mb> does not exceed ~80% of available system memory.\n"
-            << "  -count <count>        Number of full loops (read/write/copy/latency) (default: 1)\n"
+            << "  -count <count>        Number of full loops (read/write/copy/latency) (default: " << Constants::DEFAULT_LOOP_COUNT << ")\n"
             << "  -cache-size <size_kb> Custom cache size in Kilobytes (KB) as integer (16 KB to 524288 KB).\n"
             << "                        Minimum is 16 KB (system page size). When set, skips automatic\n"
             << "                        L1/L2 cache size detection and only performs bandwidth and latency\n"

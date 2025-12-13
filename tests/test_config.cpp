@@ -21,9 +21,9 @@
 // Test default configuration values
 TEST(ConfigTest, DefaultValues) {
   BenchmarkConfig config;
-  EXPECT_EQ(config.buffer_size_mb, 512u);
-  EXPECT_EQ(config.iterations, 1000);
-  EXPECT_EQ(config.loop_count, 1);
+  EXPECT_EQ(config.buffer_size_mb, Constants::DEFAULT_BUFFER_SIZE_MB);
+  EXPECT_EQ(config.iterations, Constants::DEFAULT_ITERATIONS);
+  EXPECT_EQ(config.loop_count, Constants::DEFAULT_LOOP_COUNT);
   EXPECT_EQ(config.custom_cache_size_kb_ll, -1);
   EXPECT_FALSE(config.use_custom_cache_size);
 }

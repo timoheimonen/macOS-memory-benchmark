@@ -55,6 +55,10 @@ namespace Constants {
   constexpr int CACHE_ITERATIONS_MULTIPLIER = 10;  // Cache tests use 10x iterations for accuracy
   constexpr int SINGLE_THREAD = 1;  // Single-threaded execution for cache tests
   
+  // Default configuration values
+  constexpr int DEFAULT_ITERATIONS = 1000;  // Default number of iterations for R/W/Copy tests
+  constexpr int DEFAULT_LOOP_COUNT = 1;     // Default number of full benchmark loops
+  
   // Bandwidth calculation constants
   constexpr double NANOSECONDS_PER_SECOND = 1e9;  // Conversion factor for GB/s calculations
   constexpr int COPY_OPERATION_MULTIPLIER = 2;  // Copy = read + write

@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.46] - 2025-XX-XX
+
+### Changed
+- **Consolidated default configuration values**: Moved all default configuration values from `config.h` to `constants.h` to eliminate duplication and ensure single source of truth:
+  - `DEFAULT_BUFFER_SIZE_MB` (512): Already existed in constants, now used as default in `config.h`
+  - `DEFAULT_ITERATIONS` (1000): Moved from hardcoded value in `config.h` to `constants.h`
+  - `DEFAULT_LOOP_COUNT` (1): Moved from hardcoded value in `config.h` to `constants.h`
+- **Help text now references constants**: Updated help output in `utils.cpp` to dynamically reference constants instead of hardcoded default values, ensuring help text stays synchronized with actual defaults.
+- **Test updates**: Updated unit tests to use constants instead of hardcoded values for better maintainability.
+
 ## [0.45] - 2025-12-13
 
 ### Added
