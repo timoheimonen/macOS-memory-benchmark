@@ -37,7 +37,7 @@
 #include <mach/mach_time.h>
 
 // --- Version Information ---
-#define SOFTVERSION 0.43f // Software version
+#define SOFTVERSION 0.44f // Software version
 
 // --- High-resolution timer helper ---
 struct HighResTimer {
@@ -67,8 +67,8 @@ void initialize_buffers(void* src_buffer, void* dst_buffer, size_t buffer_size);
 void warmup_read(void* buffer, size_t size, int num_threads, std::atomic<uint64_t>& dummy_checksum); // Warmup for read tests
 void warmup_write(void* buffer, size_t size, int num_threads); // Warmup for write tests
 void warmup_copy(void* dst, void* src, size_t size, int num_threads); // Warmup for copy tests
-void warmup_latency(void* buffer, size_t num_accesses); // Warmup for latency tests
-void warmup_cache_latency(void* buffer, size_t num_accesses); // Warmup for cache latency tests
+void warmup_latency(void* buffer, size_t buffer_size); // Warmup for latency tests (page prefaulting)
+void warmup_cache_latency(void* buffer, size_t buffer_size); // Warmup for cache latency tests (page prefaulting)
 void warmup_cache_read(void* src_buffer, size_t size, int num_threads, std::atomic<uint64_t>& dummy_checksum); // Warmup for cache read tests
 void warmup_cache_write(void* dst_buffer, size_t size, int num_threads); // Warmup for cache write tests
 void warmup_cache_copy(void* dst, void* src, size_t size, int num_threads); // Warmup for cache copy tests

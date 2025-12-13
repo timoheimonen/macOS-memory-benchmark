@@ -662,7 +662,7 @@ int main(int argc, char *argv[]) {
         // Run custom cache latency test
         if (custom_buffer_size > 0 && custom_buffer != nullptr) {
           show_progress();
-          warmup_cache_latency(custom_buffer, custom_num_accesses);
+          warmup_cache_latency(custom_buffer, custom_buffer_size);
           custom_lat_time_ns = run_cache_latency_test(custom_buffer, custom_buffer_size, custom_num_accesses, test_timer);
           custom_latency_ns = custom_lat_time_ns / static_cast<double>(custom_num_accesses);
         }
@@ -670,14 +670,14 @@ int main(int argc, char *argv[]) {
         // Run L1/L2 cache latency tests
         if (l1_buffer_size > 0 && l1_buffer != nullptr) {
           show_progress();
-          warmup_cache_latency(l1_buffer, l1_num_accesses);
+          warmup_cache_latency(l1_buffer, l1_buffer_size);
           l1_lat_time_ns = run_cache_latency_test(l1_buffer, l1_buffer_size, l1_num_accesses, test_timer);
           l1_latency_ns = l1_lat_time_ns / static_cast<double>(l1_num_accesses);
         }
         
         if (l2_buffer_size > 0 && l2_buffer != nullptr) {
           show_progress();
-          warmup_cache_latency(l2_buffer, l2_num_accesses);
+          warmup_cache_latency(l2_buffer, l2_buffer_size);
           l2_lat_time_ns = run_cache_latency_test(l2_buffer, l2_buffer_size, l2_num_accesses, test_timer);
           l2_latency_ns = l2_lat_time_ns / static_cast<double>(l2_num_accesses);
         }
@@ -685,7 +685,7 @@ int main(int argc, char *argv[]) {
 
       // Warm latency immediately before measuring it to keep cache state representative
       show_progress();
-      warmup_latency(lat_buffer, lat_num_accesses);
+      warmup_latency(lat_buffer, buffer_size);
       total_lat_time_ns = run_latency_test(lat_buffer, lat_num_accesses, test_timer);
     } catch (const std::exception &e) {
       std::cerr << "Error during benchmark tests: " << e.what() << std::endl;

@@ -5,10 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [X.XX] - XXXX-XX-XX
+## [0.44] - 2025-12-XX
 
 ### Changed
 - README.md updated.
+- Optimized checksum accumulation in read benchmark: moved `checksum.fetch_xor()` out of the inner loop to reduce atomic operations from one per iteration to one per thread, significantly reducing contention and improving performance.
+- Latency warmup changed from pointer chasing to page prefaulting: `warmup_latency()` and `warmup_cache_latency()` now perform linear page prefaulting (touching each page with 1-byte read/write at page-size intervals) instead of chasing pointers. This ensures pages are mapped and page faults are removed without building the pointer chain, providing more accurate "cold-ish" latency measurements, especially with small buffers or buffers near cache boundaries (L1/L2).
 
 ## [0.43] - 2025-12-12
 
