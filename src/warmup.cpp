@@ -97,6 +97,11 @@ void warmup_parallel(void* buffer, size_t size, int num_threads, ChunkOp chunk_o
 // 'operation': Function to execute (takes no parameters or specific parameters based on operation type).
 template<typename Op>
 void warmup_single(Op operation) {
+  // Set QoS for single-threaded warmup operations to ensure highest priority
+  kern_return_t qos_ret = pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
+  if (qos_ret != KERN_SUCCESS) {
+    fprintf(stderr, "Warning: Failed to set QoS class for single-threaded warmup (code: %d)\n", qos_ret);
+  }
   operation();
 }
 
@@ -116,7 +121,7 @@ void warmup_read(void* buffer, size_t size, int num_threads, std::atomic<uint64_
       checksum->fetch_xor(result, std::memory_order_relaxed);
     }
   };
-  warmup_parallel(buffer, size, num_threads, read_chunk_op, false, nullptr, &dummy_checksum);
+  warmup_parallel(buffer, size, num_threads, read_chunk_op, true, nullptr, &dummy_checksum);
 }
 
 // Warms up memory by writing to the buffer using multiple threads.
