@@ -18,6 +18,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Test files compile with debug symbols (`-g`) for faster compilation during development.
   - Google Test framework integrated via Homebrew installation.
 
+### Changed
+- **Register allocation cleanup in `memory_latency.s`**: Removed unused register allocations (x2, x3) that were saving parameters but never used, improving code clarity and reducing unnecessary register operations.
+
 ## [0.44] - 2025-12-13
 
 ### Changed
