@@ -20,6 +20,7 @@
 #include "benchmark.h"
 #include "constants.h"
 #include <cstdlib>
+#include <cmath>     // std::isnan, std::isinf
 #include <unistd.h>  // getpagesize
 
 // Test that BenchmarkStatistics is properly initialized
@@ -178,5 +179,72 @@ TEST(BenchmarkRunnerTest, StatisticsStructure) {
   EXPECT_EQ(stats.all_custom_read_bw_gb_s[0], 14.0);
   EXPECT_EQ(stats.all_custom_write_bw_gb_s[0], 15.0);
   EXPECT_EQ(stats.all_custom_copy_bw_gb_s[0], 16.0);
+}
+
+// Test that benchmark results are valid and reasonable
+// This validates that the refactored calculation functions produce correct results
+TEST(BenchmarkRunnerTest, ResultsValidation) {
+  BenchmarkConfig config;
+  BenchmarkBuffers buffers;
+  BenchmarkStatistics stats;
+  
+  // Initialize system info
+  config.cpu_name = get_processor_name();
+  config.perf_cores = get_performance_cores();
+  config.eff_cores = get_efficiency_cores();
+  config.num_threads = get_total_logical_cores();
+  config.l1_cache_size = get_l1_cache_size();
+  config.l2_cache_size = get_l2_cache_size();
+  
+  // Set config with loop_count > 0
+  config.buffer_size = getpagesize();
+  config.buffer_size_mb = 1;
+  config.iterations = 1;
+  config.loop_count = 1;  // Single loop for validation
+  config.use_custom_cache_size = false;
+  config.l1_buffer_size = 0;
+  config.l2_buffer_size = 0;
+  config.lat_num_accesses = 100;  // Small number for quick test
+  
+  // Allocate minimal buffers
+  int alloc_result = allocate_all_buffers(config, buffers);
+  ASSERT_EQ(alloc_result, EXIT_SUCCESS);
+  
+  // Initialize buffers
+  int init_result = initialize_all_buffers(buffers, config);
+  ASSERT_EQ(init_result, EXIT_SUCCESS);
+  
+  // Run benchmarks
+  int result = run_all_benchmarks(buffers, config, stats);
+  ASSERT_EQ(result, EXIT_SUCCESS);
+  
+  // Validate that results were collected
+  ASSERT_EQ(static_cast<int>(stats.all_read_bw_gb_s.size()), 1);
+  ASSERT_EQ(static_cast<int>(stats.all_write_bw_gb_s.size()), 1);
+  ASSERT_EQ(static_cast<int>(stats.all_copy_bw_gb_s.size()), 1);
+  ASSERT_EQ(static_cast<int>(stats.all_average_latency_ns.size()), 1);
+  
+  // Validate main memory bandwidth results are reasonable
+  // Bandwidth should be positive (even if small for minimal test)
+  EXPECT_GE(stats.all_read_bw_gb_s[0], 0.0);
+  EXPECT_GE(stats.all_write_bw_gb_s[0], 0.0);
+  EXPECT_GE(stats.all_copy_bw_gb_s[0], 0.0);
+  
+  // Validate latency results are reasonable
+  // Latency should be positive and in a reasonable range (1ns to 1ms for memory)
+  EXPECT_GT(stats.all_average_latency_ns[0], 0.0);
+  EXPECT_LT(stats.all_average_latency_ns[0], 1000000.0);  // Less than 1ms
+  
+  // Validate that bandwidth calculations are consistent
+  // Copy bandwidth should typically be >= read or write (it's both operations)
+  // But we allow for variance, so just check they're not negative
+  EXPECT_FALSE(std::isnan(stats.all_read_bw_gb_s[0]));
+  EXPECT_FALSE(std::isnan(stats.all_write_bw_gb_s[0]));
+  EXPECT_FALSE(std::isnan(stats.all_copy_bw_gb_s[0]));
+  EXPECT_FALSE(std::isnan(stats.all_average_latency_ns[0]));
+  EXPECT_FALSE(std::isinf(stats.all_read_bw_gb_s[0]));
+  EXPECT_FALSE(std::isinf(stats.all_write_bw_gb_s[0]));
+  EXPECT_FALSE(std::isinf(stats.all_copy_bw_gb_s[0]));
+  EXPECT_FALSE(std::isinf(stats.all_average_latency_ns[0]));
 }
 
