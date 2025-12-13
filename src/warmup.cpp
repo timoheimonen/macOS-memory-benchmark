@@ -17,6 +17,7 @@
 #include <iostream>  // For std::cout
 #include <thread>    // For std::thread
 #include <vector>    // For std::vector
+#include <unistd.h>  // For getpagesize()
 
 // macOS specific QoS
 #include <mach/mach.h>    // For kern_return_t
@@ -156,36 +157,56 @@ void warmup_copy(void* dst, void* src, size_t size, int num_threads) {
   join_threads(threads);
 }
 
-// Warms up memory for latency test by chasing pointers (single thread).
-// 'buffer': Memory region containing the pointer chain.
-// 'num_accesses': Total number of pointer dereferences planned for the actual test.
-void warmup_latency(void* buffer, size_t num_accesses) {
-  // Only perform warmup if there will be accesses in the main test.
-  if (num_accesses > 0) {
-    // Perform a small fraction of the total accesses for warmup (at least 1).
-    // This helps bring relevant cache lines into the hierarchy.
-    size_t warmup_accesses = std::max(static_cast<size_t>(1), num_accesses / 100);
-    // Get the starting pointer from the buffer.
-    uintptr_t* lat_warmup_ptr = static_cast<uintptr_t*>(buffer);
-    // Call the assembly latency chase function (defined elsewhere).
-    memory_latency_chase_asm(lat_warmup_ptr, warmup_accesses);
+// Warms up memory for latency test by page prefaulting (single thread).
+// This ensures pages are mapped and page faults are removed, but does not
+// build/run the pointer chain, allowing for more accurate "cold-ish" latency measurements.
+// 'buffer': Memory region to warm up.
+// 'buffer_size': Total size of the buffer in bytes.
+void warmup_latency(void* buffer, size_t buffer_size) {
+  // Only perform warmup if buffer is valid.
+  if (buffer == nullptr || buffer_size == 0) {
+    return;
+  }
+  
+  // Get actual system page size (4KB on most systems, 16KB on some Apple Silicon)
+  const size_t page_size = static_cast<size_t>(getpagesize());
+  char* buf = static_cast<char*>(buffer);
+  
+  // Touch each page with a 1-byte read/write to ensure it's mapped
+  // This removes page faults without building the pointer chain
+  for (size_t offset = 0; offset < buffer_size; offset += page_size) {
+    // Read one byte to trigger page mapping
+    volatile char dummy = buf[offset];
+    (void)dummy;  // Prevent optimization
+    // Write one byte to ensure write access is established
+    buf[offset] = buf[offset];
   }
 }
 
-// Warms up memory for cache latency test by chasing pointers (single thread).
+// Warms up memory for cache latency test by page prefaulting (single thread).
 // Similar to warmup_latency() but for cache-specific tests.
-// 'buffer': Memory region containing the pointer chain.
-// 'num_accesses': Total number of pointer dereferences planned for the actual test.
-void warmup_cache_latency(void* buffer, size_t num_accesses) {
-  // Only perform warmup if there will be accesses in the main test.
-  if (num_accesses > 0) {
-    // Perform a small fraction of the total accesses for warmup (at least 1).
-    // This helps bring relevant cache lines into the target cache level.
-    size_t warmup_accesses = std::max(static_cast<size_t>(1), num_accesses / 100);
-    // Get the starting pointer from the buffer.
-    uintptr_t* lat_warmup_ptr = static_cast<uintptr_t*>(buffer);
-    // Call the assembly latency chase function (same as main latency warmup).
-    memory_latency_chase_asm(lat_warmup_ptr, warmup_accesses);
+// This ensures pages are mapped and page faults are removed, but does not
+// build/run the pointer chain, allowing for more accurate "cold-ish" cache latency measurements.
+// 'buffer': Memory region to warm up.
+// 'buffer_size': Total size of the buffer in bytes.
+void warmup_cache_latency(void* buffer, size_t buffer_size) {
+  // Only perform warmup if buffer is valid.
+  if (buffer == nullptr || buffer_size == 0) {
+    return;
+  }
+  
+  // Get actual system page size (4KB on most systems, 16KB on some Apple Silicon)
+  const size_t page_size = static_cast<size_t>(getpagesize());
+  char* buf = static_cast<char*>(buffer);
+  
+  // Touch each page with a 1-byte read/write to ensure it's mapped
+  // This removes page faults without building the pointer chain
+  for (size_t offset = 0; offset < buffer_size; offset += page_size) {
+    // Read one byte to trigger page mapping
+    volatile char dummy = buf[offset];
+    (void)dummy;  // Prevent optimization
+    // Write one byte to ensure write access is established
+    buf[offset] = buf[offset];
   }
 }
 

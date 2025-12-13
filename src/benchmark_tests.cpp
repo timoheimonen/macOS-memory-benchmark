@@ -82,12 +82,16 @@ double run_read_test(void *buffer, size_t size, int iterations, int num_threads,
         start_cv.wait(lk, [&start_flag] { return start_flag; });
       }
 
+      // Accumulate checksum locally to avoid atomic operations in the inner loop.
+      uint64_t local_checksum = 0;
       for (int i = 0; i < iterations; ++i) {
         // Call external assembly function for reading.
         uint64_t thread_checksum = memory_read_loop_asm(chunk_start, current_chunk_size);
-        // Atomically combine result (relaxed order is sufficient).
-        checksum.fetch_xor(thread_checksum, std::memory_order_relaxed);
+        // Combine result locally (non-atomic).
+        local_checksum ^= thread_checksum;
       }
+      // Atomically combine final result (one atomic per thread, relaxed order is sufficient).
+      checksum.fetch_xor(local_checksum, std::memory_order_relaxed);
     });
     offset += current_chunk_size;  // Update offset for the next chunk.
   }
