@@ -5,6 +5,38 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.45] - 2025-12-XX
+
+### Added
+- **Unit test suite with Google Test framework**: Added unit tests to improve code quality.
+  - `tests/test_config.cpp`: 12 tests covering configuration parsing, validation, buffer size calculations, and access count calculations.
+  - `tests/test_buffer_manager.cpp`: 4 tests for buffer allocation, initialization, and helper methods.
+  - `tests/test_memory_manager.cpp`: 9 tests for memory allocation, read/write operations, and automatic cleanup.
+  - `tests/test_benchmark_runner.cpp`: 6 tests for statistics initialization, result structures, benchmark execution, and result validation.
+  - Total of 31 tests across 4 test suites
+- **Makefile test support**: Added `test` target to build and run all unit tests, and `clean-test` target for test cleanup.
+  - Test files compile with debug symbols (`-g`) for faster compilation during development.
+  - Google Test framework integrated via Homebrew installation.
+
+### Changed
+- **Register allocation cleanup in `memory_latency.s`**: Removed unused register allocations (x2, x3) that were saving parameters but never used, improving code clarity and reducing unnecessary register operations.
+- **Warmup function refactoring**: Created generic `warmup_parallel()` and `warmup_single()` template functions to eliminate duplicate code across warmup implementations. All parallel warmup functions (`warmup_read`, `warmup_write`, `warmup_copy`) now share the same thread management logic via `warmup_parallel()`, and all single-threaded warmup functions (`warmup_cache_read`, `warmup_cache_write`, `warmup_cache_copy`) use `warmup_single()`. Eliminated duplicate implementation between `warmup_latency()` and `warmup_cache_latency()` by having `warmup_cache_latency()` call `warmup_latency()`. This reduces code duplication and improves maintainability while preserving the existing public API.
+- **Benchmark test function refactoring**: Created generic `run_parallel_test()` template function that handles the common threading pattern (thread creation, synchronization, chunk calculation, QoS setting, and timer coordination). Refactored `run_read_test()`, `run_write_test()`, and `run_copy_test()` to use this framework, reducing code duplication from ~60 lines per function to ~10-20 lines. Each test now defines only its specific work function (lambda), while the generic framework handles all thread management.
+- **QoS class consistency**: Ensured `QOS_CLASS_USER_INTERACTIVE` (highest priority) is set consistently across all threads and operations. Updated `warmup_read()` to set QoS (previously disabled), and added QoS setting to `warmup_single()` template for all single-threaded warmup operations. All benchmark worker threads, warmup threads, and single-threaded operations now use the highest QoS class by default for optimal performance.
+- **Benchmark runner refactoring**: Eliminated code duplication in cache testing functions by creating helper functions:
+  - `calculate_single_bandwidth()`: Unified bandwidth calculation logic for main memory, L1, L2, and custom cache levels, reducing `calculate_bandwidth_results()` from ~70 lines to ~30 lines.
+  - `run_single_cache_latency_test()`: Unified cache latency test execution for L1, L2, and custom cache levels, reducing `run_cache_latency_tests()` from ~28 lines to ~18 lines.
+  - `run_single_cache_bandwidth_test()`: Unified cache bandwidth test execution (read, write, copy) for L1, L2, and custom cache levels, reducing `run_cache_bandwidth_tests()` from ~48 lines to ~28 lines.
+  - Overall code reduction: ~146 lines of duplicated code reduced to ~60-70 lines with shared helper functions, improving maintainability and reducing bug risk.
+- **Enhanced test validation**: Added `ResultsValidation` test that verifies benchmark results are mathematically valid (non-negative bandwidth, reasonable latency ranges, no NaN/Inf values), ensuring refactored calculation functions produce correct results.
+- **Statistics printing refactoring**: Refactored monolithic `print_statistics()` function in `src/utils.cpp` to eliminate massive code duplication across cache levels (L1, L2, Custom). Created reusable helper functions:
+  - `Statistics` struct and `calculate_statistics()`: Unified statistics calculation (average, min, max) from vectors.
+  - `print_metric_statistics()`: Generic function for printing single metric statistics.
+  - `print_cache_bandwidth_statistics()`: Unified bandwidth statistics printing for any cache level.
+  - `print_cache_latency_statistics()`: Unified latency statistics printing for any cache level.
+  - Reduced `print_statistics()` from ~200 lines to ~50 lines (75% reduction), eliminating duplicate code patterns for L1, L2, and Custom cache levels while maintaining identical output format.
+- **Thread utility function extraction**: Extracted duplicated `join_threads` lambda from `benchmark_tests.cpp` and `warmup.cpp` into a common utility function in `utils.cpp`. The function is now declared in `benchmark.h` and shared across both files, eliminating code duplication and improving maintainability.
+
 ## [0.44] - 2025-12-13
 
 ### Changed

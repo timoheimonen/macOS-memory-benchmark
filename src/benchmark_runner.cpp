@@ -66,6 +66,26 @@ static void run_main_memory_bandwidth_tests(const BenchmarkBuffers& buffers, con
                                           config.iterations, config.num_threads, test_timer);
 }
 
+// Helper function to run a single cache bandwidth test (read, write, copy)
+static void run_single_cache_bandwidth_test(void* src_buffer, void* dst_buffer, size_t buffer_size,
+                                            int cache_iterations, HighResTimer& test_timer,
+                                            double& read_time, double& write_time, double& copy_time,
+                                            std::atomic<uint64_t>& read_checksum) {
+  show_progress();
+  std::atomic<uint64_t> warmup_read_checksum{0};
+  warmup_cache_read(src_buffer, buffer_size, Constants::SINGLE_THREAD, warmup_read_checksum);
+  read_time = run_read_test(src_buffer, buffer_size, cache_iterations, 
+                           Constants::SINGLE_THREAD, read_checksum, test_timer);
+  
+  warmup_cache_write(dst_buffer, buffer_size, Constants::SINGLE_THREAD);
+  write_time = run_write_test(dst_buffer, buffer_size, cache_iterations, 
+                             Constants::SINGLE_THREAD, test_timer);
+  
+  warmup_cache_copy(dst_buffer, src_buffer, buffer_size, Constants::SINGLE_THREAD);
+  copy_time = run_copy_test(dst_buffer, src_buffer, buffer_size, 
+                           cache_iterations, Constants::SINGLE_THREAD, test_timer);
+}
+
 // Run cache bandwidth tests (L1, L2, or custom)
 static void run_cache_bandwidth_tests(const BenchmarkBuffers& buffers, const BenchmarkConfig& config,
                                       TimingResults& timings, HighResTimer& test_timer) {
@@ -73,47 +93,35 @@ static void run_cache_bandwidth_tests(const BenchmarkBuffers& buffers, const Ben
   
   if (config.use_custom_cache_size) {
     if (config.custom_buffer_size > 0 && buffers.custom_bw_src() != nullptr && buffers.custom_bw_dst() != nullptr) {
-      show_progress();
-      std::atomic<uint64_t> custom_warmup_read_checksum{0};
-      warmup_cache_read(buffers.custom_bw_src(), config.custom_buffer_size, Constants::SINGLE_THREAD, custom_warmup_read_checksum);
-      timings.custom_read_time = run_read_test(buffers.custom_bw_src(), config.custom_buffer_size, cache_iterations, 
-                                               Constants::SINGLE_THREAD, timings.custom_read_checksum, test_timer);
-      warmup_cache_write(buffers.custom_bw_dst(), config.custom_buffer_size, Constants::SINGLE_THREAD);
-      timings.custom_write_time = run_write_test(buffers.custom_bw_dst(), config.custom_buffer_size, cache_iterations, 
-                                                 Constants::SINGLE_THREAD, test_timer);
-      warmup_cache_copy(buffers.custom_bw_dst(), buffers.custom_bw_src(), config.custom_buffer_size, Constants::SINGLE_THREAD);
-      timings.custom_copy_time = run_copy_test(buffers.custom_bw_dst(), buffers.custom_bw_src(), config.custom_buffer_size, 
-                                              cache_iterations, Constants::SINGLE_THREAD, test_timer);
+      run_single_cache_bandwidth_test(buffers.custom_bw_src(), buffers.custom_bw_dst(), config.custom_buffer_size,
+                                      cache_iterations, test_timer,
+                                      timings.custom_read_time, timings.custom_write_time, timings.custom_copy_time,
+                                      timings.custom_read_checksum);
     }
   } else {
     if (config.l1_buffer_size > 0 && buffers.l1_bw_src() != nullptr && buffers.l1_bw_dst() != nullptr) {
-      show_progress();
-      std::atomic<uint64_t> l1_warmup_read_checksum{0};
-      warmup_cache_read(buffers.l1_bw_src(), config.l1_buffer_size, Constants::SINGLE_THREAD, l1_warmup_read_checksum);
-      timings.l1_read_time = run_read_test(buffers.l1_bw_src(), config.l1_buffer_size, cache_iterations, 
-                                           Constants::SINGLE_THREAD, timings.l1_read_checksum, test_timer);
-      warmup_cache_write(buffers.l1_bw_dst(), config.l1_buffer_size, Constants::SINGLE_THREAD);
-      timings.l1_write_time = run_write_test(buffers.l1_bw_dst(), config.l1_buffer_size, cache_iterations, 
-                                             Constants::SINGLE_THREAD, test_timer);
-      warmup_cache_copy(buffers.l1_bw_dst(), buffers.l1_bw_src(), config.l1_buffer_size, Constants::SINGLE_THREAD);
-      timings.l1_copy_time = run_copy_test(buffers.l1_bw_dst(), buffers.l1_bw_src(), config.l1_buffer_size, 
-                                           cache_iterations, Constants::SINGLE_THREAD, test_timer);
+      run_single_cache_bandwidth_test(buffers.l1_bw_src(), buffers.l1_bw_dst(), config.l1_buffer_size,
+                                      cache_iterations, test_timer,
+                                      timings.l1_read_time, timings.l1_write_time, timings.l1_copy_time,
+                                      timings.l1_read_checksum);
     }
     
     if (config.l2_buffer_size > 0 && buffers.l2_bw_src() != nullptr && buffers.l2_bw_dst() != nullptr) {
-      show_progress();
-      std::atomic<uint64_t> l2_warmup_read_checksum{0};
-      warmup_cache_read(buffers.l2_bw_src(), config.l2_buffer_size, Constants::SINGLE_THREAD, l2_warmup_read_checksum);
-      timings.l2_read_time = run_read_test(buffers.l2_bw_src(), config.l2_buffer_size, cache_iterations, 
-                                           Constants::SINGLE_THREAD, timings.l2_read_checksum, test_timer);
-      warmup_cache_write(buffers.l2_bw_dst(), config.l2_buffer_size, Constants::SINGLE_THREAD);
-      timings.l2_write_time = run_write_test(buffers.l2_bw_dst(), config.l2_buffer_size, cache_iterations, 
-                                             Constants::SINGLE_THREAD, test_timer);
-      warmup_cache_copy(buffers.l2_bw_dst(), buffers.l2_bw_src(), config.l2_buffer_size, Constants::SINGLE_THREAD);
-      timings.l2_copy_time = run_copy_test(buffers.l2_bw_dst(), buffers.l2_bw_src(), config.l2_buffer_size, 
-                                           cache_iterations, Constants::SINGLE_THREAD, test_timer);
+      run_single_cache_bandwidth_test(buffers.l2_bw_src(), buffers.l2_bw_dst(), config.l2_buffer_size,
+                                      cache_iterations, test_timer,
+                                      timings.l2_read_time, timings.l2_write_time, timings.l2_copy_time,
+                                      timings.l2_read_checksum);
     }
   }
+}
+
+// Helper function to run a single cache latency test
+static void run_single_cache_latency_test(void* buffer, size_t buffer_size, size_t num_accesses,
+                                          HighResTimer& test_timer, double& lat_time_ns, double& latency_ns) {
+  show_progress();
+  warmup_cache_latency(buffer, buffer_size);
+  lat_time_ns = run_cache_latency_test(buffer, buffer_size, num_accesses, test_timer);
+  latency_ns = lat_time_ns / static_cast<double>(num_accesses);
 }
 
 // Run cache latency tests (L1, L2, or custom)
@@ -121,27 +129,18 @@ static void run_cache_latency_tests(const BenchmarkBuffers& buffers, const Bench
                                      TimingResults& timings, BenchmarkResults& results, HighResTimer& test_timer) {
   if (config.use_custom_cache_size) {
     if (config.custom_buffer_size > 0 && buffers.custom_buffer() != nullptr) {
-      show_progress();
-      warmup_cache_latency(buffers.custom_buffer(), config.custom_buffer_size);
-      timings.custom_lat_time_ns = run_cache_latency_test(buffers.custom_buffer(), config.custom_buffer_size, 
-                                                          config.custom_num_accesses, test_timer);
-      results.custom_latency_ns = timings.custom_lat_time_ns / static_cast<double>(config.custom_num_accesses);
+      run_single_cache_latency_test(buffers.custom_buffer(), config.custom_buffer_size, config.custom_num_accesses,
+                                    test_timer, timings.custom_lat_time_ns, results.custom_latency_ns);
     }
   } else {
     if (config.l1_buffer_size > 0 && buffers.l1_buffer() != nullptr) {
-      show_progress();
-      warmup_cache_latency(buffers.l1_buffer(), config.l1_buffer_size);
-      timings.l1_lat_time_ns = run_cache_latency_test(buffers.l1_buffer(), config.l1_buffer_size, 
-                                                      config.l1_num_accesses, test_timer);
-      results.l1_latency_ns = timings.l1_lat_time_ns / static_cast<double>(config.l1_num_accesses);
+      run_single_cache_latency_test(buffers.l1_buffer(), config.l1_buffer_size, config.l1_num_accesses,
+                                    test_timer, timings.l1_lat_time_ns, results.l1_latency_ns);
     }
     
     if (config.l2_buffer_size > 0 && buffers.l2_buffer() != nullptr) {
-      show_progress();
-      warmup_cache_latency(buffers.l2_buffer(), config.l2_buffer_size);
-      timings.l2_lat_time_ns = run_cache_latency_test(buffers.l2_buffer(), config.l2_buffer_size, 
-                                                      config.l2_num_accesses, test_timer);
-      results.l2_latency_ns = timings.l2_lat_time_ns / static_cast<double>(config.l2_num_accesses);
+      run_single_cache_latency_test(buffers.l2_buffer(), config.l2_buffer_size, config.l2_num_accesses,
+                                    test_timer, timings.l2_lat_time_ns, results.l2_latency_ns);
     }
   }
 }
@@ -154,74 +153,53 @@ static void run_main_memory_latency_test(const BenchmarkBuffers& buffers, const 
   timings.total_lat_time_ns = run_latency_test(buffers.lat_buffer(), config.lat_num_accesses, test_timer);
 }
 
+// Helper function to calculate bandwidth for a single cache level
+static void calculate_single_bandwidth(size_t buffer_size, int iterations,
+                                       double read_time, double write_time, double copy_time,
+                                       double& read_bw_gb_s, double& write_bw_gb_s, double& copy_bw_gb_s) {
+  size_t total_bytes_read = static_cast<size_t>(iterations) * buffer_size;
+  size_t total_bytes_written = static_cast<size_t>(iterations) * buffer_size;
+  size_t total_bytes_copied_op = static_cast<size_t>(iterations) * buffer_size;
+  
+  if (read_time > 0) {
+    read_bw_gb_s = static_cast<double>(total_bytes_read) / read_time / Constants::NANOSECONDS_PER_SECOND;
+  }
+  if (write_time > 0) {
+    write_bw_gb_s = static_cast<double>(total_bytes_written) / write_time / Constants::NANOSECONDS_PER_SECOND;
+  }
+  if (copy_time > 0) {
+    copy_bw_gb_s = static_cast<double>(total_bytes_copied_op * Constants::COPY_OPERATION_MULTIPLIER) / 
+                   copy_time / Constants::NANOSECONDS_PER_SECOND;
+  }
+}
+
 // Calculate bandwidth results from timing data
 static void calculate_bandwidth_results(const BenchmarkConfig& config, const TimingResults& timings, 
                                          BenchmarkResults& results) {
   // Main memory bandwidth calculations
-  size_t total_bytes_read = static_cast<size_t>(config.iterations) * config.buffer_size;
-  size_t total_bytes_written = static_cast<size_t>(config.iterations) * config.buffer_size;
-  size_t total_bytes_copied_op = static_cast<size_t>(config.iterations) * config.buffer_size;
-  
-  if (timings.total_read_time > 0) {
-    results.read_bw_gb_s = static_cast<double>(total_bytes_read) / timings.total_read_time / Constants::NANOSECONDS_PER_SECOND;
-  }
-  if (timings.total_write_time > 0) {
-    results.write_bw_gb_s = static_cast<double>(total_bytes_written) / timings.total_write_time / Constants::NANOSECONDS_PER_SECOND;
-  }
-  if (timings.total_copy_time > 0) {
-    results.copy_bw_gb_s = static_cast<double>(total_bytes_copied_op * Constants::COPY_OPERATION_MULTIPLIER) / 
-                          timings.total_copy_time / Constants::NANOSECONDS_PER_SECOND;
-  }
+  calculate_single_bandwidth(config.buffer_size, config.iterations,
+                             timings.total_read_time, timings.total_write_time, timings.total_copy_time,
+                             results.read_bw_gb_s, results.write_bw_gb_s, results.copy_bw_gb_s);
   
   // Cache bandwidth calculations
   int cache_iterations = config.iterations * Constants::CACHE_ITERATIONS_MULTIPLIER;
   
   if (config.use_custom_cache_size) {
     if (config.custom_buffer_size > 0) {
-      size_t custom_total_bytes_read = static_cast<size_t>(cache_iterations) * config.custom_buffer_size;
-      size_t custom_total_bytes_written = static_cast<size_t>(cache_iterations) * config.custom_buffer_size;
-      size_t custom_total_bytes_copied_op = static_cast<size_t>(cache_iterations) * config.custom_buffer_size;
-      if (timings.custom_read_time > 0) {
-        results.custom_read_bw_gb_s = static_cast<double>(custom_total_bytes_read) / timings.custom_read_time / Constants::NANOSECONDS_PER_SECOND;
-      }
-      if (timings.custom_write_time > 0) {
-        results.custom_write_bw_gb_s = static_cast<double>(custom_total_bytes_written) / timings.custom_write_time / Constants::NANOSECONDS_PER_SECOND;
-      }
-      if (timings.custom_copy_time > 0) {
-        results.custom_copy_bw_gb_s = static_cast<double>(custom_total_bytes_copied_op * Constants::COPY_OPERATION_MULTIPLIER) / 
-                                      timings.custom_copy_time / Constants::NANOSECONDS_PER_SECOND;
-      }
+      calculate_single_bandwidth(config.custom_buffer_size, cache_iterations,
+                                 timings.custom_read_time, timings.custom_write_time, timings.custom_copy_time,
+                                 results.custom_read_bw_gb_s, results.custom_write_bw_gb_s, results.custom_copy_bw_gb_s);
     }
   } else {
     if (config.l1_buffer_size > 0) {
-      size_t l1_total_bytes_read = static_cast<size_t>(cache_iterations) * config.l1_buffer_size;
-      size_t l1_total_bytes_written = static_cast<size_t>(cache_iterations) * config.l1_buffer_size;
-      size_t l1_total_bytes_copied_op = static_cast<size_t>(cache_iterations) * config.l1_buffer_size;
-      if (timings.l1_read_time > 0) {
-        results.l1_read_bw_gb_s = static_cast<double>(l1_total_bytes_read) / timings.l1_read_time / Constants::NANOSECONDS_PER_SECOND;
-      }
-      if (timings.l1_write_time > 0) {
-        results.l1_write_bw_gb_s = static_cast<double>(l1_total_bytes_written) / timings.l1_write_time / Constants::NANOSECONDS_PER_SECOND;
-      }
-      if (timings.l1_copy_time > 0) {
-        results.l1_copy_bw_gb_s = static_cast<double>(l1_total_bytes_copied_op * Constants::COPY_OPERATION_MULTIPLIER) / 
-                                  timings.l1_copy_time / Constants::NANOSECONDS_PER_SECOND;
-      }
+      calculate_single_bandwidth(config.l1_buffer_size, cache_iterations,
+                                 timings.l1_read_time, timings.l1_write_time, timings.l1_copy_time,
+                                 results.l1_read_bw_gb_s, results.l1_write_bw_gb_s, results.l1_copy_bw_gb_s);
     }
     if (config.l2_buffer_size > 0) {
-      size_t l2_total_bytes_read = static_cast<size_t>(cache_iterations) * config.l2_buffer_size;
-      size_t l2_total_bytes_written = static_cast<size_t>(cache_iterations) * config.l2_buffer_size;
-      size_t l2_total_bytes_copied_op = static_cast<size_t>(cache_iterations) * config.l2_buffer_size;
-      if (timings.l2_read_time > 0) {
-        results.l2_read_bw_gb_s = static_cast<double>(l2_total_bytes_read) / timings.l2_read_time / Constants::NANOSECONDS_PER_SECOND;
-      }
-      if (timings.l2_write_time > 0) {
-        results.l2_write_bw_gb_s = static_cast<double>(l2_total_bytes_written) / timings.l2_write_time / Constants::NANOSECONDS_PER_SECOND;
-      }
-      if (timings.l2_copy_time > 0) {
-        results.l2_copy_bw_gb_s = static_cast<double>(l2_total_bytes_copied_op * Constants::COPY_OPERATION_MULTIPLIER) / 
-                                  timings.l2_copy_time / Constants::NANOSECONDS_PER_SECOND;
-      }
+      calculate_single_bandwidth(config.l2_buffer_size, cache_iterations,
+                                 timings.l2_read_time, timings.l2_write_time, timings.l2_copy_time,
+                                 results.l2_read_bw_gb_s, results.l2_write_bw_gb_s, results.l2_copy_bw_gb_s);
     }
   }
 }

@@ -15,40 +15,32 @@
 //
 #include <atomic>                // For std::atomic
 #include <condition_variable>    // For start gate sync
+#include <cstdio>                // For fprintf, stderr
+#include <functional>            // For std::function
 #include <iostream>              // For std::cout
 #include <mutex>                 // For std::mutex
 #include <thread>                // For std::thread
 #include <vector>                // For std::vector
 
+// macOS specific includes
+#include <mach/mach.h>          // For kern_return_t
+#include <pthread/qos.h>        // For pthread_set_qos_class_self_np
+
 #include "benchmark.h"  // Include benchmark definitions (assembly funcs, HighResTimer)
 
-// --- Local Helper ---
-// Unnamed namespace restricts helper visibility to this file.
-namespace {
-// Joins all threads in the provided vector and clears the vector.
-auto join_threads = [](std::vector<std::thread> &threads) {
-  for (auto &t : threads) {
-    if (t.joinable()) {  // Check if thread is joinable
-      t.join();          // Wait for thread completion
-    }
-  }
-  threads.clear();  // Remove thread objects after joining
-};
-}  // namespace
+// --- Generic Parallel Test Framework ---
 
-// --- Benchmark Execution Functions ---
-
-// Executes the multi-threaded read bandwidth benchmark.
-// 'buffer': Pointer to the memory buffer to read.
-// 'size': Size of the buffer in bytes.
-// 'iterations': How many times to read the entire buffer.
+// Generic function to run parallel tests with a common threading pattern.
+// 'size': Total size of the buffer(s) in bytes.
+// 'iterations': How many times to perform the operation.
 // 'num_threads': Number of threads to use.
-// 'checksum': Atomic variable to accumulate checksums from threads (ensures work isn't optimized away).
 // 'timer': High-resolution timer for measuring execution time.
+// 'work_function': Function to call for each thread chunk. Takes (chunk_start, chunk_size, iterations).
+// 'thread_name': Name of the thread type for QoS error messages (e.g., "read", "write", "copy").
 // Returns: Total duration in seconds.
-double run_read_test(void *buffer, size_t size, int iterations, int num_threads, std::atomic<uint64_t> &checksum,
-                     HighResTimer &timer) {
-  checksum = 0;  // Ensure checksum starts at 0 for the measurement pass.
+template<typename WorkFunction>
+double run_parallel_test(size_t size, int iterations, int num_threads, HighResTimer &timer,
+                         WorkFunction work_function, const char *thread_name) {
   std::vector<std::thread> threads;
   threads.reserve(num_threads);  // Pre-allocate vector space for threads.
 
@@ -65,15 +57,14 @@ double run_read_test(void *buffer, size_t size, int iterations, int num_threads,
   for (int t = 0; t < num_threads; ++t) {
     size_t current_chunk_size = chunk_base_size + (t < chunk_remainder ? 1 : 0);
     if (current_chunk_size == 0) continue;  // Avoid launching threads for zero work.
-    char *chunk_start = static_cast<char *>(buffer) + offset;
 
     // iterations loop inside thread lambda for re-use (avoids per-iteration creation).
-    threads.emplace_back([chunk_start, current_chunk_size, &checksum, iterations, &start_mutex, &start_cv,
-                          &start_flag]() {
+    threads.emplace_back([current_chunk_size, offset, iterations, &start_mutex, &start_cv,
+                          &start_flag, work_function, thread_name]() {
       // Set QoS for this worker thread
       kern_return_t qos_ret = pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
       if (qos_ret != KERN_SUCCESS) {
-        fprintf(stderr, "Warning: Failed to set QoS class for read worker thread (code: %d)\n", qos_ret);
+        fprintf(stderr, "Warning: Failed to set QoS class for %s worker thread (code: %d)\n", thread_name, qos_ret);
       }
 
       // Wait for the main thread to start the timer before beginning work.
@@ -82,16 +73,8 @@ double run_read_test(void *buffer, size_t size, int iterations, int num_threads,
         start_cv.wait(lk, [&start_flag] { return start_flag; });
       }
 
-      // Accumulate checksum locally to avoid atomic operations in the inner loop.
-      uint64_t local_checksum = 0;
-      for (int i = 0; i < iterations; ++i) {
-        // Call external assembly function for reading.
-        uint64_t thread_checksum = memory_read_loop_asm(chunk_start, current_chunk_size);
-        // Combine result locally (non-atomic).
-        local_checksum ^= thread_checksum;
-      }
-      // Atomically combine final result (one atomic per thread, relaxed order is sufficient).
-      checksum.fetch_xor(local_checksum, std::memory_order_relaxed);
+      // Execute the work function for this chunk
+      work_function(offset, current_chunk_size, iterations);
     });
     offset += current_chunk_size;  // Update offset for the next chunk.
   }
@@ -108,6 +91,39 @@ double run_read_test(void *buffer, size_t size, int iterations, int num_threads,
   return duration;  // Return total time elapsed.
 }
 
+// --- Benchmark Execution Functions ---
+
+// Executes the multi-threaded read bandwidth benchmark.
+// 'buffer': Pointer to the memory buffer to read.
+// 'size': Size of the buffer in bytes.
+// 'iterations': How many times to read the entire buffer.
+// 'num_threads': Number of threads to use.
+// 'checksum': Atomic variable to accumulate checksums from threads (ensures work isn't optimized away).
+// 'timer': High-resolution timer for measuring execution time.
+// Returns: Total duration in seconds.
+double run_read_test(void *buffer, size_t size, int iterations, int num_threads, std::atomic<uint64_t> &checksum,
+                     HighResTimer &timer) {
+  checksum = 0;  // Ensure checksum starts at 0 for the measurement pass.
+  
+  // Define the work function for read operations
+  auto read_work = [buffer, &checksum](size_t offset, size_t chunk_size, int iters) {
+    char *chunk_start = static_cast<char *>(buffer) + offset;
+    
+    // Accumulate checksum locally to avoid atomic operations in the inner loop.
+    uint64_t local_checksum = 0;
+    for (int i = 0; i < iters; ++i) {
+      // Call external assembly function for reading.
+      uint64_t thread_checksum = memory_read_loop_asm(chunk_start, chunk_size);
+      // Combine result locally (non-atomic).
+      local_checksum ^= thread_checksum;
+    }
+    // Atomically combine final result (one atomic per thread, relaxed order is sufficient).
+    checksum.fetch_xor(local_checksum, std::memory_order_relaxed);
+  };
+  
+  return run_parallel_test(size, iterations, num_threads, timer, read_work, "read");
+}
+
 // Executes the multi-threaded write bandwidth benchmark.
 // 'buffer': Pointer to the memory buffer to write to.
 // 'size': Size of the buffer in bytes.
@@ -116,55 +132,16 @@ double run_read_test(void *buffer, size_t size, int iterations, int num_threads,
 // 'timer': High-resolution timer for measuring execution time.
 // Returns: Total duration in seconds.
 double run_write_test(void *buffer, size_t size, int iterations, int num_threads, HighResTimer &timer) {
-  std::vector<std::thread> threads;
-  threads.reserve(num_threads);  // Pre-allocate vector space.
-
-  std::mutex start_mutex;
-  std::condition_variable start_cv;
-  bool start_flag = false;  // Gate so timing starts after threads are ready
-
-  // Divide work among threads (chunks calculated once).
-  size_t offset = 0;
-  size_t chunk_base_size = size / num_threads;
-  size_t chunk_remainder = size % num_threads;
-
-  // Launch threads once; each handles its chunk for all iterations.
-  for (int t = 0; t < num_threads; ++t) {
-    size_t current_chunk_size = chunk_base_size + (t < chunk_remainder ? 1 : 0);
-    if (current_chunk_size == 0) continue;
+  // Define the work function for write operations
+  auto write_work = [buffer](size_t offset, size_t chunk_size, int iters) {
     char *chunk_start = static_cast<char *>(buffer) + offset;
-
-    // iterations loop inside thread lambda for re-use.
-    threads.emplace_back([chunk_start, current_chunk_size, iterations, &start_mutex, &start_cv, &start_flag]() {
-      // Set QoS for this worker thread
-      kern_return_t qos_ret = pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
-      if (qos_ret != KERN_SUCCESS) {
-        fprintf(stderr, "Warning: Failed to set QoS class for write worker thread (code: %d)\n", qos_ret);
-      }
-
-      // Wait for the main thread to start the timer before beginning work.
-      {
-        std::unique_lock<std::mutex> lk(start_mutex);
-        start_cv.wait(lk, [&start_flag] { return start_flag; });
-      }
-
-      for (int i = 0; i < iterations; ++i) {
-        memory_write_loop_asm(chunk_start, current_chunk_size);
-      }
-    });
-    offset += current_chunk_size;
-  }
-
-  {
-    std::unique_lock<std::mutex> lk(start_mutex);
-    timer.start();   // Start timing after all threads are created and waiting.
-    start_flag = true;
-  }
-  start_cv.notify_all();
-
-  join_threads(threads);           // Wait for all threads to finish (joined once).
-  double duration = timer.stop();  // Stop timing.
-  return duration;  // Return total time elapsed.
+    
+    for (int i = 0; i < iters; ++i) {
+      memory_write_loop_asm(chunk_start, chunk_size);
+    }
+  };
+  
+  return run_parallel_test(size, iterations, num_threads, timer, write_work, "write");
 }
 
 // Executes the multi-threaded copy bandwidth benchmark.
@@ -176,56 +153,17 @@ double run_write_test(void *buffer, size_t size, int iterations, int num_threads
 // 'timer': High-resolution timer for measuring execution time.
 // Returns: Total duration in seconds.
 double run_copy_test(void *dst, void *src, size_t size, int iterations, int num_threads, HighResTimer &timer) {
-  std::vector<std::thread> threads;
-  threads.reserve(num_threads);  // Pre-allocate vector space.
-
-  std::mutex start_mutex;
-  std::condition_variable start_cv;
-  bool start_flag = false;  // Gate so timing starts after threads are ready
-
-  // Divide work among threads (chunks calculated once).
-  size_t offset = 0;
-  size_t chunk_base_size = size / num_threads;
-  size_t chunk_remainder = size % num_threads;
-
-  // Launch threads once; each handles its chunk for all iterations.
-  for (int t = 0; t < num_threads; ++t) {
-    size_t current_chunk_size = chunk_base_size + (t < chunk_remainder ? 1 : 0);
-    if (current_chunk_size == 0) continue;
+  // Define the work function for copy operations
+  auto copy_work = [dst, src](size_t offset, size_t chunk_size, int iters) {
     char *src_chunk = static_cast<char *>(src) + offset;
     char *dst_chunk = static_cast<char *>(dst) + offset;
-
-    // iterations loop inside thread lambda for re-use.
-    threads.emplace_back([dst_chunk, src_chunk, current_chunk_size, iterations, &start_mutex, &start_cv, &start_flag]() {
-      // Set QoS for this worker thread
-      kern_return_t qos_ret = pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
-      if (qos_ret != KERN_SUCCESS) {
-        fprintf(stderr, "Warning: Failed to set QoS class for copy worker thread (code: %d)\n", qos_ret);
-      }
-
-      // Wait for the main thread to start the timer before beginning work.
-      {
-        std::unique_lock<std::mutex> lk(start_mutex);
-        start_cv.wait(lk, [&start_flag] { return start_flag; });
-      }
-
-      for (int i = 0; i < iterations; ++i) {
-        memory_copy_loop_asm(dst_chunk, src_chunk, current_chunk_size);
-      }
-    });
-    offset += current_chunk_size;
-  }
-
-  {
-    std::unique_lock<std::mutex> lk(start_mutex);
-    timer.start();   // Start timing after all threads are created and waiting.
-    start_flag = true;
-  }
-  start_cv.notify_all();
-
-  join_threads(threads);           // Wait for all threads to finish (joined once).
-  double duration = timer.stop();  // Stop timing.
-  return duration;  // Return total time elapsed.
+    
+    for (int i = 0; i < iters; ++i) {
+      memory_copy_loop_asm(dst_chunk, src_chunk, chunk_size);
+    }
+  };
+  
+  return run_parallel_test(size, iterations, num_threads, timer, copy_work, "copy");
 }
 
 // Executes the single-threaded memory latency benchmark.

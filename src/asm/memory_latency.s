@@ -27,7 +27,7 @@
 // Returns:
 //   x0 = final pointer value (acts as a sink to prevent DCE)
 // Clobbers:
-//   x2‑x5 (temporaries), x4 reused for iteration counts
+//   x4‑x5 (temporaries for iteration counts)
 // Implementation Notes:
 //   * Uses barriers (dsb/isb/dmb) to isolate measurement window and reduce
 //     speculative side effects across the unrolled section.
@@ -37,9 +37,6 @@
 .global _memory_latency_chase_asm
 .align 4
 _memory_latency_chase_asm:
-    mov x2, x1              // Save count in x2 (unused, can be removed)
-    mov x3, x0              // Preserve original pointer in x3 (unused, can be removed)
-    
     // Pre-touch to ensure TLB entries are loaded
     ldr x4, [x0]                // Prime the first access but don't use result yet
     dsb ish                     // Data synchronization barrier (inner shareable)

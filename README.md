@@ -106,7 +106,7 @@ In the Terminal, go to the directory with `memory_benchmark` and use these comma
     ```
     Example output:
     ```text
-    Version: 0.43 by Timo Heimonen <timo.heimonen@proton.me>
+    Version: 0.45 by Timo Heimonen <timo.heimonen@proton.me>
     License: GNU GPL v3. See <https://www.gnu.org/licenses/>
     Link: https://github.com/timoheimonen/macOS-memory-benchmark
 
@@ -132,13 +132,12 @@ In the Terminal, go to the directory with `memory_benchmark` and use these comma
     ```
 3. **Run with custom parameters example**
     ```bash
-    ./memory_benchmark -iterations 500 -buffersize 512
-    ./memory_benchmark -cache-size 1024
+    ./memory_benchmark -iterations 500 -buffersize 512 -cache-size 1024
     ```
 
 ## Example output (Mac Mini M4 24GB)
 ```text
------ macOS-memory-benchmark v0.43 -----
+----- macOS-memory-benchmark v0.45 -----
 Program is licensed under GNU GPL v3. See <https://www.gnu.org/licenses/>
 Copyright 2025 Timo Heimonen <timo.heimonen@proton.me>
 
@@ -157,30 +156,30 @@ Detected Cache Sizes:
   L2 Cache Size: 16.00 MB (per P-core cluster)
 
 Running benchmarks...
-| Running tests...
+\ Running tests...
 --- Results (Loop 1) ---
 Main Memory Bandwidth Tests (multi-threaded, 10 threads):
-  Read : 115.639 GB/s (Total time: 4.643 s)
-  Write: 66.164 GB/s (Total time: 8.114 s)
-  Copy : 106.756 GB/s (Total time: 10.058 s)
+  Read : 114.520 GB/s (Total time: 4.688 s)
+  Write: 65.185 GB/s (Total time: 8.236 s)
+  Copy : 105.568 GB/s (Total time: 10.171 s)
 
 Main Memory Latency Test (single-threaded, pointer chase):
-  Total time: 19.797 s
-  Average latency: 98.99 ns
+  Total time: 19.404 s
+  Average latency: 97.02 ns
 
 Cache Bandwidth Tests (single-threaded):
   L1 Cache:
-    Read : 135.919 GB/s (Buffer size: 96.00 KB)
-    Write: 72.616 GB/s
-    Copy : 176.416 GB/s
+    Read : 138.945 GB/s (Buffer size: 96.00 KB)
+    Write: 73.596 GB/s
+    Copy : 176.373 GB/s
   L2 Cache:
-    Read : 112.459 GB/s (Buffer size: 12.00 MB)
-    Write: 37.651 GB/s
-    Copy : 122.726 GB/s
+    Read : 118.461 GB/s (Buffer size: 1.60 MB)
+    Write: 46.757 GB/s
+    Copy : 129.434 GB/s
 
 Cache Latency Tests (single-threaded, pointer chase):
-  L1 Cache: 0.68 ns (Buffer size: 96.00 KB)
-  L2 Cache: 4.83 ns (Buffer size: 1.60 MB)
+  L1 Cache: 0.69 ns (Buffer size: 96.00 KB)
+  L2 Cache: 4.84 ns (Buffer size: 1.60 MB)
 --------------
 
-Done. Total execution time: 50.122 s
+Done. Total execution time: 43.843 s
