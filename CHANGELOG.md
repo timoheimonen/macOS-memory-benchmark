@@ -29,6 +29,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `run_single_cache_bandwidth_test()`: Unified cache bandwidth test execution (read, write, copy) for L1, L2, and custom cache levels, reducing `run_cache_bandwidth_tests()` from ~48 lines to ~28 lines.
   - Overall code reduction: ~146 lines of duplicated code reduced to ~60-70 lines with shared helper functions, improving maintainability and reducing bug risk.
 - **Enhanced test validation**: Added `ResultsValidation` test that verifies benchmark results are mathematically valid (non-negative bandwidth, reasonable latency ranges, no NaN/Inf values), ensuring refactored calculation functions produce correct results.
+- **Statistics printing refactoring**: Refactored monolithic `print_statistics()` function in `src/utils.cpp` to eliminate massive code duplication across cache levels (L1, L2, Custom). Created reusable helper functions:
+  - `Statistics` struct and `calculate_statistics()`: Unified statistics calculation (average, min, max) from vectors.
+  - `print_metric_statistics()`: Generic function for printing single metric statistics.
+  - `print_cache_bandwidth_statistics()`: Unified bandwidth statistics printing for any cache level.
+  - `print_cache_latency_statistics()`: Unified latency statistics printing for any cache level.
+  - Reduced `print_statistics()` from ~200 lines to ~50 lines (75% reduction), eliminating duplicate code patterns for L1, L2, and Custom cache levels while maintaining identical output format.
 
 ## [0.44] - 2025-12-13
 
