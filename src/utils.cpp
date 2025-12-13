@@ -19,6 +19,7 @@
 #include <numeric>    // Required for std::accumulate (calculating sums)
 #include <vector>     // Required for std::vector
 #include <atomic>     // Required for std::atomic (progress indicator)
+#include <thread>     // Required for std::thread
 
 #include "benchmark.h"  // Include common definitions/constants (e.g., SOFTVERSION)
 
@@ -31,6 +32,18 @@ static const char spinner_chars[] = {'|', '/', '-', '\\'};
 void show_progress() {
   int idx = spinner_counter.fetch_add(1, std::memory_order_relaxed) % 4;
   std::cout << '\r' << spinner_chars[idx] << " Running tests... " << std::flush;
+}
+
+// --- Thread Utility Functions ---
+// Joins all threads in the provided vector and clears the vector.
+// 'threads': Vector of thread objects to join.
+void join_threads(std::vector<std::thread> &threads) {
+  for (auto &t : threads) {
+    if (t.joinable()) {  // Check if thread is joinable
+      t.join();          // Wait for thread completion
+    }
+  }
+  threads.clear();  // Remove thread objects after joining
 }
 
 // --- Helper function to print usage instructions ---

@@ -26,20 +26,6 @@
 
 #include "benchmark.h"  // Includes definitions for assembly loops etc.
 
-// Helper lambda to join all threads in a given vector.
-auto join_threads = [](std::vector<std::thread>& threads) {
-  // Iterate over each thread in the vector.
-  for (auto& t : threads) {
-    // Check if the thread is joinable (can be waited for).
-    if (t.joinable()) {
-      // Wait for the thread to complete its execution.
-      t.join();
-    }
-  }
-  // Remove all thread objects from the vector.
-  threads.clear();
-};
-
 // Generic parallel warmup function for multi-threaded operations.
 // 'buffer': Primary memory region (or destination for copy operations).
 // 'size': Total size of the buffer in bytes.

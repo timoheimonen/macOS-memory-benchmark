@@ -35,6 +35,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `print_cache_bandwidth_statistics()`: Unified bandwidth statistics printing for any cache level.
   - `print_cache_latency_statistics()`: Unified latency statistics printing for any cache level.
   - Reduced `print_statistics()` from ~200 lines to ~50 lines (75% reduction), eliminating duplicate code patterns for L1, L2, and Custom cache levels while maintaining identical output format.
+- **Thread utility function extraction**: Extracted duplicated `join_threads` lambda from `benchmark_tests.cpp` and `warmup.cpp` into a common utility function in `utils.cpp`. The function is now declared in `benchmark.h` and shared across both files, eliminating code duplication and improving maintainability.
 
 ## [0.44] - 2025-12-13
 

@@ -82,6 +82,7 @@ double run_cache_latency_test(void* buffer, size_t buffer_size, size_t num_acces
 
 // --- Utility Functions (utils.cpp) ---
 void print_usage(const char* prog_name); // Print command-line usage instructions
+void join_threads(std::vector<std::thread>& threads); // Join all threads in vector and clear it
 void print_configuration(size_t buffer_size, size_t buffer_size_mb, int iterations, int loop_count, const std::string& cpu_name, int perf_cores, int eff_cores, int num_threads); // Print benchmark setup details
 void print_results(int loop, size_t buffer_size, size_t buffer_size_mb, int iterations, int num_threads,
     double read_bw_gb_s, double total_read_time,

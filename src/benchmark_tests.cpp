@@ -28,20 +28,6 @@
 
 #include "benchmark.h"  // Include benchmark definitions (assembly funcs, HighResTimer)
 
-// --- Local Helper ---
-// Unnamed namespace restricts helper visibility to this file.
-namespace {
-// Joins all threads in the provided vector and clears the vector.
-auto join_threads = [](std::vector<std::thread> &threads) {
-  for (auto &t : threads) {
-    if (t.joinable()) {  // Check if thread is joinable
-      t.join();          // Wait for thread completion
-    }
-  }
-  threads.clear();  // Remove thread objects after joining
-};
-}  // namespace
-
 // --- Generic Parallel Test Framework ---
 
 // Generic function to run parallel tests with a common threading pattern.
