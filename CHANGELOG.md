@@ -20,6 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 - **Register allocation cleanup in `memory_latency.s`**: Removed unused register allocations (x2, x3) that were saving parameters but never used, improving code clarity and reducing unnecessary register operations.
+- **Warmup function refactoring**: Created generic `warmup_parallel()` and `warmup_single()` template functions to eliminate duplicate code across warmup implementations. All parallel warmup functions (`warmup_read`, `warmup_write`, `warmup_copy`) now share the same thread management logic via `warmup_parallel()`, and all single-threaded warmup functions (`warmup_cache_read`, `warmup_cache_write`, `warmup_cache_copy`) use `warmup_single()`. Eliminated duplicate implementation between `warmup_latency()` and `warmup_cache_latency()` by having `warmup_cache_latency()` call `warmup_latency()`. This reduces code duplication and improves maintainability while preserving the existing public API.
 
 ## [0.44] - 2025-12-13
 
