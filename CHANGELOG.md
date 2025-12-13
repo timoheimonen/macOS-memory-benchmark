@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 - README.md updated.
+- **Refactoring of main.cpp**: Refactored  `main.cpp`:
+  - `src/memory_manager.h/cpp`: Encapsulates mmap-based memory allocation with RAII (`MmapPtr`, `MmapDeleter`).
+  - `src/config.h/cpp`: Centralizes configuration management (`BenchmarkConfig` struct, CLI argument parsing, validation, and buffer size calculations).
+  - `src/buffer_manager.h/cpp`: Manages all benchmark buffer lifecycle (`BenchmarkBuffers` struct, allocation, and initialization).
+  - `src/benchmark_runner.h/cpp`: Handles benchmark execution and result collection (`BenchmarkResults`, `BenchmarkStatistics` structs).
+  - `main.cpp` now serves as a clean orchestration function, improving maintainability, testability, and extensibility.
 - Optimized checksum accumulation in read benchmark: moved `checksum.fetch_xor()` out of the inner loop to reduce atomic operations from one per iteration to one per thread, significantly reducing contention and improving performance.
 - Latency warmup changed from pointer chasing to page prefaulting: `warmup_latency()` and `warmup_cache_latency()` now perform linear page prefaulting (touching each page with 1-byte read/write at page-size intervals) instead of chasing pointers. This ensures pages are mapped and page faults are removed without building the pointer chain, providing more accurate "cold-ish" latency measurements, especially with small buffers or buffers near cache boundaries (L1/L2).
 
