@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.45] - 2025-12-XX
+
+### Added
+- **Unit test suite with Google Test framework**: Added unit tests to improve code quality.
+  - `tests/test_config.cpp`: 12 tests covering configuration parsing, validation, buffer size calculations, and access count calculations.
+  - `tests/test_buffer_manager.cpp`: 4 tests for buffer allocation, initialization, and helper methods.
+  - `tests/test_memory_manager.cpp`: 9 tests for memory allocation, read/write operations, and automatic cleanup.
+  - `tests/test_benchmark_runner.cpp`: 5 tests for statistics initialization, result structures, and benchmark execution.
+  - Total of 30 tests across 4 test suites
+- **Makefile test support**: Added `test` target to build and run all unit tests, and `clean-test` target for test cleanup.
+  - Test files compile with debug symbols (`-g`) for faster compilation during development.
+  - Google Test framework integrated via Homebrew installation.
+
 ## [0.44] - 2025-12-13
 
 ### Changed
