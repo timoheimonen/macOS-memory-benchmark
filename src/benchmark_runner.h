@@ -37,11 +37,15 @@ struct BenchmarkResults {
   // Main memory latency results
   double average_latency_ns = 0.0;
   double total_lat_time_ns = 0.0;
+  std::vector<double> latency_samples;  // Per-sample latencies for main memory
   
   // Cache latency results
   double l1_latency_ns = 0.0;
   double l2_latency_ns = 0.0;
   double custom_latency_ns = 0.0;
+  std::vector<double> l1_latency_samples;  // Per-sample latencies for L1 cache
+  std::vector<double> l2_latency_samples;  // Per-sample latencies for L2 cache
+  std::vector<double> custom_latency_samples;  // Per-sample latencies for custom cache
   
   // Cache bandwidth results
   double l1_read_bw_gb_s = 0.0;
@@ -74,6 +78,12 @@ struct BenchmarkStatistics {
   std::vector<double> all_custom_read_bw_gb_s;
   std::vector<double> all_custom_write_bw_gb_s;
   std::vector<double> all_custom_copy_bw_gb_s;
+  
+  // Full sample distributions for percentile calculations
+  std::vector<double> all_main_mem_latency_samples;  // Concatenated samples from all loops
+  std::vector<double> all_l1_latency_samples;  // Concatenated samples from all loops
+  std::vector<double> all_l2_latency_samples;  // Concatenated samples from all loops
+  std::vector<double> all_custom_latency_samples;  // Concatenated samples from all loops
 };
 
 // Run all benchmark loops and collect statistics

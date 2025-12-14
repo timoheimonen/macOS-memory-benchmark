@@ -17,6 +17,7 @@
 #define BENCHMARK_EXECUTOR_H
 
 #include <cstddef>  // size_t
+#include <vector>   // std::vector
 #include <atomic>
 #include <cstdint>
 
@@ -66,7 +67,8 @@ void run_cache_bandwidth_tests(const BenchmarkBuffers& buffers, const BenchmarkC
 
 // Helper function to run a single cache latency test
 void run_single_cache_latency_test(void* buffer, size_t buffer_size, size_t num_accesses,
-                                   HighResTimer& test_timer, double& lat_time_ns, double& latency_ns);
+                                   HighResTimer& test_timer, double& lat_time_ns, double& latency_ns,
+                                   std::vector<double>* latency_samples = nullptr, int sample_count = 0);
 
 // Run cache latency tests (L1, L2, or custom)
 void run_cache_latency_tests(const BenchmarkBuffers& buffers, const BenchmarkConfig& config,
@@ -74,6 +76,6 @@ void run_cache_latency_tests(const BenchmarkBuffers& buffers, const BenchmarkCon
 
 // Run main memory latency test
 void run_main_memory_latency_test(const BenchmarkBuffers& buffers, const BenchmarkConfig& config,
-                                  TimingResults& timings, HighResTimer& test_timer);
+                                  TimingResults& timings, BenchmarkResults& results, HighResTimer& test_timer);
 
 #endif // BENCHMARK_EXECUTOR_H

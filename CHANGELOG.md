@@ -5,6 +5,31 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.47] - DEVELOPMENT VERSION
+
+### Added
+- **Percentile statistics (P50, P90, P95, P99) and standard deviation**: Enhanced statistics reporting to include median (P50), P90, P95, P99 percentiles, and standard deviation for all metrics:
+  - Main memory bandwidth (read, write, copy)
+  - Cache bandwidth (L1, L2, Custom - read, write, copy)
+  - Cache latency (L1, L2, Custom)
+  - Main memory latency
+  - Percentiles calculated using linear interpolation method for accurate results
+- **Full sample distribution collection for latency tests**: Added ability to collect individual latency samples per test iteration for meaningful percentile calculations:
+  - New `-latency-samples <count>` CLI parameter (default: 1000) to control number of samples collected per latency test
+  - Modified `run_latency_test()` and `run_cache_latency_test()` to collect per-sample latencies when sample collection is enabled
+  - Samples are collected across all benchmark loops and concatenated for final percentile calculation
+  - Statistics now show percentiles from full sample distributions (e.g., "from 10000 samples") when available, providing much more meaningful percentile statistics than loop averages alone
+  - Falls back to loop average percentiles if sample collection is disabled (backward compatible)
+- **Enhanced statistics display**: Statistics output now clearly indicates when percentiles are calculated from full sample distributions vs. loop averages, showing sample count in output
+
+### Changed
+- **Extended `Statistics` struct**: Added `median`, `p90`, `p95`, `p99`, and `stddev` fields to support comprehensive statistical analysis
+- **Updated `calculate_statistics()` function**: Now calculates percentiles using linear interpolation and standard deviation in addition to average, min, and max
+- **Statistics calculation improvements**: All print functions (`print_metric_statistics()`, `print_cache_bandwidth_statistics()`, `print_cache_latency_statistics()`) now display the new percentile and standard deviation statistics
+- **Latency test function signatures**: Updated `run_latency_test()` and `run_cache_latency_test()` to accept optional sample collection parameters while maintaining backward compatibility
+- **Benchmark results structures**: Added latency sample vectors to `BenchmarkResults` and `BenchmarkStatistics` to store full sample distributions
+- **Configuration system**: Added `latency_sample_count` to `BenchmarkConfig` with default value from `Constants::DEFAULT_LATENCY_SAMPLE_COUNT` (1000)
+
 ## [0.46] - 2025-12-14
 
 ### Added

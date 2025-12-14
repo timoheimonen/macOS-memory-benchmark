@@ -120,7 +120,7 @@ In the Terminal, go to the directory with `memory_benchmark` and use these comma
     ```
     Example output:
     ```text
-    Version: 0.46 by Timo Heimonen <timo.heimonen@proton.me>
+    Version: 0.47 by Timo Heimonen <timo.heimonen@proton.me>
     License: GNU GPL v3. See <https://www.gnu.org/licenses/>
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -137,7 +137,9 @@ In the Terminal, go to the directory with `memory_benchmark` and use these comma
       -buffersize <size_mb> Size for EACH of the 3 buffers in Megabytes (MB) as integer (default: 512).
                             The maximum allowed <size_mb> is automatically determined such that
                             3 * <size_mb> does not exceed ~80% of available system memory.
-      -count <count>        Number of full loops (read/write/copy/latency) (default: 1)
+      -count <count>        Number of full loops (read/write/copy/latency) (default: 1).
+                            When count > 1, statistics include percentiles (P50/P90/P95/P99) and stddev.
+      -latency-samples <count> Number of latency samples to collect per test (default: 1000)
       -cache-size <size_kb> Custom cache size in Kilobytes (KB) as integer (16 KB to 524288 KB).
                             Minimum is 16 KB (system page size). When set, skips automatic
                             L1/L2 cache size detection and only performs bandwidth and latency
@@ -158,7 +160,7 @@ In the Terminal, go to the directory with `memory_benchmark` and use these comma
 
 ## Example output (Mac Mini M4 24GB)
 ```text
------ macOS-memory-benchmark v0.46 -----
+----- macOS-memory-benchmark v0.47 -----
 Copyright 2025 Timo Heimonen <timo.heimonen@proton.me>
 This program is free software: you can redistribute it and/or modify
 it under the terms of the GNU General Public License as published by

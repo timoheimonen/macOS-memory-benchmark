@@ -28,6 +28,7 @@ struct BenchmarkConfig {
   int iterations = Constants::DEFAULT_ITERATIONS;  // Default test iterations
   int loop_count = Constants::DEFAULT_LOOP_COUNT;  // Default benchmark loops
   long long custom_cache_size_kb_ll = -1;       // User requested custom cache size in KB (-1 = none)
+  int latency_sample_count = Constants::DEFAULT_LATENCY_SAMPLE_COUNT;  // Number of latency samples to collect per test
   
   // Calculated sizes
   size_t buffer_size = 0;                       // Final buffer size in bytes

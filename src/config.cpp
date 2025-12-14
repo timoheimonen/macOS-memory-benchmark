@@ -98,6 +98,14 @@ int parse_arguments(int argc, char* argv[], BenchmarkConfig& config) {
           config.loop_count = static_cast<int>(val_ll);
         } else
           throw std::invalid_argument("Missing value for -count");
+      } else if (arg == "-latency-samples") {
+        if (++i < argc) {
+          long long val_ll = std::stoll(argv[i]);
+          if (val_ll <= 0 || val_ll > std::numeric_limits<int>::max())
+            throw std::out_of_range("latency-samples invalid");
+          config.latency_sample_count = static_cast<int>(val_ll);
+        } else
+          throw std::invalid_argument("Missing value for -latency-samples");
       } else if (arg == "-cache-size") {
         if (++i < argc) {
           // Already parsed in first pass, just skip the value

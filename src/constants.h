@@ -58,6 +58,7 @@ namespace Constants {
   // Default configuration values
   constexpr int DEFAULT_ITERATIONS = 1000;  // Default number of iterations for R/W/Copy tests
   constexpr int DEFAULT_LOOP_COUNT = 1;     // Default number of full benchmark loops
+  constexpr int DEFAULT_LATENCY_SAMPLE_COUNT = 1000;  // Default number of latency samples per test
   
   // Bandwidth calculation constants
   constexpr double NANOSECONDS_PER_SECOND = 1e9;  // Conversion factor for GB/s calculations
