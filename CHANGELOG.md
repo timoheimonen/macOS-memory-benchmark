@@ -5,6 +5,37 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.46] - 2025-12-14
+
+### Added
+- Testing section to 'README.md'
+
+### Changed
+- **Code organization: Split `src/utils.cpp` into focused modules**: Refactored the monolithic 443-line `utils.cpp` file into three focused files following single responsibility principle:
+  - `src/utils.cpp` (43 lines): Contains only thread utilities (`join_threads()`) and progress indicator (`show_progress()`)
+  - `src/output_printer.cpp` (269 lines, new): Contains all output/printing functions (`print_usage()`, `print_configuration()`, `print_results()`, `print_cache_info()`)
+  - `src/statistics.cpp` (167 lines, new): Contains all statistics calculation and printing functions (`print_statistics()` and helper functions)
+  - Updated `src/benchmark.h` with organized function declarations grouped by source file
+  - Updated `Makefile` to include new source files in build
+  - All tests continue to pass without modification (31 tests)
+  - Benefits: Improved code navigation, better maintainability, reduced cognitive load, clearer separation of concerns
+- **Code organization: Split `src/benchmark_runner.cpp` into focused modules**: Refactored the 344-line `benchmark_runner.cpp` file into three focused files following single responsibility principle:
+  - `src/benchmark_runner.cpp` (161 lines): Contains main orchestration functions (`run_single_benchmark_loop()`, `run_all_benchmarks()`)
+  - `src/benchmark_executor.cpp` (129 lines, new): Contains all test execution helper functions (`run_main_memory_bandwidth_tests()`, `run_cache_bandwidth_tests()`, `run_cache_latency_tests()`, `run_main_memory_latency_test()`, and helper functions)
+  - `src/benchmark_results.cpp` (71 lines, new): Contains results calculation functions (`calculate_single_bandwidth()`, `calculate_bandwidth_results()`)
+  - `src/benchmark_executor.h` (new): Header with `TimingResults` struct and test execution function declarations
+  - `src/benchmark_results.h` (new): Header with results calculation function declarations
+  - Updated `Makefile` to include new source files in build
+  - Benefits: Improved separation of concerns (test execution, results calculation, and orchestration), better code navigation, easier maintenance
+- **Consolidated default configuration values**: Moved all default configuration values from `config.h` to `constants.h` to eliminate duplication and ensure single source of truth:
+  - `DEFAULT_BUFFER_SIZE_MB` (512): Already existed in constants, now used as default in `config.h`
+  - `DEFAULT_ITERATIONS` (1000): Moved from hardcoded value in `config.h` to `constants.h`
+  - `DEFAULT_LOOP_COUNT` (1): Moved from hardcoded value in `config.h` to `constants.h`
+- **Help text now references constants**: Updated help output in `output_printer.cpp` to dynamically reference constants instead of hardcoded default values, ensuring help text stays synchronized with actual defaults.
+- **Enhanced license information display**: Added full GPL v3 license text including warranty disclaimer to both help output (`-h`/`--help`) and normal program execution output.
+- **Test updates**: Updated unit tests to use constants instead of hardcoded values for better maintainability.
+- Output examples for 0.46 version in 'README.md'
+
 ## [0.45] - 2025-12-13
 
 ### Added

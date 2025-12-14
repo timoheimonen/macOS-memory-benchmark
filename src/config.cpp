@@ -32,7 +32,7 @@ int parse_arguments(int argc, char* argv[], BenchmarkConfig& config) {
         if (++i < argc) {
           long long val_ll = std::stoll(argv[i]);
           if (val_ll <= 0 || val_ll < Constants::MIN_CACHE_SIZE_KB || val_ll > Constants::MAX_CACHE_SIZE_KB)
-            throw std::out_of_range("cache-size invalid (must be between " + std::to_string(Constants::MIN_CACHE_SIZE_KB) + " KB and " + std::to_string(Constants::MAX_CACHE_SIZE_KB) + " KB (512 MB))");
+            throw std::out_of_range("cache-size invalid (must be between " + std::to_string(Constants::MIN_CACHE_SIZE_KB) + " KB and " + std::to_string(Constants::MAX_CACHE_SIZE_KB) + " KB (" + std::to_string(Constants::MAX_CACHE_SIZE_KB / 1024) + " MB))");
           config.custom_cache_size_kb_ll = val_ll;
         } else
           throw std::invalid_argument("Missing value for -cache-size");

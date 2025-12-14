@@ -37,7 +37,7 @@
 #include <mach/mach_time.h>
 
 // --- Version Information ---
-#define SOFTVERSION 0.45f // Software version
+#define SOFTVERSION 0.46f // Software version
 
 // --- High-resolution timer helper ---
 struct HighResTimer {
@@ -81,8 +81,11 @@ double run_latency_test(void* buffer, size_t num_accesses, HighResTimer& timer);
 double run_cache_latency_test(void* buffer, size_t buffer_size, size_t num_accesses, HighResTimer& timer); // Run cache latency benchmark
 
 // --- Utility Functions (utils.cpp) ---
-void print_usage(const char* prog_name); // Print command-line usage instructions
 void join_threads(std::vector<std::thread>& threads); // Join all threads in vector and clear it
+void show_progress(); // Show progress indicator (spinner)
+
+// --- Output/Printing Functions (output_printer.cpp) ---
+void print_usage(const char* prog_name); // Print command-line usage instructions
 void print_configuration(size_t buffer_size, size_t buffer_size_mb, int iterations, int loop_count, const std::string& cpu_name, int perf_cores, int eff_cores, int num_threads); // Print benchmark setup details
 void print_results(int loop, size_t buffer_size, size_t buffer_size_mb, int iterations, int num_threads,
     double read_bw_gb_s, double total_read_time,
@@ -95,6 +98,9 @@ void print_results(int loop, size_t buffer_size, size_t buffer_size_mb, int iter
     double average_latency_ns, double total_lat_time_ns,
     bool use_custom_cache_size, double custom_latency_ns, size_t custom_buffer_size,
     double custom_read_bw_gb_s, double custom_write_bw_gb_s, double custom_copy_bw_gb_s); // Print results for one loop
+void print_cache_info(size_t l1_cache_size, size_t l2_cache_size, bool use_custom_cache_size, size_t custom_cache_size_bytes); // Print cache size information
+
+// --- Statistics Functions (statistics.cpp) ---
 void print_statistics(int loop_count,
                       const std::vector<double>& all_read_bw,
                       const std::vector<double>& all_write_bw,
@@ -113,8 +119,6 @@ void print_statistics(int loop_count,
                       const std::vector<double>& all_custom_read_bw,
                       const std::vector<double>& all_custom_write_bw,
                       const std::vector<double>& all_custom_copy_bw); // Print summary statistics after all loops
-void print_cache_info(size_t l1_cache_size, size_t l2_cache_size, bool use_custom_cache_size, size_t custom_cache_size_bytes); // Print cache size information
-void show_progress(); // Show progress indicator (spinner)
 
 
 // --- Assembly Function Declarations ---

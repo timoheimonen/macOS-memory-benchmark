@@ -90,11 +90,25 @@ brew install timoheimonen/macOS-memory-benchmark/memory-benchmark
 
 In the Terminal, go to the directory with source code. Run:
 
-1.  **Compile C++/ASM code:**
+**Compile C++/ASM code:**
     ```bash
     make
     ```
 This makes the program file named `memory_benchmark`.
+
+## Testing
+
+Prerequisites:
+```bash
+brew install googletest
+```
+
+Run:
+```bash
+make test
+```
+
+(31 unit tests covering config, buffers, memory, benchmarks.)
 
 ## Usage
 
@@ -106,8 +120,15 @@ In the Terminal, go to the directory with `memory_benchmark` and use these comma
     ```
     Example output:
     ```text
-    Version: 0.45 by Timo Heimonen <timo.heimonen@proton.me>
+    Version: 0.46 by Timo Heimonen <timo.heimonen@proton.me>
     License: GNU GPL v3. See <https://www.gnu.org/licenses/>
+    This program is free software: you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+    the Free Software Foundation, either version 3 of the License, or
+    (at your option) any later version.
+    This program is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
     Link: https://github.com/timoheimonen/macOS-memory-benchmark
 
     Usage: ./memory_benchmark [options]
@@ -137,9 +158,16 @@ In the Terminal, go to the directory with `memory_benchmark` and use these comma
 
 ## Example output (Mac Mini M4 24GB)
 ```text
------ macOS-memory-benchmark v0.45 -----
-Program is licensed under GNU GPL v3. See <https://www.gnu.org/licenses/>
+----- macOS-memory-benchmark v0.46 -----
 Copyright 2025 Timo Heimonen <timo.heimonen@proton.me>
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU General Public License as published by
+the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+See <https://www.gnu.org/licenses/> for more details.
 
 Buffer Size (per buffer): 512.00 MiB (512 MB requested/capped)
 Total Allocation Size: ~1536.00 MiB (for 3 buffers)

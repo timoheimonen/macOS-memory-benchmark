@@ -19,13 +19,14 @@
 #include <cstddef>  // size_t
 #include <string>
 #include <cstdlib>  // EXIT_SUCCESS, EXIT_FAILURE
+#include "constants.h"
 
 // Configuration structure containing all benchmark settings
 struct BenchmarkConfig {
   // User-provided settings
-  unsigned long buffer_size_mb = 512;           // Default buffer size (MB)
-  int iterations = 1000;                        // Default test iterations
-  int loop_count = 1;                           // Default benchmark loops
+  unsigned long buffer_size_mb = Constants::DEFAULT_BUFFER_SIZE_MB;  // Default buffer size (MB)
+  int iterations = Constants::DEFAULT_ITERATIONS;  // Default test iterations
+  int loop_count = Constants::DEFAULT_LOOP_COUNT;  // Default benchmark loops
   long long custom_cache_size_kb_ll = -1;       // User requested custom cache size in KB (-1 = none)
   
   // Calculated sizes
