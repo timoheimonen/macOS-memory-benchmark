@@ -54,6 +54,13 @@ void print_usage(const char *prog_name) {
   // Output usage syntax, version, options, and an example to standard error.
   std::cerr << "Version: " << SOFTVERSION << " by Timo Heimonen <timo.heimonen@proton.me>\n"  // SOFTVERSION defined in benchmark.h
             << "License: GNU GPL v3. See <https://www.gnu.org/licenses/>\n"
+            << "This program is free software: you can redistribute it and/or modify\n"
+            << "it under the terms of the GNU General Public License as published by\n"
+            << "the Free Software Foundation, either version 3 of the License, or\n"
+            << "(at your option) any later version.\n"
+            << "This program is distributed in the hope that it will be useful,\n"
+            << "but WITHOUT ANY WARRANTY; without even the implied warranty of\n"
+            << "MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.\n"
             << "Link: https://github.com/timoheimonen/macOS-memory-benchmark\n\n"
             << "Usage: " << prog_name << " [options]\n"
             << "Options:\n"
@@ -85,8 +92,15 @@ void print_configuration(size_t buffer_size, size_t buffer_size_mb, int iteratio
                          const std::string &cpu_name, int perf_cores, int eff_cores, int num_threads) {
   // Print benchmark header and copyright/license info.
   std::cout << "----- macOS-memory-benchmark v" << SOFTVERSION << " -----" << std::endl;
-  std::cout << "Program is licensed under GNU GPL v3. See <https://www.gnu.org/licenses/>" << std::endl;
-  std::cout << "Copyright 2025 Timo Heimonen <timo.heimonen@proton.me>\n" << std::endl;
+  std::cout << "Copyright 2025 Timo Heimonen <timo.heimonen@proton.me>" << std::endl;
+  std::cout << "This program is free software: you can redistribute it and/or modify" << std::endl;
+  std::cout << "it under the terms of the GNU General Public License as published by" << std::endl;
+  std::cout << "the Free Software Foundation, either version 3 of the License, or" << std::endl;
+  std::cout << "(at your option) any later version." << std::endl;
+  std::cout << "This program is distributed in the hope that it will be useful," << std::endl;
+  std::cout << "but WITHOUT ANY WARRANTY; without even the implied warranty of" << std::endl;
+  std::cout << "MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE." << std::endl;
+  std::cout << "See <https://www.gnu.org/licenses/> for more details.\n" << std::endl;
   // Display buffer sizes (actual MiB and requested/capped MB).
   std::cout << "Buffer Size (per buffer): " << std::fixed << std::setprecision(2) << buffer_size / (1024.0 * 1024.0)
             << " MiB (" << buffer_size_mb << " MB requested/capped)" << std::endl;

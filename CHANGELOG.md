@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `DEFAULT_ITERATIONS` (1000): Moved from hardcoded value in `config.h` to `constants.h`
   - `DEFAULT_LOOP_COUNT` (1): Moved from hardcoded value in `config.h` to `constants.h`
 - **Help text now references constants**: Updated help output in `utils.cpp` to dynamically reference constants instead of hardcoded default values, ensuring help text stays synchronized with actual defaults.
+- **Enhanced license information display**: Added full GPL v3 license text including warranty disclaimer to both help output (`-h`/`--help`) and normal program execution output.
 - **Test updates**: Updated unit tests to use constants instead of hardcoded values for better maintainability.
 
 ## [0.45] - 2025-12-13
