@@ -90,11 +90,25 @@ brew install timoheimonen/macOS-memory-benchmark/memory-benchmark
 
 In the Terminal, go to the directory with source code. Run:
 
-1.  **Compile C++/ASM code:**
+**Compile C++/ASM code:**
     ```bash
     make
     ```
 This makes the program file named `memory_benchmark`.
+
+## Testing
+
+Prerequisites:
+```bash
+brew install googletest
+```
+
+Run:
+```bash
+make test
+```
+
+(31 unit tests covering config, buffers, memory, benchmarks.)
 
 ## Usage
 

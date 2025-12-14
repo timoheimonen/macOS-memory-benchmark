@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.46] - 2025-XX-XX
 
+### Added
+- Testing section to 'README.md'
+
 ### Changed
 - **Consolidated default configuration values**: Moved all default configuration values from `config.h` to `constants.h` to eliminate duplication and ensure single source of truth:
   - `DEFAULT_BUFFER_SIZE_MB` (512): Already existed in constants, now used as default in `config.h`
