@@ -18,6 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Help text now references constants**: Updated help output in `utils.cpp` to dynamically reference constants instead of hardcoded default values, ensuring help text stays synchronized with actual defaults.
 - **Enhanced license information display**: Added full GPL v3 license text including warranty disclaimer to both help output (`-h`/`--help`) and normal program execution output.
 - **Test updates**: Updated unit tests to use constants instead of hardcoded values for better maintainability.
+- Output examples for 0.46 version in 'README.md'
 
 ## [0.45] - 2025-12-13
 
