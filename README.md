@@ -64,6 +64,7 @@ macOS on Apple Silicon.
 * Checks L1 and L2 cache bandwidth (read/write/copy) using single-threaded tests.
 * Checks L1 and L2 cache latency using pointer chasing methodology.
 * Checks main memory access latency.
+* When running with multiple loops (`-count > 1`), calculates detailed statistics including percentiles (P50/P90/P95/P99) and standard deviation for bandwidth and latency tests.
 * Automatically detects cache sizes (L1, L2) for Apple Silicon processors.
 * Uses `mmap` for memory blocks (large blocks for bandwidth/main memory latency; cache-sized blocks for cache bandwidth and latency tests).
 * Main read/write/copy and latency loops are in ARM64 assembly files (`src/asm/memory_copy.s`, `src/asm/memory_read.s`, `src/asm/memory_write.s`, `src/asm/memory_latency.s`).
@@ -189,27 +190,27 @@ Running benchmarks...
 \ Running tests...
 --- Results (Loop 1) ---
 Main Memory Bandwidth Tests (multi-threaded, 10 threads):
-  Read : 114.520 GB/s (Total time: 4.688 s)
-  Write: 65.185 GB/s (Total time: 8.236 s)
-  Copy : 105.568 GB/s (Total time: 10.171 s)
+  Read : 116.539 GB/s (Total time: 4.607 s)
+  Write: 66.293 GB/s (Total time: 8.098 s)
+  Copy : 106.634 GB/s (Total time: 10.069 s)
 
 Main Memory Latency Test (single-threaded, pointer chase):
-  Total time: 19.404 s
-  Average latency: 97.02 ns
+  Total time: 19.720 s
+  Average latency: 98.60 ns
 
 Cache Bandwidth Tests (single-threaded):
   L1 Cache:
-    Read : 138.945 GB/s (Buffer size: 96.00 KB)
-    Write: 73.596 GB/s
-    Copy : 176.373 GB/s
+    Read : 139.461 GB/s (Buffer size: 96.00 KB)
+    Write: 72.589 GB/s
+    Copy : 176.591 GB/s
   L2 Cache:
-    Read : 118.461 GB/s (Buffer size: 1.60 MB)
-    Write: 46.757 GB/s
-    Copy : 129.434 GB/s
+    Read : 122.078 GB/s (Buffer size: 1.60 MB)
+    Write: 44.904 GB/s
+    Copy : 129.392 GB/s
 
 Cache Latency Tests (single-threaded, pointer chase):
   L1 Cache: 0.69 ns (Buffer size: 96.00 KB)
-  L2 Cache: 4.84 ns (Buffer size: 1.60 MB)
+  L2 Cache: 4.86 ns (Buffer size: 1.60 MB)
 --------------
 
-Done. Total execution time: 43.843 s
+Done. Total execution time: 43.826 s
