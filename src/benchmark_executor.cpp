@@ -130,5 +130,5 @@ void run_main_memory_latency_test(const BenchmarkBuffers& buffers, const Benchma
   show_progress();
   warmup_latency(buffers.lat_buffer(), config.buffer_size);
   timings.total_lat_time_ns = run_latency_test(buffers.lat_buffer(), config.lat_num_accesses, test_timer,
-                                                &results.latency_samples, config.latency_sample_count);
+                                                nullptr, 0);
 }
