@@ -214,3 +214,13 @@ Cache Latency Tests (single-threaded, pointer chase):
 --------------
 
 Done. Total execution time: 43.826 s
+```
+
+## Known Issues and Limitations
+
+* **Small buffer sizes (< 512 MB–1 GB) are cache-dominated**:  
+  When you run the main memory bandwidth or latency tests with small buffer sizes, a significant portion of the accesses can be served from the CPU caches instead of true main memory (DRAM). This is especially true on Apple Silicon, which has large and complex shared caches. As a result, small buffers tend to measure *cache* performance rather than pure DRAM performance, and may report unrealistically high bandwidth or low latency.
+* **No explicit cache flush on Apple Silicon**:  
+  Unlike x86 (`CLFLUSH`), there is no user-space instruction on Apple Silicon to reliably flush data caches. The benchmark cannot force a “cold cache” state before each measurement; it relies on large buffer sizes and warm-up behavior to approximate steady-state memory behavior.
+* **Recommendation**:  
+  For more realistic main memory measurements, prefer buffer sizes in the range of **512 MB–1 GB (or larger, if RAM allows)**. Smaller values are still useful to study cache behavior, but they should not be interpreted as pure main memory bandwidth/latency.
