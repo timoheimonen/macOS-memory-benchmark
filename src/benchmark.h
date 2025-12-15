@@ -37,7 +37,7 @@
 #include <mach/mach_time.h>
 
 // --- Version Information ---
-#define SOFTVERSION 0.46f // Software version
+#define SOFTVERSION 0.47f // Software version
 
 // --- High-resolution timer helper ---
 struct HighResTimer {
@@ -77,8 +77,8 @@ void warmup_cache_copy(void* dst, void* src, size_t size, int num_threads); // W
 double run_read_test(void* buffer, size_t size, int iterations, int num_threads, std::atomic<uint64_t>& checksum, HighResTimer& timer); // Run read benchmark
 double run_write_test(void* buffer, size_t size, int iterations, int num_threads, HighResTimer& timer); // Run write benchmark
 double run_copy_test(void* dst, void* src, size_t size, int iterations, int num_threads, HighResTimer& timer); // Run copy benchmark
-double run_latency_test(void* buffer, size_t num_accesses, HighResTimer& timer); // Run latency benchmark
-double run_cache_latency_test(void* buffer, size_t buffer_size, size_t num_accesses, HighResTimer& timer); // Run cache latency benchmark
+double run_latency_test(void* buffer, size_t num_accesses, HighResTimer& timer, std::vector<double>* latency_samples = nullptr, int sample_count = 0); // Run latency benchmark
+double run_cache_latency_test(void* buffer, size_t buffer_size, size_t num_accesses, HighResTimer& timer, std::vector<double>* latency_samples = nullptr, int sample_count = 0); // Run cache latency benchmark
 
 // --- Utility Functions (utils.cpp) ---
 void join_threads(std::vector<std::thread>& threads); // Join all threads in vector and clear it
@@ -118,7 +118,11 @@ void print_statistics(int loop_count,
                       const std::vector<double>& all_custom_latency,
                       const std::vector<double>& all_custom_read_bw,
                       const std::vector<double>& all_custom_write_bw,
-                      const std::vector<double>& all_custom_copy_bw); // Print summary statistics after all loops
+                      const std::vector<double>& all_custom_copy_bw,
+                      const std::vector<double>& all_main_mem_latency_samples,
+                      const std::vector<double>& all_l1_latency_samples,
+                      const std::vector<double>& all_l2_latency_samples,
+                      const std::vector<double>& all_custom_latency_samples); // Print summary statistics after all loops
 
 
 // --- Assembly Function Declarations ---

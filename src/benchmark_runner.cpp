@@ -32,7 +32,7 @@ static BenchmarkResults run_single_benchmark_loop(const BenchmarkBuffers& buffer
     run_main_memory_bandwidth_tests(buffers, config, timings, test_timer);
     run_cache_bandwidth_tests(buffers, config, timings, test_timer);
     run_cache_latency_tests(buffers, config, timings, results, test_timer);
-    run_main_memory_latency_test(buffers, config, timings, test_timer);
+    run_main_memory_latency_test(buffers, config, timings, results, test_timer);
   } catch (const std::exception &e) {
     std::cerr << "Error during benchmark tests: " << e.what() << std::endl;
     throw;  // Re-throw to be handled by caller
@@ -73,6 +73,12 @@ int run_all_benchmarks(const BenchmarkBuffers& buffers, const BenchmarkConfig& c
   stats.all_custom_read_bw_gb_s.clear();
   stats.all_custom_write_bw_gb_s.clear();
   stats.all_custom_copy_bw_gb_s.clear();
+  
+  // Initialize sample vectors
+  stats.all_main_mem_latency_samples.clear();
+  stats.all_l1_latency_samples.clear();
+  stats.all_l2_latency_samples.clear();
+  stats.all_custom_latency_samples.clear();
 
   // Pre-allocate vector space if needed
   if (config.loop_count > 0) {
@@ -86,6 +92,8 @@ int run_all_benchmarks(const BenchmarkBuffers& buffers, const BenchmarkConfig& c
         stats.all_custom_read_bw_gb_s.reserve(config.loop_count);
         stats.all_custom_write_bw_gb_s.reserve(config.loop_count);
         stats.all_custom_copy_bw_gb_s.reserve(config.loop_count);
+        // Pre-allocate sample vectors (latency_sample_count samples per loop)
+        stats.all_custom_latency_samples.reserve(config.loop_count * config.latency_sample_count);
       }
     } else {
       stats.all_l1_latency_ns.reserve(config.loop_count);
@@ -94,13 +102,17 @@ int run_all_benchmarks(const BenchmarkBuffers& buffers, const BenchmarkConfig& c
         stats.all_l1_read_bw_gb_s.reserve(config.loop_count);
         stats.all_l1_write_bw_gb_s.reserve(config.loop_count);
         stats.all_l1_copy_bw_gb_s.reserve(config.loop_count);
+        stats.all_l1_latency_samples.reserve(config.loop_count * config.latency_sample_count);
       }
       if (config.l2_buffer_size > 0) {
         stats.all_l2_read_bw_gb_s.reserve(config.loop_count);
         stats.all_l2_write_bw_gb_s.reserve(config.loop_count);
         stats.all_l2_copy_bw_gb_s.reserve(config.loop_count);
+        stats.all_l2_latency_samples.reserve(config.loop_count * config.latency_sample_count);
       }
     }
+    // Pre-allocate main memory sample vector
+    stats.all_main_mem_latency_samples.reserve(config.loop_count * config.latency_sample_count);
   }
 
   HighResTimer test_timer;  // Timer for individual tests
@@ -136,6 +148,32 @@ int run_all_benchmarks(const BenchmarkBuffers& buffers, const BenchmarkConfig& c
         }
       }
       stats.all_average_latency_ns.push_back(loop_results.average_latency_ns);
+      
+      // Collect latency samples from this loop
+      if (!loop_results.latency_samples.empty()) {
+        stats.all_main_mem_latency_samples.insert(stats.all_main_mem_latency_samples.end(),
+                                                   loop_results.latency_samples.begin(),
+                                                   loop_results.latency_samples.end());
+      }
+      
+      if (config.use_custom_cache_size) {
+        if (config.custom_buffer_size > 0 && !loop_results.custom_latency_samples.empty()) {
+          stats.all_custom_latency_samples.insert(stats.all_custom_latency_samples.end(),
+                                                  loop_results.custom_latency_samples.begin(),
+                                                  loop_results.custom_latency_samples.end());
+        }
+      } else {
+        if (config.l1_buffer_size > 0 && !loop_results.l1_latency_samples.empty()) {
+          stats.all_l1_latency_samples.insert(stats.all_l1_latency_samples.end(),
+                                               loop_results.l1_latency_samples.begin(),
+                                               loop_results.l1_latency_samples.end());
+        }
+        if (config.l2_buffer_size > 0 && !loop_results.l2_latency_samples.empty()) {
+          stats.all_l2_latency_samples.insert(stats.all_l2_latency_samples.end(),
+                                               loop_results.l2_latency_samples.begin(),
+                                               loop_results.l2_latency_samples.end());
+        }
+      }
 
       // Print results for this loop
       std::cout << '\r' << std::flush;  // Clear progress indicator

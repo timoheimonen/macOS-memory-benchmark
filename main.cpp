@@ -93,7 +93,11 @@ int main(int argc, char *argv[]) {
                    stats.all_average_latency_ns,
                    config.use_custom_cache_size,
                    stats.all_custom_latency_ns, stats.all_custom_read_bw_gb_s,
-                   stats.all_custom_write_bw_gb_s, stats.all_custom_copy_bw_gb_s);
+                   stats.all_custom_write_bw_gb_s, stats.all_custom_copy_bw_gb_s,
+                   stats.all_main_mem_latency_samples,
+                   stats.all_l1_latency_samples,
+                   stats.all_l2_latency_samples,
+                   stats.all_custom_latency_samples);
 
   // --- Free Memory ---
   // std::cout << "\nFreeing memory..." << std::endl;
