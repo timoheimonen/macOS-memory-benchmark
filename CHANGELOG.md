@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 - **Test configuration bug**: Fixed unit tests in `test_benchmark_runner.cpp` that were not calling `calculate_buffer_sizes(config)` and `calculate_access_counts(config)`, causing cache buffer sizes to remain 0 and cache bandwidth/latency tests to be completely skipped. Tests now properly initialize cache buffer sizes and access counts before running benchmarks, ensuring complete test coverage of cache tests.
 - **Timing display bug**: Fixed main memory bandwidth test times displaying as "0.000 s" due to insufficient precision. Times were correctly measured and used for bandwidth calculations, but displayed with only 3 decimal places, causing very small times (< 0.0005 s) to round to zero. Increased precision to 6 decimal places for time values in `output_printer.cpp` while keeping bandwidth values at 3 decimal places, ensuring accurate time display without affecting bandwidth calculations.
+- **Buffer overflow safety**: Replaced unsafe `strcpy()` call in `test_memory_manager.cpp` with `std::strncpy()` with explicit bounds checking and null termination. The fix ensures the string copy respects buffer size limits (`buffer_size - 1`) and explicitly sets the null terminator to prevent buffer overflows and ensure proper string termination.
 
 ## [0.47] - 2025-12-15
 

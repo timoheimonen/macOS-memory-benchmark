@@ -55,7 +55,8 @@ TEST(MemoryManagerTest, AllocateBufferWritable) {
   
   // Write to buffer
   char* ptr = static_cast<char*>(buffer.get());
-  strcpy(ptr, "test data");
+  std::strncpy(ptr, "test data", buffer_size - 1);
+  ptr[buffer_size - 1] = '\0';  // Ensure null termination
   
   // Read back
   EXPECT_STREQ(ptr, "test data");
