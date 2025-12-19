@@ -144,7 +144,7 @@ const std::string& msg_running_benchmarks() {
 
 std::string msg_done_total_time(double total_time_sec) {
   std::ostringstream oss;
-  oss << std::fixed << std::setprecision(3);
+  oss << std::fixed << std::setprecision(Constants::TIME_PRECISION);
   oss << "\nDone. Total execution time: " << total_time_sec << " s";
   return oss.str();
 }
@@ -394,21 +394,21 @@ std::string results_l2_cache() {
 
 std::string results_cache_read_bandwidth(double bw_gb_s) {
   std::ostringstream oss;
-  oss << std::fixed << std::setprecision(3);
+  oss << std::fixed << std::setprecision(Constants::BANDWIDTH_PRECISION);
   oss << "    Read : " << bw_gb_s << " GB/s";
   return oss.str();
 }
 
 std::string results_cache_write_bandwidth(double bw_gb_s) {
   std::ostringstream oss;
-  oss << std::fixed << std::setprecision(3);
+  oss << std::fixed << std::setprecision(Constants::BANDWIDTH_PRECISION);
   oss << "    Write: " << bw_gb_s << " GB/s";
   return oss.str();
 }
 
 std::string results_cache_copy_bandwidth(double bw_gb_s) {
   std::ostringstream oss;
-  oss << std::fixed << std::setprecision(3);
+  oss << std::fixed << std::setprecision(Constants::BANDWIDTH_PRECISION);
   oss << "    Copy : " << bw_gb_s << " GB/s";
   return oss.str();
 }

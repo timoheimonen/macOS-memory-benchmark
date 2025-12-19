@@ -19,6 +19,7 @@
 #include <iostream>    // Required for std::cout
 #include <numeric>     // Required for std::accumulate (calculating sums)
 #include <vector>      // Required for std::vector
+#include "constants.h" // Constants for precision values
 #include "messages.h"  // Centralized messages
 
 // --- Helper structures and functions for statistics ---
@@ -78,7 +79,7 @@ static Statistics calculate_statistics(const std::vector<double> &values) {
 }
 
 // Print statistics for a single metric (used for main memory bandwidth)
-static void print_metric_statistics(const std::string &metric_name, const Statistics &stats, int precision = 3) {
+static void print_metric_statistics(const std::string &metric_name, const Statistics &stats, int precision = Constants::BANDWIDTH_PRECISION) {
   std::cout << Messages::statistics_metric_name(metric_name) << std::endl;
   std::cout << Messages::statistics_average(stats.average, precision) << std::endl;
   std::cout << Messages::statistics_median_p50(stats.median, precision) << std::endl;
@@ -104,40 +105,40 @@ static void print_cache_bandwidth_statistics(const std::string &cache_name,
   if (!read_bw.empty()) {
     Statistics read_stats = calculate_statistics(read_bw);
     std::cout << Messages::statistics_cache_read() << std::endl;
-    std::cout << "    " << Messages::statistics_average(read_stats.average, 3) << std::endl;
-    std::cout << "    " << Messages::statistics_median_p50(read_stats.median, 3) << std::endl;
-    std::cout << "    " << Messages::statistics_p90(read_stats.p90, 3) << std::endl;
-    std::cout << "    " << Messages::statistics_p95(read_stats.p95, 3) << std::endl;
-    std::cout << "    " << Messages::statistics_p99(read_stats.p99, 3) << std::endl;
-    std::cout << "    " << Messages::statistics_stddev(read_stats.stddev, 3) << std::endl;
-    std::cout << "    " << Messages::statistics_min(read_stats.min, 3) << std::endl;
-    std::cout << "    " << Messages::statistics_max(read_stats.max, 3) << std::endl;
+    std::cout << "    " << Messages::statistics_average(read_stats.average, Constants::BANDWIDTH_PRECISION) << std::endl;
+    std::cout << "    " << Messages::statistics_median_p50(read_stats.median, Constants::BANDWIDTH_PRECISION) << std::endl;
+    std::cout << "    " << Messages::statistics_p90(read_stats.p90, Constants::BANDWIDTH_PRECISION) << std::endl;
+    std::cout << "    " << Messages::statistics_p95(read_stats.p95, Constants::BANDWIDTH_PRECISION) << std::endl;
+    std::cout << "    " << Messages::statistics_p99(read_stats.p99, Constants::BANDWIDTH_PRECISION) << std::endl;
+    std::cout << "    " << Messages::statistics_stddev(read_stats.stddev, Constants::BANDWIDTH_PRECISION) << std::endl;
+    std::cout << "    " << Messages::statistics_min(read_stats.min, Constants::BANDWIDTH_PRECISION) << std::endl;
+    std::cout << "    " << Messages::statistics_max(read_stats.max, Constants::BANDWIDTH_PRECISION) << std::endl;
   }
   
   if (!write_bw.empty()) {
     Statistics write_stats = calculate_statistics(write_bw);
     std::cout << Messages::statistics_cache_write() << std::endl;
-    std::cout << "    " << Messages::statistics_average(write_stats.average, 3) << std::endl;
-    std::cout << "    " << Messages::statistics_median_p50(write_stats.median, 3) << std::endl;
-    std::cout << "    " << Messages::statistics_p90(write_stats.p90, 3) << std::endl;
-    std::cout << "    " << Messages::statistics_p95(write_stats.p95, 3) << std::endl;
-    std::cout << "    " << Messages::statistics_p99(write_stats.p99, 3) << std::endl;
-    std::cout << "    " << Messages::statistics_stddev(write_stats.stddev, 3) << std::endl;
-    std::cout << "    " << Messages::statistics_min(write_stats.min, 3) << std::endl;
-    std::cout << "    " << Messages::statistics_max(write_stats.max, 3) << std::endl;
+    std::cout << "    " << Messages::statistics_average(write_stats.average, Constants::BANDWIDTH_PRECISION) << std::endl;
+    std::cout << "    " << Messages::statistics_median_p50(write_stats.median, Constants::BANDWIDTH_PRECISION) << std::endl;
+    std::cout << "    " << Messages::statistics_p90(write_stats.p90, Constants::BANDWIDTH_PRECISION) << std::endl;
+    std::cout << "    " << Messages::statistics_p95(write_stats.p95, Constants::BANDWIDTH_PRECISION) << std::endl;
+    std::cout << "    " << Messages::statistics_p99(write_stats.p99, Constants::BANDWIDTH_PRECISION) << std::endl;
+    std::cout << "    " << Messages::statistics_stddev(write_stats.stddev, Constants::BANDWIDTH_PRECISION) << std::endl;
+    std::cout << "    " << Messages::statistics_min(write_stats.min, Constants::BANDWIDTH_PRECISION) << std::endl;
+    std::cout << "    " << Messages::statistics_max(write_stats.max, Constants::BANDWIDTH_PRECISION) << std::endl;
   }
   
   if (!copy_bw.empty()) {
     Statistics copy_stats = calculate_statistics(copy_bw);
     std::cout << Messages::statistics_cache_copy() << std::endl;
-    std::cout << "    " << Messages::statistics_average(copy_stats.average, 3) << std::endl;
-    std::cout << "    " << Messages::statistics_median_p50(copy_stats.median, 3) << std::endl;
-    std::cout << "    " << Messages::statistics_p90(copy_stats.p90, 3) << std::endl;
-    std::cout << "    " << Messages::statistics_p95(copy_stats.p95, 3) << std::endl;
-    std::cout << "    " << Messages::statistics_p99(copy_stats.p99, 3) << std::endl;
-    std::cout << "    " << Messages::statistics_stddev(copy_stats.stddev, 3) << std::endl;
-    std::cout << "    " << Messages::statistics_min(copy_stats.min, 3) << std::endl;
-    std::cout << "    " << Messages::statistics_max(copy_stats.max, 3) << std::endl;
+    std::cout << "    " << Messages::statistics_average(copy_stats.average, Constants::BANDWIDTH_PRECISION) << std::endl;
+    std::cout << "    " << Messages::statistics_median_p50(copy_stats.median, Constants::BANDWIDTH_PRECISION) << std::endl;
+    std::cout << "    " << Messages::statistics_p90(copy_stats.p90, Constants::BANDWIDTH_PRECISION) << std::endl;
+    std::cout << "    " << Messages::statistics_p95(copy_stats.p95, Constants::BANDWIDTH_PRECISION) << std::endl;
+    std::cout << "    " << Messages::statistics_p99(copy_stats.p99, Constants::BANDWIDTH_PRECISION) << std::endl;
+    std::cout << "    " << Messages::statistics_stddev(copy_stats.stddev, Constants::BANDWIDTH_PRECISION) << std::endl;
+    std::cout << "    " << Messages::statistics_min(copy_stats.min, Constants::BANDWIDTH_PRECISION) << std::endl;
+    std::cout << "    " << Messages::statistics_max(copy_stats.max, Constants::BANDWIDTH_PRECISION) << std::endl;
   }
 }
 
