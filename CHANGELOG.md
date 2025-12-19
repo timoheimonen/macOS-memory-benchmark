@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.48] - DEVELOPMENT
+
+### Fixed
+- **Test configuration bug**: Fixed unit tests in `test_benchmark_runner.cpp` that were not calling `calculate_buffer_sizes(config)` and `calculate_access_counts(config)`, causing cache buffer sizes to remain 0 and cache bandwidth/latency tests to be completely skipped. Tests now properly initialize cache buffer sizes and access counts before running benchmarks, ensuring complete test coverage of cache tests.
+
 ## [0.47] - 2025-12-15
 
 ### Added
