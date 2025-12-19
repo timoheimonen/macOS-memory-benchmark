@@ -107,7 +107,6 @@ int main(int argc, char *argv[]) {
 
   // --- Print Total Time ---
   double total_elapsed_time_sec = total_execution_timer.stop();                                  // Stop overall timer
-  std::cout << std::fixed << std::setprecision(Constants::TIME_PRECISION);                                               // Set output precision
   std::cout << Messages::msg_done_total_time(total_elapsed_time_sec) << std::endl;  // Print duration
 
   return EXIT_SUCCESS;  // Indicate success
