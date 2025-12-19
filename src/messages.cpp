@@ -270,26 +270,6 @@ std::string cache_info_header() {
   return "\nDetected Cache Sizes:";
 }
 
-std::string cache_size_bytes(size_t size_bytes) {
-  std::ostringstream oss;
-  oss << size_bytes << " B";
-  return oss.str();
-}
-
-std::string cache_size_kb(double size_kb) {
-  std::ostringstream oss;
-  oss << std::fixed << std::setprecision(2);
-  oss << size_kb << " KB";
-  return oss.str();
-}
-
-std::string cache_size_mb(double size_mb) {
-  std::ostringstream oss;
-  oss << std::fixed << std::setprecision(2);
-  oss << size_mb << " MB";
-  return oss.str();
-}
-
 std::string cache_size_custom(size_t size_bytes) {
   std::ostringstream oss;
   oss << "  Custom Cache Size: ";
@@ -352,25 +332,25 @@ std::string results_main_memory_bandwidth(int num_threads) {
 
 std::string results_read_bandwidth(double bw_gb_s, double total_time) {
   std::ostringstream oss;
-  oss << std::fixed << std::setprecision(3);
+  oss << std::fixed << std::setprecision(Constants::BANDWIDTH_PRECISION);
   oss << "  Read : " << bw_gb_s << " GB/s (Total time: ";
-  oss << std::setprecision(6) << total_time << " s)";
+  oss << std::setprecision(Constants::TIME_PRECISION) << total_time << " s)";
   return oss.str();
 }
 
 std::string results_write_bandwidth(double bw_gb_s, double total_time) {
   std::ostringstream oss;
-  oss << std::fixed << std::setprecision(3);
+  oss << std::fixed << std::setprecision(Constants::BANDWIDTH_PRECISION);
   oss << "  Write: " << bw_gb_s << " GB/s (Total time: ";
-  oss << std::setprecision(6) << total_time << " s)";
+  oss << std::setprecision(Constants::TIME_PRECISION) << total_time << " s)";
   return oss.str();
 }
 
 std::string results_copy_bandwidth(double bw_gb_s, double total_time) {
   std::ostringstream oss;
-  oss << std::fixed << std::setprecision(3);
+  oss << std::fixed << std::setprecision(Constants::BANDWIDTH_PRECISION);
   oss << "  Copy : " << bw_gb_s << " GB/s (Total time: ";
-  oss << std::setprecision(6) << total_time << " s)";
+  oss << std::setprecision(Constants::TIME_PRECISION) << total_time << " s)";
   return oss.str();
 }
 

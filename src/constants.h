@@ -63,6 +63,10 @@ namespace Constants {
   // Bandwidth calculation constants
   constexpr double NANOSECONDS_PER_SECOND = 1e9;  // Conversion factor for GB/s calculations
   constexpr int COPY_OPERATION_MULTIPLIER = 2;  // Copy = read + write
+  
+  // Output formatting precision constants
+  constexpr int BANDWIDTH_PRECISION = 3;  // Decimal places for bandwidth values (GB/s)
+  constexpr int TIME_PRECISION = 3;  // Decimal places for time values (seconds)
 }
 
 #endif // CONSTANTS_H

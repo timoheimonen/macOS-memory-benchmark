@@ -73,9 +73,6 @@ std::string config_total_cores(int num_threads);
 
 // --- Cache Info Messages ---
 std::string cache_info_header();
-std::string cache_size_bytes(size_t size_bytes);
-std::string cache_size_kb(double size_kb);
-std::string cache_size_mb(double size_mb);
 std::string cache_size_custom(size_t size_bytes);
 std::string cache_size_l1(size_t size_bytes);
 std::string cache_size_l2(size_t size_bytes);
