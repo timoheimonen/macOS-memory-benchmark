@@ -105,21 +105,21 @@ void print_results(int loop, size_t buffer_size, size_t buffer_size_mb, int iter
 
   // Display Main Memory Bandwidth test results.
   std::cout << Messages::results_main_memory_bandwidth(num_threads) << std::endl;
-  std::cout << std::setprecision(3);
+  std::cout << std::setprecision(Constants::BANDWIDTH_PRECISION);
   std::cout << Messages::results_read_bandwidth(read_bw_gb_s, total_read_time) << std::endl;
   std::cout << Messages::results_write_bandwidth(write_bw_gb_s, total_write_time) << std::endl;
   std::cout << Messages::results_copy_bandwidth(copy_bw_gb_s, total_copy_time) << std::endl;
   
   // Display main memory latency test results.
   std::cout << Messages::results_main_memory_latency() << std::endl;
-  std::cout << std::setprecision(3);
+  std::cout << std::setprecision(Constants::TIME_PRECISION);
   std::cout << Messages::results_latency_total_time(total_lat_time_ns / 1e9) << std::endl;
   std::cout << std::setprecision(2);
   std::cout << Messages::results_latency_average(average_latency_ns) << std::endl;
 
   // Display cache bandwidth test results.
   std::cout << Messages::results_cache_bandwidth() << std::endl;
-  std::cout << std::setprecision(3);
+  std::cout << std::setprecision(Constants::BANDWIDTH_PRECISION);
   if (use_custom_cache_size) {
     // Display custom cache bandwidth results
     if (custom_buffer_size > 0) {

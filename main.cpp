@@ -24,6 +24,7 @@
 #include "buffer_manager.h"
 #include "benchmark_runner.h"
 #include "messages.h"
+#include "constants.h"
 
 // macOS specific memory management
 #include <mach/mach.h>  // kern_return_t
@@ -106,7 +107,7 @@ int main(int argc, char *argv[]) {
 
   // --- Print Total Time ---
   double total_elapsed_time_sec = total_execution_timer.stop();                                  // Stop overall timer
-  std::cout << std::fixed << std::setprecision(3);                                               // Set output precision
+  std::cout << std::fixed << std::setprecision(Constants::TIME_PRECISION);                                               // Set output precision
   std::cout << Messages::msg_done_total_time(total_elapsed_time_sec) << std::endl;  // Print duration
 
   return EXIT_SUCCESS;  // Indicate success

@@ -360,7 +360,7 @@ std::string results_main_memory_latency() {
 
 std::string results_latency_total_time(double total_time_sec) {
   std::ostringstream oss;
-  oss << std::fixed << std::setprecision(3);
+  oss << std::fixed << std::setprecision(Constants::TIME_PRECISION);
   oss << "  Total time: " << total_time_sec << " s";
   return oss.str();
 }
