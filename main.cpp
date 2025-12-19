@@ -13,7 +13,6 @@
 // You should have received a copy of the GNU General Public License
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 //
-#include <cstdio>   // fprintf, stderr
 #include <cstdlib>  // Exit codes
 #include <iomanip>  // Output formatting
 #include <iostream>
@@ -24,6 +23,7 @@
 #include "config.h"
 #include "buffer_manager.h"
 #include "benchmark_runner.h"
+#include "messages.h"
 
 // macOS specific memory management
 #include <mach/mach.h>  // kern_return_t
@@ -63,7 +63,7 @@ int main(int argc, char *argv[]) {
   kern_return_t qos_ret = pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
   if (qos_ret != KERN_SUCCESS) {
     // Non-critical error, just print a warning
-    fprintf(stderr, "Warning: Failed to set QoS class for main thread (code: %d)\n", qos_ret);
+    std::cerr << Messages::warning_qos_failed(qos_ret) << std::endl;
   }
 
   // --- Allocate and Initialize Buffers ---
@@ -77,7 +77,7 @@ int main(int argc, char *argv[]) {
   }
 
   // --- Run Benchmarks ---
-  std::cout << "\nRunning benchmarks..." << std::endl;
+  std::cout << Messages::msg_running_benchmarks() << std::endl;
   
   BenchmarkStatistics stats;
   if (run_all_benchmarks(buffers, config, stats) != EXIT_SUCCESS) {
@@ -107,7 +107,7 @@ int main(int argc, char *argv[]) {
   // --- Print Total Time ---
   double total_elapsed_time_sec = total_execution_timer.stop();                                  // Stop overall timer
   std::cout << std::fixed << std::setprecision(3);                                               // Set output precision
-  std::cout << "\nDone. Total execution time: " << total_elapsed_time_sec << " s" << std::endl;  // Print duration
+  std::cout << Messages::msg_done_total_time(total_elapsed_time_sec) << std::endl;  // Print duration
 
   return EXIT_SUCCESS;  // Indicate success
 }

@@ -14,7 +14,9 @@
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 //
 #include "memory_manager.h"
+#include "messages.h"
 #include <cstring>  // strlen, strcpy
+#include <cstdio>   // perror
 
 MmapPtr allocate_buffer(size_t size, const char* buffer_name) {
   // Allocate memory using mmap
@@ -22,9 +24,7 @@ MmapPtr allocate_buffer(size_t size, const char* buffer_name) {
   
   if (ptr == MAP_FAILED) {
     // Create specific error message
-    char error_msg[256];
-    snprintf(error_msg, sizeof(error_msg), "mmap failed for %s", buffer_name);
-    perror(error_msg);
+    perror(Messages::error_mmap_failed(buffer_name).c_str());
     // Return empty unique_ptr (nullptr) on failure
     return MmapPtr(nullptr, MmapDeleter{0});
   }
@@ -34,9 +34,7 @@ MmapPtr allocate_buffer(size_t size, const char* buffer_name) {
   
   // Advise the kernel that we will need this memory (prefault optimization)
   if (madvise(ptr, size, MADV_WILLNEED) == -1) {
-    char error_msg[256];
-    snprintf(error_msg, sizeof(error_msg), "madvise failed for %s", buffer_name);
-    perror(error_msg);
+    perror(Messages::error_madvise_failed(buffer_name).c_str());
     // Non-fatal error, continue anyway
   }
   

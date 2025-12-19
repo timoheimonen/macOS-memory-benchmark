@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.48] - DEVELOPMENT
 
+### Changed
+- **Centralized all text messages**: Moved all error messages, warnings, info messages, and output text into a single place (`src/messages.h` and `src/messages.cpp`). This makes it much easier to update messages, ensures consistent formatting, and sets things up nicely if we ever want to add translations. All the main source files now pull their messages from this central location.
+
 ### Fixed
 - **Test configuration bug**: Fixed unit tests in `test_benchmark_runner.cpp` that were not calling `calculate_buffer_sizes(config)` and `calculate_access_counts(config)`, causing cache buffer sizes to remain 0 and cache bandwidth/latency tests to be completely skipped. Tests now properly initialize cache buffer sizes and access counts before running benchmarks, ensuring complete test coverage of cache tests.
 - **Timing display bug**: Fixed main memory bandwidth test times displaying as "0.000 s" due to insufficient precision. Times were correctly measured and used for bandwidth calculations, but displayed with only 3 decimal places, causing very small times (< 0.0005 s) to round to zero. Increased precision to 6 decimal places for time values in `output_printer.cpp` while keeping bandwidth values at 3 decimal places, ensuring accurate time display without affecting bandwidth calculations.

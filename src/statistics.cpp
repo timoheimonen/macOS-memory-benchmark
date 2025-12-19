@@ -19,6 +19,7 @@
 #include <iostream>    // Required for std::cout
 #include <numeric>     // Required for std::accumulate (calculating sums)
 #include <vector>      // Required for std::vector
+#include "messages.h"  // Centralized messages
 
 // --- Helper structures and functions for statistics ---
 
@@ -78,15 +79,15 @@ static Statistics calculate_statistics(const std::vector<double> &values) {
 
 // Print statistics for a single metric (used for main memory bandwidth)
 static void print_metric_statistics(const std::string &metric_name, const Statistics &stats, int precision = 3) {
-  std::cout << metric_name << ":" << std::endl;
-  std::cout << "  Average: " << std::setprecision(precision) << stats.average << std::endl;
-  std::cout << "  Median (P50): " << std::setprecision(precision) << stats.median << std::endl;
-  std::cout << "  P90: " << std::setprecision(precision) << stats.p90 << std::endl;
-  std::cout << "  P95: " << std::setprecision(precision) << stats.p95 << std::endl;
-  std::cout << "  P99: " << std::setprecision(precision) << stats.p99 << std::endl;
-  std::cout << "  Stddev: " << std::setprecision(precision) << stats.stddev << std::endl;
-  std::cout << "  Min:     " << std::setprecision(precision) << stats.min << std::endl;
-  std::cout << "  Max:     " << std::setprecision(precision) << stats.max << std::endl;
+  std::cout << Messages::statistics_metric_name(metric_name) << std::endl;
+  std::cout << Messages::statistics_average(stats.average, precision) << std::endl;
+  std::cout << Messages::statistics_median_p50(stats.median, precision) << std::endl;
+  std::cout << Messages::statistics_p90(stats.p90, precision) << std::endl;
+  std::cout << Messages::statistics_p95(stats.p95, precision) << std::endl;
+  std::cout << Messages::statistics_p99(stats.p99, precision) << std::endl;
+  std::cout << Messages::statistics_stddev(stats.stddev, precision) << std::endl;
+  std::cout << Messages::statistics_min(stats.min, precision) << std::endl;
+  std::cout << Messages::statistics_max(stats.max, precision) << std::endl;
 }
 
 // Print bandwidth statistics for a cache level (L1, L2, or Custom)
@@ -98,45 +99,45 @@ static void print_cache_bandwidth_statistics(const std::string &cache_name,
     return;
   }
   
-  std::cout << "\n" << cache_name << " Cache Bandwidth (GB/s):" << std::endl;
+  std::cout << Messages::statistics_cache_bandwidth_header(cache_name) << std::endl;
   
   if (!read_bw.empty()) {
     Statistics read_stats = calculate_statistics(read_bw);
-    std::cout << "  Read:" << std::endl;
-    std::cout << "    Average: " << std::setprecision(3) << read_stats.average << std::endl;
-    std::cout << "    Median (P50): " << std::setprecision(3) << read_stats.median << std::endl;
-    std::cout << "    P90: " << std::setprecision(3) << read_stats.p90 << std::endl;
-    std::cout << "    P95: " << std::setprecision(3) << read_stats.p95 << std::endl;
-    std::cout << "    P99: " << std::setprecision(3) << read_stats.p99 << std::endl;
-    std::cout << "    Stddev: " << std::setprecision(3) << read_stats.stddev << std::endl;
-    std::cout << "    Min:     " << std::setprecision(3) << read_stats.min << std::endl;
-    std::cout << "    Max:     " << std::setprecision(3) << read_stats.max << std::endl;
+    std::cout << Messages::statistics_cache_read() << std::endl;
+    std::cout << "    " << Messages::statistics_average(read_stats.average, 3) << std::endl;
+    std::cout << "    " << Messages::statistics_median_p50(read_stats.median, 3) << std::endl;
+    std::cout << "    " << Messages::statistics_p90(read_stats.p90, 3) << std::endl;
+    std::cout << "    " << Messages::statistics_p95(read_stats.p95, 3) << std::endl;
+    std::cout << "    " << Messages::statistics_p99(read_stats.p99, 3) << std::endl;
+    std::cout << "    " << Messages::statistics_stddev(read_stats.stddev, 3) << std::endl;
+    std::cout << "    " << Messages::statistics_min(read_stats.min, 3) << std::endl;
+    std::cout << "    " << Messages::statistics_max(read_stats.max, 3) << std::endl;
   }
   
   if (!write_bw.empty()) {
     Statistics write_stats = calculate_statistics(write_bw);
-    std::cout << "  Write:" << std::endl;
-    std::cout << "    Average: " << std::setprecision(3) << write_stats.average << std::endl;
-    std::cout << "    Median (P50): " << std::setprecision(3) << write_stats.median << std::endl;
-    std::cout << "    P90: " << std::setprecision(3) << write_stats.p90 << std::endl;
-    std::cout << "    P95: " << std::setprecision(3) << write_stats.p95 << std::endl;
-    std::cout << "    P99: " << std::setprecision(3) << write_stats.p99 << std::endl;
-    std::cout << "    Stddev: " << std::setprecision(3) << write_stats.stddev << std::endl;
-    std::cout << "    Min:     " << std::setprecision(3) << write_stats.min << std::endl;
-    std::cout << "    Max:     " << std::setprecision(3) << write_stats.max << std::endl;
+    std::cout << Messages::statistics_cache_write() << std::endl;
+    std::cout << "    " << Messages::statistics_average(write_stats.average, 3) << std::endl;
+    std::cout << "    " << Messages::statistics_median_p50(write_stats.median, 3) << std::endl;
+    std::cout << "    " << Messages::statistics_p90(write_stats.p90, 3) << std::endl;
+    std::cout << "    " << Messages::statistics_p95(write_stats.p95, 3) << std::endl;
+    std::cout << "    " << Messages::statistics_p99(write_stats.p99, 3) << std::endl;
+    std::cout << "    " << Messages::statistics_stddev(write_stats.stddev, 3) << std::endl;
+    std::cout << "    " << Messages::statistics_min(write_stats.min, 3) << std::endl;
+    std::cout << "    " << Messages::statistics_max(write_stats.max, 3) << std::endl;
   }
   
   if (!copy_bw.empty()) {
     Statistics copy_stats = calculate_statistics(copy_bw);
-    std::cout << "  Copy:" << std::endl;
-    std::cout << "    Average: " << std::setprecision(3) << copy_stats.average << std::endl;
-    std::cout << "    Median (P50): " << std::setprecision(3) << copy_stats.median << std::endl;
-    std::cout << "    P90: " << std::setprecision(3) << copy_stats.p90 << std::endl;
-    std::cout << "    P95: " << std::setprecision(3) << copy_stats.p95 << std::endl;
-    std::cout << "    P99: " << std::setprecision(3) << copy_stats.p99 << std::endl;
-    std::cout << "    Stddev: " << std::setprecision(3) << copy_stats.stddev << std::endl;
-    std::cout << "    Min:     " << std::setprecision(3) << copy_stats.min << std::endl;
-    std::cout << "    Max:     " << std::setprecision(3) << copy_stats.max << std::endl;
+    std::cout << Messages::statistics_cache_copy() << std::endl;
+    std::cout << "    " << Messages::statistics_average(copy_stats.average, 3) << std::endl;
+    std::cout << "    " << Messages::statistics_median_p50(copy_stats.median, 3) << std::endl;
+    std::cout << "    " << Messages::statistics_p90(copy_stats.p90, 3) << std::endl;
+    std::cout << "    " << Messages::statistics_p95(copy_stats.p95, 3) << std::endl;
+    std::cout << "    " << Messages::statistics_p99(copy_stats.p99, 3) << std::endl;
+    std::cout << "    " << Messages::statistics_stddev(copy_stats.stddev, 3) << std::endl;
+    std::cout << "    " << Messages::statistics_min(copy_stats.min, 3) << std::endl;
+    std::cout << "    " << Messages::statistics_max(copy_stats.max, 3) << std::endl;
   }
 }
 
@@ -159,24 +160,24 @@ static void print_cache_latency_statistics(const std::string &cache_name,
     sample_stats = calculate_statistics(latency_samples);
   }
   
-  std::cout << "  " << cache_name << " Cache:" << std::endl;
-  std::cout << "    Average: " << std::setprecision(2) << latency_stats.average << std::endl;
+  std::cout << Messages::statistics_cache_latency_name(cache_name) << std::endl;
+  std::cout << "    " << Messages::statistics_average(latency_stats.average, 2) << std::endl;
   if (use_samples) {
-    std::cout << "    Median (P50): " << std::setprecision(2) << sample_stats.median << " (from " << latency_samples.size() << " samples)" << std::endl;
-    std::cout << "    P90: " << std::setprecision(2) << sample_stats.p90 << std::endl;
-    std::cout << "    P95: " << std::setprecision(2) << sample_stats.p95 << std::endl;
-    std::cout << "    P99: " << std::setprecision(2) << sample_stats.p99 << std::endl;
-    std::cout << "    Stddev: " << std::setprecision(2) << sample_stats.stddev << std::endl;
-    std::cout << "    Min:     " << std::setprecision(2) << sample_stats.min << std::endl;
-    std::cout << "    Max:     " << std::setprecision(2) << sample_stats.max << std::endl;
+    std::cout << "    " << Messages::statistics_median_p50_from_samples(sample_stats.median, latency_samples.size(), 2) << std::endl;
+    std::cout << "    " << Messages::statistics_p90(sample_stats.p90, 2) << std::endl;
+    std::cout << "    " << Messages::statistics_p95(sample_stats.p95, 2) << std::endl;
+    std::cout << "    " << Messages::statistics_p99(sample_stats.p99, 2) << std::endl;
+    std::cout << "    " << Messages::statistics_stddev(sample_stats.stddev, 2) << std::endl;
+    std::cout << "    " << Messages::statistics_min(sample_stats.min, 2) << std::endl;
+    std::cout << "    " << Messages::statistics_max(sample_stats.max, 2) << std::endl;
   } else {
-    std::cout << "    Median (P50): " << std::setprecision(2) << latency_stats.median << std::endl;
-    std::cout << "    P90: " << std::setprecision(2) << latency_stats.p90 << std::endl;
-    std::cout << "    P95: " << std::setprecision(2) << latency_stats.p95 << std::endl;
-    std::cout << "    P99: " << std::setprecision(2) << latency_stats.p99 << std::endl;
-    std::cout << "    Stddev: " << std::setprecision(2) << latency_stats.stddev << std::endl;
-    std::cout << "    Min:     " << std::setprecision(2) << latency_stats.min << std::endl;
-    std::cout << "    Max:     " << std::setprecision(2) << latency_stats.max << std::endl;
+    std::cout << "    " << Messages::statistics_median_p50(latency_stats.median, 2) << std::endl;
+    std::cout << "    " << Messages::statistics_p90(latency_stats.p90, 2) << std::endl;
+    std::cout << "    " << Messages::statistics_p95(latency_stats.p95, 2) << std::endl;
+    std::cout << "    " << Messages::statistics_p99(latency_stats.p99, 2) << std::endl;
+    std::cout << "    " << Messages::statistics_stddev(latency_stats.stddev, 2) << std::endl;
+    std::cout << "    " << Messages::statistics_min(latency_stats.min, 2) << std::endl;
+    std::cout << "    " << Messages::statistics_max(latency_stats.max, 2) << std::endl;
   }
 }
 
@@ -212,7 +213,7 @@ void print_statistics(int loop_count, const std::vector<double> &all_read_bw, co
   if (loop_count <= 1 || all_read_bw.empty()) return;
 
   // Print statistics header.
-  std::cout << "\n--- Statistics Across " << loop_count << " Loops ---" << std::endl;
+  std::cout << Messages::statistics_header(loop_count) << std::endl;
   std::cout << std::fixed;
 
   // Display Main Memory Bandwidth statistics.
@@ -235,7 +236,7 @@ void print_statistics(int loop_count, const std::vector<double> &all_read_bw, co
   }
 
   // Display Cache Latency statistics.
-  std::cout << "\nCache Latency (ns):" << std::endl;
+  std::cout << Messages::statistics_cache_latency_header() << std::endl;
   if (use_custom_cache_size) {
     print_cache_latency_statistics("Custom", all_custom_latency, all_custom_latency_samples);
   } else {
@@ -251,26 +252,26 @@ void print_statistics(int loop_count, const std::vector<double> &all_read_bw, co
     main_mem_sample_stats = calculate_statistics(all_main_mem_latency_samples);
   }
   
-  std::cout << "\nMain Memory Latency (ns):" << std::endl;
-  std::cout << "  Average: " << std::setprecision(2) << main_mem_latency_stats.average << std::endl;
+  std::cout << Messages::statistics_main_memory_latency_header() << std::endl;
+  std::cout << Messages::statistics_average(main_mem_latency_stats.average, 2) << std::endl;
   if (use_main_mem_samples) {
-    std::cout << "  Median (P50): " << std::setprecision(2) << main_mem_sample_stats.median << " (from " << all_main_mem_latency_samples.size() << " samples)" << std::endl;
-    std::cout << "  P90: " << std::setprecision(2) << main_mem_sample_stats.p90 << std::endl;
-    std::cout << "  P95: " << std::setprecision(2) << main_mem_sample_stats.p95 << std::endl;
-    std::cout << "  P99: " << std::setprecision(2) << main_mem_sample_stats.p99 << std::endl;
-    std::cout << "  Stddev: " << std::setprecision(2) << main_mem_sample_stats.stddev << std::endl;
-    std::cout << "  Min:     " << std::setprecision(2) << main_mem_sample_stats.min << std::endl;
-    std::cout << "  Max:     " << std::setprecision(2) << main_mem_sample_stats.max << std::endl;
+    std::cout << Messages::statistics_median_p50_from_samples(main_mem_sample_stats.median, all_main_mem_latency_samples.size(), 2) << std::endl;
+    std::cout << Messages::statistics_p90(main_mem_sample_stats.p90, 2) << std::endl;
+    std::cout << Messages::statistics_p95(main_mem_sample_stats.p95, 2) << std::endl;
+    std::cout << Messages::statistics_p99(main_mem_sample_stats.p99, 2) << std::endl;
+    std::cout << Messages::statistics_stddev(main_mem_sample_stats.stddev, 2) << std::endl;
+    std::cout << Messages::statistics_min(main_mem_sample_stats.min, 2) << std::endl;
+    std::cout << Messages::statistics_max(main_mem_sample_stats.max, 2) << std::endl;
   } else {
-    std::cout << "  Median (P50): " << std::setprecision(2) << main_mem_latency_stats.median << std::endl;
-    std::cout << "  P90: " << std::setprecision(2) << main_mem_latency_stats.p90 << std::endl;
-    std::cout << "  P95: " << std::setprecision(2) << main_mem_latency_stats.p95 << std::endl;
-    std::cout << "  P99: " << std::setprecision(2) << main_mem_latency_stats.p99 << std::endl;
-    std::cout << "  Stddev: " << std::setprecision(2) << main_mem_latency_stats.stddev << std::endl;
-    std::cout << "  Min:     " << std::setprecision(2) << main_mem_latency_stats.min << std::endl;
-    std::cout << "  Max:     " << std::setprecision(2) << main_mem_latency_stats.max << std::endl;
+    std::cout << Messages::statistics_median_p50(main_mem_latency_stats.median, 2) << std::endl;
+    std::cout << Messages::statistics_p90(main_mem_latency_stats.p90, 2) << std::endl;
+    std::cout << Messages::statistics_p95(main_mem_latency_stats.p95, 2) << std::endl;
+    std::cout << Messages::statistics_p99(main_mem_latency_stats.p99, 2) << std::endl;
+    std::cout << Messages::statistics_stddev(main_mem_latency_stats.stddev, 2) << std::endl;
+    std::cout << Messages::statistics_min(main_mem_latency_stats.min, 2) << std::endl;
+    std::cout << Messages::statistics_max(main_mem_latency_stats.max, 2) << std::endl;
   }
   
   // Print a final separator after statistics.
-  std::cout << "----------------------------------" << std::endl;
+  std::cout << Messages::statistics_footer() << std::endl;
 }
