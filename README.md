@@ -24,10 +24,24 @@ The main read/write/copy and latency tests are done in separate ARM64 assembly f
 The performance-critical memory operations are implemented in ARM64 assembly for maximum efficiency across four separate source files:
 
 * **Core Functions:**
-    * `memory_copy.s` - `_memory_copy_loop_asm`: Copies data between buffers using non-temporal instructions (`stnp`) to minimize cache impact.
-    * `memory_read.s` - `_memory_read_loop_asm`: Reads memory and calculates an XOR checksum to prevent optimization and ensure data is actually read.
-    * `memory_write.s` - `_memory_write_loop_asm`: Writes zeros to memory using non-temporal instructions (`stnp`).
-    * `memory_latency.s` - `_memory_latency_chase_asm`: Measures memory access latency via pointer chasing with dependent loads (`ldr x0, [x0]`).  
+    * `memory_copy.s` - `_memory_copy_loop_asm`: Copies data between buffers using non-temporal instructions (`stnp`) to minimize cache impact. Processes 512-byte blocks sequentially forward.
+    * `memory_read.s` - `_memory_read_loop_asm`: Reads memory and calculates an XOR checksum to prevent optimization and ensure data is actually read. Processes 512-byte blocks sequentially forward.
+    * `memory_write.s` - `_memory_write_loop_asm`: Writes zeros to memory using non-temporal instructions (`stnp`). Processes 512-byte blocks sequentially forward.
+    * `memory_latency.s` - `_memory_latency_chase_asm`: Measures memory access latency via pointer chasing with dependent loads (`ldr x0, [x0]`). Uses 8-way loop unrolling.
+
+* **Pattern Benchmark Functions:**
+    * **Sequential Reverse:**
+        * `memory_copy_reverse.s` - `_memory_copy_reverse_loop_asm`: Copies data backwards (reverse sequential) using 512-byte blocks with non-temporal stores.
+        * `memory_read_reverse.s` - `_memory_read_reverse_loop_asm`: Reads memory backwards with XOR checksum accumulation.
+        * `memory_write_reverse.s` - `_memory_write_reverse_loop_asm`: Writes zeros backwards using non-temporal stores.
+    * **Strided Access:**
+        * `memory_copy_strided.s` - `_memory_copy_strided_loop_asm`: Copies data using strided access pattern (e.g., 64B cache line or 4096B page stride) with 32-byte operations, wrapping around buffer via modulo arithmetic.
+        * `memory_read_strided.s` - `_memory_read_strided_loop_asm`: Reads memory using strided access pattern with XOR checksum accumulation.
+        * `memory_write_strided.s` - `_memory_write_strided_loop_asm`: Writes zeros using strided access pattern with non-temporal stores.
+    * **Random Access:**
+        * `memory_copy_random.s` - `_memory_copy_random_loop_asm`: Copies data using random access pattern defined by pre-generated indices array. Processes 32-byte cache lines per access to maximize cache misses and TLB pressure.
+        * `memory_read_random.s` - `_memory_read_random_loop_asm`: Reads memory using random access pattern with XOR checksum accumulation.
+        * `memory_write_random.s` - `_memory_write_random_loop_asm`: Writes zeros using random access pattern with non-temporal stores.  
 
 * **Key Optimizations:**
     * Processing data in large 512-byte blocks.
