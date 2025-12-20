@@ -171,7 +171,7 @@ In the Terminal, go to the directory with `memory_benchmark` and use these comma
 
     Example: ./memory_benchmark -iterations 500 -buffersize 1024
     Example: ./memory_benchmark -cache-size 256
-    Example: ./memory_benchmark -patterns -buffersize 128
+    Example: ./memory_benchmark -patterns -buffersize 512
     Example: ./memory_benchmark -output results.json
     ```
 2. **Run with default parameters**
@@ -238,6 +238,70 @@ Cache Latency Tests (single-threaded, pointer chase):
 --------------
 
 Done. Total execution time: 43.826 s
+```
+```text
+----- macOS-memory-benchmark v0.49 -----
+Copyright 2025 Timo Heimonen <timo.heimonen@proton.me>
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU General Public License as published by
+the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+See <https://www.gnu.org/licenses/> for more details.
+
+Buffer Size (per buffer): 512.00 MiB (512 MB requested/capped)
+Total Allocation Size: ~1536.00 MiB (for 3 buffers)
+Iterations (per R/W/Copy test per loop): 1000
+Loop Count (total benchmark repetitions): 1
+
+Processor Name: Apple M4
+  Performance Cores: 4
+  Efficiency Cores: 6
+  Total CPU Cores Detected: 10
+
+Detected Cache Sizes:
+  L1 Cache Size: 128.00 KB (per P-core)
+  L2 Cache Size: 16.00 MB (per P-core cluster)
+
+Running Pattern Benchmarks...
+- Running tests...
+================================
+
+Sequential Forward:
+  Read : 115.410 GB/s
+  Write: 66.226 GB/s
+  Copy : 53.140 GB/s
+
+Sequential Reverse:
+  Read : 70.693 GB/s (-38.7%)
+  Write: 37.107 GB/s (-44.0%)
+  Copy : 44.577 GB/s (-16.1%)
+
+Strided (Cache Line - 64B):
+  Read : 35.190 GB/s (-69.5%)
+  Write: 18.697 GB/s (-71.8%)
+  Copy : 53.308 GB/s (+0.3%)
+
+Strided (Page - 4096B):
+  Read : 9.000 GB/s (-92.2%)
+  Write: 23.320 GB/s (-64.8%)
+  Copy : 13.001 GB/s (-75.5%)
+
+Random Uniform:
+  Read : 6.344 GB/s (-94.5%)
+  Write: 21.539 GB/s (-67.5%)
+  Copy : 5.582 GB/s (-89.5%)
+
+Pattern Efficiency Analysis:
+- Sequential coherence: 64.9%
+- Prefetcher effectiveness: 45.7%
+- Cache thrashing potential: High
+- TLB pressure: Minimal
+
+
+Done. Total execution time: 102.93132 s
 ```
 
 ![Mac Mini M4 Cache Latency from multiple JSON-files](pictures/MacMiniM4_cache_latency.png)  

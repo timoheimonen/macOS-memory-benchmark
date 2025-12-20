@@ -215,7 +215,7 @@ std::string usage_example(const std::string& prog_name) {
   std::ostringstream oss;
   oss << "Example: " << prog_name << " -iterations 500 -buffersize 1024\n"
       << "Example: " << prog_name << " -cache-size 256\n"
-      << "Example: " << prog_name << " -patterns -buffersize 128\n"
+      << "Example: " << prog_name << " -patterns -buffersize 512\n"
       << "Example: " << prog_name << " -output results.json\n";
   return oss.str();
 }
