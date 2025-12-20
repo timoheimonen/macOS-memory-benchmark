@@ -25,6 +25,7 @@
 #include "benchmark_runner.h"
 #include "messages.h"
 #include "constants.h"
+#include "json_output.h"
 
 // macOS specific memory management
 #include <mach/mach.h>  // kern_return_t
@@ -108,6 +109,13 @@ int main(int argc, char *argv[]) {
   // --- Print Total Time ---
   double total_elapsed_time_sec = total_execution_timer.stop();                                  // Stop overall timer
   std::cout << Messages::msg_done_total_time(total_elapsed_time_sec) << std::endl;  // Print duration
+
+  // --- Save JSON Output if requested ---
+  if (!config.output_file.empty()) {
+    if (save_results_to_json(config, stats, total_elapsed_time_sec) != EXIT_SUCCESS) {
+      return EXIT_FAILURE;
+    }
+  }
 
   return EXIT_SUCCESS;  // Indicate success
 }

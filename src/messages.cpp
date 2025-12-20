@@ -96,6 +96,26 @@ std::string error_benchmark_loop(int loop, const std::string& error) {
   return oss.str();
 }
 
+std::string error_json_parse_failed(const std::string& error_details) {
+  return "JSON parsing failed: " + error_details;
+}
+
+std::string error_json_file_read_failed(const std::string& file_path, const std::string& error_details) {
+  return "Failed to read JSON file \"" + file_path + "\": " + error_details;
+}
+
+std::string error_file_write_failed(const std::string& file_path, const std::string& error_details) {
+  return "Failed to write file \"" + file_path + "\": " + error_details;
+}
+
+std::string error_file_permission_denied(const std::string& file_path) {
+  return "Permission denied: cannot write to \"" + file_path + "\"";
+}
+
+std::string error_file_directory_creation_failed(const std::string& dir_path, const std::string& error_details) {
+  return "Failed to create directory \"" + dir_path + "\": " + error_details;
+}
+
 // --- Warning Messages ---
 const std::string& warning_cannot_get_memory() {
   static const std::string msg = "Warning: Cannot get available memory. Using fallback limit.";
@@ -180,6 +200,8 @@ std::string usage_options(const std::string& prog_name) {
       << "                        Minimum is 16 KB (system page size). When set, skips automatic\n"
       << "                        L1/L2 cache size detection and only performs bandwidth and latency\n"
       << "                        tests for the custom cache size.\n"
+      << "  -output <file>        Save benchmark results to JSON file. If path is relative,\n"
+      << "                        file is saved in current working directory.\n"
       << "  -h, --help            Show this help message and exit\n\n";
   return oss.str();
 }
@@ -187,7 +209,8 @@ std::string usage_options(const std::string& prog_name) {
 std::string usage_example(const std::string& prog_name) {
   std::ostringstream oss;
   oss << "Example: " << prog_name << " -iterations 500 -buffersize 1024\n"
-      << "Example: " << prog_name << " -cache-size 256\n";
+      << "Example: " << prog_name << " -cache-size 256\n"
+      << "Example: " << prog_name << " -output results.json\n";
   return oss.str();
 }
 

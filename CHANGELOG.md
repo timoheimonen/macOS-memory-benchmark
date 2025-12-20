@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.48] - DEVELOPMENT
 
 ### Added
+- **JSON output support**: Added `-output <file>` parameter to save benchmark results to JSON format. Results include configuration, all benchmark metrics (bandwidth and latency for main memory and cache levels), per-loop values, aggregated statistics (average, min, max, median, P90, P95, P99, stddev), and execution timestamp in ISO 8601 UTC format. JSON output uses the [nlohmann/json](https://github.com/nlohmann/json) library (MIT licensed, header-only). The output file path can be relative (saved to current working directory) or absolute, and parent directories are automatically created if needed. Implementation is organized in `src/json_output.h`/`json_output.cpp` for JSON serialization and `src/json_utils.h`/`json_utils.cpp` for statistics calculation utilities.
 - **Comprehensive unit tests for messages module**: Added `tests/test_messages.cpp` with 140 unit tests covering all message functions in the centralized messages module.
 
 ### Changed

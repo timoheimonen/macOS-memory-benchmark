@@ -113,6 +113,11 @@ int parse_arguments(int argc, char* argv[], BenchmarkConfig& config) {
           // Already parsed in first pass, just skip the value
         } else
           throw std::invalid_argument(Messages::error_missing_value("-cache-size"));
+      } else if (arg == "-output") {
+        if (++i < argc) {
+          config.output_file = argv[i];
+        } else
+          throw std::invalid_argument(Messages::error_missing_value("-output"));
       } else if (arg == "-h" || arg == "--help") {
         print_usage(argv[0]);
         return EXIT_SUCCESS;  // Special return value for help

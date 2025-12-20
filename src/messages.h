@@ -37,6 +37,11 @@ std::string error_mmap_failed(const std::string& buffer_name);
 std::string error_madvise_failed(const std::string& buffer_name);
 std::string error_benchmark_tests(const std::string& error);
 std::string error_benchmark_loop(int loop, const std::string& error);
+std::string error_json_parse_failed(const std::string& error_details);
+std::string error_json_file_read_failed(const std::string& file_path, const std::string& error_details);
+std::string error_file_write_failed(const std::string& file_path, const std::string& error_details);
+std::string error_file_permission_denied(const std::string& file_path);
+std::string error_file_directory_creation_failed(const std::string& dir_path, const std::string& error_details);
 
 // --- Warning Messages ---
 const std::string& warning_cannot_get_memory();

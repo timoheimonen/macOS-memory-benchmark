@@ -145,10 +145,13 @@ In the Terminal, go to the directory with `memory_benchmark` and use these comma
                             Minimum is 16 KB (system page size). When set, skips automatic
                             L1/L2 cache size detection and only performs bandwidth and latency
                             tests for the custom cache size.
+      -output <file>        Save benchmark results to JSON file. If path is relative,
+                            file is saved in current working directory.
       -h, --help            Show this help message and exit
 
     Example: ./memory_benchmark -iterations 500 -buffersize 1024
     Example: ./memory_benchmark -cache-size 256
+    Example: ./memory_benchmark -output results.json
     ```
 2. **Run with default parameters**
     ```bash
@@ -215,6 +218,23 @@ Cache Latency Tests (single-threaded, pointer chase):
 
 Done. Total execution time: 43.826 s
 ```
+
+## JSON Output
+
+The benchmark can save results to a JSON file using the `-output` option:
+
+```bash
+./memory_benchmark -output results.json
+```
+
+The JSON output includes:
+- Benchmark configuration (buffer sizes, iterations, CPU info, cache sizes)
+- Main memory performance metrics (bandwidth: read/write/copy, latency)
+- Cache performance metrics (L1/L2 or custom cache: bandwidth and latency)
+- Statistical analysis when multiple loops are run (average, min, max, median, percentiles, standard deviation)
+- Execution timestamp and total execution time
+
+For detailed information about the JSON schema structure, field descriptions, and example outputs, see [JSON_SCHEMA.md](JSON_SCHEMA.md).
 
 ## Known Issues and Limitations
 

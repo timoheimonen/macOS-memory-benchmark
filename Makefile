@@ -36,7 +36,7 @@ LDFLAGS = -pthread
 # Files in the root directory
 CPP_SRCS_ROOT = main.cpp
 # Files in the src directory
-CPP_SRCS_SRC = timer.cpp system_info.cpp memory_utils.cpp warmup.cpp benchmark_tests.cpp utils.cpp output_printer.cpp statistics.cpp memory_manager.cpp config.cpp buffer_manager.cpp benchmark_runner.cpp benchmark_executor.cpp benchmark_results.cpp messages.cpp
+CPP_SRCS_SRC = timer.cpp system_info.cpp memory_utils.cpp warmup.cpp benchmark_tests.cpp utils.cpp output_printer.cpp statistics.cpp memory_manager.cpp config.cpp buffer_manager.cpp benchmark_runner.cpp benchmark_executor.cpp benchmark_results.cpp messages.cpp json_utils.cpp json_output.cpp
 
 # Add src/ prefix to source files in the src directory
 CPP_SRCS_SRC_FULL = $(addprefix $(SRC_DIR)/, $(CPP_SRCS_SRC))

@@ -50,6 +50,10 @@ struct HighResTimer {
     double stop_ns(); // Stop timer, return nanoseconds
 };
 
+// Forward declarations
+struct BenchmarkConfig;
+struct BenchmarkStatistics;
+
 // --- System Info Functions (system_info.cpp) ---
 int get_performance_cores();          // Get number of performance cores
 int get_efficiency_cores();           // Get number of efficiency cores
