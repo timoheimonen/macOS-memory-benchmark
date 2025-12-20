@@ -36,9 +36,13 @@
 .align 4
 _memory_copy_loop_asm:
     mov x3, xzr             // offset = 0
-    mov x4, #512            // step = 512 bytes
+    // 512B blocks chosen as sweet spot: large enough for high throughput,
+    // small enough to fit in L2 cache, avoids TLB pressure on large regions
+    mov x4, #512            // step = 512 bytes (optimal block size)
 
 copy_loop_start_nt512:      // Main 512B block loop
+    // Loop invariants: x4=512B block size, x0/x1 are base pointers.
+    // Only x3 (offset) and x5 (remaining) change per iteration.
     subs x5, x2, x3         // remaining = count - offset
     cmp x5, x4              // remaining < step?
     b.lt copy_loop_cleanup  // If less, handle remaining bytes
@@ -48,7 +52,8 @@ copy_loop_start_nt512:      // Main 512B block loop
     add x7, x0, x3          // dst_addr = base + offset
 
     // Load 512 bytes from source (16 ldp pairs, 32B each)
-    // Using only caller-saved registers: q0-q7 and q16-q31 (avoiding q8-q15 per AAPCS64)
+    // Use caller-saved registers q0-q7,q16-q31 only (avoid q8-q15 per AAPCS64).
+    // This ensures no callee-saved state corruption and follows ARM64 calling convention.
     // Load first 8 pairs (0-7) into q0-q7 and q16-q23
     ldp q0,  q1,  [x6, #0]      // Load pair 0 (offset 0)
     ldp q2,  q3,  [x6, #32]     // Load pair 1 (offset 32)
@@ -59,8 +64,10 @@ copy_loop_start_nt512:      // Main 512B block loop
     ldp q20, q21, [x6, #192]    // Load pair 6 (offset 192)
     ldp q22, q23, [x6, #224]    // Load pair 7 (offset 224)
     
-    // Store first 8 pairs before loading next 8 (to avoid register pressure)
-    stnp q0,  q1,  [x7, #0]     // Store pair 0 (offset 0, non-temporal)
+    // Store first 8 pairs before loading next 8 (to avoid register pressure).
+    // Non-temporal stores (stnp) hint to CPU that data won't be reused soon,
+    // encouraging write-combining and reducing cache pollution during bandwidth tests.
+    stnp q0,  q1,  [x7, #0]     // Store pair 0 (offset 0, non-temporal hint for bandwidth)
     stnp q2,  q3,  [x7, #32]    // Store pair 1 (offset 32, non-temporal)
     stnp q4,  q5,  [x7, #64]    // Store pair 2 (offset 64, non-temporal)
     stnp q6,  q7,  [x7, #96]    // Store pair 3 (offset 96, non-temporal)
@@ -93,6 +100,9 @@ copy_loop_start_nt512:      // Main 512B block loop
     b copy_loop_start_nt512 // Loop again
 
 copy_loop_cleanup:          // Tail handling when <512B remain
+    // Tail handling: Process remaining bytes in 256B→128B→64B→32B→byte tiers.
+    // This minimizes branches while ensuring exact byte count handling.
+    // Larger chunks first for better performance on unaligned remainders.
     cmp x3, x2              // offset == count?
     b.ge copy_loop_end      // If done, exit
 
@@ -159,6 +169,8 @@ cleanup_32:                   // Handle 32B chunk (1 ldp + 1 stnp)
     sub x5, x5, #32           // Decrement remaining count by 32B
 
 copy_cleanup_byte:           // Byte tail for final <32B
+    // Final byte-by-byte copy for <32B remainder. Expected to be rare in
+    // bandwidth benchmarks but ensures correctness for any input size.
     cmp x5, #0               // Check if any bytes remain
     b.le copy_loop_end        // If none, exit
     ldrb w8, [x6], #1        // Load byte, post-increment source

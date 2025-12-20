@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.49] - DEVELOPMENT
 
+### Changed
+- **Enhanced assembly source commenting**: Improved code documentation across assembly source files (`memory_copy.s`, `memory_latency.s`, `memory_read.s`, `memory_write.s`).
+
 ### Fixed
 - **Cache latency infinity display bug**: Fixed cache latency tests (L1, L2, Custom) displaying "inf ns" instead of valid latency values. The issue was caused by division by zero when `num_accesses` was 0. Added guards in `run_cache_latency_tests()` to skip tests when access counts are invalid, and added a safety check in `run_single_cache_latency_test()` to prevent division by zero. Additionally, added infinity/NaN detection in all cache latency formatting functions (`results_cache_latency_l1_ns*`, `results_cache_latency_l2_ns*`, `results_cache_latency_custom_ns*`) to display "N/A ns" instead of "inf ns" when values are invalid, providing clearer error indication.
 

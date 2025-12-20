@@ -37,8 +37,11 @@
 .global _memory_latency_chase_asm
 .align 4
 _memory_latency_chase_asm:
-    // Pre-touch to ensure TLB entries are loaded
+    // Pre-touch to ensure TLB entries are loaded before timing measurement.
+    // This prevents TLB miss overhead from contaminating latency results.
     ldr x4, [x0]                // Prime the first access but don't use result yet
+    // DSB ISH: Ensure TLB preload completes before timing measurement.
+    // Prevents speculative execution from contaminating latency results.
     dsb ish                     // Data synchronization barrier (inner shareable)
     isb                         // Instruction synchronization barrier
 
@@ -48,10 +51,18 @@ _memory_latency_chase_asm:
 
     cbz x4, latency_remainder   // Skip unrolled loop if no full groups
 
+    // DMB SY: Full system memory barrier to prevent reordering before measurement.
+    // Ensures all prior memory operations complete and prevents speculative loads
+    // from affecting the timing window.
     dmb sy                      // Memory barrier to prevent reordering before measurement
 
 latency_loop_unrolled:          // 8 dependent loads per iteration
-    ldr x0, [x0]                // Load 1: x0 = *x0
+    // Use pointer chasing with 8x unrolling to minimize branch overhead while
+    // maintaining dependency chain. Each load depends on the previous result,
+    // creating a true latency measurement rather than throughput.
+    // Expected: ~1 cycle per load on L1 hit, ~4-10 cycles on L2 hit,
+    // 50+ cycles on DRAM access. Unrolling hides some latency.
+    ldr x0, [x0]                // Load 1: Start dependency chain (true latency measurement)
     ldr x0, [x0]                // Load 2: x0 = *x0 (dependent on load 1)
     ldr x0, [x0]                // Load 3: x0 = *x0 (dependent on load 2)
     ldr x0, [x0]                // Load 4: x0 = *x0 (dependent on load 3)
@@ -63,9 +74,14 @@ latency_loop_unrolled:          // 8 dependent loads per iteration
     subs x4, x4, #1             // Decrement unrolled iteration count
     b.gt latency_loop_unrolled  // Loop if more groups remain
 
+    // DMB SY: Full system memory barrier after unrolled section to ensure completion.
+    // Guarantees all loads in the measurement window have completed before
+    // proceeding to remainder handling or return.
     dmb sy                      // Memory barrier after unrolled section to ensure completion
 
 latency_remainder:              // Handle remaining (0-7) dereferences
+    // Process remainder with single dependent loads. Maintains same dependency
+    // chain characteristics as unrolled loop for consistent latency measurement.
     cbz x5, latency_end         // Skip if no remainder
 latency_single:                 // Single dependent dereference loop
     ldr x0, [x0]                // Load: x0 = *x0 (dependent chain)
