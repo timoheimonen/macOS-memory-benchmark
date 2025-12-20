@@ -36,9 +36,14 @@
 .align 4
 _memory_write_loop_asm:
     mov x3, xzr             // offset = 0
-    mov x4, #512            // step = 512 bytes
+    // 512B blocks chosen as sweet spot: large enough for high throughput,
+    // small enough to fit in L2 cache, avoids TLB pressure on large regions
+    mov x4, #512            // step = 512 bytes (optimal block size)
 
-    // Zero out data registers (using only caller-saved: v0-v7 and v16-v31, avoiding v8-v15 per AAPCS64)
+    // Zero out data registers (using only caller-saved: v0-v7 and v16-v31, avoiding v8-v15 per AAPCS64).
+    // Use caller-saved registers q0-q7,q16-q31 only (avoid q8-q15 per AAPCS64).
+    // This ensures no callee-saved state corruption and follows ARM64 calling convention.
+    // Zero vectors are materialized once (movi) then reused throughout the loop.
     movi v0.16b, #0             // Zero vector 0
     movi v1.16b, #0             // Zero vector 1
     movi v2.16b, #0             // Zero vector 2
@@ -66,15 +71,19 @@ _memory_write_loop_asm:
 
 
 write_loop_start_nt512:     // Main 512B block loop
+    // Loop invariants: x4=512B block size, all vectors (q0-q7, q16-q31) are zero.
+    // Only x3 (offset) and x5 (remaining) change per iteration.
     subs x5, x1, x3         // remaining = count - offset
     cmp x5, x4              // remaining < step?
     b.lt write_loop_cleanup // If less, handle remaining bytes
 
     add x7, x0, x3          // dst_addr = base + offset
 
-    // Store 512B zeros (non-temporal) (16 stnp pairs)
-    // Using only caller-saved registers: q0-q7 and q16-q31
-    stnp q0,  q1,  [x7, #0]       // Store pair 0 (offset 0, non-temporal)
+    // Store 512B zeros (non-temporal) (16 stnp pairs).
+    // Using only caller-saved registers: q0-q7 and q16-q31.
+    // Non-temporal stores (stnp) hint to CPU that data won't be reused soon,
+    // encouraging write-combining and reducing cache pollution during bandwidth tests.
+    stnp q0,  q1,  [x7, #0]       // Store pair 0 (offset 0, non-temporal hint for bandwidth)
     stnp q2,  q3,  [x7, #32]      // Store pair 1 (offset 32, non-temporal)
     stnp q4,  q5,  [x7, #64]      // Store pair 2 (offset 64, non-temporal)
     stnp q6,  q7,  [x7, #96]      // Store pair 3 (offset 96, non-temporal)
@@ -96,6 +105,9 @@ write_loop_start_nt512:     // Main 512B block loop
     b write_loop_start_nt512 // Loop again
 
 write_loop_cleanup:         // Tail handling when <512B remain
+    // Tail handling: Process remaining bytes in 256B→128B→64B→32B→byte tiers.
+    // This minimizes branches while ensuring exact byte count handling.
+    // Larger chunks first for better performance on unaligned remainders.
     cmp x3, x1              // offset == count?
     b.ge write_loop_end     // If done, exit
 
@@ -142,6 +154,9 @@ write_cleanup_32:             // 32B chunk
     sub x5, x5, #32           // Decrement remaining count by 32B
 
 write_cleanup_byte:            // Byte tail (<32B)
+    // Final byte-by-byte write for <32B remainder. Expected to be rare in
+    // bandwidth benchmarks but ensures correctness for any input size.
+    // Using wzr (zero register) avoids needing to load/store a zero value.
     cmp x5, #0                // Check if any bytes remain
     b.le write_loop_end        // If none, exit
     strb wzr, [x7], #1         // Store zero byte, post-increment destination

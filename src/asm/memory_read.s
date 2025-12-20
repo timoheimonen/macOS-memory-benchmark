@@ -38,26 +38,32 @@
 .align 4
 _memory_read_loop_asm:
     mov x3, xzr             // offset = 0
-    mov x4, #512            // step = 512 bytes
+    // 512B blocks chosen as sweet spot: large enough for high throughput,
+    // small enough to fit in L2 cache, avoids TLB pressure on large regions
+    mov x4, #512            // step = 512 bytes (optimal block size)
     mov x12, xzr            // Zero byte cleanup checksum accumulator
 
-    // Zero accumulators (v0-v3) using XOR self-operation (caller-saved, safe to use)
-    eor v0.16b, v0.16b, v0.16b   // Zero accumulator 0
-    eor v1.16b, v1.16b, v1.16b   // Zero accumulator 1
-    eor v2.16b, v2.16b, v2.16b   // Zero accumulator 2
-    eor v3.16b, v3.16b, v3.16b   // Zero accumulator 3
+    // Zero accumulators (v0-v3) using XOR self-operation.
+    // Use caller-saved registers q0-q7,q16-q31 only (avoid q8-q15 per AAPCS64).
+    // This ensures no callee-saved state corruption and follows ARM64 calling convention.
+    eor v0.16b, v0.16b, v0.16b   // Zero accumulator 0 (caller-saved, safe)
+    eor v1.16b, v1.16b, v1.16b   // Zero accumulator 1 (caller-saved, safe)
+    eor v2.16b, v2.16b, v2.16b   // Zero accumulator 2 (caller-saved, safe)
+    eor v3.16b, v3.16b, v3.16b   // Zero accumulator 3 (caller-saved, safe)
 
 read_loop_start_512:        // Main 512B block loop
+    // Loop invariants: x4=512B block size, accumulators v0-v3 accumulate XOR,
+    // x12 holds byte checksum. Only x3 (offset) and loop counters change.
     subs x5, x1, x3         // remaining = count - offset
     cmp x5, x4              // remaining < step?
     b.lt read_loop_cleanup  // If less, handle remaining bytes
 
     add x6, x0, x3          // src_addr = base + offset
 
-    // Load 512 bytes from source (16 * 32B = 512B) using pair loads
-    // Using only caller-saved registers: q0-q7 and q16-q31 (avoiding q8-q15 per AAPCS64)
-    // Accumulators are v0-v3 (q0-q3), so we load data into q4-q7 and q16-q31 first
-    // Process in two chunks: first 8 pairs, then next 8 pairs
+    // Load 512 bytes from source (16 * 32B = 512B) using pair loads.
+    // Using only caller-saved registers: q0-q7 and q16-q31 (avoiding q8-q15 per AAPCS64).
+    // Accumulators are v0-v3 (q0-q3), so we load data into q4-q7 and q16-q31 first.
+    // Process in two chunks: first 8 pairs, then next 8 pairs.
     
     // Load first 8 pairs (0-7) into q4-q7 and q16-q23
     ldp q4,  q5,  [x6, #0]        // Load pair 0 (offset 0)
@@ -69,7 +75,9 @@ read_loop_start_512:        // Main 512B block loop
     ldp q24, q25, [x6, #192]      // Load pair 6 (offset 192)
     ldp q26, q27, [x6, #224]      // Load pair 7 (offset 224)
     
-    // Accumulate first 8 pairs into v0-v3
+    // Accumulate first 8 pairs into v0-v3.
+    // Distribute XOR across 4 accumulators (v0-v3) to reduce dependency depth.
+    // Each accumulator handles 1/4 of data, allowing parallel computation.
     eor v0.16b, v0.16b, v4.16b    // Accumulate q4 into v0
     eor v1.16b, v1.16b, v5.16b    // Accumulate q5 into v1
     eor v2.16b, v2.16b, v6.16b    // Accumulate q6 into v2
@@ -119,6 +127,9 @@ read_loop_start_512:        // Main 512B block loop
     b read_loop_start_512   // Loop again
 
 read_loop_cleanup:          // Tail handling when <512B remain
+    // Tail handling: Process remaining bytes in 256B→128B→64B→32B→byte tiers.
+    // This minimizes branches while ensuring exact byte count handling.
+    // Larger chunks first for better performance on unaligned remainders.
     cmp x3, x1              // offset == count?
     b.ge read_loop_combine_sum // If done, combine sums
 
@@ -204,7 +215,10 @@ read_cleanup_byte:             // Byte tail (<32B)
     b.gt read_cleanup_byte     // Loop if more bytes remain
 
 read_loop_combine_sum:         // Final reduction + result write-back
-    // Combine accumulators v0-v3 -> v0
+    // Combine accumulators v0-v3 -> v0.
+    // Distribute XOR across 4 accumulators (v0-v3) to reduce dependency depth.
+    // Each accumulator handles 1/4 of data, allowing parallel computation.
+    // Final reduction combines them: v0⊕v1, v2⊕v3, then (v0⊕v1)⊕(v2⊕v3)
     eor v0.16b, v0.16b, v1.16b  // Combine v0 and v1 into v0
     eor v2.16b, v2.16b, v3.16b  // Combine v2 and v3 into v2
     eor v0.16b, v0.16b, v2.16b  // Combine v0 and v2 into v0 (final vector)
