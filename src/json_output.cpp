@@ -33,6 +33,7 @@
 #include "messages.h"   // Include centralized messages
 #include "config.h"     // For BenchmarkConfig
 #include "benchmark_runner.h"  // For BenchmarkStatistics
+#include "pattern_benchmark.h" // For PatternResults
 #include "json_utils.h" // JSON utility functions
 #include "nlohmann/json.hpp"   // JSON library
 
@@ -385,6 +386,86 @@ int save_results_to_json(const BenchmarkConfig& config, const BenchmarkStatistic
   
   // Add cache results
   json_output[JsonKeys::CACHE] = build_cache_json(config, stats);
+  
+  // Add execution time
+  json_output[JsonKeys::EXECUTION_TIME_SEC] = total_execution_time_sec;
+  
+  // Resolve file path (handle relative paths)
+  std::filesystem::path file_path(config.output_file);
+  if (file_path.is_relative()) {
+    // Relative path - use current working directory
+    file_path = std::filesystem::current_path() / file_path;
+  }
+  
+  // Write JSON to file
+  return write_json_to_file(file_path, json_output);
+}
+
+// Build patterns JSON object from PatternResults
+static nlohmann::json build_patterns_json(const PatternResults& results) {
+  nlohmann::json patterns;
+  
+  // Sequential Forward (baseline)
+  patterns[JsonKeys::SEQUENTIAL_FORWARD] = nlohmann::json::object();
+  patterns[JsonKeys::SEQUENTIAL_FORWARD][JsonKeys::READ_GB_S] = results.forward_read_bw;
+  patterns[JsonKeys::SEQUENTIAL_FORWARD][JsonKeys::WRITE_GB_S] = results.forward_write_bw;
+  patterns[JsonKeys::SEQUENTIAL_FORWARD][JsonKeys::COPY_GB_S] = results.forward_copy_bw;
+  
+  // Sequential Reverse
+  patterns[JsonKeys::SEQUENTIAL_REVERSE] = nlohmann::json::object();
+  patterns[JsonKeys::SEQUENTIAL_REVERSE][JsonKeys::READ_GB_S] = results.reverse_read_bw;
+  patterns[JsonKeys::SEQUENTIAL_REVERSE][JsonKeys::WRITE_GB_S] = results.reverse_write_bw;
+  patterns[JsonKeys::SEQUENTIAL_REVERSE][JsonKeys::COPY_GB_S] = results.reverse_copy_bw;
+  
+  // Strided (Cache Line - 64B)
+  patterns[JsonKeys::STRIDED_64] = nlohmann::json::object();
+  patterns[JsonKeys::STRIDED_64][JsonKeys::READ_GB_S] = results.strided_64_read_bw;
+  patterns[JsonKeys::STRIDED_64][JsonKeys::WRITE_GB_S] = results.strided_64_write_bw;
+  patterns[JsonKeys::STRIDED_64][JsonKeys::COPY_GB_S] = results.strided_64_copy_bw;
+  
+  // Strided (Page - 4096B)
+  patterns[JsonKeys::STRIDED_4096] = nlohmann::json::object();
+  patterns[JsonKeys::STRIDED_4096][JsonKeys::READ_GB_S] = results.strided_4096_read_bw;
+  patterns[JsonKeys::STRIDED_4096][JsonKeys::WRITE_GB_S] = results.strided_4096_write_bw;
+  patterns[JsonKeys::STRIDED_4096][JsonKeys::COPY_GB_S] = results.strided_4096_copy_bw;
+  
+  // Random Uniform
+  patterns[JsonKeys::RANDOM] = nlohmann::json::object();
+  patterns[JsonKeys::RANDOM][JsonKeys::READ_GB_S] = results.random_read_bw;
+  patterns[JsonKeys::RANDOM][JsonKeys::WRITE_GB_S] = results.random_write_bw;
+  patterns[JsonKeys::RANDOM][JsonKeys::COPY_GB_S] = results.random_copy_bw;
+  
+  return patterns;
+}
+
+// Save pattern benchmark results to JSON file
+// Returns EXIT_SUCCESS on success, EXIT_FAILURE on error
+int save_pattern_results_to_json(const BenchmarkConfig& config, const PatternResults& results, double total_execution_time_sec) {
+  if (config.output_file.empty()) {
+    return EXIT_SUCCESS;  // No output file specified, nothing to do
+  }
+  
+  nlohmann::json json_output;
+  
+  // Add version
+  std::ostringstream version_str;
+  version_str << SOFTVERSION;
+  json_output[JsonKeys::VERSION] = version_str.str();
+  
+  // Add timestamp (ISO 8601 UTC)
+  auto now = std::chrono::system_clock::now();
+  auto time_t = std::chrono::system_clock::to_time_t(now);
+  std::tm utc_time;
+  gmtime_r(&time_t, &utc_time);
+  std::ostringstream timestamp_str;
+  timestamp_str << std::put_time(&utc_time, "%Y-%m-%dT%H:%M:%SZ");
+  json_output[JsonKeys::TIMESTAMP] = timestamp_str.str();
+  
+  // Add configuration
+  json_output[JsonKeys::CONFIGURATION] = build_config_json(config);
+  
+  // Add patterns results
+  json_output[JsonKeys::PATTERNS] = build_patterns_json(results);
   
   // Add execution time
   json_output[JsonKeys::EXECUTION_TIME_SEC] = total_execution_time_sec;

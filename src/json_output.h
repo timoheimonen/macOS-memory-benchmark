@@ -21,6 +21,7 @@
 // Forward declarations
 struct BenchmarkConfig;
 struct BenchmarkStatistics;
+struct PatternResults;
 
 // JSON structure constants
 namespace JsonKeys {
@@ -30,6 +31,7 @@ namespace JsonKeys {
   constexpr const char* CONFIGURATION = "configuration";
   constexpr const char* MAIN_MEMORY = "main_memory";
   constexpr const char* CACHE = "cache";
+  constexpr const char* PATTERNS = "patterns";
   constexpr const char* EXECUTION_TIME_SEC = "execution_time_sec";
   
   // Configuration keys
@@ -67,11 +69,22 @@ namespace JsonKeys {
   constexpr const char* L1 = "l1";
   constexpr const char* L2 = "l2";
   constexpr const char* CUSTOM = "custom";
+  
+  // Pattern keys
+  constexpr const char* SEQUENTIAL_FORWARD = "sequential_forward";
+  constexpr const char* SEQUENTIAL_REVERSE = "sequential_reverse";
+  constexpr const char* STRIDED_64 = "strided_64";
+  constexpr const char* STRIDED_4096 = "strided_4096";
+  constexpr const char* RANDOM = "random";
 }
 
 // Save benchmark results to JSON file
 // Returns EXIT_SUCCESS on success, EXIT_FAILURE on error
 int save_results_to_json(const BenchmarkConfig& config, const BenchmarkStatistics& stats, double total_execution_time_sec);
+
+// Save pattern benchmark results to JSON file
+// Returns EXIT_SUCCESS on success, EXIT_FAILURE on error
+int save_pattern_results_to_json(const BenchmarkConfig& config, const PatternResults& results, double total_execution_time_sec);
 
 #endif // JSON_OUTPUT_H
 

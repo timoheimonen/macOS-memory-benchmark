@@ -87,6 +87,14 @@ int main(int argc, char *argv[]) {
       return EXIT_FAILURE;
     }
     print_pattern_results(pattern_results);
+    
+    // --- Save JSON Output if requested ---
+    if (!config.output_file.empty()) {
+      double total_elapsed_time_sec = total_execution_timer.stop();
+      if (save_pattern_results_to_json(config, pattern_results, total_elapsed_time_sec) != EXIT_SUCCESS) {
+        return EXIT_FAILURE;
+      }
+    }
   } else {
     // Run standard benchmarks
     std::cout << Messages::msg_running_benchmarks() << std::endl;
