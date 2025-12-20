@@ -53,6 +53,7 @@ struct BenchmarkConfig {
   
   // Flags
   bool use_custom_cache_size = false;
+  bool run_patterns = false;  // Run pattern benchmarks
   
   // Output file
   std::string output_file;  // JSON output file path (empty = no JSON output)

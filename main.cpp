@@ -26,6 +26,7 @@
 #include "messages.h"
 #include "constants.h"
 #include "json_output.h"
+#include "pattern_benchmark.h"
 
 // macOS specific memory management
 #include <mach/mach.h>  // kern_return_t
@@ -79,27 +80,45 @@ int main(int argc, char *argv[]) {
   }
 
   // --- Run Benchmarks ---
-  std::cout << Messages::msg_running_benchmarks() << std::endl;
-  
-  BenchmarkStatistics stats;
-  if (run_all_benchmarks(buffers, config, stats) != EXIT_SUCCESS) {
-    return EXIT_FAILURE;
-  }
+  if (config.run_patterns) {
+    // Run pattern benchmarks only
+    PatternResults pattern_results;
+    if (run_pattern_benchmarks(buffers, config, pattern_results) != EXIT_SUCCESS) {
+      return EXIT_FAILURE;
+    }
+    print_pattern_results(pattern_results);
+  } else {
+    // Run standard benchmarks
+    std::cout << Messages::msg_running_benchmarks() << std::endl;
+    
+    BenchmarkStatistics stats;
+    if (run_all_benchmarks(buffers, config, stats) != EXIT_SUCCESS) {
+      return EXIT_FAILURE;
+    }
 
-  // --- Print Stats ---
-  // Print summary statistics if more than one loop was run
-  print_statistics(config.loop_count, stats.all_read_bw_gb_s, stats.all_write_bw_gb_s, stats.all_copy_bw_gb_s,
-                   stats.all_l1_latency_ns, stats.all_l2_latency_ns,
-                   stats.all_l1_read_bw_gb_s, stats.all_l1_write_bw_gb_s, stats.all_l1_copy_bw_gb_s,
-                   stats.all_l2_read_bw_gb_s, stats.all_l2_write_bw_gb_s, stats.all_l2_copy_bw_gb_s,
-                   stats.all_average_latency_ns,
-                   config.use_custom_cache_size,
-                   stats.all_custom_latency_ns, stats.all_custom_read_bw_gb_s,
-                   stats.all_custom_write_bw_gb_s, stats.all_custom_copy_bw_gb_s,
-                   stats.all_main_mem_latency_samples,
-                   stats.all_l1_latency_samples,
-                   stats.all_l2_latency_samples,
-                   stats.all_custom_latency_samples);
+    // --- Print Stats ---
+    // Print summary statistics if more than one loop was run
+    print_statistics(config.loop_count, stats.all_read_bw_gb_s, stats.all_write_bw_gb_s, stats.all_copy_bw_gb_s,
+                     stats.all_l1_latency_ns, stats.all_l2_latency_ns,
+                     stats.all_l1_read_bw_gb_s, stats.all_l1_write_bw_gb_s, stats.all_l1_copy_bw_gb_s,
+                     stats.all_l2_read_bw_gb_s, stats.all_l2_write_bw_gb_s, stats.all_l2_copy_bw_gb_s,
+                     stats.all_average_latency_ns,
+                     config.use_custom_cache_size,
+                     stats.all_custom_latency_ns, stats.all_custom_read_bw_gb_s,
+                     stats.all_custom_write_bw_gb_s, stats.all_custom_copy_bw_gb_s,
+                     stats.all_main_mem_latency_samples,
+                     stats.all_l1_latency_samples,
+                     stats.all_l2_latency_samples,
+                     stats.all_custom_latency_samples);
+
+    // --- Save JSON Output if requested ---
+    if (!config.output_file.empty()) {
+      double total_elapsed_time_sec = total_execution_timer.stop();
+      if (save_results_to_json(config, stats, total_elapsed_time_sec) != EXIT_FAILURE) {
+        return EXIT_FAILURE;
+      }
+    }
+  }
 
   // --- Free Memory ---
   // std::cout << "\nFreeing memory..." << std::endl;
@@ -109,13 +128,6 @@ int main(int argc, char *argv[]) {
   // --- Print Total Time ---
   double total_elapsed_time_sec = total_execution_timer.stop();                                  // Stop overall timer
   std::cout << Messages::msg_done_total_time(total_elapsed_time_sec) << std::endl;  // Print duration
-
-  // --- Save JSON Output if requested ---
-  if (!config.output_file.empty()) {
-    if (save_results_to_json(config, stats, total_elapsed_time_sec) != EXIT_SUCCESS) {
-      return EXIT_FAILURE;
-    }
-  }
 
   return EXIT_SUCCESS;  // Indicate success
 }

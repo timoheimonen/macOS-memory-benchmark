@@ -64,10 +64,11 @@ macOS on Apple Silicon.
 * Checks L1 and L2 cache bandwidth (read/write/copy) using single-threaded tests.
 * Checks L1 and L2 cache latency using pointer chasing methodology.
 * Checks main memory access latency.
+* Check memory performance with different access patterns (sequential forward/reverse, strided 64B/4096B, random). Measures read/write/copy bandwidth for each pattern using optimized ARM64 assembly.
 * When running with multiple loops (`-count > 1`), calculates detailed statistics including percentiles (P50/P90/P95/P99) and standard deviation for bandwidth and latency tests.
 * Automatically detects cache sizes (L1, L2) for Apple Silicon processors.
 * Uses `mmap` for memory blocks (large blocks for bandwidth/main memory latency; cache-sized blocks for cache bandwidth and latency tests).
-* Main read/write/copy and latency loops are in ARM64 assembly files (`src/asm/memory_copy.s`, `src/asm/memory_read.s`, `src/asm/memory_write.s`, `src/asm/memory_latency.s`).
+* All memory operations are implemented in optimized ARM64 assembly.
 * Uses optimized non-temporal pair instructions (`ldnp`/`stnp`) for high-throughput bandwidth tests in the assembly loop.
 * Checks latency by pointer chasing with dependent loads (`ldr x0, [x0]`) in assembly.
 * Uses multiple threads (`std::thread`) for main memory bandwidth tests (single-threaded for cache tests).
@@ -122,7 +123,7 @@ In the Terminal, go to the directory with `memory_benchmark` and use these comma
     ```
     Example output:
     ```text
-    Version: 0.48 by Timo Heimonen <timo.heimonen@proton.me>
+    Version: 0.49 by Timo Heimonen <timo.heimonen@proton.me>
     License: GNU GPL v3. See <https://www.gnu.org/licenses/>
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -146,12 +147,17 @@ In the Terminal, go to the directory with `memory_benchmark` and use these comma
                             Minimum is 16 KB (system page size). When set, skips automatic
                             L1/L2 cache size detection and only performs bandwidth and latency
                             tests for the custom cache size.
+      -patterns             Run pattern benchmarks (sequential forward/reverse, strided,
+                            and random access patterns). When set, only pattern benchmarks
+                            are executed, skipping standard bandwidth and latency tests.
+                            use with -buffersize <size_mb> to set the buffer size for the pattern benchmarks.
       -output <file>        Save benchmark results to JSON file. If path is relative,
                             file is saved in current working directory.
       -h, --help            Show this help message and exit
 
     Example: ./memory_benchmark -iterations 500 -buffersize 1024
     Example: ./memory_benchmark -cache-size 256
+    Example: ./memory_benchmark -patterns -buffersize 128
     Example: ./memory_benchmark -output results.json
     ```
 2. **Run with default parameters**
@@ -165,7 +171,7 @@ In the Terminal, go to the directory with `memory_benchmark` and use these comma
 
 ## Example output (Mac Mini M4 24GB)
 ```text
------ macOS-memory-benchmark v0.48 -----
+----- macOS-memory-benchmark v0.49 -----
 Copyright 2025 Timo Heimonen <timo.heimonen@proton.me>
 This program is free software: you can redistribute it and/or modify
 it under the terms of the GNU General Public License as published by
