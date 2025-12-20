@@ -169,10 +169,7 @@ In the Terminal, go to the directory with `memory_benchmark` and use these comma
                             file is saved in current working directory.
       -h, --help            Show this help message and exit
 
-    Example: ./memory_benchmark -iterations 500 -buffersize 1024
-    Example: ./memory_benchmark -cache-size 256
-    Example: ./memory_benchmark -patterns -buffersize 512
-    Example: ./memory_benchmark -output results.json
+    Example: ./memory_benchmark -iterations 2000 -buffersize 1024 -output results.json
     ```
 2. **Run with default parameters**
     ```bash
