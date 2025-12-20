@@ -36,7 +36,7 @@ LDFLAGS = -pthread
 # Files in the root directory
 CPP_SRCS_ROOT = main.cpp
 # Files in the src directory
-CPP_SRCS_SRC = timer.cpp system_info.cpp memory_utils.cpp warmup.cpp benchmark_tests.cpp utils.cpp output_printer.cpp statistics.cpp memory_manager.cpp config.cpp buffer_manager.cpp benchmark_runner.cpp benchmark_executor.cpp benchmark_results.cpp messages.cpp json_utils.cpp json_output.cpp
+CPP_SRCS_SRC = timer.cpp system_info.cpp memory_utils.cpp warmup.cpp benchmark_tests.cpp utils.cpp output_printer.cpp statistics.cpp memory_manager.cpp config.cpp buffer_manager.cpp benchmark_runner.cpp benchmark_executor.cpp benchmark_results.cpp messages.cpp json_utils.cpp json_output.cpp pattern_benchmark.cpp
 
 # Add src/ prefix to source files in the src directory
 CPP_SRCS_SRC_FULL = $(addprefix $(SRC_DIR)/, $(CPP_SRCS_SRC))
@@ -45,7 +45,10 @@ CPP_SRCS_SRC_FULL = $(addprefix $(SRC_DIR)/, $(CPP_SRCS_SRC))
 ALL_CPP_SRCS = $(CPP_SRCS_ROOT) $(CPP_SRCS_SRC_FULL)
 
 # Assembly source files (in src/asm)
-ASM_SRCS = src/asm/memory_copy.s src/asm/memory_read.s src/asm/memory_write.s src/asm/memory_latency.s
+ASM_SRCS = src/asm/memory_copy.s src/asm/memory_read.s src/asm/memory_write.s src/asm/memory_latency.s \
+           src/asm/memory_read_reverse.s src/asm/memory_write_reverse.s src/asm/memory_copy_reverse.s \
+           src/asm/memory_read_strided.s src/asm/memory_write_strided.s src/asm/memory_copy_strided.s \
+           src/asm/memory_read_random.s src/asm/memory_write_random.s src/asm/memory_copy_random.s
 
 # Object files (derived from source files, maintaining directory structure)
 # main.cpp -> main.o

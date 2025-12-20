@@ -118,6 +118,8 @@ int parse_arguments(int argc, char* argv[], BenchmarkConfig& config) {
           config.output_file = argv[i];
         } else
           throw std::invalid_argument(Messages::error_missing_value("-output"));
+      } else if (arg == "-patterns") {
+        config.run_patterns = true;
       } else if (arg == "-h" || arg == "--help") {
         print_usage(argv[0]);
         return EXIT_SUCCESS;  // Special return value for help

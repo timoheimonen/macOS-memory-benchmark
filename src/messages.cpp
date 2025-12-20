@@ -201,6 +201,10 @@ std::string usage_options(const std::string& prog_name) {
       << "                        Minimum is 16 KB (system page size). When set, skips automatic\n"
       << "                        L1/L2 cache size detection and only performs bandwidth and latency\n"
       << "                        tests for the custom cache size.\n"
+      << "  -patterns             Run pattern benchmarks (sequential forward/reverse, strided,\n"
+      << "                        and random access patterns). When set, only pattern benchmarks\n"
+      << "                        are executed, skipping standard bandwidth and latency tests.\n"
+      << "                        use with -buffersize <size_mb> to set the buffer size for the pattern benchmarks.\n"
       << "  -output <file>        Save benchmark results to JSON file. If path is relative,\n"
       << "                        file is saved in current working directory.\n"
       << "  -h, --help            Show this help message and exit\n\n";
@@ -211,6 +215,7 @@ std::string usage_example(const std::string& prog_name) {
   std::ostringstream oss;
   oss << "Example: " << prog_name << " -iterations 500 -buffersize 1024\n"
       << "Example: " << prog_name << " -cache-size 256\n"
+      << "Example: " << prog_name << " -patterns -buffersize 512\n"
       << "Example: " << prog_name << " -output results.json\n";
   return oss.str();
 }

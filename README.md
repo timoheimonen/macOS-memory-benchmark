@@ -24,10 +24,24 @@ The main read/write/copy and latency tests are done in separate ARM64 assembly f
 The performance-critical memory operations are implemented in ARM64 assembly for maximum efficiency across four separate source files:
 
 * **Core Functions:**
-    * `memory_copy.s` - `_memory_copy_loop_asm`: Copies data between buffers using non-temporal instructions (`stnp`) to minimize cache impact.
-    * `memory_read.s` - `_memory_read_loop_asm`: Reads memory and calculates an XOR checksum to prevent optimization and ensure data is actually read.
-    * `memory_write.s` - `_memory_write_loop_asm`: Writes zeros to memory using non-temporal instructions (`stnp`).
-    * `memory_latency.s` - `_memory_latency_chase_asm`: Measures memory access latency via pointer chasing with dependent loads (`ldr x0, [x0]`).  
+    * `memory_copy.s` - `_memory_copy_loop_asm`: Copies data between buffers using non-temporal instructions (`stnp`) to minimize cache impact. Processes 512-byte blocks sequentially forward.
+    * `memory_read.s` - `_memory_read_loop_asm`: Reads memory and calculates an XOR checksum to prevent optimization and ensure data is actually read. Processes 512-byte blocks sequentially forward.
+    * `memory_write.s` - `_memory_write_loop_asm`: Writes zeros to memory using non-temporal instructions (`stnp`). Processes 512-byte blocks sequentially forward.
+    * `memory_latency.s` - `_memory_latency_chase_asm`: Measures memory access latency via pointer chasing with dependent loads (`ldr x0, [x0]`). Uses 8-way loop unrolling.
+
+* **Pattern Benchmark Functions:**
+    * **Sequential Reverse:**
+        * `memory_copy_reverse.s` - `_memory_copy_reverse_loop_asm`: Copies data backwards (reverse sequential) using 512-byte blocks with non-temporal stores.
+        * `memory_read_reverse.s` - `_memory_read_reverse_loop_asm`: Reads memory backwards with XOR checksum accumulation.
+        * `memory_write_reverse.s` - `_memory_write_reverse_loop_asm`: Writes zeros backwards using non-temporal stores.
+    * **Strided Access:**
+        * `memory_copy_strided.s` - `_memory_copy_strided_loop_asm`: Copies data using strided access patterns (64B cache line stride and 4096B page stride, tested separately) with 32-byte operations, wrapping around buffer via modulo arithmetic.
+        * `memory_read_strided.s` - `_memory_read_strided_loop_asm`: Reads memory using strided access patterns (64B and 4096B strides, tested separately) with XOR checksum accumulation.
+        * `memory_write_strided.s` - `_memory_write_strided_loop_asm`: Writes zeros using strided access patterns (64B and 4096B strides, tested separately) with non-temporal stores.
+    * **Random Access:**
+        * `memory_copy_random.s` - `_memory_copy_random_loop_asm`: Copies data using random access pattern defined by pre-generated indices array. Processes 32-byte cache lines per access to maximize cache misses and TLB pressure.
+        * `memory_read_random.s` - `_memory_read_random_loop_asm`: Reads memory using random access pattern with XOR checksum accumulation.
+        * `memory_write_random.s` - `_memory_write_random_loop_asm`: Writes zeros using random access pattern with non-temporal stores.  
 
 * **Key Optimizations:**
     * Processing data in large 512-byte blocks.
@@ -43,7 +57,7 @@ The benchmark does these steps:
 3.  Writes to the bandwidth buffers to make sure the OS maps the memory.
 4.  Creates random pointer chains inside the latency buffers (this also maps their memory).
 5.  Does warm-up runs for read/write/copy and latency tests to let the CPU speed and caches settle.
-6.  Main Memory Bandwidth Tests: Times the read/write/copy from source to destination buffer multiple times using the precise `mach_absolute_time` timer (multi-threaded).
+6.  Main Memory Bandwidth Tests: Times the read/write/copy from source to destination buffer multiple times using the precise `mach_absolute_time` timer (multi-threaded, using all available logical CPU cores).
 7.  Cache Bandwidth Tests: Times read/write/copy operations in buffers sized to fit within L1 and L2 cache levels (single-threaded, using 10x more iterations for accuracy).
 8.  Cache Latency Tests: Times doing many dependent pointer reads in buffers sized to fit within L1 and L2 cache levels.
 9.  Main Memory Latency Test: Times doing many dependent pointer reads (following the chain) using `mach_absolute_time`.
@@ -60,17 +74,18 @@ macOS on Apple Silicon.
 
 ## Features
 
-* Checks main memory read, write and copy speeds (multi-threaded).
+* Checks main memory read, write and copy speeds (multi-threaded, using all available logical CPU cores).
 * Checks L1 and L2 cache bandwidth (read/write/copy) using single-threaded tests.
 * Checks L1 and L2 cache latency using pointer chasing methodology.
 * Checks main memory access latency.
+* Check memory performance with different access patterns (sequential forward/reverse, strided 64B and 4096B tested separately, random). Measures read/write/copy bandwidth for each pattern using optimized ARM64 assembly.
 * When running with multiple loops (`-count > 1`), calculates detailed statistics including percentiles (P50/P90/P95/P99) and standard deviation for bandwidth and latency tests.
 * Automatically detects cache sizes (L1, L2) for Apple Silicon processors.
 * Uses `mmap` for memory blocks (large blocks for bandwidth/main memory latency; cache-sized blocks for cache bandwidth and latency tests).
-* Main read/write/copy and latency loops are in ARM64 assembly files (`src/asm/memory_copy.s`, `src/asm/memory_read.s`, `src/asm/memory_write.s`, `src/asm/memory_latency.s`).
+* All memory operations are implemented in optimized ARM64 assembly.
 * Uses optimized non-temporal pair instructions (`ldnp`/`stnp`) for high-throughput bandwidth tests in the assembly loop.
 * Checks latency by pointer chasing with dependent loads (`ldr x0, [x0]`) in assembly.
-* Uses multiple threads (`std::thread`) for main memory bandwidth tests (single-threaded for cache tests).
+* Uses multiple threads (`std::thread`) for main memory bandwidth tests, with thread count equal to total logical cores (performance cores + efficiency cores). Cache tests are single-threaded.
 * Uses `mach_absolute_time` for precise timing.
 * Initializes memory and does warm-ups for more stable results.
 * Save results to JSON-file
@@ -122,7 +137,7 @@ In the Terminal, go to the directory with `memory_benchmark` and use these comma
     ```
     Example output:
     ```text
-    Version: 0.48 by Timo Heimonen <timo.heimonen@proton.me>
+    Version: 0.49 by Timo Heimonen <timo.heimonen@proton.me>
     License: GNU GPL v3. See <https://www.gnu.org/licenses/>
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -146,12 +161,17 @@ In the Terminal, go to the directory with `memory_benchmark` and use these comma
                             Minimum is 16 KB (system page size). When set, skips automatic
                             L1/L2 cache size detection and only performs bandwidth and latency
                             tests for the custom cache size.
+      -patterns             Run pattern benchmarks (sequential forward/reverse, strided,
+                            and random access patterns). When set, only pattern benchmarks
+                            are executed, skipping standard bandwidth and latency tests.
+                            use with -buffersize <size_mb> to set the buffer size for the pattern benchmarks.
       -output <file>        Save benchmark results to JSON file. If path is relative,
                             file is saved in current working directory.
       -h, --help            Show this help message and exit
 
     Example: ./memory_benchmark -iterations 500 -buffersize 1024
     Example: ./memory_benchmark -cache-size 256
+    Example: ./memory_benchmark -patterns -buffersize 512
     Example: ./memory_benchmark -output results.json
     ```
 2. **Run with default parameters**
@@ -165,7 +185,7 @@ In the Terminal, go to the directory with `memory_benchmark` and use these comma
 
 ## Example output (Mac Mini M4 24GB)
 ```text
------ macOS-memory-benchmark v0.48 -----
+----- macOS-memory-benchmark v0.49 -----
 Copyright 2025 Timo Heimonen <timo.heimonen@proton.me>
 This program is free software: you can redistribute it and/or modify
 it under the terms of the GNU General Public License as published by
@@ -218,6 +238,70 @@ Cache Latency Tests (single-threaded, pointer chase):
 --------------
 
 Done. Total execution time: 43.826 s
+```
+```text
+----- macOS-memory-benchmark v0.49 -----
+Copyright 2025 Timo Heimonen <timo.heimonen@proton.me>
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU General Public License as published by
+the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+See <https://www.gnu.org/licenses/> for more details.
+
+Buffer Size (per buffer): 512.00 MiB (512 MB requested/capped)
+Total Allocation Size: ~1536.00 MiB (for 3 buffers)
+Iterations (per R/W/Copy test per loop): 1000
+Loop Count (total benchmark repetitions): 1
+
+Processor Name: Apple M4
+  Performance Cores: 4
+  Efficiency Cores: 6
+  Total CPU Cores Detected: 10
+
+Detected Cache Sizes:
+  L1 Cache Size: 128.00 KB (per P-core)
+  L2 Cache Size: 16.00 MB (per P-core cluster)
+
+Running Pattern Benchmarks...
+- Running tests...
+================================
+
+Sequential Forward:
+  Read : 115.410 GB/s
+  Write: 66.226 GB/s
+  Copy : 53.140 GB/s
+
+Sequential Reverse:
+  Read : 70.693 GB/s (-38.7%)
+  Write: 37.107 GB/s (-44.0%)
+  Copy : 44.577 GB/s (-16.1%)
+
+Strided (Cache Line - 64B):
+  Read : 35.190 GB/s (-69.5%)
+  Write: 18.697 GB/s (-71.8%)
+  Copy : 53.308 GB/s (+0.3%)
+
+Strided (Page - 4096B):
+  Read : 9.000 GB/s (-92.2%)
+  Write: 23.320 GB/s (-64.8%)
+  Copy : 13.001 GB/s (-75.5%)
+
+Random Uniform:
+  Read : 6.344 GB/s (-94.5%)
+  Write: 21.539 GB/s (-67.5%)
+  Copy : 5.582 GB/s (-89.5%)
+
+Pattern Efficiency Analysis:
+- Sequential coherence: 64.9%
+- Prefetcher effectiveness: 45.7%
+- Cache thrashing potential: High
+- TLB pressure: Minimal
+
+
+Done. Total execution time: 102.93132 s
 ```
 
 ![Mac Mini M4 Cache Latency from multiple JSON-files](pictures/MacMiniM4_cache_latency.png)  

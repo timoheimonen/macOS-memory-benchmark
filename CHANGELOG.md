@@ -7,8 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.49] - DEVELOPMENT
 
+### Added
+- **Pattern benchmarks (`-patterns` parameter)**: Added memory access pattern benchmarking to measure performance across different access patterns:
+  - **Sequential Forward**: Baseline sequential access pattern (forward direction)
+  - **Sequential Reverse**: Sequential access in reverse order (backwards)
+  - **Strided (Cache Line - 64B)**: Strided access with 64-byte stride (cache line size)
+  - **Strided (Page - 4096B)**: Strided access with 4096-byte stride (page size)
+  - **Random Uniform**: Completely random access pattern (worst case for prefetch)
+  - Each pattern measures read, write, and copy bandwidth with all memory operations implemented in optimized assembly
+  - Results include percentage differences from sequential forward baseline
+  - Pattern Efficiency Analysis provides metrics for:
+    - Sequential coherence (reverse vs forward performance)
+    - Prefetcher effectiveness (strided 64B vs sequential)
+    - Cache thrashing potential (strided 4096B performance)
+    - TLB pressure (random vs strided access)
+  - New assembly functions: `memory_*_reverse_loop_asm`, `memory_*_strided_loop_asm`, `memory_*_random_loop_asm`
+  - When `-patterns` is used, only pattern benchmarks are executed (standard bandwidth/latency tests are skipped)
+
 ### Changed
-- **Enhanced assembly source commenting**: Improved code documentation across assembly source files (`memory_copy.s`, `memory_latency.s`, `memory_read.s`, `memory_write.s`).
+- **Enhanced assembly source commenting**: Improved code documentation across all assembly source files with detailed inline comments, loop invariant documentation, and implementation notes. Applied consistent commenting style to new pattern benchmark assembly files (`memory_*_reverse.s`, `memory_*_strided.s`, `memory_*_random.s`) matching existing files (`memory_copy.s`, `memory_latency.s`, `memory_read.s`, `memory_write.s`).
 
 ### Fixed
 - **Cache latency infinity display bug**: Fixed cache latency tests (L1, L2, Custom) displaying "inf ns" instead of valid latency values. The issue was caused by division by zero when `num_accesses` was 0. Added guards in `run_cache_latency_tests()` to skip tests when access counts are invalid, and added a safety check in `run_single_cache_latency_test()` to prevent division by zero. Additionally, added infinity/NaN detection in all cache latency formatting functions (`results_cache_latency_l1_ns*`, `results_cache_latency_l2_ns*`, `results_cache_latency_custom_ns*`) to display "N/A ns" instead of "inf ns" when values are invalid, providing clearer error indication.

@@ -139,6 +139,22 @@ extern "C" {
     void memory_write_loop_asm(void* dst, size_t byteCount);
     // Pointer chasing loop for latency measurement (assembly)
     void memory_latency_chase_asm(uintptr_t* start_pointer, size_t count);
+    
+    // Pattern-specific assembly functions
+    // Reverse sequential
+    uint64_t memory_read_reverse_loop_asm(const void* src, size_t byteCount);
+    void memory_write_reverse_loop_asm(void* dst, size_t byteCount);
+    void memory_copy_reverse_loop_asm(void* dst, const void* src, size_t byteCount);
+    
+    // Strided access
+    uint64_t memory_read_strided_loop_asm(const void* src, size_t byteCount, size_t stride);
+    void memory_write_strided_loop_asm(void* dst, size_t byteCount, size_t stride);
+    void memory_copy_strided_loop_asm(void* dst, const void* src, size_t byteCount, size_t stride);
+    
+    // Random access
+    uint64_t memory_read_random_loop_asm(const void* src, const size_t* indices, size_t num_accesses);
+    void memory_write_random_loop_asm(void* dst, const size_t* indices, size_t num_accesses);
+    void memory_copy_random_loop_asm(void* dst, const void* src, const size_t* indices, size_t num_accesses);
 }
 
 #endif // BENCHMARK_H
