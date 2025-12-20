@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.48] - DEVELOPMENT
+
+### Added
+- **JSON output support**: Added `-output <file>` parameter to save benchmark results to JSON format. Results include configuration, all benchmark metrics (bandwidth and latency for main memory and cache levels), per-loop values, aggregated statistics (average, min, max, median, P90, P95, P99, stddev), and execution timestamp in ISO 8601 UTC format. JSON output uses the [nlohmann/json](https://github.com/nlohmann/json) library (MIT licensed, header-only). The output file path can be relative (saved to current working directory) or absolute, and parent directories are automatically created if needed. Implementation is organized in `src/json_output.h`/`json_output.cpp` for JSON serialization and `src/json_utils.h`/`json_utils.cpp` for statistics calculation utilities.
+- **Comprehensive unit tests for messages module**: Added `tests/test_messages.cpp` with 140 unit tests covering all message functions in the centralized messages module.
+
+### Changed
+- **Centralized all text messages**: Moved all error messages, warnings, info messages, and output text into a single place (`src/messages.h` and `src/messages.cpp`). This makes it much easier to update messages, ensures consistent formatting, and sets things up nicely if we ever want to add translations. All the main source files now pull their messages from this central location.
+
+### Fixed
+- **Test configuration bug**: Fixed unit tests in `test_benchmark_runner.cpp` that were not calling `calculate_buffer_sizes(config)` and `calculate_access_counts(config)`, causing cache buffer sizes to remain 0 and cache bandwidth/latency tests to be completely skipped. Tests now properly initialize cache buffer sizes and access counts before running benchmarks, ensuring complete test coverage of cache tests.
+- **Timing display bug**: Fixed main memory bandwidth test times displaying as "0.000 s" due to insufficient precision. Times were correctly measured and used for bandwidth calculations, but displayed with only 3 decimal places, causing very small times (< 0.0005 s) to round to zero. Increased precision to 6 decimal places for time values in `output_printer.cpp` while keeping bandwidth values at 3 decimal places, ensuring accurate time display without affecting bandwidth calculations.
+- **Buffer overflow safety**: Replaced unsafe `strcpy()` call in `test_memory_manager.cpp` with `std::strncpy()` with explicit bounds checking and null termination. The fix ensures the string copy respects buffer size limits (`buffer_size - 1`) and explicitly sets the null terminator to prevent buffer overflows and ensure proper string termination.
+
 ## [0.47] - 2025-12-15
 
 ### Added

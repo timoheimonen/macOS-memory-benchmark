@@ -19,8 +19,10 @@
 #include "buffer_manager.h"      // BenchmarkBuffers
 #include "config.h"               // BenchmarkConfig
 #include "benchmark.h"            // All benchmark functions and print functions
+#include "messages.h"             // Centralized messages
 #include <iostream>
 #include <stdexcept>
+#include <sstream>
 
 // Run a single benchmark loop and return results
 static BenchmarkResults run_single_benchmark_loop(const BenchmarkBuffers& buffers, const BenchmarkConfig& config, int loop, HighResTimer& test_timer) {
@@ -34,7 +36,7 @@ static BenchmarkResults run_single_benchmark_loop(const BenchmarkBuffers& buffer
     run_cache_latency_tests(buffers, config, timings, results, test_timer);
     run_main_memory_latency_test(buffers, config, timings, results, test_timer);
   } catch (const std::exception &e) {
-    std::cerr << "Error during benchmark tests: " << e.what() << std::endl;
+    std::cerr << Messages::error_benchmark_tests(e.what()) << std::endl;
     throw;  // Re-throw to be handled by caller
   }
 
@@ -189,7 +191,7 @@ int run_all_benchmarks(const BenchmarkBuffers& buffers, const BenchmarkConfig& c
                     config.use_custom_cache_size, loop_results.custom_latency_ns, config.custom_buffer_size,
                     loop_results.custom_read_bw_gb_s, loop_results.custom_write_bw_gb_s, loop_results.custom_copy_bw_gb_s);
     } catch (const std::exception &e) {
-      std::cerr << "Error during benchmark loop " << loop << ": " << e.what() << std::endl;
+      std::cerr << Messages::error_benchmark_loop(loop, e.what()) << std::endl;
       return EXIT_FAILURE;
     }
   }

@@ -70,9 +70,10 @@ TEST(BenchmarkRunnerTest, StatisticsClearing) {
   config.iterations = 1;
   config.loop_count = 0;  // No loops to avoid running actual benchmarks
   config.use_custom_cache_size = false;
-  config.l1_buffer_size = 0;
-  config.l2_buffer_size = 0;
-  config.lat_num_accesses = 0;
+  
+  // Calculate buffer sizes and access counts (required for cache tests)
+  calculate_buffer_sizes(config);
+  calculate_access_counts(config);
   
   // Allocate minimal buffers
   int alloc_result = allocate_all_buffers(config, buffers);
@@ -114,9 +115,10 @@ TEST(BenchmarkRunnerTest, StatisticsReservation) {
   config.iterations = 1;
   config.loop_count = 3;  // 3 loops
   config.use_custom_cache_size = false;
-  config.l1_buffer_size = 0;
-  config.l2_buffer_size = 0;
-  config.lat_num_accesses = 100;  // Small number for quick test
+  
+  // Calculate buffer sizes and access counts (required for cache tests)
+  calculate_buffer_sizes(config);
+  calculate_access_counts(config);
   
   // Allocate minimal buffers
   int alloc_result = allocate_all_buffers(config, buffers);
@@ -202,9 +204,10 @@ TEST(BenchmarkRunnerTest, ResultsValidation) {
   config.iterations = 1;
   config.loop_count = 1;  // Single loop for validation
   config.use_custom_cache_size = false;
-  config.l1_buffer_size = 0;
-  config.l2_buffer_size = 0;
-  config.lat_num_accesses = 100;  // Small number for quick test
+  
+  // Calculate buffer sizes and access counts (required for cache tests)
+  calculate_buffer_sizes(config);
+  calculate_access_counts(config);
   
   // Allocate minimal buffers
   int alloc_result = allocate_all_buffers(config, buffers);

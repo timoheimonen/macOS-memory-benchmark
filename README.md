@@ -73,6 +73,7 @@ macOS on Apple Silicon.
 * Uses multiple threads (`std::thread`) for main memory bandwidth tests (single-threaded for cache tests).
 * Uses `mach_absolute_time` for precise timing.
 * Initializes memory and does warm-ups for more stable results.
+* Save results to JSON-file
 
 ## Install with Homebrew
 
@@ -121,7 +122,7 @@ In the Terminal, go to the directory with `memory_benchmark` and use these comma
     ```
     Example output:
     ```text
-    Version: 0.47 by Timo Heimonen <timo.heimonen@proton.me>
+    Version: 0.48 by Timo Heimonen <timo.heimonen@proton.me>
     License: GNU GPL v3. See <https://www.gnu.org/licenses/>
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -145,10 +146,13 @@ In the Terminal, go to the directory with `memory_benchmark` and use these comma
                             Minimum is 16 KB (system page size). When set, skips automatic
                             L1/L2 cache size detection and only performs bandwidth and latency
                             tests for the custom cache size.
+      -output <file>        Save benchmark results to JSON file. If path is relative,
+                            file is saved in current working directory.
       -h, --help            Show this help message and exit
 
     Example: ./memory_benchmark -iterations 500 -buffersize 1024
     Example: ./memory_benchmark -cache-size 256
+    Example: ./memory_benchmark -output results.json
     ```
 2. **Run with default parameters**
     ```bash
@@ -161,7 +165,7 @@ In the Terminal, go to the directory with `memory_benchmark` and use these comma
 
 ## Example output (Mac Mini M4 24GB)
 ```text
------ macOS-memory-benchmark v0.47 -----
+----- macOS-memory-benchmark v0.48 -----
 Copyright 2025 Timo Heimonen <timo.heimonen@proton.me>
 This program is free software: you can redistribute it and/or modify
 it under the terms of the GNU General Public License as published by

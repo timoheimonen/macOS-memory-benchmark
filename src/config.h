@@ -53,6 +53,9 @@ struct BenchmarkConfig {
   
   // Flags
   bool use_custom_cache_size = false;
+  
+  // Output file
+  std::string output_file;  // JSON output file path (empty = no JSON output)
 };
 
 // Parse command line arguments and populate config

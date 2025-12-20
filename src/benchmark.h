@@ -37,7 +37,7 @@
 #include <mach/mach_time.h>
 
 // --- Version Information ---
-#define SOFTVERSION 0.47f // Software version
+#define SOFTVERSION 0.48f // Software version
 
 // --- High-resolution timer helper ---
 struct HighResTimer {
@@ -49,6 +49,10 @@ struct HighResTimer {
     double stop();  // Stop timer, return seconds
     double stop_ns(); // Stop timer, return nanoseconds
 };
+
+// Forward declarations
+struct BenchmarkConfig;
+struct BenchmarkStatistics;
 
 // --- System Info Functions (system_info.cpp) ---
 int get_performance_cores();          // Get number of performance cores

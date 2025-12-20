@@ -16,10 +16,12 @@
 #include "config.h"
 #include "benchmark.h"
 #include "constants.h"
+#include "messages.h"
 #include <iostream>
 #include <limits>
 #include <stdexcept>
 #include <unistd.h>  // getpagesize
+#include <sstream>
 
 int parse_arguments(int argc, char* argv[], BenchmarkConfig& config) {
   long long requested_buffer_size_mb_ll = -1;  // User requested size (-1 = none)
@@ -32,17 +34,17 @@ int parse_arguments(int argc, char* argv[], BenchmarkConfig& config) {
         if (++i < argc) {
           long long val_ll = std::stoll(argv[i]);
           if (val_ll <= 0 || val_ll < Constants::MIN_CACHE_SIZE_KB || val_ll > Constants::MAX_CACHE_SIZE_KB)
-            throw std::out_of_range("cache-size invalid (must be between " + std::to_string(Constants::MIN_CACHE_SIZE_KB) + " KB and " + std::to_string(Constants::MAX_CACHE_SIZE_KB) + " KB (" + std::to_string(Constants::MAX_CACHE_SIZE_KB / 1024) + " MB))");
+            throw std::out_of_range(Messages::error_cache_size_invalid(Constants::MIN_CACHE_SIZE_KB, Constants::MAX_CACHE_SIZE_KB, Constants::MAX_CACHE_SIZE_KB / 1024));
           config.custom_cache_size_kb_ll = val_ll;
         } else
-          throw std::invalid_argument("Missing value for -cache-size");
+          throw std::invalid_argument(Messages::error_missing_value("-cache-size"));
       }
     } catch (const std::invalid_argument &e) {
-      std::cerr << "Error: " << e.what() << std::endl;
+      std::cerr << Messages::error_prefix() << e.what() << std::endl;
       print_usage(argv[0]);
       return EXIT_FAILURE;
     } catch (const std::out_of_range &e) {
-      std::cerr << "Error: Invalid value for " << arg << ": " << argv[i] << " (" << e.what() << ")" << std::endl;
+      std::cerr << Messages::error_prefix() << Messages::error_invalid_value(arg, argv[i], e.what()) << std::endl;
       print_usage(argv[0]);
       return EXIT_FAILURE;
     }
@@ -78,51 +80,56 @@ int parse_arguments(int argc, char* argv[], BenchmarkConfig& config) {
         if (++i < argc) {
           long long val_ll = std::stoll(argv[i]);
           if (val_ll <= 0 || val_ll > std::numeric_limits<int>::max())
-            throw std::out_of_range("iterations invalid");
+            throw std::out_of_range(Messages::error_iterations_invalid());
           config.iterations = static_cast<int>(val_ll);
         } else
-          throw std::invalid_argument("Missing value for -iterations");
+          throw std::invalid_argument(Messages::error_missing_value("-iterations"));
       } else if (arg == "-buffersize") {
         if (++i < argc) {
           long long val_ll = std::stoll(argv[i]);
           if (val_ll <= 0 || val_ll > std::numeric_limits<unsigned long>::max())
-            throw std::out_of_range("buffersize invalid");
+            throw std::out_of_range(Messages::error_buffersize_invalid());
           requested_buffer_size_mb_ll = val_ll;
         } else
-          throw std::invalid_argument("Missing value for -buffersize");
+          throw std::invalid_argument(Messages::error_missing_value("-buffersize"));
       } else if (arg == "-count") {
         if (++i < argc) {
           long long val_ll = std::stoll(argv[i]);
           if (val_ll <= 0 || val_ll > std::numeric_limits<int>::max())
-            throw std::out_of_range("count invalid");
+            throw std::out_of_range(Messages::error_count_invalid());
           config.loop_count = static_cast<int>(val_ll);
         } else
-          throw std::invalid_argument("Missing value for -count");
+          throw std::invalid_argument(Messages::error_missing_value("-count"));
       } else if (arg == "-latency-samples") {
         if (++i < argc) {
           long long val_ll = std::stoll(argv[i]);
           if (val_ll <= 0 || val_ll > std::numeric_limits<int>::max())
-            throw std::out_of_range("latency-samples invalid");
+            throw std::out_of_range(Messages::error_latency_samples_invalid());
           config.latency_sample_count = static_cast<int>(val_ll);
         } else
-          throw std::invalid_argument("Missing value for -latency-samples");
+          throw std::invalid_argument(Messages::error_missing_value("-latency-samples"));
       } else if (arg == "-cache-size") {
         if (++i < argc) {
           // Already parsed in first pass, just skip the value
         } else
-          throw std::invalid_argument("Missing value for -cache-size");
+          throw std::invalid_argument(Messages::error_missing_value("-cache-size"));
+      } else if (arg == "-output") {
+        if (++i < argc) {
+          config.output_file = argv[i];
+        } else
+          throw std::invalid_argument(Messages::error_missing_value("-output"));
       } else if (arg == "-h" || arg == "--help") {
         print_usage(argv[0]);
         return EXIT_SUCCESS;  // Special return value for help
       } else {
-        throw std::invalid_argument("Unknown option: " + arg);
+        throw std::invalid_argument(Messages::error_unknown_option(arg));
       }
     } catch (const std::invalid_argument &e) {
-      std::cerr << "Error: " << e.what() << std::endl;
+      std::cerr << Messages::error_prefix() << e.what() << std::endl;
       print_usage(argv[0]);
       return EXIT_FAILURE;
     } catch (const std::out_of_range &e) {
-      std::cerr << "Error: Invalid value for " << arg << ": " << argv[i] << " (" << e.what() << ")" << std::endl;
+      std::cerr << Messages::error_prefix() << Messages::error_invalid_value(arg, argv[i], e.what()) << std::endl;
       print_usage(argv[0]);
       return EXIT_FAILURE;
     }
@@ -146,21 +153,19 @@ int validate_config(BenchmarkConfig& config) {
     unsigned long max_total_allowed_mb = static_cast<unsigned long>(available_mem_mb * Constants::MEMORY_LIMIT_FACTOR);
     max_allowed_mb_per_buffer = max_total_allowed_mb / 3;
   } else {
-    std::cerr << "Warning: Cannot get available memory. Using fallback limit." << std::endl;
+    std::cerr << Messages::warning_cannot_get_memory() << std::endl;
     max_allowed_mb_per_buffer = Constants::FALLBACK_TOTAL_LIMIT_MB / 3;
-    std::cout << "Info: Setting max per buffer to fallback: " << max_allowed_mb_per_buffer << " MB." << std::endl;
+    std::cout << Messages::info_setting_max_fallback(max_allowed_mb_per_buffer) << std::endl;
   }
   
   if (max_allowed_mb_per_buffer < Constants::MINIMUM_LIMIT_MB_PER_BUFFER) {
-    std::cout << "Info: Calculated max (" << max_allowed_mb_per_buffer << " MB) < min (" << Constants::MINIMUM_LIMIT_MB_PER_BUFFER
-              << " MB). Using min." << std::endl;
+    std::cout << Messages::info_calculated_max_less_than_min(max_allowed_mb_per_buffer, Constants::MINIMUM_LIMIT_MB_PER_BUFFER) << std::endl;
     max_allowed_mb_per_buffer = Constants::MINIMUM_LIMIT_MB_PER_BUFFER;
   }
 
   // Validate and cap buffer size
   if (config.buffer_size_mb > max_allowed_mb_per_buffer) {
-    std::cerr << "Warning: Requested buffer size (" << config.buffer_size_mb << " MB) > limit ("
-              << max_allowed_mb_per_buffer << " MB). Using limit." << std::endl;
+    std::cerr << Messages::warning_buffer_size_exceeds_limit(config.buffer_size_mb, max_allowed_mb_per_buffer) << std::endl;
     config.buffer_size_mb = max_allowed_mb_per_buffer;
   }
 
@@ -171,12 +176,12 @@ int validate_config(BenchmarkConfig& config) {
   size_t page_size = getpagesize();
   
   if (config.buffer_size_mb > 0 && (config.buffer_size == 0 || config.buffer_size / Constants::BYTES_PER_MB != config.buffer_size_mb)) {
-    std::cerr << "Error: Buffer size calculation error (" << config.buffer_size_mb << " MB)." << std::endl;
+    std::cerr << Messages::error_prefix() << Messages::error_buffer_size_calculation(config.buffer_size_mb) << std::endl;
     return EXIT_FAILURE;
   }
   
   if (config.buffer_size < page_size || config.buffer_size < Constants::MIN_LATENCY_BUFFER_SIZE) {
-    std::cerr << "Error: Final buffer size (" << config.buffer_size << " bytes) is too small." << std::endl;
+    std::cerr << Messages::error_prefix() << Messages::error_buffer_size_too_small(config.buffer_size) << std::endl;
     return EXIT_FAILURE;
   }
 
@@ -201,8 +206,7 @@ void calculate_buffer_sizes(BenchmarkConfig& config) {
       size_t original_size_kb = config.custom_cache_size_bytes / Constants::BYTES_PER_KB;
       size_t rounded_size_kb = page_size_check / Constants::BYTES_PER_KB;
       if (original_size_kb < rounded_size_kb) {
-        std::cout << "Info: Custom cache size (" << original_size_kb << " KB) rounded up to " 
-                  << rounded_size_kb << " KB (system page size)" << std::endl;
+        std::cout << Messages::info_custom_cache_rounded_up(original_size_kb, rounded_size_kb) << std::endl;
       }
       config.custom_buffer_size = page_size_check;
     }
