@@ -221,6 +221,7 @@ Done. Total execution time: 43.826 s
 ```
 
 ![Mac Mini M4 Cache Latency from multiple JSON-files](pictures/MacMiniM4_cache_latency.png)
+Mac Mini M4 Cache Latency from multiple JSON-files
 
 ## Known Issues and Limitations
 
