@@ -97,26 +97,30 @@ void run_single_cache_latency_test(void* buffer, size_t buffer_size, size_t num_
   show_progress();
   warmup_cache_latency(buffer, buffer_size);
   lat_time_ns = run_cache_latency_test(buffer, buffer_size, num_accesses, test_timer, latency_samples, sample_count);
-  latency_ns = lat_time_ns / static_cast<double>(num_accesses);
+  if (num_accesses > 0) {
+    latency_ns = lat_time_ns / static_cast<double>(num_accesses);
+  } else {
+    latency_ns = 0.0;  // Avoid division by zero
+  }
 }
 
 // Run cache latency tests (L1, L2, or custom)
 void run_cache_latency_tests(const BenchmarkBuffers& buffers, const BenchmarkConfig& config,
                              TimingResults& timings, BenchmarkResults& results, HighResTimer& test_timer) {
   if (config.use_custom_cache_size) {
-    if (config.custom_buffer_size > 0 && buffers.custom_buffer() != nullptr) {
+    if (config.custom_buffer_size > 0 && buffers.custom_buffer() != nullptr && config.custom_num_accesses > 0) {
       run_single_cache_latency_test(buffers.custom_buffer(), config.custom_buffer_size, config.custom_num_accesses,
                                     test_timer, timings.custom_lat_time_ns, results.custom_latency_ns,
                                     &results.custom_latency_samples, config.latency_sample_count);
     }
   } else {
-    if (config.l1_buffer_size > 0 && buffers.l1_buffer() != nullptr) {
+    if (config.l1_buffer_size > 0 && buffers.l1_buffer() != nullptr && config.l1_num_accesses > 0) {
       run_single_cache_latency_test(buffers.l1_buffer(), config.l1_buffer_size, config.l1_num_accesses,
                                     test_timer, timings.l1_lat_time_ns, results.l1_latency_ns,
                                     &results.l1_latency_samples, config.latency_sample_count);
     }
     
-    if (config.l2_buffer_size > 0 && buffers.l2_buffer() != nullptr) {
+    if (config.l2_buffer_size > 0 && buffers.l2_buffer() != nullptr && config.l2_num_accesses > 0) {
       run_single_cache_latency_test(buffers.l2_buffer(), config.l2_buffer_size, config.l2_num_accesses,
                                     test_timer, timings.l2_lat_time_ns, results.l2_latency_ns,
                                     &results.l2_latency_samples, config.latency_sample_count);

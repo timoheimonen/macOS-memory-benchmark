@@ -5,7 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.48] - DEVELOPMENT
+## [0.49] - DEVELOPMENT
+
+### Fixed
+- **Cache latency infinity display bug**: Fixed cache latency tests (L1, L2, Custom) displaying "inf ns" instead of valid latency values. The issue was caused by division by zero when `num_accesses` was 0. Added guards in `run_cache_latency_tests()` to skip tests when access counts are invalid, and added a safety check in `run_single_cache_latency_test()` to prevent division by zero. Additionally, added infinity/NaN detection in all cache latency formatting functions (`results_cache_latency_l1_ns*`, `results_cache_latency_l2_ns*`, `results_cache_latency_custom_ns*`) to display "N/A ns" instead of "inf ns" when values are invalid, providing clearer error indication.
+
+## [0.48] - 2025-12-20
 
 ### Added
 - **JSON output support**: Added `-output <file>` parameter to save benchmark results to JSON format. Results include configuration, all benchmark metrics (bandwidth and latency for main memory and cache levels), per-loop values, aggregated statistics (average, min, max, median, P90, P95, P99, stddev), and execution timestamp in ISO 8601 UTC format. JSON output uses the [nlohmann/json](https://github.com/nlohmann/json) library (MIT licensed, header-only). The output file path can be relative (saved to current working directory) or absolute, and parent directories are automatically created if needed. Implementation is organized in `src/json_output.h`/`json_output.cpp` for JSON serialization and `src/json_utils.h`/`json_utils.cpp` for statistics calculation utilities.
