@@ -16,16 +16,20 @@
 #include <mach/mach_error.h>  // For mach_error_string
 #include <mach/mach_time.h>   // For mach_absolute_time, mach_timebase_info
 
-#include <cstdio>   // For perror
 #include <cstdlib>  // For exit, EXIT_FAILURE
+#include <iostream> // For std::cerr
 
 #include "benchmark.h"
+#include "messages.h"
 
 // Constructor: Initializes the timer by getting the timebase info.
 HighResTimer::HighResTimer() {
   // Get the timebase info for converting ticks to nanoseconds.
-  if (mach_timebase_info(&timebase_info) != KERN_SUCCESS) {
-    perror("mach_timebase_info failed");
+  kern_return_t kern_ret = mach_timebase_info(&timebase_info);
+  if (kern_ret != KERN_SUCCESS) {
+    std::cerr << Messages::error_prefix() 
+              << Messages::error_mach_timebase_info_failed(mach_error_string(kern_ret)) 
+              << std::endl;
     // Could also throw an exception here instead of exiting.
     exit(EXIT_FAILURE);
   }

@@ -17,12 +17,15 @@
 #include <mach/mach_host.h>   // For host_statistics64, mach_host_self, host_page_size
 #include <sys/sysctl.h>       // For sysctlbyname
 
-#include <cstdio>   // For perror
+#include <cstring>   // For strerror
 #include <iostream>  // For std::cerr
 #include <thread>   // For std::thread::hardware_concurrency
 #include <vector>   // For std::vector
+#include <cerrno>   // For errno
 
 #include "benchmark.h"
+#include "constants.h"
+#include "messages.h"
 
 // Gets the number of logical Performance cores using sysctl.
 int get_performance_cores() {
@@ -82,7 +85,7 @@ int get_total_logical_cores() {
   if (hc > 0) return hc;
 
   // If all methods fail, print a warning and return 1.
-  std::cerr << "Warning: Failed to detect core count, defaulting to 1." << std::endl;
+  std::cerr << Messages::warning_core_count_detection_failed() << std::endl;
   return 1;
 }
 
@@ -91,7 +94,9 @@ std::string get_processor_name() {
   size_t len = 0;
   // First call to get the size of the string.
   if (sysctlbyname("machdep.cpu.brand_string", NULL, &len, NULL, 0) == -1) {
-    perror("sysctlbyname (get size) failed for machdep.cpu.brand_string");
+    std::cerr << Messages::error_prefix() 
+              << Messages::error_sysctlbyname_failed("get size", "machdep.cpu.brand_string")
+              << ": " << strerror(errno) << std::endl;
     return "";  // Return empty string on error.
   }
 
@@ -99,7 +104,9 @@ std::string get_processor_name() {
     std::vector<char> buffer(len);
     // Second call to get the actual string data.
     if (sysctlbyname("machdep.cpu.brand_string", buffer.data(), &len, NULL, 0) == -1) {
-      perror("sysctlbyname (get data) failed for machdep.cpu.brand_string");
+      std::cerr << Messages::error_prefix() 
+                << Messages::error_sysctlbyname_failed("get data", "machdep.cpu.brand_string")
+                << ": " << strerror(errno) << std::endl;
       return "";  // Return empty string on error.
     }
     // Create string, excluding potential null terminator if included in len.
@@ -112,7 +119,7 @@ std::string get_processor_name() {
 unsigned long get_available_memory_mb() {
   mach_port_t host_port = mach_host_self();  // Get the host port.
   if (host_port == MACH_PORT_NULL) {
-    std::cerr << "Warning: Failed to get mach_host_self(). Cannot determine available memory." << std::endl;
+    std::cerr << Messages::warning_mach_host_self_failed() << std::endl;
     return 0;
   }
 
@@ -120,8 +127,7 @@ unsigned long get_available_memory_mb() {
   // Get the system page size.
   kern_return_t kern_ret = host_page_size(host_port, &page_size_local);
   if (kern_ret != KERN_SUCCESS || page_size_local == 0) {
-    std::cerr << "Warning: Failed to get host_page_size(): " << mach_error_string(kern_ret)
-              << ". Cannot determine available memory." << std::endl;
+    std::cerr << Messages::warning_host_page_size_failed(mach_error_string(kern_ret)) << std::endl;
     return 0;
   }
 
@@ -130,17 +136,15 @@ unsigned long get_available_memory_mb() {
   // Get virtual memory statistics.
   kern_ret = host_statistics64(host_port, HOST_VM_INFO64, (host_info64_t)&vm_stats, &info_count);
   if (kern_ret != KERN_SUCCESS) {
-    std::cerr << "Warning: Failed to get host_statistics64(): " << mach_error_string(kern_ret)
-              << ". Cannot determine available memory." << std::endl;
+    std::cerr << Messages::warning_host_statistics64_failed(mach_error_string(kern_ret)) << std::endl;
     return 0;
   }
 
   // Calculate available memory (free + inactive pages) in bytes.
   // Inactive pages can be reclaimed by the OS when needed.
   uint64_t available_bytes = static_cast<uint64_t>(vm_stats.free_count + vm_stats.inactive_count) * page_size_local;
-  const uint64_t bytes_per_mb = 1024 * 1024;
   // Convert bytes to MB.
-  unsigned long available_mb = static_cast<unsigned long>(available_bytes / bytes_per_mb);
+  unsigned long available_mb = static_cast<unsigned long>(available_bytes / Constants::BYTES_PER_MB);
   return available_mb;
 }
 
@@ -154,8 +158,8 @@ size_t get_l1_cache_size() {
     return l1_size;  // Return detected size.
   }
   // Fallback: Use typical Apple Silicon P-core L1 size (128 KB).
-  std::cerr << "Warning: Could not detect L1 cache size, using fallback: 128 KB" << std::endl;
-  return 128 * 1024;  // 128 KB in bytes.
+  std::cerr << Messages::warning_l1_cache_size_detection_failed() << std::endl;
+  return Constants::L1_CACHE_FALLBACK_SIZE_BYTES;
 }
 
 // Gets the L2 cache size for performance cores using sysctl.
@@ -170,14 +174,14 @@ size_t get_l2_cache_size() {
   // Fallback: Try to infer from processor name, otherwise use conservative estimate.
   std::string cpu_name = get_processor_name();
   if (cpu_name.find("M1") != std::string::npos) {
-    std::cerr << "Warning: Could not detect L2 cache size, using M1 fallback: 12 MB" << std::endl;
-    return 12 * 1024 * 1024;  // M1: 12 MB per P-core cluster.
+    std::cerr << Messages::warning_l2_cache_size_detection_failed_m1() << std::endl;
+    return Constants::L2_CACHE_M1_FALLBACK_SIZE_BYTES;
   } else if (cpu_name.find("M2") != std::string::npos || cpu_name.find("M3") != std::string::npos ||
              cpu_name.find("M4") != std::string::npos || cpu_name.find("M5") != std::string::npos) {
-    std::cerr << "Warning: Could not detect L2 cache size, using M2/M3/M4/M5 fallback: 16 MB" << std::endl;
-    return 16 * 1024 * 1024;  // M2/M3/M4/M5: 16 MB per P-core cluster.
+    std::cerr << Messages::warning_l2_cache_size_detection_failed_m2_m3_m4_m5() << std::endl;
+    return Constants::L2_CACHE_M2_M3_M4_M5_FALLBACK_SIZE_BYTES;
   }
   // Generic fallback.
-  std::cerr << "Warning: Could not detect L2 cache size, using generic fallback: 16 MB" << std::endl;
-  return 16 * 1024 * 1024;  // 16 MB in bytes.
+  std::cerr << Messages::warning_l2_cache_size_detection_failed_generic() << std::endl;
+  return Constants::L2_CACHE_GENERIC_FALLBACK_SIZE_BYTES;
 }

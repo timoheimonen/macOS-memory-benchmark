@@ -14,7 +14,7 @@
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 //
 #include <gtest/gtest.h>
-#include "pattern_benchmark.h"
+#include "pattern_benchmark/pattern_benchmark.h"
 #include "buffer_manager.h"
 #include "config.h"
 #include "benchmark.h"  // Declares system_info functions

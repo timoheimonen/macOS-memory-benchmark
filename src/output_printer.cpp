@@ -39,12 +39,13 @@ void print_usage(const char *prog_name) {
 // 'buffer_size_mb': The requested/capped buffer size in Megabytes.
 // 'iterations': Number of iterations per bandwidth test per loop.
 // 'loop_count': How many times the entire set of tests will be repeated.
+// 'use_non_cacheable': Flag indicating if non-cacheable memory hints are enabled.
 // 'cpu_name': Detected processor name string.
 // 'perf_cores': Number of detected performance cores.
 // 'eff_cores': Number of detected efficiency cores.
 // 'num_threads': Total number of threads used for bandwidth tests (usually equals total cores).
 void print_configuration(size_t buffer_size, size_t buffer_size_mb, int iterations, int loop_count,
-                         const std::string &cpu_name, int perf_cores, int eff_cores, int num_threads) {
+                         bool use_non_cacheable, const std::string &cpu_name, int perf_cores, int eff_cores, int num_threads) {
   // Print benchmark header and copyright/license info.
   std::ostringstream version_str;
   version_str << SOFTVERSION;
@@ -58,6 +59,8 @@ void print_configuration(size_t buffer_size, size_t buffer_size_mb, int iteratio
   // Display test repetition counts.
   std::cout << Messages::config_iterations(iterations) << std::endl;
   std::cout << Messages::config_loop_count(loop_count) << std::endl;
+  // Display non-cacheable memory hints status.
+  std::cout << Messages::config_non_cacheable(use_non_cacheable) << std::endl;
   // Display CPU information if successfully retrieved.
   if (!cpu_name.empty()) {
     std::cout << Messages::config_processor_name(cpu_name) << std::endl;

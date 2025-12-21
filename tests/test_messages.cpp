@@ -343,7 +343,7 @@ TEST_F(MessagesFormattingTest, UsageExample) {
   EXPECT_NE(msg.find("memory_benchmark"), std::string::npos);
   EXPECT_NE(msg.find("-iterations"), std::string::npos);
   EXPECT_NE(msg.find("-buffersize"), std::string::npos);
-  EXPECT_NE(msg.find("-cache-size"), std::string::npos);
+  EXPECT_NE(msg.find("-output"), std::string::npos);
 }
 
 // ============================================================================
@@ -394,6 +394,18 @@ TEST_F(MessagesFormattingTest, ConfigLoopCount) {
   std::string msg = Messages::config_loop_count(5);
   EXPECT_NE(msg.find("5"), std::string::npos);
   EXPECT_NE(msg.find("Loop Count"), std::string::npos);
+}
+
+TEST_F(MessagesFormattingTest, ConfigNonCacheable) {
+  // Test enabled
+  std::string msg = Messages::config_non_cacheable(true);
+  EXPECT_NE(msg.find("Non-Cacheable Memory Hints"), std::string::npos);
+  EXPECT_NE(msg.find("Enabled"), std::string::npos);
+  
+  // Test disabled
+  msg = Messages::config_non_cacheable(false);
+  EXPECT_NE(msg.find("Non-Cacheable Memory Hints"), std::string::npos);
+  EXPECT_NE(msg.find("Disabled"), std::string::npos);
 }
 
 TEST_F(MessagesFormattingTest, ConfigProcessorName) {

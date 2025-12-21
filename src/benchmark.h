@@ -37,7 +37,7 @@
 #include <mach/mach_time.h>
 
 // --- Version Information ---
-#define SOFTVERSION 0.49f // Software version
+#define SOFTVERSION 0.50f // Software version
 
 // --- High-resolution timer helper ---
 struct HighResTimer {
@@ -67,15 +67,8 @@ size_t get_l2_cache_size();           // Get L2 cache size for performance cores
 void setup_latency_chain(void* buffer, size_t buffer_size, size_t stride); // Prepare buffer for latency test
 void initialize_buffers(void* src_buffer, void* dst_buffer, size_t buffer_size); // Initialize data buffers
 
-// --- Warmup Functions (warmup.cpp) ---
-void warmup_read(void* buffer, size_t size, int num_threads, std::atomic<uint64_t>& dummy_checksum); // Warmup for read tests
-void warmup_write(void* buffer, size_t size, int num_threads); // Warmup for write tests
-void warmup_copy(void* dst, void* src, size_t size, int num_threads); // Warmup for copy tests
-void warmup_latency(void* buffer, size_t buffer_size); // Warmup for latency tests (page prefaulting)
-void warmup_cache_latency(void* buffer, size_t buffer_size); // Warmup for cache latency tests (page prefaulting)
-void warmup_cache_read(void* src_buffer, size_t size, int num_threads, std::atomic<uint64_t>& dummy_checksum); // Warmup for cache read tests
-void warmup_cache_write(void* dst_buffer, size_t size, int num_threads); // Warmup for cache write tests
-void warmup_cache_copy(void* dst, void* src, size_t size, int num_threads); // Warmup for cache copy tests
+// --- Warmup Functions (warmup/) ---
+#include "warmup/warmup.h"
 
 // --- Benchmark Test Functions (benchmark_tests.cpp) ---
 double run_read_test(void* buffer, size_t size, int iterations, int num_threads, std::atomic<uint64_t>& checksum, HighResTimer& timer); // Run read benchmark
@@ -90,7 +83,7 @@ void show_progress(); // Show progress indicator (spinner)
 
 // --- Output/Printing Functions (output_printer.cpp) ---
 void print_usage(const char* prog_name); // Print command-line usage instructions
-void print_configuration(size_t buffer_size, size_t buffer_size_mb, int iterations, int loop_count, const std::string& cpu_name, int perf_cores, int eff_cores, int num_threads); // Print benchmark setup details
+void print_configuration(size_t buffer_size, size_t buffer_size_mb, int iterations, int loop_count, bool use_non_cacheable, const std::string& cpu_name, int perf_cores, int eff_cores, int num_threads); // Print benchmark setup details
 void print_results(int loop, size_t buffer_size, size_t buffer_size_mb, int iterations, int num_threads,
     double read_bw_gb_s, double total_read_time,
     double write_bw_gb_s, double total_write_time,
