@@ -14,6 +14,7 @@
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 //
 #include "messages/messages.h"
+#include "constants.h"
 #include <sstream>
 #include <iomanip>
 
@@ -27,12 +28,12 @@ std::string cache_info_header() {
 std::string cache_size_custom(size_t size_bytes) {
   std::ostringstream oss;
   oss << "  Custom Cache Size: ";
-  if (size_bytes < 1024) {
+  if (size_bytes < Constants::BYTES_PER_KB) {
     oss << size_bytes << " B";
-  } else if (size_bytes < 1024 * 1024) {
-    oss << std::fixed << std::setprecision(2) << size_bytes / 1024.0 << " KB";
+  } else if (size_bytes < Constants::BYTES_PER_MB) {
+    oss << std::fixed << std::setprecision(2) << size_bytes / static_cast<double>(Constants::BYTES_PER_KB) << " KB";
   } else {
-    oss << std::fixed << std::setprecision(2) << size_bytes / (1024.0 * 1024.0) << " MB";
+    oss << std::fixed << std::setprecision(2) << size_bytes / static_cast<double>(Constants::BYTES_PER_MB) << " MB";
   }
   return oss.str();
 }
@@ -40,12 +41,12 @@ std::string cache_size_custom(size_t size_bytes) {
 std::string cache_size_l1(size_t size_bytes) {
   std::ostringstream oss;
   oss << "  L1 Cache Size: ";
-  if (size_bytes < 1024) {
+  if (size_bytes < Constants::BYTES_PER_KB) {
     oss << size_bytes << " B (per P-core)";
-  } else if (size_bytes < 1024 * 1024) {
-    oss << std::fixed << std::setprecision(2) << size_bytes / 1024.0 << " KB (per P-core)";
+  } else if (size_bytes < Constants::BYTES_PER_MB) {
+    oss << std::fixed << std::setprecision(2) << size_bytes / static_cast<double>(Constants::BYTES_PER_KB) << " KB (per P-core)";
   } else {
-    oss << std::fixed << std::setprecision(2) << size_bytes / (1024.0 * 1024.0) << " MB (per P-core)";
+    oss << std::fixed << std::setprecision(2) << size_bytes / static_cast<double>(Constants::BYTES_PER_MB) << " MB (per P-core)";
   }
   return oss.str();
 }
@@ -53,12 +54,12 @@ std::string cache_size_l1(size_t size_bytes) {
 std::string cache_size_l2(size_t size_bytes) {
   std::ostringstream oss;
   oss << "  L2 Cache Size: ";
-  if (size_bytes < 1024) {
+  if (size_bytes < Constants::BYTES_PER_KB) {
     oss << size_bytes << " B (per P-core cluster)";
-  } else if (size_bytes < 1024 * 1024) {
-    oss << std::fixed << std::setprecision(2) << size_bytes / 1024.0 << " KB (per P-core cluster)";
+  } else if (size_bytes < Constants::BYTES_PER_MB) {
+    oss << std::fixed << std::setprecision(2) << size_bytes / static_cast<double>(Constants::BYTES_PER_KB) << " KB (per P-core cluster)";
   } else {
-    oss << std::fixed << std::setprecision(2) << size_bytes / (1024.0 * 1024.0) << " MB (per P-core cluster)";
+    oss << std::fixed << std::setprecision(2) << size_bytes / static_cast<double>(Constants::BYTES_PER_MB) << " MB (per P-core cluster)";
   }
   return oss.str();
 }

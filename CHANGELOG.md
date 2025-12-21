@@ -35,6 +35,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Pattern benchmarking (`src/pattern_benchmark.cpp`, 655 lines) was reorganized into `src/pattern_benchmark/`.
   Warmup functionality (`src/warmup.cpp`, 526 lines) was split into `src/warmup/`.
   JSON output (`src/json_output.cpp`, 484 lines) was reorganized into `src/json_output/`.
+- **Magic number elimination**: Replaced hardcoded magic numbers with named constants from `constants.h`:
+  - **Cache messages**: Replaced hardcoded `1024` and `1024 * 1024` byte conversion values in `cache_messages.cpp` with `Constants::BYTES_PER_KB` and `Constants::BYTES_PER_MB`
+  - **System info**: Replaced hardcoded `1024 * 1024` bytes-per-MB conversion and cache fallback sizes (128 KB, 12 MB, 16 MB) in `system_info.cpp` with `Constants::BYTES_PER_MB` and new cache fallback constants (`L1_CACHE_FALLBACK_SIZE_BYTES`, `L2_CACHE_M1_FALLBACK_SIZE_BYTES`, `L2_CACHE_M2_M3_M4_M5_FALLBACK_SIZE_BYTES`, `L2_CACHE_GENERIC_FALLBACK_SIZE_BYTES`)
+  - **Progress spinner**: Replaced hardcoded `4` in `utils.cpp` with `sizeof()`-based calculation for maintainability
+  - Added new constants to `constants.h` for cache fallback sizes and UI constants
 
 
 ## [0.49] - 2025-12-20

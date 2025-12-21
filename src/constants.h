@@ -85,6 +85,15 @@ namespace Constants {
   constexpr double PATTERN_TLB_PRESSURE_MODERATE_THRESHOLD = 20.0;  // TLB pressure moderate threshold (percentage)
   constexpr int PATTERN_PERCENTAGE_PRECISION = 1;  // Decimal places for percentage values
   constexpr int PATTERN_BANDWIDTH_PRECISION = 3;  // Decimal places for bandwidth values in pattern results
+  
+  // Cache fallback sizes (bytes) - used when cache detection fails
+  constexpr size_t L1_CACHE_FALLBACK_SIZE_BYTES = 128 * 1024;  // 128 KB - typical Apple Silicon P-core L1 size
+  constexpr size_t L2_CACHE_M1_FALLBACK_SIZE_BYTES = 12 * 1024 * 1024;  // 12 MB - M1 L2 cache per P-core cluster
+  constexpr size_t L2_CACHE_M2_M3_M4_M5_FALLBACK_SIZE_BYTES = 16 * 1024 * 1024;  // 16 MB - M2/M3/M4/M5 L2 cache per P-core cluster
+  constexpr size_t L2_CACHE_GENERIC_FALLBACK_SIZE_BYTES = 16 * 1024 * 1024;  // 16 MB - generic fallback L2 cache size
+  
+  // UI constants
+  constexpr size_t SPINNER_CHARACTER_COUNT = 4;  // Number of characters in progress spinner
 }
 
 #endif // CONSTANTS_H

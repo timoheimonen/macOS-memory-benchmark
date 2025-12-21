@@ -27,7 +27,7 @@ static std::atomic<int> spinner_counter{0};
 static const char spinner_chars[] = {'|', '/', '-', '\\'};
 
 void show_progress() {
-  int idx = spinner_counter.fetch_add(1, std::memory_order_relaxed) % 4;
+  int idx = spinner_counter.fetch_add(1, std::memory_order_relaxed) % (sizeof(spinner_chars) / sizeof(spinner_chars[0]));
   std::cout << '\r' << spinner_chars[idx] << " Running tests... " << std::flush;
 }
 
