@@ -14,10 +14,10 @@
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 //
 #include <gtest/gtest.h>
-#include "buffer_manager.h"
-#include "config.h"
-#include "constants.h"
-#include "benchmark.h"  // Declares system_info functions
+#include "core/memory/buffer_manager.h"
+#include "core/config/config.h"
+#include "core/config/constants.h"
+#include "utils/benchmark.h"  // Declares system_info functions
 #include <cstdlib>
 
 // Test buffer allocation with valid config

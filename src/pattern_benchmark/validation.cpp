@@ -14,8 +14,8 @@
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 //
 #include "pattern_benchmark/pattern_benchmark.h"
-#include "constants.h"
-#include "messages.h"
+#include "core/config/constants.h"
+#include "output/console/messages.h"
 #include <iostream>
 #include <algorithm>
 

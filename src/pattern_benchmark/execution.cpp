@@ -14,11 +14,11 @@
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 //
 #include "pattern_benchmark/pattern_benchmark.h"
-#include "benchmark.h"
-#include "buffer_manager.h"
-#include "config.h"
-#include "constants.h"
-#include "messages.h"
+#include "utils/benchmark.h"
+#include "core/memory/buffer_manager.h"
+#include "core/config/config.h"
+#include "core/config/constants.h"
+#include "output/console/messages.h"
 #include <iostream>
 #include <random>
 #include <algorithm>

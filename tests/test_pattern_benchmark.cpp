@@ -15,10 +15,10 @@
 //
 #include <gtest/gtest.h>
 #include "pattern_benchmark/pattern_benchmark.h"
-#include "buffer_manager.h"
-#include "config.h"
-#include "benchmark.h"  // Declares system_info functions
-#include "constants.h"
+#include "core/memory/buffer_manager.h"
+#include "core/config/config.h"
+#include "utils/benchmark.h"  // Declares system_info functions
+#include "core/config/constants.h"
 #include <cstdlib>
 #include <cstring>
 #include <algorithm>

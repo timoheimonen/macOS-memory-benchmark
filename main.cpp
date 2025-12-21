@@ -18,14 +18,14 @@
 #include <iostream>
 #include <string>
 
-#include "benchmark.h"
-#include "memory_manager.h"
-#include "config.h"
-#include "buffer_manager.h"
-#include "benchmark_runner.h"
-#include "messages.h"
-#include "constants.h"
-#include "json_output.h"
+#include "utils/benchmark.h"
+#include "core/memory/memory_manager.h"
+#include "core/config/config.h"
+#include "core/memory/buffer_manager.h"
+#include "benchmark/benchmark_runner.h"
+#include "output/console/messages.h"
+#include "core/config/constants.h"
+#include "output/json/json_output.h"
 #include "pattern_benchmark/pattern_benchmark.h"
 
 // macOS specific memory management

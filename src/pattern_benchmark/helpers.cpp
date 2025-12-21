@@ -14,7 +14,7 @@
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 //
 #include "pattern_benchmark/pattern_benchmark.h"
-#include "benchmark.h"
+#include "utils/benchmark.h"
 #include <atomic>
 
 // ============================================================================

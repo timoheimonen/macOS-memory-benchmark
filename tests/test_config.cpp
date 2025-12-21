@@ -14,8 +14,8 @@
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 //
 #include <gtest/gtest.h>
-#include "config.h"
-#include "constants.h"
+#include "core/config/config.h"
+#include "core/config/constants.h"
 #include <cstdlib>
 
 // Test default configuration values
