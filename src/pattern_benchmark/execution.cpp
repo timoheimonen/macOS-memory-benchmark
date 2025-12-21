@@ -13,123 +13,44 @@
 // You should have received a copy of the GNU General Public License
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 //
-#include "pattern_benchmark.h"
+#include "pattern_benchmark/pattern_benchmark.h"
 #include "benchmark.h"
 #include "buffer_manager.h"
 #include "config.h"
 #include "constants.h"
 #include "messages.h"
 #include <iostream>
-#include <iomanip>
-#include <sstream>
 #include <random>
 #include <algorithm>
 #include <atomic>
+#include <cstdlib>
 
-// ============================================================================
-// Helper Functions for Pattern Tests
-// ============================================================================
+// Forward declarations from helpers.cpp
+double run_pattern_read_test(void* buffer, size_t size, int iterations, 
+                             uint64_t (*read_func)(const void*, size_t),
+                             std::atomic<uint64_t>& checksum, HighResTimer& timer);
+double run_pattern_write_test(void* buffer, size_t size, int iterations,
+                              void (*write_func)(void*, size_t),
+                              HighResTimer& timer);
+double run_pattern_copy_test(void* dst, void* src, size_t size, int iterations,
+                             void (*copy_func)(void*, const void*, size_t),
+                             HighResTimer& timer);
+double run_pattern_read_strided_test(void* buffer, size_t size, size_t stride, int iterations,
+                                     std::atomic<uint64_t>& checksum, HighResTimer& timer);
+double run_pattern_write_strided_test(void* buffer, size_t size, size_t stride, int iterations,
+                                      HighResTimer& timer);
+double run_pattern_copy_strided_test(void* dst, void* src, size_t size, size_t stride, int iterations,
+                                     HighResTimer& timer);
+double run_pattern_read_random_test(void* buffer, const std::vector<size_t>& indices, int iterations,
+                                    std::atomic<uint64_t>& checksum, HighResTimer& timer);
+double run_pattern_write_random_test(void* buffer, const std::vector<size_t>& indices, int iterations,
+                                     HighResTimer& timer);
+double run_pattern_copy_random_test(void* dst, void* src, const std::vector<size_t>& indices, int iterations,
+                                    HighResTimer& timer);
 
-// Helper function to run a pattern read test
-static double run_pattern_read_test(void* buffer, size_t size, int iterations, 
-                                     uint64_t (*read_func)(const void*, size_t),
-                                     std::atomic<uint64_t>& checksum, HighResTimer& timer) {
-  timer.start();
-  uint64_t total_checksum = 0;
-  for (int i = 0; i < iterations; ++i) {
-    uint64_t result = read_func(buffer, size);
-    total_checksum ^= result;
-  }
-  double elapsed = timer.stop();
-  checksum.fetch_xor(total_checksum, std::memory_order_relaxed);
-  return elapsed;
-}
-
-// Helper function to run a pattern write test
-static double run_pattern_write_test(void* buffer, size_t size, int iterations,
-                                      void (*write_func)(void*, size_t),
-                                      HighResTimer& timer) {
-  timer.start();
-  for (int i = 0; i < iterations; ++i) {
-    write_func(buffer, size);
-  }
-  return timer.stop();
-}
-
-// Helper function to run a pattern copy test
-static double run_pattern_copy_test(void* dst, void* src, size_t size, int iterations,
-                                     void (*copy_func)(void*, const void*, size_t),
-                                     HighResTimer& timer) {
-  timer.start();
-  for (int i = 0; i < iterations; ++i) {
-    copy_func(dst, src, size);
-  }
-  return timer.stop();
-}
-
-// Helper function to run a strided pattern test
-static double run_pattern_read_strided_test(void* buffer, size_t size, size_t stride, int iterations,
-                                             std::atomic<uint64_t>& checksum, HighResTimer& timer) {
-  timer.start();
-  uint64_t total_checksum = 0;
-  for (int i = 0; i < iterations; ++i) {
-    uint64_t result = memory_read_strided_loop_asm(buffer, size, stride);
-    total_checksum ^= result;
-  }
-  double elapsed = timer.stop();
-  checksum.fetch_xor(total_checksum, std::memory_order_relaxed);
-  return elapsed;
-}
-
-static double run_pattern_write_strided_test(void* buffer, size_t size, size_t stride, int iterations,
-                                              HighResTimer& timer) {
-  timer.start();
-  for (int i = 0; i < iterations; ++i) {
-    memory_write_strided_loop_asm(buffer, size, stride);
-  }
-  return timer.stop();
-}
-
-static double run_pattern_copy_strided_test(void* dst, void* src, size_t size, size_t stride, int iterations,
-                                             HighResTimer& timer) {
-  timer.start();
-  for (int i = 0; i < iterations; ++i) {
-    memory_copy_strided_loop_asm(dst, src, size, stride);
-  }
-  return timer.stop();
-}
-
-// Helper function to run a random pattern test
-static double run_pattern_read_random_test(void* buffer, const std::vector<size_t>& indices, int iterations,
-                                            std::atomic<uint64_t>& checksum, HighResTimer& timer) {
-  timer.start();
-  uint64_t total_checksum = 0;
-  for (int i = 0; i < iterations; ++i) {
-    uint64_t result = memory_read_random_loop_asm(buffer, indices.data(), indices.size());
-    total_checksum ^= result;
-  }
-  double elapsed = timer.stop();
-  checksum.fetch_xor(total_checksum, std::memory_order_relaxed);
-  return elapsed;
-}
-
-static double run_pattern_write_random_test(void* buffer, const std::vector<size_t>& indices, int iterations,
-                                             HighResTimer& timer) {
-  timer.start();
-  for (int i = 0; i < iterations; ++i) {
-    memory_write_random_loop_asm(buffer, indices.data(), indices.size());
-  }
-  return timer.stop();
-}
-
-static double run_pattern_copy_random_test(void* dst, void* src, const std::vector<size_t>& indices, int iterations,
-                                            HighResTimer& timer) {
-  timer.start();
-  for (int i = 0; i < iterations; ++i) {
-    memory_copy_random_loop_asm(dst, src, indices.data(), indices.size());
-  }
-  return timer.stop();
-}
+// Forward declarations from validation.cpp
+bool validate_stride(size_t stride, size_t buffer_size);
+bool validate_random_indices(const std::vector<size_t>& indices, size_t buffer_size);
 
 // ============================================================================
 // Utility Functions
@@ -192,56 +113,6 @@ static size_t calculate_num_random_accesses(size_t buffer_size) {
     num_accesses = PATTERN_RANDOM_ACCESS_MAX;
   }
   return num_accesses;
-}
-
-// ============================================================================
-// Validation Functions
-// ============================================================================
-
-// Validate stride parameters
-static bool validate_stride(size_t stride, size_t buffer_size) {
-  using namespace Constants;
-  if (stride < PATTERN_MIN_BUFFER_SIZE_BYTES) {
-    std::cerr << Messages::error_prefix() << Messages::error_stride_too_small() << std::endl;
-    return false;
-  }
-  if (stride > buffer_size) {
-    std::cerr << Messages::error_prefix() << Messages::error_stride_too_large(stride, buffer_size) << std::endl;
-    return false;
-  }
-  if (buffer_size < PATTERN_MIN_BUFFER_SIZE_BYTES) {
-    std::cerr << Messages::error_prefix() 
-              << Messages::error_buffer_too_small_strided(PATTERN_MIN_BUFFER_SIZE_BYTES) << std::endl;
-    return false;
-  }
-  return true;
-}
-
-// Validate random indices
-static bool validate_random_indices(const std::vector<size_t>& indices, size_t buffer_size) {
-  using namespace Constants;
-  if (indices.empty()) {
-    std::cerr << Messages::error_prefix() << Messages::error_indices_empty() << std::endl;
-    return false;
-  }
-  
-  // Validate that indices are within buffer bounds and properly aligned
-  // Each access loads/stores PATTERN_ACCESS_SIZE_BYTES bytes
-  size_t validation_limit = std::min(indices.size(), 
-                                     static_cast<size_t>(PATTERN_VALIDATION_INDICES_LIMIT));
-  for (size_t i = 0; i < validation_limit; ++i) {
-    if (indices[i] + PATTERN_ACCESS_SIZE_BYTES > buffer_size) {
-      std::cerr << Messages::error_prefix() 
-                << Messages::error_index_out_of_bounds(i, indices[i], buffer_size) << std::endl;
-      return false;
-    }
-    if (indices[i] % PATTERN_ACCESS_SIZE_BYTES != 0) {
-      std::cerr << Messages::error_prefix() 
-                << Messages::error_index_not_aligned(i, indices[i]) << std::endl;
-      return false;
-    }
-  }
-  return true;
 }
 
 // ============================================================================
@@ -500,156 +371,3 @@ int run_pattern_benchmarks(const BenchmarkBuffers& buffers, const BenchmarkConfi
   return EXIT_SUCCESS;
 }
 
-// ============================================================================
-// Output Formatting Functions
-// ============================================================================
-
-// Format percentage difference from baseline
-static std::string format_percentage(double baseline, double value) {
-  using namespace Constants;
-  if (baseline == 0.0) return Messages::pattern_na();
-  double pct = ((value - baseline) / baseline) * 100.0;
-  std::ostringstream oss;
-  oss << std::fixed << std::setprecision(PATTERN_PERCENTAGE_PRECISION);
-  if (pct >= 0) {
-    oss << " (+" << pct << "%)";
-  } else {
-    oss << " (" << pct << "%)";
-  }
-  return oss.str();
-}
-
-// Print sequential pattern results
-static void print_sequential_results(const PatternResults& results) {
-  using namespace Constants;
-  
-  // Sequential Forward (baseline)
-  std::cout << Messages::pattern_sequential_forward() << "\n";
-  std::cout << Messages::pattern_read_label() << std::fixed << std::setprecision(PATTERN_BANDWIDTH_PRECISION) 
-            << results.forward_read_bw << Messages::pattern_bandwidth_unit_newline();
-  std::cout << Messages::pattern_write_label() << results.forward_write_bw << Messages::pattern_bandwidth_unit_newline();
-  std::cout << Messages::pattern_copy_label() << results.forward_copy_bw << Messages::pattern_bandwidth_unit_newline() << "\n";
-  
-  // Sequential Reverse
-  std::cout << Messages::pattern_sequential_reverse() << "\n";
-  std::cout << Messages::pattern_read_label() << results.reverse_read_bw << Messages::pattern_bandwidth_unit()
-            << format_percentage(results.forward_read_bw, results.reverse_read_bw) << "\n";
-  std::cout << Messages::pattern_write_label() << results.reverse_write_bw << Messages::pattern_bandwidth_unit()
-            << format_percentage(results.forward_write_bw, results.reverse_write_bw) << "\n";
-  std::cout << Messages::pattern_copy_label() << results.reverse_copy_bw << Messages::pattern_bandwidth_unit()
-            << format_percentage(results.forward_copy_bw, results.reverse_copy_bw) << "\n\n";
-}
-
-// Print strided pattern results
-static void print_strided_results(const PatternResults& results, const std::string& stride_name, 
-                                  double read_bw, double write_bw, double copy_bw) {
-  std::cout << Messages::pattern_strided(stride_name) << "\n";
-  std::cout << Messages::pattern_read_label() << read_bw << Messages::pattern_bandwidth_unit()
-            << format_percentage(results.forward_read_bw, read_bw) << "\n";
-  std::cout << Messages::pattern_write_label() << write_bw << Messages::pattern_bandwidth_unit()
-            << format_percentage(results.forward_write_bw, write_bw) << "\n";
-  std::cout << Messages::pattern_copy_label() << copy_bw << Messages::pattern_bandwidth_unit()
-            << format_percentage(results.forward_copy_bw, copy_bw) << "\n\n";
-}
-
-// Print random pattern results
-static void print_random_results(const PatternResults& results) {
-  std::cout << Messages::pattern_random_uniform() << "\n";
-  std::cout << Messages::pattern_read_label() << results.random_read_bw << Messages::pattern_bandwidth_unit()
-            << format_percentage(results.forward_read_bw, results.random_read_bw) << "\n";
-  std::cout << Messages::pattern_write_label() << results.random_write_bw << Messages::pattern_bandwidth_unit()
-            << format_percentage(results.forward_write_bw, results.random_write_bw) << "\n";
-  std::cout << Messages::pattern_copy_label() << results.random_copy_bw << Messages::pattern_bandwidth_unit()
-            << format_percentage(results.forward_copy_bw, results.random_copy_bw) << "\n\n";
-}
-
-// Calculate pattern efficiency metrics
-static void calculate_efficiency_metrics(const PatternResults& results,
-                                         double& seq_coherence,
-                                         double& prefetch_effectiveness,
-                                         double& cache_thrashing,
-                                         double& tlb_pressure) {
-  using namespace Constants;
-  
-  double forward_total = results.forward_read_bw + results.forward_write_bw + results.forward_copy_bw;
-  double reverse_total = results.reverse_read_bw + results.reverse_write_bw + results.reverse_copy_bw;
-  double strided_64_total = results.strided_64_read_bw + results.strided_64_write_bw + results.strided_64_copy_bw;
-  double strided_4096_total = results.strided_4096_read_bw + results.strided_4096_write_bw + results.strided_4096_copy_bw;
-  double random_total = results.random_read_bw + results.random_write_bw + results.random_copy_bw;
-  
-  // Sequential coherence: ratio of reverse to forward
-  seq_coherence = (reverse_total / forward_total) * 100.0;
-  
-  // Prefetcher effectiveness: ratio of strided 64B to forward (cache line stride should be well-prefetched)
-  prefetch_effectiveness = (strided_64_total / forward_total) * 100.0;
-  
-  // Cache thrashing potential: based on strided 4096B performance (page stride causes more misses)
-  cache_thrashing = (strided_4096_total / forward_total) * 100.0;
-  
-  // TLB pressure: based on random vs strided 4096B (random has more TLB misses)
-  tlb_pressure = (random_total / strided_4096_total) * 100.0;
-}
-
-// Get cache thrashing level string
-static const std::string& get_cache_thrashing_level(double cache_thrashing) {
-  using namespace Constants;
-  if (cache_thrashing > PATTERN_CACHE_THRASHING_HIGH_THRESHOLD) {
-    return Messages::pattern_cache_thrashing_low();
-  } else if (cache_thrashing > PATTERN_CACHE_THRASHING_MEDIUM_THRESHOLD) {
-    return Messages::pattern_cache_thrashing_medium();
-  } else {
-    return Messages::pattern_cache_thrashing_high();
-  }
-}
-
-// Get TLB pressure level string
-static const std::string& get_tlb_pressure_level(double tlb_pressure) {
-  using namespace Constants;
-  if (tlb_pressure > PATTERN_TLB_PRESSURE_MINIMAL_THRESHOLD) {
-    return Messages::pattern_tlb_pressure_minimal();
-  } else if (tlb_pressure > PATTERN_TLB_PRESSURE_MODERATE_THRESHOLD) {
-    return Messages::pattern_tlb_pressure_moderate();
-  } else {
-    return Messages::pattern_tlb_pressure_high();
-  }
-}
-
-// Print pattern efficiency analysis
-static void print_efficiency_analysis(const PatternResults& results) {
-  using namespace Constants;
-  
-  double seq_coherence, prefetch_effectiveness, cache_thrashing, tlb_pressure;
-  calculate_efficiency_metrics(results, seq_coherence, prefetch_effectiveness, 
-                                cache_thrashing, tlb_pressure);
-  
-  std::cout << Messages::pattern_efficiency_analysis() << "\n";
-  std::cout << "- " << Messages::pattern_sequential_coherence() << " " << std::fixed 
-            << std::setprecision(PATTERN_PERCENTAGE_PRECISION) << seq_coherence << "%\n";
-  std::cout << "- " << Messages::pattern_prefetcher_effectiveness() << " " << prefetch_effectiveness << "%\n";
-  std::cout << "- " << Messages::pattern_cache_thrashing_potential() << " " 
-            << get_cache_thrashing_level(cache_thrashing) << "\n";
-  std::cout << "- " << Messages::pattern_tlb_pressure() << " " 
-            << get_tlb_pressure_level(tlb_pressure) << "\n";
-  std::cout << "\n";
-}
-
-void print_pattern_results(const PatternResults& results) {
-  using namespace Constants;
-  
-  std::cout << Messages::pattern_separator();
-  
-  // Print all pattern results
-  print_sequential_results(results);
-  print_strided_results(results, Messages::pattern_cache_line_64b(), 
-                        results.strided_64_read_bw, 
-                        results.strided_64_write_bw, 
-                        results.strided_64_copy_bw);
-  print_strided_results(results, Messages::pattern_page_4096b(), 
-                        results.strided_4096_read_bw, 
-                        results.strided_4096_write_bw, 
-                        results.strided_4096_copy_bw);
-  print_random_results(results);
-  
-  // Print efficiency analysis
-  print_efficiency_analysis(results);
-}

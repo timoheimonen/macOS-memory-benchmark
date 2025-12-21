@@ -30,6 +30,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     - Output formatting functions: `format_percentage()`, `print_sequential_results()`, `print_strided_results()`, `print_random_results()`, `calculate_efficiency_metrics()`, `get_cache_thrashing_level()`, `get_tlb_pressure_level()`, `print_efficiency_analysis()`
   - **Standardized error handling**: Changed pattern benchmark functions to return `EXIT_SUCCESS`/`EXIT_FAILURE` consistently, with graceful handling for buffer size constraints (patterns that can't run due to small buffers are skipped rather than causing benchmark failure)
   - **Centralized all text messages**: Moved all hardcoded strings to `messages.cpp` (25 new message functions including `pattern_sequential_forward()`, `pattern_strided()`, `pattern_efficiency_analysis()`, etc.), ensuring consistent messaging and easier localization
+- **Code refactoring**: Split four large source files into smaller.
+  The messages system (`src/messages.cpp`, 871 lines) was split into `src/messages/`.
+  Pattern benchmarking (`src/pattern_benchmark.cpp`, 655 lines) was reorganized into `src/pattern_benchmark/`.
+  Warmup functionality (`src/warmup.cpp`, 526 lines) was split into `src/warmup/`.
+  JSON output (`src/json_output.cpp`, 484 lines) was reorganized into `src/json_output/`.
+
 
 ## [0.49] - 2025-12-20
 

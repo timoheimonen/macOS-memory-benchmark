@@ -36,13 +36,29 @@ LDFLAGS = -pthread
 # Files in the root directory
 CPP_SRCS_ROOT = main.cpp
 # Files in the src directory
-CPP_SRCS_SRC = timer.cpp system_info.cpp memory_utils.cpp warmup.cpp benchmark_tests.cpp utils.cpp output_printer.cpp statistics.cpp memory_manager.cpp config.cpp buffer_manager.cpp benchmark_runner.cpp benchmark_executor.cpp benchmark_results.cpp messages.cpp json_utils.cpp json_output.cpp pattern_benchmark.cpp
+CPP_SRCS_SRC = timer.cpp system_info.cpp memory_utils.cpp benchmark_tests.cpp utils.cpp output_printer.cpp statistics.cpp memory_manager.cpp config.cpp buffer_manager.cpp benchmark_runner.cpp benchmark_executor.cpp benchmark_results.cpp json_utils.cpp
+# Files in the src/messages subdirectory
+CPP_SRCS_MESSAGES = error_messages.cpp warning_messages.cpp info_messages.cpp program_messages.cpp config_messages.cpp cache_messages.cpp results_messages.cpp statistics_messages.cpp pattern_messages.cpp
+# Files in the src/warmup subdirectory
+CPP_SRCS_WARMUP = basic_warmup.cpp latency_warmup.cpp cache_warmup.cpp pattern_warmup.cpp
+# Files in the src/json_output subdirectory
+CPP_SRCS_JSON_OUTPUT = builder.cpp main_memory.cpp cache.cpp patterns.cpp file_writer.cpp json_output.cpp
+# Files in the src/pattern_benchmark subdirectory
+CPP_SRCS_PATTERN_BENCHMARK = helpers.cpp validation.cpp execution.cpp output.cpp
 
 # Add src/ prefix to source files in the src directory
 CPP_SRCS_SRC_FULL = $(addprefix $(SRC_DIR)/, $(CPP_SRCS_SRC))
+# Add src/messages/ prefix to source files in the messages subdirectory
+CPP_SRCS_MESSAGES_FULL = $(addprefix $(SRC_DIR)/messages/, $(CPP_SRCS_MESSAGES))
+# Add src/json_output/ prefix to source files in the json_output subdirectory
+CPP_SRCS_JSON_OUTPUT_FULL = $(addprefix $(SRC_DIR)/json_output/, $(CPP_SRCS_JSON_OUTPUT))
+# Add src/warmup/ prefix to source files in the warmup subdirectory
+CPP_SRCS_WARMUP_FULL = $(addprefix $(SRC_DIR)/warmup/, $(CPP_SRCS_WARMUP))
+# Add src/pattern_benchmark/ prefix to source files in the pattern_benchmark subdirectory
+CPP_SRCS_PATTERN_BENCHMARK_FULL = $(addprefix $(SRC_DIR)/pattern_benchmark/, $(CPP_SRCS_PATTERN_BENCHMARK))
 
 # All C++ source files with correct paths
-ALL_CPP_SRCS = $(CPP_SRCS_ROOT) $(CPP_SRCS_SRC_FULL)
+ALL_CPP_SRCS = $(CPP_SRCS_ROOT) $(CPP_SRCS_SRC_FULL) $(CPP_SRCS_MESSAGES_FULL) $(CPP_SRCS_JSON_OUTPUT_FULL) $(CPP_SRCS_WARMUP_FULL) $(CPP_SRCS_PATTERN_BENCHMARK_FULL)
 
 # Assembly source files (in src/asm)
 ASM_SRCS = src/asm/memory_copy.s src/asm/memory_read.s src/asm/memory_write.s src/asm/memory_latency.s \
@@ -101,6 +117,30 @@ $(TEST_DIR)/%.o: $(TEST_DIR)/%.cpp
 # This rule handles src/timer.cpp -> src/timer.o etc.
 $(SRC_DIR)/%.o: $(SRC_DIR)/%.cpp $(HEADERS)
 	@echo "Compiling (src) $< -> $@..."
+	$(CXX) $(CXXFLAGS) -c $< -o $@
+
+# Rule for compiling C++ source files in the src/json_output/ directory into object files
+# This rule handles src/json_output/builder.cpp -> src/json_output/builder.o etc.
+$(SRC_DIR)/json_output/%.o: $(SRC_DIR)/json_output/%.cpp $(HEADERS)
+	@echo "Compiling (json_output) $< -> $@..."
+	$(CXX) $(CXXFLAGS) -c $< -o $@
+
+# Rule for compiling C++ source files in the src/warmup/ directory into object files
+# This rule handles src/warmup/basic_warmup.cpp -> src/warmup/basic_warmup.o etc.
+$(SRC_DIR)/warmup/%.o: $(SRC_DIR)/warmup/%.cpp $(HEADERS)
+	@echo "Compiling (warmup) $< -> $@..."
+	$(CXX) $(CXXFLAGS) -c $< -o $@
+
+# Rule for compiling C++ source files in the src/pattern_benchmark/ directory into object files
+# This rule handles src/pattern_benchmark/helpers.cpp -> src/pattern_benchmark/helpers.o etc.
+$(SRC_DIR)/pattern_benchmark/%.o: $(SRC_DIR)/pattern_benchmark/%.cpp $(HEADERS)
+	@echo "Compiling (pattern_benchmark) $< -> $@..."
+	$(CXX) $(CXXFLAGS) -c $< -o $@
+
+# Rule for compiling C++ source files in the src/messages/ directory into object files
+# This rule handles src/messages/error_messages.cpp -> src/messages/error_messages.o etc.
+$(SRC_DIR)/messages/%.o: $(SRC_DIR)/messages/%.cpp $(HEADERS)
+	@echo "Compiling (messages) $< -> $@..."
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
 # Rule for assembling assembly source files in src/asm into object files

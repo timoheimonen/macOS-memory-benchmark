@@ -26,7 +26,7 @@
 #include "messages.h"
 #include "constants.h"
 #include "json_output.h"
-#include "pattern_benchmark.h"
+#include "pattern_benchmark/pattern_benchmark.h"
 
 // macOS specific memory management
 #include <mach/mach.h>  // kern_return_t
