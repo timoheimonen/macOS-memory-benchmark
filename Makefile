@@ -87,7 +87,21 @@ TARGET = memory_benchmark
 HEADERS = $(SRC_DIR)/utils/benchmark.h
 
 # Default target: build the executable
-all: $(TARGET)
+all:
+	@echo "Starting build..." > /dev/null; \
+	date +%s > .build_start_time; \
+	$(MAKE) $(TARGET) || (rm -f .build_start_time; exit 1); \
+	START_TIME=$$(cat .build_start_time); \
+	rm -f .build_start_time; \
+	END_TIME=$$(date +%s); \
+	ELAPSED=$$((END_TIME - START_TIME)); \
+	MINUTES=$$((ELAPSED / 60)); \
+	SECONDS=$$((ELAPSED % 60)); \
+	if [ $$MINUTES -gt 0 ]; then \
+		echo "Build completed in $$MINUTES minute(s) and $$SECONDS second(s)."; \
+	else \
+		echo "Build completed in $$SECONDS second(s)."; \
+	fi
 
 # Rule for linking the executable from object files
 $(TARGET): $(OBJ_FILES)
@@ -208,7 +222,7 @@ clean-test:
 # Clean target: remove object files (from root and src/) and the executable
 clean: clean-test
 	@echo "Cleaning up object files and target..."
-	rm -f $(TARGET) $(OBJ_FILES)
+	rm -f $(TARGET) $(OBJ_FILES) .build_start_time
 	@echo "Cleanup complete."
 
 # Define targets that don't correspond to files
