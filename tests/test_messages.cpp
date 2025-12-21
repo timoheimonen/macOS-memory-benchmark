@@ -14,8 +14,8 @@
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 //
 #include <gtest/gtest.h>
-#include "messages.h"
-#include "constants.h"
+#include "output/console/messages.h"
+#include "core/config/constants.h"
 #include <string>
 #include <sstream>
 #include <tuple>

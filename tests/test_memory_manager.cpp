@@ -14,7 +14,7 @@
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 //
 #include <gtest/gtest.h>
-#include "memory_manager.h"
+#include "core/memory/memory_manager.h"
 #include <cstring>
 #include <unistd.h>  // getpagesize
 

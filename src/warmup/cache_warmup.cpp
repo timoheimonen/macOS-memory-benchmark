@@ -15,7 +15,7 @@
 //
 #include <atomic>    // For std::atomic
 
-#include "benchmark.h"  // Includes definitions for assembly loops etc.
+#include "utils/benchmark.h"  // Includes definitions for assembly loops etc.
 #include "warmup/warmup.h"
 #include "warmup/warmup_internal.h"
 

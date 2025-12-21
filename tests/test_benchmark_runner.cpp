@@ -14,11 +14,11 @@
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 //
 #include <gtest/gtest.h>
-#include "benchmark_runner.h"
-#include "buffer_manager.h"
-#include "config.h"
-#include "benchmark.h"
-#include "constants.h"
+#include "benchmark/benchmark_runner.h"
+#include "core/memory/buffer_manager.h"
+#include "core/config/config.h"
+#include "utils/benchmark.h"
+#include "core/config/constants.h"
 #include <cstdlib>
 #include <cmath>     // std::isnan, std::isinf
 #include <unistd.h>  // getpagesize

@@ -22,8 +22,8 @@
 #include <mach/mach.h>    // For kern_return_t
 #include <pthread/qos.h>  // For pthread_set_qos_class_self_np
 
-#include "benchmark.h"  // Includes definitions for assembly loops etc.
-#include "messages.h"   // For error and warning messages
+#include "utils/benchmark.h"  // Includes definitions for assembly loops etc.
+#include "output/console/messages.h"   // For error and warning messages
 #include "warmup/warmup.h"
 #include "warmup/warmup_internal.h"
 

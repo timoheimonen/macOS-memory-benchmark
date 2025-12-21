@@ -26,7 +26,7 @@
 #include <mach/mach.h>
 #include <pthread/qos.h>
 
-#include "messages.h"
+#include "output/console/messages.h"
 
 // Forward declaration for join_threads (defined in utils.cpp, declared in benchmark.h)
 void join_threads(std::vector<std::thread>& threads);

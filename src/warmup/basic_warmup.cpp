@@ -13,7 +13,7 @@
 // You should have received a copy of the GNU General Public License
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 //
-#include "benchmark.h"  // Includes definitions for assembly loops etc.
+#include "utils/benchmark.h"  // Includes definitions for assembly loops etc.
 #include "warmup/warmup.h"
 #include "warmup/warmup_internal.h"
 
