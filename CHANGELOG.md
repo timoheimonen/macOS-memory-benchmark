@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.50] - DEVELOPMENT
 
 ### Added
+- **Non-cacheable memory hints (`-non-cacheable` flag)**: Added support for applying cache-discouraging hints to src/dst buffers using `madvise(ptr, size, MADV_RANDOM)`. This is a best-effort approach that provides hints to the memory system to discourage aggressive caching, but does NOT provide true non-cacheable memory (user-space cannot modify page table attributes or MAIR registers on macOS). The feature applies hints to source buffers (for read/copy operations) and destination buffers (for write/copy operations) when enabled. Implementation includes proper error handling with non-fatal warnings if hints cannot be applied, and comprehensive documentation explaining the limitations. All text messages are centralized in the messages system.
 - **Pattern-specific warmup functions**: Added specialized warmup functions that match the access pattern of each benchmark type for improved cache/TLB state preparation:
   - `warmup_read_strided()`, `warmup_write_strided()`, `warmup_copy_strided()`: Use strided access pattern matching the benchmark stride (64B or 4096B)
   - `warmup_read_random()`, `warmup_write_random()`, `warmup_copy_random()`: Use random access pattern matching the benchmark's random indices

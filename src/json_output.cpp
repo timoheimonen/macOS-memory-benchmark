@@ -114,6 +114,7 @@ static nlohmann::json build_config_json(const BenchmarkConfig& config) {
   config_json[JsonKeys::EFFICIENCY_CORES] = config.eff_cores;
   config_json[JsonKeys::TOTAL_THREADS] = config.num_threads;
   config_json[JsonKeys::USE_CUSTOM_CACHE_SIZE] = config.use_custom_cache_size;
+  config_json[JsonKeys::USE_NON_CACHEABLE] = config.use_non_cacheable;
   
   if (config.use_custom_cache_size) {
     config_json[JsonKeys::CUSTOM_CACHE_SIZE_BYTES] = config.custom_cache_size_bytes;

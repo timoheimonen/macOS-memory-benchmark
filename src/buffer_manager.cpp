@@ -34,31 +34,47 @@ int allocate_all_buffers(const BenchmarkConfig& config, BenchmarkBuffers& buffer
   buffers.custom_bw_src_ptr = MmapPtr(nullptr, MmapDeleter{0});
   buffers.custom_bw_dst_ptr = MmapPtr(nullptr, MmapDeleter{0});
 
-  // Allocate source buffer
-  buffers.src_buffer_ptr = allocate_buffer(config.buffer_size, "src_buffer");
+  // Allocate source buffer (with cache-discouraging hints if requested)
+  if (config.use_non_cacheable) {
+    buffers.src_buffer_ptr = allocate_buffer_non_cacheable(config.buffer_size, "src_buffer");
+  } else {
+    buffers.src_buffer_ptr = allocate_buffer(config.buffer_size, "src_buffer");
+  }
   if (!buffers.src_buffer_ptr) {
     return EXIT_FAILURE;
   }
 
-  // Allocate destination buffer
-  buffers.dst_buffer_ptr = allocate_buffer(config.buffer_size, "dst_buffer");
+  // Allocate destination buffer (with cache-discouraging hints if requested)
+  if (config.use_non_cacheable) {
+    buffers.dst_buffer_ptr = allocate_buffer_non_cacheable(config.buffer_size, "dst_buffer");
+  } else {
+    buffers.dst_buffer_ptr = allocate_buffer(config.buffer_size, "dst_buffer");
+  }
   if (!buffers.dst_buffer_ptr) {
     // src_buffer_ptr will be cleaned up automatically upon return
     return EXIT_FAILURE;
   }
 
-  // Allocate latency buffer
-  buffers.lat_buffer_ptr = allocate_buffer(config.buffer_size, "lat_buffer");
+  // Allocate latency buffer (with cache-discouraging hints if requested)
+  if (config.use_non_cacheable) {
+    buffers.lat_buffer_ptr = allocate_buffer_non_cacheable(config.buffer_size, "lat_buffer");
+  } else {
+    buffers.lat_buffer_ptr = allocate_buffer(config.buffer_size, "lat_buffer");
+  }
   if (!buffers.lat_buffer_ptr) {
     // src_buffer_ptr and dst_buffer_ptr will be cleaned up automatically upon return
     return EXIT_FAILURE;
   }
 
-  // Allocate cache latency test buffers
+  // Allocate cache latency test buffers (with cache-discouraging hints if requested)
   if (config.use_custom_cache_size) {
     // Allocate custom cache latency test buffer
     if (config.custom_buffer_size > 0) {
-      buffers.custom_buffer_ptr = allocate_buffer(config.custom_buffer_size, "custom_buffer");
+      if (config.use_non_cacheable) {
+        buffers.custom_buffer_ptr = allocate_buffer_non_cacheable(config.custom_buffer_size, "custom_buffer");
+      } else {
+        buffers.custom_buffer_ptr = allocate_buffer(config.custom_buffer_size, "custom_buffer");
+      }
       if (!buffers.custom_buffer_ptr) {
         return EXIT_FAILURE;
       }
@@ -66,31 +82,47 @@ int allocate_all_buffers(const BenchmarkConfig& config, BenchmarkBuffers& buffer
   } else {
     // Allocate L1/L2 cache latency test buffers
     if (config.l1_buffer_size > 0) {
-      buffers.l1_buffer_ptr = allocate_buffer(config.l1_buffer_size, "l1_buffer");
+      if (config.use_non_cacheable) {
+        buffers.l1_buffer_ptr = allocate_buffer_non_cacheable(config.l1_buffer_size, "l1_buffer");
+      } else {
+        buffers.l1_buffer_ptr = allocate_buffer(config.l1_buffer_size, "l1_buffer");
+      }
       if (!buffers.l1_buffer_ptr) {
         return EXIT_FAILURE;
       }
     }
 
     if (config.l2_buffer_size > 0) {
-      buffers.l2_buffer_ptr = allocate_buffer(config.l2_buffer_size, "l2_buffer");
+      if (config.use_non_cacheable) {
+        buffers.l2_buffer_ptr = allocate_buffer_non_cacheable(config.l2_buffer_size, "l2_buffer");
+      } else {
+        buffers.l2_buffer_ptr = allocate_buffer(config.l2_buffer_size, "l2_buffer");
+      }
       if (!buffers.l2_buffer_ptr) {
         return EXIT_FAILURE;
       }
     }
   }
 
-  // Allocate cache bandwidth test buffers
+  // Allocate cache bandwidth test buffers (with cache-discouraging hints if requested)
   if (config.use_custom_cache_size) {
     // Allocate custom cache bandwidth test buffers
     if (config.custom_buffer_size > 0) {
       // Allocate source buffer for custom cache bandwidth tests
-      buffers.custom_bw_src_ptr = allocate_buffer(config.custom_buffer_size, "custom_bw_src_buffer");
+      if (config.use_non_cacheable) {
+        buffers.custom_bw_src_ptr = allocate_buffer_non_cacheable(config.custom_buffer_size, "custom_bw_src_buffer");
+      } else {
+        buffers.custom_bw_src_ptr = allocate_buffer(config.custom_buffer_size, "custom_bw_src_buffer");
+      }
       if (!buffers.custom_bw_src_ptr) {
         return EXIT_FAILURE;
       }
       // Allocate destination buffer for custom cache bandwidth tests
-      buffers.custom_bw_dst_ptr = allocate_buffer(config.custom_buffer_size, "custom_bw_dst_buffer");
+      if (config.use_non_cacheable) {
+        buffers.custom_bw_dst_ptr = allocate_buffer_non_cacheable(config.custom_buffer_size, "custom_bw_dst_buffer");
+      } else {
+        buffers.custom_bw_dst_ptr = allocate_buffer(config.custom_buffer_size, "custom_bw_dst_buffer");
+      }
       if (!buffers.custom_bw_dst_ptr) {
         return EXIT_FAILURE;
       }
@@ -99,12 +131,20 @@ int allocate_all_buffers(const BenchmarkConfig& config, BenchmarkBuffers& buffer
     // Allocate L1/L2 cache bandwidth test buffers
     if (config.l1_buffer_size > 0) {
       // Allocate source buffer for L1 bandwidth tests
-      buffers.l1_bw_src_ptr = allocate_buffer(config.l1_buffer_size, "l1_bw_src_buffer");
+      if (config.use_non_cacheable) {
+        buffers.l1_bw_src_ptr = allocate_buffer_non_cacheable(config.l1_buffer_size, "l1_bw_src_buffer");
+      } else {
+        buffers.l1_bw_src_ptr = allocate_buffer(config.l1_buffer_size, "l1_bw_src_buffer");
+      }
       if (!buffers.l1_bw_src_ptr) {
         return EXIT_FAILURE;
       }
       // Allocate destination buffer for L1 bandwidth tests
-      buffers.l1_bw_dst_ptr = allocate_buffer(config.l1_buffer_size, "l1_bw_dst_buffer");
+      if (config.use_non_cacheable) {
+        buffers.l1_bw_dst_ptr = allocate_buffer_non_cacheable(config.l1_buffer_size, "l1_bw_dst_buffer");
+      } else {
+        buffers.l1_bw_dst_ptr = allocate_buffer(config.l1_buffer_size, "l1_bw_dst_buffer");
+      }
       if (!buffers.l1_bw_dst_ptr) {
         return EXIT_FAILURE;
       }
@@ -112,12 +152,20 @@ int allocate_all_buffers(const BenchmarkConfig& config, BenchmarkBuffers& buffer
 
     if (config.l2_buffer_size > 0) {
       // Allocate source buffer for L2 bandwidth tests
-      buffers.l2_bw_src_ptr = allocate_buffer(config.l2_buffer_size, "l2_bw_src_buffer");
+      if (config.use_non_cacheable) {
+        buffers.l2_bw_src_ptr = allocate_buffer_non_cacheable(config.l2_buffer_size, "l2_bw_src_buffer");
+      } else {
+        buffers.l2_bw_src_ptr = allocate_buffer(config.l2_buffer_size, "l2_bw_src_buffer");
+      }
       if (!buffers.l2_bw_src_ptr) {
         return EXIT_FAILURE;
       }
       // Allocate destination buffer for L2 bandwidth tests
-      buffers.l2_bw_dst_ptr = allocate_buffer(config.l2_buffer_size, "l2_bw_dst_buffer");
+      if (config.use_non_cacheable) {
+        buffers.l2_bw_dst_ptr = allocate_buffer_non_cacheable(config.l2_buffer_size, "l2_bw_dst_buffer");
+      } else {
+        buffers.l2_bw_dst_ptr = allocate_buffer(config.l2_buffer_size, "l2_bw_dst_buffer");
+      }
       if (!buffers.l2_bw_dst_ptr) {
         return EXIT_FAILURE;
       }

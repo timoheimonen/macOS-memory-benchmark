@@ -54,6 +54,7 @@ std::string warning_buffer_size_exceeds_limit(unsigned long requested_mb, unsign
 std::string warning_qos_failed(int code);
 std::string warning_stride_not_aligned(size_t stride);
 std::string warning_qos_failed_worker_thread(int code);
+std::string warning_madvise_random_failed(const std::string& buffer_name, const std::string& error_msg);
 
 // --- Info Messages ---
 std::string info_setting_max_fallback(unsigned long max_mb);
@@ -77,6 +78,7 @@ std::string config_buffer_size(double buffer_size_mib, unsigned long buffer_size
 std::string config_total_allocation(double total_mib);
 std::string config_iterations(int iterations);
 std::string config_loop_count(int loop_count);
+std::string config_non_cacheable(bool use_non_cacheable);
 std::string config_processor_name(const std::string& cpu_name);
 std::string config_processor_name_error();
 std::string config_performance_cores(int perf_cores);

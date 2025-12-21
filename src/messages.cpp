@@ -174,6 +174,13 @@ std::string warning_qos_failed_worker_thread(int code) {
   return oss.str();
 }
 
+std::string warning_madvise_random_failed(const std::string& buffer_name, const std::string& error_msg) {
+  std::ostringstream oss;
+  oss << "Warning: madvise(MADV_RANDOM) failed for " << buffer_name 
+      << " (non-fatal, continuing with regular allocation): " << error_msg;
+  return oss.str();
+}
+
 // --- Info Messages ---
 std::string info_setting_max_fallback(unsigned long max_mb) {
   std::ostringstream oss;
@@ -243,6 +250,10 @@ std::string usage_options(const std::string& prog_name) {
       << "                        and random access patterns). When set, only pattern benchmarks\n"
       << "                        are executed, skipping standard bandwidth and latency tests.\n"
       << "                        use with -buffersize <size_mb> to set the buffer size for the pattern benchmarks.\n"
+      << "  -non-cacheable        Apply cache-discouraging hints to src/dst buffers.\n"
+      << "                        Uses madvise() hints to discourage caching, but does NOT provide\n"
+      << "                        true non-cacheable memory (user-space cannot modify page tables).\n"
+      << "                        Best-effort approach that may reduce but not eliminate caching.\n"
       << "  -output <file>        Save benchmark results to JSON file. If path is relative,\n"
       << "                        file is saved in current working directory.\n"
       << "  -h, --help            Show this help message and exit\n\n";
@@ -300,6 +311,12 @@ std::string config_iterations(int iterations) {
 std::string config_loop_count(int loop_count) {
   std::ostringstream oss;
   oss << "Loop Count (total benchmark repetitions): " << loop_count;
+  return oss.str();
+}
+
+std::string config_non_cacheable(bool use_non_cacheable) {
+  std::ostringstream oss;
+  oss << "Non-Cacheable Memory Hints: " << (use_non_cacheable ? "Enabled" : "Disabled");
   return oss.str();
 }
 

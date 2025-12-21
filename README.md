@@ -165,6 +165,11 @@ In the Terminal, go to the directory with `memory_benchmark` and use these comma
                             and random access patterns). When set, only pattern benchmarks
                             are executed, skipping standard bandwidth and latency tests.
                             use with -buffersize <size_mb> to set the buffer size for the pattern benchmarks.
+      -non-cacheable        Apply cache-discouraging hints to src/dst buffers.
+                            Uses madvise() hints to discourage caching, but does NOT provide
+                            true non-cacheable memory (user-space cannot modify page tables).
+                            Best-effort approach that may reduce but not eliminate caching.
+                            See "Non-Cacheable Memory Limitations" section below for details.
       -output <file>        Save benchmark results to JSON file. If path is relative,
                             file is saved in current working directory.
       -h, --help            Show this help message and exit
@@ -303,6 +308,18 @@ Done. Total execution time: 102.93132 s
 
 ![Mac Mini M4 Cache Latency from multiple JSON-files](pictures/MacMiniM4_cache_latency.png)  
 Mac Mini M4 Cache Latency from multiple JSON-files
+
+## Non-Cacheable Memory Limitations
+
+The `-non-cacheable` flag provides **cache-discouraging hints**, not true non-cacheable memory. This is a fundamental limitation of user-space applications on macOS ARM64:
+
+* **User-space cannot modify page table attributes** (requires kernel privileges)
+* **User-space cannot set MAIR** (Memory Attribute Indirection Register)
+* **User-space cannot create truly uncached mappings**
+
+The implementation uses `madvise(ptr, size, MADV_RANDOM)` to hint that the memory access pattern is random, which may discourage aggressive caching. However, this is a **best-effort approach** that provides hints to the memory system, not guarantees of cache-bypass behavior.
+
+**Important**: The actual cache behavior will depend on the CPU and kernel implementation. This feature may reduce but not eliminate caching. For true non-cacheable memory, kernel-level modifications would be required, which is not feasible for user-space applications.
 
 ## Known Issues and Limitations
 

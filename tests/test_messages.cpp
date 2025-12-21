@@ -396,6 +396,18 @@ TEST_F(MessagesFormattingTest, ConfigLoopCount) {
   EXPECT_NE(msg.find("Loop Count"), std::string::npos);
 }
 
+TEST_F(MessagesFormattingTest, ConfigNonCacheable) {
+  // Test enabled
+  std::string msg = Messages::config_non_cacheable(true);
+  EXPECT_NE(msg.find("Non-Cacheable Memory Hints"), std::string::npos);
+  EXPECT_NE(msg.find("Enabled"), std::string::npos);
+  
+  // Test disabled
+  msg = Messages::config_non_cacheable(false);
+  EXPECT_NE(msg.find("Non-Cacheable Memory Hints"), std::string::npos);
+  EXPECT_NE(msg.find("Disabled"), std::string::npos);
+}
+
 TEST_F(MessagesFormattingTest, ConfigProcessorName) {
   std::string msg = Messages::config_processor_name("Apple M1");
   EXPECT_NE(msg.find("Apple M1"), std::string::npos);

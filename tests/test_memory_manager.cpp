@@ -129,3 +129,114 @@ TEST(MemoryManagerTest, AllocateLargeBuffer) {
   EXPECT_NE(buffer.get(), MAP_FAILED);
 }
 
+// Test successful non-cacheable buffer allocation
+TEST(MemoryManagerTest, AllocateNonCacheableBufferSuccess) {
+  size_t buffer_size = 1024 * 1024;  // 1 MB
+  MmapPtr buffer = allocate_buffer_non_cacheable(buffer_size, "test_non_cacheable_buffer");
+  
+  EXPECT_NE(buffer.get(), nullptr);
+  EXPECT_NE(buffer.get(), MAP_FAILED);
+}
+
+// Test non-cacheable buffer allocation with page-aligned size
+TEST(MemoryManagerTest, AllocateNonCacheableBufferPageAligned) {
+  size_t page_size = getpagesize();
+  size_t buffer_size = page_size * 4;  // 4 pages
+  MmapPtr buffer = allocate_buffer_non_cacheable(buffer_size, "test_non_cacheable_buffer");
+  
+  EXPECT_NE(buffer.get(), nullptr);
+  EXPECT_NE(buffer.get(), MAP_FAILED);
+}
+
+// Test non-cacheable buffer allocation with default buffer name
+TEST(MemoryManagerTest, AllocateNonCacheableBufferDefaultName) {
+  size_t buffer_size = 64 * 1024;  // 64 KB
+  MmapPtr buffer = allocate_buffer_non_cacheable(buffer_size);
+  
+  EXPECT_NE(buffer.get(), nullptr);
+  EXPECT_NE(buffer.get(), MAP_FAILED);
+}
+
+// Test that allocated non-cacheable buffer can be written to
+TEST(MemoryManagerTest, AllocateNonCacheableBufferWritable) {
+  size_t buffer_size = 1024;  // 1 KB
+  MmapPtr buffer = allocate_buffer_non_cacheable(buffer_size, "writable_non_cacheable_buffer");
+  
+  ASSERT_NE(buffer.get(), nullptr);
+  
+  // Write to buffer
+  char* ptr = static_cast<char*>(buffer.get());
+  std::strncpy(ptr, "test data", buffer_size - 1);
+  ptr[buffer_size - 1] = '\0';  // Ensure null termination
+  
+  // Read back
+  EXPECT_STREQ(ptr, "test data");
+}
+
+// Test that allocated non-cacheable buffer can be read from
+TEST(MemoryManagerTest, AllocateNonCacheableBufferReadable) {
+  size_t buffer_size = 1024;  // 1 KB
+  MmapPtr buffer = allocate_buffer_non_cacheable(buffer_size, "readable_non_cacheable_buffer");
+  
+  ASSERT_NE(buffer.get(), nullptr);
+  
+  // Write pattern
+  unsigned char* ptr = static_cast<unsigned char*>(buffer.get());
+  for (size_t i = 0; i < buffer_size; ++i) {
+    ptr[i] = static_cast<unsigned char>(i % 256);
+  }
+  
+  // Read back and verify
+  for (size_t i = 0; i < buffer_size; ++i) {
+    EXPECT_EQ(ptr[i], static_cast<unsigned char>(i % 256));
+  }
+}
+
+// Test multiple non-cacheable buffer allocations
+TEST(MemoryManagerTest, AllocateMultipleNonCacheableBuffers) {
+  size_t buffer_size = 64 * 1024;  // 64 KB
+  
+  MmapPtr buffer1 = allocate_buffer_non_cacheable(buffer_size, "non_cacheable_buffer1");
+  MmapPtr buffer2 = allocate_buffer_non_cacheable(buffer_size, "non_cacheable_buffer2");
+  MmapPtr buffer3 = allocate_buffer_non_cacheable(buffer_size, "non_cacheable_buffer3");
+  
+  EXPECT_NE(buffer1.get(), nullptr);
+  EXPECT_NE(buffer2.get(), nullptr);
+  EXPECT_NE(buffer3.get(), nullptr);
+  
+  // Verify they are different memory locations
+  EXPECT_NE(buffer1.get(), buffer2.get());
+  EXPECT_NE(buffer1.get(), buffer3.get());
+  EXPECT_NE(buffer2.get(), buffer3.get());
+}
+
+// Test non-cacheable buffer with minimum size (page size)
+TEST(MemoryManagerTest, AllocateNonCacheableBufferMinimumSize) {
+  size_t page_size = getpagesize();
+  MmapPtr buffer = allocate_buffer_non_cacheable(page_size, "min_non_cacheable_buffer");
+  
+  EXPECT_NE(buffer.get(), nullptr);
+  EXPECT_NE(buffer.get(), MAP_FAILED);
+}
+
+// Test that non-cacheable buffer is automatically freed when going out of scope
+TEST(MemoryManagerTest, NonCacheableBufferAutoCleanup) {
+  {
+    size_t buffer_size = 1024 * 1024;  // 1 MB
+    MmapPtr buffer = allocate_buffer_non_cacheable(buffer_size, "auto_cleanup_non_cacheable_buffer");
+    EXPECT_NE(buffer.get(), nullptr);
+    // Buffer should be automatically freed here when going out of scope
+  }
+  // If we get here without crashing, cleanup worked
+  SUCCEED();
+}
+
+// Test large non-cacheable buffer allocation
+TEST(MemoryManagerTest, AllocateLargeNonCacheableBuffer) {
+  size_t buffer_size = 10 * 1024 * 1024;  // 10 MB
+  MmapPtr buffer = allocate_buffer_non_cacheable(buffer_size, "large_non_cacheable_buffer");
+  
+  EXPECT_NE(buffer.get(), nullptr);
+  EXPECT_NE(buffer.get(), MAP_FAILED);
+}
+

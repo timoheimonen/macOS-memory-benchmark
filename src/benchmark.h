@@ -97,7 +97,7 @@ void show_progress(); // Show progress indicator (spinner)
 
 // --- Output/Printing Functions (output_printer.cpp) ---
 void print_usage(const char* prog_name); // Print command-line usage instructions
-void print_configuration(size_t buffer_size, size_t buffer_size_mb, int iterations, int loop_count, const std::string& cpu_name, int perf_cores, int eff_cores, int num_threads); // Print benchmark setup details
+void print_configuration(size_t buffer_size, size_t buffer_size_mb, int iterations, int loop_count, bool use_non_cacheable, const std::string& cpu_name, int perf_cores, int eff_cores, int num_threads); // Print benchmark setup details
 void print_results(int loop, size_t buffer_size, size_t buffer_size_mb, int iterations, int num_threads,
     double read_bw_gb_s, double total_read_time,
     double write_bw_gb_s, double total_write_time,

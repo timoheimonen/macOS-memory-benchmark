@@ -45,6 +45,7 @@ namespace JsonKeys {
   constexpr const char* EFFICIENCY_CORES = "efficiency_cores";
   constexpr const char* TOTAL_THREADS = "total_threads";
   constexpr const char* USE_CUSTOM_CACHE_SIZE = "use_custom_cache_size";
+  constexpr const char* USE_NON_CACHEABLE = "use_non_cacheable";
   constexpr const char* CUSTOM_CACHE_SIZE_BYTES = "custom_cache_size_bytes";
   constexpr const char* CUSTOM_CACHE_SIZE_KB = "custom_cache_size_kb";
   constexpr const char* CUSTOM_BUFFER_SIZE_BYTES = "custom_buffer_size_bytes";

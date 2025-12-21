@@ -54,6 +54,7 @@ struct BenchmarkConfig {
   // Flags
   bool use_custom_cache_size = false;
   bool run_patterns = false;  // Run pattern benchmarks
+  bool use_non_cacheable = false;  // Use cache-discouraging hints (best-effort, not true non-cacheable)
   
   // Output file
   std::string output_file;  // JSON output file path (empty = no JSON output)

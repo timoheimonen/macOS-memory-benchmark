@@ -101,12 +101,21 @@ static std::vector<size_t> generate_random_indices(size_t buffer_size, size_t nu
   indices.reserve(num_accesses);
   
   // Generate random offsets that are 32-byte aligned (for 32B loads)
-  size_t aligned_size = (buffer_size / 32) * 32;  // Round down to 32-byte boundary
-  if (aligned_size < 32) aligned_size = 32;
+  // Each access loads 32 bytes, so we need offset + 32 <= buffer_size
+  // Maximum valid offset is buffer_size - 32 (if buffer_size >= 32)
+  if (buffer_size < 32) {
+    // Buffer too small for 32-byte access
+    return indices;  // Return empty vector
+  }
+  
+  // Calculate maximum valid 32-byte aligned offset
+  // We need: offset + 32 <= buffer_size, so offset <= buffer_size - 32
+  // Round down (buffer_size - 32) to 32-byte boundary
+  size_t max_offset = ((buffer_size - 32) / 32) * 32;
   
   std::random_device rd;
   std::mt19937 gen(rd());
-  std::uniform_int_distribution<size_t> dis(0, (aligned_size - 32) / 32);  // Index in 32-byte units
+  std::uniform_int_distribution<size_t> dis(0, max_offset / 32);  // Index in 32-byte units
   
   for (size_t i = 0; i < num_accesses; ++i) {
     size_t offset = dis(gen) * 32;  // Convert to byte offset
@@ -150,7 +159,10 @@ static double run_pattern_copy_random_test(void* dst, void* src, const std::vect
 
 // Helper function to calculate bandwidth from time and data size
 static double calculate_bandwidth(size_t data_size, int iterations, double elapsed_time_ns) {
-  return (static_cast<double>(data_size) * iterations) / (elapsed_time_ns * 1e9);
+  // Avoid division by zero - use minimum time of 1 nanosecond if time is too small
+  // This handles cases where very fast operations complete in < 1ns due to timer resolution
+  double effective_time_ns = (elapsed_time_ns < 1e-9) ? 1e-9 : elapsed_time_ns;
+  return (static_cast<double>(data_size) * iterations) / (effective_time_ns * 1e9);
 }
 
 // Run forward pattern benchmarks (baseline sequential access)
@@ -213,33 +225,58 @@ static void run_strided_pattern_benchmarks(const BenchmarkBuffers& buffers, cons
     return;
   }
   
+  // Ensure buffer is large enough for 32-byte accesses
+  if (config.buffer_size < 32) {
+    std::cerr << Messages::error_prefix() << "Buffer too small for strided access (minimum 32 bytes)" << std::endl;
+    return;
+  }
+  
+  // The strided assembly functions use modulo arithmetic: addr = base + (offset % byteCount)
+  // Each access loads/stores 32 bytes, so we need to ensure addr + 32 <= buffer_size
+  // Therefore, we pass (buffer_size - 32) as the effective buffer size for modulo calculation
+  // This ensures addresses are always <= buffer_size - 32, and accessing 32 bytes stays within bounds
+  size_t effective_buffer_size = config.buffer_size - 32;
+  
+  // Ensure effective buffer size is at least as large as stride
+  // If not, the strided pattern won't work correctly
+  if (effective_buffer_size < stride) {
+    std::cerr << Messages::error_prefix() << Messages::error_stride_too_large(stride, config.buffer_size) << std::endl;
+    return;
+  }
+  
   // Calculate actual data accessed for strided pattern
   // The strided loop accesses 32 bytes per iteration, advancing by stride each time
-  // Number of iterations = ceil(buffer_size / stride)
+  // Number of iterations = ceil(effective_buffer_size / stride)
   // Actual data accessed = iterations * 32 bytes
-  size_t num_iterations = (config.buffer_size + stride - 1) / stride;  // Ceiling division
+  size_t num_iterations = (effective_buffer_size + stride - 1) / stride;  // Ceiling division
   size_t bytes_per_access = 32;  // Each iteration accesses 32 bytes (one cache line)
   size_t actual_data_accessed = num_iterations * bytes_per_access;
   
+  // Ensure we have at least one iteration
+  if (num_iterations == 0) {
+    std::cerr << Messages::error_prefix() << "No iterations possible for strided pattern (buffer too small)" << std::endl;
+    return;
+  }
+  
   show_progress();
   std::atomic<uint64_t> checksum{0};
-  warmup_read_strided(buffers.src_buffer(), config.buffer_size, stride, config.num_threads, checksum);
-  double read_time = run_pattern_read_strided_test(buffers.src_buffer(), config.buffer_size, stride,
+  warmup_read_strided(buffers.src_buffer(), effective_buffer_size, stride, config.num_threads, checksum);
+  double read_time = run_pattern_read_strided_test(buffers.src_buffer(), effective_buffer_size, stride,
                                                      config.iterations, checksum, timer);
   // For read: actual_data_accessed bytes are read per iteration
   read_bw = calculate_bandwidth(actual_data_accessed, config.iterations, read_time);
   
   show_progress();
-  warmup_write_strided(buffers.dst_buffer(), config.buffer_size, stride, config.num_threads);
-  double write_time = run_pattern_write_strided_test(buffers.dst_buffer(), config.buffer_size, stride,
+  warmup_write_strided(buffers.dst_buffer(), effective_buffer_size, stride, config.num_threads);
+  double write_time = run_pattern_write_strided_test(buffers.dst_buffer(), effective_buffer_size, stride,
                                                       config.iterations, timer);
   // For write: actual_data_accessed bytes are written per iteration
   write_bw = calculate_bandwidth(actual_data_accessed, config.iterations, write_time);
   
   show_progress();
-  warmup_copy_strided(buffers.dst_buffer(), buffers.src_buffer(), config.buffer_size, stride, config.num_threads);
+  warmup_copy_strided(buffers.dst_buffer(), buffers.src_buffer(), effective_buffer_size, stride, config.num_threads);
   double copy_time = run_pattern_copy_strided_test(buffers.dst_buffer(), buffers.src_buffer(),
-                                                    config.buffer_size, stride, config.iterations, timer);
+                                                    effective_buffer_size, stride, config.iterations, timer);
   // For copy: actual_data_accessed bytes are read + actual_data_accessed bytes are written per iteration
   copy_bw = calculate_bandwidth(actual_data_accessed * 2, config.iterations, copy_time);
 }
@@ -255,8 +292,9 @@ static void run_random_pattern_benchmarks(const BenchmarkBuffers& buffers, const
   }
   
   // Validate that indices are within buffer bounds and properly aligned
+  // Each access loads/stores 32 bytes, so we need index + 32 <= buffer_size
   for (size_t i = 0; i < random_indices.size() && i < 100; ++i) {
-    if (random_indices[i] >= config.buffer_size) {
+    if (random_indices[i] + 32 > config.buffer_size) {
       std::cerr << Messages::error_prefix() << Messages::error_index_out_of_bounds(i, random_indices[i], config.buffer_size) << std::endl;
       return;
     }
