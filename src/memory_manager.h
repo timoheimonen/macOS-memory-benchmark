@@ -18,8 +18,11 @@
 
 #include <cstddef>  // size_t
 #include <memory>   // std::unique_ptr
-#include <cstdio>   // perror
+#include <cstring>  // strerror
+#include <iostream> // std::cerr
+#include <cerrno>   // errno
 #include <sys/mman.h>  // mmap, munmap, MAP_FAILED, madvise, MADV_WILLNEED
+#include "messages.h"  // For Messages namespace
 
 // Custom deleter for memory allocated with mmap
 struct MmapDeleter {
@@ -30,7 +33,8 @@ struct MmapDeleter {
     if (ptr && ptr != MAP_FAILED) {
       if (munmap(ptr, allocation_size) == -1) {
         // Log error if munmap fails, but don't throw from destructor
-        perror("munmap failed in MmapDeleter");
+        std::cerr << Messages::error_prefix() << Messages::error_munmap_failed() 
+                  << ": " << strerror(errno) << std::endl;
       }
     }
   }

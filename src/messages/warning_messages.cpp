@@ -56,5 +56,49 @@ std::string warning_madvise_random_failed(const std::string& buffer_name, const 
   return oss.str();
 }
 
+const std::string& warning_core_count_detection_failed() {
+  static const std::string msg = "Warning: Failed to detect core count, defaulting to 1.";
+  return msg;
+}
+
+const std::string& warning_mach_host_self_failed() {
+  static const std::string msg = "Warning: Failed to get mach_host_self(). Cannot determine available memory.";
+  return msg;
+}
+
+std::string warning_host_page_size_failed(const std::string& error_details) {
+  std::ostringstream oss;
+  oss << "Warning: Failed to get host_page_size(): " << error_details
+      << ". Cannot determine available memory.";
+  return oss.str();
+}
+
+std::string warning_host_statistics64_failed(const std::string& error_details) {
+  std::ostringstream oss;
+  oss << "Warning: Failed to get host_statistics64(): " << error_details
+      << ". Cannot determine available memory.";
+  return oss.str();
+}
+
+const std::string& warning_l1_cache_size_detection_failed() {
+  static const std::string msg = "Warning: Could not detect L1 cache size, using fallback: 128 KB";
+  return msg;
+}
+
+const std::string& warning_l2_cache_size_detection_failed_m1() {
+  static const std::string msg = "Warning: Could not detect L2 cache size, using M1 fallback: 12 MB";
+  return msg;
+}
+
+const std::string& warning_l2_cache_size_detection_failed_m2_m3_m4_m5() {
+  static const std::string msg = "Warning: Could not detect L2 cache size, using M2/M3/M4/M5 fallback: 16 MB";
+  return msg;
+}
+
+const std::string& warning_l2_cache_size_detection_failed_generic() {
+  static const std::string msg = "Warning: Could not detect L2 cache size, using generic fallback: 16 MB";
+  return msg;
+}
+
 } // namespace Messages
 

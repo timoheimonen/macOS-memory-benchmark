@@ -16,7 +16,6 @@
 #include "memory_manager.h"
 #include "messages.h"
 #include <cstring>  // strlen, strcpy, strerror
-#include <cstdio>   // perror
 #include <iostream> // std::cerr
 #include <cerrno>   // errno
 
@@ -26,7 +25,8 @@ MmapPtr allocate_buffer(size_t size, const char* buffer_name) {
   
   if (ptr == MAP_FAILED) {
     // Create specific error message
-    perror(Messages::error_mmap_failed(buffer_name).c_str());
+    std::cerr << Messages::error_prefix() << Messages::error_mmap_failed(buffer_name) 
+              << ": " << strerror(errno) << std::endl;
     // Return empty unique_ptr (nullptr) on failure
     return MmapPtr(nullptr, MmapDeleter{0});
   }
@@ -36,7 +36,8 @@ MmapPtr allocate_buffer(size_t size, const char* buffer_name) {
   
   // Advise the kernel that we will need this memory (prefault optimization)
   if (madvise(ptr, size, MADV_WILLNEED) == -1) {
-    perror(Messages::error_madvise_failed(buffer_name).c_str());
+    std::cerr << Messages::error_prefix() << Messages::error_madvise_failed(buffer_name) 
+              << ": " << strerror(errno) << std::endl;
     // Non-fatal error, continue anyway
   }
   
@@ -49,7 +50,8 @@ MmapPtr allocate_buffer_non_cacheable(size_t size, const char* buffer_name) {
   
   if (ptr == MAP_FAILED) {
     // Create specific error message
-    perror(Messages::error_mmap_failed(buffer_name).c_str());
+    std::cerr << Messages::error_prefix() << Messages::error_mmap_failed(buffer_name) 
+              << ": " << strerror(errno) << std::endl;
     // Return empty unique_ptr (nullptr) on failure
     return MmapPtr(nullptr, MmapDeleter{0});
   }

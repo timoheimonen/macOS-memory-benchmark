@@ -40,6 +40,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - **System info**: Replaced hardcoded `1024 * 1024` bytes-per-MB conversion and cache fallback sizes (128 KB, 12 MB, 16 MB) in `system_info.cpp` with `Constants::BYTES_PER_MB` and new cache fallback constants (`L1_CACHE_FALLBACK_SIZE_BYTES`, `L2_CACHE_M1_FALLBACK_SIZE_BYTES`, `L2_CACHE_M2_M3_M4_M5_FALLBACK_SIZE_BYTES`, `L2_CACHE_GENERIC_FALLBACK_SIZE_BYTES`)
   - **Progress spinner**: Replaced hardcoded `4` in `utils.cpp` with `sizeof()`-based calculation for maintainability
   - Added new constants to `constants.h` for cache fallback sizes and UI constants
+- **Error handling standardization**: Standardized error handling patterns:
+  - **Replaced all `perror()` calls**: All system call error reporting now uses `std::cerr + Messages namespace + strerror(errno)` for errno-based errors, or `mach_error_string()` for Mach kernel errors, ensuring consistent formatting and centralized message management
+  - **Added new Messages functions**: Added system call error message functions (`error_munmap_failed()`, `error_sysctlbyname_failed()`, `error_mach_timebase_info_failed()`) and system info warning functions (`warning_core_count_detection_failed()`, `warning_mach_host_self_failed()`, `warning_host_page_size_failed()`, `warning_host_statistics64_failed()`, and cache detection warnings) to the Messages namespace
+  - **Replaced hardcoded warning strings**: All hardcoded "Warning: " strings in `system_info.cpp` now use Messages namespace functions for consistency
+  - **Consistent error format**: All system call errors now follow the pattern `std::cerr << Messages::error_prefix() << Messages::error_xxx() << ": " << strerror(errno) << std::endl;`, providing uniform error reporting with errno details
+  - **Files updated**: `memory_manager.cpp`, `memory_manager.h` (MmapDeleter), `system_info.cpp`, `timer.cpp` - all now use consistent error handling patterns
 
 
 ## [0.49] - 2025-12-20

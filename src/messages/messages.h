@@ -35,6 +35,9 @@ const std::string& error_count_invalid();
 const std::string& error_latency_samples_invalid();
 std::string error_mmap_failed(const std::string& buffer_name);
 std::string error_madvise_failed(const std::string& buffer_name);
+std::string error_munmap_failed();
+std::string error_sysctlbyname_failed(const std::string& operation, const std::string& key);
+std::string error_mach_timebase_info_failed(const std::string& error_details);
 std::string error_benchmark_tests(const std::string& error);
 std::string error_benchmark_loop(int loop, const std::string& error);
 std::string error_json_parse_failed(const std::string& error_details);
@@ -57,6 +60,14 @@ std::string warning_qos_failed(int code);
 std::string warning_stride_not_aligned(size_t stride);
 std::string warning_qos_failed_worker_thread(int code);
 std::string warning_madvise_random_failed(const std::string& buffer_name, const std::string& error_msg);
+const std::string& warning_core_count_detection_failed();
+const std::string& warning_mach_host_self_failed();
+std::string warning_host_page_size_failed(const std::string& error_details);
+std::string warning_host_statistics64_failed(const std::string& error_details);
+const std::string& warning_l1_cache_size_detection_failed();
+const std::string& warning_l2_cache_size_detection_failed_m1();
+const std::string& warning_l2_cache_size_detection_failed_m2_m3_m4_m5();
+const std::string& warning_l2_cache_size_detection_failed_generic();
 
 // --- Info Messages ---
 std::string info_setting_max_fallback(unsigned long max_mb);

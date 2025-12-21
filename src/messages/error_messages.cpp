@@ -83,6 +83,18 @@ std::string error_madvise_failed(const std::string& buffer_name) {
   return "madvise failed for " + buffer_name;
 }
 
+std::string error_munmap_failed() {
+  return "munmap failed in MmapDeleter";
+}
+
+std::string error_sysctlbyname_failed(const std::string& operation, const std::string& key) {
+  return "sysctlbyname (" + operation + ") failed for " + key;
+}
+
+std::string error_mach_timebase_info_failed(const std::string& error_details) {
+  return "mach_timebase_info failed: " + error_details;
+}
+
 std::string error_benchmark_tests(const std::string& error) {
   return "Error during benchmark tests: " + error;
 }
