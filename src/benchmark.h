@@ -37,7 +37,7 @@
 #include <mach/mach_time.h>
 
 // --- Version Information ---
-#define SOFTVERSION 0.49f // Software version
+#define SOFTVERSION 0.50f // Software version
 
 // --- High-resolution timer helper ---
 struct HighResTimer {
@@ -76,6 +76,13 @@ void warmup_cache_latency(void* buffer, size_t buffer_size); // Warmup for cache
 void warmup_cache_read(void* src_buffer, size_t size, int num_threads, std::atomic<uint64_t>& dummy_checksum); // Warmup for cache read tests
 void warmup_cache_write(void* dst_buffer, size_t size, int num_threads); // Warmup for cache write tests
 void warmup_cache_copy(void* dst, void* src, size_t size, int num_threads); // Warmup for cache copy tests
+// Pattern-specific warmup functions
+void warmup_read_strided(void* buffer, size_t size, size_t stride, int num_threads, std::atomic<uint64_t>& dummy_checksum); // Warmup for strided read tests
+void warmup_write_strided(void* buffer, size_t size, size_t stride, int num_threads); // Warmup for strided write tests
+void warmup_copy_strided(void* dst, void* src, size_t size, size_t stride, int num_threads); // Warmup for strided copy tests
+void warmup_read_random(void* buffer, const std::vector<size_t>& indices, int num_threads, std::atomic<uint64_t>& dummy_checksum); // Warmup for random read tests
+void warmup_write_random(void* buffer, const std::vector<size_t>& indices, int num_threads); // Warmup for random write tests
+void warmup_copy_random(void* dst, void* src, const std::vector<size_t>& indices, int num_threads); // Warmup for random copy tests
 
 // --- Benchmark Test Functions (benchmark_tests.cpp) ---
 double run_read_test(void* buffer, size_t size, int iterations, int num_threads, std::atomic<uint64_t>& checksum, HighResTimer& timer); // Run read benchmark

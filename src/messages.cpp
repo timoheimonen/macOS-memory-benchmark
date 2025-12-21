@@ -117,6 +117,32 @@ std::string error_file_directory_creation_failed(const std::string& dir_path, co
   return "Failed to create directory \"" + dir_path + "\": " + error_details;
 }
 
+std::string error_stride_too_small() {
+  return "stride must be >= 32 bytes";
+}
+
+std::string error_stride_too_large(size_t stride, size_t buffer_size) {
+  std::ostringstream oss;
+  oss << "stride (" << stride << ") must be <= buffer size (" << buffer_size << ")";
+  return oss.str();
+}
+
+std::string error_indices_empty() {
+  return "indices vector is empty";
+}
+
+std::string error_index_out_of_bounds(size_t index, size_t index_value, size_t buffer_size) {
+  std::ostringstream oss;
+  oss << "index " << index << " (" << index_value << ") exceeds buffer size " << buffer_size;
+  return oss.str();
+}
+
+std::string error_index_not_aligned(size_t index, size_t index_value) {
+  std::ostringstream oss;
+  oss << "index " << index << " (" << index_value << ") is not 32-byte aligned";
+  return oss.str();
+}
+
 // --- Warning Messages ---
 const std::string& warning_cannot_get_memory() {
   static const std::string msg = "Warning: Cannot get available memory. Using fallback limit.";
@@ -133,6 +159,18 @@ std::string warning_buffer_size_exceeds_limit(unsigned long requested_mb, unsign
 std::string warning_qos_failed(int code) {
   std::ostringstream oss;
   oss << "Warning: Failed to set QoS class for main thread (code: " << code << ")";
+  return oss.str();
+}
+
+std::string warning_stride_not_aligned(size_t stride) {
+  std::ostringstream oss;
+  oss << "Warning: stride (" << stride << ") is not 32-byte aligned, may cause issues";
+  return oss.str();
+}
+
+std::string warning_qos_failed_worker_thread(int code) {
+  std::ostringstream oss;
+  oss << "Warning: Failed to set QoS class for warmup worker thread (code: " << code << ")";
   return oss.str();
 }
 

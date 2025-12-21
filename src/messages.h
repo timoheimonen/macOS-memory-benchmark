@@ -42,11 +42,18 @@ std::string error_json_file_read_failed(const std::string& file_path, const std:
 std::string error_file_write_failed(const std::string& file_path, const std::string& error_details);
 std::string error_file_permission_denied(const std::string& file_path);
 std::string error_file_directory_creation_failed(const std::string& dir_path, const std::string& error_details);
+std::string error_stride_too_small();
+std::string error_stride_too_large(size_t stride, size_t buffer_size);
+std::string error_indices_empty();
+std::string error_index_out_of_bounds(size_t index, size_t index_value, size_t buffer_size);
+std::string error_index_not_aligned(size_t index, size_t index_value);
 
 // --- Warning Messages ---
 const std::string& warning_cannot_get_memory();
 std::string warning_buffer_size_exceeds_limit(unsigned long requested_mb, unsigned long limit_mb);
 std::string warning_qos_failed(int code);
+std::string warning_stride_not_aligned(size_t stride);
+std::string warning_qos_failed_worker_thread(int code);
 
 // --- Info Messages ---
 std::string info_setting_max_fallback(unsigned long max_mb);

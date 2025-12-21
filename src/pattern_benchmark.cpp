@@ -18,6 +18,7 @@
 #include "buffer_manager.h"
 #include "config.h"
 #include "constants.h"
+#include "messages.h"
 #include <iostream>
 #include <iomanip>
 #include <sstream>
@@ -202,6 +203,16 @@ static void run_reverse_pattern_benchmarks(const BenchmarkBuffers& buffers, cons
 static void run_strided_pattern_benchmarks(const BenchmarkBuffers& buffers, const BenchmarkConfig& config,
                                            size_t stride, double& read_bw, double& write_bw, double& copy_bw,
                                            HighResTimer& timer) {
+  // Validate stride
+  if (stride < 32) {
+    std::cerr << Messages::error_prefix() << Messages::error_stride_too_small() << std::endl;
+    return;
+  }
+  if (stride > config.buffer_size) {
+    std::cerr << Messages::error_prefix() << Messages::error_stride_too_large(stride, config.buffer_size) << std::endl;
+    return;
+  }
+  
   // Calculate actual data accessed for strided pattern
   // The strided loop accesses 32 bytes per iteration, advancing by stride each time
   // Number of iterations = ceil(buffer_size / stride)
@@ -212,21 +223,21 @@ static void run_strided_pattern_benchmarks(const BenchmarkBuffers& buffers, cons
   
   show_progress();
   std::atomic<uint64_t> checksum{0};
-  warmup_read(buffers.src_buffer(), config.buffer_size, config.num_threads, checksum);
+  warmup_read_strided(buffers.src_buffer(), config.buffer_size, stride, config.num_threads, checksum);
   double read_time = run_pattern_read_strided_test(buffers.src_buffer(), config.buffer_size, stride,
                                                      config.iterations, checksum, timer);
   // For read: actual_data_accessed bytes are read per iteration
   read_bw = calculate_bandwidth(actual_data_accessed, config.iterations, read_time);
   
   show_progress();
-  warmup_write(buffers.dst_buffer(), config.buffer_size, config.num_threads);
+  warmup_write_strided(buffers.dst_buffer(), config.buffer_size, stride, config.num_threads);
   double write_time = run_pattern_write_strided_test(buffers.dst_buffer(), config.buffer_size, stride,
                                                       config.iterations, timer);
   // For write: actual_data_accessed bytes are written per iteration
   write_bw = calculate_bandwidth(actual_data_accessed, config.iterations, write_time);
   
   show_progress();
-  warmup_copy(buffers.dst_buffer(), buffers.src_buffer(), config.buffer_size, config.num_threads);
+  warmup_copy_strided(buffers.dst_buffer(), buffers.src_buffer(), config.buffer_size, stride, config.num_threads);
   double copy_time = run_pattern_copy_strided_test(buffers.dst_buffer(), buffers.src_buffer(),
                                                     config.buffer_size, stride, config.iterations, timer);
   // For copy: actual_data_accessed bytes are read + actual_data_accessed bytes are written per iteration
@@ -237,22 +248,45 @@ static void run_strided_pattern_benchmarks(const BenchmarkBuffers& buffers, cons
 static void run_random_pattern_benchmarks(const BenchmarkBuffers& buffers, const BenchmarkConfig& config,
                                            const std::vector<size_t>& random_indices, size_t num_accesses,
                                            PatternResults& results, HighResTimer& timer) {
+  // Validate indices
+  if (random_indices.empty()) {
+    std::cerr << Messages::error_prefix() << Messages::error_indices_empty() << std::endl;
+    return;
+  }
+  
+  // Validate that indices are within buffer bounds and properly aligned
+  for (size_t i = 0; i < random_indices.size() && i < 100; ++i) {
+    if (random_indices[i] >= config.buffer_size) {
+      std::cerr << Messages::error_prefix() << Messages::error_index_out_of_bounds(i, random_indices[i], config.buffer_size) << std::endl;
+      return;
+    }
+    if (random_indices[i] % 32 != 0) {
+      std::cerr << Messages::error_prefix() << Messages::error_index_not_aligned(i, random_indices[i]) << std::endl;
+      return;
+    }
+  }
+  
+  // Use first min(10000, indices.size() / 10) indices for warmup
+  size_t warmup_indices_count = std::min(static_cast<size_t>(10000), random_indices.size() / 10);
+  if (warmup_indices_count == 0) warmup_indices_count = 1;  // At least one index
+  std::vector<size_t> warmup_indices(random_indices.begin(), random_indices.begin() + warmup_indices_count);
+  
   show_progress();
   std::atomic<uint64_t> checksum{0};
-  warmup_read(buffers.src_buffer(), config.buffer_size, config.num_threads, checksum);
+  warmup_read_random(buffers.src_buffer(), warmup_indices, config.num_threads, checksum);
   double read_time = run_pattern_read_random_test(buffers.src_buffer(), random_indices,
                                                    config.iterations, checksum, timer);
   // For random, we use num_accesses * 32 instead of buffer_size for bandwidth calculation
   results.random_read_bw = calculate_bandwidth(num_accesses * 32, config.iterations, read_time);
   
   show_progress();
-  warmup_write(buffers.dst_buffer(), config.buffer_size, config.num_threads);
+  warmup_write_random(buffers.dst_buffer(), warmup_indices, config.num_threads);
   double write_time = run_pattern_write_random_test(buffers.dst_buffer(), random_indices,
                                                       config.iterations, timer);
   results.random_write_bw = calculate_bandwidth(num_accesses * 32, config.iterations, write_time);
   
   show_progress();
-  warmup_copy(buffers.dst_buffer(), buffers.src_buffer(), config.buffer_size, config.num_threads);
+  warmup_copy_random(buffers.dst_buffer(), buffers.src_buffer(), warmup_indices, config.num_threads);
   double copy_time = run_pattern_copy_random_test(buffers.dst_buffer(), buffers.src_buffer(), random_indices,
                                                    config.iterations, timer);
   results.random_copy_bw = calculate_bandwidth(num_accesses * 32, config.iterations, copy_time);

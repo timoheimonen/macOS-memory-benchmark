@@ -5,7 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.49] - DEVELOPMENT
+## [0.50] - DEVELOPMENT
+
+### Added
+- **Pattern-specific warmup functions**: Added specialized warmup functions that match the access pattern of each benchmark type for improved cache/TLB state preparation:
+  - `warmup_read_strided()`, `warmup_write_strided()`, `warmup_copy_strided()`: Use strided access pattern matching the benchmark stride (64B or 4096B)
+  - `warmup_read_random()`, `warmup_write_random()`, `warmup_copy_random()`: Use random access pattern matching the benchmark's random indices
+  - Strided and random pattern benchmarks now use pattern-specific warmup instead of sequential warmup, ensuring warmup state better represents actual test conditions
+- **Warmup size limiting**: Added intelligent warmup size calculation (`min(buffer_size, max(64MB, buffer_size * 0.1))`) to prevent excessive warmup overhead on very large buffers while ensuring meaningful warmup even for small buffers
+- **Enhanced error handling**: Added validation for stride values (must be >= 32 bytes, aligned, and <= buffer_size) and random indices (must be within buffer bounds and 32-byte aligned) with appropriate error messages
+
+### Changed
+- **Pattern benchmark warmup strategy**: Pattern benchmarks now use pattern-specific warmup functions:
+  - Strided patterns use strided warmup with matching stride values
+  - Random patterns use random warmup with a subset of test indices (first `min(10000, indices.size() / 10)` indices)
+  - Forward and reverse patterns continue using sequential warmup (sufficient for these access patterns)
+- **Warmup size optimization**: All warmup functions now apply size limiting to prevent over-warmup on large buffers, reducing warmup time while maintaining effectiveness
+
+## [0.49] - 2025-12-20
 
 ### Added
 - **Pattern benchmarks (`-patterns` parameter)**: Added memory access pattern benchmarking to measure performance across different access patterns:

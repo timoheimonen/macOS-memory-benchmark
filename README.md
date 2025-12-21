@@ -137,7 +137,7 @@ In the Terminal, go to the directory with `memory_benchmark` and use these comma
     ```
     Example output:
     ```text
-    Version: 0.49 by Timo Heimonen <timo.heimonen@proton.me>
+    Version: 0.50 by Timo Heimonen <timo.heimonen@proton.me>
     License: GNU GPL v3. See <https://www.gnu.org/licenses/>
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -182,7 +182,7 @@ In the Terminal, go to the directory with `memory_benchmark` and use these comma
 
 ## Example output (Mac Mini M4 24GB)
 ```text
------ macOS-memory-benchmark v0.49 -----
+----- macOS-memory-benchmark v0.50 -----
 Copyright 2025 Timo Heimonen <timo.heimonen@proton.me>
 This program is free software: you can redistribute it and/or modify
 it under the terms of the GNU General Public License as published by
@@ -237,7 +237,7 @@ Cache Latency Tests (single-threaded, pointer chase):
 Done. Total execution time: 43.826 s
 ```
 ```text
------ macOS-memory-benchmark v0.49 -----
+----- macOS-memory-benchmark v0.50 -----
 Copyright 2025 Timo Heimonen <timo.heimonen@proton.me>
 This program is free software: you can redistribute it and/or modify
 it under the terms of the GNU General Public License as published by

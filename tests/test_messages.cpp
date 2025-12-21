@@ -343,7 +343,7 @@ TEST_F(MessagesFormattingTest, UsageExample) {
   EXPECT_NE(msg.find("memory_benchmark"), std::string::npos);
   EXPECT_NE(msg.find("-iterations"), std::string::npos);
   EXPECT_NE(msg.find("-buffersize"), std::string::npos);
-  EXPECT_NE(msg.find("-cache-size"), std::string::npos);
+  EXPECT_NE(msg.find("-output"), std::string::npos);
 }
 
 // ============================================================================

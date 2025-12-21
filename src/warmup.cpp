@@ -14,7 +14,6 @@
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 //
 #include <atomic>    // For std::atomic
-#include <cstdio>    // For fprintf
 #include <iostream>  // For std::cout
 #include <thread>    // For std::thread
 #include <vector>    // For std::vector
@@ -25,6 +24,16 @@
 #include <pthread/qos.h>  // For pthread_set_qos_class_self_np
 
 #include "benchmark.h"  // Includes definitions for assembly loops etc.
+#include "messages.h"   // For error and warning messages
+
+// Helper function to calculate warmup size: min(buffer_size, max(64MB, buffer_size * 0.1))
+// This ensures meaningful warmup for small buffers while preventing excessive overhead on large buffers.
+static size_t calculate_warmup_size(size_t buffer_size) {
+  const size_t min_warmup = 64 * 1024 * 1024;  // 64MB
+  const size_t percent_warmup = static_cast<size_t>(buffer_size * 0.1);
+  const size_t effective_warmup = (min_warmup > percent_warmup) ? min_warmup : percent_warmup;
+  return (buffer_size < effective_warmup) ? buffer_size : effective_warmup;
+}
 
 // Generic parallel warmup function for multi-threaded operations.
 // 'buffer': Primary memory region (or destination for copy operations).
@@ -34,10 +43,18 @@
 // 'set_qos': Whether to set QoS class for worker threads (default: false).
 // 'src_buffer': Optional source buffer for copy operations (default: nullptr).
 // 'dummy_checksum': Optional atomic variable to accumulate checksum results (default: nullptr).
+// 'warmup_size': Optional warmup size limit (default: calculated from buffer_size).
 template<typename ChunkOp>
 void warmup_parallel(void* buffer, size_t size, int num_threads, ChunkOp chunk_operation, 
                      bool set_qos = false, void* src_buffer = nullptr, 
-                     std::atomic<uint64_t>* dummy_checksum = nullptr) {
+                     std::atomic<uint64_t>* dummy_checksum = nullptr, size_t warmup_size = 0) {
+  // Calculate warmup size if not provided
+  if (warmup_size == 0) {
+    warmup_size = calculate_warmup_size(size);
+  }
+  // Use the smaller of buffer size and warmup size
+  size_t effective_size = (size < warmup_size) ? size : warmup_size;
+  
   // Vector to store thread objects.
   std::vector<std::thread> threads;
   // Pre-allocate space for efficiency.
@@ -45,9 +62,9 @@ void warmup_parallel(void* buffer, size_t size, int num_threads, ChunkOp chunk_o
   // Tracks the current position in the buffer.
   size_t offset = 0;
   // Calculate the base size of the memory chunk per thread.
-  size_t chunk_base_size = size / num_threads;
+  size_t chunk_base_size = effective_size / num_threads;
   // Calculate the remainder to distribute among threads.
-  size_t chunk_remainder = size % num_threads;
+  size_t chunk_remainder = effective_size % num_threads;
 
   // Create and launch threads.
   for (int t = 0; t < num_threads; ++t) {
@@ -66,7 +83,7 @@ void warmup_parallel(void* buffer, size_t size, int num_threads, ChunkOp chunk_o
       if (set_qos) {
         kern_return_t qos_ret = pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
         if (qos_ret != KERN_SUCCESS) {
-          fprintf(stderr, "Warning: Failed to set QoS class for warmup worker thread (code: %d)\n", qos_ret);
+          std::cerr << Messages::warning_qos_failed_worker_thread(qos_ret) << std::endl;
         }
       }
       // Execute the chunk operation.
@@ -86,7 +103,7 @@ void warmup_single(Op operation) {
   // Set QoS for single-threaded warmup operations to ensure highest priority
   kern_return_t qos_ret = pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
   if (qos_ret != KERN_SUCCESS) {
-    fprintf(stderr, "Warning: Failed to set QoS class for single-threaded warmup (code: %d)\n", qos_ret);
+    std::cerr << Messages::warning_qos_failed(qos_ret) << std::endl;
   }
   operation();
 }
@@ -97,6 +114,7 @@ void warmup_single(Op operation) {
 // 'num_threads': Number of concurrent threads to use.
 // 'dummy_checksum': Atomic variable to accumulate a dummy result (prevents optimization).
 void warmup_read(void* buffer, size_t size, int num_threads, std::atomic<uint64_t>& dummy_checksum) {
+  size_t warmup_size = calculate_warmup_size(size);
   auto read_chunk_op = [](char* chunk_start, char* /* src_chunk */, size_t chunk_size, 
                           std::atomic<uint64_t>* checksum) {
     // Call the assembly read loop function (defined elsewhere).
@@ -107,7 +125,7 @@ void warmup_read(void* buffer, size_t size, int num_threads, std::atomic<uint64_
       checksum->fetch_xor(result, std::memory_order_relaxed);
     }
   };
-  warmup_parallel(buffer, size, num_threads, read_chunk_op, true, nullptr, &dummy_checksum);
+  warmup_parallel(buffer, size, num_threads, read_chunk_op, true, nullptr, &dummy_checksum, warmup_size);
 }
 
 // Warms up memory by writing to the buffer using multiple threads.
@@ -115,11 +133,12 @@ void warmup_read(void* buffer, size_t size, int num_threads, std::atomic<uint64_
 // 'size': Total size of the buffer in bytes.
 // 'num_threads': Number of concurrent threads to use.
 void warmup_write(void* buffer, size_t size, int num_threads) {
+  size_t warmup_size = calculate_warmup_size(size);
   auto write_chunk_op = [](char* chunk_start, char* /* src_chunk */, size_t chunk_size, 
                            std::atomic<uint64_t>* /* checksum */) {
     memory_write_loop_asm(chunk_start, chunk_size);
   };
-  warmup_parallel(buffer, size, num_threads, write_chunk_op, true);
+  warmup_parallel(buffer, size, num_threads, write_chunk_op, true, nullptr, nullptr, warmup_size);
 }
 
 // Warms up memory by copying data between buffers using multiple threads.
@@ -128,11 +147,12 @@ void warmup_write(void* buffer, size_t size, int num_threads) {
 // 'size': Total size of data to copy in bytes.
 // 'num_threads': Number of concurrent threads to use.
 void warmup_copy(void* dst, void* src, size_t size, int num_threads) {
+  size_t warmup_size = calculate_warmup_size(size);
   auto copy_chunk_op = [](char* dst_chunk, char* src_chunk, size_t chunk_size, 
                           std::atomic<uint64_t>* /* checksum */) {
     memory_copy_loop_asm(dst_chunk, src_chunk, chunk_size);
   };
-  warmup_parallel(dst, size, num_threads, copy_chunk_op, true, src);
+  warmup_parallel(dst, size, num_threads, copy_chunk_op, true, src, nullptr, warmup_size);
 }
 
 // Warms up memory for latency test by page prefaulting (single thread).
@@ -215,4 +235,293 @@ void warmup_cache_copy(void* dst, void* src, size_t size, int num_threads) {
     memory_copy_loop_asm(dst, src, size);
   };
   warmup_single(copy_op);
+}
+
+// Warms up memory by reading from the buffer using strided access pattern.
+// 'buffer': Memory region to read from.
+// 'size': Total size of the buffer in bytes.
+// 'stride': Stride size in bytes (must be >= 32, aligned, and <= size).
+// 'num_threads': Number of concurrent threads to use.
+// 'dummy_checksum': Atomic variable to accumulate a dummy result (prevents optimization).
+void warmup_read_strided(void* buffer, size_t size, size_t stride, int num_threads, std::atomic<uint64_t>& dummy_checksum) {
+  // Validate stride
+  if (stride < 32) {
+    std::cerr << Messages::error_prefix() << Messages::error_stride_too_small() << std::endl;
+    return;
+  }
+  if (stride > size) {
+    std::cerr << Messages::error_prefix() << Messages::error_stride_too_large(stride, size) << std::endl;
+    return;
+  }
+  if (stride % 32 != 0) {
+    std::cerr << Messages::warning_stride_not_aligned(stride) << std::endl;
+  }
+  
+  size_t warmup_size = calculate_warmup_size(size);
+  auto read_chunk_op = [stride](char* chunk_start, char* /* src_chunk */, size_t chunk_size, 
+                                 std::atomic<uint64_t>* checksum) {
+    // Use strided read for warmup
+    uint64_t result = memory_read_strided_loop_asm(chunk_start, chunk_size, stride);
+    if (checksum) {
+      checksum->fetch_xor(result, std::memory_order_relaxed);
+    }
+  };
+  warmup_parallel(buffer, size, num_threads, read_chunk_op, true, nullptr, &dummy_checksum, warmup_size);
+}
+
+// Warms up memory by writing to the buffer using strided access pattern.
+// 'buffer': Memory region to write to.
+// 'size': Total size of the buffer in bytes.
+// 'stride': Stride size in bytes (must be >= 32, aligned, and <= size).
+// 'num_threads': Number of concurrent threads to use.
+void warmup_write_strided(void* buffer, size_t size, size_t stride, int num_threads) {
+  // Validate stride
+  if (stride < 32) {
+    std::cerr << Messages::error_prefix() << Messages::error_stride_too_small() << std::endl;
+    return;
+  }
+  if (stride > size) {
+    std::cerr << Messages::error_prefix() << Messages::error_stride_too_large(stride, size) << std::endl;
+    return;
+  }
+  if (stride % 32 != 0) {
+    std::cerr << Messages::warning_stride_not_aligned(stride) << std::endl;
+  }
+  
+  size_t warmup_size = calculate_warmup_size(size);
+  auto write_chunk_op = [stride](char* chunk_start, char* /* src_chunk */, size_t chunk_size, 
+                                  std::atomic<uint64_t>* /* checksum */) {
+    // Use strided write for warmup
+    memory_write_strided_loop_asm(chunk_start, chunk_size, stride);
+  };
+  warmup_parallel(buffer, size, num_threads, write_chunk_op, true, nullptr, nullptr, warmup_size);
+}
+
+// Warms up memory by copying data between buffers using strided access pattern.
+// 'dst': Destination memory region.
+// 'src': Source memory region.
+// 'size': Total size of data to copy in bytes.
+// 'stride': Stride size in bytes (must be >= 32, aligned, and <= size).
+// 'num_threads': Number of concurrent threads to use.
+void warmup_copy_strided(void* dst, void* src, size_t size, size_t stride, int num_threads) {
+  // Validate stride
+  if (stride < 32) {
+    std::cerr << Messages::error_prefix() << Messages::error_stride_too_small() << std::endl;
+    return;
+  }
+  if (stride > size) {
+    std::cerr << Messages::error_prefix() << Messages::error_stride_too_large(stride, size) << std::endl;
+    return;
+  }
+  if (stride % 32 != 0) {
+    std::cerr << Messages::warning_stride_not_aligned(stride) << std::endl;
+  }
+  
+  size_t warmup_size = calculate_warmup_size(size);
+  auto copy_chunk_op = [stride](char* dst_chunk, char* src_chunk, size_t chunk_size, 
+                                 std::atomic<uint64_t>* /* checksum */) {
+    // Use strided copy for warmup
+    memory_copy_strided_loop_asm(dst_chunk, src_chunk, chunk_size, stride);
+  };
+  warmup_parallel(dst, size, num_threads, copy_chunk_op, true, src, nullptr, warmup_size);
+}
+
+// Warms up memory by reading from the buffer using random access pattern.
+// 'buffer': Memory region to read from.
+// 'indices': Vector of byte offsets (must be 32-byte aligned and within buffer bounds).
+// 'num_threads': Number of concurrent threads to use.
+// 'dummy_checksum': Atomic variable to accumulate a dummy result (prevents optimization).
+void warmup_read_random(void* buffer, const std::vector<size_t>& indices, int num_threads, std::atomic<uint64_t>& dummy_checksum) {
+  if (indices.empty()) {
+    std::cerr << Messages::error_prefix() << Messages::error_indices_empty() << std::endl;
+    return;
+  }
+  
+  // Validate indices (check first few as sample)
+  size_t sample_size = (indices.size() < 100) ? indices.size() : 100;
+  for (size_t i = 0; i < sample_size; ++i) {
+    if (indices[i] % 32 != 0) {
+      std::cerr << Messages::error_prefix() << Messages::error_index_not_aligned(i, indices[i]) << std::endl;
+      return;
+    }
+  }
+  
+  // Use the indices directly - they should already be validated by the caller
+  // For multi-threading, we'll split the indices across threads
+  // If num_threads is 0 or indices is empty, return early (already checked empty above)
+  if (num_threads <= 0) {
+    return;
+  }
+  
+  // For small index sets or single thread, just run directly
+  if (num_threads == 1 || indices.size() <= static_cast<size_t>(num_threads)) {
+    uint64_t result = memory_read_random_loop_asm(buffer, indices.data(), indices.size());
+    dummy_checksum.fetch_xor(result, std::memory_order_relaxed);
+    return;
+  }
+  
+  std::vector<std::thread> threads;
+  threads.reserve(num_threads);
+  
+  size_t indices_per_thread = indices.size() / num_threads;
+  size_t remainder = indices.size() % num_threads;
+  
+  size_t offset = 0;
+  for (int t = 0; t < num_threads; ++t) {
+    size_t thread_count = indices_per_thread + (t < static_cast<int>(remainder) ? 1 : 0);
+    if (thread_count == 0 || offset >= indices.size()) continue;
+    
+    size_t start_idx = offset;
+    size_t end_idx = offset + thread_count;
+    if (end_idx > indices.size()) end_idx = indices.size();
+    offset = end_idx;
+    
+    // Create a copy of the indices for this thread to avoid race conditions
+    std::vector<size_t> thread_indices(indices.begin() + start_idx, indices.begin() + end_idx);
+    
+    threads.emplace_back([buffer, thread_indices, &dummy_checksum]() {
+      kern_return_t qos_ret = pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
+      if (qos_ret != KERN_SUCCESS) {
+        std::cerr << Messages::warning_qos_failed_worker_thread(qos_ret) << std::endl;
+      }
+      
+      if (!thread_indices.empty()) {
+        uint64_t result = memory_read_random_loop_asm(buffer, thread_indices.data(), thread_indices.size());
+        dummy_checksum.fetch_xor(result, std::memory_order_relaxed);
+      }
+    });
+  }
+  
+  join_threads(threads);
+}
+
+// Warms up memory by writing to the buffer using random access pattern.
+// 'buffer': Memory region to write to.
+// 'indices': Vector of byte offsets (must be 32-byte aligned and within buffer bounds).
+// 'num_threads': Number of concurrent threads to use.
+void warmup_write_random(void* buffer, const std::vector<size_t>& indices, int num_threads) {
+  if (indices.empty()) {
+    std::cerr << Messages::error_prefix() << Messages::error_indices_empty() << std::endl;
+    return;
+  }
+  
+  // Validate indices (check first few as sample)
+  size_t sample_size = (indices.size() < 100) ? indices.size() : 100;
+  for (size_t i = 0; i < sample_size; ++i) {
+    if (indices[i] % 32 != 0) {
+      std::cerr << Messages::error_prefix() << Messages::error_index_not_aligned(i, indices[i]) << std::endl;
+      return;
+    }
+  }
+  
+  // Use the indices directly - they should already be validated by the caller
+  // For multi-threading, we'll split the indices across threads
+  if (num_threads <= 0) {
+    return;
+  }
+  
+  // For small index sets or single thread, just run directly
+  if (num_threads == 1 || indices.size() <= static_cast<size_t>(num_threads)) {
+    memory_write_random_loop_asm(buffer, indices.data(), indices.size());
+    return;
+  }
+  
+  std::vector<std::thread> threads;
+  threads.reserve(num_threads);
+  
+  size_t indices_per_thread = indices.size() / num_threads;
+  size_t remainder = indices.size() % num_threads;
+  
+  size_t offset = 0;
+  for (int t = 0; t < num_threads; ++t) {
+    size_t thread_count = indices_per_thread + (t < static_cast<int>(remainder) ? 1 : 0);
+    if (thread_count == 0 || offset >= indices.size()) continue;
+    
+    size_t start_idx = offset;
+    size_t end_idx = offset + thread_count;
+    if (end_idx > indices.size()) end_idx = indices.size();
+    offset = end_idx;
+    
+    // Create a copy of the indices for this thread to avoid race conditions
+    std::vector<size_t> thread_indices(indices.begin() + start_idx, indices.begin() + end_idx);
+    
+    threads.emplace_back([buffer, thread_indices]() {
+      kern_return_t qos_ret = pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
+      if (qos_ret != KERN_SUCCESS) {
+        std::cerr << Messages::warning_qos_failed_worker_thread(qos_ret) << std::endl;
+      }
+      
+      if (!thread_indices.empty()) {
+        memory_write_random_loop_asm(buffer, thread_indices.data(), thread_indices.size());
+      }
+    });
+  }
+  
+  join_threads(threads);
+}
+
+// Warms up memory by copying data between buffers using random access pattern.
+// 'dst': Destination memory region.
+// 'src': Source memory region.
+// 'indices': Vector of byte offsets (must be 32-byte aligned and within buffer bounds).
+// 'num_threads': Number of concurrent threads to use.
+void warmup_copy_random(void* dst, void* src, const std::vector<size_t>& indices, int num_threads) {
+  if (indices.empty()) {
+    std::cerr << Messages::error_prefix() << Messages::error_indices_empty() << std::endl;
+    return;
+  }
+  
+  // Validate indices (check first few as sample)
+  size_t sample_size = (indices.size() < 100) ? indices.size() : 100;
+  for (size_t i = 0; i < sample_size; ++i) {
+    if (indices[i] % 32 != 0) {
+      std::cerr << Messages::error_prefix() << Messages::error_index_not_aligned(i, indices[i]) << std::endl;
+      return;
+    }
+  }
+  
+  // Use the indices directly - they should already be validated by the caller
+  // For multi-threading, we'll split the indices across threads
+  if (num_threads <= 0) {
+    return;
+  }
+  
+  // For small index sets or single thread, just run directly
+  if (num_threads == 1 || indices.size() <= static_cast<size_t>(num_threads)) {
+    memory_copy_random_loop_asm(dst, src, indices.data(), indices.size());
+    return;
+  }
+  
+  std::vector<std::thread> threads;
+  threads.reserve(num_threads);
+  
+  size_t indices_per_thread = indices.size() / num_threads;
+  size_t remainder = indices.size() % num_threads;
+  
+  size_t offset = 0;
+  for (int t = 0; t < num_threads; ++t) {
+    size_t thread_count = indices_per_thread + (t < static_cast<int>(remainder) ? 1 : 0);
+    if (thread_count == 0 || offset >= indices.size()) continue;
+    
+    size_t start_idx = offset;
+    size_t end_idx = offset + thread_count;
+    if (end_idx > indices.size()) end_idx = indices.size();
+    offset = end_idx;
+    
+    // Create a copy of the indices for this thread to avoid race conditions
+    std::vector<size_t> thread_indices(indices.begin() + start_idx, indices.begin() + end_idx);
+    
+    threads.emplace_back([dst, src, thread_indices]() {
+      kern_return_t qos_ret = pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
+      if (qos_ret != KERN_SUCCESS) {
+        std::cerr << Messages::warning_qos_failed_worker_thread(qos_ret) << std::endl;
+      }
+      
+      if (!thread_indices.empty()) {
+        memory_copy_random_loop_asm(dst, src, thread_indices.data(), thread_indices.size());
+      }
+    });
+  }
+  
+  join_threads(threads);
 }
