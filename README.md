@@ -11,58 +11,15 @@ A simple tool to measure memory write/read/copy bandwidth and memory access late
   
 ## Description
 
-This C++/asm program measures:
-1. How fast data can be read/written/copied between two big memory blocks allocated using `mmap` (main memory bandwidth).
-2. How fast data can be read/written/copied in buffers sized to fit within L1 and L2 cache levels (cache bandwidth).
-3. The average time (latency) it takes to do dependent memory reads in a large buffer, similar to random access (main memory latency).
-4. L1 and L2 cache latency using pointer chasing methodology with buffers sized to fit within each cache level.
+This tool measures memory performance on macOS Apple Silicon systems. It provides comprehensive benchmarks for:
 
-The main read/write/copy and latency tests are done in separate ARM64 assembly files located in `src/asm/`. The read/write/copy loops use optimized non-temporal instructions (`ldnp`/`stnp`) for faster testing, and the latency test uses dependent loads (`ldr x0, [x0]`) to measure access time.
+1. **Main Memory Bandwidth**: How fast data can be read, written, and copied between large memory blocks (measures DRAM performance).
+2. **Cache Bandwidth**: How fast data can be read, written, and copied within L1 and L2 cache levels.
+3. **Main Memory Latency**: The average time it takes to access memory (measures DRAM access time).
+4. **Cache Latency**: The average time it takes to access L1 and L2 cache levels.
+5. **Access Pattern Performance**: Performance across different memory access patterns (sequential, strided, random) to analyze prefetcher effectiveness and cache behavior.
 
-### Assembly Implementation (`src/asm/`)
-
-The performance-critical memory operations are implemented in ARM64 assembly for maximum efficiency across four separate source files:
-
-* **Core Functions:**
-    * `memory_copy.s` - `_memory_copy_loop_asm`: Copies data between buffers using non-temporal instructions (`stnp`) to minimize cache impact. Processes 512-byte blocks sequentially forward.
-    * `memory_read.s` - `_memory_read_loop_asm`: Reads memory and calculates an XOR checksum to prevent optimization and ensure data is actually read. Processes 512-byte blocks sequentially forward.
-    * `memory_write.s` - `_memory_write_loop_asm`: Writes zeros to memory using non-temporal instructions (`stnp`). Processes 512-byte blocks sequentially forward.
-    * `memory_latency.s` - `_memory_latency_chase_asm`: Measures memory access latency via pointer chasing with dependent loads (`ldr x0, [x0]`). Uses 8-way loop unrolling.
-
-* **Pattern Benchmark Functions:**
-    * **Sequential Reverse:**
-        * `memory_copy_reverse.s` - `_memory_copy_reverse_loop_asm`: Copies data backwards (reverse sequential) using 512-byte blocks with non-temporal stores.
-        * `memory_read_reverse.s` - `_memory_read_reverse_loop_asm`: Reads memory backwards with XOR checksum accumulation.
-        * `memory_write_reverse.s` - `_memory_write_reverse_loop_asm`: Writes zeros backwards using non-temporal stores.
-    * **Strided Access:**
-        * `memory_copy_strided.s` - `_memory_copy_strided_loop_asm`: Copies data using strided access patterns (64B cache line stride and 4096B page stride, tested separately) with 32-byte operations, wrapping around buffer via modulo arithmetic.
-        * `memory_read_strided.s` - `_memory_read_strided_loop_asm`: Reads memory using strided access patterns (64B and 4096B strides, tested separately) with XOR checksum accumulation.
-        * `memory_write_strided.s` - `_memory_write_strided_loop_asm`: Writes zeros using strided access patterns (64B and 4096B strides, tested separately) with non-temporal stores.
-    * **Random Access:**
-        * `memory_copy_random.s` - `_memory_copy_random_loop_asm`: Copies data using random access pattern defined by pre-generated indices array. Processes 32-byte cache lines per access to maximize cache misses and TLB pressure.
-        * `memory_read_random.s` - `_memory_read_random_loop_asm`: Reads memory using random access pattern with XOR checksum accumulation.
-        * `memory_write_random.s` - `_memory_write_random_loop_asm`: Writes zeros using random access pattern with non-temporal stores.  
-
-* **Key Optimizations:**
-    * Processing data in large 512-byte blocks.
-    * Extensive use of NEON SIMD registers (q0-q7 and q16-q31) for high throughput, avoiding callee-saved registers (q8-q15) per AAPCS64 for ABI compliance.
-    * Non-temporal stores (`stnp`) to reduce cache pollution during bandwidth tests.
-    * Careful register management ensuring ABI compatibility without stack operations (leaf function optimization).
-    * 8-way loop unrolling in the latency test.  
-
-The benchmark does these steps:
-
-1.  Detects L1 and L2 cache sizes using system calls (`sysctlbyname`).
-2.  Gets memory blocks using `mmap` (src, dst for bandwidth; lat for main memory latency; separate buffers for L1/L2 cache latency).
-3.  Writes to the bandwidth buffers to make sure the OS maps the memory.
-4.  Creates random pointer chains inside the latency buffers (this also maps their memory).
-5.  Does warm-up runs for read/write/copy and latency tests to let the CPU speed and caches settle.
-6.  Main Memory Bandwidth Tests: Times the read/write/copy from source to destination buffer multiple times using the precise `mach_absolute_time` timer (multi-threaded, using all available logical CPU cores).
-7.  Cache Bandwidth Tests: Times read/write/copy operations in buffers sized to fit within L1 and L2 cache levels (single-threaded, using 10x more iterations for accuracy).
-8.  Cache Latency Tests: Times doing many dependent pointer reads in buffers sized to fit within L1 and L2 cache levels.
-9.  Main Memory Latency Test: Times doing many dependent pointer reads (following the chain) using `mach_absolute_time`.
-10. Calculates and shows the memory bandwidth, cache latencies, and the average main memory access latency.
-11. Releases the memory using `munmap` (via RAII with `std::unique_ptr` and a custom deleter).
+The tool automatically detects your system's cache sizes and uses optimized assembly code for accurate measurements. All tests include warm-up runs to ensure stable and consistent results.
 
 ## Why This Tool?
 
@@ -74,21 +31,14 @@ macOS on Apple Silicon.
 
 ## Features
 
-* Checks main memory read, write and copy speeds (multi-threaded, using all available logical CPU cores).
-* Checks L1 and L2 cache bandwidth (read/write/copy) using single-threaded tests.
-* Checks L1 and L2 cache latency using pointer chasing methodology.
-* Checks main memory access latency.
-* Check memory performance with different access patterns (sequential forward/reverse, strided 64B and 4096B tested separately, random). Measures read/write/copy bandwidth for each pattern using optimized ARM64 assembly.
-* When running with multiple loops (`-count > 1`), calculates detailed statistics including percentiles (P50/P90/P95/P99) and standard deviation for bandwidth and latency tests.
-* Automatically detects cache sizes (L1, L2) for Apple Silicon processors.
-* Uses `mmap` for memory blocks (large blocks for bandwidth/main memory latency; cache-sized blocks for cache bandwidth and latency tests).
-* All memory operations are implemented in optimized ARM64 assembly.
-* Uses optimized non-temporal pair instructions (`ldnp`/`stnp`) for high-throughput bandwidth tests in the assembly loop.
-* Checks latency by pointer chasing with dependent loads (`ldr x0, [x0]`) in assembly.
-* Uses multiple threads (`std::thread`) for main memory bandwidth tests, with thread count equal to total logical cores (performance cores + efficiency cores). Cache tests are single-threaded.
-* Uses `mach_absolute_time` for precise timing.
-* Initializes memory and does warm-ups for more stable results.
-* Save results to JSON-file
+* **Main Memory Bandwidth**: Measures read, write, and copy speeds using all available CPU cores for maximum throughput.
+* **Cache Bandwidth**: Measures L1 and L2 cache read, write, and copy speeds using single-threaded tests for accuracy.
+* **Memory Latency**: Measures access latency for both main memory and cache levels.
+* **Access Pattern Analysis**: Tests different memory access patterns (sequential forward/reverse, strided, random) to analyze prefetcher effectiveness and cache behavior.
+* **Advanced Statistics**: When running multiple test loops, provides detailed statistics including percentiles (P50/P90/P95/P99) and standard deviation.
+* **Automatic Cache Detection**: Automatically detects and uses your system's L1 and L2 cache sizes.
+* **JSON Export**: Save benchmark results to JSON format for further analysis or visualization.
+* **Optimized Performance**: Uses highly optimized assembly code for accurate and fast measurements.
 
 ## Install with Homebrew
 
@@ -309,6 +259,68 @@ Done. Total execution time: 103.52740 s
 
 ![Mac Mini M4 Cache Latency from multiple JSON-files](pictures/MacMiniM4_cache_latency.png)  
 Mac Mini M4 Cache Latency from multiple JSON-files
+
+## Technical Details
+
+This section provides implementation details for developers and those interested in the technical aspects of the benchmark.
+
+### Implementation Overview
+
+The benchmark is implemented in C++ with performance-critical memory operations written in ARM64 assembly. The main read/write/copy and latency tests are implemented in separate assembly files located in `src/asm/`.
+
+### Assembly Implementation (`src/asm/`)
+
+The performance-critical memory operations are implemented in ARM64 assembly across multiple source files:
+
+* **Core Functions:**
+    * `memory_copy.s` - `_memory_copy_loop_asm`: Copies data between buffers using non-temporal instructions (`stnp`) to minimize cache impact. Processes 512-byte blocks sequentially forward.
+    * `memory_read.s` - `_memory_read_loop_asm`: Reads memory and calculates an XOR checksum to prevent optimization and ensure data is actually read. Processes 512-byte blocks sequentially forward.
+    * `memory_write.s` - `_memory_write_loop_asm`: Writes zeros to memory using non-temporal instructions (`stnp`). Processes 512-byte blocks sequentially forward.
+    * `memory_latency.s` - `_memory_latency_chase_asm`: Measures memory access latency via pointer chasing with dependent loads (`ldr x0, [x0]`). Uses 8-way loop unrolling.
+
+* **Pattern Benchmark Functions:**
+    * **Sequential Reverse:**
+        * `memory_copy_reverse.s` - `_memory_copy_reverse_loop_asm`: Copies data backwards (reverse sequential) using 512-byte blocks with non-temporal stores.
+        * `memory_read_reverse.s` - `_memory_read_reverse_loop_asm`: Reads memory backwards with XOR checksum accumulation.
+        * `memory_write_reverse.s` - `_memory_write_reverse_loop_asm`: Writes zeros backwards using non-temporal stores.
+    * **Strided Access:**
+        * `memory_copy_strided.s` - `_memory_copy_strided_loop_asm`: Copies data using strided access patterns (64B cache line stride and 4096B page stride, tested separately) with 32-byte operations, wrapping around buffer via modulo arithmetic.
+        * `memory_read_strided.s` - `_memory_read_strided_loop_asm`: Reads memory using strided access patterns (64B and 4096B strides, tested separately) with XOR checksum accumulation.
+        * `memory_write_strided.s` - `_memory_write_strided_loop_asm`: Writes zeros using strided access patterns (64B and 4096B strides, tested separately) with non-temporal stores.
+    * **Random Access:**
+        * `memory_copy_random.s` - `_memory_copy_random_loop_asm`: Copies data using random access pattern defined by pre-generated indices array. Processes 32-byte cache lines per access to maximize cache misses and TLB pressure.
+        * `memory_read_random.s` - `_memory_read_random_loop_asm`: Reads memory using random access pattern with XOR checksum accumulation.
+        * `memory_write_random.s` - `_memory_write_random_loop_asm`: Writes zeros using random access pattern with non-temporal stores.
+
+* **Key Optimizations:**
+    * Processing data in large 512-byte blocks.
+    * Extensive use of NEON SIMD registers (q0-q7 and q16-q31) for high throughput, avoiding callee-saved registers (q8-q15) per AAPCS64 for ABI compliance.
+    * Non-temporal stores (`stnp`) to reduce cache pollution during bandwidth tests.
+    * Careful register management ensuring ABI compatibility without stack operations (leaf function optimization).
+    * 8-way loop unrolling in the latency test.
+
+### Benchmark Execution Flow
+
+The benchmark performs the following steps:
+
+1. Detects L1 and L2 cache sizes using system calls (`sysctlbyname`).
+2. Allocates memory blocks using `mmap` (source and destination buffers for bandwidth tests; latency buffer for main memory latency; separate buffers for L1/L2 cache latency).
+3. Initializes bandwidth buffers to ensure the OS maps the memory.
+4. Creates random pointer chains inside the latency buffers (this also maps their memory).
+5. Performs warm-up runs for read/write/copy and latency tests to let the CPU speed and caches settle.
+6. **Main Memory Bandwidth Tests**: Times read/write/copy operations from source to destination buffer multiple times using precise timing (multi-threaded, using all available logical CPU cores).
+7. **Cache Bandwidth Tests**: Times read/write/copy operations in buffers sized to fit within L1 and L2 cache levels (single-threaded, using more iterations for accuracy).
+8. **Cache Latency Tests**: Times many dependent pointer reads in buffers sized to fit within L1 and L2 cache levels.
+9. **Main Memory Latency Test**: Times many dependent pointer reads (following the chain) using precise timing.
+10. Calculates and displays memory bandwidth, cache latencies, and average main memory access latency.
+11. Releases memory using `munmap` (via RAII with `std::unique_ptr` and a custom deleter).
+
+### Technical Specifications
+
+* **Memory Allocation**: Uses `mmap` for memory blocks (large blocks for bandwidth/main memory latency; cache-sized blocks for cache bandwidth and latency tests).
+* **Timing**: Uses `mach_absolute_time` for precise timing measurements.
+* **Threading**: Uses multiple threads (`std::thread`) for main memory bandwidth tests, with thread count equal to total logical cores (performance cores + efficiency cores). Cache tests are single-threaded.
+* **Optimizations**: All memory operations use optimized non-temporal pair instructions (`ldnp`/`stnp`) for high-throughput bandwidth tests. Latency tests use pointer chasing with dependent loads (`ldr x0, [x0]`).
 
 ## Known Issues and Limitations
 
