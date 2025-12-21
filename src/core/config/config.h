@@ -13,6 +13,15 @@
 // You should have received a copy of the GNU General Public License
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 //
+/**
+ * @file config.h
+ * @brief Benchmark configuration structure and parsing functions
+ * @author Timo Heimonen <timo.heimonen@proton.me>
+ * @date 2025
+ *
+ * This header defines the BenchmarkConfig structure and provides functions
+ * to parse command-line arguments and validate configuration settings.
+ */
 #ifndef CONFIG_H
 #define CONFIG_H
 
@@ -21,57 +30,87 @@
 #include <cstdlib>  // EXIT_SUCCESS, EXIT_FAILURE
 #include "core/config/constants.h"
 
-// Configuration structure containing all benchmark settings
+/**
+ * @struct BenchmarkConfig
+ * @brief Configuration structure containing all benchmark settings
+ *
+ * This structure holds all configuration parameters for running benchmarks,
+ * including user-provided settings, calculated buffer sizes, system information,
+ * and various flags.
+ */
 struct BenchmarkConfig {
   // User-provided settings
-  unsigned long buffer_size_mb = Constants::DEFAULT_BUFFER_SIZE_MB;  // Default buffer size (MB)
-  int iterations = Constants::DEFAULT_ITERATIONS;  // Default test iterations
-  int loop_count = Constants::DEFAULT_LOOP_COUNT;  // Default benchmark loops
-  long long custom_cache_size_kb_ll = -1;       // User requested custom cache size in KB (-1 = none)
-  int latency_sample_count = Constants::DEFAULT_LATENCY_SAMPLE_COUNT;  // Number of latency samples to collect per test
+  unsigned long buffer_size_mb = Constants::DEFAULT_BUFFER_SIZE_MB;  ///< Buffer size in megabytes
+  int iterations = Constants::DEFAULT_ITERATIONS;  ///< Number of test iterations per benchmark
+  int loop_count = Constants::DEFAULT_LOOP_COUNT;  ///< Number of benchmark loops to run
+  long long custom_cache_size_kb_ll = -1;  ///< User-requested custom cache size in KB (-1 = none)
+  int latency_sample_count = Constants::DEFAULT_LATENCY_SAMPLE_COUNT;  ///< Number of latency samples to collect per test
   
   // Calculated sizes
-  size_t buffer_size = 0;                       // Final buffer size in bytes
-  size_t l1_buffer_size = 0;                   // L1 cache buffer size
-  size_t l2_buffer_size = 0;                   // L2 cache buffer size
-  size_t custom_buffer_size = 0;                // Custom cache buffer size
+  size_t buffer_size = 0;        ///< Final buffer size in bytes (calculated from buffer_size_mb)
+  size_t l1_buffer_size = 0;     ///< L1 cache buffer size in bytes
+  size_t l2_buffer_size = 0;     ///< L2 cache buffer size in bytes
+  size_t custom_buffer_size = 0; ///< Custom cache buffer size in bytes
   
   // Access counts
-  size_t lat_num_accesses = 0;                  // Main memory latency test access count (calculated)
-  size_t l1_num_accesses = 0;                   // L1 cache latency test access count (set from constants)
-  size_t l2_num_accesses = 0;                   // L2 cache latency test access count (set from constants)
-  size_t custom_num_accesses = 0;               // Custom cache latency test access count (set from constants)
+  size_t lat_num_accesses = 0;    ///< Main memory latency test access count (calculated)
+  size_t l1_num_accesses = 0;     ///< L1 cache latency test access count (set from constants)
+  size_t l2_num_accesses = 0;     ///< L2 cache latency test access count (set from constants)
+  size_t custom_num_accesses = 0; ///< Custom cache latency test access count (set from constants)
   
   // System info
-  std::string cpu_name;
-  int perf_cores = 0;
-  int eff_cores = 0;
-  int num_threads = 0;
-  size_t l1_cache_size = 0;
-  size_t l2_cache_size = 0;
-  size_t custom_cache_size_bytes = 0;
+  std::string cpu_name;          ///< CPU model name
+  int perf_cores = 0;            ///< Number of performance cores
+  int eff_cores = 0;             ///< Number of efficiency cores
+  int num_threads = 0;           ///< Total number of threads to use
+  size_t l1_cache_size = 0;      ///< L1 cache size in bytes
+  size_t l2_cache_size = 0;      ///< L2 cache size in bytes
+  size_t custom_cache_size_bytes = 0;  ///< Custom cache size in bytes
   
   // Flags
-  bool use_custom_cache_size = false;
-  bool run_patterns = false;  // Run pattern benchmarks
-  bool use_non_cacheable = false;  // Use cache-discouraging hints (best-effort, not true non-cacheable)
+  bool use_custom_cache_size = false;  ///< Whether to use custom cache size
+  bool run_patterns = false;           ///< Whether to run pattern benchmarks
+  bool use_non_cacheable = false;      ///< Use cache-discouraging hints (best-effort, not true non-cacheable)
   
   // Output file
-  std::string output_file;  // JSON output file path (empty = no JSON output)
+  std::string output_file;  ///< JSON output file path (empty = no JSON output)
 };
 
-// Parse command line arguments and populate config
-// Returns EXIT_SUCCESS on success, EXIT_FAILURE on error (and prints error message)
+/**
+ * @brief Parse command line arguments and populate config
+ * @param argc Number of command-line arguments
+ * @param argv Array of command-line argument strings
+ * @param[out] config Reference to BenchmarkConfig structure to populate
+ * @return EXIT_SUCCESS on success, EXIT_FAILURE on error (and prints error message)
+ */
 int parse_arguments(int argc, char* argv[], BenchmarkConfig& config);
 
-// Validate configuration values
-// Returns EXIT_SUCCESS on success, EXIT_FAILURE on error
+/**
+ * @brief Validate configuration values
+ * @param[in,out] config Reference to BenchmarkConfig structure to validate
+ * @return EXIT_SUCCESS on success, EXIT_FAILURE on error
+ *
+ * Validates that all configuration values are within acceptable ranges and
+ * performs necessary adjustments (e.g., rounding buffer sizes).
+ */
 int validate_config(BenchmarkConfig& config);
 
-// Calculate cache buffer sizes based on cache sizes and constraints
+/**
+ * @brief Calculate cache buffer sizes based on cache sizes and constraints
+ * @param[in,out] config Reference to BenchmarkConfig structure
+ *
+ * Calculates appropriate buffer sizes for L1, L2, and custom cache tests
+ * based on detected cache sizes and configuration constraints.
+ */
 void calculate_buffer_sizes(BenchmarkConfig& config);
 
-// Calculate latency test access counts based on buffer sizes
+/**
+ * @brief Calculate latency test access counts based on buffer sizes
+ * @param[in,out] config Reference to BenchmarkConfig structure
+ *
+ * Calculates the number of pointer-chasing accesses to perform for each
+ * latency test based on the corresponding buffer sizes.
+ */
 void calculate_access_counts(BenchmarkConfig& config);
 
 #endif // CONFIG_H
