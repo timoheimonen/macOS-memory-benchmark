@@ -169,7 +169,6 @@ In the Terminal, go to the directory with `memory_benchmark` and use these comma
                             Uses madvise() hints to discourage caching, but does NOT provide
                             true non-cacheable memory (user-space cannot modify page tables).
                             Best-effort approach that may reduce but not eliminate caching.
-                            See "Non-Cacheable Memory Limitations" section below for details.
       -output <file>        Save benchmark results to JSON file. If path is relative,
                             file is saved in current working directory.
       -h, --help            Show this help message and exit
@@ -187,7 +186,7 @@ In the Terminal, go to the directory with `memory_benchmark` and use these comma
 
 ## Example output (Mac Mini M4 24GB)
 ```text
------ macOS-memory-benchmark v0.50 -----
+----- macOS-memory-benchmark v0.5 -----
 Copyright 2025 Timo Heimonen <timo.heimonen@proton.me>
 This program is free software: you can redistribute it and/or modify
 it under the terms of the GNU General Public License as published by
@@ -202,6 +201,7 @@ Buffer Size (per buffer): 512.00 MiB (512 MB requested/capped)
 Total Allocation Size: ~1536.00 MiB (for 3 buffers)
 Iterations (per R/W/Copy test per loop): 1000
 Loop Count (total benchmark repetitions): 1
+Non-Cacheable Memory Hints: Enabled
 
 Processor Name: Apple M4
   Performance Cores: 4
@@ -216,33 +216,33 @@ Running benchmarks...
 \ Running tests...
 --- Results (Loop 1) ---
 Main Memory Bandwidth Tests (multi-threaded, 10 threads):
-  Read : 116.539 GB/s (Total time: 4.607 s)
-  Write: 66.293 GB/s (Total time: 8.098 s)
-  Copy : 106.634 GB/s (Total time: 10.069 s)
+  Read : 114.74709 GB/s (Total time: 4.67873 s)
+  Write: 68.55840 GB/s (Total time: 7.83086 s)
+  Copy : 105.60609 GB/s (Total time: 10.16742 s)
 
 Main Memory Latency Test (single-threaded, pointer chase):
-  Total time: 19.720 s
-  Average latency: 98.60 ns
+  Total time: 19.47850 s
+  Average latency: 97.39 ns
 
 Cache Bandwidth Tests (single-threaded):
   L1 Cache:
-    Read : 139.461 GB/s (Buffer size: 96.00 KB)
-    Write: 72.589 GB/s
-    Copy : 176.591 GB/s
+    Read : 139.59918 GB/s (Buffer size: 96.00 KB)
+    Write: 72.70513 GB/s
+    Copy : 163.58213 GB/s
   L2 Cache:
-    Read : 122.078 GB/s (Buffer size: 1.60 MB)
-    Write: 44.904 GB/s
-    Copy : 129.392 GB/s
+    Read : 120.46392 GB/s (Buffer size: 1.60 MB)
+    Write: 45.08152 GB/s
+    Copy : 126.15097 GB/s
 
 Cache Latency Tests (single-threaded, pointer chase):
   L1 Cache: 0.69 ns (Buffer size: 96.00 KB)
-  L2 Cache: 4.86 ns (Buffer size: 1.60 MB)
+  L2 Cache: 4.90 ns (Buffer size: 1.60 MB)
 --------------
 
-Done. Total execution time: 43.826 s
+Done. Total execution time: 43.48166 s
 ```
 ```text
------ macOS-memory-benchmark v0.50 -----
+----- macOS-memory-benchmark v0.5 -----
 Copyright 2025 Timo Heimonen <timo.heimonen@proton.me>
 This program is free software: you can redistribute it and/or modify
 it under the terms of the GNU General Public License as published by
@@ -257,6 +257,7 @@ Buffer Size (per buffer): 512.00 MiB (512 MB requested/capped)
 Total Allocation Size: ~1536.00 MiB (for 3 buffers)
 Iterations (per R/W/Copy test per loop): 1000
 Loop Count (total benchmark repetitions): 1
+Non-Cacheable Memory Hints: Enabled
 
 Processor Name: Apple M4
   Performance Cores: 4
@@ -272,56 +273,54 @@ Running Pattern Benchmarks...
 ================================
 
 Sequential Forward:
-  Read : 115.410 GB/s
-  Write: 66.226 GB/s
-  Copy : 53.140 GB/s
+  Read : 114.756 GB/s
+  Write: 65.681 GB/s
+  Copy : 52.868 GB/s
 
 Sequential Reverse:
-  Read : 70.693 GB/s (-38.7%)
-  Write: 37.107 GB/s (-44.0%)
-  Copy : 44.577 GB/s (-16.1%)
+  Read : 69.604 GB/s (-39.3%)
+  Write: 38.266 GB/s (-41.7%)
+  Copy : 44.317 GB/s (-16.2%)
 
 Strided (Cache Line - 64B):
-  Read : 35.190 GB/s (-69.5%)
-  Write: 18.697 GB/s (-71.8%)
-  Copy : 53.308 GB/s (+0.3%)
+  Read : 35.567 GB/s (-69.0%)
+  Write: 17.807 GB/s (-72.9%)
+  Copy : 52.520 GB/s (-0.7%)
 
 Strided (Page - 4096B):
-  Read : 9.000 GB/s (-92.2%)
-  Write: 23.320 GB/s (-64.8%)
-  Copy : 13.001 GB/s (-75.5%)
+  Read : 8.979 GB/s (-92.2%)
+  Write: 20.918 GB/s (-68.2%)
+  Copy : 12.740 GB/s (-75.9%)
 
 Random Uniform:
-  Read : 6.344 GB/s (-94.5%)
-  Write: 21.539 GB/s (-67.5%)
-  Copy : 5.582 GB/s (-89.5%)
+  Read : 6.339 GB/s (-94.5%)
+  Write: 21.694 GB/s (-67.0%)
+  Copy : 5.572 GB/s (-89.5%)
 
 Pattern Efficiency Analysis:
-- Sequential coherence: 64.9%
-- Prefetcher effectiveness: 45.7%
+- Sequential coherence: 65.2%
+- Prefetcher effectiveness: 45.4%
 - Cache thrashing potential: High
 - TLB pressure: Minimal
 
 
-Done. Total execution time: 102.93132 s
+Done. Total execution time: 103.52740 s
 ```
 
 ![Mac Mini M4 Cache Latency from multiple JSON-files](pictures/MacMiniM4_cache_latency.png)  
 Mac Mini M4 Cache Latency from multiple JSON-files
 
-## Non-Cacheable Memory Limitations
-
-The `-non-cacheable` flag provides **cache-discouraging hints**, not true non-cacheable memory. This is a fundamental limitation of user-space applications on macOS ARM64:
-
-* **User-space cannot modify page table attributes** (requires kernel privileges)
-* **User-space cannot set MAIR** (Memory Attribute Indirection Register)
-* **User-space cannot create truly uncached mappings**
-
-The implementation uses `madvise(ptr, size, MADV_RANDOM)` to hint that the memory access pattern is random, which may discourage aggressive caching. However, this is a **best-effort approach** that provides hints to the memory system, not guarantees of cache-bypass behavior.
-
-**Important**: The actual cache behavior will depend on the CPU and kernel implementation. This feature may reduce but not eliminate caching. For true non-cacheable memory, kernel-level modifications would be required, which is not feasible for user-space applications.
-
 ## Known Issues and Limitations
+
+* **Non-cacheable memory limitations**:  
+  The `-non-cacheable` flag provides **cache-discouraging hints**, not true non-cacheable memory. This is a fundamental limitation of user-space applications on macOS ARM64:
+  * **User-space cannot modify page table attributes** (requires kernel privileges)
+  * **User-space cannot set MAIR** (Memory Attribute Indirection Register)
+  * **User-space cannot create truly uncached mappings**
+  
+  The implementation uses `madvise(ptr, size, MADV_RANDOM)` to hint that the memory access pattern is random, which may discourage aggressive caching. However, this is a **best-effort approach** that provides hints to the memory system, not guarantees of cache-bypass behavior.
+  
+  **Important**: The actual cache behavior will depend on the CPU and kernel implementation. This feature may reduce but not eliminate caching. For true non-cacheable memory, kernel-level modifications would be required, which is not feasible for user-space applications.
 
 * **Small buffer sizes (< 512 MB–1 GB) are cache-dominated**:  
   When you run the main memory bandwidth or latency tests with small buffer sizes, a significant portion of the accesses can be served from the CPU caches instead of true main memory (DRAM). This is especially true on Apple Silicon, which has large and complex shared caches. As a result, small buffers tend to measure *cache* performance rather than pure DRAM performance, and may report unrealistically high bandwidth or low latency.
