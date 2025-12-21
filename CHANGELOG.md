@@ -22,6 +22,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Random patterns use random warmup with a subset of test indices (first `min(10000, indices.size() / 10)` indices)
   - Forward and reverse patterns continue using sequential warmup (sufficient for these access patterns)
 - **Warmup size optimization**: All warmup functions now apply size limiting to prevent over-warmup on large buffers, reducing warmup time while maintaining effectiveness
+- **Pattern benchmark code refactoring**: Refactoring of `pattern_benchmark.cpp` to improve maintainability and code quality:
+  - **Extracted magic numbers to constants**: Moved all hardcoded values (32, 64, 4096, thresholds, limits) to `constants.h` as named constants (`PATTERN_ACCESS_SIZE_BYTES`, `PATTERN_STRIDE_CACHE_LINE`, `PATTERN_STRIDE_PAGE`, `PATTERN_RANDOM_ACCESS_MIN/MAX`, etc.)
+  - **Created focused helper functions**: Broke down large functions into smaller, single-responsibility helpers:
+    - Validation functions: `validate_stride()`, `validate_random_indices()`
+    - Calculation functions: `calculate_max_aligned_offset()`, `calculate_strided_params()`, `calculate_num_random_accesses()`, `prepare_warmup_indices()`
+    - Output formatting functions: `format_percentage()`, `print_sequential_results()`, `print_strided_results()`, `print_random_results()`, `calculate_efficiency_metrics()`, `get_cache_thrashing_level()`, `get_tlb_pressure_level()`, `print_efficiency_analysis()`
+  - **Standardized error handling**: Changed pattern benchmark functions to return `EXIT_SUCCESS`/`EXIT_FAILURE` consistently, with graceful handling for buffer size constraints (patterns that can't run due to small buffers are skipped rather than causing benchmark failure)
+  - **Centralized all text messages**: Moved all hardcoded strings to `messages.cpp` (25 new message functions including `pattern_sequential_forward()`, `pattern_strided()`, `pattern_efficiency_analysis()`, etc.), ensuring consistent messaging and easier localization
 
 ## [0.49] - 2025-12-20
 

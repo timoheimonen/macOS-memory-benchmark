@@ -47,6 +47,8 @@ std::string error_stride_too_large(size_t stride, size_t buffer_size);
 std::string error_indices_empty();
 std::string error_index_out_of_bounds(size_t index, size_t index_value, size_t buffer_size);
 std::string error_index_not_aligned(size_t index, size_t index_value);
+std::string error_buffer_too_small_strided(size_t min_bytes);
+std::string error_no_iterations_strided();
 
 // --- Warning Messages ---
 const std::string& warning_cannot_get_memory();
@@ -64,6 +66,7 @@ std::string info_custom_cache_rounded_up(unsigned long original_kb, unsigned lon
 // --- Main Program Messages ---
 const std::string& msg_running_benchmarks();
 std::string msg_done_total_time(double total_time_sec);
+const std::string& msg_running_pattern_benchmarks();
 
 // --- Usage/Help Messages ---
 std::string usage_header(const std::string& version);
@@ -145,6 +148,32 @@ std::string statistics_cache_latency_name(const std::string& cache_name);
 std::string statistics_median_p50_from_samples(double value, size_t sample_count, int precision = 2);
 std::string statistics_main_memory_latency_header();
 std::string statistics_footer();
+
+// --- Pattern Benchmark Messages ---
+const std::string& pattern_na();
+const std::string& pattern_sequential_forward();
+const std::string& pattern_sequential_reverse();
+std::string pattern_strided(const std::string& stride_name);
+const std::string& pattern_random_uniform();
+const std::string& pattern_cache_line_64b();
+const std::string& pattern_page_4096b();
+const std::string& pattern_efficiency_analysis();
+const std::string& pattern_sequential_coherence();
+const std::string& pattern_prefetcher_effectiveness();
+const std::string& pattern_cache_thrashing_potential();
+const std::string& pattern_tlb_pressure();
+const std::string& pattern_cache_thrashing_low();
+const std::string& pattern_cache_thrashing_medium();
+const std::string& pattern_cache_thrashing_high();
+const std::string& pattern_tlb_pressure_minimal();
+const std::string& pattern_tlb_pressure_moderate();
+const std::string& pattern_tlb_pressure_high();
+const std::string& pattern_separator();
+const std::string& pattern_read_label();
+const std::string& pattern_write_label();
+const std::string& pattern_copy_label();
+const std::string& pattern_bandwidth_unit();
+const std::string& pattern_bandwidth_unit_newline();
 
 } // namespace Messages
 

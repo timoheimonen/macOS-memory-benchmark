@@ -67,6 +67,24 @@ namespace Constants {
   // Output formatting precision constants
   constexpr int BANDWIDTH_PRECISION = 5;  // Decimal places for bandwidth values (GB/s)
   constexpr int TIME_PRECISION = 5;  // Decimal places for time values (seconds)
+  
+  // Pattern benchmark constants
+  constexpr size_t PATTERN_ACCESS_SIZE_BYTES = 32;  // Bytes per access in pattern benchmarks (cache line alignment)
+  constexpr size_t PATTERN_MIN_BUFFER_SIZE_BYTES = 32;  // Minimum buffer size for pattern benchmarks
+  constexpr size_t PATTERN_STRIDE_CACHE_LINE = 64;  // Cache line stride (bytes)
+  constexpr size_t PATTERN_STRIDE_PAGE = 4096;  // Page stride (bytes)
+  constexpr size_t PATTERN_RANDOM_ACCESS_MIN = 1000;  // Minimum number of random accesses
+  constexpr size_t PATTERN_RANDOM_ACCESS_MAX = 1000000;  // Maximum number of random accesses
+  constexpr size_t PATTERN_WARMUP_INDICES_MAX = 10000;  // Maximum indices to use for warmup
+  constexpr size_t PATTERN_WARMUP_INDICES_FRACTION = 10;  // Use 1/N of indices for warmup
+  constexpr size_t PATTERN_VALIDATION_INDICES_LIMIT = 100;  // Maximum indices to validate
+  constexpr double PATTERN_MIN_TIME_NS = 1e-9;  // Minimum time for bandwidth calculation (nanoseconds)
+  constexpr double PATTERN_CACHE_THRASHING_HIGH_THRESHOLD = 70.0;  // Cache thrashing threshold (percentage)
+  constexpr double PATTERN_CACHE_THRASHING_MEDIUM_THRESHOLD = 40.0;  // Cache thrashing medium threshold (percentage)
+  constexpr double PATTERN_TLB_PRESSURE_MINIMAL_THRESHOLD = 50.0;  // TLB pressure minimal threshold (percentage)
+  constexpr double PATTERN_TLB_PRESSURE_MODERATE_THRESHOLD = 20.0;  // TLB pressure moderate threshold (percentage)
+  constexpr int PATTERN_PERCENTAGE_PRECISION = 1;  // Decimal places for percentage values
+  constexpr int PATTERN_BANDWIDTH_PRECISION = 3;  // Decimal places for bandwidth values in pattern results
 }
 
 #endif // CONSTANTS_H
