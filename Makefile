@@ -225,5 +225,38 @@ clean: clean-test
 	rm -f $(TARGET) $(OBJ_FILES) .build_start_time
 	@echo "Cleanup complete."
 
+# Documentation directory
+DOCS_DIR = docs
+
+# Doxygen configuration file
+DOXYFILE = Doxyfile
+
+# Generate Doxygen configuration file
+$(DOXYFILE):
+	@echo "Generating $(DOXYFILE)..."
+	doxygen -g $(DOXYFILE)
+	@echo "Configuring $(DOXYFILE)..."
+	@sed -i '' 's|^PROJECT_NAME[[:space:]]*=.*|PROJECT_NAME = "macOS-memory-benchmark"|' $(DOXYFILE)
+	@sed -i '' 's|^PROJECT_BRIEF[[:space:]]*=.*|PROJECT_BRIEF = "Apple silicon memory benchmark console-tool."|' $(DOXYFILE)
+	@sed -i '' 's|^INPUT[[:space:]]*=.*|INPUT = $(SRC_DIR)|' $(DOXYFILE)
+	@sed -i '' 's|^RECURSIVE[[:space:]]*=.*|RECURSIVE = YES|' $(DOXYFILE)
+	@sed -i '' 's|^EXTRACT_ALL[[:space:]]*=.*|EXTRACT_ALL = YES|' $(DOXYFILE)
+	@sed -i '' 's|^GENERATE_HTML[[:space:]]*=.*|GENERATE_HTML = YES|' $(DOXYFILE)
+	@sed -i '' 's|^GENERATE_LATEX[[:space:]]*=.*|GENERATE_LATEX = NO|' $(DOXYFILE)
+	@sed -i '' 's|^OUTPUT_DIRECTORY[[:space:]]*=.*|OUTPUT_DIRECTORY = $(DOCS_DIR)|' $(DOXYFILE)
+	@echo "$(DOXYFILE) generated and configured."
+
+# Generate documentation
+docs: $(DOXYFILE)
+	@echo "Generating documentation..."
+	doxygen $(DOXYFILE)
+	@echo "Documentation generated in $(DOCS_DIR)/html/"
+
+# Clean documentation
+clean-docs:
+	@echo "Cleaning documentation..."
+	rm -rf $(DOCS_DIR) $(DOXYFILE)
+	@echo "Documentation cleanup complete."
+
 # Define targets that don't correspond to files
-.PHONY: all clean test clean-test
+.PHONY: all clean test clean-test docs clean-docs
