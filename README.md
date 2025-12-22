@@ -21,7 +21,7 @@ The tool automatically detects your system's cache sizes and uses optimized asse
 
 The primary motivation for developing this tool is to provide a straightforward and reliable method for measuring and comparing the memory performance characteristics across different generations of Apple Silicon chips (M1, M2, M3, M4, M5, etc.).
 
-Most benchmarks do not reflect real Apple Silicon cache behavior.
+Many general-purpose benchmarks are not specifically designed to expose Apple Silicon–specific cache behavior or access patterns.
 This tool focuses on:
 - Native ARM64 execution (no Rosetta)
 - Cache-size aware access patterns
