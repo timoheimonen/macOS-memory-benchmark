@@ -4,10 +4,6 @@ Copyright 2025 Timo Heimonen <timo.heimonen@proton.me>
 License: GPL-3.0 license  
   
 A simple tool to measure memory write/read/copy bandwidth and memory access latency on macOS with Apple Silicon (ARM64).  
-
-## Disclaimer
-
-**Use this software entirely at your own risk.** This tool performs intensive memory operations. The author(s) are not responsible for any potential system instability, data loss, or hardware issues resulting from its use.  
   
 ## Description
 
@@ -24,6 +20,16 @@ The tool automatically detects your system's cache sizes and uses optimized asse
 ## Why This Tool?
 
 The primary motivation for developing this tool is to provide a straightforward and reliable method for measuring and comparing the memory performance characteristics across different generations of Apple Silicon chips (M1, M2, M3, M4, M5, etc.).
+
+Most benchmarks do not reflect real Apple Silicon cache behavior.
+This tool focuses on:
+- Native ARM64 execution (no Rosetta)
+- Cache-size aware access patterns
+- mmap-based memory allocation
+
+## Disclaimer
+
+**Use this software entirely at your own risk.** This tool performs intensive memory operations. The author(s) are not responsible for any potential system instability, data loss, or hardware issues resulting from its use.  
 
 ## Target Platform
 
