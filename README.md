@@ -37,8 +37,8 @@ macOS on Apple Silicon.
 
 ## Features
 
-* **Main Memory Bandwidth**: Measures read, write, and copy speeds using all available CPU cores for maximum throughput.
-* **Cache Bandwidth**: Measures L1 and L2 cache read, write, and copy speeds using single-threaded tests for accuracy.
+* **Main Memory Bandwidth**: Measures read, write, and copy speeds using all available CPU cores for maximum throughput (customizable with `-threads` parameter).
+* **Cache Bandwidth**: Measures L1 and L2 cache read, write, and copy speeds. By default uses single-threaded tests for accuracy, but can be configured with `-threads` parameter.
 * **Memory Latency**: Measures access latency for both main memory and cache levels.
 * **Access Pattern Analysis**: Tests different memory access patterns (sequential forward/reverse, strided, random) to analyze prefetcher effectiveness and cache behavior.
 * **Advanced Statistics**: When running multiple test loops, provides detailed statistics including percentiles (P50/P90/P95/P99) and standard deviation.
@@ -93,7 +93,7 @@ In the Terminal, go to the directory with `memory_benchmark` and use these comma
     ```
     Example output:
     ```text
-    Version: 0.50 by Timo Heimonen <timo.heimonen@proton.me>
+    Version: 0.51 by Timo Heimonen <timo.heimonen@proton.me>
     License: GNU GPL v3. See <https://www.gnu.org/licenses/>
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -113,6 +113,10 @@ In the Terminal, go to the directory with `memory_benchmark` and use these comma
       -count <count>        Number of full loops (read/write/copy/latency) (default: 1).
                             When count > 1, statistics include percentiles (P50/P90/P95/P99) and stddev.
       -latency-samples <count> Number of latency samples to collect per test (default: 1000)
+      -threads <count>      Number of threads to use for benchmarks (default: detected
+                            CPU core count). Applies to all benchmarks including cache tests.
+                            If specified value exceeds available cores, it will be capped to
+                            the maximum number of cores with a warning.
       -cache-size <size_kb> Custom cache size in Kilobytes (KB) as integer (16 KB to 524288 KB).
                             Minimum is 16 KB (system page size). When set, skips automatic
                             L1/L2 cache size detection and only performs bandwidth and latency
@@ -137,12 +141,12 @@ In the Terminal, go to the directory with `memory_benchmark` and use these comma
     ```
 3. **Run with custom parameters example**
     ```bash
-    ./memory_benchmark -iterations 500 -buffersize 512 -cache-size 1024
+    ./memory_benchmark -iterations 500 -buffersize 512 -cache-size 1024 -threads 4 -non-cacheable 
     ```
 
 ## Example output (Mac Mini M4 24GB)
 ```text
------ macOS-memory-benchmark v0.5 -----
+----- macOS-memory-benchmark v0.51 -----
 Copyright 2025 Timo Heimonen <timo.heimonen@proton.me>
 This program is free software: you can redistribute it and/or modify
 it under the terms of the GNU General Public License as published by
@@ -198,7 +202,7 @@ Cache Latency Tests (single-threaded, pointer chase):
 Done. Total execution time: 43.48166 s
 ```
 ```text
------ macOS-memory-benchmark v0.5 -----
+----- macOS-memory-benchmark v0.51 -----
 Copyright 2025 Timo Heimonen <timo.heimonen@proton.me>
 This program is free software: you can redistribute it and/or modify
 it under the terms of the GNU General Public License as published by
@@ -314,8 +318,8 @@ The benchmark performs the following steps:
 3. Initializes bandwidth buffers to ensure the OS maps the memory.
 4. Creates random pointer chains inside the latency buffers (this also maps their memory).
 5. Performs warm-up runs for read/write/copy and latency tests to let the CPU speed and caches settle.
-6. **Main Memory Bandwidth Tests**: Times read/write/copy operations from source to destination buffer multiple times using precise timing (multi-threaded, using all available logical CPU cores).
-7. **Cache Bandwidth Tests**: Times read/write/copy operations in buffers sized to fit within L1 and L2 cache levels (single-threaded, using more iterations for accuracy).
+6. **Main Memory Bandwidth Tests**: Times read/write/copy operations from source to destination buffer multiple times using precise timing (multi-threaded by default, using all available logical CPU cores, customizable with `-threads` parameter).
+7. **Cache Bandwidth Tests**: Times read/write/copy operations in buffers sized to fit within L1 and L2 cache levels (single-threaded by default, using more iterations for accuracy, but can be configured with `-threads` parameter).
 8. **Cache Latency Tests**: Times many dependent pointer reads in buffers sized to fit within L1 and L2 cache levels.
 9. **Main Memory Latency Test**: Times many dependent pointer reads (following the chain) using precise timing.
 10. Calculates and displays memory bandwidth, cache latencies, and average main memory access latency.
@@ -325,7 +329,7 @@ The benchmark performs the following steps:
 
 * **Memory Allocation**: Uses `mmap` for memory blocks (large blocks for bandwidth/main memory latency; cache-sized blocks for cache bandwidth and latency tests).
 * **Timing**: Uses `mach_absolute_time` for precise timing measurements.
-* **Threading**: Uses multiple threads (`std::thread`) for main memory bandwidth tests, with thread count equal to total logical cores (performance cores + efficiency cores). Cache tests are single-threaded.
+* **Threading**: Uses multiple threads (`std::thread`) for bandwidth tests. By default, main memory bandwidth tests use all available logical cores (performance cores + efficiency cores), while cache tests are single-threaded. The thread count can be customized using the `-threads` parameter, which applies to all benchmarks including cache tests. If the specified thread count exceeds available cores, it is automatically capped with a warning.
 * **Optimizations**: All memory operations use optimized non-temporal pair instructions (`ldnp`/`stnp`) for high-throughput bandwidth tests. Latency tests use pointer chasing with dependent loads (`ldr x0, [x0]`).
 
 ## Known Issues and Limitations

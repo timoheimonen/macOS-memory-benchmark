@@ -27,6 +27,7 @@
 #include <pthread/qos.h>
 
 #include "output/console/messages.h"
+#include "core/memory/memory_utils.h"
 
 // Forward declaration for join_threads (defined in utils.cpp, declared in benchmark.h)
 void join_threads(std::vector<std::thread>& threads);
@@ -74,13 +75,45 @@ void warmup_parallel(void* buffer, size_t size, int num_threads, ChunkOp chunk_o
   // Create and launch threads.
   for (int t = 0; t < num_threads; ++t) {
     // Calculate the exact size for this thread's chunk, adding remainder if needed.
-    size_t current_chunk_size = chunk_base_size + (t < chunk_remainder ? 1 : 0);
+    size_t original_chunk_size = chunk_base_size + (t < chunk_remainder ? 1 : 0);
     // If chunk size is zero (e.g., size < num_threads), skip creating a thread.
-    if (current_chunk_size == 0) continue;
+    if (original_chunk_size == 0) continue;
+    
+    // Calculate the original end position for this chunk
+    size_t original_chunk_end = offset + original_chunk_size;
+    
     // Calculate the start address for this thread's chunk.
-    char* chunk_start = static_cast<char*>(buffer) + offset;
+    char* unaligned_start = static_cast<char*>(buffer) + offset;
+    // Align chunk_start to cache line boundary to prevent false sharing
+    char* chunk_start = static_cast<char*>(align_ptr_to_cache_line(unaligned_start));
+    
     // Calculate the source start address for copy operations.
-    char* src_chunk = src_buffer ? static_cast<char*>(src_buffer) + offset : nullptr;
+    // Maintain the same offset relationship between src and dst to preserve data correspondence
+    char* src_chunk = nullptr;
+    if (src_buffer) {
+      char* src_unaligned_start = static_cast<char*>(src_buffer) + offset;
+      // Apply the same alignment offset to maintain src/dst correspondence
+      size_t alignment_offset = chunk_start - unaligned_start;
+      src_chunk = src_unaligned_start + alignment_offset;
+    }
+    
+    // Calculate chunk size to cover the original range [offset, offset + original_chunk_size)
+    // This ensures no gaps: chunk covers from aligned start to original end
+    char* original_end_ptr = static_cast<char*>(buffer) + original_chunk_end;
+    size_t current_chunk_size = original_end_ptr - chunk_start;
+    
+    // Ensure we don't exceed the effective buffer size
+    char* buffer_end = static_cast<char*>(buffer) + effective_size;
+    if (chunk_start + current_chunk_size > buffer_end) {
+      current_chunk_size = buffer_end - chunk_start;
+    }
+    
+    // Skip if chunk size is zero or negative after alignment adjustments
+    if (current_chunk_size == 0 || chunk_start >= buffer_end) {
+      // Still update offset to prevent infinite loops, but skip thread creation
+      offset = original_chunk_end;
+      continue;
+    }
 
     // Create a new thread to execute the chunk operation.
     threads.emplace_back([chunk_start, src_chunk, current_chunk_size, chunk_operation, set_qos, dummy_checksum]() {
@@ -94,8 +127,9 @@ void warmup_parallel(void* buffer, size_t size, int num_threads, ChunkOp chunk_o
       // Execute the chunk operation.
       chunk_operation(chunk_start, src_chunk, current_chunk_size, dummy_checksum);
     });
-    // Move the offset for the next thread's chunk.
-    offset += current_chunk_size;
+    
+    // Move the offset for the next thread's chunk using the actual end position
+    offset = original_chunk_end;
   }
   // Wait for all worker threads to complete.
   join_threads(threads);

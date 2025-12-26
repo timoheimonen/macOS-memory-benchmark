@@ -27,6 +27,7 @@
 #include <pthread/qos.h>        // For pthread_set_qos_class_self_np
 
 #include "utils/benchmark.h"  // Include benchmark definitions (assembly funcs, HighResTimer)
+#include "core/memory/memory_utils.h"
 
 // --- Generic Parallel Test Framework ---
 
@@ -58,8 +59,11 @@ double run_parallel_test(size_t size, int iterations, int num_threads, HighResTi
     size_t current_chunk_size = chunk_base_size + (t < chunk_remainder ? 1 : 0);
     if (current_chunk_size == 0) continue;  // Avoid launching threads for zero work.
 
+    // Store original offset for this thread (before alignment)
+    size_t original_offset = offset;
+    
     // iterations loop inside thread lambda for re-use (avoids per-iteration creation).
-    threads.emplace_back([current_chunk_size, offset, iterations, &start_mutex, &start_cv,
+    threads.emplace_back([current_chunk_size, original_offset, iterations, &start_mutex, &start_cv,
                           &start_flag, work_function, thread_name]() {
       // Set QoS for this worker thread
       kern_return_t qos_ret = pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
@@ -74,9 +78,11 @@ double run_parallel_test(size_t size, int iterations, int num_threads, HighResTi
       }
 
       // Execute the work function for this chunk
-      work_function(offset, current_chunk_size, iterations);
+      work_function(original_offset, current_chunk_size, iterations);
     });
-    offset += current_chunk_size;  // Update offset for the next chunk.
+    
+    // Update offset for the next chunk using original chunk size calculation
+    offset += (chunk_base_size + (t < chunk_remainder ? 1 : 0));
   }
 
   {
@@ -106,8 +112,27 @@ double run_read_test(void *buffer, size_t size, int iterations, int num_threads,
   checksum = 0;  // Ensure checksum starts at 0 for the measurement pass.
   
   // Define the work function for read operations
-  auto read_work = [buffer, &checksum](size_t offset, size_t chunk_size, int iters) {
-    char *chunk_start = static_cast<char *>(buffer) + offset;
+  auto read_work = [buffer, size, &checksum](size_t offset, size_t original_chunk_size, int iters) {
+    // Calculate original end position
+    size_t original_chunk_end = offset + original_chunk_size;
+    
+    char *unaligned_start = static_cast<char *>(buffer) + offset;
+    // Align chunk_start to cache line boundary to prevent false sharing
+    char *chunk_start = static_cast<char *>(align_ptr_to_cache_line(unaligned_start));
+    
+    // Calculate chunk size to cover the original range [offset, offset + original_chunk_size)
+    // This ensures no gaps: chunk covers from aligned start to original end
+    char *original_end_ptr = static_cast<char *>(buffer) + original_chunk_end;
+    size_t chunk_size = original_end_ptr - chunk_start;
+    
+    // Ensure we don't exceed the buffer size
+    char *buffer_end = static_cast<char *>(buffer) + size;
+    if (chunk_start + chunk_size > buffer_end) {
+      chunk_size = buffer_end - chunk_start;
+    }
+    
+    // Skip if chunk size is zero or negative after alignment adjustments
+    if (chunk_size == 0 || chunk_start >= buffer_end) return;
     
     // Accumulate checksum locally to avoid atomic operations in the inner loop.
     uint64_t local_checksum = 0;
@@ -133,8 +158,27 @@ double run_read_test(void *buffer, size_t size, int iterations, int num_threads,
 // Returns: Total duration in seconds.
 double run_write_test(void *buffer, size_t size, int iterations, int num_threads, HighResTimer &timer) {
   // Define the work function for write operations
-  auto write_work = [buffer](size_t offset, size_t chunk_size, int iters) {
-    char *chunk_start = static_cast<char *>(buffer) + offset;
+  auto write_work = [buffer, size](size_t offset, size_t original_chunk_size, int iters) {
+    // Calculate original end position
+    size_t original_chunk_end = offset + original_chunk_size;
+    
+    char *unaligned_start = static_cast<char *>(buffer) + offset;
+    // Align chunk_start to cache line boundary to prevent false sharing
+    char *chunk_start = static_cast<char *>(align_ptr_to_cache_line(unaligned_start));
+    
+    // Calculate chunk size to cover the original range [offset, offset + original_chunk_size)
+    // This ensures no gaps: chunk covers from aligned start to original end
+    char *original_end_ptr = static_cast<char *>(buffer) + original_chunk_end;
+    size_t chunk_size = original_end_ptr - chunk_start;
+    
+    // Ensure we don't exceed the buffer size
+    char *buffer_end = static_cast<char *>(buffer) + size;
+    if (chunk_start + chunk_size > buffer_end) {
+      chunk_size = buffer_end - chunk_start;
+    }
+    
+    // Skip if chunk size is zero or negative after alignment adjustments
+    if (chunk_size == 0 || chunk_start >= buffer_end) return;
     
     for (int i = 0; i < iters; ++i) {
       memory_write_loop_asm(chunk_start, chunk_size);
@@ -154,9 +198,35 @@ double run_write_test(void *buffer, size_t size, int iterations, int num_threads
 // Returns: Total duration in seconds.
 double run_copy_test(void *dst, void *src, size_t size, int iterations, int num_threads, HighResTimer &timer) {
   // Define the work function for copy operations
-  auto copy_work = [dst, src](size_t offset, size_t chunk_size, int iters) {
-    char *src_chunk = static_cast<char *>(src) + offset;
-    char *dst_chunk = static_cast<char *>(dst) + offset;
+  auto copy_work = [dst, src, size](size_t offset, size_t original_chunk_size, int iters) {
+    // Calculate original end position
+    size_t original_chunk_end = offset + original_chunk_size;
+    
+    // Calculate unaligned start positions
+    char *dst_unaligned_start = static_cast<char *>(dst) + offset;
+    char *src_unaligned_start = static_cast<char *>(src) + offset;
+    
+    // Align dst to cache line boundary to prevent false sharing
+    char *dst_chunk = static_cast<char *>(align_ptr_to_cache_line(dst_unaligned_start));
+    
+    // Maintain src/dst correspondence by applying the same alignment offset
+    // This ensures data integrity: src[i] always maps to dst[i]
+    size_t alignment_offset = dst_chunk - dst_unaligned_start;
+    char *src_chunk = src_unaligned_start + alignment_offset;
+    
+    // Calculate chunk size to cover the original range [offset, offset + original_chunk_size)
+    // This ensures no gaps: chunk covers from aligned start to original end
+    char *dst_original_end = static_cast<char *>(dst) + original_chunk_end;
+    size_t chunk_size = dst_original_end - dst_chunk;
+    
+    // Ensure we don't exceed the buffer size
+    char *dst_end = static_cast<char *>(dst) + size;
+    if (dst_chunk + chunk_size > dst_end) {
+      chunk_size = dst_end - dst_chunk;
+    }
+    
+    // Skip if chunk size is zero or negative after alignment adjustments
+    if (chunk_size == 0 || dst_chunk >= dst_end) return;
     
     for (int i = 0; i < iters; ++i) {
       memory_copy_loop_asm(dst_chunk, src_chunk, chunk_size);
