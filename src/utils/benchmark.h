@@ -51,7 +51,7 @@
  * @def SOFTVERSION
  * @brief Software version number
  */
-#define SOFTVERSION 0.50f
+#define SOFTVERSION 0.51f
 
 // --- High-resolution timer helper ---
 /**
@@ -246,7 +246,8 @@ void print_results(int loop, size_t buffer_size, size_t buffer_size_mb, int iter
     double l2_read_bw_gb_s, double l2_write_bw_gb_s, double l2_copy_bw_gb_s,
     double average_latency_ns, double total_lat_time_ns,
     bool use_custom_cache_size, double custom_latency_ns, size_t custom_buffer_size,
-    double custom_read_bw_gb_s, double custom_write_bw_gb_s, double custom_copy_bw_gb_s); // Print results for one loop
+    double custom_read_bw_gb_s, double custom_write_bw_gb_s, double custom_copy_bw_gb_s,
+    bool user_specified_threads); // Print results for one loop
 void print_cache_info(size_t l1_cache_size, size_t l2_cache_size, bool use_custom_cache_size, size_t custom_cache_size_bytes); // Print cache size information
 
 // --- Statistics Functions (statistics.cpp) ---

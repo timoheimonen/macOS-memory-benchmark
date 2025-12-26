@@ -33,6 +33,7 @@ const std::string& error_iterations_invalid();
 const std::string& error_buffersize_invalid();
 const std::string& error_count_invalid();
 const std::string& error_latency_samples_invalid();
+const std::string& error_threads_invalid();
 std::string error_mmap_failed(const std::string& buffer_name);
 std::string error_madvise_failed(const std::string& buffer_name);
 std::string error_munmap_failed();
@@ -68,6 +69,7 @@ const std::string& warning_l1_cache_size_detection_failed();
 const std::string& warning_l2_cache_size_detection_failed_m1();
 const std::string& warning_l2_cache_size_detection_failed_m2_m3_m4_m5();
 const std::string& warning_l2_cache_size_detection_failed_generic();
+std::string warning_threads_capped(int requested, int max_cores);
 
 // --- Info Messages ---
 std::string info_setting_max_fallback(unsigned long max_mb);
@@ -116,7 +118,7 @@ std::string results_copy_bandwidth(double bw_gb_s, double total_time);
 std::string results_main_memory_latency();
 std::string results_latency_total_time(double total_time_sec);
 std::string results_latency_average(double latency_ns);
-std::string results_cache_bandwidth();
+std::string results_cache_bandwidth(int num_threads);
 std::string results_cache_latency();
 std::string results_custom_cache();
 std::string results_l1_cache();

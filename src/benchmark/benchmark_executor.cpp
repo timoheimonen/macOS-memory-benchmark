@@ -43,47 +43,49 @@ void run_main_memory_bandwidth_tests(const BenchmarkBuffers& buffers, const Benc
 
 // Helper function to run a single cache bandwidth test (read, write, copy)
 void run_single_cache_bandwidth_test(void* src_buffer, void* dst_buffer, size_t buffer_size,
-                                     int cache_iterations, HighResTimer& test_timer,
+                                     int cache_iterations, int num_threads, HighResTimer& test_timer,
                                      double& read_time, double& write_time, double& copy_time,
                                      std::atomic<uint64_t>& read_checksum) {
   show_progress();
   std::atomic<uint64_t> warmup_read_checksum{0};
-  warmup_cache_read(src_buffer, buffer_size, Constants::SINGLE_THREAD, warmup_read_checksum);
+  warmup_cache_read(src_buffer, buffer_size, num_threads, warmup_read_checksum);
   read_time = run_read_test(src_buffer, buffer_size, cache_iterations, 
-                           Constants::SINGLE_THREAD, read_checksum, test_timer);
+                           num_threads, read_checksum, test_timer);
   
-  warmup_cache_write(dst_buffer, buffer_size, Constants::SINGLE_THREAD);
+  warmup_cache_write(dst_buffer, buffer_size, num_threads);
   write_time = run_write_test(dst_buffer, buffer_size, cache_iterations, 
-                             Constants::SINGLE_THREAD, test_timer);
+                             num_threads, test_timer);
   
-  warmup_cache_copy(dst_buffer, src_buffer, buffer_size, Constants::SINGLE_THREAD);
+  warmup_cache_copy(dst_buffer, src_buffer, buffer_size, num_threads);
   copy_time = run_copy_test(dst_buffer, src_buffer, buffer_size, 
-                           cache_iterations, Constants::SINGLE_THREAD, test_timer);
+                           cache_iterations, num_threads, test_timer);
 }
 
 // Run cache bandwidth tests (L1, L2, or custom)
 void run_cache_bandwidth_tests(const BenchmarkBuffers& buffers, const BenchmarkConfig& config,
                                TimingResults& timings, HighResTimer& test_timer) {
   int cache_iterations = config.iterations * Constants::CACHE_ITERATIONS_MULTIPLIER;
+  // Use user-specified threads if set, otherwise default to single-threaded for cache tests
+  int cache_threads = config.user_specified_threads ? config.num_threads : Constants::SINGLE_THREAD;
   
   if (config.use_custom_cache_size) {
     if (config.custom_buffer_size > 0 && buffers.custom_bw_src() != nullptr && buffers.custom_bw_dst() != nullptr) {
       run_single_cache_bandwidth_test(buffers.custom_bw_src(), buffers.custom_bw_dst(), config.custom_buffer_size,
-                                      cache_iterations, test_timer,
+                                      cache_iterations, cache_threads, test_timer,
                                       timings.custom_read_time, timings.custom_write_time, timings.custom_copy_time,
                                       timings.custom_read_checksum);
     }
   } else {
     if (config.l1_buffer_size > 0 && buffers.l1_bw_src() != nullptr && buffers.l1_bw_dst() != nullptr) {
       run_single_cache_bandwidth_test(buffers.l1_bw_src(), buffers.l1_bw_dst(), config.l1_buffer_size,
-                                      cache_iterations, test_timer,
+                                      cache_iterations, cache_threads, test_timer,
                                       timings.l1_read_time, timings.l1_write_time, timings.l1_copy_time,
                                       timings.l1_read_checksum);
     }
     
     if (config.l2_buffer_size > 0 && buffers.l2_bw_src() != nullptr && buffers.l2_bw_dst() != nullptr) {
       run_single_cache_bandwidth_test(buffers.l2_bw_src(), buffers.l2_bw_dst(), config.l2_buffer_size,
-                                      cache_iterations, test_timer,
+                                      cache_iterations, cache_threads, test_timer,
                                       timings.l2_read_time, timings.l2_write_time, timings.l2_copy_time,
                                       timings.l2_read_checksum);
     }

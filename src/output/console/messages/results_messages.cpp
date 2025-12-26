@@ -76,8 +76,14 @@ std::string results_latency_average(double latency_ns) {
   return oss.str();
 }
 
-std::string results_cache_bandwidth() {
-  return "\nCache Bandwidth Tests (single-threaded):";
+std::string results_cache_bandwidth(int num_threads) {
+  std::ostringstream oss;
+  if (num_threads == 1) {
+    oss << "\nCache Bandwidth Tests (single-threaded):";
+  } else {
+    oss << "\nCache Bandwidth Tests (multi-threaded, " << num_threads << " threads):";
+  }
+  return oss.str();
 }
 
 std::string results_cache_latency() {

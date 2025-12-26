@@ -189,7 +189,8 @@ int run_all_benchmarks(const BenchmarkBuffers& buffers, const BenchmarkConfig& c
                     loop_results.l2_read_bw_gb_s, loop_results.l2_write_bw_gb_s, loop_results.l2_copy_bw_gb_s,
                     loop_results.average_latency_ns, loop_results.total_lat_time_ns,
                     config.use_custom_cache_size, loop_results.custom_latency_ns, config.custom_buffer_size,
-                    loop_results.custom_read_bw_gb_s, loop_results.custom_write_bw_gb_s, loop_results.custom_copy_bw_gb_s);
+                    loop_results.custom_read_bw_gb_s, loop_results.custom_write_bw_gb_s, loop_results.custom_copy_bw_gb_s,
+                    config.user_specified_threads);
     } catch (const std::exception &e) {
       std::cerr << Messages::error_benchmark_loop(loop, e.what()) << std::endl;
       return EXIT_FAILURE;
