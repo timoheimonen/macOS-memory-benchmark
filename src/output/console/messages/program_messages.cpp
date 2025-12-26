@@ -65,7 +65,7 @@ std::string usage_options(const std::string& prog_name) {
       << "  -count <count>        Number of full loops (read/write/copy/latency) (default: " << Constants::DEFAULT_LOOP_COUNT << ").\n"
       << "                        When count > 1, statistics include percentiles (P50/P90/P95/P99) and stddev.\n"
       << "  -latency-samples <count> Number of latency samples to collect per test (default: " << Constants::DEFAULT_LATENCY_SAMPLE_COUNT << ")\n"
-      << "  -threads <count>        Number of threads to use for benchmarks (default: detected\n"
+      << "  -threads <count>      Number of threads to use for benchmarks (default: detected\n"
       << "                        CPU core count). Applies to all benchmarks including cache tests.\n"
       << "                        If specified value exceeds available cores, it will be capped to\n"
       << "                        the maximum number of cores with a warning.\n"
