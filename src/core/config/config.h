@@ -71,6 +71,7 @@ struct BenchmarkConfig {
   bool use_custom_cache_size = false;  ///< Whether to use custom cache size
   bool run_patterns = false;           ///< Whether to run pattern benchmarks
   bool use_non_cacheable = false;      ///< Use cache-discouraging hints (best-effort, not true non-cacheable)
+  bool user_specified_threads = false; ///< Whether user explicitly set -threads parameter
   
   // Output file
   std::string output_file;  ///< JSON output file path (empty = no JSON output)

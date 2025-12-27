@@ -25,6 +25,7 @@
 
 int parse_arguments(int argc, char* argv[], BenchmarkConfig& config) {
   long long requested_buffer_size_mb_ll = -1;  // User requested size (-1 = none)
+  long long requested_threads_ll = -1;  // User requested threads (-1 = none)
   
   // First pass: parse -cache-size early (needed for cache size detection)
   for (int i = 1; i < argc; ++i) {
@@ -54,7 +55,8 @@ int parse_arguments(int argc, char* argv[], BenchmarkConfig& config) {
   config.cpu_name = get_processor_name();
   config.perf_cores = get_performance_cores();
   config.eff_cores = get_efficiency_cores();
-  config.num_threads = get_total_logical_cores();
+  int max_cores = get_total_logical_cores();
+  config.num_threads = max_cores;  // Default: use all available cores
   
   // Determine if custom cache size is being used
   config.use_custom_cache_size = (config.custom_cache_size_kb_ll != -1);
@@ -122,6 +124,14 @@ int parse_arguments(int argc, char* argv[], BenchmarkConfig& config) {
         config.run_patterns = true;
       } else if (arg == "-non-cacheable") {
         config.use_non_cacheable = true;
+      } else if (arg == "-threads") {
+        if (++i < argc) {
+          long long val_ll = std::stoll(argv[i]);
+          if (val_ll <= 0 || val_ll > std::numeric_limits<int>::max())
+            throw std::out_of_range(Messages::error_threads_invalid());
+          requested_threads_ll = val_ll;
+        } else
+          throw std::invalid_argument(Messages::error_missing_value("-threads"));
       } else if (arg == "-h" || arg == "--help") {
         print_usage(argv[0]);
         return EXIT_SUCCESS;  // Special return value for help
@@ -144,6 +154,18 @@ int parse_arguments(int argc, char* argv[], BenchmarkConfig& config) {
     config.buffer_size_mb = static_cast<unsigned long>(requested_buffer_size_mb_ll);
   }
   // Otherwise use default (already set in struct)
+
+  // Set threads from user request or default
+  if (requested_threads_ll != -1) {
+    int requested_threads = static_cast<int>(requested_threads_ll);
+    if (requested_threads > max_cores) {
+      std::cerr << Messages::warning_threads_capped(requested_threads, max_cores) << std::endl;
+      config.num_threads = max_cores;
+    } else {
+      config.num_threads = requested_threads;
+    }
+    config.user_specified_threads = true;
+  }
 
   return EXIT_SUCCESS;
 }

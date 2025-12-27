@@ -555,7 +555,7 @@ TEST_F(MessagesFormattingTest, ResultsLatencyAverage) {
 }
 
 TEST_F(MessagesFormattingTest, ResultsCacheBandwidth) {
-  std::string msg = Messages::results_cache_bandwidth();
+  std::string msg = Messages::results_cache_bandwidth(1);
   EXPECT_NE(msg.find("Cache Bandwidth"), std::string::npos);
   EXPECT_NE(msg.find("single-threaded"), std::string::npos);
 }

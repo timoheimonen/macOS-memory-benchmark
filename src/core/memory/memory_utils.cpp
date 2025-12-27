@@ -13,7 +13,7 @@
 // You should have received a copy of the GNU General Public License
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 //
-#include "utils/benchmark.h"
+#include "core/memory/memory_utils.h"
 #include <vector>
 #include <numeric>   // Needed for std::iota
 #include <random>    // Needed for std::random_device, std::mt19937_64

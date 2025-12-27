@@ -45,13 +45,13 @@ CPP_SRCS_OUTPUT_CONSOLE_MESSAGES = output/console/messages/error_messages.cpp ou
 CPP_SRCS_UTILS = utils/utils.cpp utils/json_utils.cpp
 CPP_SRCS_SRC = $(CPP_SRCS_CORE_CONFIG) $(CPP_SRCS_CORE_MEMORY) $(CPP_SRCS_CORE_SYSTEM) $(CPP_SRCS_CORE_TIMING) $(CPP_SRCS_OUTPUT_CONSOLE) $(CPP_SRCS_OUTPUT_CONSOLE_MESSAGES) $(CPP_SRCS_UTILS)
 # Files in the src/benchmark subdirectory
-CPP_SRCS_BENCHMARK = benchmark_tests.cpp benchmark_runner.cpp benchmark_executor.cpp benchmark_results.cpp
+CPP_SRCS_BENCHMARK = bandwidth_tests.cpp latency_tests.cpp benchmark_runner.cpp benchmark_executor.cpp benchmark_results.cpp
 # Files in the src/warmup subdirectory
 CPP_SRCS_WARMUP = basic_warmup.cpp latency_warmup.cpp cache_warmup.cpp pattern_warmup.cpp
 # Files in the src/output/json/json_output subdirectory
 CPP_SRCS_JSON_OUTPUT = output/json/json_output/builder.cpp output/json/json_output/main_memory.cpp output/json/json_output/cache.cpp output/json/json_output/patterns.cpp output/json/json_output/file_writer.cpp output/json/json_output/json_output.cpp
 # Files in the src/pattern_benchmark subdirectory
-CPP_SRCS_PATTERN_BENCHMARK = helpers.cpp validation.cpp execution.cpp output.cpp
+CPP_SRCS_PATTERN_BENCHMARK = helpers.cpp validation.cpp execution.cpp execution_utils.cpp execution_strided.cpp execution_patterns.cpp output.cpp
 
 # Add src/ prefix to source files
 CPP_SRCS_SRC_FULL = $(addprefix $(SRC_DIR)/, $(CPP_SRCS_SRC))
@@ -126,65 +126,29 @@ $(TEST_DIR)/%.o: $(TEST_DIR)/%.cpp
 	@echo "Compiling test $< -> $@..."
 	$(CXX) $(TEST_CXXFLAGS) -c $< -o $@
 
-# Rule for compiling C++ source files in the root directory into object files
-# $< means the first prerequisite (source file)
-# $@ means the target (object file)
-# This rule handles main.cpp -> main.o
-%.o: %.cpp $(HEADERS)
-	@echo "Compiling (root) $< -> $@..."
-	$(CXX) $(CXXFLAGS) -c $< -o $@
-
-# Rule for compiling C++ source files in the src/ directory into object files
-# This rule handles src/timer.cpp -> src/timer.o etc.
-$(SRC_DIR)/%.o: $(SRC_DIR)/%.cpp $(HEADERS)
-	@echo "Compiling (src) $< -> $@..."
-	$(CXX) $(CXXFLAGS) -c $< -o $@
-
-# Rule for compiling C++ source files in the src/benchmark/ directory into object files
-# This rule handles src/benchmark/benchmark_runner.cpp -> src/benchmark/benchmark_runner.o etc.
-$(SRC_DIR)/benchmark/%.o: $(SRC_DIR)/benchmark/%.cpp $(HEADERS)
-	@echo "Compiling (benchmark) $< -> $@..."
-	$(CXX) $(CXXFLAGS) -c $< -o $@
-
-# Rule for compiling C++ source files in the src/output/json/json_output/ directory into object files
-# This rule handles src/output/json/json_output/builder.cpp -> src/output/json/json_output/builder.o etc.
-$(SRC_DIR)/output/json/json_output/%.o: $(SRC_DIR)/output/json/json_output/%.cpp $(HEADERS)
-	@echo "Compiling (json_output) $< -> $@..."
-	$(CXX) $(CXXFLAGS) -c $< -o $@
-
-# Rule for compiling C++ source files in the src/warmup/ directory into object files
-# This rule handles src/warmup/basic_warmup.cpp -> src/warmup/basic_warmup.o etc.
-$(SRC_DIR)/warmup/%.o: $(SRC_DIR)/warmup/%.cpp $(HEADERS)
-	@echo "Compiling (warmup) $< -> $@..."
-	$(CXX) $(CXXFLAGS) -c $< -o $@
-
-# Rule for compiling C++ source files in the src/pattern_benchmark/ directory into object files
-# This rule handles src/pattern_benchmark/helpers.cpp -> src/pattern_benchmark/helpers.o etc.
-$(SRC_DIR)/pattern_benchmark/%.o: $(SRC_DIR)/pattern_benchmark/%.cpp $(HEADERS)
-	@echo "Compiling (pattern_benchmark) $< -> $@..."
-	$(CXX) $(CXXFLAGS) -c $< -o $@
-
-# Rule for compiling C++ source files in the src/output/console/messages/ directory into object files
-# This rule handles src/output/console/messages/error_messages.cpp -> src/output/console/messages/error_messages.o etc.
-$(SRC_DIR)/output/console/messages/%.o: $(SRC_DIR)/output/console/messages/%.cpp $(HEADERS)
-	@echo "Compiling (messages) $< -> $@..."
-	$(CXX) $(CXXFLAGS) -c $< -o $@
-
-# Rule for compiling C++ source files in the src/core/ directories into object files
+# Rule for compiling C++ source files in the src/core/config/ directory into object files
 $(SRC_DIR)/core/config/%.o: $(SRC_DIR)/core/config/%.cpp $(HEADERS)
 	@echo "Compiling (core/config) $< -> $@..."
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
+# Rule for compiling C++ source files in the src/core/memory/ directory into object files
 $(SRC_DIR)/core/memory/%.o: $(SRC_DIR)/core/memory/%.cpp $(HEADERS)
 	@echo "Compiling (core/memory) $< -> $@..."
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
+# Rule for compiling C++ source files in the src/core/system/ directory into object files
 $(SRC_DIR)/core/system/%.o: $(SRC_DIR)/core/system/%.cpp $(HEADERS)
 	@echo "Compiling (core/system) $< -> $@..."
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
+# Rule for compiling C++ source files in the src/core/timing/ directory into object files
 $(SRC_DIR)/core/timing/%.o: $(SRC_DIR)/core/timing/%.cpp $(HEADERS)
 	@echo "Compiling (core/timing) $< -> $@..."
+	$(CXX) $(CXXFLAGS) -c $< -o $@
+
+# Rule for compiling C++ source files in the src/output/console/messages/ directory into object files
+$(SRC_DIR)/output/console/messages/%.o: $(SRC_DIR)/output/console/messages/%.cpp $(HEADERS)
+	@echo "Compiling (messages) $< -> $@..."
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
 # Rule for compiling C++ source files in the src/output/console/ directory into object files
@@ -192,9 +156,38 @@ $(SRC_DIR)/output/console/%.o: $(SRC_DIR)/output/console/%.cpp $(HEADERS)
 	@echo "Compiling (output/console) $< -> $@..."
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
+# Rule for compiling C++ source files in the src/output/json/json_output/ directory into object files
+$(SRC_DIR)/output/json/json_output/%.o: $(SRC_DIR)/output/json/json_output/%.cpp $(HEADERS)
+	@echo "Compiling (json_output) $< -> $@..."
+	$(CXX) $(CXXFLAGS) -c $< -o $@
+
 # Rule for compiling C++ source files in the src/utils/ directory into object files
 $(SRC_DIR)/utils/%.o: $(SRC_DIR)/utils/%.cpp $(HEADERS)
 	@echo "Compiling (utils) $< -> $@..."
+	$(CXX) $(CXXFLAGS) -c $< -o $@
+
+# Rule for compiling C++ source files in the src/benchmark/ directory into object files
+$(SRC_DIR)/benchmark/%.o: $(SRC_DIR)/benchmark/%.cpp $(HEADERS)
+	@echo "Compiling (benchmark) $< -> $@..."
+	$(CXX) $(CXXFLAGS) -c $< -o $@
+
+# Rule for compiling C++ source files in the src/warmup/ directory into object files
+$(SRC_DIR)/warmup/%.o: $(SRC_DIR)/warmup/%.cpp $(HEADERS)
+	@echo "Compiling (warmup) $< -> $@..."
+	$(CXX) $(CXXFLAGS) -c $< -o $@
+
+# Rule for compiling C++ source files in the src/pattern_benchmark/ directory into object files
+$(SRC_DIR)/pattern_benchmark/%.o: $(SRC_DIR)/pattern_benchmark/%.cpp $(HEADERS)
+	@echo "Compiling (pattern_benchmark) $< -> $@..."
+	$(CXX) $(CXXFLAGS) -c $< -o $@
+
+# Rule for compiling C++ source files in the root directory into object files
+# $< means the first prerequisite (source file)
+# $@ means the target (object file)
+# This rule handles main.cpp -> main.o
+# NOTE: This must come AFTER all specific subdirectory rules
+%.o: %.cpp $(HEADERS)
+	@echo "Compiling (root) $< -> $@..."
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
 # Rule for assembling assembly source files in src/asm into object files

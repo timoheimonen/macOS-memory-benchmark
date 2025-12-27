@@ -75,6 +75,11 @@ const std::string& error_latency_samples_invalid() {
   return msg;
 }
 
+const std::string& error_threads_invalid() {
+  static const std::string msg = "threads invalid (must be > 0)";
+  return msg;
+}
+
 std::string error_mmap_failed(const std::string& buffer_name) {
   return "mmap failed for " + buffer_name;
 }

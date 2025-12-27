@@ -82,6 +82,7 @@ void run_main_memory_bandwidth_tests(const BenchmarkBuffers& buffers, const Benc
  * @param dst_buffer Pointer to destination buffer
  * @param buffer_size Size of buffers in bytes
  * @param cache_iterations Number of iterations for the cache test
+ * @param num_threads Number of threads to use for the test
  * @param test_timer Reference to high-resolution timer
  * @param[out] read_time Output parameter for read time (seconds)
  * @param[out] write_time Output parameter for write time (seconds)
@@ -89,7 +90,7 @@ void run_main_memory_bandwidth_tests(const BenchmarkBuffers& buffers, const Benc
  * @param[out] read_checksum Output parameter for read checksum
  */
 void run_single_cache_bandwidth_test(void* src_buffer, void* dst_buffer, size_t buffer_size,
-                                     int cache_iterations, HighResTimer& test_timer,
+                                     int cache_iterations, int num_threads, HighResTimer& test_timer,
                                      double& read_time, double& write_time, double& copy_time,
                                      std::atomic<uint64_t>& read_checksum);
 

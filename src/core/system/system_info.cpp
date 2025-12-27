@@ -23,7 +23,7 @@
 #include <vector>   // For std::vector
 #include <cerrno>   // For errno
 
-#include "utils/benchmark.h"
+#include "core/system/system_info.h"
 #include "core/config/constants.h"
 #include "output/console/messages.h"
 

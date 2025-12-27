@@ -38,6 +38,9 @@ namespace Constants {
   constexpr size_t BYTES_PER_KB = 1024;
   constexpr size_t BYTES_PER_MB = 1024 * 1024;
   
+  // Cache line alignment constant
+  constexpr size_t CACHE_LINE_SIZE_BYTES = 64;  // Cache line size for alignment (64 bytes on Apple Silicon)
+  
   // Latency test constants
   constexpr size_t LATENCY_STRIDE_BYTES = 128;  // Latency test access stride
   constexpr size_t MIN_LATENCY_BUFFER_SIZE = LATENCY_STRIDE_BYTES * 2;  // Minimum size (2 pointers worth)

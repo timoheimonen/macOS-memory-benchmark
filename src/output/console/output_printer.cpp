@@ -17,9 +17,10 @@
 #include <iostream>   // Required for std::cout, std::cerr
 #include <sstream>    // Required for std::ostringstream
 
-#include "utils/benchmark.h"  // Include common definitions/constants (e.g., SOFTVERSION)
+#include "core/config/version.h"  // SOFTVERSION
 #include "core/config/constants.h"  // Include constants for default values
 #include "output/console/messages.h"   // Include centralized messages
+#include "output/console/output_printer.h"  // Function declarations
 
 // --- Helper function to print usage instructions ---
 // Displays how to use the program via command-line arguments.
@@ -100,7 +101,8 @@ void print_results(int loop, size_t buffer_size, size_t buffer_size_mb, int iter
                    double l2_read_bw_gb_s, double l2_write_bw_gb_s, double l2_copy_bw_gb_s,
                    double average_latency_ns, double total_lat_time_ns,
                    bool use_custom_cache_size, double custom_latency_ns, size_t custom_buffer_size,
-                   double custom_read_bw_gb_s, double custom_write_bw_gb_s, double custom_copy_bw_gb_s) {
+                   double custom_read_bw_gb_s, double custom_write_bw_gb_s, double custom_copy_bw_gb_s,
+                   bool user_specified_threads) {
   // Print a header indicating the current loop number.
   std::cout << Messages::results_loop_header(loop) << std::endl;
   // Set output to fixed-point notation for consistent formatting.
@@ -120,7 +122,9 @@ void print_results(int loop, size_t buffer_size, size_t buffer_size_mb, int iter
   std::cout << Messages::results_latency_average(average_latency_ns) << std::endl;
 
   // Display cache bandwidth test results.
-  std::cout << Messages::results_cache_bandwidth() << std::endl;
+  // Cache tests use user-specified threads if set, otherwise single-threaded
+  int cache_threads = user_specified_threads ? num_threads : Constants::SINGLE_THREAD;
+  std::cout << Messages::results_cache_bandwidth(cache_threads) << std::endl;
   std::cout << std::setprecision(Constants::BANDWIDTH_PRECISION);
   if (use_custom_cache_size) {
     // Display custom cache bandwidth results

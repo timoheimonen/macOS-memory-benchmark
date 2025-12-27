@@ -100,5 +100,12 @@ const std::string& warning_l2_cache_size_detection_failed_generic() {
   return msg;
 }
 
+std::string warning_threads_capped(int requested, int max_cores) {
+  std::ostringstream oss;
+  oss << "Warning: Requested threads (" << requested << ") exceeds maximum available cores ("
+      << max_cores << "). Using " << max_cores << " threads.";
+  return oss.str();
+}
+
 } // namespace Messages
 
