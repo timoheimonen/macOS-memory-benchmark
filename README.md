@@ -1,4 +1,4 @@
-# macOS Apple Silicon Memory Performance Test
+# macOS Apple Silicon Memory Benchmark
 
 Copyright 2025 Timo Heimonen <timo.heimonen@proton.me>  
 License: GPL-3.0 license  
