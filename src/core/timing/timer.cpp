@@ -19,7 +19,7 @@
 #include <cstdlib>  // For exit, EXIT_FAILURE
 #include <iostream> // For std::cerr
 
-#include "utils/benchmark.h"
+#include "core/timing/timer.h"
 #include "output/console/messages.h"
 
 // Constructor: Initializes the timer by getting the timebase info.

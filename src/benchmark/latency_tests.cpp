@@ -16,7 +16,9 @@
 #include <vector>                // For std::vector
 #include <cstddef>               // For size_t
 
-#include "utils/benchmark.h"  // Include benchmark definitions (assembly funcs, HighResTimer)
+#include "benchmark/benchmark_tests.h"  // Function declarations
+#include "core/timing/timer.h"  // HighResTimer
+#include "asm/asm_functions.h"  // Assembly function declarations
 
 // Executes the single-threaded memory latency benchmark.
 // 'buffer': Pointer to the buffer containing the pointer chain.

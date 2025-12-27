@@ -17,9 +17,10 @@
 #include <iostream>   // Required for std::cout, std::cerr
 #include <sstream>    // Required for std::ostringstream
 
-#include "utils/benchmark.h"  // Include common definitions/constants (e.g., SOFTVERSION)
+#include "core/config/version.h"  // SOFTVERSION
 #include "core/config/constants.h"  // Include constants for default values
 #include "output/console/messages.h"   // Include centralized messages
+#include "output/console/output_printer.h"  // Function declarations
 
 // --- Helper function to print usage instructions ---
 // Displays how to use the program via command-line arguments.

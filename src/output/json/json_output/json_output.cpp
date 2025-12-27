@@ -24,7 +24,7 @@
 #include <iomanip>    // Required for std::put_time
 
 #include "output/json/json_output.h"
-#include "utils/benchmark.h"  // Include common definitions/constants (e.g., SOFTVERSION)
+#include "core/config/version.h"  // SOFTVERSION
 #include "core/config/config.h"     // For BenchmarkConfig
 #include "benchmark/benchmark_runner.h"  // For BenchmarkStatistics
 #include "pattern_benchmark/pattern_benchmark.h" // For PatternResults

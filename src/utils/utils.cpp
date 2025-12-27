@@ -18,7 +18,7 @@
 #include <thread>     // Required for std::thread
 #include <vector>     // Required for std::vector
 
-#include "utils/benchmark.h"  // Include common definitions/constants
+#include "utils/utils.h"
 
 // --- Progress Indicator ---
 // Simple spinner for showing progress without affecting performance

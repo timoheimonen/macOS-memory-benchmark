@@ -16,7 +16,9 @@
 #include <atomic>                // For std::atomic
 #include <cstdint>               // For uint64_t
 
-#include "utils/benchmark.h"  // Include benchmark definitions (assembly funcs, HighResTimer)
+#include "benchmark/benchmark_tests.h"  // Function declarations
+#include "core/timing/timer.h"  // HighResTimer
+#include "asm/asm_functions.h"  // Assembly function declarations
 #include "core/memory/memory_utils.h"
 #include "benchmark/parallel_test_framework.h"
 
