@@ -5,10 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.51] - DEVELOPMENT
+## [0.51] - 2025-12-27
 
 ### Added
 - **Thread count control (`-threads` parameter)**: Added `-threads <count>` command-line parameter to allow users to specify the number of threads used for benchmarks. The parameter applies to all non-latency benchmarks. If the specified value exceeds the available CPU cores, it is automatically capped to the maximum number of cores. If not specified, the default behavior uses the detected CPU core count. This provides fine-grained control over benchmark parallelism for testing different thread configurations.
+- **Example scripts**: Added script-examples folder containing example bash and Python scripts to automate benchmark execution and result analysis.
 
 ## [0.50] - 2025-12-21
 
