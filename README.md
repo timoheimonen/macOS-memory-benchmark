@@ -3,7 +3,7 @@
 Copyright 2025 Timo Heimonen <timo.heimonen@proton.me>  
 License: GPL-3.0 license  
   
-A simple tool to measure memory write/read/copy bandwidth and memory access latency on macOS with Apple Silicon (ARM64).  
+**Low-level tool** to measure memory read/write/copy bandwidth, cache/main memory latency, and access pattern performance on macOS Apple Silicon (ARM64).
   
 ## Description
 
