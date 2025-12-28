@@ -42,17 +42,19 @@ TEST(ConfigTest, ParseValidArguments) {
 }
 
 // Test parsing custom cache size
-// Note: The code parses -cache-size in a first pass, then encounters it again in the second pass
-// and treats it as a duplicate (even though it's only specified once). This is the current behavior.
+// The code parses -cache-size in a first pass, then skips it in the second pass
+// (since it was already parsed). This allows -cache-size to work correctly.
 TEST(ConfigTest, ParseCustomCacheSize) {
   BenchmarkConfig config;
   const char* argv[] = {"program", "-cache-size", "256"};
   int argc = 3;
   
   // The code parses -cache-size in the first pass and sets the value,
-  // then in the second pass it encounters it again and treats it as a duplicate
+  // then in the second pass it skips it (since it was already parsed)
   int result = parse_arguments(argc, const_cast<char**>(argv), config);
-  EXPECT_EQ(result, EXIT_FAILURE);  // Expect failure due to duplicate detection in second pass
+  EXPECT_EQ(result, EXIT_SUCCESS);
+  EXPECT_EQ(config.custom_cache_size_kb_ll, 256);
+  EXPECT_TRUE(config.use_custom_cache_size);
 }
 
 // Test parsing invalid cache size (too small)
