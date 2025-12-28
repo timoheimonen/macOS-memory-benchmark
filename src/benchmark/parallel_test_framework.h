@@ -56,6 +56,12 @@ double run_parallel_test(size_t size, int iterations, int num_threads, HighResTi
   size_t chunk_base_size = size / num_threads;
   size_t chunk_remainder = size % num_threads;
 
+  // Early validation: return 0.0 if no work to do or invalid thread count.
+  // This avoids timer overhead when no meaningful work can be performed.
+  if (size == 0 || num_threads <= 0) {
+    return 0.0;  // No work to do or invalid thread count
+  }
+
   // Launch threads once; each handles its chunk for all iterations.
   for (int t = 0; t < num_threads; ++t) {
     size_t current_chunk_size = chunk_base_size + (t < chunk_remainder ? 1 : 0);
@@ -85,6 +91,12 @@ double run_parallel_test(size_t size, int iterations, int num_threads, HighResTi
     
     // Update offset for the next chunk using original chunk size calculation
     offset += (chunk_base_size + (t < chunk_remainder ? 1 : 0));
+  }
+
+  // Check if any threads were created. If all chunks were zero after alignment,
+  // no threads were created and we should return 0.0 to avoid misleading timer measurements.
+  if (threads.empty()) {
+    return 0.0;  // No threads created (all chunks were zero after alignment)
   }
 
   {

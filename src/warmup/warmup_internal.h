@@ -72,6 +72,12 @@ void warmup_parallel(void* buffer, size_t size, int num_threads, ChunkOp chunk_o
   // Calculate the remainder to distribute among threads.
   size_t chunk_remainder = effective_size % num_threads;
 
+  // Early validation: return early if no work to do or invalid thread count.
+  // This avoids unnecessary thread creation overhead when no meaningful work can be performed.
+  if (effective_size == 0 || num_threads <= 0) {
+    return;  // No work to do or invalid thread count
+  }
+
   // Create and launch threads.
   for (int t = 0; t < num_threads; ++t) {
     // Calculate the exact size for this thread's chunk, adding remainder if needed.
@@ -131,6 +137,13 @@ void warmup_parallel(void* buffer, size_t size, int num_threads, ChunkOp chunk_o
     // Move the offset for the next thread's chunk using the actual end position
     offset = original_chunk_end;
   }
+
+  // Check if any threads were created. If all chunks were zero after alignment,
+  // no threads were created and we should return early to avoid unnecessary overhead.
+  if (threads.empty()) {
+    return;  // No threads created (all chunks were zero after alignment)
+  }
+
   // Wait for all worker threads to complete.
   join_threads(threads);
 }
