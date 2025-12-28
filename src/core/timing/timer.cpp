@@ -33,6 +33,13 @@ HighResTimer::HighResTimer() {
     // Could also throw an exception here instead of exiting.
     exit(EXIT_FAILURE);
   }
+  // Validate timebase denominator to prevent division by zero
+  if (timebase_info.denom == 0) {
+    std::cerr << Messages::error_prefix() 
+              << "timebase denominator is zero (invalid timebase)" 
+              << std::endl;
+    exit(EXIT_FAILURE);
+  }
   start_ticks = 0;  // Ensure start_ticks is initialized.
 }
 
@@ -45,6 +52,13 @@ double HighResTimer::stop() {
   // Calculate elapsed ticks, handling potential timer wrap-around.
   uint64_t elapsed_ticks = (end >= start_ticks) ? (end - start_ticks) : (UINT64_MAX - start_ticks + end + 1);
   // Convert ticks to nanoseconds using the timebase info.
+  // Defensive check: ensure denom is not zero (should never happen after constructor validation)
+  if (timebase_info.denom == 0) {
+    std::cerr << Messages::error_prefix() 
+              << "timebase denominator is zero in stop()" 
+              << std::endl;
+    return 0.0;  // Return 0 to avoid division by zero
+  }
   double elapsed_nanos = static_cast<double>(elapsed_ticks) * timebase_info.numer / timebase_info.denom;
   // Convert nanoseconds to seconds.
   return elapsed_nanos / 1e9;
@@ -56,5 +70,12 @@ double HighResTimer::stop_ns() {
   // Calculate elapsed ticks, handling potential timer wrap-around.
   uint64_t elapsed_ticks = (end >= start_ticks) ? (end - start_ticks) : (UINT64_MAX - start_ticks + end + 1);
   // Convert ticks to nanoseconds and return.
+  // Defensive check: ensure denom is not zero (should never happen after constructor validation)
+  if (timebase_info.denom == 0) {
+    std::cerr << Messages::error_prefix() 
+              << "timebase denominator is zero in stop_ns()" 
+              << std::endl;
+    return 0.0;  // Return 0 to avoid division by zero
+  }
   return static_cast<double>(elapsed_ticks) * timebase_info.numer / timebase_info.denom;
 }

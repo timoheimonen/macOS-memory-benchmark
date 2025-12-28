@@ -34,7 +34,8 @@
 // Returns: Total duration in seconds.
 double run_read_test(void *buffer, size_t size, int iterations, int num_threads, std::atomic<uint64_t> &checksum,
                      HighResTimer &timer) {
-  checksum = 0;  // Ensure checksum starts at 0 for the measurement pass.
+  // Initialize checksum to 0 before measurement pass (thread-safe atomic assignment)
+  checksum.store(0, std::memory_order_relaxed);
   
   // Define the work function for read operations
   auto read_work = [buffer, size, &checksum](size_t offset, size_t original_chunk_size, int iters) {
@@ -60,14 +61,20 @@ double run_read_test(void *buffer, size_t size, int iterations, int num_threads,
     if (chunk_size == 0 || chunk_start >= buffer_end) return;
     
     // Accumulate checksum locally to avoid atomic operations in the inner loop.
+    // This reduces contention and improves performance in multi-threaded scenarios.
     uint64_t local_checksum = 0;
     for (int i = 0; i < iters; ++i) {
       // Call external assembly function for reading.
       uint64_t thread_checksum = memory_read_loop_asm(chunk_start, chunk_size);
-      // Combine result locally (non-atomic).
+      // Combine result locally (non-atomic). XOR is commutative and associative,
+      // so the order of combination doesn't matter for checksum correctness.
       local_checksum ^= thread_checksum;
     }
-    // Atomically combine final result (one atomic per thread, relaxed order is sufficient).
+    // Atomically combine final result (one atomic per thread).
+    // Using relaxed memory order is safe because:
+    // 1. XOR is commutative and associative, so order doesn't matter
+    // 2. We only care about the final checksum value, not intermediate states
+    // 3. Each thread accumulates locally first, reducing contention
     checksum.fetch_xor(local_checksum, std::memory_order_relaxed);
   };
   

@@ -15,6 +15,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Enhanced error reporting with proper error codes instead of immediate program termination
   - Added bounds checking in pointer arithmetic to prevent buffer overruns
   - Improved initialization error handling with proper cleanup on failure
+- **Timing and measurement logic robustness**: Enhanced timing calculations and measurement accuracy with comprehensive validation:
+  - **Timer safety**: Added validation to prevent division by zero errors in high-resolution timer calculations. The timer now safely handles edge cases where timebase conversion could fail, preventing crashes and ensuring reliable measurements.
+  - **Latency calculation protection**: Fixed potential division by zero issues in latency tests when zero accesses are requested. Tests now gracefully return zero duration instead of producing invalid results.
+  - **Bandwidth calculation safety**: Added overflow protection for bandwidth calculations when dealing with very large buffer sizes or iteration counts. Calculations now detect potential integer overflow before multiplication and use safe double-precision arithmetic when needed. Results are validated to ensure they are finite and non-negative, preventing invalid or misleading bandwidth values.
+  - **Checksum thread-safety verification**: Verified and improved atomic checksum operations to ensure correct behavior in multi-threaded scenarios. Checksums are now explicitly initialized using atomic operations, and the implementation is documented to confirm thread-safety.
 
 ## [0.51] - 2025-12-27
 

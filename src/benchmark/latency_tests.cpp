@@ -29,6 +29,11 @@
 // Returns: Total duration in nanoseconds.
 double run_latency_test(void *buffer, size_t num_accesses, HighResTimer &timer,
                         std::vector<double> *latency_samples, int sample_count) {
+  // Early validation: return 0 if no accesses requested
+  if (num_accesses == 0) {
+    return 0.0;
+  }
+  
   // Get the starting address of the pointer chain.
   uintptr_t *lat_start_ptr = static_cast<uintptr_t *>(buffer);
   
@@ -37,8 +42,10 @@ double run_latency_test(void *buffer, size_t num_accesses, HighResTimer &timer,
     latency_samples->clear();
     latency_samples->reserve(sample_count);
     
-    size_t accesses_per_sample = num_accesses / sample_count;
-    if (accesses_per_sample == 0) accesses_per_sample = 1;  // Ensure at least 1 access per sample
+    // Calculate accesses per sample, ensuring at least 1 access per sample
+    size_t accesses_per_sample = (num_accesses >= static_cast<size_t>(sample_count)) 
+                                  ? (num_accesses / static_cast<size_t>(sample_count))
+                                  : 1;
     
     double total_duration_ns = 0.0;
     
@@ -74,6 +81,11 @@ double run_latency_test(void *buffer, size_t num_accesses, HighResTimer &timer,
 // Returns: Total duration in nanoseconds.
 double run_cache_latency_test(void *buffer, size_t buffer_size, size_t num_accesses, HighResTimer &timer,
                               std::vector<double> *latency_samples, int sample_count) {
+  // Early validation: return 0 if no accesses requested
+  if (num_accesses == 0) {
+    return 0.0;
+  }
+  
   // Get the starting address of the pointer chain.
   uintptr_t *lat_start_ptr = static_cast<uintptr_t *>(buffer);
   
@@ -82,8 +94,10 @@ double run_cache_latency_test(void *buffer, size_t buffer_size, size_t num_acces
     latency_samples->clear();
     latency_samples->reserve(sample_count);
     
-    size_t accesses_per_sample = num_accesses / sample_count;
-    if (accesses_per_sample == 0) accesses_per_sample = 1;  // Ensure at least 1 access per sample
+    // Calculate accesses per sample, ensuring at least 1 access per sample
+    size_t accesses_per_sample = (num_accesses >= static_cast<size_t>(sample_count)) 
+                                  ? (num_accesses / static_cast<size_t>(sample_count))
+                                  : 1;
     
     double total_duration_ns = 0.0;
     
