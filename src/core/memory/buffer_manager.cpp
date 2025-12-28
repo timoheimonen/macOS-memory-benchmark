@@ -33,35 +33,58 @@ int allocate_all_buffers(const BenchmarkConfig& config, BenchmarkBuffers& buffer
   size_t total_memory = 0;
   
   // Main buffers (3x buffer_size)
+  // Check multiplication overflow first: ensure buffer_size * 3 won't overflow
   if (config.buffer_size > std::numeric_limits<size_t>::max() / 3) {
     std::cerr << Messages::error_prefix() << Messages::error_buffer_size_overflow_calculation() << std::endl;
     return EXIT_FAILURE;
   }
-  total_memory += config.buffer_size * 3;  // src, dst, lat
+  size_t main_buffer_triple = config.buffer_size * 3;  // Safe: multiplication checked above
+  total_memory += main_buffer_triple;  // src, dst, lat
   
   // Cache buffers
   if (config.use_custom_cache_size) {
     if (config.custom_buffer_size > 0) {
-      if (total_memory > std::numeric_limits<size_t>::max() - config.custom_buffer_size * 3) {
+      // Check multiplication overflow first: ensure custom_buffer_size * 3 won't overflow
+      if (config.custom_buffer_size > std::numeric_limits<size_t>::max() / 3) {
+        std::cerr << Messages::error_prefix() << Messages::error_buffer_size_overflow_calculation() << std::endl;
+        return EXIT_FAILURE;
+      }
+      size_t custom_buffer_triple = config.custom_buffer_size * 3;  // Safe: multiplication checked above
+      // Check addition overflow: ensure total_memory + custom_buffer_triple won't overflow
+      if (total_memory > std::numeric_limits<size_t>::max() - custom_buffer_triple) {
         std::cerr << Messages::error_prefix() << Messages::error_total_memory_overflow() << std::endl;
         return EXIT_FAILURE;
       }
-      total_memory += config.custom_buffer_size * 3;  // custom, custom_bw_src, custom_bw_dst
+      total_memory += custom_buffer_triple;  // custom, custom_bw_src, custom_bw_dst
     }
   } else {
     if (config.l1_buffer_size > 0) {
-      if (total_memory > std::numeric_limits<size_t>::max() - config.l1_buffer_size * 3) {
+      // Check multiplication overflow first: ensure l1_buffer_size * 3 won't overflow
+      if (config.l1_buffer_size > std::numeric_limits<size_t>::max() / 3) {
+        std::cerr << Messages::error_prefix() << Messages::error_buffer_size_overflow_calculation() << std::endl;
+        return EXIT_FAILURE;
+      }
+      size_t l1_buffer_triple = config.l1_buffer_size * 3;  // Safe: multiplication checked above
+      // Check addition overflow: ensure total_memory + l1_buffer_triple won't overflow
+      if (total_memory > std::numeric_limits<size_t>::max() - l1_buffer_triple) {
         std::cerr << Messages::error_prefix() << Messages::error_total_memory_overflow() << std::endl;
         return EXIT_FAILURE;
       }
-      total_memory += config.l1_buffer_size * 3;  // l1, l1_bw_src, l1_bw_dst
+      total_memory += l1_buffer_triple;  // l1, l1_bw_src, l1_bw_dst
     }
     if (config.l2_buffer_size > 0) {
-      if (total_memory > std::numeric_limits<size_t>::max() - config.l2_buffer_size * 3) {
+      // Check multiplication overflow first: ensure l2_buffer_size * 3 won't overflow
+      if (config.l2_buffer_size > std::numeric_limits<size_t>::max() / 3) {
+        std::cerr << Messages::error_prefix() << Messages::error_buffer_size_overflow_calculation() << std::endl;
+        return EXIT_FAILURE;
+      }
+      size_t l2_buffer_triple = config.l2_buffer_size * 3;  // Safe: multiplication checked above
+      // Check addition overflow: ensure total_memory + l2_buffer_triple won't overflow
+      if (total_memory > std::numeric_limits<size_t>::max() - l2_buffer_triple) {
         std::cerr << Messages::error_prefix() << Messages::error_total_memory_overflow() << std::endl;
         return EXIT_FAILURE;
       }
-      total_memory += config.l2_buffer_size * 3;  // l2, l2_bw_src, l2_bw_dst
+      total_memory += l2_buffer_triple;  // l2, l2_bw_src, l2_bw_dst
     }
   }
   

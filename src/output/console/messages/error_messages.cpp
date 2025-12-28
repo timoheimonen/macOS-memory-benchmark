@@ -36,6 +36,10 @@ std::string error_unknown_option(const std::string& option) {
   return "Unknown option: " + option;
 }
 
+std::string error_duplicate_option(const std::string& option) {
+  return "Duplicate option: " + option;
+}
+
 std::string error_buffer_size_calculation(unsigned long size_mb) {
   std::ostringstream oss;
   oss << "Buffer size calculation error (" << size_mb << " MB).";

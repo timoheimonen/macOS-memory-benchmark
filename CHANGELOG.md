@@ -8,18 +8,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.52] - DEVELOPMENT
 
 ### Fixed
-- **Measurement accuracy with small buffers**: Fixed issue where benchmarks with very small buffer sizes or edge cases could produce misleading timing measurements. Benchmarks now correctly return zero duration when no meaningful work can be performed, ensuring accurate bandwidth calculations.
-- **Memory management robustness**: Improved memory allocation and buffer management with comprehensive validation and error handling:
-  - Added validation for buffer sizes before allocation to prevent zero-size allocations
-  - Added overflow protection when calculating total memory requirements and buffer sizes
-  - Enhanced error reporting with proper error codes instead of immediate program termination
-  - Added bounds checking in pointer arithmetic to prevent buffer overruns
-  - Improved initialization error handling with proper cleanup on failure
-- **Timing and measurement logic robustness**: Enhanced timing calculations and measurement accuracy with comprehensive validation:
-  - **Timer safety**: Added validation to prevent division by zero errors in high-resolution timer calculations. The timer now safely handles edge cases where timebase conversion could fail, preventing crashes and ensuring reliable measurements.
-  - **Latency calculation protection**: Fixed potential division by zero issues in latency tests when zero accesses are requested. Tests now gracefully return zero duration instead of producing invalid results.
-  - **Bandwidth calculation safety**: Added overflow protection for bandwidth calculations when dealing with very large buffer sizes or iteration counts. Calculations now detect potential integer overflow before multiplication and use safe double-precision arithmetic when needed. Results are validated to ensure they are finite and non-negative, preventing invalid or misleading bandwidth values.
-  - **Checksum thread-safety verification**: Verified and improved atomic checksum operations to ensure correct behavior in multi-threaded scenarios. Checksums are now explicitly initialized using atomic operations, and the implementation is documented to confirm thread-safety.
+- **Improved measurement accuracy**: Fixed issues with small buffer sizes and edge cases that could produce misleading results.
+- **Better error handling**: Enhanced error reporting throughout the application.
+- **Timer reliability**: Fixed timer issues that could cause crashes or incorrect measurements on long-running benchmarks or edge cases.
+- **Bandwidth calculation fixes**: Fixed copy bandwidth calculation that was reporting inflated values.
+- **Multi-threading improvements**: Fixed thread synchronization issues that could cause incomplete benchmark coverage or incorrect results when using multiple threads.
+- **Memory safety**: Added comprehensive validation to prevent buffer overruns and memory allocation issues, especially when working with large memory regions or near buffer boundaries.
+
+
 
 ## [0.51] - 2025-12-27
 

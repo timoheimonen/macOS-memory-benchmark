@@ -49,8 +49,8 @@ void HighResTimer::start() { start_ticks = mach_absolute_time(); }
 // stop: Calculates elapsed time since start() in seconds.
 double HighResTimer::stop() {
   uint64_t end = mach_absolute_time();  // Get current time.
-  // Calculate elapsed ticks, handling potential timer wrap-around.
-  uint64_t elapsed_ticks = (end >= start_ticks) ? (end - start_ticks) : (UINT64_MAX - start_ticks + end + 1);
+  // Calculate elapsed ticks. Unsigned arithmetic automatically handles wrap-around.
+  uint64_t elapsed_ticks = end - start_ticks;
   // Convert ticks to nanoseconds using the timebase info.
   // Defensive check: ensure denom is not zero (should never happen after constructor validation)
   if (timebase_info.denom == 0) {
@@ -67,8 +67,8 @@ double HighResTimer::stop() {
 // stop_ns: Calculates elapsed time since start() in nanoseconds.
 double HighResTimer::stop_ns() {
   uint64_t end = mach_absolute_time();  // Get current time.
-  // Calculate elapsed ticks, handling potential timer wrap-around.
-  uint64_t elapsed_ticks = (end >= start_ticks) ? (end - start_ticks) : (UINT64_MAX - start_ticks + end + 1);
+  // Calculate elapsed ticks. Unsigned arithmetic automatically handles wrap-around.
+  uint64_t elapsed_ticks = end - start_ticks;
   // Convert ticks to nanoseconds and return.
   // Defensive check: ensure denom is not zero (should never happen after constructor validation)
   if (timebase_info.denom == 0) {

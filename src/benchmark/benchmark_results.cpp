@@ -37,7 +37,7 @@ void calculate_single_bandwidth(size_t buffer_size, int iterations,
       // Overflow would occur, use double precision calculation instead
       double total_bytes_read = static_cast<double>(iterations) * static_cast<double>(buffer_size);
       double total_bytes_written = total_bytes_read;
-      double total_bytes_copied_op = total_bytes_read;
+      double total_bytes_copied_op = total_bytes_read * Constants::COPY_OPERATION_MULTIPLIER;
       
       if (read_time > 0 && !std::isnan(read_time) && !std::isinf(read_time)) {
         read_bw_gb_s = total_bytes_read / read_time / Constants::NANOSECONDS_PER_SECOND;
@@ -54,8 +54,7 @@ void calculate_single_bandwidth(size_t buffer_size, int iterations,
         }
       }
       if (copy_time > 0 && !std::isnan(copy_time) && !std::isinf(copy_time)) {
-        copy_bw_gb_s = (total_bytes_copied_op * Constants::COPY_OPERATION_MULTIPLIER) / 
-                       copy_time / Constants::NANOSECONDS_PER_SECOND;
+        copy_bw_gb_s = total_bytes_copied_op / copy_time / Constants::NANOSECONDS_PER_SECOND;
         // Validate result is finite and non-negative
         if (std::isnan(copy_bw_gb_s) || std::isinf(copy_bw_gb_s) || copy_bw_gb_s < 0.0) {
           copy_bw_gb_s = 0.0;
@@ -65,7 +64,7 @@ void calculate_single_bandwidth(size_t buffer_size, int iterations,
       // No overflow, use integer calculation
       size_t total_bytes_read = static_cast<size_t>(iterations) * buffer_size;
       size_t total_bytes_written = total_bytes_read;
-      size_t total_bytes_copied_op = total_bytes_read;
+      size_t total_bytes_copied_op = total_bytes_read * Constants::COPY_OPERATION_MULTIPLIER;
       
       if (read_time > 0 && !std::isnan(read_time) && !std::isinf(read_time)) {
         read_bw_gb_s = static_cast<double>(total_bytes_read) / read_time / Constants::NANOSECONDS_PER_SECOND;
@@ -82,7 +81,7 @@ void calculate_single_bandwidth(size_t buffer_size, int iterations,
         }
       }
       if (copy_time > 0 && !std::isnan(copy_time) && !std::isinf(copy_time)) {
-        copy_bw_gb_s = static_cast<double>(total_bytes_copied_op * Constants::COPY_OPERATION_MULTIPLIER) / 
+        copy_bw_gb_s = static_cast<double>(total_bytes_copied_op) / 
                        copy_time / Constants::NANOSECONDS_PER_SECOND;
         // Validate result is finite and non-negative
         if (std::isnan(copy_bw_gb_s) || std::isinf(copy_bw_gb_s) || copy_bw_gb_s < 0.0) {

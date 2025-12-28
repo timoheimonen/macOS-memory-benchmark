@@ -26,6 +26,7 @@ const std::string& error_prefix();
 std::string error_missing_value(const std::string& option);
 std::string error_invalid_value(const std::string& option, const std::string& value, const std::string& reason);
 std::string error_unknown_option(const std::string& option);
+std::string error_duplicate_option(const std::string& option);
 std::string error_buffer_size_calculation(unsigned long size_mb);
 std::string error_buffer_size_too_small(size_t size_bytes);
 std::string error_cache_size_invalid(long long min_kb, long long max_kb, long long max_mb);

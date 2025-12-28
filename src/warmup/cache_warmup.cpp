@@ -30,7 +30,7 @@ void warmup_cache_read(void* src_buffer, size_t size, int num_threads, std::atom
     // Call the assembly read loop function directly (single-threaded).
     uint64_t checksum = memory_read_loop_asm(src_buffer, size);
     // Store result to prevent optimization.
-    dummy_checksum.fetch_xor(checksum, std::memory_order_relaxed);
+    dummy_checksum.fetch_xor(checksum, std::memory_order_release);
   };
   warmup_single(read_op);
 }

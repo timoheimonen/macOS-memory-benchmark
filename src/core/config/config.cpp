@@ -113,7 +113,28 @@ int parse_arguments(int argc, char* argv[], BenchmarkConfig& config) {
           throw std::invalid_argument(Messages::error_missing_value("-latency-samples"));
       } else if (arg == "-cache-size") {
         if (++i < argc) {
-          // Already parsed in first pass, just skip the value
+          // Already parsed in first pass, validate it's a duplicate
+          // Parse the value to ensure it's consumed and validate it matches
+          try {
+            long long val_ll = std::stoll(argv[i]);
+            // Check if this is a duplicate (should always be true if we reach here)
+            if (config.custom_cache_size_kb_ll != -1) {
+              // Check if values match (if they don't, provide more specific error)
+              if (val_ll != config.custom_cache_size_kb_ll) {
+                throw std::invalid_argument(Messages::error_duplicate_option("-cache-size") + " (values don't match)");
+              }
+              // Even if values match, report duplicate option
+              throw std::invalid_argument(Messages::error_duplicate_option("-cache-size"));
+            }
+            // This shouldn't happen (first pass should have set it), but handle defensively
+            throw std::invalid_argument(Messages::error_duplicate_option("-cache-size"));
+          } catch (const std::invalid_argument &e) {
+            // Re-throw our custom duplicate error or parsing errors
+            throw;
+          } catch (const std::exception &) {
+            // If parsing fails, treat as duplicate (value should be valid from first pass)
+            throw std::invalid_argument(Messages::error_duplicate_option("-cache-size"));
+          }
         } else
           throw std::invalid_argument(Messages::error_missing_value("-cache-size"));
       } else if (arg == "-output") {

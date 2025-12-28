@@ -53,7 +53,7 @@ void warmup_read_strided(void* buffer, size_t size, size_t stride, int num_threa
     // Use strided read for warmup
     uint64_t result = memory_read_strided_loop_asm(chunk_start, chunk_size, stride);
     if (checksum) {
-      checksum->fetch_xor(result, std::memory_order_relaxed);
+      checksum->fetch_xor(result, std::memory_order_release);
     }
   };
   warmup_parallel(buffer, size, num_threads, read_chunk_op, true, nullptr, &dummy_checksum, warmup_size);
@@ -146,7 +146,7 @@ void warmup_read_random(void* buffer, const std::vector<size_t>& indices, int nu
   // For small index sets or single thread, just run directly
   if (num_threads == 1 || indices.size() <= static_cast<size_t>(num_threads)) {
     uint64_t result = memory_read_random_loop_asm(buffer, indices.data(), indices.size());
-    dummy_checksum.fetch_xor(result, std::memory_order_relaxed);
+    dummy_checksum.fetch_xor(result, std::memory_order_release);
     return;
   }
   
@@ -177,7 +177,7 @@ void warmup_read_random(void* buffer, const std::vector<size_t>& indices, int nu
       
       if (!thread_indices.empty()) {
         uint64_t result = memory_read_random_loop_asm(buffer, thread_indices.data(), thread_indices.size());
-        dummy_checksum.fetch_xor(result, std::memory_order_relaxed);
+        dummy_checksum.fetch_xor(result, std::memory_order_release);
       }
     });
   }

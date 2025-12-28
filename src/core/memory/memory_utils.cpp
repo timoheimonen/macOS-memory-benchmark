@@ -79,7 +79,7 @@ int setup_latency_chain(void *buffer, size_t buffer_size, size_t stride)
         size_t current_offset = indices[i] * stride;
         
         // Bounds check: ensure we don't write beyond buffer
-        if (current_offset > max_valid_offset) {
+        if (current_offset + sizeof(uintptr_t) > buffer_size) {
             std::cerr << Messages::error_prefix() << Messages::error_offset_exceeds_bounds(current_offset, max_valid_offset) << std::endl;
             return EXIT_FAILURE;
         }
@@ -92,7 +92,7 @@ int setup_latency_chain(void *buffer, size_t buffer_size, size_t stride)
         size_t next_offset = indices[next_index] * stride;
         
         // Bounds check: ensure next pointer is within buffer
-        if (next_offset > max_valid_offset) {
+        if (next_offset + sizeof(uintptr_t) > buffer_size) {
             std::cerr << Messages::error_prefix() << Messages::error_next_pointer_offset_exceeds_bounds(next_offset, max_valid_offset) << std::endl;
             return EXIT_FAILURE;
         }
