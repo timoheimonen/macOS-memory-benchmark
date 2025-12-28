@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 - **Measurement accuracy with small buffers**: Fixed issue where benchmarks with very small buffer sizes or edge cases could produce misleading timing measurements. Benchmarks now correctly return zero duration when no meaningful work can be performed, ensuring accurate bandwidth calculations.
+- **Memory management robustness**: Improved memory allocation and buffer management with comprehensive validation and error handling:
+  - Added validation for buffer sizes before allocation to prevent zero-size allocations
+  - Added overflow protection when calculating total memory requirements and buffer sizes
+  - Enhanced error reporting with proper error codes instead of immediate program termination
+  - Added bounds checking in pointer arithmetic to prevent buffer overruns
+  - Improved initialization error handling with proper cleanup on failure
 
 ## [0.51] - 2025-12-27
 

@@ -20,6 +20,12 @@
 #include <cerrno>   // errno
 
 MmapPtr allocate_buffer(size_t size, const char* buffer_name) {
+  // Validate size before allocation
+  if (size == 0) {
+    std::cerr << Messages::error_prefix() << Messages::error_buffer_size_zero(buffer_name) << std::endl;
+    return MmapPtr(nullptr, MmapDeleter{0});
+  }
+  
   // Allocate memory using mmap
   void *ptr = mmap(nullptr, size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
   
@@ -45,6 +51,12 @@ MmapPtr allocate_buffer(size_t size, const char* buffer_name) {
 }
 
 MmapPtr allocate_buffer_non_cacheable(size_t size, const char* buffer_name) {
+  // Validate size before allocation
+  if (size == 0) {
+    std::cerr << Messages::error_prefix() << Messages::error_buffer_size_zero(buffer_name) << std::endl;
+    return MmapPtr(nullptr, MmapDeleter{0});
+  }
+  
   // Allocate memory using mmap (same as regular allocation)
   void *ptr = mmap(nullptr, size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
   

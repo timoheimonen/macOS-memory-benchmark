@@ -64,21 +64,23 @@ inline size_t alignment_offset_to_cache_line(void* ptr) {
  * @param buffer Pointer to the buffer to initialize
  * @param buffer_size Size of the buffer in bytes
  * @param stride Stride size in bytes between linked pointers
+ * @return EXIT_SUCCESS on success, EXIT_FAILURE on error
  *
  * Creates a linked list structure in memory where each pointer points to the
  * next location, enabling pointer-chasing latency measurements.
  */
-void setup_latency_chain(void* buffer, size_t buffer_size, size_t stride);
+int setup_latency_chain(void* buffer, size_t buffer_size, size_t stride);
 
 /**
  * @brief Initialize data buffers with test data
  * @param src_buffer Pointer to source buffer
  * @param dst_buffer Pointer to destination buffer
  * @param buffer_size Size of buffers in bytes
+ * @return EXIT_SUCCESS on success, EXIT_FAILURE on error
  *
  * Fills source buffer with test data and zeros destination buffer.
  */
-void initialize_buffers(void* src_buffer, void* dst_buffer, size_t buffer_size);
+int initialize_buffers(void* src_buffer, void* dst_buffer, size_t buffer_size);
 
 #endif // MEMORY_UTILS_H
 

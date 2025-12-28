@@ -15,11 +15,56 @@
 //
 #include "core/memory/buffer_manager.h"
 #include "core/config/config.h"  // BenchmarkConfig
-#include "utils/benchmark.h"  // initialize_buffers, setup_latency_chain
+#include "core/memory/memory_utils.h"  // initialize_buffers, setup_latency_chain
 #include "core/config/constants.h"
+#include "output/console/messages.h"
 #include <cstdlib>  // EXIT_SUCCESS, EXIT_FAILURE
+#include <limits>   // std::numeric_limits
+#include <iostream> // std::cerr
 
 int allocate_all_buffers(const BenchmarkConfig& config, BenchmarkBuffers& buffers) {
+  // Validate buffer sizes before allocation
+  if (config.buffer_size == 0) {
+    std::cerr << Messages::error_prefix() << Messages::error_main_buffer_size_zero() << std::endl;
+    return EXIT_FAILURE;
+  }
+  
+  // Calculate total memory requirement and check for overflow
+  size_t total_memory = 0;
+  
+  // Main buffers (3x buffer_size)
+  if (config.buffer_size > std::numeric_limits<size_t>::max() / 3) {
+    std::cerr << Messages::error_prefix() << Messages::error_buffer_size_overflow_calculation() << std::endl;
+    return EXIT_FAILURE;
+  }
+  total_memory += config.buffer_size * 3;  // src, dst, lat
+  
+  // Cache buffers
+  if (config.use_custom_cache_size) {
+    if (config.custom_buffer_size > 0) {
+      if (total_memory > std::numeric_limits<size_t>::max() - config.custom_buffer_size * 3) {
+        std::cerr << Messages::error_prefix() << Messages::error_total_memory_overflow() << std::endl;
+        return EXIT_FAILURE;
+      }
+      total_memory += config.custom_buffer_size * 3;  // custom, custom_bw_src, custom_bw_dst
+    }
+  } else {
+    if (config.l1_buffer_size > 0) {
+      if (total_memory > std::numeric_limits<size_t>::max() - config.l1_buffer_size * 3) {
+        std::cerr << Messages::error_prefix() << Messages::error_total_memory_overflow() << std::endl;
+        return EXIT_FAILURE;
+      }
+      total_memory += config.l1_buffer_size * 3;  // l1, l1_bw_src, l1_bw_dst
+    }
+    if (config.l2_buffer_size > 0) {
+      if (total_memory > std::numeric_limits<size_t>::max() - config.l2_buffer_size * 3) {
+        std::cerr << Messages::error_prefix() << Messages::error_total_memory_overflow() << std::endl;
+        return EXIT_FAILURE;
+      }
+      total_memory += config.l2_buffer_size * 3;  // l2, l2_bw_src, l2_bw_dst
+    }
+  }
+  
   // Initialize all buffers with nullptr and size 0
   buffers.src_buffer_ptr = MmapPtr(nullptr, MmapDeleter{0});
   buffers.dst_buffer_ptr = MmapPtr(nullptr, MmapDeleter{0});
@@ -176,35 +221,82 @@ int allocate_all_buffers(const BenchmarkConfig& config, BenchmarkBuffers& buffer
 }
 
 int initialize_all_buffers(BenchmarkBuffers& buffers, const BenchmarkConfig& config) {
+  // Validate main buffers are allocated
+  if (buffers.src_buffer() == nullptr || buffers.dst_buffer() == nullptr || buffers.lat_buffer() == nullptr) {
+    std::cerr << Messages::error_prefix() << Messages::error_main_buffers_not_allocated() << std::endl;
+    return EXIT_FAILURE;
+  }
+  
   // Initialize main memory buffers
-  initialize_buffers(buffers.src_buffer(), buffers.dst_buffer(), config.buffer_size);
-  setup_latency_chain(buffers.lat_buffer(), config.buffer_size, Constants::LATENCY_STRIDE_BYTES);
+  if (initialize_buffers(buffers.src_buffer(), buffers.dst_buffer(), config.buffer_size) != EXIT_SUCCESS) {
+    return EXIT_FAILURE;
+  }
+  
+  if (setup_latency_chain(buffers.lat_buffer(), config.buffer_size, Constants::LATENCY_STRIDE_BYTES) != EXIT_SUCCESS) {
+    return EXIT_FAILURE;
+  }
   
   // Setup cache latency chains
   if (config.use_custom_cache_size) {
-    if (config.custom_buffer_size > 0 && buffers.custom_buffer() != nullptr) {
-      setup_latency_chain(buffers.custom_buffer(), config.custom_buffer_size, Constants::LATENCY_STRIDE_BYTES);
+    if (config.custom_buffer_size > 0) {
+      if (buffers.custom_buffer() == nullptr) {
+        std::cerr << Messages::error_prefix() << Messages::error_custom_buffer_not_allocated() << std::endl;
+        return EXIT_FAILURE;
+      }
+      if (setup_latency_chain(buffers.custom_buffer(), config.custom_buffer_size, Constants::LATENCY_STRIDE_BYTES) != EXIT_SUCCESS) {
+        return EXIT_FAILURE;
+      }
     }
   } else {
-    if (config.l1_buffer_size > 0 && buffers.l1_buffer() != nullptr) {
-      setup_latency_chain(buffers.l1_buffer(), config.l1_buffer_size, Constants::LATENCY_STRIDE_BYTES);
+    if (config.l1_buffer_size > 0) {
+      if (buffers.l1_buffer() == nullptr) {
+        std::cerr << Messages::error_prefix() << Messages::error_l1_buffer_not_allocated() << std::endl;
+        return EXIT_FAILURE;
+      }
+      if (setup_latency_chain(buffers.l1_buffer(), config.l1_buffer_size, Constants::LATENCY_STRIDE_BYTES) != EXIT_SUCCESS) {
+        return EXIT_FAILURE;
+      }
     }
-    if (config.l2_buffer_size > 0 && buffers.l2_buffer() != nullptr) {
-      setup_latency_chain(buffers.l2_buffer(), config.l2_buffer_size, Constants::LATENCY_STRIDE_BYTES);
+    if (config.l2_buffer_size > 0) {
+      if (buffers.l2_buffer() == nullptr) {
+        std::cerr << Messages::error_prefix() << Messages::error_l2_buffer_not_allocated() << std::endl;
+        return EXIT_FAILURE;
+      }
+      if (setup_latency_chain(buffers.l2_buffer(), config.l2_buffer_size, Constants::LATENCY_STRIDE_BYTES) != EXIT_SUCCESS) {
+        return EXIT_FAILURE;
+      }
     }
   }
   
   // Initialize cache bandwidth test buffers (not pointer chains, regular data)
   if (config.use_custom_cache_size) {
-    if (config.custom_buffer_size > 0 && buffers.custom_bw_src() != nullptr && buffers.custom_bw_dst() != nullptr) {
-      initialize_buffers(buffers.custom_bw_src(), buffers.custom_bw_dst(), config.custom_buffer_size);
+    if (config.custom_buffer_size > 0) {
+      if (buffers.custom_bw_src() == nullptr || buffers.custom_bw_dst() == nullptr) {
+        std::cerr << Messages::error_prefix() << Messages::error_custom_bandwidth_buffers_not_allocated() << std::endl;
+        return EXIT_FAILURE;
+      }
+      if (initialize_buffers(buffers.custom_bw_src(), buffers.custom_bw_dst(), config.custom_buffer_size) != EXIT_SUCCESS) {
+        return EXIT_FAILURE;
+      }
     }
   } else {
-    if (config.l1_buffer_size > 0 && buffers.l1_bw_src() != nullptr && buffers.l1_bw_dst() != nullptr) {
-      initialize_buffers(buffers.l1_bw_src(), buffers.l1_bw_dst(), config.l1_buffer_size);
+    if (config.l1_buffer_size > 0) {
+      if (buffers.l1_bw_src() == nullptr || buffers.l1_bw_dst() == nullptr) {
+        std::cerr << Messages::error_prefix() << Messages::error_l1_bandwidth_buffers_not_allocated() << std::endl;
+        return EXIT_FAILURE;
+      }
+      if (initialize_buffers(buffers.l1_bw_src(), buffers.l1_bw_dst(), config.l1_buffer_size) != EXIT_SUCCESS) {
+        return EXIT_FAILURE;
+      }
     }
-    if (config.l2_buffer_size > 0 && buffers.l2_bw_src() != nullptr && buffers.l2_bw_dst() != nullptr) {
-      initialize_buffers(buffers.l2_bw_src(), buffers.l2_bw_dst(), config.l2_buffer_size);
+    if (config.l2_buffer_size > 0) {
+      if (buffers.l2_bw_src() == nullptr || buffers.l2_bw_dst() == nullptr) {
+        std::cerr << Messages::error_prefix() << Messages::error_l2_bandwidth_buffers_not_allocated() << std::endl;
+        return EXIT_FAILURE;
+      }
+      if (initialize_buffers(buffers.l2_bw_src(), buffers.l2_bw_dst(), config.l2_buffer_size) != EXIT_SUCCESS) {
+        return EXIT_FAILURE;
+      }
     }
   }
 

@@ -38,10 +38,19 @@
  * @brief Custom deleter for memory allocated with mmap
  *
  * This deleter is used with std::unique_ptr to automatically unmap memory
- * allocated via mmap when the unique_ptr is destroyed.
+ * allocated via mmap when the unique_ptr is destroyed. This provides RAII
+ * (Resource Acquisition Is Initialization) guarantees:
+ * - Memory is automatically freed when the unique_ptr goes out of scope
+ * - Memory is freed even if exceptions are thrown
+ * - No manual memory management required
+ * - Prevents memory leaks on all code paths
+ *
+ * @note The allocation_size must match the size passed to mmap() when the
+ *       memory was allocated. Incorrect sizes can cause munmap() to fail
+ *       or corrupt memory. The size is stored at MmapPtr creation time.
  */
 struct MmapDeleter {
-  size_t allocation_size;  ///< Store the size needed for munmap
+  size_t allocation_size;  ///< Store the size needed for munmap (must match mmap size)
 
   /**
    * @brief Function call operator invoked by unique_ptr upon destruction
@@ -49,6 +58,9 @@ struct MmapDeleter {
    *
    * Automatically unmaps the memory using munmap. Logs errors but does not
    * throw exceptions (as destructors should not throw).
+   * 
+   * @note This function is safe to call with nullptr or MAP_FAILED, which
+   *       are handled gracefully without attempting to unmap.
    */
   void operator()(void *ptr) const {
     if (ptr && ptr != MAP_FAILED) {
@@ -72,26 +84,34 @@ using MmapPtr = std::unique_ptr<void, MmapDeleter>;
 
 /**
  * @brief Allocate a buffer using mmap with proper error handling and madvise hints
- * @param size Size of the buffer to allocate in bytes
+ * @param size Size of the buffer to allocate in bytes (must be > 0)
  * @param buffer_name Name of the buffer (used in error messages for clarity)
- * @return MmapPtr that will automatically free the memory on destruction
- * @return nullptr (empty unique_ptr) if allocation fails
+ * @return MmapPtr that will automatically free the memory on destruction (RAII)
+ * @return nullptr (empty unique_ptr) if allocation fails or size is 0
  *
  * Allocates memory using mmap with MAP_PRIVATE | MAP_ANONYMOUS flags and
  * applies MADV_WILLNEED hint to encourage the OS to prefault pages.
+ * 
+ * @note The returned MmapPtr uses RAII - memory is automatically freed when
+ *       the pointer goes out of scope, even if exceptions are thrown.
+ * @note If madvise() fails, the buffer is still returned (non-fatal error).
  */
 MmapPtr allocate_buffer(size_t size, const char* buffer_name = "buffer");
 
 /**
  * @brief Allocate a buffer with cache-discouraging hints (best-effort, not true non-cacheable)
- * @param size Size of the buffer to allocate in bytes
+ * @param size Size of the buffer to allocate in bytes (must be > 0)
  * @param buffer_name Name of the buffer (used in error messages for clarity)
- * @return MmapPtr that will automatically free the memory on destruction
- * @return nullptr (empty unique_ptr) if allocation fails
+ * @return MmapPtr that will automatically free the memory on destruction (RAII)
+ * @return nullptr (empty unique_ptr) if allocation fails or size is 0
  *
  * On macOS ARM64, applies madvise() hints to discourage caching, but cannot achieve
  * true non-cacheable memory (user-space cannot modify page table attributes).
  * This is a best-effort approach to reduce cache effects.
+ * 
+ * @note The returned MmapPtr uses RAII - memory is automatically freed when
+ *       the pointer goes out of scope, even if exceptions are thrown.
+ * @note If madvise() fails, the buffer is still returned (non-fatal error).
  */
 MmapPtr allocate_buffer_non_cacheable(size_t size, const char* buffer_name = "buffer");
 
