@@ -27,7 +27,7 @@
 #include "core/config/version.h"  // SOFTVERSION
 #include "core/config/config.h"     // For BenchmarkConfig
 #include "benchmark/benchmark_runner.h"  // For BenchmarkStatistics
-#include "pattern_benchmark/pattern_benchmark.h" // For PatternResults
+#include "pattern_benchmark/pattern_benchmark.h" // For PatternStatistics
 #include "third_party/nlohmann/json.hpp"   // JSON library
 
 // Save benchmark results to JSON file
@@ -78,7 +78,7 @@ int save_results_to_json(const BenchmarkConfig& config, const BenchmarkStatistic
 
 // Save pattern benchmark results to JSON file
 // Returns EXIT_SUCCESS on success, EXIT_FAILURE on error
-int save_pattern_results_to_json(const BenchmarkConfig& config, const PatternResults& results, double total_execution_time_sec) {
+int save_pattern_results_to_json(const BenchmarkConfig& config, const PatternStatistics& stats, double total_execution_time_sec) {
   if (config.output_file.empty()) {
     return EXIT_SUCCESS;  // No output file specified, nothing to do
   }
@@ -103,7 +103,7 @@ int save_pattern_results_to_json(const BenchmarkConfig& config, const PatternRes
   json_output[JsonKeys::CONFIGURATION] = build_config_json(config);
   
   // Add patterns results
-  json_output[JsonKeys::PATTERNS] = build_patterns_json(results);
+  json_output[JsonKeys::PATTERNS] = build_patterns_json(stats);
   
   // Add execution time
   json_output[JsonKeys::EXECUTION_TIME_SEC] = total_execution_time_sec;

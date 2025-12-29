@@ -18,42 +18,57 @@
 // License: MIT License
 //
 #include "output/json/json_output.h"
-#include "pattern_benchmark/pattern_benchmark.h" // For PatternResults
+#include "pattern_benchmark/pattern_benchmark.h" // For PatternStatistics
 #include "third_party/nlohmann/json.hpp"   // JSON library
 
-// Build patterns JSON object from PatternResults
-nlohmann::json build_patterns_json(const PatternResults& results) {
+// Build patterns JSON object from PatternStatistics
+nlohmann::json build_patterns_json(const PatternStatistics& stats) {
   nlohmann::json patterns;
   
   // Sequential Forward (baseline)
-  patterns[JsonKeys::SEQUENTIAL_FORWARD] = nlohmann::json::object();
-  patterns[JsonKeys::SEQUENTIAL_FORWARD][JsonKeys::READ_GB_S] = results.forward_read_bw;
-  patterns[JsonKeys::SEQUENTIAL_FORWARD][JsonKeys::WRITE_GB_S] = results.forward_write_bw;
-  patterns[JsonKeys::SEQUENTIAL_FORWARD][JsonKeys::COPY_GB_S] = results.forward_copy_bw;
+  if (!stats.all_forward_read_bw.empty()) {
+    patterns[JsonKeys::SEQUENTIAL_FORWARD] = nlohmann::json::object();
+    add_bandwidth_results(patterns[JsonKeys::SEQUENTIAL_FORWARD],
+                          stats.all_forward_read_bw,
+                          stats.all_forward_write_bw,
+                          stats.all_forward_copy_bw);
+  }
   
   // Sequential Reverse
-  patterns[JsonKeys::SEQUENTIAL_REVERSE] = nlohmann::json::object();
-  patterns[JsonKeys::SEQUENTIAL_REVERSE][JsonKeys::READ_GB_S] = results.reverse_read_bw;
-  patterns[JsonKeys::SEQUENTIAL_REVERSE][JsonKeys::WRITE_GB_S] = results.reverse_write_bw;
-  patterns[JsonKeys::SEQUENTIAL_REVERSE][JsonKeys::COPY_GB_S] = results.reverse_copy_bw;
+  if (!stats.all_reverse_read_bw.empty()) {
+    patterns[JsonKeys::SEQUENTIAL_REVERSE] = nlohmann::json::object();
+    add_bandwidth_results(patterns[JsonKeys::SEQUENTIAL_REVERSE],
+                          stats.all_reverse_read_bw,
+                          stats.all_reverse_write_bw,
+                          stats.all_reverse_copy_bw);
+  }
   
   // Strided (Cache Line - 64B)
-  patterns[JsonKeys::STRIDED_64] = nlohmann::json::object();
-  patterns[JsonKeys::STRIDED_64][JsonKeys::READ_GB_S] = results.strided_64_read_bw;
-  patterns[JsonKeys::STRIDED_64][JsonKeys::WRITE_GB_S] = results.strided_64_write_bw;
-  patterns[JsonKeys::STRIDED_64][JsonKeys::COPY_GB_S] = results.strided_64_copy_bw;
+  if (!stats.all_strided_64_read_bw.empty()) {
+    patterns[JsonKeys::STRIDED_64] = nlohmann::json::object();
+    add_bandwidth_results(patterns[JsonKeys::STRIDED_64],
+                          stats.all_strided_64_read_bw,
+                          stats.all_strided_64_write_bw,
+                          stats.all_strided_64_copy_bw);
+  }
   
   // Strided (Page - 4096B)
-  patterns[JsonKeys::STRIDED_4096] = nlohmann::json::object();
-  patterns[JsonKeys::STRIDED_4096][JsonKeys::READ_GB_S] = results.strided_4096_read_bw;
-  patterns[JsonKeys::STRIDED_4096][JsonKeys::WRITE_GB_S] = results.strided_4096_write_bw;
-  patterns[JsonKeys::STRIDED_4096][JsonKeys::COPY_GB_S] = results.strided_4096_copy_bw;
+  if (!stats.all_strided_4096_read_bw.empty()) {
+    patterns[JsonKeys::STRIDED_4096] = nlohmann::json::object();
+    add_bandwidth_results(patterns[JsonKeys::STRIDED_4096],
+                          stats.all_strided_4096_read_bw,
+                          stats.all_strided_4096_write_bw,
+                          stats.all_strided_4096_copy_bw);
+  }
   
   // Random Uniform
-  patterns[JsonKeys::RANDOM] = nlohmann::json::object();
-  patterns[JsonKeys::RANDOM][JsonKeys::READ_GB_S] = results.random_read_bw;
-  patterns[JsonKeys::RANDOM][JsonKeys::WRITE_GB_S] = results.random_write_bw;
-  patterns[JsonKeys::RANDOM][JsonKeys::COPY_GB_S] = results.random_copy_bw;
+  if (!stats.all_random_read_bw.empty()) {
+    patterns[JsonKeys::RANDOM] = nlohmann::json::object();
+    add_bandwidth_results(patterns[JsonKeys::RANDOM],
+                          stats.all_random_read_bw,
+                          stats.all_random_write_bw,
+                          stats.all_random_copy_bw);
+  }
   
   return patterns;
 }

@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.52] - DEVELOPMENT
 
 ### Fixed
+- **Pattern benchmarks now respect loop count**: Fixed pattern benchmarks to properly respect the `-count` parameter. Pattern benchmarks now run the specified number of loops and collect aggregated statistics (average, min, max, median/P50, P90, P95, P99, stddev) across all loops.
 - **Improved measurement accuracy**: Fixed issues with small buffer sizes and edge cases that could produce misleading results.
 - **Better error handling**: Enhanced error reporting throughout the application.
 - **Timer reliability**: Fixed timer issues that could cause crashes or incorrect measurements on long-running benchmarks or edge cases.

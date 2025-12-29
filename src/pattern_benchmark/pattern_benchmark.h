@@ -69,6 +69,32 @@ struct PatternResults {
 };
 
 /**
+ * @struct PatternStatistics
+ * @brief Structure containing aggregated statistics across all pattern benchmark loops
+ *
+ * Collects results from multiple pattern benchmark loops to enable statistical analysis,
+ * including mean, min, max, and percentile calculations.
+ */
+struct PatternStatistics {
+  // Vectors storing results from each loop
+  std::vector<double> all_forward_read_bw;        ///< Forward read bandwidth from each loop (GB/s)
+  std::vector<double> all_forward_write_bw;       ///< Forward write bandwidth from each loop (GB/s)
+  std::vector<double> all_forward_copy_bw;        ///< Forward copy bandwidth from each loop (GB/s)
+  std::vector<double> all_reverse_read_bw;         ///< Reverse read bandwidth from each loop (GB/s)
+  std::vector<double> all_reverse_write_bw;       ///< Reverse write bandwidth from each loop (GB/s)
+  std::vector<double> all_reverse_copy_bw;        ///< Reverse copy bandwidth from each loop (GB/s)
+  std::vector<double> all_strided_64_read_bw;     ///< Strided 64B read bandwidth from each loop (GB/s)
+  std::vector<double> all_strided_64_write_bw;    ///< Strided 64B write bandwidth from each loop (GB/s)
+  std::vector<double> all_strided_64_copy_bw;     ///< Strided 64B copy bandwidth from each loop (GB/s)
+  std::vector<double> all_strided_4096_read_bw;   ///< Strided 4096B read bandwidth from each loop (GB/s)
+  std::vector<double> all_strided_4096_write_bw;  ///< Strided 4096B write bandwidth from each loop (GB/s)
+  std::vector<double> all_strided_4096_copy_bw;   ///< Strided 4096B copy bandwidth from each loop (GB/s)
+  std::vector<double> all_random_read_bw;         ///< Random read bandwidth from each loop (GB/s)
+  std::vector<double> all_random_write_bw;        ///< Random write bandwidth from each loop (GB/s)
+  std::vector<double> all_random_copy_bw;         ///< Random copy bandwidth from each loop (GB/s)
+};
+
+/**
  * @brief Run pattern benchmarks for various memory access patterns
  * @param buffers Reference to benchmark buffers structure
  * @param config Reference to benchmark configuration
@@ -81,10 +107,32 @@ struct PatternResults {
 int run_pattern_benchmarks(const BenchmarkBuffers& buffers, const BenchmarkConfig& config, PatternResults& results);
 
 /**
+ * @brief Run all pattern benchmark loops and collect statistics
+ * @param buffers Reference to benchmark buffers structure
+ * @param config Reference to benchmark configuration
+ * @param[out] stats Reference to PatternStatistics structure to store aggregated results
+ * @return EXIT_SUCCESS on success, EXIT_FAILURE on error
+ *
+ * Executes multiple pattern benchmark loops as specified by config.loop_count and
+ * aggregates all results into the PatternStatistics structure for statistical analysis.
+ */
+int run_all_pattern_benchmarks(const BenchmarkBuffers& buffers, const BenchmarkConfig& config, PatternStatistics& stats);
+
+/**
  * @brief Print pattern benchmark results to console
  * @param results Reference to PatternResults structure containing results to print
  */
 void print_pattern_results(const PatternResults& results);
+
+/**
+ * @brief Print pattern benchmark statistics to console
+ * @param loop_count Number of loops executed
+ * @param stats Reference to PatternStatistics structure containing aggregated results
+ *
+ * Calculates and displays summary statistics (average, min, max, percentiles) across
+ * all pattern benchmark loops. Only prints if loop_count > 1.
+ */
+void print_pattern_statistics(int loop_count, const PatternStatistics& stats);
 
 #endif // PATTERN_BENCHMARK_H
 

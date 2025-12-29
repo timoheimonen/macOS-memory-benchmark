@@ -26,6 +26,7 @@
 struct BenchmarkConfig;
 struct BenchmarkStatistics;
 struct PatternResults;
+struct PatternStatistics;
 
 // JSON structure constants
 namespace JsonKeys {
@@ -96,7 +97,7 @@ void add_latency_results(nlohmann::json& json_obj,
 nlohmann::json build_config_json(const BenchmarkConfig& config);
 nlohmann::json build_main_memory_json(const BenchmarkStatistics& stats);
 nlohmann::json build_cache_json(const BenchmarkConfig& config, const BenchmarkStatistics& stats);
-nlohmann::json build_patterns_json(const PatternResults& results);
+nlohmann::json build_patterns_json(const PatternStatistics& stats);
 int write_json_to_file(const std::filesystem::path& file_path, const nlohmann::json& json_output);
 
 // Public API functions
@@ -106,7 +107,7 @@ int save_results_to_json(const BenchmarkConfig& config, const BenchmarkStatistic
 
 // Save pattern benchmark results to JSON file
 // Returns EXIT_SUCCESS on success, EXIT_FAILURE on error
-int save_pattern_results_to_json(const BenchmarkConfig& config, const PatternResults& results, double total_execution_time_sec);
+int save_pattern_results_to_json(const BenchmarkConfig& config, const PatternStatistics& stats, double total_execution_time_sec);
 
 #endif // JSON_OUTPUT_JSON_OUTPUT_H
 
