@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.52] - DEVELOPMENT
+## [0.52] - 2025-12-29
 
 ### Fixed
 - **Pattern benchmarks now respect loop count**: Fixed pattern benchmarks to properly respect the `-count` parameter. Pattern benchmarks now run the specified number of loops and collect aggregated statistics (average, min, max, median/P50, P90, P95, P99, stddev) across all loops.
@@ -15,8 +15,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Bandwidth calculation fixes**: Fixed copy bandwidth calculation that was reporting inflated values.
 - **Multi-threading improvements**: Fixed thread synchronization issues that could cause incomplete benchmark coverage or incorrect results when using multiple threads.
 - **Memory safety**: Added comprehensive validation to prevent buffer overruns and memory allocation issues, especially when working with large memory regions or near buffer boundaries.
-
-
 
 ## [0.51] - 2025-12-27
 
