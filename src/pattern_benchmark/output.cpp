@@ -236,20 +236,6 @@ static PatternStatisticsData calculate_pattern_statistics(const std::vector<doub
   return {avg, min_val, max_val, median, p90, p95, p99, stddev_val};
 }
 
-// Print statistics for a single pattern metric
-static void print_pattern_metric_statistics(const std::string &metric_name, const PatternStatisticsData &stats) {
-  using namespace Constants;
-  std::cout << Messages::statistics_metric_name(metric_name) << std::endl;
-  std::cout << Messages::statistics_average(stats.average, Constants::PATTERN_BANDWIDTH_PRECISION) << std::endl;
-  std::cout << Messages::statistics_median_p50(stats.median, Constants::PATTERN_BANDWIDTH_PRECISION) << std::endl;
-  std::cout << Messages::statistics_p90(stats.p90, Constants::PATTERN_BANDWIDTH_PRECISION) << std::endl;
-  std::cout << Messages::statistics_p95(stats.p95, Constants::PATTERN_BANDWIDTH_PRECISION) << std::endl;
-  std::cout << Messages::statistics_p99(stats.p99, Constants::PATTERN_BANDWIDTH_PRECISION) << std::endl;
-  std::cout << Messages::statistics_stddev(stats.stddev, Constants::PATTERN_BANDWIDTH_PRECISION) << std::endl;
-  std::cout << Messages::statistics_min(stats.min, Constants::PATTERN_BANDWIDTH_PRECISION) << std::endl;
-  std::cout << Messages::statistics_max(stats.max, Constants::PATTERN_BANDWIDTH_PRECISION) << std::endl;
-}
-
 // Print statistics for a pattern type (read, write, copy)
 static void print_pattern_type_statistics(const std::string &pattern_name,
                                           const std::vector<double> &read_bw,
