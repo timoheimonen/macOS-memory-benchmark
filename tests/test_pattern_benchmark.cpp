@@ -65,7 +65,7 @@ TEST(PatternBenchmarkTest, PatternResultsSetValues) {
 // Test pattern benchmarks with minimal configuration
 TEST(PatternBenchmarkTest, RunPatternBenchmarksMinimal) {
   BenchmarkConfig config;
-  config.buffer_size = 64 * 1024;  // 64 KB - small buffer for fast tests
+  config.buffer_size = 512 * 1024;  // 512 KB - large enough for all patterns including strided 4096
   config.iterations = 1;  // Single iteration for speed
   config.num_threads = 1;  // Single thread
   
@@ -312,7 +312,7 @@ TEST(PatternBenchmarkTest, RunPatternBenchmarksSmallBuffer) {
 // 64B stride should access cache lines, 4096B stride should access pages
 TEST(PatternBenchmarkTest, StridedPatternStrides) {
   BenchmarkConfig config;
-  config.buffer_size = 64 * 1024;  // 64 KB
+  config.buffer_size = 512 * 1024;  // 512 KB - large enough for strided 4096 pattern
   config.iterations = 2;
   config.num_threads = 1;
   
@@ -348,7 +348,7 @@ TEST(PatternBenchmarkTest, StridedPatternStrides) {
 // Test that all pattern types produce results
 TEST(PatternBenchmarkTest, AllPatternTypesComplete) {
   BenchmarkConfig config;
-  config.buffer_size = 128 * 1024;  // 128 KB
+  config.buffer_size = 512 * 1024;  // 512 KB - large enough for all patterns including strided 4096
   config.iterations = 1;
   config.num_threads = 1;
   
@@ -443,7 +443,7 @@ TEST(PatternBenchmarkTest, PatternResultsConsistency) {
 // Test that copy operations use both source and destination buffers
 TEST(PatternBenchmarkTest, CopyOperationsUseBothBuffers) {
   BenchmarkConfig config;
-  config.buffer_size = 128 * 1024;  // 128 KB
+  config.buffer_size = 512 * 1024;  // 512 KB - large enough for all patterns including strided 4096
   config.iterations = 1;
   config.num_threads = 1;
   

@@ -19,6 +19,10 @@
 #include <iostream>
 #include <iomanip>
 #include <sstream>
+#include <algorithm>
+#include <cmath>
+#include <numeric>
+#include <vector>
 
 // ============================================================================
 // Output Formatting Functions
@@ -172,5 +176,198 @@ void print_pattern_results(const PatternResults& results) {
   
   // Print efficiency analysis
   print_efficiency_analysis(results);
+}
+
+// ============================================================================
+// Pattern Statistics Functions
+// ============================================================================
+
+// Structure to hold calculated statistics (average, min, max, percentiles, stddev)
+struct PatternStatisticsData {
+  double average;
+  double min;
+  double max;
+  double median;    // P50
+  double p90;
+  double p95;
+  double p99;
+  double stddev;
+};
+
+// Calculate statistics (average, min, max, percentiles, stddev) from a vector of values
+static PatternStatisticsData calculate_pattern_statistics(const std::vector<double> &values) {
+  if (values.empty()) {
+    return {0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
+  }
+
+  double sum = std::accumulate(values.begin(), values.end(), 0.0);
+  double avg = sum / values.size();
+  double min_val = *std::min_element(values.begin(), values.end());
+  double max_val = *std::max_element(values.begin(), values.end());
+
+  // Sort copy for percentiles
+  std::vector<double> sorted = values;
+  std::sort(sorted.begin(), sorted.end());
+  size_t n = sorted.size();
+
+  // Helper function for percentile calculation (linear interpolation)
+  auto percentile = [&sorted, n](double p) -> double {
+    if (n == 0) return 0.0;
+    if (n == 1) return sorted[0];
+    double index = p * (n - 1);
+    size_t lower = static_cast<size_t>(index);
+    size_t upper = lower + 1;
+    if (upper >= n) return sorted[n - 1];
+    double weight = index - lower;
+    return sorted[lower] * (1.0 - weight) + sorted[upper] * weight;
+  };
+
+  // Calculate percentiles
+  double median = percentile(0.50);  // P50
+  double p90 = percentile(0.90);
+  double p95 = percentile(0.95);
+  double p99 = percentile(0.99);
+
+  // Stddev
+  double variance = 0.0;
+  for (double v : values) variance += (v - avg) * (v - avg);
+  double stddev_val = std::sqrt(variance / n);
+
+  return {avg, min_val, max_val, median, p90, p95, p99, stddev_val};
+}
+
+// Print statistics for a single pattern metric
+static void print_pattern_metric_statistics(const std::string &metric_name, const PatternStatisticsData &stats) {
+  using namespace Constants;
+  std::cout << Messages::statistics_metric_name(metric_name) << std::endl;
+  std::cout << Messages::statistics_average(stats.average, Constants::PATTERN_BANDWIDTH_PRECISION) << std::endl;
+  std::cout << Messages::statistics_median_p50(stats.median, Constants::PATTERN_BANDWIDTH_PRECISION) << std::endl;
+  std::cout << Messages::statistics_p90(stats.p90, Constants::PATTERN_BANDWIDTH_PRECISION) << std::endl;
+  std::cout << Messages::statistics_p95(stats.p95, Constants::PATTERN_BANDWIDTH_PRECISION) << std::endl;
+  std::cout << Messages::statistics_p99(stats.p99, Constants::PATTERN_BANDWIDTH_PRECISION) << std::endl;
+  std::cout << Messages::statistics_stddev(stats.stddev, Constants::PATTERN_BANDWIDTH_PRECISION) << std::endl;
+  std::cout << Messages::statistics_min(stats.min, Constants::PATTERN_BANDWIDTH_PRECISION) << std::endl;
+  std::cout << Messages::statistics_max(stats.max, Constants::PATTERN_BANDWIDTH_PRECISION) << std::endl;
+}
+
+// Print statistics for a pattern type (read, write, copy)
+static void print_pattern_type_statistics(const std::string &pattern_name,
+                                          const std::vector<double> &read_bw,
+                                          const std::vector<double> &write_bw,
+                                          const std::vector<double> &copy_bw) {
+  if (read_bw.empty() && write_bw.empty() && copy_bw.empty()) {
+    return;
+  }
+  
+  std::cout << Messages::statistics_cache_bandwidth_header(pattern_name) << std::endl;
+  
+  if (!read_bw.empty()) {
+    PatternStatisticsData read_stats = calculate_pattern_statistics(read_bw);
+    std::cout << Messages::statistics_cache_read() << std::endl;
+    std::cout << "    " << Messages::statistics_average(read_stats.average, Constants::PATTERN_BANDWIDTH_PRECISION) << std::endl;
+    std::cout << "    " << Messages::statistics_median_p50(read_stats.median, Constants::PATTERN_BANDWIDTH_PRECISION) << std::endl;
+    std::cout << "    " << Messages::statistics_p90(read_stats.p90, Constants::PATTERN_BANDWIDTH_PRECISION) << std::endl;
+    std::cout << "    " << Messages::statistics_p95(read_stats.p95, Constants::PATTERN_BANDWIDTH_PRECISION) << std::endl;
+    std::cout << "    " << Messages::statistics_p99(read_stats.p99, Constants::PATTERN_BANDWIDTH_PRECISION) << std::endl;
+    std::cout << "    " << Messages::statistics_stddev(read_stats.stddev, Constants::PATTERN_BANDWIDTH_PRECISION) << std::endl;
+    std::cout << "    " << Messages::statistics_min(read_stats.min, Constants::PATTERN_BANDWIDTH_PRECISION) << std::endl;
+    std::cout << "    " << Messages::statistics_max(read_stats.max, Constants::PATTERN_BANDWIDTH_PRECISION) << std::endl;
+  }
+  
+  if (!write_bw.empty()) {
+    PatternStatisticsData write_stats = calculate_pattern_statistics(write_bw);
+    std::cout << Messages::statistics_cache_write() << std::endl;
+    std::cout << "    " << Messages::statistics_average(write_stats.average, Constants::PATTERN_BANDWIDTH_PRECISION) << std::endl;
+    std::cout << "    " << Messages::statistics_median_p50(write_stats.median, Constants::PATTERN_BANDWIDTH_PRECISION) << std::endl;
+    std::cout << "    " << Messages::statistics_p90(write_stats.p90, Constants::PATTERN_BANDWIDTH_PRECISION) << std::endl;
+    std::cout << "    " << Messages::statistics_p95(write_stats.p95, Constants::PATTERN_BANDWIDTH_PRECISION) << std::endl;
+    std::cout << "    " << Messages::statistics_p99(write_stats.p99, Constants::PATTERN_BANDWIDTH_PRECISION) << std::endl;
+    std::cout << "    " << Messages::statistics_stddev(write_stats.stddev, Constants::PATTERN_BANDWIDTH_PRECISION) << std::endl;
+    std::cout << "    " << Messages::statistics_min(write_stats.min, Constants::PATTERN_BANDWIDTH_PRECISION) << std::endl;
+    std::cout << "    " << Messages::statistics_max(write_stats.max, Constants::PATTERN_BANDWIDTH_PRECISION) << std::endl;
+  }
+  
+  if (!copy_bw.empty()) {
+    PatternStatisticsData copy_stats = calculate_pattern_statistics(copy_bw);
+    std::cout << Messages::statistics_cache_copy() << std::endl;
+    std::cout << "    " << Messages::statistics_average(copy_stats.average, Constants::PATTERN_BANDWIDTH_PRECISION) << std::endl;
+    std::cout << "    " << Messages::statistics_median_p50(copy_stats.median, Constants::PATTERN_BANDWIDTH_PRECISION) << std::endl;
+    std::cout << "    " << Messages::statistics_p90(copy_stats.p90, Constants::PATTERN_BANDWIDTH_PRECISION) << std::endl;
+    std::cout << "    " << Messages::statistics_p95(copy_stats.p95, Constants::PATTERN_BANDWIDTH_PRECISION) << std::endl;
+    std::cout << "    " << Messages::statistics_p99(copy_stats.p99, Constants::PATTERN_BANDWIDTH_PRECISION) << std::endl;
+    std::cout << "    " << Messages::statistics_stddev(copy_stats.stddev, Constants::PATTERN_BANDWIDTH_PRECISION) << std::endl;
+    std::cout << "    " << Messages::statistics_min(copy_stats.min, Constants::PATTERN_BANDWIDTH_PRECISION) << std::endl;
+    std::cout << "    " << Messages::statistics_max(copy_stats.max, Constants::PATTERN_BANDWIDTH_PRECISION) << std::endl;
+  }
+}
+
+void print_pattern_statistics(int loop_count, const PatternStatistics& stats) {
+  using namespace Constants;
+  
+  // Don't print statistics if only one loop ran or if there's no data
+  if (loop_count <= 1 || stats.all_forward_read_bw.empty()) {
+    return;
+  }
+
+  // Print statistics header
+  std::cout << Messages::statistics_header(loop_count) << std::endl;
+  std::cout << std::fixed;
+
+  // Display Sequential Forward (baseline) statistics
+  std::string forward_name = Messages::pattern_sequential_forward();
+  if (!forward_name.empty() && forward_name.back() == ':') {
+    forward_name.pop_back();
+  }
+  print_pattern_type_statistics(forward_name, 
+                                 stats.all_forward_read_bw,
+                                 stats.all_forward_write_bw,
+                                 stats.all_forward_copy_bw);
+  std::cout << "\n";
+
+  // Display Sequential Reverse statistics
+  std::string reverse_name = Messages::pattern_sequential_reverse();
+  if (!reverse_name.empty() && reverse_name.back() == ':') {
+    reverse_name.pop_back();
+  }
+  print_pattern_type_statistics(reverse_name,
+                                 stats.all_reverse_read_bw,
+                                 stats.all_reverse_write_bw,
+                                 stats.all_reverse_copy_bw);
+  std::cout << "\n";
+
+  // Display Strided 64B statistics
+  std::string strided_64_name = Messages::pattern_strided(Messages::pattern_cache_line_64b());
+  if (!strided_64_name.empty() && strided_64_name.back() == ':') {
+    strided_64_name.pop_back();
+  }
+  print_pattern_type_statistics(strided_64_name,
+                                 stats.all_strided_64_read_bw,
+                                 stats.all_strided_64_write_bw,
+                                 stats.all_strided_64_copy_bw);
+  std::cout << "\n";
+
+  // Display Strided 4096B statistics
+  std::string strided_4096_name = Messages::pattern_strided(Messages::pattern_page_4096b());
+  if (!strided_4096_name.empty() && strided_4096_name.back() == ':') {
+    strided_4096_name.pop_back();
+  }
+  print_pattern_type_statistics(strided_4096_name,
+                                 stats.all_strided_4096_read_bw,
+                                 stats.all_strided_4096_write_bw,
+                                 stats.all_strided_4096_copy_bw);
+  std::cout << "\n";
+
+  // Display Random Uniform statistics
+  std::string random_name = Messages::pattern_random_uniform();
+  if (!random_name.empty() && random_name.back() == ':') {
+    random_name.pop_back();
+  }
+  print_pattern_type_statistics(random_name,
+                                 stats.all_random_read_bw,
+                                 stats.all_random_write_bw,
+                                 stats.all_random_copy_bw);
+  
+  // Print a final separator after statistics
+  std::cout << Messages::statistics_footer() << std::endl;
 }
 

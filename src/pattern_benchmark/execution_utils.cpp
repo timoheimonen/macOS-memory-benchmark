@@ -18,6 +18,8 @@
 #include <random>
 #include <vector>
 #include <algorithm>
+#include <limits>  // std::numeric_limits
+#include <cmath>   // std::isnan, std::isinf
 
 // ============================================================================
 // Utility Functions
@@ -25,13 +27,46 @@
 
 // Helper function to calculate bandwidth from time and data size
 double calculate_bandwidth(size_t data_size, int iterations, double elapsed_time_ns) {
+  // Validate inputs
+  if (data_size == 0 || iterations <= 0) {
+    return 0.0;
+  }
+  
+  // Check for invalid time values
+  if (elapsed_time_ns <= 0.0 || std::isnan(elapsed_time_ns) || std::isinf(elapsed_time_ns)) {
+    return 0.0;
+  }
+  
   // Avoid division by zero - use minimum time if time is too small
   // This handles cases where very fast operations complete in < 1ns due to timer resolution
   double effective_time_ns = (elapsed_time_ns < Constants::PATTERN_MIN_TIME_NS) 
                               ? Constants::PATTERN_MIN_TIME_NS 
                               : elapsed_time_ns;
-  return (static_cast<double>(data_size) * iterations) / 
-         (effective_time_ns * Constants::NANOSECONDS_PER_SECOND);
+  
+  // Check for overflow before multiplication: data_size * iterations
+  double total_bytes;
+  if (iterations > 0 && data_size > 0) {
+    // Check if data_size * iterations would overflow size_t
+    if (static_cast<size_t>(iterations) > std::numeric_limits<size_t>::max() / data_size) {
+      // Overflow would occur, use double precision calculation
+      total_bytes = static_cast<double>(data_size) * static_cast<double>(iterations);
+    } else {
+      // No overflow, use integer calculation then cast
+      size_t total_bytes_size_t = data_size * static_cast<size_t>(iterations);
+      total_bytes = static_cast<double>(total_bytes_size_t);
+    }
+  } else {
+    return 0.0;
+  }
+  
+  double bandwidth = total_bytes / (effective_time_ns * Constants::NANOSECONDS_PER_SECOND);
+  
+  // Validate result is finite and non-negative
+  if (std::isnan(bandwidth) || std::isinf(bandwidth) || bandwidth < 0.0) {
+    return 0.0;
+  }
+  
+  return bandwidth;
 }
 
 // Helper function to calculate maximum valid aligned offset

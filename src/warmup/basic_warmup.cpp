@@ -29,9 +29,9 @@ void warmup_read(void* buffer, size_t size, int num_threads, std::atomic<uint64_
     // Call the assembly read loop function (defined elsewhere).
     uint64_t result = memory_read_loop_asm(chunk_start, chunk_size);
     // Atomically combine the local checksum with the global dummy value.
-    // Using relaxed memory order as strict consistency isn't needed for warmup.
+    // Using release memory order ensures proper visibility when threads complete.
     if (checksum) {
-      checksum->fetch_xor(result, std::memory_order_relaxed);
+      checksum->fetch_xor(result, std::memory_order_release);
     }
   };
   warmup_parallel(buffer, size, num_threads, read_chunk_op, true, nullptr, &dummy_checksum, warmup_size);

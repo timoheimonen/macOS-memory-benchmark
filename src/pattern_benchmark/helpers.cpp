@@ -32,7 +32,7 @@ double run_pattern_read_test(void* buffer, size_t size, int iterations,
     total_checksum ^= result;
   }
   double elapsed = timer.stop();
-  checksum.fetch_xor(total_checksum, std::memory_order_relaxed);
+  checksum.fetch_xor(total_checksum, std::memory_order_release);
   return elapsed;
 }
 
@@ -68,7 +68,7 @@ double run_pattern_read_strided_test(void* buffer, size_t size, size_t stride, i
     total_checksum ^= result;
   }
   double elapsed = timer.stop();
-  checksum.fetch_xor(total_checksum, std::memory_order_relaxed);
+  checksum.fetch_xor(total_checksum, std::memory_order_release);
   return elapsed;
 }
 
@@ -100,7 +100,7 @@ double run_pattern_read_random_test(void* buffer, const std::vector<size_t>& ind
     total_checksum ^= result;
   }
   double elapsed = timer.stop();
-  checksum.fetch_xor(total_checksum, std::memory_order_relaxed);
+  checksum.fetch_xor(total_checksum, std::memory_order_release);
   return elapsed;
 }
 

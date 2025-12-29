@@ -82,16 +82,64 @@ int main(int argc, char *argv[]) {
   // --- Run Benchmarks ---
   if (config.run_patterns) {
     // Run pattern benchmarks only
-    PatternResults pattern_results;
-    if (run_pattern_benchmarks(buffers, config, pattern_results) != EXIT_SUCCESS) {
+    PatternStatistics pattern_stats;
+    if (run_all_pattern_benchmarks(buffers, config, pattern_stats) != EXIT_SUCCESS) {
       return EXIT_FAILURE;
     }
-    print_pattern_results(pattern_results);
+    
+    // Print results - if single loop, print detailed results; if multiple loops, print last loop's results
+    if (config.loop_count == 1) {
+      // For single loop, reconstruct PatternResults from statistics for display
+      PatternResults single_result;
+      if (!pattern_stats.all_forward_read_bw.empty()) {
+        single_result.forward_read_bw = pattern_stats.all_forward_read_bw[0];
+        single_result.forward_write_bw = pattern_stats.all_forward_write_bw[0];
+        single_result.forward_copy_bw = pattern_stats.all_forward_copy_bw[0];
+        single_result.reverse_read_bw = pattern_stats.all_reverse_read_bw[0];
+        single_result.reverse_write_bw = pattern_stats.all_reverse_write_bw[0];
+        single_result.reverse_copy_bw = pattern_stats.all_reverse_copy_bw[0];
+        single_result.strided_64_read_bw = pattern_stats.all_strided_64_read_bw[0];
+        single_result.strided_64_write_bw = pattern_stats.all_strided_64_write_bw[0];
+        single_result.strided_64_copy_bw = pattern_stats.all_strided_64_copy_bw[0];
+        single_result.strided_4096_read_bw = pattern_stats.all_strided_4096_read_bw[0];
+        single_result.strided_4096_write_bw = pattern_stats.all_strided_4096_write_bw[0];
+        single_result.strided_4096_copy_bw = pattern_stats.all_strided_4096_copy_bw[0];
+        single_result.random_read_bw = pattern_stats.all_random_read_bw[0];
+        single_result.random_write_bw = pattern_stats.all_random_write_bw[0];
+        single_result.random_copy_bw = pattern_stats.all_random_copy_bw[0];
+      }
+      print_pattern_results(single_result);
+    } else {
+      // For multiple loops, print last loop's results and then statistics
+      PatternResults last_result;
+      if (!pattern_stats.all_forward_read_bw.empty()) {
+        size_t last_idx = pattern_stats.all_forward_read_bw.size() - 1;
+        last_result.forward_read_bw = pattern_stats.all_forward_read_bw[last_idx];
+        last_result.forward_write_bw = pattern_stats.all_forward_write_bw[last_idx];
+        last_result.forward_copy_bw = pattern_stats.all_forward_copy_bw[last_idx];
+        last_result.reverse_read_bw = pattern_stats.all_reverse_read_bw[last_idx];
+        last_result.reverse_write_bw = pattern_stats.all_reverse_write_bw[last_idx];
+        last_result.reverse_copy_bw = pattern_stats.all_reverse_copy_bw[last_idx];
+        last_result.strided_64_read_bw = pattern_stats.all_strided_64_read_bw[last_idx];
+        last_result.strided_64_write_bw = pattern_stats.all_strided_64_write_bw[last_idx];
+        last_result.strided_64_copy_bw = pattern_stats.all_strided_64_copy_bw[last_idx];
+        last_result.strided_4096_read_bw = pattern_stats.all_strided_4096_read_bw[last_idx];
+        last_result.strided_4096_write_bw = pattern_stats.all_strided_4096_write_bw[last_idx];
+        last_result.strided_4096_copy_bw = pattern_stats.all_strided_4096_copy_bw[last_idx];
+        last_result.random_read_bw = pattern_stats.all_random_read_bw[last_idx];
+        last_result.random_write_bw = pattern_stats.all_random_write_bw[last_idx];
+        last_result.random_copy_bw = pattern_stats.all_random_copy_bw[last_idx];
+      }
+      print_pattern_results(last_result);
+      
+      // Print summary statistics
+      print_pattern_statistics(config.loop_count, pattern_stats);
+    }
     
     // --- Save JSON Output if requested ---
     if (!config.output_file.empty()) {
       double total_elapsed_time_sec = total_execution_timer.stop();
-      if (save_pattern_results_to_json(config, pattern_results, total_elapsed_time_sec) != EXIT_SUCCESS) {
+      if (save_pattern_results_to_json(config, pattern_stats, total_elapsed_time_sec) != EXIT_SUCCESS) {
         return EXIT_FAILURE;
       }
     }

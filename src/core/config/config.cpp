@@ -22,6 +22,7 @@
 #include <stdexcept>
 #include <unistd.h>  // getpagesize
 #include <sstream>
+#include <cmath>     // std::numeric_limits for overflow checks
 
 int parse_arguments(int argc, char* argv[], BenchmarkConfig& config) {
   long long requested_buffer_size_mb_ll = -1;  // User requested size (-1 = none)
@@ -111,10 +112,26 @@ int parse_arguments(int argc, char* argv[], BenchmarkConfig& config) {
         } else
           throw std::invalid_argument(Messages::error_missing_value("-latency-samples"));
       } else if (arg == "-cache-size") {
-        if (++i < argc) {
-          // Already parsed in first pass, just skip the value
-        } else
-          throw std::invalid_argument(Messages::error_missing_value("-cache-size"));
+        // Already parsed in first pass, skip it and its value in second pass
+        if (config.custom_cache_size_kb_ll != -1) {
+          // Skip the value argument (already validated in first pass)
+          if (++i >= argc) {
+            // This shouldn't happen (first pass should have validated it), but handle defensively
+            throw std::invalid_argument(Messages::error_missing_value("-cache-size"));
+          }
+          // Silently skip - already parsed and validated in first pass
+          continue;
+        } else {
+          // This shouldn't happen (first pass should have set it), but handle defensively
+          if (++i < argc) {
+            // Try to parse it now (fallback case)
+            long long val_ll = std::stoll(argv[i]);
+            if (val_ll <= 0 || val_ll < Constants::MIN_CACHE_SIZE_KB || val_ll > Constants::MAX_CACHE_SIZE_KB)
+              throw std::out_of_range(Messages::error_cache_size_invalid(Constants::MIN_CACHE_SIZE_KB, Constants::MAX_CACHE_SIZE_KB, Constants::MAX_CACHE_SIZE_KB / 1024));
+            config.custom_cache_size_kb_ll = val_ll;
+          } else
+            throw std::invalid_argument(Messages::error_missing_value("-cache-size"));
+        }
       } else if (arg == "-output") {
         if (++i < argc) {
           config.output_file = argv[i];
@@ -221,11 +238,20 @@ void calculate_buffer_sizes(BenchmarkConfig& config) {
     // Use 100% of custom cache size
     config.custom_buffer_size = config.custom_cache_size_bytes;
     
-    // Ensure buffer size is multiple of stride
-    config.custom_buffer_size = ((config.custom_buffer_size / Constants::LATENCY_STRIDE_BYTES) * Constants::LATENCY_STRIDE_BYTES);
+    // Validate that stride rounding won't cause issues
+    // Note: Division truncation is intentional here - we round down to nearest stride multiple
+    // This ensures the buffer fits within the cache size while maintaining stride alignment
+    if (config.custom_buffer_size >= Constants::LATENCY_STRIDE_BYTES) {
+      config.custom_buffer_size = ((config.custom_buffer_size / Constants::LATENCY_STRIDE_BYTES) * Constants::LATENCY_STRIDE_BYTES);
+    } else {
+      // If buffer is smaller than stride, set to minimum size
+      config.custom_buffer_size = Constants::MIN_LATENCY_BUFFER_SIZE;
+    }
     
     // Ensure minimum size (at least 2 pointers worth)
-    if (config.custom_buffer_size < Constants::MIN_LATENCY_BUFFER_SIZE) config.custom_buffer_size = Constants::MIN_LATENCY_BUFFER_SIZE;
+    if (config.custom_buffer_size < Constants::MIN_LATENCY_BUFFER_SIZE) {
+      config.custom_buffer_size = Constants::MIN_LATENCY_BUFFER_SIZE;
+    }
     
     // Ensure buffer size is at least page size aligned
     if (config.custom_buffer_size < page_size_check) {
@@ -236,28 +262,94 @@ void calculate_buffer_sizes(BenchmarkConfig& config) {
       }
       config.custom_buffer_size = page_size_check;
     }
+    
+    // Final validation: ensure buffer size is not zero after all calculations
+    if (config.custom_buffer_size == 0) {
+      std::cerr << Messages::error_prefix() << Messages::error_calculated_custom_buffer_size_zero() << std::endl;
+      config.custom_buffer_size = Constants::MIN_LATENCY_BUFFER_SIZE;
+    }
   } else {
     // Use configured factors for L1 and L2 to ensure fits within target level
-    config.l1_buffer_size = static_cast<size_t>(config.l1_cache_size * Constants::L1_BUFFER_SIZE_FACTOR);
-    config.l2_buffer_size = static_cast<size_t>(config.l2_cache_size * Constants::L2_BUFFER_SIZE_FACTOR);
+    // Check for overflow before multiplication
+    if (config.l1_cache_size > 0 && 
+        config.l1_cache_size > std::numeric_limits<size_t>::max() / Constants::L1_BUFFER_SIZE_FACTOR) {
+      std::cerr << Messages::error_prefix() << Messages::error_l1_cache_size_overflow() << std::endl;
+      config.l1_buffer_size = std::numeric_limits<size_t>::max();
+    } else {
+      config.l1_buffer_size = static_cast<size_t>(config.l1_cache_size * Constants::L1_BUFFER_SIZE_FACTOR);
+    }
     
-    // Ensure buffer sizes are multiples of stride
-    config.l1_buffer_size = ((config.l1_buffer_size / Constants::LATENCY_STRIDE_BYTES) * Constants::LATENCY_STRIDE_BYTES);
-    config.l2_buffer_size = ((config.l2_buffer_size / Constants::LATENCY_STRIDE_BYTES) * Constants::LATENCY_STRIDE_BYTES);
+    if (config.l2_cache_size > 0 && 
+        config.l2_cache_size > std::numeric_limits<size_t>::max() / Constants::L2_BUFFER_SIZE_FACTOR) {
+      std::cerr << Messages::error_prefix() << Messages::error_l2_cache_size_overflow() << std::endl;
+      config.l2_buffer_size = std::numeric_limits<size_t>::max();
+    } else {
+      config.l2_buffer_size = static_cast<size_t>(config.l2_cache_size * Constants::L2_BUFFER_SIZE_FACTOR);
+    }
+    
+    // Ensure buffer sizes are multiples of stride (with validation)
+    // Note: Division truncation is intentional - rounds down to nearest stride multiple
+    if (config.l1_buffer_size >= Constants::LATENCY_STRIDE_BYTES) {
+      config.l1_buffer_size = ((config.l1_buffer_size / Constants::LATENCY_STRIDE_BYTES) * Constants::LATENCY_STRIDE_BYTES);
+    } else {
+      config.l1_buffer_size = Constants::MIN_LATENCY_BUFFER_SIZE;
+    }
+    
+    if (config.l2_buffer_size >= Constants::LATENCY_STRIDE_BYTES) {
+      config.l2_buffer_size = ((config.l2_buffer_size / Constants::LATENCY_STRIDE_BYTES) * Constants::LATENCY_STRIDE_BYTES);
+    } else {
+      config.l2_buffer_size = Constants::MIN_LATENCY_BUFFER_SIZE;
+    }
     
     // Ensure minimum size (at least 2 pointers worth)
-    if (config.l1_buffer_size < Constants::MIN_LATENCY_BUFFER_SIZE) config.l1_buffer_size = Constants::MIN_LATENCY_BUFFER_SIZE;
-    if (config.l2_buffer_size < Constants::MIN_LATENCY_BUFFER_SIZE) config.l2_buffer_size = Constants::MIN_LATENCY_BUFFER_SIZE;
+    if (config.l1_buffer_size < Constants::MIN_LATENCY_BUFFER_SIZE) {
+      config.l1_buffer_size = Constants::MIN_LATENCY_BUFFER_SIZE;
+    }
+    if (config.l2_buffer_size < Constants::MIN_LATENCY_BUFFER_SIZE) {
+      config.l2_buffer_size = Constants::MIN_LATENCY_BUFFER_SIZE;
+    }
     
     // Ensure buffer sizes are at least page size aligned
-    if (config.l1_buffer_size < page_size_check) config.l1_buffer_size = page_size_check;
-    if (config.l2_buffer_size < page_size_check) config.l2_buffer_size = page_size_check;
+    if (config.l1_buffer_size < page_size_check) {
+      config.l1_buffer_size = page_size_check;
+    }
+    if (config.l2_buffer_size < page_size_check) {
+      config.l2_buffer_size = page_size_check;
+    }
+    
+    // Final validation: ensure buffer sizes are not zero after all calculations
+    if (config.l1_buffer_size == 0) {
+      std::cerr << Messages::error_prefix() << Messages::error_calculated_l1_buffer_size_zero() << std::endl;
+      config.l1_buffer_size = Constants::MIN_LATENCY_BUFFER_SIZE;
+    }
+    if (config.l2_buffer_size == 0) {
+      std::cerr << Messages::error_prefix() << Messages::error_calculated_l2_buffer_size_zero() << std::endl;
+      config.l2_buffer_size = Constants::MIN_LATENCY_BUFFER_SIZE;
+    }
   }
 }
 
 void calculate_access_counts(BenchmarkConfig& config) {
   // Scale latency accesses proportionally to buffer size
-  config.lat_num_accesses = static_cast<size_t>(Constants::BASE_LATENCY_ACCESSES * (static_cast<double>(config.buffer_size_mb) / Constants::DEFAULT_BUFFER_SIZE_MB));
+  // Use floating-point arithmetic for precision, but validate result fits in size_t
+  double scale_factor = static_cast<double>(config.buffer_size_mb) / Constants::DEFAULT_BUFFER_SIZE_MB;
+  double scaled_accesses = Constants::BASE_LATENCY_ACCESSES * scale_factor;
+  
+  // Check for overflow before casting
+  if (scaled_accesses > static_cast<double>(std::numeric_limits<size_t>::max())) {
+    std::cerr << Messages::error_prefix() << Messages::error_latency_access_count_overflow() << std::endl;
+    config.lat_num_accesses = std::numeric_limits<size_t>::max();
+  } else if (scaled_accesses < 0) {
+    std::cerr << Messages::error_prefix() << Messages::error_latency_access_count_negative() << std::endl;
+    config.lat_num_accesses = Constants::BASE_LATENCY_ACCESSES;  // Use default
+  } else {
+    config.lat_num_accesses = static_cast<size_t>(scaled_accesses);
+  }
+  
+  // Ensure minimum access count
+  if (config.lat_num_accesses == 0) {
+    config.lat_num_accesses = Constants::BASE_LATENCY_ACCESSES;
+  }
   
   // Cache latency test access counts are already set in struct defaults
   // (l1_num_accesses, l2_num_accesses, custom_num_accesses)

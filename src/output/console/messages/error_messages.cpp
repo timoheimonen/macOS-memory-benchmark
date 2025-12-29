@@ -36,6 +36,10 @@ std::string error_unknown_option(const std::string& option) {
   return "Unknown option: " + option;
 }
 
+std::string error_duplicate_option(const std::string& option) {
+  return "Duplicate option: " + option;
+}
+
 std::string error_buffer_size_calculation(unsigned long size_mb) {
   std::ostringstream oss;
   oss << "Buffer size calculation error (" << size_mb << " MB).";
@@ -164,6 +168,144 @@ std::string error_buffer_too_small_strided(size_t min_bytes) {
 
 std::string error_no_iterations_strided() {
   return "No iterations possible for strided pattern (buffer too small)";
+}
+
+std::string error_buffer_size_zero(const std::string& buffer_name) {
+  return "Buffer size is zero for " + buffer_name;
+}
+
+const std::string& error_main_buffer_size_zero() {
+  static const std::string msg = "Main buffer size is zero";
+  return msg;
+}
+
+const std::string& error_buffer_size_overflow_calculation() {
+  static const std::string msg = "Buffer size too large, would overflow when calculating total memory";
+  return msg;
+}
+
+const std::string& error_total_memory_overflow() {
+  static const std::string msg = "Total memory requirement would overflow";
+  return msg;
+}
+
+const std::string& error_main_buffers_not_allocated() {
+  static const std::string msg = "Main buffers not allocated";
+  return msg;
+}
+
+const std::string& error_custom_buffer_not_allocated() {
+  static const std::string msg = "Custom buffer not allocated but size > 0";
+  return msg;
+}
+
+const std::string& error_l1_buffer_not_allocated() {
+  static const std::string msg = "L1 buffer not allocated but size > 0";
+  return msg;
+}
+
+const std::string& error_l2_buffer_not_allocated() {
+  static const std::string msg = "L2 buffer not allocated but size > 0";
+  return msg;
+}
+
+const std::string& error_custom_bandwidth_buffers_not_allocated() {
+  static const std::string msg = "Custom bandwidth buffers not allocated but size > 0";
+  return msg;
+}
+
+const std::string& error_l1_bandwidth_buffers_not_allocated() {
+  static const std::string msg = "L1 bandwidth buffers not allocated but size > 0";
+  return msg;
+}
+
+const std::string& error_l2_bandwidth_buffers_not_allocated() {
+  static const std::string msg = "L2 bandwidth buffers not allocated but size > 0";
+  return msg;
+}
+
+const std::string& error_buffer_pointer_null_latency_chain() {
+  static const std::string msg = "Buffer pointer is null for latency chain setup";
+  return msg;
+}
+
+const std::string& error_stride_zero_latency_chain() {
+  static const std::string msg = "Stride is zero for latency chain setup";
+  return msg;
+}
+
+std::string error_buffer_stride_invalid_latency_chain(size_t num_pointers, size_t buffer_size, size_t stride) {
+  std::ostringstream oss;
+  oss << "Buffer/stride invalid for latency chain setup (num_pointers=" << num_pointers 
+      << "). Buffer size: " << buffer_size << ", Stride: " << stride;
+  return oss.str();
+}
+
+const std::string& error_buffer_too_small_for_pointers() {
+  static const std::string msg = "Buffer size too small to store pointers";
+  return msg;
+}
+
+std::string error_offset_exceeds_bounds(size_t offset, size_t max_offset) {
+  std::ostringstream oss;
+  oss << "Calculated offset exceeds buffer bounds (offset=" << offset << ", max=" << max_offset << ")";
+  return oss.str();
+}
+
+std::string error_next_pointer_offset_exceeds_bounds(size_t offset, size_t max_offset) {
+  std::ostringstream oss;
+  oss << "Next pointer offset exceeds buffer bounds (offset=" << offset << ", max=" << max_offset << ")";
+  return oss.str();
+}
+
+const std::string& error_source_buffer_null() {
+  static const std::string msg = "Source buffer pointer is null";
+  return msg;
+}
+
+const std::string& error_destination_buffer_null() {
+  static const std::string msg = "Destination buffer pointer is null";
+  return msg;
+}
+
+const std::string& error_buffer_size_zero_generic() {
+  static const std::string msg = "Buffer size is zero";
+  return msg;
+}
+
+const std::string& error_calculated_custom_buffer_size_zero() {
+  static const std::string msg = "Calculated custom buffer size is zero";
+  return msg;
+}
+
+const std::string& error_l1_cache_size_overflow() {
+  static const std::string msg = "L1 cache size too large, would overflow when calculating buffer size";
+  return msg;
+}
+
+const std::string& error_l2_cache_size_overflow() {
+  static const std::string msg = "L2 cache size too large, would overflow when calculating buffer size";
+  return msg;
+}
+
+const std::string& error_calculated_l1_buffer_size_zero() {
+  static const std::string msg = "Calculated L1 buffer size is zero";
+  return msg;
+}
+
+const std::string& error_calculated_l2_buffer_size_zero() {
+  static const std::string msg = "Calculated L2 buffer size is zero";
+  return msg;
+}
+
+const std::string& error_latency_access_count_overflow() {
+  static const std::string msg = "Calculated latency access count would overflow";
+  return msg;
+}
+
+const std::string& error_latency_access_count_negative() {
+  static const std::string msg = "Calculated latency access count is negative";
+  return msg;
 }
 
 } // namespace Messages
