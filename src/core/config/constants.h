@@ -70,6 +70,7 @@ namespace Constants {
   // Output formatting precision constants
   constexpr int BANDWIDTH_PRECISION = 5;  // Decimal places for bandwidth values (GB/s)
   constexpr int TIME_PRECISION = 5;  // Decimal places for time values (seconds)
+  constexpr int LATENCY_PRECISION = 2;    // Decimal places for latency values (nanoseconds)
   
   // Pattern benchmark constants
   constexpr size_t PATTERN_ACCESS_SIZE_BYTES = 32;  // Bytes per access in pattern benchmarks (cache line alignment)

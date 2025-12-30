@@ -71,7 +71,7 @@ std::string results_latency_total_time(double total_time_sec) {
 
 std::string results_latency_average(double latency_ns) {
   std::ostringstream oss;
-  oss << std::fixed << std::setprecision(2);
+  oss << std::fixed << std::setprecision(Constants::LATENCY_PRECISION);
   oss << "  Average latency: " << latency_ns << " ns";
   return oss.str();
 }
@@ -131,21 +131,21 @@ std::string results_buffer_size_bytes(size_t buffer_size) {
 
 std::string results_buffer_size_kb(double buffer_size_kb) {
   std::ostringstream oss;
-  oss << std::fixed << std::setprecision(2);
+  oss << std::fixed << std::setprecision(Constants::LATENCY_PRECISION);
   oss << " (Buffer size: " << buffer_size_kb << " KB)";
   return oss.str();
 }
 
 std::string results_buffer_size_mb(double buffer_size_mb) {
   std::ostringstream oss;
-  oss << std::fixed << std::setprecision(2);
+  oss << std::fixed << std::setprecision(Constants::LATENCY_PRECISION);
   oss << " (Buffer size: " << buffer_size_mb << " MB)";
   return oss.str();
 }
 
 std::string results_cache_latency_ns(double latency_ns) {
   std::ostringstream oss;
-  oss << std::fixed << std::setprecision(2);
+  oss << std::fixed << std::setprecision(Constants::LATENCY_PRECISION);
   oss << " " << latency_ns << " ns";
   return oss.str();
 }
@@ -156,7 +156,7 @@ std::string results_separator() {
 
 std::string results_cache_latency_custom_ns(double latency_ns, size_t buffer_size) {
   std::ostringstream oss;
-  oss << std::fixed << std::setprecision(2);
+  oss << std::fixed << std::setprecision(Constants::LATENCY_PRECISION);
   if (std::isinf(latency_ns) || std::isnan(latency_ns)) {
     oss << "  Custom Cache: N/A ns (Buffer size: " << buffer_size << " B)";
   } else {
@@ -167,7 +167,7 @@ std::string results_cache_latency_custom_ns(double latency_ns, size_t buffer_siz
 
 std::string results_cache_latency_custom_ns_kb(double latency_ns, double buffer_size_kb) {
   std::ostringstream oss;
-  oss << std::fixed << std::setprecision(2);
+  oss << std::fixed << std::setprecision(Constants::LATENCY_PRECISION);
   if (std::isinf(latency_ns) || std::isnan(latency_ns)) {
     oss << "  Custom Cache: N/A ns (Buffer size: " << buffer_size_kb << " KB)";
   } else {
@@ -178,7 +178,7 @@ std::string results_cache_latency_custom_ns_kb(double latency_ns, double buffer_
 
 std::string results_cache_latency_custom_ns_mb(double latency_ns, double buffer_size_mb) {
   std::ostringstream oss;
-  oss << std::fixed << std::setprecision(2);
+  oss << std::fixed << std::setprecision(Constants::LATENCY_PRECISION);
   if (std::isinf(latency_ns) || std::isnan(latency_ns)) {
     oss << "  Custom Cache: N/A ns (Buffer size: " << buffer_size_mb << " MB)";
   } else {
@@ -189,7 +189,7 @@ std::string results_cache_latency_custom_ns_mb(double latency_ns, double buffer_
 
 std::string results_cache_latency_l1_ns(double latency_ns, size_t buffer_size) {
   std::ostringstream oss;
-  oss << std::fixed << std::setprecision(2);
+  oss << std::fixed << std::setprecision(Constants::LATENCY_PRECISION);
   if (std::isinf(latency_ns) || std::isnan(latency_ns)) {
     oss << "  L1 Cache: N/A ns (Buffer size: " << buffer_size << " B)";
   } else {
@@ -200,7 +200,7 @@ std::string results_cache_latency_l1_ns(double latency_ns, size_t buffer_size) {
 
 std::string results_cache_latency_l1_ns_kb(double latency_ns, double buffer_size_kb) {
   std::ostringstream oss;
-  oss << std::fixed << std::setprecision(2);
+  oss << std::fixed << std::setprecision(Constants::LATENCY_PRECISION);
   if (std::isinf(latency_ns) || std::isnan(latency_ns)) {
     oss << "  L1 Cache: N/A ns (Buffer size: " << buffer_size_kb << " KB)";
   } else {
@@ -211,7 +211,7 @@ std::string results_cache_latency_l1_ns_kb(double latency_ns, double buffer_size
 
 std::string results_cache_latency_l1_ns_mb(double latency_ns, double buffer_size_mb) {
   std::ostringstream oss;
-  oss << std::fixed << std::setprecision(2);
+  oss << std::fixed << std::setprecision(Constants::LATENCY_PRECISION);
   if (std::isinf(latency_ns) || std::isnan(latency_ns)) {
     oss << "  L1 Cache: N/A ns (Buffer size: " << buffer_size_mb << " MB)";
   } else {
@@ -222,7 +222,7 @@ std::string results_cache_latency_l1_ns_mb(double latency_ns, double buffer_size
 
 std::string results_cache_latency_l2_ns(double latency_ns, size_t buffer_size) {
   std::ostringstream oss;
-  oss << std::fixed << std::setprecision(2);
+  oss << std::fixed << std::setprecision(Constants::LATENCY_PRECISION);
   if (std::isinf(latency_ns) || std::isnan(latency_ns)) {
     oss << "  L2 Cache: N/A ns (Buffer size: " << buffer_size << " B)";
   } else {
@@ -233,7 +233,7 @@ std::string results_cache_latency_l2_ns(double latency_ns, size_t buffer_size) {
 
 std::string results_cache_latency_l2_ns_kb(double latency_ns, double buffer_size_kb) {
   std::ostringstream oss;
-  oss << std::fixed << std::setprecision(2);
+  oss << std::fixed << std::setprecision(Constants::LATENCY_PRECISION);
   if (std::isinf(latency_ns) || std::isnan(latency_ns)) {
     oss << "  L2 Cache: N/A ns (Buffer size: " << buffer_size_kb << " KB)";
   } else {
@@ -244,7 +244,7 @@ std::string results_cache_latency_l2_ns_kb(double latency_ns, double buffer_size
 
 std::string results_cache_latency_l2_ns_mb(double latency_ns, double buffer_size_mb) {
   std::ostringstream oss;
-  oss << std::fixed << std::setprecision(2);
+  oss << std::fixed << std::setprecision(Constants::LATENCY_PRECISION);
   if (std::isinf(latency_ns) || std::isnan(latency_ns)) {
     oss << "  L2 Cache: N/A ns (Buffer size: " << buffer_size_mb << " MB)";
   } else {

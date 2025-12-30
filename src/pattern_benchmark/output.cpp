@@ -228,10 +228,10 @@ static PatternStatisticsData calculate_pattern_statistics(const std::vector<doub
   double p95 = percentile(0.95);
   double p99 = percentile(0.99);
 
-  // Stddev
+  // Stddev (using sample standard deviation with Bessel's correction)
   double variance = 0.0;
   for (double v : values) variance += (v - avg) * (v - avg);
-  double stddev_val = std::sqrt(variance / n);
+  double stddev_val = (n > 1) ? std::sqrt(variance / (n - 1)) : 0.0;
 
   return {avg, min_val, max_val, median, p90, p95, p99, stddev_val};
 }

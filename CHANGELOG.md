@@ -10,6 +10,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 - **Strided access pattern benchmark accuracy**: Fixed bug in strided access pattern benchmarks where loops terminated incorrectly, causing unreliable and incorrect results.
 - **Optimized reverse read byte loop**: Improved efficiency of byte cleanup loop in `memory_read_reverse.s`.
+- **Standard deviation calculation consistency**: Fixed bug where console output used population standard deviation (÷n) while JSON output used sample standard deviation (÷n-1), causing 5-22% difference in reported stddev values. Console and JSON outputs now show identical stddev values using the statistically correct sample standard deviation formula.
+- **Centralized latency precision**: Replaced ~36 hardcoded precision values across output formatting code with a single `LATENCY_PRECISION` constant for easier maintenance and consistency.
 
 ## [0.52] - 2025-12-29
 
