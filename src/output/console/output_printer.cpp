@@ -27,9 +27,7 @@
 // 'prog_name': The name of the executable (typically argv[0]).
 void print_usage(const char *prog_name) {
   // Output usage syntax, version, options, and an example to standard error.
-  std::ostringstream version_str;
-  version_str << SOFTVERSION;
-  std::cerr << Messages::usage_header(version_str.str())
+  std::cerr << Messages::usage_header(SOFTVERSION)
             << Messages::usage_options(prog_name)
             << Messages::usage_example(prog_name);
 }
@@ -48,9 +46,7 @@ void print_usage(const char *prog_name) {
 void print_configuration(size_t buffer_size, size_t buffer_size_mb, int iterations, int loop_count,
                          bool use_non_cacheable, const std::string &cpu_name, int perf_cores, int eff_cores, int num_threads) {
   // Print benchmark header and copyright/license info.
-  std::ostringstream version_str;
-  version_str << SOFTVERSION;
-  std::cout << Messages::config_header(version_str.str()) << std::endl;
+  std::cout << Messages::config_header(SOFTVERSION) << std::endl;
   std::cout << Messages::config_copyright() << std::endl;
   std::cout << Messages::config_license() << std::endl;
   // Display buffer sizes (actual MiB and requested/capped MB).
