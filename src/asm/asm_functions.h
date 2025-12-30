@@ -95,28 +95,31 @@ extern "C" {
     /**
      * @brief Optimized strided memory read loop (assembly)
      * @param src Source buffer pointer
-     * @param byteCount Total buffer size in bytes
+     * @param byteCount Total buffer size in bytes (for modulo wrapping)
      * @param stride Stride size in bytes between accesses
+     * @param num_iterations Number of strided accesses to perform
      * @return Checksum of read data
      */
-    uint64_t memory_read_strided_loop_asm(const void* src, size_t byteCount, size_t stride);
+    uint64_t memory_read_strided_loop_asm(const void* src, size_t byteCount, size_t stride, size_t num_iterations);
     
     /**
      * @brief Optimized strided memory write loop (assembly)
      * @param dst Destination buffer pointer
-     * @param byteCount Total buffer size in bytes
+     * @param byteCount Total buffer size in bytes (for modulo wrapping)
      * @param stride Stride size in bytes between accesses
+     * @param num_iterations Number of strided accesses to perform
      */
-    void memory_write_strided_loop_asm(void* dst, size_t byteCount, size_t stride);
+    void memory_write_strided_loop_asm(void* dst, size_t byteCount, size_t stride, size_t num_iterations);
     
     /**
      * @brief Optimized strided memory copy loop (assembly)
      * @param dst Destination buffer pointer
      * @param src Source buffer pointer
-     * @param byteCount Total buffer size in bytes
+     * @param byteCount Total buffer size in bytes (for modulo wrapping)
      * @param stride Stride size in bytes between accesses
+     * @param num_iterations Number of strided accesses to perform
      */
-    void memory_copy_strided_loop_asm(void* dst, const void* src, size_t byteCount, size_t stride);
+    void memory_copy_strided_loop_asm(void* dst, const void* src, size_t byteCount, size_t stride, size_t num_iterations);
     
     // Random access
     /**

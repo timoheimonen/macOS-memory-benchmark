@@ -29,7 +29,7 @@
  * @def SOFTVERSION
  * @brief Software version number
  */
-#define SOFTVERSION 0.52f
+#define SOFTVERSION 0.53f
 
 #endif // VERSION_H
 
