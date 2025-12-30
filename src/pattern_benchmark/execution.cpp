@@ -159,9 +159,16 @@ int run_all_pattern_benchmarks(const BenchmarkBuffers& buffers, const BenchmarkC
 
 int run_pattern_benchmarks(const BenchmarkBuffers& buffers, const BenchmarkConfig& config, PatternResults& results) {
   using namespace Constants;
-  
-  HighResTimer timer;
-  
+
+  auto timer_opt = HighResTimer::create();
+  if (!timer_opt) {
+    std::cerr << Messages::error_prefix()
+              << "Failed to create pattern benchmark timer."
+              << std::endl;
+    return EXIT_FAILURE;
+  }
+  auto& timer = *timer_opt;
+
   // Calculate number of accesses for random pattern
   size_t num_random_accesses = calculate_num_random_accesses(config.buffer_size);
   

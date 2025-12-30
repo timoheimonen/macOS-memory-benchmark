@@ -30,11 +30,11 @@ std::string error_duplicate_option(const std::string& option);
 std::string error_buffer_size_calculation(unsigned long size_mb);
 std::string error_buffer_size_too_small(size_t size_bytes);
 std::string error_cache_size_invalid(long long min_kb, long long max_kb, long long max_mb);
-const std::string& error_iterations_invalid();
-const std::string& error_buffersize_invalid();
-const std::string& error_count_invalid();
-const std::string& error_latency_samples_invalid();
-const std::string& error_threads_invalid();
+std::string error_iterations_invalid(long long value, long long min_val, long long max_val);
+std::string error_buffersize_invalid(long long value, unsigned long max_val);
+std::string error_count_invalid(long long value, long long min_val, long long max_val);
+std::string error_latency_samples_invalid(long long value, long long min_val, long long max_val);
+std::string error_threads_invalid(long long value, long long min_val, long long max_val);
 std::string error_mmap_failed(const std::string& buffer_name);
 std::string error_madvise_failed(const std::string& buffer_name);
 std::string error_munmap_failed();
@@ -83,6 +83,7 @@ const std::string& error_latency_access_count_overflow();
 const std::string& error_latency_access_count_negative();
 
 // --- Warning Messages ---
+const std::string& warning_prefix();
 const std::string& warning_cannot_get_memory();
 std::string warning_buffer_size_exceeds_limit(unsigned long requested_mb, unsigned long limit_mb);
 std::string warning_qos_failed(int code);

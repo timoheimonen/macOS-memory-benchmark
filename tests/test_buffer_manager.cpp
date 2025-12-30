@@ -212,3 +212,107 @@ TEST(BufferManagerTest, InitializeAllBuffersNonCacheable) {
   EXPECT_EQ(init_result, EXIT_SUCCESS);
 }
 
+// Test allocation failure when buffer_size is zero - should fail early with error message
+TEST(BufferManagerTest, AllocateAllBuffersFirstBufferFails) {
+  BenchmarkConfig config;
+  config.buffer_size = 0;  // Invalid size - should fail early
+  config.l1_buffer_size = 64 * 1024;
+  config.l2_buffer_size = 512 * 1024;
+  config.use_custom_cache_size = false;
+  
+  // Initialize system info
+  config.cpu_name = get_processor_name();
+  config.perf_cores = get_performance_cores();
+  config.eff_cores = get_efficiency_cores();
+  config.num_threads = get_total_logical_cores();
+  config.l1_cache_size = get_l1_cache_size();
+  config.l2_cache_size = get_l2_cache_size();
+  
+  testing::internal::CaptureStderr();
+  BenchmarkBuffers buffers;
+  int result = allocate_all_buffers(config, buffers);
+  std::string error_output = testing::internal::GetCapturedStderr();
+  
+  // Verify allocation failed
+  EXPECT_EQ(result, EXIT_FAILURE);
+  
+  // Verify error message contains expected content
+  EXPECT_NE(error_output.find("Error: "), std::string::npos);
+  EXPECT_NE(error_output.find("Main buffer size is zero"), std::string::npos);
+  
+  // Verify all buffers are nullptr (properly initialized to nullptr on failure)
+  EXPECT_EQ(buffers.src_buffer(), nullptr);
+  EXPECT_EQ(buffers.dst_buffer(), nullptr);
+  EXPECT_EQ(buffers.lat_buffer(), nullptr);
+  EXPECT_EQ(buffers.l1_buffer(), nullptr);
+  EXPECT_EQ(buffers.l2_buffer(), nullptr);
+}
+
+// Test that buffers are properly cleaned up on failure
+TEST(BufferManagerTest, AllocateAllBuffersCleanupOnFailure) {
+  BenchmarkConfig config;
+  config.buffer_size = 0;  // Invalid size - should fail early
+  config.l1_buffer_size = 64 * 1024;
+  config.l2_buffer_size = 512 * 1024;
+  config.use_custom_cache_size = false;
+  
+  // Initialize system info
+  config.cpu_name = get_processor_name();
+  config.perf_cores = get_performance_cores();
+  config.eff_cores = get_efficiency_cores();
+  config.num_threads = get_total_logical_cores();
+  config.l1_cache_size = get_l1_cache_size();
+  config.l2_cache_size = get_l2_cache_size();
+  
+  BenchmarkBuffers buffers;
+  int result = allocate_all_buffers(config, buffers);
+  EXPECT_EQ(result, EXIT_FAILURE);
+  
+  // Verify buffers are nullptr (RAII cleanup should have occurred)
+  EXPECT_EQ(buffers.src_buffer(), nullptr);
+  EXPECT_EQ(buffers.dst_buffer(), nullptr);
+  EXPECT_EQ(buffers.lat_buffer(), nullptr);
+  
+  // Verify buffers can be safely destroyed without issues
+  // (This test passes if we get here without crashing)
+  SUCCEED();
+}
+
+// Test partial allocation failure scenario
+// Note: Direct mmap failure simulation is difficult without mocking,
+// but we can test the error handling path when buffer_size is invalid
+TEST(BufferManagerTest, AllocateAllBuffersPartialFailure) {
+  // Test with invalid buffer_size that causes early failure
+  BenchmarkConfig config;
+  config.buffer_size = 0;  // Invalid - will fail before any allocations
+  config.l1_buffer_size = 64 * 1024;
+  config.l2_buffer_size = 512 * 1024;
+  config.use_custom_cache_size = false;
+  
+  // Initialize system info
+  config.cpu_name = get_processor_name();
+  config.perf_cores = get_performance_cores();
+  config.eff_cores = get_efficiency_cores();
+  config.num_threads = get_total_logical_cores();
+  config.l1_cache_size = get_l1_cache_size();
+  config.l2_cache_size = get_l2_cache_size();
+  
+  testing::internal::CaptureStderr();
+  BenchmarkBuffers buffers;
+  int result = allocate_all_buffers(config, buffers);
+  std::string error_output = testing::internal::GetCapturedStderr();
+  
+  // Verify failure occurred
+  EXPECT_EQ(result, EXIT_FAILURE);
+  
+  // Verify error message was logged
+  EXPECT_NE(error_output.find("Error: "), std::string::npos);
+  
+  // Verify all buffers are nullptr (no partial allocation occurred)
+  EXPECT_EQ(buffers.src_buffer(), nullptr);
+  EXPECT_EQ(buffers.dst_buffer(), nullptr);
+  EXPECT_EQ(buffers.lat_buffer(), nullptr);
+  EXPECT_EQ(buffers.l1_buffer(), nullptr);
+  EXPECT_EQ(buffers.l2_buffer(), nullptr);
+}
+

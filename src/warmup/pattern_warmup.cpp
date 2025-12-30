@@ -44,14 +44,15 @@ void warmup_read_strided(void* buffer, size_t size, size_t stride, int num_threa
     return;
   }
   if (stride % 32 != 0) {
-    std::cerr << Messages::warning_stride_not_aligned(stride) << std::endl;
+    std::cerr << Messages::warning_prefix() << Messages::warning_stride_not_aligned(stride) << std::endl;
   }
   
   size_t warmup_size = calculate_warmup_size(size);
-  auto read_chunk_op = [stride](char* chunk_start, char* /* src_chunk */, size_t chunk_size, 
+  auto read_chunk_op = [stride](char* chunk_start, char* /* src_chunk */, size_t chunk_size,
                                  std::atomic<uint64_t>* checksum) {
     // Use strided read for warmup
-    uint64_t result = memory_read_strided_loop_asm(chunk_start, chunk_size, stride);
+    size_t num_iterations = (chunk_size + stride - 1) / stride;
+    uint64_t result = memory_read_strided_loop_asm(chunk_start, chunk_size, stride, num_iterations);
     if (checksum) {
       checksum->fetch_xor(result, std::memory_order_release);
     }
@@ -75,14 +76,15 @@ void warmup_write_strided(void* buffer, size_t size, size_t stride, int num_thre
     return;
   }
   if (stride % 32 != 0) {
-    std::cerr << Messages::warning_stride_not_aligned(stride) << std::endl;
+    std::cerr << Messages::warning_prefix() << Messages::warning_stride_not_aligned(stride) << std::endl;
   }
   
   size_t warmup_size = calculate_warmup_size(size);
-  auto write_chunk_op = [stride](char* chunk_start, char* /* src_chunk */, size_t chunk_size, 
+  auto write_chunk_op = [stride](char* chunk_start, char* /* src_chunk */, size_t chunk_size,
                                   std::atomic<uint64_t>* /* checksum */) {
     // Use strided write for warmup
-    memory_write_strided_loop_asm(chunk_start, chunk_size, stride);
+    size_t num_iterations = (chunk_size + stride - 1) / stride;
+    memory_write_strided_loop_asm(chunk_start, chunk_size, stride, num_iterations);
   };
   warmup_parallel(buffer, size, num_threads, write_chunk_op, true, nullptr, nullptr, warmup_size);
 }
@@ -104,14 +106,15 @@ void warmup_copy_strided(void* dst, void* src, size_t size, size_t stride, int n
     return;
   }
   if (stride % 32 != 0) {
-    std::cerr << Messages::warning_stride_not_aligned(stride) << std::endl;
+    std::cerr << Messages::warning_prefix() << Messages::warning_stride_not_aligned(stride) << std::endl;
   }
   
   size_t warmup_size = calculate_warmup_size(size);
-  auto copy_chunk_op = [stride](char* dst_chunk, char* src_chunk, size_t chunk_size, 
+  auto copy_chunk_op = [stride](char* dst_chunk, char* src_chunk, size_t chunk_size,
                                  std::atomic<uint64_t>* /* checksum */) {
     // Use strided copy for warmup
-    memory_copy_strided_loop_asm(dst_chunk, src_chunk, chunk_size, stride);
+    size_t num_iterations = (chunk_size + stride - 1) / stride;
+    memory_copy_strided_loop_asm(dst_chunk, src_chunk, chunk_size, stride, num_iterations);
   };
   warmup_parallel(dst, size, num_threads, copy_chunk_op, true, src, nullptr, warmup_size);
 }
@@ -172,7 +175,7 @@ void warmup_read_random(void* buffer, const std::vector<size_t>& indices, int nu
     threads.emplace_back([buffer, thread_indices, &dummy_checksum]() {
       kern_return_t qos_ret = pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
       if (qos_ret != KERN_SUCCESS) {
-        std::cerr << Messages::warning_qos_failed_worker_thread(qos_ret) << std::endl;
+        std::cerr << Messages::warning_prefix() << Messages::warning_qos_failed_worker_thread(qos_ret) << std::endl;
       }
       
       if (!thread_indices.empty()) {
@@ -238,7 +241,7 @@ void warmup_write_random(void* buffer, const std::vector<size_t>& indices, int n
     threads.emplace_back([buffer, thread_indices]() {
       kern_return_t qos_ret = pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
       if (qos_ret != KERN_SUCCESS) {
-        std::cerr << Messages::warning_qos_failed_worker_thread(qos_ret) << std::endl;
+        std::cerr << Messages::warning_prefix() << Messages::warning_qos_failed_worker_thread(qos_ret) << std::endl;
       }
       
       if (!thread_indices.empty()) {
@@ -304,7 +307,7 @@ void warmup_copy_random(void* dst, void* src, const std::vector<size_t>& indices
     threads.emplace_back([dst, src, thread_indices]() {
       kern_return_t qos_ret = pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
       if (qos_ret != KERN_SUCCESS) {
-        std::cerr << Messages::warning_qos_failed_worker_thread(qos_ret) << std::endl;
+        std::cerr << Messages::warning_prefix() << Messages::warning_qos_failed_worker_thread(qos_ret) << std::endl;
       }
       
       if (!thread_indices.empty()) {

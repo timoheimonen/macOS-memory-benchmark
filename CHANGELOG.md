@@ -5,6 +5,26 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.52.1] - DEVELOPMENT
+
+### Added
+- **Test coverage for memory allocation failures**: Added tests to verify error handling when memory allocation fails, including tests for zero-size buffers and allocation cleanup on failure.
+- **Test coverage for buffer size edge cases**: Added tests for buffer size boundary conditions, including buffers smaller than stride, equal to stride, and minimum valid sizes for latency chain setup.
+
+### Fixed
+- **Strided access pattern benchmark accuracy**: Fixed bug in strided access pattern benchmarks where loops terminated incorrectly, causing unreliable and incorrect results.
+- **Optimized reverse read byte loop**: Improved efficiency of byte cleanup loop in `memory_read_reverse.s`.
+- **Standard deviation calculation consistency**: Fixed bug where console output used population standard deviation (÷n) while JSON output used sample standard deviation (÷n-1), causing 5-22% difference in reported stddev values. Console and JSON outputs now show identical stddev values using the statistically correct sample standard deviation formula.
+- **Centralized latency precision**: Replaced ~36 hardcoded precision values across output formatting code with a single `LATENCY_PRECISION` constant for easier maintenance and consistency.
+- **Better error messages**: Error messages for invalid parameters now show the actual invalid value and valid ranges (e.g., "iterations invalid (must be between 1 and 2147483647, got -5)").
+- **Timer reliability**: Timer initialization no longer causes the program to exit unexpectedly. Errors are now reported gracefully with clear messages.
+- **Consistent warning format**: All warning messages now use a centralized prefix system for consistent formatting throughout the application.
+- **Test reliability**: Removed arbitrary test limits (10000 GB/s bandwidth and 1ms latency) that could cause false test failures on different hardware configurations. Tests now validate that results are positive and valid without overly restrictive upper bounds.
+
+### Changed
+- **Version numbering system**: Transitioned from simple incrementing version numbers (0.52, 0.53...) to semantic versioning format (0.52.1, 0.52.2...) to prevent the version number from growing too rapidly with small fixes and patches. The version is now stored as a string literal instead of a float, supporting proper semantic versioning with patch-level increments.
+- **Test organization**: Separated integration tests from unit tests using Google Test filters. Tests that perform actual system operations (benchmark execution) are now marked as integration tests and can be run separately. The Makefile now provides three test targets: `make test` (unit tests only, faster), `make test-integration` (integration tests only), and `make test-all` (all tests). This improves test independence and allows faster unit test runs during development.
+
 ## [0.52] - 2025-12-29
 
 ### Fixed

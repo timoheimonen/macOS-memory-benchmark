@@ -83,7 +83,7 @@ int parse_arguments(int argc, char* argv[], BenchmarkConfig& config) {
         if (++i < argc) {
           long long val_ll = std::stoll(argv[i]);
           if (val_ll <= 0 || val_ll > std::numeric_limits<int>::max())
-            throw std::out_of_range(Messages::error_iterations_invalid());
+            throw std::out_of_range(Messages::error_iterations_invalid(val_ll, 1, std::numeric_limits<int>::max()));
           config.iterations = static_cast<int>(val_ll);
         } else
           throw std::invalid_argument(Messages::error_missing_value("-iterations"));
@@ -91,7 +91,7 @@ int parse_arguments(int argc, char* argv[], BenchmarkConfig& config) {
         if (++i < argc) {
           long long val_ll = std::stoll(argv[i]);
           if (val_ll <= 0 || val_ll > std::numeric_limits<unsigned long>::max())
-            throw std::out_of_range(Messages::error_buffersize_invalid());
+            throw std::out_of_range(Messages::error_buffersize_invalid(val_ll, std::numeric_limits<unsigned long>::max()));
           requested_buffer_size_mb_ll = val_ll;
         } else
           throw std::invalid_argument(Messages::error_missing_value("-buffersize"));
@@ -99,7 +99,7 @@ int parse_arguments(int argc, char* argv[], BenchmarkConfig& config) {
         if (++i < argc) {
           long long val_ll = std::stoll(argv[i]);
           if (val_ll <= 0 || val_ll > std::numeric_limits<int>::max())
-            throw std::out_of_range(Messages::error_count_invalid());
+            throw std::out_of_range(Messages::error_count_invalid(val_ll, 1, std::numeric_limits<int>::max()));
           config.loop_count = static_cast<int>(val_ll);
         } else
           throw std::invalid_argument(Messages::error_missing_value("-count"));
@@ -107,7 +107,7 @@ int parse_arguments(int argc, char* argv[], BenchmarkConfig& config) {
         if (++i < argc) {
           long long val_ll = std::stoll(argv[i]);
           if (val_ll <= 0 || val_ll > std::numeric_limits<int>::max())
-            throw std::out_of_range(Messages::error_latency_samples_invalid());
+            throw std::out_of_range(Messages::error_latency_samples_invalid(val_ll, 1, std::numeric_limits<int>::max()));
           config.latency_sample_count = static_cast<int>(val_ll);
         } else
           throw std::invalid_argument(Messages::error_missing_value("-latency-samples"));
@@ -145,7 +145,7 @@ int parse_arguments(int argc, char* argv[], BenchmarkConfig& config) {
         if (++i < argc) {
           long long val_ll = std::stoll(argv[i]);
           if (val_ll <= 0 || val_ll > std::numeric_limits<int>::max())
-            throw std::out_of_range(Messages::error_threads_invalid());
+            throw std::out_of_range(Messages::error_threads_invalid(val_ll, 1, std::numeric_limits<int>::max()));
           requested_threads_ll = val_ll;
         } else
           throw std::invalid_argument(Messages::error_missing_value("-threads"));
@@ -176,7 +176,7 @@ int parse_arguments(int argc, char* argv[], BenchmarkConfig& config) {
   if (requested_threads_ll != -1) {
     int requested_threads = static_cast<int>(requested_threads_ll);
     if (requested_threads > max_cores) {
-      std::cerr << Messages::warning_threads_capped(requested_threads, max_cores) << std::endl;
+      std::cerr << Messages::warning_prefix() << Messages::warning_threads_capped(requested_threads, max_cores) << std::endl;
       config.num_threads = max_cores;
     } else {
       config.num_threads = requested_threads;
@@ -196,7 +196,7 @@ int validate_config(BenchmarkConfig& config) {
     unsigned long max_total_allowed_mb = static_cast<unsigned long>(available_mem_mb * Constants::MEMORY_LIMIT_FACTOR);
     max_allowed_mb_per_buffer = max_total_allowed_mb / 3;
   } else {
-    std::cerr << Messages::warning_cannot_get_memory() << std::endl;
+    std::cerr << Messages::warning_prefix() << Messages::warning_cannot_get_memory() << std::endl;
     max_allowed_mb_per_buffer = Constants::FALLBACK_TOTAL_LIMIT_MB / 3;
     std::cout << Messages::info_setting_max_fallback(max_allowed_mb_per_buffer) << std::endl;
   }
@@ -208,7 +208,7 @@ int validate_config(BenchmarkConfig& config) {
 
   // Validate and cap buffer size
   if (config.buffer_size_mb > max_allowed_mb_per_buffer) {
-    std::cerr << Messages::warning_buffer_size_exceeds_limit(config.buffer_size_mb, max_allowed_mb_per_buffer) << std::endl;
+    std::cerr << Messages::warning_prefix() << Messages::warning_buffer_size_exceeds_limit(config.buffer_size_mb, max_allowed_mb_per_buffer) << std::endl;
     config.buffer_size_mb = max_allowed_mb_per_buffer;
   }
 

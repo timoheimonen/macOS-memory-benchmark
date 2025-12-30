@@ -81,7 +81,7 @@ MmapPtr allocate_buffer_non_cacheable(size_t size, const char* buffer_name) {
   // Use MADV_RANDOM to hint that access pattern is random, discouraging aggressive caching
   // This is a best-effort hint; it does not guarantee non-cacheable behavior
   if (madvise(ptr, size, MADV_RANDOM) == -1) {
-    std::cerr << Messages::warning_madvise_random_failed(buffer_name, strerror(errno)) << std::endl;
+    std::cerr << Messages::warning_prefix() << Messages::warning_madvise_random_failed(buffer_name, strerror(errno)) << std::endl;
     // Non-fatal error, continue anyway
   }
   

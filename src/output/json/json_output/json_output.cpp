@@ -40,9 +40,7 @@ int save_results_to_json(const BenchmarkConfig& config, const BenchmarkStatistic
   nlohmann::json json_output;
   
   // Add version
-  std::ostringstream version_str;
-  version_str << SOFTVERSION;
-  json_output[JsonKeys::VERSION] = version_str.str();
+  json_output[JsonKeys::VERSION] = SOFTVERSION;
   
   // Add timestamp (ISO 8601 UTC)
   auto now = std::chrono::system_clock::now();
@@ -86,9 +84,7 @@ int save_pattern_results_to_json(const BenchmarkConfig& config, const PatternSta
   nlohmann::json json_output;
   
   // Add version
-  std::ostringstream version_str;
-  version_str << SOFTVERSION;
-  json_output[JsonKeys::VERSION] = version_str.str();
+  json_output[JsonKeys::VERSION] = SOFTVERSION;
   
   // Add timestamp (ISO 8601 UTC)
   auto now = std::chrono::system_clock::now();

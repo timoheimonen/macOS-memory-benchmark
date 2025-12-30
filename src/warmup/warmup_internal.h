@@ -127,7 +127,7 @@ void warmup_parallel(void* buffer, size_t size, int num_threads, ChunkOp chunk_o
       if (set_qos) {
         kern_return_t qos_ret = pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
         if (qos_ret != KERN_SUCCESS) {
-          std::cerr << Messages::warning_qos_failed_worker_thread(qos_ret) << std::endl;
+          std::cerr << Messages::warning_prefix() << Messages::warning_qos_failed_worker_thread(qos_ret) << std::endl;
         }
       }
       // Execute the chunk operation.
@@ -155,7 +155,7 @@ void warmup_single(Op operation) {
   // Set QoS for single-threaded warmup operations to ensure highest priority
   kern_return_t qos_ret = pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
   if (qos_ret != KERN_SUCCESS) {
-    std::cerr << Messages::warning_qos_failed(qos_ret) << std::endl;
+    std::cerr << Messages::warning_prefix() << Messages::warning_qos_failed(qos_ret) << std::endl;
   }
   operation();
 }

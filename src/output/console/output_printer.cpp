@@ -27,9 +27,7 @@
 // 'prog_name': The name of the executable (typically argv[0]).
 void print_usage(const char *prog_name) {
   // Output usage syntax, version, options, and an example to standard error.
-  std::ostringstream version_str;
-  version_str << SOFTVERSION;
-  std::cerr << Messages::usage_header(version_str.str())
+  std::cerr << Messages::usage_header(SOFTVERSION)
             << Messages::usage_options(prog_name)
             << Messages::usage_example(prog_name);
 }
@@ -48,9 +46,7 @@ void print_usage(const char *prog_name) {
 void print_configuration(size_t buffer_size, size_t buffer_size_mb, int iterations, int loop_count,
                          bool use_non_cacheable, const std::string &cpu_name, int perf_cores, int eff_cores, int num_threads) {
   // Print benchmark header and copyright/license info.
-  std::ostringstream version_str;
-  version_str << SOFTVERSION;
-  std::cout << Messages::config_header(version_str.str()) << std::endl;
+  std::cout << Messages::config_header(SOFTVERSION) << std::endl;
   std::cout << Messages::config_copyright() << std::endl;
   std::cout << Messages::config_license() << std::endl;
   // Display buffer sizes (actual MiB and requested/capped MB).
@@ -118,7 +114,7 @@ void print_results(int loop, size_t buffer_size, size_t buffer_size_mb, int iter
   // Display main memory latency test results.
   std::cout << Messages::results_main_memory_latency() << std::endl;
   std::cout << Messages::results_latency_total_time(total_lat_time_ns / 1e9) << std::endl;
-  std::cout << std::setprecision(2);
+  std::cout << std::setprecision(Constants::LATENCY_PRECISION);
   std::cout << Messages::results_latency_average(average_latency_ns) << std::endl;
 
   // Display cache bandwidth test results.
@@ -173,7 +169,7 @@ void print_results(int loop, size_t buffer_size, size_t buffer_size_mb, int iter
 
   // Display cache latency test results.
   std::cout << Messages::results_cache_latency() << std::endl;
-  std::cout << std::setprecision(2);
+  std::cout << std::setprecision(Constants::LATENCY_PRECISION);
   if (use_custom_cache_size) {
     // Display custom cache latency results
     if (custom_buffer_size > 0) {
@@ -218,7 +214,7 @@ void print_results(int loop, size_t buffer_size, size_t buffer_size_mb, int iter
 // 'custom_cache_size_bytes': Custom cache size in bytes (only used if use_custom_cache_size is true).
 void print_cache_info(size_t l1_cache_size, size_t l2_cache_size, bool use_custom_cache_size, size_t custom_cache_size_bytes) {
   std::cout << Messages::cache_info_header() << std::endl;
-  std::cout << std::fixed << std::setprecision(2);
+  std::cout << std::fixed << std::setprecision(Constants::LATENCY_PRECISION);
   
   if (use_custom_cache_size) {
     // Display custom cache size.

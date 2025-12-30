@@ -85,7 +85,7 @@ int get_total_logical_cores() {
   if (hc > 0) return hc;
 
   // If all methods fail, print a warning and return 1.
-  std::cerr << Messages::warning_core_count_detection_failed() << std::endl;
+  std::cerr << Messages::warning_prefix() << Messages::warning_core_count_detection_failed() << std::endl;
   return 1;
 }
 
@@ -119,7 +119,7 @@ std::string get_processor_name() {
 unsigned long get_available_memory_mb() {
   mach_port_t host_port = mach_host_self();  // Get the host port.
   if (host_port == MACH_PORT_NULL) {
-    std::cerr << Messages::warning_mach_host_self_failed() << std::endl;
+    std::cerr << Messages::warning_prefix() << Messages::warning_mach_host_self_failed() << std::endl;
     return 0;
   }
 
@@ -127,7 +127,7 @@ unsigned long get_available_memory_mb() {
   // Get the system page size.
   kern_return_t kern_ret = host_page_size(host_port, &page_size_local);
   if (kern_ret != KERN_SUCCESS || page_size_local == 0) {
-    std::cerr << Messages::warning_host_page_size_failed(mach_error_string(kern_ret)) << std::endl;
+    std::cerr << Messages::warning_prefix() << Messages::warning_host_page_size_failed(mach_error_string(kern_ret)) << std::endl;
     return 0;
   }
 
@@ -136,7 +136,7 @@ unsigned long get_available_memory_mb() {
   // Get virtual memory statistics.
   kern_ret = host_statistics64(host_port, HOST_VM_INFO64, (host_info64_t)&vm_stats, &info_count);
   if (kern_ret != KERN_SUCCESS) {
-    std::cerr << Messages::warning_host_statistics64_failed(mach_error_string(kern_ret)) << std::endl;
+    std::cerr << Messages::warning_prefix() << Messages::warning_host_statistics64_failed(mach_error_string(kern_ret)) << std::endl;
     return 0;
   }
 
@@ -158,7 +158,7 @@ size_t get_l1_cache_size() {
     return l1_size;  // Return detected size.
   }
   // Fallback: Use typical Apple Silicon P-core L1 size (128 KB).
-  std::cerr << Messages::warning_l1_cache_size_detection_failed() << std::endl;
+  std::cerr << Messages::warning_prefix() << Messages::warning_l1_cache_size_detection_failed() << std::endl;
   return Constants::L1_CACHE_FALLBACK_SIZE_BYTES;
 }
 
@@ -174,14 +174,14 @@ size_t get_l2_cache_size() {
   // Fallback: Try to infer from processor name, otherwise use conservative estimate.
   std::string cpu_name = get_processor_name();
   if (cpu_name.find("M1") != std::string::npos) {
-    std::cerr << Messages::warning_l2_cache_size_detection_failed_m1() << std::endl;
+    std::cerr << Messages::warning_prefix() << Messages::warning_l2_cache_size_detection_failed_m1() << std::endl;
     return Constants::L2_CACHE_M1_FALLBACK_SIZE_BYTES;
   } else if (cpu_name.find("M2") != std::string::npos || cpu_name.find("M3") != std::string::npos ||
              cpu_name.find("M4") != std::string::npos || cpu_name.find("M5") != std::string::npos) {
-    std::cerr << Messages::warning_l2_cache_size_detection_failed_m2_m3_m4_m5() << std::endl;
+    std::cerr << Messages::warning_prefix() << Messages::warning_l2_cache_size_detection_failed_m2_m3_m4_m5() << std::endl;
     return Constants::L2_CACHE_M2_M3_M4_M5_FALLBACK_SIZE_BYTES;
   }
   // Generic fallback.
-  std::cerr << Messages::warning_l2_cache_size_detection_failed_generic() << std::endl;
+  std::cerr << Messages::warning_prefix() << Messages::warning_l2_cache_size_detection_failed_generic() << std::endl;
   return Constants::L2_CACHE_GENERIC_FALLBACK_SIZE_BYTES;
 }

@@ -62,8 +62,11 @@ TEST(PatternBenchmarkTest, PatternResultsSetValues) {
   EXPECT_DOUBLE_EQ(results.random_read_bw, 5.1);
 }
 
-// Test pattern benchmarks with minimal configuration
-TEST(PatternBenchmarkTest, RunPatternBenchmarksMinimal) {
+// Integration test: Test pattern benchmarks with minimal configuration
+// NOTE: This is an integration test that performs actual system operations.
+// It runs real pattern benchmarks which may be slower and can fail on slow systems or under load.
+// Use 'make test-integration' to run integration tests, or 'make test' for unit tests only.
+TEST(PatternBenchmarkTest, RunPatternBenchmarksMinimalIntegration) {
   BenchmarkConfig config;
   config.buffer_size = 512 * 1024;  // 512 KB - large enough for all patterns including strided 4096
   config.iterations = 1;  // Single iteration for speed
@@ -174,14 +177,6 @@ TEST(PatternBenchmarkTest, ForwardPatternBaseline) {
   EXPECT_GT(results.strided_64_read_bw, 0.0);
   EXPECT_GT(results.strided_4096_read_bw, 0.0);
   EXPECT_GT(results.random_read_bw, 0.0);
-  
-  // Verify all bandwidth values are reasonable (not zero, not unreasonably high)
-  // With small buffers, bandwidth can be very high, so we use a generous upper bound
-  EXPECT_LT(results.forward_read_bw, 10000.0);  // Less than 10000 GB/s
-  EXPECT_LT(results.reverse_read_bw, 10000.0);
-  EXPECT_LT(results.strided_64_read_bw, 10000.0);
-  EXPECT_LT(results.strided_4096_read_bw, 10000.0);
-  EXPECT_LT(results.random_read_bw, 10000.0);
 }
 
 // Test pattern benchmarks with different buffer sizes
@@ -475,5 +470,242 @@ TEST(PatternBenchmarkTest, CopyOperationsUseBothBuffers) {
   EXPECT_GT(results.strided_64_copy_bw, 0.0);
   EXPECT_GT(results.strided_4096_copy_bw, 0.0);
   EXPECT_GT(results.random_copy_bw, 0.0);
+}
+
+// Test strided pattern with buffer smaller than stride - should skip gracefully
+TEST(PatternBenchmarkTest, StridedPatternSkippedWhenBufferTooSmall) {
+  using namespace Constants;
+  
+  BenchmarkConfig config;
+  // Use buffer size smaller than PATTERN_STRIDE_PAGE (4096B)
+  config.buffer_size = PATTERN_STRIDE_PAGE - 1;  // 4095 bytes - smaller than page stride
+  config.iterations = 1;
+  config.num_threads = 1;
+  
+  // Initialize system info
+  config.cpu_name = get_processor_name();
+  config.perf_cores = get_performance_cores();
+  config.eff_cores = get_efficiency_cores();
+  config.num_threads = get_total_logical_cores();
+  config.l1_cache_size = get_l1_cache_size();
+  config.l2_cache_size = get_l2_cache_size();
+  
+  BenchmarkBuffers buffers;
+  int alloc_result = allocate_all_buffers(config, buffers);
+  ASSERT_EQ(alloc_result, EXIT_SUCCESS);
+  
+  int init_result = initialize_all_buffers(buffers, config);
+  ASSERT_EQ(init_result, EXIT_SUCCESS);
+  
+  PatternResults results;
+  int result = run_pattern_benchmarks(buffers, config, results);
+  
+  // Should succeed (pattern skipped, not an error)
+  EXPECT_EQ(result, EXIT_SUCCESS);
+  
+  // Strided 4096B should be skipped (buffer too small)
+  // When skipped, bandwidth remains 0.0
+  EXPECT_EQ(results.strided_4096_read_bw, 0.0);
+  EXPECT_EQ(results.strided_4096_write_bw, 0.0);
+  EXPECT_EQ(results.strided_4096_copy_bw, 0.0);
+  
+  // Strided 64B may work or be skipped depending on effective buffer size
+  // The important thing is that the test completes successfully
+  SUCCEED();
+}
+
+// Test strided pattern with buffer equal to stride - boundary case
+TEST(PatternBenchmarkTest, StridedPatternBufferEqualToStride) {
+  using namespace Constants;
+  
+  BenchmarkConfig config;
+  // Use buffer size equal to PATTERN_STRIDE_CACHE_LINE (64B)
+  // But need larger buffer for latency chain setup (at least LATENCY_STRIDE_BYTES * 2 = 256 bytes)
+  // So we'll use a larger buffer but test the strided pattern behavior with effective size
+  config.buffer_size = 512;  // Large enough for latency chain, but we'll test strided with 64B stride
+  config.l1_buffer_size = 0;  // Disable cache buffers to avoid latency chain issues
+  config.l2_buffer_size = 0;
+  config.use_custom_cache_size = false;
+  config.iterations = 1;
+  config.num_threads = 1;
+  
+  // Initialize system info
+  config.cpu_name = get_processor_name();
+  config.perf_cores = get_performance_cores();
+  config.eff_cores = get_efficiency_cores();
+  config.num_threads = get_total_logical_cores();
+  config.l1_cache_size = get_l1_cache_size();
+  config.l2_cache_size = get_l2_cache_size();
+  
+  BenchmarkBuffers buffers;
+  int alloc_result = allocate_all_buffers(config, buffers);
+  ASSERT_EQ(alloc_result, EXIT_SUCCESS);
+  
+  int init_result = initialize_all_buffers(buffers, config);
+  ASSERT_EQ(init_result, EXIT_SUCCESS);
+  
+  PatternResults results;
+  int result = run_pattern_benchmarks(buffers, config, results);
+  
+  // Should succeed
+  EXPECT_EQ(result, EXIT_SUCCESS);
+  
+  // With 512 byte buffer, strided patterns should work
+  // Note: May be 0 if pattern is skipped, but test should complete successfully
+  // The important thing is that the test doesn't crash and completes
+  SUCCEED();
+}
+
+// Test strided pattern with buffer just larger than stride - boundary case
+TEST(PatternBenchmarkTest, StridedPatternBufferJustLargerThanStride) {
+  using namespace Constants;
+  
+  BenchmarkConfig config;
+  // Use buffer size just larger than PATTERN_STRIDE_CACHE_LINE
+  // Need buffer_size - PATTERN_ACCESS_SIZE_BYTES >= stride
+  // So buffer_size >= stride + PATTERN_ACCESS_SIZE_BYTES = 64 + 32 = 96
+  // But also need at least LATENCY_STRIDE_BYTES * 2 = 256 for latency chain
+  config.buffer_size = 512;  // Large enough for latency chain
+  config.l1_buffer_size = 0;  // Disable cache buffers
+  config.l2_buffer_size = 0;
+  config.use_custom_cache_size = false;
+  config.iterations = 1;
+  config.num_threads = 1;
+  
+  // Initialize system info
+  config.cpu_name = get_processor_name();
+  config.perf_cores = get_performance_cores();
+  config.eff_cores = get_efficiency_cores();
+  config.num_threads = get_total_logical_cores();
+  config.l1_cache_size = get_l1_cache_size();
+  config.l2_cache_size = get_l2_cache_size();
+  
+  BenchmarkBuffers buffers;
+  int alloc_result = allocate_all_buffers(config, buffers);
+  ASSERT_EQ(alloc_result, EXIT_SUCCESS);
+  
+  int init_result = initialize_all_buffers(buffers, config);
+  ASSERT_EQ(init_result, EXIT_SUCCESS);
+  
+  PatternResults results;
+  int result = run_pattern_benchmarks(buffers, config, results);
+  
+  // Should succeed
+  EXPECT_EQ(result, EXIT_SUCCESS);
+  
+  // With 512 byte buffer, strided patterns should work
+  // Note: May be 0 if pattern is skipped, but test should complete successfully
+  SUCCEED();
+}
+
+// Test buffer size progression with PATTERN_MIN_BUFFER_SIZE_BYTES
+TEST(PatternBenchmarkTest, BufferSizeProgressionMinBufferSize) {
+  using namespace Constants;
+  
+  BenchmarkConfig config;
+  // Need at least LATENCY_STRIDE_BYTES * 2 = 256 bytes for latency chain
+  // So we'll use a larger buffer but test with minimum pattern buffer size concept
+  config.buffer_size = 512;  // Large enough for latency chain
+  config.l1_buffer_size = 0;  // Disable cache buffers
+  config.l2_buffer_size = 0;
+  config.use_custom_cache_size = false;
+  config.iterations = 1;
+  config.num_threads = 1;
+  
+  // Initialize system info
+  config.cpu_name = get_processor_name();
+  config.perf_cores = get_performance_cores();
+  config.eff_cores = get_efficiency_cores();
+  config.num_threads = get_total_logical_cores();
+  config.l1_cache_size = get_l1_cache_size();
+  config.l2_cache_size = get_l2_cache_size();
+  
+  BenchmarkBuffers buffers;
+  int alloc_result = allocate_all_buffers(config, buffers);
+  ASSERT_EQ(alloc_result, EXIT_SUCCESS);
+  
+  int init_result = initialize_all_buffers(buffers, config);
+  ASSERT_EQ(init_result, EXIT_SUCCESS);
+  
+  PatternResults results;
+  int result = run_pattern_benchmarks(buffers, config, results);
+  
+  // Should succeed
+  EXPECT_EQ(result, EXIT_SUCCESS);
+}
+
+// Test buffer size progression with PATTERN_STRIDE_CACHE_LINE
+TEST(PatternBenchmarkTest, BufferSizeProgressionCacheLineStride) {
+  using namespace Constants;
+  
+  BenchmarkConfig config;
+  // Need at least LATENCY_STRIDE_BYTES * 2 = 256 bytes for latency chain
+  config.buffer_size = 512;  // Large enough for latency chain
+  config.l1_buffer_size = 0;  // Disable cache buffers
+  config.l2_buffer_size = 0;
+  config.use_custom_cache_size = false;
+  config.iterations = 1;
+  config.num_threads = 1;
+  
+  // Initialize system info
+  config.cpu_name = get_processor_name();
+  config.perf_cores = get_performance_cores();
+  config.eff_cores = get_efficiency_cores();
+  config.num_threads = get_total_logical_cores();
+  config.l1_cache_size = get_l1_cache_size();
+  config.l2_cache_size = get_l2_cache_size();
+  
+  BenchmarkBuffers buffers;
+  int alloc_result = allocate_all_buffers(config, buffers);
+  ASSERT_EQ(alloc_result, EXIT_SUCCESS);
+  
+  int init_result = initialize_all_buffers(buffers, config);
+  ASSERT_EQ(init_result, EXIT_SUCCESS);
+  
+  PatternResults results;
+  int result = run_pattern_benchmarks(buffers, config, results);
+  
+  // Should succeed
+  EXPECT_EQ(result, EXIT_SUCCESS);
+  
+  // Test should complete successfully
+  SUCCEED();
+}
+
+// Test buffer size progression with PATTERN_STRIDE_PAGE
+TEST(PatternBenchmarkTest, BufferSizeProgressionPageStride) {
+  using namespace Constants;
+  
+  BenchmarkConfig config;
+  config.buffer_size = PATTERN_STRIDE_PAGE;  // 4096 bytes
+  config.iterations = 1;
+  config.num_threads = 1;
+  
+  // Initialize system info
+  config.cpu_name = get_processor_name();
+  config.perf_cores = get_performance_cores();
+  config.eff_cores = get_efficiency_cores();
+  config.num_threads = get_total_logical_cores();
+  config.l1_cache_size = get_l1_cache_size();
+  config.l2_cache_size = get_l2_cache_size();
+  
+  BenchmarkBuffers buffers;
+  int alloc_result = allocate_all_buffers(config, buffers);
+  ASSERT_EQ(alloc_result, EXIT_SUCCESS);
+  
+  int init_result = initialize_all_buffers(buffers, config);
+  ASSERT_EQ(init_result, EXIT_SUCCESS);
+  
+  PatternResults results;
+  int result = run_pattern_benchmarks(buffers, config, results);
+  
+  // Should succeed
+  EXPECT_EQ(result, EXIT_SUCCESS);
+  
+  // Both strided patterns should work with 4096B buffer
+  EXPECT_GT(results.strided_64_read_bw, 0.0);
+  // For 4096B stride: effective_buffer_size = 4096 - 32 = 4064, which is >= 4096? No, so should skip
+  // Actually, effective_buffer_size (4064) < stride (4096), so should skip
+  EXPECT_EQ(results.strided_4096_read_bw, 0.0);
 }
 

@@ -31,9 +31,9 @@ std::string cache_size_custom(size_t size_bytes) {
   if (size_bytes < Constants::BYTES_PER_KB) {
     oss << size_bytes << " B";
   } else if (size_bytes < Constants::BYTES_PER_MB) {
-    oss << std::fixed << std::setprecision(2) << size_bytes / static_cast<double>(Constants::BYTES_PER_KB) << " KB";
+    oss << std::fixed << std::setprecision(Constants::LATENCY_PRECISION) << size_bytes / static_cast<double>(Constants::BYTES_PER_KB) << " KB";
   } else {
-    oss << std::fixed << std::setprecision(2) << size_bytes / static_cast<double>(Constants::BYTES_PER_MB) << " MB";
+    oss << std::fixed << std::setprecision(Constants::LATENCY_PRECISION) << size_bytes / static_cast<double>(Constants::BYTES_PER_MB) << " MB";
   }
   return oss.str();
 }
@@ -44,9 +44,9 @@ std::string cache_size_l1(size_t size_bytes) {
   if (size_bytes < Constants::BYTES_PER_KB) {
     oss << size_bytes << " B (per P-core)";
   } else if (size_bytes < Constants::BYTES_PER_MB) {
-    oss << std::fixed << std::setprecision(2) << size_bytes / static_cast<double>(Constants::BYTES_PER_KB) << " KB (per P-core)";
+    oss << std::fixed << std::setprecision(Constants::LATENCY_PRECISION) << size_bytes / static_cast<double>(Constants::BYTES_PER_KB) << " KB (per P-core)";
   } else {
-    oss << std::fixed << std::setprecision(2) << size_bytes / static_cast<double>(Constants::BYTES_PER_MB) << " MB (per P-core)";
+    oss << std::fixed << std::setprecision(Constants::LATENCY_PRECISION) << size_bytes / static_cast<double>(Constants::BYTES_PER_MB) << " MB (per P-core)";
   }
   return oss.str();
 }
@@ -57,9 +57,9 @@ std::string cache_size_l2(size_t size_bytes) {
   if (size_bytes < Constants::BYTES_PER_KB) {
     oss << size_bytes << " B (per P-core cluster)";
   } else if (size_bytes < Constants::BYTES_PER_MB) {
-    oss << std::fixed << std::setprecision(2) << size_bytes / static_cast<double>(Constants::BYTES_PER_KB) << " KB (per P-core cluster)";
+    oss << std::fixed << std::setprecision(Constants::LATENCY_PRECISION) << size_bytes / static_cast<double>(Constants::BYTES_PER_KB) << " KB (per P-core cluster)";
   } else {
-    oss << std::fixed << std::setprecision(2) << size_bytes / static_cast<double>(Constants::BYTES_PER_MB) << " MB (per P-core cluster)";
+    oss << std::fixed << std::setprecision(Constants::LATENCY_PRECISION) << size_bytes / static_cast<double>(Constants::BYTES_PER_MB) << " MB (per P-core cluster)";
   }
   return oss.str();
 }

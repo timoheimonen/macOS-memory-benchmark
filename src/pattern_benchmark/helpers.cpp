@@ -61,10 +61,13 @@ double run_pattern_copy_test(void* dst, void* src, size_t size, int iterations,
 // Helper function to run a strided pattern test
 double run_pattern_read_strided_test(void* buffer, size_t size, size_t stride, int iterations,
                                      std::atomic<uint64_t>& checksum, HighResTimer& timer) {
+  // Calculate num_iterations that ASM should perform
+  size_t num_iterations = (size + stride - 1) / stride;  // Ceiling division
+
   timer.start();
   uint64_t total_checksum = 0;
   for (int i = 0; i < iterations; ++i) {
-    uint64_t result = memory_read_strided_loop_asm(buffer, size, stride);
+    uint64_t result = memory_read_strided_loop_asm(buffer, size, stride, num_iterations);
     total_checksum ^= result;
   }
   double elapsed = timer.stop();
@@ -74,18 +77,24 @@ double run_pattern_read_strided_test(void* buffer, size_t size, size_t stride, i
 
 double run_pattern_write_strided_test(void* buffer, size_t size, size_t stride, int iterations,
                                        HighResTimer& timer) {
+  // Calculate num_iterations that ASM should perform
+  size_t num_iterations = (size + stride - 1) / stride;  // Ceiling division
+
   timer.start();
   for (int i = 0; i < iterations; ++i) {
-    memory_write_strided_loop_asm(buffer, size, stride);
+    memory_write_strided_loop_asm(buffer, size, stride, num_iterations);
   }
   return timer.stop();
 }
 
 double run_pattern_copy_strided_test(void* dst, void* src, size_t size, size_t stride, int iterations,
                                      HighResTimer& timer) {
+  // Calculate num_iterations that ASM should perform
+  size_t num_iterations = (size + stride - 1) / stride;  // Ceiling division
+
   timer.start();
   for (int i = 0; i < iterations; ++i) {
-    memory_copy_strided_loop_asm(dst, src, size, stride);
+    memory_copy_strided_loop_asm(dst, src, size, stride, num_iterations);
   }
   return timer.stop();
 }

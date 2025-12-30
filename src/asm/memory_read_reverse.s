@@ -219,14 +219,13 @@ read_reverse_cleanup_32:               // 32B chunk
     sub x5, x5, #32            // Decrement remaining count by 32B
 
 read_reverse_cleanup_byte:             // Byte tail (<32B)
-    cmp x5, #0                 // Check if any bytes remain
-    b.le read_reverse_loop_combine_sum // If none, combine checksums
+    subs x5, x5, #1            // Decrement and set condition flags
+    b.lt read_reverse_loop_combine_sum // If < 0, no bytes remain
     sub x7, x3, #1              // addr = end_ptr - 1
     ldrb w13, [x7]             // Load byte from address
     eor x12, x12, x13          // XOR byte into accumulator
     sub x3, x3, #1             // Decrement end_ptr
-    sub x5, x5, #1             // Decrement remaining count
-    b.gt read_reverse_cleanup_byte     // Loop if more bytes remain
+    b read_reverse_cleanup_byte // Loop again
 
 read_reverse_loop_combine_sum:         // Final reduction + result write-back
     // Combine accumulators v0-v3 -> v0.

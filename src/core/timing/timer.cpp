@@ -22,25 +22,33 @@
 #include "core/timing/timer.h"
 #include "output/console/messages.h"
 
-// Constructor: Initializes the timer by getting the timebase info.
-HighResTimer::HighResTimer() {
-  // Get the timebase info for converting ticks to nanoseconds.
-  kern_return_t kern_ret = mach_timebase_info(&timebase_info);
+// Private constructor: Initialize without exit() calls
+HighResTimer::HighResTimer() : start_ticks(0) {
+  // Factory method handles initialization
+}
+
+// Static factory method: Safe timer creation
+std::optional<HighResTimer> HighResTimer::create() {
+  HighResTimer timer;
+
+  // Get the timebase info for converting ticks to nanoseconds
+  kern_return_t kern_ret = mach_timebase_info(&timer.timebase_info);
   if (kern_ret != KERN_SUCCESS) {
-    std::cerr << Messages::error_prefix() 
-              << Messages::error_mach_timebase_info_failed(mach_error_string(kern_ret)) 
+    std::cerr << Messages::error_prefix()
+              << Messages::error_mach_timebase_info_failed(mach_error_string(kern_ret))
               << std::endl;
-    // Could also throw an exception here instead of exiting.
-    exit(EXIT_FAILURE);
+    return std::nullopt;  // Return empty optional on failure
   }
+
   // Validate timebase denominator to prevent division by zero
-  if (timebase_info.denom == 0) {
-    std::cerr << Messages::error_prefix() 
-              << "timebase denominator is zero (invalid timebase)" 
+  if (timer.timebase_info.denom == 0) {
+    std::cerr << Messages::error_prefix()
+              << "timebase denominator is zero (invalid timebase)"
               << std::endl;
-    exit(EXIT_FAILURE);
+    return std::nullopt;  // Return empty optional on failure
   }
-  start_ticks = 0;  // Ensure start_ticks is initialized.
+
+  return timer;  // Return successfully initialized timer
 }
 
 // start: Records the current time in ticks.

@@ -117,7 +117,14 @@ int run_all_benchmarks(const BenchmarkBuffers& buffers, const BenchmarkConfig& c
     stats.all_main_mem_latency_samples.reserve(config.loop_count * config.latency_sample_count);
   }
 
-  HighResTimer test_timer;  // Timer for individual tests
+  auto test_timer_opt = HighResTimer::create();
+  if (!test_timer_opt) {
+    std::cerr << Messages::error_prefix()
+              << "Failed to create benchmark timer."
+              << std::endl;
+    return EXIT_FAILURE;
+  }
+  auto& test_timer = *test_timer_opt;
 
   // Main benchmark loop
   for (int loop = 0; loop < config.loop_count; ++loop) {
