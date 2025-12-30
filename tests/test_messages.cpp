@@ -389,7 +389,7 @@ TEST_F(MessagesFormattingTest, ConfigTotalAllocation) {
   std::string msg = Messages::config_total_allocation(3072.75);
   EXPECT_NE(msg.find("3072.75"), std::string::npos);
   EXPECT_NE(msg.find("MiB"), std::string::npos);
-  EXPECT_NE(msg.find("3 buffers"), std::string::npos);
+  EXPECT_NE(msg.find("Total Allocation Size"), std::string::npos);
 }
 
 TEST_F(MessagesFormattingTest, ConfigIterations) {

@@ -55,7 +55,7 @@ int save_results_to_json(const BenchmarkConfig& config, const BenchmarkStatistic
   json_output[JsonKeys::CONFIGURATION] = build_config_json(config);
   
   // Add main memory results
-  json_output[JsonKeys::MAIN_MEMORY] = build_main_memory_json(stats);
+  json_output[JsonKeys::MAIN_MEMORY] = build_main_memory_json(config, stats);
   
   // Add cache results
   json_output[JsonKeys::CACHE] = build_cache_json(config, stats);

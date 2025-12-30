@@ -72,6 +72,13 @@ struct BenchmarkConfig {
   bool run_patterns = false;           ///< Whether to run pattern benchmarks
   bool use_non_cacheable = false;      ///< Use cache-discouraging hints (best-effort, not true non-cacheable)
   bool user_specified_threads = false; ///< Whether user explicitly set -threads parameter
+  bool only_bandwidth = false;         ///< When true, run only bandwidth tests
+  bool only_latency = false;           ///< When true, run only latency tests
+  
+  // Tracking flags for user-specified parameters
+  bool user_specified_buffersize = false;      ///< Whether user explicitly set -buffersize
+  bool user_specified_iterations = false;      ///< Whether user explicitly set -iterations
+  bool user_specified_latency_samples = false; ///< Whether user explicitly set -latency-samples
   
   // Output file
   std::string output_file;  ///< JSON output file path (empty = no JSON output)

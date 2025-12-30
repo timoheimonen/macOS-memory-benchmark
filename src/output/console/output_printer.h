@@ -46,8 +46,11 @@ void print_usage(const char* prog_name);
  * @param perf_cores Number of performance cores
  * @param eff_cores Number of efficiency cores
  * @param num_threads Number of threads
+ * @param only_bandwidth Whether only bandwidth tests are run
+ * @param only_latency Whether only latency tests are run
+ * @param run_patterns Whether pattern benchmarks are run (bandwidth-only, uses 2x buffers)
  */
-void print_configuration(size_t buffer_size, size_t buffer_size_mb, int iterations, int loop_count, bool use_non_cacheable, const std::string& cpu_name, int perf_cores, int eff_cores, int num_threads);
+void print_configuration(size_t buffer_size, size_t buffer_size_mb, int iterations, int loop_count, bool use_non_cacheable, const std::string& cpu_name, int perf_cores, int eff_cores, int num_threads, bool only_bandwidth, bool only_latency, bool run_patterns);
 
 /**
  * @brief Print results for one loop
@@ -81,6 +84,8 @@ void print_configuration(size_t buffer_size, size_t buffer_size_mb, int iteratio
  * @param custom_write_bw_gb_s Custom write bandwidth in GB/s
  * @param custom_copy_bw_gb_s Custom copy bandwidth in GB/s
  * @param user_specified_threads Whether user specified thread count
+ * @param only_bandwidth Whether only bandwidth tests are run
+ * @param only_latency Whether only latency tests are run
  */
 void print_results(int loop, size_t buffer_size, size_t buffer_size_mb, int iterations, int num_threads,
     double read_bw_gb_s, double total_read_time,
@@ -93,7 +98,7 @@ void print_results(int loop, size_t buffer_size, size_t buffer_size_mb, int iter
     double average_latency_ns, double total_lat_time_ns,
     bool use_custom_cache_size, double custom_latency_ns, size_t custom_buffer_size,
     double custom_read_bw_gb_s, double custom_write_bw_gb_s, double custom_copy_bw_gb_s,
-    bool user_specified_threads);
+    bool user_specified_threads, bool only_bandwidth, bool only_latency);
 
 /**
  * @brief Print cache size information

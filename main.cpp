@@ -66,7 +66,8 @@ int main(int argc, char *argv[]) {
 
   // --- Print Config ---
   print_configuration(config.buffer_size, config.buffer_size_mb, config.iterations, config.loop_count,
-                      config.use_non_cacheable, config.cpu_name, config.perf_cores, config.eff_cores, config.num_threads);
+                      config.use_non_cacheable, config.cpu_name, config.perf_cores, config.eff_cores, config.num_threads,
+                      config.only_bandwidth, config.only_latency, config.run_patterns);
   print_cache_info(config.l1_cache_size, config.l2_cache_size, config.use_custom_cache_size, config.custom_cache_size_bytes);
 
   // --- Set QoS for the main thread (affects latency tests) ---
@@ -172,7 +173,9 @@ int main(int argc, char *argv[]) {
                      stats.all_main_mem_latency_samples,
                      stats.all_l1_latency_samples,
                      stats.all_l2_latency_samples,
-                     stats.all_custom_latency_samples);
+                     stats.all_custom_latency_samples,
+                     config.only_bandwidth,
+                     config.only_latency);
 
     // --- Save JSON Output if requested ---
     if (!config.output_file.empty()) {

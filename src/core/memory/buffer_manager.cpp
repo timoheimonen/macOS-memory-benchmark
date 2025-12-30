@@ -24,7 +24,7 @@
 
 int allocate_all_buffers(const BenchmarkConfig& config, BenchmarkBuffers& buffers) {
   // Validate buffer sizes before allocation
-  if (config.buffer_size == 0) {
+  if (config.buffer_size == 0 && !config.only_latency) {
     std::cerr << Messages::error_prefix() << Messages::error_main_buffer_size_zero() << std::endl;
     return EXIT_FAILURE;
   }
@@ -32,59 +32,95 @@ int allocate_all_buffers(const BenchmarkConfig& config, BenchmarkBuffers& buffer
   // Calculate total memory requirement and check for overflow
   size_t total_memory = 0;
   
-  // Main buffers (3x buffer_size)
-  // Check multiplication overflow first: ensure buffer_size * 3 won't overflow
-  if (config.buffer_size > std::numeric_limits<size_t>::max() / 3) {
-    std::cerr << Messages::error_prefix() << Messages::error_buffer_size_overflow_calculation() << std::endl;
-    return EXIT_FAILURE;
+  // Main buffers - conditionally allocate based on flags
+  if (!config.only_latency) {
+    // Need src and dst buffers for bandwidth tests
+    // Check multiplication overflow first: ensure buffer_size * 2 won't overflow
+    if (config.buffer_size > std::numeric_limits<size_t>::max() / 2) {
+      std::cerr << Messages::error_prefix() << Messages::error_buffer_size_overflow_calculation() << std::endl;
+      return EXIT_FAILURE;
+    }
+    size_t main_buffer_double = config.buffer_size * 2;  // Safe: multiplication checked above
+    total_memory += main_buffer_double;  // src, dst
   }
-  size_t main_buffer_triple = config.buffer_size * 3;  // Safe: multiplication checked above
-  total_memory += main_buffer_triple;  // src, dst, lat
+  if (!config.only_bandwidth && !config.run_patterns) {
+    // Need lat buffer for latency tests (but not for pattern benchmarks, which are bandwidth-only)
+    if (config.buffer_size > 0) {
+      total_memory += config.buffer_size;  // lat
+    }
+  }
   
-  // Cache buffers
+  // Cache buffers - conditionally allocate based on flags
   if (config.use_custom_cache_size) {
     if (config.custom_buffer_size > 0) {
-      // Check multiplication overflow first: ensure custom_buffer_size * 3 won't overflow
-      if (config.custom_buffer_size > std::numeric_limits<size_t>::max() / 3) {
-        std::cerr << Messages::error_prefix() << Messages::error_buffer_size_overflow_calculation() << std::endl;
-        return EXIT_FAILURE;
+      if (!config.only_bandwidth) {
+        // Need custom latency buffer
+        if (total_memory > std::numeric_limits<size_t>::max() - config.custom_buffer_size) {
+          std::cerr << Messages::error_prefix() << Messages::error_total_memory_overflow() << std::endl;
+          return EXIT_FAILURE;
+        }
+        total_memory += config.custom_buffer_size;  // custom
       }
-      size_t custom_buffer_triple = config.custom_buffer_size * 3;  // Safe: multiplication checked above
-      // Check addition overflow: ensure total_memory + custom_buffer_triple won't overflow
-      if (total_memory > std::numeric_limits<size_t>::max() - custom_buffer_triple) {
-        std::cerr << Messages::error_prefix() << Messages::error_total_memory_overflow() << std::endl;
-        return EXIT_FAILURE;
+      if (!config.only_latency) {
+        // Need custom bandwidth buffers
+        if (config.custom_buffer_size > std::numeric_limits<size_t>::max() / 2) {
+          std::cerr << Messages::error_prefix() << Messages::error_buffer_size_overflow_calculation() << std::endl;
+          return EXIT_FAILURE;
+        }
+        size_t custom_bw_double = config.custom_buffer_size * 2;  // custom_bw_src, custom_bw_dst
+        if (total_memory > std::numeric_limits<size_t>::max() - custom_bw_double) {
+          std::cerr << Messages::error_prefix() << Messages::error_total_memory_overflow() << std::endl;
+          return EXIT_FAILURE;
+        }
+        total_memory += custom_bw_double;  // custom_bw_src, custom_bw_dst
       }
-      total_memory += custom_buffer_triple;  // custom, custom_bw_src, custom_bw_dst
     }
   } else {
     if (config.l1_buffer_size > 0) {
-      // Check multiplication overflow first: ensure l1_buffer_size * 3 won't overflow
-      if (config.l1_buffer_size > std::numeric_limits<size_t>::max() / 3) {
-        std::cerr << Messages::error_prefix() << Messages::error_buffer_size_overflow_calculation() << std::endl;
-        return EXIT_FAILURE;
+      if (!config.only_bandwidth) {
+        // Need L1 latency buffer
+        if (total_memory > std::numeric_limits<size_t>::max() - config.l1_buffer_size) {
+          std::cerr << Messages::error_prefix() << Messages::error_total_memory_overflow() << std::endl;
+          return EXIT_FAILURE;
+        }
+        total_memory += config.l1_buffer_size;  // l1
       }
-      size_t l1_buffer_triple = config.l1_buffer_size * 3;  // Safe: multiplication checked above
-      // Check addition overflow: ensure total_memory + l1_buffer_triple won't overflow
-      if (total_memory > std::numeric_limits<size_t>::max() - l1_buffer_triple) {
-        std::cerr << Messages::error_prefix() << Messages::error_total_memory_overflow() << std::endl;
-        return EXIT_FAILURE;
+      if (!config.only_latency) {
+        // Need L1 bandwidth buffers
+        if (config.l1_buffer_size > std::numeric_limits<size_t>::max() / 2) {
+          std::cerr << Messages::error_prefix() << Messages::error_buffer_size_overflow_calculation() << std::endl;
+          return EXIT_FAILURE;
+        }
+        size_t l1_bw_double = config.l1_buffer_size * 2;  // l1_bw_src, l1_bw_dst
+        if (total_memory > std::numeric_limits<size_t>::max() - l1_bw_double) {
+          std::cerr << Messages::error_prefix() << Messages::error_total_memory_overflow() << std::endl;
+          return EXIT_FAILURE;
+        }
+        total_memory += l1_bw_double;  // l1_bw_src, l1_bw_dst
       }
-      total_memory += l1_buffer_triple;  // l1, l1_bw_src, l1_bw_dst
     }
     if (config.l2_buffer_size > 0) {
-      // Check multiplication overflow first: ensure l2_buffer_size * 3 won't overflow
-      if (config.l2_buffer_size > std::numeric_limits<size_t>::max() / 3) {
-        std::cerr << Messages::error_prefix() << Messages::error_buffer_size_overflow_calculation() << std::endl;
-        return EXIT_FAILURE;
+      if (!config.only_bandwidth) {
+        // Need L2 latency buffer
+        if (total_memory > std::numeric_limits<size_t>::max() - config.l2_buffer_size) {
+          std::cerr << Messages::error_prefix() << Messages::error_total_memory_overflow() << std::endl;
+          return EXIT_FAILURE;
+        }
+        total_memory += config.l2_buffer_size;  // l2
       }
-      size_t l2_buffer_triple = config.l2_buffer_size * 3;  // Safe: multiplication checked above
-      // Check addition overflow: ensure total_memory + l2_buffer_triple won't overflow
-      if (total_memory > std::numeric_limits<size_t>::max() - l2_buffer_triple) {
-        std::cerr << Messages::error_prefix() << Messages::error_total_memory_overflow() << std::endl;
-        return EXIT_FAILURE;
+      if (!config.only_latency) {
+        // Need L2 bandwidth buffers
+        if (config.l2_buffer_size > std::numeric_limits<size_t>::max() / 2) {
+          std::cerr << Messages::error_prefix() << Messages::error_buffer_size_overflow_calculation() << std::endl;
+          return EXIT_FAILURE;
+        }
+        size_t l2_bw_double = config.l2_buffer_size * 2;  // l2_bw_src, l2_bw_dst
+        if (total_memory > std::numeric_limits<size_t>::max() - l2_bw_double) {
+          std::cerr << Messages::error_prefix() << Messages::error_total_memory_overflow() << std::endl;
+          return EXIT_FAILURE;
+        }
+        total_memory += l2_bw_double;  // l2_bw_src, l2_bw_dst
       }
-      total_memory += l2_buffer_triple;  // l2, l2_bw_src, l2_bw_dst
     }
   }
   
@@ -102,140 +138,148 @@ int allocate_all_buffers(const BenchmarkConfig& config, BenchmarkBuffers& buffer
   buffers.custom_bw_src_ptr = MmapPtr(nullptr, MmapDeleter{0});
   buffers.custom_bw_dst_ptr = MmapPtr(nullptr, MmapDeleter{0});
 
-  // Allocate source buffer (with cache-discouraging hints if requested)
-  if (config.use_non_cacheable) {
-    buffers.src_buffer_ptr = allocate_buffer_non_cacheable(config.buffer_size, "src_buffer");
-  } else {
-    buffers.src_buffer_ptr = allocate_buffer(config.buffer_size, "src_buffer");
-  }
-  if (!buffers.src_buffer_ptr) {
-    return EXIT_FAILURE;
-  }
-
-  // Allocate destination buffer (with cache-discouraging hints if requested)
-  if (config.use_non_cacheable) {
-    buffers.dst_buffer_ptr = allocate_buffer_non_cacheable(config.buffer_size, "dst_buffer");
-  } else {
-    buffers.dst_buffer_ptr = allocate_buffer(config.buffer_size, "dst_buffer");
-  }
-  if (!buffers.dst_buffer_ptr) {
-    // src_buffer_ptr will be cleaned up automatically upon return
-    return EXIT_FAILURE;
-  }
-
-  // Allocate latency buffer (with cache-discouraging hints if requested)
-  if (config.use_non_cacheable) {
-    buffers.lat_buffer_ptr = allocate_buffer_non_cacheable(config.buffer_size, "lat_buffer");
-  } else {
-    buffers.lat_buffer_ptr = allocate_buffer(config.buffer_size, "lat_buffer");
-  }
-  if (!buffers.lat_buffer_ptr) {
-    // src_buffer_ptr and dst_buffer_ptr will be cleaned up automatically upon return
-    return EXIT_FAILURE;
-  }
-
-  // Allocate cache latency test buffers (with cache-discouraging hints if requested)
-  if (config.use_custom_cache_size) {
-    // Allocate custom cache latency test buffer
-    if (config.custom_buffer_size > 0) {
-      if (config.use_non_cacheable) {
-        buffers.custom_buffer_ptr = allocate_buffer_non_cacheable(config.custom_buffer_size, "custom_buffer");
-      } else {
-        buffers.custom_buffer_ptr = allocate_buffer(config.custom_buffer_size, "custom_buffer");
-      }
-      if (!buffers.custom_buffer_ptr) {
-        return EXIT_FAILURE;
-      }
+  // Allocate source buffer (only if not latency-only)
+  if (!config.only_latency && config.buffer_size > 0) {
+    if (config.use_non_cacheable) {
+      buffers.src_buffer_ptr = allocate_buffer_non_cacheable(config.buffer_size, "src_buffer");
+    } else {
+      buffers.src_buffer_ptr = allocate_buffer(config.buffer_size, "src_buffer");
     }
-  } else {
-    // Allocate L1/L2 cache latency test buffers
-    if (config.l1_buffer_size > 0) {
-      if (config.use_non_cacheable) {
-        buffers.l1_buffer_ptr = allocate_buffer_non_cacheable(config.l1_buffer_size, "l1_buffer");
-      } else {
-        buffers.l1_buffer_ptr = allocate_buffer(config.l1_buffer_size, "l1_buffer");
-      }
-      if (!buffers.l1_buffer_ptr) {
-        return EXIT_FAILURE;
-      }
-    }
-
-    if (config.l2_buffer_size > 0) {
-      if (config.use_non_cacheable) {
-        buffers.l2_buffer_ptr = allocate_buffer_non_cacheable(config.l2_buffer_size, "l2_buffer");
-      } else {
-        buffers.l2_buffer_ptr = allocate_buffer(config.l2_buffer_size, "l2_buffer");
-      }
-      if (!buffers.l2_buffer_ptr) {
-        return EXIT_FAILURE;
-      }
+    if (!buffers.src_buffer_ptr) {
+      return EXIT_FAILURE;
     }
   }
 
-  // Allocate cache bandwidth test buffers (with cache-discouraging hints if requested)
-  if (config.use_custom_cache_size) {
-    // Allocate custom cache bandwidth test buffers
-    if (config.custom_buffer_size > 0) {
-      // Allocate source buffer for custom cache bandwidth tests
-      if (config.use_non_cacheable) {
-        buffers.custom_bw_src_ptr = allocate_buffer_non_cacheable(config.custom_buffer_size, "custom_bw_src_buffer");
-      } else {
-        buffers.custom_bw_src_ptr = allocate_buffer(config.custom_buffer_size, "custom_bw_src_buffer");
-      }
-      if (!buffers.custom_bw_src_ptr) {
-        return EXIT_FAILURE;
-      }
-      // Allocate destination buffer for custom cache bandwidth tests
-      if (config.use_non_cacheable) {
-        buffers.custom_bw_dst_ptr = allocate_buffer_non_cacheable(config.custom_buffer_size, "custom_bw_dst_buffer");
-      } else {
-        buffers.custom_bw_dst_ptr = allocate_buffer(config.custom_buffer_size, "custom_bw_dst_buffer");
-      }
-      if (!buffers.custom_bw_dst_ptr) {
-        return EXIT_FAILURE;
-      }
+  // Allocate destination buffer (only if not latency-only)
+  if (!config.only_latency && config.buffer_size > 0) {
+    if (config.use_non_cacheable) {
+      buffers.dst_buffer_ptr = allocate_buffer_non_cacheable(config.buffer_size, "dst_buffer");
+    } else {
+      buffers.dst_buffer_ptr = allocate_buffer(config.buffer_size, "dst_buffer");
     }
-  } else {
-    // Allocate L1/L2 cache bandwidth test buffers
-    if (config.l1_buffer_size > 0) {
-      // Allocate source buffer for L1 bandwidth tests
-      if (config.use_non_cacheable) {
-        buffers.l1_bw_src_ptr = allocate_buffer_non_cacheable(config.l1_buffer_size, "l1_bw_src_buffer");
-      } else {
-        buffers.l1_bw_src_ptr = allocate_buffer(config.l1_buffer_size, "l1_bw_src_buffer");
-      }
-      if (!buffers.l1_bw_src_ptr) {
-        return EXIT_FAILURE;
-      }
-      // Allocate destination buffer for L1 bandwidth tests
-      if (config.use_non_cacheable) {
-        buffers.l1_bw_dst_ptr = allocate_buffer_non_cacheable(config.l1_buffer_size, "l1_bw_dst_buffer");
-      } else {
-        buffers.l1_bw_dst_ptr = allocate_buffer(config.l1_buffer_size, "l1_bw_dst_buffer");
-      }
-      if (!buffers.l1_bw_dst_ptr) {
-        return EXIT_FAILURE;
-      }
+    if (!buffers.dst_buffer_ptr) {
+      return EXIT_FAILURE;
     }
+  }
 
-    if (config.l2_buffer_size > 0) {
-      // Allocate source buffer for L2 bandwidth tests
-      if (config.use_non_cacheable) {
-        buffers.l2_bw_src_ptr = allocate_buffer_non_cacheable(config.l2_buffer_size, "l2_bw_src_buffer");
-      } else {
-        buffers.l2_bw_src_ptr = allocate_buffer(config.l2_buffer_size, "l2_bw_src_buffer");
+  // Allocate latency buffer (only if not bandwidth-only and not pattern benchmarks)
+  if (!config.only_bandwidth && !config.run_patterns && config.buffer_size > 0) {
+    if (config.use_non_cacheable) {
+      buffers.lat_buffer_ptr = allocate_buffer_non_cacheable(config.buffer_size, "lat_buffer");
+    } else {
+      buffers.lat_buffer_ptr = allocate_buffer(config.buffer_size, "lat_buffer");
+    }
+    if (!buffers.lat_buffer_ptr) {
+      return EXIT_FAILURE;
+    }
+  }
+
+  // Allocate cache latency test buffers (only if not bandwidth-only)
+  if (!config.only_bandwidth) {
+    if (config.use_custom_cache_size) {
+      // Allocate custom cache latency test buffer
+      if (config.custom_buffer_size > 0) {
+        if (config.use_non_cacheable) {
+          buffers.custom_buffer_ptr = allocate_buffer_non_cacheable(config.custom_buffer_size, "custom_buffer");
+        } else {
+          buffers.custom_buffer_ptr = allocate_buffer(config.custom_buffer_size, "custom_buffer");
+        }
+        if (!buffers.custom_buffer_ptr) {
+          return EXIT_FAILURE;
+        }
       }
-      if (!buffers.l2_bw_src_ptr) {
-        return EXIT_FAILURE;
+    } else {
+      // Allocate L1/L2 cache latency test buffers
+      if (config.l1_buffer_size > 0) {
+        if (config.use_non_cacheable) {
+          buffers.l1_buffer_ptr = allocate_buffer_non_cacheable(config.l1_buffer_size, "l1_buffer");
+        } else {
+          buffers.l1_buffer_ptr = allocate_buffer(config.l1_buffer_size, "l1_buffer");
+        }
+        if (!buffers.l1_buffer_ptr) {
+          return EXIT_FAILURE;
+        }
       }
-      // Allocate destination buffer for L2 bandwidth tests
-      if (config.use_non_cacheable) {
-        buffers.l2_bw_dst_ptr = allocate_buffer_non_cacheable(config.l2_buffer_size, "l2_bw_dst_buffer");
-      } else {
-        buffers.l2_bw_dst_ptr = allocate_buffer(config.l2_buffer_size, "l2_bw_dst_buffer");
+
+      if (config.l2_buffer_size > 0) {
+        if (config.use_non_cacheable) {
+          buffers.l2_buffer_ptr = allocate_buffer_non_cacheable(config.l2_buffer_size, "l2_buffer");
+        } else {
+          buffers.l2_buffer_ptr = allocate_buffer(config.l2_buffer_size, "l2_buffer");
+        }
+        if (!buffers.l2_buffer_ptr) {
+          return EXIT_FAILURE;
+        }
       }
-      if (!buffers.l2_bw_dst_ptr) {
-        return EXIT_FAILURE;
+    }
+  }
+
+  // Allocate cache bandwidth test buffers (only if not latency-only)
+  if (!config.only_latency) {
+    if (config.use_custom_cache_size) {
+      // Allocate custom cache bandwidth test buffers
+      if (config.custom_buffer_size > 0) {
+        // Allocate source buffer for custom cache bandwidth tests
+        if (config.use_non_cacheable) {
+          buffers.custom_bw_src_ptr = allocate_buffer_non_cacheable(config.custom_buffer_size, "custom_bw_src_buffer");
+        } else {
+          buffers.custom_bw_src_ptr = allocate_buffer(config.custom_buffer_size, "custom_bw_src_buffer");
+        }
+        if (!buffers.custom_bw_src_ptr) {
+          return EXIT_FAILURE;
+        }
+        // Allocate destination buffer for custom cache bandwidth tests
+        if (config.use_non_cacheable) {
+          buffers.custom_bw_dst_ptr = allocate_buffer_non_cacheable(config.custom_buffer_size, "custom_bw_dst_buffer");
+        } else {
+          buffers.custom_bw_dst_ptr = allocate_buffer(config.custom_buffer_size, "custom_bw_dst_buffer");
+        }
+        if (!buffers.custom_bw_dst_ptr) {
+          return EXIT_FAILURE;
+        }
+      }
+    } else {
+      // Allocate L1/L2 cache bandwidth test buffers
+      if (config.l1_buffer_size > 0) {
+        // Allocate source buffer for L1 bandwidth tests
+        if (config.use_non_cacheable) {
+          buffers.l1_bw_src_ptr = allocate_buffer_non_cacheable(config.l1_buffer_size, "l1_bw_src_buffer");
+        } else {
+          buffers.l1_bw_src_ptr = allocate_buffer(config.l1_buffer_size, "l1_bw_src_buffer");
+        }
+        if (!buffers.l1_bw_src_ptr) {
+          return EXIT_FAILURE;
+        }
+        // Allocate destination buffer for L1 bandwidth tests
+        if (config.use_non_cacheable) {
+          buffers.l1_bw_dst_ptr = allocate_buffer_non_cacheable(config.l1_buffer_size, "l1_bw_dst_buffer");
+        } else {
+          buffers.l1_bw_dst_ptr = allocate_buffer(config.l1_buffer_size, "l1_bw_dst_buffer");
+        }
+        if (!buffers.l1_bw_dst_ptr) {
+          return EXIT_FAILURE;
+        }
+      }
+
+      if (config.l2_buffer_size > 0) {
+        // Allocate source buffer for L2 bandwidth tests
+        if (config.use_non_cacheable) {
+          buffers.l2_bw_src_ptr = allocate_buffer_non_cacheable(config.l2_buffer_size, "l2_bw_src_buffer");
+        } else {
+          buffers.l2_bw_src_ptr = allocate_buffer(config.l2_buffer_size, "l2_bw_src_buffer");
+        }
+        if (!buffers.l2_bw_src_ptr) {
+          return EXIT_FAILURE;
+        }
+        // Allocate destination buffer for L2 bandwidth tests
+        if (config.use_non_cacheable) {
+          buffers.l2_bw_dst_ptr = allocate_buffer_non_cacheable(config.l2_buffer_size, "l2_bw_dst_buffer");
+        } else {
+          buffers.l2_bw_dst_ptr = allocate_buffer(config.l2_buffer_size, "l2_bw_dst_buffer");
+        }
+        if (!buffers.l2_bw_dst_ptr) {
+          return EXIT_FAILURE;
+        }
       }
     }
   }
@@ -244,81 +288,95 @@ int allocate_all_buffers(const BenchmarkConfig& config, BenchmarkBuffers& buffer
 }
 
 int initialize_all_buffers(BenchmarkBuffers& buffers, const BenchmarkConfig& config) {
-  // Validate main buffers are allocated
-  if (buffers.src_buffer() == nullptr || buffers.dst_buffer() == nullptr || buffers.lat_buffer() == nullptr) {
-    std::cerr << Messages::error_prefix() << Messages::error_main_buffers_not_allocated() << std::endl;
-    return EXIT_FAILURE;
-  }
-  
-  // Initialize main memory buffers
-  if (initialize_buffers(buffers.src_buffer(), buffers.dst_buffer(), config.buffer_size) != EXIT_SUCCESS) {
-    return EXIT_FAILURE;
-  }
-  
-  if (setup_latency_chain(buffers.lat_buffer(), config.buffer_size, Constants::LATENCY_STRIDE_BYTES) != EXIT_SUCCESS) {
-    return EXIT_FAILURE;
-  }
-  
-  // Setup cache latency chains
-  if (config.use_custom_cache_size) {
-    if (config.custom_buffer_size > 0) {
-      if (buffers.custom_buffer() == nullptr) {
-        std::cerr << Messages::error_prefix() << Messages::error_custom_buffer_not_allocated() << std::endl;
-        return EXIT_FAILURE;
-      }
-      if (setup_latency_chain(buffers.custom_buffer(), config.custom_buffer_size, Constants::LATENCY_STRIDE_BYTES) != EXIT_SUCCESS) {
-        return EXIT_FAILURE;
-      }
+  // Initialize main memory buffers conditionally
+  if (!config.only_latency) {
+    // Validate bandwidth buffers are allocated
+    if (buffers.src_buffer() == nullptr || buffers.dst_buffer() == nullptr) {
+      std::cerr << Messages::error_prefix() << Messages::error_main_buffers_not_allocated() << std::endl;
+      return EXIT_FAILURE;
     }
-  } else {
-    if (config.l1_buffer_size > 0) {
-      if (buffers.l1_buffer() == nullptr) {
-        std::cerr << Messages::error_prefix() << Messages::error_l1_buffer_not_allocated() << std::endl;
-        return EXIT_FAILURE;
-      }
-      if (setup_latency_chain(buffers.l1_buffer(), config.l1_buffer_size, Constants::LATENCY_STRIDE_BYTES) != EXIT_SUCCESS) {
-        return EXIT_FAILURE;
-      }
-    }
-    if (config.l2_buffer_size > 0) {
-      if (buffers.l2_buffer() == nullptr) {
-        std::cerr << Messages::error_prefix() << Messages::error_l2_buffer_not_allocated() << std::endl;
-        return EXIT_FAILURE;
-      }
-      if (setup_latency_chain(buffers.l2_buffer(), config.l2_buffer_size, Constants::LATENCY_STRIDE_BYTES) != EXIT_SUCCESS) {
-        return EXIT_FAILURE;
-      }
+    // Initialize main memory bandwidth buffers
+    if (initialize_buffers(buffers.src_buffer(), buffers.dst_buffer(), config.buffer_size) != EXIT_SUCCESS) {
+      return EXIT_FAILURE;
     }
   }
   
-  // Initialize cache bandwidth test buffers (not pointer chains, regular data)
-  if (config.use_custom_cache_size) {
-    if (config.custom_buffer_size > 0) {
-      if (buffers.custom_bw_src() == nullptr || buffers.custom_bw_dst() == nullptr) {
-        std::cerr << Messages::error_prefix() << Messages::error_custom_bandwidth_buffers_not_allocated() << std::endl;
-        return EXIT_FAILURE;
+  if (!config.only_bandwidth && !config.run_patterns) {
+    // Validate latency buffer is allocated
+    if (buffers.lat_buffer() == nullptr) {
+      std::cerr << Messages::error_prefix() << Messages::error_main_buffers_not_allocated() << std::endl;
+      return EXIT_FAILURE;
+    }
+    // Setup main memory latency chain
+    if (setup_latency_chain(buffers.lat_buffer(), config.buffer_size, Constants::LATENCY_STRIDE_BYTES) != EXIT_SUCCESS) {
+      return EXIT_FAILURE;
+    }
+  }
+  
+  // Setup cache latency chains (only if not bandwidth-only)
+  if (!config.only_bandwidth) {
+    if (config.use_custom_cache_size) {
+      if (config.custom_buffer_size > 0) {
+        if (buffers.custom_buffer() == nullptr) {
+          std::cerr << Messages::error_prefix() << Messages::error_custom_buffer_not_allocated() << std::endl;
+          return EXIT_FAILURE;
+        }
+        if (setup_latency_chain(buffers.custom_buffer(), config.custom_buffer_size, Constants::LATENCY_STRIDE_BYTES) != EXIT_SUCCESS) {
+          return EXIT_FAILURE;
+        }
       }
-      if (initialize_buffers(buffers.custom_bw_src(), buffers.custom_bw_dst(), config.custom_buffer_size) != EXIT_SUCCESS) {
-        return EXIT_FAILURE;
+    } else {
+      if (config.l1_buffer_size > 0) {
+        if (buffers.l1_buffer() == nullptr) {
+          std::cerr << Messages::error_prefix() << Messages::error_l1_buffer_not_allocated() << std::endl;
+          return EXIT_FAILURE;
+        }
+        if (setup_latency_chain(buffers.l1_buffer(), config.l1_buffer_size, Constants::LATENCY_STRIDE_BYTES) != EXIT_SUCCESS) {
+          return EXIT_FAILURE;
+        }
+      }
+      if (config.l2_buffer_size > 0) {
+        if (buffers.l2_buffer() == nullptr) {
+          std::cerr << Messages::error_prefix() << Messages::error_l2_buffer_not_allocated() << std::endl;
+          return EXIT_FAILURE;
+        }
+        if (setup_latency_chain(buffers.l2_buffer(), config.l2_buffer_size, Constants::LATENCY_STRIDE_BYTES) != EXIT_SUCCESS) {
+          return EXIT_FAILURE;
+        }
       }
     }
-  } else {
-    if (config.l1_buffer_size > 0) {
-      if (buffers.l1_bw_src() == nullptr || buffers.l1_bw_dst() == nullptr) {
-        std::cerr << Messages::error_prefix() << Messages::error_l1_bandwidth_buffers_not_allocated() << std::endl;
-        return EXIT_FAILURE;
+  }
+  
+  // Initialize cache bandwidth test buffers (only if not latency-only)
+  if (!config.only_latency) {
+    if (config.use_custom_cache_size) {
+      if (config.custom_buffer_size > 0) {
+        if (buffers.custom_bw_src() == nullptr || buffers.custom_bw_dst() == nullptr) {
+          std::cerr << Messages::error_prefix() << Messages::error_custom_bandwidth_buffers_not_allocated() << std::endl;
+          return EXIT_FAILURE;
+        }
+        if (initialize_buffers(buffers.custom_bw_src(), buffers.custom_bw_dst(), config.custom_buffer_size) != EXIT_SUCCESS) {
+          return EXIT_FAILURE;
+        }
       }
-      if (initialize_buffers(buffers.l1_bw_src(), buffers.l1_bw_dst(), config.l1_buffer_size) != EXIT_SUCCESS) {
-        return EXIT_FAILURE;
+    } else {
+      if (config.l1_buffer_size > 0) {
+        if (buffers.l1_bw_src() == nullptr || buffers.l1_bw_dst() == nullptr) {
+          std::cerr << Messages::error_prefix() << Messages::error_l1_bandwidth_buffers_not_allocated() << std::endl;
+          return EXIT_FAILURE;
+        }
+        if (initialize_buffers(buffers.l1_bw_src(), buffers.l1_bw_dst(), config.l1_buffer_size) != EXIT_SUCCESS) {
+          return EXIT_FAILURE;
+        }
       }
-    }
-    if (config.l2_buffer_size > 0) {
-      if (buffers.l2_bw_src() == nullptr || buffers.l2_bw_dst() == nullptr) {
-        std::cerr << Messages::error_prefix() << Messages::error_l2_bandwidth_buffers_not_allocated() << std::endl;
-        return EXIT_FAILURE;
-      }
-      if (initialize_buffers(buffers.l2_bw_src(), buffers.l2_bw_dst(), config.l2_buffer_size) != EXIT_SUCCESS) {
-        return EXIT_FAILURE;
+      if (config.l2_buffer_size > 0) {
+        if (buffers.l2_bw_src() == nullptr || buffers.l2_bw_dst() == nullptr) {
+          std::cerr << Messages::error_prefix() << Messages::error_l2_bandwidth_buffers_not_allocated() << std::endl;
+          return EXIT_FAILURE;
+        }
+        if (initialize_buffers(buffers.l2_bw_src(), buffers.l2_bw_dst(), config.l2_buffer_size) != EXIT_SUCCESS) {
+          return EXIT_FAILURE;
+        }
       }
     }
   }

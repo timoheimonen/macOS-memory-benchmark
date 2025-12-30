@@ -194,6 +194,8 @@ static void print_cache_latency_statistics(const std::string &cache_name,
 // 'use_custom_cache_size': Flag indicating if custom cache size is being used.
 // 'all_custom_latency', 'all_custom_read_bw', 'all_custom_write_bw', 'all_custom_copy_bw': Custom cache results vectors.
 // 'all_main_mem_latency_samples', 'all_l1_latency_samples', 'all_l2_latency_samples', 'all_custom_latency_samples': Full sample distributions.
+// 'only_bandwidth': Whether only bandwidth tests are run (skip latency statistics if true).
+// 'only_latency': Whether only latency tests are run (skip bandwidth statistics if true).
 void print_statistics(int loop_count, const std::vector<double> &all_read_bw, const std::vector<double> &all_write_bw,
                       const std::vector<double> &all_copy_bw, 
                       const std::vector<double> &all_l1_latency, const std::vector<double> &all_l2_latency,
@@ -210,68 +212,80 @@ void print_statistics(int loop_count, const std::vector<double> &all_read_bw, co
                       const std::vector<double> &all_main_mem_latency_samples,
                       const std::vector<double> &all_l1_latency_samples,
                       const std::vector<double> &all_l2_latency_samples,
-                      const std::vector<double> &all_custom_latency_samples) {
+                      const std::vector<double> &all_custom_latency_samples,
+                      bool only_bandwidth,
+                      bool only_latency) {
   // Don't print statistics if only one loop ran or if there's no data.
-  if (loop_count <= 1 || all_read_bw.empty()) return;
+  // For only_latency mode, check latency data instead of bandwidth data
+  if (loop_count <= 1) return;
+  if (only_latency) {
+    if (all_main_mem_latency.empty() && all_l1_latency.empty() && all_l2_latency.empty() && all_custom_latency.empty()) return;
+  } else {
+    if (all_read_bw.empty()) return;
+  }
 
   // Print statistics header.
   std::cout << Messages::statistics_header(loop_count) << std::endl;
   std::cout << std::fixed;
 
-  // Display Main Memory Bandwidth statistics.
-  Statistics read_stats = calculate_statistics(all_read_bw);
-  Statistics write_stats = calculate_statistics(all_write_bw);
-  Statistics copy_stats = calculate_statistics(all_copy_bw);
-  
-  print_metric_statistics("Read Bandwidth (GB/s)", read_stats);
-  std::cout << "\n";
-  print_metric_statistics("Write Bandwidth (GB/s)", write_stats);
-  std::cout << "\n";
-  print_metric_statistics("Copy Bandwidth (GB/s)", copy_stats);
+  // Display Main Memory Bandwidth statistics (skip if only latency tests).
+  if (!only_latency) {
+    Statistics read_stats = calculate_statistics(all_read_bw);
+    Statistics write_stats = calculate_statistics(all_write_bw);
+    Statistics copy_stats = calculate_statistics(all_copy_bw);
+    
+    print_metric_statistics("Read Bandwidth (GB/s)", read_stats);
+    std::cout << "\n";
+    print_metric_statistics("Write Bandwidth (GB/s)", write_stats);
+    std::cout << "\n";
+    print_metric_statistics("Copy Bandwidth (GB/s)", copy_stats);
 
-  // Display Cache Bandwidth statistics.
-  if (use_custom_cache_size) {
-    print_cache_bandwidth_statistics("Custom", all_custom_read_bw, all_custom_write_bw, all_custom_copy_bw);
-  } else {
-    print_cache_bandwidth_statistics("L1", all_l1_read_bw, all_l1_write_bw, all_l1_copy_bw);
-    print_cache_bandwidth_statistics("L2", all_l2_read_bw, all_l2_write_bw, all_l2_copy_bw);
+    // Display Cache Bandwidth statistics.
+    if (use_custom_cache_size) {
+      print_cache_bandwidth_statistics("Custom", all_custom_read_bw, all_custom_write_bw, all_custom_copy_bw);
+    } else {
+      print_cache_bandwidth_statistics("L1", all_l1_read_bw, all_l1_write_bw, all_l1_copy_bw);
+      print_cache_bandwidth_statistics("L2", all_l2_read_bw, all_l2_write_bw, all_l2_copy_bw);
+    }
   }
 
-  // Display Cache Latency statistics.
-  std::cout << Messages::statistics_cache_latency_header() << std::endl;
-  if (use_custom_cache_size) {
-    print_cache_latency_statistics("Custom", all_custom_latency, all_custom_latency_samples);
-  } else {
-    print_cache_latency_statistics("L1", all_l1_latency, all_l1_latency_samples);
-    print_cache_latency_statistics("L2", all_l2_latency, all_l2_latency_samples);
-  }
+  // Display Cache Latency statistics (skip if only bandwidth tests).
+  if (!only_bandwidth) {
+    std::cout << Messages::statistics_cache_latency_header() << std::endl;
+    if (use_custom_cache_size) {
+      print_cache_latency_statistics("Custom", all_custom_latency, all_custom_latency_samples);
+    } else {
+      print_cache_latency_statistics("L1", all_l1_latency, all_l1_latency_samples);
+      print_cache_latency_statistics("L2", all_l2_latency, all_l2_latency_samples);
+    }
 
-  // Display Main Memory Latency statistics.
-  Statistics main_mem_latency_stats = calculate_statistics(all_main_mem_latency);
-  bool use_main_mem_samples = !all_main_mem_latency_samples.empty();
-  Statistics main_mem_sample_stats;
-  if (use_main_mem_samples) {
-    main_mem_sample_stats = calculate_statistics(all_main_mem_latency_samples);
-  }
-  
-  std::cout << Messages::statistics_main_memory_latency_header() << std::endl;
-  std::cout << Messages::statistics_average(main_mem_latency_stats.average, Constants::LATENCY_PRECISION) << std::endl;
-  if (use_main_mem_samples) {
-    std::cout << Messages::statistics_median_p50_from_samples(main_mem_sample_stats.median, all_main_mem_latency_samples.size(), Constants::LATENCY_PRECISION) << std::endl;
-    std::cout << Messages::statistics_p90(main_mem_sample_stats.p90, Constants::LATENCY_PRECISION) << std::endl;
-    std::cout << Messages::statistics_p95(main_mem_sample_stats.p95, Constants::LATENCY_PRECISION) << std::endl;
-    std::cout << Messages::statistics_p99(main_mem_sample_stats.p99, Constants::LATENCY_PRECISION) << std::endl;
-    std::cout << Messages::statistics_stddev(main_mem_sample_stats.stddev, Constants::LATENCY_PRECISION) << std::endl;
-    std::cout << Messages::statistics_min(main_mem_sample_stats.min, Constants::LATENCY_PRECISION) << std::endl;
-    std::cout << Messages::statistics_max(main_mem_sample_stats.max, Constants::LATENCY_PRECISION) << std::endl;
-  } else {
-    std::cout << Messages::statistics_median_p50(main_mem_latency_stats.median, Constants::LATENCY_PRECISION) << std::endl;
-    std::cout << Messages::statistics_p90(main_mem_latency_stats.p90, Constants::LATENCY_PRECISION) << std::endl;
-    std::cout << Messages::statistics_p95(main_mem_latency_stats.p95, Constants::LATENCY_PRECISION) << std::endl;
-    std::cout << Messages::statistics_p99(main_mem_latency_stats.p99, Constants::LATENCY_PRECISION) << std::endl;
-    std::cout << Messages::statistics_stddev(main_mem_latency_stats.stddev, Constants::LATENCY_PRECISION) << std::endl;
-    std::cout << Messages::statistics_min(main_mem_latency_stats.min, Constants::LATENCY_PRECISION) << std::endl;
-    std::cout << Messages::statistics_max(main_mem_latency_stats.max, Constants::LATENCY_PRECISION) << std::endl;
+    // Display Main Memory Latency statistics.
+    Statistics main_mem_latency_stats = calculate_statistics(all_main_mem_latency);
+    bool use_main_mem_samples = !all_main_mem_latency_samples.empty();
+    Statistics main_mem_sample_stats;
+    if (use_main_mem_samples) {
+      main_mem_sample_stats = calculate_statistics(all_main_mem_latency_samples);
+    }
+    
+    std::cout << Messages::statistics_main_memory_latency_header() << std::endl;
+    std::cout << Messages::statistics_average(main_mem_latency_stats.average, Constants::LATENCY_PRECISION) << std::endl;
+    if (use_main_mem_samples) {
+      std::cout << Messages::statistics_median_p50_from_samples(main_mem_sample_stats.median, all_main_mem_latency_samples.size(), Constants::LATENCY_PRECISION) << std::endl;
+      std::cout << Messages::statistics_p90(main_mem_sample_stats.p90, Constants::LATENCY_PRECISION) << std::endl;
+      std::cout << Messages::statistics_p95(main_mem_sample_stats.p95, Constants::LATENCY_PRECISION) << std::endl;
+      std::cout << Messages::statistics_p99(main_mem_sample_stats.p99, Constants::LATENCY_PRECISION) << std::endl;
+      std::cout << Messages::statistics_stddev(main_mem_sample_stats.stddev, Constants::LATENCY_PRECISION) << std::endl;
+      std::cout << Messages::statistics_min(main_mem_sample_stats.min, Constants::LATENCY_PRECISION) << std::endl;
+      std::cout << Messages::statistics_max(main_mem_sample_stats.max, Constants::LATENCY_PRECISION) << std::endl;
+    } else {
+      std::cout << Messages::statistics_median_p50(main_mem_latency_stats.median, Constants::LATENCY_PRECISION) << std::endl;
+      std::cout << Messages::statistics_p90(main_mem_latency_stats.p90, Constants::LATENCY_PRECISION) << std::endl;
+      std::cout << Messages::statistics_p95(main_mem_latency_stats.p95, Constants::LATENCY_PRECISION) << std::endl;
+      std::cout << Messages::statistics_p99(main_mem_latency_stats.p99, Constants::LATENCY_PRECISION) << std::endl;
+      std::cout << Messages::statistics_stddev(main_mem_latency_stats.stddev, Constants::LATENCY_PRECISION) << std::endl;
+      std::cout << Messages::statistics_min(main_mem_latency_stats.min, Constants::LATENCY_PRECISION) << std::endl;
+      std::cout << Messages::statistics_max(main_mem_latency_stats.max, Constants::LATENCY_PRECISION) << std::endl;
+    }
   }
   
   // Print a final separator after statistics.

@@ -93,7 +93,7 @@ In the Terminal, go to the directory with `memory_benchmark` and use these comma
     ```
     Example output:
     ```text
-    Version: 0.52.1 by Timo Heimonen <timo.heimonen@proton.me>
+    Version: 0.52.2 by Timo Heimonen <timo.heimonen@proton.me>
     License: GNU GPL v3. See <https://www.gnu.org/licenses/>
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -125,6 +125,11 @@ In the Terminal, go to the directory with `memory_benchmark` and use these comma
                             and random access patterns). When set, only pattern benchmarks
                             are executed, skipping standard bandwidth and latency tests.
                             use with -buffersize <size_mb> to set the buffer size for the pattern benchmarks.
+      -only-bandwidth       Run only bandwidth tests (read/write/copy for main memory and cache).
+                            Skips all latency tests. Cannot be used with -patterns, -cache-size,
+                            or -latency-samples.
+      -only-latency         Run only latency tests (main memory and cache latency).
+                            Skips all bandwidth tests. Cannot be used with -patterns or -iterations.
       -non-cacheable        Apply cache-discouraging hints to src/dst buffers.
                             Uses madvise() hints to discourage caching, but does NOT provide
                             true non-cacheable memory (user-space cannot modify page tables).
@@ -146,7 +151,7 @@ In the Terminal, go to the directory with `memory_benchmark` and use these comma
 
 ## Example output (Mac Mini M4 24GB)
 ```text
------ macOS-memory-benchmark v0.52.1 -----
+----- macOS-memory-benchmark v0.52.2 -----
 Copyright 2025 Timo Heimonen <timo.heimonen@proton.me>
 This program is free software: you can redistribute it and/or modify
 it under the terms of the GNU General Public License as published by
@@ -202,7 +207,7 @@ Cache Latency Tests (single-threaded, pointer chase):
 Done. Total execution time: 43.48166 s
 ```
 ```text
------ macOS-memory-benchmark v0.52.1 -----
+----- macOS-memory-benchmark v0.52.2 -----
 Copyright 2025 Timo Heimonen <timo.heimonen@proton.me>
 This program is free software: you can redistribute it and/or modify
 it under the terms of the GNU General Public License as published by
