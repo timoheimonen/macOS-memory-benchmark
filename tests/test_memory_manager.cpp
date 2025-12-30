@@ -240,3 +240,45 @@ TEST(MemoryManagerTest, AllocateLargeNonCacheableBuffer) {
   EXPECT_NE(buffer.get(), MAP_FAILED);
 }
 
+// Test buffer allocation with size 0 - should return nullptr and log error
+TEST(MemoryManagerTest, AllocateBufferSizeZero) {
+  testing::internal::CaptureStderr();
+  MmapPtr buffer = allocate_buffer(0, "test_buffer_zero");
+  std::string error_output = testing::internal::GetCapturedStderr();
+  
+  // Verify buffer is nullptr
+  EXPECT_EQ(buffer.get(), nullptr);
+  
+  // Verify error message contains expected content
+  EXPECT_NE(error_output.find("Error: "), std::string::npos);
+  EXPECT_NE(error_output.find("test_buffer_zero"), std::string::npos);
+  EXPECT_NE(error_output.find("Buffer size is zero"), std::string::npos);
+}
+
+// Test non-cacheable buffer allocation with size 0 - should return nullptr and log error
+TEST(MemoryManagerTest, AllocateNonCacheableBufferSizeZero) {
+  testing::internal::CaptureStderr();
+  MmapPtr buffer = allocate_buffer_non_cacheable(0, "test_non_cacheable_buffer_zero");
+  std::string error_output = testing::internal::GetCapturedStderr();
+  
+  // Verify buffer is nullptr
+  EXPECT_EQ(buffer.get(), nullptr);
+  
+  // Verify error message contains expected content
+  EXPECT_NE(error_output.find("Error: "), std::string::npos);
+  EXPECT_NE(error_output.find("test_non_cacheable_buffer_zero"), std::string::npos);
+  EXPECT_NE(error_output.find("Buffer size is zero"), std::string::npos);
+}
+
+// Test that returned MmapPtr is empty (nullptr) on failure
+TEST(MemoryManagerTest, AllocateBufferFailureReturnsNullptr) {
+  // Test with size 0 which should fail
+  MmapPtr buffer = allocate_buffer(0, "failure_test_buffer");
+  
+  // Verify MmapPtr is empty (nullptr)
+  EXPECT_EQ(buffer.get(), nullptr);
+  
+  // Verify that the unique_ptr is in a valid but empty state
+  EXPECT_FALSE(buffer);
+}
+

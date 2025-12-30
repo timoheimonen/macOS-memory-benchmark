@@ -195,9 +195,20 @@ $(SRC_DIR)/asm/%.o: $(SRC_DIR)/asm/%.s
 	@echo "Assembling $< -> $@..."
 	$(AS) $(ASFLAGS) $< -o $@
 
-# Test target: build and run tests
+# Test targets: build and run tests
+# Unit tests only (excludes integration tests that perform actual system operations)
 test: $(TEST_TARGET)
-	@echo "Running tests..."
+	@echo "Running unit tests (excluding integration tests)..."
+	./$(TEST_TARGET) --gtest_filter=-*Integration*
+
+# Integration tests only (tests that perform actual system operations)
+test-integration: $(TEST_TARGET)
+	@echo "Running integration tests..."
+	./$(TEST_TARGET) --gtest_filter=*Integration*
+
+# All tests (unit tests + integration tests)
+test-all: $(TEST_TARGET)
+	@echo "Running all tests (unit + integration)..."
 	./$(TEST_TARGET)
 
 # Build test executable

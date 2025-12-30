@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.53] - DEVELOPMENT
 
+### Added
+- **Test coverage for memory allocation failures**: Added tests to verify error handling when memory allocation fails, including tests for zero-size buffers and allocation cleanup on failure.
+- **Test coverage for buffer size edge cases**: Added tests for buffer size boundary conditions, including buffers smaller than stride, equal to stride, and minimum valid sizes for latency chain setup.
+
 ### Fixed
 - **Strided access pattern benchmark accuracy**: Fixed bug in strided access pattern benchmarks where loops terminated incorrectly, causing unreliable and incorrect results.
 - **Optimized reverse read byte loop**: Improved efficiency of byte cleanup loop in `memory_read_reverse.s`.
@@ -15,6 +19,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Better error messages**: Error messages for invalid parameters now show the actual invalid value and valid ranges (e.g., "iterations invalid (must be between 1 and 2147483647, got -5)").
 - **Timer reliability**: Timer initialization no longer causes the program to exit unexpectedly. Errors are now reported gracefully with clear messages.
 - **Consistent warning format**: All warning messages now use a centralized prefix system for consistent formatting throughout the application.
+- **Test reliability**: Removed arbitrary test limits (10000 GB/s bandwidth and 1ms latency) that could cause false test failures on different hardware configurations. Tests now validate that results are positive and valid without overly restrictive upper bounds.
+
+### Changed
+- **Test organization**: Separated integration tests from unit tests using Google Test filters. Tests that perform actual system operations (benchmark execution) are now marked as integration tests and can be run separately. The Makefile now provides three test targets: `make test` (unit tests only, faster), `make test-integration` (integration tests only), and `make test-all` (all tests). This improves test independence and allows faster unit test runs during development.
 
 ## [0.52] - 2025-12-29
 
