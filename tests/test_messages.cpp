@@ -158,7 +158,7 @@ class MessagesWarningQosFailedTest : public ::testing::TestWithParam<int> {};
 TEST_P(MessagesWarningQosFailedTest, WarningQosFailed) {
   int code = GetParam();
   std::string msg = Messages::warning_qos_failed(code);
-  EXPECT_NE(msg.find("Warning"), std::string::npos);
+  EXPECT_NE(msg.find("Failed to set QoS"), std::string::npos);
   EXPECT_NE(msg.find(std::to_string(code)), std::string::npos);
 }
 
@@ -215,28 +215,36 @@ TEST_F(MessagesErrorTest, ErrorCacheSizeInvalid) {
 }
 
 TEST_F(MessagesErrorTest, ErrorIterationsInvalid) {
-  const std::string& msg = Messages::error_iterations_invalid();
-  EXPECT_EQ(msg, "iterations invalid");
-  // Test that it returns the same reference (static)
-  EXPECT_EQ(&msg, &Messages::error_iterations_invalid());
+  std::string msg = Messages::error_iterations_invalid(-5, 1, 2147483647);
+  EXPECT_EQ(msg, "iterations invalid (must be between 1 and 2147483647, got -5)");
+  // Test with different values
+  std::string msg2 = Messages::error_iterations_invalid(0, 1, 100);
+  EXPECT_EQ(msg2, "iterations invalid (must be between 1 and 100, got 0)");
 }
 
 TEST_F(MessagesErrorTest, ErrorBuffersizeInvalid) {
-  const std::string& msg = Messages::error_buffersize_invalid();
-  EXPECT_EQ(msg, "buffersize invalid");
-  EXPECT_EQ(&msg, &Messages::error_buffersize_invalid());
+  std::string msg = Messages::error_buffersize_invalid(-100, 18446744073709551615UL);
+  EXPECT_TRUE(msg.find("buffersize invalid") != std::string::npos);
+  EXPECT_TRUE(msg.find("got -100") != std::string::npos);
+  // Test with zero
+  std::string msg2 = Messages::error_buffersize_invalid(0, 1000);
+  EXPECT_EQ(msg2, "buffersize invalid (must be > 0 and <= 1000, got 0)");
 }
 
 TEST_F(MessagesErrorTest, ErrorCountInvalid) {
-  const std::string& msg = Messages::error_count_invalid();
-  EXPECT_EQ(msg, "count invalid");
-  EXPECT_EQ(&msg, &Messages::error_count_invalid());
+  std::string msg = Messages::error_count_invalid(0, 1, 2147483647);
+  EXPECT_EQ(msg, "count invalid (must be between 1 and 2147483647, got 0)");
+  // Test with negative value
+  std::string msg2 = Messages::error_count_invalid(-10, 1, 1000);
+  EXPECT_EQ(msg2, "count invalid (must be between 1 and 1000, got -10)");
 }
 
 TEST_F(MessagesErrorTest, ErrorLatencySamplesInvalid) {
-  const std::string& msg = Messages::error_latency_samples_invalid();
-  EXPECT_EQ(msg, "latency-samples invalid");
-  EXPECT_EQ(&msg, &Messages::error_latency_samples_invalid());
+  std::string msg = Messages::error_latency_samples_invalid(0, 1, 2147483647);
+  EXPECT_EQ(msg, "latency-samples invalid (must be between 1 and 2147483647, got 0)");
+  // Test with negative value
+  std::string msg2 = Messages::error_latency_samples_invalid(-1, 1, 5000);
+  EXPECT_EQ(msg2, "latency-samples invalid (must be between 1 and 5000, got -1)");
 }
 
 TEST_F(MessagesErrorTest, ErrorMadviseFailed) {
@@ -255,7 +263,7 @@ TEST_F(MessagesErrorTest, ErrorBenchmarkTests) {
 
 TEST_F(MessagesWarningTest, WarningCannotGetMemory) {
   const std::string& msg = Messages::warning_cannot_get_memory();
-  EXPECT_NE(msg.find("Warning"), std::string::npos);
+  EXPECT_NE(msg.find("Cannot get"), std::string::npos);
   EXPECT_NE(msg.find("memory"), std::string::npos);
   EXPECT_EQ(&msg, &Messages::warning_cannot_get_memory());
 }
@@ -264,7 +272,7 @@ TEST_F(MessagesWarningTest, WarningBufferSizeExceedsLimit) {
   std::string msg = Messages::warning_buffer_size_exceeds_limit(2048, 1024);
   EXPECT_NE(msg.find("2048"), std::string::npos);
   EXPECT_NE(msg.find("1024"), std::string::npos);
-  EXPECT_NE(msg.find("Warning"), std::string::npos);
+  EXPECT_NE(msg.find("Requested buffer size"), std::string::npos);
 }
 
 // ============================================================================

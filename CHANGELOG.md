@@ -12,6 +12,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Optimized reverse read byte loop**: Improved efficiency of byte cleanup loop in `memory_read_reverse.s`.
 - **Standard deviation calculation consistency**: Fixed bug where console output used population standard deviation (÷n) while JSON output used sample standard deviation (÷n-1), causing 5-22% difference in reported stddev values. Console and JSON outputs now show identical stddev values using the statistically correct sample standard deviation formula.
 - **Centralized latency precision**: Replaced ~36 hardcoded precision values across output formatting code with a single `LATENCY_PRECISION` constant for easier maintenance and consistency.
+- **Better error messages**: Error messages for invalid parameters now show the actual invalid value and valid ranges (e.g., "iterations invalid (must be between 1 and 2147483647, got -5)").
+- **Timer reliability**: Timer initialization no longer causes the program to exit unexpectedly. Errors are now reported gracefully with clear messages.
+- **Consistent warning format**: All warning messages now use a centralized prefix system for consistent formatting throughout the application.
 
 ## [0.52] - 2025-12-29
 

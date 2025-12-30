@@ -59,29 +59,38 @@ std::string error_cache_size_invalid(long long min_kb, long long max_kb, long lo
   return oss.str();
 }
 
-const std::string& error_iterations_invalid() {
-  static const std::string msg = "iterations invalid";
-  return msg;
+std::string error_iterations_invalid(long long value, long long min_val, long long max_val) {
+  std::ostringstream oss;
+  oss << "iterations invalid (must be between " << min_val << " and " << max_val
+      << ", got " << value << ")";
+  return oss.str();
 }
 
-const std::string& error_buffersize_invalid() {
-  static const std::string msg = "buffersize invalid";
-  return msg;
+std::string error_buffersize_invalid(long long value, unsigned long max_val) {
+  std::ostringstream oss;
+  oss << "buffersize invalid (must be > 0 and <= " << max_val << ", got " << value << ")";
+  return oss.str();
 }
 
-const std::string& error_count_invalid() {
-  static const std::string msg = "count invalid";
-  return msg;
+std::string error_count_invalid(long long value, long long min_val, long long max_val) {
+  std::ostringstream oss;
+  oss << "count invalid (must be between " << min_val << " and " << max_val
+      << ", got " << value << ")";
+  return oss.str();
 }
 
-const std::string& error_latency_samples_invalid() {
-  static const std::string msg = "latency-samples invalid";
-  return msg;
+std::string error_latency_samples_invalid(long long value, long long min_val, long long max_val) {
+  std::ostringstream oss;
+  oss << "latency-samples invalid (must be between " << min_val << " and " << max_val
+      << ", got " << value << ")";
+  return oss.str();
 }
 
-const std::string& error_threads_invalid() {
-  static const std::string msg = "threads invalid (must be > 0)";
-  return msg;
+std::string error_threads_invalid(long long value, long long min_val, long long max_val) {
+  std::ostringstream oss;
+  oss << "threads invalid (must be between " << min_val << " and " << max_val
+      << ", got " << value << ")";
+  return oss.str();
 }
 
 std::string error_mmap_failed(const std::string& buffer_name) {

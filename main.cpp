@@ -35,7 +35,14 @@
 // Main program entry
 int main(int argc, char *argv[]) {
   // Start total execution timer
-  HighResTimer total_execution_timer;
+  auto timer_opt = HighResTimer::create();
+  if (!timer_opt) {
+    std::cerr << Messages::error_prefix()
+              << "Failed to create high-resolution timer. Exiting."
+              << std::endl;
+    return EXIT_FAILURE;
+  }
+  auto& total_execution_timer = *timer_opt;
   total_execution_timer.start();
 
   // --- Parse and Validate Configuration ---
@@ -66,7 +73,7 @@ int main(int argc, char *argv[]) {
   kern_return_t qos_ret = pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
   if (qos_ret != KERN_SUCCESS) {
     // Non-critical error, just print a warning
-    std::cerr << Messages::warning_qos_failed(qos_ret) << std::endl;
+    std::cerr << Messages::warning_prefix() << Messages::warning_qos_failed(qos_ret) << std::endl;
   }
 
   // --- Allocate and Initialize Buffers ---
