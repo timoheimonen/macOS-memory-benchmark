@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 - **Strided access pattern benchmark accuracy**: Fixed bug in strided access pattern benchmarks where loops terminated incorrectly, causing unreliable and incorrect results.
+- **Optimized reverse read byte loop**: Improved efficiency of byte cleanup loop in `memory_read_reverse.s`.
 
 ## [0.52] - 2025-12-29
 
