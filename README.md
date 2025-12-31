@@ -144,9 +144,17 @@ In the Terminal, go to the directory with `memory_benchmark` and use these comma
     ```bash
     ./memory_benchmark
     ```
+   For longer runs consider running with `caffeinate -i -d` to prevent the system from sleeping:
+    ```bash
+    caffeinate -i -d ./memory_benchmark
+    ```
 3. **Run with custom parameters example**
     ```bash
     ./memory_benchmark -iterations 500 -buffersize 512 -cache-size 1024 -threads 4 -non-cacheable 
+    ```
+   For longer runs, consider running with `caffeinate -i -d` to prevent the system from sleeping:
+    ```bash
+    caffeinate -i -d ./memory_benchmark -iterations 500 -buffersize 512 -cache-size 1024 -threads 4 -non-cacheable
     ```
 
 ## Example output (Mac Mini M4 24GB)
