@@ -52,6 +52,8 @@
  * @param all_l1_latency_samples Vector of L1 cache latency samples
  * @param all_l2_latency_samples Vector of L2 cache latency samples
  * @param all_custom_latency_samples Vector of custom cache latency samples
+ * @param only_bandwidth Whether only bandwidth tests are run
+ * @param only_latency Whether only latency tests are run
  */
 void print_statistics(int loop_count,
                       const std::vector<double>& all_read_bw,
@@ -74,7 +76,9 @@ void print_statistics(int loop_count,
                       const std::vector<double>& all_main_mem_latency_samples,
                       const std::vector<double>& all_l1_latency_samples,
                       const std::vector<double>& all_l2_latency_samples,
-                      const std::vector<double>& all_custom_latency_samples);
+                      const std::vector<double>& all_custom_latency_samples,
+                      bool only_bandwidth,
+                      bool only_latency);
 
 #endif // STATISTICS_H
 

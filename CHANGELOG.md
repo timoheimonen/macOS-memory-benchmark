@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.52.2] - 2025-12-31
+
+### Added
+- **Selective test execution parameters**: Added `-only-bandwidth` and `-only-latency` parameters to allow running only specific test types:
+  - `-only-bandwidth`: Runs only bandwidth tests (read/write/copy for main memory and cache), skipping all latency tests. 
+  - `-only-latency`: Runs only latency tests (main memory and cache latency), skipping all bandwidth tests. 
+
+### Fixed
+- **Pattern benchmark memory allocation**: Fixed issue where pattern benchmarks (`-patterns` flag) were allocating 3x buffer size (src + dst + lat) when they only need 2x (src + dst). Pattern benchmarks are bandwidth-only tests and do not use the latency buffer, so the latency buffer allocation and initialization are now skipped when pattern benchmarks are enabled. The total allocation size display now correctly shows 2x instead of 3x for pattern benchmarks.
+
 ## [0.52.1] - 2025-12-30
 
 ### Added

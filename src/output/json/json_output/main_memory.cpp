@@ -18,23 +18,28 @@
 // License: MIT License
 //
 #include "output/json/json_output.h"
+#include "core/config/config.h"     // For BenchmarkConfig
 #include "benchmark/benchmark_runner.h"  // For BenchmarkStatistics
 #include "third_party/nlohmann/json.hpp"   // JSON library
 
 // Build main memory results JSON object
-nlohmann::json build_main_memory_json(const BenchmarkStatistics& stats) {
+nlohmann::json build_main_memory_json(const BenchmarkConfig& config, const BenchmarkStatistics& stats) {
   nlohmann::json main_memory;
   
-  // Add bandwidth results
-  add_bandwidth_results(main_memory, 
-                        stats.all_read_bw_gb_s,
-                        stats.all_write_bw_gb_s,
-                        stats.all_copy_bw_gb_s);
+  // Add bandwidth results (skip if only latency tests)
+  if (!config.only_latency) {
+    add_bandwidth_results(main_memory, 
+                          stats.all_read_bw_gb_s,
+                          stats.all_write_bw_gb_s,
+                          stats.all_copy_bw_gb_s);
+  }
   
-  // Add latency results
-  add_latency_results(main_memory,
-                      stats.all_average_latency_ns,
-                      stats.all_main_mem_latency_samples);
+  // Add latency results (skip if only bandwidth tests)
+  if (!config.only_bandwidth) {
+    add_latency_results(main_memory,
+                        stats.all_average_latency_ns,
+                        stats.all_main_mem_latency_samples);
+  }
   
   return main_memory;
 }

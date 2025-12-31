@@ -85,6 +85,7 @@ int parse_arguments(int argc, char* argv[], BenchmarkConfig& config) {
           if (val_ll <= 0 || val_ll > std::numeric_limits<int>::max())
             throw std::out_of_range(Messages::error_iterations_invalid(val_ll, 1, std::numeric_limits<int>::max()));
           config.iterations = static_cast<int>(val_ll);
+          config.user_specified_iterations = true;
         } else
           throw std::invalid_argument(Messages::error_missing_value("-iterations"));
       } else if (arg == "-buffersize") {
@@ -93,6 +94,7 @@ int parse_arguments(int argc, char* argv[], BenchmarkConfig& config) {
           if (val_ll <= 0 || val_ll > std::numeric_limits<unsigned long>::max())
             throw std::out_of_range(Messages::error_buffersize_invalid(val_ll, std::numeric_limits<unsigned long>::max()));
           requested_buffer_size_mb_ll = val_ll;
+          config.user_specified_buffersize = true;
         } else
           throw std::invalid_argument(Messages::error_missing_value("-buffersize"));
       } else if (arg == "-count") {
@@ -109,6 +111,7 @@ int parse_arguments(int argc, char* argv[], BenchmarkConfig& config) {
           if (val_ll <= 0 || val_ll > std::numeric_limits<int>::max())
             throw std::out_of_range(Messages::error_latency_samples_invalid(val_ll, 1, std::numeric_limits<int>::max()));
           config.latency_sample_count = static_cast<int>(val_ll);
+          config.user_specified_latency_samples = true;
         } else
           throw std::invalid_argument(Messages::error_missing_value("-latency-samples"));
       } else if (arg == "-cache-size") {
@@ -141,6 +144,10 @@ int parse_arguments(int argc, char* argv[], BenchmarkConfig& config) {
         config.run_patterns = true;
       } else if (arg == "-non-cacheable") {
         config.use_non_cacheable = true;
+      } else if (arg == "-only-bandwidth") {
+        config.only_bandwidth = true;
+      } else if (arg == "-only-latency") {
+        config.only_latency = true;
       } else if (arg == "-threads") {
         if (++i < argc) {
           long long val_ll = std::stoll(argv[i]);
@@ -188,6 +195,38 @@ int parse_arguments(int argc, char* argv[], BenchmarkConfig& config) {
 }
 
 int validate_config(BenchmarkConfig& config) {
+  // Validate mutually exclusive flags
+  if (config.only_bandwidth && config.only_latency) {
+    std::cerr << Messages::error_prefix() << Messages::error_incompatible_flags() << std::endl;
+    return EXIT_FAILURE;
+  }
+  
+  // Validate flags with -patterns
+  if (config.run_patterns && (config.only_bandwidth || config.only_latency)) {
+    std::cerr << Messages::error_prefix() << Messages::error_only_flags_with_patterns() << std::endl;
+    return EXIT_FAILURE;
+  }
+  
+  // Validate -only-bandwidth incompatibilities
+  if (config.only_bandwidth) {
+    if (config.use_custom_cache_size) {
+      std::cerr << Messages::error_prefix() << Messages::error_only_bandwidth_with_cache_size() << std::endl;
+      return EXIT_FAILURE;
+    }
+    if (config.user_specified_latency_samples) {
+      std::cerr << Messages::error_prefix() << Messages::error_only_bandwidth_with_latency_samples() << std::endl;
+      return EXIT_FAILURE;
+    }
+  }
+  
+  // Validate -only-latency incompatibilities
+  if (config.only_latency) {
+    if (config.user_specified_iterations) {
+      std::cerr << Messages::error_prefix() << Messages::error_only_latency_with_iterations() << std::endl;
+      return EXIT_FAILURE;
+    }
+  }
+  
   // Calculate memory limit
   unsigned long available_mem_mb = get_available_memory_mb();
   unsigned long max_allowed_mb_per_buffer = 0;
@@ -206,10 +245,24 @@ int validate_config(BenchmarkConfig& config) {
     max_allowed_mb_per_buffer = Constants::MINIMUM_LIMIT_MB_PER_BUFFER;
   }
 
-  // Validate and cap buffer size
-  if (config.buffer_size_mb > max_allowed_mb_per_buffer) {
-    std::cerr << Messages::warning_prefix() << Messages::warning_buffer_size_exceeds_limit(config.buffer_size_mb, max_allowed_mb_per_buffer) << std::endl;
-    config.buffer_size_mb = max_allowed_mb_per_buffer;
+  // Validate and cap buffer size (only if not latency-only, or if latency-only but buffer_size is needed)
+  // For latency-only mode, we still need buffer_size for main memory latency test, but we use default
+  if (!config.only_latency) {
+    // For bandwidth tests, validate and cap buffer size
+    if (config.buffer_size_mb > max_allowed_mb_per_buffer) {
+      std::cerr << Messages::warning_prefix() << Messages::warning_buffer_size_exceeds_limit(config.buffer_size_mb, max_allowed_mb_per_buffer) << std::endl;
+      config.buffer_size_mb = max_allowed_mb_per_buffer;
+    }
+  } else {
+    // For latency-only, we still need a buffer for main memory latency test
+    // Use default if not set, but don't cap it (latency test uses less memory)
+    if (config.buffer_size_mb == 0) {
+      config.buffer_size_mb = Constants::DEFAULT_BUFFER_SIZE_MB;
+    }
+    if (config.buffer_size_mb > max_allowed_mb_per_buffer) {
+      std::cerr << Messages::warning_prefix() << Messages::warning_buffer_size_exceeds_limit(config.buffer_size_mb, max_allowed_mb_per_buffer) << std::endl;
+      config.buffer_size_mb = max_allowed_mb_per_buffer;
+    }
   }
 
   // Calculate final buffer size in bytes
@@ -223,6 +276,7 @@ int validate_config(BenchmarkConfig& config) {
     return EXIT_FAILURE;
   }
   
+  // For latency-only, we still need buffer_size for main memory latency test
   if (config.buffer_size < page_size || config.buffer_size < Constants::MIN_LATENCY_BUFFER_SIZE) {
     std::cerr << Messages::error_prefix() << Messages::error_buffer_size_too_small(config.buffer_size) << std::endl;
     return EXIT_FAILURE;

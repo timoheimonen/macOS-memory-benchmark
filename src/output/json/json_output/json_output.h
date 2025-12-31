@@ -95,7 +95,7 @@ void add_latency_results(nlohmann::json& json_obj,
                          const std::vector<double>& samples);
 
 nlohmann::json build_config_json(const BenchmarkConfig& config);
-nlohmann::json build_main_memory_json(const BenchmarkStatistics& stats);
+nlohmann::json build_main_memory_json(const BenchmarkConfig& config, const BenchmarkStatistics& stats);
 nlohmann::json build_cache_json(const BenchmarkConfig& config, const BenchmarkStatistics& stats);
 nlohmann::json build_patterns_json(const PatternStatistics& stats);
 int write_json_to_file(const std::filesystem::path& file_path, const nlohmann::json& json_output);

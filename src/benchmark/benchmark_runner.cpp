@@ -30,11 +30,22 @@ static BenchmarkResults run_single_benchmark_loop(const BenchmarkBuffers& buffer
   TimingResults timings;
 
   try {
-    // Run all benchmark tests
-    run_main_memory_bandwidth_tests(buffers, config, timings, test_timer);
-    run_cache_bandwidth_tests(buffers, config, timings, test_timer);
-    run_cache_latency_tests(buffers, config, timings, results, test_timer);
-    run_main_memory_latency_test(buffers, config, timings, results, test_timer);
+    // Run benchmark tests based on flags
+    if (config.only_bandwidth) {
+      // Run only bandwidth tests
+      run_main_memory_bandwidth_tests(buffers, config, timings, test_timer);
+      run_cache_bandwidth_tests(buffers, config, timings, test_timer);
+    } else if (config.only_latency) {
+      // Run only latency tests
+      run_cache_latency_tests(buffers, config, timings, results, test_timer);
+      run_main_memory_latency_test(buffers, config, timings, results, test_timer);
+    } else {
+      // Run all tests (default behavior)
+      run_main_memory_bandwidth_tests(buffers, config, timings, test_timer);
+      run_cache_bandwidth_tests(buffers, config, timings, test_timer);
+      run_cache_latency_tests(buffers, config, timings, results, test_timer);
+      run_main_memory_latency_test(buffers, config, timings, results, test_timer);
+    }
   } catch (const std::exception &e) {
     std::cerr << Messages::error_benchmark_tests(e.what()) << std::endl;
     throw;  // Re-throw to be handled by caller
@@ -197,7 +208,7 @@ int run_all_benchmarks(const BenchmarkBuffers& buffers, const BenchmarkConfig& c
                     loop_results.average_latency_ns, loop_results.total_lat_time_ns,
                     config.use_custom_cache_size, loop_results.custom_latency_ns, config.custom_buffer_size,
                     loop_results.custom_read_bw_gb_s, loop_results.custom_write_bw_gb_s, loop_results.custom_copy_bw_gb_s,
-                    config.user_specified_threads);
+                    config.user_specified_threads, config.only_bandwidth, config.only_latency);
     } catch (const std::exception &e) {
       std::cerr << Messages::error_benchmark_loop(loop, e.what()) << std::endl;
       return EXIT_FAILURE;

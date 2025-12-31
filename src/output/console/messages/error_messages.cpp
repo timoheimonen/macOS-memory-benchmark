@@ -317,5 +317,35 @@ const std::string& error_latency_access_count_negative() {
   return msg;
 }
 
+const std::string& error_incompatible_flags() {
+  static const std::string msg = "-only-bandwidth and -only-latency are mutually exclusive (cannot use both together)";
+  return msg;
+}
+
+const std::string& error_only_flags_with_patterns() {
+  static const std::string msg = "-only-bandwidth and -only-latency cannot be used with -patterns (pattern benchmarks are a separate execution mode)";
+  return msg;
+}
+
+const std::string& error_only_bandwidth_with_cache_size() {
+  static const std::string msg = "-only-bandwidth cannot be used with -cache-size (cache-size is only relevant for latency tests)";
+  return msg;
+}
+
+const std::string& error_only_bandwidth_with_latency_samples() {
+  static const std::string msg = "-only-bandwidth cannot be used with -latency-samples (latency-samples is only relevant for latency tests)";
+  return msg;
+}
+
+const std::string& error_only_latency_with_buffersize() {
+  static const std::string msg = "-only-latency cannot be used with -buffersize (buffersize is only relevant for bandwidth tests)";
+  return msg;
+}
+
+const std::string& error_only_latency_with_iterations() {
+  static const std::string msg = "-only-latency cannot be used with -iterations (iterations is only relevant for bandwidth tests)";
+  return msg;
+}
+
 } // namespace Messages
 

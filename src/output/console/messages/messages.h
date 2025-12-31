@@ -81,6 +81,12 @@ const std::string& error_calculated_l1_buffer_size_zero();
 const std::string& error_calculated_l2_buffer_size_zero();
 const std::string& error_latency_access_count_overflow();
 const std::string& error_latency_access_count_negative();
+const std::string& error_incompatible_flags();
+const std::string& error_only_flags_with_patterns();
+const std::string& error_only_bandwidth_with_cache_size();
+const std::string& error_only_bandwidth_with_latency_samples();
+const std::string& error_only_latency_with_buffersize();
+const std::string& error_only_latency_with_iterations();
 
 // --- Warning Messages ---
 const std::string& warning_prefix();

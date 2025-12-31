@@ -43,18 +43,38 @@ void print_usage(const char *prog_name) {
 // 'perf_cores': Number of detected performance cores.
 // 'eff_cores': Number of detected efficiency cores.
 // 'num_threads': Total number of threads used for bandwidth tests (usually equals total cores).
+// 'run_patterns': Whether pattern benchmarks are run (bandwidth-only, uses 2x buffers).
 void print_configuration(size_t buffer_size, size_t buffer_size_mb, int iterations, int loop_count,
-                         bool use_non_cacheable, const std::string &cpu_name, int perf_cores, int eff_cores, int num_threads) {
+                         bool use_non_cacheable, const std::string &cpu_name, int perf_cores, int eff_cores, int num_threads, bool only_bandwidth, bool only_latency, bool run_patterns) {
   // Print benchmark header and copyright/license info.
   std::cout << Messages::config_header(SOFTVERSION) << std::endl;
   std::cout << Messages::config_copyright() << std::endl;
   std::cout << Messages::config_license() << std::endl;
-  // Display buffer sizes (actual MiB and requested/capped MB).
-  std::cout << Messages::config_buffer_size(buffer_size / (1024.0 * 1024.0), buffer_size_mb) << std::endl;
-  // Display total approximate memory allocated for the three buffers.
-  std::cout << Messages::config_total_allocation(3.0 * buffer_size / (1024.0 * 1024.0)) << std::endl;
-  // Display test repetition counts.
-  std::cout << Messages::config_iterations(iterations) << std::endl;
+  
+  // Display buffer sizes conditionally
+  if (buffer_size > 0) {
+    // Display buffer sizes (actual MiB and requested/capped MB).
+    std::cout << Messages::config_buffer_size(buffer_size / (1024.0 * 1024.0), buffer_size_mb) << std::endl;
+    
+    // Calculate and display total approximate memory allocated
+    double total_mib = 0.0;
+    if (only_bandwidth || run_patterns) {
+      // Bandwidth-only or pattern benchmarks: src + dst = 2x
+      total_mib = 2.0 * buffer_size / (1024.0 * 1024.0);
+    } else if (only_latency) {
+      // Latency-only: lat = 1x
+      total_mib = buffer_size / (1024.0 * 1024.0);
+    } else {
+      // Normal run: src + dst + lat = 3x
+      total_mib = 3.0 * buffer_size / (1024.0 * 1024.0);
+    }
+    std::cout << Messages::config_total_allocation(total_mib) << std::endl;
+  }
+  
+  // Display test repetition counts conditionally
+  if (!only_latency) {
+    std::cout << Messages::config_iterations(iterations) << std::endl;
+  }
   std::cout << Messages::config_loop_count(loop_count) << std::endl;
   // Display non-cacheable memory hints status.
   std::cout << Messages::config_non_cacheable(use_non_cacheable) << std::endl;
@@ -88,6 +108,8 @@ void print_configuration(size_t buffer_size, size_t buffer_size_mb, int iteratio
 // 'use_custom_cache_size': Flag indicating if custom cache size is being used.
 // 'custom_latency_ns', 'custom_buffer_size': Custom cache latency results and buffer size.
 // 'custom_read_bw_gb_s', 'custom_write_bw_gb_s', 'custom_copy_bw_gb_s': Custom cache bandwidth results.
+// 'only_bandwidth': Whether only bandwidth tests are run (skip latency output if true).
+// 'only_latency': Whether only latency tests are run (skip bandwidth output if true).
 void print_results(int loop, size_t buffer_size, size_t buffer_size_mb, int iterations, int num_threads,
                    double read_bw_gb_s, double total_read_time, double write_bw_gb_s, double total_write_time,
                    double copy_bw_gb_s, double total_copy_time, 
@@ -98,31 +120,36 @@ void print_results(int loop, size_t buffer_size, size_t buffer_size_mb, int iter
                    double average_latency_ns, double total_lat_time_ns,
                    bool use_custom_cache_size, double custom_latency_ns, size_t custom_buffer_size,
                    double custom_read_bw_gb_s, double custom_write_bw_gb_s, double custom_copy_bw_gb_s,
-                   bool user_specified_threads) {
+                   bool user_specified_threads, bool only_bandwidth, bool only_latency) {
   // Print a header indicating the current loop number.
   std::cout << Messages::results_loop_header(loop) << std::endl;
   // Set output to fixed-point notation for consistent formatting.
   std::cout << std::fixed;
 
-  // Display Main Memory Bandwidth test results.
-  std::cout << Messages::results_main_memory_bandwidth(num_threads) << std::endl;
-  std::cout << std::setprecision(Constants::BANDWIDTH_PRECISION);
-  std::cout << Messages::results_read_bandwidth(read_bw_gb_s, total_read_time) << std::endl;
-  std::cout << Messages::results_write_bandwidth(write_bw_gb_s, total_write_time) << std::endl;
-  std::cout << Messages::results_copy_bandwidth(copy_bw_gb_s, total_copy_time) << std::endl;
+  // Display Main Memory Bandwidth test results (skip if only latency tests).
+  if (!only_latency) {
+    std::cout << Messages::results_main_memory_bandwidth(num_threads) << std::endl;
+    std::cout << std::setprecision(Constants::BANDWIDTH_PRECISION);
+    std::cout << Messages::results_read_bandwidth(read_bw_gb_s, total_read_time) << std::endl;
+    std::cout << Messages::results_write_bandwidth(write_bw_gb_s, total_write_time) << std::endl;
+    std::cout << Messages::results_copy_bandwidth(copy_bw_gb_s, total_copy_time) << std::endl;
+  }
   
-  // Display main memory latency test results.
-  std::cout << Messages::results_main_memory_latency() << std::endl;
-  std::cout << Messages::results_latency_total_time(total_lat_time_ns / 1e9) << std::endl;
-  std::cout << std::setprecision(Constants::LATENCY_PRECISION);
-  std::cout << Messages::results_latency_average(average_latency_ns) << std::endl;
+  // Display main memory latency test results (skip if only bandwidth tests).
+  if (!only_bandwidth) {
+    std::cout << Messages::results_main_memory_latency() << std::endl;
+    std::cout << Messages::results_latency_total_time(total_lat_time_ns / 1e9) << std::endl;
+    std::cout << std::setprecision(Constants::LATENCY_PRECISION);
+    std::cout << Messages::results_latency_average(average_latency_ns) << std::endl;
+  }
 
-  // Display cache bandwidth test results.
-  // Cache tests use user-specified threads if set, otherwise single-threaded
-  int cache_threads = user_specified_threads ? num_threads : Constants::SINGLE_THREAD;
-  std::cout << Messages::results_cache_bandwidth(cache_threads) << std::endl;
-  std::cout << std::setprecision(Constants::BANDWIDTH_PRECISION);
-  if (use_custom_cache_size) {
+  // Display cache bandwidth test results (skip if only latency tests).
+  if (!only_latency) {
+    // Cache tests use user-specified threads if set, otherwise single-threaded
+    int cache_threads = user_specified_threads ? num_threads : Constants::SINGLE_THREAD;
+    std::cout << Messages::results_cache_bandwidth(cache_threads) << std::endl;
+    std::cout << std::setprecision(Constants::BANDWIDTH_PRECISION);
+    if (use_custom_cache_size) {
     // Display custom cache bandwidth results
     if (custom_buffer_size > 0) {
       std::cout << Messages::results_custom_cache() << std::endl;
@@ -165,12 +192,14 @@ void print_results(int loop, size_t buffer_size, size_t buffer_size_mb, int iter
       std::cout << Messages::results_cache_write_bandwidth(l2_write_bw_gb_s) << std::endl;
       std::cout << Messages::results_cache_copy_bandwidth(l2_copy_bw_gb_s) << std::endl;
     }
+    }
   }
 
-  // Display cache latency test results.
-  std::cout << Messages::results_cache_latency() << std::endl;
-  std::cout << std::setprecision(Constants::LATENCY_PRECISION);
-  if (use_custom_cache_size) {
+  // Display cache latency test results (skip if only bandwidth tests).
+  if (!only_bandwidth) {
+    std::cout << Messages::results_cache_latency() << std::endl;
+    std::cout << std::setprecision(Constants::LATENCY_PRECISION);
+    if (use_custom_cache_size) {
     // Display custom cache latency results
     if (custom_buffer_size > 0) {
       if (custom_buffer_size < 1024) {
@@ -201,6 +230,7 @@ void print_results(int loop, size_t buffer_size, size_t buffer_size_mb, int iter
         std::cout << Messages::results_cache_latency_l2_ns_mb(l2_latency_ns, l2_buffer_size / (1024.0 * 1024.0)) << std::endl;
       }
     }
+  }
   }
   // Print a separator after the loop results.
   std::cout << Messages::results_separator() << std::endl;

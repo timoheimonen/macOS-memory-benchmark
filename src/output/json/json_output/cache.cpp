@@ -62,44 +62,56 @@ nlohmann::json build_cache_json(const BenchmarkConfig& config, const BenchmarkSt
   nlohmann::json cache;
   
   if (config.use_custom_cache_size) {
-    // Custom cache bandwidth
-    add_cache_bandwidth_json(cache,
+    // Custom cache bandwidth (skip if only latency tests)
+    if (!config.only_latency) {
+      add_cache_bandwidth_json(cache,
+                               JsonKeys::CUSTOM,
+                               stats.all_custom_read_bw_gb_s,
+                               stats.all_custom_write_bw_gb_s,
+                               stats.all_custom_copy_bw_gb_s);
+    }
+    
+    // Custom cache latency (skip if only bandwidth tests)
+    if (!config.only_bandwidth) {
+      add_cache_latency_json(cache,
                              JsonKeys::CUSTOM,
-                             stats.all_custom_read_bw_gb_s,
-                             stats.all_custom_write_bw_gb_s,
-                             stats.all_custom_copy_bw_gb_s);
-    
-    // Custom cache latency
-    add_cache_latency_json(cache,
-                           JsonKeys::CUSTOM,
-                           stats.all_custom_latency_ns,
-                           stats.all_custom_latency_samples);
+                             stats.all_custom_latency_ns,
+                             stats.all_custom_latency_samples);
+    }
   } else {
-    // L1 cache bandwidth
-    add_cache_bandwidth_json(cache,
-                             JsonKeys::L1,
-                             stats.all_l1_read_bw_gb_s,
-                             stats.all_l1_write_bw_gb_s,
-                             stats.all_l1_copy_bw_gb_s);
+    // L1 cache bandwidth (skip if only latency tests)
+    if (!config.only_latency) {
+      add_cache_bandwidth_json(cache,
+                               JsonKeys::L1,
+                               stats.all_l1_read_bw_gb_s,
+                               stats.all_l1_write_bw_gb_s,
+                               stats.all_l1_copy_bw_gb_s);
+    }
     
-    // L1 cache latency
-    add_cache_latency_json(cache,
-                          JsonKeys::L1,
-                          stats.all_l1_latency_ns,
-                          stats.all_l1_latency_samples);
+    // L1 cache latency (skip if only bandwidth tests)
+    if (!config.only_bandwidth) {
+      add_cache_latency_json(cache,
+                            JsonKeys::L1,
+                            stats.all_l1_latency_ns,
+                            stats.all_l1_latency_samples);
+    }
     
-    // L2 cache bandwidth
-    add_cache_bandwidth_json(cache,
-                             JsonKeys::L2,
-                             stats.all_l2_read_bw_gb_s,
-                             stats.all_l2_write_bw_gb_s,
-                             stats.all_l2_copy_bw_gb_s);
+    // L2 cache bandwidth (skip if only latency tests)
+    if (!config.only_latency) {
+      add_cache_bandwidth_json(cache,
+                               JsonKeys::L2,
+                               stats.all_l2_read_bw_gb_s,
+                               stats.all_l2_write_bw_gb_s,
+                               stats.all_l2_copy_bw_gb_s);
+    }
     
-    // L2 cache latency
-    add_cache_latency_json(cache,
-                          JsonKeys::L2,
-                          stats.all_l2_latency_ns,
-                          stats.all_l2_latency_samples);
+    // L2 cache latency (skip if only bandwidth tests)
+    if (!config.only_bandwidth) {
+      add_cache_latency_json(cache,
+                            JsonKeys::L2,
+                            stats.all_l2_latency_ns,
+                            stats.all_l2_latency_samples);
+    }
   }
   
   return cache;
