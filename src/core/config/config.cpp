@@ -232,11 +232,20 @@ int validate_config(BenchmarkConfig& config) {
   unsigned long max_allowed_mb_per_buffer = 0;
 
   if (available_mem_mb > 0) {
-    unsigned long max_total_allowed_mb = static_cast<unsigned long>(available_mem_mb * Constants::MEMORY_LIMIT_FACTOR);
-    max_allowed_mb_per_buffer = max_total_allowed_mb / 3;
+    config.max_total_allowed_mb = static_cast<unsigned long>(available_mem_mb * Constants::MEMORY_LIMIT_FACTOR);
+    // Divide by 3 to account for the 3 main buffers: src, dst, and lat.
+    // Note: This per-buffer calculation does NOT include cache buffers (L1, L2, custom)
+    // and their bandwidth counterparts. The total memory check in buffer_manager.cpp
+    // is necessary to ensure all buffers (main + cache) fit within max_total_allowed_mb.
+    max_allowed_mb_per_buffer = config.max_total_allowed_mb / 3;
   } else {
     std::cerr << Messages::warning_prefix() << Messages::warning_cannot_get_memory() << std::endl;
-    max_allowed_mb_per_buffer = Constants::FALLBACK_TOTAL_LIMIT_MB / 3;
+    config.max_total_allowed_mb = Constants::FALLBACK_TOTAL_LIMIT_MB;
+    // Divide by 3 to account for the 3 main buffers: src, dst, and lat.
+    // Note: This per-buffer calculation does NOT include cache buffers (L1, L2, custom)
+    // and their bandwidth counterparts. The total memory check in buffer_manager.cpp
+    // is necessary to ensure all buffers (main + cache) fit within max_total_allowed_mb.
+    max_allowed_mb_per_buffer = config.max_total_allowed_mb / 3;
     std::cout << Messages::info_setting_max_fallback(max_allowed_mb_per_buffer) << std::endl;
   }
   

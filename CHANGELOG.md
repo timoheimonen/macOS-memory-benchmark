@@ -15,6 +15,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Increased maximum cache size limit**: Raised `MAX_CACHE_SIZE_KB` from 512 MB to 1 GB to support larger memory working sets and to help identify bandwidth and latency changes when moving beyond on-chip cache regions into main memory.
 - **README.md documentation**: Replaced detailed technical implementation section with a concise reference to the new Technical Specification document, reducing duplication and centralizing technical documentation.
 
+### Fixed
+- **Mach host port leak**: Fixed memory leak in `get_available_memory_mb()` where Mach host port acquired via `mach_host_self()` was never deallocated.
+- **Unnecessary cache buffer allocation for pattern-only runs**: Fixed issue where pattern benchmarks (`-patterns` flag) were allocating and initializing cache buffers (L1/L2/custom latency and bandwidth) even though pattern benchmarks only use src/dst buffers.
+- **Missing total memory guard**: Fixed issue where total memory requirement calculation did not validate against the 80% availability limit calculated in `validate_config()`.
+
 ## [0.52.2] - 2025-12-31
 
 ### Added

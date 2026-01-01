@@ -198,6 +198,12 @@ const std::string& error_total_memory_overflow() {
   return msg;
 }
 
+std::string error_total_memory_exceeds_limit(unsigned long total_mb, unsigned long max_mb) {
+  std::ostringstream oss;
+  oss << "Total memory requirement (" << total_mb << " MB) exceeds maximum allowed (" << max_mb << " MB)";
+  return oss.str();
+}
+
 const std::string& error_main_buffers_not_allocated() {
   static const std::string msg = "Main buffers not allocated";
   return msg;

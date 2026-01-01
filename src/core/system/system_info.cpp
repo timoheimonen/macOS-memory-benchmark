@@ -15,6 +15,7 @@
 //
 #include <mach/mach_error.h>  // For mach_error_string
 #include <mach/mach_host.h>   // For host_statistics64, mach_host_self, host_page_size
+#include <mach/mach.h>        // For mach_task_self, mach_port_deallocate
 #include <sys/sysctl.h>       // For sysctlbyname
 
 #include <cstring>   // For strerror
@@ -128,6 +129,7 @@ unsigned long get_available_memory_mb() {
   kern_return_t kern_ret = host_page_size(host_port, &page_size_local);
   if (kern_ret != KERN_SUCCESS || page_size_local == 0) {
     std::cerr << Messages::warning_prefix() << Messages::warning_host_page_size_failed(mach_error_string(kern_ret)) << std::endl;
+    mach_port_deallocate(mach_task_self(), host_port);
     return 0;
   }
 
@@ -137,6 +139,7 @@ unsigned long get_available_memory_mb() {
   kern_ret = host_statistics64(host_port, HOST_VM_INFO64, (host_info64_t)&vm_stats, &info_count);
   if (kern_ret != KERN_SUCCESS) {
     std::cerr << Messages::warning_prefix() << Messages::warning_host_statistics64_failed(mach_error_string(kern_ret)) << std::endl;
+    mach_port_deallocate(mach_task_self(), host_port);
     return 0;
   }
 
@@ -145,6 +148,9 @@ unsigned long get_available_memory_mb() {
   uint64_t available_bytes = static_cast<uint64_t>(vm_stats.free_count + vm_stats.inactive_count) * page_size_local;
   // Convert bytes to MB.
   unsigned long available_mb = static_cast<unsigned long>(available_bytes / Constants::BYTES_PER_MB);
+  
+  // Deallocate the host port before returning
+  mach_port_deallocate(mach_task_self(), host_port);
   return available_mb;
 }
 

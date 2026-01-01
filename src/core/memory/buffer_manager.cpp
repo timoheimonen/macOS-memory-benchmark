@@ -50,77 +50,92 @@ int allocate_all_buffers(const BenchmarkConfig& config, BenchmarkBuffers& buffer
     }
   }
   
-  // Cache buffers - conditionally allocate based on flags
-  if (config.use_custom_cache_size) {
-    if (config.custom_buffer_size > 0) {
-      if (!config.only_bandwidth) {
-        // Need custom latency buffer
-        if (total_memory > std::numeric_limits<size_t>::max() - config.custom_buffer_size) {
-          std::cerr << Messages::error_prefix() << Messages::error_total_memory_overflow() << std::endl;
-          return EXIT_FAILURE;
+  // Cache buffers - conditionally allocate based on flags (skip for pattern-only runs)
+  if (!config.run_patterns) {
+    if (config.use_custom_cache_size) {
+      if (config.custom_buffer_size > 0) {
+        if (!config.only_bandwidth) {
+          // Need custom latency buffer
+          if (total_memory > std::numeric_limits<size_t>::max() - config.custom_buffer_size) {
+            std::cerr << Messages::error_prefix() << Messages::error_total_memory_overflow() << std::endl;
+            return EXIT_FAILURE;
+          }
+          total_memory += config.custom_buffer_size;  // custom
         }
-        total_memory += config.custom_buffer_size;  // custom
+        if (!config.only_latency) {
+          // Need custom bandwidth buffers
+          if (config.custom_buffer_size > std::numeric_limits<size_t>::max() / 2) {
+            std::cerr << Messages::error_prefix() << Messages::error_buffer_size_overflow_calculation() << std::endl;
+            return EXIT_FAILURE;
+          }
+          size_t custom_bw_double = config.custom_buffer_size * 2;  // custom_bw_src, custom_bw_dst
+          if (total_memory > std::numeric_limits<size_t>::max() - custom_bw_double) {
+            std::cerr << Messages::error_prefix() << Messages::error_total_memory_overflow() << std::endl;
+            return EXIT_FAILURE;
+          }
+          total_memory += custom_bw_double;  // custom_bw_src, custom_bw_dst
+        }
       }
-      if (!config.only_latency) {
-        // Need custom bandwidth buffers
-        if (config.custom_buffer_size > std::numeric_limits<size_t>::max() / 2) {
-          std::cerr << Messages::error_prefix() << Messages::error_buffer_size_overflow_calculation() << std::endl;
-          return EXIT_FAILURE;
+    } else {
+      if (config.l1_buffer_size > 0) {
+        if (!config.only_bandwidth) {
+          // Need L1 latency buffer
+          if (total_memory > std::numeric_limits<size_t>::max() - config.l1_buffer_size) {
+            std::cerr << Messages::error_prefix() << Messages::error_total_memory_overflow() << std::endl;
+            return EXIT_FAILURE;
+          }
+          total_memory += config.l1_buffer_size;  // l1
         }
-        size_t custom_bw_double = config.custom_buffer_size * 2;  // custom_bw_src, custom_bw_dst
-        if (total_memory > std::numeric_limits<size_t>::max() - custom_bw_double) {
-          std::cerr << Messages::error_prefix() << Messages::error_total_memory_overflow() << std::endl;
-          return EXIT_FAILURE;
+        if (!config.only_latency) {
+          // Need L1 bandwidth buffers
+          if (config.l1_buffer_size > std::numeric_limits<size_t>::max() / 2) {
+            std::cerr << Messages::error_prefix() << Messages::error_buffer_size_overflow_calculation() << std::endl;
+            return EXIT_FAILURE;
+          }
+          size_t l1_bw_double = config.l1_buffer_size * 2;  // l1_bw_src, l1_bw_dst
+          if (total_memory > std::numeric_limits<size_t>::max() - l1_bw_double) {
+            std::cerr << Messages::error_prefix() << Messages::error_total_memory_overflow() << std::endl;
+            return EXIT_FAILURE;
+          }
+          total_memory += l1_bw_double;  // l1_bw_src, l1_bw_dst
         }
-        total_memory += custom_bw_double;  // custom_bw_src, custom_bw_dst
+      }
+      if (config.l2_buffer_size > 0) {
+        if (!config.only_bandwidth) {
+          // Need L2 latency buffer
+          if (total_memory > std::numeric_limits<size_t>::max() - config.l2_buffer_size) {
+            std::cerr << Messages::error_prefix() << Messages::error_total_memory_overflow() << std::endl;
+            return EXIT_FAILURE;
+          }
+          total_memory += config.l2_buffer_size;  // l2
+        }
+        if (!config.only_latency) {
+          // Need L2 bandwidth buffers
+          if (config.l2_buffer_size > std::numeric_limits<size_t>::max() / 2) {
+            std::cerr << Messages::error_prefix() << Messages::error_buffer_size_overflow_calculation() << std::endl;
+            return EXIT_FAILURE;
+          }
+          size_t l2_bw_double = config.l2_buffer_size * 2;  // l2_bw_src, l2_bw_dst
+          if (total_memory > std::numeric_limits<size_t>::max() - l2_bw_double) {
+            std::cerr << Messages::error_prefix() << Messages::error_total_memory_overflow() << std::endl;
+            return EXIT_FAILURE;
+          }
+          total_memory += l2_bw_double;  // l2_bw_src, l2_bw_dst
+        }
       }
     }
-  } else {
-    if (config.l1_buffer_size > 0) {
-      if (!config.only_bandwidth) {
-        // Need L1 latency buffer
-        if (total_memory > std::numeric_limits<size_t>::max() - config.l1_buffer_size) {
-          std::cerr << Messages::error_prefix() << Messages::error_total_memory_overflow() << std::endl;
-          return EXIT_FAILURE;
-        }
-        total_memory += config.l1_buffer_size;  // l1
-      }
-      if (!config.only_latency) {
-        // Need L1 bandwidth buffers
-        if (config.l1_buffer_size > std::numeric_limits<size_t>::max() / 2) {
-          std::cerr << Messages::error_prefix() << Messages::error_buffer_size_overflow_calculation() << std::endl;
-          return EXIT_FAILURE;
-        }
-        size_t l1_bw_double = config.l1_buffer_size * 2;  // l1_bw_src, l1_bw_dst
-        if (total_memory > std::numeric_limits<size_t>::max() - l1_bw_double) {
-          std::cerr << Messages::error_prefix() << Messages::error_total_memory_overflow() << std::endl;
-          return EXIT_FAILURE;
-        }
-        total_memory += l1_bw_double;  // l1_bw_src, l1_bw_dst
-      }
-    }
-    if (config.l2_buffer_size > 0) {
-      if (!config.only_bandwidth) {
-        // Need L2 latency buffer
-        if (total_memory > std::numeric_limits<size_t>::max() - config.l2_buffer_size) {
-          std::cerr << Messages::error_prefix() << Messages::error_total_memory_overflow() << std::endl;
-          return EXIT_FAILURE;
-        }
-        total_memory += config.l2_buffer_size;  // l2
-      }
-      if (!config.only_latency) {
-        // Need L2 bandwidth buffers
-        if (config.l2_buffer_size > std::numeric_limits<size_t>::max() / 2) {
-          std::cerr << Messages::error_prefix() << Messages::error_buffer_size_overflow_calculation() << std::endl;
-          return EXIT_FAILURE;
-        }
-        size_t l2_bw_double = config.l2_buffer_size * 2;  // l2_bw_src, l2_bw_dst
-        if (total_memory > std::numeric_limits<size_t>::max() - l2_bw_double) {
-          std::cerr << Messages::error_prefix() << Messages::error_total_memory_overflow() << std::endl;
-          return EXIT_FAILURE;
-        }
-        total_memory += l2_bw_double;  // l2_bw_src, l2_bw_dst
-      }
+  }
+  
+  // Validate total memory requirement against availability limit.
+  // This check is necessary because the per-buffer limit calculation in config.cpp
+  // (max_total_allowed_mb / 3) only accounts for the 3 main buffers (src, dst, lat)
+  // and does not include cache buffers (L1, L2, custom) and their bandwidth counterparts.
+  // This ensures the combined memory usage of all buffers stays within the total limit.
+  if (config.max_total_allowed_mb > 0) {
+    unsigned long total_memory_mb = static_cast<unsigned long>(total_memory / Constants::BYTES_PER_MB);
+    if (total_memory_mb > config.max_total_allowed_mb) {
+      std::cerr << Messages::error_prefix() << Messages::error_total_memory_exceeds_limit(total_memory_mb, config.max_total_allowed_mb) << std::endl;
+      return EXIT_FAILURE;
     }
   }
   
@@ -174,8 +189,8 @@ int allocate_all_buffers(const BenchmarkConfig& config, BenchmarkBuffers& buffer
     }
   }
 
-  // Allocate cache latency test buffers (only if not bandwidth-only)
-  if (!config.only_bandwidth) {
+  // Allocate cache latency test buffers (only if not bandwidth-only and not pattern-only)
+  if (!config.only_bandwidth && !config.run_patterns) {
     if (config.use_custom_cache_size) {
       // Allocate custom cache latency test buffer
       if (config.custom_buffer_size > 0) {
@@ -214,8 +229,8 @@ int allocate_all_buffers(const BenchmarkConfig& config, BenchmarkBuffers& buffer
     }
   }
 
-  // Allocate cache bandwidth test buffers (only if not latency-only)
-  if (!config.only_latency) {
+  // Allocate cache bandwidth test buffers (only if not latency-only and not pattern-only)
+  if (!config.only_latency && !config.run_patterns) {
     if (config.use_custom_cache_size) {
       // Allocate custom cache bandwidth test buffers
       if (config.custom_buffer_size > 0) {
@@ -313,8 +328,8 @@ int initialize_all_buffers(BenchmarkBuffers& buffers, const BenchmarkConfig& con
     }
   }
   
-  // Setup cache latency chains (only if not bandwidth-only)
-  if (!config.only_bandwidth) {
+  // Setup cache latency chains (only if not bandwidth-only and not pattern-only)
+  if (!config.only_bandwidth && !config.run_patterns) {
     if (config.use_custom_cache_size) {
       if (config.custom_buffer_size > 0) {
         if (buffers.custom_buffer() == nullptr) {
@@ -347,8 +362,8 @@ int initialize_all_buffers(BenchmarkBuffers& buffers, const BenchmarkConfig& con
     }
   }
   
-  // Initialize cache bandwidth test buffers (only if not latency-only)
-  if (!config.only_latency) {
+  // Initialize cache bandwidth test buffers (only if not latency-only and not pattern-only)
+  if (!config.only_latency && !config.run_patterns) {
     if (config.use_custom_cache_size) {
       if (config.custom_buffer_size > 0) {
         if (buffers.custom_bw_src() == nullptr || buffers.custom_bw_dst() == nullptr) {

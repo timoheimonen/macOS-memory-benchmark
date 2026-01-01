@@ -58,6 +58,7 @@ std::string error_buffer_size_zero(const std::string& buffer_name);
 const std::string& error_main_buffer_size_zero();
 const std::string& error_buffer_size_overflow_calculation();
 const std::string& error_total_memory_overflow();
+std::string error_total_memory_exceeds_limit(unsigned long total_mb, unsigned long max_mb);
 const std::string& error_main_buffers_not_allocated();
 const std::string& error_custom_buffer_not_allocated();
 const std::string& error_l1_buffer_not_allocated();

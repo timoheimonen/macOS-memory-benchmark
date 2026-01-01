@@ -66,6 +66,7 @@ struct BenchmarkConfig {
   size_t l1_cache_size = 0;      ///< L1 cache size in bytes
   size_t l2_cache_size = 0;      ///< L2 cache size in bytes
   size_t custom_cache_size_bytes = 0;  ///< Custom cache size in bytes
+  unsigned long max_total_allowed_mb = 0;  ///< Maximum total memory allowed in MB (80% of available)
   
   // Flags
   bool use_custom_cache_size = false;  ///< Whether to use custom cache size
