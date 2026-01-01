@@ -7,9 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.52.3] - DEVELOPMENT
 
+### Added
+- **Technical Specification document**: Added  [TECHNICAL_SPECIFICATION.md](TECHNICAL_SPECIFICATION.md) documenting system architecture, memory management, low-level ARM64 assembly implementation, benchmark execution flow, system integration, and technical specifications with links to relevant source files and directories.
+
 ### Changed
 - **Standardized JSON output structure**: All JSON output files now follow a consistent field ordering across all benchmark types (latency/bandwidth and pattern benchmarks).
 - **Increased maximum cache size limit**: Raised `MAX_CACHE_SIZE_KB` from 512 MB to 1 GB to support larger memory working sets and to help identify bandwidth and latency changes when moving beyond on-chip cache regions into main memory.
+- **README.md documentation**: Replaced detailed technical implementation section with a concise reference to the new Technical Specification document, reducing duplication and centralizing technical documentation.
 
 ## [0.52.2] - 2025-12-31
 
