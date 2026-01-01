@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 - **Standardized JSON output structure**: All JSON output files now follow a consistent field ordering across all benchmark types (latency/bandwidth and pattern benchmarks).
+- **Increased maximum cache size limit**: Raised `MAX_CACHE_SIZE_KB` from 512 MB to 1 GB to support larger memory working sets and to help identify bandwidth and latency changes when moving beyond on-chip cache regions into main memory.
 
 ## [0.52.2] - 2025-12-31
 

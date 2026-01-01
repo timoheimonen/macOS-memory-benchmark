@@ -32,7 +32,7 @@ namespace Constants {
   
   // Cache size limits (in KB)
   constexpr long long MIN_CACHE_SIZE_KB = 16;  // Minimum cache size (page size on macOS)
-  constexpr long long MAX_CACHE_SIZE_KB = 524288;  // Maximum cache size (512 MB)
+  constexpr long long MAX_CACHE_SIZE_KB = 1048576;  // Maximum cache size (1 GB)
   
   // Size conversion constants
   constexpr size_t BYTES_PER_KB = 1024;
