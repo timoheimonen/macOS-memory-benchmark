@@ -1,4 +1,4 @@
-// Copyright 2025 Timo Heimonen <timo.heimonen@proton.me>
+// Copyright 2026 Timo Heimonen <timo.heimonen@proton.me>
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -17,7 +17,7 @@
  * @file benchmark_executor.h
  * @brief Benchmark execution functions for memory and cache tests
  * @author Timo Heimonen <timo.heimonen@proton.me>
- * @date 2025
+ * @date 2026
  *
  * This header provides functions to execute various memory and cache benchmarks,
  * including bandwidth and latency tests for main memory and different cache levels.
@@ -140,5 +140,18 @@ void run_cache_latency_tests(const BenchmarkBuffers& buffers, const BenchmarkCon
  */
 void run_main_memory_latency_test(const BenchmarkBuffers& buffers, const BenchmarkConfig& config,
                                   TimingResults& timings, BenchmarkResults& results, HighResTimer& test_timer);
+
+/**
+ * @brief Run a single benchmark loop and return results
+ * @param buffers Reference to benchmark buffers structure
+ * @param config Reference to benchmark configuration
+ * @param loop Loop number (for display purposes)
+ * @param test_timer Reference to high-resolution timer for measurements
+ * @return BenchmarkResults structure containing all results from the loop
+ *
+ * Executes one complete benchmark loop, running all configured tests
+ * (bandwidth and/or latency) and calculating results.
+ */
+BenchmarkResults run_single_benchmark_loop(const BenchmarkBuffers& buffers, const BenchmarkConfig& config, int loop, HighResTimer& test_timer);
 
 #endif // BENCHMARK_EXECUTOR_H

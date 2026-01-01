@@ -1,4 +1,4 @@
-// Copyright 2025 Timo Heimonen <timo.heimonen@proton.me>
+// Copyright 2026 Timo Heimonen <timo.heimonen@proton.me>
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -18,8 +18,12 @@
 #include "core/config/config.h"           // BenchmarkConfig
 #include "utils/benchmark.h"        // All benchmark functions and print functions
 #include "benchmark/benchmark_runner.h" // BenchmarkResults
+#include "benchmark/benchmark_results.h"   // Results calculation functions
+#include "output/console/messages.h"             // Centralized messages
 #include "core/config/constants.h"
 #include <atomic>
+#include <iostream>
+#include <stdexcept>
 
 // Run main memory bandwidth tests (read, write, copy)
 void run_main_memory_bandwidth_tests(const BenchmarkBuffers& buffers, const BenchmarkConfig& config, 
@@ -137,4 +141,48 @@ void run_main_memory_latency_test(const BenchmarkBuffers& buffers, const Benchma
   warmup_latency(buffers.lat_buffer(), config.buffer_size);
   timings.total_lat_time_ns = run_latency_test(buffers.lat_buffer(), config.lat_num_accesses, test_timer,
                                                 nullptr, 0);
+}
+
+// Run a single benchmark loop and return results
+BenchmarkResults run_single_benchmark_loop(const BenchmarkBuffers& buffers, const BenchmarkConfig& config, int loop, HighResTimer& test_timer) {
+  BenchmarkResults results;
+  TimingResults timings;
+
+  try {
+    // Run benchmark tests based on flags
+    if (config.only_bandwidth) {
+      // Run only bandwidth tests
+      run_main_memory_bandwidth_tests(buffers, config, timings, test_timer);
+      run_cache_bandwidth_tests(buffers, config, timings, test_timer);
+    } else if (config.only_latency) {
+      // Run only latency tests
+      run_cache_latency_tests(buffers, config, timings, results, test_timer);
+      run_main_memory_latency_test(buffers, config, timings, results, test_timer);
+    } else {
+      // Run all tests (default behavior)
+      run_main_memory_bandwidth_tests(buffers, config, timings, test_timer);
+      run_cache_bandwidth_tests(buffers, config, timings, test_timer);
+      run_cache_latency_tests(buffers, config, timings, results, test_timer);
+      run_main_memory_latency_test(buffers, config, timings, results, test_timer);
+    }
+  } catch (const std::exception &e) {
+    std::cerr << Messages::error_benchmark_tests(e.what()) << std::endl;
+    throw;  // Re-throw to be handled by caller
+  }
+
+  // Calculate all results from timing data
+  calculate_bandwidth_results(config, timings, results);
+  
+  // Store timing results
+  results.total_read_time = timings.total_read_time;
+  results.total_write_time = timings.total_write_time;
+  results.total_copy_time = timings.total_copy_time;
+  results.total_lat_time_ns = timings.total_lat_time_ns;
+  
+  // Calculate main memory latency
+  if (config.lat_num_accesses > 0) {
+    results.average_latency_ns = timings.total_lat_time_ns / static_cast<double>(config.lat_num_accesses);
+  }
+
+  return results;
 }

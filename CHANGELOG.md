@@ -19,6 +19,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `src/core/memory/buffer_allocator.cpp` - Memory allocation logic with validation and overflow checks
   - `src/core/memory/buffer_initializer.cpp` - Buffer initialization and latency chain setup
   - `buffer_manager.h` remains as the main interface, including both new headers for backward compatibility
+- **Refactored benchmark runner module**: Split `src/benchmark/benchmark_runner.cpp`:
+  - `src/benchmark/benchmark_executor.cpp` - Single benchmark loop execution (`run_single_benchmark_loop`)
+  - `src/benchmark/benchmark_statistics_collector.cpp` - Statistics collection and aggregation (`initialize_statistics`, `collect_loop_results`)
+  - `benchmark_runner.cpp` simplified to orchestration only (~73 lines), using the new modules for execution and statistics collection
+- **Refactored pattern benchmark execution module**: Split `src/pattern_benchmark/execution.cpp`:
+  - `src/pattern_benchmark/pattern_coordinator.cpp` - High-level pattern coordination (`run_pattern_benchmarks`) orchestrating different pattern types (forward, reverse, strided, random)
+  - `src/pattern_benchmark/pattern_statistics_manager.cpp` - Loop management and statistics collection (`run_all_pattern_benchmarks`) handling result aggregation across multiple loops
 - **Standardized JSON output structure**: All JSON output files now follow a consistent field ordering across all benchmark types (latency/bandwidth and pattern benchmarks).
 - **Increased maximum cache size limit**: Raised `MAX_CACHE_SIZE_KB` from 512 MB to 1 GB to support larger memory working sets and to help identify bandwidth and latency changes when moving beyond on-chip cache regions into main memory.
 - **README.md documentation**: Replaced detailed technical implementation section with a concise reference to the new Technical Specification document, reducing duplication and centralizing technical documentation.

@@ -45,13 +45,13 @@ CPP_SRCS_OUTPUT_CONSOLE_MESSAGES = output/console/messages/error_messages.cpp ou
 CPP_SRCS_UTILS = utils/utils.cpp utils/json_utils.cpp
 CPP_SRCS_SRC = $(CPP_SRCS_CORE_CONFIG) $(CPP_SRCS_CORE_MEMORY) $(CPP_SRCS_CORE_SYSTEM) $(CPP_SRCS_CORE_TIMING) $(CPP_SRCS_OUTPUT_CONSOLE) $(CPP_SRCS_OUTPUT_CONSOLE_MESSAGES) $(CPP_SRCS_UTILS)
 # Files in the src/benchmark subdirectory
-CPP_SRCS_BENCHMARK = bandwidth_tests.cpp latency_tests.cpp benchmark_runner.cpp benchmark_executor.cpp benchmark_results.cpp
+CPP_SRCS_BENCHMARK = bandwidth_tests.cpp latency_tests.cpp benchmark_runner.cpp benchmark_executor.cpp benchmark_results.cpp benchmark_statistics_collector.cpp
 # Files in the src/warmup subdirectory
 CPP_SRCS_WARMUP = basic_warmup.cpp latency_warmup.cpp cache_warmup.cpp pattern_warmup.cpp
 # Files in the src/output/json/json_output subdirectory
 CPP_SRCS_JSON_OUTPUT = output/json/json_output/builder.cpp output/json/json_output/main_memory.cpp output/json/json_output/cache.cpp output/json/json_output/patterns.cpp output/json/json_output/file_writer.cpp output/json/json_output/json_output.cpp
 # Files in the src/pattern_benchmark subdirectory
-CPP_SRCS_PATTERN_BENCHMARK = helpers.cpp validation.cpp execution.cpp execution_utils.cpp execution_strided.cpp execution_patterns.cpp output.cpp
+CPP_SRCS_PATTERN_BENCHMARK = helpers.cpp validation.cpp pattern_coordinator.cpp pattern_statistics_manager.cpp execution_utils.cpp execution_strided.cpp execution_patterns.cpp output.cpp
 
 # Add src/ prefix to source files
 CPP_SRCS_SRC_FULL = $(addprefix $(SRC_DIR)/, $(CPP_SRCS_SRC))
