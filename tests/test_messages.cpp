@@ -366,7 +366,7 @@ TEST_F(MessagesFormattingTest, ConfigHeader) {
 
 TEST_F(MessagesFormattingTest, ConfigCopyright) {
   std::string msg = Messages::config_copyright();
-  EXPECT_NE(msg.find("2025"), std::string::npos);
+  EXPECT_TRUE(msg.find("2025") != std::string::npos || msg.find("2026") != std::string::npos);
   EXPECT_NE(msg.find("Timo Heimonen"), std::string::npos);
 }
 

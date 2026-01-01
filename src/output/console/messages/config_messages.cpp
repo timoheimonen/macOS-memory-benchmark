@@ -1,4 +1,4 @@
-// Copyright 2025 Timo Heimonen <timo.heimonen@proton.me>
+// Copyright 2026 Timo Heimonen <timo.heimonen@proton.me>
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -27,7 +27,7 @@ std::string config_header(const std::string& version) {
 }
 
 std::string config_copyright() {
-  return "Copyright 2025 Timo Heimonen <timo.heimonen@proton.me>";
+  return "Copyright 2025-2026 Timo Heimonen <timo.heimonen@proton.me>";
 }
 
 std::string config_license() {

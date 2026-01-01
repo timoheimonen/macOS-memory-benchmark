@@ -11,6 +11,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Technical Specification document**: Added  [TECHNICAL_SPECIFICATION.md](TECHNICAL_SPECIFICATION.md) documenting system architecture, memory management, low-level ARM64 assembly implementation, benchmark execution flow, system integration, and technical specifications with links to relevant source files and directories.
 
 ### Changed
+- **Refactored configuration module**: Split `src/core/config/config.cpp`:
+  - `src/core/config/argument_parser.cpp` - Command-line argument parsing logic
+  - `src/core/config/config_validator.cpp` - Configuration validation logic
+  - `src/core/config/buffer_calculator.cpp` - Buffer size and access count calculations
+- **Refactored buffer management module**: Split `src/core/memory/buffer_manager.cpp`:
+  - `src/core/memory/buffer_allocator.cpp` - Memory allocation logic with validation and overflow checks
+  - `src/core/memory/buffer_initializer.cpp` - Buffer initialization and latency chain setup
+  - `buffer_manager.h` remains as the main interface, including both new headers for backward compatibility
 - **Standardized JSON output structure**: All JSON output files now follow a consistent field ordering across all benchmark types (latency/bandwidth and pattern benchmarks).
 - **Increased maximum cache size limit**: Raised `MAX_CACHE_SIZE_KB` from 512 MB to 1 GB to support larger memory working sets and to help identify bandwidth and latency changes when moving beyond on-chip cache regions into main memory.
 - **README.md documentation**: Replaced detailed technical implementation section with a concise reference to the new Technical Specification document, reducing duplication and centralizing technical documentation.

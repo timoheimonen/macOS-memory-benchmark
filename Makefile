@@ -36,8 +36,8 @@ LDFLAGS = -pthread
 # Files in the root directory
 CPP_SRCS_ROOT = main.cpp
 # Files in the src directory (now organized in subdirectories)
-CPP_SRCS_CORE_CONFIG = core/config/config.cpp
-CPP_SRCS_CORE_MEMORY = core/memory/buffer_manager.cpp core/memory/memory_manager.cpp core/memory/memory_utils.cpp
+CPP_SRCS_CORE_CONFIG = core/config/argument_parser.cpp core/config/config_validator.cpp core/config/buffer_calculator.cpp
+CPP_SRCS_CORE_MEMORY = core/memory/buffer_allocator.cpp core/memory/buffer_initializer.cpp core/memory/memory_manager.cpp core/memory/memory_utils.cpp
 CPP_SRCS_CORE_SYSTEM = core/system/system_info.cpp
 CPP_SRCS_CORE_TIMING = core/timing/timer.cpp
 CPP_SRCS_OUTPUT_CONSOLE = output/console/output_printer.cpp output/console/statistics.cpp
