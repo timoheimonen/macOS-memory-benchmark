@@ -42,6 +42,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Alignment gaps creating cold regions in warmup**: Fixed bug where bytes between `unaligned_start` and `chunk_start` (up to 63 bytes per thread) were never touched, creating unwarmed gaps throughout the buffer, especially with high thread counts or small chunks.
 - **Tiny buffers completely skipped in warmup**: Fixed issue where buffers smaller than the cache line alignment gap (e.g., < 64 bytes) were completely skipped during warmup when `prefix_size >= effective_size`.
 - **Small chunks completely skipped in warmup**: Fixed bug where chunks smaller than the alignment offset (`original_chunk_size <= alignment_offset`) were completely skipped without any processing, creating unwarmed "holes" in the buffer. 
+- **Copy bandwidth underreported in pattern benchmarks**: Fixed issue where forward, reverse, and random copy operations in pattern benchmarks (`execution_patterns.cpp`) were underreported by 2x because they didn't account for copy operations moving data twice (read from source + write to destination).
 
 ## [0.52.2] - 2025-12-31
 
