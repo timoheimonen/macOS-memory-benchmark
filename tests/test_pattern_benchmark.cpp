@@ -680,6 +680,7 @@ TEST(PatternBenchmarkTest, BufferSizeProgressionPageStride) {
   config.buffer_size = PATTERN_STRIDE_PAGE;  // 4096 bytes
   config.iterations = 1;
   config.num_threads = 1;
+  config.run_patterns = true;  // Mark as pattern benchmark to skip latency buffer allocation
   
   // Initialize system info
   config.cpu_name = get_processor_name();

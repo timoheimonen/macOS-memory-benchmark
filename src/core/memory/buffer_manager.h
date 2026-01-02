@@ -1,4 +1,4 @@
-// Copyright 2025 Timo Heimonen <timo.heimonen@proton.me>
+// Copyright 2026 Timo Heimonen <timo.heimonen@proton.me>
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -17,7 +17,7 @@
  * @file buffer_manager.h
  * @brief Buffer management for benchmark memory allocations
  * @author Timo Heimonen <timo.heimonen@proton.me>
- * @date 2025
+ * @date 2026
  *
  * This header provides structures and functions to manage all benchmark buffers,
  * including allocation, initialization, and accessor methods.
@@ -26,6 +26,8 @@
 #define BUFFER_MANAGER_H
 
 #include "core/memory/memory_manager.h"  // MmapPtr
+#include "core/memory/buffer_allocator.h"  // allocate_all_buffers
+#include "core/memory/buffer_initializer.h"  // initialize_all_buffers
 #include <cstddef>  // size_t
 #include <cstdlib>  // EXIT_SUCCESS, EXIT_FAILURE
 
@@ -132,28 +134,6 @@ struct BenchmarkBuffers {
    */
   void* custom_bw_dst() const { return custom_bw_dst_ptr.get(); }
 };
-
-/**
- * @brief Allocate all buffers based on configuration
- * @param config Reference to benchmark configuration
- * @param[out] buffers Reference to BenchmarkBuffers structure to populate
- * @return EXIT_SUCCESS on success, EXIT_FAILURE on error
- *
- * Allocates all required buffers for main memory, cache latency, and cache
- * bandwidth tests based on the configuration settings.
- */
-int allocate_all_buffers(const BenchmarkConfig& config, BenchmarkBuffers& buffers);
-
-/**
- * @brief Initialize all buffers (fill data and setup latency chains)
- * @param buffers Reference to BenchmarkBuffers structure
- * @param config Reference to benchmark configuration
- * @return EXIT_SUCCESS on success, EXIT_FAILURE on error
- *
- * Initializes buffers by filling them with data and setting up pointer-chasing
- * chains for latency tests.
- */
-int initialize_all_buffers(BenchmarkBuffers& buffers, const BenchmarkConfig& config);
 
 #endif // BUFFER_MANAGER_H
 

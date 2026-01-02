@@ -1,4 +1,4 @@
-// Copyright 2025 Timo Heimonen <timo.heimonen@proton.me>
+// Copyright 2026 Timo Heimonen <timo.heimonen@proton.me>
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -71,7 +71,8 @@ void run_forward_pattern_benchmarks(const BenchmarkBuffers& buffers, const Bench
   warmup_copy(buffers.dst_buffer(), buffers.src_buffer(), config.buffer_size, config.num_threads);
   double copy_time = run_copy_test(buffers.dst_buffer(), buffers.src_buffer(), config.buffer_size,
                                    config.iterations, config.num_threads, timer);
-  results.forward_copy_bw = calculate_bandwidth(config.buffer_size, config.iterations, copy_time);
+  results.forward_copy_bw = calculate_bandwidth(config.buffer_size * Constants::COPY_OPERATION_MULTIPLIER, 
+                                                config.iterations, copy_time);
 }
 
 // Run reverse pattern benchmarks (backward sequential access)
@@ -94,7 +95,8 @@ void run_reverse_pattern_benchmarks(const BenchmarkBuffers& buffers, const Bench
   warmup_copy(buffers.dst_buffer(), buffers.src_buffer(), config.buffer_size, config.num_threads);
   double copy_time = run_pattern_copy_test(buffers.dst_buffer(), buffers.src_buffer(), config.buffer_size,
                                             config.iterations, memory_copy_reverse_loop_asm, timer);
-  results.reverse_copy_bw = calculate_bandwidth(config.buffer_size, config.iterations, copy_time);
+  results.reverse_copy_bw = calculate_bandwidth(config.buffer_size * Constants::COPY_OPERATION_MULTIPLIER,
+                                                config.iterations, copy_time);
 }
 
 // Prepare warmup indices for random pattern
@@ -152,7 +154,7 @@ int run_random_pattern_benchmarks(const BenchmarkBuffers& buffers, const Benchma
   warmup_copy_random(buffers.dst_buffer(), buffers.src_buffer(), warmup_indices, config.num_threads);
   double copy_time = run_pattern_copy_random_test(buffers.dst_buffer(), buffers.src_buffer(), random_indices,
                                                    config.iterations, timer);
-  results.random_copy_bw = calculate_bandwidth(num_accesses * PATTERN_ACCESS_SIZE_BYTES, 
+  results.random_copy_bw = calculate_bandwidth(num_accesses * PATTERN_ACCESS_SIZE_BYTES * Constants::COPY_OPERATION_MULTIPLIER,
                                               config.iterations, copy_time);
   
   return EXIT_SUCCESS;

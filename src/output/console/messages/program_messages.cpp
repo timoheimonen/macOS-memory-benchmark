@@ -1,4 +1,4 @@
-// Copyright 2025 Timo Heimonen <timo.heimonen@proton.me>
+// Copyright 2026 Timo Heimonen <timo.heimonen@proton.me>
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -41,7 +41,8 @@ const std::string& msg_running_pattern_benchmarks() {
 // --- Usage/Help Messages ---
 std::string usage_header(const std::string& version) {
   std::ostringstream oss;
-  oss << "Version: " << version << " by Timo Heimonen <timo.heimonen@proton.me>\n"
+  oss << "Copyright 2025-2026 Timo Heimonen <timo.heimonen@proton.me>\n"
+      << "Version: " << version << " by Timo Heimonen <timo.heimonen@proton.me>\n"
       << "License: GNU GPL v3. See <https://www.gnu.org/licenses/>\n"
       << "This program is free software: you can redistribute it and/or modify\n"
       << "it under the terms of the GNU General Public License as published by\n"

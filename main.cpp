@@ -1,4 +1,4 @@
-// Copyright 2025 Timo Heimonen <timo.heimonen@proton.me>
+// Copyright 2026 Timo Heimonen <timo.heimonen@proton.me>
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -180,7 +180,7 @@ int main(int argc, char *argv[]) {
     // --- Save JSON Output if requested ---
     if (!config.output_file.empty()) {
       double total_elapsed_time_sec = total_execution_timer.stop();
-      if (save_results_to_json(config, stats, total_elapsed_time_sec) != EXIT_FAILURE) {
+      if (save_results_to_json(config, stats, total_elapsed_time_sec) != EXIT_SUCCESS) {
         return EXIT_FAILURE;
       }
     }

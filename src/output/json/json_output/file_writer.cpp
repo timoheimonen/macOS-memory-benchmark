@@ -33,7 +33,7 @@
 // Write JSON to file with proper error handling and atomic writes
 // Uses atomic file writing: writes to a temporary file, then renames it to the final destination
 // Returns EXIT_SUCCESS on success, EXIT_FAILURE on error
-int write_json_to_file(const std::filesystem::path& file_path, const nlohmann::json& json_output) {
+int write_json_to_file(const std::filesystem::path& file_path, const nlohmann::ordered_json& json_output) {
   // Ensure parent directory exists
   std::filesystem::path parent_dir = file_path.parent_path();
   if (!parent_dir.empty() && !std::filesystem::exists(parent_dir)) {

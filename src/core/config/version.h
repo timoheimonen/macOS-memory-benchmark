@@ -1,4 +1,4 @@
-// Copyright 2025 Timo Heimonen <timo.heimonen@proton.me>
+// Copyright 2026 Timo Heimonen <timo.heimonen@proton.me>
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -17,7 +17,7 @@
  * @file version.h
  * @brief Software version information
  * @author Timo Heimonen <timo.heimonen@proton.me>
- * @date 2025
+ * @date 2026
  *
  * This header defines the software version number.
  */
@@ -29,7 +29,7 @@
  * @def SOFTVERSION
  * @brief Software version number (semantic versioning format as string)
  */
-#define SOFTVERSION "0.52.2"
+#define SOFTVERSION "0.52.3"
 
 #endif // VERSION_H
 

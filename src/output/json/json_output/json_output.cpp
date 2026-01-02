@@ -37,31 +37,34 @@ int save_results_to_json(const BenchmarkConfig& config, const BenchmarkStatistic
     return EXIT_SUCCESS;  // No output file specified, nothing to do
   }
   
-  nlohmann::json json_output;
+  nlohmann::ordered_json json_output;
   
-  // Add version
-  json_output[JsonKeys::VERSION] = SOFTVERSION;
-  
-  // Add timestamp (ISO 8601 UTC)
+  // Calculate timestamp (ISO 8601 UTC) - needed before assignment
   auto now = std::chrono::system_clock::now();
   auto time_t = std::chrono::system_clock::to_time_t(now);
   std::tm utc_time;
   gmtime_r(&time_t, &utc_time);
   std::ostringstream timestamp_str;
   timestamp_str << std::put_time(&utc_time, "%Y-%m-%dT%H:%M:%SZ");
-  json_output[JsonKeys::TIMESTAMP] = timestamp_str.str();
   
-  // Add configuration
+  // Add fields in the correct order - nlohmann::json preserves insertion order
+  // Add configuration (first)
   json_output[JsonKeys::CONFIGURATION] = build_config_json(config);
   
-  // Add main memory results
+  // Add execution time (second)
+  json_output[JsonKeys::EXECUTION_TIME_SEC] = total_execution_time_sec;
+  
+  // Add main memory results (third)
   json_output[JsonKeys::MAIN_MEMORY] = build_main_memory_json(config, stats);
   
-  // Add cache results
+  // Add cache results (fourth)
   json_output[JsonKeys::CACHE] = build_cache_json(config, stats);
   
-  // Add execution time
-  json_output[JsonKeys::EXECUTION_TIME_SEC] = total_execution_time_sec;
+  // Add timestamp (fifth)
+  json_output[JsonKeys::TIMESTAMP] = timestamp_str.str();
+  
+  // Add version (last)
+  json_output[JsonKeys::VERSION] = SOFTVERSION;
   
   // Resolve file path (handle relative paths)
   std::filesystem::path file_path(config.output_file);
@@ -81,28 +84,31 @@ int save_pattern_results_to_json(const BenchmarkConfig& config, const PatternSta
     return EXIT_SUCCESS;  // No output file specified, nothing to do
   }
   
-  nlohmann::json json_output;
+  nlohmann::ordered_json json_output;
   
-  // Add version
-  json_output[JsonKeys::VERSION] = SOFTVERSION;
-  
-  // Add timestamp (ISO 8601 UTC)
+  // Calculate timestamp (ISO 8601 UTC) - needed before assignment
   auto now = std::chrono::system_clock::now();
   auto time_t = std::chrono::system_clock::to_time_t(now);
   std::tm utc_time;
   gmtime_r(&time_t, &utc_time);
   std::ostringstream timestamp_str;
   timestamp_str << std::put_time(&utc_time, "%Y-%m-%dT%H:%M:%SZ");
-  json_output[JsonKeys::TIMESTAMP] = timestamp_str.str();
   
-  // Add configuration
+  // Add fields in the correct order - nlohmann::json preserves insertion order
+  // Add configuration (first)
   json_output[JsonKeys::CONFIGURATION] = build_config_json(config);
   
-  // Add patterns results
+  // Add execution time (second)
+  json_output[JsonKeys::EXECUTION_TIME_SEC] = total_execution_time_sec;
+  
+  // Add patterns results (third)
   json_output[JsonKeys::PATTERNS] = build_patterns_json(stats);
   
-  // Add execution time
-  json_output[JsonKeys::EXECUTION_TIME_SEC] = total_execution_time_sec;
+  // Add timestamp (fourth)
+  json_output[JsonKeys::TIMESTAMP] = timestamp_str.str();
+  
+  // Add version (last)
+  json_output[JsonKeys::VERSION] = SOFTVERSION;
   
   // Resolve file path (handle relative paths)
   std::filesystem::path file_path(config.output_file);

@@ -70,7 +70,7 @@ TEST(ConfigTest, ParseInvalidCacheSizeTooSmall) {
 // Test parsing invalid cache size (too large)
 TEST(ConfigTest, ParseInvalidCacheSizeTooLarge) {
   BenchmarkConfig config;
-  const char* argv[] = {"program", "-cache-size", "600000"};  // Above maximum of 524288 KB
+  const char* argv[] = {"program", "-cache-size", "1100000"};  // Above maximum of 1048576 KB (1 GB)
   int argc = 3;
   
   int result = parse_arguments(argc, const_cast<char**>(argv), config);

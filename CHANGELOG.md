@@ -5,6 +5,45 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.52.3] - 2026-01-02
+
+### Added
+- **Technical Specification document**: Added  [TECHNICAL_SPECIFICATION.md](TECHNICAL_SPECIFICATION.md) documenting system architecture, memory management, low-level ARM64 assembly implementation, benchmark execution flow, system integration, and technical specifications with links to relevant source files and directories.
+
+### Changed
+- **Refactored configuration module**: Split `src/core/config/config.cpp`:
+  - `src/core/config/argument_parser.cpp` - Command-line argument parsing logic
+  - `src/core/config/config_validator.cpp` - Configuration validation logic
+  - `src/core/config/buffer_calculator.cpp` - Buffer size and access count calculations
+- **Refactored buffer management module**: Split `src/core/memory/buffer_manager.cpp`:
+  - `src/core/memory/buffer_allocator.cpp` - Memory allocation logic with validation and overflow checks
+  - `src/core/memory/buffer_initializer.cpp` - Buffer initialization and latency chain setup
+  - `buffer_manager.h` remains as the main interface, including both new headers for backward compatibility
+- **Refactored benchmark runner module**: Split `src/benchmark/benchmark_runner.cpp`:
+  - `src/benchmark/benchmark_executor.cpp` - Single benchmark loop execution (`run_single_benchmark_loop`)
+  - `src/benchmark/benchmark_statistics_collector.cpp` - Statistics collection and aggregation (`initialize_statistics`, `collect_loop_results`)
+  - `benchmark_runner.cpp` simplified to orchestration only (~73 lines), using the new modules for execution and statistics collection
+- **Refactored pattern benchmark execution module**: Split `src/pattern_benchmark/execution.cpp`:
+  - `src/pattern_benchmark/pattern_coordinator.cpp` - High-level pattern coordination (`run_pattern_benchmarks`) orchestrating different pattern types (forward, reverse, strided, random)
+  - `src/pattern_benchmark/pattern_statistics_manager.cpp` - Loop management and statistics collection (`run_all_pattern_benchmarks`) handling result aggregation across multiple loops
+- **Standardized JSON output structure**: All JSON output files now follow a consistent field ordering across all benchmark types (latency/bandwidth and pattern benchmarks).
+- **Increased maximum cache size limit**: Raised `MAX_CACHE_SIZE_KB` from 512 MB to 1 GB to support larger memory working sets and to help identify bandwidth and latency changes when moving beyond on-chip cache regions into main memory.
+- **README.md documentation**: Replaced detailed technical implementation section with a concise reference to the new Technical Specification document, reducing duplication and centralizing technical documentation.
+
+### Fixed
+- **Mach host port leak**: Fixed memory leak in `get_available_memory_mb()` where Mach host port acquired via `mach_host_self()` was never deallocated.
+- **Unnecessary cache buffer allocation for pattern-only runs**: Fixed issue where pattern benchmarks (`-patterns` flag) were allocating and initializing cache buffers (L1/L2/custom latency and bandwidth) even though pattern benchmarks only use src/dst buffers.
+- **Missing total memory guard**: Fixed issue where total memory requirement calculation did not validate against the 80% availability limit calculated in `validate_config()`.
+- **JSON save logic inversion**: Fixed inverted logic in standard benchmark JSON save path (`main.cpp`) that caused the program to exit with failure (`EXIT_FAILURE`) when JSON output was successfully saved.
+- **Division by zero in warmup_parallel**: Fixed bug in `warmup_parallel()` where `chunk_base_size` and `chunk_remainder` were computed before validating `num_threads`, causing division by zero and undefined behavior when `num_threads` is 0 or negative. 
+- **Volatile write optimization in latency warmup**: Fixed issue in `warmup_latency()` where `buf[offset] = buf[offset];` on a non-volatile pointer could be optimized away by the compiler as a no-op, preventing write permissions from being faulted in.
+- **Negative pointer difference in warmup offset calculation**: Fixed bug in `warmup_parallel()` where rounding `chunk_end` down to cache line boundary could result in `aligned_end_ptr` being before `buffer` when `chunk_end` was within the first cache line. The negative pointer difference would wrap to a huge `size_t` value, causing the next iteration to access memory far beyond the buffer.
+- **Incomplete buffer coverage in warmup**: Fixed issue where unaligned prefix bytes between `buffer` and the first cache-line boundary were never touched during warmup, leaving those regions cold. 
+- **Alignment gaps creating cold regions in warmup**: Fixed bug where bytes between `unaligned_start` and `chunk_start` (up to 63 bytes per thread) were never touched, creating unwarmed gaps throughout the buffer, especially with high thread counts or small chunks.
+- **Tiny buffers completely skipped in warmup**: Fixed issue where buffers smaller than the cache line alignment gap (e.g., < 64 bytes) were completely skipped during warmup when `prefix_size >= effective_size`.
+- **Small chunks completely skipped in warmup**: Fixed bug where chunks smaller than the alignment offset (`original_chunk_size <= alignment_offset`) were completely skipped without any processing, creating unwarmed "holes" in the buffer. 
+- **Copy bandwidth underreported in pattern benchmarks**: Fixed issue where forward, reverse, and random copy operations in pattern benchmarks (`execution_patterns.cpp`) were underreported by 2x because they didn't account for copy operations moving data twice (read from source + write to destination).
+
 ## [0.52.2] - 2025-12-31
 
 ### Added
