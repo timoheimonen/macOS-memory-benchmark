@@ -180,7 +180,7 @@ int main(int argc, char *argv[]) {
     // --- Save JSON Output if requested ---
     if (!config.output_file.empty()) {
       double total_elapsed_time_sec = total_execution_timer.stop();
-      if (save_results_to_json(config, stats, total_elapsed_time_sec) != EXIT_FAILURE) {
+      if (save_results_to_json(config, stats, total_elapsed_time_sec) != EXIT_SUCCESS) {
         return EXIT_FAILURE;
       }
     }
