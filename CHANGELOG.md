@@ -35,6 +35,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Unnecessary cache buffer allocation for pattern-only runs**: Fixed issue where pattern benchmarks (`-patterns` flag) were allocating and initializing cache buffers (L1/L2/custom latency and bandwidth) even though pattern benchmarks only use src/dst buffers.
 - **Missing total memory guard**: Fixed issue where total memory requirement calculation did not validate against the 80% availability limit calculated in `validate_config()`.
 - **JSON save logic inversion**: Fixed inverted logic in standard benchmark JSON save path (`main.cpp`) that caused the program to exit with failure (`EXIT_FAILURE`) when JSON output was successfully saved.
+- **Division by zero in warmup_parallel**: Fixed bug in `warmup_parallel()` where `chunk_base_size` and `chunk_remainder` were computed before validating `num_threads`, causing division by zero and undefined behavior when `num_threads` is 0 or negative. 
 
 ## [0.52.2] - 2025-12-31
 

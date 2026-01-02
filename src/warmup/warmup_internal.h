@@ -1,4 +1,4 @@
-// Copyright 2025 Timo Heimonen <timo.heimonen@proton.me>
+// Copyright 2026 Timo Heimonen <timo.heimonen@proton.me>
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -61,6 +61,12 @@ void warmup_parallel(void* buffer, size_t size, int num_threads, ChunkOp chunk_o
   // Use the smaller of buffer size and warmup size
   size_t effective_size = (size < warmup_size) ? size : warmup_size;
   
+  // Early validation: return early if no work to do or invalid thread count.
+  // This avoids unnecessary thread creation overhead when no meaningful work can be performed.
+  if (effective_size == 0 || num_threads <= 0) {
+    return;  // No work to do or invalid thread count
+  }
+
   // Vector to store thread objects.
   std::vector<std::thread> threads;
   // Pre-allocate space for efficiency.
@@ -71,12 +77,6 @@ void warmup_parallel(void* buffer, size_t size, int num_threads, ChunkOp chunk_o
   size_t chunk_base_size = effective_size / num_threads;
   // Calculate the remainder to distribute among threads.
   size_t chunk_remainder = effective_size % num_threads;
-
-  // Early validation: return early if no work to do or invalid thread count.
-  // This avoids unnecessary thread creation overhead when no meaningful work can be performed.
-  if (effective_size == 0 || num_threads <= 0) {
-    return;  // No work to do or invalid thread count
-  }
 
   // Create and launch threads.
   for (int t = 0; t < num_threads; ++t) {
