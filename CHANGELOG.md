@@ -36,6 +36,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Missing total memory guard**: Fixed issue where total memory requirement calculation did not validate against the 80% availability limit calculated in `validate_config()`.
 - **JSON save logic inversion**: Fixed inverted logic in standard benchmark JSON save path (`main.cpp`) that caused the program to exit with failure (`EXIT_FAILURE`) when JSON output was successfully saved.
 - **Division by zero in warmup_parallel**: Fixed bug in `warmup_parallel()` where `chunk_base_size` and `chunk_remainder` were computed before validating `num_threads`, causing division by zero and undefined behavior when `num_threads` is 0 or negative. 
+- **Volatile write optimization in latency warmup**: Fixed issue in `warmup_latency()` where `buf[offset] = buf[offset];` on a non-volatile pointer could be optimized away by the compiler as a no-op, preventing write permissions from being faulted in.
+- **Negative pointer difference in warmup offset calculation**: Fixed bug in `warmup_parallel()` where rounding `chunk_end` down to cache line boundary could result in `aligned_end_ptr` being before `buffer` when `chunk_end` was within the first cache line. The negative pointer difference would wrap to a huge `size_t` value, causing the next iteration to access memory far beyond the buffer.
+- **Incomplete buffer coverage in warmup**: Fixed issue where unaligned prefix bytes between `buffer` and the first cache-line boundary were never touched during warmup, leaving those regions cold. 
+- **Alignment gaps creating cold regions in warmup**: Fixed bug where bytes between `unaligned_start` and `chunk_start` (up to 63 bytes per thread) were never touched, creating unwarmed gaps throughout the buffer, especially with high thread counts or small chunks. A
+- **Tiny buffers completely skipped in warmup**: Fixed issue where buffers smaller than the cache line alignment gap (e.g., < 64 bytes) were completely skipped during warmup when `prefix_size >= effective_size`.
+- **Small chunks completely skipped in warmup**: Fixed bug where chunks smaller than the alignment offset (`original_chunk_size <= alignment_offset`) were completely skipped without any processing, creating unwarmed "holes" in the buffer. 
 
 ## [0.52.2] - 2025-12-31
 

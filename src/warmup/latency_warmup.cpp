@@ -1,4 +1,4 @@
-// Copyright 2025 Timo Heimonen <timo.heimonen@proton.me>
+// Copyright 2026 Timo Heimonen <timo.heimonen@proton.me>
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -41,7 +41,7 @@ void warmup_latency(void* buffer, size_t buffer_size) {
       volatile char dummy = buf[offset];
       (void)dummy;  // Prevent optimization
       // Write one byte to ensure write access is established
-      buf[offset] = buf[offset];
+      *static_cast<volatile char*>(&buf[offset]) = buf[offset];
     }
   };
   warmup_single(latency_op);
