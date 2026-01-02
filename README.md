@@ -228,7 +228,7 @@ MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
 See <https://www.gnu.org/licenses/> for more details.
 
 Buffer Size (per buffer): 512.00 MiB (512 MB requested/capped)
-Total Allocation Size: ~1536.00 MiB (for 3 buffers)
+Total Allocation Size: ~1024.00 MiB
 Iterations (per R/W/Copy test per loop): 1000
 Loop Count (total benchmark repetitions): 1
 Non-Cacheable Memory Hints: Enabled
@@ -243,42 +243,44 @@ Detected Cache Sizes:
   L2 Cache Size: 16.00 MB (per P-core cluster)
 
 Running Pattern Benchmarks...
+
+Running Pattern Benchmarks...
 - Running tests...
 ================================
 
 Sequential Forward:
-  Read : 114.756 GB/s
-  Write: 65.681 GB/s
-  Copy : 52.868 GB/s
+  Read : 114.754 GB/s
+  Write: 65.959 GB/s
+  Copy : 105.532 GB/s
 
 Sequential Reverse:
-  Read : 69.604 GB/s (-39.3%)
-  Write: 38.266 GB/s (-41.7%)
-  Copy : 44.317 GB/s (-16.2%)
+  Read : 70.724 GB/s (-38.4%)
+  Write: 37.437 GB/s (-43.2%)
+  Copy : 88.743 GB/s (-15.9%)
 
 Strided (Cache Line - 64B):
-  Read : 35.567 GB/s (-69.0%)
-  Write: 17.807 GB/s (-72.9%)
-  Copy : 52.520 GB/s (-0.7%)
+  Read : 35.369 GB/s (-69.2%)
+  Write: 18.655 GB/s (-71.7%)
+  Copy : 52.914 GB/s (-49.9%)
 
 Strided (Page - 4096B):
-  Read : 8.979 GB/s (-92.2%)
-  Write: 20.918 GB/s (-68.2%)
-  Copy : 12.740 GB/s (-75.9%)
+  Read : 9.072 GB/s (-92.1%)
+  Write: 24.492 GB/s (-62.9%)
+  Copy : 12.979 GB/s (-87.7%)
 
 Random Uniform:
-  Read : 6.339 GB/s (-94.5%)
-  Write: 21.694 GB/s (-67.0%)
-  Copy : 5.572 GB/s (-89.5%)
+  Read : 6.342 GB/s (-94.5%)
+  Write: 21.752 GB/s (-67.0%)
+  Copy : 11.142 GB/s (-89.4%)
 
 Pattern Efficiency Analysis:
-- Sequential coherence: 65.2%
-- Prefetcher effectiveness: 45.4%
+- Sequential coherence: 68.8%
+- Prefetcher effectiveness: 37.4%
 - Cache thrashing potential: High
 - TLB pressure: Minimal
 
 
-Done. Total execution time: 103.52740 s
+Done. Total execution time: 102.79452 s
 ```
 
 ![Mac Mini M4 Cache Latency from multiple JSON-files](pictures/MacMiniM4_cache_latency.png)  
