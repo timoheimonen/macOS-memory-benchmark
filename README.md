@@ -1,5 +1,7 @@
 # macOS Apple Silicon Memory Benchmark
 
+![Platform](https://img.shields.io/badge/platform-Apple%20Silicon-000000?logo=apple)![License](https://img.shields.io/badge/license-GPL--3.0-blue)![Assembly](https://img.shields.io/badge/Assembly-ARM64-6E4C13)![C++](https://img.shields.io/badge/C++-00599C?logo=cplusplus&logoColor=white)
+
 Copyright 2025-2026 Timo Heimonen <timo.heimonen@proton.me>  
 License: GPL-3.0 license  
   
