@@ -1,6 +1,6 @@
 # macOS Apple Silicon Memory Benchmark
 
-Copyright 2025 Timo Heimonen <timo.heimonen@proton.me>  
+Copyright 2025-2026 Timo Heimonen <timo.heimonen@proton.me>  
 License: GPL-3.0 license  
   
 **Low-level tool** to measure memory read/write/copy bandwidth, cache/main memory latency, and access pattern performance on macOS Apple Silicon (ARM64).
@@ -94,7 +94,7 @@ In the Terminal, go to the directory with `memory_benchmark` and use these comma
     Example output:
     ```text
     Copyright 2025-2026 Timo Heimonen <timo.heimonen@proton.me>
-    Version: 0.52.4 by Timo Heimonen <timo.heimonen@proton.me>
+    Version: 0.52.5 by Timo Heimonen <timo.heimonen@proton.me>
     License: GNU GPL v3. See <https://www.gnu.org/licenses/>
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -160,7 +160,7 @@ In the Terminal, go to the directory with `memory_benchmark` and use these comma
 
 ## Example output (Mac Mini M4 24GB)
 ```text
------ macOS-memory-benchmark v0.52.4 -----
+----- macOS-memory-benchmark v0.52.5 -----
 Copyright 2025-2026 Timo Heimonen <timo.heimonen@proton.me>
 This program is free software: you can redistribute it and/or modify
 it under the terms of the GNU General Public License as published by
@@ -216,7 +216,7 @@ Cache Latency Tests (single-threaded, pointer chase):
 Done. Total execution time: 43.48166 s
 ```
 ```text
------ macOS-memory-benchmark v0.52.4 -----
+----- macOS-memory-benchmark v0.52.5 -----
 Copyright 2025-2026 Timo Heimonen <timo.heimonen@proton.me>
 This program is free software: you can redistribute it and/or modify
 it under the terms of the GNU General Public License as published by
