@@ -5,10 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.52.5] - DEVELOPMENT
+## [0.52.5] - NON-RELEASED
+
+Summary: Fixes cache warmup to honor `num_threads` and adds null/size guards.
 
 ### Fixed
 - **Cache warmup ignoring num_threads parameter**: Fixed issue where cache warmup functions (`warmup_cache_read`, `warmup_cache_write`, `warmup_cache_copy`) accepted a `num_threads` parameter but always ran single-threaded, ignoring the parameter.
+- **Missing null buffer guards in cache warmup functions**: Added null buffer and size checks to cache warmup functions (`warmup_cache_read`, `warmup_cache_write`, `warmup_cache_copy`) to prevent null pointer dereferencing. The functions now validate buffers before passing them to `warmup_parallel()`, matching the defensive programming pattern used in `warmup_latency()`.
 
 ## [0.52.4] - 2026-01-02
 

@@ -25,6 +25,9 @@
 // 'num_threads': Number of concurrent threads to use.
 // 'dummy_checksum': Atomic variable to accumulate a dummy result (prevents optimization).
 void warmup_cache_read(void* src_buffer, size_t size, int num_threads, std::atomic<uint64_t>& dummy_checksum) {
+  if (src_buffer == nullptr || size == 0) {
+    return;
+  }
   // Cache buffers are small (typically L1 ~128KB, L2 ~12-16MB), so we warm the entire buffer.
   // Unlike main memory warmup which uses calculate_warmup_size() to limit overhead,
   // cache warmup explicitly uses the full buffer size to ensure complete cache coverage.
@@ -47,6 +50,9 @@ void warmup_cache_read(void* src_buffer, size_t size, int num_threads, std::atom
 // 'size': Total size of the buffer in bytes (cache size).
 // 'num_threads': Number of concurrent threads to use.
 void warmup_cache_write(void* dst_buffer, size_t size, int num_threads) {
+  if (dst_buffer == nullptr || size == 0) {
+    return;
+  }
   // Cache buffers are small (typically L1 ~128KB, L2 ~12-16MB), so we warm the entire buffer.
   // Unlike main memory warmup which uses calculate_warmup_size() to limit overhead,
   // cache warmup explicitly uses the full buffer size to ensure complete cache coverage.
@@ -64,6 +70,9 @@ void warmup_cache_write(void* dst_buffer, size_t size, int num_threads) {
 // 'size': Total size of data to copy in bytes (cache size).
 // 'num_threads': Number of concurrent threads to use.
 void warmup_cache_copy(void* dst, void* src, size_t size, int num_threads) {
+  if (dst == nullptr || src == nullptr || size == 0) {
+    return;
+  }
   // Cache buffers are small (typically L1 ~128KB, L2 ~12-16MB), so we warm the entire buffer.
   // Unlike main memory warmup which uses calculate_warmup_size() to limit overhead,
   // cache warmup explicitly uses the full buffer size to ensure complete cache coverage.
