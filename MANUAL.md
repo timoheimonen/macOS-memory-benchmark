@@ -279,7 +279,7 @@ Specify a custom cache size to test (in kilobytes).
 **Behavior:**
 - Skips automatic L1/L2 detection
 - Runs bandwidth and latency tests for the specified cache size only
-- Uses 75% of specified size for actual buffer
+- Uses 100% of specified size for actual buffer
 
 **Use cases:**
 - Testing specific cache sizes
@@ -951,7 +951,7 @@ done
 
 **Notes:**
 - Skips L1/L2 auto-detection when `-cache-size` is specified
-- Buffer size is 75% of specified cache size
+- Buffer size is 100% of specified cache size
 - Single-threaded tests recommended for accuracy
 
 ### Combining Options
