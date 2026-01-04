@@ -293,7 +293,7 @@ Mac Mini M4 Cache Latency from multiple JSON-files with example-script provided.
 ![Mac Mini M4 10 benchmark loops](pictures/MacMiniM4_10_loops_results.png)  
 Mac Mini M4 10 benchmark loops results.
 
-![Mac Mini M4 patterns benchmark results](MacMiniM4_patterns_results.png)  
+![Mac Mini M4 patterns benchmark results](pictures/MacMiniM4_patterns_results.png)  
 Mac Mini M4 patterns benchmark results.
 
 ## Documentation
