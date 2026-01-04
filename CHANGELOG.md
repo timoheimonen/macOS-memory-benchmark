@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.52.6] - 2026-01-04
+
+### Fixed
+- **Pattern benchmarks ignoring `-threads` parameter**: Fixed issue where pattern benchmarks (forward, reverse, strided, and random access patterns) were running single-threaded even when the `-threads` parameter was specified.
+
 ## [0.52.5] - 2026-01-04
 
 Summary: Fixes cache warmup to honor `num_threads` and adds null/size guards.
