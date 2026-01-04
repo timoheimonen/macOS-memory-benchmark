@@ -813,6 +813,7 @@ When using `-output <file>`, results are saved in JSON format for programmatic a
   "iterations": 1000,
   "loop_count": 10,
   "cpu_name": "Apple M4",
+  "macos_version": "26.2",
   "performance_cores": 4,
   "efficiency_cores": 6,
   "total_threads": 10,
