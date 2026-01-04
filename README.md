@@ -1,6 +1,8 @@
 # macOS Apple Silicon Memory Benchmark
 
-Copyright 2025 Timo Heimonen <timo.heimonen@proton.me>  
+![Platform](https://img.shields.io/badge/platform-Apple%20Silicon-000000?logo=apple) ![CLI](https://img.shields.io/badge/CLI-Tool-00A8CC?logo=terminal) ![License](https://img.shields.io/badge/license-GPL--3.0-blue) ![Assembly](https://img.shields.io/badge/Assembly-ARM64-6E4C13) ![C++](https://img.shields.io/badge/C++-00599C?logo=cplusplus&logoColor=white)
+
+Copyright 2025-2026 Timo Heimonen <timo.heimonen@proton.me>  
 License: GPL-3.0 license  
   
 **Low-level tool** to measure memory read/write/copy bandwidth, cache/main memory latency, and access pattern performance on macOS Apple Silicon (ARM64).
@@ -94,7 +96,7 @@ In the Terminal, go to the directory with `memory_benchmark` and use these comma
     Example output:
     ```text
     Copyright 2025-2026 Timo Heimonen <timo.heimonen@proton.me>
-    Version: 0.52.4 by Timo Heimonen <timo.heimonen@proton.me>
+    Version: 0.52.5 by Timo Heimonen <timo.heimonen@proton.me>
     License: GNU GPL v3. See <https://www.gnu.org/licenses/>
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -160,7 +162,7 @@ In the Terminal, go to the directory with `memory_benchmark` and use these comma
 
 ## Example output (Mac Mini M4 24GB)
 ```text
------ macOS-memory-benchmark v0.52.4 -----
+----- macOS-memory-benchmark v0.52.5 -----
 Copyright 2025-2026 Timo Heimonen <timo.heimonen@proton.me>
 This program is free software: you can redistribute it and/or modify
 it under the terms of the GNU General Public License as published by
@@ -216,7 +218,7 @@ Cache Latency Tests (single-threaded, pointer chase):
 Done. Total execution time: 43.48166 s
 ```
 ```text
------ macOS-memory-benchmark v0.52.4 -----
+----- macOS-memory-benchmark v0.52.5 -----
 Copyright 2025-2026 Timo Heimonen <timo.heimonen@proton.me>
 This program is free software: you can redistribute it and/or modify
 it under the terms of the GNU General Public License as published by

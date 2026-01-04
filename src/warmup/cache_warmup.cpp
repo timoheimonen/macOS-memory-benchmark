@@ -1,4 +1,4 @@
-// Copyright 2025 Timo Heimonen <timo.heimonen@proton.me>
+// Copyright 2026 Timo Heimonen <timo.heimonen@proton.me>
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -19,46 +19,68 @@
 #include "warmup/warmup.h"
 #include "warmup/warmup_internal.h"
 
-// Warms up cache bandwidth test by reading from the buffer (single thread).
+// Warms up cache bandwidth test by reading from the buffer using multiple threads.
 // 'src_buffer': Source memory region to read from (cache-sized).
 // 'size': Total size of the buffer in bytes (cache size).
-// 'num_threads': Unused parameter (kept for API compatibility).
+// 'num_threads': Number of concurrent threads to use.
 // 'dummy_checksum': Atomic variable to accumulate a dummy result (prevents optimization).
 void warmup_cache_read(void* src_buffer, size_t size, int num_threads, std::atomic<uint64_t>& dummy_checksum) {
-  (void)num_threads;  // Unused parameter
-  auto read_op = [src_buffer, size, &dummy_checksum]() {
-    // Call the assembly read loop function directly (single-threaded).
-    uint64_t checksum = memory_read_loop_asm(src_buffer, size);
-    // Store result to prevent optimization.
-    dummy_checksum.fetch_xor(checksum, std::memory_order_release);
+  if (src_buffer == nullptr || size == 0) {
+    return;
+  }
+  // Cache buffers are small (typically L1 ~128KB, L2 ~12-16MB), so we warm the entire buffer.
+  // Unlike main memory warmup which uses calculate_warmup_size() to limit overhead,
+  // cache warmup explicitly uses the full buffer size to ensure complete cache coverage.
+  size_t warmup_size = size;
+  auto read_chunk_op = [](char* chunk_start, char* /* src_chunk */, size_t chunk_size, 
+                          std::atomic<uint64_t>* checksum) {
+    // Call the assembly read loop function (defined elsewhere).
+    uint64_t result = memory_read_loop_asm(chunk_start, chunk_size);
+    // Atomically combine the local checksum with the global dummy value.
+    // Using release memory order ensures proper visibility when threads complete.
+    if (checksum) {
+      checksum->fetch_xor(result, std::memory_order_release);
+    }
   };
-  warmup_single(read_op);
+  warmup_parallel(src_buffer, size, num_threads, read_chunk_op, true, nullptr, &dummy_checksum, warmup_size);
 }
 
-// Warms up cache bandwidth test by writing to the buffer (single thread).
+// Warms up cache bandwidth test by writing to the buffer using multiple threads.
 // 'dst_buffer': Destination memory region to write to (cache-sized).
 // 'size': Total size of the buffer in bytes (cache size).
-// 'num_threads': Unused parameter (kept for API compatibility).
+// 'num_threads': Number of concurrent threads to use.
 void warmup_cache_write(void* dst_buffer, size_t size, int num_threads) {
-  (void)num_threads;  // Unused parameter
-  auto write_op = [dst_buffer, size]() {
-    // Call the assembly write loop function directly (single-threaded).
-    memory_write_loop_asm(dst_buffer, size);
+  if (dst_buffer == nullptr || size == 0) {
+    return;
+  }
+  // Cache buffers are small (typically L1 ~128KB, L2 ~12-16MB), so we warm the entire buffer.
+  // Unlike main memory warmup which uses calculate_warmup_size() to limit overhead,
+  // cache warmup explicitly uses the full buffer size to ensure complete cache coverage.
+  size_t warmup_size = size;
+  auto write_chunk_op = [](char* chunk_start, char* /* src_chunk */, size_t chunk_size, 
+                           std::atomic<uint64_t>* /* checksum */) {
+    memory_write_loop_asm(chunk_start, chunk_size);
   };
-  warmup_single(write_op);
+  warmup_parallel(dst_buffer, size, num_threads, write_chunk_op, true, nullptr, nullptr, warmup_size);
 }
 
-// Warms up cache bandwidth test by copying data between buffers (single thread).
+// Warms up cache bandwidth test by copying data between buffers using multiple threads.
 // 'dst': Destination memory region (cache-sized).
 // 'src': Source memory region (cache-sized).
 // 'size': Total size of data to copy in bytes (cache size).
-// 'num_threads': Unused parameter (kept for API compatibility).
+// 'num_threads': Number of concurrent threads to use.
 void warmup_cache_copy(void* dst, void* src, size_t size, int num_threads) {
-  (void)num_threads;  // Unused parameter
-  auto copy_op = [dst, src, size]() {
-    // Call the assembly copy loop function directly (single-threaded).
-    memory_copy_loop_asm(dst, src, size);
+  if (dst == nullptr || src == nullptr || size == 0) {
+    return;
+  }
+  // Cache buffers are small (typically L1 ~128KB, L2 ~12-16MB), so we warm the entire buffer.
+  // Unlike main memory warmup which uses calculate_warmup_size() to limit overhead,
+  // cache warmup explicitly uses the full buffer size to ensure complete cache coverage.
+  size_t warmup_size = size;
+  auto copy_chunk_op = [](char* dst_chunk, char* src_chunk, size_t chunk_size, 
+                          std::atomic<uint64_t>* /* checksum */) {
+    memory_copy_loop_asm(dst_chunk, src_chunk, chunk_size);
   };
-  warmup_single(copy_op);
+  warmup_parallel(dst, size, num_threads, copy_chunk_op, true, src, nullptr, warmup_size);
 }
 
