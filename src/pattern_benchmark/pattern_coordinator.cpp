@@ -25,27 +25,30 @@
 #include <cstdlib>
 
 // Forward declarations from helpers.cpp
-double run_pattern_read_test(void* buffer, size_t size, int iterations, 
+double run_pattern_read_test(void* buffer, size_t size, int iterations,
                              uint64_t (*read_func)(const void*, size_t),
-                             std::atomic<uint64_t>& checksum, HighResTimer& timer);
+                             std::atomic<uint64_t>& checksum, HighResTimer& timer,
+                             int num_threads);
 double run_pattern_write_test(void* buffer, size_t size, int iterations,
                               void (*write_func)(void*, size_t),
-                              HighResTimer& timer);
+                              HighResTimer& timer, int num_threads);
 double run_pattern_copy_test(void* dst, void* src, size_t size, int iterations,
                              void (*copy_func)(void*, const void*, size_t),
-                             HighResTimer& timer);
+                             HighResTimer& timer, int num_threads);
 double run_pattern_read_strided_test(void* buffer, size_t size, size_t stride, int iterations,
-                                     std::atomic<uint64_t>& checksum, HighResTimer& timer);
+                                     std::atomic<uint64_t>& checksum, HighResTimer& timer,
+                                     int num_threads);
 double run_pattern_write_strided_test(void* buffer, size_t size, size_t stride, int iterations,
-                                      HighResTimer& timer);
+                                      HighResTimer& timer, int num_threads);
 double run_pattern_copy_strided_test(void* dst, void* src, size_t size, size_t stride, int iterations,
-                                     HighResTimer& timer);
+                                     HighResTimer& timer, int num_threads);
 double run_pattern_read_random_test(void* buffer, const std::vector<size_t>& indices, int iterations,
-                                    std::atomic<uint64_t>& checksum, HighResTimer& timer);
+                                    std::atomic<uint64_t>& checksum, HighResTimer& timer,
+                                    int num_threads, size_t buffer_size);
 double run_pattern_write_random_test(void* buffer, const std::vector<size_t>& indices, int iterations,
-                                     HighResTimer& timer);
+                                     HighResTimer& timer, int num_threads, size_t buffer_size);
 double run_pattern_copy_random_test(void* dst, void* src, const std::vector<size_t>& indices, int iterations,
-                                    HighResTimer& timer);
+                                    HighResTimer& timer, int num_threads, size_t buffer_size);
 
 // Forward declarations from validation.cpp
 bool validate_stride(size_t stride, size_t buffer_size);

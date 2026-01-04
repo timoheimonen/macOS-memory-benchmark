@@ -1,4 +1,4 @@
-// Copyright 2025 Timo Heimonen <timo.heimonen@proton.me>
+// Copyright 2026 Timo Heimonen <timo.heimonen@proton.me>
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -26,11 +26,12 @@
 
 // Forward declarations from helpers.cpp
 double run_pattern_read_strided_test(void* buffer, size_t size, size_t stride, int iterations,
-                                     std::atomic<uint64_t>& checksum, HighResTimer& timer);
+                                     std::atomic<uint64_t>& checksum, HighResTimer& timer,
+                                     int num_threads);
 double run_pattern_write_strided_test(void* buffer, size_t size, size_t stride, int iterations,
-                                      HighResTimer& timer);
+                                      HighResTimer& timer, int num_threads);
 double run_pattern_copy_strided_test(void* dst, void* src, size_t size, size_t stride, int iterations,
-                                     HighResTimer& timer);
+                                     HighResTimer& timer, int num_threads);
 
 // Forward declarations from validation.cpp
 bool validate_stride(size_t stride, size_t buffer_size);
@@ -115,23 +116,24 @@ int run_strided_pattern_benchmarks(const BenchmarkBuffers& buffers, const Benchm
   std::atomic<uint64_t> checksum{0};
   warmup_read_strided(buffers.src_buffer(), effective_buffer_size, stride, config.num_threads, checksum);
   double read_time = run_pattern_read_strided_test(buffers.src_buffer(), effective_buffer_size, stride,
-                                                     config.iterations, checksum, timer);
+                                                     config.iterations, checksum, timer, config.num_threads);
   read_bw = calculate_bandwidth(actual_data_accessed, config.iterations, read_time);
-  
+
   // Execute write benchmark
   show_progress();
   warmup_write_strided(buffers.dst_buffer(), effective_buffer_size, stride, config.num_threads);
   double write_time = run_pattern_write_strided_test(buffers.dst_buffer(), effective_buffer_size, stride,
-                                                      config.iterations, timer);
+                                                      config.iterations, timer, config.num_threads);
   write_bw = calculate_bandwidth(actual_data_accessed, config.iterations, write_time);
-  
+
   // Execute copy benchmark
   show_progress();
   warmup_copy_strided(buffers.dst_buffer(), buffers.src_buffer(), effective_buffer_size, stride, config.num_threads);
   double copy_time = run_pattern_copy_strided_test(buffers.dst_buffer(), buffers.src_buffer(),
-                                                    effective_buffer_size, stride, config.iterations, timer);
+                                                    effective_buffer_size, stride, config.iterations, timer,
+                                                    config.num_threads);
   // For copy: actual_data_accessed bytes are read + actual_data_accessed bytes are written per iteration
-  copy_bw = calculate_bandwidth(actual_data_accessed * Constants::COPY_OPERATION_MULTIPLIER, 
+  copy_bw = calculate_bandwidth(actual_data_accessed * Constants::COPY_OPERATION_MULTIPLIER,
                                 config.iterations, copy_time);
   
   return EXIT_SUCCESS;

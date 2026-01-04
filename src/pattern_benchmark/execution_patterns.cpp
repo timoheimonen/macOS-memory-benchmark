@@ -25,21 +25,23 @@
 #include <cstdlib>
 
 // Forward declarations from helpers.cpp
-double run_pattern_read_test(void* buffer, size_t size, int iterations, 
+double run_pattern_read_test(void* buffer, size_t size, int iterations,
                              uint64_t (*read_func)(const void*, size_t),
-                             std::atomic<uint64_t>& checksum, HighResTimer& timer);
+                             std::atomic<uint64_t>& checksum, HighResTimer& timer,
+                             int num_threads);
 double run_pattern_write_test(void* buffer, size_t size, int iterations,
                               void (*write_func)(void*, size_t),
-                              HighResTimer& timer);
+                              HighResTimer& timer, int num_threads);
 double run_pattern_copy_test(void* dst, void* src, size_t size, int iterations,
                              void (*copy_func)(void*, const void*, size_t),
-                             HighResTimer& timer);
+                             HighResTimer& timer, int num_threads);
 double run_pattern_read_random_test(void* buffer, const std::vector<size_t>& indices, int iterations,
-                                    std::atomic<uint64_t>& checksum, HighResTimer& timer);
+                                    std::atomic<uint64_t>& checksum, HighResTimer& timer,
+                                    int num_threads, size_t buffer_size);
 double run_pattern_write_random_test(void* buffer, const std::vector<size_t>& indices, int iterations,
-                                     HighResTimer& timer);
+                                     HighResTimer& timer, int num_threads, size_t buffer_size);
 double run_pattern_copy_random_test(void* dst, void* src, const std::vector<size_t>& indices, int iterations,
-                                    HighResTimer& timer);
+                                    HighResTimer& timer, int num_threads, size_t buffer_size);
 
 // Forward declarations from validation.cpp
 bool validate_random_indices(const std::vector<size_t>& indices, size_t buffer_size);
@@ -82,19 +84,19 @@ void run_reverse_pattern_benchmarks(const BenchmarkBuffers& buffers, const Bench
   std::atomic<uint64_t> checksum{0};
   warmup_read(buffers.src_buffer(), config.buffer_size, config.num_threads, checksum);
   double read_time = run_pattern_read_test(buffers.src_buffer(), config.buffer_size, config.iterations,
-                                            memory_read_reverse_loop_asm, checksum, timer);
+                                            memory_read_reverse_loop_asm, checksum, timer, config.num_threads);
   results.reverse_read_bw = calculate_bandwidth(config.buffer_size, config.iterations, read_time);
-  
+
   show_progress();
   warmup_write(buffers.dst_buffer(), config.buffer_size, config.num_threads);
   double write_time = run_pattern_write_test(buffers.dst_buffer(), config.buffer_size, config.iterations,
-                                             memory_write_reverse_loop_asm, timer);
+                                             memory_write_reverse_loop_asm, timer, config.num_threads);
   results.reverse_write_bw = calculate_bandwidth(config.buffer_size, config.iterations, write_time);
-  
+
   show_progress();
   warmup_copy(buffers.dst_buffer(), buffers.src_buffer(), config.buffer_size, config.num_threads);
   double copy_time = run_pattern_copy_test(buffers.dst_buffer(), buffers.src_buffer(), config.buffer_size,
-                                            config.iterations, memory_copy_reverse_loop_asm, timer);
+                                            config.iterations, memory_copy_reverse_loop_asm, timer, config.num_threads);
   results.reverse_copy_bw = calculate_bandwidth(config.buffer_size * Constants::COPY_OPERATION_MULTIPLIER,
                                                 config.iterations, copy_time);
 }
@@ -136,24 +138,27 @@ int run_random_pattern_benchmarks(const BenchmarkBuffers& buffers, const Benchma
   std::atomic<uint64_t> checksum{0};
   warmup_read_random(buffers.src_buffer(), warmup_indices, config.num_threads, checksum);
   double read_time = run_pattern_read_random_test(buffers.src_buffer(), random_indices,
-                                                   config.iterations, checksum, timer);
+                                                   config.iterations, checksum, timer,
+                                                   config.num_threads, config.buffer_size);
   // For random, we use num_accesses * PATTERN_ACCESS_SIZE_BYTES instead of buffer_size
-  results.random_read_bw = calculate_bandwidth(num_accesses * PATTERN_ACCESS_SIZE_BYTES, 
+  results.random_read_bw = calculate_bandwidth(num_accesses * PATTERN_ACCESS_SIZE_BYTES,
                                                config.iterations, read_time);
-  
+
   // Execute write benchmark
   show_progress();
   warmup_write_random(buffers.dst_buffer(), warmup_indices, config.num_threads);
   double write_time = run_pattern_write_random_test(buffers.dst_buffer(), random_indices,
-                                                      config.iterations, timer);
-  results.random_write_bw = calculate_bandwidth(num_accesses * PATTERN_ACCESS_SIZE_BYTES, 
+                                                      config.iterations, timer,
+                                                      config.num_threads, config.buffer_size);
+  results.random_write_bw = calculate_bandwidth(num_accesses * PATTERN_ACCESS_SIZE_BYTES,
                                                 config.iterations, write_time);
-  
+
   // Execute copy benchmark
   show_progress();
   warmup_copy_random(buffers.dst_buffer(), buffers.src_buffer(), warmup_indices, config.num_threads);
   double copy_time = run_pattern_copy_random_test(buffers.dst_buffer(), buffers.src_buffer(), random_indices,
-                                                   config.iterations, timer);
+                                                   config.iterations, timer,
+                                                   config.num_threads, config.buffer_size);
   results.random_copy_bw = calculate_bandwidth(num_accesses * PATTERN_ACCESS_SIZE_BYTES * Constants::COPY_OPERATION_MULTIPLIER,
                                               config.iterations, copy_time);
   
