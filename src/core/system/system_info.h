@@ -71,5 +71,11 @@ size_t get_l1_cache_size();
  */
 size_t get_l2_cache_size();
 
+/**
+ * @brief Get macOS version string
+ * @return macOS version as string (e.g., "14.2.1")
+ */
+std::string get_macos_version();
+
 #endif // SYSTEM_INFO_H
 

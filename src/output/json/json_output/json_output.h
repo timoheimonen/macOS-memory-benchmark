@@ -46,6 +46,7 @@ namespace JsonKeys {
   constexpr const char* LOOP_COUNT = "loop_count";
   constexpr const char* LATENCY_SAMPLE_COUNT = "latency_sample_count";
   constexpr const char* CPU_NAME = "cpu_name";
+  constexpr const char* MACOS_VERSION = "macos_version";
   constexpr const char* PERFORMANCE_CORES = "performance_cores";
   constexpr const char* EFFICIENCY_CORES = "efficiency_cores";
   constexpr const char* TOTAL_THREADS = "total_threads";

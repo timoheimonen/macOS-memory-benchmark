@@ -60,6 +60,7 @@ struct BenchmarkConfig {
   
   // System info
   std::string cpu_name;          ///< CPU model name
+  std::string macos_version;     ///< macOS version string (e.g., "14.2.1")
   int perf_cores = 0;            ///< Number of performance cores
   int eff_cores = 0;             ///< Number of efficiency cores
   int num_threads = 0;           ///< Total number of threads to use
