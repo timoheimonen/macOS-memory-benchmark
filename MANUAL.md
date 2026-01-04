@@ -707,29 +707,29 @@ Shows performance across different access patterns:
 
 ```text
 Sequential Forward:
-  Read : 114.754 GB/s
-  Write: 65.959 GB/s
-  Copy : 105.532 GB/s
+  Read : 113.385 GB/s
+  Write: 105.412 GB/s
+  Copy : 104.176 GB/s
 
 Sequential Reverse:
-  Read : 70.724 GB/s (-38.4%)
-  Write: 37.437 GB/s (-43.2%)
-  Copy : 88.743 GB/s (-15.9%)
+  Read : 113.228 GB/s (-0.1%)
+  Write: 104.662 GB/s (-0.7%)
+  Copy : 103.399 GB/s (-0.7%)
 
 Strided (Cache Line - 64B):
-  Read : 35.369 GB/s (-69.2%)
-  Write: 18.655 GB/s (-71.7%)
-  Copy : 52.914 GB/s (-49.9%)
+  Read : 56.387 GB/s (-50.3%)
+  Write: 51.807 GB/s (-50.9%)
+  Copy : 68.214 GB/s (-34.5%)
 
 Strided (Page - 4096B):
-  Read : 9.072 GB/s (-92.1%)
-  Write: 24.492 GB/s (-62.9%)
-  Copy : 12.979 GB/s (-87.7%)
+  Read : 26.390 GB/s (-76.7%)
+  Write: 52.138 GB/s (-50.5%)
+  Copy : 33.388 GB/s (-68.0%)
 
 Random Uniform:
-  Read : 6.342 GB/s (-94.5%)
-  Write: 21.752 GB/s (-67.0%)
-  Copy : 11.142 GB/s (-89.4%)
+  Read : 26.504 GB/s (-76.6%)
+  Write: 43.328 GB/s (-58.9%)
+  Copy : 31.687 GB/s (-69.6%)
 ```
 
 **Patterns explained:**
@@ -745,8 +745,8 @@ Random Uniform:
 **Pattern efficiency metrics:**
 ```text
 Pattern Efficiency Analysis:
-- Sequential coherence: 68.8%
-- Prefetcher effectiveness: 37.4%
+- Sequential coherence: 99.5%
+- Prefetcher effectiveness: 54.6%
 - Cache thrashing potential: High
 - TLB pressure: Minimal
 ```
