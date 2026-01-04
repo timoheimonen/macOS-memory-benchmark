@@ -83,7 +83,7 @@ Run:
 make test
 ```
 
-(190+ unit tests covering config, buffers, memory, benchmarks, and messages.)
+(unit tests covering config, buffers, memory, benchmarks, and messages.)
 
 ## Usage
 
