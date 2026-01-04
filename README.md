@@ -160,6 +160,8 @@ In the Terminal, go to the directory with `memory_benchmark` and use these comma
     caffeinate -i -d ./memory_benchmark -iterations 500 -buffersize 512 -cache-size 1024 -threads 4 -non-cacheable
     ```
 
+For usage documentation, command-line options reference, best practices, and detailed examples, see the [User Manual](MANUAL.md).
+
 ## Example output (Mac Mini M4 24GB)
 ```text
 ----- macOS-memory-benchmark v0.52.5 -----
@@ -292,9 +294,10 @@ Mac Mini M4 Cache Latency from multiple JSON-files with example-script provided.
 Mac Mini M4 10 benchmark loops results.
 
 
-## Technical Details
+## Documentation
 
-For comprehensive technical documentation including system architecture, memory management, low-level ARM64 assembly implementation, benchmark execution flow, system integration, and technical specifications, see the [Technical Specification](TECHNICAL_SPECIFICATION.md).
+- **[User Manual](MANUAL.md)** - Usage guide with command-line options, best practices, workflows, and detailed examples
+- **[Technical Specification](TECHNICAL_SPECIFICATION.md)** - System architecture, memory management, low-level ARM64 assembly implementation, benchmark execution flow, system integration, and technical specifications
 
 ## Known Issues and Limitations
 
