@@ -48,6 +48,26 @@ macOS on Apple Silicon.
 * **JSON Export**: Save benchmark results to JSON format for further analysis or visualization.
 * **Optimized Performance**: Uses highly optimized assembly code for accurate and fast measurements.
 
+## Reliability and Stability
+
+The benchmark produces stable and highly repeatable results. Across 100 consecutive runs on a Mac mini M4 using the pattern-based bandwidth tests, the measured memory bandwidth shows extremely low variance (stddev ≈ 0.15% relative to the mean), with a tight percentile distribution (P50–P99 within ~0.2 GB/s).
+
+```data
+"read_gb_s": {
+  "statistics": {
+    "average": 116.38363691482549,
+    "max": 116.61212708384109,
+    "median": 116.41264548721367,
+    "min": 115.449510036971,
+    "p90": 116.54143114134801,
+    "p95": 116.57314206456576,
+    "p99": 116.60095068065866,
+    "stddev": 0.17026641589059727
+  }
+}
+```
+Full JSON dataset: [MacMiniM4_100_pattern_runs.json](results/MacMiniM4_100_pattern_runs.json).
+
 ## Install with Homebrew
 
 In the Terminal, Run:  
