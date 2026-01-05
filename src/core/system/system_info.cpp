@@ -197,8 +197,9 @@ std::string get_macos_version() {
   size_t len = 0;
   // First call to get the size of the string.
   if (sysctlbyname("kern.osproductversion", NULL, &len, NULL, 0) == -1) {
-    std::cerr << Messages::warning_prefix() 
-              << "Failed to get macOS version size: " << strerror(errno) << std::endl;
+    std::cerr << Messages::error_prefix() 
+              << Messages::error_sysctlbyname_failed("get size", "kern.osproductversion")
+              << ": " << strerror(errno) << std::endl;
     return "";  // Return empty string on error.
   }
 
@@ -206,8 +207,9 @@ std::string get_macos_version() {
     std::vector<char> buffer(len);
     // Second call to get the actual string data.
     if (sysctlbyname("kern.osproductversion", buffer.data(), &len, NULL, 0) == -1) {
-      std::cerr << Messages::warning_prefix() 
-                << "Failed to get macOS version data: " << strerror(errno) << std::endl;
+      std::cerr << Messages::error_prefix() 
+                << Messages::error_sysctlbyname_failed("get data", "kern.osproductversion")
+                << ": " << strerror(errno) << std::endl;
       return "";  // Return empty string on error.
     }
     // Create string, excluding potential null terminator if included in len.
