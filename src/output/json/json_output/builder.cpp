@@ -95,6 +95,7 @@ nlohmann::json build_config_json(const BenchmarkConfig& config) {
   config_json[JsonKeys::LOOP_COUNT] = config.loop_count;
   config_json[JsonKeys::LATENCY_SAMPLE_COUNT] = config.latency_sample_count;
   config_json[JsonKeys::CPU_NAME] = config.cpu_name;
+  config_json[JsonKeys::MACOS_VERSION] = config.macos_version;
   config_json[JsonKeys::PERFORMANCE_CORES] = config.perf_cores;
   config_json[JsonKeys::EFFICIENCY_CORES] = config.eff_cores;
   config_json[JsonKeys::TOTAL_THREADS] = config.num_threads;

@@ -55,6 +55,7 @@ int parse_arguments(int argc, char* argv[], BenchmarkConfig& config) {
 
   // Get system info
   config.cpu_name = get_processor_name();
+  config.macos_version = get_macos_version();
   config.perf_cores = get_performance_cores();
   config.eff_cores = get_efficiency_cores();
   int max_cores = get_total_logical_cores();

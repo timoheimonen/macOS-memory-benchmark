@@ -191,3 +191,29 @@ size_t get_l2_cache_size() {
   std::cerr << Messages::warning_prefix() << Messages::warning_l2_cache_size_detection_failed_generic() << std::endl;
   return Constants::L2_CACHE_GENERIC_FALLBACK_SIZE_BYTES;
 }
+
+// Gets the macOS version string using sysctl.
+std::string get_macos_version() {
+  size_t len = 0;
+  // First call to get the size of the string.
+  if (sysctlbyname("kern.osproductversion", NULL, &len, NULL, 0) == -1) {
+    std::cerr << Messages::error_prefix() 
+              << Messages::error_sysctlbyname_failed("get size", "kern.osproductversion")
+              << ": " << strerror(errno) << std::endl;
+    return "";  // Return empty string on error.
+  }
+
+  if (len > 0) {
+    std::vector<char> buffer(len);
+    // Second call to get the actual string data.
+    if (sysctlbyname("kern.osproductversion", buffer.data(), &len, NULL, 0) == -1) {
+      std::cerr << Messages::error_prefix() 
+                << Messages::error_sysctlbyname_failed("get data", "kern.osproductversion")
+                << ": " << strerror(errno) << std::endl;
+      return "";  // Return empty string on error.
+    }
+    // Create string, excluding potential null terminator if included in len.
+    return std::string(buffer.data(), len > 0 ? len - 1 : 0);
+  }
+  return "";  // Return empty string if size is 0.
+}
