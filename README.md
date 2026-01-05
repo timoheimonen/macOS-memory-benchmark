@@ -50,19 +50,59 @@ macOS on Apple Silicon.
 
 ## Reliability and Stability
 
-The benchmark produces stable and highly repeatable results. Across 100 consecutive runs on a Mac mini M4 using the pattern-based bandwidth tests, the measured memory bandwidth shows extremely low variance (stddev ≈ 0.15% relative to the mean), with a tight percentile distribution (P50–P99 within ~0.2 GB/s).
+The benchmark produces stable and highly repeatable results. Across 100 consecutive runs on a Mac mini M4 using the pattern-based bandwidth tests, the measured memory bandwidth shows extremely low variance for sequential and cache-line–strided accesses (stddev ≈ 0.15–0.17% relative to the mean), with a tight percentile distribution (P50–P99 within ~0.2 GB/s).
+
+As expected, access patterns that stress page-level behavior (4096B stride) exhibit higher run-to-run variation (~1.8%), while random uniform access remains comparatively stable (~0.36%).
 
 ```data
-"read_gb_s": {
-  "statistics": {
-    "average": 116.38363691482549,
-    "max": 116.61212708384109,
-    "median": 116.41264548721367,
-    "min": 115.449510036971,
-    "p90": 116.54143114134801,
-    "p95": 116.57314206456576,
-    "p99": 116.60095068065866,
-    "stddev": 0.17026641589059727
+"sequential_forward": {
+  "bandwidth": {
+    "read_gb_s": {
+      "statistics": {
+        "average": 116.38363691482549,
+        "max": 116.61212708384109,
+        "median": 116.41264548721367,
+        "min": 115.449510036971,
+        "p90": 116.54143114134801,
+        "p95": 116.57314206456576,
+        "p99": 116.60095068065866,
+        "stddev": 0.17026641589059727
+      }
+    }
+  }
+}
+...
+"strided_4096": {
+  "bandwidth": {
+    "read_gb_s": {
+      "statistics": {
+        "average": 26.460392735220456,
+        "max": 27.7722419653915,
+        "median": 26.457051473208285,
+        "min": 25.519925729459107,
+        "p90": 27.105171215736604,
+        "p95": 27.190715938337473,
+        "p99": 27.360449534513144,
+        "stddev": 0.4730857335572576
+      }
+    }
+  }
+}
+...
+"random": {
+  "bandwidth": {
+    "read_gb_s": {
+      "statistics": {
+        "average": 26.71367836895143,
+        "max": 26.966820487564327,
+        "median": 26.69907406197067,
+        "min": 26.49374804466308,
+        "p90": 26.845236287807374,
+        "p95": 26.882004355057887,
+        "p99": 26.95742242818151,
+        "stddev": 0.09600564296001704
+      }
+    }
   }
 }
 ```
