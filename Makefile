@@ -262,5 +262,22 @@ clean-docs:
 	rm -rf $(DOCS_DIR) $(DOXYFILE)
 	@echo "Documentation cleanup complete."
 
+# Installation prefix (can be overridden: make install PREFIX=/opt/local)
+PREFIX = /usr/local
+
+# Install target: install the executable to $(PREFIX)/bin
+install: $(TARGET)
+	@echo "Installing $(TARGET) to $(PREFIX)/bin..."
+	@mkdir -p $(PREFIX)/bin
+	@cp $(TARGET) $(PREFIX)/bin/$(TARGET)
+	@chmod 755 $(PREFIX)/bin/$(TARGET)
+	@echo "$(TARGET) installed successfully to $(PREFIX)/bin/$(TARGET)"
+
+# Uninstall target: remove the installed executable
+uninstall:
+	@echo "Removing $(PREFIX)/bin/$(TARGET)..."
+	@rm -f $(PREFIX)/bin/$(TARGET)
+	@echo "$(TARGET) uninstalled successfully."
+
 # Define targets that don't correspond to files
-.PHONY: all clean test clean-test docs clean-docs
+.PHONY: all clean test clean-test docs clean-docs install uninstall
