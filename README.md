@@ -50,7 +50,7 @@ macOS on Apple Silicon.
 
 ## Reliability and Stability
 
-The benchmark produces stable and highly repeatable results. Across 100 consecutive runs on a Mac mini M4 using the pattern-based bandwidth tests, the measured memory bandwidth shows extremely low variance for sequential and cache-line–strided accesses (stddev ≈ 0.15–0.17% relative to the mean), with a tight percentile distribution (P50–P99 within ~0.2 GB/s).
+The benchmark produces stable and repeatable results. Across 100 consecutive runs on a Mac mini M4 using the pattern-based bandwidth tests, the measured memory bandwidth shows low variance for sequential and cache-line–strided accesses (stddev ≈ 0.15–0.17% relative to the mean), with a tight percentile distribution (P50–P99 within ~0.2 GB/s).
 
 As expected, access patterns that stress page-level behavior (4096B stride) exhibit higher run-to-run variation (~1.8%), while random uniform access remains comparatively stable (~0.36%).
 
