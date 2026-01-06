@@ -26,7 +26,7 @@ The configuration system manages all benchmark parameters through a two-pass arg
 - **Configuration Validation**: [`config_validator.cpp`](src/core/config/config_validator.cpp) validates flag compatibility (e.g., mutual exclusion of `-only-bandwidth` and `-only-latency`), enforces memory limits (80% of available RAM), and validates buffer size constraints.
 - **Buffer Calculations**: [`buffer_calculator.cpp`](src/core/config/buffer_calculator.cpp) computes cache buffer sizes (L1 at 75% of cache, L2 at 10%) with stride alignment and page boundary enforcement, and scales latency access counts based on buffer size.
 - **System Constants**: [`constants.h`](src/core/config/constants.h) defines all default values including 512MB default buffer size, 1000 iterations, and platform-specific constraints like 16KB minimum cache size and 1GB maximum.
-- **Version Management**: [`version.h`](src/core/config/version.h) maintains the software version (currently "0.52.5") using semantic versioning.
+- **Version Management**: [`version.h`](src/core/config/version.h) maintains the software version using semantic versioning.
 
 #### Command-Line Parameters
 
