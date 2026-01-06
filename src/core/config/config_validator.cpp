@@ -21,36 +21,55 @@
 #include <unistd.h>  // getpagesize
 #include <cstdlib>
 
+/**
+ * @brief Error Handling Strategy for this module:
+ * 
+ * This function uses RETURN CODES (EXIT_SUCCESS/EXIT_FAILURE) for error handling.
+ * 
+ * Rationale:
+ * - Simple validation logic with straightforward error paths
+ * - Called early in program lifecycle (before exceptions are expected)
+ * - Consistent with other validation functions
+ * - No deep call stacks - return codes are sufficient
+ * - Integrates with main() program flow which uses exit codes
+ * 
+ * Error handling:
+ * - Validation errors: Returns EXIT_FAILURE immediately with error message
+ * - All errors are logged to std::cerr before returning
+ * - Returns EXIT_SUCCESS on success
+ * 
+ * Callers should check return value and handle EXIT_FAILURE appropriately.
+ */
 int validate_config(BenchmarkConfig& config) {
-  // Validate mutually exclusive flags
+  // Error: Validate mutually exclusive flags
   if (config.only_bandwidth && config.only_latency) {
     std::cerr << Messages::error_prefix() << Messages::error_incompatible_flags() << std::endl;
-    return EXIT_FAILURE;
+    return EXIT_FAILURE;  // Return code: validation error
   }
   
-  // Validate flags with -patterns
+  // Error: Validate flags with -patterns
   if (config.run_patterns && (config.only_bandwidth || config.only_latency)) {
     std::cerr << Messages::error_prefix() << Messages::error_only_flags_with_patterns() << std::endl;
-    return EXIT_FAILURE;
+    return EXIT_FAILURE;  // Return code: validation error
   }
   
-  // Validate -only-bandwidth incompatibilities
+  // Error: Validate -only-bandwidth incompatibilities
   if (config.only_bandwidth) {
     if (config.use_custom_cache_size) {
       std::cerr << Messages::error_prefix() << Messages::error_only_bandwidth_with_cache_size() << std::endl;
-      return EXIT_FAILURE;
+      return EXIT_FAILURE;  // Return code: validation error
     }
     if (config.user_specified_latency_samples) {
       std::cerr << Messages::error_prefix() << Messages::error_only_bandwidth_with_latency_samples() << std::endl;
-      return EXIT_FAILURE;
+      return EXIT_FAILURE;  // Return code: validation error
     }
   }
   
-  // Validate -only-latency incompatibilities
+  // Error: Validate -only-latency incompatibilities
   if (config.only_latency) {
     if (config.user_specified_iterations) {
       std::cerr << Messages::error_prefix() << Messages::error_only_latency_with_iterations() << std::endl;
-      return EXIT_FAILURE;
+      return EXIT_FAILURE;  // Return code: validation error
     }
   }
   
@@ -107,17 +126,18 @@ int validate_config(BenchmarkConfig& config) {
   // Sanity checks
   size_t page_size = getpagesize();
   
+  // Error: Sanity check - buffer size calculation should be consistent
   if (config.buffer_size_mb > 0 && (config.buffer_size == 0 || config.buffer_size / Constants::BYTES_PER_MB != config.buffer_size_mb)) {
     std::cerr << Messages::error_prefix() << Messages::error_buffer_size_calculation(config.buffer_size_mb) << std::endl;
-    return EXIT_FAILURE;
+    return EXIT_FAILURE;  // Return code: calculation error
   }
   
-  // For latency-only, we still need buffer_size for main memory latency test
+  // Error: Buffer size must meet minimum requirements (page size and minimum latency buffer size)
   if (config.buffer_size < page_size || config.buffer_size < Constants::MIN_LATENCY_BUFFER_SIZE) {
     std::cerr << Messages::error_prefix() << Messages::error_buffer_size_too_small(config.buffer_size) << std::endl;
-    return EXIT_FAILURE;
+    return EXIT_FAILURE;  // Return code: validation error
   }
 
-  return EXIT_SUCCESS;
+  return EXIT_SUCCESS;  // All validations passed
 }
 

@@ -23,11 +23,31 @@
 #include <limits>   // std::numeric_limits
 #include <iostream> // std::cerr
 
+/**
+ * @brief Error Handling Strategy for this module:
+ * 
+ * This function uses RETURN CODES (EXIT_SUCCESS/EXIT_FAILURE) for error handling.
+ * 
+ * Rationale:
+ * - Called from main() program flow, which uses exit codes
+ * - Orchestrates multiple memory allocations - simple error propagation needed
+ * - No deep call stacks - return codes are sufficient
+ * - Consistent with program-level error handling pattern
+ * 
+ * Error propagation:
+ * - Validation errors: Returns EXIT_FAILURE immediately with error message
+ * - Memory allocation errors: Checks null pointers from allocate_buffer() calls
+ *   (which uses null pointer returns - see memory_manager.cpp)
+ * - All errors are logged to std::cerr before returning
+ * 
+ * Callers should check return value and handle EXIT_FAILURE appropriately.
+ */
 int allocate_all_buffers(const BenchmarkConfig& config, BenchmarkBuffers& buffers) {
   // Validate buffer sizes before allocation
+  // Error: Zero buffer size is invalid for bandwidth tests (latency-only mode is exception)
   if (config.buffer_size == 0 && !config.only_latency) {
     std::cerr << Messages::error_prefix() << Messages::error_main_buffer_size_zero() << std::endl;
-    return EXIT_FAILURE;
+    return EXIT_FAILURE;  // Return code: validation error
   }
   
   // Calculate total memory requirement and check for overflow
@@ -36,10 +56,11 @@ int allocate_all_buffers(const BenchmarkConfig& config, BenchmarkBuffers& buffer
   // Main buffers - conditionally allocate based on flags
   if (!config.only_latency) {
     // Need src and dst buffers for bandwidth tests
-    // Check multiplication overflow first: ensure buffer_size * 2 won't overflow
+    // Error: Check multiplication overflow first: ensure buffer_size * 2 won't overflow
+    // This prevents undefined behavior from integer overflow
     if (config.buffer_size > std::numeric_limits<size_t>::max() / 2) {
       std::cerr << Messages::error_prefix() << Messages::error_buffer_size_overflow_calculation() << std::endl;
-      return EXIT_FAILURE;
+      return EXIT_FAILURE;  // Return code: arithmetic overflow error
     }
     size_t main_buffer_double = config.buffer_size * 2;  // Safe: multiplication checked above
     total_memory += main_buffer_double;  // src, dst
@@ -57,9 +78,10 @@ int allocate_all_buffers(const BenchmarkConfig& config, BenchmarkBuffers& buffer
       if (config.custom_buffer_size > 0) {
         if (!config.only_bandwidth) {
           // Need custom latency buffer
+          // Error: Check addition overflow when accumulating total memory
           if (total_memory > std::numeric_limits<size_t>::max() - config.custom_buffer_size) {
             std::cerr << Messages::error_prefix() << Messages::error_total_memory_overflow() << std::endl;
-            return EXIT_FAILURE;
+            return EXIT_FAILURE;  // Return code: arithmetic overflow error
           }
           total_memory += config.custom_buffer_size;  // custom
         }
@@ -133,10 +155,11 @@ int allocate_all_buffers(const BenchmarkConfig& config, BenchmarkBuffers& buffer
   // and does not include cache buffers (L1, L2, custom) and their bandwidth counterparts.
   // This ensures the combined memory usage of all buffers stays within the total limit.
   if (config.max_total_allowed_mb > 0) {
+    // Error: Total memory requirement exceeds system limit
     unsigned long total_memory_mb = static_cast<unsigned long>(total_memory / Constants::BYTES_PER_MB);
     if (total_memory_mb > config.max_total_allowed_mb) {
       std::cerr << Messages::error_prefix() << Messages::error_total_memory_exceeds_limit(total_memory_mb, config.max_total_allowed_mb) << std::endl;
-      return EXIT_FAILURE;
+      return EXIT_FAILURE;  // Return code: resource limit exceeded
     }
   }
   
@@ -155,6 +178,8 @@ int allocate_all_buffers(const BenchmarkConfig& config, BenchmarkBuffers& buffer
   buffers.custom_bw_dst_ptr = MmapPtr(nullptr, MmapDeleter{0});
 
   // Allocate source buffer (only if not latency-only)
+  // Note: allocate_buffer() returns null pointer on failure (see memory_manager.cpp)
+  // Error: Memory allocation failed - propagate error using return code
   if (!config.only_latency && config.buffer_size > 0) {
     if (config.use_non_cacheable) {
       buffers.src_buffer_ptr = allocate_buffer_non_cacheable(config.buffer_size, "src_buffer");
@@ -162,11 +187,12 @@ int allocate_all_buffers(const BenchmarkConfig& config, BenchmarkBuffers& buffer
       buffers.src_buffer_ptr = allocate_buffer(config.buffer_size, "src_buffer");
     }
     if (!buffers.src_buffer_ptr) {
-      return EXIT_FAILURE;
+      return EXIT_FAILURE;  // Return code: memory allocation failure (null pointer from allocate_buffer)
     }
   }
 
   // Allocate destination buffer (only if not latency-only)
+  // Error: Memory allocation failed - propagate error using return code
   if (!config.only_latency && config.buffer_size > 0) {
     if (config.use_non_cacheable) {
       buffers.dst_buffer_ptr = allocate_buffer_non_cacheable(config.buffer_size, "dst_buffer");
@@ -174,11 +200,12 @@ int allocate_all_buffers(const BenchmarkConfig& config, BenchmarkBuffers& buffer
       buffers.dst_buffer_ptr = allocate_buffer(config.buffer_size, "dst_buffer");
     }
     if (!buffers.dst_buffer_ptr) {
-      return EXIT_FAILURE;
+      return EXIT_FAILURE;  // Return code: memory allocation failure
     }
   }
 
   // Allocate latency buffer (only if not bandwidth-only and not pattern benchmarks)
+  // Error: Memory allocation failed - propagate error using return code
   if (!config.only_bandwidth && !config.run_patterns && config.buffer_size > 0) {
     if (config.use_non_cacheable) {
       buffers.lat_buffer_ptr = allocate_buffer_non_cacheable(config.buffer_size, "lat_buffer");
@@ -186,7 +213,7 @@ int allocate_all_buffers(const BenchmarkConfig& config, BenchmarkBuffers& buffer
       buffers.lat_buffer_ptr = allocate_buffer(config.buffer_size, "lat_buffer");
     }
     if (!buffers.lat_buffer_ptr) {
-      return EXIT_FAILURE;
+      return EXIT_FAILURE;  // Return code: memory allocation failure
     }
   }
 
@@ -200,8 +227,9 @@ int allocate_all_buffers(const BenchmarkConfig& config, BenchmarkBuffers& buffer
         } else {
           buffers.custom_buffer_ptr = allocate_buffer(config.custom_buffer_size, "custom_buffer");
         }
+        // Error: Memory allocation failed
         if (!buffers.custom_buffer_ptr) {
-          return EXIT_FAILURE;
+          return EXIT_FAILURE;  // Return code: memory allocation failure
         }
       }
     } else {
@@ -212,8 +240,9 @@ int allocate_all_buffers(const BenchmarkConfig& config, BenchmarkBuffers& buffer
         } else {
           buffers.l1_buffer_ptr = allocate_buffer(config.l1_buffer_size, "l1_buffer");
         }
+        // Error: Memory allocation failed
         if (!buffers.l1_buffer_ptr) {
-          return EXIT_FAILURE;
+          return EXIT_FAILURE;  // Return code: memory allocation failure
         }
       }
 
@@ -223,8 +252,9 @@ int allocate_all_buffers(const BenchmarkConfig& config, BenchmarkBuffers& buffer
         } else {
           buffers.l2_buffer_ptr = allocate_buffer(config.l2_buffer_size, "l2_buffer");
         }
+        // Error: Memory allocation failed
         if (!buffers.l2_buffer_ptr) {
-          return EXIT_FAILURE;
+          return EXIT_FAILURE;  // Return code: memory allocation failure
         }
       }
     }
@@ -241,8 +271,9 @@ int allocate_all_buffers(const BenchmarkConfig& config, BenchmarkBuffers& buffer
         } else {
           buffers.custom_bw_src_ptr = allocate_buffer(config.custom_buffer_size, "custom_bw_src_buffer");
         }
+        // Error: Memory allocation failed
         if (!buffers.custom_bw_src_ptr) {
-          return EXIT_FAILURE;
+          return EXIT_FAILURE;  // Return code: memory allocation failure
         }
         // Allocate destination buffer for custom cache bandwidth tests
         if (config.use_non_cacheable) {
@@ -250,8 +281,9 @@ int allocate_all_buffers(const BenchmarkConfig& config, BenchmarkBuffers& buffer
         } else {
           buffers.custom_bw_dst_ptr = allocate_buffer(config.custom_buffer_size, "custom_bw_dst_buffer");
         }
+        // Error: Memory allocation failed
         if (!buffers.custom_bw_dst_ptr) {
-          return EXIT_FAILURE;
+          return EXIT_FAILURE;  // Return code: memory allocation failure
         }
       }
     } else {
@@ -263,8 +295,9 @@ int allocate_all_buffers(const BenchmarkConfig& config, BenchmarkBuffers& buffer
         } else {
           buffers.l1_bw_src_ptr = allocate_buffer(config.l1_buffer_size, "l1_bw_src_buffer");
         }
+        // Error: Memory allocation failed
         if (!buffers.l1_bw_src_ptr) {
-          return EXIT_FAILURE;
+          return EXIT_FAILURE;  // Return code: memory allocation failure
         }
         // Allocate destination buffer for L1 bandwidth tests
         if (config.use_non_cacheable) {
@@ -272,8 +305,9 @@ int allocate_all_buffers(const BenchmarkConfig& config, BenchmarkBuffers& buffer
         } else {
           buffers.l1_bw_dst_ptr = allocate_buffer(config.l1_buffer_size, "l1_bw_dst_buffer");
         }
+        // Error: Memory allocation failed
         if (!buffers.l1_bw_dst_ptr) {
-          return EXIT_FAILURE;
+          return EXIT_FAILURE;  // Return code: memory allocation failure
         }
       }
 
@@ -284,8 +318,9 @@ int allocate_all_buffers(const BenchmarkConfig& config, BenchmarkBuffers& buffer
         } else {
           buffers.l2_bw_src_ptr = allocate_buffer(config.l2_buffer_size, "l2_bw_src_buffer");
         }
+        // Error: Memory allocation failed
         if (!buffers.l2_bw_src_ptr) {
-          return EXIT_FAILURE;
+          return EXIT_FAILURE;  // Return code: memory allocation failure
         }
         // Allocate destination buffer for L2 bandwidth tests
         if (config.use_non_cacheable) {
@@ -293,13 +328,14 @@ int allocate_all_buffers(const BenchmarkConfig& config, BenchmarkBuffers& buffer
         } else {
           buffers.l2_bw_dst_ptr = allocate_buffer(config.l2_buffer_size, "l2_bw_dst_buffer");
         }
+        // Error: Memory allocation failed
         if (!buffers.l2_bw_dst_ptr) {
-          return EXIT_FAILURE;
+          return EXIT_FAILURE;  // Return code: memory allocation failure
         }
       }
     }
   }
 
-  return EXIT_SUCCESS;
+  return EXIT_SUCCESS;  // All buffers allocated successfully
 }
 
