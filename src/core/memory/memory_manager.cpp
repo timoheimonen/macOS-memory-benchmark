@@ -1,4 +1,4 @@
-// Copyright 2025 Timo Heimonen <timo.heimonen@proton.me>
+// Copyright 2026 Timo Heimonen <timo.heimonen@proton.me>
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -19,53 +19,74 @@
 #include <iostream> // std::cerr
 #include <cerrno>   // errno
 
+/**
+ * @brief Error Handling Strategy for this module:
+ * 
+ * This function uses NULL POINTER RETURNS for error handling.
+ * 
+ * Rationale:
+ * - Memory allocation is a common operation that may fail frequently
+ * - Null checks are lightweight and don't require exception handling overhead
+ * - Fits naturally with smart pointer patterns (std::unique_ptr)
+ * - Allows callers to decide how to handle failures (check null or propagate)
+ * - C-style API (mmap) returns MAP_FAILED, which maps naturally to null pointers
+ * 
+ * Error handling:
+ * - Validation errors: Returns null pointer with error message logged
+ * - System call errors (mmap): Returns null pointer with errno-based error message
+ * - Non-fatal errors (madvise): Logs warning but continues (doesn't fail allocation)
+ * 
+ * Callers should check for null pointer before using the returned MmapPtr.
+ * See buffer_allocator.cpp for example of null pointer checking.
+ */
 MmapPtr allocate_buffer(size_t size, const char* buffer_name) {
-  // Validate size before allocation
+  // Error: Validate size before allocation - zero size is invalid
   if (size == 0) {
     std::cerr << Messages::error_prefix() << Messages::error_buffer_size_zero(buffer_name) << std::endl;
-    return MmapPtr(nullptr, MmapDeleter{0});
+    return MmapPtr(nullptr, MmapDeleter{0});  // Return null pointer on validation error
   }
   
-  // Allocate memory using mmap
+  // Allocate memory using mmap (C-style API returns MAP_FAILED on error)
   void *ptr = mmap(nullptr, size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
   
+  // Error: System call failed - mmap returns MAP_FAILED on error
   if (ptr == MAP_FAILED) {
-    // Create specific error message
+    // Create specific error message with errno details
     std::cerr << Messages::error_prefix() << Messages::error_mmap_failed(buffer_name) 
               << ": " << strerror(errno) << std::endl;
-    // Return empty unique_ptr (nullptr) on failure
-    return MmapPtr(nullptr, MmapDeleter{0});
+    return MmapPtr(nullptr, MmapDeleter{0});  // Return null pointer on allocation failure
   }
   
   // Create MmapPtr with custom deleter
   MmapPtr buffer_ptr(ptr, MmapDeleter{size});
   
   // Advise the kernel that we will need this memory (prefault optimization)
+  // Note: Non-fatal error - madvise failure doesn't prevent memory from being usable
   if (madvise(ptr, size, MADV_WILLNEED) == -1) {
     std::cerr << Messages::error_prefix() << Messages::error_madvise_failed(buffer_name) 
               << ": " << strerror(errno) << std::endl;
-    // Non-fatal error, continue anyway
+    // Non-fatal error, continue anyway - allocation succeeded
   }
   
-  return buffer_ptr;
+  return buffer_ptr;  // Return valid pointer on success
 }
 
 MmapPtr allocate_buffer_non_cacheable(size_t size, const char* buffer_name) {
-  // Validate size before allocation
+  // Error: Validate size before allocation - zero size is invalid
   if (size == 0) {
     std::cerr << Messages::error_prefix() << Messages::error_buffer_size_zero(buffer_name) << std::endl;
-    return MmapPtr(nullptr, MmapDeleter{0});
+    return MmapPtr(nullptr, MmapDeleter{0});  // Return null pointer on validation error
   }
   
   // Allocate memory using mmap (same as regular allocation)
+  // Error: System call failed - mmap returns MAP_FAILED on error
   void *ptr = mmap(nullptr, size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
   
   if (ptr == MAP_FAILED) {
-    // Create specific error message
+    // Create specific error message with errno details
     std::cerr << Messages::error_prefix() << Messages::error_mmap_failed(buffer_name) 
               << ": " << strerror(errno) << std::endl;
-    // Return empty unique_ptr (nullptr) on failure
-    return MmapPtr(nullptr, MmapDeleter{0});
+    return MmapPtr(nullptr, MmapDeleter{0});  // Return null pointer on allocation failure
   }
   
   // Create MmapPtr with custom deleter
@@ -80,11 +101,12 @@ MmapPtr allocate_buffer_non_cacheable(size_t size, const char* buffer_name) {
   
   // Use MADV_RANDOM to hint that access pattern is random, discouraging aggressive caching
   // This is a best-effort hint; it does not guarantee non-cacheable behavior
+  // Note: Non-fatal error - madvise failure doesn't prevent memory from being usable
   if (madvise(ptr, size, MADV_RANDOM) == -1) {
     std::cerr << Messages::warning_prefix() << Messages::warning_madvise_random_failed(buffer_name, strerror(errno)) << std::endl;
-    // Non-fatal error, continue anyway
+    // Non-fatal error, continue anyway - allocation succeeded
   }
   
-  return buffer_ptr;
+  return buffer_ptr;  // Return valid pointer on success
 }
 

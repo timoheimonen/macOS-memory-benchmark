@@ -111,7 +111,67 @@ Every benchmark type has a corresponding warmup function executed immediately be
 
 The warmup functions call the same ARM64 assembly loops as the benchmarks, ensuring identical access patterns. Atomic XOR accumulation (`std::atomic<uint64_t>`) prevents compiler dead code elimination while maintaining thread safety.
 
-## 4. Benchmark Logic and Execution
+## 4. Error Handling Architecture
+
+The codebase employs a hybrid error handling strategy that selects the most appropriate mechanism for each module's specific requirements. This approach balances performance, code clarity, and integration with system-level error reporting.
+
+### 4.1 Strategy Selection by Module
+
+The codebase uses three complementary error handling strategies:
+
+**Null Pointer Returns** ([`memory_manager.cpp`](src/core/memory/memory_manager.cpp)):
+- **Use Case**: Memory allocation functions that may fail frequently
+- **Rationale**: Lightweight error checking without exception overhead, natural integration with smart pointer patterns (`std::unique_ptr`)
+- **Implementation**: Functions return `MmapPtr(nullptr, MmapDeleter{0})` on failure, with error messages logged to `std::cerr`
+- **Caller Responsibility**: Check for null pointer before using returned smart pointer
+- **See**: `allocate_buffer()`, `allocate_buffer_non_cacheable()`
+
+**Return Codes** ([`config_validator.cpp`](src/core/config/config_validator.cpp), [`buffer_allocator.cpp`](src/core/memory/buffer_allocator.cpp)):
+- **Use Case**: Simple validation logic and orchestration functions called from `main()`
+- **Rationale**: Direct integration with program exit codes (`EXIT_SUCCESS`/`EXIT_FAILURE`), straightforward error propagation, no exception overhead
+- **Implementation**: Functions return `EXIT_SUCCESS` on success, `EXIT_FAILURE` on error, with error messages logged to `std::cerr`
+- **Caller Responsibility**: Check return value and propagate or handle appropriately
+- **See**: `validate_config()`, `allocate_all_buffers()`
+
+**Exceptions with Boundary Conversion** ([`argument_parser.cpp`](src/core/config/argument_parser.cpp)):
+- **Use Case**: Complex validation logic with multiple validation points and early termination
+- **Rationale**: Standard library functions (`std::stoll`) throw exceptions naturally, cleaner code flow without deeply nested conditionals, allows early termination
+- **Implementation**: Functions throw `std::invalid_argument` (missing values, unknown options) or `std::out_of_range` (value validation errors), which are caught and converted to `EXIT_FAILURE` at module boundaries
+- **Boundary Pattern**: Exceptions are caught within the function and converted to return codes before returning to `main()`, ensuring no exceptions propagate to the main program flow
+- **See**: `parse_arguments()`
+
+### 4.2 Error Message Centralization
+
+All error messages are centralized in the message system ([`src/output/console/messages/error_messages.cpp`](src/output/console/messages/error_messages.cpp)) to ensure:
+
+- **Consistency**: Standardized error message format across the entire application
+- **Maintainability**: Single source of truth for error text, enabling easy updates and future localization
+- **Type Safety**: Type-safe message generation functions that prevent format string vulnerabilities
+- **User Experience**: Consistent error prefixing ("Error: ") and clear, actionable error descriptions
+
+The message system provides specialized error message functions for different error categories:
+- Validation errors (invalid values, missing arguments, incompatible flags)
+- System call errors (mmap failures, file I/O errors) with `errno` integration
+- Resource errors (memory allocation failures, buffer size limits)
+- Configuration errors (calculation errors, constraint violations)
+
+Error messages include contextual information (option names, values, limits) to help users diagnose and correct configuration issues.
+
+### 4.3 Error Propagation Patterns
+
+The error handling architecture follows a clear propagation hierarchy:
+
+1. **Low-Level Functions** (memory allocation, system calls): Return null pointers or use C-style error codes (`errno`)
+2. **Mid-Level Functions** (validation, orchestration): Use return codes (`EXIT_SUCCESS`/`EXIT_FAILURE`) or catch exceptions and convert
+3. **High-Level Functions** (`main()`): Use return codes exclusively, converting all errors to program exit codes
+
+This hierarchy ensures that:
+- Performance-critical paths (memory allocation) avoid exception overhead
+- Complex validation logic can use exceptions for cleaner code flow
+- The main program maintains a consistent error handling interface
+- All errors are eventually converted to program exit codes for shell integration
+
+## 5. Benchmark Logic and Execution
 
 The measurement process is divided into specialized executors. See [`src/benchmark/`](src/benchmark/) for implementation details:
 
@@ -119,12 +179,12 @@ The measurement process is divided into specialized executors. See [`src/benchma
 - **Single-threading**: Latency tests are executed on a single thread to ensure maximum accuracy. See [`latency_tests.cpp`](src/benchmark/latency_tests.cpp).
 - **Statistical Analysis**: Results are aggregated across multiple runs, calculating means and percentiles (P50, P90, P95, P99). See [`benchmark_results.cpp`](src/benchmark/benchmark_results.cpp) and [`benchmark_runner.cpp`](src/benchmark/benchmark_runner.cpp).
 
-### 4.1 Test Types
+### 5.1 Test Types
 
 - **Main Memory Bandwidth**: Read, write, and copy operations at the DRAM level. See [`benchmark_executor.cpp`](src/benchmark/benchmark_executor.cpp).
 - **Cache Bandwidth**: Specific throughput tests for L1 and L2 caches.
 
-### 4.2 Pattern Benchmark Architecture ([`src/pattern_benchmark/`](src/pattern_benchmark/))
+### 5.2 Pattern Benchmark Architecture ([`src/pattern_benchmark/`](src/pattern_benchmark/))
 
 The pattern benchmark subsystem analyzes how memory access patterns affect performance, complementing the main bandwidth tests' focus on maximum throughput. While main tests answer "How fast can the memory go?", pattern tests answer "How does access pattern degrade performance?"
 
@@ -165,17 +225,17 @@ All assembly functions use NEON SIMD (32-byte loads/stores), modulo arithmetic f
 
 Pattern benchmarks run via `-patterns` flag, allocating only 2× buffer size (src + dst, no latency buffer). Results include absolute bandwidth plus percentage differences from baseline, providing quantitative analysis of pattern sensitivity across read, write, and copy operations.
 
-## 5. System Integration
+## 6. System Integration
 
 - **Timing**: Uses the macOS `mach_absolute_time()` interface for nanosecond-precision timing. See [`timer.h`](src/core/timing/timer.h) and [`timer.cpp`](src/core/timing/timer.cpp).
 - **Hardware Detection**: Automatically detects L1/L2 cache sizes and CPU models via `sysctlbyname` calls. See [`system_info.h`](src/core/system/system_info.h) and [`system_info.cpp`](src/core/system/system_info.cpp).
 - **QoS Configuration**: Sets the system Quality of Service (QoS) state to levels appropriate for latency-critical testing.
 
-## 6. Output and Reporting
+## 7. Output and Reporting
 
 The software implements a sophisticated dual-output system designed for both human readability and machine processing:
 
-### 6.1 Console Output System ([`src/output/console/`](src/output/console/))
+### 7.1 Console Output System ([`src/output/console/`](src/output/console/))
 
 **Message Architecture:**
 
@@ -203,7 +263,7 @@ All numeric output uses precision constants from [`constants.h`](src/core/config
 - Latency: 2 decimal places (e.g., "125.47 ns")
 - Pattern percentages: 1 decimal place (e.g., "+15.3%")
 
-### 6.2 JSON Output System ([`src/output/json/`](src/output/json/))
+### 7.2 JSON Output System ([`src/output/json/`](src/output/json/))
 
 **JSON Architecture:**
 
@@ -235,13 +295,13 @@ JSON parsing and generation uses the nlohmann/json library ([`src/third_party/nl
 - **Console Only** (default): Real-time human-readable output with progress indicators
 - **Console + JSON** (`-output <file>`): Both console display and machine-readable JSON export for automated analysis and result archiving
 
-## 7. Technical Constraints and Considerations
+## 8. Technical Constraints and Considerations
 
 - **Platform**: Designed exclusively for the macOS Apple Silicon platform.
 - **User-Space Limitations**: As a user-space application, the tool does not have direct access to explicit cache flushing (cache flush) or true non-cacheable memory. The `-non-cacheable` flag uses `madvise()` hints which do not make memory truly non-cacheable; they only reduce caching likelihood and affect paging and cache behavior heuristically.
 - **Buffer Sizes**: DRAM measurements require large buffer sizes (recommended > 512 MB) to minimize the impact of the cache hierarchy.
 
-## 8. Quality Assurance
+## 9. Quality Assurance
 
 The software includes a comprehensive testing suite:
 
@@ -251,7 +311,7 @@ The software includes a comprehensive testing suite:
 - **Doxygen-compliant documentation** at the source code level.
 - **Validation logic** for all user inputs and detected system values.
 
-## 9. Known Sources of Bias and Limitations
+## 10. Known Sources of Bias and Limitations
 
 The following factors may influence measurement accuracy and should be considered when interpreting results:
 
