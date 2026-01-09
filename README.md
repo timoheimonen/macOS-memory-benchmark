@@ -351,10 +351,10 @@ Done. Total execution time: 62.73719 s
 Mac Mini M4 Cache Latency from multiple JSON-files with example-script provided.
 
 ![Mac Mini M4 10 benchmark loops](pictures/MacMiniM4_10_loops_results.png)  
-Mac Mini M4 10 benchmark loops results.
+Mac Mini M4 10 benchmark loops results. Image created from JSON file using separate program.
 
 ![Mac Mini M4 patterns benchmark results](pictures/MacMiniM4_patterns_results.png)  
-Mac Mini M4 patterns benchmark results.
+Mac Mini M4 patterns benchmark results. Image created from JSON file using separate program.
 
 ## Documentation
 
