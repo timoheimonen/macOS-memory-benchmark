@@ -13,6 +13,30 @@
 // You should have received a copy of the GNU General Public License
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 //
+
+/**
+ * @file argument_parser.cpp
+ * @brief Command-line argument parsing implementation
+ *
+ * This file implements the argument parser for the memory benchmark application.
+ * It handles parsing and validation of all command-line options including:
+ * - Buffer size configuration (-buffersize)
+ * - Iteration counts (-iterations, -count)
+ * - Cache size specification (-cache-size)
+ * - Thread count configuration (-threads)
+ * - Test mode selection (-patterns, -only-bandwidth, -only-latency)
+ * - Output options (-output)
+ * - Help display (-h, --help)
+ *
+ * The parser uses a two-pass approach: first parsing cache size (needed for
+ * system detection), then parsing all other arguments. It employs exception
+ * handling internally for validation, converting exceptions to return codes
+ * at the function boundary.
+ *
+ * @note Uses exception handling internally but presents a return code interface
+ * @note Performs comprehensive range validation for all numeric parameters
+ */
+
 #include "core/config/config.h"
 #include "core/config/constants.h"
 #include "core/system/system_info.h"

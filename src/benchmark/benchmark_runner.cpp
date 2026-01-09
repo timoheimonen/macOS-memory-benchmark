@@ -13,6 +13,32 @@
 // You should have received a copy of the GNU General Public License
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 //
+
+/**
+ * @file benchmark_runner.cpp
+ * @brief Benchmark execution coordinator
+ *
+ * Orchestrates the main benchmark loop, coordinating test execution, result collection,
+ * and output printing. Handles multiple benchmark loops for statistical analysis and
+ * exception handling for robust execution.
+ *
+ * Key features:
+ * - Multi-loop execution for statistical reliability
+ * - Exception handling with error propagation
+ * - Progress indication during benchmark execution
+ * - Integration with statistics collection system
+ * - Real-time result printing for each loop
+ *
+ * Execution flow:
+ * 1. Initialize statistics structure
+ * 2. Create high-resolution timer
+ * 3. For each loop:
+ *    a. Run single benchmark loop (all tests)
+ *    b. Collect results into statistics
+ *    c. Print loop results
+ * 4. Return success/failure status
+ */
+
 #include "benchmark/benchmark_runner.h"
 #include "benchmark/benchmark_executor.h"  // run_single_benchmark_loop
 #include "benchmark/benchmark_statistics_collector.h"  // initialize_statistics, collect_loop_results
@@ -24,6 +50,44 @@
 #include <iostream>
 #include <cstdlib>  // EXIT_SUCCESS, EXIT_FAILURE
 
+/**
+ * @brief Runs all benchmarks for the specified number of loops and collects statistics.
+ *
+ * Orchestrates the complete benchmark execution:
+ * 1. Initializes statistics collection structure
+ * 2. Creates high-resolution timer for measurements
+ * 3. Executes config.loop_count benchmark loops
+ * 4. Collects results from each loop into statistics
+ * 5. Prints results for each loop in real-time
+ * 6. Handles exceptions and reports errors
+ *
+ * Loop execution:
+ * - Each loop runs all configured tests (bandwidth, latency, cache)
+ * - Results are collected for statistical analysis
+ * - Progress indicator is shown during execution
+ * - Results are printed immediately after each loop
+ *
+ * Error handling:
+ * - Timer creation failure returns EXIT_FAILURE
+ * - Exceptions during benchmark loops are caught and reported
+ * - Loop number and error details are included in error messages
+ *
+ * @param[in]  buffers  Pre-allocated and initialized benchmark buffers
+ * @param[in]  config   Benchmark configuration (buffer sizes, threads, loops, flags)
+ * @param[out] stats    Statistics structure to populate with all loop results
+ *
+ * @return EXIT_SUCCESS (0) if all loops complete successfully
+ * @return EXIT_FAILURE (1) if timer creation fails or any loop throws exception
+ *
+ * @note Statistics structure is used for final aggregate calculations.
+ * @note Progress indicators are cleared before printing each loop's results.
+ * @note Exception messages include loop number for debugging.
+ *
+ * @see run_single_benchmark_loop() for individual loop execution
+ * @see initialize_statistics() for statistics setup
+ * @see collect_loop_results() for result collection
+ * @see print_results() for output formatting
+ */
 int run_all_benchmarks(const BenchmarkBuffers& buffers, const BenchmarkConfig& config, BenchmarkStatistics& stats) {
   // Initialize statistics structure
   initialize_statistics(stats, config);

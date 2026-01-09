@@ -17,6 +17,22 @@
 // Library: https://github.com/nlohmann/json
 // License: MIT License
 //
+
+/**
+ * @file json_utils.h
+ * @brief JSON utility functions for parsing, generation, and statistical calculations
+ *
+ * This file provides utility functions for JSON operations used throughout the benchmark application:
+ * - Statistical calculations (average, median, percentiles, standard deviation) with JSON output
+ * - Validated JSON parsing from strings and files with comprehensive error handling
+ * - JSON generation helpers for structured benchmark result output
+ *
+ * These utilities wrap the nlohmann/json library to provide consistent error handling
+ * and statistical analysis for benchmark results exported to JSON format.
+ *
+ * @note Uses nlohmann/json library (MIT License): https://github.com/nlohmann/json
+ */
+
 #ifndef JSON_UTILS_H
 #define JSON_UTILS_H
 
@@ -24,18 +40,41 @@
 #include <string>
 #include "third_party/nlohmann/json.hpp"
 
-// Calculate statistics (average, min, max, percentiles, stddev) from a vector of values
-// Returns a JSON object containing the calculated statistics
+/**
+ * @brief Calculate statistical measures from a dataset and return as JSON
+ *
+ * Computes comprehensive statistics including average, min, max, median (p50),
+ * percentiles (p90, p95, p99), and standard deviation.
+ *
+ * @param values Vector of numerical values to analyze
+ * @return JSON object containing all calculated statistics
+ *
+ * @note Returns empty JSON object if input vector is empty
+ */
 nlohmann::json calculate_json_statistics(const std::vector<double>& values);
 
-// Parse JSON from a string with validation
-// Returns true on success, false on error
-// On error, error_message is populated with a descriptive error message
+/**
+ * @brief Parse JSON from a string with validation
+ *
+ * @param json_string Input string containing JSON data
+ * @param result Output parameter to store parsed JSON object
+ * @param error_message Output parameter for error description on failure
+ * @return true on successful parsing, false on error
+ *
+ * @note On error, error_message contains detailed parsing error information
+ */
 bool parse_json_from_string(const std::string& json_string, nlohmann::json& result, std::string& error_message);
 
-// Parse JSON from a file with validation
-// Returns true on success, false on error
-// On error, error_message is populated with a descriptive error message
+/**
+ * @brief Parse JSON from a file with validation
+ *
+ * @param file_path Path to the JSON file to parse
+ * @param result Output parameter to store parsed JSON object
+ * @param error_message Output parameter for error description on failure
+ * @return true on successful parsing, false on error
+ *
+ * @note On error, error_message contains detailed file I/O or parsing error information
+ */
 bool parse_json_from_file(const std::string& file_path, nlohmann::json& result, std::string& error_message);
 
 #endif // JSON_UTILS_H

@@ -17,6 +17,16 @@
 // Library: https://github.com/nlohmann/json
 // License: MIT License
 //
+
+/**
+ * @file json_utils.cpp
+ * @brief JSON utility function implementations
+ *
+ * Provides implementations for JSON-related utility functions including
+ * statistical calculations, JSON parsing from strings and files with
+ * comprehensive error handling and validation.
+ */
+
 #include "json_utils.h"
 #include <algorithm>  // Required for std::sort
 #include <cmath>      // Required for std::sqrt

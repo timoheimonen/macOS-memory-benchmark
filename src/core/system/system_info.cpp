@@ -13,6 +13,35 @@
 // You should have received a copy of the GNU General Public License
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 //
+
+/**
+ * @file system_info.cpp
+ * @brief System information detection implementation for macOS
+ *
+ * This file implements functions to detect and query various system characteristics
+ * on macOS using sysctl and Mach APIs. Detection includes:
+ * - CPU core topology (performance cores, efficiency cores, total cores)
+ * - Processor model identification
+ * - Available system memory
+ * - Cache hierarchy (L1, L2 cache sizes)
+ * - macOS version information
+ *
+ * The implementation is Apple Silicon-aware, distinguishing between performance
+ * and efficiency cores on heterogeneous CPU architectures. It provides robust
+ * fallback mechanisms when direct detection fails, using conservative estimates
+ * or standard library alternatives.
+ *
+ * Detection strategy:
+ * - Primary: macOS-specific sysctl keys (hw.perflevel0.*, hw.perflevel1.*)
+ * - Fallback 1: Generic sysctl keys (hw.logicalcpu_max, hw.l1dcachesize)
+ * - Fallback 2: Standard library (std::thread::hardware_concurrency)
+ * - Fallback 3: Conservative hardcoded defaults based on CPU model
+ *
+ * @note All functions handle detection failures gracefully with warnings
+ * @note Cache size detection includes Apple Silicon-specific optimizations
+ * @note Memory calculations account for reclaimable inactive pages
+ */
+
 #include <mach/mach_error.h>  // For mach_error_string
 #include <mach/mach_host.h>   // For host_statistics64, mach_host_self, host_page_size
 #include <mach/mach.h>        // For mach_task_self, mach_port_deallocate
@@ -28,7 +57,18 @@
 #include "core/config/constants.h"
 #include "output/console/messages.h"
 
-// Gets the number of logical Performance cores using sysctl.
+/**
+ * @brief Get the number of logical performance cores
+ *
+ * Queries the macOS-specific sysctl key for performance cores (perflevel0).
+ * On Apple Silicon systems, performance cores are the high-power, high-performance
+ * cores in the hybrid architecture.
+ *
+ * @return Number of logical performance cores, or 0 if detection fails
+ *
+ * @note Uses hw.perflevel0.logicalcpu_max sysctl key
+ * @note Returns 0 (not an error code) on detection failure
+ */
 int get_performance_cores() {
   int p_cores = 0;
   size_t len = sizeof(p_cores);

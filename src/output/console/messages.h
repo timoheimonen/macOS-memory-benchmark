@@ -13,6 +13,21 @@
 // You should have received a copy of the GNU General Public License
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 //
+
+/**
+ * @file messages.h
+ * @brief Backward compatibility wrapper for the Messages namespace
+ *
+ * This header provides backward compatibility by forwarding to the consolidated
+ * messages header located in the messages subdirectory. It allows existing code
+ * to continue using the original include path while the actual implementation
+ * has been reorganized.
+ *
+ * @deprecated This is a compatibility header. New code should include "messages/messages.h" directly.
+ *
+ * @see messages/messages.h for the actual Messages namespace declarations
+ */
+
 #ifndef MESSAGES_H
 #define MESSAGES_H
 

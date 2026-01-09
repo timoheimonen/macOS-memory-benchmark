@@ -13,6 +13,16 @@
 // You should have received a copy of the GNU General Public License
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 //
+
+/**
+ * @file results_messages.cpp
+ * @brief Results output messages
+ *
+ * Provides implementations for benchmark results message generation functions.
+ * Includes formatted messages for displaying bandwidth and latency test results,
+ * cache performance metrics, and buffer size information.
+ */
+
 #include "messages.h"
 #include "core/config/constants.h"  // For default values
 #include <sstream>

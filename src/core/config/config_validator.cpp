@@ -13,6 +13,29 @@
 // You should have received a copy of the GNU General Public License
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 //
+
+/**
+ * @file config_validator.cpp
+ * @brief Configuration validation implementation
+ *
+ * This file implements configuration validation logic that ensures the parsed
+ * configuration is internally consistent and meets system resource constraints.
+ * Validation includes:
+ * - Checking for mutually exclusive flags (--only-bandwidth vs --only-latency)
+ * - Validating flag combinations with pattern mode
+ * - Enforcing memory limits based on available system memory
+ * - Verifying buffer size meets minimum requirements
+ * - Capping buffer sizes to prevent system memory exhaustion
+ *
+ * The validator queries system information to determine available memory and
+ * applies appropriate limits while respecting user-specified configurations
+ * where possible. Uses return codes for error handling to integrate cleanly
+ * with the main program flow.
+ *
+ * @note Memory limits are calculated as a fraction of available system memory
+ * @note Minimum buffer size constraints ensure valid benchmark execution
+ */
+
 #include "core/config/config.h"
 #include "core/config/constants.h"
 #include "core/system/system_info.h"

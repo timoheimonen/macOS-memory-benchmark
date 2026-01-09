@@ -13,6 +13,16 @@
 // You should have received a copy of the GNU General Public License
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 //
+
+/**
+ * @file warning_messages.cpp
+ * @brief Warning message implementations
+ *
+ * Provides implementations for warning message generation functions used throughout
+ * the benchmark application. Includes formatted warning messages for memory limits,
+ * system configuration, cache detection, and non-fatal runtime issues.
+ */
+
 #include "messages.h"
 #include <sstream>
 

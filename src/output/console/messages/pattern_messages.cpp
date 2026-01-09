@@ -13,6 +13,16 @@
 // You should have received a copy of the GNU General Public License
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 //
+
+/**
+ * @file pattern_messages.cpp
+ * @brief Pattern benchmark messages
+ *
+ * Provides implementations for pattern benchmark message generation functions.
+ * Includes formatted messages for different memory access patterns (sequential,
+ * strided, random) and pattern efficiency analysis metrics.
+ */
+
 #include "messages.h"
 
 namespace Messages {

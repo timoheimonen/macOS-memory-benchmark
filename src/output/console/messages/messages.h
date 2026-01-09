@@ -13,12 +13,39 @@
 // You should have received a copy of the GNU General Public License
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 //
+
+/**
+ * @file messages.h
+ * @brief Centralized message namespace for all application output strings
+ *
+ * This file declares the Messages namespace containing all user-facing text messages
+ * used throughout the application. It provides a centralized location for managing:
+ * - Error messages with consistent formatting and prefixes
+ * - Warning messages for non-critical issues
+ * - Informational messages for user guidance
+ * - Configuration and result output formatting
+ * - Statistical analysis output strings
+ * - Pattern benchmark descriptive labels
+ *
+ * Centralizing messages improves maintainability, enables consistent error reporting,
+ * and facilitates future internationalization efforts.
+ *
+ * @note All messages support dynamic content through function parameters
+ * @note Constant messages are returned by reference for efficiency
+ */
+
 #ifndef MESSAGES_MESSAGES_H
 #define MESSAGES_MESSAGES_H
 
 #include <string>
 
-// Centralized namespace for all text messages, error messages, and output strings
+/**
+ * @brief Centralized namespace for all text messages, error messages, and output strings
+ *
+ * The Messages namespace provides functions that return formatted strings for every
+ * user-facing message in the application. This design ensures consistency in output
+ * formatting and makes it easy to modify messages across the entire codebase.
+ */
 namespace Messages {
 
 // --- Error Messages ---

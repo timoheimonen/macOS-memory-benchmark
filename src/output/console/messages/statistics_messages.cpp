@@ -13,6 +13,16 @@
 // You should have received a copy of the GNU General Public License
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 //
+
+/**
+ * @file statistics_messages.cpp
+ * @brief Statistics output messages
+ *
+ * Provides implementations for statistical summary message generation functions.
+ * Includes formatted messages for displaying aggregate statistics across multiple
+ * benchmark runs including averages, percentiles (P50/P90/P95/P99), and standard deviation.
+ */
+
 #include "messages.h"
 #include <sstream>
 #include <iomanip>

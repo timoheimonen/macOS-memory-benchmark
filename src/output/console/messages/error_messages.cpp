@@ -13,6 +13,16 @@
 // You should have received a copy of the GNU General Public License
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 //
+
+/**
+ * @file error_messages.cpp
+ * @brief Error message implementations
+ *
+ * Provides implementations for error message generation functions used throughout
+ * the benchmark application. Includes formatted error messages for configuration
+ * validation, memory allocation, file I/O, buffer operations, and benchmark execution.
+ */
+
 #include "messages.h"
 #include <sstream>
 

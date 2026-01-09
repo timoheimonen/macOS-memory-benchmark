@@ -13,6 +13,16 @@
 // You should have received a copy of the GNU General Public License
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 //
+
+/**
+ * @file utils.cpp
+ * @brief General utility function implementations
+ *
+ * Provides implementations for general-purpose utility functions including
+ * progress indicators and thread management utilities used throughout the
+ * benchmark application.
+ */
+
 #include <atomic>     // Required for std::atomic (progress indicator)
 #include <iostream>   // Required for std::cout
 #include <thread>     // Required for std::thread
