@@ -120,6 +120,7 @@ int parse_arguments(int argc, char* argv[], BenchmarkConfig& config);
  * @see Constants::MEMORY_LIMIT_FACTOR
  * @see Constants::FALLBACK_TOTAL_LIMIT_MB
  * @see Constants::MINIMUM_LIMIT_MB_PER_BUFFER
+ * @see Constants::DEFAULT_BUFFER_SIZE_MB
  * @see Constants::BYTES_PER_MB
  * @see Constants::MIN_LATENCY_BUFFER_SIZE
  */
