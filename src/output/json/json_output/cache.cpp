@@ -13,6 +13,17 @@
 // You should have received a copy of the GNU General Public License
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 //
+/**
+ * @file cache.cpp
+ * @brief JSON output generation for cache benchmark results
+ * @author Timo Heimonen <timo.heimonen@proton.me>
+ * @date 2025
+ *
+ * This file builds the JSON structure for cache benchmark results including
+ * L1, L2, and custom cache levels. Each cache level includes bandwidth
+ * (read/write/copy) and latency measurements with values and optional
+ * statistical aggregation.
+ */
 // This file uses the nlohmann/json library for JSON parsing and generation.
 // Library: https://github.com/nlohmann/json
 // License: MIT License

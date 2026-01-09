@@ -13,6 +13,23 @@
 // You should have received a copy of the GNU General Public License
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 //
+
+/**
+ * @file main.cpp
+ * @brief Main entry point for the memory benchmark application
+ *
+ * This file contains the main program logic that orchestrates the execution
+ * of memory benchmarks. It handles configuration parsing, buffer allocation,
+ * benchmark execution, and results output in both console and JSON formats.
+ *
+ * The program supports two primary benchmark modes:
+ * - Standard benchmarks: Memory bandwidth and latency tests for different cache levels
+ * - Pattern benchmarks: Access pattern-specific tests (forward, reverse, strided, random)
+ *
+ * @author Timo Heimonen
+ * @date 2026
+ */
+
 #include <cstdlib>  // Exit codes
 #include <iomanip>  // Output formatting
 #include <iostream>
@@ -32,7 +49,35 @@
 #include <mach/mach.h>  // kern_return_t
 #include <pthread/qos.h>
 
-// Main program entry
+/**
+ * @brief Main entry point for the memory benchmark application
+ *
+ * This function orchestrates the complete benchmark workflow:
+ * 1. Parses and validates command-line arguments
+ * 2. Configures system settings (QoS, cache parameters)
+ * 3. Allocates and initializes benchmark buffers
+ * 4. Executes requested benchmarks (standard or pattern-based)
+ * 5. Outputs results to console and optionally to JSON file
+ *
+ * The program supports multiple execution modes:
+ * - Bandwidth-only measurements (--bandwidth-only)
+ * - Latency-only measurements (--latency-only)
+ * - Pattern-specific benchmarks (--patterns)
+ * - Multiple loop iterations for statistical analysis (--loops)
+ *
+ * @param argc Number of command-line arguments
+ * @param argv Array of command-line argument strings
+ *
+ * @return EXIT_SUCCESS (0) on successful completion
+ * @return EXIT_FAILURE (1) on error (configuration, allocation, or benchmark failure)
+ *
+ * @note The main thread is set to QOS_CLASS_USER_INTERACTIVE for optimal latency test performance
+ * @note All allocated buffers are automatically freed when going out of scope
+ *
+ * @see parse_arguments() for command-line argument details
+ * @see run_all_benchmarks() for standard benchmark execution
+ * @see run_all_pattern_benchmarks() for pattern benchmark execution
+ */
 int main(int argc, char *argv[]) {
   // Start total execution timer
   auto timer_opt = HighResTimer::create();

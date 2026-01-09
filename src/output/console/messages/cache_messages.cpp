@@ -13,6 +13,16 @@
 // You should have received a copy of the GNU General Public License
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 //
+
+/**
+ * @file cache_messages.cpp
+ * @brief Cache information messages
+ *
+ * Provides implementations for cache information message generation functions.
+ * Includes formatted messages for displaying detected cache sizes (L1, L2, custom)
+ * with appropriate unit conversions.
+ */
+
 #include "messages.h"
 #include "core/config/constants.h"
 #include <sstream>

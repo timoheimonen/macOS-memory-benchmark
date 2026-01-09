@@ -13,6 +13,15 @@
 // You should have received a copy of the GNU General Public License
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 //
+
+/**
+ * @file program_messages.cpp
+ * @brief Main program messages
+ *
+ * Provides implementations for main program message generation functions including
+ * benchmark execution status messages, program usage/help text, and version information.
+ */
+
 #include "messages.h"
 #include "core/config/constants.h"  // For default values
 #include <sstream>

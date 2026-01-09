@@ -13,6 +13,30 @@
 // You should have received a copy of the GNU General Public License
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 //
+/**
+ * @file json_output.h
+ * @brief JSON output generation for benchmark results
+ * @author Timo Heimonen <timo.heimonen@proton.me>
+ * @date 2025
+ *
+ * This header provides the public API and internal functions for generating
+ * JSON output files from benchmark results. Uses the nlohmann/json library
+ * for JSON manipulation.
+ *
+ * Features:
+ * - Structured JSON output with configuration, results, and metadata
+ * - Statistical aggregation (average, percentiles, stddev) for multi-loop runs
+ * - Support for main memory, cache, and pattern benchmark results
+ * - ISO 8601 timestamp generation
+ * - File path resolution and output
+ *
+ * JSON Structure:
+ * - configuration: System info and benchmark parameters
+ * - execution_time_sec: Total benchmark duration
+ * - main_memory/cache/patterns: Bandwidth and latency results with statistics
+ * - timestamp: ISO 8601 UTC timestamp
+ * - version: Software version
+ */
 #ifndef JSON_OUTPUT_JSON_OUTPUT_H
 #define JSON_OUTPUT_JSON_OUTPUT_H
 

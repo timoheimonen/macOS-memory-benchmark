@@ -13,6 +13,16 @@
 // You should have received a copy of the GNU General Public License
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 //
+
+/**
+ * @file memory_utils.cpp
+ * @brief Memory utility implementations
+ *
+ * Provides implementations for memory buffer initialization and latency chain setup.
+ * Includes functions for creating pointer-chasing chains for latency measurements
+ * and initializing source/destination buffers with test patterns.
+ */
+
 #include "core/memory/memory_utils.h"
 #include "output/console/messages.h"
 #include <vector>
@@ -23,12 +33,33 @@
 #include <iostream>  // Needed for std::cout, std::cerr
 #include <cstdlib>   // Needed for EXIT_SUCCESS, EXIT_FAILURE
 
-// --- Latency Test Helper ---
-// Sets up a randomly shuffled pointer chain within the buffer for latency measurement.
-// 'buffer': The memory area to set up the chain in.
-// 'buffer_size': Total size of the 'buffer' in bytes.
-// 'stride': The distance between consecutive pointer locations in bytes.
-// Returns EXIT_SUCCESS on success, EXIT_FAILURE on error.
+/**
+ * @brief Sets up a randomly shuffled pointer chain within the buffer for latency measurement.
+ *
+ * Creates a circular linked list of pointers within the buffer where each pointer points to
+ * the next element in a randomly shuffled sequence. This ensures unpredictable memory access
+ * patterns that defeat hardware prefetchers and measure true memory latency.
+ *
+ * The function:
+ * 1. Calculates how many pointers can fit in the buffer based on the stride
+ * 2. Creates a shuffled sequence of indices using std::shuffle
+ * 3. Forms a circular chain by making each element point to the next in the shuffled sequence
+ * 4. Performs bounds checking to prevent buffer overruns
+ *
+ * @param[in,out] buffer       The memory area to set up the chain in. Must be non-null.
+ * @param[in]     buffer_size  Total size of the buffer in bytes. Must be >= stride * 2.
+ * @param[in]     stride       The distance between consecutive pointer locations in bytes.
+ *                             Must be >= sizeof(uintptr_t) and non-zero.
+ *
+ * @return EXIT_SUCCESS (0) on success
+ * @return EXIT_FAILURE (1) if buffer is null, stride is zero, or buffer is too small
+ *
+ * @note The buffer must be large enough to hold at least 2 pointers at the given stride.
+ * @note Uses std::random_device and std::mt19937_64 for high-quality randomization.
+ * @note All pointer locations are bounds-checked to prevent buffer overruns.
+ *
+ * @see initialize_buffers() for buffer initialization
+ */
 int setup_latency_chain(void *buffer, size_t buffer_size, size_t stride)
 {
     // Validate input parameters
@@ -106,12 +137,30 @@ int setup_latency_chain(void *buffer, size_t buffer_size, size_t stride)
     return EXIT_SUCCESS;
 }
 
-// --- Buffer Initialization ---
-// Fills source and destination buffers with initial data.
-// 'src_buffer': Pointer to the source buffer.
-// 'dst_buffer': Pointer to the destination buffer.
-// 'buffer_size': Size of each buffer in bytes.
-// Returns EXIT_SUCCESS on success, EXIT_FAILURE on error.
+/**
+ * @brief Fills source and destination buffers with initial data.
+ *
+ * Initializes two buffers for bandwidth testing:
+ * - Source buffer: Filled with a repeating pattern (0-255) to provide deterministic data
+ * - Destination buffer: Zeroed using memset to ensure clean starting state
+ *
+ * This initialization ensures that bandwidth tests start with known buffer states and
+ * can detect errors in memory operations by comparing expected vs actual values.
+ *
+ * @param[out] src_buffer   Pointer to the source buffer. Must be non-null.
+ *                          Will be filled with pattern (i % 256) for each byte i.
+ * @param[out] dst_buffer   Pointer to the destination buffer. Must be non-null.
+ *                          Will be zeroed.
+ * @param[in]  buffer_size  Size of each buffer in bytes. Must be non-zero.
+ *
+ * @return EXIT_SUCCESS (0) on success
+ * @return EXIT_FAILURE (1) if either buffer is null or buffer_size is zero
+ *
+ * @note Both buffers must be pre-allocated to at least buffer_size bytes.
+ * @note The source pattern (i % 256) creates a repeating 0-255 byte sequence.
+ *
+ * @see setup_latency_chain() for latency buffer setup
+ */
 int initialize_buffers(void *src_buffer, void *dst_buffer, size_t buffer_size)
 {
     // Validate input parameters

@@ -13,6 +13,17 @@
 // You should have received a copy of the GNU General Public License
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 //
+/**
+ * @file patterns.cpp
+ * @brief JSON output generation for pattern benchmark results
+ * @author Timo Heimonen <timo.heimonen@proton.me>
+ * @date 2025
+ *
+ * This file builds the JSON structure for pattern benchmark results including
+ * sequential (forward/reverse), strided (64B/4096B), and random access patterns.
+ * Each pattern includes bandwidth measurements (read/write/copy) with values
+ * and optional statistical aggregation.
+ */
 // This file uses the nlohmann/json library for JSON parsing and generation.
 // Library: https://github.com/nlohmann/json
 // License: MIT License

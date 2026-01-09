@@ -13,6 +13,21 @@
 // You should have received a copy of the GNU General Public License
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 //
+/**
+ * @file builder.cpp
+ * @brief JSON builder helper functions for bandwidth and latency results
+ * @author Timo Heimonen <timo.heimonen@proton.me>
+ * @date 2025
+ *
+ * This file provides helper functions for building JSON objects from benchmark
+ * results. Handles the structure for bandwidth (read/write/copy) and latency
+ * results with optional statistical aggregation.
+ *
+ * Functions:
+ * - add_bandwidth_results(): Adds bandwidth measurements with statistics
+ * - add_latency_results(): Adds latency measurements and sample distributions
+ * - build_config_json(): Creates configuration section with system info
+ */
 // This file uses the nlohmann/json library for JSON parsing and generation.
 // Library: https://github.com/nlohmann/json
 // License: MIT License

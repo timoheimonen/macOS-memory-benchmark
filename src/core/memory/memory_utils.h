@@ -13,6 +13,23 @@
 // You should have received a copy of the GNU General Public License
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 //
+
+/**
+ * @file memory_utils.h
+ * @brief Memory utility functions for buffer management and cache line alignment
+ *
+ * This file provides utility functions for memory operations commonly used in benchmarks:
+ * - Cache line alignment functions to prevent false sharing in multi-threaded scenarios
+ * - Pointer alignment utilities for optimal memory access patterns
+ * - Latency chain setup for pointer-chasing memory latency tests
+ * - Buffer initialization routines for benchmark preparation
+ *
+ * All inline alignment functions ensure 64-byte (cache line) boundaries to optimize
+ * memory access and prevent performance degradation from false sharing.
+ *
+ * @note Cache line size is defined as 64 bytes (Constants::CACHE_LINE_SIZE_BYTES)
+ */
+
 #ifndef MEMORY_UTILS_H
 #define MEMORY_UTILS_H
 

@@ -13,6 +13,21 @@
 // You should have received a copy of the GNU General Public License
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 //
+/**
+ * @file execution_strided.cpp
+ * @brief Strided pattern benchmark execution
+ * @author Timo Heimonen <timo.heimonen@proton.me>
+ * @date 2026
+ *
+ * This file implements the execution of strided memory access pattern
+ * benchmarks. Strided access patterns skip fixed numbers of bytes between
+ * successive accesses, used to evaluate cache line utilization and TLB
+ * behavior.
+ *
+ * Supported stride patterns:
+ * - Cache line stride (64 bytes): Tests cache line prefetcher effectiveness
+ * - Page stride (4096 bytes): Tests TLB behavior and page boundary crossing
+ */
 #include "pattern_benchmark/pattern_benchmark.h"
 #include "utils/benchmark.h"
 #include "core/memory/buffer_manager.h"

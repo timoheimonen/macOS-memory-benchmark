@@ -13,6 +13,22 @@
 // You should have received a copy of the GNU General Public License
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 //
+/**
+ * @file execution_utils.cpp
+ * @brief Utility functions for pattern benchmark execution
+ * @author Timo Heimonen <timo.heimonen@proton.me>
+ * @date 2025
+ *
+ * This file provides utility functions for pattern benchmark execution
+ * including bandwidth calculations, random index generation, and parameter
+ * validation.
+ *
+ * Key utilities:
+ * - Bandwidth calculation with overflow protection
+ * - Random access index generation with proper alignment
+ * - Access count calculation based on buffer size
+ * - Alignment boundary calculations
+ */
 #include "pattern_benchmark/pattern_benchmark.h"
 #include "core/config/constants.h"
 #include <random>

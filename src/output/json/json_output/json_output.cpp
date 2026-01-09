@@ -13,6 +13,26 @@
 // You should have received a copy of the GNU General Public License
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 //
+/**
+ * @file json_output.cpp
+ * @brief Main JSON output public API implementation
+ * @author Timo Heimonen <timo.heimonen@proton.me>
+ * @date 2025
+ *
+ * This file implements the public API for saving benchmark results to JSON
+ * files. Coordinates the building of JSON structures from configuration,
+ * statistics, and metadata, then writes to the specified output file.
+ *
+ * Public functions:
+ * - save_results_to_json(): Save main memory and cache benchmark results
+ * - save_pattern_results_to_json(): Save pattern benchmark results
+ *
+ * Features:
+ * - ISO 8601 UTC timestamp generation
+ * - Ordered JSON output for readability
+ * - Path resolution (relative/absolute)
+ * - Version information inclusion
+ */
 // This file uses the nlohmann/json library for JSON parsing and generation.
 // Library: https://github.com/nlohmann/json
 // License: MIT License

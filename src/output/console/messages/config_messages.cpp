@@ -13,6 +13,16 @@
 // You should have received a copy of the GNU General Public License
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 //
+
+/**
+ * @file config_messages.cpp
+ * @brief Configuration output messages
+ *
+ * Provides implementations for configuration display message generation functions.
+ * Includes formatted messages for displaying benchmark configuration parameters,
+ * system information, and CPU details.
+ */
+
 #include "messages.h"
 #include <sstream>
 #include <iomanip>

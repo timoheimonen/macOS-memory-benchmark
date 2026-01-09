@@ -13,6 +13,7 @@
 // You should have received a copy of the GNU General Public License
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 //
+
 /**
  * @file benchmark_runner.h
  * @brief Benchmark runner and results structures
@@ -22,6 +23,7 @@
  * This header defines structures for storing benchmark results and provides
  * functions to run all benchmark loops and collect statistics.
  */
+ 
 #ifndef BENCHMARK_RUNNER_H
 #define BENCHMARK_RUNNER_H
 

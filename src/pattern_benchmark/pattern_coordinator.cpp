@@ -13,6 +13,23 @@
 // You should have received a copy of the GNU General Public License
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 //
+/**
+ * @file pattern_coordinator.cpp
+ * @brief Main coordinator for pattern benchmark execution
+ * @author Timo Heimonen <timo.heimonen@proton.me>
+ * @date 2026
+ *
+ * This file provides the main public API function for running pattern
+ * benchmarks. It orchestrates the execution of all pattern types (sequential,
+ * strided, random) within a single benchmark loop and generates random
+ * indices for random access patterns.
+ *
+ * Primary responsibilities:
+ * - Coordinate execution of all pattern types in sequence
+ * - Generate random access indices
+ * - Create and manage high-resolution timer
+ * - Handle errors and gracefully skip patterns when buffer constraints prevent execution
+ */
 #include "pattern_benchmark/pattern_benchmark.h"
 #include "utils/benchmark.h"
 #include "core/memory/buffer_manager.h"

@@ -13,6 +13,21 @@
 // You should have received a copy of the GNU General Public License
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 //
+/**
+ * @file execution_patterns.cpp
+ * @brief Sequential and random pattern benchmark execution
+ * @author Timo Heimonen <timo.heimonen@proton.me>
+ * @date 2026
+ *
+ * This file implements the execution of sequential (forward/reverse) and
+ * random memory access pattern benchmarks. It coordinates warmup routines,
+ * test execution, timing, and bandwidth calculations for these patterns.
+ *
+ * Implemented patterns:
+ * - Sequential forward: Standard linear memory access (baseline)
+ * - Sequential reverse: Backward linear memory access
+ * - Random uniform: Pseudo-random memory access at cache-line-aligned offsets
+ */
 #include "pattern_benchmark/pattern_benchmark.h"
 #include "utils/benchmark.h"
 #include "core/memory/buffer_manager.h"

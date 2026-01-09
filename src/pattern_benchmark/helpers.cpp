@@ -13,6 +13,21 @@
 // You should have received a copy of the GNU General Public License
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 //
+/**
+ * @file helpers.cpp
+ * @brief Helper functions for pattern benchmark test execution
+ * @author Timo Heimonen <timo.heimonen@proton.me>
+ * @date 2026
+ *
+ * This file provides helper functions that wrap the parallel test framework
+ * for pattern-based memory access benchmarks. These functions handle the
+ * execution of read, write, and copy operations for various access patterns
+ * including sequential, strided, and random access.
+ *
+ * The helpers integrate assembly-level memory access functions with the
+ * multi-threaded parallel test framework, managing checksums, timing, and
+ * thread coordination.
+ */
 #include "pattern_benchmark/pattern_benchmark.h"
 #include "utils/benchmark.h"
 #include "benchmark/parallel_test_framework.h"

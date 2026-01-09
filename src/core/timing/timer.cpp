@@ -13,6 +13,35 @@
 // You should have received a copy of the GNU General Public License
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 //
+
+/**
+ * @file timer.cpp
+ * @brief High-resolution timer implementation using macOS Mach APIs
+ *
+ * This file implements the HighResTimer class, providing high-precision timing
+ * capabilities for benchmarking using macOS-specific Mach absolute time APIs.
+ * The implementation offers:
+ * - Nanosecond-precision timing using mach_absolute_time()
+ * - Safe initialization through factory pattern (std::optional)
+ * - Timebase conversion for accurate time measurements
+ * - Graceful error handling without program termination
+ *
+ * The timer uses Mach absolute time, which provides a monotonic clock that is
+ * not affected by system clock adjustments. Time conversion accounts for the
+ * system's timebase to provide accurate nanosecond measurements that can be
+ * converted to seconds for bandwidth calculations.
+ *
+ * Implementation details:
+ * - Private constructor prevents direct instantiation
+ * - Factory method (create()) validates timebase before returning timer
+ * - Defensive checks prevent division by zero in time conversions
+ * - Supports both second and nanosecond time measurements
+ *
+ * @note Uses mach_absolute_time() for monotonic, high-precision timing
+ * @note Timebase info is cached per timer instance for efficiency
+ * @note All time calculations handle counter wraparound correctly
+ */
+
 #include <mach/mach_error.h>  // For mach_error_string
 #include <mach/mach_time.h>   // For mach_absolute_time, mach_timebase_info
 
@@ -22,7 +51,16 @@
 #include "core/timing/timer.h"
 #include "output/console/messages.h"
 
-// Private constructor: Initialize without exit() calls
+/**
+ * @brief Private constructor for HighResTimer
+ *
+ * Initializes timer with zero start time. Actual initialization of timebase
+ * information is performed by the factory method to allow error handling
+ * without exceptions.
+ *
+ * @note Private to enforce factory pattern usage
+ * @see create() for the public creation interface
+ */
 HighResTimer::HighResTimer() : start_ticks(0) {
   // Factory method handles initialization
 }

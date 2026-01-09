@@ -13,6 +13,16 @@
 // You should have received a copy of the GNU General Public License
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 //
+
+/**
+ * @file info_messages.cpp
+ * @brief Info message implementations
+ *
+ * Provides implementations for informational message generation functions used
+ * throughout the benchmark application. Includes formatted info messages for
+ * configuration adjustments and runtime calculations.
+ */
+
 #include "messages.h"
 #include <sstream>
 

@@ -13,6 +13,29 @@
 // You should have received a copy of the GNU General Public License
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 //
+
+/**
+ * @file warmup_internal.h
+ * @brief Internal template functions for memory warmup operations
+ *
+ * This file provides generic template-based warmup functions used to prepare memory
+ * buffers before benchmark execution. Proper warmup is critical for accurate benchmarking
+ * as it ensures:
+ * - CPU caches are populated with relevant data
+ * - TLB entries are established for the working set
+ * - Memory pages are faulted in and ready for access
+ * - Multi-threaded tests have threads ready and synchronized
+ *
+ * The implementation provides both single-threaded and parallel warmup capabilities:
+ * - Single-threaded warmup with QoS optimization for latency tests
+ * - Parallel warmup with cache-line aligned chunk distribution to prevent false sharing
+ * - Configurable warmup size to balance thoroughness with overhead
+ *
+ * @note All warmup operations are generic templates accepting ChunkOp functors
+ * @note Cache line alignment is maintained throughout to prevent false sharing
+ * @note Supports optional QoS (Quality of Service) configuration for macOS
+ */
+
 #ifndef WARMUP_INTERNAL_H
 #define WARMUP_INTERNAL_H
 
@@ -33,8 +56,21 @@
 // Forward declaration for join_threads (defined in utils.cpp, declared in benchmark.h)
 void join_threads(std::vector<std::thread>& threads);
 
-// Helper function to calculate warmup size: min(buffer_size, max(64MB, buffer_size * 0.1))
-// This ensures meaningful warmup for small buffers while preventing excessive overhead on large buffers.
+/**
+ * @brief Calculate adaptive warmup size based on buffer size
+ *
+ * Computes an appropriate warmup size using the formula:
+ * min(buffer_size, max(64MB, buffer_size * 0.1))
+ *
+ * This ensures meaningful warmup for small buffers while preventing excessive
+ * overhead on large buffers by capping at 10% of buffer size or 64MB minimum.
+ *
+ * @param buffer_size Total size of the buffer in bytes
+ * @return Calculated warmup size in bytes
+ *
+ * @note For buffers < 64MB, returns full buffer_size
+ * @note For buffers >= 64MB, returns max(64MB, 10% of buffer_size)
+ */
 inline size_t calculate_warmup_size(size_t buffer_size) {
   const size_t min_warmup = 64 * 1024 * 1024;  // 64MB
   const size_t percent_warmup = static_cast<size_t>(buffer_size * 0.1);

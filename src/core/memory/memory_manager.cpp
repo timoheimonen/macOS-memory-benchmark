@@ -13,6 +13,22 @@
 // You should have received a copy of the GNU General Public License
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 //
+
+/**
+ * @file memory_manager.cpp
+ * @brief Memory allocation with mmap
+ *
+ * Provides low-level memory allocation functions using mmap for benchmark buffers.
+ * Supports both regular cached allocation and best-effort non-cacheable allocation
+ * with automatic memory cleanup via RAII smart pointers.
+ *
+ * Key features:
+ * - Uses mmap for large, page-aligned allocations
+ * - Optional madvise hints for prefaulting (MADV_WILLNEED) and cache control (MADV_RANDOM)
+ * - Custom MmapDeleter for automatic munmap cleanup
+ * - Comprehensive error handling with errno details
+ */
+
 #include "core/memory/memory_manager.h"
 #include "output/console/messages.h"
 #include <cstring>  // strlen, strcpy, strerror
@@ -20,24 +36,39 @@
 #include <cerrno>   // errno
 
 /**
- * @brief Error Handling Strategy for this module:
- * 
- * This function uses NULL POINTER RETURNS for error handling.
- * 
+ * @brief Allocates a memory buffer using mmap with prefaulting hints.
+ *
+ * Allocates a buffer using mmap with MAP_ANONYMOUS and MAP_PRIVATE flags,
+ * then applies MADV_WILLNEED to prefault pages and potentially improve
+ * initial access performance.
+ *
+ * Error Handling Strategy:
+ * - Uses NULL POINTER RETURNS for error handling
+ * - Validation errors: Returns null pointer with error message logged
+ * - System call errors (mmap): Returns null pointer with errno-based error message
+ * - Non-fatal errors (madvise): Logs warning but continues (doesn't fail allocation)
+ *
  * Rationale:
  * - Memory allocation is a common operation that may fail frequently
  * - Null checks are lightweight and don't require exception handling overhead
  * - Fits naturally with smart pointer patterns (std::unique_ptr)
  * - Allows callers to decide how to handle failures (check null or propagate)
  * - C-style API (mmap) returns MAP_FAILED, which maps naturally to null pointers
- * 
- * Error handling:
- * - Validation errors: Returns null pointer with error message logged
- * - System call errors (mmap): Returns null pointer with errno-based error message
- * - Non-fatal errors (madvise): Logs warning but continues (doesn't fail allocation)
- * 
- * Callers should check for null pointer before using the returned MmapPtr.
- * See buffer_allocator.cpp for example of null pointer checking.
+ *
+ * @param[in] size         Size of the buffer to allocate in bytes. Must be non-zero.
+ * @param[in] buffer_name  Descriptive name for the buffer (used in error messages).
+ *                         Must be a valid null-terminated string.
+ *
+ * @return MmapPtr smart pointer managing the allocated memory
+ * @return nullptr if allocation fails (size is 0 or mmap fails)
+ *
+ * @note The returned pointer is managed by MmapPtr and will be automatically
+ *       freed via munmap when it goes out of scope.
+ * @note madvise(MADV_WILLNEED) failure is non-fatal and logged as a warning.
+ * @note Callers should check for null pointer before using the returned MmapPtr.
+ *
+ * @see allocate_buffer_non_cacheable() for non-cached allocation
+ * @see buffer_allocator.cpp for example usage with null pointer checking
  */
 MmapPtr allocate_buffer(size_t size, const char* buffer_name) {
   // Error: Validate size before allocation - zero size is invalid
@@ -71,6 +102,37 @@ MmapPtr allocate_buffer(size_t size, const char* buffer_name) {
   return buffer_ptr;  // Return valid pointer on success
 }
 
+/**
+ * @brief Allocates a memory buffer with hints to discourage CPU caching (best-effort).
+ *
+ * Allocates a buffer using mmap and applies MADV_RANDOM to hint that access patterns
+ * are random and unpredictable, which may discourage aggressive prefetching and caching.
+ *
+ * IMPORTANT LIMITATIONS:
+ * User-space code on macOS cannot create truly non-cacheable memory because:
+ * - Cannot modify page table attributes (requires kernel privileges)
+ * - Cannot set MAIR (Memory Attribute Indirection Register)
+ * - Cannot create truly uncached mappings
+ *
+ * This function provides best-effort cache discouragement, but the CPU may still
+ * cache the data. For true non-cacheable memory, kernel-level support is required.
+ *
+ * @param[in] size         Size of the buffer to allocate in bytes. Must be non-zero.
+ * @param[in] buffer_name  Descriptive name for the buffer (used in error messages).
+ *                         Must be a valid null-terminated string.
+ *
+ * @return MmapPtr smart pointer managing the allocated memory
+ * @return nullptr if allocation fails (size is 0 or mmap fails)
+ *
+ * @note The returned pointer is managed by MmapPtr and will be automatically
+ *       freed via munmap when it goes out of scope.
+ * @note MADV_RANDOM is a hint to the kernel and does not guarantee non-cached behavior.
+ * @note madvise(MADV_RANDOM) failure is non-fatal and logged as a warning.
+ * @note This is primarily useful for testing memory subsystem behavior under
+ *       different access patterns, not for guaranteeing uncached access.
+ *
+ * @see allocate_buffer() for regular cached allocation
+ */
 MmapPtr allocate_buffer_non_cacheable(size_t size, const char* buffer_name) {
   // Error: Validate size before allocation - zero size is invalid
   if (size == 0) {

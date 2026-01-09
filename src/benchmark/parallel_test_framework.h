@@ -13,6 +13,29 @@
 // You should have received a copy of the GNU General Public License
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 //
+/**
+ * @file parallel_test_framework.h
+ * @brief Generic parallel test framework for multi-threaded benchmark execution
+ * @author Timo Heimonen <timo.heimonen@proton.me>
+ * @date 2025
+ *
+ * This header provides template-based functions for executing parallel memory
+ * benchmarks across multiple threads with proper synchronization and cache-line
+ * alignment. The framework handles thread creation, work distribution, Quality of
+ * Service (QoS) settings, and timing measurements.
+ *
+ * Key features:
+ * - Generic template interface supporting custom work functions
+ * - Automatic cache-line alignment to prevent false sharing
+ * - Synchronized start gate for accurate timing
+ * - Thread-safe execution with minimal overhead
+ * - macOS QoS integration for performance cores
+ * - Support for both single-buffer and dual-buffer (copy) operations
+ *
+ * The framework provides two main template functions:
+ * - run_parallel_test(): For read/write operations on a single buffer
+ * - run_parallel_test_copy(): For copy operations requiring source and destination buffers
+ */
 #ifndef PARALLEL_TEST_FRAMEWORK_H
 #define PARALLEL_TEST_FRAMEWORK_H
 
@@ -34,15 +57,27 @@
 
 // --- Generic Parallel Test Framework ---
 
-// Generic function to run parallel tests with a common threading pattern.
-// 'buffer': Pointer to the memory buffer to operate on.
-// 'size': Total size of the buffer(s) in bytes.
-// 'iterations': How many times to perform the operation.
-// 'num_threads': Number of threads to use.
-// 'timer': High-resolution timer for measuring execution time.
-// 'work_function': Function to call for each thread chunk. Takes (chunk_start, chunk_size, iterations).
-// 'thread_name': Name of the thread type for QoS error messages (e.g., "read", "write", "copy").
-// Returns: Total duration in seconds.
+/**
+ * @brief Run a parallel test with automatic work distribution across threads
+ * @tparam WorkFunction Function type for per-thread work (void(void* chunk_start, size_t chunk_size, int iterations))
+ * @param buffer Pointer to the memory buffer to operate on
+ * @param size Total size of the buffer in bytes
+ * @param iterations Number of times to perform the operation
+ * @param num_threads Number of threads to use for parallel execution
+ * @param timer Reference to high-resolution timer for measuring execution time
+ * @param work_function Function to call for each thread's chunk. Signature: void(void* chunk_start, size_t chunk_size, int iterations)
+ * @param thread_name Name of the thread type for QoS error messages (e.g., "read", "write", "copy")
+ * @return Total duration in seconds, or 0.0 if no work was performed
+ *
+ * This function distributes the buffer across multiple threads with cache-line alignment
+ * to prevent false sharing. All threads are synchronized to start simultaneously after
+ * the timer begins, ensuring accurate timing measurements. Each thread is configured
+ * with QOS_CLASS_USER_INTERACTIVE for optimal performance on macOS.
+ *
+ * @note The buffer is divided evenly among threads, with each chunk aligned to cache-line
+ *       boundaries. Remainder bytes are distributed across the first N threads.
+ * @warning Returns 0.0 if size is 0, num_threads <= 0, or no threads could be created
+ */
 template<typename WorkFunction>
 double run_parallel_test(void *buffer, size_t size, int iterations, int num_threads, HighResTimer &timer,
                          WorkFunction work_function, const char *thread_name) {
@@ -148,16 +183,29 @@ double run_parallel_test(void *buffer, size_t size, int iterations, int num_thre
   return duration;  // Return total time elapsed.
 }
 
-// Overload for copy operations that need both src and dst buffers.
-// 'dst': Pointer to the destination buffer.
-// 'src': Pointer to the source buffer.
-// 'size': Total size of the buffers in bytes.
-// 'iterations': How many times to perform the operation.
-// 'num_threads': Number of threads to use.
-// 'timer': High-resolution timer for measuring execution time.
-// 'work_function': Function to call for each thread chunk. Takes (dst_chunk_start, src_chunk_start, chunk_size, iterations).
-// 'thread_name': Name of the thread type for QoS error messages (e.g., "copy").
-// Returns: Total duration in seconds.
+/**
+ * @brief Run a parallel copy test with automatic work distribution across threads
+ * @tparam WorkFunction Function type for per-thread copy work (void(void* dst_chunk, void* src_chunk, size_t chunk_size, int iterations))
+ * @param dst Pointer to the destination buffer
+ * @param src Pointer to the source buffer
+ * @param size Total size of the buffers in bytes
+ * @param iterations Number of times to perform the copy operation
+ * @param num_threads Number of threads to use for parallel execution
+ * @param timer Reference to high-resolution timer for measuring execution time
+ * @param work_function Function to call for each thread's chunk. Signature: void(void* dst_chunk, void* src_chunk, size_t chunk_size, int iterations)
+ * @param thread_name Name of the thread type for QoS error messages (e.g., "copy")
+ * @return Total duration in seconds, or 0.0 if no work was performed
+ *
+ * This function distributes copy operations across multiple threads with cache-line alignment
+ * on the destination buffer to prevent false sharing. The source buffer alignment is adjusted
+ * to maintain data correspondence with the destination buffer (ensuring src[i] maps to dst[i]).
+ * All threads are synchronized to start simultaneously after the timer begins.
+ *
+ * @note Both buffers are divided evenly among threads. Destination chunks are aligned to
+ *       cache-line boundaries, and source chunks maintain the same alignment offset to
+ *       preserve data integrity.
+ * @warning Returns 0.0 if size is 0, num_threads <= 0, or no threads could be created
+ */
 template<typename WorkFunction>
 double run_parallel_test_copy(void *dst, void *src, size_t size, int iterations, int num_threads, HighResTimer &timer,
                                WorkFunction work_function, const char *thread_name) {

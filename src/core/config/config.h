@@ -1,4 +1,4 @@
-// Copyright 2025 Timo Heimonen <timo.heimonen@proton.me>
+// Copyright 2026 Timo Heimonen <timo.heimonen@proton.me>
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -21,6 +21,15 @@
  *
  * This header defines the BenchmarkConfig structure and provides functions
  * to parse command-line arguments and validate configuration settings.
+ *
+ * This module uses various constants from constants.h including:
+ * - Memory limits (MEMORY_LIMIT_FACTOR, FALLBACK_TOTAL_LIMIT_MB, MINIMUM_LIMIT_MB_PER_BUFFER)
+ * - Cache size validation (MIN_CACHE_SIZE_KB, MAX_CACHE_SIZE_KB)
+ * - Size conversion (BYTES_PER_KB, BYTES_PER_MB)
+ * - Buffer sizing factors (L1_BUFFER_SIZE_FACTOR, L2_BUFFER_SIZE_FACTOR)
+ * - Latency test parameters (LATENCY_STRIDE_BYTES, MIN_LATENCY_BUFFER_SIZE, BASE_LATENCY_ACCESSES, L1_LATENCY_ACCESSES, L2_LATENCY_ACCESSES, CUSTOM_LATENCY_ACCESSES)
+ *
+ * @see constants.h for detailed constant definitions and values.
  */
 #ifndef CONFIG_H
 #define CONFIG_H
@@ -92,6 +101,12 @@ struct BenchmarkConfig {
  * @param argv Array of command-line argument strings
  * @param[out] config Reference to BenchmarkConfig structure to populate
  * @return EXIT_SUCCESS on success, EXIT_FAILURE on error (and prints error message)
+ * @see Constants::MIN_CACHE_SIZE_KB
+ * @see Constants::MAX_CACHE_SIZE_KB
+ * @see Constants::BYTES_PER_KB
+ * @see Constants::L1_LATENCY_ACCESSES
+ * @see Constants::L2_LATENCY_ACCESSES
+ * @see Constants::CUSTOM_LATENCY_ACCESSES
  */
 int parse_arguments(int argc, char* argv[], BenchmarkConfig& config);
 
@@ -102,6 +117,12 @@ int parse_arguments(int argc, char* argv[], BenchmarkConfig& config);
  *
  * Validates that all configuration values are within acceptable ranges and
  * performs necessary adjustments (e.g., rounding buffer sizes).
+ * @see Constants::MEMORY_LIMIT_FACTOR
+ * @see Constants::FALLBACK_TOTAL_LIMIT_MB
+ * @see Constants::MINIMUM_LIMIT_MB_PER_BUFFER
+ * @see Constants::DEFAULT_BUFFER_SIZE_MB
+ * @see Constants::BYTES_PER_MB
+ * @see Constants::MIN_LATENCY_BUFFER_SIZE
  */
 int validate_config(BenchmarkConfig& config);
 
@@ -111,6 +132,11 @@ int validate_config(BenchmarkConfig& config);
  *
  * Calculates appropriate buffer sizes for L1, L2, and custom cache tests
  * based on detected cache sizes and configuration constraints.
+ * @see Constants::L1_BUFFER_SIZE_FACTOR
+ * @see Constants::L2_BUFFER_SIZE_FACTOR
+ * @see Constants::LATENCY_STRIDE_BYTES
+ * @see Constants::MIN_LATENCY_BUFFER_SIZE
+ * @see Constants::BYTES_PER_KB
  */
 void calculate_buffer_sizes(BenchmarkConfig& config);
 
@@ -120,6 +146,8 @@ void calculate_buffer_sizes(BenchmarkConfig& config);
  *
  * Calculates the number of pointer-chasing accesses to perform for each
  * latency test based on the corresponding buffer sizes.
+ * @see Constants::BASE_LATENCY_ACCESSES
+ * @see Constants::DEFAULT_BUFFER_SIZE_MB
  */
 void calculate_access_counts(BenchmarkConfig& config);
 

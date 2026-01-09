@@ -13,6 +13,11 @@
 // You should have received a copy of the GNU General Public License
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 //
+/**
+ * @file pattern_warmup.cpp
+ * @brief Pattern benchmark warmup functions
+ */
+
 #include <atomic>    // For std::atomic
 #include <iostream>  // For std::cerr
 #include <thread>    // For std::thread
@@ -27,12 +32,15 @@
 #include "warmup/warmup.h"
 #include "warmup/warmup_internal.h"
 
-// Warms up memory by reading from the buffer using strided access pattern.
-// 'buffer': Memory region to read from.
-// 'size': Total size of the buffer in bytes.
-// 'stride': Stride size in bytes (must be >= 32, aligned, and <= size).
-// 'num_threads': Number of concurrent threads to use.
-// 'dummy_checksum': Atomic variable to accumulate a dummy result (prevents optimization).
+/**
+ * @brief Warms up memory by reading from the buffer using strided access pattern.
+ *
+ * @param buffer Memory region to read from
+ * @param size Total size of the buffer in bytes
+ * @param stride Stride size in bytes (must be >= 32, aligned, and <= size)
+ * @param num_threads Number of concurrent threads to use
+ * @param dummy_checksum Atomic variable to accumulate a dummy result (prevents optimization)
+ */
 void warmup_read_strided(void* buffer, size_t size, size_t stride, int num_threads, std::atomic<uint64_t>& dummy_checksum) {
   // Validate stride
   if (stride < 32) {
@@ -60,11 +68,14 @@ void warmup_read_strided(void* buffer, size_t size, size_t stride, int num_threa
   warmup_parallel(buffer, size, num_threads, read_chunk_op, true, nullptr, &dummy_checksum, warmup_size);
 }
 
-// Warms up memory by writing to the buffer using strided access pattern.
-// 'buffer': Memory region to write to.
-// 'size': Total size of the buffer in bytes.
-// 'stride': Stride size in bytes (must be >= 32, aligned, and <= size).
-// 'num_threads': Number of concurrent threads to use.
+/**
+ * @brief Warms up memory by writing to the buffer using strided access pattern.
+ *
+ * @param buffer Memory region to write to
+ * @param size Total size of the buffer in bytes
+ * @param stride Stride size in bytes (must be >= 32, aligned, and <= size)
+ * @param num_threads Number of concurrent threads to use
+ */
 void warmup_write_strided(void* buffer, size_t size, size_t stride, int num_threads) {
   // Validate stride
   if (stride < 32) {
@@ -89,12 +100,15 @@ void warmup_write_strided(void* buffer, size_t size, size_t stride, int num_thre
   warmup_parallel(buffer, size, num_threads, write_chunk_op, true, nullptr, nullptr, warmup_size);
 }
 
-// Warms up memory by copying data between buffers using strided access pattern.
-// 'dst': Destination memory region.
-// 'src': Source memory region.
-// 'size': Total size of data to copy in bytes.
-// 'stride': Stride size in bytes (must be >= 32, aligned, and <= size).
-// 'num_threads': Number of concurrent threads to use.
+/**
+ * @brief Warms up memory by copying data between buffers using strided access pattern.
+ *
+ * @param dst Destination memory region
+ * @param src Source memory region
+ * @param size Total size of data to copy in bytes
+ * @param stride Stride size in bytes (must be >= 32, aligned, and <= size)
+ * @param num_threads Number of concurrent threads to use
+ */
 void warmup_copy_strided(void* dst, void* src, size_t size, size_t stride, int num_threads) {
   // Validate stride
   if (stride < 32) {
@@ -119,11 +133,14 @@ void warmup_copy_strided(void* dst, void* src, size_t size, size_t stride, int n
   warmup_parallel(dst, size, num_threads, copy_chunk_op, true, src, nullptr, warmup_size);
 }
 
-// Warms up memory by reading from the buffer using random access pattern.
-// 'buffer': Memory region to read from.
-// 'indices': Vector of byte offsets (must be 32-byte aligned and within buffer bounds).
-// 'num_threads': Number of concurrent threads to use.
-// 'dummy_checksum': Atomic variable to accumulate a dummy result (prevents optimization).
+/**
+ * @brief Warms up memory by reading from the buffer using random access pattern.
+ *
+ * @param buffer Memory region to read from
+ * @param indices Vector of byte offsets (must be 32-byte aligned and within buffer bounds)
+ * @param num_threads Number of concurrent threads to use
+ * @param dummy_checksum Atomic variable to accumulate a dummy result (prevents optimization)
+ */
 void warmup_read_random(void* buffer, const std::vector<size_t>& indices, int num_threads, std::atomic<uint64_t>& dummy_checksum) {
   if (indices.empty()) {
     std::cerr << Messages::error_prefix() << Messages::error_indices_empty() << std::endl;
@@ -188,10 +205,13 @@ void warmup_read_random(void* buffer, const std::vector<size_t>& indices, int nu
   join_threads(threads);
 }
 
-// Warms up memory by writing to the buffer using random access pattern.
-// 'buffer': Memory region to write to.
-// 'indices': Vector of byte offsets (must be 32-byte aligned and within buffer bounds).
-// 'num_threads': Number of concurrent threads to use.
+/**
+ * @brief Warms up memory by writing to the buffer using random access pattern.
+ *
+ * @param buffer Memory region to write to
+ * @param indices Vector of byte offsets (must be 32-byte aligned and within buffer bounds)
+ * @param num_threads Number of concurrent threads to use
+ */
 void warmup_write_random(void* buffer, const std::vector<size_t>& indices, int num_threads) {
   if (indices.empty()) {
     std::cerr << Messages::error_prefix() << Messages::error_indices_empty() << std::endl;
@@ -253,11 +273,14 @@ void warmup_write_random(void* buffer, const std::vector<size_t>& indices, int n
   join_threads(threads);
 }
 
-// Warms up memory by copying data between buffers using random access pattern.
-// 'dst': Destination memory region.
-// 'src': Source memory region.
-// 'indices': Vector of byte offsets (must be 32-byte aligned and within buffer bounds).
-// 'num_threads': Number of concurrent threads to use.
+/**
+ * @brief Warms up memory by copying data between buffers using random access pattern.
+ *
+ * @param dst Destination memory region
+ * @param src Source memory region
+ * @param indices Vector of byte offsets (must be 32-byte aligned and within buffer bounds)
+ * @param num_threads Number of concurrent threads to use
+ */
 void warmup_copy_random(void* dst, void* src, const std::vector<size_t>& indices, int num_threads) {
   if (indices.empty()) {
     std::cerr << Messages::error_prefix() << Messages::error_indices_empty() << std::endl;

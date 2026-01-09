@@ -13,6 +13,22 @@
 // You should have received a copy of the GNU General Public License
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 //
+/**
+ * @file file_writer.cpp
+ * @brief JSON file writing with error handling
+ * @author Timo Heimonen <timo.heimonen@proton.me>
+ * @date 2025
+ *
+ * This file provides the file writing functionality for JSON output with
+ * comprehensive error handling for file system operations. Includes directory
+ * creation, permission checking, and detailed error reporting.
+ *
+ * Error handling:
+ * - Automatic parent directory creation
+ * - Permission validation
+ * - Detailed error messages with errno information
+ * - Safe file overwriting
+ */
 // This file uses the nlohmann/json library for JSON parsing and generation.
 // Library: https://github.com/nlohmann/json
 // License: MIT License

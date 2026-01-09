@@ -13,15 +13,23 @@
 // You should have received a copy of the GNU General Public License
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 //
+/**
+ * @file basic_warmup.cpp
+ * @brief Basic memory warmup functions
+ */
+
 #include "utils/benchmark.h"  // Includes definitions for assembly loops etc.
 #include "warmup/warmup.h"
 #include "warmup/warmup_internal.h"
 
-// Warms up memory by reading from the buffer using multiple threads.
-// 'buffer': Memory region to read from.
-// 'size': Total size of the buffer in bytes.
-// 'num_threads': Number of concurrent threads to use.
-// 'dummy_checksum': Atomic variable to accumulate a dummy result (prevents optimization).
+/**
+ * @brief Warms up memory by reading from the buffer using multiple threads.
+ *
+ * @param buffer Memory region to read from
+ * @param size Total size of the buffer in bytes
+ * @param num_threads Number of concurrent threads to use
+ * @param dummy_checksum Atomic variable to accumulate a dummy result (prevents optimization)
+ */
 void warmup_read(void* buffer, size_t size, int num_threads, std::atomic<uint64_t>& dummy_checksum) {
   size_t warmup_size = calculate_warmup_size(size);
   auto read_chunk_op = [](char* chunk_start, char* /* src_chunk */, size_t chunk_size, 
@@ -37,10 +45,13 @@ void warmup_read(void* buffer, size_t size, int num_threads, std::atomic<uint64_
   warmup_parallel(buffer, size, num_threads, read_chunk_op, true, nullptr, &dummy_checksum, warmup_size);
 }
 
-// Warms up memory by writing to the buffer using multiple threads.
-// 'buffer': Memory region to write to.
-// 'size': Total size of the buffer in bytes.
-// 'num_threads': Number of concurrent threads to use.
+/**
+ * @brief Warms up memory by writing to the buffer using multiple threads.
+ *
+ * @param buffer Memory region to write to
+ * @param size Total size of the buffer in bytes
+ * @param num_threads Number of concurrent threads to use
+ */
 void warmup_write(void* buffer, size_t size, int num_threads) {
   size_t warmup_size = calculate_warmup_size(size);
   auto write_chunk_op = [](char* chunk_start, char* /* src_chunk */, size_t chunk_size, 
@@ -50,11 +61,14 @@ void warmup_write(void* buffer, size_t size, int num_threads) {
   warmup_parallel(buffer, size, num_threads, write_chunk_op, true, nullptr, nullptr, warmup_size);
 }
 
-// Warms up memory by copying data between buffers using multiple threads.
-// 'dst': Destination memory region.
-// 'src': Source memory region.
-// 'size': Total size of data to copy in bytes.
-// 'num_threads': Number of concurrent threads to use.
+/**
+ * @brief Warms up memory by copying data between buffers using multiple threads.
+ *
+ * @param dst Destination memory region
+ * @param src Source memory region
+ * @param size Total size of data to copy in bytes
+ * @param num_threads Number of concurrent threads to use
+ */
 void warmup_copy(void* dst, void* src, size_t size, int num_threads) {
   size_t warmup_size = calculate_warmup_size(size);
   auto copy_chunk_op = [](char* dst_chunk, char* src_chunk, size_t chunk_size, 

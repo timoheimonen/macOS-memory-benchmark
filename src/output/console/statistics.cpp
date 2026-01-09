@@ -13,6 +13,12 @@
 // You should have received a copy of the GNU General Public License
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 //
+
+/**
+ * @file statistics.cpp
+ * @brief Statistics calculation and display
+ */
+
 #include <algorithm>  // Required for std::min_element, std::max_element, std::sort (finding min/max, sorting)
 #include <cmath>       // Required for std::sqrt (standard deviation calculation)
 #include <iomanip>     // Required for std::setprecision, std::fixed (output formatting)
@@ -23,9 +29,9 @@
 #include "output/console/messages.h"  // Centralized messages
 #include "output/console/statistics.h"  // Function declaration
 
-// --- Helper structures and functions for statistics ---
-
-// Structure to hold calculated statistics (average, min, max, percentiles, stddev)
+/**
+ * @brief Structure to hold calculated statistics (average, min, max, percentiles, stddev)
+ */
 struct Statistics {
   double average;
   double min;
@@ -37,7 +43,12 @@ struct Statistics {
   double stddev;
 };
 
-// Calculate statistics (average, min, max, percentiles, stddev) from a vector of values
+/**
+ * @brief Calculate statistics (average, min, max, percentiles, stddev) from a vector of values.
+ *
+ * @param values Vector of values to calculate statistics from
+ * @return Statistics structure containing calculated values
+ */
 static Statistics calculate_statistics(const std::vector<double> &values) {
   if (values.empty()) {
     return {0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
@@ -79,7 +90,13 @@ static Statistics calculate_statistics(const std::vector<double> &values) {
   return {avg, min_val, max_val, median, p90, p95, p99, stddev_val};
 }
 
-// Print statistics for a single metric (used for main memory bandwidth)
+/**
+ * @brief Print statistics for a single metric (used for main memory bandwidth).
+ *
+ * @param metric_name Name of the metric being displayed
+ * @param stats Statistics structure containing calculated values
+ * @param precision Output precision for formatting (default: BANDWIDTH_PRECISION)
+ */
 static void print_metric_statistics(const std::string &metric_name, const Statistics &stats, int precision = Constants::BANDWIDTH_PRECISION) {
   std::cout << Messages::statistics_metric_name(metric_name) << std::endl;
   std::cout << Messages::statistics_average(stats.average, precision) << std::endl;
@@ -92,7 +109,14 @@ static void print_metric_statistics(const std::string &metric_name, const Statis
   std::cout << Messages::statistics_max(stats.max, precision) << std::endl;
 }
 
-// Print bandwidth statistics for a cache level (L1, L2, or Custom)
+/**
+ * @brief Print bandwidth statistics for a cache level (L1, L2, or Custom).
+ *
+ * @param cache_name Name of the cache level (e.g., "L1", "L2", "Custom")
+ * @param read_bw Vector of read bandwidth values
+ * @param write_bw Vector of write bandwidth values
+ * @param copy_bw Vector of copy bandwidth values
+ */
 static void print_cache_bandwidth_statistics(const std::string &cache_name,
                                               const std::vector<double> &read_bw,
                                               const std::vector<double> &write_bw,
@@ -143,8 +167,15 @@ static void print_cache_bandwidth_statistics(const std::string &cache_name,
   }
 }
 
-// Print latency statistics for a cache level (L1, L2, or Custom)
-// Uses full sample distribution for percentiles if available, otherwise uses loop averages
+/**
+ * @brief Print latency statistics for a cache level (L1, L2, or Custom).
+ *
+ * Uses full sample distribution for percentiles if available, otherwise uses loop averages.
+ *
+ * @param cache_name Name of the cache level (e.g., "L1", "L2", "Custom")
+ * @param latency Vector of latency values (loop averages)
+ * @param latency_samples Vector of full sample distribution (if available)
+ */
 static void print_cache_latency_statistics(const std::string &cache_name,
                                             const std::vector<double> &latency,
                                             const std::vector<double> &latency_samples) {
@@ -183,21 +214,36 @@ static void print_cache_latency_statistics(const std::string &cache_name,
   }
 }
 
-// --- Print Statistics across all loops ---
-// Calculates and displays summary statistics (Avg/Min/Max) if more than one loop was run.
-// 'loop_count': The total number of loops that were executed.
-// 'all_read_bw', 'all_write_bw', 'all_copy_bw': Vectors holding bandwidth results from each individual loop.
-// 'all_l1_latency', 'all_l2_latency': Vectors holding cache latency results from each loop.
-// 'all_l1_read_bw', 'all_l1_write_bw', 'all_l1_copy_bw': Vectors holding L1 cache bandwidth results from each loop.
-// 'all_l2_read_bw', 'all_l2_write_bw', 'all_l2_copy_bw': Vectors holding L2 cache bandwidth results from each loop.
-// 'all_main_mem_latency': Vector holding main memory latency results from each loop.
-// 'use_custom_cache_size': Flag indicating if custom cache size is being used.
-// 'all_custom_latency', 'all_custom_read_bw', 'all_custom_write_bw', 'all_custom_copy_bw': Custom cache results vectors.
-// 'all_main_mem_latency_samples', 'all_l1_latency_samples', 'all_l2_latency_samples', 'all_custom_latency_samples': Full sample distributions.
-// 'only_bandwidth': Whether only bandwidth tests are run (skip latency statistics if true).
-// 'only_latency': Whether only latency tests are run (skip bandwidth statistics if true).
+/**
+ * @brief Calculates and displays summary statistics if more than one loop was run.
+ *
+ * @param loop_count The total number of loops that were executed
+ * @param all_read_bw Vector holding read bandwidth results from each loop
+ * @param all_write_bw Vector holding write bandwidth results from each loop
+ * @param all_copy_bw Vector holding copy bandwidth results from each loop
+ * @param all_l1_latency Vector holding L1 cache latency results from each loop
+ * @param all_l2_latency Vector holding L2 cache latency results from each loop
+ * @param all_l1_read_bw Vector holding L1 cache read bandwidth results from each loop
+ * @param all_l1_write_bw Vector holding L1 cache write bandwidth results from each loop
+ * @param all_l1_copy_bw Vector holding L1 cache copy bandwidth results from each loop
+ * @param all_l2_read_bw Vector holding L2 cache read bandwidth results from each loop
+ * @param all_l2_write_bw Vector holding L2 cache write bandwidth results from each loop
+ * @param all_l2_copy_bw Vector holding L2 cache copy bandwidth results from each loop
+ * @param all_main_mem_latency Vector holding main memory latency results from each loop
+ * @param use_custom_cache_size Flag indicating if custom cache size is being used
+ * @param all_custom_latency Vector holding custom cache latency results from each loop
+ * @param all_custom_read_bw Vector holding custom cache read bandwidth results from each loop
+ * @param all_custom_write_bw Vector holding custom cache write bandwidth results from each loop
+ * @param all_custom_copy_bw Vector holding custom cache copy bandwidth results from each loop
+ * @param all_main_mem_latency_samples Full sample distribution for main memory latency
+ * @param all_l1_latency_samples Full sample distribution for L1 cache latency
+ * @param all_l2_latency_samples Full sample distribution for L2 cache latency
+ * @param all_custom_latency_samples Full sample distribution for custom cache latency
+ * @param only_bandwidth Whether only bandwidth tests are run
+ * @param only_latency Whether only latency tests are run
+ */
 void print_statistics(int loop_count, const std::vector<double> &all_read_bw, const std::vector<double> &all_write_bw,
-                      const std::vector<double> &all_copy_bw, 
+                      const std::vector<double> &all_copy_bw,
                       const std::vector<double> &all_l1_latency, const std::vector<double> &all_l2_latency,
                       const std::vector<double> &all_l1_read_bw, const std::vector<double> &all_l1_write_bw,
                       const std::vector<double> &all_l1_copy_bw,
