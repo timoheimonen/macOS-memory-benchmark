@@ -13,6 +13,22 @@
 // You should have received a copy of the GNU General Public License
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 //
+/**
+ * @file validation.cpp
+ * @brief Validation functions for pattern benchmark parameters
+ * @author Timo Heimonen <timo.heimonen@proton.me>
+ * @date 2025
+ *
+ * This file provides validation functions for pattern benchmark parameters
+ * including stride values and random access index arrays. Ensures that all
+ * benchmark parameters meet safety and correctness requirements before
+ * execution begins.
+ *
+ * Validates:
+ * - Stride values are within acceptable bounds
+ * - Random access indices are within buffer bounds
+ * - Indices are properly aligned to access size requirements
+ */
 #include "pattern_benchmark/pattern_benchmark.h"
 #include "core/config/constants.h"
 #include "output/console/messages.h"

@@ -13,6 +13,22 @@
 // You should have received a copy of the GNU General Public License
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 //
+/**
+ * @file pattern_statistics_manager.cpp
+ * @brief Statistics collection and management for pattern benchmarks
+ * @author Timo Heimonen <timo.heimonen@proton.me>
+ * @date 2026
+ *
+ * This file implements the top-level coordinator for running multiple
+ * pattern benchmark loops and collecting aggregated statistics. It manages
+ * the execution of all pattern types across multiple iterations and stores
+ * results for statistical analysis.
+ *
+ * Coordinates execution of:
+ * - Multiple benchmark loops (user-configurable loop count)
+ * - All pattern types (forward, reverse, strided, random)
+ * - Result aggregation into PatternStatistics structure
+ */
 #include "pattern_benchmark/pattern_benchmark.h"
 #include "core/config/config.h"
 #include "core/config/constants.h"

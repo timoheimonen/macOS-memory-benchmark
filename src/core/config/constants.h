@@ -13,12 +13,47 @@
 // You should have received a copy of the GNU General Public License
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 //
+/**
+ * @file constants.h
+ * @brief Central configuration constants for benchmark execution
+ * @author Timo Heimonen <timo.heimonen@proton.me>
+ * @date 2025
+ *
+ * This header defines all configuration constants used throughout the benchmark
+ * suite, organized into logical categories for maintainability and clarity.
+ *
+ * Constant categories:
+ * - Buffer size factors: Scaling factors for cache-level buffer sizing
+ * - Memory limits: System memory usage constraints and fallbacks
+ * - Cache size limits: Validation ranges for cache size specifications
+ * - Size conversions: Unit conversion factors (KB, MB, cache lines)
+ * - Latency test parameters: Stride values and buffer size requirements
+ * - Access count defaults: Number of operations for latency measurements
+ * - Execution parameters: Thread counts and iteration multipliers
+ * - Default values: User-configurable parameter defaults
+ * - Bandwidth calculations: Constants for throughput computation
+ * - Output formatting: Display precision for various metric types
+ * - Pattern benchmarks: Parameters for memory access pattern tests
+ * - Cache fallback sizes: Default cache sizes when detection fails
+ * - UI constants: Progress indicator settings
+ *
+ * All constants are defined within the Constants namespace to avoid naming
+ * conflicts and provide clear semantic grouping.
+ */
 #ifndef CONSTANTS_H
 #define CONSTANTS_H
 
 #include <cstddef>  // size_t
 
-// Memory and buffer constants
+/**
+ * @namespace Constants
+ * @brief Namespace containing all benchmark configuration constants
+ *
+ * This namespace provides centralized access to configuration constants used
+ * throughout the benchmark suite. Constants are organized by functional area
+ * and include comprehensive inline documentation explaining their purpose and
+ * usage context.
+ */
 namespace Constants {
   // Buffer size factors
   constexpr double L1_BUFFER_SIZE_FACTOR = 0.75;  // Use 75% of L1 cache size

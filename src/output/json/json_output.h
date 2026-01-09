@@ -1,4 +1,4 @@
-// Copyright 2025 Timo Heimonen <timo.heimonen@proton.me>
+// Copyright 2026 Timo Heimonen <timo.heimonen@proton.me>
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -13,8 +13,16 @@
 // You should have received a copy of the GNU General Public License
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 //
-// Compatibility header: redirects to the new json_output/json_output.h location
-//
+/**
+ * @file json_output.h
+ * @brief Compatibility header redirecting to json_output/json_output.h
+ * @author Timo Heimonen <timo.heimonen@proton.me>
+ * @date 2026
+ *
+ * This is a compatibility header that redirects includes to the new location
+ * of the JSON output module. Use this for backward compatibility with code
+ * that includes from the old location.
+ */
 #ifndef JSON_OUTPUT_H
 #define JSON_OUTPUT_H
 

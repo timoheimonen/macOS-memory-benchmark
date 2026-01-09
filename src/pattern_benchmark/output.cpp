@@ -13,6 +13,23 @@
 // You should have received a copy of the GNU General Public License
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 //
+/**
+ * @file output.cpp
+ * @brief Console output formatting for pattern benchmark results
+ * @author Timo Heimonen <timo.heimonen@proton.me>
+ * @date 2025
+ *
+ * This file provides functions for formatting and displaying pattern benchmark
+ * results to the console. It handles result presentation, statistical analysis,
+ * and efficiency metrics calculation.
+ *
+ * Output features:
+ * - Individual pattern results with percentage comparisons to baseline
+ * - Statistical analysis across multiple loops (average, percentiles, stddev)
+ * - Efficiency metrics (sequential coherence, prefetcher effectiveness,
+ *   cache thrashing potential, TLB pressure)
+ * - Formatted tables with appropriate precision and units
+ */
 #include "pattern_benchmark/pattern_benchmark.h"
 #include "core/config/constants.h"
 #include "output/console/messages.h"
