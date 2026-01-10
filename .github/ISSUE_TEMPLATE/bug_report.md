@@ -11,8 +11,8 @@ A clear and concise description of the issue.
 
 ## Environment
 **System Information:**
-- macOS Version: [e.g., macOS 15.2]
-- Chip: [e.g., Apple M4, M3, M2, M1]
+- macOS Version: [e.g., macOS 26.2]
+- Chip: [e.g., Apple M5, M4, M3, M2, M1]
 - Performance Cores: [e.g., 4]
 - Efficiency Cores: [e.g., 6]
 - Total Memory: [e.g., 24GB]
