@@ -6,7 +6,11 @@ Copyright 2025-2026 Timo Heimonen <timo.heimonen@proton.me>
 License: GPL-3.0 license  
   
 **Low-level tool** to measure memory read/write/copy bandwidth, cache/main memory latency, and access pattern performance on macOS Apple Silicon (ARM64).
-  
+
+![Mac Mini M4 Cache Latency from multiple JSON-files](pictures/MacMiniM4_cache_latency.png)  
+Mac Mini M4 Cache Latency from multiple JSON-files with example-script provided.
+
+
 ## Description
 
 This tool measures memory performance on macOS Apple Silicon systems. It provides comprehensive benchmarks for:
@@ -346,9 +350,6 @@ Pattern Efficiency Analysis:
 
 Done. Total execution time: 62.73719 s
 ```
-
-![Mac Mini M4 Cache Latency from multiple JSON-files](pictures/MacMiniM4_cache_latency.png)  
-Mac Mini M4 Cache Latency from multiple JSON-files with example-script provided.
 
 ![Mac Mini M4 10 benchmark loops](pictures/MacMiniM4_10_loops_results.png)  
 Mac Mini M4 10 benchmark loops results. Image created from JSON file using separate program.
