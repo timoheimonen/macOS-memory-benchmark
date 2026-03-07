@@ -51,7 +51,7 @@ const std::string& msg_running_pattern_benchmarks() {
 std::string usage_header(const std::string& version) {
   std::ostringstream oss;
   oss << "Copyright 2025-2026 Timo Heimonen <timo.heimonen@proton.me>\n"
-      << "Version: " << version << " by Timo Heimonen <timo.heimonen@proton.me>\n"
+      << "Version: " << version << "\n"
       << "License: GNU GPL v3. See <https://www.gnu.org/licenses/>\n"
       << "This program is free software: you can redistribute it and/or modify\n"
       << "it under the terms of the GNU General Public License as published by\n"
@@ -109,4 +109,3 @@ std::string usage_example(const std::string& prog_name) {
 }
 
 } // namespace Messages
-
