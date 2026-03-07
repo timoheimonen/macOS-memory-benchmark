@@ -15,6 +15,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Byte-tail termination in write kernel**: Fixed the `<32B` byte cleanup loop in `memory_write_loop_asm` to use zero/non-zero termination (`cbz`/`b.ne`) instead of signed conditions, preventing edge-case misbehavior with large unsigned counters.
 - **Unsigned loop/cleanup branching in read kernel**: Fixed `memory_read_loop_asm` to use unsigned branch conditions (`b.lo`/`b.hs`) for block and cleanup thresholds, ensuring correct behavior across the full `size_t` range.
 - **Byte-tail termination in read kernel**: Fixed the `<32B` byte cleanup loop in `memory_read_loop_asm` to use zero/non-zero termination (`cbz`/`b.ne`) instead of signed conditions, preventing edge-case misbehavior with large unsigned counters.
+- **Unsigned loop/cleanup branching in copy kernel**: Fixed `memory_copy_loop_asm` to use unsigned branch conditions (`b.lo`/`b.hs`) for block and cleanup thresholds, ensuring correct behavior across the full `size_t` range.
+- **Byte-tail termination in copy kernel**: Fixed the `<32B` byte cleanup loop in `memory_copy_loop_asm` to use zero/non-zero termination (`cbz`/`b.ne`) instead of signed conditions, preventing edge-case misbehavior with large unsigned counters.
 
 ## [0.52.7] - 2026-01-05
 

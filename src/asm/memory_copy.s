@@ -45,7 +45,7 @@ copy_loop_start_nt512:      // Main 512B block loop
     // Only x3 (offset) and x5 (remaining) change per iteration.
     subs x5, x2, x3         // remaining = count - offset
     cmp x5, x4              // remaining < step?
-    b.lt copy_loop_cleanup  // If less, handle remaining bytes
+    b.lo copy_loop_cleanup  // If less (unsigned), handle remaining bytes
 
     // Calculate current addresses
     add x6, x1, x3          // src_addr = base + offset
@@ -104,7 +104,7 @@ copy_loop_cleanup:          // Tail handling when <512B remain
     // This minimizes branches while ensuring exact byte count handling.
     // Larger chunks first for better performance on unaligned remainders.
     cmp x3, x2              // offset == count?
-    b.ge copy_loop_end      // If done, exit
+    b.hs copy_loop_end      // If done (unsigned >=), exit
 
     subs x5, x2, x3         // Recalc remaining (x5)
     add x6, x1, x3          // src_addr = src + offset
@@ -112,7 +112,7 @@ copy_loop_cleanup:          // Tail handling when <512B remain
 
     // Handle 256B chunks (8 ldp/stnp pairs)
     cmp x5, #256              // Check if >= 256 bytes remain
-    b.lt cleanup_128          // If less, handle smaller chunks
+    b.lo cleanup_128          // If less (unsigned), handle smaller chunks
     ldp q0, q1, [x6, #0]      // Load first pair (32B)
     ldp q2, q3, [x6, #32]     // Load second pair (32B)
     ldp q4, q5, [x6, #64]     // Load third pair (32B)
@@ -135,7 +135,7 @@ copy_loop_cleanup:          // Tail handling when <512B remain
 
 cleanup_128:                  // Handle 128B chunks (4 ldp + 4 stnp)
     cmp x5, #128              // Check if >= 128 bytes remain
-    b.lt cleanup_64           // If less, handle smaller chunks
+    b.lo cleanup_64           // If less (unsigned), handle smaller chunks
     ldp q0, q1, [x6, #0]      // Load first pair (32B)
     ldp q2, q3, [x6, #32]     // Load second pair (32B)
     ldp q4, q5, [x6, #64]     // Load third pair (32B)
@@ -150,7 +150,7 @@ cleanup_128:                  // Handle 128B chunks (4 ldp + 4 stnp)
 
 cleanup_64:                   // Handle 64B chunks (2 ldp + 2 stnp)
     cmp x5, #64               // Check if >= 64 bytes remain
-    b.lt cleanup_32           // If less, handle smaller chunks
+    b.lo cleanup_32           // If less (unsigned), handle smaller chunks
     ldp q0, q1, [x6, #0]      // Load first pair (32B)
     ldp q2, q3, [x6, #32]     // Load second pair (32B)
     stnp q0, q1, [x7, #0]     // Store first pair (non-temporal)
@@ -161,7 +161,7 @@ cleanup_64:                   // Handle 64B chunks (2 ldp + 2 stnp)
 
 cleanup_32:                   // Handle 32B chunk (1 ldp + 1 stnp)
     cmp x5, #32               // Check if >= 32 bytes remain
-    b.lt copy_cleanup_byte    // If less, handle byte tail
+    b.lo copy_cleanup_byte    // If less (unsigned), handle byte tail
     ldp q0, q1, [x6, #0]      // Load pair (32B)
     stnp q0, q1, [x7, #0]     // Store pair (non-temporal)
     add x6, x6, #32           // Advance source pointer by 32B
@@ -171,12 +171,11 @@ cleanup_32:                   // Handle 32B chunk (1 ldp + 1 stnp)
 copy_cleanup_byte:           // Byte tail for final <32B
     // Final byte-by-byte copy for <32B remainder. Expected to be rare in
     // bandwidth benchmarks but ensures correctness for any input size.
-    cmp x5, #0               // Check if any bytes remain
-    b.le copy_loop_end        // If none, exit
+    cbz x5, copy_loop_end     // If none remain, exit
     ldrb w8, [x6], #1        // Load byte, post-increment source
     strb w8, [x7], #1        // Store byte, post-increment destination
     subs x5, x5, #1          // Decrement remaining count
-    b.gt copy_cleanup_byte    // Loop if more bytes remain
+    b.ne copy_cleanup_byte    // Loop while bytes remain
 
 copy_loop_end:              // Return to caller
     ret                     // Return
