@@ -1,4 +1,4 @@
-// Copyright 2025 Timo Heimonen <timo.heimonen@proton.me>
+// Copyright 2026 Timo Heimonen <timo.heimonen@proton.me>
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -54,7 +54,7 @@ write_random_loop:              // Main random access loop
     
     // Check if done
     cmp x3, x2              // i >= num_accesses?
-    b.ge write_random_end   // If done, exit
+    b.hs write_random_end   // If done (unsigned >=), exit
     
     // Load index: indices[i]
     // Array indexing: indices[i] = *(indices + i * sizeof(size_t))
@@ -75,4 +75,3 @@ write_random_loop:              // Main random access loop
 
 write_random_end:             // Return to caller
     ret                     // Return
-

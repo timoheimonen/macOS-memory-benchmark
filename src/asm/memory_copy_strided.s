@@ -1,4 +1,4 @@
-// Copyright 2025 Timo Heimonen <timo.heimonen@proton.me>
+// Copyright 2026 Timo Heimonen <timo.heimonen@proton.me>
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -51,7 +51,7 @@ copy_strided_loop:              // Main strided access loop
 
     // Check termination: iteration_count >= num_iterations?
     cmp x5, x4              // iteration_count >= num_iterations?
-    b.ge copy_strided_done  // If done, exit
+    b.hs copy_strided_done  // If done (unsigned >=), exit
 
     // Calculate current addresses: src + (offset % byteCount), dst + (offset % byteCount)
     // Use modulo operation: offset % byteCount = offset - (offset / byteCount) * byteCount
@@ -78,4 +78,3 @@ copy_strided_loop:              // Main strided access loop
 
 copy_strided_done:          // Return to caller
     ret                     // Return
-

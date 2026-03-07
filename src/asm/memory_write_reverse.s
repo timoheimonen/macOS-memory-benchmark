@@ -1,4 +1,4 @@
-// Copyright 2025 Timo Heimonen <timo.heimonen@proton.me>
+// Copyright 2026 Timo Heimonen <timo.heimonen@proton.me>
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -77,11 +77,11 @@ write_reverse_loop_start_nt512:     // Main 512B block loop (reverse direction)
     // Loop invariants: x4=512B block size, all vectors (q0-q7, q16-q31) are zero.
     // Only x3 (end_ptr) and x5 (remaining) change per iteration.
     cmp x3, x0              // end_ptr <= dst?
-    b.le write_reverse_loop_end     // If done, exit
+    b.ls write_reverse_loop_end     // If done (unsigned <=), exit
     
     sub x5, x3, x0          // remaining = end_ptr - dst
     cmp x5, x4              // remaining < step?
-    b.lt write_reverse_cleanup // If less, handle remaining bytes
+    b.lo write_reverse_cleanup // If less (unsigned), handle remaining bytes
 
     sub x7, x3, #512        // block_start = end_ptr - 512
 
@@ -115,14 +115,14 @@ write_reverse_cleanup:         // Tail handling when <512B remain
     // This minimizes branches while ensuring exact byte count handling.
     // Larger chunks first for better performance on unaligned remainders.
     cmp x3, x0              // end_ptr <= dst?
-    b.ge write_reverse_loop_end     // If done, exit
+    b.ls write_reverse_loop_end     // If done (unsigned <=), exit
 
     subs x5, x3, x0         // Recalc remaining (x5)
     sub x7, x3, x5          // block_start = end_ptr - remaining
 
     // Handle 256B chunks (8 stnp pairs)
     cmp x5, #256              // Check if >= 256 bytes remain
-    b.lt write_reverse_cleanup_128    // If less, handle smaller chunks
+    b.lo write_reverse_cleanup_128    // If less (unsigned), handle smaller chunks
     sub x7, x3, #256          // block_start = end_ptr - 256
     stnp q0, q1, [x7, #0]     // Store first pair (non-temporal, 32B)
     stnp q2, q3, [x7, #32]    // Store second pair (non-temporal, 32B)
@@ -137,7 +137,7 @@ write_reverse_cleanup:         // Tail handling when <512B remain
 
 write_reverse_cleanup_128:            // 128B chunk
     cmp x5, #128              // Check if >= 128 bytes remain
-    b.lt write_reverse_cleanup_64      // If less, handle smaller chunks
+    b.lo write_reverse_cleanup_64      // If less (unsigned), handle smaller chunks
     sub x7, x3, #128          // block_start = end_ptr - 128
     stnp q0, q1, [x7, #0]     // Store first pair (non-temporal, 32B)
     stnp q2, q3, [x7, #32]    // Store second pair (non-temporal, 32B)
@@ -148,7 +148,7 @@ write_reverse_cleanup_128:            // 128B chunk
 
 write_reverse_cleanup_64:             // 64B chunk
     cmp x5, #64               // Check if >= 64 bytes remain
-    b.lt write_reverse_cleanup_32      // If less, handle smaller chunks
+    b.lo write_reverse_cleanup_32      // If less (unsigned), handle smaller chunks
     sub x7, x3, #64           // block_start = end_ptr - 64
     stnp q0, q1, [x7, #0]     // Store first pair (non-temporal, 32B)
     stnp q2, q3, [x7, #32]    // Store second pair (non-temporal, 32B)
@@ -157,7 +157,7 @@ write_reverse_cleanup_64:             // 64B chunk
 
 write_reverse_cleanup_32:             // 32B chunk
     cmp x5, #32               // Check if >= 32 bytes remain
-    b.lt write_reverse_cleanup_byte    // If less, handle byte tail
+    b.lo write_reverse_cleanup_byte    // If less (unsigned), handle byte tail
     sub x7, x3, #32           // block_start = end_ptr - 32
     stnp q0, q1, [x7, #0]     // Store pair (non-temporal, 32B)
     sub x3, x3, #32           // Advance end_ptr backwards by 32B
@@ -167,14 +167,12 @@ write_reverse_cleanup_byte:            // Byte tail (<32B)
     // Final byte-by-byte write for <32B remainder. Expected to be rare in
     // bandwidth benchmarks but ensures correctness for any input size.
     // Using wzr (zero register) avoids needing to load/store a zero value.
-    cmp x5, #0                // Check if any bytes remain
-    b.le write_reverse_loop_end        // If none, exit
+    cbz x5, write_reverse_loop_end     // If none remain, exit
     sub x7, x3, #1             // addr = end_ptr - 1
     strb wzr, [x7]            // Store zero byte
     sub x3, x3, #1           // Decrement end_ptr
     subs x5, x5, #1           // Decrement remaining count
-    b.gt write_reverse_cleanup_byte    // Loop if more bytes remain
+    b.ne write_reverse_cleanup_byte    // Loop while bytes remain
 
 write_reverse_loop_end:             // Return to caller
     ret                     // Return
-

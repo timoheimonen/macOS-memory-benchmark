@@ -63,8 +63,9 @@ extern "C" {
      * @brief Pointer chasing loop for latency measurement (assembly)
      * @param start_pointer Starting pointer for pointer-chasing chain
      * @param count Number of pointer-chasing accesses to perform
+     * @return Final pointer after chasing count links
      */
-    void memory_latency_chase_asm(uintptr_t* start_pointer, size_t count);
+    uintptr_t* memory_latency_chase_asm(uintptr_t* start_pointer, size_t count);
     
     // Pattern-specific assembly functions
     // Reverse sequential
@@ -151,4 +152,3 @@ extern "C" {
 /** @} */
 
 #endif // ASM_FUNCTIONS_H
-

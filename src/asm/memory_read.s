@@ -1,4 +1,4 @@
-// Copyright 2025 Timo Heimonen <timo.heimonen@proton.me>
+// Copyright 2026 Timo Heimonen <timo.heimonen@proton.me>
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -56,7 +56,7 @@ read_loop_start_512:        // Main 512B block loop
     // x12 holds byte checksum. Only x3 (offset) and loop counters change.
     subs x5, x1, x3         // remaining = count - offset
     cmp x5, x4              // remaining < step?
-    b.lt read_loop_cleanup  // If less, handle remaining bytes
+    b.lo read_loop_cleanup  // If less (unsigned), handle remaining bytes
 
     add x6, x0, x3          // src_addr = base + offset
 
@@ -131,14 +131,14 @@ read_loop_cleanup:          // Tail handling when <512B remain
     // This minimizes branches while ensuring exact byte count handling.
     // Larger chunks first for better performance on unaligned remainders.
     cmp x3, x1              // offset == count?
-    b.ge read_loop_combine_sum // If done, combine sums
+    b.hs read_loop_combine_sum // If done (unsigned >=), combine sums
 
     subs x5, x1, x3         // Recalc remaining (x5)
     add x6, x0, x3          // src_addr = src + offset
 
     // 256B chunk (8 pair loads + XOR fold)
     cmp x5, #256              // Check if >= 256 bytes remain
-    b.lt read_cleanup_128     // If less, handle smaller chunks
+    b.lo read_cleanup_128     // If less (unsigned), handle smaller chunks
     ldp q4, q5, [x6, #0]      // Load first pair (32B)
     ldp q6, q7, [x6, #32]     // Load second pair (32B)
     ldp q16, q17, [x6, #64]   // Load third pair (32B)
@@ -169,7 +169,7 @@ read_loop_cleanup:          // Tail handling when <512B remain
 
 read_cleanup_128:              // 128B chunk
     cmp x5, #128               // Check if >= 128 bytes remain
-    b.lt read_cleanup_64        // If less, handle smaller chunks
+    b.lo read_cleanup_64        // If less (unsigned), handle smaller chunks
     ldp q4, q5, [x6, #0]        // Load first pair (32B)
     ldp q6, q7, [x6, #32]       // Load second pair (32B)
     ldp q16, q17, [x6, #64]     // Load third pair (32B)
@@ -187,7 +187,7 @@ read_cleanup_128:              // 128B chunk
 
 read_cleanup_64:               // 64B chunk
     cmp x5, #64                // Check if >= 64 bytes remain
-    b.lt read_cleanup_32        // If less, handle smaller chunks
+    b.lo read_cleanup_32        // If less (unsigned), handle smaller chunks
     ldp q4, q5, [x6, #0]       // Load first pair (32B)
     ldp q6, q7, [x6, #32]      // Load second pair (32B)
     eor v0.16b, v0.16b, v4.16b // Accumulate q4 into v0
@@ -199,7 +199,7 @@ read_cleanup_64:               // 64B chunk
 
 read_cleanup_32:               // 32B chunk
     cmp x5, #32                // Check if >= 32 bytes remain
-    b.lt read_cleanup_byte      // If less, handle byte tail
+    b.lo read_cleanup_byte      // If less (unsigned), handle byte tail
     ldp q4, q5, [x6, #0]       // Load pair (32B)
     eor v0.16b, v0.16b, v4.16b  // Accumulate q4 into v0
     eor v1.16b, v1.16b, v5.16b  // Accumulate q5 into v1
@@ -207,12 +207,11 @@ read_cleanup_32:               // 32B chunk
     sub x5, x5, #32            // Decrement remaining count by 32B
 
 read_cleanup_byte:             // Byte tail (<32B)
-    cmp x5, #0                 // Check if any bytes remain
-    b.le read_loop_combine_sum // If none, combine checksums
+    cbz x5, read_loop_combine_sum // If none remain, combine checksums
     ldrb w13, [x6], #1         // Load byte, post-increment source
     eor x12, x12, x13          // XOR byte into accumulator
     subs x5, x5, #1            // Decrement remaining count
-    b.gt read_cleanup_byte     // Loop if more bytes remain
+    b.ne read_cleanup_byte     // Loop while bytes remain
 
 read_loop_combine_sum:         // Final reduction + result write-back
     // Combine accumulators v0-v3 -> v0.

@@ -51,7 +51,24 @@
 #include "core/config/constants.h"
 #include <atomic>
 #include <iostream>
+#include <limits>
 #include <stdexcept>
+
+namespace {
+
+int calculate_cache_iterations_saturated(int iterations) {
+  if (iterations <= 0) {
+    return 0;
+  }
+
+  if (iterations > std::numeric_limits<int>::max() / Constants::CACHE_ITERATIONS_MULTIPLIER) {
+    return std::numeric_limits<int>::max();
+  }
+
+  return iterations * Constants::CACHE_ITERATIONS_MULTIPLIER;
+}
+
+}  // namespace
 
 /**
  * @brief Run main memory bandwidth tests (read, write, copy).
@@ -157,7 +174,7 @@ void run_single_cache_bandwidth_test(void* src_buffer, void* dst_buffer, size_t 
  */
 void run_cache_bandwidth_tests(const BenchmarkBuffers& buffers, const BenchmarkConfig& config,
                                TimingResults& timings, HighResTimer& test_timer) {
-  int cache_iterations = config.iterations * Constants::CACHE_ITERATIONS_MULTIPLIER;
+  int cache_iterations = calculate_cache_iterations_saturated(config.iterations);
   // Use user-specified threads if set, otherwise default to single-threaded for cache tests
   int cache_threads = config.user_specified_threads ? config.num_threads : Constants::SINGLE_THREAD;
   
@@ -260,18 +277,24 @@ void run_cache_latency_tests(const BenchmarkBuffers& buffers, const BenchmarkCon
  * @param[in]     buffers     Benchmark buffers (lat_buffer)
  * @param[in]     config      Configuration (lat_num_accesses)
  * @param[out]    timings     Timing results structure to populate
- * @param[out]    results     Results structure (not used for samples in main memory)
+ * @param[out]    results     Results structure for optional latency samples
  * @param[in,out] test_timer  High-resolution timer for measurements
  *
- * @note No sample collection for main memory latency (nullptr, 0 passed).
+ * @note Main memory average latency is always computed from a single continuous chase.
+ * @note When sample collection is enabled, samples are collected in a separate pass.
  * @note Progress indicator shown before test execution.
  */
 void run_main_memory_latency_test(const BenchmarkBuffers& buffers, const BenchmarkConfig& config,
-                                  TimingResults& timings, BenchmarkResults& results, HighResTimer& test_timer) {
+                                    TimingResults& timings, BenchmarkResults& results, HighResTimer& test_timer) {
   show_progress();
   warmup_latency(buffers.lat_buffer(), config.buffer_size);
   timings.total_lat_time_ns = run_latency_test(buffers.lat_buffer(), config.lat_num_accesses, test_timer,
                                                 nullptr, 0);
+
+  if (config.latency_sample_count > 0) {
+    (void)run_latency_test(buffers.lat_buffer(), config.lat_num_accesses, test_timer,
+                           &results.latency_samples, config.latency_sample_count);
+  }
 }
 
 /**

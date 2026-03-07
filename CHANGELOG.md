@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.52.8] - 2026-03-07
+
+### Fixed
+- **Zero-access latency chase safety**: Fixed `memory_latency_chase_asm` to return immediately when `count == 0`, preventing an unnecessary dereference when no pointer-chasing accesses are requested.
+- **Unsigned loop termination in latency chase**: Fixed loop branch conditions in `memory_latency_chase_asm` to use counter-based `b.ne` termination, ensuring correct behavior for full `size_t` ranges.
+- **Latency measurement overhead in pointer chase kernel**: Removed pre-touch and barrier instructions (`ldr` preload, `dsb/isb`, and `dmb` fences) from `memory_latency_chase_asm` to avoid adding non-chase overhead to latency measurements.
+- **`size_t`-safe branch/cleanup fixes across ARM64 bandwidth kernels**: Unified loop/cleanup/byte-tail control flow in forward, reverse, strided, and random read/write/copy kernels to use unsigned or zero/non-zero termination semantics (`b.hs`/`b.lo`/`b.ls`, `cbz`, `b.ne`), and fixed reverse cleanup exit direction plus reverse copy byte-tail pointer initialization for correct full-range behavior.
+- **Mode-aware memory cap validation for `-only-bandwidth` / `-only-latency` / `-patterns`**: Updated `validate_config()` to compute per-buffer limits using the active main-buffer count (1/2/3) instead of always dividing by 3, preventing unnecessary buffer-size capping in reduced-buffer modes while keeping total-memory safeguards intact.
+- **Main-buffer total-memory overflow guard in allocator**: Added missing checked-add overflow validation when including the main latency buffer in `allocate_all_buffers()` total-memory accounting, and added a targeted unit test to lock in the overflow failure path.
+
 ## [0.52.7] - 2026-01-05
 
 ### Added
