@@ -36,10 +36,63 @@
 
 #include <vector>                // For std::vector
 #include <cstddef>               // For size_t
+#include <algorithm>             // For std::min
 
 #include "benchmark/benchmark_tests.h"  // Function declarations
 #include "core/timing/timer.h"  // HighResTimer
 #include "asm/asm_functions.h"  // Assembly function declarations
+
+/**
+ * @brief Run latency chase with optional per-sample collection.
+ *
+ * When sampling is enabled, this function guarantees that the total number of
+ * executed accesses equals num_accesses by distributing remainder accesses
+ * across early samples.
+ */
+static double run_latency_measurement(uintptr_t* lat_start_ptr,
+                                      size_t num_accesses,
+                                      HighResTimer& timer,
+                                      std::vector<double>* latency_samples,
+                                      int sample_count) {
+  if (num_accesses == 0) {
+    return 0.0;
+  }
+
+  if (latency_samples == nullptr || sample_count <= 0) {
+    timer.start();
+    (void)memory_latency_chase_asm(lat_start_ptr, num_accesses);
+    return timer.stop_ns();
+  }
+
+  latency_samples->clear();
+
+  size_t requested_samples = static_cast<size_t>(sample_count);
+  size_t effective_samples = std::min(requested_samples, num_accesses);
+  if (effective_samples == 0) {
+    return 0.0;
+  }
+
+  latency_samples->reserve(effective_samples);
+
+  size_t base_accesses = num_accesses / effective_samples;
+  size_t remainder_accesses = num_accesses % effective_samples;
+  uintptr_t* current_ptr = lat_start_ptr;
+
+  double total_duration_ns = 0.0;
+  for (size_t i = 0; i < effective_samples; ++i) {
+    size_t accesses_this_sample = base_accesses + (i < remainder_accesses ? 1 : 0);
+
+    timer.start();
+    current_ptr = memory_latency_chase_asm(current_ptr, accesses_this_sample);
+    double sample_duration_ns = timer.stop_ns();
+    double sample_latency_ns = sample_duration_ns / static_cast<double>(accesses_this_sample);
+
+    latency_samples->push_back(sample_latency_ns);
+    total_duration_ns += sample_duration_ns;
+  }
+
+  return total_duration_ns;
+}
 
 /**
  * @brief Executes the single-threaded memory latency benchmark.
@@ -77,7 +130,7 @@
  * @see setup_latency_chain() for buffer initialization
  */
 double run_latency_test(void *buffer, size_t num_accesses, HighResTimer &timer,
-                        std::vector<double> *latency_samples, int sample_count) {
+                         std::vector<double> *latency_samples, int sample_count) {
   // Early validation: return 0 if no accesses requested
   if (num_accesses == 0) {
     return 0.0;
@@ -85,38 +138,8 @@ double run_latency_test(void *buffer, size_t num_accesses, HighResTimer &timer,
   
   // Get the starting address of the pointer chain.
   uintptr_t *lat_start_ptr = static_cast<uintptr_t *>(buffer);
-  
-  // If sample collection is requested
-  if (latency_samples != nullptr && sample_count > 0) {
-    latency_samples->clear();
-    latency_samples->reserve(sample_count);
-    
-    // Calculate accesses per sample, ensuring at least 1 access per sample
-    size_t accesses_per_sample = (num_accesses >= static_cast<size_t>(sample_count)) 
-                                  ? (num_accesses / static_cast<size_t>(sample_count))
-                                  : 1;
-    
-    double total_duration_ns = 0.0;
-    
-    for (int i = 0; i < sample_count; ++i) {
-      timer.start();
-      memory_latency_chase_asm(lat_start_ptr, accesses_per_sample);
-      double sample_duration_ns = timer.stop_ns();
-      double sample_latency_ns = sample_duration_ns / static_cast<double>(accesses_per_sample);
-      latency_samples->push_back(sample_latency_ns);
-      total_duration_ns += sample_duration_ns;
-    }
-    
-    return total_duration_ns;
-  } else {
-    // Original single measurement behavior
-    timer.start();  // Start timing.
-    // Call external assembly function to chase the pointer chain.
-    memory_latency_chase_asm(lat_start_ptr, num_accesses);
-    // Stop timing, getting result in nanoseconds for latency.
-    double duration_ns = timer.stop_ns();
-    return duration_ns;  // Return total time elapsed in nanoseconds.
-  }
+
+  return run_latency_measurement(lat_start_ptr, num_accesses, timer, latency_samples, sample_count);
 }
 
 /**
@@ -157,7 +180,7 @@ double run_latency_test(void *buffer, size_t num_accesses, HighResTimer &timer,
  * @see setup_latency_chain() for buffer initialization
  */
 double run_cache_latency_test(void *buffer, size_t buffer_size, size_t num_accesses, HighResTimer &timer,
-                              std::vector<double> *latency_samples, int sample_count) {
+                               std::vector<double> *latency_samples, int sample_count) {
   // Early validation: return 0 if no accesses requested
   if (num_accesses == 0) {
     return 0.0;
@@ -165,37 +188,7 @@ double run_cache_latency_test(void *buffer, size_t buffer_size, size_t num_acces
   
   // Get the starting address of the pointer chain.
   uintptr_t *lat_start_ptr = static_cast<uintptr_t *>(buffer);
-  
-  // If sample collection is requested
-  if (latency_samples != nullptr && sample_count > 0) {
-    latency_samples->clear();
-    latency_samples->reserve(sample_count);
-    
-    // Calculate accesses per sample, ensuring at least 1 access per sample
-    size_t accesses_per_sample = (num_accesses >= static_cast<size_t>(sample_count)) 
-                                  ? (num_accesses / static_cast<size_t>(sample_count))
-                                  : 1;
-    
-    double total_duration_ns = 0.0;
-    
-    for (int i = 0; i < sample_count; ++i) {
-      timer.start();
-      memory_latency_chase_asm(lat_start_ptr, accesses_per_sample);
-      double sample_duration_ns = timer.stop_ns();
-      double sample_latency_ns = sample_duration_ns / static_cast<double>(accesses_per_sample);
-      latency_samples->push_back(sample_latency_ns);
-      total_duration_ns += sample_duration_ns;
-    }
-    
-    return total_duration_ns;
-  } else {
-    // Original single measurement behavior
-    timer.start();  // Start timing.
-    // Call external assembly function to chase the pointer chain (same as main latency test).
-    memory_latency_chase_asm(lat_start_ptr, num_accesses);
-    // Stop timing, getting result in nanoseconds for latency.
-    double duration_ns = timer.stop_ns();
-    return duration_ns;  // Return total time elapsed in nanoseconds.
-  }
-}
 
+  (void)buffer_size;
+  return run_latency_measurement(lat_start_ptr, num_accesses, timer, latency_samples, sample_count);
+}

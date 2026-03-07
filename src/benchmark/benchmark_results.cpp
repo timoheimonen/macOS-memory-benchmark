@@ -42,6 +42,22 @@
 #include <limits>  // std::numeric_limits
 #include <cmath>   // std::isnan, std::isinf
 
+namespace {
+
+int calculate_cache_iterations_saturated(int iterations) {
+  if (iterations <= 0) {
+    return 0;
+  }
+
+  if (iterations > std::numeric_limits<int>::max() / Constants::CACHE_ITERATIONS_MULTIPLIER) {
+    return std::numeric_limits<int>::max();
+  }
+
+  return iterations * Constants::CACHE_ITERATIONS_MULTIPLIER;
+}
+
+}  // namespace
+
 /**
  * @brief Helper function to calculate bandwidth for a single memory level (main or cache).
  *
@@ -183,7 +199,7 @@ void calculate_bandwidth_results(const BenchmarkConfig& config, const TimingResu
                              results.read_bw_gb_s, results.write_bw_gb_s, results.copy_bw_gb_s);
   
   // Cache bandwidth calculations
-  int cache_iterations = config.iterations * Constants::CACHE_ITERATIONS_MULTIPLIER;
+  int cache_iterations = calculate_cache_iterations_saturated(config.iterations);
   
   if (config.use_custom_cache_size) {
     if (config.custom_buffer_size > 0) {

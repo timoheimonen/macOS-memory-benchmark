@@ -16,7 +16,7 @@
 // memory_latency_chase_asm
 // -----------------------------------------------------------------------------
 // C++ Prototype:
-//   extern "C" uint64_t memory_latency_chase_asm(uintptr_t* start_pointer, size_t count);
+//   extern "C" uintptr_t* memory_latency_chase_asm(uintptr_t* start_pointer, size_t count);
 // Purpose:
 //   Measure load‑to‑use latency via dependent pointer chasing. Each load feeds
 //   the address of the next, forming a serialized chain. Loop is unrolled by 8

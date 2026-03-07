@@ -58,6 +58,62 @@
 // --- Generic Parallel Test Framework ---
 
 /**
+ * @brief Build contiguous per-thread ranges with aligned internal boundaries.
+ *
+ * Produces `num_threads` contiguous ranges that cover [0, size) exactly once.
+ * Internal boundaries are aligned to cache-line boundaries (rounded up) using
+ * `alignment_base` as the pointer reference. This keeps dst chunk starts aligned
+ * for most threads while preserving full byte coverage (no gaps/overlaps).
+ *
+ * @param alignment_base Base pointer used for boundary alignment calculations
+ * @param size Total size of the covered range in bytes
+ * @param num_threads Number of ranges to produce (must be > 0)
+ * @return Vector of boundary offsets of size num_threads + 1
+ */
+inline std::vector<size_t> build_aligned_chunk_boundaries(void* alignment_base, size_t size, int num_threads) {
+  const size_t thread_count = static_cast<size_t>(num_threads);
+  std::vector<size_t> boundaries(thread_count + 1, 0);
+
+  // Start from an even byte partition.
+  size_t offset = 0;
+  const size_t chunk_base_size = size / thread_count;
+  const size_t chunk_remainder = size % thread_count;
+  for (size_t t = 0; t < thread_count; ++t) {
+    const size_t chunk_size = chunk_base_size + (t < chunk_remainder ? 1 : 0);
+    offset += chunk_size;
+    boundaries[t + 1] = offset;
+  }
+
+  // Align internal boundaries while preserving monotonic ordering.
+  char* base_ptr = static_cast<char*>(alignment_base);
+  for (size_t i = 1; i < thread_count; ++i) {
+    char* boundary_ptr = base_ptr + boundaries[i];
+    char* aligned_boundary_ptr = static_cast<char*>(align_ptr_to_cache_line(boundary_ptr));
+    size_t aligned_offset = static_cast<size_t>(aligned_boundary_ptr - base_ptr);
+
+    if (aligned_offset > size) {
+      aligned_offset = size;
+    }
+    if (aligned_offset < boundaries[i - 1]) {
+      aligned_offset = boundaries[i - 1];
+    }
+    boundaries[i] = aligned_offset;
+  }
+
+  boundaries[0] = 0;
+  boundaries[thread_count] = size;
+
+  // Final monotonicity guard after clamping.
+  for (size_t i = 1; i < boundaries.size(); ++i) {
+    if (boundaries[i] < boundaries[i - 1]) {
+      boundaries[i] = boundaries[i - 1];
+    }
+  }
+
+  return boundaries;
+}
+
+/**
  * @brief Run a parallel test with automatic work distribution across threads
  * @tparam WorkFunction Function type for per-thread work (void(void* chunk_start, size_t chunk_size, int iterations))
  * @param buffer Pointer to the memory buffer to operate on
@@ -81,67 +137,34 @@
 template<typename WorkFunction>
 double run_parallel_test(void *buffer, size_t size, int iterations, int num_threads, HighResTimer &timer,
                          WorkFunction work_function, const char *thread_name) {
+  // Early validation: return 0.0 if no work to do or invalid thread count.
+  // This avoids unnecessary setup and prevents division-by-zero in partitioning.
+  if (size == 0 || num_threads <= 0) {
+    return 0.0;
+  }
+
   std::vector<std::thread> threads;
-  threads.reserve(num_threads);  // Pre-allocate vector space for threads.
+  threads.reserve(static_cast<size_t>(num_threads));  // Pre-allocate vector space for threads.
 
   std::mutex start_mutex;
   std::condition_variable start_cv;
   bool start_flag = false;  // Gate so timing starts after threads are ready
 
-  // Divide work among threads (chunks calculated once).
-  size_t offset = 0;
-  size_t chunk_base_size = size / num_threads;
-  size_t chunk_remainder = size % num_threads;
-
-  // Early validation: return 0.0 if no work to do or invalid thread count.
-  // This avoids timer overhead when no meaningful work can be performed.
-  if (size == 0 || num_threads <= 0) {
-    return 0.0;  // No work to do or invalid thread count
-  }
+  // Build contiguous chunk boundaries with aligned internal split points.
+  std::vector<size_t> boundaries = build_aligned_chunk_boundaries(buffer, size, num_threads);
 
   // Launch threads once; each handles its chunk for all iterations.
-  for (int t = 0; t < num_threads; ++t) {
-    // Calculate the exact size for this thread's chunk, adding remainder if needed.
-    size_t original_chunk_size = chunk_base_size + (t < chunk_remainder ? 1 : 0);
-    if (original_chunk_size == 0) continue;  // Avoid launching threads for zero work.
-
-    // Calculate the original end position for this chunk
-    size_t original_chunk_end = offset + original_chunk_size;
-    
-    // Calculate the start address for this thread's chunk.
-    char *unaligned_start = static_cast<char *>(buffer) + offset;
-    // Align chunk_start to cache line boundary to prevent false sharing
-    char *chunk_start = static_cast<char *>(align_ptr_to_cache_line(unaligned_start));
-    
-    // Calculate chunk size to cover the original range [offset, offset + original_chunk_size)
-    // This ensures no gaps: chunk covers from aligned start to original end
-    char *original_end_ptr = static_cast<char *>(buffer) + original_chunk_end;
-    
-    // Check if alignment moved us past the original range
-    // If so, fallback to unaligned start to ensure coverage
-    if (chunk_start >= original_end_ptr) {
-      chunk_start = unaligned_start;
-    }
-    
-    size_t current_chunk_size = original_end_ptr - chunk_start;
-    
-    // Ensure we don't exceed the buffer size
-    char *buffer_end = static_cast<char *>(buffer) + size;
-    if (chunk_start + current_chunk_size > buffer_end) {
-      current_chunk_size = buffer_end - chunk_start;
-    }
-    
-    // Skip if chunk size is zero or negative after alignment adjustments
-    if (current_chunk_size == 0 || chunk_start >= buffer_end) {
-      // Still update offset to prevent infinite loops, but skip thread creation
-      offset = original_chunk_end;
+  char* buffer_start = static_cast<char*>(buffer);
+  for (size_t t = 0; t < static_cast<size_t>(num_threads); ++t) {
+    size_t chunk_start_offset = boundaries[t];
+    size_t chunk_end_offset = boundaries[t + 1];
+    if (chunk_end_offset <= chunk_start_offset) {
       continue;
     }
-    
-    // Capture aligned chunk_start and adjusted chunk_size for the thread
-    char *thread_chunk_start = chunk_start;
-    size_t thread_chunk_size = current_chunk_size;
-    
+
+    char* thread_chunk_start = buffer_start + chunk_start_offset;
+    size_t thread_chunk_size = chunk_end_offset - chunk_start_offset;
+     
     // iterations loop inside thread lambda for re-use (avoids per-iteration creation).
     threads.emplace_back([thread_chunk_start, thread_chunk_size, iterations, &start_mutex, &start_cv,
                           &start_flag, work_function, thread_name]() {
@@ -160,9 +183,6 @@ double run_parallel_test(void *buffer, size_t size, int iterations, int num_thre
       // Execute the work function for this chunk with aligned pointer
       work_function(thread_chunk_start, thread_chunk_size, iterations);
     });
-    
-    // Move the offset for the next thread's chunk using the actual end position
-    offset = original_chunk_end;
   }
 
   // Check if any threads were created. If all chunks were zero after alignment,
@@ -208,76 +228,37 @@ double run_parallel_test(void *buffer, size_t size, int iterations, int num_thre
  */
 template<typename WorkFunction>
 double run_parallel_test_copy(void *dst, void *src, size_t size, int iterations, int num_threads, HighResTimer &timer,
-                               WorkFunction work_function, const char *thread_name) {
+                                WorkFunction work_function, const char *thread_name) {
+  // Early validation: return 0.0 if no work to do or invalid thread count.
+  // This avoids unnecessary setup and prevents division-by-zero in partitioning.
+  if (size == 0 || num_threads <= 0) {
+    return 0.0;
+  }
+
   std::vector<std::thread> threads;
-  threads.reserve(num_threads);  // Pre-allocate vector space for threads.
+  threads.reserve(static_cast<size_t>(num_threads));  // Pre-allocate vector space for threads.
 
   std::mutex start_mutex;
   std::condition_variable start_cv;
   bool start_flag = false;  // Gate so timing starts after threads are ready
 
-  // Divide work among threads (chunks calculated once).
-  size_t offset = 0;
-  size_t chunk_base_size = size / num_threads;
-  size_t chunk_remainder = size % num_threads;
-
-  // Early validation: return 0.0 if no work to do or invalid thread count.
-  // This avoids timer overhead when no meaningful work can be performed.
-  if (size == 0 || num_threads <= 0) {
-    return 0.0;  // No work to do or invalid thread count
-  }
+  // Build contiguous chunk boundaries using destination alignment for false-sharing mitigation.
+  std::vector<size_t> boundaries = build_aligned_chunk_boundaries(dst, size, num_threads);
 
   // Launch threads once; each handles its chunk for all iterations.
-  for (int t = 0; t < num_threads; ++t) {
-    // Calculate the exact size for this thread's chunk, adding remainder if needed.
-    size_t original_chunk_size = chunk_base_size + (t < chunk_remainder ? 1 : 0);
-    if (original_chunk_size == 0) continue;  // Avoid launching threads for zero work.
-
-    // Calculate the original end position for this chunk
-    size_t original_chunk_end = offset + original_chunk_size;
-    
-    // Calculate unaligned start positions
-    char *dst_unaligned_start = static_cast<char *>(dst) + offset;
-    char *src_unaligned_start = static_cast<char *>(src) + offset;
-    
-    // Align dst to cache line boundary to prevent false sharing
-    char *dst_chunk = static_cast<char *>(align_ptr_to_cache_line(dst_unaligned_start));
-    
-    // Calculate chunk size to cover the original range [offset, offset + original_chunk_size)
-    // This ensures no gaps: chunk covers from aligned start to original end
-    char *dst_original_end = static_cast<char *>(dst) + original_chunk_end;
-    
-    // Check if alignment moved us past the original range
-    // If so, fallback to unaligned start to ensure coverage
-    if (dst_chunk >= dst_original_end) {
-      dst_chunk = dst_unaligned_start;
-    }
-    
-    // Maintain src/dst correspondence by applying the same alignment offset
-    // This ensures data integrity: src[i] always maps to dst[i]
-    size_t alignment_offset = dst_chunk - dst_unaligned_start;
-    char *src_chunk = src_unaligned_start + alignment_offset;
-    
-    size_t current_chunk_size = dst_original_end - dst_chunk;
-    
-    // Ensure we don't exceed the buffer size
-    char *dst_end = static_cast<char *>(dst) + size;
-    if (dst_chunk + current_chunk_size > dst_end) {
-      current_chunk_size = dst_end - dst_chunk;
-    }
-    
-    // Skip if chunk size is zero or negative after alignment adjustments
-    if (current_chunk_size == 0 || dst_chunk >= dst_end) {
-      // Still update offset to prevent infinite loops, but skip thread creation
-      offset = original_chunk_end;
+  char* dst_start = static_cast<char*>(dst);
+  char* src_start = static_cast<char*>(src);
+  for (size_t t = 0; t < static_cast<size_t>(num_threads); ++t) {
+    size_t chunk_start_offset = boundaries[t];
+    size_t chunk_end_offset = boundaries[t + 1];
+    if (chunk_end_offset <= chunk_start_offset) {
       continue;
     }
-    
-    // Capture aligned chunk pointers and adjusted chunk_size for the thread
-    char *thread_dst_chunk = dst_chunk;
-    char *thread_src_chunk = src_chunk;
-    size_t thread_chunk_size = current_chunk_size;
-    
+
+    char* thread_dst_chunk = dst_start + chunk_start_offset;
+    char* thread_src_chunk = src_start + chunk_start_offset;
+    size_t thread_chunk_size = chunk_end_offset - chunk_start_offset;
+     
     // iterations loop inside thread lambda for re-use (avoids per-iteration creation).
     threads.emplace_back([thread_dst_chunk, thread_src_chunk, thread_chunk_size, iterations, &start_mutex, &start_cv,
                           &start_flag, work_function, thread_name]() {
@@ -296,9 +277,6 @@ double run_parallel_test_copy(void *dst, void *src, size_t size, int iterations,
       // Execute the work function for this chunk with aligned pointers
       work_function(thread_dst_chunk, thread_src_chunk, thread_chunk_size, iterations);
     });
-    
-    // Move the offset for the next thread's chunk using the actual end position
-    offset = original_chunk_end;
   }
 
   // Check if any threads were created. If all chunks were zero after alignment,
@@ -320,4 +298,3 @@ double run_parallel_test_copy(void *dst, void *src, size_t size, int iterations,
 }
 
 #endif // PARALLEL_TEST_FRAMEWORK_H
-
