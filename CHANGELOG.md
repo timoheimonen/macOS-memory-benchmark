@@ -11,12 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Zero-access latency chase safety**: Fixed `memory_latency_chase_asm` to return immediately when `count == 0`, preventing an unnecessary dereference when no pointer-chasing accesses are requested.
 - **Unsigned loop termination in latency chase**: Fixed loop branch conditions in `memory_latency_chase_asm` to use counter-based `b.ne` termination, ensuring correct behavior for full `size_t` ranges.
 - **Latency measurement overhead in pointer chase kernel**: Removed pre-touch and barrier instructions (`ldr` preload, `dsb/isb`, and `dmb` fences) from `memory_latency_chase_asm` to avoid adding non-chase overhead to latency measurements.
-- **Unsigned loop/cleanup branching in write kernel**: Fixed `memory_write_loop_asm` to use unsigned branch conditions (`b.lo`/`b.hs`) for block and cleanup thresholds, ensuring correct behavior across the full `size_t` range.
-- **Byte-tail termination in write kernel**: Fixed the `<32B` byte cleanup loop in `memory_write_loop_asm` to use zero/non-zero termination (`cbz`/`b.ne`) instead of signed conditions, preventing edge-case misbehavior with large unsigned counters.
-- **Unsigned loop/cleanup branching in read kernel**: Fixed `memory_read_loop_asm` to use unsigned branch conditions (`b.lo`/`b.hs`) for block and cleanup thresholds, ensuring correct behavior across the full `size_t` range.
-- **Byte-tail termination in read kernel**: Fixed the `<32B` byte cleanup loop in `memory_read_loop_asm` to use zero/non-zero termination (`cbz`/`b.ne`) instead of signed conditions, preventing edge-case misbehavior with large unsigned counters.
-- **Unsigned loop/cleanup branching in copy kernel**: Fixed `memory_copy_loop_asm` to use unsigned branch conditions (`b.lo`/`b.hs`) for block and cleanup thresholds, ensuring correct behavior across the full `size_t` range.
-- **Byte-tail termination in copy kernel**: Fixed the `<32B` byte cleanup loop in `memory_copy_loop_asm` to use zero/non-zero termination (`cbz`/`b.ne`) instead of signed conditions, preventing edge-case misbehavior with large unsigned counters.
+- **`size_t`-safe branch/cleanup fixes across ARM64 bandwidth kernels**: Unified loop/cleanup/byte-tail control flow in forward, reverse, strided, and random read/write/copy kernels to use unsigned or zero/non-zero termination semantics (`b.hs`/`b.lo`/`b.ls`, `cbz`, `b.ne`), and fixed reverse cleanup exit direction plus reverse copy byte-tail pointer initialization for correct full-range behavior.
 
 ## [0.52.7] - 2026-01-05
 

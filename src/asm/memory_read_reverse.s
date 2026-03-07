@@ -1,4 +1,4 @@
-// Copyright 2025 Timo Heimonen <timo.heimonen@proton.me>
+// Copyright 2026 Timo Heimonen <timo.heimonen@proton.me>
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -58,12 +58,12 @@ read_reverse_loop_start_512:        // Main 512B block loop (reverse direction)
     // Loop invariants: x4=512B block size, accumulators v0-v3 accumulate XOR,
     // x12 holds byte checksum. Only x3 (end_ptr) and loop counters change.
     cmp x3, x0              // end_ptr <= src?
-    b.le read_reverse_loop_combine_sum // If done, combine sums
+    b.ls read_reverse_loop_combine_sum // If done (unsigned <=), combine sums
     
     // Calculate remaining bytes
     sub x5, x3, x0          // remaining = end_ptr - src
     cmp x5, x4              // remaining < step?
-    b.lt read_reverse_cleanup  // If less, handle remaining bytes
+    b.lo read_reverse_cleanup  // If less (unsigned), handle remaining bytes
 
     // Calculate start address for this block (subtract block size from end)
     sub x7, x3, #512        // block_start = end_ptr - 512
@@ -139,14 +139,14 @@ read_reverse_cleanup:          // Tail handling when <512B remain
     // This minimizes branches while ensuring exact byte count handling.
     // Larger chunks first for better performance on unaligned remainders.
     cmp x3, x0              // end_ptr <= src?
-    b.le read_reverse_loop_combine_sum // If done, combine sums
+    b.ls read_reverse_loop_combine_sum // If done (unsigned <=), combine sums
 
     subs x5, x3, x0         // Recalc remaining (x5)
     sub x7, x3, x5          // block_start = end_ptr - remaining
 
     // 256B chunk (8 pair loads + XOR fold)
     cmp x5, #256              // Check if >= 256 bytes remain
-    b.lt read_reverse_cleanup_128     // If less, handle smaller chunks
+    b.lo read_reverse_cleanup_128     // If less (unsigned), handle smaller chunks
     sub x7, x3, #256          // block_start = end_ptr - 256
     ldp q4, q5, [x7, #0]      // Load first pair (32B)
     ldp q6, q7, [x7, #32]     // Load second pair (32B)
@@ -178,7 +178,7 @@ read_reverse_cleanup:          // Tail handling when <512B remain
 
 read_reverse_cleanup_128:              // 128B chunk
     cmp x5, #128               // Check if >= 128 bytes remain
-    b.lt read_reverse_cleanup_64        // If less, handle smaller chunks
+    b.lo read_reverse_cleanup_64        // If less (unsigned), handle smaller chunks
     sub x7, x3, #128            // block_start = end_ptr - 128
     ldp q4, q5, [x7, #0]        // Load first pair (32B)
     ldp q6, q7, [x7, #32]       // Load second pair (32B)
@@ -197,7 +197,7 @@ read_reverse_cleanup_128:              // 128B chunk
 
 read_reverse_cleanup_64:               // 64B chunk
     cmp x5, #64                // Check if >= 64 bytes remain
-    b.lt read_reverse_cleanup_32        // If less, handle smaller chunks
+    b.lo read_reverse_cleanup_32        // If less (unsigned), handle smaller chunks
     sub x7, x3, #64             // block_start = end_ptr - 64
     ldp q4, q5, [x7, #0]       // Load first pair (32B)
     ldp q6, q7, [x7, #32]      // Load second pair (32B)
@@ -210,7 +210,7 @@ read_reverse_cleanup_64:               // 64B chunk
 
 read_reverse_cleanup_32:               // 32B chunk
     cmp x5, #32                // Check if >= 32 bytes remain
-    b.lt read_reverse_cleanup_byte      // If less, handle byte tail
+    b.lo read_reverse_cleanup_byte      // If less (unsigned), handle byte tail
     sub x7, x3, #32             // block_start = end_ptr - 32
     ldp q4, q5, [x7, #0]       // Load pair (32B)
     eor v0.16b, v0.16b, v4.16b  // Accumulate q4 into v0
@@ -219,13 +219,13 @@ read_reverse_cleanup_32:               // 32B chunk
     sub x5, x5, #32            // Decrement remaining count by 32B
 
 read_reverse_cleanup_byte:             // Byte tail (<32B)
-    subs x5, x5, #1            // Decrement and set condition flags
-    b.lt read_reverse_loop_combine_sum // If < 0, no bytes remain
+    cbz x5, read_reverse_loop_combine_sum // If no bytes remain, combine sums
     sub x7, x3, #1              // addr = end_ptr - 1
     ldrb w13, [x7]             // Load byte from address
     eor x12, x12, x13          // XOR byte into accumulator
     sub x3, x3, #1             // Decrement end_ptr
-    b read_reverse_cleanup_byte // Loop again
+    subs x5, x5, #1            // Decrement remaining count
+    b.ne read_reverse_cleanup_byte // Loop while bytes remain
 
 read_reverse_loop_combine_sum:         // Final reduction + result write-back
     // Combine accumulators v0-v3 -> v0.

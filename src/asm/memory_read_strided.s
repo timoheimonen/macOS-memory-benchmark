@@ -1,4 +1,4 @@
-// Copyright 2025 Timo Heimonen <timo.heimonen@proton.me>
+// Copyright 2026 Timo Heimonen <timo.heimonen@proton.me>
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -57,7 +57,7 @@ read_strided_loop:              // Main strided access loop
 
     // Check termination: iteration_count >= num_iterations?
     cmp x4, x3              // iteration_count >= num_iterations?
-    b.ge read_strided_combine_sum  // If done, combine checksums
+    b.hs read_strided_combine_sum  // If done (unsigned >=), combine checksums
 
     // Calculate current address: src + (offset % byteCount)
     // Use modulo operation: offset % byteCount = offset - (offset / byteCount) * byteCount
@@ -90,4 +90,3 @@ read_strided_combine_sum:       // Combine checksums and return
     eor x0, x12, x13             // Combine both halves into final checksum
     
     ret                         // Return checksum in x0
-

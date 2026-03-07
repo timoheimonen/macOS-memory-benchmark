@@ -1,4 +1,4 @@
-// Copyright 2025 Timo Heimonen <timo.heimonen@proton.me>
+// Copyright 2026 Timo Heimonen <timo.heimonen@proton.me>
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -47,11 +47,11 @@ copy_reverse_loop_start_nt512:      // Main 512B block loop (reverse direction)
     // Loop invariants: x5=512B block size, x0/x1 are base pointers.
     // Only x3 (dst_end), x4 (src_end) and x6 (remaining) change per iteration.
     cmp x3, x0              // dst_end <= dst?
-    b.le copy_reverse_loop_end      // If done, exit
+    b.ls copy_reverse_loop_end      // If done (unsigned <=), exit
     
     sub x6, x3, x0          // remaining = dst_end - dst
     cmp x6, x5              // remaining < step?
-    b.lt copy_reverse_cleanup  // If less, handle remaining bytes
+    b.lo copy_reverse_cleanup  // If less (unsigned), handle remaining bytes
     
     // Calculate current addresses (working backwards from end)
     sub x7, x3, #512        // dst_block_start = dst_end - 512
@@ -111,7 +111,7 @@ copy_reverse_cleanup:          // Tail handling when <512B remain
     // This minimizes branches while ensuring exact byte count handling.
     // Larger chunks first for better performance on unaligned remainders.
     cmp x3, x0              // dst_end <= dst?
-    b.ge copy_reverse_loop_end      // If done, exit
+    b.ls copy_reverse_loop_end      // If done (unsigned <=), exit
 
     subs x6, x3, x0         // Recalc remaining (x6)
     sub x7, x3, x6           // dst_block_start = dst_end - remaining
@@ -119,7 +119,7 @@ copy_reverse_cleanup:          // Tail handling when <512B remain
 
     // Handle 256B chunks (8 ldp/stnp pairs)
     cmp x6, #256              // Check if >= 256 bytes remain
-    b.lt copy_reverse_cleanup_128          // If less, handle smaller chunks
+    b.lo copy_reverse_cleanup_128          // If less (unsigned), handle smaller chunks
     sub x7, x3, #256          // dst_block_start = dst_end - 256
     sub x8, x4, #256          // src_block_start = src_end - 256
     ldp q0, q1, [x8, #0]      // Load first pair (32B)
@@ -144,7 +144,7 @@ copy_reverse_cleanup:          // Tail handling when <512B remain
 
 copy_reverse_cleanup_128:                  // Handle 128B chunks (4 ldp + 4 stnp)
     cmp x6, #128              // Check if >= 128 bytes remain
-    b.lt copy_reverse_cleanup_64           // If less, handle smaller chunks
+    b.lo copy_reverse_cleanup_64           // If less (unsigned), handle smaller chunks
     sub x7, x3, #128          // dst_block_start = dst_end - 128
     sub x8, x4, #128          // src_block_start = src_end - 128
     ldp q0, q1, [x8, #0]      // Load first pair (32B)
@@ -161,7 +161,7 @@ copy_reverse_cleanup_128:                  // Handle 128B chunks (4 ldp + 4 stnp
 
 copy_reverse_cleanup_64:                   // Handle 64B chunks (2 ldp + 2 stnp)
     cmp x6, #64               // Check if >= 64 bytes remain
-    b.lt copy_reverse_cleanup_32           // If less, handle smaller chunks
+    b.lo copy_reverse_cleanup_32           // If less (unsigned), handle smaller chunks
     sub x7, x3, #64           // dst_block_start = dst_end - 64
     sub x8, x4, #64           // src_block_start = src_end - 64
     ldp q0, q1, [x8, #0]      // Load first pair (32B)
@@ -174,7 +174,7 @@ copy_reverse_cleanup_64:                   // Handle 64B chunks (2 ldp + 2 stnp)
 
 copy_reverse_cleanup_32:                   // Handle 32B chunk (1 ldp + 1 stnp)
     cmp x6, #32               // Check if >= 32 bytes remain
-    b.lt copy_reverse_cleanup_byte    // If less, handle byte tail
+    b.lo copy_reverse_cleanup_byte    // If less (unsigned), handle byte tail
     sub x7, x3, #32           // dst_block_start = dst_end - 32
     sub x8, x4, #32           // src_block_start = src_end - 32
     ldp q0, q1, [x8, #0]      // Load pair (32B)
@@ -186,11 +186,10 @@ copy_reverse_cleanup_32:                   // Handle 32B chunk (1 ldp + 1 stnp)
 copy_reverse_cleanup_byte:           // Byte tail for final <32B
     // Final byte-by-byte copy for <32B remainder. Expected to be rare in
     // bandwidth benchmarks but ensures correctness for any input size.
-    cmp x6, #0               // Check if any bytes remain
-    b.le copy_reverse_loop_end        // If none, exit
-    // Initialize pointers to last byte (one before end)
-    sub x7, x3, #1           // dst_addr = dst_end - 1
-    sub x8, x4, #1           // src_addr = src_end - 1
+    cbz x6, copy_reverse_loop_end     // If none remain, exit
+    // Initialize pointers to end; pre-indexed loads/stores decrement first.
+    mov x7, x3               // dst_addr = dst_end
+    mov x8, x4               // src_addr = src_end
     // Use pre-indexed addressing to auto-decrement pointers, eliminating
     // redundant address calculations. This reduces loop overhead from 5
     // instructions (sub x7, sub x8, ldrb, strb, sub x3/x4) to 3 instructions.
@@ -198,8 +197,7 @@ copy_reverse_cleanup_byte_loop:
     ldrb w9, [x8, #-1]!      // Pre-decrement src_addr, then load byte
     strb w9, [x7, #-1]!      // Pre-decrement dst_addr, then store byte
     subs x6, x6, #1          // Decrement remaining count, set flags
-    b.gt copy_reverse_cleanup_byte_loop // Loop if more bytes remain
+    b.ne copy_reverse_cleanup_byte_loop // Loop while bytes remain
 
 copy_reverse_loop_end:              // Return to caller
     ret                     // Return
-
