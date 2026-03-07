@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.52.9] - 2026-xx-xx
+
+### Added
+- **Extended `-patterns` strided coverage for page-size analysis**: Added two new strided pattern measurements to complement existing 64B and 4096B tests:
+  - `strided_16384` (16 KB stride; Apple Silicon page-size candidate)
+  - `strided_2mb` (2 MB stride; superpage-scale stride candidate)
+  These are now executed, aggregated, and reported in both console and JSON outputs.
+
+### Changed
+- **Pattern output and stats now include new stride variants**: Console pattern results/statistics and JSON pattern payloads now include `strided_16384` and `strided_2mb` fields alongside existing pattern metrics.
+
+### Fixed
+- **Pattern strided skip behavior messaging**: Removed noisy error-style prints for expected "buffer too small for this stride" skip paths in pattern execution, while preserving graceful skip behavior and zero-valued results when a stride cannot be run.
+
 ## [0.52.8] - 2026-03-07
 
 ### Fixed

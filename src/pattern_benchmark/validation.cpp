@@ -47,7 +47,6 @@ bool validate_stride(size_t stride, size_t buffer_size) {
     return false;
   }
   if (stride > buffer_size) {
-    std::cerr << Messages::error_prefix() << Messages::error_stride_too_large(stride, buffer_size) << std::endl;
     return false;
   }
   if (buffer_size < PATTERN_MIN_BUFFER_SIZE_BYTES) {
@@ -84,4 +83,3 @@ bool validate_random_indices(const std::vector<size_t>& indices, size_t buffer_s
   }
   return true;
 }
-

@@ -189,6 +189,14 @@ void print_pattern_results(const PatternResults& results) {
                         results.strided_4096_read_bw, 
                         results.strided_4096_write_bw, 
                         results.strided_4096_copy_bw);
+  print_strided_results(results, Messages::pattern_page_16384b(),
+                        results.strided_16384_read_bw,
+                        results.strided_16384_write_bw,
+                        results.strided_16384_copy_bw);
+  print_strided_results(results, Messages::pattern_superpage_2mb(),
+                        results.strided_2mb_read_bw,
+                        results.strided_2mb_write_bw,
+                        results.strided_2mb_copy_bw);
   print_random_results(results);
   
   // Print efficiency analysis
@@ -360,6 +368,28 @@ void print_pattern_statistics(int loop_count, const PatternStatistics& stats) {
                                  stats.all_strided_4096_copy_bw);
   std::cout << "\n";
 
+  // Display Strided 16384B statistics
+  std::string strided_16384_name = Messages::pattern_strided(Messages::pattern_page_16384b());
+  if (!strided_16384_name.empty() && strided_16384_name.back() == ':') {
+    strided_16384_name.pop_back();
+  }
+  print_pattern_type_statistics(strided_16384_name,
+                                 stats.all_strided_16384_read_bw,
+                                 stats.all_strided_16384_write_bw,
+                                 stats.all_strided_16384_copy_bw);
+  std::cout << "\n";
+
+  // Display Strided 2MB statistics
+  std::string strided_2mb_name = Messages::pattern_strided(Messages::pattern_superpage_2mb());
+  if (!strided_2mb_name.empty() && strided_2mb_name.back() == ':') {
+    strided_2mb_name.pop_back();
+  }
+  print_pattern_type_statistics(strided_2mb_name,
+                                 stats.all_strided_2mb_read_bw,
+                                 stats.all_strided_2mb_write_bw,
+                                 stats.all_strided_2mb_copy_bw);
+  std::cout << "\n";
+
   // Display Random Uniform statistics
   std::string random_name = Messages::pattern_random_uniform();
   if (!random_name.empty() && random_name.back() == ':') {
@@ -373,4 +403,3 @@ void print_pattern_statistics(int loop_count, const PatternStatistics& stats) {
   // Print a final separator after statistics
   std::cout << Messages::statistics_footer() << std::endl;
 }
-

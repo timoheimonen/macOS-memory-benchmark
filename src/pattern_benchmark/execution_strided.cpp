@@ -33,7 +33,6 @@
 #include "core/memory/buffer_manager.h"
 #include "core/config/config.h"
 #include "core/config/constants.h"
-#include "output/console/messages.h"
 #include "warmup/warmup.h"
 #include <iostream>
 #include <atomic>
@@ -73,8 +72,6 @@ static bool calculate_strided_params(size_t buffer_size, size_t stride,
   
   // Ensure effective buffer size is at least as large as stride
   if (effective_buffer_size < stride) {
-    std::cerr << Messages::error_prefix() 
-              << Messages::error_stride_too_large(stride, buffer_size) << std::endl;
     return false;
   }
   
@@ -85,8 +82,6 @@ static bool calculate_strided_params(size_t buffer_size, size_t stride,
   
   // Ensure we have at least one iteration
   if (num_iterations == 0) {
-    std::cerr << Messages::error_prefix() 
-              << Messages::error_no_iterations_strided() << std::endl;
     return false;
   }
   
@@ -153,4 +148,3 @@ int run_strided_pattern_benchmarks(const BenchmarkBuffers& buffers, const Benchm
   
   return EXIT_SUCCESS;
 }
-

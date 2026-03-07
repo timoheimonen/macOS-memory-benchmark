@@ -61,6 +61,8 @@ TEST(PatternValidationTest, ValidateStrideBufferSmallerThanStride) {
   // With 512 byte buffer, patterns should complete successfully
   // Strided 4096B should be skipped (buffer too small)
   EXPECT_EQ(results.strided_4096_read_bw, 0.0);
+  EXPECT_EQ(results.strided_16384_read_bw, 0.0);
+  EXPECT_EQ(results.strided_2mb_read_bw, 0.0);
 }
 
 // Test validate_stride with buffer equal to stride - boundary case
@@ -315,6 +317,8 @@ TEST(PatternValidationTest, BufferSizeProgressionLessThanPage) {
   // Should succeed (strided 4096B pattern skipped)
   EXPECT_EQ(result, EXIT_SUCCESS);
   EXPECT_EQ(results.strided_4096_read_bw, 0.0);
+  EXPECT_EQ(results.strided_16384_read_bw, 0.0);
+  EXPECT_EQ(results.strided_2mb_read_bw, 0.0);
 }
 
 // Test buffer size progression: buffer == PATTERN_STRIDE_PAGE
@@ -378,4 +382,3 @@ TEST(PatternValidationTest, BufferSizeProgressionJustLargerThanPage) {
   // Should succeed
   EXPECT_EQ(result, EXIT_SUCCESS);
 }
-

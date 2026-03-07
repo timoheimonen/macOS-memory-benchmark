@@ -57,6 +57,12 @@ int run_all_pattern_benchmarks(const BenchmarkBuffers& buffers, const BenchmarkC
   stats.all_strided_4096_read_bw.clear();
   stats.all_strided_4096_write_bw.clear();
   stats.all_strided_4096_copy_bw.clear();
+  stats.all_strided_16384_read_bw.clear();
+  stats.all_strided_16384_write_bw.clear();
+  stats.all_strided_16384_copy_bw.clear();
+  stats.all_strided_2mb_read_bw.clear();
+  stats.all_strided_2mb_write_bw.clear();
+  stats.all_strided_2mb_copy_bw.clear();
   stats.all_random_read_bw.clear();
   stats.all_random_write_bw.clear();
   stats.all_random_copy_bw.clear();
@@ -75,6 +81,12 @@ int run_all_pattern_benchmarks(const BenchmarkBuffers& buffers, const BenchmarkC
     stats.all_strided_4096_read_bw.reserve(config.loop_count);
     stats.all_strided_4096_write_bw.reserve(config.loop_count);
     stats.all_strided_4096_copy_bw.reserve(config.loop_count);
+    stats.all_strided_16384_read_bw.reserve(config.loop_count);
+    stats.all_strided_16384_write_bw.reserve(config.loop_count);
+    stats.all_strided_16384_copy_bw.reserve(config.loop_count);
+    stats.all_strided_2mb_read_bw.reserve(config.loop_count);
+    stats.all_strided_2mb_write_bw.reserve(config.loop_count);
+    stats.all_strided_2mb_copy_bw.reserve(config.loop_count);
     stats.all_random_read_bw.reserve(config.loop_count);
     stats.all_random_write_bw.reserve(config.loop_count);
     stats.all_random_copy_bw.reserve(config.loop_count);
@@ -106,6 +118,12 @@ int run_all_pattern_benchmarks(const BenchmarkBuffers& buffers, const BenchmarkC
       stats.all_strided_4096_read_bw.push_back(loop_results.strided_4096_read_bw);
       stats.all_strided_4096_write_bw.push_back(loop_results.strided_4096_write_bw);
       stats.all_strided_4096_copy_bw.push_back(loop_results.strided_4096_copy_bw);
+      stats.all_strided_16384_read_bw.push_back(loop_results.strided_16384_read_bw);
+      stats.all_strided_16384_write_bw.push_back(loop_results.strided_16384_write_bw);
+      stats.all_strided_16384_copy_bw.push_back(loop_results.strided_16384_copy_bw);
+      stats.all_strided_2mb_read_bw.push_back(loop_results.strided_2mb_read_bw);
+      stats.all_strided_2mb_write_bw.push_back(loop_results.strided_2mb_write_bw);
+      stats.all_strided_2mb_copy_bw.push_back(loop_results.strided_2mb_copy_bw);
       stats.all_random_read_bw.push_back(loop_results.random_read_bw);
       stats.all_random_write_bw.push_back(loop_results.random_write_bw);
       stats.all_random_copy_bw.push_back(loop_results.random_copy_bw);
@@ -123,4 +141,3 @@ int run_all_pattern_benchmarks(const BenchmarkBuffers& buffers, const BenchmarkC
   
   return EXIT_SUCCESS;
 }
-
