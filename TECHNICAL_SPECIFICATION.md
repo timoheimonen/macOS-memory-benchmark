@@ -61,12 +61,14 @@ The core of the performance measurement resides in the [`src/asm/`](src/asm/) di
 - **Read**: 512-byte block reads with XOR checksums to prevent dead code elimination by the compiler. See [`memory_read.s`](src/asm/memory_read.s).
 - **Write**: Utilizes non-temporal stores (`stnp`) to minimize cache pollution. See [`memory_write.s`](src/asm/memory_write.s).
 - **Copy**: Optimized using pair loads and stores to achieve maximum throughput. See [`memory_copy.s`](src/asm/memory_copy.s).
+- **`size_t`-safe control flow**: Sequential kernels use unsigned and zero/non-zero loop termination semantics for full-range correctness (`b.hs`/`b.lo`/`b.ls`, `cbz`, `b.ne`) instead of signed comparisons.
 
 ### 3.2 Latency Measurements
 
 - **Pointer-chasing**: Implemented with 8-way loop unrolling. See [`memory_latency.s`](src/asm/memory_latency.s).
-- **Memory Barriers**: `dsb`, `isb`, and `dmb` instructions are used to strictly isolate measurement windows.
-- **TLB Pre-touch**: The Translation Lookaside Buffer (TLB) is pre-loaded to ensure address translation does not contaminate latency measurements.
+- **Zero-access safety**: `memory_latency_chase_asm` returns immediately when `count == 0`, avoiding unnecessary dereference in no-access runs.
+- **Full-range loop correctness**: Loop termination uses counter-based zero/non-zero control (`subs` + `b.ne`) to remain correct for full `size_t` ranges.
+- **Measurement-window purity**: Pre-touch and barrier overhead (`ldr` preload, `dsb/isb`, `dmb`) was removed from the chase kernel so timed latency reflects dependent pointer loads only.
 - **Dependencies**: Built with true data dependencies, ensuring the measurement reflects actual latency rather than throughput.
 
 ### 3.3 Register Usage and SIMD
@@ -220,6 +222,7 @@ Dedicated ARM64 assembly functions for each pattern:
 - Random: [`memory_read_random.s`](src/asm/memory_read_random.s), [`memory_write_random.s`](src/asm/memory_write_random.s), [`memory_copy_random.s`](src/asm/memory_copy_random.s)
 
 All assembly functions use NEON SIMD (32-byte loads/stores), modulo arithmetic for bounds safety, and XOR checksum accumulation.
+Loop and cleanup control flow is standardized on unsigned or zero/non-zero termination semantics for `size_t` counters. Reverse kernels also include corrected cleanup exit direction and reverse copy byte-tail pointer initialization to ensure full-range correctness.
 
 **Integration:**
 
@@ -239,7 +242,7 @@ The software implements a sophisticated dual-output system designed for both hum
 
 **Message Architecture:**
 
-The console output uses a modular message system ([`src/output/console/messages/`](src/output/console/messages/)) with 10 specialized message modules:
+The console output uses a modular message system ([`src/output/console/messages/`](src/output/console/messages/)) with 9 specialized message modules:
 - [`cache_messages.cpp`](src/output/console/messages/cache_messages.cpp): Cache test result formatting
 - [`config_messages.cpp`](src/output/console/messages/config_messages.cpp): Configuration display
 - [`error_messages.cpp`](src/output/console/messages/error_messages.cpp): Error reporting with centralized prefixes
@@ -267,7 +270,7 @@ All numeric output uses precision constants from [`constants.h`](src/core/config
 
 **JSON Architecture:**
 
-The JSON export subsystem ([`src/output/json/json_output/`](src/output/json/json_output/)) consists of 7 specialized modules:
+The JSON export subsystem ([`src/output/json/json_output/`](src/output/json/json_output/)) consists of 6 specialized implementation modules:
 
 - **JSON Builder** ([`builder.cpp`](src/output/json/json_output/builder.cpp)): Constructs the root JSON structure with standardized field ordering (v0.52.4)
 - **File Writer** ([`file_writer.cpp`](src/output/json/json_output/file_writer.cpp)): Handles file I/O with error handling
@@ -305,7 +308,7 @@ JSON parsing and generation uses the nlohmann/json library ([`src/third_party/nl
 
 The software includes a comprehensive testing suite:
 
-- **Testing Framework**: 183 tests across 8 test files (3,200 lines) using the GoogleTest framework. See [`tests/`](tests/) directory.
+- **Testing Framework**: 199 tests across 8 test files using the GoogleTest framework. See [`tests/`](tests/) directory.
 - **Test Organization**: Tests are separated into unit tests and integration tests (v0.52.1). Three test targets available: `make test` (unit tests only, faster development cycle), `make test-integration` (integration tests only), and `make test-all` (complete test suite).
 - **Coverage Areas**: Memory allocation and initialization, buffer management, configuration validation and parsing, benchmark execution, pattern validation, message formatting, memory utilities.
 - **Doxygen-compliant documentation** at the source code level.
