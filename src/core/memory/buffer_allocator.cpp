@@ -120,6 +120,11 @@ int allocate_all_buffers(const BenchmarkConfig& config, BenchmarkBuffers& buffer
   if (!config.only_bandwidth && !config.run_patterns) {
     // Need lat buffer for latency tests (but not for pattern benchmarks, which are bandwidth-only)
     if (config.buffer_size > 0) {
+      // Error: Check addition overflow when accumulating total memory
+      if (total_memory > std::numeric_limits<size_t>::max() - config.buffer_size) {
+        std::cerr << Messages::error_prefix() << Messages::error_total_memory_overflow() << std::endl;
+        return EXIT_FAILURE;  // Return code: arithmetic overflow error
+      }
       total_memory += config.buffer_size;  // lat
     }
   }
@@ -202,9 +207,9 @@ int allocate_all_buffers(const BenchmarkConfig& config, BenchmarkBuffers& buffer
   }
   
   // Validate total memory requirement against availability limit.
-  // This check is necessary because the per-buffer limit calculation in config.cpp
-  // (max_total_allowed_mb / 3) only accounts for the 3 main buffers (src, dst, lat)
-  // and does not include cache buffers (L1, L2, custom) and their bandwidth counterparts.
+  // This check is necessary because per-buffer limit calculation in config_validator.cpp
+  // accounts for main buffers only (mode-aware: 1/2/3 buffers) and does not include
+  // cache buffers (L1, L2, custom) and their bandwidth counterparts.
   // This ensures the combined memory usage of all buffers stays within the total limit.
   if (config.max_total_allowed_mb > 0) {
     // Error: Total memory requirement exceeds system limit
@@ -390,4 +395,3 @@ int allocate_all_buffers(const BenchmarkConfig& config, BenchmarkBuffers& buffer
 
   return EXIT_SUCCESS;  // All buffers allocated successfully
 }
-

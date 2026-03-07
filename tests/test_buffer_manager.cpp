@@ -19,6 +19,7 @@
 #include "core/config/constants.h"
 #include "utils/benchmark.h"  // Declares system_info functions
 #include <cstdlib>
+#include <limits>
 
 // Test buffer allocation with valid config
 TEST(BufferManagerTest, AllocateAllBuffersValid) {
@@ -316,3 +317,20 @@ TEST(BufferManagerTest, AllocateAllBuffersPartialFailure) {
   EXPECT_EQ(buffers.l2_buffer(), nullptr);
 }
 
+// Test overflow check when adding main latency buffer to total memory
+TEST(BufferManagerTest, AllocateAllBuffersMainLatencyAdditionOverflow) {
+  BenchmarkConfig config;
+  config.buffer_size = std::numeric_limits<size_t>::max() / 2;
+  config.only_latency = false;
+  config.only_bandwidth = false;
+  config.run_patterns = false;
+
+  testing::internal::CaptureStderr();
+  BenchmarkBuffers buffers;
+  int result = allocate_all_buffers(config, buffers);
+  std::string error_output = testing::internal::GetCapturedStderr();
+
+  EXPECT_EQ(result, EXIT_FAILURE);
+  EXPECT_NE(error_output.find("Error: "), std::string::npos);
+  EXPECT_NE(error_output.find("Total memory requirement would overflow"), std::string::npos);
+}
