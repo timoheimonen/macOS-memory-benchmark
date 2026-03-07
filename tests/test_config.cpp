@@ -17,6 +17,7 @@
 #include "core/config/config.h"
 #include "core/config/constants.h"
 #include <cstdlib>
+#include <limits>
 
 // Test default configuration values
 TEST(ConfigTest, DefaultValues) {
@@ -167,3 +168,50 @@ TEST(ConfigTest, AccessCountScaling) {
   EXPECT_LT(config1.lat_num_accesses, config2.lat_num_accesses);
 }
 
+// Test validate_config rejects mutually exclusive flags
+TEST(ConfigTest, ValidateConfigRejectsOnlyBandwidthAndOnlyLatency) {
+  BenchmarkConfig config;
+  config.only_bandwidth = true;
+  config.only_latency = true;
+
+  int result = validate_config(config);
+  EXPECT_EQ(result, EXIT_FAILURE);
+}
+
+// Test validate_config rejects only-flags with pattern mode
+TEST(ConfigTest, ValidateConfigRejectsOnlyFlagsWithPatterns) {
+  BenchmarkConfig config;
+  config.run_patterns = true;
+  config.only_bandwidth = true;
+
+  int result = validate_config(config);
+  EXPECT_EQ(result, EXIT_FAILURE);
+}
+
+// Test mode-aware per-buffer capping based on required main buffer count
+TEST(ConfigTest, ValidateConfigModeAwareBufferCap) {
+  auto expected_cap = [](const BenchmarkConfig& cfg, unsigned long required_main_buffers) {
+    unsigned long cap = cfg.max_total_allowed_mb / required_main_buffers;
+    if (cap < Constants::MINIMUM_LIMIT_MB_PER_BUFFER) {
+      cap = Constants::MINIMUM_LIMIT_MB_PER_BUFFER;
+    }
+    return cap;
+  };
+
+  BenchmarkConfig full;
+  full.buffer_size_mb = std::numeric_limits<unsigned long>::max();
+  EXPECT_EQ(validate_config(full), EXIT_SUCCESS);
+  EXPECT_EQ(full.buffer_size_mb, expected_cap(full, 3));
+
+  BenchmarkConfig bw_only;
+  bw_only.only_bandwidth = true;
+  bw_only.buffer_size_mb = std::numeric_limits<unsigned long>::max();
+  EXPECT_EQ(validate_config(bw_only), EXIT_SUCCESS);
+  EXPECT_EQ(bw_only.buffer_size_mb, expected_cap(bw_only, 2));
+
+  BenchmarkConfig lat_only;
+  lat_only.only_latency = true;
+  lat_only.buffer_size_mb = std::numeric_limits<unsigned long>::max();
+  EXPECT_EQ(validate_config(lat_only), EXIT_SUCCESS);
+  EXPECT_EQ(lat_only.buffer_size_mb, expected_cap(lat_only, 1));
+}

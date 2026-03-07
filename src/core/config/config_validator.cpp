@@ -99,22 +99,29 @@ int validate_config(BenchmarkConfig& config) {
   // Calculate memory limit
   unsigned long available_mem_mb = get_available_memory_mb();
   unsigned long max_allowed_mb_per_buffer = 0;
+  unsigned long required_main_buffers = 3;  // Default mode: src + dst + lat
+
+  if (config.only_latency) {
+    required_main_buffers = 1;  // Latency-only mode: lat
+  } else if (config.only_bandwidth || config.run_patterns) {
+    required_main_buffers = 2;  // Bandwidth/pattern mode: src + dst
+  }
 
   if (available_mem_mb > 0) {
     config.max_total_allowed_mb = static_cast<unsigned long>(available_mem_mb * Constants::MEMORY_LIMIT_FACTOR);
-    // Divide by 3 to account for the 3 main buffers: src, dst, and lat.
+    // Divide by mode-specific main buffer count.
     // Note: This per-buffer calculation does NOT include cache buffers (L1, L2, custom)
     // and their bandwidth counterparts. The total memory check in buffer_manager.cpp
     // is necessary to ensure all buffers (main + cache) fit within max_total_allowed_mb.
-    max_allowed_mb_per_buffer = config.max_total_allowed_mb / 3;
+    max_allowed_mb_per_buffer = config.max_total_allowed_mb / required_main_buffers;
   } else {
     std::cerr << Messages::warning_prefix() << Messages::warning_cannot_get_memory() << std::endl;
     config.max_total_allowed_mb = Constants::FALLBACK_TOTAL_LIMIT_MB;
-    // Divide by 3 to account for the 3 main buffers: src, dst, and lat.
+    // Divide by mode-specific main buffer count.
     // Note: This per-buffer calculation does NOT include cache buffers (L1, L2, custom)
     // and their bandwidth counterparts. The total memory check in buffer_manager.cpp
     // is necessary to ensure all buffers (main + cache) fit within max_total_allowed_mb.
-    max_allowed_mb_per_buffer = config.max_total_allowed_mb / 3;
+    max_allowed_mb_per_buffer = config.max_total_allowed_mb / required_main_buffers;
     std::cout << Messages::info_setting_max_fallback(max_allowed_mb_per_buffer) << std::endl;
   }
   
@@ -123,24 +130,14 @@ int validate_config(BenchmarkConfig& config) {
     max_allowed_mb_per_buffer = Constants::MINIMUM_LIMIT_MB_PER_BUFFER;
   }
 
-  // Validate and cap buffer size (only if not latency-only, or if latency-only but buffer_size is needed)
-  // For latency-only mode, we still need buffer_size for main memory latency test, but we use default
-  if (!config.only_latency) {
-    // For bandwidth tests, validate and cap buffer size
-    if (config.buffer_size_mb > max_allowed_mb_per_buffer) {
-      std::cerr << Messages::warning_prefix() << Messages::warning_buffer_size_exceeds_limit(config.buffer_size_mb, max_allowed_mb_per_buffer) << std::endl;
-      config.buffer_size_mb = max_allowed_mb_per_buffer;
-    }
-  } else {
-    // For latency-only, we still need a buffer for main memory latency test
-    // Use default if not set, but don't cap it (latency test uses less memory)
-    if (config.buffer_size_mb == 0) {
-      config.buffer_size_mb = Constants::DEFAULT_BUFFER_SIZE_MB;
-    }
-    if (config.buffer_size_mb > max_allowed_mb_per_buffer) {
-      std::cerr << Messages::warning_prefix() << Messages::warning_buffer_size_exceeds_limit(config.buffer_size_mb, max_allowed_mb_per_buffer) << std::endl;
-      config.buffer_size_mb = max_allowed_mb_per_buffer;
-    }
+  // Validate and cap buffer size.
+  // In latency-only mode, use default if unset before applying cap.
+  if (config.only_latency && config.buffer_size_mb == 0) {
+    config.buffer_size_mb = Constants::DEFAULT_BUFFER_SIZE_MB;
+  }
+  if (config.buffer_size_mb > max_allowed_mb_per_buffer) {
+    std::cerr << Messages::warning_prefix() << Messages::warning_buffer_size_exceeds_limit(config.buffer_size_mb, max_allowed_mb_per_buffer) << std::endl;
+    config.buffer_size_mb = max_allowed_mb_per_buffer;
   }
 
   // Calculate final buffer size in bytes
@@ -163,4 +160,3 @@ int validate_config(BenchmarkConfig& config) {
 
   return EXIT_SUCCESS;  // All validations passed
 }
-
