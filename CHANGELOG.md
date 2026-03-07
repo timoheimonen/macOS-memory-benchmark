@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.52.8] - 2026-03-07
+
+### Fixed
+- **Zero-access latency chase safety**: Fixed `memory_latency_chase_asm` to return immediately when `count == 0`, preventing an unnecessary dereference when no pointer-chasing accesses are requested.
+- **Unsigned loop termination in latency chase**: Fixed loop branch conditions in `memory_latency_chase_asm` to use counter-based `b.ne` termination, ensuring correct behavior for full `size_t` ranges.
+- **Latency measurement overhead in pointer chase kernel**: Removed pre-touch and barrier instructions (`ldr` preload, `dsb/isb`, and `dmb` fences) from `memory_latency_chase_asm` to avoid adding non-chase overhead to latency measurements.
+
 ## [0.52.7] - 2026-01-05
 
 ### Added
