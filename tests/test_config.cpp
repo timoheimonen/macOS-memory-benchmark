@@ -18,6 +18,7 @@
 #include "core/config/constants.h"
 #include <cstdlib>
 #include <limits>
+#include <unistd.h>  // getpagesize
 
 // Test default configuration values
 TEST(ConfigTest, DefaultValues) {
@@ -25,6 +26,7 @@ TEST(ConfigTest, DefaultValues) {
   EXPECT_EQ(config.buffer_size_mb, Constants::DEFAULT_BUFFER_SIZE_MB);
   EXPECT_EQ(config.iterations, Constants::DEFAULT_ITERATIONS);
   EXPECT_EQ(config.loop_count, Constants::DEFAULT_LOOP_COUNT);
+  EXPECT_EQ(config.latency_tlb_locality_bytes, static_cast<size_t>(16) * Constants::BYTES_PER_KB);
   EXPECT_EQ(config.custom_cache_size_kb_ll, -1);
   EXPECT_FALSE(config.use_custom_cache_size);
 }
@@ -74,6 +76,58 @@ TEST(ConfigTest, ParseInvalidCacheSizeTooLarge) {
   const char* argv[] = {"program", "-cache-size", "1100000"};  // Above maximum of 1048576 KB (1 GB)
   int argc = 3;
   
+  int result = parse_arguments(argc, const_cast<char**>(argv), config);
+  EXPECT_EQ(result, EXIT_FAILURE);
+}
+
+// Test parsing cache size zero (validated later; allowed only with -only-latency)
+TEST(ConfigTest, ParseCacheSizeZero) {
+  BenchmarkConfig config;
+  const char* argv[] = {"program", "-cache-size", "0"};
+  int argc = 3;
+
+  int result = parse_arguments(argc, const_cast<char**>(argv), config);
+  EXPECT_EQ(result, EXIT_SUCCESS);
+  EXPECT_EQ(config.custom_cache_size_kb_ll, 0);
+  EXPECT_TRUE(config.use_custom_cache_size);
+}
+
+// Test parsing buffer size zero (validated later; allowed only with -only-latency)
+TEST(ConfigTest, ParseBufferSizeZero) {
+  BenchmarkConfig config;
+  const char* argv[] = {"program", "-buffersize", "0"};
+  int argc = 3;
+
+  int result = parse_arguments(argc, const_cast<char**>(argv), config);
+  EXPECT_EQ(result, EXIT_SUCCESS);
+  EXPECT_EQ(config.buffer_size_mb, 0u);
+}
+
+TEST(ConfigTest, ParseLatencyTlbLocalityValid) {
+  BenchmarkConfig config;
+  const char* argv[] = {"program", "-latency-tlb-locality-kb", "16"};
+  int argc = 3;
+
+  int result = parse_arguments(argc, const_cast<char**>(argv), config);
+  EXPECT_EQ(result, EXIT_SUCCESS);
+  EXPECT_EQ(config.latency_tlb_locality_bytes, static_cast<size_t>(16) * Constants::BYTES_PER_KB);
+}
+
+TEST(ConfigTest, ParseLatencyTlbLocalityZeroDisables) {
+  BenchmarkConfig config;
+  const char* argv[] = {"program", "-latency-tlb-locality-kb", "0"};
+  int argc = 3;
+
+  int result = parse_arguments(argc, const_cast<char**>(argv), config);
+  EXPECT_EQ(result, EXIT_SUCCESS);
+  EXPECT_EQ(config.latency_tlb_locality_bytes, 0u);
+}
+
+TEST(ConfigTest, ParseLatencyTlbLocalityInvalidNegative) {
+  BenchmarkConfig config;
+  const char* argv[] = {"program", "-latency-tlb-locality-kb", "-1"};
+  int argc = 3;
+
   int result = parse_arguments(argc, const_cast<char**>(argv), config);
   EXPECT_EQ(result, EXIT_FAILURE);
 }
@@ -134,7 +188,9 @@ TEST(ConfigTest, CalculateCustomBufferSize) {
   
   calculate_buffer_sizes(config);
   
-  EXPECT_EQ(config.custom_buffer_size, config.custom_cache_size_bytes);
+  EXPECT_GT(config.custom_buffer_size, 0u);
+  EXPECT_LE(config.custom_buffer_size, config.custom_cache_size_bytes);
+  EXPECT_EQ(config.custom_buffer_size % Constants::LATENCY_STRIDE_BYTES, 0u);
 }
 
 // Test access count calculation
@@ -214,4 +270,76 @@ TEST(ConfigTest, ValidateConfigModeAwareBufferCap) {
   lat_only.buffer_size_mb = std::numeric_limits<unsigned long>::max();
   EXPECT_EQ(validate_config(lat_only), EXIT_SUCCESS);
   EXPECT_EQ(lat_only.buffer_size_mb, expected_cap(lat_only, 1));
+}
+
+TEST(ConfigTest, ValidateConfigRejectsBufferSizeZeroWithoutOnlyLatency) {
+  BenchmarkConfig config;
+  config.buffer_size_mb = 0;
+
+  int result = validate_config(config);
+  EXPECT_EQ(result, EXIT_FAILURE);
+}
+
+TEST(ConfigTest, ValidateConfigRejectsCacheSizeZeroWithoutOnlyLatency) {
+  BenchmarkConfig config;
+  config.custom_cache_size_kb_ll = 0;
+  config.use_custom_cache_size = true;
+  config.custom_cache_size_bytes = 0;
+
+  int result = validate_config(config);
+  EXPECT_EQ(result, EXIT_FAILURE);
+}
+
+TEST(ConfigTest, ValidateConfigAllowsCacheOnlyLatencyMode) {
+  BenchmarkConfig config;
+  config.only_latency = true;
+  config.buffer_size_mb = 0;
+  config.custom_cache_size_kb_ll = 8096;
+  config.use_custom_cache_size = true;
+  config.custom_cache_size_bytes = static_cast<size_t>(8096) * Constants::BYTES_PER_KB;
+
+  int result = validate_config(config);
+  EXPECT_EQ(result, EXIT_SUCCESS);
+}
+
+TEST(ConfigTest, ValidateConfigAllowsMainOnlyLatencyMode) {
+  BenchmarkConfig config;
+  config.only_latency = true;
+  config.buffer_size_mb = 16;
+  config.custom_cache_size_kb_ll = 0;
+  config.use_custom_cache_size = true;
+  config.custom_cache_size_bytes = 0;
+
+  int result = validate_config(config);
+  EXPECT_EQ(result, EXIT_SUCCESS);
+}
+
+TEST(ConfigTest, ValidateConfigRejectsOnlyLatencyWithNoTargets) {
+  BenchmarkConfig config;
+  config.only_latency = true;
+  config.buffer_size_mb = 0;
+  config.custom_cache_size_kb_ll = 0;
+  config.use_custom_cache_size = true;
+  config.custom_cache_size_bytes = 0;
+
+  int result = validate_config(config);
+  EXPECT_EQ(result, EXIT_FAILURE);
+}
+
+TEST(ConfigTest, ValidateConfigRejectsLatencyTlbLocalityNotPageMultiple) {
+  BenchmarkConfig config;
+  const size_t page_size = static_cast<size_t>(getpagesize());
+  config.latency_tlb_locality_bytes = page_size + Constants::BYTES_PER_KB;
+
+  int result = validate_config(config);
+  EXPECT_EQ(result, EXIT_FAILURE);
+}
+
+TEST(ConfigTest, ValidateConfigAllowsLatencyTlbLocalityPageMultiple) {
+  BenchmarkConfig config;
+  const size_t page_size = static_cast<size_t>(getpagesize());
+  config.latency_tlb_locality_bytes = page_size * 2;
+
+  int result = validate_config(config);
+  EXPECT_EQ(result, EXIT_SUCCESS);
 }

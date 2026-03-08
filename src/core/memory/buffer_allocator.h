@@ -25,6 +25,7 @@
 #ifndef BUFFER_ALLOCATOR_H
 #define BUFFER_ALLOCATOR_H
 
+#include <cstddef>  // size_t
 #include <cstdlib>  // EXIT_SUCCESS, EXIT_FAILURE
 
 // Forward declarations to avoid including headers in header
@@ -43,5 +44,15 @@ struct BenchmarkBuffers;
  */
 int allocate_all_buffers(const BenchmarkConfig& config, BenchmarkBuffers& buffers);
 
-#endif // BUFFER_ALLOCATOR_H
+/**
+ * @brief Calculate total bytes required for all buffers based on configuration
+ * @param config Reference to benchmark configuration
+ * @param[out] total_memory_bytes Total required bytes on success
+ * @return EXIT_SUCCESS on success, EXIT_FAILURE on validation/overflow/limit error
+ *
+ * Uses the same mode-aware accounting rules as allocate_all_buffers() so
+ * callers can report the exact total memory requirement before allocation.
+ */
+int calculate_total_allocation_bytes(const BenchmarkConfig& config, size_t& total_memory_bytes);
 
+#endif // BUFFER_ALLOCATOR_H

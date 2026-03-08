@@ -33,6 +33,36 @@
 #include <iostream>  // Needed for std::cout, std::cerr
 #include <cstdlib>   // Needed for EXIT_SUCCESS, EXIT_FAILURE
 
+namespace {
+
+void shuffle_indices_with_tlb_locality(std::vector<size_t>& indices, size_t locality_pointer_span,
+                                       std::mt19937_64& rng) {
+    const size_t num_pointers = indices.size();
+    const size_t locality_count = (num_pointers + locality_pointer_span - 1) / locality_pointer_span;
+
+    std::vector<size_t> locality_order(locality_count);
+    std::iota(locality_order.begin(), locality_order.end(), 0);
+    std::shuffle(locality_order.begin(), locality_order.end(), rng);
+
+    std::vector<size_t> reordered_indices;
+    reordered_indices.reserve(num_pointers);
+
+    for (size_t locality_id : locality_order) {
+        const size_t start = locality_id * locality_pointer_span;
+        const size_t end = std::min(start + locality_pointer_span, num_pointers);
+
+        std::vector<size_t> locality_indices(end - start);
+        std::iota(locality_indices.begin(), locality_indices.end(), start);
+        std::shuffle(locality_indices.begin(), locality_indices.end(), rng);
+
+        reordered_indices.insert(reordered_indices.end(), locality_indices.begin(), locality_indices.end());
+    }
+
+    indices.swap(reordered_indices);
+}
+
+}  // namespace
+
 /**
  * @brief Sets up a randomly shuffled pointer chain within the buffer for latency measurement.
  *
@@ -42,7 +72,7 @@
  *
  * The function:
  * 1. Calculates how many pointers can fit in the buffer based on the stride
- * 2. Creates a shuffled sequence of indices using std::shuffle
+ * 2. Creates a shuffled sequence of indices using std::shuffle (globally or TLB-locality aware)
  * 3. Forms a circular chain by making each element point to the next in the shuffled sequence
  * 4. Performs bounds checking to prevent buffer overruns
  *
@@ -50,6 +80,9 @@
  * @param[in]     buffer_size  Total size of the buffer in bytes. Must be >= stride * 2.
  * @param[in]     stride       The distance between consecutive pointer locations in bytes.
  *                             Must be >= sizeof(uintptr_t) and non-zero.
+ * @param[in]     tlb_locality_bytes Optional locality window in bytes.
+ *                             0 = global random chain. >0 = random within local windows,
+ *                             then randomized window order.
  *
  * @return EXIT_SUCCESS (0) on success
  * @return EXIT_FAILURE (1) if buffer is null, stride is zero, or buffer is too small
@@ -60,7 +93,7 @@
  *
  * @see initialize_buffers() for buffer initialization
  */
-int setup_latency_chain(void *buffer, size_t buffer_size, size_t stride)
+int setup_latency_chain(void *buffer, size_t buffer_size, size_t stride, size_t tlb_locality_bytes)
 {
     // Validate input parameters
     if (buffer == nullptr) {
@@ -90,8 +123,19 @@ int setup_latency_chain(void *buffer, size_t buffer_size, size_t stride)
     // Initialize random number generator.
     std::random_device rd;
     std::mt19937_64 g(rd());
-    // Randomly shuffle the indices.
-    std::shuffle(indices.begin(), indices.end(), g);
+    if (tlb_locality_bytes == 0) {
+        // Randomly shuffle the full index space.
+        std::shuffle(indices.begin(), indices.end(), g);
+    } else {
+        const size_t locality_pointer_span = tlb_locality_bytes / stride;
+        if (locality_pointer_span < 2) {
+            std::cerr << Messages::error_prefix()
+                      << Messages::error_buffer_stride_invalid_latency_chain(locality_pointer_span, tlb_locality_bytes, stride)
+                      << std::endl;
+            return EXIT_FAILURE;
+        }
+        shuffle_indices_with_tlb_locality(indices, locality_pointer_span, g);
+    }
 
     // Get a base pointer to the buffer.
     char *base_ptr = static_cast<char *>(buffer);

@@ -46,6 +46,7 @@ macOS on Apple Silicon.
 * **Main Memory Bandwidth**: Measures read, write, and copy speeds using all available CPU cores for maximum throughput (customizable with `-threads` parameter).
 * **Cache Bandwidth**: Measures L1 and L2 cache read, write, and copy speeds. By default uses single-threaded tests for accuracy, but can be configured with `-threads` parameter.
 * **Memory Latency**: Measures access latency for both main memory and cache levels.
+* **TLB-Locality Control for Latency**: `-latency-tlb-locality-kb` lets you keep pointer-chase randomness inside locality windows to reduce TLB-refill noise when analyzing cache-level latency transitions (default: `16`, set `0` to disable).
 * **Access Pattern Analysis**: Tests different memory access patterns (sequential forward/reverse, strided, random) to analyze prefetcher effectiveness and cache behavior.
 * **Advanced Statistics**: When running multiple test loops, provides detailed statistics including percentiles (P50/P90/P95/P99) and standard deviation.
 * **Automatic Cache Detection**: Automatically detects and uses your system's L1 and L2 cache sizes.
@@ -110,7 +111,6 @@ As expected, access patterns that stress page-level behavior (4096B stride) exhi
   }
 }
 ```
-Full JSON dataset: [MacMiniM4_100_pattern_runs.json](results/MacMiniM4_100_pattern_runs.json).
 
 ## Install with Homebrew
 
@@ -160,7 +160,7 @@ In the Terminal, go to the directory with `memory_benchmark` and use these comma
     Example output:
     ```text
     Copyright 2025-2026 Timo Heimonen <timo.heimonen@proton.me>
-    Version: 0.52.8 by Timo Heimonen <timo.heimonen@proton.me>
+    Version: 0.53.0 by Timo Heimonen <timo.heimonen@proton.me>
     License: GNU GPL v3. See <https://www.gnu.org/licenses/>
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -177,9 +177,12 @@ In the Terminal, go to the directory with `memory_benchmark` and use these comma
       -buffersize <size_mb> Size for EACH of the 3 buffers in Megabytes (MB) as integer (default: 512).
                             The maximum allowed <size_mb> is automatically determined such that
                             3 * <size_mb> does not exceed ~80% of available system memory.
+                            In -only-latency mode, -buffersize 0 disables main memory latency.
       -count <count>        Number of full loops (read/write/copy/latency) (default: 1).
                             When count > 1, statistics include percentiles (P50/P90/P95/P99) and stddev.
       -latency-samples <count> Number of latency samples to collect per test (default: 1000)
+      -latency-tlb-locality-kb <size_kb> TLB-locality window for latency pointer chains (default: 16 KB; set 0 to disable).
+                            Must be a multiple of system page size (typically 4 KB or 16 KB).
       -threads <count>      Number of threads to use for benchmarks (default: detected
                             CPU core count). Applies to all benchmarks including cache tests.
                             If specified value exceeds available cores, it will be capped to
@@ -188,6 +191,7 @@ In the Terminal, go to the directory with `memory_benchmark` and use these comma
                             Minimum is 16 KB (system page size). When set, skips automatic
                             L1/L2 cache size detection and only performs bandwidth and latency
                             tests for the custom cache size.
+                            In -only-latency mode, -cache-size 0 disables cache latency.
       -patterns             Run pattern benchmarks (sequential forward/reverse, strided,
                             and random access patterns). When set, only pattern benchmarks
                             are executed, skipping standard bandwidth and latency tests.
@@ -197,6 +201,8 @@ In the Terminal, go to the directory with `memory_benchmark` and use these comma
                             or -latency-samples.
       -only-latency         Run only latency tests (main memory and cache latency).
                             Skips all bandwidth tests. Cannot be used with -patterns or -iterations.
+                            Use -buffersize 0 to disable main memory latency, or -cache-size 0
+                            to disable cache latency.
       -non-cacheable        Apply cache-discouraging hints to src/dst buffers.
                             Uses madvise() hints to discourage caching, but does NOT provide
                             true non-cacheable memory (user-space cannot modify page tables).
@@ -228,7 +234,7 @@ For usage documentation, command-line options reference, best practices, and det
 
 ## Example output (Mac Mini M4 24GB)
 ```text
------ macOS-memory-benchmark v0.52.9 -----
+----- macOS-memory-benchmark v0.53.0 -----
 Copyright 2025-2026 Timo Heimonen <timo.heimonen@proton.me>
 This program is free software: you can redistribute it and/or modify
 it under the terms of the GNU General Public License as published by
@@ -240,10 +246,11 @@ MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
 See <https://www.gnu.org/licenses/> for more details.
 
 Buffer Size (per buffer): 512.00 MiB (512 MB requested/capped)
-Total Allocation Size: ~1536.00 MiB (for 3 buffers)
+Total Allocation Size: ~1541.08 MiB
 Iterations (per R/W/Copy test per loop): 1000
 Loop Count (total benchmark repetitions): 1
-Non-Cacheable Memory Hints: Enabled
+Non-Cacheable Memory Hints: Disabled
+Latency TLB Locality: 16.00 KB
 
 Processor Name: Apple M4
   Performance Cores: 4
@@ -258,33 +265,33 @@ Running benchmarks...
 \ Running tests...
 --- Results (Loop 1) ---
 Main Memory Bandwidth Tests (multi-threaded, 10 threads):
-  Read : 114.74709 GB/s (Total time: 4.67873 s)
-  Write: 68.55840 GB/s (Total time: 7.83086 s)
-  Copy : 105.60609 GB/s (Total time: 10.16742 s)
+  Read : 115.48455 GB/s (Total time: 4.64885 s)
+  Write: 66.86407 GB/s (Total time: 8.02929 s)
+  Copy : 106.26014 GB/s (Total time: 10.10484 s)
 
 Main Memory Latency Test (single-threaded, pointer chase):
-  Total time: 19.47850 s
-  Average latency: 97.39 ns
+  Total time: 5.21972 s
+  Average latency: 26.10 ns
 
 Cache Bandwidth Tests (single-threaded):
   L1 Cache:
-    Read : 139.59918 GB/s (Buffer size: 96.00 KB)
-    Write: 72.70513 GB/s
-    Copy : 163.58213 GB/s
+    Read : 139.76431 GB/s (Buffer size: 95.89 KB)
+    Write: 74.67711 GB/s
+    Copy : 175.20467 GB/s
   L2 Cache:
-    Read : 120.46392 GB/s (Buffer size: 1.60 MB)
-    Write: 45.08152 GB/s
-    Copy : 126.15097 GB/s
+    Read : 121.26469 GB/s (Buffer size: 1.60 MB)
+    Write: 47.57190 GB/s
+    Copy : 130.90856 GB/s
 
 Cache Latency Tests (single-threaded, pointer chase):
-  L1 Cache: 0.69 ns (Buffer size: 96.00 KB)
-  L2 Cache: 4.90 ns (Buffer size: 1.60 MB)
+  L1 Cache: 0.69 ns (Buffer size: 95.89 KB)
+  L2 Cache: 5.12 ns (Buffer size: 1.60 MB)
 --------------
 
-Done. Total execution time: 43.48166 s
+Done. Total execution time: 34.68413 s
 ```
 ```text
------ macOS-memory-benchmark v0.52.9 -----
+----- macOS-memory-benchmark v0.53.0 -----
 Copyright 2025-2026 Timo Heimonen <timo.heimonen@proton.me>
 This program is free software: you can redistribute it and/or modify
 it under the terms of the GNU General Public License as published by
@@ -300,6 +307,7 @@ Total Allocation Size: ~1024.00 MiB
 Iterations (per R/W/Copy test per loop): 1000
 Loop Count (total benchmark repetitions): 1
 Non-Cacheable Memory Hints: Disabled
+Latency TLB Locality: 16.00 KB
 
 Processor Name: Apple M4
   Performance Cores: 4
@@ -317,55 +325,49 @@ Running Pattern Benchmarks...
 ================================
 
 Sequential Forward:
-  Read : 115.645 GB/s
-  Write: 66.629 GB/s
-  Copy : 106.294 GB/s
+  Read : 115.483 GB/s
+  Write: 66.164 GB/s
+  Copy : 105.721 GB/s
 
 Sequential Reverse:
-  Read : 114.673 GB/s (-0.8%)
-  Write: 66.466 GB/s (-0.2%)
-  Copy : 105.869 GB/s (-0.4%)
+  Read : 115.050 GB/s (-0.4%)
+  Write: 66.671 GB/s (+0.8%)
+  Copy : 105.728 GB/s (+0.0%)
 
 Strided (Cache Line - 64B):
-  Read : 57.718 GB/s (-50.1%)
-  Write: 33.412 GB/s (-49.9%)
-  Copy : 69.511 GB/s (-34.6%)
+  Read : 57.710 GB/s (-50.0%)
+  Write: 33.365 GB/s (-49.6%)
+  Copy : 69.423 GB/s (-34.3%)
 
 Strided (Page - 4096B):
-  Read : 24.878 GB/s (-78.5%)
-  Write: 50.735 GB/s (-23.9%)
-  Copy : 34.105 GB/s (-67.9%)
+  Read : 26.697 GB/s (-76.9%)
+  Write: 49.558 GB/s (-25.1%)
+  Copy : 33.349 GB/s (-68.5%)
 
 Strided (Page - 16384B):
-  Read : 26.484 GB/s (-77.1%)
-  Write: 55.083 GB/s (-17.3%)
-  Copy : 31.305 GB/s (-70.5%)
+  Read : 24.991 GB/s (-78.4%)
+  Write: 52.766 GB/s (-20.2%)
+  Copy : 36.120 GB/s (-65.8%)
 
 Strided (Superpage - 2MB):
-  Read : 68.219 GB/s (-41.0%)
-  Write: 41.956 GB/s (-37.0%)
-  Copy : 34.231 GB/s (-67.8%)
+  Read : 57.087 GB/s (-50.6%)
+  Write: 41.654 GB/s (-37.0%)
+  Copy : 69.350 GB/s (-34.4%)
 
 Random Uniform:
-  Read : 26.930 GB/s (-76.7%)
-  Write: 45.144 GB/s (-32.2%)
-  Copy : 32.992 GB/s (-69.0%)
+  Read : 26.731 GB/s (-76.9%)
+  Write: 45.303 GB/s (-31.5%)
+  Copy : 32.715 GB/s (-69.1%)
 
 Pattern Efficiency Analysis:
-- Sequential coherence: 99.5%
-- Prefetcher effectiveness: 55.7%
+- Sequential coherence: 100.0%
+- Prefetcher effectiveness: 55.9%
 - Cache thrashing potential: High
 - TLB pressure: Minimal
 
 
-Done. Total execution time: 70.72316 s
+Done. Total execution time: 70.81675 s
 ```
-
-![Mac Mini M4 10 benchmark loops](pictures/MacMiniM4_10_loops_results.png)  
-Mac Mini M4 10 benchmark loops results. Image created from JSON file using separate program.
-
-![Mac Mini M4 patterns benchmark results](pictures/MacMiniM4_patterns_results.png)  
-Mac Mini M4 patterns benchmark results. Image created from JSON file using separate program.
 
 ## Documentation
 
@@ -388,8 +390,9 @@ Mac Mini M4 patterns benchmark results. Image created from JSON file using separ
   When you run the main memory bandwidth or latency tests with small buffer sizes, a significant portion of the accesses can be served from the CPU caches instead of true main memory (DRAM). This is especially true on Apple Silicon, which has large and complex shared caches. As a result, small buffers tend to measure *cache* performance rather than pure DRAM performance, and may report unrealistically high bandwidth or low latency.
 * **No explicit cache flush on Apple Silicon**:  
   Unlike x86 (`CLFLUSH`), there is no user-space instruction on Apple Silicon to reliably flush data caches. The benchmark cannot force a “cold cache” state before each measurement; it relies on large buffer sizes and warm-up behavior to approximate steady-state memory behavior.
+* **TLB effects in random latency walks**:
+  Fully random pointer-chase over large buffers can include TLB miss/refill latency in addition to cache/DRAM latency. Use `-latency-tlb-locality-kb` (default `16`) to reduce this effect; set `0` to return to fully global randomization.
 * **Recommendation**:  
   For more realistic main memory measurements, prefer buffer sizes in the range of **512 MB–1 GB (or larger, if RAM allows)**. Smaller values are still useful to study cache behavior, but they should not be interpreted as pure main memory bandwidth/latency.
 * **Other Programs**:
   As userspace cannot prioritize programs, close all other programs to avoid noise from operating system to the results.
-

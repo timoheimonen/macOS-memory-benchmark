@@ -181,6 +181,8 @@ Sets the size of each memory buffer in megabytes.
 
 **Important**: The tool allocates 3 buffers, so total memory usage is `3 × buffersize`. Maximum is automatically capped at ~80% of available system memory.
 
+**Latency-only special case**: With `-only-latency`, you can use `-buffersize 0` to disable main memory latency and its main latency buffer allocation.
+
 **Example:**
 ```bash
 ./memory_benchmark -buffersize 1024
@@ -264,6 +266,11 @@ Run only latency tests, skip all bandwidth tests.
 
 **Cannot be combined with**: `-patterns`, `-iterations`
 
+**Selective latency targets:**
+- `-buffersize 0` disables main memory latency (cache latency only)
+- `-cache-size 0` disables cache latency (main memory latency only)
+- `-buffersize 0 -cache-size 0` is invalid (nothing to run)
+
 **Example:**
 ```bash
 ./memory_benchmark -only-latency
@@ -280,6 +287,7 @@ Specify a custom cache size to test (in kilobytes).
 - Skips automatic L1/L2 detection
 - Runs bandwidth and latency tests for the specified cache size only
 - Uses 100% of specified size for actual buffer
+- In `-only-latency` mode, `-cache-size 0` disables cache latency tests and cache latency buffer allocation
 
 **Use cases:**
 - Testing specific cache sizes
@@ -324,6 +332,33 @@ Number of samples to collect per latency test.
 **Example:**
 ```bash
 ./memory_benchmark -latency-samples 5000
+```
+
+#### `-latency-tlb-locality-kb <size_kb>`
+Set the TLB-locality window used when building latency pointer-chase chains.
+
+**Default**: 16 KB
+
+**Behavior:**
+- **`16` (default)**: Randomizes accesses inside 16 KB local windows, then randomizes window order.
+- **`0`**: Disables locality mode and uses globally random pointer-chain order.
+- **Non-zero values** must be exact multiples of the system page size (typically 4 KB or 16 KB).
+
+**When to use:**
+- Keep default (`16`) when you want cleaner cache-hierarchy latency transitions with less TLB refill noise.
+- Use `0` when you explicitly want fully global randomization (includes stronger TLB effects).
+- Increase locality (e.g., 64/256 KB) to further reduce TLB-miss contribution per locality block.
+
+**Examples:**
+```bash
+# Default behavior (16 KB locality)
+./memory_benchmark -only-latency
+
+# Disable locality mode (global random chain)
+./memory_benchmark -only-latency -latency-tlb-locality-kb 0
+
+# Larger locality window (must be page-size multiple)
+./memory_benchmark -only-latency -latency-tlb-locality-kb 64
 ```
 
 #### `-non-cacheable`
@@ -820,7 +855,10 @@ When using `-output <file>`, results are saved in JSON format for programmatic a
   "l1_cache_size_bytes": 131072,
   "l2_cache_size_bytes": 16777216,
   "use_non_cacheable": true,
-  "latency_sample_count": 1000
+  "latency_sample_count": 1000,
+  "use_latency_tlb_locality": true,
+  "latency_tlb_locality_kb": 16,
+  "latency_tlb_locality_bytes": 16384
 }
 ```
 
@@ -977,6 +1015,11 @@ done
 **Latency-focused with many samples:**
 ```bash
 ./memory_benchmark -only-latency -latency-samples 10000 -count 10
+```
+
+**Latency-focused with global random chain (TLB effects included):**
+```bash
+./memory_benchmark -only-latency -latency-samples 10000 -latency-tlb-locality-kb 0 -count 10
 ```
 
 **Custom cache with non-cacheable hints:**

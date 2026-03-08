@@ -5,6 +5,26 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.53.0] - 2026-03-08
+
+### Added
+- **Selective latency-target execution in `-only-latency` mode**: You can now disable one latency path at a time:
+  - `-buffersize 0` disables main memory latency
+  - `-cache-size 0` disables cache latency
+  Disabled latency targets are also skipped in allocation and execution paths.
+- **TLB-locality mode for latency pointer-chase setup**: Added `-latency-tlb-locality-kb <size_kb>` to build latency chains with randomized access inside locality windows (instead of fully global randomization), helping reduce TLB-refill contamination when analyzing cache-level latency behavior.
+
+### Changed
+- **Clear zero-value rules for latency-only mode**: `-buffersize 0` and `-cache-size 0` are valid only with `-only-latency`; using both as zero at the same time is rejected as an invalid no-target configuration.
+- **Cleaner latency-only output and docs**: Help/docs now describe zero-disable behavior, and console output omits disabled latency sections while showing a clear cache-disabled status when applicable.
+- **More accurate total allocation reporting**: Displayed total allocation now reflects active benchmark mode and enabled buffers.
+- **Strict validation and defaults for TLB-locality option**: `-latency-tlb-locality-kb` now defaults to `16` (KB); setting `0` explicitly disables locality mode. Non-zero values must be exact multiples of the system page size, and configuration/JSON output include explicit TLB-locality mode and size fields.
+
+### Fixed
+- **Main latency disable path in config validation**: `-only-latency -buffersize 0` no longer gets reset to default buffer size.
+- **Custom cache zero handling in buffer sizing**: `-only-latency -cache-size 0` no longer rounds up to a minimum custom cache buffer.
+- **Disabled-target statistics noise**: Statistics and loop output no longer show empty or irrelevant latency blocks for disabled targets.
+
 ## [0.52.9] - 2026-03-08
 
 ### Added

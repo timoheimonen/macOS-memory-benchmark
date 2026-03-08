@@ -286,6 +286,10 @@ void run_cache_latency_tests(const BenchmarkBuffers& buffers, const BenchmarkCon
  */
 void run_main_memory_latency_test(const BenchmarkBuffers& buffers, const BenchmarkConfig& config,
                                     TimingResults& timings, BenchmarkResults& results, HighResTimer& test_timer) {
+  if (buffers.lat_buffer() == nullptr || config.buffer_size == 0 || config.lat_num_accesses == 0) {
+    return;
+  }
+
   show_progress();
   warmup_latency(buffers.lat_buffer(), config.buffer_size);
   timings.total_lat_time_ns = run_latency_test(buffers.lat_buffer(), config.lat_num_accesses, test_timer,

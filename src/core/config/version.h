@@ -29,7 +29,7 @@
  * @def SOFTVERSION
  * @brief Software version number (semantic versioning format as string)
  */
-#define SOFTVERSION "0.52.9"
+#define SOFTVERSION "0.53.0"
 
 #endif // VERSION_H
 

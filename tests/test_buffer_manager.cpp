@@ -334,3 +334,76 @@ TEST(BufferManagerTest, AllocateAllBuffersMainLatencyAdditionOverflow) {
   EXPECT_NE(error_output.find("Error: "), std::string::npos);
   EXPECT_NE(error_output.find("Total memory requirement would overflow"), std::string::npos);
 }
+
+TEST(BufferManagerTest, CalculateTotalAllocationBytesOnlyLatencyCustomCache) {
+  BenchmarkConfig config;
+  config.buffer_size = Constants::BYTES_PER_MB;
+  config.only_latency = true;
+  config.only_bandwidth = false;
+  config.run_patterns = false;
+  config.use_custom_cache_size = true;
+  config.custom_buffer_size = 43 * Constants::BYTES_PER_MB;
+
+  size_t total_memory_bytes = 0;
+  int result = calculate_total_allocation_bytes(config, total_memory_bytes);
+
+  EXPECT_EQ(result, EXIT_SUCCESS);
+  EXPECT_EQ(total_memory_bytes, 44 * Constants::BYTES_PER_MB);
+}
+
+TEST(BufferManagerTest, CalculateTotalAllocationBytesDefaultModeIncludesCacheBuffers) {
+  BenchmarkConfig config;
+  config.buffer_size = Constants::BYTES_PER_MB;
+  config.l1_buffer_size = 64 * Constants::BYTES_PER_KB;
+  config.l2_buffer_size = 512 * Constants::BYTES_PER_KB;
+  config.only_latency = false;
+  config.only_bandwidth = false;
+  config.run_patterns = false;
+  config.use_custom_cache_size = false;
+
+  size_t total_memory_bytes = 0;
+  int result = calculate_total_allocation_bytes(config, total_memory_bytes);
+
+  const size_t expected_bytes = (3 * Constants::BYTES_PER_MB) +
+                                (3 * config.l1_buffer_size) +
+                                (3 * config.l2_buffer_size);
+  EXPECT_EQ(result, EXIT_SUCCESS);
+  EXPECT_EQ(total_memory_bytes, expected_bytes);
+}
+
+TEST(BufferManagerTest, CalculateTotalAllocationBytesPatternsSkipsLatencyAndCacheBuffers) {
+  BenchmarkConfig config;
+  config.buffer_size = Constants::BYTES_PER_MB;
+  config.l1_buffer_size = 64 * Constants::BYTES_PER_KB;
+  config.l2_buffer_size = 512 * Constants::BYTES_PER_KB;
+  config.only_latency = false;
+  config.only_bandwidth = false;
+  config.run_patterns = true;
+  config.use_custom_cache_size = true;
+  config.custom_buffer_size = 43 * Constants::BYTES_PER_MB;
+
+  size_t total_memory_bytes = 0;
+  int result = calculate_total_allocation_bytes(config, total_memory_bytes);
+
+  EXPECT_EQ(result, EXIT_SUCCESS);
+  EXPECT_EQ(total_memory_bytes, 2 * Constants::BYTES_PER_MB);
+}
+
+TEST(BufferManagerTest, InitializeAllBuffersOnlyLatencyWithMainDisabledAndCustomCacheEnabled) {
+  BenchmarkConfig config;
+  config.only_latency = true;
+  config.buffer_size_mb = 0;
+  config.buffer_size = 0;
+  config.lat_num_accesses = 0;
+  config.use_custom_cache_size = true;
+  config.custom_cache_size_bytes = 8 * Constants::BYTES_PER_MB;
+  config.custom_buffer_size = config.custom_cache_size_bytes;
+  config.custom_num_accesses = Constants::CUSTOM_LATENCY_ACCESSES;
+
+  BenchmarkBuffers buffers;
+  ASSERT_EQ(allocate_all_buffers(config, buffers), EXIT_SUCCESS);
+  EXPECT_EQ(buffers.lat_buffer(), nullptr);
+  EXPECT_NE(buffers.custom_buffer(), nullptr);
+
+  EXPECT_EQ(initialize_all_buffers(buffers, config), EXIT_SUCCESS);
+}

@@ -228,7 +228,7 @@ TEST_F(MessagesErrorTest, ErrorBuffersizeInvalid) {
   EXPECT_TRUE(msg.find("got -100") != std::string::npos);
   // Test with zero
   std::string msg2 = Messages::error_buffersize_invalid(0, 1000);
-  EXPECT_EQ(msg2, "buffersize invalid (must be > 0 and <= 1000, got 0)");
+  EXPECT_EQ(msg2, "buffersize invalid (must be >= 0 and <= 1000, got 0)");
 }
 
 TEST_F(MessagesErrorTest, ErrorCountInvalid) {
@@ -245,6 +245,16 @@ TEST_F(MessagesErrorTest, ErrorLatencySamplesInvalid) {
   // Test with negative value
   std::string msg2 = Messages::error_latency_samples_invalid(-1, 1, 5000);
   EXPECT_EQ(msg2, "latency-samples invalid (must be between 1 and 5000, got -1)");
+}
+
+TEST_F(MessagesErrorTest, ErrorLatencyTlbLocalityInvalid) {
+  std::string msg = Messages::error_latency_tlb_locality_invalid(-1, 1024);
+  EXPECT_EQ(msg, "latency-tlb-locality-kb invalid (must be >= 0 and <= 1024, got -1)");
+}
+
+TEST_F(MessagesErrorTest, ErrorLatencyTlbLocalityPageMultiple) {
+  std::string msg = Messages::error_latency_tlb_locality_page_multiple(10, 16);
+  EXPECT_EQ(msg, "latency-tlb-locality-kb must be a multiple of system page size (16 KB), got 10 KB");
 }
 
 TEST_F(MessagesErrorTest, ErrorMadviseFailed) {
@@ -337,6 +347,7 @@ TEST_F(MessagesFormattingTest, UsageOptions) {
   EXPECT_NE(msg.find("-buffersize"), std::string::npos);
   EXPECT_NE(msg.find("-count"), std::string::npos);
   EXPECT_NE(msg.find("-latency-samples"), std::string::npos);
+  EXPECT_NE(msg.find("-latency-tlb-locality-kb"), std::string::npos);
   EXPECT_NE(msg.find("-cache-size"), std::string::npos);
   EXPECT_NE(msg.find("-h"), std::string::npos);
   // Check that default values are included
@@ -416,6 +427,16 @@ TEST_F(MessagesFormattingTest, ConfigNonCacheable) {
   EXPECT_NE(msg.find("Disabled"), std::string::npos);
 }
 
+TEST_F(MessagesFormattingTest, ConfigLatencyTlbLocality) {
+  std::string msg = Messages::config_latency_tlb_locality(0);
+  EXPECT_NE(msg.find("Latency TLB Locality"), std::string::npos);
+  EXPECT_NE(msg.find("Disabled"), std::string::npos);
+
+  msg = Messages::config_latency_tlb_locality(16 * 1024);
+  EXPECT_NE(msg.find("16.00"), std::string::npos);
+  EXPECT_NE(msg.find("KB"), std::string::npos);
+}
+
 TEST_F(MessagesFormattingTest, ConfigProcessorName) {
   std::string msg = Messages::config_processor_name("Apple M1");
   EXPECT_NE(msg.find("Apple M1"), std::string::npos);
@@ -469,6 +490,12 @@ TEST_F(MessagesFormattingTest, CacheSizeCustom) {
   msg = Messages::cache_size_custom(2 * 1024 * 1024);
   EXPECT_NE(msg.find("2"), std::string::npos);
   EXPECT_NE(msg.find("MB"), std::string::npos);
+}
+
+TEST_F(MessagesFormattingTest, CacheSizeCustomDisabled) {
+  std::string msg = Messages::cache_size_custom_disabled();
+  EXPECT_NE(msg.find("Custom Cache Size"), std::string::npos);
+  EXPECT_NE(msg.find("Disabled"), std::string::npos);
 }
 
 TEST_F(MessagesFormattingTest, CacheSizeL1) {

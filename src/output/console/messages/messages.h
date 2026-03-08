@@ -61,6 +61,8 @@ std::string error_iterations_invalid(long long value, long long min_val, long lo
 std::string error_buffersize_invalid(long long value, unsigned long max_val);
 std::string error_count_invalid(long long value, long long min_val, long long max_val);
 std::string error_latency_samples_invalid(long long value, long long min_val, long long max_val);
+std::string error_latency_tlb_locality_invalid(long long value, long long max_val);
+std::string error_latency_tlb_locality_page_multiple(size_t value_kb, size_t page_size_kb);
 std::string error_threads_invalid(long long value, long long min_val, long long max_val);
 std::string error_mmap_failed(const std::string& buffer_name);
 std::string error_madvise_failed(const std::string& buffer_name);
@@ -113,6 +115,9 @@ const std::string& error_incompatible_flags();
 const std::string& error_only_flags_with_patterns();
 const std::string& error_only_bandwidth_with_cache_size();
 const std::string& error_only_bandwidth_with_latency_samples();
+const std::string& error_buffersize_zero_requires_only_latency();
+const std::string& error_cache_size_zero_requires_only_latency();
+const std::string& error_only_latency_requires_latency_target();
 const std::string& error_only_latency_with_buffersize();
 const std::string& error_only_latency_with_iterations();
 
@@ -158,6 +163,7 @@ std::string config_total_allocation(double total_mib);
 std::string config_iterations(int iterations);
 std::string config_loop_count(int loop_count);
 std::string config_non_cacheable(bool use_non_cacheable);
+std::string config_latency_tlb_locality(size_t locality_bytes);
 std::string config_processor_name(const std::string& cpu_name);
 std::string config_processor_name_error();
 std::string config_performance_cores(int perf_cores);
@@ -167,6 +173,7 @@ std::string config_total_cores(int num_threads);
 // --- Cache Info Messages ---
 std::string cache_info_header();
 std::string cache_size_custom(size_t size_bytes);
+std::string cache_size_custom_disabled();
 std::string cache_size_l1(size_t size_bytes);
 std::string cache_size_l2(size_t size_bytes);
 std::string cache_size_per_pcore();

@@ -109,9 +109,16 @@ int main(int argc, char *argv[]) {
   calculate_buffer_sizes(config);
   calculate_access_counts(config);
 
+  size_t total_allocation_bytes = 0;
+  if (calculate_total_allocation_bytes(config, total_allocation_bytes) != EXIT_SUCCESS) {
+    return EXIT_FAILURE;
+  }
+
   // --- Print Config ---
-  print_configuration(config.buffer_size, config.buffer_size_mb, config.iterations, config.loop_count,
-                      config.use_non_cacheable, config.cpu_name, config.perf_cores, config.eff_cores, config.num_threads,
+  print_configuration(config.buffer_size, config.buffer_size_mb, total_allocation_bytes,
+                      config.iterations, config.loop_count,
+                      config.use_non_cacheable, config.latency_tlb_locality_bytes,
+                      config.cpu_name, config.perf_cores, config.eff_cores, config.num_threads,
                       config.only_bandwidth, config.only_latency, config.run_patterns);
   print_cache_info(config.l1_cache_size, config.l2_cache_size, config.use_custom_cache_size, config.custom_cache_size_bytes);
 
