@@ -71,6 +71,24 @@ nlohmann::json build_patterns_json(const PatternStatistics& stats) {
                           stats.all_strided_4096_write_bw,
                           stats.all_strided_4096_copy_bw);
   }
+
+  // Strided (Page - 16384B)
+  if (!stats.all_strided_16384_read_bw.empty()) {
+    patterns[JsonKeys::STRIDED_16384] = nlohmann::json::object();
+    add_bandwidth_results(patterns[JsonKeys::STRIDED_16384],
+                          stats.all_strided_16384_read_bw,
+                          stats.all_strided_16384_write_bw,
+                          stats.all_strided_16384_copy_bw);
+  }
+
+  // Strided (Superpage - 2MB)
+  if (!stats.all_strided_2mb_read_bw.empty()) {
+    patterns[JsonKeys::STRIDED_2MB] = nlohmann::json::object();
+    add_bandwidth_results(patterns[JsonKeys::STRIDED_2MB],
+                          stats.all_strided_2mb_read_bw,
+                          stats.all_strided_2mb_write_bw,
+                          stats.all_strided_2mb_copy_bw);
+  }
   
   // Random Uniform
   if (!stats.all_random_read_bw.empty()) {
@@ -83,4 +101,3 @@ nlohmann::json build_patterns_json(const PatternStatistics& stats) {
   
   return patterns;
 }
-

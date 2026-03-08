@@ -112,6 +112,8 @@ namespace Constants {
   constexpr size_t PATTERN_MIN_BUFFER_SIZE_BYTES = 32;  // Minimum buffer size for pattern benchmarks
   constexpr size_t PATTERN_STRIDE_CACHE_LINE = 64;  // Cache line stride (bytes)
   constexpr size_t PATTERN_STRIDE_PAGE = 4096;  // Page stride (bytes)
+  constexpr size_t PATTERN_STRIDE_PAGE_16K = 16 * 1024;  // Apple Silicon page-size stride candidate (bytes)
+  constexpr size_t PATTERN_STRIDE_SUPERPAGE_2MB = 2 * 1024 * 1024;  // Large-page stride candidate (bytes)
   constexpr size_t PATTERN_RANDOM_ACCESS_MIN = 1000;  // Minimum number of random accesses
   constexpr size_t PATTERN_RANDOM_ACCESS_MAX = 1000000;  // Maximum number of random accesses
   constexpr size_t PATTERN_WARMUP_INDICES_MAX = 10000;  // Maximum indices to use for warmup
@@ -136,4 +138,3 @@ namespace Constants {
 }
 
 #endif // CONSTANTS_H
-

@@ -157,6 +157,12 @@ int main(int argc, char *argv[]) {
         single_result.strided_4096_read_bw = pattern_stats.all_strided_4096_read_bw[0];
         single_result.strided_4096_write_bw = pattern_stats.all_strided_4096_write_bw[0];
         single_result.strided_4096_copy_bw = pattern_stats.all_strided_4096_copy_bw[0];
+        single_result.strided_16384_read_bw = pattern_stats.all_strided_16384_read_bw[0];
+        single_result.strided_16384_write_bw = pattern_stats.all_strided_16384_write_bw[0];
+        single_result.strided_16384_copy_bw = pattern_stats.all_strided_16384_copy_bw[0];
+        single_result.strided_2mb_read_bw = pattern_stats.all_strided_2mb_read_bw[0];
+        single_result.strided_2mb_write_bw = pattern_stats.all_strided_2mb_write_bw[0];
+        single_result.strided_2mb_copy_bw = pattern_stats.all_strided_2mb_copy_bw[0];
         single_result.random_read_bw = pattern_stats.all_random_read_bw[0];
         single_result.random_write_bw = pattern_stats.all_random_write_bw[0];
         single_result.random_copy_bw = pattern_stats.all_random_copy_bw[0];
@@ -179,6 +185,12 @@ int main(int argc, char *argv[]) {
         last_result.strided_4096_read_bw = pattern_stats.all_strided_4096_read_bw[last_idx];
         last_result.strided_4096_write_bw = pattern_stats.all_strided_4096_write_bw[last_idx];
         last_result.strided_4096_copy_bw = pattern_stats.all_strided_4096_copy_bw[last_idx];
+        last_result.strided_16384_read_bw = pattern_stats.all_strided_16384_read_bw[last_idx];
+        last_result.strided_16384_write_bw = pattern_stats.all_strided_16384_write_bw[last_idx];
+        last_result.strided_16384_copy_bw = pattern_stats.all_strided_16384_copy_bw[last_idx];
+        last_result.strided_2mb_read_bw = pattern_stats.all_strided_2mb_read_bw[last_idx];
+        last_result.strided_2mb_write_bw = pattern_stats.all_strided_2mb_write_bw[last_idx];
+        last_result.strided_2mb_copy_bw = pattern_stats.all_strided_2mb_copy_bw[last_idx];
         last_result.random_read_bw = pattern_stats.all_random_read_bw[last_idx];
         last_result.random_write_bw = pattern_stats.all_random_write_bw[last_idx];
         last_result.random_copy_bw = pattern_stats.all_random_copy_bw[last_idx];

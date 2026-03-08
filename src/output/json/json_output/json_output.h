@@ -106,6 +106,8 @@ namespace JsonKeys {
   constexpr const char* SEQUENTIAL_REVERSE = "sequential_reverse";
   constexpr const char* STRIDED_64 = "strided_64";
   constexpr const char* STRIDED_4096 = "strided_4096";
+  constexpr const char* STRIDED_16384 = "strided_16384";
+  constexpr const char* STRIDED_2MB = "strided_2mb";
   constexpr const char* RANDOM = "random";
 }
 
@@ -135,4 +137,3 @@ int save_results_to_json(const BenchmarkConfig& config, const BenchmarkStatistic
 int save_pattern_results_to_json(const BenchmarkConfig& config, const PatternStatistics& stats, double total_execution_time_sec);
 
 #endif // JSON_OUTPUT_JSON_OUTPUT_H
-

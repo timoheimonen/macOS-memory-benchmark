@@ -228,7 +228,7 @@ For usage documentation, command-line options reference, best practices, and det
 
 ## Example output (Mac Mini M4 24GB)
 ```text
------ macOS-memory-benchmark v0.52.8 -----
+----- macOS-memory-benchmark v0.52.9 -----
 Copyright 2025-2026 Timo Heimonen <timo.heimonen@proton.me>
 This program is free software: you can redistribute it and/or modify
 it under the terms of the GNU General Public License as published by
@@ -284,7 +284,7 @@ Cache Latency Tests (single-threaded, pointer chase):
 Done. Total execution time: 43.48166 s
 ```
 ```text
------ macOS-memory-benchmark v0.52.8 -----
+----- macOS-memory-benchmark v0.52.9 -----
 Copyright 2025-2026 Timo Heimonen <timo.heimonen@proton.me>
 This program is free software: you can redistribute it and/or modify
 it under the terms of the GNU General Public License as published by
@@ -299,7 +299,7 @@ Buffer Size (per buffer): 512.00 MiB (512 MB requested/capped)
 Total Allocation Size: ~1024.00 MiB
 Iterations (per R/W/Copy test per loop): 1000
 Loop Count (total benchmark repetitions): 1
-Non-Cacheable Memory Hints: Enabled
+Non-Cacheable Memory Hints: Disabled
 
 Processor Name: Apple M4
   Performance Cores: 4
@@ -313,42 +313,52 @@ Detected Cache Sizes:
 Running Pattern Benchmarks...
 
 Running Pattern Benchmarks...
-- Running tests...
+| Running tests...
 ================================
 
 Sequential Forward:
-  Read : 113.385 GB/s
-  Write: 105.412 GB/s
-  Copy : 104.176 GB/s
+  Read : 115.645 GB/s
+  Write: 66.629 GB/s
+  Copy : 106.294 GB/s
 
 Sequential Reverse:
-  Read : 113.228 GB/s (-0.1%)
-  Write: 104.662 GB/s (-0.7%)
-  Copy : 103.399 GB/s (-0.7%)
+  Read : 114.673 GB/s (-0.8%)
+  Write: 66.466 GB/s (-0.2%)
+  Copy : 105.869 GB/s (-0.4%)
 
 Strided (Cache Line - 64B):
-  Read : 56.387 GB/s (-50.3%)
-  Write: 51.807 GB/s (-50.9%)
-  Copy : 68.214 GB/s (-34.5%)
+  Read : 57.718 GB/s (-50.1%)
+  Write: 33.412 GB/s (-49.9%)
+  Copy : 69.511 GB/s (-34.6%)
 
 Strided (Page - 4096B):
-  Read : 26.390 GB/s (-76.7%)
-  Write: 52.138 GB/s (-50.5%)
-  Copy : 33.388 GB/s (-68.0%)
+  Read : 24.878 GB/s (-78.5%)
+  Write: 50.735 GB/s (-23.9%)
+  Copy : 34.105 GB/s (-67.9%)
+
+Strided (Page - 16384B):
+  Read : 26.484 GB/s (-77.1%)
+  Write: 55.083 GB/s (-17.3%)
+  Copy : 31.305 GB/s (-70.5%)
+
+Strided (Superpage - 2MB):
+  Read : 68.219 GB/s (-41.0%)
+  Write: 41.956 GB/s (-37.0%)
+  Copy : 34.231 GB/s (-67.8%)
 
 Random Uniform:
-  Read : 26.504 GB/s (-76.6%)
-  Write: 43.328 GB/s (-58.9%)
-  Copy : 31.687 GB/s (-69.6%)
+  Read : 26.930 GB/s (-76.7%)
+  Write: 45.144 GB/s (-32.2%)
+  Copy : 32.992 GB/s (-69.0%)
 
 Pattern Efficiency Analysis:
 - Sequential coherence: 99.5%
-- Prefetcher effectiveness: 54.6%
+- Prefetcher effectiveness: 55.7%
 - Cache thrashing potential: High
 - TLB pressure: Minimal
 
 
-Done. Total execution time: 62.73719 s
+Done. Total execution time: 70.72316 s
 ```
 
 ![Mac Mini M4 10 benchmark loops](pictures/MacMiniM4_10_loops_results.png)  
@@ -362,7 +372,7 @@ Mac Mini M4 patterns benchmark results. Image created from JSON file using separ
 - **[User Manual](MANUAL.md)** - Usage guide with command-line options, best practices, workflows, and detailed examples
 - **[Technical Specification](TECHNICAL_SPECIFICATION.md)** - System architecture, memory management, low-level ARM64 assembly implementation, benchmark execution flow, system integration, and technical specifications
 
-## Known Issues and Limitations
+## Technical Disclaimers and Limitations
 
 * **Non-cacheable memory limitations**:  
   The `-non-cacheable` flag provides **cache-discouraging hints**, not true non-cacheable memory. This is a fundamental limitation of user-space applications on macOS ARM64:
@@ -380,4 +390,6 @@ Mac Mini M4 patterns benchmark results. Image created from JSON file using separ
   Unlike x86 (`CLFLUSH`), there is no user-space instruction on Apple Silicon to reliably flush data caches. The benchmark cannot force a “cold cache” state before each measurement; it relies on large buffer sizes and warm-up behavior to approximate steady-state memory behavior.
 * **Recommendation**:  
   For more realistic main memory measurements, prefer buffer sizes in the range of **512 MB–1 GB (or larger, if RAM allows)**. Smaller values are still useful to study cache behavior, but they should not be interpreted as pure main memory bandwidth/latency.
+* **Other Programs**:
+  As userspace cannot prioritize programs, close all other programs to avoid noise from operating system to the results.
 

@@ -61,6 +61,16 @@ struct PatternResults {
   double strided_4096_read_bw = 0.0;   ///< Strided (4096B stride) read bandwidth (GB/s)
   double strided_4096_write_bw = 0.0;  ///< Strided (4096B stride) write bandwidth (GB/s)
   double strided_4096_copy_bw = 0.0;   ///< Strided (4096B stride) copy bandwidth (GB/s)
+
+  // Strided (Page - 16384B)
+  double strided_16384_read_bw = 0.0;   ///< Strided (16384B stride) read bandwidth (GB/s)
+  double strided_16384_write_bw = 0.0;  ///< Strided (16384B stride) write bandwidth (GB/s)
+  double strided_16384_copy_bw = 0.0;   ///< Strided (16384B stride) copy bandwidth (GB/s)
+
+  // Strided (Superpage - 2MB)
+  double strided_2mb_read_bw = 0.0;   ///< Strided (2MB stride) read bandwidth (GB/s)
+  double strided_2mb_write_bw = 0.0;  ///< Strided (2MB stride) write bandwidth (GB/s)
+  double strided_2mb_copy_bw = 0.0;   ///< Strided (2MB stride) copy bandwidth (GB/s)
   
   // Random Uniform
   double random_read_bw = 0.0;   ///< Random access read bandwidth (GB/s)
@@ -89,6 +99,12 @@ struct PatternStatistics {
   std::vector<double> all_strided_4096_read_bw;   ///< Strided 4096B read bandwidth from each loop (GB/s)
   std::vector<double> all_strided_4096_write_bw;  ///< Strided 4096B write bandwidth from each loop (GB/s)
   std::vector<double> all_strided_4096_copy_bw;   ///< Strided 4096B copy bandwidth from each loop (GB/s)
+  std::vector<double> all_strided_16384_read_bw;   ///< Strided 16384B read bandwidth from each loop (GB/s)
+  std::vector<double> all_strided_16384_write_bw;  ///< Strided 16384B write bandwidth from each loop (GB/s)
+  std::vector<double> all_strided_16384_copy_bw;   ///< Strided 16384B copy bandwidth from each loop (GB/s)
+  std::vector<double> all_strided_2mb_read_bw;   ///< Strided 2MB read bandwidth from each loop (GB/s)
+  std::vector<double> all_strided_2mb_write_bw;  ///< Strided 2MB write bandwidth from each loop (GB/s)
+  std::vector<double> all_strided_2mb_copy_bw;   ///< Strided 2MB copy bandwidth from each loop (GB/s)
   std::vector<double> all_random_read_bw;         ///< Random read bandwidth from each loop (GB/s)
   std::vector<double> all_random_write_bw;        ///< Random write bandwidth from each loop (GB/s)
   std::vector<double> all_random_copy_bw;         ///< Random copy bandwidth from each loop (GB/s)
@@ -135,4 +151,3 @@ void print_pattern_results(const PatternResults& results);
 void print_pattern_statistics(int loop_count, const PatternStatistics& stats);
 
 #endif // PATTERN_BENCHMARK_H
-

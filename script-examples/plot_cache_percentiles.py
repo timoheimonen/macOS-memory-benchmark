@@ -71,7 +71,7 @@ def main():
     plt.plot(labels, p95, marker="o", label="P95")
     plt.plot(labels, p99, marker="o", label="P99")
 
-    plt.xlabel("Cache Size")
+    plt.xlabel(f"Cache Size\ngithub.com/timoheimonen/macos-memory-benchmark")
     plt.ylabel("Latency (ns)")
     plt.title("Cache Latency as a Function of Cache Size (P50 / P90 / P95 / P99)")
     plt.xticks(rotation=45)

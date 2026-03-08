@@ -40,6 +40,12 @@ TEST(PatternBenchmarkTest, PatternResultsDefaultValues) {
   EXPECT_EQ(results.strided_4096_read_bw, 0.0);
   EXPECT_EQ(results.strided_4096_write_bw, 0.0);
   EXPECT_EQ(results.strided_4096_copy_bw, 0.0);
+  EXPECT_EQ(results.strided_16384_read_bw, 0.0);
+  EXPECT_EQ(results.strided_16384_write_bw, 0.0);
+  EXPECT_EQ(results.strided_16384_copy_bw, 0.0);
+  EXPECT_EQ(results.strided_2mb_read_bw, 0.0);
+  EXPECT_EQ(results.strided_2mb_write_bw, 0.0);
+  EXPECT_EQ(results.strided_2mb_copy_bw, 0.0);
   EXPECT_EQ(results.random_read_bw, 0.0);
   EXPECT_EQ(results.random_write_bw, 0.0);
   EXPECT_EQ(results.random_copy_bw, 0.0);
@@ -108,6 +114,12 @@ TEST(PatternBenchmarkTest, RunPatternBenchmarksMinimalIntegration) {
   EXPECT_GT(results.strided_4096_read_bw, 0.0);
   EXPECT_GT(results.strided_4096_write_bw, 0.0);
   EXPECT_GT(results.strided_4096_copy_bw, 0.0);
+  EXPECT_GT(results.strided_16384_read_bw, 0.0);
+  EXPECT_GT(results.strided_16384_write_bw, 0.0);
+  EXPECT_GT(results.strided_16384_copy_bw, 0.0);
+  EXPECT_EQ(results.strided_2mb_read_bw, 0.0);
+  EXPECT_EQ(results.strided_2mb_write_bw, 0.0);
+  EXPECT_EQ(results.strided_2mb_copy_bw, 0.0);
   EXPECT_GT(results.random_read_bw, 0.0);
   EXPECT_GT(results.random_write_bw, 0.0);
   EXPECT_GT(results.random_copy_bw, 0.0);
@@ -176,6 +188,7 @@ TEST(PatternBenchmarkTest, ForwardPatternBaseline) {
   EXPECT_GT(results.reverse_read_bw, 0.0);
   EXPECT_GT(results.strided_64_read_bw, 0.0);
   EXPECT_GT(results.strided_4096_read_bw, 0.0);
+  EXPECT_GT(results.strided_16384_read_bw, 0.0);
   EXPECT_GT(results.random_read_bw, 0.0);
 }
 
@@ -333,11 +346,48 @@ TEST(PatternBenchmarkTest, StridedPatternStrides) {
   // Both strided patterns should complete successfully
   EXPECT_GT(results.strided_64_read_bw, 0.0);
   EXPECT_GT(results.strided_4096_read_bw, 0.0);
+  EXPECT_GT(results.strided_16384_read_bw, 0.0);
   
   // Verify both are reasonable (not zero, not unreasonably high)
   // With small buffers and fast memory, bandwidth can be very high
   EXPECT_LT(results.strided_64_read_bw, 10000.0);  // Less than 10000 GB/s
   EXPECT_LT(results.strided_4096_read_bw, 10000.0);
+  EXPECT_LT(results.strided_16384_read_bw, 10000.0);
+}
+
+// Test large-page stride variants with a larger buffer
+TEST(PatternBenchmarkTest, StridedLargePagePatterns) {
+  BenchmarkConfig config;
+  config.buffer_size = 8 * 1024 * 1024;  // 8 MB - large enough for 2MB stride
+  config.iterations = 1;
+  config.num_threads = 1;
+
+  // Initialize system info
+  config.cpu_name = get_processor_name();
+  config.perf_cores = get_performance_cores();
+  config.eff_cores = get_efficiency_cores();
+  config.num_threads = get_total_logical_cores();
+  config.l1_cache_size = get_l1_cache_size();
+  config.l2_cache_size = get_l2_cache_size();
+
+  BenchmarkBuffers buffers;
+  int alloc_result = allocate_all_buffers(config, buffers);
+  ASSERT_EQ(alloc_result, EXIT_SUCCESS);
+
+  int init_result = initialize_all_buffers(buffers, config);
+  ASSERT_EQ(init_result, EXIT_SUCCESS);
+
+  PatternResults results;
+  int result = run_pattern_benchmarks(buffers, config, results);
+  ASSERT_EQ(result, EXIT_SUCCESS);
+
+  EXPECT_GT(results.strided_16384_read_bw, 0.0);
+  EXPECT_GT(results.strided_16384_write_bw, 0.0);
+  EXPECT_GT(results.strided_16384_copy_bw, 0.0);
+
+  EXPECT_GT(results.strided_2mb_read_bw, 0.0);
+  EXPECT_GT(results.strided_2mb_write_bw, 0.0);
+  EXPECT_GT(results.strided_2mb_copy_bw, 0.0);
 }
 
 // Test that all pattern types produce results
@@ -386,6 +436,16 @@ TEST(PatternBenchmarkTest, AllPatternTypesComplete) {
   EXPECT_GT(results.strided_4096_read_bw, 0.0);
   EXPECT_GT(results.strided_4096_write_bw, 0.0);
   EXPECT_GT(results.strided_4096_copy_bw, 0.0);
+
+  // Strided 16384B patterns
+  EXPECT_GT(results.strided_16384_read_bw, 0.0);
+  EXPECT_GT(results.strided_16384_write_bw, 0.0);
+  EXPECT_GT(results.strided_16384_copy_bw, 0.0);
+
+  // Strided 2MB patterns are skipped for 512KB buffer
+  EXPECT_EQ(results.strided_2mb_read_bw, 0.0);
+  EXPECT_EQ(results.strided_2mb_write_bw, 0.0);
+  EXPECT_EQ(results.strided_2mb_copy_bw, 0.0);
   
   // Random patterns
   EXPECT_GT(results.random_read_bw, 0.0);
@@ -469,6 +529,8 @@ TEST(PatternBenchmarkTest, CopyOperationsUseBothBuffers) {
   EXPECT_GT(results.reverse_copy_bw, 0.0);
   EXPECT_GT(results.strided_64_copy_bw, 0.0);
   EXPECT_GT(results.strided_4096_copy_bw, 0.0);
+  EXPECT_GT(results.strided_16384_copy_bw, 0.0);
+  EXPECT_EQ(results.strided_2mb_copy_bw, 0.0);
   EXPECT_GT(results.random_copy_bw, 0.0);
 }
 
@@ -508,6 +570,12 @@ TEST(PatternBenchmarkTest, StridedPatternSkippedWhenBufferTooSmall) {
   EXPECT_EQ(results.strided_4096_read_bw, 0.0);
   EXPECT_EQ(results.strided_4096_write_bw, 0.0);
   EXPECT_EQ(results.strided_4096_copy_bw, 0.0);
+  EXPECT_EQ(results.strided_16384_read_bw, 0.0);
+  EXPECT_EQ(results.strided_16384_write_bw, 0.0);
+  EXPECT_EQ(results.strided_16384_copy_bw, 0.0);
+  EXPECT_EQ(results.strided_2mb_read_bw, 0.0);
+  EXPECT_EQ(results.strided_2mb_write_bw, 0.0);
+  EXPECT_EQ(results.strided_2mb_copy_bw, 0.0);
   
   // Strided 64B may work or be skipped depending on effective buffer size
   // The important thing is that the test completes successfully
@@ -709,4 +777,3 @@ TEST(PatternBenchmarkTest, BufferSizeProgressionPageStride) {
   // Actually, effective_buffer_size (4064) < stride (4096), so should skip
   EXPECT_EQ(results.strided_4096_read_bw, 0.0);
 }
-

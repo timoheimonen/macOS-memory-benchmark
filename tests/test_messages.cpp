@@ -822,3 +822,8 @@ TEST_F(MessagesFormattingTest, StatisticsFooter) {
   EXPECT_EQ(msg, "----------------------------------");
 }
 
+TEST_F(MessagesFormattingTest, PatternStrideLabels) {
+  EXPECT_EQ(Messages::pattern_page_4096b(), "Page - 4096B");
+  EXPECT_EQ(Messages::pattern_page_16384b(), "Page - 16384B");
+  EXPECT_EQ(Messages::pattern_superpage_2mb(), "Superpage - 2MB");
+}

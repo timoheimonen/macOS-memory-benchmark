@@ -62,6 +62,16 @@ const std::string& pattern_page_4096b() {
   return msg;
 }
 
+const std::string& pattern_page_16384b() {
+  static const std::string msg = "Page - 16384B";
+  return msg;
+}
+
+const std::string& pattern_superpage_2mb() {
+  static const std::string msg = "Superpage - 2MB";
+  return msg;
+}
+
 const std::string& pattern_efficiency_analysis() {
   static const std::string msg = "Pattern Efficiency Analysis:";
   return msg;
@@ -148,4 +158,3 @@ const std::string& pattern_bandwidth_unit_newline() {
 }
 
 } // namespace Messages
-

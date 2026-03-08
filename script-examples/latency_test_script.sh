@@ -15,9 +15,10 @@ BUFFER_SIZE=1
 NON_CACHEABLE="-non-cacheable"
 LATENCY_SAMPLES=5000
 
-# Cache sizes in KB: 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768, 65536, 131072, 262144
-# Starting from 32 KB, doubling each time up to 256 MB (262144 KB)
-cache_sizes=(32 64 128 256 512 1024 2048 4096 8192 16384 32768 65536 131072 262144)
+# Cache sizes in KB, choose list from the following or make your own
+#cache_sizes=(32 64 128 256 512 1024 2048 4096 8192 16384 32768 65536 131072 262144)
+cache_sizes=(32 64 128 256 512 1024 2048 3072 4096 5120 6144 7168 8192 9216 10240 11264 12288 13312 14336 15360 16384 17408 18432 19456 20480 21504 22528 23552 24576)
+
 
 echo "Starting latency tests for cache sizes: ${cache_sizes[*]} KB"
 echo "=========================================="

@@ -233,6 +233,8 @@ std::string pattern_strided(const std::string& stride_name);
 const std::string& pattern_random_uniform();
 const std::string& pattern_cache_line_64b();
 const std::string& pattern_page_4096b();
+const std::string& pattern_page_16384b();
+const std::string& pattern_superpage_2mb();
 const std::string& pattern_efficiency_analysis();
 const std::string& pattern_sequential_coherence();
 const std::string& pattern_prefetcher_effectiveness();
@@ -254,4 +256,3 @@ const std::string& pattern_bandwidth_unit_newline();
 } // namespace Messages
 
 #endif // MESSAGES_MESSAGES_H
-

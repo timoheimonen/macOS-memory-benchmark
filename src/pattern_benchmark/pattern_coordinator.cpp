@@ -137,6 +137,24 @@ int run_pattern_benchmarks(const BenchmarkBuffers& buffers, const BenchmarkConfi
   if (status != EXIT_SUCCESS) {
     return status;
   }
+
+  // Strided (16KB Page) - may be skipped if buffer too small
+  status = run_strided_pattern_benchmarks(buffers, config, PATTERN_STRIDE_PAGE_16K,
+                                          results.strided_16384_read_bw,
+                                          results.strided_16384_write_bw,
+                                          results.strided_16384_copy_bw, timer);
+  if (status != EXIT_SUCCESS) {
+    return status;
+  }
+
+  // Strided (2MB Superpage) - may be skipped if buffer too small
+  status = run_strided_pattern_benchmarks(buffers, config, PATTERN_STRIDE_SUPERPAGE_2MB,
+                                          results.strided_2mb_read_bw,
+                                          results.strided_2mb_write_bw,
+                                          results.strided_2mb_copy_bw, timer);
+  if (status != EXIT_SUCCESS) {
+    return status;
+  }
   
   // Random Uniform - may be skipped if buffer too small or no valid indices
   status = run_random_pattern_benchmarks(buffers, config, random_indices, num_random_accesses, results, timer);
@@ -146,4 +164,3 @@ int run_pattern_benchmarks(const BenchmarkBuffers& buffers, const BenchmarkConfi
   
   return EXIT_SUCCESS;
 }
-
