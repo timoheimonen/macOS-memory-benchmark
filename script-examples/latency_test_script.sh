@@ -1,6 +1,8 @@
 #!/bin/bash
 # Latency test script for memory_benchmark
-# Tests cache sizes from 32 KB to 256 MB in doubling steps
+# Sweeps custom cache sizes and extracts latency percentiles
+
+set -u
 
 # Get the directory where this script is located
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -10,44 +12,85 @@ TMP_DIR="${SCRIPT_DIR}/tmp"
 mkdir -p "${TMP_DIR}"
 
 # Base command parameters
-BENCHMARK_CMD="memory_benchmark"
-BUFFER_SIZE=1
-NON_CACHEABLE="-non-cacheable"
+BENCHMARK_CMD="../memory_benchmark"
+BUFFER_SIZE_MB=0
 LATENCY_SAMPLES=5000
+LOOP_COUNT=5
+ONLY_LATENCY=true
+TLB_LOCALITY_KB=16
+
+# Leave empty by default for cleaner cache-hierarchy latency runs.
+# Set to "-non-cacheable" if you specifically want MADV_RANDOM behavior.
+NON_CACHEABLE=""
 
 # Cache sizes in KB, choose list from the following or make your own
 #cache_sizes=(32 64 128 256 512 1024 2048 4096 8192 16384 32768 65536 131072 262144)
-cache_sizes=(32 64 128 256 512 1024 2048 3072 4096 5120 6144 7168 8192 9216 10240 11264 12288 13312 14336 15360 16384 17408 18432 19456 20480 21504 22528 23552 24576)
+cache_sizes=(32 64 128 256 512 1024 2048 3072 4096 5120 6144 7168 8192 9216 10240 11264 12288 13312 14336 15360 16384 17408 18432 19456 20480 21504 22528 23552 24576 25600 26624 27648 28672 29696 30720 31744 32768 33792 34816 35840 36864 37888 38912 39936 40960 41984 43008 44032 45056 46080 47104 48128 49152 50176 51200 52224 53248 54272 55296 56320 57344 58368 59392 60416 61440 62464 63488 65536)
 
 
 echo "Starting latency tests for cache sizes: ${cache_sizes[*]} KB"
 echo "=========================================="
 
+if ! command -v "${BENCHMARK_CMD}" > /dev/null 2>&1; then
+    echo "Error: ${BENCHMARK_CMD} not found in PATH"
+    exit 1
+fi
+
+echo "Configuration:"
+echo "  -only-latency: ${ONLY_LATENCY}"
+echo "  -buffersize: ${BUFFER_SIZE_MB} MB"
+echo "  -latency-samples: ${LATENCY_SAMPLES}"
+echo "  -count: ${LOOP_COUNT}"
+if [ -n "${NON_CACHEABLE}" ]; then
+    echo "  -non-cacheable: enabled"
+else
+    echo "  -non-cacheable: disabled"
+fi
+
+fail_count=0
+
 for cache_size in "${cache_sizes[@]}"; do
     output_file="${TMP_DIR}/output_${cache_size}.json"
+
+    cmd=(
+        "${BENCHMARK_CMD}"
+        -latency-tlb-locality-kb "${TLB_LOCALITY_KB}"
+        -cache-size "${cache_size}"
+        -buffersize "${BUFFER_SIZE_MB}"
+        -output "${output_file}"
+        -latency-samples "${LATENCY_SAMPLES}"
+        -count "${LOOP_COUNT}"
+    )
+
+    if [ "${ONLY_LATENCY}" = true ]; then
+        cmd+=("-only-latency")
+    fi
+
+    if [ -n "${NON_CACHEABLE}" ]; then
+        cmd+=("${NON_CACHEABLE}")
+    fi
     
     echo ""
     echo "Running test for cache size: ${cache_size} KB"
     echo "Output file: ${output_file}"
-    echo "Command: ${BENCHMARK_CMD} -cache-size ${cache_size} -buffersize ${BUFFER_SIZE} ${NON_CACHEABLE} -output ${output_file} -latency-samples ${LATENCY_SAMPLES}"
+    printf "Command:"
+    printf " %q" "${cmd[@]}"
+    printf "\n"
     
-    ${BENCHMARK_CMD} \
-        -cache-size ${cache_size} \
-        -buffersize ${BUFFER_SIZE} \
-        ${NON_CACHEABLE} \
-        -output ${output_file} \
-        -latency-samples ${LATENCY_SAMPLES}
-    
-    if [ $? -eq 0 ]; then
+    if "${cmd[@]}"; then
         echo "✓ Successfully completed test for ${cache_size} KB cache size"
     else
         echo "✗ Failed test for ${cache_size} KB cache size"
+        fail_count=$((fail_count + 1))
     fi
 done
 
 echo ""
 echo "=========================================="
 echo "All latency tests completed!"
+if [ "${fail_count}" -gt 0 ]; then
+    echo "Warning: ${fail_count} test(s) failed"
+fi
 echo "Output files created:"
 for cache_size in "${cache_sizes[@]}"; do
     output_file="${TMP_DIR}/output_${cache_size}.json"
@@ -138,4 +181,3 @@ if [ -d "${TMP_DIR}" ]; then
 else
     echo "Warning: Tmp folder does not exist: ${TMP_DIR}"
 fi
-

@@ -54,6 +54,7 @@ struct BenchmarkConfig {
   int loop_count = Constants::DEFAULT_LOOP_COUNT;  ///< Number of benchmark loops to run
   long long custom_cache_size_kb_ll = -1;  ///< User-requested custom cache size in KB (-1 = none)
   int latency_sample_count = Constants::DEFAULT_LATENCY_SAMPLE_COUNT;  ///< Number of latency samples to collect per test
+  size_t latency_tlb_locality_bytes = 16 * Constants::BYTES_PER_KB;  ///< TLB-locality window for latency chains (default 16 KB, 0 = disabled)
   
   // Calculated sizes
   size_t buffer_size = 0;        ///< Final buffer size in bytes (calculated from buffer_size_mb)
@@ -90,6 +91,7 @@ struct BenchmarkConfig {
   bool user_specified_buffersize = false;      ///< Whether user explicitly set -buffersize
   bool user_specified_iterations = false;      ///< Whether user explicitly set -iterations
   bool user_specified_latency_samples = false; ///< Whether user explicitly set -latency-samples
+  bool user_specified_latency_tlb_locality = false; ///< Whether user explicitly set -latency-tlb-locality-kb
   
   // Output file
   std::string output_file;  ///< JSON output file path (empty = no JSON output)
@@ -152,4 +154,3 @@ void calculate_buffer_sizes(BenchmarkConfig& config);
 void calculate_access_counts(BenchmarkConfig& config);
 
 #endif // CONFIG_H
-

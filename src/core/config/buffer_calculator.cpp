@@ -67,6 +67,12 @@ void calculate_buffer_sizes(BenchmarkConfig& config) {
   size_t page_size_check = getpagesize();
   
   if (config.use_custom_cache_size) {
+    if (config.custom_cache_size_bytes == 0) {
+      // -cache-size 0 in -only-latency mode disables cache latency buffers.
+      config.custom_buffer_size = 0;
+      return;
+    }
+
     // Use 100% of custom cache size
     config.custom_buffer_size = config.custom_cache_size_bytes;
     
@@ -176,6 +182,12 @@ void calculate_buffer_sizes(BenchmarkConfig& config) {
  * @note Scales linearly with buffer size relative to DEFAULT_BUFFER_SIZE_MB
  */
 void calculate_access_counts(BenchmarkConfig& config) {
+  if (config.buffer_size_mb == 0) {
+    // -buffersize 0 in -only-latency mode disables main memory latency.
+    config.lat_num_accesses = 0;
+    return;
+  }
+
   // Scale latency accesses proportionally to buffer size
   // Use floating-point arithmetic for precision, but validate result fits in size_t
   double scale_factor = static_cast<double>(config.buffer_size_mb) / Constants::DEFAULT_BUFFER_SIZE_MB;
@@ -200,4 +212,3 @@ void calculate_access_counts(BenchmarkConfig& config) {
   // Cache latency test access counts are already set in struct defaults
   // (l1_num_accesses, l2_num_accesses, custom_num_accesses)
 }
-

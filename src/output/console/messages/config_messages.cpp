@@ -83,6 +83,25 @@ std::string config_non_cacheable(bool use_non_cacheable) {
   return oss.str();
 }
 
+std::string config_latency_tlb_locality(size_t locality_bytes) {
+  std::ostringstream oss;
+  oss << "Latency TLB Locality: ";
+  if (locality_bytes == 0) {
+    oss << "Disabled";
+    return oss.str();
+  }
+
+  oss << std::fixed << std::setprecision(2);
+  if (locality_bytes < 1024) {
+    oss << locality_bytes << " B";
+  } else if (locality_bytes < 1024 * 1024) {
+    oss << (locality_bytes / 1024.0) << " KB";
+  } else {
+    oss << (locality_bytes / (1024.0 * 1024.0)) << " MB";
+  }
+  return oss.str();
+}
+
 std::string config_processor_name(const std::string& cpu_name) {
   return "\nProcessor Name: " + cpu_name;
 }
@@ -110,4 +129,3 @@ std::string config_total_cores(int num_threads) {
 }
 
 } // namespace Messages
-

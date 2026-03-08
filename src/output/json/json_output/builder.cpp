@@ -109,6 +109,9 @@ nlohmann::json build_config_json(const BenchmarkConfig& config) {
   config_json[JsonKeys::ITERATIONS] = config.iterations;
   config_json[JsonKeys::LOOP_COUNT] = config.loop_count;
   config_json[JsonKeys::LATENCY_SAMPLE_COUNT] = config.latency_sample_count;
+  config_json[JsonKeys::USE_LATENCY_TLB_LOCALITY] = (config.latency_tlb_locality_bytes > 0);
+  config_json[JsonKeys::LATENCY_TLB_LOCALITY_BYTES] = config.latency_tlb_locality_bytes;
+  config_json[JsonKeys::LATENCY_TLB_LOCALITY_KB] = config.latency_tlb_locality_bytes / 1024;
   config_json[JsonKeys::CPU_NAME] = config.cpu_name;
   config_json[JsonKeys::MACOS_VERSION] = config.macos_version;
   config_json[JsonKeys::PERFORMANCE_CORES] = config.perf_cores;
@@ -130,4 +133,3 @@ nlohmann::json build_config_json(const BenchmarkConfig& config) {
   
   return config_json;
 }
-

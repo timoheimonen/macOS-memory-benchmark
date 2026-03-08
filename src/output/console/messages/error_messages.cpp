@@ -78,7 +78,7 @@ std::string error_iterations_invalid(long long value, long long min_val, long lo
 
 std::string error_buffersize_invalid(long long value, unsigned long max_val) {
   std::ostringstream oss;
-  oss << "buffersize invalid (must be > 0 and <= " << max_val << ", got " << value << ")";
+  oss << "buffersize invalid (must be >= 0 and <= " << max_val << ", got " << value << ")";
   return oss.str();
 }
 
@@ -93,6 +93,20 @@ std::string error_latency_samples_invalid(long long value, long long min_val, lo
   std::ostringstream oss;
   oss << "latency-samples invalid (must be between " << min_val << " and " << max_val
       << ", got " << value << ")";
+  return oss.str();
+}
+
+std::string error_latency_tlb_locality_invalid(long long value, long long max_val) {
+  std::ostringstream oss;
+  oss << "latency-tlb-locality-kb invalid (must be >= 0 and <= " << max_val
+      << ", got " << value << ")";
+  return oss.str();
+}
+
+std::string error_latency_tlb_locality_page_multiple(size_t value_kb, size_t page_size_kb) {
+  std::ostringstream oss;
+  oss << "latency-tlb-locality-kb must be a multiple of system page size ("
+      << page_size_kb << " KB), got " << value_kb << " KB";
   return oss.str();
 }
 
@@ -353,6 +367,21 @@ const std::string& error_only_bandwidth_with_latency_samples() {
   return msg;
 }
 
+const std::string& error_buffersize_zero_requires_only_latency() {
+  static const std::string msg = "-buffersize 0 is only allowed with -only-latency";
+  return msg;
+}
+
+const std::string& error_cache_size_zero_requires_only_latency() {
+  static const std::string msg = "-cache-size 0 is only allowed with -only-latency";
+  return msg;
+}
+
+const std::string& error_only_latency_requires_latency_target() {
+  static const std::string msg = "-only-latency requires at least one target enabled: main memory (-buffersize > 0) or cache (-cache-size > 0 or omit -cache-size)";
+  return msg;
+}
+
 const std::string& error_only_latency_with_buffersize() {
   static const std::string msg = "-only-latency cannot be used with -buffersize (buffersize is only relevant for bandwidth tests)";
   return msg;
@@ -364,4 +393,3 @@ const std::string& error_only_latency_with_iterations() {
 }
 
 } // namespace Messages
-

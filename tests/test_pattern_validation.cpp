@@ -28,7 +28,7 @@ TEST(PatternValidationTest, ValidateStrideBufferSmallerThanStride) {
   using namespace Constants;
   
   BenchmarkConfig config;
-  // Use buffer smaller than stride, but need at least LATENCY_STRIDE_BYTES * 2 = 256 for latency chain
+  // Use buffer smaller than stride, but need at least LATENCY_STRIDE_BYTES * 2 for latency chain
   // So we'll use a larger buffer but test that strided patterns with stride > effective_buffer_size are skipped
   config.buffer_size = 512;  // Large enough for latency chain
   config.l1_buffer_size = 0;  // Disable cache buffers
@@ -70,7 +70,7 @@ TEST(PatternValidationTest, ValidateStrideBufferEqualToStride) {
   using namespace Constants;
   
   BenchmarkConfig config;
-  // Need at least LATENCY_STRIDE_BYTES * 2 = 256 for latency chain
+  // Need at least LATENCY_STRIDE_BYTES * 2 for latency chain
   config.buffer_size = 512;  // Large enough for latency chain
   config.l1_buffer_size = 0;  // Disable cache buffers
   config.l2_buffer_size = 0;
@@ -108,7 +108,7 @@ TEST(PatternValidationTest, BufferSizeProgressionLessThanMin) {
   using namespace Constants;
   
   BenchmarkConfig config;
-  // Need at least LATENCY_STRIDE_BYTES * 2 = 256 for latency chain
+  // Need at least LATENCY_STRIDE_BYTES * 2 for latency chain
   config.buffer_size = 512;  // Large enough for latency chain
   config.l1_buffer_size = 0;  // Disable cache buffers
   config.l2_buffer_size = 0;
@@ -143,7 +143,7 @@ TEST(PatternValidationTest, BufferSizeProgressionEqualToMin) {
   using namespace Constants;
   
   BenchmarkConfig config;
-  // Need at least LATENCY_STRIDE_BYTES * 2 = 256 for latency chain
+  // Need at least LATENCY_STRIDE_BYTES * 2 for latency chain
   config.buffer_size = 512;  // Large enough for latency chain
   config.l1_buffer_size = 0;  // Disable cache buffers
   config.l2_buffer_size = 0;
@@ -178,7 +178,7 @@ TEST(PatternValidationTest, BufferSizeProgressionLessThanCacheLine) {
   using namespace Constants;
   
   BenchmarkConfig config;
-  // Need at least LATENCY_STRIDE_BYTES * 2 = 256 for latency chain
+  // Need at least LATENCY_STRIDE_BYTES * 2 for latency chain
   config.buffer_size = 512;  // Large enough for latency chain
   config.l1_buffer_size = 0;  // Disable cache buffers
   config.l2_buffer_size = 0;
@@ -216,7 +216,7 @@ TEST(PatternValidationTest, BufferSizeProgressionEqualToCacheLine) {
   using namespace Constants;
   
   BenchmarkConfig config;
-  // Need at least LATENCY_STRIDE_BYTES * 2 = 256 for latency chain
+  // Need at least LATENCY_STRIDE_BYTES * 2 for latency chain
   config.buffer_size = 512;  // Large enough for latency chain
   config.l1_buffer_size = 0;  // Disable cache buffers
   config.l2_buffer_size = 0;
@@ -254,7 +254,7 @@ TEST(PatternValidationTest, BufferSizeProgressionJustLargerThanCacheLine) {
   using namespace Constants;
   
   BenchmarkConfig config;
-  // Need at least LATENCY_STRIDE_BYTES * 2 = 256 for latency chain
+  // Need at least LATENCY_STRIDE_BYTES * 2 for latency chain
   config.buffer_size = 512;  // Large enough for latency chain
   config.l1_buffer_size = 0;  // Disable cache buffers
   config.l2_buffer_size = 0;

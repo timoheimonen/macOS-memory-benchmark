@@ -77,6 +77,7 @@
 int parse_arguments(int argc, char* argv[], BenchmarkConfig& config) {
   long long requested_buffer_size_mb_ll = -1;  // User requested size (-1 = none)
   long long requested_threads_ll = -1;  // User requested threads (-1 = none)
+  long long requested_latency_tlb_locality_kb_ll = -1;  // User requested TLB-locality window in KB (-1 = none)
   
   // First pass: parse -cache-size early (needed for cache size detection)
   for (int i = 1; i < argc; ++i) {
@@ -88,7 +89,9 @@ int parse_arguments(int argc, char* argv[], BenchmarkConfig& config) {
           // std::stoll() throws std::out_of_range if value out of range
           long long val_ll = std::stoll(argv[i]);
           // Error: Value validation - out of valid range
-          if (val_ll <= 0 || val_ll < Constants::MIN_CACHE_SIZE_KB || val_ll > Constants::MAX_CACHE_SIZE_KB)
+          // Note: 0 is accepted here and validated later (allowed only with -only-latency)
+          if (val_ll < 0 || val_ll > Constants::MAX_CACHE_SIZE_KB ||
+              (val_ll > 0 && val_ll < Constants::MIN_CACHE_SIZE_KB))
             throw std::out_of_range(Messages::error_cache_size_invalid(Constants::MIN_CACHE_SIZE_KB, Constants::MAX_CACHE_SIZE_KB, Constants::MAX_CACHE_SIZE_KB / 1024));
           config.custom_cache_size_kb_ll = val_ll;
         } else
@@ -154,7 +157,8 @@ int parse_arguments(int argc, char* argv[], BenchmarkConfig& config) {
           // Error: std::stoll() may throw exceptions
           long long val_ll = std::stoll(argv[i]);
           // Error: Value validation - out of valid range
-          if (val_ll <= 0 || val_ll > std::numeric_limits<unsigned long>::max())
+          // Note: 0 is accepted here and validated later (allowed only with -only-latency)
+          if (val_ll < 0 || val_ll > std::numeric_limits<unsigned long>::max())
             throw std::out_of_range(Messages::error_buffersize_invalid(val_ll, std::numeric_limits<unsigned long>::max()));
           requested_buffer_size_mb_ll = val_ll;
           config.user_specified_buffersize = true;
@@ -184,6 +188,19 @@ int parse_arguments(int argc, char* argv[], BenchmarkConfig& config) {
         } else
           // Error: Missing required value
           throw std::invalid_argument(Messages::error_missing_value("-latency-samples"));
+      } else if (arg == "-latency-tlb-locality-kb") {
+        if (++i < argc) {
+          long long val_ll = std::stoll(argv[i]);
+          const long long max_locality_kb =
+              static_cast<long long>(std::numeric_limits<size_t>::max() / Constants::BYTES_PER_KB);
+          if (val_ll < 0 || val_ll > max_locality_kb) {
+            throw std::out_of_range(Messages::error_latency_tlb_locality_invalid(val_ll, max_locality_kb));
+          }
+          requested_latency_tlb_locality_kb_ll = val_ll;
+          config.user_specified_latency_tlb_locality = true;
+        } else {
+          throw std::invalid_argument(Messages::error_missing_value("-latency-tlb-locality-kb"));
+        }
       } else if (arg == "-cache-size") {
         // Already parsed in first pass, skip it and its value in second pass
         if (config.custom_cache_size_kb_ll != -1) {
@@ -200,7 +217,8 @@ int parse_arguments(int argc, char* argv[], BenchmarkConfig& config) {
             // Error: Try to parse it now (fallback case) - std::stoll() may throw
             long long val_ll = std::stoll(argv[i]);
             // Error: Value validation - out of valid range
-            if (val_ll <= 0 || val_ll < Constants::MIN_CACHE_SIZE_KB || val_ll > Constants::MAX_CACHE_SIZE_KB)
+            if (val_ll < 0 || val_ll > Constants::MAX_CACHE_SIZE_KB ||
+                (val_ll > 0 && val_ll < Constants::MIN_CACHE_SIZE_KB))
               throw std::out_of_range(Messages::error_cache_size_invalid(Constants::MIN_CACHE_SIZE_KB, Constants::MAX_CACHE_SIZE_KB, Constants::MAX_CACHE_SIZE_KB / 1024));
             config.custom_cache_size_kb_ll = val_ll;
           } else
@@ -272,6 +290,10 @@ int parse_arguments(int argc, char* argv[], BenchmarkConfig& config) {
     config.user_specified_threads = true;
   }
 
+  if (requested_latency_tlb_locality_kb_ll != -1) {
+    config.latency_tlb_locality_bytes =
+        static_cast<size_t>(requested_latency_tlb_locality_kb_ll) * Constants::BYTES_PER_KB;
+  }
+
   return EXIT_SUCCESS;  // All arguments parsed successfully
 }
-

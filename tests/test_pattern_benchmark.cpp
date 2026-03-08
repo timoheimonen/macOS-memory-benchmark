@@ -588,7 +588,7 @@ TEST(PatternBenchmarkTest, StridedPatternBufferEqualToStride) {
   
   BenchmarkConfig config;
   // Use buffer size equal to PATTERN_STRIDE_CACHE_LINE (64B)
-  // But need larger buffer for latency chain setup (at least LATENCY_STRIDE_BYTES * 2 = 256 bytes)
+  // But need larger buffer for latency chain setup (at least LATENCY_STRIDE_BYTES * 2 bytes)
   // So we'll use a larger buffer but test the strided pattern behavior with effective size
   config.buffer_size = 512;  // Large enough for latency chain, but we'll test strided with 64B stride
   config.l1_buffer_size = 0;  // Disable cache buffers to avoid latency chain issues
@@ -632,7 +632,7 @@ TEST(PatternBenchmarkTest, StridedPatternBufferJustLargerThanStride) {
   // Use buffer size just larger than PATTERN_STRIDE_CACHE_LINE
   // Need buffer_size - PATTERN_ACCESS_SIZE_BYTES >= stride
   // So buffer_size >= stride + PATTERN_ACCESS_SIZE_BYTES = 64 + 32 = 96
-  // But also need at least LATENCY_STRIDE_BYTES * 2 = 256 for latency chain
+  // But also need at least LATENCY_STRIDE_BYTES * 2 for latency chain
   config.buffer_size = 512;  // Large enough for latency chain
   config.l1_buffer_size = 0;  // Disable cache buffers
   config.l2_buffer_size = 0;
@@ -671,7 +671,7 @@ TEST(PatternBenchmarkTest, BufferSizeProgressionMinBufferSize) {
   using namespace Constants;
   
   BenchmarkConfig config;
-  // Need at least LATENCY_STRIDE_BYTES * 2 = 256 bytes for latency chain
+  // Need at least LATENCY_STRIDE_BYTES * 2 bytes for latency chain
   // So we'll use a larger buffer but test with minimum pattern buffer size concept
   config.buffer_size = 512;  // Large enough for latency chain
   config.l1_buffer_size = 0;  // Disable cache buffers
@@ -707,7 +707,7 @@ TEST(PatternBenchmarkTest, BufferSizeProgressionCacheLineStride) {
   using namespace Constants;
   
   BenchmarkConfig config;
-  // Need at least LATENCY_STRIDE_BYTES * 2 = 256 bytes for latency chain
+  // Need at least LATENCY_STRIDE_BYTES * 2 bytes for latency chain
   config.buffer_size = 512;  // Large enough for latency chain
   config.l1_buffer_size = 0;  // Disable cache buffers
   config.l2_buffer_size = 0;

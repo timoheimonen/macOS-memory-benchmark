@@ -297,40 +297,47 @@ void print_statistics(int loop_count, const std::vector<double> &all_read_bw, co
 
   // Display Cache Latency statistics (skip if only bandwidth tests).
   if (!only_bandwidth) {
-    std::cout << Messages::statistics_cache_latency_header() << std::endl;
-    if (use_custom_cache_size) {
-      print_cache_latency_statistics("Custom", all_custom_latency, all_custom_latency_samples);
-    } else {
-      print_cache_latency_statistics("L1", all_l1_latency, all_l1_latency_samples);
-      print_cache_latency_statistics("L2", all_l2_latency, all_l2_latency_samples);
+    const bool has_cache_latency_stats = use_custom_cache_size
+                                             ? !all_custom_latency.empty()
+                                             : (!all_l1_latency.empty() || !all_l2_latency.empty());
+    if (has_cache_latency_stats) {
+      std::cout << Messages::statistics_cache_latency_header() << std::endl;
+      if (use_custom_cache_size) {
+        print_cache_latency_statistics("Custom", all_custom_latency, all_custom_latency_samples);
+      } else {
+        print_cache_latency_statistics("L1", all_l1_latency, all_l1_latency_samples);
+        print_cache_latency_statistics("L2", all_l2_latency, all_l2_latency_samples);
+      }
     }
 
     // Display Main Memory Latency statistics.
-    Statistics main_mem_latency_stats = calculate_statistics(all_main_mem_latency);
-    bool use_main_mem_samples = !all_main_mem_latency_samples.empty();
-    Statistics main_mem_sample_stats;
-    if (use_main_mem_samples) {
-      main_mem_sample_stats = calculate_statistics(all_main_mem_latency_samples);
-    }
-    
-    std::cout << Messages::statistics_main_memory_latency_header() << std::endl;
-    std::cout << Messages::statistics_average(main_mem_latency_stats.average, Constants::LATENCY_PRECISION) << std::endl;
-    if (use_main_mem_samples) {
-      std::cout << Messages::statistics_median_p50_from_samples(main_mem_sample_stats.median, all_main_mem_latency_samples.size(), Constants::LATENCY_PRECISION) << std::endl;
-      std::cout << Messages::statistics_p90(main_mem_sample_stats.p90, Constants::LATENCY_PRECISION) << std::endl;
-      std::cout << Messages::statistics_p95(main_mem_sample_stats.p95, Constants::LATENCY_PRECISION) << std::endl;
-      std::cout << Messages::statistics_p99(main_mem_sample_stats.p99, Constants::LATENCY_PRECISION) << std::endl;
-      std::cout << Messages::statistics_stddev(main_mem_sample_stats.stddev, Constants::LATENCY_PRECISION) << std::endl;
-      std::cout << Messages::statistics_min(main_mem_sample_stats.min, Constants::LATENCY_PRECISION) << std::endl;
-      std::cout << Messages::statistics_max(main_mem_sample_stats.max, Constants::LATENCY_PRECISION) << std::endl;
-    } else {
-      std::cout << Messages::statistics_median_p50(main_mem_latency_stats.median, Constants::LATENCY_PRECISION) << std::endl;
-      std::cout << Messages::statistics_p90(main_mem_latency_stats.p90, Constants::LATENCY_PRECISION) << std::endl;
-      std::cout << Messages::statistics_p95(main_mem_latency_stats.p95, Constants::LATENCY_PRECISION) << std::endl;
-      std::cout << Messages::statistics_p99(main_mem_latency_stats.p99, Constants::LATENCY_PRECISION) << std::endl;
-      std::cout << Messages::statistics_stddev(main_mem_latency_stats.stddev, Constants::LATENCY_PRECISION) << std::endl;
-      std::cout << Messages::statistics_min(main_mem_latency_stats.min, Constants::LATENCY_PRECISION) << std::endl;
-      std::cout << Messages::statistics_max(main_mem_latency_stats.max, Constants::LATENCY_PRECISION) << std::endl;
+    if (!all_main_mem_latency.empty()) {
+      Statistics main_mem_latency_stats = calculate_statistics(all_main_mem_latency);
+      bool use_main_mem_samples = !all_main_mem_latency_samples.empty();
+      Statistics main_mem_sample_stats;
+      if (use_main_mem_samples) {
+        main_mem_sample_stats = calculate_statistics(all_main_mem_latency_samples);
+      }
+
+      std::cout << Messages::statistics_main_memory_latency_header() << std::endl;
+      std::cout << Messages::statistics_average(main_mem_latency_stats.average, Constants::LATENCY_PRECISION) << std::endl;
+      if (use_main_mem_samples) {
+        std::cout << Messages::statistics_median_p50_from_samples(main_mem_sample_stats.median, all_main_mem_latency_samples.size(), Constants::LATENCY_PRECISION) << std::endl;
+        std::cout << Messages::statistics_p90(main_mem_sample_stats.p90, Constants::LATENCY_PRECISION) << std::endl;
+        std::cout << Messages::statistics_p95(main_mem_sample_stats.p95, Constants::LATENCY_PRECISION) << std::endl;
+        std::cout << Messages::statistics_p99(main_mem_sample_stats.p99, Constants::LATENCY_PRECISION) << std::endl;
+        std::cout << Messages::statistics_stddev(main_mem_sample_stats.stddev, Constants::LATENCY_PRECISION) << std::endl;
+        std::cout << Messages::statistics_min(main_mem_sample_stats.min, Constants::LATENCY_PRECISION) << std::endl;
+        std::cout << Messages::statistics_max(main_mem_sample_stats.max, Constants::LATENCY_PRECISION) << std::endl;
+      } else {
+        std::cout << Messages::statistics_median_p50(main_mem_latency_stats.median, Constants::LATENCY_PRECISION) << std::endl;
+        std::cout << Messages::statistics_p90(main_mem_latency_stats.p90, Constants::LATENCY_PRECISION) << std::endl;
+        std::cout << Messages::statistics_p95(main_mem_latency_stats.p95, Constants::LATENCY_PRECISION) << std::endl;
+        std::cout << Messages::statistics_p99(main_mem_latency_stats.p99, Constants::LATENCY_PRECISION) << std::endl;
+        std::cout << Messages::statistics_stddev(main_mem_latency_stats.stddev, Constants::LATENCY_PRECISION) << std::endl;
+        std::cout << Messages::statistics_min(main_mem_latency_stats.min, Constants::LATENCY_PRECISION) << std::endl;
+        std::cout << Messages::statistics_max(main_mem_latency_stats.max, Constants::LATENCY_PRECISION) << std::endl;
+      }
     }
   }
   
