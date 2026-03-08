@@ -159,6 +159,8 @@ void initialize_statistics(BenchmarkStatistics& stats, const BenchmarkConfig& co
  * @see BenchmarkResults for loop results structure
  */
 void collect_loop_results(BenchmarkStatistics& stats, const BenchmarkResults& loop_results, const BenchmarkConfig& config) {
+  const bool main_latency_enabled = (!config.only_bandwidth && config.buffer_size > 0 && config.lat_num_accesses > 0);
+
   // Store results for this loop
   stats.all_read_bw_gb_s.push_back(loop_results.read_bw_gb_s);
   stats.all_write_bw_gb_s.push_back(loop_results.write_bw_gb_s);
@@ -184,10 +186,12 @@ void collect_loop_results(BenchmarkStatistics& stats, const BenchmarkResults& lo
       stats.all_l2_copy_bw_gb_s.push_back(loop_results.l2_copy_bw_gb_s);
     }
   }
-  stats.all_average_latency_ns.push_back(loop_results.average_latency_ns);
+  if (main_latency_enabled) {
+    stats.all_average_latency_ns.push_back(loop_results.average_latency_ns);
+  }
   
   // Collect latency samples from this loop
-  if (!loop_results.latency_samples.empty()) {
+  if (main_latency_enabled && !loop_results.latency_samples.empty()) {
     stats.all_main_mem_latency_samples.insert(stats.all_main_mem_latency_samples.end(),
                                                loop_results.latency_samples.begin(),
                                                loop_results.latency_samples.end());
@@ -212,4 +216,3 @@ void collect_loop_results(BenchmarkStatistics& stats, const BenchmarkResults& lo
     }
   }
 }
-

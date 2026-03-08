@@ -181,6 +181,8 @@ Sets the size of each memory buffer in megabytes.
 
 **Important**: The tool allocates 3 buffers, so total memory usage is `3 × buffersize`. Maximum is automatically capped at ~80% of available system memory.
 
+**Latency-only special case**: With `-only-latency`, you can use `-buffersize 0` to disable main memory latency and its main latency buffer allocation.
+
 **Example:**
 ```bash
 ./memory_benchmark -buffersize 1024
@@ -264,6 +266,11 @@ Run only latency tests, skip all bandwidth tests.
 
 **Cannot be combined with**: `-patterns`, `-iterations`
 
+**Selective latency targets:**
+- `-buffersize 0` disables main memory latency (cache latency only)
+- `-cache-size 0` disables cache latency (main memory latency only)
+- `-buffersize 0 -cache-size 0` is invalid (nothing to run)
+
 **Example:**
 ```bash
 ./memory_benchmark -only-latency
@@ -280,6 +287,7 @@ Specify a custom cache size to test (in kilobytes).
 - Skips automatic L1/L2 detection
 - Runs bandwidth and latency tests for the specified cache size only
 - Uses 100% of specified size for actual buffer
+- In `-only-latency` mode, `-cache-size 0` disables cache latency tests and cache latency buffer allocation
 
 **Use cases:**
 - Testing specific cache sizes

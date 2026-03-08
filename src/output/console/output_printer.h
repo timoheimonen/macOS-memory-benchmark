@@ -39,6 +39,7 @@ void print_usage(const char* prog_name);
  * @brief Print benchmark setup details
  * @param buffer_size Buffer size in bytes
  * @param buffer_size_mb Buffer size in megabytes
+ * @param total_allocation_bytes Total allocated bytes across all enabled buffers
  * @param iterations Number of iterations
  * @param loop_count Number of loops
  * @param use_non_cacheable Whether non-cacheable memory is used
@@ -50,7 +51,10 @@ void print_usage(const char* prog_name);
  * @param only_latency Whether only latency tests are run
  * @param run_patterns Whether pattern benchmarks are run (bandwidth-only, uses 2x buffers)
  */
-void print_configuration(size_t buffer_size, size_t buffer_size_mb, int iterations, int loop_count, bool use_non_cacheable, const std::string& cpu_name, int perf_cores, int eff_cores, int num_threads, bool only_bandwidth, bool only_latency, bool run_patterns);
+void print_configuration(size_t buffer_size, size_t buffer_size_mb, size_t total_allocation_bytes, int iterations,
+                         int loop_count, bool use_non_cacheable, const std::string& cpu_name, int perf_cores,
+                         int eff_cores, int num_threads, bool only_bandwidth, bool only_latency,
+                         bool run_patterns);
 
 /**
  * @brief Print results for one loop
@@ -110,4 +114,3 @@ void print_results(int loop, size_t buffer_size, size_t buffer_size_mb, int iter
 void print_cache_info(size_t l1_cache_size, size_t l2_cache_size, bool use_custom_cache_size, size_t custom_cache_size_bytes);
 
 #endif // OUTPUT_PRINTER_H
-

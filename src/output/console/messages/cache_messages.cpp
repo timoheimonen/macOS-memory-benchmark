@@ -48,6 +48,10 @@ std::string cache_size_custom(size_t size_bytes) {
   return oss.str();
 }
 
+std::string cache_size_custom_disabled() {
+  return "  Custom Cache Size: Disabled (cache latency skipped)";
+}
+
 std::string cache_size_l1(size_t size_bytes) {
   std::ostringstream oss;
   oss << "  L1 Cache Size: ";
@@ -83,4 +87,3 @@ std::string cache_size_per_pcore_cluster() {
 }
 
 } // namespace Messages
-

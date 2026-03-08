@@ -95,6 +95,25 @@ int validate_config(BenchmarkConfig& config) {
       return EXIT_FAILURE;  // Return code: validation error
     }
   }
+
+  // Zero-size disabling behavior is only supported with -only-latency.
+  const bool cache_latency_disabled = (config.custom_cache_size_kb_ll == 0);
+  const bool main_latency_disabled = (config.buffer_size_mb == 0);
+
+  if (cache_latency_disabled && !config.only_latency) {
+    std::cerr << Messages::error_prefix() << Messages::error_cache_size_zero_requires_only_latency() << std::endl;
+    return EXIT_FAILURE;  // Return code: validation error
+  }
+
+  if (main_latency_disabled && !config.only_latency) {
+    std::cerr << Messages::error_prefix() << Messages::error_buffersize_zero_requires_only_latency() << std::endl;
+    return EXIT_FAILURE;  // Return code: validation error
+  }
+
+  if (config.only_latency && cache_latency_disabled && main_latency_disabled) {
+    std::cerr << Messages::error_prefix() << Messages::error_only_latency_requires_latency_target() << std::endl;
+    return EXIT_FAILURE;  // Return code: validation error
+  }
   
   // Calculate memory limit
   unsigned long available_mem_mb = get_available_memory_mb();
@@ -131,10 +150,6 @@ int validate_config(BenchmarkConfig& config) {
   }
 
   // Validate and cap buffer size.
-  // In latency-only mode, use default if unset before applying cap.
-  if (config.only_latency && config.buffer_size_mb == 0) {
-    config.buffer_size_mb = Constants::DEFAULT_BUFFER_SIZE_MB;
-  }
   if (config.buffer_size_mb > max_allowed_mb_per_buffer) {
     std::cerr << Messages::warning_prefix() << Messages::warning_buffer_size_exceeds_limit(config.buffer_size_mb, max_allowed_mb_per_buffer) << std::endl;
     config.buffer_size_mb = max_allowed_mb_per_buffer;
@@ -153,7 +168,8 @@ int validate_config(BenchmarkConfig& config) {
   }
   
   // Error: Buffer size must meet minimum requirements (page size and minimum latency buffer size)
-  if (config.buffer_size < page_size || config.buffer_size < Constants::MIN_LATENCY_BUFFER_SIZE) {
+  // Skip this check when main memory latency is explicitly disabled (-only-latency with -buffersize 0).
+  if (config.buffer_size_mb > 0 && (config.buffer_size < page_size || config.buffer_size < Constants::MIN_LATENCY_BUFFER_SIZE)) {
     std::cerr << Messages::error_prefix() << Messages::error_buffer_size_too_small(config.buffer_size) << std::endl;
     return EXIT_FAILURE;  // Return code: validation error
   }

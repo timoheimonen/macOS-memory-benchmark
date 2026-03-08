@@ -177,6 +177,7 @@ In the Terminal, go to the directory with `memory_benchmark` and use these comma
       -buffersize <size_mb> Size for EACH of the 3 buffers in Megabytes (MB) as integer (default: 512).
                             The maximum allowed <size_mb> is automatically determined such that
                             3 * <size_mb> does not exceed ~80% of available system memory.
+                            In -only-latency mode, -buffersize 0 disables main memory latency.
       -count <count>        Number of full loops (read/write/copy/latency) (default: 1).
                             When count > 1, statistics include percentiles (P50/P90/P95/P99) and stddev.
       -latency-samples <count> Number of latency samples to collect per test (default: 1000)
@@ -188,6 +189,7 @@ In the Terminal, go to the directory with `memory_benchmark` and use these comma
                             Minimum is 16 KB (system page size). When set, skips automatic
                             L1/L2 cache size detection and only performs bandwidth and latency
                             tests for the custom cache size.
+                            In -only-latency mode, -cache-size 0 disables cache latency.
       -patterns             Run pattern benchmarks (sequential forward/reverse, strided,
                             and random access patterns). When set, only pattern benchmarks
                             are executed, skipping standard bandwidth and latency tests.
@@ -197,6 +199,8 @@ In the Terminal, go to the directory with `memory_benchmark` and use these comma
                             or -latency-samples.
       -only-latency         Run only latency tests (main memory and cache latency).
                             Skips all bandwidth tests. Cannot be used with -patterns or -iterations.
+                            Use -buffersize 0 to disable main memory latency, or -cache-size 0
+                            to disable cache latency.
       -non-cacheable        Apply cache-discouraging hints to src/dst buffers.
                             Uses madvise() hints to discourage caching, but does NOT provide
                             true non-cacheable memory (user-space cannot modify page tables).
@@ -392,4 +396,3 @@ Mac Mini M4 patterns benchmark results. Image created from JSON file using separ
   For more realistic main memory measurements, prefer buffer sizes in the range of **512 MB–1 GB (or larger, if RAM allows)**. Smaller values are still useful to study cache behavior, but they should not be interpreted as pure main memory bandwidth/latency.
 * **Other Programs**:
   As userspace cannot prioritize programs, close all other programs to avoid noise from operating system to the results.
-

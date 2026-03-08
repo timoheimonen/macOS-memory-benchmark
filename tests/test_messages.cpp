@@ -228,7 +228,7 @@ TEST_F(MessagesErrorTest, ErrorBuffersizeInvalid) {
   EXPECT_TRUE(msg.find("got -100") != std::string::npos);
   // Test with zero
   std::string msg2 = Messages::error_buffersize_invalid(0, 1000);
-  EXPECT_EQ(msg2, "buffersize invalid (must be > 0 and <= 1000, got 0)");
+  EXPECT_EQ(msg2, "buffersize invalid (must be >= 0 and <= 1000, got 0)");
 }
 
 TEST_F(MessagesErrorTest, ErrorCountInvalid) {
@@ -469,6 +469,12 @@ TEST_F(MessagesFormattingTest, CacheSizeCustom) {
   msg = Messages::cache_size_custom(2 * 1024 * 1024);
   EXPECT_NE(msg.find("2"), std::string::npos);
   EXPECT_NE(msg.find("MB"), std::string::npos);
+}
+
+TEST_F(MessagesFormattingTest, CacheSizeCustomDisabled) {
+  std::string msg = Messages::cache_size_custom_disabled();
+  EXPECT_NE(msg.find("Custom Cache Size"), std::string::npos);
+  EXPECT_NE(msg.find("Disabled"), std::string::npos);
 }
 
 TEST_F(MessagesFormattingTest, CacheSizeL1) {

@@ -138,3 +138,30 @@ TEST(BenchmarkExecutorTest, MainMemoryLatencyCollectsSamplesWhenConfigured) {
   EXPECT_GT(timings.total_lat_time_ns, 0.0);
   EXPECT_EQ(results.latency_samples.size(), static_cast<size_t>(config.latency_sample_count));
 }
+
+TEST(BenchmarkExecutorTest, MainMemoryLatencySkipsWhenMainLatencyDisabled) {
+  BenchmarkConfig config = build_base_config();
+  config.only_latency = true;
+  config.buffer_size_mb = 0;
+  config.buffer_size = 0;
+  config.custom_cache_size_kb_ll = 8096;
+  config.use_custom_cache_size = true;
+  config.custom_cache_size_bytes = static_cast<size_t>(8096) * Constants::BYTES_PER_KB;
+
+  calculate_buffer_sizes(config);
+  calculate_access_counts(config);
+
+  BenchmarkBuffers buffers;
+  ASSERT_EQ(allocate_all_buffers(config, buffers), EXIT_SUCCESS);
+  ASSERT_EQ(initialize_all_buffers(buffers, config), EXIT_SUCCESS);
+
+  auto timer_opt = HighResTimer::create();
+  ASSERT_TRUE(timer_opt.has_value());
+
+  TimingResults timings;
+  BenchmarkResults results;
+  run_main_memory_latency_test(buffers, config, timings, results, *timer_opt);
+
+  EXPECT_EQ(timings.total_lat_time_ns, 0.0);
+  EXPECT_TRUE(results.latency_samples.empty());
+}

@@ -88,7 +88,9 @@ int parse_arguments(int argc, char* argv[], BenchmarkConfig& config) {
           // std::stoll() throws std::out_of_range if value out of range
           long long val_ll = std::stoll(argv[i]);
           // Error: Value validation - out of valid range
-          if (val_ll <= 0 || val_ll < Constants::MIN_CACHE_SIZE_KB || val_ll > Constants::MAX_CACHE_SIZE_KB)
+          // Note: 0 is accepted here and validated later (allowed only with -only-latency)
+          if (val_ll < 0 || val_ll > Constants::MAX_CACHE_SIZE_KB ||
+              (val_ll > 0 && val_ll < Constants::MIN_CACHE_SIZE_KB))
             throw std::out_of_range(Messages::error_cache_size_invalid(Constants::MIN_CACHE_SIZE_KB, Constants::MAX_CACHE_SIZE_KB, Constants::MAX_CACHE_SIZE_KB / 1024));
           config.custom_cache_size_kb_ll = val_ll;
         } else
@@ -154,7 +156,8 @@ int parse_arguments(int argc, char* argv[], BenchmarkConfig& config) {
           // Error: std::stoll() may throw exceptions
           long long val_ll = std::stoll(argv[i]);
           // Error: Value validation - out of valid range
-          if (val_ll <= 0 || val_ll > std::numeric_limits<unsigned long>::max())
+          // Note: 0 is accepted here and validated later (allowed only with -only-latency)
+          if (val_ll < 0 || val_ll > std::numeric_limits<unsigned long>::max())
             throw std::out_of_range(Messages::error_buffersize_invalid(val_ll, std::numeric_limits<unsigned long>::max()));
           requested_buffer_size_mb_ll = val_ll;
           config.user_specified_buffersize = true;
@@ -200,7 +203,8 @@ int parse_arguments(int argc, char* argv[], BenchmarkConfig& config) {
             // Error: Try to parse it now (fallback case) - std::stoll() may throw
             long long val_ll = std::stoll(argv[i]);
             // Error: Value validation - out of valid range
-            if (val_ll <= 0 || val_ll < Constants::MIN_CACHE_SIZE_KB || val_ll > Constants::MAX_CACHE_SIZE_KB)
+            if (val_ll < 0 || val_ll > Constants::MAX_CACHE_SIZE_KB ||
+                (val_ll > 0 && val_ll < Constants::MIN_CACHE_SIZE_KB))
               throw std::out_of_range(Messages::error_cache_size_invalid(Constants::MIN_CACHE_SIZE_KB, Constants::MAX_CACHE_SIZE_KB, Constants::MAX_CACHE_SIZE_KB / 1024));
             config.custom_cache_size_kb_ll = val_ll;
           } else
@@ -274,4 +278,3 @@ int parse_arguments(int argc, char* argv[], BenchmarkConfig& config) {
 
   return EXIT_SUCCESS;  // All arguments parsed successfully
 }
-

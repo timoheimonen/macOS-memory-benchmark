@@ -78,6 +78,29 @@ TEST(ConfigTest, ParseInvalidCacheSizeTooLarge) {
   EXPECT_EQ(result, EXIT_FAILURE);
 }
 
+// Test parsing cache size zero (validated later; allowed only with -only-latency)
+TEST(ConfigTest, ParseCacheSizeZero) {
+  BenchmarkConfig config;
+  const char* argv[] = {"program", "-cache-size", "0"};
+  int argc = 3;
+
+  int result = parse_arguments(argc, const_cast<char**>(argv), config);
+  EXPECT_EQ(result, EXIT_SUCCESS);
+  EXPECT_EQ(config.custom_cache_size_kb_ll, 0);
+  EXPECT_TRUE(config.use_custom_cache_size);
+}
+
+// Test parsing buffer size zero (validated later; allowed only with -only-latency)
+TEST(ConfigTest, ParseBufferSizeZero) {
+  BenchmarkConfig config;
+  const char* argv[] = {"program", "-buffersize", "0"};
+  int argc = 3;
+
+  int result = parse_arguments(argc, const_cast<char**>(argv), config);
+  EXPECT_EQ(result, EXIT_SUCCESS);
+  EXPECT_EQ(config.buffer_size_mb, 0u);
+}
+
 // Test parsing missing value for option
 TEST(ConfigTest, ParseMissingValue) {
   BenchmarkConfig config;
@@ -214,4 +237,58 @@ TEST(ConfigTest, ValidateConfigModeAwareBufferCap) {
   lat_only.buffer_size_mb = std::numeric_limits<unsigned long>::max();
   EXPECT_EQ(validate_config(lat_only), EXIT_SUCCESS);
   EXPECT_EQ(lat_only.buffer_size_mb, expected_cap(lat_only, 1));
+}
+
+TEST(ConfigTest, ValidateConfigRejectsBufferSizeZeroWithoutOnlyLatency) {
+  BenchmarkConfig config;
+  config.buffer_size_mb = 0;
+
+  int result = validate_config(config);
+  EXPECT_EQ(result, EXIT_FAILURE);
+}
+
+TEST(ConfigTest, ValidateConfigRejectsCacheSizeZeroWithoutOnlyLatency) {
+  BenchmarkConfig config;
+  config.custom_cache_size_kb_ll = 0;
+  config.use_custom_cache_size = true;
+  config.custom_cache_size_bytes = 0;
+
+  int result = validate_config(config);
+  EXPECT_EQ(result, EXIT_FAILURE);
+}
+
+TEST(ConfigTest, ValidateConfigAllowsCacheOnlyLatencyMode) {
+  BenchmarkConfig config;
+  config.only_latency = true;
+  config.buffer_size_mb = 0;
+  config.custom_cache_size_kb_ll = 8096;
+  config.use_custom_cache_size = true;
+  config.custom_cache_size_bytes = static_cast<size_t>(8096) * Constants::BYTES_PER_KB;
+
+  int result = validate_config(config);
+  EXPECT_EQ(result, EXIT_SUCCESS);
+}
+
+TEST(ConfigTest, ValidateConfigAllowsMainOnlyLatencyMode) {
+  BenchmarkConfig config;
+  config.only_latency = true;
+  config.buffer_size_mb = 16;
+  config.custom_cache_size_kb_ll = 0;
+  config.use_custom_cache_size = true;
+  config.custom_cache_size_bytes = 0;
+
+  int result = validate_config(config);
+  EXPECT_EQ(result, EXIT_SUCCESS);
+}
+
+TEST(ConfigTest, ValidateConfigRejectsOnlyLatencyWithNoTargets) {
+  BenchmarkConfig config;
+  config.only_latency = true;
+  config.buffer_size_mb = 0;
+  config.custom_cache_size_kb_ll = 0;
+  config.use_custom_cache_size = true;
+  config.custom_cache_size_bytes = 0;
+
+  int result = validate_config(config);
+  EXPECT_EQ(result, EXIT_FAILURE);
 }

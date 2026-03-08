@@ -113,6 +113,9 @@ const std::string& error_incompatible_flags();
 const std::string& error_only_flags_with_patterns();
 const std::string& error_only_bandwidth_with_cache_size();
 const std::string& error_only_bandwidth_with_latency_samples();
+const std::string& error_buffersize_zero_requires_only_latency();
+const std::string& error_cache_size_zero_requires_only_latency();
+const std::string& error_only_latency_requires_latency_target();
 const std::string& error_only_latency_with_buffersize();
 const std::string& error_only_latency_with_iterations();
 
@@ -167,6 +170,7 @@ std::string config_total_cores(int num_threads);
 // --- Cache Info Messages ---
 std::string cache_info_header();
 std::string cache_size_custom(size_t size_bytes);
+std::string cache_size_custom_disabled();
 std::string cache_size_l1(size_t size_bytes);
 std::string cache_size_l2(size_t size_bytes);
 std::string cache_size_per_pcore();

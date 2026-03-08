@@ -100,7 +100,7 @@ int initialize_all_buffers(BenchmarkBuffers& buffers, const BenchmarkConfig& con
     }
   }
   
-  if (!config.only_bandwidth && !config.run_patterns) {
+  if (!config.only_bandwidth && !config.run_patterns && config.buffer_size > 0 && config.lat_num_accesses > 0) {
     // Validate latency buffer is allocated
     if (buffers.lat_buffer() == nullptr) {
       std::cerr << Messages::error_prefix() << Messages::error_main_buffers_not_allocated() << std::endl;
@@ -182,4 +182,3 @@ int initialize_all_buffers(BenchmarkBuffers& buffers, const BenchmarkConfig& con
 
   return EXIT_SUCCESS;
 }
-
