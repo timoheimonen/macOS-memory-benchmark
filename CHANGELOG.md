@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.52.9] - 2026-xx-xx
+## [0.52.9] - 2026-03-08
 
 ### Added
 - **Extended `-patterns` strided coverage for page-size analysis**: Added two new strided pattern measurements to complement existing 64B and 4096B tests:

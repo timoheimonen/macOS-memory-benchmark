@@ -228,7 +228,7 @@ For usage documentation, command-line options reference, best practices, and det
 
 ## Example output (Mac Mini M4 24GB)
 ```text
------ macOS-memory-benchmark v0.52.8 -----
+----- macOS-memory-benchmark v0.52.9 -----
 Copyright 2025-2026 Timo Heimonen <timo.heimonen@proton.me>
 This program is free software: you can redistribute it and/or modify
 it under the terms of the GNU General Public License as published by
@@ -372,7 +372,7 @@ Mac Mini M4 patterns benchmark results. Image created from JSON file using separ
 - **[User Manual](MANUAL.md)** - Usage guide with command-line options, best practices, workflows, and detailed examples
 - **[Technical Specification](TECHNICAL_SPECIFICATION.md)** - System architecture, memory management, low-level ARM64 assembly implementation, benchmark execution flow, system integration, and technical specifications
 
-## Known Issues and Limitations
+## Technical Disclaimers and Limitations
 
 * **Non-cacheable memory limitations**:  
   The `-non-cacheable` flag provides **cache-discouraging hints**, not true non-cacheable memory. This is a fundamental limitation of user-space applications on macOS ARM64:
@@ -390,4 +390,6 @@ Mac Mini M4 patterns benchmark results. Image created from JSON file using separ
   Unlike x86 (`CLFLUSH`), there is no user-space instruction on Apple Silicon to reliably flush data caches. The benchmark cannot force a “cold cache” state before each measurement; it relies on large buffer sizes and warm-up behavior to approximate steady-state memory behavior.
 * **Recommendation**:  
   For more realistic main memory measurements, prefer buffer sizes in the range of **512 MB–1 GB (or larger, if RAM allows)**. Smaller values are still useful to study cache behavior, but they should not be interpreted as pure main memory bandwidth/latency.
+* **Other Programs**:
+  As userspace cannot prioritize programs, close all other programs to avoid noise from operating system to the results.
 
