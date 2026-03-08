@@ -62,7 +62,7 @@ TEST(MemoryUtilsTest, SetupLatencyChainBufferSmallerThanStride) {
   using namespace Constants;
   
   // Allocate buffer smaller than stride
-  size_t buffer_size = LATENCY_STRIDE_BYTES - 1;  // 127 bytes < 128 bytes
+  size_t buffer_size = LATENCY_STRIDE_BYTES - 1;  // < stride
   MmapPtr buffer = allocate_buffer(buffer_size, "test_buffer");
   ASSERT_NE(buffer.get(), nullptr);
   
@@ -82,7 +82,7 @@ TEST(MemoryUtilsTest, SetupLatencyChainBufferEqualToStride) {
   using namespace Constants;
   
   // Allocate buffer equal to stride
-  size_t buffer_size = LATENCY_STRIDE_BYTES;  // 128 bytes == 128 bytes
+  size_t buffer_size = LATENCY_STRIDE_BYTES;  // == stride
   MmapPtr buffer = allocate_buffer(buffer_size, "test_buffer");
   ASSERT_NE(buffer.get(), nullptr);
   
@@ -90,7 +90,7 @@ TEST(MemoryUtilsTest, SetupLatencyChainBufferEqualToStride) {
   int result = setup_latency_chain(buffer.get(), buffer_size, LATENCY_STRIDE_BYTES);
   std::string error_output = testing::internal::GetCapturedStderr();
   
-  // Should fail (num_pointers = 128 / 128 = 1, need at least 2)
+  // Should fail (num_pointers = stride / stride = 1, need at least 2)
   EXPECT_EQ(result, EXIT_FAILURE);
   
   // Verify error message
@@ -103,7 +103,7 @@ TEST(MemoryUtilsTest, SetupLatencyChainBufferJustLargerThanStride) {
   
   // Allocate buffer just larger than stride
   // Need at least 2 pointers, so buffer_size >= stride * 2
-  size_t buffer_size = LATENCY_STRIDE_BYTES * 2;  // 256 bytes (minimum valid)
+  size_t buffer_size = LATENCY_STRIDE_BYTES * 2;  // minimum valid
   MmapPtr buffer = allocate_buffer(buffer_size, "test_buffer");
   ASSERT_NE(buffer.get(), nullptr);
   
@@ -111,7 +111,7 @@ TEST(MemoryUtilsTest, SetupLatencyChainBufferJustLargerThanStride) {
   int result = setup_latency_chain(buffer.get(), buffer_size, LATENCY_STRIDE_BYTES);
   std::string error_output = testing::internal::GetCapturedStderr();
   
-  // Should succeed (num_pointers = 256 / 128 = 2, minimum valid)
+  // Should succeed (num_pointers = 2, minimum valid)
   EXPECT_EQ(result, EXIT_SUCCESS);
   
   // No error should be logged
@@ -123,7 +123,7 @@ TEST(MemoryUtilsTest, SetupLatencyChainMinimumValid) {
   using namespace Constants;
   
   // Allocate buffer for exactly 2 pointers
-  size_t buffer_size = LATENCY_STRIDE_BYTES * 2;  // 256 bytes
+  size_t buffer_size = LATENCY_STRIDE_BYTES * 2;
   MmapPtr buffer = allocate_buffer(buffer_size, "test_buffer");
   ASSERT_NE(buffer.get(), nullptr);
   
@@ -143,7 +143,7 @@ TEST(MemoryUtilsTest, SetupLatencyChainThreePointers) {
   using namespace Constants;
   
   // Allocate buffer for 3 pointers
-  size_t buffer_size = LATENCY_STRIDE_BYTES * 3;  // 384 bytes
+  size_t buffer_size = LATENCY_STRIDE_BYTES * 3;
   MmapPtr buffer = allocate_buffer(buffer_size, "test_buffer");
   ASSERT_NE(buffer.get(), nullptr);
   
@@ -162,7 +162,7 @@ TEST(MemoryUtilsTest, SetupLatencyChainThreePointers) {
 TEST(MemoryUtilsTest, BufferSizeProgressionLessThanStride) {
   using namespace Constants;
   
-  size_t buffer_size = LATENCY_STRIDE_BYTES - 1;  // 127 bytes
+  size_t buffer_size = LATENCY_STRIDE_BYTES - 1;
   MmapPtr buffer = allocate_buffer(buffer_size, "test_buffer");
   ASSERT_NE(buffer.get(), nullptr);
   
@@ -179,7 +179,7 @@ TEST(MemoryUtilsTest, BufferSizeProgressionLessThanStride) {
 TEST(MemoryUtilsTest, BufferSizeProgressionEqualToStride) {
   using namespace Constants;
   
-  size_t buffer_size = LATENCY_STRIDE_BYTES;  // 128 bytes
+  size_t buffer_size = LATENCY_STRIDE_BYTES;
   MmapPtr buffer = allocate_buffer(buffer_size, "test_buffer");
   ASSERT_NE(buffer.get(), nullptr);
   
@@ -196,7 +196,7 @@ TEST(MemoryUtilsTest, BufferSizeProgressionEqualToStride) {
 TEST(MemoryUtilsTest, BufferSizeProgressionMinimumValid) {
   using namespace Constants;
   
-  size_t buffer_size = LATENCY_STRIDE_BYTES * 2;  // 256 bytes
+  size_t buffer_size = LATENCY_STRIDE_BYTES * 2;
   MmapPtr buffer = allocate_buffer(buffer_size, "test_buffer");
   ASSERT_NE(buffer.get(), nullptr);
   
@@ -213,7 +213,7 @@ TEST(MemoryUtilsTest, BufferSizeProgressionMinimumValid) {
 TEST(MemoryUtilsTest, BufferSizeProgressionThreePointers) {
   using namespace Constants;
   
-  size_t buffer_size = LATENCY_STRIDE_BYTES * 3;  // 384 bytes
+  size_t buffer_size = LATENCY_STRIDE_BYTES * 3;
   MmapPtr buffer = allocate_buffer(buffer_size, "test_buffer");
   ASSERT_NE(buffer.get(), nullptr);
   
@@ -230,7 +230,7 @@ TEST(MemoryUtilsTest, BufferSizeProgressionThreePointers) {
 TEST(MemoryUtilsTest, SetupLatencyChainCreatesValidChain) {
   using namespace Constants;
   
-  size_t buffer_size = LATENCY_STRIDE_BYTES * 4;  // 512 bytes (4 pointers)
+  size_t buffer_size = LATENCY_STRIDE_BYTES * 4;  // 4 pointers
   MmapPtr buffer = allocate_buffer(buffer_size, "test_buffer");
   ASSERT_NE(buffer.get(), nullptr);
   
@@ -254,4 +254,3 @@ TEST(MemoryUtilsTest, SetupLatencyChainCreatesValidChain) {
   EXPECT_GE(*ptr2, buffer_start);
   EXPECT_LT(*ptr2, buffer_end);
 }
-
