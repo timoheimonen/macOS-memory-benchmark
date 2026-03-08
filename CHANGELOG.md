@@ -18,7 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Clear zero-value rules for latency-only mode**: `-buffersize 0` and `-cache-size 0` are valid only with `-only-latency`; using both as zero at the same time is rejected as an invalid no-target configuration.
 - **Cleaner latency-only output and docs**: Help/docs now describe zero-disable behavior, and console output omits disabled latency sections while showing a clear cache-disabled status when applicable.
 - **More accurate total allocation reporting**: Displayed total allocation now reflects active benchmark mode and enabled buffers.
-- **Strict validation for TLB-locality option**: Non-zero `-latency-tlb-locality-kb` values must be exact multiples of the system page size; configuration and JSON output now include explicit TLB-locality mode/size fields.
+- **Strict validation and defaults for TLB-locality option**: `-latency-tlb-locality-kb` now defaults to `16` (KB); setting `0` explicitly disables locality mode. Non-zero values must be exact multiples of the system page size, and configuration/JSON output include explicit TLB-locality mode and size fields.
 
 ### Fixed
 - **Main latency disable path in config validation**: `-only-latency -buffersize 0` no longer gets reset to default buffer size.

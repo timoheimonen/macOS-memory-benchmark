@@ -26,6 +26,7 @@ TEST(ConfigTest, DefaultValues) {
   EXPECT_EQ(config.buffer_size_mb, Constants::DEFAULT_BUFFER_SIZE_MB);
   EXPECT_EQ(config.iterations, Constants::DEFAULT_ITERATIONS);
   EXPECT_EQ(config.loop_count, Constants::DEFAULT_LOOP_COUNT);
+  EXPECT_EQ(config.latency_tlb_locality_bytes, static_cast<size_t>(16) * Constants::BYTES_PER_KB);
   EXPECT_EQ(config.custom_cache_size_kb_ll, -1);
   EXPECT_FALSE(config.use_custom_cache_size);
 }
@@ -110,6 +111,16 @@ TEST(ConfigTest, ParseLatencyTlbLocalityValid) {
   int result = parse_arguments(argc, const_cast<char**>(argv), config);
   EXPECT_EQ(result, EXIT_SUCCESS);
   EXPECT_EQ(config.latency_tlb_locality_bytes, static_cast<size_t>(16) * Constants::BYTES_PER_KB);
+}
+
+TEST(ConfigTest, ParseLatencyTlbLocalityZeroDisables) {
+  BenchmarkConfig config;
+  const char* argv[] = {"program", "-latency-tlb-locality-kb", "0"};
+  int argc = 3;
+
+  int result = parse_arguments(argc, const_cast<char**>(argv), config);
+  EXPECT_EQ(result, EXIT_SUCCESS);
+  EXPECT_EQ(config.latency_tlb_locality_bytes, 0u);
 }
 
 TEST(ConfigTest, ParseLatencyTlbLocalityInvalidNegative) {

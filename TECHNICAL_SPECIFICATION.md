@@ -37,6 +37,7 @@ The tool supports the following command-line flags:
 - `-iterations <count>`: Number of bandwidth test iterations (default: 1000, incompatible with `-only-latency`)
 - `-count <count>`: Number of full benchmark loops (default: 1, enables percentile statistics when > 1)
 - `-latency-samples <count>`: Latency samples per test (default: 1000, incompatible with `-only-bandwidth`)
+- `-latency-tlb-locality-kb <size_kb>`: TLB-locality window for latency pointer-chain construction (default: 16 KB; set `0` to disable). Non-zero values must be exact multiples of system page size.
 - `-threads <count>`: Thread count for parallel tests (default: auto-detected CPU cores, auto-capped to maximum available)
 - `-cache-size <size_kb>`: Custom cache size in KB for testing (range: 16KB to 1GB, skips L1/L2 detection)
 
@@ -70,6 +71,7 @@ The core of the performance measurement resides in the [`src/asm/`](src/asm/) di
 - **Full-range loop correctness**: Loop termination uses counter-based zero/non-zero control (`subs` + `b.ne`) to remain correct for full `size_t` ranges.
 - **Measurement-window purity**: Pre-touch and barrier overhead (`ldr` preload, `dsb/isb`, `dmb`) was removed from the chase kernel so timed latency reflects dependent pointer loads only.
 - **Dependencies**: Built with true data dependencies, ensuring the measurement reflects actual latency rather than throughput.
+- **TLB-locality-aware chain setup**: Pointer chains can be built with locality windows in [`memory_utils.cpp`](src/core/memory/memory_utils.cpp), randomizing within each window and randomizing window order. This reduces TLB-refill contamination in cache-latency analysis while preserving dependent-load semantics in [`memory_latency.s`](src/asm/memory_latency.s).
 
 ### 3.3 Register Usage and SIMD
 
@@ -323,6 +325,8 @@ The following factors may influence measurement accuracy and should be considere
 - **Core Heterogeneity**: Apple Silicon features performance (P) and efficiency (E) cores with different cache sizes and clock speeds. The tool does not set thread affinity, so the macOS scheduler determines core allocation. Multi-threaded tests may distribute work across heterogeneous cores, potentially showing lower aggregate bandwidth than homogeneous core setups would achieve. Note that even if thread affinity were set via `thread_policy_set()`, macOS does not guarantee strict core binding and may migrate threads based on thermal or power management policies.
 
 - **Operating System Interference**: macOS background services, system daemons, and the scheduler itself introduce non-deterministic overhead. The QoS settings (`QOS_CLASS_USER_INTERACTIVE`) request priority but cannot eliminate all OS interference. Running multiple benchmark loops (`-count`) and examining percentile statistics (P95, P99) helps identify outliers caused by OS activity.
+
+- **TLB Contamination in Random Latency Walks**: Fully random pointer-chase over large buffers measures a mixture of cache/DRAM latency and address-translation cost (TLB miss/refill and page-walk effects). Use `-latency-tlb-locality-kb` (default 16 KB) to amortize TLB misses within local windows when the goal is cleaner cache-hierarchy transition analysis; use `0` for globally random chains.
 
 - **Thermal Throttling and DVFS**: Extended benchmark runs may trigger thermal throttling, reducing CPU clock speeds and memory controller performance. Dynamic Voltage and Frequency Scaling (DVFS) adjusts power states based on load and temperature. Results from later loops may show degraded performance if thermal limits are reached. Consider monitoring system temperature and allowing cooldown periods between intensive test runs.
 

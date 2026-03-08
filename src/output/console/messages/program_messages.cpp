@@ -76,7 +76,7 @@ std::string usage_options(const std::string& prog_name) {
       << "  -count <count>        Number of full loops (read/write/copy/latency) (default: " << Constants::DEFAULT_LOOP_COUNT << ").\n"
       << "                        When count > 1, statistics include percentiles (P50/P90/P95/P99) and stddev.\n"
       << "  -latency-samples <count> Number of latency samples to collect per test (default: " << Constants::DEFAULT_LATENCY_SAMPLE_COUNT << ")\n"
-      << "  -latency-tlb-locality-kb <size_kb> TLB-locality window for latency pointer chains (default: 0 = disabled).\n"
+      << "  -latency-tlb-locality-kb <size_kb> TLB-locality window for latency pointer chains (default: 16 KB; set 0 to disable).\n"
       << "                        Must be a multiple of system page size (typically 4 KB or 16 KB).\n"
       << "  -threads <count>      Number of threads to use for benchmarks (default: detected\n"
       << "                        CPU core count). Applies to all benchmarks including cache tests.\n"

@@ -334,6 +334,33 @@ Number of samples to collect per latency test.
 ./memory_benchmark -latency-samples 5000
 ```
 
+#### `-latency-tlb-locality-kb <size_kb>`
+Set the TLB-locality window used when building latency pointer-chase chains.
+
+**Default**: 16 KB
+
+**Behavior:**
+- **`16` (default)**: Randomizes accesses inside 16 KB local windows, then randomizes window order.
+- **`0`**: Disables locality mode and uses globally random pointer-chain order.
+- **Non-zero values** must be exact multiples of the system page size (typically 4 KB or 16 KB).
+
+**When to use:**
+- Keep default (`16`) when you want cleaner cache-hierarchy latency transitions with less TLB refill noise.
+- Use `0` when you explicitly want fully global randomization (includes stronger TLB effects).
+- Increase locality (e.g., 64/256 KB) to further reduce TLB-miss contribution per locality block.
+
+**Examples:**
+```bash
+# Default behavior (16 KB locality)
+./memory_benchmark -only-latency
+
+# Disable locality mode (global random chain)
+./memory_benchmark -only-latency -latency-tlb-locality-kb 0
+
+# Larger locality window (must be page-size multiple)
+./memory_benchmark -only-latency -latency-tlb-locality-kb 64
+```
+
 #### `-non-cacheable`
 Apply cache-discouraging hints to memory buffers.
 
@@ -828,7 +855,10 @@ When using `-output <file>`, results are saved in JSON format for programmatic a
   "l1_cache_size_bytes": 131072,
   "l2_cache_size_bytes": 16777216,
   "use_non_cacheable": true,
-  "latency_sample_count": 1000
+  "latency_sample_count": 1000,
+  "use_latency_tlb_locality": true,
+  "latency_tlb_locality_kb": 16,
+  "latency_tlb_locality_bytes": 16384
 }
 ```
 
@@ -985,6 +1015,11 @@ done
 **Latency-focused with many samples:**
 ```bash
 ./memory_benchmark -only-latency -latency-samples 10000 -count 10
+```
+
+**Latency-focused with global random chain (TLB effects included):**
+```bash
+./memory_benchmark -only-latency -latency-samples 10000 -latency-tlb-locality-kb 0 -count 10
 ```
 
 **Custom cache with non-cacheable hints:**
