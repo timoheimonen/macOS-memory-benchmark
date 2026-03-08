@@ -69,6 +69,9 @@ namespace JsonKeys {
   constexpr const char* ITERATIONS = "iterations";
   constexpr const char* LOOP_COUNT = "loop_count";
   constexpr const char* LATENCY_SAMPLE_COUNT = "latency_sample_count";
+  constexpr const char* USE_LATENCY_TLB_LOCALITY = "use_latency_tlb_locality";
+  constexpr const char* LATENCY_TLB_LOCALITY_BYTES = "latency_tlb_locality_bytes";
+  constexpr const char* LATENCY_TLB_LOCALITY_KB = "latency_tlb_locality_kb";
   constexpr const char* CPU_NAME = "cpu_name";
   constexpr const char* MACOS_VERSION = "macos_version";
   constexpr const char* PERFORMANCE_CORES = "performance_cores";

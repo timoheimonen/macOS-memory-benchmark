@@ -61,6 +61,8 @@ std::string error_iterations_invalid(long long value, long long min_val, long lo
 std::string error_buffersize_invalid(long long value, unsigned long max_val);
 std::string error_count_invalid(long long value, long long min_val, long long max_val);
 std::string error_latency_samples_invalid(long long value, long long min_val, long long max_val);
+std::string error_latency_tlb_locality_invalid(long long value, long long max_val);
+std::string error_latency_tlb_locality_page_multiple(size_t value_kb, size_t page_size_kb);
 std::string error_threads_invalid(long long value, long long min_val, long long max_val);
 std::string error_mmap_failed(const std::string& buffer_name);
 std::string error_madvise_failed(const std::string& buffer_name);
@@ -161,6 +163,7 @@ std::string config_total_allocation(double total_mib);
 std::string config_iterations(int iterations);
 std::string config_loop_count(int loop_count);
 std::string config_non_cacheable(bool use_non_cacheable);
+std::string config_latency_tlb_locality(size_t locality_bytes);
 std::string config_processor_name(const std::string& cpu_name);
 std::string config_processor_name_error();
 std::string config_performance_cores(int perf_cores);

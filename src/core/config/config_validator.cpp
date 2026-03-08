@@ -64,6 +64,8 @@
  * Callers should check return value and handle EXIT_FAILURE appropriately.
  */
 int validate_config(BenchmarkConfig& config) {
+  const size_t page_size = static_cast<size_t>(getpagesize());
+
   // Error: Validate mutually exclusive flags
   if (config.only_bandwidth && config.only_latency) {
     std::cerr << Messages::error_prefix() << Messages::error_incompatible_flags() << std::endl;
@@ -114,6 +116,15 @@ int validate_config(BenchmarkConfig& config) {
     std::cerr << Messages::error_prefix() << Messages::error_only_latency_requires_latency_target() << std::endl;
     return EXIT_FAILURE;  // Return code: validation error
   }
+
+  if (config.latency_tlb_locality_bytes > 0 && (config.latency_tlb_locality_bytes % page_size) != 0) {
+    const size_t locality_kb = config.latency_tlb_locality_bytes / Constants::BYTES_PER_KB;
+    const size_t page_kb = page_size / Constants::BYTES_PER_KB;
+    std::cerr << Messages::error_prefix()
+              << Messages::error_latency_tlb_locality_page_multiple(locality_kb, page_kb)
+              << std::endl;
+    return EXIT_FAILURE;  // Return code: validation error
+  }
   
   // Calculate memory limit
   unsigned long available_mem_mb = get_available_memory_mb();
@@ -159,8 +170,6 @@ int validate_config(BenchmarkConfig& config) {
   config.buffer_size = static_cast<size_t>(config.buffer_size_mb) * Constants::BYTES_PER_MB;
 
   // Sanity checks
-  size_t page_size = getpagesize();
-  
   // Error: Sanity check - buffer size calculation should be consistent
   if (config.buffer_size_mb > 0 && (config.buffer_size == 0 || config.buffer_size / Constants::BYTES_PER_MB != config.buffer_size_mb)) {
     std::cerr << Messages::error_prefix() << Messages::error_buffer_size_calculation(config.buffer_size_mb) << std::endl;

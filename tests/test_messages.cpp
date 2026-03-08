@@ -247,6 +247,16 @@ TEST_F(MessagesErrorTest, ErrorLatencySamplesInvalid) {
   EXPECT_EQ(msg2, "latency-samples invalid (must be between 1 and 5000, got -1)");
 }
 
+TEST_F(MessagesErrorTest, ErrorLatencyTlbLocalityInvalid) {
+  std::string msg = Messages::error_latency_tlb_locality_invalid(-1, 1024);
+  EXPECT_EQ(msg, "latency-tlb-locality-kb invalid (must be >= 0 and <= 1024, got -1)");
+}
+
+TEST_F(MessagesErrorTest, ErrorLatencyTlbLocalityPageMultiple) {
+  std::string msg = Messages::error_latency_tlb_locality_page_multiple(10, 16);
+  EXPECT_EQ(msg, "latency-tlb-locality-kb must be a multiple of system page size (16 KB), got 10 KB");
+}
+
 TEST_F(MessagesErrorTest, ErrorMadviseFailed) {
   std::string msg = Messages::error_madvise_failed("lat_buffer");
   EXPECT_EQ(msg, "madvise failed for lat_buffer");
@@ -337,6 +347,7 @@ TEST_F(MessagesFormattingTest, UsageOptions) {
   EXPECT_NE(msg.find("-buffersize"), std::string::npos);
   EXPECT_NE(msg.find("-count"), std::string::npos);
   EXPECT_NE(msg.find("-latency-samples"), std::string::npos);
+  EXPECT_NE(msg.find("-latency-tlb-locality-kb"), std::string::npos);
   EXPECT_NE(msg.find("-cache-size"), std::string::npos);
   EXPECT_NE(msg.find("-h"), std::string::npos);
   // Check that default values are included
@@ -414,6 +425,16 @@ TEST_F(MessagesFormattingTest, ConfigNonCacheable) {
   msg = Messages::config_non_cacheable(false);
   EXPECT_NE(msg.find("Non-Cacheable Memory Hints"), std::string::npos);
   EXPECT_NE(msg.find("Disabled"), std::string::npos);
+}
+
+TEST_F(MessagesFormattingTest, ConfigLatencyTlbLocality) {
+  std::string msg = Messages::config_latency_tlb_locality(0);
+  EXPECT_NE(msg.find("Latency TLB Locality"), std::string::npos);
+  EXPECT_NE(msg.find("Disabled"), std::string::npos);
+
+  msg = Messages::config_latency_tlb_locality(16 * 1024);
+  EXPECT_NE(msg.find("16.00"), std::string::npos);
+  EXPECT_NE(msg.find("KB"), std::string::npos);
 }
 
 TEST_F(MessagesFormattingTest, ConfigProcessorName) {

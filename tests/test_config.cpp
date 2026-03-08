@@ -18,6 +18,7 @@
 #include "core/config/constants.h"
 #include <cstdlib>
 #include <limits>
+#include <unistd.h>  // getpagesize
 
 // Test default configuration values
 TEST(ConfigTest, DefaultValues) {
@@ -101,6 +102,25 @@ TEST(ConfigTest, ParseBufferSizeZero) {
   EXPECT_EQ(config.buffer_size_mb, 0u);
 }
 
+TEST(ConfigTest, ParseLatencyTlbLocalityValid) {
+  BenchmarkConfig config;
+  const char* argv[] = {"program", "-latency-tlb-locality-kb", "16"};
+  int argc = 3;
+
+  int result = parse_arguments(argc, const_cast<char**>(argv), config);
+  EXPECT_EQ(result, EXIT_SUCCESS);
+  EXPECT_EQ(config.latency_tlb_locality_bytes, static_cast<size_t>(16) * Constants::BYTES_PER_KB);
+}
+
+TEST(ConfigTest, ParseLatencyTlbLocalityInvalidNegative) {
+  BenchmarkConfig config;
+  const char* argv[] = {"program", "-latency-tlb-locality-kb", "-1"};
+  int argc = 3;
+
+  int result = parse_arguments(argc, const_cast<char**>(argv), config);
+  EXPECT_EQ(result, EXIT_FAILURE);
+}
+
 // Test parsing missing value for option
 TEST(ConfigTest, ParseMissingValue) {
   BenchmarkConfig config;
@@ -157,7 +177,9 @@ TEST(ConfigTest, CalculateCustomBufferSize) {
   
   calculate_buffer_sizes(config);
   
-  EXPECT_EQ(config.custom_buffer_size, config.custom_cache_size_bytes);
+  EXPECT_GT(config.custom_buffer_size, 0u);
+  EXPECT_LE(config.custom_buffer_size, config.custom_cache_size_bytes);
+  EXPECT_EQ(config.custom_buffer_size % Constants::LATENCY_STRIDE_BYTES, 0u);
 }
 
 // Test access count calculation
@@ -291,4 +313,22 @@ TEST(ConfigTest, ValidateConfigRejectsOnlyLatencyWithNoTargets) {
 
   int result = validate_config(config);
   EXPECT_EQ(result, EXIT_FAILURE);
+}
+
+TEST(ConfigTest, ValidateConfigRejectsLatencyTlbLocalityNotPageMultiple) {
+  BenchmarkConfig config;
+  const size_t page_size = static_cast<size_t>(getpagesize());
+  config.latency_tlb_locality_bytes = page_size + Constants::BYTES_PER_KB;
+
+  int result = validate_config(config);
+  EXPECT_EQ(result, EXIT_FAILURE);
+}
+
+TEST(ConfigTest, ValidateConfigAllowsLatencyTlbLocalityPageMultiple) {
+  BenchmarkConfig config;
+  const size_t page_size = static_cast<size_t>(getpagesize());
+  config.latency_tlb_locality_bytes = page_size * 2;
+
+  int result = validate_config(config);
+  EXPECT_EQ(result, EXIT_SUCCESS);
 }

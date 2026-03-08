@@ -77,6 +77,7 @@
 int parse_arguments(int argc, char* argv[], BenchmarkConfig& config) {
   long long requested_buffer_size_mb_ll = -1;  // User requested size (-1 = none)
   long long requested_threads_ll = -1;  // User requested threads (-1 = none)
+  long long requested_latency_tlb_locality_kb_ll = -1;  // User requested TLB-locality window in KB (-1 = none)
   
   // First pass: parse -cache-size early (needed for cache size detection)
   for (int i = 1; i < argc; ++i) {
@@ -187,6 +188,19 @@ int parse_arguments(int argc, char* argv[], BenchmarkConfig& config) {
         } else
           // Error: Missing required value
           throw std::invalid_argument(Messages::error_missing_value("-latency-samples"));
+      } else if (arg == "-latency-tlb-locality-kb") {
+        if (++i < argc) {
+          long long val_ll = std::stoll(argv[i]);
+          const long long max_locality_kb =
+              static_cast<long long>(std::numeric_limits<size_t>::max() / Constants::BYTES_PER_KB);
+          if (val_ll < 0 || val_ll > max_locality_kb) {
+            throw std::out_of_range(Messages::error_latency_tlb_locality_invalid(val_ll, max_locality_kb));
+          }
+          requested_latency_tlb_locality_kb_ll = val_ll;
+          config.user_specified_latency_tlb_locality = true;
+        } else {
+          throw std::invalid_argument(Messages::error_missing_value("-latency-tlb-locality-kb"));
+        }
       } else if (arg == "-cache-size") {
         // Already parsed in first pass, skip it and its value in second pass
         if (config.custom_cache_size_kb_ll != -1) {
@@ -274,6 +288,11 @@ int parse_arguments(int argc, char* argv[], BenchmarkConfig& config) {
       config.num_threads = requested_threads;
     }
     config.user_specified_threads = true;
+  }
+
+  if (requested_latency_tlb_locality_kb_ll != -1) {
+    config.latency_tlb_locality_bytes =
+        static_cast<size_t>(requested_latency_tlb_locality_kb_ll) * Constants::BYTES_PER_KB;
   }
 
   return EXIT_SUCCESS;  // All arguments parsed successfully

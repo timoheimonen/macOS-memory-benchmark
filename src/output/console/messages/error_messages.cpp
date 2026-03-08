@@ -96,6 +96,20 @@ std::string error_latency_samples_invalid(long long value, long long min_val, lo
   return oss.str();
 }
 
+std::string error_latency_tlb_locality_invalid(long long value, long long max_val) {
+  std::ostringstream oss;
+  oss << "latency-tlb-locality-kb invalid (must be >= 0 and <= " << max_val
+      << ", got " << value << ")";
+  return oss.str();
+}
+
+std::string error_latency_tlb_locality_page_multiple(size_t value_kb, size_t page_size_kb) {
+  std::ostringstream oss;
+  oss << "latency-tlb-locality-kb must be a multiple of system page size ("
+      << page_size_kb << " KB), got " << value_kb << " KB";
+  return oss.str();
+}
+
 std::string error_threads_invalid(long long value, long long min_val, long long max_val) {
   std::ostringstream oss;
   oss << "threads invalid (must be between " << min_val << " and " << max_val

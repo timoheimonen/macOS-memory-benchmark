@@ -107,7 +107,8 @@ int initialize_all_buffers(BenchmarkBuffers& buffers, const BenchmarkConfig& con
       return EXIT_FAILURE;
     }
     // Setup main memory latency chain
-    if (setup_latency_chain(buffers.lat_buffer(), config.buffer_size, Constants::LATENCY_STRIDE_BYTES) != EXIT_SUCCESS) {
+    if (setup_latency_chain(buffers.lat_buffer(), config.buffer_size, Constants::LATENCY_STRIDE_BYTES,
+                            config.latency_tlb_locality_bytes) != EXIT_SUCCESS) {
       return EXIT_FAILURE;
     }
   }
@@ -120,7 +121,8 @@ int initialize_all_buffers(BenchmarkBuffers& buffers, const BenchmarkConfig& con
           std::cerr << Messages::error_prefix() << Messages::error_custom_buffer_not_allocated() << std::endl;
           return EXIT_FAILURE;
         }
-        if (setup_latency_chain(buffers.custom_buffer(), config.custom_buffer_size, Constants::LATENCY_STRIDE_BYTES) != EXIT_SUCCESS) {
+        if (setup_latency_chain(buffers.custom_buffer(), config.custom_buffer_size, Constants::LATENCY_STRIDE_BYTES,
+                                config.latency_tlb_locality_bytes) != EXIT_SUCCESS) {
           return EXIT_FAILURE;
         }
       }
@@ -130,7 +132,8 @@ int initialize_all_buffers(BenchmarkBuffers& buffers, const BenchmarkConfig& con
           std::cerr << Messages::error_prefix() << Messages::error_l1_buffer_not_allocated() << std::endl;
           return EXIT_FAILURE;
         }
-        if (setup_latency_chain(buffers.l1_buffer(), config.l1_buffer_size, Constants::LATENCY_STRIDE_BYTES) != EXIT_SUCCESS) {
+        if (setup_latency_chain(buffers.l1_buffer(), config.l1_buffer_size, Constants::LATENCY_STRIDE_BYTES,
+                                config.latency_tlb_locality_bytes) != EXIT_SUCCESS) {
           return EXIT_FAILURE;
         }
       }
@@ -139,7 +142,8 @@ int initialize_all_buffers(BenchmarkBuffers& buffers, const BenchmarkConfig& con
           std::cerr << Messages::error_prefix() << Messages::error_l2_buffer_not_allocated() << std::endl;
           return EXIT_FAILURE;
         }
-        if (setup_latency_chain(buffers.l2_buffer(), config.l2_buffer_size, Constants::LATENCY_STRIDE_BYTES) != EXIT_SUCCESS) {
+        if (setup_latency_chain(buffers.l2_buffer(), config.l2_buffer_size, Constants::LATENCY_STRIDE_BYTES,
+                                config.latency_tlb_locality_bytes) != EXIT_SUCCESS) {
           return EXIT_FAILURE;
         }
       }

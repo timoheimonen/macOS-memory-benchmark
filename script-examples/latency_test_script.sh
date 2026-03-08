@@ -15,8 +15,9 @@ mkdir -p "${TMP_DIR}"
 BENCHMARK_CMD="../memory_benchmark"
 BUFFER_SIZE_MB=0
 LATENCY_SAMPLES=5000
-LOOP_COUNT=3
+LOOP_COUNT=5
 ONLY_LATENCY=true
+TLB_LOCALITY_KB=16
 
 # Leave empty by default for cleaner cache-hierarchy latency runs.
 # Set to "-non-cacheable" if you specifically want MADV_RANDOM behavior.
@@ -53,6 +54,7 @@ for cache_size in "${cache_sizes[@]}"; do
 
     cmd=(
         "${BENCHMARK_CMD}"
+        -latency-tlb-locality-kb "${TLB_LOCALITY_KB}"
         -cache-size "${cache_size}"
         -buffersize "${BUFFER_SIZE_MB}"
         -output "${output_file}"
