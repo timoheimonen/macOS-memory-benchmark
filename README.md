@@ -369,12 +369,6 @@ Pattern Efficiency Analysis:
 Done. Total execution time: 70.81675 s
 ```
 
-![Mac Mini M4 10 benchmark loops](pictures/MacMiniM4_10_loops_results.png)  
-Mac Mini M4 10 benchmark loops results. Image created from JSON file using separate program.
-
-![Mac Mini M4 patterns benchmark results](pictures/MacMiniM4_patterns_results.png)  
-Mac Mini M4 patterns benchmark results. Image created from JSON file using separate program.
-
 ## Documentation
 
 - **[User Manual](MANUAL.md)** - Usage guide with command-line options, best practices, workflows, and detailed examples
