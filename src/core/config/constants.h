@@ -56,8 +56,8 @@
  */
 namespace Constants {
   // Buffer size factors
-  constexpr double L1_BUFFER_SIZE_FACTOR = 0.75;  // Use 75% of L1 cache size
-  constexpr double L2_BUFFER_SIZE_FACTOR = 0.10;  // Use 10% of L2 cache size
+  constexpr double L1_BUFFER_SIZE_FACTOR = 1.0;  // Use 100% of L1 cache size
+  constexpr double L2_BUFFER_SIZE_FACTOR = 1.0;  // Use 100% of L2 cache size
   constexpr double CUSTOM_BUFFER_SIZE_FACTOR = 1.0;  // Use 100% of custom cache size
   
   // Memory limit constants

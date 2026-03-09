@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.53.1] - 2026-03-09
+
+### Added
+  - Two benchmark json files from Mac Mini M4 24GB machine.
+
+### Changed
+  - Benchmarks now default to 100% use of detected L1/L2 cache sizes.
+
 ## [0.53.0] - 2026-03-08
 
 ### Added
