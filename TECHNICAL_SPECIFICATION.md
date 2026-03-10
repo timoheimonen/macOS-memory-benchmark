@@ -1,335 +1,377 @@
-# Technical Specification: macOS-memory-benchmark Tool (macOS Apple Silicon)
+# macOS Memory Benchmark - Technical Specification
 
-## 1. Introduction
+## 1. Scope and Status
 
-This document describes the technical structure and implementation of a memory performance measurement tool optimized for the Apple Silicon (ARM64) architecture. The software is designed to provide precise data on memory bus bandwidth, access latencies, and cache hierarchy behavior by utilizing low-level optimizations.
+This document specifies the current implementation in this repository (version series `0.53.x`) for `memory_benchmark` on macOS Apple Silicon.
 
-## 2. System Architecture
+It is intentionally implementation-driven and reflects real behavior in code paths under `main.cpp`, `src/core`, `src/benchmark`, `src/pattern_benchmark`, `src/output`, and `src/asm`.
 
-The software is implemented modularly in C++, with performance-critical sections written in ARM64 assembly. The architecture follows a strict separation of concerns and utilizes the RAII (Resource Acquisition Is Initialization) design pattern for resource management.
+Primary goals:
 
-### 2.1 Memory Management ([`src/core/memory/`](src/core/memory/))
+- Define runtime architecture and execution flow.
+- Define command/config semantics and validation rules.
+- Define memory allocation, initialization, and benchmark execution contracts.
+- Define output contracts (console and JSON).
+- Capture current constraints, known drift, and measurement caveats.
 
-The system employs advanced memory management techniques to ensure the reproducibility of measurement results:
+Out of scope:
 
-- **Smart Memory Allocation**: Utilizes `mmap` calls wrapped in `MmapPtr` for automatic resource deallocation. See [`memory_manager.h`](src/core/memory/memory_manager.h) and [`memory_manager.cpp`](src/core/memory/memory_manager.cpp).
-- **MmapDeleter**: A specialized custom deleter that prevents memory leaks even in the event of exceptions.
-- **Cache Control**: Implements `madvise()` hints to simulate non-cacheable memory (acknowledging user-space limitations).
-- **Buffer Manager**: Provides centralized management for all test buffers (main memory, L1/L2 caches). The interface is defined in [`buffer_manager.h`](src/core/memory/buffer_manager.h), with implementation split (v0.52.4) into [`buffer_allocator.cpp`](src/core/memory/buffer_allocator.cpp) for memory allocation with validation and [`buffer_initializer.cpp`](src/core/memory/buffer_initializer.cpp) for buffer initialization.
+- Generic memory-performance theory (see `LATENCY_WHITEPAPER.md`).
+- Historical behavior from older releases.
 
-### 2.2 Configuration Management ([`src/core/config/`](src/core/config/))
+## 2. Platform and Build Constraints
 
-The configuration system manages all benchmark parameters through a two-pass argument parsing strategy and comprehensive validation:
+- Target OS: macOS.
+- Target CPU architecture: ARM64 Apple Silicon.
+- Language: C++17 with ARM64 assembly kernels.
+- Build: `Makefile` (`clang++`, `as`).
+- Test framework: GoogleTest (`test_runner`).
 
-- **Configuration Structure**: The central [`BenchmarkConfig`](src/core/config/config.h) structure contains all benchmark settings including buffer sizes, iteration counts, thread configuration, and test mode flags.
-- **Two-Pass Argument Parsing**: [`argument_parser.cpp`](src/core/config/argument_parser.cpp) implements a two-stage parsing process. The first pass extracts `-cache-size` early to enable proper cache detection before the second pass parses all remaining arguments.
-- **Configuration Validation**: [`config_validator.cpp`](src/core/config/config_validator.cpp) validates flag compatibility (e.g., mutual exclusion of `-only-bandwidth` and `-only-latency`), enforces memory limits (80% of available RAM), and validates buffer size constraints.
-- **Buffer Calculations**: [`buffer_calculator.cpp`](src/core/config/buffer_calculator.cpp) computes cache buffer sizes (L1 at 75% of cache, L2 at 10%) with stride alignment and page boundary enforcement, and scales latency access counts based on buffer size.
-- **System Constants**: [`constants.h`](src/core/config/constants.h) defines all default values including 512MB default buffer size, 1000 iterations, and platform-specific constraints like 16KB minimum cache size and 1GB maximum.
-- **Version Management**: [`version.h`](src/core/config/version.h) maintains the software version using semantic versioning.
+The tool is designed and tuned for Apple Silicon execution characteristics (cache hierarchy, page behavior, QoS, and assembly kernels).
 
-#### Command-Line Parameters
+## 3. High-Level Runtime Architecture
 
-The tool supports the following command-line flags:
+Main orchestration (`main.cpp`) follows this pipeline:
 
-**Core Configuration:**
-- `-buffersize <size_mb>`: Buffer size in MB (default: 512, automatically capped to 80% of available memory / 3)
-- `-iterations <count>`: Number of bandwidth test iterations (default: 1000, incompatible with `-only-latency`)
-- `-count <count>`: Number of full benchmark loops (default: 1, enables percentile statistics when > 1)
-- `-latency-samples <count>`: Latency samples per test (default: 1000, incompatible with `-only-bandwidth`)
-- `-latency-tlb-locality-kb <size_kb>`: TLB-locality window for latency pointer-chain construction (default: 16 KB; set `0` to disable). Non-zero values must be exact multiples of system page size.
-- `-threads <count>`: Thread count for parallel tests (default: auto-detected CPU cores, auto-capped to maximum available)
-- `-cache-size <size_kb>`: Custom cache size in KB for testing (range: 16KB to 1GB, skips L1/L2 detection)
+1. Create high-resolution total-execution timer.
+2. Parse CLI arguments into `BenchmarkConfig` (`parse_arguments`).
+3. Validate configuration (`validate_config`).
+4. Calculate derived sizes and counts:
+   - `calculate_buffer_sizes`
+   - `calculate_access_counts`
+   - `calculate_total_allocation_bytes`
+5. Print resolved configuration and cache info.
+6. Raise main thread QoS (`QOS_CLASS_USER_INTERACTIVE`) best-effort.
+7. Allocate all required buffers (`allocate_all_buffers`).
+8. Initialize all buffers (`initialize_all_buffers`).
+9. Execute one mode:
+   - Standard benchmark mode (`run_all_benchmarks`), or
+   - Pattern benchmark mode (`run_all_pattern_benchmarks`).
+10. Print loop results and aggregate statistics.
+11. Optionally serialize JSON output.
+12. Print total elapsed runtime.
 
-**Test Mode Selection:**
-- `-patterns`: Run pattern benchmarks only (forward, reverse, strided, random access)
-- `-only-bandwidth`: Run only bandwidth tests (main memory and cache), skip latency
-- `-only-latency`: Run only latency tests (main memory and cache), skip bandwidth
-- `-non-cacheable`: Apply cache-discouraging memory hints via `madvise()` (best-effort)
+Memory cleanup is RAII-based through `MmapPtr` custom deleters (`munmap` on scope exit).
 
-**Output Control:**
-- `-output <file>`: Save results to JSON file
-- `-h, --help`: Display help message and exit
+## 4. Configuration Model
 
-The configuration flow integrates with system detection ([`system_info.cpp`](src/core/system/system_info.cpp)) to automatically determine CPU model, core counts, cache sizes, and available memory, providing intelligent defaults while allowing user override of all parameters.
+Configuration state is represented by `BenchmarkConfig` (`src/core/config/config.h`).
 
-## 3. Low-Level Implementation (ARM64 Assembly)
+### 4.1 User-facing control fields
 
-The core of the performance measurement resides in the [`src/asm/`](src/asm/) directory, specifically optimized for the Apple Silicon microarchitecture:
+- Main options: buffer size MB, iterations, loop count, output path, threads.
+- Mode flags: `run_patterns`, `only_bandwidth`, `only_latency`.
+- Cache behavior: auto L1/L2 or user-provided `-cache-size`.
+- Latency sampling: `latency_sample_count`.
+- TLB-locality control for latency chain construction:
+  - `latency_tlb_locality_bytes` (default 16 KB)
+  - `0` means global random chain.
+- Best-effort cache-discouraging mode: `use_non_cacheable`.
 
-### 3.1 Sequential Operations
+### 4.2 Derived fields
 
-- **Read**: 512-byte block reads with XOR checksums to prevent dead code elimination by the compiler. See [`memory_read.s`](src/asm/memory_read.s).
-- **Write**: Utilizes non-temporal stores (`stnp`) to minimize cache pollution. See [`memory_write.s`](src/asm/memory_write.s).
-- **Copy**: Optimized using pair loads and stores to achieve maximum throughput. See [`memory_copy.s`](src/asm/memory_copy.s).
-- **`size_t`-safe control flow**: Sequential kernels use unsigned and zero/non-zero loop termination semantics for full-range correctness (`b.hs`/`b.lo`/`b.ls`, `cbz`, `b.ne`) instead of signed comparisons.
+- Resolved byte sizes for main and cache buffers.
+- Access counts for latency paths.
+- System metadata (CPU name, macOS version, core counts).
+- Max memory limits and bookkeeping flags.
 
-### 3.2 Latency Measurements
+## 5. CLI Parsing and Validation
 
-- **Pointer-chasing**: Implemented with 8-way loop unrolling. See [`memory_latency.s`](src/asm/memory_latency.s).
-- **Zero-access safety**: `memory_latency_chase_asm` returns immediately when `count == 0`, avoiding unnecessary dereference in no-access runs.
-- **Full-range loop correctness**: Loop termination uses counter-based zero/non-zero control (`subs` + `b.ne`) to remain correct for full `size_t` ranges.
-- **Measurement-window purity**: Pre-touch and barrier overhead (`ldr` preload, `dsb/isb`, `dmb`) was removed from the chase kernel so timed latency reflects dependent pointer loads only.
-- **Dependencies**: Built with true data dependencies, ensuring the measurement reflects actual latency rather than throughput.
-- **TLB-locality-aware chain setup**: Pointer chains can be built with locality windows in [`memory_utils.cpp`](src/core/memory/memory_utils.cpp), randomizing within each window and randomizing window order. This reduces TLB-refill contamination in cache-latency analysis while preserving dependent-load semantics in [`memory_latency.s`](src/asm/memory_latency.s).
+### 5.1 Parsing behavior (`argument_parser.cpp`)
 
-### 3.3 Register Usage and SIMD
+- Two-pass parse:
+  - First pass extracts `-cache-size` early.
+  - Second pass parses remaining options.
+- Parser may throw internally (`std::stoll`/validation) but converts to return-code failures at function boundary.
+- Help (`-h`, `--help`) prints usage and exits successfully.
 
-- Utilizes NEON SIMD registers (`q0-q7`, `q16-q31`) for parallel data movement.
-- Complies with the AAPCS64 ABI standard by avoiding the use of callee-saved registers (`q8-q15`).
-- 4-way XOR accumulation is used to reduce the dependency depth between instructions.
+### 5.2 Validation behavior (`config_validator.cpp`)
 
-### 3.4 Warmup Strategies ([`src/warmup/`](src/warmup/))
+Validation rejects incompatible flag combinations and invalid value states:
 
-Accurate memory benchmarking requires eliminating cold-start effects through systematic warmup. The warmup module implements four distinct strategies optimized for different test scenarios:
+- `-only-bandwidth` and `-only-latency` are mutually exclusive.
+- `-patterns` cannot be combined with `-only-bandwidth` or `-only-latency`.
+- `-only-bandwidth` cannot be combined with `-cache-size` and cannot use latency-sample overrides.
+- `-only-latency` cannot be combined with `-iterations` override.
 
-**Purpose and Critical Importance:**
-- **Page Fault Elimination**: Touches all memory pages to map virtual-to-physical addresses before timing, preventing kernel traps (100-1000× overhead) during measurement
-- **TLB Population**: Pre-loads Translation Lookaside Buffer entries to eliminate address translation overhead (10-50 cycle penalty per miss)
-- **Cache Priming**: Loads data into cache hierarchy to measure steady-state performance rather than cold-start behavior (10-100× difference)
-- **Prefetcher Training**: Establishes access patterns to ensure hardware prefetchers operate at full efficiency during timed runs
+Zero-disabling semantics (supported only in `-only-latency`):
 
-**Warmup Strategies:**
+- `-buffersize 0` disables main-memory latency path.
+- `-cache-size 0` disables cache-latency path.
+- Both cannot be zero simultaneously in `-only-latency`.
 
-1. **Basic Warmup** ([`basic_warmup.cpp`](src/warmup/basic_warmup.cpp)): Multi-threaded sequential read/write/copy warmup for main memory bandwidth tests. Uses adaptive sizing (10% of buffer or 64MB maximum) to prevent excessive overhead on large buffers while ensuring meaningful coverage on small buffers.
+TLB-locality constraints:
 
-2. **Cache Warmup** ([`cache_warmup.cpp`](src/warmup/cache_warmup.cpp)): Multi-threaded full-buffer warmup for cache-specific tests (L1/L2/custom). Warms entire buffer since cache-sized buffers are small (128KB-16MB). Fixed in v0.52.5 to properly honor `num_threads` parameter and added null/size validation guards.
+- Non-zero `-latency-tlb-locality-kb` must be a multiple of system page size.
 
-3. **Latency Warmup** ([`latency_warmup.cpp`](src/warmup/latency_warmup.cpp)): Single-threaded page-granular prefaulting (1-byte read + write per page) that eliminates page faults without warming caches, preserving "cold-ish" cache state for accurate latency measurement. Uses volatile pointers to prevent compiler optimization.
+Memory-limit model:
 
-4. **Pattern Warmup** ([`pattern_warmup.cpp`](src/warmup/pattern_warmup.cpp)): Specialized warmup for strided and random access patterns. Validates stride parameters (≥32 bytes) and random indices (bounds + alignment). Distributes indices across threads rather than buffer chunks to avoid race conditions.
+- System available memory is queried.
+- Global cap uses `MEMORY_LIMIT_FACTOR` (80%).
+- Per-main-buffer cap is mode-aware (1, 2, or 3 main buffers).
+- A second total-allocation check includes all cache-related buffers.
 
-**Implementation Architecture:**
+## 6. Size and Access Derivation
 
-The warmup system is built on template-based infrastructure ([`warmup_internal.h`](src/warmup/warmup_internal.h)) with two core functions:
-- `warmup_parallel<ChunkOp>()`: Multi-threaded orchestrator handling cache-line alignment (64-byte boundaries), chunk distribution, prefix/gap processing to ensure complete buffer coverage, and thread synchronization with QoS settings
-- `warmup_single<Op>()`: Single-threaded wrapper for latency tests requiring memory locality
+### 6.1 Buffer sizing (`buffer_calculator.cpp`)
 
-**Integration with Benchmarks:**
+- Main buffer size is derived from `buffer_size_mb`.
+- L1/L2/custom cache test buffers use factor constants currently set to `1.0`.
+- Cache buffers are rounded to latency stride granularity (`LATENCY_STRIDE_BYTES = 136`) and minimum constraints.
+- Minimum practical lower bound includes page-size enforcement.
+- `-cache-size 0` (in allowed mode) produces zero custom cache buffer.
 
-Every benchmark type has a corresponding warmup function executed immediately before timing begins:
-- Main memory bandwidth: `warmup_read()`, `warmup_write()`, `warmup_copy()`
-- Cache bandwidth: `warmup_cache_read()`, `warmup_cache_write()`, `warmup_cache_copy()`
-- Latency tests: `warmup_latency()`, `warmup_cache_latency()`
-- Pattern tests: `warmup_read_strided()`, `warmup_write_random()`, etc.
+### 6.2 Latency access counts
 
-The warmup functions call the same ARM64 assembly loops as the benchmarks, ensuring identical access patterns. Atomic XOR accumulation (`std::atomic<uint64_t>`) prevents compiler dead code elimination while maintaining thread safety.
+- Main-memory latency accesses scale from base count relative to default buffer size.
+- Cache latency access counts use fixed constants (`L1`, `L2`, `CUSTOM`).
+- `-buffersize 0` (in allowed mode) sets main latency accesses to zero.
 
-## 4. Error Handling Architecture
+## 7. Memory Allocation and Initialization
 
-The codebase employs a hybrid error handling strategy that selects the most appropriate mechanism for each module's specific requirements. This approach balances performance, code clarity, and integration with system-level error reporting.
+### 7.1 Allocation strategy
 
-### 4.1 Strategy Selection by Module
+Allocation entrypoint: `allocate_all_buffers` (`src/core/memory/buffer_allocator.cpp`).
 
-The codebase uses three complementary error handling strategies:
+- Uses `mmap` anonymous private mappings.
+- Uses mode-aware conditional allocation to avoid unused buffers.
+- Performs overflow-safe byte arithmetic before allocation.
+- Enforces global total-allocation vs resolved memory limit.
 
-**Null Pointer Returns** ([`memory_manager.cpp`](src/core/memory/memory_manager.cpp)):
-- **Use Case**: Memory allocation functions that may fail frequently
-- **Rationale**: Lightweight error checking without exception overhead, natural integration with smart pointer patterns (`std::unique_ptr`)
-- **Implementation**: Functions return `MmapPtr(nullptr, MmapDeleter{0})` on failure, with error messages logged to `std::cerr`
-- **Caller Responsibility**: Check for null pointer before using returned smart pointer
-- **See**: `allocate_buffer()`, `allocate_buffer_non_cacheable()`
+Allocated buffer families (conditional):
 
-**Return Codes** ([`config_validator.cpp`](src/core/config/config_validator.cpp), [`buffer_allocator.cpp`](src/core/memory/buffer_allocator.cpp)):
-- **Use Case**: Simple validation logic and orchestration functions called from `main()`
-- **Rationale**: Direct integration with program exit codes (`EXIT_SUCCESS`/`EXIT_FAILURE`), straightforward error propagation, no exception overhead
-- **Implementation**: Functions return `EXIT_SUCCESS` on success, `EXIT_FAILURE` on error, with error messages logged to `std::cerr`
-- **Caller Responsibility**: Check return value and propagate or handle appropriately
-- **See**: `validate_config()`, `allocate_all_buffers()`
+- Main bandwidth: `src`, `dst`.
+- Main latency: `lat`.
+- Cache latency: `l1/l2` or `custom`.
+- Cache bandwidth: `l1_bw_src/dst`, `l2_bw_src/dst` or `custom_bw_src/dst`.
 
-**Exceptions with Boundary Conversion** ([`argument_parser.cpp`](src/core/config/argument_parser.cpp)):
-- **Use Case**: Complex validation logic with multiple validation points and early termination
-- **Rationale**: Standard library functions (`std::stoll`) throw exceptions naturally, cleaner code flow without deeply nested conditionals, allows early termination
-- **Implementation**: Functions throw `std::invalid_argument` (missing values, unknown options) or `std::out_of_range` (value validation errors), which are caught and converted to `EXIT_FAILURE` at module boundaries
-- **Boundary Pattern**: Exceptions are caught within the function and converted to return codes before returning to `main()`, ensuring no exceptions propagate to the main program flow
-- **See**: `parse_arguments()`
+Pattern mode intentionally allocates and uses only main source/destination buffers.
 
-### 4.2 Error Message Centralization
+### 7.2 Best-effort non-cacheable mode
 
-All error messages are centralized in the message system ([`src/output/console/messages/error_messages.cpp`](src/output/console/messages/error_messages.cpp)) to ensure:
+- `allocate_buffer_non_cacheable` still uses normal user-space mappings.
+- Applies `madvise(MADV_RANDOM)` hints.
+- This is best-effort cache discouragement only; not true uncached memory.
 
-- **Consistency**: Standardized error message format across the entire application
-- **Maintainability**: Single source of truth for error text, enabling easy updates and future localization
-- **Type Safety**: Type-safe message generation functions that prevent format string vulnerabilities
-- **User Experience**: Consistent error prefixing ("Error: ") and clear, actionable error descriptions
+### 7.3 Initialization strategy
 
-The message system provides specialized error message functions for different error categories:
-- Validation errors (invalid values, missing arguments, incompatible flags)
-- System call errors (mmap failures, file I/O errors) with `errno` integration
-- Resource errors (memory allocation failures, buffer size limits)
-- Configuration errors (calculation errors, constraint violations)
+Initialization entrypoint: `initialize_all_buffers` (`src/core/memory/buffer_initializer.cpp`).
 
-Error messages include contextual information (option names, values, limits) to help users diagnose and correct configuration issues.
+- Bandwidth buffers: deterministic source pattern + zeroed destination.
+- Latency buffers: randomized pointer-chasing circular chain via `setup_latency_chain`.
+- Conditional initialization mirrors allocation and mode flags.
 
-### 4.3 Error Propagation Patterns
+## 8. Latency-Chain Construction Contract
 
-The error handling architecture follows a clear propagation hierarchy:
+`setup_latency_chain` (`src/core/memory/memory_utils.cpp`) builds pointer chains used by main/cache latency tests.
 
-1. **Low-Level Functions** (memory allocation, system calls): Return null pointers or use C-style error codes (`errno`)
-2. **Mid-Level Functions** (validation, orchestration): Use return codes (`EXIT_SUCCESS`/`EXIT_FAILURE`) or catch exceptions and convert
-3. **High-Level Functions** (`main()`): Use return codes exclusively, converting all errors to program exit codes
+Key properties:
 
-This hierarchy ensures that:
-- Performance-critical paths (memory allocation) avoid exception overhead
-- Complex validation logic can use exceptions for cleaner code flow
-- The main program maintains a consistent error handling interface
-- All errors are eventually converted to program exit codes for shell integration
+- Uses stride-spaced pointer slots across buffer.
+- Requires at least two pointers.
+- Produces a circular linked structure.
 
-## 5. Benchmark Logic and Execution
+Randomization modes:
 
-The measurement process is divided into specialized executors. See [`src/benchmark/`](src/benchmark/) for implementation details:
+- `tlb_locality_bytes == 0`: global random permutation.
+- `tlb_locality_bytes > 0`: randomization within locality windows, then randomized window order.
 
-- **Multi-threading**: Bandwidth tests utilize all available system cores by default. See [`bandwidth_tests.cpp`](src/benchmark/bandwidth_tests.cpp) and [`parallel_test_framework.h`](src/benchmark/parallel_test_framework.h).
-- **Single-threading**: Latency tests are executed on a single thread to ensure maximum accuracy. See [`latency_tests.cpp`](src/benchmark/latency_tests.cpp).
-- **Statistical Analysis**: Results are aggregated across multiple runs, calculating means and percentiles (P50, P90, P95, P99). See [`benchmark_results.cpp`](src/benchmark/benchmark_results.cpp) and [`benchmark_runner.cpp`](src/benchmark/benchmark_runner.cpp).
+Purpose:
 
-### 5.1 Test Types
+- Preserve dependent load-to-use semantics.
+- Reduce prefetch predictability.
+- Allow controlled locality pressure experiments.
 
-- **Main Memory Bandwidth**: Read, write, and copy operations at the DRAM level. See [`benchmark_executor.cpp`](src/benchmark/benchmark_executor.cpp).
-- **Cache Bandwidth**: Specific throughput tests for L1 and L2 caches.
+## 9. Warmup Subsystem
 
-### 5.2 Pattern Benchmark Architecture ([`src/pattern_benchmark/`](src/pattern_benchmark/))
+Warmup functions (`src/warmup`) run before measured tests.
 
-The pattern benchmark subsystem analyzes how memory access patterns affect performance, complementing the main bandwidth tests' focus on maximum throughput. While main tests answer "How fast can the memory go?", pattern tests answer "How does access pattern degrade performance?"
+- Bandwidth warmups are multi-threaded and adaptive in size.
+- Latency warmups are single-threaded page-touch prefault style, avoiding chain execution.
+- Worker and/or single-thread warmups attempt high QoS class best-effort.
 
-**Architectural Components:**
+Adaptive warmup size (`warmup_internal.h`):
 
-- **Pattern Coordinator** ([`pattern_coordinator.cpp`](src/pattern_benchmark/pattern_coordinator.cpp)): Orchestrates execution of five access patterns in sequence: sequential forward (baseline), sequential reverse, strided 64-byte (cache-line), strided 4096-byte (page), and random uniform. Added in v0.52.4 refactoring.
+- `min(buffer_size, max(64MB, 10% of buffer_size))`.
 
-- **Statistics Manager** ([`pattern_statistics_manager.cpp`](src/pattern_benchmark/pattern_statistics_manager.cpp)): Manages multi-loop execution and collects bandwidth results across iterations for statistical analysis. Refactored from monolithic structure in v0.52.4.
+## 10. Standard Benchmark Execution
 
-- **Execution Modules**: Specialized executors for each pattern type in [`execution_patterns.cpp`](src/pattern_benchmark/execution_patterns.cpp) (forward/reverse) and [`execution_strided.cpp`](src/pattern_benchmark/execution_strided.cpp) (strided patterns). Random index generation handled in [`execution_utils.cpp`](src/pattern_benchmark/execution_utils.cpp).
+Standard mode coordinator: `run_all_benchmarks` -> `run_single_benchmark_loop`.
 
-**Access Pattern Types:**
+Per loop, conditional by flags:
 
-1. **Sequential Forward**: Standard linear forward access establishing baseline performance
-2. **Sequential Reverse**: Backward linear access testing backward prefetcher efficiency (percentage vs. forward baseline)
-3. **Strided 64B**: Cache-line aligned strides (64-byte) measuring hardware prefetcher effectiveness with predictable patterns
-4. **Strided 4096B**: Page-level strides (4096-byte) revealing TLB pressure and cache thrashing potential
-5. **Random Uniform**: Completely unpredictable access pattern (1,000-1,000,000 accesses, 32-byte aligned) representing worst-case performance
+1. Main-memory bandwidth tests (read/write/copy).
+2. Cache bandwidth tests (L1/L2 or custom).
+3. Cache latency tests (L1/L2 or custom).
+4. Main-memory latency test.
 
-**Efficiency Metrics:**
+Important execution semantics:
 
-Pattern benchmarks calculate performance ratios to quantify degradation:
-- **Sequential Coherence**: `(reverse_bandwidth / forward_bandwidth) × 100%` - Measures backward prefetcher capability
-- **Prefetcher Effectiveness**: `(strided_64_bandwidth / forward_bandwidth) × 100%` - Cache-line stride should be well-prefetched
-- **Cache Thrashing Potential**: `(strided_4096_bandwidth / forward_bandwidth) × 100%` with thresholds (>70% = low, 40-70% = medium, <40% = high)
-- **TLB Pressure**: `(random_bandwidth / strided_4096_bandwidth) × 100%` with thresholds (>50% = minimal, 20-50% = moderate, <20% = high)
+- Cache bandwidth uses `iterations * CACHE_ITERATIONS_MULTIPLIER` (saturated) for stability.
+- Cache bandwidth defaults to single-thread unless user explicitly provides `-threads`.
+- Main-memory latency headline is computed from one continuous chase pass.
+- If latency samples are enabled, sample collection runs in a separate pass.
 
-**Assembly Implementation:**
+## 11. Pattern Benchmark Execution
 
-Dedicated ARM64 assembly functions for each pattern:
-- Reverse: [`memory_read_reverse.s`](src/asm/memory_read_reverse.s), [`memory_write_reverse.s`](src/asm/memory_write_reverse.s), [`memory_copy_reverse.s`](src/asm/memory_copy_reverse.s)
-- Strided: [`memory_read_strided.s`](src/asm/memory_read_strided.s), [`memory_write_strided.s`](src/asm/memory_write_strided.s), [`memory_copy_strided.s`](src/asm/memory_copy_strided.s)
-- Random: [`memory_read_random.s`](src/asm/memory_read_random.s), [`memory_write_random.s`](src/asm/memory_write_random.s), [`memory_copy_random.s`](src/asm/memory_copy_random.s)
+Pattern mode coordinator: `run_pattern_benchmarks` (`src/pattern_benchmark/pattern_coordinator.cpp`).
 
-All assembly functions use NEON SIMD (32-byte loads/stores), modulo arithmetic for bounds safety, and XOR checksum accumulation.
-Loop and cleanup control flow is standardized on unsigned or zero/non-zero termination semantics for `size_t` counters. Reverse kernels also include corrected cleanup exit direction and reverse copy byte-tail pointer initialization to ensure full-range correctness.
+Executed pattern families:
 
-**Integration:**
+- Sequential forward.
+- Sequential reverse.
+- Strided 64B.
+- Strided 4096B.
+- Strided 16384B.
+- Strided 2MB.
+- Random uniform.
 
-Pattern benchmarks run via `-patterns` flag, allocating only 2× buffer size (src + dst, no latency buffer). Results include absolute bandwidth plus percentage differences from baseline, providing quantitative analysis of pattern sensitivity across read, write, and copy operations.
+Each pattern reports read/write/copy bandwidth metrics.
 
-## 6. System Integration
+Implementation notes:
 
-- **Timing**: Uses the macOS `mach_absolute_time()` interface for nanosecond-precision timing. See [`timer.h`](src/core/timing/timer.h) and [`timer.cpp`](src/core/timing/timer.cpp).
-- **Hardware Detection**: Automatically detects L1/L2 cache sizes and CPU models via `sysctlbyname` calls. See [`system_info.h`](src/core/system/system_info.h) and [`system_info.cpp`](src/core/system/system_info.cpp).
-- **QoS Configuration**: Sets the system Quality of Service (QoS) state to levels appropriate for latency-critical testing.
+- Random indices generated once per pattern loop for random benchmarks.
+- Large-stride patterns can be skipped when constraints invalidate execution.
+- Pattern statistics are aggregated across outer loop count.
 
-## 7. Output and Reporting
+## 12. Assembly Kernel Layer
 
-The software implements a sophisticated dual-output system designed for both human readability and machine processing:
+Assembly entrypoints are declared in `src/asm/asm_functions.h` and used by benchmark/warmup code:
 
-### 7.1 Console Output System ([`src/output/console/`](src/output/console/))
+- Main kernels: read, write, copy, latency chase.
+- Pattern kernels: reverse, strided, random variants.
 
-**Message Architecture:**
+Design intent:
 
-The console output uses a modular message system ([`src/output/console/messages/`](src/output/console/messages/)) with 9 specialized message modules:
-- [`cache_messages.cpp`](src/output/console/messages/cache_messages.cpp): Cache test result formatting
-- [`config_messages.cpp`](src/output/console/messages/config_messages.cpp): Configuration display
-- [`error_messages.cpp`](src/output/console/messages/error_messages.cpp): Error reporting with centralized prefixes
-- [`info_messages.cpp`](src/output/console/messages/info_messages.cpp): Informational messages
-- [`pattern_messages.cpp`](src/output/console/messages/pattern_messages.cpp): Pattern benchmark formatting with efficiency metrics
-- [`program_messages.cpp`](src/output/console/messages/program_messages.cpp): Program lifecycle messages (startup, completion)
-- [`results_messages.cpp`](src/output/console/messages/results_messages.cpp): Main memory benchmark results
-- [`statistics_messages.cpp`](src/output/console/messages/statistics_messages.cpp): Multi-loop statistical summaries
-- [`warning_messages.cpp`](src/output/console/messages/warning_messages.cpp): Warning messages with standardized format
+- Keep hot loops in ARM64 assembly for predictable overhead and high throughput.
+- Follow AAPCS64 conventions for register preservation and call boundaries.
+- Use checksum sinks in read paths to keep loads architecturally meaningful.
 
-**Output Components:**
+Latency kernel (`memory_latency_chase_asm`) performs strictly dependent pointer chasing and returns terminal pointer to prevent dead-code elimination.
 
-- **Output Printer** ([`output_printer.h`](src/output/console/output_printer.h) and [`output_printer.cpp`](src/output/console/output_printer.cpp)): Main output coordinator managing message dispatch and formatting consistency
-- **Statistics Formatter** ([`statistics.h`](src/output/console/statistics.h) and [`statistics.cpp`](src/output/console/statistics.cpp)): Calculates and formats percentile statistics (P50/P90/P95/P99), standard deviation (sample stddev with Bessel's correction), min/max values
-- **Progress Indicators**: Real-time dot indicators during benchmark execution and spinner animation for long-running operations
+## 13. Timing Model
 
-**Formatting Standards:**
+Timing API: `HighResTimer` (`src/core/timing/timer.*`).
 
-All numeric output uses precision constants from [`constants.h`](src/core/config/constants.h):
-- Bandwidth: 5 decimal places (e.g., "45.12345 GB/s")
-- Latency: 2 decimal places (e.g., "125.47 ns")
-- Pattern percentages: 1 decimal place (e.g., "+15.3%")
+- Provides second and nanosecond stop methods.
+- Used for both macro (test durations) and micro (latency sample windows) timing.
+- Factory creation returns optional; failure is treated as fatal at call sites.
 
-### 7.2 JSON Output System ([`src/output/json/`](src/output/json/))
+## 14. Statistics and Aggregation
 
-**JSON Architecture:**
+`BenchmarkStatistics` and pattern statistics collect vectors per metric across outer loops.
 
-The JSON export subsystem ([`src/output/json/json_output/`](src/output/json/json_output/)) consists of 6 specialized implementation modules:
+- Single loop: direct value reporting.
+- Multiple loops: aggregate statistics printed and optionally serialized.
+- Statistics include central tendency and percentile-oriented summaries.
 
-- **JSON Builder** ([`builder.cpp`](src/output/json/json_output/builder.cpp)): Constructs the root JSON structure with standardized field ordering (v0.52.4)
-- **File Writer** ([`file_writer.cpp`](src/output/json/json_output/file_writer.cpp)): Handles file I/O with error handling
-- **Main Memory Formatter** ([`main_memory.cpp`](src/output/json/json_output/main_memory.cpp)): Formats bandwidth and latency results for main memory tests
-- **Cache Formatter** ([`cache.cpp`](src/output/json/json_output/cache.cpp)): Formats L1/L2/custom cache test results
-- **Pattern Formatter** ([`patterns.cpp`](src/output/json/json_output/patterns.cpp)): Formats pattern benchmark results with efficiency metrics
-- **JSON Output Coordinator** ([`json_output.h`](src/output/json/json_output/json_output.h) and [`json_output.cpp`](src/output/json/json_output/json_output.cpp)): Orchestrates the complete JSON export process
+For contention-prone environments, percentiles (P50/P95/P99) are more informative than mean-only interpretation.
 
-**JSON Structure:**
+## 15. Console Output Contract
 
-The output includes comprehensive metadata and results:
-- **System Information**: CPU model, core counts (performance/efficiency), cache sizes, available memory, macOS version
-- **Configuration**: All benchmark parameters (buffer sizes, iterations, thread count, test modes)
-- **Timestamp**: ISO 8601 formatted execution time
-- **Per-Loop Raw Values**: Individual measurements for each benchmark loop iteration
-- **Aggregated Statistics**: Mean, median, percentiles (P90/P95/P99), standard deviation, min/max across all loops (when loop_count > 1)
-- **Pattern Efficiency Metrics**: Sequential coherence, prefetcher effectiveness, cache thrashing potential, TLB pressure
+Console rendering is centralized in `src/output/console` and message helpers in `src/output/console/messages`.
 
-**Third-Party Dependency:**
+Contract highlights:
 
-JSON parsing and generation uses the nlohmann/json library ([`src/third_party/nlohmann/json.hpp`](src/third_party/nlohmann/json.hpp)), a header-only C++ JSON library providing type-safe serialization.
+- Configuration and cache info printed before execution.
+- Per-loop results are printed in standard mode.
+- Pattern mode prints pattern table-style sections and derived efficiency indicators.
+- Aggregate statistics printed when loop count > 1.
+- Errors and warnings use `Messages::error_prefix()` / `Messages::warning_prefix()` conventions.
 
-**Output Modes:**
+## 16. JSON Output Contract
 
-- **Console Only** (default): Real-time human-readable output with progress indicators
-- **Console + JSON** (`-output <file>`): Both console display and machine-readable JSON export for automated analysis and result archiving
+JSON writer API (`src/output/json/json_output/json_output.cpp`):
 
-## 8. Technical Constraints and Considerations
+- Standard mode: `configuration`, `execution_time_sec`, `main_memory`, `cache`, `timestamp`, `version`.
+- Pattern mode: `configuration`, `execution_time_sec`, `patterns`, `timestamp`, `version`.
 
-- **Platform**: Designed exclusively for the macOS Apple Silicon platform.
-- **User-Space Limitations**: As a user-space application, the tool does not have direct access to explicit cache flushing (cache flush) or true non-cacheable memory. The `-non-cacheable` flag uses `madvise()` hints which do not make memory truly non-cacheable; they only reduce caching likelihood and affect paging and cache behavior heuristically.
-- **Buffer Sizes**: DRAM measurements require large buffer sizes (recommended > 512 MB) to minimize the impact of the cache hierarchy.
+### 16.1 Structure conventions
 
-## 9. Quality Assurance
+- Ordered JSON is used for stable key order.
+- Bandwidth metrics are nested as arrays in `values` with optional `statistics`.
+- Latency is nested:
+  - `latency.average_ns.values` (plus optional `statistics`),
+  - optional `latency.samples_ns`,
+  - optional `latency.samples_statistics`.
 
-The software includes a comprehensive testing suite:
+### 16.2 Path behavior
 
-- **Testing Framework**: 199 tests across 8 test files using the GoogleTest framework. See [`tests/`](tests/) directory.
-- **Test Organization**: Tests are separated into unit tests and integration tests (v0.52.1). Three test targets available: `make test` (unit tests only, faster development cycle), `make test-integration` (integration tests only), and `make test-all` (complete test suite).
-- **Coverage Areas**: Memory allocation and initialization, buffer management, configuration validation and parsing, benchmark execution, pattern validation, message formatting, memory utilities.
-- **Doxygen-compliant documentation** at the source code level.
-- **Validation logic** for all user inputs and detected system values.
+- Relative `-output` paths are resolved against current working directory.
 
-## 10. Known Sources of Bias and Limitations
+## 17. Error-Handling Model
 
-The following factors may influence measurement accuracy and should be considered when interpreting results:
+This codebase uses boundary-aware mixed error handling:
 
-- **Hardware Prefetcher Effects**: Pattern benchmarks intentionally measure prefetcher behavior, but this means sequential and strided patterns may show optimistically high bandwidth compared to real-world irregular access patterns. The prefetcher effectiveness metric quantifies this bias.
+- Program orchestration and most modules: return codes (`EXIT_SUCCESS`/`EXIT_FAILURE`).
+- Argument parsing internals: exceptions for parsing/validation, converted to return codes at API boundary.
+- Allocation internals: null smart-pointer returns for allocation failure.
 
-- **Core Heterogeneity**: Apple Silicon features performance (P) and efficiency (E) cores with different cache sizes and clock speeds. The tool does not set thread affinity, so the macOS scheduler determines core allocation. Multi-threaded tests may distribute work across heterogeneous cores, potentially showing lower aggregate bandwidth than homogeneous core setups would achieve. Note that even if thread affinity were set via `thread_policy_set()`, macOS does not guarantee strict core binding and may migrate threads based on thermal or power management policies.
+Principle: no uncaught exceptions should escape to `main()` control flow.
 
-- **Operating System Interference**: macOS background services, system daemons, and the scheduler itself introduce non-deterministic overhead. The QoS settings (`QOS_CLASS_USER_INTERACTIVE`) request priority but cannot eliminate all OS interference. Running multiple benchmark loops (`-count`) and examining percentile statistics (P95, P99) helps identify outliers caused by OS activity.
+## 18. Concurrency Model
 
-- **TLB Contamination in Random Latency Walks**: Fully random pointer-chase over large buffers measures a mixture of cache/DRAM latency and address-translation cost (TLB miss/refill and page-walk effects). Use `-latency-tlb-locality-kb` (default 16 KB) to amortize TLB misses within local windows when the goal is cleaner cache-hierarchy transition analysis; use `0` for globally random chains.
+- Bandwidth and pattern bandwidth paths are parallelized by thread-count configuration.
+- Latency tests are intentionally single-threaded pointer-chase measurements.
+- Cache tests default to single-thread unless user overrides thread count.
+- Threaded work partitioning attempts cache-line-aware chunk handling to reduce false sharing effects.
 
-- **Thermal Throttling and DVFS**: Extended benchmark runs may trigger thermal throttling, reducing CPU clock speeds and memory controller performance. Dynamic Voltage and Frequency Scaling (DVFS) adjusts power states based on load and temperature. Results from later loops may show degraded performance if thermal limits are reached. Consider monitoring system temperature and allowing cooldown periods between intensive test runs.
+## 19. Measurement Caveats and Interpretation Under Load
 
-- **Unified Memory Architecture**: Apple Silicon uses unified memory shared between CPU, GPU, and Neural Engine (ANE). Concurrent GPU or ANE workloads can compete for memory bandwidth, affecting CPU benchmark results. For isolated CPU measurements, ensure minimal GPU/ANE activity (close graphics-intensive applications, disable background ML tasks). The unified architecture also means memory bandwidth measurements reflect the entire SoC memory subsystem, not just CPU-specific paths.
+The tool can be run on active systems with concurrent workloads, but interpretation must account for scheduler and memory-system contention.
 
-- **Lack of SMT/Hyper-Threading**: Apple Silicon does not implement Simultaneous Multi-Threading (SMT). Each thread runs on a dedicated physical core, eliminating SMT-related resource contention but also preventing measurements of SMT bandwidth scaling behavior present on x86 architectures.
+Practical caveats:
+
+- Heavy concurrent activity can inflate tail latency and depress bandwidth.
+- Tail metrics (`P95`, `P99`) usually reveal contention more clearly than averages.
+- Comparing runs across time requires similar background-load conditions.
+- Small buffers can become cache-dominated and hide DRAM behavior.
+
+For high-confidence baselines, run repeated loops and analyze distributions rather than single-point values.
+
+## 20. Current Known Drift / Documentation Notes
+
+One known mismatch exists between parser limits and help text:
+
+- Parser/constants accept `-cache-size` up to `1048576 KB` (1 GB).
+- Help text currently states max `524288 KB`.
+
+This is an implementation/help-text consistency issue, not a runtime parser limitation.
+
+## 21. Verification and Test Expectations
+
+Recommended validation commands:
+
+- Build: `make`
+- Unit tests (non-integration): `make test`
+- Integration-only: `make test-integration`
+- Full test set: `make test-all`
+- CLI help smoke check: `./memory_benchmark -h`
+
+For narrow changes, prefer targeted `gtest` filters via `./test_runner --gtest_filter=...`.
+
+## 22. Source Map (Primary Entry Points)
+
+- Program entry: `main.cpp`
+- Config parse/validate/derive:
+  - `src/core/config/argument_parser.cpp`
+  - `src/core/config/config_validator.cpp`
+  - `src/core/config/buffer_calculator.cpp`
+- Memory allocation/init:
+  - `src/core/memory/buffer_allocator.cpp`
+  - `src/core/memory/buffer_initializer.cpp`
+  - `src/core/memory/memory_manager.cpp`
+  - `src/core/memory/memory_utils.cpp`
+- Standard benchmark:
+  - `src/benchmark/benchmark_runner.cpp`
+  - `src/benchmark/benchmark_executor.cpp`
+  - `src/benchmark/bandwidth_tests.cpp`
+  - `src/benchmark/latency_tests.cpp`
+- Pattern benchmark:
+  - `src/pattern_benchmark/pattern_coordinator.cpp`
+  - `src/pattern_benchmark/output.cpp`
+- Output:
+  - `src/output/console/output_printer.cpp`
+  - `src/output/json/json_output/*.cpp`
+- Assembly kernels:
+  - `src/asm/*.s`
