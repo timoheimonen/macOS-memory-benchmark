@@ -123,8 +123,6 @@ Latency-specific disable controls in `-only-latency`:
 - `-non-cacheable`: Best-effort cache-discouraging hints (not true uncached memory).
 - `-output <file>`: Save JSON output.
 
-Note: some help text builds still show `524288 KB` max for `-cache-size`, while parser/validation currently allow up to `1048576 KB`.
-
 ## Typical Workflows
 
 Statistical baseline:

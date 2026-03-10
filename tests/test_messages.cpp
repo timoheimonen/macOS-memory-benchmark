@@ -355,6 +355,8 @@ TEST_F(MessagesFormattingTest, UsageOptions) {
   EXPECT_NE(msg.find(std::to_string(Constants::DEFAULT_BUFFER_SIZE_MB)), std::string::npos);
   EXPECT_NE(msg.find(std::to_string(Constants::DEFAULT_LOOP_COUNT)), std::string::npos);
   EXPECT_NE(msg.find(std::to_string(Constants::DEFAULT_LATENCY_SAMPLE_COUNT)), std::string::npos);
+  EXPECT_NE(msg.find(std::to_string(Constants::MIN_CACHE_SIZE_KB)), std::string::npos);
+  EXPECT_NE(msg.find(std::to_string(Constants::MAX_CACHE_SIZE_KB)), std::string::npos);
 }
 
 TEST_F(MessagesFormattingTest, UsageExample) {

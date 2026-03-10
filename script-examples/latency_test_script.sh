@@ -17,7 +17,7 @@ BUFFER_SIZE_MB=0
 LATENCY_SAMPLES=5000
 LOOP_COUNT=5
 ONLY_LATENCY=true
-tlb_locality_sizes_kb=(16 2048 4096 8192 16384 32768)
+tlb_locality_sizes_kb=(16 512 1024 2048 4096 8192 16384 32768)
 
 # Leave empty by default for cleaner cache-hierarchy latency runs.
 # Set to "-non-cacheable" if you specifically want MADV_RANDOM behavior.

@@ -331,12 +331,7 @@ For high-confidence baselines, run repeated loops and analyze distributions rath
 
 ## 20. Current Known Drift / Documentation Notes
 
-One known mismatch exists between parser limits and help text:
-
-- Parser/constants accept `-cache-size` up to `1048576 KB` (1 GB).
-- Help text currently states max `524288 KB`.
-
-This is an implementation/help-text consistency issue, not a runtime parser limitation.
+No known parser/help-text drift is currently documented for `-cache-size` limits.
 
 ## 21. Verification and Test Expectations
 

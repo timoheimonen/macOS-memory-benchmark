@@ -205,8 +205,6 @@ Pattern mode (`-patterns`) measures bandwidth sensitivity across:
 - `0` is accepted only with `-only-latency` and disables cache latency target
 - When set to non-zero, auto L1/L2 detection is replaced by custom cache target
 
-Note: some help text builds still print `524288` KB max, but current parser/validation accepts up to `1048576` KB.
-
 #### `-non-cacheable`
 
 - Applies cache-discouraging `madvise()` hints
