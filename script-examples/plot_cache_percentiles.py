@@ -7,7 +7,54 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 
 
-def parse_final_output(path: Path):
+ALLOWED_METRICS = {
+    "median": "Median",
+    "p90": "P90",
+    "p95": "P95",
+    "p99": "P99",
+    "average": "Average",
+    "min": "Min",
+    "max": "Max",
+    "stddev": "Stddev",
+}
+
+
+def print_usage(script_name: str):
+    allowed = ", ".join(ALLOWED_METRICS.keys())
+    print(f"Usage: {script_name} [final_output_path] [--metric <name>]")
+    print(f"Allowed metrics: {allowed}")
+    print(f"Example: {script_name} script-examples/final_output.txt --metric p99")
+
+
+def parse_args(argv):
+    src = Path("final_output.txt")
+    metric = "median"
+
+    i = 1
+    while i < len(argv):
+        arg = argv[i]
+        if arg in ("-h", "--help"):
+            print_usage(argv[0])
+            sys.exit(0)
+        if arg == "--metric":
+            if i + 1 >= len(argv):
+                raise RuntimeError("Missing value for --metric")
+            metric = argv[i + 1].lower()
+            i += 2
+            continue
+        if arg.startswith("-"):
+            raise RuntimeError(f"Unknown option: {arg}")
+        src = Path(arg)
+        i += 1
+
+    if metric not in ALLOWED_METRICS:
+        allowed = ", ".join(ALLOWED_METRICS.keys())
+        raise RuntimeError(f"Invalid --metric '{metric}'. Allowed: {allowed}")
+
+    return src, metric
+
+
+def parse_final_output(path: Path, metric: str):
     """Parse final_output.txt blocks keyed by TLB locality and cache size."""
     text = path.read_text(encoding="utf-8", errors="replace")
 
@@ -22,12 +69,12 @@ def parse_final_output(path: Path):
         cache_kb = int(m.group(2))
         stats = json.loads(m.group(3))
 
-        if "median" not in stats:
+        if metric not in stats:
             raise RuntimeError(
-                f"Missing 'median' in stats block for tlb={tlb_kb}KB cache={cache_kb}KB"
+                f"Missing '{metric}' in stats block for tlb={tlb_kb}KB cache={cache_kb}KB"
             )
 
-        rows.append((tlb_kb, cache_kb, float(stats["median"])))
+        rows.append((tlb_kb, cache_kb, float(stats[metric])))
 
     if not rows:
         raise RuntimeError(
@@ -45,11 +92,8 @@ def parse_final_output(path: Path):
 
 
 def main():
-    src = Path("final_output.txt")
-    if len(sys.argv) > 1:
-        src = Path(sys.argv[1])
-
-    grouped = parse_final_output(src)
+    src, metric = parse_args(sys.argv)
+    grouped = parse_final_output(src, metric)
 
     plt.figure(figsize=(11, 6))
 
@@ -62,8 +106,8 @@ def main():
 
     plt.xscale("log", base=2)
     plt.xlabel(f"Cache Size (KB)\ngithub.com/timoheimonen/macos-memory-benchmark")
-    plt.ylabel("Median Latency (ns)")
-    plt.title("Latency Trend vs Cache Size by TLB Locality")
+    plt.ylabel(f"{ALLOWED_METRICS[metric]} Latency (ns)")
+    plt.title(f"{ALLOWED_METRICS[metric]} Latency Trend vs Cache Size by TLB Locality")
     plt.xticks(all_cache_sizes, [f"{size} KB" for size in all_cache_sizes], rotation=45, ha="right")
     plt.grid(True, which="both", alpha=0.3)
     plt.legend()
