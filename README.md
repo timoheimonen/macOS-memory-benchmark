@@ -374,6 +374,7 @@ Done. Total execution time: 70.81675 s
 
 - **[User Manual](MANUAL.md)** - Usage guide with command-line options, best practices, workflows, and detailed examples
 - **[Technical Specification](TECHNICAL_SPECIFICATION.md)** - System architecture, memory management, low-level ARM64 assembly implementation, benchmark execution flow, system integration, and technical specifications
+- **[Latency Whitepaper](LATENCY_WHITEPAPER.md)** - Deep dive into dependent pointer-chase latency methodology, chain construction, sampling semantics, and result interpretation
 
 ## Technical Disclaimers and Limitations
 
