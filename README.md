@@ -8,7 +8,7 @@ License: GPL-3.0 license
 **Low-level tool** to measure memory read/write/copy bandwidth, cache/main memory latency, and access pattern performance on macOS Apple Silicon (ARM64).
 
 ![Mac Mini M4 Cache Latency from multiple JSON-files](pictures/MacMiniM4_cache_latency_with_TLB.png)  
-Mac Mini M4 Cache Latency from multiple JSON-files with example-script provided. Using different size TLB locality.
+Mac Mini M4 Cache Latency from multiple JSON-files with example-script provided. Using different size TLB locality. This shows the penalty if program critical memory area does not fit the TLB.
 
 
 ## Description
