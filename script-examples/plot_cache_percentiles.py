@@ -8,54 +8,40 @@ import matplotlib.pyplot as plt
 
 
 def parse_final_output(path: Path):
-    """
-    Parses blocks like:
-
-    Cache Size: 32 KB
-    ----------------------------------------
-    {
-      "median": ...,
-      "p90": ...,
-      "p95": ...,
-      "p99": ...
-    }
-
-    Returns:
-      labels, p50, p90, p95, p99
-    """
+    """Parse final_output.txt blocks keyed by TLB locality and cache size."""
     text = path.read_text(encoding="utf-8", errors="replace")
 
     pattern = re.compile(
-        r"Cache Size:\s*(\d+)\s*KB\s*.*?\n\s*(\{.*?\})",
+        r"TLB\s+Locality:\s*(\d+)\s*KB\s*,\s*Cache\s+Size:\s*(\d+)\s*KB\s*.*?\n\s*(\{.*?\})",
         re.DOTALL | re.IGNORECASE,
     )
 
     rows = []
     for m in pattern.finditer(text):
-        size_kb = int(m.group(1))
-        stats = json.loads(m.group(2))
+        tlb_kb = int(m.group(1))
+        cache_kb = int(m.group(2))
+        stats = json.loads(m.group(3))
 
-        rows.append((
-            size_kb,
-            float(stats["median"]),  # P50
-            float(stats["p90"]),
-            float(stats["p95"]),
-            float(stats["p99"]),
-        ))
+        if "median" not in stats:
+            raise RuntimeError(
+                f"Missing 'median' in stats block for tlb={tlb_kb}KB cache={cache_kb}KB"
+            )
+
+        rows.append((tlb_kb, cache_kb, float(stats["median"])))
 
     if not rows:
-        raise RuntimeError("No cache blocks found in final_output.txt")
+        raise RuntimeError(
+            "No TLB/cache blocks found. Expected lines like 'TLB Locality: 16 KB, Cache Size: 32 KB'."
+        )
 
-    # sort by cache size
-    rows.sort(key=lambda x: x[0])
+    grouped = {}
+    for tlb_kb, cache_kb, median in rows:
+        grouped.setdefault(tlb_kb, []).append((cache_kb, median))
 
-    labels = [f"{r[0]} KB" for r in rows]
-    p50 = [r[1] for r in rows]
-    p90 = [r[2] for r in rows]
-    p95 = [r[3] for r in rows]
-    p99 = [r[4] for r in rows]
+    for tlb_kb in grouped:
+        grouped[tlb_kb].sort(key=lambda x: x[0])
 
-    return labels, p50, p90, p95, p99
+    return grouped
 
 
 def main():
@@ -63,19 +49,23 @@ def main():
     if len(sys.argv) > 1:
         src = Path(sys.argv[1])
 
-    labels, p50, p90, p95, p99 = parse_final_output(src)
+    grouped = parse_final_output(src)
 
-    plt.figure()
-    plt.plot(labels, p50, marker="o", label="P50")
-    plt.plot(labels, p90, marker="o", label="P90")
-    plt.plot(labels, p95, marker="o", label="P95")
-    plt.plot(labels, p99, marker="o", label="P99")
+    plt.figure(figsize=(11, 6))
 
-    plt.xlabel(f"Cache Size\ngithub.com/timoheimonen/macos-memory-benchmark")
-    plt.ylabel("Latency (ns)")
-    plt.title("Cache Latency as a Function of Cache Size (P50 / P90 / P95 / P99)")
-    plt.xticks(rotation=45)
-    plt.grid(True)
+    for tlb_kb in sorted(grouped.keys()):
+        cache_sizes = [p[0] for p in grouped[tlb_kb]]
+        medians = [p[1] for p in grouped[tlb_kb]]
+        plt.plot(cache_sizes, medians, marker="o", linewidth=2.0, label=f"TLB {tlb_kb} KB")
+
+    all_cache_sizes = sorted({cache_kb for points in grouped.values() for cache_kb, _ in points})
+
+    plt.xscale("log", base=2)
+    plt.xlabel(f"Cache Size (KB)\ngithub.com/timoheimonen/macos-memory-benchmark")
+    plt.ylabel("Median Latency (ns)")
+    plt.title("Latency Trend vs Cache Size by TLB Locality")
+    plt.xticks(all_cache_sizes, [f"{size} KB" for size in all_cache_sizes], rotation=45, ha="right")
+    plt.grid(True, which="both", alpha=0.3)
     plt.legend()
     plt.tight_layout()
     plt.show()
