@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.53.2] - 2026-03-10
+
+### Changed
+  - **Help text `-cache-size` range now dynamically sourced from constants**: Updated `src/output/console/messages/program_messages.cpp` to generate the `-cache-size` range bounds from `Constants::MIN_CACHE_SIZE_KB` and `Constants::MAX_CACHE_SIZE_KB` instead of hardcoding values. This ensures help output (`-h`) and parser/validation limits stay automatically synchronized and prevents future drift.
+
+### Fixed
+  - **Help text showed stale 524288 KB max for `-cache-size` while parser allowed 1048576 KB**: The hardcoded max in help text generation is now replaced by a reference to the runtime constant, eliminating the drift and preventing regression.
+
+### Added
+  - **Regression test for `-cache-size` help bounds**: Added check in `tests/test_messages.cpp` to verify that `UsageOptions` message includes both `MIN_CACHE_SIZE_KB` and `MAX_CACHE_SIZE_KB` constants in the cache-size option line.
+
 ## [0.53.1] - 2026-03-09
 
 ### Added
