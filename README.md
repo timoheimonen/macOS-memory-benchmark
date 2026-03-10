@@ -14,387 +14,236 @@ Blue at the end 'TLB hit' ~25ns where brown is total 'TLB miss' ~90-95ns+.
 
 ## Description
 
-This tool measures memory performance on macOS Apple Silicon systems. It provides comprehensive benchmarks for:
+`memory_benchmark` measures memory behavior on macOS Apple Silicon with an implementation focused on practical low-level analysis:
 
-1. **Main Memory Bandwidth**: How fast data can be read, written, and copied between large memory blocks (measures DRAM performance).
-2. **Cache Bandwidth**: How fast data can be read, written, and copied within L1 and L2 cache levels.
-3. **Main Memory Latency**: The average time it takes to access memory (measures DRAM access time).
-4. **Cache Latency**: The average time it takes to access L1 and L2 cache levels.
-5. **Access Pattern Performance**: Performance across different memory access patterns (sequential, strided, random) to analyze prefetcher effectiveness and cache behavior.
+1. Main memory bandwidth (read/write/copy).
+2. Cache bandwidth (L1/L2 auto-detected, or custom cache target).
+3. Main memory latency (dependent pointer chase).
+4. Cache latency (dependent pointer chase).
+5. Pattern bandwidth behavior (sequential, strided, random).
 
-The tool automatically detects your system's cache sizes and uses optimized assembly code for accurate measurements. All tests include warm-up runs to ensure stable and consistent results.
+The benchmark uses ARM64 assembly kernels, warmup passes, and loop statistics to produce stable and comparable results.
 
 ## Why This Tool?
 
-The primary motivation for developing this tool is to provide a straightforward and reliable method for measuring and comparing the memory performance characteristics across different generations of Apple Silicon chips (M1, M2, M3, M4, M5, etc.).
+This project is built to characterize Apple Silicon memory behavior in a direct and reproducible way.
 
-Many general-purpose benchmarks are not specifically designed to expose Apple Silicon–specific cache behavior or access patterns.
-This tool focuses on:
-- Native ARM64 execution (no Rosetta)
-- Cache-size aware access patterns
-- mmap-based memory allocation
+Compared to generic benchmark suites, it is intentionally focused on:
+
+- Native ARM64 execution on macOS.
+- Cache-aware and latency-aware test paths.
+- Explicit mode control for bandwidth-only, latency-only, and pattern-only workflows.
+- JSON output that is easy to automate and plot.
 
 ## Disclaimer
 
-**Use this software entirely at your own risk.** This tool performs intensive memory operations. The author(s) are not responsible for any potential system instability, data loss, or hardware issues resulting from its use.  
+**Use this software at your own risk.** It performs sustained, intensive memory operations. The author is not responsible for instability, data loss, or hardware issues resulting from use.
 
 ## Target Platform
 
-macOS on Apple Silicon.
-
-## Features
-
-* **Main Memory Bandwidth**: Measures read, write, and copy speeds using all available CPU cores for maximum throughput (customizable with `-threads` parameter).
-* **Cache Bandwidth**: Measures L1 and L2 cache read, write, and copy speeds. By default uses single-threaded tests for accuracy, but can be configured with `-threads` parameter.
-* **Memory Latency**: Measures access latency for both main memory and cache levels.
-* **TLB-Locality Control for Latency**: `-latency-tlb-locality-kb` lets you keep pointer-chase randomness inside locality windows to reduce TLB-refill noise when analyzing cache-level latency transitions (default: `16`, set `0` to disable).
-* **Access Pattern Analysis**: Tests different memory access patterns (sequential forward/reverse, strided, random) to analyze prefetcher effectiveness and cache behavior.
-* **Advanced Statistics**: When running multiple test loops, provides detailed statistics including percentiles (P50/P90/P95/P99) and standard deviation.
-* **Automatic Cache Detection**: Automatically detects and uses your system's L1 and L2 cache sizes.
-* **JSON Export**: Save benchmark results to JSON format for further analysis or visualization.
-* **Optimized Performance**: Uses highly optimized assembly code for accurate and fast measurements.
-
-## Reliability and Stability
-
-The benchmark produces stable and repeatable results. Across 100 consecutive runs on a Mac mini M4 using the pattern-based bandwidth tests, the measured memory bandwidth shows low variance for sequential and cache-line–strided accesses (stddev ≈ 0.15–0.17% relative to the mean), with a tight percentile distribution (P50–P99 within ~0.2 GB/s).
-
-As expected, access patterns that stress page-level behavior (4096B stride) exhibit higher run-to-run variation (~1.8%), while random uniform access remains comparatively stable (~0.36%).
-
-```data
-"sequential_forward": {
-  "bandwidth": {
-    "read_gb_s": {
-      "statistics": {
-        "average": 116.38363691482549,
-        "max": 116.61212708384109,
-        "median": 116.41264548721367,
-        "min": 115.449510036971,
-        "p90": 116.54143114134801,
-        "p95": 116.57314206456576,
-        "p99": 116.60095068065866,
-        "stddev": 0.17026641589059727
-      }
-    }
-  }
-}
-...
-"strided_4096": {
-  "bandwidth": {
-    "read_gb_s": {
-      "statistics": {
-        "average": 26.460392735220456,
-        "max": 27.7722419653915,
-        "median": 26.457051473208285,
-        "min": 25.519925729459107,
-        "p90": 27.105171215736604,
-        "p95": 27.190715938337473,
-        "p99": 27.360449534513144,
-        "stddev": 0.4730857335572576
-      }
-    }
-  }
-}
-...
-"random": {
-  "bandwidth": {
-    "read_gb_s": {
-      "statistics": {
-        "average": 26.71367836895143,
-        "max": 26.966820487564327,
-        "median": 26.69907406197067,
-        "min": 26.49374804466308,
-        "p90": 26.845236287807374,
-        "p95": 26.882004355057887,
-        "p99": 26.95742242818151,
-        "stddev": 0.09600564296001704
-      }
-    }
-  }
-}
-```
+- macOS
+- Apple Silicon (ARM64)
 
 ## Install with Homebrew
 
-In the Terminal, Run:  
 ```bash
 brew install timoheimonen/macOS-memory-benchmark/memory-benchmark
 ```
 
-## Prerequisites
+## Build from Source
 
-* macOS (Apple Silicon).
-* Xcode Command Line Tools (includes `clang++` compiler and `as` assembler).
-    * Install with: `xcode-select --install` in the Terminal.
+Prerequisites:
 
-## Building
+- Xcode Command Line Tools (`xcode-select --install`)
 
-In the Terminal, go to the directory with source code. Run:
+Build:
 
-**Compile C++/ASM code:**
-    ```bash
-    make
-    ```
-This makes the program file named `memory_benchmark`.
+```bash
+git clone https://github.com/timoheimonen/macOS-memory-benchmark.git
+cd macOS-memory-benchmark
+make
+```
 
 ## Testing
 
-Prerequisites:
+Install test dependency:
+
 ```bash
 brew install googletest
 ```
 
-Run:
+Run unit tests:
+
 ```bash
 make test
 ```
 
-(unit tests covering config, buffers, memory, benchmarks, and messages.)
+## Quick Usage
 
-## Usage
+Help:
 
-In the Terminal, go to the directory with `memory_benchmark` and use these commands:
-
-1. **Help**
-    ```bash
-    ./memory_benchmark -h
-    ```
-    Example output:
-    ```text
-    Copyright 2025-2026 Timo Heimonen <timo.heimonen@proton.me>
-    Version: 0.53.0 by Timo Heimonen <timo.heimonen@proton.me>
-    License: GNU GPL v3. See <https://www.gnu.org/licenses/>
-    This program is free software: you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation, either version 3 of the License, or
-    (at your option) any later version.
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
-    Link: https://github.com/timoheimonen/macOS-memory-benchmark
-
-    Usage: ./memory_benchmark [options]
-    Options:
-      -iterations <count>   Number of iterations for R/W/Copy tests (default: 1000)
-      -buffersize <size_mb> Size for EACH of the 3 buffers in Megabytes (MB) as integer (default: 512).
-                            The maximum allowed <size_mb> is automatically determined such that
-                            3 * <size_mb> does not exceed ~80% of available system memory.
-                            In -only-latency mode, -buffersize 0 disables main memory latency.
-      -count <count>        Number of full loops (read/write/copy/latency) (default: 1).
-                            When count > 1, statistics include percentiles (P50/P90/P95/P99) and stddev.
-      -latency-samples <count> Number of latency samples to collect per test (default: 1000)
-      -latency-tlb-locality-kb <size_kb> TLB-locality window for latency pointer chains (default: 16 KB; set 0 to disable).
-                            Must be a multiple of system page size (typically 4 KB or 16 KB).
-      -threads <count>      Number of threads to use for benchmarks (default: detected
-                            CPU core count). Applies to all benchmarks including cache tests.
-                            If specified value exceeds available cores, it will be capped to
-                            the maximum number of cores with a warning.
-      -cache-size <size_kb> Custom cache size in Kilobytes (KB) as integer (16 KB to 524288 KB).
-                            Minimum is 16 KB (system page size). When set, skips automatic
-                            L1/L2 cache size detection and only performs bandwidth and latency
-                            tests for the custom cache size.
-                            In -only-latency mode, -cache-size 0 disables cache latency.
-      -patterns             Run pattern benchmarks (sequential forward/reverse, strided,
-                            and random access patterns). When set, only pattern benchmarks
-                            are executed, skipping standard bandwidth and latency tests.
-                            use with -buffersize <size_mb> to set the buffer size for the pattern benchmarks.
-      -only-bandwidth       Run only bandwidth tests (read/write/copy for main memory and cache).
-                            Skips all latency tests. Cannot be used with -patterns, -cache-size,
-                            or -latency-samples.
-      -only-latency         Run only latency tests (main memory and cache latency).
-                            Skips all bandwidth tests. Cannot be used with -patterns or -iterations.
-                            Use -buffersize 0 to disable main memory latency, or -cache-size 0
-                            to disable cache latency.
-      -non-cacheable        Apply cache-discouraging hints to src/dst buffers.
-                            Uses madvise() hints to discourage caching, but does NOT provide
-                            true non-cacheable memory (user-space cannot modify page tables).
-                            Best-effort approach that may reduce but not eliminate caching.
-      -output <file>        Save benchmark results to JSON file. If path is relative,
-                            file is saved in current working directory.
-      -h, --help            Show this help message and exit
-
-    Example: ./memory_benchmark -iterations 2000 -buffersize 1024 -output results.json
-    ```
-2. **Run with default parameters**
-    ```bash
-    ./memory_benchmark
-    ```
-   For longer runs consider running with `caffeinate -i -d` to prevent the system from sleeping:
-    ```bash
-    caffeinate -i -d ./memory_benchmark
-    ```
-3. **Run with custom parameters example**
-    ```bash
-    ./memory_benchmark -iterations 500 -buffersize 512 -cache-size 1024 -threads 4 -non-cacheable 
-    ```
-   For longer runs, consider running with `caffeinate -i -d` to prevent the system from sleeping:
-    ```bash
-    caffeinate -i -d ./memory_benchmark -iterations 500 -buffersize 512 -cache-size 1024 -threads 4 -non-cacheable
-    ```
-
-For usage documentation, command-line options reference, best practices, and detailed examples, see the [User Manual](MANUAL.md).
-
-## Example output (Mac Mini M4 24GB)
-```text
------ macOS-memory-benchmark v0.53.0 -----
-Copyright 2025-2026 Timo Heimonen <timo.heimonen@proton.me>
-This program is free software: you can redistribute it and/or modify
-it under the terms of the GNU General Public License as published by
-the Free Software Foundation, either version 3 of the License, or
-(at your option) any later version.
-This program is distributed in the hope that it will be useful,
-but WITHOUT ANY WARRANTY; without even the implied warranty of
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
-See <https://www.gnu.org/licenses/> for more details.
-
-Buffer Size (per buffer): 512.00 MiB (512 MB requested/capped)
-Total Allocation Size: ~1541.08 MiB
-Iterations (per R/W/Copy test per loop): 1000
-Loop Count (total benchmark repetitions): 1
-Non-Cacheable Memory Hints: Disabled
-Latency TLB Locality: 16.00 KB
-
-Processor Name: Apple M4
-  Performance Cores: 4
-  Efficiency Cores: 6
-  Total CPU Cores Detected: 10
-
-Detected Cache Sizes:
-  L1 Cache Size: 128.00 KB (per P-core)
-  L2 Cache Size: 16.00 MB (per P-core cluster)
-
-Running benchmarks...
-\ Running tests...
---- Results (Loop 1) ---
-Main Memory Bandwidth Tests (multi-threaded, 10 threads):
-  Read : 115.48455 GB/s (Total time: 4.64885 s)
-  Write: 66.86407 GB/s (Total time: 8.02929 s)
-  Copy : 106.26014 GB/s (Total time: 10.10484 s)
-
-Main Memory Latency Test (single-threaded, pointer chase):
-  Total time: 5.21972 s
-  Average latency: 26.10 ns
-
-Cache Bandwidth Tests (single-threaded):
-  L1 Cache:
-    Read : 139.76431 GB/s (Buffer size: 95.89 KB)
-    Write: 74.67711 GB/s
-    Copy : 175.20467 GB/s
-  L2 Cache:
-    Read : 121.26469 GB/s (Buffer size: 1.60 MB)
-    Write: 47.57190 GB/s
-    Copy : 130.90856 GB/s
-
-Cache Latency Tests (single-threaded, pointer chase):
-  L1 Cache: 0.69 ns (Buffer size: 95.89 KB)
-  L2 Cache: 5.12 ns (Buffer size: 1.60 MB)
---------------
-
-Done. Total execution time: 34.68413 s
+```bash
+./memory_benchmark -h
 ```
-```text
------ macOS-memory-benchmark v0.53.0 -----
-Copyright 2025-2026 Timo Heimonen <timo.heimonen@proton.me>
-This program is free software: you can redistribute it and/or modify
-it under the terms of the GNU General Public License as published by
-the Free Software Foundation, either version 3 of the License, or
-(at your option) any later version.
-This program is distributed in the hope that it will be useful,
-but WITHOUT ANY WARRANTY; without even the implied warranty of
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
-See <https://www.gnu.org/licenses/> for more details.
 
-Buffer Size (per buffer): 512.00 MiB (512 MB requested/capped)
-Total Allocation Size: ~1024.00 MiB
-Iterations (per R/W/Copy test per loop): 1000
-Loop Count (total benchmark repetitions): 1
-Non-Cacheable Memory Hints: Disabled
-Latency TLB Locality: 16.00 KB
+Default run:
 
-Processor Name: Apple M4
-  Performance Cores: 4
-  Efficiency Cores: 6
-  Total CPU Cores Detected: 10
-
-Detected Cache Sizes:
-  L1 Cache Size: 128.00 KB (per P-core)
-  L2 Cache Size: 16.00 MB (per P-core cluster)
-
-Running Pattern Benchmarks...
-
-Running Pattern Benchmarks...
-| Running tests...
-================================
-
-Sequential Forward:
-  Read : 115.483 GB/s
-  Write: 66.164 GB/s
-  Copy : 105.721 GB/s
-
-Sequential Reverse:
-  Read : 115.050 GB/s (-0.4%)
-  Write: 66.671 GB/s (+0.8%)
-  Copy : 105.728 GB/s (+0.0%)
-
-Strided (Cache Line - 64B):
-  Read : 57.710 GB/s (-50.0%)
-  Write: 33.365 GB/s (-49.6%)
-  Copy : 69.423 GB/s (-34.3%)
-
-Strided (Page - 4096B):
-  Read : 26.697 GB/s (-76.9%)
-  Write: 49.558 GB/s (-25.1%)
-  Copy : 33.349 GB/s (-68.5%)
-
-Strided (Page - 16384B):
-  Read : 24.991 GB/s (-78.4%)
-  Write: 52.766 GB/s (-20.2%)
-  Copy : 36.120 GB/s (-65.8%)
-
-Strided (Superpage - 2MB):
-  Read : 57.087 GB/s (-50.6%)
-  Write: 41.654 GB/s (-37.0%)
-  Copy : 69.350 GB/s (-34.4%)
-
-Random Uniform:
-  Read : 26.731 GB/s (-76.9%)
-  Write: 45.303 GB/s (-31.5%)
-  Copy : 32.715 GB/s (-69.1%)
-
-Pattern Efficiency Analysis:
-- Sequential coherence: 100.0%
-- Prefetcher effectiveness: 55.9%
-- Cache thrashing potential: High
-- TLB pressure: Minimal
-
-
-Done. Total execution time: 70.81675 s
+```bash
+./memory_benchmark
 ```
+
+For longer runs, prevent sleep:
+
+```bash
+caffeinate -i -d ./memory_benchmark -count 10 -buffersize 1024
+```
+
+## Benchmark Modes
+
+- **Default mode**: Runs main bandwidth + main latency + cache bandwidth + cache latency.
+- **`-patterns`**: Runs pattern bandwidth suite only (`sequential_forward`, `sequential_reverse`, `strided_64`, `strided_4096`, `strided_16384`, `strided_2mb`, `random`).
+- **`-only-bandwidth`**: Runs bandwidth paths only (`-patterns`, `-cache-size`, and `-latency-samples` are not allowed in this mode).
+- **`-only-latency`**: Runs latency paths only (`-patterns` and `-iterations` are not allowed in this mode).
+
+Latency-specific disable controls in `-only-latency`:
+
+- `-buffersize 0` disables main-memory latency target.
+- `-cache-size 0` disables cache-latency target.
+- Both disabled at once is invalid.
+
+## Most-Used Options
+
+- `-buffersize <MB>`: Main buffer size (default `512`; auto-capped by memory safety rules).
+- `-iterations <count>`: Bandwidth iterations per loop (default `1000`).
+- `-count <count>`: Full benchmark repetitions (default `1`; use `5-10` for statistics).
+- `-threads <count>`: Bandwidth thread count (latency tests remain single-threaded).
+- `-cache-size <KB>`: Custom cache target. Non-zero range is `16` to `1048576` KB (1 GB).
+- `-latency-samples <count>`: Samples per latency test (default `1000`).
+- `-latency-tlb-locality-kb <KB>`: Pointer-chain locality window (default `16`; `0` = global random chain; non-zero values must be page-size multiples).
+- `-non-cacheable`: Best-effort cache-discouraging hints (not true uncached memory).
+- `-output <file>`: Save JSON output.
+
+Note: some help text builds still show `524288 KB` max for `-cache-size`, while parser/validation currently allow up to `1048576 KB`.
+
+## Typical Workflows
+
+Statistical baseline:
+
+```bash
+caffeinate -i -d ./memory_benchmark -count 10 -buffersize 1024 -output baseline.json
+```
+
+Pattern analysis:
+
+```bash
+./memory_benchmark -patterns -count 10 -buffersize 512 -output patterns.json
+```
+
+Latency locality comparison:
+
+```bash
+./memory_benchmark -only-latency -buffersize 1024 -count 10 -latency-samples 5000 -latency-tlb-locality-kb 16 -output lat_tlb16.json
+./memory_benchmark -only-latency -buffersize 1024 -count 10 -latency-samples 5000 -latency-tlb-locality-kb 0 -output lat_global.json
+```
+
+Custom cache target:
+
+```bash
+./memory_benchmark -cache-size 4096 -threads 1 -count 5 -output cache_4mb.json
+```
+
+## Output Overview
+
+Console output includes:
+
+- Resolved configuration and cache information.
+- Per-loop benchmark results.
+- Aggregate statistics when `-count > 1` (including P50/P90/P95/P99 and stddev).
+
+JSON output shape:
+
+- Standard mode:
+
+```json
+{
+  "configuration": {},
+  "execution_time_sec": 0,
+  "main_memory": {},
+  "cache": {},
+  "timestamp": "...",
+  "version": "..."
+}
+```
+
+- Pattern mode:
+
+```json
+{
+  "configuration": {},
+  "execution_time_sec": 0,
+  "patterns": {},
+  "timestamp": "...",
+  "version": "..."
+}
+```
+
+Current latency payload is nested (not scalar):
+
+```json
+"latency": {
+  "average_ns": {
+    "values": [],
+    "statistics": {}
+  },
+  "samples_ns": [],
+  "samples_statistics": {}
+}
+```
+
+## Visualization Workflow
+
+Run cache/locality sweep script:
+
+```bash
+./script-examples/latency_test_script.sh
+```
+
+Plot extracted percentile trends from `script-examples/final_output.txt`:
+
+```bash
+python3 script-examples/plot_cache_percentiles.py script-examples/final_output.txt --metric median
+```
+
+Supported metrics: `median`, `p90`, `p95`, `p99`, `average`, `min`, `max`, `stddev`.
+
+Note: `script-examples/latency_test_script.sh` invokes `memory_benchmark` from `PATH`. If you only built locally as `./memory_benchmark`, either install it or update `BENCHMARK_CMD` in the script.
+
+## Interpreting Results Under Active System Load
+
+If other macOS programs are heavily active, treat results as contention-influenced.
+
+Recommended interpretation approach:
+
+1. Keep background load profile consistent across compared runs.
+2. Use repeated loops (`-count 10` or more).
+3. Prioritize median and tail percentiles (`P95`/`P99`) over single-run extremes.
+4. Keep command lines identical when comparing machines or builds.
+
+Reference sample result files in this repository:
+
+- `results/macminim4_benchmark_count10.json`
+- `results/macminim4_patterns_count10.json`
 
 ## Documentation
 
-- **[User Manual](MANUAL.md)** - Usage guide with command-line options, best practices, workflows, and detailed examples
-- **[Technical Specification](TECHNICAL_SPECIFICATION.md)** - System architecture, memory management, low-level ARM64 assembly implementation, benchmark execution flow, system integration, and technical specifications
-- **[Latency Whitepaper](LATENCY_WHITEPAPER.md)** - Deep dive into dependent pointer-chase latency methodology, chain construction, sampling semantics, and result interpretation
+- **[User Manual](MANUAL.md)**: full usage guide, option reference, workflows, troubleshooting.
+- **[Technical Specification](TECHNICAL_SPECIFICATION.md)**: architecture, execution flow, memory model, output contracts.
+- **[Latency Whitepaper](LATENCY_WHITEPAPER.md)**: dependent pointer-chase design, chain construction, and sampling methodology.
 
-## Technical Disclaimers and Limitations
+## Limitations and Caveats
 
-* **Non-cacheable memory limitations**:  
-  The `-non-cacheable` flag provides **cache-discouraging hints**, not true non-cacheable memory. This is a fundamental limitation of user-space applications on macOS ARM64:
-  * **User-space cannot modify page table attributes** (requires kernel privileges)
-  * **User-space cannot set MAIR** (Memory Attribute Indirection Register)
-  * **User-space cannot create truly uncached mappings**
-  
-  The implementation uses `madvise(ptr, size, MADV_RANDOM)` to hint that the memory access pattern is random, which may discourage aggressive caching. However, this is a **best-effort approach** that provides hints to the memory system, not guarantees of cache-bypass behavior.
-  
-  **Important**: The actual cache behavior will depend on the CPU and kernel implementation. This feature may reduce but not eliminate caching. For true non-cacheable memory, kernel-level modifications would be required, which is not feasible for user-space applications.
-
-* **Small buffer sizes (< 512 MB–1 GB) are cache-dominated**:  
-  When you run the main memory bandwidth or latency tests with small buffer sizes, a significant portion of the accesses can be served from the CPU caches instead of true main memory (DRAM). This is especially true on Apple Silicon, which has large and complex shared caches. As a result, small buffers tend to measure *cache* performance rather than pure DRAM performance, and may report unrealistically high bandwidth or low latency.
-* **No explicit cache flush on Apple Silicon**:  
-  Unlike x86 (`CLFLUSH`), there is no user-space instruction on Apple Silicon to reliably flush data caches. The benchmark cannot force a “cold cache” state before each measurement; it relies on large buffer sizes and warm-up behavior to approximate steady-state memory behavior.
-* **TLB effects in random latency walks**:
-  Fully random pointer-chase over large buffers can include TLB miss/refill latency in addition to cache/DRAM latency. Use `-latency-tlb-locality-kb` (default `16`) to reduce this effect; set `0` to return to fully global randomization.
-* **Recommendation**:  
-  For more realistic main memory measurements, prefer buffer sizes in the range of **512 MB–1 GB (or larger, if RAM allows)**. Smaller values are still useful to study cache behavior, but they should not be interpreted as pure main memory bandwidth/latency.
-* **Other Programs**:
-  As userspace cannot prioritize programs, close all other programs to avoid noise from operating system to the results.
+- `-non-cacheable` is best effort only (`madvise` hints); it does not create true uncached mappings.
+- Small buffers can be cache-dominated, so they may not represent DRAM behavior.
+- Apple Silicon user space has no explicit data-cache flush primitive equivalent to x86 `CLFLUSH` for strict cold-cache control.
+- TLB-locality mode controls pointer-chain construction policy; it does not directly control hardware TLB residency.
+- Background activity, thermals, and scheduling can materially affect tails and variance.
