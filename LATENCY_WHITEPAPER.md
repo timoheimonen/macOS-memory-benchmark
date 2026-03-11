@@ -86,6 +86,15 @@ The function returns `EXIT_FAILURE` for invalid setup cases, including:
 
 This is a chain-construction policy, not a hardware TLB control primitive.
 
+### 4.4 Stride Control
+
+`-latency-stride-bytes` controls spacing between pointer-chain nodes (default `136`).
+
+- Smaller stride (for example `64`) increases same-page cache-line activity.
+- Larger stride increases page turnover and can amplify translation pressure.
+
+Non-zero stride must be pointer-size aligned.
+
 ## 5. Test-Backed Correctness Guarantees (`tests/test_memory_utils.cpp`)
 
 The following behaviors are explicitly covered by unit tests:
@@ -159,6 +168,7 @@ python3 script-examples/plot_cache_percentiles.py script-examples/final_output.t
 - Use **P95/P99** to evaluate tail sensitivity and instability.
 - Treat isolated very large `max` values as outlier diagnostics, not central tendency.
 - Compare locality settings at the same cache size, then compare cache-size transitions.
+- For page-pressure investigations, inspect `chain_diagnostics.unique_pages_touched` in JSON latency sections.
 
 ## 9. Limitations and Non-Goals
 

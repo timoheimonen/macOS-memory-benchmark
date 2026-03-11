@@ -11,6 +11,8 @@ License: GPL-3.0 license
 Mac Mini M4 Cache Latency from multiple JSON-files with example-script provided. Using different size TLB locality. This shows the penalty if program critical memory area does not fit the TLB.  
 Blue at the end 'TLB hit' ~25ns where brown is total 'TLB miss' ~90-95ns+.
 
+![Mac Mini M4 Cache Latency/Stride/TLB from multiple JSON-files](pictures/MacMiniM4_cache_latency_with_STRIDE_TLB.png)  
+Seconds script-example what is using `-latency-stride-bytes` argument parameter. 
 
 ## Description
 
@@ -119,6 +121,7 @@ Latency-specific disable controls in `-only-latency`:
 - `-threads <count>`: Bandwidth thread count (latency tests remain single-threaded).
 - `-cache-size <KB>`: Custom cache target. Non-zero range is `16` to `1048576` KB (1 GB).
 - `-latency-samples <count>`: Samples per latency test (default `1000`).
+- `-latency-stride-bytes <bytes>`: Pointer-chain stride for latency tests (default `136`; must be > 0 and pointer-size aligned).
 - `-latency-tlb-locality-kb <KB>`: Pointer-chain locality window (default `16`; `0` = global random chain; non-zero values must be page-size multiples).
 - `-non-cacheable`: Best-effort cache-discouraging hints (not true uncached memory).
 - `-output <file>`: Save JSON output.
@@ -142,6 +145,12 @@ Latency locality comparison:
 ```bash
 ./memory_benchmark -only-latency -buffersize 1024 -count 10 -latency-samples 5000 -latency-tlb-locality-kb 16 -output lat_tlb16.json
 ./memory_benchmark -only-latency -buffersize 1024 -count 10 -latency-samples 5000 -latency-tlb-locality-kb 0 -output lat_global.json
+```
+
+TLB-vs-cache isolation (smaller stride within pages):
+
+```bash
+./memory_benchmark -only-latency -buffersize 1024 -cache-size 4096 -latency-stride-bytes 64 -latency-tlb-locality-kb 16 -count 10 -latency-samples 5000 -output lat_stride64_tlb16.json
 ```
 
 Custom cache target:

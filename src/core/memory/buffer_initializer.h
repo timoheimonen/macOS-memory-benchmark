@@ -40,7 +40,6 @@ struct BenchmarkBuffers;
  * Initializes buffers by filling them with data and setting up pointer-chasing
  * chains for latency tests.
  */
-int initialize_all_buffers(BenchmarkBuffers& buffers, const BenchmarkConfig& config);
+int initialize_all_buffers(BenchmarkBuffers& buffers, BenchmarkConfig& config);
 
 #endif // BUFFER_INITIALIZER_H
-

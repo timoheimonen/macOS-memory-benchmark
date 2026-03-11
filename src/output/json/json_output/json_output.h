@@ -1,4 +1,4 @@
-// Copyright 2025 Timo Heimonen <timo.heimonen@proton.me>
+// Copyright 2026 Timo Heimonen <timo.heimonen@proton.me>
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -69,6 +69,7 @@ namespace JsonKeys {
   constexpr const char* ITERATIONS = "iterations";
   constexpr const char* LOOP_COUNT = "loop_count";
   constexpr const char* LATENCY_SAMPLE_COUNT = "latency_sample_count";
+  constexpr const char* LATENCY_STRIDE_BYTES = "latency_stride_bytes";
   constexpr const char* USE_LATENCY_TLB_LOCALITY = "use_latency_tlb_locality";
   constexpr const char* LATENCY_TLB_LOCALITY_BYTES = "latency_tlb_locality_bytes";
   constexpr const char* LATENCY_TLB_LOCALITY_KB = "latency_tlb_locality_kb";
@@ -96,6 +97,11 @@ namespace JsonKeys {
   constexpr const char* AVERAGE_NS = "average_ns";
   constexpr const char* SAMPLES_NS = "samples_ns";
   constexpr const char* SAMPLES_STATISTICS = "samples_statistics";
+  constexpr const char* CHAIN_DIAGNOSTICS = "chain_diagnostics";
+  constexpr const char* POINTER_COUNT = "pointer_count";
+  constexpr const char* UNIQUE_PAGES_TOUCHED = "unique_pages_touched";
+  constexpr const char* PAGE_SIZE_BYTES = "page_size_bytes";
+  constexpr const char* STRIDE_BYTES = "stride_bytes";
   constexpr const char* VALUES = "values";
   constexpr const char* STATISTICS = "statistics";
   

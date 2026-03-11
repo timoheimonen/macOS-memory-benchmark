@@ -1,4 +1,4 @@
-// Copyright 2025 Timo Heimonen <timo.heimonen@proton.me>
+// Copyright 2026 Timo Heimonen <timo.heimonen@proton.me>
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -32,6 +32,26 @@
 #include "core/config/config.h"     // For BenchmarkConfig
 #include "benchmark/benchmark_runner.h"  // For BenchmarkStatistics
 #include "third_party/nlohmann/json.hpp"   // JSON library
+
+namespace {
+
+void add_chain_diagnostics_json(nlohmann::json& cache_json,
+                                const std::string& cache_key,
+                                const LatencyChainDiagnostics& diagnostics) {
+  if (diagnostics.pointer_count == 0 ||
+      !cache_json.contains(cache_key) ||
+      !cache_json[cache_key].contains(JsonKeys::LATENCY)) {
+    return;
+  }
+
+  cache_json[cache_key][JsonKeys::LATENCY][JsonKeys::CHAIN_DIAGNOSTICS] = {
+      {JsonKeys::POINTER_COUNT, diagnostics.pointer_count},
+      {JsonKeys::UNIQUE_PAGES_TOUCHED, diagnostics.unique_pages_touched},
+      {JsonKeys::PAGE_SIZE_BYTES, diagnostics.page_size_bytes},
+      {JsonKeys::STRIDE_BYTES, diagnostics.stride_bytes}};
+}
+
+}  // namespace
 
 // Build cache bandwidth JSON for a specific cache level
 // cache_key: "l1", "l2", or "custom"
@@ -88,6 +108,7 @@ nlohmann::json build_cache_json(const BenchmarkConfig& config, const BenchmarkSt
                              JsonKeys::CUSTOM,
                              stats.all_custom_latency_ns,
                              stats.all_custom_latency_samples);
+      add_chain_diagnostics_json(cache, JsonKeys::CUSTOM, config.custom_latency_chain_diagnostics);
     }
   } else {
     // L1 cache bandwidth (skip if only latency tests)
@@ -102,9 +123,10 @@ nlohmann::json build_cache_json(const BenchmarkConfig& config, const BenchmarkSt
     // L1 cache latency (skip if only bandwidth tests)
     if (!config.only_bandwidth) {
       add_cache_latency_json(cache,
-                            JsonKeys::L1,
-                            stats.all_l1_latency_ns,
-                            stats.all_l1_latency_samples);
+                             JsonKeys::L1,
+                             stats.all_l1_latency_ns,
+                             stats.all_l1_latency_samples);
+      add_chain_diagnostics_json(cache, JsonKeys::L1, config.l1_latency_chain_diagnostics);
     }
     
     // L2 cache bandwidth (skip if only latency tests)
@@ -119,12 +141,12 @@ nlohmann::json build_cache_json(const BenchmarkConfig& config, const BenchmarkSt
     // L2 cache latency (skip if only bandwidth tests)
     if (!config.only_bandwidth) {
       add_cache_latency_json(cache,
-                            JsonKeys::L2,
-                            stats.all_l2_latency_ns,
-                            stats.all_l2_latency_samples);
+                             JsonKeys::L2,
+                             stats.all_l2_latency_ns,
+                             stats.all_l2_latency_samples);
+      add_chain_diagnostics_json(cache, JsonKeys::L2, config.l2_latency_chain_diagnostics);
     }
   }
   
   return cache;
 }
-

@@ -1,4 +1,4 @@
-// Copyright 2025 Timo Heimonen <timo.heimonen@proton.me>
+// Copyright 2026 Timo Heimonen <timo.heimonen@proton.me>
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -36,6 +36,17 @@
 #include <cstddef>  // size_t
 #include <cstdint>  // uintptr_t
 #include "core/config/constants.h"
+
+/**
+ * @struct LatencyChainDiagnostics
+ * @brief Diagnostics collected during latency-chain setup
+ */
+struct LatencyChainDiagnostics {
+  size_t pointer_count = 0;         ///< Number of nodes in the pointer chain
+  size_t unique_pages_touched = 0;  ///< Unique virtual pages touched by chain nodes
+  size_t page_size_bytes = 0;       ///< System page size used for page accounting
+  size_t stride_bytes = 0;          ///< Stride used to build the chain
+};
 
 /**
  * @brief Align an offset to the next cache line boundary (rounds up)
@@ -82,12 +93,15 @@ inline size_t alignment_offset_to_cache_line(void* ptr) {
  * @param buffer_size Size of the buffer in bytes
  * @param stride Stride size in bytes between linked pointers
  * @param tlb_locality_bytes Optional TLB-locality window in bytes (0 = global random chain)
+ * @param diagnostics Optional diagnostics output for page-touch analysis
  * @return EXIT_SUCCESS on success, EXIT_FAILURE on error
  *
  * Creates a linked list structure in memory where each pointer points to the
  * next location, enabling pointer-chasing latency measurements.
  */
-int setup_latency_chain(void* buffer, size_t buffer_size, size_t stride, size_t tlb_locality_bytes = 0);
+int setup_latency_chain(void* buffer, size_t buffer_size, size_t stride,
+                        size_t tlb_locality_bytes = 0,
+                        LatencyChainDiagnostics* diagnostics = nullptr);
 
 /**
  * @brief Initialize data buffers with test data

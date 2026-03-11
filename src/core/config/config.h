@@ -17,7 +17,7 @@
  * @file config.h
  * @brief Benchmark configuration structure and parsing functions
  * @author Timo Heimonen <timo.heimonen@proton.me>
- * @date 2025
+ * @date 2026
  *
  * This header defines the BenchmarkConfig structure and provides functions
  * to parse command-line arguments and validate configuration settings.
@@ -38,6 +38,7 @@
 #include <string>
 #include <cstdlib>  // EXIT_SUCCESS, EXIT_FAILURE
 #include "core/config/constants.h"
+#include "core/memory/memory_utils.h"
 
 /**
  * @struct BenchmarkConfig
@@ -54,6 +55,7 @@ struct BenchmarkConfig {
   int loop_count = Constants::DEFAULT_LOOP_COUNT;  ///< Number of benchmark loops to run
   long long custom_cache_size_kb_ll = -1;  ///< User-requested custom cache size in KB (-1 = none)
   int latency_sample_count = Constants::DEFAULT_LATENCY_SAMPLE_COUNT;  ///< Number of latency samples to collect per test
+  size_t latency_stride_bytes = Constants::LATENCY_STRIDE_BYTES;  ///< Stride used for latency pointer chains (bytes)
   size_t latency_tlb_locality_bytes = 16 * Constants::BYTES_PER_KB;  ///< TLB-locality window for latency chains (default 16 KB, 0 = disabled)
   
   // Calculated sizes
@@ -91,7 +93,14 @@ struct BenchmarkConfig {
   bool user_specified_buffersize = false;      ///< Whether user explicitly set -buffersize
   bool user_specified_iterations = false;      ///< Whether user explicitly set -iterations
   bool user_specified_latency_samples = false; ///< Whether user explicitly set -latency-samples
+  bool user_specified_latency_stride = false;  ///< Whether user explicitly set -latency-stride-bytes
   bool user_specified_latency_tlb_locality = false; ///< Whether user explicitly set -latency-tlb-locality-kb
+
+  // Latency-chain diagnostics (populated during chain setup)
+  LatencyChainDiagnostics main_latency_chain_diagnostics;
+  LatencyChainDiagnostics l1_latency_chain_diagnostics;
+  LatencyChainDiagnostics l2_latency_chain_diagnostics;
+  LatencyChainDiagnostics custom_latency_chain_diagnostics;
   
   // Output file
   std::string output_file;  ///< JSON output file path (empty = no JSON output)

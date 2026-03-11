@@ -103,6 +103,12 @@ Zero-disabling semantics (supported only in `-only-latency`):
 TLB-locality constraints:
 
 - Non-zero `-latency-tlb-locality-kb` must be a multiple of system page size.
+- Non-zero locality window must span at least two latency-stride steps.
+
+Latency stride constraints:
+
+- `-latency-stride-bytes` must be greater than zero.
+- Stride must be pointer-size aligned.
 
 Memory-limit model:
 
@@ -117,7 +123,7 @@ Memory-limit model:
 
 - Main buffer size is derived from `buffer_size_mb`.
 - L1/L2/custom cache test buffers use factor constants currently set to `1.0`.
-- Cache buffers are rounded to latency stride granularity (`LATENCY_STRIDE_BYTES = 136`) and minimum constraints.
+- Cache buffers are rounded to active latency stride granularity (`latency_stride_bytes`, default `136`) and minimum constraints.
 - Minimum practical lower bound includes page-size enforcement.
 - `-cache-size 0` (in allowed mode) produces zero custom cache buffer.
 
@@ -170,6 +176,7 @@ Key properties:
 - Uses stride-spaced pointer slots across buffer.
 - Requires at least two pointers.
 - Produces a circular linked structure.
+- Collects chain diagnostics (pointer count, unique pages touched, page size, stride).
 
 Randomization modes:
 
@@ -329,11 +336,7 @@ Practical caveats:
 
 For high-confidence baselines, run repeated loops and analyze distributions rather than single-point values.
 
-## 20. Current Known Drift / Documentation Notes
-
-No known parser/help-text drift is currently documented for `-cache-size` limits.
-
-## 21. Verification and Test Expectations
+## 20. Verification and Test Expectations
 
 Recommended validation commands:
 
@@ -345,7 +348,7 @@ Recommended validation commands:
 
 For narrow changes, prefer targeted `gtest` filters via `./test_runner --gtest_filter=...`.
 
-## 22. Source Map (Primary Entry Points)
+## 21. Source Map (Primary Entry Points)
 
 - Program entry: `main.cpp`
 - Config parse/validate/derive:

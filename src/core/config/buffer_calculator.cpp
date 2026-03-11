@@ -65,6 +65,12 @@
  */
 void calculate_buffer_sizes(BenchmarkConfig& config) {
   size_t page_size_check = getpagesize();
+  const size_t latency_stride =
+      (config.latency_stride_bytes > 0) ? config.latency_stride_bytes : Constants::LATENCY_STRIDE_BYTES;
+  const size_t min_latency_buffer_size =
+      (latency_stride <= std::numeric_limits<size_t>::max() / 2)
+          ? (latency_stride * 2)
+          : std::numeric_limits<size_t>::max();
   
   if (config.use_custom_cache_size) {
     if (config.custom_cache_size_bytes == 0) {
@@ -79,16 +85,16 @@ void calculate_buffer_sizes(BenchmarkConfig& config) {
     // Validate that stride rounding won't cause issues
     // Note: Division truncation is intentional here - we round down to nearest stride multiple
     // This ensures the buffer fits within the cache size while maintaining stride alignment
-    if (config.custom_buffer_size >= Constants::LATENCY_STRIDE_BYTES) {
-      config.custom_buffer_size = ((config.custom_buffer_size / Constants::LATENCY_STRIDE_BYTES) * Constants::LATENCY_STRIDE_BYTES);
+    if (config.custom_buffer_size >= latency_stride) {
+      config.custom_buffer_size = ((config.custom_buffer_size / latency_stride) * latency_stride);
     } else {
       // If buffer is smaller than stride, set to minimum size
-      config.custom_buffer_size = Constants::MIN_LATENCY_BUFFER_SIZE;
+      config.custom_buffer_size = min_latency_buffer_size;
     }
     
     // Ensure minimum size (at least 2 pointers worth)
-    if (config.custom_buffer_size < Constants::MIN_LATENCY_BUFFER_SIZE) {
-      config.custom_buffer_size = Constants::MIN_LATENCY_BUFFER_SIZE;
+    if (config.custom_buffer_size < min_latency_buffer_size) {
+      config.custom_buffer_size = min_latency_buffer_size;
     }
     
     // Ensure buffer size is at least page size aligned
@@ -104,7 +110,7 @@ void calculate_buffer_sizes(BenchmarkConfig& config) {
     // Final validation: ensure buffer size is not zero after all calculations
     if (config.custom_buffer_size == 0) {
       std::cerr << Messages::error_prefix() << Messages::error_calculated_custom_buffer_size_zero() << std::endl;
-      config.custom_buffer_size = Constants::MIN_LATENCY_BUFFER_SIZE;
+      config.custom_buffer_size = min_latency_buffer_size;
     }
   } else {
     // Use configured factors for L1 and L2 to ensure fits within target level
@@ -127,24 +133,24 @@ void calculate_buffer_sizes(BenchmarkConfig& config) {
     
     // Ensure buffer sizes are multiples of stride (with validation)
     // Note: Division truncation is intentional - rounds down to nearest stride multiple
-    if (config.l1_buffer_size >= Constants::LATENCY_STRIDE_BYTES) {
-      config.l1_buffer_size = ((config.l1_buffer_size / Constants::LATENCY_STRIDE_BYTES) * Constants::LATENCY_STRIDE_BYTES);
+    if (config.l1_buffer_size >= latency_stride) {
+      config.l1_buffer_size = ((config.l1_buffer_size / latency_stride) * latency_stride);
     } else {
-      config.l1_buffer_size = Constants::MIN_LATENCY_BUFFER_SIZE;
+      config.l1_buffer_size = min_latency_buffer_size;
     }
     
-    if (config.l2_buffer_size >= Constants::LATENCY_STRIDE_BYTES) {
-      config.l2_buffer_size = ((config.l2_buffer_size / Constants::LATENCY_STRIDE_BYTES) * Constants::LATENCY_STRIDE_BYTES);
+    if (config.l2_buffer_size >= latency_stride) {
+      config.l2_buffer_size = ((config.l2_buffer_size / latency_stride) * latency_stride);
     } else {
-      config.l2_buffer_size = Constants::MIN_LATENCY_BUFFER_SIZE;
+      config.l2_buffer_size = min_latency_buffer_size;
     }
     
     // Ensure minimum size (at least 2 pointers worth)
-    if (config.l1_buffer_size < Constants::MIN_LATENCY_BUFFER_SIZE) {
-      config.l1_buffer_size = Constants::MIN_LATENCY_BUFFER_SIZE;
+    if (config.l1_buffer_size < min_latency_buffer_size) {
+      config.l1_buffer_size = min_latency_buffer_size;
     }
-    if (config.l2_buffer_size < Constants::MIN_LATENCY_BUFFER_SIZE) {
-      config.l2_buffer_size = Constants::MIN_LATENCY_BUFFER_SIZE;
+    if (config.l2_buffer_size < min_latency_buffer_size) {
+      config.l2_buffer_size = min_latency_buffer_size;
     }
     
     // Ensure buffer sizes are at least page size aligned
@@ -158,11 +164,11 @@ void calculate_buffer_sizes(BenchmarkConfig& config) {
     // Final validation: ensure buffer sizes are not zero after all calculations
     if (config.l1_buffer_size == 0) {
       std::cerr << Messages::error_prefix() << Messages::error_calculated_l1_buffer_size_zero() << std::endl;
-      config.l1_buffer_size = Constants::MIN_LATENCY_BUFFER_SIZE;
+      config.l1_buffer_size = min_latency_buffer_size;
     }
     if (config.l2_buffer_size == 0) {
       std::cerr << Messages::error_prefix() << Messages::error_calculated_l2_buffer_size_zero() << std::endl;
-      config.l2_buffer_size = Constants::MIN_LATENCY_BUFFER_SIZE;
+      config.l2_buffer_size = min_latency_buffer_size;
     }
   }
 }

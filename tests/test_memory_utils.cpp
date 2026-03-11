@@ -1,4 +1,4 @@
-// Copyright 2025 Timo Heimonen <timo.heimonen@proton.me>
+// Copyright 2026 Timo Heimonen <timo.heimonen@proton.me>
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -266,6 +266,25 @@ TEST(MemoryUtilsTest, SetupLatencyChainWithTlbLocality) {
   const size_t locality_bytes = static_cast<size_t>(getpagesize());
   int result = setup_latency_chain(buffer.get(), buffer_size, LATENCY_STRIDE_BYTES, locality_bytes);
   EXPECT_EQ(result, EXIT_SUCCESS);
+}
+
+TEST(MemoryUtilsTest, SetupLatencyChainCollectsDiagnostics) {
+  using namespace Constants;
+
+  const size_t page_size = static_cast<size_t>(getpagesize());
+  const size_t buffer_size = page_size * 4;
+  const size_t stride = sizeof(uintptr_t) * 8;
+  MmapPtr buffer = allocate_buffer(buffer_size, "test_buffer");
+  ASSERT_NE(buffer.get(), nullptr);
+
+  LatencyChainDiagnostics diagnostics;
+  int result = setup_latency_chain(buffer.get(), buffer_size, stride, 0, &diagnostics);
+  EXPECT_EQ(result, EXIT_SUCCESS);
+  EXPECT_EQ(diagnostics.pointer_count, buffer_size / stride);
+  EXPECT_GT(diagnostics.unique_pages_touched, 0u);
+  EXPECT_LE(diagnostics.unique_pages_touched, 4u);
+  EXPECT_EQ(diagnostics.page_size_bytes, page_size);
+  EXPECT_EQ(diagnostics.stride_bytes, stride);
 }
 
 TEST(MemoryUtilsTest, SetupLatencyChainWithTooSmallTlbLocalityFails) {

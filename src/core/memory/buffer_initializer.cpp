@@ -38,7 +38,6 @@
 #include "core/memory/buffer_manager.h"  // BenchmarkBuffers
 #include "core/config/config.h"  // BenchmarkConfig
 #include "core/memory/memory_utils.h"  // initialize_buffers, setup_latency_chain
-#include "core/config/constants.h"
 #include "output/console/messages.h"
 #include <cstdlib>  // EXIT_SUCCESS, EXIT_FAILURE
 #include <iostream> // std::cerr
@@ -86,7 +85,14 @@
  * @see BenchmarkBuffers for buffer management structure
  * @see BenchmarkConfig for configuration options
  */
-int initialize_all_buffers(BenchmarkBuffers& buffers, const BenchmarkConfig& config) {
+int initialize_all_buffers(BenchmarkBuffers& buffers, BenchmarkConfig& config) {
+  const bool collect_chain_diagnostics = config.user_specified_latency_stride;
+
+  config.main_latency_chain_diagnostics = {};
+  config.l1_latency_chain_diagnostics = {};
+  config.l2_latency_chain_diagnostics = {};
+  config.custom_latency_chain_diagnostics = {};
+
   // Initialize main memory buffers conditionally
   if (!config.only_latency) {
     // Validate bandwidth buffers are allocated
@@ -107,8 +113,9 @@ int initialize_all_buffers(BenchmarkBuffers& buffers, const BenchmarkConfig& con
       return EXIT_FAILURE;
     }
     // Setup main memory latency chain
-    if (setup_latency_chain(buffers.lat_buffer(), config.buffer_size, Constants::LATENCY_STRIDE_BYTES,
-                            config.latency_tlb_locality_bytes) != EXIT_SUCCESS) {
+    if (setup_latency_chain(buffers.lat_buffer(), config.buffer_size, config.latency_stride_bytes,
+                            config.latency_tlb_locality_bytes,
+                            collect_chain_diagnostics ? &config.main_latency_chain_diagnostics : nullptr) != EXIT_SUCCESS) {
       return EXIT_FAILURE;
     }
   }
@@ -121,8 +128,9 @@ int initialize_all_buffers(BenchmarkBuffers& buffers, const BenchmarkConfig& con
           std::cerr << Messages::error_prefix() << Messages::error_custom_buffer_not_allocated() << std::endl;
           return EXIT_FAILURE;
         }
-        if (setup_latency_chain(buffers.custom_buffer(), config.custom_buffer_size, Constants::LATENCY_STRIDE_BYTES,
-                                config.latency_tlb_locality_bytes) != EXIT_SUCCESS) {
+        if (setup_latency_chain(buffers.custom_buffer(), config.custom_buffer_size, config.latency_stride_bytes,
+                                config.latency_tlb_locality_bytes,
+                                collect_chain_diagnostics ? &config.custom_latency_chain_diagnostics : nullptr) != EXIT_SUCCESS) {
           return EXIT_FAILURE;
         }
       }
@@ -132,8 +140,9 @@ int initialize_all_buffers(BenchmarkBuffers& buffers, const BenchmarkConfig& con
           std::cerr << Messages::error_prefix() << Messages::error_l1_buffer_not_allocated() << std::endl;
           return EXIT_FAILURE;
         }
-        if (setup_latency_chain(buffers.l1_buffer(), config.l1_buffer_size, Constants::LATENCY_STRIDE_BYTES,
-                                config.latency_tlb_locality_bytes) != EXIT_SUCCESS) {
+        if (setup_latency_chain(buffers.l1_buffer(), config.l1_buffer_size, config.latency_stride_bytes,
+                                config.latency_tlb_locality_bytes,
+                                collect_chain_diagnostics ? &config.l1_latency_chain_diagnostics : nullptr) != EXIT_SUCCESS) {
           return EXIT_FAILURE;
         }
       }
@@ -142,8 +151,9 @@ int initialize_all_buffers(BenchmarkBuffers& buffers, const BenchmarkConfig& con
           std::cerr << Messages::error_prefix() << Messages::error_l2_buffer_not_allocated() << std::endl;
           return EXIT_FAILURE;
         }
-        if (setup_latency_chain(buffers.l2_buffer(), config.l2_buffer_size, Constants::LATENCY_STRIDE_BYTES,
-                                config.latency_tlb_locality_bytes) != EXIT_SUCCESS) {
+        if (setup_latency_chain(buffers.l2_buffer(), config.l2_buffer_size, config.latency_stride_bytes,
+                                config.latency_tlb_locality_bytes,
+                                collect_chain_diagnostics ? &config.l2_latency_chain_diagnostics : nullptr) != EXIT_SUCCESS) {
           return EXIT_FAILURE;
         }
       }

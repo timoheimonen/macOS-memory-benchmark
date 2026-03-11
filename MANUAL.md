@@ -111,6 +111,9 @@ Latency tests use dependent pointer-chase chains. `-latency-tlb-locality-kb` con
 - `0`: fully global random chain
 - non-zero values must be multiples of system page size
 
+`-latency-stride-bytes` controls spacing between chain nodes. Smaller stride biases toward same-page reuse;
+larger stride increases page turnover pressure.
+
 Use `0` when you explicitly want stronger translation effects in the measured path.
 
 ### Pattern benchmarks
@@ -188,6 +191,14 @@ Pattern mode (`-patterns`) measures bandwidth sensitivity across:
 - Default: `1000`
 - Positive integer
 - More samples improve percentile stability at the cost of run time
+
+#### `-latency-stride-bytes <bytes>`
+
+- Pointer-chain stride for latency tests
+- Default: `136`
+- Must be `> 0`
+- Must be a multiple of pointer size (`8` bytes on Apple Silicon)
+- Use smaller values (for example `64`) to increase same-page cache-line activity and reduce TLB sensitivity
 
 #### `-latency-tlb-locality-kb <size_kb>`
 
@@ -400,6 +411,8 @@ For noisy systems, prioritize median and P95/P99 rather than single fastest/slow
 
 Latency values are structured objects, not scalars:
 
+When `-latency-stride-bytes` is explicitly set, latency sections also include `chain_diagnostics`.
+
 ```json
 "latency": {
   "average_ns": {
@@ -425,6 +438,12 @@ Latency values are structured objects, not scalars:
     "stddev": 0.47,
     "min": 26.24,
     "max": 27.73
+  },
+  "chain_diagnostics": {
+    "pointer_count": 1057030,
+    "unique_pages_touched": 65536,
+    "page_size_bytes": 16384,
+    "stride_bytes": 64
   }
 }
 ```

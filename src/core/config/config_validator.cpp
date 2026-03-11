@@ -42,6 +42,8 @@
 #include "output/console/messages.h"
 #include <iostream>
 #include <unistd.h>  // getpagesize
+#include <cstdint>   // uintptr_t
+#include <limits>
 #include <cstdlib>
 
 /**
@@ -65,6 +67,21 @@
  */
 int validate_config(BenchmarkConfig& config) {
   const size_t page_size = static_cast<size_t>(getpagesize());
+
+  // Error: Validate latency stride settings.
+  if (config.latency_stride_bytes == 0) {
+    std::cerr << Messages::error_prefix()
+              << Messages::error_latency_stride_invalid(0, 1, std::numeric_limits<long long>::max())
+              << std::endl;
+    return EXIT_FAILURE;
+  }
+
+  if ((config.latency_stride_bytes % sizeof(uintptr_t)) != 0) {
+    std::cerr << Messages::error_prefix()
+              << Messages::error_latency_stride_alignment(config.latency_stride_bytes, sizeof(uintptr_t))
+              << std::endl;
+    return EXIT_FAILURE;
+  }
 
   // Error: Validate mutually exclusive flags
   if (config.only_bandwidth && config.only_latency) {
@@ -98,6 +115,46 @@ int validate_config(BenchmarkConfig& config) {
     }
   }
 
+  if (!config.only_bandwidth) {
+    if (config.use_custom_cache_size && config.custom_cache_size_bytes > 0) {
+      const size_t custom_pointer_count = config.custom_cache_size_bytes / config.latency_stride_bytes;
+      if (custom_pointer_count < 2) {
+        std::cerr << Messages::error_prefix()
+                  << Messages::error_buffer_stride_invalid_latency_chain(custom_pointer_count,
+                                                                         config.custom_cache_size_bytes,
+                                                                         config.latency_stride_bytes)
+                  << std::endl;
+        return EXIT_FAILURE;
+      }
+    }
+
+    if (!config.use_custom_cache_size) {
+      if (config.l1_cache_size > 0) {
+        const size_t l1_pointer_count = config.l1_cache_size / config.latency_stride_bytes;
+        if (l1_pointer_count < 2) {
+          std::cerr << Messages::error_prefix()
+                    << Messages::error_buffer_stride_invalid_latency_chain(l1_pointer_count,
+                                                                           config.l1_cache_size,
+                                                                           config.latency_stride_bytes)
+                    << std::endl;
+          return EXIT_FAILURE;
+        }
+      }
+
+      if (config.l2_cache_size > 0) {
+        const size_t l2_pointer_count = config.l2_cache_size / config.latency_stride_bytes;
+        if (l2_pointer_count < 2) {
+          std::cerr << Messages::error_prefix()
+                    << Messages::error_buffer_stride_invalid_latency_chain(l2_pointer_count,
+                                                                           config.l2_cache_size,
+                                                                           config.latency_stride_bytes)
+                    << std::endl;
+          return EXIT_FAILURE;
+        }
+      }
+    }
+  }
+
   // Zero-size disabling behavior is only supported with -only-latency.
   const bool cache_latency_disabled = (config.custom_cache_size_kb_ll == 0);
   const bool main_latency_disabled = (config.buffer_size_mb == 0);
@@ -122,6 +179,15 @@ int validate_config(BenchmarkConfig& config) {
     const size_t page_kb = page_size / Constants::BYTES_PER_KB;
     std::cerr << Messages::error_prefix()
               << Messages::error_latency_tlb_locality_page_multiple(locality_kb, page_kb)
+              << std::endl;
+    return EXIT_FAILURE;  // Return code: validation error
+  }
+
+  if (config.latency_tlb_locality_bytes > 0 &&
+      (config.latency_tlb_locality_bytes / config.latency_stride_bytes) < 2) {
+    std::cerr << Messages::error_prefix()
+              << Messages::error_latency_tlb_locality_too_small_for_stride(
+                     config.latency_tlb_locality_bytes, config.latency_stride_bytes)
               << std::endl;
     return EXIT_FAILURE;  // Return code: validation error
   }
@@ -178,7 +244,8 @@ int validate_config(BenchmarkConfig& config) {
   
   // Error: Buffer size must meet minimum requirements (page size and minimum latency buffer size)
   // Skip this check when main memory latency is explicitly disabled (-only-latency with -buffersize 0).
-  if (config.buffer_size_mb > 0 && (config.buffer_size < page_size || config.buffer_size < Constants::MIN_LATENCY_BUFFER_SIZE)) {
+  if (config.buffer_size_mb > 0 &&
+      (config.buffer_size < page_size || (config.buffer_size / config.latency_stride_bytes) < 2)) {
     std::cerr << Messages::error_prefix() << Messages::error_buffer_size_too_small(config.buffer_size) << std::endl;
     return EXIT_FAILURE;  // Return code: validation error
   }
