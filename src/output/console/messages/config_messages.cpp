@@ -83,6 +83,12 @@ std::string config_non_cacheable(bool use_non_cacheable) {
   return oss.str();
 }
 
+std::string config_latency_stride(size_t stride_bytes) {
+  std::ostringstream oss;
+  oss << "Latency Stride: " << stride_bytes << " B";
+  return oss.str();
+}
+
 std::string config_latency_tlb_locality(size_t locality_bytes) {
   std::ostringstream oss;
   oss << "Latency TLB Locality: ";

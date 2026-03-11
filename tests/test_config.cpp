@@ -1,4 +1,4 @@
-// Copyright 2025 Timo Heimonen <timo.heimonen@proton.me>
+// Copyright 2026 Timo Heimonen <timo.heimonen@proton.me>
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -18,6 +18,7 @@
 #include "core/config/constants.h"
 #include <cstdlib>
 #include <limits>
+#include <cstdint>
 #include <unistd.h>  // getpagesize
 
 // Test default configuration values
@@ -26,6 +27,7 @@ TEST(ConfigTest, DefaultValues) {
   EXPECT_EQ(config.buffer_size_mb, Constants::DEFAULT_BUFFER_SIZE_MB);
   EXPECT_EQ(config.iterations, Constants::DEFAULT_ITERATIONS);
   EXPECT_EQ(config.loop_count, Constants::DEFAULT_LOOP_COUNT);
+  EXPECT_EQ(config.latency_stride_bytes, static_cast<size_t>(Constants::LATENCY_STRIDE_BYTES));
   EXPECT_EQ(config.latency_tlb_locality_bytes, static_cast<size_t>(16) * Constants::BYTES_PER_KB);
   EXPECT_EQ(config.custom_cache_size_kb_ll, -1);
   EXPECT_FALSE(config.use_custom_cache_size);
@@ -111,6 +113,25 @@ TEST(ConfigTest, ParseLatencyTlbLocalityValid) {
   int result = parse_arguments(argc, const_cast<char**>(argv), config);
   EXPECT_EQ(result, EXIT_SUCCESS);
   EXPECT_EQ(config.latency_tlb_locality_bytes, static_cast<size_t>(16) * Constants::BYTES_PER_KB);
+}
+
+TEST(ConfigTest, ParseLatencyStrideValid) {
+  BenchmarkConfig config;
+  const char* argv[] = {"program", "-latency-stride-bytes", "64"};
+  int argc = 3;
+
+  int result = parse_arguments(argc, const_cast<char**>(argv), config);
+  EXPECT_EQ(result, EXIT_SUCCESS);
+  EXPECT_EQ(config.latency_stride_bytes, 64u);
+}
+
+TEST(ConfigTest, ParseLatencyStrideInvalidZero) {
+  BenchmarkConfig config;
+  const char* argv[] = {"program", "-latency-stride-bytes", "0"};
+  int argc = 3;
+
+  int result = parse_arguments(argc, const_cast<char**>(argv), config);
+  EXPECT_EQ(result, EXIT_FAILURE);
 }
 
 TEST(ConfigTest, ParseLatencyTlbLocalityZeroDisables) {
@@ -333,6 +354,34 @@ TEST(ConfigTest, ValidateConfigRejectsLatencyTlbLocalityNotPageMultiple) {
 
   int result = validate_config(config);
   EXPECT_EQ(result, EXIT_FAILURE);
+}
+
+TEST(ConfigTest, ValidateConfigRejectsLatencyStrideNotPointerAligned) {
+  BenchmarkConfig config;
+  config.latency_stride_bytes = sizeof(uintptr_t) + 1;
+
+  int result = validate_config(config);
+  EXPECT_EQ(result, EXIT_FAILURE);
+}
+
+TEST(ConfigTest, ValidateConfigRejectsLatencyTlbLocalityTooSmallForStride) {
+  BenchmarkConfig config;
+  const size_t page_size = static_cast<size_t>(getpagesize());
+  config.latency_stride_bytes = page_size;
+  config.latency_tlb_locality_bytes = page_size;
+
+  int result = validate_config(config);
+  EXPECT_EQ(result, EXIT_FAILURE);
+}
+
+TEST(ConfigTest, ValidateConfigAllowsLatencyTlbLocalityForStride) {
+  BenchmarkConfig config;
+  const size_t page_size = static_cast<size_t>(getpagesize());
+  config.latency_stride_bytes = page_size;
+  config.latency_tlb_locality_bytes = page_size * 2;
+
+  int result = validate_config(config);
+  EXPECT_EQ(result, EXIT_SUCCESS);
 }
 
 TEST(ConfigTest, ValidateConfigAllowsLatencyTlbLocalityPageMultiple) {

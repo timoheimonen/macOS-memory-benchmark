@@ -117,7 +117,8 @@ int main(int argc, char *argv[]) {
   // --- Print Config ---
   print_configuration(config.buffer_size, config.buffer_size_mb, total_allocation_bytes,
                       config.iterations, config.loop_count,
-                      config.use_non_cacheable, config.latency_tlb_locality_bytes,
+                      config.use_non_cacheable, config.latency_stride_bytes,
+                      config.latency_tlb_locality_bytes,
                       config.cpu_name, config.perf_cores, config.eff_cores, config.num_threads,
                       config.only_bandwidth, config.only_latency, config.run_patterns);
   print_cache_info(config.l1_cache_size, config.l2_cache_size, config.use_custom_cache_size, config.custom_cache_size_bytes);

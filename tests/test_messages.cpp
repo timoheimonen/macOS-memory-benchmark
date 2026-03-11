@@ -1,4 +1,4 @@
-// Copyright 2025 Timo Heimonen <timo.heimonen@proton.me>
+// Copyright 2026 Timo Heimonen <timo.heimonen@proton.me>
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -247,6 +247,17 @@ TEST_F(MessagesErrorTest, ErrorLatencySamplesInvalid) {
   EXPECT_EQ(msg2, "latency-samples invalid (must be between 1 and 5000, got -1)");
 }
 
+TEST_F(MessagesErrorTest, ErrorLatencyStrideInvalid) {
+  std::string msg = Messages::error_latency_stride_invalid(0, 1, 9223372036854775807LL);
+  EXPECT_NE(msg.find("latency-stride-bytes invalid"), std::string::npos);
+  EXPECT_NE(msg.find("got 0"), std::string::npos);
+}
+
+TEST_F(MessagesErrorTest, ErrorLatencyStrideAlignment) {
+  std::string msg = Messages::error_latency_stride_alignment(65, 8);
+  EXPECT_EQ(msg, "latency-stride-bytes must be a multiple of 8 bytes, got 65");
+}
+
 TEST_F(MessagesErrorTest, ErrorLatencyTlbLocalityInvalid) {
   std::string msg = Messages::error_latency_tlb_locality_invalid(-1, 1024);
   EXPECT_EQ(msg, "latency-tlb-locality-kb invalid (must be >= 0 and <= 1024, got -1)");
@@ -255,6 +266,12 @@ TEST_F(MessagesErrorTest, ErrorLatencyTlbLocalityInvalid) {
 TEST_F(MessagesErrorTest, ErrorLatencyTlbLocalityPageMultiple) {
   std::string msg = Messages::error_latency_tlb_locality_page_multiple(10, 16);
   EXPECT_EQ(msg, "latency-tlb-locality-kb must be a multiple of system page size (16 KB), got 10 KB");
+}
+
+TEST_F(MessagesErrorTest, ErrorLatencyTlbLocalityTooSmallForStride) {
+  std::string msg = Messages::error_latency_tlb_locality_too_small_for_stride(4096, 4096);
+  EXPECT_NE(msg.find("latency-tlb-locality-kb too small for latency-stride-bytes"), std::string::npos);
+  EXPECT_NE(msg.find("requires at least 8192 bytes"), std::string::npos);
 }
 
 TEST_F(MessagesErrorTest, ErrorMadviseFailed) {
@@ -347,6 +364,7 @@ TEST_F(MessagesFormattingTest, UsageOptions) {
   EXPECT_NE(msg.find("-buffersize"), std::string::npos);
   EXPECT_NE(msg.find("-count"), std::string::npos);
   EXPECT_NE(msg.find("-latency-samples"), std::string::npos);
+  EXPECT_NE(msg.find("-latency-stride-bytes"), std::string::npos);
   EXPECT_NE(msg.find("-latency-tlb-locality-kb"), std::string::npos);
   EXPECT_NE(msg.find("-cache-size"), std::string::npos);
   EXPECT_NE(msg.find("-h"), std::string::npos);
@@ -427,6 +445,13 @@ TEST_F(MessagesFormattingTest, ConfigNonCacheable) {
   msg = Messages::config_non_cacheable(false);
   EXPECT_NE(msg.find("Non-Cacheable Memory Hints"), std::string::npos);
   EXPECT_NE(msg.find("Disabled"), std::string::npos);
+}
+
+TEST_F(MessagesFormattingTest, ConfigLatencyStride) {
+  std::string msg = Messages::config_latency_stride(136);
+  EXPECT_NE(msg.find("Latency Stride"), std::string::npos);
+  EXPECT_NE(msg.find("136"), std::string::npos);
+  EXPECT_NE(msg.find("B"), std::string::npos);
 }
 
 TEST_F(MessagesFormattingTest, ConfigLatencyTlbLocality) {

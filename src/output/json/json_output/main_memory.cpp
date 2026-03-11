@@ -1,4 +1,4 @@
-// Copyright 2025 Timo Heimonen <timo.heimonen@proton.me>
+// Copyright 2026 Timo Heimonen <timo.heimonen@proton.me>
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -49,8 +49,16 @@ nlohmann::json build_main_memory_json(const BenchmarkConfig& config, const Bench
     add_latency_results(main_memory,
                         stats.all_average_latency_ns,
                         stats.all_main_mem_latency_samples);
+
+    const auto& diagnostics = config.main_latency_chain_diagnostics;
+    if (main_memory.contains(JsonKeys::LATENCY) && diagnostics.pointer_count > 0) {
+      main_memory[JsonKeys::LATENCY][JsonKeys::CHAIN_DIAGNOSTICS] = {
+          {JsonKeys::POINTER_COUNT, diagnostics.pointer_count},
+          {JsonKeys::UNIQUE_PAGES_TOUCHED, diagnostics.unique_pages_touched},
+          {JsonKeys::PAGE_SIZE_BYTES, diagnostics.page_size_bytes},
+          {JsonKeys::STRIDE_BYTES, diagnostics.stride_bytes}};
+    }
   }
   
   return main_memory;
 }
-

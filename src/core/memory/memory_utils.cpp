@@ -1,4 +1,4 @@
-// Copyright 2025 Timo Heimonen <timo.heimonen@proton.me>
+// Copyright 2026 Timo Heimonen <timo.heimonen@proton.me>
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -32,6 +32,7 @@
 #include <cstring>   // Needed for memset
 #include <iostream>  // Needed for std::cout, std::cerr
 #include <cstdlib>   // Needed for EXIT_SUCCESS, EXIT_FAILURE
+#include <unistd.h>  // getpagesize
 
 namespace {
 
@@ -93,8 +94,17 @@ void shuffle_indices_with_tlb_locality(std::vector<size_t>& indices, size_t loca
  *
  * @see initialize_buffers() for buffer initialization
  */
-int setup_latency_chain(void *buffer, size_t buffer_size, size_t stride, size_t tlb_locality_bytes)
+int setup_latency_chain(void *buffer, size_t buffer_size, size_t stride,
+                        size_t tlb_locality_bytes,
+                        LatencyChainDiagnostics* diagnostics)
 {
+    if (diagnostics != nullptr) {
+        diagnostics->pointer_count = 0;
+        diagnostics->unique_pages_touched = 0;
+        diagnostics->page_size_bytes = 0;
+        diagnostics->stride_bytes = stride;
+    }
+
     // Validate input parameters
     if (buffer == nullptr) {
         std::cerr << Messages::error_prefix() << Messages::error_buffer_pointer_null_latency_chain() << std::endl;
@@ -113,6 +123,19 @@ int setup_latency_chain(void *buffer, size_t buffer_size, size_t stride, size_t 
     {
         std::cerr << Messages::error_prefix() << Messages::error_buffer_stride_invalid_latency_chain(num_pointers, buffer_size, stride) << std::endl;
         return EXIT_FAILURE;
+    }
+
+    const int page_size_raw = getpagesize();
+    const size_t page_size = (page_size_raw > 0) ? static_cast<size_t>(page_size_raw) : 0;
+    const bool collect_page_diagnostics = (diagnostics != nullptr && page_size > 0);
+    std::vector<uint8_t> page_seen;
+    size_t unique_pages_touched = 0;
+    size_t base_page_offset = 0;
+    if (collect_page_diagnostics) {
+        base_page_offset = reinterpret_cast<uintptr_t>(buffer) % page_size;
+        const size_t span_with_offset = base_page_offset + buffer_size;
+        const size_t page_count = (span_with_offset + page_size - 1) / page_size;
+        page_seen.assign(page_count, 0);
     }
 
     // Create a vector to store the indices of pointer locations.
@@ -158,6 +181,18 @@ int setup_latency_chain(void *buffer, size_t buffer_size, size_t stride, size_t 
             std::cerr << Messages::error_prefix() << Messages::error_offset_exceeds_bounds(current_offset, max_valid_offset) << std::endl;
             return EXIT_FAILURE;
         }
+
+        if (collect_page_diagnostics) {
+            const size_t page_index = (base_page_offset + current_offset) / page_size;
+            if (page_index >= page_seen.size()) {
+                std::cerr << Messages::error_prefix() << Messages::error_offset_exceeds_bounds(page_index, page_seen.size() - 1) << std::endl;
+                return EXIT_FAILURE;
+            }
+            if (page_seen[page_index] == 0) {
+                page_seen[page_index] = 1;
+                ++unique_pages_touched;
+            }
+        }
         
         uintptr_t *current_loc = (uintptr_t *)(base_ptr + current_offset);
         
@@ -176,6 +211,13 @@ int setup_latency_chain(void *buffer, size_t buffer_size, size_t stride, size_t 
         
         // Write the address of the next element into the current location.
         *current_loc = next_addr;
+    }
+
+    if (diagnostics != nullptr) {
+        diagnostics->pointer_count = num_pointers;
+        diagnostics->unique_pages_touched = unique_pages_touched;
+        diagnostics->page_size_bytes = page_size;
+        diagnostics->stride_bytes = stride;
     }
     
     return EXIT_SUCCESS;

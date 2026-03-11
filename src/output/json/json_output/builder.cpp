@@ -1,4 +1,4 @@
-// Copyright 2025 Timo Heimonen <timo.heimonen@proton.me>
+// Copyright 2026 Timo Heimonen <timo.heimonen@proton.me>
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -109,6 +109,7 @@ nlohmann::json build_config_json(const BenchmarkConfig& config) {
   config_json[JsonKeys::ITERATIONS] = config.iterations;
   config_json[JsonKeys::LOOP_COUNT] = config.loop_count;
   config_json[JsonKeys::LATENCY_SAMPLE_COUNT] = config.latency_sample_count;
+  config_json[JsonKeys::LATENCY_STRIDE_BYTES] = config.latency_stride_bytes;
   config_json[JsonKeys::USE_LATENCY_TLB_LOCALITY] = (config.latency_tlb_locality_bytes > 0);
   config_json[JsonKeys::LATENCY_TLB_LOCALITY_BYTES] = config.latency_tlb_locality_bytes;
   config_json[JsonKeys::LATENCY_TLB_LOCALITY_KB] = config.latency_tlb_locality_bytes / 1024;

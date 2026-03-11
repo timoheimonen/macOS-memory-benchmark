@@ -22,6 +22,7 @@
  * It handles parsing and validation of all command-line options including:
  * - Buffer size configuration (-buffersize)
  * - Iteration counts (-iterations, -count)
+ * - Latency pointer-chain stride (-latency-stride-bytes)
  * - Cache size specification (-cache-size)
  * - Thread count configuration (-threads)
  * - Test mode selection (-patterns, -only-bandwidth, -only-latency)
@@ -188,6 +189,18 @@ int parse_arguments(int argc, char* argv[], BenchmarkConfig& config) {
         } else
           // Error: Missing required value
           throw std::invalid_argument(Messages::error_missing_value("-latency-samples"));
+      } else if (arg == "-latency-stride-bytes") {
+        if (++i < argc) {
+          long long val_ll = std::stoll(argv[i]);
+          if (val_ll <= 0) {
+            throw std::out_of_range(Messages::error_latency_stride_invalid(
+                val_ll, 1, std::numeric_limits<long long>::max()));
+          }
+          config.latency_stride_bytes = static_cast<size_t>(val_ll);
+          config.user_specified_latency_stride = true;
+        } else {
+          throw std::invalid_argument(Messages::error_missing_value("-latency-stride-bytes"));
+        }
       } else if (arg == "-latency-tlb-locality-kb") {
         if (++i < argc) {
           long long val_ll = std::stoll(argv[i]);

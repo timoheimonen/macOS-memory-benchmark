@@ -1,4 +1,4 @@
-// Copyright 2025 Timo Heimonen <timo.heimonen@proton.me>
+// Copyright 2026 Timo Heimonen <timo.heimonen@proton.me>
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -25,6 +25,7 @@
 
 #include "messages.h"
 #include <sstream>
+#include <limits>
 
 namespace Messages {
 
@@ -96,6 +97,20 @@ std::string error_latency_samples_invalid(long long value, long long min_val, lo
   return oss.str();
 }
 
+std::string error_latency_stride_invalid(long long value, long long min_val, long long max_val) {
+  std::ostringstream oss;
+  oss << "latency-stride-bytes invalid (must be between " << min_val << " and " << max_val
+      << ", got " << value << ")";
+  return oss.str();
+}
+
+std::string error_latency_stride_alignment(size_t value_bytes, size_t alignment_bytes) {
+  std::ostringstream oss;
+  oss << "latency-stride-bytes must be a multiple of " << alignment_bytes
+      << " bytes, got " << value_bytes;
+  return oss.str();
+}
+
 std::string error_latency_tlb_locality_invalid(long long value, long long max_val) {
   std::ostringstream oss;
   oss << "latency-tlb-locality-kb invalid (must be >= 0 and <= " << max_val
@@ -107,6 +122,18 @@ std::string error_latency_tlb_locality_page_multiple(size_t value_kb, size_t pag
   std::ostringstream oss;
   oss << "latency-tlb-locality-kb must be a multiple of system page size ("
       << page_size_kb << " KB), got " << value_kb << " KB";
+  return oss.str();
+}
+
+std::string error_latency_tlb_locality_too_small_for_stride(size_t locality_bytes,
+                                                             size_t stride_bytes) {
+  const size_t required_bytes =
+      (stride_bytes > std::numeric_limits<size_t>::max() / 2)
+          ? std::numeric_limits<size_t>::max()
+          : (2 * stride_bytes);
+  std::ostringstream oss;
+  oss << "latency-tlb-locality-kb too small for latency-stride-bytes (requires at least "
+      << required_bytes << " bytes, got " << locality_bytes << " bytes)";
   return oss.str();
 }
 
