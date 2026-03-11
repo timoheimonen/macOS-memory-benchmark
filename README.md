@@ -10,7 +10,9 @@ License: GPL-3.0 license
 ![Mac Mini M4 Cache Latency from multiple JSON-files](pictures/MacMiniM4_cache_latency_with_TLB_5loops_p50_values.png)  
 Mac Mini M4 Cache Latency from multiple JSON-files with example-script provided. Using different size TLB locality. This shows the penalty if program critical memory area does not fit the TLB.  
 Blue at the end 'TLB hit' ~25ns where brown is total 'TLB miss' ~90-95ns+.
+
 ![Mac Mini M4 Cache Latency/Stride/TLB from multiple JSON-files](pictures/MacMiniM4_cache_latency_with_STRIDE_TLB.png)  
+Seconds script-example what is using `-latency-stride-bytes` argument parameter. 
 
 ## Description
 
