@@ -40,7 +40,7 @@
 #include "core/config/config.h"
 #include "core/memory/buffer_manager.h"
 #include "benchmark/benchmark_runner.h"
-#include "benchmark/analysis.h"
+#include "benchmark/tlb_analysis.h"
 #include "output/console/messages.h"
 #include "core/config/constants.h"
 #include "output/json/json_output.h"

@@ -19,7 +19,7 @@
 #include <algorithm>
 #include <vector>
 
-#include "benchmark/analysis.h"
+#include "benchmark/tlb_analysis.h"
 #include "core/config/constants.h"
 
 TEST(AnalysisTest, DetectBoundaryFindsL1Transition) {

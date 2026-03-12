@@ -18,8 +18,8 @@ This is an implementation whitepaper, not a generic architecture theory paper.
 
 Primary implementation references:
 
-- `src/benchmark/analysis.cpp`
-- `src/benchmark/analysis.h`
+- `src/benchmark/tlb_analysis.cpp`
+- `src/benchmark/tlb_analysis.h`
 - `src/core/config/argument_parser.cpp`
 - `tests/test_analysis.cpp`
 

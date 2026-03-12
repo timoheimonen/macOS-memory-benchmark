@@ -15,11 +15,11 @@
 //
 
 /**
- * @file analysis.cpp
+ * @file tlb_analysis.cpp
  * @brief Standalone TLB analysis mode implementation
  */
 
-#include "benchmark/analysis.h"
+#include "benchmark/tlb_analysis.h"
 
 #include <algorithm>
 #include <array>
@@ -27,12 +27,8 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdlib>
-#include <filesystem>
-#include <iomanip>
 #include <iostream>
 #include <limits>
-#include <numeric>
-#include <sstream>
 #include <string>
 #include <vector>
 
@@ -40,6 +36,7 @@
 #include <unistd.h>
 
 #include "benchmark/benchmark_tests.h"
+#include "benchmark/tlb_analysis_json.h"
 #include "core/config/config.h"
 #include "core/config/constants.h"
 #include "core/config/version.h"
@@ -48,7 +45,6 @@
 #include "core/system/system_info.h"
 #include "core/timing/timer.h"
 #include "output/console/messages.h"
-#include "output/json/json_output.h"
 #include "warmup/warmup.h"
 
 namespace {
@@ -60,8 +56,6 @@ constexpr size_t kSweepMinLocalityBytes = 16 * Constants::BYTES_PER_KB;
 constexpr size_t kSweepMaxLocalityBytes = 256 * Constants::BYTES_PER_MB;
 constexpr size_t kPageWalkComparisonLocalityBytes = 512 * Constants::BYTES_PER_MB;
 constexpr size_t kPageWalkMinimumBufferMb = 512;
-constexpr double kRelativeThreshold = 0.10;
-constexpr double kAbsoluteThresholdNs = 2.0;
 
 const std::array<size_t, 15> kLocalitySweepBytes = {
     16 * Constants::BYTES_PER_KB,        64 * Constants::BYTES_PER_KB,
@@ -111,29 +105,6 @@ std::vector<size_t> build_effective_locality_sweep(size_t stride_bytes) {
   std::sort(localities.begin(), localities.end());
   localities.erase(std::unique(localities.begin(), localities.end()), localities.end());
   return localities;
-}
-
-/**
- * @brief Compute arithmetic mean for a half-open range.
- *
- * Calculates the average of `values[start, end)`. Returns `0.0` when the
- * range is invalid or empty.
- *
- * @param[in] values Source value vector
- * @param[in] start  Inclusive start index
- * @param[in] end    Exclusive end index
- *
- * @return Mean value for the requested range, or `0.0` on invalid input.
- */
-double average_range(const std::vector<double>& values, size_t start, size_t end) {
-  if (start >= end || end > values.size()) {
-    return 0.0;
-  }
-
-  const double sum = std::accumulate(values.begin() + static_cast<std::ptrdiff_t>(start),
-                                     values.begin() + static_cast<std::ptrdiff_t>(end), 0.0);
-  const double count = static_cast<double>(end - start);
-  return (count > 0.0) ? (sum / count) : 0.0;
 }
 
 double median(std::vector<double> values) {
@@ -221,220 +192,7 @@ bool measure_locality_p50(void* latency_buffer,
   return true;
 }
 
-nlohmann::ordered_json build_tlb_boundary_json(const TlbBoundaryDetection& boundary,
-                                               size_t inferred_entries) {
-  nlohmann::ordered_json boundary_json;
-  boundary_json["detected"] = boundary.detected;
-  if (!boundary.detected) {
-    return boundary_json;
-  }
-
-  boundary_json["segment_start_index"] = boundary.segment_start_index;
-  boundary_json["boundary_index"] = boundary.boundary_index;
-  boundary_json["boundary_locality_bytes"] = boundary.boundary_locality_bytes;
-  boundary_json["boundary_locality_kb"] = boundary.boundary_locality_bytes / Constants::BYTES_PER_KB;
-  boundary_json["baseline_ns"] = boundary.baseline_ns;
-  boundary_json["boundary_latency_ns"] = boundary.boundary_latency_ns;
-  boundary_json["step_ns"] = boundary.step_ns;
-  boundary_json["step_percent"] = boundary.step_percent;
-  boundary_json["persistent_jump"] = boundary.persistent_jump;
-  boundary_json["confidence"] = boundary.confidence;
-  boundary_json["inferred_entries"] = inferred_entries;
-  return boundary_json;
-}
-
-std::string build_utc_timestamp() {
-  auto now = std::chrono::system_clock::now();
-  auto time_t = std::chrono::system_clock::to_time_t(now);
-  std::tm utc_time;
-  gmtime_r(&time_t, &utc_time);
-  std::ostringstream timestamp_str;
-  timestamp_str << std::put_time(&utc_time, "%Y-%m-%dT%H:%M:%SZ");
-  return timestamp_str.str();
-}
-
-int save_tlb_analysis_to_json(
-    const BenchmarkConfig& config,
-    const std::string& cpu_name,
-    size_t page_size_bytes,
-    size_t l1_cache_size_bytes,
-    size_t tlb_guard_bytes,
-    size_t stride_bytes,
-    size_t page_walk_baseline_locality_bytes,
-    size_t selected_buffer_mb,
-    bool buffer_locked,
-    const std::vector<size_t>& localities_bytes,
-    const std::vector<std::vector<double>>& sweep_loop_latencies_ns,
-    const std::vector<double>& p50_latency_ns,
-    const TlbBoundaryDetection& l1_boundary,
-    const TlbBoundaryDetection& l2_boundary,
-    size_t l1_entries,
-    size_t l2_entries,
-    bool can_measure_page_walk_penalty,
-    const std::vector<double>& page_walk_512mb_loop_latencies_ns,
-    double page_walk_512mb_p50_ns,
-    double page_walk_baseline_ns,
-    double page_walk_penalty_ns,
-    double total_execution_time_sec) {
-  if (config.output_file.empty()) {
-    return EXIT_SUCCESS;
-  }
-
-  nlohmann::ordered_json json_output;
-  json_output[JsonKeys::CONFIGURATION] = {
-      {"mode", "analyze_tlb"},
-      {JsonKeys::CPU_NAME, cpu_name},
-      {JsonKeys::PAGE_SIZE_BYTES, page_size_bytes},
-      {JsonKeys::L1_CACHE_SIZE_BYTES, l1_cache_size_bytes},
-      {JsonKeys::LATENCY_STRIDE_BYTES, stride_bytes},
-      {JsonKeys::LATENCY_SAMPLE_COUNT, static_cast<int>(kLoopsPerPoint)},
-      {"accesses_per_loop", kAccessesPerLoop},
-      {"tlb_guard_bytes", tlb_guard_bytes},
-      {"buffer_size_mb", selected_buffer_mb},
-      {"buffer_locked", buffer_locked}};
-  json_output[JsonKeys::EXECUTION_TIME_SEC] = total_execution_time_sec;
-
-  nlohmann::ordered_json sweep_json = nlohmann::ordered_json::array();
-  for (size_t i = 0; i < localities_bytes.size(); ++i) {
-    nlohmann::ordered_json point;
-    point["locality_bytes"] = localities_bytes[i];
-    point["locality_kb"] = localities_bytes[i] / Constants::BYTES_PER_KB;
-    point["loop_latencies_ns"] = sweep_loop_latencies_ns[i];
-    point["p50_latency_ns"] = p50_latency_ns[i];
-    sweep_json.push_back(point);
-  }
-
-  nlohmann::ordered_json tlb_json;
-  tlb_json["sweep"] = sweep_json;
-  tlb_json["l1_tlb_detection"] = build_tlb_boundary_json(l1_boundary, l1_entries);
-  tlb_json["l2_tlb_detection"] = build_tlb_boundary_json(l2_boundary, l2_entries);
-  tlb_json["page_walk_penalty"] = {
-      {"available", can_measure_page_walk_penalty},
-      {"baseline_locality_kb", page_walk_baseline_locality_bytes / Constants::BYTES_PER_KB},
-      {"comparison_locality_mb", kPageWalkComparisonLocalityBytes / Constants::BYTES_PER_MB},
-      {"baseline_p50_ns", page_walk_baseline_ns}};
-  if (can_measure_page_walk_penalty) {
-    tlb_json["page_walk_penalty"]["comparison_loop_latencies_ns"] = page_walk_512mb_loop_latencies_ns;
-    tlb_json["page_walk_penalty"]["comparison_p50_ns"] = page_walk_512mb_p50_ns;
-    tlb_json["page_walk_penalty"]["penalty_ns"] = page_walk_penalty_ns;
-  } else {
-    tlb_json["page_walk_penalty"]["reason"] =
-        "requires at least 512 MB analysis buffer";
-  }
-  json_output["tlb_analysis"] = tlb_json;
-  json_output[JsonKeys::TIMESTAMP] = build_utc_timestamp();
-  json_output[JsonKeys::VERSION] = SOFTVERSION;
-
-  std::filesystem::path file_path(config.output_file);
-  if (file_path.is_relative()) {
-    file_path = std::filesystem::current_path() / file_path;
-  }
-  return write_json_to_file(file_path, json_output);
-}
-
 }  // namespace
-
-/**
- * @brief Classify boundary confidence level.
- *
- * Confidence is based on step magnitude and whether the jump persists at the
- * next locality point.
- *
- * @param[in] step_ns         Absolute boundary step in nanoseconds
- * @param[in] step_percent    Relative boundary step (0.10 = 10%)
- * @param[in] persistent_jump True when next point remains above threshold
- *
- * @return "High", "Medium", or "Low" confidence label.
- */
-std::string classify_tlb_confidence(double step_ns, double step_percent, bool persistent_jump) {
-  const bool strong_step = (step_ns >= 4.0) || (step_percent >= 0.15);
-
-  if (strong_step && persistent_jump) {
-    return "High";
-  }
-  if (strong_step || persistent_jump) {
-    return "Medium";
-  }
-  return "Low";
-}
-
-/**
- * @brief Infer TLB entry count from locality boundary and page size.
- *
- * @param[in] locality_bytes  Boundary locality window in bytes
- * @param[in] page_size_bytes System page size in bytes
- *
- * @return Inferred entry count, or 0 if page size is zero.
- */
-size_t infer_tlb_entries(size_t locality_bytes, size_t page_size_bytes) {
-  if (page_size_bytes == 0) {
-    return 0;
-  }
-  return locality_bytes / page_size_bytes;
-}
-
-/**
- * @brief Detect first latency boundary in a locality segment.
- *
- * Scans from `segment_start_index + 1` onward and marks the first point where
- * latency rises by at least `max(2ns, 10% of baseline)` against a running
- * average baseline built from the current segment.
- *
- * @param[in] locality_bytes       Locality windows in measurement order
- * @param[in] p50_latency_ns       P50 latency values for each locality point
- * @param[in] segment_start_index  Start index of the active baseline segment
- * @param[in] min_locality_bytes   Minimum locality accepted as TLB boundary
- *
- * @return Boundary detection result including index, step, and confidence.
- */
-TlbBoundaryDetection detect_tlb_boundary(const std::vector<size_t>& locality_bytes,
-                                         const std::vector<double>& p50_latency_ns,
-                                         size_t segment_start_index,
-                                         size_t min_locality_bytes) {
-  TlbBoundaryDetection result;
-  result.segment_start_index = segment_start_index;
-
-  if (locality_bytes.size() != p50_latency_ns.size() ||
-      p50_latency_ns.size() < 2 ||
-      segment_start_index >= p50_latency_ns.size() - 1) {
-    return result;
-  }
-
-  for (size_t i = segment_start_index + 1; i < p50_latency_ns.size(); ++i) {
-    const double baseline_ns = average_range(p50_latency_ns, segment_start_index, i);
-    const double boundary_ns = p50_latency_ns[i];
-    const double step_ns = boundary_ns - baseline_ns;
-    const double step_percent = (baseline_ns > 0.0) ? (step_ns / baseline_ns) : 0.0;
-    const double threshold_ns = std::max(kAbsoluteThresholdNs, baseline_ns * kRelativeThreshold);
-
-    if (step_ns < threshold_ns) {
-      continue;
-    }
-
-    if (locality_bytes[i] < min_locality_bytes) {
-      continue;
-    }
-
-    bool persistent_jump = false;
-    if (i + 1 < p50_latency_ns.size()) {
-      const double next_step_ns = p50_latency_ns[i + 1] - baseline_ns;
-      persistent_jump = next_step_ns >= threshold_ns;
-    }
-
-    result.detected = true;
-    result.boundary_index = i;
-    result.boundary_locality_bytes = locality_bytes[i];
-    result.baseline_ns = baseline_ns;
-    result.boundary_latency_ns = boundary_ns;
-    result.step_ns = step_ns;
-    result.step_percent = step_percent;
-    result.persistent_jump = persistent_jump;
-    result.confidence = classify_tlb_confidence(step_ns, step_percent, persistent_jump);
-    return result;
-  }
-
-  return result;
-}
 
 /**
  * @brief Run standalone TLB analysis benchmark mode.
@@ -683,28 +441,35 @@ int run_tlb_analysis(const BenchmarkConfig& config) {
   const auto analysis_end = std::chrono::steady_clock::now();
   const double total_execution_time_sec =
       std::chrono::duration<double>(analysis_end - analysis_start).count();
-  if (save_tlb_analysis_to_json(config,
-                                cpu_name,
-                                page_size_bytes,
-                                l1_cache_size_bytes,
-                                tlb_guard_bytes,
-                                analysis_stride_bytes,
-                                page_walk_baseline_locality_bytes,
-                                selected_buffer_mb,
-                                buffer_locked,
-                                localities_bytes,
-                                sweep_loop_latencies_ns,
-                                p50_latency_ns,
-                                l1_boundary,
-                                l2_boundary,
-                                l1_entries,
-                                l2_entries,
-                                can_measure_page_walk_penalty,
-                                page_walk_512mb_loop_latencies_ns,
-                                page_walk_512mb_p50_ns,
-                                page_walk_baseline_ns,
-                                page_walk_penalty_ns,
-                                total_execution_time_sec) != EXIT_SUCCESS) {
+  const TlbAnalysisJsonContext json_context = {
+      config,
+      cpu_name,
+      page_size_bytes,
+      l1_cache_size_bytes,
+      tlb_guard_bytes,
+      analysis_stride_bytes,
+      kLoopsPerPoint,
+      kAccessesPerLoop,
+      page_walk_baseline_locality_bytes,
+      kPageWalkComparisonLocalityBytes,
+      selected_buffer_mb,
+      buffer_locked,
+      localities_bytes,
+      sweep_loop_latencies_ns,
+      p50_latency_ns,
+      l1_boundary,
+      l2_boundary,
+      l1_entries,
+      l2_entries,
+      can_measure_page_walk_penalty,
+      page_walk_512mb_loop_latencies_ns,
+      page_walk_512mb_p50_ns,
+      page_walk_baseline_ns,
+      page_walk_penalty_ns,
+      total_execution_time_sec,
+  };
+
+  if (save_tlb_analysis_to_json(json_context) != EXIT_SUCCESS) {
     return EXIT_FAILURE;
   }
 
