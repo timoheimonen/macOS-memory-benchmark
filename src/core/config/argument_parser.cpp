@@ -79,6 +79,27 @@ int parse_arguments(int argc, char* argv[], BenchmarkConfig& config) {
   long long requested_buffer_size_mb_ll = -1;  // User requested size (-1 = none)
   long long requested_threads_ll = -1;  // User requested threads (-1 = none)
   long long requested_latency_tlb_locality_kb_ll = -1;  // User requested TLB-locality window in KB (-1 = none)
+
+  bool analyze_tlb_present = false;
+  for (int i = 1; i < argc; ++i) {
+    if (std::string(argv[i]) == "-analyze-tlb") {
+      analyze_tlb_present = true;
+      break;
+    }
+  }
+
+  if (analyze_tlb_present) {
+    if (argc != 2 || std::string(argv[1]) != "-analyze-tlb") {
+      std::cerr << Messages::error_prefix()
+                << Messages::error_analyze_tlb_must_be_used_alone()
+                << std::endl;
+      print_usage(argv[0]);
+      return EXIT_FAILURE;
+    }
+
+    config.analyze_tlb = true;
+    return EXIT_SUCCESS;
+  }
   
   // First pass: parse -cache-size early (needed for cache size detection)
   for (int i = 1; i < argc; ++i) {

@@ -66,6 +66,10 @@
  * Callers should check return value and handle EXIT_FAILURE appropriately.
  */
 int validate_config(BenchmarkConfig& config) {
+  if (config.analyze_tlb) {
+    return EXIT_SUCCESS;
+  }
+
   const size_t page_size = static_cast<size_t>(getpagesize());
 
   // Error: Validate latency stride settings.

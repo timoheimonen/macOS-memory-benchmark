@@ -67,6 +67,10 @@ std::string error_latency_tlb_locality_invalid(long long value, long long max_va
 std::string error_latency_tlb_locality_page_multiple(size_t value_kb, size_t page_size_kb);
 std::string error_latency_tlb_locality_too_small_for_stride(size_t locality_bytes, size_t stride_bytes);
 std::string error_threads_invalid(long long value, long long min_val, long long max_val);
+const std::string& error_analyze_tlb_must_be_used_alone();
+const std::string& error_tlb_analysis_insufficient_memory();
+const std::string& error_tlb_analysis_timer_creation_failed();
+std::string error_tlb_analysis_invalid_measurement(size_t locality_kb, int loop_number);
 std::string error_mmap_failed(const std::string& buffer_name);
 std::string error_madvise_failed(const std::string& buffer_name);
 std::string error_munmap_failed();
@@ -151,6 +155,26 @@ std::string info_custom_cache_rounded_up(unsigned long original_kb, unsigned lon
 const std::string& msg_running_benchmarks();
 std::string msg_done_total_time(double total_time_sec);
 const std::string& msg_running_pattern_benchmarks();
+const std::string& msg_running_tlb_analysis();
+std::string msg_tlb_analysis_locality_progress(size_t current_index, size_t total_count, size_t locality_kb);
+std::string msg_tlb_analysis_page_walk_progress(size_t locality_mb);
+
+// --- TLB Analysis Report Messages ---
+const std::string& report_tlb_header();
+std::string report_tlb_cpu(const std::string& cpu_name);
+std::string report_tlb_page_size(size_t page_size_bytes);
+std::string report_tlb_buffer(size_t buffer_mb, bool locked);
+std::string report_tlb_stride(size_t stride_bytes);
+std::string report_tlb_loop_config(size_t loops_per_point, size_t accesses_per_loop);
+const std::string& report_tlb_l1_section();
+const std::string& report_tlb_l2_section();
+std::string report_tlb_boundary_kb(size_t boundary_kb);
+std::string report_tlb_inferred_size_entries(size_t entries);
+std::string report_tlb_inferred_reach_entries(size_t entries);
+std::string report_tlb_confidence(const std::string& confidence, double step_ns, double step_percent);
+std::string report_tlb_page_walk_penalty(double penalty_ns, size_t from_kb, size_t to_mb);
+std::string report_tlb_page_walk_penalty_unavailable(size_t required_buffer_mb, size_t selected_buffer_mb);
+const std::string& report_tlb_not_detected();
 
 // --- Usage/Help Messages ---
 std::string usage_header(const std::string& version);

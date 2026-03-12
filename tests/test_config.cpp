@@ -153,6 +153,25 @@ TEST(ConfigTest, ParseLatencyTlbLocalityInvalidNegative) {
   EXPECT_EQ(result, EXIT_FAILURE);
 }
 
+TEST(ConfigTest, ParseAnalyzeTlbStandalone) {
+  BenchmarkConfig config;
+  const char* argv[] = {"program", "-analyze-tlb"};
+  int argc = 2;
+
+  int result = parse_arguments(argc, const_cast<char**>(argv), config);
+  EXPECT_EQ(result, EXIT_SUCCESS);
+  EXPECT_TRUE(config.analyze_tlb);
+}
+
+TEST(ConfigTest, ParseAnalyzeTlbWithOtherArgumentsFails) {
+  BenchmarkConfig config;
+  const char* argv[] = {"program", "-analyze-tlb", "-buffersize", "512"};
+  int argc = 4;
+
+  int result = parse_arguments(argc, const_cast<char**>(argv), config);
+  EXPECT_EQ(result, EXIT_FAILURE);
+}
+
 // Test parsing missing value for option
 TEST(ConfigTest, ParseMissingValue) {
   BenchmarkConfig config;
@@ -388,6 +407,17 @@ TEST(ConfigTest, ValidateConfigAllowsLatencyTlbLocalityPageMultiple) {
   BenchmarkConfig config;
   const size_t page_size = static_cast<size_t>(getpagesize());
   config.latency_tlb_locality_bytes = page_size * 2;
+
+  int result = validate_config(config);
+  EXPECT_EQ(result, EXIT_SUCCESS);
+}
+
+TEST(ConfigTest, ValidateConfigAnalyzeTlbBypassesRegularValidation) {
+  BenchmarkConfig config;
+  config.analyze_tlb = true;
+  config.only_bandwidth = true;
+  config.only_latency = true;
+  config.latency_stride_bytes = 0;
 
   int result = validate_config(config);
   EXPECT_EQ(result, EXIT_SUCCESS);

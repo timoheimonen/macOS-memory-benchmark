@@ -144,6 +144,29 @@ std::string error_threads_invalid(long long value, long long min_val, long long 
   return oss.str();
 }
 
+const std::string& error_analyze_tlb_must_be_used_alone() {
+  static const std::string msg = "-analyze-tlb must be used alone (no other options allowed)";
+  return msg;
+}
+
+const std::string& error_tlb_analysis_insufficient_memory() {
+  static const std::string msg =
+      "Not enough memory for TLB analysis buffer (failed 1024 MB, 512 MB, and 256 MB allocations)";
+  return msg;
+}
+
+const std::string& error_tlb_analysis_timer_creation_failed() {
+  static const std::string msg = "Failed to create timer for TLB analysis";
+  return msg;
+}
+
+std::string error_tlb_analysis_invalid_measurement(size_t locality_kb, int loop_number) {
+  std::ostringstream oss;
+  oss << "Invalid latency measurement during TLB analysis (locality=" << locality_kb
+      << " KB, loop=" << loop_number << ")";
+  return oss.str();
+}
+
 std::string error_mmap_failed(const std::string& buffer_name) {
   return "mmap failed for " + buffer_name;
 }
