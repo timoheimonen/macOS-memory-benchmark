@@ -336,6 +336,18 @@ Shows how bandwidth changes under different access patterns.
 ./memory_benchmark -only-latency -buffersize 1024 -latency-samples 5000 -latency-tlb-locality-kb 0 -count 10 -output lat_global.json
 ```
 
+### Canonical standalone TLB analysis
+
+```bash
+./memory_benchmark -analyze-tlb -output tlb_analysis.json
+```
+
+Quick first checks in the output file:
+
+- `tlb_analysis.l1_tlb_detection.boundary_locality_kb`
+- `tlb_analysis.l2_tlb_detection.boundary_locality_kb`
+- `tlb_analysis.page_walk_penalty.penalty_ns`
+
 ### Custom cache target
 
 ```bash
@@ -468,6 +480,50 @@ When `-latency-stride-bytes` is explicitly set, latency sections also include `c
 }
 ```
 
+### TLB analysis JSON (analyze mode)
+
+When run with `-analyze-tlb -output tlb_analysis.json`, the payload includes a dedicated `tlb_analysis` block.
+Example below is modeled from `results/macminim4_analyte-tbl_stride_136B.json`:
+
+```json
+{
+  "configuration": {
+    "mode": "analyze_tlb",
+    "latency_stride_bytes": 136,
+    "buffer_size_mb": 1024
+  },
+  "tlb_analysis": {
+    "sweep": [
+      {
+        "locality_kb": 16,
+        "loop_latencies_ns": [25.957278, 25.965990, 25.916902],
+        "p50_latency_ns": 25.982678
+      }
+    ],
+    "l1_tlb_detection": {
+      "detected": true,
+      "boundary_locality_kb": 4096,
+      "inferred_entries": 256,
+      "confidence": "High"
+    },
+    "l2_tlb_detection": {
+      "detected": true,
+      "boundary_locality_kb": 8192,
+      "inferred_entries": 512,
+      "confidence": "High"
+    },
+    "page_walk_penalty": {
+      "available": true,
+      "baseline_locality_kb": 16,
+      "comparison_locality_mb": 512,
+      "baseline_p50_ns": 25.982678,
+      "comparison_p50_ns": 98.832814,
+      "penalty_ns": 72.850136
+    }
+  }
+}
+```
+
 ### Pattern keys (current)
 
 - `sequential_forward`
@@ -492,6 +548,12 @@ jq '.main_memory.latency.samples_statistics.p95' results.json
 
 # Pattern random read average
 jq '.patterns.random.bandwidth.read_gb_s.statistics.average' patterns.json
+
+# TLB L1 boundary locality (KB)
+jq '.tlb_analysis.l1_tlb_detection.boundary_locality_kb' tlb_analysis.json
+
+# TLB page-walk penalty (ns)
+jq '.tlb_analysis.page_walk_penalty.penalty_ns' tlb_analysis.json
 ```
 
 ---
@@ -626,4 +688,4 @@ Command help:
 
 ---
 
-**Last Updated**: 2026-03-10
+**Last Updated**: 2026-03-12
