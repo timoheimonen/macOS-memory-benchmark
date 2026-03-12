@@ -137,6 +137,33 @@ TEST(BenchmarkExecutorTest, MainMemoryLatencyCollectsSamplesWhenConfigured) {
 
   EXPECT_GT(timings.total_lat_time_ns, 0.0);
   EXPECT_EQ(results.latency_samples.size(), static_cast<size_t>(config.latency_sample_count));
+  EXPECT_TRUE(results.has_auto_tlb_breakdown);
+  EXPECT_GT(results.tlb_hit_latency_ns, 0.0);
+  EXPECT_GT(results.tlb_miss_latency_ns, 0.0);
+}
+
+TEST(BenchmarkExecutorTest, MainMemoryLatencySkipsAutoTlbBreakdownWhenLocalitySpecified) {
+  BenchmarkConfig config = build_base_config();
+  config.only_latency = true;
+  config.user_specified_latency_tlb_locality = true;
+  config.latency_tlb_locality_bytes = static_cast<size_t>(16) * Constants::BYTES_PER_KB;
+
+  BenchmarkBuffers buffers;
+  ASSERT_EQ(allocate_all_buffers(config, buffers), EXIT_SUCCESS);
+  ASSERT_EQ(initialize_all_buffers(buffers, config), EXIT_SUCCESS);
+
+  auto timer_opt = HighResTimer::create();
+  ASSERT_TRUE(timer_opt.has_value());
+
+  TimingResults timings;
+  BenchmarkResults results;
+  run_main_memory_latency_test(buffers, config, timings, results, *timer_opt);
+
+  EXPECT_GT(timings.total_lat_time_ns, 0.0);
+  EXPECT_FALSE(results.has_auto_tlb_breakdown);
+  EXPECT_EQ(results.tlb_hit_latency_ns, 0.0);
+  EXPECT_EQ(results.tlb_miss_latency_ns, 0.0);
+  EXPECT_EQ(results.page_walk_penalty_ns, 0.0);
 }
 
 TEST(BenchmarkExecutorTest, MainMemoryLatencySkipsWhenMainLatencyDisabled) {

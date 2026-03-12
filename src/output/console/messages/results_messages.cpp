@@ -86,6 +86,27 @@ std::string results_latency_average(double latency_ns) {
   return oss.str();
 }
 
+std::string results_latency_tlb_hit(double latency_ns) {
+  std::ostringstream oss;
+  oss << std::fixed << std::setprecision(Constants::LATENCY_PRECISION);
+  oss << "  TLB hit latency (16 KB locality): " << latency_ns << " ns";
+  return oss.str();
+}
+
+std::string results_latency_tlb_miss(double latency_ns) {
+  std::ostringstream oss;
+  oss << std::fixed << std::setprecision(Constants::LATENCY_PRECISION);
+  oss << "  TLB miss latency (global random locality): " << latency_ns << " ns";
+  return oss.str();
+}
+
+std::string results_latency_page_walk_penalty(double penalty_ns) {
+  std::ostringstream oss;
+  oss << std::fixed << std::setprecision(Constants::LATENCY_PRECISION);
+  oss << "  Estimated page-walk penalty: " << penalty_ns << " ns";
+  return oss.str();
+}
+
 std::string results_cache_bandwidth(int num_threads) {
   std::ostringstream oss;
   if (num_threads == 1) {
@@ -264,4 +285,3 @@ std::string results_cache_latency_l2_ns_mb(double latency_ns, double buffer_size
 }
 
 } // namespace Messages
-

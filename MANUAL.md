@@ -116,6 +116,15 @@ larger stride increases page turnover pressure.
 
 Use `0` when you explicitly want stronger translation effects in the measured path.
 
+When `-latency-tlb-locality-kb` is omitted in regular benchmark mode, main-memory latency output also runs an
+automatic comparison and prints:
+
+- TLB hit latency (16 KB locality)
+- TLB miss latency (global random locality, `0`)
+- Estimated page-walk penalty (`miss - hit`)
+
+If you explicitly set `-latency-tlb-locality-kb` (including `16` or `0`), this auto comparison is skipped.
+
 ### Pattern benchmarks
 
 Pattern mode (`-patterns`) measures bandwidth sensitivity across:
@@ -214,6 +223,7 @@ Pattern mode (`-patterns`) measures bandwidth sensitivity across:
 - Default: `16`
 - `0` disables locality mode (global random chain)
 - Non-zero values must be exact multiples of system page size
+- In regular benchmark mode, explicitly setting this option disables automatic TLB hit/miss comparison lines
 
 ### Cache and memory hint controls
 
@@ -336,6 +346,15 @@ Shows how bandwidth changes under different access patterns.
 ./memory_benchmark -only-latency -buffersize 1024 -latency-samples 5000 -latency-tlb-locality-kb 0 -count 10 -output lat_global.json
 ```
 
+### Regular benchmark with automatic DRAM TLB breakdown
+
+```bash
+./memory_benchmark -latency-stride-bytes 128 -count 1
+```
+
+This prints `Average latency` plus auto-derived `TLB hit latency`, `TLB miss latency`, and
+`Estimated page-walk penalty` when `-latency-tlb-locality-kb` is not explicitly set.
+
 ### Canonical standalone TLB analysis
 
 ```bash
@@ -384,6 +403,12 @@ Displayed as read/write/copy GB/s. Higher is better.
 ### 3) Main memory latency
 
 Average latency in ns. Lower is better.
+
+When `-latency-tlb-locality-kb` is not explicitly provided, this section also prints:
+
+- `TLB hit latency (16 KB locality)`
+- `TLB miss latency (global random locality)`
+- `Estimated page-walk penalty (miss - hit)`
 
 ### 4) Cache bandwidth and latency
 
