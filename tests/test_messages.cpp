@@ -274,6 +274,12 @@ TEST_F(MessagesErrorTest, ErrorLatencyTlbLocalityTooSmallForStride) {
   EXPECT_NE(msg.find("requires at least 8192 bytes"), std::string::npos);
 }
 
+TEST_F(MessagesErrorTest, ErrorAnalyzeTlbMustBeUsedAlone) {
+  const std::string& msg = Messages::error_analyze_tlb_must_be_used_alone();
+  EXPECT_NE(msg.find("-analyze-tlb"), std::string::npos);
+  EXPECT_NE(msg.find("used alone"), std::string::npos);
+}
+
 TEST_F(MessagesErrorTest, ErrorMadviseFailed) {
   std::string msg = Messages::error_madvise_failed("lat_buffer");
   EXPECT_EQ(msg, "madvise failed for lat_buffer");
@@ -345,6 +351,26 @@ TEST_F(MessagesFormattingTest, MsgDoneTotalTime) {
   EXPECT_NE(msg.find("0.001"), std::string::npos);
 }
 
+TEST_F(MessagesFormattingTest, MsgTlbAnalysisPageWalkProgress) {
+  std::string msg = Messages::msg_tlb_analysis_page_walk_progress(512);
+  EXPECT_NE(msg.find("Page Walk"), std::string::npos);
+  EXPECT_NE(msg.find("512"), std::string::npos);
+  EXPECT_NE(msg.find("MB"), std::string::npos);
+}
+
+TEST_F(MessagesFormattingTest, ReportTlbPageWalkPenaltyWindow) {
+  std::string msg = Messages::report_tlb_page_walk_penalty(62.4, 16, 512);
+  EXPECT_NE(msg.find("16KB -> 512MB"), std::string::npos);
+  EXPECT_NE(msg.find("~62.4ns"), std::string::npos);
+}
+
+TEST_F(MessagesFormattingTest, ReportTlbPageWalkPenaltyUnavailable) {
+  std::string msg = Messages::report_tlb_page_walk_penalty_unavailable(512, 256);
+  EXPECT_NE(msg.find("N/A"), std::string::npos);
+  EXPECT_NE(msg.find("requires 512 MB"), std::string::npos);
+  EXPECT_NE(msg.find("selected 256 MB"), std::string::npos);
+}
+
 // ============================================================================
 // Usage/Help Messages Tests (using formatting fixture)
 // ============================================================================
@@ -363,6 +389,7 @@ TEST_F(MessagesFormattingTest, UsageOptions) {
   EXPECT_NE(msg.find("-iterations"), std::string::npos);
   EXPECT_NE(msg.find("-buffersize"), std::string::npos);
   EXPECT_NE(msg.find("-count"), std::string::npos);
+  EXPECT_NE(msg.find("-analyze-tlb"), std::string::npos);
   EXPECT_NE(msg.find("-latency-samples"), std::string::npos);
   EXPECT_NE(msg.find("-latency-stride-bytes"), std::string::npos);
   EXPECT_NE(msg.find("-latency-tlb-locality-kb"), std::string::npos);

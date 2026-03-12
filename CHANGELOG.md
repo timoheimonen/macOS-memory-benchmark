@@ -5,11 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.53.2] - 2026-03-11
+## [0.53.2] - 2026-03-12
 
 ### Changed
   - **Latency chain sizing now follows the configured stride**: Main/cache latency buffer sizing and pointer-chain setup now use the active `latency_stride_bytes` value instead of a fixed internal stride constant, keeping chain geometry and access-count calculations consistent when stride is customized.
   - **Help text `-cache-size` range now dynamically sourced from constants**: Updated `src/output/console/messages/program_messages.cpp` to generate the `-cache-size` range bounds from `Constants::MIN_CACHE_SIZE_KB` and `Constants::MAX_CACHE_SIZE_KB` instead of hardcoding values. This ensures help output (`-h`) and parser/validation limits stay automatically synchronized and prevents future drift.
+  - Default Stride changed from 134 to 64.
 
 ### Fixed
   - **Help text showed stale 524288 KB max for `-cache-size` while parser allowed 1048576 KB**: The hardcoded max in help text generation is now replaced by a reference to the runtime constant, eliminating the drift and preventing regression.
@@ -19,6 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - **Latency chain diagnostics in JSON output**: Added optional `chain_diagnostics` blocks for latency results (main/cache) with `pointer_count`, `unique_pages_touched`, `page_size_bytes`, and `stride_bytes` to support page-touch and TLB-vs-cache analysis.
   - **Coverage for stride parsing/validation and diagnostics**: Added targeted tests for stride defaults/parsing/validation messaging and latency-chain diagnostics serialization paths.
   - **Regression test for `-cache-size` help bounds**: Added check in `tests/test_messages.cpp` to verify that `UsageOptions` message includes both `MIN_CACHE_SIZE_KB` and `MAX_CACHE_SIZE_KB` constants in the cache-size option line.
+  - **Standalone TLB analysis mode (`-analyze-tlb`)**: Added a dedicated mode that must be used alone, allocates a fallback analysis buffer (`1024 MB`, `512 MB`, then `256 MB`), sweeps TLB-locality windows (`16 KB` to `256 MB`) with fixed `64B` stride over 30 loops per point, and reports inferred L1/L2 TLB boundaries and confidence. Page-table-walk penalty is reported separately as `P50(512 MB) - P50(16 KB)` when analysis buffer size is at least `512 MB`.
 
 ## [0.53.1] - 2026-03-09
 

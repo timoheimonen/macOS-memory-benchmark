@@ -47,6 +47,23 @@ const std::string& msg_running_pattern_benchmarks() {
   return msg;
 }
 
+const std::string& msg_running_tlb_analysis() {
+  static const std::string msg = "\nRunning standalone TLB analysis...";
+  return msg;
+}
+
+std::string msg_tlb_analysis_locality_progress(size_t current_index, size_t total_count, size_t locality_kb) {
+  std::ostringstream oss;
+  oss << "  [" << current_index << "/" << total_count << "] Locality " << locality_kb << " KB";
+  return oss.str();
+}
+
+std::string msg_tlb_analysis_page_walk_progress(size_t locality_mb) {
+  std::ostringstream oss;
+  oss << "  [Page Walk] Locality " << locality_mb << " MB";
+  return oss.str();
+}
+
 // --- Usage/Help Messages ---
 std::string usage_header(const std::string& version) {
   std::ostringstream oss;
@@ -75,6 +92,7 @@ std::string usage_options(const std::string& prog_name) {
       << "                        In -only-latency mode, -buffersize 0 disables main memory latency.\n"
       << "  -count <count>        Number of full loops (read/write/copy/latency) (default: " << Constants::DEFAULT_LOOP_COUNT << ").\n"
       << "                        When count > 1, statistics include percentiles (P50/P90/P95/P99) and stddev.\n"
+      << "  -analyze-tlb          Run standalone TLB analysis benchmark mode. Must be used alone.\n"
       << "  -latency-samples <count> Number of latency samples to collect per test (default: " << Constants::DEFAULT_LATENCY_SAMPLE_COUNT << ")\n"
       << "  -latency-stride-bytes <bytes> Stride used by latency pointer chains (default: "
       << Constants::LATENCY_STRIDE_BYTES << " bytes).\n"
@@ -116,6 +134,99 @@ std::string usage_example(const std::string& prog_name) {
   std::ostringstream oss;
   oss << "Example: " << prog_name << " -iterations 2000 -buffersize 1024 -output results.json\n";
   return oss.str();
+}
+
+const std::string& report_tlb_header() {
+  static const std::string msg = "--- TLB Analysis Report ---";
+  return msg;
+}
+
+std::string report_tlb_cpu(const std::string& cpu_name) {
+  if (cpu_name.empty()) {
+    return "CPU: Unknown";
+  }
+  return "CPU: " + cpu_name;
+}
+
+std::string report_tlb_page_size(size_t page_size_bytes) {
+  std::ostringstream oss;
+  oss << "Page Size: " << page_size_bytes << " bytes";
+  return oss.str();
+}
+
+std::string report_tlb_buffer(size_t buffer_mb, bool locked) {
+  std::ostringstream oss;
+  oss << "Buffer: " << buffer_mb << " MB (" << (locked ? "Locked" : "Allocated") << ")";
+  return oss.str();
+}
+
+std::string report_tlb_stride(size_t stride_bytes) {
+  std::ostringstream oss;
+  oss << "Stride: " << stride_bytes << " bytes";
+  return oss.str();
+}
+
+std::string report_tlb_loop_config(size_t loops_per_point, size_t accesses_per_loop) {
+  std::ostringstream oss;
+  oss << "Loops per Point: " << loops_per_point << ", Accesses per Loop: " << accesses_per_loop;
+  return oss.str();
+}
+
+const std::string& report_tlb_l1_section() {
+  static const std::string msg = "[L1 TLB Detection]";
+  return msg;
+}
+
+const std::string& report_tlb_l2_section() {
+  static const std::string msg = "[L2 TLB / Page Walk]";
+  return msg;
+}
+
+std::string report_tlb_boundary_kb(size_t boundary_kb) {
+  std::ostringstream oss;
+  oss << "  Boundary: " << boundary_kb << " KB";
+  return oss.str();
+}
+
+std::string report_tlb_inferred_size_entries(size_t entries) {
+  std::ostringstream oss;
+  oss << "  Inferred Size: " << entries << " entries";
+  return oss.str();
+}
+
+std::string report_tlb_inferred_reach_entries(size_t entries) {
+  std::ostringstream oss;
+  oss << "  Inferred Reach: " << entries << " entries";
+  return oss.str();
+}
+
+std::string report_tlb_confidence(const std::string& confidence, double step_ns, double step_percent) {
+  std::ostringstream oss;
+  oss << std::fixed << std::setprecision(1);
+  oss << "  Confidence: " << confidence << " (Step: +" << step_ns << "ns, +"
+      << (step_percent * 100.0) << "%)";
+  return oss.str();
+}
+
+std::string report_tlb_page_walk_penalty(double penalty_ns, size_t from_kb, size_t to_mb) {
+  std::ostringstream oss;
+  oss << std::fixed << std::setprecision(1);
+  oss << "  Page Table Walk Penalty (" << from_kb << "KB -> " << to_mb << "MB): ~"
+      << penalty_ns << "ns";
+  return oss.str();
+}
+
+std::string report_tlb_page_walk_penalty_unavailable(size_t required_buffer_mb, size_t selected_buffer_mb) {
+  std::ostringstream oss;
+  oss << "  Page Table Walk Penalty (16KB -> 512MB): N/A "
+      << "(requires " << required_buffer_mb << " MB or larger analysis buffer, selected "
+      << selected_buffer_mb << " MB)";
+  return oss.str();
+}
+
+const std::string& report_tlb_not_detected() {
+  static const std::string msg = "  Boundary: Not detected";
+  return msg;
 }
 
 } // namespace Messages

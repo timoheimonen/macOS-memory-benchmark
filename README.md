@@ -106,6 +106,7 @@ caffeinate -i -d ./memory_benchmark -count 10 -buffersize 1024
 - **`-patterns`**: Runs pattern bandwidth suite only (`sequential_forward`, `sequential_reverse`, `strided_64`, `strided_4096`, `strided_16384`, `strided_2mb`, `random`).
 - **`-only-bandwidth`**: Runs bandwidth paths only (`-patterns`, `-cache-size`, and `-latency-samples` are not allowed in this mode).
 - **`-only-latency`**: Runs latency paths only (`-patterns` and `-iterations` are not allowed in this mode).
+- **`-analyze-tlb`**: Runs standalone TLB analysis mode and must be used alone.
 
 Latency-specific disable controls in `-only-latency`:
 
@@ -120,6 +121,7 @@ Latency-specific disable controls in `-only-latency`:
 - `-count <count>`: Full benchmark repetitions (default `1`; use `5-10` for statistics).
 - `-threads <count>`: Bandwidth thread count (latency tests remain single-threaded).
 - `-cache-size <KB>`: Custom cache target. Non-zero range is `16` to `1048576` KB (1 GB).
+- `-analyze-tlb`: Standalone TLB-boundary detection benchmark (`1024/512/256 MB` fallback buffer selection), sweeping locality windows from `16 KB` to `256 MB` (plus optional `512 MB` page-walk comparison when buffer is at least `512 MB`).
 - `-latency-samples <count>`: Samples per latency test (default `1000`).
 - `-latency-stride-bytes <bytes>`: Pointer-chain stride for latency tests (default `136`; must be > 0 and pointer-size aligned).
 - `-latency-tlb-locality-kb <KB>`: Pointer-chain locality window (default `16`; `0` = global random chain; non-zero values must be page-size multiples).
@@ -157,6 +159,12 @@ Custom cache target:
 
 ```bash
 ./memory_benchmark -cache-size 4096 -threads 1 -count 5 -output cache_4mb.json
+```
+
+Standalone TLB analysis report:
+
+```bash
+./memory_benchmark -analyze-tlb
 ```
 
 ## Output Overview

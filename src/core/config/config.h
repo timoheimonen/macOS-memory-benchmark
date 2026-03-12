@@ -88,6 +88,7 @@ struct BenchmarkConfig {
   bool user_specified_threads = false; ///< Whether user explicitly set -threads parameter
   bool only_bandwidth = false;         ///< When true, run only bandwidth tests
   bool only_latency = false;           ///< When true, run only latency tests
+  bool analyze_tlb = false;            ///< When true, run standalone TLB analysis mode
   
   // Tracking flags for user-specified parameters
   bool user_specified_buffersize = false;      ///< Whether user explicitly set -buffersize

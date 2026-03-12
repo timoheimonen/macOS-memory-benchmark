@@ -40,6 +40,7 @@
 #include "core/config/config.h"
 #include "core/memory/buffer_manager.h"
 #include "benchmark/benchmark_runner.h"
+#include "benchmark/analysis.h"
 #include "output/console/messages.h"
 #include "core/config/constants.h"
 #include "output/json/json_output.h"
@@ -95,6 +96,10 @@ int main(int argc, char *argv[]) {
   int parse_result = parse_arguments(argc, argv, config);
   if (parse_result != EXIT_SUCCESS) {
     return EXIT_FAILURE;
+  }
+
+  if (config.analyze_tlb) {
+    return run_tlb_analysis();
   }
   
   // Check if help was requested (simple check: if only help flag, exit after printing)

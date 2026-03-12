@@ -183,6 +183,13 @@ Pattern mode (`-patterns`) measures bandwidth sensitivity across:
   - `-cache-size 0` disables cache latency
   - both zero is invalid
 
+#### `-analyze-tlb`
+
+- Runs standalone TLB analysis mode only
+- Must be used alone (no other options)
+- Uses fixed `64B` stride, sweeps locality windows `16KB` to `256MB`, and reports inferred L1/L2 TLB boundaries and entry counts
+- Separately computes page-walk penalty as `P50(512MB) - P50(16KB)` when analysis buffer is at least `512MB`
+
 ### Latency-specific controls
 
 #### `-latency-samples <count>`
@@ -257,6 +264,9 @@ Pattern mode (`-patterns`) measures bandwidth sensitivity across:
 
 # Latency-only (cache only)
 ./memory_benchmark -only-latency -buffersize 0 -cache-size 2048
+
+# Standalone TLB analysis
+./memory_benchmark -analyze-tlb
 ```
 
 ### Invalid combinations
@@ -276,6 +286,9 @@ Pattern mode (`-patterns`) measures bandwidth sensitivity across:
 
 # invalid: both latency targets disabled
 ./memory_benchmark -only-latency -buffersize 0 -cache-size 0
+
+# invalid: analyze-tlb with any extra option
+./memory_benchmark -analyze-tlb -buffersize 1024
 ```
 
 ---
