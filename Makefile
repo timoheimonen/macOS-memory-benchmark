@@ -45,7 +45,7 @@ CPP_SRCS_OUTPUT_CONSOLE_MESSAGES = output/console/messages/error_messages.cpp ou
 CPP_SRCS_UTILS = utils/utils.cpp utils/json_utils.cpp
 CPP_SRCS_SRC = $(CPP_SRCS_CORE_CONFIG) $(CPP_SRCS_CORE_MEMORY) $(CPP_SRCS_CORE_SYSTEM) $(CPP_SRCS_CORE_TIMING) $(CPP_SRCS_OUTPUT_CONSOLE) $(CPP_SRCS_OUTPUT_CONSOLE_MESSAGES) $(CPP_SRCS_UTILS)
 # Files in the src/benchmark subdirectory
-CPP_SRCS_BENCHMARK = bandwidth_tests.cpp latency_tests.cpp benchmark_runner.cpp benchmark_executor.cpp benchmark_results.cpp benchmark_statistics_collector.cpp analysis.cpp
+CPP_SRCS_BENCHMARK = bandwidth_tests.cpp latency_tests.cpp benchmark_runner.cpp benchmark_executor.cpp benchmark_results.cpp benchmark_statistics_collector.cpp tlb_analysis.cpp tlb_boundary_detector.cpp tlb_analysis_json.cpp
 # Files in the src/warmup subdirectory
 CPP_SRCS_WARMUP = basic_warmup.cpp latency_warmup.cpp cache_warmup.cpp pattern_warmup.cpp
 # Files in the src/output/json/json_output subdirectory

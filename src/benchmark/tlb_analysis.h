@@ -14,14 +14,14 @@
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 //
 /**
- * @file analysis.h
+ * @file tlb_analysis.h
  * @brief Standalone TLB analysis mode interfaces
  * @author Timo Heimonen <timo.heimonen@proton.me>
  * @date 2026
  */
 
-#ifndef ANALYSIS_H
-#define ANALYSIS_H
+#ifndef TLB_ANALYSIS_H
+#define TLB_ANALYSIS_H
 
 #include <cstddef>  // size_t
 #include <string>
@@ -84,4 +84,4 @@ std::string classify_tlb_confidence(double step_ns, double step_percent, bool pe
  */
 int run_tlb_analysis(const BenchmarkConfig& config);
 
-#endif  // ANALYSIS_H
+#endif  // TLB_ANALYSIS_H

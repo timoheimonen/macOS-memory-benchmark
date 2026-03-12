@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.53.6] - 2026-03-12
+
+### Changed
+  - **Refactored standalone TLB analysis module into smaller units**: Split previous `src/benchmark/analysis.cpp` into focused files: `src/benchmark/tlb_analysis.cpp` (orchestration), `src/benchmark/tlb_boundary_detector.cpp` (boundary detection and confidence logic), and `src/benchmark/tlb_analysis_json.cpp` (JSON serialization).
+  - **Renamed TLB analysis interface/header**: Renamed `src/benchmark/analysis.h` to `src/benchmark/tlb_analysis.h` and updated includes/references accordingly (`main.cpp`, tests, and docs).
+  - **Build wiring updated for new TLB analysis files**: Updated benchmark source list in `Makefile` to compile/link the new `tlb_analysis*` and `tlb_boundary_detector` units.
+
 ## [0.53.5] - 2026-03-12
 
 ### Added

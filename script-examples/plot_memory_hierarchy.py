@@ -4,7 +4,7 @@ import json
 import re
 from pathlib import Path
 
-import matplotlib.pyplot as plt
+import matplotlib.pyplot as plt # pyright: ignore[reportMissingModuleSource]
 
 # uses json output from file "memory_benchmark -count (>1) -only-latency -output results/<file>.json"
 
