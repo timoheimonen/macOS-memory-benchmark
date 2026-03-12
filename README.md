@@ -106,7 +106,7 @@ caffeinate -i -d ./memory_benchmark -count 10 -buffersize 1024
 - **`-patterns`**: Runs pattern bandwidth suite only (`sequential_forward`, `sequential_reverse`, `strided_64`, `strided_4096`, `strided_16384`, `strided_2mb`, `random`).
 - **`-only-bandwidth`**: Runs bandwidth paths only (`-patterns`, `-cache-size`, and `-latency-samples` are not allowed in this mode).
 - **`-only-latency`**: Runs latency paths only (`-patterns` and `-iterations` are not allowed in this mode).
-- **`-analyze-tlb`**: Runs standalone TLB analysis mode and must be used alone.
+- **`-analyze-tlb`**: Runs standalone TLB analysis mode; only optional `-output <file>` and `-latency-stride-bytes <bytes>` may be combined with it.
 
 Latency-specific disable controls in `-only-latency`:
 
@@ -121,7 +121,7 @@ Latency-specific disable controls in `-only-latency`:
 - `-count <count>`: Full benchmark repetitions (default `1`; use `5-10` for statistics).
 - `-threads <count>`: Bandwidth thread count (latency tests remain single-threaded).
 - `-cache-size <KB>`: Custom cache target. Non-zero range is `16` to `1048576` KB (1 GB).
-- `-analyze-tlb`: Standalone TLB-boundary detection benchmark (`1024/512/256 MB` fallback buffer selection), sweeping locality windows from `16 KB` to `256 MB` (plus optional `512 MB` page-walk comparison when buffer is at least `512 MB`).
+- `-analyze-tlb`: Standalone TLB-boundary detection benchmark (`1024/512/256 MB` fallback buffer selection), sweeping locality windows from `max(16 KB, 2*stride)` to `256 MB` (plus optional `512 MB` page-walk comparison when buffer is at least `512 MB`). Supports optional `-latency-stride-bytes <bytes>` and defaults to normal latency stride default.
 - `-latency-samples <count>`: Samples per latency test (default `1000`).
 - `-latency-stride-bytes <bytes>`: Pointer-chain stride for latency tests (default `136`; must be > 0 and pointer-size aligned).
 - `-latency-tlb-locality-kb <KB>`: Pointer-chain locality window (default `16`; `0` = global random chain; non-zero values must be page-size multiples).
@@ -165,6 +165,18 @@ Standalone TLB analysis report:
 
 ```bash
 ./memory_benchmark -analyze-tlb
+```
+
+Standalone TLB analysis with JSON export:
+
+```bash
+./memory_benchmark -analyze-tlb -output tlb_analysis.json
+```
+
+Standalone TLB analysis with custom stride:
+
+```bash
+./memory_benchmark -analyze-tlb -latency-stride-bytes 128 -output tlb_analysis_stride128.json
 ```
 
 ## Output Overview
@@ -254,6 +266,7 @@ Reference sample result files in this repository:
 - **[User Manual](MANUAL.md)**: full usage guide, option reference, workflows, troubleshooting.
 - **[Technical Specification](TECHNICAL_SPECIFICATION.md)**: architecture, execution flow, memory model, output contracts.
 - **[Latency Whitepaper](LATENCY_WHITEPAPER.md)**: dependent pointer-chase design, chain construction, and sampling methodology.
+- **[TLB Analysis Whitepaper](TLB_ANALYSIS_WHITEPAPER.md)**: standalone `-analyze-tlb` methodology, boundary/guard rules, confidence model, and JSON verification contract.
 
 ## Limitations and Caveats
 

@@ -92,7 +92,7 @@ std::string usage_options(const std::string& prog_name) {
       << "                        In -only-latency mode, -buffersize 0 disables main memory latency.\n"
       << "  -count <count>        Number of full loops (read/write/copy/latency) (default: " << Constants::DEFAULT_LOOP_COUNT << ").\n"
       << "                        When count > 1, statistics include percentiles (P50/P90/P95/P99) and stddev.\n"
-      << "  -analyze-tlb          Run standalone TLB analysis benchmark mode. Must be used alone.\n"
+      << "  -analyze-tlb          Run standalone TLB analysis benchmark mode (allows optional -output <file> and -latency-stride-bytes <bytes> only).\n"
       << "  -latency-samples <count> Number of latency samples to collect per test (default: " << Constants::DEFAULT_LATENCY_SAMPLE_COUNT << ")\n"
       << "  -latency-stride-bytes <bytes> Stride used by latency pointer chains (default: "
       << Constants::LATENCY_STRIDE_BYTES << " bytes).\n"
@@ -216,9 +216,12 @@ std::string report_tlb_page_walk_penalty(double penalty_ns, size_t from_kb, size
   return oss.str();
 }
 
-std::string report_tlb_page_walk_penalty_unavailable(size_t required_buffer_mb, size_t selected_buffer_mb) {
+std::string report_tlb_page_walk_penalty_unavailable(size_t from_kb,
+                                                     size_t to_mb,
+                                                     size_t required_buffer_mb,
+                                                     size_t selected_buffer_mb) {
   std::ostringstream oss;
-  oss << "  Page Table Walk Penalty (16KB -> 512MB): N/A "
+  oss << "  Page Table Walk Penalty (" << from_kb << "KB -> " << to_mb << "MB): N/A "
       << "(requires " << required_buffer_mb << " MB or larger analysis buffer, selected "
       << selected_buffer_mb << " MB)";
   return oss.str();
