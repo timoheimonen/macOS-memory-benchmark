@@ -172,6 +172,37 @@ TEST(ConfigTest, ParseAnalyzeTlbWithOtherArgumentsFails) {
   EXPECT_EQ(result, EXIT_FAILURE);
 }
 
+TEST(ConfigTest, ParseAnalyzeTlbWithOutputSucceeds) {
+  BenchmarkConfig config;
+  const char* argv[] = {"program", "-analyze-tlb", "-output", "tlb.json"};
+  int argc = 4;
+
+  int result = parse_arguments(argc, const_cast<char**>(argv), config);
+  EXPECT_EQ(result, EXIT_SUCCESS);
+  EXPECT_TRUE(config.analyze_tlb);
+  EXPECT_EQ(config.output_file, "tlb.json");
+}
+
+TEST(ConfigTest, ParseAnalyzeTlbWithOutputFirstSucceeds) {
+  BenchmarkConfig config;
+  const char* argv[] = {"program", "-output", "tlb.json", "-analyze-tlb"};
+  int argc = 4;
+
+  int result = parse_arguments(argc, const_cast<char**>(argv), config);
+  EXPECT_EQ(result, EXIT_SUCCESS);
+  EXPECT_TRUE(config.analyze_tlb);
+  EXPECT_EQ(config.output_file, "tlb.json");
+}
+
+TEST(ConfigTest, ParseAnalyzeTlbWithMissingOutputValueFails) {
+  BenchmarkConfig config;
+  const char* argv[] = {"program", "-analyze-tlb", "-output"};
+  int argc = 3;
+
+  int result = parse_arguments(argc, const_cast<char**>(argv), config);
+  EXPECT_EQ(result, EXIT_FAILURE);
+}
+
 // Test parsing missing value for option
 TEST(ConfigTest, ParseMissingValue) {
   BenchmarkConfig config;

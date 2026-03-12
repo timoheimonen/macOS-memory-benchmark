@@ -99,7 +99,7 @@ int main(int argc, char *argv[]) {
   }
 
   if (config.analyze_tlb) {
-    return run_tlb_analysis();
+    return run_tlb_analysis(config);
   }
   
   // Check if help was requested (simple check: if only help flag, exit after printing)

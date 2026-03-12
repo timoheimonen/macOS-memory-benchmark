@@ -186,7 +186,7 @@ Pattern mode (`-patterns`) measures bandwidth sensitivity across:
 #### `-analyze-tlb`
 
 - Runs standalone TLB analysis mode only
-- Must be used alone (no other options)
+- Can be combined only with optional `-output <file>`
 - Uses fixed `64B` stride, sweeps locality windows `16KB` to `256MB`, and reports inferred L1/L2 TLB boundaries and entry counts
 - Separately computes page-walk penalty as `P50(512MB) - P50(16KB)` when analysis buffer is at least `512MB`
 
@@ -267,6 +267,9 @@ Pattern mode (`-patterns`) measures bandwidth sensitivity across:
 
 # Standalone TLB analysis
 ./memory_benchmark -analyze-tlb
+
+# Standalone TLB analysis with JSON export
+./memory_benchmark -analyze-tlb -output tlb_analysis.json
 ```
 
 ### Invalid combinations

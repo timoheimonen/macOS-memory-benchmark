@@ -106,7 +106,7 @@ caffeinate -i -d ./memory_benchmark -count 10 -buffersize 1024
 - **`-patterns`**: Runs pattern bandwidth suite only (`sequential_forward`, `sequential_reverse`, `strided_64`, `strided_4096`, `strided_16384`, `strided_2mb`, `random`).
 - **`-only-bandwidth`**: Runs bandwidth paths only (`-patterns`, `-cache-size`, and `-latency-samples` are not allowed in this mode).
 - **`-only-latency`**: Runs latency paths only (`-patterns` and `-iterations` are not allowed in this mode).
-- **`-analyze-tlb`**: Runs standalone TLB analysis mode and must be used alone.
+- **`-analyze-tlb`**: Runs standalone TLB analysis mode; only optional `-output <file>` may be combined with it.
 
 Latency-specific disable controls in `-only-latency`:
 
@@ -165,6 +165,12 @@ Standalone TLB analysis report:
 
 ```bash
 ./memory_benchmark -analyze-tlb
+```
+
+Standalone TLB analysis with JSON export:
+
+```bash
+./memory_benchmark -analyze-tlb -output tlb_analysis.json
 ```
 
 ## Output Overview

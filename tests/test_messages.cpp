@@ -277,7 +277,7 @@ TEST_F(MessagesErrorTest, ErrorLatencyTlbLocalityTooSmallForStride) {
 TEST_F(MessagesErrorTest, ErrorAnalyzeTlbMustBeUsedAlone) {
   const std::string& msg = Messages::error_analyze_tlb_must_be_used_alone();
   EXPECT_NE(msg.find("-analyze-tlb"), std::string::npos);
-  EXPECT_NE(msg.find("used alone"), std::string::npos);
+  EXPECT_NE(msg.find("-output"), std::string::npos);
 }
 
 TEST_F(MessagesErrorTest, ErrorMadviseFailed) {

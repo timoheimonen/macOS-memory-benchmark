@@ -27,6 +27,9 @@
 #include <string>
 #include <vector>
 
+// Forward declaration
+struct BenchmarkConfig;
+
 /**
  * @struct TlbBoundaryDetection
  * @brief Boundary-detection result for TLB working-set transition analysis
@@ -76,8 +79,9 @@ std::string classify_tlb_confidence(double step_ns, double step_percent, bool pe
 
 /**
  * @brief Run standalone TLB analysis benchmark mode.
+ * @param config Benchmark configuration (supports optional output_file)
  * @return EXIT_SUCCESS on success, EXIT_FAILURE on error
  */
-int run_tlb_analysis();
+int run_tlb_analysis(const BenchmarkConfig& config);
 
 #endif  // ANALYSIS_H

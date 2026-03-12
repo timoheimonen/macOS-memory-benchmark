@@ -23,12 +23,16 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <cstddef>
 #include <cstdlib>
+#include <filesystem>
+#include <iomanip>
 #include <iostream>
 #include <limits>
 #include <numeric>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -36,6 +40,7 @@
 #include <unistd.h>
 
 #include "benchmark/benchmark_tests.h"
+#include "core/config/config.h"
 #include "core/config/constants.h"
 #include "core/config/version.h"
 #include "core/memory/memory_manager.h"
@@ -43,6 +48,7 @@
 #include "core/system/system_info.h"
 #include "core/timing/timer.h"
 #include "output/console/messages.h"
+#include "output/json/json_output.h"
 #include "warmup/warmup.h"
 
 namespace {
@@ -132,6 +138,7 @@ MmapPtr try_allocate_analysis_buffer(size_t size_bytes) {
  * @param[in]     locality_bytes      Locality window size in bytes
  * @param[in,out] timer               High-resolution timer instance
  * @param[out]    out_p50_latency_ns  Measured P50 latency in ns/access
+ * @param[out]    out_loop_latencies_ns Optional raw loop latencies (ns/access)
  *
  * @return true on success, false on setup/measurement failure.
  */
@@ -139,7 +146,8 @@ bool measure_locality_p50(void* latency_buffer,
                           size_t buffer_size_bytes,
                           size_t locality_bytes,
                           HighResTimer& timer,
-                          double& out_p50_latency_ns) {
+                          double& out_p50_latency_ns,
+                          std::vector<double>* out_loop_latencies_ns = nullptr) {
   const size_t locality_kb = locality_bytes / Constants::BYTES_PER_KB;
 
   std::vector<double> loop_latencies_ns;
@@ -168,7 +176,119 @@ bool measure_locality_p50(void* latency_buffer,
   }
 
   out_p50_latency_ns = median(loop_latencies_ns);
+  if (out_loop_latencies_ns != nullptr) {
+    *out_loop_latencies_ns = loop_latencies_ns;
+  }
   return true;
+}
+
+nlohmann::ordered_json build_tlb_boundary_json(const TlbBoundaryDetection& boundary,
+                                               size_t inferred_entries) {
+  nlohmann::ordered_json boundary_json;
+  boundary_json["detected"] = boundary.detected;
+  if (!boundary.detected) {
+    return boundary_json;
+  }
+
+  boundary_json["segment_start_index"] = boundary.segment_start_index;
+  boundary_json["boundary_index"] = boundary.boundary_index;
+  boundary_json["boundary_locality_bytes"] = boundary.boundary_locality_bytes;
+  boundary_json["boundary_locality_kb"] = boundary.boundary_locality_bytes / Constants::BYTES_PER_KB;
+  boundary_json["baseline_ns"] = boundary.baseline_ns;
+  boundary_json["boundary_latency_ns"] = boundary.boundary_latency_ns;
+  boundary_json["step_ns"] = boundary.step_ns;
+  boundary_json["step_percent"] = boundary.step_percent;
+  boundary_json["persistent_jump"] = boundary.persistent_jump;
+  boundary_json["confidence"] = boundary.confidence;
+  boundary_json["inferred_entries"] = inferred_entries;
+  return boundary_json;
+}
+
+std::string build_utc_timestamp() {
+  auto now = std::chrono::system_clock::now();
+  auto time_t = std::chrono::system_clock::to_time_t(now);
+  std::tm utc_time;
+  gmtime_r(&time_t, &utc_time);
+  std::ostringstream timestamp_str;
+  timestamp_str << std::put_time(&utc_time, "%Y-%m-%dT%H:%M:%SZ");
+  return timestamp_str.str();
+}
+
+int save_tlb_analysis_to_json(
+    const BenchmarkConfig& config,
+    const std::string& cpu_name,
+    size_t page_size_bytes,
+    size_t l1_cache_size_bytes,
+    size_t tlb_guard_bytes,
+    size_t selected_buffer_mb,
+    bool buffer_locked,
+    const std::vector<size_t>& localities_bytes,
+    const std::vector<std::vector<double>>& sweep_loop_latencies_ns,
+    const std::vector<double>& p50_latency_ns,
+    const TlbBoundaryDetection& l1_boundary,
+    const TlbBoundaryDetection& l2_boundary,
+    size_t l1_entries,
+    size_t l2_entries,
+    bool can_measure_page_walk_penalty,
+    const std::vector<double>& page_walk_512mb_loop_latencies_ns,
+    double page_walk_512mb_p50_ns,
+    double page_walk_baseline_ns,
+    double page_walk_penalty_ns,
+    double total_execution_time_sec) {
+  if (config.output_file.empty()) {
+    return EXIT_SUCCESS;
+  }
+
+  nlohmann::ordered_json json_output;
+  json_output[JsonKeys::CONFIGURATION] = {
+      {"mode", "analyze_tlb"},
+      {JsonKeys::CPU_NAME, cpu_name},
+      {JsonKeys::PAGE_SIZE_BYTES, page_size_bytes},
+      {JsonKeys::L1_CACHE_SIZE_BYTES, l1_cache_size_bytes},
+      {JsonKeys::LATENCY_STRIDE_BYTES, kLatencyStrideBytes},
+      {JsonKeys::LATENCY_SAMPLE_COUNT, static_cast<int>(kLoopsPerPoint)},
+      {"accesses_per_loop", kAccessesPerLoop},
+      {"tlb_guard_bytes", tlb_guard_bytes},
+      {"buffer_size_mb", selected_buffer_mb},
+      {"buffer_locked", buffer_locked}};
+  json_output[JsonKeys::EXECUTION_TIME_SEC] = total_execution_time_sec;
+
+  nlohmann::ordered_json sweep_json = nlohmann::ordered_json::array();
+  for (size_t i = 0; i < localities_bytes.size(); ++i) {
+    nlohmann::ordered_json point;
+    point["locality_bytes"] = localities_bytes[i];
+    point["locality_kb"] = localities_bytes[i] / Constants::BYTES_PER_KB;
+    point["loop_latencies_ns"] = sweep_loop_latencies_ns[i];
+    point["p50_latency_ns"] = p50_latency_ns[i];
+    sweep_json.push_back(point);
+  }
+
+  nlohmann::ordered_json tlb_json;
+  tlb_json["sweep"] = sweep_json;
+  tlb_json["l1_tlb_detection"] = build_tlb_boundary_json(l1_boundary, l1_entries);
+  tlb_json["l2_tlb_detection"] = build_tlb_boundary_json(l2_boundary, l2_entries);
+  tlb_json["page_walk_penalty"] = {
+      {"available", can_measure_page_walk_penalty},
+      {"baseline_locality_kb", kPageWalkBaselineLocalityBytes / Constants::BYTES_PER_KB},
+      {"comparison_locality_mb", kPageWalkComparisonLocalityBytes / Constants::BYTES_PER_MB},
+      {"baseline_p50_ns", page_walk_baseline_ns}};
+  if (can_measure_page_walk_penalty) {
+    tlb_json["page_walk_penalty"]["comparison_loop_latencies_ns"] = page_walk_512mb_loop_latencies_ns;
+    tlb_json["page_walk_penalty"]["comparison_p50_ns"] = page_walk_512mb_p50_ns;
+    tlb_json["page_walk_penalty"]["penalty_ns"] = page_walk_penalty_ns;
+  } else {
+    tlb_json["page_walk_penalty"]["reason"] =
+        "requires at least 512 MB analysis buffer";
+  }
+  json_output["tlb_analysis"] = tlb_json;
+  json_output[JsonKeys::TIMESTAMP] = build_utc_timestamp();
+  json_output[JsonKeys::VERSION] = SOFTVERSION;
+
+  std::filesystem::path file_path(config.output_file);
+  if (file_path.is_relative()) {
+    file_path = std::filesystem::current_path() / file_path;
+  }
+  return write_json_to_file(file_path, json_output);
 }
 
 }  // namespace
@@ -291,7 +411,8 @@ TlbBoundaryDetection detect_tlb_boundary(const std::vector<size_t>& locality_byt
  *
  * @return EXIT_SUCCESS on success, EXIT_FAILURE on allocation or measurement error.
  */
-int run_tlb_analysis() {
+int run_tlb_analysis(const BenchmarkConfig& config) {
+  const auto analysis_start = std::chrono::steady_clock::now();
   std::cout << Messages::usage_header(SOFTVERSION);
   std::cout << Messages::msg_running_tlb_analysis() << std::endl;
 
@@ -340,7 +461,9 @@ int run_tlb_analysis() {
 
   std::vector<size_t> localities_bytes(kLocalitySweepBytes.begin(), kLocalitySweepBytes.end());
   std::vector<double> p50_latency_ns;
+  std::vector<std::vector<double>> sweep_loop_latencies_ns;
   p50_latency_ns.reserve(localities_bytes.size());
+  sweep_loop_latencies_ns.reserve(localities_bytes.size());
 
   for (size_t locality_index = 0; locality_index < localities_bytes.size(); ++locality_index) {
     const size_t locality_bytes = localities_bytes[locality_index];
@@ -352,11 +475,13 @@ int run_tlb_analysis() {
               << std::endl;
 
     double locality_p50_ns = 0.0;
+    std::vector<double> loop_latencies_ns;
     if (!measure_locality_p50(latency_buffer.get(),
                               selected_buffer_bytes,
                               locality_bytes,
                               timer,
-                              locality_p50_ns)) {
+                              locality_p50_ns,
+                              &loop_latencies_ns)) {
       if (buffer_locked) {
         (void)munlock(latency_buffer.get(), selected_buffer_bytes);
       }
@@ -364,9 +489,11 @@ int run_tlb_analysis() {
     }
 
     p50_latency_ns.push_back(locality_p50_ns);
+    sweep_loop_latencies_ns.push_back(std::move(loop_latencies_ns));
   }
 
   const bool can_measure_page_walk_penalty = selected_buffer_mb >= kPageWalkMinimumBufferMb;
+  std::vector<double> page_walk_512mb_loop_latencies_ns;
   double page_walk_512mb_p50_ns = 0.0;
   if (can_measure_page_walk_penalty) {
     std::cout << Messages::msg_tlb_analysis_page_walk_progress(
@@ -376,7 +503,8 @@ int run_tlb_analysis() {
                               selected_buffer_bytes,
                               kPageWalkComparisonLocalityBytes,
                               timer,
-                              page_walk_512mb_p50_ns)) {
+                              page_walk_512mb_p50_ns,
+                              &page_walk_512mb_loop_latencies_ns)) {
       if (buffer_locked) {
         (void)munlock(latency_buffer.get(), selected_buffer_bytes);
       }
@@ -472,6 +600,32 @@ int run_tlb_analysis() {
                        selected_buffer_mb)
                 << std::endl;
     }
+  }
+
+  const auto analysis_end = std::chrono::steady_clock::now();
+  const double total_execution_time_sec =
+      std::chrono::duration<double>(analysis_end - analysis_start).count();
+  if (save_tlb_analysis_to_json(config,
+                                cpu_name,
+                                page_size_bytes,
+                                l1_cache_size_bytes,
+                                tlb_guard_bytes,
+                                selected_buffer_mb,
+                                buffer_locked,
+                                localities_bytes,
+                                sweep_loop_latencies_ns,
+                                p50_latency_ns,
+                                l1_boundary,
+                                l2_boundary,
+                                l1_entries,
+                                l2_entries,
+                                can_measure_page_walk_penalty,
+                                page_walk_512mb_loop_latencies_ns,
+                                page_walk_512mb_p50_ns,
+                                page_walk_baseline_ns,
+                                page_walk_penalty_ns,
+                                total_execution_time_sec) != EXIT_SUCCESS) {
+    return EXIT_FAILURE;
   }
 
   return EXIT_SUCCESS;

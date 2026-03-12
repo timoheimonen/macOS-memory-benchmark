@@ -89,7 +89,35 @@ int parse_arguments(int argc, char* argv[], BenchmarkConfig& config) {
   }
 
   if (analyze_tlb_present) {
-    if (argc != 2 || std::string(argv[1]) != "-analyze-tlb") {
+    config.analyze_tlb = true;
+    bool output_seen = false;
+
+    for (int i = 1; i < argc; ++i) {
+      const std::string arg = argv[i];
+      if (arg == "-analyze-tlb") {
+        continue;
+      }
+
+      if (arg == "-output") {
+        if (output_seen) {
+          std::cerr << Messages::error_prefix()
+                    << Messages::error_duplicate_option("-output")
+                    << std::endl;
+          print_usage(argv[0]);
+          return EXIT_FAILURE;
+        }
+        if (++i >= argc) {
+          std::cerr << Messages::error_prefix()
+                    << Messages::error_missing_value("-output")
+                    << std::endl;
+          print_usage(argv[0]);
+          return EXIT_FAILURE;
+        }
+        config.output_file = argv[i];
+        output_seen = true;
+        continue;
+      }
+
       std::cerr << Messages::error_prefix()
                 << Messages::error_analyze_tlb_must_be_used_alone()
                 << std::endl;
@@ -97,7 +125,6 @@ int parse_arguments(int argc, char* argv[], BenchmarkConfig& config) {
       return EXIT_FAILURE;
     }
 
-    config.analyze_tlb = true;
     return EXIT_SUCCESS;
   }
   

@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.53.3] - 2026-03-12
+
+### Added
+  - **`-analyze-tlb` JSON export support via `-output <file>`**: Standalone TLB analysis mode now supports optional JSON output for verification workflows. Export includes full sweep locality points, raw per-loop latencies, per-point P50 values, inferred L1/L2 boundaries (with confidence and inferred entries), guard parameters, and page-walk penalty details.
+
+### Changed
+  - **`-analyze-tlb` argument compatibility rule**: Mode no longer requires strict single-argument usage; it now allows `-output <file>` as the only additional option and rejects all other options.
+
 ## [0.53.2] - 2026-03-12
 
 ### Changed
