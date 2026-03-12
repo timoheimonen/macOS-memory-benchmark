@@ -55,6 +55,10 @@ struct BenchmarkResults {
   double average_latency_ns = 0.0;  ///< Average main memory latency (nanoseconds)
   double total_lat_time_ns = 0.0;   ///< Total main memory latency time (nanoseconds)
   std::vector<double> latency_samples;  ///< Per-sample latencies for main memory (nanoseconds)
+  bool has_auto_tlb_breakdown = false;  ///< True when automatic TLB hit/miss breakdown was measured
+  double tlb_hit_latency_ns = 0.0;      ///< TLB hit-biased latency (16 KB locality)
+  double tlb_miss_latency_ns = 0.0;     ///< TLB miss-biased latency (global random locality)
+  double page_walk_penalty_ns = 0.0;    ///< Estimated page-walk penalty (miss - hit)
   
   // Cache latency results
   double l1_latency_ns = 0.0;  ///< L1 cache latency (nanoseconds)
@@ -122,4 +126,3 @@ struct BenchmarkStatistics {
 int run_all_benchmarks(const BenchmarkBuffers& buffers, const BenchmarkConfig& config, BenchmarkStatistics& stats);
 
 #endif // BENCHMARK_RUNNER_H
-

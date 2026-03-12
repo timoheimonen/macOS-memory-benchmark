@@ -285,10 +285,15 @@ void run_cache_latency_tests(const BenchmarkBuffers& buffers, const BenchmarkCon
  * @note Progress indicator shown before test execution.
  */
 void run_main_memory_latency_test(const BenchmarkBuffers& buffers, const BenchmarkConfig& config,
-                                    TimingResults& timings, BenchmarkResults& results, HighResTimer& test_timer) {
+                                     TimingResults& timings, BenchmarkResults& results, HighResTimer& test_timer) {
   if (buffers.lat_buffer() == nullptr || config.buffer_size == 0 || config.lat_num_accesses == 0) {
     return;
   }
+
+  results.has_auto_tlb_breakdown = false;
+  results.tlb_hit_latency_ns = 0.0;
+  results.tlb_miss_latency_ns = 0.0;
+  results.page_walk_penalty_ns = 0.0;
 
   show_progress();
   warmup_latency(buffers.lat_buffer(), config.buffer_size);
@@ -298,6 +303,35 @@ void run_main_memory_latency_test(const BenchmarkBuffers& buffers, const Benchma
   if (config.latency_sample_count > 0) {
     (void)run_latency_test(buffers.lat_buffer(), config.lat_num_accesses, test_timer,
                            &results.latency_samples, config.latency_sample_count);
+  }
+
+  if (!config.user_specified_latency_tlb_locality) {
+    const double tlb_hit_latency_ns =
+        timings.total_lat_time_ns / static_cast<double>(config.lat_num_accesses);
+
+    if (setup_latency_chain(buffers.lat_buffer(),
+                            config.buffer_size,
+                            config.latency_stride_bytes,
+                            0,
+                            nullptr) == EXIT_SUCCESS) {
+      show_progress();
+      warmup_latency(buffers.lat_buffer(), config.buffer_size);
+      const double miss_total_lat_time_ns =
+          run_latency_test(buffers.lat_buffer(), config.lat_num_accesses, test_timer, nullptr, 0);
+      const double tlb_miss_latency_ns =
+          miss_total_lat_time_ns / static_cast<double>(config.lat_num_accesses);
+
+      results.has_auto_tlb_breakdown = true;
+      results.tlb_hit_latency_ns = tlb_hit_latency_ns;
+      results.tlb_miss_latency_ns = tlb_miss_latency_ns;
+      results.page_walk_penalty_ns = tlb_miss_latency_ns - tlb_hit_latency_ns;
+    }
+
+    (void)setup_latency_chain(buffers.lat_buffer(),
+                              config.buffer_size,
+                              config.latency_stride_bytes,
+                              config.latency_tlb_locality_bytes,
+                              nullptr);
   }
 }
 

@@ -125,7 +125,7 @@ Latency-specific disable controls in `-only-latency`:
 - `-analyze-tlb`: Standalone TLB-boundary detection benchmark (`1024/512/256 MB` fallback buffer selection), sweeping locality windows from `max(16 KB, 2*stride)` to `256 MB` (plus optional `512 MB` page-walk comparison when buffer is at least `512 MB`). Supports optional `-latency-stride-bytes <bytes>` and defaults to normal latency stride default.
 - `-latency-samples <count>`: Samples per latency test (default `1000`).
 - `-latency-stride-bytes <bytes>`: Pointer-chain stride for latency tests (default `136`; must be > 0 and pointer-size aligned).
-- `-latency-tlb-locality-kb <KB>`: Pointer-chain locality window (default `16`; `0` = global random chain; non-zero values must be page-size multiples).
+- `-latency-tlb-locality-kb <KB>`: Pointer-chain locality window (default `16`; `0` = global random chain; non-zero values must be page-size multiples). If omitted, regular main-memory latency output also includes an automatic TLB comparison (`16 KB` hit-biased vs `0` miss-biased) and estimated page-walk penalty.
 - `-non-cacheable`: Best-effort cache-discouraging hints (not true uncached memory).
 - `-output <file>`: Save JSON output.
 
@@ -148,6 +148,12 @@ Latency locality comparison:
 ```bash
 ./memory_benchmark -only-latency -buffersize 1024 -count 10 -latency-samples 5000 -latency-tlb-locality-kb 16 -output lat_tlb16.json
 ./memory_benchmark -only-latency -buffersize 1024 -count 10 -latency-samples 5000 -latency-tlb-locality-kb 0 -output lat_global.json
+```
+
+Regular benchmark with automatic DRAM TLB breakdown (omit `-latency-tlb-locality-kb`):
+
+```bash
+./memory_benchmark -latency-stride-bytes 128 -count 1
 ```
 
 TLB-vs-cache isolation (smaller stride within pages):
@@ -186,6 +192,7 @@ Console output includes:
 
 - Resolved configuration and cache information.
 - Per-loop benchmark results.
+- Main-memory latency may include automatic TLB breakdown lines (`TLB hit latency`, `TLB miss latency`, and `Estimated page-walk penalty`) when `-latency-tlb-locality-kb` is not explicitly set.
 - Aggregate statistics when `-count > 1` (including P50/P90/P95/P99 and stddev).
 
 JSON output shape:

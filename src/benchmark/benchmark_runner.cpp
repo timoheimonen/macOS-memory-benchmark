@@ -124,6 +124,8 @@ int run_all_benchmarks(const BenchmarkBuffers& buffers, const BenchmarkConfig& c
                     loop_results.average_latency_ns, loop_results.total_lat_time_ns,
                     config.use_custom_cache_size, loop_results.custom_latency_ns, config.custom_buffer_size,
                     loop_results.custom_read_bw_gb_s, loop_results.custom_write_bw_gb_s, loop_results.custom_copy_bw_gb_s,
+                    loop_results.has_auto_tlb_breakdown, loop_results.tlb_hit_latency_ns,
+                    loop_results.tlb_miss_latency_ns, loop_results.page_walk_penalty_ns,
                     config.user_specified_threads, config.only_bandwidth, config.only_latency);
     } catch (const std::exception &e) {
       std::cerr << Messages::error_benchmark_loop(loop, e.what()) << std::endl;
@@ -133,4 +135,3 @@ int run_all_benchmarks(const BenchmarkBuffers& buffers, const BenchmarkConfig& c
 
   return EXIT_SUCCESS;
 }
-

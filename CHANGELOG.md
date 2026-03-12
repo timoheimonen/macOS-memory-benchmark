@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.53.4] - 2026-03-12
+
+### Added
+  - **Automatic DRAM TLB breakdown in regular benchmark mode**: When `-latency-tlb-locality-kb` is not explicitly set by the user, main-memory latency output now includes additional lines for `TLB hit latency` (16 KB locality), `TLB miss latency` (global random locality, `0`), and an `Estimated page-walk penalty` (`miss - hit`).
+  - **Result plumbing for per-loop TLB breakdown metrics**: Added loop-level result fields for auto TLB hit/miss/page-walk values so they can be emitted in standard results output.
+
+### Changed
+  - **Main-memory latency execution path now performs an auto comparative pass**: In auto mode, the regular DRAM latency path keeps the default 16 KB locality measurement and adds a second global-random pass for miss-biased timing.
+  - **Main-memory latency report now restores default locality chain after auto miss pass**: The latency chain is rebuilt back to configured/default locality after the global-random measurement so subsequent loops keep expected baseline behavior.
+
 ## [0.53.3] - 2026-03-12
 
 ### Added

@@ -645,6 +645,27 @@ TEST_F(MessagesFormattingTest, ResultsLatencyAverage) {
   EXPECT_NE(msg.find("ns"), std::string::npos);
 }
 
+TEST_F(MessagesFormattingTest, ResultsLatencyTlbHit) {
+  std::string msg = Messages::results_latency_tlb_hit(24.10);
+  EXPECT_NE(msg.find("TLB hit latency"), std::string::npos);
+  EXPECT_NE(msg.find("16 KB locality"), std::string::npos);
+  EXPECT_NE(msg.find("24.10"), std::string::npos);
+}
+
+TEST_F(MessagesFormattingTest, ResultsLatencyTlbMiss) {
+  std::string msg = Messages::results_latency_tlb_miss(86.70);
+  EXPECT_NE(msg.find("TLB miss latency"), std::string::npos);
+  EXPECT_NE(msg.find("global random locality"), std::string::npos);
+  EXPECT_NE(msg.find("86.70"), std::string::npos);
+}
+
+TEST_F(MessagesFormattingTest, ResultsLatencyPageWalkPenalty) {
+  std::string msg = Messages::results_latency_page_walk_penalty(62.60);
+  EXPECT_NE(msg.find("Estimated page-walk penalty"), std::string::npos);
+  EXPECT_NE(msg.find("62.60"), std::string::npos);
+  EXPECT_NE(msg.find("ns"), std::string::npos);
+}
+
 TEST_F(MessagesFormattingTest, ResultsCacheBandwidth) {
   std::string msg = Messages::results_cache_bandwidth(1);
   EXPECT_NE(msg.find("Cache Bandwidth"), std::string::npos);
