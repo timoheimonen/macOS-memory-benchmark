@@ -133,9 +133,20 @@ std::string statistics_main_memory_latency_header() {
   return "\nMain Memory Latency (ns):";
 }
 
+std::string statistics_tlb_hit_latency_metric_name() {
+  return "TLB Hit Latency (ns)";
+}
+
+std::string statistics_tlb_miss_latency_metric_name() {
+  return "TLB Miss Latency (ns)";
+}
+
+std::string statistics_page_walk_penalty_metric_name() {
+  return "Estimated Page-Walk Penalty (ns)";
+}
+
 std::string statistics_footer() {
   return "----------------------------------";
 }
 
 } // namespace Messages
-

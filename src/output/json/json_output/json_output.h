@@ -97,6 +97,10 @@ namespace JsonKeys {
   constexpr const char* AVERAGE_NS = "average_ns";
   constexpr const char* SAMPLES_NS = "samples_ns";
   constexpr const char* SAMPLES_STATISTICS = "samples_statistics";
+  constexpr const char* AUTO_TLB_BREAKDOWN = "auto_tlb_breakdown";
+  constexpr const char* TLB_HIT_NS = "tlb_hit_ns";
+  constexpr const char* TLB_MISS_NS = "tlb_miss_ns";
+  constexpr const char* PAGE_WALK_PENALTY_NS = "page_walk_penalty_ns";
   constexpr const char* CHAIN_DIAGNOSTICS = "chain_diagnostics";
   constexpr const char* POINTER_COUNT = "pointer_count";
   constexpr const char* UNIQUE_PAGES_TOUCHED = "unique_pages_touched";

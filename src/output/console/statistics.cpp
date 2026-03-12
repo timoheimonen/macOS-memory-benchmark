@@ -230,6 +230,9 @@ static void print_cache_latency_statistics(const std::string &cache_name,
  * @param all_l2_write_bw Vector holding L2 cache write bandwidth results from each loop
  * @param all_l2_copy_bw Vector holding L2 cache copy bandwidth results from each loop
  * @param all_main_mem_latency Vector holding main memory latency results from each loop
+ * @param all_tlb_hit_latency Vector holding TLB hit-biased latency results from each loop
+ * @param all_tlb_miss_latency Vector holding TLB miss-biased latency results from each loop
+ * @param all_page_walk_penalty Vector holding estimated page-walk penalty results from each loop
  * @param use_custom_cache_size Flag indicating if custom cache size is being used
  * @param all_custom_latency Vector holding custom cache latency results from each loop
  * @param all_custom_read_bw Vector holding custom cache read bandwidth results from each loop
@@ -250,6 +253,9 @@ void print_statistics(int loop_count, const std::vector<double> &all_read_bw, co
                       const std::vector<double> &all_l2_read_bw, const std::vector<double> &all_l2_write_bw,
                       const std::vector<double> &all_l2_copy_bw,
                       const std::vector<double> &all_main_mem_latency,
+                      const std::vector<double> &all_tlb_hit_latency,
+                      const std::vector<double> &all_tlb_miss_latency,
+                      const std::vector<double> &all_page_walk_penalty,
                       bool use_custom_cache_size,
                       const std::vector<double> &all_custom_latency,
                       const std::vector<double> &all_custom_read_bw,
@@ -337,6 +343,28 @@ void print_statistics(int loop_count, const std::vector<double> &all_read_bw, co
         std::cout << Messages::statistics_stddev(main_mem_latency_stats.stddev, Constants::LATENCY_PRECISION) << std::endl;
         std::cout << Messages::statistics_min(main_mem_latency_stats.min, Constants::LATENCY_PRECISION) << std::endl;
         std::cout << Messages::statistics_max(main_mem_latency_stats.max, Constants::LATENCY_PRECISION) << std::endl;
+      }
+
+      if (!all_tlb_hit_latency.empty()) {
+        std::cout << "\n";
+        Statistics tlb_hit_stats = calculate_statistics(all_tlb_hit_latency);
+        print_metric_statistics(Messages::statistics_tlb_hit_latency_metric_name(),
+                                tlb_hit_stats,
+                                Constants::LATENCY_PRECISION);
+      }
+      if (!all_tlb_miss_latency.empty()) {
+        std::cout << "\n";
+        Statistics tlb_miss_stats = calculate_statistics(all_tlb_miss_latency);
+        print_metric_statistics(Messages::statistics_tlb_miss_latency_metric_name(),
+                                tlb_miss_stats,
+                                Constants::LATENCY_PRECISION);
+      }
+      if (!all_page_walk_penalty.empty()) {
+        std::cout << "\n";
+        Statistics page_walk_penalty_stats = calculate_statistics(all_page_walk_penalty);
+        print_metric_statistics(Messages::statistics_page_walk_penalty_metric_name(),
+                                page_walk_penalty_stats,
+                                Constants::LATENCY_PRECISION);
       }
     }
   }

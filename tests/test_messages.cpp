@@ -921,6 +921,24 @@ TEST_F(MessagesFormattingTest, StatisticsMainMemoryLatencyHeader) {
   EXPECT_NE(msg.find("ns"), std::string::npos);
 }
 
+TEST_F(MessagesFormattingTest, StatisticsTlbHitLatencyMetricName) {
+  std::string msg = Messages::statistics_tlb_hit_latency_metric_name();
+  EXPECT_NE(msg.find("TLB Hit Latency"), std::string::npos);
+  EXPECT_NE(msg.find("ns"), std::string::npos);
+}
+
+TEST_F(MessagesFormattingTest, StatisticsTlbMissLatencyMetricName) {
+  std::string msg = Messages::statistics_tlb_miss_latency_metric_name();
+  EXPECT_NE(msg.find("TLB Miss Latency"), std::string::npos);
+  EXPECT_NE(msg.find("ns"), std::string::npos);
+}
+
+TEST_F(MessagesFormattingTest, StatisticsPageWalkPenaltyMetricName) {
+  std::string msg = Messages::statistics_page_walk_penalty_metric_name();
+  EXPECT_NE(msg.find("Page-Walk Penalty"), std::string::npos);
+  EXPECT_NE(msg.find("ns"), std::string::npos);
+}
+
 TEST_F(MessagesFormattingTest, StatisticsFooter) {
   std::string msg = Messages::statistics_footer();
   EXPECT_EQ(msg, "----------------------------------");

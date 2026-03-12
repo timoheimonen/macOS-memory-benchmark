@@ -261,6 +261,9 @@ std::string statistics_cache_latency_header();
 std::string statistics_cache_latency_name(const std::string& cache_name);
 std::string statistics_median_p50_from_samples(double value, size_t sample_count, int precision = 2);
 std::string statistics_main_memory_latency_header();
+std::string statistics_tlb_hit_latency_metric_name();
+std::string statistics_tlb_miss_latency_metric_name();
+std::string statistics_page_walk_penalty_metric_name();
 std::string statistics_footer();
 
 // --- Pattern Benchmark Messages ---
