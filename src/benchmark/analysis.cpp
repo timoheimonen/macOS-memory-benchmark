@@ -54,10 +54,10 @@
 namespace {
 
 // Fixed analysis parameters for standalone TLB mode.
-constexpr size_t kLatencyStrideBytes = 64;
 constexpr size_t kLoopsPerPoint = 30;
 constexpr size_t kAccessesPerLoop = 25 * 1000 * 1000;
-constexpr size_t kPageWalkBaselineLocalityBytes = 16 * Constants::BYTES_PER_KB;
+constexpr size_t kSweepMinLocalityBytes = 16 * Constants::BYTES_PER_KB;
+constexpr size_t kSweepMaxLocalityBytes = 256 * Constants::BYTES_PER_MB;
 constexpr size_t kPageWalkComparisonLocalityBytes = 512 * Constants::BYTES_PER_MB;
 constexpr size_t kPageWalkMinimumBufferMb = 512;
 constexpr double kRelativeThreshold = 0.10;
@@ -75,6 +75,43 @@ const std::array<size_t, 15> kLocalitySweepBytes = {
 };
 
 const std::array<size_t, 3> kBufferCandidateMb = {1024, 512, 256};
+
+size_t calculate_min_sweep_locality(size_t stride_bytes) {
+  if (stride_bytes > (std::numeric_limits<size_t>::max() / 2)) {
+    return std::numeric_limits<size_t>::max();
+  }
+
+  return std::max(kSweepMinLocalityBytes, 2 * stride_bytes);
+}
+
+std::vector<size_t> build_effective_locality_sweep(size_t stride_bytes) {
+  const size_t min_locality_bytes = calculate_min_sweep_locality(stride_bytes);
+  std::vector<size_t> localities;
+
+  if (min_locality_bytes > kSweepMaxLocalityBytes) {
+    return localities;
+  }
+
+  localities.reserve(kLocalitySweepBytes.size() + 1);
+  if (std::none_of(kLocalitySweepBytes.begin(),
+                   kLocalitySweepBytes.end(),
+                   [min_locality_bytes](size_t value) {
+                     return value == min_locality_bytes;
+                   })) {
+    localities.push_back(min_locality_bytes);
+  }
+
+  for (size_t locality_bytes : kLocalitySweepBytes) {
+    if (locality_bytes < min_locality_bytes || locality_bytes > kSweepMaxLocalityBytes) {
+      continue;
+    }
+    localities.push_back(locality_bytes);
+  }
+
+  std::sort(localities.begin(), localities.end());
+  localities.erase(std::unique(localities.begin(), localities.end()), localities.end());
+  return localities;
+}
 
 /**
  * @brief Compute arithmetic mean for a half-open range.
@@ -135,6 +172,7 @@ MmapPtr try_allocate_analysis_buffer(size_t size_bytes) {
  *
  * @param[in]     latency_buffer      Latency buffer base pointer
  * @param[in]     buffer_size_bytes   Buffer size in bytes
+ * @param[in]     stride_bytes        Pointer-chase stride in bytes
  * @param[in]     locality_bytes      Locality window size in bytes
  * @param[in,out] timer               High-resolution timer instance
  * @param[out]    out_p50_latency_ns  Measured P50 latency in ns/access
@@ -144,6 +182,7 @@ MmapPtr try_allocate_analysis_buffer(size_t size_bytes) {
  */
 bool measure_locality_p50(void* latency_buffer,
                           size_t buffer_size_bytes,
+                          size_t stride_bytes,
                           size_t locality_bytes,
                           HighResTimer& timer,
                           double& out_p50_latency_ns,
@@ -155,7 +194,7 @@ bool measure_locality_p50(void* latency_buffer,
 
   for (size_t loop = 0; loop < kLoopsPerPoint; ++loop) {
     if (setup_latency_chain(latency_buffer, buffer_size_bytes,
-                            kLatencyStrideBytes, locality_bytes) != EXIT_SUCCESS) {
+                            stride_bytes, locality_bytes) != EXIT_SUCCESS) {
       return false;
     }
 
@@ -220,6 +259,8 @@ int save_tlb_analysis_to_json(
     size_t page_size_bytes,
     size_t l1_cache_size_bytes,
     size_t tlb_guard_bytes,
+    size_t stride_bytes,
+    size_t page_walk_baseline_locality_bytes,
     size_t selected_buffer_mb,
     bool buffer_locked,
     const std::vector<size_t>& localities_bytes,
@@ -245,7 +286,7 @@ int save_tlb_analysis_to_json(
       {JsonKeys::CPU_NAME, cpu_name},
       {JsonKeys::PAGE_SIZE_BYTES, page_size_bytes},
       {JsonKeys::L1_CACHE_SIZE_BYTES, l1_cache_size_bytes},
-      {JsonKeys::LATENCY_STRIDE_BYTES, kLatencyStrideBytes},
+      {JsonKeys::LATENCY_STRIDE_BYTES, stride_bytes},
       {JsonKeys::LATENCY_SAMPLE_COUNT, static_cast<int>(kLoopsPerPoint)},
       {"accesses_per_loop", kAccessesPerLoop},
       {"tlb_guard_bytes", tlb_guard_bytes},
@@ -269,7 +310,7 @@ int save_tlb_analysis_to_json(
   tlb_json["l2_tlb_detection"] = build_tlb_boundary_json(l2_boundary, l2_entries);
   tlb_json["page_walk_penalty"] = {
       {"available", can_measure_page_walk_penalty},
-      {"baseline_locality_kb", kPageWalkBaselineLocalityBytes / Constants::BYTES_PER_KB},
+      {"baseline_locality_kb", page_walk_baseline_locality_bytes / Constants::BYTES_PER_KB},
       {"comparison_locality_mb", kPageWalkComparisonLocalityBytes / Constants::BYTES_PER_MB},
       {"baseline_p50_ns", page_walk_baseline_ns}};
   if (can_measure_page_walk_penalty) {
@@ -401,12 +442,13 @@ TlbBoundaryDetection detect_tlb_boundary(const std::vector<size_t>& locality_byt
  * Workflow:
  * - Print program header and run banner.
  * - Allocate analysis buffer with fallback order: 1024MB -> 512MB -> 256MB.
- * - Sweep locality windows from 16KB to 256MB and collect P50 latencies.
+ * - Use configured latency stride (default from `-latency-stride-bytes`).
+ * - Sweep locality windows from max(16KB, 2*stride) to 256MB and collect P50 latencies.
  * - Optionally run a separate 512MB locality pass for page-walk penalty.
  * - Infer L1/L2 boundaries and emit the TLB analysis report.
  *
  * Page-walk penalty:
- * - Reported as P50(512MB) - P50(16KB).
+ * - Reported as P50(512MB) - P50(effective baseline locality).
  * - Only computed when selected analysis buffer is at least 512MB.
  *
  * @return EXIT_SUCCESS on success, EXIT_FAILURE on allocation or measurement error.
@@ -415,6 +457,20 @@ int run_tlb_analysis(const BenchmarkConfig& config) {
   const auto analysis_start = std::chrono::steady_clock::now();
   std::cout << Messages::usage_header(SOFTVERSION);
   std::cout << Messages::msg_running_tlb_analysis() << std::endl;
+
+  if (config.latency_stride_bytes == 0) {
+    std::cerr << Messages::error_prefix()
+              << Messages::error_latency_stride_invalid(0, 1, std::numeric_limits<long long>::max())
+              << std::endl;
+    return EXIT_FAILURE;
+  }
+  if ((config.latency_stride_bytes % sizeof(void*)) != 0) {
+    std::cerr << Messages::error_prefix()
+              << Messages::error_latency_stride_alignment(config.latency_stride_bytes, sizeof(void*))
+              << std::endl;
+    return EXIT_FAILURE;
+  }
+  const size_t analysis_stride_bytes = config.latency_stride_bytes;
 
   const size_t page_size_bytes = static_cast<size_t>(getpagesize());
   const size_t l1_cache_size_bytes = get_l1_cache_size();
@@ -442,6 +498,26 @@ int run_tlb_analysis(const BenchmarkConfig& config) {
     return EXIT_FAILURE;
   }
 
+  const size_t pointer_count = selected_buffer_bytes / analysis_stride_bytes;
+  if (pointer_count < 2) {
+    std::cerr << Messages::error_prefix()
+              << Messages::error_buffer_stride_invalid_latency_chain(
+                     pointer_count, selected_buffer_bytes, analysis_stride_bytes)
+              << std::endl;
+    return EXIT_FAILURE;
+  }
+
+  std::vector<size_t> localities_bytes = build_effective_locality_sweep(analysis_stride_bytes);
+  if (localities_bytes.empty()) {
+    std::cerr << Messages::error_prefix()
+              << Messages::error_buffer_stride_invalid_latency_chain(
+                     pointer_count, selected_buffer_bytes, analysis_stride_bytes)
+              << std::endl;
+    return EXIT_FAILURE;
+  }
+
+  const size_t page_walk_baseline_locality_bytes = localities_bytes.front();
+
   bool buffer_locked = false;
   if (mlock(latency_buffer.get(), selected_buffer_bytes) == 0) {
     buffer_locked = true;
@@ -459,7 +535,6 @@ int run_tlb_analysis(const BenchmarkConfig& config) {
   }
   auto& timer = *timer_opt;
 
-  std::vector<size_t> localities_bytes(kLocalitySweepBytes.begin(), kLocalitySweepBytes.end());
   std::vector<double> p50_latency_ns;
   std::vector<std::vector<double>> sweep_loop_latencies_ns;
   p50_latency_ns.reserve(localities_bytes.size());
@@ -478,6 +553,7 @@ int run_tlb_analysis(const BenchmarkConfig& config) {
     std::vector<double> loop_latencies_ns;
     if (!measure_locality_p50(latency_buffer.get(),
                               selected_buffer_bytes,
+                              analysis_stride_bytes,
                               locality_bytes,
                               timer,
                               locality_p50_ns,
@@ -501,6 +577,7 @@ int run_tlb_analysis(const BenchmarkConfig& config) {
               << std::endl;
     if (!measure_locality_p50(latency_buffer.get(),
                               selected_buffer_bytes,
+                              analysis_stride_bytes,
                               kPageWalkComparisonLocalityBytes,
                               timer,
                               page_walk_512mb_p50_ns,
@@ -534,10 +611,7 @@ int run_tlb_analysis(const BenchmarkConfig& config) {
                                 ? infer_tlb_entries(l2_boundary.boundary_locality_bytes, page_size_bytes)
                                 : 0;
 
-  const size_t page_walk_baseline_index = 0;
-  const double page_walk_baseline_ns = (p50_latency_ns.size() > page_walk_baseline_index)
-                                            ? p50_latency_ns[page_walk_baseline_index]
-                                            : 0.0;
+  const double page_walk_baseline_ns = p50_latency_ns.empty() ? 0.0 : p50_latency_ns.front();
   const double page_walk_penalty_ns = page_walk_512mb_p50_ns - page_walk_baseline_ns;
 
   std::cout << std::endl;
@@ -545,7 +619,7 @@ int run_tlb_analysis(const BenchmarkConfig& config) {
   std::cout << Messages::report_tlb_cpu(cpu_name) << std::endl;
   std::cout << Messages::report_tlb_page_size(page_size_bytes) << std::endl;
   std::cout << Messages::report_tlb_buffer(selected_buffer_mb, buffer_locked) << std::endl;
-  std::cout << Messages::report_tlb_stride(kLatencyStrideBytes) << std::endl;
+  std::cout << Messages::report_tlb_stride(analysis_stride_bytes) << std::endl;
   std::cout << Messages::report_tlb_loop_config(kLoopsPerPoint, kAccessesPerLoop) << std::endl;
 
   std::cout << std::endl;
@@ -577,11 +651,13 @@ int run_tlb_analysis(const BenchmarkConfig& config) {
     if (can_measure_page_walk_penalty) {
       std::cout << Messages::report_tlb_page_walk_penalty(
                        page_walk_penalty_ns,
-                       kPageWalkBaselineLocalityBytes / Constants::BYTES_PER_KB,
+                       page_walk_baseline_locality_bytes / Constants::BYTES_PER_KB,
                        kPageWalkComparisonLocalityBytes / Constants::BYTES_PER_MB)
                 << std::endl;
     } else {
       std::cout << Messages::report_tlb_page_walk_penalty_unavailable(
+                       page_walk_baseline_locality_bytes / Constants::BYTES_PER_KB,
+                       kPageWalkComparisonLocalityBytes / Constants::BYTES_PER_MB,
                        kPageWalkMinimumBufferMb,
                        selected_buffer_mb)
                 << std::endl;
@@ -591,11 +667,13 @@ int run_tlb_analysis(const BenchmarkConfig& config) {
     if (can_measure_page_walk_penalty) {
       std::cout << Messages::report_tlb_page_walk_penalty(
                        page_walk_penalty_ns,
-                       kPageWalkBaselineLocalityBytes / Constants::BYTES_PER_KB,
+                       page_walk_baseline_locality_bytes / Constants::BYTES_PER_KB,
                        kPageWalkComparisonLocalityBytes / Constants::BYTES_PER_MB)
                 << std::endl;
     } else {
       std::cout << Messages::report_tlb_page_walk_penalty_unavailable(
+                       page_walk_baseline_locality_bytes / Constants::BYTES_PER_KB,
+                       kPageWalkComparisonLocalityBytes / Constants::BYTES_PER_MB,
                        kPageWalkMinimumBufferMb,
                        selected_buffer_mb)
                 << std::endl;
@@ -610,6 +688,8 @@ int run_tlb_analysis(const BenchmarkConfig& config) {
                                 page_size_bytes,
                                 l1_cache_size_bytes,
                                 tlb_guard_bytes,
+                                analysis_stride_bytes,
+                                page_walk_baseline_locality_bytes,
                                 selected_buffer_mb,
                                 buffer_locked,
                                 localities_bytes,

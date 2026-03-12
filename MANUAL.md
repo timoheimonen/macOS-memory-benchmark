@@ -186,9 +186,10 @@ Pattern mode (`-patterns`) measures bandwidth sensitivity across:
 #### `-analyze-tlb`
 
 - Runs standalone TLB analysis mode only
-- Can be combined only with optional `-output <file>`
-- Uses fixed `64B` stride, sweeps locality windows `16KB` to `256MB`, and reports inferred L1/L2 TLB boundaries and entry counts
-- Separately computes page-walk penalty as `P50(512MB) - P50(16KB)` when analysis buffer is at least `512MB`
+- Can be combined only with optional `-output <file>` and `-latency-stride-bytes <bytes>`
+- Uses latency stride from `-latency-stride-bytes` (same default as standard latency mode), sweeps locality windows `max(16KB, 2*stride)` to `256MB`, and reports inferred L1/L2 TLB boundaries and entry counts
+- Separately computes page-walk penalty as `P50(512MB) - P50(effective baseline locality)` when analysis buffer is at least `512MB`
+- Detailed methodology and JSON contract: `TLB_ANALYSIS_WHITEPAPER.md`
 
 ### Latency-specific controls
 
@@ -270,6 +271,9 @@ Pattern mode (`-patterns`) measures bandwidth sensitivity across:
 
 # Standalone TLB analysis with JSON export
 ./memory_benchmark -analyze-tlb -output tlb_analysis.json
+
+# Standalone TLB analysis with custom stride
+./memory_benchmark -analyze-tlb -latency-stride-bytes 128 -output tlb_analysis_stride128.json
 ```
 
 ### Invalid combinations
@@ -290,7 +294,7 @@ Pattern mode (`-patterns`) measures bandwidth sensitivity across:
 # invalid: both latency targets disabled
 ./memory_benchmark -only-latency -buffersize 0 -cache-size 0
 
-# invalid: analyze-tlb with any extra option
+# invalid: analyze-tlb with unsupported extra option
 ./memory_benchmark -analyze-tlb -buffersize 1024
 ```
 

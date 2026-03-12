@@ -146,7 +146,7 @@ std::string error_threads_invalid(long long value, long long min_val, long long 
 
 const std::string& error_analyze_tlb_must_be_used_alone() {
   static const std::string msg =
-      "-analyze-tlb allows only optional -output <file> (no other options allowed)";
+      "-analyze-tlb allows only optional -output <file> and -latency-stride-bytes <bytes> (no other options allowed)";
   return msg;
 }
 

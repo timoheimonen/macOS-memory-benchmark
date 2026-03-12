@@ -9,9 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
   - **`-analyze-tlb` JSON export support via `-output <file>`**: Standalone TLB analysis mode now supports optional JSON output for verification workflows. Export includes full sweep locality points, raw per-loop latencies, per-point P50 values, inferred L1/L2 boundaries (with confidence and inferred entries), guard parameters, and page-walk penalty details.
-
-### Changed
-  - **`-analyze-tlb` argument compatibility rule**: Mode no longer requires strict single-argument usage; it now allows `-output <file>` as the only additional option and rejects all other options.
+  - **TLB analysis whitepaper**: Added `TLB_ANALYSIS_WHITEPAPER.md` documenting standalone TLB-analysis methodology, guard/boundary logic, confidence classification, and JSON output verification structure.
+  - **`-analyze-tlb` optional argument support**: Added support for optional `-output <file>` and optional `-latency-stride-bytes <bytes>` with `-analyze-tlb`, while keeping other options disallowed in this mode.
+  - **`-analyze-tlb` configurable stride source**: Added usage of configured `-latency-stride-bytes` in standalone TLB analysis (defaulting to the same stride default as standard latency mode).
+  - **Stride-aware TLB sweep and page-walk baseline**: Added effective sweep start at `max(16KB, 2*stride)` (inserting that point when needed) to avoid invalid pointer-chain locality windows for large stride values. Page-walk penalty baseline now follows the same effective first sweep locality.
 
 ## [0.53.2] - 2026-03-12
 

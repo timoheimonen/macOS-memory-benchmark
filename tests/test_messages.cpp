@@ -278,6 +278,7 @@ TEST_F(MessagesErrorTest, ErrorAnalyzeTlbMustBeUsedAlone) {
   const std::string& msg = Messages::error_analyze_tlb_must_be_used_alone();
   EXPECT_NE(msg.find("-analyze-tlb"), std::string::npos);
   EXPECT_NE(msg.find("-output"), std::string::npos);
+  EXPECT_NE(msg.find("-latency-stride-bytes"), std::string::npos);
 }
 
 TEST_F(MessagesErrorTest, ErrorMadviseFailed) {
@@ -365,8 +366,9 @@ TEST_F(MessagesFormattingTest, ReportTlbPageWalkPenaltyWindow) {
 }
 
 TEST_F(MessagesFormattingTest, ReportTlbPageWalkPenaltyUnavailable) {
-  std::string msg = Messages::report_tlb_page_walk_penalty_unavailable(512, 256);
+  std::string msg = Messages::report_tlb_page_walk_penalty_unavailable(32, 512, 512, 256);
   EXPECT_NE(msg.find("N/A"), std::string::npos);
+  EXPECT_NE(msg.find("32KB -> 512MB"), std::string::npos);
   EXPECT_NE(msg.find("requires 512 MB"), std::string::npos);
   EXPECT_NE(msg.find("selected 256 MB"), std::string::npos);
 }

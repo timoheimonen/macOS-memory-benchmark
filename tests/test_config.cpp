@@ -194,6 +194,48 @@ TEST(ConfigTest, ParseAnalyzeTlbWithOutputFirstSucceeds) {
   EXPECT_EQ(config.output_file, "tlb.json");
 }
 
+TEST(ConfigTest, ParseAnalyzeTlbWithLatencyStrideSucceeds) {
+  BenchmarkConfig config;
+  const char* argv[] = {"program", "-analyze-tlb", "-latency-stride-bytes", "128"};
+  int argc = 4;
+
+  int result = parse_arguments(argc, const_cast<char**>(argv), config);
+  EXPECT_EQ(result, EXIT_SUCCESS);
+  EXPECT_TRUE(config.analyze_tlb);
+  EXPECT_EQ(config.latency_stride_bytes, 128u);
+}
+
+TEST(ConfigTest, ParseAnalyzeTlbWithLatencyStrideAndOutputSucceeds) {
+  BenchmarkConfig config;
+  const char* argv[] = {
+      "program", "-analyze-tlb", "-latency-stride-bytes", "64", "-output", "tlb.json"};
+  int argc = 6;
+
+  int result = parse_arguments(argc, const_cast<char**>(argv), config);
+  EXPECT_EQ(result, EXIT_SUCCESS);
+  EXPECT_TRUE(config.analyze_tlb);
+  EXPECT_EQ(config.latency_stride_bytes, 64u);
+  EXPECT_EQ(config.output_file, "tlb.json");
+}
+
+TEST(ConfigTest, ParseAnalyzeTlbWithInvalidLatencyStrideFails) {
+  BenchmarkConfig config;
+  const char* argv[] = {"program", "-analyze-tlb", "-latency-stride-bytes", "0"};
+  int argc = 4;
+
+  int result = parse_arguments(argc, const_cast<char**>(argv), config);
+  EXPECT_EQ(result, EXIT_FAILURE);
+}
+
+TEST(ConfigTest, ParseAnalyzeTlbWithUnalignedLatencyStrideFails) {
+  BenchmarkConfig config;
+  const char* argv[] = {"program", "-analyze-tlb", "-latency-stride-bytes", "65"};
+  int argc = 4;
+
+  int result = parse_arguments(argc, const_cast<char**>(argv), config);
+  EXPECT_EQ(result, EXIT_FAILURE);
+}
+
 TEST(ConfigTest, ParseAnalyzeTlbWithMissingOutputValueFails) {
   BenchmarkConfig config;
   const char* argv[] = {"program", "-analyze-tlb", "-output"};

@@ -173,7 +173,7 @@ std::string report_tlb_inferred_size_entries(size_t entries);
 std::string report_tlb_inferred_reach_entries(size_t entries);
 std::string report_tlb_confidence(const std::string& confidence, double step_ns, double step_percent);
 std::string report_tlb_page_walk_penalty(double penalty_ns, size_t from_kb, size_t to_mb);
-std::string report_tlb_page_walk_penalty_unavailable(size_t required_buffer_mb, size_t selected_buffer_mb);
+std::string report_tlb_page_walk_penalty_unavailable(size_t from_kb, size_t to_mb, size_t required_buffer_mb, size_t selected_buffer_mb);
 const std::string& report_tlb_not_detected();
 
 // --- Usage/Help Messages ---

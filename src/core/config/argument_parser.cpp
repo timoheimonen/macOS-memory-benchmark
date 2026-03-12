@@ -91,6 +91,7 @@ int parse_arguments(int argc, char* argv[], BenchmarkConfig& config) {
   if (analyze_tlb_present) {
     config.analyze_tlb = true;
     bool output_seen = false;
+    bool latency_stride_seen = false;
 
     for (int i = 1; i < argc; ++i) {
       const std::string arg = argv[i];
@@ -115,6 +116,68 @@ int parse_arguments(int argc, char* argv[], BenchmarkConfig& config) {
         }
         config.output_file = argv[i];
         output_seen = true;
+        continue;
+      }
+
+      if (arg == "-latency-stride-bytes") {
+        if (latency_stride_seen) {
+          std::cerr << Messages::error_prefix()
+                    << Messages::error_duplicate_option("-latency-stride-bytes")
+                    << std::endl;
+          print_usage(argv[0]);
+          return EXIT_FAILURE;
+        }
+        if (++i >= argc) {
+          std::cerr << Messages::error_prefix()
+                    << Messages::error_missing_value("-latency-stride-bytes")
+                    << std::endl;
+          print_usage(argv[0]);
+          return EXIT_FAILURE;
+        }
+
+        const std::string stride_value = argv[i];
+        long long val_ll = 0;
+        try {
+          val_ll = std::stoll(stride_value);
+        } catch (const std::invalid_argument&) {
+          std::cerr << Messages::error_prefix()
+                    << Messages::error_invalid_value(arg, stride_value, "must be an integer")
+                    << std::endl;
+          print_usage(argv[0]);
+          return EXIT_FAILURE;
+        } catch (const std::out_of_range&) {
+          std::cerr << Messages::error_prefix()
+                    << Messages::error_invalid_value(arg, stride_value, "out of range")
+                    << std::endl;
+          print_usage(argv[0]);
+          return EXIT_FAILURE;
+        }
+
+        if (val_ll <= 0) {
+          std::cerr << Messages::error_prefix()
+                    << Messages::error_invalid_value(
+                           arg,
+                           stride_value,
+                           Messages::error_latency_stride_invalid(
+                               val_ll, 1, std::numeric_limits<long long>::max()))
+                    << std::endl;
+          print_usage(argv[0]);
+          return EXIT_FAILURE;
+        }
+
+        config.latency_stride_bytes = static_cast<size_t>(val_ll);
+        if ((config.latency_stride_bytes % sizeof(void*)) != 0) {
+          std::cerr << Messages::error_prefix()
+                    << Messages::error_latency_stride_alignment(
+                           config.latency_stride_bytes,
+                           sizeof(void*))
+                    << std::endl;
+          print_usage(argv[0]);
+          return EXIT_FAILURE;
+        }
+
+        config.user_specified_latency_stride = true;
+        latency_stride_seen = true;
         continue;
       }
 
