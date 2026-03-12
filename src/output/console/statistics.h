@@ -43,6 +43,9 @@
  * @param all_l2_write_bw Vector of L2 write bandwidth measurements
  * @param all_l2_copy_bw Vector of L2 copy bandwidth measurements
  * @param all_main_mem_latency Vector of main memory latency measurements
+ * @param all_tlb_hit_latency Vector of TLB hit-biased latency measurements
+ * @param all_tlb_miss_latency Vector of TLB miss-biased latency measurements
+ * @param all_page_walk_penalty Vector of estimated page-walk penalty measurements
  * @param use_custom_cache_size Whether custom cache size is used
  * @param all_custom_latency Vector of custom cache latency measurements
  * @param all_custom_read_bw Vector of custom cache read bandwidth measurements
@@ -68,6 +71,9 @@ void print_statistics(int loop_count,
                       const std::vector<double>& all_l2_write_bw,
                       const std::vector<double>& all_l2_copy_bw,
                       const std::vector<double>& all_main_mem_latency,
+                      const std::vector<double>& all_tlb_hit_latency,
+                      const std::vector<double>& all_tlb_miss_latency,
+                      const std::vector<double>& all_page_walk_penalty,
                       bool use_custom_cache_size,
                       const std::vector<double>& all_custom_latency,
                       const std::vector<double>& all_custom_read_bw,
@@ -81,4 +87,3 @@ void print_statistics(int loop_count,
                       bool only_latency);
 
 #endif // STATISTICS_H
-

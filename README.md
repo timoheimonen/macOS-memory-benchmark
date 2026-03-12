@@ -193,7 +193,7 @@ Console output includes:
 - Resolved configuration and cache information.
 - Per-loop benchmark results.
 - Main-memory latency may include automatic TLB breakdown lines (`TLB hit latency`, `TLB miss latency`, and `Estimated page-walk penalty`) when `-latency-tlb-locality-kb` is not explicitly set.
-- Aggregate statistics when `-count > 1` (including P50/P90/P95/P99 and stddev).
+- Aggregate statistics when `-count > 1` (including P50/P90/P95/P99 and stddev). In auto-TLB mode, statistics also include `TLB Hit Latency (ns)`, `TLB Miss Latency (ns)`, and `Estimated Page-Walk Penalty (ns)`.
 
 JSON output shape:
 
@@ -231,7 +231,21 @@ Current latency payload is nested (not scalar):
     "statistics": {}
   },
   "samples_ns": [],
-  "samples_statistics": {}
+  "samples_statistics": {},
+  "auto_tlb_breakdown": {
+    "tlb_hit_ns": {
+      "values": [],
+      "statistics": {}
+    },
+    "tlb_miss_ns": {
+      "values": [],
+      "statistics": {}
+    },
+    "page_walk_penalty_ns": {
+      "values": [],
+      "statistics": {}
+    }
+  }
 }
 ```
 

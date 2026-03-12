@@ -30,7 +30,26 @@
 #include "output/json/json_output.h"
 #include "core/config/config.h"     // For BenchmarkConfig
 #include "benchmark/benchmark_runner.h"  // For BenchmarkStatistics
+#include "utils/json_utils.h"  // calculate_json_statistics
 #include "third_party/nlohmann/json.hpp"   // JSON library
+
+namespace {
+
+void add_metric_with_statistics(nlohmann::json& parent,
+                                const char* metric_key,
+                                const std::vector<double>& values) {
+  if (values.empty()) {
+    return;
+  }
+
+  parent[metric_key] = nlohmann::json::object();
+  parent[metric_key][JsonKeys::VALUES] = values;
+  if (values.size() > 1) {
+    parent[metric_key][JsonKeys::STATISTICS] = calculate_json_statistics(values);
+  }
+}
+
+}  // namespace
 
 // Build main memory results JSON object
 nlohmann::json build_main_memory_json(const BenchmarkConfig& config, const BenchmarkStatistics& stats) {
@@ -49,6 +68,25 @@ nlohmann::json build_main_memory_json(const BenchmarkConfig& config, const Bench
     add_latency_results(main_memory,
                         stats.all_average_latency_ns,
                         stats.all_main_mem_latency_samples);
+
+    if (main_memory.contains(JsonKeys::LATENCY) &&
+        (!stats.all_tlb_hit_latency_ns.empty() ||
+         !stats.all_tlb_miss_latency_ns.empty() ||
+         !stats.all_page_walk_penalty_ns.empty())) {
+      nlohmann::json auto_tlb_breakdown = nlohmann::json::object();
+      add_metric_with_statistics(auto_tlb_breakdown,
+                                 JsonKeys::TLB_HIT_NS,
+                                 stats.all_tlb_hit_latency_ns);
+      add_metric_with_statistics(auto_tlb_breakdown,
+                                 JsonKeys::TLB_MISS_NS,
+                                 stats.all_tlb_miss_latency_ns);
+      add_metric_with_statistics(auto_tlb_breakdown,
+                                 JsonKeys::PAGE_WALK_PENALTY_NS,
+                                 stats.all_page_walk_penalty_ns);
+      if (!auto_tlb_breakdown.empty()) {
+        main_memory[JsonKeys::LATENCY][JsonKeys::AUTO_TLB_BREAKDOWN] = auto_tlb_breakdown;
+      }
+    }
 
     const auto& diagnostics = config.main_latency_chain_diagnostics;
     if (main_memory.contains(JsonKeys::LATENCY) && diagnostics.pointer_count > 0) {

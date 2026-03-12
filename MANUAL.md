@@ -433,6 +433,13 @@ Includes values such as:
 - Std Dev
 - Min / Max
 
+When automatic TLB comparison is active (you did not explicitly set `-latency-tlb-locality-kb`),
+statistics also include dedicated sections for:
+
+- `TLB Hit Latency (ns)`
+- `TLB Miss Latency (ns)`
+- `Estimated Page-Walk Penalty (ns)`
+
 For noisy systems, prioritize median and P95/P99 rather than single fastest/slowest values.
 
 ---
@@ -495,6 +502,47 @@ When `-latency-stride-bytes` is explicitly set, latency sections also include `c
     "stddev": 0.47,
     "min": 26.24,
     "max": 27.73
+  },
+  "auto_tlb_breakdown": {
+    "tlb_hit_ns": {
+      "values": [26.80, 27.73, 26.62],
+      "statistics": {
+        "average": 26.75,
+        "median": 26.71,
+        "p90": 27.30,
+        "p95": 27.51,
+        "p99": 27.68,
+        "stddev": 0.47,
+        "min": 26.24,
+        "max": 27.73
+      }
+    },
+    "tlb_miss_ns": {
+      "values": [89.10, 90.45, 91.02],
+      "statistics": {
+        "average": 90.19,
+        "median": 90.45,
+        "p90": 90.91,
+        "p95": 90.96,
+        "p99": 91.01,
+        "stddev": 0.99,
+        "min": 89.10,
+        "max": 91.02
+      }
+    },
+    "page_walk_penalty_ns": {
+      "values": [62.30, 62.72, 64.40],
+      "statistics": {
+        "average": 63.14,
+        "median": 62.72,
+        "p90": 64.06,
+        "p95": 64.23,
+        "p99": 64.37,
+        "stddev": 1.12,
+        "min": 62.30,
+        "max": 64.40
+      }
+    }
   },
   "chain_diagnostics": {
     "pointer_count": 1057030,
@@ -570,6 +618,9 @@ jq '.main_memory.bandwidth.read_gb_s.statistics.median' results.json
 
 # Main memory latency P95 from sample distribution
 jq '.main_memory.latency.samples_statistics.p95' results.json
+
+# Auto TLB miss latency median (when auto comparison is active)
+jq '.main_memory.latency.auto_tlb_breakdown.tlb_miss_ns.statistics.median' results.json
 
 # Pattern random read average
 jq '.patterns.random.bandwidth.read_gb_s.statistics.average' patterns.json

@@ -73,6 +73,9 @@ void initialize_statistics(BenchmarkStatistics& stats, const BenchmarkConfig& co
   stats.all_l1_latency_ns.clear();
   stats.all_l2_latency_ns.clear();
   stats.all_average_latency_ns.clear();
+  stats.all_tlb_hit_latency_ns.clear();
+  stats.all_tlb_miss_latency_ns.clear();
+  stats.all_page_walk_penalty_ns.clear();
   stats.all_l1_read_bw_gb_s.clear();
   stats.all_l1_write_bw_gb_s.clear();
   stats.all_l1_copy_bw_gb_s.clear();
@@ -96,6 +99,9 @@ void initialize_statistics(BenchmarkStatistics& stats, const BenchmarkConfig& co
     stats.all_write_bw_gb_s.reserve(config.loop_count);
     stats.all_copy_bw_gb_s.reserve(config.loop_count);
     stats.all_average_latency_ns.reserve(config.loop_count);
+    stats.all_tlb_hit_latency_ns.reserve(config.loop_count);
+    stats.all_tlb_miss_latency_ns.reserve(config.loop_count);
+    stats.all_page_walk_penalty_ns.reserve(config.loop_count);
     if (config.use_custom_cache_size) {
       if (config.custom_buffer_size > 0) {
         stats.all_custom_latency_ns.reserve(config.loop_count);
@@ -188,6 +194,11 @@ void collect_loop_results(BenchmarkStatistics& stats, const BenchmarkResults& lo
   }
   if (main_latency_enabled) {
     stats.all_average_latency_ns.push_back(loop_results.average_latency_ns);
+    if (loop_results.has_auto_tlb_breakdown) {
+      stats.all_tlb_hit_latency_ns.push_back(loop_results.tlb_hit_latency_ns);
+      stats.all_tlb_miss_latency_ns.push_back(loop_results.tlb_miss_latency_ns);
+      stats.all_page_walk_penalty_ns.push_back(loop_results.page_walk_penalty_ns);
+    }
   }
   
   // Collect latency samples from this loop

@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.53.5] - 2026-03-12
+
+### Added
+  - **Aggregate statistics for automatic DRAM TLB breakdown metrics**: When auto TLB comparison is active (regular mode without explicitly setting `-latency-tlb-locality-kb`), end-of-run statistics now include full sections for `TLB Hit Latency (ns)`, `TLB Miss Latency (ns)`, and `Estimated Page-Walk Penalty (ns)` with Average/P50/P90/P95/P99/Stddev/Min/Max.
+  - **JSON export for automatic DRAM TLB breakdown metrics**: Standard benchmark JSON now includes `main_memory.latency.auto_tlb_breakdown` with per-loop `values` (and multi-loop `statistics`) for `tlb_hit_ns`, `tlb_miss_ns`, and `page_walk_penalty_ns`.
+
+### Changed
+  - **Loop aggregation plumbing extended for auto TLB metrics**: Benchmark statistics collection now persists per-loop auto TLB hit/miss/penalty values so console summary statistics and JSON output remain consistent with per-loop console results.
+
 ## [0.53.4] - 2026-03-12
 
 ### Added

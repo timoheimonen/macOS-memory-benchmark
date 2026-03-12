@@ -17,6 +17,7 @@
 #include "benchmark/benchmark_runner.h"
 #include "core/memory/buffer_manager.h"
 #include "core/config/config.h"
+#include "output/json/json_output.h"
 #include "utils/benchmark.h"
 #include "core/config/constants.h"
 #include <cstdlib>
@@ -34,6 +35,9 @@ TEST(BenchmarkRunnerTest, StatisticsInitialization) {
   EXPECT_TRUE(stats.all_l1_latency_ns.empty());
   EXPECT_TRUE(stats.all_l2_latency_ns.empty());
   EXPECT_TRUE(stats.all_average_latency_ns.empty());
+  EXPECT_TRUE(stats.all_tlb_hit_latency_ns.empty());
+  EXPECT_TRUE(stats.all_tlb_miss_latency_ns.empty());
+  EXPECT_TRUE(stats.all_page_walk_penalty_ns.empty());
 }
 
 // Test BenchmarkResults default values
@@ -47,6 +51,10 @@ TEST(BenchmarkRunnerTest, BenchmarkResultsDefaults) {
   EXPECT_EQ(results.l1_latency_ns, 0.0);
   EXPECT_EQ(results.l2_latency_ns, 0.0);
   EXPECT_EQ(results.custom_latency_ns, 0.0);
+  EXPECT_FALSE(results.has_auto_tlb_breakdown);
+  EXPECT_EQ(results.tlb_hit_latency_ns, 0.0);
+  EXPECT_EQ(results.tlb_miss_latency_ns, 0.0);
+  EXPECT_EQ(results.page_walk_penalty_ns, 0.0);
 }
 
 // Test statistics structure after run_all_benchmarks clears vectors
@@ -93,6 +101,9 @@ TEST(BenchmarkRunnerTest, StatisticsClearing) {
   EXPECT_TRUE(stats.all_read_bw_gb_s.empty());
   EXPECT_TRUE(stats.all_write_bw_gb_s.empty());
   EXPECT_TRUE(stats.all_copy_bw_gb_s.empty());
+  EXPECT_TRUE(stats.all_tlb_hit_latency_ns.empty());
+  EXPECT_TRUE(stats.all_tlb_miss_latency_ns.empty());
+  EXPECT_TRUE(stats.all_page_walk_penalty_ns.empty());
 }
 
 // Integration test: Test that statistics vectors are properly reserved
@@ -143,6 +154,9 @@ TEST(BenchmarkRunnerTest, StatisticsReservationIntegration) {
   EXPECT_EQ(static_cast<int>(stats.all_write_bw_gb_s.size()), config.loop_count);
   EXPECT_EQ(static_cast<int>(stats.all_copy_bw_gb_s.size()), config.loop_count);
   EXPECT_EQ(static_cast<int>(stats.all_average_latency_ns.size()), config.loop_count);
+  EXPECT_EQ(static_cast<int>(stats.all_tlb_hit_latency_ns.size()), config.loop_count);
+  EXPECT_EQ(static_cast<int>(stats.all_tlb_miss_latency_ns.size()), config.loop_count);
+  EXPECT_EQ(static_cast<int>(stats.all_page_walk_penalty_ns.size()), config.loop_count);
 }
 
 // Test BenchmarkStatistics structure size and layout
@@ -156,6 +170,9 @@ TEST(BenchmarkRunnerTest, StatisticsStructure) {
   stats.all_l1_latency_ns.push_back(4.0);
   stats.all_l2_latency_ns.push_back(5.0);
   stats.all_average_latency_ns.push_back(6.0);
+  stats.all_tlb_hit_latency_ns.push_back(6.5);
+  stats.all_tlb_miss_latency_ns.push_back(6.8);
+  stats.all_page_walk_penalty_ns.push_back(0.3);
   stats.all_l1_read_bw_gb_s.push_back(7.0);
   stats.all_l1_write_bw_gb_s.push_back(8.0);
   stats.all_l1_copy_bw_gb_s.push_back(9.0);
@@ -174,6 +191,9 @@ TEST(BenchmarkRunnerTest, StatisticsStructure) {
   EXPECT_EQ(stats.all_l1_latency_ns[0], 4.0);
   EXPECT_EQ(stats.all_l2_latency_ns[0], 5.0);
   EXPECT_EQ(stats.all_average_latency_ns[0], 6.0);
+  EXPECT_EQ(stats.all_tlb_hit_latency_ns[0], 6.5);
+  EXPECT_EQ(stats.all_tlb_miss_latency_ns[0], 6.8);
+  EXPECT_EQ(stats.all_page_walk_penalty_ns[0], 0.3);
   EXPECT_EQ(stats.all_l1_read_bw_gb_s[0], 7.0);
   EXPECT_EQ(stats.all_l1_write_bw_gb_s[0], 8.0);
   EXPECT_EQ(stats.all_l1_copy_bw_gb_s[0], 9.0);
@@ -229,6 +249,9 @@ TEST(BenchmarkRunnerTest, ResultsValidation) {
   ASSERT_EQ(static_cast<int>(stats.all_write_bw_gb_s.size()), 1);
   ASSERT_EQ(static_cast<int>(stats.all_copy_bw_gb_s.size()), 1);
   ASSERT_EQ(static_cast<int>(stats.all_average_latency_ns.size()), 1);
+  ASSERT_EQ(static_cast<int>(stats.all_tlb_hit_latency_ns.size()), 1);
+  ASSERT_EQ(static_cast<int>(stats.all_tlb_miss_latency_ns.size()), 1);
+  ASSERT_EQ(static_cast<int>(stats.all_page_walk_penalty_ns.size()), 1);
   
   // Validate main memory bandwidth results are reasonable
   // Bandwidth should be positive (even if small for minimal test)
@@ -239,6 +262,8 @@ TEST(BenchmarkRunnerTest, ResultsValidation) {
   // Validate latency results are reasonable
   // Latency should be positive
   EXPECT_GT(stats.all_average_latency_ns[0], 0.0);
+  EXPECT_GT(stats.all_tlb_hit_latency_ns[0], 0.0);
+  EXPECT_GT(stats.all_tlb_miss_latency_ns[0], 0.0);
   
   // Validate that bandwidth calculations are consistent
   // Copy bandwidth should typically be >= read or write (it's both operations)
@@ -247,9 +272,102 @@ TEST(BenchmarkRunnerTest, ResultsValidation) {
   EXPECT_FALSE(std::isnan(stats.all_write_bw_gb_s[0]));
   EXPECT_FALSE(std::isnan(stats.all_copy_bw_gb_s[0]));
   EXPECT_FALSE(std::isnan(stats.all_average_latency_ns[0]));
+  EXPECT_FALSE(std::isnan(stats.all_tlb_hit_latency_ns[0]));
+  EXPECT_FALSE(std::isnan(stats.all_tlb_miss_latency_ns[0]));
+  EXPECT_FALSE(std::isnan(stats.all_page_walk_penalty_ns[0]));
   EXPECT_FALSE(std::isinf(stats.all_read_bw_gb_s[0]));
   EXPECT_FALSE(std::isinf(stats.all_write_bw_gb_s[0]));
   EXPECT_FALSE(std::isinf(stats.all_copy_bw_gb_s[0]));
   EXPECT_FALSE(std::isinf(stats.all_average_latency_ns[0]));
+  EXPECT_FALSE(std::isinf(stats.all_tlb_hit_latency_ns[0]));
+  EXPECT_FALSE(std::isinf(stats.all_tlb_miss_latency_ns[0]));
+  EXPECT_FALSE(std::isinf(stats.all_page_walk_penalty_ns[0]));
 }
 
+TEST(BenchmarkRunnerTest, StatisticsPrintsAutoTlbBreakdownMetrics) {
+  const int loop_count = 2;
+
+  const std::vector<double> empty;
+  const std::vector<double> all_main_mem_latency = {15.0, 16.0};
+  const std::vector<double> all_tlb_hit_latency = {14.0, 15.0};
+  const std::vector<double> all_tlb_miss_latency = {90.0, 92.0};
+  const std::vector<double> all_page_walk_penalty = {76.0, 77.0};
+
+  testing::internal::CaptureStdout();
+  print_statistics(loop_count,
+                   empty,
+                   empty,
+                   empty,
+                   empty,
+                   empty,
+                   empty,
+                   empty,
+                   empty,
+                   empty,
+                   empty,
+                   empty,
+                   all_main_mem_latency,
+                   all_tlb_hit_latency,
+                   all_tlb_miss_latency,
+                   all_page_walk_penalty,
+                   false,
+                   empty,
+                   empty,
+                   empty,
+                   empty,
+                   empty,
+                   empty,
+                   empty,
+                   empty,
+                   false,
+                   true);
+  const std::string output = testing::internal::GetCapturedStdout();
+
+  EXPECT_NE(output.find("TLB Hit Latency (ns):"), std::string::npos);
+  EXPECT_NE(output.find("TLB Miss Latency (ns):"), std::string::npos);
+  EXPECT_NE(output.find("Estimated Page-Walk Penalty (ns):"), std::string::npos);
+}
+
+TEST(BenchmarkRunnerTest, MainMemoryJsonIncludesAutoTlbBreakdownWhenAvailable) {
+  BenchmarkConfig config;
+  config.only_bandwidth = false;
+  config.only_latency = true;
+
+  BenchmarkStatistics stats;
+  stats.all_average_latency_ns = {15.10, 15.90};
+  stats.all_main_mem_latency_samples = {15.20, 15.80, 16.00, 15.60};
+  stats.all_tlb_hit_latency_ns = {15.10, 15.90};
+  stats.all_tlb_miss_latency_ns = {95.10, 97.90};
+  stats.all_page_walk_penalty_ns = {80.00, 82.00};
+
+  const nlohmann::json main_memory_json = build_main_memory_json(config, stats);
+  ASSERT_TRUE(main_memory_json.contains(JsonKeys::LATENCY));
+  ASSERT_TRUE(main_memory_json[JsonKeys::LATENCY].contains(JsonKeys::AUTO_TLB_BREAKDOWN));
+
+  const nlohmann::json auto_tlb_json = main_memory_json[JsonKeys::LATENCY][JsonKeys::AUTO_TLB_BREAKDOWN];
+  ASSERT_TRUE(auto_tlb_json.contains(JsonKeys::TLB_HIT_NS));
+  ASSERT_TRUE(auto_tlb_json.contains(JsonKeys::TLB_MISS_NS));
+  ASSERT_TRUE(auto_tlb_json.contains(JsonKeys::PAGE_WALK_PENALTY_NS));
+
+  ASSERT_EQ(auto_tlb_json[JsonKeys::TLB_HIT_NS][JsonKeys::VALUES].size(), 2u);
+  ASSERT_EQ(auto_tlb_json[JsonKeys::TLB_MISS_NS][JsonKeys::VALUES].size(), 2u);
+  ASSERT_EQ(auto_tlb_json[JsonKeys::PAGE_WALK_PENALTY_NS][JsonKeys::VALUES].size(), 2u);
+
+  EXPECT_TRUE(auto_tlb_json[JsonKeys::TLB_HIT_NS].contains(JsonKeys::STATISTICS));
+  EXPECT_TRUE(auto_tlb_json[JsonKeys::TLB_MISS_NS].contains(JsonKeys::STATISTICS));
+  EXPECT_TRUE(auto_tlb_json[JsonKeys::PAGE_WALK_PENALTY_NS].contains(JsonKeys::STATISTICS));
+}
+
+TEST(BenchmarkRunnerTest, MainMemoryJsonOmitsAutoTlbBreakdownWhenUnavailable) {
+  BenchmarkConfig config;
+  config.only_bandwidth = false;
+  config.only_latency = true;
+
+  BenchmarkStatistics stats;
+  stats.all_average_latency_ns = {15.10, 15.90};
+  stats.all_main_mem_latency_samples = {15.20, 15.80, 16.00, 15.60};
+
+  const nlohmann::json main_memory_json = build_main_memory_json(config, stats);
+  ASSERT_TRUE(main_memory_json.contains(JsonKeys::LATENCY));
+  EXPECT_FALSE(main_memory_json[JsonKeys::LATENCY].contains(JsonKeys::AUTO_TLB_BREAKDOWN));
+}
