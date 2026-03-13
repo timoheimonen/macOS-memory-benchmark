@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
   - **CLI help text extended for standalone core-to-core mode**: `-h/--help` now documents `-analyze-core2core` and its allowed option set.
+  - **Core-to-core handoff loop uses dedicated ARM64 assembly kernels**: Standalone `-analyze-core2core` now executes initiator/responder token ping-pong rounds through dedicated assembly routines, while keeping the existing mode interface, reporting, and JSON output structure.
   - **Refactored standalone TLB analysis module into smaller units**: Split previous `src/benchmark/analysis.cpp` into focused files: `src/benchmark/tlb_analysis.cpp` (orchestration), `src/benchmark/tlb_boundary_detector.cpp` (boundary detection and confidence logic), and `src/benchmark/tlb_analysis_json.cpp` (JSON serialization).
   - **Renamed TLB analysis interface/header**: Renamed `src/benchmark/analysis.h` to `src/benchmark/tlb_analysis.h` and updated includes/references accordingly (`main.cpp`, tests, and docs).
   - **Build wiring updated for new TLB analysis files**: Updated benchmark source list in `Makefile` to compile/link the new `tlb_analysis*` and `tlb_boundary_detector` units.

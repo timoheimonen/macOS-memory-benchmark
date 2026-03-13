@@ -66,7 +66,31 @@ extern "C" {
      * @return Final pointer after chasing count links
      */
     uintptr_t* memory_latency_chase_asm(uintptr_t* start_pointer, size_t count);
-    
+
+    /**
+     * @brief Core-to-core initiator ping-pong loop (assembly)
+     * @param turn_ptr Shared turn token pointer
+     * @param round_trips Number of round trips to execute
+     * @param initiator_turn Token value owned by initiator
+     * @param responder_turn Token value owned by responder
+     */
+    void core_to_core_initiator_round_trips_asm(uint32_t* turn_ptr,
+                                                size_t round_trips,
+                                                uint32_t initiator_turn,
+                                                uint32_t responder_turn);
+
+    /**
+     * @brief Core-to-core responder ping-pong loop (assembly)
+     * @param turn_ptr Shared turn token pointer
+     * @param round_trips Number of round trips to execute
+     * @param responder_turn Token value owned by responder
+     * @param initiator_turn Token value owned by initiator
+     */
+    void core_to_core_responder_round_trips_asm(uint32_t* turn_ptr,
+                                                size_t round_trips,
+                                                uint32_t responder_turn,
+                                                uint32_t initiator_turn);
+     
     // Pattern-specific assembly functions
     // Reverse sequential
     /**

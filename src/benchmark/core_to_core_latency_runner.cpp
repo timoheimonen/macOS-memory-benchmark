@@ -35,6 +35,7 @@
 #include <pthread.h>
 #include <pthread/qos.h>
 
+#include "asm/asm_functions.h"
 #include "benchmark/core_to_core_latency_json.h"
 #include "core/config/constants.h"
 #include "core/config/version.h"
@@ -70,12 +71,11 @@ struct ScenarioMeasurement {
 };
 
 struct alignas(Constants::CACHE_LINE_SIZE_BYTES) SharedTurn {
-  std::atomic<uint32_t> value{Constants::CORE_TO_CORE_INITIATOR_TURN_VALUE};
+  uint32_t value = Constants::CORE_TO_CORE_INITIATOR_TURN_VALUE;
 };
 
 struct alignas(Constants::CACHE_LINE_SIZE_BYTES) SharedFlags {
   std::atomic<bool> start{false};
-  std::atomic<bool> stop{false};
   std::atomic<int> ready_threads{0};
 };
 
@@ -83,6 +83,7 @@ struct SharedPingPongState {
   SharedTurn turn;
   SharedFlags flags;
 };
+
 double calculate_average(const std::vector<double>& values) {
   if (values.empty()) {
     return 0.0;
@@ -164,89 +165,88 @@ ThreadHintStatus apply_thread_hints(bool request_affinity, int affinity_tag) {
   status.affinity_code = affinity_ret;
   return status;
 }
+
 // Busy-wait start barrier keeps thread creation outside timed region.
 void wait_for_start_signal(const SharedPingPongState& state) {
   while (!state.flags.start.load(std::memory_order_acquire)) {
   }
 }
+
+size_t calculate_total_responder_round_trips(int sample_count) {
+  return Constants::CORE_TO_CORE_WARMUP_ROUND_TRIPS +
+         Constants::CORE_TO_CORE_HEADLINE_ROUND_TRIPS +
+         (static_cast<size_t>(sample_count) * Constants::CORE_TO_CORE_SAMPLE_WINDOW_ROUND_TRIPS);
+}
+
 // One round trip: initiator hands token to responder and waits to get it back.
-void run_round_trip_batch(SharedPingPongState& state, size_t round_trips) {
-  for (size_t i = 0; i < round_trips; ++i) {
-    while (state.turn.value.load(std::memory_order_acquire) != Constants::CORE_TO_CORE_INITIATOR_TURN_VALUE) {
-    }
-    state.turn.value.store(Constants::CORE_TO_CORE_RESPONDER_TURN_VALUE, std::memory_order_release);
-    while (state.turn.value.load(std::memory_order_acquire) != Constants::CORE_TO_CORE_INITIATOR_TURN_VALUE) {
-    }
-  }
+void run_round_trip_batch(uint32_t* turn_ptr, size_t round_trips) {
+  core_to_core_initiator_round_trips_asm(turn_ptr,
+                                         round_trips,
+                                         Constants::CORE_TO_CORE_INITIATOR_TURN_VALUE,
+                                         Constants::CORE_TO_CORE_RESPONDER_TURN_VALUE);
 }
-// Responder spins for token ownership and returns it to initiator.
-void responder_loop(SharedPingPongState& state) {
-  while (true) {
-    while (state.turn.value.load(std::memory_order_acquire) != Constants::CORE_TO_CORE_RESPONDER_TURN_VALUE) {
-      if (state.flags.stop.load(std::memory_order_acquire)) {
-        return;
-      }
-    }
-    state.turn.value.store(Constants::CORE_TO_CORE_INITIATOR_TURN_VALUE, std::memory_order_release);
-  }
+
+void run_responder_round_trip_batch(uint32_t* turn_ptr, size_t round_trips) {
+  core_to_core_responder_round_trips_asm(turn_ptr,
+                                         round_trips,
+                                         Constants::CORE_TO_CORE_RESPONDER_TURN_VALUE,
+                                         Constants::CORE_TO_CORE_INITIATOR_TURN_VALUE);
 }
+
 bool execute_single_scenario(const ScenarioDescriptor& scenario,
                              int sample_count,
                              ScenarioMeasurement& out_measurement) {
-  SharedPingPongState state;
-  bool timer_creation_failed = false;
+  auto timer_opt = HighResTimer::create();
+  if (!timer_opt) {
+    return false;
+  }
 
-  std::thread responder_thread([&state, &scenario, &out_measurement]() {
+  const size_t responder_round_trips = calculate_total_responder_round_trips(sample_count);
+
+  SharedPingPongState state;
+
+  std::thread responder_thread([&state, &scenario, &out_measurement, responder_round_trips]() {
     out_measurement.responder_hint =
         apply_thread_hints(scenario.apply_affinity, scenario.responder_affinity_tag);
     state.flags.ready_threads.fetch_add(1, std::memory_order_release);
     wait_for_start_signal(state);
-    responder_loop(state);
+    run_responder_round_trip_batch(&state.turn.value, responder_round_trips);
   });
 
-  std::thread initiator_thread([&state, &scenario, &out_measurement, sample_count, &timer_creation_failed]() {
+  std::thread initiator_thread([&state, &scenario, &out_measurement, sample_count, &timer_opt]() {
     out_measurement.initiator_hint =
         apply_thread_hints(scenario.apply_affinity, scenario.initiator_affinity_tag);
     state.flags.ready_threads.fetch_add(1, std::memory_order_release);
     wait_for_start_signal(state);
 
-    run_round_trip_batch(state, Constants::CORE_TO_CORE_WARMUP_ROUND_TRIPS);
-
-    auto timer_opt = HighResTimer::create();
-    if (!timer_opt) {
-      timer_creation_failed = true;
-      state.flags.stop.store(true, std::memory_order_release);
-      return;
-    }
+    run_round_trip_batch(&state.turn.value, Constants::CORE_TO_CORE_WARMUP_ROUND_TRIPS);
 
     auto& timer = *timer_opt;
     timer.start();
-    run_round_trip_batch(state, Constants::CORE_TO_CORE_HEADLINE_ROUND_TRIPS);
+    run_round_trip_batch(&state.turn.value, Constants::CORE_TO_CORE_HEADLINE_ROUND_TRIPS);
     const double headline_total_ns = timer.stop_ns();
     out_measurement.round_trip_ns = headline_total_ns / static_cast<double>(Constants::CORE_TO_CORE_HEADLINE_ROUND_TRIPS);
 
     out_measurement.samples_ns.reserve(static_cast<size_t>(sample_count));
     for (int sample_index = 0; sample_index < sample_count; ++sample_index) {
       timer.start();
-      run_round_trip_batch(state, Constants::CORE_TO_CORE_SAMPLE_WINDOW_ROUND_TRIPS);
+      run_round_trip_batch(&state.turn.value, Constants::CORE_TO_CORE_SAMPLE_WINDOW_ROUND_TRIPS);
       const double sample_total_ns = timer.stop_ns();
       out_measurement.samples_ns.push_back(sample_total_ns /
                                            static_cast<double>(Constants::CORE_TO_CORE_SAMPLE_WINDOW_ROUND_TRIPS));
     }
-
-    state.flags.stop.store(true, std::memory_order_release);
   });
 
   // Ensure both worker threads have applied hints before starting handoff loop.
   while (state.flags.ready_threads.load(std::memory_order_acquire) < Constants::CORE_TO_CORE_READY_THREADS_TARGET) {
   }
-  state.turn.value.store(Constants::CORE_TO_CORE_INITIATOR_TURN_VALUE, std::memory_order_release);
+  state.turn.value = Constants::CORE_TO_CORE_INITIATOR_TURN_VALUE;
   state.flags.start.store(true, std::memory_order_release);
 
   initiator_thread.join();
   responder_thread.join();
 
-  return !timer_creation_failed;
+  return true;
 }
 // Scenarios are interpreted as scheduler-hint requests, not hard pinning contracts.
 std::vector<ScenarioDescriptor> build_scenarios() {
