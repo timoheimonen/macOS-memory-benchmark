@@ -33,6 +33,9 @@ The tool is designed and tuned for Apple Silicon execution characteristics (cach
 
 Main orchestration (`main.cpp`) follows this pipeline:
 
+Standalone modes (`-analyze-tlb`, `-analyze-core2core`) are dispatched early and use dedicated runners.
+The pipeline below applies to standard/pattern benchmark execution.
+
 1. Create high-resolution total-execution timer.
 2. Parse CLI arguments into `BenchmarkConfig` (`parse_arguments`).
 3. Validate configuration (`validate_config`).
@@ -61,6 +64,9 @@ Configuration state is represented by `BenchmarkConfig` (`src/core/config/config
 
 - Main options: buffer size MB, iterations, loop count, output path, threads.
 - Mode flags: `run_patterns`, `only_bandwidth`, `only_latency`.
+- Standalone analysis flags are handled outside `BenchmarkConfig` orchestration flow:
+  - `-analyze-tlb`
+  - `-analyze-core2core`
 - Cache behavior: auto L1/L2 or user-provided `-cache-size`.
 - Latency sampling: `latency_sample_count`.
 - TLB-locality control for latency chain construction:
@@ -84,6 +90,7 @@ Configuration state is represented by `BenchmarkConfig` (`src/core/config/config
   - Second pass parses remaining options.
 - Parser may throw internally (`std::stoll`/validation) but converts to return-code failures at function boundary.
 - Help (`-h`, `--help`) prints usage and exits successfully.
+- `-analyze-core2core` uses dedicated mode parsing (outside `argument_parser.cpp`) and only allows optional `-output`, `-count`, and `-latency-samples`.
 
 ### 5.2 Validation behavior (`config_validator.cpp`)
 

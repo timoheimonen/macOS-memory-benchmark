@@ -200,6 +200,15 @@ Pattern mode (`-patterns`) measures bandwidth sensitivity across:
 - Separately computes page-walk penalty as `P50(512MB) - P50(effective baseline locality)` when analysis buffer is at least `512MB`
 - Detailed methodology and JSON contract: `TLB_ANALYSIS_WHITEPAPER.md`
 
+#### `-analyze-core2core`
+
+- Runs standalone two-thread cache-line handoff (ping-pong) mode only
+- Can be combined only with optional `-output <file>`, `-count <count>`, and `-latency-samples <count>`
+- Executes three scheduler-hint scenarios: `no_affinity_hint`, `same_affinity_tag`, and `different_affinity_tags`
+- Reports round-trip latency, one-way estimate (`round_trip / 2`), and sample distribution stats (P50/P90/P95/P99/stddev/min/max)
+- Includes per-thread QoS/affinity hint status in console and JSON output
+- Notes explicitly that macOS user-space cannot hard-pin exact core IDs
+
 ### Latency-specific controls
 
 #### `-latency-samples <count>`
@@ -212,7 +221,7 @@ Pattern mode (`-patterns`) measures bandwidth sensitivity across:
 #### `-latency-stride-bytes <bytes>`
 
 - Pointer-chain stride for latency tests
-- Default: `136`
+- Default: `64`
 - Must be `> 0`
 - Must be a multiple of pointer size (`8` bytes on Apple Silicon)
 - Use smaller values (for example `64`) to increase same-page cache-line activity and reduce TLB sensitivity
@@ -284,6 +293,12 @@ Pattern mode (`-patterns`) measures bandwidth sensitivity across:
 
 # Standalone TLB analysis with custom stride
 ./memory_benchmark -analyze-tlb -latency-stride-bytes 128 -output tlb_analysis_stride128.json
+
+# Standalone core-to-core handoff analysis
+./memory_benchmark -analyze-core2core
+
+# Standalone core-to-core analysis with deeper sampling + JSON
+./memory_benchmark -analyze-core2core -count 5 -latency-samples 2000 -output core2core.json
 ```
 
 ### Invalid combinations
@@ -306,6 +321,9 @@ Pattern mode (`-patterns`) measures bandwidth sensitivity across:
 
 # invalid: analyze-tlb with unsupported extra option
 ./memory_benchmark -analyze-tlb -buffersize 1024
+
+# invalid: analyze-core2core with unsupported extra option
+./memory_benchmark -analyze-core2core -threads 4
 ```
 
 ---

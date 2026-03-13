@@ -41,11 +41,11 @@ CPP_SRCS_CORE_MEMORY = core/memory/buffer_allocator.cpp core/memory/buffer_initi
 CPP_SRCS_CORE_SYSTEM = core/system/system_info.cpp
 CPP_SRCS_CORE_TIMING = core/timing/timer.cpp
 CPP_SRCS_OUTPUT_CONSOLE = output/console/output_printer.cpp output/console/statistics.cpp
-CPP_SRCS_OUTPUT_CONSOLE_MESSAGES = output/console/messages/error_messages.cpp output/console/messages/warning_messages.cpp output/console/messages/info_messages.cpp output/console/messages/program_messages.cpp output/console/messages/config_messages.cpp output/console/messages/cache_messages.cpp output/console/messages/results_messages.cpp output/console/messages/statistics_messages.cpp output/console/messages/pattern_messages.cpp
+CPP_SRCS_OUTPUT_CONSOLE_MESSAGES = output/console/messages/error_messages.cpp output/console/messages/warning_messages.cpp output/console/messages/info_messages.cpp output/console/messages/program_messages.cpp output/console/messages/core_to_core_messages.cpp output/console/messages/config_messages.cpp output/console/messages/cache_messages.cpp output/console/messages/results_messages.cpp output/console/messages/statistics_messages.cpp output/console/messages/pattern_messages.cpp
 CPP_SRCS_UTILS = utils/utils.cpp utils/json_utils.cpp
 CPP_SRCS_SRC = $(CPP_SRCS_CORE_CONFIG) $(CPP_SRCS_CORE_MEMORY) $(CPP_SRCS_CORE_SYSTEM) $(CPP_SRCS_CORE_TIMING) $(CPP_SRCS_OUTPUT_CONSOLE) $(CPP_SRCS_OUTPUT_CONSOLE_MESSAGES) $(CPP_SRCS_UTILS)
 # Files in the src/benchmark subdirectory
-CPP_SRCS_BENCHMARK = bandwidth_tests.cpp latency_tests.cpp benchmark_runner.cpp benchmark_executor.cpp benchmark_results.cpp benchmark_statistics_collector.cpp tlb_analysis.cpp tlb_boundary_detector.cpp tlb_analysis_json.cpp
+CPP_SRCS_BENCHMARK = bandwidth_tests.cpp latency_tests.cpp benchmark_runner.cpp benchmark_executor.cpp benchmark_results.cpp benchmark_statistics_collector.cpp tlb_analysis.cpp tlb_boundary_detector.cpp tlb_analysis_json.cpp core_to_core_latency_cli.cpp core_to_core_latency_runner.cpp core_to_core_latency_json.cpp
 # Files in the src/warmup subdirectory
 CPP_SRCS_WARMUP = basic_warmup.cpp latency_warmup.cpp cache_warmup.cpp pattern_warmup.cpp
 # Files in the src/output/json/json_output subdirectory
@@ -69,9 +69,10 @@ ALL_CPP_SRCS = $(CPP_SRCS_ROOT) $(CPP_SRCS_SRC_FULL) $(CPP_SRCS_BENCHMARK_FULL) 
 
 # Assembly source files (in src/asm)
 ASM_SRCS = src/asm/memory_copy.s src/asm/memory_read.s src/asm/memory_write.s src/asm/memory_latency.s \
-           src/asm/memory_read_reverse.s src/asm/memory_write_reverse.s src/asm/memory_copy_reverse.s \
-           src/asm/memory_read_strided.s src/asm/memory_write_strided.s src/asm/memory_copy_strided.s \
-           src/asm/memory_read_random.s src/asm/memory_write_random.s src/asm/memory_copy_random.s
+            src/asm/memory_read_reverse.s src/asm/memory_write_reverse.s src/asm/memory_copy_reverse.s \
+            src/asm/memory_read_strided.s src/asm/memory_write_strided.s src/asm/memory_copy_strided.s \
+            src/asm/memory_read_random.s src/asm/memory_write_random.s src/asm/memory_copy_random.s \
+            src/asm/core_to_core_latency.s
 
 # Object files (derived from source files, maintaining directory structure)
 # main.cpp -> main.o
