@@ -7,9 +7,8 @@ License: GPL-3.0 license
   
 **Low-level tool** to measure memory read/write/copy bandwidth, cache/main memory latency, and access pattern performance on macOS Apple Silicon (ARM64).
 
-![Mac Mini M4 Cache Latency from multiple JSON-files](pictures/MacMiniM4_cache_latency_with_TLB_5loops_p50_values.png)  
-Mac Mini M4 Cache Latency from multiple JSON-files with example-script provided. Using different size TLB locality. This shows the penalty if program critical memory area does not fit the TLB.  
-Blue at the end 'TLB hit' ~25ns where brown is total 'TLB miss' ~90-95ns+.
+![Mac Mini M4 Cache Latency from multiple JSON-files](pictures/MacMiniM4_cache_latency_with_STRIDE_TLB.png)  
+Mac Mini M4 Cache Latency by example-script provided. Using different size TLB locality and Stride size. 
 
 ![Mac Mini M4 TLB Analysis with 64B Stride](pictures/MacMiniM4_memory_hierarchy_v0_53_5.png)  
 Mac Mini M4 memory latency from [JSON file](results/macminim4_count5_latency.json) using provided [script-example](script-examples/plot_memory_hierarchy.py)
