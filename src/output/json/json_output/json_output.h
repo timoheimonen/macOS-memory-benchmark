@@ -64,6 +64,7 @@ namespace JsonKeys {
   constexpr const char* EXECUTION_TIME_SEC = "execution_time_sec";
   
   // Configuration keys
+  constexpr const char* MODE = "mode";
   constexpr const char* BUFFER_SIZE_MB = "buffer_size_mb";
   constexpr const char* BUFFER_SIZE_BYTES = "buffer_size_bytes";
   constexpr const char* ITERATIONS = "iterations";
@@ -96,7 +97,6 @@ namespace JsonKeys {
   constexpr const char* LATENCY = "latency";
   constexpr const char* AVERAGE_NS = "average_ns";
   constexpr const char* SAMPLES_NS = "samples_ns";
-  constexpr const char* SAMPLES_STATISTICS = "samples_statistics";
   constexpr const char* AUTO_TLB_BREAKDOWN = "auto_tlb_breakdown";
   constexpr const char* TLB_HIT_NS = "tlb_hit_ns";
   constexpr const char* TLB_MISS_NS = "tlb_miss_ns";
@@ -134,7 +134,7 @@ void add_latency_results(nlohmann::json& json_obj,
                          const std::vector<double>& average_values,
                          const std::vector<double>& samples);
 
-nlohmann::json build_config_json(const BenchmarkConfig& config);
+nlohmann::json build_config_json(const BenchmarkConfig& config, const char* mode_name);
 nlohmann::json build_main_memory_json(const BenchmarkConfig& config, const BenchmarkStatistics& stats);
 nlohmann::json build_cache_json(const BenchmarkConfig& config, const BenchmarkStatistics& stats);
 nlohmann::json build_patterns_json(const PatternStatistics& stats);

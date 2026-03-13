@@ -39,6 +39,8 @@ struct BenchmarkConfig;
 struct TlbAnalysisJsonContext {
   const BenchmarkConfig& config;
   const std::string& cpu_name;
+  int perf_cores;
+  int eff_cores;
   size_t page_size_bytes;
   size_t l1_cache_size_bytes;
   size_t tlb_guard_bytes;

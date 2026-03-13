@@ -5,6 +5,7 @@ from pathlib import Path
 
 import matplotlib.pyplot as plt
 
+#run ./latency_test_script_stride_tlb.sh to get latency_summary.csv
 
 ALLOWED_METRICS = {
     "median": "Median",
@@ -35,7 +36,7 @@ def parse_args():
         "--metric",
         default="median",
         choices=sorted(ALLOWED_METRICS.keys()),
-        help="Which samples_statistics metric to plot",
+        help="Which samples_ns.statistics metric to plot",
     )
     parser.add_argument(
         "--stride",

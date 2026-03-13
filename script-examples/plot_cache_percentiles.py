@@ -6,6 +6,7 @@ from pathlib import Path
 
 import matplotlib.pyplot as plt
 
+#run ./latency_test_script.sh to get final_output.txt
 
 ALLOWED_METRICS = {
     "median": "Median",

@@ -118,6 +118,9 @@ namespace Constants {
   constexpr const char CORE_TO_CORE_SCENARIO_NO_AFFINITY[] = "no_affinity_hint";  // Scenario name for no affinity policy hints
   constexpr const char CORE_TO_CORE_SCENARIO_SAME_AFFINITY[] = "same_affinity_tag";  // Scenario name for matching affinity tags
   constexpr const char CORE_TO_CORE_SCENARIO_DIFFERENT_AFFINITY[] = "different_affinity_tags";  // Scenario name for different affinity tags
+  constexpr const char BENCHMARK_JSON_MODE_NAME[] = "benchmark";  // Serialized mode identifier for standard benchmark JSON output
+  constexpr const char PATTERNS_JSON_MODE_NAME[] = "patterns";  // Serialized mode identifier for pattern benchmark JSON output
+  constexpr const char TLB_ANALYSIS_JSON_MODE_NAME[] = "analyze_tlb";  // Serialized mode identifier for standalone TLB analysis JSON output
   constexpr const char CORE_TO_CORE_JSON_MODE_NAME[] = "analyze_core2core";  // Serialized mode identifier in JSON output
   constexpr bool CORE_TO_CORE_JSON_HARD_PINNING_SUPPORTED = false;  // User-space hard core pinning is not available on macOS
   constexpr bool CORE_TO_CORE_JSON_AFFINITY_TAGS_ARE_HINTS = true;  // Affinity tags are scheduler hints, not strict binding

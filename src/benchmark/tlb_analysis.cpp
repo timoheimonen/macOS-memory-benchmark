@@ -444,6 +444,8 @@ int run_tlb_analysis(const BenchmarkConfig& config) {
   const TlbAnalysisJsonContext json_context = {
       config,
       cpu_name,
+      config.perf_cores,
+      config.eff_cores,
       page_size_bytes,
       l1_cache_size_bytes,
       tlb_guard_bytes,

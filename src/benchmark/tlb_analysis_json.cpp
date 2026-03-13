@@ -78,8 +78,10 @@ int save_tlb_analysis_to_json(const TlbAnalysisJsonContext& context) {
 
   nlohmann::ordered_json json_output;
   json_output[JsonKeys::CONFIGURATION] = {
-      {"mode", "analyze_tlb"},
+      {JsonKeys::MODE, Constants::TLB_ANALYSIS_JSON_MODE_NAME},
       {JsonKeys::CPU_NAME, context.cpu_name},
+      {JsonKeys::PERFORMANCE_CORES, context.perf_cores},
+      {JsonKeys::EFFICIENCY_CORES, context.eff_cores},
       {JsonKeys::PAGE_SIZE_BYTES, context.page_size_bytes},
       {JsonKeys::L1_CACHE_SIZE_BYTES, context.l1_cache_size_bytes},
       {JsonKeys::LATENCY_STRIDE_BYTES, context.stride_bytes},
