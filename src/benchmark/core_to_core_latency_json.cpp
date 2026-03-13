@@ -106,7 +106,7 @@ int save_core_to_core_latency_to_json(const CoreToCoreLatencyJsonContext& contex
 
   nlohmann::ordered_json json_output;
   json_output[JsonKeys::CONFIGURATION] = {
-      {"mode", Constants::CORE_TO_CORE_JSON_MODE_NAME},
+      {JsonKeys::MODE, Constants::CORE_TO_CORE_JSON_MODE_NAME},
       {JsonKeys::CPU_NAME, context.cpu_name},
       {JsonKeys::PERFORMANCE_CORES, context.perf_cores},
       {JsonKeys::EFFICIENCY_CORES, context.eff_cores},

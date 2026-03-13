@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.53.7] - 2026-03-13
+
+### Added
+  - **Schema contract tests for JSON exports**: Added `tests/test_json_schema.cpp` coverage to verify mode tagging, canonical latency sample container shape, and shared-key consistency across benchmark, pattern, TLB-analysis, and core-to-core JSON exporters.
+
+### Changed
+  - **Unified JSON mode tagging across exporters**: Standard benchmark and pattern exports now include `configuration.mode` (`benchmark` / `patterns`), and standalone exporters use the same shared key convention (`mode`) for `analyze_tlb` and `analyze_core2core`.
+  - **Canonicalized latency sample JSON structure**: Latency sample payloads now use `samples_ns.values` with optional `samples_ns.statistics` (legacy `samples_statistics` field removed).
+  - **Aligned TLB-analysis configuration metadata with shared JSON keys**: Standalone TLB analysis JSON now includes `performance_cores` and `efficiency_cores` in `configuration` for parity with other exporters.
+  - **Omitted empty result sections instead of emitting nulls**: Standard and pattern JSON writers now skip absent payload sections rather than serializing `null` blocks.
+
+### Fixed
+  - **Documentation/script schema drift after sample-structure normalization**: Updated docs and script examples to read `samples_ns.statistics` consistently (`README.md`, `MANUAL.md`, `TECHNICAL_SPECIFICATION.md`, and latency helper scripts).
+
 ## [0.53.6] - 2026-03-13
 
 ### Added

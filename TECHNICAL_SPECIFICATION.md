@@ -130,7 +130,7 @@ Memory-limit model:
 
 - Main buffer size is derived from `buffer_size_mb`.
 - L1/L2/custom cache test buffers use factor constants currently set to `1.0`.
-- Cache buffers are rounded to active latency stride granularity (`latency_stride_bytes`, default `136`) and minimum constraints.
+- Cache buffers are rounded to active latency stride granularity (`latency_stride_bytes`, default `64`) and minimum constraints.
 - Minimum practical lower bound includes page-size enforcement.
 - `-cache-size 0` (in allowed mode) produces zero custom cache buffer.
 
@@ -306,8 +306,7 @@ JSON writer API (`src/output/json/json_output/json_output.cpp`):
 - Bandwidth metrics are nested as arrays in `values` with optional `statistics`.
 - Latency is nested:
   - `latency.average_ns.values` (plus optional `statistics`),
-  - optional `latency.samples_ns`,
-  - optional `latency.samples_statistics`.
+  - optional `latency.samples_ns.values` (plus optional `latency.samples_ns.statistics`).
 
 ### 16.2 Path behavior
 

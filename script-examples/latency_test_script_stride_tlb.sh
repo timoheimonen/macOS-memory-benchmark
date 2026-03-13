@@ -130,7 +130,8 @@ for path in sorted(json_dir.glob("*.json")):
         cache = data.get("cache", {}) or {}
         custom = cache.get("custom", {}) or {}
         latency = custom.get("latency", {}) or {}
-        stats = latency.get("samples_statistics", {}) or {}
+        samples = latency.get("samples_ns", {}) or {}
+        stats = samples.get("statistics", {}) or {}
         diag = latency.get("chain_diagnostics", {}) or {}
 
         rows.append({

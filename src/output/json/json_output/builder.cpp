@@ -35,6 +35,7 @@
 #include "output/json/json_output.h"
 #include "utils/json_utils.h" // JSON utility functions
 #include "core/config/config.h"     // For BenchmarkConfig
+#include "core/config/constants.h"
 #include "third_party/nlohmann/json.hpp"   // JSON library
 
 // Helper function to add bandwidth results to JSON
@@ -93,17 +94,19 @@ void add_latency_results(nlohmann::json& json_obj,
   
   // Add sample distribution if available
   if (!samples.empty()) {
-    json_obj[JsonKeys::LATENCY][JsonKeys::SAMPLES_NS] = samples;
+    json_obj[JsonKeys::LATENCY][JsonKeys::SAMPLES_NS] = nlohmann::json::object();
+    json_obj[JsonKeys::LATENCY][JsonKeys::SAMPLES_NS][JsonKeys::VALUES] = samples;
     if (samples.size() > 1) {
-      json_obj[JsonKeys::LATENCY][JsonKeys::SAMPLES_STATISTICS] = 
+      json_obj[JsonKeys::LATENCY][JsonKeys::SAMPLES_NS][JsonKeys::STATISTICS] =
           calculate_json_statistics(samples);
     }
   }
 }
 
 // Build configuration JSON object
-nlohmann::json build_config_json(const BenchmarkConfig& config) {
+nlohmann::json build_config_json(const BenchmarkConfig& config, const char* mode_name) {
   nlohmann::json config_json;
+  config_json[JsonKeys::MODE] = mode_name;
   config_json[JsonKeys::BUFFER_SIZE_MB] = config.buffer_size_mb;
   config_json[JsonKeys::BUFFER_SIZE_BYTES] = config.buffer_size;
   config_json[JsonKeys::ITERATIONS] = config.iterations;

@@ -45,6 +45,7 @@
 
 #include "output/json/json_output.h"
 #include "core/config/version.h"  // SOFTVERSION
+#include "core/config/constants.h"
 #include "core/config/config.h"     // For BenchmarkConfig
 #include "benchmark/benchmark_runner.h"  // For BenchmarkStatistics
 #include "pattern_benchmark/pattern_benchmark.h" // For PatternStatistics
@@ -69,16 +70,23 @@ int save_results_to_json(const BenchmarkConfig& config, const BenchmarkStatistic
   
   // Add fields in the correct order - nlohmann::json preserves insertion order
   // Add configuration (first)
-  json_output[JsonKeys::CONFIGURATION] = build_config_json(config);
+  json_output[JsonKeys::CONFIGURATION] =
+      build_config_json(config, Constants::BENCHMARK_JSON_MODE_NAME);
   
   // Add execution time (second)
   json_output[JsonKeys::EXECUTION_TIME_SEC] = total_execution_time_sec;
   
   // Add main memory results (third)
-  json_output[JsonKeys::MAIN_MEMORY] = build_main_memory_json(config, stats);
+  const nlohmann::json main_memory_json = build_main_memory_json(config, stats);
+  if (!main_memory_json.is_null()) {
+    json_output[JsonKeys::MAIN_MEMORY] = main_memory_json;
+  }
   
   // Add cache results (fourth)
-  json_output[JsonKeys::CACHE] = build_cache_json(config, stats);
+  const nlohmann::json cache_json = build_cache_json(config, stats);
+  if (!cache_json.is_null()) {
+    json_output[JsonKeys::CACHE] = cache_json;
+  }
   
   // Add timestamp (fifth)
   json_output[JsonKeys::TIMESTAMP] = timestamp_str.str();
@@ -116,13 +124,17 @@ int save_pattern_results_to_json(const BenchmarkConfig& config, const PatternSta
   
   // Add fields in the correct order - nlohmann::json preserves insertion order
   // Add configuration (first)
-  json_output[JsonKeys::CONFIGURATION] = build_config_json(config);
+  json_output[JsonKeys::CONFIGURATION] =
+      build_config_json(config, Constants::PATTERNS_JSON_MODE_NAME);
   
   // Add execution time (second)
   json_output[JsonKeys::EXECUTION_TIME_SEC] = total_execution_time_sec;
   
   // Add patterns results (third)
-  json_output[JsonKeys::PATTERNS] = build_patterns_json(stats);
+  const nlohmann::json patterns_json = build_patterns_json(stats);
+  if (!patterns_json.is_null()) {
+    json_output[JsonKeys::PATTERNS] = patterns_json;
+  }
   
   // Add timestamp (fourth)
   json_output[JsonKeys::TIMESTAMP] = timestamp_str.str();
@@ -140,4 +152,3 @@ int save_pattern_results_to_json(const BenchmarkConfig& config, const PatternSta
   // Write JSON to file
   return write_json_to_file(file_path, json_output);
 }
-

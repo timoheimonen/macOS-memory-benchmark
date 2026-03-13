@@ -11,8 +11,7 @@ License: GPL-3.0 license
 Mac Mini M4 Cache Latency by example-script provided. Using different size TLB locality and Stride size. 
 
 ![Mac Mini M4 TLB Analysis with 64B Stride](pictures/MacMiniM4_memory_hierarchy_v0_53_5.png)  
-Mac Mini M4 memory latency from [JSON file](results/macminim4_count5_latency.json) using provided [script-example](script-examples/plot_memory_hierarchy.py)
-
+Mac Mini M4 memory latency from [JSON file](results/old/macminim4_count5_latency.json)
 ## Description
 
 `memory_benchmark` measures memory behavior on macOS Apple Silicon with an implementation focused on practical low-level analysis:
@@ -242,8 +241,10 @@ Current latency payload is nested (not scalar):
     "values": [],
     "statistics": {}
   },
-  "samples_ns": [],
-  "samples_statistics": {},
+  "samples_ns": {
+    "values": [],
+    "statistics": {}
+  },
   "auto_tlb_breakdown": {
     "tlb_hit_ns": {
       "values": [],
@@ -291,13 +292,13 @@ Recommended interpretation approach:
 4. Keep command lines identical when comparing machines or builds.
 
 The measured bandwidth can be close to platform theoretical limits under favorable conditions. For example,
-`results/macminim4_benchmark_count10.json` reports ~`116.37 GB/s` average main-memory read on Apple M4 versus
+`results/0.53.7/MacMiniM4_benchmark.json` reports ~`115.87 GB/s` average main-memory read on Apple M4 versus
 ~`120 GB/s` theoretical peak (about `97%`). Treat this as an empirical reference, not a guaranteed ceiling.
 
 Reference sample result files in this repository:
 
-- `results/macminim4_benchmark_count10.json`
-- `results/macminim4_patterns_count10.json`
+- `results/0.53.7/MacMiniM4_benchmark.json`
+- `results/0.53.7/MacMiniM4_patterns.json`
 
 ## Documentation
 

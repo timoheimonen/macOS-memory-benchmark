@@ -1,0 +1,50 @@
+memory_benchmark -analyze-tlb
+
+Copyright 2025-2026 Timo Heimonen <timo.heimonen@proton.me>
+Version: 0.53.2
+License: GNU GPL v3. See <https://www.gnu.org/licenses/>
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU General Public License as published by
+the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+Link: https://github.com/timoheimonen/macOS-memory-benchmark
+
+
+Running standalone TLB analysis...
+  [1/15] Locality 16 KB
+  [2/15] Locality 64 KB
+  [3/15] Locality 128 KB
+  [4/15] Locality 256 KB
+  [5/15] Locality 512 KB
+  [6/15] Locality 1024 KB
+  [7/15] Locality 2048 KB
+  [8/15] Locality 4096 KB
+  [9/15] Locality 8192 KB
+  [10/15] Locality 12288 KB
+  [11/15] Locality 16384 KB
+  [12/15] Locality 32768 KB
+  [13/15] Locality 65536 KB
+  [14/15] Locality 131072 KB
+  [15/15] Locality 262144 KB
+  [Page Walk] Locality 512 MB
+
+--- TLB Analysis Report ---
+CPU: Apple M4
+Page Size: 16384 bytes
+Buffer: 1024 MB (Locked)
+Stride: 64 bytes
+Loops per Point: 30, Accesses per Loop: 25000000
+
+[L1 TLB Detection]
+  Boundary: 4096 KB
+  Inferred Size: 256 entries
+  Confidence: High (Step: +4.0ns, +22.3%)
+
+[L2 TLB / Page Walk]
+  Boundary: 8192 KB
+  Inferred Reach: 512 entries
+  Confidence: High (Step: +13.6ns, +61.8%)
+  Page Table Walk Penalty (16KB -> 512MB): ~80.3ns

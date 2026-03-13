@@ -2,7 +2,7 @@
 
 ## 1. Purpose
 
-This document specifies how `macOS-memory-benchmark` implements standalone TLB analysis mode (`-analyze-tlb`) in version `0.53.3`.
+This document specifies how `macOS-memory-benchmark` implements standalone TLB analysis mode (`-analyze-tlb`) in version `0.53.7`.
 
 The goal is to provide a reproducible, implementation-accurate description of:
 
@@ -211,14 +211,14 @@ This payload is designed for full post-run verification and reproducibility chec
 
 Example file:
 
-- `results/macminim4_analyte-tbl.json`
+- `results/0.53.7/MacMiniM4_analyzetlb.json`
 
 Observed fields in this sample:
 
 - `tlb_guard_bytes = 1048576` (`1MB`)
 - `l1_tlb_detection.boundary_locality_kb = 4096` and `inferred_entries = 256`
 - `l2_tlb_detection.boundary_locality_kb = 8192` and `inferred_entries = 512`
-- `page_walk_penalty.penalty_ns ~= 80.73`
+- `page_walk_penalty.penalty_ns ~= 81.93`
 
 Interpretation note for Apple Silicon:
 
