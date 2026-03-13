@@ -40,6 +40,7 @@
 #include "core/config/config.h"
 #include "core/memory/buffer_manager.h"
 #include "benchmark/benchmark_runner.h"
+#include "benchmark/core_to_core_latency.h"
 #include "benchmark/tlb_analysis.h"
 #include "output/console/messages.h"
 #include "core/config/constants.h"
@@ -80,6 +81,12 @@
  * @see run_all_pattern_benchmarks() for pattern benchmark execution
  */
 int main(int argc, char *argv[]) {
+  for (int i = 1; i < argc; ++i) {
+    if (std::string(argv[i]) == "-analyze-core2core") {
+      return run_core_to_core_latency_mode(argc, argv);
+    }
+  }
+
   // Start total execution timer
   auto timer_opt = HighResTimer::create();
   if (!timer_opt) {

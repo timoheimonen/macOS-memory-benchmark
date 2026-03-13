@@ -44,6 +44,7 @@
 #define CONSTANTS_H
 
 #include <cstddef>  // size_t
+#include <cstdint>  // uint32_t
 
 /**
  * @namespace Constants
@@ -99,6 +100,27 @@ namespace Constants {
   constexpr int DEFAULT_ITERATIONS = 1000;  // Default number of iterations for R/W/Copy tests
   constexpr int DEFAULT_LOOP_COUNT = 1;     // Default number of full benchmark loops
   constexpr int DEFAULT_LATENCY_SAMPLE_COUNT = 1000;  // Default number of latency samples per test
+
+  // Core-to-core standalone mode constants
+  constexpr int CORE_TO_CORE_DEFAULT_LOOP_COUNT = DEFAULT_LOOP_COUNT;  // Default loop count for standalone core-to-core mode
+  constexpr int CORE_TO_CORE_DEFAULT_LATENCY_SAMPLE_COUNT = DEFAULT_LATENCY_SAMPLE_COUNT;  // Default sample count per loop for core-to-core mode
+  constexpr size_t CORE_TO_CORE_WARMUP_ROUND_TRIPS = 20 * 1000;  // Warmup handoff count before timed measurements
+  constexpr size_t CORE_TO_CORE_HEADLINE_ROUND_TRIPS = 1 * 1000 * 1000;  // Round-trips used for headline latency metric
+  constexpr size_t CORE_TO_CORE_SAMPLE_WINDOW_ROUND_TRIPS = 2 * 1000;  // Round-trips per sampled measurement window
+  constexpr int CORE_TO_CORE_READY_THREADS_TARGET = 2;  // Required thread count before benchmark start signal
+  constexpr uint32_t CORE_TO_CORE_INITIATOR_TURN_VALUE = 0;  // Turn token value for initiator thread ownership
+  constexpr uint32_t CORE_TO_CORE_RESPONDER_TURN_VALUE = 1;  // Turn token value for responder thread ownership
+  constexpr int CORE_TO_CORE_AFFINITY_TAG_NONE = 0;  // No affinity tag requested for thread policy hint
+  constexpr int CORE_TO_CORE_AFFINITY_TAG_PRIMARY = 1;  // Primary affinity tag used in hinted scenarios
+  constexpr int CORE_TO_CORE_AFFINITY_TAG_SECONDARY = 2;  // Secondary affinity tag used for split-tag scenario
+  constexpr bool CORE_TO_CORE_AFFINITY_HINT_DISABLED = false;  // Scenario does not request affinity hint
+  constexpr bool CORE_TO_CORE_AFFINITY_HINT_ENABLED = true;  // Scenario requests affinity hint
+  constexpr const char CORE_TO_CORE_SCENARIO_NO_AFFINITY[] = "no_affinity_hint";  // Scenario name for no affinity policy hints
+  constexpr const char CORE_TO_CORE_SCENARIO_SAME_AFFINITY[] = "same_affinity_tag";  // Scenario name for matching affinity tags
+  constexpr const char CORE_TO_CORE_SCENARIO_DIFFERENT_AFFINITY[] = "different_affinity_tags";  // Scenario name for different affinity tags
+  constexpr const char CORE_TO_CORE_JSON_MODE_NAME[] = "analyze_core2core";  // Serialized mode identifier in JSON output
+  constexpr bool CORE_TO_CORE_JSON_HARD_PINNING_SUPPORTED = false;  // User-space hard core pinning is not available on macOS
+  constexpr bool CORE_TO_CORE_JSON_AFFINITY_TAGS_ARE_HINTS = true;  // Affinity tags are scheduler hints, not strict binding
   
   // Bandwidth calculation constants
   constexpr double NANOSECONDS_PER_SECOND = 1e9;  // Conversion factor for GB/s calculations

@@ -5,9 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.53.6] - 2026-03-12
+## [0.53.6] - 2026-xx-xx
+
+### Added
+  - **Standalone core-to-core latency analysis mode (`-analyze-core2core`)**: Added a dedicated two-thread cache-line handoff benchmark mode that runs outside standard benchmark orchestration and supports optional `-output <file>`, `-count <count>`, and `-latency-samples <count>`.
+  - **Core-to-core scenario reporting with scheduler hints**: New mode executes `no_affinity_hint`, `same_affinity_tag`, and `different_affinity_tags` scenarios, reports round-trip latency, one-way estimate, sample distribution statistics (P50/P90/P95/P99/stddev/min/max), and per-thread QoS/affinity hint status.
+  - **Core-to-core JSON export**: Added mode-specific JSON payload under `core_to_core_latency` including loop values, sample distributions, computed statistics, and thread-hint application results.
 
 ### Changed
+  - **CLI help text extended for standalone core-to-core mode**: `-h/--help` now documents `-analyze-core2core` and its allowed option set.
   - **Refactored standalone TLB analysis module into smaller units**: Split previous `src/benchmark/analysis.cpp` into focused files: `src/benchmark/tlb_analysis.cpp` (orchestration), `src/benchmark/tlb_boundary_detector.cpp` (boundary detection and confidence logic), and `src/benchmark/tlb_analysis_json.cpp` (JSON serialization).
   - **Renamed TLB analysis interface/header**: Renamed `src/benchmark/analysis.h` to `src/benchmark/tlb_analysis.h` and updated includes/references accordingly (`main.cpp`, tests, and docs).
   - **Build wiring updated for new TLB analysis files**: Updated benchmark source list in `Makefile` to compile/link the new `tlb_analysis*` and `tlb_boundary_detector` units.

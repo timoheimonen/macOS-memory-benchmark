@@ -68,6 +68,8 @@ std::string error_latency_tlb_locality_page_multiple(size_t value_kb, size_t pag
 std::string error_latency_tlb_locality_too_small_for_stride(size_t locality_bytes, size_t stride_bytes);
 std::string error_threads_invalid(long long value, long long min_val, long long max_val);
 const std::string& error_analyze_tlb_must_be_used_alone();
+const std::string& error_analyze_core_to_core_must_be_used_alone();
+const std::string& error_core_to_core_timer_creation_failed();
 const std::string& error_tlb_analysis_insufficient_memory();
 const std::string& error_tlb_analysis_timer_creation_failed();
 std::string error_tlb_analysis_invalid_measurement(size_t locality_kb, int loop_number);
@@ -156,8 +158,33 @@ const std::string& msg_running_benchmarks();
 std::string msg_done_total_time(double total_time_sec);
 const std::string& msg_running_pattern_benchmarks();
 const std::string& msg_running_tlb_analysis();
+const std::string& msg_running_core_to_core_analysis();
+std::string msg_core_to_core_scenario_progress(size_t current_loop,
+                                               size_t total_loops,
+                                               const std::string& scenario_name);
 std::string msg_tlb_analysis_locality_progress(size_t current_index, size_t total_count, size_t locality_kb);
 std::string msg_tlb_analysis_page_walk_progress(size_t locality_mb);
+
+// --- Core-to-Core Report Messages ---
+const std::string& report_core_to_core_header();
+const std::string& report_core_to_core_scheduler_note();
+std::string report_core_to_core_cpu(const std::string& cpu_name);
+std::string report_core_to_core_cores(int perf_cores, int eff_cores);
+std::string report_core_to_core_loop_config(int loop_count,
+                                            int sample_count,
+                                            size_t headline_round_trips,
+                                            size_t sample_window_round_trips);
+std::string report_core_to_core_scenario_title(const std::string& scenario_name);
+std::string report_core_to_core_round_trip(double round_trip_ns);
+std::string report_core_to_core_one_way_estimate(double one_way_ns);
+std::string report_core_to_core_samples(size_t sample_count);
+std::string report_core_to_core_hint_status(const std::string& thread_role,
+                                            bool qos_applied,
+                                            int qos_code,
+                                            bool affinity_requested,
+                                            bool affinity_applied,
+                                            int affinity_code,
+                                            int affinity_tag);
 
 // --- TLB Analysis Report Messages ---
 const std::string& report_tlb_header();

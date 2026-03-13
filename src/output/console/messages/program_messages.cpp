@@ -93,6 +93,8 @@ std::string usage_options(const std::string& prog_name) {
       << "  -count <count>        Number of full loops (read/write/copy/latency) (default: " << Constants::DEFAULT_LOOP_COUNT << ").\n"
       << "                        When count > 1, statistics include percentiles (P50/P90/P95/P99) and stddev.\n"
       << "  -analyze-tlb          Run standalone TLB analysis benchmark mode (allows optional -output <file> and -latency-stride-bytes <bytes> only).\n"
+      << "  -analyze-core2core    Run standalone core-to-core cache-line handoff benchmark mode\n"
+      << "                        (allows optional -output <file>, -count <count>, and -latency-samples <count> only).\n"
       << "  -latency-samples <count> Number of latency samples to collect per test (default: " << Constants::DEFAULT_LATENCY_SAMPLE_COUNT << ")\n"
       << "  -latency-stride-bytes <bytes> Stride used by latency pointer chains (default: "
       << Constants::LATENCY_STRIDE_BYTES << " bytes).\n"
