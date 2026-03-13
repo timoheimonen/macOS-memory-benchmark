@@ -79,10 +79,13 @@ If built from source:
 ./memory_benchmark
 ```
 
+All command examples in this manual use the installed/`PATH` form (`memory_benchmark ...`).
+If running from an uninstalled local source build, prefix commands with `./`.
+
 For longer runs, prevent sleep:
 
 ```bash
-caffeinate -i -d ./memory_benchmark -count 10 -buffersize 1024
+caffeinate -i -d memory_benchmark -count 10 -buffersize 1024
 ```
 
 ---
@@ -268,62 +271,62 @@ Pattern mode (`-patterns`) measures bandwidth sensitivity across:
 
 ```bash
 # Full benchmark
-./memory_benchmark -count 10 -buffersize 1024 -output full.json
+memory_benchmark -count 10 -buffersize 1024 -output full.json
 
 # Pattern-only
-./memory_benchmark -patterns -count 5 -buffersize 512 -output patterns.json
+memory_benchmark -patterns -count 5 -buffersize 512 -output patterns.json
 
 # Bandwidth-only
-./memory_benchmark -only-bandwidth -threads 8 -count 5
+memory_benchmark -only-bandwidth -threads 8 -count 5
 
 # Latency-only (both main + cache)
-./memory_benchmark -only-latency -latency-samples 5000 -count 10
+memory_benchmark -only-latency -latency-samples 5000 -count 10
 
 # Latency-only (main memory only)
-./memory_benchmark -only-latency -cache-size 0 -buffersize 1024
+memory_benchmark -only-latency -cache-size 0 -buffersize 1024
 
 # Latency-only (cache only)
-./memory_benchmark -only-latency -buffersize 0 -cache-size 2048
+memory_benchmark -only-latency -buffersize 0 -cache-size 2048
 
 # Standalone TLB analysis
-./memory_benchmark -analyze-tlb
+memory_benchmark -analyze-tlb
 
 # Standalone TLB analysis with JSON export
-./memory_benchmark -analyze-tlb -output tlb_analysis.json
+memory_benchmark -analyze-tlb -output tlb_analysis.json
 
 # Standalone TLB analysis with custom stride
-./memory_benchmark -analyze-tlb -latency-stride-bytes 128 -output tlb_analysis_stride128.json
+memory_benchmark -analyze-tlb -latency-stride-bytes 128 -output tlb_analysis_stride128.json
 
 # Standalone core-to-core handoff analysis
-./memory_benchmark -analyze-core2core
+memory_benchmark -analyze-core2core
 
 # Standalone core-to-core analysis with deeper sampling + JSON
-./memory_benchmark -analyze-core2core -count 5 -latency-samples 2000 -output core2core.json
+memory_benchmark -analyze-core2core -count 5 -latency-samples 2000 -output core2core.json
 ```
 
 ### Invalid combinations
 
 ```bash
 # invalid: pattern mode with only-bandwidth
-./memory_benchmark -patterns -only-bandwidth
+memory_benchmark -patterns -only-bandwidth
 
 # invalid: pattern mode with only-latency
-./memory_benchmark -patterns -only-latency
+memory_benchmark -patterns -only-latency
 
 # invalid: latency samples with only-bandwidth
-./memory_benchmark -only-bandwidth -latency-samples 5000
+memory_benchmark -only-bandwidth -latency-samples 5000
 
 # invalid: iterations with only-latency
-./memory_benchmark -only-latency -iterations 2000
+memory_benchmark -only-latency -iterations 2000
 
 # invalid: both latency targets disabled
-./memory_benchmark -only-latency -buffersize 0 -cache-size 0
+memory_benchmark -only-latency -buffersize 0 -cache-size 0
 
 # invalid: analyze-tlb with unsupported extra option
-./memory_benchmark -analyze-tlb -buffersize 1024
+memory_benchmark -analyze-tlb -buffersize 1024
 
 # invalid: analyze-core2core with unsupported extra option
-./memory_benchmark -analyze-core2core -threads 4
+memory_benchmark -analyze-core2core -threads 4
 ```
 
 ---
@@ -333,7 +336,7 @@ Pattern mode (`-patterns`) measures bandwidth sensitivity across:
 ### Quick baseline
 
 ```bash
-./memory_benchmark
+memory_benchmark
 ```
 
 Good for a fast health check.
@@ -341,7 +344,7 @@ Good for a fast health check.
 ### Statistical baseline (recommended)
 
 ```bash
-caffeinate -i -d ./memory_benchmark -count 10 -buffersize 1024 -output baseline.json
+caffeinate -i -d memory_benchmark -count 10 -buffersize 1024 -output baseline.json
 ```
 
 Use this for comparisons across machines or software versions.
@@ -349,7 +352,7 @@ Use this for comparisons across machines or software versions.
 ### Pattern analysis
 
 ```bash
-./memory_benchmark -patterns -count 10 -buffersize 512 -output patterns.json
+memory_benchmark -patterns -count 10 -buffersize 512 -output patterns.json
 ```
 
 Shows how bandwidth changes under different access patterns.
@@ -358,16 +361,16 @@ Shows how bandwidth changes under different access patterns.
 
 ```bash
 # default locality mode
-./memory_benchmark -only-latency -buffersize 1024 -latency-samples 5000 -count 10 -output lat_tlb16.json
+memory_benchmark -only-latency -buffersize 1024 -latency-samples 5000 -count 10 -output lat_tlb16.json
 
 # global random chain
-./memory_benchmark -only-latency -buffersize 1024 -latency-samples 5000 -latency-tlb-locality-kb 0 -count 10 -output lat_global.json
+memory_benchmark -only-latency -buffersize 1024 -latency-samples 5000 -latency-tlb-locality-kb 0 -count 10 -output lat_global.json
 ```
 
 ### Regular benchmark with automatic DRAM TLB breakdown
 
 ```bash
-./memory_benchmark -latency-stride-bytes 128 -count 1
+memory_benchmark -latency-stride-bytes 128 -count 1
 ```
 
 This prints `Average latency` plus auto-derived `TLB hit latency`, `TLB miss latency`, and
@@ -376,7 +379,7 @@ This prints `Average latency` plus auto-derived `TLB hit latency`, `TLB miss lat
 ### Canonical standalone TLB analysis
 
 ```bash
-./memory_benchmark -analyze-tlb -output tlb_analysis.json
+memory_benchmark -analyze-tlb -output tlb_analysis.json
 ```
 
 Quick first checks in the output file:
@@ -388,7 +391,7 @@ Quick first checks in the output file:
 ### Custom cache target
 
 ```bash
-./memory_benchmark -cache-size 4096 -threads 1 -count 5 -output cache_4mb.json
+memory_benchmark -cache-size 4096 -threads 1 -count 5 -output cache_4mb.json
 ```
 
 ### Cache-size sweep + trend plotting
@@ -782,7 +785,7 @@ Repository sample result files:
 Command help:
 
 ```bash
-./memory_benchmark -h
+memory_benchmark -h
 ```
 
 ---

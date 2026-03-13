@@ -64,6 +64,12 @@ cd macOS-memory-benchmark
 make
 ```
 
+Run from source tree (without installing to `PATH`):
+
+```bash
+./memory_benchmark -h
+```
+
 ## Testing
 
 Install test dependency:
@@ -80,22 +86,25 @@ make test
 
 ## Quick Usage
 
+Examples below use the Homebrew/`PATH` form (`memory_benchmark ...`).
+If you are running directly from a local source build, use `./memory_benchmark ...`.
+
 Help:
 
 ```bash
-./memory_benchmark -h
+memory_benchmark -h
 ```
 
 Default run:
 
 ```bash
-./memory_benchmark
+memory_benchmark
 ```
 
 For longer runs, prevent sleep:
 
 ```bash
-caffeinate -i -d ./memory_benchmark -count 10 -buffersize 1024
+caffeinate -i -d memory_benchmark -count 10 -buffersize 1024
 ```
 
 ## Benchmark Modes
@@ -133,68 +142,68 @@ Latency-specific disable controls in `-only-latency`:
 Statistical baseline:
 
 ```bash
-caffeinate -i -d ./memory_benchmark -count 10 -buffersize 1024 -output baseline.json
+caffeinate -i -d memory_benchmark -count 10 -buffersize 1024 -output baseline.json
 ```
 
 Pattern analysis:
 
 ```bash
-./memory_benchmark -patterns -count 10 -buffersize 512 -output patterns.json
+memory_benchmark -patterns -count 10 -buffersize 512 -output patterns.json
 ```
 
 Latency locality comparison:
 
 ```bash
-./memory_benchmark -only-latency -buffersize 1024 -count 10 -latency-samples 5000 -latency-tlb-locality-kb 16 -output lat_tlb16.json
-./memory_benchmark -only-latency -buffersize 1024 -count 10 -latency-samples 5000 -latency-tlb-locality-kb 0 -output lat_global.json
+memory_benchmark -only-latency -buffersize 1024 -count 10 -latency-samples 5000 -latency-tlb-locality-kb 16 -output lat_tlb16.json
+memory_benchmark -only-latency -buffersize 1024 -count 10 -latency-samples 5000 -latency-tlb-locality-kb 0 -output lat_global.json
 ```
 
 Regular benchmark with automatic DRAM TLB breakdown (omit `-latency-tlb-locality-kb`):
 
 ```bash
-./memory_benchmark -latency-stride-bytes 128 -count 1
+memory_benchmark -latency-stride-bytes 128 -count 1
 ```
 
 TLB-vs-cache isolation (smaller stride within pages):
 
 ```bash
-./memory_benchmark -only-latency -buffersize 1024 -cache-size 4096 -latency-stride-bytes 64 -latency-tlb-locality-kb 16 -count 10 -latency-samples 5000 -output lat_stride64_tlb16.json
+memory_benchmark -only-latency -buffersize 1024 -cache-size 4096 -latency-stride-bytes 64 -latency-tlb-locality-kb 16 -count 10 -latency-samples 5000 -output lat_stride64_tlb16.json
 ```
 
 Custom cache target:
 
 ```bash
-./memory_benchmark -cache-size 4096 -threads 1 -count 5 -output cache_4mb.json
+memory_benchmark -cache-size 4096 -threads 1 -count 5 -output cache_4mb.json
 ```
 
 Standalone TLB analysis report:
 
 ```bash
-./memory_benchmark -analyze-tlb
+memory_benchmark -analyze-tlb
 ```
 
 Standalone TLB analysis with JSON export:
 
 ```bash
-./memory_benchmark -analyze-tlb -output tlb_analysis.json
+memory_benchmark -analyze-tlb -output tlb_analysis.json
 ```
 
 Standalone TLB analysis with custom stride:
 
 ```bash
-./memory_benchmark -analyze-tlb -latency-stride-bytes 128 -output tlb_analysis_stride128.json
+memory_benchmark -analyze-tlb -latency-stride-bytes 128 -output tlb_analysis_stride128.json
 ```
 
 Standalone core-to-core handoff analysis:
 
 ```bash
-./memory_benchmark -analyze-core2core
+memory_benchmark -analyze-core2core
 ```
 
 Standalone core-to-core handoff analysis with JSON export and custom sample depth:
 
 ```bash
-./memory_benchmark -analyze-core2core -count 5 -latency-samples 2000 -output core2core.json
+memory_benchmark -analyze-core2core -count 5 -latency-samples 2000 -output core2core.json
 ```
 
 ## Output Overview
