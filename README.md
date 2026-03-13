@@ -290,6 +290,10 @@ Recommended interpretation approach:
 3. Prioritize median and tail percentiles (`P95`/`P99`) over single-run extremes.
 4. Keep command lines identical when comparing machines or builds.
 
+The measured bandwidth can be close to platform theoretical limits under favorable conditions. For example,
+`results/macminim4_benchmark_count10.json` reports ~`116.37 GB/s` average main-memory read on Apple M4 versus
+~`120 GB/s` theoretical peak (about `97%`). Treat this as an empirical reference, not a guaranteed ceiling.
+
 Reference sample result files in this repository:
 
 - `results/macminim4_benchmark_count10.json`
