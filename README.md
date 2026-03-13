@@ -11,9 +11,8 @@ License: GPL-3.0 license
 Mac Mini M4 Cache Latency from multiple JSON-files with example-script provided. Using different size TLB locality. This shows the penalty if program critical memory area does not fit the TLB.  
 Blue at the end 'TLB hit' ~25ns where brown is total 'TLB miss' ~90-95ns+.
 
-![Mac Mini M4 TLB Analysis with 64B Stride](pictures/MacMiniM4_TLB_analysis_with_64_STRIDE.png)  
-Mac Mini M4 TLB Analysis with 64B Stride is using `-latency-stride-bytes 64 -analyze-tlb` argument parameters. Full [Result JSON-file](results/macminim4_analyte-tbl.json).  
-L2 TLB size analysis is challenging due to interference from the System Level Cache (SLC). 
+![Mac Mini M4 TLB Analysis with 64B Stride](pictures/MacMiniM4_memory_hierarchy_v0_53_5.png)  
+Mac Mini M4 memory latency from [JSON file](results/macminim4_count5_latency.json) using provided [script-example](script-examples/plot_memory_hierarchy.py)
 
 ## Description
 
