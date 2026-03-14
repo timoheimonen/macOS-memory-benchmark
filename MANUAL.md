@@ -411,7 +411,7 @@ Shows active settings and detected hardware.
 
 Important fields:
 
-- Buffer size and total allocation estimate
+- Buffer size and peak concurrent allocation estimate
 - Loop/iteration/sample configuration
 - Thread count
 - TLB locality setting

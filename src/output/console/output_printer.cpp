@@ -45,7 +45,7 @@ void print_usage(const char *prog_name) {
  *
  * @param buffer_size The final size (in bytes) of each test buffer after memory checks
  * @param buffer_size_mb The requested/capped buffer size in Megabytes
- * @param total_allocation_bytes Total allocated bytes across all enabled benchmark buffers
+ * @param total_allocation_bytes Peak concurrently allocated bytes across enabled benchmark phases
  * @param iterations Number of iterations per bandwidth test per loop
  * @param loop_count How many times the entire set of tests will be repeated
  * @param use_non_cacheable Flag indicating if non-cacheable memory hints are enabled

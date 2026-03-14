@@ -44,18 +44,29 @@
 #include "benchmark/benchmark_executor.h"
 #include "core/memory/buffer_manager.h"  // BenchmarkBuffers
 #include "core/config/config.h"           // BenchmarkConfig
+#include "core/memory/memory_manager.h"   // allocate_buffer, allocate_buffer_non_cacheable
+#include "core/memory/memory_utils.h"     // initialize_buffers, setup_latency_chain
 #include "utils/benchmark.h"        // All benchmark functions and print functions
 #include "benchmark/benchmark_runner.h" // BenchmarkResults
 #include "benchmark/benchmark_results.h"   // Results calculation functions
 #include "output/console/messages.h"             // Centralized messages
 #include "core/config/constants.h"
 #include <atomic>
+#include <cstdlib>
 #include <iostream>
 #include <limits>
 #include <stdexcept>
 
 namespace {
 
+/**
+ * @brief Scales main iteration count for cache tests with saturation.
+ *
+ * Cache bandwidth paths intentionally run more iterations than main-memory paths
+ * to stabilize measurements at much lower per-access latency. Saturation avoids
+ * signed integer overflow when the caller already uses a very large iteration
+ * value.
+ */
 int calculate_cache_iterations_saturated(int iterations) {
   if (iterations <= 0) {
     return 0;
@@ -66,6 +77,212 @@ int calculate_cache_iterations_saturated(int iterations) {
   }
 
   return iterations * Constants::CACHE_ITERATIONS_MULTIPLIER;
+}
+
+/**
+ * @brief Allocates a phase-local buffer using the active cacheability policy.
+ *
+ * Standard benchmark execution allocates buffers immediately before a phase and
+ * releases them when the local `BenchmarkBuffers` owner goes out of scope.
+ * This helper centralizes the mode switch between regular mappings and the
+ * best-effort cache-discouraging allocation path.
+ */
+MmapPtr allocate_phase_buffer(const BenchmarkConfig& config, size_t size, const char* buffer_name) {
+  if (config.use_non_cacheable) {
+    return allocate_buffer_non_cacheable(size, buffer_name);
+  }
+  return allocate_buffer(size, buffer_name);
+}
+
+/**
+ * @brief Clears latency-chain diagnostics before each benchmark loop.
+ *
+ * Diagnostics are re-populated when latency buffers are prepared. Resetting at
+ * loop start prevents stale values from a previously executed path.
+ */
+void reset_latency_chain_diagnostics(BenchmarkConfig& config) {
+  config.main_latency_chain_diagnostics = {};
+  config.l1_latency_chain_diagnostics = {};
+  config.l2_latency_chain_diagnostics = {};
+  config.custom_latency_chain_diagnostics = {};
+}
+
+/**
+ * @brief Prepares main-memory bandwidth buffers for one phase.
+ *
+ * Allocates source and destination buffers and initializes deterministic data
+ * before timing starts. Copy/read/write kernels depend on both buffers being
+ * present at the same time, so this phase intentionally uses a 2x main-buffer
+ * footprint.
+ */
+int prepare_main_memory_bandwidth_buffers(const BenchmarkConfig& config, BenchmarkBuffers& buffers) {
+  if (config.buffer_size == 0) {
+    return EXIT_SUCCESS;
+  }
+
+  buffers.src_buffer_ptr = allocate_phase_buffer(config, config.buffer_size, "src_buffer");
+  if (!buffers.src_buffer_ptr) {
+    return EXIT_FAILURE;
+  }
+
+  buffers.dst_buffer_ptr = allocate_phase_buffer(config, config.buffer_size, "dst_buffer");
+  if (!buffers.dst_buffer_ptr) {
+    return EXIT_FAILURE;
+  }
+
+  return initialize_buffers(buffers.src_buffer(), buffers.dst_buffer(), config.buffer_size);
+}
+
+/**
+ * @brief Prepares cache-bandwidth buffers for one phase.
+ *
+ * In custom-cache mode this prepares one src/dst pair. In auto-cache mode this
+ * prepares L1 and L2 src/dst pairs. All initialization happens before measured
+ * cache bandwidth kernels run.
+ */
+int prepare_cache_bandwidth_buffers(const BenchmarkConfig& config, BenchmarkBuffers& buffers) {
+  if (config.use_custom_cache_size) {
+    if (config.custom_buffer_size == 0) {
+      return EXIT_SUCCESS;
+    }
+
+    buffers.custom_bw_src_ptr =
+        allocate_phase_buffer(config, config.custom_buffer_size, "custom_bw_src_buffer");
+    if (!buffers.custom_bw_src_ptr) {
+      return EXIT_FAILURE;
+    }
+
+    buffers.custom_bw_dst_ptr =
+        allocate_phase_buffer(config, config.custom_buffer_size, "custom_bw_dst_buffer");
+    if (!buffers.custom_bw_dst_ptr) {
+      return EXIT_FAILURE;
+    }
+
+    return initialize_buffers(buffers.custom_bw_src(), buffers.custom_bw_dst(),
+                              config.custom_buffer_size);
+  }
+
+  if (config.l1_buffer_size > 0) {
+    buffers.l1_bw_src_ptr = allocate_phase_buffer(config, config.l1_buffer_size, "l1_bw_src_buffer");
+    if (!buffers.l1_bw_src_ptr) {
+      return EXIT_FAILURE;
+    }
+
+    buffers.l1_bw_dst_ptr = allocate_phase_buffer(config, config.l1_buffer_size, "l1_bw_dst_buffer");
+    if (!buffers.l1_bw_dst_ptr) {
+      return EXIT_FAILURE;
+    }
+
+    if (initialize_buffers(buffers.l1_bw_src(), buffers.l1_bw_dst(), config.l1_buffer_size) !=
+        EXIT_SUCCESS) {
+      return EXIT_FAILURE;
+    }
+  }
+
+  if (config.l2_buffer_size > 0) {
+    buffers.l2_bw_src_ptr = allocate_phase_buffer(config, config.l2_buffer_size, "l2_bw_src_buffer");
+    if (!buffers.l2_bw_src_ptr) {
+      return EXIT_FAILURE;
+    }
+
+    buffers.l2_bw_dst_ptr = allocate_phase_buffer(config, config.l2_buffer_size, "l2_bw_dst_buffer");
+    if (!buffers.l2_bw_dst_ptr) {
+      return EXIT_FAILURE;
+    }
+
+    if (initialize_buffers(buffers.l2_bw_src(), buffers.l2_bw_dst(), config.l2_buffer_size) !=
+        EXIT_SUCCESS) {
+      return EXIT_FAILURE;
+    }
+  }
+
+  return EXIT_SUCCESS;
+}
+
+/**
+ * @brief Prepares cache-latency buffers and pointer chains for one phase.
+ *
+ * Builds latency chains using current stride/locality settings and optionally
+ * records chain diagnostics when the user explicitly sets latency stride.
+ */
+int prepare_cache_latency_buffers(BenchmarkConfig& config, BenchmarkBuffers& buffers) {
+  const bool collect_chain_diagnostics = config.user_specified_latency_stride;
+
+  if (config.use_custom_cache_size) {
+    if (config.custom_buffer_size == 0) {
+      return EXIT_SUCCESS;
+    }
+
+    buffers.custom_buffer_ptr = allocate_phase_buffer(config, config.custom_buffer_size, "custom_buffer");
+    if (!buffers.custom_buffer_ptr) {
+      return EXIT_FAILURE;
+    }
+
+    return setup_latency_chain(buffers.custom_buffer(),
+                               config.custom_buffer_size,
+                               config.latency_stride_bytes,
+                               config.latency_tlb_locality_bytes,
+                               collect_chain_diagnostics ? &config.custom_latency_chain_diagnostics
+                                                         : nullptr);
+  }
+
+  if (config.l1_buffer_size > 0) {
+    buffers.l1_buffer_ptr = allocate_phase_buffer(config, config.l1_buffer_size, "l1_buffer");
+    if (!buffers.l1_buffer_ptr) {
+      return EXIT_FAILURE;
+    }
+
+    if (setup_latency_chain(buffers.l1_buffer(),
+                            config.l1_buffer_size,
+                            config.latency_stride_bytes,
+                            config.latency_tlb_locality_bytes,
+                            collect_chain_diagnostics ? &config.l1_latency_chain_diagnostics
+                                                      : nullptr) != EXIT_SUCCESS) {
+      return EXIT_FAILURE;
+    }
+  }
+
+  if (config.l2_buffer_size > 0) {
+    buffers.l2_buffer_ptr = allocate_phase_buffer(config, config.l2_buffer_size, "l2_buffer");
+    if (!buffers.l2_buffer_ptr) {
+      return EXIT_FAILURE;
+    }
+
+    if (setup_latency_chain(buffers.l2_buffer(),
+                            config.l2_buffer_size,
+                            config.latency_stride_bytes,
+                            config.latency_tlb_locality_bytes,
+                            collect_chain_diagnostics ? &config.l2_latency_chain_diagnostics
+                                                      : nullptr) != EXIT_SUCCESS) {
+      return EXIT_FAILURE;
+    }
+  }
+
+  return EXIT_SUCCESS;
+}
+
+/**
+ * @brief Prepares the main-memory latency buffer and pointer chain.
+ *
+ * This path is skipped when main latency is disabled (zero main buffer or zero
+ * configured accesses). Chain setup is completed before timing starts.
+ */
+int prepare_main_memory_latency_buffer(BenchmarkConfig& config, BenchmarkBuffers& buffers) {
+  if (config.buffer_size == 0 || config.lat_num_accesses == 0) {
+    return EXIT_SUCCESS;
+  }
+
+  buffers.lat_buffer_ptr = allocate_phase_buffer(config, config.buffer_size, "lat_buffer");
+  if (!buffers.lat_buffer_ptr) {
+    return EXIT_FAILURE;
+  }
+
+  const bool collect_chain_diagnostics = config.user_specified_latency_stride;
+  return setup_latency_chain(buffers.lat_buffer(),
+                             config.buffer_size,
+                             config.latency_stride_bytes,
+                             config.latency_tlb_locality_bytes,
+                             collect_chain_diagnostics ? &config.main_latency_chain_diagnostics : nullptr);
 }
 
 }  // namespace
@@ -354,7 +571,7 @@ void run_main_memory_latency_test(const BenchmarkBuffers& buffers, const Benchma
  * - Logs error message to stderr
  * - Re-throws exception for caller to handle
  *
- * @param[in]     buffers     Pre-allocated and initialized benchmark buffers
+ * @param[in]     buffers     Benchmark buffers (unused in phase-local allocation mode)
  * @param[in]     config      Benchmark configuration (sizes, counts, flags)
  * @param[in]     loop        Loop number (for error reporting, not used internally)
  * @param[in,out] test_timer  High-resolution timer for measurements
@@ -365,6 +582,7 @@ void run_main_memory_latency_test(const BenchmarkBuffers& buffers, const Benchma
  *
  * @note Results include both raw timing data and calculated bandwidth values.
  * @note Main memory latency is calculated as total_time / num_accesses.
+ * @note Phase-local `BenchmarkBuffers` objects free mappings on scope exit (RAII).
  *
  * @see run_main_memory_bandwidth_tests() for main memory bandwidth execution
  * @see run_cache_bandwidth_tests() for cache bandwidth execution
@@ -372,26 +590,69 @@ void run_main_memory_latency_test(const BenchmarkBuffers& buffers, const Benchma
  * @see run_main_memory_latency_test() for main memory latency execution
  * @see calculate_bandwidth_results() for bandwidth calculation
  */
-BenchmarkResults run_single_benchmark_loop(const BenchmarkBuffers& buffers, const BenchmarkConfig& config, int loop, HighResTimer& test_timer) {
+BenchmarkResults run_single_benchmark_loop(const BenchmarkBuffers& buffers, BenchmarkConfig& config, int loop, HighResTimer& test_timer) {
   BenchmarkResults results;
   TimingResults timings;
+
+  (void)buffers;
+  (void)loop;
+
+  reset_latency_chain_diagnostics(config);
 
   try {
     // Run benchmark tests based on flags
     if (config.only_bandwidth) {
       // Run only bandwidth tests
-      run_main_memory_bandwidth_tests(buffers, config, timings, test_timer);
-      run_cache_bandwidth_tests(buffers, config, timings, test_timer);
+      BenchmarkBuffers main_bandwidth_buffers;
+      if (prepare_main_memory_bandwidth_buffers(config, main_bandwidth_buffers) != EXIT_SUCCESS) {
+        throw std::runtime_error("Failed to prepare main memory bandwidth buffers");
+      }
+      run_main_memory_bandwidth_tests(main_bandwidth_buffers, config, timings, test_timer);
+
+      BenchmarkBuffers cache_bandwidth_buffers;
+      if (prepare_cache_bandwidth_buffers(config, cache_bandwidth_buffers) != EXIT_SUCCESS) {
+        throw std::runtime_error("Failed to prepare cache bandwidth buffers");
+      }
+      run_cache_bandwidth_tests(cache_bandwidth_buffers, config, timings, test_timer);
     } else if (config.only_latency) {
-      // Run only latency tests
-      run_cache_latency_tests(buffers, config, timings, results, test_timer);
-      run_main_memory_latency_test(buffers, config, timings, results, test_timer);
+      // Run only latency tests. Cache and main latency buffers are prepared in separate
+      // local owners; both remain alive until the branch scope ends.
+      BenchmarkBuffers cache_latency_buffers;
+      if (prepare_cache_latency_buffers(config, cache_latency_buffers) != EXIT_SUCCESS) {
+        throw std::runtime_error("Failed to prepare cache latency buffers");
+      }
+      run_cache_latency_tests(cache_latency_buffers, config, timings, results, test_timer);
+
+      BenchmarkBuffers main_latency_buffers;
+      if (prepare_main_memory_latency_buffer(config, main_latency_buffers) != EXIT_SUCCESS) {
+        throw std::runtime_error("Failed to prepare main memory latency buffer");
+      }
+      run_main_memory_latency_test(main_latency_buffers, config, timings, results, test_timer);
     } else {
       // Run all tests (default behavior)
-      run_main_memory_bandwidth_tests(buffers, config, timings, test_timer);
-      run_cache_bandwidth_tests(buffers, config, timings, test_timer);
-      run_cache_latency_tests(buffers, config, timings, results, test_timer);
-      run_main_memory_latency_test(buffers, config, timings, results, test_timer);
+      BenchmarkBuffers main_bandwidth_buffers;
+      if (prepare_main_memory_bandwidth_buffers(config, main_bandwidth_buffers) != EXIT_SUCCESS) {
+        throw std::runtime_error("Failed to prepare main memory bandwidth buffers");
+      }
+      run_main_memory_bandwidth_tests(main_bandwidth_buffers, config, timings, test_timer);
+
+      BenchmarkBuffers cache_bandwidth_buffers;
+      if (prepare_cache_bandwidth_buffers(config, cache_bandwidth_buffers) != EXIT_SUCCESS) {
+        throw std::runtime_error("Failed to prepare cache bandwidth buffers");
+      }
+      run_cache_bandwidth_tests(cache_bandwidth_buffers, config, timings, test_timer);
+
+      BenchmarkBuffers cache_latency_buffers;
+      if (prepare_cache_latency_buffers(config, cache_latency_buffers) != EXIT_SUCCESS) {
+        throw std::runtime_error("Failed to prepare cache latency buffers");
+      }
+      run_cache_latency_tests(cache_latency_buffers, config, timings, results, test_timer);
+
+      BenchmarkBuffers main_latency_buffers;
+      if (prepare_main_memory_latency_buffer(config, main_latency_buffers) != EXIT_SUCCESS) {
+        throw std::runtime_error("Failed to prepare main memory latency buffer");
+      }
+      run_main_memory_latency_test(main_latency_buffers, config, timings, results, test_timer);
     }
   } catch (const std::exception &e) {
     std::cerr << Messages::error_benchmark_tests(e.what()) << std::endl;

@@ -370,7 +370,7 @@ TEST(ConfigTest, ValidateConfigModeAwareBufferCap) {
   BenchmarkConfig full;
   full.buffer_size_mb = std::numeric_limits<unsigned long>::max();
   EXPECT_EQ(validate_config(full), EXIT_SUCCESS);
-  EXPECT_EQ(full.buffer_size_mb, expected_cap(full, 3));
+  EXPECT_EQ(full.buffer_size_mb, expected_cap(full, 2));
 
   BenchmarkConfig bw_only;
   bw_only.only_bandwidth = true;

@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.53.8] - 2026-XX-XX
+
+### Changed
+  - **Standard benchmark memory lifecycle moved to phase-local allocation**: Standard mode now allocates and initializes buffers immediately before each benchmark phase (main bandwidth, cache bandwidth, cache latency, main latency) and releases them after the phase instead of keeping all mode buffers resident for the full run.
+  - **Memory estimate now reports peak concurrent footprint**: Configuration output/help text now describes the memory requirement as peak concurrent allocation for the active mode/phase model.
+  - **Validation defaults aligned with phased execution**: Main-buffer cap logic now validates against phased peak needs (for example, 2x main buffer during copy bandwidth, 1x in latency-only main path).
+
+### Fixed
+  - **Over-reservation for standard benchmark runs**: Large `-buffersize` runs no longer reserve all standard-mode buffers up-front when only one phase is active at a time.
+
 ## [0.53.7] - 2026-03-13
 
 ### Added

@@ -39,7 +39,7 @@ void print_usage(const char* prog_name);
  * @brief Print benchmark setup details
  * @param buffer_size Buffer size in bytes
  * @param buffer_size_mb Buffer size in megabytes
- * @param total_allocation_bytes Total allocated bytes across all enabled buffers
+ * @param total_allocation_bytes Peak concurrently allocated bytes across enabled benchmark phases
  * @param iterations Number of iterations
  * @param loop_count Number of loops
  * @param use_non_cacheable Whether non-cacheable memory is used

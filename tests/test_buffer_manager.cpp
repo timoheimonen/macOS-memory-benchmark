@@ -348,7 +348,7 @@ TEST(BufferManagerTest, CalculateTotalAllocationBytesOnlyLatencyCustomCache) {
   int result = calculate_total_allocation_bytes(config, total_memory_bytes);
 
   EXPECT_EQ(result, EXIT_SUCCESS);
-  EXPECT_EQ(total_memory_bytes, 44 * Constants::BYTES_PER_MB);
+  EXPECT_EQ(total_memory_bytes, 43 * Constants::BYTES_PER_MB);
 }
 
 TEST(BufferManagerTest, CalculateTotalAllocationBytesDefaultModeIncludesCacheBuffers) {
@@ -364,9 +364,7 @@ TEST(BufferManagerTest, CalculateTotalAllocationBytesDefaultModeIncludesCacheBuf
   size_t total_memory_bytes = 0;
   int result = calculate_total_allocation_bytes(config, total_memory_bytes);
 
-  const size_t expected_bytes = (3 * Constants::BYTES_PER_MB) +
-                                (3 * config.l1_buffer_size) +
-                                (3 * config.l2_buffer_size);
+  const size_t expected_bytes = 2 * Constants::BYTES_PER_MB;
   EXPECT_EQ(result, EXIT_SUCCESS);
   EXPECT_EQ(total_memory_bytes, expected_bytes);
 }
