@@ -72,7 +72,7 @@
  * - Exceptions during benchmark loops are caught and reported
  * - Loop number and error details are included in error messages
  *
- * @param[in]  buffers  Pre-allocated and initialized benchmark buffers
+ * @param[in]  buffers  Benchmark buffers (unused in phase-local allocation mode)
  * @param[in]  config   Benchmark configuration (buffer sizes, threads, loops, flags)
  * @param[out] stats    Statistics structure to populate with all loop results
  *
@@ -82,13 +82,16 @@
  * @note Statistics structure is used for final aggregate calculations.
  * @note Progress indicators are cleared before printing each loop's results.
  * @note Exception messages include loop number for debugging.
+ * @note Per-phase buffers are prepared in run_single_benchmark_loop().
  *
  * @see run_single_benchmark_loop() for individual loop execution
  * @see initialize_statistics() for statistics setup
  * @see collect_loop_results() for result collection
  * @see print_results() for output formatting
  */
-int run_all_benchmarks(const BenchmarkBuffers& buffers, const BenchmarkConfig& config, BenchmarkStatistics& stats) {
+int run_all_benchmarks(const BenchmarkBuffers& buffers, BenchmarkConfig& config, BenchmarkStatistics& stats) {
+  (void)buffers;
+
   // Initialize statistics structure
   initialize_statistics(stats, config);
 

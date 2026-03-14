@@ -263,6 +263,17 @@ TEST_F(MessagesErrorTest, ErrorLatencyTlbLocalityInvalid) {
   EXPECT_EQ(msg, "latency-tlb-locality-kb invalid (must be >= 0 and <= 1024, got -1)");
 }
 
+TEST_F(MessagesErrorTest, ErrorLatencyChainModeInvalid) {
+  std::string msg = Messages::error_latency_chain_mode_invalid();
+  EXPECT_NE(msg.find("latency-chain-mode invalid"), std::string::npos);
+  EXPECT_NE(msg.find("random-box"), std::string::npos);
+}
+
+TEST_F(MessagesErrorTest, ErrorLatencyChainModeRequiresLocality) {
+  std::string msg = Messages::error_latency_chain_mode_requires_locality("same-random-in-box-increasing-box");
+  EXPECT_NE(msg.find("requires -latency-tlb-locality-kb > 0"), std::string::npos);
+}
+
 TEST_F(MessagesErrorTest, ErrorLatencyTlbLocalityPageMultiple) {
   std::string msg = Messages::error_latency_tlb_locality_page_multiple(10, 16);
   EXPECT_EQ(msg, "latency-tlb-locality-kb must be a multiple of system page size (16 KB), got 10 KB");
@@ -365,6 +376,12 @@ TEST_F(MessagesFormattingTest, ReportTlbPageWalkPenaltyWindow) {
   EXPECT_NE(msg.find("~62.4ns"), std::string::npos);
 }
 
+TEST_F(MessagesFormattingTest, ReportTlbChainMode) {
+  std::string msg = Messages::report_tlb_chain_mode("random-box");
+  EXPECT_NE(msg.find("Chain Mode"), std::string::npos);
+  EXPECT_NE(msg.find("random-box"), std::string::npos);
+}
+
 TEST_F(MessagesFormattingTest, ReportTlbPageWalkPenaltyUnavailable) {
   std::string msg = Messages::report_tlb_page_walk_penalty_unavailable(32, 512, 512, 256);
   EXPECT_NE(msg.find("N/A"), std::string::npos);
@@ -394,6 +411,7 @@ TEST_F(MessagesFormattingTest, UsageOptions) {
   EXPECT_NE(msg.find("-analyze-tlb"), std::string::npos);
   EXPECT_NE(msg.find("-latency-samples"), std::string::npos);
   EXPECT_NE(msg.find("-latency-stride-bytes"), std::string::npos);
+  EXPECT_NE(msg.find("-latency-chain-mode"), std::string::npos);
   EXPECT_NE(msg.find("-latency-tlb-locality-kb"), std::string::npos);
   EXPECT_NE(msg.find("-cache-size"), std::string::npos);
   EXPECT_NE(msg.find("-h"), std::string::npos);
@@ -449,7 +467,7 @@ TEST_F(MessagesFormattingTest, ConfigTotalAllocation) {
   std::string msg = Messages::config_total_allocation(3072.75);
   EXPECT_NE(msg.find("3072.75"), std::string::npos);
   EXPECT_NE(msg.find("MiB"), std::string::npos);
-  EXPECT_NE(msg.find("Total Allocation Size"), std::string::npos);
+  EXPECT_NE(msg.find("Peak Concurrent Allocation"), std::string::npos);
 }
 
 TEST_F(MessagesFormattingTest, ConfigIterations) {
@@ -481,6 +499,12 @@ TEST_F(MessagesFormattingTest, ConfigLatencyStride) {
   EXPECT_NE(msg.find("Latency Stride"), std::string::npos);
   EXPECT_NE(msg.find("136"), std::string::npos);
   EXPECT_NE(msg.find("B"), std::string::npos);
+}
+
+TEST_F(MessagesFormattingTest, ConfigLatencyChainMode) {
+  std::string msg = Messages::config_latency_chain_mode("random-in-box-random-box");
+  EXPECT_NE(msg.find("Latency Chain Mode"), std::string::npos);
+  EXPECT_NE(msg.find("random-in-box-random-box"), std::string::npos);
 }
 
 TEST_F(MessagesFormattingTest, ConfigLatencyTlbLocality) {

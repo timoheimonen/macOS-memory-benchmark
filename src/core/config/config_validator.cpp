@@ -87,6 +87,18 @@ int validate_config(BenchmarkConfig& config) {
     return EXIT_FAILURE;
   }
 
+  const LatencyChainMode effective_chain_mode =
+      resolve_latency_chain_mode(config.latency_chain_mode, config.latency_tlb_locality_bytes);
+  const bool chain_mode_uses_locality = latency_chain_mode_uses_locality(effective_chain_mode);
+
+  if (chain_mode_uses_locality && config.latency_tlb_locality_bytes == 0) {
+    std::cerr << Messages::error_prefix()
+              << Messages::error_latency_chain_mode_requires_locality(
+                     latency_chain_mode_to_string(effective_chain_mode))
+              << std::endl;
+    return EXIT_FAILURE;
+  }
+
   // Error: Validate mutually exclusive flags
   if (config.only_bandwidth && config.only_latency) {
     std::cerr << Messages::error_prefix() << Messages::error_incompatible_flags() << std::endl;
@@ -178,7 +190,9 @@ int validate_config(BenchmarkConfig& config) {
     return EXIT_FAILURE;  // Return code: validation error
   }
 
-  if (config.latency_tlb_locality_bytes > 0 && (config.latency_tlb_locality_bytes % page_size) != 0) {
+  if (chain_mode_uses_locality &&
+      config.latency_tlb_locality_bytes > 0 &&
+      (config.latency_tlb_locality_bytes % page_size) != 0) {
     const size_t locality_kb = config.latency_tlb_locality_bytes / Constants::BYTES_PER_KB;
     const size_t page_kb = page_size / Constants::BYTES_PER_KB;
     std::cerr << Messages::error_prefix()
@@ -187,7 +201,8 @@ int validate_config(BenchmarkConfig& config) {
     return EXIT_FAILURE;  // Return code: validation error
   }
 
-  if (config.latency_tlb_locality_bytes > 0 &&
+  if (chain_mode_uses_locality &&
+      config.latency_tlb_locality_bytes > 0 &&
       (config.latency_tlb_locality_bytes / config.latency_stride_bytes) < 2) {
     std::cerr << Messages::error_prefix()
               << Messages::error_latency_tlb_locality_too_small_for_stride(
@@ -196,10 +211,17 @@ int validate_config(BenchmarkConfig& config) {
     return EXIT_FAILURE;  // Return code: validation error
   }
   
+  /**
+   * Memory-cap model notes:
+   * - This per-main-buffer cap is an early bound for the user-facing main buffer.
+   * - It reflects phased execution peak for main-memory buffers (1x or 2x).
+   * - Full peak concurrent validation, including cache phases, is performed by
+   *   calculate_total_allocation_bytes() before benchmark execution starts.
+   */
   // Calculate memory limit
   unsigned long available_mem_mb = get_available_memory_mb();
   unsigned long max_allowed_mb_per_buffer = 0;
-  unsigned long required_main_buffers = 3;  // Default mode: src + dst + lat
+  unsigned long required_main_buffers = 2;  // Default mode peak: src + dst
 
   if (config.only_latency) {
     required_main_buffers = 1;  // Latency-only mode: lat
@@ -209,18 +231,16 @@ int validate_config(BenchmarkConfig& config) {
 
   if (available_mem_mb > 0) {
     config.max_total_allowed_mb = static_cast<unsigned long>(available_mem_mb * Constants::MEMORY_LIMIT_FACTOR);
-    // Divide by mode-specific main buffer count.
-    // Note: This per-buffer calculation does NOT include cache buffers (L1, L2, custom)
-    // and their bandwidth counterparts. The total memory check in buffer_manager.cpp
-    // is necessary to ensure all buffers (main + cache) fit within max_total_allowed_mb.
+    // Divide by mode-specific main-buffer peak count.
+    // Full peak validation (including cache phases) is performed by
+    // calculate_total_allocation_bytes() before benchmark execution.
     max_allowed_mb_per_buffer = config.max_total_allowed_mb / required_main_buffers;
   } else {
     std::cerr << Messages::warning_prefix() << Messages::warning_cannot_get_memory() << std::endl;
     config.max_total_allowed_mb = Constants::FALLBACK_TOTAL_LIMIT_MB;
-    // Divide by mode-specific main buffer count.
-    // Note: This per-buffer calculation does NOT include cache buffers (L1, L2, custom)
-    // and their bandwidth counterparts. The total memory check in buffer_manager.cpp
-    // is necessary to ensure all buffers (main + cache) fit within max_total_allowed_mb.
+    // Divide by mode-specific main-buffer peak count.
+    // Full peak validation (including cache phases) is performed by
+    // calculate_total_allocation_bytes() before benchmark execution.
     max_allowed_mb_per_buffer = config.max_total_allowed_mb / required_main_buffers;
     std::cout << Messages::info_setting_max_fallback(max_allowed_mb_per_buffer) << std::endl;
   }

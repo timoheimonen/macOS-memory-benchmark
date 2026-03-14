@@ -118,14 +118,17 @@ struct BenchmarkStatistics {
 
 /**
  * @brief Run all benchmark loops and collect statistics
- * @param buffers Reference to benchmark buffers structure
+ * @param buffers Reference to benchmark buffers structure (unused in phase-local allocation mode)
  * @param config Reference to benchmark configuration
  * @param[out] stats Reference to BenchmarkStatistics structure to store aggregated results
  * @return EXIT_SUCCESS on success, EXIT_FAILURE on error
  *
  * Executes multiple benchmark loops as specified by config.loop_count and
  * aggregates all results into the BenchmarkStatistics structure for statistical analysis.
+ * In phased execution mode, per-test buffers are allocated inside loop execution
+ * rather than passed through this API.
  */
-int run_all_benchmarks(const BenchmarkBuffers& buffers, const BenchmarkConfig& config, BenchmarkStatistics& stats);
+int run_all_benchmarks(const BenchmarkBuffers& buffers, BenchmarkConfig& config,
+                       BenchmarkStatistics& stats);
 
 #endif // BENCHMARK_RUNNER_H

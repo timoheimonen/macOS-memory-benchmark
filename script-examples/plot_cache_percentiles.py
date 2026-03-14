@@ -4,7 +4,7 @@ import json
 import sys
 from pathlib import Path
 
-import matplotlib.pyplot as plt
+import matplotlib.pyplot as plt # pyright: ignore[reportMissingModuleSource]
 
 #run ./latency_test_script.sh to get final_output.txt
 

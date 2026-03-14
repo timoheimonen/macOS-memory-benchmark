@@ -45,11 +45,12 @@ void print_usage(const char *prog_name) {
  *
  * @param buffer_size The final size (in bytes) of each test buffer after memory checks
  * @param buffer_size_mb The requested/capped buffer size in Megabytes
- * @param total_allocation_bytes Total allocated bytes across all enabled benchmark buffers
+ * @param total_allocation_bytes Peak concurrently allocated bytes across enabled benchmark phases
  * @param iterations Number of iterations per bandwidth test per loop
  * @param loop_count How many times the entire set of tests will be repeated
  * @param use_non_cacheable Flag indicating if non-cacheable memory hints are enabled
  * @param latency_stride_bytes Stride used by latency pointer chains
+ * @param latency_chain_mode_name Chain construction mode used by latency pointer chains
  * @param latency_tlb_locality_bytes TLB-locality window for latency chains (0 = disabled)
  * @param cpu_name Detected processor name string
  * @param perf_cores Number of detected performance cores
@@ -62,6 +63,7 @@ void print_usage(const char *prog_name) {
 void print_configuration(size_t buffer_size, size_t buffer_size_mb, size_t total_allocation_bytes,
                          int iterations, int loop_count, bool use_non_cacheable,
                          size_t latency_stride_bytes,
+                         const std::string& latency_chain_mode_name,
                          size_t latency_tlb_locality_bytes,
                          const std::string &cpu_name, int perf_cores, int eff_cores, int num_threads,
                          bool only_bandwidth, bool only_latency, bool run_patterns) {
@@ -92,6 +94,7 @@ void print_configuration(size_t buffer_size, size_t buffer_size_mb, size_t total
   // Display non-cacheable memory hints status.
   std::cout << Messages::config_non_cacheable(use_non_cacheable) << std::endl;
   std::cout << Messages::config_latency_stride(latency_stride_bytes) << std::endl;
+  std::cout << Messages::config_latency_chain_mode(latency_chain_mode_name) << std::endl;
   std::cout << Messages::config_latency_tlb_locality(latency_tlb_locality_bytes) << std::endl;
   // Display CPU information if successfully retrieved.
   if (!cpu_name.empty()) {

@@ -114,6 +114,16 @@ Latency tests use dependent pointer-chase chains. `-latency-tlb-locality-kb` con
 - `0`: fully global random chain
 - non-zero values must be multiples of system page size
 
+`-latency-chain-mode` controls pointer-chain ordering policy:
+
+- `auto` (default): preserves current behavior (`random-box` when locality > 0, `global-random` when locality = 0)
+- `global-random`: full-buffer random permutation
+- `random-box`: random order within locality boxes and random box traversal order
+- `same-random-in-box`: same in-box random pattern reused across boxes (increasing box order)
+- `diff-random-in-box`: independently randomized in-box pattern per box (increasing box order)
+
+Modes other than `global-random` require non-zero `-latency-tlb-locality-kb`.
+
 `-latency-stride-bytes` controls spacing between chain nodes. Smaller stride biases toward same-page reuse;
 larger stride increases page turnover pressure.
 
@@ -198,7 +208,7 @@ Pattern mode (`-patterns`) measures bandwidth sensitivity across:
 #### `-analyze-tlb`
 
 - Runs standalone TLB analysis mode only
-- Can be combined only with optional `-output <file>` and `-latency-stride-bytes <bytes>`
+- Can be combined only with optional `-output <file>`, `-latency-stride-bytes <bytes>`, and `-latency-chain-mode <mode>`
 - Uses latency stride from `-latency-stride-bytes` (same default as standard latency mode), sweeps locality windows `max(16KB, 2*stride)` to `256MB`, and reports inferred L1/L2 TLB boundaries and entry counts
 - Separately computes page-walk penalty as `P50(512MB) - P50(effective baseline locality)` when analysis buffer is at least `512MB`
 - Detailed methodology and JSON contract: `TLB_ANALYSIS_WHITEPAPER.md`
@@ -228,6 +238,14 @@ Pattern mode (`-patterns`) measures bandwidth sensitivity across:
 - Must be `> 0`
 - Must be a multiple of pointer size (`8` bytes on Apple Silicon)
 - Use smaller values (for example `64`) to increase same-page cache-line activity and reduce TLB sensitivity
+
+#### `-latency-chain-mode <mode>`
+
+- Pointer-chain construction policy for latency paths
+- Default: `auto`
+- Accepted values: `auto`, `global-random`, `random-box`, `same-random-in-box`, `diff-random-in-box`
+- `global-random` works with `-latency-tlb-locality-kb 0`
+- `random-box`, `same-random-in-box`, and `diff-random-in-box` require `-latency-tlb-locality-kb > 0`
 
 #### `-latency-tlb-locality-kb <size_kb>`
 
@@ -297,6 +315,9 @@ memory_benchmark -analyze-tlb -output tlb_analysis.json
 # Standalone TLB analysis with custom stride
 memory_benchmark -analyze-tlb -latency-stride-bytes 128 -output tlb_analysis_stride128.json
 
+# Standalone TLB analysis with explicit chain mode
+memory_benchmark -analyze-tlb -latency-chain-mode same-random-in-box -output tlb_analysis_same_box.json
+
 # Standalone core-to-core handoff analysis
 memory_benchmark -analyze-core2core
 
@@ -365,6 +386,9 @@ memory_benchmark -only-latency -buffersize 1024 -latency-samples 5000 -count 10 
 
 # global random chain
 memory_benchmark -only-latency -buffersize 1024 -latency-samples 5000 -latency-tlb-locality-kb 0 -count 10 -output lat_global.json
+
+# same in-box random pattern (good for prefetch-vs-TLB comparisons)
+memory_benchmark -only-latency -buffersize 1024 -latency-samples 5000 -latency-tlb-locality-kb 16 -latency-chain-mode same-random-in-box -count 10 -output lat_same_box.json
 ```
 
 ### Regular benchmark with automatic DRAM TLB breakdown
@@ -411,9 +435,10 @@ Shows active settings and detected hardware.
 
 Important fields:
 
-- Buffer size and total allocation estimate
+- Buffer size and peak concurrent allocation estimate
 - Loop/iteration/sample configuration
 - Thread count
+- Latency chain mode
 - TLB locality setting
 - Detected or custom cache sizes
 
@@ -754,6 +779,11 @@ Check mode combinations in [Mode Compatibility](#mode-compatibility).
 
 Use `0` or a value that is an exact multiple of system page size.
 
+### `-latency-chain-mode` rejected
+
+Use one of: `auto`, `global-random`, `random-box`, `same-random-in-box`, `diff-random-in-box`.
+If using a box mode (`random-box`, `same-random-in-box`, `diff-random-in-box`), also set `-latency-tlb-locality-kb` to a non-zero page-multiple value.
+
 ### Buffer size warnings/capping
 
 The tool caps per-buffer size against memory safety limits. Use the printed configuration summary to see actual applied sizes.
@@ -790,4 +820,4 @@ memory_benchmark -h
 
 ---
 
-**Last Updated**: 2026-03-13
+**Last Updated**: 2026-03-14

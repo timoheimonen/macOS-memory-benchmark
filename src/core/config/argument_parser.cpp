@@ -92,6 +92,7 @@ int parse_arguments(int argc, char* argv[], BenchmarkConfig& config) {
     config.analyze_tlb = true;
     bool output_seen = false;
     bool latency_stride_seen = false;
+    bool latency_chain_mode_seen = false;
 
     for (int i = 1; i < argc; ++i) {
       const std::string arg = argv[i];
@@ -178,6 +179,39 @@ int parse_arguments(int argc, char* argv[], BenchmarkConfig& config) {
 
         config.user_specified_latency_stride = true;
         latency_stride_seen = true;
+        continue;
+      }
+
+      if (arg == "-latency-chain-mode") {
+        if (latency_chain_mode_seen) {
+          std::cerr << Messages::error_prefix()
+                    << Messages::error_duplicate_option("-latency-chain-mode")
+                    << std::endl;
+          print_usage(argv[0]);
+          return EXIT_FAILURE;
+        }
+        if (++i >= argc) {
+          std::cerr << Messages::error_prefix()
+                    << Messages::error_missing_value("-latency-chain-mode")
+                    << std::endl;
+          print_usage(argv[0]);
+          return EXIT_FAILURE;
+        }
+
+        const std::string mode_value = argv[i];
+        LatencyChainMode parsed_mode = LatencyChainMode::Auto;
+        if (!latency_chain_mode_from_string(mode_value, parsed_mode)) {
+          std::cerr << Messages::error_prefix()
+                    << Messages::error_invalid_value(arg, mode_value,
+                                                     Messages::error_latency_chain_mode_invalid())
+                    << std::endl;
+          print_usage(argv[0]);
+          return EXIT_FAILURE;
+        }
+
+        config.latency_chain_mode = parsed_mode;
+        config.user_specified_latency_chain_mode = true;
+        latency_chain_mode_seen = true;
         continue;
       }
 
@@ -311,6 +345,17 @@ int parse_arguments(int argc, char* argv[], BenchmarkConfig& config) {
           config.user_specified_latency_stride = true;
         } else {
           throw std::invalid_argument(Messages::error_missing_value("-latency-stride-bytes"));
+        }
+      } else if (arg == "-latency-chain-mode") {
+        if (++i < argc) {
+          LatencyChainMode parsed_mode = LatencyChainMode::Auto;
+          if (!latency_chain_mode_from_string(argv[i], parsed_mode)) {
+            throw std::out_of_range(Messages::error_latency_chain_mode_invalid());
+          }
+          config.latency_chain_mode = parsed_mode;
+          config.user_specified_latency_chain_mode = true;
+        } else {
+          throw std::invalid_argument(Messages::error_missing_value("-latency-chain-mode"));
         }
       } else if (arg == "-latency-tlb-locality-kb") {
         if (++i < argc) {

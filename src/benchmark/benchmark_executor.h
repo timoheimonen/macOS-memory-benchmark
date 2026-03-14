@@ -143,8 +143,8 @@ void run_main_memory_latency_test(const BenchmarkBuffers& buffers, const Benchma
 
 /**
  * @brief Run a single benchmark loop and return results
- * @param buffers Reference to benchmark buffers structure
- * @param config Reference to benchmark configuration
+ * @param buffers Reference to benchmark buffers structure (unused in phase-local allocation mode)
+ * @param config Reference to benchmark configuration (updated for per-loop diagnostics)
  * @param loop Loop number (for display purposes)
  * @param test_timer Reference to high-resolution timer for measurements
  * @return BenchmarkResults structure containing all results from the loop
@@ -152,6 +152,7 @@ void run_main_memory_latency_test(const BenchmarkBuffers& buffers, const Benchma
  * Executes one complete benchmark loop, running all configured tests
  * (bandwidth and/or latency) and calculating results.
  */
-BenchmarkResults run_single_benchmark_loop(const BenchmarkBuffers& buffers, const BenchmarkConfig& config, int loop, HighResTimer& test_timer);
+BenchmarkResults run_single_benchmark_loop(const BenchmarkBuffers& buffers, BenchmarkConfig& config, int loop,
+                                           HighResTimer& test_timer);
 
 #endif // BENCHMARK_EXECUTOR_H

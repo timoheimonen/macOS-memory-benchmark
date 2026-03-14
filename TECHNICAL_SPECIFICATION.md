@@ -45,14 +45,12 @@ The pipeline below applies to standard/pattern benchmark execution.
    - `calculate_total_allocation_bytes`
 5. Print resolved configuration and cache info.
 6. Raise main thread QoS (`QOS_CLASS_USER_INTERACTIVE`) best-effort.
-7. Allocate all required buffers (`allocate_all_buffers`).
-8. Initialize all buffers (`initialize_all_buffers`).
-9. Execute one mode:
-   - Standard benchmark mode (`run_all_benchmarks`), or
-   - Pattern benchmark mode (`run_all_pattern_benchmarks`).
-10. Print loop results and aggregate statistics.
-11. Optionally serialize JSON output.
-12. Print total elapsed runtime.
+7. Execute one mode:
+   - Standard benchmark mode (`run_all_benchmarks`), which allocates/initializes buffers per phase and releases them after the phase.
+   - Pattern benchmark mode (`run_all_pattern_benchmarks`), which pre-allocates/initializes required buffers (`allocate_all_buffers` + `initialize_all_buffers`).
+8. Print loop results and aggregate statistics.
+9. Optionally serialize JSON output.
+10. Print total elapsed runtime.
 
 Memory cleanup is RAII-based through `MmapPtr` custom deleters (`munmap` on scope exit).
 
@@ -121,8 +119,8 @@ Memory-limit model:
 
 - System available memory is queried.
 - Global cap uses `MEMORY_LIMIT_FACTOR` (80%).
-- Per-main-buffer cap is mode-aware (1, 2, or 3 main buffers).
-- A second total-allocation check includes all cache-related buffers.
+- Per-main-buffer cap is mode-aware (1 or 2 main buffers, depending on active mode/phase needs).
+- A second peak-concurrent allocation check validates the highest active phase footprint (main + cache paths).
 
 ## 6. Size and Access Derivation
 
@@ -144,12 +142,17 @@ Memory-limit model:
 
 ### 7.1 Allocation strategy
 
-Allocation entrypoint: `allocate_all_buffers` (`src/core/memory/buffer_allocator.cpp`).
+Allocation entrypoints:
+
+- Standard benchmark mode: per-phase allocators in `src/benchmark/benchmark_executor.cpp` (`prepare_*_buffers` helpers).
+- Pattern benchmark mode: `allocate_all_buffers` (`src/core/memory/buffer_allocator.cpp`).
+
+Shared allocation behavior:
 
 - Uses `mmap` anonymous private mappings.
 - Uses mode-aware conditional allocation to avoid unused buffers.
 - Performs overflow-safe byte arithmetic before allocation.
-- Enforces global total-allocation vs resolved memory limit.
+- Enforces global memory-limit checks from peak-concurrent requirements.
 
 Allocated buffer families (conditional):
 
@@ -168,11 +171,16 @@ Pattern mode intentionally allocates and uses only main source/destination buffe
 
 ### 7.3 Initialization strategy
 
-Initialization entrypoint: `initialize_all_buffers` (`src/core/memory/buffer_initializer.cpp`).
+Initialization entrypoints:
+
+- Standard benchmark mode: per-phase initialization in `run_single_benchmark_loop` before each measured phase.
+- Pattern benchmark mode: `initialize_all_buffers` (`src/core/memory/buffer_initializer.cpp`).
+
+Initialization semantics:
 
 - Bandwidth buffers: deterministic source pattern + zeroed destination.
 - Latency buffers: randomized pointer-chasing circular chain via `setup_latency_chain`.
-- Conditional initialization mirrors allocation and mode flags.
+- Allocation/initialization happen before phase timing starts and are excluded from measured benchmark durations.
 
 ## 8. Latency-Chain Construction Contract
 
@@ -221,6 +229,7 @@ Per loop, conditional by flags:
 
 Important execution semantics:
 
+- Phase-local buffers are allocated and initialized immediately before each phase and released after the phase, reducing standard-mode peak footprint.
 - Cache bandwidth uses `iterations * CACHE_ITERATIONS_MULTIPLIER` (saturated) for stability.
 - Cache bandwidth defaults to single-thread unless user explicitly provides `-threads`.
 - Main-memory latency headline is computed from one continuous chase pass.

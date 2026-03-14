@@ -86,19 +86,21 @@ std::string usage_options(const std::string& prog_name) {
   oss << "Usage: " << prog_name << " [options]\n"
       << "Options:\n"
       << "  -iterations <count>   Number of iterations for R/W/Copy tests (default: " << Constants::DEFAULT_ITERATIONS << ")\n"
-      << "  -buffersize <size_mb> Size for EACH of the 3 buffers in Megabytes (MB) as integer (default: " << Constants::DEFAULT_BUFFER_SIZE_MB << ").\n"
-      << "                        The maximum allowed <size_mb> is automatically determined such that\n"
-      << "                        3 * <size_mb> does not exceed ~80% of available system memory.\n"
+      << "  -buffersize <size_mb> Main-memory buffer size in Megabytes (MB) as integer (default: " << Constants::DEFAULT_BUFFER_SIZE_MB << ").\n"
+      << "                        Peak concurrent main-memory allocation is up to 2 * <size_mb>\n"
+      << "                        (read/copy source + destination). In -only-latency mode peak is 1 * <size_mb>.\n"
       << "                        In -only-latency mode, -buffersize 0 disables main memory latency.\n"
       << "  -count <count>        Number of full loops (read/write/copy/latency) (default: " << Constants::DEFAULT_LOOP_COUNT << ").\n"
       << "                        When count > 1, statistics include percentiles (P50/P90/P95/P99) and stddev.\n"
-      << "  -analyze-tlb          Run standalone TLB analysis benchmark mode (allows optional -output <file> and -latency-stride-bytes <bytes> only).\n"
+      << "  -analyze-tlb          Run standalone TLB analysis benchmark mode (allows optional -output <file>, -latency-stride-bytes <bytes>, and -latency-chain-mode <mode> only).\n"
       << "  -analyze-core2core    Run standalone core-to-core cache-line handoff benchmark mode\n"
       << "                        (allows optional -output <file>, -count <count>, and -latency-samples <count> only).\n"
       << "  -latency-samples <count> Number of latency samples to collect per test (default: " << Constants::DEFAULT_LATENCY_SAMPLE_COUNT << ")\n"
       << "  -latency-stride-bytes <bytes> Stride used by latency pointer chains (default: "
       << Constants::LATENCY_STRIDE_BYTES << " bytes).\n"
       << "                        Must be > 0 and a multiple of pointer size (typically 8 bytes).\n"
+      << "  -latency-chain-mode <mode> Pointer-chain construction policy. Modes: auto (default), global-random,\n"
+      << "                        random-box, same-random-in-box, diff-random-in-box.\n"
       << "  -latency-tlb-locality-kb <size_kb> TLB-locality window for latency pointer chains (default: 16 KB; set 0 to disable).\n"
       << "                        Must be a multiple of system page size (typically 4 KB or 16 KB).\n"
       << "  -threads <count>      Number of threads to use for benchmarks (default: detected\n"
@@ -166,6 +168,10 @@ std::string report_tlb_stride(size_t stride_bytes) {
   std::ostringstream oss;
   oss << "Stride: " << stride_bytes << " bytes";
   return oss.str();
+}
+
+std::string report_tlb_chain_mode(const std::string& chain_mode_name) {
+  return "Chain Mode: " + chain_mode_name;
 }
 
 std::string report_tlb_loop_config(size_t loops_per_point, size_t accesses_per_loop) {

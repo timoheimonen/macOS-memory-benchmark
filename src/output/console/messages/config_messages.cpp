@@ -61,7 +61,7 @@ std::string config_buffer_size(double buffer_size_mib, unsigned long buffer_size
 std::string config_total_allocation(double total_mib) {
   std::ostringstream oss;
   oss << std::fixed << std::setprecision(2);
-  oss << "Total Allocation Size: ~" << total_mib << " MiB";
+  oss << "Peak Concurrent Allocation: ~" << total_mib << " MiB";
   return oss.str();
 }
 
@@ -87,6 +87,10 @@ std::string config_latency_stride(size_t stride_bytes) {
   std::ostringstream oss;
   oss << "Latency Stride: " << stride_bytes << " B";
   return oss.str();
+}
+
+std::string config_latency_chain_mode(const std::string& mode_name) {
+  return "Latency Chain Mode: " + mode_name;
 }
 
 std::string config_latency_tlb_locality(size_t locality_bytes) {

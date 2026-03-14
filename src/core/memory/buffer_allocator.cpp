@@ -45,37 +45,111 @@
 #include <limits>   // std::numeric_limits
 #include <iostream> // std::cerr
 
-int calculate_total_allocation_bytes(const BenchmarkConfig& config, size_t& total_memory_bytes) {
+namespace {
+
+/**
+ * @brief Adds two size_t values with overflow detection.
+ * @param current Current accumulator value
+ * @param delta Value to add
+ * @param[out] out Sum when no overflow occurs
+ * @return true when addition succeeds, false on overflow
+ */
+bool checked_add(size_t current, size_t delta, size_t& out) {
+  if (current > std::numeric_limits<size_t>::max() - delta) {
+    return false;
+  }
+  out = current + delta;
+  return true;
+}
+
+/**
+ * @brief Multiplies a size_t value by two with overflow detection.
+ * @param value Input value
+ * @param[out] out Doubled value when no overflow occurs
+ * @return true when multiplication succeeds, false on overflow
+ */
+bool checked_mul_by_two(size_t value, size_t& out) {
+  if (value > std::numeric_limits<size_t>::max() / 2) {
+    return false;
+  }
+  out = value * 2;
+  return true;
+}
+
+/**
+ * @brief Validates that main-memory bandwidth paths have a usable buffer.
+ *
+ * Standard and bandwidth-only paths require source/destination main buffers.
+ * Latency-only mode is the only mode where main buffer size may be zero.
+ */
+int validate_main_buffer_size_for_bandwidth(const BenchmarkConfig& config) {
+  if (config.buffer_size == 0 && !config.only_latency) {
+    std::cerr << Messages::error_prefix() << Messages::error_main_buffer_size_zero() << std::endl;
+    return EXIT_FAILURE;
+  }
+  return EXIT_SUCCESS;
+}
+
+/**
+ * @brief Validates required bytes against the configured global memory cap.
+ * @param config Benchmark configuration containing max_total_allowed_mb
+ * @param bytes_required Required bytes to validate
+ * @return EXIT_SUCCESS when within limit, EXIT_FAILURE otherwise
+ */
+int validate_memory_limit(const BenchmarkConfig& config, size_t bytes_required) {
+  if (config.max_total_allowed_mb == 0) {
+    return EXIT_SUCCESS;
+  }
+
+  unsigned long required_mb = static_cast<unsigned long>(bytes_required / Constants::BYTES_PER_MB);
+  if (required_mb > config.max_total_allowed_mb) {
+    std::cerr << Messages::error_prefix()
+              << Messages::error_total_memory_exceeds_limit(required_mb, config.max_total_allowed_mb)
+              << std::endl;
+    return EXIT_FAILURE;
+  }
+
+  return EXIT_SUCCESS;
+}
+
+/**
+ * @brief Calculates full up-front allocation bytes for allocate_all_buffers().
+ *
+ * This preserves compatibility for call sites that still allocate all required
+ * buffers in one step (pattern mode and legacy allocator path).
+ */
+int calculate_full_allocation_bytes_internal(const BenchmarkConfig& config, size_t& total_memory_bytes) {
   total_memory_bytes = 0;
 
   // Validate buffer sizes before calculation
   // Error: Zero buffer size is invalid for bandwidth tests (latency-only mode is exception)
-  if (config.buffer_size == 0 && !config.only_latency) {
-    std::cerr << Messages::error_prefix() << Messages::error_main_buffer_size_zero() << std::endl;
-    return EXIT_FAILURE;  // Return code: validation error
+  if (validate_main_buffer_size_for_bandwidth(config) != EXIT_SUCCESS) {
+    return EXIT_FAILURE;
   }
 
   // Main buffers - conditionally account based on flags
   if (!config.only_latency) {
     // Need src and dst buffers for bandwidth tests
     // Error: Check multiplication overflow first: ensure buffer_size * 2 won't overflow
-    if (config.buffer_size > std::numeric_limits<size_t>::max() / 2) {
+    size_t main_buffer_double = 0;
+    if (!checked_mul_by_two(config.buffer_size, main_buffer_double)) {
       std::cerr << Messages::error_prefix() << Messages::error_buffer_size_overflow_calculation() << std::endl;
       return EXIT_FAILURE;  // Return code: arithmetic overflow error
     }
-    size_t main_buffer_double = config.buffer_size * 2;  // Safe: multiplication checked above
-    total_memory_bytes += main_buffer_double;  // src, dst
+    if (!checked_add(total_memory_bytes, main_buffer_double, total_memory_bytes)) {
+      std::cerr << Messages::error_prefix() << Messages::error_total_memory_overflow() << std::endl;
+      return EXIT_FAILURE;
+    }
   }
 
   if (!config.only_bandwidth && !config.run_patterns) {
     // Need lat buffer for latency tests (but not for pattern benchmarks, which are bandwidth-only)
     if (config.buffer_size > 0) {
       // Error: Check addition overflow when accumulating total memory
-      if (total_memory_bytes > std::numeric_limits<size_t>::max() - config.buffer_size) {
+      if (!checked_add(total_memory_bytes, config.buffer_size, total_memory_bytes)) {
         std::cerr << Messages::error_prefix() << Messages::error_total_memory_overflow() << std::endl;
         return EXIT_FAILURE;  // Return code: arithmetic overflow error
       }
-      total_memory_bytes += config.buffer_size;  // lat
     }
   }
 
@@ -86,91 +160,194 @@ int calculate_total_allocation_bytes(const BenchmarkConfig& config, size_t& tota
         if (!config.only_bandwidth) {
           // Need custom latency buffer
           // Error: Check addition overflow when accumulating total memory
-          if (total_memory_bytes > std::numeric_limits<size_t>::max() - config.custom_buffer_size) {
+          if (!checked_add(total_memory_bytes, config.custom_buffer_size, total_memory_bytes)) {
             std::cerr << Messages::error_prefix() << Messages::error_total_memory_overflow() << std::endl;
             return EXIT_FAILURE;  // Return code: arithmetic overflow error
           }
-          total_memory_bytes += config.custom_buffer_size;  // custom
         }
         if (!config.only_latency) {
           // Need custom bandwidth buffers
-          if (config.custom_buffer_size > std::numeric_limits<size_t>::max() / 2) {
+          size_t custom_bw_double = 0;
+          if (!checked_mul_by_two(config.custom_buffer_size, custom_bw_double)) {
             std::cerr << Messages::error_prefix() << Messages::error_buffer_size_overflow_calculation() << std::endl;
             return EXIT_FAILURE;
           }
-          size_t custom_bw_double = config.custom_buffer_size * 2;  // custom_bw_src, custom_bw_dst
-          if (total_memory_bytes > std::numeric_limits<size_t>::max() - custom_bw_double) {
+          if (!checked_add(total_memory_bytes, custom_bw_double, total_memory_bytes)) {
             std::cerr << Messages::error_prefix() << Messages::error_total_memory_overflow() << std::endl;
             return EXIT_FAILURE;
           }
-          total_memory_bytes += custom_bw_double;  // custom_bw_src, custom_bw_dst
         }
       }
     } else {
       if (config.l1_buffer_size > 0) {
         if (!config.only_bandwidth) {
           // Need L1 latency buffer
-          if (total_memory_bytes > std::numeric_limits<size_t>::max() - config.l1_buffer_size) {
+          if (!checked_add(total_memory_bytes, config.l1_buffer_size, total_memory_bytes)) {
             std::cerr << Messages::error_prefix() << Messages::error_total_memory_overflow() << std::endl;
             return EXIT_FAILURE;
           }
-          total_memory_bytes += config.l1_buffer_size;  // l1
         }
         if (!config.only_latency) {
           // Need L1 bandwidth buffers
-          if (config.l1_buffer_size > std::numeric_limits<size_t>::max() / 2) {
+          size_t l1_bw_double = 0;
+          if (!checked_mul_by_two(config.l1_buffer_size, l1_bw_double)) {
             std::cerr << Messages::error_prefix() << Messages::error_buffer_size_overflow_calculation() << std::endl;
             return EXIT_FAILURE;
           }
-          size_t l1_bw_double = config.l1_buffer_size * 2;  // l1_bw_src, l1_bw_dst
-          if (total_memory_bytes > std::numeric_limits<size_t>::max() - l1_bw_double) {
+          if (!checked_add(total_memory_bytes, l1_bw_double, total_memory_bytes)) {
             std::cerr << Messages::error_prefix() << Messages::error_total_memory_overflow() << std::endl;
             return EXIT_FAILURE;
           }
-          total_memory_bytes += l1_bw_double;  // l1_bw_src, l1_bw_dst
         }
       }
       if (config.l2_buffer_size > 0) {
         if (!config.only_bandwidth) {
           // Need L2 latency buffer
-          if (total_memory_bytes > std::numeric_limits<size_t>::max() - config.l2_buffer_size) {
+          if (!checked_add(total_memory_bytes, config.l2_buffer_size, total_memory_bytes)) {
             std::cerr << Messages::error_prefix() << Messages::error_total_memory_overflow() << std::endl;
             return EXIT_FAILURE;
           }
-          total_memory_bytes += config.l2_buffer_size;  // l2
         }
         if (!config.only_latency) {
           // Need L2 bandwidth buffers
-          if (config.l2_buffer_size > std::numeric_limits<size_t>::max() / 2) {
+          size_t l2_bw_double = 0;
+          if (!checked_mul_by_two(config.l2_buffer_size, l2_bw_double)) {
             std::cerr << Messages::error_prefix() << Messages::error_buffer_size_overflow_calculation() << std::endl;
             return EXIT_FAILURE;
           }
-          size_t l2_bw_double = config.l2_buffer_size * 2;  // l2_bw_src, l2_bw_dst
-          if (total_memory_bytes > std::numeric_limits<size_t>::max() - l2_bw_double) {
+          if (!checked_add(total_memory_bytes, l2_bw_double, total_memory_bytes)) {
             std::cerr << Messages::error_prefix() << Messages::error_total_memory_overflow() << std::endl;
             return EXIT_FAILURE;
           }
-          total_memory_bytes += l2_bw_double;  // l2_bw_src, l2_bw_dst
         }
       }
     }
   }
 
-  // Validate total memory requirement against availability limit.
-  // This check is necessary because per-buffer limit calculation in config_validator.cpp
-  // accounts for main buffers only (mode-aware: 1/2/3 buffers) and does not include
-  // cache buffers (L1, L2, custom) and their bandwidth counterparts.
-  // This ensures the combined memory usage of all buffers stays within the total limit.
-  if (config.max_total_allowed_mb > 0) {
-    // Error: Total memory requirement exceeds system limit
-    unsigned long total_memory_mb = static_cast<unsigned long>(total_memory_bytes / Constants::BYTES_PER_MB);
-    if (total_memory_mb > config.max_total_allowed_mb) {
-      std::cerr << Messages::error_prefix() << Messages::error_total_memory_exceeds_limit(total_memory_mb, config.max_total_allowed_mb) << std::endl;
-      return EXIT_FAILURE;  // Return code: resource limit exceeded
+  return validate_memory_limit(config, total_memory_bytes);
+}
+
+/**
+ * @brief Calculates the peak concurrent memory footprint for phased benchmark execution.
+ *
+ * Unlike the legacy "allocate everything up-front" model, the benchmark now allocates
+ * buffers per execution phase (main bandwidth, cache bandwidth, cache latency, main latency).
+ * This helper computes the highest simultaneous byte requirement across those phases.
+ *
+ * Peak candidates considered:
+ * - Main bandwidth phase: src + dst (2 * main buffer)
+ * - Main latency phase: lat buffer (1 * main buffer)
+ * - Cache bandwidth phase:
+ *   - Custom cache mode: custom src + custom dst (2 * custom buffer)
+ *   - Auto cache mode: L1 pair + L2 pair (2 * L1 + 2 * L2)
+ * - Cache latency phase:
+ *   - Custom cache mode: custom latency buffer (1 * custom buffer)
+ *   - Auto cache mode: L1 latency + L2 latency (L1 + L2)
+ *
+ * The function keeps full overflow protection and validates the resulting peak value
+ * against config.max_total_allowed_mb.
+ */
+int calculate_peak_allocation_bytes_internal(const BenchmarkConfig& config, size_t& peak_memory_bytes) {
+  peak_memory_bytes = 0;
+
+  if (validate_main_buffer_size_for_bandwidth(config) != EXIT_SUCCESS) {
+    return EXIT_FAILURE;
+  }
+
+  auto update_peak = [&peak_memory_bytes](size_t candidate) {
+    if (candidate > peak_memory_bytes) {
+      peak_memory_bytes = candidate;
+    }
+  };
+
+  if (!config.only_latency && config.buffer_size > 0) {
+    size_t main_bandwidth_bytes = 0;
+    if (!checked_mul_by_two(config.buffer_size, main_bandwidth_bytes)) {
+      std::cerr << Messages::error_prefix() << Messages::error_buffer_size_overflow_calculation() << std::endl;
+      return EXIT_FAILURE;
+    }
+    update_peak(main_bandwidth_bytes);
+  }
+
+  if (!config.only_bandwidth && !config.run_patterns && config.buffer_size > 0) {
+    update_peak(config.buffer_size);
+  }
+
+  if (!config.run_patterns) {
+    if (config.use_custom_cache_size) {
+      if (config.custom_buffer_size > 0) {
+        if (!config.only_latency) {
+          size_t custom_bandwidth_bytes = 0;
+          if (!checked_mul_by_two(config.custom_buffer_size, custom_bandwidth_bytes)) {
+            std::cerr << Messages::error_prefix() << Messages::error_buffer_size_overflow_calculation() << std::endl;
+            return EXIT_FAILURE;
+          }
+          update_peak(custom_bandwidth_bytes);
+        }
+
+        if (!config.only_bandwidth) {
+          update_peak(config.custom_buffer_size);
+        }
+      }
+    } else {
+      if (!config.only_latency) {
+        size_t cache_bandwidth_peak = 0;
+        if (config.l1_buffer_size > 0) {
+          size_t l1_bandwidth_bytes = 0;
+          if (!checked_mul_by_two(config.l1_buffer_size, l1_bandwidth_bytes)) {
+            std::cerr << Messages::error_prefix() << Messages::error_buffer_size_overflow_calculation() << std::endl;
+            return EXIT_FAILURE;
+          }
+          if (!checked_add(cache_bandwidth_peak, l1_bandwidth_bytes, cache_bandwidth_peak)) {
+            std::cerr << Messages::error_prefix() << Messages::error_total_memory_overflow() << std::endl;
+            return EXIT_FAILURE;
+          }
+        }
+
+        if (config.l2_buffer_size > 0) {
+          size_t l2_bandwidth_bytes = 0;
+          if (!checked_mul_by_two(config.l2_buffer_size, l2_bandwidth_bytes)) {
+            std::cerr << Messages::error_prefix() << Messages::error_buffer_size_overflow_calculation() << std::endl;
+            return EXIT_FAILURE;
+          }
+          if (!checked_add(cache_bandwidth_peak, l2_bandwidth_bytes, cache_bandwidth_peak)) {
+            std::cerr << Messages::error_prefix() << Messages::error_total_memory_overflow() << std::endl;
+            return EXIT_FAILURE;
+          }
+        }
+
+        update_peak(cache_bandwidth_peak);
+      }
+
+      if (!config.only_bandwidth) {
+        size_t cache_latency_peak = 0;
+        if (!checked_add(cache_latency_peak, config.l1_buffer_size, cache_latency_peak)) {
+          std::cerr << Messages::error_prefix() << Messages::error_total_memory_overflow() << std::endl;
+          return EXIT_FAILURE;
+        }
+        if (!checked_add(cache_latency_peak, config.l2_buffer_size, cache_latency_peak)) {
+          std::cerr << Messages::error_prefix() << Messages::error_total_memory_overflow() << std::endl;
+          return EXIT_FAILURE;
+        }
+
+        update_peak(cache_latency_peak);
+      }
     }
   }
 
-  return EXIT_SUCCESS;
+  return validate_memory_limit(config, peak_memory_bytes);
+}
+
+}  // namespace
+
+/**
+ * @brief Returns peak concurrent allocation bytes for phased benchmark execution.
+ *
+ * Public callers use this for user-facing reporting and global memory-limit
+ * validation before execution begins.
+ */
+int calculate_total_allocation_bytes(const BenchmarkConfig& config, size_t& total_memory_bytes) {
+  return calculate_peak_allocation_bytes_internal(config, total_memory_bytes);
 }
 
 /**
@@ -224,7 +401,7 @@ int calculate_total_allocation_bytes(const BenchmarkConfig& config, size_t& tota
  */
 int allocate_all_buffers(const BenchmarkConfig& config, BenchmarkBuffers& buffers) {
   size_t total_memory = 0;
-  if (calculate_total_allocation_bytes(config, total_memory) != EXIT_SUCCESS) {
+  if (calculate_full_allocation_bytes_internal(config, total_memory) != EXIT_SUCCESS) {
     return EXIT_FAILURE;
   }
   (void)total_memory;

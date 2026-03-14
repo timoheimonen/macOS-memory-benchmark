@@ -33,6 +33,7 @@
 #include "core/config/config.h"
 #include "core/config/constants.h"
 #include "core/config/version.h"
+#include "core/memory/memory_utils.h"
 #include "output/json/json_output.h"
 
 namespace {
@@ -76,6 +77,10 @@ int save_tlb_analysis_to_json(const TlbAnalysisJsonContext& context) {
     return EXIT_SUCCESS;
   }
 
+  const LatencyChainMode effective_chain_mode =
+      resolve_latency_chain_mode(context.config.latency_chain_mode,
+                                 context.page_walk_baseline_locality_bytes);
+
   nlohmann::ordered_json json_output;
   json_output[JsonKeys::CONFIGURATION] = {
       {JsonKeys::MODE, Constants::TLB_ANALYSIS_JSON_MODE_NAME},
@@ -85,6 +90,7 @@ int save_tlb_analysis_to_json(const TlbAnalysisJsonContext& context) {
       {JsonKeys::PAGE_SIZE_BYTES, context.page_size_bytes},
       {JsonKeys::L1_CACHE_SIZE_BYTES, context.l1_cache_size_bytes},
       {JsonKeys::LATENCY_STRIDE_BYTES, context.stride_bytes},
+      {JsonKeys::LATENCY_CHAIN_MODE, latency_chain_mode_to_string(effective_chain_mode)},
       {JsonKeys::LATENCY_SAMPLE_COUNT, static_cast<int>(context.loops_per_point)},
       {"accesses_per_loop", context.accesses_per_loop},
       {"tlb_guard_bytes", context.tlb_guard_bytes},

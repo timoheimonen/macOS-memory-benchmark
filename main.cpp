@@ -19,8 +19,8 @@
  * @brief Main entry point for the memory benchmark application
  *
  * This file contains the main program logic that orchestrates the execution
- * of memory benchmarks. It handles configuration parsing, buffer allocation,
- * benchmark execution, and results output in both console and JSON formats.
+ * of memory benchmarks. It handles configuration parsing, mode-specific buffer
+ * preparation, benchmark execution, and results output in both console and JSON formats.
  *
  * The program supports two primary benchmark modes:
  * - Standard benchmarks: Memory bandwidth and latency tests for different cache levels
@@ -57,7 +57,7 @@
  * This function orchestrates the complete benchmark workflow:
  * 1. Parses and validates command-line arguments
  * 2. Configures system settings (QoS, cache parameters)
- * 3. Allocates and initializes benchmark buffers
+ * 3. Prepares benchmark buffers using mode-appropriate strategy
  * 4. Executes requested benchmarks (standard or pattern-based)
  * 5. Outputs results to console and optionally to JSON file
  *
@@ -75,6 +75,7 @@
  *
  * @note The main thread is set to QOS_CLASS_USER_INTERACTIVE for optimal latency test performance
  * @note All allocated buffers are automatically freed when going out of scope
+ * @note Standard mode uses per-phase allocation; pattern mode uses pre-allocated buffers
  *
  * @see parse_arguments() for command-line argument details
  * @see run_all_benchmarks() for standard benchmark execution
@@ -121,15 +122,17 @@ int main(int argc, char *argv[]) {
   calculate_buffer_sizes(config);
   calculate_access_counts(config);
 
-  size_t total_allocation_bytes = 0;
-  if (calculate_total_allocation_bytes(config, total_allocation_bytes) != EXIT_SUCCESS) {
+  size_t peak_allocation_bytes = 0;
+  if (calculate_total_allocation_bytes(config, peak_allocation_bytes) != EXIT_SUCCESS) {
     return EXIT_FAILURE;
   }
 
   // --- Print Config ---
-  print_configuration(config.buffer_size, config.buffer_size_mb, total_allocation_bytes,
+  print_configuration(config.buffer_size, config.buffer_size_mb, peak_allocation_bytes,
                       config.iterations, config.loop_count,
                       config.use_non_cacheable, config.latency_stride_bytes,
+                      latency_chain_mode_to_string(resolve_latency_chain_mode(
+                          config.latency_chain_mode, config.latency_tlb_locality_bytes)),
                       config.latency_tlb_locality_bytes,
                       config.cpu_name, config.perf_cores, config.eff_cores, config.num_threads,
                       config.only_bandwidth, config.only_latency, config.run_patterns);
@@ -142,18 +145,18 @@ int main(int argc, char *argv[]) {
     std::cerr << Messages::warning_prefix() << Messages::warning_qos_failed(qos_ret) << std::endl;
   }
 
-  // --- Allocate and Initialize Buffers ---
-  BenchmarkBuffers buffers;
-  if (allocate_all_buffers(config, buffers) != EXIT_SUCCESS) {
-    return EXIT_FAILURE;
-  }
-  
-  if (initialize_all_buffers(buffers, config) != EXIT_SUCCESS) {
-    return EXIT_FAILURE;
-  }
-
   // --- Run Benchmarks ---
+  BenchmarkBuffers buffers;
   if (config.run_patterns) {
+    // Pattern mode uses pre-allocated src/dst buffers across pattern tests.
+    if (allocate_all_buffers(config, buffers) != EXIT_SUCCESS) {
+      return EXIT_FAILURE;
+    }
+
+    if (initialize_all_buffers(buffers, config) != EXIT_SUCCESS) {
+      return EXIT_FAILURE;
+    }
+
     // Run pattern benchmarks only
     PatternStatistics pattern_stats;
     if (run_all_pattern_benchmarks(buffers, config, pattern_stats) != EXIT_SUCCESS) {
