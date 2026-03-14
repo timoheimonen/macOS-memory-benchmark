@@ -89,6 +89,10 @@ std::string config_latency_stride(size_t stride_bytes) {
   return oss.str();
 }
 
+std::string config_latency_chain_mode(const std::string& mode_name) {
+  return "Latency Chain Mode: " + mode_name;
+}
+
 std::string config_latency_tlb_locality(size_t locality_bytes) {
   std::ostringstream oss;
   oss << "Latency TLB Locality: ";

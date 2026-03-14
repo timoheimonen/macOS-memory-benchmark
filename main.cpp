@@ -131,6 +131,8 @@ int main(int argc, char *argv[]) {
   print_configuration(config.buffer_size, config.buffer_size_mb, peak_allocation_bytes,
                       config.iterations, config.loop_count,
                       config.use_non_cacheable, config.latency_stride_bytes,
+                      latency_chain_mode_to_string(resolve_latency_chain_mode(
+                          config.latency_chain_mode, config.latency_tlb_locality_bytes)),
                       config.latency_tlb_locality_bytes,
                       config.cpu_name, config.perf_cores, config.eff_cores, config.num_threads,
                       config.only_bandwidth, config.only_latency, config.run_patterns);

@@ -35,7 +35,41 @@
 
 #include <cstddef>  // size_t
 #include <cstdint>  // uintptr_t
+#include <string>
 #include "core/config/constants.h"
+
+/**
+ * @enum LatencyChainMode
+ * @brief Pointer-chain construction policy for latency benchmarks
+ */
+enum class LatencyChainMode {
+  Auto = 0,
+  GlobalRandom,
+  RandomInBoxRandomBox,
+  SameRandomInBoxIncreasingBox,
+  DiffRandomInBoxIncreasingBox,
+};
+
+/**
+ * @brief Convert latency-chain mode enum to canonical CLI/JSON string.
+ */
+const char* latency_chain_mode_to_string(LatencyChainMode mode);
+
+/**
+ * @brief Parse latency-chain mode string.
+ * @return true when parsing succeeds, false otherwise.
+ */
+bool latency_chain_mode_from_string(const std::string& mode_value, LatencyChainMode& out_mode);
+
+/**
+ * @brief Resolve effective chain mode from user mode and locality setting.
+ */
+LatencyChainMode resolve_latency_chain_mode(LatencyChainMode mode, size_t tlb_locality_bytes);
+
+/**
+ * @brief Whether a chain mode requires a non-zero locality window.
+ */
+bool latency_chain_mode_uses_locality(LatencyChainMode mode);
 
 /**
  * @struct LatencyChainDiagnostics
@@ -101,7 +135,8 @@ inline size_t alignment_offset_to_cache_line(void* ptr) {
  */
 int setup_latency_chain(void* buffer, size_t buffer_size, size_t stride,
                         size_t tlb_locality_bytes = 0,
-                        LatencyChainDiagnostics* diagnostics = nullptr);
+                        LatencyChainDiagnostics* diagnostics = nullptr,
+                        LatencyChainMode mode = LatencyChainMode::Auto);
 
 /**
  * @brief Initialize data buffers with test data

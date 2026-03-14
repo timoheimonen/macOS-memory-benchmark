@@ -7,10 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.53.8] - 2026-XX-XX
 
+### Added
+  - **Configurable latency chain-construction policies (`-latency-chain-mode`)**: Added selectable pointer-chain modes for latency paths and standalone TLB analysis: `auto` (default), `global-random`, `random-box`, `same-random-in-box`, and `diff-random-in-box`.
+  - **Latency chain mode surfaced in outputs**: Configuration output now prints the effective latency chain mode, and benchmark JSON now includes `configuration.latency_chain_mode`.
+
 ### Changed
   - **Standard benchmark memory lifecycle moved to phase-local allocation**: Standard mode now allocates and initializes buffers immediately before each benchmark phase (main bandwidth, cache bandwidth, cache latency, main latency) and releases them after the phase instead of keeping all mode buffers resident for the full run.
   - **Memory estimate now reports peak concurrent footprint**: Configuration output/help text now describes the memory requirement as peak concurrent allocation for the active mode/phase model.
   - **Validation defaults aligned with phased execution**: Main-buffer cap logic now validates against phased peak needs (for example, 2x main buffer during copy bandwidth, 1x in latency-only main path).
+  - **Latency-chain validation and `-analyze-tlb` option contract extended**: Box-based chain modes now require non-zero `-latency-tlb-locality-kb`, and standalone TLB mode now allows optional `-latency-chain-mode <mode>` in addition to `-output` and `-latency-stride-bytes`.
+  - **Documentation updated for chain modes**: Updated `README.md` and `MANUAL.md` to document latency-chain modes, examples, and troubleshooting guidance.
 
 ### Fixed
   - **Over-reservation for standard benchmark runs**: Large `-buffersize` runs no longer reserve all standard-mode buffers up-front when only one phase is active at a time.

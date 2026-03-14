@@ -223,7 +223,8 @@ int prepare_cache_latency_buffers(BenchmarkConfig& config, BenchmarkBuffers& buf
                                config.latency_stride_bytes,
                                config.latency_tlb_locality_bytes,
                                collect_chain_diagnostics ? &config.custom_latency_chain_diagnostics
-                                                         : nullptr);
+                                                          : nullptr,
+                               config.latency_chain_mode);
   }
 
   if (config.l1_buffer_size > 0) {
@@ -237,7 +238,8 @@ int prepare_cache_latency_buffers(BenchmarkConfig& config, BenchmarkBuffers& buf
                             config.latency_stride_bytes,
                             config.latency_tlb_locality_bytes,
                             collect_chain_diagnostics ? &config.l1_latency_chain_diagnostics
-                                                      : nullptr) != EXIT_SUCCESS) {
+                                                      : nullptr,
+                            config.latency_chain_mode) != EXIT_SUCCESS) {
       return EXIT_FAILURE;
     }
   }
@@ -253,7 +255,8 @@ int prepare_cache_latency_buffers(BenchmarkConfig& config, BenchmarkBuffers& buf
                             config.latency_stride_bytes,
                             config.latency_tlb_locality_bytes,
                             collect_chain_diagnostics ? &config.l2_latency_chain_diagnostics
-                                                      : nullptr) != EXIT_SUCCESS) {
+                                                      : nullptr,
+                            config.latency_chain_mode) != EXIT_SUCCESS) {
       return EXIT_FAILURE;
     }
   }
@@ -282,7 +285,8 @@ int prepare_main_memory_latency_buffer(BenchmarkConfig& config, BenchmarkBuffers
                              config.buffer_size,
                              config.latency_stride_bytes,
                              config.latency_tlb_locality_bytes,
-                             collect_chain_diagnostics ? &config.main_latency_chain_diagnostics : nullptr);
+                             collect_chain_diagnostics ? &config.main_latency_chain_diagnostics : nullptr,
+                             config.latency_chain_mode);
 }
 
 }  // namespace
@@ -530,7 +534,8 @@ void run_main_memory_latency_test(const BenchmarkBuffers& buffers, const Benchma
                             config.buffer_size,
                             config.latency_stride_bytes,
                             0,
-                            nullptr) == EXIT_SUCCESS) {
+                            nullptr,
+                            LatencyChainMode::GlobalRandom) == EXIT_SUCCESS) {
       show_progress();
       warmup_latency(buffers.lat_buffer(), config.buffer_size);
       const double miss_total_lat_time_ns =
@@ -548,7 +553,8 @@ void run_main_memory_latency_test(const BenchmarkBuffers& buffers, const Benchma
                               config.buffer_size,
                               config.latency_stride_bytes,
                               config.latency_tlb_locality_bytes,
-                              nullptr);
+                              nullptr,
+                              config.latency_chain_mode);
   }
 }
 

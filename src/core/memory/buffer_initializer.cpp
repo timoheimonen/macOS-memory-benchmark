@@ -114,8 +114,9 @@ int initialize_all_buffers(BenchmarkBuffers& buffers, BenchmarkConfig& config) {
     }
     // Setup main memory latency chain
     if (setup_latency_chain(buffers.lat_buffer(), config.buffer_size, config.latency_stride_bytes,
-                            config.latency_tlb_locality_bytes,
-                            collect_chain_diagnostics ? &config.main_latency_chain_diagnostics : nullptr) != EXIT_SUCCESS) {
+                             config.latency_tlb_locality_bytes,
+                             collect_chain_diagnostics ? &config.main_latency_chain_diagnostics : nullptr,
+                             config.latency_chain_mode) != EXIT_SUCCESS) {
       return EXIT_FAILURE;
     }
   }
@@ -130,7 +131,8 @@ int initialize_all_buffers(BenchmarkBuffers& buffers, BenchmarkConfig& config) {
         }
         if (setup_latency_chain(buffers.custom_buffer(), config.custom_buffer_size, config.latency_stride_bytes,
                                 config.latency_tlb_locality_bytes,
-                                collect_chain_diagnostics ? &config.custom_latency_chain_diagnostics : nullptr) != EXIT_SUCCESS) {
+                                collect_chain_diagnostics ? &config.custom_latency_chain_diagnostics : nullptr,
+                                config.latency_chain_mode) != EXIT_SUCCESS) {
           return EXIT_FAILURE;
         }
       }
@@ -142,7 +144,8 @@ int initialize_all_buffers(BenchmarkBuffers& buffers, BenchmarkConfig& config) {
         }
         if (setup_latency_chain(buffers.l1_buffer(), config.l1_buffer_size, config.latency_stride_bytes,
                                 config.latency_tlb_locality_bytes,
-                                collect_chain_diagnostics ? &config.l1_latency_chain_diagnostics : nullptr) != EXIT_SUCCESS) {
+                                collect_chain_diagnostics ? &config.l1_latency_chain_diagnostics : nullptr,
+                                config.latency_chain_mode) != EXIT_SUCCESS) {
           return EXIT_FAILURE;
         }
       }
@@ -153,7 +156,8 @@ int initialize_all_buffers(BenchmarkBuffers& buffers, BenchmarkConfig& config) {
         }
         if (setup_latency_chain(buffers.l2_buffer(), config.l2_buffer_size, config.latency_stride_bytes,
                                 config.latency_tlb_locality_bytes,
-                                collect_chain_diagnostics ? &config.l2_latency_chain_diagnostics : nullptr) != EXIT_SUCCESS) {
+                                collect_chain_diagnostics ? &config.l2_latency_chain_diagnostics : nullptr,
+                                config.latency_chain_mode) != EXIT_SUCCESS) {
           return EXIT_FAILURE;
         }
       }

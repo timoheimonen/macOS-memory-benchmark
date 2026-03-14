@@ -113,6 +113,9 @@ nlohmann::json build_config_json(const BenchmarkConfig& config, const char* mode
   config_json[JsonKeys::LOOP_COUNT] = config.loop_count;
   config_json[JsonKeys::LATENCY_SAMPLE_COUNT] = config.latency_sample_count;
   config_json[JsonKeys::LATENCY_STRIDE_BYTES] = config.latency_stride_bytes;
+  config_json[JsonKeys::LATENCY_CHAIN_MODE] =
+      latency_chain_mode_to_string(resolve_latency_chain_mode(config.latency_chain_mode,
+                                                              config.latency_tlb_locality_bytes));
   config_json[JsonKeys::USE_LATENCY_TLB_LOCALITY] = (config.latency_tlb_locality_bytes > 0);
   config_json[JsonKeys::LATENCY_TLB_LOCALITY_BYTES] = config.latency_tlb_locality_bytes;
   config_json[JsonKeys::LATENCY_TLB_LOCALITY_KB] = config.latency_tlb_locality_bytes / 1024;
