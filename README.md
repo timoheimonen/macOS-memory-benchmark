@@ -7,11 +7,14 @@ License: GPL-3.0 license
   
 **Low-level tool** to measure memory read/write/copy bandwidth, cache/main memory latency, and access pattern performance on macOS Apple Silicon (ARM64).
 
-![Mac Mini M4 Cache Latency from multiple JSON-files](pictures/MacMiniM4_cache_latency_with_STRIDE_TLB.png)  
-Mac Mini M4 Cache Latency by example-script provided. Using different size TLB locality and Stride size. 
+![Macbook Air M5 Cache Latency from multiple JSON-files](pictures/MacBookAirM5_latency_vs_cache-stride-tlb.png)  
+Macbook Air M5 Cache Latency by example-script provided. Using different size TLB locality and Stride size. 
 
-![Mac Mini M4 TLB Analysis with 64B Stride](pictures/MacMiniM4_memory_hierarchy_v0_53_5.png)  
-Mac Mini M4 memory latency from [JSON file](results/old/macminim4_count5_latency.json)
+![Macbook Air M5 TLB Analysis with 64B Stride](pictures/MacBookAirM5_latency_memory_hierarchy.png)  
+Macbook Air M5 memory latency from [JSON file](results/0.53.8/MacbookAirM5_benchmark.json)  
+DRAM TLB-hit ~9,8ns is really nice!  
+More Apple Silicon M5 results in [/results/0.53.8/ -folder](results/0.53.8/)
+
 ## Description
 
 `memory_benchmark` measures memory behavior on macOS Apple Silicon with an implementation focused on practical low-level analysis:
