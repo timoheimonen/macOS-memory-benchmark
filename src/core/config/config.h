@@ -56,6 +56,7 @@ struct BenchmarkConfig {
   long long custom_cache_size_kb_ll = -1;  ///< User-requested custom cache size in KB (-1 = none)
   int latency_sample_count = Constants::DEFAULT_LATENCY_SAMPLE_COUNT;  ///< Number of latency samples to collect per test
   size_t latency_stride_bytes = Constants::LATENCY_STRIDE_BYTES;  ///< Stride used for latency pointer chains (bytes)
+  LatencyChainMode latency_chain_mode = LatencyChainMode::Auto;  ///< Pointer-chain construction policy (auto preserves default behavior)
   size_t latency_tlb_locality_bytes = 16 * Constants::BYTES_PER_KB;  ///< TLB-locality window for latency chains (default 16 KB, 0 = disabled)
   
   // Calculated sizes
@@ -95,6 +96,7 @@ struct BenchmarkConfig {
   bool user_specified_iterations = false;      ///< Whether user explicitly set -iterations
   bool user_specified_latency_samples = false; ///< Whether user explicitly set -latency-samples
   bool user_specified_latency_stride = false;  ///< Whether user explicitly set -latency-stride-bytes
+  bool user_specified_latency_chain_mode = false; ///< Whether user explicitly set -latency-chain-mode
   bool user_specified_latency_tlb_locality = false; ///< Whether user explicitly set -latency-tlb-locality-kb
 
   // Latency-chain diagnostics (populated during chain setup)

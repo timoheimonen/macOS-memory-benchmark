@@ -134,6 +134,25 @@ TEST(ConfigTest, ParseLatencyStrideInvalidZero) {
   EXPECT_EQ(result, EXIT_FAILURE);
 }
 
+TEST(ConfigTest, ParseLatencyChainModeValid) {
+  BenchmarkConfig config;
+  const char* argv[] = {"program", "-latency-chain-mode", "same-random-in-box"};
+  int argc = 3;
+
+  int result = parse_arguments(argc, const_cast<char**>(argv), config);
+  EXPECT_EQ(result, EXIT_SUCCESS);
+  EXPECT_EQ(config.latency_chain_mode, LatencyChainMode::SameRandomInBoxIncreasingBox);
+}
+
+TEST(ConfigTest, ParseLatencyChainModeInvalid) {
+  BenchmarkConfig config;
+  const char* argv[] = {"program", "-latency-chain-mode", "unknown-mode"};
+  int argc = 3;
+
+  int result = parse_arguments(argc, const_cast<char**>(argv), config);
+  EXPECT_EQ(result, EXIT_FAILURE);
+}
+
 TEST(ConfigTest, ParseLatencyTlbLocalityZeroDisables) {
   BenchmarkConfig config;
   const char* argv[] = {"program", "-latency-tlb-locality-kb", "0"};
@@ -216,6 +235,17 @@ TEST(ConfigTest, ParseAnalyzeTlbWithLatencyStrideAndOutputSucceeds) {
   EXPECT_TRUE(config.analyze_tlb);
   EXPECT_EQ(config.latency_stride_bytes, 64u);
   EXPECT_EQ(config.output_file, "tlb.json");
+}
+
+TEST(ConfigTest, ParseAnalyzeTlbWithLatencyChainModeSucceeds) {
+  BenchmarkConfig config;
+  const char* argv[] = {"program", "-analyze-tlb", "-latency-chain-mode", "random-box"};
+  int argc = 4;
+
+  int result = parse_arguments(argc, const_cast<char**>(argv), config);
+  EXPECT_EQ(result, EXIT_SUCCESS);
+  EXPECT_TRUE(config.analyze_tlb);
+  EXPECT_EQ(config.latency_chain_mode, LatencyChainMode::RandomInBoxRandomBox);
 }
 
 TEST(ConfigTest, ParseAnalyzeTlbWithInvalidLatencyStrideFails) {
@@ -480,6 +510,24 @@ TEST(ConfigTest, ValidateConfigAllowsLatencyTlbLocalityPageMultiple) {
   BenchmarkConfig config;
   const size_t page_size = static_cast<size_t>(getpagesize());
   config.latency_tlb_locality_bytes = page_size * 2;
+
+  int result = validate_config(config);
+  EXPECT_EQ(result, EXIT_SUCCESS);
+}
+
+TEST(ConfigTest, ValidateConfigRejectsLatencyChainModeWithoutLocality) {
+  BenchmarkConfig config;
+  config.latency_chain_mode = LatencyChainMode::SameRandomInBoxIncreasingBox;
+  config.latency_tlb_locality_bytes = 0;
+
+  int result = validate_config(config);
+  EXPECT_EQ(result, EXIT_FAILURE);
+}
+
+TEST(ConfigTest, ValidateConfigAllowsGlobalLatencyChainModeWithoutLocality) {
+  BenchmarkConfig config;
+  config.latency_chain_mode = LatencyChainMode::GlobalRandom;
+  config.latency_tlb_locality_bytes = 0;
 
   int result = validate_config(config);
   EXPECT_EQ(result, EXIT_SUCCESS);

@@ -118,6 +118,14 @@ std::string error_latency_tlb_locality_invalid(long long value, long long max_va
   return oss.str();
 }
 
+std::string error_latency_chain_mode_invalid() {
+  return "latency-chain-mode invalid (must be one of: auto, global-random, random-box, same-random-in-box, diff-random-in-box)";
+}
+
+std::string error_latency_chain_mode_requires_locality(const std::string& mode_name) {
+  return "latency-chain-mode '" + mode_name + "' requires -latency-tlb-locality-kb > 0";
+}
+
 std::string error_latency_tlb_locality_page_multiple(size_t value_kb, size_t page_size_kb) {
   std::ostringstream oss;
   oss << "latency-tlb-locality-kb must be a multiple of system page size ("
@@ -146,7 +154,7 @@ std::string error_threads_invalid(long long value, long long min_val, long long 
 
 const std::string& error_analyze_tlb_must_be_used_alone() {
   static const std::string msg =
-      "-analyze-tlb allows only optional -output <file> and -latency-stride-bytes <bytes> (no other options allowed)";
+      "-analyze-tlb allows only optional -output <file>, -latency-stride-bytes <bytes>, and -latency-chain-mode <mode> (no other options allowed)";
   return msg;
 }
 

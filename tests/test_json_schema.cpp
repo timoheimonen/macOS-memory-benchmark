@@ -72,6 +72,7 @@ TEST(JsonSchemaTest, BenchmarkExporterIncludesBenchmarkModeAndOmitsEmptySections
 
   const nlohmann::json output_json = read_json_file(config.output_file);
   EXPECT_EQ(output_json[JsonKeys::CONFIGURATION][JsonKeys::MODE], Constants::BENCHMARK_JSON_MODE_NAME);
+  EXPECT_TRUE(output_json[JsonKeys::CONFIGURATION].contains(JsonKeys::LATENCY_CHAIN_MODE));
   EXPECT_FALSE(output_json.contains(JsonKeys::MAIN_MEMORY));
   EXPECT_FALSE(output_json.contains(JsonKeys::CACHE));
 
@@ -139,6 +140,8 @@ TEST(JsonSchemaTest, TlbAnalysisExporterIncludesModeAndCoreCounts) {
   EXPECT_EQ(output_json[JsonKeys::CONFIGURATION][JsonKeys::MODE], Constants::TLB_ANALYSIS_JSON_MODE_NAME);
   EXPECT_EQ(output_json[JsonKeys::CONFIGURATION][JsonKeys::PERFORMANCE_CORES], 4);
   EXPECT_EQ(output_json[JsonKeys::CONFIGURATION][JsonKeys::EFFICIENCY_CORES], 6);
+  EXPECT_TRUE(output_json[JsonKeys::CONFIGURATION].contains(JsonKeys::LATENCY_CHAIN_MODE));
+  EXPECT_EQ(output_json[JsonKeys::CONFIGURATION][JsonKeys::LATENCY_CHAIN_MODE], "random-box");
 
   std::filesystem::remove(config.output_file);
 }

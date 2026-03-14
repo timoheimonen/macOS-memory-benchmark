@@ -87,6 +87,18 @@ int validate_config(BenchmarkConfig& config) {
     return EXIT_FAILURE;
   }
 
+  const LatencyChainMode effective_chain_mode =
+      resolve_latency_chain_mode(config.latency_chain_mode, config.latency_tlb_locality_bytes);
+  const bool chain_mode_uses_locality = latency_chain_mode_uses_locality(effective_chain_mode);
+
+  if (chain_mode_uses_locality && config.latency_tlb_locality_bytes == 0) {
+    std::cerr << Messages::error_prefix()
+              << Messages::error_latency_chain_mode_requires_locality(
+                     latency_chain_mode_to_string(effective_chain_mode))
+              << std::endl;
+    return EXIT_FAILURE;
+  }
+
   // Error: Validate mutually exclusive flags
   if (config.only_bandwidth && config.only_latency) {
     std::cerr << Messages::error_prefix() << Messages::error_incompatible_flags() << std::endl;
@@ -178,7 +190,9 @@ int validate_config(BenchmarkConfig& config) {
     return EXIT_FAILURE;  // Return code: validation error
   }
 
-  if (config.latency_tlb_locality_bytes > 0 && (config.latency_tlb_locality_bytes % page_size) != 0) {
+  if (chain_mode_uses_locality &&
+      config.latency_tlb_locality_bytes > 0 &&
+      (config.latency_tlb_locality_bytes % page_size) != 0) {
     const size_t locality_kb = config.latency_tlb_locality_bytes / Constants::BYTES_PER_KB;
     const size_t page_kb = page_size / Constants::BYTES_PER_KB;
     std::cerr << Messages::error_prefix()
@@ -187,7 +201,8 @@ int validate_config(BenchmarkConfig& config) {
     return EXIT_FAILURE;  // Return code: validation error
   }
 
-  if (config.latency_tlb_locality_bytes > 0 &&
+  if (chain_mode_uses_locality &&
+      config.latency_tlb_locality_bytes > 0 &&
       (config.latency_tlb_locality_bytes / config.latency_stride_bytes) < 2) {
     std::cerr << Messages::error_prefix()
               << Messages::error_latency_tlb_locality_too_small_for_stride(

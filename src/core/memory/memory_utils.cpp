@@ -26,43 +26,173 @@
 #include "core/memory/memory_utils.h"
 #include "output/console/messages.h"
 #include <vector>
+#include <string>
 #include <numeric>   // Needed for std::iota
 #include <random>    // Needed for std::random_device, std::mt19937_64
 #include <algorithm> // Needed for std::shuffle
 #include <cstring>   // Needed for memset
+#include <cctype>
 #include <iostream>  // Needed for std::cout, std::cerr
 #include <cstdlib>   // Needed for EXIT_SUCCESS, EXIT_FAILURE
 #include <unistd.h>  // getpagesize
 
 namespace {
 
-void shuffle_indices_with_tlb_locality(std::vector<size_t>& indices, size_t locality_pointer_span,
-                                       std::mt19937_64& rng) {
-    const size_t num_pointers = indices.size();
-    const size_t locality_count = (num_pointers + locality_pointer_span - 1) / locality_pointer_span;
+std::string normalize_mode_token(const std::string& value) {
+  std::string normalized;
+  normalized.reserve(value.size());
+  for (char c : value) {
+    if (c == '-' || c == ' ') {
+      normalized.push_back('_');
+      continue;
+    }
+    normalized.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(c))));
+  }
+  return normalized;
+}
 
-    std::vector<size_t> locality_order(locality_count);
-    std::iota(locality_order.begin(), locality_order.end(), 0);
+void append_same_random_in_box(std::vector<size_t>& out_indices,
+                               size_t locality_id,
+                               size_t locality_pointer_span,
+                               size_t num_pointers,
+                               const std::vector<size_t>& in_box_permutation) {
+  const size_t start = locality_id * locality_pointer_span;
+  const size_t end = std::min(start + locality_pointer_span, num_pointers);
+  for (size_t offset : in_box_permutation) {
+    const size_t index = start + offset;
+    if (index < end) {
+      out_indices.push_back(index);
+    }
+  }
+}
+
+void append_diff_random_in_box(std::vector<size_t>& out_indices,
+                               size_t locality_id,
+                               size_t locality_pointer_span,
+                               size_t num_pointers,
+                               std::mt19937_64& rng) {
+  const size_t start = locality_id * locality_pointer_span;
+  const size_t end = std::min(start + locality_pointer_span, num_pointers);
+  std::vector<size_t> locality_indices(end - start);
+  std::iota(locality_indices.begin(), locality_indices.end(), start);
+  std::shuffle(locality_indices.begin(), locality_indices.end(), rng);
+  out_indices.insert(out_indices.end(), locality_indices.begin(), locality_indices.end());
+}
+
+void reorder_indices_with_mode(std::vector<size_t>& indices,
+                               size_t locality_pointer_span,
+                               LatencyChainMode mode,
+                               std::mt19937_64& rng) {
+  const size_t num_pointers = indices.size();
+  const size_t locality_count = (num_pointers + locality_pointer_span - 1) / locality_pointer_span;
+
+  std::vector<size_t> locality_order(locality_count);
+  std::iota(locality_order.begin(), locality_order.end(), 0);
+
+  if (mode == LatencyChainMode::RandomInBoxRandomBox) {
     std::shuffle(locality_order.begin(), locality_order.end(), rng);
+  }
 
-    std::vector<size_t> reordered_indices;
-    reordered_indices.reserve(num_pointers);
+  std::vector<size_t> reordered_indices;
+  reordered_indices.reserve(num_pointers);
 
-    for (size_t locality_id : locality_order) {
-        const size_t start = locality_id * locality_pointer_span;
-        const size_t end = std::min(start + locality_pointer_span, num_pointers);
+  std::vector<size_t> shared_permutation;
+  if (mode == LatencyChainMode::SameRandomInBoxIncreasingBox) {
+    shared_permutation.resize(locality_pointer_span);
+    std::iota(shared_permutation.begin(), shared_permutation.end(), 0);
+    std::shuffle(shared_permutation.begin(), shared_permutation.end(), rng);
+  }
 
-        std::vector<size_t> locality_indices(end - start);
-        std::iota(locality_indices.begin(), locality_indices.end(), start);
-        std::shuffle(locality_indices.begin(), locality_indices.end(), rng);
-
-        reordered_indices.insert(reordered_indices.end(), locality_indices.begin(), locality_indices.end());
+  for (size_t locality_id : locality_order) {
+    if (mode == LatencyChainMode::SameRandomInBoxIncreasingBox) {
+      append_same_random_in_box(reordered_indices,
+                                locality_id,
+                                locality_pointer_span,
+                                num_pointers,
+                                shared_permutation);
+      continue;
     }
 
-    indices.swap(reordered_indices);
+    append_diff_random_in_box(reordered_indices,
+                              locality_id,
+                              locality_pointer_span,
+                              num_pointers,
+                              rng);
+  }
+
+  indices.swap(reordered_indices);
 }
 
 }  // namespace
+
+const char* latency_chain_mode_to_string(LatencyChainMode mode) {
+  switch (mode) {
+    case LatencyChainMode::Auto:
+      return "auto";
+    case LatencyChainMode::GlobalRandom:
+      return "global-random";
+    case LatencyChainMode::RandomInBoxRandomBox:
+      return "random-box";
+    case LatencyChainMode::SameRandomInBoxIncreasingBox:
+      return "same-random-in-box";
+    case LatencyChainMode::DiffRandomInBoxIncreasingBox:
+      return "diff-random-in-box";
+  }
+
+  return "auto";
+}
+
+bool latency_chain_mode_from_string(const std::string& mode_value, LatencyChainMode& out_mode) {
+  const std::string normalized = normalize_mode_token(mode_value);
+
+  if (normalized == "auto") {
+    out_mode = LatencyChainMode::Auto;
+    return true;
+  }
+  if (normalized == "global" || normalized == "global_random") {
+    out_mode = LatencyChainMode::GlobalRandom;
+    return true;
+  }
+  if (normalized == "random_box" || normalized == "random_in_box_random_box") {
+    out_mode = LatencyChainMode::RandomInBoxRandomBox;
+    return true;
+  }
+  if (normalized == "same_random_in_box" ||
+      normalized == "same_random_in_box_increasing_box") {
+    out_mode = LatencyChainMode::SameRandomInBoxIncreasingBox;
+    return true;
+  }
+  if (normalized == "diff_random_in_box" ||
+      normalized == "diff_random_in_box_increasing_box") {
+    out_mode = LatencyChainMode::DiffRandomInBoxIncreasingBox;
+    return true;
+  }
+
+  return false;
+}
+
+LatencyChainMode resolve_latency_chain_mode(LatencyChainMode mode, size_t tlb_locality_bytes) {
+  if (mode != LatencyChainMode::Auto) {
+    return mode;
+  }
+
+  return (tlb_locality_bytes == 0) ? LatencyChainMode::GlobalRandom
+                                   : LatencyChainMode::RandomInBoxRandomBox;
+}
+
+bool latency_chain_mode_uses_locality(LatencyChainMode mode) {
+  switch (mode) {
+    case LatencyChainMode::GlobalRandom:
+      return false;
+    case LatencyChainMode::Auto:
+    case LatencyChainMode::RandomInBoxRandomBox:
+    case LatencyChainMode::SameRandomInBoxIncreasingBox:
+    case LatencyChainMode::DiffRandomInBoxIncreasingBox:
+      return true;
+  }
+
+  return true;
+}
 
 /**
  * @brief Sets up a randomly shuffled pointer chain within the buffer for latency measurement.
@@ -96,7 +226,8 @@ void shuffle_indices_with_tlb_locality(std::vector<size_t>& indices, size_t loca
  */
 int setup_latency_chain(void *buffer, size_t buffer_size, size_t stride,
                         size_t tlb_locality_bytes,
-                        LatencyChainDiagnostics* diagnostics)
+                        LatencyChainDiagnostics* diagnostics,
+                        LatencyChainMode mode)
 {
     if (diagnostics != nullptr) {
         diagnostics->pointer_count = 0;
@@ -138,6 +269,16 @@ int setup_latency_chain(void *buffer, size_t buffer_size, size_t stride,
         page_seen.assign(page_count, 0);
     }
 
+    const LatencyChainMode effective_mode = resolve_latency_chain_mode(mode, tlb_locality_bytes);
+
+    if (latency_chain_mode_uses_locality(effective_mode) && tlb_locality_bytes == 0) {
+        std::cerr << Messages::error_prefix()
+                  << Messages::error_latency_chain_mode_requires_locality(
+                         latency_chain_mode_to_string(effective_mode))
+                  << std::endl;
+        return EXIT_FAILURE;
+    }
+
     // Create a vector to store the indices of pointer locations.
     std::vector<size_t> indices(num_pointers);
     // Fill indices vector with 0, 1, 2, ..., num_pointers - 1.
@@ -146,7 +287,7 @@ int setup_latency_chain(void *buffer, size_t buffer_size, size_t stride,
     // Initialize random number generator.
     std::random_device rd;
     std::mt19937_64 g(rd());
-    if (tlb_locality_bytes == 0) {
+    if (effective_mode == LatencyChainMode::GlobalRandom) {
         // Randomly shuffle the full index space.
         std::shuffle(indices.begin(), indices.end(), g);
     } else {
@@ -157,7 +298,8 @@ int setup_latency_chain(void *buffer, size_t buffer_size, size_t stride,
                       << std::endl;
             return EXIT_FAILURE;
         }
-        shuffle_indices_with_tlb_locality(indices, locality_pointer_span, g);
+
+        reorder_indices_with_mode(indices, locality_pointer_span, effective_mode, g);
     }
 
     // Get a base pointer to the buffer.

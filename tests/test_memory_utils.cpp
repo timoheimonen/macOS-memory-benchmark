@@ -301,3 +301,34 @@ TEST(MemoryUtilsTest, SetupLatencyChainWithTooSmallTlbLocalityFails) {
   EXPECT_EQ(result, EXIT_FAILURE);
   EXPECT_NE(error_output.find("Error: "), std::string::npos);
 }
+
+TEST(MemoryUtilsTest, SetupLatencyChainWithSameRandomInBoxMode) {
+  using namespace Constants;
+
+  size_t buffer_size = LATENCY_STRIDE_BYTES * 128;
+  MmapPtr buffer = allocate_buffer(buffer_size, "test_buffer");
+  ASSERT_NE(buffer.get(), nullptr);
+
+  const size_t locality_bytes = static_cast<size_t>(getpagesize());
+  int result = setup_latency_chain(buffer.get(), buffer_size, LATENCY_STRIDE_BYTES,
+                                   locality_bytes, nullptr,
+                                   LatencyChainMode::SameRandomInBoxIncreasingBox);
+  EXPECT_EQ(result, EXIT_SUCCESS);
+}
+
+TEST(MemoryUtilsTest, SetupLatencyChainWithBoxModeAndZeroLocalityFails) {
+  using namespace Constants;
+
+  size_t buffer_size = LATENCY_STRIDE_BYTES * 128;
+  MmapPtr buffer = allocate_buffer(buffer_size, "test_buffer");
+  ASSERT_NE(buffer.get(), nullptr);
+
+  testing::internal::CaptureStderr();
+  int result = setup_latency_chain(buffer.get(), buffer_size, LATENCY_STRIDE_BYTES,
+                                   0, nullptr,
+                                   LatencyChainMode::DiffRandomInBoxIncreasingBox);
+  std::string error_output = testing::internal::GetCapturedStderr();
+
+  EXPECT_EQ(result, EXIT_FAILURE);
+  EXPECT_NE(error_output.find("latency-chain-mode"), std::string::npos);
+}

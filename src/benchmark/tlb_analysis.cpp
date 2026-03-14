@@ -145,6 +145,7 @@ MmapPtr try_allocate_analysis_buffer(size_t size_bytes) {
  * @param[in]     buffer_size_bytes   Buffer size in bytes
  * @param[in]     stride_bytes        Pointer-chase stride in bytes
  * @param[in]     locality_bytes      Locality window size in bytes
+ * @param[in]     chain_mode          Pointer-chain construction mode
  * @param[in,out] timer               High-resolution timer instance
  * @param[out]    out_p50_latency_ns  Measured P50 latency in ns/access
  * @param[out]    out_loop_latencies_ns Optional raw loop latencies (ns/access)
@@ -155,6 +156,7 @@ bool measure_locality_p50(void* latency_buffer,
                           size_t buffer_size_bytes,
                           size_t stride_bytes,
                           size_t locality_bytes,
+                          LatencyChainMode chain_mode,
                           HighResTimer& timer,
                           double& out_p50_latency_ns,
                           std::vector<double>* out_loop_latencies_ns = nullptr) {
@@ -165,7 +167,7 @@ bool measure_locality_p50(void* latency_buffer,
 
   for (size_t loop = 0; loop < kLoopsPerPoint; ++loop) {
     if (setup_latency_chain(latency_buffer, buffer_size_bytes,
-                            stride_bytes, locality_bytes) != EXIT_SUCCESS) {
+                            stride_bytes, locality_bytes, nullptr, chain_mode) != EXIT_SUCCESS) {
       return false;
     }
 
@@ -275,6 +277,8 @@ int run_tlb_analysis(const BenchmarkConfig& config) {
   }
 
   const size_t page_walk_baseline_locality_bytes = localities_bytes.front();
+  const LatencyChainMode effective_chain_mode =
+      resolve_latency_chain_mode(config.latency_chain_mode, page_walk_baseline_locality_bytes);
 
   bool buffer_locked = false;
   if (mlock(latency_buffer.get(), selected_buffer_bytes) == 0) {
@@ -313,6 +317,7 @@ int run_tlb_analysis(const BenchmarkConfig& config) {
                               selected_buffer_bytes,
                               analysis_stride_bytes,
                               locality_bytes,
+                              config.latency_chain_mode,
                               timer,
                               locality_p50_ns,
                               &loop_latencies_ns)) {
@@ -337,6 +342,7 @@ int run_tlb_analysis(const BenchmarkConfig& config) {
                               selected_buffer_bytes,
                               analysis_stride_bytes,
                               kPageWalkComparisonLocalityBytes,
+                              config.latency_chain_mode,
                               timer,
                               page_walk_512mb_p50_ns,
                               &page_walk_512mb_loop_latencies_ns)) {
@@ -378,6 +384,9 @@ int run_tlb_analysis(const BenchmarkConfig& config) {
   std::cout << Messages::report_tlb_page_size(page_size_bytes) << std::endl;
   std::cout << Messages::report_tlb_buffer(selected_buffer_mb, buffer_locked) << std::endl;
   std::cout << Messages::report_tlb_stride(analysis_stride_bytes) << std::endl;
+  std::cout << Messages::report_tlb_chain_mode(
+                   latency_chain_mode_to_string(effective_chain_mode))
+            << std::endl;
   std::cout << Messages::report_tlb_loop_config(kLoopsPerPoint, kAccessesPerLoop) << std::endl;
 
   std::cout << std::endl;

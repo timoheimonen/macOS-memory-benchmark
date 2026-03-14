@@ -44,6 +44,7 @@ void print_usage(const char* prog_name);
  * @param loop_count Number of loops
  * @param use_non_cacheable Whether non-cacheable memory is used
  * @param latency_stride_bytes Stride used by latency pointer chains
+ * @param latency_chain_mode_name Chain construction mode used by latency pointer chains
  * @param latency_tlb_locality_bytes TLB-locality window for latency chains (0 = disabled)
  * @param cpu_name CPU name
  * @param perf_cores Number of performance cores
@@ -54,8 +55,9 @@ void print_usage(const char* prog_name);
  * @param run_patterns Whether pattern benchmarks are run (bandwidth-only, uses 2x buffers)
  */
 void print_configuration(size_t buffer_size, size_t buffer_size_mb, size_t total_allocation_bytes, int iterations,
-                         int loop_count, bool use_non_cacheable, size_t latency_stride_bytes,
-                         size_t latency_tlb_locality_bytes,
+                          int loop_count, bool use_non_cacheable, size_t latency_stride_bytes,
+                          const std::string& latency_chain_mode_name,
+                          size_t latency_tlb_locality_bytes,
                          const std::string& cpu_name, int perf_cores,
                          int eff_cores, int num_threads, bool only_bandwidth, bool only_latency,
                          bool run_patterns);
