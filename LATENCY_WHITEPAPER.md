@@ -102,7 +102,7 @@ The following behaviors are explicitly covered by unit tests:
 - **Null buffer rejected** (`SetupLatencyChainNullBuffer`)
 - **Zero stride rejected** (`SetupLatencyChainZeroStride`)
 - **Insufficient buffer capacity rejected** (`SetupLatencyChainBufferSmallerThanStride`, `SetupLatencyChainBufferEqualToStride`)
-- **Minimum valid chain accepted** (`SetupLatencyChainMinimumValid`)
+- **Minimum valid chain accepted** (`SetupLatencyChainBufferJustLargerThanStride`)
 - **Small valid chains accepted** (`SetupLatencyChainThreePointers`)
 - **Constructed pointers stay inside buffer bounds** (`SetupLatencyChainCreatesValidChain`)
 - **Page-sized locality accepted** (`SetupLatencyChainWithTlbLocality`)
