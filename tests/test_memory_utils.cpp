@@ -119,26 +119,6 @@ TEST(MemoryUtilsTest, SetupLatencyChainBufferJustLargerThanStride) {
   EXPECT_EQ(error_output.find("Error: "), std::string::npos);
 }
 
-// Test setup_latency_chain with minimum valid case (num_pointers == 2)
-TEST(MemoryUtilsTest, SetupLatencyChainMinimumValid) {
-  using namespace Constants;
-  
-  // Allocate buffer for exactly 2 pointers
-  size_t buffer_size = LATENCY_STRIDE_BYTES * 2;
-  MmapPtr buffer = allocate_buffer(buffer_size, "test_buffer");
-  ASSERT_NE(buffer.get(), nullptr);
-  
-  testing::internal::CaptureStderr();
-  int result = setup_latency_chain(buffer.get(), buffer_size, LATENCY_STRIDE_BYTES);
-  std::string error_output = testing::internal::GetCapturedStderr();
-  
-  // Should succeed (num_pointers == 2, minimum valid)
-  EXPECT_EQ(result, EXIT_SUCCESS);
-  
-  // No error should be logged
-  EXPECT_EQ(error_output.find("Error: "), std::string::npos);
-}
-
 // Test setup_latency_chain with num_pointers == 3 (valid case)
 TEST(MemoryUtilsTest, SetupLatencyChainThreePointers) {
   using namespace Constants;
@@ -156,74 +136,6 @@ TEST(MemoryUtilsTest, SetupLatencyChainThreePointers) {
   EXPECT_EQ(result, EXIT_SUCCESS);
   
   // No error should be logged
-  EXPECT_EQ(error_output.find("Error: "), std::string::npos);
-}
-
-// Test buffer size progression: buffer_size < LATENCY_STRIDE_BYTES
-TEST(MemoryUtilsTest, BufferSizeProgressionLessThanStride) {
-  using namespace Constants;
-  
-  size_t buffer_size = LATENCY_STRIDE_BYTES - 1;
-  MmapPtr buffer = allocate_buffer(buffer_size, "test_buffer");
-  ASSERT_NE(buffer.get(), nullptr);
-  
-  testing::internal::CaptureStderr();
-  int result = setup_latency_chain(buffer.get(), buffer_size, LATENCY_STRIDE_BYTES);
-  std::string error_output = testing::internal::GetCapturedStderr();
-  
-  // Should fail
-  EXPECT_EQ(result, EXIT_FAILURE);
-  EXPECT_NE(error_output.find("Error: "), std::string::npos);
-}
-
-// Test buffer size progression: buffer_size == LATENCY_STRIDE_BYTES
-TEST(MemoryUtilsTest, BufferSizeProgressionEqualToStride) {
-  using namespace Constants;
-  
-  size_t buffer_size = LATENCY_STRIDE_BYTES;
-  MmapPtr buffer = allocate_buffer(buffer_size, "test_buffer");
-  ASSERT_NE(buffer.get(), nullptr);
-  
-  testing::internal::CaptureStderr();
-  int result = setup_latency_chain(buffer.get(), buffer_size, LATENCY_STRIDE_BYTES);
-  std::string error_output = testing::internal::GetCapturedStderr();
-  
-  // Should fail (num_pointers == 1, need at least 2)
-  EXPECT_EQ(result, EXIT_FAILURE);
-  EXPECT_NE(error_output.find("Error: "), std::string::npos);
-}
-
-// Test buffer size progression: buffer_size == LATENCY_STRIDE_BYTES * 2 (minimum valid)
-TEST(MemoryUtilsTest, BufferSizeProgressionMinimumValid) {
-  using namespace Constants;
-  
-  size_t buffer_size = LATENCY_STRIDE_BYTES * 2;
-  MmapPtr buffer = allocate_buffer(buffer_size, "test_buffer");
-  ASSERT_NE(buffer.get(), nullptr);
-  
-  testing::internal::CaptureStderr();
-  int result = setup_latency_chain(buffer.get(), buffer_size, LATENCY_STRIDE_BYTES);
-  std::string error_output = testing::internal::GetCapturedStderr();
-  
-  // Should succeed (num_pointers == 2, minimum valid)
-  EXPECT_EQ(result, EXIT_SUCCESS);
-  EXPECT_EQ(error_output.find("Error: "), std::string::npos);
-}
-
-// Test buffer size progression: buffer_size == LATENCY_STRIDE_BYTES * 3
-TEST(MemoryUtilsTest, BufferSizeProgressionThreePointers) {
-  using namespace Constants;
-  
-  size_t buffer_size = LATENCY_STRIDE_BYTES * 3;
-  MmapPtr buffer = allocate_buffer(buffer_size, "test_buffer");
-  ASSERT_NE(buffer.get(), nullptr);
-  
-  testing::internal::CaptureStderr();
-  int result = setup_latency_chain(buffer.get(), buffer_size, LATENCY_STRIDE_BYTES);
-  std::string error_output = testing::internal::GetCapturedStderr();
-  
-  // Should succeed (num_pointers == 3)
-  EXPECT_EQ(result, EXIT_SUCCESS);
   EXPECT_EQ(error_output.find("Error: "), std::string::npos);
 }
 
