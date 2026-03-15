@@ -88,6 +88,8 @@ For longer runs, prevent sleep:
 caffeinate -i -d memory_benchmark -count 10 -buffersize 1024
 ```
 
+If running a local build, use `./memory_benchmark` instead of `memory_benchmark` (see note in "[First run](#first-run)").
+
 ---
 
 ## Key Concepts
@@ -194,7 +196,7 @@ Pattern mode (`-patterns`) measures bandwidth sensitivity across:
 #### `-only-bandwidth`
 
 - Runs bandwidth paths only
-- Incompatible with: `-patterns`, `-cache-size`, `-latency-samples`
+- Incompatible with: `-patterns`, `-cache-size` (any value including `0`), `-latency-samples`
 
 #### `-only-latency`
 
@@ -236,7 +238,7 @@ Pattern mode (`-patterns`) measures bandwidth sensitivity across:
 - Pointer-chain stride for latency tests
 - Default: `64`
 - Must be `> 0`
-- Must be a multiple of pointer size (`8` bytes on Apple Silicon)
+- Must be a multiple of 8 bytes (pointer size on Apple Silicon)
 - Use smaller values (for example `64`) to increase same-page cache-line activity and reduce TLB sensitivity
 
 #### `-latency-chain-mode <mode>`
@@ -488,6 +490,8 @@ statistics also include dedicated sections for:
 
 For noisy systems, prioritize median and P95/P99 rather than single fastest/slowest values.
 
+**Note:** Chain diagnostics (`pointer_count`, `unique_pages_touched`, etc.) appear in JSON output only when `-latency-stride-bytes` is explicitly set; they are not displayed in console output.
+
 ---
 
 ## JSON Output Format
@@ -501,9 +505,11 @@ For noisy systems, prioritize median and P95/P99 rather than single fastest/slow
   "main_memory": { ... },
   "cache": { ... },
   "timestamp": "2026-03-09T14:57:56Z",
-  "version": "0.53.7"
+  "version": "0.53.8"
 }
 ```
+
+Note: The `configuration` block includes fields such as `latency_chain_mode` (the resolved pointer-chain mode used), `latency_tlb_locality_kb`, `use_custom_cache_size`, and other runtime settings. For the complete configuration schema, inspect a sample output file or examine the configuration builder code.
 
 ### Pattern benchmark JSON shape
 
@@ -513,98 +519,100 @@ For noisy systems, prioritize median and P95/P99 rather than single fastest/slow
   "execution_time_sec": 705.6,
   "patterns": { ... },
   "timestamp": "2026-03-09T15:10:01Z",
-  "version": "0.53.7"
+  "version": "0.53.8"
 }
 ```
 
 ### Latency payload structure (current)
 
-Latency values are structured objects, not scalars:
+Latency values are structured objects, not scalars. The example below uses real values from a benchmark run.
 
-When `-latency-stride-bytes` is explicitly set, latency sections also include `chain_diagnostics`.
+When `-latency-stride-bytes` is explicitly set (with a non-default value), latency sections also include `chain_diagnostics`.
 
 ```json
 "latency": {
-  "average_ns": {
-    "values": [26.80, 27.73, 26.62],
-    "statistics": {
-      "average": 26.75,
-      "median": 26.71,
-      "p90": 27.30,
-      "p95": 27.51,
-      "p99": 27.68,
-      "stddev": 0.47,
-      "min": 26.24,
-      "max": 27.73
-    }
-  },
-  "samples_ns": {
-    "values": [26.86, 26.77, 26.69],
-    "statistics": {
-      "average": 26.75,
-      "median": 26.72,
-      "p90": 27.30,
-      "p95": 27.51,
-      "p99": 27.68,
-      "stddev": 0.47,
-      "min": 26.24,
-      "max": 27.73
-    }
-  },
   "auto_tlb_breakdown": {
-    "tlb_hit_ns": {
-      "values": [26.80, 27.73, 26.62],
+    "page_walk_penalty_ns": {
       "statistics": {
-        "average": 26.75,
-        "median": 26.71,
-        "p90": 27.30,
-        "p95": 27.51,
-        "p99": 27.68,
-        "stddev": 0.47,
-        "min": 26.24,
-        "max": 27.73
-      }
+        "average": 80.94071304166667,
+        "max": 81.21026791666667,
+        "median": 80.93019520833334,
+        "min": 80.71570645833333,
+        "p90": 81.10030966666667,
+        "p95": 81.15528879166668,
+        "p99": 81.19927209166667,
+        "stddev": 0.1762455963793484
+      },
+      "values": [80.71570645833333, 80.91202333333334, 80.93019520833334, 81.21026791666667, 80.93537229166668]
+    },
+    "tlb_hit_ns": {
+      "statistics": {
+        "average": 15.289083916666666,
+        "max": 16.014336875,
+        "median": 15.122818125,
+        "min": 15.072767291666667,
+        "p90": 15.668637291666668,
+        "p95": 15.841487083333334,
+        "p99": 15.97976691666667,
+        "stddev": 0.4065809440444531
+      },
+      "values": [15.072767291666667, 16.014336875, 15.085409375, 15.122818125, 15.150087916666667]
     },
     "tlb_miss_ns": {
-      "values": [89.10, 90.45, 91.02],
       "statistics": {
-        "average": 90.19,
-        "median": 90.45,
-        "p90": 90.91,
-        "p95": 90.96,
-        "p99": 91.01,
-        "stddev": 0.99,
-        "min": 89.10,
-        "max": 91.02
-      }
-    },
-    "page_walk_penalty_ns": {
-      "values": [62.30, 62.72, 64.40],
-      "statistics": {
-        "average": 63.14,
-        "median": 62.72,
-        "p90": 64.06,
-        "p95": 64.23,
-        "p99": 64.37,
-        "stddev": 1.12,
-        "min": 62.30,
-        "max": 64.40
-      }
+        "average": 96.22979695833334,
+        "max": 96.92636020833334,
+        "median": 96.08546020833334,
+        "min": 95.78847375,
+        "p90": 96.68905054166666,
+        "p95": 96.807705375,
+        "p99": 96.90262924166667,
+        "stddev": 0.4351283262178906
+      },
+      "values": [95.78847375, 96.92636020833334, 96.01560458333334, 96.33308604166666, 96.08546020833334]
     }
   },
+  "average_ns": {
+    "statistics": {
+      "average": 15.289083916666666,
+      "max": 16.014336875,
+      "median": 15.122818125,
+      "min": 15.072767291666667,
+      "p90": 15.668637291666668,
+      "p95": 15.841487083333334,
+      "p99": 15.97976691666667,
+      "stddev": 0.4065809440444531
+    },
+    "values": [15.072767291666667, 16.014336875, 15.085409375, 15.122818125, 15.150087916666667]
+  },
   "chain_diagnostics": {
-    "pointer_count": 1057030,
-    "unique_pages_touched": 65536,
     "page_size_bytes": 16384,
-    "stride_bytes": 64
+    "pointer_count": 1057030,
+    "stride_bytes": 128,
+    "unique_pages_touched": 65536
+  },
+  "samples_ns": {
+    "statistics": {
+      "average": 15.289083916666666,
+      "max": 16.014336875,
+      "median": 15.122818125,
+      "min": 15.072767291666667,
+      "p90": 15.668637291666668,
+      "p95": 15.841487083333334,
+      "p99": 15.97976691666667,
+      "stddev": 0.4065809440444531
+    },
+    "values": [15.072767291666667, 16.014336875, 15.085409375, 15.122818125, 15.150087916666667]
   }
 }
 ```
 
+**Source**: Real values extracted from `results/0.53.7/MacMiniM4_benchmark.json` (5-run sample)
+
 ### TLB analysis JSON (analyze mode)
 
 When run with `-analyze-tlb -output tlb_analysis.json`, the payload includes a dedicated `tlb_analysis` block.
-Example below is modeled from `results/0.53.7/MacMiniM4_analyzetlb.json`:
+Example below uses real values extracted from `results/0.53.8/MacMiniM4_analyze-tlb-chain-mode-random-box.json`:
 
 ```json
 {
@@ -624,23 +632,40 @@ Example below is modeled from `results/0.53.7/MacMiniM4_analyzetlb.json`:
     ],
     "l1_tlb_detection": {
       "detected": true,
+      "segment_start_index": 0,
+      "boundary_index": 7,
+      "boundary_locality_bytes": 4194304,
       "boundary_locality_kb": 4096,
-      "inferred_entries": 256,
-      "confidence": "High"
+      "baseline_ns": 17.837711547619048,
+      "boundary_latency_ns": 21.85142833333333,
+      "step_ns": 4.0137167857142835,
+      "step_percent": 0.22501298863362484,
+      "persistent_jump": true,
+      "confidence": "High",
+      "inferred_entries": 256
     },
     "l2_tlb_detection": {
       "detected": true,
+      "segment_start_index": 7,
+      "boundary_index": 8,
+      "boundary_locality_bytes": 8388608,
       "boundary_locality_kb": 8192,
-      "inferred_entries": 512,
-      "confidence": "High"
+      "baseline_ns": 21.85142833333333,
+      "boundary_latency_ns": 35.431156666666666,
+      "step_ns": 13.579728333333335,
+      "step_percent": 0.6214572395992117,
+      "persistent_jump": true,
+      "confidence": "High",
+      "inferred_entries": 512
     },
     "page_walk_penalty": {
       "available": true,
       "baseline_locality_kb": 16,
+      "baseline_p50_ns": 15.070645833333334,
       "comparison_locality_mb": 512,
-      "baseline_p50_ns": 25.982678,
-      "comparison_p50_ns": 98.832814,
-      "penalty_ns": 72.850136
+      "comparison_loop_latencies_ns": [95.34058666666667, 95.126475, 95.072195],
+      "comparison_p50_ns": 95.179255833333334,
+      "penalty_ns": 80.10860949999999
     }
   }
 }
@@ -655,6 +680,8 @@ Example below is modeled from `results/0.53.7/MacMiniM4_analyzetlb.json`:
 - `strided_16384`
 - `strided_2mb`
 - `random`
+
+Each pattern key contains a `bandwidth` sub-object with the same structure as `main_memory.bandwidth` (i.e., `read_gb_s`, `write_gb_s`, `copy_gb_s`, each with `values` and `statistics`).
 
 ### Useful JSON inspection commands
 
@@ -802,15 +829,16 @@ Make sure you are passing `script-examples/final_output.txt` generated by the la
 
 - [README.md](README.md) - project overview, install, examples
 - [LATENCY_WHITEPAPER.md](LATENCY_WHITEPAPER.md) - pointer-chase latency methodology deep dive
+- [TLB_ANALYSIS_WHITEPAPER.md](TLB_ANALYSIS_WHITEPAPER.md) - TLB analysis methodology and JSON schema
 - [TECHNICAL_SPECIFICATION.md](TECHNICAL_SPECIFICATION.md) - architecture and implementation details
 - [CHANGELOG.md](CHANGELOG.md) - release history
 
 Repository sample result files:
 
-- `results/0.53.7/MacMiniM4_benchmark.json`
-- `results/0.53.7/MacMiniM4_patterns.json`
-- `results/0.53.7/MacMiniM4_analyzetlb.json`
-- `results/0.53.7/MacMiniM4_core2core.json`
+- `results/0.53.8/MacMiniM4_benchmark.json`
+- `results/0.53.8/MacMiniM4_patterns.json`
+- `results/0.53.8/MacMiniM4_analyzetlb.json`
+- `results/0.53.8/MacMiniM4_core2core.json`
 
 Command help:
 
@@ -820,4 +848,4 @@ memory_benchmark -h
 
 ---
 
-**Last Updated**: 2026-03-14
+**Last Updated**: 2026-03-15

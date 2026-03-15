@@ -23,8 +23,10 @@ This project uses a circular linked list in memory, then repeatedly dereferences
 p = *p
 ```
 
-Because each load address depends on the previous load result, the hardware cannot freely overlap the chain.
-This forces a serialized load-to-use path that is suitable for latency characterization.
+Because each load address depends on the previous load result, the out-of-order engine cannot issue
+load `n+1` until the result of load `n` is committed to the register file — a true RAW (read-after-write)
+register dependency. The load pipeline is therefore serialized on the critical-path latency of each
+individual cache or DRAM access, making the measurement suitable for latency characterization.
 
 ## 3. Assembly Kernel Design (`src/asm/memory_latency.s`)
 
@@ -35,7 +37,8 @@ This forces a serialized load-to-use path that is suitable for latency character
   - `x0` = start pointer
   - `x1` = dereference count
 - Output:
-  - `x0` = final pointer value after `count` dependent dereferences
+  - `x0` = final pointer value after `count` dependent dereferences (returned to prevent dead-code
+    elimination of the chase loop by the compiler or linker)
 
 ### 3.2 Core Behavior
 
@@ -45,8 +48,9 @@ The kernel uses three key safeguards:
    - If `count == 0`, it returns immediately.
 2. **Exact-count execution with 8x unroll**
    - `count / 8` iterations of 8 dependent loads, then `count % 8` remainder loads.
-3. **Counter-based unsigned-safe loop termination**
-   - Uses decrement-and-branch patterns (`subs` + `b.ne`) for full `size_t` ranges.
+3. **Correct unsigned loop termination**
+   - Remainder loop uses `subs`/`b.ne` rather than compare-and-branch to correctly handle the full
+     unsigned 64-bit `count` range without introducing a signed-comparison hazard.
 
 The unrolled body remains dependency-serialized because each `ldr x0, [x0]` consumes the prior result.
 Unrolling primarily reduces branch overhead per dereference; it does not remove the data dependency chain.
@@ -54,7 +58,8 @@ Unrolling primarily reduces branch overhead per dereference; it does not remove 
 ### 3.3 Measurement Purity Notes
 
 The chase kernel intentionally avoids extra ordering/fence overhead in the hot path.
-No pre-touch or barrier instructions are required for functional correctness of the chase loop.
+The kernel does not prefetch, touch pages in advance, or insert memory barrier instructions (`DMB`/`DSB`)
+in the hot path, as none of these are required for functional correctness of the chase loop.
 
 ## 4. Pointer-Chain Construction (`src/core/memory/memory_utils.cpp`)
 
@@ -67,33 +72,54 @@ The function returns `EXIT_FAILURE` for invalid setup cases, including:
 - `buffer == nullptr`
 - `stride == 0`
 - fewer than 2 pointers fit in the provided buffer (`buffer_size / stride < 2`)
+- a locality-using `LatencyChainMode` is selected explicitly while `tlb_locality_bytes == 0`
+  (the mode requires a locality window but none is provided)
+- `tlb_locality_bytes > 0` but the locality window is too small to hold 2 pointers
+  (`tlb_locality_bytes / stride < 2`)
 
 ### 4.2 Chain Construction Flow
 
 1. Build index vector `0..num_pointers-1`
-2. Shuffle indices
-3. Link shuffled indices into a circular chain
+2. Reorder indices according to the effective chain mode (mode-dispatched):
+   - `GlobalRandom`: full-space `std::shuffle` across all indices
+   - All locality modes: delegate to `reorder_indices_with_mode()`, which applies the
+     appropriate within-window and window-ordering strategy (see Section 4.3)
+3. Link reordered indices into a circular chain
 4. Bounds-check each write target and next-pointer target
 
-### 4.3 TLB-Locality Mode
+### 4.3 Chain Construction Modes
 
-`-latency-tlb-locality-kb` controls chain randomization scope:
+The `-latency-chain-mode` flag selects the pointer-chain construction policy.
+`-latency-tlb-locality-kb` sets the locality window size used by all non-global modes.
 
-- `0`: fully global randomization across all indices
-- `>0`: locality-window mode
-  - randomize inside each locality window
-  - randomize the order of locality windows
+| Mode enum | CLI name | `-latency-tlb-locality-kb` required | Behavior |
+|---|---|---|---|
+| `GlobalRandom` | `global-random` | No (ignored if provided) | Single `std::shuffle` across the full index space. Maximum address randomness; highest TLB and cache pressure. |
+| `RandomInBoxRandomBox` | `random-box` | Yes | Independent random permutation within each locality window; window visit order is also randomized. Default when `tlb_locality_bytes > 0` and mode is `auto`. |
+| `SameRandomInBoxIncreasingBox` | `same-random-in-box` | Yes | One random permutation is generated and applied identically to every locality window; windows are visited in sequential order. Useful for isolating within-window access variance. |
+| `DiffRandomInBoxIncreasingBox` | `diff-random-in-box` | Yes | Independent random permutation per window; windows are visited in sequential order. Combines per-window randomness with a predictable inter-window traversal order. |
 
-This is a chain-construction policy, not a hardware TLB control primitive.
+When `-latency-chain-mode auto` (the default), the effective mode is `global-random` if
+`-latency-tlb-locality-kb 0`, and `random-box` otherwise.
+
+This is a chain-construction policy, not a hardware TLB control primitive. The locality window
+influences which addresses appear in the same traversal neighborhood; it does not guarantee
+those addresses reside in any particular TLB level during execution.
 
 ### 4.4 Stride Control
 
 `-latency-stride-bytes` controls spacing between pointer-chain nodes (default `64`).
 
-- Smaller stride (for example `64`) increases same-page cache-line activity.
-- Larger stride increases page turnover and can amplify translation pressure.
+- Smaller stride (e.g., `32`) increases same-page cache-line density — more nodes per page,
+  lower page turnover.
+- Larger stride (e.g., `128`) increases page turnover and can amplify translation pressure.
 
-Non-zero stride must be pointer-size aligned.
+Non-zero stride must be a multiple of the pointer size. On AArch64, pointer size is 8 bytes,
+so stride must be a multiple of 8.
+
+> **Note [REVIEW NEEDED]:** `LATENCY_STRIDE_BYTES` in `src/core/config/constants.h` is `64`.
+> The CHANGELOG entry for this feature mentions `136` as the original default. Verify which
+> value is correct before citing a specific default in experiments.
 
 ## 5. Test-Backed Correctness Guarantees (`tests/test_memory_utils.cpp`)
 
@@ -107,6 +133,9 @@ The following behaviors are explicitly covered by unit tests:
 - **Constructed pointers stay inside buffer bounds** (`SetupLatencyChainCreatesValidChain`)
 - **Page-sized locality accepted** (`SetupLatencyChainWithTlbLocality`)
 - **Too-small locality-span rejected** (`SetupLatencyChainWithTooSmallTlbLocalityFails`)
+- **Diagnostics populated correctly** (`SetupLatencyChainCollectsDiagnostics`)
+- **`SameRandomInBoxIncreasingBox` mode accepted** (`SetupLatencyChainWithSameRandomInBoxMode`)
+- **Locality-using mode with zero locality window rejected** (`SetupLatencyChainWithBoxModeAndZeroLocalityFails`)
 
 These tests validate setup correctness and failure handling before timing is run.
 
@@ -124,9 +153,30 @@ Key sampled-mode behavior:
 - Each sample times `accesses_this_sample` dereferences and stores per-sample latency
 - The returned pointer from sample `i` becomes the starting pointer for sample `i+1`
 
-That pointer continuity avoids repeatedly restarting from the same chain head and reduces cache-prefix bias.
+That pointer continuity is important for measurement integrity. If each sample always restarted
+from the same chain head, the chain head and its immediate successors would be warm in cache
+at the start of every sample (left there by the prior sample), causing the first few accesses
+of each sample to measure a hot-cache hit rather than the steady-state latency. This would bias
+per-sample latencies systematically downward. By passing the final pointer of sample `i` as the
+start of sample `i+1`, every sample begins from an arbitrary point in the chain, preventing
+that cold-start artifact.
+
+`run_latency_test()` is the entry point for main-memory latency measurement.
+`run_cache_latency_test()` is the corresponding entry point for L1, L2, and custom-cache-size
+latency measurements. Both functions share the same internal `run_latency_measurement()` path
+and the same assembly kernel; the distinction is only in which buffer is passed and which
+result field is populated.
 
 ## 7. Experimental Protocols
+
+### Parameter Quick Reference
+
+| Flag | Default | Effect |
+|---|---|---|
+| `-latency-stride-bytes` | `64` | Byte spacing between pointer-chain nodes. Must be a multiple of 8 (pointer size on AArch64). |
+| `-latency-tlb-locality-kb` | `16` | Locality window size in KB. `0` forces global-random mode regardless of `-latency-chain-mode`. |
+| `-latency-samples` | (see help) | Number of sub-samples per benchmark loop. Higher values improve statistical resolution. |
+| `-latency-chain-mode` | `auto` | Chain construction policy. `auto` selects `global-random` when locality is 0, `random-box` otherwise. |
 
 ### 7.1 Baseline Main-Memory Latency (Global Random Chain)
 
@@ -162,13 +212,41 @@ Then visualize trends:
 python3 script-examples/plot_cache_percentiles.py script-examples/final_output.txt --metric median
 ```
 
+A second sweep script, `script-examples/latency_test_script_stride_tlb.sh`, explores stride and
+TLB-locality combinations and produces a combined CSV-style output suitable for cross-dimensional
+analysis.
+
 ## 8. Reading the Results
 
 - Prefer **median (P50)** for the trend curve.
 - Use **P95/P99** to evaluate tail sensitivity and instability.
 - Treat isolated very large `max` values as outlier diagnostics, not central tendency.
 - Compare locality settings at the same cache size, then compare cache-size transitions.
-- For page-pressure investigations, inspect `chain_diagnostics.unique_pages_touched` in JSON latency sections.
+- For page-pressure investigations, inspect `chain_diagnostics.unique_pages_touched` in the JSON
+  output. The full paths are:
+  - Main memory: `main_memory.latency.chain_diagnostics.unique_pages_touched`
+  - Custom cache size: `cache.custom.latency.chain_diagnostics.unique_pages_touched`
+  - L1: `cache.l1.latency.chain_diagnostics.unique_pages_touched`
+  - L2: `cache.l2.latency.chain_diagnostics.unique_pages_touched`
+
+  **Note:** `chain_diagnostics` is only emitted when `-latency-stride-bytes` is explicitly
+  specified on the command line with a non-default value. Runs using the default stride will not
+  include this block.
+
+### 8a. ARM64 Reference Latency Ranges
+
+The table below provides approximate latency ranges for Apple Silicon as a sanity-check reference.
+Exact values vary by M-series generation, operating frequency, and thermal state.
+
+| Memory level | Typical cycles | Typical latency (@ ~4 GHz) |
+|---|---|---|
+| L1 data cache hit | ~4 cycles | ~1 ns |
+| L2 cache hit | ~12 cycles | ~3 ns |
+| Main memory (DRAM) | ~100–150 cycles | ~25–40 ns |
+
+If measured latency deviates substantially from these ranges at the expected cache size (e.g.,
+measured L1 latency is 20 ns), the buffer size or stride likely places accesses outside the
+intended cache level, or system interference is present.
 
 ## 9. Limitations and Non-Goals
 
