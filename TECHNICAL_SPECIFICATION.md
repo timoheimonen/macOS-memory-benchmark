@@ -23,7 +23,7 @@ Out of scope:
 
 - Target OS: macOS.
 - Target CPU architecture: ARM64 Apple Silicon.
-- Language: C++17 with ARM64 assembly kernels.
+- Language: C++17 with ARM64 Apple Silicon assembly kernels.
 - Build: `Makefile` (`clang++`, `as`).
 - Test framework: GoogleTest (`test_runner`).
 
@@ -70,7 +70,7 @@ The pipeline below applies to standard/pattern benchmark execution.
 6. Raise main thread QoS (`QOS_CLASS_USER_INTERACTIVE`) best-effort.
 7. Execute one mode:
    - Standard benchmark mode (`run_all_benchmarks`), which allocates/initializes buffers per phase and releases them after the phase.
-   - Pattern benchmark mode (`run_all_pattern_benchmarks`), which pre-allocates/initializes required buffers (`allocate_all_buffers` + `initialize_all_buffers`).
+   - Pattern benchmark mode (`run_pattern_benchmarks`), which pre-allocates/initializes required buffers (`allocate_all_buffers` + `initialize_all_buffers`).
 8. Print loop results and aggregate statistics.
 9. Optionally serialize JSON output.
 10. Print total elapsed runtime.
@@ -90,6 +90,9 @@ Configuration state is represented by `BenchmarkConfig` (`src/core/config/config
   - `-analyze-core2core`
 - Cache behavior: auto L1/L2 or user-provided `-cache-size`.
 - Latency sampling: `latency_sample_count`.
+- Latency-chain construction mode:
+  - `latency_chain_mode` (type `LatencyChainMode`, CLI flag `-latency-chain-mode`)
+  - `user_specified_latency_chain_mode` flag
 - TLB-locality control for latency chain construction:
   - `latency_tlb_locality_bytes` (default 16 KB)
   - `0` means global random chain.
@@ -111,6 +114,7 @@ Configuration state is represented by `BenchmarkConfig` (`src/core/config/config
   - Second pass parses remaining options.
 - Parser may throw internally (`std::stoll`/validation) but converts to return-code failures at function boundary.
 - Help (`-h`, `--help`) prints usage and exits successfully.
+- `-latency-chain-mode` accepts string values and resolves to `LatencyChainMode` enum.
 - `-analyze-core2core` uses dedicated mode parsing (outside `argument_parser.cpp`) and only allows optional `-output`, `-count`, and `-latency-samples`.
 
 ### 6.2 Validation behavior (`config_validator.cpp`)
@@ -172,7 +176,7 @@ Allocation entrypoints:
 
 Shared allocation behavior:
 
-- Uses `mmap` anonymous private mappings.
+- Uses `mmap` anonymous private mappings (macOS-specific behavior and limits apply).
 - Uses mode-aware conditional allocation to avoid unused buffers.
 - Performs overflow-safe byte arithmetic before allocation.
 - Enforces global memory-limit checks from peak-concurrent requirements.
@@ -189,7 +193,7 @@ Pattern mode intentionally allocates and uses only main source/destination buffe
 ### 8.2 Best-effort non-cacheable mode
 
 - `allocate_buffer_non_cacheable` still uses normal user-space mappings.
-- Applies `madvise(MADV_RANDOM)` hints.
+- Applies `madvise(MADV_RANDOM)` hints on macOS.
 - This is best-effort cache discouragement only; not true uncached memory.
 
 ### 8.3 Initialization strategy
@@ -209,19 +213,31 @@ Initialization semantics:
 
 `setup_latency_chain` (`src/core/memory/memory_utils.cpp`) builds pointer chains used by main/cache latency tests.
 
-Key properties:
+### 9.1 Chain Construction Modes
+
+The `LatencyChainMode` enum (from `src/core/memory/memory_utils.h`) defines four explicit modes plus `Auto`:
+
+- `Auto` (0, default): Resolves to effective mode based on `tlb_locality_bytes`:
+  - If `tlb_locality_bytes == 0`, behaves as `GlobalRandom`.
+  - If `tlb_locality_bytes > 0`, behaves as `RandomInBoxRandomBox`.
+- `GlobalRandom`: Global random permutation across entire buffer (ignores locality).
+- `RandomInBoxRandomBox`: Randomize within locality windows, then randomize window order.
+- `SameRandomInBoxIncreasingBox`: Locality windows grow (doubling each step), randomization within each box.
+- `DiffRandomInBoxIncreasingBox`: Randomization offset by locality window step.
+
+### 9.2 Key Properties
 
 - Uses stride-spaced pointer slots across buffer.
 - Requires at least two pointers.
 - Produces a circular linked structure.
 - Collects chain diagnostics (pointer count, unique pages touched, page size, stride).
 
-Randomization modes:
+### 9.3 Randomization Behavior
 
-- `tlb_locality_bytes == 0`: global random permutation.
-- `tlb_locality_bytes > 0`: randomization within locality windows, then randomized window order.
+- `tlb_locality_bytes == 0`: global random permutation (mode-independent).
+- `tlb_locality_bytes > 0`: randomization within locality windows, then randomized window order (specific behavior mode-dependent).
 
-Purpose:
+### 9.4 Purpose
 
 - Preserve dependent load-to-use semantics.
 - Reduce prefetch predictability.
@@ -238,6 +254,21 @@ Warmup functions (`src/warmup`) run before measured tests.
 Adaptive warmup size (`warmup_internal.h`):
 
 - `min(buffer_size, max(64MB, 10% of buffer_size))`.
+
+## 10.1 Auto TLB Breakdown (when `latency_chain_mode == Auto`)
+
+When the user selects or defaults to `latency_chain_mode=Auto`, the implementation runs two latency-chain passes to decompose memory latency into TLB-related components:
+
+1. **TLB-hit pass**: Chain with 16 KB locality window (within typical TLB entry footprint).
+2. **Global-random pass**: Chain with global randomization (no locality).
+
+Results from both passes are stored in `BenchmarkResults` and `BenchmarkStatistics`:
+
+- `tlb_hit_latency_ns`: Average latency from 16 KB locality pass.
+- `tlb_miss_latency_ns`: Average latency from global-random pass.
+- `page_walk_penalty_ns`: `tlb_miss_latency_ns - tlb_hit_latency_ns` (approximate TLB miss cost).
+
+These breakdown metrics are optionally serialized to JSON under `main_memory.latency.auto_tlb_breakdown`.
 
 ## 11. Standard Benchmark Execution
 
@@ -286,14 +317,20 @@ Assembly entrypoints are declared in `src/asm/asm_functions.h` and used by bench
 
 - Main kernels: read, write, copy, latency chase.
 - Pattern kernels: reverse, strided, random variants.
+- Core-to-core kernels: initiator and responder round-trip loops.
 
 Design intent:
 
-- Keep hot loops in ARM64 assembly for predictable overhead and high throughput.
+- Keep hot loops in ARM64 Apple Silicon assembly for predictable overhead and high throughput.
 - Follow AAPCS64 conventions for register preservation and call boundaries.
 - Use checksum sinks in read paths to keep loads architecturally meaningful.
 
 Latency kernel (`memory_latency_chase_asm`) performs strictly dependent pointer chasing and returns terminal pointer to prevent dead-code elimination.
+
+Core-to-core kernels:
+
+- `core_to_core_initiator_round_trips_asm`: Waits for responder token, sends initiator token; repeats for specified round trips.
+- `core_to_core_responder_round_trips_asm`: Mirrors initiator; coordinates via shared token word.
 
 ## 14. Timing Model
 
@@ -312,6 +349,19 @@ Timing API: `HighResTimer` (`src/core/timing/timer.*`).
 - Statistics include central tendency and percentile-oriented summaries.
 
 For contention-prone environments, percentiles (P50/P95/P99) are more informative than mean-only interpretation.
+
+### 15.1 Statistics Fields
+
+Computed from collected value vectors:
+
+- **Average**: Mean of all values.
+- **Median (P50)**: 50th percentile value.
+- **P90**: 90th percentile value.
+- **P95**: 95th percentile value.
+- **P99**: 99th percentile value.
+- **Stddev**: Standard deviation.
+- **Min**: Minimum observed value.
+- **Max**: Maximum observed value.
 
 ## 16. Console Output Contract
 
@@ -332,15 +382,34 @@ JSON writer API (`src/output/json/json_output/json_output.cpp`):
 - Standard mode: `configuration`, `execution_time_sec`, `main_memory`, `cache`, `timestamp`, `version`.
 - Pattern mode: `configuration`, `execution_time_sec`, `patterns`, `timestamp`, `version`.
 
-### 17.1 Structure conventions
+### 17.1 Configuration keys
+
+In addition to standard fields (buffer size, iterations, loop count, thread count, CPU/OS info):
+
+- `latency_chain_mode` (string): Resolved pointer-chain construction mode.
+- `use_latency_tlb_locality` (boolean): Whether TLB-locality window is in use.
+- `latency_tlb_locality_bytes` (number): TLB-locality window size in bytes.
+- `latency_tlb_locality_kb` (number): TLB-locality window size in KB.
+
+### 17.2 Main-memory latency keys
+
+- `main_memory.latency.average_ns.values` (array): Latency sample values per loop.
+- `main_memory.latency.average_ns.statistics` (object, optional): Aggregate stats (average, median, P90, P95, P99, stddev, min, max).
+- `main_memory.latency.samples_ns.values` (array, optional): Per-sample latency values.
+- `main_memory.latency.samples_ns.statistics` (object, optional): Per-sample aggregate statistics.
+- `main_memory.latency.chain_diagnostics` (object): Pointer chain metadata (pointer_count, unique_pages_touched, page_size_bytes, stride_bytes).
+- `main_memory.latency.auto_tlb_breakdown` (object, optional): TLB breakdown when `latency_chain_mode==Auto`:
+  - `tlb_hit_ns.values` (array): TLB-hit latency per loop.
+  - `tlb_miss_ns.values` (array): Global-random latency per loop.
+  - `page_walk_penalty_ns.values` (array): Approximate TLB miss cost.
+
+### 17.3 Structure conventions
 
 - Ordered JSON is used for stable key order.
 - Bandwidth metrics are nested as arrays in `values` with optional `statistics`.
-- Latency is nested:
-  - `latency.average_ns.values` (plus optional `statistics`),
-  - optional `latency.samples_ns.values` (plus optional `latency.samples_ns.statistics`).
+- Latency is nested as described in §17.2.
 
-### 17.2 Path behavior
+### 17.4 Path behavior
 
 - Relative `-output` paths are resolved against current working directory.
 
@@ -411,3 +480,4 @@ For narrow changes, prefer targeted `gtest` filters via `./test_runner --gtest_f
   - `src/output/json/json_output/*.cpp`
 - Assembly kernels:
   - `src/asm/*.s`
+  - `src/asm/core_to_core_latency.s` (core-to-core latency measurements)
