@@ -29,7 +29,30 @@ Out of scope:
 
 The tool is designed and tuned for Apple Silicon execution characteristics (cache hierarchy, page behavior, QoS, and assembly kernels).
 
-## 3. High-Level Runtime Architecture
+## 3. Hardware Limitations
+
+### 3.1 Thermal constraints on fanless systems
+
+Fanless Apple Silicon systems (e.g., MacBook Air M5) have limited thermal capacity and cannot sustain heavy benchmarking for extended durations.
+
+Observed behavior:
+
+- MacBook Air M5 typically enters Heavy thermal state after approximately 2 pattern benchmark runs.
+- Thermal state transitions depend significantly on ambient environment temperature.
+- Thermal throttling during benchmarking invalidates measurement reliability and comparability.
+
+Impact:
+
+- Repeated back-to-back benchmark executions may encounter thermal limiting.
+- Measurements from throttled runs should not be compared with baseline measurements from thermal-normal conditions.
+- For consistent results on fanless systems, allow sufficient idle time between consecutive benchmark runs to permit thermal cool-down.
+
+Recommendation:
+
+- For reliable baseline measurement on fanless systems, run single benchmark iterations with thermal cool-down intervals between runs.
+- Use `caffeinate -i -d ./memory_benchmark ...` to prevent system sleep during longer measurement sessions on cooler systems.
+
+## 4. High-Level Runtime Architecture
 
 Main orchestration (`main.cpp`) follows this pipeline:
 
@@ -54,11 +77,11 @@ The pipeline below applies to standard/pattern benchmark execution.
 
 Memory cleanup is RAII-based through `MmapPtr` custom deleters (`munmap` on scope exit).
 
-## 4. Configuration Model
+## 5. Configuration Model
 
 Configuration state is represented by `BenchmarkConfig` (`src/core/config/config.h`).
 
-### 4.1 User-facing control fields
+### 5.1 User-facing control fields
 
 - Main options: buffer size MB, iterations, loop count, output path, threads.
 - Mode flags: `run_patterns`, `only_bandwidth`, `only_latency`.
@@ -72,16 +95,16 @@ Configuration state is represented by `BenchmarkConfig` (`src/core/config/config
   - `0` means global random chain.
 - Best-effort cache-discouraging mode: `use_non_cacheable`.
 
-### 4.2 Derived fields
+### 5.2 Derived fields
 
 - Resolved byte sizes for main and cache buffers.
 - Access counts for latency paths.
 - System metadata (CPU name, macOS version, core counts).
 - Max memory limits and bookkeeping flags.
 
-## 5. CLI Parsing and Validation
+## 6. CLI Parsing and Validation
 
-### 5.1 Parsing behavior (`argument_parser.cpp`)
+### 6.1 Parsing behavior (`argument_parser.cpp`)
 
 - Two-pass parse:
   - First pass extracts `-cache-size` early.
@@ -90,7 +113,7 @@ Configuration state is represented by `BenchmarkConfig` (`src/core/config/config
 - Help (`-h`, `--help`) prints usage and exits successfully.
 - `-analyze-core2core` uses dedicated mode parsing (outside `argument_parser.cpp`) and only allows optional `-output`, `-count`, and `-latency-samples`.
 
-### 5.2 Validation behavior (`config_validator.cpp`)
+### 6.2 Validation behavior (`config_validator.cpp`)
 
 Validation rejects incompatible flag combinations and invalid value states:
 
@@ -122,9 +145,9 @@ Memory-limit model:
 - Per-main-buffer cap is mode-aware (1 or 2 main buffers, depending on active mode/phase needs).
 - A second peak-concurrent allocation check validates the highest active phase footprint (main + cache paths).
 
-## 6. Size and Access Derivation
+## 7. Size and Access Derivation
 
-### 6.1 Buffer sizing (`buffer_calculator.cpp`)
+### 7.1 Buffer sizing (`buffer_calculator.cpp`)
 
 - Main buffer size is derived from `buffer_size_mb`.
 - L1/L2/custom cache test buffers use factor constants currently set to `1.0`.
@@ -132,15 +155,15 @@ Memory-limit model:
 - Minimum practical lower bound includes page-size enforcement.
 - `-cache-size 0` (in allowed mode) produces zero custom cache buffer.
 
-### 6.2 Latency access counts
+### 7.2 Latency access counts
 
 - Main-memory latency accesses scale from base count relative to default buffer size.
 - Cache latency access counts use fixed constants (`L1`, `L2`, `CUSTOM`).
 - `-buffersize 0` (in allowed mode) sets main latency accesses to zero.
 
-## 7. Memory Allocation and Initialization
+## 8. Memory Allocation and Initialization
 
-### 7.1 Allocation strategy
+### 8.1 Allocation strategy
 
 Allocation entrypoints:
 
@@ -163,13 +186,13 @@ Allocated buffer families (conditional):
 
 Pattern mode intentionally allocates and uses only main source/destination buffers.
 
-### 7.2 Best-effort non-cacheable mode
+### 8.2 Best-effort non-cacheable mode
 
 - `allocate_buffer_non_cacheable` still uses normal user-space mappings.
 - Applies `madvise(MADV_RANDOM)` hints.
 - This is best-effort cache discouragement only; not true uncached memory.
 
-### 7.3 Initialization strategy
+### 8.3 Initialization strategy
 
 Initialization entrypoints:
 
@@ -182,7 +205,7 @@ Initialization semantics:
 - Latency buffers: randomized pointer-chasing circular chain via `setup_latency_chain`.
 - Allocation/initialization happen before phase timing starts and are excluded from measured benchmark durations.
 
-## 8. Latency-Chain Construction Contract
+## 9. Latency-Chain Construction Contract
 
 `setup_latency_chain` (`src/core/memory/memory_utils.cpp`) builds pointer chains used by main/cache latency tests.
 
@@ -204,7 +227,7 @@ Purpose:
 - Reduce prefetch predictability.
 - Allow controlled locality pressure experiments.
 
-## 9. Warmup Subsystem
+## 10. Warmup Subsystem
 
 Warmup functions (`src/warmup`) run before measured tests.
 
@@ -216,7 +239,7 @@ Adaptive warmup size (`warmup_internal.h`):
 
 - `min(buffer_size, max(64MB, 10% of buffer_size))`.
 
-## 10. Standard Benchmark Execution
+## 11. Standard Benchmark Execution
 
 Standard mode coordinator: `run_all_benchmarks` -> `run_single_benchmark_loop`.
 
@@ -235,7 +258,7 @@ Important execution semantics:
 - Main-memory latency headline is computed from one continuous chase pass.
 - If latency samples are enabled, sample collection runs in a separate pass.
 
-## 11. Pattern Benchmark Execution
+## 12. Pattern Benchmark Execution
 
 Pattern mode coordinator: `run_pattern_benchmarks` (`src/pattern_benchmark/pattern_coordinator.cpp`).
 
@@ -257,7 +280,7 @@ Implementation notes:
 - Large-stride patterns can be skipped when constraints invalidate execution.
 - Pattern statistics are aggregated across outer loop count.
 
-## 12. Assembly Kernel Layer
+## 13. Assembly Kernel Layer
 
 Assembly entrypoints are declared in `src/asm/asm_functions.h` and used by benchmark/warmup code:
 
@@ -272,7 +295,7 @@ Design intent:
 
 Latency kernel (`memory_latency_chase_asm`) performs strictly dependent pointer chasing and returns terminal pointer to prevent dead-code elimination.
 
-## 13. Timing Model
+## 14. Timing Model
 
 Timing API: `HighResTimer` (`src/core/timing/timer.*`).
 
@@ -280,7 +303,7 @@ Timing API: `HighResTimer` (`src/core/timing/timer.*`).
 - Used for both macro (test durations) and micro (latency sample windows) timing.
 - Factory creation returns optional; failure is treated as fatal at call sites.
 
-## 14. Statistics and Aggregation
+## 15. Statistics and Aggregation
 
 `BenchmarkStatistics` and pattern statistics collect vectors per metric across outer loops.
 
@@ -290,7 +313,7 @@ Timing API: `HighResTimer` (`src/core/timing/timer.*`).
 
 For contention-prone environments, percentiles (P50/P95/P99) are more informative than mean-only interpretation.
 
-## 15. Console Output Contract
+## 16. Console Output Contract
 
 Console rendering is centralized in `src/output/console` and message helpers in `src/output/console/messages`.
 
@@ -302,14 +325,14 @@ Contract highlights:
 - Aggregate statistics printed when loop count > 1.
 - Errors and warnings use `Messages::error_prefix()` / `Messages::warning_prefix()` conventions.
 
-## 16. JSON Output Contract
+## 17. JSON Output Contract
 
 JSON writer API (`src/output/json/json_output/json_output.cpp`):
 
 - Standard mode: `configuration`, `execution_time_sec`, `main_memory`, `cache`, `timestamp`, `version`.
 - Pattern mode: `configuration`, `execution_time_sec`, `patterns`, `timestamp`, `version`.
 
-### 16.1 Structure conventions
+### 17.1 Structure conventions
 
 - Ordered JSON is used for stable key order.
 - Bandwidth metrics are nested as arrays in `values` with optional `statistics`.
@@ -317,11 +340,11 @@ JSON writer API (`src/output/json/json_output/json_output.cpp`):
   - `latency.average_ns.values` (plus optional `statistics`),
   - optional `latency.samples_ns.values` (plus optional `latency.samples_ns.statistics`).
 
-### 16.2 Path behavior
+### 17.2 Path behavior
 
 - Relative `-output` paths are resolved against current working directory.
 
-## 17. Error-Handling Model
+## 18. Error-Handling Model
 
 This codebase uses boundary-aware mixed error handling:
 
@@ -331,14 +354,14 @@ This codebase uses boundary-aware mixed error handling:
 
 Principle: no uncaught exceptions should escape to `main()` control flow.
 
-## 18. Concurrency Model
+## 19. Concurrency Model
 
 - Bandwidth and pattern bandwidth paths are parallelized by thread-count configuration.
 - Latency tests are intentionally single-threaded pointer-chase measurements.
 - Cache tests default to single-thread unless user overrides thread count.
 - Threaded work partitioning attempts cache-line-aware chunk handling to reduce false sharing effects.
 
-## 19. Measurement Caveats and Interpretation Under Load
+## 20. Measurement Caveats and Interpretation Under Load
 
 The tool can be run on active systems with concurrent workloads, but interpretation must account for scheduler and memory-system contention.
 
@@ -351,7 +374,7 @@ Practical caveats:
 
 For high-confidence baselines, run repeated loops and analyze distributions rather than single-point values.
 
-## 20. Verification and Test Expectations
+## 21. Verification and Test Expectations
 
 Recommended validation commands:
 
@@ -363,7 +386,7 @@ Recommended validation commands:
 
 For narrow changes, prefer targeted `gtest` filters via `./test_runner --gtest_filter=...`.
 
-## 21. Source Map (Primary Entry Points)
+## 22. Source Map (Primary Entry Points)
 
 - Program entry: `main.cpp`
 - Config parse/validate/derive:
