@@ -32,7 +32,7 @@
  */
 #include "pattern_benchmark/pattern_benchmark.h"
 #include "core/config/constants.h"
-#include "output/console/messages.h"
+#include "output/console/messages/messages_api.h"
 #include <iostream>
 #include <iomanip>
 #include <sstream>

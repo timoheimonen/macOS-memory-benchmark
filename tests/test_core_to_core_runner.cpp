@@ -25,7 +25,7 @@
 
 #include <cmath>
 
-#include "benchmark/core_to_core_latency_runner_internal.h"
+#include "benchmark/core_to_core_latency_internal.h"
 #include "core/config/constants.h"
 
 TEST(CoreToCoreRunnerTest, ExecuteSingleScenarioProducesHeadlineAndSamples) {

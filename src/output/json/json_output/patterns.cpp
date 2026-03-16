@@ -28,7 +28,7 @@
 // Library: https://github.com/nlohmann/json
 // License: MIT License
 //
-#include "output/json/json_output.h"
+#include "output/json/json_output/json_output_api.h"
 #include "pattern_benchmark/pattern_benchmark.h" // For PatternStatistics
 #include "third_party/nlohmann/json.hpp"   // JSON library
 

@@ -35,7 +35,7 @@
 #include <vector>
 
 #include "core/config/version.h"
-#include "output/json/json_output.h"
+#include "output/json/json_output/json_output_api.h"
 #include "utils/json_utils.h"
 
 namespace {

@@ -41,7 +41,7 @@
 #include "core/config/config.h"
 #include "core/config/constants.h"
 #include "core/system/system_info.h"
-#include "output/console/messages.h"
+#include "output/console/messages/messages_api.h"
 #include "utils/benchmark.h"
 #include <iostream>
 #include <limits>

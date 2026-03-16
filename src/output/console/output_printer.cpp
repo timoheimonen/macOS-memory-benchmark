@@ -25,7 +25,7 @@
 
 #include "core/config/version.h"  // SOFTVERSION
 #include "core/config/constants.h"  // Include constants for default values
-#include "output/console/messages.h"   // Include centralized messages
+#include "output/console/messages/messages_api.h"   // Include centralized messages
 #include "output/console/output_printer.h"  // Function declarations
 
 /**

@@ -23,7 +23,7 @@
  * benchmark runs including averages, percentiles (P50/P90/P95/P99), and standard deviation.
  */
 
-#include "messages.h"
+#include "messages_api.h"
 #include <sstream>
 #include <iomanip>
 

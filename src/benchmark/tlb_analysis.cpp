@@ -44,7 +44,7 @@
 #include "core/memory/memory_utils.h"
 #include "core/system/system_info.h"
 #include "core/timing/timer.h"
-#include "output/console/messages.h"
+#include "output/console/messages/messages_api.h"
 #include "warmup/warmup.h"
 
 namespace {

@@ -24,7 +24,7 @@
  * logic can format output without hardcoded text literals.
  */
 
-#include "messages.h"
+#include "messages_api.h"
 
 #include <iomanip>
 #include <sstream>

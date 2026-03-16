@@ -23,7 +23,7 @@
  * system information, and CPU details.
  */
 
-#include "messages.h"
+#include "messages_api.h"
 #include <sstream>
 #include <iomanip>
 

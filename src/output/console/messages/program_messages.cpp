@@ -22,7 +22,7 @@
  * benchmark execution status messages, program usage/help text, and version information.
  */
 
-#include "messages.h"
+#include "messages_api.h"
 #include "core/config/constants.h"  // For default values
 #include <sstream>
 #include <iomanip>

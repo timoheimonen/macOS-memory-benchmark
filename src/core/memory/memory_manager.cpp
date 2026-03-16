@@ -30,7 +30,7 @@
  */
 
 #include "core/memory/memory_manager.h"
-#include "output/console/messages.h"
+#include "output/console/messages/messages_api.h"
 #include <cstring>  // strlen, strcpy, strerror
 #include <iostream> // std::cerr
 #include <cerrno>   // errno
@@ -171,4 +171,3 @@ MmapPtr allocate_buffer_non_cacheable(size_t size, const char* buffer_name) {
   
   return buffer_ptr;  // Return valid pointer on success
 }
-

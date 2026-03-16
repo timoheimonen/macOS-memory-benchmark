@@ -521,7 +521,7 @@ initiator tag `CORE_TO_CORE_AFFINITY_TAG_PRIMARY`, responder tag
 path even when sampling is disabled.
 
 Both tests exercise the internal `execute_single_scenario` function via the
-`core_to_core_latency_runner_internal.h` header, which is the only
+`core_to_core_latency_internal.h` header, which is the only
 translation-unit-private interface exposed exclusively for unit testing.
 
 ### 7.5 Additional unit-test coverage

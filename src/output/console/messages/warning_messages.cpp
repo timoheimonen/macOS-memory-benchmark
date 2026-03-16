@@ -23,7 +23,7 @@
  * system configuration, cache detection, and non-fatal runtime issues.
  */
 
-#include "messages.h"
+#include "messages_api.h"
 #include <sstream>
 
 namespace Messages {
@@ -123,4 +123,3 @@ std::string warning_threads_capped(int requested, int max_cores) {
 }
 
 } // namespace Messages
-

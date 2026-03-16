@@ -34,7 +34,7 @@
 #include <string>
 
 #include "core/config/constants.h"
-#include "output/console/messages.h"
+#include "output/console/messages/messages_api.h"
 #include "output/console/output_printer.h"
 
 namespace {

@@ -42,7 +42,7 @@
 
 #include "core/config/config.h"
 #include "core/config/constants.h"
-#include "output/console/messages.h"
+#include "output/console/messages/messages_api.h"
 #include <iostream>
 #include <unistd.h>  // getpagesize
 #include <limits>

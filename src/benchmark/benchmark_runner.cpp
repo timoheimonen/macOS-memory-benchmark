@@ -46,7 +46,7 @@
 #include "core/config/config.h"               // BenchmarkConfig
 #include "core/timing/timer.h"                // HighResTimer
 #include "utils/benchmark.h"            // All benchmark functions and print functions
-#include "output/console/messages.h"             // Centralized messages
+#include "output/console/messages/messages_api.h"             // Centralized messages
 #include <iostream>
 #include <cstdlib>  // EXIT_SUCCESS, EXIT_FAILURE
 

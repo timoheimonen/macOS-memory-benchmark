@@ -23,7 +23,7 @@
  * with appropriate unit conversions.
  */
 
-#include "messages.h"
+#include "messages_api.h"
 #include "core/config/constants.h"
 #include <sstream>
 #include <iomanip>

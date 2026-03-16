@@ -26,7 +26,7 @@
 #include <numeric>     // Required for std::accumulate (calculating sums)
 #include <vector>      // Required for std::vector
 #include "core/config/constants.h" // Constants for precision values
-#include "output/console/messages.h"  // Centralized messages
+#include "output/console/messages/messages_api.h"  // Centralized messages
 #include "output/console/statistics.h"  // Function declaration
 
 /**

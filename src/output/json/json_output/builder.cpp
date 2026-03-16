@@ -32,7 +32,7 @@
 // Library: https://github.com/nlohmann/json
 // License: MIT License
 //
-#include "output/json/json_output.h"
+#include "output/json/json_output/json_output_api.h"
 #include "utils/json_utils.h" // JSON utility functions
 #include "core/config/config.h"     // For BenchmarkConfig
 #include "core/config/constants.h"

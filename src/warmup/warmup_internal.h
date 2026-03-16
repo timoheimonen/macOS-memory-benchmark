@@ -49,7 +49,7 @@
 #include <mach/mach.h>
 #include <pthread/qos.h>
 
-#include "output/console/messages.h"
+#include "output/console/messages/messages_api.h"
 #include "core/memory/memory_utils.h"
 #include "core/config/constants.h"
 
@@ -271,4 +271,3 @@ void warmup_single(Op operation) {
 }
 
 #endif // WARMUP_INTERNAL_H
-

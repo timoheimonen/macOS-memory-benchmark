@@ -14,7 +14,7 @@
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 //
 #include <gtest/gtest.h>
-#include "output/console/messages.h"
+#include "output/console/messages/messages_api.h"
 #include "core/config/constants.h"
 #include <string>
 #include <sstream>

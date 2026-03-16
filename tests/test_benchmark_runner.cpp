@@ -17,7 +17,7 @@
 #include "benchmark/benchmark_runner.h"
 #include "core/memory/buffer_manager.h"
 #include "core/config/config.h"
-#include "output/json/json_output.h"
+#include "output/json/json_output/json_output_api.h"
 #include "utils/benchmark.h"
 #include "core/config/constants.h"
 #include <cstdlib>

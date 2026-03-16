@@ -27,7 +27,7 @@
 // Library: https://github.com/nlohmann/json
 // License: MIT License
 //
-#include "output/json/json_output.h"
+#include "output/json/json_output/json_output_api.h"
 #include "core/config/config.h"     // For BenchmarkConfig
 #include "benchmark/benchmark_runner.h"  // For BenchmarkStatistics
 #include "utils/json_utils.h"  // calculate_json_statistics
