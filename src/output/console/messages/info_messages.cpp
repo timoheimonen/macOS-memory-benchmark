@@ -23,7 +23,7 @@
  * configuration adjustments and runtime calculations.
  */
 
-#include "messages.h"
+#include "messages_api.h"
 #include <sstream>
 
 namespace Messages {
@@ -50,4 +50,3 @@ std::string info_custom_cache_rounded_up(unsigned long original_kb, unsigned lon
 }
 
 } // namespace Messages
-

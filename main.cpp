@@ -42,9 +42,9 @@
 #include "benchmark/benchmark_runner.h"
 #include "benchmark/core_to_core_latency.h"
 #include "benchmark/tlb_analysis.h"
-#include "output/console/messages.h"
+#include "output/console/messages/messages_api.h"
 #include "core/config/constants.h"
-#include "output/json/json_output.h"
+#include "output/json/json_output/json_output_api.h"
 #include "pattern_benchmark/pattern_benchmark.h"
 
 // macOS specific memory management

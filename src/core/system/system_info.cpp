@@ -55,7 +55,7 @@
 
 #include "core/system/system_info.h"
 #include "core/config/constants.h"
-#include "output/console/messages.h"
+#include "output/console/messages/messages_api.h"
 
 /**
  * @brief Get the number of logical performance cores

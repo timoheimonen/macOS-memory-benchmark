@@ -18,7 +18,7 @@
 
 #include <string>
 
-#include "output/console/messages.h"
+#include "output/console/messages/messages_api.h"
 
 TEST(CoreToCoreMessagesTest, UsageMentionsStandaloneMode) {
   const std::string usage = Messages::usage_options("memory_benchmark");

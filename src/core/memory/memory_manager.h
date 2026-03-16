@@ -31,7 +31,7 @@
 #include <iostream> // std::cerr
 #include <cerrno>   // errno
 #include <sys/mman.h>  // mmap, munmap, MAP_FAILED, madvise, MADV_WILLNEED
-#include "output/console/messages.h"  // For Messages namespace
+#include "output/console/messages/messages_api.h"  // For Messages namespace
 
 /**
  * @struct MmapDeleter
@@ -116,4 +116,3 @@ MmapPtr allocate_buffer(size_t size, const char* buffer_name = "buffer");
 MmapPtr allocate_buffer_non_cacheable(size_t size, const char* buffer_name = "buffer");
 
 #endif // MEMORY_MANAGER_H
-

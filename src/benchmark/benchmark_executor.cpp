@@ -49,7 +49,7 @@
 #include "utils/benchmark.h"        // All benchmark functions and print functions
 #include "benchmark/benchmark_runner.h" // BenchmarkResults
 #include "benchmark/benchmark_results.h"   // Results calculation functions
-#include "output/console/messages.h"             // Centralized messages
+#include "output/console/messages/messages_api.h"             // Centralized messages
 #include "core/config/constants.h"
 #include <atomic>
 #include <cstdlib>

@@ -43,7 +43,7 @@
 #include <ctime>      // Required for std::time, std::localtime, std::strftime
 #include <iomanip>    // Required for std::put_time
 
-#include "output/json/json_output.h"
+#include "output/json/json_output/json_output_api.h"
 #include "core/config/version.h"  // SOFTVERSION
 #include "core/config/constants.h"
 #include "core/config/config.h"     // For BenchmarkConfig

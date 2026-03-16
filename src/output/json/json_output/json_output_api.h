@@ -14,7 +14,7 @@
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 //
 /**
- * @file json_output.h
+ * @file json_output_api.h
  * @brief JSON output generation for benchmark results
  * @author Timo Heimonen <timo.heimonen@proton.me>
  * @date 2025
@@ -37,8 +37,8 @@
  * - timestamp: ISO 8601 UTC timestamp
  * - version: Software version
  */
-#ifndef JSON_OUTPUT_JSON_OUTPUT_H
-#define JSON_OUTPUT_JSON_OUTPUT_H
+#ifndef JSON_OUTPUT_JSON_OUTPUT_API_H
+#define JSON_OUTPUT_JSON_OUTPUT_API_H
 
 #include <cstdlib>  // EXIT_SUCCESS, EXIT_FAILURE
 #include <vector>
@@ -150,4 +150,4 @@ int save_results_to_json(const BenchmarkConfig& config, const BenchmarkStatistic
 // Returns EXIT_SUCCESS on success, EXIT_FAILURE on error
 int save_pattern_results_to_json(const BenchmarkConfig& config, const PatternStatistics& stats, double total_execution_time_sec);
 
-#endif // JSON_OUTPUT_JSON_OUTPUT_H
+#endif // JSON_OUTPUT_JSON_OUTPUT_API_H

@@ -28,7 +28,7 @@
 #include "benchmark/benchmark_runner.h"
 #include "core/config/config.h"
 #include "core/config/constants.h"
-#include "output/json/json_output.h"
+#include "output/json/json_output/json_output_api.h"
 #include "pattern_benchmark/pattern_benchmark.h"
 
 namespace {

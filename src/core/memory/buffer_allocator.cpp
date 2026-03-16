@@ -40,7 +40,7 @@
 #include "core/config/config.h"  // BenchmarkConfig
 #include "core/memory/memory_manager.h"  // allocate_buffer, allocate_buffer_non_cacheable
 #include "core/config/constants.h"
-#include "output/console/messages.h"
+#include "output/console/messages/messages_api.h"
 #include <cstdlib>  // EXIT_SUCCESS, EXIT_FAILURE
 #include <limits>   // std::numeric_limits
 #include <iostream> // std::cerr

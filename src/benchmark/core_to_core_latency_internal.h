@@ -15,14 +15,14 @@
 //
 
 /**
- * @file core_to_core_latency_runner_internal.h
+ * @file core_to_core_latency_internal.h
  * @brief Internal runner interfaces for standalone core-to-core latency mode
  * @author Timo Heimonen <timo.heimonen@proton.me>
  * @date 2026
  */
 
-#ifndef CORE_TO_CORE_LATENCY_RUNNER_INTERNAL_H
-#define CORE_TO_CORE_LATENCY_RUNNER_INTERNAL_H
+#ifndef CORE_TO_CORE_LATENCY_INTERNAL_H
+#define CORE_TO_CORE_LATENCY_INTERNAL_H
 
 #include <string>
 #include <vector>
@@ -47,4 +47,4 @@ bool execute_single_scenario(const ScenarioDescriptor& scenario,
                              int sample_count,
                              ScenarioMeasurement& out_measurement);
 
-#endif  // CORE_TO_CORE_LATENCY_RUNNER_INTERNAL_H
+#endif  // CORE_TO_CORE_LATENCY_INTERNAL_H

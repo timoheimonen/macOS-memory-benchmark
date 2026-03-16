@@ -38,7 +38,7 @@
 #include "core/memory/buffer_manager.h"  // BenchmarkBuffers
 #include "core/config/config.h"  // BenchmarkConfig
 #include "core/memory/memory_utils.h"  // initialize_buffers, setup_latency_chain
-#include "output/console/messages.h"
+#include "output/console/messages/messages_api.h"
 #include <cstdlib>  // EXIT_SUCCESS, EXIT_FAILURE
 #include <iostream> // std::cerr
 

@@ -24,7 +24,7 @@
  */
 
 #include "core/memory/memory_utils.h"
-#include "output/console/messages.h"
+#include "output/console/messages/messages_api.h"
 #include <vector>
 #include <string>
 #include <numeric>   // Needed for std::iota

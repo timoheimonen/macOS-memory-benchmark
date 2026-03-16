@@ -20,7 +20,7 @@
  */
 
 #include "benchmark/core_to_core_latency.h"
-#include "benchmark/core_to_core_latency_runner_internal.h"
+#include "benchmark/core_to_core_latency_internal.h"
 
 #include <algorithm>
 #include <atomic>
@@ -42,7 +42,7 @@
 #include "core/config/version.h"
 #include "core/system/system_info.h"
 #include "core/timing/timer.h"
-#include "output/console/messages.h"
+#include "output/console/messages/messages_api.h"
 
 namespace {
 

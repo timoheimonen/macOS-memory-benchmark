@@ -49,7 +49,7 @@
 #include <iostream> // For std::cerr
 
 #include "core/timing/timer.h"
-#include "output/console/messages.h"
+#include "output/console/messages/messages_api.h"
 
 /**
  * @brief Private constructor for HighResTimer

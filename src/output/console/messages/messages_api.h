@@ -15,7 +15,7 @@
 //
 
 /**
- * @file messages.h
+ * @file messages_api.h
  * @brief Centralized message namespace for all application output strings
  *
  * This file declares the Messages namespace containing all user-facing text messages
@@ -34,8 +34,8 @@
  * @note Constant messages are returned by reference for efficiency
  */
 
-#ifndef MESSAGES_MESSAGES_H
-#define MESSAGES_MESSAGES_H
+#ifndef MESSAGES_MESSAGES_API_H
+#define MESSAGES_MESSAGES_API_H
 
 #include <string>
 
@@ -327,4 +327,4 @@ const std::string& pattern_bandwidth_unit_newline();
 
 } // namespace Messages
 
-#endif // MESSAGES_MESSAGES_H
+#endif // MESSAGES_MESSAGES_API_H

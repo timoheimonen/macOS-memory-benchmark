@@ -42,8 +42,8 @@
 #include <cstring>    // Required for std::strerror
 #include <system_error> // Required for std::errc
 
-#include "output/json/json_output.h"
-#include "output/console/messages.h"   // Include centralized messages
+#include "output/json/json_output/json_output_api.h"
+#include "output/console/messages/messages_api.h"   // Include centralized messages
 #include "third_party/nlohmann/json.hpp"   // JSON library
 
 // Write JSON to file with proper error handling and atomic writes
@@ -170,4 +170,3 @@ int write_json_to_file(const std::filesystem::path& file_path, const nlohmann::o
   
   return EXIT_SUCCESS;
 }
-

@@ -28,7 +28,7 @@
 #include <pthread/qos.h>  // For pthread_set_qos_class_self_np
 
 #include "utils/benchmark.h"  // Includes definitions for assembly loops etc.
-#include "output/console/messages.h"   // For error and warning messages
+#include "output/console/messages/messages_api.h"   // For error and warning messages
 #include "warmup/warmup.h"
 #include "warmup/warmup_internal.h"
 
@@ -341,4 +341,3 @@ void warmup_copy_random(void* dst, void* src, const std::vector<size_t>& indices
   
   join_threads(threads);
 }
-

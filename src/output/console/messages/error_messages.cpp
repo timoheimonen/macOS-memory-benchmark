@@ -23,7 +23,7 @@
  * validation, memory allocation, file I/O, buffer operations, and benchmark execution.
  */
 
-#include "messages.h"
+#include "messages_api.h"
 #include <sstream>
 #include <limits>
 

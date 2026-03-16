@@ -23,7 +23,7 @@
  * strided, random) and pattern efficiency analysis metrics.
  */
 
-#include "messages.h"
+#include "messages_api.h"
 
 namespace Messages {
 
