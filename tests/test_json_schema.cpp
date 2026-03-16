@@ -186,3 +186,170 @@ TEST(JsonSchemaTest, CoreToCoreExporterUsesSharedModeKeyAndSamplesContainer) {
 
   std::filesystem::remove(config.output_file);
 }
+
+TEST(JsonSchemaTest, CoreToCoreExporterReturnsSuccessWhenOutputPathIsEmpty) {
+  CoreToCoreLatencyConfig config;
+  config.output_file.clear();
+  config.loop_count = 1;
+  config.latency_sample_count = 1;
+
+  const std::string cpu_name = "test-cpu";
+  const std::vector<CoreToCoreLatencyScenarioResult> scenarios;
+  const CoreToCoreLatencyJsonContext context = {
+      config,
+      cpu_name,
+      4,
+      6,
+      100,
+      200,
+      20,
+      scenarios,
+      1.0,
+  };
+
+  EXPECT_EQ(save_core_to_core_latency_to_json(context), EXIT_SUCCESS);
+}
+
+TEST(JsonSchemaTest, CoreToCoreExporterSerializesOneWayValuesAndThreadHints) {
+  CoreToCoreLatencyConfig config;
+  config.output_file = make_temp_json_path("core2core_values").string();
+  config.loop_count = 2;
+  config.latency_sample_count = 2;
+
+  const std::string cpu_name = "test-cpu";
+  ThreadHintStatus initiator_hint;
+  initiator_hint.qos_applied = true;
+  initiator_hint.qos_code = 0;
+  initiator_hint.affinity_requested = true;
+  initiator_hint.affinity_applied = false;
+  initiator_hint.affinity_code = 5;
+  initiator_hint.affinity_tag = 1;
+
+  ThreadHintStatus responder_hint;
+  responder_hint.qos_applied = false;
+  responder_hint.qos_code = 6;
+  responder_hint.affinity_requested = true;
+  responder_hint.affinity_applied = true;
+  responder_hint.affinity_code = 0;
+  responder_hint.affinity_tag = 2;
+
+  const std::vector<CoreToCoreLatencyScenarioResult> scenarios = {
+      {
+          Constants::CORE_TO_CORE_SCENARIO_SAME_AFFINITY,
+          {12.0, 18.0},
+          {15.0, 17.0},
+          initiator_hint,
+          responder_hint,
+      },
+  };
+
+  const CoreToCoreLatencyJsonContext context = {
+      config,
+      cpu_name,
+      4,
+      6,
+      100,
+      200,
+      20,
+      scenarios,
+      4.5,
+  };
+
+  ASSERT_EQ(save_core_to_core_latency_to_json(context), EXIT_SUCCESS);
+  const nlohmann::json output_json = read_json_file(config.output_file);
+
+  const nlohmann::json scenario_json = output_json["core_to_core_latency"]["scenarios"][0];
+  ASSERT_EQ(scenario_json["one_way_estimate_ns"][JsonKeys::VALUES].size(), 2u);
+  EXPECT_DOUBLE_EQ(scenario_json["one_way_estimate_ns"][JsonKeys::VALUES][0].get<double>(), 6.0);
+  EXPECT_DOUBLE_EQ(scenario_json["one_way_estimate_ns"][JsonKeys::VALUES][1].get<double>(), 9.0);
+
+  ASSERT_TRUE(scenario_json["thread_hints"].contains("initiator"));
+  ASSERT_TRUE(scenario_json["thread_hints"].contains("responder"));
+  EXPECT_EQ(scenario_json["thread_hints"]["initiator"]["affinity_tag"], 1);
+  EXPECT_EQ(scenario_json["thread_hints"]["responder"]["qos_code"], 6);
+  EXPECT_TRUE(scenario_json["thread_hints"]["initiator"].contains("qos_applied"));
+  EXPECT_TRUE(scenario_json["thread_hints"]["initiator"].contains("qos_code"));
+  EXPECT_TRUE(scenario_json["thread_hints"]["initiator"].contains("affinity_requested"));
+  EXPECT_TRUE(scenario_json["thread_hints"]["initiator"].contains("affinity_applied"));
+  EXPECT_TRUE(scenario_json["thread_hints"]["initiator"].contains("affinity_code"));
+  EXPECT_TRUE(scenario_json["thread_hints"]["initiator"].contains("affinity_tag"));
+
+  std::filesystem::remove(config.output_file);
+}
+
+TEST(JsonSchemaTest, CoreToCoreExporterOmitsStatisticsWhenOnlySingleValueExists) {
+  CoreToCoreLatencyConfig config;
+  config.output_file = make_temp_json_path("core2core_single").string();
+  config.loop_count = 1;
+  config.latency_sample_count = 1;
+
+  const std::string cpu_name = "test-cpu";
+  const std::vector<CoreToCoreLatencyScenarioResult> scenarios = {
+      {
+          Constants::CORE_TO_CORE_SCENARIO_NO_AFFINITY,
+          {10.0},
+          {10.5},
+          {},
+          {},
+      },
+  };
+
+  const CoreToCoreLatencyJsonContext context = {
+      config,
+      cpu_name,
+      4,
+      6,
+      100,
+      200,
+      20,
+      scenarios,
+      4.5,
+  };
+
+  ASSERT_EQ(save_core_to_core_latency_to_json(context), EXIT_SUCCESS);
+  const nlohmann::json output_json = read_json_file(config.output_file);
+
+  const nlohmann::json scenario_json = output_json["core_to_core_latency"]["scenarios"][0];
+  EXPECT_FALSE(scenario_json["round_trip_ns"].contains(JsonKeys::STATISTICS));
+  EXPECT_FALSE(scenario_json["one_way_estimate_ns"].contains(JsonKeys::STATISTICS));
+  EXPECT_FALSE(scenario_json[JsonKeys::SAMPLES_NS].contains(JsonKeys::STATISTICS));
+
+  std::filesystem::remove(config.output_file);
+}
+
+TEST(JsonSchemaTest, CoreToCoreExporterReturnsFailureForInvalidOutputPath) {
+  CoreToCoreLatencyConfig config;
+  config.output_file = "/dev/null/core2core.json";
+  config.loop_count = 1;
+  config.latency_sample_count = 1;
+
+  const std::string cpu_name = "test-cpu";
+  const std::vector<CoreToCoreLatencyScenarioResult> scenarios = {
+      {
+          Constants::CORE_TO_CORE_SCENARIO_NO_AFFINITY,
+          {10.0},
+          {10.5},
+          {},
+          {},
+      },
+  };
+
+  const CoreToCoreLatencyJsonContext context = {
+      config,
+      cpu_name,
+      4,
+      6,
+      100,
+      200,
+      20,
+      scenarios,
+      4.5,
+  };
+
+  testing::internal::CaptureStderr();
+  const int result = save_core_to_core_latency_to_json(context);
+  const std::string error_output = testing::internal::GetCapturedStderr();
+
+  EXPECT_EQ(result, EXIT_FAILURE);
+  EXPECT_FALSE(error_output.empty());
+}

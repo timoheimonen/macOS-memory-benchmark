@@ -16,7 +16,9 @@ Primary goals:
 
 Out of scope:
 
-- Generic memory-performance theory (see `LATENCY_WHITEPAPER.md`).
+- Generic memory-performance theory (see [LATENCY_WHITEPAPER.md](LATENCY_WHITEPAPER.md)).
+- `-analyze-tlb` methodology details (see [TLB_ANALYSIS_WHITEPAPER.md](TLB_ANALYSIS_WHITEPAPER.md)).
+- `-analyze-core2core` methodology details (see [CORE_TO_CORE_WHITEPAPER.md](CORE_TO_CORE_WHITEPAPER.md)).
 - Historical behavior from older releases.
 
 ## 2. Platform and Build Constraints
@@ -115,7 +117,7 @@ Configuration state is represented by `BenchmarkConfig` (`src/core/config/config
 - Parser may throw internally (`std::stoll`/validation) but converts to return-code failures at function boundary.
 - Help (`-h`, `--help`) prints usage and exits successfully.
 - `-latency-chain-mode` accepts string values and resolves to `LatencyChainMode` enum.
-- `-analyze-core2core` uses dedicated mode parsing (outside `argument_parser.cpp`) and only allows optional `-output`, `-count`, and `-latency-samples`.
+- `-analyze-core2core` uses dedicated mode parsing (outside `argument_parser.cpp`) and only allows optional `-output`, `-count`, and `-latency-samples`. Full methodology and JSON contract: [CORE_TO_CORE_WHITEPAPER.md](CORE_TO_CORE_WHITEPAPER.md).
 
 ### 6.2 Validation behavior (`config_validator.cpp`)
 
@@ -480,4 +482,4 @@ For narrow changes, prefer targeted `gtest` filters via `./test_runner --gtest_f
   - `src/output/json/json_output/*.cpp`
 - Assembly kernels:
   - `src/asm/*.s`
-  - `src/asm/core_to_core_latency.s` (core-to-core latency measurements)
+  - `src/asm/core_to_core_latency.s` (core-to-core latency measurements; see [CORE_TO_CORE_WHITEPAPER.md](CORE_TO_CORE_WHITEPAPER.md))

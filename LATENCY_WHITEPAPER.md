@@ -255,3 +255,9 @@ intended cache level, or system interference is present.
 
 The latency path in this project is built around a strict dependent pointer chase with exact-count execution and tested chain setup boundaries.
 It is suitable for comparative latency studies across cache sizes and locality-window policies when interpreted with robust statistics (median and tails) rather than single-point extremes.
+
+## 11. Related Documents
+
+- [TLB_ANALYSIS_WHITEPAPER.md](TLB_ANALYSIS_WHITEPAPER.md) — Standalone TLB boundary detection mode (`-analyze-tlb`): sweep methodology, boundary/guard rules, confidence model, and JSON contract.
+- [CORE_TO_CORE_WHITEPAPER.md](CORE_TO_CORE_WHITEPAPER.md) — Core-to-Core Cache-Line Handoff Latency Benchmark (`-analyze-core2core`): LDAR/STLR assembly protocol, scheduler-hint scenarios, and JSON contract.
+- [TECHNICAL_SPECIFICATION.md](TECHNICAL_SPECIFICATION.md) — Runtime architecture, execution flow, and output contracts for all benchmark modes.
