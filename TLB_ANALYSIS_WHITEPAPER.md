@@ -30,6 +30,10 @@ Related user-facing docs:
 - `README.md`
 - `MANUAL.md`
 
+Related whitepaper for the other standalone analysis mode:
+
+- [CORE_TO_CORE_WHITEPAPER.md](CORE_TO_CORE_WHITEPAPER.md) — Core-to-Core Cache-Line Handoff Latency Benchmark (`-analyze-core2core`)
+
 ## 3. CLI Contract
 
 ### 3.1 Accepted Forms

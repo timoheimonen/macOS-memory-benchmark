@@ -117,7 +117,7 @@ caffeinate -i -d memory_benchmark -count 10 -buffersize 1024
 - **`-only-bandwidth`**: Runs bandwidth paths only (`-patterns`, `-cache-size`, and `-latency-samples` are not allowed in this mode).
 - **`-only-latency`**: Runs latency paths only (`-patterns` and `-iterations` are not allowed in this mode).
 - **`-analyze-tlb`**: Runs standalone TLB analysis mode; only optional `-output <file>`, `-latency-stride-bytes <bytes>`, and `-latency-chain-mode <mode>` may be combined with it.
-- **`-analyze-core2core`**: Runs standalone core-to-core cache-line handoff analysis mode; only optional `-output <file>`, `-count <count>`, and `-latency-samples <count>` may be combined with it.
+- **`-analyze-core2core`**: Runs standalone core-to-core cache-line handoff analysis mode; only optional `-output <file>`, `-count <count>`, and `-latency-samples <count>` may be combined with it. See [CORE_TO_CORE_WHITEPAPER.md](CORE_TO_CORE_WHITEPAPER.md) for methodology and JSON contract.
 
 Latency-specific disable controls in `-only-latency`:
 
@@ -319,6 +319,7 @@ Reference sample result files in this repository:
 - **[Technical Specification](TECHNICAL_SPECIFICATION.md)**: architecture, execution flow, memory model, output contracts.
 - **[Latency Whitepaper](LATENCY_WHITEPAPER.md)**: dependent pointer-chase design, chain construction, and sampling methodology.
 - **[TLB Analysis Whitepaper](TLB_ANALYSIS_WHITEPAPER.md)**: standalone `-analyze-tlb` methodology, boundary/guard rules, confidence model, and JSON verification contract.
+- **[Core-to-Core Cache-Line Handoff Latency Whitepaper](CORE_TO_CORE_WHITEPAPER.md)**: standalone `-analyze-core2core` methodology, LDAR/STLR assembly protocol, scheduler-hint scenarios, and JSON contract.
 
 ## Limitations and Caveats
 

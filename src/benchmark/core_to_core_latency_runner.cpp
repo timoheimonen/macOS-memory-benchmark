@@ -20,6 +20,7 @@
  */
 
 #include "benchmark/core_to_core_latency.h"
+#include "benchmark/core_to_core_latency_runner_internal.h"
 
 #include <algorithm>
 #include <atomic>
@@ -54,20 +55,6 @@ struct SummaryStats {
   double p95 = 0.0;
   double p99 = 0.0;
   double stddev = 0.0;
-};
-
-struct ScenarioDescriptor {
-  std::string name;
-  bool apply_affinity = false;
-  int initiator_affinity_tag = 0;
-  int responder_affinity_tag = 0;
-};
-
-struct ScenarioMeasurement {
-  double round_trip_ns = 0.0;
-  std::vector<double> samples_ns;
-  ThreadHintStatus initiator_hint;
-  ThreadHintStatus responder_hint;
 };
 
 struct alignas(Constants::CACHE_LINE_SIZE_BYTES) SharedTurn {
@@ -193,61 +180,6 @@ void run_responder_round_trip_batch(uint32_t* turn_ptr, size_t round_trips) {
                                          Constants::CORE_TO_CORE_INITIATOR_TURN_VALUE);
 }
 
-bool execute_single_scenario(const ScenarioDescriptor& scenario,
-                             int sample_count,
-                             ScenarioMeasurement& out_measurement) {
-  auto timer_opt = HighResTimer::create();
-  if (!timer_opt) {
-    return false;
-  }
-
-  const size_t responder_round_trips = calculate_total_responder_round_trips(sample_count);
-
-  SharedPingPongState state;
-
-  std::thread responder_thread([&state, &scenario, &out_measurement, responder_round_trips]() {
-    out_measurement.responder_hint =
-        apply_thread_hints(scenario.apply_affinity, scenario.responder_affinity_tag);
-    state.flags.ready_threads.fetch_add(1, std::memory_order_release);
-    wait_for_start_signal(state);
-    run_responder_round_trip_batch(&state.turn.value, responder_round_trips);
-  });
-
-  std::thread initiator_thread([&state, &scenario, &out_measurement, sample_count, &timer_opt]() {
-    out_measurement.initiator_hint =
-        apply_thread_hints(scenario.apply_affinity, scenario.initiator_affinity_tag);
-    state.flags.ready_threads.fetch_add(1, std::memory_order_release);
-    wait_for_start_signal(state);
-
-    run_round_trip_batch(&state.turn.value, Constants::CORE_TO_CORE_WARMUP_ROUND_TRIPS);
-
-    auto& timer = *timer_opt;
-    timer.start();
-    run_round_trip_batch(&state.turn.value, Constants::CORE_TO_CORE_HEADLINE_ROUND_TRIPS);
-    const double headline_total_ns = timer.stop_ns();
-    out_measurement.round_trip_ns = headline_total_ns / static_cast<double>(Constants::CORE_TO_CORE_HEADLINE_ROUND_TRIPS);
-
-    out_measurement.samples_ns.reserve(static_cast<size_t>(sample_count));
-    for (int sample_index = 0; sample_index < sample_count; ++sample_index) {
-      timer.start();
-      run_round_trip_batch(&state.turn.value, Constants::CORE_TO_CORE_SAMPLE_WINDOW_ROUND_TRIPS);
-      const double sample_total_ns = timer.stop_ns();
-      out_measurement.samples_ns.push_back(sample_total_ns /
-                                           static_cast<double>(Constants::CORE_TO_CORE_SAMPLE_WINDOW_ROUND_TRIPS));
-    }
-  });
-
-  // Ensure both worker threads have applied hints before starting handoff loop.
-  while (state.flags.ready_threads.load(std::memory_order_acquire) < Constants::CORE_TO_CORE_READY_THREADS_TARGET) {
-  }
-  state.turn.value = Constants::CORE_TO_CORE_INITIATOR_TURN_VALUE;
-  state.flags.start.store(true, std::memory_order_release);
-
-  initiator_thread.join();
-  responder_thread.join();
-
-  return true;
-}
 // Scenarios are interpreted as scheduler-hint requests, not hard pinning contracts.
 std::vector<ScenarioDescriptor> build_scenarios() {
   std::vector<ScenarioDescriptor> scenarios;
@@ -312,6 +244,64 @@ void print_scenario_report(const CoreToCoreLatencyScenarioResult& scenario_resul
 }
 
 }  // namespace
+
+bool execute_single_scenario(const ScenarioDescriptor& scenario,
+                             int sample_count,
+                             ScenarioMeasurement& out_measurement) {
+  auto timer_opt = HighResTimer::create();
+  if (!timer_opt) {
+    return false;
+  }
+
+  const size_t responder_round_trips = calculate_total_responder_round_trips(sample_count);
+
+  SharedPingPongState state;
+
+  std::thread responder_thread([&state, &scenario, &out_measurement, responder_round_trips]() {
+    out_measurement.responder_hint =
+        apply_thread_hints(scenario.apply_affinity, scenario.responder_affinity_tag);
+    state.flags.ready_threads.fetch_add(1, std::memory_order_release);
+    wait_for_start_signal(state);
+    run_responder_round_trip_batch(&state.turn.value, responder_round_trips);
+  });
+
+  std::thread initiator_thread([&state, &scenario, &out_measurement, sample_count, &timer_opt]() {
+    out_measurement.initiator_hint =
+        apply_thread_hints(scenario.apply_affinity, scenario.initiator_affinity_tag);
+    state.flags.ready_threads.fetch_add(1, std::memory_order_release);
+    wait_for_start_signal(state);
+
+    run_round_trip_batch(&state.turn.value, Constants::CORE_TO_CORE_WARMUP_ROUND_TRIPS);
+
+    auto& timer = *timer_opt;
+    timer.start();
+    run_round_trip_batch(&state.turn.value, Constants::CORE_TO_CORE_HEADLINE_ROUND_TRIPS);
+    const double headline_total_ns = timer.stop_ns();
+    out_measurement.round_trip_ns =
+        headline_total_ns / static_cast<double>(Constants::CORE_TO_CORE_HEADLINE_ROUND_TRIPS);
+
+    out_measurement.samples_ns.reserve(static_cast<size_t>(sample_count));
+    for (int sample_index = 0; sample_index < sample_count; ++sample_index) {
+      timer.start();
+      run_round_trip_batch(&state.turn.value, Constants::CORE_TO_CORE_SAMPLE_WINDOW_ROUND_TRIPS);
+      const double sample_total_ns = timer.stop_ns();
+      out_measurement.samples_ns.push_back(
+          sample_total_ns / static_cast<double>(Constants::CORE_TO_CORE_SAMPLE_WINDOW_ROUND_TRIPS));
+    }
+  });
+
+  // Ensure both worker threads have applied hints before starting handoff loop.
+  while (state.flags.ready_threads.load(std::memory_order_acquire) <
+         Constants::CORE_TO_CORE_READY_THREADS_TARGET) {
+  }
+  state.turn.value = Constants::CORE_TO_CORE_INITIATOR_TURN_VALUE;
+  state.flags.start.store(true, std::memory_order_release);
+
+  initiator_thread.join();
+  responder_thread.join();
+
+  return true;
+}
 
 int run_core_to_core_latency(const CoreToCoreLatencyConfig& config) {
   const auto analysis_start = std::chrono::steady_clock::now();
