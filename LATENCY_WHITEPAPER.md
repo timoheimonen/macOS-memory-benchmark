@@ -117,10 +117,6 @@ those addresses reside in any particular TLB level during execution.
 Non-zero stride must be a multiple of the pointer size. On AArch64, pointer size is 8 bytes,
 so stride must be a multiple of 8.
 
-> **Note [REVIEW NEEDED]:** `LATENCY_STRIDE_BYTES` in `src/core/config/constants.h` is `64`.
-> The CHANGELOG entry for this feature mentions `136` as the original default. Verify which
-> value is correct before citing a specific default in experiments.
-
 ## 5. Test-Backed Correctness Guarantees (`tests/test_memory_utils.cpp`)
 
 The following behaviors are explicitly covered by unit tests:
