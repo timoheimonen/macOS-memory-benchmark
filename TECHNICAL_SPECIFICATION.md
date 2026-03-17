@@ -52,7 +52,7 @@ Impact:
 Recommendation:
 
 - For reliable baseline measurement on fanless systems, run single benchmark iterations with thermal cool-down intervals between runs.
-- Use `caffeinate -i -d ./memory_benchmark ...` to prevent system sleep during longer measurement sessions on cooler systems.
+- Use `caffeinate -i -d memory_benchmark ...` to prevent system sleep during longer measurement sessions on cooler systems.
 
 ## 4. High-Level Runtime Architecture
 
@@ -453,7 +453,7 @@ Recommended validation commands:
 - Unit tests (non-integration): `make test`
 - Integration-only: `make test-integration`
 - Full test set: `make test-all`
-- CLI help smoke check: `./memory_benchmark -h`
+- CLI help smoke check: `memory_benchmark -h`
 
 For narrow changes, prefer targeted `gtest` filters via `./test_runner --gtest_filter=...`.
 
