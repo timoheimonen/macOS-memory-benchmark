@@ -320,17 +320,17 @@ message listing the permitted options.
 
 **Quick single run with JSON output:**
 ```sh
-./memory_benchmark -analyze-core2core -output results.json
+memory_benchmark -analyze-core2core -output results.json
 ```
 
 **Extended run for stable statistics:**
 ```sh
-./memory_benchmark -analyze-core2core -count 10 -latency-samples 5000 -output results.json
+memory_benchmark -analyze-core2core -count 10 -latency-samples 5000 -output results.json
 ```
 
 **Verbose mode for manual inspection (no JSON):**
 ```sh
-./memory_benchmark -analyze-core2core -count 3
+memory_benchmark -analyze-core2core -count 3
 ```
 
 ### 5.3 Example console output

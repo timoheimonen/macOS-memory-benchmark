@@ -177,7 +177,7 @@ result field is populated.
 ### 7.1 Baseline Main-Memory Latency (Global Random Chain)
 
 ```bash
-./memory_benchmark \
+memory_benchmark \
   -only-latency \
   -buffersize 1024 \
   -count 10 \
@@ -189,9 +189,9 @@ result field is populated.
 ### 7.2 Locality-Window Latency Runs
 
 ```bash
-./memory_benchmark -only-latency -buffersize 1024 -count 10 -latency-samples 1000 -latency-tlb-locality-kb 16 -output latency_tlb16.json
-./memory_benchmark -only-latency -buffersize 1024 -count 10 -latency-samples 1000 -latency-tlb-locality-kb 2048 -output latency_tlb2048.json
-./memory_benchmark -only-latency -buffersize 1024 -count 10 -latency-samples 1000 -latency-tlb-locality-kb 32768 -output latency_tlb32768.json
+memory_benchmark -only-latency -buffersize 1024 -count 10 -latency-samples 1000 -latency-tlb-locality-kb 16 -output latency_tlb16.json
+memory_benchmark -only-latency -buffersize 1024 -count 10 -latency-samples 1000 -latency-tlb-locality-kb 2048 -output latency_tlb2048.json
+memory_benchmark -only-latency -buffersize 1024 -count 10 -latency-samples 1000 -latency-tlb-locality-kb 32768 -output latency_tlb32768.json
 ```
 
 ### 7.3 Cache-Scale Sweep (Custom Cache Size)
@@ -199,7 +199,7 @@ result field is populated.
 Use the repository script to sweep cache sizes with multiple locality settings:
 
 ```bash
-./script-examples/latency_test_script.sh
+script-examples/latency_test_script.sh
 ```
 
 Then visualize trends:

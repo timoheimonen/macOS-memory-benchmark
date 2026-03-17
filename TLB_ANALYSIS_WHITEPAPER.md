@@ -41,10 +41,10 @@ Related whitepaper for the other standalone analysis mode:
 `-analyze-tlb` runs a dedicated analysis path and accepts only optional JSON output and optional latency stride override:
 
 ```bash
-./memory_benchmark -analyze-tlb
-./memory_benchmark -analyze-tlb -output tlb_analysis.json
-./memory_benchmark -output tlb_analysis.json -analyze-tlb
-./memory_benchmark -analyze-tlb -latency-stride-bytes 128 -output tlb_analysis_stride128.json
+memory_benchmark -analyze-tlb
+memory_benchmark -analyze-tlb -output tlb_analysis.json
+memory_benchmark -output tlb_analysis.json -analyze-tlb
+memory_benchmark -analyze-tlb -latency-stride-bytes 128 -output tlb_analysis_stride128.json
 ```
 
 ### 3.2 Stride Default
@@ -58,7 +58,7 @@ All other options are rejected when `-analyze-tlb` is present.
 Example (invalid):
 
 ```bash
-./memory_benchmark -analyze-tlb -buffersize 1024
+memory_benchmark -analyze-tlb -buffersize 1024
 ```
 
 ## 4. Measurement Workflow
