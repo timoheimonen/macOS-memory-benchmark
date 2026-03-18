@@ -43,6 +43,14 @@ extern "C" {
      * @param byteCount Number of bytes to copy
      */
     void memory_copy_loop_asm(void* dst, const void* src, size_t byteCount);
+
+    /**
+     * @brief Optimized cache-focused memory copy loop (assembly)
+     * @param dst Destination buffer pointer
+     * @param src Source buffer pointer
+     * @param byteCount Number of bytes to copy
+     */
+    void memory_copy_cache_loop_asm(void* dst, const void* src, size_t byteCount);
     
     /**
      * @brief Optimized memory read loop (assembly)
@@ -51,6 +59,14 @@ extern "C" {
      * @return Checksum of read data
      */
     uint64_t memory_read_loop_asm(const void* src, size_t byteCount);
+
+    /**
+     * @brief Optimized cache-focused memory read loop (assembly)
+     * @param src Source buffer pointer
+     * @param byteCount Number of bytes to read
+     * @return Checksum of read data
+     */
+    uint64_t memory_read_cache_loop_asm(const void* src, size_t byteCount);
     
     /**
      * @brief Optimized memory write loop (assembly)
@@ -58,6 +74,13 @@ extern "C" {
      * @param byteCount Number of bytes to write
      */
     void memory_write_loop_asm(void* dst, size_t byteCount);
+
+    /**
+     * @brief Optimized cache-focused memory write loop (assembly)
+     * @param dst Destination buffer pointer
+     * @param byteCount Number of bytes to write
+     */
+    void memory_write_cache_loop_asm(void* dst, size_t byteCount);
     
     /**
      * @brief Pointer chasing loop for latency measurement (assembly)
@@ -126,6 +149,42 @@ extern "C" {
      * @return Checksum of read data
      */
     uint64_t memory_read_strided_loop_asm(const void* src, size_t byteCount, size_t stride, size_t num_iterations);
+
+    /**
+     * @brief Optimized strided memory read loop for 64-byte stride
+     * @param src Source buffer pointer
+     * @param byteCount Total buffer size in bytes (for modulo wrapping)
+     * @param num_iterations Number of strided accesses to perform
+     * @return Checksum of read data
+     */
+    uint64_t memory_read_strided_64_loop_asm(const void* src, size_t byteCount, size_t num_iterations);
+
+    /**
+     * @brief Optimized strided memory read loop for 4096-byte stride
+     * @param src Source buffer pointer
+     * @param byteCount Total buffer size in bytes (for modulo wrapping)
+     * @param num_iterations Number of strided accesses to perform
+     * @return Checksum of read data
+     */
+    uint64_t memory_read_strided_4096_loop_asm(const void* src, size_t byteCount, size_t num_iterations);
+
+    /**
+     * @brief Optimized strided memory read loop for 16384-byte stride
+     * @param src Source buffer pointer
+     * @param byteCount Total buffer size in bytes (for modulo wrapping)
+     * @param num_iterations Number of strided accesses to perform
+     * @return Checksum of read data
+     */
+    uint64_t memory_read_strided_16384_loop_asm(const void* src, size_t byteCount, size_t num_iterations);
+
+    /**
+     * @brief Optimized strided memory read loop for 2MB stride
+     * @param src Source buffer pointer
+     * @param byteCount Total buffer size in bytes (for modulo wrapping)
+     * @param num_iterations Number of strided accesses to perform
+     * @return Checksum of read data
+     */
+    uint64_t memory_read_strided_2mb_loop_asm(const void* src, size_t byteCount, size_t num_iterations);
     
     /**
      * @brief Optimized strided memory write loop (assembly)
@@ -135,6 +194,38 @@ extern "C" {
      * @param num_iterations Number of strided accesses to perform
      */
     void memory_write_strided_loop_asm(void* dst, size_t byteCount, size_t stride, size_t num_iterations);
+
+    /**
+     * @brief Optimized strided memory write loop for 64-byte stride
+     * @param dst Destination buffer pointer
+     * @param byteCount Total buffer size in bytes (for modulo wrapping)
+     * @param num_iterations Number of strided accesses to perform
+     */
+    void memory_write_strided_64_loop_asm(void* dst, size_t byteCount, size_t num_iterations);
+
+    /**
+     * @brief Optimized strided memory write loop for 4096-byte stride
+     * @param dst Destination buffer pointer
+     * @param byteCount Total buffer size in bytes (for modulo wrapping)
+     * @param num_iterations Number of strided accesses to perform
+     */
+    void memory_write_strided_4096_loop_asm(void* dst, size_t byteCount, size_t num_iterations);
+
+    /**
+     * @brief Optimized strided memory write loop for 16384-byte stride
+     * @param dst Destination buffer pointer
+     * @param byteCount Total buffer size in bytes (for modulo wrapping)
+     * @param num_iterations Number of strided accesses to perform
+     */
+    void memory_write_strided_16384_loop_asm(void* dst, size_t byteCount, size_t num_iterations);
+
+    /**
+     * @brief Optimized strided memory write loop for 2MB stride
+     * @param dst Destination buffer pointer
+     * @param byteCount Total buffer size in bytes (for modulo wrapping)
+     * @param num_iterations Number of strided accesses to perform
+     */
+    void memory_write_strided_2mb_loop_asm(void* dst, size_t byteCount, size_t num_iterations);
     
     /**
      * @brief Optimized strided memory copy loop (assembly)
@@ -145,6 +236,42 @@ extern "C" {
      * @param num_iterations Number of strided accesses to perform
      */
     void memory_copy_strided_loop_asm(void* dst, const void* src, size_t byteCount, size_t stride, size_t num_iterations);
+
+    /**
+     * @brief Optimized strided memory copy loop for 64-byte stride
+     * @param dst Destination buffer pointer
+     * @param src Source buffer pointer
+     * @param byteCount Total buffer size in bytes (for modulo wrapping)
+     * @param num_iterations Number of strided accesses to perform
+     */
+    void memory_copy_strided_64_loop_asm(void* dst, const void* src, size_t byteCount, size_t num_iterations);
+
+    /**
+     * @brief Optimized strided memory copy loop for 4096-byte stride
+     * @param dst Destination buffer pointer
+     * @param src Source buffer pointer
+     * @param byteCount Total buffer size in bytes (for modulo wrapping)
+     * @param num_iterations Number of strided accesses to perform
+     */
+    void memory_copy_strided_4096_loop_asm(void* dst, const void* src, size_t byteCount, size_t num_iterations);
+
+    /**
+     * @brief Optimized strided memory copy loop for 16384-byte stride
+     * @param dst Destination buffer pointer
+     * @param src Source buffer pointer
+     * @param byteCount Total buffer size in bytes (for modulo wrapping)
+     * @param num_iterations Number of strided accesses to perform
+     */
+    void memory_copy_strided_16384_loop_asm(void* dst, const void* src, size_t byteCount, size_t num_iterations);
+
+    /**
+     * @brief Optimized strided memory copy loop for 2MB stride
+     * @param dst Destination buffer pointer
+     * @param src Source buffer pointer
+     * @param byteCount Total buffer size in bytes (for modulo wrapping)
+     * @param num_iterations Number of strided accesses to perform
+     */
+    void memory_copy_strided_2mb_loop_asm(void* dst, const void* src, size_t byteCount, size_t num_iterations);
     
     // Random access
     /**

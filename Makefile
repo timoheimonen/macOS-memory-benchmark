@@ -69,8 +69,12 @@ ALL_CPP_SRCS = $(CPP_SRCS_ROOT) $(CPP_SRCS_SRC_FULL) $(CPP_SRCS_BENCHMARK_FULL) 
 
 # Assembly source files (in src/asm)
 ASM_SRCS = src/asm/memory_copy.s src/asm/memory_read.s src/asm/memory_write.s src/asm/memory_latency.s \
+            src/asm/memory_read_cache.s src/asm/memory_write_cache.s src/asm/memory_copy_cache.s \
             src/asm/memory_read_reverse.s src/asm/memory_write_reverse.s src/asm/memory_copy_reverse.s \
             src/asm/memory_read_strided.s src/asm/memory_write_strided.s src/asm/memory_copy_strided.s \
+            src/asm/memory_read_strided_64.s src/asm/memory_read_strided_4096.s src/asm/memory_read_strided_16384.s src/asm/memory_read_strided_2mb.s \
+            src/asm/memory_write_strided_64.s src/asm/memory_write_strided_4096.s src/asm/memory_write_strided_16384.s src/asm/memory_write_strided_2mb.s \
+            src/asm/memory_copy_strided_64.s src/asm/memory_copy_strided_4096.s src/asm/memory_copy_strided_16384.s src/asm/memory_copy_strided_2mb.s \
             src/asm/memory_read_random.s src/asm/memory_write_random.s src/asm/memory_copy_random.s \
             src/asm/core_to_core_latency.s
 
