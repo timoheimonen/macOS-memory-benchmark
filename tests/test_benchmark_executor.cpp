@@ -31,20 +31,14 @@
 #include "core/config/constants.h"
 #include "core/memory/buffer_manager.h"
 #include "core/memory/memory_utils.h"
-#include "core/system/system_info.h"
 #include "core/timing/timer.h"
+#include "test_config_helpers.h"
 
 namespace {
 
 BenchmarkConfig build_base_config() {
   BenchmarkConfig config;
-
-  config.cpu_name = get_processor_name();
-  config.perf_cores = get_performance_cores();
-  config.eff_cores = get_efficiency_cores();
-  config.num_threads = get_total_logical_cores();
-  config.l1_cache_size = get_l1_cache_size();
-  config.l2_cache_size = get_l2_cache_size();
+  initialize_system_info(config);
 
   config.buffer_size = static_cast<size_t>(getpagesize());
   config.buffer_size_mb = 1;
@@ -125,8 +119,7 @@ TEST(BenchmarkExecutorTest, MainMemoryLatencyCollectsSamplesWhenConfigured) {
   config.latency_sample_count = 17;
 
   BenchmarkBuffers buffers;
-  ASSERT_EQ(allocate_all_buffers(config, buffers), EXIT_SUCCESS);
-  ASSERT_EQ(initialize_all_buffers(buffers, config), EXIT_SUCCESS);
+  ASSERT_TRUE(allocate_and_initialize_buffers(config, buffers));
 
   auto timer_opt = HighResTimer::create();
   ASSERT_TRUE(timer_opt.has_value());
@@ -149,8 +142,7 @@ TEST(BenchmarkExecutorTest, MainMemoryLatencySkipsAutoTlbBreakdownWhenLocalitySp
   config.latency_tlb_locality_bytes = static_cast<size_t>(16) * Constants::BYTES_PER_KB;
 
   BenchmarkBuffers buffers;
-  ASSERT_EQ(allocate_all_buffers(config, buffers), EXIT_SUCCESS);
-  ASSERT_EQ(initialize_all_buffers(buffers, config), EXIT_SUCCESS);
+  ASSERT_TRUE(allocate_and_initialize_buffers(config, buffers));
 
   auto timer_opt = HighResTimer::create();
   ASSERT_TRUE(timer_opt.has_value());
@@ -179,8 +171,7 @@ TEST(BenchmarkExecutorTest, MainMemoryLatencySkipsWhenMainLatencyDisabled) {
   calculate_access_counts(config);
 
   BenchmarkBuffers buffers;
-  ASSERT_EQ(allocate_all_buffers(config, buffers), EXIT_SUCCESS);
-  ASSERT_EQ(initialize_all_buffers(buffers, config), EXIT_SUCCESS);
+  ASSERT_TRUE(allocate_and_initialize_buffers(config, buffers));
 
   auto timer_opt = HighResTimer::create();
   ASSERT_TRUE(timer_opt.has_value());

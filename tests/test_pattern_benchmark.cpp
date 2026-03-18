@@ -19,9 +19,84 @@
 #include "core/config/config.h"
 #include "utils/benchmark.h"  // Declares system_info functions
 #include "core/config/constants.h"
+#include "test_config_helpers.h"
 #include <cstdlib>
 #include <cstring>
 #include <algorithm>
+
+namespace {
+
+BenchmarkConfig make_pattern_config(size_t buffer_size, int iterations, int num_threads = 1) {
+  BenchmarkConfig config;
+  config.buffer_size = buffer_size;
+  config.iterations = iterations;
+  initialize_system_info(config);
+  config.num_threads = num_threads;
+  return config;
+}
+
+::testing::AssertionResult run_pattern_benchmarks_checked(BenchmarkBuffers& buffers,
+                                                          const BenchmarkConfig& config,
+                                                          PatternResults& results) {
+  const int run_result = run_pattern_benchmarks(buffers, config, results);
+  if (run_result != EXIT_SUCCESS) {
+    return ::testing::AssertionFailure()
+           << "run_pattern_benchmarks(buffers, config, results) failed with code " << run_result;
+  }
+
+  return ::testing::AssertionSuccess();
+}
+
+::testing::AssertionResult run_pattern_benchmarks_with_fresh_buffers(BenchmarkConfig& config,
+                                                                      PatternResults& results) {
+  BenchmarkBuffers buffers;
+  const ::testing::AssertionResult alloc_init_result = allocate_and_initialize_buffers(config, buffers);
+  if (!alloc_init_result) {
+    return alloc_init_result;
+  }
+
+  return run_pattern_benchmarks_checked(buffers, config, results);
+}
+
+void expect_core_pattern_bandwidths_positive(const PatternResults& results) {
+  EXPECT_GT(results.forward_read_bw, 0.0);
+  EXPECT_GT(results.forward_write_bw, 0.0);
+  EXPECT_GT(results.forward_copy_bw, 0.0);
+
+  EXPECT_GT(results.reverse_read_bw, 0.0);
+  EXPECT_GT(results.reverse_write_bw, 0.0);
+  EXPECT_GT(results.reverse_copy_bw, 0.0);
+
+  EXPECT_GT(results.strided_64_read_bw, 0.0);
+  EXPECT_GT(results.strided_64_write_bw, 0.0);
+  EXPECT_GT(results.strided_64_copy_bw, 0.0);
+
+  EXPECT_GT(results.strided_4096_read_bw, 0.0);
+  EXPECT_GT(results.strided_4096_write_bw, 0.0);
+  EXPECT_GT(results.strided_4096_copy_bw, 0.0);
+
+  EXPECT_GT(results.strided_16384_read_bw, 0.0);
+  EXPECT_GT(results.strided_16384_write_bw, 0.0);
+  EXPECT_GT(results.strided_16384_copy_bw, 0.0);
+
+  EXPECT_GT(results.random_read_bw, 0.0);
+  EXPECT_GT(results.random_write_bw, 0.0);
+  EXPECT_GT(results.random_copy_bw, 0.0);
+}
+
+void expect_2mb_pattern_bandwidths_zero(const PatternResults& results) {
+  EXPECT_EQ(results.strided_2mb_read_bw, 0.0);
+  EXPECT_EQ(results.strided_2mb_write_bw, 0.0);
+  EXPECT_EQ(results.strided_2mb_copy_bw, 0.0);
+}
+
+void expect_2mb_pattern_bandwidths_positive(const PatternResults& results) {
+  EXPECT_GT(results.strided_2mb_read_bw, 0.0);
+  EXPECT_GT(results.strided_2mb_write_bw, 0.0);
+  EXPECT_GT(results.strided_2mb_copy_bw, 0.0);
+}
+
+}  // namespace
 
 // Test PatternResults default initialization
 TEST(PatternBenchmarkTest, PatternResultsDefaultValues) {
@@ -73,84 +148,20 @@ TEST(PatternBenchmarkTest, PatternResultsSetValues) {
 // It runs real pattern benchmarks which may be slower and can fail on slow systems or under load.
 // Use 'make test-integration' to run integration tests, or 'make test' for unit tests only.
 TEST(PatternBenchmarkTest, RunPatternBenchmarksMinimalIntegration) {
-  BenchmarkConfig config;
-  config.buffer_size = 512 * 1024;  // 512 KB - large enough for all patterns including strided 4096
-  config.iterations = 1;  // Single iteration for speed
-  config.num_threads = 1;  // Single thread
-  
-  // Initialize system info
-  config.cpu_name = get_processor_name();
-  config.perf_cores = get_performance_cores();
-  config.eff_cores = get_efficiency_cores();
-  config.num_threads = get_total_logical_cores();
-  config.l1_cache_size = get_l1_cache_size();
-  config.l2_cache_size = get_l2_cache_size();
-  
-  // Allocate buffers
-  BenchmarkBuffers buffers;
-  int alloc_result = allocate_all_buffers(config, buffers);
-  ASSERT_EQ(alloc_result, EXIT_SUCCESS);
-  
-  // Initialize buffers
-  int init_result = initialize_all_buffers(buffers, config);
-  ASSERT_EQ(init_result, EXIT_SUCCESS);
-  
-  // Run pattern benchmarks
+  BenchmarkConfig config = make_pattern_config(512 * 1024, 1);
   PatternResults results;
-  int result = run_pattern_benchmarks(buffers, config, results);
-  
-  EXPECT_EQ(result, EXIT_SUCCESS);
-  
-  // Verify that results were populated (should be > 0 for valid benchmarks)
-  EXPECT_GT(results.forward_read_bw, 0.0);
-  EXPECT_GT(results.forward_write_bw, 0.0);
-  EXPECT_GT(results.forward_copy_bw, 0.0);
-  EXPECT_GT(results.reverse_read_bw, 0.0);
-  EXPECT_GT(results.reverse_write_bw, 0.0);
-  EXPECT_GT(results.reverse_copy_bw, 0.0);
-  EXPECT_GT(results.strided_64_read_bw, 0.0);
-  EXPECT_GT(results.strided_64_write_bw, 0.0);
-  EXPECT_GT(results.strided_64_copy_bw, 0.0);
-  EXPECT_GT(results.strided_4096_read_bw, 0.0);
-  EXPECT_GT(results.strided_4096_write_bw, 0.0);
-  EXPECT_GT(results.strided_4096_copy_bw, 0.0);
-  EXPECT_GT(results.strided_16384_read_bw, 0.0);
-  EXPECT_GT(results.strided_16384_write_bw, 0.0);
-  EXPECT_GT(results.strided_16384_copy_bw, 0.0);
-  EXPECT_EQ(results.strided_2mb_read_bw, 0.0);
-  EXPECT_EQ(results.strided_2mb_write_bw, 0.0);
-  EXPECT_EQ(results.strided_2mb_copy_bw, 0.0);
-  EXPECT_GT(results.random_read_bw, 0.0);
-  EXPECT_GT(results.random_write_bw, 0.0);
-  EXPECT_GT(results.random_copy_bw, 0.0);
+
+  ASSERT_TRUE(run_pattern_benchmarks_with_fresh_buffers(config, results));
+
+  expect_core_pattern_bandwidths_positive(results);
+  expect_2mb_pattern_bandwidths_zero(results);
 }
 
 // Test pattern benchmarks with multiple iterations
 TEST(PatternBenchmarkTest, RunPatternBenchmarksMultipleIterations) {
-  BenchmarkConfig config;
-  config.buffer_size = 128 * 1024;  // 128 KB
-  config.iterations = 3;  // Multiple iterations
-  config.num_threads = 1;
-  
-  // Initialize system info
-  config.cpu_name = get_processor_name();
-  config.perf_cores = get_performance_cores();
-  config.eff_cores = get_efficiency_cores();
-  config.num_threads = get_total_logical_cores();
-  config.l1_cache_size = get_l1_cache_size();
-  config.l2_cache_size = get_l2_cache_size();
-  
-  BenchmarkBuffers buffers;
-  int alloc_result = allocate_all_buffers(config, buffers);
-  ASSERT_EQ(alloc_result, EXIT_SUCCESS);
-  
-  int init_result = initialize_all_buffers(buffers, config);
-  ASSERT_EQ(init_result, EXIT_SUCCESS);
-  
+  BenchmarkConfig config = make_pattern_config(128 * 1024, 3);
   PatternResults results;
-  int result = run_pattern_benchmarks(buffers, config, results);
-  
-  EXPECT_EQ(result, EXIT_SUCCESS);
+  ASSERT_TRUE(run_pattern_benchmarks_with_fresh_buffers(config, results));
   
   // All results should be positive
   EXPECT_GT(results.forward_read_bw, 0.0);
@@ -159,29 +170,9 @@ TEST(PatternBenchmarkTest, RunPatternBenchmarksMultipleIterations) {
 
 // Test that forward pattern is baseline (typically fastest)
 TEST(PatternBenchmarkTest, ForwardPatternBaseline) {
-  BenchmarkConfig config;
-  config.buffer_size = 256 * 1024;  // 256 KB
-  config.iterations = 2;
-  config.num_threads = 1;
-  
-  // Initialize system info
-  config.cpu_name = get_processor_name();
-  config.perf_cores = get_performance_cores();
-  config.eff_cores = get_efficiency_cores();
-  config.num_threads = get_total_logical_cores();
-  config.l1_cache_size = get_l1_cache_size();
-  config.l2_cache_size = get_l2_cache_size();
-  
-  BenchmarkBuffers buffers;
-  int alloc_result = allocate_all_buffers(config, buffers);
-  ASSERT_EQ(alloc_result, EXIT_SUCCESS);
-  
-  int init_result = initialize_all_buffers(buffers, config);
-  ASSERT_EQ(init_result, EXIT_SUCCESS);
-  
+  BenchmarkConfig config = make_pattern_config(256 * 1024, 2);
   PatternResults results;
-  int result = run_pattern_benchmarks(buffers, config, results);
-  ASSERT_EQ(result, EXIT_SUCCESS);
+  ASSERT_TRUE(run_pattern_benchmarks_with_fresh_buffers(config, results));
   
   // All patterns should produce valid results
   EXPECT_GT(results.forward_read_bw, 0.0);
@@ -194,49 +185,12 @@ TEST(PatternBenchmarkTest, ForwardPatternBaseline) {
 
 // Test pattern benchmarks with different buffer sizes
 TEST(PatternBenchmarkTest, RunPatternBenchmarksDifferentSizes) {
-  BenchmarkConfig config1, config2;
-  
-  config1.buffer_size = 64 * 1024;  // 64 KB
-  config1.iterations = 1;
-  config1.num_threads = 1;
-  
-  config2.buffer_size = 512 * 1024;  // 512 KB
-  config2.iterations = 1;
-  config2.num_threads = 1;
-  
-  // Initialize system info for both
-  std::string cpu_name = get_processor_name();
-  int perf_cores = get_performance_cores();
-  int eff_cores = get_efficiency_cores();
-  int num_threads = get_total_logical_cores();
-  size_t l1_cache_size = get_l1_cache_size();
-  size_t l2_cache_size = get_l2_cache_size();
-  
-  config1.cpu_name = config2.cpu_name = cpu_name;
-  config1.perf_cores = config2.perf_cores = perf_cores;
-  config1.eff_cores = config2.eff_cores = eff_cores;
-  config1.num_threads = config2.num_threads = num_threads;
-  config1.l1_cache_size = config2.l1_cache_size = l1_cache_size;
-  config1.l2_cache_size = config2.l2_cache_size = l2_cache_size;
-  
-  BenchmarkBuffers buffers1, buffers2;
-  
-  int alloc_result1 = allocate_all_buffers(config1, buffers1);
-  ASSERT_EQ(alloc_result1, EXIT_SUCCESS);
-  int alloc_result2 = allocate_all_buffers(config2, buffers2);
-  ASSERT_EQ(alloc_result2, EXIT_SUCCESS);
-  
-  int init_result1 = initialize_all_buffers(buffers1, config1);
-  ASSERT_EQ(init_result1, EXIT_SUCCESS);
-  int init_result2 = initialize_all_buffers(buffers2, config2);
-  ASSERT_EQ(init_result2, EXIT_SUCCESS);
-  
+  BenchmarkConfig config1 = make_pattern_config(64 * 1024, 1);
+  BenchmarkConfig config2 = make_pattern_config(512 * 1024, 1);
+
   PatternResults results1, results2;
-  int result1 = run_pattern_benchmarks(buffers1, config1, results1);
-  int result2 = run_pattern_benchmarks(buffers2, config2, results2);
-  
-  EXPECT_EQ(result1, EXIT_SUCCESS);
-  EXPECT_EQ(result2, EXIT_SUCCESS);
+  ASSERT_TRUE(run_pattern_benchmarks_with_fresh_buffers(config1, results1));
+  ASSERT_TRUE(run_pattern_benchmarks_with_fresh_buffers(config2, results2));
   
   // Both should produce valid results
   EXPECT_GT(results1.forward_read_bw, 0.0);
@@ -247,30 +201,9 @@ TEST(PatternBenchmarkTest, RunPatternBenchmarksDifferentSizes) {
 // This tests that random pattern benchmarks complete successfully, which implies
 // random indices were generated within valid bounds
 TEST(PatternBenchmarkTest, RandomIndicesGeneration) {
-  BenchmarkConfig config;
-  config.buffer_size = 1024 * 1024;  // 1 MB - enough for random pattern
-  config.iterations = 1;
-  config.num_threads = 1;
-  
-  // Initialize system info
-  config.cpu_name = get_processor_name();
-  config.perf_cores = get_performance_cores();
-  config.eff_cores = get_efficiency_cores();
-  config.num_threads = get_total_logical_cores();
-  config.l1_cache_size = get_l1_cache_size();
-  config.l2_cache_size = get_l2_cache_size();
-  
-  BenchmarkBuffers buffers;
-  int alloc_result = allocate_all_buffers(config, buffers);
-  ASSERT_EQ(alloc_result, EXIT_SUCCESS);
-  
-  int init_result = initialize_all_buffers(buffers, config);
-  ASSERT_EQ(init_result, EXIT_SUCCESS);
-  
+  BenchmarkConfig config = make_pattern_config(1024 * 1024, 1);
   PatternResults results;
-  int result = run_pattern_benchmarks(buffers, config, results);
-  
-  EXPECT_EQ(result, EXIT_SUCCESS);
+  ASSERT_TRUE(run_pattern_benchmarks_with_fresh_buffers(config, results));
   
   // Random pattern should complete successfully, implying indices were valid
   EXPECT_GT(results.random_read_bw, 0.0);
@@ -286,31 +219,9 @@ TEST(PatternBenchmarkTest, RandomIndicesGeneration) {
 
 // Test pattern benchmarks with very small buffer (edge case)
 TEST(PatternBenchmarkTest, RunPatternBenchmarksSmallBuffer) {
-  BenchmarkConfig config;
-  config.buffer_size = 1024;  // 1 KB - very small
-  config.iterations = 1;
-  config.num_threads = 1;
-  
-  // Initialize system info
-  config.cpu_name = get_processor_name();
-  config.perf_cores = get_performance_cores();
-  config.eff_cores = get_efficiency_cores();
-  config.num_threads = get_total_logical_cores();
-  config.l1_cache_size = get_l1_cache_size();
-  config.l2_cache_size = get_l2_cache_size();
-  
-  BenchmarkBuffers buffers;
-  int alloc_result = allocate_all_buffers(config, buffers);
-  ASSERT_EQ(alloc_result, EXIT_SUCCESS);
-  
-  int init_result = initialize_all_buffers(buffers, config);
-  ASSERT_EQ(init_result, EXIT_SUCCESS);
-  
+  BenchmarkConfig config = make_pattern_config(1024, 1);
   PatternResults results;
-  int result = run_pattern_benchmarks(buffers, config, results);
-  
-  // Should still succeed even with small buffer
-  EXPECT_EQ(result, EXIT_SUCCESS);
+  ASSERT_TRUE(run_pattern_benchmarks_with_fresh_buffers(config, results));
   
   // Results should be valid (may be small but should be > 0)
   EXPECT_GT(results.forward_read_bw, 0.0);
@@ -319,29 +230,9 @@ TEST(PatternBenchmarkTest, RunPatternBenchmarksSmallBuffer) {
 // Test that strided patterns use correct stride values
 // 64B stride should access cache lines, 4096B stride should access pages
 TEST(PatternBenchmarkTest, StridedPatternStrides) {
-  BenchmarkConfig config;
-  config.buffer_size = 512 * 1024;  // 512 KB - large enough for strided 4096 pattern
-  config.iterations = 2;
-  config.num_threads = 1;
-  
-  // Initialize system info
-  config.cpu_name = get_processor_name();
-  config.perf_cores = get_performance_cores();
-  config.eff_cores = get_efficiency_cores();
-  config.num_threads = get_total_logical_cores();
-  config.l1_cache_size = get_l1_cache_size();
-  config.l2_cache_size = get_l2_cache_size();
-  
-  BenchmarkBuffers buffers;
-  int alloc_result = allocate_all_buffers(config, buffers);
-  ASSERT_EQ(alloc_result, EXIT_SUCCESS);
-  
-  int init_result = initialize_all_buffers(buffers, config);
-  ASSERT_EQ(init_result, EXIT_SUCCESS);
-  
+  BenchmarkConfig config = make_pattern_config(512 * 1024, 2);
   PatternResults results;
-  int result = run_pattern_benchmarks(buffers, config, results);
-  ASSERT_EQ(result, EXIT_SUCCESS);
+  ASSERT_TRUE(run_pattern_benchmarks_with_fresh_buffers(config, results));
   
   // Both strided patterns should complete successfully
   EXPECT_GT(results.strided_64_read_bw, 0.0);
@@ -357,132 +248,40 @@ TEST(PatternBenchmarkTest, StridedPatternStrides) {
 
 // Test large-page stride variants with a larger buffer
 TEST(PatternBenchmarkTest, StridedLargePagePatterns) {
-  BenchmarkConfig config;
-  config.buffer_size = 8 * 1024 * 1024;  // 8 MB - large enough for 2MB stride
-  config.iterations = 1;
-  config.num_threads = 1;
-
-  // Initialize system info
-  config.cpu_name = get_processor_name();
-  config.perf_cores = get_performance_cores();
-  config.eff_cores = get_efficiency_cores();
-  config.num_threads = get_total_logical_cores();
-  config.l1_cache_size = get_l1_cache_size();
-  config.l2_cache_size = get_l2_cache_size();
-
-  BenchmarkBuffers buffers;
-  int alloc_result = allocate_all_buffers(config, buffers);
-  ASSERT_EQ(alloc_result, EXIT_SUCCESS);
-
-  int init_result = initialize_all_buffers(buffers, config);
-  ASSERT_EQ(init_result, EXIT_SUCCESS);
+  BenchmarkConfig config = make_pattern_config(8 * 1024 * 1024, 1);
 
   PatternResults results;
-  int result = run_pattern_benchmarks(buffers, config, results);
-  ASSERT_EQ(result, EXIT_SUCCESS);
+  ASSERT_TRUE(run_pattern_benchmarks_with_fresh_buffers(config, results));
 
   EXPECT_GT(results.strided_16384_read_bw, 0.0);
   EXPECT_GT(results.strided_16384_write_bw, 0.0);
   EXPECT_GT(results.strided_16384_copy_bw, 0.0);
 
-  EXPECT_GT(results.strided_2mb_read_bw, 0.0);
-  EXPECT_GT(results.strided_2mb_write_bw, 0.0);
-  EXPECT_GT(results.strided_2mb_copy_bw, 0.0);
+  expect_2mb_pattern_bandwidths_positive(results);
 }
 
 // Test that all pattern types produce results
 TEST(PatternBenchmarkTest, AllPatternTypesComplete) {
-  BenchmarkConfig config;
-  config.buffer_size = 512 * 1024;  // 512 KB - large enough for all patterns including strided 4096
-  config.iterations = 1;
-  config.num_threads = 1;
-  
-  // Initialize system info
-  config.cpu_name = get_processor_name();
-  config.perf_cores = get_performance_cores();
-  config.eff_cores = get_efficiency_cores();
-  config.num_threads = get_total_logical_cores();
-  config.l1_cache_size = get_l1_cache_size();
-  config.l2_cache_size = get_l2_cache_size();
-  
-  BenchmarkBuffers buffers;
-  int alloc_result = allocate_all_buffers(config, buffers);
-  ASSERT_EQ(alloc_result, EXIT_SUCCESS);
-  
-  int init_result = initialize_all_buffers(buffers, config);
-  ASSERT_EQ(init_result, EXIT_SUCCESS);
-  
+  BenchmarkConfig config = make_pattern_config(512 * 1024, 1);
   PatternResults results;
-  int result = run_pattern_benchmarks(buffers, config, results);
-  ASSERT_EQ(result, EXIT_SUCCESS);
-  
-  // Verify all pattern types have results
-  // Forward patterns
-  EXPECT_GT(results.forward_read_bw, 0.0);
-  EXPECT_GT(results.forward_write_bw, 0.0);
-  EXPECT_GT(results.forward_copy_bw, 0.0);
-  
-  // Reverse patterns
-  EXPECT_GT(results.reverse_read_bw, 0.0);
-  EXPECT_GT(results.reverse_write_bw, 0.0);
-  EXPECT_GT(results.reverse_copy_bw, 0.0);
-  
-  // Strided 64B patterns
-  EXPECT_GT(results.strided_64_read_bw, 0.0);
-  EXPECT_GT(results.strided_64_write_bw, 0.0);
-  EXPECT_GT(results.strided_64_copy_bw, 0.0);
-  
-  // Strided 4096B patterns
-  EXPECT_GT(results.strided_4096_read_bw, 0.0);
-  EXPECT_GT(results.strided_4096_write_bw, 0.0);
-  EXPECT_GT(results.strided_4096_copy_bw, 0.0);
+  ASSERT_TRUE(run_pattern_benchmarks_with_fresh_buffers(config, results));
 
-  // Strided 16384B patterns
-  EXPECT_GT(results.strided_16384_read_bw, 0.0);
-  EXPECT_GT(results.strided_16384_write_bw, 0.0);
-  EXPECT_GT(results.strided_16384_copy_bw, 0.0);
-
-  // Strided 2MB patterns are skipped for 512KB buffer
-  EXPECT_EQ(results.strided_2mb_read_bw, 0.0);
-  EXPECT_EQ(results.strided_2mb_write_bw, 0.0);
-  EXPECT_EQ(results.strided_2mb_copy_bw, 0.0);
-  
-  // Random patterns
-  EXPECT_GT(results.random_read_bw, 0.0);
-  EXPECT_GT(results.random_write_bw, 0.0);
-  EXPECT_GT(results.random_copy_bw, 0.0);
+  expect_core_pattern_bandwidths_positive(results);
+  expect_2mb_pattern_bandwidths_zero(results);
 }
 
 // Test that pattern results are consistent across multiple runs
 // (Results may vary but should be in reasonable range)
 TEST(PatternBenchmarkTest, PatternResultsConsistency) {
-  BenchmarkConfig config;
-  config.buffer_size = 256 * 1024;  // 256 KB
-  config.iterations = 2;
-  config.num_threads = 1;
-  
-  // Initialize system info
-  config.cpu_name = get_processor_name();
-  config.perf_cores = get_performance_cores();
-  config.eff_cores = get_efficiency_cores();
-  config.num_threads = get_total_logical_cores();
-  config.l1_cache_size = get_l1_cache_size();
-  config.l2_cache_size = get_l2_cache_size();
+  BenchmarkConfig config = make_pattern_config(256 * 1024, 2);
   
   BenchmarkBuffers buffers;
-  int alloc_result = allocate_all_buffers(config, buffers);
-  ASSERT_EQ(alloc_result, EXIT_SUCCESS);
-  
-  int init_result = initialize_all_buffers(buffers, config);
-  ASSERT_EQ(init_result, EXIT_SUCCESS);
+  ASSERT_TRUE(allocate_and_initialize_buffers(config, buffers));
   
   PatternResults results1, results2;
-  
-  int result1 = run_pattern_benchmarks(buffers, config, results1);
-  ASSERT_EQ(result1, EXIT_SUCCESS);
-  
-  int result2 = run_pattern_benchmarks(buffers, config, results2);
-  ASSERT_EQ(result2, EXIT_SUCCESS);
+
+  ASSERT_TRUE(run_pattern_benchmarks_checked(buffers, config, results1));
+  ASSERT_TRUE(run_pattern_benchmarks_checked(buffers, config, results2));
   
   // Both runs should produce valid results
   EXPECT_GT(results1.forward_read_bw, 0.0);
@@ -497,32 +296,16 @@ TEST(PatternBenchmarkTest, PatternResultsConsistency) {
 
 // Test that copy operations use both source and destination buffers
 TEST(PatternBenchmarkTest, CopyOperationsUseBothBuffers) {
-  BenchmarkConfig config;
-  config.buffer_size = 512 * 1024;  // 512 KB - large enough for all patterns including strided 4096
-  config.iterations = 1;
-  config.num_threads = 1;
-  
-  // Initialize system info
-  config.cpu_name = get_processor_name();
-  config.perf_cores = get_performance_cores();
-  config.eff_cores = get_efficiency_cores();
-  config.num_threads = get_total_logical_cores();
-  config.l1_cache_size = get_l1_cache_size();
-  config.l2_cache_size = get_l2_cache_size();
+  BenchmarkConfig config = make_pattern_config(512 * 1024, 1);
   
   BenchmarkBuffers buffers;
-  int alloc_result = allocate_all_buffers(config, buffers);
-  ASSERT_EQ(alloc_result, EXIT_SUCCESS);
-  
-  int init_result = initialize_all_buffers(buffers, config);
-  ASSERT_EQ(init_result, EXIT_SUCCESS);
+  ASSERT_TRUE(allocate_and_initialize_buffers(config, buffers));
   
   // Verify buffers are different
   EXPECT_NE(buffers.src_buffer(), buffers.dst_buffer());
   
   PatternResults results;
-  int result = run_pattern_benchmarks(buffers, config, results);
-  ASSERT_EQ(result, EXIT_SUCCESS);
+  ASSERT_TRUE(run_pattern_benchmarks_checked(buffers, config, results));
   
   // Copy operations should complete successfully
   EXPECT_GT(results.forward_copy_bw, 0.0);
@@ -538,32 +321,10 @@ TEST(PatternBenchmarkTest, CopyOperationsUseBothBuffers) {
 TEST(PatternBenchmarkTest, StridedPatternSkippedWhenBufferTooSmall) {
   using namespace Constants;
   
-  BenchmarkConfig config;
-  // Use buffer size smaller than PATTERN_STRIDE_PAGE (4096B)
-  config.buffer_size = PATTERN_STRIDE_PAGE - 1;  // 4095 bytes - smaller than page stride
-  config.iterations = 1;
-  config.num_threads = 1;
-  
-  // Initialize system info
-  config.cpu_name = get_processor_name();
-  config.perf_cores = get_performance_cores();
-  config.eff_cores = get_efficiency_cores();
-  config.num_threads = get_total_logical_cores();
-  config.l1_cache_size = get_l1_cache_size();
-  config.l2_cache_size = get_l2_cache_size();
-  
-  BenchmarkBuffers buffers;
-  int alloc_result = allocate_all_buffers(config, buffers);
-  ASSERT_EQ(alloc_result, EXIT_SUCCESS);
-  
-  int init_result = initialize_all_buffers(buffers, config);
-  ASSERT_EQ(init_result, EXIT_SUCCESS);
+  BenchmarkConfig config = make_pattern_config(PATTERN_STRIDE_PAGE - 1, 1);
   
   PatternResults results;
-  int result = run_pattern_benchmarks(buffers, config, results);
-  
-  // Should succeed (pattern skipped, not an error)
-  EXPECT_EQ(result, EXIT_SUCCESS);
+  ASSERT_TRUE(run_pattern_benchmarks_with_fresh_buffers(config, results));
   
   // Strided 4096B should be skipped (buffer too small)
   // When skipped, bandwidth remains 0.0
@@ -581,5 +342,3 @@ TEST(PatternBenchmarkTest, StridedPatternSkippedWhenBufferTooSmall) {
   // The important thing is that the test completes successfully
   SUCCEED();
 }
-
-

@@ -30,48 +30,14 @@
 #include <limits>
 #include <string>
 #include <vector>
+#include "test_statistics_helpers.h"
 #include "output/console/statistics.h"
 
 namespace {
 
-// Convenience: empty vector reused for all unused parameters.
-const std::vector<double> kE{};
-
-// ---------------------------------------------------------------------------
-// Call print_statistics() exercising only the bandwidth path (read_bw driven).
-// loop_count=2 bypasses the "loop_count <= 1" early-exit guard.
-// ---------------------------------------------------------------------------
-std::string capture_bw(const std::vector<double>& v) {
-  testing::internal::CaptureStdout();
-  print_statistics(
-      2, v, v, v,
-      kE, kE, kE, kE, kE, kE, kE, kE,
-      kE, kE, kE, kE,
-      false,
-      kE, kE, kE, kE,
-      kE, kE, kE, kE,
-      false, false);
-  return testing::internal::GetCapturedStdout();
-}
-
-// ---------------------------------------------------------------------------
-// Call print_statistics() exercising only the main-memory latency path.
-// only_latency=true suppresses bandwidth sections.
-// ---------------------------------------------------------------------------
-std::string capture_lat(const std::vector<double>& v) {
-  testing::internal::CaptureStdout();
-  print_statistics(
-      2,
-      kE, kE, kE,
-      kE, kE, kE, kE, kE, kE, kE, kE,
-      v,
-      kE, kE, kE,
-      false,
-      kE, kE, kE, kE,
-      kE, kE, kE, kE,
-      false, true);
-  return testing::internal::GetCapturedStdout();
-}
+const std::vector<double>& kE = test_statistics_helpers::empty_values();
+using test_statistics_helpers::capture_bw;
+using test_statistics_helpers::capture_lat;
 
 // ---------------------------------------------------------------------------
 // Parse the first floating-point number that follows the given label string.

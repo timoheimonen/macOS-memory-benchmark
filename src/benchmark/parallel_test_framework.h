@@ -114,6 +114,67 @@ inline std::vector<size_t> build_aligned_chunk_boundaries(void* alignment_base, 
 }
 
 /**
+ * @brief Shared parallel test runner for single-buffer and copy variants.
+ * @tparam MakeThreadFunction Function type creating a worker callable for std::thread
+ * @param alignment_base Base pointer used for chunk-boundary alignment
+ * @param size Total size of the covered range in bytes
+ * @param iterations Number of operation iterations executed by each worker
+ * @param num_threads Number of worker threads to launch
+ * @param timer Reference to high-resolution timer for measuring execution time
+ * @param make_thread Function that builds a worker callable for one chunk
+ * @return Total duration in seconds, or 0.0 if no work was performed
+ */
+template<typename MakeThreadFunction>
+double run_parallel_test_common(void* alignment_base, size_t size, int iterations, int num_threads,
+                                HighResTimer& timer, MakeThreadFunction make_thread) {
+  // Early validation: return 0.0 if no work to do or invalid thread count.
+  // This avoids unnecessary setup and prevents division-by-zero in partitioning.
+  if (size == 0 || num_threads <= 0) {
+    return 0.0;
+  }
+
+  std::vector<std::thread> threads;
+  threads.reserve(static_cast<size_t>(num_threads));  // Pre-allocate vector space for threads.
+
+  std::mutex start_mutex;
+  std::condition_variable start_cv;
+  bool start_flag = false;  // Gate so timing starts after threads are ready
+
+  // Build contiguous chunk boundaries with aligned internal split points.
+  std::vector<size_t> boundaries = build_aligned_chunk_boundaries(alignment_base, size, num_threads);
+
+  // Launch threads once; each handles its chunk for all iterations.
+  for (size_t t = 0; t < static_cast<size_t>(num_threads); ++t) {
+    size_t chunk_start_offset = boundaries[t];
+    size_t chunk_end_offset = boundaries[t + 1];
+    if (chunk_end_offset <= chunk_start_offset) {
+      continue;
+    }
+
+    size_t thread_chunk_size = chunk_end_offset - chunk_start_offset;
+    threads.emplace_back(make_thread(chunk_start_offset, thread_chunk_size, iterations, start_mutex, start_cv,
+                                     start_flag));
+  }
+
+  // Check if any threads were created. If all chunks were zero after alignment,
+  // no threads were created and we should return 0.0 to avoid misleading timer measurements.
+  if (threads.empty()) {
+    return 0.0;  // No threads created (all chunks were zero after alignment)
+  }
+
+  {
+    std::unique_lock<std::mutex> lk(start_mutex);
+    timer.start();  // Start timing after all threads are created and waiting.
+    start_flag = true;
+  }
+  start_cv.notify_all();
+
+  join_threads(threads);           // Wait for all threads to finish (joined once after all iterations).
+  double duration = timer.stop();  // Stop timing after all work.
+  return duration;                 // Return total time elapsed.
+}
+
+/**
  * @brief Run a parallel test with automatic work distribution across threads
  * @tparam WorkFunction Function type for per-thread work (void(void* chunk_start, size_t chunk_size, int iterations))
  * @param buffer Pointer to the memory buffer to operate on
@@ -137,37 +198,14 @@ inline std::vector<size_t> build_aligned_chunk_boundaries(void* alignment_base, 
 template<typename WorkFunction>
 double run_parallel_test(void *buffer, size_t size, int iterations, int num_threads, HighResTimer &timer,
                          WorkFunction work_function, const char *thread_name) {
-  // Early validation: return 0.0 if no work to do or invalid thread count.
-  // This avoids unnecessary setup and prevents division-by-zero in partitioning.
-  if (size == 0 || num_threads <= 0) {
-    return 0.0;
-  }
-
-  std::vector<std::thread> threads;
-  threads.reserve(static_cast<size_t>(num_threads));  // Pre-allocate vector space for threads.
-
-  std::mutex start_mutex;
-  std::condition_variable start_cv;
-  bool start_flag = false;  // Gate so timing starts after threads are ready
-
-  // Build contiguous chunk boundaries with aligned internal split points.
-  std::vector<size_t> boundaries = build_aligned_chunk_boundaries(buffer, size, num_threads);
-
-  // Launch threads once; each handles its chunk for all iterations.
   char* buffer_start = static_cast<char*>(buffer);
-  for (size_t t = 0; t < static_cast<size_t>(num_threads); ++t) {
-    size_t chunk_start_offset = boundaries[t];
-    size_t chunk_end_offset = boundaries[t + 1];
-    if (chunk_end_offset <= chunk_start_offset) {
-      continue;
-    }
-
+  auto make_thread = [buffer_start, work_function, thread_name](size_t chunk_start_offset, size_t thread_chunk_size,
+                                                                 int iterations_local, std::mutex& start_mutex,
+                                                                 std::condition_variable& start_cv,
+                                                                 bool& start_flag) {
     char* thread_chunk_start = buffer_start + chunk_start_offset;
-    size_t thread_chunk_size = chunk_end_offset - chunk_start_offset;
-     
-    // iterations loop inside thread lambda for re-use (avoids per-iteration creation).
-    threads.emplace_back([thread_chunk_start, thread_chunk_size, iterations, &start_mutex, &start_cv,
-                          &start_flag, work_function, thread_name]() {
+    return [thread_chunk_start, thread_chunk_size, iterations_local, &start_mutex, &start_cv, &start_flag,
+            work_function, thread_name]() {
       // Set QoS for this worker thread
       kern_return_t qos_ret = pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
       if (qos_ret != KERN_SUCCESS) {
@@ -181,26 +219,11 @@ double run_parallel_test(void *buffer, size_t size, int iterations, int num_thre
       }
 
       // Execute the work function for this chunk with aligned pointer
-      work_function(thread_chunk_start, thread_chunk_size, iterations);
-    });
-  }
+      work_function(thread_chunk_start, thread_chunk_size, iterations_local);
+    };
+  };
 
-  // Check if any threads were created. If all chunks were zero after alignment,
-  // no threads were created and we should return 0.0 to avoid misleading timer measurements.
-  if (threads.empty()) {
-    return 0.0;  // No threads created (all chunks were zero after alignment)
-  }
-
-  {
-    std::unique_lock<std::mutex> lk(start_mutex);
-    timer.start();   // Start timing after all threads are created and waiting.
-    start_flag = true;
-  }
-  start_cv.notify_all();
-
-  join_threads(threads);           // Wait for all threads to finish (joined once after all iterations).
-  double duration = timer.stop();  // Stop timing after all work.
-  return duration;  // Return total time elapsed.
+  return run_parallel_test_common(buffer, size, iterations, num_threads, timer, make_thread);
 }
 
 /**
@@ -228,40 +251,16 @@ double run_parallel_test(void *buffer, size_t size, int iterations, int num_thre
  */
 template<typename WorkFunction>
 double run_parallel_test_copy(void *dst, void *src, size_t size, int iterations, int num_threads, HighResTimer &timer,
-                                WorkFunction work_function, const char *thread_name) {
-  // Early validation: return 0.0 if no work to do or invalid thread count.
-  // This avoids unnecessary setup and prevents division-by-zero in partitioning.
-  if (size == 0 || num_threads <= 0) {
-    return 0.0;
-  }
-
-  std::vector<std::thread> threads;
-  threads.reserve(static_cast<size_t>(num_threads));  // Pre-allocate vector space for threads.
-
-  std::mutex start_mutex;
-  std::condition_variable start_cv;
-  bool start_flag = false;  // Gate so timing starts after threads are ready
-
-  // Build contiguous chunk boundaries using destination alignment for false-sharing mitigation.
-  std::vector<size_t> boundaries = build_aligned_chunk_boundaries(dst, size, num_threads);
-
-  // Launch threads once; each handles its chunk for all iterations.
+                                 WorkFunction work_function, const char *thread_name) {
   char* dst_start = static_cast<char*>(dst);
   char* src_start = static_cast<char*>(src);
-  for (size_t t = 0; t < static_cast<size_t>(num_threads); ++t) {
-    size_t chunk_start_offset = boundaries[t];
-    size_t chunk_end_offset = boundaries[t + 1];
-    if (chunk_end_offset <= chunk_start_offset) {
-      continue;
-    }
-
+  auto make_thread = [dst_start, src_start, work_function,
+                      thread_name](size_t chunk_start_offset, size_t thread_chunk_size, int iterations_local,
+                                   std::mutex& start_mutex, std::condition_variable& start_cv, bool& start_flag) {
     char* thread_dst_chunk = dst_start + chunk_start_offset;
     char* thread_src_chunk = src_start + chunk_start_offset;
-    size_t thread_chunk_size = chunk_end_offset - chunk_start_offset;
-     
-    // iterations loop inside thread lambda for re-use (avoids per-iteration creation).
-    threads.emplace_back([thread_dst_chunk, thread_src_chunk, thread_chunk_size, iterations, &start_mutex, &start_cv,
-                          &start_flag, work_function, thread_name]() {
+    return [thread_dst_chunk, thread_src_chunk, thread_chunk_size, iterations_local, &start_mutex, &start_cv,
+            &start_flag, work_function, thread_name]() {
       // Set QoS for this worker thread
       kern_return_t qos_ret = pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
       if (qos_ret != KERN_SUCCESS) {
@@ -275,26 +274,11 @@ double run_parallel_test_copy(void *dst, void *src, size_t size, int iterations,
       }
 
       // Execute the work function for this chunk with aligned pointers
-      work_function(thread_dst_chunk, thread_src_chunk, thread_chunk_size, iterations);
-    });
-  }
+      work_function(thread_dst_chunk, thread_src_chunk, thread_chunk_size, iterations_local);
+    };
+  };
 
-  // Check if any threads were created. If all chunks were zero after alignment,
-  // no threads were created and we should return 0.0 to avoid misleading timer measurements.
-  if (threads.empty()) {
-    return 0.0;  // No threads created (all chunks were zero after alignment)
-  }
-
-  {
-    std::unique_lock<std::mutex> lk(start_mutex);
-    timer.start();   // Start timing after all threads are created and waiting.
-    start_flag = true;
-  }
-  start_cv.notify_all();
-
-  join_threads(threads);           // Wait for all threads to finish (joined once after all iterations).
-  double duration = timer.stop();  // Stop timing after all work.
-  return duration;  // Return total time elapsed.
+  return run_parallel_test_common(dst, size, iterations, num_threads, timer, make_thread);
 }
 
 #endif // PARALLEL_TEST_FRAMEWORK_H
