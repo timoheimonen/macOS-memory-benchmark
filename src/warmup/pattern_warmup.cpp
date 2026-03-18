@@ -1,4 +1,4 @@
-// Copyright 2025 Timo Heimonen <timo.heimonen@proton.me>
+// Copyright 2026 Timo Heimonen <timo.heimonen@proton.me>
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -32,6 +32,90 @@
 #include "warmup/warmup.h"
 #include "warmup/warmup_internal.h"
 
+namespace {
+
+bool validate_strided_warmup_stride(size_t stride, size_t size) {
+  if (stride < 32) {
+    std::cerr << Messages::error_prefix() << Messages::error_stride_too_small() << std::endl;
+    return false;
+  }
+  if (stride > size) {
+    std::cerr << Messages::error_prefix() << Messages::error_stride_too_large(stride, size) << std::endl;
+    return false;
+  }
+  if (stride % 32 != 0) {
+    std::cerr << Messages::warning_prefix() << Messages::warning_stride_not_aligned(stride) << std::endl;
+  }
+  return true;
+}
+
+bool validate_random_warmup_indices(const std::vector<size_t>& indices) {
+  if (indices.empty()) {
+    std::cerr << Messages::error_prefix() << Messages::error_indices_empty() << std::endl;
+    return false;
+  }
+
+  size_t sample_size = (indices.size() < 100) ? indices.size() : 100;
+  for (size_t i = 0; i < sample_size; ++i) {
+    if (indices[i] % 32 != 0) {
+      std::cerr << Messages::error_prefix() << Messages::error_index_not_aligned(i, indices[i]) << std::endl;
+      return false;
+    }
+  }
+
+  return true;
+}
+
+template<typename RandomOp>
+void run_random_warmup_operation(const std::vector<size_t>& indices, int num_threads, RandomOp operation) {
+  if (!validate_random_warmup_indices(indices)) {
+    return;
+  }
+
+  if (num_threads <= 0) {
+    return;
+  }
+
+  if (num_threads == 1 || indices.size() <= static_cast<size_t>(num_threads)) {
+    operation(indices.data(), indices.size());
+    return;
+  }
+
+  std::vector<std::thread> threads;
+  threads.reserve(num_threads);
+
+  size_t indices_per_thread = indices.size() / num_threads;
+  size_t remainder = indices.size() % num_threads;
+
+  size_t offset = 0;
+  for (int t = 0; t < num_threads; ++t) {
+    size_t thread_count = indices_per_thread + (t < static_cast<int>(remainder) ? 1 : 0);
+    if (thread_count == 0 || offset >= indices.size()) continue;
+
+    size_t start_idx = offset;
+    size_t end_idx = offset + thread_count;
+    if (end_idx > indices.size()) end_idx = indices.size();
+    offset = end_idx;
+
+    std::vector<size_t> thread_indices(indices.begin() + start_idx, indices.begin() + end_idx);
+
+    threads.emplace_back([thread_indices = std::move(thread_indices), operation]() {
+      kern_return_t qos_ret = pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
+      if (qos_ret != KERN_SUCCESS) {
+        std::cerr << Messages::warning_prefix() << Messages::warning_qos_failed_worker_thread(qos_ret) << std::endl;
+      }
+
+      if (!thread_indices.empty()) {
+        operation(thread_indices.data(), thread_indices.size());
+      }
+    });
+  }
+
+  join_threads(threads);
+}
+
+}  // namespace
+
 /**
  * @brief Warms up memory by reading from the buffer using strided access pattern.
  *
@@ -42,17 +126,8 @@
  * @param dummy_checksum Atomic variable to accumulate a dummy result (prevents optimization)
  */
 void warmup_read_strided(void* buffer, size_t size, size_t stride, int num_threads, std::atomic<uint64_t>& dummy_checksum) {
-  // Validate stride
-  if (stride < 32) {
-    std::cerr << Messages::error_prefix() << Messages::error_stride_too_small() << std::endl;
+  if (!validate_strided_warmup_stride(stride, size)) {
     return;
-  }
-  if (stride > size) {
-    std::cerr << Messages::error_prefix() << Messages::error_stride_too_large(stride, size) << std::endl;
-    return;
-  }
-  if (stride % 32 != 0) {
-    std::cerr << Messages::warning_prefix() << Messages::warning_stride_not_aligned(stride) << std::endl;
   }
   
   size_t warmup_size = calculate_warmup_size(size);
@@ -77,17 +152,8 @@ void warmup_read_strided(void* buffer, size_t size, size_t stride, int num_threa
  * @param num_threads Number of concurrent threads to use
  */
 void warmup_write_strided(void* buffer, size_t size, size_t stride, int num_threads) {
-  // Validate stride
-  if (stride < 32) {
-    std::cerr << Messages::error_prefix() << Messages::error_stride_too_small() << std::endl;
+  if (!validate_strided_warmup_stride(stride, size)) {
     return;
-  }
-  if (stride > size) {
-    std::cerr << Messages::error_prefix() << Messages::error_stride_too_large(stride, size) << std::endl;
-    return;
-  }
-  if (stride % 32 != 0) {
-    std::cerr << Messages::warning_prefix() << Messages::warning_stride_not_aligned(stride) << std::endl;
   }
   
   size_t warmup_size = calculate_warmup_size(size);
@@ -110,17 +176,8 @@ void warmup_write_strided(void* buffer, size_t size, size_t stride, int num_thre
  * @param num_threads Number of concurrent threads to use
  */
 void warmup_copy_strided(void* dst, void* src, size_t size, size_t stride, int num_threads) {
-  // Validate stride
-  if (stride < 32) {
-    std::cerr << Messages::error_prefix() << Messages::error_stride_too_small() << std::endl;
+  if (!validate_strided_warmup_stride(stride, size)) {
     return;
-  }
-  if (stride > size) {
-    std::cerr << Messages::error_prefix() << Messages::error_stride_too_large(stride, size) << std::endl;
-    return;
-  }
-  if (stride % 32 != 0) {
-    std::cerr << Messages::warning_prefix() << Messages::warning_stride_not_aligned(stride) << std::endl;
   }
   
   size_t warmup_size = calculate_warmup_size(size);
@@ -142,67 +199,11 @@ void warmup_copy_strided(void* dst, void* src, size_t size, size_t stride, int n
  * @param dummy_checksum Atomic variable to accumulate a dummy result (prevents optimization)
  */
 void warmup_read_random(void* buffer, const std::vector<size_t>& indices, int num_threads, std::atomic<uint64_t>& dummy_checksum) {
-  if (indices.empty()) {
-    std::cerr << Messages::error_prefix() << Messages::error_indices_empty() << std::endl;
-    return;
-  }
-  
-  // Validate indices (check first few as sample)
-  size_t sample_size = (indices.size() < 100) ? indices.size() : 100;
-  for (size_t i = 0; i < sample_size; ++i) {
-    if (indices[i] % 32 != 0) {
-      std::cerr << Messages::error_prefix() << Messages::error_index_not_aligned(i, indices[i]) << std::endl;
-      return;
-    }
-  }
-  
-  // Use the indices directly - they should already be validated by the caller
-  // For multi-threading, we'll split the indices across threads
-  // If num_threads is 0 or indices is empty, return early (already checked empty above)
-  if (num_threads <= 0) {
-    return;
-  }
-  
-  // For small index sets or single thread, just run directly
-  if (num_threads == 1 || indices.size() <= static_cast<size_t>(num_threads)) {
-    uint64_t result = memory_read_random_loop_asm(buffer, indices.data(), indices.size());
-    dummy_checksum.fetch_xor(result, std::memory_order_release);
-    return;
-  }
-  
-  std::vector<std::thread> threads;
-  threads.reserve(num_threads);
-  
-  size_t indices_per_thread = indices.size() / num_threads;
-  size_t remainder = indices.size() % num_threads;
-  
-  size_t offset = 0;
-  for (int t = 0; t < num_threads; ++t) {
-    size_t thread_count = indices_per_thread + (t < static_cast<int>(remainder) ? 1 : 0);
-    if (thread_count == 0 || offset >= indices.size()) continue;
-    
-    size_t start_idx = offset;
-    size_t end_idx = offset + thread_count;
-    if (end_idx > indices.size()) end_idx = indices.size();
-    offset = end_idx;
-    
-    // Create a copy of the indices for this thread to avoid race conditions
-    std::vector<size_t> thread_indices(indices.begin() + start_idx, indices.begin() + end_idx);
-    
-    threads.emplace_back([buffer, thread_indices, &dummy_checksum]() {
-      kern_return_t qos_ret = pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
-      if (qos_ret != KERN_SUCCESS) {
-        std::cerr << Messages::warning_prefix() << Messages::warning_qos_failed_worker_thread(qos_ret) << std::endl;
-      }
-      
-      if (!thread_indices.empty()) {
-        uint64_t result = memory_read_random_loop_asm(buffer, thread_indices.data(), thread_indices.size());
-        dummy_checksum.fetch_xor(result, std::memory_order_release);
-      }
-    });
-  }
-  
-  join_threads(threads);
+  run_random_warmup_operation(indices, num_threads,
+                              [buffer, &dummy_checksum](const size_t* random_indices, size_t random_count) {
+                                uint64_t result = memory_read_random_loop_asm(buffer, random_indices, random_count);
+                                dummy_checksum.fetch_xor(result, std::memory_order_release);
+                              });
 }
 
 /**
@@ -213,64 +214,10 @@ void warmup_read_random(void* buffer, const std::vector<size_t>& indices, int nu
  * @param num_threads Number of concurrent threads to use
  */
 void warmup_write_random(void* buffer, const std::vector<size_t>& indices, int num_threads) {
-  if (indices.empty()) {
-    std::cerr << Messages::error_prefix() << Messages::error_indices_empty() << std::endl;
-    return;
-  }
-  
-  // Validate indices (check first few as sample)
-  size_t sample_size = (indices.size() < 100) ? indices.size() : 100;
-  for (size_t i = 0; i < sample_size; ++i) {
-    if (indices[i] % 32 != 0) {
-      std::cerr << Messages::error_prefix() << Messages::error_index_not_aligned(i, indices[i]) << std::endl;
-      return;
-    }
-  }
-  
-  // Use the indices directly - they should already be validated by the caller
-  // For multi-threading, we'll split the indices across threads
-  if (num_threads <= 0) {
-    return;
-  }
-  
-  // For small index sets or single thread, just run directly
-  if (num_threads == 1 || indices.size() <= static_cast<size_t>(num_threads)) {
-    memory_write_random_loop_asm(buffer, indices.data(), indices.size());
-    return;
-  }
-  
-  std::vector<std::thread> threads;
-  threads.reserve(num_threads);
-  
-  size_t indices_per_thread = indices.size() / num_threads;
-  size_t remainder = indices.size() % num_threads;
-  
-  size_t offset = 0;
-  for (int t = 0; t < num_threads; ++t) {
-    size_t thread_count = indices_per_thread + (t < static_cast<int>(remainder) ? 1 : 0);
-    if (thread_count == 0 || offset >= indices.size()) continue;
-    
-    size_t start_idx = offset;
-    size_t end_idx = offset + thread_count;
-    if (end_idx > indices.size()) end_idx = indices.size();
-    offset = end_idx;
-    
-    // Create a copy of the indices for this thread to avoid race conditions
-    std::vector<size_t> thread_indices(indices.begin() + start_idx, indices.begin() + end_idx);
-    
-    threads.emplace_back([buffer, thread_indices]() {
-      kern_return_t qos_ret = pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
-      if (qos_ret != KERN_SUCCESS) {
-        std::cerr << Messages::warning_prefix() << Messages::warning_qos_failed_worker_thread(qos_ret) << std::endl;
-      }
-      
-      if (!thread_indices.empty()) {
-        memory_write_random_loop_asm(buffer, thread_indices.data(), thread_indices.size());
-      }
-    });
-  }
-  
-  join_threads(threads);
+  run_random_warmup_operation(indices, num_threads,
+                              [buffer](const size_t* random_indices, size_t random_count) {
+                                memory_write_random_loop_asm(buffer, random_indices, random_count);
+                              });
 }
 
 /**
@@ -282,62 +229,8 @@ void warmup_write_random(void* buffer, const std::vector<size_t>& indices, int n
  * @param num_threads Number of concurrent threads to use
  */
 void warmup_copy_random(void* dst, void* src, const std::vector<size_t>& indices, int num_threads) {
-  if (indices.empty()) {
-    std::cerr << Messages::error_prefix() << Messages::error_indices_empty() << std::endl;
-    return;
-  }
-  
-  // Validate indices (check first few as sample)
-  size_t sample_size = (indices.size() < 100) ? indices.size() : 100;
-  for (size_t i = 0; i < sample_size; ++i) {
-    if (indices[i] % 32 != 0) {
-      std::cerr << Messages::error_prefix() << Messages::error_index_not_aligned(i, indices[i]) << std::endl;
-      return;
-    }
-  }
-  
-  // Use the indices directly - they should already be validated by the caller
-  // For multi-threading, we'll split the indices across threads
-  if (num_threads <= 0) {
-    return;
-  }
-  
-  // For small index sets or single thread, just run directly
-  if (num_threads == 1 || indices.size() <= static_cast<size_t>(num_threads)) {
-    memory_copy_random_loop_asm(dst, src, indices.data(), indices.size());
-    return;
-  }
-  
-  std::vector<std::thread> threads;
-  threads.reserve(num_threads);
-  
-  size_t indices_per_thread = indices.size() / num_threads;
-  size_t remainder = indices.size() % num_threads;
-  
-  size_t offset = 0;
-  for (int t = 0; t < num_threads; ++t) {
-    size_t thread_count = indices_per_thread + (t < static_cast<int>(remainder) ? 1 : 0);
-    if (thread_count == 0 || offset >= indices.size()) continue;
-    
-    size_t start_idx = offset;
-    size_t end_idx = offset + thread_count;
-    if (end_idx > indices.size()) end_idx = indices.size();
-    offset = end_idx;
-    
-    // Create a copy of the indices for this thread to avoid race conditions
-    std::vector<size_t> thread_indices(indices.begin() + start_idx, indices.begin() + end_idx);
-    
-    threads.emplace_back([dst, src, thread_indices]() {
-      kern_return_t qos_ret = pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
-      if (qos_ret != KERN_SUCCESS) {
-        std::cerr << Messages::warning_prefix() << Messages::warning_qos_failed_worker_thread(qos_ret) << std::endl;
-      }
-      
-      if (!thread_indices.empty()) {
-        memory_copy_random_loop_asm(dst, src, thread_indices.data(), thread_indices.size());
-      }
-    });
-  }
-  
-  join_threads(threads);
+  run_random_warmup_operation(indices, num_threads,
+                              [dst, src](const size_t* random_indices, size_t random_count) {
+                                memory_copy_random_loop_asm(dst, src, random_indices, random_count);
+                              });
 }

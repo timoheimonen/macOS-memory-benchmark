@@ -18,7 +18,6 @@
  * @brief Basic memory warmup functions
  */
 
-#include "utils/benchmark.h"  // Includes definitions for assembly loops etc.
 #include "warmup/warmup.h"
 #include "warmup/warmup_internal.h"
 
@@ -32,17 +31,7 @@
  */
 void warmup_read(void* buffer, size_t size, int num_threads, std::atomic<uint64_t>& dummy_checksum) {
   size_t warmup_size = calculate_warmup_size(size);
-  auto read_chunk_op = [](char* chunk_start, char* /* src_chunk */, size_t chunk_size, 
-                          std::atomic<uint64_t>* checksum) {
-    // Call the assembly read loop function (defined elsewhere).
-    uint64_t result = memory_read_loop_asm(chunk_start, chunk_size);
-    // Atomically combine the local checksum with the global dummy value.
-    // Using release memory order ensures proper visibility when threads complete.
-    if (checksum) {
-      checksum->fetch_xor(result, std::memory_order_release);
-    }
-  };
-  warmup_parallel(buffer, size, num_threads, read_chunk_op, true, nullptr, &dummy_checksum, warmup_size);
+  warmup_parallel(buffer, size, num_threads, warmup_read_chunk_op, true, nullptr, &dummy_checksum, warmup_size);
 }
 
 /**
@@ -54,11 +43,7 @@ void warmup_read(void* buffer, size_t size, int num_threads, std::atomic<uint64_
  */
 void warmup_write(void* buffer, size_t size, int num_threads) {
   size_t warmup_size = calculate_warmup_size(size);
-  auto write_chunk_op = [](char* chunk_start, char* /* src_chunk */, size_t chunk_size, 
-                           std::atomic<uint64_t>* /* checksum */) {
-    memory_write_loop_asm(chunk_start, chunk_size);
-  };
-  warmup_parallel(buffer, size, num_threads, write_chunk_op, true, nullptr, nullptr, warmup_size);
+  warmup_parallel(buffer, size, num_threads, warmup_write_chunk_op, true, nullptr, nullptr, warmup_size);
 }
 
 /**
@@ -71,10 +56,5 @@ void warmup_write(void* buffer, size_t size, int num_threads) {
  */
 void warmup_copy(void* dst, void* src, size_t size, int num_threads) {
   size_t warmup_size = calculate_warmup_size(size);
-  auto copy_chunk_op = [](char* dst_chunk, char* src_chunk, size_t chunk_size, 
-                          std::atomic<uint64_t>* /* checksum */) {
-    memory_copy_loop_asm(dst_chunk, src_chunk, chunk_size);
-  };
-  warmup_parallel(dst, size, num_threads, copy_chunk_op, true, src, nullptr, warmup_size);
+  warmup_parallel(dst, size, num_threads, warmup_copy_chunk_op, true, src, nullptr, warmup_size);
 }
-

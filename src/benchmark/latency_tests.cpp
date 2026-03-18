@@ -95,6 +95,25 @@ static double run_latency_measurement(uintptr_t* lat_start_ptr,
 }
 
 /**
+ * @brief Shared wrapper for latency benchmarks.
+ *
+ * Performs common validation and pointer conversion before dispatching to
+ * run_latency_measurement().
+ */
+static double run_latency_test_common(void* buffer,
+                                      size_t num_accesses,
+                                      HighResTimer& timer,
+                                      std::vector<double>* latency_samples,
+                                      int sample_count) {
+  if (num_accesses == 0) {
+    return 0.0;
+  }
+
+  uintptr_t* lat_start_ptr = static_cast<uintptr_t*>(buffer);
+  return run_latency_measurement(lat_start_ptr, num_accesses, timer, latency_samples, sample_count);
+}
+
+/**
  * @brief Executes the single-threaded memory latency benchmark.
  *
  * Measures memory access latency using pointer-chasing through a randomized circular
@@ -130,16 +149,8 @@ static double run_latency_measurement(uintptr_t* lat_start_ptr,
  * @see setup_latency_chain() for buffer initialization
  */
 double run_latency_test(void *buffer, size_t num_accesses, HighResTimer &timer,
-                         std::vector<double> *latency_samples, int sample_count) {
-  // Early validation: return 0 if no accesses requested
-  if (num_accesses == 0) {
-    return 0.0;
-  }
-  
-  // Get the starting address of the pointer chain.
-  uintptr_t *lat_start_ptr = static_cast<uintptr_t *>(buffer);
-
-  return run_latency_measurement(lat_start_ptr, num_accesses, timer, latency_samples, sample_count);
+                          std::vector<double> *latency_samples, int sample_count) {
+  return run_latency_test_common(buffer, num_accesses, timer, latency_samples, sample_count);
 }
 
 /**
@@ -180,15 +191,7 @@ double run_latency_test(void *buffer, size_t num_accesses, HighResTimer &timer,
  * @see setup_latency_chain() for buffer initialization
  */
 double run_cache_latency_test(void *buffer, size_t buffer_size, size_t num_accesses, HighResTimer &timer,
-                               std::vector<double> *latency_samples, int sample_count) {
-  // Early validation: return 0 if no accesses requested
-  if (num_accesses == 0) {
-    return 0.0;
-  }
-  
-  // Get the starting address of the pointer chain.
-  uintptr_t *lat_start_ptr = static_cast<uintptr_t *>(buffer);
-
+                                std::vector<double> *latency_samples, int sample_count) {
   (void)buffer_size;
-  return run_latency_measurement(lat_start_ptr, num_accesses, timer, latency_samples, sample_count);
+  return run_latency_test_common(buffer, num_accesses, timer, latency_samples, sample_count);
 }

@@ -49,6 +49,7 @@
 #include <mach/mach.h>
 #include <pthread/qos.h>
 
+#include "asm/asm_functions.h"
 #include "output/console/messages/messages_api.h"
 #include "core/memory/memory_utils.h"
 #include "core/config/constants.h"
@@ -76,6 +77,33 @@ inline size_t calculate_warmup_size(size_t buffer_size) {
   const size_t percent_warmup = static_cast<size_t>(buffer_size * 0.1);
   const size_t effective_warmup = (min_warmup > percent_warmup) ? min_warmup : percent_warmup;
   return (buffer_size < effective_warmup) ? buffer_size : effective_warmup;
+}
+
+/**
+ * @brief Shared chunk operation for warmup read paths.
+ */
+inline void warmup_read_chunk_op(char* chunk_start, char* /* src_chunk */, size_t chunk_size,
+                                 std::atomic<uint64_t>* checksum) {
+  uint64_t result = memory_read_loop_asm(chunk_start, chunk_size);
+  if (checksum) {
+    checksum->fetch_xor(result, std::memory_order_release);
+  }
+}
+
+/**
+ * @brief Shared chunk operation for warmup write paths.
+ */
+inline void warmup_write_chunk_op(char* chunk_start, char* /* src_chunk */, size_t chunk_size,
+                                  std::atomic<uint64_t>* /* checksum */) {
+  memory_write_loop_asm(chunk_start, chunk_size);
+}
+
+/**
+ * @brief Shared chunk operation for warmup copy paths.
+ */
+inline void warmup_copy_chunk_op(char* dst_chunk, char* src_chunk, size_t chunk_size,
+                                 std::atomic<uint64_t>* /* checksum */) {
+  memory_copy_loop_asm(dst_chunk, src_chunk, chunk_size);
 }
 
 // Generic parallel warmup function for multi-threaded operations.
