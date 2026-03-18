@@ -131,7 +131,7 @@ int run_all_pattern_benchmarks(const BenchmarkBuffers& buffers, const BenchmarkC
       // Print simple progress message for each loop
       if (config.loop_count > 1) {
         std::cout << '\r' << std::flush;  // Clear progress indicator
-        std::cout << "Pattern benchmarks - Loop " << (loop + 1) << "/" << config.loop_count << " completed" << std::endl;
+        std::cout << Messages::msg_pattern_benchmark_loop_completed(loop + 1, config.loop_count) << std::endl;
       }
     } catch (const std::exception &e) {
       std::cerr << Messages::error_benchmark_loop(loop, e.what()) << std::endl;

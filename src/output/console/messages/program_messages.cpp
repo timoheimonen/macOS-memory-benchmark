@@ -47,6 +47,16 @@ const std::string& msg_running_pattern_benchmarks() {
   return msg;
 }
 
+std::string msg_pattern_benchmark_loop_completed(int current_loop, int total_loops) {
+  std::ostringstream oss;
+  oss << "Pattern benchmarks - Loop " << current_loop << "/" << total_loops << " completed";
+  return oss.str();
+}
+
+std::string msg_results_saved_to(const std::string& file_path) {
+  return "Results saved to: " + file_path;
+}
+
 const std::string& msg_running_tlb_analysis() {
   static const std::string msg = "\nRunning standalone TLB analysis...";
   return msg;

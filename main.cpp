@@ -92,7 +92,7 @@ int main(int argc, char *argv[]) {
   auto timer_opt = HighResTimer::create();
   if (!timer_opt) {
     std::cerr << Messages::error_prefix()
-              << "Failed to create high-resolution timer. Exiting."
+              << Messages::error_timer_creation_failed()
               << std::endl;
     return EXIT_FAILURE;
   }
