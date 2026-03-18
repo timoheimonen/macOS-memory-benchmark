@@ -1,6 +1,6 @@
 # Project Structure — membenchmark
 
-**Version:** 0.53.8
+**Version:** 0.53.9
 **Platform:** ARM64 / AArch64 (Apple Silicon macOS)
 **License:** GNU General Public License v3.0
 
@@ -239,7 +239,7 @@ Warm-up passes eliminate cold-start effects from page faults, TLB misses, and in
 | File | Purpose |
 |---|---|
 | `warmup.h` | Public warm-up API |
-| `warmup_internal.h` | Internal warm-up helpers not exposed outside the module |
+| `warmup_internal.h` | Internal warm-up helpers not exposed outside the module; provides template functions and shared inline chunk operations (`warmup_read_chunk_op`, `warmup_write_chunk_op`, `warmup_copy_chunk_op`) |
 | `basic_warmup.cpp` | Simple sequential read/write pass to page in all benchmark buffers |
 | `cache_warmup.cpp` | Targeted warm-up designed to fill a specific cache level before a cache-level benchmark |
 | `latency_warmup.cpp` | Warm-up for latency tests: traverses the pointer-chase chain to bring it into the target cache level |
@@ -289,7 +289,18 @@ GoogleTest-based unit test suite. All files are picked up automatically by the M
 | `test_timer.cpp` | `HighResTimerTest` | Timer resolution, monotonicity, and elapsed-time accuracy |
 | `test_system_info.cpp` | `SystemInfoTest` | `sysctlbyname`-based system queries on macOS |
 
-**Total unit tests (non-integration):** approximately 335 across 16 suites as of 2026-03-15.
+**Total unit tests (non-integration):** approximately 335 across 16 suites as of 2026-03-18.
+
+---
+
+### Shared test helper headers
+
+Two shared helper headers provide functionality reused across multiple test suites:
+
+| File | Purpose |
+|---|---|
+| `test_config_helpers.h` | Provides `initialize_system_info(BenchmarkConfig&)` and `allocate_and_initialize_buffers(BenchmarkConfig&, BenchmarkBuffers&)` — used by multiple suites to set up system config and buffer allocation |
+| `test_statistics_helpers.h` | Provides `capture_bw()`, `capture_lat()`, `capture_auto_tlb_breakdown()` helpers in `namespace test_statistics_helpers` — used by `StatisticsTest` to capture statistics output |
 
 ---
 
