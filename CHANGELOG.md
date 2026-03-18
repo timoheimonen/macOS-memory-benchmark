@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.53.9] - 2026-03-18
+
+### Changed
+  - **Centralized user-facing message strings**: Moved three remaining hardcoded user-facing strings to the Messages system:
+    - Timer creation failure error (`main.cpp:95`) now uses `Messages::error_timer_creation_failed()`
+    - JSON output success message (`file_writer.cpp:143`) now uses `Messages::msg_results_saved_to()`
+    - Pattern benchmark loop progress (`pattern_statistics_manager.cpp:134`) now uses `Messages::msg_pattern_benchmark_loop_completed()`
+  - **Test coverage for new message functions**: Added test cases for all three new message functions in `tests/test_messages.cpp`.
+  - **DRY cleanup across benchmarks, warmup, and tests**: Extracted shared helpers to remove duplicated latency, warmup, pattern, and test setup code.
+
 ## [0.53.8] - 2026-03-14
 
 ### Added

@@ -74,6 +74,7 @@ const std::string& error_analyze_core_to_core_must_be_used_alone();
 const std::string& error_core_to_core_timer_creation_failed();
 const std::string& error_tlb_analysis_insufficient_memory();
 const std::string& error_tlb_analysis_timer_creation_failed();
+const std::string& error_timer_creation_failed();
 std::string error_tlb_analysis_invalid_measurement(size_t locality_kb, int loop_number);
 std::string error_mmap_failed(const std::string& buffer_name);
 std::string error_madvise_failed(const std::string& buffer_name);
@@ -159,6 +160,8 @@ std::string info_custom_cache_rounded_up(unsigned long original_kb, unsigned lon
 const std::string& msg_running_benchmarks();
 std::string msg_done_total_time(double total_time_sec);
 const std::string& msg_running_pattern_benchmarks();
+std::string msg_pattern_benchmark_loop_completed(int current_loop, int total_loops);
+std::string msg_results_saved_to(const std::string& file_path);
 const std::string& msg_running_tlb_analysis();
 const std::string& msg_running_core_to_core_analysis();
 std::string msg_core_to_core_scenario_progress(size_t current_loop,

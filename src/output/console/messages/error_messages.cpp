@@ -169,6 +169,11 @@ const std::string& error_tlb_analysis_timer_creation_failed() {
   return msg;
 }
 
+const std::string& error_timer_creation_failed() {
+  static const std::string msg = "Failed to create high-resolution timer. Exiting.";
+  return msg;
+}
+
 std::string error_tlb_analysis_invalid_measurement(size_t locality_kb, int loop_number) {
   std::ostringstream oss;
   oss << "Invalid latency measurement during TLB analysis (locality=" << locality_kb

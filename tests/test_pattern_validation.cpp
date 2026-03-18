@@ -19,6 +19,7 @@
 #include "core/memory/buffer_manager.h"
 #include "core/config/config.h"
 #include "utils/benchmark.h"
+#include "test_config_helpers.h"
 #include <iostream>
 #include <cstdlib>
 
@@ -37,20 +38,10 @@ TEST(PatternValidationTest, ValidateStrideBufferSmallerThanStride) {
   config.iterations = 1;
   config.num_threads = 1;
   
-  // Initialize system info
-  config.cpu_name = get_processor_name();
-  config.perf_cores = get_performance_cores();
-  config.eff_cores = get_efficiency_cores();
-  config.num_threads = get_total_logical_cores();
-  config.l1_cache_size = get_l1_cache_size();
-  config.l2_cache_size = get_l2_cache_size();
+  initialize_system_info(config);
   
   BenchmarkBuffers buffers;
-  int alloc_result = allocate_all_buffers(config, buffers);
-  ASSERT_EQ(alloc_result, EXIT_SUCCESS);
-  
-  int init_result = initialize_all_buffers(buffers, config);
-  ASSERT_EQ(init_result, EXIT_SUCCESS);
+  ASSERT_TRUE(allocate_and_initialize_buffers(config, buffers));
   
   PatternResults results;
   int result = run_pattern_benchmarks(buffers, config, results);
@@ -78,20 +69,10 @@ TEST(PatternValidationTest, ValidateStrideBufferEqualToStride) {
   config.iterations = 1;
   config.num_threads = 1;
   
-  // Initialize system info
-  config.cpu_name = get_processor_name();
-  config.perf_cores = get_performance_cores();
-  config.eff_cores = get_efficiency_cores();
-  config.num_threads = get_total_logical_cores();
-  config.l1_cache_size = get_l1_cache_size();
-  config.l2_cache_size = get_l2_cache_size();
+  initialize_system_info(config);
   
   BenchmarkBuffers buffers;
-  int alloc_result = allocate_all_buffers(config, buffers);
-  ASSERT_EQ(alloc_result, EXIT_SUCCESS);
-  
-  int init_result = initialize_all_buffers(buffers, config);
-  ASSERT_EQ(init_result, EXIT_SUCCESS);
+  ASSERT_TRUE(allocate_and_initialize_buffers(config, buffers));
   
   PatternResults results;
   int result = run_pattern_benchmarks(buffers, config, results);
@@ -116,20 +97,10 @@ TEST(PatternValidationTest, BufferSizeProgressionLessThanMin) {
   config.iterations = 1;
   config.num_threads = 1;
   
-  // Initialize system info
-  config.cpu_name = get_processor_name();
-  config.perf_cores = get_performance_cores();
-  config.eff_cores = get_efficiency_cores();
-  config.num_threads = get_total_logical_cores();
-  config.l1_cache_size = get_l1_cache_size();
-  config.l2_cache_size = get_l2_cache_size();
+  initialize_system_info(config);
   
   BenchmarkBuffers buffers;
-  int alloc_result = allocate_all_buffers(config, buffers);
-  ASSERT_EQ(alloc_result, EXIT_SUCCESS);
-  
-  int init_result = initialize_all_buffers(buffers, config);
-  ASSERT_EQ(init_result, EXIT_SUCCESS);
+  ASSERT_TRUE(allocate_and_initialize_buffers(config, buffers));
   
   PatternResults results;
   int result = run_pattern_benchmarks(buffers, config, results);
@@ -151,20 +122,10 @@ TEST(PatternValidationTest, BufferSizeProgressionEqualToMin) {
   config.iterations = 1;
   config.num_threads = 1;
   
-  // Initialize system info
-  config.cpu_name = get_processor_name();
-  config.perf_cores = get_performance_cores();
-  config.eff_cores = get_efficiency_cores();
-  config.num_threads = get_total_logical_cores();
-  config.l1_cache_size = get_l1_cache_size();
-  config.l2_cache_size = get_l2_cache_size();
+  initialize_system_info(config);
   
   BenchmarkBuffers buffers;
-  int alloc_result = allocate_all_buffers(config, buffers);
-  ASSERT_EQ(alloc_result, EXIT_SUCCESS);
-  
-  int init_result = initialize_all_buffers(buffers, config);
-  ASSERT_EQ(init_result, EXIT_SUCCESS);
+  ASSERT_TRUE(allocate_and_initialize_buffers(config, buffers));
   
   PatternResults results;
   int result = run_pattern_benchmarks(buffers, config, results);
@@ -186,20 +147,10 @@ TEST(PatternValidationTest, BufferSizeProgressionLessThanCacheLine) {
   config.iterations = 1;
   config.num_threads = 1;
   
-  // Initialize system info
-  config.cpu_name = get_processor_name();
-  config.perf_cores = get_performance_cores();
-  config.eff_cores = get_efficiency_cores();
-  config.num_threads = get_total_logical_cores();
-  config.l1_cache_size = get_l1_cache_size();
-  config.l2_cache_size = get_l2_cache_size();
+  initialize_system_info(config);
   
   BenchmarkBuffers buffers;
-  int alloc_result = allocate_all_buffers(config, buffers);
-  ASSERT_EQ(alloc_result, EXIT_SUCCESS);
-  
-  int init_result = initialize_all_buffers(buffers, config);
-  ASSERT_EQ(init_result, EXIT_SUCCESS);
+  ASSERT_TRUE(allocate_and_initialize_buffers(config, buffers));
   
   PatternResults results;
   int result = run_pattern_benchmarks(buffers, config, results);
@@ -224,20 +175,10 @@ TEST(PatternValidationTest, BufferSizeProgressionEqualToCacheLine) {
   config.iterations = 1;
   config.num_threads = 1;
   
-  // Initialize system info
-  config.cpu_name = get_processor_name();
-  config.perf_cores = get_performance_cores();
-  config.eff_cores = get_efficiency_cores();
-  config.num_threads = get_total_logical_cores();
-  config.l1_cache_size = get_l1_cache_size();
-  config.l2_cache_size = get_l2_cache_size();
+  initialize_system_info(config);
   
   BenchmarkBuffers buffers;
-  int alloc_result = allocate_all_buffers(config, buffers);
-  ASSERT_EQ(alloc_result, EXIT_SUCCESS);
-  
-  int init_result = initialize_all_buffers(buffers, config);
-  ASSERT_EQ(init_result, EXIT_SUCCESS);
+  ASSERT_TRUE(allocate_and_initialize_buffers(config, buffers));
   
   PatternResults results;
   int result = run_pattern_benchmarks(buffers, config, results);
@@ -262,20 +203,10 @@ TEST(PatternValidationTest, BufferSizeProgressionJustLargerThanCacheLine) {
   config.iterations = 1;
   config.num_threads = 1;
   
-  // Initialize system info
-  config.cpu_name = get_processor_name();
-  config.perf_cores = get_performance_cores();
-  config.eff_cores = get_efficiency_cores();
-  config.num_threads = get_total_logical_cores();
-  config.l1_cache_size = get_l1_cache_size();
-  config.l2_cache_size = get_l2_cache_size();
+  initialize_system_info(config);
   
   BenchmarkBuffers buffers;
-  int alloc_result = allocate_all_buffers(config, buffers);
-  ASSERT_EQ(alloc_result, EXIT_SUCCESS);
-  
-  int init_result = initialize_all_buffers(buffers, config);
-  ASSERT_EQ(init_result, EXIT_SUCCESS);
+  ASSERT_TRUE(allocate_and_initialize_buffers(config, buffers));
   
   PatternResults results;
   int result = run_pattern_benchmarks(buffers, config, results);
@@ -296,20 +227,10 @@ TEST(PatternValidationTest, BufferSizeProgressionLessThanPage) {
   config.iterations = 1;
   config.num_threads = 1;
   
-  // Initialize system info
-  config.cpu_name = get_processor_name();
-  config.perf_cores = get_performance_cores();
-  config.eff_cores = get_efficiency_cores();
-  config.num_threads = get_total_logical_cores();
-  config.l1_cache_size = get_l1_cache_size();
-  config.l2_cache_size = get_l2_cache_size();
+  initialize_system_info(config);
   
   BenchmarkBuffers buffers;
-  int alloc_result = allocate_all_buffers(config, buffers);
-  ASSERT_EQ(alloc_result, EXIT_SUCCESS);
-  
-  int init_result = initialize_all_buffers(buffers, config);
-  ASSERT_EQ(init_result, EXIT_SUCCESS);
+  ASSERT_TRUE(allocate_and_initialize_buffers(config, buffers));
   
   PatternResults results;
   int result = run_pattern_benchmarks(buffers, config, results);
@@ -330,20 +251,10 @@ TEST(PatternValidationTest, BufferSizeProgressionEqualToPage) {
   config.iterations = 1;
   config.num_threads = 1;
   
-  // Initialize system info
-  config.cpu_name = get_processor_name();
-  config.perf_cores = get_performance_cores();
-  config.eff_cores = get_efficiency_cores();
-  config.num_threads = get_total_logical_cores();
-  config.l1_cache_size = get_l1_cache_size();
-  config.l2_cache_size = get_l2_cache_size();
+  initialize_system_info(config);
   
   BenchmarkBuffers buffers;
-  int alloc_result = allocate_all_buffers(config, buffers);
-  ASSERT_EQ(alloc_result, EXIT_SUCCESS);
-  
-  int init_result = initialize_all_buffers(buffers, config);
-  ASSERT_EQ(init_result, EXIT_SUCCESS);
+  ASSERT_TRUE(allocate_and_initialize_buffers(config, buffers));
   
   PatternResults results;
   int result = run_pattern_benchmarks(buffers, config, results);
@@ -361,20 +272,10 @@ TEST(PatternValidationTest, BufferSizeProgressionJustLargerThanPage) {
   config.iterations = 1;
   config.num_threads = 1;
   
-  // Initialize system info
-  config.cpu_name = get_processor_name();
-  config.perf_cores = get_performance_cores();
-  config.eff_cores = get_efficiency_cores();
-  config.num_threads = get_total_logical_cores();
-  config.l1_cache_size = get_l1_cache_size();
-  config.l2_cache_size = get_l2_cache_size();
+  initialize_system_info(config);
   
   BenchmarkBuffers buffers;
-  int alloc_result = allocate_all_buffers(config, buffers);
-  ASSERT_EQ(alloc_result, EXIT_SUCCESS);
-  
-  int init_result = initialize_all_buffers(buffers, config);
-  ASSERT_EQ(init_result, EXIT_SUCCESS);
+  ASSERT_TRUE(allocate_and_initialize_buffers(config, buffers));
   
   PatternResults results;
   int result = run_pattern_benchmarks(buffers, config, results);

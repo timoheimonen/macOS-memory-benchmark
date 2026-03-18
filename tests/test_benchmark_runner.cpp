@@ -20,6 +20,8 @@
 #include "output/json/json_output/json_output_api.h"
 #include "utils/benchmark.h"
 #include "core/config/constants.h"
+#include "test_config_helpers.h"
+#include "test_statistics_helpers.h"
 #include <cstdlib>
 #include <cmath>     // std::isnan, std::isinf
 #include <unistd.h>  // getpagesize
@@ -64,13 +66,7 @@ TEST(BenchmarkRunnerTest, StatisticsClearing) {
   BenchmarkBuffers buffers;
   BenchmarkStatistics stats;
   
-  // Initialize system info
-  config.cpu_name = get_processor_name();
-  config.perf_cores = get_performance_cores();
-  config.eff_cores = get_efficiency_cores();
-  config.num_threads = get_total_logical_cores();
-  config.l1_cache_size = get_l1_cache_size();
-  config.l2_cache_size = get_l2_cache_size();
+  initialize_system_info(config);
   
   // Set minimal config for testing
   config.buffer_size = getpagesize();  // Minimum size
@@ -82,14 +78,9 @@ TEST(BenchmarkRunnerTest, StatisticsClearing) {
   // Calculate buffer sizes and access counts (required for cache tests)
   calculate_buffer_sizes(config);
   calculate_access_counts(config);
-  
+
   // Allocate minimal buffers
-  int alloc_result = allocate_all_buffers(config, buffers);
-  ASSERT_EQ(alloc_result, EXIT_SUCCESS);
-  
-  // Initialize buffers
-  int init_result = initialize_all_buffers(buffers, config);
-  ASSERT_EQ(init_result, EXIT_SUCCESS);
+  ASSERT_TRUE(allocate_and_initialize_buffers(config, buffers));
   
   // Run with 0 loops - should just clear statistics
   int result = run_all_benchmarks(buffers, config, stats);
@@ -115,13 +106,7 @@ TEST(BenchmarkRunnerTest, StatisticsReservationIntegration) {
   BenchmarkBuffers buffers;
   BenchmarkStatistics stats;
   
-  // Initialize system info
-  config.cpu_name = get_processor_name();
-  config.perf_cores = get_performance_cores();
-  config.eff_cores = get_efficiency_cores();
-  config.num_threads = get_total_logical_cores();
-  config.l1_cache_size = get_l1_cache_size();
-  config.l2_cache_size = get_l2_cache_size();
+  initialize_system_info(config);
   
   // Set config with loop_count > 0
   config.buffer_size = getpagesize();
@@ -133,14 +118,9 @@ TEST(BenchmarkRunnerTest, StatisticsReservationIntegration) {
   // Calculate buffer sizes and access counts (required for cache tests)
   calculate_buffer_sizes(config);
   calculate_access_counts(config);
-  
+
   // Allocate minimal buffers
-  int alloc_result = allocate_all_buffers(config, buffers);
-  ASSERT_EQ(alloc_result, EXIT_SUCCESS);
-  
-  // Initialize buffers
-  int init_result = initialize_all_buffers(buffers, config);
-  ASSERT_EQ(init_result, EXIT_SUCCESS);
+  ASSERT_TRUE(allocate_and_initialize_buffers(config, buffers));
   
   // Note: This will run actual benchmarks, which may take a moment
   // but tests the full integration
@@ -213,13 +193,7 @@ TEST(BenchmarkRunnerTest, ResultsValidation) {
   BenchmarkBuffers buffers;
   BenchmarkStatistics stats;
   
-  // Initialize system info
-  config.cpu_name = get_processor_name();
-  config.perf_cores = get_performance_cores();
-  config.eff_cores = get_efficiency_cores();
-  config.num_threads = get_total_logical_cores();
-  config.l1_cache_size = get_l1_cache_size();
-  config.l2_cache_size = get_l2_cache_size();
+  initialize_system_info(config);
   
   // Set config with loop_count > 0
   config.buffer_size = getpagesize();
@@ -231,14 +205,9 @@ TEST(BenchmarkRunnerTest, ResultsValidation) {
   // Calculate buffer sizes and access counts (required for cache tests)
   calculate_buffer_sizes(config);
   calculate_access_counts(config);
-  
+
   // Allocate minimal buffers
-  int alloc_result = allocate_all_buffers(config, buffers);
-  ASSERT_EQ(alloc_result, EXIT_SUCCESS);
-  
-  // Initialize buffers
-  int init_result = initialize_all_buffers(buffers, config);
-  ASSERT_EQ(init_result, EXIT_SUCCESS);
+  ASSERT_TRUE(allocate_and_initialize_buffers(config, buffers));
   
   // Run benchmarks
   int result = run_all_benchmarks(buffers, config, stats);
@@ -285,43 +254,13 @@ TEST(BenchmarkRunnerTest, ResultsValidation) {
 }
 
 TEST(BenchmarkRunnerTest, StatisticsPrintsAutoTlbBreakdownMetrics) {
-  const int loop_count = 2;
-
-  const std::vector<double> empty;
   const std::vector<double> all_main_mem_latency = {15.0, 16.0};
   const std::vector<double> all_tlb_hit_latency = {14.0, 15.0};
   const std::vector<double> all_tlb_miss_latency = {90.0, 92.0};
   const std::vector<double> all_page_walk_penalty = {76.0, 77.0};
 
-  testing::internal::CaptureStdout();
-  print_statistics(loop_count,
-                   empty,
-                   empty,
-                   empty,
-                   empty,
-                   empty,
-                   empty,
-                   empty,
-                   empty,
-                   empty,
-                   empty,
-                   empty,
-                   all_main_mem_latency,
-                   all_tlb_hit_latency,
-                   all_tlb_miss_latency,
-                   all_page_walk_penalty,
-                   false,
-                   empty,
-                   empty,
-                   empty,
-                   empty,
-                   empty,
-                   empty,
-                   empty,
-                   empty,
-                   false,
-                   true);
-  const std::string output = testing::internal::GetCapturedStdout();
+  const std::string output = test_statistics_helpers::capture_auto_tlb_breakdown(
+      all_main_mem_latency, all_tlb_hit_latency, all_tlb_miss_latency, all_page_walk_penalty);
 
   EXPECT_NE(output.find("TLB Hit Latency (ns):"), std::string::npos);
   EXPECT_NE(output.find("TLB Miss Latency (ns):"), std::string::npos);

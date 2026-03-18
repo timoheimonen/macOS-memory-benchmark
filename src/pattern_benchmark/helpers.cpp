@@ -39,6 +39,40 @@
 // Helper Functions for Pattern Tests
 // ============================================================================
 
+namespace {
+
+inline bool calculate_strided_chunk_params(size_t chunk_size, size_t stride,
+                                           size_t& effective_size,
+                                           size_t& num_accesses) {
+  using namespace Constants;
+
+  if (chunk_size <= PATTERN_ACCESS_SIZE_BYTES) {
+    return false;
+  }
+
+  effective_size = chunk_size - PATTERN_ACCESS_SIZE_BYTES;
+  num_accesses = (effective_size + stride - 1) / stride;
+  return true;
+}
+
+inline void build_random_chunk_indices(const std::vector<size_t>& indices,
+                                       size_t chunk_offset,
+                                       size_t chunk_size,
+                                       std::vector<size_t>& chunk_indices) {
+  using namespace Constants;
+
+  chunk_indices.reserve(indices.size() / 4);
+
+  size_t chunk_end = chunk_offset + chunk_size;
+  for (size_t idx : indices) {
+    if (idx >= chunk_offset && idx < chunk_end - PATTERN_ACCESS_SIZE_BYTES) {
+      chunk_indices.push_back(idx - chunk_offset);
+    }
+  }
+}
+
+}  // namespace
+
 // Helper function to run a pattern read test (multi-threaded)
 double run_pattern_read_test(void* buffer, size_t size, int iterations,
                              uint64_t (*read_func)(const void*, size_t),
@@ -98,14 +132,11 @@ double run_pattern_read_strided_test(void* buffer, size_t size, size_t stride, i
   auto strided_read_work = [&checksum, stride](char *chunk_start, size_t chunk_size, int iters) {
     uint64_t local_checksum = 0;
 
-    // Calculate effective size (accounting for access size)
-    if (chunk_size <= PATTERN_ACCESS_SIZE_BYTES) {
-      return;  // Skip if chunk too small
+    size_t effective_size = 0;
+    size_t num_accesses = 0;
+    if (!calculate_strided_chunk_params(chunk_size, stride, effective_size, num_accesses)) {
+      return;
     }
-    size_t effective_size = chunk_size - PATTERN_ACCESS_SIZE_BYTES;
-
-    // Calculate number of strided accesses for this chunk
-    size_t num_accesses = (effective_size + stride - 1) / stride;  // Ceiling division
 
     for (int i = 0; i < iters; ++i) {
       uint64_t result = memory_read_strided_loop_asm(chunk_start, effective_size, stride, num_accesses);
@@ -124,14 +155,11 @@ double run_pattern_write_strided_test(void* buffer, size_t size, size_t stride, 
 
   // Create work function that captures stride
   auto strided_write_work = [stride](char *chunk_start, size_t chunk_size, int iters) {
-    // Calculate effective size (accounting for access size)
-    if (chunk_size <= PATTERN_ACCESS_SIZE_BYTES) {
-      return;  // Skip if chunk too small
+    size_t effective_size = 0;
+    size_t num_accesses = 0;
+    if (!calculate_strided_chunk_params(chunk_size, stride, effective_size, num_accesses)) {
+      return;
     }
-    size_t effective_size = chunk_size - PATTERN_ACCESS_SIZE_BYTES;
-
-    // Calculate number of strided accesses for this chunk
-    size_t num_accesses = (effective_size + stride - 1) / stride;  // Ceiling division
 
     for (int i = 0; i < iters; ++i) {
       memory_write_strided_loop_asm(chunk_start, effective_size, stride, num_accesses);
@@ -148,14 +176,11 @@ double run_pattern_copy_strided_test(void* dst, void* src, size_t size, size_t s
 
   // Create work function that captures stride
   auto strided_copy_work = [stride](char *dst_chunk, char *src_chunk, size_t chunk_size, int iters) {
-    // Calculate effective size (accounting for access size)
-    if (chunk_size <= PATTERN_ACCESS_SIZE_BYTES) {
-      return;  // Skip if chunk too small
+    size_t effective_size = 0;
+    size_t num_accesses = 0;
+    if (!calculate_strided_chunk_params(chunk_size, stride, effective_size, num_accesses)) {
+      return;
     }
-    size_t effective_size = chunk_size - PATTERN_ACCESS_SIZE_BYTES;
-
-    // Calculate number of strided accesses for this chunk
-    size_t num_accesses = (effective_size + stride - 1) / stride;  // Ceiling division
 
     for (int i = 0; i < iters; ++i) {
       memory_copy_strided_loop_asm(dst_chunk, src_chunk, effective_size, stride, num_accesses);
@@ -181,19 +206,8 @@ double run_pattern_read_random_test(void* buffer, const std::vector<size_t>& ind
 
     // Calculate this chunk's offset from buffer start
     size_t chunk_offset = chunk_start - buffer_start;
-    size_t chunk_end = chunk_offset + chunk_size;
-
-    // Filter indices that fall within this chunk's range
     std::vector<size_t> chunk_indices;
-    chunk_indices.reserve(indices.size() / 4);  // Estimate
-
-    for (size_t idx : indices) {
-      // Check if this index falls within our chunk
-      if (idx >= chunk_offset && idx < chunk_end - PATTERN_ACCESS_SIZE_BYTES) {
-        // Convert to chunk-relative offset
-        chunk_indices.push_back(idx - chunk_offset);
-      }
-    }
+    build_random_chunk_indices(indices, chunk_offset, chunk_size, chunk_indices);
 
     // Skip if no valid indices for this chunk
     if (chunk_indices.empty()) {
@@ -223,19 +237,8 @@ double run_pattern_write_random_test(void* buffer, const std::vector<size_t>& in
   auto random_write_work = [&indices, buffer_start](char *chunk_start, size_t chunk_size, int iters) {
     // Calculate this chunk's offset from buffer start
     size_t chunk_offset = chunk_start - buffer_start;
-    size_t chunk_end = chunk_offset + chunk_size;
-
-    // Filter indices that fall within this chunk's range
     std::vector<size_t> chunk_indices;
-    chunk_indices.reserve(indices.size() / 4);  // Estimate
-
-    for (size_t idx : indices) {
-      // Check if this index falls within our chunk
-      if (idx >= chunk_offset && idx < chunk_end - PATTERN_ACCESS_SIZE_BYTES) {
-        // Convert to chunk-relative offset
-        chunk_indices.push_back(idx - chunk_offset);
-      }
-    }
+    build_random_chunk_indices(indices, chunk_offset, chunk_size, chunk_indices);
 
     // Skip if no valid indices for this chunk
     if (chunk_indices.empty()) {
@@ -263,19 +266,8 @@ double run_pattern_copy_random_test(void* dst, void* src, const std::vector<size
                           char *dst_chunk, char *src_chunk, size_t chunk_size, int iters) {
     // Calculate this chunk's offset from buffer start
     size_t chunk_offset = dst_chunk - dst_buffer_start;
-    size_t chunk_end = chunk_offset + chunk_size;
-
-    // Filter indices that fall within this chunk's range
     std::vector<size_t> chunk_indices;
-    chunk_indices.reserve(indices.size() / 4);  // Estimate
-
-    for (size_t idx : indices) {
-      // Check if this index falls within our chunk
-      if (idx >= chunk_offset && idx < chunk_end - PATTERN_ACCESS_SIZE_BYTES) {
-        // Convert to chunk-relative offset
-        chunk_indices.push_back(idx - chunk_offset);
-      }
-    }
+    build_random_chunk_indices(indices, chunk_offset, chunk_size, chunk_indices);
 
     // Skip if no valid indices for this chunk
     if (chunk_indices.empty()) {

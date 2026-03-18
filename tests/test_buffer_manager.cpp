@@ -18,6 +18,7 @@
 #include "core/config/config.h"
 #include "core/config/constants.h"
 #include "utils/benchmark.h"  // Declares system_info functions
+#include "test_config_helpers.h"
 #include <cstdlib>
 #include <limits>
 
@@ -29,13 +30,7 @@ TEST(BufferManagerTest, AllocateAllBuffersValid) {
   config.l2_buffer_size = 512 * 1024;  // 512 KB
   config.use_custom_cache_size = false;
   
-  // Initialize system info (needed for allocation)
-  config.cpu_name = get_processor_name();
-  config.perf_cores = get_performance_cores();
-  config.eff_cores = get_efficiency_cores();
-  config.num_threads = get_total_logical_cores();
-  config.l1_cache_size = get_l1_cache_size();
-  config.l2_cache_size = get_l2_cache_size();
+  initialize_system_info(config);
   
   BenchmarkBuffers buffers;
   int result = allocate_all_buffers(config, buffers);
@@ -55,11 +50,7 @@ TEST(BufferManagerTest, AllocateAllBuffersCustomCache) {
   config.use_custom_cache_size = true;
   config.custom_buffer_size = 128 * 1024;  // 128 KB
   
-  // Initialize system info
-  config.cpu_name = get_processor_name();
-  config.perf_cores = get_performance_cores();
-  config.eff_cores = get_efficiency_cores();
-  config.num_threads = get_total_logical_cores();
+  initialize_system_info(config);
   config.custom_cache_size_bytes = config.custom_buffer_size;
   
   BenchmarkBuffers buffers;
@@ -80,13 +71,7 @@ TEST(BufferManagerTest, BufferHelperMethods) {
   config.l2_buffer_size = 512 * 1024;  // 512 KB
   config.use_custom_cache_size = false;
   
-  // Initialize system info
-  config.cpu_name = get_processor_name();
-  config.perf_cores = get_performance_cores();
-  config.eff_cores = get_efficiency_cores();
-  config.num_threads = get_total_logical_cores();
-  config.l1_cache_size = get_l1_cache_size();
-  config.l2_cache_size = get_l2_cache_size();
+  initialize_system_info(config);
   
   BenchmarkBuffers buffers;
   int result = allocate_all_buffers(config, buffers);
@@ -108,20 +93,10 @@ TEST(BufferManagerTest, InitializeAllBuffers) {
   config.l2_buffer_size = 512 * 1024;  // 512 KB
   config.use_custom_cache_size = false;
   
-  // Initialize system info
-  config.cpu_name = get_processor_name();
-  config.perf_cores = get_performance_cores();
-  config.eff_cores = get_efficiency_cores();
-  config.num_threads = get_total_logical_cores();
-  config.l1_cache_size = get_l1_cache_size();
-  config.l2_cache_size = get_l2_cache_size();
+  initialize_system_info(config);
   
   BenchmarkBuffers buffers;
-  int alloc_result = allocate_all_buffers(config, buffers);
-  ASSERT_EQ(alloc_result, EXIT_SUCCESS);
-  
-  int init_result = initialize_all_buffers(buffers, config);
-  EXPECT_EQ(init_result, EXIT_SUCCESS);
+  ASSERT_TRUE(allocate_and_initialize_buffers(config, buffers));
 }
 
 // Test that all buffers use non-cacheable allocation when flag is set
@@ -133,13 +108,7 @@ TEST(BufferManagerTest, AllocateAllBuffersNonCacheable) {
   config.use_custom_cache_size = false;
   config.use_non_cacheable = true;  // Enable non-cacheable allocation
   
-  // Initialize system info (needed for allocation)
-  config.cpu_name = get_processor_name();
-  config.perf_cores = get_performance_cores();
-  config.eff_cores = get_efficiency_cores();
-  config.num_threads = get_total_logical_cores();
-  config.l1_cache_size = get_l1_cache_size();
-  config.l2_cache_size = get_l2_cache_size();
+  initialize_system_info(config);
   
   BenchmarkBuffers buffers;
   int result = allocate_all_buffers(config, buffers);
@@ -166,11 +135,7 @@ TEST(BufferManagerTest, AllocateAllBuffersNonCacheableCustomCache) {
   config.custom_buffer_size = 128 * 1024;  // 128 KB
   config.use_non_cacheable = true;  // Enable non-cacheable allocation
   
-  // Initialize system info
-  config.cpu_name = get_processor_name();
-  config.perf_cores = get_performance_cores();
-  config.eff_cores = get_efficiency_cores();
-  config.num_threads = get_total_logical_cores();
+  initialize_system_info(config);
   config.custom_cache_size_bytes = config.custom_buffer_size;
   
   BenchmarkBuffers buffers;
@@ -196,21 +161,11 @@ TEST(BufferManagerTest, InitializeAllBuffersNonCacheable) {
   config.use_custom_cache_size = false;
   config.use_non_cacheable = true;  // Enable non-cacheable allocation
   
-  // Initialize system info
-  config.cpu_name = get_processor_name();
-  config.perf_cores = get_performance_cores();
-  config.eff_cores = get_efficiency_cores();
-  config.num_threads = get_total_logical_cores();
-  config.l1_cache_size = get_l1_cache_size();
-  config.l2_cache_size = get_l2_cache_size();
+  initialize_system_info(config);
   
   BenchmarkBuffers buffers;
-  int alloc_result = allocate_all_buffers(config, buffers);
-  ASSERT_EQ(alloc_result, EXIT_SUCCESS);
-  
   // Verify buffers can be initialized (tests that they're usable)
-  int init_result = initialize_all_buffers(buffers, config);
-  EXPECT_EQ(init_result, EXIT_SUCCESS);
+  ASSERT_TRUE(allocate_and_initialize_buffers(config, buffers));
 }
 
 // Test allocation failure when buffer_size is zero - should fail early with error message
@@ -221,13 +176,7 @@ TEST(BufferManagerTest, AllocateAllBuffersFirstBufferFails) {
   config.l2_buffer_size = 512 * 1024;
   config.use_custom_cache_size = false;
   
-  // Initialize system info
-  config.cpu_name = get_processor_name();
-  config.perf_cores = get_performance_cores();
-  config.eff_cores = get_efficiency_cores();
-  config.num_threads = get_total_logical_cores();
-  config.l1_cache_size = get_l1_cache_size();
-  config.l2_cache_size = get_l2_cache_size();
+  initialize_system_info(config);
   
   testing::internal::CaptureStderr();
   BenchmarkBuffers buffers;
@@ -331,9 +280,7 @@ TEST(BufferManagerTest, InitializeAllBuffersOnlyLatencyWithMainDisabledAndCustom
   config.custom_num_accesses = Constants::CUSTOM_LATENCY_ACCESSES;
 
   BenchmarkBuffers buffers;
-  ASSERT_EQ(allocate_all_buffers(config, buffers), EXIT_SUCCESS);
+  ASSERT_TRUE(allocate_and_initialize_buffers(config, buffers));
   EXPECT_EQ(buffers.lat_buffer(), nullptr);
   EXPECT_NE(buffers.custom_buffer(), nullptr);
-
-  EXPECT_EQ(initialize_all_buffers(buffers, config), EXIT_SUCCESS);
 }

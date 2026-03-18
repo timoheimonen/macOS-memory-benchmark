@@ -140,7 +140,7 @@ int write_json_to_file(const std::filesystem::path& file_path, const nlohmann::o
       return EXIT_FAILURE;
     }
     
-    std::cout << "Results saved to: " << file_path << std::endl;
+    std::cout << Messages::msg_results_saved_to(file_path.string()) << std::endl;
   } catch (const std::filesystem::filesystem_error& e) {
     // Clean up temp file if it exists
     std::error_code ec;

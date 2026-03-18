@@ -302,6 +302,14 @@ TEST_F(MessagesErrorTest, ErrorBenchmarkTests) {
   EXPECT_EQ(msg, "Error during benchmark tests: test failure");
 }
 
+TEST_F(MessagesErrorTest, ErrorTimerCreationFailed) {
+  const std::string& msg = Messages::error_timer_creation_failed();
+  EXPECT_NE(msg.find("timer"), std::string::npos);
+  EXPECT_NE(msg.find("Failed"), std::string::npos);
+  // Verify it returns a stable reference (static string)
+  EXPECT_EQ(&msg, &Messages::error_timer_creation_failed());
+}
+
 // ============================================================================
 // Warning Messages Tests (using fixture)
 // ============================================================================
@@ -361,6 +369,26 @@ TEST_F(MessagesFormattingTest, MsgDoneTotalTime) {
   
   msg = Messages::msg_done_total_time(0.001);
   EXPECT_NE(msg.find("0.001"), std::string::npos);
+}
+
+TEST_F(MessagesFormattingTest, MsgResultsSavedTo) {
+  std::string msg = Messages::msg_results_saved_to("results.json");
+  EXPECT_NE(msg.find("Results saved to"), std::string::npos);
+  EXPECT_NE(msg.find("results.json"), std::string::npos);
+
+  msg = Messages::msg_results_saved_to("/tmp/out/bench.json");
+  EXPECT_NE(msg.find("/tmp/out/bench.json"), std::string::npos);
+}
+
+TEST_F(MessagesFormattingTest, MsgPatternBenchmarkLoopCompleted) {
+  std::string msg = Messages::msg_pattern_benchmark_loop_completed(3, 10);
+  EXPECT_NE(msg.find("3"), std::string::npos);
+  EXPECT_NE(msg.find("10"), std::string::npos);
+  EXPECT_NE(msg.find("Pattern benchmarks"), std::string::npos);
+  EXPECT_NE(msg.find("completed"), std::string::npos);
+
+  // Verify the loop separator is present
+  EXPECT_NE(msg.find("3/10"), std::string::npos);
 }
 
 TEST_F(MessagesFormattingTest, MsgTlbAnalysisPageWalkProgress) {
