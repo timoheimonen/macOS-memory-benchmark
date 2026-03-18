@@ -28,115 +28,112 @@
 //   (none)
 // Clobbers:
 //   x3-x7, q0-q7, q16-q31 (caller-saved only)
+// Implementation Notes:
+//   * Uses one zero vector (q0) and repeats it for all wide stores.
+//   * Uses pointer+remaining loop state (x7/x5) for lower loop-control overhead.
+//   * Processes 512B per iteration using 16 store pairs.
+//   * Tail uses size-bit tests plus 16/8/4/2/1 scalar zero stores.
 // -----------------------------------------------------------------------------
 
 .global _memory_write_cache_loop_asm
 .align 4
 _memory_write_cache_loop_asm:
-    mov x3, xzr
-    mov x4, #512
-
+    // x7 = current dst pointer, x5 = remaining bytes.
+    mov x7, x0
+    mov x5, x1
+    // Materialize zero vector once and reuse for all SIMD stores.
     movi v0.16b, #0
-    movi v1.16b, #0
-    movi v2.16b, #0
-    movi v3.16b, #0
-    movi v4.16b, #0
-    movi v5.16b, #0
-    movi v6.16b, #0
-    movi v7.16b, #0
-    movi v16.16b, #0
-    movi v17.16b, #0
-    movi v18.16b, #0
-    movi v19.16b, #0
-    movi v20.16b, #0
-    movi v21.16b, #0
-    movi v22.16b, #0
-    movi v23.16b, #0
-    movi v24.16b, #0
-    movi v25.16b, #0
-    movi v26.16b, #0
-    movi v27.16b, #0
-    movi v28.16b, #0
-    movi v29.16b, #0
-    movi v30.16b, #0
-    movi v31.16b, #0
 
-write_cache_loop_start_nt512:
-    subs x5, x1, x3
-    cmp x5, x4
+write_cache_loop_start_nt512: // Main 512B loop
+    // If <512B remain, switch to tail handling.
+    cmp x5, #512
     b.lo write_cache_loop_cleanup
 
-    add x7, x0, x3
-    stnp q0,  q1,  [x7, #0]
-    stnp q2,  q3,  [x7, #32]
-    stnp q4,  q5,  [x7, #64]
-    stnp q6,  q7,  [x7, #96]
-    stnp q16, q17, [x7, #128]
-    stnp q18, q19, [x7, #160]
-    stnp q20, q21, [x7, #192]
-    stnp q22, q23, [x7, #224]
-    stnp q24, q25, [x7, #256]
-    stnp q26, q27, [x7, #288]
-    stnp q28, q29, [x7, #320]
-    stnp q30, q31, [x7, #352]
-    stnp q0,  q1,  [x7, #384]
-    stnp q2,  q3,  [x7, #416]
-    stnp q4,  q5,  [x7, #448]
-    stnp q6,  q7,  [x7, #480]
+    // 512B of zero stores (16x 32B store pairs).
+    stp q0, q0, [x7, #0]
+    stp q0, q0, [x7, #32]
+    stp q0, q0, [x7, #64]
+    stp q0, q0, [x7, #96]
+    stp q0, q0, [x7, #128]
+    stp q0, q0, [x7, #160]
+    stp q0, q0, [x7, #192]
+    stp q0, q0, [x7, #224]
+    stp q0, q0, [x7, #256]
+    stp q0, q0, [x7, #288]
+    stp q0, q0, [x7, #320]
+    stp q0, q0, [x7, #352]
+    stp q0, q0, [x7, #384]
+    stp q0, q0, [x7, #416]
+    stp q0, q0, [x7, #448]
+    stp q0, q0, [x7, #480]
 
-    add x3, x3, x4
+    // Advance destination and remaining-byte count.
+    add x7, x7, #512
+    sub x5, x5, #512
     b write_cache_loop_start_nt512
 
-write_cache_loop_cleanup:
-    cmp x3, x1
-    b.hs write_cache_loop_end
+write_cache_loop_cleanup:     // Tail handling when <512B remain
+    cbz x5, write_cache_loop_end
 
-    subs x5, x1, x3
-    add x7, x0, x3
-
-    cmp x5, #256
-    b.lo write_cache_cleanup_128
-    stnp q0, q1, [x7, #0]
-    stnp q2, q3, [x7, #32]
-    stnp q4, q5, [x7, #64]
-    stnp q6, q7, [x7, #96]
-    stnp q16, q17, [x7, #128]
-    stnp q18, q19, [x7, #160]
-    stnp q20, q21, [x7, #192]
-    stnp q22, q23, [x7, #224]
+    // Tiered tail: test size bits for 256/128/64/32 before scalar ladder.
+    tbz x5, #8, write_cache_cleanup_128
+    // 256B chunk
+    stp q0, q0, [x7, #0]
+    stp q0, q0, [x7, #32]
+    stp q0, q0, [x7, #64]
+    stp q0, q0, [x7, #96]
+    stp q0, q0, [x7, #128]
+    stp q0, q0, [x7, #160]
+    stp q0, q0, [x7, #192]
+    stp q0, q0, [x7, #224]
     add x7, x7, #256
     sub x5, x5, #256
 
-write_cache_cleanup_128:
-    cmp x5, #128
-    b.lo write_cache_cleanup_64
-    stnp q0, q1, [x7, #0]
-    stnp q2, q3, [x7, #32]
-    stnp q4, q5, [x7, #64]
-    stnp q6, q7, [x7, #96]
+write_cache_cleanup_128:      // Optional 128B chunk
+    tbz x5, #7, write_cache_cleanup_64
+    stp q0, q0, [x7, #0]
+    stp q0, q0, [x7, #32]
+    stp q0, q0, [x7, #64]
+    stp q0, q0, [x7, #96]
     add x7, x7, #128
     sub x5, x5, #128
 
-write_cache_cleanup_64:
-    cmp x5, #64
-    b.lo write_cache_cleanup_32
-    stnp q0, q1, [x7, #0]
-    stnp q2, q3, [x7, #32]
+write_cache_cleanup_64:       // Optional 64B chunk
+    tbz x5, #6, write_cache_cleanup_32
+    stp q0, q0, [x7, #0]
+    stp q0, q0, [x7, #32]
     add x7, x7, #64
     sub x5, x5, #64
 
-write_cache_cleanup_32:
-    cmp x5, #32
-    b.lo write_cache_cleanup_byte
-    stnp q0, q1, [x7, #0]
+write_cache_cleanup_32:       // Optional 32B chunk
+    tbz x5, #5, write_cache_cleanup_16
+    stp q0, q0, [x7, #0]
     add x7, x7, #32
     sub x5, x5, #32
 
-write_cache_cleanup_byte:
-    cbz x5, write_cache_loop_end
-    strb wzr, [x7], #1
-    subs x5, x5, #1
-    b.ne write_cache_cleanup_byte
+write_cache_cleanup_16:       // Optional 16B scalar zero store
+    tbz x5, #4, write_cache_cleanup_8
+    str q0, [x7], #16
+    sub x5, x5, #16
 
-write_cache_loop_end:
+write_cache_cleanup_8:        // Optional 8B scalar zero store
+    tbz x5, #3, write_cache_cleanup_4
+    str xzr, [x7], #8
+    sub x5, x5, #8
+
+write_cache_cleanup_4:        // Optional 4B scalar zero store
+    tbz x5, #2, write_cache_cleanup_2
+    str wzr, [x7], #4
+    sub x5, x5, #4
+
+write_cache_cleanup_2:        // Optional 2B scalar zero store
+    tbz x5, #1, write_cache_cleanup_1
+    strh wzr, [x7], #2
+    sub x5, x5, #2
+
+write_cache_cleanup_1:        // Optional final 1B zero store
+    tbz x5, #0, write_cache_loop_end
+    strb wzr, [x7]
+
+write_cache_loop_end:         // Return to caller
     ret

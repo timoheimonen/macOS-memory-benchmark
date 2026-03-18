@@ -28,27 +28,34 @@
 //   x0 = 64-bit XOR checksum
 // Clobbers:
 //   x2-x7, x12-x13, q0-q7, q16-q31
+// Implementation Notes:
+//   * Uses pointer+remaining loop state (x6/x5) to avoid per-iteration offset math.
+//   * Processes 512B per iteration (16 pair loads) for high cache-path throughput.
+//   * Distributes XOR into four accumulators (v0-v3) to reduce dependency depth.
+//   * Tail path uses size-bit tests (tbz for 256/128/64/32), then byte cleanup.
 // -----------------------------------------------------------------------------
 
 .global _memory_read_cache_loop_asm
 .align 4
 _memory_read_cache_loop_asm:
-    mov x3, xzr
-    mov x4, #512
+    // x6 = current source pointer, x5 = remaining bytes.
+    // x12 accumulates XOR for byte cleanup (<32B tail).
+    mov x6, x0
+    mov x5, x1
     mov x12, xzr
 
+    // Zero vector accumulators once; they fold all wide reads.
     eor v0.16b, v0.16b, v0.16b
     eor v1.16b, v1.16b, v1.16b
     eor v2.16b, v2.16b, v2.16b
     eor v3.16b, v3.16b, v3.16b
 
-cache_read_loop_start_512:
-    subs x5, x1, x3
-    cmp x5, x4
+cache_read_loop_start_512:    // Main 512B loop
+    // If <512B remain, switch to tail handling.
+    cmp x5, #512
     b.lo cache_read_loop_cleanup
 
-    add x6, x0, x3
-
+    // Load first 256B (8x 32B pairs) using caller-saved SIMD regs.
     ldp q4,  q5,  [x6, #0]
     ldp q6,  q7,  [x6, #32]
     ldp q16, q17, [x6, #64]
@@ -58,6 +65,7 @@ cache_read_loop_start_512:
     ldp q24, q25, [x6, #192]
     ldp q26, q27, [x6, #224]
 
+    // Fold first 256B into four independent accumulators (v0-v3).
     eor v0.16b, v0.16b, v4.16b
     eor v1.16b, v1.16b, v5.16b
     eor v2.16b, v2.16b, v6.16b
@@ -75,6 +83,7 @@ cache_read_loop_start_512:
     eor v2.16b, v2.16b, v26.16b
     eor v3.16b, v3.16b, v27.16b
 
+    // Load second 256B (offsets 256..480).
     ldp q4,  q5,  [x6, #256]
     ldp q6,  q7,  [x6, #288]
     ldp q16, q17, [x6, #320]
@@ -84,6 +93,7 @@ cache_read_loop_start_512:
     ldp q24, q25, [x6, #448]
     ldp q26, q27, [x6, #480]
 
+    // Fold second 256B into the same accumulators.
     eor v0.16b, v0.16b, v4.16b
     eor v1.16b, v1.16b, v5.16b
     eor v2.16b, v2.16b, v6.16b
@@ -101,18 +111,17 @@ cache_read_loop_start_512:
     eor v2.16b, v2.16b, v26.16b
     eor v3.16b, v3.16b, v27.16b
 
-    add x3, x3, x4
+    // Advance pointers/counters for next 512B block.
+    add x6, x6, #512
+    sub x5, x5, #512
     b cache_read_loop_start_512
 
-cache_read_loop_cleanup:
-    cmp x3, x1
-    b.hs cache_read_loop_combine_sum
+cache_read_loop_cleanup:      // Tail handling when <512B remain
+    cbz x5, cache_read_loop_combine_sum
 
-    subs x5, x1, x3
-    add x6, x0, x3
-
-    cmp x5, #256
-    b.lo cache_read_cleanup_128
+    // Tiered tail: check 256/128/64/32 chunks via size bits.
+    tbz x5, #8, cache_read_cleanup_128
+    // 256B chunk: load+fold exactly like half of main loop.
     ldp q4, q5, [x6, #0]
     ldp q6, q7, [x6, #32]
     ldp q16, q17, [x6, #64]
@@ -140,9 +149,8 @@ cache_read_loop_cleanup:
     add x6, x6, #256
     sub x5, x5, #256
 
-cache_read_cleanup_128:
-    cmp x5, #128
-    b.lo cache_read_cleanup_64
+cache_read_cleanup_128:       // Optional 128B chunk
+    tbz x5, #7, cache_read_cleanup_64
     ldp q4, q5, [x6, #0]
     ldp q6, q7, [x6, #32]
     ldp q16, q17, [x6, #64]
@@ -158,9 +166,8 @@ cache_read_cleanup_128:
     add x6, x6, #128
     sub x5, x5, #128
 
-cache_read_cleanup_64:
-    cmp x5, #64
-    b.lo cache_read_cleanup_32
+cache_read_cleanup_64:        // Optional 64B chunk
+    tbz x5, #6, cache_read_cleanup_32
     ldp q4, q5, [x6, #0]
     ldp q6, q7, [x6, #32]
     eor v0.16b, v0.16b, v4.16b
@@ -170,26 +177,28 @@ cache_read_cleanup_64:
     add x6, x6, #64
     sub x5, x5, #64
 
-cache_read_cleanup_32:
-    cmp x5, #32
-    b.lo cache_read_cleanup_byte
+cache_read_cleanup_32:        // Optional 32B chunk
+    tbz x5, #5, cache_read_cleanup_byte
     ldp q4, q5, [x6, #0]
     eor v0.16b, v0.16b, v4.16b
     eor v1.16b, v1.16b, v5.16b
     add x6, x6, #32
     sub x5, x5, #32
 
-cache_read_cleanup_byte:
+cache_read_cleanup_byte:      // Final byte tail (<32B)
+    // Byte tail keeps checksum exact for non-vectorizable remainder.
     cbz x5, cache_read_loop_combine_sum
     ldrb w13, [x6], #1
     eor x12, x12, x13
     subs x5, x5, #1
     b.ne cache_read_cleanup_byte
 
-cache_read_loop_combine_sum:
+cache_read_loop_combine_sum:  // Final reduction and return value
+    // Reduce four vector accumulators into one.
     eor v0.16b, v0.16b, v1.16b
     eor v2.16b, v2.16b, v3.16b
     eor v0.16b, v0.16b, v2.16b
+    // Extract low 64b and fold byte-tail checksum.
     umov x0, v0.d[0]
     eor x0, x0, x12
     ret
