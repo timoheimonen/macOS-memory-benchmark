@@ -32,31 +32,25 @@
 // Assumptions / Guarantees:
 //   * Undefined behavior if regions overlap (not a memmove replacement).
 // Implementation Notes:
-//   * Uses offset-based loop state (x3) with 512B step size.
+//   * Uses pointer+remaining loop state (x7/x6/x5) with 512B step size.
 //   * Processes 512B per iteration with 16 load/store pairs.
-//   * Uses STNP for cache-path store behavior parity with prior baseline.
-//   * Tail path mirrors 256/128/64/32 tiers then byte cleanup.
+//   * Uses STNP for cache-path store behavior.
+//   * Tail path uses size-bit tiers (256/128/64/32/16/8/4/2/1).
 // -----------------------------------------------------------------------------
 
 .global _memory_copy_cache_loop_asm
 .align 4
 _memory_copy_cache_loop_asm:
-    // offset-based loop state (matches baseline cache-copy behavior)
-    mov x3, xzr               // offset = 0
-    mov x4, #512              // step = 512 bytes
+    // pointer+remaining loop state (lower loop-control overhead)
+    mov x7, x0                // dst ptr
+    mov x6, x1                // src ptr
+    mov x5, x2                // remaining bytes
 
 copy_cache_loop_start_nt512:  // Main 512B loop
-    // Loop invariants: x4=512B step, x0/x1 are base pointers.
-    // x3 tracks current offset and x5 tracks remaining bytes.
-    subs x5, x2, x3           // remaining = count - offset
-    cmp x5, x4                // remaining < 512?
+    cmp x5, #512
     b.lo copy_cache_loop_cleanup
 
-    // Calculate current src/dst addresses.
-    add x6, x1, x3            // src + offset
-    add x7, x0, x3            // dst + offset
-
-    // First 256B: load then store as 8x pair operations.
+    // First 256B
     ldp q0,  q1,  [x6, #0]
     ldp q2,  q3,  [x6, #32]
     ldp q4,  q5,  [x6, #64]
@@ -74,7 +68,7 @@ copy_cache_loop_start_nt512:  // Main 512B loop
     stnp q20, q21, [x7, #192]
     stnp q22, q23, [x7, #224]
 
-    // Second 256B: reuse registers, keep same memory pattern.
+    // Second 256B
     ldp q24, q25, [x6, #256]
     ldp q26, q27, [x6, #288]
     ldp q28, q29, [x6, #320]
@@ -92,21 +86,16 @@ copy_cache_loop_start_nt512:  // Main 512B loop
     stnp q4,  q5,  [x7, #448]
     stnp q6,  q7,  [x7, #480]
 
-    add x3, x3, x4            // offset += 512
+    add x6, x6, #512
+    add x7, x7, #512
+    sub x5, x5, #512
     b copy_cache_loop_start_nt512
 
 copy_cache_loop_cleanup:      // Tail handling when <512B remain
-    cmp x3, x2
-    b.hs copy_cache_loop_end
-
-    // Recompute remaining and current pointers for tiered tail copy.
-    subs x5, x2, x3
-    add x6, x1, x3
-    add x7, x0, x3
+    cbz x5, copy_cache_loop_end
 
     // 256B chunk
-    cmp x5, #256
-    b.lo copy_cache_cleanup_128
+    tbz x5, #8, copy_cache_cleanup_128
     ldp q0, q1, [x6, #0]
     ldp q2, q3, [x6, #32]
     ldp q4, q5, [x6, #64]
@@ -128,8 +117,7 @@ copy_cache_loop_cleanup:      // Tail handling when <512B remain
     sub x5, x5, #256
 
 copy_cache_cleanup_128:       // Optional 128B chunk
-    cmp x5, #128
-    b.lo copy_cache_cleanup_64
+    tbz x5, #7, copy_cache_cleanup_64
     ldp q0, q1, [x6, #0]
     ldp q2, q3, [x6, #32]
     ldp q4, q5, [x6, #64]
@@ -143,8 +131,7 @@ copy_cache_cleanup_128:       // Optional 128B chunk
     sub x5, x5, #128
 
 copy_cache_cleanup_64:        // Optional 64B chunk
-    cmp x5, #64
-    b.lo copy_cache_cleanup_32
+    tbz x5, #6, copy_cache_cleanup_32
     ldp q0, q1, [x6, #0]
     ldp q2, q3, [x6, #32]
     stnp q0, q1, [x7, #0]
@@ -154,20 +141,41 @@ copy_cache_cleanup_64:        // Optional 64B chunk
     sub x5, x5, #64
 
 copy_cache_cleanup_32:        // Optional 32B chunk
-    cmp x5, #32
-    b.lo copy_cache_cleanup_byte
+    tbz x5, #5, copy_cache_cleanup_16
     ldp q0, q1, [x6, #0]
     stnp q0, q1, [x7, #0]
     add x6, x6, #32
     add x7, x7, #32
     sub x5, x5, #32
 
-copy_cache_cleanup_byte:      // Final byte tail (<32B)
-    cbz x5, copy_cache_loop_end
-    ldrb w8, [x6], #1
-    strb w8, [x7], #1
-    subs x5, x5, #1
-    b.ne copy_cache_cleanup_byte
+copy_cache_cleanup_16:        // Optional 16B chunk
+    tbz x5, #4, copy_cache_cleanup_8
+    ldr q0, [x6], #16
+    str q0, [x7], #16
+    sub x5, x5, #16
+
+copy_cache_cleanup_8:         // Optional 8B chunk
+    tbz x5, #3, copy_cache_cleanup_4
+    ldr x8, [x6], #8
+    str x8, [x7], #8
+    sub x5, x5, #8
+
+copy_cache_cleanup_4:         // Optional 4B chunk
+    tbz x5, #2, copy_cache_cleanup_2
+    ldr w8, [x6], #4
+    str w8, [x7], #4
+    sub x5, x5, #4
+
+copy_cache_cleanup_2:         // Optional 2B chunk
+    tbz x5, #1, copy_cache_cleanup_1
+    ldrh w8, [x6], #2
+    strh w8, [x7], #2
+    sub x5, x5, #2
+
+copy_cache_cleanup_1:         // Optional final 1B chunk
+    tbz x5, #0, copy_cache_loop_end
+    ldrb w8, [x6]
+    strb w8, [x7]
 
 copy_cache_loop_end:          // Return to caller
     ret
