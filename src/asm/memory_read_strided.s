@@ -32,7 +32,7 @@
 // Clobbers:
 //   x4‑x8, x12‑x13, q0‑q7, q16‑q31 (data + accumulators, avoiding q8‑q15 per AAPCS64)
 // Implementation Notes:
-//   * Uses modulo arithmetic to wrap around buffer when stride exceeds buffer size.
+//   * Uses branch-based wraparound (offset -= byteCount) to avoid division in hot path.
 //   * Loads 32 bytes (one cache line) per iteration to test strided prefetch behavior.
 //   * Distributes XOR across two accumulators (v0-v1) to reduce dependency depth.
 // -----------------------------------------------------------------------------
@@ -59,12 +59,8 @@ read_strided_loop:              // Main strided access loop
     cmp x4, x3              // iteration_count >= num_iterations?
     b.hs read_strided_combine_sum  // If done (unsigned >=), combine checksums
 
-    // Calculate current address: src + (offset % byteCount)
-    // Use modulo operation: offset % byteCount = offset - (offset / byteCount) * byteCount
-    // This wraps the offset around when it exceeds buffer size, creating strided pattern.
-    udiv x6, x5, x1         // quotient = offset / byteCount
-    msub x7, x6, x1, x5     // remainder = offset - quotient * byteCount (wraps around)
-    add x8, x0, x7          // addr = src + remainder (actual memory address)
+    // Calculate current address: src + offset
+    add x8, x0, x5          // addr = src + offset
 
     // Load 32 bytes (one cache line worth) at strided offset
     // Using caller-saved registers: q2-q3 (avoiding q8-q15 per AAPCS64)
@@ -75,8 +71,12 @@ read_strided_loop:              // Main strided access loop
     eor v0.16b, v0.16b, v2.16b    // Accumulate q2 into v0
     eor v1.16b, v1.16b, v3.16b    // Accumulate q3 into v1
 
-    // Advance offset and iteration count
+    // Advance offset with wraparound (validated path guarantees stride <= byteCount)
     add x5, x5, x2          // offset += stride
+    cmp x5, x1              // offset >= byteCount?
+    b.lo read_strided_offset_ready
+    sub x5, x5, x1          // offset -= byteCount
+read_strided_offset_ready:
     add x4, x4, #1          // iteration_count++
     b read_strided_loop     // Loop again
 

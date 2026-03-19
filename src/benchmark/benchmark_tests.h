@@ -47,6 +47,25 @@ struct HighResTimer;
 double run_read_test(void* buffer, size_t size, int iterations, int num_threads, std::atomic<uint64_t>& checksum, HighResTimer& timer);
 
 /**
+ * @brief Run read benchmark test with a specific assembly read kernel
+ * @param buffer Pointer to buffer to read from
+ * @param size Size of buffer in bytes
+ * @param iterations Number of iterations to run
+ * @param num_threads Number of threads to use
+ * @param checksum Reference to atomic checksum accumulator
+ * @param timer Reference to high-resolution timer
+ * @param read_func Assembly read kernel to invoke
+ * @return Total elapsed time in seconds
+ */
+double run_read_test_with_kernel(void* buffer,
+                                 size_t size,
+                                 int iterations,
+                                 int num_threads,
+                                 std::atomic<uint64_t>& checksum,
+                                 HighResTimer& timer,
+                                 uint64_t (*read_func)(const void*, size_t));
+
+/**
  * @brief Run write benchmark test
  * @param buffer Pointer to buffer to write to
  * @param size Size of buffer in bytes
@@ -56,6 +75,23 @@ double run_read_test(void* buffer, size_t size, int iterations, int num_threads,
  * @return Total elapsed time in seconds
  */
 double run_write_test(void* buffer, size_t size, int iterations, int num_threads, HighResTimer& timer);
+
+/**
+ * @brief Run write benchmark test with a specific assembly write kernel
+ * @param buffer Pointer to buffer to write to
+ * @param size Size of buffer in bytes
+ * @param iterations Number of iterations to run
+ * @param num_threads Number of threads to use
+ * @param timer Reference to high-resolution timer
+ * @param write_func Assembly write kernel to invoke
+ * @return Total elapsed time in seconds
+ */
+double run_write_test_with_kernel(void* buffer,
+                                  size_t size,
+                                  int iterations,
+                                  int num_threads,
+                                  HighResTimer& timer,
+                                  void (*write_func)(void*, size_t));
 
 /**
  * @brief Run copy benchmark test
@@ -68,6 +104,25 @@ double run_write_test(void* buffer, size_t size, int iterations, int num_threads
  * @return Total elapsed time in seconds
  */
 double run_copy_test(void* dst, void* src, size_t size, int iterations, int num_threads, HighResTimer& timer);
+
+/**
+ * @brief Run copy benchmark test with a specific assembly copy kernel
+ * @param dst Pointer to destination buffer
+ * @param src Pointer to source buffer
+ * @param size Size of buffers in bytes
+ * @param iterations Number of iterations to run
+ * @param num_threads Number of threads to use
+ * @param timer Reference to high-resolution timer
+ * @param copy_func Assembly copy kernel to invoke
+ * @return Total elapsed time in seconds
+ */
+double run_copy_test_with_kernel(void* dst,
+                                 void* src,
+                                 size_t size,
+                                 int iterations,
+                                 int num_threads,
+                                 HighResTimer& timer,
+                                 void (*copy_func)(void*, const void*, size_t));
 
 /**
  * @brief Run latency benchmark test
@@ -93,4 +148,3 @@ double run_latency_test(void* buffer, size_t num_accesses, HighResTimer& timer, 
 double run_cache_latency_test(void* buffer, size_t buffer_size, size_t num_accesses, HighResTimer& timer, std::vector<double>* latency_samples = nullptr, int sample_count = 0);
 
 #endif // BENCHMARK_TESTS_H
-

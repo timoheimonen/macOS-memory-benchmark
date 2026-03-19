@@ -352,21 +352,24 @@ void run_main_memory_bandwidth_tests(const BenchmarkBuffers& buffers, const Benc
  */
 void run_single_cache_bandwidth_test(void* src_buffer, void* dst_buffer, size_t buffer_size,
                                      int cache_iterations, int num_threads, HighResTimer& test_timer,
+                                     uint64_t (*read_kernel)(const void*, size_t),
+                                     void (*write_kernel)(void*, size_t),
+                                     void (*copy_kernel)(void*, const void*, size_t),
                                      double& read_time, double& write_time, double& copy_time,
                                      std::atomic<uint64_t>& read_checksum) {
   show_progress();
   std::atomic<uint64_t> warmup_read_checksum{0};
   warmup_cache_read(src_buffer, buffer_size, num_threads, warmup_read_checksum);
-  read_time = run_read_test(src_buffer, buffer_size, cache_iterations, 
-                           num_threads, read_checksum, test_timer);
+  read_time = run_read_test_with_kernel(src_buffer, buffer_size, cache_iterations,
+                                        num_threads, read_checksum, test_timer, read_kernel);
   
   warmup_cache_write(dst_buffer, buffer_size, num_threads);
-  write_time = run_write_test(dst_buffer, buffer_size, cache_iterations, 
-                             num_threads, test_timer);
+  write_time = run_write_test_with_kernel(dst_buffer, buffer_size, cache_iterations,
+                                          num_threads, test_timer, write_kernel);
   
   warmup_cache_copy(dst_buffer, src_buffer, buffer_size, num_threads);
-  copy_time = run_copy_test(dst_buffer, src_buffer, buffer_size, 
-                           cache_iterations, num_threads, test_timer);
+  copy_time = run_copy_test_with_kernel(dst_buffer, src_buffer, buffer_size,
+                                        cache_iterations, num_threads, test_timer, copy_kernel);
 }
 
 /**
@@ -398,11 +401,15 @@ void run_cache_bandwidth_tests(const BenchmarkBuffers& buffers, const BenchmarkC
   int cache_iterations = calculate_cache_iterations_saturated(config.iterations);
   // Use user-specified threads if set, otherwise default to single-threaded for cache tests
   int cache_threads = config.user_specified_threads ? config.num_threads : Constants::SINGLE_THREAD;
+  auto cache_read_kernel = memory_read_cache_loop_asm;
+  auto cache_write_kernel = memory_write_cache_loop_asm;
+  auto cache_copy_kernel = memory_copy_cache_loop_asm;
   
   if (config.use_custom_cache_size) {
     if (config.custom_buffer_size > 0 && buffers.custom_bw_src() != nullptr && buffers.custom_bw_dst() != nullptr) {
       run_single_cache_bandwidth_test(buffers.custom_bw_src(), buffers.custom_bw_dst(), config.custom_buffer_size,
                                       cache_iterations, cache_threads, test_timer,
+                                      cache_read_kernel, cache_write_kernel, cache_copy_kernel,
                                       timings.custom_read_time, timings.custom_write_time, timings.custom_copy_time,
                                       timings.custom_read_checksum);
     }
@@ -410,6 +417,7 @@ void run_cache_bandwidth_tests(const BenchmarkBuffers& buffers, const BenchmarkC
     if (config.l1_buffer_size > 0 && buffers.l1_bw_src() != nullptr && buffers.l1_bw_dst() != nullptr) {
       run_single_cache_bandwidth_test(buffers.l1_bw_src(), buffers.l1_bw_dst(), config.l1_buffer_size,
                                       cache_iterations, cache_threads, test_timer,
+                                      cache_read_kernel, cache_write_kernel, cache_copy_kernel,
                                       timings.l1_read_time, timings.l1_write_time, timings.l1_copy_time,
                                       timings.l1_read_checksum);
     }
@@ -417,6 +425,7 @@ void run_cache_bandwidth_tests(const BenchmarkBuffers& buffers, const BenchmarkC
     if (config.l2_buffer_size > 0 && buffers.l2_bw_src() != nullptr && buffers.l2_bw_dst() != nullptr) {
       run_single_cache_bandwidth_test(buffers.l2_bw_src(), buffers.l2_bw_dst(), config.l2_buffer_size,
                                       cache_iterations, cache_threads, test_timer,
+                                      cache_read_kernel, cache_write_kernel, cache_copy_kernel,
                                       timings.l2_read_time, timings.l2_write_time, timings.l2_copy_time,
                                       timings.l2_read_checksum);
     }
