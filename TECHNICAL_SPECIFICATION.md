@@ -2,7 +2,7 @@
 
 ## 1. Scope and Status
 
-This document specifies the current implementation in this repository (version series `0.53.x`) for `memory_benchmark` on macOS Apple Silicon.
+This document specifies the current implementation in this repository (version series `0.54.x`) for `memory_benchmark` on macOS Apple Silicon.
 
 It is intentionally implementation-driven and reflects real behavior in code paths under `main.cpp`, `src/core`, `src/benchmark`, `src/pattern_benchmark`, `src/output`, and `src/asm`.
 
@@ -317,8 +317,10 @@ Implementation notes:
 
 Assembly entrypoints are declared in `src/asm/asm_functions.h` and used by benchmark/warmup code:
 
-- Main kernels: read, write, copy, latency chase.
-- Pattern kernels: reverse, strided, random variants.
+- Main-memory kernels: read, write, copy (non-temporal stores).
+- Cache kernels: read, write, copy (cache-focused variants).
+- Latency kernel: pointer-chase loop.
+- Pattern kernels: reverse (read/write/copy), strided generic (read/write/copy), strided fixed-stride variants (64B, 4096B, 16384B, 2MB — each as read/write/copy), random (read/write/copy).
 - Core-to-core kernels: initiator and responder round-trip loops.
 
 Design intent:
