@@ -32,7 +32,7 @@
 // Clobbers:
 //   x4‑x8, q0‑q1 (zero vectors, avoiding q8‑q15 per AAPCS64)
 // Implementation Notes:
-//   * Uses modulo arithmetic to wrap around buffer when stride exceeds buffer size.
+//   * Uses branch-based wraparound (offset -= byteCount) to avoid division in hot path.
 //   * Stores 32 bytes (one cache line) per iteration to test strided write behavior.
 //   * Zero vectors are materialized once (movi) then reused.
 // -----------------------------------------------------------------------------
@@ -58,20 +58,20 @@ write_strided_loop:              // Main strided access loop
     cmp x4, x3              // iteration_count >= num_iterations?
     b.hs write_strided_done // If done (unsigned >=), exit
 
-    // Calculate current address: dst + (offset % byteCount)
-    // Use modulo operation: offset % byteCount = offset - (offset / byteCount) * byteCount
-    // This wraps the offset around when it exceeds buffer size, creating strided pattern.
-    udiv x6, x5, x1         // quotient = offset / byteCount
-    msub x7, x6, x1, x5     // remainder = offset - quotient * byteCount (wraps around)
-    add x8, x0, x7          // addr = dst + remainder (actual memory address)
+    // Calculate current address: dst + offset
+    add x8, x0, x5          // addr = dst + offset
 
     // Store 32 bytes (one cache line worth) at strided offset
     // Non-temporal stores (stnp) hint to CPU that data won't be reused soon,
     // encouraging write-combining and reducing cache pollution during bandwidth tests.
     stnp q0, q1, [x8]       // Store pair (32B total, non-temporal) to strided address
 
-    // Advance offset and iteration count
+    // Advance offset with wraparound (validated path guarantees stride <= byteCount)
     add x5, x5, x2          // offset += stride
+    cmp x5, x1              // offset >= byteCount?
+    b.lo write_strided_offset_ready
+    sub x5, x5, x1          // offset -= byteCount
+write_strided_offset_ready:
     add x4, x4, #1          // iteration_count++
     b write_strided_loop    // Loop again
 

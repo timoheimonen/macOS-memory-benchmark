@@ -37,6 +37,62 @@
 #include "asm/asm_functions.h"  // Assembly function declarations
 #include "benchmark/parallel_test_framework.h"
 
+namespace {
+
+double run_read_test_impl(void* buffer,
+                          size_t size,
+                          int iterations,
+                          int num_threads,
+                          std::atomic<uint64_t>& checksum,
+                          HighResTimer& timer,
+                          uint64_t (*read_func)(const void*, size_t)) {
+  checksum.store(0, std::memory_order_relaxed);
+
+  auto read_work = [&checksum, read_func](char* chunk_start, size_t chunk_size, int iters) {
+    uint64_t local_checksum = 0;
+    for (int i = 0; i < iters; ++i) {
+      uint64_t thread_checksum = read_func(chunk_start, chunk_size);
+      local_checksum ^= thread_checksum;
+    }
+    checksum.fetch_xor(local_checksum, std::memory_order_release);
+  };
+
+  return run_parallel_test(buffer, size, iterations, num_threads, timer, read_work, "read");
+}
+
+double run_write_test_impl(void* buffer,
+                           size_t size,
+                           int iterations,
+                           int num_threads,
+                           HighResTimer& timer,
+                           void (*write_func)(void*, size_t)) {
+  auto write_work = [write_func](char* chunk_start, size_t chunk_size, int iters) {
+    for (int i = 0; i < iters; ++i) {
+      write_func(chunk_start, chunk_size);
+    }
+  };
+
+  return run_parallel_test(buffer, size, iterations, num_threads, timer, write_work, "write");
+}
+
+double run_copy_test_impl(void* dst,
+                          void* src,
+                          size_t size,
+                          int iterations,
+                          int num_threads,
+                          HighResTimer& timer,
+                          void (*copy_func)(void*, const void*, size_t)) {
+  auto copy_work = [copy_func](char* dst_chunk, char* src_chunk, size_t chunk_size, int iters) {
+    for (int i = 0; i < iters; ++i) {
+      copy_func(dst_chunk, src_chunk, chunk_size);
+    }
+  };
+
+  return run_parallel_test_copy(dst, src, size, iterations, num_threads, timer, copy_work, "copy");
+}
+
+}  // namespace
+
 /**
  * @brief Executes the multi-threaded read bandwidth benchmark.
  *
@@ -70,32 +126,17 @@
  */
 double run_read_test(void *buffer, size_t size, int iterations, int num_threads, std::atomic<uint64_t> &checksum,
                      HighResTimer &timer) {
-  // Initialize checksum to 0 before measurement pass (thread-safe atomic assignment)
-  checksum.store(0, std::memory_order_relaxed);
-  
-  // Define the work function for read operations
-  // Alignment is now handled in the framework, so we receive aligned chunk_start directly
-  auto read_work = [&checksum](char *chunk_start, size_t chunk_size, int iters) {
-    // Accumulate checksum locally to avoid atomic operations in the inner loop.
-    // This reduces contention and improves performance in multi-threaded scenarios.
-    uint64_t local_checksum = 0;
-    for (int i = 0; i < iters; ++i) {
-      // Call external assembly function for reading.
-      uint64_t thread_checksum = memory_read_loop_asm(chunk_start, chunk_size);
-      // Combine result locally (non-atomic). XOR is commutative and associative,
-      // so the order of combination doesn't matter for checksum correctness.
-      local_checksum ^= thread_checksum;
-    }
-    // Atomically combine final result (one atomic per thread).
-    // Using release memory order ensures:
-    // 1. All previous operations in this thread are visible before the checksum update
-    // 2. The checksum update is properly synchronized with thread completion
-    // 3. XOR is commutative and associative, so order doesn't matter for correctness
-    // 4. Each thread accumulates locally first, reducing contention
-    checksum.fetch_xor(local_checksum, std::memory_order_release);
-  };
-  
-  return run_parallel_test(buffer, size, iterations, num_threads, timer, read_work, "read");
+  return run_read_test_impl(buffer, size, iterations, num_threads, checksum, timer, memory_read_loop_asm);
+}
+
+double run_read_test_with_kernel(void* buffer,
+                                 size_t size,
+                                 int iterations,
+                                 int num_threads,
+                                 std::atomic<uint64_t>& checksum,
+                                 HighResTimer& timer,
+                                 uint64_t (*read_func)(const void*, size_t)) {
+  return run_read_test_impl(buffer, size, iterations, num_threads, checksum, timer, read_func);
 }
 
 /**
@@ -127,15 +168,16 @@ double run_read_test(void *buffer, size_t size, int iterations, int num_threads,
  * @see memory_write_loop_asm() for the low-level write implementation
  */
 double run_write_test(void *buffer, size_t size, int iterations, int num_threads, HighResTimer &timer) {
-  // Define the work function for write operations
-  // Alignment is now handled in the framework, so we receive aligned chunk_start directly
-  auto write_work = [](char *chunk_start, size_t chunk_size, int iters) {
-    for (int i = 0; i < iters; ++i) {
-      memory_write_loop_asm(chunk_start, chunk_size);
-    }
-  };
-  
-  return run_parallel_test(buffer, size, iterations, num_threads, timer, write_work, "write");
+  return run_write_test_impl(buffer, size, iterations, num_threads, timer, memory_write_loop_asm);
+}
+
+double run_write_test_with_kernel(void* buffer,
+                                  size_t size,
+                                  int iterations,
+                                  int num_threads,
+                                  HighResTimer& timer,
+                                  void (*write_func)(void*, size_t)) {
+  return run_write_test_impl(buffer, size, iterations, num_threads, timer, write_func);
 }
 
 /**
@@ -173,15 +215,15 @@ double run_write_test(void *buffer, size_t size, int iterations, int num_threads
  * @see memory_copy_loop_asm() for the low-level copy implementation
  */
 double run_copy_test(void *dst, void *src, size_t size, int iterations, int num_threads, HighResTimer &timer) {
-  // Define the work function for copy operations
-  // Alignment and src/dst correspondence are now handled in the framework,
-  // so we receive aligned chunk pointers directly
-  auto copy_work = [](char *dst_chunk, char *src_chunk, size_t chunk_size, int iters) {
-    for (int i = 0; i < iters; ++i) {
-      memory_copy_loop_asm(dst_chunk, src_chunk, chunk_size);
-    }
-  };
-  
-  return run_parallel_test_copy(dst, src, size, iterations, num_threads, timer, copy_work, "copy");
+  return run_copy_test_impl(dst, src, size, iterations, num_threads, timer, memory_copy_loop_asm);
 }
 
+double run_copy_test_with_kernel(void* dst,
+                                 void* src,
+                                 size_t size,
+                                 int iterations,
+                                 int num_threads,
+                                 HighResTimer& timer,
+                                 void (*copy_func)(void*, const void*, size_t)) {
+  return run_copy_test_impl(dst, src, size, iterations, num_threads, timer, copy_func);
+}

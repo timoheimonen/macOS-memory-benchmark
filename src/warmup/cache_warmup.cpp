@@ -57,7 +57,11 @@ void warmup_cache_write(void* dst_buffer, size_t size, int num_threads) {
     return;
   }
   size_t warmup_size = size;
-  warmup_parallel(dst_buffer, size, num_threads, warmup_write_chunk_op, true, nullptr, nullptr, warmup_size);
+  auto cache_write_chunk_op = [](char* chunk_start, char* /* src_chunk */, size_t chunk_size,
+                                 std::atomic<uint64_t>* /* checksum */) {
+    memory_write_cache_loop_asm(chunk_start, chunk_size);
+  };
+  warmup_parallel(dst_buffer, size, num_threads, cache_write_chunk_op, true, nullptr, nullptr, warmup_size);
 }
 
 /**
@@ -77,5 +81,9 @@ void warmup_cache_copy(void* dst, void* src, size_t size, int num_threads) {
     return;
   }
   size_t warmup_size = size;
-  warmup_parallel(dst, size, num_threads, warmup_copy_chunk_op, true, src, nullptr, warmup_size);
+  auto cache_copy_chunk_op = [](char* dst_chunk, char* src_chunk, size_t chunk_size,
+                                std::atomic<uint64_t>* /* checksum */) {
+    memory_copy_cache_loop_asm(dst_chunk, src_chunk, chunk_size);
+  };
+  warmup_parallel(dst, size, num_threads, cache_copy_chunk_op, true, src, nullptr, warmup_size);
 }

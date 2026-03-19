@@ -71,6 +71,77 @@ inline void build_random_chunk_indices(const std::vector<size_t>& indices,
   }
 }
 
+inline uint64_t run_strided_read_kernel(const void* src,
+                                        size_t byte_count,
+                                        size_t stride,
+                                        size_t num_iterations) {
+  using namespace Constants;
+
+  switch (stride) {
+    case PATTERN_STRIDE_CACHE_LINE:
+      return memory_read_strided_64_loop_asm(src, byte_count, num_iterations);
+    case PATTERN_STRIDE_PAGE:
+      return memory_read_strided_4096_loop_asm(src, byte_count, num_iterations);
+    case PATTERN_STRIDE_PAGE_16K:
+      return memory_read_strided_16384_loop_asm(src, byte_count, num_iterations);
+    case PATTERN_STRIDE_SUPERPAGE_2MB:
+      return memory_read_strided_2mb_loop_asm(src, byte_count, num_iterations);
+    default:
+      return memory_read_strided_loop_asm(src, byte_count, stride, num_iterations);
+  }
+}
+
+inline void run_strided_write_kernel(void* dst,
+                                     size_t byte_count,
+                                     size_t stride,
+                                     size_t num_iterations) {
+  using namespace Constants;
+
+  switch (stride) {
+    case PATTERN_STRIDE_CACHE_LINE:
+      memory_write_strided_64_loop_asm(dst, byte_count, num_iterations);
+      return;
+    case PATTERN_STRIDE_PAGE:
+      memory_write_strided_4096_loop_asm(dst, byte_count, num_iterations);
+      return;
+    case PATTERN_STRIDE_PAGE_16K:
+      memory_write_strided_16384_loop_asm(dst, byte_count, num_iterations);
+      return;
+    case PATTERN_STRIDE_SUPERPAGE_2MB:
+      memory_write_strided_2mb_loop_asm(dst, byte_count, num_iterations);
+      return;
+    default:
+      memory_write_strided_loop_asm(dst, byte_count, stride, num_iterations);
+      return;
+  }
+}
+
+inline void run_strided_copy_kernel(void* dst,
+                                    const void* src,
+                                    size_t byte_count,
+                                    size_t stride,
+                                    size_t num_iterations) {
+  using namespace Constants;
+
+  switch (stride) {
+    case PATTERN_STRIDE_CACHE_LINE:
+      memory_copy_strided_64_loop_asm(dst, src, byte_count, num_iterations);
+      return;
+    case PATTERN_STRIDE_PAGE:
+      memory_copy_strided_4096_loop_asm(dst, src, byte_count, num_iterations);
+      return;
+    case PATTERN_STRIDE_PAGE_16K:
+      memory_copy_strided_16384_loop_asm(dst, src, byte_count, num_iterations);
+      return;
+    case PATTERN_STRIDE_SUPERPAGE_2MB:
+      memory_copy_strided_2mb_loop_asm(dst, src, byte_count, num_iterations);
+      return;
+    default:
+      memory_copy_strided_loop_asm(dst, src, byte_count, stride, num_iterations);
+      return;
+  }
+}
+
 }  // namespace
 
 // Helper function to run a pattern read test (multi-threaded)
@@ -139,7 +210,7 @@ double run_pattern_read_strided_test(void* buffer, size_t size, size_t stride, i
     }
 
     for (int i = 0; i < iters; ++i) {
-      uint64_t result = memory_read_strided_loop_asm(chunk_start, effective_size, stride, num_accesses);
+      uint64_t result = run_strided_read_kernel(chunk_start, effective_size, stride, num_accesses);
       local_checksum ^= result;
     }
     checksum.fetch_xor(local_checksum, std::memory_order_release);
@@ -162,7 +233,7 @@ double run_pattern_write_strided_test(void* buffer, size_t size, size_t stride, 
     }
 
     for (int i = 0; i < iters; ++i) {
-      memory_write_strided_loop_asm(chunk_start, effective_size, stride, num_accesses);
+      run_strided_write_kernel(chunk_start, effective_size, stride, num_accesses);
     }
   };
 
@@ -183,7 +254,7 @@ double run_pattern_copy_strided_test(void* dst, void* src, size_t size, size_t s
     }
 
     for (int i = 0; i < iters; ++i) {
-      memory_copy_strided_loop_asm(dst_chunk, src_chunk, effective_size, stride, num_accesses);
+      run_strided_copy_kernel(dst_chunk, src_chunk, effective_size, stride, num_accesses);
     }
   };
 

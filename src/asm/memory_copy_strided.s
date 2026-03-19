@@ -35,7 +35,7 @@
 // Assumptions / Guarantees:
 //   * Undefined behavior if regions overlap (not a memmove replacement).
 // Implementation Notes:
-//   * Uses modulo arithmetic to wrap around buffer when stride exceeds buffer size.
+//   * Uses branch-based wraparound (offset -= byteCount) to avoid division in hot path.
 //   * Copies 32 bytes (one cache line) per iteration to test strided copy behavior.
 // -----------------------------------------------------------------------------
 
@@ -53,13 +53,9 @@ copy_strided_loop:              // Main strided access loop
     cmp x5, x4              // iteration_count >= num_iterations?
     b.hs copy_strided_done  // If done (unsigned >=), exit
 
-    // Calculate current addresses: src + (offset % byteCount), dst + (offset % byteCount)
-    // Use modulo operation: offset % byteCount = offset - (offset / byteCount) * byteCount
-    // This wraps the offset around when it exceeds buffer size, creating strided pattern.
-    udiv x7, x6, x2         // quotient = offset / byteCount
-    msub x8, x7, x2, x6     // remainder = offset - quotient * byteCount (wraps around)
-    add x9, x1, x8          // src_addr = src + remainder (actual source address)
-    add x10, x0, x8         // dst_addr = dst + remainder (actual destination address)
+    // Calculate current addresses: src + offset, dst + offset
+    add x9, x1, x6          // src_addr = src + offset
+    add x10, x0, x6         // dst_addr = dst + offset
 
     // Load 32 bytes from source
     // Use caller-saved registers q0-q1 only (avoid q8-q15 per AAPCS64).
@@ -71,8 +67,12 @@ copy_strided_loop:              // Main strided access loop
     // encouraging write-combining and reducing cache pollution during bandwidth tests.
     stnp q0, q1, [x10]      // Store pair (32B total, non-temporal) to strided destination
 
-    // Advance offset and iteration count
+    // Advance offset with wraparound (validated path guarantees stride <= byteCount)
     add x6, x6, x3          // offset += stride
+    cmp x6, x2              // offset >= byteCount?
+    b.lo copy_strided_offset_ready
+    sub x6, x6, x2          // offset -= byteCount
+copy_strided_offset_ready:
     add x5, x5, #1          // iteration_count++
     b copy_strided_loop     // Loop again
 

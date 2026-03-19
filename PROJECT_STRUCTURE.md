@@ -1,6 +1,6 @@
 # Project Structure — membenchmark
 
-**Version:** 0.53.9
+**Version:** 0.54.0
 **Platform:** ARM64 / AArch64 (Apple Silicon macOS)
 **License:** GNU General Public License v3.0
 
@@ -73,18 +73,33 @@ Hand-written AArch64 assembly implementing the hot inner loops that must not be 
 | File | Operation |
 |---|---|
 | `asm_functions.h` | `extern "C"` declarations for all assembly functions |
-| `memory_copy.s` | Sequential forward memory copy |
+| `memory_copy.s` | Sequential forward memory copy (main-memory, non-temporal stores) |
+| `memory_copy_cache.s` | Sequential forward memory copy (cache-focused) |
 | `memory_copy_random.s` | Random-order memory copy |
 | `memory_copy_reverse.s` | Reverse-order memory copy |
-| `memory_copy_strided.s` | Strided memory copy |
-| `memory_read.s` | Sequential forward memory read |
+| `memory_copy_strided.s` | Strided memory copy (generic stride parameter) |
+| `memory_copy_strided_64.s` | Strided memory copy — 64-byte stride |
+| `memory_copy_strided_4096.s` | Strided memory copy — 4096-byte stride |
+| `memory_copy_strided_16384.s` | Strided memory copy — 16384-byte stride |
+| `memory_copy_strided_2mb.s` | Strided memory copy — 2 MB stride |
+| `memory_read.s` | Sequential forward memory read (main-memory) |
+| `memory_read_cache.s` | Sequential forward memory read (cache-focused) |
 | `memory_read_random.s` | Random-order memory read |
 | `memory_read_reverse.s` | Reverse-order memory read |
-| `memory_read_strided.s` | Strided memory read |
-| `memory_write.s` | Sequential forward memory write |
+| `memory_read_strided.s` | Strided memory read (generic stride parameter) |
+| `memory_read_strided_64.s` | Strided memory read — 64-byte stride |
+| `memory_read_strided_4096.s` | Strided memory read — 4096-byte stride |
+| `memory_read_strided_16384.s` | Strided memory read — 16384-byte stride |
+| `memory_read_strided_2mb.s` | Strided memory read — 2 MB stride |
+| `memory_write.s` | Sequential forward memory write (main-memory, non-temporal stores) |
+| `memory_write_cache.s` | Sequential forward memory write (cache-focused) |
 | `memory_write_random.s` | Random-order memory write |
 | `memory_write_reverse.s` | Reverse-order memory write |
-| `memory_write_strided.s` | Strided memory write |
+| `memory_write_strided.s` | Strided memory write (generic stride parameter) |
+| `memory_write_strided_64.s` | Strided memory write — 64-byte stride |
+| `memory_write_strided_4096.s` | Strided memory write — 4096-byte stride |
+| `memory_write_strided_16384.s` | Strided memory write — 16384-byte stride |
+| `memory_write_strided_2mb.s` | Strided memory write — 2 MB stride |
 | `memory_latency.s` | Pointer-chase latency measurement loop |
 | `core_to_core_latency.s` | Cache-line handoff ping-pong loop for core-to-core latency |
 
@@ -142,7 +157,7 @@ Platform-independent infrastructure: configuration, memory management, system in
 |---|---|
 | `config.h` | `BenchmarkConfig` structure; aggregates all run-time settings parsed from the command line |
 | `constants.h` | Named constants for memory limits, cache size bounds, stride values, buffer sizing factors, and latency access counts |
-| `version.h` | `SOFTVERSION` macro (semantic version string, currently `"0.53.8"`) |
+| `version.h` | `SOFTVERSION` macro (semantic version string, currently `"0.54.0"`) |
 | `argument_parser.cpp` | Parses `argv` into a `BenchmarkConfig`; implements all flag definitions |
 | `config_validator.cpp` | Validates the parsed configuration; emits errors for out-of-range or conflicting settings |
 | `buffer_calculator.cpp` | Derives buffer sizes for each cache/memory level from the validated configuration and detected system parameters |

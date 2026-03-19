@@ -37,6 +37,8 @@
 #include <iostream>
 #include <atomic>
 #include <cstdlib>
+#include <algorithm>
+#include <limits>
 
 // Forward declarations from helpers.cpp
 double run_pattern_read_strided_test(void* buffer, size_t size, size_t stride, int iterations,
@@ -59,9 +61,9 @@ double calculate_bandwidth(size_t data_size, int iterations, double elapsed_time
 
 // Calculate effective buffer size for strided pattern
 static bool calculate_strided_params(size_t buffer_size, size_t stride, 
-                                      size_t& effective_buffer_size, 
-                                      size_t& num_iterations, 
-                                      size_t& actual_data_accessed) {
+                                       size_t& effective_buffer_size, 
+                                       size_t& num_iterations, 
+                                       size_t& actual_data_accessed) {
   using namespace Constants;
   
   // The strided assembly functions use modulo arithmetic: addr = base + (offset % byteCount)
@@ -89,6 +91,26 @@ static bool calculate_strided_params(size_t buffer_size, size_t stride,
   return true;
 }
 
+static int calculate_effective_iterations_for_stride(size_t actual_data_accessed, int base_iterations) {
+  using namespace Constants;
+
+  if (base_iterations <= 0 || actual_data_accessed == 0) {
+    return 0;
+  }
+
+  size_t required_iterations =
+      PATTERN_STRIDED_MIN_TOUCHED_BYTES / actual_data_accessed +
+      ((PATTERN_STRIDED_MIN_TOUCHED_BYTES % actual_data_accessed) != 0 ? 1 : 0);
+  size_t effective_iterations =
+      std::max(static_cast<size_t>(base_iterations), required_iterations);
+
+  if (effective_iterations > static_cast<size_t>(std::numeric_limits<int>::max())) {
+    return std::numeric_limits<int>::max();
+  }
+
+  return static_cast<int>(effective_iterations);
+}
+
 // ============================================================================
 // Strided Pattern Execution Functions
 // ============================================================================
@@ -96,8 +118,8 @@ static bool calculate_strided_params(size_t buffer_size, size_t stride,
 // Run strided pattern benchmarks (access with specified stride)
 // Returns EXIT_SUCCESS on success, EXIT_FAILURE on error, or skips pattern if buffer too small
 int run_strided_pattern_benchmarks(const BenchmarkBuffers& buffers, const BenchmarkConfig& config,
-                                     size_t stride, double& read_bw, double& write_bw, double& copy_bw,
-                                     HighResTimer& timer) {
+                                      size_t stride, double& read_bw, double& write_bw, double& copy_bw,
+                                      HighResTimer& timer) {
   using namespace Constants;
   
   // Initialize results to 0 in case we skip this pattern
@@ -120,31 +142,36 @@ int run_strided_pattern_benchmarks(const BenchmarkBuffers& buffers, const Benchm
     // Buffer too small for this stride - skip pattern (not an error)
     return EXIT_SUCCESS;
   }
+
+  const int effective_iterations = calculate_effective_iterations_for_stride(actual_data_accessed, config.iterations);
+  if (effective_iterations <= 0) {
+    return EXIT_SUCCESS;
+  }
   
   // Execute read benchmark
   show_progress();
   std::atomic<uint64_t> checksum{0};
   warmup_read_strided(buffers.src_buffer(), effective_buffer_size, stride, config.num_threads, checksum);
   double read_time = run_pattern_read_strided_test(buffers.src_buffer(), effective_buffer_size, stride,
-                                                     config.iterations, checksum, timer, config.num_threads);
-  read_bw = calculate_bandwidth(actual_data_accessed, config.iterations, read_time);
+                                                     effective_iterations, checksum, timer, config.num_threads);
+  read_bw = calculate_bandwidth(actual_data_accessed, effective_iterations, read_time);
 
   // Execute write benchmark
   show_progress();
   warmup_write_strided(buffers.dst_buffer(), effective_buffer_size, stride, config.num_threads);
   double write_time = run_pattern_write_strided_test(buffers.dst_buffer(), effective_buffer_size, stride,
-                                                      config.iterations, timer, config.num_threads);
-  write_bw = calculate_bandwidth(actual_data_accessed, config.iterations, write_time);
+                                                       effective_iterations, timer, config.num_threads);
+  write_bw = calculate_bandwidth(actual_data_accessed, effective_iterations, write_time);
 
   // Execute copy benchmark
   show_progress();
   warmup_copy_strided(buffers.dst_buffer(), buffers.src_buffer(), effective_buffer_size, stride, config.num_threads);
   double copy_time = run_pattern_copy_strided_test(buffers.dst_buffer(), buffers.src_buffer(),
-                                                    effective_buffer_size, stride, config.iterations, timer,
-                                                    config.num_threads);
+                                                     effective_buffer_size, stride, effective_iterations, timer,
+                                                     config.num_threads);
   // For copy: actual_data_accessed bytes are read + actual_data_accessed bytes are written per iteration
   copy_bw = calculate_bandwidth(actual_data_accessed * Constants::COPY_OPERATION_MULTIPLIER,
-                                config.iterations, copy_time);
+                                effective_iterations, copy_time);
   
   return EXIT_SUCCESS;
 }

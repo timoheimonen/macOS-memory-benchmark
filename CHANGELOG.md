@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.54.0] - 2026-03-19
+
+Changes in benchmark ASM kernels.
+From this version onwards bandwidth results are not compatible against older(<0.54.0) version results.
+Latency kernels unchanged.
+
+### Changed
+  - Main change: split pattern ASM kernels into separate files for each case (main-memory, cache, forward, reverse, strided, random).
+  - Some kernels currently behave the same, but they are intentionally kept separate to make future tuning easier.
+  - Tuned cache ASM kernels with pointer+remaining loop state and bit-test based tail handling.
+  - Pattern strided benchmarks now scale effective iterations so each stride variant targets at least `256 MB` of touched data (for more stable results on small buffers).
+  - Added `PATTERN_STRIDED_MIN_TOUCHED_BYTES` constant (`256 * 1024 * 1024`) for strided pattern iteration scaling.
+  - Simplified and improved inline comments in cache ASM kernels:
+    - `src/asm/memory_write_cache.s`
+    - `src/asm/memory_read_cache.s`
+    - `src/asm/memory_copy_cache.s`
+  - Added clearer ABI/register-preservation notes, tail-bit (`tbz`) mapping notes, and short control-flow maps for easier future tuning.
+
 ## [0.53.9] - 2026-03-18
 
 ### Changed
