@@ -37,6 +37,7 @@
 #include <iostream>
 #include <atomic>
 #include <cstdlib>
+#include <algorithm>
 #include <limits>
 
 // Forward declarations from helpers.cpp
@@ -90,27 +91,24 @@ static bool calculate_strided_params(size_t buffer_size, size_t stride,
   return true;
 }
 
-static int calculate_effective_iterations_for_stride(size_t stride, int base_iterations) {
+static int calculate_effective_iterations_for_stride(size_t actual_data_accessed, int base_iterations) {
   using namespace Constants;
 
-  if (base_iterations <= 0) {
+  if (base_iterations <= 0 || actual_data_accessed == 0) {
     return 0;
   }
 
-  if (stride != PATTERN_STRIDE_SUPERPAGE_2MB) {
-    return base_iterations;
-  }
+  size_t required_iterations =
+      PATTERN_STRIDED_MIN_TOUCHED_BYTES / actual_data_accessed +
+      ((PATTERN_STRIDED_MIN_TOUCHED_BYTES % actual_data_accessed) != 0 ? 1 : 0);
+  size_t effective_iterations =
+      std::max(static_cast<size_t>(base_iterations), required_iterations);
 
-  const int multiplier = PATTERN_STRIDED_2MB_ITERATIONS_MULTIPLIER;
-  if (multiplier <= 1) {
-    return base_iterations;
-  }
-
-  if (base_iterations > (std::numeric_limits<int>::max() / multiplier)) {
+  if (effective_iterations > static_cast<size_t>(std::numeric_limits<int>::max())) {
     return std::numeric_limits<int>::max();
   }
 
-  return base_iterations * multiplier;
+  return static_cast<int>(effective_iterations);
 }
 
 // ============================================================================
@@ -145,7 +143,7 @@ int run_strided_pattern_benchmarks(const BenchmarkBuffers& buffers, const Benchm
     return EXIT_SUCCESS;
   }
 
-  const int effective_iterations = calculate_effective_iterations_for_stride(stride, config.iterations);
+  const int effective_iterations = calculate_effective_iterations_for_stride(actual_data_accessed, config.iterations);
   if (effective_iterations <= 0) {
     return EXIT_SUCCESS;
   }

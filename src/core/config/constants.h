@@ -141,7 +141,7 @@ namespace Constants {
   constexpr size_t PATTERN_STRIDE_PAGE = 4096;  // Page stride (bytes)
   constexpr size_t PATTERN_STRIDE_PAGE_16K = 16 * 1024;  // Apple Silicon page-size stride candidate (bytes)
   constexpr size_t PATTERN_STRIDE_SUPERPAGE_2MB = 2 * 1024 * 1024;  // Large-page stride candidate (bytes)
-  constexpr int PATTERN_STRIDED_2MB_ITERATIONS_MULTIPLIER = 15;  // Extra iteration scaling for 2MB-stride stability
+  constexpr size_t PATTERN_STRIDED_MIN_TOUCHED_BYTES = 256 * 1024 * 1024;  // Minimum touched bytes target for strided pattern stability
   constexpr size_t PATTERN_RANDOM_ACCESS_MIN = 1000;  // Minimum number of random accesses
   constexpr size_t PATTERN_RANDOM_ACCESS_MAX = 1000000;  // Maximum number of random accesses
   constexpr size_t PATTERN_WARMUP_INDICES_MAX = 10000;  // Maximum indices to use for warmup
