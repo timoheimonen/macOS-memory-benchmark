@@ -28,11 +28,16 @@
 //   x0 = 64-bit XOR checksum
 // Clobbers:
 //   x2-x7, x12-x13, q0-q7, q16-q31
+// ABI Notes:
+//   * AAPCS64 callee-saved registers are preserved (x19-x28, v8-v15 untouched).
+//   * Checksum exists to keep loads observable (anti-DCE), not as a data-integrity primitive.
 // Implementation Notes:
 //   * Uses pointer+remaining loop state (x6/x5) to avoid per-iteration offset math.
 //   * Processes 512B per iteration (16 pair loads) for high cache-path throughput.
 //   * Distributes XOR into four accumulators (v0-v3) to reduce dependency depth.
 //   * Tail path uses size-bit tests (tbz for 256/128/64/32), then byte cleanup.
+// Control-Flow Map:
+//   main 512B loop -> tiered tail (256/128/64/32) -> byte tail -> final reduction
 // -----------------------------------------------------------------------------
 
 .global _memory_read_cache_loop_asm
@@ -119,7 +124,8 @@ cache_read_loop_start_512:    // Main 512B loop
 cache_read_loop_cleanup:      // Tail handling when <512B remain
     cbz x5, cache_read_loop_combine_sum
 
-    // Tiered tail: check 256/128/64/32 chunks via size bits.
+    // Tiered tail: bits in x5 encode optional chunks.
+    // bit8=256B, bit7=128B, bit6=64B, bit5=32B.
     tbz x5, #8, cache_read_cleanup_128
     // 256B chunk: load+fold exactly like half of main loop.
     ldp q4, q5, [x6, #0]
@@ -198,7 +204,7 @@ cache_read_loop_combine_sum:  // Final reduction and return value
     eor v0.16b, v0.16b, v1.16b
     eor v2.16b, v2.16b, v3.16b
     eor v0.16b, v0.16b, v2.16b
-    // Extract low 64b and fold byte-tail checksum.
+    // Extract low 64b lane and fold byte-tail checksum (x12) into return value.
     umov x0, v0.d[0]
     eor x0, x0, x12
     ret

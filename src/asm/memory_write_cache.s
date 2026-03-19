@@ -28,11 +28,16 @@
 //   (none)
 // Clobbers:
 //   x3-x7, q0-q7, q16-q31 (caller-saved only)
+// ABI Notes:
+//   * AAPCS64 callee-saved registers are preserved (x19-x28, v8-v15 untouched).
+//   * Caller is expected to provide writable range [dst, dst + byteCount).
 // Implementation Notes:
 //   * Uses one zero vector (q0) and repeats it for all wide stores.
 //   * Uses pointer+remaining loop state (x7/x5) for lower loop-control overhead.
 //   * Processes 512B per iteration using 16 store pairs.
 //   * Tail uses size-bit tests plus 16/8/4/2/1 scalar zero stores.
+// Control-Flow Map:
+//   main 512B loop -> tiered tail (256/128/64/32) -> scalar tail -> return
 // -----------------------------------------------------------------------------
 
 .global _memory_write_cache_loop_asm
@@ -75,7 +80,8 @@ write_cache_loop_start_nt512: // Main 512B loop
 write_cache_loop_cleanup:     // Tail handling when <512B remain
     cbz x5, write_cache_loop_end
 
-    // Tiered tail: test size bits for 256/128/64/32 before scalar ladder.
+    // Tiered tail: bits in x5 encode presence of each power-of-two chunk.
+    // bit8=256B, bit7=128B, bit6=64B, bit5=32B.
     tbz x5, #8, write_cache_cleanup_128
     // 256B chunk
     stp q0, q0, [x7, #0]

@@ -31,11 +31,16 @@
 //   x3-x8, q0-q7, q16-q31 (caller-saved only)
 // Assumptions / Guarantees:
 //   * Undefined behavior if regions overlap (not a memmove replacement).
+// ABI Notes:
+//   * AAPCS64 callee-saved registers are preserved (x19-x28, v8-v15 untouched).
+//   * Caller is expected to provide readable/writable ranges for full byteCount.
 // Implementation Notes:
 //   * Uses pointer+remaining loop state (x7/x6/x5) with 512B step size.
 //   * Processes 512B per iteration with 16 load/store pairs.
-//   * Uses STNP for cache-path store behavior.
+//   * Uses STNP for the cache-oriented store path used by this benchmark mode.
 //   * Tail path uses size-bit tiers (256/128/64/32/16/8/4/2/1).
+// Control-Flow Map:
+//   main 512B loop -> tiered tail (256/128/64/32) -> scalar tail -> return
 // -----------------------------------------------------------------------------
 
 .global _memory_copy_cache_loop_asm
@@ -94,6 +99,8 @@ copy_cache_loop_start_nt512:  // Main 512B loop
 copy_cache_loop_cleanup:      // Tail handling when <512B remain
     cbz x5, copy_cache_loop_end
 
+    // Tiered tail: bits in x5 encode optional chunks.
+    // bit8=256B, bit7=128B, bit6=64B, bit5=32B.
     // 256B chunk
     tbz x5, #8, copy_cache_cleanup_128
     ldp q0, q1, [x6, #0]
