@@ -321,6 +321,13 @@ Reference sample result files in this repository:
 - **[TLB Analysis Whitepaper](TLB_ANALYSIS_WHITEPAPER.md)**: standalone `-analyze-tlb` methodology, boundary/guard rules, confidence model, and JSON verification contract.
 - **[Core-to-Core Cache-Line Handoff Latency Whitepaper](CORE_TO_CORE_WHITEPAPER.md)**: standalone `-analyze-core2core` methodology, LDAR/STLR assembly protocol, scheduler-hint scenarios, and JSON contract.
 
+## Non-Goals
+
+Here are some things what are not goals to this application.
+- Support other than Apple Silicon systems
+- GUI
+- Server backend / top score tables
+
 ## Limitations and Caveats
 
 - `-non-cacheable` is best effort only (`madvise` hints); it does not create true uncached mappings.
