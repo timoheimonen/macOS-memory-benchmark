@@ -117,11 +117,11 @@ Separate page-walk comparison point:
 
 ## 5. Boundary Detection Algorithm
 
-Boundary detection is based on a running segment baseline, using a first-match strategy.
+Boundary detection uses a recency-weighted segment baseline with multi-point persistence and IQR-overlap rejection.
 
 For candidate index `i`:
 
-- `baseline_ns = average(p50[segment_start, i))` — average of P50 latencies from `segment_start` (inclusive) to `i` (exclusive)
+- `baseline_ns = recency_weighted_average(p50[segment_start, i))` — weighted average where point `j` receives weight `(j - segment_start + 1)`. Recent measurements carry more influence, reducing drag from early points that may have had different thermal or frequency conditions.
 - `step_ns = p50[i] - baseline_ns`
 - `threshold_ns = max(2.0ns, baseline_ns * 0.10)`
 
@@ -129,7 +129,7 @@ Candidate passes threshold when:
 
 - `step_ns >= threshold_ns`
 
-The algorithm scans from `segment_start_index + 1` and stops at the **first** candidate that satisfies both the threshold and guard conditions, returning it as the detected boundary. If no candidate passes, detection returns `detected = false`.
+The algorithm scans from `segment_start_index + 1` and returns the **first** candidate that satisfies threshold, guard, and IQR conditions. If no candidate passes, detection returns `detected = false`.
 
 ### 5.1 TLB Guard (Cache-Transition Filter)
 
@@ -143,14 +143,44 @@ where:
 
 The guard acts as a hard lower-bound filter on the candidate index `i`; it does not shift the segment start or baseline calculation.
 
-### 5.2 L1 and L2 Boundary Selection
+### 5.2 IQR-Overlap Rejection
 
-- `L1 TLB boundary`: first candidate passing threshold + guard, scanning from sweep start.
-- `L2 TLB boundary`: first candidate passing threshold + guard, scanning from the **L1 boundary index** (not segment start).
+When per-point raw loop latencies are available (the 30 individual loop measurements), the detector applies an interquartile-range (IQR) overlap check to reject candidates whose step falls within measurement noise:
 
-L2 detection only runs when L1 is detected and its boundary index is not at the last sweep point. If L1 is not detected, or if L1 is detected at the final sweep point, L2 detection is skipped.
+- `avg_baseline_q3 = average(Q3 of raw loops for each point in [segment_start, i))`
+- `candidate_q1 = Q1 of raw loops at point i`
+- If `avg_baseline_q3 >= candidate_q1`, the baseline's upper noise band overlaps the candidate's lower band → candidate is **rejected** even if the P50 step exceeds threshold.
 
-Both L1 and L2 detections share data points from the L1 boundary index onward, and recompute their baselines independently.
+This prevents false positives from "lucky medians" where a noisy point happens to have a high P50 due to sampling variance.
+
+### 5.3 Multi-Point Persistence
+
+Instead of checking a single future point, the detector checks up to **3 future points**:
+
+- `persistent_count = count of j in [i+1, min(i+4, size)) where p50[j] - baseline >= threshold`
+- `persistent_jump = persistent_count >= 2` (majority of up to 3)
+
+This makes detection robust against single-point noise dips after a genuine boundary. A boundary at index `i` followed by one noisy dip and two confirming points will still be classified as persistent.
+
+### 5.4 Last-Point Strong-Step Compensation
+
+When the candidate is at or near the last sweep point, there are few or no future points for persistence evaluation. In this case, if the step itself is very large:
+
+- `strong_last_point = (step_ns >= 8.0) || (step_percent >= 0.25)`
+
+Then `effective_persistent = persistent_jump || strong_last_point`. This prevents downgrading a massive final-point step to Low confidence purely due to lack of future data.
+
+### 5.5 L1 and L2 Boundary Selection
+
+- `L1 TLB boundary`: first candidate passing threshold + guard + IQR check, scanning from sweep start.
+- `L2 TLB boundary`: first candidate passing threshold + guard + IQR check, scanning from an **offset segment start** past the L1 boundary.
+
+L2 detection specifics:
+
+- **Segment start offset**: L2 scanning starts at `min(L1_boundary_index + 2, size - 2)`, excluding the L1 boundary point and its immediate neighbour from the L2 baseline. This prevents L1 transition noise from contaminating the L2 baseline.
+- **L2-specific guard**: `max(tlb_guard_bytes, L1_boundary_locality_bytes)`, preventing L2 from re-detecting at or below the L1 boundary locality.
+
+L2 detection only runs when L1 is detected and its boundary index is not at the last two sweep points.
 
 Technical note (Apple Silicon):
 
@@ -159,12 +189,10 @@ Technical note (Apple Silicon):
 
 ## 6. Confidence Model
 
-Boundary confidence is classified by step strength and persistence:
+Boundary confidence is classified by step strength and multi-point persistence:
 
 - `strong_step = (step_ns >= 4.0) || (step_percent >= 0.15)`
-- `persistent_jump = next_point_step >= threshold`, where `next_point_step = p50[i+1] - baseline_ns` (using the **same baseline** as the boundary point, not a new baseline)
-
-The `persistent_jump` check is only evaluated when `i + 1 < p50_latency_ns.size()`. At the last sweep point, `persistent_jump` is forced to `false`, which can result in a Large boundary at the final point being classified as Medium or Low confidence even if the step is large.
+- `persistent_jump`: majority of up to 3 future points exceed threshold (see section 5.3). At the last sweep point, a strong step (`step_ns >= 8.0` or `step_percent >= 0.25`) compensates for the lack of future data.
 
 Confidence levels:
 

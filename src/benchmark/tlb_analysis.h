@@ -49,16 +49,22 @@ struct TlbBoundaryDetection {
 
 /**
  * @brief Detect the first boundary where latency rises by >=10% or >=2ns.
+ *
+ * Uses multi-point persistence (3-point window, majority rule), recency-weighted
+ * baseline, and optional IQR-overlap rejection when loop-level data is provided.
+ *
  * @param locality_bytes Locality windows used in measurement order
  * @param p50_latency_ns P50 latency values corresponding to locality windows
  * @param segment_start_index Index where running-baseline segment starts
  * @param min_locality_bytes Minimum locality window to accept as a TLB boundary
+ * @param loop_latencies Optional per-point raw loop latencies for IQR gating (nullptr to skip)
  * @return Boundary-detection result
  */
 TlbBoundaryDetection detect_tlb_boundary(const std::vector<size_t>& locality_bytes,
                                          const std::vector<double>& p50_latency_ns,
                                          size_t segment_start_index,
-                                         size_t min_locality_bytes = 0);
+                                         size_t min_locality_bytes = 0,
+                                         const std::vector<std::vector<double>>* loop_latencies = nullptr);
 
 /**
  * @brief Infer TLB entries from locality boundary and page size.

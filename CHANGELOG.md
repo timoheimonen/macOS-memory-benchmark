@@ -12,6 +12,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Reduced `memory_write.s` zero-register setup from 24 to 8 `movi` instructions (the stnp pairs reuse the same zero registers).
   - Reduced `memory_write_reverse.s` zero-register setup from 24 to 8 `movi` instructions, matching the forward write kernel. The 512B loop and 256B cleanup now reuse `q0–q7` for all 16 stnp pairs instead of using separate `q16–q31` registers.
   - Updated clobber documentation to reflect actual register usage.
+  - **Improved `-analyze-tlb` boundary detection stability**: Replaced single-point persistence check with 3-point majority persistence, recency-weighted baselines, and IQR-overlap rejection. These changes reduce false boundary detections from transient noise and improve L1/L2 TLB classification accuracy.
+  - **L2 detection uses offset baseline and specific guard**: L2 scanning now starts 2 points past the L1 boundary (instead of at the L1 boundary index) and uses a locality guard of `max(tlb_guard, L1_boundary_locality)`, preventing L1 transition noise from contaminating the L2 baseline.
+  - **Last-point strong-step compensation**: Final sweep points with very large steps (>=8 ns or >=25%) now get effective persistence, preventing massive last-point steps from being downgraded to Low confidence.
+
+### Added
+  - **IQR-overlap rejection in TLB boundary detection**: When raw per-point loop latencies are available, the detector compares baseline Q3 with candidate Q1 and rejects boundaries where the step falls within measurement noise overlap.
+  - **Multi-point persistence window**: Boundary persistence is now evaluated over a 3-point future window using majority rule (2 of 3), replacing the previous single-point check.
+  - **New test cases for improved TLB detection**: Added `DetectBoundaryMultiPointPersistenceSurvivesNoiseDip`, `DetectBoundaryRejectsNoisyStepByIQR`, `DetectBoundaryAcceptsClearStepWithIQR`, and `DetectBoundaryLastPointStrongStepGetsMediumConfidence` tests.
 
 ## [0.54.0] - 2026-03-19
 

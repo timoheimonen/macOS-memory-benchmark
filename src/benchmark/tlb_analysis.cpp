@@ -360,12 +360,25 @@ int run_tlb_analysis(const BenchmarkConfig& config) {
   const size_t tlb_guard_bytes = std::max<size_t>(2 * l1_cache_size_bytes, 64 * page_size_bytes);
 
   const TlbBoundaryDetection l1_boundary =
-      detect_tlb_boundary(localities_bytes, p50_latency_ns, 0, tlb_guard_bytes);
+      detect_tlb_boundary(localities_bytes, p50_latency_ns, 0, tlb_guard_bytes,
+                          &sweep_loop_latencies_ns);
 
   TlbBoundaryDetection l2_boundary;
   if (l1_boundary.detected && l1_boundary.boundary_index < localities_bytes.size() - 1) {
+    // Offset L2 segment start past the L1 boundary to avoid contaminating the
+    // L2 baseline with the L1 transition noise.  Use at least +1, or +2 when
+    // there are enough remaining points, so the L1 boundary point and its
+    // immediate neighbour are excluded from the L2 baseline.
+    const size_t l2_segment_start = std::min(
+        l1_boundary.boundary_index + 2,
+        localities_bytes.size() - 2);
+
+    // L2-specific guard: prevent L2 from re-detecting at or below the L1 boundary.
+    const size_t l2_guard_bytes = std::max(tlb_guard_bytes, l1_boundary.boundary_locality_bytes);
+
     l2_boundary = detect_tlb_boundary(localities_bytes, p50_latency_ns,
-                                      l1_boundary.boundary_index, tlb_guard_bytes);
+                                      l2_segment_start, l2_guard_bytes,
+                                      &sweep_loop_latencies_ns);
   }
 
   const size_t l1_entries = l1_boundary.detected
