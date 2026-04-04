@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.54.1] - EXPERIMELTAL
+## [0.54.1] - 2026-04-04 - EXPERIMENTAL
 
 ### Changed
   - Main-memory read/write/copy ASM kernels converted from offset-add addressing to pointer-bump addressing (`src/asm/memory_read.s`, `src/asm/memory_write.s`, `src/asm/memory_copy.s`). The hot loop no longer recomputes `base + offset` each iteration; instead a running pointer advances directly, eliminating one `add` per 512B block.

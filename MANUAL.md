@@ -507,7 +507,7 @@ For noisy systems, prioritize median and P95/P99 rather than single fastest/slow
   "main_memory": { ... },
   "cache": { ... },
   "timestamp": "2026-03-09T14:57:56Z",
-  "version": "0.54.0"
+  "version": "0.54.1"
 }
 ```
 
@@ -521,7 +521,7 @@ Note: The `configuration` block includes fields such as `latency_chain_mode` (th
   "execution_time_sec": 705.6,
   "patterns": { ... },
   "timestamp": "2026-03-09T15:10:01Z",
-  "version": "0.54.0"
+  "version": "0.54.1"
 }
 ```
 
