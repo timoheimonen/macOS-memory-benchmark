@@ -302,14 +302,12 @@ int run_tlb_analysis(const BenchmarkConfig& config) {
   p50_latency_ns.reserve(localities_bytes.size());
   sweep_loop_latencies_ns.reserve(localities_bytes.size());
 
+  std::cout << std::fixed;
+  std::cout.precision(Constants::LATENCY_PRECISION);
+
   for (size_t locality_index = 0; locality_index < localities_bytes.size(); ++locality_index) {
     const size_t locality_bytes = localities_bytes[locality_index];
     const size_t locality_kb = locality_bytes / Constants::BYTES_PER_KB;
-
-    std::cout << Messages::msg_tlb_analysis_locality_progress(locality_index + 1,
-                                                              localities_bytes.size(),
-                                                              locality_kb)
-              << std::endl;
 
     double locality_p50_ns = 0.0;
     std::vector<double> loop_latencies_ns;
@@ -327,6 +325,11 @@ int run_tlb_analysis(const BenchmarkConfig& config) {
       return EXIT_FAILURE;
     }
 
+    std::cout << Messages::msg_tlb_analysis_locality_progress(locality_index + 1,
+                                                              localities_bytes.size(),
+                                                              locality_kb)
+              << " — " << locality_p50_ns << " ns" << std::endl;
+
     p50_latency_ns.push_back(locality_p50_ns);
     sweep_loop_latencies_ns.push_back(std::move(loop_latencies_ns));
   }
@@ -335,9 +338,6 @@ int run_tlb_analysis(const BenchmarkConfig& config) {
   std::vector<double> page_walk_512mb_loop_latencies_ns;
   double page_walk_512mb_p50_ns = 0.0;
   if (can_measure_page_walk_penalty) {
-    std::cout << Messages::msg_tlb_analysis_page_walk_progress(
-                     kPageWalkComparisonLocalityBytes / Constants::BYTES_PER_MB)
-              << std::endl;
     if (!measure_locality_p50(latency_buffer.get(),
                               selected_buffer_bytes,
                               analysis_stride_bytes,
@@ -351,6 +351,10 @@ int run_tlb_analysis(const BenchmarkConfig& config) {
       }
       return EXIT_FAILURE;
     }
+
+    std::cout << Messages::msg_tlb_analysis_page_walk_progress(
+                     kPageWalkComparisonLocalityBytes / Constants::BYTES_PER_MB)
+              << " — " << page_walk_512mb_p50_ns << " ns" << std::endl;
   }
 
   if (buffer_locked) {

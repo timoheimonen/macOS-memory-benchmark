@@ -20,6 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - **IQR-overlap rejection in TLB boundary detection**: When raw per-point loop latencies are available, the detector compares baseline Q3 with candidate Q1 and rejects boundaries where the step falls within measurement noise overlap.
   - **Multi-point persistence window**: Boundary persistence is now evaluated over a 3-point future window using majority rule (2 of 3), replacing the previous single-point check.
   - **New test cases for improved TLB detection**: Added `DetectBoundaryMultiPointPersistenceSurvivesNoiseDip`, `DetectBoundaryRejectsNoisyStepByIQR`, `DetectBoundaryAcceptsClearStepWithIQR`, and `DetectBoundaryLastPointStrongStepGetsMediumConfidence` tests.
+  - **`-analyze-tlb` sweep progress now shows measured latency**: Each sweep step now prints the measured P50 latency alongside the locality label (e.g., `[1/15] Locality 16 KB — 10.23 ns`), giving real-time per-step feedback during the analysis sweep.
 
 ## [0.54.0] - 2026-03-19
 
