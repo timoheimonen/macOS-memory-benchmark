@@ -115,18 +115,26 @@ void calculate_buffer_sizes(BenchmarkConfig& config) {
   } else {
     // Use configured factors for L1 and L2 to ensure fits within target level
     // Check for overflow before multiplication
-    if (config.l1_cache_size > 0 && 
-        config.l1_cache_size > std::numeric_limits<size_t>::max() / Constants::L1_BUFFER_SIZE_FACTOR) {
-      std::cerr << Messages::error_prefix() << Messages::error_l1_cache_size_overflow() << std::endl;
-      config.l1_buffer_size = std::numeric_limits<size_t>::max();
+    if (config.l1_cache_size > 0) {
+      const size_t l1_factor = static_cast<size_t>(Constants::L1_BUFFER_SIZE_FACTOR);
+      if (l1_factor > 0 && config.l1_cache_size > std::numeric_limits<size_t>::max() / l1_factor) {
+        std::cerr << Messages::error_prefix() << Messages::error_l1_cache_size_overflow() << std::endl;
+        config.l1_buffer_size = std::numeric_limits<size_t>::max();
+      } else {
+        config.l1_buffer_size = static_cast<size_t>(config.l1_cache_size * Constants::L1_BUFFER_SIZE_FACTOR);
+      }
     } else {
       config.l1_buffer_size = static_cast<size_t>(config.l1_cache_size * Constants::L1_BUFFER_SIZE_FACTOR);
     }
     
-    if (config.l2_cache_size > 0 && 
-        config.l2_cache_size > std::numeric_limits<size_t>::max() / Constants::L2_BUFFER_SIZE_FACTOR) {
-      std::cerr << Messages::error_prefix() << Messages::error_l2_cache_size_overflow() << std::endl;
-      config.l2_buffer_size = std::numeric_limits<size_t>::max();
+    if (config.l2_cache_size > 0) {
+      const size_t l2_factor = static_cast<size_t>(Constants::L2_BUFFER_SIZE_FACTOR);
+      if (l2_factor > 0 && config.l2_cache_size > std::numeric_limits<size_t>::max() / l2_factor) {
+        std::cerr << Messages::error_prefix() << Messages::error_l2_cache_size_overflow() << std::endl;
+        config.l2_buffer_size = std::numeric_limits<size_t>::max();
+      } else {
+        config.l2_buffer_size = static_cast<size_t>(config.l2_cache_size * Constants::L2_BUFFER_SIZE_FACTOR);
+      }
     } else {
       config.l2_buffer_size = static_cast<size_t>(config.l2_cache_size * Constants::L2_BUFFER_SIZE_FACTOR);
     }

@@ -22,6 +22,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - **New test cases for improved TLB detection**: Added `DetectBoundaryMultiPointPersistenceSurvivesNoiseDip`, `DetectBoundaryRejectsNoisyStepByIQR`, `DetectBoundaryAcceptsClearStepWithIQR`, and `DetectBoundaryLastPointStrongStepGetsMediumConfidence` tests.
   - **`-analyze-tlb` sweep progress now shows measured latency**: Each sweep step now prints the measured P50 latency alongside the locality label (e.g., `[1/15] Locality 16 KB — 10.23 ns`), giving real-time per-step feedback during the analysis sweep.
 
+### Fixed
+  - **Compiler warning in buffer overflow checks**: Fixed `-Wimplicit-const-int-float-conversion` warnings in `buffer_calculator.cpp` where `std::numeric_limits<size_t>::max()` was implicitly converted to `double` during L1/L2 buffer size factor division. Overflow checks now use integer arithmetic via `static_cast<size_t>(factor)`.
+
 ## [0.54.0] - 2026-03-19
 
 Changes in benchmark ASM kernels.
