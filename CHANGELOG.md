@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.54.1] - EXPERIMELTAL
+
+### Changed
+  - Main-memory read/write/copy ASM kernels converted from offset-add addressing to pointer-bump addressing (`src/asm/memory_read.s`, `src/asm/memory_write.s`, `src/asm/memory_copy.s`). The hot loop no longer recomputes `base + offset` each iteration; instead a running pointer advances directly, eliminating one `add` per 512B block.
+  - Reduced `memory_write.s` zero-register setup from 24 to 8 `movi` instructions (the stnp pairs reuse the same zero registers).
+  - Updated clobber documentation to reflect actual register usage.
+
 ## [0.54.0] - 2026-03-19
 
 Changes in benchmark ASM kernels.
