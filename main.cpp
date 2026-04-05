@@ -110,6 +110,11 @@ int main(int argc, char *argv[]) {
     return EXIT_FAILURE;
   }
 
+  // If -h/--help was handled, usage already printed — exit now
+  if (config.help_printed) {
+    return EXIT_SUCCESS;
+  }
+
   if (config.analyze_tlb) {
     return run_tlb_analysis(config);
   }
