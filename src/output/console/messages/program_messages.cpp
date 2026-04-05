@@ -62,6 +62,11 @@ const std::string& msg_running_tlb_analysis() {
   return msg;
 }
 
+const std::string& msg_interrupted_by_user() {
+  static const std::string msg = "\nInterrupted by user. Partial results shown.";
+  return msg;
+}
+
 std::string msg_tlb_analysis_locality_progress(size_t current_index, size_t total_count, size_t locality_kb) {
   std::ostringstream oss;
   oss << "  [" << current_index << "/" << total_count << "] Locality " << locality_kb << " KB";

@@ -46,6 +46,7 @@
 #include "core/config/constants.h"
 #include "output/json/json_output/json_output_api.h"
 #include "pattern_benchmark/pattern_benchmark.h"
+#include "core/signal/signal_handler.h"
 
 // macOS specific memory management
 #include <mach/mach.h>  // kern_return_t
@@ -82,6 +83,9 @@
  * @see run_all_pattern_benchmarks() for pattern benchmark execution
  */
 int main(int argc, char *argv[]) {
+  // Install signal handlers early (before any benchmark logic)
+  install_signal_handlers();
+
   for (int i = 1; i < argc; ++i) {
     if (std::string(argv[i]) == "-analyze-core2core") {
       return run_core_to_core_latency_mode(argc, argv);
@@ -153,6 +157,11 @@ int main(int argc, char *argv[]) {
   }
 
   // --- Run Benchmarks ---
+  // Block SIGINT/SIGTERM so worker threads inherit the blocked mask.
+  // Only the main thread will receive Ctrl+C — worker threads finish their
+  // current kernel before the main thread checks signal_received().
+  block_benchmark_signals();
+
   BenchmarkBuffers buffers;
   if (config.run_patterns) {
     // Pattern mode uses pre-allocated src/dst buffers across pattern tests.
@@ -172,60 +181,10 @@ int main(int argc, char *argv[]) {
     
     // Print results - if single loop, print detailed results; if multiple loops, print last loop's results
     if (config.loop_count == 1) {
-      // For single loop, reconstruct PatternResults from statistics for display
-      PatternResults single_result;
-      if (!pattern_stats.all_forward_read_bw.empty()) {
-        single_result.forward_read_bw = pattern_stats.all_forward_read_bw[0];
-        single_result.forward_write_bw = pattern_stats.all_forward_write_bw[0];
-        single_result.forward_copy_bw = pattern_stats.all_forward_copy_bw[0];
-        single_result.reverse_read_bw = pattern_stats.all_reverse_read_bw[0];
-        single_result.reverse_write_bw = pattern_stats.all_reverse_write_bw[0];
-        single_result.reverse_copy_bw = pattern_stats.all_reverse_copy_bw[0];
-        single_result.strided_64_read_bw = pattern_stats.all_strided_64_read_bw[0];
-        single_result.strided_64_write_bw = pattern_stats.all_strided_64_write_bw[0];
-        single_result.strided_64_copy_bw = pattern_stats.all_strided_64_copy_bw[0];
-        single_result.strided_4096_read_bw = pattern_stats.all_strided_4096_read_bw[0];
-        single_result.strided_4096_write_bw = pattern_stats.all_strided_4096_write_bw[0];
-        single_result.strided_4096_copy_bw = pattern_stats.all_strided_4096_copy_bw[0];
-        single_result.strided_16384_read_bw = pattern_stats.all_strided_16384_read_bw[0];
-        single_result.strided_16384_write_bw = pattern_stats.all_strided_16384_write_bw[0];
-        single_result.strided_16384_copy_bw = pattern_stats.all_strided_16384_copy_bw[0];
-        single_result.strided_2mb_read_bw = pattern_stats.all_strided_2mb_read_bw[0];
-        single_result.strided_2mb_write_bw = pattern_stats.all_strided_2mb_write_bw[0];
-        single_result.strided_2mb_copy_bw = pattern_stats.all_strided_2mb_copy_bw[0];
-        single_result.random_read_bw = pattern_stats.all_random_read_bw[0];
-        single_result.random_write_bw = pattern_stats.all_random_write_bw[0];
-        single_result.random_copy_bw = pattern_stats.all_random_copy_bw[0];
-      }
-      print_pattern_results(single_result);
+      print_pattern_results(extract_pattern_results_at(pattern_stats, 0));
     } else {
-      // For multiple loops, print last loop's results and then statistics
-      PatternResults last_result;
-      if (!pattern_stats.all_forward_read_bw.empty()) {
-        size_t last_idx = pattern_stats.all_forward_read_bw.size() - 1;
-        last_result.forward_read_bw = pattern_stats.all_forward_read_bw[last_idx];
-        last_result.forward_write_bw = pattern_stats.all_forward_write_bw[last_idx];
-        last_result.forward_copy_bw = pattern_stats.all_forward_copy_bw[last_idx];
-        last_result.reverse_read_bw = pattern_stats.all_reverse_read_bw[last_idx];
-        last_result.reverse_write_bw = pattern_stats.all_reverse_write_bw[last_idx];
-        last_result.reverse_copy_bw = pattern_stats.all_reverse_copy_bw[last_idx];
-        last_result.strided_64_read_bw = pattern_stats.all_strided_64_read_bw[last_idx];
-        last_result.strided_64_write_bw = pattern_stats.all_strided_64_write_bw[last_idx];
-        last_result.strided_64_copy_bw = pattern_stats.all_strided_64_copy_bw[last_idx];
-        last_result.strided_4096_read_bw = pattern_stats.all_strided_4096_read_bw[last_idx];
-        last_result.strided_4096_write_bw = pattern_stats.all_strided_4096_write_bw[last_idx];
-        last_result.strided_4096_copy_bw = pattern_stats.all_strided_4096_copy_bw[last_idx];
-        last_result.strided_16384_read_bw = pattern_stats.all_strided_16384_read_bw[last_idx];
-        last_result.strided_16384_write_bw = pattern_stats.all_strided_16384_write_bw[last_idx];
-        last_result.strided_16384_copy_bw = pattern_stats.all_strided_16384_copy_bw[last_idx];
-        last_result.strided_2mb_read_bw = pattern_stats.all_strided_2mb_read_bw[last_idx];
-        last_result.strided_2mb_write_bw = pattern_stats.all_strided_2mb_write_bw[last_idx];
-        last_result.strided_2mb_copy_bw = pattern_stats.all_strided_2mb_copy_bw[last_idx];
-        last_result.random_read_bw = pattern_stats.all_random_read_bw[last_idx];
-        last_result.random_write_bw = pattern_stats.all_random_write_bw[last_idx];
-        last_result.random_copy_bw = pattern_stats.all_random_copy_bw[last_idx];
-      }
-      print_pattern_results(last_result);
+      size_t last_idx = pattern_stats.all_forward_read_bw.size() - 1;
+      print_pattern_results(extract_pattern_results_at(pattern_stats, last_idx));
       
       // Print summary statistics
       print_pattern_statistics(config.loop_count, pattern_stats);
@@ -280,6 +239,9 @@ int main(int argc, char *argv[]) {
   // std::cout << "\nFreeing memory..." << std::endl;
   // Memory is freed automatically when src_buffer_ptr, dst_buffer_ptr,
   // and lat_buffer_ptr go out of scope. No manual munmap needed.
+
+  // --- Restore Signal Mask ---
+  restore_signal_mask();
 
   // --- Print Total Time ---
   double total_elapsed_time_sec = total_execution_timer.stop();                                  // Stop overall timer

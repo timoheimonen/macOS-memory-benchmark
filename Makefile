@@ -38,12 +38,13 @@ CPP_SRCS_ROOT = main.cpp
 # Files in the src directory (now organized in subdirectories)
 CPP_SRCS_CORE_CONFIG = core/config/argument_parser.cpp core/config/config_validator.cpp core/config/buffer_calculator.cpp
 CPP_SRCS_CORE_MEMORY = core/memory/buffer_allocator.cpp core/memory/buffer_initializer.cpp core/memory/memory_manager.cpp core/memory/memory_utils.cpp
+CPP_SRCS_CORE_SIGNAL = core/signal/signal_handler.cpp
 CPP_SRCS_CORE_SYSTEM = core/system/system_info.cpp
 CPP_SRCS_CORE_TIMING = core/timing/timer.cpp
 CPP_SRCS_OUTPUT_CONSOLE = output/console/output_printer.cpp output/console/statistics.cpp
 CPP_SRCS_OUTPUT_CONSOLE_MESSAGES = output/console/messages/error_messages.cpp output/console/messages/warning_messages.cpp output/console/messages/info_messages.cpp output/console/messages/program_messages.cpp output/console/messages/core_to_core_messages.cpp output/console/messages/config_messages.cpp output/console/messages/cache_messages.cpp output/console/messages/results_messages.cpp output/console/messages/statistics_messages.cpp output/console/messages/pattern_messages.cpp
 CPP_SRCS_UTILS = utils/utils.cpp utils/json_utils.cpp
-CPP_SRCS_SRC = $(CPP_SRCS_CORE_CONFIG) $(CPP_SRCS_CORE_MEMORY) $(CPP_SRCS_CORE_SYSTEM) $(CPP_SRCS_CORE_TIMING) $(CPP_SRCS_OUTPUT_CONSOLE) $(CPP_SRCS_OUTPUT_CONSOLE_MESSAGES) $(CPP_SRCS_UTILS)
+CPP_SRCS_SRC = $(CPP_SRCS_CORE_CONFIG) $(CPP_SRCS_CORE_MEMORY) $(CPP_SRCS_CORE_SIGNAL) $(CPP_SRCS_CORE_SYSTEM) $(CPP_SRCS_CORE_TIMING) $(CPP_SRCS_OUTPUT_CONSOLE) $(CPP_SRCS_OUTPUT_CONSOLE_MESSAGES) $(CPP_SRCS_UTILS)
 # Files in the src/benchmark subdirectory
 CPP_SRCS_BENCHMARK = bandwidth_tests.cpp latency_tests.cpp benchmark_runner.cpp benchmark_executor.cpp benchmark_results.cpp benchmark_statistics_collector.cpp tlb_analysis.cpp tlb_boundary_detector.cpp tlb_analysis_json.cpp core_to_core_latency_cli.cpp core_to_core_latency_runner.cpp core_to_core_latency_json.cpp
 # Files in the src/warmup subdirectory
@@ -139,6 +140,11 @@ $(SRC_DIR)/core/config/%.o: $(SRC_DIR)/core/config/%.cpp $(HEADERS)
 # Rule for compiling C++ source files in the src/core/memory/ directory into object files
 $(SRC_DIR)/core/memory/%.o: $(SRC_DIR)/core/memory/%.cpp $(HEADERS)
 	@echo "Compiling (core/memory) $< -> $@..."
+	$(CXX) $(CXXFLAGS) -c $< -o $@
+
+# Rule for compiling C++ source files in the src/core/signal/ directory into object files
+$(SRC_DIR)/core/signal/%.o: $(SRC_DIR)/core/signal/%.cpp $(HEADERS)
+	@echo "Compiling (core/signal) $< -> $@..."
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
 # Rule for compiling C++ source files in the src/core/system/ directory into object files

@@ -370,6 +370,14 @@ TEST_F(MessagesFormattingTest, MsgRunningBenchmarks) {
   EXPECT_EQ(&msg, &Messages::msg_running_benchmarks());
 }
 
+TEST_F(MessagesFormattingTest, MsgInterruptedByUser) {
+  const std::string& msg = Messages::msg_interrupted_by_user();
+  EXPECT_NE(msg.find("Interrupted"), std::string::npos);
+  EXPECT_NE(msg.find("Partial results"), std::string::npos);
+  // Verify it returns a stable reference (static string)
+  EXPECT_EQ(&msg, &Messages::msg_interrupted_by_user());
+}
+
 TEST_F(MessagesFormattingTest, MsgDoneTotalTime) {
   std::string msg = Messages::msg_done_total_time(123.456);
   EXPECT_NE(msg.find("123.456"), std::string::npos);

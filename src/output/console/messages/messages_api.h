@@ -166,6 +166,7 @@ std::string msg_pattern_benchmark_loop_completed(int current_loop, int total_loo
 std::string msg_results_saved_to(const std::string& file_path);
 const std::string& msg_running_tlb_analysis();
 const std::string& msg_running_core_to_core_analysis();
+const std::string& msg_interrupted_by_user();
 std::string msg_core_to_core_scenario_progress(size_t current_loop,
                                                size_t total_loops,
                                                const std::string& scenario_name);

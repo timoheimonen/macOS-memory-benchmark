@@ -35,6 +35,7 @@
 #include "core/memory/buffer_manager.h"
 #include "core/config/config.h"
 #include "core/config/constants.h"
+#include "core/signal/signal_handler.h"
 #include "output/console/messages/messages_api.h"
 #include <iostream>
 #include <vector>
@@ -116,9 +117,11 @@ int run_pattern_benchmarks(const BenchmarkBuffers& buffers, const BenchmarkConfi
   
   // Sequential Forward (baseline)
   run_forward_pattern_benchmarks(buffers, config, results, timer);
+  if (signal_received()) return EXIT_SUCCESS;
   
   // Sequential Reverse
   run_reverse_pattern_benchmarks(buffers, config, results, timer);
+  if (signal_received()) return EXIT_SUCCESS;
   
   // Strided (Cache Line)
   int status = run_strided_pattern_benchmarks(buffers, config, PATTERN_STRIDE_CACHE_LINE, 
@@ -128,6 +131,7 @@ int run_pattern_benchmarks(const BenchmarkBuffers& buffers, const BenchmarkConfi
   if (status != EXIT_SUCCESS) {
     return status;
   }
+  if (signal_received()) return EXIT_SUCCESS;
   
   // Strided (Page) - may be skipped if buffer too small
   status = run_strided_pattern_benchmarks(buffers, config, PATTERN_STRIDE_PAGE, 
@@ -137,6 +141,7 @@ int run_pattern_benchmarks(const BenchmarkBuffers& buffers, const BenchmarkConfi
   if (status != EXIT_SUCCESS) {
     return status;
   }
+  if (signal_received()) return EXIT_SUCCESS;
 
   // Strided (16KB Page) - may be skipped if buffer too small
   status = run_strided_pattern_benchmarks(buffers, config, PATTERN_STRIDE_PAGE_16K,
@@ -146,6 +151,7 @@ int run_pattern_benchmarks(const BenchmarkBuffers& buffers, const BenchmarkConfi
   if (status != EXIT_SUCCESS) {
     return status;
   }
+  if (signal_received()) return EXIT_SUCCESS;
 
   // Strided (2MB Superpage) - may be skipped if buffer too small
   status = run_strided_pattern_benchmarks(buffers, config, PATTERN_STRIDE_SUPERPAGE_2MB,
@@ -155,6 +161,7 @@ int run_pattern_benchmarks(const BenchmarkBuffers& buffers, const BenchmarkConfi
   if (status != EXIT_SUCCESS) {
     return status;
   }
+  if (signal_received()) return EXIT_SUCCESS;
   
   // Random Uniform - may be skipped if buffer too small or no valid indices
   status = run_random_pattern_benchmarks(buffers, config, random_indices, num_random_accesses, results, timer);

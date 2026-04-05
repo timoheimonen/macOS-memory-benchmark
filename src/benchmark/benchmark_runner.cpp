@@ -47,6 +47,7 @@
 #include "core/timing/timer.h"                // HighResTimer
 #include "utils/benchmark.h"            // All benchmark functions and print functions
 #include "output/console/messages/messages_api.h"             // Centralized messages
+#include "core/signal/signal_handler.h"
 #include <iostream>
 #include <cstdlib>  // EXIT_SUCCESS, EXIT_FAILURE
 
@@ -107,6 +108,12 @@ int run_all_benchmarks(const BenchmarkBuffers& buffers, BenchmarkConfig& config,
 
   // Main benchmark loop
   for (int loop = 0; loop < config.loop_count; ++loop) {
+    // Check for Ctrl+C between loops
+    if (signal_received()) {
+      std::cout << std::endl << Messages::msg_interrupted_by_user() << std::endl;
+      return EXIT_SUCCESS;
+    }
+
     try {
       // Run single benchmark loop
       BenchmarkResults loop_results = run_single_benchmark_loop(buffers, config, loop, test_timer);

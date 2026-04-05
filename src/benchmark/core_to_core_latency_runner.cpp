@@ -40,6 +40,7 @@
 #include "benchmark/core_to_core_latency_json.h"
 #include "core/config/constants.h"
 #include "core/config/version.h"
+#include "core/signal/signal_handler.h"
 #include "core/system/system_info.h"
 #include "core/timing/timer.h"
 #include "output/console/messages/messages_api.h"
@@ -348,6 +349,17 @@ int run_core_to_core_latency(const CoreToCoreLatencyConfig& config) {
         scenario_result.initiator_hint = measurement.initiator_hint;
         scenario_result.responder_hint = measurement.responder_hint;
       }
+
+      // Check for Ctrl+C between scenarios (after valid measurement)
+      if (signal_received()) {
+        break;
+      }
+    }
+
+    // Propagate interrupt to outer loop
+    if (signal_received()) {
+      std::cout << std::endl << Messages::msg_interrupted_by_user() << std::endl;
+      break;
     }
   }
 

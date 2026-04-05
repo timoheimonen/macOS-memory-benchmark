@@ -42,6 +42,7 @@
 #include "core/config/version.h"
 #include "core/memory/memory_manager.h"
 #include "core/memory/memory_utils.h"
+#include "core/signal/signal_handler.h"
 #include "core/system/system_info.h"
 #include "core/timing/timer.h"
 #include "output/console/messages/messages_api.h"
@@ -332,12 +333,18 @@ int run_tlb_analysis(const BenchmarkConfig& config) {
 
     p50_latency_ns.push_back(locality_p50_ns);
     sweep_loop_latencies_ns.push_back(std::move(loop_latencies_ns));
+
+    // Check for Ctrl+C between sweep points (after valid measurement)
+    if (signal_received()) {
+      std::cout << std::endl << Messages::msg_interrupted_by_user() << std::endl;
+      break;
+    }
   }
 
   const bool can_measure_page_walk_penalty = selected_buffer_mb >= kPageWalkMinimumBufferMb;
   std::vector<double> page_walk_512mb_loop_latencies_ns;
   double page_walk_512mb_p50_ns = 0.0;
-  if (can_measure_page_walk_penalty) {
+  if (can_measure_page_walk_penalty && !signal_received()) {
     if (!measure_locality_p50(latency_buffer.get(),
                               selected_buffer_bytes,
                               analysis_stride_bytes,
