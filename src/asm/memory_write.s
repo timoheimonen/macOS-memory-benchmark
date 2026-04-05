@@ -26,141 +26,107 @@
 // Returns:
 //   (none)
 // Clobbers:
-//   x3‑x7, q0‑q7, q16‑q31 (zero vectors, avoiding q8‑q15 per AAPCS64)
+//   x3‑x7, q0‑q7 (zero vectors, avoiding q8‑q15 per AAPCS64)
 // Implementation Notes:
-//   * Zero vectors are materialized once (movi) then reused.
+//   * Pointer-bump addressing (no per-iteration offset math).
+//   * Zero vectors materialized once (8 regs), reused for all 16 stnp pairs.
 //   * Tiered tail mirrors copy/read for consistency.
 // -----------------------------------------------------------------------------
 
 .global _memory_write_loop_asm
 .align 4
 _memory_write_loop_asm:
-    mov x3, xzr             // offset = 0
-    // 512B blocks chosen as sweet spot: large enough for high throughput,
-    // small enough to fit in L2 cache, avoids TLB pressure on large regions
-    mov x4, #512            // step = 512 bytes (optimal block size)
+    mov x7, x0              // dst_ptr = dst
+    mov x5, x1              // remaining = byteCount
 
-    // Zero out data registers (using only caller-saved: v0-v7 and v16-v31, avoiding v8-v15 per AAPCS64).
-    // Use caller-saved registers q0-q7,q16-q31 only (avoid q8-q15 per AAPCS64).
-    // This ensures no callee-saved state corruption and follows ARM64 calling convention.
-    // Zero vectors are materialized once (movi) then reused throughout the loop.
-    movi v0.16b, #0             // Zero vector 0
-    movi v1.16b, #0             // Zero vector 1
-    movi v2.16b, #0             // Zero vector 2
-    movi v3.16b, #0             // Zero vector 3
-    movi v4.16b, #0             // Zero vector 4
-    movi v5.16b, #0             // Zero vector 5
-    movi v6.16b, #0             // Zero vector 6
-    movi v7.16b, #0             // Zero vector 7
-    movi v16.16b, #0            // Zero vector 16
-    movi v17.16b, #0            // Zero vector 17
-    movi v18.16b, #0            // Zero vector 18
-    movi v19.16b, #0            // Zero vector 19
-    movi v20.16b, #0            // Zero vector 20
-    movi v21.16b, #0            // Zero vector 21
-    movi v22.16b, #0            // Zero vector 22
-    movi v23.16b, #0            // Zero vector 23
-    movi v24.16b, #0            // Zero vector 24
-    movi v25.16b, #0            // Zero vector 25
-    movi v26.16b, #0            // Zero vector 26
-    movi v27.16b, #0            // Zero vector 27
-    movi v28.16b, #0            // Zero vector 28
-    movi v29.16b, #0            // Zero vector 29
-    movi v30.16b, #0            // Zero vector 30
-    movi v31.16b, #0            // Zero vector 31
-
+    // Zero out 8 data registers (caller-saved: v0-v7, avoiding v8-v15 per AAPCS64).
+    // All 16 stnp pairs reuse these 8 registers (zeros are identical).
+    movi v0.16b, #0
+    movi v1.16b, #0
+    movi v2.16b, #0
+    movi v3.16b, #0
+    movi v4.16b, #0
+    movi v5.16b, #0
+    movi v6.16b, #0
+    movi v7.16b, #0
 
 write_loop_start_nt512:     // Main 512B block loop
-    // Loop invariants: x4=512B block size, all vectors (q0-q7, q16-q31) are zero.
-    // Only x3 (offset) and x5 (remaining) change per iteration.
-    subs x5, x1, x3         // remaining = count - offset
-    cmp x5, x4              // remaining < step?
-    b.lo write_loop_cleanup // If less (unsigned), handle remaining bytes
-
-    add x7, x0, x3          // dst_addr = base + offset
+    cmp x5, #512            // remaining < 512?
+    b.lo write_loop_cleanup
 
     // Store 512B zeros (non-temporal) (16 stnp pairs).
-    // Using only caller-saved registers: q0-q7 and q16-q31.
     // Non-temporal stores (stnp) hint to CPU that data won't be reused soon,
     // encouraging write-combining and reducing cache pollution during bandwidth tests.
-    stnp q0,  q1,  [x7, #0]       // Store pair 0 (offset 0, non-temporal hint for bandwidth)
-    stnp q2,  q3,  [x7, #32]      // Store pair 1 (offset 32, non-temporal)
-    stnp q4,  q5,  [x7, #64]      // Store pair 2 (offset 64, non-temporal)
-    stnp q6,  q7,  [x7, #96]      // Store pair 3 (offset 96, non-temporal)
-    stnp q16, q17, [x7, #128]     // Store pair 4 (offset 128, non-temporal)
-    stnp q18, q19, [x7, #160]     // Store pair 5 (offset 160, non-temporal)
-    stnp q20, q21, [x7, #192]     // Store pair 6 (offset 192, non-temporal)
-    stnp q22, q23, [x7, #224]     // Store pair 7 (offset 224, non-temporal)
-    stnp q24, q25, [x7, #256]     // Store pair 8 (offset 256, non-temporal)
-    stnp q26, q27, [x7, #288]     // Store pair 9 (offset 288, non-temporal)
-    stnp q28, q29, [x7, #320]     // Store pair 10 (offset 320, non-temporal)
-    stnp q30, q31, [x7, #352]     // Store pair 11 (offset 352, non-temporal)
-    // Reuse q0-q7 for remaining pairs (all zeros, so safe to reuse)
-    stnp q0,  q1,  [x7, #384]     // Store pair 12 (offset 384, non-temporal)
-    stnp q2,  q3,  [x7, #416]     // Store pair 13 (offset 416, non-temporal)
-    stnp q4,  q5,  [x7, #448]     // Store pair 14 (offset 448, non-temporal)
-    stnp q6,  q7,  [x7, #480]     // Store pair 15 (offset 480, non-temporal)
+    stnp q0,  q1,  [x7, #0]
+    stnp q2,  q3,  [x7, #32]
+    stnp q4,  q5,  [x7, #64]
+    stnp q6,  q7,  [x7, #96]
+    stnp q0,  q1,  [x7, #128]
+    stnp q2,  q3,  [x7, #160]
+    stnp q4,  q5,  [x7, #192]
+    stnp q6,  q7,  [x7, #224]
+    stnp q0,  q1,  [x7, #256]
+    stnp q2,  q3,  [x7, #288]
+    stnp q4,  q5,  [x7, #320]
+    stnp q6,  q7,  [x7, #352]
+    stnp q0,  q1,  [x7, #384]
+    stnp q2,  q3,  [x7, #416]
+    stnp q4,  q5,  [x7, #448]
+    stnp q6,  q7,  [x7, #480]
 
-    add x3, x3, x4          // offset += step
-    b write_loop_start_nt512 // Loop again
+    add x7, x7, #512        // dst_ptr += 512
+    sub x5, x5, #512        // remaining -= 512
+    b write_loop_start_nt512
 
 write_loop_cleanup:         // Tail handling when <512B remain
-    // Tail handling: Process remaining bytes in 256B→128B→64B→32B→byte tiers.
-    // This minimizes branches while ensuring exact byte count handling.
-    // Larger chunks first for better performance on unaligned remainders.
-    cmp x3, x1              // offset == count?
-    b.hs write_loop_end     // If done (unsigned >=), exit
-
-    subs x5, x1, x3         // Recalc remaining (x5)
-    add x7, x0, x3          // dst_addr = dst + offset
+    cbz x5, write_loop_end  // If none remain, exit
 
     // Handle 256B chunks (8 stnp pairs)
-    cmp x5, #256              // Check if >= 256 bytes remain
-    b.lo write_cleanup_128    // If less (unsigned), handle smaller chunks
-    stnp q0, q1, [x7, #0]     // Store first pair (non-temporal, 32B)
-    stnp q2, q3, [x7, #32]    // Store second pair (non-temporal, 32B)
-    stnp q4, q5, [x7, #64]    // Store third pair (non-temporal, 32B)
-    stnp q6, q7, [x7, #96]    // Store fourth pair (non-temporal, 32B)
-    stnp q16, q17, [x7, #128] // Store fifth pair (non-temporal, 32B)
-    stnp q18, q19, [x7, #160] // Store sixth pair (non-temporal, 32B)
-    stnp q20, q21, [x7, #192] // Store seventh pair (non-temporal, 32B)
-    stnp q22, q23, [x7, #224] // Store eighth pair (non-temporal, 32B)
-    add x7, x7, #256          // Advance destination pointer by 256B
-    sub x5, x5, #256          // Decrement remaining count by 256B
+    cmp x5, #256
+    b.lo write_cleanup_128
+    stnp q0, q1, [x7, #0]
+    stnp q2, q3, [x7, #32]
+    stnp q4, q5, [x7, #64]
+    stnp q6, q7, [x7, #96]
+    stnp q0, q1, [x7, #128]
+    stnp q2, q3, [x7, #160]
+    stnp q4, q5, [x7, #192]
+    stnp q6, q7, [x7, #224]
+    add x7, x7, #256
+    sub x5, x5, #256
 
 write_cleanup_128:            // 128B chunk
-    cmp x5, #128              // Check if >= 128 bytes remain
-    b.lo write_cleanup_64      // If less (unsigned), handle smaller chunks
-    stnp q0, q1, [x7, #0]     // Store first pair (non-temporal, 32B)
-    stnp q2, q3, [x7, #32]    // Store second pair (non-temporal, 32B)
-    stnp q4, q5, [x7, #64]    // Store third pair (non-temporal, 32B)
-    stnp q6, q7, [x7, #96]    // Store fourth pair (non-temporal, 32B)
-    add x7, x7, #128          // Advance destination pointer by 128B
-    sub x5, x5, #128          // Decrement remaining count by 128B
+    cmp x5, #128
+    b.lo write_cleanup_64
+    stnp q0, q1, [x7, #0]
+    stnp q2, q3, [x7, #32]
+    stnp q4, q5, [x7, #64]
+    stnp q6, q7, [x7, #96]
+    add x7, x7, #128
+    sub x5, x5, #128
 
 write_cleanup_64:             // 64B chunk
-    cmp x5, #64               // Check if >= 64 bytes remain
-    b.lo write_cleanup_32      // If less (unsigned), handle smaller chunks
-    stnp q0, q1, [x7, #0]     // Store first pair (non-temporal, 32B)
-    stnp q2, q3, [x7, #32]    // Store second pair (non-temporal, 32B)
-    add x7, x7, #64           // Advance destination pointer by 64B
-    sub x5, x5, #64           // Decrement remaining count by 64B
+    cmp x5, #64
+    b.lo write_cleanup_32
+    stnp q0, q1, [x7, #0]
+    stnp q2, q3, [x7, #32]
+    add x7, x7, #64
+    sub x5, x5, #64
 
 write_cleanup_32:             // 32B chunk
-    cmp x5, #32               // Check if >= 32 bytes remain
-    b.lo write_cleanup_byte    // If less (unsigned), handle byte tail
-    stnp q0, q1, [x7, #0]     // Store pair (non-temporal, 32B)
-    add x7, x7, #32           // Advance destination pointer by 32B
-    sub x5, x5, #32           // Decrement remaining count by 32B
+    cmp x5, #32
+    b.lo write_cleanup_byte
+    stnp q0, q1, [x7, #0]
+    add x7, x7, #32
+    sub x5, x5, #32
 
 write_cleanup_byte:            // Byte tail (<32B)
     // Final byte-by-byte write for <32B remainder. Expected to be rare in
     // bandwidth benchmarks but ensures correctness for any input size.
-    // Using wzr (zero register) avoids needing to load/store a zero value.
-    cbz x5, write_loop_end     // If none remain, exit
-    strb wzr, [x7], #1         // Store zero byte, post-increment destination
-    subs x5, x5, #1           // Decrement remaining count
-    b.ne write_cleanup_byte    // Loop while bytes remain
+    cbz x5, write_loop_end
+    strb wzr, [x7], #1
+    subs x5, x5, #1
+    b.ne write_cleanup_byte
 
 write_loop_end:             // Return to caller
     ret                     // Return

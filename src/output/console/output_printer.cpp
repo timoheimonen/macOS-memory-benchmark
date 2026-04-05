@@ -41,6 +41,17 @@ void print_usage(const char *prog_name) {
 }
 
 /**
+ * @brief Displays help text to standard output (for -h/--help).
+ *
+ * @param prog_name The name of the executable (typically argv[0])
+ */
+void print_help(const char *prog_name) {
+  std::cout << Messages::usage_header(SOFTVERSION)
+            << Messages::usage_options(prog_name)
+            << Messages::usage_example(prog_name);
+}
+
+/**
  * @brief Outputs the configuration parameters the benchmark will run with.
  *
  * @param buffer_size The final size (in bytes) of each test buffer after memory checks

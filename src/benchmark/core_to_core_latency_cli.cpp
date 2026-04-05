@@ -99,7 +99,7 @@ int parse_core_to_core_mode_arguments(int argc, char* argv[], CoreToCoreLatencyC
 
     // Help is an early-exit path for this standalone parser.
     if (arg == "-h" || arg == "--help") {
-      print_usage(argv[0]);
+      print_help(argv[0]);
       config.help_requested = true;
       return EXIT_SUCCESS;
     }

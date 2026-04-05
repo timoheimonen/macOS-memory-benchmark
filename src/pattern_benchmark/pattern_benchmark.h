@@ -150,4 +150,15 @@ void print_pattern_results(const PatternResults& results);
  */
 void print_pattern_statistics(int loop_count, const PatternStatistics& stats);
 
+/**
+ * @brief Extract a PatternResults snapshot at a specific loop index from PatternStatistics
+ * @param stats Reference to PatternStatistics structure containing aggregated results
+ * @param index Loop index to extract from (must be < vector sizes)
+ * @return PatternResults populated from the given index, or default PatternResults if vectors are empty
+ *
+ * Convenience function that extracts a single loop's results from the multi-loop statistics
+ * vectors. Returns a default-constructed PatternResults (all zeros) when the statistics are empty.
+ */
+PatternResults extract_pattern_results_at(const PatternStatistics& stats, size_t index);
+
 #endif // PATTERN_BENCHMARK_H

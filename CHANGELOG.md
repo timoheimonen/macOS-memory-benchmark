@@ -5,6 +5,41 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.55.0] - 2026-04-05
+
+### Changed
+  - **`-benchmark` flag required for standard benchmarks**: Running with no arguments now prints help instead of starting the benchmark. Use `-benchmark` to run the standard memory benchmark (replicates old default behavior). `-benchmark` and `-patterns` are mutually exclusive. Standalone modes (`-analyze-tlb`, `-analyze-core2core`) are unaffected.
+  - **`BenchmarkConfig` extended**: Added `bool run_benchmark` field to `BenchmarkConfig` struct (`config.h`) to track whether the user requested standard benchmark execution.
+  - **Modifier flags require a mode flag**: Running with only modifier flags (e.g., `-only-latency`, `-only-bandwidth`, `-buffersize`) without `-benchmark` or `-patterns` now prints help and exits.
+  - **Help text updated**: `-benchmark` documented as the first option; mutual exclusivity with `-patterns` noted in both option descriptions.
+  - **Documentation and scripts updated**: `README.md`, `MANUAL.md`, and `script-examples/` updated to reflect `-benchmark` requirement across all examples and workflow descriptions.
+  - Main-memory read/write/copy ASM kernels converted from offset-add addressing to pointer-bump addressing (`src/asm/memory_read.s`, `src/asm/memory_write.s`, `src/asm/memory_copy.s`). The hot loop no longer recomputes `base + offset` each iteration; instead a running pointer advances directly, eliminating one `add` per 512B block.
+  - Reduced `memory_write.s` zero-register setup from 24 to 8 `movi` instructions (the stnp pairs reuse the same zero registers).
+  - Reduced `memory_write_reverse.s` zero-register setup from 24 to 8 `movi` instructions, matching the forward write kernel. The 512B loop and 256B cleanup now reuse `q0–q7` for all 16 stnp pairs instead of using separate `q16–q31` registers.
+  - Updated clobber documentation to reflect actual register usage.
+  - **Improved `-analyze-tlb` boundary detection stability**: Replaced single-point persistence check with 3-point majority persistence, recency-weighted baselines, and IQR-overlap rejection. These changes reduce false boundary detections from transient noise and improve L1/L2 TLB classification accuracy.
+  - **L2 detection uses offset baseline and specific guard**: L2 scanning now starts 2 points past the L1 boundary (instead of at the L1 boundary index) and uses a locality guard of `max(tlb_guard, L1_boundary_locality)`, preventing L1 transition noise from contaminating the L2 baseline.
+  - **Last-point strong-step compensation**: Final sweep points with very large steps (>=8 ns or >=25%) now get effective persistence, preventing massive last-point steps from being downgraded to Low confidence.
+
+### Added
+  - **`-benchmark` CLI flag**: New explicit mode flag to run the standard memory benchmark. Required for standard, `-only-bandwidth`, and `-only-latency` modes. Mutually exclusive with `-patterns`. When omitted (and no other mode flag is set), the program prints help and exits.
+  - **Mutual exclusion validation**: Added runtime check that rejects `-benchmark` and `-patterns` together with a clear error message.
+  - **New error message `error_mutually_exclusive_modes()`**: Centralized mutual-exclusion error string in the Messages system.
+  - **IQR-overlap rejection in TLB boundary detection**: When raw per-point loop latencies are available, the detector compares baseline Q3 with candidate Q1 and rejects boundaries where the step falls within measurement noise overlap.
+  - **Multi-point persistence window**: Boundary persistence is now evaluated over a 3-point future window using majority rule (2 of 3), replacing the previous single-point check.
+  - **New test cases for improved TLB detection**: Added `DetectBoundaryMultiPointPersistenceSurvivesNoiseDip`, `DetectBoundaryRejectsNoisyStepByIQR`, `DetectBoundaryAcceptsClearStepWithIQR`, and `DetectBoundaryLastPointStrongStepGetsMediumConfidence` tests.
+  - **New tests for `-benchmark` flag**: Added `ConfigTest.ParseBenchmarkFlag`, `ConfigTest.ParseBenchmarkWithModifiers`, `ConfigTest.ParsePatternsSetsRunPatterns`, and `ConfigTest.BenchmarkPatternsMutuallyExclusive` tests. Updated existing validation tests to set `run_benchmark = true` where required.
+  - **Parameter compatibility matrix**: Added `PARAMETER_MATRIX.md` documenting all CLI flag combinations and their validity.
+  - **`-analyze-tlb` sweep progress now shows measured latency**: Each sweep step now prints the measured P50 latency alongside the locality label (e.g., `[1/15] Locality 16 KB — 10.23 ns`), giving real-time per-step feedback during the analysis sweep.
+  - **Signal handler test coverage**: Added `MessagesFormattingTest.MsgInterruptedByUser` test verifying interrupt message content and static reference stability.
+  - **Test count updated**: Unit test suite now contains 326 tests (was 325).
+
+### Fixed
+  - **Compiler warning in buffer overflow checks**: Fixed `-Wimplicit-const-int-float-conversion` warnings in `buffer_calculator.cpp` where `std::numeric_limits<size_t>::max()` was implicitly converted to `double` during L1/L2 buffer size factor division. Overflow checks now use integer arithmetic via `static_cast<size_t>(factor)`.
+  - **Test correctness and cleanup**: Reviewed all 17 test files (~140 test cases) for correctness and necessity. Fixed 7 `PatternValidationTest` cases that claimed to test specific buffer-size boundaries but all used identical `buffer_size=512` without varying the boundary. Tests now use correct buffer sizes targeting the effective stride boundary (`stride + PATTERN_ACCESS_SIZE_BYTES`), matching each test name to actual behavior. Removed duplicate `AllPatternTypesComplete` test (identical to `RunPatternBenchmarksMinimalIntegration`). Removed 3 trivial struct-default tests (`StatisticsInitialization`, `BenchmarkResultsDefaults`, `StatisticsStructure`) that only tested C++ language behavior. Fixed stale comments claiming L1/L2 buffer size factors are 75%/10% when constants are 100%. Removed redundant `MAP_FAILED` assertions from `MemoryManagerTest` (allocator returns valid pointer or `nullptr`, never `MAP_FAILED`). Net result: 326/326 unit tests pass.
+  - **DRY cleanup in `main.cpp`**: Removed 54-line duplicated pattern results reconstruction block (two identical 24-field copy-and-assign sections for single-loop vs multi-loop display). Replaced with `extract_pattern_results_at()` helper in `src/pattern_benchmark/pattern_statistics_manager.cpp` that takes a `PatternStatistics` and an index, returning a populated `PatternResults`. The two call sites now differ only in the index parameter (`0` vs `last_idx`). Added bounds clamping and empty-vector guard.
+  - **Graceful Ctrl+C shutdown**: Added signal handling infrastructure so that pressing Ctrl+C during a long benchmark run (`-count`, `-loops`) stops the program between test phases or between loops instead of killing it mid-flight. Worker threads inherit a blocked SIGINT/SIGTERM mask so only the main thread handles interruption. The main thread checks for pending signals via `sigpending()` between test phases in `run_single_benchmark_loop()`, between individual pattern types in `run_pattern_benchmarks()`, and between loops in `run_all_benchmarks()` / `run_all_pattern_benchmarks()`. On interrupt, partial results from completed phases/loops are printed with an "Interrupted by user. Partial results shown." message, then the program exits cleanly with `EXIT_SUCCESS`. New module `src/core/signal/` with `signal_handler.h` and `signal_handler.cpp`.
+
 ## [0.54.0] - 2026-03-19
 
 Changes in benchmark ASM kernels.

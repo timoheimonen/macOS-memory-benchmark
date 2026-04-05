@@ -36,6 +36,12 @@
 void print_usage(const char* prog_name);
 
 /**
+ * @brief Print help text to stdout (for -h/--help)
+ * @param prog_name Program name (typically argv[0])
+ */
+void print_help(const char* prog_name);
+
+/**
  * @brief Print benchmark setup details
  * @param buffer_size Buffer size in bytes
  * @param buffer_size_mb Buffer size in megabytes

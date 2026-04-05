@@ -32,6 +32,7 @@
 #include "pattern_benchmark/pattern_benchmark.h"
 #include "core/config/config.h"
 #include "core/config/constants.h"
+#include "core/signal/signal_handler.h"
 #include "output/console/messages/messages_api.h"
 #include <iostream>
 #include <vector>
@@ -96,6 +97,12 @@ int run_all_pattern_benchmarks(const BenchmarkBuffers& buffers, const BenchmarkC
   
   // Main pattern benchmark loop
   for (int loop = 0; loop < config.loop_count; ++loop) {
+    // Check for Ctrl+C between pattern loops
+    if (signal_received()) {
+      std::cout << std::endl << Messages::msg_interrupted_by_user() << std::endl;
+      return EXIT_SUCCESS;
+    }
+
     try {
       PatternResults loop_results;
       
@@ -140,4 +147,40 @@ int run_all_pattern_benchmarks(const BenchmarkBuffers& buffers, const BenchmarkC
   }
   
   return EXIT_SUCCESS;
+}
+
+PatternResults extract_pattern_results_at(const PatternStatistics& stats, size_t index) {
+  PatternResults result;
+
+  if (stats.all_forward_read_bw.empty()) {
+    return result;
+  }
+
+  if (index >= stats.all_forward_read_bw.size()) {
+    index = stats.all_forward_read_bw.size() - 1;
+  }
+
+  result.forward_read_bw = stats.all_forward_read_bw[index];
+  result.forward_write_bw = stats.all_forward_write_bw[index];
+  result.forward_copy_bw = stats.all_forward_copy_bw[index];
+  result.reverse_read_bw = stats.all_reverse_read_bw[index];
+  result.reverse_write_bw = stats.all_reverse_write_bw[index];
+  result.reverse_copy_bw = stats.all_reverse_copy_bw[index];
+  result.strided_64_read_bw = stats.all_strided_64_read_bw[index];
+  result.strided_64_write_bw = stats.all_strided_64_write_bw[index];
+  result.strided_64_copy_bw = stats.all_strided_64_copy_bw[index];
+  result.strided_4096_read_bw = stats.all_strided_4096_read_bw[index];
+  result.strided_4096_write_bw = stats.all_strided_4096_write_bw[index];
+  result.strided_4096_copy_bw = stats.all_strided_4096_copy_bw[index];
+  result.strided_16384_read_bw = stats.all_strided_16384_read_bw[index];
+  result.strided_16384_write_bw = stats.all_strided_16384_write_bw[index];
+  result.strided_16384_copy_bw = stats.all_strided_16384_copy_bw[index];
+  result.strided_2mb_read_bw = stats.all_strided_2mb_read_bw[index];
+  result.strided_2mb_write_bw = stats.all_strided_2mb_write_bw[index];
+  result.strided_2mb_copy_bw = stats.all_strided_2mb_copy_bw[index];
+  result.random_read_bw = stats.all_random_read_bw[index];
+  result.random_write_bw = stats.all_random_write_bw[index];
+  result.random_copy_bw = stats.all_random_copy_bw[index];
+
+  return result;
 }

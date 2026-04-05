@@ -51,6 +51,7 @@
 #include "benchmark/benchmark_results.h"   // Results calculation functions
 #include "output/console/messages/messages_api.h"             // Centralized messages
 #include "core/config/constants.h"
+#include "core/signal/signal_handler.h"
 #include <atomic>
 #include <cstdlib>
 #include <iostream>
@@ -623,6 +624,7 @@ BenchmarkResults run_single_benchmark_loop(const BenchmarkBuffers& buffers, Benc
         throw std::runtime_error("Failed to prepare main memory bandwidth buffers");
       }
       run_main_memory_bandwidth_tests(main_bandwidth_buffers, config, timings, test_timer);
+      if (signal_received()) return results;
 
       BenchmarkBuffers cache_bandwidth_buffers;
       if (prepare_cache_bandwidth_buffers(config, cache_bandwidth_buffers) != EXIT_SUCCESS) {
@@ -637,6 +639,7 @@ BenchmarkResults run_single_benchmark_loop(const BenchmarkBuffers& buffers, Benc
         throw std::runtime_error("Failed to prepare cache latency buffers");
       }
       run_cache_latency_tests(cache_latency_buffers, config, timings, results, test_timer);
+      if (signal_received()) return results;
 
       BenchmarkBuffers main_latency_buffers;
       if (prepare_main_memory_latency_buffer(config, main_latency_buffers) != EXIT_SUCCESS) {
@@ -650,18 +653,21 @@ BenchmarkResults run_single_benchmark_loop(const BenchmarkBuffers& buffers, Benc
         throw std::runtime_error("Failed to prepare main memory bandwidth buffers");
       }
       run_main_memory_bandwidth_tests(main_bandwidth_buffers, config, timings, test_timer);
+      if (signal_received()) return results;
 
       BenchmarkBuffers cache_bandwidth_buffers;
       if (prepare_cache_bandwidth_buffers(config, cache_bandwidth_buffers) != EXIT_SUCCESS) {
         throw std::runtime_error("Failed to prepare cache bandwidth buffers");
       }
       run_cache_bandwidth_tests(cache_bandwidth_buffers, config, timings, test_timer);
+      if (signal_received()) return results;
 
       BenchmarkBuffers cache_latency_buffers;
       if (prepare_cache_latency_buffers(config, cache_latency_buffers) != EXIT_SUCCESS) {
         throw std::runtime_error("Failed to prepare cache latency buffers");
       }
       run_cache_latency_tests(cache_latency_buffers, config, timings, results, test_timer);
+      if (signal_received()) return results;
 
       BenchmarkBuffers main_latency_buffers;
       if (prepare_main_memory_latency_buffer(config, main_latency_buffers) != EXIT_SUCCESS) {
