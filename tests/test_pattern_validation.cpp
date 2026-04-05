@@ -23,263 +23,147 @@
 #include <iostream>
 #include <cstdlib>
 
-// Test validate_stride behavior indirectly through pattern benchmarks
-// When buffer is smaller than stride, pattern should be skipped (not error)
-TEST(PatternValidationTest, ValidateStrideBufferSmallerThanStride) {
+// Shared helper: configure for pattern-only mode with minimal buffers
+// run_patterns=true skips latency/cache buffer allocation and initialization,
+// allowing tests to use buffer sizes below LATENCY_STRIDE_BYTES * 2.
+static BenchmarkConfig make_pattern_validation_config(size_t buffer_size) {
   using namespace Constants;
-  
   BenchmarkConfig config;
-  // Use buffer smaller than stride, but need at least LATENCY_STRIDE_BYTES * 2 for latency chain
-  // So we'll use a larger buffer but test that strided patterns with stride > effective_buffer_size are skipped
-  config.buffer_size = 512;  // Large enough for latency chain
-  config.l1_buffer_size = 0;  // Disable cache buffers
+  config.buffer_size = buffer_size;
+  config.l1_buffer_size = 0;
   config.l2_buffer_size = 0;
   config.use_custom_cache_size = false;
   config.iterations = 1;
   config.num_threads = 1;
-  
+  config.run_patterns = true;
   initialize_system_info(config);
-  
+  return config;
+}
+
+// ============================================================================
+// 64B (cache line) stride boundary tests
+//
+// calculate_strided_params subtracts PATTERN_ACCESS_SIZE_BYTES (32) from
+// buffer_size before comparing with stride. So strided 64B pattern produces
+// results only when buffer_size >= 96 (= 64 + 32). Below 96, the pattern is
+// gracefully skipped (bw=0, EXIT_SUCCESS).
+// ============================================================================
+
+// buffer_size=95 = stride+31: 64B strided pattern skipped, other patterns succeed
+TEST(PatternValidationTest, ValidateStride64SkippedBelowEffectiveBoundary) {
+  using namespace Constants;
+  auto config = make_pattern_validation_config(PATTERN_STRIDE_CACHE_LINE + PATTERN_ACCESS_SIZE_BYTES - 1);
+
   BenchmarkBuffers buffers;
   ASSERT_TRUE(allocate_and_initialize_buffers(config, buffers));
-  
+
   PatternResults results;
-  int result = run_pattern_benchmarks(buffers, config, results);
-  
-  // Should succeed
-  EXPECT_EQ(result, EXIT_SUCCESS);
-  
-  // With 512 byte buffer, patterns should complete successfully
-  // Strided 4096B should be skipped (buffer too small)
+  EXPECT_EQ(run_pattern_benchmarks(buffers, config, results), EXIT_SUCCESS);
+  EXPECT_GT(results.forward_read_bw, 0.0);
+  EXPECT_EQ(results.strided_64_read_bw, 0.0);
+  EXPECT_EQ(results.strided_4096_read_bw, 0.0);
+}
+
+// buffer_size=96 = stride+32: 64B strided pattern produces results
+TEST(PatternValidationTest, ValidateStride64AtEffectiveBoundary) {
+  using namespace Constants;
+  auto config = make_pattern_validation_config(PATTERN_STRIDE_CACHE_LINE + PATTERN_ACCESS_SIZE_BYTES);
+
+  BenchmarkBuffers buffers;
+  ASSERT_TRUE(allocate_and_initialize_buffers(config, buffers));
+
+  PatternResults results;
+  EXPECT_EQ(run_pattern_benchmarks(buffers, config, results), EXIT_SUCCESS);
+  EXPECT_GT(results.strided_64_read_bw, 0.0);
+  EXPECT_EQ(results.strided_4096_read_bw, 0.0);
+}
+
+// ============================================================================
+// Page (4096B) stride boundary tests
+//
+// Strided 4096B pattern produces results only when buffer_size >= 4128 (= 4096 + 32).
+// ============================================================================
+
+// buffer_size=4095 < stride: validate_stride fails (silently skips)
+TEST(PatternValidationTest, ValidateStridePageBelowStrideBoundary) {
+  using namespace Constants;
+  auto config = make_pattern_validation_config(PATTERN_STRIDE_PAGE - 1);
+
+  BenchmarkBuffers buffers;
+  ASSERT_TRUE(allocate_and_initialize_buffers(config, buffers));
+
+  PatternResults results;
+  EXPECT_EQ(run_pattern_benchmarks(buffers, config, results), EXIT_SUCCESS);
   EXPECT_EQ(results.strided_4096_read_bw, 0.0);
   EXPECT_EQ(results.strided_16384_read_bw, 0.0);
   EXPECT_EQ(results.strided_2mb_read_bw, 0.0);
 }
 
-// Test validate_stride with buffer equal to stride - boundary case
-TEST(PatternValidationTest, ValidateStrideBufferEqualToStride) {
+// buffer_size=4096 == stride: validate passes but calculate_strided_params skips (effective < stride)
+TEST(PatternValidationTest, ValidateStridePageAtStrideBoundary) {
   using namespace Constants;
-  
-  BenchmarkConfig config;
-  // Need at least LATENCY_STRIDE_BYTES * 2 for latency chain
-  config.buffer_size = 512;  // Large enough for latency chain
-  config.l1_buffer_size = 0;  // Disable cache buffers
-  config.l2_buffer_size = 0;
-  config.use_custom_cache_size = false;
-  config.iterations = 1;
-  config.num_threads = 1;
-  
-  initialize_system_info(config);
-  
-  BenchmarkBuffers buffers;
-  ASSERT_TRUE(allocate_and_initialize_buffers(config, buffers));
-  
-  PatternResults results;
-  int result = run_pattern_benchmarks(buffers, config, results);
-  
-  // Should succeed
-  EXPECT_EQ(result, EXIT_SUCCESS);
-  
-  // Test should complete successfully
-  SUCCEED();
-}
+  auto config = make_pattern_validation_config(PATTERN_STRIDE_PAGE);
 
-// Test buffer size progression: buffer < PATTERN_MIN_BUFFER_SIZE_BYTES
-TEST(PatternValidationTest, BufferSizeProgressionLessThanMin) {
-  using namespace Constants;
-  
-  BenchmarkConfig config;
-  // Need at least LATENCY_STRIDE_BYTES * 2 for latency chain
-  config.buffer_size = 512;  // Large enough for latency chain
-  config.l1_buffer_size = 0;  // Disable cache buffers
-  config.l2_buffer_size = 0;
-  config.use_custom_cache_size = false;
-  config.iterations = 1;
-  config.num_threads = 1;
-  
-  initialize_system_info(config);
-  
   BenchmarkBuffers buffers;
   ASSERT_TRUE(allocate_and_initialize_buffers(config, buffers));
-  
-  PatternResults results;
-  int result = run_pattern_benchmarks(buffers, config, results);
-  
-  // Should succeed
-  EXPECT_EQ(result, EXIT_SUCCESS);
-}
 
-// Test buffer size progression: buffer == PATTERN_MIN_BUFFER_SIZE_BYTES
-TEST(PatternValidationTest, BufferSizeProgressionEqualToMin) {
-  using namespace Constants;
-  
-  BenchmarkConfig config;
-  // Need at least LATENCY_STRIDE_BYTES * 2 for latency chain
-  config.buffer_size = 512;  // Large enough for latency chain
-  config.l1_buffer_size = 0;  // Disable cache buffers
-  config.l2_buffer_size = 0;
-  config.use_custom_cache_size = false;
-  config.iterations = 1;
-  config.num_threads = 1;
-  
-  initialize_system_info(config);
-  
-  BenchmarkBuffers buffers;
-  ASSERT_TRUE(allocate_and_initialize_buffers(config, buffers));
-  
   PatternResults results;
-  int result = run_pattern_benchmarks(buffers, config, results);
-  
-  // Should succeed
-  EXPECT_EQ(result, EXIT_SUCCESS);
-}
-
-// Test buffer size progression: buffer < PATTERN_STRIDE_CACHE_LINE
-TEST(PatternValidationTest, BufferSizeProgressionLessThanCacheLine) {
-  using namespace Constants;
-  
-  BenchmarkConfig config;
-  // Need at least LATENCY_STRIDE_BYTES * 2 for latency chain
-  config.buffer_size = 512;  // Large enough for latency chain
-  config.l1_buffer_size = 0;  // Disable cache buffers
-  config.l2_buffer_size = 0;
-  config.use_custom_cache_size = false;
-  config.iterations = 1;
-  config.num_threads = 1;
-  
-  initialize_system_info(config);
-  
-  BenchmarkBuffers buffers;
-  ASSERT_TRUE(allocate_and_initialize_buffers(config, buffers));
-  
-  PatternResults results;
-  int result = run_pattern_benchmarks(buffers, config, results);
-  
-  // Should succeed
-  EXPECT_EQ(result, EXIT_SUCCESS);
-  
-  // Test should complete successfully
-  SUCCEED();
-}
-
-// Test buffer size progression: buffer == PATTERN_STRIDE_CACHE_LINE
-TEST(PatternValidationTest, BufferSizeProgressionEqualToCacheLine) {
-  using namespace Constants;
-  
-  BenchmarkConfig config;
-  // Need at least LATENCY_STRIDE_BYTES * 2 for latency chain
-  config.buffer_size = 512;  // Large enough for latency chain
-  config.l1_buffer_size = 0;  // Disable cache buffers
-  config.l2_buffer_size = 0;
-  config.use_custom_cache_size = false;
-  config.iterations = 1;
-  config.num_threads = 1;
-  
-  initialize_system_info(config);
-  
-  BenchmarkBuffers buffers;
-  ASSERT_TRUE(allocate_and_initialize_buffers(config, buffers));
-  
-  PatternResults results;
-  int result = run_pattern_benchmarks(buffers, config, results);
-  
-  // Should succeed
-  EXPECT_EQ(result, EXIT_SUCCESS);
-  
-  // Test should complete successfully
-  SUCCEED();
-}
-
-// Test buffer size progression: buffer == PATTERN_STRIDE_CACHE_LINE + 1
-TEST(PatternValidationTest, BufferSizeProgressionJustLargerThanCacheLine) {
-  using namespace Constants;
-  
-  BenchmarkConfig config;
-  // Need at least LATENCY_STRIDE_BYTES * 2 for latency chain
-  config.buffer_size = 512;  // Large enough for latency chain
-  config.l1_buffer_size = 0;  // Disable cache buffers
-  config.l2_buffer_size = 0;
-  config.use_custom_cache_size = false;
-  config.iterations = 1;
-  config.num_threads = 1;
-  
-  initialize_system_info(config);
-  
-  BenchmarkBuffers buffers;
-  ASSERT_TRUE(allocate_and_initialize_buffers(config, buffers));
-  
-  PatternResults results;
-  int result = run_pattern_benchmarks(buffers, config, results);
-  
-  // Should succeed
-  EXPECT_EQ(result, EXIT_SUCCESS);
-  
-  // Test should complete successfully
-  SUCCEED();
-}
-
-// Test buffer size progression: buffer < PATTERN_STRIDE_PAGE
-TEST(PatternValidationTest, BufferSizeProgressionLessThanPage) {
-  using namespace Constants;
-  
-  BenchmarkConfig config;
-  config.buffer_size = PATTERN_STRIDE_PAGE - 1;  // 4095 bytes
-  config.iterations = 1;
-  config.num_threads = 1;
-  
-  initialize_system_info(config);
-  
-  BenchmarkBuffers buffers;
-  ASSERT_TRUE(allocate_and_initialize_buffers(config, buffers));
-  
-  PatternResults results;
-  int result = run_pattern_benchmarks(buffers, config, results);
-  
-  // Should succeed (strided 4096B pattern skipped)
-  EXPECT_EQ(result, EXIT_SUCCESS);
+  EXPECT_EQ(run_pattern_benchmarks(buffers, config, results), EXIT_SUCCESS);
   EXPECT_EQ(results.strided_4096_read_bw, 0.0);
   EXPECT_EQ(results.strided_16384_read_bw, 0.0);
   EXPECT_EQ(results.strided_2mb_read_bw, 0.0);
 }
 
-// Test buffer size progression: buffer == PATTERN_STRIDE_PAGE
-TEST(PatternValidationTest, BufferSizeProgressionEqualToPage) {
+// buffer_size=4128 = stride+32: 4096B strided pattern produces results
+TEST(PatternValidationTest, ValidateStridePageAtEffectiveBoundary) {
   using namespace Constants;
-  
-  BenchmarkConfig config;
-  config.buffer_size = PATTERN_STRIDE_PAGE;  // 4096 bytes
-  config.iterations = 1;
-  config.num_threads = 1;
-  
-  initialize_system_info(config);
-  
+  auto config = make_pattern_validation_config(PATTERN_STRIDE_PAGE + PATTERN_ACCESS_SIZE_BYTES);
+
   BenchmarkBuffers buffers;
   ASSERT_TRUE(allocate_and_initialize_buffers(config, buffers));
-  
+
   PatternResults results;
-  int result = run_pattern_benchmarks(buffers, config, results);
-  
-  // Should succeed
-  EXPECT_EQ(result, EXIT_SUCCESS);
+  EXPECT_EQ(run_pattern_benchmarks(buffers, config, results), EXIT_SUCCESS);
+  EXPECT_GT(results.strided_4096_read_bw, 0.0);
+  EXPECT_EQ(results.strided_16384_read_bw, 0.0);
+  EXPECT_EQ(results.strided_2mb_read_bw, 0.0);
 }
 
-// Test buffer size progression: buffer == PATTERN_STRIDE_PAGE + 1
-TEST(PatternValidationTest, BufferSizeProgressionJustLargerThanPage) {
+// ============================================================================
+// 16KB page stride boundary tests
+// ============================================================================
+
+// buffer_size=16416 = 16K+32: 16K strided pattern produces results
+TEST(PatternValidationTest, ValidateStride16KAtEffectiveBoundary) {
   using namespace Constants;
-  
-  BenchmarkConfig config;
-  config.buffer_size = PATTERN_STRIDE_PAGE + 1;  // 4097 bytes
-  config.iterations = 1;
-  config.num_threads = 1;
-  
-  initialize_system_info(config);
-  
+  auto config = make_pattern_validation_config(PATTERN_STRIDE_PAGE_16K + PATTERN_ACCESS_SIZE_BYTES);
+
   BenchmarkBuffers buffers;
   ASSERT_TRUE(allocate_and_initialize_buffers(config, buffers));
-  
+
   PatternResults results;
-  int result = run_pattern_benchmarks(buffers, config, results);
-  
-  // Should succeed
-  EXPECT_EQ(result, EXIT_SUCCESS);
+  EXPECT_EQ(run_pattern_benchmarks(buffers, config, results), EXIT_SUCCESS);
+  EXPECT_GT(results.strided_4096_read_bw, 0.0);
+  EXPECT_GT(results.strided_16384_read_bw, 0.0);
+  EXPECT_EQ(results.strided_2mb_read_bw, 0.0);
+}
+
+// ============================================================================
+// 2MB superpage stride boundary test
+// ============================================================================
+
+// buffer_size=2MB+32: 2MB strided pattern produces results
+TEST(PatternValidationTest, ValidateStrideSuperpage2MBAtEffectiveBoundary) {
+  using namespace Constants;
+  auto config = make_pattern_validation_config(PATTERN_STRIDE_SUPERPAGE_2MB + PATTERN_ACCESS_SIZE_BYTES);
+
+  BenchmarkBuffers buffers;
+  ASSERT_TRUE(allocate_and_initialize_buffers(config, buffers));
+
+  PatternResults results;
+  EXPECT_EQ(run_pattern_benchmarks(buffers, config, results), EXIT_SUCCESS);
+  EXPECT_GT(results.strided_64_read_bw, 0.0);
+  EXPECT_GT(results.strided_4096_read_bw, 0.0);
+  EXPECT_GT(results.strided_16384_read_bw, 0.0);
+  EXPECT_GT(results.strided_2mb_read_bw, 0.0);
 }

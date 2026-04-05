@@ -26,39 +26,6 @@
 #include <cmath>     // std::isnan, std::isinf
 #include <unistd.h>  // getpagesize
 
-// Test that BenchmarkStatistics is properly initialized
-TEST(BenchmarkRunnerTest, StatisticsInitialization) {
-  BenchmarkStatistics stats;
-  
-  // Vectors should be empty initially
-  EXPECT_TRUE(stats.all_read_bw_gb_s.empty());
-  EXPECT_TRUE(stats.all_write_bw_gb_s.empty());
-  EXPECT_TRUE(stats.all_copy_bw_gb_s.empty());
-  EXPECT_TRUE(stats.all_l1_latency_ns.empty());
-  EXPECT_TRUE(stats.all_l2_latency_ns.empty());
-  EXPECT_TRUE(stats.all_average_latency_ns.empty());
-  EXPECT_TRUE(stats.all_tlb_hit_latency_ns.empty());
-  EXPECT_TRUE(stats.all_tlb_miss_latency_ns.empty());
-  EXPECT_TRUE(stats.all_page_walk_penalty_ns.empty());
-}
-
-// Test BenchmarkResults default values
-TEST(BenchmarkRunnerTest, BenchmarkResultsDefaults) {
-  BenchmarkResults results;
-  
-  EXPECT_EQ(results.read_bw_gb_s, 0.0);
-  EXPECT_EQ(results.write_bw_gb_s, 0.0);
-  EXPECT_EQ(results.copy_bw_gb_s, 0.0);
-  EXPECT_EQ(results.average_latency_ns, 0.0);
-  EXPECT_EQ(results.l1_latency_ns, 0.0);
-  EXPECT_EQ(results.l2_latency_ns, 0.0);
-  EXPECT_EQ(results.custom_latency_ns, 0.0);
-  EXPECT_FALSE(results.has_auto_tlb_breakdown);
-  EXPECT_EQ(results.tlb_hit_latency_ns, 0.0);
-  EXPECT_EQ(results.tlb_miss_latency_ns, 0.0);
-  EXPECT_EQ(results.page_walk_penalty_ns, 0.0);
-}
-
 // Test statistics structure after run_all_benchmarks clears vectors
 // Note: This test verifies the clearing behavior without running actual benchmarks
 TEST(BenchmarkRunnerTest, StatisticsClearing) {
@@ -137,53 +104,6 @@ TEST(BenchmarkRunnerTest, StatisticsReservationIntegration) {
   EXPECT_EQ(static_cast<int>(stats.all_tlb_hit_latency_ns.size()), config.loop_count);
   EXPECT_EQ(static_cast<int>(stats.all_tlb_miss_latency_ns.size()), config.loop_count);
   EXPECT_EQ(static_cast<int>(stats.all_page_walk_penalty_ns.size()), config.loop_count);
-}
-
-// Test BenchmarkStatistics structure size and layout
-TEST(BenchmarkRunnerTest, StatisticsStructure) {
-  BenchmarkStatistics stats;
-  
-  // Verify all expected vectors exist and are accessible
-  stats.all_read_bw_gb_s.push_back(1.0);
-  stats.all_write_bw_gb_s.push_back(2.0);
-  stats.all_copy_bw_gb_s.push_back(3.0);
-  stats.all_l1_latency_ns.push_back(4.0);
-  stats.all_l2_latency_ns.push_back(5.0);
-  stats.all_average_latency_ns.push_back(6.0);
-  stats.all_tlb_hit_latency_ns.push_back(6.5);
-  stats.all_tlb_miss_latency_ns.push_back(6.8);
-  stats.all_page_walk_penalty_ns.push_back(0.3);
-  stats.all_l1_read_bw_gb_s.push_back(7.0);
-  stats.all_l1_write_bw_gb_s.push_back(8.0);
-  stats.all_l1_copy_bw_gb_s.push_back(9.0);
-  stats.all_l2_read_bw_gb_s.push_back(10.0);
-  stats.all_l2_write_bw_gb_s.push_back(11.0);
-  stats.all_l2_copy_bw_gb_s.push_back(12.0);
-  stats.all_custom_latency_ns.push_back(13.0);
-  stats.all_custom_read_bw_gb_s.push_back(14.0);
-  stats.all_custom_write_bw_gb_s.push_back(15.0);
-  stats.all_custom_copy_bw_gb_s.push_back(16.0);
-  
-  // Verify values were stored correctly
-  EXPECT_EQ(stats.all_read_bw_gb_s[0], 1.0);
-  EXPECT_EQ(stats.all_write_bw_gb_s[0], 2.0);
-  EXPECT_EQ(stats.all_copy_bw_gb_s[0], 3.0);
-  EXPECT_EQ(stats.all_l1_latency_ns[0], 4.0);
-  EXPECT_EQ(stats.all_l2_latency_ns[0], 5.0);
-  EXPECT_EQ(stats.all_average_latency_ns[0], 6.0);
-  EXPECT_EQ(stats.all_tlb_hit_latency_ns[0], 6.5);
-  EXPECT_EQ(stats.all_tlb_miss_latency_ns[0], 6.8);
-  EXPECT_EQ(stats.all_page_walk_penalty_ns[0], 0.3);
-  EXPECT_EQ(stats.all_l1_read_bw_gb_s[0], 7.0);
-  EXPECT_EQ(stats.all_l1_write_bw_gb_s[0], 8.0);
-  EXPECT_EQ(stats.all_l1_copy_bw_gb_s[0], 9.0);
-  EXPECT_EQ(stats.all_l2_read_bw_gb_s[0], 10.0);
-  EXPECT_EQ(stats.all_l2_write_bw_gb_s[0], 11.0);
-  EXPECT_EQ(stats.all_l2_copy_bw_gb_s[0], 12.0);
-  EXPECT_EQ(stats.all_custom_latency_ns[0], 13.0);
-  EXPECT_EQ(stats.all_custom_read_bw_gb_s[0], 14.0);
-  EXPECT_EQ(stats.all_custom_write_bw_gb_s[0], 15.0);
-  EXPECT_EQ(stats.all_custom_copy_bw_gb_s[0], 16.0);
 }
 
 // Test that benchmark results are valid and reasonable

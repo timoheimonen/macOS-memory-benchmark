@@ -34,6 +34,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
   - **Compiler warning in buffer overflow checks**: Fixed `-Wimplicit-const-int-float-conversion` warnings in `buffer_calculator.cpp` where `std::numeric_limits<size_t>::max()` was implicitly converted to `double` during L1/L2 buffer size factor division. Overflow checks now use integer arithmetic via `static_cast<size_t>(factor)`.
+  - **Test correctness and cleanup**: Reviewed all 17 test files (~140 test cases) for correctness and necessity. Fixed 7 `PatternValidationTest` cases that claimed to test specific buffer-size boundaries but all used identical `buffer_size=512` without varying the boundary. Tests now use correct buffer sizes targeting the effective stride boundary (`stride + PATTERN_ACCESS_SIZE_BYTES`), matching each test name to actual behavior. Removed duplicate `AllPatternTypesComplete` test (identical to `RunPatternBenchmarksMinimalIntegration`). Removed 3 trivial struct-default tests (`StatisticsInitialization`, `BenchmarkResultsDefaults`, `StatisticsStructure`) that only tested C++ language behavior. Fixed stale comments claiming L1/L2 buffer size factors are 75%/10% when constants are 100%. Removed redundant `MAP_FAILED` assertions from `MemoryManagerTest` (allocator returns valid pointer or `nullptr`, never `MAP_FAILED`). Net result: 325/325 unit tests pass.
 
 ## [0.54.0] - 2026-03-19
 

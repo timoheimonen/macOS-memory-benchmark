@@ -359,11 +359,11 @@ TEST(ConfigTest, CalculateBufferSizes) {
   
   calculate_buffer_sizes(config);
   
-  // L1 should be 75% of cache size, rounded to stride
+  // L1 should be 100% of cache size, rounded to stride
   EXPECT_GT(config.l1_buffer_size, 0u);
   EXPECT_LE(config.l1_buffer_size, config.l1_cache_size);
   
-  // L2 should be 10% of cache size, rounded to stride
+  // L2 should be 100% of cache size, rounded to stride
   EXPECT_GT(config.l2_buffer_size, 0u);
   EXPECT_LE(config.l2_buffer_size, config.l2_cache_size);
 }
