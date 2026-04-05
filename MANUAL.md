@@ -68,17 +68,19 @@ make
 
 ### First run
 
-If installed from Homebrew:
+Running with no arguments shows help:
 
 ```bash
 memory_benchmark
 ```
 
-If built from source:
+To run the standard memory benchmark:
 
 ```bash
-./memory_benchmark
+memory_benchmark -benchmark
 ```
+
+If built from source, use `./memory_benchmark` instead.
 
 All command examples in this manual use the installed/`PATH` form (`memory_benchmark ...`).
 If running from an uninstalled local source build, prefix commands with `./`.
@@ -86,7 +88,7 @@ If running from an uninstalled local source build, prefix commands with `./`.
 For longer runs, prevent sleep:
 
 ```bash
-caffeinate -i -d memory_benchmark -count 10 -buffersize 1024
+caffeinate -i -d memory_benchmark -benchmark -count 10 -buffersize 1024
 ```
 
 If running a local build, use `./memory_benchmark` instead of `memory_benchmark` (see note in "[First run](#first-run)").
@@ -189,6 +191,13 @@ Pattern mode (`-patterns`) measures bandwidth sensitivity across:
 
 ### Mode selection
 
+#### `-benchmark`
+
+- **Required** to run standard memory benchmark (bandwidth + latency)
+- Mutually exclusive with `-patterns`
+- Can be combined with `-only-bandwidth`, `-only-latency`, `-cache-size`, `-threads`, and other modifier flags
+- Running without this flag (or `-patterns`) shows help and exits
+
 #### `-patterns`
 
 - Runs only access-pattern benchmarks
@@ -197,11 +206,13 @@ Pattern mode (`-patterns`) measures bandwidth sensitivity across:
 #### `-only-bandwidth`
 
 - Runs bandwidth paths only
+- **Requires `-benchmark`**
 - Incompatible with: `-patterns`, `-cache-size` (any value including `0`), `-latency-samples`
 
 #### `-only-latency`
 
 - Runs latency paths only
+- **Requires `-benchmark`**
 - Incompatible with: `-patterns`, `-iterations`
 - Supports selective target disabling:
   - `-buffersize 0` disables main-memory latency
@@ -293,22 +304,22 @@ Pattern mode (`-patterns`) measures bandwidth sensitivity across:
 
 ```bash
 # Full benchmark
-memory_benchmark -count 10 -buffersize 1024 -output full.json
+memory_benchmark -benchmark -count 10 -buffersize 1024 -output full.json
 
 # Pattern-only
 memory_benchmark -patterns -count 5 -buffersize 512 -output patterns.json
 
 # Bandwidth-only
-memory_benchmark -only-bandwidth -threads 8 -count 5
+memory_benchmark -benchmark -only-bandwidth -threads 8 -count 5
 
 # Latency-only (both main + cache)
-memory_benchmark -only-latency -latency-samples 5000 -count 10
+memory_benchmark -benchmark -only-latency -latency-samples 5000 -count 10
 
 # Latency-only (main memory only)
-memory_benchmark -only-latency -cache-size 0 -buffersize 1024
+memory_benchmark -benchmark -only-latency -cache-size 0 -buffersize 1024
 
 # Latency-only (cache only)
-memory_benchmark -only-latency -buffersize 0 -cache-size 2048
+memory_benchmark -benchmark -only-latency -buffersize 0 -cache-size 2048
 
 # Standalone TLB analysis
 memory_benchmark -analyze-tlb
@@ -332,6 +343,9 @@ memory_benchmark -analyze-core2core -count 5 -latency-samples 2000 -output core2
 ### Invalid combinations
 
 ```bash
+# invalid: -benchmark with -patterns (mutually exclusive)
+memory_benchmark -benchmark -patterns
+
 # invalid: pattern mode with only-bandwidth
 memory_benchmark -patterns -only-bandwidth
 
@@ -361,7 +375,7 @@ memory_benchmark -analyze-core2core -threads 4
 ### Quick baseline
 
 ```bash
-memory_benchmark
+memory_benchmark -benchmark
 ```
 
 Good for a fast health check.
@@ -369,7 +383,7 @@ Good for a fast health check.
 ### Statistical baseline (recommended)
 
 ```bash
-caffeinate -i -d memory_benchmark -count 10 -buffersize 1024 -output baseline.json
+caffeinate -i -d memory_benchmark -benchmark -count 10 -buffersize 1024 -output baseline.json
 ```
 
 Use this for comparisons across machines or software versions.
@@ -386,19 +400,19 @@ Shows how bandwidth changes under different access patterns.
 
 ```bash
 # default locality mode
-memory_benchmark -only-latency -buffersize 1024 -latency-samples 5000 -count 10 -output lat_tlb16.json
+memory_benchmark -benchmark -only-latency -buffersize 1024 -latency-samples 5000 -count 10 -output lat_tlb16.json
 
 # global random chain
-memory_benchmark -only-latency -buffersize 1024 -latency-samples 5000 -latency-tlb-locality-kb 0 -count 10 -output lat_global.json
+memory_benchmark -benchmark -only-latency -buffersize 1024 -latency-samples 5000 -latency-tlb-locality-kb 0 -count 10 -output lat_global.json
 
 # same in-box random pattern (good for prefetch-vs-TLB comparisons)
-memory_benchmark -only-latency -buffersize 1024 -latency-samples 5000 -latency-tlb-locality-kb 16 -latency-chain-mode same-random-in-box -count 10 -output lat_same_box.json
+memory_benchmark -benchmark -only-latency -buffersize 1024 -latency-samples 5000 -latency-tlb-locality-kb 16 -latency-chain-mode same-random-in-box -count 10 -output lat_same_box.json
 ```
 
 ### Regular benchmark with automatic DRAM TLB breakdown
 
 ```bash
-memory_benchmark -latency-stride-bytes 128 -count 1
+memory_benchmark -benchmark -latency-stride-bytes 128 -count 1
 ```
 
 This prints `Average latency` plus auto-derived `TLB hit latency`, `TLB miss latency`, and
@@ -419,7 +433,7 @@ Quick first checks in the output file:
 ### Custom cache target
 
 ```bash
-memory_benchmark -cache-size 4096 -threads 1 -count 5 -output cache_4mb.json
+memory_benchmark -benchmark -cache-size 4096 -threads 1 -count 5 -output cache_4mb.json
 ```
 
 ### Cache-size sweep + trend plotting
@@ -507,7 +521,7 @@ For noisy systems, prioritize median and P95/P99 rather than single fastest/slow
   "main_memory": { ... },
   "cache": { ... },
   "timestamp": "2026-03-09T14:57:56Z",
-  "version": "0.54.1"
+  "version": "0.55.0"
 }
 ```
 
@@ -521,7 +535,7 @@ Note: The `configuration` block includes fields such as `latency_chain_mode` (th
   "execution_time_sec": 705.6,
   "patterns": { ... },
   "timestamp": "2026-03-09T15:10:01Z",
-  "version": "0.54.1"
+  "version": "0.55.0"
 }
 ```
 
@@ -724,7 +738,7 @@ What it does:
 - Extracts `.cache.custom.latency.samples_ns.statistics` into `script-examples/final_output.txt`
 - Clears `tmp` after extraction
 
-Important: the script currently invokes `memory_benchmark` from `PATH`. If you only built locally as `./memory_benchmark`, either install it to `PATH` or update `BENCHMARK_CMD` in the script.
+Important: the script currently invokes `memory_benchmark -benchmark` from `PATH`. If you only built locally as `./memory_benchmark`, either install it to `PATH` or update `BENCHMARK_CMD` in the script.
 
 ### `script-examples/plot_cache_percentiles.py`
 
@@ -851,4 +865,4 @@ memory_benchmark -h
 
 ---
 
-**Last Updated**: 2026-03-19
+**Last Updated**: 2026-04-05

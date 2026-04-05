@@ -98,24 +98,24 @@ Help:
 memory_benchmark -h
 ```
 
-Default run:
+Standard benchmark:
 
 ```bash
-memory_benchmark
+memory_benchmark -benchmark
 ```
 
 For longer runs, prevent sleep:
 
 ```bash
-caffeinate -i -d memory_benchmark -count 10 -buffersize 1024
+caffeinate -i -d memory_benchmark -benchmark -count 10 -buffersize 1024
 ```
 
 ## Benchmark Modes
 
-- **Default mode**: Runs main bandwidth + main latency + cache bandwidth + cache latency.
-- **`-patterns`**: Runs pattern bandwidth suite only (`sequential_forward`, `sequential_reverse`, `strided_64`, `strided_4096`, `strided_16384`, `strided_2mb`, `random`).
-- **`-only-bandwidth`**: Runs bandwidth paths only (`-patterns`, `-cache-size`, and `-latency-samples` are not allowed in this mode).
-- **`-only-latency`**: Runs latency paths only (`-patterns` and `-iterations` are not allowed in this mode).
+- **`-benchmark`**: Runs standard memory benchmark (main bandwidth + main latency + cache bandwidth + cache latency). **Required** to execute standard benchmarks. Mutually exclusive with `-patterns`.
+- **`-patterns`**: Runs pattern bandwidth suite only (`sequential_forward`, `sequential_reverse`, `strided_64`, `strided_4096`, `strided_16384`, `strided_2mb`, `random`). Mutually exclusive with `-benchmark`.
+- **`-only-bandwidth`**: Runs bandwidth paths only. **Requires `-benchmark`**. Cannot be used with `-patterns`, `-cache-size`, or `-latency-samples`.
+- **`-only-latency`**: Runs latency paths only. **Requires `-benchmark`**. Cannot be used with `-patterns` or `-iterations`.
 - **`-analyze-tlb`**: Runs standalone TLB analysis mode; only optional `-output <file>`, `-latency-stride-bytes <bytes>`, and `-latency-chain-mode <mode>` may be combined with it.
 - **`-analyze-core2core`**: Runs standalone core-to-core cache-line handoff analysis mode; only optional `-output <file>`, `-count <count>`, and `-latency-samples <count>` may be combined with it. See [CORE_TO_CORE_WHITEPAPER.md](CORE_TO_CORE_WHITEPAPER.md) for methodology and JSON contract.
 
@@ -126,6 +126,8 @@ Latency-specific disable controls in `-only-latency`:
 - Both disabled at once is invalid.
 
 ## Most-Used Options
+
+- `-benchmark`: Run standard memory benchmark. Mutually exclusive with `-patterns`. Required for standard, `-only-bandwidth`, and `-only-latency` modes.
 
 - `-buffersize <MB>`: Main buffer size (default `512`; auto-capped by memory safety rules).
 - `-iterations <count>`: Bandwidth iterations per loop (default `1000`).
@@ -146,7 +148,7 @@ Latency-specific disable controls in `-only-latency`:
 Statistical baseline:
 
 ```bash
-caffeinate -i -d memory_benchmark -count 10 -buffersize 1024 -output baseline.json
+caffeinate -i -d memory_benchmark -benchmark -count 10 -buffersize 1024 -output baseline.json
 ```
 
 Pattern analysis:
@@ -158,26 +160,26 @@ memory_benchmark -patterns -count 10 -buffersize 512 -output patterns.json
 Latency locality comparison:
 
 ```bash
-memory_benchmark -only-latency -buffersize 1024 -count 10 -latency-samples 5000 -latency-tlb-locality-kb 16 -output lat_tlb16.json
-memory_benchmark -only-latency -buffersize 1024 -count 10 -latency-samples 5000 -latency-tlb-locality-kb 0 -output lat_global.json
+memory_benchmark -benchmark -only-latency -buffersize 1024 -count 10 -latency-samples 5000 -latency-tlb-locality-kb 16 -output lat_tlb16.json
+memory_benchmark -benchmark -only-latency -buffersize 1024 -count 10 -latency-samples 5000 -latency-tlb-locality-kb 0 -output lat_global.json
 ```
 
 Regular benchmark with automatic DRAM TLB breakdown (omit `-latency-tlb-locality-kb`):
 
 ```bash
-memory_benchmark -latency-stride-bytes 128 -count 1
+memory_benchmark -benchmark -latency-stride-bytes 128 -count 1
 ```
 
 TLB-vs-cache isolation (smaller stride within pages):
 
 ```bash
-memory_benchmark -only-latency -buffersize 1024 -cache-size 4096 -latency-stride-bytes 64 -latency-tlb-locality-kb 16 -count 10 -latency-samples 5000 -output lat_stride64_tlb16.json
+memory_benchmark -benchmark -only-latency -buffersize 1024 -cache-size 4096 -latency-stride-bytes 64 -latency-tlb-locality-kb 16 -count 10 -latency-samples 5000 -output lat_stride64_tlb16.json
 ```
 
 Custom cache target:
 
 ```bash
-memory_benchmark -cache-size 4096 -threads 1 -count 5 -output cache_4mb.json
+memory_benchmark -benchmark -cache-size 4096 -threads 1 -count 5 -output cache_4mb.json
 ```
 
 Standalone TLB analysis report:
@@ -291,7 +293,7 @@ python3 script-examples/plot_cache_percentiles.py script-examples/final_output.t
 
 Supported metrics: `median`, `p90`, `p95`, `p99`, `average`, `min`, `max`, `stddev`.
 
-Note: `script-examples/latency_test_script.sh` invokes `memory_benchmark` from `PATH`. If you only built locally as `./memory_benchmark`, either install it or update `BENCHMARK_CMD` in the script.
+Note: `script-examples/latency_test_script.sh` invokes `memory_benchmark -benchmark` from `PATH`. If you only built locally as `./memory_benchmark`, either install it or update `BENCHMARK_CMD` in the script.
 
 ## Interpreting Results Under Active System Load
 

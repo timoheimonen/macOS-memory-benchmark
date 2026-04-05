@@ -132,6 +132,8 @@ const std::string& error_cache_size_zero_requires_only_latency();
 const std::string& error_only_latency_requires_latency_target();
 const std::string& error_only_latency_with_buffersize();
 const std::string& error_only_latency_with_iterations();
+std::string error_mutually_exclusive_modes(const std::string& mode1, const std::string& mode2);
+const std::string& error_only_flags_require_benchmark();
 
 // --- Warning Messages ---
 const std::string& warning_prefix();

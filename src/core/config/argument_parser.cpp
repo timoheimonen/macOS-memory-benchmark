@@ -400,8 +400,16 @@ int parse_arguments(int argc, char* argv[], BenchmarkConfig& config) {
         } else
           // Error: Missing required value
           throw std::invalid_argument(Messages::error_missing_value("-output"));
+      } else if (arg == "-benchmark") {
+        config.run_benchmark = true;
+        if (config.run_patterns) {
+          throw std::invalid_argument(Messages::error_mutually_exclusive_modes("-benchmark", "-patterns"));
+        }
       } else if (arg == "-patterns") {
         config.run_patterns = true;
+        if (config.run_benchmark) {
+          throw std::invalid_argument(Messages::error_mutually_exclusive_modes("-benchmark", "-patterns"));
+        }
       } else if (arg == "-non-cacheable") {
         config.use_non_cacheable = true;
       } else if (arg == "-only-bandwidth") {
@@ -420,6 +428,7 @@ int parse_arguments(int argc, char* argv[], BenchmarkConfig& config) {
           // Error: Missing required value
           throw std::invalid_argument(Messages::error_missing_value("-threads"));
       } else if (arg == "-h" || arg == "--help") {
+        config.help_printed = true;
         print_usage(argv[0]);
         return EXIT_SUCCESS;  // Special return value for help (not an error)
       } else {

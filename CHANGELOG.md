@@ -5,9 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.54.1] - 2026-04-04 - EXPERIMENTAL
+## [0.55.0] - 2026-04-05 - EXPERIMENTAL
 
 ### Changed
+  - **`-benchmark` flag required for standard benchmarks**: Running with no arguments now prints help instead of starting the benchmark. Use `-benchmark` to run the standard memory benchmark (replicates old default behavior). `-benchmark` and `-patterns` are mutually exclusive. Standalone modes (`-analyze-tlb`, `-analyze-core2core`) are unaffected.
+  - **`BenchmarkConfig` extended**: Added `bool run_benchmark` field to `BenchmarkConfig` struct (`config.h`) to track whether the user requested standard benchmark execution.
+  - **Modifier flags require a mode flag**: Running with only modifier flags (e.g., `-only-latency`, `-only-bandwidth`, `-buffersize`) without `-benchmark` or `-patterns` now prints help and exits.
+  - **Help text updated**: `-benchmark` documented as the first option; mutual exclusivity with `-patterns` noted in both option descriptions.
+  - **Documentation and scripts updated**: `README.md`, `MANUAL.md`, and `script-examples/` updated to reflect `-benchmark` requirement across all examples and workflow descriptions.
   - Main-memory read/write/copy ASM kernels converted from offset-add addressing to pointer-bump addressing (`src/asm/memory_read.s`, `src/asm/memory_write.s`, `src/asm/memory_copy.s`). The hot loop no longer recomputes `base + offset` each iteration; instead a running pointer advances directly, eliminating one `add` per 512B block.
   - Reduced `memory_write.s` zero-register setup from 24 to 8 `movi` instructions (the stnp pairs reuse the same zero registers).
   - Reduced `memory_write_reverse.s` zero-register setup from 24 to 8 `movi` instructions, matching the forward write kernel. The 512B loop and 256B cleanup now reuse `q0–q7` for all 16 stnp pairs instead of using separate `q16–q31` registers.
@@ -17,9 +22,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - **Last-point strong-step compensation**: Final sweep points with very large steps (>=8 ns or >=25%) now get effective persistence, preventing massive last-point steps from being downgraded to Low confidence.
 
 ### Added
+  - **`-benchmark` CLI flag**: New explicit mode flag to run the standard memory benchmark. Required for standard, `-only-bandwidth`, and `-only-latency` modes. Mutually exclusive with `-patterns`. When omitted (and no other mode flag is set), the program prints help and exits.
+  - **Mutual exclusion validation**: Added runtime check that rejects `-benchmark` and `-patterns` together with a clear error message.
+  - **New error message `error_mutually_exclusive_modes()`**: Centralized mutual-exclusion error string in the Messages system.
   - **IQR-overlap rejection in TLB boundary detection**: When raw per-point loop latencies are available, the detector compares baseline Q3 with candidate Q1 and rejects boundaries where the step falls within measurement noise overlap.
   - **Multi-point persistence window**: Boundary persistence is now evaluated over a 3-point future window using majority rule (2 of 3), replacing the previous single-point check.
   - **New test cases for improved TLB detection**: Added `DetectBoundaryMultiPointPersistenceSurvivesNoiseDip`, `DetectBoundaryRejectsNoisyStepByIQR`, `DetectBoundaryAcceptsClearStepWithIQR`, and `DetectBoundaryLastPointStrongStepGetsMediumConfidence` tests.
+  - **New tests for `-benchmark` flag**: Added `ConfigTest.ParseBenchmarkFlag`, `ConfigTest.ParseBenchmarkWithModifiers`, `ConfigTest.ParsePatternsSetsRunPatterns`, and `ConfigTest.BenchmarkPatternsMutuallyExclusive` tests. Updated existing validation tests to set `run_benchmark = true` where required.
+  - **Parameter compatibility matrix**: Added `PARAMETER_MATRIX.md` documenting all CLI flag combinations and their validity.
   - **`-analyze-tlb` sweep progress now shows measured latency**: Each sweep step now prints the measured P50 latency alongside the locality label (e.g., `[1/15] Locality 16 KB — 10.23 ns`), giving real-time per-step feedback during the analysis sweep.
 
 ### Fixed

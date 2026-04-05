@@ -310,6 +310,14 @@ TEST_F(MessagesErrorTest, ErrorTimerCreationFailed) {
   EXPECT_EQ(&msg, &Messages::error_timer_creation_failed());
 }
 
+TEST_F(MessagesErrorTest, ErrorOnlyFlagsRequireBenchmark) {
+  const std::string& msg = Messages::error_only_flags_require_benchmark();
+  EXPECT_NE(msg.find("-only-bandwidth"), std::string::npos);
+  EXPECT_NE(msg.find("-only-latency"), std::string::npos);
+  EXPECT_NE(msg.find("-benchmark"), std::string::npos);
+  EXPECT_EQ(&msg, &Messages::error_only_flags_require_benchmark());
+}
+
 // ============================================================================
 // Warning Messages Tests (using fixture)
 // ============================================================================
@@ -433,6 +441,7 @@ TEST_F(MessagesFormattingTest, UsageHeader) {
 TEST_F(MessagesFormattingTest, UsageOptions) {
   std::string msg = Messages::usage_options("memory_benchmark");
   EXPECT_NE(msg.find("memory_benchmark"), std::string::npos);
+  EXPECT_NE(msg.find("-benchmark"), std::string::npos);
   EXPECT_NE(msg.find("-iterations"), std::string::npos);
   EXPECT_NE(msg.find("-buffersize"), std::string::npos);
   EXPECT_NE(msg.find("-count"), std::string::npos);

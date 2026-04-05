@@ -456,4 +456,13 @@ const std::string& error_only_latency_with_iterations() {
   return msg;
 }
 
+std::string error_mutually_exclusive_modes(const std::string& mode1, const std::string& mode2) {
+  return mode1 + " and " + mode2 + " are mutually exclusive (cannot use both together)";
+}
+
+const std::string& error_only_flags_require_benchmark() {
+  static const std::string msg = "-only-bandwidth and -only-latency require -benchmark flag";
+  return msg;
+}
+
 } // namespace Messages

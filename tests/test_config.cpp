@@ -305,6 +305,51 @@ TEST(ConfigTest, ParseHelpFlag) {
   EXPECT_EQ(result, EXIT_SUCCESS);  // Help returns SUCCESS
 }
 
+// Test parsing -benchmark flag
+TEST(ConfigTest, ParseBenchmarkFlag) {
+  BenchmarkConfig config;
+  const char* argv[] = {"program", "-benchmark"};
+  int argc = 2;
+  
+  int result = parse_arguments(argc, const_cast<char**>(argv), config);
+  EXPECT_EQ(result, EXIT_SUCCESS);
+  EXPECT_TRUE(config.run_benchmark);
+  EXPECT_FALSE(config.run_patterns);
+}
+
+// Test -benchmark with other modifier flags
+TEST(ConfigTest, ParseBenchmarkWithModifiers) {
+  BenchmarkConfig config;
+  const char* argv[] = {"program", "-benchmark", "-only-latency", "-cache-size", "256"};
+  int argc = 5;
+  
+  int result = parse_arguments(argc, const_cast<char**>(argv), config);
+  EXPECT_EQ(result, EXIT_SUCCESS);
+  EXPECT_TRUE(config.run_benchmark);
+  EXPECT_TRUE(config.only_latency);
+  EXPECT_EQ(config.custom_cache_size_kb_ll, 256);
+}
+
+// Test -benchmark and -patterns are mutually exclusive
+TEST(ConfigTest, ParseBenchmarkAndPatternsMutuallyExclusive) {
+  BenchmarkConfig config;
+  const char* argv[] = {"program", "-benchmark", "-patterns"};
+  int argc = 3;
+  
+  int result = parse_arguments(argc, const_cast<char**>(argv), config);
+  EXPECT_EQ(result, EXIT_FAILURE);
+}
+
+// Test -benchmark and -patterns in reverse order
+TEST(ConfigTest, ParsePatternsAndBenchmarkMutuallyExclusive) {
+  BenchmarkConfig config;
+  const char* argv[] = {"program", "-patterns", "-benchmark"};
+  int argc = 3;
+  
+  int result = parse_arguments(argc, const_cast<char**>(argv), config);
+  EXPECT_EQ(result, EXIT_FAILURE);
+}
+
 // Test buffer size calculation
 TEST(ConfigTest, CalculateBufferSizes) {
   BenchmarkConfig config;
@@ -398,17 +443,20 @@ TEST(ConfigTest, ValidateConfigModeAwareBufferCap) {
   };
 
   BenchmarkConfig full;
+  full.run_benchmark = true;
   full.buffer_size_mb = std::numeric_limits<unsigned long>::max();
   EXPECT_EQ(validate_config(full), EXIT_SUCCESS);
   EXPECT_EQ(full.buffer_size_mb, expected_cap(full, 2));
 
   BenchmarkConfig bw_only;
+  bw_only.run_benchmark = true;
   bw_only.only_bandwidth = true;
   bw_only.buffer_size_mb = std::numeric_limits<unsigned long>::max();
   EXPECT_EQ(validate_config(bw_only), EXIT_SUCCESS);
   EXPECT_EQ(bw_only.buffer_size_mb, expected_cap(bw_only, 2));
 
   BenchmarkConfig lat_only;
+  lat_only.run_benchmark = true;
   lat_only.only_latency = true;
   lat_only.buffer_size_mb = std::numeric_limits<unsigned long>::max();
   EXPECT_EQ(validate_config(lat_only), EXIT_SUCCESS);
@@ -435,6 +483,7 @@ TEST(ConfigTest, ValidateConfigRejectsCacheSizeZeroWithoutOnlyLatency) {
 
 TEST(ConfigTest, ValidateConfigAllowsCacheOnlyLatencyMode) {
   BenchmarkConfig config;
+  config.run_benchmark = true;
   config.only_latency = true;
   config.buffer_size_mb = 0;
   config.custom_cache_size_kb_ll = 8096;
@@ -447,6 +496,7 @@ TEST(ConfigTest, ValidateConfigAllowsCacheOnlyLatencyMode) {
 
 TEST(ConfigTest, ValidateConfigAllowsMainOnlyLatencyMode) {
   BenchmarkConfig config;
+  config.run_benchmark = true;
   config.only_latency = true;
   config.buffer_size_mb = 16;
   config.custom_cache_size_kb_ll = 0;
@@ -459,6 +509,7 @@ TEST(ConfigTest, ValidateConfigAllowsMainOnlyLatencyMode) {
 
 TEST(ConfigTest, ValidateConfigRejectsOnlyLatencyWithNoTargets) {
   BenchmarkConfig config;
+  config.run_benchmark = true;
   config.only_latency = true;
   config.buffer_size_mb = 0;
   config.custom_cache_size_kb_ll = 0;

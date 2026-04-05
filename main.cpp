@@ -110,9 +110,16 @@ int main(int argc, char *argv[]) {
     return run_tlb_analysis(config);
   }
   
-  // Check if help was requested (simple check: if only help flag, exit after printing)
-  if (argc == 2 && (std::string(argv[1]) == "-h" || std::string(argv[1]) == "--help")) {
-    return EXIT_SUCCESS;  // Help already printed by parse_arguments
+  // If no arguments provided, show help
+  if (argc == 1) {
+    print_usage(argv[0]);
+    return EXIT_SUCCESS;
+  }
+  
+  // If no mode flag is set (neither -benchmark nor -patterns), show help
+  if (!config.run_benchmark && !config.run_patterns && !config.help_printed) {
+    print_usage(argv[0]);
+    return EXIT_SUCCESS;
   }
   
   if (validate_config(config) != EXIT_SUCCESS) {

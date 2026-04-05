@@ -84,12 +84,14 @@ struct BenchmarkConfig {
   
   // Flags
   bool use_custom_cache_size = false;  ///< Whether to use custom cache size
+  bool run_benchmark = false;          ///< Whether to run standard benchmarks
   bool run_patterns = false;           ///< Whether to run pattern benchmarks
   bool use_non_cacheable = false;      ///< Use cache-discouraging hints (best-effort, not true non-cacheable)
   bool user_specified_threads = false; ///< Whether user explicitly set -threads parameter
   bool only_bandwidth = false;         ///< When true, run only bandwidth tests
   bool only_latency = false;           ///< When true, run only latency tests
   bool analyze_tlb = false;            ///< When true, run standalone TLB analysis mode
+  bool help_printed = false;           ///< Whether -h/--help was invoked (usage already printed)
   
   // Tracking flags for user-specified parameters
   bool user_specified_buffersize = false;      ///< Whether user explicitly set -buffersize

@@ -1,6 +1,6 @@
 # Project Structure — membenchmark
 
-**Version:** 0.54.1
+**Version:** 0.55.0
 **Platform:** ARM64 / AArch64 (Apple Silicon macOS)
 **License:** GNU General Public License v3.0
 
@@ -157,7 +157,7 @@ Platform-independent infrastructure: configuration, memory management, system in
 |---|---|
 | `config.h` | `BenchmarkConfig` structure; aggregates all run-time settings parsed from the command line |
 | `constants.h` | Named constants for memory limits, cache size bounds, stride values, buffer sizing factors, and latency access counts |
-| `version.h` | `SOFTVERSION` macro (semantic version string, currently `"0.54.1"`) |
+| `version.h` | `SOFTVERSION` macro (semantic version string, currently `"0.55.0"`) |
 | `argument_parser.cpp` | Parses `argv` into a `BenchmarkConfig`; implements all flag definitions |
 | `config_validator.cpp` | Validates the parsed configuration; emits errors for out-of-range or conflicting settings |
 | `buffer_calculator.cpp` | Derives buffer sizes for each cache/memory level from the validated configuration and detected system parameters |

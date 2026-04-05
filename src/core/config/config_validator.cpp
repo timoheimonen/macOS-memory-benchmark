@@ -111,6 +111,16 @@ int validate_config(BenchmarkConfig& config) {
     return EXIT_FAILURE;  // Return code: validation error
   }
   
+  // Error: Validate -only-bandwidth and -only-latency require -benchmark
+  if (!config.run_benchmark && !config.run_patterns) {
+    if (config.only_bandwidth || config.only_latency) {
+      std::cerr << Messages::error_prefix()
+                << Messages::error_only_flags_require_benchmark()
+                << std::endl;
+      return EXIT_FAILURE;
+    }
+  }
+  
   // Error: Validate -only-bandwidth incompatibilities
   if (config.only_bandwidth) {
     if (config.use_custom_cache_size) {
