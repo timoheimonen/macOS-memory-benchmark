@@ -42,6 +42,7 @@
 #include "core/config/version.h"
 #include "core/memory/memory_manager.h"
 #include "core/memory/memory_utils.h"
+#include "core/signal/signal_handler.h"
 #include "core/system/system_info.h"
 #include "core/timing/timer.h"
 #include "output/console/messages/messages_api.h"
@@ -302,14 +303,12 @@ int run_tlb_analysis(const BenchmarkConfig& config) {
   p50_latency_ns.reserve(localities_bytes.size());
   sweep_loop_latencies_ns.reserve(localities_bytes.size());
 
+  std::cout << std::fixed;
+  std::cout.precision(Constants::LATENCY_PRECISION);
+
   for (size_t locality_index = 0; locality_index < localities_bytes.size(); ++locality_index) {
     const size_t locality_bytes = localities_bytes[locality_index];
     const size_t locality_kb = locality_bytes / Constants::BYTES_PER_KB;
-
-    std::cout << Messages::msg_tlb_analysis_locality_progress(locality_index + 1,
-                                                              localities_bytes.size(),
-                                                              locality_kb)
-              << std::endl;
 
     double locality_p50_ns = 0.0;
     std::vector<double> loop_latencies_ns;
@@ -327,17 +326,25 @@ int run_tlb_analysis(const BenchmarkConfig& config) {
       return EXIT_FAILURE;
     }
 
+    std::cout << Messages::msg_tlb_analysis_locality_progress(locality_index + 1,
+                                                              localities_bytes.size(),
+                                                              locality_kb)
+              << " — " << locality_p50_ns << " ns" << std::endl;
+
     p50_latency_ns.push_back(locality_p50_ns);
     sweep_loop_latencies_ns.push_back(std::move(loop_latencies_ns));
+
+    // Check for Ctrl+C between sweep points (after valid measurement)
+    if (signal_received()) {
+      std::cout << std::endl << Messages::msg_interrupted_by_user() << std::endl;
+      break;
+    }
   }
 
   const bool can_measure_page_walk_penalty = selected_buffer_mb >= kPageWalkMinimumBufferMb;
   std::vector<double> page_walk_512mb_loop_latencies_ns;
   double page_walk_512mb_p50_ns = 0.0;
-  if (can_measure_page_walk_penalty) {
-    std::cout << Messages::msg_tlb_analysis_page_walk_progress(
-                     kPageWalkComparisonLocalityBytes / Constants::BYTES_PER_MB)
-              << std::endl;
+  if (can_measure_page_walk_penalty && !signal_received()) {
     if (!measure_locality_p50(latency_buffer.get(),
                               selected_buffer_bytes,
                               analysis_stride_bytes,
@@ -351,6 +358,10 @@ int run_tlb_analysis(const BenchmarkConfig& config) {
       }
       return EXIT_FAILURE;
     }
+
+    std::cout << Messages::msg_tlb_analysis_page_walk_progress(
+                     kPageWalkComparisonLocalityBytes / Constants::BYTES_PER_MB)
+              << " — " << page_walk_512mb_p50_ns << " ns" << std::endl;
   }
 
   if (buffer_locked) {
@@ -360,12 +371,25 @@ int run_tlb_analysis(const BenchmarkConfig& config) {
   const size_t tlb_guard_bytes = std::max<size_t>(2 * l1_cache_size_bytes, 64 * page_size_bytes);
 
   const TlbBoundaryDetection l1_boundary =
-      detect_tlb_boundary(localities_bytes, p50_latency_ns, 0, tlb_guard_bytes);
+      detect_tlb_boundary(localities_bytes, p50_latency_ns, 0, tlb_guard_bytes,
+                          &sweep_loop_latencies_ns);
 
   TlbBoundaryDetection l2_boundary;
   if (l1_boundary.detected && l1_boundary.boundary_index < localities_bytes.size() - 1) {
+    // Offset L2 segment start past the L1 boundary to avoid contaminating the
+    // L2 baseline with the L1 transition noise.  Use at least +1, or +2 when
+    // there are enough remaining points, so the L1 boundary point and its
+    // immediate neighbour are excluded from the L2 baseline.
+    const size_t l2_segment_start = std::min(
+        l1_boundary.boundary_index + 2,
+        localities_bytes.size() - 2);
+
+    // L2-specific guard: prevent L2 from re-detecting at or below the L1 boundary.
+    const size_t l2_guard_bytes = std::max(tlb_guard_bytes, l1_boundary.boundary_locality_bytes);
+
     l2_boundary = detect_tlb_boundary(localities_bytes, p50_latency_ns,
-                                      l1_boundary.boundary_index, tlb_guard_bytes);
+                                      l2_segment_start, l2_guard_bytes,
+                                      &sweep_loop_latencies_ns);
   }
 
   const size_t l1_entries = l1_boundary.detected

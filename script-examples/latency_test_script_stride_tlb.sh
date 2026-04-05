@@ -81,6 +81,7 @@ for stride in "${latency_strides_bytes[@]}"; do
 
       cmd=(
         "${BENCHMARK_CMD}"
+        -benchmark
         -only-latency
         -buffersize "${MAIN_BUFFER_MB}"
         -cache-size "${cache_kb}"

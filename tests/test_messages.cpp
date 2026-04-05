@@ -310,6 +310,14 @@ TEST_F(MessagesErrorTest, ErrorTimerCreationFailed) {
   EXPECT_EQ(&msg, &Messages::error_timer_creation_failed());
 }
 
+TEST_F(MessagesErrorTest, ErrorOnlyFlagsRequireBenchmark) {
+  const std::string& msg = Messages::error_only_flags_require_benchmark();
+  EXPECT_NE(msg.find("-only-bandwidth"), std::string::npos);
+  EXPECT_NE(msg.find("-only-latency"), std::string::npos);
+  EXPECT_NE(msg.find("-benchmark"), std::string::npos);
+  EXPECT_EQ(&msg, &Messages::error_only_flags_require_benchmark());
+}
+
 // ============================================================================
 // Warning Messages Tests (using fixture)
 // ============================================================================
@@ -360,6 +368,14 @@ TEST_F(MessagesFormattingTest, MsgRunningBenchmarks) {
   const std::string& msg = Messages::msg_running_benchmarks();
   EXPECT_NE(msg.find("Running benchmarks"), std::string::npos);
   EXPECT_EQ(&msg, &Messages::msg_running_benchmarks());
+}
+
+TEST_F(MessagesFormattingTest, MsgInterruptedByUser) {
+  const std::string& msg = Messages::msg_interrupted_by_user();
+  EXPECT_NE(msg.find("Interrupted"), std::string::npos);
+  EXPECT_NE(msg.find("Partial results"), std::string::npos);
+  // Verify it returns a stable reference (static string)
+  EXPECT_EQ(&msg, &Messages::msg_interrupted_by_user());
 }
 
 TEST_F(MessagesFormattingTest, MsgDoneTotalTime) {
@@ -433,6 +449,7 @@ TEST_F(MessagesFormattingTest, UsageHeader) {
 TEST_F(MessagesFormattingTest, UsageOptions) {
   std::string msg = Messages::usage_options("memory_benchmark");
   EXPECT_NE(msg.find("memory_benchmark"), std::string::npos);
+  EXPECT_NE(msg.find("-benchmark"), std::string::npos);
   EXPECT_NE(msg.find("-iterations"), std::string::npos);
   EXPECT_NE(msg.find("-buffersize"), std::string::npos);
   EXPECT_NE(msg.find("-count"), std::string::npos);

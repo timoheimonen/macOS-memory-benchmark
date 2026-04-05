@@ -64,6 +64,7 @@ for tlb_kb in "${tlb_locality_sizes_kb[@]}"; do
 
         cmd=(
             "${BENCHMARK_CMD}"
+            -benchmark
             -latency-tlb-locality-kb "${tlb_kb}"
             -cache-size "${cache_size}"
             -buffersize "${BUFFER_SIZE_MB}"

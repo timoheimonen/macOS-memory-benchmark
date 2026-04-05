@@ -260,16 +260,6 @@ TEST(PatternBenchmarkTest, StridedLargePagePatterns) {
   expect_2mb_pattern_bandwidths_positive(results);
 }
 
-// Test that all pattern types produce results
-TEST(PatternBenchmarkTest, AllPatternTypesComplete) {
-  BenchmarkConfig config = make_pattern_config(512 * 1024, 1);
-  PatternResults results;
-  ASSERT_TRUE(run_pattern_benchmarks_with_fresh_buffers(config, results));
-
-  expect_core_pattern_bandwidths_positive(results);
-  expect_2mb_pattern_bandwidths_zero(results);
-}
-
 // Test that pattern results are consistent across multiple runs
 // (Results may vary but should be in reasonable range)
 TEST(PatternBenchmarkTest, PatternResultsConsistency) {

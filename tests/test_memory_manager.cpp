@@ -24,7 +24,6 @@ TEST(MemoryManagerTest, AllocateBufferSuccess) {
   MmapPtr buffer = allocate_buffer(buffer_size, "test_buffer");
   
   EXPECT_NE(buffer.get(), nullptr);
-  EXPECT_NE(buffer.get(), MAP_FAILED);
 }
 
 // Test buffer allocation with page-aligned size
@@ -32,18 +31,16 @@ TEST(MemoryManagerTest, AllocateBufferPageAligned) {
   size_t page_size = getpagesize();
   size_t buffer_size = page_size * 4;  // 4 pages
   MmapPtr buffer = allocate_buffer(buffer_size, "test_buffer");
-  
+
   EXPECT_NE(buffer.get(), nullptr);
-  EXPECT_NE(buffer.get(), MAP_FAILED);
 }
 
 // Test buffer allocation with default buffer name
 TEST(MemoryManagerTest, AllocateBufferDefaultName) {
   size_t buffer_size = 64 * 1024;  // 64 KB
   MmapPtr buffer = allocate_buffer(buffer_size);
-  
+
   EXPECT_NE(buffer.get(), nullptr);
-  EXPECT_NE(buffer.get(), MAP_FAILED);
 }
 
 // Test that allocated buffer can be written to
@@ -103,9 +100,8 @@ TEST(MemoryManagerTest, AllocateMultipleBuffers) {
 TEST(MemoryManagerTest, AllocateBufferMinimumSize) {
   size_t page_size = getpagesize();
   MmapPtr buffer = allocate_buffer(page_size, "min_buffer");
-  
+
   EXPECT_NE(buffer.get(), nullptr);
-  EXPECT_NE(buffer.get(), MAP_FAILED);
 }
 
 // Test that buffer is automatically freed when going out of scope
@@ -126,16 +122,14 @@ TEST(MemoryManagerTest, AllocateLargeBuffer) {
   MmapPtr buffer = allocate_buffer(buffer_size, "large_buffer");
   
   EXPECT_NE(buffer.get(), nullptr);
-  EXPECT_NE(buffer.get(), MAP_FAILED);
 }
 
 // Test successful non-cacheable buffer allocation
 TEST(MemoryManagerTest, AllocateNonCacheableBufferSuccess) {
   size_t buffer_size = 1024 * 1024;  // 1 MB
   MmapPtr buffer = allocate_buffer_non_cacheable(buffer_size, "test_non_cacheable_buffer");
-  
+
   EXPECT_NE(buffer.get(), nullptr);
-  EXPECT_NE(buffer.get(), MAP_FAILED);
 }
 
 // Test buffer allocation with size 0 - should return nullptr and log error

@@ -283,10 +283,22 @@ int parse_arguments(int argc, char* argv[], BenchmarkConfig& config) {
 
   // Second pass: parse all other arguments
   // Error handling: Uses try-catch to convert exceptions to return codes
+  bool iterations_seen = false;
+  bool buffersize_seen = false;
+  bool count_seen = false;
+  bool latency_samples_seen = false;
+  bool latency_stride_seen = false;
+  bool latency_chain_mode_seen = false;
+  bool latency_tlb_locality_seen = false;
+  bool threads_seen = false;
+  bool output_seen = false;
+
   for (int i = 1; i < argc; ++i) {
     std::string arg = argv[i];
     try {
       if (arg == "-iterations") {
+        if (iterations_seen)
+          throw std::invalid_argument(Messages::error_duplicate_option("-iterations"));
         if (++i < argc) {
           // Error: std::stoll() may throw std::invalid_argument or std::out_of_range
           long long val_ll = std::stoll(argv[i]);
@@ -298,7 +310,10 @@ int parse_arguments(int argc, char* argv[], BenchmarkConfig& config) {
         } else
           // Error: Missing required value
           throw std::invalid_argument(Messages::error_missing_value("-iterations"));
+        iterations_seen = true;
       } else if (arg == "-buffersize") {
+        if (buffersize_seen)
+          throw std::invalid_argument(Messages::error_duplicate_option("-buffersize"));
         if (++i < argc) {
           // Error: std::stoll() may throw exceptions
           long long val_ll = std::stoll(argv[i]);
@@ -311,7 +326,10 @@ int parse_arguments(int argc, char* argv[], BenchmarkConfig& config) {
         } else
           // Error: Missing required value
           throw std::invalid_argument(Messages::error_missing_value("-buffersize"));
+        buffersize_seen = true;
       } else if (arg == "-count") {
+        if (count_seen)
+          throw std::invalid_argument(Messages::error_duplicate_option("-count"));
         if (++i < argc) {
           // Error: std::stoll() may throw exceptions
           long long val_ll = std::stoll(argv[i]);
@@ -322,7 +340,10 @@ int parse_arguments(int argc, char* argv[], BenchmarkConfig& config) {
         } else
           // Error: Missing required value
           throw std::invalid_argument(Messages::error_missing_value("-count"));
+        count_seen = true;
       } else if (arg == "-latency-samples") {
+        if (latency_samples_seen)
+          throw std::invalid_argument(Messages::error_duplicate_option("-latency-samples"));
         if (++i < argc) {
           // Error: std::stoll() may throw exceptions
           long long val_ll = std::stoll(argv[i]);
@@ -334,7 +355,10 @@ int parse_arguments(int argc, char* argv[], BenchmarkConfig& config) {
         } else
           // Error: Missing required value
           throw std::invalid_argument(Messages::error_missing_value("-latency-samples"));
+        latency_samples_seen = true;
       } else if (arg == "-latency-stride-bytes") {
+        if (latency_stride_seen)
+          throw std::invalid_argument(Messages::error_duplicate_option("-latency-stride-bytes"));
         if (++i < argc) {
           long long val_ll = std::stoll(argv[i]);
           if (val_ll <= 0) {
@@ -346,7 +370,10 @@ int parse_arguments(int argc, char* argv[], BenchmarkConfig& config) {
         } else {
           throw std::invalid_argument(Messages::error_missing_value("-latency-stride-bytes"));
         }
+        latency_stride_seen = true;
       } else if (arg == "-latency-chain-mode") {
+        if (latency_chain_mode_seen)
+          throw std::invalid_argument(Messages::error_duplicate_option("-latency-chain-mode"));
         if (++i < argc) {
           LatencyChainMode parsed_mode = LatencyChainMode::Auto;
           if (!latency_chain_mode_from_string(argv[i], parsed_mode)) {
@@ -357,7 +384,10 @@ int parse_arguments(int argc, char* argv[], BenchmarkConfig& config) {
         } else {
           throw std::invalid_argument(Messages::error_missing_value("-latency-chain-mode"));
         }
+        latency_chain_mode_seen = true;
       } else if (arg == "-latency-tlb-locality-kb") {
+        if (latency_tlb_locality_seen)
+          throw std::invalid_argument(Messages::error_duplicate_option("-latency-tlb-locality-kb"));
         if (++i < argc) {
           long long val_ll = std::stoll(argv[i]);
           const long long max_locality_kb =
@@ -370,38 +400,34 @@ int parse_arguments(int argc, char* argv[], BenchmarkConfig& config) {
         } else {
           throw std::invalid_argument(Messages::error_missing_value("-latency-tlb-locality-kb"));
         }
+        latency_tlb_locality_seen = true;
       } else if (arg == "-cache-size") {
         // Already parsed in first pass, skip it and its value in second pass
-        if (config.custom_cache_size_kb_ll != -1) {
-          // Skip the value argument (already validated in first pass)
-          if (++i >= argc) {
-            // Error: This shouldn't happen (first pass should have validated it), but handle defensively
-            throw std::invalid_argument(Messages::error_missing_value("-cache-size"));
-          }
-          // Silently skip - already parsed and validated in first pass
-          continue;
-        } else {
-          // This shouldn't happen (first pass should have set it), but handle defensively
-          if (++i < argc) {
-            // Error: Try to parse it now (fallback case) - std::stoll() may throw
-            long long val_ll = std::stoll(argv[i]);
-            // Error: Value validation - out of valid range
-            if (val_ll < 0 || val_ll > Constants::MAX_CACHE_SIZE_KB ||
-                (val_ll > 0 && val_ll < Constants::MIN_CACHE_SIZE_KB))
-              throw std::out_of_range(Messages::error_cache_size_invalid(Constants::MIN_CACHE_SIZE_KB, Constants::MAX_CACHE_SIZE_KB, Constants::MAX_CACHE_SIZE_KB / 1024));
-            config.custom_cache_size_kb_ll = val_ll;
-          } else
-            // Error: Missing required value
-            throw std::invalid_argument(Messages::error_missing_value("-cache-size"));
+        if (++i >= argc) {
+          // Error: This shouldn't happen (first pass should have validated it), but handle defensively
+          throw std::invalid_argument(Messages::error_missing_value("-cache-size"));
         }
+        // Silently skip - already parsed and validated in first pass
+        continue;
       } else if (arg == "-output") {
+        if (output_seen)
+          throw std::invalid_argument(Messages::error_duplicate_option("-output"));
         if (++i < argc) {
           config.output_file = argv[i];
         } else
           // Error: Missing required value
           throw std::invalid_argument(Messages::error_missing_value("-output"));
+        output_seen = true;
+      } else if (arg == "-benchmark") {
+        config.run_benchmark = true;
+        if (config.run_patterns) {
+          throw std::invalid_argument(Messages::error_mutually_exclusive_modes("-benchmark", "-patterns"));
+        }
       } else if (arg == "-patterns") {
         config.run_patterns = true;
+        if (config.run_benchmark) {
+          throw std::invalid_argument(Messages::error_mutually_exclusive_modes("-benchmark", "-patterns"));
+        }
       } else if (arg == "-non-cacheable") {
         config.use_non_cacheable = true;
       } else if (arg == "-only-bandwidth") {
@@ -409,6 +435,8 @@ int parse_arguments(int argc, char* argv[], BenchmarkConfig& config) {
       } else if (arg == "-only-latency") {
         config.only_latency = true;
       } else if (arg == "-threads") {
+        if (threads_seen)
+          throw std::invalid_argument(Messages::error_duplicate_option("-threads"));
         if (++i < argc) {
           // Error: std::stoll() may throw exceptions
           long long val_ll = std::stoll(argv[i]);
@@ -419,8 +447,10 @@ int parse_arguments(int argc, char* argv[], BenchmarkConfig& config) {
         } else
           // Error: Missing required value
           throw std::invalid_argument(Messages::error_missing_value("-threads"));
+        threads_seen = true;
       } else if (arg == "-h" || arg == "--help") {
-        print_usage(argv[0]);
+        config.help_printed = true;
+        print_help(argv[0]);
         return EXIT_SUCCESS;  // Special return value for help (not an error)
       } else {
         // Error: Unknown option
