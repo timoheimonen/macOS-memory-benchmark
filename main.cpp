@@ -121,13 +121,13 @@ int main(int argc, char *argv[]) {
   
   // If no arguments provided, show help
   if (argc == 1) {
-    print_usage(argv[0]);
+    print_help(argv[0]);
     return EXIT_SUCCESS;
   }
   
   // If no mode flag is set (neither -benchmark nor -patterns), show help
   if (!config.run_benchmark && !config.run_patterns && !config.help_printed) {
-    print_usage(argv[0]);
+    print_help(argv[0]);
     return EXIT_SUCCESS;
   }
   
