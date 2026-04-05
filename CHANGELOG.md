@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.55.0] - 2026-X-X
+## [0.55.0] - 2026-04-05
 
 ### Changed
   - **`-benchmark` flag required for standard benchmarks**: Running with no arguments now prints help instead of starting the benchmark. Use `-benchmark` to run the standard memory benchmark (replicates old default behavior). `-benchmark` and `-patterns` are mutually exclusive. Standalone modes (`-analyze-tlb`, `-analyze-core2core`) are unaffected.
