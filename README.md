@@ -15,6 +15,10 @@ Macbook Air M5 memory latency from [JSON file](results/0.53.8/MacbookAirM5_bench
 DRAM TLB-hit ~9,8ns is really nice!  
 More Apple Silicon M5 results in [/results/0.53.8/ -folder](results/0.53.8/)
 
+## Star History
+
+[![Star History Chart](https://api.star-history.com/chart?repos=timoheimonen/macOS-memory-benchmark&type=date&legend=top-left)](https://www.star-history.com/?repos=timoheimonen%2FmacOS-memory-benchmark&type=date&legend=top-left)
+
 ## Description
 
 `memory_benchmark` measures memory behavior on macOS Apple Silicon with an implementation focused on practical low-level analysis:
