@@ -36,8 +36,15 @@
 //   * Processes 512B per iteration (16 pair loads) for high cache-path throughput.
 //   * Distributes XOR into four accumulators (v0-v3) to reduce dependency depth.
 //   * Tail path uses size-bit tests (tbz for 256/128/64/32), then byte cleanup.
+//   * Main loop label is 64-byte aligned to keep the unrolled body on a single
+//     I-cache line boundary for steady run-to-run timing on Apple Silicon.
 // Control-Flow Map:
 //   main 512B loop -> tiered tail (256/128/64/32) -> byte tail -> final reduction
+// Timing Contract:
+//   Caller must emit `dsb ish; isb` before reading the start-of-measurement
+//   timestamp and another `dsb ish; isb` before reading the end-of-measurement
+//   timestamp. This kernel emits no internal fences; barrier discipline is the
+//   caller's responsibility for reproducible timing.
 // -----------------------------------------------------------------------------
 
 .global _memory_read_cache_loop_asm
@@ -55,6 +62,9 @@ _memory_read_cache_loop_asm:
     eor v2.16b, v2.16b, v2.16b
     eor v3.16b, v3.16b, v3.16b
 
+    // Align hot loop entry to 64B so the unrolled 512B body always lands on a
+    // predictable I-cache line. Reduces first-iteration fetch-boundary jitter.
+    .p2align 6
 cache_read_loop_start_512:    // Main 512B loop
     // If <512B remain, switch to tail handling.
     cmp x5, #512

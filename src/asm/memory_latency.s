@@ -30,6 +30,14 @@
 //   x4‑x5 (temporaries for iteration counts)
 // Implementation Notes:
 //   * No prefetching: intentional to keep strictly serialized accesses.
+//   * Unrolled loop label is 64-byte aligned so the 8-load chain always lands
+//     on the same I-cache line layout run-to-run, reducing jitter on the
+//     headline latency figure on Apple Silicon.
+// Timing Contract:
+//   Caller must emit `dsb ish; isb` before reading the start-of-measurement
+//   timestamp and another `dsb ish; isb` before reading the end-of-measurement
+//   timestamp. This kernel emits no internal fences; barrier discipline is the
+//   caller's responsibility for reproducible timing.
 // -----------------------------------------------------------------------------
 
 .global _memory_latency_chase_asm
@@ -43,6 +51,10 @@ _memory_latency_chase_asm:
 
     cbz x4, latency_remainder   // Skip unrolled loop if no full groups
 
+    // Align hot loop entry to 64B so the 8-load dependent chain always lands
+    // on a predictable I-cache line. Reduces fetch-boundary jitter on the
+    // headline load-to-use latency figure.
+    .p2align 6
 latency_loop_unrolled:          // 8 dependent loads per iteration
     // Use pointer chasing with 8x unrolling to minimize branch overhead while
     // maintaining dependency chain. Each load depends on the previous result,

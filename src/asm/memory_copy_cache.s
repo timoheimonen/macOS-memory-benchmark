@@ -39,8 +39,15 @@
 //   * Processes 512B per iteration with 16 load/store pairs.
 //   * Uses STNP for the cache-oriented store path used by this benchmark mode.
 //   * Tail path uses size-bit tiers (256/128/64/32/16/8/4/2/1).
+//   * Main loop label is 64-byte aligned to keep the unrolled body on a single
+//     I-cache line boundary for steady run-to-run timing on Apple Silicon.
 // Control-Flow Map:
 //   main 512B loop -> tiered tail (256/128/64/32) -> scalar tail -> return
+// Timing Contract:
+//   Caller must emit `dsb ish; isb` before reading the start-of-measurement
+//   timestamp and another `dsb ish; isb` before reading the end-of-measurement
+//   timestamp. This kernel emits no internal fences; barrier discipline is the
+//   caller's responsibility for reproducible timing.
 // -----------------------------------------------------------------------------
 
 .global _memory_copy_cache_loop_asm
@@ -51,6 +58,9 @@ _memory_copy_cache_loop_asm:
     mov x6, x1                // src ptr
     mov x5, x2                // remaining bytes
 
+    // Align hot loop entry to 64B so the unrolled 512B body always lands on a
+    // predictable I-cache line. Reduces first-iteration fetch-boundary jitter.
+    .p2align 6
 copy_cache_loop_start_nt512:  // Main 512B loop
     cmp x5, #512
     b.lo copy_cache_loop_cleanup

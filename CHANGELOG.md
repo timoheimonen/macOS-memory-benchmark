@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.55.2] - 2026-04-17
+
+### Changed
+  - **64-byte I-cache alignment for main ASM kernel loops**: Added `.p2align 6` directives immediately before the main hot-loop label in the 10 unrolled kernels so each 512B (or dependent-load) body lands on a predictable I-cache line layout on Apple Silicon. This reduces first-iteration fetch-boundary jitter and tightens run-to-run variance without changing the measurement shape. Affected files: `src/asm/memory_read.s`, `src/asm/memory_write.s`, `src/asm/memory_copy.s`, `src/asm/memory_read_cache.s`, `src/asm/memory_write_cache.s`, `src/asm/memory_copy_cache.s`, `src/asm/memory_read_reverse.s`, `src/asm/memory_write_reverse.s`, `src/asm/memory_copy_reverse.s`, `src/asm/memory_latency.s`.
+  - **Dead instruction removed from `memory_read_reverse.s` tail**: Removed a redundant `sub x7, x3, x5` in the reverse-read cleanup path. Each tier (256/128/64/32B) already recomputes `x7` from `x3` with an immediate offset, so the general setup was never read. Behavior is unchanged.
+  - **Per-file timing-contract documentation in all 29 ASM kernels**: Added an explicit "Timing Contract" section to every header under `src/asm/` documenting that the caller must emit `dsb ish; isb` around the measured region and that the kernels themselves emit no internal fences. Makes the caller-side barrier discipline explicit for future maintainers and agents. Applies to all `src/asm/*.s` files including the core-to-core handoff kernels.
+  - **Design-rationale note in strided and random ASM kernels**: Added an "Implementation Notes" clause to each strided (`_strided*`) and random-access (`_random`) read/write/copy kernel stating that the per-iteration loop overhead (offset wrap / index load plus counter check) is intentional because those kernels measure steady per-access cost under the chosen stride or random index sequence rather than peak streaming throughput. Future tuners are warned not to unroll these loops without re-baselining all strided/random benchmark modes. Covers 18 kernels (unified + fixed-stride 64/4096/16384/2MB variants across read, write, and copy, plus the three random kernels).
+
 ## [0.55.1] - 2026-04-06
 
 ### Fixed

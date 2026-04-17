@@ -36,8 +36,15 @@
 //   * Uses pointer+remaining loop state (x7/x5) for lower loop-control overhead.
 //   * Processes 512B per iteration using 16 store pairs.
 //   * Tail uses size-bit tests plus 16/8/4/2/1 scalar zero stores.
+//   * Main loop label is 64-byte aligned to keep the unrolled body on a single
+//     I-cache line boundary for steady run-to-run timing on Apple Silicon.
 // Control-Flow Map:
 //   main 512B loop -> tiered tail (256/128/64/32) -> scalar tail -> return
+// Timing Contract:
+//   Caller must emit `dsb ish; isb` before reading the start-of-measurement
+//   timestamp and another `dsb ish; isb` before reading the end-of-measurement
+//   timestamp. This kernel emits no internal fences; barrier discipline is the
+//   caller's responsibility for reproducible timing.
 // -----------------------------------------------------------------------------
 
 .global _memory_write_cache_loop_asm
@@ -49,6 +56,9 @@ _memory_write_cache_loop_asm:
     // Materialize zero vector once and reuse for all SIMD stores.
     movi v0.16b, #0
 
+    // Align hot loop entry to 64B so the unrolled 512B body always lands on a
+    // predictable I-cache line. Reduces first-iteration fetch-boundary jitter.
+    .p2align 6
 write_cache_loop_start_nt512: // Main 512B loop
     // If <512B remain, switch to tail handling.
     cmp x5, #512

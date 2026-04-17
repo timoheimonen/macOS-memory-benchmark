@@ -34,6 +34,15 @@
 // Implementation Notes:
 //   * Fixed stride immediate avoids passing/decoding a dynamic stride.
 //   * Wraparound uses compare/subtract (no divide/modulo in hot loop).
+//   * Per-iteration loop overhead (offset wrap + counter check) is intentional:
+//     this kernel measures steady per-access cost under the fixed stride, not
+//     peak streaming throughput. Do not unroll without re-baselining all
+//     strided benchmark modes.
+// Timing Contract:
+//   Caller must emit `dsb ish; isb` before reading the start-of-measurement
+//   timestamp and another `dsb ish; isb` before reading the end-of-measurement
+//   timestamp. This kernel emits no internal fences; barrier discipline is the
+//   caller's responsibility for reproducible timing.
 // -----------------------------------------------------------------------------
 
 .global _memory_read_strided_64_loop_asm

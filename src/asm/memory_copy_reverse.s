@@ -32,6 +32,14 @@
 // Assumptions / Guarantees:
 //   * Undefined behavior if regions overlap (not a memmove replacement).
 //   * Tail handled with progressively smaller vector tiers then byte loop (<32B).
+// Implementation Notes:
+//   * Main loop label is 64-byte aligned to keep the unrolled body on a single
+//     I-cache line boundary for steady run-to-run timing on Apple Silicon.
+// Timing Contract:
+//   Caller must emit `dsb ish; isb` before reading the start-of-measurement
+//   timestamp and another `dsb ish; isb` before reading the end-of-measurement
+//   timestamp. This kernel emits no internal fences; barrier discipline is the
+//   caller's responsibility for reproducible timing.
 // -----------------------------------------------------------------------------
 .global _memory_copy_reverse_loop_asm
 .align 4
@@ -43,6 +51,9 @@ _memory_copy_reverse_loop_asm:
     // small enough to fit in L2 cache, avoids TLB pressure on large regions
     mov x5, #512            // step = 512 bytes (optimal block size)
 
+    // Align hot loop entry to 64B so the unrolled 512B body always lands on a
+    // predictable I-cache line. Reduces first-iteration fetch-boundary jitter.
+    .p2align 6
 copy_reverse_loop_start_nt512:      // Main 512B block loop (reverse direction)
     // Loop invariants: x5=512B block size, x0/x1 are base pointers.
     // Only x3 (dst_end), x4 (src_end) and x6 (remaining) change per iteration.
