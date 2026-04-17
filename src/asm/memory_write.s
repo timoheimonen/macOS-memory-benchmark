@@ -26,11 +26,17 @@
 // Returns:
 //   (none)
 // Clobbers:
-//   x3‑x7, q0‑q7 (zero vectors, avoiding q8‑q15 per AAPCS64)
+//   x2‑x7, q0‑q7 (zero vectors + block counter, avoiding q8‑q15 per AAPCS64)
 // Implementation Notes:
 //   * Pointer-bump addressing (no per-iteration offset math).
 //   * Zero vectors materialized once (8 regs), reused for all 16 stnp pairs.
-//   * Tiered tail mirrors copy/read for consistency.
+//   * Main loop uses a precomputed block count (x2) and counts down with
+//     `subs + b.ne` at the bottom (3 control ops/iter) instead of the older
+//     `cmp + b.lo` top guard plus `sub + b` unconditional back-edge
+//     (5 control ops/iter). x5 holds tail bytes (remaining % 512) during the
+//     block loop and feeds the tbz tail tiers afterwards.
+//   * Tail uses `tbz` bit-tests for 256/128/64/32 tiers plus scalar 16/8/4/2/1
+//     stores, harmonized with memory_write_cache.s. No byte-by-byte loop.
 //   * Main loop label is 64-byte aligned to keep the unrolled body on a single
 //     I-cache line boundary for steady run-to-run timing on Apple Silicon.
 // Timing Contract:
@@ -57,13 +63,18 @@ _memory_write_loop_asm:
     movi v6.16b, #0
     movi v7.16b, #0
 
+    // Split remaining byteCount into full 512B blocks (x2) and tail bytes (x5).
+    // The hot loop then becomes a counted subs+b.ne (3 control ops per 512B
+    // iter) rather than a remainder compare+subtract+unconditional-branch
+    // (5 control ops per iter). x5 carries the residual into the tail tiers.
+    lsr x2, x5, #9               // x2 = full 512B block count (byteCount / 512)
+    and x5, x5, #0x1ff           // x5 = tail bytes (byteCount % 512)
+    cbz x2, write_loop_cleanup   // No full block? Go straight to tail.
+
     // Align hot loop entry to 64B so the unrolled 512B body always lands on a
     // predictable I-cache line. Reduces first-iteration fetch-boundary jitter.
     .p2align 6
-write_loop_start_nt512:     // Main 512B block loop
-    cmp x5, #512            // remaining < 512?
-    b.lo write_loop_cleanup
-
+write_loop_start_nt512:     // Main 512B block loop (count-down on x2)
     // Store 512B zeros (non-temporal) (16 stnp pairs).
     // Non-temporal stores (stnp) hint to CPU that data won't be reused soon,
     // encouraging write-combining and reducing cache pollution during bandwidth tests.
@@ -85,15 +96,16 @@ write_loop_start_nt512:     // Main 512B block loop
     stnp q6,  q7,  [x7, #480]
 
     add x7, x7, #512        // dst_ptr += 512
-    sub x5, x5, #512        // remaining -= 512
-    b write_loop_start_nt512
+    subs x2, x2, #1         // block_count -= 1, set flags
+    b.ne write_loop_start_nt512 // Loop while blocks remain
 
-write_loop_cleanup:         // Tail handling when <512B remain
+write_loop_cleanup:         // Tail handling when <512B remain (x5 = tail bytes)
     cbz x5, write_loop_end  // If none remain, exit
 
-    // Handle 256B chunks (8 stnp pairs)
-    cmp x5, #256
-    b.lo write_cleanup_128
+    // Tiered tail: bits in x5 encode presence of each power-of-two chunk.
+    // bit8=256B, bit7=128B, bit6=64B, bit5=32B.
+    tbz x5, #8, write_cleanup_128
+    // 256B chunk (8 stnp pairs)
     stnp q0, q1, [x7, #0]
     stnp q2, q3, [x7, #32]
     stnp q4, q5, [x7, #64]
@@ -105,9 +117,8 @@ write_loop_cleanup:         // Tail handling when <512B remain
     add x7, x7, #256
     sub x5, x5, #256
 
-write_cleanup_128:            // 128B chunk
-    cmp x5, #128
-    b.lo write_cleanup_64
+write_cleanup_128:            // Optional 128B chunk
+    tbz x5, #7, write_cleanup_64
     stnp q0, q1, [x7, #0]
     stnp q2, q3, [x7, #32]
     stnp q4, q5, [x7, #64]
@@ -115,28 +126,42 @@ write_cleanup_128:            // 128B chunk
     add x7, x7, #128
     sub x5, x5, #128
 
-write_cleanup_64:             // 64B chunk
-    cmp x5, #64
-    b.lo write_cleanup_32
+write_cleanup_64:             // Optional 64B chunk
+    tbz x5, #6, write_cleanup_32
     stnp q0, q1, [x7, #0]
     stnp q2, q3, [x7, #32]
     add x7, x7, #64
     sub x5, x5, #64
 
-write_cleanup_32:             // 32B chunk
-    cmp x5, #32
-    b.lo write_cleanup_byte
+write_cleanup_32:             // Optional 32B chunk
+    tbz x5, #5, write_cleanup_16
     stnp q0, q1, [x7, #0]
     add x7, x7, #32
     sub x5, x5, #32
 
-write_cleanup_byte:            // Byte tail (<32B)
-    // Final byte-by-byte write for <32B remainder. Expected to be rare in
-    // bandwidth benchmarks but ensures correctness for any input size.
-    cbz x5, write_loop_end
-    strb wzr, [x7], #1
-    subs x5, x5, #1
-    b.ne write_cleanup_byte
+write_cleanup_16:             // Optional 16B scalar zero store
+    tbz x5, #4, write_cleanup_8
+    str q0, [x7], #16
+    sub x5, x5, #16
+
+write_cleanup_8:              // Optional 8B scalar zero store
+    tbz x5, #3, write_cleanup_4
+    str xzr, [x7], #8
+    sub x5, x5, #8
+
+write_cleanup_4:              // Optional 4B scalar zero store
+    tbz x5, #2, write_cleanup_2
+    str wzr, [x7], #4
+    sub x5, x5, #4
+
+write_cleanup_2:              // Optional 2B scalar zero store
+    tbz x5, #1, write_cleanup_1
+    strh wzr, [x7], #2
+    sub x5, x5, #2
+
+write_cleanup_1:              // Optional final 1B zero store
+    tbz x5, #0, write_loop_end
+    strb wzr, [x7]
 
 write_loop_end:             // Return to caller
     ret                     // Return
