@@ -78,7 +78,7 @@ namespace Constants {
   constexpr size_t CACHE_LINE_SIZE_BYTES = 64;  // Cache line size for alignment (64 bytes on Apple Silicon)
   
   // Latency test constants
-  constexpr size_t LATENCY_STRIDE_BYTES = 64;  // Latency test access stride (8-byte aligned, non-64B multiple)
+  constexpr size_t LATENCY_STRIDE_BYTES = 512;  // Latency test access stride (8-byte aligned, DRAM-oriented default)
   constexpr size_t MIN_LATENCY_BUFFER_SIZE = LATENCY_STRIDE_BYTES * 2;  // Minimum size (2 pointers worth)
   static_assert((LATENCY_STRIDE_BYTES % sizeof(void*)) == 0,
                 "LATENCY_STRIDE_BYTES must be pointer-size aligned for latency chain");

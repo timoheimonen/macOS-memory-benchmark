@@ -117,7 +117,7 @@ std::string usage_options(const std::string& prog_name) {
       << "                        Must be > 0 and a multiple of pointer size (typically 8 bytes).\n"
       << "  -latency-chain-mode <mode> Pointer-chain construction policy. Modes: auto (default), global-random,\n"
       << "                        random-box, same-random-in-box, diff-random-in-box.\n"
-      << "  -latency-tlb-locality-kb <size_kb> TLB-locality window for latency pointer chains (default: 16 KB; set 0 to disable).\n"
+      << "  -latency-tlb-locality-kb <size_kb> TLB-locality window for latency pointer chains (default: 0 KB = global random; non-zero enables box-locality).\n"
       << "                        Must be a multiple of system page size (typically 4 KB or 16 KB).\n"
       << "  -threads <count>      Number of threads to use for benchmarks (default: detected\n"
       << "                        CPU core count). Applies to all benchmarks including cache tests.\n"

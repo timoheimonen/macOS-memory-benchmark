@@ -537,8 +537,25 @@ void run_main_memory_latency_test(const BenchmarkBuffers& buffers, const Benchma
   }
 
   if (!config.user_specified_latency_tlb_locality) {
-    const double tlb_hit_latency_ns =
-        timings.total_lat_time_ns / static_cast<double>(config.lat_num_accesses);
+    constexpr size_t kAutoTlbHitLocalityBytes = 16 * Constants::BYTES_PER_KB;
+    bool hit_measured = false;
+    bool miss_measured = false;
+    double tlb_hit_latency_ns = 0.0;
+    double tlb_miss_latency_ns = 0.0;
+
+    if (setup_latency_chain(buffers.lat_buffer(),
+                            config.buffer_size,
+                            config.latency_stride_bytes,
+                            kAutoTlbHitLocalityBytes,
+                            nullptr,
+                            LatencyChainMode::RandomInBoxRandomBox) == EXIT_SUCCESS) {
+      show_progress();
+      warmup_latency(buffers.lat_buffer(), config.buffer_size);
+      const double hit_total_lat_time_ns =
+          run_latency_test(buffers.lat_buffer(), config.lat_num_accesses, test_timer, nullptr, 0);
+      tlb_hit_latency_ns = hit_total_lat_time_ns / static_cast<double>(config.lat_num_accesses);
+      hit_measured = true;
+    }
 
     if (setup_latency_chain(buffers.lat_buffer(),
                             config.buffer_size,
@@ -550,9 +567,11 @@ void run_main_memory_latency_test(const BenchmarkBuffers& buffers, const Benchma
       warmup_latency(buffers.lat_buffer(), config.buffer_size);
       const double miss_total_lat_time_ns =
           run_latency_test(buffers.lat_buffer(), config.lat_num_accesses, test_timer, nullptr, 0);
-      const double tlb_miss_latency_ns =
-          miss_total_lat_time_ns / static_cast<double>(config.lat_num_accesses);
+      tlb_miss_latency_ns = miss_total_lat_time_ns / static_cast<double>(config.lat_num_accesses);
+      miss_measured = true;
+    }
 
+    if (hit_measured && miss_measured) {
       results.has_auto_tlb_breakdown = true;
       results.tlb_hit_latency_ns = tlb_hit_latency_ns;
       results.tlb_miss_latency_ns = tlb_miss_latency_ns;
