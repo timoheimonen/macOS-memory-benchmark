@@ -10,11 +10,6 @@ License: GPL-3.0 license
 ![Macbook Air M5 Cache Latency from multiple JSON-files](pictures/MacBookAirM5_latency_vs_cache-stride-tlb.png)  
 Macbook Air M5 Cache Latency by example-script provided. Using different size TLB locality and Stride size. 
 
-![Macbook Air M5 TLB Analysis with 64B Stride](pictures/MacBookAirM5_latency_memory_hierarchy.png)  
-Macbook Air M5 memory latency from [JSON file](results/0.53.8/MacbookAirM5_benchmark.json)  
-DRAM TLB-hit ~9,8ns is really nice!  
-More Apple Silicon M5 results in [/results/0.53.8/ -folder](results/0.53.8/)
-
 ## Star History
 
 [![Star History Chart](https://api.star-history.com/chart?repos=timoheimonen/macOS-memory-benchmark&type=date&legend=top-left)](https://www.star-history.com/?repos=timoheimonen%2FmacOS-memory-benchmark&type=date&legend=top-left)
