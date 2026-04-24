@@ -290,6 +290,7 @@ TEST_F(MessagesErrorTest, ErrorAnalyzeTlbMustBeUsedAlone) {
   EXPECT_NE(msg.find("-analyze-tlb"), std::string::npos);
   EXPECT_NE(msg.find("-output"), std::string::npos);
   EXPECT_NE(msg.find("-latency-stride-bytes"), std::string::npos);
+  EXPECT_NE(msg.find("-tlb-density"), std::string::npos);
 }
 
 TEST_F(MessagesErrorTest, ErrorMadviseFailed) {
@@ -433,6 +434,12 @@ TEST_F(MessagesFormattingTest, ReportTlbChainMode) {
   EXPECT_NE(msg.find("random-box"), std::string::npos);
 }
 
+TEST_F(MessagesFormattingTest, ReportTlbDensity) {
+  std::string msg = Messages::report_tlb_density("high");
+  EXPECT_NE(msg.find("Sweep Density"), std::string::npos);
+  EXPECT_NE(msg.find("high"), std::string::npos);
+}
+
 TEST_F(MessagesFormattingTest, ReportTlbRequestedAndEffectiveChainMode) {
   std::string requested = Messages::report_tlb_chain_mode_requested("auto");
   EXPECT_NE(requested.find("Requested Chain Mode"), std::string::npos);
@@ -519,6 +526,7 @@ TEST_F(MessagesFormattingTest, UsageOptions) {
   EXPECT_NE(msg.find("-buffersize"), std::string::npos);
   EXPECT_NE(msg.find("-count"), std::string::npos);
   EXPECT_NE(msg.find("-analyze-tlb"), std::string::npos);
+  EXPECT_NE(msg.find("-tlb-density"), std::string::npos);
   EXPECT_NE(msg.find("-latency-samples"), std::string::npos);
   EXPECT_NE(msg.find("-latency-stride-bytes"), std::string::npos);
   EXPECT_NE(msg.find("-latency-chain-mode"), std::string::npos);

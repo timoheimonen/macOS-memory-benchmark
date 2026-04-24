@@ -114,7 +114,11 @@ std::string usage_options(const std::string& prog_name) {
       << "                        In -only-latency mode, -buffersize 0 disables main memory latency.\n"
       << "  -count <count>        Number of full loops (read/write/copy/latency) (default: " << Constants::DEFAULT_LOOP_COUNT << ").\n"
       << "                        When count > 1, statistics include percentiles (P50/P90/P95/P99) and stddev.\n"
-      << "  -analyze-tlb          Run standalone TLB analysis benchmark mode (allows optional -output <file>, -latency-stride-bytes <bytes>, and -latency-chain-mode <mode> only).\n"
+      << "  -analyze-tlb          Run standalone TLB analysis benchmark mode (allows optional -output <file>, -latency-stride-bytes <bytes>,\n"
+      << "                        -latency-chain-mode <mode>, and -tlb-density <low|medium|high> only).\n"
+      << "  -tlb-density <level>  Sweep density for -analyze-tlb: low, medium, high (default: high).\n"
+      << "                        low = 15-point base sweep, no refinement. medium = 15-point base + refinement.\n"
+      << "                        high = 29-point base + refinement.\n"
       << "  -analyze-core2core    Run standalone core-to-core cache-line handoff benchmark mode\n"
       << "                        (allows optional -output <file>, -count <count>, and -latency-samples <count> only).\n"
       << "  -latency-samples <count> Number of latency samples to collect per test (default: " << Constants::DEFAULT_LATENCY_SAMPLE_COUNT << ")\n"
@@ -199,6 +203,10 @@ std::string report_tlb_stride(size_t stride_bytes) {
   std::ostringstream oss;
   oss << "Stride: " << stride_bytes << " bytes";
   return oss.str();
+}
+
+std::string report_tlb_density(const std::string& density_name) {
+  return "Sweep Density: " + density_name;
 }
 
 std::string report_tlb_chain_mode(const std::string& chain_mode_name) {

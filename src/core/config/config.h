@@ -41,6 +41,16 @@
 #include "core/memory/memory_utils.h"
 
 /**
+ * @enum TlbSweepDensity
+ * @brief Sweep density profile for standalone `-analyze-tlb` mode
+ */
+enum class TlbSweepDensity {
+  Low = 0,    ///< 15-point base sweep, no refinement
+  Medium,     ///< 15-point base sweep + boundary refinement
+  High,       ///< 29-point base sweep + boundary refinement
+};
+
+/**
  * @struct BenchmarkConfig
  * @brief Configuration structure containing all benchmark settings
  *
@@ -58,6 +68,7 @@ struct BenchmarkConfig {
   size_t latency_stride_bytes = Constants::LATENCY_STRIDE_BYTES;  ///< Stride used for latency pointer chains (bytes)
   LatencyChainMode latency_chain_mode = LatencyChainMode::Auto;  ///< Pointer-chain construction policy (auto preserves default behavior)
   size_t latency_tlb_locality_bytes = Constants::DEFAULT_LATENCY_TLB_LOCALITY_KB * Constants::BYTES_PER_KB;  ///< TLB-locality window for latency chains (default 1 MB; 0 = global random)
+  TlbSweepDensity tlb_sweep_density = TlbSweepDensity::High;  ///< Sweep density for standalone -analyze-tlb mode
   
   // Calculated sizes
   size_t buffer_size = 0;        ///< Final buffer size in bytes (calculated from buffer_size_mb)

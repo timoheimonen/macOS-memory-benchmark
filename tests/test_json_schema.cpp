@@ -95,6 +95,7 @@ TEST(JsonSchemaTest, PatternExporterIncludesPatternsMode) {
 TEST(JsonSchemaTest, TlbAnalysisExporterIncludesModeAndCoreCounts) {
   BenchmarkConfig config;
   config.output_file = make_temp_json_path("tlb_schema").string();
+  config.tlb_sweep_density = TlbSweepDensity::High;
 
   const std::string cpu_name = "test-cpu";
   const std::vector<size_t> localities_bytes = {16 * Constants::BYTES_PER_KB};
@@ -152,6 +153,8 @@ TEST(JsonSchemaTest, TlbAnalysisExporterIncludesModeAndCoreCounts) {
   EXPECT_EQ(output_json[JsonKeys::CONFIGURATION][JsonKeys::EFFICIENCY_CORES], 6);
   EXPECT_TRUE(output_json[JsonKeys::CONFIGURATION].contains(JsonKeys::LATENCY_CHAIN_MODE));
   EXPECT_EQ(output_json[JsonKeys::CONFIGURATION][JsonKeys::LATENCY_CHAIN_MODE], "random-box");
+  EXPECT_TRUE(output_json[JsonKeys::CONFIGURATION].contains(JsonKeys::TLB_DENSITY));
+  EXPECT_EQ(output_json[JsonKeys::CONFIGURATION][JsonKeys::TLB_DENSITY], "high");
   EXPECT_TRUE(output_json[JsonKeys::CONFIGURATION].contains("fine_sweep_added_points"));
   EXPECT_TRUE(output_json["tlb_analysis"].contains("private_cache_knee"));
 

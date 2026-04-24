@@ -38,6 +38,18 @@
 
 namespace {
 
+const char* tlb_sweep_density_to_string(TlbSweepDensity density) {
+  switch (density) {
+    case TlbSweepDensity::Low:
+      return "low";
+    case TlbSweepDensity::Medium:
+      return "medium";
+    case TlbSweepDensity::High:
+      return "high";
+  }
+  return "high";
+}
+
 nlohmann::ordered_json build_tlb_boundary_json(const TlbBoundaryDetection& boundary,
                                                size_t inferred_entries) {
   nlohmann::ordered_json boundary_json;
@@ -115,6 +127,7 @@ int save_tlb_analysis_to_json(const TlbAnalysisJsonContext& context) {
       {JsonKeys::L1_CACHE_SIZE_BYTES, context.l1_cache_size_bytes},
       {JsonKeys::LATENCY_STRIDE_BYTES, context.stride_bytes},
       {JsonKeys::LATENCY_CHAIN_MODE, latency_chain_mode_to_string(effective_chain_mode)},
+      {JsonKeys::TLB_DENSITY, tlb_sweep_density_to_string(context.config.tlb_sweep_density)},
       {JsonKeys::LATENCY_SAMPLE_COUNT, static_cast<int>(context.loops_per_point)},
       {"accesses_per_loop", context.accesses_per_loop},
       {"tlb_guard_bytes", context.tlb_guard_bytes},

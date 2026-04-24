@@ -61,7 +61,7 @@ constexpr size_t kSweepMaxLocalityBytes = 256 * Constants::BYTES_PER_MB;
 constexpr size_t kPageWalkComparisonLocalityBytes = 512 * Constants::BYTES_PER_MB;
 constexpr size_t kPageWalkMinimumBufferMb = 512;
 
-const std::array<size_t, 15> kLocalitySweepBytes = {
+const std::array<size_t, 15> kLocalitySweepLowBytes = {
     16 * Constants::BYTES_PER_KB,        64 * Constants::BYTES_PER_KB,
     128 * Constants::BYTES_PER_KB,       256 * Constants::BYTES_PER_KB,
     512 * Constants::BYTES_PER_KB,       1 * Constants::BYTES_PER_MB,
@@ -72,9 +72,43 @@ const std::array<size_t, 15> kLocalitySweepBytes = {
     256 * Constants::BYTES_PER_MB,
 };
 
+const std::array<size_t, 29> kLocalitySweepHighBytes = {
+    16 * Constants::BYTES_PER_KB,        32 * Constants::BYTES_PER_KB,
+    64 * Constants::BYTES_PER_KB,        96 * Constants::BYTES_PER_KB,
+    128 * Constants::BYTES_PER_KB,       192 * Constants::BYTES_PER_KB,
+    256 * Constants::BYTES_PER_KB,       384 * Constants::BYTES_PER_KB,
+    512 * Constants::BYTES_PER_KB,       768 * Constants::BYTES_PER_KB,
+    1 * Constants::BYTES_PER_MB,         1536 * Constants::BYTES_PER_KB,
+    2 * Constants::BYTES_PER_MB,         3 * Constants::BYTES_PER_MB,
+    4 * Constants::BYTES_PER_MB,         6 * Constants::BYTES_PER_MB,
+    8 * Constants::BYTES_PER_MB,         10 * Constants::BYTES_PER_MB,
+    12 * Constants::BYTES_PER_MB,        14 * Constants::BYTES_PER_MB,
+    16 * Constants::BYTES_PER_MB,        24 * Constants::BYTES_PER_MB,
+    32 * Constants::BYTES_PER_MB,        48 * Constants::BYTES_PER_MB,
+    64 * Constants::BYTES_PER_MB,        96 * Constants::BYTES_PER_MB,
+    128 * Constants::BYTES_PER_MB,       192 * Constants::BYTES_PER_MB,
+    256 * Constants::BYTES_PER_MB,
+};
+
 const std::array<size_t, 3> kBufferCandidateMb = {1024, 512, 256};
 
 constexpr size_t kRefinementSubdivisions = 8;
+
+const char* tlb_sweep_density_to_string(TlbSweepDensity density) {
+  switch (density) {
+    case TlbSweepDensity::Low:
+      return "low";
+    case TlbSweepDensity::Medium:
+      return "medium";
+    case TlbSweepDensity::High:
+      return "high";
+  }
+  return "high";
+}
+
+bool tlb_density_enables_refinement(TlbSweepDensity density) {
+  return density != TlbSweepDensity::Low;
+}
 
 struct LocalityMeasurement {
   size_t locality_bytes = 0;
@@ -144,24 +178,34 @@ size_t calculate_min_sweep_locality(size_t stride_bytes) {
   return std::max(kSweepMinLocalityBytes, 2 * stride_bytes);
 }
 
-std::vector<size_t> build_effective_locality_sweep(size_t stride_bytes) {
+std::vector<size_t> build_effective_locality_sweep(size_t stride_bytes,
+                                                   TlbSweepDensity density) {
   const size_t min_locality_bytes = calculate_min_sweep_locality(stride_bytes);
   std::vector<size_t> localities;
+
+  const size_t* canonical_localities = nullptr;
+  size_t canonical_count = 0;
+  if (density == TlbSweepDensity::High) {
+    canonical_localities = kLocalitySweepHighBytes.data();
+    canonical_count = kLocalitySweepHighBytes.size();
+  } else {
+    canonical_localities = kLocalitySweepLowBytes.data();
+    canonical_count = kLocalitySweepLowBytes.size();
+  }
 
   if (min_locality_bytes > kSweepMaxLocalityBytes) {
     return localities;
   }
 
-  localities.reserve(kLocalitySweepBytes.size() + 1);
-  if (std::none_of(kLocalitySweepBytes.begin(),
-                   kLocalitySweepBytes.end(),
-                   [min_locality_bytes](size_t value) {
-                     return value == min_locality_bytes;
-                   })) {
+  localities.reserve(canonical_count + 1);
+  if (std::none_of(canonical_localities,
+                   canonical_localities + canonical_count,
+                   [min_locality_bytes](size_t value) { return value == min_locality_bytes; })) {
     localities.push_back(min_locality_bytes);
   }
 
-  for (size_t locality_bytes : kLocalitySweepBytes) {
+  for (size_t i = 0; i < canonical_count; ++i) {
+    const size_t locality_bytes = canonical_localities[i];
     if (locality_bytes < min_locality_bytes || locality_bytes > kSweepMaxLocalityBytes) {
       continue;
     }
@@ -384,6 +428,8 @@ int run_tlb_analysis(const BenchmarkConfig& config) {
     return EXIT_FAILURE;
   }
   const size_t analysis_stride_bytes = config.latency_stride_bytes;
+  const TlbSweepDensity sweep_density = config.tlb_sweep_density;
+  const bool refinement_enabled = tlb_density_enables_refinement(sweep_density);
 
   const size_t page_size_bytes = static_cast<size_t>(getpagesize());
   const size_t l1_cache_size_bytes = get_l1_cache_size();
@@ -420,7 +466,8 @@ int run_tlb_analysis(const BenchmarkConfig& config) {
     return EXIT_FAILURE;
   }
 
-  std::vector<size_t> localities_bytes = build_effective_locality_sweep(analysis_stride_bytes);
+  std::vector<size_t> localities_bytes =
+      build_effective_locality_sweep(analysis_stride_bytes, sweep_density);
   if (localities_bytes.empty()) {
     std::cerr << Messages::error_prefix()
               << Messages::error_buffer_stride_invalid_latency_chain(
@@ -457,6 +504,7 @@ int run_tlb_analysis(const BenchmarkConfig& config) {
   std::cout << Messages::report_tlb_page_size(page_size_bytes) << std::endl;
   std::cout << Messages::report_tlb_buffer(selected_buffer_mb, buffer_locked) << std::endl;
   std::cout << Messages::report_tlb_stride(analysis_stride_bytes) << std::endl;
+  std::cout << Messages::report_tlb_density(tlb_sweep_density_to_string(sweep_density)) << std::endl;
   std::cout << Messages::report_tlb_chain_mode_requested(
                    latency_chain_mode_to_string(config.latency_chain_mode))
             << std::endl;
@@ -565,26 +613,28 @@ int run_tlb_analysis(const BenchmarkConfig& config) {
   }
 
   std::vector<size_t> refinement_points;
-  if (private_cache_knee.detected) {
-    const std::vector<size_t> points = build_refinement_points(final_localities_bytes,
-                                                               private_cache_knee.boundary_index,
-                                                               localities_bytes.front(),
-                                                               localities_bytes.back());
-    refinement_points.insert(refinement_points.end(), points.begin(), points.end());
-  }
-  if (l1_boundary.detected) {
-    const std::vector<size_t> points = build_refinement_points(final_localities_bytes,
-                                                               l1_boundary.boundary_index,
-                                                               localities_bytes.front(),
-                                                               localities_bytes.back());
-    refinement_points.insert(refinement_points.end(), points.begin(), points.end());
-  }
-  if (l2_boundary.detected) {
-    const std::vector<size_t> points = build_refinement_points(final_localities_bytes,
-                                                               l2_boundary.boundary_index,
-                                                               localities_bytes.front(),
-                                                               localities_bytes.back());
-    refinement_points.insert(refinement_points.end(), points.begin(), points.end());
+  if (refinement_enabled) {
+    if (private_cache_knee.detected) {
+      const std::vector<size_t> points = build_refinement_points(final_localities_bytes,
+                                                                 private_cache_knee.boundary_index,
+                                                                 localities_bytes.front(),
+                                                                 localities_bytes.back());
+      refinement_points.insert(refinement_points.end(), points.begin(), points.end());
+    }
+    if (l1_boundary.detected) {
+      const std::vector<size_t> points = build_refinement_points(final_localities_bytes,
+                                                                 l1_boundary.boundary_index,
+                                                                 localities_bytes.front(),
+                                                                 localities_bytes.back());
+      refinement_points.insert(refinement_points.end(), points.begin(), points.end());
+    }
+    if (l2_boundary.detected) {
+      const std::vector<size_t> points = build_refinement_points(final_localities_bytes,
+                                                                 l2_boundary.boundary_index,
+                                                                 localities_bytes.front(),
+                                                                 localities_bytes.back());
+      refinement_points.insert(refinement_points.end(), points.begin(), points.end());
+    }
   }
 
   std::sort(refinement_points.begin(), refinement_points.end());
@@ -752,6 +802,7 @@ int run_tlb_analysis(const BenchmarkConfig& config) {
   std::cout << Messages::report_tlb_page_size(page_size_bytes) << std::endl;
   std::cout << Messages::report_tlb_buffer(selected_buffer_mb, buffer_locked) << std::endl;
   std::cout << Messages::report_tlb_stride(analysis_stride_bytes) << std::endl;
+  std::cout << Messages::report_tlb_density(tlb_sweep_density_to_string(sweep_density)) << std::endl;
   std::cout << Messages::report_tlb_chain_mode(
                    latency_chain_mode_to_string(effective_chain_mode))
             << std::endl;

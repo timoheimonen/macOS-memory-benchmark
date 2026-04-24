@@ -2,7 +2,7 @@
 
 ## 1. Purpose
 
-This document specifies how `macOS-memory-benchmark` implements standalone TLB analysis mode (`-analyze-tlb`) in version `0.53.7`.
+This document specifies how `macOS-memory-benchmark` implements standalone TLB analysis mode (`-analyze-tlb`) in version `0.53.3`.
 
 The goal is to provide a reproducible, implementation-accurate description of:
 
@@ -38,20 +38,29 @@ Related whitepaper for the other standalone analysis mode:
 
 ### 3.1 Accepted Forms
 
-`-analyze-tlb` runs a dedicated analysis path and accepts only optional JSON output and optional latency stride override:
+`-analyze-tlb` runs a dedicated analysis path and accepts only optional JSON output, optional latency stride override, optional chain-mode override, and optional sweep density:
 
 ```bash
 memory_benchmark -analyze-tlb
 memory_benchmark -analyze-tlb -output tlb_analysis.json
 memory_benchmark -output tlb_analysis.json -analyze-tlb
 memory_benchmark -analyze-tlb -latency-stride-bytes 128 -output tlb_analysis_stride128.json
+memory_benchmark -analyze-tlb -latency-chain-mode random-box -tlb-density medium -output tlb_analysis_medium.json
 ```
 
 ### 3.2 Stride Default
 
 If `-latency-stride-bytes` is not provided, the default stride is **256 bytes**, which matches the standard latency mode default (`Constants::LATENCY_STRIDE_BYTES`).
 
-### 3.3 Rejected Combinations
+### 3.3 Sweep Density (`-tlb-density`)
+
+Sweep density applies only to `-analyze-tlb`.
+
+- `low`: 15-point base sweep, no refinement pass
+- `medium`: 15-point base sweep + refinement pass
+- `high` (default): 29-point base sweep + refinement pass
+
+### 3.4 Rejected Combinations
 
 All other options are rejected when `-analyze-tlb` is present.
 
@@ -98,10 +107,21 @@ Per-point central value is `P50` (median) over 30 loops.
 
 ### 4.3 Locality Sweep
 
-Main sweep windows are selected from the canonical set:
+Main sweep windows depend on `-tlb-density`:
 
-- `16KB`, `64KB`, `128KB`, `256KB`, `512KB`
-- `1MB`, `2MB`, `4MB`, `8MB`, `12MB`, `16MB`, `32MB`, `64MB`, `128MB`, `256MB`
+- `low` / `medium` base set (15 points):
+  - `16KB`, `64KB`, `128KB`, `256KB`, `512KB`
+  - `1MB`, `2MB`, `4MB`, `8MB`, `12MB`, `16MB`, `32MB`, `64MB`, `128MB`, `256MB`
+
+- `high` base set (29 points):
+  - `16KB`, `32KB`, `64KB`, `96KB`, `128KB`, `192KB`, `256KB`, `384KB`, `512KB`, `768KB`
+  - `1MB`, `1536KB`, `2MB`, `3MB`, `4MB`, `6MB`, `8MB`, `10MB`, `12MB`, `14MB`, `16MB`
+  - `24MB`, `32MB`, `48MB`, `64MB`, `96MB`, `128MB`, `192MB`, `256MB`
+
+Refinement policy by density:
+
+- `low`: refinement disabled
+- `medium` / `high`: refinement enabled around detected transitions
 
 Effective sweep start is stride-aware:
 
@@ -117,13 +137,14 @@ Separate page-walk comparison point:
 
 ## 5. Boundary Detection Algorithm
 
-Boundary detection uses a recency-weighted segment baseline with multi-point persistence and IQR-overlap rejection.
+Boundary detection uses a recency-weighted segment baseline with multi-point persistence, adaptive noise thresholding, and IQR-overlap rejection.
 
 For candidate index `i`:
 
 - `baseline_ns = recency_weighted_average(p50[segment_start, i))` — weighted average where point `j` receives weight `(j - segment_start + 1)`. Recent measurements carry more influence, reducing drag from early points that may have had different thermal or frequency conditions.
 - `step_ns = p50[i] - baseline_ns`
-- `threshold_ns = max(2.0ns, baseline_ns * 0.10)`
+- `noise_boost_ns = median(IQR of baseline loop-latency rows)` (when loop rows are available and baseline has at least 3 points)
+- `threshold_ns = max(2.0ns, baseline_ns * 0.10, noise_boost_ns)`
 
 Candidate passes threshold when:
 
@@ -143,9 +164,15 @@ where:
 
 The guard acts as a hard lower-bound filter on the candidate index `i`; it does not shift the segment start or baseline calculation.
 
-### 5.2 IQR-Overlap Rejection
+### 5.2 Adaptive Noise Floor and IQR-Overlap Rejection
 
-When per-point raw loop latencies are available (the 30 individual loop measurements), the detector applies an interquartile-range (IQR) overlap check to reject candidates whose step falls within measurement noise:
+When per-point raw loop latencies are available (the 30 individual loop measurements), the detector first estimates a baseline-noise floor from IQR values and raises the candidate threshold when needed:
+
+- `IQR(point_j) = Q3_j - Q1_j`
+- `noise_boost_ns = median(IQR(point_j))` for `j in [segment_start, i)`
+- effective threshold includes this term: `max(2.0ns, 10% baseline, noise_boost_ns)`
+
+Then it applies an IQR-overlap check to reject candidates whose step still falls inside baseline noise overlap:
 
 - `avg_baseline_q3 = average(Q3 of raw loops for each point in [segment_start, i))`
 - `candidate_q1 = Q1 of raw loops at point i`
@@ -300,7 +327,7 @@ Observed fields in this sample:
 
 ### Algorithm Walkthrough (M4 L1 Detection)
 
-The sweep includes points: `[16KB, 64KB, 128KB, 256KB, 512KB, 1MB, 2MB, 4MB, 8MB, ...]`.
+The sweep includes points: `[16KB, 32KB, 64KB, 96KB, 128KB, 192KB, 256KB, 384KB, 512KB, 768KB, 1MB, 1536KB, 2MB, 3MB, 4MB, 6MB, 8MB, ...]`.
 
 The L1 scan begins at `16KB` (min_sweep_locality with stride 64 bytes). It computes:
 
