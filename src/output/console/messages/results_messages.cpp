@@ -79,10 +79,36 @@ std::string results_latency_total_time(double total_time_sec) {
   return oss.str();
 }
 
-std::string results_latency_average(double latency_ns) {
+namespace {
+
+std::string format_locality_label(size_t locality_bytes) {
+  std::ostringstream locality;
+
+  if (locality_bytes == 0) {
+    return "global random locality";
+  }
+
+  if (locality_bytes < 1024) {
+    locality << locality_bytes << " B locality";
+    return locality.str();
+  }
+
+  locality << std::fixed << std::setprecision(2);
+  if (locality_bytes < 1024 * 1024) {
+    locality << (locality_bytes / 1024.0) << " KB locality";
+    return locality.str();
+  }
+
+  locality << (locality_bytes / (1024.0 * 1024.0)) << " MB locality";
+  return locality.str();
+}
+
+}  // namespace
+
+std::string results_latency_average(double latency_ns, size_t locality_bytes) {
   std::ostringstream oss;
   oss << std::fixed << std::setprecision(Constants::LATENCY_PRECISION);
-  oss << "  Average latency: " << latency_ns << " ns";
+  oss << "  Average latency (" << format_locality_label(locality_bytes) << "): " << latency_ns << " ns";
   return oss.str();
 }
 

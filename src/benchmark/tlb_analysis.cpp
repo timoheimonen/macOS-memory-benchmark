@@ -280,6 +280,7 @@ int run_tlb_analysis(const BenchmarkConfig& config) {
   const size_t page_walk_baseline_locality_bytes = localities_bytes.front();
   const LatencyChainMode effective_chain_mode =
       resolve_latency_chain_mode(config.latency_chain_mode, page_walk_baseline_locality_bytes);
+  const bool can_measure_page_walk_penalty = selected_buffer_mb >= kPageWalkMinimumBufferMb;
 
   bool buffer_locked = false;
   if (mlock(latency_buffer.get(), selected_buffer_bytes) == 0) {
@@ -297,6 +298,30 @@ int run_tlb_analysis(const BenchmarkConfig& config) {
     return EXIT_FAILURE;
   }
   auto& timer = *timer_opt;
+
+  std::cout << std::endl;
+  std::cout << Messages::report_tlb_settings_header() << std::endl;
+  std::cout << Messages::report_tlb_cpu(cpu_name) << std::endl;
+  std::cout << Messages::report_tlb_page_size(page_size_bytes) << std::endl;
+  std::cout << Messages::report_tlb_buffer(selected_buffer_mb, buffer_locked) << std::endl;
+  std::cout << Messages::report_tlb_stride(analysis_stride_bytes) << std::endl;
+  std::cout << Messages::report_tlb_chain_mode_requested(
+                   latency_chain_mode_to_string(config.latency_chain_mode))
+            << std::endl;
+  std::cout << Messages::report_tlb_chain_mode_effective(
+                   latency_chain_mode_to_string(effective_chain_mode))
+            << std::endl;
+  std::cout << Messages::report_tlb_loop_config(kLoopsPerPoint, kAccessesPerLoop) << std::endl;
+  std::cout << Messages::report_tlb_sweep_range(localities_bytes.front(),
+                                                localities_bytes.back(),
+                                                localities_bytes.size())
+            << std::endl;
+  std::cout << Messages::report_tlb_page_walk_config(can_measure_page_walk_penalty,
+                                                     kPageWalkComparisonLocalityBytes / Constants::BYTES_PER_MB,
+                                                     kPageWalkMinimumBufferMb,
+                                                     selected_buffer_mb)
+            << std::endl;
+  std::cout << std::endl;
 
   std::vector<double> p50_latency_ns;
   std::vector<std::vector<double>> sweep_loop_latencies_ns;
@@ -341,7 +366,6 @@ int run_tlb_analysis(const BenchmarkConfig& config) {
     }
   }
 
-  const bool can_measure_page_walk_penalty = selected_buffer_mb >= kPageWalkMinimumBufferMb;
   std::vector<double> page_walk_512mb_loop_latencies_ns;
   double page_walk_512mb_p50_ns = 0.0;
   if (can_measure_page_walk_penalty && !signal_received()) {

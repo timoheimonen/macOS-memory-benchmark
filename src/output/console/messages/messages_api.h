@@ -196,12 +196,22 @@ std::string report_core_to_core_hint_status(const std::string& thread_role,
 
 // --- TLB Analysis Report Messages ---
 const std::string& report_tlb_header();
+const std::string& report_tlb_settings_header();
 std::string report_tlb_cpu(const std::string& cpu_name);
 std::string report_tlb_page_size(size_t page_size_bytes);
 std::string report_tlb_buffer(size_t buffer_mb, bool locked);
 std::string report_tlb_stride(size_t stride_bytes);
 std::string report_tlb_chain_mode(const std::string& chain_mode_name);
+std::string report_tlb_chain_mode_requested(const std::string& chain_mode_name);
+std::string report_tlb_chain_mode_effective(const std::string& chain_mode_name);
 std::string report_tlb_loop_config(size_t loops_per_point, size_t accesses_per_loop);
+std::string report_tlb_sweep_range(size_t start_locality_bytes,
+                                   size_t end_locality_bytes,
+                                   size_t point_count);
+std::string report_tlb_page_walk_config(bool enabled,
+                                        size_t comparison_locality_mb,
+                                        size_t required_buffer_mb,
+                                        size_t selected_buffer_mb);
 const std::string& report_tlb_l1_section();
 const std::string& report_tlb_l2_section();
 std::string report_tlb_boundary_kb(size_t boundary_kb);
@@ -252,7 +262,7 @@ std::string results_write_bandwidth(double bw_gb_s, double total_time);
 std::string results_copy_bandwidth(double bw_gb_s, double total_time);
 std::string results_main_memory_latency();
 std::string results_latency_total_time(double total_time_sec);
-std::string results_latency_average(double latency_ns);
+std::string results_latency_average(double latency_ns, size_t locality_bytes);
 std::string results_latency_tlb_hit(double latency_ns);
 std::string results_latency_tlb_miss(double latency_ns);
 std::string results_latency_page_walk_penalty(double penalty_ns);

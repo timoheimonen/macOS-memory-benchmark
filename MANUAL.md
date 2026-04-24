@@ -115,8 +115,8 @@ Both matter: some workloads are throughput-bound, others are access-latency-boun
 
 Latency tests use dependent pointer-chase chains. `-latency-tlb-locality-kb` controls how the chain is constructed:
 
-- `0` (default): fully global random chain
-- `16`: randomized within 16 KB windows, plus randomized window order
+- `1024` (default): randomized within 1 MB windows, plus randomized window order
+- `0`: fully global random chain
 - non-zero values must be multiples of system page size
 
 `-latency-chain-mode` controls pointer-chain ordering policy:
@@ -249,7 +249,7 @@ Pattern mode (`-patterns`) measures bandwidth sensitivity across:
 #### `-latency-stride-bytes <bytes>`
 
 - Pointer-chain stride for latency tests
-- Default: `512`
+- Default: `256`
 - Must be `> 0`
 - Must be a multiple of 8 bytes (pointer size on Apple Silicon)
 - Use smaller values (for example `64`) to increase same-page cache-line activity and reduce TLB sensitivity
@@ -265,7 +265,7 @@ Pattern mode (`-patterns`) measures bandwidth sensitivity across:
 #### `-latency-tlb-locality-kb <size_kb>`
 
 - Pointer-chain locality window for latency path
-- Default: `0`
+- Default: `1024`
 - `0` disables locality mode (global random chain)
 - Non-zero values must be exact multiples of system page size
 - In regular benchmark mode, explicitly setting this option disables automatic TLB hit/miss comparison lines
@@ -399,8 +399,8 @@ Shows how bandwidth changes under different access patterns.
 ### Latency analysis with TLB-locality control
 
 ```bash
-# default locality mode (global random)
-memory_benchmark -benchmark -only-latency -buffersize 1024 -latency-samples 5000 -count 10 -output lat_global_default.json
+# default locality mode (1 MB window)
+memory_benchmark -benchmark -only-latency -buffersize 1024 -latency-samples 5000 -count 10 -output lat_default_1mb.json
 
 # global random chain
 memory_benchmark -benchmark -only-latency -buffersize 1024 -latency-samples 5000 -latency-tlb-locality-kb 0 -count 10 -output lat_global.json

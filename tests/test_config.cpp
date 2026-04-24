@@ -28,7 +28,8 @@ TEST(ConfigTest, DefaultValues) {
   EXPECT_EQ(config.iterations, Constants::DEFAULT_ITERATIONS);
   EXPECT_EQ(config.loop_count, Constants::DEFAULT_LOOP_COUNT);
   EXPECT_EQ(config.latency_stride_bytes, static_cast<size_t>(Constants::LATENCY_STRIDE_BYTES));
-  EXPECT_EQ(config.latency_tlb_locality_bytes, 0u);
+  EXPECT_EQ(config.latency_tlb_locality_bytes,
+            Constants::DEFAULT_LATENCY_TLB_LOCALITY_KB * Constants::BYTES_PER_KB);
   EXPECT_EQ(config.custom_cache_size_kb_ll, -1);
   EXPECT_FALSE(config.use_custom_cache_size);
 }
