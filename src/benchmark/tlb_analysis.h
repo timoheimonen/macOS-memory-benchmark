@@ -59,6 +59,8 @@ struct PrivateCacheKneeDetection {
   double step_ns = 0.0;
   double step_percent = 0.0;
   std::string confidence;
+  bool strong_private_cache_candidate = false;
+  bool early_cache_candidate = false;
   bool may_interfere_with_tlb = false;
 };
 

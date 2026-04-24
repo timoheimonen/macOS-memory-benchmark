@@ -60,7 +60,10 @@ nlohmann::ordered_json build_tlb_boundary_json(const TlbBoundaryDetection& bound
   return boundary_json;
 }
 
-nlohmann::ordered_json build_private_cache_knee_json(const PrivateCacheKneeDetection& knee) {
+nlohmann::ordered_json build_private_cache_knee_json(const PrivateCacheKneeDetection& knee,
+                                                     bool interference_elevated,
+                                                     size_t distance_to_l1_bytes,
+                                                     size_t distance_to_l1_pages) {
   nlohmann::ordered_json knee_json;
   knee_json["detected"] = knee.detected;
   if (!knee.detected) {
@@ -73,7 +76,11 @@ nlohmann::ordered_json build_private_cache_knee_json(const PrivateCacheKneeDetec
   knee_json["step_ns"] = knee.step_ns;
   knee_json["step_percent"] = knee.step_percent;
   knee_json["confidence"] = knee.confidence;
+  knee_json["candidate_type"] = knee.strong_private_cache_candidate ? "strong_private_cache" : "early_cache";
   knee_json["may_interfere_with_tlb"] = knee.may_interfere_with_tlb;
+  knee_json["interference_elevated"] = interference_elevated;
+  knee_json["distance_to_l1_bytes"] = distance_to_l1_bytes;
+  knee_json["distance_to_l1_pages"] = distance_to_l1_pages;
   return knee_json;
 }
 
@@ -130,7 +137,10 @@ int save_tlb_analysis_to_json(const TlbAnalysisJsonContext& context) {
   tlb_json["sweep"] = sweep_json;
   tlb_json["l1_tlb_detection"] = build_tlb_boundary_json(context.l1_boundary, context.l1_entries);
   tlb_json["l2_tlb_detection"] = build_tlb_boundary_json(context.l2_boundary, context.l2_entries);
-  tlb_json["private_cache_knee"] = build_private_cache_knee_json(context.private_cache_knee);
+  tlb_json["private_cache_knee"] = build_private_cache_knee_json(context.private_cache_knee,
+                                                                  context.private_cache_interference_elevated,
+                                                                  context.private_cache_to_l1_distance_bytes,
+                                                                  context.private_cache_to_l1_distance_pages);
 
   if (context.l1_boundary.detected) {
     tlb_json["l1_tlb_detection"]["inferred_entries_min"] = context.l1_entries_min;

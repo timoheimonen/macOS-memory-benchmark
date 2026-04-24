@@ -414,6 +414,13 @@ TEST_F(MessagesFormattingTest, MsgTlbAnalysisPageWalkProgress) {
   EXPECT_NE(msg.find("MB"), std::string::npos);
 }
 
+TEST_F(MessagesFormattingTest, MsgTlbAnalysisRefinementStart) {
+  std::string msg = Messages::msg_tlb_analysis_refinement_start(20);
+  EXPECT_NE(msg.find("Starting refinement sweep"), std::string::npos);
+  EXPECT_NE(msg.find("20"), std::string::npos);
+  EXPECT_NE(msg.find("points"), std::string::npos);
+}
+
 TEST_F(MessagesFormattingTest, ReportTlbPageWalkPenaltyWindow) {
   std::string msg = Messages::report_tlb_page_walk_penalty(62.4, 16, 512);
   EXPECT_NE(msg.find("16KB -> 512MB"), std::string::npos);
@@ -468,11 +475,22 @@ TEST_F(MessagesFormattingTest, ReportTlbFineSweepAndPrivateCacheInfo) {
   const std::string& section = Messages::report_tlb_private_cache_section();
   EXPECT_NE(section.find("Private Cache"), std::string::npos);
 
-  std::string risk_high = Messages::report_tlb_private_cache_interference(true);
-  EXPECT_NE(risk_high.find("Elevated"), std::string::npos);
+  std::string candidate_strong = Messages::report_tlb_private_cache_candidate(true);
+  EXPECT_NE(candidate_strong.find("Strong"), std::string::npos);
 
-  std::string risk_low = Messages::report_tlb_private_cache_interference(false);
+  std::string candidate_early = Messages::report_tlb_private_cache_candidate(false);
+  EXPECT_NE(candidate_early.find("Early"), std::string::npos);
+
+  std::string risk_high = Messages::report_tlb_private_cache_interference(true, 512);
+  EXPECT_NE(risk_high.find("Elevated"), std::string::npos);
+  EXPECT_NE(risk_high.find("512"), std::string::npos);
+
+  std::string risk_low = Messages::report_tlb_private_cache_interference(false, 512);
   EXPECT_NE(risk_low.find("Low"), std::string::npos);
+
+  std::string distance = Messages::report_tlb_private_cache_l1_distance(4608, 288);
+  EXPECT_NE(distance.find("4608"), std::string::npos);
+  EXPECT_NE(distance.find("288"), std::string::npos);
 }
 
 TEST_F(MessagesFormattingTest, ReportTlbInferredEntriesRange) {

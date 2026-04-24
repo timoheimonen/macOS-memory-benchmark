@@ -79,6 +79,12 @@ std::string msg_tlb_analysis_page_walk_progress(size_t locality_mb) {
   return oss.str();
 }
 
+std::string msg_tlb_analysis_refinement_start(size_t point_count) {
+  std::ostringstream oss;
+  oss << "Starting refinement sweep (" << point_count << " points)...";
+  return oss.str();
+}
+
 // --- Usage/Help Messages ---
 std::string usage_header(const std::string& version) {
   std::ostringstream oss;
@@ -313,11 +319,27 @@ std::string report_tlb_confidence(const std::string& confidence, double step_ns,
   return oss.str();
 }
 
-std::string report_tlb_private_cache_interference(bool may_interfere) {
-  if (may_interfere) {
-    return "  TLB Interference Risk: Elevated near ~1 MB locality";
+std::string report_tlb_private_cache_candidate(bool strong_private_cache_candidate) {
+  if (strong_private_cache_candidate) {
+    return "  Candidate Type: Strong private-cache candidate";
   }
-  return "  TLB Interference Risk: Low";
+  return "  Candidate Type: Early-cache candidate";
+}
+
+std::string report_tlb_private_cache_interference(bool elevated_risk, size_t locality_kb) {
+  std::ostringstream oss;
+  if (elevated_risk) {
+    oss << "  TLB Interference Risk: Elevated near " << locality_kb << " KB locality";
+    return oss.str();
+  }
+  oss << "  TLB Interference Risk: Low near " << locality_kb << " KB locality";
+  return oss.str();
+}
+
+std::string report_tlb_private_cache_l1_distance(size_t distance_kb, size_t distance_pages) {
+  std::ostringstream oss;
+  oss << "  Distance to L1 TLB Boundary: " << distance_kb << " KB (" << distance_pages << " pages)";
+  return oss.str();
 }
 
 std::string report_tlb_page_walk_penalty(double penalty_ns, size_t from_kb, size_t to_mb) {

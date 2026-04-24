@@ -42,6 +42,7 @@ constexpr double kLastPointStrongStepNs = 8.0;
 constexpr double kLastPointStrongStepPercent = 0.25;
 
 constexpr size_t kPrivateCacheKneeMinBytes = 512 * Constants::BYTES_PER_KB;
+constexpr size_t kStrongPrivateCacheKneeMinBytes = 768 * Constants::BYTES_PER_KB;
 constexpr size_t kPrivateCacheKneeMaxBytes = 2 * Constants::BYTES_PER_MB;
 
 /**
@@ -252,6 +253,9 @@ PrivateCacheKneeDetection detect_private_cache_knee(
   result.step_ns = boundary.step_ns;
   result.step_percent = boundary.step_percent;
   result.confidence = boundary.confidence;
-  result.may_interfere_with_tlb = boundary.boundary_locality_bytes <= (1 * Constants::BYTES_PER_MB);
+  result.strong_private_cache_candidate =
+      boundary.boundary_locality_bytes >= kStrongPrivateCacheKneeMinBytes;
+  result.early_cache_candidate = !result.strong_private_cache_candidate;
+  result.may_interfere_with_tlb = result.strong_private_cache_candidate;
   return result;
 }

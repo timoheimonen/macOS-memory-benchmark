@@ -590,6 +590,10 @@ int run_tlb_analysis(const BenchmarkConfig& config) {
   std::sort(refinement_points.begin(), refinement_points.end());
   refinement_points.erase(std::unique(refinement_points.begin(), refinement_points.end()), refinement_points.end());
 
+  if (!refinement_points.empty() && !interrupted && !signal_received()) {
+    std::cout << Messages::msg_tlb_analysis_refinement_start(refinement_points.size()) << std::endl;
+  }
+
   size_t fine_sweep_added_points = 0;
   for (size_t refinement_locality_bytes : refinement_points) {
     if (signal_received()) {
@@ -665,6 +669,33 @@ int run_tlb_analysis(const BenchmarkConfig& config) {
                                       &sweep_loop_latencies_ns);
   }
 
+  size_t private_cache_to_l1_distance_bytes = 0;
+  size_t private_cache_to_l1_distance_pages = 0;
+  bool private_cache_interference_elevated = false;
+  if (private_cache_knee.detected) {
+    if (l1_boundary.detected && l1_boundary.boundary_locality_bytes > private_cache_knee.boundary_locality_bytes) {
+      private_cache_to_l1_distance_bytes =
+          l1_boundary.boundary_locality_bytes - private_cache_knee.boundary_locality_bytes;
+      private_cache_to_l1_distance_pages =
+          (page_size_bytes > 0) ? (private_cache_to_l1_distance_bytes / page_size_bytes) : 0;
+
+      bool l1_within_two_x_locality = false;
+      if (private_cache_knee.boundary_locality_bytes <= (std::numeric_limits<size_t>::max() / 2)) {
+        l1_within_two_x_locality =
+            l1_boundary.boundary_locality_bytes <= (2 * private_cache_knee.boundary_locality_bytes);
+      }
+
+      if (private_cache_knee.strong_private_cache_candidate) {
+        private_cache_interference_elevated =
+            l1_within_two_x_locality || (private_cache_to_l1_distance_pages < 128);
+      } else {
+        private_cache_interference_elevated = private_cache_to_l1_distance_pages < 64;
+      }
+    } else {
+      private_cache_interference_elevated = private_cache_knee.strong_private_cache_candidate;
+    }
+  }
+
   std::vector<double> page_walk_512mb_loop_latencies_ns;
   double page_walk_512mb_p50_ns = 0.0;
   if (can_measure_page_walk_penalty && !signal_received()) {
@@ -736,16 +767,28 @@ int run_tlb_analysis(const BenchmarkConfig& config) {
   std::cout << std::endl;
   std::cout << Messages::report_tlb_private_cache_section() << std::endl;
   if (private_cache_knee.detected) {
+    const size_t private_cache_locality_kb =
+        private_cache_knee.boundary_locality_bytes / Constants::BYTES_PER_KB;
     std::cout << Messages::report_tlb_boundary_kb(
-                     private_cache_knee.boundary_locality_bytes / Constants::BYTES_PER_KB)
+                     private_cache_locality_kb)
               << std::endl;
     std::cout << Messages::report_tlb_confidence(private_cache_knee.confidence,
                                                  private_cache_knee.step_ns,
                                                  private_cache_knee.step_percent)
               << std::endl;
-    std::cout << Messages::report_tlb_private_cache_interference(
-                     private_cache_knee.may_interfere_with_tlb)
+    std::cout << Messages::report_tlb_private_cache_candidate(
+                     private_cache_knee.strong_private_cache_candidate)
               << std::endl;
+    std::cout << Messages::report_tlb_private_cache_interference(
+                     private_cache_interference_elevated,
+                     private_cache_locality_kb)
+              << std::endl;
+    if (private_cache_to_l1_distance_bytes > 0) {
+      std::cout << Messages::report_tlb_private_cache_l1_distance(
+                       private_cache_to_l1_distance_bytes / Constants::BYTES_PER_KB,
+                       private_cache_to_l1_distance_pages)
+                << std::endl;
+    }
   } else {
     std::cout << Messages::report_tlb_not_detected() << std::endl;
   }
@@ -847,6 +890,9 @@ int run_tlb_analysis(const BenchmarkConfig& config) {
       l2_entry_range.first,
       l2_entry_range.second,
       fine_sweep_added_points,
+      private_cache_interference_elevated,
+      private_cache_to_l1_distance_bytes,
+      private_cache_to_l1_distance_pages,
       can_measure_page_walk_penalty,
       page_walk_512mb_loop_latencies_ns,
       page_walk_512mb_p50_ns,

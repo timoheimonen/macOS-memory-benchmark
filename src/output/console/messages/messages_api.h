@@ -172,6 +172,7 @@ std::string msg_core_to_core_scenario_progress(size_t current_loop,
                                                const std::string& scenario_name);
 std::string msg_tlb_analysis_locality_progress(size_t current_index, size_t total_count, size_t locality_kb);
 std::string msg_tlb_analysis_page_walk_progress(size_t locality_mb);
+std::string msg_tlb_analysis_refinement_start(size_t point_count);
 
 // --- Core-to-Core Report Messages ---
 const std::string& report_core_to_core_header();
@@ -221,7 +222,9 @@ std::string report_tlb_inferred_size_entries(size_t entries);
 std::string report_tlb_inferred_reach_entries(size_t entries);
 std::string report_tlb_inferred_entries_range(size_t min_entries, size_t max_entries);
 std::string report_tlb_confidence(const std::string& confidence, double step_ns, double step_percent);
-std::string report_tlb_private_cache_interference(bool may_interfere);
+std::string report_tlb_private_cache_candidate(bool strong_private_cache_candidate);
+std::string report_tlb_private_cache_interference(bool elevated_risk, size_t locality_kb);
+std::string report_tlb_private_cache_l1_distance(size_t distance_kb, size_t distance_pages);
 std::string report_tlb_page_walk_penalty(double penalty_ns, size_t from_kb, size_t to_mb);
 std::string report_tlb_page_walk_penalty_unavailable(size_t from_kb, size_t to_mb, size_t required_buffer_mb, size_t selected_buffer_mb);
 const std::string& report_tlb_not_detected();
