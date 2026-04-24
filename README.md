@@ -141,9 +141,9 @@ Latency-specific disable controls in `-only-latency`:
 - `-analyze-tlb`: Standalone TLB-boundary detection benchmark (`1024/512/256 MB` fallback buffer selection), sweeping locality windows from `max(16 KB, 2*stride)` to `256 MB` (plus optional `512 MB` page-walk comparison when buffer is at least `512 MB`). Supports optional `-latency-stride-bytes <bytes>` and `-latency-chain-mode <mode>`.
 - `-analyze-core2core`: Standalone two-thread cache-line ping-pong benchmark for coherence handoff latency, with three scheduler-hint scenarios (`no_affinity_hint`, `same_affinity_tag`, `different_affinity_tags`). Reports round-trip and one-way-estimate latency plus percentiles.
 - `-latency-samples <count>`: Samples per latency test (default `1000`).
-- `-latency-stride-bytes <bytes>`: Pointer-chain stride for latency tests (default `64`; must be > 0 and pointer-size aligned).
+- `-latency-stride-bytes <bytes>`: Pointer-chain stride for latency tests (default `256`; must be > 0 and pointer-size aligned).
 - `-latency-chain-mode <mode>`: Pointer-chain construction policy. Modes: `auto` (default), `global-random`, `random-box`, `same-random-in-box`, `diff-random-in-box`.
-- `-latency-tlb-locality-kb <KB>`: Pointer-chain locality window (default `16`; `0` = global random chain; non-zero values must be page-size multiples). If omitted, regular main-memory latency output also includes an automatic TLB comparison (`16 KB` hit-biased vs `0` miss-biased) and estimated page-walk penalty.
+- `-latency-tlb-locality-kb <KB>`: Pointer-chain locality window (default `1024`; `0` = global random chain; non-zero values must be page-size multiples). If omitted, regular main-memory latency output also includes an automatic TLB comparison (`16 KB` hit-biased vs `0` miss-biased) and estimated page-walk penalty.
 - `-non-cacheable`: Best-effort cache-discouraging hints (not true uncached memory).
 - `-output <file>`: Save JSON output.
 
@@ -168,16 +168,22 @@ memory_benchmark -benchmark -only-latency -buffersize 1024 -count 10 -latency-sa
 memory_benchmark -benchmark -only-latency -buffersize 1024 -count 10 -latency-samples 5000 -latency-tlb-locality-kb 0 -output lat_global.json
 ```
 
-Regular benchmark with automatic DRAM TLB breakdown (omit `-latency-tlb-locality-kb`):
+Regular benchmark with default latency profile (`256B` stride, `1024KB` locality) and automatic TLB breakdown (omit `-latency-tlb-locality-kb`):
 
 ```bash
-memory_benchmark -benchmark -latency-stride-bytes 128 -count 1
+memory_benchmark -benchmark -count 1
 ```
 
 TLB-vs-cache isolation (smaller stride within pages):
 
 ```bash
 memory_benchmark -benchmark -only-latency -buffersize 1024 -cache-size 4096 -latency-stride-bytes 64 -latency-tlb-locality-kb 16 -count 10 -latency-samples 5000 -output lat_stride64_tlb16.json
+```
+
+For a more pessimistic global-random DRAM stress profile, use:
+
+```bash
+memory_benchmark -benchmark -only-latency -buffersize 1024 -latency-stride-bytes 512 -latency-tlb-locality-kb 0 -count 10 -latency-samples 5000 -output lat_stride512_global.json
 ```
 
 Custom cache target:

@@ -35,6 +35,15 @@
 //   * Uses branch-based wraparound (offset -= byteCount) to avoid division in hot path.
 //   * Loads 32 bytes (one cache line) per iteration to test strided prefetch behavior.
 //   * Distributes XOR across two accumulators (v0-v1) to reduce dependency depth.
+//   * Per-iteration loop overhead (offset wrap + counter check) is intentional:
+//     this kernel measures steady per-access cost under the chosen stride, not
+//     peak streaming throughput. Do not unroll without re-baselining all
+//     strided benchmark modes.
+// Timing Contract:
+//   Caller must emit `dsb ish; isb` before reading the start-of-measurement
+//   timestamp and another `dsb ish; isb` before reading the end-of-measurement
+//   timestamp. This kernel emits no internal fences; barrier discipline is the
+//   caller's responsibility for reproducible timing.
 // -----------------------------------------------------------------------------
 
 .global _memory_read_strided_loop_asm

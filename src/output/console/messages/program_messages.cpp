@@ -117,7 +117,9 @@ std::string usage_options(const std::string& prog_name) {
       << "                        Must be > 0 and a multiple of pointer size (typically 8 bytes).\n"
       << "  -latency-chain-mode <mode> Pointer-chain construction policy. Modes: auto (default), global-random,\n"
       << "                        random-box, same-random-in-box, diff-random-in-box.\n"
-      << "  -latency-tlb-locality-kb <size_kb> TLB-locality window for latency pointer chains (default: 16 KB; set 0 to disable).\n"
+      << "  -latency-tlb-locality-kb <size_kb> TLB-locality window for latency pointer chains (default: "
+      << Constants::DEFAULT_LATENCY_TLB_LOCALITY_KB
+      << " KB; set 0 for global random).\n"
       << "                        Must be a multiple of system page size (typically 4 KB or 16 KB).\n"
       << "  -threads <count>      Number of threads to use for benchmarks (default: detected\n"
       << "                        CPU core count). Applies to all benchmarks including cache tests.\n"
@@ -163,6 +165,11 @@ const std::string& report_tlb_header() {
   return msg;
 }
 
+const std::string& report_tlb_settings_header() {
+  static const std::string msg = "--- TLB Analysis Settings ---";
+  return msg;
+}
+
 std::string report_tlb_cpu(const std::string& cpu_name) {
   if (cpu_name.empty()) {
     return "CPU: Unknown";
@@ -192,9 +199,56 @@ std::string report_tlb_chain_mode(const std::string& chain_mode_name) {
   return "Chain Mode: " + chain_mode_name;
 }
 
+std::string report_tlb_chain_mode_requested(const std::string& chain_mode_name) {
+  return "Requested Chain Mode: " + chain_mode_name;
+}
+
+std::string report_tlb_chain_mode_effective(const std::string& chain_mode_name) {
+  return "Effective Chain Mode: " + chain_mode_name;
+}
+
 std::string report_tlb_loop_config(size_t loops_per_point, size_t accesses_per_loop) {
   std::ostringstream oss;
   oss << "Loops per Point: " << loops_per_point << ", Accesses per Loop: " << accesses_per_loop;
+  return oss.str();
+}
+
+std::string report_tlb_sweep_range(size_t start_locality_bytes,
+                                   size_t end_locality_bytes,
+                                   size_t point_count) {
+  std::ostringstream oss;
+  oss << "Sweep Locality Range: ";
+
+  if (start_locality_bytes < 1024 * 1024) {
+    oss << (start_locality_bytes / 1024) << " KB";
+  } else {
+    oss << (start_locality_bytes / (1024 * 1024)) << " MB";
+  }
+
+  oss << " -> ";
+
+  if (end_locality_bytes < 1024 * 1024) {
+    oss << (end_locality_bytes / 1024) << " KB";
+  } else {
+    oss << (end_locality_bytes / (1024 * 1024)) << " MB";
+  }
+
+  oss << " (" << point_count << " points)";
+  return oss.str();
+}
+
+std::string report_tlb_page_walk_config(bool enabled,
+                                        size_t comparison_locality_mb,
+                                        size_t required_buffer_mb,
+                                        size_t selected_buffer_mb) {
+  std::ostringstream oss;
+  if (enabled) {
+    oss << "Page-Walk Comparison: Enabled (" << comparison_locality_mb << " MB locality)";
+    return oss.str();
+  }
+
+  oss << "Page-Walk Comparison: Disabled (requires " << required_buffer_mb
+      << " MB analysis buffer, selected " << selected_buffer_mb << " MB)";
   return oss.str();
 }
 

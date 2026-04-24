@@ -32,6 +32,21 @@
 //   * 512B main loop with pointer-bump addressing (no per-iteration offset math).
 //   * Distributes XOR into four accumulators (v0‑v3) to reduce dependency depth.
 //   * Tail path mirrors tiered size reductions (256/128/64/32/bytes).
+//   * Main loop uses a precomputed block count (x2) and counts down with
+//     `subs + b.ne` at the bottom (3 control ops/iter) instead of the older
+//     `cmp + b.lo` top guard plus `sub + b` unconditional back-edge
+//     (5 control ops/iter). x5 holds tail bytes (remaining % 512) during the
+//     block loop and feeds the tbz tail tiers afterwards.
+//   * Tail uses `tbz` bit-tests for 256/128/64/32 tiers (harmonized with
+//     memory_read_cache.s), then a byte-fold loop into x12 for the <32B
+//     remainder so checksum granularity stays exact for any input size.
+//   * Main loop label is 64-byte aligned to keep the unrolled body on a single
+//     I-cache line boundary for steady run-to-run timing on Apple Silicon.
+// Timing Contract:
+//   Caller must emit `dsb ish; isb` before reading the start-of-measurement
+//   timestamp and another `dsb ish; isb` before reading the end-of-measurement
+//   timestamp. This kernel emits no internal fences; barrier discipline is the
+//   caller's responsibility for reproducible timing.
 // -----------------------------------------------------------------------------
 
 .global _memory_read_loop_asm
@@ -49,10 +64,18 @@ _memory_read_loop_asm:
     eor v2.16b, v2.16b, v2.16b   // Zero accumulator 2 (caller-saved, safe)
     eor v3.16b, v3.16b, v3.16b   // Zero accumulator 3 (caller-saved, safe)
 
-read_loop_start_512:        // Main 512B block loop
-    cmp x5, #512            // remaining < 512?
-    b.lo read_loop_cleanup  // If less, handle remaining bytes
+    // Split remaining byteCount into full 512B blocks (x2) and tail bytes (x5).
+    // The hot loop then becomes a counted subs+b.ne (3 control ops per 512B
+    // iter) rather than a remainder compare+subtract+unconditional-branch
+    // (5 control ops per iter). x5 carries the residual into the tail tiers.
+    lsr x2, x5, #9               // x2 = full 512B block count (byteCount / 512)
+    and x5, x5, #0x1ff           // x5 = tail bytes (byteCount % 512)
+    cbz x2, read_loop_cleanup    // No full block? Go straight to tail.
 
+    // Align hot loop entry to 64B so the unrolled 512B body always lands on a
+    // predictable I-cache line. Reduces first-iteration fetch-boundary jitter.
+    .p2align 6
+read_loop_start_512:        // Main 512B block loop (count-down on x2)
     // Load 512 bytes from source (16 * 32B = 512B) using pair loads.
     // Using only caller-saved registers: q0-q7 and q16-q31 (avoiding q8-q15 per AAPCS64).
     // Accumulators are v0-v3 (q0-q3), so we load data into q4-q7 and q16-q31 first.
@@ -115,15 +138,14 @@ read_loop_start_512:        // Main 512B block loop
     eor v3.16b, v3.16b, v27.16b
 
     add x6, x6, #512        // src_ptr += 512
-    sub x5, x5, #512        // remaining -= 512
-    b read_loop_start_512
+    subs x2, x2, #1         // block_count -= 1, set flags
+    b.ne read_loop_start_512 // Loop while blocks remain
 
-read_loop_cleanup:          // Tail handling when <512B remain
+read_loop_cleanup:          // Tail handling when <512B remain (x5 = tail bytes)
     cbz x5, read_loop_combine_sum // If no bytes remain, combine checksums
 
     // 256B chunk (8 pair loads + XOR fold)
-    cmp x5, #256
-    b.lo read_cleanup_128
+    tbz x5, #8, read_cleanup_128 // bit8 of x5 == 256B chunk present
     ldp q4, q5, [x6, #0]
     ldp q6, q7, [x6, #32]
     ldp q16, q17, [x6, #64]
@@ -152,8 +174,7 @@ read_loop_cleanup:          // Tail handling when <512B remain
     sub x5, x5, #256
 
 read_cleanup_128:              // 128B chunk
-    cmp x5, #128
-    b.lo read_cleanup_64
+    tbz x5, #7, read_cleanup_64 // bit7 of x5 == 128B chunk present
     ldp q4, q5, [x6, #0]
     ldp q6, q7, [x6, #32]
     ldp q16, q17, [x6, #64]
@@ -170,8 +191,7 @@ read_cleanup_128:              // 128B chunk
     sub x5, x5, #128
 
 read_cleanup_64:               // 64B chunk
-    cmp x5, #64
-    b.lo read_cleanup_32
+    tbz x5, #6, read_cleanup_32 // bit6 of x5 == 64B chunk present
     ldp q4, q5, [x6, #0]
     ldp q6, q7, [x6, #32]
     eor v0.16b, v0.16b, v4.16b
@@ -182,8 +202,7 @@ read_cleanup_64:               // 64B chunk
     sub x5, x5, #64
 
 read_cleanup_32:               // 32B chunk
-    cmp x5, #32
-    b.lo read_cleanup_byte
+    tbz x5, #5, read_cleanup_byte // bit5 of x5 == 32B chunk present
     ldp q4, q5, [x6, #0]
     eor v0.16b, v0.16b, v4.16b
     eor v1.16b, v1.16b, v5.16b

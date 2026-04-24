@@ -32,12 +32,24 @@
 //   * AAPCS64 callee-saved registers are preserved (x19-x28, v8-v15 untouched).
 //   * Checksum exists to keep loads observable (anti-DCE), not as a data-integrity primitive.
 // Implementation Notes:
-//   * Uses pointer+remaining loop state (x6/x5) to avoid per-iteration offset math.
+//   * Uses pointer+counter loop state (x6/x2) to avoid per-iteration offset math.
 //   * Processes 512B per iteration (16 pair loads) for high cache-path throughput.
 //   * Distributes XOR into four accumulators (v0-v3) to reduce dependency depth.
+//   * Main loop uses a precomputed block count (x2) and counts down with
+//     `subs + b.ne` at the bottom (3 control ops/iter) instead of the older
+//     `cmp + b.lo` top guard plus `sub + b` unconditional back-edge
+//     (5 control ops/iter). x5 holds tail bytes (remaining % 512) during the
+//     block loop and feeds the tbz tail tiers afterwards.
 //   * Tail path uses size-bit tests (tbz for 256/128/64/32), then byte cleanup.
+//   * Main loop label is 64-byte aligned to keep the unrolled body on a single
+//     I-cache line boundary for steady run-to-run timing on Apple Silicon.
 // Control-Flow Map:
 //   main 512B loop -> tiered tail (256/128/64/32) -> byte tail -> final reduction
+// Timing Contract:
+//   Caller must emit `dsb ish; isb` before reading the start-of-measurement
+//   timestamp and another `dsb ish; isb` before reading the end-of-measurement
+//   timestamp. This kernel emits no internal fences; barrier discipline is the
+//   caller's responsibility for reproducible timing.
 // -----------------------------------------------------------------------------
 
 .global _memory_read_cache_loop_asm
@@ -55,11 +67,18 @@ _memory_read_cache_loop_asm:
     eor v2.16b, v2.16b, v2.16b
     eor v3.16b, v3.16b, v3.16b
 
-cache_read_loop_start_512:    // Main 512B loop
-    // If <512B remain, switch to tail handling.
-    cmp x5, #512
-    b.lo cache_read_loop_cleanup
+    // Split remaining byteCount into full 512B blocks (x2) and tail bytes (x5).
+    // The hot loop then becomes a counted subs+b.ne (3 control ops per 512B
+    // iter) rather than a remainder compare+subtract+unconditional-branch
+    // (5 control ops per iter). x5 carries the residual into the tail tiers.
+    lsr x2, x5, #9                    // x2 = full 512B block count
+    and x5, x5, #0x1ff                // x5 = tail bytes (byteCount % 512)
+    cbz x2, cache_read_loop_cleanup   // No full block? Go straight to tail.
 
+    // Align hot loop entry to 64B so the unrolled 512B body always lands on a
+    // predictable I-cache line. Reduces first-iteration fetch-boundary jitter.
+    .p2align 6
+cache_read_loop_start_512:    // Main 512B loop (count-down on x2)
     // Load first 256B (8x 32B pairs) using caller-saved SIMD regs.
     ldp q4,  q5,  [x6, #0]
     ldp q6,  q7,  [x6, #32]
@@ -116,12 +135,12 @@ cache_read_loop_start_512:    // Main 512B loop
     eor v2.16b, v2.16b, v26.16b
     eor v3.16b, v3.16b, v27.16b
 
-    // Advance pointers/counters for next 512B block.
+    // Advance pointer and decrement block count.
     add x6, x6, #512
-    sub x5, x5, #512
-    b cache_read_loop_start_512
+    subs x2, x2, #1                   // block_count -= 1, set flags
+    b.ne cache_read_loop_start_512    // Loop while blocks remain
 
-cache_read_loop_cleanup:      // Tail handling when <512B remain
+cache_read_loop_cleanup:      // Tail handling when <512B remain (x5 = tail bytes)
     cbz x5, cache_read_loop_combine_sum
 
     // Tiered tail: bits in x5 encode optional chunks.

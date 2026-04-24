@@ -49,7 +49,7 @@ memory_benchmark -analyze-tlb -latency-stride-bytes 128 -output tlb_analysis_str
 
 ### 3.2 Stride Default
 
-If `-latency-stride-bytes` is not provided, the default stride is **64 bytes**, which matches the standard latency mode default (`Constants::LATENCY_STRIDE_BYTES`).
+If `-latency-stride-bytes` is not provided, the default stride is **256 bytes**, which matches the standard latency mode default (`Constants::LATENCY_STRIDE_BYTES`).
 
 ### 3.3 Rejected Combinations
 
@@ -86,7 +86,7 @@ The mode uses fixed constants:
 
 Stride behavior:
 
-- Effective stride is taken from `-latency-stride-bytes` (default: **64 bytes**).
+- Effective stride is taken from `-latency-stride-bytes` (default: **256 bytes**).
 
 **Chain mode:** The latency chain mode is resolved via `resolve_latency_chain_mode(config.latency_chain_mode, page_walk_baseline_locality_bytes)`. This determines the method used to build the pointer-chase chain for each locality measurement. The resolved mode is reported in the console output and stored in the JSON metadata.
 

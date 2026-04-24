@@ -157,7 +157,7 @@ Memory-limit model:
 
 - Main buffer size is derived from `buffer_size_mb`.
 - L1/L2/custom cache test buffers use factor constants currently set to `1.0`.
-- Cache buffers are rounded to active latency stride granularity (`latency_stride_bytes`, default `64`) and minimum constraints.
+- Cache buffers are rounded to active latency stride granularity (`latency_stride_bytes`, default `256`) and minimum constraints.
 - Minimum practical lower bound includes page-size enforcement.
 - `-cache-size 0` (in allowed mode) produces zero custom cache buffer.
 

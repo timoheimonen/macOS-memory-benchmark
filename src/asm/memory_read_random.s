@@ -34,6 +34,15 @@
 //   * Loads 32 bytes (one cache line) per access to test random access behavior.
 //   * Distributes XOR across two accumulators (v0-v1) to reduce dependency depth.
 //   * Random pattern maximizes cache misses and TLB pressure, testing worst-case performance.
+//   * Per-iteration loop overhead (index load + counter check) is intentional:
+//     this kernel measures steady per-access cost under the given random index
+//     sequence, not peak streaming throughput. Do not unroll without
+//     re-baselining all random benchmark modes.
+// Timing Contract:
+//   Caller must emit `dsb ish; isb` before reading the start-of-measurement
+//   timestamp and another `dsb ish; isb` before reading the end-of-measurement
+//   timestamp. This kernel emits no internal fences; barrier discipline is the
+//   caller's responsibility for reproducible timing.
 // -----------------------------------------------------------------------------
 
 .global _memory_read_random_loop_asm

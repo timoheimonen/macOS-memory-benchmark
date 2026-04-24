@@ -57,7 +57,7 @@ struct BenchmarkConfig {
   int latency_sample_count = Constants::DEFAULT_LATENCY_SAMPLE_COUNT;  ///< Number of latency samples to collect per test
   size_t latency_stride_bytes = Constants::LATENCY_STRIDE_BYTES;  ///< Stride used for latency pointer chains (bytes)
   LatencyChainMode latency_chain_mode = LatencyChainMode::Auto;  ///< Pointer-chain construction policy (auto preserves default behavior)
-  size_t latency_tlb_locality_bytes = 16 * Constants::BYTES_PER_KB;  ///< TLB-locality window for latency chains (default 16 KB, 0 = disabled)
+  size_t latency_tlb_locality_bytes = Constants::DEFAULT_LATENCY_TLB_LOCALITY_KB * Constants::BYTES_PER_KB;  ///< TLB-locality window for latency chains (default 1 MB; 0 = global random)
   
   // Calculated sizes
   size_t buffer_size = 0;        ///< Final buffer size in bytes (calculated from buffer_size_mb)

@@ -32,6 +32,13 @@
 //   * Zero vectors materialized once (8 regs), reused for all 16 stnp pairs.
 //   * Tiered tail mirrors copy/read for consistency.
 //   * Accesses memory from end to start, testing reverse sequential write behavior.
+//   * Main loop label is 64-byte aligned to keep the unrolled body on a single
+//     I-cache line boundary for steady run-to-run timing on Apple Silicon.
+// Timing Contract:
+//   Caller must emit `dsb ish; isb` before reading the start-of-measurement
+//   timestamp and another `dsb ish; isb` before reading the end-of-measurement
+//   timestamp. This kernel emits no internal fences; barrier discipline is the
+//   caller's responsibility for reproducible timing.
 // -----------------------------------------------------------------------------
 
 .global _memory_write_reverse_loop_asm
@@ -55,6 +62,9 @@ _memory_write_reverse_loop_asm:
     movi v7.16b, #0
 
 
+    // Align hot loop entry to 64B so the unrolled 512B body always lands on a
+    // predictable I-cache line. Reduces first-iteration fetch-boundary jitter.
+    .p2align 6
 write_reverse_loop_start_nt512:     // Main 512B block loop (reverse direction)
     cmp x3, x0              // end_ptr <= dst?
     b.ls write_reverse_loop_end     // If done (unsigned <=), exit

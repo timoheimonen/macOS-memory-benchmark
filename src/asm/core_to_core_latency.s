@@ -34,6 +34,11 @@
 //   (none)
 // Clobbers:
 //   w8
+// Timing Contract:
+//   Caller must emit `dsb ish; isb` before reading the start-of-measurement
+//   timestamp and another `dsb ish; isb` before reading the end-of-measurement
+//   timestamp. The kernel itself relies on ldar/stlr for cross-core ordering;
+//   per-iteration internal fences are not emitted.
 // -----------------------------------------------------------------------------
 
 .global _core_to_core_initiator_round_trips_asm
@@ -81,6 +86,11 @@ c2c_initiator_end:
 //   (none)
 // Clobbers:
 //   w8
+// Timing Contract:
+//   Caller must emit `dsb ish; isb` before reading the start-of-measurement
+//   timestamp and another `dsb ish; isb` before reading the end-of-measurement
+//   timestamp. The kernel itself relies on ldar/stlr for cross-core ordering;
+//   per-iteration internal fences are not emitted.
 // -----------------------------------------------------------------------------
 
 .global _core_to_core_responder_round_trips_asm

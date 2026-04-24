@@ -147,6 +147,7 @@ void print_configuration(size_t buffer_size, size_t buffer_size_mb, size_t total
  * @param l2_write_bw_gb_s L2 cache write bandwidth in GB/s
  * @param l2_copy_bw_gb_s L2 cache copy bandwidth in GB/s
  * @param average_latency_ns Main memory average latency in nanoseconds
+ * @param latency_tlb_locality_bytes Active locality window used for headline latency (0 = global random)
  * @param total_lat_time_ns Main memory total latency test time in nanoseconds
  * @param use_custom_cache_size Flag indicating if custom cache size is being used
  * @param custom_latency_ns Custom cache latency in nanoseconds
@@ -169,8 +170,8 @@ void print_results(int loop, size_t buffer_size, size_t buffer_size_mb, int iter
                    size_t l1_buffer_size, size_t l2_buffer_size,
                    double l1_read_bw_gb_s, double l1_write_bw_gb_s, double l1_copy_bw_gb_s,
                     double l2_read_bw_gb_s, double l2_write_bw_gb_s, double l2_copy_bw_gb_s,
-                    double average_latency_ns, double total_lat_time_ns,
-                    bool use_custom_cache_size, double custom_latency_ns, size_t custom_buffer_size,
+                     double average_latency_ns, size_t latency_tlb_locality_bytes, double total_lat_time_ns,
+                     bool use_custom_cache_size, double custom_latency_ns, size_t custom_buffer_size,
                     double custom_read_bw_gb_s, double custom_write_bw_gb_s, double custom_copy_bw_gb_s,
                     bool has_auto_tlb_breakdown, double tlb_hit_latency_ns, double tlb_miss_latency_ns,
                     double page_walk_penalty_ns,
@@ -195,7 +196,7 @@ void print_results(int loop, size_t buffer_size, size_t buffer_size_mb, int iter
     std::cout << Messages::results_main_memory_latency() << std::endl;
     std::cout << Messages::results_latency_total_time(total_lat_time_ns / 1e9) << std::endl;
     std::cout << std::setprecision(Constants::LATENCY_PRECISION);
-    std::cout << Messages::results_latency_average(average_latency_ns) << std::endl;
+    std::cout << Messages::results_latency_average(average_latency_ns, latency_tlb_locality_bytes) << std::endl;
     if (has_auto_tlb_breakdown) {
       std::cout << Messages::results_latency_tlb_hit(tlb_hit_latency_ns) << std::endl;
       std::cout << Messages::results_latency_tlb_miss(tlb_miss_latency_ns) << std::endl;

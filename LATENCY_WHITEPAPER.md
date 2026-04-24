@@ -108,7 +108,7 @@ those addresses reside in any particular TLB level during execution.
 
 ### 4.4 Stride Control
 
-`-latency-stride-bytes` controls spacing between pointer-chain nodes (default `64`).
+`-latency-stride-bytes` controls spacing between pointer-chain nodes (default `256`).
 
 - Smaller stride (e.g., `32`) increases same-page cache-line density — more nodes per page,
   lower page turnover.

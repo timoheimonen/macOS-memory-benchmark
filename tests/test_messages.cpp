@@ -426,6 +426,32 @@ TEST_F(MessagesFormattingTest, ReportTlbChainMode) {
   EXPECT_NE(msg.find("random-box"), std::string::npos);
 }
 
+TEST_F(MessagesFormattingTest, ReportTlbRequestedAndEffectiveChainMode) {
+  std::string requested = Messages::report_tlb_chain_mode_requested("auto");
+  EXPECT_NE(requested.find("Requested Chain Mode"), std::string::npos);
+  EXPECT_NE(requested.find("auto"), std::string::npos);
+
+  std::string effective = Messages::report_tlb_chain_mode_effective("random-box");
+  EXPECT_NE(effective.find("Effective Chain Mode"), std::string::npos);
+  EXPECT_NE(effective.find("random-box"), std::string::npos);
+}
+
+TEST_F(MessagesFormattingTest, ReportTlbSweepRangeAndPageWalkConfig) {
+  std::string sweep = Messages::report_tlb_sweep_range(16 * 1024, 256 * 1024 * 1024, 15);
+  EXPECT_NE(sweep.find("16 KB"), std::string::npos);
+  EXPECT_NE(sweep.find("256 MB"), std::string::npos);
+  EXPECT_NE(sweep.find("15 points"), std::string::npos);
+
+  std::string enabled = Messages::report_tlb_page_walk_config(true, 512, 512, 1024);
+  EXPECT_NE(enabled.find("Enabled"), std::string::npos);
+  EXPECT_NE(enabled.find("512 MB locality"), std::string::npos);
+
+  std::string disabled = Messages::report_tlb_page_walk_config(false, 512, 512, 256);
+  EXPECT_NE(disabled.find("Disabled"), std::string::npos);
+  EXPECT_NE(disabled.find("requires 512 MB"), std::string::npos);
+  EXPECT_NE(disabled.find("selected 256 MB"), std::string::npos);
+}
+
 TEST_F(MessagesFormattingTest, ReportTlbPageWalkPenaltyUnavailable) {
   std::string msg = Messages::report_tlb_page_walk_penalty_unavailable(32, 512, 512, 256);
   EXPECT_NE(msg.find("N/A"), std::string::npos);
@@ -709,9 +735,14 @@ TEST_F(MessagesFormattingTest, ResultsLatencyTotalTime) {
 }
 
 TEST_F(MessagesFormattingTest, ResultsLatencyAverage) {
-  std::string msg = Messages::results_latency_average(123.45);
+  std::string msg = Messages::results_latency_average(123.45, 1024 * 1024);
   EXPECT_NE(msg.find("123.45"), std::string::npos);
   EXPECT_NE(msg.find("ns"), std::string::npos);
+  EXPECT_NE(msg.find("Average latency"), std::string::npos);
+  EXPECT_NE(msg.find("1.00 MB locality"), std::string::npos);
+
+  msg = Messages::results_latency_average(86.70, 0);
+  EXPECT_NE(msg.find("global random locality"), std::string::npos);
 }
 
 TEST_F(MessagesFormattingTest, ResultsLatencyTlbHit) {

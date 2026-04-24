@@ -90,10 +90,30 @@ std::optional<HighResTimer> HighResTimer::create() {
 }
 
 // start: Records the current time in ticks.
-void HighResTimer::start() { start_ticks = mach_absolute_time(); }
+//
+// Emits `dsb ish; isb` before reading the timestamp to enforce the timing
+// contract documented in every ASM kernel under src/asm/*.s:
+//   * `dsb ish` drains all prior memory accesses so warmup/setup writes are
+//     architecturally complete before the timestamp is captured.
+//   * `isb` flushes the fetch pipeline so subsequent instructions (including
+//     the measured kernel body) re-fetch after the barrier.
+//   * `"memory"` clobber prevents the C++ compiler from reordering memory
+//     accesses across the barrier.
+// Without this fence, out-of-order dispatch on Apple Silicon can straddle the
+// timestamp read and the measured region, introducing run-to-run jitter.
+void HighResTimer::start() {
+  asm volatile("dsb ish\n\tisb" ::: "memory");
+  start_ticks = mach_absolute_time();
+}
 
 // stop: Calculates elapsed time since start() in seconds.
+//
+// Emits `dsb ish; isb` before reading the end timestamp, mirroring start(),
+// to enforce the timing contract documented in every src/asm/*.s kernel.
+// This ensures the measured kernel's architectural effects are complete before
+// the end timestamp is captured.
 double HighResTimer::stop() {
+  asm volatile("dsb ish\n\tisb" ::: "memory");
   uint64_t end = mach_absolute_time();  // Get current time.
   // Calculate elapsed ticks. Unsigned arithmetic automatically handles wrap-around.
   uint64_t elapsed_ticks = end - start_ticks;
@@ -111,7 +131,13 @@ double HighResTimer::stop() {
 }
 
 // stop_ns: Calculates elapsed time since start() in nanoseconds.
+//
+// Emits `dsb ish; isb` before reading the end timestamp, mirroring start(),
+// to enforce the timing contract documented in every src/asm/*.s kernel.
+// This ensures the measured kernel's architectural effects are complete before
+// the end timestamp is captured.
 double HighResTimer::stop_ns() {
+  asm volatile("dsb ish\n\tisb" ::: "memory");
   uint64_t end = mach_absolute_time();  // Get current time.
   // Calculate elapsed ticks. Unsigned arithmetic automatically handles wrap-around.
   uint64_t elapsed_ticks = end - start_ticks;

@@ -92,6 +92,7 @@ void print_configuration(size_t buffer_size, size_t buffer_size_mb, size_t total
  * @param l2_write_bw_gb_s L2 write bandwidth in GB/s
  * @param l2_copy_bw_gb_s L2 copy bandwidth in GB/s
  * @param average_latency_ns Average latency in nanoseconds
+ * @param latency_tlb_locality_bytes Active locality window used for headline latency (0 = global random)
  * @param total_lat_time_ns Total latency time in nanoseconds
  * @param use_custom_cache_size Whether custom cache size is used
  * @param custom_latency_ns Custom cache latency in nanoseconds
@@ -113,9 +114,9 @@ void print_results(int loop, size_t buffer_size, size_t buffer_size_mb, int iter
     double copy_bw_gb_s, double total_copy_time,
     double l1_latency_ns, double l2_latency_ns,
     size_t l1_buffer_size, size_t l2_buffer_size,
-    double l1_read_bw_gb_s, double l1_write_bw_gb_s, double l1_copy_bw_gb_s,
-    double l2_read_bw_gb_s, double l2_write_bw_gb_s, double l2_copy_bw_gb_s,
-    double average_latency_ns, double total_lat_time_ns,
+     double l1_read_bw_gb_s, double l1_write_bw_gb_s, double l1_copy_bw_gb_s,
+     double l2_read_bw_gb_s, double l2_write_bw_gb_s, double l2_copy_bw_gb_s,
+    double average_latency_ns, size_t latency_tlb_locality_bytes, double total_lat_time_ns,
     bool use_custom_cache_size, double custom_latency_ns, size_t custom_buffer_size,
     double custom_read_bw_gb_s, double custom_write_bw_gb_s, double custom_copy_bw_gb_s,
     bool has_auto_tlb_breakdown, double tlb_hit_latency_ns, double tlb_miss_latency_ns,
