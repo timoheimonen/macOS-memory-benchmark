@@ -460,6 +460,27 @@ TEST_F(MessagesFormattingTest, ReportTlbPageWalkPenaltyUnavailable) {
   EXPECT_NE(msg.find("selected 256 MB"), std::string::npos);
 }
 
+TEST_F(MessagesFormattingTest, ReportTlbFineSweepAndPrivateCacheInfo) {
+  std::string sweep = Messages::report_tlb_fine_sweep(6, 21);
+  EXPECT_NE(sweep.find("Added 6"), std::string::npos);
+  EXPECT_NE(sweep.find("total 21"), std::string::npos);
+
+  const std::string& section = Messages::report_tlb_private_cache_section();
+  EXPECT_NE(section.find("Private Cache"), std::string::npos);
+
+  std::string risk_high = Messages::report_tlb_private_cache_interference(true);
+  EXPECT_NE(risk_high.find("Elevated"), std::string::npos);
+
+  std::string risk_low = Messages::report_tlb_private_cache_interference(false);
+  EXPECT_NE(risk_low.find("Low"), std::string::npos);
+}
+
+TEST_F(MessagesFormattingTest, ReportTlbInferredEntriesRange) {
+  std::string msg = Messages::report_tlb_inferred_entries_range(240, 256);
+  EXPECT_NE(msg.find("240-256"), std::string::npos);
+  EXPECT_NE(msg.find("entries"), std::string::npos);
+}
+
 // ============================================================================
 // Usage/Help Messages Tests (using formatting fixture)
 // ============================================================================

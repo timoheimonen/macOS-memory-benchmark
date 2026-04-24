@@ -252,6 +252,21 @@ std::string report_tlb_page_walk_config(bool enabled,
   return oss.str();
 }
 
+std::string report_tlb_fine_sweep(size_t added_points, size_t total_points) {
+  std::ostringstream oss;
+  oss << "Fine Sweep: Added " << added_points << " refinement point";
+  if (added_points != 1) {
+    oss << "s";
+  }
+  oss << ", total " << total_points << " points";
+  return oss.str();
+}
+
+const std::string& report_tlb_private_cache_section() {
+  static const std::string msg = "[Private Cache Detection]";
+  return msg;
+}
+
 const std::string& report_tlb_l1_section() {
   static const std::string msg = "[L1 TLB Detection]";
   return msg;
@@ -280,12 +295,29 @@ std::string report_tlb_inferred_reach_entries(size_t entries) {
   return oss.str();
 }
 
+std::string report_tlb_inferred_entries_range(size_t min_entries, size_t max_entries) {
+  std::ostringstream oss;
+  oss << "  Inferred Entry Range: " << min_entries;
+  if (max_entries != min_entries) {
+    oss << "-" << max_entries;
+  }
+  oss << " entries";
+  return oss.str();
+}
+
 std::string report_tlb_confidence(const std::string& confidence, double step_ns, double step_percent) {
   std::ostringstream oss;
   oss << std::fixed << std::setprecision(1);
   oss << "  Confidence: " << confidence << " (Step: +" << step_ns << "ns, +"
       << (step_percent * 100.0) << "%)";
   return oss.str();
+}
+
+std::string report_tlb_private_cache_interference(bool may_interfere) {
+  if (may_interfere) {
+    return "  TLB Interference Risk: Elevated near ~1 MB locality";
+  }
+  return "  TLB Interference Risk: Low";
 }
 
 std::string report_tlb_page_walk_penalty(double penalty_ns, size_t from_kb, size_t to_mb) {

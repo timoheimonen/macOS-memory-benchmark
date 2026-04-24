@@ -208,7 +208,11 @@ For detected boundaries:
 
 `inferred_entries = boundary_locality_bytes / page_size_bytes`
 
-This is reported separately for L1 and L2 sections.
+`inferred_entries_min = previous_locality_bytes / page_size_bytes`
+
+`inferred_entries_max = boundary_locality_bytes / page_size_bytes`
+
+Point estimate and range are reported separately for L1 and L2 sections. The range captures sweep-grid uncertainty and avoids implying a strict power-of-two entry count.
 
 ### 7.2 Page-Walk Penalty
 
@@ -233,6 +237,8 @@ Report always includes:
 
 - CPU, page size, selected buffer, stride, loops/accesses config
 - Resolved **latency chain mode**
+- Fine-sweep refinement summary (added points, total points)
+- `[Private Cache Knee Detection]`
 - `[L1 TLB Detection]`
 - `[L2 TLB / Page Walk]`
 
@@ -272,7 +278,8 @@ When `-output <file>` is provided with `-analyze-tlb`, output includes:
 
 - `tlb_analysis` contains:
   - `sweep[]` with raw `loop_latencies_ns` and per-point `p50_latency_ns`
-  - `l1_tlb_detection` (with `detected`, `boundary_locality_kb`, `inferred_entries`, `confidence`, and step metadata)
+  - `private_cache_knee` (with `detected`, `boundary_locality_kb`, `confidence`, and `may_interfere_with_tlb`)
+  - `l1_tlb_detection` (with `detected`, `boundary_locality_kb`, `inferred_entries`, `inferred_entries_min`, `inferred_entries_max`, `confidence`, and step metadata)
   - `l2_tlb_detection` (same structure as L1)
   - `page_walk_penalty` block (`available`, baseline/comparison metadata, raw comparison loops, `penalty_ns` when available)
 

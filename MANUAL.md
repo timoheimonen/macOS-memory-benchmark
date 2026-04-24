@@ -223,7 +223,9 @@ Pattern mode (`-patterns`) measures bandwidth sensitivity across:
 
 - Runs standalone TLB analysis mode only
 - Can be combined only with optional `-output <file>`, `-latency-stride-bytes <bytes>`, and `-latency-chain-mode <mode>`
-- Uses latency stride from `-latency-stride-bytes` (same default as standard latency mode), sweeps locality windows `max(16KB, 2*stride)` to `256MB`, and reports inferred L1/L2 TLB boundaries and entry counts
+- Uses latency stride from `-latency-stride-bytes` (same default as standard latency mode), performs a coarse locality sweep `max(16KB, 2*stride)` to `256MB`, then automatically inserts finer locality points near detected knees/boundaries
+- Detects likely private-cache knee candidates (around the ~1MB region when present) and reports whether they may interfere with TLB boundary interpretation
+- Reports inferred L1/L2 TLB boundaries with both point estimate (`inferred_entries`) and local-range estimate (`inferred_entries_min`/`inferred_entries_max`)
 - Separately computes page-walk penalty as `P50(512MB) - P50(effective baseline locality)` when analysis buffer is at least `512MB`
 - Detailed methodology and JSON contract: `TLB_ANALYSIS_WHITEPAPER.md`
 

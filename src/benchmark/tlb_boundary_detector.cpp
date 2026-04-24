@@ -21,6 +21,8 @@
 
 #include "benchmark/tlb_analysis.h"
 
+#include "core/config/constants.h"
+
 #include <algorithm>
 #include <numeric>
 #include <string>
@@ -38,6 +40,9 @@ constexpr size_t kPersistenceMajorityRequired = 2;
 // Last-point strong-step compensation thresholds (when no future points exist).
 constexpr double kLastPointStrongStepNs = 8.0;
 constexpr double kLastPointStrongStepPercent = 0.25;
+
+constexpr size_t kPrivateCacheKneeMinBytes = 512 * Constants::BYTES_PER_KB;
+constexpr size_t kPrivateCacheKneeMaxBytes = 2 * Constants::BYTES_PER_MB;
 
 /**
  * @brief Recency-weighted average over a range.
@@ -129,6 +134,20 @@ size_t infer_tlb_entries(size_t locality_bytes, size_t page_size_bytes) {
   return locality_bytes / page_size_bytes;
 }
 
+std::pair<size_t, size_t> infer_tlb_entries_range(const std::vector<size_t>& locality_bytes,
+                                                  size_t boundary_index,
+                                                  size_t page_size_bytes) {
+  if (page_size_bytes == 0 || locality_bytes.empty() || boundary_index >= locality_bytes.size()) {
+    return {0, 0};
+  }
+
+  const size_t lower_locality_bytes = (boundary_index > 0)
+                                           ? locality_bytes[boundary_index - 1]
+                                           : locality_bytes[boundary_index];
+  const size_t upper_locality_bytes = locality_bytes[boundary_index];
+  return {lower_locality_bytes / page_size_bytes, upper_locality_bytes / page_size_bytes};
+}
+
 TlbBoundaryDetection detect_tlb_boundary(const std::vector<size_t>& locality_bytes,
                                          const std::vector<double>& p50_latency_ns,
                                          size_t segment_start_index,
@@ -209,5 +228,30 @@ TlbBoundaryDetection detect_tlb_boundary(const std::vector<size_t>& locality_byt
     return result;
   }
 
+  return result;
+}
+
+PrivateCacheKneeDetection detect_private_cache_knee(
+    const std::vector<size_t>& locality_bytes,
+    const std::vector<double>& p50_latency_ns,
+    const std::vector<std::vector<double>>* loop_latencies) {
+  PrivateCacheKneeDetection result;
+  const TlbBoundaryDetection boundary =
+      detect_tlb_boundary(locality_bytes, p50_latency_ns, 0, kPrivateCacheKneeMinBytes, loop_latencies);
+  if (!boundary.detected) {
+    return result;
+  }
+
+  if (boundary.boundary_locality_bytes > kPrivateCacheKneeMaxBytes) {
+    return result;
+  }
+
+  result.detected = true;
+  result.boundary_index = boundary.boundary_index;
+  result.boundary_locality_bytes = boundary.boundary_locality_bytes;
+  result.step_ns = boundary.step_ns;
+  result.step_percent = boundary.step_percent;
+  result.confidence = boundary.confidence;
+  result.may_interfere_with_tlb = boundary.boundary_locality_bytes <= (1 * Constants::BYTES_PER_MB);
   return result;
 }

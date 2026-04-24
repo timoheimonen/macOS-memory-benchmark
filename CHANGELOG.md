@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.55.3] - Unreleased
+
+### Changed
+  - **`-analyze-tlb` now runs an automatic two-stage sweep**: Standalone TLB analysis still performs the coarse locality sweep (`max(16KB, 2*stride)` to `256MB`), but now also inserts tighter refinement points around detected transitions. This reduces boundary quantization from coarse-only points and improves boundary localization without adding a new CLI flag.
+  - **Private-cache-knee detection added to TLB analysis flow**: The analyzer now attempts to detect an early private-cache knee (typically around ~1MB locality when present) and reports a TLB-interference risk hint. L1 TLB boundary scanning is offset past a detected knee to reduce cache-knee contamination.
+  - **TLB size reporting now includes entry ranges**: In addition to point estimates (`inferred_entries`), L1/L2 TLB output now includes a locality-window-derived range (`inferred_entries_min` / `inferred_entries_max`) to better represent non-power-of-two capacities and coarse-grid uncertainty.
+  - **TLB analysis console and JSON output extended**: Added fine-sweep summary, private-cache-knee section, interference hint, and inferred-entry-range fields in both console report and `tlb_analysis` JSON payload.
+  - **`-analyze-tlb` now shows a live spinner during locality-point measurement loops**: Added a TTY-only `|/-\` progress spinner for per-locality loop execution in standalone TLB analysis. Spinner output is written to `stderr`, clears itself after each measurement window, and stays disabled in non-interactive/redirected runs to keep machine-readable output clean.
+
 ## [0.55.2] - 2026-04-24
 
 ### Changed
