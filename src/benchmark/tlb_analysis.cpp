@@ -82,6 +82,12 @@ struct LocalityMeasurement {
   std::vector<double> loop_latencies_ns;
 };
 
+enum class LocalityMeasureStatus {
+  Success,
+  Interrupted,
+  Error,
+};
+
 class TlbMeasureSpinner {
  public:
   TlbMeasureSpinner() : enabled_(isatty(fileno(stderr)) == 1) {}
@@ -279,14 +285,14 @@ MmapPtr try_allocate_analysis_buffer(size_t size_bytes) {
  *
  * @return true on success, false on setup/measurement failure.
  */
-bool measure_locality_p50(void* latency_buffer,
-                          size_t buffer_size_bytes,
-                          size_t stride_bytes,
-                          size_t locality_bytes,
-                          LatencyChainMode chain_mode,
-                          HighResTimer& timer,
-                          double& out_p50_latency_ns,
-                          std::vector<double>* out_loop_latencies_ns = nullptr) {
+LocalityMeasureStatus measure_locality_p50(void* latency_buffer,
+                                           size_t buffer_size_bytes,
+                                           size_t stride_bytes,
+                                           size_t locality_bytes,
+                                           LatencyChainMode chain_mode,
+                                           HighResTimer& timer,
+                                           double& out_p50_latency_ns,
+                                           std::vector<double>* out_loop_latencies_ns = nullptr) {
   const size_t locality_kb = locality_bytes / Constants::BYTES_PER_KB;
   TlbMeasureSpinner spinner;
 
@@ -294,11 +300,15 @@ bool measure_locality_p50(void* latency_buffer,
   loop_latencies_ns.reserve(kLoopsPerPoint);
 
   for (size_t loop = 0; loop < kLoopsPerPoint; ++loop) {
+    if (signal_received()) {
+      return LocalityMeasureStatus::Interrupted;
+    }
+
     spinner.tick(locality_kb, loop + 1, kLoopsPerPoint);
 
     if (setup_latency_chain(latency_buffer, buffer_size_bytes,
                             stride_bytes, locality_bytes, nullptr, chain_mode) != EXIT_SUCCESS) {
-      return false;
+      return LocalityMeasureStatus::Error;
     }
 
     warmup_latency(latency_buffer, buffer_size_bytes);
@@ -310,18 +320,22 @@ bool measure_locality_p50(void* latency_buffer,
                 << Messages::error_tlb_analysis_invalid_measurement(locality_kb,
                                                                      static_cast<int>(loop + 1))
                 << std::endl;
-      return false;
+      return LocalityMeasureStatus::Error;
     }
 
     const double latency_ns_per_access = total_latency_ns / static_cast<double>(kAccessesPerLoop);
     loop_latencies_ns.push_back(latency_ns_per_access);
+
+    if (signal_received()) {
+      return LocalityMeasureStatus::Interrupted;
+    }
   }
 
   out_p50_latency_ns = median(loop_latencies_ns);
   if (out_loop_latencies_ns != nullptr) {
     *out_loop_latencies_ns = loop_latencies_ns;
   }
-  return true;
+  return LocalityMeasureStatus::Success;
 }
 
 }  // namespace
@@ -347,6 +361,15 @@ int run_tlb_analysis(const BenchmarkConfig& config) {
   const auto analysis_start = std::chrono::steady_clock::now();
   std::cout << Messages::usage_header(SOFTVERSION);
   std::cout << Messages::msg_running_tlb_analysis() << std::endl;
+
+  bool interrupted = false;
+  bool interrupt_reported = false;
+  auto report_interrupt_once = [&]() {
+    if (!interrupt_reported) {
+      std::cout << std::endl << Messages::msg_interrupted_by_user() << std::endl;
+      interrupt_reported = true;
+    }
+  };
 
   if (config.latency_stride_bytes == 0) {
     std::cerr << Messages::error_prefix()
@@ -464,14 +487,20 @@ int run_tlb_analysis(const BenchmarkConfig& config) {
 
     double locality_p50_ns = 0.0;
     std::vector<double> loop_latencies_ns;
-    if (!measure_locality_p50(latency_buffer.get(),
-                              selected_buffer_bytes,
-                              analysis_stride_bytes,
-                              locality_bytes,
-                              config.latency_chain_mode,
-                              timer,
-                              locality_p50_ns,
-                              &loop_latencies_ns)) {
+    const LocalityMeasureStatus status = measure_locality_p50(latency_buffer.get(),
+                                                              selected_buffer_bytes,
+                                                              analysis_stride_bytes,
+                                                              locality_bytes,
+                                                              config.latency_chain_mode,
+                                                              timer,
+                                                              locality_p50_ns,
+                                                              &loop_latencies_ns);
+    if (status == LocalityMeasureStatus::Interrupted) {
+      interrupted = true;
+      report_interrupt_once();
+      break;
+    }
+    if (status == LocalityMeasureStatus::Error) {
       if (buffer_locked) {
         (void)munlock(latency_buffer.get(), selected_buffer_bytes);
       }
@@ -487,9 +516,17 @@ int run_tlb_analysis(const BenchmarkConfig& config) {
 
     // Check for Ctrl+C between sweep points (after valid measurement)
     if (signal_received()) {
-      std::cout << std::endl << Messages::msg_interrupted_by_user() << std::endl;
+      interrupted = true;
+      report_interrupt_once();
       break;
     }
+  }
+
+  if (measurements.empty()) {
+    if (buffer_locked) {
+      (void)munlock(latency_buffer.get(), selected_buffer_bytes);
+    }
+    return interrupted ? EXIT_SUCCESS : EXIT_FAILURE;
   }
 
   std::sort(measurements.begin(), measurements.end(), [](const LocalityMeasurement& a, const LocalityMeasurement& b) {
@@ -555,6 +592,12 @@ int run_tlb_analysis(const BenchmarkConfig& config) {
 
   size_t fine_sweep_added_points = 0;
   for (size_t refinement_locality_bytes : refinement_points) {
+    if (signal_received()) {
+      interrupted = true;
+      report_interrupt_once();
+      break;
+    }
+
     if (std::any_of(measurements.begin(),
                     measurements.end(),
                     [refinement_locality_bytes](const LocalityMeasurement& measurement) {
@@ -565,14 +608,20 @@ int run_tlb_analysis(const BenchmarkConfig& config) {
 
     double refinement_p50_ns = 0.0;
     std::vector<double> refinement_loops_ns;
-    if (!measure_locality_p50(latency_buffer.get(),
-                              selected_buffer_bytes,
-                              analysis_stride_bytes,
-                              refinement_locality_bytes,
-                              config.latency_chain_mode,
-                              timer,
-                              refinement_p50_ns,
-                              &refinement_loops_ns)) {
+    const LocalityMeasureStatus status = measure_locality_p50(latency_buffer.get(),
+                                                              selected_buffer_bytes,
+                                                              analysis_stride_bytes,
+                                                              refinement_locality_bytes,
+                                                              config.latency_chain_mode,
+                                                              timer,
+                                                              refinement_p50_ns,
+                                                              &refinement_loops_ns);
+    if (status == LocalityMeasureStatus::Interrupted) {
+      interrupted = true;
+      report_interrupt_once();
+      break;
+    }
+    if (status == LocalityMeasureStatus::Error) {
       if (buffer_locked) {
         (void)munlock(latency_buffer.get(), selected_buffer_bytes);
       }
@@ -619,23 +668,27 @@ int run_tlb_analysis(const BenchmarkConfig& config) {
   std::vector<double> page_walk_512mb_loop_latencies_ns;
   double page_walk_512mb_p50_ns = 0.0;
   if (can_measure_page_walk_penalty && !signal_received()) {
-    if (!measure_locality_p50(latency_buffer.get(),
-                              selected_buffer_bytes,
-                              analysis_stride_bytes,
-                              kPageWalkComparisonLocalityBytes,
-                              config.latency_chain_mode,
-                              timer,
-                              page_walk_512mb_p50_ns,
-                              &page_walk_512mb_loop_latencies_ns)) {
+    const LocalityMeasureStatus status = measure_locality_p50(latency_buffer.get(),
+                                                              selected_buffer_bytes,
+                                                              analysis_stride_bytes,
+                                                              kPageWalkComparisonLocalityBytes,
+                                                              config.latency_chain_mode,
+                                                              timer,
+                                                              page_walk_512mb_p50_ns,
+                                                              &page_walk_512mb_loop_latencies_ns);
+    if (status == LocalityMeasureStatus::Interrupted) {
+      interrupted = true;
+      report_interrupt_once();
+    } else if (status == LocalityMeasureStatus::Error) {
       if (buffer_locked) {
         (void)munlock(latency_buffer.get(), selected_buffer_bytes);
       }
       return EXIT_FAILURE;
+    } else {
+      std::cout << Messages::msg_tlb_analysis_page_walk_progress(
+                       kPageWalkComparisonLocalityBytes / Constants::BYTES_PER_MB)
+                << " — " << page_walk_512mb_p50_ns << " ns" << std::endl;
     }
-
-    std::cout << Messages::msg_tlb_analysis_page_walk_progress(
-                     kPageWalkComparisonLocalityBytes / Constants::BYTES_PER_MB)
-              << " — " << page_walk_512mb_p50_ns << " ns" << std::endl;
   }
 
   if (buffer_locked) {
