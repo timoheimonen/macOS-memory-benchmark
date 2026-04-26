@@ -1,6 +1,6 @@
-# Project Structure — membenchmark
+# Project Structure — macOS-memory-benchmark
 
-**Version:** 0.55.0
+**Version:** 0.55.4
 **Platform:** ARM64 / AArch64 (Apple Silicon macOS)
 **License:** GNU General Public License v3.0
 
@@ -39,7 +39,7 @@ This document describes the layout of project files, organized by purpose. It is
 
 | File | Purpose |
 |---|---|
-| `Makefile` | Primary build system; produces the `membenchmark` release binary and the `test_runner` test binary |
+| `Makefile` | Primary build system; produces the `memory_benchmark` release binary and the `test_runner` test binary |
 | `.clang-format` | Clang-Format style configuration enforced across all C++ sources |
 
 ### User-facing documentation
@@ -157,16 +157,22 @@ Platform-independent infrastructure: configuration, memory management, system in
 |---|---|
 | `config.h` | `BenchmarkConfig` structure; aggregates all run-time settings parsed from the command line |
 | `constants.h` | Named constants for memory limits, cache size bounds, stride values, buffer sizing factors, and latency access counts |
-| `version.h` | `SOFTVERSION` macro (semantic version string, currently `"0.55.0"`) |
+| `version.h` | `SOFTVERSION` macro (semantic version string, currently `"0.55.4"`) |
 | `argument_parser.cpp` | Parses `argv` into a `BenchmarkConfig`; implements all flag definitions |
 | `config_validator.cpp` | Validates the parsed configuration; emits errors for out-of-range or conflicting settings |
 | `buffer_calculator.cpp` | Derives buffer sizes for each cache/memory level from the validated configuration and detected system parameters |
+
+#### src/core/signal/
+
+| File | Purpose |
+|---|---|
+| `signal_handler.h` / `.cpp` | Installs SIGINT/SIGTERM handling and coordinates benchmark interruption between main and worker threads |
 
 #### src/core/memory/
 
 | File | Purpose |
 |---|---|
-| `memory_manager.h` / `.cpp` | Top-level RAII memory manager; allocates and owns benchmark buffers via `mmap`; supports normal and cache-discouraging (`MAP_NOCACHE`) allocation |
+| `memory_manager.h` / `.cpp` | Top-level RAII memory manager; allocates and owns benchmark buffers via `mmap`; supports normal and cache-discouraging (`MADV_RANDOM`) allocation |
 | `buffer_manager.h` | Manages the set of named buffers handed to benchmark passes |
 | `buffer_allocator.h` / `.cpp` | Low-level `mmap`/`munmap` wrapper with alignment support |
 | `buffer_initializer.h` / `.cpp` | Initializes buffer contents (sequential fill, random fill, pointer-chase chain construction) before benchmark runs |
@@ -176,13 +182,13 @@ Platform-independent infrastructure: configuration, memory management, system in
 
 | File | Purpose |
 |---|---|
-| `system_info.h` / `.cpp` | Queries the OS for physical CPU core count, performance/efficiency core topology, cache sizes (L1/L2/L3), page size, and total physical memory via `sysctlbyname` |
+| `system_info.h` / `.cpp` | Queries the OS for CPU core topology, L1/L2 cache sizes, macOS version, and available memory via sysctl and Mach APIs |
 
 #### src/core/timing/
 
 | File | Purpose |
 |---|---|
-| `timer.h` / `.cpp` | High-resolution timer wrapping `clock_gettime(CLOCK_MONOTONIC_RAW)` on macOS; provides nanosecond-resolution elapsed-time measurement |
+| `timer.h` / `.cpp` | High-resolution timer wrapping `mach_absolute_time()` on macOS; provides nanosecond-resolution elapsed-time measurement |
 
 ---
 
@@ -225,7 +231,7 @@ All user-facing text strings are centralized here. Each `.cpp` file implements a
 | `cache.cpp` | Serializes cache-level benchmark results |
 | `main_memory.cpp` | Serializes main-memory benchmark results |
 | `patterns.cpp` | Serializes pattern benchmark results |
-| `file_writer.cpp` | Writes the completed JSON document to disk with ISO 8601 timestamp in the filename |
+| `file_writer.cpp` | Atomically writes the completed JSON document to the requested output path, creating parent directories as needed |
 
 ---
 
@@ -300,11 +306,12 @@ GoogleTest-based unit test suite. All files are picked up automatically by the M
 | `test_core_to_core_messages.cpp` | `CoreToCoreMessagesTest` | Core-to-core console message strings |
 | `test_core_to_core_cli.cpp` | `CoreToCoreCliTest` | Core-to-core CLI argument parsing |
 | `test_core_to_core_runner.cpp` | `CoreToCoreRunnerTest` | Core-to-core runner logic and JSON serialization |
+| `test_executable_cli.cpp` | `ExecutableCliIntegrationTest` | Executable-level CLI routing, invalid config, JSON output, and pattern orchestration smoke coverage |
 | `test_statistics.cpp` | `StatisticsTest` | Statistical computations: median, percentiles, stddev, min, max |
 | `test_timer.cpp` | `HighResTimerTest` | Timer resolution, monotonicity, and elapsed-time accuracy |
 | `test_system_info.cpp` | `SystemInfoTest` | `sysctlbyname`-based system queries on macOS |
 
-**Total unit tests (non-integration):** approximately 335 across 16 suites as of 2026-03-18.
+**Total listed GoogleTest cases:** 354 across 23 suite headings/instantiations as of 2026-04-26.
 
 ---
 

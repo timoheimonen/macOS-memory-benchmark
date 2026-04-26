@@ -1,7 +1,7 @@
 # Parameter Compatibility Matrix
 
-Last updated 2026-04-05
-Version 0.55.0
+Last updated 2026-04-26
+Version 0.55.4
 
 ## All Flags
 
@@ -46,10 +46,10 @@ Version 0.55.0
 | `-count <n>` | ✅ | |
 | `-latency-samples <n>` | ✅ | |
 | `-latency-stride-bytes <n>` | ✅ | |
-| `-latency-chain-mode <mode>` | ✅ | Requires `-latency-tlb-locality-kb > 0` for non-auto modes |
+| `-latency-chain-mode <mode>` | ✅ | Box modes require `-latency-tlb-locality-kb > 0`; `global-random` works with locality `0` |
 | `-latency-tlb-locality-kb <n>` | ✅ | |
 | `-threads <n>` | ✅ | |
-| `-cache-size <KB>` | ✅ | Only relevant for latency tests |
+| `-cache-size <KB>` | ✅ | Replaces auto L1/L2 cache tests with one custom cache target |
 | `-only-bandwidth` | ✅ | ❌ with `-cache-size`, ❌ with `-latency-samples` |
 | `-only-latency` | ✅ | ❌ with `-iterations`, needs `-buffersize > 0` or `-cache-size > 0` |
 | `-non-cacheable` | ✅ | |
@@ -63,17 +63,17 @@ Version 0.55.0
 |----------|------------|-------|
 | `-buffersize <MB>` | ✅ | |
 | `-count <n>` | ✅ | |
-| `-latency-samples <n>` | ❌ | Not applicable |
-| `-latency-stride-bytes <n>` | ❌ | Not applicable |
-| `-latency-chain-mode <mode>` | ❌ | Not applicable |
-| `-latency-tlb-locality-kb <n>` | ❌ | Not applicable |
+| `-latency-samples <n>` | Accepted, ignored | Value must parse; pattern mode has no latency path |
+| `-latency-stride-bytes <n>` | Accepted, ignored | Value must validate; pattern mode has no latency pointer chain |
+| `-latency-chain-mode <mode>` | Accepted, ignored | Mode/locality combination must validate; pattern mode has no latency pointer chain |
+| `-latency-tlb-locality-kb <n>` | Accepted, ignored | Value must validate; pattern mode has no latency pointer chain |
 | `-threads <n>` | ✅ | |
-| `-cache-size <KB>` | ❌ | Not applicable |
+| `-cache-size <KB>` | Accepted, ignored | Non-zero value must validate; pattern mode does not run cache tests |
 | `-only-bandwidth` | ❌ | Separate execution mode |
 | `-only-latency` | ❌ | Separate execution mode |
 | `-non-cacheable` | ✅ | |
 | `-output <file>` | ✅ | |
-| `-iterations <n>` | ❌ | Not applicable |
+| `-iterations <n>` | ✅ | Used by pattern benchmark execution loops |
 
 ### Modifiers with `-analyze-tlb` (standalone mode)
 

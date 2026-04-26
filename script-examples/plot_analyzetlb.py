@@ -185,7 +185,7 @@ def main():
   ax.legend(loc="upper left", bbox_to_anchor=(0.02, 0.74), fontsize=9)
   fig.text(0.5,
            0.01,
-           "github.com/timoheimonen/macos-memory-benchmark",
+           "https://github.com/timoheimonen/macOS-memory-benchmark",
            ha="center",
            fontsize=9)
   plt.tight_layout(rect=(0.01, 0.03, 0.99, 0.99))

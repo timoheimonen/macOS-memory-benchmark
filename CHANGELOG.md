@@ -23,6 +23,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
   - **Duplicate `-cache-size` options are now rejected**: Normal argument parsing now treats repeated `-cache-size` the same as other duplicate value options and fails fast instead of accepting the later value.
   - **Copy bandwidth calculation handles byte-count overflow**: `calculate_single_bandwidth()` now checks overflow after applying the copy-operation multiplier, preventing wrapped byte counts for extreme iteration/buffer combinations.
+  - **Documentation synchronized with current CLI and version state**: Corrected stale documentation and examples for the `-benchmark` requirement, `0.55.4` version references, default latency stride/locality values, source inventory counts, project structure details, issue-template version guidance, and rendered plot repository URL text.
 
 ## [0.55.3] - 2026-04-26
 

@@ -195,7 +195,7 @@ def main():
     fig.text(
         0.5,
         0.01,
-        "github.com/timoheimonen/macOS-memory-benchmark",
+        "https://github.com/timoheimonen/macOS-memory-benchmark",
         ha="center",
         fontsize=9)
     plt.tight_layout(rect=(0.01, 0.03, 0.99, 0.97))

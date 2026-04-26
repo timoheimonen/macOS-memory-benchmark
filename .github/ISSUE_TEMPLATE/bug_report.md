@@ -18,7 +18,7 @@ A clear and concise description of the issue.
 - Total Memory: [e.g., 24GB]
 
 **Benchmark Version:**
-- Version: [Run `./memory_benchmark --version` or check version.h]
+- Version: [Run `./memory_benchmark -h` or check `src/core/config/version.h`]
 - Build Method: [e.g., make, Homebrew]
 
 ## Steps to Reproduce
@@ -53,7 +53,7 @@ What should have happened?
 ## Configuration Used
 If applicable, share your command-line arguments or configuration:
 ```bash
-./memory_benchmark -buffersize 1024 -iterations 2000 [etc]
+./memory_benchmark -benchmark -buffersize 1024 -iterations 2000 [etc]
 ```
 
 ## Possible Solution

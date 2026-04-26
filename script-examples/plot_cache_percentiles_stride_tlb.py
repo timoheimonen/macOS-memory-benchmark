@@ -130,7 +130,7 @@ def main():
 
     plt.xscale("log", base=2)
     plt.xticks(all_cache_sizes, [f"{v} KB" for v in all_cache_sizes], rotation=45, ha="right")
-    plt.xlabel("Cache Size (KB)\ngithub.com/timoheimonen/macos-memory-benchmark")
+    plt.xlabel("Cache Size (KB)\nhttps://github.com/timoheimonen/macOS-memory-benchmark")
     plt.ylabel(f"{ALLOWED_METRICS[args.metric]} Latency (ns)")
     plt.title(f"{ALLOWED_METRICS[args.metric]} Cache Latency vs Cache Size/Stride/TLB")
     plt.grid(True, which="both", alpha=0.3)
