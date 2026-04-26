@@ -38,6 +38,18 @@
 
 namespace {
 
+const char* tlb_sweep_density_to_string(TlbSweepDensity density) {
+  switch (density) {
+    case TlbSweepDensity::Low:
+      return "low";
+    case TlbSweepDensity::Medium:
+      return "medium";
+    case TlbSweepDensity::High:
+      return "high";
+  }
+  return "high";
+}
+
 nlohmann::ordered_json build_tlb_boundary_json(const TlbBoundaryDetection& boundary,
                                                size_t inferred_entries) {
   nlohmann::ordered_json boundary_json;
@@ -58,6 +70,30 @@ nlohmann::ordered_json build_tlb_boundary_json(const TlbBoundaryDetection& bound
   boundary_json["confidence"] = boundary.confidence;
   boundary_json["inferred_entries"] = inferred_entries;
   return boundary_json;
+}
+
+nlohmann::ordered_json build_private_cache_knee_json(const PrivateCacheKneeDetection& knee,
+                                                     bool interference_elevated,
+                                                     size_t distance_to_l1_bytes,
+                                                     size_t distance_to_l1_pages) {
+  nlohmann::ordered_json knee_json;
+  knee_json["detected"] = knee.detected;
+  if (!knee.detected) {
+    return knee_json;
+  }
+
+  knee_json["boundary_index"] = knee.boundary_index;
+  knee_json["boundary_locality_bytes"] = knee.boundary_locality_bytes;
+  knee_json["boundary_locality_kb"] = knee.boundary_locality_bytes / Constants::BYTES_PER_KB;
+  knee_json["step_ns"] = knee.step_ns;
+  knee_json["step_percent"] = knee.step_percent;
+  knee_json["confidence"] = knee.confidence;
+  knee_json["candidate_type"] = knee.strong_private_cache_candidate ? "strong_private_cache" : "early_cache";
+  knee_json["may_interfere_with_tlb"] = knee.may_interfere_with_tlb;
+  knee_json["interference_elevated"] = interference_elevated;
+  knee_json["distance_to_l1_bytes"] = distance_to_l1_bytes;
+  knee_json["distance_to_l1_pages"] = distance_to_l1_pages;
+  return knee_json;
 }
 
 std::string build_utc_timestamp() {
@@ -91,11 +127,13 @@ int save_tlb_analysis_to_json(const TlbAnalysisJsonContext& context) {
       {JsonKeys::L1_CACHE_SIZE_BYTES, context.l1_cache_size_bytes},
       {JsonKeys::LATENCY_STRIDE_BYTES, context.stride_bytes},
       {JsonKeys::LATENCY_CHAIN_MODE, latency_chain_mode_to_string(effective_chain_mode)},
+      {JsonKeys::TLB_DENSITY, tlb_sweep_density_to_string(context.config.tlb_sweep_density)},
       {JsonKeys::LATENCY_SAMPLE_COUNT, static_cast<int>(context.loops_per_point)},
       {"accesses_per_loop", context.accesses_per_loop},
       {"tlb_guard_bytes", context.tlb_guard_bytes},
       {"buffer_size_mb", context.selected_buffer_mb},
-      {"buffer_locked", context.buffer_locked}};
+      {"buffer_locked", context.buffer_locked},
+      {"fine_sweep_added_points", context.fine_sweep_added_points}};
   json_output[JsonKeys::EXECUTION_TIME_SEC] = context.total_execution_time_sec;
 
   nlohmann::ordered_json sweep_json = nlohmann::ordered_json::array();
@@ -112,6 +150,20 @@ int save_tlb_analysis_to_json(const TlbAnalysisJsonContext& context) {
   tlb_json["sweep"] = sweep_json;
   tlb_json["l1_tlb_detection"] = build_tlb_boundary_json(context.l1_boundary, context.l1_entries);
   tlb_json["l2_tlb_detection"] = build_tlb_boundary_json(context.l2_boundary, context.l2_entries);
+  tlb_json["private_cache_knee"] = build_private_cache_knee_json(context.private_cache_knee,
+                                                                  context.private_cache_interference_elevated,
+                                                                  context.private_cache_to_l1_distance_bytes,
+                                                                  context.private_cache_to_l1_distance_pages);
+
+  if (context.l1_boundary.detected) {
+    tlb_json["l1_tlb_detection"]["inferred_entries_min"] = context.l1_entries_min;
+    tlb_json["l1_tlb_detection"]["inferred_entries_max"] = context.l1_entries_max;
+  }
+  if (context.l2_boundary.detected) {
+    tlb_json["l2_tlb_detection"]["inferred_entries_min"] = context.l2_entries_min;
+    tlb_json["l2_tlb_detection"]["inferred_entries_max"] = context.l2_entries_max;
+  }
+
   tlb_json["page_walk_penalty"] = {
       {"available", context.can_measure_page_walk_penalty},
       {"baseline_locality_kb", context.page_walk_baseline_locality_bytes / Constants::BYTES_PER_KB},

@@ -24,6 +24,7 @@
 #define TLB_ANALYSIS_H
 
 #include <cstddef>  // size_t
+#include <utility>
 #include <string>
 #include <vector>
 
@@ -45,6 +46,22 @@ struct TlbBoundaryDetection {
   double step_percent = 0.0;
   bool persistent_jump = false;
   std::string confidence;
+};
+
+/**
+ * @struct PrivateCacheKneeDetection
+ * @brief Detected private-cache knee candidate in locality sweep.
+ */
+struct PrivateCacheKneeDetection {
+  bool detected = false;
+  size_t boundary_index = 0;
+  size_t boundary_locality_bytes = 0;
+  double step_ns = 0.0;
+  double step_percent = 0.0;
+  std::string confidence;
+  bool strong_private_cache_candidate = false;
+  bool early_cache_candidate = false;
+  bool may_interfere_with_tlb = false;
 };
 
 /**
@@ -75,6 +92,17 @@ TlbBoundaryDetection detect_tlb_boundary(const std::vector<size_t>& locality_byt
 size_t infer_tlb_entries(size_t locality_bytes, size_t page_size_bytes);
 
 /**
+ * @brief Infer entry range from boundary and previous locality point.
+ * @param locality_bytes Sweep localities corresponding to detector input
+ * @param boundary_index Index of detected boundary
+ * @param page_size_bytes System page size in bytes
+ * @return Pair(min_entries, max_entries)
+ */
+std::pair<size_t, size_t> infer_tlb_entries_range(const std::vector<size_t>& locality_bytes,
+                                                  size_t boundary_index,
+                                                  size_t page_size_bytes);
+
+/**
  * @brief Classify confidence for a detected boundary.
  * @param step_ns Absolute latency step in nanoseconds
  * @param step_percent Relative step ratio (e.g. 0.12 = 12%)
@@ -82,6 +110,18 @@ size_t infer_tlb_entries(size_t locality_bytes, size_t page_size_bytes);
  * @return Confidence level string (High/Medium/Low)
  */
 std::string classify_tlb_confidence(double step_ns, double step_percent, bool persistent_jump);
+
+/**
+ * @brief Detect likely private-cache knee near 1 MB region.
+ * @param locality_bytes Locality windows used in measurement order
+ * @param p50_latency_ns P50 latency values corresponding to locality windows
+ * @param loop_latencies Optional per-point raw loop latencies for IQR gating (nullptr to skip)
+ * @return Cache-knee detection metadata
+ */
+PrivateCacheKneeDetection detect_private_cache_knee(
+    const std::vector<size_t>& locality_bytes,
+    const std::vector<double>& p50_latency_ns,
+    const std::vector<std::vector<double>>* loop_latencies = nullptr);
 
 /**
  * @brief Run standalone TLB analysis benchmark mode.

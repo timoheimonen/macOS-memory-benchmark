@@ -249,6 +249,37 @@ TEST(ConfigTest, ParseAnalyzeTlbWithLatencyChainModeSucceeds) {
   EXPECT_EQ(config.latency_chain_mode, LatencyChainMode::RandomInBoxRandomBox);
 }
 
+TEST(ConfigTest, ParseAnalyzeTlbWithTlbDensityLowSucceeds) {
+  BenchmarkConfig config;
+  const char* argv[] = {"program", "-analyze-tlb", "-tlb-density", "low"};
+  int argc = 4;
+
+  int result = parse_arguments(argc, const_cast<char**>(argv), config);
+  EXPECT_EQ(result, EXIT_SUCCESS);
+  EXPECT_TRUE(config.analyze_tlb);
+  EXPECT_EQ(config.tlb_sweep_density, TlbSweepDensity::Low);
+}
+
+TEST(ConfigTest, ParseAnalyzeTlbWithTlbDensityMediumSucceeds) {
+  BenchmarkConfig config;
+  const char* argv[] = {"program", "-analyze-tlb", "-tlb-density", "medium"};
+  int argc = 4;
+
+  int result = parse_arguments(argc, const_cast<char**>(argv), config);
+  EXPECT_EQ(result, EXIT_SUCCESS);
+  EXPECT_TRUE(config.analyze_tlb);
+  EXPECT_EQ(config.tlb_sweep_density, TlbSweepDensity::Medium);
+}
+
+TEST(ConfigTest, ParseAnalyzeTlbWithInvalidTlbDensityFails) {
+  BenchmarkConfig config;
+  const char* argv[] = {"program", "-analyze-tlb", "-tlb-density", "ultra"};
+  int argc = 4;
+
+  int result = parse_arguments(argc, const_cast<char**>(argv), config);
+  EXPECT_EQ(result, EXIT_FAILURE);
+}
+
 TEST(ConfigTest, ParseAnalyzeTlbWithInvalidLatencyStrideFails) {
   BenchmarkConfig config;
   const char* argv[] = {"program", "-analyze-tlb", "-latency-stride-bytes", "0"};
