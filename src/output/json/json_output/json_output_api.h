@@ -72,6 +72,7 @@ namespace JsonKeys {
   constexpr const char* LATENCY_SAMPLE_COUNT = "latency_sample_count";
   constexpr const char* LATENCY_STRIDE_BYTES = "latency_stride_bytes";
   constexpr const char* LATENCY_CHAIN_MODE = "latency_chain_mode";
+  constexpr const char* TLB_DENSITY = "tlb_density";
   constexpr const char* USE_LATENCY_TLB_LOCALITY = "use_latency_tlb_locality";
   constexpr const char* LATENCY_TLB_LOCALITY_BYTES = "latency_tlb_locality_bytes";
   constexpr const char* LATENCY_TLB_LOCALITY_KB = "latency_tlb_locality_kb";

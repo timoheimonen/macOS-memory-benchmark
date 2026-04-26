@@ -26,10 +26,13 @@
 #include <chrono>
 #include <cmath>
 #include <cstddef>
+#include <cstdio>
 #include <cstdlib>
 #include <iostream>
 #include <limits>
+#include <sstream>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include <sys/mman.h>
@@ -58,7 +61,7 @@ constexpr size_t kSweepMaxLocalityBytes = 256 * Constants::BYTES_PER_MB;
 constexpr size_t kPageWalkComparisonLocalityBytes = 512 * Constants::BYTES_PER_MB;
 constexpr size_t kPageWalkMinimumBufferMb = 512;
 
-const std::array<size_t, 15> kLocalitySweepBytes = {
+const std::array<size_t, 15> kLocalitySweepLowBytes = {
     16 * Constants::BYTES_PER_KB,        64 * Constants::BYTES_PER_KB,
     128 * Constants::BYTES_PER_KB,       256 * Constants::BYTES_PER_KB,
     512 * Constants::BYTES_PER_KB,       1 * Constants::BYTES_PER_MB,
@@ -69,7 +72,103 @@ const std::array<size_t, 15> kLocalitySweepBytes = {
     256 * Constants::BYTES_PER_MB,
 };
 
+const std::array<size_t, 29> kLocalitySweepHighBytes = {
+    16 * Constants::BYTES_PER_KB,        32 * Constants::BYTES_PER_KB,
+    64 * Constants::BYTES_PER_KB,        96 * Constants::BYTES_PER_KB,
+    128 * Constants::BYTES_PER_KB,       192 * Constants::BYTES_PER_KB,
+    256 * Constants::BYTES_PER_KB,       384 * Constants::BYTES_PER_KB,
+    512 * Constants::BYTES_PER_KB,       768 * Constants::BYTES_PER_KB,
+    1 * Constants::BYTES_PER_MB,         1536 * Constants::BYTES_PER_KB,
+    2 * Constants::BYTES_PER_MB,         3 * Constants::BYTES_PER_MB,
+    4 * Constants::BYTES_PER_MB,         6 * Constants::BYTES_PER_MB,
+    8 * Constants::BYTES_PER_MB,         10 * Constants::BYTES_PER_MB,
+    12 * Constants::BYTES_PER_MB,        14 * Constants::BYTES_PER_MB,
+    16 * Constants::BYTES_PER_MB,        24 * Constants::BYTES_PER_MB,
+    32 * Constants::BYTES_PER_MB,        48 * Constants::BYTES_PER_MB,
+    64 * Constants::BYTES_PER_MB,        96 * Constants::BYTES_PER_MB,
+    128 * Constants::BYTES_PER_MB,       192 * Constants::BYTES_PER_MB,
+    256 * Constants::BYTES_PER_MB,
+};
+
 const std::array<size_t, 3> kBufferCandidateMb = {1024, 512, 256};
+
+constexpr size_t kRefinementSubdivisions = 8;
+
+const char* tlb_sweep_density_to_string(TlbSweepDensity density) {
+  switch (density) {
+    case TlbSweepDensity::Low:
+      return "low";
+    case TlbSweepDensity::Medium:
+      return "medium";
+    case TlbSweepDensity::High:
+      return "high";
+  }
+  return "high";
+}
+
+bool tlb_density_enables_refinement(TlbSweepDensity density) {
+  return density != TlbSweepDensity::Low;
+}
+
+struct LocalityMeasurement {
+  size_t locality_bytes = 0;
+  double p50_latency_ns = 0.0;
+  std::vector<double> loop_latencies_ns;
+};
+
+enum class LocalityMeasureStatus {
+  Success,
+  Interrupted,
+  Error,
+};
+
+class TlbMeasureSpinner {
+ public:
+  TlbMeasureSpinner() : enabled_(isatty(fileno(stderr)) == 1) {}
+
+  ~TlbMeasureSpinner() {
+    clear();
+  }
+
+  void tick(size_t locality_kb, size_t loop_index, size_t loop_total) {
+    if (!enabled_) {
+      return;
+    }
+
+    static constexpr char kFrames[] = {'|', '/', '-', '\\'};
+    const char frame = kFrames[frame_index_ % 4];
+    ++frame_index_;
+
+    std::ostringstream oss;
+    oss << frame << " Measuring locality " << locality_kb << " KB"
+        << " (loop " << loop_index << "/" << loop_total << ")";
+    render(oss.str());
+  }
+
+ private:
+  void render(const std::string& text) {
+    std::string padded = text;
+    if (last_text_len_ > text.size()) {
+      padded.append(last_text_len_ - text.size(), ' ');
+    }
+    std::fputs(("\r" + padded).c_str(), stderr);
+    std::fflush(stderr);
+    last_text_len_ = text.size();
+  }
+
+  void clear() {
+    if (!enabled_ || last_text_len_ == 0) {
+      return;
+    }
+    std::fputs(("\r" + std::string(last_text_len_, ' ') + "\r").c_str(), stderr);
+    std::fflush(stderr);
+    last_text_len_ = 0;
+  }
+
+  bool enabled_ = false;
+  size_t frame_index_ = 0;
+  size_t last_text_len_ = 0;
+};
 
 size_t calculate_min_sweep_locality(size_t stride_bytes) {
   if (stride_bytes > (std::numeric_limits<size_t>::max() / 2)) {
@@ -79,24 +178,34 @@ size_t calculate_min_sweep_locality(size_t stride_bytes) {
   return std::max(kSweepMinLocalityBytes, 2 * stride_bytes);
 }
 
-std::vector<size_t> build_effective_locality_sweep(size_t stride_bytes) {
+std::vector<size_t> build_effective_locality_sweep(size_t stride_bytes,
+                                                   TlbSweepDensity density) {
   const size_t min_locality_bytes = calculate_min_sweep_locality(stride_bytes);
   std::vector<size_t> localities;
+
+  const size_t* canonical_localities = nullptr;
+  size_t canonical_count = 0;
+  if (density == TlbSweepDensity::High) {
+    canonical_localities = kLocalitySweepHighBytes.data();
+    canonical_count = kLocalitySweepHighBytes.size();
+  } else {
+    canonical_localities = kLocalitySweepLowBytes.data();
+    canonical_count = kLocalitySweepLowBytes.size();
+  }
 
   if (min_locality_bytes > kSweepMaxLocalityBytes) {
     return localities;
   }
 
-  localities.reserve(kLocalitySweepBytes.size() + 1);
-  if (std::none_of(kLocalitySweepBytes.begin(),
-                   kLocalitySweepBytes.end(),
-                   [min_locality_bytes](size_t value) {
-                     return value == min_locality_bytes;
-                   })) {
+  localities.reserve(canonical_count + 1);
+  if (std::none_of(canonical_localities,
+                   canonical_localities + canonical_count,
+                   [min_locality_bytes](size_t value) { return value == min_locality_bytes; })) {
     localities.push_back(min_locality_bytes);
   }
 
-  for (size_t locality_bytes : kLocalitySweepBytes) {
+  for (size_t i = 0; i < canonical_count; ++i) {
+    const size_t locality_bytes = canonical_localities[i];
     if (locality_bytes < min_locality_bytes || locality_bytes > kSweepMaxLocalityBytes) {
       continue;
     }
@@ -106,6 +215,73 @@ std::vector<size_t> build_effective_locality_sweep(size_t stride_bytes) {
   std::sort(localities.begin(), localities.end());
   localities.erase(std::unique(localities.begin(), localities.end()), localities.end());
   return localities;
+}
+
+std::vector<size_t> build_refinement_points(const std::vector<size_t>& localities_bytes,
+                                            size_t boundary_index,
+                                            size_t min_locality_bytes,
+                                            size_t max_locality_bytes) {
+  std::vector<size_t> points;
+  if (localities_bytes.empty() || boundary_index >= localities_bytes.size()) {
+    return points;
+  }
+
+  const size_t boundary = localities_bytes[boundary_index];
+  const size_t lower = (boundary_index > 0) ? localities_bytes[boundary_index - 1] : min_locality_bytes;
+  const size_t upper = (boundary_index + 1 < localities_bytes.size())
+                           ? localities_bytes[boundary_index + 1]
+                           : std::min(max_locality_bytes, boundary * 2);
+  if (upper <= lower) {
+    return points;
+  }
+
+  for (size_t step = 1; step < kRefinementSubdivisions; ++step) {
+    const size_t candidate = lower + ((upper - lower) * step) / kRefinementSubdivisions;
+    if (candidate <= lower || candidate >= upper) {
+      continue;
+    }
+    if (candidate < min_locality_bytes || candidate > max_locality_bytes) {
+      continue;
+    }
+    points.push_back(candidate);
+  }
+
+  std::sort(points.begin(), points.end());
+  points.erase(std::unique(points.begin(), points.end()), points.end());
+  return points;
+}
+
+void upsert_measurement(std::vector<LocalityMeasurement>& measurements,
+                        size_t locality_bytes,
+                        double p50_latency_ns,
+                        std::vector<double>&& loop_latencies_ns) {
+  for (LocalityMeasurement& measurement : measurements) {
+    if (measurement.locality_bytes == locality_bytes) {
+      measurement.p50_latency_ns = p50_latency_ns;
+      measurement.loop_latencies_ns = std::move(loop_latencies_ns);
+      return;
+    }
+  }
+
+  measurements.push_back(LocalityMeasurement{locality_bytes, p50_latency_ns, std::move(loop_latencies_ns)});
+}
+
+void flatten_measurements(const std::vector<LocalityMeasurement>& measurements,
+                          std::vector<size_t>& out_localities,
+                          std::vector<double>& out_p50,
+                          std::vector<std::vector<double>>& out_loops) {
+  out_localities.clear();
+  out_p50.clear();
+  out_loops.clear();
+  out_localities.reserve(measurements.size());
+  out_p50.reserve(measurements.size());
+  out_loops.reserve(measurements.size());
+
+  for (const LocalityMeasurement& measurement : measurements) {
+    out_localities.push_back(measurement.locality_bytes);
+    out_p50.push_back(measurement.p50_latency_ns);
+    out_loops.push_back(measurement.loop_latencies_ns);
+  }
 }
 
 double median(std::vector<double> values) {
@@ -153,23 +329,30 @@ MmapPtr try_allocate_analysis_buffer(size_t size_bytes) {
  *
  * @return true on success, false on setup/measurement failure.
  */
-bool measure_locality_p50(void* latency_buffer,
-                          size_t buffer_size_bytes,
-                          size_t stride_bytes,
-                          size_t locality_bytes,
-                          LatencyChainMode chain_mode,
-                          HighResTimer& timer,
-                          double& out_p50_latency_ns,
-                          std::vector<double>* out_loop_latencies_ns = nullptr) {
+LocalityMeasureStatus measure_locality_p50(void* latency_buffer,
+                                           size_t buffer_size_bytes,
+                                           size_t stride_bytes,
+                                           size_t locality_bytes,
+                                           LatencyChainMode chain_mode,
+                                           HighResTimer& timer,
+                                           double& out_p50_latency_ns,
+                                           std::vector<double>* out_loop_latencies_ns = nullptr) {
   const size_t locality_kb = locality_bytes / Constants::BYTES_PER_KB;
+  TlbMeasureSpinner spinner;
 
   std::vector<double> loop_latencies_ns;
   loop_latencies_ns.reserve(kLoopsPerPoint);
 
   for (size_t loop = 0; loop < kLoopsPerPoint; ++loop) {
+    if (signal_received()) {
+      return LocalityMeasureStatus::Interrupted;
+    }
+
+    spinner.tick(locality_kb, loop + 1, kLoopsPerPoint);
+
     if (setup_latency_chain(latency_buffer, buffer_size_bytes,
                             stride_bytes, locality_bytes, nullptr, chain_mode) != EXIT_SUCCESS) {
-      return false;
+      return LocalityMeasureStatus::Error;
     }
 
     warmup_latency(latency_buffer, buffer_size_bytes);
@@ -181,18 +364,22 @@ bool measure_locality_p50(void* latency_buffer,
                 << Messages::error_tlb_analysis_invalid_measurement(locality_kb,
                                                                      static_cast<int>(loop + 1))
                 << std::endl;
-      return false;
+      return LocalityMeasureStatus::Error;
     }
 
     const double latency_ns_per_access = total_latency_ns / static_cast<double>(kAccessesPerLoop);
     loop_latencies_ns.push_back(latency_ns_per_access);
+
+    if (signal_received()) {
+      return LocalityMeasureStatus::Interrupted;
+    }
   }
 
   out_p50_latency_ns = median(loop_latencies_ns);
   if (out_loop_latencies_ns != nullptr) {
     *out_loop_latencies_ns = loop_latencies_ns;
   }
-  return true;
+  return LocalityMeasureStatus::Success;
 }
 
 }  // namespace
@@ -219,6 +406,15 @@ int run_tlb_analysis(const BenchmarkConfig& config) {
   std::cout << Messages::usage_header(SOFTVERSION);
   std::cout << Messages::msg_running_tlb_analysis() << std::endl;
 
+  bool interrupted = false;
+  bool interrupt_reported = false;
+  auto report_interrupt_once = [&]() {
+    if (!interrupt_reported) {
+      std::cout << std::endl << Messages::msg_interrupted_by_user() << std::endl;
+      interrupt_reported = true;
+    }
+  };
+
   if (config.latency_stride_bytes == 0) {
     std::cerr << Messages::error_prefix()
               << Messages::error_latency_stride_invalid(0, 1, std::numeric_limits<long long>::max())
@@ -232,6 +428,8 @@ int run_tlb_analysis(const BenchmarkConfig& config) {
     return EXIT_FAILURE;
   }
   const size_t analysis_stride_bytes = config.latency_stride_bytes;
+  const TlbSweepDensity sweep_density = config.tlb_sweep_density;
+  const bool refinement_enabled = tlb_density_enables_refinement(sweep_density);
 
   const size_t page_size_bytes = static_cast<size_t>(getpagesize());
   const size_t l1_cache_size_bytes = get_l1_cache_size();
@@ -268,7 +466,8 @@ int run_tlb_analysis(const BenchmarkConfig& config) {
     return EXIT_FAILURE;
   }
 
-  std::vector<size_t> localities_bytes = build_effective_locality_sweep(analysis_stride_bytes);
+  std::vector<size_t> localities_bytes =
+      build_effective_locality_sweep(analysis_stride_bytes, sweep_density);
   if (localities_bytes.empty()) {
     std::cerr << Messages::error_prefix()
               << Messages::error_buffer_stride_invalid_latency_chain(
@@ -305,6 +504,7 @@ int run_tlb_analysis(const BenchmarkConfig& config) {
   std::cout << Messages::report_tlb_page_size(page_size_bytes) << std::endl;
   std::cout << Messages::report_tlb_buffer(selected_buffer_mb, buffer_locked) << std::endl;
   std::cout << Messages::report_tlb_stride(analysis_stride_bytes) << std::endl;
+  std::cout << Messages::report_tlb_density(tlb_sweep_density_to_string(sweep_density)) << std::endl;
   std::cout << Messages::report_tlb_chain_mode_requested(
                    latency_chain_mode_to_string(config.latency_chain_mode))
             << std::endl;
@@ -323,10 +523,8 @@ int run_tlb_analysis(const BenchmarkConfig& config) {
             << std::endl;
   std::cout << std::endl;
 
-  std::vector<double> p50_latency_ns;
-  std::vector<std::vector<double>> sweep_loop_latencies_ns;
-  p50_latency_ns.reserve(localities_bytes.size());
-  sweep_loop_latencies_ns.reserve(localities_bytes.size());
+  std::vector<LocalityMeasurement> measurements;
+  measurements.reserve(localities_bytes.size() + 16);
 
   std::cout << std::fixed;
   std::cout.precision(Constants::LATENCY_PRECISION);
@@ -337,14 +535,20 @@ int run_tlb_analysis(const BenchmarkConfig& config) {
 
     double locality_p50_ns = 0.0;
     std::vector<double> loop_latencies_ns;
-    if (!measure_locality_p50(latency_buffer.get(),
-                              selected_buffer_bytes,
-                              analysis_stride_bytes,
-                              locality_bytes,
-                              config.latency_chain_mode,
-                              timer,
-                              locality_p50_ns,
-                              &loop_latencies_ns)) {
+    const LocalityMeasureStatus status = measure_locality_p50(latency_buffer.get(),
+                                                              selected_buffer_bytes,
+                                                              analysis_stride_bytes,
+                                                              locality_bytes,
+                                                              config.latency_chain_mode,
+                                                              timer,
+                                                              locality_p50_ns,
+                                                              &loop_latencies_ns);
+    if (status == LocalityMeasureStatus::Interrupted) {
+      interrupted = true;
+      report_interrupt_once();
+      break;
+    }
+    if (status == LocalityMeasureStatus::Error) {
       if (buffer_locked) {
         (void)munlock(latency_buffer.get(), selected_buffer_bytes);
       }
@@ -356,72 +560,238 @@ int run_tlb_analysis(const BenchmarkConfig& config) {
                                                               locality_kb)
               << " — " << locality_p50_ns << " ns" << std::endl;
 
-    p50_latency_ns.push_back(locality_p50_ns);
-    sweep_loop_latencies_ns.push_back(std::move(loop_latencies_ns));
+    measurements.push_back(LocalityMeasurement{locality_bytes, locality_p50_ns, std::move(loop_latencies_ns)});
 
     // Check for Ctrl+C between sweep points (after valid measurement)
     if (signal_received()) {
-      std::cout << std::endl << Messages::msg_interrupted_by_user() << std::endl;
+      interrupted = true;
+      report_interrupt_once();
       break;
     }
   }
 
-  std::vector<double> page_walk_512mb_loop_latencies_ns;
-  double page_walk_512mb_p50_ns = 0.0;
-  if (can_measure_page_walk_penalty && !signal_received()) {
-    if (!measure_locality_p50(latency_buffer.get(),
-                              selected_buffer_bytes,
-                              analysis_stride_bytes,
-                              kPageWalkComparisonLocalityBytes,
-                              config.latency_chain_mode,
-                              timer,
-                              page_walk_512mb_p50_ns,
-                              &page_walk_512mb_loop_latencies_ns)) {
+  if (measurements.empty()) {
+    if (buffer_locked) {
+      (void)munlock(latency_buffer.get(), selected_buffer_bytes);
+    }
+    return interrupted ? EXIT_SUCCESS : EXIT_FAILURE;
+  }
+
+  std::sort(measurements.begin(), measurements.end(), [](const LocalityMeasurement& a, const LocalityMeasurement& b) {
+    return a.locality_bytes < b.locality_bytes;
+  });
+
+  std::vector<size_t> final_localities_bytes;
+  std::vector<double> p50_latency_ns;
+  std::vector<std::vector<double>> sweep_loop_latencies_ns;
+  flatten_measurements(measurements, final_localities_bytes, p50_latency_ns, sweep_loop_latencies_ns);
+
+  const size_t tlb_guard_bytes = std::max<size_t>(2 * l1_cache_size_bytes, 64 * page_size_bytes);
+
+  PrivateCacheKneeDetection private_cache_knee =
+      detect_private_cache_knee(final_localities_bytes, p50_latency_ns, &sweep_loop_latencies_ns);
+
+  const size_t l1_segment_start =
+      (private_cache_knee.detected && private_cache_knee.boundary_index < final_localities_bytes.size() - 1)
+          ? (private_cache_knee.boundary_index + 1)
+          : 0;
+
+  TlbBoundaryDetection l1_boundary =
+      detect_tlb_boundary(final_localities_bytes, p50_latency_ns, l1_segment_start, tlb_guard_bytes,
+                          &sweep_loop_latencies_ns);
+
+  TlbBoundaryDetection l2_boundary;
+  if (l1_boundary.detected && l1_boundary.boundary_index < final_localities_bytes.size() - 1) {
+    const size_t l2_segment_start = std::min(l1_boundary.boundary_index + 2,
+                                             final_localities_bytes.size() - 2);
+    const size_t l2_guard_bytes = std::max(tlb_guard_bytes, l1_boundary.boundary_locality_bytes);
+    l2_boundary = detect_tlb_boundary(final_localities_bytes,
+                                      p50_latency_ns,
+                                      l2_segment_start,
+                                      l2_guard_bytes,
+                                      &sweep_loop_latencies_ns);
+  }
+
+  std::vector<size_t> refinement_points;
+  if (refinement_enabled) {
+    if (private_cache_knee.detected) {
+      const std::vector<size_t> points = build_refinement_points(final_localities_bytes,
+                                                                 private_cache_knee.boundary_index,
+                                                                 localities_bytes.front(),
+                                                                 localities_bytes.back());
+      refinement_points.insert(refinement_points.end(), points.begin(), points.end());
+    }
+    if (l1_boundary.detected) {
+      const std::vector<size_t> points = build_refinement_points(final_localities_bytes,
+                                                                 l1_boundary.boundary_index,
+                                                                 localities_bytes.front(),
+                                                                 localities_bytes.back());
+      refinement_points.insert(refinement_points.end(), points.begin(), points.end());
+    }
+    if (l2_boundary.detected) {
+      const std::vector<size_t> points = build_refinement_points(final_localities_bytes,
+                                                                 l2_boundary.boundary_index,
+                                                                 localities_bytes.front(),
+                                                                 localities_bytes.back());
+      refinement_points.insert(refinement_points.end(), points.begin(), points.end());
+    }
+  }
+
+  std::sort(refinement_points.begin(), refinement_points.end());
+  refinement_points.erase(std::unique(refinement_points.begin(), refinement_points.end()), refinement_points.end());
+
+  if (!refinement_points.empty() && !interrupted && !signal_received()) {
+    std::cout << Messages::msg_tlb_analysis_refinement_start(refinement_points.size()) << std::endl;
+  }
+
+  size_t fine_sweep_added_points = 0;
+  for (size_t refinement_locality_bytes : refinement_points) {
+    if (signal_received()) {
+      interrupted = true;
+      report_interrupt_once();
+      break;
+    }
+
+    if (std::any_of(measurements.begin(),
+                    measurements.end(),
+                    [refinement_locality_bytes](const LocalityMeasurement& measurement) {
+                      return measurement.locality_bytes == refinement_locality_bytes;
+                    })) {
+      continue;
+    }
+
+    double refinement_p50_ns = 0.0;
+    std::vector<double> refinement_loops_ns;
+    const LocalityMeasureStatus status = measure_locality_p50(latency_buffer.get(),
+                                                              selected_buffer_bytes,
+                                                              analysis_stride_bytes,
+                                                              refinement_locality_bytes,
+                                                              config.latency_chain_mode,
+                                                              timer,
+                                                              refinement_p50_ns,
+                                                              &refinement_loops_ns);
+    if (status == LocalityMeasureStatus::Interrupted) {
+      interrupted = true;
+      report_interrupt_once();
+      break;
+    }
+    if (status == LocalityMeasureStatus::Error) {
       if (buffer_locked) {
         (void)munlock(latency_buffer.get(), selected_buffer_bytes);
       }
       return EXIT_FAILURE;
     }
 
-    std::cout << Messages::msg_tlb_analysis_page_walk_progress(
-                     kPageWalkComparisonLocalityBytes / Constants::BYTES_PER_MB)
-              << " — " << page_walk_512mb_p50_ns << " ns" << std::endl;
+    upsert_measurement(measurements,
+                       refinement_locality_bytes,
+                       refinement_p50_ns,
+                       std::move(refinement_loops_ns));
+    ++fine_sweep_added_points;
+  }
+
+  std::sort(measurements.begin(), measurements.end(), [](const LocalityMeasurement& a, const LocalityMeasurement& b) {
+    return a.locality_bytes < b.locality_bytes;
+  });
+  flatten_measurements(measurements, final_localities_bytes, p50_latency_ns, sweep_loop_latencies_ns);
+
+  private_cache_knee = detect_private_cache_knee(final_localities_bytes, p50_latency_ns, &sweep_loop_latencies_ns);
+
+  const size_t final_l1_segment_start =
+      (private_cache_knee.detected && private_cache_knee.boundary_index < final_localities_bytes.size() - 1)
+          ? (private_cache_knee.boundary_index + 1)
+          : 0;
+
+  l1_boundary = detect_tlb_boundary(final_localities_bytes,
+                                    p50_latency_ns,
+                                    final_l1_segment_start,
+                                    tlb_guard_bytes,
+                                    &sweep_loop_latencies_ns);
+
+  l2_boundary = TlbBoundaryDetection{};
+  if (l1_boundary.detected && l1_boundary.boundary_index < final_localities_bytes.size() - 1) {
+    const size_t l2_segment_start = std::min(l1_boundary.boundary_index + 2,
+                                             final_localities_bytes.size() - 2);
+    const size_t l2_guard_bytes = std::max(tlb_guard_bytes, l1_boundary.boundary_locality_bytes);
+    l2_boundary = detect_tlb_boundary(final_localities_bytes,
+                                      p50_latency_ns,
+                                      l2_segment_start,
+                                      l2_guard_bytes,
+                                      &sweep_loop_latencies_ns);
+  }
+
+  size_t private_cache_to_l1_distance_bytes = 0;
+  size_t private_cache_to_l1_distance_pages = 0;
+  bool private_cache_interference_elevated = false;
+  if (private_cache_knee.detected) {
+    if (l1_boundary.detected && l1_boundary.boundary_locality_bytes > private_cache_knee.boundary_locality_bytes) {
+      private_cache_to_l1_distance_bytes =
+          l1_boundary.boundary_locality_bytes - private_cache_knee.boundary_locality_bytes;
+      private_cache_to_l1_distance_pages =
+          (page_size_bytes > 0) ? (private_cache_to_l1_distance_bytes / page_size_bytes) : 0;
+
+      bool l1_within_two_x_locality = false;
+      if (private_cache_knee.boundary_locality_bytes <= (std::numeric_limits<size_t>::max() / 2)) {
+        l1_within_two_x_locality =
+            l1_boundary.boundary_locality_bytes <= (2 * private_cache_knee.boundary_locality_bytes);
+      }
+
+      if (private_cache_knee.strong_private_cache_candidate) {
+        private_cache_interference_elevated =
+            l1_within_two_x_locality || (private_cache_to_l1_distance_pages < 128);
+      } else {
+        private_cache_interference_elevated = private_cache_to_l1_distance_pages < 64;
+      }
+    } else {
+      private_cache_interference_elevated = private_cache_knee.strong_private_cache_candidate;
+    }
+  }
+
+  std::vector<double> page_walk_512mb_loop_latencies_ns;
+  double page_walk_512mb_p50_ns = 0.0;
+  if (can_measure_page_walk_penalty && !signal_received()) {
+    const LocalityMeasureStatus status = measure_locality_p50(latency_buffer.get(),
+                                                              selected_buffer_bytes,
+                                                              analysis_stride_bytes,
+                                                              kPageWalkComparisonLocalityBytes,
+                                                              config.latency_chain_mode,
+                                                              timer,
+                                                              page_walk_512mb_p50_ns,
+                                                              &page_walk_512mb_loop_latencies_ns);
+    if (status == LocalityMeasureStatus::Interrupted) {
+      interrupted = true;
+      report_interrupt_once();
+    } else if (status == LocalityMeasureStatus::Error) {
+      if (buffer_locked) {
+        (void)munlock(latency_buffer.get(), selected_buffer_bytes);
+      }
+      return EXIT_FAILURE;
+    } else {
+      std::cout << Messages::msg_tlb_analysis_page_walk_progress(
+                       kPageWalkComparisonLocalityBytes / Constants::BYTES_PER_MB)
+                << " — " << page_walk_512mb_p50_ns << " ns" << std::endl;
+    }
   }
 
   if (buffer_locked) {
     (void)munlock(latency_buffer.get(), selected_buffer_bytes);
   }
 
-  const size_t tlb_guard_bytes = std::max<size_t>(2 * l1_cache_size_bytes, 64 * page_size_bytes);
-
-  const TlbBoundaryDetection l1_boundary =
-      detect_tlb_boundary(localities_bytes, p50_latency_ns, 0, tlb_guard_bytes,
-                          &sweep_loop_latencies_ns);
-
-  TlbBoundaryDetection l2_boundary;
-  if (l1_boundary.detected && l1_boundary.boundary_index < localities_bytes.size() - 1) {
-    // Offset L2 segment start past the L1 boundary to avoid contaminating the
-    // L2 baseline with the L1 transition noise.  Use at least +1, or +2 when
-    // there are enough remaining points, so the L1 boundary point and its
-    // immediate neighbour are excluded from the L2 baseline.
-    const size_t l2_segment_start = std::min(
-        l1_boundary.boundary_index + 2,
-        localities_bytes.size() - 2);
-
-    // L2-specific guard: prevent L2 from re-detecting at or below the L1 boundary.
-    const size_t l2_guard_bytes = std::max(tlb_guard_bytes, l1_boundary.boundary_locality_bytes);
-
-    l2_boundary = detect_tlb_boundary(localities_bytes, p50_latency_ns,
-                                      l2_segment_start, l2_guard_bytes,
-                                      &sweep_loop_latencies_ns);
-  }
-
   const size_t l1_entries = l1_boundary.detected
                                 ? infer_tlb_entries(l1_boundary.boundary_locality_bytes, page_size_bytes)
                                 : 0;
   const size_t l2_entries = l2_boundary.detected
-                                ? infer_tlb_entries(l2_boundary.boundary_locality_bytes, page_size_bytes)
-                                : 0;
+                                 ? infer_tlb_entries(l2_boundary.boundary_locality_bytes, page_size_bytes)
+                                 : 0;
+  const std::pair<size_t, size_t> l1_entry_range = l1_boundary.detected
+                                                       ? infer_tlb_entries_range(final_localities_bytes,
+                                                                                 l1_boundary.boundary_index,
+                                                                                 page_size_bytes)
+                                                       : std::make_pair(static_cast<size_t>(0), static_cast<size_t>(0));
+  const std::pair<size_t, size_t> l2_entry_range = l2_boundary.detected
+                                                       ? infer_tlb_entries_range(final_localities_bytes,
+                                                                                 l2_boundary.boundary_index,
+                                                                                 page_size_bytes)
+                                                       : std::make_pair(static_cast<size_t>(0), static_cast<size_t>(0));
 
   const double page_walk_baseline_ns = p50_latency_ns.empty() ? 0.0 : p50_latency_ns.front();
   const double page_walk_penalty_ns = page_walk_512mb_p50_ns - page_walk_baseline_ns;
@@ -432,10 +802,47 @@ int run_tlb_analysis(const BenchmarkConfig& config) {
   std::cout << Messages::report_tlb_page_size(page_size_bytes) << std::endl;
   std::cout << Messages::report_tlb_buffer(selected_buffer_mb, buffer_locked) << std::endl;
   std::cout << Messages::report_tlb_stride(analysis_stride_bytes) << std::endl;
+  std::cout << Messages::report_tlb_density(tlb_sweep_density_to_string(sweep_density)) << std::endl;
   std::cout << Messages::report_tlb_chain_mode(
                    latency_chain_mode_to_string(effective_chain_mode))
             << std::endl;
   std::cout << Messages::report_tlb_loop_config(kLoopsPerPoint, kAccessesPerLoop) << std::endl;
+  std::cout << Messages::report_tlb_sweep_range(final_localities_bytes.front(),
+                                                final_localities_bytes.back(),
+                                                final_localities_bytes.size())
+            << std::endl;
+  std::cout << Messages::report_tlb_fine_sweep(fine_sweep_added_points,
+                                               final_localities_bytes.size())
+            << std::endl;
+
+  std::cout << std::endl;
+  std::cout << Messages::report_tlb_private_cache_section() << std::endl;
+  if (private_cache_knee.detected) {
+    const size_t private_cache_locality_kb =
+        private_cache_knee.boundary_locality_bytes / Constants::BYTES_PER_KB;
+    std::cout << Messages::report_tlb_boundary_kb(
+                     private_cache_locality_kb)
+              << std::endl;
+    std::cout << Messages::report_tlb_confidence(private_cache_knee.confidence,
+                                                 private_cache_knee.step_ns,
+                                                 private_cache_knee.step_percent)
+              << std::endl;
+    std::cout << Messages::report_tlb_private_cache_candidate(
+                     private_cache_knee.strong_private_cache_candidate)
+              << std::endl;
+    std::cout << Messages::report_tlb_private_cache_interference(
+                     private_cache_interference_elevated,
+                     private_cache_locality_kb)
+              << std::endl;
+    if (private_cache_to_l1_distance_bytes > 0) {
+      std::cout << Messages::report_tlb_private_cache_l1_distance(
+                       private_cache_to_l1_distance_bytes / Constants::BYTES_PER_KB,
+                       private_cache_to_l1_distance_pages)
+                << std::endl;
+    }
+  } else {
+    std::cout << Messages::report_tlb_not_detected() << std::endl;
+  }
 
   std::cout << std::endl;
   std::cout << Messages::report_tlb_l1_section() << std::endl;
@@ -444,6 +851,10 @@ int run_tlb_analysis(const BenchmarkConfig& config) {
                      l1_boundary.boundary_locality_bytes / Constants::BYTES_PER_KB)
               << std::endl;
     std::cout << Messages::report_tlb_inferred_size_entries(l1_entries) << std::endl;
+    std::cout << Messages::report_tlb_inferred_entries_range(
+                     l1_entry_range.first,
+                     l1_entry_range.second)
+              << std::endl;
     std::cout << Messages::report_tlb_confidence(l1_boundary.confidence,
                                                  l1_boundary.step_ns,
                                                  l1_boundary.step_percent)
@@ -459,6 +870,10 @@ int run_tlb_analysis(const BenchmarkConfig& config) {
                      l2_boundary.boundary_locality_bytes / Constants::BYTES_PER_KB)
               << std::endl;
     std::cout << Messages::report_tlb_inferred_reach_entries(l2_entries) << std::endl;
+    std::cout << Messages::report_tlb_inferred_entries_range(
+                     l2_entry_range.first,
+                     l2_entry_range.second)
+              << std::endl;
     std::cout << Messages::report_tlb_confidence(l2_boundary.confidence,
                                                  l2_boundary.step_ns,
                                                  l2_boundary.step_percent)
@@ -513,13 +928,22 @@ int run_tlb_analysis(const BenchmarkConfig& config) {
       kPageWalkComparisonLocalityBytes,
       selected_buffer_mb,
       buffer_locked,
-      localities_bytes,
+      final_localities_bytes,
       sweep_loop_latencies_ns,
       p50_latency_ns,
       l1_boundary,
       l2_boundary,
+      private_cache_knee,
       l1_entries,
       l2_entries,
+      l1_entry_range.first,
+      l1_entry_range.second,
+      l2_entry_range.first,
+      l2_entry_range.second,
+      fine_sweep_added_points,
+      private_cache_interference_elevated,
+      private_cache_to_l1_distance_bytes,
+      private_cache_to_l1_distance_pages,
       can_measure_page_walk_penalty,
       page_walk_512mb_loop_latencies_ns,
       page_walk_512mb_p50_ns,

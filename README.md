@@ -115,7 +115,7 @@ caffeinate -i -d memory_benchmark -benchmark -count 10 -buffersize 1024
 - **`-patterns`**: Runs pattern bandwidth suite only (`sequential_forward`, `sequential_reverse`, `strided_64`, `strided_4096`, `strided_16384`, `strided_2mb`, `random`). Mutually exclusive with `-benchmark`.
 - **`-only-bandwidth`**: Runs bandwidth paths only. **Requires `-benchmark`**. Cannot be used with `-patterns`, `-cache-size`, or `-latency-samples`.
 - **`-only-latency`**: Runs latency paths only. **Requires `-benchmark`**. Cannot be used with `-patterns` or `-iterations`.
-- **`-analyze-tlb`**: Runs standalone TLB analysis mode; only optional `-output <file>`, `-latency-stride-bytes <bytes>`, and `-latency-chain-mode <mode>` may be combined with it.
+- **`-analyze-tlb`**: Runs standalone TLB analysis mode with automatic two-stage sweep refinement, private-cache-knee detection, and L1/L2 TLB boundary inference; only optional `-output <file>`, `-latency-stride-bytes <bytes>`, and `-latency-chain-mode <mode>` may be combined with it.
 - **`-analyze-core2core`**: Runs standalone core-to-core cache-line handoff analysis mode; only optional `-output <file>`, `-count <count>`, and `-latency-samples <count>` may be combined with it. See [CORE_TO_CORE_WHITEPAPER.md](CORE_TO_CORE_WHITEPAPER.md) for methodology and JSON contract.
 
 Latency-specific disable controls in `-only-latency`:
@@ -133,7 +133,7 @@ Latency-specific disable controls in `-only-latency`:
 - `-count <count>`: Full benchmark repetitions (default `1`; use `5-10` for statistics).
 - `-threads <count>`: Bandwidth thread count (latency tests remain single-threaded).
 - `-cache-size <KB>`: Custom cache target. Non-zero range is `16` to `1048576` KB (1 GB).
-- `-analyze-tlb`: Standalone TLB-boundary detection benchmark (`1024/512/256 MB` fallback buffer selection), sweeping locality windows from `max(16 KB, 2*stride)` to `256 MB` (plus optional `512 MB` page-walk comparison when buffer is at least `512 MB`). Supports optional `-latency-stride-bytes <bytes>` and `-latency-chain-mode <mode>`.
+- `-analyze-tlb`: Standalone TLB-boundary detection benchmark (`1024/512/256 MB` fallback buffer selection), sweeping locality windows from `max(16 KB, 2*stride)` to `256 MB` with automatic fine-sweep insertion near detected knees/boundaries (plus optional `512 MB` page-walk comparison when buffer is at least `512 MB`). Reports private-cache-knee risk and inferred entry ranges in addition to boundary points. Supports optional `-latency-stride-bytes <bytes>` and `-latency-chain-mode <mode>`.
 - `-analyze-core2core`: Standalone two-thread cache-line ping-pong benchmark for coherence handoff latency, with three scheduler-hint scenarios (`no_affinity_hint`, `same_affinity_tag`, `different_affinity_tags`). Reports round-trip and one-way-estimate latency plus percentiles.
 - `-latency-samples <count>`: Samples per latency test (default `1000`).
 - `-latency-stride-bytes <bytes>`: Pointer-chain stride for latency tests (default `256`; must be > 0 and pointer-size aligned).

@@ -79,6 +79,12 @@ std::string msg_tlb_analysis_page_walk_progress(size_t locality_mb) {
   return oss.str();
 }
 
+std::string msg_tlb_analysis_refinement_start(size_t point_count) {
+  std::ostringstream oss;
+  oss << "Starting refinement sweep (" << point_count << " points)...";
+  return oss.str();
+}
+
 // --- Usage/Help Messages ---
 std::string usage_header(const std::string& version) {
   std::ostringstream oss;
@@ -108,7 +114,11 @@ std::string usage_options(const std::string& prog_name) {
       << "                        In -only-latency mode, -buffersize 0 disables main memory latency.\n"
       << "  -count <count>        Number of full loops (read/write/copy/latency) (default: " << Constants::DEFAULT_LOOP_COUNT << ").\n"
       << "                        When count > 1, statistics include percentiles (P50/P90/P95/P99) and stddev.\n"
-      << "  -analyze-tlb          Run standalone TLB analysis benchmark mode (allows optional -output <file>, -latency-stride-bytes <bytes>, and -latency-chain-mode <mode> only).\n"
+      << "  -analyze-tlb          Run standalone TLB analysis benchmark mode (allows optional -output <file>, -latency-stride-bytes <bytes>,\n"
+      << "                        -latency-chain-mode <mode>, and -tlb-density <low|medium|high> only).\n"
+      << "  -tlb-density <level>  Sweep density for -analyze-tlb: low, medium, high (default: high).\n"
+      << "                        low = 15-point base sweep, no refinement. medium = 15-point base + refinement.\n"
+      << "                        high = 29-point base + refinement.\n"
       << "  -analyze-core2core    Run standalone core-to-core cache-line handoff benchmark mode\n"
       << "                        (allows optional -output <file>, -count <count>, and -latency-samples <count> only).\n"
       << "  -latency-samples <count> Number of latency samples to collect per test (default: " << Constants::DEFAULT_LATENCY_SAMPLE_COUNT << ")\n"
@@ -195,6 +205,10 @@ std::string report_tlb_stride(size_t stride_bytes) {
   return oss.str();
 }
 
+std::string report_tlb_density(const std::string& density_name) {
+  return "Sweep Density: " + density_name;
+}
+
 std::string report_tlb_chain_mode(const std::string& chain_mode_name) {
   return "Chain Mode: " + chain_mode_name;
 }
@@ -252,6 +266,21 @@ std::string report_tlb_page_walk_config(bool enabled,
   return oss.str();
 }
 
+std::string report_tlb_fine_sweep(size_t added_points, size_t total_points) {
+  std::ostringstream oss;
+  oss << "Fine Sweep: Added " << added_points << " refinement point";
+  if (added_points != 1) {
+    oss << "s";
+  }
+  oss << ", total " << total_points << " points";
+  return oss.str();
+}
+
+const std::string& report_tlb_private_cache_section() {
+  static const std::string msg = "[Private Cache Detection]";
+  return msg;
+}
+
 const std::string& report_tlb_l1_section() {
   static const std::string msg = "[L1 TLB Detection]";
   return msg;
@@ -280,11 +309,44 @@ std::string report_tlb_inferred_reach_entries(size_t entries) {
   return oss.str();
 }
 
+std::string report_tlb_inferred_entries_range(size_t min_entries, size_t max_entries) {
+  std::ostringstream oss;
+  oss << "  Inferred Entry Range: " << min_entries;
+  if (max_entries != min_entries) {
+    oss << "-" << max_entries;
+  }
+  oss << " entries";
+  return oss.str();
+}
+
 std::string report_tlb_confidence(const std::string& confidence, double step_ns, double step_percent) {
   std::ostringstream oss;
   oss << std::fixed << std::setprecision(1);
   oss << "  Confidence: " << confidence << " (Step: +" << step_ns << "ns, +"
       << (step_percent * 100.0) << "%)";
+  return oss.str();
+}
+
+std::string report_tlb_private_cache_candidate(bool strong_private_cache_candidate) {
+  if (strong_private_cache_candidate) {
+    return "  Candidate Type: Strong private-cache candidate";
+  }
+  return "  Candidate Type: Early-cache candidate";
+}
+
+std::string report_tlb_private_cache_interference(bool elevated_risk, size_t locality_kb) {
+  std::ostringstream oss;
+  if (elevated_risk) {
+    oss << "  TLB Interference Risk: Elevated near " << locality_kb << " KB locality";
+    return oss.str();
+  }
+  oss << "  TLB Interference Risk: Low near " << locality_kb << " KB locality";
+  return oss.str();
+}
+
+std::string report_tlb_private_cache_l1_distance(size_t distance_kb, size_t distance_pages) {
+  std::ostringstream oss;
+  oss << "  Distance to L1 TLB Boundary: " << distance_kb << " KB (" << distance_pages << " pages)";
   return oss.str();
 }
 

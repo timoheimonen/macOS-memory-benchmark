@@ -17,6 +17,7 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <utility>
 #include <vector>
 
 #include "benchmark/tlb_analysis.h"
@@ -113,6 +114,58 @@ TEST(AnalysisTest, DetectBoundaryWithGuardSkipsLikelyCacheTransition) {
 TEST(AnalysisTest, InferTlbEntriesFromBoundaryAndPageSize) {
   const size_t entries = infer_tlb_entries(4 * Constants::BYTES_PER_MB, 16 * Constants::BYTES_PER_KB);
   EXPECT_EQ(entries, 256u);
+}
+
+TEST(AnalysisTest, InferTlbEntriesRangeFromBoundaryWindow) {
+  const std::vector<size_t> localities = {
+      2 * Constants::BYTES_PER_MB,
+      3 * Constants::BYTES_PER_MB,
+      4 * Constants::BYTES_PER_MB,
+  };
+  const std::pair<size_t, size_t> range = infer_tlb_entries_range(
+      localities,
+      1,
+      16 * Constants::BYTES_PER_KB);
+
+  EXPECT_EQ(range.first, 128u);
+  EXPECT_EQ(range.second, 192u);
+}
+
+TEST(AnalysisTest, DetectPrivateCacheKneeNearOneMegabyte) {
+  const std::vector<size_t> localities = {
+      256 * Constants::BYTES_PER_KB,
+      512 * Constants::BYTES_PER_KB,
+      768 * Constants::BYTES_PER_KB,
+      1 * Constants::BYTES_PER_MB,
+      2 * Constants::BYTES_PER_MB,
+      4 * Constants::BYTES_PER_MB,
+  };
+  const std::vector<double> latencies_ns = {10.0, 10.1, 10.2, 14.5, 14.7, 15.0};
+
+  const PrivateCacheKneeDetection knee = detect_private_cache_knee(localities, latencies_ns);
+  EXPECT_TRUE(knee.detected);
+  EXPECT_EQ(knee.boundary_locality_bytes, 1u * Constants::BYTES_PER_MB);
+  EXPECT_TRUE(knee.strong_private_cache_candidate);
+  EXPECT_FALSE(knee.early_cache_candidate);
+  EXPECT_TRUE(knee.may_interfere_with_tlb);
+}
+
+TEST(AnalysisTest, DetectPrivateCacheKneeClassifiesEarlyCandidate) {
+  const std::vector<size_t> localities = {
+      256 * Constants::BYTES_PER_KB,
+      512 * Constants::BYTES_PER_KB,
+      768 * Constants::BYTES_PER_KB,
+      1 * Constants::BYTES_PER_MB,
+      2 * Constants::BYTES_PER_MB,
+  };
+  const std::vector<double> latencies_ns = {10.0, 12.8, 12.9, 13.0, 13.1};
+
+  const PrivateCacheKneeDetection knee = detect_private_cache_knee(localities, latencies_ns);
+  EXPECT_TRUE(knee.detected);
+  EXPECT_EQ(knee.boundary_locality_bytes, 512u * Constants::BYTES_PER_KB);
+  EXPECT_FALSE(knee.strong_private_cache_candidate);
+  EXPECT_TRUE(knee.early_cache_candidate);
+  EXPECT_FALSE(knee.may_interfere_with_tlb);
 }
 
 TEST(AnalysisTest, ConfidenceClassification) {

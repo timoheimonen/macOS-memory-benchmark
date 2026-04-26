@@ -222,10 +222,22 @@ Pattern mode (`-patterns`) measures bandwidth sensitivity across:
 #### `-analyze-tlb`
 
 - Runs standalone TLB analysis mode only
-- Can be combined only with optional `-output <file>`, `-latency-stride-bytes <bytes>`, and `-latency-chain-mode <mode>`
-- Uses latency stride from `-latency-stride-bytes` (same default as standard latency mode), sweeps locality windows `max(16KB, 2*stride)` to `256MB`, and reports inferred L1/L2 TLB boundaries and entry counts
+- Can be combined only with optional `-output <file>`, `-latency-stride-bytes <bytes>`, `-latency-chain-mode <mode>`, and `-tlb-density <low|medium|high>`
+- Uses latency stride from `-latency-stride-bytes` (same default as standard latency mode), performs a denser base locality sweep (`29` canonical points, stride-clamped to `max(16KB, 2*stride)` up to `256MB`), then automatically inserts finer locality points near detected knees/boundaries
+- Detects likely private-cache knee candidates (around the ~1MB region when present) and reports whether they may interfere with TLB boundary interpretation
+- Reports inferred L1/L2 TLB boundaries with both point estimate (`inferred_entries`) and local-range estimate (`inferred_entries_min`/`inferred_entries_max`)
+- Uses adaptive boundary thresholding in addition to fixed thresholds (`>= 2.0ns`, `>= 10% baseline`): baseline loop-noise (median IQR) can raise the required step on noisy runs to reduce false positives
 - Separately computes page-walk penalty as `P50(512MB) - P50(effective baseline locality)` when analysis buffer is at least `512MB`
 - Detailed methodology and JSON contract: `TLB_ANALYSIS_WHITEPAPER.md`
+
+#### `-tlb-density <level>`
+
+- Applies only to `-analyze-tlb`
+- Default: `high`
+- Accepted values: `low`, `medium`, `high`
+- `low`: 15-point base sweep, no refinement pass
+- `medium`: 15-point base sweep + refinement pass around detected boundaries
+- `high`: 29-point base sweep + refinement pass around detected boundaries
 
 #### `-analyze-core2core`
 
@@ -332,6 +344,9 @@ memory_benchmark -analyze-tlb -latency-stride-bytes 128 -output tlb_analysis_str
 
 # Standalone TLB analysis with explicit chain mode
 memory_benchmark -analyze-tlb -latency-chain-mode same-random-in-box -output tlb_analysis_same_box.json
+
+# Standalone TLB analysis with quick low-density sweep (no refinement)
+memory_benchmark -analyze-tlb -tlb-density low -output tlb_analysis_low.json
 
 # Standalone core-to-core handoff analysis
 memory_benchmark -analyze-core2core
@@ -865,4 +880,4 @@ memory_benchmark -h
 
 ---
 
-**Last Updated**: 2026-04-05
+**Last Updated**: 2026-04-24

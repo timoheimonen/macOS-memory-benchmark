@@ -50,6 +50,26 @@
 #include <cmath>
 #include <cstdlib>
 
+namespace {
+
+bool tlb_sweep_density_from_string(const std::string& value, TlbSweepDensity& out_density) {
+  if (value == "low") {
+    out_density = TlbSweepDensity::Low;
+    return true;
+  }
+  if (value == "medium") {
+    out_density = TlbSweepDensity::Medium;
+    return true;
+  }
+  if (value == "high") {
+    out_density = TlbSweepDensity::High;
+    return true;
+  }
+  return false;
+}
+
+}  // namespace
+
 /**
  * @brief Error Handling Strategy for this module:
  * 
@@ -90,9 +110,11 @@ int parse_arguments(int argc, char* argv[], BenchmarkConfig& config) {
 
   if (analyze_tlb_present) {
     config.analyze_tlb = true;
+    config.tlb_sweep_density = TlbSweepDensity::High;
     bool output_seen = false;
     bool latency_stride_seen = false;
     bool latency_chain_mode_seen = false;
+    bool tlb_density_seen = false;
 
     for (int i = 1; i < argc; ++i) {
       const std::string arg = argv[i];
@@ -212,6 +234,38 @@ int parse_arguments(int argc, char* argv[], BenchmarkConfig& config) {
         config.latency_chain_mode = parsed_mode;
         config.user_specified_latency_chain_mode = true;
         latency_chain_mode_seen = true;
+        continue;
+      }
+
+      if (arg == "-tlb-density") {
+        if (tlb_density_seen) {
+          std::cerr << Messages::error_prefix()
+                    << Messages::error_duplicate_option("-tlb-density")
+                    << std::endl;
+          print_usage(argv[0]);
+          return EXIT_FAILURE;
+        }
+        if (++i >= argc) {
+          std::cerr << Messages::error_prefix()
+                    << Messages::error_missing_value("-tlb-density")
+                    << std::endl;
+          print_usage(argv[0]);
+          return EXIT_FAILURE;
+        }
+
+        const std::string density_value = argv[i];
+        TlbSweepDensity parsed_density = TlbSweepDensity::High;
+        if (!tlb_sweep_density_from_string(density_value, parsed_density)) {
+          std::cerr << Messages::error_prefix()
+                    << Messages::error_invalid_value(
+                           arg, density_value, "must be one of: low, medium, high")
+                    << std::endl;
+          print_usage(argv[0]);
+          return EXIT_FAILURE;
+        }
+
+        config.tlb_sweep_density = parsed_density;
+        tlb_density_seen = true;
         continue;
       }
 

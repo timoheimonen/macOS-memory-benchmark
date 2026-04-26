@@ -172,6 +172,7 @@ std::string msg_core_to_core_scenario_progress(size_t current_loop,
                                                const std::string& scenario_name);
 std::string msg_tlb_analysis_locality_progress(size_t current_index, size_t total_count, size_t locality_kb);
 std::string msg_tlb_analysis_page_walk_progress(size_t locality_mb);
+std::string msg_tlb_analysis_refinement_start(size_t point_count);
 
 // --- Core-to-Core Report Messages ---
 const std::string& report_core_to_core_header();
@@ -201,6 +202,7 @@ std::string report_tlb_cpu(const std::string& cpu_name);
 std::string report_tlb_page_size(size_t page_size_bytes);
 std::string report_tlb_buffer(size_t buffer_mb, bool locked);
 std::string report_tlb_stride(size_t stride_bytes);
+std::string report_tlb_density(const std::string& density_name);
 std::string report_tlb_chain_mode(const std::string& chain_mode_name);
 std::string report_tlb_chain_mode_requested(const std::string& chain_mode_name);
 std::string report_tlb_chain_mode_effective(const std::string& chain_mode_name);
@@ -209,15 +211,21 @@ std::string report_tlb_sweep_range(size_t start_locality_bytes,
                                    size_t end_locality_bytes,
                                    size_t point_count);
 std::string report_tlb_page_walk_config(bool enabled,
-                                        size_t comparison_locality_mb,
-                                        size_t required_buffer_mb,
-                                        size_t selected_buffer_mb);
+                                         size_t comparison_locality_mb,
+                                         size_t required_buffer_mb,
+                                         size_t selected_buffer_mb);
+std::string report_tlb_fine_sweep(size_t added_points, size_t total_points);
 const std::string& report_tlb_l1_section();
 const std::string& report_tlb_l2_section();
+const std::string& report_tlb_private_cache_section();
 std::string report_tlb_boundary_kb(size_t boundary_kb);
 std::string report_tlb_inferred_size_entries(size_t entries);
 std::string report_tlb_inferred_reach_entries(size_t entries);
+std::string report_tlb_inferred_entries_range(size_t min_entries, size_t max_entries);
 std::string report_tlb_confidence(const std::string& confidence, double step_ns, double step_percent);
+std::string report_tlb_private_cache_candidate(bool strong_private_cache_candidate);
+std::string report_tlb_private_cache_interference(bool elevated_risk, size_t locality_kb);
+std::string report_tlb_private_cache_l1_distance(size_t distance_kb, size_t distance_pages);
 std::string report_tlb_page_walk_penalty(double penalty_ns, size_t from_kb, size_t to_mb);
 std::string report_tlb_page_walk_penalty_unavailable(size_t from_kb, size_t to_mb, size_t required_buffer_mb, size_t selected_buffer_mb);
 const std::string& report_tlb_not_detected();

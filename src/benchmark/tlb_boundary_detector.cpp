@@ -21,6 +21,8 @@
 
 #include "benchmark/tlb_analysis.h"
 
+#include "core/config/constants.h"
+
 #include <algorithm>
 #include <numeric>
 #include <string>
@@ -31,6 +33,13 @@ namespace {
 constexpr double kRelativeThreshold = 0.10;
 constexpr double kAbsoluteThresholdNs = 2.0;
 
+// Multiplier applied to the median baseline IQR for adaptive noise gating.
+// On quiet systems the baseline IQR is small (<0.5 ns), so this rarely
+// raises the threshold above the hardcoded floor. On noisy/congested
+// systems it automatically raises the detection bar to suppress spurious
+// boundary claims.
+constexpr double kNoiseMultiplier = 1.0;
+
 // Multi-point persistence: check up to 3 future points, require majority.
 constexpr size_t kPersistenceWindowSize = 3;
 constexpr size_t kPersistenceMajorityRequired = 2;
@@ -38,6 +47,10 @@ constexpr size_t kPersistenceMajorityRequired = 2;
 // Last-point strong-step compensation thresholds (when no future points exist).
 constexpr double kLastPointStrongStepNs = 8.0;
 constexpr double kLastPointStrongStepPercent = 0.25;
+
+constexpr size_t kPrivateCacheKneeMinBytes = 512 * Constants::BYTES_PER_KB;
+constexpr size_t kStrongPrivateCacheKneeMinBytes = 768 * Constants::BYTES_PER_KB;
+constexpr size_t kPrivateCacheKneeMaxBytes = 2 * Constants::BYTES_PER_MB;
 
 /**
  * @brief Recency-weighted average over a range.
@@ -108,6 +121,44 @@ double average_baseline_q3(const std::vector<std::vector<double>>& loop_latencie
   return sum_q3 / static_cast<double>(end - start);
 }
 
+/**
+ * @brief Estimate typical baseline noise as the median IQR across baseline points.
+ *
+ * For each baseline point j in [start, end), computes the IQR of its raw loop
+ * latencies (when available). Returns the median of those IQRs as a robust
+ * noise-floor estimate. Requires at least 3 baseline points; otherwise
+ * returns 0.0 to fall back to hardcoded thresholds.
+ */
+double estimate_baseline_iqr_noise(const std::vector<std::vector<double>>& loop_latencies,
+                                   size_t start,
+                                   size_t end) {
+  if (end < start + 3 || end > loop_latencies.size()) {
+    return 0.0;
+  }
+
+  std::vector<double> iqrs;
+  iqrs.reserve(end - start);
+  for (size_t j = start; j < end; ++j) {
+    double q1 = 0.0;
+    double q3 = 0.0;
+    compute_quartiles(loop_latencies[j], q1, q3);
+    if (q3 > q1) {
+      iqrs.push_back(q3 - q1);
+    }
+  }
+
+  if (iqrs.empty()) {
+    return 0.0;
+  }
+
+  std::sort(iqrs.begin(), iqrs.end());
+  const size_t mid = iqrs.size() / 2;
+  if ((iqrs.size() % 2) == 0) {
+    return 0.5 * (iqrs[mid - 1] + iqrs[mid]);
+  }
+  return iqrs[mid];
+}
+
 }  // namespace
 
 std::string classify_tlb_confidence(double step_ns, double step_percent, bool persistent_jump) {
@@ -127,6 +178,20 @@ size_t infer_tlb_entries(size_t locality_bytes, size_t page_size_bytes) {
     return 0;
   }
   return locality_bytes / page_size_bytes;
+}
+
+std::pair<size_t, size_t> infer_tlb_entries_range(const std::vector<size_t>& locality_bytes,
+                                                  size_t boundary_index,
+                                                  size_t page_size_bytes) {
+  if (page_size_bytes == 0 || locality_bytes.empty() || boundary_index >= locality_bytes.size()) {
+    return {0, 0};
+  }
+
+  const size_t lower_locality_bytes = (boundary_index > 0)
+                                           ? locality_bytes[boundary_index - 1]
+                                           : locality_bytes[boundary_index];
+  const size_t upper_locality_bytes = locality_bytes[boundary_index];
+  return {lower_locality_bytes / page_size_bytes, upper_locality_bytes / page_size_bytes};
 }
 
 TlbBoundaryDetection detect_tlb_boundary(const std::vector<size_t>& locality_bytes,
@@ -151,7 +216,13 @@ TlbBoundaryDetection detect_tlb_boundary(const std::vector<size_t>& locality_byt
     const double boundary_ns = p50_latency_ns[i];
     const double step_ns = boundary_ns - baseline_ns;
     const double step_percent = (baseline_ns > 0.0) ? (step_ns / baseline_ns) : 0.0;
-    const double threshold_ns = std::max(kAbsoluteThresholdNs, baseline_ns * kRelativeThreshold);
+    double noise_boost = 0.0;
+    if (has_loop_data && i > segment_start_index + 2) {
+      noise_boost = kNoiseMultiplier *
+                    estimate_baseline_iqr_noise(*loop_latencies, segment_start_index, i);
+    }
+    const double threshold_ns =
+        std::max({kAbsoluteThresholdNs, baseline_ns * kRelativeThreshold, noise_boost});
 
     if (step_ns < threshold_ns) {
       continue;
@@ -209,5 +280,33 @@ TlbBoundaryDetection detect_tlb_boundary(const std::vector<size_t>& locality_byt
     return result;
   }
 
+  return result;
+}
+
+PrivateCacheKneeDetection detect_private_cache_knee(
+    const std::vector<size_t>& locality_bytes,
+    const std::vector<double>& p50_latency_ns,
+    const std::vector<std::vector<double>>* loop_latencies) {
+  PrivateCacheKneeDetection result;
+  const TlbBoundaryDetection boundary =
+      detect_tlb_boundary(locality_bytes, p50_latency_ns, 0, kPrivateCacheKneeMinBytes, loop_latencies);
+  if (!boundary.detected) {
+    return result;
+  }
+
+  if (boundary.boundary_locality_bytes > kPrivateCacheKneeMaxBytes) {
+    return result;
+  }
+
+  result.detected = true;
+  result.boundary_index = boundary.boundary_index;
+  result.boundary_locality_bytes = boundary.boundary_locality_bytes;
+  result.step_ns = boundary.step_ns;
+  result.step_percent = boundary.step_percent;
+  result.confidence = boundary.confidence;
+  result.strong_private_cache_candidate =
+      boundary.boundary_locality_bytes >= kStrongPrivateCacheKneeMinBytes;
+  result.early_cache_candidate = !result.strong_private_cache_candidate;
+  result.may_interfere_with_tlb = result.strong_private_cache_candidate;
   return result;
 }

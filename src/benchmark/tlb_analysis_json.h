@@ -56,8 +56,17 @@ struct TlbAnalysisJsonContext {
   const std::vector<double>& p50_latency_ns;
   const TlbBoundaryDetection& l1_boundary;
   const TlbBoundaryDetection& l2_boundary;
+  const PrivateCacheKneeDetection& private_cache_knee;
   size_t l1_entries;
   size_t l2_entries;
+  size_t l1_entries_min;
+  size_t l1_entries_max;
+  size_t l2_entries_min;
+  size_t l2_entries_max;
+  size_t fine_sweep_added_points;
+  bool private_cache_interference_elevated;
+  size_t private_cache_to_l1_distance_bytes;
+  size_t private_cache_to_l1_distance_pages;
   bool can_measure_page_walk_penalty;
   const std::vector<double>& page_walk_comparison_loop_latencies_ns;
   double page_walk_comparison_p50_ns;
