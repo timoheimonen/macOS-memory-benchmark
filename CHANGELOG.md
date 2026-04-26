@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.55.5] - Unreleased
+
+### Changed
+  - **Regular benchmark auto-TLB comparison now uses a P50 noise guard**: When `-latency-tlb-locality-kb` is omitted in `-benchmark` mode, the automatic TLB hit/miss comparison now measures each point with three complete pointer-chase passes and reports the median value. This reduces the impact of a single IRQ-inflated pass on `TLB hit latency`, `TLB miss latency`, and `Estimated page-walk penalty` while keeping the main `Average latency` headline as one continuous pointer-chase pass.
+
 ## [0.55.4] - 2026-04-26
 
 ### Added

@@ -141,6 +141,9 @@ automatic comparison and prints:
 - TLB miss latency (global random locality, `0`)
 - Estimated page-walk penalty (`miss - hit`)
 
+Each automatic comparison point is measured as P50 over three complete pointer-chase passes. This reduces the impact of
+a single IRQ-inflated timing pass while keeping every candidate pass continuous.
+
 If you explicitly set `-latency-tlb-locality-kb` (including `16` or `0`), this auto comparison is skipped.
 
 ### Pattern benchmarks
@@ -492,6 +495,9 @@ When `-latency-tlb-locality-kb` is not explicitly provided, this section also pr
 - `TLB hit latency (16 KB locality)`
 - `TLB miss latency (global random locality)`
 - `Estimated page-walk penalty (miss - hit)`
+
+The auto-TLB hit/miss values are P50 values from three complete comparison passes per point. The main `Average latency`
+headline remains one continuous pointer-chase pass.
 
 ### 4) Cache bandwidth and latency
 

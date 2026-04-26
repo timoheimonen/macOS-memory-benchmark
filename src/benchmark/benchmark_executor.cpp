@@ -52,13 +52,18 @@
 #include "output/console/messages/messages_api.h"             // Centralized messages
 #include "core/config/constants.h"
 #include "core/signal/signal_handler.h"
+#include <algorithm>
 #include <atomic>
+#include <cmath>
 #include <cstdlib>
 #include <iostream>
 #include <limits>
 #include <stdexcept>
+#include <vector>
 
 namespace {
+
+constexpr int kAutoTlbComparisonRepeats = 3;
 
 /**
  * @brief Scales main iteration count for cache tests with saturation.
@@ -288,6 +293,77 @@ int prepare_main_memory_latency_buffer(BenchmarkConfig& config, BenchmarkBuffers
                              config.latency_tlb_locality_bytes,
                              collect_chain_diagnostics ? &config.main_latency_chain_diagnostics : nullptr,
                              config.latency_chain_mode);
+}
+
+/**
+ * @brief Returns the median value from a small latency sample set.
+ *
+ * Used for automatic TLB hit/miss comparison where a single interrupted pass can
+ * otherwise dominate the reported page-walk penalty. The input is intentionally
+ * copied because the caller owns a very small vector.
+ */
+double median_latency(std::vector<double> values) {
+  if (values.empty()) {
+    return 0.0;
+  }
+
+  std::sort(values.begin(), values.end());
+  const size_t mid = values.size() / 2;
+  if ((values.size() % 2) == 0) {
+    return 0.5 * (values[mid - 1] + values[mid]);
+  }
+  return values[mid];
+}
+
+/**
+ * @brief Measure one auto-TLB comparison point with a small P50 noise guard.
+ *
+ * Each repeat rebuilds the chain, warms it, and performs one continuous
+ * pointer-chase timing pass. Taking P50 across complete passes rejects a single
+ * IRQ-inflated outlier without deriving the result from segmented sample
+ * windows.
+ */
+bool measure_auto_tlb_latency_p50(void* buffer,
+                                  size_t buffer_size,
+                                  size_t stride_bytes,
+                                  size_t locality_bytes,
+                                  LatencyChainMode chain_mode,
+                                  size_t num_accesses,
+                                  HighResTimer& test_timer,
+                                  double& out_latency_ns) {
+  if (buffer == nullptr || buffer_size == 0 || num_accesses == 0) {
+    return false;
+  }
+
+  std::vector<double> loop_latencies_ns;
+  loop_latencies_ns.reserve(kAutoTlbComparisonRepeats);
+
+  for (int repeat = 0; repeat < kAutoTlbComparisonRepeats; ++repeat) {
+    if (signal_received()) {
+      return false;
+    }
+
+    if (setup_latency_chain(buffer, buffer_size, stride_bytes, locality_bytes, nullptr, chain_mode) !=
+        EXIT_SUCCESS) {
+      return false;
+    }
+
+    show_progress();
+    warmup_latency(buffer, buffer_size);
+    const double total_lat_time_ns =
+        run_latency_test(buffer, num_accesses, test_timer, nullptr, 0);
+    const double latency_ns = total_lat_time_ns / static_cast<double>(num_accesses);
+    if (latency_ns > 0.0 && std::isfinite(latency_ns)) {
+      loop_latencies_ns.push_back(latency_ns);
+    }
+  }
+
+  if (loop_latencies_ns.empty()) {
+    return false;
+  }
+
+  out_latency_ns = median_latency(loop_latencies_ns);
+  return true;
 }
 
 }  // namespace
@@ -538,38 +614,24 @@ void run_main_memory_latency_test(const BenchmarkBuffers& buffers, const Benchma
 
   if (!config.user_specified_latency_tlb_locality) {
     constexpr size_t kAutoTlbHitLocalityBytes = 16 * Constants::BYTES_PER_KB;
-    bool hit_measured = false;
-    bool miss_measured = false;
     double tlb_hit_latency_ns = 0.0;
     double tlb_miss_latency_ns = 0.0;
-
-    if (setup_latency_chain(buffers.lat_buffer(),
-                            config.buffer_size,
-                            config.latency_stride_bytes,
-                            kAutoTlbHitLocalityBytes,
-                            nullptr,
-                            LatencyChainMode::RandomInBoxRandomBox) == EXIT_SUCCESS) {
-      show_progress();
-      warmup_latency(buffers.lat_buffer(), config.buffer_size);
-      const double hit_total_lat_time_ns =
-          run_latency_test(buffers.lat_buffer(), config.lat_num_accesses, test_timer, nullptr, 0);
-      tlb_hit_latency_ns = hit_total_lat_time_ns / static_cast<double>(config.lat_num_accesses);
-      hit_measured = true;
-    }
-
-    if (setup_latency_chain(buffers.lat_buffer(),
-                            config.buffer_size,
-                            config.latency_stride_bytes,
-                            0,
-                            nullptr,
-                            LatencyChainMode::GlobalRandom) == EXIT_SUCCESS) {
-      show_progress();
-      warmup_latency(buffers.lat_buffer(), config.buffer_size);
-      const double miss_total_lat_time_ns =
-          run_latency_test(buffers.lat_buffer(), config.lat_num_accesses, test_timer, nullptr, 0);
-      tlb_miss_latency_ns = miss_total_lat_time_ns / static_cast<double>(config.lat_num_accesses);
-      miss_measured = true;
-    }
+    const bool hit_measured = measure_auto_tlb_latency_p50(buffers.lat_buffer(),
+                                                          config.buffer_size,
+                                                          config.latency_stride_bytes,
+                                                          kAutoTlbHitLocalityBytes,
+                                                          LatencyChainMode::RandomInBoxRandomBox,
+                                                          config.lat_num_accesses,
+                                                          test_timer,
+                                                          tlb_hit_latency_ns);
+    const bool miss_measured = measure_auto_tlb_latency_p50(buffers.lat_buffer(),
+                                                           config.buffer_size,
+                                                           config.latency_stride_bytes,
+                                                           0,
+                                                           LatencyChainMode::GlobalRandom,
+                                                           config.lat_num_accesses,
+                                                           test_timer,
+                                                           tlb_miss_latency_ns);
 
     if (hit_measured && miss_measured) {
       results.has_auto_tlb_breakdown = true;
