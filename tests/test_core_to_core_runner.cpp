@@ -28,7 +28,7 @@
 #include "benchmark/core_to_core_latency_internal.h"
 #include "core/config/constants.h"
 
-TEST(CoreToCoreRunnerTest, ExecuteSingleScenarioProducesHeadlineAndSamples) {
+TEST(CoreToCoreRunnerTest, ExecuteSingleScenarioProducesHeadlineAndSamplesIntegration) {
   const ScenarioDescriptor scenario = {
       Constants::CORE_TO_CORE_SCENARIO_NO_AFFINITY,
       Constants::CORE_TO_CORE_AFFINITY_HINT_DISABLED,
@@ -47,7 +47,7 @@ TEST(CoreToCoreRunnerTest, ExecuteSingleScenarioProducesHeadlineAndSamples) {
   EXPECT_FALSE(std::isinf(measurement.round_trip_ns));
 }
 
-TEST(CoreToCoreRunnerTest, ExecuteSingleScenarioSupportsZeroSamples) {
+TEST(CoreToCoreRunnerTest, ExecuteSingleScenarioSupportsZeroSamplesIntegration) {
   const ScenarioDescriptor scenario = {
       Constants::CORE_TO_CORE_SCENARIO_DIFFERENT_AFFINITY,
       Constants::CORE_TO_CORE_AFFINITY_HINT_ENABLED,

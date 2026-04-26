@@ -106,7 +106,7 @@ def main():
     all_cache_sizes = sorted({cache_kb for points in grouped.values() for cache_kb, _ in points})
 
     plt.xscale("log", base=2)
-    plt.xlabel(f"Cache Size (KB)\ngithub.com/timoheimonen/macos-memory-benchmark")
+    plt.xlabel("Cache Size (KB)\nhttps://github.com/timoheimonen/macOS-memory-benchmark")
     plt.ylabel(f"{ALLOWED_METRICS[metric]} Latency (ns)")
     plt.title(f"{ALLOWED_METRICS[metric]} Latency Trend vs Cache Size by TLB Locality")
     plt.xticks(all_cache_sizes, [f"{size} KB" for size in all_cache_sizes], rotation=45, ha="right")

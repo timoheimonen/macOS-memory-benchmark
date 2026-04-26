@@ -131,6 +131,20 @@ TEST(AnalysisTest, InferTlbEntriesRangeFromBoundaryWindow) {
   EXPECT_EQ(range.second, 192u);
 }
 
+TEST(AnalysisTest, InferTlbEntriesEstimateUsesBoundaryWindowMidpoint) {
+  const std::vector<size_t> localities = {
+      2 * Constants::BYTES_PER_MB,
+      3 * Constants::BYTES_PER_MB,
+      4 * Constants::BYTES_PER_MB,
+  };
+  const size_t estimate = infer_tlb_entries_estimate(
+      localities,
+      1,
+      16 * Constants::BYTES_PER_KB);
+
+  EXPECT_EQ(estimate, 160u);
+}
+
 TEST(AnalysisTest, DetectPrivateCacheKneeNearOneMegabyte) {
   const std::vector<size_t> localities = {
       256 * Constants::BYTES_PER_KB,

@@ -169,15 +169,16 @@ result field is populated.
 
 | Flag | Default | Effect |
 |---|---|---|
-| `-latency-stride-bytes` | `64` | Byte spacing between pointer-chain nodes. Must be a multiple of 8 (pointer size on AArch64). |
-| `-latency-tlb-locality-kb` | `16` | Locality window size in KB. `0` forces global-random mode regardless of `-latency-chain-mode`. |
-| `-latency-samples` | (see help) | Number of sub-samples per benchmark loop. Higher values improve statistical resolution. |
+| `-latency-stride-bytes` | `256` | Byte spacing between pointer-chain nodes. Must be a multiple of 8 (pointer size on AArch64). |
+| `-latency-tlb-locality-kb` | `1024` | Locality window size in KB. `0` selects global-random mode when `-latency-chain-mode auto` is used; explicit box modes require non-zero locality. |
+| `-latency-samples` | `1000` | Number of sub-samples per benchmark loop. Higher values improve statistical resolution. |
 | `-latency-chain-mode` | `auto` | Chain construction policy. `auto` selects `global-random` when locality is 0, `random-box` otherwise. |
 
 ### 7.1 Baseline Main-Memory Latency (Global Random Chain)
 
 ```bash
 memory_benchmark \
+  -benchmark \
   -only-latency \
   -buffersize 1024 \
   -count 10 \
@@ -189,9 +190,9 @@ memory_benchmark \
 ### 7.2 Locality-Window Latency Runs
 
 ```bash
-memory_benchmark -only-latency -buffersize 1024 -count 10 -latency-samples 1000 -latency-tlb-locality-kb 16 -output latency_tlb16.json
-memory_benchmark -only-latency -buffersize 1024 -count 10 -latency-samples 1000 -latency-tlb-locality-kb 2048 -output latency_tlb2048.json
-memory_benchmark -only-latency -buffersize 1024 -count 10 -latency-samples 1000 -latency-tlb-locality-kb 32768 -output latency_tlb32768.json
+memory_benchmark -benchmark -only-latency -buffersize 1024 -count 10 -latency-samples 1000 -latency-tlb-locality-kb 16 -output latency_tlb16.json
+memory_benchmark -benchmark -only-latency -buffersize 1024 -count 10 -latency-samples 1000 -latency-tlb-locality-kb 2048 -output latency_tlb2048.json
+memory_benchmark -benchmark -only-latency -buffersize 1024 -count 10 -latency-samples 1000 -latency-tlb-locality-kb 32768 -output latency_tlb32768.json
 ```
 
 ### 7.3 Cache-Scale Sweep (Custom Cache Size)

@@ -2,7 +2,7 @@
 
 ## 1. Scope and Status
 
-This document specifies the current implementation in this repository (version series `0.54.x`) for `memory_benchmark` on macOS Apple Silicon.
+This document specifies the current implementation in this repository (version series `0.55.x`) for `memory_benchmark` on macOS Apple Silicon.
 
 It is intentionally implementation-driven and reflects real behavior in code paths under `main.cpp`, `src/core`, `src/benchmark`, `src/pattern_benchmark`, `src/output`, and `src/asm`.
 
@@ -96,7 +96,7 @@ Configuration state is represented by `BenchmarkConfig` (`src/core/config/config
   - `latency_chain_mode` (type `LatencyChainMode`, CLI flag `-latency-chain-mode`)
   - `user_specified_latency_chain_mode` flag
 - TLB-locality control for latency chain construction:
-  - `latency_tlb_locality_bytes` (default 16 KB)
+  - `latency_tlb_locality_bytes` (default 1024 KB)
   - `0` means global random chain.
 - Best-effort cache-discouraging mode: `use_non_cacheable`.
 

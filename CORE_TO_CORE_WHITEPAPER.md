@@ -1,7 +1,7 @@
 # Core-to-Core Cache-Line Handoff Latency Benchmark
 
-**membenchmark — Technical Whitepaper**
-*Revision 2026-03-16 — Applies to release 0.53.7 and later*
+**memory_benchmark — Technical Whitepaper**
+*Revision 2026-04-26 — Applies to release 0.55.x; historical data examples may use 0.53.7 sample files*
 
 ---
 
@@ -24,7 +24,7 @@ multi-threaded software on shared-memory processors. It sets a hard lower
 bound on the cost of every lock acquisition, producer-consumer queue handoff,
 and fine-grained atomic flag.
 
-The `membenchmark` tool provides a dedicated standalone mode,
+The `memory_benchmark` tool provides a dedicated standalone mode,
 `-analyze-core2core`, for measuring this latency on Apple Silicon and other
 ARM64 targets running macOS. The mode deliberately excludes all standard
 benchmark orchestration (buffer sizing, iteration counts, memory allocation)
@@ -336,7 +336,7 @@ memory_benchmark -analyze-core2core -count 3
 ### 5.3 Example console output
 
 ```
-membenchmark 0.53.7
+Version: 0.55.4
 
 Running standalone core-to-core latency analysis...
   [Loop 1/1] Scenario: no_affinity_hint

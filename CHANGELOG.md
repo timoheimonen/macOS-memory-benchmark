@@ -5,6 +5,26 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.55.4] - 2026-04-26
+
+### Added
+  - **Executable CLI integration coverage**: Added `tests/test_executable_cli.cpp` to exercise the real `memory_benchmark` binary for help/no-mode routing, invalid standard-mode exits, `-analyze-core2core` pre-parser routing, standard JSON output, and pattern orchestration smoke coverage.
+  - **Deterministic benchmark result and collector tests**: Added focused unit coverage for bandwidth math, custom/detected cache result population, copy byte-count overflow handling, and loop statistics collection without executing benchmark kernels.
+  - **Expanded normal parser and validator coverage**: Added tests for `-threads`, `-latency-samples`, `-output`, `-non-cacheable`, duplicate value options, and parsed incompatible-option cases such as `-only-bandwidth` with latency samples or cache-size settings.
+
+### Changed
+  - **Integration test taxonomy tightened**: Tests that execute real benchmark kernels, ARM64 ASM paths, hardware-sensitive workflows, or subprocess-level CLI flows now use `Integration` in the test name so `make test` remains deterministic and `make test-integration` owns those paths.
+  - **Pattern benchmark tests reduced to higher-signal coverage**: Removed broad duplicate smoke cases that only asserted positive bandwidth and kept representative integration smoke coverage for core patterns and large-page strided behavior.
+  - **Integration test targets now build the release executable**: `make test-integration` and `make test-all` now depend on `memory_benchmark` as well as `test_runner`, matching the new executable-level CLI tests.
+  - **Test policy documentation updated**: Updated agent/dry-check documentation with the test taxonomy, expected assertions, integration naming rules, and current unit/integration test split.
+  - **`-analyze-tlb` now preserves private-cache-overlap L1 candidates**: L1 TLB detection no longer automatically skips a boundary that coincides with a detected private-cache knee. When the direct L1 candidate and private-cache knee resolve to the same locality, the analyzer keeps it as an ambiguous L1 TLB candidate and marks the overlap in console/JSON output instead of silently reporting a later, potentially oversized L1 boundary.
+  - **TLB entry point estimates now use locality-window midpoint estimates**: `inferred_entries` is now derived from the midpoint of the detected locality window (`inferred_entries_min`..`inferred_entries_max`) rather than the upper edge of the boundary. Console output labels these values as estimates, while JSON adds `inferred_entries_method: "range_midpoint"` and keeps the explicit min/max range fields.
+
+### Fixed
+  - **Duplicate `-cache-size` options are now rejected**: Normal argument parsing now treats repeated `-cache-size` the same as other duplicate value options and fails fast instead of accepting the later value.
+  - **Copy bandwidth calculation handles byte-count overflow**: `calculate_single_bandwidth()` now checks overflow after applying the copy-operation multiplier, preventing wrapped byte counts for extreme iteration/buffer combinations.
+  - **Documentation synchronized with current CLI and version state**: Corrected stale documentation and examples for the `-benchmark` requirement, `0.55.4` version references, default latency stride/locality values, source inventory counts, project structure details, issue-template version guidance, and rendered plot repository URL text.
+
 ## [0.55.3] - 2026-04-26
 
 ### Changed
