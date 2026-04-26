@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.55.4] - Unreleased
+## [0.55.4] - 2026-04-26
 
 ### Added
   - **Executable CLI integration coverage**: Added `tests/test_executable_cli.cpp` to exercise the real `memory_benchmark` binary for help/no-mode routing, invalid standard-mode exits, `-analyze-core2core` pre-parser routing, standard JSON output, and pattern orchestration smoke coverage.
