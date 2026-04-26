@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.55.3] - Unreleased
+## [0.55.3] - 2026-04-26
 
 ### Changed
   - **`-tlb-density` added for standalone TLB analysis sweep control**: New `-analyze-tlb`-only option with `low|medium|high` profiles. `low` runs a fast 15-point base sweep without refinement, `medium` runs 15-point base sweep with refinement, and `high` (default) runs 29-point base sweep with refinement.
