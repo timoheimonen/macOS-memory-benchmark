@@ -307,6 +307,74 @@ TEST(ConfigTest, ParseAnalyzeTlbWithMissingOutputValueFails) {
   EXPECT_EQ(result, EXIT_FAILURE);
 }
 
+TEST(ConfigTest, ParseNormalModeUserOptions) {
+  BenchmarkConfig config;
+  const char* argv[] = {
+      "program", "-benchmark", "-threads", "1", "-latency-samples", "17", "-output", "results.json",
+      "-non-cacheable"};
+  int argc = 9;
+
+  int result = parse_arguments(argc, const_cast<char**>(argv), config);
+  EXPECT_EQ(result, EXIT_SUCCESS);
+  EXPECT_TRUE(config.run_benchmark);
+  EXPECT_EQ(config.num_threads, 1);
+  EXPECT_TRUE(config.user_specified_threads);
+  EXPECT_EQ(config.latency_sample_count, 17);
+  EXPECT_TRUE(config.user_specified_latency_samples);
+  EXPECT_EQ(config.output_file, "results.json");
+  EXPECT_TRUE(config.use_non_cacheable);
+}
+
+TEST(ConfigTest, ParseThreadsInvalidZero) {
+  BenchmarkConfig config;
+  const char* argv[] = {"program", "-threads", "0"};
+  int argc = 3;
+
+  int result = parse_arguments(argc, const_cast<char**>(argv), config);
+  EXPECT_EQ(result, EXIT_FAILURE);
+}
+
+TEST(ConfigTest, ParseLatencySamplesInvalidZero) {
+  BenchmarkConfig config;
+  const char* argv[] = {"program", "-latency-samples", "0"};
+  int argc = 3;
+
+  int result = parse_arguments(argc, const_cast<char**>(argv), config);
+  EXPECT_EQ(result, EXIT_FAILURE);
+}
+
+TEST(ConfigTest, ParseDuplicateValueOptionsRejected) {
+  struct DuplicateOptionCase {
+    const char* option;
+    const char* first_value;
+    const char* second_value;
+  };
+
+  const DuplicateOptionCase cases[] = {
+      {"-iterations", "1", "2"},
+      {"-buffersize", "1", "2"},
+      {"-count", "1", "2"},
+      {"-latency-samples", "1", "2"},
+      {"-latency-stride-bytes", "64", "128"},
+      {"-latency-chain-mode", "auto", "global-random"},
+      {"-latency-tlb-locality-kb", "16", "32"},
+      {"-threads", "1", "2"},
+      {"-output", "first.json", "second.json"},
+      {"-cache-size", "256", "512"},
+  };
+
+  for (const DuplicateOptionCase& test_case : cases) {
+    SCOPED_TRACE(test_case.option);
+    BenchmarkConfig config;
+    const char* argv[] = {
+        "program", test_case.option, test_case.first_value, test_case.option, test_case.second_value};
+    int argc = 5;
+
+    int result = parse_arguments(argc, const_cast<char**>(argv), config);
+    EXPECT_EQ(result, EXIT_FAILURE);
+  }
+}
+
 // Test parsing missing value for option
 TEST(ConfigTest, ParseMissingValue) {
   BenchmarkConfig config;
@@ -360,6 +428,45 @@ TEST(ConfigTest, ParseBenchmarkWithModifiers) {
   EXPECT_TRUE(config.run_benchmark);
   EXPECT_TRUE(config.only_latency);
   EXPECT_EQ(config.custom_cache_size_kb_ll, 256);
+}
+
+TEST(ConfigTest, ValidateParsedOnlyBandwidthRejectsLatencySamples) {
+  BenchmarkConfig config;
+  const char* argv[] = {"program", "-benchmark", "-only-bandwidth", "-latency-samples", "10"};
+  int argc = 5;
+
+  ASSERT_EQ(parse_arguments(argc, const_cast<char**>(argv), config), EXIT_SUCCESS);
+  EXPECT_TRUE(config.only_bandwidth);
+  EXPECT_TRUE(config.user_specified_latency_samples);
+
+  int result = validate_config(config);
+  EXPECT_EQ(result, EXIT_FAILURE);
+}
+
+TEST(ConfigTest, ValidateParsedOnlyBandwidthRejectsCacheSize) {
+  BenchmarkConfig config;
+  const char* argv[] = {"program", "-benchmark", "-only-bandwidth", "-cache-size", "256"};
+  int argc = 5;
+
+  ASSERT_EQ(parse_arguments(argc, const_cast<char**>(argv), config), EXIT_SUCCESS);
+  EXPECT_TRUE(config.only_bandwidth);
+  EXPECT_TRUE(config.use_custom_cache_size);
+
+  int result = validate_config(config);
+  EXPECT_EQ(result, EXIT_FAILURE);
+}
+
+TEST(ConfigTest, ValidateParsedOnlyLatencyRejectsIterations) {
+  BenchmarkConfig config;
+  const char* argv[] = {"program", "-benchmark", "-only-latency", "-iterations", "10"};
+  int argc = 5;
+
+  ASSERT_EQ(parse_arguments(argc, const_cast<char**>(argv), config), EXIT_SUCCESS);
+  EXPECT_TRUE(config.only_latency);
+  EXPECT_TRUE(config.user_specified_iterations);
+
+  int result = validate_config(config);
+  EXPECT_EQ(result, EXIT_FAILURE);
 }
 
 // Test -benchmark and -patterns are mutually exclusive

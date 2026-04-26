@@ -159,6 +159,9 @@ Pattern mode (`-patterns`) measures bandwidth sensitivity across:
 
 ## Command-Line Options
 
+Options that take a value, such as `-buffersize`, `-cache-size`, `-threads`, `-latency-samples`, and `-output`,
+must be specified at most once per command.
+
 ### Core controls
 
 #### `-buffersize <MB>`

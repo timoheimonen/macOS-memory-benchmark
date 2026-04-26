@@ -1,4 +1,4 @@
-// Copyright 2025 Timo Heimonen <timo.heimonen@proton.me>
+// Copyright 2026 Timo Heimonen <timo.heimonen@proton.me>
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -101,66 +101,54 @@ void calculate_single_bandwidth(size_t buffer_size, int iterations,
   write_bw_gb_s = 0.0;
   copy_bw_gb_s = 0.0;
   
-  // Check for overflow before multiplication: iterations * buffer_size
-  if (iterations > 0 && buffer_size > 0) {
-    // Check if iterations * buffer_size would overflow size_t
-    if (static_cast<size_t>(iterations) > std::numeric_limits<size_t>::max() / buffer_size) {
-      // Overflow would occur, use double precision calculation instead
-      double total_bytes_read = static_cast<double>(iterations) * static_cast<double>(buffer_size);
-      double total_bytes_written = total_bytes_read;
-      double total_bytes_copied_op = total_bytes_read * Constants::COPY_OPERATION_MULTIPLIER;
-      
-      if (read_time > 0 && !std::isnan(read_time) && !std::isinf(read_time)) {
-        read_bw_gb_s = total_bytes_read / read_time / Constants::NANOSECONDS_PER_SECOND;
-        // Validate result is finite and non-negative
-        if (std::isnan(read_bw_gb_s) || std::isinf(read_bw_gb_s) || read_bw_gb_s < 0.0) {
-          read_bw_gb_s = 0.0;
-        }
-      }
-      if (write_time > 0 && !std::isnan(write_time) && !std::isinf(write_time)) {
-        write_bw_gb_s = total_bytes_written / write_time / Constants::NANOSECONDS_PER_SECOND;
-        // Validate result is finite and non-negative
-        if (std::isnan(write_bw_gb_s) || std::isinf(write_bw_gb_s) || write_bw_gb_s < 0.0) {
-          write_bw_gb_s = 0.0;
-        }
-      }
-      if (copy_time > 0 && !std::isnan(copy_time) && !std::isinf(copy_time)) {
-        copy_bw_gb_s = total_bytes_copied_op / copy_time / Constants::NANOSECONDS_PER_SECOND;
-        // Validate result is finite and non-negative
-        if (std::isnan(copy_bw_gb_s) || std::isinf(copy_bw_gb_s) || copy_bw_gb_s < 0.0) {
-          copy_bw_gb_s = 0.0;
-        }
-      }
-    } else {
-      // No overflow, use integer calculation
-      size_t total_bytes_read = static_cast<size_t>(iterations) * buffer_size;
-      size_t total_bytes_written = total_bytes_read;
-      size_t total_bytes_copied_op = total_bytes_read * Constants::COPY_OPERATION_MULTIPLIER;
-      
-      if (read_time > 0 && !std::isnan(read_time) && !std::isinf(read_time)) {
-        read_bw_gb_s = static_cast<double>(total_bytes_read) / read_time / Constants::NANOSECONDS_PER_SECOND;
-        // Validate result is finite and non-negative
-        if (std::isnan(read_bw_gb_s) || std::isinf(read_bw_gb_s) || read_bw_gb_s < 0.0) {
-          read_bw_gb_s = 0.0;
-        }
-      }
-      if (write_time > 0 && !std::isnan(write_time) && !std::isinf(write_time)) {
-        write_bw_gb_s = static_cast<double>(total_bytes_written) / write_time / Constants::NANOSECONDS_PER_SECOND;
-        // Validate result is finite and non-negative
-        if (std::isnan(write_bw_gb_s) || std::isinf(write_bw_gb_s) || write_bw_gb_s < 0.0) {
-          write_bw_gb_s = 0.0;
-        }
-      }
-      if (copy_time > 0 && !std::isnan(copy_time) && !std::isinf(copy_time)) {
-        copy_bw_gb_s = static_cast<double>(total_bytes_copied_op) / 
-                       copy_time / Constants::NANOSECONDS_PER_SECOND;
-        // Validate result is finite and non-negative
-        if (std::isnan(copy_bw_gb_s) || std::isinf(copy_bw_gb_s) || copy_bw_gb_s < 0.0) {
-          copy_bw_gb_s = 0.0;
-        }
-      }
-    }
+  if (iterations <= 0 || buffer_size == 0) {
+    return;
   }
+
+  auto calculate_valid_bandwidth = [](double total_bytes, double elapsed_time) {
+    if (elapsed_time <= 0 || std::isnan(elapsed_time) || std::isinf(elapsed_time)) {
+      return 0.0;
+    }
+
+    double bandwidth = total_bytes / elapsed_time / Constants::NANOSECONDS_PER_SECOND;
+    if (std::isnan(bandwidth) || std::isinf(bandwidth) || bandwidth < 0.0) {
+      return 0.0;
+    }
+    return bandwidth;
+  };
+
+  const bool base_bytes_overflow =
+      static_cast<size_t>(iterations) > std::numeric_limits<size_t>::max() / buffer_size;
+
+  if (base_bytes_overflow) {
+    const double total_bytes_read = static_cast<double>(iterations) * static_cast<double>(buffer_size);
+    const double total_bytes_copied_op = total_bytes_read * Constants::COPY_OPERATION_MULTIPLIER;
+
+    read_bw_gb_s = calculate_valid_bandwidth(total_bytes_read, read_time);
+    write_bw_gb_s = calculate_valid_bandwidth(total_bytes_read, write_time);
+    copy_bw_gb_s = calculate_valid_bandwidth(total_bytes_copied_op, copy_time);
+    return;
+  }
+
+  const size_t total_bytes_read = static_cast<size_t>(iterations) * buffer_size;
+  const bool copy_bytes_overflow =
+      total_bytes_read > std::numeric_limits<size_t>::max() / Constants::COPY_OPERATION_MULTIPLIER;
+
+  if (copy_bytes_overflow) {
+    const double total_bytes_read_double = static_cast<double>(total_bytes_read);
+    const double total_bytes_copied_op = total_bytes_read_double * Constants::COPY_OPERATION_MULTIPLIER;
+
+    read_bw_gb_s = calculate_valid_bandwidth(total_bytes_read_double, read_time);
+    write_bw_gb_s = calculate_valid_bandwidth(total_bytes_read_double, write_time);
+    copy_bw_gb_s = calculate_valid_bandwidth(total_bytes_copied_op, copy_time);
+    return;
+  }
+
+  const size_t total_bytes_copied_op = total_bytes_read * Constants::COPY_OPERATION_MULTIPLIER;
+
+  read_bw_gb_s = calculate_valid_bandwidth(static_cast<double>(total_bytes_read), read_time);
+  write_bw_gb_s = calculate_valid_bandwidth(static_cast<double>(total_bytes_read), write_time);
+  copy_bw_gb_s = calculate_valid_bandwidth(static_cast<double>(total_bytes_copied_op), copy_time);
 }
 
 /**

@@ -280,10 +280,13 @@ int parse_arguments(int argc, char* argv[], BenchmarkConfig& config) {
   }
   
   // First pass: parse -cache-size early (needed for cache size detection)
+  bool cache_size_seen = false;
   for (int i = 1; i < argc; ++i) {
     std::string arg = argv[i];
     try {
       if (arg == "-cache-size") {
+        if (cache_size_seen)
+          throw std::invalid_argument(Messages::error_duplicate_option("-cache-size"));
         if (++i < argc) {
           // std::stoll() throws std::invalid_argument if conversion fails
           // std::stoll() throws std::out_of_range if value out of range
@@ -292,8 +295,11 @@ int parse_arguments(int argc, char* argv[], BenchmarkConfig& config) {
           // Note: 0 is accepted here and validated later (allowed only with -only-latency)
           if (val_ll < 0 || val_ll > Constants::MAX_CACHE_SIZE_KB ||
               (val_ll > 0 && val_ll < Constants::MIN_CACHE_SIZE_KB))
-            throw std::out_of_range(Messages::error_cache_size_invalid(Constants::MIN_CACHE_SIZE_KB, Constants::MAX_CACHE_SIZE_KB, Constants::MAX_CACHE_SIZE_KB / 1024));
+            throw std::out_of_range(Messages::error_cache_size_invalid(Constants::MIN_CACHE_SIZE_KB,
+                                                                       Constants::MAX_CACHE_SIZE_KB,
+                                                                       Constants::MAX_CACHE_SIZE_KB / 1024));
           config.custom_cache_size_kb_ll = val_ll;
+          cache_size_seen = true;
         } else
           // Error: Missing required value for option
           throw std::invalid_argument(Messages::error_missing_value("-cache-size"));

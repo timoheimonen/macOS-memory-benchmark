@@ -1,4 +1,4 @@
-// Copyright 2025 Timo Heimonen <timo.heimonen@proton.me>
+// Copyright 2026 Timo Heimonen <timo.heimonen@proton.me>
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -50,7 +50,7 @@ static BenchmarkConfig make_pattern_validation_config(size_t buffer_size) {
 // ============================================================================
 
 // buffer_size=95 = stride+31: 64B strided pattern skipped, other patterns succeed
-TEST(PatternValidationTest, ValidateStride64SkippedBelowEffectiveBoundary) {
+TEST(PatternValidationTest, ValidateStride64SkippedBelowEffectiveBoundaryIntegration) {
   using namespace Constants;
   auto config = make_pattern_validation_config(PATTERN_STRIDE_CACHE_LINE + PATTERN_ACCESS_SIZE_BYTES - 1);
 
@@ -65,7 +65,7 @@ TEST(PatternValidationTest, ValidateStride64SkippedBelowEffectiveBoundary) {
 }
 
 // buffer_size=96 = stride+32: 64B strided pattern produces results
-TEST(PatternValidationTest, ValidateStride64AtEffectiveBoundary) {
+TEST(PatternValidationTest, ValidateStride64AtEffectiveBoundaryIntegration) {
   using namespace Constants;
   auto config = make_pattern_validation_config(PATTERN_STRIDE_CACHE_LINE + PATTERN_ACCESS_SIZE_BYTES);
 
@@ -85,7 +85,7 @@ TEST(PatternValidationTest, ValidateStride64AtEffectiveBoundary) {
 // ============================================================================
 
 // buffer_size=4095 < stride: validate_stride fails (silently skips)
-TEST(PatternValidationTest, ValidateStridePageBelowStrideBoundary) {
+TEST(PatternValidationTest, ValidateStridePageBelowStrideBoundaryIntegration) {
   using namespace Constants;
   auto config = make_pattern_validation_config(PATTERN_STRIDE_PAGE - 1);
 
@@ -100,7 +100,7 @@ TEST(PatternValidationTest, ValidateStridePageBelowStrideBoundary) {
 }
 
 // buffer_size=4096 == stride: validate passes but calculate_strided_params skips (effective < stride)
-TEST(PatternValidationTest, ValidateStridePageAtStrideBoundary) {
+TEST(PatternValidationTest, ValidateStridePageAtStrideBoundaryIntegration) {
   using namespace Constants;
   auto config = make_pattern_validation_config(PATTERN_STRIDE_PAGE);
 
@@ -115,7 +115,7 @@ TEST(PatternValidationTest, ValidateStridePageAtStrideBoundary) {
 }
 
 // buffer_size=4128 = stride+32: 4096B strided pattern produces results
-TEST(PatternValidationTest, ValidateStridePageAtEffectiveBoundary) {
+TEST(PatternValidationTest, ValidateStridePageAtEffectiveBoundaryIntegration) {
   using namespace Constants;
   auto config = make_pattern_validation_config(PATTERN_STRIDE_PAGE + PATTERN_ACCESS_SIZE_BYTES);
 
@@ -134,7 +134,7 @@ TEST(PatternValidationTest, ValidateStridePageAtEffectiveBoundary) {
 // ============================================================================
 
 // buffer_size=16416 = 16K+32: 16K strided pattern produces results
-TEST(PatternValidationTest, ValidateStride16KAtEffectiveBoundary) {
+TEST(PatternValidationTest, ValidateStride16KAtEffectiveBoundaryIntegration) {
   using namespace Constants;
   auto config = make_pattern_validation_config(PATTERN_STRIDE_PAGE_16K + PATTERN_ACCESS_SIZE_BYTES);
 
@@ -153,7 +153,7 @@ TEST(PatternValidationTest, ValidateStride16KAtEffectiveBoundary) {
 // ============================================================================
 
 // buffer_size=2MB+32: 2MB strided pattern produces results
-TEST(PatternValidationTest, ValidateStrideSuperpage2MBAtEffectiveBoundary) {
+TEST(PatternValidationTest, ValidateStrideSuperpage2MBAtEffectiveBoundaryIntegration) {
   using namespace Constants;
   auto config = make_pattern_validation_config(PATTERN_STRIDE_SUPERPAGE_2MB + PATTERN_ACCESS_SIZE_BYTES);
 

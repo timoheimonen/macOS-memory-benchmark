@@ -213,12 +213,12 @@ test: $(TEST_TARGET)
 	./$(TEST_TARGET) --gtest_filter=-*Integration*
 
 # Integration tests only (tests that perform actual system operations)
-test-integration: $(TEST_TARGET)
+test-integration: $(TARGET) $(TEST_TARGET)
 	@echo "Running integration tests..."
 	./$(TEST_TARGET) --gtest_filter=*Integration*
 
 # All tests (unit tests + integration tests)
-test-all: $(TEST_TARGET)
+test-all: $(TARGET) $(TEST_TARGET)
 	@echo "Running all tests (unit + integration)..."
 	./$(TEST_TARGET)
 

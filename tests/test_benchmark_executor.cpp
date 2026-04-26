@@ -53,7 +53,7 @@ BenchmarkConfig build_base_config() {
 
 }  // namespace
 
-TEST(BenchmarkExecutorTest, WriteTestCoversEntireBufferForUnevenThreadSplits) {
+TEST(BenchmarkExecutorTest, WriteTestCoversEntireBufferForUnevenThreadSplitsIntegration) {
   const size_t buffer_size = (1024 * 1024) + 123;
   std::vector<unsigned char> buffer(buffer_size, 0xAB);
 
@@ -69,7 +69,7 @@ TEST(BenchmarkExecutorTest, WriteTestCoversEntireBufferForUnevenThreadSplits) {
   EXPECT_TRUE(all_zero);
 }
 
-TEST(BenchmarkExecutorTest, WriteTestReturnsZeroForInvalidThreadCounts) {
+TEST(BenchmarkExecutorTest, WriteTestReturnsZeroForInvalidThreadCountsIntegration) {
   std::vector<unsigned char> buffer(4096, 0xCD);
 
   auto timer_opt = HighResTimer::create();
@@ -87,7 +87,7 @@ TEST(BenchmarkExecutorTest, WriteTestReturnsZeroForInvalidThreadCounts) {
   EXPECT_TRUE(unchanged);
 }
 
-TEST(BenchmarkExecutorTest, LatencySamplingClampsToAccessCount) {
+TEST(BenchmarkExecutorTest, LatencySamplingClampsToAccessCountIntegration) {
   const size_t buffer_size = static_cast<size_t>(getpagesize());
   std::vector<unsigned char> buffer(buffer_size, 0);
 
@@ -113,7 +113,7 @@ TEST(BenchmarkExecutorTest, LatencySamplingClampsToAccessCount) {
   }
 }
 
-TEST(BenchmarkExecutorTest, MainMemoryLatencyCollectsSamplesWhenConfigured) {
+TEST(BenchmarkExecutorTest, MainMemoryLatencyCollectsSamplesWhenConfiguredIntegration) {
   BenchmarkConfig config = build_base_config();
   config.only_latency = true;
   config.latency_sample_count = 17;
@@ -135,7 +135,7 @@ TEST(BenchmarkExecutorTest, MainMemoryLatencyCollectsSamplesWhenConfigured) {
   EXPECT_GT(results.tlb_miss_latency_ns, 0.0);
 }
 
-TEST(BenchmarkExecutorTest, MainMemoryLatencySkipsAutoTlbBreakdownWhenLocalitySpecified) {
+TEST(BenchmarkExecutorTest, MainMemoryLatencySkipsAutoTlbBreakdownWhenLocalitySpecifiedIntegration) {
   BenchmarkConfig config = build_base_config();
   config.only_latency = true;
   config.user_specified_latency_tlb_locality = true;
@@ -158,7 +158,7 @@ TEST(BenchmarkExecutorTest, MainMemoryLatencySkipsAutoTlbBreakdownWhenLocalitySp
   EXPECT_EQ(results.page_walk_penalty_ns, 0.0);
 }
 
-TEST(BenchmarkExecutorTest, MainMemoryLatencySkipsWhenMainLatencyDisabled) {
+TEST(BenchmarkExecutorTest, MainMemoryLatencySkipsWhenMainLatencyDisabledIntegration) {
   BenchmarkConfig config = build_base_config();
   config.only_latency = true;
   config.buffer_size_mb = 0;
