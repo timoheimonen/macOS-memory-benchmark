@@ -45,6 +45,7 @@ struct TlbBoundaryDetection {
   double step_ns = 0.0;
   double step_percent = 0.0;
   bool persistent_jump = false;
+  bool overlaps_private_cache_knee = false;
   std::string confidence;
 };
 
@@ -101,6 +102,17 @@ size_t infer_tlb_entries(size_t locality_bytes, size_t page_size_bytes);
 std::pair<size_t, size_t> infer_tlb_entries_range(const std::vector<size_t>& locality_bytes,
                                                   size_t boundary_index,
                                                   size_t page_size_bytes);
+
+/**
+ * @brief Infer a midpoint entry estimate from the detected boundary window.
+ * @param locality_bytes Sweep localities corresponding to detector input
+ * @param boundary_index Index of detected boundary
+ * @param page_size_bytes System page size in bytes
+ * @return Midpoint estimate between previous locality and detected boundary
+ */
+size_t infer_tlb_entries_estimate(const std::vector<size_t>& locality_bytes,
+                                  size_t boundary_index,
+                                  size_t page_size_bytes);
 
 /**
  * @brief Classify confidence for a detected boundary.

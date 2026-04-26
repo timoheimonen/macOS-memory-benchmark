@@ -102,7 +102,12 @@ TEST(JsonSchemaTest, TlbAnalysisExporterIncludesModeAndCoreCounts) {
   const std::vector<std::vector<double>> sweep_loop_latencies_ns = {{15.0, 15.1}};
   const std::vector<double> p50_latency_ns = {15.0};
   const std::vector<double> page_walk_comparison_loop_latencies_ns = {95.0, 96.0};
-  const TlbBoundaryDetection l1_boundary;
+  TlbBoundaryDetection l1_boundary;
+  l1_boundary.detected = true;
+  l1_boundary.boundary_index = 0;
+  l1_boundary.boundary_locality_bytes = 16 * Constants::BYTES_PER_KB;
+  l1_boundary.overlaps_private_cache_knee = true;
+  l1_boundary.confidence = "Medium";
   const TlbBoundaryDetection l2_boundary;
   const PrivateCacheKneeDetection private_cache_knee;
 
@@ -127,7 +132,7 @@ TEST(JsonSchemaTest, TlbAnalysisExporterIncludesModeAndCoreCounts) {
       l1_boundary,
       l2_boundary,
       private_cache_knee,
-      256,
+      248,
       2048,
       240,
       256,
@@ -157,6 +162,9 @@ TEST(JsonSchemaTest, TlbAnalysisExporterIncludesModeAndCoreCounts) {
   EXPECT_EQ(output_json[JsonKeys::CONFIGURATION][JsonKeys::TLB_DENSITY], "high");
   EXPECT_TRUE(output_json[JsonKeys::CONFIGURATION].contains("fine_sweep_added_points"));
   EXPECT_TRUE(output_json["tlb_analysis"].contains("private_cache_knee"));
+  EXPECT_EQ(output_json["tlb_analysis"]["l1_tlb_detection"]["inferred_entries"], 248);
+  EXPECT_EQ(output_json["tlb_analysis"]["l1_tlb_detection"]["inferred_entries_method"], "range_midpoint");
+  EXPECT_TRUE(output_json["tlb_analysis"]["l1_tlb_detection"]["overlaps_private_cache_knee"]);
 
   std::filesystem::remove(config.output_file);
 }

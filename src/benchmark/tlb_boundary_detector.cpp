@@ -194,6 +194,17 @@ std::pair<size_t, size_t> infer_tlb_entries_range(const std::vector<size_t>& loc
   return {lower_locality_bytes / page_size_bytes, upper_locality_bytes / page_size_bytes};
 }
 
+size_t infer_tlb_entries_estimate(const std::vector<size_t>& locality_bytes,
+                                  size_t boundary_index,
+                                  size_t page_size_bytes) {
+  const std::pair<size_t, size_t> range =
+      infer_tlb_entries_range(locality_bytes, boundary_index, page_size_bytes);
+  if (range.first == 0 && range.second == 0) {
+    return 0;
+  }
+  return range.first + ((range.second - range.first) / 2);
+}
+
 TlbBoundaryDetection detect_tlb_boundary(const std::vector<size_t>& locality_bytes,
                                          const std::vector<double>& p50_latency_ns,
                                          size_t segment_start_index,

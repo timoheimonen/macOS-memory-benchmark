@@ -501,9 +501,21 @@ TEST_F(MessagesFormattingTest, ReportTlbFineSweepAndPrivateCacheInfo) {
 }
 
 TEST_F(MessagesFormattingTest, ReportTlbInferredEntriesRange) {
+  std::string size = Messages::report_tlb_inferred_size_entries(248);
+  EXPECT_NE(size.find("Estimate"), std::string::npos);
+  EXPECT_NE(size.find("~248"), std::string::npos);
+
+  std::string reach = Messages::report_tlb_inferred_reach_entries(2000);
+  EXPECT_NE(reach.find("Estimate"), std::string::npos);
+  EXPECT_NE(reach.find("~2000"), std::string::npos);
+
   std::string msg = Messages::report_tlb_inferred_entries_range(240, 256);
   EXPECT_NE(msg.find("240-256"), std::string::npos);
   EXPECT_NE(msg.find("entries"), std::string::npos);
+
+  const std::string& overlap = Messages::report_tlb_private_cache_overlap();
+  EXPECT_NE(overlap.find("Private Cache Overlap"), std::string::npos);
+  EXPECT_NE(overlap.find("ambiguous"), std::string::npos);
 }
 
 // ============================================================================

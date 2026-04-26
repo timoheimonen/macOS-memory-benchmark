@@ -225,7 +225,8 @@ Pattern mode (`-patterns`) measures bandwidth sensitivity across:
 - Can be combined only with optional `-output <file>`, `-latency-stride-bytes <bytes>`, `-latency-chain-mode <mode>`, and `-tlb-density <low|medium|high>`
 - Uses latency stride from `-latency-stride-bytes` (same default as standard latency mode), performs a denser base locality sweep (`29` canonical points, stride-clamped to `max(16KB, 2*stride)` up to `256MB`), then automatically inserts finer locality points near detected knees/boundaries
 - Detects likely private-cache knee candidates (around the ~1MB region when present) and reports whether they may interfere with TLB boundary interpretation
-- Reports inferred L1/L2 TLB boundaries with both point estimate (`inferred_entries`) and local-range estimate (`inferred_entries_min`/`inferred_entries_max`)
+- Preserves a direct L1 candidate that overlaps the private-cache knee and marks it as ambiguous instead of silently skipping to a later boundary
+- Reports inferred L1/L2 TLB boundaries with both midpoint estimate (`inferred_entries`) and local-range estimate (`inferred_entries_min`/`inferred_entries_max`)
 - Uses adaptive boundary thresholding in addition to fixed thresholds (`>= 2.0ns`, `>= 10% baseline`): baseline loop-noise (median IQR) can raise the required step on noisy runs to reduce false positives
 - Separately computes page-walk penalty as `P50(512MB) - P50(effective baseline locality)` when analysis buffer is at least `512MB`
 - Detailed methodology and JSON contract: `TLB_ANALYSIS_WHITEPAPER.md`
@@ -672,8 +673,12 @@ Example below uses real values extracted from `results/0.53.8/MacMiniM4_analyze-
       "step_ns": 4.0137167857142835,
       "step_percent": 0.22501298863362484,
       "persistent_jump": true,
+      "overlaps_private_cache_knee": false,
       "confidence": "High",
-      "inferred_entries": 256
+      "inferred_entries": 224,
+      "inferred_entries_method": "range_midpoint",
+      "inferred_entries_min": 192,
+      "inferred_entries_max": 256
     },
     "l2_tlb_detection": {
       "detected": true,
@@ -686,8 +691,12 @@ Example below uses real values extracted from `results/0.53.8/MacMiniM4_analyze-
       "step_ns": 13.579728333333335,
       "step_percent": 0.6214572395992117,
       "persistent_jump": true,
+      "overlaps_private_cache_knee": false,
       "confidence": "High",
-      "inferred_entries": 512
+      "inferred_entries": 448,
+      "inferred_entries_method": "range_midpoint",
+      "inferred_entries_min": 384,
+      "inferred_entries_max": 512
     },
     "page_walk_penalty": {
       "available": true,

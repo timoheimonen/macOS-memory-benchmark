@@ -2,7 +2,7 @@
 
 ## 1. Purpose
 
-This document specifies how `macOS-memory-benchmark` implements standalone TLB analysis mode (`-analyze-tlb`) in version `0.53.3`.
+This document specifies how `macOS-memory-benchmark` implements standalone TLB analysis mode (`-analyze-tlb`) in version `0.55.4`.
 
 The goal is to provide a reproducible, implementation-accurate description of:
 
@@ -202,6 +202,12 @@ Then `effective_persistent = persistent_jump || strong_last_point`. This prevent
 - `L1 TLB boundary`: first candidate passing threshold + guard + IQR check, scanning from sweep start.
 - `L2 TLB boundary`: first candidate passing threshold + guard + IQR check, scanning from an **offset segment start** past the L1 boundary.
 
+Private-cache overlap handling:
+
+- The analyzer first checks the direct L1 candidate from sweep start.
+- If that candidate is the same locality as a detected private-cache knee, it is preserved as an ambiguous L1 TLB candidate and marked with `overlaps_private_cache_knee = true`.
+- If the direct candidate does not overlap the private-cache knee, the analyzer also tries the cache-knee-offset scan used to avoid obvious cache-knee contamination.
+
 L2 detection specifics:
 
 - **Segment start offset**: L2 scanning starts at `min(L1_boundary_index + 2, size - 2)`, excluding the L1 boundary point and its immediate neighbour from the L2 baseline. This prevents L1 transition noise from contaminating the L2 baseline.
@@ -233,13 +239,13 @@ Confidence levels:
 
 For detected boundaries:
 
-`inferred_entries = boundary_locality_bytes / page_size_bytes`
-
 `inferred_entries_min = previous_locality_bytes / page_size_bytes`
 
 `inferred_entries_max = boundary_locality_bytes / page_size_bytes`
 
-Point estimate and range are reported separately for L1 and L2 sections. The range captures sweep-grid uncertainty and avoids implying a strict power-of-two entry count.
+`inferred_entries = midpoint(inferred_entries_min, inferred_entries_max)`
+
+Point estimate and range are reported separately for L1 and L2 sections. The point estimate is intentionally the midpoint of the detected locality window, not the upper boundary edge, so the headline value does not imply more precision than the sweep grid supports.
 
 ### 7.2 Page-Walk Penalty
 
@@ -306,7 +312,7 @@ When `-output <file>` is provided with `-analyze-tlb`, output includes:
 - `tlb_analysis` contains:
   - `sweep[]` with raw `loop_latencies_ns` and per-point `p50_latency_ns`
   - `private_cache_knee` (with `detected`, `boundary_locality_kb`, `confidence`, and `may_interfere_with_tlb`)
-  - `l1_tlb_detection` (with `detected`, `boundary_locality_kb`, `inferred_entries`, `inferred_entries_min`, `inferred_entries_max`, `confidence`, and step metadata)
+  - `l1_tlb_detection` (with `detected`, `boundary_locality_kb`, `inferred_entries`, `inferred_entries_method`, `inferred_entries_min`, `inferred_entries_max`, `overlaps_private_cache_knee`, `confidence`, and step metadata)
   - `l2_tlb_detection` (same structure as L1)
   - `page_walk_penalty` block (`available`, baseline/comparison metadata, raw comparison loops, `penalty_ns` when available)
 
@@ -321,8 +327,8 @@ Example file:
 Observed fields in this sample:
 
 - `tlb_guard_bytes = 1048576` (`1MB`)
-- `l1_tlb_detection.boundary_locality_kb = 4096` and `inferred_entries = 256`
-- `l2_tlb_detection.boundary_locality_kb = 8192` and `inferred_entries = 512`
+- `l1_tlb_detection.boundary_locality_kb = 4096` and `inferred_entries` near the midpoint of its detected entry range
+- `l2_tlb_detection.boundary_locality_kb = 8192` and `inferred_entries` near the midpoint of its detected entry range
 - `page_walk_penalty.penalty_ns ~= 81.93`
 
 ### Algorithm Walkthrough (M4 L1 Detection)
@@ -336,7 +342,7 @@ The L1 scan begins at `16KB` (min_sweep_locality with stride 64 bytes). It compu
 3. ... (continuing through `1MB`, `2MB`)
 4. At `4MB`: `baseline = avg(P50[16KB..2MB])`, `step = P50(4MB) - baseline ≥ threshold`, `locality(4MB) = 4096KB ≥ guard`, **first match** → detected at `4MB`.
 
-The `inferred_entries = 4096KB / 16KB = 256`, which is typical for a first-level TLB on Apple M4.
+With a high-density sweep, a `4MB` boundary following a `3MB` prior point yields `inferred_entries_min = 192`, `inferred_entries_max = 256`, and `inferred_entries = 224` as a midpoint estimate. The upper edge (`256`) is still visible in the range and is typical for a first-level TLB on Apple M4.
 
 ### Limitations and Edge Cases
 
@@ -361,7 +367,7 @@ Interpretation note for Apple Silicon:
 
 All Apple Silicon Macs use a fixed **16 KB page size**. When comparing `-analyze-tlb` results across different Apple Silicon generations (M1, M2, M3, M4, M5, etc.):
 
-- `inferred_entries` is calculated as `boundary_locality_bytes / 16384`.
+- `inferred_entries` is calculated as the midpoint of the detected entry range; use `inferred_entries_min` and `inferred_entries_max` when comparing uncertainty windows.
 - The actual entry counts may differ between generations due to microarchitectural changes.
 - Comparing `inferred_entries` directly across models is valid (same page size), but be aware that TLB capacity has evolved across generations.
 

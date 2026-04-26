@@ -67,8 +67,10 @@ nlohmann::ordered_json build_tlb_boundary_json(const TlbBoundaryDetection& bound
   boundary_json["step_ns"] = boundary.step_ns;
   boundary_json["step_percent"] = boundary.step_percent;
   boundary_json["persistent_jump"] = boundary.persistent_jump;
+  boundary_json["overlaps_private_cache_knee"] = boundary.overlaps_private_cache_knee;
   boundary_json["confidence"] = boundary.confidence;
   boundary_json["inferred_entries"] = inferred_entries;
+  boundary_json["inferred_entries_method"] = "range_midpoint";
   return boundary_json;
 }
 

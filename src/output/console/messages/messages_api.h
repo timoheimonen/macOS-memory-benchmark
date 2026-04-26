@@ -222,6 +222,7 @@ std::string report_tlb_boundary_kb(size_t boundary_kb);
 std::string report_tlb_inferred_size_entries(size_t entries);
 std::string report_tlb_inferred_reach_entries(size_t entries);
 std::string report_tlb_inferred_entries_range(size_t min_entries, size_t max_entries);
+const std::string& report_tlb_private_cache_overlap();
 std::string report_tlb_confidence(const std::string& confidence, double step_ns, double step_percent);
 std::string report_tlb_private_cache_candidate(bool strong_private_cache_candidate);
 std::string report_tlb_private_cache_interference(bool elevated_risk, size_t locality_kb);

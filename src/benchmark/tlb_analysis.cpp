@@ -297,6 +297,47 @@ double median(std::vector<double> values) {
   return values[mid];
 }
 
+bool boundary_matches_private_cache_knee(const TlbBoundaryDetection& boundary,
+                                         const PrivateCacheKneeDetection& private_cache_knee) {
+  return boundary.detected &&
+         private_cache_knee.detected &&
+         boundary.boundary_index == private_cache_knee.boundary_index &&
+         boundary.boundary_locality_bytes == private_cache_knee.boundary_locality_bytes;
+}
+
+TlbBoundaryDetection detect_l1_tlb_boundary(
+    const std::vector<size_t>& localities_bytes,
+    const std::vector<double>& p50_latency_ns,
+    size_t tlb_guard_bytes,
+    const PrivateCacheKneeDetection& private_cache_knee,
+    const std::vector<std::vector<double>>& sweep_loop_latencies_ns) {
+  TlbBoundaryDetection direct_boundary =
+      detect_tlb_boundary(localities_bytes, p50_latency_ns, 0, tlb_guard_bytes, &sweep_loop_latencies_ns);
+  if (!private_cache_knee.detected) {
+    return direct_boundary;
+  }
+
+  if (boundary_matches_private_cache_knee(direct_boundary, private_cache_knee)) {
+    direct_boundary.overlaps_private_cache_knee = true;
+    return direct_boundary;
+  }
+
+  if (!localities_bytes.empty() && private_cache_knee.boundary_index < localities_bytes.size() - 1) {
+    const size_t offset_segment_start = private_cache_knee.boundary_index + 1;
+    TlbBoundaryDetection offset_boundary =
+        detect_tlb_boundary(localities_bytes,
+                            p50_latency_ns,
+                            offset_segment_start,
+                            tlb_guard_bytes,
+                            &sweep_loop_latencies_ns);
+    if (offset_boundary.detected) {
+      return offset_boundary;
+    }
+  }
+
+  return direct_boundary;
+}
+
 MmapPtr try_allocate_analysis_buffer(size_t size_bytes) {
   if (size_bytes == 0) {
     return MmapPtr(nullptr, MmapDeleter{0});
@@ -591,14 +632,11 @@ int run_tlb_analysis(const BenchmarkConfig& config) {
   PrivateCacheKneeDetection private_cache_knee =
       detect_private_cache_knee(final_localities_bytes, p50_latency_ns, &sweep_loop_latencies_ns);
 
-  const size_t l1_segment_start =
-      (private_cache_knee.detected && private_cache_knee.boundary_index < final_localities_bytes.size() - 1)
-          ? (private_cache_knee.boundary_index + 1)
-          : 0;
-
-  TlbBoundaryDetection l1_boundary =
-      detect_tlb_boundary(final_localities_bytes, p50_latency_ns, l1_segment_start, tlb_guard_bytes,
-                          &sweep_loop_latencies_ns);
+  TlbBoundaryDetection l1_boundary = detect_l1_tlb_boundary(final_localities_bytes,
+                                                            p50_latency_ns,
+                                                            tlb_guard_bytes,
+                                                            private_cache_knee,
+                                                            sweep_loop_latencies_ns);
 
   TlbBoundaryDetection l2_boundary;
   if (l1_boundary.detected && l1_boundary.boundary_index < final_localities_bytes.size() - 1) {
@@ -696,16 +734,11 @@ int run_tlb_analysis(const BenchmarkConfig& config) {
 
   private_cache_knee = detect_private_cache_knee(final_localities_bytes, p50_latency_ns, &sweep_loop_latencies_ns);
 
-  const size_t final_l1_segment_start =
-      (private_cache_knee.detected && private_cache_knee.boundary_index < final_localities_bytes.size() - 1)
-          ? (private_cache_knee.boundary_index + 1)
-          : 0;
-
-  l1_boundary = detect_tlb_boundary(final_localities_bytes,
-                                    p50_latency_ns,
-                                    final_l1_segment_start,
-                                    tlb_guard_bytes,
-                                    &sweep_loop_latencies_ns);
+  l1_boundary = detect_l1_tlb_boundary(final_localities_bytes,
+                                       p50_latency_ns,
+                                       tlb_guard_bytes,
+                                       private_cache_knee,
+                                       sweep_loop_latencies_ns);
 
   l2_boundary = TlbBoundaryDetection{};
   if (l1_boundary.detected && l1_boundary.boundary_index < final_localities_bytes.size() - 1) {
@@ -776,12 +809,6 @@ int run_tlb_analysis(const BenchmarkConfig& config) {
     (void)munlock(latency_buffer.get(), selected_buffer_bytes);
   }
 
-  const size_t l1_entries = l1_boundary.detected
-                                ? infer_tlb_entries(l1_boundary.boundary_locality_bytes, page_size_bytes)
-                                : 0;
-  const size_t l2_entries = l2_boundary.detected
-                                 ? infer_tlb_entries(l2_boundary.boundary_locality_bytes, page_size_bytes)
-                                 : 0;
   const std::pair<size_t, size_t> l1_entry_range = l1_boundary.detected
                                                        ? infer_tlb_entries_range(final_localities_bytes,
                                                                                  l1_boundary.boundary_index,
@@ -792,6 +819,16 @@ int run_tlb_analysis(const BenchmarkConfig& config) {
                                                                                  l2_boundary.boundary_index,
                                                                                  page_size_bytes)
                                                        : std::make_pair(static_cast<size_t>(0), static_cast<size_t>(0));
+  const size_t l1_entries = l1_boundary.detected
+                                ? infer_tlb_entries_estimate(final_localities_bytes,
+                                                             l1_boundary.boundary_index,
+                                                             page_size_bytes)
+                                : 0;
+  const size_t l2_entries = l2_boundary.detected
+                                 ? infer_tlb_entries_estimate(final_localities_bytes,
+                                                              l2_boundary.boundary_index,
+                                                              page_size_bytes)
+                                 : 0;
 
   const double page_walk_baseline_ns = p50_latency_ns.empty() ? 0.0 : p50_latency_ns.front();
   const double page_walk_penalty_ns = page_walk_512mb_p50_ns - page_walk_baseline_ns;
@@ -855,6 +892,9 @@ int run_tlb_analysis(const BenchmarkConfig& config) {
                      l1_entry_range.first,
                      l1_entry_range.second)
               << std::endl;
+    if (l1_boundary.overlaps_private_cache_knee) {
+      std::cout << Messages::report_tlb_private_cache_overlap() << std::endl;
+    }
     std::cout << Messages::report_tlb_confidence(l1_boundary.confidence,
                                                  l1_boundary.step_ns,
                                                  l1_boundary.step_percent)

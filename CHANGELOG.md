@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.55.4] - Unreleased
+
+### Changed
+  - **`-analyze-tlb` now preserves private-cache-overlap L1 candidates**: L1 TLB detection no longer automatically skips a boundary that coincides with a detected private-cache knee. When the direct L1 candidate and private-cache knee resolve to the same locality, the analyzer keeps it as an ambiguous L1 TLB candidate and marks the overlap in console/JSON output instead of silently reporting a later, potentially oversized L1 boundary.
+  - **TLB entry point estimates now use locality-window midpoint estimates**: `inferred_entries` is now derived from the midpoint of the detected locality window (`inferred_entries_min`..`inferred_entries_max`) rather than the upper edge of the boundary. Console output labels these values as estimates, while JSON adds `inferred_entries_method: "range_midpoint"` and keeps the explicit min/max range fields.
+
 ## [0.55.3] - 2026-04-26
 
 ### Changed

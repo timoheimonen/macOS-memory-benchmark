@@ -299,13 +299,13 @@ std::string report_tlb_boundary_kb(size_t boundary_kb) {
 
 std::string report_tlb_inferred_size_entries(size_t entries) {
   std::ostringstream oss;
-  oss << "  Inferred Size: " << entries << " entries";
+  oss << "  Inferred Size Estimate: ~" << entries << " entries";
   return oss.str();
 }
 
 std::string report_tlb_inferred_reach_entries(size_t entries) {
   std::ostringstream oss;
-  oss << "  Inferred Reach: " << entries << " entries";
+  oss << "  Inferred Reach Estimate: ~" << entries << " entries";
   return oss.str();
 }
 
@@ -317,6 +317,12 @@ std::string report_tlb_inferred_entries_range(size_t min_entries, size_t max_ent
   }
   oss << " entries";
   return oss.str();
+}
+
+const std::string& report_tlb_private_cache_overlap() {
+  static const std::string msg =
+      "  Private Cache Overlap: yes (kept as ambiguous L1 TLB candidate)";
+  return msg;
 }
 
 std::string report_tlb_confidence(const std::string& confidence, double step_ns, double step_percent) {
