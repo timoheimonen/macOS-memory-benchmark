@@ -438,7 +438,7 @@ LocalityMeasureStatus measure_locality_p50(void* latency_buffer,
  *
  * Page-walk penalty:
  * - Reported as P50(512MB) - P50(effective baseline locality).
- * - Only computed when selected analysis buffer is at least 512MB.
+ * - Only computed when selected analysis buffer is at least 512MB and the comparison pass completes.
  *
  * @return EXIT_SUCCESS on success, EXIT_FAILURE on allocation or measurement error.
  */
@@ -781,6 +781,7 @@ int run_tlb_analysis(const BenchmarkConfig& config) {
 
   std::vector<double> page_walk_512mb_loop_latencies_ns;
   double page_walk_512mb_p50_ns = 0.0;
+  bool page_walk_comparison_completed = false;
   if (can_measure_page_walk_penalty && !signal_received()) {
     const LocalityMeasureStatus status = measure_locality_p50(latency_buffer.get(),
                                                               selected_buffer_bytes,
@@ -802,6 +803,7 @@ int run_tlb_analysis(const BenchmarkConfig& config) {
       std::cout << Messages::msg_tlb_analysis_page_walk_progress(
                        kPageWalkComparisonLocalityBytes / Constants::BYTES_PER_MB)
                 << " — " << page_walk_512mb_p50_ns << " ns" << std::endl;
+      page_walk_comparison_completed = true;
     }
   }
 
@@ -831,7 +833,8 @@ int run_tlb_analysis(const BenchmarkConfig& config) {
                                  : 0;
 
   const double page_walk_baseline_ns = p50_latency_ns.empty() ? 0.0 : p50_latency_ns.front();
-  const double page_walk_penalty_ns = page_walk_512mb_p50_ns - page_walk_baseline_ns;
+  const double page_walk_penalty_ns =
+      page_walk_comparison_completed ? (page_walk_512mb_p50_ns - page_walk_baseline_ns) : 0.0;
 
   std::cout << std::endl;
   std::cout << Messages::report_tlb_header() << std::endl;
@@ -918,9 +921,14 @@ int run_tlb_analysis(const BenchmarkConfig& config) {
                                                  l2_boundary.step_ns,
                                                  l2_boundary.step_percent)
               << std::endl;
-    if (can_measure_page_walk_penalty) {
+    if (page_walk_comparison_completed) {
       std::cout << Messages::report_tlb_page_walk_penalty(
                        page_walk_penalty_ns,
+                       page_walk_baseline_locality_bytes / Constants::BYTES_PER_KB,
+                       kPageWalkComparisonLocalityBytes / Constants::BYTES_PER_MB)
+                << std::endl;
+    } else if (can_measure_page_walk_penalty) {
+      std::cout << Messages::report_tlb_page_walk_penalty_interrupted(
                        page_walk_baseline_locality_bytes / Constants::BYTES_PER_KB,
                        kPageWalkComparisonLocalityBytes / Constants::BYTES_PER_MB)
                 << std::endl;
@@ -934,9 +942,14 @@ int run_tlb_analysis(const BenchmarkConfig& config) {
     }
   } else {
     std::cout << Messages::report_tlb_not_detected() << std::endl;
-    if (can_measure_page_walk_penalty) {
+    if (page_walk_comparison_completed) {
       std::cout << Messages::report_tlb_page_walk_penalty(
                        page_walk_penalty_ns,
+                       page_walk_baseline_locality_bytes / Constants::BYTES_PER_KB,
+                       kPageWalkComparisonLocalityBytes / Constants::BYTES_PER_MB)
+                << std::endl;
+    } else if (can_measure_page_walk_penalty) {
+      std::cout << Messages::report_tlb_page_walk_penalty_interrupted(
                        page_walk_baseline_locality_bytes / Constants::BYTES_PER_KB,
                        kPageWalkComparisonLocalityBytes / Constants::BYTES_PER_MB)
                 << std::endl;
@@ -985,6 +998,7 @@ int run_tlb_analysis(const BenchmarkConfig& config) {
       private_cache_to_l1_distance_bytes,
       private_cache_to_l1_distance_pages,
       can_measure_page_walk_penalty,
+      page_walk_comparison_completed,
       page_walk_512mb_loop_latencies_ns,
       page_walk_512mb_p50_ns,
       page_walk_baseline_ns,

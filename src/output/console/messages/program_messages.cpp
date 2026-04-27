@@ -127,6 +127,7 @@ std::string usage_options(const std::string& prog_name) {
       << "                        Must be > 0 and a multiple of pointer size (typically 8 bytes).\n"
       << "  -latency-chain-mode <mode> Pointer-chain construction policy. Modes: auto (default), global-random,\n"
       << "                        random-box, same-random-in-box, diff-random-in-box.\n"
+      << "                        -analyze-tlb rejects global-random because locality sweep labels would be misleading.\n"
       << "  -latency-tlb-locality-kb <size_kb> TLB-locality window for latency pointer chains (default: "
       << Constants::DEFAULT_LATENCY_TLB_LOCALITY_KB
       << " KB; set 0 for global random).\n"
@@ -372,6 +373,13 @@ std::string report_tlb_page_walk_penalty_unavailable(size_t from_kb,
   oss << "  Page Table Walk Penalty (" << from_kb << "KB -> " << to_mb << "MB): N/A "
       << "(requires " << required_buffer_mb << " MB or larger analysis buffer, selected "
       << selected_buffer_mb << " MB)";
+  return oss.str();
+}
+
+std::string report_tlb_page_walk_penalty_interrupted(size_t from_kb, size_t to_mb) {
+  std::ostringstream oss;
+  oss << "  Page Table Walk Penalty (" << from_kb << "KB -> " << to_mb
+      << "MB): N/A (comparison measurement did not complete)";
   return oss.str();
 }
 

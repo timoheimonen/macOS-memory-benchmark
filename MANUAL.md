@@ -280,6 +280,7 @@ must be specified at most once per command.
 - Accepted values: `auto`, `global-random`, `random-box`, `same-random-in-box`, `diff-random-in-box`
 - `global-random` works with `-latency-tlb-locality-kb 0`
 - `random-box`, `same-random-in-box`, and `diff-random-in-box` require `-latency-tlb-locality-kb > 0`
+- In `-analyze-tlb` mode, `global-random` is rejected because it ignores locality windows and would make locality sweep boundaries misleading
 
 #### `-latency-tlb-locality-kb <size_kb>`
 
@@ -719,6 +720,8 @@ Example below uses real values extracted from `results/0.53.8/MacMiniM4_analyze-
   }
 }
 ```
+
+If the 512MB page-walk comparison cannot run or is interrupted, `page_walk_penalty.available` is `false` and `comparison_p50_ns`, `comparison_loop_latencies_ns`, and `penalty_ns` are omitted. The `reason` field explains whether the selected analysis buffer was too small or the comparison measurement did not complete.
 
 ### Pattern keys (current)
 

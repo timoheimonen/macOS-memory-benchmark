@@ -143,6 +143,7 @@ TEST(JsonSchemaTest, TlbAnalysisExporterIncludesModeAndCoreCounts) {
       4 * Constants::BYTES_PER_MB,
       256,
       true,
+      true,
       page_walk_comparison_loop_latencies_ns,
       95.5,
       15.0,
@@ -165,6 +166,71 @@ TEST(JsonSchemaTest, TlbAnalysisExporterIncludesModeAndCoreCounts) {
   EXPECT_EQ(output_json["tlb_analysis"]["l1_tlb_detection"]["inferred_entries"], 248);
   EXPECT_EQ(output_json["tlb_analysis"]["l1_tlb_detection"]["inferred_entries_method"], "range_midpoint");
   EXPECT_TRUE(output_json["tlb_analysis"]["l1_tlb_detection"]["overlaps_private_cache_knee"]);
+
+  std::filesystem::remove(config.output_file);
+}
+
+TEST(JsonSchemaTest, TlbAnalysisExporterOmitsPageWalkPenaltyWhenComparisonIncomplete) {
+  BenchmarkConfig config;
+  config.output_file = make_temp_json_path("tlb_page_walk_incomplete").string();
+
+  const std::string cpu_name = "test-cpu";
+  const std::vector<size_t> localities_bytes = {16 * Constants::BYTES_PER_KB};
+  const std::vector<std::vector<double>> sweep_loop_latencies_ns = {{15.0, 15.1}};
+  const std::vector<double> p50_latency_ns = {15.0};
+  const std::vector<double> page_walk_comparison_loop_latencies_ns;
+  const TlbBoundaryDetection l1_boundary;
+  const TlbBoundaryDetection l2_boundary;
+  const PrivateCacheKneeDetection private_cache_knee;
+
+  const TlbAnalysisJsonContext context = {
+      config,
+      cpu_name,
+      4,
+      6,
+      16384,
+      131072,
+      1024 * 1024,
+      64,
+      2,
+      1000,
+      16 * Constants::BYTES_PER_KB,
+      512 * Constants::BYTES_PER_MB,
+      1024,
+      true,
+      localities_bytes,
+      sweep_loop_latencies_ns,
+      p50_latency_ns,
+      l1_boundary,
+      l2_boundary,
+      private_cache_knee,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      false,
+      0,
+      0,
+      true,
+      false,
+      page_walk_comparison_loop_latencies_ns,
+      0.0,
+      15.0,
+      0.0,
+      3.0,
+  };
+
+  ASSERT_EQ(save_tlb_analysis_to_json(context), EXIT_SUCCESS);
+  const nlohmann::json output_json = read_json_file(config.output_file);
+  const nlohmann::json page_walk_json = output_json["tlb_analysis"]["page_walk_penalty"];
+
+  EXPECT_FALSE(page_walk_json["available"]);
+  EXPECT_FALSE(page_walk_json.contains("comparison_p50_ns"));
+  EXPECT_FALSE(page_walk_json.contains("penalty_ns"));
+  EXPECT_NE(page_walk_json["reason"].get<std::string>().find("did not complete"), std::string::npos);
 
   std::filesystem::remove(config.output_file);
 }

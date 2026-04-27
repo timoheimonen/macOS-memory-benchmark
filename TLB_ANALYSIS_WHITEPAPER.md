@@ -63,11 +63,13 @@ Sweep density applies only to `-analyze-tlb`.
 ### 3.4 Rejected Combinations
 
 All other options are rejected when `-analyze-tlb` is present.
+`-latency-chain-mode global-random` is also rejected for `-analyze-tlb`, because it ignores locality windows and would turn the locality sweep into repeated full-buffer random measurements with misleading boundary labels.
 
 Example (invalid):
 
 ```bash
 memory_benchmark -analyze-tlb -buffersize 1024
+memory_benchmark -analyze-tlb -latency-chain-mode global-random
 ```
 
 ## 4. Measurement Workflow
@@ -97,7 +99,7 @@ Stride behavior:
 
 - Effective stride is taken from `-latency-stride-bytes` (default: **256 bytes**).
 
-**Chain mode:** The latency chain mode is resolved via `resolve_latency_chain_mode(config.latency_chain_mode, page_walk_baseline_locality_bytes)`. This determines the method used to build the pointer-chase chain for each locality measurement. The resolved mode is reported in the console output and stored in the JSON metadata.
+**Chain mode:** The latency chain mode is resolved via `resolve_latency_chain_mode(config.latency_chain_mode, page_walk_baseline_locality_bytes)`. This determines the method used to build the pointer-chase chain for each locality measurement. The resolved mode is reported in the console output and stored in the JSON metadata. In `-analyze-tlb`, `global-random` is rejected; `auto` resolves to `random-box` because the baseline locality is non-zero.
 
 **Memory prefaulting:** After buffer allocation, the code calls `madvise(ptr, size_bytes, MADV_WILLNEED)` to prefault pages and reduce page-fault noise during early measurement.
 
@@ -257,7 +259,7 @@ where:
 
 - `effective baseline locality = P50 latency of the first point in the stride-aware sweep` (i.e., `p50_latency_ns[0]`; this is measured during the main run, not a separate reference measurement)
 
-The penalty is computed as-is; a negative value indicates measurement noise (e.g., due to thermal variance or CPU frequency scaling) rather than a genuine negative penalty.
+The penalty is computed as-is; a negative value indicates measurement noise (e.g., due to thermal variance or CPU frequency scaling) rather than a genuine negative penalty. If the 512MB comparison pass cannot run or is interrupted, page-walk penalty is reported unavailable and `penalty_ns` is omitted from JSON.
 
 Availability rule:
 
@@ -314,7 +316,7 @@ When `-output <file>` is provided with `-analyze-tlb`, output includes:
   - `private_cache_knee` (with `detected`, `boundary_locality_kb`, `confidence`, and `may_interfere_with_tlb`)
   - `l1_tlb_detection` (with `detected`, `boundary_locality_kb`, `inferred_entries`, `inferred_entries_method`, `inferred_entries_min`, `inferred_entries_max`, `overlaps_private_cache_knee`, `confidence`, and step metadata)
   - `l2_tlb_detection` (same structure as L1)
-  - `page_walk_penalty` block (`available`, baseline/comparison metadata, raw comparison loops, `penalty_ns` when available)
+  - `page_walk_penalty` block (`available`, baseline/comparison metadata, raw comparison loops, `penalty_ns` when the comparison completed, otherwise `reason`)
 
 This payload is designed for full post-run verification and reproducibility checks.
 
@@ -347,7 +349,7 @@ With a high-density sweep, a `4MB` boundary following a `3MB` prior point yields
 ### Limitations and Edge Cases
 
 - If the entire sweep remained below threshold (e.g., very small buffer or very large stride), L1 would report "Not detected."
-- If the 256 MB buffer fallback is used, `page_walk_penalty` will report `N/A` and explain why.
+- If the 256 MB buffer fallback is used, or if the 512MB comparison pass is interrupted, `page_walk_penalty` will report `N/A` and explain why.
 - On machines with 4 KB pages (instead of macOS's 16 KB), the same entry count would correspond to a 1 MB boundary.
 
 Interpretation note for Apple Silicon:

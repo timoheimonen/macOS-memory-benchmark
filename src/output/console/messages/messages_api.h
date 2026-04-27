@@ -66,6 +66,7 @@ std::string error_latency_stride_alignment(size_t value_bytes, size_t alignment_
 std::string error_latency_tlb_locality_invalid(long long value, long long max_val);
 std::string error_latency_chain_mode_invalid();
 std::string error_latency_chain_mode_requires_locality(const std::string& mode_name);
+const std::string& error_analyze_tlb_global_random_unsupported();
 std::string error_latency_tlb_locality_page_multiple(size_t value_kb, size_t page_size_kb);
 std::string error_latency_tlb_locality_too_small_for_stride(size_t locality_bytes, size_t stride_bytes);
 std::string error_threads_invalid(long long value, long long min_val, long long max_val);
@@ -229,6 +230,7 @@ std::string report_tlb_private_cache_interference(bool elevated_risk, size_t loc
 std::string report_tlb_private_cache_l1_distance(size_t distance_kb, size_t distance_pages);
 std::string report_tlb_page_walk_penalty(double penalty_ns, size_t from_kb, size_t to_mb);
 std::string report_tlb_page_walk_penalty_unavailable(size_t from_kb, size_t to_mb, size_t required_buffer_mb, size_t selected_buffer_mb);
+std::string report_tlb_page_walk_penalty_interrupted(size_t from_kb, size_t to_mb);
 const std::string& report_tlb_not_detected();
 
 // --- Usage/Help Messages ---

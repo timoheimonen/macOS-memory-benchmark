@@ -126,6 +126,12 @@ std::string error_latency_chain_mode_requires_locality(const std::string& mode_n
   return "latency-chain-mode '" + mode_name + "' requires -latency-tlb-locality-kb > 0";
 }
 
+const std::string& error_analyze_tlb_global_random_unsupported() {
+  static const std::string msg =
+      "-analyze-tlb does not support -latency-chain-mode global-random";
+  return msg;
+}
+
 std::string error_latency_tlb_locality_page_multiple(size_t value_kb, size_t page_size_kb) {
   std::ostringstream oss;
   oss << "latency-tlb-locality-kb must be a multiple of system page size ("
