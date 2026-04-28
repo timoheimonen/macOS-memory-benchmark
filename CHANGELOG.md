@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.55.5] - Unreleased
+
+### Changed
+  - **Regular benchmark auto-TLB comparison now uses a P50 noise guard**: When `-latency-tlb-locality-kb` is omitted in `-benchmark` mode, the automatic TLB hit/miss comparison now measures each point with three complete pointer-chase passes and reports the median value. This reduces the impact of a single IRQ-inflated pass on `TLB hit latency`, `TLB miss latency`, and `Estimated page-walk penalty` while keeping the main `Average latency` headline as one continuous pointer-chase pass.
+
+### Fixed
+  - **`-analyze-tlb` now rejects `global-random` chain mode**: Standalone TLB analysis fails fast for `-latency-chain-mode global-random` because that mode ignores locality windows and would make locality sweep boundary labels misleading. Use `auto` or a locality-aware box mode for TLB analysis.
+  - **Interrupted TLB page-walk comparisons no longer serialize bogus penalties**: The 512MB page-walk comparison now tracks measurement completion separately from buffer eligibility. Console and JSON output only include `comparison_p50_ns`, raw comparison loops, and `penalty_ns` when the comparison pass completes; otherwise `page_walk_penalty.available` is `false` and a reason is emitted.
+
 ## [0.55.4] - 2026-04-26
 
 ### Added

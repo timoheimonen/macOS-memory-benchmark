@@ -68,6 +68,7 @@ struct TlbAnalysisJsonContext {
   size_t private_cache_to_l1_distance_bytes;
   size_t private_cache_to_l1_distance_pages;
   bool can_measure_page_walk_penalty;
+  bool page_walk_comparison_completed;
   const std::vector<double>& page_walk_comparison_loop_latencies_ns;
   double page_walk_comparison_p50_ns;
   double page_walk_baseline_ns;

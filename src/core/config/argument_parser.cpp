@@ -230,6 +230,13 @@ int parse_arguments(int argc, char* argv[], BenchmarkConfig& config) {
           print_usage(argv[0]);
           return EXIT_FAILURE;
         }
+        if (parsed_mode == LatencyChainMode::GlobalRandom) {
+          std::cerr << Messages::error_prefix()
+                    << Messages::error_analyze_tlb_global_random_unsupported()
+                    << std::endl;
+          print_usage(argv[0]);
+          return EXIT_FAILURE;
+        }
 
         config.latency_chain_mode = parsed_mode;
         config.user_specified_latency_chain_mode = true;

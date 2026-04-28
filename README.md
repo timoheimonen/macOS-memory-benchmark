@@ -138,7 +138,7 @@ Latency-specific disable controls in `-only-latency`:
 - `-latency-samples <count>`: Samples per latency test (default `1000`).
 - `-latency-stride-bytes <bytes>`: Pointer-chain stride for latency tests (default `256`; must be > 0 and pointer-size aligned).
 - `-latency-chain-mode <mode>`: Pointer-chain construction policy. Modes: `auto` (default), `global-random`, `random-box`, `same-random-in-box`, `diff-random-in-box`.
-- `-latency-tlb-locality-kb <KB>`: Pointer-chain locality window (default `1024`; `0` = global random chain; non-zero values must be page-size multiples). If omitted, regular main-memory latency output also includes an automatic TLB comparison (`16 KB` hit-biased vs `0` miss-biased) and estimated page-walk penalty.
+- `-latency-tlb-locality-kb <KB>`: Pointer-chain locality window (default `1024`; `0` = global random chain; non-zero values must be page-size multiples). If omitted, regular main-memory latency output also includes an automatic TLB comparison (`16 KB` hit-biased vs `0` miss-biased) and estimated page-walk penalty. The automatic comparison uses P50 over three complete pointer-chase passes per point to reduce single-IRQ outlier impact.
 - `-non-cacheable`: Best-effort cache-discouraging hints (not true uncached memory).
 - `-output <file>`: Save JSON output.
 
@@ -223,7 +223,7 @@ Console output includes:
 
 - Resolved configuration and cache information.
 - Per-loop benchmark results.
-- Main-memory latency may include automatic TLB breakdown lines (`TLB hit latency`, `TLB miss latency`, and `Estimated page-walk penalty`) when `-latency-tlb-locality-kb` is not explicitly set.
+- Main-memory latency may include automatic TLB breakdown lines (`TLB hit latency`, `TLB miss latency`, and `Estimated page-walk penalty`) when `-latency-tlb-locality-kb` is not explicitly set. These auto-TLB hit/miss values are P50 values from three complete comparison passes per point, so a single IRQ-inflated pass is less likely to dominate the estimate.
 - Aggregate statistics when `-count > 1` (including P50/P90/P95/P99 and stddev). In auto-TLB mode, statistics also include `TLB Hit Latency (ns)`, `TLB Miss Latency (ns)`, and `Estimated Page-Walk Penalty (ns)`.
 
 JSON output shape:

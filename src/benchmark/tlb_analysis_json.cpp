@@ -167,18 +167,20 @@ int save_tlb_analysis_to_json(const TlbAnalysisJsonContext& context) {
   }
 
   tlb_json["page_walk_penalty"] = {
-      {"available", context.can_measure_page_walk_penalty},
+      {"available", context.page_walk_comparison_completed},
       {"baseline_locality_kb", context.page_walk_baseline_locality_bytes / Constants::BYTES_PER_KB},
       {"comparison_locality_mb", context.page_walk_comparison_locality_bytes / Constants::BYTES_PER_MB},
       {"baseline_p50_ns", context.page_walk_baseline_ns}};
 
-  if (context.can_measure_page_walk_penalty) {
+  if (context.page_walk_comparison_completed) {
     tlb_json["page_walk_penalty"]["comparison_loop_latencies_ns"] =
         context.page_walk_comparison_loop_latencies_ns;
     tlb_json["page_walk_penalty"]["comparison_p50_ns"] = context.page_walk_comparison_p50_ns;
     tlb_json["page_walk_penalty"]["penalty_ns"] = context.page_walk_penalty_ns;
-  } else {
+  } else if (!context.can_measure_page_walk_penalty) {
     tlb_json["page_walk_penalty"]["reason"] = "requires at least 512 MB analysis buffer";
+  } else {
+    tlb_json["page_walk_penalty"]["reason"] = "comparison measurement did not complete";
   }
 
   json_output["tlb_analysis"] = tlb_json;

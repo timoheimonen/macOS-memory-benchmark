@@ -141,6 +141,9 @@ automatic comparison and prints:
 - TLB miss latency (global random locality, `0`)
 - Estimated page-walk penalty (`miss - hit`)
 
+Each automatic comparison point is measured as P50 over three complete pointer-chase passes. This reduces the impact of
+a single IRQ-inflated timing pass while keeping every candidate pass continuous.
+
 If you explicitly set `-latency-tlb-locality-kb` (including `16` or `0`), this auto comparison is skipped.
 
 ### Pattern benchmarks
@@ -277,6 +280,7 @@ must be specified at most once per command.
 - Accepted values: `auto`, `global-random`, `random-box`, `same-random-in-box`, `diff-random-in-box`
 - `global-random` works with `-latency-tlb-locality-kb 0`
 - `random-box`, `same-random-in-box`, and `diff-random-in-box` require `-latency-tlb-locality-kb > 0`
+- In `-analyze-tlb` mode, `global-random` is rejected because it ignores locality windows and would make locality sweep boundaries misleading
 
 #### `-latency-tlb-locality-kb <size_kb>`
 
@@ -492,6 +496,9 @@ When `-latency-tlb-locality-kb` is not explicitly provided, this section also pr
 - `TLB hit latency (16 KB locality)`
 - `TLB miss latency (global random locality)`
 - `Estimated page-walk penalty (miss - hit)`
+
+The auto-TLB hit/miss values are P50 values from three complete comparison passes per point. The main `Average latency`
+headline remains one continuous pointer-chase pass.
 
 ### 4) Cache bandwidth and latency
 
@@ -713,6 +720,8 @@ Example below uses real values extracted from `results/0.53.8/MacMiniM4_analyze-
   }
 }
 ```
+
+If the 512MB page-walk comparison cannot run or is interrupted, `page_walk_penalty.available` is `false` and `comparison_p50_ns`, `comparison_loop_latencies_ns`, and `penalty_ns` are omitted. The `reason` field explains whether the selected analysis buffer was too small or the comparison measurement did not complete.
 
 ### Pattern keys (current)
 

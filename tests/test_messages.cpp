@@ -274,6 +274,12 @@ TEST_F(MessagesErrorTest, ErrorLatencyChainModeRequiresLocality) {
   EXPECT_NE(msg.find("requires -latency-tlb-locality-kb > 0"), std::string::npos);
 }
 
+TEST_F(MessagesErrorTest, ErrorAnalyzeTlbGlobalRandomUnsupported) {
+  const std::string& msg = Messages::error_analyze_tlb_global_random_unsupported();
+  EXPECT_NE(msg.find("-analyze-tlb"), std::string::npos);
+  EXPECT_NE(msg.find("global-random"), std::string::npos);
+}
+
 TEST_F(MessagesErrorTest, ErrorLatencyTlbLocalityPageMultiple) {
   std::string msg = Messages::error_latency_tlb_locality_page_multiple(10, 16);
   EXPECT_EQ(msg, "latency-tlb-locality-kb must be a multiple of system page size (16 KB), got 10 KB");
@@ -472,6 +478,13 @@ TEST_F(MessagesFormattingTest, ReportTlbPageWalkPenaltyUnavailable) {
   EXPECT_NE(msg.find("32KB -> 512MB"), std::string::npos);
   EXPECT_NE(msg.find("requires 512 MB"), std::string::npos);
   EXPECT_NE(msg.find("selected 256 MB"), std::string::npos);
+}
+
+TEST_F(MessagesFormattingTest, ReportTlbPageWalkPenaltyInterrupted) {
+  std::string msg = Messages::report_tlb_page_walk_penalty_interrupted(32, 512);
+  EXPECT_NE(msg.find("N/A"), std::string::npos);
+  EXPECT_NE(msg.find("32KB -> 512MB"), std::string::npos);
+  EXPECT_NE(msg.find("did not complete"), std::string::npos);
 }
 
 TEST_F(MessagesFormattingTest, ReportTlbFineSweepAndPrivateCacheInfo) {
