@@ -47,6 +47,7 @@ This document describes the layout of project files, organized by purpose. It is
 | File | Purpose |
 |---|---|
 | `README.md` | Project overview, quick-start instructions, and feature summary |
+| `CAPABILITIES.md` | Measurement capability overview and interpretation notes |
 | `MANUAL.md` | Complete user manual: all CLI flags, modes, output formats, and usage examples |
 | `TECHNICAL_SPECIFICATION.md` | Internal architecture, data structures, and implementation decisions |
 | `CHANGELOG.md` | Version history and release notes |
