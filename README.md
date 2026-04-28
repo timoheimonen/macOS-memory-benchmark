@@ -5,7 +5,8 @@
 Copyright 2025-2026 Timo Heimonen <timo.heimonen@proton.me>  
 License: GPL-3.0 license  
   
-**Low-level tool** to measure memory read/write/copy bandwidth, cache/main memory latency, and access pattern performance on macOS Apple Silicon (ARM64).
+**Low-level tool** to measure memory read/write/copy bandwidth, cache/main memory latency, and access pattern performance on macOS Apple Silicon (ARM64).  
+Application [measurement capabilities](CAPABILITIES.md) information.
 
 ![Macbook Air M5 Cache Latency from multiple JSON-files](pictures/MacBookAirM5_latency_vs_cache-stride-tlb.png)  
 Macbook Air M5 Cache Latency by example-script provided. Using different size TLB locality and Stride size. 
