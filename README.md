@@ -322,6 +322,7 @@ Reference sample result files in this repository:
 
 ## Documentation
 
+- **[Measurement Capabilities](CAPABILITIES.md)**: overview of what the tool can measure and how to interpret those measurements.
 - **[User Manual](MANUAL.md)**: full usage guide, option reference, workflows, troubleshooting.
 - **[Technical Specification](TECHNICAL_SPECIFICATION.md)**: architecture, execution flow, memory model, output contracts.
 - **[Latency Whitepaper](LATENCY_WHITEPAPER.md)**: dependent pointer-chase design, chain construction, and sampling methodology.
