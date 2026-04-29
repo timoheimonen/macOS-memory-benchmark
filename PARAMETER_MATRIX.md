@@ -1,7 +1,6 @@
 # Parameter Compatibility Matrix
 
-Last updated 2026-04-26
-Version 0.55.4
+Version 0.55.6
 
 ## All Flags
 
@@ -22,6 +21,8 @@ Version 0.55.4
 | `-only-latency` | Latency tests only |
 | `-non-cacheable` | Cache-discouraging hints |
 | `-output <file>` | JSON output file |
+| `-sweep <key=a,b>` | Cartesian parameter sweep |
+| `-sweep-max-runs <n>` | Maximum generated sweep runs |
 | `-analyze-tlb` | Standalone TLB analysis |
 | `-analyze-core2core` | Core-to-core analysis |
 | `-h, --help` | Show help |
@@ -54,6 +55,8 @@ Version 0.55.4
 | `-only-latency` | ✅ | ❌ with `-iterations`, needs `-buffersize > 0` or `-cache-size > 0` |
 | `-non-cacheable` | ✅ | |
 | `-output <file>` | ✅ | |
+| `-sweep <key=a,b>` | ✅ | Requires `-output`; supported keys depend on benchmark subtype, see [Sweep Compatibility](#sweep-compatibility) |
+| `-sweep-max-runs <n>` | ✅ with `-sweep` | Default `256` |
 | `-buffersize 0` | ✅ only with `-only-latency` | Disables main memory latency |
 | `-cache-size 0` | ✅ only with `-only-latency` | Disables cache latency |
 
@@ -73,6 +76,8 @@ Version 0.55.4
 | `-only-latency` | ❌ | Separate execution mode |
 | `-non-cacheable` | ✅ | |
 | `-output <file>` | ✅ | |
+| `-sweep <key=a,b>` | ✅ | Requires `-output`; supported keys: `buffersize`, `threads` |
+| `-sweep-max-runs <n>` | ✅ with `-sweep` | Default `256` |
 | `-iterations <n>` | ✅ | Used by pattern benchmark execution loops |
 
 ### Modifiers with `-analyze-tlb` (standalone mode)
@@ -82,6 +87,9 @@ Version 0.55.4
 | `-output <file>` | ✅ | |
 | `-latency-stride-bytes <n>` | ✅ | |
 | `-latency-chain-mode <mode>` | ✅ | |
+| `-tlb-density <low\|medium\|high>` | ✅ | |
+| `-sweep <key=a,b>` | ✅ | Requires `-output`; supported keys: `latency-stride-bytes`, `latency-chain-mode`, `tlb-density` |
+| `-sweep-max-runs <n>` | ✅ with `-sweep` | Default `256` |
 | All others | ❌ | Must be used alone |
 
 ### Modifiers with `-analyze-core2core` (standalone mode)
@@ -91,7 +99,31 @@ Version 0.55.4
 | `-output <file>` | ✅ | |
 | `-count <n>` | ✅ | |
 | `-latency-samples <n>` | ✅ | |
+| `-sweep <key=a,b>` | ❌ | Not supported by core-to-core mode yet |
+| `-sweep-max-runs <n>` | ❌ | Only meaningful with `-sweep` |
 | All others | ❌ | Must be used alone |
+
+### Sweep Compatibility
+
+`-sweep` runs a Cartesian product over one or more parameter lists. It always requires `-output <file>` because sweep
+results are written as one combined JSON document with `configuration.mode: "sweep"` and per-run payloads under
+`runs[].result`.
+
+| Base mode | Supported sweep keys | Not supported |
+|-----------|----------------------|---------------|
+| `-benchmark` | `buffersize`, `cache-size`, `threads`, `latency-tlb-locality-kb`, `latency-stride-bytes`, `latency-chain-mode` | `tlb-density` |
+| `-benchmark -only-bandwidth` | `buffersize`, `threads` | `cache-size`, latency keys, `tlb-density` |
+| `-benchmark -only-latency` | `buffersize`, `cache-size`, `latency-tlb-locality-kb`, `latency-stride-bytes`, `latency-chain-mode` | `threads`, `tlb-density` |
+| `-patterns` | `buffersize`, `threads` | `cache-size`, latency keys, `tlb-density` |
+| `-analyze-tlb` | `latency-stride-bytes`, `latency-chain-mode`, `tlb-density` | `buffersize`, `cache-size`, `threads`, `latency-tlb-locality-kb` |
+| `-analyze-core2core` | none | all sweep keys |
+
+Additional sweep rules:
+
+- `-sweep-max-runs <n>` limits the generated Cartesian product; default is `256`.
+- `-sweep latency-chain-mode=global-random` is invalid with `-analyze-tlb`.
+- Direct options outside `-sweep` are used as fixed values for every generated run.
+- If the same parameter is provided both directly and through `-sweep`, the sweep value is applied per run.
 
 ### Incompatible Modifier Combinations
 
@@ -104,6 +136,8 @@ Version 0.55.4
 | `-only-bandwidth` + `-patterns` | Separate modes |
 | `-only-latency` + `-patterns` | Separate modes |
 | `-benchmark` + `-patterns` | Mutually exclusive |
+| `-sweep` without `-output` | Sweep mode requires a combined JSON output file |
+| `-sweep` generated runs > `-sweep-max-runs` | Guardrail against accidental large Cartesian sweeps |
 
 ### No Mode Flag (shows help)
 

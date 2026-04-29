@@ -67,6 +67,22 @@ const std::string& msg_interrupted_by_user() {
   return msg;
 }
 
+std::string msg_running_sweep(size_t run_count) {
+  std::ostringstream oss;
+  oss << "\nRunning sweep with " << run_count << " run";
+  if (run_count != 1) {
+    oss << "s";
+  }
+  oss << "...";
+  return oss.str();
+}
+
+std::string msg_sweep_run_progress(size_t current_run, size_t total_runs) {
+  std::ostringstream oss;
+  oss << "\nSweep run " << current_run << "/" << total_runs;
+  return oss.str();
+}
+
 std::string msg_tlb_analysis_locality_progress(size_t current_index, size_t total_count, size_t locality_kb) {
   std::ostringstream oss;
   oss << "  [" << current_index << "/" << total_count << "] Locality " << locality_kb << " KB";
@@ -161,6 +177,11 @@ std::string usage_options(const std::string& prog_name) {
       << "                        Best-effort approach that may reduce but not eliminate caching.\n"
       << "  -output <file>        Save benchmark results to JSON file. If path is relative,\n"
       << "                        file is saved in current working directory.\n"
+      << "  -sweep <key=a,b>      Run a Cartesian sweep over one parameter. Repeat for multiple\n"
+      << "                        parameters. Supported keys: buffersize, cache-size, threads,\n"
+      << "                        latency-tlb-locality-kb, latency-stride-bytes,\n"
+      << "                        latency-chain-mode, tlb-density. Requires -output <file>.\n"
+      << "  -sweep-max-runs <n>   Maximum generated sweep runs (default: " << Constants::DEFAULT_SWEEP_MAX_RUNS << ").\n"
       << "  -h, --help            Show this help message and exit\n\n";
   return oss.str();
 }

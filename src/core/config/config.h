@@ -36,6 +36,7 @@
 
 #include <cstddef>  // size_t
 #include <string>
+#include <vector>
 #include <cstdlib>  // EXIT_SUCCESS, EXIT_FAILURE
 #include "core/config/constants.h"
 #include "core/memory/memory_utils.h"
@@ -48,6 +49,41 @@ enum class TlbSweepDensity {
   Low = 0,    ///< 15-point base sweep, no refinement
   Medium,     ///< 15-point base sweep + boundary refinement
   High,       ///< 29-point base sweep + boundary refinement
+};
+
+/**
+ * @enum SweepParameter
+ * @brief Parameter names supported by `-sweep key=value1,value2`.
+ */
+enum class SweepParameter {
+  BufferSizeMb = 0,
+  CacheSizeKb,
+  Threads,
+  LatencyTlbLocalityKb,
+  LatencyStrideBytes,
+  LatencyChainMode,
+  TlbDensity,
+};
+
+/**
+ * @struct SweepValue
+ * @brief Parsed typed value for one sweep parameter point.
+ */
+struct SweepValue {
+  std::string raw_value;
+  long long integer_value = 0;
+  LatencyChainMode latency_chain_mode = LatencyChainMode::Auto;
+  TlbSweepDensity tlb_sweep_density = TlbSweepDensity::High;
+};
+
+/**
+ * @struct SweepSpec
+ * @brief One `-sweep` option with a parameter and candidate values.
+ */
+struct SweepSpec {
+  SweepParameter parameter = SweepParameter::BufferSizeMb;
+  std::string parameter_name;
+  std::vector<SweepValue> values;
 };
 
 /**
@@ -102,8 +138,10 @@ struct BenchmarkConfig {
   bool only_bandwidth = false;         ///< When true, run only bandwidth tests
   bool only_latency = false;           ///< When true, run only latency tests
   bool analyze_tlb = false;            ///< When true, run standalone TLB analysis mode
+  bool run_sweep = false;              ///< Whether to execute a multi-configuration sweep
   bool help_printed = false;           ///< Whether -h/--help was invoked (usage already printed)
-  
+  size_t sweep_max_runs = Constants::DEFAULT_SWEEP_MAX_RUNS;  ///< Maximum allowed sweep combinations
+
   // Tracking flags for user-specified parameters
   bool user_specified_buffersize = false;      ///< Whether user explicitly set -buffersize
   bool user_specified_iterations = false;      ///< Whether user explicitly set -iterations
@@ -120,6 +158,9 @@ struct BenchmarkConfig {
   
   // Output file
   std::string output_file;  ///< JSON output file path (empty = no JSON output)
+
+  // Sweep configuration
+  std::vector<SweepSpec> sweep_specs;  ///< Parsed `-sweep` parameter/value lists
 };
 
 /**

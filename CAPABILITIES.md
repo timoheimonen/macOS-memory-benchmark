@@ -99,6 +99,25 @@ Advanced latency experiments can be configured with:
 These options allow manual exploration of boundary cases where cache locality, TLB locality, prefetch behavior, and DRAM
 access begin to dominate results differently.
 
+## Built-in Parameter Sweeps
+
+Sweep mode runs repeated measurements across parameter lists and stores every run in one combined JSON file. This makes
+buffer-size, cache-size, thread-scaling, stride, locality, chain-mode, and TLB-density experiments reproducible without
+external shell orchestration.
+
+Supported sweep targets include:
+
+- Main buffer size via `-sweep buffersize=...`
+- Custom cache target via `-sweep cache-size=...`
+- Bandwidth thread count via `-sweep threads=...`
+- Latency locality windows via `-sweep latency-tlb-locality-kb=...`
+- Pointer-chain stride via `-sweep latency-stride-bytes=...`
+- Pointer-chain construction mode via `-sweep latency-chain-mode=...`
+- TLB analysis density via `-sweep tlb-density=...`
+
+Multiple `-sweep` options are combined as a Cartesian product. `-sweep-max-runs` caps the generated run count, and
+`-output` is required for the combined JSON result.
+
 ## Core-to-Core Cache-Line Handoff
 
 The standalone core-to-core mode, `-analyze-core2core`, measures two-thread cache-line handoff behavior using a ping-pong

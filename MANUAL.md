@@ -313,6 +313,25 @@ must be specified at most once per command.
 - Relative path writes under current working directory
 - Parent directories are created automatically
 
+#### `-sweep <key=value1,value2>`
+
+- Runs a Cartesian parameter sweep and writes one combined JSON result
+- Requires `-output <file>`
+- Can be repeated to sweep multiple parameters
+- Supported keys: `buffersize`, `cache-size`, `threads`, `latency-tlb-locality-kb`, `latency-stride-bytes`, `latency-chain-mode`, `tlb-density`
+- `tlb-density` applies only with `-analyze-tlb`
+- `-patterns` supports `buffersize` and `threads`
+- `-benchmark -only-bandwidth` supports `buffersize` and `threads`
+- `-benchmark -only-latency` supports `buffersize`, `cache-size`, and latency chain/locality/stride keys
+- `-analyze-tlb` supports `latency-stride-bytes`, `latency-chain-mode`, and `tlb-density`
+- `-analyze-core2core` is not supported by sweep mode
+
+#### `-sweep-max-runs <count>`
+
+- Maximum number of generated sweep combinations
+- Default: `256`
+- Prevents accidental very large Cartesian sweeps
+
 #### `-h`, `--help`
 
 - Print help and exit
@@ -362,6 +381,12 @@ memory_benchmark -analyze-core2core
 
 # Standalone core-to-core analysis with deeper sampling + JSON
 memory_benchmark -analyze-core2core -count 5 -latency-samples 2000 -output core2core.json
+
+# Benchmark latency sweep over 3 buffer sizes and 3 locality windows (9 runs)
+memory_benchmark -benchmark -only-latency -count 5 -sweep buffersize=256,512,1024 -sweep latency-tlb-locality-kb=16,1024,0 -output latency_sweep.json
+
+# Thread scaling sweep for bandwidth
+memory_benchmark -benchmark -only-bandwidth -count 5 -sweep buffersize=512,1024 -sweep threads=1,4,8 -output bandwidth_thread_sweep.json
 ```
 
 ### Invalid combinations
@@ -467,6 +492,14 @@ memory_benchmark -benchmark -cache-size 4096 -threads 1 -count 5 -output cache_4
 python3 script-examples/plot_cache_percentiles.py script-examples/final_output.txt --metric median
 ```
 
+### Built-in sweep JSON
+
+```bash
+memory_benchmark -benchmark -only-latency -count 5 -sweep buffersize=256,512,1024 -sweep latency-stride-bytes=64,256 -output latency_sweep.json
+```
+
+The command above creates six runs and stores each run's normal benchmark JSON under `runs[].result`.
+
 ---
 
 ## Understanding Console Output
@@ -562,6 +595,36 @@ Note: The `configuration` block includes fields such as `latency_chain_mode` (th
   "execution_time_sec": 705.6,
   "patterns": { ... },
   "timestamp": "2026-03-09T15:10:01Z",
+  "version": "0.55.4"
+}
+```
+
+### Sweep JSON shape
+
+```json
+{
+  "configuration": {
+    "mode": "sweep",
+    "base_mode": "benchmark",
+    "run_count": 6,
+    "sweep_max_runs": 256,
+    "sweep_parameters": {
+      "buffersize": [256, 512, 1024],
+      "latency-stride-bytes": [64, 256]
+    }
+  },
+  "runs": [
+    {
+      "index": 0,
+      "parameters": {
+        "buffersize": 256,
+        "latency-stride-bytes": 64
+      },
+      "result": { "...": "normal benchmark, pattern, or TLB JSON payload" }
+    }
+  ],
+  "execution_time_sec": 123.4,
+  "timestamp": "2026-04-29T12:00:00Z",
   "version": "0.55.4"
 }
 ```

@@ -46,6 +46,73 @@
 #include <limits>
 #include <cstdlib>
 
+namespace {
+
+size_t calculate_sweep_run_count(const BenchmarkConfig& config) {
+  size_t run_count = 1;
+  for (const SweepSpec& spec : config.sweep_specs) {
+    if (spec.values.empty()) {
+      return 0;
+    }
+    if (run_count > std::numeric_limits<size_t>::max() / spec.values.size()) {
+      return std::numeric_limits<size_t>::max();
+    }
+    run_count *= spec.values.size();
+  }
+  return run_count;
+}
+
+bool sweep_parameter_allowed(const BenchmarkConfig& config, SweepParameter parameter) {
+  if (config.analyze_tlb) {
+    return parameter == SweepParameter::LatencyStrideBytes ||
+           parameter == SweepParameter::LatencyChainMode ||
+           parameter == SweepParameter::TlbDensity;
+  }
+
+  if (config.run_patterns) {
+    return parameter == SweepParameter::BufferSizeMb ||
+           parameter == SweepParameter::Threads;
+  }
+
+  if (config.only_bandwidth) {
+    return parameter == SweepParameter::BufferSizeMb ||
+           parameter == SweepParameter::Threads;
+  }
+
+  if (config.only_latency) {
+    return parameter == SweepParameter::BufferSizeMb ||
+           parameter == SweepParameter::CacheSizeKb ||
+           parameter == SweepParameter::LatencyTlbLocalityKb ||
+           parameter == SweepParameter::LatencyStrideBytes ||
+           parameter == SweepParameter::LatencyChainMode;
+  }
+
+  return parameter == SweepParameter::BufferSizeMb ||
+         parameter == SweepParameter::CacheSizeKb ||
+         parameter == SweepParameter::Threads ||
+         parameter == SweepParameter::LatencyTlbLocalityKb ||
+         parameter == SweepParameter::LatencyStrideBytes ||
+         parameter == SweepParameter::LatencyChainMode;
+}
+
+std::string mode_name_for_sweep(const BenchmarkConfig& config) {
+  if (config.analyze_tlb) {
+    return "-analyze-tlb";
+  }
+  if (config.run_patterns) {
+    return "-patterns";
+  }
+  if (config.only_bandwidth) {
+    return "-benchmark -only-bandwidth";
+  }
+  if (config.only_latency) {
+    return "-benchmark -only-latency";
+  }
+  return "-benchmark";
+}
+
+}  // namespace
+
 /**
  * @brief Error Handling Strategy for this module:
  * 
@@ -66,6 +133,45 @@
  * Callers should check return value and handle EXIT_FAILURE appropriately.
  */
 int validate_config(BenchmarkConfig& config) {
+  if (config.run_sweep) {
+    if (config.sweep_specs.empty()) {
+      std::cerr << Messages::error_prefix() << Messages::error_sweep_requires_parameter() << std::endl;
+      return EXIT_FAILURE;
+    }
+    if (config.output_file.empty()) {
+      std::cerr << Messages::error_prefix() << Messages::error_sweep_requires_output() << std::endl;
+      return EXIT_FAILURE;
+    }
+
+    const std::string mode_name = mode_name_for_sweep(config);
+    for (const SweepSpec& spec : config.sweep_specs) {
+      if (!sweep_parameter_allowed(config, spec.parameter)) {
+        std::cerr << Messages::error_prefix()
+                  << Messages::error_sweep_parameter_not_allowed(spec.parameter_name, mode_name)
+                  << std::endl;
+        return EXIT_FAILURE;
+      }
+      if (config.analyze_tlb && spec.parameter == SweepParameter::LatencyChainMode) {
+        for (const SweepValue& value : spec.values) {
+          if (value.latency_chain_mode == LatencyChainMode::GlobalRandom) {
+            std::cerr << Messages::error_prefix()
+                      << Messages::error_analyze_tlb_global_random_unsupported()
+                      << std::endl;
+            return EXIT_FAILURE;
+          }
+        }
+      }
+    }
+
+    const size_t sweep_run_count = calculate_sweep_run_count(config);
+    if (sweep_run_count == 0 || sweep_run_count > config.sweep_max_runs) {
+      std::cerr << Messages::error_prefix()
+                << Messages::error_sweep_too_many_runs(sweep_run_count, config.sweep_max_runs)
+                << std::endl;
+      return EXIT_FAILURE;
+    }
+  }
+
   if (config.analyze_tlb) {
     return EXIT_SUCCESS;
   }

@@ -471,4 +471,30 @@ const std::string& error_only_flags_require_benchmark() {
   return msg;
 }
 
+const std::string& error_sweep_requires_parameter() {
+  static const std::string msg = "-sweep requires at least one parameter specification";
+  return msg;
+}
+
+std::string error_sweep_too_many_runs(size_t run_count, size_t max_runs) {
+  std::ostringstream oss;
+  oss << "Sweep would generate " << run_count << " runs, exceeding -sweep-max-runs " << max_runs;
+  return oss.str();
+}
+
+std::string error_sweep_parameter_not_allowed(const std::string& parameter_name,
+                                              const std::string& mode_name) {
+  return "Sweep parameter '" + parameter_name + "' is not allowed with " + mode_name;
+}
+
+const std::string& error_sweep_requires_output() {
+  static const std::string msg = "-sweep requires -output <file> for the combined JSON result";
+  return msg;
+}
+
+std::string error_sweep_temp_json_parse_failed(const std::string& file_path,
+                                               const std::string& error_details) {
+  return "Failed to read sweep run JSON from " + file_path + ": " + error_details;
+}
+
 } // namespace Messages

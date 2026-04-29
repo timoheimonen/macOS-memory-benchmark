@@ -47,6 +47,92 @@ TEST(ConfigTest, ParseValidArguments) {
   EXPECT_EQ(config.loop_count, 3);
 }
 
+TEST(ConfigTest, ParseSweepValid) {
+  BenchmarkConfig config;
+  const char* argv[] = {"program", "-benchmark", "-output", "sweep.json",
+                        "-sweep", "buffersize=128,256",
+                        "-sweep", "threads=1,2",
+                        "-sweep-max-runs", "4"};
+  int argc = 10;
+
+  int result = parse_arguments(argc, const_cast<char**>(argv), config);
+  EXPECT_EQ(result, EXIT_SUCCESS);
+  EXPECT_TRUE(config.run_sweep);
+  ASSERT_EQ(config.sweep_specs.size(), 2u);
+  EXPECT_EQ(config.sweep_specs[0].parameter, SweepParameter::BufferSizeMb);
+  EXPECT_EQ(config.sweep_specs[0].values[0].integer_value, 128);
+  EXPECT_EQ(config.sweep_specs[0].values[1].integer_value, 256);
+  EXPECT_EQ(config.sweep_specs[1].parameter, SweepParameter::Threads);
+  EXPECT_EQ(config.sweep_specs[1].values[0].integer_value, 1);
+  EXPECT_EQ(config.sweep_specs[1].values[1].integer_value, 2);
+  EXPECT_EQ(config.sweep_max_runs, 4u);
+}
+
+TEST(ConfigTest, ParseSweepRejectsUnsupportedParameter) {
+  BenchmarkConfig config;
+  const char* argv[] = {"program", "-benchmark", "-sweep", "latency-samples=100,200"};
+  int argc = 4;
+
+  int result = parse_arguments(argc, const_cast<char**>(argv), config);
+  EXPECT_EQ(result, EXIT_FAILURE);
+}
+
+TEST(ConfigTest, ValidateSweepRejectsTooManyRuns) {
+  BenchmarkConfig config;
+  config.run_benchmark = true;
+  config.run_sweep = true;
+  config.output_file = "sweep.json";
+  config.sweep_max_runs = 3;
+  config.sweep_specs = {
+      {SweepParameter::BufferSizeMb, "buffersize", {{"128"}, {"256"}}},
+      {SweepParameter::Threads, "threads", {{"1"}, {"2"}}},
+  };
+
+  int result = validate_config(config);
+  EXPECT_EQ(result, EXIT_FAILURE);
+}
+
+TEST(ConfigTest, ValidateSweepRejectsPatternCacheSize) {
+  BenchmarkConfig config;
+  config.run_patterns = true;
+  config.run_sweep = true;
+  config.output_file = "sweep.json";
+  config.sweep_specs = {
+      {SweepParameter::CacheSizeKb, "cache-size", {{"1024"}}},
+  };
+
+  int result = validate_config(config);
+  EXPECT_EQ(result, EXIT_FAILURE);
+}
+
+TEST(ConfigTest, ValidateSweepRequiresOutput) {
+  BenchmarkConfig config;
+  config.run_benchmark = true;
+  config.run_sweep = true;
+  config.sweep_specs = {
+      {SweepParameter::BufferSizeMb, "buffersize", {{"128"}}},
+  };
+
+  int result = validate_config(config);
+  EXPECT_EQ(result, EXIT_FAILURE);
+}
+
+TEST(ConfigTest, ValidateAnalyzeTlbSweepRejectsGlobalRandom) {
+  BenchmarkConfig config;
+  config.analyze_tlb = true;
+  config.run_sweep = true;
+  config.output_file = "sweep.json";
+  SweepValue value;
+  value.raw_value = "global-random";
+  value.latency_chain_mode = LatencyChainMode::GlobalRandom;
+  config.sweep_specs = {
+      {SweepParameter::LatencyChainMode, "latency-chain-mode", {value}},
+  };
+
+  int result = validate_config(config);
+  EXPECT_EQ(result, EXIT_FAILURE);
+}
+
 // Test parsing custom cache size
 // The code parses -cache-size in a first pass, then skips it in the second pass
 // (since it was already parsed). This allows -cache-size to work correctly.

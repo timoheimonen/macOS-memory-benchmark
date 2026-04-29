@@ -49,6 +49,7 @@
 #include <sstream>
 #include <cmath>
 #include <cstdlib>
+#include <vector>
 
 namespace {
 
@@ -66,6 +67,143 @@ bool tlb_sweep_density_from_string(const std::string& value, TlbSweepDensity& ou
     return true;
   }
   return false;
+}
+
+std::vector<std::string> split_comma_values(const std::string& input) {
+  std::vector<std::string> values;
+  std::stringstream stream(input);
+  std::string item;
+  while (std::getline(stream, item, ',')) {
+    values.push_back(item);
+  }
+  return values;
+}
+
+bool sweep_parameter_from_string(const std::string& value,
+                                 SweepParameter& out_parameter,
+                                 std::string& out_name) {
+  if (value == "buffersize") {
+    out_parameter = SweepParameter::BufferSizeMb;
+    out_name = "buffersize";
+    return true;
+  }
+  if (value == "cache-size") {
+    out_parameter = SweepParameter::CacheSizeKb;
+    out_name = "cache-size";
+    return true;
+  }
+  if (value == "threads") {
+    out_parameter = SweepParameter::Threads;
+    out_name = "threads";
+    return true;
+  }
+  if (value == "latency-tlb-locality-kb") {
+    out_parameter = SweepParameter::LatencyTlbLocalityKb;
+    out_name = "latency-tlb-locality-kb";
+    return true;
+  }
+  if (value == "latency-stride-bytes") {
+    out_parameter = SweepParameter::LatencyStrideBytes;
+    out_name = "latency-stride-bytes";
+    return true;
+  }
+  if (value == "latency-chain-mode") {
+    out_parameter = SweepParameter::LatencyChainMode;
+    out_name = "latency-chain-mode";
+    return true;
+  }
+  if (value == "tlb-density") {
+    out_parameter = SweepParameter::TlbDensity;
+    out_name = "tlb-density";
+    return true;
+  }
+  return false;
+}
+
+SweepSpec parse_sweep_spec(const std::string& spec_text) {
+  const size_t equals_pos = spec_text.find('=');
+  if (equals_pos == std::string::npos || equals_pos == 0 || equals_pos == spec_text.size() - 1) {
+    throw std::invalid_argument("sweep must use key=value1,value2 syntax");
+  }
+
+  const std::string key = spec_text.substr(0, equals_pos);
+  const std::string value_text = spec_text.substr(equals_pos + 1);
+
+  SweepSpec spec;
+  if (!sweep_parameter_from_string(key, spec.parameter, spec.parameter_name)) {
+    throw std::invalid_argument("unsupported sweep parameter: " + key);
+  }
+
+  const std::vector<std::string> raw_values = split_comma_values(value_text);
+  if (raw_values.empty()) {
+    throw std::invalid_argument("sweep value list cannot be empty");
+  }
+
+  for (const std::string& raw_value : raw_values) {
+    if (raw_value.empty()) {
+      throw std::invalid_argument("sweep value list cannot contain empty values");
+    }
+
+    SweepValue value;
+    value.raw_value = raw_value;
+
+    if (spec.parameter == SweepParameter::LatencyChainMode) {
+      if (!latency_chain_mode_from_string(raw_value, value.latency_chain_mode)) {
+        throw std::out_of_range(Messages::error_latency_chain_mode_invalid());
+      }
+    } else if (spec.parameter == SweepParameter::TlbDensity) {
+      if (!tlb_sweep_density_from_string(raw_value, value.tlb_sweep_density)) {
+        throw std::out_of_range("must be one of: low, medium, high");
+      }
+    } else {
+      const long long parsed = std::stoll(raw_value);
+      switch (spec.parameter) {
+        case SweepParameter::BufferSizeMb:
+          if (parsed < 0 || parsed > std::numeric_limits<unsigned long>::max()) {
+            throw std::out_of_range(Messages::error_buffersize_invalid(
+                parsed, std::numeric_limits<unsigned long>::max()));
+          }
+          break;
+        case SweepParameter::CacheSizeKb:
+          if (parsed < 0 || parsed > Constants::MAX_CACHE_SIZE_KB ||
+              (parsed > 0 && parsed < Constants::MIN_CACHE_SIZE_KB)) {
+            throw std::out_of_range(Messages::error_cache_size_invalid(
+                Constants::MIN_CACHE_SIZE_KB,
+                Constants::MAX_CACHE_SIZE_KB,
+                Constants::MAX_CACHE_SIZE_KB / 1024));
+          }
+          break;
+        case SweepParameter::Threads:
+          if (parsed <= 0 || parsed > std::numeric_limits<int>::max()) {
+            throw std::out_of_range(Messages::error_threads_invalid(
+                parsed, 1, std::numeric_limits<int>::max()));
+          }
+          break;
+        case SweepParameter::LatencyTlbLocalityKb: {
+          const long long max_locality_kb =
+              static_cast<long long>(std::numeric_limits<size_t>::max() / Constants::BYTES_PER_KB);
+          if (parsed < 0 || parsed > max_locality_kb) {
+            throw std::out_of_range(Messages::error_latency_tlb_locality_invalid(parsed, max_locality_kb));
+          }
+          break;
+        }
+        case SweepParameter::LatencyStrideBytes:
+          if (parsed <= 0) {
+            throw std::out_of_range(Messages::error_latency_stride_invalid(
+                parsed, 1, std::numeric_limits<long long>::max()));
+          }
+          break;
+        case SweepParameter::LatencyChainMode:
+        case SweepParameter::TlbDensity:
+          break;
+      }
+      value.integer_value = parsed;
+    }
+
+    spec.values.push_back(value);
+  }
+
+  return spec;
 }
 
 }  // namespace
@@ -115,6 +253,7 @@ int parse_arguments(int argc, char* argv[], BenchmarkConfig& config) {
     bool latency_stride_seen = false;
     bool latency_chain_mode_seen = false;
     bool tlb_density_seen = false;
+    bool sweep_max_runs_seen = false;
 
     for (int i = 1; i < argc; ++i) {
       const std::string arg = argv[i];
@@ -139,6 +278,71 @@ int parse_arguments(int argc, char* argv[], BenchmarkConfig& config) {
         }
         config.output_file = argv[i];
         output_seen = true;
+        continue;
+      }
+
+      if (arg == "-sweep") {
+        if (++i >= argc) {
+          std::cerr << Messages::error_prefix()
+                    << Messages::error_missing_value("-sweep")
+                    << std::endl;
+          print_usage(argv[0]);
+          return EXIT_FAILURE;
+        }
+        try {
+          config.sweep_specs.push_back(parse_sweep_spec(argv[i]));
+        } catch (const std::invalid_argument& e) {
+          std::cerr << Messages::error_prefix()
+                    << Messages::error_invalid_value(arg, argv[i], e.what())
+                    << std::endl;
+          print_usage(argv[0]);
+          return EXIT_FAILURE;
+        } catch (const std::out_of_range& e) {
+          std::cerr << Messages::error_prefix()
+                    << Messages::error_invalid_value(arg, argv[i], e.what())
+                    << std::endl;
+          print_usage(argv[0]);
+          return EXIT_FAILURE;
+        }
+        config.run_sweep = true;
+        continue;
+      }
+
+      if (arg == "-sweep-max-runs") {
+        if (sweep_max_runs_seen) {
+          std::cerr << Messages::error_prefix()
+                    << Messages::error_duplicate_option("-sweep-max-runs")
+                    << std::endl;
+          print_usage(argv[0]);
+          return EXIT_FAILURE;
+        }
+        if (++i >= argc) {
+          std::cerr << Messages::error_prefix()
+                    << Messages::error_missing_value("-sweep-max-runs")
+                    << std::endl;
+          print_usage(argv[0]);
+          return EXIT_FAILURE;
+        }
+        try {
+          const long long val_ll = std::stoll(argv[i]);
+          if (val_ll <= 0) {
+            throw std::out_of_range("must be a positive integer");
+          }
+          config.sweep_max_runs = static_cast<size_t>(val_ll);
+        } catch (const std::invalid_argument& e) {
+          std::cerr << Messages::error_prefix()
+                    << Messages::error_invalid_value(arg, argv[i], e.what())
+                    << std::endl;
+          print_usage(argv[0]);
+          return EXIT_FAILURE;
+        } catch (const std::out_of_range& e) {
+          std::cerr << Messages::error_prefix()
+                    << Messages::error_invalid_value(arg, argv[i], e.what())
+                    << std::endl;
+          print_usage(argv[0]);
+          return EXIT_FAILURE;
+        }
+        sweep_max_runs_seen = true;
         continue;
       }
 
@@ -283,6 +487,11 @@ int parse_arguments(int argc, char* argv[], BenchmarkConfig& config) {
       return EXIT_FAILURE;
     }
 
+    config.cpu_name = get_processor_name();
+    config.macos_version = get_macos_version();
+    config.perf_cores = get_performance_cores();
+    config.eff_cores = get_efficiency_cores();
+
     return EXIT_SUCCESS;
   }
   
@@ -359,6 +568,7 @@ int parse_arguments(int argc, char* argv[], BenchmarkConfig& config) {
   bool latency_tlb_locality_seen = false;
   bool threads_seen = false;
   bool output_seen = false;
+  bool sweep_max_runs_seen = false;
 
   for (int i = 1; i < argc; ++i) {
     std::string arg = argv[i];
@@ -476,6 +686,26 @@ int parse_arguments(int argc, char* argv[], BenchmarkConfig& config) {
         }
         // Silently skip - already parsed and validated in first pass
         continue;
+      } else if (arg == "-sweep") {
+        if (++i < argc) {
+          config.sweep_specs.push_back(parse_sweep_spec(argv[i]));
+          config.run_sweep = true;
+        } else {
+          throw std::invalid_argument(Messages::error_missing_value("-sweep"));
+        }
+      } else if (arg == "-sweep-max-runs") {
+        if (sweep_max_runs_seen)
+          throw std::invalid_argument(Messages::error_duplicate_option("-sweep-max-runs"));
+        if (++i < argc) {
+          long long val_ll = std::stoll(argv[i]);
+          if (val_ll <= 0) {
+            throw std::out_of_range("sweep-max-runs must be a positive integer");
+          }
+          config.sweep_max_runs = static_cast<size_t>(val_ll);
+        } else {
+          throw std::invalid_argument(Messages::error_missing_value("-sweep-max-runs"));
+        }
+        sweep_max_runs_seen = true;
       } else if (arg == "-output") {
         if (output_seen)
           throw std::invalid_argument(Messages::error_duplicate_option("-output"));

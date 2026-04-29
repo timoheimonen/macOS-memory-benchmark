@@ -41,6 +41,7 @@
 #include "core/memory/buffer_manager.h"
 #include "benchmark/benchmark_runner.h"
 #include "benchmark/core_to_core_latency.h"
+#include "benchmark/sweep_runner.h"
 #include "benchmark/tlb_analysis.h"
 #include "output/console/messages/messages_api.h"
 #include "core/config/constants.h"
@@ -115,20 +116,27 @@ int main(int argc, char *argv[]) {
     return EXIT_SUCCESS;
   }
 
-  if (config.analyze_tlb) {
-    return run_tlb_analysis(config);
-  }
-  
   // If no arguments provided, show help
   if (argc == 1) {
     print_help(argv[0]);
     return EXIT_SUCCESS;
   }
-  
-  // If no mode flag is set (neither -benchmark nor -patterns), show help
-  if (!config.run_benchmark && !config.run_patterns && !config.help_printed) {
+
+  // If no mode flag is set (neither -benchmark nor -patterns nor -analyze-tlb), show help
+  if (!config.analyze_tlb && !config.run_benchmark && !config.run_patterns && !config.help_printed) {
     print_help(argv[0]);
     return EXIT_SUCCESS;
+  }
+
+  if (config.run_sweep) {
+    if (validate_config(config) != EXIT_SUCCESS) {
+      return EXIT_FAILURE;
+    }
+    return run_sweep_mode(config);
+  }
+
+  if (config.analyze_tlb) {
+    return run_tlb_analysis(config);
   }
   
   if (validate_config(config) != EXIT_SUCCESS) {

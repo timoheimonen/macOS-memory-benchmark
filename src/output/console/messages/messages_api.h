@@ -135,6 +135,11 @@ const std::string& error_only_latency_with_buffersize();
 const std::string& error_only_latency_with_iterations();
 std::string error_mutually_exclusive_modes(const std::string& mode1, const std::string& mode2);
 const std::string& error_only_flags_require_benchmark();
+const std::string& error_sweep_requires_parameter();
+std::string error_sweep_too_many_runs(size_t run_count, size_t max_runs);
+std::string error_sweep_parameter_not_allowed(const std::string& parameter_name, const std::string& mode_name);
+const std::string& error_sweep_requires_output();
+std::string error_sweep_temp_json_parse_failed(const std::string& file_path, const std::string& error_details);
 
 // --- Warning Messages ---
 const std::string& warning_prefix();
@@ -168,6 +173,8 @@ std::string msg_results_saved_to(const std::string& file_path);
 const std::string& msg_running_tlb_analysis();
 const std::string& msg_running_core_to_core_analysis();
 const std::string& msg_interrupted_by_user();
+std::string msg_running_sweep(size_t run_count);
+std::string msg_sweep_run_progress(size_t current_run, size_t total_runs);
 std::string msg_core_to_core_scenario_progress(size_t current_loop,
                                                size_t total_loops,
                                                const std::string& scenario_name);

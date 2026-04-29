@@ -325,6 +325,23 @@ TEST_F(MessagesErrorTest, ErrorOnlyFlagsRequireBenchmark) {
   EXPECT_EQ(&msg, &Messages::error_only_flags_require_benchmark());
 }
 
+TEST_F(MessagesErrorTest, ErrorSweepMessages) {
+  EXPECT_NE(Messages::error_sweep_requires_parameter().find("-sweep"), std::string::npos);
+  EXPECT_NE(Messages::error_sweep_requires_output().find("-output"), std::string::npos);
+
+  std::string too_many = Messages::error_sweep_too_many_runs(12, 10);
+  EXPECT_NE(too_many.find("12"), std::string::npos);
+  EXPECT_NE(too_many.find("10"), std::string::npos);
+
+  std::string not_allowed = Messages::error_sweep_parameter_not_allowed("cache-size", "-patterns");
+  EXPECT_NE(not_allowed.find("cache-size"), std::string::npos);
+  EXPECT_NE(not_allowed.find("-patterns"), std::string::npos);
+
+  std::string parse_failed = Messages::error_sweep_temp_json_parse_failed("/tmp/run.json", "bad json");
+  EXPECT_NE(parse_failed.find("/tmp/run.json"), std::string::npos);
+  EXPECT_NE(parse_failed.find("bad json"), std::string::npos);
+}
+
 // ============================================================================
 // Warning Messages Tests (using fixture)
 // ============================================================================
@@ -383,6 +400,15 @@ TEST_F(MessagesFormattingTest, MsgInterruptedByUser) {
   EXPECT_NE(msg.find("Partial results"), std::string::npos);
   // Verify it returns a stable reference (static string)
   EXPECT_EQ(&msg, &Messages::msg_interrupted_by_user());
+}
+
+TEST_F(MessagesFormattingTest, MsgSweepProgress) {
+  std::string running = Messages::msg_running_sweep(3);
+  EXPECT_NE(running.find("Running sweep"), std::string::npos);
+  EXPECT_NE(running.find("3"), std::string::npos);
+
+  std::string progress = Messages::msg_sweep_run_progress(2, 5);
+  EXPECT_NE(progress.find("2/5"), std::string::npos);
 }
 
 TEST_F(MessagesFormattingTest, MsgDoneTotalTime) {

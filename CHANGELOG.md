@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.55.6] - Unreleased
+
+### Added
+  - **Built-in parameter sweep mode**: Added `-sweep <key=value1,value2>` for running Cartesian parameter sweeps without external shell orchestration. Supported sweep keys are `buffersize`, `cache-size`, `threads`, `latency-tlb-locality-kb`, `latency-stride-bytes`, `latency-chain-mode`, and `tlb-density`.
+  - **Combined sweep JSON output**: Sweep mode now requires `-output <file>` and writes a single JSON document with `configuration.mode: "sweep"`, the base mode, sweep parameters, per-run parameter assignments, and each run's normal benchmark/pattern/TLB JSON payload under `runs[].result`.
+  - **Sweep run guardrail**: Added `-sweep-max-runs <count>` with default `256` to prevent accidental very large Cartesian sweep runs.
+  - **Sweep parser, validator, message, and documentation coverage**: Added targeted tests for sweep parsing, compatibility validation, run-count limits, and user-facing sweep messages. Updated README, manual, capabilities documentation, help text, and source inventory for the new mode.
+
+### Changed
+  - **JSON builders can now return in-memory payloads**: Standard and pattern JSON output code now exposes builder helpers in addition to file-writing APIs so sweep mode can embed existing result payloads without temporary files.
+
 ## [0.55.5] - 2026-04-28
 
 ### Changed
