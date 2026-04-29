@@ -47,7 +47,7 @@ int parse_with_args(const std::vector<std::string>& args, CoreToCoreLatencyConfi
 TEST(CoreToCoreCliTest, ParsesDefaultStandaloneModeValues) {
   // Baseline parse should inherit defaults directly from centralized constants.
   CoreToCoreLatencyConfig config;
-  const int parse_result = parse_with_args({"memory_benchmark", "-analyze-core2core"}, config);
+  const int parse_result = parse_with_args({"memory_benchmark", "--analyze-core2core"}, config);
 
   EXPECT_EQ(parse_result, EXIT_SUCCESS);
   EXPECT_FALSE(config.help_requested);
@@ -61,14 +61,26 @@ TEST(CoreToCoreCliTest, ParsesOptionalModeArguments) {
   CoreToCoreLatencyConfig config;
   const int parse_result =
       parse_with_args({"memory_benchmark",
-                       "-analyze-core2core",
-                       "-count",
+                       "--analyze-core2core",
+                       "--count",
                        "5",
-                       "-latency-samples",
+                       "--latency-samples",
                        "128",
-                       "-output",
+                       "--output",
                        "core2core.json"},
                       config);
+
+  EXPECT_EQ(parse_result, EXIT_SUCCESS);
+  EXPECT_FALSE(config.help_requested);
+  EXPECT_EQ(config.loop_count, 5);
+  EXPECT_EQ(config.latency_sample_count, 128);
+  EXPECT_EQ(config.output_file, "core2core.json");
+}
+
+TEST(CoreToCoreCliTest, ParsesShortModeArguments) {
+  CoreToCoreLatencyConfig config;
+  const int parse_result =
+      parse_with_args({"memory_benchmark", "-C", "-r", "5", "-n", "128", "-o", "core2core.json"}, config);
 
   EXPECT_EQ(parse_result, EXIT_SUCCESS);
   EXPECT_FALSE(config.help_requested);
@@ -81,14 +93,14 @@ TEST(CoreToCoreCliTest, ParsesSweepArguments) {
   CoreToCoreLatencyConfig config;
   const int parse_result =
       parse_with_args({"memory_benchmark",
-                       "-analyze-core2core",
-                       "-output",
+                       "--analyze-core2core",
+                       "--output",
                        "core2core_sweep.json",
-                       "-sweep",
+                       "--sweep",
                        "count=1,2",
-                       "-sweep",
+                       "--sweep",
                        "latency-samples=4,8",
-                       "-sweep-max-runs",
+                       "--sweep-max-runs",
                        "4"},
                       config);
 
@@ -109,10 +121,10 @@ TEST(CoreToCoreCliTest, RejectsUnsupportedSweepParameter) {
   CoreToCoreLatencyConfig config;
   const int parse_result =
       parse_with_args({"memory_benchmark",
-                       "-analyze-core2core",
-                       "-output",
+                       "--analyze-core2core",
+                       "--output",
                        "core2core_sweep.json",
-                       "-sweep",
+                       "--sweep",
                        "threads=1,2"},
                       config);
 
@@ -122,7 +134,7 @@ TEST(CoreToCoreCliTest, RejectsUnsupportedSweepParameter) {
 TEST(CoreToCoreCliTest, RejectsSweepWithoutOutput) {
   CoreToCoreLatencyConfig config;
   const int parse_result =
-      parse_with_args({"memory_benchmark", "-analyze-core2core", "-sweep", "count=1,2"}, config);
+      parse_with_args({"memory_benchmark", "--analyze-core2core", "--sweep", "count=1,2"}, config);
 
   EXPECT_EQ(parse_result, EXIT_FAILURE);
 }
@@ -131,14 +143,14 @@ TEST(CoreToCoreCliTest, RejectsSweepExceedingMaxRuns) {
   CoreToCoreLatencyConfig config;
   const int parse_result =
       parse_with_args({"memory_benchmark",
-                       "-analyze-core2core",
-                       "-output",
+                       "--analyze-core2core",
+                       "--output",
                        "core2core_sweep.json",
-                       "-sweep",
+                       "--sweep",
                        "count=1,2",
-                       "-sweep",
+                       "--sweep",
                        "latency-samples=4,8",
-                       "-sweep-max-runs",
+                       "--sweep-max-runs",
                        "3"},
                       config);
 
@@ -149,7 +161,7 @@ TEST(CoreToCoreCliTest, RejectsUnknownOptionsInStandaloneMode) {
   // Standalone mode must reject standard benchmark options.
   CoreToCoreLatencyConfig config;
   const int parse_result = parse_with_args(
-      {"memory_benchmark", "-analyze-core2core", "-buffersize", "256"},
+      {"memory_benchmark", "--analyze-core2core", "--buffer-size", "256"},
       config);
 
   EXPECT_EQ(parse_result, EXIT_FAILURE);
@@ -159,7 +171,7 @@ TEST(CoreToCoreCliTest, RejectsInvalidCountValues) {
   // Count must be a positive integer.
   CoreToCoreLatencyConfig config;
   const int parse_result =
-      parse_with_args({"memory_benchmark", "-analyze-core2core", "-count", "0"}, config);
+      parse_with_args({"memory_benchmark", "--analyze-core2core", "--count", "0"}, config);
 
   EXPECT_EQ(parse_result, EXIT_FAILURE);
 }
@@ -168,7 +180,7 @@ TEST(CoreToCoreCliTest, HelpFlagReturnsSuccessAndSetsHelpRequested) {
   // Help should short-circuit with success and mark help flag in config.
   CoreToCoreLatencyConfig config;
   const int parse_result = parse_with_args(
-      {"memory_benchmark", "-analyze-core2core", "-h"},
+      {"memory_benchmark", "--analyze-core2core", "-h"},
       config);
 
   EXPECT_EQ(parse_result, EXIT_SUCCESS);

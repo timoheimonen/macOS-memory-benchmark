@@ -25,7 +25,7 @@ LOOP_COUNT="${LOOP_COUNT:-5}"
 # Keep main-memory latency disabled for cache-focused sweeps.
 MAIN_BUFFER_MB="${MAIN_BUFFER_MB:-0}"
 
-# Set to "1" to add -non-cacheable.
+# Set to "1" to add --non-cacheable.
 USE_NON_CACHEABLE="${USE_NON_CACHEABLE:-0}"
 
 # Default sweep knobs. Override by editing arrays below.
@@ -45,8 +45,8 @@ elif ! command -v "${BENCHMARK_CMD}" >/dev/null 2>&1; then
 fi
 
 help_text="$("${BENCHMARK_CMD}" -h 2>&1 || true)"
-if [[ "${help_text}" != *"-latency-stride-bytes"* ]]; then
-  echo "Error: selected benchmark does not support -latency-stride-bytes"
+if [[ "${help_text}" != *"--latency-stride-bytes"* ]]; then
+  echo "Error: selected benchmark does not support --latency-stride-bytes"
   echo "Selected command: ${BENCHMARK_CMD}"
   echo "Tip: use the newer local binary, e.g. BENCHMARK_CMD=${SCRIPT_DIR}/../memory_benchmark"
   exit 1
@@ -66,10 +66,10 @@ echo "  Output directory: ${RUN_DIR}"
 echo "  Cache sizes (KB): ${cache_sizes_kb[*]}"
 echo "  TLB locality (KB): ${tlb_locality_kb[*]}"
 echo "  Strides (bytes): ${latency_strides_bytes[*]}"
-echo "  -buffersize: ${MAIN_BUFFER_MB} MB"
-echo "  -latency-samples: ${LATENCY_SAMPLES}"
-echo "  -count: ${LOOP_COUNT}"
-echo "  -non-cacheable: ${USE_NON_CACHEABLE}"
+echo "  --buffer-size: ${MAIN_BUFFER_MB} MB"
+echo "  --latency-samples: ${LATENCY_SAMPLES}"
+echo "  --count: ${LOOP_COUNT}"
+echo "  --non-cacheable: ${USE_NON_CACHEABLE}"
 
 for stride in "${latency_strides_bytes[@]}"; do
   for tlb_kb in "${tlb_locality_kb[@]}"; do
@@ -81,19 +81,19 @@ for stride in "${latency_strides_bytes[@]}"; do
 
       cmd=(
         "${BENCHMARK_CMD}"
-        -benchmark
-        -only-latency
-        -buffersize "${MAIN_BUFFER_MB}"
-        -cache-size "${cache_kb}"
-        -latency-samples "${LATENCY_SAMPLES}"
-        -count "${LOOP_COUNT}"
-        -latency-tlb-locality-kb "${tlb_kb}"
-        -latency-stride-bytes "${stride}"
-        -output "${output_file}"
+        --benchmark
+        --only-latency
+        --buffer-size "${MAIN_BUFFER_MB}"
+        --cache-size "${cache_kb}"
+        --latency-samples "${LATENCY_SAMPLES}"
+        --count "${LOOP_COUNT}"
+        --latency-tlb-locality-kb "${tlb_kb}"
+        --latency-stride-bytes "${stride}"
+        --output "${output_file}"
       )
 
       if [ "${USE_NON_CACHEABLE}" = "1" ]; then
-        cmd+=("-non-cacheable")
+        cmd+=("--non-cacheable")
       fi
 
       echo ""

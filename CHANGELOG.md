@@ -8,13 +8,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.56.0] - Unreleased
 
 ### Added
-  - **Built-in parameter sweep mode**: Added `-sweep <key=value1,value2>` for running Cartesian parameter sweeps without external shell orchestration. Supported sweep keys are `buffersize`, `cache-size`, `threads`, `latency-tlb-locality-kb`, `latency-stride-bytes`, `latency-chain-mode`, `tlb-density`, and core-to-core `count` / `latency-samples`.
-  - **Core-to-core sweep support**: `-analyze-core2core` now supports V1 sweep mode for loop count and sample-depth experiments using `-sweep count=...` and `-sweep latency-samples=...`.
-  - **Combined sweep JSON output**: Sweep mode now requires `-output <file>` and writes a single JSON document with `configuration.mode: "sweep"`, the base mode, sweep parameters, per-run parameter assignments, and each run's normal benchmark/pattern/TLB/core-to-core JSON payload under `runs[].result`.
-  - **Sweep run guardrail**: Added `-sweep-max-runs <count>` with default `256` to prevent accidental very large Cartesian sweep runs.
+  - **Built-in parameter sweep mode**: Added `--sweep <key=value1,value2>` for running Cartesian parameter sweeps without external shell orchestration. Supported sweep keys are `buffer-size`, `cache-size`, `threads`, `latency-tlb-locality-kb`, `latency-stride-bytes`, `latency-chain-mode`, `tlb-density`, and core-to-core `count` / `latency-samples`.
+  - **Core-to-core sweep support**: `--analyze-core2core` now supports V1 sweep mode for loop count and sample-depth experiments using `--sweep count=...` and `--sweep latency-samples=...`.
+  - **Combined sweep JSON output**: Sweep mode now requires `--output <file>` and writes a single JSON document with `configuration.mode: "sweep"`, the base mode, sweep parameters, per-run parameter assignments, and each run's normal benchmark/pattern/TLB/core-to-core JSON payload under `runs[].result`.
+  - **Sweep run guardrail**: Added `--sweep-max-runs <count>` with default `256` to prevent accidental very large Cartesian sweep runs.
   - **Sweep parser, validator, message, and documentation coverage**: Added targeted tests for sweep parsing, compatibility validation, run-count limits, and user-facing sweep messages. Updated README, manual, capabilities documentation, help text, and source inventory for the new mode.
 
 ### Changed
+  - **CLI option spelling normalized as a breaking change**: Long options now require GNU-style `--long-option` spelling, and one-dash long forms such as `-benchmark` and `-buffersize` are invalid. One-character short aliases were added for all options (`-B/--benchmark`, `-b/--buffer-size`, `-o/--output`, etc.).
   - **JSON builders can now return in-memory payloads**: Standard, pattern, and core-to-core JSON output code now exposes builder helpers in addition to file-writing APIs so sweep mode can embed existing result payloads without temporary files.
 
 ## [0.55.5] - 2026-04-28

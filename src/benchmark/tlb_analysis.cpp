@@ -431,7 +431,7 @@ LocalityMeasureStatus measure_locality_p50(void* latency_buffer,
  * Workflow:
  * - Print program header and run banner.
  * - Allocate analysis buffer with fallback order: 1024MB -> 512MB -> 256MB.
- * - Use configured latency stride (default from `-latency-stride-bytes`).
+ * - Use configured latency stride (default from `--latency-stride-bytes`).
  * - Sweep locality windows from max(16KB, 2*stride) to 256MB and collect P50 latencies.
  * - Optionally run a separate 512MB locality pass for page-walk penalty.
  * - Infer L1/L2 boundaries and emit the TLB analysis report.

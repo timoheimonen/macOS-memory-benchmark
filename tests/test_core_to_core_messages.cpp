@@ -22,16 +22,16 @@
 
 TEST(CoreToCoreMessagesTest, UsageMentionsStandaloneMode) {
   const std::string usage = Messages::usage_options("memory_benchmark");
-  EXPECT_NE(usage.find("-analyze-core2core"), std::string::npos);
+  EXPECT_NE(usage.find("--analyze-core2core"), std::string::npos);
 }
 
 TEST(CoreToCoreMessagesTest, StandaloneModeErrorMessageExists) {
   const std::string& msg = Messages::error_analyze_core_to_core_must_be_used_alone();
-  EXPECT_NE(msg.find("-analyze-core2core"), std::string::npos);
-  EXPECT_NE(msg.find("-output"), std::string::npos);
-  EXPECT_NE(msg.find("-count"), std::string::npos);
-  EXPECT_NE(msg.find("-latency-samples"), std::string::npos);
-  EXPECT_NE(msg.find("-sweep"), std::string::npos);
+  EXPECT_NE(msg.find("--analyze-core2core"), std::string::npos);
+  EXPECT_NE(msg.find("--output"), std::string::npos);
+  EXPECT_NE(msg.find("--count"), std::string::npos);
+  EXPECT_NE(msg.find("--latency-samples"), std::string::npos);
+  EXPECT_NE(msg.find("--sweep"), std::string::npos);
 }
 
 TEST(CoreToCoreMessagesTest, HintStatusMessageContainsRoleAndCodes) {

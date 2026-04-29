@@ -77,7 +77,7 @@ TEST_P(MessagesErrorMissingValueTest, ErrorMissingValue) {
 INSTANTIATE_TEST_SUITE_P(
   ErrorMissingValueVariants,
   MessagesErrorMissingValueTest,
-  ::testing::Values("-iterations", "-buffersize", "-count", "-cache-size")
+  ::testing::Values("--iterations", "--buffer-size", "--count", "--cache-size")
 );
 
 // Parameterized test for error_unknown_option
@@ -110,9 +110,9 @@ INSTANTIATE_TEST_SUITE_P(
   ErrorInvalidValueVariants,
   MessagesErrorInvalidValueTest,
   ::testing::Values(
-    std::make_tuple("-iterations", "abc", "must be a number"),
-    std::make_tuple("-cache-size", "-1", "must be positive"),
-    std::make_tuple("-buffersize", "0", "must be greater than zero")
+    std::make_tuple("--iterations", "abc", "must be a number"),
+    std::make_tuple("--cache-size", "-1", "must be positive"),
+    std::make_tuple("--buffer-size", "0", "must be greater than zero")
   )
 );
 
@@ -224,11 +224,11 @@ TEST_F(MessagesErrorTest, ErrorIterationsInvalid) {
 
 TEST_F(MessagesErrorTest, ErrorBuffersizeInvalid) {
   std::string msg = Messages::error_buffersize_invalid(-100, 18446744073709551615UL);
-  EXPECT_TRUE(msg.find("buffersize invalid") != std::string::npos);
+  EXPECT_TRUE(msg.find("buffer-size invalid") != std::string::npos);
   EXPECT_TRUE(msg.find("got -100") != std::string::npos);
   // Test with zero
   std::string msg2 = Messages::error_buffersize_invalid(0, 1000);
-  EXPECT_EQ(msg2, "buffersize invalid (must be >= 0 and <= 1000, got 0)");
+  EXPECT_EQ(msg2, "buffer-size invalid (must be >= 0 and <= 1000, got 0)");
 }
 
 TEST_F(MessagesErrorTest, ErrorCountInvalid) {
@@ -271,12 +271,12 @@ TEST_F(MessagesErrorTest, ErrorLatencyChainModeInvalid) {
 
 TEST_F(MessagesErrorTest, ErrorLatencyChainModeRequiresLocality) {
   std::string msg = Messages::error_latency_chain_mode_requires_locality("same-random-in-box-increasing-box");
-  EXPECT_NE(msg.find("requires -latency-tlb-locality-kb > 0"), std::string::npos);
+  EXPECT_NE(msg.find("requires --latency-tlb-locality-kb > 0"), std::string::npos);
 }
 
 TEST_F(MessagesErrorTest, ErrorAnalyzeTlbGlobalRandomUnsupported) {
   const std::string& msg = Messages::error_analyze_tlb_global_random_unsupported();
-  EXPECT_NE(msg.find("-analyze-tlb"), std::string::npos);
+  EXPECT_NE(msg.find("--analyze-tlb"), std::string::npos);
   EXPECT_NE(msg.find("global-random"), std::string::npos);
 }
 
@@ -293,10 +293,10 @@ TEST_F(MessagesErrorTest, ErrorLatencyTlbLocalityTooSmallForStride) {
 
 TEST_F(MessagesErrorTest, ErrorAnalyzeTlbMustBeUsedAlone) {
   const std::string& msg = Messages::error_analyze_tlb_must_be_used_alone();
-  EXPECT_NE(msg.find("-analyze-tlb"), std::string::npos);
-  EXPECT_NE(msg.find("-output"), std::string::npos);
-  EXPECT_NE(msg.find("-latency-stride-bytes"), std::string::npos);
-  EXPECT_NE(msg.find("-tlb-density"), std::string::npos);
+  EXPECT_NE(msg.find("--analyze-tlb"), std::string::npos);
+  EXPECT_NE(msg.find("--output"), std::string::npos);
+  EXPECT_NE(msg.find("--latency-stride-bytes"), std::string::npos);
+  EXPECT_NE(msg.find("--tlb-density"), std::string::npos);
 }
 
 TEST_F(MessagesErrorTest, ErrorMadviseFailed) {
@@ -319,23 +319,23 @@ TEST_F(MessagesErrorTest, ErrorTimerCreationFailed) {
 
 TEST_F(MessagesErrorTest, ErrorOnlyFlagsRequireBenchmark) {
   const std::string& msg = Messages::error_only_flags_require_benchmark();
-  EXPECT_NE(msg.find("-only-bandwidth"), std::string::npos);
-  EXPECT_NE(msg.find("-only-latency"), std::string::npos);
-  EXPECT_NE(msg.find("-benchmark"), std::string::npos);
+  EXPECT_NE(msg.find("--only-bandwidth"), std::string::npos);
+  EXPECT_NE(msg.find("--only-latency"), std::string::npos);
+  EXPECT_NE(msg.find("--benchmark"), std::string::npos);
   EXPECT_EQ(&msg, &Messages::error_only_flags_require_benchmark());
 }
 
 TEST_F(MessagesErrorTest, ErrorSweepMessages) {
-  EXPECT_NE(Messages::error_sweep_requires_parameter().find("-sweep"), std::string::npos);
-  EXPECT_NE(Messages::error_sweep_requires_output().find("-output"), std::string::npos);
+  EXPECT_NE(Messages::error_sweep_requires_parameter().find("--sweep"), std::string::npos);
+  EXPECT_NE(Messages::error_sweep_requires_output().find("--output"), std::string::npos);
 
   std::string too_many = Messages::error_sweep_too_many_runs(12, 10);
   EXPECT_NE(too_many.find("12"), std::string::npos);
   EXPECT_NE(too_many.find("10"), std::string::npos);
 
-  std::string not_allowed = Messages::error_sweep_parameter_not_allowed("cache-size", "-patterns");
+  std::string not_allowed = Messages::error_sweep_parameter_not_allowed("cache-size", "--patterns");
   EXPECT_NE(not_allowed.find("cache-size"), std::string::npos);
-  EXPECT_NE(not_allowed.find("-patterns"), std::string::npos);
+  EXPECT_NE(not_allowed.find("--patterns"), std::string::npos);
 
   std::string parse_failed = Messages::error_sweep_temp_json_parse_failed("/tmp/run.json", "bad json");
   EXPECT_NE(parse_failed.find("/tmp/run.json"), std::string::npos);
@@ -572,17 +572,17 @@ TEST_F(MessagesFormattingTest, UsageHeader) {
 TEST_F(MessagesFormattingTest, UsageOptions) {
   std::string msg = Messages::usage_options("memory_benchmark");
   EXPECT_NE(msg.find("memory_benchmark"), std::string::npos);
-  EXPECT_NE(msg.find("-benchmark"), std::string::npos);
-  EXPECT_NE(msg.find("-iterations"), std::string::npos);
-  EXPECT_NE(msg.find("-buffersize"), std::string::npos);
-  EXPECT_NE(msg.find("-count"), std::string::npos);
-  EXPECT_NE(msg.find("-analyze-tlb"), std::string::npos);
-  EXPECT_NE(msg.find("-tlb-density"), std::string::npos);
-  EXPECT_NE(msg.find("-latency-samples"), std::string::npos);
-  EXPECT_NE(msg.find("-latency-stride-bytes"), std::string::npos);
-  EXPECT_NE(msg.find("-latency-chain-mode"), std::string::npos);
-  EXPECT_NE(msg.find("-latency-tlb-locality-kb"), std::string::npos);
-  EXPECT_NE(msg.find("-cache-size"), std::string::npos);
+  EXPECT_NE(msg.find("--benchmark"), std::string::npos);
+  EXPECT_NE(msg.find("--iterations"), std::string::npos);
+  EXPECT_NE(msg.find("--buffer-size"), std::string::npos);
+  EXPECT_NE(msg.find("--count"), std::string::npos);
+  EXPECT_NE(msg.find("--analyze-tlb"), std::string::npos);
+  EXPECT_NE(msg.find("--tlb-density"), std::string::npos);
+  EXPECT_NE(msg.find("--latency-samples"), std::string::npos);
+  EXPECT_NE(msg.find("--latency-stride-bytes"), std::string::npos);
+  EXPECT_NE(msg.find("--latency-chain-mode"), std::string::npos);
+  EXPECT_NE(msg.find("--latency-tlb-locality-kb"), std::string::npos);
+  EXPECT_NE(msg.find("--cache-size"), std::string::npos);
   EXPECT_NE(msg.find("-h"), std::string::npos);
   // Check that default values are included
   EXPECT_NE(msg.find(std::to_string(Constants::DEFAULT_ITERATIONS)), std::string::npos);
@@ -596,9 +596,9 @@ TEST_F(MessagesFormattingTest, UsageOptions) {
 TEST_F(MessagesFormattingTest, UsageExample) {
   std::string msg = Messages::usage_example("memory_benchmark");
   EXPECT_NE(msg.find("memory_benchmark"), std::string::npos);
-  EXPECT_NE(msg.find("-iterations"), std::string::npos);
-  EXPECT_NE(msg.find("-buffersize"), std::string::npos);
-  EXPECT_NE(msg.find("-output"), std::string::npos);
+  EXPECT_NE(msg.find("--iterations"), std::string::npos);
+  EXPECT_NE(msg.find("--buffer-size"), std::string::npos);
+  EXPECT_NE(msg.find("--output"), std::string::npos);
 }
 
 // ============================================================================

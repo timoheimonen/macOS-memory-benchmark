@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import argparse
 import json
+import sys
 from pathlib import Path
 
 import matplotlib.pyplot as plt
@@ -8,12 +9,12 @@ import matplotlib.pyplot as plt
 
 def parse_args():
   parser = argparse.ArgumentParser(
-      description="Plot locality-vs-latency trend from -analyze-tlb JSON output.")
+      description="Plot locality-vs-latency trend from --analyze-tlb JSON output.")
   parser.add_argument(
-      "-file",
+      "-f",
       "--file",
       default="macminim4_analyte-tbl.json",
-      help="Path to -analyze-tlb JSON file (default: macminim4_analyte-tbl.json)")
+      help="Path to --analyze-tlb JSON file (default: macminim4_analyte-tbl.json)")
   parser.add_argument(
       "--save",
       default=None,
@@ -22,6 +23,9 @@ def parse_args():
       "--no-show",
       action="store_true",
       help="Do not open an interactive plot window")
+  for arg in sys.argv[1:]:
+    if arg.startswith("-file"):
+      parser.error("legacy option '-file' is no longer supported; use '-f' or '--file'")
   return parser.parse_args()
 
 

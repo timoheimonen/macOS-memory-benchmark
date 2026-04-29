@@ -64,10 +64,10 @@
  * 5. Outputs results to console and optionally to JSON file
  *
  * The program supports multiple execution modes:
- * - Bandwidth-only measurements (--bandwidth-only)
- * - Latency-only measurements (--latency-only)
+ * - Bandwidth-only measurements (--only-bandwidth)
+ * - Latency-only measurements (--only-latency)
  * - Pattern-specific benchmarks (--patterns)
- * - Multiple loop iterations for statistical analysis (--loops)
+ * - Multiple loop iterations for statistical analysis (--count)
  *
  * @param argc Number of command-line arguments
  * @param argv Array of command-line argument strings
@@ -88,7 +88,8 @@ int main(int argc, char *argv[]) {
   install_signal_handlers();
 
   for (int i = 1; i < argc; ++i) {
-    if (std::string(argv[i]) == "-analyze-core2core") {
+    const std::string arg = argv[i];
+    if (arg == "-C" || arg == "--analyze-core2core") {
       return run_core_to_core_latency_mode(argc, argv);
     }
   }
@@ -122,7 +123,7 @@ int main(int argc, char *argv[]) {
     return EXIT_SUCCESS;
   }
 
-  // If no mode flag is set (neither -benchmark nor -patterns nor -analyze-tlb), show help
+  // If no mode flag is set (neither --benchmark nor --patterns nor --analyze-tlb), show help
   if (!config.analyze_tlb && !config.run_benchmark && !config.run_patterns && !config.help_printed) {
     print_help(argv[0]);
     return EXIT_SUCCESS;

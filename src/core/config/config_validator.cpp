@@ -97,18 +97,18 @@ bool sweep_parameter_allowed(const BenchmarkConfig& config, SweepParameter param
 
 std::string mode_name_for_sweep(const BenchmarkConfig& config) {
   if (config.analyze_tlb) {
-    return "-analyze-tlb";
+    return "--analyze-tlb";
   }
   if (config.run_patterns) {
-    return "-patterns";
+    return "--patterns";
   }
   if (config.only_bandwidth) {
-    return "-benchmark -only-bandwidth";
+    return "--benchmark --only-bandwidth";
   }
   if (config.only_latency) {
-    return "-benchmark -only-latency";
+    return "--benchmark --only-latency";
   }
-  return "-benchmark";
+  return "--benchmark";
 }
 
 }  // namespace
@@ -211,13 +211,13 @@ int validate_config(BenchmarkConfig& config) {
     return EXIT_FAILURE;  // Return code: validation error
   }
   
-  // Error: Validate flags with -patterns
+  // Error: Validate flags with --patterns
   if (config.run_patterns && (config.only_bandwidth || config.only_latency)) {
     std::cerr << Messages::error_prefix() << Messages::error_only_flags_with_patterns() << std::endl;
     return EXIT_FAILURE;  // Return code: validation error
   }
   
-  // Error: Validate -only-bandwidth and -only-latency require -benchmark
+  // Error: Validate --only-bandwidth and --only-latency require --benchmark
   if (!config.run_benchmark && !config.run_patterns) {
     if (config.only_bandwidth || config.only_latency) {
       std::cerr << Messages::error_prefix()
@@ -227,7 +227,7 @@ int validate_config(BenchmarkConfig& config) {
     }
   }
   
-  // Error: Validate -only-bandwidth incompatibilities
+  // Error: Validate --only-bandwidth incompatibilities
   if (config.only_bandwidth) {
     if (config.use_custom_cache_size) {
       std::cerr << Messages::error_prefix() << Messages::error_only_bandwidth_with_cache_size() << std::endl;
@@ -239,7 +239,7 @@ int validate_config(BenchmarkConfig& config) {
     }
   }
   
-  // Error: Validate -only-latency incompatibilities
+  // Error: Validate --only-latency incompatibilities
   if (config.only_latency) {
     if (config.user_specified_iterations) {
       std::cerr << Messages::error_prefix() << Messages::error_only_latency_with_iterations() << std::endl;
@@ -287,7 +287,7 @@ int validate_config(BenchmarkConfig& config) {
     }
   }
 
-  // Zero-size disabling behavior is only supported with -only-latency.
+  // Zero-size disabling behavior is only supported with --only-latency.
   const bool cache_latency_disabled = (config.custom_cache_size_kb_ll == 0);
   const bool main_latency_disabled = (config.buffer_size_mb == 0);
 
@@ -383,7 +383,7 @@ int validate_config(BenchmarkConfig& config) {
   }
   
   // Error: Buffer size must meet minimum requirements (page size and minimum latency buffer size)
-  // Skip this check when main memory latency is explicitly disabled (-only-latency with -buffersize 0).
+  // Skip this check when main memory latency is explicitly disabled (--only-latency with --buffer-size 0).
   if (config.buffer_size_mb > 0 &&
       (config.buffer_size < page_size || (config.buffer_size / config.latency_stride_bytes) < 2)) {
     std::cerr << Messages::error_prefix() << Messages::error_buffer_size_too_small(config.buffer_size) << std::endl;
