@@ -24,16 +24,37 @@
 #ifndef CORE_TO_CORE_LATENCY_H
 #define CORE_TO_CORE_LATENCY_H
 
+#include <cstddef>
 #include <string>
 #include <vector>
 
 #include "core/config/constants.h"
+#include "third_party/nlohmann/json.hpp"
+
+enum class CoreToCoreSweepParameter {
+  Count = 0,
+  LatencySamples,
+};
+
+struct CoreToCoreSweepValue {
+  std::string raw_value;
+  int integer_value = 0;
+};
+
+struct CoreToCoreSweepSpec {
+  CoreToCoreSweepParameter parameter = CoreToCoreSweepParameter::Count;
+  std::string parameter_name;
+  std::vector<CoreToCoreSweepValue> values;
+};
 
 struct CoreToCoreLatencyConfig {
   int loop_count = Constants::CORE_TO_CORE_DEFAULT_LOOP_COUNT;
   int latency_sample_count = Constants::CORE_TO_CORE_DEFAULT_LATENCY_SAMPLE_COUNT;
   std::string output_file;
   bool help_requested = false;
+  bool run_sweep = false;
+  size_t sweep_max_runs = Constants::DEFAULT_SWEEP_MAX_RUNS;
+  std::vector<CoreToCoreSweepSpec> sweep_specs;
 };
 
 struct ThreadHintStatus {
@@ -68,6 +89,15 @@ int parse_core_to_core_mode_arguments(int argc, char* argv[], CoreToCoreLatencyC
  * @return EXIT_SUCCESS on success, EXIT_FAILURE on runtime/IO error.
  */
 int run_core_to_core_latency(const CoreToCoreLatencyConfig& config);
+
+/**
+ * @brief Run standalone core-to-core benchmark and return its JSON payload in memory.
+ * @param config Parsed mode configuration.
+ * @param[out] result_json JSON payload with the normal core-to-core schema.
+ * @return EXIT_SUCCESS on success, EXIT_FAILURE on runtime error.
+ */
+int run_core_to_core_latency_collect(const CoreToCoreLatencyConfig& config,
+                                     nlohmann::ordered_json& result_json);
 
 /**
  * @brief Parse and run standalone core-to-core mode from main().

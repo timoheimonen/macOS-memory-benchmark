@@ -14,21 +14,20 @@
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 //
 /**
- * @file version.h
- * @brief Software version information
- * @author Timo Heimonen <timo.heimonen@proton.me>
- * @date 2026
- *
- * This header defines the software version number.
+ * @file core_to_core_sweep_runner.h
+ * @brief Core-to-core parameter sweep runner.
  */
-#ifndef VERSION_H
-#define VERSION_H
 
-// --- Version Information ---
-/**
- * @def SOFTVERSION
- * @brief Software version number (semantic versioning format as string)
- */
-#define SOFTVERSION "0.56.0"
+#ifndef CORE_TO_CORE_SWEEP_RUNNER_H
+#define CORE_TO_CORE_SWEEP_RUNNER_H
 
-#endif // VERSION_H
+#include <cstddef>
+#include <cstdlib>
+
+struct CoreToCoreLatencyConfig;
+
+size_t calculate_core_to_core_sweep_run_count(const CoreToCoreLatencyConfig& config);
+
+int run_core_to_core_latency_sweep(const CoreToCoreLatencyConfig& base_config);
+
+#endif  // CORE_TO_CORE_SWEEP_RUNNER_H

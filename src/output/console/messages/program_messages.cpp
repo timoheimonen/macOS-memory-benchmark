@@ -136,7 +136,8 @@ std::string usage_options(const std::string& prog_name) {
       << "                        low = 15-point base sweep, no refinement. medium = 15-point base + refinement.\n"
       << "                        high = 29-point base + refinement.\n"
       << "  -analyze-core2core    Run standalone core-to-core cache-line handoff benchmark mode\n"
-      << "                        (allows optional -output <file>, -count <count>, and -latency-samples <count> only).\n"
+      << "                        (allows optional -output <file>, -count <count>, -latency-samples <count>,\n"
+      << "                        and sweep over count or latency-samples only).\n"
       << "  -latency-samples <count> Number of latency samples to collect per test (default: " << Constants::DEFAULT_LATENCY_SAMPLE_COUNT << ")\n"
       << "  -latency-stride-bytes <bytes> Stride used by latency pointer chains (default: "
       << Constants::LATENCY_STRIDE_BYTES << " bytes).\n"
@@ -180,7 +181,8 @@ std::string usage_options(const std::string& prog_name) {
       << "  -sweep <key=a,b>      Run a Cartesian sweep over one parameter. Repeat for multiple\n"
       << "                        parameters. Supported keys: buffersize, cache-size, threads,\n"
       << "                        latency-tlb-locality-kb, latency-stride-bytes,\n"
-      << "                        latency-chain-mode, tlb-density. Requires -output <file>.\n"
+      << "                        latency-chain-mode, tlb-density. With -analyze-core2core,\n"
+      << "                        supported keys are count and latency-samples. Requires -output <file>.\n"
       << "  -sweep-max-runs <n>   Maximum generated sweep runs (default: " << Constants::DEFAULT_SWEEP_MAX_RUNS << ").\n"
       << "  -h, --help            Show this help message and exit\n\n";
   return oss.str();

@@ -31,6 +31,7 @@ TEST(CoreToCoreMessagesTest, StandaloneModeErrorMessageExists) {
   EXPECT_NE(msg.find("-output"), std::string::npos);
   EXPECT_NE(msg.find("-count"), std::string::npos);
   EXPECT_NE(msg.find("-latency-samples"), std::string::npos);
+  EXPECT_NE(msg.find("-sweep"), std::string::npos);
 }
 
 TEST(CoreToCoreMessagesTest, HintStatusMessageContainsRoleAndCodes) {

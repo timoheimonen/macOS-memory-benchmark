@@ -250,7 +250,7 @@ must be specified at most once per command.
 #### `-analyze-core2core`
 
 - Runs standalone two-thread cache-line handoff (ping-pong) mode only
-- Can be combined only with optional `-output <file>`, `-count <count>`, and `-latency-samples <count>`
+- Can be combined only with optional `-output <file>`, `-count <count>`, `-latency-samples <count>`, `-sweep count=...`, `-sweep latency-samples=...`, and `-sweep-max-runs <count>`
 - Executes three scheduler-hint scenarios: `no_affinity_hint`, `same_affinity_tag`, and `different_affinity_tags`
 - Reports round-trip latency, one-way estimate (`round_trip / 2`), and sample distribution stats (P50/P90/P95/P99/stddev/min/max)
 - Includes per-thread QoS/affinity hint status in console and JSON output
@@ -318,13 +318,13 @@ must be specified at most once per command.
 - Runs a Cartesian parameter sweep and writes one combined JSON result
 - Requires `-output <file>`
 - Can be repeated to sweep multiple parameters
-- Supported keys: `buffersize`, `cache-size`, `threads`, `latency-tlb-locality-kb`, `latency-stride-bytes`, `latency-chain-mode`, `tlb-density`
+- Supported keys: `buffersize`, `cache-size`, `threads`, `latency-tlb-locality-kb`, `latency-stride-bytes`, `latency-chain-mode`, `tlb-density`, `count`, `latency-samples`
 - `tlb-density` applies only with `-analyze-tlb`
 - `-patterns` supports `buffersize` and `threads`
 - `-benchmark -only-bandwidth` supports `buffersize` and `threads`
 - `-benchmark -only-latency` supports `buffersize`, `cache-size`, and latency chain/locality/stride keys
 - `-analyze-tlb` supports `latency-stride-bytes`, `latency-chain-mode`, and `tlb-density`
-- `-analyze-core2core` is not supported by sweep mode
+- `-analyze-core2core` supports `count` and `latency-samples`
 
 #### `-sweep-max-runs <count>`
 
@@ -382,6 +382,9 @@ memory_benchmark -analyze-core2core
 # Standalone core-to-core analysis with deeper sampling + JSON
 memory_benchmark -analyze-core2core -count 5 -latency-samples 2000 -output core2core.json
 
+# Standalone core-to-core sample-depth sweep
+memory_benchmark -analyze-core2core -count 3 -sweep latency-samples=500,1000,2000 -output core2core_sample_sweep.json
+
 # Benchmark latency sweep over 3 buffer sizes and 3 locality windows (9 runs)
 memory_benchmark -benchmark -only-latency -count 5 -sweep buffersize=256,512,1024 -sweep latency-tlb-locality-kb=16,1024,0 -output latency_sweep.json
 
@@ -415,6 +418,9 @@ memory_benchmark -analyze-tlb -buffersize 1024
 
 # invalid: analyze-core2core with unsupported extra option
 memory_benchmark -analyze-core2core -threads 4
+
+# invalid: analyze-core2core sweep supports only count and latency-samples
+memory_benchmark -analyze-core2core -sweep threads=1,2 -output core2core_sweep.json
 ```
 
 ---
@@ -498,7 +504,8 @@ python3 script-examples/plot_cache_percentiles.py script-examples/final_output.t
 memory_benchmark -benchmark -only-latency -count 5 -sweep buffersize=256,512,1024 -sweep latency-stride-bytes=64,256 -output latency_sweep.json
 ```
 
-The command above creates six runs and stores each run's normal benchmark JSON under `runs[].result`.
+The command above creates six runs and stores each run's normal benchmark JSON under `runs[].result`. Core-to-core
+sweeps use the same envelope with `base_mode: "analyze_core2core"` and support only `count` and `latency-samples`.
 
 ---
 
@@ -620,12 +627,12 @@ Note: The `configuration` block includes fields such as `latency_chain_mode` (th
         "buffersize": 256,
         "latency-stride-bytes": 64
       },
-      "result": { "...": "normal benchmark, pattern, or TLB JSON payload" }
+      "result": { "...": "normal benchmark, pattern, TLB, or core-to-core JSON payload" }
     }
   ],
   "execution_time_sec": 123.4,
   "timestamp": "2026-04-29T12:00:00Z",
-  "version": "0.55.4"
+  "version": "0.56.0"
 }
 ```
 

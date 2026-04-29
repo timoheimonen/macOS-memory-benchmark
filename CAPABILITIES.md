@@ -102,8 +102,8 @@ access begin to dominate results differently.
 ## Built-in Parameter Sweeps
 
 Sweep mode runs repeated measurements across parameter lists and stores every run in one combined JSON file. This makes
-buffer-size, cache-size, thread-scaling, stride, locality, chain-mode, and TLB-density experiments reproducible without
-external shell orchestration.
+buffer-size, cache-size, thread-scaling, stride, locality, chain-mode, TLB-density, and core-to-core sample-depth
+experiments reproducible without external shell orchestration.
 
 Supported sweep targets include:
 
@@ -114,6 +114,8 @@ Supported sweep targets include:
 - Pointer-chain stride via `-sweep latency-stride-bytes=...`
 - Pointer-chain construction mode via `-sweep latency-chain-mode=...`
 - TLB analysis density via `-sweep tlb-density=...`
+- Core-to-core loop count via `-sweep count=...`
+- Core-to-core sample depth via `-sweep latency-samples=...`
 
 Multiple `-sweep` options are combined as a Cartesian product. `-sweep-max-runs` caps the generated run count, and
 `-output` is required for the combined JSON result.

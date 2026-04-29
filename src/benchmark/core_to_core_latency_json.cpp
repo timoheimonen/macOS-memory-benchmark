@@ -99,11 +99,7 @@ nlohmann::ordered_json build_scenario_json(const CoreToCoreLatencyScenarioResult
 
 }  // namespace
 
-int save_core_to_core_latency_to_json(const CoreToCoreLatencyJsonContext& context) {
-  if (context.config.output_file.empty()) {
-    return EXIT_SUCCESS;
-  }
-
+nlohmann::ordered_json build_core_to_core_latency_json(const CoreToCoreLatencyJsonContext& context) {
   nlohmann::ordered_json json_output;
   json_output[JsonKeys::CONFIGURATION] = {
       {JsonKeys::MODE, Constants::CORE_TO_CORE_JSON_MODE_NAME},
@@ -131,6 +127,16 @@ int save_core_to_core_latency_to_json(const CoreToCoreLatencyJsonContext& contex
 
   json_output[JsonKeys::TIMESTAMP] = build_utc_timestamp();
   json_output[JsonKeys::VERSION] = SOFTVERSION;
+
+  return json_output;
+}
+
+int save_core_to_core_latency_to_json(const CoreToCoreLatencyJsonContext& context) {
+  if (context.config.output_file.empty()) {
+    return EXIT_SUCCESS;
+  }
+
+  nlohmann::ordered_json json_output = build_core_to_core_latency_json(context);
 
   std::filesystem::path file_path(context.config.output_file);
   if (file_path.is_relative()) {

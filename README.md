@@ -117,8 +117,8 @@ caffeinate -i -d memory_benchmark -benchmark -count 10 -buffersize 1024
 - **`-only-bandwidth`**: Runs bandwidth paths only. **Requires `-benchmark`**. Cannot be used with `-patterns`, `-cache-size`, or `-latency-samples`.
 - **`-only-latency`**: Runs latency paths only. **Requires `-benchmark`**. Cannot be used with `-patterns` or `-iterations`.
 - **`-analyze-tlb`**: Runs standalone TLB analysis mode with automatic two-stage sweep refinement, private-cache-knee detection, and L1/L2 TLB boundary inference; only optional `-output <file>`, `-latency-stride-bytes <bytes>`, `-latency-chain-mode <mode>`, and `-tlb-density <low|medium|high>` may be combined with it.
-- **`-analyze-core2core`**: Runs standalone core-to-core cache-line handoff analysis mode; only optional `-output <file>`, `-count <count>`, and `-latency-samples <count>` may be combined with it. See [CORE_TO_CORE_WHITEPAPER.md](CORE_TO_CORE_WHITEPAPER.md) for methodology and JSON contract.
-- **`-sweep <key=a,b>`**: Runs a Cartesian parameter sweep for `-benchmark`, `-patterns`, or `-analyze-tlb` and writes one combined JSON file. Repeat `-sweep` to sweep multiple parameters. Requires `-output <file>`.
+- **`-analyze-core2core`**: Runs standalone core-to-core cache-line handoff analysis mode; only optional `-output <file>`, `-count <count>`, `-latency-samples <count>`, `-sweep count=...`, `-sweep latency-samples=...`, and `-sweep-max-runs <count>` may be combined with it. See [CORE_TO_CORE_WHITEPAPER.md](CORE_TO_CORE_WHITEPAPER.md) for methodology and JSON contract.
+- **`-sweep <key=a,b>`**: Runs a Cartesian parameter sweep for `-benchmark`, `-patterns`, `-analyze-tlb`, or `-analyze-core2core` and writes one combined JSON file. Repeat `-sweep` to sweep multiple parameters. Requires `-output <file>`.
 
 Latency-specific disable controls in `-only-latency`:
 
@@ -143,7 +143,7 @@ Latency-specific disable controls in `-only-latency`:
 - `-latency-tlb-locality-kb <KB>`: Pointer-chain locality window (default `1024`; `0` = global random chain; non-zero values must be page-size multiples). If omitted, regular main-memory latency output also includes an automatic TLB comparison (`16 KB` hit-biased vs `0` miss-biased) and estimated page-walk penalty. The automatic comparison uses P50 over three complete pointer-chase passes per point to reduce single-IRQ outlier impact.
 - `-non-cacheable`: Best-effort cache-discouraging hints (not true uncached memory).
 - `-output <file>`: Save JSON output.
-- `-sweep <key=a,b>`: Sweep supported parameters. Keys: `buffersize`, `cache-size`, `threads`, `latency-tlb-locality-kb`, `latency-stride-bytes`, `latency-chain-mode`, `tlb-density`.
+- `-sweep <key=a,b>`: Sweep supported parameters. General benchmark keys: `buffersize`, `cache-size`, `threads`, `latency-tlb-locality-kb`, `latency-stride-bytes`, `latency-chain-mode`; TLB analysis key: `tlb-density`; core-to-core keys: `count`, `latency-samples`.
 - `-sweep-max-runs <count>`: Maximum generated sweep runs (default `256`).
 
 ## Typical Workflows
@@ -164,6 +164,12 @@ Built-in parameter sweep:
 
 ```bash
 memory_benchmark -benchmark -only-latency -count 5 -sweep buffersize=256,512,1024 -sweep latency-tlb-locality-kb=16,1024,0 -output latency_sweep.json
+```
+
+Core-to-core sample-depth sweep:
+
+```bash
+memory_benchmark -analyze-core2core -count 3 -sweep latency-samples=500,1000,2000 -output core2core_sample_sweep.json
 ```
 
 Latency locality comparison:

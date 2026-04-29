@@ -29,6 +29,7 @@
 #include <vector>
 
 #include "benchmark/core_to_core_latency.h"
+#include "third_party/nlohmann/json.hpp"
 
 struct CoreToCoreLatencyJsonContext {
   const CoreToCoreLatencyConfig& config;
@@ -41,6 +42,8 @@ struct CoreToCoreLatencyJsonContext {
   const std::vector<CoreToCoreLatencyScenarioResult>& scenario_results;
   double total_execution_time_sec;
 };
+
+nlohmann::ordered_json build_core_to_core_latency_json(const CoreToCoreLatencyJsonContext& context);
 
 int save_core_to_core_latency_to_json(const CoreToCoreLatencyJsonContext& context);
 

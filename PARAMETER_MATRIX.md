@@ -1,6 +1,6 @@
 # Parameter Compatibility Matrix
 
-Version 0.55.6
+Version 0.56.0
 
 ## All Flags
 
@@ -99,8 +99,8 @@ Version 0.55.6
 | `-output <file>` | ✅ | |
 | `-count <n>` | ✅ | |
 | `-latency-samples <n>` | ✅ | |
-| `-sweep <key=a,b>` | ❌ | Not supported by core-to-core mode yet |
-| `-sweep-max-runs <n>` | ❌ | Only meaningful with `-sweep` |
+| `-sweep <key=a,b>` | ✅ | Requires `-output`; supported keys: `count`, `latency-samples` |
+| `-sweep-max-runs <n>` | ✅ with `-sweep` | Default `256` |
 | All others | ❌ | Must be used alone |
 
 ### Sweep Compatibility
@@ -116,7 +116,7 @@ results are written as one combined JSON document with `configuration.mode: "swe
 | `-benchmark -only-latency` | `buffersize`, `cache-size`, `latency-tlb-locality-kb`, `latency-stride-bytes`, `latency-chain-mode` | `threads`, `tlb-density` |
 | `-patterns` | `buffersize`, `threads` | `cache-size`, latency keys, `tlb-density` |
 | `-analyze-tlb` | `latency-stride-bytes`, `latency-chain-mode`, `tlb-density` | `buffersize`, `cache-size`, `threads`, `latency-tlb-locality-kb` |
-| `-analyze-core2core` | none | all sweep keys |
+| `-analyze-core2core` | `count`, `latency-samples` | `buffersize`, `cache-size`, `threads`, latency chain/locality/stride keys, `tlb-density` |
 
 Additional sweep rules:
 
