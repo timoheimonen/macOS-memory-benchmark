@@ -37,11 +37,11 @@ def parse_args():
     parser = argparse.ArgumentParser(
         description="Compare Apple M4 vs M5 memory bandwidth and latency.")
     parser.add_argument(
-        "-m4", "--m4-file",
+        "-4", "--m4-file",
         default="results/0.53.7/MacMiniM4_benchmark.json",
         help="Path to M4 benchmark JSON (default: results/0.53.7/MacMiniM4_benchmark.json)")
     parser.add_argument(
-        "-m5", "--m5-file",
+        "-5", "--m5-file",
         default="results/0.53.8/MacbookAirM5_benchmark.json",
         help="Path to M5 benchmark JSON (default: results/0.53.8/MacbookAirM5_benchmark.json)")
     parser.add_argument(

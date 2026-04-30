@@ -78,7 +78,7 @@ memory_benchmark
 To run the standard memory benchmark:
 
 ```bash
-memory_benchmark -benchmark
+memory_benchmark --benchmark
 ```
 
 If built from source, use `./memory_benchmark` instead.
@@ -89,7 +89,7 @@ If running from an uninstalled local source build, prefix commands with `./`.
 For longer runs, prevent sleep:
 
 ```bash
-caffeinate -i -d memory_benchmark -benchmark -count 10 -buffersize 1024
+caffeinate -i -d memory_benchmark --benchmark --count 10 --buffer-size 1024
 ```
 
 If running a local build, use `./memory_benchmark` instead of `memory_benchmark` (see note in "[First run](#first-run)").
@@ -114,13 +114,13 @@ Both matter: some workloads are throughput-bound, others are access-latency-boun
 
 ### Pointer-chase latency and TLB locality
 
-Latency tests use dependent pointer-chase chains. `-latency-tlb-locality-kb` controls how the chain is constructed:
+Latency tests use dependent pointer-chase chains. `--latency-tlb-locality-kb` controls how the chain is constructed:
 
 - `1024` (default): randomized within 1 MB windows, plus randomized window order
 - `0`: fully global random chain
 - non-zero values must be multiples of system page size
 
-`-latency-chain-mode` controls pointer-chain ordering policy:
+`--latency-chain-mode` controls pointer-chain ordering policy:
 
 - `auto` (default): preserves current behavior (`random-box` when locality > 0, `global-random` when locality = 0)
 - `global-random`: full-buffer random permutation
@@ -128,14 +128,14 @@ Latency tests use dependent pointer-chase chains. `-latency-tlb-locality-kb` con
 - `same-random-in-box`: same in-box random pattern reused across boxes (increasing box order)
 - `diff-random-in-box`: independently randomized in-box pattern per box (increasing box order)
 
-Modes other than `global-random` require non-zero `-latency-tlb-locality-kb`.
+Modes other than `global-random` require non-zero `--latency-tlb-locality-kb`.
 
-`-latency-stride-bytes` controls spacing between chain nodes. Smaller stride biases toward same-page reuse;
+`--latency-stride-bytes` controls spacing between chain nodes. Smaller stride biases toward same-page reuse;
 larger stride increases page turnover pressure.
 
 Use `0` when you explicitly want stronger translation effects in the measured path.
 
-When `-latency-tlb-locality-kb` is omitted in regular benchmark mode, main-memory latency output also runs an
+When `--latency-tlb-locality-kb` is omitted in regular benchmark mode, main-memory latency output also runs an
 automatic comparison and prints:
 
 - TLB hit latency (16 KB locality)
@@ -145,11 +145,11 @@ automatic comparison and prints:
 Each automatic comparison point is measured as P50 over three complete pointer-chase passes. This reduces the impact of
 a single IRQ-inflated timing pass while keeping every candidate pass continuous.
 
-If you explicitly set `-latency-tlb-locality-kb` (including `16` or `0`), this auto comparison is skipped.
+If you explicitly set `--latency-tlb-locality-kb` (including `16` or `0`), this auto comparison is skipped.
 
 ### Pattern benchmarks
 
-Pattern mode (`-patterns`) measures bandwidth sensitivity across:
+Pattern mode (`--patterns`) measures bandwidth sensitivity across:
 
 - Sequential Forward
 - Sequential Reverse
@@ -163,33 +163,60 @@ Pattern mode (`-patterns`) measures bandwidth sensitivity across:
 
 ## Command-Line Options
 
-Options that take a value, such as `-buffersize`, `-cache-size`, `-threads`, `-latency-samples`, and `-output`,
+Options that take a value, such as `--buffer-size`, `--cache-size`, `--threads`, `--latency-samples`, and `--output`,
 must be specified at most once per command.
+
+Long options require a double dash (`--`). A single dash is reserved for one-character short options, so legacy
+forms such as `-buffersize` or `-benchmark` are invalid.
+
+| Short | Long |
+|---|---|
+| `-B` | `--benchmark` |
+| `-P` | `--patterns` |
+| `-W` | `--only-bandwidth` |
+| `-L` | `--only-latency` |
+| `-T` | `--analyze-tlb` |
+| `-C` | `--analyze-core2core` |
+| `-b` | `--buffer-size` |
+| `-i` | `--iterations` |
+| `-r` | `--count` |
+| `-t` | `--threads` |
+| `-k` | `--cache-size` |
+| `-n` | `--latency-samples` |
+| `-s` | `--latency-stride-bytes` |
+| `-m` | `--latency-chain-mode` |
+| `-l` | `--latency-tlb-locality-kb` |
+| `-D` | `--tlb-density` |
+| `-u` | `--non-cacheable` |
+| `-o` | `--output` |
+| `-S` | `--sweep` |
+| `-X` | `--sweep-max-runs` |
+| `-h` | `--help` |
 
 ### Core controls
 
-#### `-buffersize <MB>`
+#### `--buffer-size <MB>`
 
 - Main buffer size in MB (per main buffer)
 - Default: `512`
 - Auto-capped to memory safety limit
-- `-buffersize 0` is valid only with `-only-latency` and disables main-memory latency path
+- `--buffer-size 0` is valid only with `--only-latency` and disables main-memory latency path
 
-#### `-iterations <count>`
+#### `--iterations <count>`
 
 - Bandwidth loop iterations
 - Default: `1000`
 - Positive integer
-- Not allowed with `-only-latency`
+- Not allowed with `--only-latency`
 
-#### `-count <count>`
+#### `--count <count>`
 
 - Full benchmark loop count
 - Default: `1`
 - Positive integer
 - Use `5` to `10` for stable statistics
 
-#### `-threads <count>`
+#### `--threads <count>`
 
 - Thread count for bandwidth tests
 - Default: detected core count
@@ -198,39 +225,39 @@ must be specified at most once per command.
 
 ### Mode selection
 
-#### `-benchmark`
+#### `--benchmark`
 
 - **Required** to run standard memory benchmark (bandwidth + latency)
-- Mutually exclusive with `-patterns`
-- Can be combined with `-only-bandwidth`, `-only-latency`, `-cache-size`, `-threads`, and other modifier flags
-- Running without this flag (or `-patterns`) shows help and exits
+- Mutually exclusive with `--patterns`
+- Can be combined with `--only-bandwidth`, `--only-latency`, `--cache-size`, `--threads`, and other modifier flags
+- Running without this flag (or `--patterns`) shows help and exits
 
-#### `-patterns`
+#### `--patterns`
 
 - Runs only access-pattern benchmarks
 - Skips standard bandwidth/latency sections
 
-#### `-only-bandwidth`
+#### `--only-bandwidth`
 
 - Runs bandwidth paths only
-- **Requires `-benchmark`**
-- Incompatible with: `-patterns`, `-cache-size` (any value including `0`), `-latency-samples`
+- **Requires `--benchmark`**
+- Incompatible with: `--patterns`, `--cache-size` (any value including `0`), `--latency-samples`
 
-#### `-only-latency`
+#### `--only-latency`
 
 - Runs latency paths only
-- **Requires `-benchmark`**
-- Incompatible with: `-patterns`, `-iterations`
+- **Requires `--benchmark`**
+- Incompatible with: `--patterns`, `--iterations`
 - Supports selective target disabling:
-  - `-buffersize 0` disables main-memory latency
-  - `-cache-size 0` disables cache latency
+  - `--buffer-size 0` disables main-memory latency
+  - `--cache-size 0` disables cache latency
   - both zero is invalid
 
-#### `-analyze-tlb`
+#### `--analyze-tlb`
 
 - Runs standalone TLB analysis mode only
-- Can be combined only with optional `-output <file>`, `-latency-stride-bytes <bytes>`, `-latency-chain-mode <mode>`, and `-tlb-density <low|medium|high>`
-- Uses latency stride from `-latency-stride-bytes` (same default as standard latency mode), performs a denser base locality sweep (`29` canonical points, stride-clamped to `max(16KB, 2*stride)` up to `256MB`), then automatically inserts finer locality points near detected knees/boundaries
+- Can be combined only with optional `--output <file>`, `--latency-stride-bytes <bytes>`, `--latency-chain-mode <mode>`, and `--tlb-density <low|medium|high>`
+- Uses latency stride from `--latency-stride-bytes` (same default as standard latency mode), performs a denser base locality sweep (`29` canonical points, stride-clamped to `max(16KB, 2*stride)` up to `256MB`), then automatically inserts finer locality points near detected knees/boundaries
 - Detects likely private-cache knee candidates (around the ~1MB region when present) and reports whether they may interfere with TLB boundary interpretation
 - Preserves a direct L1 candidate that overlaps the private-cache knee and marks it as ambiguous instead of silently skipping to a later boundary
 - Reports inferred L1/L2 TLB boundaries with both midpoint estimate (`inferred_entries`) and local-range estimate (`inferred_entries_min`/`inferred_entries_max`)
@@ -238,19 +265,19 @@ must be specified at most once per command.
 - Separately computes page-walk penalty as `P50(512MB) - P50(effective baseline locality)` when analysis buffer is at least `512MB`
 - Detailed methodology and JSON contract: `TLB_ANALYSIS_WHITEPAPER.md`
 
-#### `-tlb-density <level>`
+#### `--tlb-density <level>`
 
-- Applies only to `-analyze-tlb`
+- Applies only to `--analyze-tlb`
 - Default: `high`
 - Accepted values: `low`, `medium`, `high`
 - `low`: 15-point base sweep, no refinement pass
 - `medium`: 15-point base sweep + refinement pass around detected boundaries
 - `high`: 29-point base sweep + refinement pass around detected boundaries
 
-#### `-analyze-core2core`
+#### `--analyze-core2core`
 
 - Runs standalone two-thread cache-line handoff (ping-pong) mode only
-- Can be combined only with optional `-output <file>`, `-count <count>`, and `-latency-samples <count>`
+- Can be combined only with optional `--output <file>`, `--count <count>`, `--latency-samples <count>`, `--sweep count=...`, `--sweep latency-samples=...`, and `--sweep-max-runs <count>`
 - Executes three scheduler-hint scenarios: `no_affinity_hint`, `same_affinity_tag`, and `different_affinity_tags`
 - Reports round-trip latency, one-way estimate (`round_trip / 2`), and sample distribution stats (P50/P90/P95/P99/stddev/min/max)
 - Includes per-thread QoS/affinity hint status in console and JSON output
@@ -259,14 +286,14 @@ must be specified at most once per command.
 
 ### Latency-specific controls
 
-#### `-latency-samples <count>`
+#### `--latency-samples <count>`
 
 - Sample count per latency test
 - Default: `1000`
 - Positive integer
 - More samples improve percentile stability at the cost of run time
 
-#### `-latency-stride-bytes <bytes>`
+#### `--latency-stride-bytes <bytes>`
 
 - Pointer-chain stride for latency tests
 - Default: `256`
@@ -274,16 +301,16 @@ must be specified at most once per command.
 - Must be a multiple of 8 bytes (pointer size on Apple Silicon)
 - Use smaller values (for example `64`) to increase same-page cache-line activity and reduce TLB sensitivity
 
-#### `-latency-chain-mode <mode>`
+#### `--latency-chain-mode <mode>`
 
 - Pointer-chain construction policy for latency paths
 - Default: `auto`
 - Accepted values: `auto`, `global-random`, `random-box`, `same-random-in-box`, `diff-random-in-box`
-- `global-random` works with `-latency-tlb-locality-kb 0`
-- `random-box`, `same-random-in-box`, and `diff-random-in-box` require `-latency-tlb-locality-kb > 0`
-- In `-analyze-tlb` mode, `global-random` is rejected because it ignores locality windows and would make locality sweep boundaries misleading
+- `global-random` works with `--latency-tlb-locality-kb 0`
+- `random-box`, `same-random-in-box`, and `diff-random-in-box` require `--latency-tlb-locality-kb > 0`
+- In `--analyze-tlb` mode, `global-random` is rejected because it ignores locality windows and would make locality sweep boundaries misleading
 
-#### `-latency-tlb-locality-kb <size_kb>`
+#### `--latency-tlb-locality-kb <size_kb>`
 
 - Pointer-chain locality window for latency path
 - Default: `1024`
@@ -293,25 +320,44 @@ must be specified at most once per command.
 
 ### Cache and memory hint controls
 
-#### `-cache-size <KB>`
+#### `--cache-size <KB>`
 
 - Enables custom cache test size
 - Non-zero range: `16` to `1048576` KB (1 GB)
-- `0` is accepted only with `-only-latency` and disables cache latency target
+- `0` is accepted only with `--only-latency` and disables cache latency target
 - When set to non-zero, auto L1/L2 detection is replaced by custom cache target
 
-#### `-non-cacheable`
+#### `--non-cacheable`
 
 - Applies cache-discouraging `madvise()` hints
 - Best effort only; this does **not** create truly uncached memory
 
 ### Output
 
-#### `-output <file>`
+#### `--output <file>`
 
 - Saves JSON output
 - Relative path writes under current working directory
 - Parent directories are created automatically
+
+#### `--sweep <key=value1,value2>`
+
+- Runs a Cartesian parameter sweep and writes one combined JSON result
+- Requires `--output <file>`
+- Can be repeated to sweep multiple parameters
+- Supported keys: `buffer-size`, `cache-size`, `threads`, `latency-tlb-locality-kb`, `latency-stride-bytes`, `latency-chain-mode`, `tlb-density`, `count`, `latency-samples`
+- `tlb-density` applies only with `--analyze-tlb`
+- `--patterns` supports `buffer-size` and `threads`
+- `--benchmark --only-bandwidth` supports `buffer-size` and `threads`
+- `--benchmark --only-latency` supports `buffer-size`, `cache-size`, and latency chain/locality/stride keys
+- `--analyze-tlb` supports `latency-stride-bytes`, `latency-chain-mode`, and `tlb-density`
+- `--analyze-core2core` supports `count` and `latency-samples`
+
+#### `--sweep-max-runs <count>`
+
+- Maximum number of generated sweep combinations
+- Default: `256`
+- Prevents accidental very large Cartesian sweeps
 
 #### `-h`, `--help`
 
@@ -325,71 +371,83 @@ must be specified at most once per command.
 
 ```bash
 # Full benchmark
-memory_benchmark -benchmark -count 10 -buffersize 1024 -output full.json
+memory_benchmark --benchmark --count 10 --buffer-size 1024 --output full.json
 
 # Pattern-only
-memory_benchmark -patterns -count 5 -buffersize 512 -output patterns.json
+memory_benchmark --patterns --count 5 --buffer-size 512 --output patterns.json
 
 # Bandwidth-only
-memory_benchmark -benchmark -only-bandwidth -threads 8 -count 5
+memory_benchmark --benchmark --only-bandwidth --threads 8 --count 5
 
 # Latency-only (both main + cache)
-memory_benchmark -benchmark -only-latency -latency-samples 5000 -count 10
+memory_benchmark --benchmark --only-latency --latency-samples 5000 --count 10
 
 # Latency-only (main memory only)
-memory_benchmark -benchmark -only-latency -cache-size 0 -buffersize 1024
+memory_benchmark --benchmark --only-latency --cache-size 0 --buffer-size 1024
 
 # Latency-only (cache only)
-memory_benchmark -benchmark -only-latency -buffersize 0 -cache-size 2048
+memory_benchmark --benchmark --only-latency --buffer-size 0 --cache-size 2048
 
 # Standalone TLB analysis
-memory_benchmark -analyze-tlb
+memory_benchmark --analyze-tlb
 
 # Standalone TLB analysis with JSON export
-memory_benchmark -analyze-tlb -output tlb_analysis.json
+memory_benchmark --analyze-tlb --output tlb_analysis.json
 
 # Standalone TLB analysis with custom stride
-memory_benchmark -analyze-tlb -latency-stride-bytes 128 -output tlb_analysis_stride128.json
+memory_benchmark --analyze-tlb --latency-stride-bytes 128 --output tlb_analysis_stride128.json
 
 # Standalone TLB analysis with explicit chain mode
-memory_benchmark -analyze-tlb -latency-chain-mode same-random-in-box -output tlb_analysis_same_box.json
+memory_benchmark --analyze-tlb --latency-chain-mode same-random-in-box --output tlb_analysis_same_box.json
 
 # Standalone TLB analysis with quick low-density sweep (no refinement)
-memory_benchmark -analyze-tlb -tlb-density low -output tlb_analysis_low.json
+memory_benchmark --analyze-tlb --tlb-density low --output tlb_analysis_low.json
 
 # Standalone core-to-core handoff analysis
-memory_benchmark -analyze-core2core
+memory_benchmark --analyze-core2core
 
 # Standalone core-to-core analysis with deeper sampling + JSON
-memory_benchmark -analyze-core2core -count 5 -latency-samples 2000 -output core2core.json
+memory_benchmark --analyze-core2core --count 5 --latency-samples 2000 --output core2core.json
+
+# Standalone core-to-core sample-depth sweep
+memory_benchmark --analyze-core2core --count 3 --sweep latency-samples=500,1000,2000 --output core2core_sample_sweep.json
+
+# Benchmark latency sweep over 3 buffer sizes and 3 locality windows (9 runs)
+memory_benchmark --benchmark --only-latency --count 5 --sweep buffer-size=256,512,1024 --sweep latency-tlb-locality-kb=16,1024,0 --output latency_sweep.json
+
+# Thread scaling sweep for bandwidth
+memory_benchmark --benchmark --only-bandwidth --count 5 --sweep buffer-size=512,1024 --sweep threads=1,4,8 --output bandwidth_thread_sweep.json
 ```
 
 ### Invalid combinations
 
 ```bash
-# invalid: -benchmark with -patterns (mutually exclusive)
-memory_benchmark -benchmark -patterns
+# invalid: --benchmark with --patterns (mutually exclusive)
+memory_benchmark --benchmark --patterns
 
 # invalid: pattern mode with only-bandwidth
-memory_benchmark -patterns -only-bandwidth
+memory_benchmark --patterns --only-bandwidth
 
 # invalid: pattern mode with only-latency
-memory_benchmark -patterns -only-latency
+memory_benchmark --patterns --only-latency
 
 # invalid: latency samples with only-bandwidth
-memory_benchmark -benchmark -only-bandwidth -latency-samples 5000
+memory_benchmark --benchmark --only-bandwidth --latency-samples 5000
 
 # invalid: iterations with only-latency
-memory_benchmark -benchmark -only-latency -iterations 2000
+memory_benchmark --benchmark --only-latency --iterations 2000
 
 # invalid: both latency targets disabled
-memory_benchmark -benchmark -only-latency -buffersize 0 -cache-size 0
+memory_benchmark --benchmark --only-latency --buffer-size 0 --cache-size 0
 
 # invalid: analyze-tlb with unsupported extra option
-memory_benchmark -analyze-tlb -buffersize 1024
+memory_benchmark --analyze-tlb --buffer-size 1024
 
 # invalid: analyze-core2core with unsupported extra option
-memory_benchmark -analyze-core2core -threads 4
+memory_benchmark --analyze-core2core --threads 4
+
+# invalid: analyze-core2core sweep supports only count and latency-samples
+memory_benchmark --analyze-core2core --sweep threads=1,2 --output core2core_sweep.json
 ```
 
 ---
@@ -399,7 +457,7 @@ memory_benchmark -analyze-core2core -threads 4
 ### Quick baseline
 
 ```bash
-memory_benchmark -benchmark
+memory_benchmark --benchmark
 ```
 
 Good for a fast health check.
@@ -407,7 +465,7 @@ Good for a fast health check.
 ### Statistical baseline (recommended)
 
 ```bash
-caffeinate -i -d memory_benchmark -benchmark -count 10 -buffersize 1024 -output baseline.json
+caffeinate -i -d memory_benchmark --benchmark --count 10 --buffer-size 1024 --output baseline.json
 ```
 
 Use this for comparisons across machines or software versions.
@@ -415,7 +473,7 @@ Use this for comparisons across machines or software versions.
 ### Pattern analysis
 
 ```bash
-memory_benchmark -patterns -count 10 -buffersize 512 -output patterns.json
+memory_benchmark --patterns --count 10 --buffer-size 512 --output patterns.json
 ```
 
 Shows how bandwidth changes under different access patterns.
@@ -424,28 +482,28 @@ Shows how bandwidth changes under different access patterns.
 
 ```bash
 # default locality mode (1 MB window)
-memory_benchmark -benchmark -only-latency -buffersize 1024 -latency-samples 5000 -count 10 -output lat_default_1mb.json
+memory_benchmark --benchmark --only-latency --buffer-size 1024 --latency-samples 5000 --count 10 --output lat_default_1mb.json
 
 # global random chain
-memory_benchmark -benchmark -only-latency -buffersize 1024 -latency-samples 5000 -latency-tlb-locality-kb 0 -count 10 -output lat_global.json
+memory_benchmark --benchmark --only-latency --buffer-size 1024 --latency-samples 5000 --latency-tlb-locality-kb 0 --count 10 --output lat_global.json
 
 # same in-box random pattern (good for prefetch-vs-TLB comparisons)
-memory_benchmark -benchmark -only-latency -buffersize 1024 -latency-samples 5000 -latency-tlb-locality-kb 16 -latency-chain-mode same-random-in-box -count 10 -output lat_same_box.json
+memory_benchmark --benchmark --only-latency --buffer-size 1024 --latency-samples 5000 --latency-tlb-locality-kb 16 --latency-chain-mode same-random-in-box --count 10 --output lat_same_box.json
 ```
 
 ### Regular benchmark with automatic DRAM TLB breakdown
 
 ```bash
-memory_benchmark -benchmark -count 1
+memory_benchmark --benchmark --count 1
 ```
 
 This prints `Average latency` plus auto-derived `TLB hit latency`, `TLB miss latency`, and
-`Estimated page-walk penalty` when `-latency-tlb-locality-kb` is not explicitly set.
+`Estimated page-walk penalty` when `--latency-tlb-locality-kb` is not explicitly set.
 
 ### Canonical standalone TLB analysis
 
 ```bash
-memory_benchmark -analyze-tlb -output tlb_analysis.json
+memory_benchmark --analyze-tlb --output tlb_analysis.json
 ```
 
 Quick first checks in the output file:
@@ -457,7 +515,7 @@ Quick first checks in the output file:
 ### Custom cache target
 
 ```bash
-memory_benchmark -benchmark -cache-size 4096 -threads 1 -count 5 -output cache_4mb.json
+memory_benchmark --benchmark --cache-size 4096 --threads 1 --count 5 --output cache_4mb.json
 ```
 
 ### Cache-size sweep + trend plotting
@@ -466,6 +524,15 @@ memory_benchmark -benchmark -cache-size 4096 -threads 1 -count 5 -output cache_4
 ./script-examples/latency_test_script.sh
 python3 script-examples/plot_cache_percentiles.py script-examples/final_output.txt --metric median
 ```
+
+### Built-in sweep JSON
+
+```bash
+memory_benchmark --benchmark --only-latency --count 5 --sweep buffer-size=256,512,1024 --sweep latency-stride-bytes=64,256 --output latency_sweep.json
+```
+
+The command above creates six runs and stores each run's normal benchmark JSON under `runs[].result`. Core-to-core
+sweeps use the same envelope with `base_mode: "analyze_core2core"` and support only `count` and `latency-samples`.
 
 ---
 
@@ -492,7 +559,7 @@ Displayed as read/write/copy GB/s. Higher is better.
 
 Average latency in ns. Lower is better.
 
-When `-latency-tlb-locality-kb` is not explicitly provided, this section also prints:
+When `--latency-tlb-locality-kb` is not explicitly provided, this section also prints:
 
 - `TLB hit latency (16 KB locality)`
 - `TLB miss latency (global random locality)`
@@ -503,7 +570,7 @@ headline remains one continuous pointer-chase pass.
 
 ### 4) Cache bandwidth and latency
 
-L1/L2 or custom cache section, depending on `-cache-size` use.
+L1/L2 or custom cache section, depending on `--cache-size` use.
 
 ### 5) Pattern benchmark output
 
@@ -514,7 +581,7 @@ Shows each pattern, relative percentage vs sequential forward baseline, and effi
 - Cache thrashing potential
 - TLB pressure
 
-### 6) Statistics (`-count > 1`)
+### 6) Statistics (`--count > 1`)
 
 Includes values such as:
 
@@ -524,7 +591,7 @@ Includes values such as:
 - Std Dev
 - Min / Max
 
-When automatic TLB comparison is active (you did not explicitly set `-latency-tlb-locality-kb`),
+When automatic TLB comparison is active (you did not explicitly set `--latency-tlb-locality-kb`),
 statistics also include dedicated sections for:
 
 - `TLB Hit Latency (ns)`
@@ -533,7 +600,7 @@ statistics also include dedicated sections for:
 
 For noisy systems, prioritize median and P95/P99 rather than single fastest/slowest values.
 
-**Note:** Chain diagnostics (`pointer_count`, `unique_pages_touched`, etc.) appear in JSON output only when `-latency-stride-bytes` is explicitly set; they are not displayed in console output.
+**Note:** Chain diagnostics (`pointer_count`, `unique_pages_touched`, etc.) appear in JSON output only when `--latency-stride-bytes` is explicitly set; they are not displayed in console output.
 
 ---
 
@@ -566,11 +633,41 @@ Note: The `configuration` block includes fields such as `latency_chain_mode` (th
 }
 ```
 
+### Sweep JSON shape
+
+```json
+{
+  "configuration": {
+    "mode": "sweep",
+    "base_mode": "benchmark",
+    "run_count": 6,
+    "sweep_max_runs": 256,
+    "sweep_parameters": {
+      "buffersize": [256, 512, 1024],
+      "latency-stride-bytes": [64, 256]
+    }
+  },
+  "runs": [
+    {
+      "index": 0,
+      "parameters": {
+        "buffersize": 256,
+        "latency-stride-bytes": 64
+      },
+      "result": { "...": "normal benchmark, pattern, TLB, or core-to-core JSON payload" }
+    }
+  ],
+  "execution_time_sec": 123.4,
+  "timestamp": "2026-04-29T12:00:00Z",
+  "version": "0.56.0"
+}
+```
+
 ### Latency payload structure (current)
 
 Latency values are structured objects, not scalars. The example below uses real values from a benchmark run.
 
-When `-latency-stride-bytes` is explicitly set (with a non-default value), latency sections also include `chain_diagnostics`.
+When `--latency-stride-bytes` is explicitly set (with a non-default value), latency sections also include `chain_diagnostics`.
 
 ```json
 "latency": {
@@ -654,7 +751,7 @@ When `-latency-stride-bytes` is explicitly set (with a non-default value), laten
 
 ### TLB analysis JSON (analyze mode)
 
-When run with `-analyze-tlb -output tlb_analysis.json`, the payload includes a dedicated `tlb_analysis` block.
+When run with `--analyze-tlb --output tlb_analysis.json`, the payload includes a dedicated `tlb_analysis` block.
 Example below uses real values extracted from `results/0.53.8/MacMiniM4_analyze-tlb-chain-mode-random-box.json`:
 
 ```json
@@ -770,12 +867,12 @@ jq '.tlb_analysis.page_walk_penalty.penalty_ns' tlb_analysis.json
 What it does:
 
 - Sweeps multiple custom cache sizes
-- Sweeps multiple `-latency-tlb-locality-kb` values
+- Sweeps multiple `--latency-tlb-locality-kb` values
 - Writes per-run JSON files under `script-examples/tmp/`
 - Extracts `.cache.custom.latency.samples_ns.statistics` into `script-examples/final_output.txt`
 - Clears `tmp` after extraction
 
-Important: the script currently invokes `memory_benchmark -benchmark` from `PATH`. If you only built locally as `./memory_benchmark`, either install it to `PATH` or update `BENCHMARK_CMD` in the script.
+Important: the script currently invokes `memory_benchmark --benchmark` from `PATH`. If you only built locally as `./memory_benchmark`, either install it to `PATH` or update `BENCHMARK_CMD` in the script.
 
 ### `script-examples/plot_cache_percentiles.py`
 
@@ -813,7 +910,7 @@ If you benchmark while other macOS apps are heavily active, treat results as **c
 Use this process:
 
 1. Keep your background load profile as consistent as possible across comparison runs.
-2. Increase statistical depth (`-count 10` or higher, larger `-latency-samples`).
+2. Increase statistical depth (`--count 10` or higher, larger `--latency-samples`).
 3. Compare **median/P95/P99**, not single-loop min/max.
 4. Keep exact command lines identical across systems/runs.
 5. Record context (apps active, external displays, power mode) with the result files.
@@ -837,13 +934,13 @@ Under heavy concurrent load, expect lower throughput and higher variance than th
 
 - Use `caffeinate -i -d` for long runs.
 - Use larger buffers (`512 MB` to `1024 MB+`) when targeting DRAM behavior.
-- Use `-count > 1` and inspect percentiles.
-- For cache-focused runs, prefer `-threads 1` unless testing aggregate behavior.
+- Use `--count > 1` and inspect percentiles.
+- For cache-focused runs, prefer `--threads 1` unless testing aggregate behavior.
 
 ### Common pitfalls
 
 - **Small buffers for DRAM claims**: often cache-dominated.
-- **Assuming `-non-cacheable` is true uncached memory**: it is only a hint.
+- **Assuming `--non-cacheable` is true uncached memory**: it is only a hint.
 - **Comparing runs with different parameters**: invalidates conclusions.
 - **Interpreting global-random and locality-window latency as identical tests**: chain construction differs intentionally.
 
@@ -855,14 +952,14 @@ Under heavy concurrent load, expect lower throughput and higher variance than th
 
 Check mode combinations in [Mode Compatibility](#mode-compatibility).
 
-### `-latency-tlb-locality-kb` rejected
+### `--latency-tlb-locality-kb` rejected
 
 Use `0` or a value that is an exact multiple of system page size.
 
-### `-latency-chain-mode` rejected
+### `--latency-chain-mode` rejected
 
 Use one of: `auto`, `global-random`, `random-box`, `same-random-in-box`, `diff-random-in-box`.
-If using a box mode (`random-box`, `same-random-in-box`, `diff-random-in-box`), also set `-latency-tlb-locality-kb` to a non-zero page-multiple value.
+If using a box mode (`random-box`, `same-random-in-box`, `diff-random-in-box`), also set `--latency-tlb-locality-kb` to a non-zero page-multiple value.
 
 ### Buffer size warnings/capping
 

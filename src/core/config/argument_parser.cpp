@@ -20,13 +20,13 @@
  *
  * This file implements the argument parser for the memory benchmark application.
  * It handles parsing and validation of all command-line options including:
- * - Buffer size configuration (-buffersize)
- * - Iteration counts (-iterations, -count)
- * - Latency pointer-chain stride (-latency-stride-bytes)
- * - Cache size specification (-cache-size)
- * - Thread count configuration (-threads)
- * - Test mode selection (-patterns, -only-bandwidth, -only-latency)
- * - Output options (-output)
+ * - Buffer size configuration (-b, --buffer-size)
+ * - Iteration counts (-i, --iterations; -r, --count)
+ * - Latency pointer-chain stride (-s, --latency-stride-bytes)
+ * - Cache size specification (-k, --cache-size)
+ * - Thread count configuration (-t, --threads)
+ * - Test mode selection (-P, --patterns; -W, --only-bandwidth; -L, --only-latency)
+ * - Output options (-o, --output)
  * - Help display (-h, --help)
  *
  * The parser uses a two-pass approach: first parsing cache size (needed for
@@ -49,8 +49,54 @@
 #include <sstream>
 #include <cmath>
 #include <cstdlib>
+#include <vector>
 
 namespace {
+
+constexpr const char* OPT_ANALYZE_TLB_SHORT = "-T";
+constexpr const char* OPT_ANALYZE_TLB_LONG = "--analyze-tlb";
+constexpr const char* OPT_BENCHMARK_SHORT = "-B";
+constexpr const char* OPT_BENCHMARK_LONG = "--benchmark";
+constexpr const char* OPT_BUFFER_SIZE_SHORT = "-b";
+constexpr const char* OPT_BUFFER_SIZE_LONG = "--buffer-size";
+constexpr const char* OPT_CACHE_SIZE_SHORT = "-k";
+constexpr const char* OPT_CACHE_SIZE_LONG = "--cache-size";
+constexpr const char* OPT_COUNT_SHORT = "-r";
+constexpr const char* OPT_COUNT_LONG = "--count";
+constexpr const char* OPT_HELP_SHORT = "-h";
+constexpr const char* OPT_HELP_LONG = "--help";
+constexpr const char* OPT_ITERATIONS_SHORT = "-i";
+constexpr const char* OPT_ITERATIONS_LONG = "--iterations";
+constexpr const char* OPT_LATENCY_CHAIN_MODE_SHORT = "-m";
+constexpr const char* OPT_LATENCY_CHAIN_MODE_LONG = "--latency-chain-mode";
+constexpr const char* OPT_LATENCY_SAMPLES_SHORT = "-n";
+constexpr const char* OPT_LATENCY_SAMPLES_LONG = "--latency-samples";
+constexpr const char* OPT_LATENCY_STRIDE_SHORT = "-s";
+constexpr const char* OPT_LATENCY_STRIDE_LONG = "--latency-stride-bytes";
+constexpr const char* OPT_LATENCY_TLB_LOCALITY_SHORT = "-l";
+constexpr const char* OPT_LATENCY_TLB_LOCALITY_LONG = "--latency-tlb-locality-kb";
+constexpr const char* OPT_NON_CACHEABLE_SHORT = "-u";
+constexpr const char* OPT_NON_CACHEABLE_LONG = "--non-cacheable";
+constexpr const char* OPT_ONLY_BANDWIDTH_SHORT = "-W";
+constexpr const char* OPT_ONLY_BANDWIDTH_LONG = "--only-bandwidth";
+constexpr const char* OPT_ONLY_LATENCY_SHORT = "-L";
+constexpr const char* OPT_ONLY_LATENCY_LONG = "--only-latency";
+constexpr const char* OPT_OUTPUT_SHORT = "-o";
+constexpr const char* OPT_OUTPUT_LONG = "--output";
+constexpr const char* OPT_PATTERNS_SHORT = "-P";
+constexpr const char* OPT_PATTERNS_LONG = "--patterns";
+constexpr const char* OPT_SWEEP_SHORT = "-S";
+constexpr const char* OPT_SWEEP_LONG = "--sweep";
+constexpr const char* OPT_SWEEP_MAX_RUNS_SHORT = "-X";
+constexpr const char* OPT_SWEEP_MAX_RUNS_LONG = "--sweep-max-runs";
+constexpr const char* OPT_THREADS_SHORT = "-t";
+constexpr const char* OPT_THREADS_LONG = "--threads";
+constexpr const char* OPT_TLB_DENSITY_SHORT = "-D";
+constexpr const char* OPT_TLB_DENSITY_LONG = "--tlb-density";
+
+bool is_option(const std::string& arg, const char* short_option, const char* long_option) {
+  return arg == short_option || arg == long_option;
+}
 
 bool tlb_sweep_density_from_string(const std::string& value, TlbSweepDensity& out_density) {
   if (value == "low") {
@@ -66,6 +112,143 @@ bool tlb_sweep_density_from_string(const std::string& value, TlbSweepDensity& ou
     return true;
   }
   return false;
+}
+
+std::vector<std::string> split_comma_values(const std::string& input) {
+  std::vector<std::string> values;
+  std::stringstream stream(input);
+  std::string item;
+  while (std::getline(stream, item, ',')) {
+    values.push_back(item);
+  }
+  return values;
+}
+
+bool sweep_parameter_from_string(const std::string& value,
+                                 SweepParameter& out_parameter,
+                                 std::string& out_name) {
+  if (value == "buffer-size") {
+    out_parameter = SweepParameter::BufferSizeMb;
+    out_name = "buffer-size";
+    return true;
+  }
+  if (value == "cache-size") {
+    out_parameter = SweepParameter::CacheSizeKb;
+    out_name = "cache-size";
+    return true;
+  }
+  if (value == "threads") {
+    out_parameter = SweepParameter::Threads;
+    out_name = "threads";
+    return true;
+  }
+  if (value == "latency-tlb-locality-kb") {
+    out_parameter = SweepParameter::LatencyTlbLocalityKb;
+    out_name = "latency-tlb-locality-kb";
+    return true;
+  }
+  if (value == "latency-stride-bytes") {
+    out_parameter = SweepParameter::LatencyStrideBytes;
+    out_name = "latency-stride-bytes";
+    return true;
+  }
+  if (value == "latency-chain-mode") {
+    out_parameter = SweepParameter::LatencyChainMode;
+    out_name = "latency-chain-mode";
+    return true;
+  }
+  if (value == "tlb-density") {
+    out_parameter = SweepParameter::TlbDensity;
+    out_name = "tlb-density";
+    return true;
+  }
+  return false;
+}
+
+SweepSpec parse_sweep_spec(const std::string& spec_text) {
+  const size_t equals_pos = spec_text.find('=');
+  if (equals_pos == std::string::npos || equals_pos == 0 || equals_pos == spec_text.size() - 1) {
+    throw std::invalid_argument("sweep must use key=value1,value2 syntax");
+  }
+
+  const std::string key = spec_text.substr(0, equals_pos);
+  const std::string value_text = spec_text.substr(equals_pos + 1);
+
+  SweepSpec spec;
+  if (!sweep_parameter_from_string(key, spec.parameter, spec.parameter_name)) {
+    throw std::invalid_argument("unsupported sweep parameter: " + key);
+  }
+
+  const std::vector<std::string> raw_values = split_comma_values(value_text);
+  if (raw_values.empty()) {
+    throw std::invalid_argument("sweep value list cannot be empty");
+  }
+
+  for (const std::string& raw_value : raw_values) {
+    if (raw_value.empty()) {
+      throw std::invalid_argument("sweep value list cannot contain empty values");
+    }
+
+    SweepValue value;
+    value.raw_value = raw_value;
+
+    if (spec.parameter == SweepParameter::LatencyChainMode) {
+      if (!latency_chain_mode_from_string(raw_value, value.latency_chain_mode)) {
+        throw std::out_of_range(Messages::error_latency_chain_mode_invalid());
+      }
+    } else if (spec.parameter == SweepParameter::TlbDensity) {
+      if (!tlb_sweep_density_from_string(raw_value, value.tlb_sweep_density)) {
+        throw std::out_of_range("must be one of: low, medium, high");
+      }
+    } else {
+      const long long parsed = std::stoll(raw_value);
+      switch (spec.parameter) {
+        case SweepParameter::BufferSizeMb:
+          if (parsed < 0 || parsed > std::numeric_limits<unsigned long>::max()) {
+            throw std::out_of_range(Messages::error_buffersize_invalid(
+                parsed, std::numeric_limits<unsigned long>::max()));
+          }
+          break;
+        case SweepParameter::CacheSizeKb:
+          if (parsed < 0 || parsed > Constants::MAX_CACHE_SIZE_KB ||
+              (parsed > 0 && parsed < Constants::MIN_CACHE_SIZE_KB)) {
+            throw std::out_of_range(Messages::error_cache_size_invalid(
+                Constants::MIN_CACHE_SIZE_KB,
+                Constants::MAX_CACHE_SIZE_KB,
+                Constants::MAX_CACHE_SIZE_KB / 1024));
+          }
+          break;
+        case SweepParameter::Threads:
+          if (parsed <= 0 || parsed > std::numeric_limits<int>::max()) {
+            throw std::out_of_range(Messages::error_threads_invalid(
+                parsed, 1, std::numeric_limits<int>::max()));
+          }
+          break;
+        case SweepParameter::LatencyTlbLocalityKb: {
+          const long long max_locality_kb =
+              static_cast<long long>(std::numeric_limits<size_t>::max() / Constants::BYTES_PER_KB);
+          if (parsed < 0 || parsed > max_locality_kb) {
+            throw std::out_of_range(Messages::error_latency_tlb_locality_invalid(parsed, max_locality_kb));
+          }
+          break;
+        }
+        case SweepParameter::LatencyStrideBytes:
+          if (parsed <= 0) {
+            throw std::out_of_range(Messages::error_latency_stride_invalid(
+                parsed, 1, std::numeric_limits<long long>::max()));
+          }
+          break;
+        case SweepParameter::LatencyChainMode:
+        case SweepParameter::TlbDensity:
+          break;
+      }
+      value.integer_value = parsed;
+    }
+
+    spec.values.push_back(value);
+  }
+
+  return spec;
 }
 
 }  // namespace
@@ -102,7 +285,7 @@ int parse_arguments(int argc, char* argv[], BenchmarkConfig& config) {
 
   bool analyze_tlb_present = false;
   for (int i = 1; i < argc; ++i) {
-    if (std::string(argv[i]) == "-analyze-tlb") {
+    if (is_option(std::string(argv[i]), OPT_ANALYZE_TLB_SHORT, OPT_ANALYZE_TLB_LONG)) {
       analyze_tlb_present = true;
       break;
     }
@@ -115,24 +298,25 @@ int parse_arguments(int argc, char* argv[], BenchmarkConfig& config) {
     bool latency_stride_seen = false;
     bool latency_chain_mode_seen = false;
     bool tlb_density_seen = false;
+    bool sweep_max_runs_seen = false;
 
     for (int i = 1; i < argc; ++i) {
       const std::string arg = argv[i];
-      if (arg == "-analyze-tlb") {
+      if (is_option(arg, OPT_ANALYZE_TLB_SHORT, OPT_ANALYZE_TLB_LONG)) {
         continue;
       }
 
-      if (arg == "-output") {
+      if (is_option(arg, OPT_OUTPUT_SHORT, OPT_OUTPUT_LONG)) {
         if (output_seen) {
           std::cerr << Messages::error_prefix()
-                    << Messages::error_duplicate_option("-output")
+                    << Messages::error_duplicate_option(OPT_OUTPUT_LONG)
                     << std::endl;
           print_usage(argv[0]);
           return EXIT_FAILURE;
         }
         if (++i >= argc) {
           std::cerr << Messages::error_prefix()
-                    << Messages::error_missing_value("-output")
+                    << Messages::error_missing_value(OPT_OUTPUT_LONG)
                     << std::endl;
           print_usage(argv[0]);
           return EXIT_FAILURE;
@@ -142,17 +326,82 @@ int parse_arguments(int argc, char* argv[], BenchmarkConfig& config) {
         continue;
       }
 
-      if (arg == "-latency-stride-bytes") {
-        if (latency_stride_seen) {
+      if (is_option(arg, OPT_SWEEP_SHORT, OPT_SWEEP_LONG)) {
+        if (++i >= argc) {
           std::cerr << Messages::error_prefix()
-                    << Messages::error_duplicate_option("-latency-stride-bytes")
+                    << Messages::error_missing_value(OPT_SWEEP_LONG)
+                    << std::endl;
+          print_usage(argv[0]);
+          return EXIT_FAILURE;
+        }
+        try {
+          config.sweep_specs.push_back(parse_sweep_spec(argv[i]));
+        } catch (const std::invalid_argument& e) {
+          std::cerr << Messages::error_prefix()
+                    << Messages::error_invalid_value(arg, argv[i], e.what())
+                    << std::endl;
+          print_usage(argv[0]);
+          return EXIT_FAILURE;
+        } catch (const std::out_of_range& e) {
+          std::cerr << Messages::error_prefix()
+                    << Messages::error_invalid_value(arg, argv[i], e.what())
+                    << std::endl;
+          print_usage(argv[0]);
+          return EXIT_FAILURE;
+        }
+        config.run_sweep = true;
+        continue;
+      }
+
+      if (is_option(arg, OPT_SWEEP_MAX_RUNS_SHORT, OPT_SWEEP_MAX_RUNS_LONG)) {
+        if (sweep_max_runs_seen) {
+          std::cerr << Messages::error_prefix()
+                    << Messages::error_duplicate_option(OPT_SWEEP_MAX_RUNS_LONG)
                     << std::endl;
           print_usage(argv[0]);
           return EXIT_FAILURE;
         }
         if (++i >= argc) {
           std::cerr << Messages::error_prefix()
-                    << Messages::error_missing_value("-latency-stride-bytes")
+                    << Messages::error_missing_value(OPT_SWEEP_MAX_RUNS_LONG)
+                    << std::endl;
+          print_usage(argv[0]);
+          return EXIT_FAILURE;
+        }
+        try {
+          const long long val_ll = std::stoll(argv[i]);
+          if (val_ll <= 0) {
+            throw std::out_of_range("must be a positive integer");
+          }
+          config.sweep_max_runs = static_cast<size_t>(val_ll);
+        } catch (const std::invalid_argument& e) {
+          std::cerr << Messages::error_prefix()
+                    << Messages::error_invalid_value(arg, argv[i], e.what())
+                    << std::endl;
+          print_usage(argv[0]);
+          return EXIT_FAILURE;
+        } catch (const std::out_of_range& e) {
+          std::cerr << Messages::error_prefix()
+                    << Messages::error_invalid_value(arg, argv[i], e.what())
+                    << std::endl;
+          print_usage(argv[0]);
+          return EXIT_FAILURE;
+        }
+        sweep_max_runs_seen = true;
+        continue;
+      }
+
+      if (is_option(arg, OPT_LATENCY_STRIDE_SHORT, OPT_LATENCY_STRIDE_LONG)) {
+        if (latency_stride_seen) {
+          std::cerr << Messages::error_prefix()
+                    << Messages::error_duplicate_option(OPT_LATENCY_STRIDE_LONG)
+                    << std::endl;
+          print_usage(argv[0]);
+          return EXIT_FAILURE;
+        }
+        if (++i >= argc) {
+          std::cerr << Messages::error_prefix()
+                    << Messages::error_missing_value(OPT_LATENCY_STRIDE_LONG)
                     << std::endl;
           print_usage(argv[0]);
           return EXIT_FAILURE;
@@ -204,17 +453,17 @@ int parse_arguments(int argc, char* argv[], BenchmarkConfig& config) {
         continue;
       }
 
-      if (arg == "-latency-chain-mode") {
+      if (is_option(arg, OPT_LATENCY_CHAIN_MODE_SHORT, OPT_LATENCY_CHAIN_MODE_LONG)) {
         if (latency_chain_mode_seen) {
           std::cerr << Messages::error_prefix()
-                    << Messages::error_duplicate_option("-latency-chain-mode")
+                    << Messages::error_duplicate_option(OPT_LATENCY_CHAIN_MODE_LONG)
                     << std::endl;
           print_usage(argv[0]);
           return EXIT_FAILURE;
         }
         if (++i >= argc) {
           std::cerr << Messages::error_prefix()
-                    << Messages::error_missing_value("-latency-chain-mode")
+                    << Messages::error_missing_value(OPT_LATENCY_CHAIN_MODE_LONG)
                     << std::endl;
           print_usage(argv[0]);
           return EXIT_FAILURE;
@@ -244,17 +493,17 @@ int parse_arguments(int argc, char* argv[], BenchmarkConfig& config) {
         continue;
       }
 
-      if (arg == "-tlb-density") {
+      if (is_option(arg, OPT_TLB_DENSITY_SHORT, OPT_TLB_DENSITY_LONG)) {
         if (tlb_density_seen) {
           std::cerr << Messages::error_prefix()
-                    << Messages::error_duplicate_option("-tlb-density")
+                    << Messages::error_duplicate_option(OPT_TLB_DENSITY_LONG)
                     << std::endl;
           print_usage(argv[0]);
           return EXIT_FAILURE;
         }
         if (++i >= argc) {
           std::cerr << Messages::error_prefix()
-                    << Messages::error_missing_value("-tlb-density")
+                    << Messages::error_missing_value(OPT_TLB_DENSITY_LONG)
                     << std::endl;
           print_usage(argv[0]);
           return EXIT_FAILURE;
@@ -283,23 +532,28 @@ int parse_arguments(int argc, char* argv[], BenchmarkConfig& config) {
       return EXIT_FAILURE;
     }
 
+    config.cpu_name = get_processor_name();
+    config.macos_version = get_macos_version();
+    config.perf_cores = get_performance_cores();
+    config.eff_cores = get_efficiency_cores();
+
     return EXIT_SUCCESS;
   }
   
-  // First pass: parse -cache-size early (needed for cache size detection)
+  // First pass: parse --cache-size early (needed for cache size detection)
   bool cache_size_seen = false;
   for (int i = 1; i < argc; ++i) {
     std::string arg = argv[i];
     try {
-      if (arg == "-cache-size") {
+      if (is_option(arg, OPT_CACHE_SIZE_SHORT, OPT_CACHE_SIZE_LONG)) {
         if (cache_size_seen)
-          throw std::invalid_argument(Messages::error_duplicate_option("-cache-size"));
+          throw std::invalid_argument(Messages::error_duplicate_option(OPT_CACHE_SIZE_LONG));
         if (++i < argc) {
           // std::stoll() throws std::invalid_argument if conversion fails
           // std::stoll() throws std::out_of_range if value out of range
           long long val_ll = std::stoll(argv[i]);
           // Error: Value validation - out of valid range
-          // Note: 0 is accepted here and validated later (allowed only with -only-latency)
+          // Note: 0 is accepted here and validated later (allowed only with --only-latency)
           if (val_ll < 0 || val_ll > Constants::MAX_CACHE_SIZE_KB ||
               (val_ll > 0 && val_ll < Constants::MIN_CACHE_SIZE_KB))
             throw std::out_of_range(Messages::error_cache_size_invalid(Constants::MIN_CACHE_SIZE_KB,
@@ -309,7 +563,7 @@ int parse_arguments(int argc, char* argv[], BenchmarkConfig& config) {
           cache_size_seen = true;
         } else
           // Error: Missing required value for option
-          throw std::invalid_argument(Messages::error_missing_value("-cache-size"));
+          throw std::invalid_argument(Messages::error_missing_value(OPT_CACHE_SIZE_LONG));
       }
     } catch (const std::invalid_argument &e) {
       // Exception caught: Convert to return code and print error
@@ -359,13 +613,14 @@ int parse_arguments(int argc, char* argv[], BenchmarkConfig& config) {
   bool latency_tlb_locality_seen = false;
   bool threads_seen = false;
   bool output_seen = false;
+  bool sweep_max_runs_seen = false;
 
   for (int i = 1; i < argc; ++i) {
     std::string arg = argv[i];
     try {
-      if (arg == "-iterations") {
+      if (is_option(arg, OPT_ITERATIONS_SHORT, OPT_ITERATIONS_LONG)) {
         if (iterations_seen)
-          throw std::invalid_argument(Messages::error_duplicate_option("-iterations"));
+          throw std::invalid_argument(Messages::error_duplicate_option(OPT_ITERATIONS_LONG));
         if (++i < argc) {
           // Error: std::stoll() may throw std::invalid_argument or std::out_of_range
           long long val_ll = std::stoll(argv[i]);
@@ -376,27 +631,27 @@ int parse_arguments(int argc, char* argv[], BenchmarkConfig& config) {
           config.user_specified_iterations = true;
         } else
           // Error: Missing required value
-          throw std::invalid_argument(Messages::error_missing_value("-iterations"));
+          throw std::invalid_argument(Messages::error_missing_value(OPT_ITERATIONS_LONG));
         iterations_seen = true;
-      } else if (arg == "-buffersize") {
+      } else if (is_option(arg, OPT_BUFFER_SIZE_SHORT, OPT_BUFFER_SIZE_LONG)) {
         if (buffersize_seen)
-          throw std::invalid_argument(Messages::error_duplicate_option("-buffersize"));
+          throw std::invalid_argument(Messages::error_duplicate_option(OPT_BUFFER_SIZE_LONG));
         if (++i < argc) {
           // Error: std::stoll() may throw exceptions
           long long val_ll = std::stoll(argv[i]);
           // Error: Value validation - out of valid range
-          // Note: 0 is accepted here and validated later (allowed only with -only-latency)
+          // Note: 0 is accepted here and validated later (allowed only with --only-latency)
           if (val_ll < 0 || val_ll > std::numeric_limits<unsigned long>::max())
             throw std::out_of_range(Messages::error_buffersize_invalid(val_ll, std::numeric_limits<unsigned long>::max()));
           requested_buffer_size_mb_ll = val_ll;
           config.user_specified_buffersize = true;
         } else
           // Error: Missing required value
-          throw std::invalid_argument(Messages::error_missing_value("-buffersize"));
+          throw std::invalid_argument(Messages::error_missing_value(OPT_BUFFER_SIZE_LONG));
         buffersize_seen = true;
-      } else if (arg == "-count") {
+      } else if (is_option(arg, OPT_COUNT_SHORT, OPT_COUNT_LONG)) {
         if (count_seen)
-          throw std::invalid_argument(Messages::error_duplicate_option("-count"));
+          throw std::invalid_argument(Messages::error_duplicate_option(OPT_COUNT_LONG));
         if (++i < argc) {
           // Error: std::stoll() may throw exceptions
           long long val_ll = std::stoll(argv[i]);
@@ -406,11 +661,11 @@ int parse_arguments(int argc, char* argv[], BenchmarkConfig& config) {
           config.loop_count = static_cast<int>(val_ll);
         } else
           // Error: Missing required value
-          throw std::invalid_argument(Messages::error_missing_value("-count"));
+          throw std::invalid_argument(Messages::error_missing_value(OPT_COUNT_LONG));
         count_seen = true;
-      } else if (arg == "-latency-samples") {
+      } else if (is_option(arg, OPT_LATENCY_SAMPLES_SHORT, OPT_LATENCY_SAMPLES_LONG)) {
         if (latency_samples_seen)
-          throw std::invalid_argument(Messages::error_duplicate_option("-latency-samples"));
+          throw std::invalid_argument(Messages::error_duplicate_option(OPT_LATENCY_SAMPLES_LONG));
         if (++i < argc) {
           // Error: std::stoll() may throw exceptions
           long long val_ll = std::stoll(argv[i]);
@@ -421,11 +676,11 @@ int parse_arguments(int argc, char* argv[], BenchmarkConfig& config) {
           config.user_specified_latency_samples = true;
         } else
           // Error: Missing required value
-          throw std::invalid_argument(Messages::error_missing_value("-latency-samples"));
+          throw std::invalid_argument(Messages::error_missing_value(OPT_LATENCY_SAMPLES_LONG));
         latency_samples_seen = true;
-      } else if (arg == "-latency-stride-bytes") {
+      } else if (is_option(arg, OPT_LATENCY_STRIDE_SHORT, OPT_LATENCY_STRIDE_LONG)) {
         if (latency_stride_seen)
-          throw std::invalid_argument(Messages::error_duplicate_option("-latency-stride-bytes"));
+          throw std::invalid_argument(Messages::error_duplicate_option(OPT_LATENCY_STRIDE_LONG));
         if (++i < argc) {
           long long val_ll = std::stoll(argv[i]);
           if (val_ll <= 0) {
@@ -435,12 +690,12 @@ int parse_arguments(int argc, char* argv[], BenchmarkConfig& config) {
           config.latency_stride_bytes = static_cast<size_t>(val_ll);
           config.user_specified_latency_stride = true;
         } else {
-          throw std::invalid_argument(Messages::error_missing_value("-latency-stride-bytes"));
+          throw std::invalid_argument(Messages::error_missing_value(OPT_LATENCY_STRIDE_LONG));
         }
         latency_stride_seen = true;
-      } else if (arg == "-latency-chain-mode") {
+      } else if (is_option(arg, OPT_LATENCY_CHAIN_MODE_SHORT, OPT_LATENCY_CHAIN_MODE_LONG)) {
         if (latency_chain_mode_seen)
-          throw std::invalid_argument(Messages::error_duplicate_option("-latency-chain-mode"));
+          throw std::invalid_argument(Messages::error_duplicate_option(OPT_LATENCY_CHAIN_MODE_LONG));
         if (++i < argc) {
           LatencyChainMode parsed_mode = LatencyChainMode::Auto;
           if (!latency_chain_mode_from_string(argv[i], parsed_mode)) {
@@ -449,12 +704,12 @@ int parse_arguments(int argc, char* argv[], BenchmarkConfig& config) {
           config.latency_chain_mode = parsed_mode;
           config.user_specified_latency_chain_mode = true;
         } else {
-          throw std::invalid_argument(Messages::error_missing_value("-latency-chain-mode"));
+          throw std::invalid_argument(Messages::error_missing_value(OPT_LATENCY_CHAIN_MODE_LONG));
         }
         latency_chain_mode_seen = true;
-      } else if (arg == "-latency-tlb-locality-kb") {
+      } else if (is_option(arg, OPT_LATENCY_TLB_LOCALITY_SHORT, OPT_LATENCY_TLB_LOCALITY_LONG)) {
         if (latency_tlb_locality_seen)
-          throw std::invalid_argument(Messages::error_duplicate_option("-latency-tlb-locality-kb"));
+          throw std::invalid_argument(Messages::error_duplicate_option(OPT_LATENCY_TLB_LOCALITY_LONG));
         if (++i < argc) {
           long long val_ll = std::stoll(argv[i]);
           const long long max_locality_kb =
@@ -465,45 +720,65 @@ int parse_arguments(int argc, char* argv[], BenchmarkConfig& config) {
           requested_latency_tlb_locality_kb_ll = val_ll;
           config.user_specified_latency_tlb_locality = true;
         } else {
-          throw std::invalid_argument(Messages::error_missing_value("-latency-tlb-locality-kb"));
+          throw std::invalid_argument(Messages::error_missing_value(OPT_LATENCY_TLB_LOCALITY_LONG));
         }
         latency_tlb_locality_seen = true;
-      } else if (arg == "-cache-size") {
+      } else if (is_option(arg, OPT_CACHE_SIZE_SHORT, OPT_CACHE_SIZE_LONG)) {
         // Already parsed in first pass, skip it and its value in second pass
         if (++i >= argc) {
           // Error: This shouldn't happen (first pass should have validated it), but handle defensively
-          throw std::invalid_argument(Messages::error_missing_value("-cache-size"));
+          throw std::invalid_argument(Messages::error_missing_value(OPT_CACHE_SIZE_LONG));
         }
         // Silently skip - already parsed and validated in first pass
         continue;
-      } else if (arg == "-output") {
+      } else if (is_option(arg, OPT_SWEEP_SHORT, OPT_SWEEP_LONG)) {
+        if (++i < argc) {
+          config.sweep_specs.push_back(parse_sweep_spec(argv[i]));
+          config.run_sweep = true;
+        } else {
+          throw std::invalid_argument(Messages::error_missing_value(OPT_SWEEP_LONG));
+        }
+      } else if (is_option(arg, OPT_SWEEP_MAX_RUNS_SHORT, OPT_SWEEP_MAX_RUNS_LONG)) {
+        if (sweep_max_runs_seen)
+          throw std::invalid_argument(Messages::error_duplicate_option(OPT_SWEEP_MAX_RUNS_LONG));
+        if (++i < argc) {
+          long long val_ll = std::stoll(argv[i]);
+          if (val_ll <= 0) {
+            throw std::out_of_range("sweep-max-runs must be a positive integer");
+          }
+          config.sweep_max_runs = static_cast<size_t>(val_ll);
+        } else {
+          throw std::invalid_argument(Messages::error_missing_value(OPT_SWEEP_MAX_RUNS_LONG));
+        }
+        sweep_max_runs_seen = true;
+      } else if (is_option(arg, OPT_OUTPUT_SHORT, OPT_OUTPUT_LONG)) {
         if (output_seen)
-          throw std::invalid_argument(Messages::error_duplicate_option("-output"));
+          throw std::invalid_argument(Messages::error_duplicate_option(OPT_OUTPUT_LONG));
         if (++i < argc) {
           config.output_file = argv[i];
         } else
           // Error: Missing required value
-          throw std::invalid_argument(Messages::error_missing_value("-output"));
+          throw std::invalid_argument(Messages::error_missing_value(OPT_OUTPUT_LONG));
         output_seen = true;
-      } else if (arg == "-benchmark") {
+      } else if (is_option(arg, OPT_BENCHMARK_SHORT, OPT_BENCHMARK_LONG)) {
         config.run_benchmark = true;
         if (config.run_patterns) {
-          throw std::invalid_argument(Messages::error_mutually_exclusive_modes("-benchmark", "-patterns"));
+          throw std::invalid_argument(Messages::error_mutually_exclusive_modes(OPT_BENCHMARK_LONG, OPT_PATTERNS_LONG));
         }
-      } else if (arg == "-patterns") {
+      } else if (is_option(arg, OPT_PATTERNS_SHORT, OPT_PATTERNS_LONG)) {
         config.run_patterns = true;
         if (config.run_benchmark) {
-          throw std::invalid_argument(Messages::error_mutually_exclusive_modes("-benchmark", "-patterns"));
+          throw std::invalid_argument(Messages::error_mutually_exclusive_modes(OPT_BENCHMARK_LONG, OPT_PATTERNS_LONG));
         }
-      } else if (arg == "-non-cacheable") {
+      } else if (is_option(arg, OPT_NON_CACHEABLE_SHORT, OPT_NON_CACHEABLE_LONG)) {
         config.use_non_cacheable = true;
-      } else if (arg == "-only-bandwidth") {
+      } else if (is_option(arg, OPT_ONLY_BANDWIDTH_SHORT, OPT_ONLY_BANDWIDTH_LONG)) {
         config.only_bandwidth = true;
-      } else if (arg == "-only-latency") {
+      } else if (is_option(arg, OPT_ONLY_LATENCY_SHORT, OPT_ONLY_LATENCY_LONG)) {
         config.only_latency = true;
-      } else if (arg == "-threads") {
+      } else if (is_option(arg, OPT_THREADS_SHORT, OPT_THREADS_LONG)) {
         if (threads_seen)
-          throw std::invalid_argument(Messages::error_duplicate_option("-threads"));
+          throw std::invalid_argument(Messages::error_duplicate_option(OPT_THREADS_LONG));
         if (++i < argc) {
           // Error: std::stoll() may throw exceptions
           long long val_ll = std::stoll(argv[i]);
@@ -513,9 +788,9 @@ int parse_arguments(int argc, char* argv[], BenchmarkConfig& config) {
           requested_threads_ll = val_ll;
         } else
           // Error: Missing required value
-          throw std::invalid_argument(Messages::error_missing_value("-threads"));
+          throw std::invalid_argument(Messages::error_missing_value(OPT_THREADS_LONG));
         threads_seen = true;
-      } else if (arg == "-h" || arg == "--help") {
+      } else if (is_option(arg, OPT_HELP_SHORT, OPT_HELP_LONG)) {
         config.help_printed = true;
         print_help(argv[0]);
         return EXIT_SUCCESS;  // Special return value for help (not an error)

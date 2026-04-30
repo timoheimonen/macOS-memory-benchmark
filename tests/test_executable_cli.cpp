@@ -71,7 +71,7 @@ TEST(ExecutableCliIntegrationTest, NoArgumentsShowsHelpAndReturnsSuccessIntegrat
 
   EXPECT_EQ(result.exit_code, EXIT_SUCCESS);
   EXPECT_NE(result.output.find("Usage:"), std::string::npos);
-  EXPECT_NE(result.output.find("-benchmark"), std::string::npos);
+  EXPECT_NE(result.output.find("--benchmark"), std::string::npos);
 }
 
 TEST(ExecutableCliIntegrationTest, HelpFlagShowsHelpAndReturnsSuccessIntegration) {
@@ -79,37 +79,37 @@ TEST(ExecutableCliIntegrationTest, HelpFlagShowsHelpAndReturnsSuccessIntegration
 
   EXPECT_EQ(result.exit_code, EXIT_SUCCESS);
   EXPECT_NE(result.output.find("Usage:"), std::string::npos);
-  EXPECT_NE(result.output.find("-patterns"), std::string::npos);
+  EXPECT_NE(result.output.find("--patterns"), std::string::npos);
 }
 
 TEST(ExecutableCliIntegrationTest, OptionsWithoutModeShowHelpAndReturnSuccessIntegration) {
-  const CliResult result = run_memory_benchmark("-threads 1");
+  const CliResult result = run_memory_benchmark("--threads 1");
 
   EXPECT_EQ(result.exit_code, EXIT_SUCCESS);
   EXPECT_NE(result.output.find("Usage:"), std::string::npos);
-  EXPECT_NE(result.output.find("-threads <count>"), std::string::npos);
+  EXPECT_NE(result.output.find("--threads <count>"), std::string::npos);
 }
 
 TEST(ExecutableCliIntegrationTest, InvalidStandardModeConfigReturnsFailureIntegration) {
-  const CliResult result = run_memory_benchmark("-benchmark -only-bandwidth -latency-samples 1");
+  const CliResult result = run_memory_benchmark("--benchmark --only-bandwidth --latency-samples 1");
 
   EXPECT_EQ(result.exit_code, EXIT_FAILURE);
-  EXPECT_NE(result.output.find("-only-bandwidth cannot be used with -latency-samples"), std::string::npos);
+  EXPECT_NE(result.output.find("--only-bandwidth cannot be used with --latency-samples"), std::string::npos);
 }
 
 TEST(ExecutableCliIntegrationTest, CoreToCoreArgumentsAreRoutedBeforeNormalParserIntegration) {
-  const CliResult result = run_memory_benchmark("-analyze-core2core -buffersize 256");
+  const CliResult result = run_memory_benchmark("--analyze-core2core --buffer-size 256");
 
   EXPECT_EQ(result.exit_code, EXIT_FAILURE);
-  EXPECT_NE(result.output.find("-analyze-core2core allows only optional"), std::string::npos);
+  EXPECT_NE(result.output.find("--analyze-core2core allows only optional"), std::string::npos);
 }
 
 TEST(ExecutableCliIntegrationTest, StandardBenchmarkWritesJsonIntegration) {
   const std::string output_path = make_temp_json_path("standard");
   std::remove(output_path.c_str());
 
-  const CliResult result = run_memory_benchmark("-benchmark -only-bandwidth -buffersize 1 -iterations 1 "
-                                                "-count 1 -threads 1 -output " + output_path);
+  const CliResult result = run_memory_benchmark("--benchmark --only-bandwidth --buffer-size 1 --iterations 1 "
+                                                "--count 1 --threads 1 --output " + output_path);
 
   EXPECT_EQ(result.exit_code, EXIT_SUCCESS);
   EXPECT_NE(result.output.find("Running benchmarks"), std::string::npos);
@@ -124,7 +124,7 @@ TEST(ExecutableCliIntegrationTest, StandardBenchmarkWritesJsonIntegration) {
 }
 
 TEST(ExecutableCliIntegrationTest, PatternModeRunsPatternOrchestrationIntegration) {
-  const CliResult result = run_memory_benchmark("-patterns -buffersize 1 -iterations 1 -count 1");
+  const CliResult result = run_memory_benchmark("--patterns --buffer-size 1 --iterations 1 --count 1");
 
   EXPECT_EQ(result.exit_code, EXIT_SUCCESS);
   EXPECT_NE(result.output.find("Running Pattern Benchmarks"), std::string::npos);

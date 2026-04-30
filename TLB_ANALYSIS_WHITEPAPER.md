@@ -1,8 +1,8 @@
-# TLB Analysis Whitepaper: `-analyze-tlb` Methodology
+# TLB Analysis Whitepaper: `--analyze-tlb` Methodology
 
 ## 1. Purpose
 
-This document specifies how `macOS-memory-benchmark` implements standalone TLB analysis mode (`-analyze-tlb`) in version `0.55.4`.
+This document specifies how `macOS-memory-benchmark` implements standalone TLB analysis mode (`--analyze-tlb`) in version `0.56.0`.
 
 The goal is to provide a reproducible, implementation-accurate description of:
 
@@ -32,29 +32,29 @@ Related user-facing docs:
 
 Related whitepaper for the other standalone analysis mode:
 
-- [CORE_TO_CORE_WHITEPAPER.md](CORE_TO_CORE_WHITEPAPER.md) — Core-to-Core Cache-Line Handoff Latency Benchmark (`-analyze-core2core`)
+- [CORE_TO_CORE_WHITEPAPER.md](CORE_TO_CORE_WHITEPAPER.md) — Core-to-Core Cache-Line Handoff Latency Benchmark (`--analyze-core2core`)
 
 ## 3. CLI Contract
 
 ### 3.1 Accepted Forms
 
-`-analyze-tlb` runs a dedicated analysis path and accepts only optional JSON output, optional latency stride override, optional chain-mode override, and optional sweep density:
+`--analyze-tlb` runs a dedicated analysis path and accepts only optional JSON output, optional latency stride override, optional chain-mode override, and optional sweep density:
 
 ```bash
-memory_benchmark -analyze-tlb
-memory_benchmark -analyze-tlb -output tlb_analysis.json
-memory_benchmark -output tlb_analysis.json -analyze-tlb
-memory_benchmark -analyze-tlb -latency-stride-bytes 128 -output tlb_analysis_stride128.json
-memory_benchmark -analyze-tlb -latency-chain-mode random-box -tlb-density medium -output tlb_analysis_medium.json
+memory_benchmark --analyze-tlb
+memory_benchmark --analyze-tlb --output tlb_analysis.json
+memory_benchmark --output tlb_analysis.json --analyze-tlb
+memory_benchmark --analyze-tlb --latency-stride-bytes 128 --output tlb_analysis_stride128.json
+memory_benchmark --analyze-tlb --latency-chain-mode random-box --tlb-density medium --output tlb_analysis_medium.json
 ```
 
 ### 3.2 Stride Default
 
-If `-latency-stride-bytes` is not provided, the default stride is **256 bytes**, which matches the standard latency mode default (`Constants::LATENCY_STRIDE_BYTES`).
+If `--latency-stride-bytes` is not provided, the default stride is **256 bytes**, which matches the standard latency mode default (`Constants::LATENCY_STRIDE_BYTES`).
 
-### 3.3 Sweep Density (`-tlb-density`)
+### 3.3 Sweep Density (`--tlb-density`)
 
-Sweep density applies only to `-analyze-tlb`.
+Sweep density applies only to `--analyze-tlb`.
 
 - `low`: 15-point base sweep, no refinement pass
 - `medium`: 15-point base sweep + refinement pass
@@ -62,14 +62,14 @@ Sweep density applies only to `-analyze-tlb`.
 
 ### 3.4 Rejected Combinations
 
-All other options are rejected when `-analyze-tlb` is present.
-`-latency-chain-mode global-random` is also rejected for `-analyze-tlb`, because it ignores locality windows and would turn the locality sweep into repeated full-buffer random measurements with misleading boundary labels.
+All other options are rejected when `--analyze-tlb` is present.
+`--latency-chain-mode global-random` is also rejected for `--analyze-tlb`, because it ignores locality windows and would turn the locality sweep into repeated full-buffer random measurements with misleading boundary labels.
 
 Example (invalid):
 
 ```bash
-memory_benchmark -analyze-tlb -buffersize 1024
-memory_benchmark -analyze-tlb -latency-chain-mode global-random
+memory_benchmark --analyze-tlb --buffer-size 1024
+memory_benchmark --analyze-tlb --latency-chain-mode global-random
 ```
 
 ## 4. Measurement Workflow
@@ -97,9 +97,9 @@ The mode uses fixed constants:
 
 Stride behavior:
 
-- Effective stride is taken from `-latency-stride-bytes` (default: **256 bytes**).
+- Effective stride is taken from `--latency-stride-bytes` (default: **256 bytes**).
 
-**Chain mode:** The latency chain mode is resolved via `resolve_latency_chain_mode(config.latency_chain_mode, page_walk_baseline_locality_bytes)`. This determines the method used to build the pointer-chase chain for each locality measurement. The resolved mode is reported in the console output and stored in the JSON metadata. In `-analyze-tlb`, `global-random` is rejected; `auto` resolves to `random-box` because the baseline locality is non-zero.
+**Chain mode:** The latency chain mode is resolved via `resolve_latency_chain_mode(config.latency_chain_mode, page_walk_baseline_locality_bytes)`. This determines the method used to build the pointer-chase chain for each locality measurement. The resolved mode is reported in the console output and stored in the JSON metadata. In `--analyze-tlb`, `global-random` is rejected; `auto` resolves to `random-box` because the baseline locality is non-zero.
 
 **Memory prefaulting:** After buffer allocation, the code calls `madvise(ptr, size_bytes, MADV_WILLNEED)` to prefault pages and reduce page-fault noise during early measurement.
 
@@ -109,7 +109,7 @@ Per-point central value is `P50` (median) over 30 loops.
 
 ### 4.3 Locality Sweep
 
-Main sweep windows depend on `-tlb-density`:
+Main sweep windows depend on `--tlb-density`:
 
 - `low` / `medium` base set (15 points):
   - `16KB`, `64KB`, `128KB`, `256KB`, `512KB`
@@ -272,7 +272,7 @@ Report always includes:
 
 - CPU, page size, selected buffer, stride, loops/accesses config
 - Resolved **latency chain mode**
-- Fine-sweep refinement summary (added points, total points)
+- Fine--sweep refinement summary (added points, total points)
 - `[Private Cache Knee Detection]`
 - `[L1 TLB Detection]`
 - `[L2 TLB / Page Walk]`
@@ -292,9 +292,9 @@ Page-walk section:
 - When available: shows page-walk penalty in `ns`, with explicit dynamic endpoints (`baseline -> 512MB`)
 - When unavailable: shows "N/A" with the reason (e.g., buffer < 512 MB)
 
-## 9. JSON Output Contract (`-output`)
+## 9. JSON Output Contract (`--output`)
 
-When `-output <file>` is provided with `-analyze-tlb`, output includes:
+When `--output <file>` is provided with `--analyze-tlb`, output includes:
 
 - top-level metadata:
   - `configuration`
@@ -367,7 +367,7 @@ Interpretation note for Apple Silicon:
 
 ### Comparing Results Across Apple Silicon Models
 
-All Apple Silicon Macs use a fixed **16 KB page size**. When comparing `-analyze-tlb` results across different Apple Silicon generations (M1, M2, M3, M4, M5, etc.):
+All Apple Silicon Macs use a fixed **16 KB page size**. When comparing `--analyze-tlb` results across different Apple Silicon generations (M1, M2, M3, M4, M5, etc.):
 
 - `inferred_entries` is calculated as the midpoint of the detected entry range; use `inferred_entries_min` and `inferred_entries_max` when comparing uncertainty windows.
 - The actual entry counts may differ between generations due to microarchitectural changes.
@@ -378,8 +378,8 @@ All Apple Silicon Macs use a fixed **16 KB page size**. When comparing `-analyze
 If L1 detection reports "Not detected":
 
 1. **Check the selected buffer size:** Is it large enough to sweep through the TLB capacity? The 16 KB sweep start may be insufficient if stride is large.
-2. **Review the stride:** If `-latency-stride-bytes` is large (e.g., 512 bytes), `min_sweep_locality = max(16KB, 2 * stride)` may skip the actual L1 TLB boundary. Try re-running with a smaller stride.
-3. **Check the raw JSON data:** Export with `-output` and inspect `sweep[].p50_latency_ns` to see if the expected inflection point is present in the raw data.
+2. **Review the stride:** If `--latency-stride-bytes` is large (e.g., 512 bytes), `min_sweep_locality = max(16KB, 2 * stride)` may skip the actual L1 TLB boundary. Try re-running with a smaller stride.
+3. **Check the raw JSON data:** Export with `--output` and inspect `sweep[].p50_latency_ns` to see if the expected inflection point is present in the raw data.
 4. **Verify CPU/system state:** Thermal throttling or power-saving modes can obscure boundaries; run in a stable, idle state.
 
 ### Best Practices for Comparable Runs

@@ -1,6 +1,6 @@
 # Measurement Capabilities
 
-`memory_benchmark` is a low-level benchmark and analysis tool for characterizing memory-system behavior on macOS
+macOS-memory-benchmark / `memory_benchmark` is a low-level benchmark and analysis tool for characterizing memory-system behavior on macOS
 running on Apple Silicon.
 
 The tool is intended for practical microarchitectural investigation rather than abstract synthetic scoring. It measures
@@ -16,7 +16,7 @@ Supported bandwidth targets include:
 
 - Main memory / DRAM bandwidth
 - L1/L2 cache-oriented bandwidth paths
-- Custom cache-sized working sets via `-cache-size`
+- Custom cache-sized working sets via `--cache-size`
 
 Bandwidth results are reported in GB/s. These results are useful for comparing throughput behavior across buffer sizes,
 thread counts, access modes, and system conditions.
@@ -31,8 +31,8 @@ Latency tests can target:
 
 - Main memory
 - Cache-sized working sets
-- Custom pointer-chain stride values via `-latency-stride-bytes`
-- Custom locality windows via `-latency-tlb-locality-kb`
+- Custom pointer-chain stride values via `--latency-stride-bytes`
+- Custom locality windows via `--latency-tlb-locality-kb`
 
 Latency results are reported in nanoseconds per access.
 
@@ -56,7 +56,7 @@ access behavior.
 
 ## TLB Behavior
 
-The standalone TLB analysis mode, `-analyze-tlb`, estimates translation-related behavior by sweeping locality windows and
+The standalone TLB analysis mode, `--analyze-tlb`, estimates translation-related behavior by sweeping locality windows and
 measuring pointer-chase latency changes.
 
 It can report:
@@ -92,16 +92,37 @@ main-memory latency.
 
 Advanced latency experiments can be configured with:
 
-- `-latency-stride-bytes <bytes>`: controls the distance between pointer-chain nodes.
-- `-latency-tlb-locality-kb <KB>`: controls the locality window used when building pointer chains.
-- `-latency-chain-mode <mode>`: controls pointer-chain ordering policy.
+- `--latency-stride-bytes <bytes>`: controls the distance between pointer-chain nodes.
+- `--latency-tlb-locality-kb <KB>`: controls the locality window used when building pointer chains.
+- `--latency-chain-mode <mode>`: controls pointer-chain ordering policy.
 
 These options allow manual exploration of boundary cases where cache locality, TLB locality, prefetch behavior, and DRAM
 access begin to dominate results differently.
 
+## Built-in Parameter Sweeps
+
+Sweep mode runs repeated measurements across parameter lists and stores every run in one combined JSON file. This makes
+buffer-size, cache-size, thread-scaling, stride, locality, chain-mode, TLB-density, and core-to-core sample-depth
+experiments reproducible without external shell orchestration.
+
+Supported sweep targets include:
+
+- Main buffer size via `--sweep buffer-size=...`
+- Custom cache target via `--sweep cache-size=...`
+- Bandwidth thread count via `--sweep threads=...`
+- Latency locality windows via `--sweep latency-tlb-locality-kb=...`
+- Pointer-chain stride via `--sweep latency-stride-bytes=...`
+- Pointer-chain construction mode via `--sweep latency-chain-mode=...`
+- TLB analysis density via `--sweep tlb-density=...`
+- Core-to-core loop count via `--sweep count=...`
+- Core-to-core sample depth via `--sweep latency-samples=...`
+
+Multiple `--sweep` options are combined as a Cartesian product. `--sweep-max-runs` caps the generated run count, and
+`--output` is required for the combined JSON result.
+
 ## Core-to-Core Cache-Line Handoff
 
-The standalone core-to-core mode, `-analyze-core2core`, measures two-thread cache-line handoff behavior using a ping-pong
+The standalone core-to-core mode, `--analyze-core2core`, measures two-thread cache-line handoff behavior using a ping-pong
 style benchmark.
 
 It reports:
@@ -120,7 +141,7 @@ The measurements are sensitive to system state, thermal conditions, power manage
 For long or comparative runs, use repeated samples and prevent sleep, for example:
 
 ```bash
-caffeinate -i -d memory_benchmark -benchmark -count 10 -buffersize 1024
+caffeinate -i -d memory_benchmark --benchmark --count 10 --buffer-size 1024
 ```
 
 For DRAM-focused results, use sufficiently large buffers so that the working set is not dominated by cache residency.

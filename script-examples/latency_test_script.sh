@@ -20,7 +20,7 @@ ONLY_LATENCY=true
 tlb_locality_sizes_kb=(16 512 1024 2048 4096 8192 16384 32768)
 
 # Leave empty by default for cleaner cache-hierarchy latency runs.
-# Set to "-non-cacheable" if you specifically want MADV_RANDOM behavior.
+# Set to "--non-cacheable" if you specifically want MADV_RANDOM behavior.
 NON_CACHEABLE=""
 
 # Cache sizes in KB, choose list from the following or make your own
@@ -38,15 +38,15 @@ if ! command -v "${BENCHMARK_CMD}" > /dev/null 2>&1; then
 fi
 
 echo "Configuration:"
-echo "  -only-latency: ${ONLY_LATENCY}"
-echo "  -buffersize: ${BUFFER_SIZE_MB} MB"
-echo "  -latency-samples: ${LATENCY_SAMPLES}"
-echo "  -count: ${LOOP_COUNT}"
-echo "  -latency-tlb-locality-kb values: ${tlb_locality_sizes_kb[*]}"
+echo "  --only-latency: ${ONLY_LATENCY}"
+echo "  --buffer-size: ${BUFFER_SIZE_MB} MB"
+echo "  --latency-samples: ${LATENCY_SAMPLES}"
+echo "  --count: ${LOOP_COUNT}"
+echo "  --latency-tlb-locality-kb values: ${tlb_locality_sizes_kb[*]}"
 if [ -n "${NON_CACHEABLE}" ]; then
-    echo "  -non-cacheable: enabled"
+    echo "  --non-cacheable: enabled"
 else
-    echo "  -non-cacheable: disabled"
+    echo "  --non-cacheable: disabled"
 fi
 
 fail_count=0
@@ -55,7 +55,7 @@ current_run=0
 
 for tlb_kb in "${tlb_locality_sizes_kb[@]}"; do
     echo ""
-    echo "--- Running sweep for -latency-tlb-locality-kb ${tlb_kb} ---"
+    echo "--- Running sweep for --latency-tlb-locality-kb ${tlb_kb} ---"
 
     for cache_size in "${cache_sizes[@]}"; do
         current_run=$((current_run + 1))
@@ -64,17 +64,17 @@ for tlb_kb in "${tlb_locality_sizes_kb[@]}"; do
 
         cmd=(
             "${BENCHMARK_CMD}"
-            -benchmark
-            -latency-tlb-locality-kb "${tlb_kb}"
-            -cache-size "${cache_size}"
-            -buffersize "${BUFFER_SIZE_MB}"
-            -output "${output_file}"
-            -latency-samples "${LATENCY_SAMPLES}"
-            -count "${LOOP_COUNT}"
+            --benchmark
+            --latency-tlb-locality-kb "${tlb_kb}"
+            --cache-size "${cache_size}"
+            --buffer-size "${BUFFER_SIZE_MB}"
+            --output "${output_file}"
+            --latency-samples "${LATENCY_SAMPLES}"
+            --count "${LOOP_COUNT}"
         )
 
         if [ "${ONLY_LATENCY}" = true ]; then
-            cmd+=("-only-latency")
+            cmd+=("--only-latency")
         fi
 
         if [ -n "${NON_CACHEABLE}" ]; then

@@ -101,6 +101,7 @@ namespace Constants {
   constexpr int DEFAULT_ITERATIONS = 1000;  // Default number of iterations for R/W/Copy tests
   constexpr int DEFAULT_LOOP_COUNT = 1;     // Default number of full benchmark loops
   constexpr int DEFAULT_LATENCY_SAMPLE_COUNT = 1000;  // Default number of latency samples per test
+  constexpr size_t DEFAULT_SWEEP_MAX_RUNS = 256;  // Default guardrail for generated sweep combinations
 
   // Core-to-core standalone mode constants
   constexpr int CORE_TO_CORE_DEFAULT_LOOP_COUNT = DEFAULT_LOOP_COUNT;  // Default loop count for standalone core-to-core mode
@@ -123,6 +124,7 @@ namespace Constants {
   constexpr const char PATTERNS_JSON_MODE_NAME[] = "patterns";  // Serialized mode identifier for pattern benchmark JSON output
   constexpr const char TLB_ANALYSIS_JSON_MODE_NAME[] = "analyze_tlb";  // Serialized mode identifier for standalone TLB analysis JSON output
   constexpr const char CORE_TO_CORE_JSON_MODE_NAME[] = "analyze_core2core";  // Serialized mode identifier in JSON output
+  constexpr const char SWEEP_JSON_MODE_NAME[] = "sweep";  // Serialized mode identifier for sweep JSON output
   constexpr bool CORE_TO_CORE_JSON_HARD_PINNING_SUPPORTED = false;  // User-space hard core pinning is not available on macOS
   constexpr bool CORE_TO_CORE_JSON_AFFINITY_TAGS_ARE_HINTS = true;  // Affinity tags are scheduler hints, not strict binding
   

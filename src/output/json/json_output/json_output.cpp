@@ -51,23 +51,25 @@
 #include "pattern_benchmark/pattern_benchmark.h" // For PatternStatistics
 #include "third_party/nlohmann/json.hpp"   // JSON library
 
-// Save benchmark results to JSON file
-// Returns EXIT_SUCCESS on success, EXIT_FAILURE on error
-int save_results_to_json(const BenchmarkConfig& config, const BenchmarkStatistics& stats, double total_execution_time_sec) {
-  if (config.output_file.empty()) {
-    return EXIT_SUCCESS;  // No output file specified, nothing to do
-  }
-  
-  nlohmann::ordered_json json_output;
-  
-  // Calculate timestamp (ISO 8601 UTC) - needed before assignment
+namespace {
+
+std::string build_utc_timestamp() {
   auto now = std::chrono::system_clock::now();
   auto time_t = std::chrono::system_clock::to_time_t(now);
   std::tm utc_time;
   gmtime_r(&time_t, &utc_time);
   std::ostringstream timestamp_str;
   timestamp_str << std::put_time(&utc_time, "%Y-%m-%dT%H:%M:%SZ");
-  
+  return timestamp_str.str();
+}
+
+}  // namespace
+
+nlohmann::ordered_json build_results_json(const BenchmarkConfig& config,
+                                          const BenchmarkStatistics& stats,
+                                          double total_execution_time_sec) {
+  nlohmann::ordered_json json_output;
+
   // Add fields in the correct order - nlohmann::json preserves insertion order
   // Add configuration (first)
   json_output[JsonKeys::CONFIGURATION] =
@@ -89,10 +91,22 @@ int save_results_to_json(const BenchmarkConfig& config, const BenchmarkStatistic
   }
   
   // Add timestamp (fifth)
-  json_output[JsonKeys::TIMESTAMP] = timestamp_str.str();
+  json_output[JsonKeys::TIMESTAMP] = build_utc_timestamp();
   
   // Add version (last)
   json_output[JsonKeys::VERSION] = SOFTVERSION;
+
+  return json_output;
+}
+
+// Save benchmark results to JSON file
+// Returns EXIT_SUCCESS on success, EXIT_FAILURE on error
+int save_results_to_json(const BenchmarkConfig& config, const BenchmarkStatistics& stats, double total_execution_time_sec) {
+  if (config.output_file.empty()) {
+    return EXIT_SUCCESS;  // No output file specified, nothing to do
+  }
+
+  nlohmann::ordered_json json_output = build_results_json(config, stats, total_execution_time_sec);
   
   // Resolve file path (handle relative paths)
   std::filesystem::path file_path(config.output_file);
@@ -105,23 +119,11 @@ int save_results_to_json(const BenchmarkConfig& config, const BenchmarkStatistic
   return write_json_to_file(file_path, json_output);
 }
 
-// Save pattern benchmark results to JSON file
-// Returns EXIT_SUCCESS on success, EXIT_FAILURE on error
-int save_pattern_results_to_json(const BenchmarkConfig& config, const PatternStatistics& stats, double total_execution_time_sec) {
-  if (config.output_file.empty()) {
-    return EXIT_SUCCESS;  // No output file specified, nothing to do
-  }
-  
+nlohmann::ordered_json build_pattern_results_json(const BenchmarkConfig& config,
+                                                  const PatternStatistics& stats,
+                                                  double total_execution_time_sec) {
   nlohmann::ordered_json json_output;
-  
-  // Calculate timestamp (ISO 8601 UTC) - needed before assignment
-  auto now = std::chrono::system_clock::now();
-  auto time_t = std::chrono::system_clock::to_time_t(now);
-  std::tm utc_time;
-  gmtime_r(&time_t, &utc_time);
-  std::ostringstream timestamp_str;
-  timestamp_str << std::put_time(&utc_time, "%Y-%m-%dT%H:%M:%SZ");
-  
+
   // Add fields in the correct order - nlohmann::json preserves insertion order
   // Add configuration (first)
   json_output[JsonKeys::CONFIGURATION] =
@@ -137,10 +139,22 @@ int save_pattern_results_to_json(const BenchmarkConfig& config, const PatternSta
   }
   
   // Add timestamp (fourth)
-  json_output[JsonKeys::TIMESTAMP] = timestamp_str.str();
+  json_output[JsonKeys::TIMESTAMP] = build_utc_timestamp();
   
   // Add version (last)
   json_output[JsonKeys::VERSION] = SOFTVERSION;
+
+  return json_output;
+}
+
+// Save pattern benchmark results to JSON file
+// Returns EXIT_SUCCESS on success, EXIT_FAILURE on error
+int save_pattern_results_to_json(const BenchmarkConfig& config, const PatternStatistics& stats, double total_execution_time_sec) {
+  if (config.output_file.empty()) {
+    return EXIT_SUCCESS;  // No output file specified, nothing to do
+  }
+
+  nlohmann::ordered_json json_output = build_pattern_results_json(config, stats, total_execution_time_sec);
   
   // Resolve file path (handle relative paths)
   std::filesystem::path file_path(config.output_file);

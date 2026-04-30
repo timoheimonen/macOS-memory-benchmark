@@ -37,7 +37,7 @@ TEST(ConfigTest, DefaultValues) {
 // Test parsing valid arguments
 TEST(ConfigTest, ParseValidArguments) {
   BenchmarkConfig config;
-  const char* argv[] = {"program", "-iterations", "500", "-buffersize", "1024", "-count", "3"};
+  const char* argv[] = {"program", "--iterations", "500", "--buffer-size", "1024", "--count", "3"};
   int argc = 7;
   
   int result = parse_arguments(argc, const_cast<char**>(argv), config);
@@ -47,15 +47,128 @@ TEST(ConfigTest, ParseValidArguments) {
   EXPECT_EQ(config.loop_count, 3);
 }
 
+TEST(ConfigTest, ParseShortOptions) {
+  BenchmarkConfig config;
+  const char* argv[] = {
+      "program", "-B", "-b", "1024", "-i", "500", "-r", "3", "-t", "1", "-n", "17", "-o", "results.json", "-u"};
+  int argc = 15;
+
+  int result = parse_arguments(argc, const_cast<char**>(argv), config);
+  EXPECT_EQ(result, EXIT_SUCCESS);
+  EXPECT_TRUE(config.run_benchmark);
+  EXPECT_EQ(config.buffer_size_mb, 1024u);
+  EXPECT_EQ(config.iterations, 500);
+  EXPECT_EQ(config.loop_count, 3);
+  EXPECT_EQ(config.num_threads, 1);
+  EXPECT_EQ(config.latency_sample_count, 17);
+  EXPECT_EQ(config.output_file, "results.json");
+  EXPECT_TRUE(config.use_non_cacheable);
+}
+
+TEST(ConfigTest, RejectsLegacySingleDashLongOption) {
+  BenchmarkConfig config;
+  const char* argv[] = {"program", "-buffersize", "1024"};
+  int argc = 3;
+
+  int result = parse_arguments(argc, const_cast<char**>(argv), config);
+  EXPECT_EQ(result, EXIT_FAILURE);
+}
+
+TEST(ConfigTest, ParseSweepValid) {
+  BenchmarkConfig config;
+  const char* argv[] = {"program", "--benchmark", "--output", "sweep.json",
+                        "--sweep", "buffer-size=128,256",
+                        "--sweep", "threads=1,2",
+                        "--sweep-max-runs", "4"};
+  int argc = 10;
+
+  int result = parse_arguments(argc, const_cast<char**>(argv), config);
+  EXPECT_EQ(result, EXIT_SUCCESS);
+  EXPECT_TRUE(config.run_sweep);
+  ASSERT_EQ(config.sweep_specs.size(), 2u);
+  EXPECT_EQ(config.sweep_specs[0].parameter, SweepParameter::BufferSizeMb);
+  EXPECT_EQ(config.sweep_specs[0].values[0].integer_value, 128);
+  EXPECT_EQ(config.sweep_specs[0].values[1].integer_value, 256);
+  EXPECT_EQ(config.sweep_specs[1].parameter, SweepParameter::Threads);
+  EXPECT_EQ(config.sweep_specs[1].values[0].integer_value, 1);
+  EXPECT_EQ(config.sweep_specs[1].values[1].integer_value, 2);
+  EXPECT_EQ(config.sweep_max_runs, 4u);
+}
+
+TEST(ConfigTest, ParseSweepRejectsUnsupportedParameter) {
+  BenchmarkConfig config;
+  const char* argv[] = {"program", "--benchmark", "--sweep", "latency-samples=100,200"};
+  int argc = 4;
+
+  int result = parse_arguments(argc, const_cast<char**>(argv), config);
+  EXPECT_EQ(result, EXIT_FAILURE);
+}
+
+TEST(ConfigTest, ValidateSweepRejectsTooManyRuns) {
+  BenchmarkConfig config;
+  config.run_benchmark = true;
+  config.run_sweep = true;
+  config.output_file = "sweep.json";
+  config.sweep_max_runs = 3;
+  config.sweep_specs = {
+      {SweepParameter::BufferSizeMb, "buffer-size", {{"128"}, {"256"}}},
+      {SweepParameter::Threads, "threads", {{"1"}, {"2"}}},
+  };
+
+  int result = validate_config(config);
+  EXPECT_EQ(result, EXIT_FAILURE);
+}
+
+TEST(ConfigTest, ValidateSweepRejectsPatternCacheSize) {
+  BenchmarkConfig config;
+  config.run_patterns = true;
+  config.run_sweep = true;
+  config.output_file = "sweep.json";
+  config.sweep_specs = {
+      {SweepParameter::CacheSizeKb, "cache-size", {{"1024"}}},
+  };
+
+  int result = validate_config(config);
+  EXPECT_EQ(result, EXIT_FAILURE);
+}
+
+TEST(ConfigTest, ValidateSweepRequiresOutput) {
+  BenchmarkConfig config;
+  config.run_benchmark = true;
+  config.run_sweep = true;
+  config.sweep_specs = {
+      {SweepParameter::BufferSizeMb, "buffer-size", {{"128"}}},
+  };
+
+  int result = validate_config(config);
+  EXPECT_EQ(result, EXIT_FAILURE);
+}
+
+TEST(ConfigTest, ValidateAnalyzeTlbSweepRejectsGlobalRandom) {
+  BenchmarkConfig config;
+  config.analyze_tlb = true;
+  config.run_sweep = true;
+  config.output_file = "sweep.json";
+  SweepValue value;
+  value.raw_value = "global-random";
+  value.latency_chain_mode = LatencyChainMode::GlobalRandom;
+  config.sweep_specs = {
+      {SweepParameter::LatencyChainMode, "latency-chain-mode", {value}},
+  };
+
+  int result = validate_config(config);
+  EXPECT_EQ(result, EXIT_FAILURE);
+}
+
 // Test parsing custom cache size
-// The code parses -cache-size in a first pass, then skips it in the second pass
-// (since it was already parsed). This allows -cache-size to work correctly.
+// The code parses --cache-size in a first pass, then skips it in the second pass
+// (since it was already parsed). This allows --cache-size to work correctly.
 TEST(ConfigTest, ParseCustomCacheSize) {
   BenchmarkConfig config;
-  const char* argv[] = {"program", "-cache-size", "256"};
+  const char* argv[] = {"program", "--cache-size", "256"};
   int argc = 3;
   
-  // The code parses -cache-size in the first pass and sets the value,
+  // The code parses --cache-size in the first pass and sets the value,
   // then in the second pass it skips it (since it was already parsed)
   int result = parse_arguments(argc, const_cast<char**>(argv), config);
   EXPECT_EQ(result, EXIT_SUCCESS);
@@ -66,7 +179,7 @@ TEST(ConfigTest, ParseCustomCacheSize) {
 // Test parsing invalid cache size (too small)
 TEST(ConfigTest, ParseInvalidCacheSizeTooSmall) {
   BenchmarkConfig config;
-  const char* argv[] = {"program", "-cache-size", "8"};  // Below minimum of 16 KB
+  const char* argv[] = {"program", "--cache-size", "8"};  // Below minimum of 16 KB
   int argc = 3;
   
   int result = parse_arguments(argc, const_cast<char**>(argv), config);
@@ -76,17 +189,17 @@ TEST(ConfigTest, ParseInvalidCacheSizeTooSmall) {
 // Test parsing invalid cache size (too large)
 TEST(ConfigTest, ParseInvalidCacheSizeTooLarge) {
   BenchmarkConfig config;
-  const char* argv[] = {"program", "-cache-size", "1100000"};  // Above maximum of 1048576 KB (1 GB)
+  const char* argv[] = {"program", "--cache-size", "1100000"};  // Above maximum of 1048576 KB (1 GB)
   int argc = 3;
   
   int result = parse_arguments(argc, const_cast<char**>(argv), config);
   EXPECT_EQ(result, EXIT_FAILURE);
 }
 
-// Test parsing cache size zero (validated later; allowed only with -only-latency)
+// Test parsing cache size zero (validated later; allowed only with --only-latency)
 TEST(ConfigTest, ParseCacheSizeZero) {
   BenchmarkConfig config;
-  const char* argv[] = {"program", "-cache-size", "0"};
+  const char* argv[] = {"program", "--cache-size", "0"};
   int argc = 3;
 
   int result = parse_arguments(argc, const_cast<char**>(argv), config);
@@ -95,10 +208,10 @@ TEST(ConfigTest, ParseCacheSizeZero) {
   EXPECT_TRUE(config.use_custom_cache_size);
 }
 
-// Test parsing buffer size zero (validated later; allowed only with -only-latency)
+// Test parsing buffer size zero (validated later; allowed only with --only-latency)
 TEST(ConfigTest, ParseBufferSizeZero) {
   BenchmarkConfig config;
-  const char* argv[] = {"program", "-buffersize", "0"};
+  const char* argv[] = {"program", "--buffer-size", "0"};
   int argc = 3;
 
   int result = parse_arguments(argc, const_cast<char**>(argv), config);
@@ -108,7 +221,7 @@ TEST(ConfigTest, ParseBufferSizeZero) {
 
 TEST(ConfigTest, ParseLatencyTlbLocalityValid) {
   BenchmarkConfig config;
-  const char* argv[] = {"program", "-latency-tlb-locality-kb", "16"};
+  const char* argv[] = {"program", "--latency-tlb-locality-kb", "16"};
   int argc = 3;
 
   int result = parse_arguments(argc, const_cast<char**>(argv), config);
@@ -118,7 +231,7 @@ TEST(ConfigTest, ParseLatencyTlbLocalityValid) {
 
 TEST(ConfigTest, ParseLatencyStrideValid) {
   BenchmarkConfig config;
-  const char* argv[] = {"program", "-latency-stride-bytes", "64"};
+  const char* argv[] = {"program", "--latency-stride-bytes", "64"};
   int argc = 3;
 
   int result = parse_arguments(argc, const_cast<char**>(argv), config);
@@ -128,7 +241,7 @@ TEST(ConfigTest, ParseLatencyStrideValid) {
 
 TEST(ConfigTest, ParseLatencyStrideInvalidZero) {
   BenchmarkConfig config;
-  const char* argv[] = {"program", "-latency-stride-bytes", "0"};
+  const char* argv[] = {"program", "--latency-stride-bytes", "0"};
   int argc = 3;
 
   int result = parse_arguments(argc, const_cast<char**>(argv), config);
@@ -137,7 +250,7 @@ TEST(ConfigTest, ParseLatencyStrideInvalidZero) {
 
 TEST(ConfigTest, ParseLatencyChainModeValid) {
   BenchmarkConfig config;
-  const char* argv[] = {"program", "-latency-chain-mode", "same-random-in-box"};
+  const char* argv[] = {"program", "--latency-chain-mode", "same-random-in-box"};
   int argc = 3;
 
   int result = parse_arguments(argc, const_cast<char**>(argv), config);
@@ -147,7 +260,7 @@ TEST(ConfigTest, ParseLatencyChainModeValid) {
 
 TEST(ConfigTest, ParseLatencyChainModeInvalid) {
   BenchmarkConfig config;
-  const char* argv[] = {"program", "-latency-chain-mode", "unknown-mode"};
+  const char* argv[] = {"program", "--latency-chain-mode", "unknown-mode"};
   int argc = 3;
 
   int result = parse_arguments(argc, const_cast<char**>(argv), config);
@@ -156,7 +269,7 @@ TEST(ConfigTest, ParseLatencyChainModeInvalid) {
 
 TEST(ConfigTest, ParseLatencyTlbLocalityZeroDisables) {
   BenchmarkConfig config;
-  const char* argv[] = {"program", "-latency-tlb-locality-kb", "0"};
+  const char* argv[] = {"program", "--latency-tlb-locality-kb", "0"};
   int argc = 3;
 
   int result = parse_arguments(argc, const_cast<char**>(argv), config);
@@ -166,7 +279,7 @@ TEST(ConfigTest, ParseLatencyTlbLocalityZeroDisables) {
 
 TEST(ConfigTest, ParseLatencyTlbLocalityInvalidNegative) {
   BenchmarkConfig config;
-  const char* argv[] = {"program", "-latency-tlb-locality-kb", "-1"};
+  const char* argv[] = {"program", "--latency-tlb-locality-kb", "-1"};
   int argc = 3;
 
   int result = parse_arguments(argc, const_cast<char**>(argv), config);
@@ -175,7 +288,7 @@ TEST(ConfigTest, ParseLatencyTlbLocalityInvalidNegative) {
 
 TEST(ConfigTest, ParseAnalyzeTlbStandalone) {
   BenchmarkConfig config;
-  const char* argv[] = {"program", "-analyze-tlb"};
+  const char* argv[] = {"program", "--analyze-tlb"};
   int argc = 2;
 
   int result = parse_arguments(argc, const_cast<char**>(argv), config);
@@ -185,7 +298,7 @@ TEST(ConfigTest, ParseAnalyzeTlbStandalone) {
 
 TEST(ConfigTest, ParseAnalyzeTlbWithOtherArgumentsFails) {
   BenchmarkConfig config;
-  const char* argv[] = {"program", "-analyze-tlb", "-buffersize", "512"};
+  const char* argv[] = {"program", "--analyze-tlb", "--buffer-size", "512"};
   int argc = 4;
 
   int result = parse_arguments(argc, const_cast<char**>(argv), config);
@@ -194,7 +307,7 @@ TEST(ConfigTest, ParseAnalyzeTlbWithOtherArgumentsFails) {
 
 TEST(ConfigTest, ParseAnalyzeTlbWithOutputSucceeds) {
   BenchmarkConfig config;
-  const char* argv[] = {"program", "-analyze-tlb", "-output", "tlb.json"};
+  const char* argv[] = {"program", "--analyze-tlb", "--output", "tlb.json"};
   int argc = 4;
 
   int result = parse_arguments(argc, const_cast<char**>(argv), config);
@@ -205,7 +318,7 @@ TEST(ConfigTest, ParseAnalyzeTlbWithOutputSucceeds) {
 
 TEST(ConfigTest, ParseAnalyzeTlbWithOutputFirstSucceeds) {
   BenchmarkConfig config;
-  const char* argv[] = {"program", "-output", "tlb.json", "-analyze-tlb"};
+  const char* argv[] = {"program", "--output", "tlb.json", "--analyze-tlb"};
   int argc = 4;
 
   int result = parse_arguments(argc, const_cast<char**>(argv), config);
@@ -216,7 +329,7 @@ TEST(ConfigTest, ParseAnalyzeTlbWithOutputFirstSucceeds) {
 
 TEST(ConfigTest, ParseAnalyzeTlbWithLatencyStrideSucceeds) {
   BenchmarkConfig config;
-  const char* argv[] = {"program", "-analyze-tlb", "-latency-stride-bytes", "128"};
+  const char* argv[] = {"program", "--analyze-tlb", "--latency-stride-bytes", "128"};
   int argc = 4;
 
   int result = parse_arguments(argc, const_cast<char**>(argv), config);
@@ -228,7 +341,7 @@ TEST(ConfigTest, ParseAnalyzeTlbWithLatencyStrideSucceeds) {
 TEST(ConfigTest, ParseAnalyzeTlbWithLatencyStrideAndOutputSucceeds) {
   BenchmarkConfig config;
   const char* argv[] = {
-      "program", "-analyze-tlb", "-latency-stride-bytes", "64", "-output", "tlb.json"};
+      "program", "--analyze-tlb", "--latency-stride-bytes", "64", "--output", "tlb.json"};
   int argc = 6;
 
   int result = parse_arguments(argc, const_cast<char**>(argv), config);
@@ -240,7 +353,7 @@ TEST(ConfigTest, ParseAnalyzeTlbWithLatencyStrideAndOutputSucceeds) {
 
 TEST(ConfigTest, ParseAnalyzeTlbWithLatencyChainModeSucceeds) {
   BenchmarkConfig config;
-  const char* argv[] = {"program", "-analyze-tlb", "-latency-chain-mode", "random-box"};
+  const char* argv[] = {"program", "--analyze-tlb", "--latency-chain-mode", "random-box"};
   int argc = 4;
 
   int result = parse_arguments(argc, const_cast<char**>(argv), config);
@@ -251,7 +364,7 @@ TEST(ConfigTest, ParseAnalyzeTlbWithLatencyChainModeSucceeds) {
 
 TEST(ConfigTest, ParseAnalyzeTlbWithGlobalRandomLatencyChainModeFails) {
   BenchmarkConfig config;
-  const char* argv[] = {"program", "-analyze-tlb", "-latency-chain-mode", "global-random"};
+  const char* argv[] = {"program", "--analyze-tlb", "--latency-chain-mode", "global-random"};
   int argc = 4;
 
   int result = parse_arguments(argc, const_cast<char**>(argv), config);
@@ -260,7 +373,7 @@ TEST(ConfigTest, ParseAnalyzeTlbWithGlobalRandomLatencyChainModeFails) {
 
 TEST(ConfigTest, ParseAnalyzeTlbWithTlbDensityLowSucceeds) {
   BenchmarkConfig config;
-  const char* argv[] = {"program", "-analyze-tlb", "-tlb-density", "low"};
+  const char* argv[] = {"program", "--analyze-tlb", "--tlb-density", "low"};
   int argc = 4;
 
   int result = parse_arguments(argc, const_cast<char**>(argv), config);
@@ -271,7 +384,7 @@ TEST(ConfigTest, ParseAnalyzeTlbWithTlbDensityLowSucceeds) {
 
 TEST(ConfigTest, ParseAnalyzeTlbWithTlbDensityMediumSucceeds) {
   BenchmarkConfig config;
-  const char* argv[] = {"program", "-analyze-tlb", "-tlb-density", "medium"};
+  const char* argv[] = {"program", "--analyze-tlb", "--tlb-density", "medium"};
   int argc = 4;
 
   int result = parse_arguments(argc, const_cast<char**>(argv), config);
@@ -282,7 +395,7 @@ TEST(ConfigTest, ParseAnalyzeTlbWithTlbDensityMediumSucceeds) {
 
 TEST(ConfigTest, ParseAnalyzeTlbWithInvalidTlbDensityFails) {
   BenchmarkConfig config;
-  const char* argv[] = {"program", "-analyze-tlb", "-tlb-density", "ultra"};
+  const char* argv[] = {"program", "--analyze-tlb", "--tlb-density", "ultra"};
   int argc = 4;
 
   int result = parse_arguments(argc, const_cast<char**>(argv), config);
@@ -291,7 +404,7 @@ TEST(ConfigTest, ParseAnalyzeTlbWithInvalidTlbDensityFails) {
 
 TEST(ConfigTest, ParseAnalyzeTlbWithInvalidLatencyStrideFails) {
   BenchmarkConfig config;
-  const char* argv[] = {"program", "-analyze-tlb", "-latency-stride-bytes", "0"};
+  const char* argv[] = {"program", "--analyze-tlb", "--latency-stride-bytes", "0"};
   int argc = 4;
 
   int result = parse_arguments(argc, const_cast<char**>(argv), config);
@@ -300,7 +413,7 @@ TEST(ConfigTest, ParseAnalyzeTlbWithInvalidLatencyStrideFails) {
 
 TEST(ConfigTest, ParseAnalyzeTlbWithUnalignedLatencyStrideFails) {
   BenchmarkConfig config;
-  const char* argv[] = {"program", "-analyze-tlb", "-latency-stride-bytes", "65"};
+  const char* argv[] = {"program", "--analyze-tlb", "--latency-stride-bytes", "65"};
   int argc = 4;
 
   int result = parse_arguments(argc, const_cast<char**>(argv), config);
@@ -309,7 +422,7 @@ TEST(ConfigTest, ParseAnalyzeTlbWithUnalignedLatencyStrideFails) {
 
 TEST(ConfigTest, ParseAnalyzeTlbWithMissingOutputValueFails) {
   BenchmarkConfig config;
-  const char* argv[] = {"program", "-analyze-tlb", "-output"};
+  const char* argv[] = {"program", "--analyze-tlb", "--output"};
   int argc = 3;
 
   int result = parse_arguments(argc, const_cast<char**>(argv), config);
@@ -319,8 +432,8 @@ TEST(ConfigTest, ParseAnalyzeTlbWithMissingOutputValueFails) {
 TEST(ConfigTest, ParseNormalModeUserOptions) {
   BenchmarkConfig config;
   const char* argv[] = {
-      "program", "-benchmark", "-threads", "1", "-latency-samples", "17", "-output", "results.json",
-      "-non-cacheable"};
+      "program", "--benchmark", "--threads", "1", "--latency-samples", "17", "--output", "results.json",
+      "--non-cacheable"};
   int argc = 9;
 
   int result = parse_arguments(argc, const_cast<char**>(argv), config);
@@ -336,7 +449,7 @@ TEST(ConfigTest, ParseNormalModeUserOptions) {
 
 TEST(ConfigTest, ParseThreadsInvalidZero) {
   BenchmarkConfig config;
-  const char* argv[] = {"program", "-threads", "0"};
+  const char* argv[] = {"program", "--threads", "0"};
   int argc = 3;
 
   int result = parse_arguments(argc, const_cast<char**>(argv), config);
@@ -345,7 +458,7 @@ TEST(ConfigTest, ParseThreadsInvalidZero) {
 
 TEST(ConfigTest, ParseLatencySamplesInvalidZero) {
   BenchmarkConfig config;
-  const char* argv[] = {"program", "-latency-samples", "0"};
+  const char* argv[] = {"program", "--latency-samples", "0"};
   int argc = 3;
 
   int result = parse_arguments(argc, const_cast<char**>(argv), config);
@@ -360,16 +473,16 @@ TEST(ConfigTest, ParseDuplicateValueOptionsRejected) {
   };
 
   const DuplicateOptionCase cases[] = {
-      {"-iterations", "1", "2"},
-      {"-buffersize", "1", "2"},
-      {"-count", "1", "2"},
-      {"-latency-samples", "1", "2"},
-      {"-latency-stride-bytes", "64", "128"},
-      {"-latency-chain-mode", "auto", "global-random"},
-      {"-latency-tlb-locality-kb", "16", "32"},
-      {"-threads", "1", "2"},
-      {"-output", "first.json", "second.json"},
-      {"-cache-size", "256", "512"},
+      {"--iterations", "1", "2"},
+      {"--buffer-size", "1", "2"},
+      {"--count", "1", "2"},
+      {"--latency-samples", "1", "2"},
+      {"--latency-stride-bytes", "64", "128"},
+      {"--latency-chain-mode", "auto", "global-random"},
+      {"--latency-tlb-locality-kb", "16", "32"},
+      {"--threads", "1", "2"},
+      {"--output", "first.json", "second.json"},
+      {"--cache-size", "256", "512"},
   };
 
   for (const DuplicateOptionCase& test_case : cases) {
@@ -387,7 +500,7 @@ TEST(ConfigTest, ParseDuplicateValueOptionsRejected) {
 // Test parsing missing value for option
 TEST(ConfigTest, ParseMissingValue) {
   BenchmarkConfig config;
-  const char* argv[] = {"program", "-iterations"};
+  const char* argv[] = {"program", "--iterations"};
   int argc = 2;
   
   int result = parse_arguments(argc, const_cast<char**>(argv), config);
@@ -414,10 +527,10 @@ TEST(ConfigTest, ParseHelpFlag) {
   EXPECT_EQ(result, EXIT_SUCCESS);  // Help returns SUCCESS
 }
 
-// Test parsing -benchmark flag
+// Test parsing --benchmark flag
 TEST(ConfigTest, ParseBenchmarkFlag) {
   BenchmarkConfig config;
-  const char* argv[] = {"program", "-benchmark"};
+  const char* argv[] = {"program", "--benchmark"};
   int argc = 2;
   
   int result = parse_arguments(argc, const_cast<char**>(argv), config);
@@ -426,10 +539,10 @@ TEST(ConfigTest, ParseBenchmarkFlag) {
   EXPECT_FALSE(config.run_patterns);
 }
 
-// Test -benchmark with other modifier flags
+// Test --benchmark with other modifier flags
 TEST(ConfigTest, ParseBenchmarkWithModifiers) {
   BenchmarkConfig config;
-  const char* argv[] = {"program", "-benchmark", "-only-latency", "-cache-size", "256"};
+  const char* argv[] = {"program", "--benchmark", "--only-latency", "--cache-size", "256"};
   int argc = 5;
   
   int result = parse_arguments(argc, const_cast<char**>(argv), config);
@@ -441,7 +554,7 @@ TEST(ConfigTest, ParseBenchmarkWithModifiers) {
 
 TEST(ConfigTest, ValidateParsedOnlyBandwidthRejectsLatencySamples) {
   BenchmarkConfig config;
-  const char* argv[] = {"program", "-benchmark", "-only-bandwidth", "-latency-samples", "10"};
+  const char* argv[] = {"program", "--benchmark", "--only-bandwidth", "--latency-samples", "10"};
   int argc = 5;
 
   ASSERT_EQ(parse_arguments(argc, const_cast<char**>(argv), config), EXIT_SUCCESS);
@@ -454,7 +567,7 @@ TEST(ConfigTest, ValidateParsedOnlyBandwidthRejectsLatencySamples) {
 
 TEST(ConfigTest, ValidateParsedOnlyBandwidthRejectsCacheSize) {
   BenchmarkConfig config;
-  const char* argv[] = {"program", "-benchmark", "-only-bandwidth", "-cache-size", "256"};
+  const char* argv[] = {"program", "--benchmark", "--only-bandwidth", "--cache-size", "256"};
   int argc = 5;
 
   ASSERT_EQ(parse_arguments(argc, const_cast<char**>(argv), config), EXIT_SUCCESS);
@@ -467,7 +580,7 @@ TEST(ConfigTest, ValidateParsedOnlyBandwidthRejectsCacheSize) {
 
 TEST(ConfigTest, ValidateParsedOnlyLatencyRejectsIterations) {
   BenchmarkConfig config;
-  const char* argv[] = {"program", "-benchmark", "-only-latency", "-iterations", "10"};
+  const char* argv[] = {"program", "--benchmark", "--only-latency", "--iterations", "10"};
   int argc = 5;
 
   ASSERT_EQ(parse_arguments(argc, const_cast<char**>(argv), config), EXIT_SUCCESS);
@@ -478,20 +591,20 @@ TEST(ConfigTest, ValidateParsedOnlyLatencyRejectsIterations) {
   EXPECT_EQ(result, EXIT_FAILURE);
 }
 
-// Test -benchmark and -patterns are mutually exclusive
+// Test --benchmark and --patterns are mutually exclusive
 TEST(ConfigTest, ParseBenchmarkAndPatternsMutuallyExclusive) {
   BenchmarkConfig config;
-  const char* argv[] = {"program", "-benchmark", "-patterns"};
+  const char* argv[] = {"program", "--benchmark", "--patterns"};
   int argc = 3;
   
   int result = parse_arguments(argc, const_cast<char**>(argv), config);
   EXPECT_EQ(result, EXIT_FAILURE);
 }
 
-// Test -benchmark and -patterns in reverse order
+// Test --benchmark and --patterns in reverse order
 TEST(ConfigTest, ParsePatternsAndBenchmarkMutuallyExclusive) {
   BenchmarkConfig config;
-  const char* argv[] = {"program", "-patterns", "-benchmark"};
+  const char* argv[] = {"program", "--patterns", "--benchmark"};
   int argc = 3;
   
   int result = parse_arguments(argc, const_cast<char**>(argv), config);

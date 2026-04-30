@@ -1,6 +1,6 @@
 # Project Structure — macOS-memory-benchmark
 
-**Version:** 0.55.4
+**Version:** 0.56.0
 **Platform:** ARM64 / AArch64 (Apple Silicon macOS)
 **License:** GNU General Public License v3.0
 
@@ -13,15 +13,15 @@ This document describes the layout of project files, organized by purpose. It is
 1. [Root-level files](#1-root-level-files)
 2. [src/ — Source code](#2-src--source-code)
    - [src/asm/](#21-srcasm--arm64-assembly-kernels)
-   - [src/benchmark/](#22-srcbenchmark--benchmarking-infrastructure)
+   - [src/benchmark/](#22-srcbenchmark---benchmarking-infrastructure)
    - [src/core/](#23-srccore--core-utilities)
-   - [src/output/](#24-srcoutput--output-layer)
-   - [src/pattern_benchmark/](#25-srcpattern_benchmark--pattern-access-benchmarks)
-   - [src/warmup/](#26-srcwarmup--pre-benchmark-warm-up)
+   - [src/output/](#24-srcoutput---output-layer)
+   - [src/pattern_benchmark/](#25-srcpattern_benchmark--pattern-access--benchmarks)
+   - [src/warmup/](#26-srcwarmup--pre--benchmark-warm-up)
    - [src/utils/](#27-srcutils--shared-utilities)
    - [src/third_party/](#28-srcthird_party--vendored-dependencies)
 3. [tests/ — Unit tests](#3-tests--unit-tests)
-4. [results/ — Benchmark result data](#4-results--benchmark-result-data)
+4. [results/ — Benchmark result data](#4-results---benchmark-result-data)
 5. [pictures/ — Documentation images](#5-pictures--documentation-images)
 6. [.github/ — GitHub integration](#6-github--github-integration)
 
@@ -132,7 +132,7 @@ The benchmark subsystem owns all measurement logic: executing tests, collecting 
 
 | File | Purpose |
 |---|---|
-| `tlb_analysis.h` / `.cpp` | Standalone `-analyze-tlb` mode: sweeps buffer sizes and strides to locate TLB capacity boundaries |
+| `tlb_analysis.h` / `.cpp` | Standalone `--analyze-tlb` mode: sweeps buffer sizes and strides to locate TLB capacity boundaries |
 | `tlb_analysis_json.h` / `.cpp` | Serializes TLB analysis results to JSON |
 | `tlb_boundary_detector.cpp` | Heuristic that identifies TLB miss inflection points in the latency-vs-buffer-size curve |
 
@@ -140,7 +140,7 @@ The benchmark subsystem owns all measurement logic: executing tests, collecting 
 
 | File | Purpose |
 |---|---|
-| `core_to_core_latency.h` | Public interface for the `-analyze-core2core` mode |
+| `core_to_core_latency.h` | Public interface for the `--analyze-core2core` mode |
 | `core_to_core_latency_internal.h` | Internal runner interfaces not exposed outside the module |
 | `core_to_core_latency_runner.cpp` | Measurement loop: coordinates two threads on selected CPU cores, runs the assembly ping-pong hot loop, and collects round-trip latency samples |
 | `core_to_core_latency_cli.cpp` | CLI argument parsing and entry point for the core-to-core mode |
@@ -254,7 +254,7 @@ Benchmarks characterizing memory access patterns: sequential forward, sequential
 
 ---
 
-### 2.6 src/warmup/ — Pre-benchmark warm-up
+### 2.6 src/warmup/ — Pre--benchmark warm-up
 
 Warm-up passes eliminate cold-start effects from page faults, TLB misses, and instruction-cache misses before timing begins.
 

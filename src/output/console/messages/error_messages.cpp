@@ -79,7 +79,7 @@ std::string error_iterations_invalid(long long value, long long min_val, long lo
 
 std::string error_buffersize_invalid(long long value, unsigned long max_val) {
   std::ostringstream oss;
-  oss << "buffersize invalid (must be >= 0 and <= " << max_val << ", got " << value << ")";
+  oss << "buffer-size invalid (must be >= 0 and <= " << max_val << ", got " << value << ")";
   return oss.str();
 }
 
@@ -123,12 +123,12 @@ std::string error_latency_chain_mode_invalid() {
 }
 
 std::string error_latency_chain_mode_requires_locality(const std::string& mode_name) {
-  return "latency-chain-mode '" + mode_name + "' requires -latency-tlb-locality-kb > 0";
+  return "latency-chain-mode '" + mode_name + "' requires --latency-tlb-locality-kb > 0";
 }
 
 const std::string& error_analyze_tlb_global_random_unsupported() {
   static const std::string msg =
-      "-analyze-tlb does not support -latency-chain-mode global-random";
+      "--analyze-tlb does not support --latency-chain-mode global-random";
   return msg;
 }
 
@@ -160,7 +160,7 @@ std::string error_threads_invalid(long long value, long long min_val, long long 
 
 const std::string& error_analyze_tlb_must_be_used_alone() {
   static const std::string msg =
-      "-analyze-tlb allows only optional -output <file>, -latency-stride-bytes <bytes>, -latency-chain-mode <mode>, and -tlb-density <low|medium|high> (no other options allowed)";
+      "--analyze-tlb allows only optional -o/--output <file>, -s/--latency-stride-bytes <bytes>, -m/--latency-chain-mode <mode>, and -D/--tlb-density <low|medium|high> (no other options allowed)";
   return msg;
 }
 
@@ -418,47 +418,47 @@ const std::string& error_latency_access_count_negative() {
 }
 
 const std::string& error_incompatible_flags() {
-  static const std::string msg = "-only-bandwidth and -only-latency are mutually exclusive (cannot use both together)";
+  static const std::string msg = "--only-bandwidth and --only-latency are mutually exclusive (cannot use both together)";
   return msg;
 }
 
 const std::string& error_only_flags_with_patterns() {
-  static const std::string msg = "-only-bandwidth and -only-latency cannot be used with -patterns (pattern benchmarks are a separate execution mode)";
+  static const std::string msg = "--only-bandwidth and --only-latency cannot be used with --patterns (pattern benchmarks are a separate execution mode)";
   return msg;
 }
 
 const std::string& error_only_bandwidth_with_cache_size() {
-  static const std::string msg = "-only-bandwidth cannot be used with -cache-size (cache-size is only relevant for latency tests)";
+  static const std::string msg = "--only-bandwidth cannot be used with --cache-size (cache-size is only relevant for latency tests)";
   return msg;
 }
 
 const std::string& error_only_bandwidth_with_latency_samples() {
-  static const std::string msg = "-only-bandwidth cannot be used with -latency-samples (latency-samples is only relevant for latency tests)";
+  static const std::string msg = "--only-bandwidth cannot be used with --latency-samples (latency-samples is only relevant for latency tests)";
   return msg;
 }
 
 const std::string& error_buffersize_zero_requires_only_latency() {
-  static const std::string msg = "-buffersize 0 is only allowed with -only-latency";
+  static const std::string msg = "--buffer-size 0 is only allowed with --only-latency";
   return msg;
 }
 
 const std::string& error_cache_size_zero_requires_only_latency() {
-  static const std::string msg = "-cache-size 0 is only allowed with -only-latency";
+  static const std::string msg = "--cache-size 0 is only allowed with --only-latency";
   return msg;
 }
 
 const std::string& error_only_latency_requires_latency_target() {
-  static const std::string msg = "-only-latency requires at least one target enabled: main memory (-buffersize > 0) or cache (-cache-size > 0 or omit -cache-size)";
+  static const std::string msg = "--only-latency requires at least one target enabled: main memory (--buffer-size > 0) or cache (--cache-size > 0 or omit --cache-size)";
   return msg;
 }
 
 const std::string& error_only_latency_with_buffersize() {
-  static const std::string msg = "-only-latency cannot be used with -buffersize (buffersize is only relevant for bandwidth tests)";
+  static const std::string msg = "--only-latency cannot be used with --buffer-size (buffer-size is only relevant for bandwidth tests)";
   return msg;
 }
 
 const std::string& error_only_latency_with_iterations() {
-  static const std::string msg = "-only-latency cannot be used with -iterations (iterations is only relevant for bandwidth tests)";
+  static const std::string msg = "--only-latency cannot be used with --iterations (iterations is only relevant for bandwidth tests)";
   return msg;
 }
 
@@ -467,8 +467,34 @@ std::string error_mutually_exclusive_modes(const std::string& mode1, const std::
 }
 
 const std::string& error_only_flags_require_benchmark() {
-  static const std::string msg = "-only-bandwidth and -only-latency require -benchmark flag";
+  static const std::string msg = "--only-bandwidth and --only-latency require --benchmark flag";
   return msg;
+}
+
+const std::string& error_sweep_requires_parameter() {
+  static const std::string msg = "--sweep requires at least one parameter specification";
+  return msg;
+}
+
+std::string error_sweep_too_many_runs(size_t run_count, size_t max_runs) {
+  std::ostringstream oss;
+  oss << "Sweep would generate " << run_count << " runs, exceeding --sweep-max-runs " << max_runs;
+  return oss.str();
+}
+
+std::string error_sweep_parameter_not_allowed(const std::string& parameter_name,
+                                              const std::string& mode_name) {
+  return "Sweep parameter '" + parameter_name + "' is not allowed with " + mode_name;
+}
+
+const std::string& error_sweep_requires_output() {
+  static const std::string msg = "--sweep requires --output <file> for the combined JSON result";
+  return msg;
+}
+
+std::string error_sweep_temp_json_parse_failed(const std::string& file_path,
+                                               const std::string& error_details) {
+  return "Failed to read sweep run JSON from " + file_path + ": " + error_details;
 }
 
 } // namespace Messages

@@ -276,6 +276,42 @@ TEST(JsonSchemaTest, CoreToCoreExporterUsesSharedModeKeyAndSamplesContainer) {
   std::filesystem::remove(config.output_file);
 }
 
+TEST(JsonSchemaTest, CoreToCoreJsonBuilderReturnsInMemoryPayload) {
+  CoreToCoreLatencyConfig config;
+  config.output_file.clear();
+  config.loop_count = 1;
+  config.latency_sample_count = 2;
+
+  const std::string cpu_name = "test-cpu";
+  const std::vector<CoreToCoreLatencyScenarioResult> scenarios = {
+      {
+          Constants::CORE_TO_CORE_SCENARIO_NO_AFFINITY,
+          {10.0},
+          {10.2, 10.4},
+          {},
+          {},
+      },
+  };
+
+  const CoreToCoreLatencyJsonContext context = {
+      config,
+      cpu_name,
+      4,
+      6,
+      100,
+      200,
+      20,
+      scenarios,
+      4.5,
+  };
+
+  const nlohmann::json output_json = build_core_to_core_latency_json(context);
+  EXPECT_EQ(output_json[JsonKeys::CONFIGURATION][JsonKeys::MODE], Constants::CORE_TO_CORE_JSON_MODE_NAME);
+  EXPECT_TRUE(output_json.contains("core_to_core_latency"));
+  EXPECT_EQ(output_json["core_to_core_latency"]["scenarios"][0]["name"],
+            Constants::CORE_TO_CORE_SCENARIO_NO_AFFINITY);
+}
+
 TEST(JsonSchemaTest, CoreToCoreExporterReturnsSuccessWhenOutputPathIsEmpty) {
   CoreToCoreLatencyConfig config;
   config.output_file.clear();

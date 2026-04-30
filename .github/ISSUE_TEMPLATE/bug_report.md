@@ -53,7 +53,7 @@ What should have happened?
 ## Configuration Used
 If applicable, share your command-line arguments or configuration:
 ```bash
-./memory_benchmark -benchmark -buffersize 1024 -iterations 2000 [etc]
+./memory_benchmark --benchmark --buffersize 1024 --iterations 2000 [etc]
 ```
 
 ## Possible Solution

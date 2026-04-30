@@ -46,7 +46,7 @@ The kernel uses three key safeguards:
 
 1. **Zero-access fast return**
    - If `count == 0`, it returns immediately.
-2. **Exact-count execution with 8x unroll**
+2. **Exact--count execution with 8x unroll**
    - `count / 8` iterations of 8 dependent loads, then `count % 8` remainder loads.
 3. **Correct unsigned loop termination**
    - Remainder loop uses `subs`/`b.ne` rather than compare-and-branch to correctly handle the full
@@ -89,18 +89,18 @@ The function returns `EXIT_FAILURE` for invalid setup cases, including:
 
 ### 4.3 Chain Construction Modes
 
-The `-latency-chain-mode` flag selects the pointer-chain construction policy.
-`-latency-tlb-locality-kb` sets the locality window size used by all non-global modes.
+The `--latency-chain-mode` flag selects the pointer-chain construction policy.
+`--latency-tlb-locality-kb` sets the locality window size used by all non-global modes.
 
-| Mode enum | CLI name | `-latency-tlb-locality-kb` required | Behavior |
+| Mode enum | CLI name | `--latency-tlb-locality-kb` required | Behavior |
 |---|---|---|---|
 | `GlobalRandom` | `global-random` | No (ignored if provided) | Single `std::shuffle` across the full index space. Maximum address randomness; highest TLB and cache pressure. |
 | `RandomInBoxRandomBox` | `random-box` | Yes | Independent random permutation within each locality window; window visit order is also randomized. Default when `tlb_locality_bytes > 0` and mode is `auto`. |
 | `SameRandomInBoxIncreasingBox` | `same-random-in-box` | Yes | One random permutation is generated and applied identically to every locality window; windows are visited in sequential order. Useful for isolating within-window access variance. |
 | `DiffRandomInBoxIncreasingBox` | `diff-random-in-box` | Yes | Independent random permutation per window; windows are visited in sequential order. Combines per-window randomness with a predictable inter-window traversal order. |
 
-When `-latency-chain-mode auto` (the default), the effective mode is `global-random` if
-`-latency-tlb-locality-kb 0`, and `random-box` otherwise.
+When `--latency-chain-mode auto` (the default), the effective mode is `global-random` if
+`--latency-tlb-locality-kb 0`, and `random-box` otherwise.
 
 This is a chain-construction policy, not a hardware TLB control primitive. The locality window
 influences which addresses appear in the same traversal neighborhood; it does not guarantee
@@ -108,7 +108,7 @@ those addresses reside in any particular TLB level during execution.
 
 ### 4.4 Stride Control
 
-`-latency-stride-bytes` controls spacing between pointer-chain nodes (default `256`).
+`--latency-stride-bytes` controls spacing between pointer-chain nodes (default `256`).
 
 - Smaller stride (e.g., `32`) increases same-page cache-line density — more nodes per page,
   lower page turnover.
@@ -158,7 +158,7 @@ start of sample `i+1`, every sample begins from an arbitrary point in the chain,
 that cold-start artifact.
 
 `run_latency_test()` is the entry point for main-memory latency measurement.
-`run_cache_latency_test()` is the corresponding entry point for L1, L2, and custom-cache-size
+`run_cache_latency_test()` is the corresponding entry point for L1, L2, and custom--cache-size
 latency measurements. Both functions share the same internal `run_latency_measurement()` path
 and the same assembly kernel; the distinction is only in which buffer is passed and which
 result field is populated.
@@ -169,30 +169,30 @@ result field is populated.
 
 | Flag | Default | Effect |
 |---|---|---|
-| `-latency-stride-bytes` | `256` | Byte spacing between pointer-chain nodes. Must be a multiple of 8 (pointer size on AArch64). |
-| `-latency-tlb-locality-kb` | `1024` | Locality window size in KB. `0` selects global-random mode when `-latency-chain-mode auto` is used; explicit box modes require non-zero locality. |
-| `-latency-samples` | `1000` | Number of sub-samples per benchmark loop. Higher values improve statistical resolution. |
-| `-latency-chain-mode` | `auto` | Chain construction policy. `auto` selects `global-random` when locality is 0, `random-box` otherwise. |
+| `--latency-stride-bytes` | `256` | Byte spacing between pointer-chain nodes. Must be a multiple of 8 (pointer size on AArch64). |
+| `--latency-tlb-locality-kb` | `1024` | Locality window size in KB. `0` selects global-random mode when `--latency-chain-mode auto` is used; explicit box modes require non-zero locality. |
+| `--latency-samples` | `1000` | Number of sub-samples per benchmark loop. Higher values improve statistical resolution. |
+| `--latency-chain-mode` | `auto` | Chain construction policy. `auto` selects `global-random` when locality is 0, `random-box` otherwise. |
 
 ### 7.1 Baseline Main-Memory Latency (Global Random Chain)
 
 ```bash
 memory_benchmark \
-  -benchmark \
-  -only-latency \
-  -buffersize 1024 \
-  -count 10 \
-  -latency-samples 1000 \
-  -latency-tlb-locality-kb 0 \
-  -output latency_global.json
+  --benchmark \
+  --only-latency \
+  --buffer-size 1024 \
+  --count 10 \
+  --latency-samples 1000 \
+  --latency-tlb-locality-kb 0 \
+  --output latency_global.json
 ```
 
 ### 7.2 Locality-Window Latency Runs
 
 ```bash
-memory_benchmark -benchmark -only-latency -buffersize 1024 -count 10 -latency-samples 1000 -latency-tlb-locality-kb 16 -output latency_tlb16.json
-memory_benchmark -benchmark -only-latency -buffersize 1024 -count 10 -latency-samples 1000 -latency-tlb-locality-kb 2048 -output latency_tlb2048.json
-memory_benchmark -benchmark -only-latency -buffersize 1024 -count 10 -latency-samples 1000 -latency-tlb-locality-kb 32768 -output latency_tlb32768.json
+memory_benchmark --benchmark --only-latency --buffer-size 1024 --count 10 --latency-samples 1000 --latency-tlb-locality-kb 16 --output latency_tlb16.json
+memory_benchmark --benchmark --only-latency --buffer-size 1024 --count 10 --latency-samples 1000 --latency-tlb-locality-kb 2048 --output latency_tlb2048.json
+memory_benchmark --benchmark --only-latency --buffer-size 1024 --count 10 --latency-samples 1000 --latency-tlb-locality-kb 32768 --output latency_tlb32768.json
 ```
 
 ### 7.3 Cache-Scale Sweep (Custom Cache Size)
@@ -226,7 +226,7 @@ analysis.
   - L1: `cache.l1.latency.chain_diagnostics.unique_pages_touched`
   - L2: `cache.l2.latency.chain_diagnostics.unique_pages_touched`
 
-  **Note:** `chain_diagnostics` is only emitted when `-latency-stride-bytes` is explicitly
+  **Note:** `chain_diagnostics` is only emitted when `--latency-stride-bytes` is explicitly
   specified on the command line with a non-default value. Runs using the default stride will not
   include this block.
 
@@ -254,11 +254,11 @@ intended cache level, or system interference is present.
 
 ## 10. Summary
 
-The latency path in this project is built around a strict dependent pointer chase with exact-count execution and tested chain setup boundaries.
+The latency path in this project is built around a strict dependent pointer chase with exact--count execution and tested chain setup boundaries.
 It is suitable for comparative latency studies across cache sizes and locality-window policies when interpreted with robust statistics (median and tails) rather than single-point extremes.
 
 ## 11. Related Documents
 
-- [TLB_ANALYSIS_WHITEPAPER.md](TLB_ANALYSIS_WHITEPAPER.md) — Standalone TLB boundary detection mode (`-analyze-tlb`): sweep methodology, boundary/guard rules, confidence model, and JSON contract.
-- [CORE_TO_CORE_WHITEPAPER.md](CORE_TO_CORE_WHITEPAPER.md) — Core-to-Core Cache-Line Handoff Latency Benchmark (`-analyze-core2core`): LDAR/STLR assembly protocol, scheduler-hint scenarios, and JSON contract.
+- [TLB_ANALYSIS_WHITEPAPER.md](TLB_ANALYSIS_WHITEPAPER.md) — Standalone TLB boundary detection mode (`--analyze-tlb`): sweep methodology, boundary/guard rules, confidence model, and JSON contract.
+- [CORE_TO_CORE_WHITEPAPER.md](CORE_TO_CORE_WHITEPAPER.md) — Core-to-Core Cache-Line Handoff Latency Benchmark (`--analyze-core2core`): LDAR/STLR assembly protocol, scheduler-hint scenarios, and JSON contract.
 - [TECHNICAL_SPECIFICATION.md](TECHNICAL_SPECIFICATION.md) — Runtime architecture, execution flow, and output contracts for all benchmark modes.

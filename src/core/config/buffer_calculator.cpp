@@ -74,7 +74,7 @@ void calculate_buffer_sizes(BenchmarkConfig& config) {
   
   if (config.use_custom_cache_size) {
     if (config.custom_cache_size_bytes == 0) {
-      // -cache-size 0 in -only-latency mode disables cache latency buffers.
+      // --cache-size 0 in --only-latency mode disables cache latency buffers.
       config.custom_buffer_size = 0;
       return;
     }
@@ -197,7 +197,7 @@ void calculate_buffer_sizes(BenchmarkConfig& config) {
  */
 void calculate_access_counts(BenchmarkConfig& config) {
   if (config.buffer_size_mb == 0) {
-    // -buffersize 0 in -only-latency mode disables main memory latency.
+    // --buffer-size 0 in --only-latency mode disables main memory latency.
     config.lat_num_accesses = 0;
     return;
   }

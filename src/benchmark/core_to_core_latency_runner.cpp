@@ -26,6 +26,7 @@
 #include <atomic>
 #include <chrono>
 #include <cmath>
+#include <filesystem>
 #include <iostream>
 #include <string>
 #include <thread>
@@ -44,6 +45,7 @@
 #include "core/system/system_info.h"
 #include "core/timing/timer.h"
 #include "output/console/messages/messages_api.h"
+#include "output/json/json_output/json_output_api.h"
 
 namespace {
 
@@ -304,7 +306,8 @@ bool execute_single_scenario(const ScenarioDescriptor& scenario,
   return true;
 }
 
-int run_core_to_core_latency(const CoreToCoreLatencyConfig& config) {
+int run_core_to_core_latency_collect(const CoreToCoreLatencyConfig& config,
+                                     nlohmann::ordered_json& result_json) {
   const auto analysis_start = std::chrono::steady_clock::now();
 
   std::cout << Messages::usage_header(SOFTVERSION);
@@ -393,9 +396,25 @@ int run_core_to_core_latency(const CoreToCoreLatencyConfig& config) {
       scenario_results,
       total_execution_time_sec,
   };
-  if (save_core_to_core_latency_to_json(json_context) != EXIT_SUCCESS) {
+
+  result_json = build_core_to_core_latency_json(json_context);
+  return EXIT_SUCCESS;
+}
+
+int run_core_to_core_latency(const CoreToCoreLatencyConfig& config) {
+  nlohmann::ordered_json result_json;
+  if (run_core_to_core_latency_collect(config, result_json) != EXIT_SUCCESS) {
     return EXIT_FAILURE;
   }
 
-  return EXIT_SUCCESS;
+  if (config.output_file.empty()) {
+    return EXIT_SUCCESS;
+  }
+
+  std::filesystem::path file_path(config.output_file);
+  if (file_path.is_relative()) {
+    file_path = std::filesystem::current_path() / file_path;
+  }
+
+  return write_json_to_file(file_path, result_json);
 }

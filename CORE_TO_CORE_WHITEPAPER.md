@@ -1,13 +1,13 @@
 # Core-to-Core Cache-Line Handoff Latency Benchmark
 
 **memory_benchmark — Technical Whitepaper**
-*Revision 2026-04-26 — Applies to release 0.55.x; historical data examples may use 0.53.7 sample files*
+*Revision 2026-04-26 — Applies to release 0.56.x; historical data examples may use 0.53.7 sample files*
 
 ---
 
 ## TL;DR
 
-The `-analyze-core2core` mode measures the round-trip latency of a single
+The `--analyze-core2core` mode measures the round-trip latency of a single
 cache-line bouncing between two POSIX threads on an ARM64 system. Two threads
 exchange a 32-bit turn token using `LDAR`/`STLR` acquire-release instructions
 in a tight ping-pong loop. The mode runs three scenarios that vary the macOS
@@ -25,7 +25,7 @@ bound on the cost of every lock acquisition, producer-consumer queue handoff,
 and fine-grained atomic flag.
 
 The `memory_benchmark` tool provides a dedicated standalone mode,
-`-analyze-core2core`, for measuring this latency on Apple Silicon and other
+`--analyze-core2core`, for measuring this latency on Apple Silicon and other
 ARM64 targets running macOS. The mode deliberately excludes all standard
 benchmark orchestration (buffer sizing, iteration counts, memory allocation)
 so the measurement path is as short and reproducible as possible.
@@ -57,10 +57,10 @@ guaranteed when the scheduler places threads on cores of different types
 
 ### 2.1 Standalone mode isolation
 
-The `-analyze-core2core` flag is detected before the standard argument parser
+The `--analyze-core2core` flag is detected before the standard argument parser
 runs. This design choice ensures:
 
-- None of the standard benchmark flags (`-buffersize`, `-iterations`, etc.) are
+- None of the standard benchmark flags (`--buffer-size`, `--iterations`, etc.) are
   accepted or silently ignored.
 - The configuration struct `CoreToCoreLatencyConfig` remains small and
   orthogonal to `BenchmarkConfig`.
@@ -70,13 +70,13 @@ The early-exit detection is in `main()`:
 
 ```cpp
 for (int i = 1; i < argc; ++i) {
-    if (std::string(argv[i]) == "-analyze-core2core") {
+    if (std::string(argv[i]) == "--analyze-core2core") {
         return run_core_to_core_latency_mode(argc, argv);
     }
 }
 ```
 
-Any unknown flag passed alongside `-analyze-core2core` returns `EXIT_FAILURE`
+Any unknown flag passed alongside `--analyze-core2core` returns `EXIT_FAILURE`
 with a descriptive error message listing the permitted options.
 
 ### 2.2 Assembly hot loop
@@ -303,34 +303,34 @@ to obtain the timebase is treated as a fatal error.
 ### 5.1 Command-line interface
 
 ```
-memory_benchmark -analyze-core2core [options]
+memory_benchmark --analyze-core2core [options]
 
 Options:
-  -count <n>             Number of benchmark loops (default: 1)
-  -latency-samples <n>   Sampled windows per loop (default: 1000)
-  -output <file>         Write JSON results to <file>
+  --count <n>             Number of benchmark loops (default: 1)
+  --latency-samples <n>   Sampled windows per loop (default: 1000)
+  --output <file>         Write JSON results to <file>
   -h, --help             Print usage and exit
 ```
 
-All options are optional. Only `-analyze-core2core` is required. Any standard
-benchmark flag (e.g., `-buffersize`) causes immediate failure with an error
+All options are optional. Only `--analyze-core2core` is required. Any standard
+benchmark flag (e.g., `--buffer-size`) causes immediate failure with an error
 message listing the permitted options.
 
 ### 5.2 Typical invocations
 
 **Quick single run with JSON output:**
 ```sh
-memory_benchmark -analyze-core2core -output results.json
+memory_benchmark --analyze-core2core --output results.json
 ```
 
 **Extended run for stable statistics:**
 ```sh
-memory_benchmark -analyze-core2core -count 10 -latency-samples 5000 -output results.json
+memory_benchmark --analyze-core2core --count 10 --latency-samples 5000 --output results.json
 ```
 
 **Verbose mode for manual inspection (no JSON):**
 ```sh
-memory_benchmark -analyze-core2core -count 3
+memory_benchmark --analyze-core2core --count 3
 ```
 
 ### 5.3 Example console output
@@ -490,18 +490,18 @@ Three dedicated GoogleTest suites cover this module:
 
 | Test | Behaviour verified |
 |---|---|
-| `ParsesDefaultStandaloneModeValues` | Bare `-analyze-core2core` produces default `loop_count` and `latency_sample_count` from centralized constants |
-| `ParsesOptionalModeArguments` | `-count`, `-latency-samples`, `-output` are parsed and stored correctly |
-| `RejectsUnknownOptionsInStandaloneMode` | Standard benchmark flag `-buffersize` returns `EXIT_FAILURE` |
-| `RejectsInvalidCountValues` | `-count 0` returns `EXIT_FAILURE` (must be ≥ 1) |
+| `ParsesDefaultStandaloneModeValues` | Bare `--analyze-core2core` produces default `loop_count` and `latency_sample_count` from centralized constants |
+| `ParsesOptionalModeArguments` | `--count`, `--latency-samples`, `--output` are parsed and stored correctly |
+| `RejectsUnknownOptionsInStandaloneMode` | Standard benchmark flag `--buffer-size` returns `EXIT_FAILURE` |
+| `RejectsInvalidCountValues` | `--count 0` returns `EXIT_FAILURE` (must be ≥ 1) |
 | `HelpFlagReturnsSuccessAndSetsHelpRequested` | `-h` returns `EXIT_SUCCESS` and sets `config.help_requested = true` |
 
 ### 7.3 Messages test coverage (`CoreToCoreMessagesTest`)
 
 | Test | Behaviour verified |
 |---|---|
-| `UsageMentionsStandaloneMode` | The usage string produced by `Messages::usage_options()` contains `-analyze-core2core` |
-| `StandaloneModeErrorMessageExists` | The isolation error message names all three permitted options: `-output`, `-count`, `-latency-samples` |
+| `UsageMentionsStandaloneMode` | The usage string produced by `Messages::usage_options()` contains `--analyze-core2core` |
+| `StandaloneModeErrorMessageExists` | The isolation error message names all three permitted options: `--output`, `--count`, `--latency-samples` |
 | `HintStatusMessageContainsRoleAndCodes` | `report_core_to_core_hint_status()` embeds the thread role name, QoS failure code, affinity tag, and affinity failure code |
 
 ### 7.4 Runner test coverage (`CoreToCoreRunnerTest`)
@@ -582,8 +582,8 @@ the percentile algorithm is correct.
 | `CORE_TO_CORE_WARMUP_ROUND_TRIPS` | 20,000 | Untimed warmup before each headline window |
 | `CORE_TO_CORE_HEADLINE_ROUND_TRIPS` | 1,000,000 | Trips per timed headline window |
 | `CORE_TO_CORE_SAMPLE_WINDOW_ROUND_TRIPS` | 2,000 | Trips per sampled distribution window |
-| `CORE_TO_CORE_DEFAULT_LOOP_COUNT` | 1 | Default `-count` value |
-| `CORE_TO_CORE_DEFAULT_LATENCY_SAMPLE_COUNT` | 1,000 | Default `-latency-samples` value |
+| `CORE_TO_CORE_DEFAULT_LOOP_COUNT` | 1 | Default `--count` value |
+| `CORE_TO_CORE_DEFAULT_LATENCY_SAMPLE_COUNT` | 1,000 | Default `--latency-samples` value |
 | `CORE_TO_CORE_INITIATOR_TURN_VALUE` | 0 | Token value for initiator ownership |
 | `CORE_TO_CORE_RESPONDER_TURN_VALUE` | 1 | Token value for responder ownership |
 | `CORE_TO_CORE_AFFINITY_TAG_NONE` | 0 | No affinity tag |

@@ -46,6 +46,73 @@
 #include <limits>
 #include <cstdlib>
 
+namespace {
+
+size_t calculate_sweep_run_count(const BenchmarkConfig& config) {
+  size_t run_count = 1;
+  for (const SweepSpec& spec : config.sweep_specs) {
+    if (spec.values.empty()) {
+      return 0;
+    }
+    if (run_count > std::numeric_limits<size_t>::max() / spec.values.size()) {
+      return std::numeric_limits<size_t>::max();
+    }
+    run_count *= spec.values.size();
+  }
+  return run_count;
+}
+
+bool sweep_parameter_allowed(const BenchmarkConfig& config, SweepParameter parameter) {
+  if (config.analyze_tlb) {
+    return parameter == SweepParameter::LatencyStrideBytes ||
+           parameter == SweepParameter::LatencyChainMode ||
+           parameter == SweepParameter::TlbDensity;
+  }
+
+  if (config.run_patterns) {
+    return parameter == SweepParameter::BufferSizeMb ||
+           parameter == SweepParameter::Threads;
+  }
+
+  if (config.only_bandwidth) {
+    return parameter == SweepParameter::BufferSizeMb ||
+           parameter == SweepParameter::Threads;
+  }
+
+  if (config.only_latency) {
+    return parameter == SweepParameter::BufferSizeMb ||
+           parameter == SweepParameter::CacheSizeKb ||
+           parameter == SweepParameter::LatencyTlbLocalityKb ||
+           parameter == SweepParameter::LatencyStrideBytes ||
+           parameter == SweepParameter::LatencyChainMode;
+  }
+
+  return parameter == SweepParameter::BufferSizeMb ||
+         parameter == SweepParameter::CacheSizeKb ||
+         parameter == SweepParameter::Threads ||
+         parameter == SweepParameter::LatencyTlbLocalityKb ||
+         parameter == SweepParameter::LatencyStrideBytes ||
+         parameter == SweepParameter::LatencyChainMode;
+}
+
+std::string mode_name_for_sweep(const BenchmarkConfig& config) {
+  if (config.analyze_tlb) {
+    return "--analyze-tlb";
+  }
+  if (config.run_patterns) {
+    return "--patterns";
+  }
+  if (config.only_bandwidth) {
+    return "--benchmark --only-bandwidth";
+  }
+  if (config.only_latency) {
+    return "--benchmark --only-latency";
+  }
+  return "--benchmark";
+}
+
+}  // namespace
+
 /**
  * @brief Error Handling Strategy for this module:
  * 
@@ -66,6 +133,45 @@
  * Callers should check return value and handle EXIT_FAILURE appropriately.
  */
 int validate_config(BenchmarkConfig& config) {
+  if (config.run_sweep) {
+    if (config.sweep_specs.empty()) {
+      std::cerr << Messages::error_prefix() << Messages::error_sweep_requires_parameter() << std::endl;
+      return EXIT_FAILURE;
+    }
+    if (config.output_file.empty()) {
+      std::cerr << Messages::error_prefix() << Messages::error_sweep_requires_output() << std::endl;
+      return EXIT_FAILURE;
+    }
+
+    const std::string mode_name = mode_name_for_sweep(config);
+    for (const SweepSpec& spec : config.sweep_specs) {
+      if (!sweep_parameter_allowed(config, spec.parameter)) {
+        std::cerr << Messages::error_prefix()
+                  << Messages::error_sweep_parameter_not_allowed(spec.parameter_name, mode_name)
+                  << std::endl;
+        return EXIT_FAILURE;
+      }
+      if (config.analyze_tlb && spec.parameter == SweepParameter::LatencyChainMode) {
+        for (const SweepValue& value : spec.values) {
+          if (value.latency_chain_mode == LatencyChainMode::GlobalRandom) {
+            std::cerr << Messages::error_prefix()
+                      << Messages::error_analyze_tlb_global_random_unsupported()
+                      << std::endl;
+            return EXIT_FAILURE;
+          }
+        }
+      }
+    }
+
+    const size_t sweep_run_count = calculate_sweep_run_count(config);
+    if (sweep_run_count == 0 || sweep_run_count > config.sweep_max_runs) {
+      std::cerr << Messages::error_prefix()
+                << Messages::error_sweep_too_many_runs(sweep_run_count, config.sweep_max_runs)
+                << std::endl;
+      return EXIT_FAILURE;
+    }
+  }
+
   if (config.analyze_tlb) {
     return EXIT_SUCCESS;
   }
@@ -105,13 +211,13 @@ int validate_config(BenchmarkConfig& config) {
     return EXIT_FAILURE;  // Return code: validation error
   }
   
-  // Error: Validate flags with -patterns
+  // Error: Validate flags with --patterns
   if (config.run_patterns && (config.only_bandwidth || config.only_latency)) {
     std::cerr << Messages::error_prefix() << Messages::error_only_flags_with_patterns() << std::endl;
     return EXIT_FAILURE;  // Return code: validation error
   }
   
-  // Error: Validate -only-bandwidth and -only-latency require -benchmark
+  // Error: Validate --only-bandwidth and --only-latency require --benchmark
   if (!config.run_benchmark && !config.run_patterns) {
     if (config.only_bandwidth || config.only_latency) {
       std::cerr << Messages::error_prefix()
@@ -121,7 +227,7 @@ int validate_config(BenchmarkConfig& config) {
     }
   }
   
-  // Error: Validate -only-bandwidth incompatibilities
+  // Error: Validate --only-bandwidth incompatibilities
   if (config.only_bandwidth) {
     if (config.use_custom_cache_size) {
       std::cerr << Messages::error_prefix() << Messages::error_only_bandwidth_with_cache_size() << std::endl;
@@ -133,7 +239,7 @@ int validate_config(BenchmarkConfig& config) {
     }
   }
   
-  // Error: Validate -only-latency incompatibilities
+  // Error: Validate --only-latency incompatibilities
   if (config.only_latency) {
     if (config.user_specified_iterations) {
       std::cerr << Messages::error_prefix() << Messages::error_only_latency_with_iterations() << std::endl;
@@ -181,7 +287,7 @@ int validate_config(BenchmarkConfig& config) {
     }
   }
 
-  // Zero-size disabling behavior is only supported with -only-latency.
+  // Zero-size disabling behavior is only supported with --only-latency.
   const bool cache_latency_disabled = (config.custom_cache_size_kb_ll == 0);
   const bool main_latency_disabled = (config.buffer_size_mb == 0);
 
@@ -277,7 +383,7 @@ int validate_config(BenchmarkConfig& config) {
   }
   
   // Error: Buffer size must meet minimum requirements (page size and minimum latency buffer size)
-  // Skip this check when main memory latency is explicitly disabled (-only-latency with -buffersize 0).
+  // Skip this check when main memory latency is explicitly disabled (--only-latency with --buffer-size 0).
   if (config.buffer_size_mb > 0 &&
       (config.buffer_size < page_size || (config.buffer_size / config.latency_stride_bytes) < 2)) {
     std::cerr << Messages::error_prefix() << Messages::error_buffer_size_too_small(config.buffer_size) << std::endl;

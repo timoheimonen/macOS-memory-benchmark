@@ -20,24 +20,46 @@
  * @author Timo Heimonen <timo.heimonen@proton.me>
  * @date 2026
  *
- * Parses and validates mode-specific command line options for `-analyze-core2core`.
+ * Parses and validates mode-specific command line options for `-C, --analyze-core2core`.
  * This parser intentionally accepts only a small, explicit option set so the
  * standalone mode remains isolated from standard benchmark orchestration flags.
  */
 
 #include "benchmark/core_to_core_latency.h"
+#include "benchmark/core_to_core_sweep_runner.h"
 
 #include <cstdlib>
 #include <iostream>
 #include <limits>
+#include <sstream>
 #include <stdexcept>
 #include <string>
+#include <vector>
 
 #include "core/config/constants.h"
 #include "output/console/messages/messages_api.h"
 #include "output/console/output_printer.h"
 
 namespace {
+
+constexpr const char* OPT_ANALYZE_CORE_TO_CORE_SHORT = "-C";
+constexpr const char* OPT_ANALYZE_CORE_TO_CORE_LONG = "--analyze-core2core";
+constexpr const char* OPT_COUNT_SHORT = "-r";
+constexpr const char* OPT_COUNT_LONG = "--count";
+constexpr const char* OPT_HELP_SHORT = "-h";
+constexpr const char* OPT_HELP_LONG = "--help";
+constexpr const char* OPT_LATENCY_SAMPLES_SHORT = "-n";
+constexpr const char* OPT_LATENCY_SAMPLES_LONG = "--latency-samples";
+constexpr const char* OPT_OUTPUT_SHORT = "-o";
+constexpr const char* OPT_OUTPUT_LONG = "--output";
+constexpr const char* OPT_SWEEP_SHORT = "-S";
+constexpr const char* OPT_SWEEP_LONG = "--sweep";
+constexpr const char* OPT_SWEEP_MAX_RUNS_SHORT = "-X";
+constexpr const char* OPT_SWEEP_MAX_RUNS_LONG = "--sweep-max-runs";
+
+bool is_option(const std::string& arg, const char* short_option, const char* long_option) {
+  return arg == short_option || arg == long_option;
+}
 
 // Shared validator for positive integer options used by standalone mode flags.
 bool parse_positive_int_option(const std::string& option,
@@ -76,6 +98,87 @@ bool parse_positive_int_option(const std::string& option,
   return true;
 }
 
+std::vector<std::string> split_comma_values(const std::string& input) {
+  std::vector<std::string> values;
+  std::stringstream stream(input);
+  std::string item;
+  while (std::getline(stream, item, ',')) {
+    values.push_back(item);
+  }
+  return values;
+}
+
+bool core_to_core_sweep_parameter_from_string(const std::string& key,
+                                              CoreToCoreSweepParameter& out_parameter,
+                                              std::string& out_name) {
+  if (key == "count") {
+    out_parameter = CoreToCoreSweepParameter::Count;
+    out_name = "count";
+    return true;
+  }
+  if (key == "latency-samples") {
+    out_parameter = CoreToCoreSweepParameter::LatencySamples;
+    out_name = "latency-samples";
+    return true;
+  }
+  return false;
+}
+
+bool parse_core_to_core_sweep_spec(const std::string& spec_text,
+                                   CoreToCoreSweepSpec& out_spec,
+                                   const char* prog_name) {
+  const size_t equals_pos = spec_text.find('=');
+  if (equals_pos == std::string::npos || equals_pos == 0 || equals_pos == spec_text.size() - 1) {
+    std::cerr << Messages::error_prefix()
+              << Messages::error_invalid_value(OPT_SWEEP_LONG, spec_text, "sweep must use key=value1,value2 syntax")
+              << std::endl;
+    print_usage(prog_name);
+    return false;
+  }
+
+  const std::string key = spec_text.substr(0, equals_pos);
+  const std::string value_text = spec_text.substr(equals_pos + 1);
+
+  CoreToCoreSweepSpec spec;
+  if (!core_to_core_sweep_parameter_from_string(key, spec.parameter, spec.parameter_name)) {
+    std::cerr << Messages::error_prefix()
+              << Messages::error_invalid_value(OPT_SWEEP_LONG, spec_text, "unsupported core-to-core sweep parameter: " + key)
+              << std::endl;
+    print_usage(prog_name);
+    return false;
+  }
+
+  const std::vector<std::string> raw_values = split_comma_values(value_text);
+  if (raw_values.empty()) {
+    std::cerr << Messages::error_prefix()
+              << Messages::error_invalid_value(OPT_SWEEP_LONG, spec_text, "sweep value list cannot be empty")
+              << std::endl;
+    print_usage(prog_name);
+    return false;
+  }
+
+  for (const std::string& raw_value : raw_values) {
+    if (raw_value.empty()) {
+      std::cerr << Messages::error_prefix()
+                << Messages::error_invalid_value(OPT_SWEEP_LONG, spec_text, "sweep value list cannot contain empty values")
+                << std::endl;
+      print_usage(prog_name);
+      return false;
+    }
+
+    int parsed = 0;
+    const std::string option_name =
+        (spec.parameter == CoreToCoreSweepParameter::Count) ? OPT_COUNT_LONG : OPT_LATENCY_SAMPLES_LONG;
+    if (!parse_positive_int_option(option_name, raw_value, parsed, prog_name)) {
+      return false;
+    }
+    spec.values.push_back(CoreToCoreSweepValue{raw_value, parsed});
+  }
+
+  out_spec = spec;
+  return true;
+}
+
 }  // namespace
 
 int parse_core_to_core_mode_arguments(int argc, char* argv[], CoreToCoreLatencyConfig& config) {
@@ -87,35 +190,36 @@ int parse_core_to_core_mode_arguments(int argc, char* argv[], CoreToCoreLatencyC
   bool output_seen = false;
   bool count_seen = false;
   bool samples_seen = false;
+  bool sweep_max_runs_seen = false;
 
   for (int i = 1; i < argc; ++i) {
     const std::string arg = argv[i];
 
     // Mode flag is required but does not consume a value.
-    if (arg == "-analyze-core2core") {
+    if (is_option(arg, OPT_ANALYZE_CORE_TO_CORE_SHORT, OPT_ANALYZE_CORE_TO_CORE_LONG)) {
       mode_seen = true;
       continue;
     }
 
     // Help is an early-exit path for this standalone parser.
-    if (arg == "-h" || arg == "--help") {
+    if (is_option(arg, OPT_HELP_SHORT, OPT_HELP_LONG)) {
       print_help(argv[0]);
       config.help_requested = true;
       return EXIT_SUCCESS;
     }
 
     // Optional JSON output target.
-    if (arg == "-output") {
+    if (is_option(arg, OPT_OUTPUT_SHORT, OPT_OUTPUT_LONG)) {
       if (output_seen) {
         std::cerr << Messages::error_prefix()
-                  << Messages::error_duplicate_option("-output")
+                  << Messages::error_duplicate_option(OPT_OUTPUT_LONG)
                   << std::endl;
         print_usage(argv[0]);
         return EXIT_FAILURE;
       }
       if (++i >= argc) {
         std::cerr << Messages::error_prefix()
-                  << Messages::error_missing_value("-output")
+                  << Messages::error_missing_value(OPT_OUTPUT_LONG)
                   << std::endl;
         print_usage(argv[0]);
         return EXIT_FAILURE;
@@ -125,23 +229,65 @@ int parse_core_to_core_mode_arguments(int argc, char* argv[], CoreToCoreLatencyC
       continue;
     }
 
-    // Optional benchmark loop count override.
-    if (arg == "-count") {
-      if (count_seen) {
+    if (is_option(arg, OPT_SWEEP_SHORT, OPT_SWEEP_LONG)) {
+      if (++i >= argc) {
         std::cerr << Messages::error_prefix()
-                  << Messages::error_duplicate_option("-count")
+                  << Messages::error_missing_value(OPT_SWEEP_LONG)
+                  << std::endl;
+        print_usage(argv[0]);
+        return EXIT_FAILURE;
+      }
+
+      CoreToCoreSweepSpec spec;
+      if (!parse_core_to_core_sweep_spec(argv[i], spec, argv[0])) {
+        return EXIT_FAILURE;
+      }
+      config.sweep_specs.push_back(std::move(spec));
+      config.run_sweep = true;
+      continue;
+    }
+
+    if (is_option(arg, OPT_SWEEP_MAX_RUNS_SHORT, OPT_SWEEP_MAX_RUNS_LONG)) {
+      if (sweep_max_runs_seen) {
+        std::cerr << Messages::error_prefix()
+                  << Messages::error_duplicate_option(OPT_SWEEP_MAX_RUNS_LONG)
                   << std::endl;
         print_usage(argv[0]);
         return EXIT_FAILURE;
       }
       if (++i >= argc) {
         std::cerr << Messages::error_prefix()
-                  << Messages::error_missing_value("-count")
+                  << Messages::error_missing_value(OPT_SWEEP_MAX_RUNS_LONG)
                   << std::endl;
         print_usage(argv[0]);
         return EXIT_FAILURE;
       }
-      if (!parse_positive_int_option("-count", argv[i], config.loop_count, argv[0])) {
+      int parsed = 0;
+      if (!parse_positive_int_option(OPT_SWEEP_MAX_RUNS_LONG, argv[i], parsed, argv[0])) {
+        return EXIT_FAILURE;
+      }
+      config.sweep_max_runs = static_cast<size_t>(parsed);
+      sweep_max_runs_seen = true;
+      continue;
+    }
+
+    // Optional benchmark loop count override.
+    if (is_option(arg, OPT_COUNT_SHORT, OPT_COUNT_LONG)) {
+      if (count_seen) {
+        std::cerr << Messages::error_prefix()
+                  << Messages::error_duplicate_option(OPT_COUNT_LONG)
+                  << std::endl;
+        print_usage(argv[0]);
+        return EXIT_FAILURE;
+      }
+      if (++i >= argc) {
+        std::cerr << Messages::error_prefix()
+                  << Messages::error_missing_value(OPT_COUNT_LONG)
+                  << std::endl;
+        print_usage(argv[0]);
+        return EXIT_FAILURE;
+      }
+      if (!parse_positive_int_option(OPT_COUNT_LONG, argv[i], config.loop_count, argv[0])) {
         return EXIT_FAILURE;
       }
       count_seen = true;
@@ -149,22 +295,22 @@ int parse_core_to_core_mode_arguments(int argc, char* argv[], CoreToCoreLatencyC
     }
 
     // Optional per-loop latency sample count override.
-    if (arg == "-latency-samples") {
+    if (is_option(arg, OPT_LATENCY_SAMPLES_SHORT, OPT_LATENCY_SAMPLES_LONG)) {
       if (samples_seen) {
         std::cerr << Messages::error_prefix()
-                  << Messages::error_duplicate_option("-latency-samples")
+                  << Messages::error_duplicate_option(OPT_LATENCY_SAMPLES_LONG)
                   << std::endl;
         print_usage(argv[0]);
         return EXIT_FAILURE;
       }
       if (++i >= argc) {
         std::cerr << Messages::error_prefix()
-                  << Messages::error_missing_value("-latency-samples")
+                  << Messages::error_missing_value(OPT_LATENCY_SAMPLES_LONG)
                   << std::endl;
         print_usage(argv[0]);
         return EXIT_FAILURE;
       }
-      if (!parse_positive_int_option("-latency-samples",
+      if (!parse_positive_int_option(OPT_LATENCY_SAMPLES_LONG,
                                      argv[i],
                                      config.latency_sample_count,
                                      argv[0])) {
@@ -190,6 +336,31 @@ int parse_core_to_core_mode_arguments(int argc, char* argv[], CoreToCoreLatencyC
     return EXIT_FAILURE;
   }
 
+  if (config.run_sweep) {
+    if (config.sweep_specs.empty()) {
+      std::cerr << Messages::error_prefix()
+                << Messages::error_sweep_requires_parameter()
+                << std::endl;
+      print_usage(argv[0]);
+      return EXIT_FAILURE;
+    }
+    if (config.output_file.empty()) {
+      std::cerr << Messages::error_prefix()
+                << Messages::error_sweep_requires_output()
+                << std::endl;
+      print_usage(argv[0]);
+      return EXIT_FAILURE;
+    }
+    const size_t run_count = calculate_core_to_core_sweep_run_count(config);
+    if (run_count == 0 || run_count > config.sweep_max_runs) {
+      std::cerr << Messages::error_prefix()
+                << Messages::error_sweep_too_many_runs(run_count, config.sweep_max_runs)
+                << std::endl;
+      print_usage(argv[0]);
+      return EXIT_FAILURE;
+    }
+  }
+
   return EXIT_SUCCESS;
 }
 
@@ -202,6 +373,10 @@ int run_core_to_core_latency_mode(int argc, char* argv[]) {
 
   if (config.help_requested) {
     return EXIT_SUCCESS;
+  }
+
+  if (config.run_sweep) {
+    return run_core_to_core_latency_sweep(config);
   }
 
   // Execute benchmark only after successful parse and non-help path.

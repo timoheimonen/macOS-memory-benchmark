@@ -2,7 +2,7 @@
 
 ## 1. Scope and Status
 
-This document specifies the current implementation in this repository (version series `0.55.x`) for `memory_benchmark` on macOS Apple Silicon.
+This document specifies the current implementation in this repository (version series `0.56.x`) for `memory_benchmark` on macOS Apple Silicon.
 
 It is intentionally implementation-driven and reflects real behavior in code paths under `main.cpp`, `src/core`, `src/benchmark`, `src/pattern_benchmark`, `src/output`, and `src/asm`.
 
@@ -17,8 +17,8 @@ Primary goals:
 Out of scope:
 
 - Generic memory-performance theory (see [LATENCY_WHITEPAPER.md](LATENCY_WHITEPAPER.md)).
-- `-analyze-tlb` methodology details (see [TLB_ANALYSIS_WHITEPAPER.md](TLB_ANALYSIS_WHITEPAPER.md)).
-- `-analyze-core2core` methodology details (see [CORE_TO_CORE_WHITEPAPER.md](CORE_TO_CORE_WHITEPAPER.md)).
+- `--analyze-tlb` methodology details (see [TLB_ANALYSIS_WHITEPAPER.md](TLB_ANALYSIS_WHITEPAPER.md)).
+- `--analyze-core2core` methodology details (see [CORE_TO_CORE_WHITEPAPER.md](CORE_TO_CORE_WHITEPAPER.md)).
 - Historical behavior from older releases.
 
 ## 2. Platform and Build Constraints
@@ -58,7 +58,7 @@ Recommendation:
 
 Main orchestration (`main.cpp`) follows this pipeline:
 
-Standalone modes (`-analyze-tlb`, `-analyze-core2core`) are dispatched early and use dedicated runners.
+Standalone modes (`--analyze-tlb`, `--analyze-core2core`) are dispatched early and use dedicated runners.
 The pipeline below applies to standard/pattern benchmark execution.
 
 1. Create high-resolution total-execution timer.
@@ -88,12 +88,12 @@ Configuration state is represented by `BenchmarkConfig` (`src/core/config/config
 - Main options: buffer size MB, iterations, loop count, output path, threads.
 - Mode flags: `run_patterns`, `only_bandwidth`, `only_latency`.
 - Standalone analysis flags are handled outside `BenchmarkConfig` orchestration flow:
-  - `-analyze-tlb`
-  - `-analyze-core2core`
-- Cache behavior: auto L1/L2 or user-provided `-cache-size`.
+  - `--analyze-tlb`
+  - `--analyze-core2core`
+- Cache behavior: auto L1/L2 or user-provided `--cache-size`.
 - Latency sampling: `latency_sample_count`.
 - Latency-chain construction mode:
-  - `latency_chain_mode` (type `LatencyChainMode`, CLI flag `-latency-chain-mode`)
+  - `latency_chain_mode` (type `LatencyChainMode`, CLI flag `--latency-chain-mode`)
   - `user_specified_latency_chain_mode` flag
 - TLB-locality control for latency chain construction:
   - `latency_tlb_locality_bytes` (default 1024 KB)
@@ -112,36 +112,36 @@ Configuration state is represented by `BenchmarkConfig` (`src/core/config/config
 ### 6.1 Parsing behavior (`argument_parser.cpp`)
 
 - Two-pass parse:
-  - First pass extracts `-cache-size` early.
+  - First pass extracts `--cache-size` early.
   - Second pass parses remaining options.
 - Parser may throw internally (`std::stoll`/validation) but converts to return-code failures at function boundary.
 - Help (`-h`, `--help`) prints usage and exits successfully.
-- `-latency-chain-mode` accepts string values and resolves to `LatencyChainMode` enum.
-- `-analyze-core2core` uses dedicated mode parsing (outside `argument_parser.cpp`) and only allows optional `-output`, `-count`, and `-latency-samples`. Full methodology and JSON contract: [CORE_TO_CORE_WHITEPAPER.md](CORE_TO_CORE_WHITEPAPER.md).
+- `--latency-chain-mode` accepts string values and resolves to `LatencyChainMode` enum.
+- `--analyze-core2core` uses dedicated mode parsing (outside `argument_parser.cpp`) and only allows optional `--output`, `--count`, and `--latency-samples`. Full methodology and JSON contract: [CORE_TO_CORE_WHITEPAPER.md](CORE_TO_CORE_WHITEPAPER.md).
 
 ### 6.2 Validation behavior (`config_validator.cpp`)
 
 Validation rejects incompatible flag combinations and invalid value states:
 
-- `-only-bandwidth` and `-only-latency` are mutually exclusive.
-- `-patterns` cannot be combined with `-only-bandwidth` or `-only-latency`.
-- `-only-bandwidth` cannot be combined with `-cache-size` and cannot use latency-sample overrides.
-- `-only-latency` cannot be combined with `-iterations` override.
+- `--only-bandwidth` and `--only-latency` are mutually exclusive.
+- `--patterns` cannot be combined with `--only-bandwidth` or `--only-latency`.
+- `--only-bandwidth` cannot be combined with `--cache-size` and cannot use latency-sample overrides.
+- `--only-latency` cannot be combined with `--iterations` override.
 
-Zero-disabling semantics (supported only in `-only-latency`):
+Zero-disabling semantics (supported only in `--only-latency`):
 
-- `-buffersize 0` disables main-memory latency path.
-- `-cache-size 0` disables cache-latency path.
-- Both cannot be zero simultaneously in `-only-latency`.
+- `--buffer-size 0` disables main-memory latency path.
+- `--cache-size 0` disables cache-latency path.
+- Both cannot be zero simultaneously in `--only-latency`.
 
 TLB-locality constraints:
 
-- Non-zero `-latency-tlb-locality-kb` must be a multiple of system page size.
+- Non-zero `--latency-tlb-locality-kb` must be a multiple of system page size.
 - Non-zero locality window must span at least two latency-stride steps.
 
 Latency stride constraints:
 
-- `-latency-stride-bytes` must be greater than zero.
+- `--latency-stride-bytes` must be greater than zero.
 - Stride must be pointer-size aligned.
 
 Memory-limit model:
@@ -159,13 +159,13 @@ Memory-limit model:
 - L1/L2/custom cache test buffers use factor constants currently set to `1.0`.
 - Cache buffers are rounded to active latency stride granularity (`latency_stride_bytes`, default `256`) and minimum constraints.
 - Minimum practical lower bound includes page-size enforcement.
-- `-cache-size 0` (in allowed mode) produces zero custom cache buffer.
+- `--cache-size 0` (in allowed mode) produces zero custom cache buffer.
 
 ### 7.2 Latency access counts
 
 - Main-memory latency accesses scale from base count relative to default buffer size.
 - Cache latency access counts use fixed constants (`L1`, `L2`, `CUSTOM`).
-- `-buffersize 0` (in allowed mode) sets main latency accesses to zero.
+- `--buffer-size 0` (in allowed mode) sets main latency accesses to zero.
 
 ## 8. Memory Allocation and Initialization
 
@@ -287,7 +287,7 @@ Important execution semantics:
 
 - Phase-local buffers are allocated and initialized immediately before each phase and released after the phase, reducing standard-mode peak footprint.
 - Cache bandwidth uses `iterations * CACHE_ITERATIONS_MULTIPLIER` (saturated) for stability.
-- Cache bandwidth defaults to single-thread unless user explicitly provides `-threads`.
+- Cache bandwidth defaults to single-thread unless user explicitly provides `--threads`.
 - Main-memory latency headline is computed from one continuous chase pass.
 - If latency samples are enabled, sample collection runs in a separate pass.
 
@@ -415,7 +415,7 @@ In addition to standard fields (buffer size, iterations, loop count, thread coun
 
 ### 17.4 Path behavior
 
-- Relative `-output` paths are resolved against current working directory.
+- Relative `--output` paths are resolved against current working directory.
 
 ## 18. Error-Handling Model
 
@@ -429,7 +429,7 @@ Principle: no uncaught exceptions should escape to `main()` control flow.
 
 ## 19. Concurrency Model
 
-- Bandwidth and pattern bandwidth paths are parallelized by thread-count configuration.
+- Bandwidth and pattern bandwidth paths are parallelized by thread--count configuration.
 - Latency tests are intentionally single-threaded pointer-chase measurements.
 - Cache tests default to single-thread unless user overrides thread count.
 - Threaded work partitioning attempts cache-line-aware chunk handling to reduce false sharing effects.

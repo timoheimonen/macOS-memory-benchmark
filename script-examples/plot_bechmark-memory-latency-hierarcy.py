@@ -2,11 +2,12 @@
 import argparse
 import json
 import re
+import sys
 from pathlib import Path
 
 import matplotlib.pyplot as plt # pyright: ignore[reportMissingModuleSource]
 
-# uses json output from file "memory_benchmark -benchmark -count (>1) -only-latency -output results/<file>.json"
+# uses json output from file "memory_benchmark --benchmark --count (>1) --only-latency --output results/<file>.json"
 
 ALLOWED_METRICS = {
     "average": "Average",
@@ -25,7 +26,7 @@ def parse_args():
         description="Plot memory hierarchy latencies from benchmark JSON or text statistics output."
     )
     parser.add_argument(
-        "-file",
+        "-f",
         "--file",
         default="results/macminim4_count5_latency.json",
         help="Path to benchmark JSON/text file (default: results/macminim4_count5_latency.json)",
@@ -51,6 +52,9 @@ def parse_args():
         default=None,
         help="Override CPU name shown in the title",
     )
+    for arg in sys.argv[1:]:
+        if arg.startswith("-file"):
+            parser.error("legacy option '-file' is no longer supported; use '-f' or '--file'")
     return parser.parse_args()
 
 

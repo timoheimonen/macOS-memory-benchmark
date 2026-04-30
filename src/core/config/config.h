@@ -36,18 +36,54 @@
 
 #include <cstddef>  // size_t
 #include <string>
+#include <vector>
 #include <cstdlib>  // EXIT_SUCCESS, EXIT_FAILURE
 #include "core/config/constants.h"
 #include "core/memory/memory_utils.h"
 
 /**
  * @enum TlbSweepDensity
- * @brief Sweep density profile for standalone `-analyze-tlb` mode
+ * @brief Sweep density profile for standalone `--analyze-tlb` mode
  */
 enum class TlbSweepDensity {
   Low = 0,    ///< 15-point base sweep, no refinement
   Medium,     ///< 15-point base sweep + boundary refinement
   High,       ///< 29-point base sweep + boundary refinement
+};
+
+/**
+ * @enum SweepParameter
+ * @brief Parameter names supported by `--sweep key=value1,value2`.
+ */
+enum class SweepParameter {
+  BufferSizeMb = 0,
+  CacheSizeKb,
+  Threads,
+  LatencyTlbLocalityKb,
+  LatencyStrideBytes,
+  LatencyChainMode,
+  TlbDensity,
+};
+
+/**
+ * @struct SweepValue
+ * @brief Parsed typed value for one sweep parameter point.
+ */
+struct SweepValue {
+  std::string raw_value;
+  long long integer_value = 0;
+  LatencyChainMode latency_chain_mode = LatencyChainMode::Auto;
+  TlbSweepDensity tlb_sweep_density = TlbSweepDensity::High;
+};
+
+/**
+ * @struct SweepSpec
+ * @brief One `--sweep` option with a parameter and candidate values.
+ */
+struct SweepSpec {
+  SweepParameter parameter = SweepParameter::BufferSizeMb;
+  std::string parameter_name;
+  std::vector<SweepValue> values;
 };
 
 /**
@@ -68,7 +104,7 @@ struct BenchmarkConfig {
   size_t latency_stride_bytes = Constants::LATENCY_STRIDE_BYTES;  ///< Stride used for latency pointer chains (bytes)
   LatencyChainMode latency_chain_mode = LatencyChainMode::Auto;  ///< Pointer-chain construction policy (auto preserves default behavior)
   size_t latency_tlb_locality_bytes = Constants::DEFAULT_LATENCY_TLB_LOCALITY_KB * Constants::BYTES_PER_KB;  ///< TLB-locality window for latency chains (default 1 MB; 0 = global random)
-  TlbSweepDensity tlb_sweep_density = TlbSweepDensity::High;  ///< Sweep density for standalone -analyze-tlb mode
+  TlbSweepDensity tlb_sweep_density = TlbSweepDensity::High;  ///< Sweep density for standalone --analyze-tlb mode
   
   // Calculated sizes
   size_t buffer_size = 0;        ///< Final buffer size in bytes (calculated from buffer_size_mb)
@@ -98,19 +134,21 @@ struct BenchmarkConfig {
   bool run_benchmark = false;          ///< Whether to run standard benchmarks
   bool run_patterns = false;           ///< Whether to run pattern benchmarks
   bool use_non_cacheable = false;      ///< Use cache-discouraging hints (best-effort, not true non-cacheable)
-  bool user_specified_threads = false; ///< Whether user explicitly set -threads parameter
+  bool user_specified_threads = false; ///< Whether user explicitly set --threads parameter
   bool only_bandwidth = false;         ///< When true, run only bandwidth tests
   bool only_latency = false;           ///< When true, run only latency tests
   bool analyze_tlb = false;            ///< When true, run standalone TLB analysis mode
+  bool run_sweep = false;              ///< Whether to execute a multi-configuration sweep
   bool help_printed = false;           ///< Whether -h/--help was invoked (usage already printed)
-  
+  size_t sweep_max_runs = Constants::DEFAULT_SWEEP_MAX_RUNS;  ///< Maximum allowed sweep combinations
+
   // Tracking flags for user-specified parameters
-  bool user_specified_buffersize = false;      ///< Whether user explicitly set -buffersize
-  bool user_specified_iterations = false;      ///< Whether user explicitly set -iterations
-  bool user_specified_latency_samples = false; ///< Whether user explicitly set -latency-samples
-  bool user_specified_latency_stride = false;  ///< Whether user explicitly set -latency-stride-bytes
-  bool user_specified_latency_chain_mode = false; ///< Whether user explicitly set -latency-chain-mode
-  bool user_specified_latency_tlb_locality = false; ///< Whether user explicitly set -latency-tlb-locality-kb
+  bool user_specified_buffersize = false;      ///< Whether user explicitly set --buffer-size
+  bool user_specified_iterations = false;      ///< Whether user explicitly set --iterations
+  bool user_specified_latency_samples = false; ///< Whether user explicitly set --latency-samples
+  bool user_specified_latency_stride = false;  ///< Whether user explicitly set --latency-stride-bytes
+  bool user_specified_latency_chain_mode = false; ///< Whether user explicitly set --latency-chain-mode
+  bool user_specified_latency_tlb_locality = false; ///< Whether user explicitly set --latency-tlb-locality-kb
 
   // Latency-chain diagnostics (populated during chain setup)
   LatencyChainDiagnostics main_latency_chain_diagnostics;
@@ -120,6 +158,9 @@ struct BenchmarkConfig {
   
   // Output file
   std::string output_file;  ///< JSON output file path (empty = no JSON output)
+
+  // Sweep configuration
+  std::vector<SweepSpec> sweep_specs;  ///< Parsed `--sweep` parameter/value lists
 };
 
 /**
