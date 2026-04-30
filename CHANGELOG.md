@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.56.0] - Unreleased
+## [0.56.0] - 2026-04-30
 
 ### Added
   - **Built-in parameter sweep mode**: Added `--sweep <key=value1,value2>` for running Cartesian parameter sweeps without external shell orchestration. Supported sweep keys are `buffer-size`, `cache-size`, `threads`, `latency-tlb-locality-kb`, `latency-stride-bytes`, `latency-chain-mode`, `tlb-density`, and core-to-core `count` / `latency-samples`.
