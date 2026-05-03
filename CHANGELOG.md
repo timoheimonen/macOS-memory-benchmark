@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.56.1] - Unreleased
+
+### Fixed
+  - **Read benchmark checksum now folds the full vector accumulator**: `memory_read_loop_asm` now includes both 64-bit lanes of the final NEON XOR accumulator before combining the byte tail, so the returned checksum covers all loaded vector data while preserving the benchmark access pattern.
+
 ## [0.56.0] - 2026-04-30
 
 ### Added

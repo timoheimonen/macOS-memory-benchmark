@@ -16,6 +16,7 @@
 
 #include <gtest/gtest.h>
 
+#include <array>
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
@@ -24,6 +25,7 @@
 #include <vector>
 #include <unistd.h>
 
+#include "asm/asm_functions.h"
 #include "benchmark/benchmark_executor.h"
 #include "benchmark/benchmark_runner.h"
 #include "benchmark/benchmark_tests.h"
@@ -85,6 +87,13 @@ TEST(BenchmarkExecutorTest, WriteTestReturnsZeroForInvalidThreadCountsIntegratio
     return value == 0xCD;
   });
   EXPECT_TRUE(unchanged);
+}
+
+TEST(BenchmarkExecutorTest, ReadLoopChecksumFoldsUpperVectorLaneIntegration) {
+  alignas(64) std::array<std::uint8_t, 32> buffer{};
+  buffer[8] = 0x5A;
+
+  EXPECT_EQ(memory_read_loop_asm(buffer.data(), buffer.size()), 0x5AULL);
 }
 
 TEST(BenchmarkExecutorTest, LatencySamplingClampsToAccessCountIntegration) {
