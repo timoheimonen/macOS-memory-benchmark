@@ -53,6 +53,39 @@
 #include <mach/mach.h>  // kern_return_t
 #include <pthread/qos.h>
 
+namespace {
+
+void set_benchmark_qos() {
+  kern_return_t qos_ret = pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
+  if (qos_ret != KERN_SUCCESS) {
+    // Non-critical error, just print a warning
+    std::cerr << Messages::warning_prefix() << Messages::warning_qos_failed(qos_ret) << std::endl;
+  }
+}
+
+class BenchmarkSignalMaskGuard {
+ public:
+  BenchmarkSignalMaskGuard() {
+    block_benchmark_signals();
+  }
+
+  BenchmarkSignalMaskGuard(const BenchmarkSignalMaskGuard&) = delete;
+  BenchmarkSignalMaskGuard& operator=(const BenchmarkSignalMaskGuard&) = delete;
+
+  ~BenchmarkSignalMaskGuard() {
+    restore_signal_mask();
+  }
+};
+
+template <typename Fn>
+int run_with_benchmark_preparation(Fn&& fn) {
+  set_benchmark_qos();
+  BenchmarkSignalMaskGuard signal_guard;
+  return fn();
+}
+
+}  // namespace
+
 /**
  * @brief Main entry point for the memory benchmark application
  *
@@ -137,13 +170,15 @@ int main(int argc, char *argv[]) {
   }
 
   if (config.analyze_tlb) {
-    return run_tlb_analysis(config);
+    return run_with_benchmark_preparation([&]() {
+      return run_tlb_analysis(config);
+    });
   }
-  
+
   if (validate_config(config) != EXIT_SUCCESS) {
     return EXIT_FAILURE;
   }
-  
+
   calculate_buffer_sizes(config);
   calculate_access_counts(config);
 
@@ -161,92 +196,88 @@ int main(int argc, char *argv[]) {
                       config.latency_tlb_locality_bytes,
                       config.cpu_name, config.perf_cores, config.eff_cores, config.num_threads,
                       config.only_bandwidth, config.only_latency, config.run_patterns);
-  print_cache_info(config.l1_cache_size, config.l2_cache_size, config.use_custom_cache_size, config.custom_cache_size_bytes);
-
-  // --- Set QoS for the main thread (affects latency tests) ---
-  kern_return_t qos_ret = pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
-  if (qos_ret != KERN_SUCCESS) {
-    // Non-critical error, just print a warning
-    std::cerr << Messages::warning_prefix() << Messages::warning_qos_failed(qos_ret) << std::endl;
-  }
+  print_cache_info(config.l1_cache_size, config.l2_cache_size, config.use_custom_cache_size,
+                   config.custom_cache_size_bytes);
 
   // --- Run Benchmarks ---
-  // Block SIGINT/SIGTERM so worker threads inherit the blocked mask.
-  // Only the main thread will receive Ctrl+C — worker threads finish their
-  // current kernel before the main thread checks signal_received().
-  block_benchmark_signals();
-
   BenchmarkBuffers buffers;
-  if (config.run_patterns) {
-    // Pattern mode uses pre-allocated src/dst buffers across pattern tests.
-    if (allocate_all_buffers(config, buffers) != EXIT_SUCCESS) {
-      return EXIT_FAILURE;
-    }
+  const int benchmark_result = run_with_benchmark_preparation([&]() {
+    if (config.run_patterns) {
+      // Pattern mode uses pre-allocated src/dst buffers across pattern tests.
+      if (allocate_all_buffers(config, buffers) != EXIT_SUCCESS) {
+        return EXIT_FAILURE;
+      }
 
-    if (initialize_all_buffers(buffers, config) != EXIT_SUCCESS) {
-      return EXIT_FAILURE;
-    }
+      if (initialize_all_buffers(buffers, config) != EXIT_SUCCESS) {
+        return EXIT_FAILURE;
+      }
 
-    // Run pattern benchmarks only
-    PatternStatistics pattern_stats;
-    if (run_all_pattern_benchmarks(buffers, config, pattern_stats) != EXIT_SUCCESS) {
-      return EXIT_FAILURE;
-    }
-    
-    // Print results - if single loop, print detailed results; if multiple loops, print last loop's results
-    if (config.loop_count == 1) {
-      print_pattern_results(extract_pattern_results_at(pattern_stats, 0));
+      // Run pattern benchmarks only
+      PatternStatistics pattern_stats;
+      if (run_all_pattern_benchmarks(buffers, config, pattern_stats) != EXIT_SUCCESS) {
+        return EXIT_FAILURE;
+      }
+
+      // Print results - if single loop, print detailed results; if multiple loops, print last loop's results
+      if (config.loop_count == 1) {
+        print_pattern_results(extract_pattern_results_at(pattern_stats, 0));
+      } else {
+        size_t last_idx = pattern_stats.all_forward_read_bw.size() - 1;
+        print_pattern_results(extract_pattern_results_at(pattern_stats, last_idx));
+
+        // Print summary statistics
+        print_pattern_statistics(config.loop_count, pattern_stats);
+      }
+
+      // --- Save JSON Output if requested ---
+      if (!config.output_file.empty()) {
+        double total_elapsed_time_sec = total_execution_timer.stop();
+        if (save_pattern_results_to_json(config, pattern_stats, total_elapsed_time_sec) != EXIT_SUCCESS) {
+          return EXIT_FAILURE;
+        }
+      }
     } else {
-      size_t last_idx = pattern_stats.all_forward_read_bw.size() - 1;
-      print_pattern_results(extract_pattern_results_at(pattern_stats, last_idx));
-      
-      // Print summary statistics
-      print_pattern_statistics(config.loop_count, pattern_stats);
-    }
-    
-    // --- Save JSON Output if requested ---
-    if (!config.output_file.empty()) {
-      double total_elapsed_time_sec = total_execution_timer.stop();
-      if (save_pattern_results_to_json(config, pattern_stats, total_elapsed_time_sec) != EXIT_SUCCESS) {
+      // Run standard benchmarks
+      std::cout << Messages::msg_running_benchmarks() << std::endl;
+
+      BenchmarkStatistics stats;
+      if (run_all_benchmarks(buffers, config, stats) != EXIT_SUCCESS) {
         return EXIT_FAILURE;
       }
-    }
-  } else {
-    // Run standard benchmarks
-    std::cout << Messages::msg_running_benchmarks() << std::endl;
-    
-    BenchmarkStatistics stats;
-    if (run_all_benchmarks(buffers, config, stats) != EXIT_SUCCESS) {
-      return EXIT_FAILURE;
-    }
 
-    // --- Print Stats ---
-    // Print summary statistics if more than one loop was run
-    print_statistics(config.loop_count, stats.all_read_bw_gb_s, stats.all_write_bw_gb_s, stats.all_copy_bw_gb_s,
-                     stats.all_l1_latency_ns, stats.all_l2_latency_ns,
-                     stats.all_l1_read_bw_gb_s, stats.all_l1_write_bw_gb_s, stats.all_l1_copy_bw_gb_s,
-                     stats.all_l2_read_bw_gb_s, stats.all_l2_write_bw_gb_s, stats.all_l2_copy_bw_gb_s,
-                     stats.all_average_latency_ns,
-                     stats.all_tlb_hit_latency_ns,
-                     stats.all_tlb_miss_latency_ns,
-                     stats.all_page_walk_penalty_ns,
-                     config.use_custom_cache_size,
-                     stats.all_custom_latency_ns, stats.all_custom_read_bw_gb_s,
-                     stats.all_custom_write_bw_gb_s, stats.all_custom_copy_bw_gb_s,
-                     stats.all_main_mem_latency_samples,
-                     stats.all_l1_latency_samples,
-                     stats.all_l2_latency_samples,
-                     stats.all_custom_latency_samples,
-                     config.only_bandwidth,
-                     config.only_latency);
+      // --- Print Stats ---
+      // Print summary statistics if more than one loop was run
+      print_statistics(config.loop_count, stats.all_read_bw_gb_s, stats.all_write_bw_gb_s, stats.all_copy_bw_gb_s,
+                       stats.all_l1_latency_ns, stats.all_l2_latency_ns,
+                       stats.all_l1_read_bw_gb_s, stats.all_l1_write_bw_gb_s, stats.all_l1_copy_bw_gb_s,
+                       stats.all_l2_read_bw_gb_s, stats.all_l2_write_bw_gb_s, stats.all_l2_copy_bw_gb_s,
+                       stats.all_average_latency_ns,
+                       stats.all_tlb_hit_latency_ns,
+                       stats.all_tlb_miss_latency_ns,
+                       stats.all_page_walk_penalty_ns,
+                       config.use_custom_cache_size,
+                       stats.all_custom_latency_ns, stats.all_custom_read_bw_gb_s,
+                       stats.all_custom_write_bw_gb_s, stats.all_custom_copy_bw_gb_s,
+                       stats.all_main_mem_latency_samples,
+                       stats.all_l1_latency_samples,
+                       stats.all_l2_latency_samples,
+                       stats.all_custom_latency_samples,
+                       config.only_bandwidth,
+                       config.only_latency);
 
-    // --- Save JSON Output if requested ---
-    if (!config.output_file.empty()) {
-      double total_elapsed_time_sec = total_execution_timer.stop();
-      if (save_results_to_json(config, stats, total_elapsed_time_sec) != EXIT_SUCCESS) {
-        return EXIT_FAILURE;
+      // --- Save JSON Output if requested ---
+      if (!config.output_file.empty()) {
+        double total_elapsed_time_sec = total_execution_timer.stop();
+        if (save_results_to_json(config, stats, total_elapsed_time_sec) != EXIT_SUCCESS) {
+          return EXIT_FAILURE;
+        }
       }
     }
+
+    return EXIT_SUCCESS;
+  });
+  if (benchmark_result != EXIT_SUCCESS) {
+    return benchmark_result;
   }
 
   // --- Free Memory ---
@@ -254,11 +285,8 @@ int main(int argc, char *argv[]) {
   // Memory is freed automatically when src_buffer_ptr, dst_buffer_ptr,
   // and lat_buffer_ptr go out of scope. No manual munmap needed.
 
-  // --- Restore Signal Mask ---
-  restore_signal_mask();
-
   // --- Print Total Time ---
-  double total_elapsed_time_sec = total_execution_timer.stop();                                  // Stop overall timer
+  double total_elapsed_time_sec = total_execution_timer.stop();                      // Stop overall timer
   std::cout << Messages::msg_done_total_time(total_elapsed_time_sec) << std::endl;  // Print duration
 
   return EXIT_SUCCESS;  // Indicate success
