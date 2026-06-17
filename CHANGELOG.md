@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
   - **Read benchmark checksum now folds the full vector accumulator**: `memory_read_loop_asm` now includes both 64-bit lanes of the final NEON XOR accumulator before combining the byte tail, so the returned checksum covers all loaded vector data while preserving the benchmark access pattern.
   - **Direct TLB analysis now uses benchmark execution preparation**: `--analyze-tlb` now applies the same main-thread QoS elevation and benchmark signal-mask setup as standard benchmark mode before measurement starts, with signal-mask restoration handled on all prepared return paths.
+  - **`--analyze-tlb` documentation now matches sweep support**: User docs, whitepaper, compatibility matrix, capabilities overview, project structure, and technical specification now consistently document `--analyze-tlb` support for `--sweep latency-stride-bytes=...`, `--sweep latency-chain-mode=...`, `--sweep tlb-density=...`, and `--sweep-max-runs`.
 
 ## [0.56.0] - 2026-04-30
 

@@ -117,7 +117,8 @@ Configuration state is represented by `BenchmarkConfig` (`src/core/config/config
 - Parser may throw internally (`std::stoll`/validation) but converts to return-code failures at function boundary.
 - Help (`-h`, `--help`) prints usage and exits successfully.
 - `--latency-chain-mode` accepts string values and resolves to `LatencyChainMode` enum.
-- `--analyze-core2core` uses dedicated mode parsing (outside `argument_parser.cpp`) and only allows optional `--output`, `--count`, and `--latency-samples`. Full methodology and JSON contract: [CORE_TO_CORE_WHITEPAPER.md](CORE_TO_CORE_WHITEPAPER.md).
+- `--analyze-tlb` uses an early dedicated parse branch in `argument_parser.cpp`. It only allows optional `--output`, `--latency-stride-bytes`, `--latency-chain-mode`, `--tlb-density`, `--sweep`, and `--sweep-max-runs`. TLB sweep supports `latency-stride-bytes`, `latency-chain-mode`, and `tlb-density`; `global-random` chain mode is rejected. Full methodology and JSON contract: [TLB_ANALYSIS_WHITEPAPER.md](TLB_ANALYSIS_WHITEPAPER.md).
+- `--analyze-core2core` uses dedicated mode parsing (outside `argument_parser.cpp`) and only allows optional `--output`, `--count`, `--latency-samples`, `--sweep`, and `--sweep-max-runs`. Core-to-core sweep supports `count` and `latency-samples`. Full methodology and JSON contract: [CORE_TO_CORE_WHITEPAPER.md](CORE_TO_CORE_WHITEPAPER.md).
 
 ### 6.2 Validation behavior (`config_validator.cpp`)
 
@@ -385,6 +386,8 @@ JSON writer API (`src/output/json/json_output/json_output.cpp`):
 
 - Standard mode: `configuration`, `execution_time_sec`, `main_memory`, `cache`, `timestamp`, `version`.
 - Pattern mode: `configuration`, `execution_time_sec`, `patterns`, `timestamp`, `version`.
+- TLB analysis mode: `configuration`, `execution_time_sec`, `tlb_analysis`, `timestamp`, `version`.
+- Sweep mode: `configuration.mode = "sweep"`, `configuration.base_mode`, `configuration.sweep_parameters`, `runs[].result`, `execution_time_sec`, `timestamp`, `version`. For `--analyze-tlb --sweep`, `base_mode` is `analyze_tlb` and each `runs[].result` contains a TLB analysis payload.
 
 ### 17.1 Configuration keys
 

@@ -2,7 +2,7 @@
 
 ## 1. Purpose
 
-This document specifies how `macOS-memory-benchmark` implements standalone TLB analysis mode (`--analyze-tlb`) in version `0.56.0`.
+This document specifies how `macOS-memory-benchmark` implements standalone TLB analysis mode (`--analyze-tlb`) in version `0.56.1`.
 
 The goal is to provide a reproducible, implementation-accurate description of:
 
@@ -38,7 +38,7 @@ Related whitepaper for the other standalone analysis mode:
 
 ### 3.1 Accepted Forms
 
-`--analyze-tlb` runs a dedicated analysis path and accepts only optional JSON output, optional latency stride override, optional chain-mode override, and optional sweep density:
+`--analyze-tlb` runs a dedicated analysis path and accepts only optional JSON output, optional latency stride override, optional chain-mode override, optional sweep density, optional parameter sweep specs, and an optional sweep run-count guardrail:
 
 ```bash
 memory_benchmark --analyze-tlb
@@ -46,6 +46,8 @@ memory_benchmark --analyze-tlb --output tlb_analysis.json
 memory_benchmark --output tlb_analysis.json --analyze-tlb
 memory_benchmark --analyze-tlb --latency-stride-bytes 128 --output tlb_analysis_stride128.json
 memory_benchmark --analyze-tlb --latency-chain-mode random-box --tlb-density medium --output tlb_analysis_medium.json
+memory_benchmark --analyze-tlb --sweep tlb-density=low,medium,high --output tlb_density_sweep.json
+memory_benchmark --analyze-tlb --sweep latency-stride-bytes=64,128 --sweep tlb-density=medium,high --sweep-max-runs 4 --output tlb_stride_density_sweep.json
 ```
 
 ### 3.2 Stride Default
@@ -60,9 +62,23 @@ Sweep density applies only to `--analyze-tlb`.
 - `medium`: 15-point base sweep + refinement pass
 - `high` (default): 29-point base sweep + refinement pass
 
-### 3.4 Rejected Combinations
+### 3.4 Parameter Sweep (`--sweep`)
 
-All other options are rejected when `--analyze-tlb` is present.
+Sweep mode applies a Cartesian product over supported TLB-analysis parameters and writes one combined JSON file.
+
+Allowed `--analyze-tlb` sweep keys:
+
+- `latency-stride-bytes`
+- `latency-chain-mode`
+- `tlb-density`
+
+Sweep mode requires `--output <file>`. `--sweep-max-runs <count>` limits the number of generated combinations; the default guardrail is `256`.
+
+`--sweep latency-chain-mode=...` follows the same chain-mode rule as direct `--latency-chain-mode`: `global-random` is rejected for `--analyze-tlb`.
+
+### 3.5 Rejected Combinations
+
+All options outside the accepted set are rejected when `--analyze-tlb` is present.
 `--latency-chain-mode global-random` is also rejected for `--analyze-tlb`, because it ignores locality windows and would turn the locality sweep into repeated full-buffer random measurements with misleading boundary labels.
 
 Example (invalid):
@@ -294,7 +310,9 @@ Page-walk section:
 
 ## 9. JSON Output Contract (`--output`)
 
-When `--output <file>` is provided with `--analyze-tlb`, output includes:
+### 9.1 Single-Run TLB Analysis JSON
+
+When `--output <file>` is provided with `--analyze-tlb` without `--sweep`, output includes:
 
 - top-level metadata:
   - `configuration`
@@ -319,6 +337,22 @@ When `--output <file>` is provided with `--analyze-tlb`, output includes:
   - `page_walk_penalty` block (`available`, baseline/comparison metadata, raw comparison loops, `penalty_ns` when the comparison completed, otherwise `reason`)
 
 This payload is designed for full post-run verification and reproducibility checks.
+
+### 9.2 TLB Sweep JSON
+
+When `--sweep` is used with `--analyze-tlb`, output uses the common sweep envelope:
+
+- top-level `configuration.mode = "sweep"`
+- `configuration.base_mode = "analyze_tlb"`
+- `configuration.run_count`
+- `configuration.sweep_max_runs`
+- `configuration.sweep_parameters`
+- `runs[]`, where each run contains:
+  - `index`
+  - `parameters`
+  - `result`
+
+Each `runs[].result` entry is the same single-run TLB analysis JSON payload described in section 9.1.
 
 ## 10. Worked Example (Apple M4)
 

@@ -296,7 +296,10 @@ TEST_F(MessagesErrorTest, ErrorAnalyzeTlbMustBeUsedAlone) {
   EXPECT_NE(msg.find("--analyze-tlb"), std::string::npos);
   EXPECT_NE(msg.find("--output"), std::string::npos);
   EXPECT_NE(msg.find("--latency-stride-bytes"), std::string::npos);
+  EXPECT_NE(msg.find("--latency-chain-mode"), std::string::npos);
   EXPECT_NE(msg.find("--tlb-density"), std::string::npos);
+  EXPECT_NE(msg.find("-S/--sweep <key=...>"), std::string::npos);
+  EXPECT_NE(msg.find("-X/--sweep-max-runs <count>"), std::string::npos);
 }
 
 TEST_F(MessagesErrorTest, ErrorMadviseFailed) {

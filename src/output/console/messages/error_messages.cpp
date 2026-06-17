@@ -160,7 +160,7 @@ std::string error_threads_invalid(long long value, long long min_val, long long 
 
 const std::string& error_analyze_tlb_must_be_used_alone() {
   static const std::string msg =
-      "--analyze-tlb allows only optional -o/--output <file>, -s/--latency-stride-bytes <bytes>, -m/--latency-chain-mode <mode>, and -D/--tlb-density <low|medium|high> (no other options allowed)";
+      "--analyze-tlb allows only optional -o/--output <file>, -s/--latency-stride-bytes <bytes>, -m/--latency-chain-mode <mode>, -D/--tlb-density <low|medium|high>, -S/--sweep <key=...>, and -X/--sweep-max-runs <count> (no other options allowed)";
   return msg;
 }
 

@@ -256,7 +256,7 @@ forms such as `-buffersize` or `-benchmark` are invalid.
 #### `--analyze-tlb`
 
 - Runs standalone TLB analysis mode only
-- Can be combined only with optional `--output <file>`, `--latency-stride-bytes <bytes>`, `--latency-chain-mode <mode>`, and `--tlb-density <low|medium|high>`
+- Can be combined only with optional `--output <file>`, `--latency-stride-bytes <bytes>`, `--latency-chain-mode <mode>`, `--tlb-density <low|medium|high>`, `--sweep <key=...>`, and `--sweep-max-runs <count>`
 - Uses latency stride from `--latency-stride-bytes` (same default as standard latency mode), performs a denser base locality sweep (`29` canonical points, stride-clamped to `max(16KB, 2*stride)` up to `256MB`), then automatically inserts finer locality points near detected knees/boundaries
 - Detects likely private-cache knee candidates (around the ~1MB region when present) and reports whether they may interfere with TLB boundary interpretation
 - Preserves a direct L1 candidate that overlaps the private-cache knee and marks it as ambiguous instead of silently skipping to a later boundary
@@ -403,6 +403,9 @@ memory_benchmark --analyze-tlb --latency-chain-mode same-random-in-box --output 
 # Standalone TLB analysis with quick low-density sweep (no refinement)
 memory_benchmark --analyze-tlb --tlb-density low --output tlb_analysis_low.json
 
+# Standalone TLB analysis parameter sweep
+memory_benchmark --analyze-tlb --sweep latency-stride-bytes=64,128 --sweep tlb-density=medium,high --sweep-max-runs 4 --output tlb_stride_density_sweep.json
+
 # Standalone core-to-core handoff analysis
 memory_benchmark --analyze-core2core
 
@@ -531,8 +534,10 @@ python3 script-examples/plot_cache_percentiles.py script-examples/final_output.t
 memory_benchmark --benchmark --only-latency --count 5 --sweep buffer-size=256,512,1024 --sweep latency-stride-bytes=64,256 --output latency_sweep.json
 ```
 
-The command above creates six runs and stores each run's normal benchmark JSON under `runs[].result`. Core-to-core
-sweeps use the same envelope with `base_mode: "analyze_core2core"` and support only `count` and `latency-samples`.
+The command above creates six runs and stores each run's normal benchmark JSON under `runs[].result`. TLB-analysis
+sweeps use the same envelope with `base_mode: "analyze_tlb"` and support `latency-stride-bytes`,
+`latency-chain-mode`, and `tlb-density`. Core-to-core sweeps use the same envelope with
+`base_mode: "analyze_core2core"` and support only `count` and `latency-samples`.
 
 ---
 
@@ -643,7 +648,7 @@ Note: The `configuration` block includes fields such as `latency_chain_mode` (th
     "run_count": 6,
     "sweep_max_runs": 256,
     "sweep_parameters": {
-      "buffersize": [256, 512, 1024],
+      "buffer-size": [256, 512, 1024],
       "latency-stride-bytes": [64, 256]
     }
   },
@@ -651,7 +656,7 @@ Note: The `configuration` block includes fields such as `latency_chain_mode` (th
     {
       "index": 0,
       "parameters": {
-        "buffersize": 256,
+        "buffer-size": 256,
         "latency-stride-bytes": 64
       },
       "result": { "...": "normal benchmark, pattern, TLB, or core-to-core JSON payload" }
@@ -659,7 +664,7 @@ Note: The `configuration` block includes fields such as `latency_chain_mode` (th
   ],
   "execution_time_sec": 123.4,
   "timestamp": "2026-04-29T12:00:00Z",
-  "version": "0.56.0"
+  "version": "0.56.1"
 }
 ```
 

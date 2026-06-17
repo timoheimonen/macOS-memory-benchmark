@@ -1,6 +1,6 @@
 # Parameter Compatibility Matrix
 
-Version 0.56.0
+Version 0.56.1
 
 ## All Flags
 
@@ -86,7 +86,7 @@ Version 0.56.0
 |----------|------------|-------|
 | `--output <file>` | ✅ | |
 | `--latency-stride-bytes <n>` | ✅ | |
-| `--latency-chain-mode <mode>` | ✅ | |
+| `--latency-chain-mode <mode>` | ✅ | `global-random` is rejected with `--analyze-tlb` |
 | `--tlb-density <low\|medium\|high>` | ✅ | |
 | `--sweep <key=a,b>` | ✅ | Requires `--output`; supported keys: `latency-stride-bytes`, `latency-chain-mode`, `tlb-density` |
 | `--sweep-max-runs <n>` | ✅ with `--sweep` | Default `256` |

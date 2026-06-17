@@ -113,7 +113,8 @@ Supported sweep targets include:
 - Latency locality windows via `--sweep latency-tlb-locality-kb=...`
 - Pointer-chain stride via `--sweep latency-stride-bytes=...`
 - Pointer-chain construction mode via `--sweep latency-chain-mode=...`
-- TLB analysis density via `--sweep tlb-density=...`
+- TLB analysis stride, chain mode, and density via `--analyze-tlb --sweep latency-stride-bytes=...`,
+  `--analyze-tlb --sweep latency-chain-mode=...`, and `--analyze-tlb --sweep tlb-density=...`
 - Core-to-core loop count via `--sweep count=...`
 - Core-to-core sample depth via `--sweep latency-samples=...`
 
