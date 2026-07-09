@@ -88,6 +88,7 @@ Version 0.56.1
 | `--latency-stride-bytes <n>` | ✅ | |
 | `--latency-chain-mode <mode>` | ✅ | `global-random` is rejected with `--analyze-tlb` |
 | `--tlb-density <low\|medium\|high>` | ✅ | |
+| `--seed <uint64>` | ✅ | Fixed reproducibility seed; generated once when omitted |
 | `--sweep <key=a,b>` | ✅ | Requires `--output`; supported keys: `latency-stride-bytes`, `latency-chain-mode`, `tlb-density` |
 | `--sweep-max-runs <n>` | ✅ with `--sweep` | Default `256` |
 | All others | ❌ | Must be used alone |

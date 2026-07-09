@@ -256,7 +256,7 @@ forms such as `-buffersize` or `-benchmark` are invalid.
 #### `--analyze-tlb`
 
 - Runs standalone TLB analysis mode only
-- Can be combined only with optional `--output <file>`, `--latency-stride-bytes <bytes>`, `--latency-chain-mode <mode>`, `--tlb-density <low|medium|high>`, `--sweep <key=...>`, and `--sweep-max-runs <count>`
+- Can be combined only with optional `--output <file>`, `--latency-stride-bytes <bytes>`, `--latency-chain-mode <mode>`, `--tlb-density <low|medium|high>`, `--seed <uint64>`, `--sweep <key=...>`, and `--sweep-max-runs <count>`
 - Uses latency stride from `--latency-stride-bytes` (same default as standard latency mode). Analyze-TLB stride must not exceed and must exactly divide the system page size. It performs a denser base locality sweep (`29` canonical points, stride-clamped to `max(16KB, 2*stride)` up to `256MB`), then automatically inserts page-aligned locality points near detected knees/boundaries
 - Detects likely private-cache knee candidates (around the ~1MB region when present) and reports whether they may interfere with TLB boundary interpretation
 - Preserves a direct L1 candidate that overlaps the private-cache knee and marks it as ambiguous instead of silently skipping to a later boundary
@@ -264,6 +264,8 @@ forms such as `-buffersize` or `-benchmark` are invalid.
 - Uses adaptive boundary thresholding in addition to fixed thresholds (`>= 2.0ns`, `>= 10% baseline`): baseline loop-noise (median IQR) can raise the required step on noisy runs to reduce false positives
 - Separately computes a large-locality latency delta as `P50(512MB) - P50(effective baseline locality)` when the analysis buffer is at least `512MB`. This is not claimed to isolate page-table-walk cost
 - Emits explicit `complete`, `interrupted`, or `partial` status. Boundary conclusions are suppressed unless the planned sweep completed
+- Uses 30 balanced rounds: every round measures each planned locality once, and a seeded cyclic Latin schedule rotates locality order to reduce elapsed-time and thermal-drift correlation
+- Rebuilds every standalone TLB pointer chain from a recorded deterministic task seed; latency-chain behavior outside standalone TLB analysis remains unchanged
 - A user interrupt remains a successful graceful-shutdown return when partial JSON can be written; consumers must use `status` and `conclusions_valid` rather than the process code to accept conclusions
 - Detailed methodology and JSON contract: `TLB_ANALYSIS_WHITEPAPER.md`
 
@@ -275,6 +277,14 @@ forms such as `-buffersize` or `-benchmark` are invalid.
 - `low`: 15-point base sweep, no refinement pass
 - `medium`: 15-point base sweep + refinement pass around detected boundaries
 - `high`: 29-point base sweep + refinement pass around detected boundaries
+
+#### `--seed <uint64>`
+
+- Applies only to `--analyze-tlb`
+- Controls base/refinement/large-locality round order and pointer-chain construction
+- The same seed reproduces planner order, derived task seeds, and chain permutations
+- If omitted, one unsigned 64-bit seed is generated for the command and reused by every TLB run in a Cartesian sweep
+- The resolved seed, source (`user` or `generated`), schedule policy, and each task seed are stored in JSON
 
 #### `--analyze-core2core`
 
@@ -408,6 +418,9 @@ memory_benchmark --analyze-tlb --latency-chain-mode same-random-in-box --output 
 
 # Standalone TLB analysis with quick low-density sweep (no refinement)
 memory_benchmark --analyze-tlb --tlb-density low --output tlb_analysis_low.json
+
+# Reproducible standalone TLB analysis
+memory_benchmark --analyze-tlb --seed 123456789 --output tlb_analysis_seeded.json
 
 # Standalone TLB analysis parameter sweep
 memory_benchmark --analyze-tlb --sweep latency-stride-bytes=64,128 --sweep tlb-density=medium,high --sweep-max-runs 4 --output tlb_stride_density_sweep.json
@@ -777,7 +790,10 @@ version-0.56.1 result:
   "configuration": {
     "mode": "analyze_tlb",
     "schema_version": 2,
-    "methodology_version": "locality-sweep-v1-guardrails",
+    "methodology_version": "locality-sweep-v2-balanced-rounds",
+    "seed": 123456789,
+    "seed_source": "user",
+    "schedule_policy": "seeded-cyclic-latin",
     "latency_stride_bytes": 64,
     "buffer_size_mb": 1024
   },
@@ -790,8 +806,14 @@ version-0.56.1 result:
       {
         "locality_bytes": 16384,
         "locality_kb": 16,
+        "requested_pages": 1,
+        "effective_pages": 1,
+        "refinement_source": "base",
         "loop_latencies_ns": [25.957278, 25.965990, 25.916902],
-        "p50_latency_ns": 25.982678
+        "p50_latency_ns": 25.982678,
+        "measurements": [
+          {"pass": "base", "round_index": 0, "order_index": 4, "seed": 987654321, "latency_ns": 25.957278}
+        ]
       }
     ],
     "l1_tlb_detection": {
@@ -843,6 +865,11 @@ version-0.56.1 result:
   }
 }
 ```
+
+The example abbreviates the 30 rounds. Actual output includes `tlb_analysis.measurement_records` in execution order and
+per-point `measurements`; every record carries `pass`, `round_index`, `order_index`, derived `seed`, and `latency_ns`.
+`planned_measurements` and `completed_measurements` distinguish a fully measured grid from points that contain only
+partial round data after interruption.
 
 If the 512MB comparison cannot run, `large_locality_latency_delta.available` is `false` and comparison values are omitted.
 The former `page_walk_penalty` object remains as a deprecated compatibility alias for one minor-version window; it

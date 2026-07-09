@@ -40,6 +40,8 @@
 
 #include "benchmark/benchmark_tests.h"
 #include "benchmark/tlb_analysis_json.h"
+#include "benchmark/tlb_measurement_scheduler.h"
+#include "benchmark/tlb_sweep_planner.h"
 #include "core/config/config.h"
 #include "core/config/constants.h"
 #include "core/config/version.h"
@@ -56,70 +58,15 @@ namespace {
 // Fixed analysis parameters for standalone TLB mode.
 constexpr size_t kLoopsPerPoint = 30;
 constexpr size_t kAccessesPerLoop = 25 * 1000 * 1000;
-constexpr size_t kSweepMinLocalityBytes = 16 * Constants::BYTES_PER_KB;
-constexpr size_t kSweepMaxLocalityBytes = 256 * Constants::BYTES_PER_MB;
 constexpr size_t kPageWalkComparisonLocalityBytes = 512 * Constants::BYTES_PER_MB;
 constexpr size_t kPageWalkMinimumBufferMb = 512;
 
-const std::array<size_t, 15> kLocalitySweepLowBytes = {
-    16 * Constants::BYTES_PER_KB,        64 * Constants::BYTES_PER_KB,
-    128 * Constants::BYTES_PER_KB,       256 * Constants::BYTES_PER_KB,
-    512 * Constants::BYTES_PER_KB,       1 * Constants::BYTES_PER_MB,
-    2 * Constants::BYTES_PER_MB,         4 * Constants::BYTES_PER_MB,
-    8 * Constants::BYTES_PER_MB,         12 * Constants::BYTES_PER_MB,
-    16 * Constants::BYTES_PER_MB,        32 * Constants::BYTES_PER_MB,
-    64 * Constants::BYTES_PER_MB,        128 * Constants::BYTES_PER_MB,
-    256 * Constants::BYTES_PER_MB,
-};
-
-const std::array<size_t, 29> kLocalitySweepHighBytes = {
-    16 * Constants::BYTES_PER_KB,        32 * Constants::BYTES_PER_KB,
-    64 * Constants::BYTES_PER_KB,        96 * Constants::BYTES_PER_KB,
-    128 * Constants::BYTES_PER_KB,       192 * Constants::BYTES_PER_KB,
-    256 * Constants::BYTES_PER_KB,       384 * Constants::BYTES_PER_KB,
-    512 * Constants::BYTES_PER_KB,       768 * Constants::BYTES_PER_KB,
-    1 * Constants::BYTES_PER_MB,         1536 * Constants::BYTES_PER_KB,
-    2 * Constants::BYTES_PER_MB,         3 * Constants::BYTES_PER_MB,
-    4 * Constants::BYTES_PER_MB,         6 * Constants::BYTES_PER_MB,
-    8 * Constants::BYTES_PER_MB,         10 * Constants::BYTES_PER_MB,
-    12 * Constants::BYTES_PER_MB,        14 * Constants::BYTES_PER_MB,
-    16 * Constants::BYTES_PER_MB,        24 * Constants::BYTES_PER_MB,
-    32 * Constants::BYTES_PER_MB,        48 * Constants::BYTES_PER_MB,
-    64 * Constants::BYTES_PER_MB,        96 * Constants::BYTES_PER_MB,
-    128 * Constants::BYTES_PER_MB,       192 * Constants::BYTES_PER_MB,
-    256 * Constants::BYTES_PER_MB,
-};
-
 const std::array<size_t, 3> kBufferCandidateMb = {1024, 512, 256};
-
-constexpr size_t kRefinementSubdivisions = 8;
-
-const char* tlb_sweep_density_to_string(TlbSweepDensity density) {
-  switch (density) {
-    case TlbSweepDensity::Low:
-      return "low";
-    case TlbSweepDensity::Medium:
-      return "medium";
-    case TlbSweepDensity::High:
-      return "high";
-  }
-  return "high";
-}
-
-bool tlb_density_enables_refinement(TlbSweepDensity density) {
-  return density != TlbSweepDensity::Low;
-}
 
 struct LocalityMeasurement {
   size_t locality_bytes = 0;
   double p50_latency_ns = 0.0;
   std::vector<double> loop_latencies_ns;
-};
-
-enum class LocalityMeasureStatus {
-  Success,
-  Interrupted,
-  Error,
 };
 
 class TlbMeasureSpinner {
@@ -169,104 +116,6 @@ class TlbMeasureSpinner {
   size_t frame_index_ = 0;
   size_t last_text_len_ = 0;
 };
-
-size_t calculate_min_sweep_locality(size_t stride_bytes) {
-  if (stride_bytes > (std::numeric_limits<size_t>::max() / 2)) {
-    return std::numeric_limits<size_t>::max();
-  }
-
-  return std::max(kSweepMinLocalityBytes, 2 * stride_bytes);
-}
-
-std::vector<size_t> build_effective_locality_sweep(size_t stride_bytes,
-                                                   TlbSweepDensity density) {
-  const size_t min_locality_bytes = calculate_min_sweep_locality(stride_bytes);
-  std::vector<size_t> localities;
-
-  const size_t* canonical_localities = nullptr;
-  size_t canonical_count = 0;
-  if (density == TlbSweepDensity::High) {
-    canonical_localities = kLocalitySweepHighBytes.data();
-    canonical_count = kLocalitySweepHighBytes.size();
-  } else {
-    canonical_localities = kLocalitySweepLowBytes.data();
-    canonical_count = kLocalitySweepLowBytes.size();
-  }
-
-  if (min_locality_bytes > kSweepMaxLocalityBytes) {
-    return localities;
-  }
-
-  localities.reserve(canonical_count + 1);
-  if (std::none_of(canonical_localities,
-                   canonical_localities + canonical_count,
-                   [min_locality_bytes](size_t value) { return value == min_locality_bytes; })) {
-    localities.push_back(min_locality_bytes);
-  }
-
-  for (size_t i = 0; i < canonical_count; ++i) {
-    const size_t locality_bytes = canonical_localities[i];
-    if (locality_bytes < min_locality_bytes || locality_bytes > kSweepMaxLocalityBytes) {
-      continue;
-    }
-    localities.push_back(locality_bytes);
-  }
-
-  std::sort(localities.begin(), localities.end());
-  localities.erase(std::unique(localities.begin(), localities.end()), localities.end());
-  return localities;
-}
-
-std::vector<size_t> build_refinement_points_internal(const std::vector<size_t>& localities_bytes,
-                                                     size_t boundary_index,
-                                                     size_t min_locality_bytes,
-                                                     size_t max_locality_bytes,
-                                                     size_t alignment_bytes) {
-  std::vector<size_t> points;
-  if (localities_bytes.empty() || boundary_index >= localities_bytes.size() || alignment_bytes == 0) {
-    return points;
-  }
-
-  const size_t boundary = localities_bytes[boundary_index];
-  const size_t lower = (boundary_index > 0) ? localities_bytes[boundary_index - 1] : min_locality_bytes;
-  const size_t upper = (boundary_index + 1 < localities_bytes.size())
-                           ? localities_bytes[boundary_index + 1]
-                           : std::min(max_locality_bytes, boundary * 2);
-  if (upper <= lower) {
-    return points;
-  }
-
-  for (size_t step = 1; step < kRefinementSubdivisions; ++step) {
-    size_t candidate = lower + ((upper - lower) * step) / kRefinementSubdivisions;
-    candidate -= candidate % alignment_bytes;
-    if (candidate <= lower || candidate >= upper) {
-      continue;
-    }
-    if (candidate < min_locality_bytes || candidate > max_locality_bytes) {
-      continue;
-    }
-    points.push_back(candidate);
-  }
-
-  std::sort(points.begin(), points.end());
-  points.erase(std::unique(points.begin(), points.end()), points.end());
-  return points;
-}
-
-void upsert_measurement(std::vector<LocalityMeasurement>& measurements,
-                        size_t locality_bytes,
-                        double p50_latency_ns,
-                        std::vector<double>&& loop_latencies_ns) {
-  for (LocalityMeasurement& measurement : measurements) {
-    if (measurement.locality_bytes == locality_bytes) {
-      measurement.p50_latency_ns = p50_latency_ns;
-      measurement.loop_latencies_ns = std::move(loop_latencies_ns);
-      return;
-    }
-  }
-
-  measurements.push_back(LocalityMeasurement{locality_bytes, p50_latency_ns, std::move(loop_latencies_ns)});
-}
 
 void flatten_measurements(const std::vector<LocalityMeasurement>& measurements,
                           std::vector<size_t>& out_localities,
@@ -356,88 +205,81 @@ MmapPtr try_allocate_analysis_buffer(size_t size_bytes) {
 }
 
 /**
- * @brief Measure one locality point and return P50 latency.
+ * @brief Execute a balanced seeded round schedule and aggregate locality medians.
  *
- * Rebuilds the pointer chain and runs the latency loop `kLoopsPerPoint`
- * times, then computes median latency per access for the locality window.
- *
- * @param[in]     latency_buffer      Latency buffer base pointer
- * @param[in]     buffer_size_bytes   Buffer size in bytes
- * @param[in]     stride_bytes        Pointer-chase stride in bytes
- * @param[in]     locality_bytes      Locality window size in bytes
- * @param[in]     chain_mode          Pointer-chain construction mode
- * @param[in,out] timer               High-resolution timer instance
- * @param[out]    out_p50_latency_ns  Measured P50 latency in ns/access
- * @param[out]    out_loop_latencies_ns Optional raw loop latencies (ns/access)
- *
- * @return true on success, false on setup/measurement failure.
+ * Each round measures every supplied point once. The scheduler rotates the seeded
+ * point order between rounds so locality and elapsed run time are not correlated.
  */
-LocalityMeasureStatus measure_locality_p50(void* latency_buffer,
-                                           size_t buffer_size_bytes,
-                                           size_t stride_bytes,
-                                           size_t locality_bytes,
-                                           LatencyChainMode chain_mode,
-                                           HighResTimer& timer,
-                                           double& out_p50_latency_ns,
-                                           std::vector<double>* out_loop_latencies_ns = nullptr) {
-  const size_t locality_kb = locality_bytes / Constants::BYTES_PER_KB;
+TlbScheduleExecutionResult measure_scheduled_points(
+    void* latency_buffer,
+    size_t buffer_size_bytes,
+    size_t stride_bytes,
+    const std::vector<TlbSweepPoint>& points,
+    LatencyChainMode chain_mode,
+    HighResTimer& timer,
+    uint64_t base_seed,
+    TlbMeasurementPass pass,
+    const TlbStopRequested& stop_requested,
+    std::vector<LocalityMeasurement>& measurements) {
   TlbMeasureSpinner spinner;
+  const std::vector<TlbMeasurementTask> schedule =
+      build_tlb_measurement_schedule(points, kLoopsPerPoint, base_seed, pass);
+  TlbScheduleExecutionResult result = execute_tlb_measurement_schedule(
+      schedule,
+      stop_requested,
+      [&](const TlbMeasurementTask& task, double& latency_ns) {
+        const size_t locality_kb = task.locality_bytes / Constants::BYTES_PER_KB;
+        spinner.tick(locality_kb, task.round_index + 1, kLoopsPerPoint);
 
-  std::vector<double> loop_latencies_ns;
-  loop_latencies_ns.reserve(kLoopsPerPoint);
+        if (setup_latency_chain(latency_buffer,
+                                buffer_size_bytes,
+                                stride_bytes,
+                                task.locality_bytes,
+                                nullptr,
+                                chain_mode,
+                                task.seed) != EXIT_SUCCESS) {
+          return TlbTaskMeasureStatus::Error;
+        }
 
-  for (size_t loop = 0; loop < kLoopsPerPoint; ++loop) {
-    if (signal_received()) {
-      return LocalityMeasureStatus::Interrupted;
-    }
+        warmup_latency(latency_buffer, buffer_size_bytes);
+        const double total_latency_ns =
+            run_latency_test(latency_buffer, kAccessesPerLoop, timer, nullptr, 0);
+        if (total_latency_ns <= 0.0 || std::isnan(total_latency_ns) ||
+            std::isinf(total_latency_ns)) {
+          std::cerr << Messages::error_prefix()
+                    << Messages::error_tlb_analysis_invalid_measurement(
+                           locality_kb, static_cast<int>(task.round_index + 1))
+                    << std::endl;
+          return TlbTaskMeasureStatus::Error;
+        }
 
-    spinner.tick(locality_kb, loop + 1, kLoopsPerPoint);
+        latency_ns = total_latency_ns / static_cast<double>(kAccessesPerLoop);
+        return TlbTaskMeasureStatus::Success;
+      });
 
-    if (setup_latency_chain(latency_buffer, buffer_size_bytes,
-                            stride_bytes, locality_bytes, nullptr, chain_mode) != EXIT_SUCCESS) {
-      return LocalityMeasureStatus::Error;
-    }
-
-    warmup_latency(latency_buffer, buffer_size_bytes);
-
-    const double total_latency_ns =
-        run_latency_test(latency_buffer, kAccessesPerLoop, timer, nullptr, 0);
-    if (total_latency_ns <= 0.0 || std::isnan(total_latency_ns) || std::isinf(total_latency_ns)) {
-      std::cerr << Messages::error_prefix()
-                << Messages::error_tlb_analysis_invalid_measurement(locality_kb,
-                                                                     static_cast<int>(loop + 1))
-                << std::endl;
-      return LocalityMeasureStatus::Error;
-    }
-
-    const double latency_ns_per_access = total_latency_ns / static_cast<double>(kAccessesPerLoop);
-    loop_latencies_ns.push_back(latency_ns_per_access);
-
-    if (signal_received()) {
-      return LocalityMeasureStatus::Interrupted;
+  for (const TlbMeasurementRecord& record : result.records) {
+    auto existing = std::find_if(
+        measurements.begin(),
+        measurements.end(),
+        [&record](const LocalityMeasurement& measurement) {
+          return measurement.locality_bytes == record.locality_bytes;
+        });
+    if (existing == measurements.end()) {
+      measurements.push_back(LocalityMeasurement{
+          record.locality_bytes, record.latency_ns, {record.latency_ns}});
+    } else {
+      existing->loop_latencies_ns.push_back(record.latency_ns);
     }
   }
-
-  out_p50_latency_ns = median(loop_latencies_ns);
-  if (out_loop_latencies_ns != nullptr) {
-    *out_loop_latencies_ns = loop_latencies_ns;
+  for (LocalityMeasurement& measurement : measurements) {
+    if (!measurement.loop_latencies_ns.empty()) {
+      measurement.p50_latency_ns = median(measurement.loop_latencies_ns);
+    }
   }
-  return LocalityMeasureStatus::Success;
+  return result;
 }
 
 }  // namespace
-
-std::vector<size_t> build_tlb_refinement_points(const std::vector<size_t>& localities_bytes,
-                                                size_t boundary_index,
-                                                size_t min_locality_bytes,
-                                                size_t max_locality_bytes,
-                                                size_t alignment_bytes) {
-  return build_refinement_points_internal(localities_bytes,
-                                          boundary_index,
-                                          min_locality_bytes,
-                                          max_locality_bytes,
-                                          alignment_bytes);
-}
 
 /**
  * @brief Run standalone TLB analysis benchmark mode.
@@ -446,17 +288,22 @@ std::vector<size_t> build_tlb_refinement_points(const std::vector<size_t>& local
  * - Print program header and run banner.
  * - Allocate analysis buffer with fallback order: 1024MB -> 512MB -> 256MB.
  * - Use configured latency stride (default from `--latency-stride-bytes`).
- * - Sweep locality windows from max(16KB, 2*stride) to 256MB and collect P50 latencies.
- * - Optionally run a separate 512MB locality pass for page-walk penalty.
+ * - Measure the page-aligned locality grid through balanced seeded rounds.
+ * - Optionally run a separate 512MB large-locality comparison pass.
  * - Infer L1/L2 boundaries and emit the TLB analysis report.
  *
- * Page-walk penalty:
+ * Large-locality delta:
  * - Reported as P50(512MB) - P50(effective baseline locality).
  * - Only computed when selected analysis buffer is at least 512MB and the comparison pass completes.
  *
  * @return EXIT_SUCCESS on success, EXIT_FAILURE on allocation or measurement error.
  */
 int run_tlb_analysis(const BenchmarkConfig& config) {
+  return run_tlb_analysis(config, []() { return signal_received(); });
+}
+
+int run_tlb_analysis(const BenchmarkConfig& config,
+                     const TlbStopRequested& stop_requested) {
   const auto analysis_start = std::chrono::steady_clock::now();
   std::cout << Messages::usage_header(SOFTVERSION);
   std::cout << Messages::msg_running_tlb_analysis() << std::endl;
@@ -470,18 +317,6 @@ int run_tlb_analysis(const BenchmarkConfig& config) {
     }
   };
 
-  if (config.latency_stride_bytes == 0) {
-    std::cerr << Messages::error_prefix()
-              << Messages::error_latency_stride_invalid(0, 1, std::numeric_limits<long long>::max())
-              << std::endl;
-    return EXIT_FAILURE;
-  }
-  if ((config.latency_stride_bytes % sizeof(void*)) != 0) {
-    std::cerr << Messages::error_prefix()
-              << Messages::error_latency_stride_alignment(config.latency_stride_bytes, sizeof(void*))
-              << std::endl;
-    return EXIT_FAILURE;
-  }
   const size_t analysis_stride_bytes = config.latency_stride_bytes;
   const TlbSweepDensity sweep_density = config.tlb_sweep_density;
   const bool refinement_enabled = tlb_density_enables_refinement(sweep_density);
@@ -545,15 +380,16 @@ int run_tlb_analysis(const BenchmarkConfig& config) {
     return EXIT_FAILURE;
   }
 
-  std::vector<size_t> localities_bytes =
-      build_effective_locality_sweep(analysis_stride_bytes, sweep_density);
-  if (localities_bytes.empty()) {
+  std::vector<TlbSweepPoint> sweep_points =
+      build_tlb_base_sweep_plan(analysis_stride_bytes, page_size_bytes, sweep_density);
+  if (sweep_points.empty()) {
     std::cerr << Messages::error_prefix()
               << Messages::error_buffer_stride_invalid_latency_chain(
                      pointer_count, selected_buffer_bytes, analysis_stride_bytes)
               << std::endl;
     return EXIT_FAILURE;
   }
+  const std::vector<size_t> localities_bytes = tlb_point_localities(sweep_points);
 
   const size_t page_walk_baseline_locality_bytes = localities_bytes.front();
   const LatencyChainMode effective_chain_mode =
@@ -584,6 +420,10 @@ int run_tlb_analysis(const BenchmarkConfig& config) {
   std::cout << Messages::report_tlb_buffer(selected_buffer_mb, buffer_locked) << std::endl;
   std::cout << Messages::report_tlb_stride(analysis_stride_bytes) << std::endl;
   std::cout << Messages::report_tlb_density(tlb_sweep_density_to_string(sweep_density)) << std::endl;
+  std::cout << Messages::report_tlb_seed(config.tlb_seed,
+                                         config.user_specified_tlb_seed)
+            << std::endl;
+  std::cout << Messages::report_tlb_schedule_policy() << std::endl;
   std::cout << Messages::report_tlb_chain_mode_requested(
                    latency_chain_mode_to_string(config.latency_chain_mode))
             << std::endl;
@@ -604,49 +444,35 @@ int run_tlb_analysis(const BenchmarkConfig& config) {
 
   std::vector<LocalityMeasurement> measurements;
   measurements.reserve(localities_bytes.size() + 16);
+  std::vector<TlbMeasurementRecord> measurement_records;
+  measurement_records.reserve(localities_bytes.size() * kLoopsPerPoint);
 
   std::cout << std::fixed;
   std::cout.precision(Constants::LATENCY_PRECISION);
 
-  for (size_t locality_index = 0; locality_index < localities_bytes.size(); ++locality_index) {
-    const size_t locality_bytes = localities_bytes[locality_index];
-    const size_t locality_kb = locality_bytes / Constants::BYTES_PER_KB;
-
-    double locality_p50_ns = 0.0;
-    std::vector<double> loop_latencies_ns;
-    const LocalityMeasureStatus status = measure_locality_p50(latency_buffer.get(),
-                                                              selected_buffer_bytes,
-                                                              analysis_stride_bytes,
-                                                              locality_bytes,
-                                                              config.latency_chain_mode,
-                                                              timer,
-                                                              locality_p50_ns,
-                                                              &loop_latencies_ns);
-    if (status == LocalityMeasureStatus::Interrupted) {
-      interrupted = true;
-      report_interrupt_once();
-      break;
+  const TlbScheduleExecutionResult base_result = measure_scheduled_points(
+      latency_buffer.get(),
+      selected_buffer_bytes,
+      analysis_stride_bytes,
+      sweep_points,
+      config.latency_chain_mode,
+      timer,
+      config.tlb_seed,
+      TlbMeasurementPass::Base,
+      stop_requested,
+      measurements);
+  measurement_records.insert(measurement_records.end(),
+                             base_result.records.begin(),
+                             base_result.records.end());
+  if (base_result.status == TlbScheduleExecutionStatus::Error) {
+    if (buffer_locked) {
+      (void)munlock(latency_buffer.get(), selected_buffer_bytes);
     }
-    if (status == LocalityMeasureStatus::Error) {
-      if (buffer_locked) {
-        (void)munlock(latency_buffer.get(), selected_buffer_bytes);
-      }
-      return EXIT_FAILURE;
-    }
-
-    std::cout << Messages::msg_tlb_analysis_locality_progress(locality_index + 1,
-                                                              localities_bytes.size(),
-                                                              locality_kb)
-              << " — " << locality_p50_ns << " ns" << std::endl;
-
-    measurements.push_back(LocalityMeasurement{locality_bytes, locality_p50_ns, std::move(loop_latencies_ns)});
-
-    // Check for Ctrl+C between sweep points (after valid measurement)
-    if (signal_received()) {
-      interrupted = true;
-      report_interrupt_once();
-      break;
-    }
+    return EXIT_FAILURE;
+  }
+  if (base_result.status == TlbScheduleExecutionStatus::Interrupted) {
+    interrupted = true;
+    report_interrupt_once();
   }
 
   if (measurements.empty() && !interrupted) {
@@ -657,11 +483,18 @@ int run_tlb_analysis(const BenchmarkConfig& config) {
   }
 
   const bool base_sweep_complete =
-      !interrupted && measurements.size() == localities_bytes.size();
+      base_result.status == TlbScheduleExecutionStatus::Complete;
 
   std::sort(measurements.begin(), measurements.end(), [](const LocalityMeasurement& a, const LocalityMeasurement& b) {
     return a.locality_bytes < b.locality_bytes;
   });
+  for (size_t locality_index = 0; locality_index < measurements.size(); ++locality_index) {
+    std::cout << Messages::msg_tlb_analysis_locality_progress(
+                     locality_index + 1,
+                     localities_bytes.size(),
+                     measurements[locality_index].locality_bytes / Constants::BYTES_PER_KB)
+              << " — " << measurements[locality_index].p50_latency_ns << " ns" << std::endl;
+  }
 
   std::vector<size_t> final_localities_bytes;
   std::vector<double> p50_latency_ns;
@@ -691,108 +524,82 @@ int run_tlb_analysis(const BenchmarkConfig& config) {
                                       &sweep_loop_latencies_ns);
   }
 
-  std::vector<size_t> refinement_points;
+  std::vector<TlbRefinementTarget> refinement_targets;
   if (refinement_enabled && base_sweep_complete) {
     if (private_cache_knee.detected) {
-      const std::vector<size_t> points = build_tlb_refinement_points(final_localities_bytes,
-                                                                     private_cache_knee.boundary_index,
-                                                                     localities_bytes.front(),
-                                                                     localities_bytes.back(),
-                                                                     page_size_bytes);
-      refinement_points.insert(refinement_points.end(), points.begin(), points.end());
+      refinement_targets.push_back(
+          TlbRefinementTarget{private_cache_knee.boundary_index, "private-cache"});
     }
     if (l1_boundary.detected) {
-      const std::vector<size_t> points = build_tlb_refinement_points(final_localities_bytes,
-                                                                     l1_boundary.boundary_index,
-                                                                     localities_bytes.front(),
-                                                                     localities_bytes.back(),
-                                                                     page_size_bytes);
-      refinement_points.insert(refinement_points.end(), points.begin(), points.end());
+      refinement_targets.push_back(TlbRefinementTarget{l1_boundary.boundary_index, "l1"});
     }
     if (l2_boundary.detected) {
-      const std::vector<size_t> points = build_tlb_refinement_points(final_localities_bytes,
-                                                                     l2_boundary.boundary_index,
-                                                                     localities_bytes.front(),
-                                                                     localities_bytes.back(),
-                                                                     page_size_bytes);
-      refinement_points.insert(refinement_points.end(), points.begin(), points.end());
+      refinement_targets.push_back(TlbRefinementTarget{l2_boundary.boundary_index, "l2"});
     }
   }
 
-  std::sort(refinement_points.begin(), refinement_points.end());
-  refinement_points.erase(std::unique(refinement_points.begin(), refinement_points.end()), refinement_points.end());
-
-  size_t planned_points = localities_bytes.size();
-  for (size_t refinement_locality_bytes : refinement_points) {
-    const bool already_measured = std::any_of(
-        measurements.begin(), measurements.end(), [refinement_locality_bytes](const LocalityMeasurement& measurement) {
-          return measurement.locality_bytes == refinement_locality_bytes;
-        });
-    if (!already_measured) {
-      ++planned_points;
-    }
+  std::vector<TlbSweepPoint> refinement_points = build_tlb_refinement_plan(
+      final_localities_bytes,
+      refinement_targets,
+      analysis_stride_bytes,
+      page_size_bytes,
+      localities_bytes.front(),
+      localities_bytes.back());
+  for (size_t i = 0; i < refinement_points.size(); ++i) {
+    refinement_points[i].point_index = sweep_points.size() + i;
   }
+  const size_t planned_points = sweep_points.size() + refinement_points.size();
 
   if (!refinement_points.empty() && !interrupted) {
     std::cout << Messages::msg_tlb_analysis_refinement_start(refinement_points.size()) << std::endl;
   }
 
   size_t fine_sweep_added_points = 0;
-  for (size_t refinement_locality_bytes : refinement_points) {
-    if (signal_received()) {
-      interrupted = true;
-      report_interrupt_once();
-      break;
-    }
-
-    if (std::any_of(measurements.begin(),
-                    measurements.end(),
-                    [refinement_locality_bytes](const LocalityMeasurement& measurement) {
-                      return measurement.locality_bytes == refinement_locality_bytes;
-                    })) {
-      continue;
-    }
-
-    double refinement_p50_ns = 0.0;
-    std::vector<double> refinement_loops_ns;
-    const LocalityMeasureStatus status = measure_locality_p50(latency_buffer.get(),
-                                                              selected_buffer_bytes,
-                                                              analysis_stride_bytes,
-                                                              refinement_locality_bytes,
-                                                              config.latency_chain_mode,
-                                                              timer,
-                                                              refinement_p50_ns,
-                                                              &refinement_loops_ns);
-    if (status == LocalityMeasureStatus::Interrupted) {
-      interrupted = true;
-      report_interrupt_once();
-      break;
-    }
-    if (status == LocalityMeasureStatus::Error) {
+  bool refinement_complete = refinement_points.empty();
+  if (!refinement_points.empty() && !interrupted) {
+    const size_t measurements_before_refinement = measurements.size();
+    const TlbScheduleExecutionResult refinement_result = measure_scheduled_points(
+        latency_buffer.get(),
+        selected_buffer_bytes,
+        analysis_stride_bytes,
+        refinement_points,
+        config.latency_chain_mode,
+        timer,
+        config.tlb_seed,
+        TlbMeasurementPass::Refinement,
+        stop_requested,
+        measurements);
+    measurement_records.insert(measurement_records.end(),
+                               refinement_result.records.begin(),
+                               refinement_result.records.end());
+    if (refinement_result.status == TlbScheduleExecutionStatus::Error) {
       if (buffer_locked) {
         (void)munlock(latency_buffer.get(), selected_buffer_bytes);
       }
       return EXIT_FAILURE;
     }
-
-    upsert_measurement(measurements,
-                       refinement_locality_bytes,
-                       refinement_p50_ns,
-                       std::move(refinement_loops_ns));
-    ++fine_sweep_added_points;
+    if (refinement_result.status == TlbScheduleExecutionStatus::Interrupted) {
+      interrupted = true;
+      report_interrupt_once();
+    }
+    refinement_complete =
+        refinement_result.status == TlbScheduleExecutionStatus::Complete;
+    fine_sweep_added_points = measurements.size() - measurements_before_refinement;
   }
+  sweep_points.insert(sweep_points.end(), refinement_points.begin(), refinement_points.end());
 
   std::sort(measurements.begin(), measurements.end(), [](const LocalityMeasurement& a, const LocalityMeasurement& b) {
     return a.locality_bytes < b.locality_bytes;
   });
   flatten_measurements(measurements, final_localities_bytes, p50_latency_ns, sweep_loop_latencies_ns);
 
-  if (!interrupted && signal_received()) {
+  if (!interrupted && stop_requested && stop_requested()) {
     interrupted = true;
     report_interrupt_once();
   }
   const bool main_sweep_complete =
-      !interrupted && final_localities_bytes.size() == planned_points;
+      base_sweep_complete && refinement_complete && !interrupted &&
+      final_localities_bytes.size() == planned_points;
 
   private_cache_knee = detect_private_cache_knee(final_localities_bytes, p50_latency_ns, &sweep_loop_latencies_ns);
 
@@ -845,23 +652,41 @@ int run_tlb_analysis(const BenchmarkConfig& config) {
   double page_walk_512mb_p50_ns = 0.0;
   bool page_walk_comparison_completed = false;
   if (can_measure_page_walk_penalty && main_sweep_complete) {
-    const LocalityMeasureStatus status = measure_locality_p50(latency_buffer.get(),
-                                                              selected_buffer_bytes,
-                                                              analysis_stride_bytes,
-                                                              kPageWalkComparisonLocalityBytes,
-                                                              config.latency_chain_mode,
-                                                              timer,
-                                                              page_walk_512mb_p50_ns,
-                                                              &page_walk_512mb_loop_latencies_ns);
-    if (status == LocalityMeasureStatus::Interrupted) {
+    TlbSweepPoint comparison_point;
+    comparison_point.point_index = planned_points;
+    comparison_point.requested_pages = kPageWalkComparisonLocalityBytes / page_size_bytes;
+    comparison_point.effective_pages = comparison_point.requested_pages;
+    comparison_point.locality_bytes = kPageWalkComparisonLocalityBytes;
+    comparison_point.stride_bytes = analysis_stride_bytes;
+    comparison_point.pointer_count = kPageWalkComparisonLocalityBytes / analysis_stride_bytes;
+    comparison_point.refinement_source = "large-locality";
+    std::vector<LocalityMeasurement> comparison_measurements;
+    const TlbScheduleExecutionResult comparison_result = measure_scheduled_points(
+        latency_buffer.get(),
+        selected_buffer_bytes,
+        analysis_stride_bytes,
+        {comparison_point},
+        config.latency_chain_mode,
+        timer,
+        config.tlb_seed,
+        TlbMeasurementPass::LargeLocality,
+        stop_requested,
+        comparison_measurements);
+    measurement_records.insert(measurement_records.end(),
+                               comparison_result.records.begin(),
+                               comparison_result.records.end());
+    if (comparison_result.status == TlbScheduleExecutionStatus::Interrupted) {
       interrupted = true;
       report_interrupt_once();
-    } else if (status == LocalityMeasureStatus::Error) {
+    } else if (comparison_result.status == TlbScheduleExecutionStatus::Error) {
       if (buffer_locked) {
         (void)munlock(latency_buffer.get(), selected_buffer_bytes);
       }
       return EXIT_FAILURE;
-    } else {
+    } else if (!comparison_measurements.empty()) {
+      page_walk_512mb_p50_ns = comparison_measurements.front().p50_latency_ns;
+      page_walk_512mb_loop_latencies_ns =
+          comparison_measurements.front().loop_latencies_ns;
       std::cout << Messages::msg_tlb_analysis_page_walk_progress(
                        kPageWalkComparisonLocalityBytes / Constants::BYTES_PER_MB)
                 << " — " << page_walk_512mb_p50_ns << " ns" << std::endl;
@@ -869,7 +694,7 @@ int run_tlb_analysis(const BenchmarkConfig& config) {
     }
   }
 
-  if (!interrupted && signal_received()) {
+  if (!interrupted && stop_requested && stop_requested()) {
     interrupted = true;
     report_interrupt_once();
   }
@@ -924,6 +749,10 @@ int run_tlb_analysis(const BenchmarkConfig& config) {
   std::cout << Messages::report_tlb_buffer(selected_buffer_mb, buffer_locked) << std::endl;
   std::cout << Messages::report_tlb_stride(analysis_stride_bytes) << std::endl;
   std::cout << Messages::report_tlb_density(tlb_sweep_density_to_string(sweep_density)) << std::endl;
+  std::cout << Messages::report_tlb_seed(config.tlb_seed,
+                                         config.user_specified_tlb_seed)
+            << std::endl;
+  std::cout << Messages::report_tlb_schedule_policy() << std::endl;
   std::cout << Messages::report_tlb_chain_mode(
                    latency_chain_mode_to_string(effective_chain_mode))
             << std::endl;
@@ -1060,6 +889,8 @@ int run_tlb_analysis(const BenchmarkConfig& config) {
       planned_points,
       final_localities_bytes.size(),
       conclusions_valid,
+      sweep_points,
+      measurement_records,
       final_localities_bytes,
       sweep_loop_latencies_ns,
       p50_latency_ns,

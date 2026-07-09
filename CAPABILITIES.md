@@ -57,15 +57,18 @@ access behavior.
 ## TLB Behavior
 
 The standalone TLB analysis mode, `--analyze-tlb`, estimates translation-related behavior by sweeping locality windows and
-measuring pointer-chase latency changes.
+measuring pointer-chase latency changes. Locality points are measured once per round in a reproducible seeded cyclic
+Latin order, so each locality rotates through different elapsed-time positions instead of being measured as one
+contiguous block.
 
 It can report:
 
 - Likely L1/L2 TLB boundary candidates
 - Locality-window sensitivity
-- Estimated page-walk penalty
+- Large-locality latency delta, explicitly not treated as an isolated page-table-walk cost
 - Ambiguity caused by private-cache effects
 - Boundary confidence and inferred entry ranges
+- Seed, round/order metadata, and derived chain seed for each raw measurement
 
 These values should be interpreted as practical microarchitectural estimates, not as guaranteed architectural TLB sizes.
 Apple Silicon does not expose every internal translation structure directly to user-space code, so the analysis is based

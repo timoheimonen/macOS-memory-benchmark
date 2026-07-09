@@ -30,6 +30,8 @@ TEST(ConfigTest, DefaultValues) {
   EXPECT_EQ(config.latency_stride_bytes, static_cast<size_t>(Constants::LATENCY_STRIDE_BYTES));
   EXPECT_EQ(config.latency_tlb_locality_bytes,
             Constants::DEFAULT_LATENCY_TLB_LOCALITY_KB * Constants::BYTES_PER_KB);
+  EXPECT_EQ(config.tlb_seed, 0u);
+  EXPECT_FALSE(config.user_specified_tlb_seed);
   EXPECT_EQ(config.custom_cache_size_kb_ll, -1);
   EXPECT_FALSE(config.use_custom_cache_size);
 }
@@ -366,6 +368,45 @@ TEST(ConfigTest, ParseAnalyzeTlbWithOutputSucceeds) {
   EXPECT_EQ(result, EXIT_SUCCESS);
   EXPECT_TRUE(config.analyze_tlb);
   EXPECT_EQ(config.output_file, "tlb.json");
+}
+
+TEST(ConfigTest, ParseAnalyzeTlbWithExplicitSeedSucceeds) {
+  BenchmarkConfig config;
+  const char* argv[] = {"program", "--analyze-tlb", "--seed", "18446744073709551615"};
+
+  EXPECT_EQ(parse_arguments(4, const_cast<char**>(argv), config), EXIT_SUCCESS);
+  EXPECT_EQ(config.tlb_seed, std::numeric_limits<uint64_t>::max());
+  EXPECT_TRUE(config.user_specified_tlb_seed);
+}
+
+TEST(ConfigTest, ParseAnalyzeTlbGeneratesSeedWhenOmitted) {
+  BenchmarkConfig config;
+  const char* argv[] = {"program", "--analyze-tlb"};
+
+  EXPECT_EQ(parse_arguments(2, const_cast<char**>(argv), config), EXIT_SUCCESS);
+  EXPECT_FALSE(config.user_specified_tlb_seed);
+}
+
+TEST(ConfigTest, ParseAnalyzeTlbRejectsInvalidSeed) {
+  BenchmarkConfig config;
+  const char* argv[] = {"program", "--analyze-tlb", "--seed", "-1"};
+
+  EXPECT_EQ(parse_arguments(4, const_cast<char**>(argv), config), EXIT_FAILURE);
+}
+
+TEST(ConfigTest, ParseAnalyzeTlbRejectsSeedWithTrailingCharacters) {
+  BenchmarkConfig config;
+  const char* argv[] = {"program", "--analyze-tlb", "--seed", "42x"};
+
+  EXPECT_EQ(parse_arguments(4, const_cast<char**>(argv), config), EXIT_FAILURE);
+}
+
+TEST(ConfigTest, ParseAnalyzeTlbRejectsDuplicateSeed) {
+  BenchmarkConfig config;
+  const char* argv[] = {
+      "program", "--analyze-tlb", "--seed", "42", "--seed", "43"};
+
+  EXPECT_EQ(parse_arguments(6, const_cast<char**>(argv), config), EXIT_FAILURE);
 }
 
 TEST(ConfigTest, ParseAnalyzeTlbWithOutputFirstSucceeds) {

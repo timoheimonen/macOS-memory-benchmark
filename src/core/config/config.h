@@ -35,6 +35,7 @@
 #define CONFIG_H
 
 #include <cstddef>  // size_t
+#include <cstdint>
 #include <string>
 #include <vector>
 #include <cstdlib>  // EXIT_SUCCESS, EXIT_FAILURE
@@ -105,6 +106,7 @@ struct BenchmarkConfig {
   LatencyChainMode latency_chain_mode = LatencyChainMode::Auto;  ///< Pointer-chain construction policy (auto preserves default behavior)
   size_t latency_tlb_locality_bytes = Constants::DEFAULT_LATENCY_TLB_LOCALITY_KB * Constants::BYTES_PER_KB;  ///< TLB-locality window for latency chains (default 1 MB; 0 = global random)
   TlbSweepDensity tlb_sweep_density = TlbSweepDensity::High;  ///< Sweep density for standalone --analyze-tlb mode
+  uint64_t tlb_seed = 0;  ///< Reproducible standalone TLB planner/chain seed
   
   // Calculated sizes
   size_t buffer_size = 0;        ///< Final buffer size in bytes (calculated from buffer_size_mb)
@@ -149,6 +151,7 @@ struct BenchmarkConfig {
   bool user_specified_latency_stride = false;  ///< Whether user explicitly set --latency-stride-bytes
   bool user_specified_latency_chain_mode = false; ///< Whether user explicitly set --latency-chain-mode
   bool user_specified_latency_tlb_locality = false; ///< Whether user explicitly set --latency-tlb-locality-kb
+  bool user_specified_tlb_seed = false;  ///< Whether user explicitly set --seed
 
   // Latency-chain diagnostics (populated during chain setup)
   LatencyChainDiagnostics main_latency_chain_diagnostics;

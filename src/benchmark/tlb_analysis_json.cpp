@@ -21,11 +21,13 @@
 
 #include "benchmark/tlb_analysis_json.h"
 
+#include <algorithm>
 #include <chrono>
 #include <cstdlib>
 #include <ctime>
 #include <filesystem>
 #include <iomanip>
+#include <limits>
 #include <sstream>
 #include <string>
 
@@ -37,18 +39,6 @@
 #include "output/json/json_output/json_output_api.h"
 
 namespace {
-
-const char* tlb_sweep_density_to_string(TlbSweepDensity density) {
-  switch (density) {
-    case TlbSweepDensity::Low:
-      return "low";
-    case TlbSweepDensity::Medium:
-      return "medium";
-    case TlbSweepDensity::High:
-      return "high";
-  }
-  return "high";
-}
 
 nlohmann::ordered_json build_tlb_boundary_json(const TlbBoundaryDetection& boundary,
                                                size_t inferred_entries) {
@@ -123,7 +113,7 @@ int save_tlb_analysis_to_json(const TlbAnalysisJsonContext& context) {
   json_output[JsonKeys::CONFIGURATION] = {
       {JsonKeys::MODE, Constants::TLB_ANALYSIS_JSON_MODE_NAME},
       {"schema_version", 2},
-      {"methodology_version", "locality-sweep-v1-guardrails"},
+      {"methodology_version", "locality-sweep-v2-balanced-rounds"},
       {JsonKeys::CPU_NAME, context.cpu_name},
       {JsonKeys::MACOS_VERSION, context.config.macos_version},
       {JsonKeys::PERFORMANCE_CORES, context.perf_cores},
@@ -134,6 +124,9 @@ int save_tlb_analysis_to_json(const TlbAnalysisJsonContext& context) {
       {"latency_chain_mode_requested", latency_chain_mode_to_string(context.config.latency_chain_mode)},
       {JsonKeys::LATENCY_CHAIN_MODE, latency_chain_mode_to_string(effective_chain_mode)},
       {JsonKeys::TLB_DENSITY, tlb_sweep_density_to_string(context.config.tlb_sweep_density)},
+      {"seed", context.config.tlb_seed},
+      {"seed_source", context.config.user_specified_tlb_seed ? "user" : "generated"},
+      {"schedule_policy", "seeded-cyclic-latin"},
       {JsonKeys::LATENCY_SAMPLE_COUNT, static_cast<int>(context.loops_per_point)},
       {"accesses_per_loop", context.accesses_per_loop},
       {"tlb_guard_bytes", context.tlb_guard_bytes},
@@ -147,8 +140,38 @@ int save_tlb_analysis_to_json(const TlbAnalysisJsonContext& context) {
     nlohmann::ordered_json point;
     point["locality_bytes"] = context.localities_bytes[i];
     point["locality_kb"] = context.localities_bytes[i] / Constants::BYTES_PER_KB;
+    const auto planned_point = std::find_if(
+        context.sweep_points.begin(),
+        context.sweep_points.end(),
+        [&](const TlbSweepPoint& candidate) {
+          return candidate.locality_bytes == context.localities_bytes[i];
+        });
+    if (planned_point != context.sweep_points.end()) {
+      point["point_index"] = planned_point->point_index;
+      point["requested_pages"] = planned_point->requested_pages;
+      point["effective_pages"] = planned_point->effective_pages;
+      point["pointer_count"] = planned_point->pointer_count;
+      point["stride_bytes"] = planned_point->stride_bytes;
+      point["refinement_source"] = planned_point->refinement_source;
+      point["bracket_lower_bytes"] = planned_point->bracket_lower_bytes;
+      point["bracket_upper_bytes"] = planned_point->bracket_upper_bytes;
+    }
     point["loop_latencies_ns"] = context.sweep_loop_latencies_ns[i];
     point["p50_latency_ns"] = context.p50_latency_ns[i];
+    point["measurements"] = nlohmann::ordered_json::array();
+    for (const TlbMeasurementRecord& record : context.measurement_records) {
+      if (record.pass == TlbMeasurementPass::LargeLocality ||
+          record.locality_bytes != context.localities_bytes[i]) {
+        continue;
+      }
+      point["measurements"].push_back({
+          {"pass", tlb_measurement_pass_to_string(record.pass)},
+          {"round_index", record.round_index},
+          {"order_index", record.order_index},
+          {"seed", record.seed},
+          {"latency_ns", record.latency_ns},
+      });
+    }
     sweep_json.push_back(point);
   }
 
@@ -157,6 +180,33 @@ int save_tlb_analysis_to_json(const TlbAnalysisJsonContext& context) {
   tlb_json["planned_points"] = context.planned_points;
   tlb_json["measured_points"] = context.measured_points;
   tlb_json["conclusions_valid"] = context.conclusions_valid;
+  const size_t planned_measurements =
+      context.loops_per_point != 0 &&
+              context.planned_points >
+                  std::numeric_limits<size_t>::max() / context.loops_per_point
+          ? std::numeric_limits<size_t>::max()
+          : context.planned_points * context.loops_per_point;
+  const size_t completed_measurements = static_cast<size_t>(std::count_if(
+      context.measurement_records.begin(),
+      context.measurement_records.end(),
+      [](const TlbMeasurementRecord& record) {
+        return record.pass != TlbMeasurementPass::LargeLocality;
+      }));
+  tlb_json["rounds_per_pass"] = context.loops_per_point;
+  tlb_json["planned_measurements"] = planned_measurements;
+  tlb_json["completed_measurements"] = completed_measurements;
+  tlb_json["measurement_records"] = nlohmann::ordered_json::array();
+  for (const TlbMeasurementRecord& record : context.measurement_records) {
+    tlb_json["measurement_records"].push_back({
+        {"pass", tlb_measurement_pass_to_string(record.pass)},
+        {"point_index", record.point_index},
+        {"locality_bytes", record.locality_bytes},
+        {"round_index", record.round_index},
+        {"order_index", record.order_index},
+        {"seed", record.seed},
+        {"latency_ns", record.latency_ns},
+    });
+  }
   tlb_json["sweep"] = sweep_json;
   if (context.conclusions_valid) {
     tlb_json["l1_tlb_detection"] = build_tlb_boundary_json(context.l1_boundary, context.l1_entries);
@@ -197,6 +247,18 @@ int save_tlb_analysis_to_json(const TlbAnalysisJsonContext& context) {
         context.page_walk_comparison_loop_latencies_ns;
     large_locality_delta["comparison_p50_ns"] = context.page_walk_comparison_p50_ns;
     large_locality_delta["delta_ns"] = context.page_walk_penalty_ns;
+    large_locality_delta["measurements"] = nlohmann::ordered_json::array();
+    for (const TlbMeasurementRecord& record : context.measurement_records) {
+      if (record.pass != TlbMeasurementPass::LargeLocality) {
+        continue;
+      }
+      large_locality_delta["measurements"].push_back({
+          {"round_index", record.round_index},
+          {"order_index", record.order_index},
+          {"seed", record.seed},
+          {"latency_ns", record.latency_ns},
+      });
+    }
   } else if (!context.conclusions_valid) {
     large_locality_delta["reason"] = "analysis incomplete; delta suppressed";
   } else if (!context.can_measure_page_walk_penalty) {

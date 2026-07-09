@@ -128,6 +128,7 @@ inline size_t alignment_offset_to_cache_line(void* ptr) {
  * @param stride Stride size in bytes between linked pointers
  * @param tlb_locality_bytes Optional TLB-locality window in bytes (0 = global random chain)
  * @param diagnostics Optional diagnostics output for page-touch analysis
+ * @param mode Pointer-chain construction policy
  * @return EXIT_SUCCESS on success, EXIT_FAILURE on error
  *
  * Creates a linked list structure in memory where each pointer points to the
@@ -137,6 +138,15 @@ int setup_latency_chain(void* buffer, size_t buffer_size, size_t stride,
                         size_t tlb_locality_bytes = 0,
                         LatencyChainDiagnostics* diagnostics = nullptr,
                         LatencyChainMode mode = LatencyChainMode::Auto);
+
+/**
+ * @brief Seeded overload of setup_latency_chain for reproducible analysis runs.
+ */
+int setup_latency_chain(void* buffer, size_t buffer_size, size_t stride,
+                        size_t tlb_locality_bytes,
+                        LatencyChainDiagnostics* diagnostics,
+                        LatencyChainMode mode,
+                        uint64_t deterministic_seed);
 
 /**
  * @brief Initialize data buffers with test data

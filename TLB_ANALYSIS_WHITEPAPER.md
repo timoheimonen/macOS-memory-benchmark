@@ -38,7 +38,7 @@ Related whitepaper for the other standalone analysis mode:
 
 ### 3.1 Accepted Forms
 
-`--analyze-tlb` runs a dedicated analysis path and accepts only optional JSON output, optional latency stride override, optional chain-mode override, optional sweep density, optional parameter sweep specs, and an optional sweep run-count guardrail:
+`--analyze-tlb` runs a dedicated analysis path and accepts only optional JSON output, optional latency stride override, optional chain-mode override, optional sweep density, optional reproducibility seed, optional parameter sweep specs, and an optional sweep run-count guardrail:
 
 ```bash
 memory_benchmark --analyze-tlb
@@ -46,6 +46,7 @@ memory_benchmark --analyze-tlb --output tlb_analysis.json
 memory_benchmark --output tlb_analysis.json --analyze-tlb
 memory_benchmark --analyze-tlb --latency-stride-bytes 128 --output tlb_analysis_stride128.json
 memory_benchmark --analyze-tlb --latency-chain-mode random-box --tlb-density medium --output tlb_analysis_medium.json
+memory_benchmark --analyze-tlb --seed 123456789 --output tlb_analysis_seeded.json
 memory_benchmark --analyze-tlb --sweep tlb-density=low,medium,high --output tlb_density_sweep.json
 memory_benchmark --analyze-tlb --sweep latency-stride-bytes=64,128 --sweep tlb-density=medium,high --sweep-max-runs 4 --output tlb_stride_density_sweep.json
 ```
@@ -54,7 +55,7 @@ memory_benchmark --analyze-tlb --sweep latency-stride-bytes=64,128 --sweep tlb-d
 
 If `--latency-stride-bytes` is not provided, the default stride is **256 bytes**, which matches the standard latency mode default (`Constants::LATENCY_STRIDE_BYTES`).
 
-As a temporary correctness guard for the locality-sweep-v1 methodology, analyze-TLB stride must:
+As a correctness guard for the locality-sweep-v2 methodology, analyze-TLB stride must:
 
 - be pointer-size aligned,
 - be no larger than the system page size,
@@ -72,7 +73,15 @@ Sweep density applies only to `--analyze-tlb`.
 - `medium`: 15-point base sweep + refinement pass
 - `high` (default): 29-point base sweep + refinement pass
 
-### 3.4 Parameter Sweep (`--sweep`)
+### 3.4 Reproducibility Seed (`--seed`)
+
+`--seed <uint64>` fixes the planner order, derived per-task seeds, and standalone TLB pointer-chain permutations. If the
+option is omitted, one 64-bit seed is generated when the command is parsed. A Cartesian parameter sweep reuses that
+same base seed for every generated run, which makes parameter comparisons share the same deterministic schedule policy.
+
+The base seed, whether it was user-provided or generated, and every derived measurement seed are stored in JSON.
+
+### 3.5 Parameter Sweep (`--sweep`)
 
 Sweep mode applies a Cartesian product over supported TLB-analysis parameters and writes one combined JSON file.
 
@@ -89,7 +98,7 @@ and records top-level `status`, `planned_runs`, `completed_runs`, and `conclusio
 
 `--sweep latency-chain-mode=...` follows the same chain-mode rule as direct `--latency-chain-mode`: `global-random` is rejected for `--analyze-tlb`.
 
-### 3.5 Rejected Combinations
+### 3.6 Rejected Combinations
 
 All options outside the accepted set are rejected when `--analyze-tlb` is present.
 `--latency-chain-mode global-random` is also rejected for `--analyze-tlb`, because it ignores locality windows and would turn the locality sweep into repeated full-buffer random measurements with misleading boundary labels.
@@ -132,7 +141,15 @@ Stride behavior:
 
 **Memory prefaulting:** After buffer allocation, the code calls `madvise(ptr, size_bytes, MADV_WILLNEED)` to prefault pages and reduce page-fault noise during early measurement.
 
-**Measurement loop:** Each loop rebuilds the latency chain for the target locality, performs warmup, runs pointer chase, and stores latency as `ns/access`.
+**Balanced round scheduler:** The pure scheduler creates 30 rounds. Every round contains every planned locality exactly
+once. A seed-shuffled initial point order is cyclically rotated on subsequent rounds, so a point traverses different
+order positions instead of always being early or late in the run. For a full point-count cycle, each point occupies every
+order position once.
+
+**Measurement task:** Each scheduled task derives a stable seed from the base seed, pass, round, and point index. The task
+rebuilds the latency chain with that seed, performs warmup, runs pointer chase, and stores latency as `ns/access` together
+with pass, round index, order index, and seed metadata. The regular benchmark path still uses its existing random-device
+chain construction unless it explicitly calls the seeded overload.
 
 Per-point central value is `P50` (median) over 30 loops.
 
@@ -156,15 +173,18 @@ Refinement policy by density:
 
 Effective sweep start is stride-aware:
 
-- `min_sweep_locality = max(16KB, 2 * stride)`
+- `min_sweep_locality = page_align_up(max(16KB, 2 * stride))`
 - points below `min_sweep_locality` are skipped
-- if `min_sweep_locality` is not in the canonical set, it is inserted as the first sweep point
+- canonical points and an inserted minimum are aligned to the system page size and deduplicated
 
 The final sweep vector is deduplicated (via `std::sort` followed by `std::unique`). This prevents duplicates if `min_sweep_locality` exactly matches one of the canonical points.
 
 Refinement candidates are rounded down to system-page boundaries and deduplicated again. A narrow bracket can therefore
 produce fewer than seven unique refinement points; this is intentional because sub-page refinement would invalidate the
 entry-count interpretation under the current methodology.
+
+Refinement points form a separate balanced round pass. Each point records whether it came from the private-cache, L1,
+L2, or a merged refinement target and stores the bracket that produced it.
 
 Separate large-locality comparison point:
 
@@ -358,10 +378,13 @@ When `--output <file>` is provided with `--analyze-tlb` without `--sweep`, outpu
   - **`latency_chain_mode`** (resolved chain mode used)
   - **`performance_cores`** and **`efficiency_cores`** (CPU core configuration)
   - selected buffer size and whether mlock succeeded
+  - `schema_version = 2` and `methodology_version = "locality-sweep-v2-balanced-rounds"`
+  - base `seed`, `seed_source`, and `schedule_policy = "seeded-cyclic-latin"`
 
 - `tlb_analysis` contains:
-  - `status`, `planned_points`, `measured_points`, and `conclusions_valid`
-  - `sweep[]` with raw `loop_latencies_ns` and per-point `p50_latency_ns`
+  - `status`, `planned_points`, `measured_points`, `rounds_per_pass`, `planned_measurements`, `completed_measurements`, and `conclusions_valid`
+  - `measurement_records[]` in execution order with pass, point, locality, round, order, seed, and latency
+  - `sweep[]` with requested/effective pages, pointer count, refinement source/bracket, raw `loop_latencies_ns`, per-task `measurements`, and per-point `p50_latency_ns`
   - `private_cache_knee` (with `detected`, `boundary_locality_kb`, `confidence`, and `may_interfere_with_tlb`)
   - `l1_tlb_detection` (with `detected`, `boundary_locality_kb`, `inferred_entries`, `inferred_entries_method`, `inferred_entries_min`, `inferred_entries_max`, `overlaps_private_cache_knee`, `confidence`, and step metadata)
   - `l2_tlb_detection` (same structure as L1)

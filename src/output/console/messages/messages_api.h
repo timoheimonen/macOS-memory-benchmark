@@ -37,6 +37,7 @@
 #ifndef MESSAGES_MESSAGES_API_H
 #define MESSAGES_MESSAGES_API_H
 
+#include <cstdint>
 #include <string>
 
 /**
@@ -214,6 +215,8 @@ std::string report_tlb_page_size(size_t page_size_bytes);
 std::string report_tlb_buffer(size_t buffer_mb, bool locked);
 std::string report_tlb_stride(size_t stride_bytes);
 std::string report_tlb_density(const std::string& density_name);
+std::string report_tlb_seed(uint64_t seed, bool user_specified);
+const std::string& report_tlb_schedule_policy();
 std::string report_tlb_chain_mode(const std::string& chain_mode_name);
 std::string report_tlb_chain_mode_requested(const std::string& chain_mode_name);
 std::string report_tlb_chain_mode_effective(const std::string& chain_mode_name);

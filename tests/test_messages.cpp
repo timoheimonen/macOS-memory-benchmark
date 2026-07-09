@@ -298,6 +298,7 @@ TEST_F(MessagesErrorTest, ErrorAnalyzeTlbMustBeUsedAlone) {
   EXPECT_NE(msg.find("--latency-stride-bytes"), std::string::npos);
   EXPECT_NE(msg.find("--latency-chain-mode"), std::string::npos);
   EXPECT_NE(msg.find("--tlb-density"), std::string::npos);
+  EXPECT_NE(msg.find("--seed"), std::string::npos);
   EXPECT_NE(msg.find("-S/--sweep <key=...>"), std::string::npos);
   EXPECT_NE(msg.find("-X/--sweep-max-runs <count>"), std::string::npos);
 }
@@ -503,6 +504,16 @@ TEST_F(MessagesFormattingTest, ReportTlbDensity) {
   std::string msg = Messages::report_tlb_density("high");
   EXPECT_NE(msg.find("Sweep Density"), std::string::npos);
   EXPECT_NE(msg.find("high"), std::string::npos);
+}
+
+TEST_F(MessagesFormattingTest, ReportTlbSeedAndSchedule) {
+  const std::string generated = Messages::report_tlb_seed(12345, false);
+  EXPECT_NE(generated.find("12345"), std::string::npos);
+  EXPECT_NE(generated.find("generated"), std::string::npos);
+
+  const std::string user = Messages::report_tlb_seed(7, true);
+  EXPECT_NE(user.find("user"), std::string::npos);
+  EXPECT_NE(Messages::report_tlb_schedule_policy().find("Latin"), std::string::npos);
 }
 
 TEST_F(MessagesFormattingTest, ReportTlbRequestedAndEffectiveChainMode) {

@@ -116,7 +116,7 @@ caffeinate -i -d memory_benchmark --benchmark --count 10 --buffer-size 1024
 - **`--patterns`**: Runs pattern bandwidth suite only (`sequential_forward`, `sequential_reverse`, `strided_64`, `strided_4096`, `strided_16384`, `strided_2mb`, `random`). Mutually exclusive with `--benchmark`.
 - **`--only-bandwidth`**: Runs bandwidth paths only. **Requires `--benchmark`**. Cannot be used with `--patterns`, `--cache-size`, or `--latency-samples`.
 - **`--only-latency`**: Runs latency paths only. **Requires `--benchmark`**. Cannot be used with `--patterns` or `--iterations`.
-- **`--analyze-tlb`**: Runs standalone TLB analysis mode with automatic two-stage sweep refinement, private-cache-knee detection, and L1/L2 TLB boundary inference; only optional `--output <file>`, `--latency-stride-bytes <bytes>`, `--latency-chain-mode <mode>`, `--tlb-density <low|medium|high>`, `--sweep <key=...>`, and `--sweep-max-runs <count>` may be combined with it.
+- **`--analyze-tlb`**: Runs standalone TLB analysis mode with automatic two-stage sweep refinement, balanced seeded measurement rounds, private-cache-knee detection, and L1/L2 TLB boundary inference; only optional `--output <file>`, `--latency-stride-bytes <bytes>`, `--latency-chain-mode <mode>`, `--tlb-density <low|medium|high>`, `--seed <uint64>`, `--sweep <key=...>`, and `--sweep-max-runs <count>` may be combined with it.
 - **`--analyze-core2core`**: Runs standalone core-to-core cache-line handoff analysis mode; only optional `--output <file>`, `--count <count>`, `--latency-samples <count>`, `--sweep count=...`, `--sweep latency-samples=...`, and `--sweep-max-runs <count>` may be combined with it. See [CORE_TO_CORE_WHITEPAPER.md](CORE_TO_CORE_WHITEPAPER.md) for methodology and JSON contract.
 - **`--sweep <key=a,b>`**: Runs a Cartesian parameter sweep for `--benchmark`, `--patterns`, `--analyze-tlb`, or `--analyze-core2core` and writes one combined JSON file. Repeat `--sweep` to sweep multiple parameters. Requires `--output <file>`.
 
@@ -161,11 +161,12 @@ Long options require `--`. A single dash is only valid for one-character short o
 - `--count <count>`: Full benchmark repetitions (default `1`; use `5-10` for statistics).
 - `--threads <count>`: Bandwidth thread count (latency tests remain single-threaded).
 - `--cache-size <KB>`: Custom cache target. Non-zero range is `16` to `1048576` KB (1 GB).
-- `--analyze-tlb`: Standalone TLB-boundary detection benchmark (`1024/512/256 MB` fallback buffer selection), sweeping locality windows from `max(16 KB, 2*stride)` to `256 MB` with page-aligned fine-sweep insertion near detected knees/boundaries (plus an optional `512 MB` large-locality comparison when buffer is at least `512 MB`). Reports private-cache-knee risk, private-cache/L1 overlap when ambiguous, and inferred entry estimates plus ranges. In this mode stride must not exceed and must exactly divide the system page size. Supports optional `--latency-stride-bytes <bytes>`, `--latency-chain-mode <mode>`, `--tlb-density <low|medium|high>`, and sweep mode over those same three TLB-analysis parameters.
+- `--analyze-tlb`: Standalone TLB-boundary detection benchmark (`1024/512/256 MB` fallback buffer selection), sweeping locality windows from `max(16 KB, 2*stride)` to `256 MB` with page-aligned fine-sweep insertion near detected knees/boundaries (plus an optional `512 MB` large-locality comparison when buffer is at least `512 MB`). Each of 30 rounds measures every locality once using a seeded cyclic Latin order, reducing correlation between locality and run-time drift. Reports private-cache-knee risk, private-cache/L1 overlap when ambiguous, and inferred entry estimates plus ranges. In this mode stride must not exceed and must exactly divide the system page size. Supports optional `--latency-stride-bytes <bytes>`, `--latency-chain-mode <mode>`, `--tlb-density <low|medium|high>`, `--seed <uint64>`, and sweep mode over those same three TLB-analysis parameters.
 - `--analyze-core2core`: Standalone two-thread cache-line ping-pong benchmark for coherence handoff latency, with three scheduler-hint scenarios (`no_affinity_hint`, `same_affinity_tag`, `different_affinity_tags`). Reports round-trip and one-way-estimate latency plus percentiles.
 - `--latency-samples <count>`: Samples per latency test (default `1000`).
 - `--latency-stride-bytes <bytes>`: Pointer-chain stride for latency tests (default `256`; must be > 0 and pointer-size aligned). With `--analyze-tlb`, it must also be no larger than and divide the system page size exactly.
 - `--latency-chain-mode <mode>`: Pointer-chain construction policy. Modes: `auto` (default), `global-random`, `random-box`, `same-random-in-box`, `diff-random-in-box`.
+- `--seed <uint64>`: Reproducible standalone TLB planner, round-order, and pointer-chain seed. When omitted, one seed is generated for the command and reused across all generated sweep runs.
 - `--latency-tlb-locality-kb <KB>`: Pointer-chain locality window (default `1024`; `0` = global random chain; non-zero values must be page-size multiples). If omitted, regular main-memory latency output also includes an automatic TLB comparison (`16 KB` hit-biased vs `0` miss-biased) and estimated page-walk penalty. The automatic comparison uses P50 over three complete pointer-chase passes per point to reduce single-IRQ outlier impact.
 - `--non-cacheable`: Best-effort cache-discouraging hints (not true uncached memory).
 - `--output <file>`: Save JSON output.
@@ -249,6 +250,12 @@ Standalone TLB analysis with custom stride:
 memory_benchmark --analyze-tlb --latency-stride-bytes 128 --output tlb_analysis_stride128.json
 ```
 
+Reproducible TLB analysis:
+
+```bash
+memory_benchmark --analyze-tlb --seed 123456789 --output tlb_analysis_seeded.json
+```
+
 Standalone TLB analysis density/stride sweep:
 
 ```bash
@@ -277,7 +284,7 @@ Console output includes:
 - Aggregate statistics when `--count > 1` (including P50/P90/P95/P99 and stddev). In auto-TLB mode, statistics also include `TLB Hit Latency (ns)`, `TLB Miss Latency (ns)`, and `Estimated Page-Walk Penalty (ns)`.
 - Standalone `--analyze-tlb` reports `Analysis Status` and suppresses boundary conclusions when the sweep is interrupted or incomplete. Its 512 MB comparison is labeled `Large-Locality Latency Delta`; it is not claimed to isolate page-table-walk cost.
 
-Standalone TLB JSON uses `schema_version: 2` and includes `tlb_analysis.status`, `planned_points`, `measured_points`, and `conclusions_valid`. The preferred comparison block is `tlb_analysis.large_locality_latency_delta` with `delta_ns`. The former `tlb_analysis.page_walk_penalty` block remains for one compatibility window with `deprecated: true` and a `replacement` field.
+Standalone TLB JSON uses `schema_version: 2` and `methodology_version: "locality-sweep-v2-balanced-rounds"`. It includes the base seed, seed source, schedule policy, per-measurement pass/round/order/seed records, point page counts, `tlb_analysis.status`, point counts, `planned_measurements`, `completed_measurements`, and `conclusions_valid`. The preferred comparison block is `tlb_analysis.large_locality_latency_delta` with `delta_ns`. The former `tlb_analysis.page_walk_penalty` block remains for one compatibility window with `deprecated: true` and a `replacement` field.
 
 JSON output shape:
 

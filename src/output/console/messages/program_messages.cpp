@@ -135,12 +135,16 @@ std::string usage_options(const std::string& prog_name) {
       << "                        When count > 1, statistics include percentiles (P50/P90/P95/P99) and stddev.\n"
       << "  -T, --analyze-tlb     Run standalone TLB analysis benchmark mode (allows optional -o/--output <file>,\n"
       << "                        -s/--latency-stride-bytes <bytes>, -m/--latency-chain-mode <mode>,\n"
-      << "                        -D/--tlb-density <low|medium|high>, -S/--sweep <key=...>,\n"
+      << "                        -D/--tlb-density <low|medium|high>, --seed <uint64>,\n"
+      << "                        -S/--sweep <key=...>,\n"
       << "                        and -X/--sweep-max-runs <count> only).\n"
       << "  -D, --tlb-density <level>\n"
       << "                        Sweep density for --analyze-tlb: low, medium, high (default: high).\n"
       << "                        low = 15-point base sweep, no refinement. medium = 15-point base + refinement.\n"
       << "                        high = 29-point base + refinement.\n"
+      << "      --seed <uint64>\n"
+      << "                        Reproducible planner, round-order, and pointer-chain seed for\n"
+      << "                        --analyze-tlb. Generated once per command when omitted.\n"
       << "  -C, --analyze-core2core\n"
       << "                        Run standalone core-to-core cache-line handoff benchmark mode\n"
       << "                        (allows optional -o/--output <file>, -r/--count <count>, -n/--latency-samples <count>,\n"
@@ -248,6 +252,17 @@ std::string report_tlb_stride(size_t stride_bytes) {
 
 std::string report_tlb_density(const std::string& density_name) {
   return "Sweep Density: " + density_name;
+}
+
+std::string report_tlb_seed(uint64_t seed, bool user_specified) {
+  std::ostringstream oss;
+  oss << "Seed: " << seed << " (" << (user_specified ? "user" : "generated") << ")";
+  return oss.str();
+}
+
+const std::string& report_tlb_schedule_policy() {
+  static const std::string msg = "Schedule: seeded cyclic Latin rounds";
+  return msg;
 }
 
 std::string report_tlb_chain_mode(const std::string& chain_mode_name) {

@@ -55,6 +55,8 @@ struct TlbAnalysisJsonContext {
   size_t planned_points;
   size_t measured_points;
   bool conclusions_valid;
+  const std::vector<TlbSweepPoint>& sweep_points;
+  const std::vector<TlbMeasurementRecord>& measurement_records;
   const std::vector<size_t>& localities_bytes;
   const std::vector<std::vector<double>>& sweep_loop_latencies_ns;
   const std::vector<double>& p50_latency_ns;

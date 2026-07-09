@@ -96,12 +96,23 @@ TEST(JsonSchemaTest, TlbAnalysisExporterIncludesModeAndCoreCounts) {
   BenchmarkConfig config;
   config.output_file = make_temp_json_path("tlb_schema").string();
   config.tlb_sweep_density = TlbSweepDensity::High;
+  config.tlb_seed = 12345;
+  config.user_specified_tlb_seed = true;
 
   const std::string cpu_name = "test-cpu";
   const std::vector<size_t> localities_bytes = {16 * Constants::BYTES_PER_KB};
   const std::vector<std::vector<double>> sweep_loop_latencies_ns = {{15.0, 15.1}};
   const std::vector<double> p50_latency_ns = {15.0};
   const std::vector<double> page_walk_comparison_loop_latencies_ns = {95.0, 96.0};
+  const std::vector<TlbSweepPoint> sweep_points = {{
+      0, 1, 1, 16 * Constants::BYTES_PER_KB, 64, 256, "base",
+      16 * Constants::BYTES_PER_KB, 16 * Constants::BYTES_PER_KB}};
+  const std::vector<TlbMeasurementRecord> measurement_records = {
+      {TlbMeasurementPass::Base, 0, 16 * Constants::BYTES_PER_KB, 0, 0, 100, 15.0},
+      {TlbMeasurementPass::Base, 0, 16 * Constants::BYTES_PER_KB, 1, 0, 101, 15.1},
+      {TlbMeasurementPass::LargeLocality, 1, 512 * Constants::BYTES_PER_MB, 0, 0, 200, 95.0},
+      {TlbMeasurementPass::LargeLocality, 1, 512 * Constants::BYTES_PER_MB, 1, 0, 201, 96.0},
+  };
   TlbBoundaryDetection l1_boundary;
   l1_boundary.detected = true;
   l1_boundary.boundary_index = 0;
@@ -130,6 +141,8 @@ TEST(JsonSchemaTest, TlbAnalysisExporterIncludesModeAndCoreCounts) {
       1,
       1,
       true,
+      sweep_points,
+      measurement_records,
       localities_bytes,
       sweep_loop_latencies_ns,
       p50_latency_ns,
@@ -163,7 +176,11 @@ TEST(JsonSchemaTest, TlbAnalysisExporterIncludesModeAndCoreCounts) {
   EXPECT_EQ(output_json[JsonKeys::CONFIGURATION][JsonKeys::EFFICIENCY_CORES], 6);
   EXPECT_EQ(output_json[JsonKeys::CONFIGURATION]["schema_version"], 2);
   EXPECT_EQ(output_json[JsonKeys::CONFIGURATION]["methodology_version"],
-            "locality-sweep-v1-guardrails");
+            "locality-sweep-v2-balanced-rounds");
+  EXPECT_EQ(output_json[JsonKeys::CONFIGURATION]["seed"], 12345);
+  EXPECT_EQ(output_json[JsonKeys::CONFIGURATION]["seed_source"], "user");
+  EXPECT_EQ(output_json[JsonKeys::CONFIGURATION]["schedule_policy"],
+            "seeded-cyclic-latin");
   EXPECT_EQ(output_json[JsonKeys::CONFIGURATION]["latency_chain_mode_requested"], "auto");
   EXPECT_TRUE(output_json[JsonKeys::CONFIGURATION].contains(JsonKeys::LATENCY_CHAIN_MODE));
   EXPECT_EQ(output_json[JsonKeys::CONFIGURATION][JsonKeys::LATENCY_CHAIN_MODE], "random-box");
@@ -177,9 +194,17 @@ TEST(JsonSchemaTest, TlbAnalysisExporterIncludesModeAndCoreCounts) {
   EXPECT_EQ(output_json["tlb_analysis"]["status"], "complete");
   EXPECT_EQ(output_json["tlb_analysis"]["planned_points"], 1);
   EXPECT_EQ(output_json["tlb_analysis"]["measured_points"], 1);
+  EXPECT_EQ(output_json["tlb_analysis"]["planned_measurements"], 2);
+  EXPECT_EQ(output_json["tlb_analysis"]["completed_measurements"], 2);
   EXPECT_TRUE(output_json["tlb_analysis"]["conclusions_valid"]);
+  EXPECT_EQ(output_json["tlb_analysis"]["measurement_records"].size(), 4u);
+  EXPECT_EQ(output_json["tlb_analysis"]["measurement_records"][0]["pass"], "base");
+  EXPECT_EQ(output_json["tlb_analysis"]["sweep"][0]["requested_pages"], 1);
+  EXPECT_EQ(output_json["tlb_analysis"]["sweep"][0]["measurements"].size(), 2u);
+  EXPECT_EQ(output_json["tlb_analysis"]["sweep"][0]["measurements"][1]["round_index"], 1);
   EXPECT_TRUE(output_json["tlb_analysis"].contains("large_locality_latency_delta"));
   EXPECT_DOUBLE_EQ(output_json["tlb_analysis"]["large_locality_latency_delta"]["delta_ns"], 80.5);
+  EXPECT_EQ(output_json["tlb_analysis"]["large_locality_latency_delta"]["measurements"].size(), 2u);
   EXPECT_TRUE(output_json["tlb_analysis"]["page_walk_penalty"]["deprecated"]);
   EXPECT_EQ(output_json["tlb_analysis"]["page_walk_penalty"]["replacement"],
             "large_locality_latency_delta");
@@ -196,6 +221,12 @@ TEST(JsonSchemaTest, TlbAnalysisExporterOmitsPageWalkPenaltyWhenComparisonIncomp
   const std::vector<std::vector<double>> sweep_loop_latencies_ns = {{15.0, 15.1}};
   const std::vector<double> p50_latency_ns = {15.0};
   const std::vector<double> page_walk_comparison_loop_latencies_ns;
+  const std::vector<TlbSweepPoint> sweep_points = {{
+      0, 1, 1, 16 * Constants::BYTES_PER_KB, 64, 256, "base",
+      16 * Constants::BYTES_PER_KB, 16 * Constants::BYTES_PER_KB}};
+  const std::vector<TlbMeasurementRecord> measurement_records = {
+      {TlbMeasurementPass::Base, 0, 16 * Constants::BYTES_PER_KB, 0, 0, 100, 15.0},
+  };
   const TlbBoundaryDetection l1_boundary;
   const TlbBoundaryDetection l2_boundary;
   const PrivateCacheKneeDetection private_cache_knee;
@@ -219,6 +250,8 @@ TEST(JsonSchemaTest, TlbAnalysisExporterOmitsPageWalkPenaltyWhenComparisonIncomp
       2,
       1,
       false,
+      sweep_points,
+      measurement_records,
       localities_bytes,
       sweep_loop_latencies_ns,
       p50_latency_ns,

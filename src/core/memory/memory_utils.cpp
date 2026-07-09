@@ -28,6 +28,7 @@
 #include <vector>
 #include <string>
 #include <numeric>   // Needed for std::iota
+#include <optional>
 #include <random>    // Needed for std::random_device, std::mt19937_64
 #include <algorithm> // Needed for std::shuffle
 #include <cstring>   // Needed for memset
@@ -214,20 +215,22 @@ bool latency_chain_mode_uses_locality(LatencyChainMode mode) {
  * @param[in]     tlb_locality_bytes Optional locality window in bytes.
  *                             0 = global random chain. >0 = random within local windows,
  *                             then randomized window order.
+ * @param[in]     deterministic_seed Optional reproducible shuffle seed.
  *
  * @return EXIT_SUCCESS (0) on success
  * @return EXIT_FAILURE (1) if buffer is null, stride is zero, or buffer is too small
  *
  * @note The buffer must be large enough to hold at least 2 pointers at the given stride.
- * @note Uses std::random_device and std::mt19937_64 for high-quality randomization.
+ * @note Uses std::random_device by default; an explicit seed makes chain order reproducible.
  * @note All pointer locations are bounds-checked to prevent buffer overruns.
  *
  * @see initialize_buffers() for buffer initialization
  */
-int setup_latency_chain(void *buffer, size_t buffer_size, size_t stride,
-                        size_t tlb_locality_bytes,
-                        LatencyChainDiagnostics* diagnostics,
-                        LatencyChainMode mode)
+static int setup_latency_chain_impl(void *buffer, size_t buffer_size, size_t stride,
+                                    size_t tlb_locality_bytes,
+                                    LatencyChainDiagnostics* diagnostics,
+                                    LatencyChainMode mode,
+                                    std::optional<uint64_t> deterministic_seed)
 {
     if (diagnostics != nullptr) {
         diagnostics->pointer_count = 0;
@@ -285,8 +288,13 @@ int setup_latency_chain(void *buffer, size_t buffer_size, size_t stride,
     std::iota(indices.begin(), indices.end(), 0);
 
     // Initialize random number generator.
-    std::random_device rd;
-    std::mt19937_64 g(rd());
+    std::mt19937_64 g;
+    if (deterministic_seed.has_value()) {
+        g.seed(*deterministic_seed);
+    } else {
+        std::random_device rd;
+        g.seed(rd());
+    }
     if (effective_mode == LatencyChainMode::GlobalRandom) {
         // Randomly shuffle the full index space.
         std::shuffle(indices.begin(), indices.end(), g);
@@ -363,6 +371,23 @@ int setup_latency_chain(void *buffer, size_t buffer_size, size_t stride,
     }
     
     return EXIT_SUCCESS;
+}
+
+int setup_latency_chain(void* buffer, size_t buffer_size, size_t stride,
+                        size_t tlb_locality_bytes,
+                        LatencyChainDiagnostics* diagnostics,
+                        LatencyChainMode mode) {
+    return setup_latency_chain_impl(buffer, buffer_size, stride, tlb_locality_bytes,
+                                    diagnostics, mode, std::nullopt);
+}
+
+int setup_latency_chain(void* buffer, size_t buffer_size, size_t stride,
+                        size_t tlb_locality_bytes,
+                        LatencyChainDiagnostics* diagnostics,
+                        LatencyChainMode mode,
+                        uint64_t deterministic_seed) {
+    return setup_latency_chain_impl(buffer, buffer_size, stride, tlb_locality_bytes,
+                                    diagnostics, mode, deterministic_seed);
 }
 
 /**

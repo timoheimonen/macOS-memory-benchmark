@@ -21,6 +21,7 @@
 #include <vector>
 
 #include "benchmark/tlb_analysis.h"
+#include "benchmark/tlb_sweep_planner.h"
 #include "core/config/constants.h"
 
 TEST(AnalysisTest, DetectBoundaryFindsL1Transition) {

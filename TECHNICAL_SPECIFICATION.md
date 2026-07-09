@@ -117,7 +117,7 @@ Configuration state is represented by `BenchmarkConfig` (`src/core/config/config
 - Parser may throw internally (`std::stoll`/validation) but converts to return-code failures at function boundary.
 - Help (`-h`, `--help`) prints usage and exits successfully.
 - `--latency-chain-mode` accepts string values and resolves to `LatencyChainMode` enum.
-- `--analyze-tlb` uses an early dedicated parse branch in `argument_parser.cpp`. It only allows optional `--output`, `--latency-stride-bytes`, `--latency-chain-mode`, `--tlb-density`, `--sweep`, and `--sweep-max-runs`. TLB sweep supports `latency-stride-bytes`, `latency-chain-mode`, and `tlb-density`; `global-random` chain mode is rejected. Full methodology and JSON contract: [TLB_ANALYSIS_WHITEPAPER.md](TLB_ANALYSIS_WHITEPAPER.md).
+- `--analyze-tlb` uses an early dedicated parse branch in `argument_parser.cpp`. It only allows optional `--output`, `--latency-stride-bytes`, `--latency-chain-mode`, `--tlb-density`, `--seed`, `--sweep`, and `--sweep-max-runs`. TLB sweep supports `latency-stride-bytes`, `latency-chain-mode`, and `tlb-density`; `global-random` chain mode is rejected. One generated or user-provided seed drives the pure sweep planner, seeded cyclic Latin round scheduler, derived task seeds, and standalone TLB chain permutations. Full methodology and JSON contract: [TLB_ANALYSIS_WHITEPAPER.md](TLB_ANALYSIS_WHITEPAPER.md).
 - `--analyze-core2core` uses dedicated mode parsing (outside `argument_parser.cpp`) and only allows optional `--output`, `--count`, `--latency-samples`, `--sweep`, and `--sweep-max-runs`. Core-to-core sweep supports `count` and `latency-samples`. Full methodology and JSON contract: [CORE_TO_CORE_WHITEPAPER.md](CORE_TO_CORE_WHITEPAPER.md).
 
 ### 6.2 Validation behavior (`config_validator.cpp`)
@@ -479,6 +479,10 @@ For narrow changes, prefer targeted `gtest` filters via `./test_runner --gtest_f
   - `src/benchmark/benchmark_executor.cpp`
   - `src/benchmark/bandwidth_tests.cpp`
   - `src/benchmark/latency_tests.cpp`
+- Standalone TLB planning and scheduling:
+  - `src/benchmark/tlb_sweep_planner.cpp`
+  - `src/benchmark/tlb_measurement_scheduler.cpp`
+  - `src/benchmark/tlb_analysis.cpp`
 - Pattern benchmark:
   - `src/pattern_benchmark/pattern_coordinator.cpp`
   - `src/pattern_benchmark/output.cpp`
