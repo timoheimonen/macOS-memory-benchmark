@@ -122,12 +122,16 @@ int save_tlb_analysis_to_json(const TlbAnalysisJsonContext& context) {
   nlohmann::ordered_json json_output;
   json_output[JsonKeys::CONFIGURATION] = {
       {JsonKeys::MODE, Constants::TLB_ANALYSIS_JSON_MODE_NAME},
+      {"schema_version", 2},
+      {"methodology_version", "locality-sweep-v1-guardrails"},
       {JsonKeys::CPU_NAME, context.cpu_name},
+      {JsonKeys::MACOS_VERSION, context.config.macos_version},
       {JsonKeys::PERFORMANCE_CORES, context.perf_cores},
       {JsonKeys::EFFICIENCY_CORES, context.eff_cores},
       {JsonKeys::PAGE_SIZE_BYTES, context.page_size_bytes},
       {JsonKeys::L1_CACHE_SIZE_BYTES, context.l1_cache_size_bytes},
       {JsonKeys::LATENCY_STRIDE_BYTES, context.stride_bytes},
+      {"latency_chain_mode_requested", latency_chain_mode_to_string(context.config.latency_chain_mode)},
       {JsonKeys::LATENCY_CHAIN_MODE, latency_chain_mode_to_string(effective_chain_mode)},
       {JsonKeys::TLB_DENSITY, tlb_sweep_density_to_string(context.config.tlb_sweep_density)},
       {JsonKeys::LATENCY_SAMPLE_COUNT, static_cast<int>(context.loops_per_point)},
@@ -149,39 +153,67 @@ int save_tlb_analysis_to_json(const TlbAnalysisJsonContext& context) {
   }
 
   nlohmann::ordered_json tlb_json;
+  tlb_json["status"] = context.analysis_status;
+  tlb_json["planned_points"] = context.planned_points;
+  tlb_json["measured_points"] = context.measured_points;
+  tlb_json["conclusions_valid"] = context.conclusions_valid;
   tlb_json["sweep"] = sweep_json;
-  tlb_json["l1_tlb_detection"] = build_tlb_boundary_json(context.l1_boundary, context.l1_entries);
-  tlb_json["l2_tlb_detection"] = build_tlb_boundary_json(context.l2_boundary, context.l2_entries);
-  tlb_json["private_cache_knee"] = build_private_cache_knee_json(context.private_cache_knee,
-                                                                  context.private_cache_interference_elevated,
-                                                                  context.private_cache_to_l1_distance_bytes,
-                                                                  context.private_cache_to_l1_distance_pages);
+  if (context.conclusions_valid) {
+    tlb_json["l1_tlb_detection"] = build_tlb_boundary_json(context.l1_boundary, context.l1_entries);
+    tlb_json["l2_tlb_detection"] = build_tlb_boundary_json(context.l2_boundary, context.l2_entries);
+    tlb_json["private_cache_knee"] = build_private_cache_knee_json(context.private_cache_knee,
+                                                                    context.private_cache_interference_elevated,
+                                                                    context.private_cache_to_l1_distance_bytes,
+                                                                    context.private_cache_to_l1_distance_pages);
+  } else {
+    const nlohmann::ordered_json suppressed = {
+        {"detected", false},
+        {"reason", "analysis incomplete; conclusions suppressed"}};
+    tlb_json["l1_tlb_detection"] = suppressed;
+    tlb_json["l2_tlb_detection"] = suppressed;
+    tlb_json["private_cache_knee"] = suppressed;
+  }
 
-  if (context.l1_boundary.detected) {
+  if (context.conclusions_valid && context.l1_boundary.detected) {
     tlb_json["l1_tlb_detection"]["inferred_entries_min"] = context.l1_entries_min;
     tlb_json["l1_tlb_detection"]["inferred_entries_max"] = context.l1_entries_max;
   }
-  if (context.l2_boundary.detected) {
+  if (context.conclusions_valid && context.l2_boundary.detected) {
     tlb_json["l2_tlb_detection"]["inferred_entries_min"] = context.l2_entries_min;
     tlb_json["l2_tlb_detection"]["inferred_entries_max"] = context.l2_entries_max;
   }
 
-  tlb_json["page_walk_penalty"] = {
-      {"available", context.page_walk_comparison_completed},
+  const bool large_locality_delta_available =
+      context.conclusions_valid && context.page_walk_comparison_completed;
+  nlohmann::ordered_json large_locality_delta = {
+      {"available", large_locality_delta_available},
       {"baseline_locality_kb", context.page_walk_baseline_locality_bytes / Constants::BYTES_PER_KB},
       {"comparison_locality_mb", context.page_walk_comparison_locality_bytes / Constants::BYTES_PER_MB},
-      {"baseline_p50_ns", context.page_walk_baseline_ns}};
+      {"baseline_p50_ns", context.page_walk_baseline_ns},
+      {"interpretation", "large-locality latency delta; not an isolated page-table-walk cost"}};
 
-  if (context.page_walk_comparison_completed) {
-    tlb_json["page_walk_penalty"]["comparison_loop_latencies_ns"] =
+  if (large_locality_delta_available) {
+    large_locality_delta["comparison_loop_latencies_ns"] =
         context.page_walk_comparison_loop_latencies_ns;
-    tlb_json["page_walk_penalty"]["comparison_p50_ns"] = context.page_walk_comparison_p50_ns;
-    tlb_json["page_walk_penalty"]["penalty_ns"] = context.page_walk_penalty_ns;
+    large_locality_delta["comparison_p50_ns"] = context.page_walk_comparison_p50_ns;
+    large_locality_delta["delta_ns"] = context.page_walk_penalty_ns;
+  } else if (!context.conclusions_valid) {
+    large_locality_delta["reason"] = "analysis incomplete; delta suppressed";
   } else if (!context.can_measure_page_walk_penalty) {
-    tlb_json["page_walk_penalty"]["reason"] = "requires at least 512 MB analysis buffer";
+    large_locality_delta["reason"] = "requires at least 512 MB analysis buffer";
   } else {
-    tlb_json["page_walk_penalty"]["reason"] = "comparison measurement did not complete";
+    large_locality_delta["reason"] = "comparison measurement did not complete";
   }
+  tlb_json["large_locality_latency_delta"] = large_locality_delta;
+
+  nlohmann::ordered_json deprecated_page_walk_penalty = large_locality_delta;
+  deprecated_page_walk_penalty["deprecated"] = true;
+  deprecated_page_walk_penalty["replacement"] = "large_locality_latency_delta";
+  if (large_locality_delta_available) {
+    deprecated_page_walk_penalty.erase("delta_ns");
+    deprecated_page_walk_penalty["penalty_ns"] = context.page_walk_penalty_ns;
+  }
+  tlb_json["page_walk_penalty"] = deprecated_page_walk_penalty;
 
   json_output["tlb_analysis"] = tlb_json;
   json_output[JsonKeys::TIMESTAMP] = build_utc_timestamp();

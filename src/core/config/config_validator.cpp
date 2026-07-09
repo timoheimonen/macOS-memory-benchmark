@@ -40,11 +40,12 @@
 #include "core/config/constants.h"
 #include "core/system/system_info.h"
 #include "output/console/messages/messages_api.h"
-#include <iostream>
-#include <unistd.h>  // getpagesize
-#include <cstdint>   // uintptr_t
-#include <limits>
 #include <cstdlib>
+#include <cstdint>   // uintptr_t
+#include <iostream>
+#include <limits>
+#include <set>
+#include <unistd.h>  // getpagesize
 
 namespace {
 
@@ -60,6 +61,38 @@ size_t calculate_sweep_run_count(const BenchmarkConfig& config) {
     run_count *= spec.values.size();
   }
   return run_count;
+}
+
+int validate_analyze_tlb_stride(size_t stride_bytes, size_t page_size_bytes) {
+  if (stride_bytes == 0) {
+    std::cerr << Messages::error_prefix()
+              << Messages::error_latency_stride_invalid(0, 1, std::numeric_limits<long long>::max())
+              << std::endl;
+    return EXIT_FAILURE;
+  }
+
+  if ((stride_bytes % sizeof(uintptr_t)) != 0) {
+    std::cerr << Messages::error_prefix()
+              << Messages::error_latency_stride_alignment(stride_bytes, sizeof(uintptr_t))
+              << std::endl;
+    return EXIT_FAILURE;
+  }
+
+  if (stride_bytes > page_size_bytes) {
+    std::cerr << Messages::error_prefix()
+              << Messages::error_analyze_tlb_stride_exceeds_page(stride_bytes, page_size_bytes)
+              << std::endl;
+    return EXIT_FAILURE;
+  }
+
+  if ((page_size_bytes % stride_bytes) != 0) {
+    std::cerr << Messages::error_prefix()
+              << Messages::error_analyze_tlb_stride_must_divide_page(stride_bytes, page_size_bytes)
+              << std::endl;
+    return EXIT_FAILURE;
+  }
+
+  return EXIT_SUCCESS;
 }
 
 bool sweep_parameter_allowed(const BenchmarkConfig& config, SweepParameter parameter) {
@@ -133,6 +166,8 @@ std::string mode_name_for_sweep(const BenchmarkConfig& config) {
  * Callers should check return value and handle EXIT_FAILURE appropriately.
  */
 int validate_config(BenchmarkConfig& config) {
+  const size_t page_size = static_cast<size_t>(getpagesize());
+
   if (config.run_sweep) {
     if (config.sweep_specs.empty()) {
       std::cerr << Messages::error_prefix() << Messages::error_sweep_requires_parameter() << std::endl;
@@ -144,7 +179,14 @@ int validate_config(BenchmarkConfig& config) {
     }
 
     const std::string mode_name = mode_name_for_sweep(config);
+    std::set<SweepParameter> seen_parameters;
     for (const SweepSpec& spec : config.sweep_specs) {
+      if (!seen_parameters.insert(spec.parameter).second) {
+        std::cerr << Messages::error_prefix()
+                  << Messages::error_duplicate_sweep_parameter(spec.parameter_name)
+                  << std::endl;
+        return EXIT_FAILURE;
+      }
       if (!sweep_parameter_allowed(config, spec.parameter)) {
         std::cerr << Messages::error_prefix()
                   << Messages::error_sweep_parameter_not_allowed(spec.parameter_name, mode_name)
@@ -161,6 +203,20 @@ int validate_config(BenchmarkConfig& config) {
           }
         }
       }
+      if (config.analyze_tlb && spec.parameter == SweepParameter::LatencyStrideBytes) {
+        for (const SweepValue& value : spec.values) {
+          if (value.integer_value <= 0) {
+            std::cerr << Messages::error_prefix()
+                      << Messages::error_latency_stride_invalid(
+                             value.integer_value, 1, std::numeric_limits<long long>::max())
+                      << std::endl;
+            return EXIT_FAILURE;
+          }
+          if (validate_analyze_tlb_stride(static_cast<size_t>(value.integer_value), page_size) != EXIT_SUCCESS) {
+            return EXIT_FAILURE;
+          }
+        }
+      }
     }
 
     const size_t sweep_run_count = calculate_sweep_run_count(config);
@@ -173,10 +229,8 @@ int validate_config(BenchmarkConfig& config) {
   }
 
   if (config.analyze_tlb) {
-    return EXIT_SUCCESS;
+    return validate_analyze_tlb_stride(config.latency_stride_bytes, page_size);
   }
-
-  const size_t page_size = static_cast<size_t>(getpagesize());
 
   // Error: Validate latency stride settings.
   if (config.latency_stride_bytes == 0) {

@@ -257,12 +257,14 @@ forms such as `-buffersize` or `-benchmark` are invalid.
 
 - Runs standalone TLB analysis mode only
 - Can be combined only with optional `--output <file>`, `--latency-stride-bytes <bytes>`, `--latency-chain-mode <mode>`, `--tlb-density <low|medium|high>`, `--sweep <key=...>`, and `--sweep-max-runs <count>`
-- Uses latency stride from `--latency-stride-bytes` (same default as standard latency mode), performs a denser base locality sweep (`29` canonical points, stride-clamped to `max(16KB, 2*stride)` up to `256MB`), then automatically inserts finer locality points near detected knees/boundaries
+- Uses latency stride from `--latency-stride-bytes` (same default as standard latency mode). Analyze-TLB stride must not exceed and must exactly divide the system page size. It performs a denser base locality sweep (`29` canonical points, stride-clamped to `max(16KB, 2*stride)` up to `256MB`), then automatically inserts page-aligned locality points near detected knees/boundaries
 - Detects likely private-cache knee candidates (around the ~1MB region when present) and reports whether they may interfere with TLB boundary interpretation
 - Preserves a direct L1 candidate that overlaps the private-cache knee and marks it as ambiguous instead of silently skipping to a later boundary
 - Reports inferred L1/L2 TLB boundaries with both midpoint estimate (`inferred_entries`) and local-range estimate (`inferred_entries_min`/`inferred_entries_max`)
 - Uses adaptive boundary thresholding in addition to fixed thresholds (`>= 2.0ns`, `>= 10% baseline`): baseline loop-noise (median IQR) can raise the required step on noisy runs to reduce false positives
-- Separately computes page-walk penalty as `P50(512MB) - P50(effective baseline locality)` when analysis buffer is at least `512MB`
+- Separately computes a large-locality latency delta as `P50(512MB) - P50(effective baseline locality)` when the analysis buffer is at least `512MB`. This is not claimed to isolate page-table-walk cost
+- Emits explicit `complete`, `interrupted`, or `partial` status. Boundary conclusions are suppressed unless the planned sweep completed
+- A user interrupt remains a successful graceful-shutdown return when partial JSON can be written; consumers must use `status` and `conclusions_valid` rather than the process code to accept conclusions
 - Detailed methodology and JSON contract: `TLB_ANALYSIS_WHITEPAPER.md`
 
 #### `--tlb-density <level>`
@@ -299,6 +301,7 @@ forms such as `-buffersize` or `-benchmark` are invalid.
 - Default: `256`
 - Must be `> 0`
 - Must be a multiple of 8 bytes (pointer size on Apple Silicon)
+- With `--analyze-tlb`, must not exceed and must exactly divide the system page size. This temporary guard remains until the planned page-native TLB chain is implemented
 - Use smaller values (for example `64`) to increase same-page cache-line activity and reduce TLB sensitivity
 
 #### `--latency-chain-mode <mode>`
@@ -358,6 +361,9 @@ forms such as `-buffersize` or `-benchmark` are invalid.
 - Maximum number of generated sweep combinations
 - Default: `256`
 - Prevents accidental very large Cartesian sweeps
+- Every generated configuration is validated before the first run
+- Combined JSON is atomically checkpointed after each completed run and records `status`, `planned_runs`, `completed_runs`, and `conclusions_valid`
+- A parameter key may appear only once in one sweep command
 
 #### `-h`, `--help`
 
@@ -513,7 +519,8 @@ Quick first checks in the output file:
 
 - `tlb_analysis.l1_tlb_detection.boundary_locality_kb`
 - `tlb_analysis.l2_tlb_detection.boundary_locality_kb`
-- `tlb_analysis.page_walk_penalty.penalty_ns`
+- `tlb_analysis.status` and `tlb_analysis.conclusions_valid`
+- `tlb_analysis.large_locality_latency_delta.delta_ns`
 
 ### Custom cache target
 
@@ -642,6 +649,10 @@ Note: The `configuration` block includes fields such as `latency_chain_mode` (th
 
 ```json
 {
+  "status": "complete",
+  "planned_runs": 6,
+  "completed_runs": 6,
+  "conclusions_valid": true,
   "configuration": {
     "mode": "sweep",
     "base_mode": "benchmark",
@@ -757,16 +768,24 @@ When `--latency-stride-bytes` is explicitly set (with a non-default value), late
 ### TLB analysis JSON (analyze mode)
 
 When run with `--analyze-tlb --output tlb_analysis.json`, the payload includes a dedicated `tlb_analysis` block.
-Example below uses real values extracted from `results/0.53.8/MacMiniM4_analyze-tlb-chain-mode-random-box.json`:
+The following is an illustrative schema-version-2 payload; its latency values are adapted from the historical
+`results/0.53.8/MacMiniM4_analyze-tlb-chain-mode-random-box.json` run rather than presented as a newly generated
+version-0.56.1 result:
 
 ```json
 {
   "configuration": {
     "mode": "analyze_tlb",
+    "schema_version": 2,
+    "methodology_version": "locality-sweep-v1-guardrails",
     "latency_stride_bytes": 64,
     "buffer_size_mb": 1024
   },
   "tlb_analysis": {
+    "status": "complete",
+    "planned_points": 29,
+    "measured_points": 29,
+    "conclusions_valid": true,
     "sweep": [
       {
         "locality_bytes": 16384,
@@ -811,20 +830,24 @@ Example below uses real values extracted from `results/0.53.8/MacMiniM4_analyze-
       "inferred_entries_min": 384,
       "inferred_entries_max": 512
     },
-    "page_walk_penalty": {
+    "large_locality_latency_delta": {
       "available": true,
       "baseline_locality_kb": 16,
       "baseline_p50_ns": 15.070645833333334,
       "comparison_locality_mb": 512,
       "comparison_loop_latencies_ns": [95.34058666666667, 95.126475, 95.072195],
       "comparison_p50_ns": 95.179255833333334,
-      "penalty_ns": 80.10860949999999
+      "delta_ns": 80.10860949999999,
+      "interpretation": "large-locality latency delta; not an isolated page-table-walk cost"
     }
   }
 }
 ```
 
-If the 512MB page-walk comparison cannot run or is interrupted, `page_walk_penalty.available` is `false` and `comparison_p50_ns`, `comparison_loop_latencies_ns`, and `penalty_ns` are omitted. The `reason` field explains whether the selected analysis buffer was too small or the comparison measurement did not complete.
+If the 512MB comparison cannot run, `large_locality_latency_delta.available` is `false` and comparison values are omitted.
+The former `page_walk_penalty` object remains as a deprecated compatibility alias for one minor-version window; it
+contains `deprecated: true` and `replacement: "large_locality_latency_delta"`. When analysis is interrupted,
+`conclusions_valid` is `false`, boundary objects contain a suppression reason, and no delta is published.
 
 ### Pattern keys (current)
 
@@ -859,8 +882,8 @@ jq '.patterns.random.bandwidth.read_gb_s.statistics.average' patterns.json
 # TLB L1 boundary locality (KB)
 jq '.tlb_analysis.l1_tlb_detection.boundary_locality_kb' tlb_analysis.json
 
-# TLB page-walk penalty (ns)
-jq '.tlb_analysis.page_walk_penalty.penalty_ns' tlb_analysis.json
+# Standalone TLB large-locality latency delta (ns)
+jq '.tlb_analysis.large_locality_latency_delta.delta_ns' tlb_analysis.json
 ```
 
 ---

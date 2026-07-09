@@ -160,6 +160,58 @@ TEST(ConfigTest, ValidateAnalyzeTlbSweepRejectsGlobalRandom) {
   EXPECT_EQ(result, EXIT_FAILURE);
 }
 
+TEST(ConfigTest, ValidateAnalyzeTlbRejectsStrideLargerThanPage) {
+  BenchmarkConfig config;
+  config.analyze_tlb = true;
+  config.latency_stride_bytes = static_cast<size_t>(getpagesize()) * 2;
+
+  EXPECT_EQ(validate_config(config), EXIT_FAILURE);
+}
+
+TEST(ConfigTest, ValidateAnalyzeTlbRejectsStrideThatDoesNotDividePage) {
+  BenchmarkConfig config;
+  config.analyze_tlb = true;
+  config.latency_stride_bytes = 136;
+
+  ASSERT_EQ(136u % sizeof(uintptr_t), 0u);
+  ASSERT_NE(static_cast<size_t>(getpagesize()) % config.latency_stride_bytes, 0u);
+  EXPECT_EQ(validate_config(config), EXIT_FAILURE);
+}
+
+TEST(ConfigTest, ValidateAnalyzeTlbSweepRejectsInvalidStrideBeforeExecution) {
+  BenchmarkConfig config;
+  config.analyze_tlb = true;
+  config.run_sweep = true;
+  config.output_file = "sweep.json";
+  SweepValue value;
+  value.raw_value = "136";
+  value.integer_value = 136;
+  config.sweep_specs = {
+      {SweepParameter::LatencyStrideBytes, "latency-stride-bytes", {value}},
+  };
+
+  EXPECT_EQ(validate_config(config), EXIT_FAILURE);
+}
+
+TEST(ConfigTest, ValidateSweepRejectsDuplicateParameter) {
+  BenchmarkConfig config;
+  config.analyze_tlb = true;
+  config.run_sweep = true;
+  config.output_file = "sweep.json";
+  SweepValue first;
+  first.raw_value = "64";
+  first.integer_value = 64;
+  SweepValue second;
+  second.raw_value = "128";
+  second.integer_value = 128;
+  config.sweep_specs = {
+      {SweepParameter::LatencyStrideBytes, "latency-stride-bytes", {first}},
+      {SweepParameter::LatencyStrideBytes, "latency-stride-bytes", {second}},
+  };
+
+  EXPECT_EQ(validate_config(config), EXIT_FAILURE);
+}
+
 // Test parsing custom cache size
 // The code parses --cache-size in a first pass, then skips it in the second pass
 // (since it was already parsed). This allows --cache-size to work correctly.
@@ -845,12 +897,12 @@ TEST(ConfigTest, ValidateConfigAllowsGlobalLatencyChainModeWithoutLocality) {
   EXPECT_EQ(result, EXIT_SUCCESS);
 }
 
-TEST(ConfigTest, ValidateConfigAnalyzeTlbBypassesRegularValidation) {
+TEST(ConfigTest, ValidateConfigAnalyzeTlbSkipsUnrelatedStandardModeRules) {
   BenchmarkConfig config;
   config.analyze_tlb = true;
   config.only_bandwidth = true;
   config.only_latency = true;
-  config.latency_stride_bytes = 0;
+  config.latency_stride_bytes = Constants::LATENCY_STRIDE_BYTES;
 
   int result = validate_config(config);
   EXPECT_EQ(result, EXIT_SUCCESS);

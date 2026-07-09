@@ -293,3 +293,24 @@ TEST(AnalysisTest, DetectBoundaryLastPointStrongStepGetsMediumConfidence) {
   EXPECT_TRUE(boundary.persistent_jump);
   EXPECT_NE(boundary.confidence, "Low");
 }
+
+TEST(AnalysisTest, RefinementPointsArePageAlignedAndInsideBracket) {
+  const size_t page_size = 16 * Constants::BYTES_PER_KB;
+  const std::vector<size_t> localities = {
+      page_size,
+      2 * page_size,
+      4 * page_size,
+  };
+
+  const std::vector<size_t> points =
+      build_tlb_refinement_points(localities, 1, page_size, 4 * page_size, page_size);
+
+  ASSERT_FALSE(points.empty());
+  EXPECT_TRUE(std::is_sorted(points.begin(), points.end()));
+  EXPECT_EQ(std::adjacent_find(points.begin(), points.end()), points.end());
+  for (size_t point : points) {
+    EXPECT_EQ(point % page_size, 0u);
+    EXPECT_GT(point, page_size);
+    EXPECT_LT(point, 4 * page_size);
+  }
+}

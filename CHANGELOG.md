@@ -7,10 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.56.1] - Unreleased
 
+### Added
+  - **Explicit TLB-analysis completion metadata**: Standalone `--analyze-tlb` JSON includes `status`, `planned_points`, `measured_points`, and `conclusions_valid`. Combined sweep JSON includes `status`, `planned_runs`, `completed_runs`, and `conclusions_valid`, including a `failed` checkpoint state when a sweep run fails.
+  - **Crash-resilient sweep checkpoints**: Combined sweep output is atomically rewritten after every completed run, preserving finished results when a later run fails or the sweep is interrupted.
+  - **Standalone TLB JSON schema version 2**: TLB configuration metadata identifies `schema_version: 2`, methodology version, requested and effective chain modes, and macOS version. The analyzer plot example accepts both the current schema and historical result files.
+
+### Changed
+  - **Page-consistent standalone TLB locality grid**: `--analyze-tlb` requires a non-zero, pointer-aligned stride that does not exceed and exactly divides the system page size. Fine-sweep refinement points are page-aligned and deduplicated so entry estimates are not derived from sub-page locality boundaries.
+  - **Neutral large-locality comparison terminology**: The standalone 512 MB comparison is reported as `large_locality_latency_delta` and explicitly described as a locality delta rather than an isolated page-table-walk cost. `page_walk_penalty` remains as a deprecated compatibility alias with a replacement field for one compatibility window.
+  - **TLB and sweep documentation synchronized with the shipped contract**: CLI help, README, manual, TLB analysis whitepaper, JSON examples, and the analyzer plot script document stride constraints, sweep support, completion states, checkpoints, conclusion suppression, schema version 2, and compatibility fields.
+
 ### Fixed
   - **Read benchmark checksum now folds the full vector accumulator**: `memory_read_loop_asm` now includes both 64-bit lanes of the final NEON XOR accumulator before combining the byte tail, so the returned checksum covers all loaded vector data while preserving the benchmark access pattern.
-  - **Direct TLB analysis now uses benchmark execution preparation**: `--analyze-tlb` now applies the same main-thread QoS elevation and benchmark signal-mask setup as standard benchmark mode before measurement starts, with signal-mask restoration handled on all prepared return paths.
-  - **`--analyze-tlb` documentation now matches sweep support**: User docs, whitepaper, compatibility matrix, capabilities overview, project structure, and technical specification now consistently document `--analyze-tlb` support for `--sweep latency-stride-bytes=...`, `--sweep latency-chain-mode=...`, `--sweep tlb-density=...`, and `--sweep-max-runs`.
+  - **Direct TLB execution preparation and validation**: `--analyze-tlb` applies main-thread QoS elevation and benchmark signal-mask setup before measurement, restores the signal mask on prepared return paths, and validates its configuration before allocating benchmark resources.
+  - **Complete sweep preflight validation**: Duplicate sweep parameter keys are rejected, and every generated Cartesian configuration is validated before the first benchmark run. Invalid TLB stride values therefore fail without creating a partial benchmark result.
+  - **Unambiguous incomplete TLB results**: Interrupted or partial standalone analyses retain completed measurements but suppress private-cache, L1/L2, and large-locality conclusions in console and JSON output. Empty interrupted sweeps serialize safely instead of being mistaken for complete analyses.
 
 ## [0.56.0] - 2026-04-30
 

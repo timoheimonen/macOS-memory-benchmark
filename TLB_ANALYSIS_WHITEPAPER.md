@@ -9,7 +9,7 @@ The goal is to provide a reproducible, implementation-accurate description of:
 - measurement workflow,
 - boundary detection logic,
 - confidence scoring,
-- derived metrics (entry reach and page-walk penalty),
+- derived metrics (entry reach and a large-locality latency delta),
 - JSON verification payload.
 
 This is an implementation whitepaper, not a generic architecture theory paper.
@@ -54,6 +54,16 @@ memory_benchmark --analyze-tlb --sweep latency-stride-bytes=64,128 --sweep tlb-d
 
 If `--latency-stride-bytes` is not provided, the default stride is **256 bytes**, which matches the standard latency mode default (`Constants::LATENCY_STRIDE_BYTES`).
 
+As a temporary correctness guard for the locality-sweep-v1 methodology, analyze-TLB stride must:
+
+- be pointer-size aligned,
+- be no larger than the system page size,
+- divide the system page size exactly.
+
+These rules ensure that nominal locality windows map to a uniform integral number of pointer slots per page. They apply
+to direct options and every stride value in a parameter sweep. The complete Cartesian sweep is validated before its
+first benchmark run.
+
 ### 3.3 Sweep Density (`--tlb-density`)
 
 Sweep density applies only to `--analyze-tlb`.
@@ -73,6 +83,9 @@ Allowed `--analyze-tlb` sweep keys:
 - `tlb-density`
 
 Sweep mode requires `--output <file>`. `--sweep-max-runs <count>` limits the number of generated combinations; the default guardrail is `256`.
+
+Each sweep parameter key may appear only once. The combined JSON is atomically checkpointed after each completed run
+and records top-level `status`, `planned_runs`, `completed_runs`, and `conclusions_valid` fields.
 
 `--sweep latency-chain-mode=...` follows the same chain-mode rule as direct `--latency-chain-mode`: `global-random` is rejected for `--analyze-tlb`.
 
@@ -149,7 +162,11 @@ Effective sweep start is stride-aware:
 
 The final sweep vector is deduplicated (via `std::sort` followed by `std::unique`). This prevents duplicates if `min_sweep_locality` exactly matches one of the canonical points.
 
-Separate page-walk comparison point:
+Refinement candidates are rounded down to system-page boundaries and deduplicated again. A narrow bracket can therefore
+produce fewer than seven unique refinement points; this is intentional because sub-page refinement would invalidate the
+entry-count interpretation under the current methodology.
+
+Separate large-locality comparison point:
 
 - `512MB` (run only when selected buffer is at least `512MB`)
 
@@ -265,17 +282,24 @@ For detected boundaries:
 
 Point estimate and range are reported separately for L1 and L2 sections. The point estimate is intentionally the midpoint of the detected locality window, not the upper boundary edge, so the headline value does not imply more precision than the sweep grid supports.
 
-### 7.2 Page-Walk Penalty
+### 7.2 Large-Locality Latency Delta
 
-Page-walk penalty is intentionally computed independently from L1/L2 boundary step values:
+The compatibility methodology computes this delta independently from L1/L2 boundary step values:
 
-`page_walk_penalty_ns = P50(512MB) - P50(effective baseline locality)`
+`large_locality_latency_delta_ns = P50(512MB) - P50(effective baseline locality)`
 
 where:
 
 - `effective baseline locality = P50 latency of the first point in the stride-aware sweep` (i.e., `p50_latency_ns[0]`; this is measured during the main run, not a separate reference measurement)
 
-The penalty is computed as-is; a negative value indicates measurement noise (e.g., due to thermal variance or CPU frequency scaling) rather than a genuine negative penalty. If the 512MB comparison pass cannot run or is interrupted, page-walk penalty is reported unavailable and `penalty_ns` is omitted from JSON.
+The delta is computed as-is; a negative value indicates measurement noise (for example thermal variance or CPU
+frequency scaling). This comparison changes locality and address-order behavior and therefore **does not isolate a
+page-table-walk cost**. Console output uses `Large-Locality Latency Delta`, and JSON uses
+`large_locality_latency_delta.delta_ns`.
+
+The old `page_walk_penalty` object remains for one compatibility window with `deprecated: true` and
+`replacement: "large_locality_latency_delta"`. If the comparison cannot run or analysis is interrupted, the delta is
+unavailable and its numerical value is omitted.
 
 Availability rule:
 
@@ -291,7 +315,7 @@ Report always includes:
 - Fine--sweep refinement summary (added points, total points)
 - `[Private Cache Knee Detection]`
 - `[L1 TLB Detection]`
-- `[L2 TLB / Page Walk]`
+- `[L2 TLB / Large-Locality Delta]`
 
 Boundary detection sections:
 
@@ -305,8 +329,14 @@ When a boundary is **not detected**, the section reports "Not detected."
 
 Page-walk section:
 
-- When available: shows page-walk penalty in `ns`, with explicit dynamic endpoints (`baseline -> 512MB`)
+- When available: shows the large-locality latency delta in `ns`, with explicit dynamic endpoints (`baseline -> 512MB`)
 - When unavailable: shows "N/A" with the reason (e.g., buffer < 512 MB)
+- Always shows analysis status, measured/planned point counts, and whether conclusions are valid.
+- Interrupted or partial analyses suppress private-cache and L1/L2 conclusions.
+
+A user interrupt uses the existing graceful-shutdown contract and may return process success after writing partial JSON.
+Machine consumers must require `status == "complete"` and `conclusions_valid == true`; exit status alone is not a
+completeness signal.
 
 ## 9. JSON Output Contract (`--output`)
 
@@ -324,17 +354,19 @@ When `--output <file>` is provided with `--analyze-tlb` without `--sweep`, outpu
 - `configuration` contains mode and run constants:
   - CPU info, page size, L1D size, TLB guard bytes, stride
   - `latency_sample_count` (fixed at 30 loops per point)
-  - `accesses_per_sample` (fixed at 25,000,000)
+  - `accesses_per_loop` (fixed at 25,000,000)
   - **`latency_chain_mode`** (resolved chain mode used)
   - **`performance_cores`** and **`efficiency_cores`** (CPU core configuration)
   - selected buffer size and whether mlock succeeded
 
 - `tlb_analysis` contains:
+  - `status`, `planned_points`, `measured_points`, and `conclusions_valid`
   - `sweep[]` with raw `loop_latencies_ns` and per-point `p50_latency_ns`
   - `private_cache_knee` (with `detected`, `boundary_locality_kb`, `confidence`, and `may_interfere_with_tlb`)
   - `l1_tlb_detection` (with `detected`, `boundary_locality_kb`, `inferred_entries`, `inferred_entries_method`, `inferred_entries_min`, `inferred_entries_max`, `overlaps_private_cache_knee`, `confidence`, and step metadata)
   - `l2_tlb_detection` (same structure as L1)
-  - `page_walk_penalty` block (`available`, baseline/comparison metadata, raw comparison loops, `penalty_ns` when the comparison completed, otherwise `reason`)
+  - `large_locality_latency_delta` block (`available`, baseline/comparison metadata, raw comparison loops, `delta_ns` when the comparison completed, otherwise `reason`)
+  - deprecated `page_walk_penalty` compatibility alias with an explicit replacement field
 
 This payload is designed for full post-run verification and reproducibility checks.
 
@@ -353,19 +385,22 @@ When `--sweep` is used with `--analyze-tlb`, output uses the common sweep envelo
   - `result`
 
 Each `runs[].result` entry is the same single-run TLB analysis JSON payload described in section 9.1.
+The top-level sweep object also includes `status`, `planned_runs`, `completed_runs`, and `conclusions_valid`. It is
+atomically rewritten after every completed run, so a later failure or interrupt leaves a readable checkpoint.
 
-## 10. Worked Example (Apple M4)
+## 10. Historical Worked Example (Apple M4)
 
 Example file:
 
 - `results/0.53.7/MacMiniM4_analyzetlb.json`
 
-Observed fields in this sample:
+This file predates schema version 2, page-aligned refinement, completion metadata, and midpoint entry ranges. It remains
+useful only as historical latency input; it is not a byte-for-byte example of current output. Observed legacy fields:
 
 - `tlb_guard_bytes = 1048576` (`1MB`)
 - `l1_tlb_detection.boundary_locality_kb = 4096` and `inferred_entries` near the midpoint of its detected entry range
 - `l2_tlb_detection.boundary_locality_kb = 8192` and `inferred_entries` near the midpoint of its detected entry range
-- `page_walk_penalty.penalty_ns ~= 81.93`
+- legacy `page_walk_penalty.penalty_ns ~= 81.93` (now reported as a large-locality latency delta)
 
 ### Algorithm Walkthrough (M4 L1 Detection)
 
@@ -378,12 +413,15 @@ The L1 scan begins at `16KB` (min_sweep_locality with stride 64 bytes). It compu
 3. ... (continuing through `1MB`, `2MB`)
 4. At `4MB`: `baseline = avg(P50[16KB..2MB])`, `step = P50(4MB) - baseline ≥ threshold`, `locality(4MB) = 4096KB ≥ guard`, **first match** → detected at `4MB`.
 
-With a high-density sweep, a `4MB` boundary following a `3MB` prior point yields `inferred_entries_min = 192`, `inferred_entries_max = 256`, and `inferred_entries = 224` as a midpoint estimate. The upper edge (`256`) is still visible in the range and is typical for a first-level TLB on Apple M4.
+Under the current high-density grid, a `4MB` boundary following a `3MB` prior point would yield
+`inferred_entries_min = 192`, `inferred_entries_max = 256`, and `inferred_entries = 224` as a midpoint estimate. This
+calculation illustrates the current algorithm; those fields are not present in the historical 0.53.7 sample. The value
+must be treated as a methodology-dependent candidate rather than an independently verified architectural entry count.
 
 ### Limitations and Edge Cases
 
 - If the entire sweep remained below threshold (e.g., very small buffer or very large stride), L1 would report "Not detected."
-- If the 256 MB buffer fallback is used, or if the 512MB comparison pass is interrupted, `page_walk_penalty` will report `N/A` and explain why.
+- If the 256 MB buffer fallback is used, or if the 512MB comparison pass is interrupted, `large_locality_latency_delta` will report `N/A` and explain why.
 - On machines with 4 KB pages (instead of macOS's 16 KB), the same entry count would correspond to a 1 MB boundary.
 
 Interpretation note for Apple Silicon:

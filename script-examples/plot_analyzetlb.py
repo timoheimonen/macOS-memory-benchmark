@@ -162,6 +162,11 @@ def main():
   ax.grid(True, which="both", alpha=0.3)
 
   note_lines = []
+  analysis_status = str(tlb.get("status", "legacy/unknown"))
+  conclusions_valid = bool(tlb.get("conclusions_valid", True))
+  note_lines.append(f"Status: {analysis_status}")
+  if not conclusions_valid:
+    note_lines.append("Boundary conclusions suppressed")
   if l1.get("detected"):
     note_lines.append(
         f"L1: {format_kb(int(l1.get('boundary_locality_kb', 0)))}"
@@ -171,11 +176,17 @@ def main():
         f"L2: {format_kb(int(l2.get('boundary_locality_kb', 0)))}"
         f", {int(l2.get('inferred_entries', 0))} entries")
 
-  page_walk = tlb.get("page_walk_penalty", {})
-  if page_walk.get("available") and "penalty_ns" in page_walk:
-    note_lines.append(f"Page walk 16KB->512MB: {float(page_walk['penalty_ns']):.2f} ns")
+  large_locality = tlb.get("large_locality_latency_delta", {})
+  if large_locality.get("available") and "delta_ns" in large_locality:
+    note_lines.append(
+        f"Large-locality delta: {float(large_locality['delta_ns']):.2f} ns")
   else:
-    note_lines.append("Page walk 16KB->512MB: N/A")
+    legacy_page_walk = tlb.get("page_walk_penalty", {})
+    if legacy_page_walk.get("available") and "penalty_ns" in legacy_page_walk:
+      note_lines.append(
+          f"Large-locality delta (legacy): {float(legacy_page_walk['penalty_ns']):.2f} ns")
+    else:
+      note_lines.append("Large-locality delta: N/A")
 
   if note_lines:
     ax.text(0.02,

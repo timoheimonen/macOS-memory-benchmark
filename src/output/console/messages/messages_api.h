@@ -63,6 +63,8 @@ std::string error_count_invalid(long long value, long long min_val, long long ma
 std::string error_latency_samples_invalid(long long value, long long min_val, long long max_val);
 std::string error_latency_stride_invalid(long long value, long long min_val, long long max_val);
 std::string error_latency_stride_alignment(size_t value_bytes, size_t alignment_bytes);
+std::string error_analyze_tlb_stride_exceeds_page(size_t stride_bytes, size_t page_size_bytes);
+std::string error_analyze_tlb_stride_must_divide_page(size_t stride_bytes, size_t page_size_bytes);
 std::string error_latency_tlb_locality_invalid(long long value, long long max_val);
 std::string error_latency_chain_mode_invalid();
 std::string error_latency_chain_mode_requires_locality(const std::string& mode_name);
@@ -71,6 +73,7 @@ std::string error_latency_tlb_locality_page_multiple(size_t value_kb, size_t pag
 std::string error_latency_tlb_locality_too_small_for_stride(size_t locality_bytes, size_t stride_bytes);
 std::string error_threads_invalid(long long value, long long min_val, long long max_val);
 const std::string& error_analyze_tlb_must_be_used_alone();
+std::string error_duplicate_sweep_parameter(const std::string& parameter_name);
 const std::string& error_analyze_core_to_core_must_be_used_alone();
 const std::string& error_core_to_core_timer_creation_failed();
 const std::string& error_tlb_analysis_insufficient_memory();
@@ -223,6 +226,10 @@ std::string report_tlb_page_walk_config(bool enabled,
                                          size_t required_buffer_mb,
                                          size_t selected_buffer_mb);
 std::string report_tlb_fine_sweep(size_t added_points, size_t total_points);
+std::string report_tlb_analysis_status(const std::string& status,
+                                       size_t planned_points,
+                                       size_t measured_points,
+                                       bool conclusions_valid);
 const std::string& report_tlb_l1_section();
 const std::string& report_tlb_l2_section();
 const std::string& report_tlb_private_cache_section();
@@ -238,6 +245,7 @@ std::string report_tlb_private_cache_l1_distance(size_t distance_kb, size_t dist
 std::string report_tlb_page_walk_penalty(double penalty_ns, size_t from_kb, size_t to_mb);
 std::string report_tlb_page_walk_penalty_unavailable(size_t from_kb, size_t to_mb, size_t required_buffer_mb, size_t selected_buffer_mb);
 std::string report_tlb_page_walk_penalty_interrupted(size_t from_kb, size_t to_mb);
+std::string report_tlb_conclusions_unavailable(const std::string& status);
 const std::string& report_tlb_not_detected();
 
 // --- Usage/Help Messages ---

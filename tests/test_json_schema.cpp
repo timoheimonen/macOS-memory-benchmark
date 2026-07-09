@@ -126,6 +126,10 @@ TEST(JsonSchemaTest, TlbAnalysisExporterIncludesModeAndCoreCounts) {
       512 * Constants::BYTES_PER_MB,
       1024,
       true,
+      "complete",
+      1,
+      1,
+      true,
       localities_bytes,
       sweep_loop_latencies_ns,
       p50_latency_ns,
@@ -157,6 +161,10 @@ TEST(JsonSchemaTest, TlbAnalysisExporterIncludesModeAndCoreCounts) {
   EXPECT_EQ(output_json[JsonKeys::CONFIGURATION][JsonKeys::MODE], Constants::TLB_ANALYSIS_JSON_MODE_NAME);
   EXPECT_EQ(output_json[JsonKeys::CONFIGURATION][JsonKeys::PERFORMANCE_CORES], 4);
   EXPECT_EQ(output_json[JsonKeys::CONFIGURATION][JsonKeys::EFFICIENCY_CORES], 6);
+  EXPECT_EQ(output_json[JsonKeys::CONFIGURATION]["schema_version"], 2);
+  EXPECT_EQ(output_json[JsonKeys::CONFIGURATION]["methodology_version"],
+            "locality-sweep-v1-guardrails");
+  EXPECT_EQ(output_json[JsonKeys::CONFIGURATION]["latency_chain_mode_requested"], "auto");
   EXPECT_TRUE(output_json[JsonKeys::CONFIGURATION].contains(JsonKeys::LATENCY_CHAIN_MODE));
   EXPECT_EQ(output_json[JsonKeys::CONFIGURATION][JsonKeys::LATENCY_CHAIN_MODE], "random-box");
   EXPECT_TRUE(output_json[JsonKeys::CONFIGURATION].contains(JsonKeys::TLB_DENSITY));
@@ -166,6 +174,15 @@ TEST(JsonSchemaTest, TlbAnalysisExporterIncludesModeAndCoreCounts) {
   EXPECT_EQ(output_json["tlb_analysis"]["l1_tlb_detection"]["inferred_entries"], 248);
   EXPECT_EQ(output_json["tlb_analysis"]["l1_tlb_detection"]["inferred_entries_method"], "range_midpoint");
   EXPECT_TRUE(output_json["tlb_analysis"]["l1_tlb_detection"]["overlaps_private_cache_knee"]);
+  EXPECT_EQ(output_json["tlb_analysis"]["status"], "complete");
+  EXPECT_EQ(output_json["tlb_analysis"]["planned_points"], 1);
+  EXPECT_EQ(output_json["tlb_analysis"]["measured_points"], 1);
+  EXPECT_TRUE(output_json["tlb_analysis"]["conclusions_valid"]);
+  EXPECT_TRUE(output_json["tlb_analysis"].contains("large_locality_latency_delta"));
+  EXPECT_DOUBLE_EQ(output_json["tlb_analysis"]["large_locality_latency_delta"]["delta_ns"], 80.5);
+  EXPECT_TRUE(output_json["tlb_analysis"]["page_walk_penalty"]["deprecated"]);
+  EXPECT_EQ(output_json["tlb_analysis"]["page_walk_penalty"]["replacement"],
+            "large_locality_latency_delta");
 
   std::filesystem::remove(config.output_file);
 }
@@ -198,6 +215,10 @@ TEST(JsonSchemaTest, TlbAnalysisExporterOmitsPageWalkPenaltyWhenComparisonIncomp
       512 * Constants::BYTES_PER_MB,
       1024,
       true,
+      "interrupted",
+      2,
+      1,
+      false,
       localities_bytes,
       sweep_loop_latencies_ns,
       p50_latency_ns,
@@ -227,10 +248,17 @@ TEST(JsonSchemaTest, TlbAnalysisExporterOmitsPageWalkPenaltyWhenComparisonIncomp
   const nlohmann::json output_json = read_json_file(config.output_file);
   const nlohmann::json page_walk_json = output_json["tlb_analysis"]["page_walk_penalty"];
 
+  EXPECT_EQ(output_json["tlb_analysis"]["status"], "interrupted");
+  EXPECT_FALSE(output_json["tlb_analysis"]["conclusions_valid"]);
+  EXPECT_FALSE(output_json["tlb_analysis"]["l1_tlb_detection"]["detected"]);
+  EXPECT_NE(output_json["tlb_analysis"]["l1_tlb_detection"]["reason"]
+                .get<std::string>()
+                .find("suppressed"),
+            std::string::npos);
   EXPECT_FALSE(page_walk_json["available"]);
   EXPECT_FALSE(page_walk_json.contains("comparison_p50_ns"));
   EXPECT_FALSE(page_walk_json.contains("penalty_ns"));
-  EXPECT_NE(page_walk_json["reason"].get<std::string>().find("did not complete"), std::string::npos);
+  EXPECT_NE(page_walk_json["reason"].get<std::string>().find("incomplete"), std::string::npos);
 
   std::filesystem::remove(config.output_file);
 }

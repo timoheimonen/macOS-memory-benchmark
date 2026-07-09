@@ -445,7 +445,7 @@ TEST_F(MessagesFormattingTest, MsgPatternBenchmarkLoopCompleted) {
 
 TEST_F(MessagesFormattingTest, MsgTlbAnalysisPageWalkProgress) {
   std::string msg = Messages::msg_tlb_analysis_page_walk_progress(512);
-  EXPECT_NE(msg.find("Page Walk"), std::string::npos);
+  EXPECT_NE(msg.find("Large Locality"), std::string::npos);
   EXPECT_NE(msg.find("512"), std::string::npos);
   EXPECT_NE(msg.find("MB"), std::string::npos);
 }
@@ -461,6 +461,36 @@ TEST_F(MessagesFormattingTest, ReportTlbPageWalkPenaltyWindow) {
   std::string msg = Messages::report_tlb_page_walk_penalty(62.4, 16, 512);
   EXPECT_NE(msg.find("16KB -> 512MB"), std::string::npos);
   EXPECT_NE(msg.find("~62.4ns"), std::string::npos);
+  EXPECT_NE(msg.find("Large-Locality Latency Delta"), std::string::npos);
+  EXPECT_EQ(msg.find("Page Table Walk Penalty"), std::string::npos);
+}
+
+TEST_F(MessagesFormattingTest, AnalyzeTlbStrideGuardMessages) {
+  const std::string exceeds = Messages::error_analyze_tlb_stride_exceeds_page(32768, 16384);
+  EXPECT_NE(exceeds.find("--analyze-tlb"), std::string::npos);
+  EXPECT_NE(exceeds.find("32768"), std::string::npos);
+  EXPECT_NE(exceeds.find("16384"), std::string::npos);
+
+  const std::string divisor = Messages::error_analyze_tlb_stride_must_divide_page(136, 16384);
+  EXPECT_NE(divisor.find("divide"), std::string::npos);
+  EXPECT_NE(divisor.find("136"), std::string::npos);
+}
+
+TEST_F(MessagesFormattingTest, DuplicateSweepParameterMessage) {
+  const std::string msg = Messages::error_duplicate_sweep_parameter("latency-stride-bytes");
+  EXPECT_NE(msg.find("more than once"), std::string::npos);
+  EXPECT_NE(msg.find("latency-stride-bytes"), std::string::npos);
+}
+
+TEST_F(MessagesFormattingTest, ReportTlbAnalysisStatusAndSuppressedConclusions) {
+  const std::string status = Messages::report_tlb_analysis_status("interrupted", 29, 7, false);
+  EXPECT_NE(status.find("interrupted"), std::string::npos);
+  EXPECT_NE(status.find("7/29"), std::string::npos);
+  EXPECT_NE(status.find("suppressed"), std::string::npos);
+
+  const std::string unavailable = Messages::report_tlb_conclusions_unavailable("interrupted");
+  EXPECT_NE(unavailable.find("Suppressed"), std::string::npos);
+  EXPECT_NE(unavailable.find("interrupted"), std::string::npos);
 }
 
 TEST_F(MessagesFormattingTest, ReportTlbChainMode) {
@@ -494,6 +524,7 @@ TEST_F(MessagesFormattingTest, ReportTlbSweepRangeAndPageWalkConfig) {
   std::string enabled = Messages::report_tlb_page_walk_config(true, 512, 512, 1024);
   EXPECT_NE(enabled.find("Enabled"), std::string::npos);
   EXPECT_NE(enabled.find("512 MB locality"), std::string::npos);
+  EXPECT_NE(enabled.find("Large-Locality Comparison"), std::string::npos);
 
   std::string disabled = Messages::report_tlb_page_walk_config(false, 512, 512, 256);
   EXPECT_NE(disabled.find("Disabled"), std::string::npos);

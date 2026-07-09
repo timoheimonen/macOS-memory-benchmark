@@ -136,6 +136,21 @@ PrivateCacheKneeDetection detect_private_cache_knee(
     const std::vector<std::vector<double>>* loop_latencies = nullptr);
 
 /**
+ * @brief Build page-aligned fine-sweep points around a detected boundary.
+ * @param localities_bytes Sorted measured locality windows.
+ * @param boundary_index Detected boundary index in localities_bytes.
+ * @param min_locality_bytes Inclusive lower sweep limit.
+ * @param max_locality_bytes Inclusive upper sweep limit.
+ * @param alignment_bytes Required point alignment, normally system page size.
+ * @return Sorted, deduplicated refinement points strictly inside the bracket.
+ */
+std::vector<size_t> build_tlb_refinement_points(const std::vector<size_t>& localities_bytes,
+                                                size_t boundary_index,
+                                                size_t min_locality_bytes,
+                                                size_t max_locality_bytes,
+                                                size_t alignment_bytes);
+
+/**
  * @brief Run standalone TLB analysis benchmark mode.
  * @param config Benchmark configuration (supports optional output_file)
  * @return EXIT_SUCCESS on success, EXIT_FAILURE on error

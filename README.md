@@ -161,16 +161,18 @@ Long options require `--`. A single dash is only valid for one-character short o
 - `--count <count>`: Full benchmark repetitions (default `1`; use `5-10` for statistics).
 - `--threads <count>`: Bandwidth thread count (latency tests remain single-threaded).
 - `--cache-size <KB>`: Custom cache target. Non-zero range is `16` to `1048576` KB (1 GB).
-- `--analyze-tlb`: Standalone TLB-boundary detection benchmark (`1024/512/256 MB` fallback buffer selection), sweeping locality windows from `max(16 KB, 2*stride)` to `256 MB` with automatic fine-sweep insertion near detected knees/boundaries (plus optional `512 MB` page-walk comparison when buffer is at least `512 MB`). Reports private-cache-knee risk, private-cache/L1 overlap when ambiguous, and inferred entry estimates plus ranges. Supports optional `--latency-stride-bytes <bytes>`, `--latency-chain-mode <mode>`, `--tlb-density <low|medium|high>`, and sweep mode over those same three TLB-analysis parameters.
+- `--analyze-tlb`: Standalone TLB-boundary detection benchmark (`1024/512/256 MB` fallback buffer selection), sweeping locality windows from `max(16 KB, 2*stride)` to `256 MB` with page-aligned fine-sweep insertion near detected knees/boundaries (plus an optional `512 MB` large-locality comparison when buffer is at least `512 MB`). Reports private-cache-knee risk, private-cache/L1 overlap when ambiguous, and inferred entry estimates plus ranges. In this mode stride must not exceed and must exactly divide the system page size. Supports optional `--latency-stride-bytes <bytes>`, `--latency-chain-mode <mode>`, `--tlb-density <low|medium|high>`, and sweep mode over those same three TLB-analysis parameters.
 - `--analyze-core2core`: Standalone two-thread cache-line ping-pong benchmark for coherence handoff latency, with three scheduler-hint scenarios (`no_affinity_hint`, `same_affinity_tag`, `different_affinity_tags`). Reports round-trip and one-way-estimate latency plus percentiles.
 - `--latency-samples <count>`: Samples per latency test (default `1000`).
-- `--latency-stride-bytes <bytes>`: Pointer-chain stride for latency tests (default `256`; must be > 0 and pointer-size aligned).
+- `--latency-stride-bytes <bytes>`: Pointer-chain stride for latency tests (default `256`; must be > 0 and pointer-size aligned). With `--analyze-tlb`, it must also be no larger than and divide the system page size exactly.
 - `--latency-chain-mode <mode>`: Pointer-chain construction policy. Modes: `auto` (default), `global-random`, `random-box`, `same-random-in-box`, `diff-random-in-box`.
 - `--latency-tlb-locality-kb <KB>`: Pointer-chain locality window (default `1024`; `0` = global random chain; non-zero values must be page-size multiples). If omitted, regular main-memory latency output also includes an automatic TLB comparison (`16 KB` hit-biased vs `0` miss-biased) and estimated page-walk penalty. The automatic comparison uses P50 over three complete pointer-chase passes per point to reduce single-IRQ outlier impact.
 - `--non-cacheable`: Best-effort cache-discouraging hints (not true uncached memory).
 - `--output <file>`: Save JSON output.
 - `--sweep <key=a,b>`: Sweep supported parameters. General benchmark keys: `buffer-size`, `cache-size`, `threads`, `latency-tlb-locality-kb`, `latency-stride-bytes`, `latency-chain-mode`; TLB analysis keys: `latency-stride-bytes`, `latency-chain-mode`, `tlb-density`; core-to-core keys: `count`, `latency-samples`.
 - `--sweep-max-runs <count>`: Maximum generated sweep runs (default `256`).
+
+Sweep configurations are fully validated before the first run. Combined sweep JSON is atomically checkpointed after every completed run and includes `status`, `planned_runs`, `completed_runs`, and `conclusions_valid`.
 
 ## Typical Workflows
 
@@ -273,6 +275,9 @@ Console output includes:
 - Per-loop benchmark results.
 - Main-memory latency may include automatic TLB breakdown lines (`TLB hit latency`, `TLB miss latency`, and `Estimated page-walk penalty`) when `--latency-tlb-locality-kb` is not explicitly set. These auto-TLB hit/miss values are P50 values from three complete comparison passes per point, so a single IRQ-inflated pass is less likely to dominate the estimate.
 - Aggregate statistics when `--count > 1` (including P50/P90/P95/P99 and stddev). In auto-TLB mode, statistics also include `TLB Hit Latency (ns)`, `TLB Miss Latency (ns)`, and `Estimated Page-Walk Penalty (ns)`.
+- Standalone `--analyze-tlb` reports `Analysis Status` and suppresses boundary conclusions when the sweep is interrupted or incomplete. Its 512 MB comparison is labeled `Large-Locality Latency Delta`; it is not claimed to isolate page-table-walk cost.
+
+Standalone TLB JSON uses `schema_version: 2` and includes `tlb_analysis.status`, `planned_points`, `measured_points`, and `conclusions_valid`. The preferred comparison block is `tlb_analysis.large_locality_latency_delta` with `delta_ns`. The former `tlb_analysis.page_walk_penalty` block remains for one compatibility window with `deprecated: true` and a `replacement` field.
 
 JSON output shape:
 

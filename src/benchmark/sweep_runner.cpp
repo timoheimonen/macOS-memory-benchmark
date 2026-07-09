@@ -325,6 +325,22 @@ int run_sweep_point(BenchmarkConfig& run_config,
   return run_standard_sweep_point(run_config, result_json);
 }
 
+void update_sweep_output(nlohmann::ordered_json& output_json,
+                         const nlohmann::ordered_json& runs_json,
+                         const std::string& status,
+                         size_t planned_runs,
+                         double elapsed_sec) {
+  output_json["status"] = status;
+  output_json["planned_runs"] = planned_runs;
+  output_json["completed_runs"] = runs_json.size();
+  output_json["conclusions_valid"] =
+      status == "complete" && runs_json.size() == planned_runs;
+  output_json["runs"] = runs_json;
+  output_json[JsonKeys::EXECUTION_TIME_SEC] = elapsed_sec;
+  output_json[JsonKeys::TIMESTAMP] = build_utc_timestamp();
+  output_json[JsonKeys::VERSION] = SOFTVERSION;
+}
+
 }  // namespace
 
 size_t calculate_sweep_run_count(const BenchmarkConfig& config) {
@@ -343,6 +359,16 @@ size_t calculate_sweep_run_count(const BenchmarkConfig& config) {
 
 int run_sweep_mode(const BenchmarkConfig& base_config) {
   const size_t run_count = calculate_sweep_run_count(base_config);
+  const std::vector<std::vector<SweepAssignment>> assignments = build_sweep_assignments(base_config);
+
+  // Validate every generated configuration before starting the first potentially long run.
+  for (const std::vector<SweepAssignment>& assignment : assignments) {
+    BenchmarkConfig preflight_config = build_run_config(base_config, assignment);
+    if (validate_config(preflight_config) != EXIT_SUCCESS) {
+      return EXIT_FAILURE;
+    }
+  }
+
   std::cout << Messages::usage_header(SOFTVERSION);
   std::cout << Messages::msg_running_sweep(run_count) << std::endl;
 
@@ -371,7 +397,11 @@ int run_sweep_mode(const BenchmarkConfig& base_config) {
       {"sweep_parameters", build_sweep_parameters_json(base_config)}};
 
   nlohmann::ordered_json runs_json = nlohmann::ordered_json::array();
-  const std::vector<std::vector<SweepAssignment>> assignments = build_sweep_assignments(base_config);
+  std::filesystem::path file_path(base_config.output_file);
+  if (file_path.is_relative()) {
+    file_path = std::filesystem::current_path() / file_path;
+  }
+
   for (size_t i = 0; i < assignments.size(); ++i) {
     if (signal_received()) {
       std::cout << Messages::msg_interrupted_by_user() << std::endl;
@@ -382,6 +412,8 @@ int run_sweep_mode(const BenchmarkConfig& base_config) {
     BenchmarkConfig run_config = build_run_config(base_config, assignments[i]);
     nlohmann::ordered_json result_json;
     if (run_sweep_point(run_config, i, result_json) != EXIT_SUCCESS) {
+      update_sweep_output(output_json, runs_json, "failed", run_count, total_timer.stop());
+      (void)write_json_to_file(file_path, output_json, false);
       restore_signal_mask();
       return EXIT_FAILURE;
     }
@@ -391,18 +423,29 @@ int run_sweep_mode(const BenchmarkConfig& base_config) {
     run_json["parameters"] = build_assignment_json(assignments[i]);
     run_json["result"] = result_json;
     runs_json.push_back(run_json);
+
+    const bool interrupted_now = signal_received();
+    update_sweep_output(output_json,
+                        runs_json,
+                        interrupted_now ? "interrupted" : "partial",
+                        run_count,
+                        total_timer.stop());
+    if (write_json_to_file(file_path, output_json, false) != EXIT_SUCCESS) {
+      restore_signal_mask();
+      return EXIT_FAILURE;
+    }
+    if (interrupted_now) {
+      break;
+    }
   }
 
   const double total_elapsed_sec = total_timer.stop();
-  output_json["runs"] = runs_json;
-  output_json[JsonKeys::EXECUTION_TIME_SEC] = total_elapsed_sec;
-  output_json[JsonKeys::TIMESTAMP] = build_utc_timestamp();
-  output_json[JsonKeys::VERSION] = SOFTVERSION;
-
-  std::filesystem::path file_path(base_config.output_file);
-  if (file_path.is_relative()) {
-    file_path = std::filesystem::current_path() / file_path;
-  }
+  const bool sweep_complete = runs_json.size() == assignments.size() && !signal_received();
+  update_sweep_output(output_json,
+                      runs_json,
+                      sweep_complete ? "complete" : "interrupted",
+                      run_count,
+                      total_elapsed_sec);
 
   restore_signal_mask();
   const int write_result = write_json_to_file(file_path, output_json);

@@ -51,6 +51,10 @@ struct TlbAnalysisJsonContext {
   size_t page_walk_comparison_locality_bytes;
   size_t selected_buffer_mb;
   bool buffer_locked;
+  std::string analysis_status;
+  size_t planned_points;
+  size_t measured_points;
+  bool conclusions_valid;
   const std::vector<size_t>& localities_bytes;
   const std::vector<std::vector<double>>& sweep_loop_latencies_ns;
   const std::vector<double>& p50_latency_ns;

@@ -91,7 +91,7 @@ std::string msg_tlb_analysis_locality_progress(size_t current_index, size_t tota
 
 std::string msg_tlb_analysis_page_walk_progress(size_t locality_mb) {
   std::ostringstream oss;
-  oss << "  [Page Walk] Locality " << locality_mb << " MB";
+  oss << "  [Large Locality] Locality " << locality_mb << " MB";
   return oss.str();
 }
 
@@ -151,6 +151,8 @@ std::string usage_options(const std::string& prog_name) {
       << "                        Stride used by latency pointer chains (default: "
       << Constants::LATENCY_STRIDE_BYTES << " bytes).\n"
       << "                        Must be > 0 and a multiple of pointer size (typically 8 bytes).\n"
+      << "                        With --analyze-tlb, stride must not exceed and must exactly divide\n"
+      << "                        the system page size. Sweep values are checked before execution.\n"
       << "  -m, --latency-chain-mode <mode>\n"
       << "                        Pointer-chain construction policy. Modes: auto (default), global-random,\n"
       << "                        random-box, same-random-in-box, diff-random-in-box.\n"
@@ -296,11 +298,11 @@ std::string report_tlb_page_walk_config(bool enabled,
                                         size_t selected_buffer_mb) {
   std::ostringstream oss;
   if (enabled) {
-    oss << "Page-Walk Comparison: Enabled (" << comparison_locality_mb << " MB locality)";
+    oss << "Large-Locality Comparison: Enabled (" << comparison_locality_mb << " MB locality)";
     return oss.str();
   }
 
-  oss << "Page-Walk Comparison: Disabled (requires " << required_buffer_mb
+  oss << "Large-Locality Comparison: Disabled (requires " << required_buffer_mb
       << " MB analysis buffer, selected " << selected_buffer_mb << " MB)";
   return oss.str();
 }
@@ -315,6 +317,17 @@ std::string report_tlb_fine_sweep(size_t added_points, size_t total_points) {
   return oss.str();
 }
 
+std::string report_tlb_analysis_status(const std::string& status,
+                                       size_t planned_points,
+                                       size_t measured_points,
+                                       bool conclusions_valid) {
+  std::ostringstream oss;
+  oss << "Analysis Status: " << status << " (measured " << measured_points << "/"
+      << planned_points << " planned points, conclusions "
+      << (conclusions_valid ? "valid" : "suppressed") << ")";
+  return oss.str();
+}
+
 const std::string& report_tlb_private_cache_section() {
   static const std::string msg = "[Private Cache Detection]";
   return msg;
@@ -326,7 +339,7 @@ const std::string& report_tlb_l1_section() {
 }
 
 const std::string& report_tlb_l2_section() {
-  static const std::string msg = "[L2 TLB / Page Walk]";
+  static const std::string msg = "[L2 TLB / Large-Locality Delta]";
   return msg;
 }
 
@@ -398,7 +411,7 @@ std::string report_tlb_private_cache_l1_distance(size_t distance_kb, size_t dist
 std::string report_tlb_page_walk_penalty(double penalty_ns, size_t from_kb, size_t to_mb) {
   std::ostringstream oss;
   oss << std::fixed << std::setprecision(1);
-  oss << "  Page Table Walk Penalty (" << from_kb << "KB -> " << to_mb << "MB): ~"
+  oss << "  Large-Locality Latency Delta (" << from_kb << "KB -> " << to_mb << "MB): ~"
       << penalty_ns << "ns";
   return oss.str();
 }
@@ -408,7 +421,7 @@ std::string report_tlb_page_walk_penalty_unavailable(size_t from_kb,
                                                      size_t required_buffer_mb,
                                                      size_t selected_buffer_mb) {
   std::ostringstream oss;
-  oss << "  Page Table Walk Penalty (" << from_kb << "KB -> " << to_mb << "MB): N/A "
+  oss << "  Large-Locality Latency Delta (" << from_kb << "KB -> " << to_mb << "MB): N/A "
       << "(requires " << required_buffer_mb << " MB or larger analysis buffer, selected "
       << selected_buffer_mb << " MB)";
   return oss.str();
@@ -416,9 +429,13 @@ std::string report_tlb_page_walk_penalty_unavailable(size_t from_kb,
 
 std::string report_tlb_page_walk_penalty_interrupted(size_t from_kb, size_t to_mb) {
   std::ostringstream oss;
-  oss << "  Page Table Walk Penalty (" << from_kb << "KB -> " << to_mb
+  oss << "  Large-Locality Latency Delta (" << from_kb << "KB -> " << to_mb
       << "MB): N/A (comparison measurement did not complete)";
   return oss.str();
+}
+
+std::string report_tlb_conclusions_unavailable(const std::string& status) {
+  return "  Conclusion: Suppressed because analysis status is " + status;
 }
 
 const std::string& report_tlb_not_detected() {

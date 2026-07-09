@@ -170,6 +170,9 @@ int main(int argc, char *argv[]) {
   }
 
   if (config.analyze_tlb) {
+    if (validate_config(config) != EXIT_SUCCESS) {
+      return EXIT_FAILURE;
+    }
     return run_with_benchmark_preparation([&]() {
       return run_tlb_analysis(config);
     });

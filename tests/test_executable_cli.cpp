@@ -104,6 +104,19 @@ TEST(ExecutableCliIntegrationTest, CoreToCoreArgumentsAreRoutedBeforeNormalParse
   EXPECT_NE(result.output.find("--analyze-core2core allows only optional"), std::string::npos);
 }
 
+TEST(ExecutableCliIntegrationTest, AnalyzeTlbInvalidStrideSweepFailsBeforeExecutionIntegration) {
+  const std::string output_path = make_temp_json_path("tlb_invalid_stride_sweep");
+  std::remove(output_path.c_str());
+
+  const CliResult result = run_memory_benchmark(
+      "--analyze-tlb --sweep latency-stride-bytes=64,136 --output " + output_path);
+
+  EXPECT_EQ(result.exit_code, EXIT_FAILURE);
+  EXPECT_NE(result.output.find("must divide the system page size exactly"), std::string::npos);
+  EXPECT_EQ(result.output.find("Running sweep"), std::string::npos);
+  EXPECT_EQ(access(output_path.c_str(), F_OK), -1);
+}
+
 TEST(ExecutableCliIntegrationTest, StandardBenchmarkWritesJsonIntegration) {
   const std::string output_path = make_temp_json_path("standard");
   std::remove(output_path.c_str());
@@ -119,6 +132,24 @@ TEST(ExecutableCliIntegrationTest, StandardBenchmarkWritesJsonIntegration) {
   EXPECT_NE(json.find("\"mode\": \"benchmark\""), std::string::npos);
   EXPECT_NE(json.find("\"main_memory\""), std::string::npos);
   EXPECT_NE(json.find("\"bandwidth\""), std::string::npos);
+
+  std::remove(output_path.c_str());
+}
+
+TEST(ExecutableCliIntegrationTest, StandardSweepWritesCompletionMetadataIntegration) {
+  const std::string output_path = make_temp_json_path("standard_sweep_status");
+  std::remove(output_path.c_str());
+
+  const CliResult result = run_memory_benchmark(
+      "--benchmark --only-bandwidth --iterations 1 --count 1 --threads 1 "
+      "--sweep buffer-size=1,2 --sweep-max-runs 2 --output " + output_path);
+
+  EXPECT_EQ(result.exit_code, EXIT_SUCCESS);
+  const std::string json = read_file(output_path);
+  EXPECT_NE(json.find("\"status\": \"complete\""), std::string::npos);
+  EXPECT_NE(json.find("\"planned_runs\": 2"), std::string::npos);
+  EXPECT_NE(json.find("\"completed_runs\": 2"), std::string::npos);
+  EXPECT_NE(json.find("\"conclusions_valid\": true"), std::string::npos);
 
   std::remove(output_path.c_str());
 }
