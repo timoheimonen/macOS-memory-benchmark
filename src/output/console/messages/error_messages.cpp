@@ -118,13 +118,6 @@ std::string error_analyze_tlb_stride_exceeds_page(size_t stride_bytes, size_t pa
   return oss.str();
 }
 
-std::string error_analyze_tlb_stride_must_divide_page(size_t stride_bytes, size_t page_size_bytes) {
-  std::ostringstream oss;
-  oss << "--analyze-tlb latency-stride-bytes must divide the system page size exactly ("
-      << page_size_bytes << " bytes), got " << stride_bytes << " bytes";
-  return oss.str();
-}
-
 std::string error_latency_tlb_locality_invalid(long long value, long long max_val) {
   std::ostringstream oss;
   oss << "latency-tlb-locality-kb invalid (must be >= 0 and <= " << max_val
@@ -202,6 +195,17 @@ std::string error_tlb_analysis_invalid_measurement(size_t locality_kb, int loop_
   std::ostringstream oss;
   oss << "Invalid latency measurement during TLB analysis (locality=" << locality_kb
       << " KB, loop=" << loop_number << ")";
+  return oss.str();
+}
+
+std::string error_tlb_chain_setup_failed(size_t locality_kb,
+                                         const std::string& layout,
+                                         const std::string& build_status,
+                                         const std::string& validation_status) {
+  std::ostringstream oss;
+  oss << "TLB " << layout << " chain setup failed (locality=" << locality_kb
+      << " KB, build_status=" << build_status
+      << ", validation_status=" << validation_status << ")";
   return oss.str();
 }
 

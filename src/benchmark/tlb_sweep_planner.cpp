@@ -103,7 +103,7 @@ TlbSweepPoint make_point(size_t locality_bytes,
   point.effective_pages = point.requested_pages;
   point.locality_bytes = locality_bytes;
   point.stride_bytes = stride_bytes;
-  point.pointer_count = stride_bytes == 0 ? 0 : locality_bytes / stride_bytes;
+  point.pointer_count = point.effective_pages;
   point.refinement_source = source;
   point.bracket_lower_bytes = bracket_lower_bytes;
   point.bracket_upper_bytes = bracket_upper_bytes;

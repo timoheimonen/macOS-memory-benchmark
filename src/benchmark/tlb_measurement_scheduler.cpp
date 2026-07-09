@@ -59,6 +59,10 @@ uint64_t derive_tlb_measurement_seed(uint64_t base_seed,
   return splitmix64(value ^ static_cast<uint64_t>(point_index));
 }
 
+bool tlb_measure_spread_first(const TlbMeasurementTask& task) {
+  return ((task.round_index + task.order_index) % 2) == 0;
+}
+
 std::vector<TlbMeasurementTask> build_tlb_measurement_schedule(
     const std::vector<TlbSweepPoint>& points,
     size_t round_count,
@@ -109,8 +113,9 @@ TlbScheduleExecutionResult execute_tlb_measurement_schedule(
       return result;
     }
 
-    double latency_ns = 0.0;
-    if (!measure_task || measure_task(task, latency_ns) != TlbTaskMeasureStatus::Success) {
+    TlbMeasurementSample sample;
+    if (!measure_task ||
+        measure_task(task, sample) != TlbTaskMeasureStatus::Success) {
       result.status = TlbScheduleExecutionStatus::Error;
       return result;
     }
@@ -121,7 +126,8 @@ TlbScheduleExecutionResult execute_tlb_measurement_schedule(
         task.round_index,
         task.order_index,
         task.seed,
-        latency_ns,
+        sample.latency_ns,
+        sample.paired,
     });
 
     if (stop_requested && stop_requested()) {

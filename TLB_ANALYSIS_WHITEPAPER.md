@@ -2,7 +2,7 @@
 
 ## 1. Purpose
 
-This document specifies how `macOS-memory-benchmark` implements standalone TLB analysis mode (`--analyze-tlb`) in version `0.56.1`.
+This document specifies how `macOS-memory-benchmark` implements standalone TLB analysis mode (`--analyze-tlb`) in version `0.57.0`.
 
 The goal is to provide a reproducible, implementation-accurate description of:
 
@@ -55,15 +55,14 @@ memory_benchmark --analyze-tlb --sweep latency-stride-bytes=64,128 --sweep tlb-d
 
 If `--latency-stride-bytes` is not provided, the default stride is **256 bytes**, which matches the standard latency mode default (`Constants::LATENCY_STRIDE_BYTES`).
 
-As a correctness guard for the locality-sweep-v2 methodology, analyze-TLB stride must:
+For the page-native paired methodology, analyze-TLB stride must:
 
 - be pointer-size aligned,
-- be no larger than the system page size,
-- divide the system page size exactly.
+- be no larger than the system page size.
 
-These rules ensure that nominal locality windows map to a uniform integral number of pointer slots per page. They apply
-to direct options and every stride value in a parameter sweep. The complete Cartesian sweep is validated before its
-first benchmark run.
+The builder rounds effective node spacing up to a cache-line multiple, so stride does not need to divide the system page
+size. These rules apply to direct options and every stride value in a parameter sweep. The complete Cartesian sweep is
+validated before its first benchmark run.
 
 ### 3.3 Sweep Density (`--tlb-density`)
 
@@ -124,7 +123,8 @@ If all fail, mode exits with an insufficient-memory error.
 
 `mlock()` is attempted for the selected buffer; report shows whether lock succeeded.
 
-After allocation, the code validates that `pointer_count = buffer_size / stride >= 2`. If stride is very large relative to the selected buffer, mode exits with an error before any measurement begins.
+The page-native builder validates each requested spread footprint and packed footprint against the selected buffer before
+writing any pointer slots.
 
 ### 4.2 Fixed Measurement Parameters
 
@@ -135,9 +135,23 @@ The mode uses fixed constants:
 
 Stride behavior:
 
-- Effective stride is taken from `--latency-stride-bytes` (default: **256 bytes**).
+- Requested stride is taken from `--latency-stride-bytes` (default: **256 bytes**).
+- Spread node-slot spacing is `cache_line_align_up(max(stride, 64 bytes))`; packed node spacing is one 64-byte cache line. Effective spacing is recorded per chain.
 
-**Chain mode:** The latency chain mode is resolved via `resolve_latency_chain_mode(config.latency_chain_mode, page_walk_baseline_locality_bytes)`. This determines the method used to build the pointer-chase chain for each locality measurement. The resolved mode is reported in the console output and stored in the JSON metadata. In `--analyze-tlb`, `global-random` is rejected; `auto` resolves to `random-box` because the baseline locality is non-zero.
+**Page-native chain pair:** Every task uses one logical node per requested page. The spread layout places exactly one node
+on every requested page. The packed layout places the same number of nodes on consecutive distinct cache lines, minimizing
+the page footprint while preserving node and unique-cache-line counts. Pointer
+values are written in sorted physical-slot order only after traversal has been planned; setup writes therefore do not
+replay the measured traversal order. An independent validation pass requires every node to stay in bounds, occur once,
+use a unique cache line, and return to the chain head after the exact node count. Spread validation additionally requires
+`actual_pages == requested_pages`.
+
+**Chain mode mapping:** The latency chain mode is resolved through
+`resolve_latency_chain_mode(config.latency_chain_mode, page_walk_baseline_locality_bytes)` and reported in console/JSON.
+`auto` resolves to `random-box`; `global-random` remains invalid. In the page-native builder, `random-box` means randomized
+page order plus randomized page-internal offsets, `same-random-in-box` means increasing page order with one shared offset,
+and `diff-random-in-box` means increasing page order with independently selected offsets. Packed controls preserve the
+corresponding randomized or increasing logical traversal policy.
 
 **Memory prefaulting:** After buffer allocation, the code calls `madvise(ptr, size_bytes, MADV_WILLNEED)` to prefault pages and reduce page-fault noise during early measurement.
 
@@ -146,12 +160,16 @@ once. A seed-shuffled initial point order is cyclically rotated on subsequent ro
 order positions instead of always being early or late in the run. For a full point-count cycle, each point occupies every
 order position once.
 
-**Measurement task:** Each scheduled task derives a stable seed from the base seed, pass, round, and point index. The task
-rebuilds the latency chain with that seed, performs warmup, runs pointer chase, and stores latency as `ns/access` together
-with pass, round index, order index, and seed metadata. The regular benchmark path still uses its existing random-device
-chain construction unless it explicitly calls the seeded overload.
+**Measurement task:** Each scheduled task derives a stable task seed from the base seed, pass, round, and point index,
+then derives separate spread and packed layout seeds. Both chains are built, warmed, and measured inside that one task;
+which layout runs first alternates by round/order parity and is recorded. The task stores both raw `ns/access` values and
+`translation_delta_ns = spread_latency_ns - packed_latency_ns`. The regular benchmark path still uses its existing
+latency-chain implementation and random-device behavior.
 
-Per-point central value is `P50` (median) over 30 loops.
+Per-point output contains spread, packed, and paired-delta P50 values over 30 rounds. The phase-3 boundary detector still
+uses spread latency for compatibility with its positive-baseline thresholds; JSON identifies this with
+`boundary_signal = "spread_latency_ns"`. The paired delta is a same-round measured metric, but boundary classification is
+not switched to it until the phase-4 changepoint/confidence model is implemented.
 
 ### 4.3 Locality Sweep
 
@@ -378,13 +396,14 @@ When `--output <file>` is provided with `--analyze-tlb` without `--sweep`, outpu
   - **`latency_chain_mode`** (resolved chain mode used)
   - **`performance_cores`** and **`efficiency_cores`** (CPU core configuration)
   - selected buffer size and whether mlock succeeded
-  - `schema_version = 2` and `methodology_version = "locality-sweep-v2-balanced-rounds"`
-  - base `seed`, `seed_source`, and `schedule_policy = "seeded-cyclic-latin"`
+  - `schema_version = 3` and `methodology_version = "page-native-paired-v3"`
+  - base `seed`, `seed_source`, `schedule_policy = "seeded-cyclic-latin"`, chain model, delta definition, and boundary signal
 
 - `tlb_analysis` contains:
-  - `status`, `planned_points`, `measured_points`, `rounds_per_pass`, `planned_measurements`, `completed_measurements`, and `conclusions_valid`
-  - `measurement_records[]` in execution order with pass, point, locality, round, order, seed, and latency
-  - `sweep[]` with requested/effective pages, pointer count, refinement source/bracket, raw `loop_latencies_ns`, per-task `measurements`, and per-point `p50_latency_ns`
+  - status, point/round counts, scheduled-pair counts, raw-measurement counts, and `conclusions_valid`
+  - `measurement_records[]` in execution order with pass, point, locality, round, order, task seed, legacy spread `latency_ns`, and a `paired_control` object
+  - each `paired_control` contains pair order, spread/packed seeds and raw latencies, verified chain diagnostics, and same-round `translation_delta_ns`
+  - `sweep[]` contains requested/effective/actual pages, actual node and unique-cache-line counts, both chain diagnostics, raw spread/packed/delta arrays, their P50 values, refinement source/bracket, and per-task records
   - `private_cache_knee` (with `detected`, `boundary_locality_kb`, `confidence`, and `may_interfere_with_tlb`)
   - `l1_tlb_detection` (with `detected`, `boundary_locality_kb`, `inferred_entries`, `inferred_entries_method`, `inferred_entries_min`, `inferred_entries_max`, `overlaps_private_cache_knee`, `confidence`, and step metadata)
   - `l2_tlb_detection` (same structure as L1)
@@ -417,7 +436,7 @@ Example file:
 
 - `results/0.53.7/MacMiniM4_analyzetlb.json`
 
-This file predates schema version 2, page-aligned refinement, completion metadata, and midpoint entry ranges. It remains
+This file predates schema version 3, page-native pairing, page-aligned refinement, completion metadata, and midpoint entry ranges. It remains
 useful only as historical latency input; it is not a byte-for-byte example of current output. Observed legacy fields:
 
 - `tlb_guard_bytes = 1048576` (`1MB`)

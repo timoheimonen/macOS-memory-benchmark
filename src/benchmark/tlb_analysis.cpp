@@ -40,6 +40,7 @@
 
 #include "benchmark/benchmark_tests.h"
 #include "benchmark/tlb_analysis_json.h"
+#include "benchmark/tlb_chain.h"
 #include "benchmark/tlb_measurement_scheduler.h"
 #include "benchmark/tlb_sweep_planner.h"
 #include "core/config/config.h"
@@ -204,6 +205,80 @@ MmapPtr try_allocate_analysis_buffer(size_t size_bytes) {
   return MmapPtr(ptr, MmapDeleter{size_bytes});
 }
 
+TlbChainTraversalPolicy tlb_chain_policy_for_mode(LatencyChainMode mode) {
+  switch (mode) {
+    case LatencyChainMode::SameRandomInBoxIncreasingBox:
+      return TlbChainTraversalPolicy::IncreasingPagesSharedOffset;
+    case LatencyChainMode::DiffRandomInBoxIncreasingBox:
+      return TlbChainTraversalPolicy::IncreasingPagesRandomOffsets;
+    case LatencyChainMode::Auto:
+    case LatencyChainMode::GlobalRandom:
+    case LatencyChainMode::RandomInBoxRandomBox:
+      return TlbChainTraversalPolicy::RandomPagesRandomOffsets;
+  }
+  return TlbChainTraversalPolicy::RandomPagesRandomOffsets;
+}
+
+TlbTaskMeasureStatus measure_tlb_chain(
+    void* latency_buffer,
+    size_t buffer_size_bytes,
+    size_t stride_bytes,
+    size_t page_size_bytes,
+    const TlbMeasurementTask& task,
+    TlbChainLayout layout,
+    TlbChainTraversalPolicy traversal_policy,
+    HighResTimer& timer,
+    TlbChainMeasurement& measurement) {
+  if (task.locality_bytes == 0 ||
+      (task.locality_bytes % page_size_bytes) != 0) {
+    return TlbTaskMeasureStatus::Error;
+  }
+
+  measurement.seed = derive_tlb_chain_layout_seed(task.seed, layout);
+  const size_t requested_pages = task.locality_bytes / page_size_bytes;
+  const TlbChainBuildResult chain = build_tlb_chain(latency_buffer,
+                                                    buffer_size_bytes,
+                                                    requested_pages,
+                                                    page_size_bytes,
+                                                    stride_bytes,
+                                                    layout,
+                                                    traversal_policy,
+                                                    measurement.seed);
+  if (chain.status != TlbChainBuildStatus::Success) {
+    std::cerr << Messages::error_prefix()
+              << Messages::error_tlb_chain_setup_failed(
+                     task.locality_bytes / Constants::BYTES_PER_KB,
+                     tlb_chain_layout_to_string(layout),
+                     tlb_chain_build_status_to_string(chain.status),
+                     tlb_chain_validation_status_to_string(
+                         chain.validation_status))
+              << std::endl;
+    return TlbTaskMeasureStatus::Error;
+  }
+
+  measurement.diagnostics = chain.diagnostics;
+  const size_t warmup_bytes =
+      layout == TlbChainLayout::Spread
+          ? task.locality_bytes
+          : chain.diagnostics.actual_pages * page_size_bytes;
+  warmup_latency(latency_buffer, std::min(warmup_bytes, buffer_size_bytes));
+  const double total_latency_ns =
+      run_latency_test(chain.chain_head, kAccessesPerLoop, timer, nullptr, 0);
+  if (total_latency_ns <= 0.0 || std::isnan(total_latency_ns) ||
+      std::isinf(total_latency_ns)) {
+    std::cerr << Messages::error_prefix()
+              << Messages::error_tlb_analysis_invalid_measurement(
+                     task.locality_bytes / Constants::BYTES_PER_KB,
+                     static_cast<int>(task.round_index + 1))
+              << std::endl;
+    return TlbTaskMeasureStatus::Error;
+  }
+
+  measurement.latency_ns =
+      total_latency_ns / static_cast<double>(kAccessesPerLoop);
+  return TlbTaskMeasureStatus::Success;
+}
+
 /**
  * @brief Execute a balanced seeded round schedule and aggregate locality medians.
  *
@@ -214,6 +289,7 @@ TlbScheduleExecutionResult measure_scheduled_points(
     void* latency_buffer,
     size_t buffer_size_bytes,
     size_t stride_bytes,
+    size_t page_size_bytes,
     const std::vector<TlbSweepPoint>& points,
     LatencyChainMode chain_mode,
     HighResTimer& timer,
@@ -227,33 +303,50 @@ TlbScheduleExecutionResult measure_scheduled_points(
   TlbScheduleExecutionResult result = execute_tlb_measurement_schedule(
       schedule,
       stop_requested,
-      [&](const TlbMeasurementTask& task, double& latency_ns) {
+      [&](const TlbMeasurementTask& task, TlbMeasurementSample& sample) {
         const size_t locality_kb = task.locality_bytes / Constants::BYTES_PER_KB;
         spinner.tick(locality_kb, task.round_index + 1, kLoopsPerPoint);
 
-        if (setup_latency_chain(latency_buffer,
-                                buffer_size_bytes,
-                                stride_bytes,
-                                task.locality_bytes,
-                                nullptr,
-                                chain_mode,
-                                task.seed) != EXIT_SUCCESS) {
+        sample.paired.available = true;
+        sample.paired.spread_measured_first =
+            tlb_measure_spread_first(task);
+        const TlbChainTraversalPolicy traversal_policy =
+            tlb_chain_policy_for_mode(chain_mode);
+        auto measure_layout = [&](TlbChainLayout layout,
+                                  TlbChainMeasurement& measurement) {
+          return measure_tlb_chain(latency_buffer,
+                                   buffer_size_bytes,
+                                   stride_bytes,
+                                   page_size_bytes,
+                                   task,
+                                   layout,
+                                   traversal_policy,
+                                   timer,
+                                   measurement);
+        };
+
+        if (sample.paired.spread_measured_first) {
+          if (measure_layout(TlbChainLayout::Spread,
+                             sample.paired.spread) !=
+                  TlbTaskMeasureStatus::Success ||
+              measure_layout(TlbChainLayout::Packed,
+                             sample.paired.packed) !=
+                  TlbTaskMeasureStatus::Success) {
+            return TlbTaskMeasureStatus::Error;
+          }
+        } else if (measure_layout(TlbChainLayout::Packed,
+                                  sample.paired.packed) !=
+                       TlbTaskMeasureStatus::Success ||
+                   measure_layout(TlbChainLayout::Spread,
+                                  sample.paired.spread) !=
+                       TlbTaskMeasureStatus::Success) {
           return TlbTaskMeasureStatus::Error;
         }
 
-        warmup_latency(latency_buffer, buffer_size_bytes);
-        const double total_latency_ns =
-            run_latency_test(latency_buffer, kAccessesPerLoop, timer, nullptr, 0);
-        if (total_latency_ns <= 0.0 || std::isnan(total_latency_ns) ||
-            std::isinf(total_latency_ns)) {
-          std::cerr << Messages::error_prefix()
-                    << Messages::error_tlb_analysis_invalid_measurement(
-                           locality_kb, static_cast<int>(task.round_index + 1))
-                    << std::endl;
-          return TlbTaskMeasureStatus::Error;
-        }
-
-        latency_ns = total_latency_ns / static_cast<double>(kAccessesPerLoop);
+        sample.latency_ns = sample.paired.spread.latency_ns;
+        sample.paired.translation_delta_ns =
+            sample.paired.spread.latency_ns -
+            sample.paired.packed.latency_ns;
         return TlbTaskMeasureStatus::Success;
       });
 
@@ -340,12 +433,6 @@ int run_tlb_analysis(const BenchmarkConfig& config,
               << std::endl;
     return EXIT_FAILURE;
   }
-  if ((page_size_bytes % analysis_stride_bytes) != 0) {
-    std::cerr << Messages::error_prefix()
-              << Messages::error_analyze_tlb_stride_must_divide_page(analysis_stride_bytes, page_size_bytes)
-              << std::endl;
-    return EXIT_FAILURE;
-  }
   const size_t l1_cache_size_bytes = get_l1_cache_size();
   const std::string cpu_name = get_processor_name();
 
@@ -424,6 +511,7 @@ int run_tlb_analysis(const BenchmarkConfig& config,
                                          config.user_specified_tlb_seed)
             << std::endl;
   std::cout << Messages::report_tlb_schedule_policy() << std::endl;
+  std::cout << Messages::report_tlb_chain_model() << std::endl;
   std::cout << Messages::report_tlb_chain_mode_requested(
                    latency_chain_mode_to_string(config.latency_chain_mode))
             << std::endl;
@@ -454,8 +542,9 @@ int run_tlb_analysis(const BenchmarkConfig& config,
       latency_buffer.get(),
       selected_buffer_bytes,
       analysis_stride_bytes,
+      page_size_bytes,
       sweep_points,
-      config.latency_chain_mode,
+      effective_chain_mode,
       timer,
       config.tlb_seed,
       TlbMeasurementPass::Base,
@@ -562,8 +651,9 @@ int run_tlb_analysis(const BenchmarkConfig& config,
         latency_buffer.get(),
         selected_buffer_bytes,
         analysis_stride_bytes,
+        page_size_bytes,
         refinement_points,
-        config.latency_chain_mode,
+        effective_chain_mode,
         timer,
         config.tlb_seed,
         TlbMeasurementPass::Refinement,
@@ -665,8 +755,9 @@ int run_tlb_analysis(const BenchmarkConfig& config,
         latency_buffer.get(),
         selected_buffer_bytes,
         analysis_stride_bytes,
+        page_size_bytes,
         {comparison_point},
-        config.latency_chain_mode,
+        effective_chain_mode,
         timer,
         config.tlb_seed,
         TlbMeasurementPass::LargeLocality,

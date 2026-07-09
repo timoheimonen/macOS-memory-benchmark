@@ -471,10 +471,15 @@ TEST_F(MessagesFormattingTest, AnalyzeTlbStrideGuardMessages) {
   EXPECT_NE(exceeds.find("--analyze-tlb"), std::string::npos);
   EXPECT_NE(exceeds.find("32768"), std::string::npos);
   EXPECT_NE(exceeds.find("16384"), std::string::npos);
+}
 
-  const std::string divisor = Messages::error_analyze_tlb_stride_must_divide_page(136, 16384);
-  EXPECT_NE(divisor.find("divide"), std::string::npos);
-  EXPECT_NE(divisor.find("136"), std::string::npos);
+TEST_F(MessagesFormattingTest, TlbChainSetupFailureMessage) {
+  const std::string msg = Messages::error_tlb_chain_setup_failed(
+      256, "packed", "integrity-failure", "early-cycle");
+  EXPECT_NE(msg.find("packed"), std::string::npos);
+  EXPECT_NE(msg.find("256"), std::string::npos);
+  EXPECT_NE(msg.find("integrity-failure"), std::string::npos);
+  EXPECT_NE(msg.find("early-cycle"), std::string::npos);
 }
 
 TEST_F(MessagesFormattingTest, DuplicateSweepParameterMessage) {
@@ -514,6 +519,8 @@ TEST_F(MessagesFormattingTest, ReportTlbSeedAndSchedule) {
   const std::string user = Messages::report_tlb_seed(7, true);
   EXPECT_NE(user.find("user"), std::string::npos);
   EXPECT_NE(Messages::report_tlb_schedule_policy().find("Latin"), std::string::npos);
+  EXPECT_NE(Messages::report_tlb_chain_model().find("spread/packed"),
+            std::string::npos);
 }
 
 TEST_F(MessagesFormattingTest, ReportTlbRequestedAndEffectiveChainMode) {

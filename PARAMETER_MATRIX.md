@@ -1,6 +1,6 @@
 # Parameter Compatibility Matrix
 
-Version 0.56.1
+Version 0.57.0
 
 ## All Flags
 
@@ -46,7 +46,7 @@ Version 0.56.1
 | `--buffer-size <MB>` | ✅ | |
 | `--count <n>` | ✅ | |
 | `--latency-samples <n>` | ✅ | |
-| `--latency-stride-bytes <n>` | ✅ | |
+| `--latency-stride-bytes <n>` | ✅ | Pointer-aligned and no larger than system page size; exact page-size divisibility is not required |
 | `--latency-chain-mode <mode>` | ✅ | Box modes require `--latency-tlb-locality-kb > 0`; `global-random` works with locality `0` |
 | `--latency-tlb-locality-kb <n>` | ✅ | |
 | `--threads <n>` | ✅ | |

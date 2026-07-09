@@ -65,7 +65,6 @@ std::string error_latency_samples_invalid(long long value, long long min_val, lo
 std::string error_latency_stride_invalid(long long value, long long min_val, long long max_val);
 std::string error_latency_stride_alignment(size_t value_bytes, size_t alignment_bytes);
 std::string error_analyze_tlb_stride_exceeds_page(size_t stride_bytes, size_t page_size_bytes);
-std::string error_analyze_tlb_stride_must_divide_page(size_t stride_bytes, size_t page_size_bytes);
 std::string error_latency_tlb_locality_invalid(long long value, long long max_val);
 std::string error_latency_chain_mode_invalid();
 std::string error_latency_chain_mode_requires_locality(const std::string& mode_name);
@@ -81,6 +80,10 @@ const std::string& error_tlb_analysis_insufficient_memory();
 const std::string& error_tlb_analysis_timer_creation_failed();
 const std::string& error_timer_creation_failed();
 std::string error_tlb_analysis_invalid_measurement(size_t locality_kb, int loop_number);
+std::string error_tlb_chain_setup_failed(size_t locality_kb,
+                                         const std::string& layout,
+                                         const std::string& build_status,
+                                         const std::string& validation_status);
 std::string error_mmap_failed(const std::string& buffer_name);
 std::string error_madvise_failed(const std::string& buffer_name);
 std::string error_munmap_failed();
@@ -217,6 +220,7 @@ std::string report_tlb_stride(size_t stride_bytes);
 std::string report_tlb_density(const std::string& density_name);
 std::string report_tlb_seed(uint64_t seed, bool user_specified);
 const std::string& report_tlb_schedule_policy();
+const std::string& report_tlb_chain_model();
 std::string report_tlb_chain_mode(const std::string& chain_mode_name);
 std::string report_tlb_chain_mode_requested(const std::string& chain_mode_name);
 std::string report_tlb_chain_mode_effective(const std::string& chain_mode_name);

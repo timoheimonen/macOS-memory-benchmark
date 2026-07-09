@@ -155,8 +155,8 @@ std::string usage_options(const std::string& prog_name) {
       << "                        Stride used by latency pointer chains (default: "
       << Constants::LATENCY_STRIDE_BYTES << " bytes).\n"
       << "                        Must be > 0 and a multiple of pointer size (typically 8 bytes).\n"
-      << "                        With --analyze-tlb, stride must not exceed and must exactly divide\n"
-      << "                        the system page size. Sweep values are checked before execution.\n"
+      << "                        With --analyze-tlb, stride must not exceed the system page size;\n"
+      << "                        page-size divisibility is not required. Sweep values are preflight checked.\n"
       << "  -m, --latency-chain-mode <mode>\n"
       << "                        Pointer-chain construction policy. Modes: auto (default), global-random,\n"
       << "                        random-box, same-random-in-box, diff-random-in-box.\n"
@@ -262,6 +262,12 @@ std::string report_tlb_seed(uint64_t seed, bool user_specified) {
 
 const std::string& report_tlb_schedule_policy() {
   static const std::string msg = "Schedule: seeded cyclic Latin rounds";
+  return msg;
+}
+
+const std::string& report_tlb_chain_model() {
+  static const std::string msg =
+      "Chain Model: page-native spread/packed pairs (one spread node per page)";
   return msg;
 }
 

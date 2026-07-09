@@ -170,17 +170,17 @@ TEST(ConfigTest, ValidateAnalyzeTlbRejectsStrideLargerThanPage) {
   EXPECT_EQ(validate_config(config), EXIT_FAILURE);
 }
 
-TEST(ConfigTest, ValidateAnalyzeTlbRejectsStrideThatDoesNotDividePage) {
+TEST(ConfigTest, ValidateAnalyzeTlbAllowsAlignedStrideThatDoesNotDividePage) {
   BenchmarkConfig config;
   config.analyze_tlb = true;
   config.latency_stride_bytes = 136;
 
   ASSERT_EQ(136u % sizeof(uintptr_t), 0u);
   ASSERT_NE(static_cast<size_t>(getpagesize()) % config.latency_stride_bytes, 0u);
-  EXPECT_EQ(validate_config(config), EXIT_FAILURE);
+  EXPECT_EQ(validate_config(config), EXIT_SUCCESS);
 }
 
-TEST(ConfigTest, ValidateAnalyzeTlbSweepRejectsInvalidStrideBeforeExecution) {
+TEST(ConfigTest, ValidateAnalyzeTlbSweepAllowsAlignedNonDivisorStride) {
   BenchmarkConfig config;
   config.analyze_tlb = true;
   config.run_sweep = true;
@@ -192,7 +192,7 @@ TEST(ConfigTest, ValidateAnalyzeTlbSweepRejectsInvalidStrideBeforeExecution) {
       {SweepParameter::LatencyStrideBytes, "latency-stride-bytes", {value}},
   };
 
-  EXPECT_EQ(validate_config(config), EXIT_FAILURE);
+  EXPECT_EQ(validate_config(config), EXIT_SUCCESS);
 }
 
 TEST(ConfigTest, ValidateSweepRejectsDuplicateParameter) {

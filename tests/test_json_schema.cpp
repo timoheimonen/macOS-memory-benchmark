@@ -16,6 +16,7 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -45,6 +46,62 @@ nlohmann::json read_json_file(const std::filesystem::path& path) {
   nlohmann::json parsed;
   in >> parsed;
   return parsed;
+}
+
+TlbMeasurementRecord make_paired_tlb_record(TlbMeasurementPass pass,
+                                            size_t point_index,
+                                            size_t locality_bytes,
+                                            size_t round_index,
+                                            size_t order_index,
+                                            uint64_t task_seed,
+                                            double spread_latency_ns) {
+  TlbMeasurementRecord record{pass,
+                              point_index,
+                              locality_bytes,
+                              round_index,
+                              order_index,
+                              task_seed,
+                              spread_latency_ns};
+  const size_t page_size = 16384;
+  const size_t requested_pages = locality_bytes / page_size;
+  record.paired.available = true;
+  record.paired.spread_measured_first = (round_index % 2) == 0;
+  record.paired.spread.seed = task_seed + 1;
+  record.paired.spread.latency_ns = spread_latency_ns;
+  record.paired.spread.diagnostics = {
+      TlbChainLayout::Spread,
+      TlbChainTraversalPolicy::RandomPagesRandomOffsets,
+      requested_pages,
+      requested_pages,
+      requested_pages,
+      requested_pages,
+      1,
+      locality_bytes,
+      page_size,
+      64,
+      64,
+      task_seed + 1,
+      true,
+  };
+  record.paired.packed.seed = task_seed + 2;
+  record.paired.packed.latency_ns = spread_latency_ns - 5.0;
+  record.paired.packed.diagnostics = {
+      TlbChainLayout::Packed,
+      TlbChainTraversalPolicy::RandomPagesRandomOffsets,
+      requested_pages,
+      std::max<size_t>(1, (requested_pages + 255) / 256),
+      requested_pages,
+      requested_pages,
+      std::min<size_t>(requested_pages, 256),
+      requested_pages * 64,
+      page_size,
+      64,
+      64,
+      task_seed + 2,
+      true,
+  };
+  record.paired.translation_delta_ns = 5.0;
+  return record;
 }
 
 }  // namespace
@@ -108,10 +165,34 @@ TEST(JsonSchemaTest, TlbAnalysisExporterIncludesModeAndCoreCounts) {
       0, 1, 1, 16 * Constants::BYTES_PER_KB, 64, 256, "base",
       16 * Constants::BYTES_PER_KB, 16 * Constants::BYTES_PER_KB}};
   const std::vector<TlbMeasurementRecord> measurement_records = {
-      {TlbMeasurementPass::Base, 0, 16 * Constants::BYTES_PER_KB, 0, 0, 100, 15.0},
-      {TlbMeasurementPass::Base, 0, 16 * Constants::BYTES_PER_KB, 1, 0, 101, 15.1},
-      {TlbMeasurementPass::LargeLocality, 1, 512 * Constants::BYTES_PER_MB, 0, 0, 200, 95.0},
-      {TlbMeasurementPass::LargeLocality, 1, 512 * Constants::BYTES_PER_MB, 1, 0, 201, 96.0},
+      make_paired_tlb_record(TlbMeasurementPass::Base,
+                             0,
+                             16 * Constants::BYTES_PER_KB,
+                             0,
+                             0,
+                             100,
+                             15.0),
+      make_paired_tlb_record(TlbMeasurementPass::Base,
+                             0,
+                             16 * Constants::BYTES_PER_KB,
+                             1,
+                             0,
+                             101,
+                             15.1),
+      make_paired_tlb_record(TlbMeasurementPass::LargeLocality,
+                             1,
+                             512 * Constants::BYTES_PER_MB,
+                             0,
+                             0,
+                             200,
+                             95.0),
+      make_paired_tlb_record(TlbMeasurementPass::LargeLocality,
+                             1,
+                             512 * Constants::BYTES_PER_MB,
+                             1,
+                             0,
+                             201,
+                             96.0),
   };
   TlbBoundaryDetection l1_boundary;
   l1_boundary.detected = true;
@@ -174,9 +255,9 @@ TEST(JsonSchemaTest, TlbAnalysisExporterIncludesModeAndCoreCounts) {
   EXPECT_EQ(output_json[JsonKeys::CONFIGURATION][JsonKeys::MODE], Constants::TLB_ANALYSIS_JSON_MODE_NAME);
   EXPECT_EQ(output_json[JsonKeys::CONFIGURATION][JsonKeys::PERFORMANCE_CORES], 4);
   EXPECT_EQ(output_json[JsonKeys::CONFIGURATION][JsonKeys::EFFICIENCY_CORES], 6);
-  EXPECT_EQ(output_json[JsonKeys::CONFIGURATION]["schema_version"], 2);
+  EXPECT_EQ(output_json[JsonKeys::CONFIGURATION]["schema_version"], 3);
   EXPECT_EQ(output_json[JsonKeys::CONFIGURATION]["methodology_version"],
-            "locality-sweep-v2-balanced-rounds");
+            "page-native-paired-v3");
   EXPECT_EQ(output_json[JsonKeys::CONFIGURATION]["seed"], 12345);
   EXPECT_EQ(output_json[JsonKeys::CONFIGURATION]["seed_source"], "user");
   EXPECT_EQ(output_json[JsonKeys::CONFIGURATION]["schedule_policy"],
@@ -196,10 +277,25 @@ TEST(JsonSchemaTest, TlbAnalysisExporterIncludesModeAndCoreCounts) {
   EXPECT_EQ(output_json["tlb_analysis"]["measured_points"], 1);
   EXPECT_EQ(output_json["tlb_analysis"]["planned_measurements"], 2);
   EXPECT_EQ(output_json["tlb_analysis"]["completed_measurements"], 2);
+  EXPECT_EQ(output_json["tlb_analysis"]["planned_measurement_pairs"], 2);
+  EXPECT_EQ(output_json["tlb_analysis"]["completed_measurement_pairs"], 2);
+  EXPECT_EQ(output_json["tlb_analysis"]["planned_raw_measurements"], 4);
+  EXPECT_EQ(output_json["tlb_analysis"]["completed_raw_measurements"], 4);
   EXPECT_TRUE(output_json["tlb_analysis"]["conclusions_valid"]);
   EXPECT_EQ(output_json["tlb_analysis"]["measurement_records"].size(), 4u);
   EXPECT_EQ(output_json["tlb_analysis"]["measurement_records"][0]["pass"], "base");
+  EXPECT_TRUE(output_json["tlb_analysis"]["measurement_records"][0]
+                         ["paired_control"]["available"]);
+  EXPECT_DOUBLE_EQ(output_json["tlb_analysis"]["measurement_records"][0]
+                              ["paired_control"]["translation_delta_ns"],
+                   5.0);
   EXPECT_EQ(output_json["tlb_analysis"]["sweep"][0]["requested_pages"], 1);
+  EXPECT_EQ(output_json["tlb_analysis"]["sweep"][0]["actual_pages"], 1);
+  EXPECT_EQ(output_json["tlb_analysis"]["sweep"][0]["actual_node_count"], 1);
+  EXPECT_EQ(output_json["tlb_analysis"]["sweep"][0]["actual_unique_cache_lines"], 1);
+  EXPECT_DOUBLE_EQ(output_json["tlb_analysis"]["sweep"][0]
+                              ["translation_delta_p50_ns"],
+                   5.0);
   EXPECT_EQ(output_json["tlb_analysis"]["sweep"][0]["measurements"].size(), 2u);
   EXPECT_EQ(output_json["tlb_analysis"]["sweep"][0]["measurements"][1]["round_index"], 1);
   EXPECT_TRUE(output_json["tlb_analysis"].contains("large_locality_latency_delta"));
@@ -225,7 +321,13 @@ TEST(JsonSchemaTest, TlbAnalysisExporterOmitsPageWalkPenaltyWhenComparisonIncomp
       0, 1, 1, 16 * Constants::BYTES_PER_KB, 64, 256, "base",
       16 * Constants::BYTES_PER_KB, 16 * Constants::BYTES_PER_KB}};
   const std::vector<TlbMeasurementRecord> measurement_records = {
-      {TlbMeasurementPass::Base, 0, 16 * Constants::BYTES_PER_KB, 0, 0, 100, 15.0},
+      make_paired_tlb_record(TlbMeasurementPass::Base,
+                             0,
+                             16 * Constants::BYTES_PER_KB,
+                             0,
+                             0,
+                             100,
+                             15.0),
   };
   const TlbBoundaryDetection l1_boundary;
   const TlbBoundaryDetection l2_boundary;

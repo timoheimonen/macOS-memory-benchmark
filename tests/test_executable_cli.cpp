@@ -109,10 +109,10 @@ TEST(ExecutableCliIntegrationTest, AnalyzeTlbInvalidStrideSweepFailsBeforeExecut
   std::remove(output_path.c_str());
 
   const CliResult result = run_memory_benchmark(
-      "--analyze-tlb --sweep latency-stride-bytes=64,136 --output " + output_path);
+      "--analyze-tlb --sweep latency-stride-bytes=64,130 --output " + output_path);
 
   EXPECT_EQ(result.exit_code, EXIT_FAILURE);
-  EXPECT_NE(result.output.find("must divide the system page size exactly"), std::string::npos);
+  EXPECT_NE(result.output.find("must be a multiple of 8 bytes"), std::string::npos);
   EXPECT_EQ(result.output.find("Running sweep"), std::string::npos);
   EXPECT_EQ(access(output_path.c_str(), F_OK), -1);
 }

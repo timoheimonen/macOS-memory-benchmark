@@ -28,6 +28,7 @@
 #include <functional>
 #include <vector>
 
+#include "benchmark/tlb_chain.h"
 #include "benchmark/tlb_sweep_planner.h"
 
 enum class TlbMeasurementPass {
@@ -46,6 +47,28 @@ struct TlbMeasurementTask {
   uint64_t seed = 0;
 };
 
+/** Raw latency and verified physical-chain metadata for one pair member. */
+struct TlbChainMeasurement {
+  uint64_t seed = 0;
+  double latency_ns = 0.0;
+  TlbChainDiagnostics diagnostics;
+};
+
+/** Same-round spread/packed control pair. */
+struct TlbPairedMeasurement {
+  bool available = false;
+  bool spread_measured_first = true;
+  TlbChainMeasurement spread;
+  TlbChainMeasurement packed;
+  double translation_delta_ns = 0.0;
+};
+
+/** Callback output for one scheduled task. */
+struct TlbMeasurementSample {
+  double latency_ns = 0.0;
+  TlbPairedMeasurement paired;
+};
+
 /** Completed task metadata and measured latency. */
 struct TlbMeasurementRecord {
   TlbMeasurementPass pass = TlbMeasurementPass::Base;
@@ -55,6 +78,7 @@ struct TlbMeasurementRecord {
   size_t order_index = 0;
   uint64_t seed = 0;
   double latency_ns = 0.0;
+  TlbPairedMeasurement paired;
 };
 
 enum class TlbTaskMeasureStatus {
@@ -75,7 +99,8 @@ struct TlbScheduleExecutionResult {
 
 using TlbStopRequested = std::function<bool()>;
 using TlbTaskMeasureFunction =
-    std::function<TlbTaskMeasureStatus(const TlbMeasurementTask&, double&)>;
+    std::function<TlbTaskMeasureStatus(const TlbMeasurementTask&,
+                                       TlbMeasurementSample&)>;
 
 const char* tlb_measurement_pass_to_string(TlbMeasurementPass pass);
 
@@ -83,6 +108,9 @@ uint64_t derive_tlb_measurement_seed(uint64_t base_seed,
                                      TlbMeasurementPass pass,
                                      size_t round_index,
                                      size_t point_index);
+
+/** Alternate which member of a paired measurement runs first. */
+bool tlb_measure_spread_first(const TlbMeasurementTask& task);
 
 /** Build seeded cyclic Latin rounds in which every point occurs once per round. */
 std::vector<TlbMeasurementTask> build_tlb_measurement_schedule(

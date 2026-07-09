@@ -84,8 +84,9 @@ def load_tlb_json(path: Path):
   points = []
   for entry in sweep:
     locality_kb = int(entry["locality_kb"])
-    p50_latency_ns = float(entry["p50_latency_ns"])
-    loop_values = entry.get("loop_latencies_ns", [])
+    p50_latency_ns = float(entry.get("spread_p50_latency_ns", entry["p50_latency_ns"]))
+    translation_delta = entry.get("translation_delta_p50_ns")
+    loop_values = entry.get("spread_loop_latencies_ns", entry.get("loop_latencies_ns", []))
     if isinstance(loop_values, list) and loop_values:
       loops = sorted(float(v) for v in loop_values)
       p10 = percentile(loops, 0.10)
@@ -99,6 +100,8 @@ def load_tlb_json(path: Path):
         "p50_latency_ns": p50_latency_ns,
         "p10_latency_ns": p10,
         "p90_latency_ns": p90,
+        "translation_delta_ns": (
+            float(translation_delta) if translation_delta is not None else None),
     })
 
   points.sort(key=lambda item: item["locality_kb"])
@@ -118,13 +121,23 @@ def main():
 
   x_kb = [p["locality_kb"] for p in points]
   y_p50 = [p["p50_latency_ns"] for p in points]
+  y_delta = [p["translation_delta_ns"] for p in points]
 
   p10_values = [p["p10_latency_ns"] for p in points]
   p90_values = [p["p90_latency_ns"] for p in points]
   has_spread_band = all(v is not None for v in p10_values) and all(v is not None for v in p90_values)
 
   fig, ax = plt.subplots(figsize=(12, 6.5))
-  ax.plot(x_kb, y_p50, marker="o", linewidth=2.2, color="#0b5d8f", label="P50 latency")
+  ax.plot(x_kb, y_p50, marker="o", linewidth=2.2, color="#0b5d8f", label="Spread P50 latency")
+
+  if all(value is not None for value in y_delta):
+    ax.plot(x_kb,
+            y_delta,
+            marker="s",
+            linewidth=1.8,
+            linestyle="--",
+            color="#8b5a2b",
+            label="Paired translation delta (spread - packed)")
 
   if has_spread_band:
     ax.fill_between(x_kb, p10_values, p90_values, alpha=0.20, color="#6aaed6", label="P10-P90 band")
@@ -157,7 +170,7 @@ def main():
   ax.set_xlabel("TLB Locality Window")
   ax.set_ylabel("Latency (ns/access)")
   ax.set_title(
-      f"TLB Analysis Trend (P50) - {cpu_name}\n"
+      f"TLB Analysis Trend (P50 spread and paired delta) - {cpu_name}\n"
       f"Stride: {stride_bytes} B, Page Size: {page_size_kb} KB")
   ax.grid(True, which="both", alpha=0.3)
 

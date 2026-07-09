@@ -85,13 +85,6 @@ int validate_analyze_tlb_stride(size_t stride_bytes, size_t page_size_bytes) {
     return EXIT_FAILURE;
   }
 
-  if ((page_size_bytes % stride_bytes) != 0) {
-    std::cerr << Messages::error_prefix()
-              << Messages::error_analyze_tlb_stride_must_divide_page(stride_bytes, page_size_bytes)
-              << std::endl;
-    return EXIT_FAILURE;
-  }
-
   return EXIT_SUCCESS;
 }
 

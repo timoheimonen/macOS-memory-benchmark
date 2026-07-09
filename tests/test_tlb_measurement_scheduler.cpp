@@ -107,9 +107,10 @@ TEST(TlbMeasurementSchedulerTest, InjectedStopReturnsDeterministicPartialRecords
   const TlbScheduleExecutionResult result = execute_tlb_measurement_schedule(
       schedule,
       [&measured_count]() { return measured_count >= 3; },
-      [&measured_count](const TlbMeasurementTask&, double& latency_ns) {
+      [&measured_count](const TlbMeasurementTask&,
+                        TlbMeasurementSample& sample) {
         ++measured_count;
-        latency_ns = static_cast<double>(measured_count);
+        sample.latency_ns = static_cast<double>(measured_count);
         return TlbTaskMeasureStatus::Success;
       });
 
@@ -125,8 +126,47 @@ TEST(TlbMeasurementSchedulerTest, MeasurementErrorStopsWithoutAppendingInvalidRe
   const TlbScheduleExecutionResult result = execute_tlb_measurement_schedule(
       schedule,
       []() { return false; },
-      [](const TlbMeasurementTask&, double&) { return TlbTaskMeasureStatus::Error; });
+      [](const TlbMeasurementTask&, TlbMeasurementSample&) {
+        return TlbTaskMeasureStatus::Error;
+      });
 
   EXPECT_EQ(result.status, TlbScheduleExecutionStatus::Error);
   EXPECT_TRUE(result.records.empty());
+}
+
+TEST(TlbMeasurementSchedulerTest, PreservesPairedMeasurementMetadata) {
+  const std::vector<TlbMeasurementTask> schedule = build_tlb_measurement_schedule(
+      make_points(1), 1, 7, TlbMeasurementPass::Base);
+
+  const TlbScheduleExecutionResult result = execute_tlb_measurement_schedule(
+      schedule,
+      []() { return false; },
+      [](const TlbMeasurementTask&, TlbMeasurementSample& sample) {
+        sample.latency_ns = 12.0;
+        sample.paired.available = true;
+        sample.paired.spread.seed = 101;
+        sample.paired.spread.latency_ns = 12.0;
+        sample.paired.packed.seed = 202;
+        sample.paired.packed.latency_ns = 7.5;
+        sample.paired.translation_delta_ns = 4.5;
+        return TlbTaskMeasureStatus::Success;
+      });
+
+  ASSERT_EQ(result.status, TlbScheduleExecutionStatus::Complete);
+  ASSERT_EQ(result.records.size(), 1U);
+  EXPECT_TRUE(result.records[0].paired.available);
+  EXPECT_EQ(result.records[0].paired.spread.seed, 101U);
+  EXPECT_EQ(result.records[0].paired.packed.seed, 202U);
+  EXPECT_DOUBLE_EQ(result.records[0].paired.translation_delta_ns, 4.5);
+}
+
+TEST(TlbMeasurementSchedulerTest, PairOrderAlternatesAcrossRoundAndOrderParity) {
+  TlbMeasurementTask task;
+  task.round_index = 0;
+  task.order_index = 0;
+  EXPECT_TRUE(tlb_measure_spread_first(task));
+  task.order_index = 1;
+  EXPECT_FALSE(tlb_measure_spread_first(task));
+  task.round_index = 1;
+  EXPECT_TRUE(tlb_measure_spread_first(task));
 }

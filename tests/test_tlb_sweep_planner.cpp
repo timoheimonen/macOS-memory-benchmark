@@ -33,7 +33,7 @@ TEST(TlbSweepPlannerTest, HighDensityBasePlanIsPageConsistent) {
     EXPECT_EQ(points[i].locality_bytes % page_size, 0u);
     EXPECT_EQ(points[i].requested_pages, points[i].locality_bytes / page_size);
     EXPECT_EQ(points[i].effective_pages, points[i].requested_pages);
-    EXPECT_EQ(points[i].pointer_count, points[i].locality_bytes / stride);
+    EXPECT_EQ(points[i].pointer_count, points[i].effective_pages);
     EXPECT_EQ(points[i].refinement_source, "base");
   }
 }

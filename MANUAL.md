@@ -257,7 +257,8 @@ forms such as `-buffersize` or `-benchmark` are invalid.
 
 - Runs standalone TLB analysis mode only
 - Can be combined only with optional `--output <file>`, `--latency-stride-bytes <bytes>`, `--latency-chain-mode <mode>`, `--tlb-density <low|medium|high>`, `--seed <uint64>`, `--sweep <key=...>`, and `--sweep-max-runs <count>`
-- Uses latency stride from `--latency-stride-bytes` (same default as standard latency mode). Analyze-TLB stride must not exceed and must exactly divide the system page size. It performs a denser base locality sweep (`29` canonical points, stride-clamped to `max(16KB, 2*stride)` up to `256MB`), then automatically inserts page-aligned locality points near detected knees/boundaries
+- Uses latency stride from `--latency-stride-bytes` (same default as standard latency mode). Analyze-TLB stride must be pointer-aligned and must not exceed the system page size; it does not need to divide the page size. It performs a denser base locality sweep (`29` canonical points, stride-clamped to `max(16KB, 2*stride)` up to `256MB`), then automatically inserts page-aligned locality points near detected knees/boundaries
+- Builds a page-native spread chain with exactly one pointer node per requested page and a cache-line-dense packed control with the same node and unique-cache-line counts. Each scheduler task measures both layouts in one round, alternates pair order, and stores the same-round `spread - packed` translation delta
 - Detects likely private-cache knee candidates (around the ~1MB region when present) and reports whether they may interfere with TLB boundary interpretation
 - Preserves a direct L1 candidate that overlaps the private-cache knee and marks it as ambiguous instead of silently skipping to a later boundary
 - Reports inferred L1/L2 TLB boundaries with both midpoint estimate (`inferred_entries`) and local-range estimate (`inferred_entries_min`/`inferred_entries_max`)
@@ -265,7 +266,7 @@ forms such as `-buffersize` or `-benchmark` are invalid.
 - Separately computes a large-locality latency delta as `P50(512MB) - P50(effective baseline locality)` when the analysis buffer is at least `512MB`. This is not claimed to isolate page-table-walk cost
 - Emits explicit `complete`, `interrupted`, or `partial` status. Boundary conclusions are suppressed unless the planned sweep completed
 - Uses 30 balanced rounds: every round measures each planned locality once, and a seeded cyclic Latin schedule rotates locality order to reduce elapsed-time and thermal-drift correlation
-- Rebuilds every standalone TLB pointer chain from a recorded deterministic task seed; latency-chain behavior outside standalone TLB analysis remains unchanged
+- Rebuilds every standalone TLB pair from recorded task and layout seeds; pointer values are written in physical-slot order and every chain is verified to visit all nodes and return to its head. Latency-chain behavior outside standalone TLB analysis remains unchanged
 - A user interrupt remains a successful graceful-shutdown return when partial JSON can be written; consumers must use `status` and `conclusions_valid` rather than the process code to accept conclusions
 - Detailed methodology and JSON contract: `TLB_ANALYSIS_WHITEPAPER.md`
 
@@ -311,7 +312,7 @@ forms such as `-buffersize` or `-benchmark` are invalid.
 - Default: `256`
 - Must be `> 0`
 - Must be a multiple of 8 bytes (pointer size on Apple Silicon)
-- With `--analyze-tlb`, must not exceed and must exactly divide the system page size. This temporary guard remains until the planned page-native TLB chain is implemented
+- With `--analyze-tlb`, must not exceed the system page size. The page-native spread builder rounds effective spacing up to a cache-line multiple, while the packed control uses one node per cache line; exact page-size divisibility is not required
 - Use smaller values (for example `64`) to increase same-page cache-line activity and reduce TLB sensitivity
 
 #### `--latency-chain-mode <mode>`
@@ -322,6 +323,7 @@ forms such as `-buffersize` or `-benchmark` are invalid.
 - `global-random` works with `--latency-tlb-locality-kb 0`
 - `random-box`, `same-random-in-box`, and `diff-random-in-box` require `--latency-tlb-locality-kb > 0`
 - In `--analyze-tlb` mode, `global-random` is rejected because it ignores locality windows and would make locality sweep boundaries misleading
+- In `--analyze-tlb`, modes select page-native traversal policy: `random-box` randomizes page order and offsets, `same-random-in-box` uses increasing pages with a shared offset, and `diff-random-in-box` uses increasing pages with independently selected offsets
 
 #### `--latency-tlb-locality-kb <size_kb>`
 
@@ -688,7 +690,7 @@ Note: The `configuration` block includes fields such as `latency_chain_mode` (th
   ],
   "execution_time_sec": 123.4,
   "timestamp": "2026-04-29T12:00:00Z",
-  "version": "0.56.1"
+  "version": "0.57.0"
 }
 ```
 
@@ -781,19 +783,22 @@ When `--latency-stride-bytes` is explicitly set (with a non-default value), late
 ### TLB analysis JSON (analyze mode)
 
 When run with `--analyze-tlb --output tlb_analysis.json`, the payload includes a dedicated `tlb_analysis` block.
-The following is an illustrative schema-version-2 payload; its latency values are adapted from the historical
+The following is an illustrative schema-version-3 payload; its latency values are adapted from the historical
 `results/0.53.8/MacMiniM4_analyze-tlb-chain-mode-random-box.json` run rather than presented as a newly generated
-version-0.56.1 result:
+version-0.57.0 result:
 
 ```json
 {
   "configuration": {
     "mode": "analyze_tlb",
-    "schema_version": 2,
-    "methodology_version": "locality-sweep-v2-balanced-rounds",
+    "schema_version": 3,
+    "methodology_version": "page-native-paired-v3",
     "seed": 123456789,
     "seed_source": "user",
     "schedule_policy": "seeded-cyclic-latin",
+    "chain_model": "one-node-per-spread-page-with-packed-control",
+    "translation_delta_definition": "same-round spread_latency_ns - packed_latency_ns",
+    "boundary_signal": "spread_latency_ns",
     "latency_stride_bytes": 64,
     "buffer_size_mb": 1024
   },
@@ -808,11 +813,32 @@ version-0.56.1 result:
         "locality_kb": 16,
         "requested_pages": 1,
         "effective_pages": 1,
+        "actual_pages": 1,
+        "packed_actual_pages": 1,
+        "actual_node_count": 1,
+        "actual_unique_cache_lines": 1,
         "refinement_source": "base",
         "loop_latencies_ns": [25.957278, 25.965990, 25.916902],
         "p50_latency_ns": 25.982678,
+        "spread_loop_latencies_ns": [25.957278, 25.965990, 25.916902],
+        "packed_loop_latencies_ns": [20.812301, 20.901100, 20.844002],
+        "translation_deltas_ns": [5.144977, 5.064890, 5.072900],
+        "translation_delta_p50_ns": 5.072900,
         "measurements": [
-          {"pass": "base", "round_index": 0, "order_index": 4, "seed": 987654321, "latency_ns": 25.957278}
+          {
+            "pass": "base",
+            "round_index": 0,
+            "order_index": 4,
+            "seed": 987654321,
+            "latency_ns": 25.957278,
+            "paired_control": {
+              "available": true,
+              "pair_order": "spread-first",
+              "spread": {"seed": 101, "latency_ns": 25.957278, "chain": {"actual_pages": 1, "node_count": 1, "unique_cache_lines": 1, "integrity_verified": true}},
+              "packed": {"seed": 102, "latency_ns": 20.812301, "chain": {"actual_pages": 1, "node_count": 1, "unique_cache_lines": 1, "integrity_verified": true}},
+              "translation_delta_ns": 5.144977
+            }
+          }
         ]
       }
     ],
@@ -866,10 +892,12 @@ version-0.56.1 result:
 }
 ```
 
-The example abbreviates the 30 rounds. Actual output includes `tlb_analysis.measurement_records` in execution order and
-per-point `measurements`; every record carries `pass`, `round_index`, `order_index`, derived `seed`, and `latency_ns`.
-`planned_measurements` and `completed_measurements` distinguish a fully measured grid from points that contain only
-partial round data after interruption.
+The example abbreviates the 30 rounds and most chain-diagnostic fields. Actual output includes
+`tlb_analysis.measurement_records` in execution order and per-point `measurements`; every complete record carries both raw
+pair members, physical diagnostics, pair order, and same-round delta. `planned_measurement_pairs` /
+`completed_measurement_pairs` count scheduler tasks, while `planned_raw_measurements` /
+`completed_raw_measurements` count their spread and packed members. Legacy `latency_ns`, `loop_latencies_ns`, and
+`p50_latency_ns` are spread values. Boundary inference also remains spread-based until the phase-4 detector update.
 
 If the 512MB comparison cannot run, `large_locality_latency_delta.available` is `false` and comparison values are omitted.
 The former `page_walk_penalty` object remains as a deprecated compatibility alias for one minor-version window; it
