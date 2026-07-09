@@ -259,10 +259,10 @@ forms such as `-buffersize` or `-benchmark` are invalid.
 - Can be combined only with optional `--output <file>`, `--latency-stride-bytes <bytes>`, `--latency-chain-mode <mode>`, `--tlb-density <low|medium|high>`, `--seed <uint64>`, `--sweep <key=...>`, and `--sweep-max-runs <count>`
 - Uses latency stride from `--latency-stride-bytes` (same default as standard latency mode). Analyze-TLB stride must be pointer-aligned and must not exceed the system page size; it does not need to divide the page size. It performs a denser base locality sweep (`29` canonical points, stride-clamped to `max(16KB, 2*stride)` up to `256MB`), then automatically inserts page-aligned locality points near detected knees/boundaries
 - Builds a page-native spread chain with exactly one pointer node per requested page and a cache-line-dense packed control with the same node and unique-cache-line counts. Each scheduler task measures both layouts in one round, alternates pair order, and stores the same-round `spread - packed` translation delta
-- Detects likely private-cache knee candidates (around the ~1MB region when present) and reports whether they may interfere with TLB boundary interpretation
-- Preserves a direct L1 candidate that overlaps the private-cache knee and marks it as ambiguous instead of silently skipping to a later boundary
-- Reports inferred L1/L2 TLB boundaries with both midpoint estimate (`inferred_entries`) and local-range estimate (`inferred_entries_min`/`inferred_entries_max`)
-- Uses adaptive boundary thresholding in addition to fixed thresholds (`>= 2.0ns`, `>= 10% baseline`): baseline loop-noise (median IQR) can raise the required step on noisy runs to reduce false positives
+- Detects likely private-cache knee candidates from spread latency as a separate diagnostic and reports whether the region may interfere with interpretation; accepted L1/L2 claims still require the paired translation-delta and validation gates
+- Reports the validated bracket range (`inferred_entries_min`/`inferred_entries_max`) as the primary L1/L2 result; `inferred_entries` is an explicitly secondary midpoint estimate
+- Builds a round-by-point matrix from same-round `spread - packed` deltas. Acceptance requires a paired median effect of at least `0.5ns`, a deterministic percentile-bootstrap 95% CI above the measured noise floor, persistence at both following points, and the same evidence in an independent validation pass
+- Retains rejected boundary candidates, their confidence intervals, persistence counts, and rejection reasons in JSON
 - Separately computes a large-locality latency delta as `P50(512MB) - P50(effective baseline locality)` when the analysis buffer is at least `512MB`. This is not claimed to isolate page-table-walk cost
 - Emits explicit `complete`, `interrupted`, or `partial` status. Boundary conclusions are suppressed unless the planned sweep completed
 - Uses 30 balanced rounds: every round measures each planned locality once, and a seeded cyclic Latin schedule rotates locality order to reduce elapsed-time and thermal-drift correlation
@@ -282,7 +282,7 @@ forms such as `-buffersize` or `-benchmark` are invalid.
 #### `--seed <uint64>`
 
 - Applies only to `--analyze-tlb`
-- Controls base/refinement/large-locality round order and pointer-chain construction
+- Controls base/refinement/validation/large-locality round order, pointer-chain construction, and deterministic bootstrap resampling
 - The same seed reproduces planner order, derived task seeds, and chain permutations
 - If omitted, one unsigned 64-bit seed is generated for the command and reused by every TLB run in a Cartesian sweep
 - The resolved seed, source (`user` or `generated`), schedule policy, and each task seed are stored in JSON
@@ -783,7 +783,7 @@ When `--latency-stride-bytes` is explicitly set (with a non-default value), late
 ### TLB analysis JSON (analyze mode)
 
 When run with `--analyze-tlb --output tlb_analysis.json`, the payload includes a dedicated `tlb_analysis` block.
-The following is an illustrative schema-version-3 payload; its latency values are adapted from the historical
+The following is an illustrative schema-version-4 payload; its latency values are adapted from the historical
 `results/0.53.8/MacMiniM4_analyze-tlb-chain-mode-random-box.json` run rather than presented as a newly generated
 version-0.57.0 result:
 
@@ -791,14 +791,19 @@ version-0.57.0 result:
 {
   "configuration": {
     "mode": "analyze_tlb",
-    "schema_version": 3,
-    "methodology_version": "page-native-paired-v3",
+    "schema_version": 4,
+    "methodology_version": "page-native-paired-validated-v4",
     "seed": 123456789,
     "seed_source": "user",
     "schedule_policy": "seeded-cyclic-latin",
     "chain_model": "one-node-per-spread-page-with-packed-control",
     "translation_delta_definition": "same-round spread_latency_ns - packed_latency_ns",
-    "boundary_signal": "spread_latency_ns",
+    "boundary_signal": "translation_delta_ns",
+    "changepoint_method": "paired-point-median-bootstrap",
+    "confidence_interval": "deterministic-percentile-bootstrap-95",
+    "minimum_effect_ns": 0.5,
+    "persistence_points_required": 2,
+    "independent_validation_required": true,
     "latency_stride_bytes": 64,
     "buffer_size_mb": 1024
   },
@@ -806,6 +811,9 @@ version-0.57.0 result:
     "status": "complete",
     "planned_points": 29,
     "measured_points": 29,
+    "validation_planned_points": 8,
+    "validation_measured_points": 8,
+    "validation_complete": true,
     "conclusions_valid": true,
     "sweep": [
       {
@@ -848,15 +856,17 @@ version-0.57.0 result:
       "boundary_index": 7,
       "boundary_locality_bytes": 4194304,
       "boundary_locality_kb": 4096,
-      "baseline_ns": 17.837711547619048,
-      "boundary_latency_ns": 21.85142833333333,
-      "step_ns": 4.0137167857142835,
-      "step_percent": 0.22501298863362484,
+      "bracket_lower_bytes": 3145728,
+      "bracket_upper_bytes": 4194304,
+      "step_ns": 2.0137,
       "persistent_jump": true,
       "overlaps_private_cache_knee": false,
       "confidence": "High",
+      "discovery": {"available": true, "passed": true, "effect_ns": 2.0137, "minimum_effect_ns": 0.5, "noise_floor_ns": 0.1, "effect_ci_95_ns": {"lower": 1.82, "upper": 2.21, "paired_sample_count": 30, "bootstrap_resamples": 2000}, "persistence_points_passed": 2, "persistence_points_required": 2, "rejection_reason": ""},
+      "validation": {"available": true, "passed": true, "effect_ns": 1.97, "minimum_effect_ns": 0.5, "noise_floor_ns": 0.1, "effect_ci_95_ns": {"lower": 1.76, "upper": 2.16, "paired_sample_count": 30, "bootstrap_resamples": 2000}, "persistence_points_passed": 2, "persistence_points_required": 2, "rejection_reason": ""},
+      "candidates": [{"accepted": true, "boundary_index": 7, "bracket_lower_bytes": 3145728, "bracket_upper_bytes": 4194304}],
       "inferred_entries": 224,
-      "inferred_entries_method": "range_midpoint",
+      "inferred_entries_method": "validated-bracket-range-midpoint-estimate",
       "inferred_entries_min": 192,
       "inferred_entries_max": 256
     },
@@ -873,8 +883,10 @@ version-0.57.0 result:
       "persistent_jump": true,
       "overlaps_private_cache_knee": false,
       "confidence": "High",
+      "discovery": {"available": true, "passed": true, "effect_ns": 6.58, "effect_ci_95_ns": {"lower": 6.11, "upper": 7.02, "paired_sample_count": 30, "bootstrap_resamples": 2000}, "persistence_points_passed": 2, "persistence_points_required": 2},
+      "validation": {"available": true, "passed": true, "effect_ns": 6.42, "effect_ci_95_ns": {"lower": 5.98, "upper": 6.88, "paired_sample_count": 30, "bootstrap_resamples": 2000}, "persistence_points_passed": 2, "persistence_points_required": 2},
       "inferred_entries": 448,
-      "inferred_entries_method": "range_midpoint",
+      "inferred_entries_method": "validated-bracket-range-midpoint-estimate",
       "inferred_entries_min": 384,
       "inferred_entries_max": 512
     },
@@ -895,9 +907,9 @@ version-0.57.0 result:
 The example abbreviates the 30 rounds and most chain-diagnostic fields. Actual output includes
 `tlb_analysis.measurement_records` in execution order and per-point `measurements`; every complete record carries both raw
 pair members, physical diagnostics, pair order, and same-round delta. `planned_measurement_pairs` /
-`completed_measurement_pairs` count scheduler tasks, while `planned_raw_measurements` /
+`completed_measurement_pairs` count scheduler tasks, including the independent validation pass, while `planned_raw_measurements` /
 `completed_raw_measurements` count their spread and packed members. Legacy `latency_ns`, `loop_latencies_ns`, and
-`p50_latency_ns` are spread values. Boundary inference also remains spread-based until the phase-4 detector update.
+`p50_latency_ns` are compatibility spread values. Boundary inference uses the round-matched translation-delta matrix. Accepted and rejected candidates retain separate discovery/validation evidence and rejection reasons.
 
 If the 512MB comparison cannot run, `large_locality_latency_delta.available` is `false` and comparison values are omitted.
 The former `page_walk_penalty` object remains as a deprecated compatibility alias for one minor-version window; it

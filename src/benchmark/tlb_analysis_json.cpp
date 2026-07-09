@@ -40,11 +40,51 @@
 
 namespace {
 
+nlohmann::ordered_json build_tlb_evidence_json(
+    const TlbBoundaryEvidence& evidence) {
+  return {
+      {"available", evidence.available},
+      {"passed", evidence.passed},
+      {"effect_ns", evidence.effect_ns},
+      {"minimum_effect_ns", evidence.minimum_effect_ns},
+      {"noise_floor_ns", evidence.noise_floor_ns},
+      {"effect_ci_95_ns",
+       {{"lower", evidence.effect_ci.lower_ns},
+        {"upper", evidence.effect_ci.upper_ns},
+        {"paired_sample_count", evidence.effect_ci.paired_sample_count},
+        {"bootstrap_resamples", evidence.effect_ci.bootstrap_resamples}}},
+      {"persistence_points_passed", evidence.persistence_points_passed},
+      {"persistence_points_required", evidence.persistence_points_required},
+      {"rejection_reason", evidence.rejection_reason},
+  };
+}
+
+nlohmann::ordered_json build_tlb_candidate_json(
+    const TlbBoundaryCandidate& candidate) {
+  return {
+      {"accepted", candidate.accepted},
+      {"boundary_index", candidate.boundary_index},
+      {"boundary_locality_bytes", candidate.boundary_locality_bytes},
+      {"bracket_lower_bytes", candidate.bracket_lower_bytes},
+      {"bracket_upper_bytes", candidate.bracket_upper_bytes},
+      {"discovery", build_tlb_evidence_json(candidate.discovery)},
+      {"validation", build_tlb_evidence_json(candidate.validation)},
+  };
+}
+
 nlohmann::ordered_json build_tlb_boundary_json(const TlbBoundaryDetection& boundary,
                                                size_t inferred_entries) {
   nlohmann::ordered_json boundary_json;
   boundary_json["detected"] = boundary.detected;
+  boundary_json["signal"] = "translation_delta_ns";
+  boundary_json["candidates"] = nlohmann::ordered_json::array();
+  for (const TlbBoundaryCandidate& candidate : boundary.candidates) {
+    boundary_json["candidates"].push_back(
+        build_tlb_candidate_json(candidate));
+  }
   if (!boundary.detected) {
+    boundary_json["reason"] =
+        "no candidate passed discovery and independent validation";
     return boundary_json;
   }
 
@@ -57,10 +97,15 @@ nlohmann::ordered_json build_tlb_boundary_json(const TlbBoundaryDetection& bound
   boundary_json["step_ns"] = boundary.step_ns;
   boundary_json["step_percent"] = boundary.step_percent;
   boundary_json["persistent_jump"] = boundary.persistent_jump;
+  boundary_json["bracket_lower_bytes"] = boundary.bracket_lower_bytes;
+  boundary_json["bracket_upper_bytes"] = boundary.bracket_upper_bytes;
   boundary_json["overlaps_private_cache_knee"] = boundary.overlaps_private_cache_knee;
   boundary_json["confidence"] = boundary.confidence;
+  boundary_json["discovery"] = build_tlb_evidence_json(boundary.discovery);
+  boundary_json["validation"] = build_tlb_evidence_json(boundary.validation);
   boundary_json["inferred_entries"] = inferred_entries;
-  boundary_json["inferred_entries_method"] = "range_midpoint";
+  boundary_json["inferred_entries_method"] =
+      "validated-bracket-range-midpoint-estimate";
   return boundary_json;
 }
 
@@ -182,8 +227,8 @@ int save_tlb_analysis_to_json(const TlbAnalysisJsonContext& context) {
   nlohmann::ordered_json json_output;
   json_output[JsonKeys::CONFIGURATION] = {
       {JsonKeys::MODE, Constants::TLB_ANALYSIS_JSON_MODE_NAME},
-      {"schema_version", 3},
-      {"methodology_version", "page-native-paired-v3"},
+      {"schema_version", 4},
+      {"methodology_version", "page-native-paired-validated-v4"},
       {JsonKeys::CPU_NAME, context.cpu_name},
       {JsonKeys::MACOS_VERSION, context.config.macos_version},
       {JsonKeys::PERFORMANCE_CORES, context.perf_cores},
@@ -200,7 +245,13 @@ int save_tlb_analysis_to_json(const TlbAnalysisJsonContext& context) {
       {"chain_model", "one-node-per-spread-page-with-packed-control"},
       {"translation_delta_definition",
        "same-round spread_latency_ns - packed_latency_ns"},
-      {"boundary_signal", "spread_latency_ns"},
+      {"boundary_signal", "translation_delta_ns"},
+      {"changepoint_method", "paired-point-median-bootstrap"},
+      {"confidence_interval", "deterministic-percentile-bootstrap-95"},
+      {"bootstrap_resamples", 2000},
+      {"minimum_effect_ns", 0.5},
+      {"persistence_points_required", 2},
+      {"independent_validation_required", true},
       {JsonKeys::LATENCY_SAMPLE_COUNT, static_cast<int>(context.loops_per_point)},
       {"accesses_per_loop", context.accesses_per_loop},
       {"tlb_guard_bytes", context.tlb_guard_bytes},
@@ -236,6 +287,9 @@ int save_tlb_analysis_to_json(const TlbAnalysisJsonContext& context) {
     std::vector<double> spread_latencies_ns;
     std::vector<double> packed_latencies_ns;
     std::vector<double> translation_deltas_ns;
+    std::vector<double> validation_spread_latencies_ns;
+    std::vector<double> validation_packed_latencies_ns;
+    std::vector<double> validation_translation_deltas_ns;
     bool physical_metadata_added = false;
     for (const TlbMeasurementRecord& record : context.measurement_records) {
       if (record.pass == TlbMeasurementPass::LargeLocality ||
@@ -247,10 +301,19 @@ int save_tlb_analysis_to_json(const TlbAnalysisJsonContext& context) {
       if (!record.paired.available) {
         continue;
       }
-      spread_latencies_ns.push_back(record.paired.spread.latency_ns);
-      packed_latencies_ns.push_back(record.paired.packed.latency_ns);
-      translation_deltas_ns.push_back(
-          record.paired.translation_delta_ns);
+      if (record.pass == TlbMeasurementPass::Validation) {
+        validation_spread_latencies_ns.push_back(
+            record.paired.spread.latency_ns);
+        validation_packed_latencies_ns.push_back(
+            record.paired.packed.latency_ns);
+        validation_translation_deltas_ns.push_back(
+            record.paired.translation_delta_ns);
+      } else {
+        spread_latencies_ns.push_back(record.paired.spread.latency_ns);
+        packed_latencies_ns.push_back(record.paired.packed.latency_ns);
+        translation_deltas_ns.push_back(
+            record.paired.translation_delta_ns);
+      }
       if (!physical_metadata_added) {
         point["actual_pages"] =
             record.paired.spread.diagnostics.actual_pages;
@@ -278,6 +341,16 @@ int save_tlb_analysis_to_json(const TlbAnalysisJsonContext& context) {
       point["translation_delta_definition"] =
           "same-round spread_latency_ns - packed_latency_ns";
     }
+    if (!validation_translation_deltas_ns.empty()) {
+      point["validation_spread_loop_latencies_ns"] =
+          validation_spread_latencies_ns;
+      point["validation_packed_loop_latencies_ns"] =
+          validation_packed_latencies_ns;
+      point["validation_translation_deltas_ns"] =
+          validation_translation_deltas_ns;
+      point["validation_translation_delta_p50_ns"] =
+          median_values(validation_translation_deltas_ns);
+    }
     sweep_json.push_back(point);
   }
 
@@ -285,13 +358,23 @@ int save_tlb_analysis_to_json(const TlbAnalysisJsonContext& context) {
   tlb_json["status"] = context.analysis_status;
   tlb_json["planned_points"] = context.planned_points;
   tlb_json["measured_points"] = context.measured_points;
+  tlb_json["validation_planned_points"] =
+      context.validation_planned_points;
+  tlb_json["validation_measured_points"] =
+      context.validation_measured_points;
+  tlb_json["validation_complete"] = context.validation_complete;
   tlb_json["conclusions_valid"] = context.conclusions_valid;
+  const size_t total_planned_points =
+      context.planned_points > std::numeric_limits<size_t>::max() -
+                                   context.validation_planned_points
+          ? std::numeric_limits<size_t>::max()
+          : context.planned_points + context.validation_planned_points;
   const size_t planned_measurements =
       context.loops_per_point != 0 &&
-              context.planned_points >
+              total_planned_points >
                   std::numeric_limits<size_t>::max() / context.loops_per_point
           ? std::numeric_limits<size_t>::max()
-          : context.planned_points * context.loops_per_point;
+          : total_planned_points * context.loops_per_point;
   const size_t completed_measurements = static_cast<size_t>(std::count_if(
       context.measurement_records.begin(),
       context.measurement_records.end(),
@@ -343,10 +426,14 @@ int save_tlb_analysis_to_json(const TlbAnalysisJsonContext& context) {
   if (context.conclusions_valid && context.l1_boundary.detected) {
     tlb_json["l1_tlb_detection"]["inferred_entries_min"] = context.l1_entries_min;
     tlb_json["l1_tlb_detection"]["inferred_entries_max"] = context.l1_entries_max;
+    tlb_json["l1_tlb_detection"]["primary_result"] =
+        "inferred_entries_min..inferred_entries_max";
   }
   if (context.conclusions_valid && context.l2_boundary.detected) {
     tlb_json["l2_tlb_detection"]["inferred_entries_min"] = context.l2_entries_min;
     tlb_json["l2_tlb_detection"]["inferred_entries_max"] = context.l2_entries_max;
+    tlb_json["l2_tlb_detection"]["primary_result"] =
+        "inferred_entries_min..inferred_entries_max";
   }
 
   const bool large_locality_delta_available =

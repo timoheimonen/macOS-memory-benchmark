@@ -179,6 +179,20 @@ TEST(JsonSchemaTest, TlbAnalysisExporterIncludesModeAndCoreCounts) {
                              0,
                              101,
                              15.1),
+      make_paired_tlb_record(TlbMeasurementPass::Validation,
+                             2,
+                             16 * Constants::BYTES_PER_KB,
+                             0,
+                             0,
+                             300,
+                             14.9),
+      make_paired_tlb_record(TlbMeasurementPass::Validation,
+                             2,
+                             16 * Constants::BYTES_PER_KB,
+                             1,
+                             0,
+                             301,
+                             15.0),
       make_paired_tlb_record(TlbMeasurementPass::LargeLocality,
                              1,
                              512 * Constants::BYTES_PER_MB,
@@ -198,9 +212,41 @@ TEST(JsonSchemaTest, TlbAnalysisExporterIncludesModeAndCoreCounts) {
   l1_boundary.detected = true;
   l1_boundary.boundary_index = 0;
   l1_boundary.boundary_locality_bytes = 16 * Constants::BYTES_PER_KB;
+  l1_boundary.bracket_lower_bytes = 8 * Constants::BYTES_PER_KB;
+  l1_boundary.bracket_upper_bytes = 16 * Constants::BYTES_PER_KB;
   l1_boundary.overlaps_private_cache_knee = true;
   l1_boundary.confidence = "Medium";
-  const TlbBoundaryDetection l2_boundary;
+  l1_boundary.discovery.available = true;
+  l1_boundary.discovery.passed = true;
+  l1_boundary.discovery.effect_ns = 2.0;
+  l1_boundary.discovery.minimum_effect_ns = 0.5;
+  l1_boundary.discovery.noise_floor_ns = 0.1;
+  l1_boundary.discovery.effect_ci = {1.5, 2.5, 0.95, 30, 2000};
+  l1_boundary.discovery.persistence_points_passed = 2;
+  l1_boundary.validation = l1_boundary.discovery;
+  TlbBoundaryCandidate accepted_candidate;
+  accepted_candidate.accepted = true;
+  accepted_candidate.boundary_index = 0;
+  accepted_candidate.boundary_locality_bytes = 16 * Constants::BYTES_PER_KB;
+  accepted_candidate.bracket_lower_bytes = 8 * Constants::BYTES_PER_KB;
+  accepted_candidate.bracket_upper_bytes = 16 * Constants::BYTES_PER_KB;
+  accepted_candidate.discovery = l1_boundary.discovery;
+  accepted_candidate.validation = l1_boundary.validation;
+  l1_boundary.candidates.push_back(accepted_candidate);
+  TlbBoundaryDetection l2_boundary;
+  TlbBoundaryCandidate rejected_candidate;
+  rejected_candidate.boundary_index = 1;
+  rejected_candidate.boundary_locality_bytes = 32 * Constants::BYTES_PER_KB;
+  rejected_candidate.bracket_lower_bytes = 16 * Constants::BYTES_PER_KB;
+  rejected_candidate.bracket_upper_bytes = 32 * Constants::BYTES_PER_KB;
+  rejected_candidate.discovery.available = true;
+  rejected_candidate.discovery.effect_ns = 1.0;
+  rejected_candidate.discovery.minimum_effect_ns = 0.5;
+  rejected_candidate.discovery.rejection_reason =
+      "persistence-not-confirmed";
+  rejected_candidate.validation.rejection_reason =
+      "discovery-not-accepted";
+  l2_boundary.candidates.push_back(rejected_candidate);
   const PrivateCacheKneeDetection private_cache_knee;
 
   const TlbAnalysisJsonContext context = {
@@ -221,6 +267,9 @@ TEST(JsonSchemaTest, TlbAnalysisExporterIncludesModeAndCoreCounts) {
       "complete",
       1,
       1,
+      1,
+      1,
+      true,
       true,
       sweep_points,
       measurement_records,
@@ -255,9 +304,11 @@ TEST(JsonSchemaTest, TlbAnalysisExporterIncludesModeAndCoreCounts) {
   EXPECT_EQ(output_json[JsonKeys::CONFIGURATION][JsonKeys::MODE], Constants::TLB_ANALYSIS_JSON_MODE_NAME);
   EXPECT_EQ(output_json[JsonKeys::CONFIGURATION][JsonKeys::PERFORMANCE_CORES], 4);
   EXPECT_EQ(output_json[JsonKeys::CONFIGURATION][JsonKeys::EFFICIENCY_CORES], 6);
-  EXPECT_EQ(output_json[JsonKeys::CONFIGURATION]["schema_version"], 3);
+  EXPECT_EQ(output_json[JsonKeys::CONFIGURATION]["schema_version"], 4);
   EXPECT_EQ(output_json[JsonKeys::CONFIGURATION]["methodology_version"],
-            "page-native-paired-v3");
+            "page-native-paired-validated-v4");
+  EXPECT_EQ(output_json[JsonKeys::CONFIGURATION]["boundary_signal"],
+            "translation_delta_ns");
   EXPECT_EQ(output_json[JsonKeys::CONFIGURATION]["seed"], 12345);
   EXPECT_EQ(output_json[JsonKeys::CONFIGURATION]["seed_source"], "user");
   EXPECT_EQ(output_json[JsonKeys::CONFIGURATION]["schedule_policy"],
@@ -270,20 +321,34 @@ TEST(JsonSchemaTest, TlbAnalysisExporterIncludesModeAndCoreCounts) {
   EXPECT_TRUE(output_json[JsonKeys::CONFIGURATION].contains("fine_sweep_added_points"));
   EXPECT_TRUE(output_json["tlb_analysis"].contains("private_cache_knee"));
   EXPECT_EQ(output_json["tlb_analysis"]["l1_tlb_detection"]["inferred_entries"], 248);
-  EXPECT_EQ(output_json["tlb_analysis"]["l1_tlb_detection"]["inferred_entries_method"], "range_midpoint");
+  EXPECT_EQ(output_json["tlb_analysis"]["l1_tlb_detection"]["inferred_entries_method"],
+            "validated-bracket-range-midpoint-estimate");
+  EXPECT_TRUE(output_json["tlb_analysis"]["l1_tlb_detection"]["discovery"]["passed"]);
+  EXPECT_TRUE(output_json["tlb_analysis"]["l1_tlb_detection"]["validation"]["passed"]);
+  EXPECT_TRUE(output_json["tlb_analysis"]["l1_tlb_detection"]["candidates"][0]["accepted"]);
+  EXPECT_FALSE(output_json["tlb_analysis"]["l2_tlb_detection"]["detected"]);
+  EXPECT_EQ(output_json["tlb_analysis"]["l2_tlb_detection"]["candidates"].size(), 1u);
+  EXPECT_EQ(output_json["tlb_analysis"]["l2_tlb_detection"]["candidates"][0]
+                       ["discovery"]["rejection_reason"],
+            "persistence-not-confirmed");
   EXPECT_TRUE(output_json["tlb_analysis"]["l1_tlb_detection"]["overlaps_private_cache_knee"]);
   EXPECT_EQ(output_json["tlb_analysis"]["status"], "complete");
   EXPECT_EQ(output_json["tlb_analysis"]["planned_points"], 1);
   EXPECT_EQ(output_json["tlb_analysis"]["measured_points"], 1);
-  EXPECT_EQ(output_json["tlb_analysis"]["planned_measurements"], 2);
-  EXPECT_EQ(output_json["tlb_analysis"]["completed_measurements"], 2);
-  EXPECT_EQ(output_json["tlb_analysis"]["planned_measurement_pairs"], 2);
-  EXPECT_EQ(output_json["tlb_analysis"]["completed_measurement_pairs"], 2);
-  EXPECT_EQ(output_json["tlb_analysis"]["planned_raw_measurements"], 4);
-  EXPECT_EQ(output_json["tlb_analysis"]["completed_raw_measurements"], 4);
+  EXPECT_EQ(output_json["tlb_analysis"]["validation_planned_points"], 1);
+  EXPECT_EQ(output_json["tlb_analysis"]["validation_measured_points"], 1);
+  EXPECT_TRUE(output_json["tlb_analysis"]["validation_complete"]);
+  EXPECT_EQ(output_json["tlb_analysis"]["planned_measurements"], 4);
+  EXPECT_EQ(output_json["tlb_analysis"]["completed_measurements"], 4);
+  EXPECT_EQ(output_json["tlb_analysis"]["planned_measurement_pairs"], 4);
+  EXPECT_EQ(output_json["tlb_analysis"]["completed_measurement_pairs"], 4);
+  EXPECT_EQ(output_json["tlb_analysis"]["planned_raw_measurements"], 8);
+  EXPECT_EQ(output_json["tlb_analysis"]["completed_raw_measurements"], 8);
   EXPECT_TRUE(output_json["tlb_analysis"]["conclusions_valid"]);
-  EXPECT_EQ(output_json["tlb_analysis"]["measurement_records"].size(), 4u);
+  EXPECT_EQ(output_json["tlb_analysis"]["measurement_records"].size(), 6u);
   EXPECT_EQ(output_json["tlb_analysis"]["measurement_records"][0]["pass"], "base");
+  EXPECT_EQ(output_json["tlb_analysis"]["measurement_records"][2]["pass"],
+            "validation");
   EXPECT_TRUE(output_json["tlb_analysis"]["measurement_records"][0]
                          ["paired_control"]["available"]);
   EXPECT_DOUBLE_EQ(output_json["tlb_analysis"]["measurement_records"][0]
@@ -296,8 +361,10 @@ TEST(JsonSchemaTest, TlbAnalysisExporterIncludesModeAndCoreCounts) {
   EXPECT_DOUBLE_EQ(output_json["tlb_analysis"]["sweep"][0]
                               ["translation_delta_p50_ns"],
                    5.0);
-  EXPECT_EQ(output_json["tlb_analysis"]["sweep"][0]["measurements"].size(), 2u);
+  EXPECT_EQ(output_json["tlb_analysis"]["sweep"][0]["measurements"].size(), 4u);
   EXPECT_EQ(output_json["tlb_analysis"]["sweep"][0]["measurements"][1]["round_index"], 1);
+  EXPECT_TRUE(output_json["tlb_analysis"]["sweep"][0].contains(
+      "validation_translation_deltas_ns"));
   EXPECT_TRUE(output_json["tlb_analysis"].contains("large_locality_latency_delta"));
   EXPECT_DOUBLE_EQ(output_json["tlb_analysis"]["large_locality_latency_delta"]["delta_ns"], 80.5);
   EXPECT_EQ(output_json["tlb_analysis"]["large_locality_latency_delta"]["measurements"].size(), 2u);
@@ -351,6 +418,9 @@ TEST(JsonSchemaTest, TlbAnalysisExporterOmitsPageWalkPenaltyWhenComparisonIncomp
       "interrupted",
       2,
       1,
+      1,
+      0,
+      false,
       false,
       sweep_points,
       measurement_records,

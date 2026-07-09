@@ -44,6 +44,8 @@ const char* tlb_measurement_pass_to_string(TlbMeasurementPass pass) {
       return "base";
     case TlbMeasurementPass::Refinement:
       return "refinement";
+    case TlbMeasurementPass::Validation:
+      return "validation";
     case TlbMeasurementPass::LargeLocality:
       return "large-locality";
   }

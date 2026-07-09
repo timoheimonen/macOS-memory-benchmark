@@ -188,6 +188,7 @@ std::string msg_core_to_core_scenario_progress(size_t current_loop,
 std::string msg_tlb_analysis_locality_progress(size_t current_index, size_t total_count, size_t locality_kb);
 std::string msg_tlb_analysis_page_walk_progress(size_t locality_mb);
 std::string msg_tlb_analysis_refinement_start(size_t point_count);
+std::string msg_tlb_analysis_validation_start(size_t point_count);
 
 // --- Core-to-Core Report Messages ---
 const std::string& report_core_to_core_header();
@@ -246,6 +247,12 @@ std::string report_tlb_inferred_reach_entries(size_t entries);
 std::string report_tlb_inferred_entries_range(size_t min_entries, size_t max_entries);
 const std::string& report_tlb_private_cache_overlap();
 std::string report_tlb_confidence(const std::string& confidence, double step_ns, double step_percent);
+std::string report_tlb_statistical_confidence(const std::string& confidence,
+                                              double effect_ns,
+                                              double discovery_ci_lower_ns,
+                                              double discovery_ci_upper_ns,
+                                              double validation_ci_lower_ns,
+                                              double validation_ci_upper_ns);
 std::string report_tlb_private_cache_candidate(bool strong_private_cache_candidate);
 std::string report_tlb_private_cache_interference(bool elevated_risk, size_t locality_kb);
 std::string report_tlb_private_cache_l1_distance(size_t distance_kb, size_t distance_pages);

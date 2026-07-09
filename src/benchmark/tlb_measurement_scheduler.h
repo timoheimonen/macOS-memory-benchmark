@@ -34,6 +34,7 @@
 enum class TlbMeasurementPass {
   Base = 0,
   Refinement,
+  Validation,
   LargeLocality,
 };
 

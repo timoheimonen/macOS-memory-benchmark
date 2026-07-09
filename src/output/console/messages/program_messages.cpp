@@ -101,6 +101,13 @@ std::string msg_tlb_analysis_refinement_start(size_t point_count) {
   return oss.str();
 }
 
+std::string msg_tlb_analysis_validation_start(size_t point_count) {
+  std::ostringstream oss;
+  oss << "Running independent TLB boundary validation pass (" << point_count
+      << " locality points)...";
+  return oss.str();
+}
+
 // --- Usage/Help Messages ---
 std::string usage_header(const std::string& version) {
   std::ostringstream oss;
@@ -133,7 +140,8 @@ std::string usage_options(const std::string& prog_name) {
       << "                        In --only-latency mode, --buffer-size 0 disables main memory latency.\n"
       << "  -r, --count <count>   Number of full loops (read/write/copy/latency) (default: " << Constants::DEFAULT_LOOP_COUNT << ").\n"
       << "                        When count > 1, statistics include percentiles (P50/P90/P95/P99) and stddev.\n"
-      << "  -T, --analyze-tlb     Run standalone TLB analysis benchmark mode (allows optional -o/--output <file>,\n"
+      << "  -T, --analyze-tlb     Run standalone TLB analysis with paired bootstrap CI and independent\n"
+      << "                        boundary validation (allows optional -o/--output <file>,\n"
       << "                        -s/--latency-stride-bytes <bytes>, -m/--latency-chain-mode <mode>,\n"
       << "                        -D/--tlb-density <low|medium|high>, --seed <uint64>,\n"
       << "                        -S/--sweep <key=...>,\n"
@@ -261,7 +269,8 @@ std::string report_tlb_seed(uint64_t seed, bool user_specified) {
 }
 
 const std::string& report_tlb_schedule_policy() {
-  static const std::string msg = "Schedule: seeded cyclic Latin rounds";
+  static const std::string msg =
+      "Schedule: seeded cyclic Latin discovery rounds plus independent candidate validation";
   return msg;
 }
 
@@ -403,6 +412,21 @@ std::string report_tlb_confidence(const std::string& confidence, double step_ns,
   oss << std::fixed << std::setprecision(1);
   oss << "  Confidence: " << confidence << " (Step: +" << step_ns << "ns, +"
       << (step_percent * 100.0) << "%)";
+  return oss.str();
+}
+
+std::string report_tlb_statistical_confidence(const std::string& confidence,
+                                              double effect_ns,
+                                              double discovery_ci_lower_ns,
+                                              double discovery_ci_upper_ns,
+                                              double validation_ci_lower_ns,
+                                              double validation_ci_upper_ns) {
+  std::ostringstream oss;
+  oss << std::fixed << std::setprecision(2);
+  oss << "  Confidence: " << confidence << " (paired effect " << effect_ns
+      << "ns; discovery 95% CI " << discovery_ci_lower_ns << ".."
+      << discovery_ci_upper_ns << "ns; validation 95% CI "
+      << validation_ci_lower_ns << ".." << validation_ci_upper_ns << "ns)";
   return oss.str();
 }
 

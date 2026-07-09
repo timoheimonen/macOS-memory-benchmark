@@ -114,6 +114,15 @@ def draw_vertical_marker(ax, locality_kb: int, label: str, color: str, linestyle
   ax.axvline(locality_kb, color=color, linestyle=linestyle, linewidth=1.4, alpha=0.9, label=label)
 
 
+def format_entry_result(detection: dict) -> str:
+  minimum = detection.get("inferred_entries_min")
+  maximum = detection.get("inferred_entries_max")
+  estimate = int(detection.get("inferred_entries", 0))
+  if isinstance(minimum, int) and isinstance(maximum, int):
+    return f"{minimum}-{maximum} entries (midpoint estimate {estimate})"
+  return f"midpoint estimate {estimate} entries"
+
+
 def main():
   args = parse_args()
   input_path = resolve_input_path(args.file)
@@ -183,11 +192,18 @@ def main():
   if l1.get("detected"):
     note_lines.append(
         f"L1: {format_kb(int(l1.get('boundary_locality_kb', 0)))}"
-        f", {int(l1.get('inferred_entries', 0))} entries")
+        f", {format_entry_result(l1)}")
   if l2.get("detected"):
     note_lines.append(
         f"L2: {format_kb(int(l2.get('boundary_locality_kb', 0)))}"
-        f", {int(l2.get('inferred_entries', 0))} entries")
+        f", {format_entry_result(l2)}")
+  rejected_candidates = sum(
+      1
+      for detection in (l1, l2)
+      for candidate in detection.get("candidates", [])
+      if not candidate.get("accepted", False))
+  if rejected_candidates:
+    note_lines.append(f"Rejected boundary candidates: {rejected_candidates}")
 
   large_locality = tlb.get("large_locality_latency_delta", {})
   if large_locality.get("available") and "delta_ns" in large_locality:

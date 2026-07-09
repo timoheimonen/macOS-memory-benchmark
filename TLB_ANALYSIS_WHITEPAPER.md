@@ -142,7 +142,7 @@ Stride behavior:
 on every requested page. The packed layout places the same number of nodes on consecutive distinct cache lines, minimizing
 the page footprint while preserving node and unique-cache-line counts. Pointer
 values are written in sorted physical-slot order only after traversal has been planned; setup writes therefore do not
-replay the measured traversal order. An independent validation pass requires every node to stay in bounds, occur once,
+replay the measured traversal order. An independent chain-integrity traversal requires every node to stay in bounds, occur once,
 use a unique cache line, and return to the chain head after the exact node count. Spread validation additionally requires
 `actual_pages == requested_pages`.
 
@@ -166,10 +166,10 @@ which layout runs first alternates by round/order parity and is recorded. The ta
 `translation_delta_ns = spread_latency_ns - packed_latency_ns`. The regular benchmark path still uses its existing
 latency-chain implementation and random-device behavior.
 
-Per-point output contains spread, packed, and paired-delta P50 values over 30 rounds. The phase-3 boundary detector still
-uses spread latency for compatibility with its positive-baseline thresholds; JSON identifies this with
-`boundary_signal = "spread_latency_ns"`. The paired delta is a same-round measured metric, but boundary classification is
-not switched to it until the phase-4 changepoint/confidence model is implemented.
+Per-point output contains spread, packed, and paired-delta P50 values over 30 rounds. Boundary inference uses a
+round-by-point matrix of `translation_delta_ns`, and JSON identifies this with
+`boundary_signal = "translation_delta_ns"`. Spread latency remains available for compatibility plots and the separate
+private-cache/refinement heuristics; it is not the accepted L1/L2 boundary signal.
 
 ### 4.3 Locality Sweep
 
@@ -202,7 +202,9 @@ produce fewer than seven unique refinement points; this is intentional because s
 entry-count interpretation under the current methodology.
 
 Refinement points form a separate balanced round pass. Each point records whether it came from the private-cache, L1,
-L2, or a merged refinement target and stores the bracket that produced it.
+L2, or a merged refinement target and stores the bracket that produced it. After refinement, discovery candidates that
+pass the robust statistical gates cause their bracket baseline, candidate, and two following points to be measured again
+in an independent validation pass.
 
 Separate large-locality comparison point:
 
@@ -210,20 +212,28 @@ Separate large-locality comparison point:
 
 ## 5. Boundary Detection Algorithm
 
-Boundary detection uses a recency-weighted segment baseline with multi-point persistence, adaptive noise thresholding, and IQR-overlap rejection.
+Accepted L1/L2 detection is based on same-round spread/packed differences, not pointwise spread P50 values. Let
+`D[r,i]` be `translation_delta_ns` at round `r` and sorted locality point `i`. For a candidate index `i`, the detector
+forms paired point-to-point effects:
 
-For candidate index `i`:
+`E[r,i] = D[r,i] - D[r,i-1]`
 
-- `baseline_ns = recency_weighted_average(p50[segment_start, i))` — weighted average where point `j` receives weight `(j - segment_start + 1)`. Recent measurements carry more influence, reducing drag from early points that may have had different thermal or frequency conditions.
-- `step_ns = p50[i] - baseline_ns`
-- `noise_boost_ns = median(IQR of baseline loop-latency rows)` (when loop rows are available and baseline has at least 3 points)
-- `threshold_ns = max(2.0ns, baseline_ns * 0.10, noise_boost_ns)`
+Only rounds containing both cells participate. At least seven paired samples are required. The candidate effect is
+`median(E[:,i])`, and its uncertainty is a deterministic 2,000-resample percentile-bootstrap 95% interval derived from
+the command seed and candidate index.
 
-Candidate passes threshold when:
+The predefined minimum effect is `0.5ns`. The adaptive noise floor is:
 
-- `step_ns >= threshold_ns`
+`max(0.1ns, 1.5 * median(abs(prior adjacent paired effects)))`
 
-The algorithm scans from `segment_start_index + 1` and returns the **first** candidate that satisfies threshold, guard, and IQR conditions. If no candidate passes, detection returns `detected = false`.
+A discovery candidate must satisfy all of the following:
+
+- median paired effect is at least `0.5ns`;
+- the bootstrap 95% CI lower bound is above the adaptive noise floor;
+- both of the next two locality points remain above the same pre-boundary point by at least `0.5ns`;
+- both persistence effects also have bootstrap 95% CI lower bounds above the noise floor.
+
+Material candidates rejected by CI, persistence, or validation are retained in JSON with their rejection reason.
 
 ### 5.1 TLB Guard (Cache-Transition Filter)
 
@@ -237,53 +247,31 @@ where:
 
 The guard acts as a hard lower-bound filter on the candidate index `i`; it does not shift the segment start or baseline calculation.
 
-### 5.2 Adaptive Noise Floor and IQR-Overlap Rejection
+### 5.2 Independent Validation Pass
 
-When per-point raw loop latencies are available (the 30 individual loop measurements), the detector first estimates a baseline-noise floor from IQR values and raises the candidate threshold when needed:
+Discovery evidence never creates an accepted boundary by itself. All points needed to check a discovery candidate are
+deduplicated into a separate `validation` scheduler pass. This pass uses pass-specific task and chain seeds and repeats
+the bracket baseline, candidate, and two persistence points. The same minimum-effect, noise-floor, paired-sample,
+bootstrap-CI, and two-point persistence gates are applied to the validation matrix. `detected = true` requires both
+`discovery.passed` and `validation.passed`.
 
-- `IQR(point_j) = Q3_j - Q1_j`
-- `noise_boost_ns = median(IQR(point_j))` for `j in [segment_start, i)`
-- effective threshold includes this term: `max(2.0ns, 10% baseline, noise_boost_ns)`
+### 5.3 Strict Two-Point Persistence
 
-Then it applies an IQR-overlap check to reject candidates whose step still falls inside baseline noise overlap:
+Both following locality points are mandatory. A final-point candidate or a candidate with only one following point is
+rejected as `insufficient-persistence-points`; there is no strong-last-point exception. A single high point followed by a
+return to baseline is rejected as `persistence-not-confirmed`.
 
-- `avg_baseline_q3 = average(Q3 of raw loops for each point in [segment_start, i))`
-- `candidate_q1 = Q1 of raw loops at point i`
-- If `avg_baseline_q3 >= candidate_q1`, the baseline's upper noise band overlaps the candidate's lower band → candidate is **rejected** even if the P50 step exceeds threshold.
+### 5.4 L1 and L2 Boundary Selection
 
-This prevents false positives from "lucky medians" where a noisy point happens to have a high P50 due to sampling variance.
+- `L1 TLB boundary`: first candidate above the TLB guard that passes discovery and validation.
+- `L2 TLB boundary`: first independently validated candidate from the offset segment after L1.
 
-### 5.3 Multi-Point Persistence
-
-Instead of checking a single future point, the detector checks up to **3 future points**:
-
-- `persistent_count = count of j in [i+1, min(i+4, size)) where p50[j] - baseline >= threshold`
-- `persistent_jump = persistent_count >= 2` (majority of up to 3)
-
-This makes detection robust against single-point noise dips after a genuine boundary. A boundary at index `i` followed by one noisy dip and two confirming points will still be classified as persistent.
-
-### 5.4 Last-Point Strong-Step Compensation
-
-When the candidate is at or near the last sweep point, there are few or no future points for persistence evaluation. In this case, if the step itself is very large:
-
-- `strong_last_point = (step_ns >= 8.0) || (step_percent >= 0.25)`
-
-Then `effective_persistent = persistent_jump || strong_last_point`. This prevents downgrading a massive final-point step to Low confidence purely due to lack of future data.
-
-### 5.5 L1 and L2 Boundary Selection
-
-- `L1 TLB boundary`: first candidate passing threshold + guard + IQR check, scanning from sweep start.
-- `L2 TLB boundary`: first candidate passing threshold + guard + IQR check, scanning from an **offset segment start** past the L1 boundary.
-
-Private-cache overlap handling:
-
-- The analyzer first checks the direct L1 candidate from sweep start.
-- If that candidate is the same locality as a detected private-cache knee, it is preserved as an ambiguous L1 TLB candidate and marked with `overlaps_private_cache_knee = true`.
-- If the direct candidate does not overlap the private-cache knee, the analyzer also tries the cache-knee-offset scan used to avoid obvious cache-knee contamination.
+Private-cache knee detection remains a separate spread-latency diagnostic. The packed control and translation-delta
+signal are the primary protection against turning a data-cache step into an accepted translation boundary.
 
 L2 detection specifics:
 
-- **Segment start offset**: L2 scanning starts at `min(L1_boundary_index + 2, size - 2)`, excluding the L1 boundary point and its immediate neighbour from the L2 baseline. This prevents L1 transition noise from contaminating the L2 baseline.
+- **Segment start offset**: candidate scanning resumes after the L1 boundary and its immediate neighbour, preventing the L1 transition from becoming the next paired baseline.
 - **L2-specific guard**: `max(tlb_guard_bytes, L1_boundary_locality_bytes)`, preventing L2 from re-detecting at or below the L1 boundary locality.
 
 L2 detection only runs when L1 is detected and its boundary index is not at the last two sweep points.
@@ -295,16 +283,13 @@ Technical note (Apple Silicon):
 
 ## 6. Confidence Model
 
-Boundary confidence is classified by step strength and multi-point persistence:
+Only candidates with complete discovery and validation evidence receive an accepted confidence label:
 
-- `strong_step = (step_ns >= 4.0) || (step_percent >= 0.15)`
-- `persistent_jump`: majority of up to 3 future points exceed threshold (see section 5.3). At the last sweep point, a strong step (`step_ns >= 8.0` or `step_percent >= 0.25`) compensates for the lack of future data.
+- **High**: both discovery and validation 95% CI lower bounds are at least `max(1.0ns, 2 * discovery_noise_floor)`.
+- **Medium**: all acceptance gates pass, but the High-strength condition does not.
 
-Confidence levels:
-
-- **High**: `strong_step && persistent_jump`
-- **Medium**: `strong_step || persistent_jump`
-- **Low**: otherwise (still passed threshold)
+Rejected candidates receive no accepted confidence label. Their discovery and validation objects still expose effect,
+95% CI, noise floor, paired sample count, persistence count, and rejection reason.
 
 ## 7. Derived Metrics
 
@@ -318,7 +303,8 @@ For detected boundaries:
 
 `inferred_entries = midpoint(inferred_entries_min, inferred_entries_max)`
 
-Point estimate and range are reported separately for L1 and L2 sections. The point estimate is intentionally the midpoint of the detected locality window, not the upper boundary edge, so the headline value does not imply more precision than the sweep grid supports.
+The range from the final refined and validated bracket is the primary result for L1 and L2. The midpoint remains an
+explicitly secondary estimate and must not be interpreted as exact architectural capacity.
 
 ### 7.2 Large-Locality Latency Delta
 
@@ -396,16 +382,17 @@ When `--output <file>` is provided with `--analyze-tlb` without `--sweep`, outpu
   - **`latency_chain_mode`** (resolved chain mode used)
   - **`performance_cores`** and **`efficiency_cores`** (CPU core configuration)
   - selected buffer size and whether mlock succeeded
-  - `schema_version = 3` and `methodology_version = "page-native-paired-v3"`
-  - base `seed`, `seed_source`, `schedule_policy = "seeded-cyclic-latin"`, chain model, delta definition, and boundary signal
+  - `schema_version = 4` and `methodology_version = "page-native-paired-validated-v4"`
+  - base `seed`, `seed_source`, `schedule_policy = "seeded-cyclic-latin"`, chain model, delta definition, and `boundary_signal = "translation_delta_ns"`
+  - paired-bootstrap method, 2,000 resamples, `0.5ns` minimum effect, two-point persistence, and independent-validation requirement
 
 - `tlb_analysis` contains:
-  - status, point/round counts, scheduled-pair counts, raw-measurement counts, and `conclusions_valid`
+  - status, discovery/validation point and round counts, scheduled-pair counts, raw-measurement counts, and `conclusions_valid`
   - `measurement_records[]` in execution order with pass, point, locality, round, order, task seed, legacy spread `latency_ns`, and a `paired_control` object
   - each `paired_control` contains pair order, spread/packed seeds and raw latencies, verified chain diagnostics, and same-round `translation_delta_ns`
   - `sweep[]` contains requested/effective/actual pages, actual node and unique-cache-line counts, both chain diagnostics, raw spread/packed/delta arrays, their P50 values, refinement source/bracket, and per-task records
   - `private_cache_knee` (with `detected`, `boundary_locality_kb`, `confidence`, and `may_interfere_with_tlb`)
-  - `l1_tlb_detection` (with `detected`, `boundary_locality_kb`, `inferred_entries`, `inferred_entries_method`, `inferred_entries_min`, `inferred_entries_max`, `overlaps_private_cache_knee`, `confidence`, and step metadata)
+  - `l1_tlb_detection` (with `detected`, validated bracket, primary entry range, midpoint estimate, confidence, discovery/validation evidence, and accepted/rejected candidates)
   - `l2_tlb_detection` (same structure as L1)
   - `large_locality_latency_delta` block (`available`, baseline/comparison metadata, raw comparison loops, `delta_ns` when the comparison completed, otherwise `reason`)
   - deprecated `page_walk_penalty` compatibility alias with an explicit replacement field
@@ -436,7 +423,7 @@ Example file:
 
 - `results/0.53.7/MacMiniM4_analyzetlb.json`
 
-This file predates schema version 3, page-native pairing, page-aligned refinement, completion metadata, and midpoint entry ranges. It remains
+This file predates schema version 4, page-native pairing, page-aligned refinement, independent validation, completion metadata, and bracket-first entry ranges. It remains
 useful only as historical latency input; it is not a byte-for-byte example of current output. Observed legacy fields:
 
 - `tlb_guard_bytes = 1048576` (`1MB`)

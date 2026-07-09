@@ -458,6 +458,20 @@ TEST_F(MessagesFormattingTest, MsgTlbAnalysisRefinementStart) {
   EXPECT_NE(msg.find("points"), std::string::npos);
 }
 
+TEST_F(MessagesFormattingTest, MsgTlbAnalysisValidationStart) {
+  const std::string msg = Messages::msg_tlb_analysis_validation_start(8);
+  EXPECT_NE(msg.find("validation"), std::string::npos);
+  EXPECT_NE(msg.find("8"), std::string::npos);
+}
+
+TEST_F(MessagesFormattingTest, ReportTlbStatisticalConfidence) {
+  const std::string msg = Messages::report_tlb_statistical_confidence(
+      "High", 2.5, 2.1, 2.9, 2.0, 2.8);
+  EXPECT_NE(msg.find("paired effect"), std::string::npos);
+  EXPECT_NE(msg.find("discovery 95% CI"), std::string::npos);
+  EXPECT_NE(msg.find("validation 95% CI"), std::string::npos);
+}
+
 TEST_F(MessagesFormattingTest, ReportTlbPageWalkPenaltyWindow) {
   std::string msg = Messages::report_tlb_page_walk_penalty(62.4, 16, 512);
   EXPECT_NE(msg.find("16KB -> 512MB"), std::string::npos);

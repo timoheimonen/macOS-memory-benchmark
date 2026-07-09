@@ -54,6 +54,9 @@ struct TlbAnalysisJsonContext {
   std::string analysis_status;
   size_t planned_points;
   size_t measured_points;
+  size_t validation_planned_points;
+  size_t validation_measured_points;
+  bool validation_complete;
   bool conclusions_valid;
   const std::vector<TlbSweepPoint>& sweep_points;
   const std::vector<TlbMeasurementRecord>& measurement_records;

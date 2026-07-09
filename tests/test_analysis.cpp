@@ -17,12 +17,33 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <cmath>
 #include <utility>
 #include <vector>
 
 #include "benchmark/tlb_analysis.h"
 #include "benchmark/tlb_sweep_planner.h"
 #include "core/config/constants.h"
+
+namespace {
+
+TlbRoundPointMatrix make_round_point_matrix(
+    const std::vector<double>& point_levels,
+    size_t round_count = 12) {
+  TlbRoundPointMatrix matrix(
+      round_count, std::vector<double>(point_levels.size(), 0.0));
+  for (size_t round = 0; round < round_count; ++round) {
+    const double common_drift = static_cast<double>(round) * 0.02;
+    for (size_t point = 0; point < point_levels.size(); ++point) {
+      const double bounded_noise =
+          (static_cast<double>((round + point) % 3) - 1.0) * 0.01;
+      matrix[round][point] = point_levels[point] + common_drift + bounded_noise;
+    }
+  }
+  return matrix;
+}
+
+}  // namespace
 
 TEST(AnalysisTest, DetectBoundaryFindsL1Transition) {
   const std::vector<size_t> localities = {
@@ -58,6 +79,128 @@ TEST(AnalysisTest, DetectBoundaryReturnsNotDetectedForFlatData) {
 
   const TlbBoundaryDetection boundary = detect_tlb_boundary(localities, latencies_ns, 0);
   EXPECT_FALSE(boundary.detected);
+}
+
+TEST(AnalysisTest, RobustBoundaryAcceptsPersistentStepWithIndependentValidation) {
+  const size_t page_size = 16 * Constants::BYTES_PER_KB;
+  const std::vector<size_t> localities = {
+      page_size, 2 * page_size, 4 * page_size,
+      8 * page_size, 16 * page_size, 32 * page_size,
+  };
+  const TlbRoundPointMatrix discovery =
+      make_round_point_matrix({0.10, 0.12, 2.10, 2.20, 2.25, 2.30});
+  const TlbRoundPointMatrix validation =
+      make_round_point_matrix({0.08, 0.10, 2.00, 2.15, 2.20, 2.25});
+
+  const TlbBoundaryDetection boundary = detect_tlb_boundary_robust(
+      localities, discovery, &validation, 0, 0, 123456);
+
+  ASSERT_TRUE(boundary.detected);
+  EXPECT_EQ(boundary.boundary_index, 2u);
+  EXPECT_EQ(boundary.bracket_lower_bytes, 2u * page_size);
+  EXPECT_EQ(boundary.bracket_upper_bytes, 4u * page_size);
+  EXPECT_TRUE(boundary.discovery.passed);
+  EXPECT_TRUE(boundary.validation.passed);
+  EXPECT_EQ(boundary.discovery.persistence_points_passed, 2u);
+  EXPECT_GT(boundary.discovery.effect_ci.lower_ns,
+            boundary.discovery.noise_floor_ns);
+}
+
+TEST(AnalysisTest, RobustBoundaryRejectsSingleSpikeThatReturnsToBaseline) {
+  const size_t page_size = 16 * Constants::BYTES_PER_KB;
+  const std::vector<size_t> localities = {
+      page_size, 2 * page_size, 4 * page_size,
+      8 * page_size, 16 * page_size, 32 * page_size,
+  };
+  const TlbRoundPointMatrix discovery =
+      make_round_point_matrix({0.10, 0.12, 5.00, 0.15, 0.14, 0.16});
+  const TlbRoundPointMatrix validation = discovery;
+
+  const TlbBoundaryDetection boundary = detect_tlb_boundary_robust(
+      localities, discovery, &validation, 0, 0, 77);
+
+  EXPECT_FALSE(boundary.detected);
+  ASSERT_FALSE(boundary.candidates.empty());
+  EXPECT_EQ(boundary.candidates.front().boundary_index, 2u);
+  EXPECT_FALSE(boundary.candidates.front().discovery.passed);
+  EXPECT_EQ(boundary.candidates.front().discovery.rejection_reason,
+            "persistence-not-confirmed");
+}
+
+TEST(AnalysisTest, RobustBoundaryRequiresIndependentValidationEvidence) {
+  const size_t page_size = 16 * Constants::BYTES_PER_KB;
+  const std::vector<size_t> localities = {
+      page_size, 2 * page_size, 4 * page_size,
+      8 * page_size, 16 * page_size, 32 * page_size,
+  };
+  const TlbRoundPointMatrix discovery =
+      make_round_point_matrix({0.10, 0.12, 2.10, 2.20, 2.25, 2.30});
+  const TlbRoundPointMatrix flat_validation =
+      make_round_point_matrix({0.10, 0.12, 0.13, 0.14, 0.15, 0.16});
+
+  const TlbBoundaryDetection boundary = detect_tlb_boundary_robust(
+      localities, discovery, &flat_validation, 0, 0, 99);
+
+  EXPECT_FALSE(boundary.detected);
+  ASSERT_FALSE(boundary.candidates.empty());
+  EXPECT_TRUE(boundary.candidates.front().discovery.passed);
+  EXPECT_FALSE(boundary.candidates.front().validation.passed);
+  EXPECT_EQ(boundary.candidates.front().validation.rejection_reason,
+            "effect-below-minimum");
+}
+
+TEST(AnalysisTest, RobustBoundaryBootstrapIsDeterministicForSameSeed) {
+  const size_t page_size = 16 * Constants::BYTES_PER_KB;
+  const std::vector<size_t> localities = {
+      page_size, 2 * page_size, 4 * page_size,
+      8 * page_size, 16 * page_size, 32 * page_size,
+  };
+  const TlbRoundPointMatrix discovery =
+      make_round_point_matrix({0.10, 0.12, 2.10, 2.20, 2.25, 2.30});
+  const TlbRoundPointMatrix validation =
+      make_round_point_matrix({0.08, 0.10, 2.00, 2.15, 2.20, 2.25});
+
+  const TlbBoundaryDetection first = detect_tlb_boundary_robust(
+      localities, discovery, &validation, 0, 0, 4242);
+  const TlbBoundaryDetection second = detect_tlb_boundary_robust(
+      localities, discovery, &validation, 0, 0, 4242);
+
+  ASSERT_TRUE(first.detected);
+  ASSERT_TRUE(second.detected);
+  EXPECT_EQ(first.confidence, second.confidence);
+  EXPECT_DOUBLE_EQ(first.discovery.effect_ci.lower_ns,
+                   second.discovery.effect_ci.lower_ns);
+  EXPECT_DOUBLE_EQ(first.discovery.effect_ci.upper_ns,
+                   second.discovery.effect_ci.upper_ns);
+  EXPECT_DOUBLE_EQ(first.validation.effect_ci.lower_ns,
+                   second.validation.effect_ci.lower_ns);
+  EXPECT_DOUBLE_EQ(first.validation.effect_ci.upper_ns,
+                   second.validation.effect_ci.upper_ns);
+}
+
+TEST(AnalysisTest, TranslationDeltaMatrixPreservesRoundAndPointCoordinates) {
+  const std::vector<size_t> localities = {16384, 32768};
+  TlbMeasurementRecord base;
+  base.pass = TlbMeasurementPass::Base;
+  base.locality_bytes = localities[1];
+  base.round_index = 1;
+  base.paired.available = true;
+  base.paired.translation_delta_ns = 3.5;
+  TlbMeasurementRecord validation = base;
+  validation.pass = TlbMeasurementPass::Validation;
+  validation.locality_bytes = localities[0];
+  validation.round_index = 0;
+  validation.paired.translation_delta_ns = 1.25;
+
+  const TlbRoundPointMatrix matrix = build_tlb_translation_delta_matrix(
+      localities, {base, validation}, {TlbMeasurementPass::Base});
+
+  ASSERT_EQ(matrix.size(), 2u);
+  ASSERT_EQ(matrix[0].size(), 2u);
+  EXPECT_TRUE(std::isnan(matrix[0][0]));
+  EXPECT_TRUE(std::isnan(matrix[0][1]));
+  EXPECT_TRUE(std::isnan(matrix[1][0]));
+  EXPECT_DOUBLE_EQ(matrix[1][1], 3.5);
 }
 
 TEST(AnalysisTest, DetectBoundaryFindsSecondTransitionFromNewSegment) {

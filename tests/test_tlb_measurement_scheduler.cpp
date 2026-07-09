@@ -63,6 +63,13 @@ TEST(TlbMeasurementSchedulerTest, DifferentBaseSeedsDeriveDifferentTaskSeeds) {
             derive_tlb_measurement_seed(1, TlbMeasurementPass::Refinement, 2, 3));
 }
 
+TEST(TlbMeasurementSchedulerTest, ValidationPassHasDistinctNameAndSeedDomain) {
+  EXPECT_STREQ(tlb_measurement_pass_to_string(TlbMeasurementPass::Validation),
+               "validation");
+  EXPECT_NE(derive_tlb_measurement_seed(1, TlbMeasurementPass::Base, 2, 3),
+            derive_tlb_measurement_seed(1, TlbMeasurementPass::Validation, 2, 3));
+}
+
 TEST(TlbMeasurementSchedulerTest, CyclicRoundsBalancePointOrder) {
   const size_t point_count = 5;
   const std::vector<TlbMeasurementTask> schedule = build_tlb_measurement_schedule(

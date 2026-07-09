@@ -149,6 +149,66 @@ double median(std::vector<double> values) {
   return values[mid];
 }
 
+void append_validation_indices(const TlbBoundaryDetection& detection,
+                               size_t point_count,
+                               std::vector<size_t>& indices) {
+  for (const TlbBoundaryCandidate& candidate : detection.candidates) {
+    if (!candidate.discovery.passed || candidate.boundary_index == 0) {
+      continue;
+    }
+    const size_t first = candidate.boundary_index - 1;
+    const size_t last = std::min(candidate.boundary_index + 2,
+                                 point_count - 1);
+    for (size_t index = first; index <= last; ++index) {
+      indices.push_back(index);
+    }
+  }
+}
+
+std::vector<TlbSweepPoint> build_validation_plan(
+    const std::vector<size_t>& locality_bytes,
+    const TlbBoundaryDetection& l1_discovery,
+    const TlbBoundaryDetection& l2_discovery,
+    size_t stride_bytes,
+    size_t page_size_bytes,
+    size_t first_point_index) {
+  std::vector<size_t> indices;
+  if (!locality_bytes.empty()) {
+    append_validation_indices(l1_discovery, locality_bytes.size(), indices);
+    append_validation_indices(l2_discovery, locality_bytes.size(), indices);
+  }
+  std::sort(indices.begin(), indices.end());
+  indices.erase(std::unique(indices.begin(), indices.end()), indices.end());
+
+  std::vector<TlbSweepPoint> points;
+  points.reserve(indices.size());
+  for (size_t index : indices) {
+    TlbSweepPoint point;
+    point.point_index = first_point_index + points.size();
+    point.locality_bytes = locality_bytes[index];
+    point.requested_pages = point.locality_bytes / page_size_bytes;
+    point.effective_pages = point.requested_pages;
+    point.stride_bytes = stride_bytes;
+    point.pointer_count = point.effective_pages;
+    point.refinement_source = "validation";
+    point.bracket_lower_bytes = index > 0 ? locality_bytes[index - 1]
+                                          : locality_bytes[index];
+    point.bracket_upper_bytes = locality_bytes[index];
+    points.push_back(point);
+  }
+  return points;
+}
+
+std::pair<size_t, size_t> validated_entry_range(
+    const TlbBoundaryDetection& boundary,
+    size_t page_size_bytes) {
+  if (!boundary.detected || page_size_bytes == 0) {
+    return {0, 0};
+  }
+  return {boundary.bracket_lower_bytes / page_size_bytes,
+          boundary.bracket_upper_bytes / page_size_bytes};
+}
+
 bool boundary_matches_private_cache_knee(const TlbBoundaryDetection& boundary,
                                          const PrivateCacheKneeDetection& private_cache_knee) {
   return boundary.detected &&
@@ -693,22 +753,107 @@ int run_tlb_analysis(const BenchmarkConfig& config,
 
   private_cache_knee = detect_private_cache_knee(final_localities_bytes, p50_latency_ns, &sweep_loop_latencies_ns);
 
-  l1_boundary = detect_l1_tlb_boundary(final_localities_bytes,
-                                       p50_latency_ns,
-                                       tlb_guard_bytes,
-                                       private_cache_knee,
-                                       sweep_loop_latencies_ns);
+  const TlbRoundPointMatrix discovery_matrix =
+      build_tlb_translation_delta_matrix(
+          final_localities_bytes,
+          measurement_records,
+          {TlbMeasurementPass::Base, TlbMeasurementPass::Refinement});
+  TlbBoundaryDetection l1_discovery;
+  TlbBoundaryDetection l2_discovery;
+  if (main_sweep_complete) {
+    l1_discovery = detect_tlb_boundary_robust(final_localities_bytes,
+                                              discovery_matrix,
+                                              nullptr,
+                                              0,
+                                              tlb_guard_bytes,
+                                              config.tlb_seed);
+    if (l1_discovery.discovery.passed &&
+        l1_discovery.boundary_index + 2 < final_localities_bytes.size()) {
+      const size_t l2_segment_start = l1_discovery.boundary_index + 1;
+      const size_t l2_guard_bytes = std::max(
+          tlb_guard_bytes, l1_discovery.boundary_locality_bytes);
+      l2_discovery = detect_tlb_boundary_robust(
+          final_localities_bytes,
+          discovery_matrix,
+          nullptr,
+          l2_segment_start,
+          l2_guard_bytes,
+          config.tlb_seed ^ 0x94d049bb133111ebULL);
+    }
+  }
 
+  const std::vector<TlbSweepPoint> validation_points = build_validation_plan(
+      final_localities_bytes,
+      l1_discovery,
+      l2_discovery,
+      analysis_stride_bytes,
+      page_size_bytes,
+      sweep_points.size());
+  bool validation_complete = validation_points.empty();
+  size_t validation_measured_points = 0;
+  if (!validation_points.empty() && !interrupted) {
+    std::cout << Messages::msg_tlb_analysis_validation_start(
+                     validation_points.size())
+              << std::endl;
+    std::vector<LocalityMeasurement> validation_measurements;
+    const TlbScheduleExecutionResult validation_result = measure_scheduled_points(
+        latency_buffer.get(),
+        selected_buffer_bytes,
+        analysis_stride_bytes,
+        page_size_bytes,
+        validation_points,
+        effective_chain_mode,
+        timer,
+        config.tlb_seed,
+        TlbMeasurementPass::Validation,
+        stop_requested,
+        validation_measurements);
+    measurement_records.insert(measurement_records.end(),
+                               validation_result.records.begin(),
+                               validation_result.records.end());
+    validation_measured_points = validation_measurements.size();
+    if (validation_result.status == TlbScheduleExecutionStatus::Error) {
+      if (buffer_locked) {
+        (void)munlock(latency_buffer.get(), selected_buffer_bytes);
+      }
+      return EXIT_FAILURE;
+    }
+    if (validation_result.status == TlbScheduleExecutionStatus::Interrupted) {
+      interrupted = true;
+      report_interrupt_once();
+    }
+    validation_complete =
+        validation_result.status == TlbScheduleExecutionStatus::Complete &&
+        validation_measured_points == validation_points.size();
+  }
+
+  const TlbRoundPointMatrix validation_matrix =
+      build_tlb_translation_delta_matrix(
+          final_localities_bytes,
+          measurement_records,
+          {TlbMeasurementPass::Validation});
+  l1_boundary = TlbBoundaryDetection{};
   l2_boundary = TlbBoundaryDetection{};
-  if (l1_boundary.detected && l1_boundary.boundary_index < final_localities_bytes.size() - 1) {
-    const size_t l2_segment_start = std::min(l1_boundary.boundary_index + 2,
-                                             final_localities_bytes.size() - 2);
-    const size_t l2_guard_bytes = std::max(tlb_guard_bytes, l1_boundary.boundary_locality_bytes);
-    l2_boundary = detect_tlb_boundary(final_localities_bytes,
-                                      p50_latency_ns,
-                                      l2_segment_start,
-                                      l2_guard_bytes,
-                                      &sweep_loop_latencies_ns);
+  if (main_sweep_complete && validation_complete && !interrupted) {
+    l1_boundary = detect_tlb_boundary_robust(final_localities_bytes,
+                                             discovery_matrix,
+                                             &validation_matrix,
+                                             0,
+                                             tlb_guard_bytes,
+                                             config.tlb_seed);
+    if (l1_boundary.detected &&
+        l1_boundary.boundary_index + 2 < final_localities_bytes.size()) {
+      const size_t l2_segment_start = l1_boundary.boundary_index + 1;
+      const size_t l2_guard_bytes = std::max(
+          tlb_guard_bytes, l1_boundary.boundary_locality_bytes);
+      l2_boundary = detect_tlb_boundary_robust(
+          final_localities_bytes,
+          discovery_matrix,
+          &validation_matrix,
+          l2_segment_start,
+          l2_guard_bytes,
+          config.tlb_seed ^ 0x94d049bb133111ebULL);
+    }
   }
 
   size_t private_cache_to_l1_distance_bytes = 0;
@@ -741,9 +886,11 @@ int run_tlb_analysis(const BenchmarkConfig& config,
   std::vector<double> page_walk_512mb_loop_latencies_ns;
   double page_walk_512mb_p50_ns = 0.0;
   bool page_walk_comparison_completed = false;
-  if (can_measure_page_walk_penalty && main_sweep_complete) {
+  if (can_measure_page_walk_penalty && main_sweep_complete &&
+      validation_complete && !interrupted) {
     TlbSweepPoint comparison_point;
-    comparison_point.point_index = planned_points;
+    comparison_point.point_index =
+        planned_points + validation_points.size();
     comparison_point.requested_pages = kPageWalkComparisonLocalityBytes / page_size_bytes;
     comparison_point.effective_pages = comparison_point.requested_pages;
     comparison_point.locality_bytes = kPageWalkComparisonLocalityBytes;
@@ -790,7 +937,8 @@ int run_tlb_analysis(const BenchmarkConfig& config,
     report_interrupt_once();
   }
 
-  const bool conclusions_valid = main_sweep_complete && !interrupted;
+  const bool conclusions_valid =
+      main_sweep_complete && validation_complete && !interrupted;
   const std::string analysis_status = conclusions_valid
                                           ? "complete"
                                           : (interrupted ? "interrupted" : "partial");
@@ -808,25 +956,21 @@ int run_tlb_analysis(const BenchmarkConfig& config,
     (void)munlock(latency_buffer.get(), selected_buffer_bytes);
   }
 
-  const std::pair<size_t, size_t> l1_entry_range = l1_boundary.detected
-                                                       ? infer_tlb_entries_range(final_localities_bytes,
-                                                                                 l1_boundary.boundary_index,
-                                                                                 page_size_bytes)
-                                                       : std::make_pair(static_cast<size_t>(0), static_cast<size_t>(0));
-  const std::pair<size_t, size_t> l2_entry_range = l2_boundary.detected
-                                                       ? infer_tlb_entries_range(final_localities_bytes,
-                                                                                 l2_boundary.boundary_index,
-                                                                                 page_size_bytes)
-                                                       : std::make_pair(static_cast<size_t>(0), static_cast<size_t>(0));
+  const std::pair<size_t, size_t> l1_entry_range =
+      validated_entry_range(l1_boundary, page_size_bytes);
+  const std::pair<size_t, size_t> l2_entry_range =
+      validated_entry_range(l2_boundary, page_size_bytes);
   const size_t l1_entries = l1_boundary.detected
-                                ? infer_tlb_entries_estimate(final_localities_bytes,
-                                                             l1_boundary.boundary_index,
-                                                             page_size_bytes)
+                                ? l1_entry_range.first +
+                                      ((l1_entry_range.second -
+                                        l1_entry_range.first) /
+                                       2)
                                 : 0;
   const size_t l2_entries = l2_boundary.detected
-                                 ? infer_tlb_entries_estimate(final_localities_bytes,
-                                                              l2_boundary.boundary_index,
-                                                              page_size_bytes)
+                                 ? l2_entry_range.first +
+                                       ((l2_entry_range.second -
+                                         l2_entry_range.first) /
+                                        2)
                                  : 0;
 
   const double page_walk_baseline_ns = p50_latency_ns.empty() ? 0.0 : p50_latency_ns.front();
@@ -902,17 +1046,21 @@ int run_tlb_analysis(const BenchmarkConfig& config,
     std::cout << Messages::report_tlb_boundary_kb(
                      l1_boundary.boundary_locality_bytes / Constants::BYTES_PER_KB)
               << std::endl;
-    std::cout << Messages::report_tlb_inferred_size_entries(l1_entries) << std::endl;
     std::cout << Messages::report_tlb_inferred_entries_range(
                      l1_entry_range.first,
                      l1_entry_range.second)
               << std::endl;
+    std::cout << Messages::report_tlb_inferred_size_entries(l1_entries) << std::endl;
     if (l1_boundary.overlaps_private_cache_knee) {
       std::cout << Messages::report_tlb_private_cache_overlap() << std::endl;
     }
-    std::cout << Messages::report_tlb_confidence(l1_boundary.confidence,
-                                                 l1_boundary.step_ns,
-                                                 l1_boundary.step_percent)
+    std::cout << Messages::report_tlb_statistical_confidence(
+                     l1_boundary.confidence,
+                     l1_boundary.discovery.effect_ns,
+                     l1_boundary.discovery.effect_ci.lower_ns,
+                     l1_boundary.discovery.effect_ci.upper_ns,
+                     l1_boundary.validation.effect_ci.lower_ns,
+                     l1_boundary.validation.effect_ci.upper_ns)
               << std::endl;
   } else {
     std::cout << Messages::report_tlb_not_detected() << std::endl;
@@ -926,14 +1074,18 @@ int run_tlb_analysis(const BenchmarkConfig& config,
     std::cout << Messages::report_tlb_boundary_kb(
                      l2_boundary.boundary_locality_bytes / Constants::BYTES_PER_KB)
               << std::endl;
-    std::cout << Messages::report_tlb_inferred_reach_entries(l2_entries) << std::endl;
     std::cout << Messages::report_tlb_inferred_entries_range(
                      l2_entry_range.first,
                      l2_entry_range.second)
               << std::endl;
-    std::cout << Messages::report_tlb_confidence(l2_boundary.confidence,
-                                                 l2_boundary.step_ns,
-                                                 l2_boundary.step_percent)
+    std::cout << Messages::report_tlb_inferred_reach_entries(l2_entries) << std::endl;
+    std::cout << Messages::report_tlb_statistical_confidence(
+                     l2_boundary.confidence,
+                     l2_boundary.discovery.effect_ns,
+                     l2_boundary.discovery.effect_ci.lower_ns,
+                     l2_boundary.discovery.effect_ci.upper_ns,
+                     l2_boundary.validation.effect_ci.lower_ns,
+                     l2_boundary.validation.effect_ci.upper_ns)
               << std::endl;
   } else {
     std::cout << Messages::report_tlb_not_detected() << std::endl;
@@ -979,6 +1131,9 @@ int run_tlb_analysis(const BenchmarkConfig& config,
       analysis_status,
       planned_points,
       final_localities_bytes.size(),
+      validation_points.size(),
+      validation_measured_points,
+      validation_complete,
       conclusions_valid,
       sweep_points,
       measurement_records,
