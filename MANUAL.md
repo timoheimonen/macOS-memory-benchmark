@@ -257,7 +257,7 @@ forms such as `-buffersize` or `-benchmark` are invalid.
 
 - Runs standalone TLB analysis mode only
 - Can be combined only with optional `--output <file>`, `--latency-stride-bytes <bytes>`, `--latency-chain-mode <mode>`, `--tlb-density <low|medium|high>`, `--seed <uint64>`, `--sweep <key=...>`, and `--sweep-max-runs <count>`
-- Uses latency stride from `--latency-stride-bytes` (same default as standard latency mode). Analyze-TLB stride must be pointer-aligned and must not exceed the system page size; it does not need to divide the page size. It performs a denser base locality sweep (`29` canonical points, stride-clamped to `max(16KB, 2*stride)` up to `256MB`), then automatically inserts page-aligned locality points near detected knees/boundaries
+- Uses latency stride from `--latency-stride-bytes` (same default as standard latency mode). Analyze-TLB stride must be pointer-aligned and must not exceed the system page size; it does not need to divide the page size. The default standard profile performs a 15-point base locality sweep, stride-clamped to `max(16KB, 2*stride)` up to `256MB`, then inserts page-aligned refinement points near detected knees/boundaries
 - Builds a page-native spread chain with exactly one pointer node per requested page and a cache-line-dense packed control with the same node and unique-cache-line counts. Each scheduler task measures both layouts in one round, alternates pair order, and stores the same-round `spread - packed` translation delta
 - Detects likely private-cache knee candidates from spread latency as a separate diagnostic and reports whether the region may interfere with interpretation; accepted L1/L2 claims still require the paired translation-delta and validation gates
 - Reports the validated bracket range (`inferred_entries_min`/`inferred_entries_max`) as the primary L1/L2 result; `inferred_entries` is an explicitly secondary midpoint estimate
@@ -265,7 +265,10 @@ forms such as `-buffersize` or `-benchmark` are invalid.
 - Retains rejected boundary candidates, their confidence intervals, persistence counts, and rejection reasons in JSON
 - Separately computes a large-locality latency delta as `P50(512MB) - P50(effective baseline locality)` when the analysis buffer is at least `512MB`. This is not claimed to isolate page-table-walk cost
 - Emits explicit `complete`, `interrupted`, or `partial` status. Boundary conclusions are suppressed unless the planned sweep completed
-- Uses 30 balanced rounds: every round measures each planned locality once, and a seeded cyclic Latin schedule rotates locality order to reduce elapsed-time and thermal-drift correlation
+- Selects the largest `1024/512/256 MB` buffer whose predicted buffer-plus-scratch peak fits the available-memory budget. The settings block reports the budget, peak-memory estimate, pointer-access envelope, and rough duration before the base pass
+- Calibrates each spread and packed measurement from a timed pilot toward the active profile's target duration while requiring a minimum number of complete chain cycles
+- Uses adaptive balanced rounds: every round measures each planned locality once in seeded cyclic-Latin order, and a pass stops after its minimum when every point's deterministic bootstrap median CI is narrow enough, or at the profile maximum
+- Attempts `mlock()` as a best-effort noise reduction. Failure reports errno and its message, records the failure in JSON, and continues with the allocated buffer unlocked
 - Rebuilds every standalone TLB pair from recorded task and layout seeds; pointer values are written in physical-slot order and every chain is verified to visit all nodes and return to its head. Latency-chain behavior outside standalone TLB analysis remains unchanged
 - A user interrupt remains a successful graceful-shutdown return when partial JSON can be written; consumers must use `status` and `conclusions_valid` rather than the process code to accept conclusions
 - Detailed methodology and JSON contract: `TLB_ANALYSIS_WHITEPAPER.md`
@@ -273,11 +276,11 @@ forms such as `-buffersize` or `-benchmark` are invalid.
 #### `--tlb-density <level>`
 
 - Applies only to `--analyze-tlb`
-- Default: `high`
+- Default: `medium` (`standard`)
 - Accepted values: `low`, `medium`, `high`
-- `low`: 15-point base sweep, no refinement pass
-- `medium`: 15-point base sweep + refinement pass around detected boundaries
-- `high`: 29-point base sweep + refinement pass around detected boundaries
+- `low` (`quick`): 15-point base sweep, no refinement pass, 7-12 rounds, 5 ms target per chain
+- `medium` (`standard`): 15-point base sweep + refinement pass, 10-20 rounds, 10 ms target per chain
+- `high` (`exhaustive`): 29-point base sweep + refinement pass, 15-30 rounds, 20 ms target per chain
 
 #### `--seed <uint64>`
 
@@ -371,7 +374,8 @@ forms such as `-buffersize` or `-benchmark` are invalid.
 #### `--sweep-max-runs <count>`
 
 - Maximum number of generated sweep combinations
-- Default: `256`
+- General default: `256`; default with `--analyze-tlb`: `16`
+- An explicit `--sweep-max-runs` value overrides the mode-specific default
 - Prevents accidental very large Cartesian sweeps
 - Every generated configuration is validated before the first run
 - Combined JSON is atomically checkpointed after each completed run and records `status`, `planned_runs`, `completed_runs`, and `conclusions_valid`
@@ -792,7 +796,30 @@ version-0.57.0 result:
   "configuration": {
     "mode": "analyze_tlb",
     "schema_version": 4,
-    "methodology_version": "page-native-paired-validated-v4",
+    "methodology_version": "page-native-paired-adaptive-validated-v4",
+    "runtime_profile": "standard",
+    "adaptive_rounds": {
+      "minimum": 10,
+      "maximum": 20,
+      "ci_width_target_ns": 0.3,
+      "bootstrap_resamples": 600
+    },
+    "access_calibration": {
+      "target_duration_ns": 10000000,
+      "minimum_chain_cycles": 16,
+      "profile_access_cap": 2000000
+    },
+    "memory_budget": {
+      "available_memory_mb": 4096,
+      "budget_mb": 1228,
+      "estimated_peak_memory_bytes": 1082130432
+    },
+    "buffer_lock": {
+      "locked": false,
+      "errno": 12,
+      "error": "Cannot allocate memory",
+      "policy": "best-effort; continue unlocked on failure"
+    },
     "seed": 123456789,
     "seed_source": "user",
     "schedule_policy": "seeded-cyclic-latin",
@@ -904,11 +931,12 @@ version-0.57.0 result:
 }
 ```
 
-The example abbreviates the 30 rounds and most chain-diagnostic fields. Actual output includes
+The example abbreviates the adaptive rounds and most chain-diagnostic fields. Actual output includes
 `tlb_analysis.measurement_records` in execution order and per-point `measurements`; every complete record carries both raw
-pair members, physical diagnostics, pair order, and same-round delta. `planned_measurement_pairs` /
-`completed_measurement_pairs` count scheduler tasks, including the independent validation pass, while `planned_raw_measurements` /
-`completed_raw_measurements` count their spread and packed members. Legacy `latency_ns`, `loop_latencies_ns`, and
+pair members, pilot duration/access count, calibrated access count, physical diagnostics, pair order, and same-round delta.
+`minimum_planned_measurement_pairs` and `maximum_planned_measurement_pairs` bound the adaptive scheduler tasks, while
+`completed_measurement_pairs` records the realized count. `pass_summaries` records rounds, convergence, and completion reason
+for each executed pass. Raw-measurement counters count the spread and packed members. Legacy `latency_ns`, `loop_latencies_ns`, and
 `p50_latency_ns` are compatibility spread values. Boundary inference uses the round-matched translation-delta matrix. Accepted and rejected candidates retain separate discovery/validation evidence and rejection reasons.
 
 If the 512MB comparison cannot run, `large_locality_latency_delta.available` is `false` and comparison values are omitted.

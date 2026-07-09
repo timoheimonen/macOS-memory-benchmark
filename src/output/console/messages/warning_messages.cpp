@@ -71,6 +71,16 @@ std::string warning_madvise_random_failed(const std::string& buffer_name, const 
   return oss.str();
 }
 
+std::string warning_tlb_mlock_failed(
+    int error_code,
+    const std::string& error_message) {
+  std::ostringstream oss;
+  oss << "mlock() failed for the TLB analysis buffer (errno "
+      << error_code << ": " << error_message
+      << "); continuing without a memory lock.";
+  return oss.str();
+}
+
 const std::string& warning_core_count_detection_failed() {
   static const std::string msg = "Failed to detect core count, defaulting to 1.";
   return msg;

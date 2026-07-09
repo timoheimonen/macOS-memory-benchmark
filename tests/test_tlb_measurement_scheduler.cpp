@@ -141,6 +141,50 @@ TEST(TlbMeasurementSchedulerTest, MeasurementErrorStopsWithoutAppendingInvalidRe
   EXPECT_TRUE(result.records.empty());
 }
 
+TEST(TlbMeasurementSchedulerTest, ConvergenceCallbackStopsOnlyAfterCompleteRound) {
+  const std::vector<TlbMeasurementTask> schedule = build_tlb_measurement_schedule(
+      make_points(3), 5, 7, TlbMeasurementPass::Base);
+
+  const TlbScheduleExecutionResult result = execute_tlb_measurement_schedule(
+      schedule,
+      []() { return false; },
+      [](const TlbMeasurementTask&, TlbMeasurementSample& sample) {
+        sample.latency_ns = 1.0;
+        return TlbTaskMeasureStatus::Success;
+      },
+      [](size_t completed_rounds,
+         const std::vector<TlbMeasurementRecord>& records) {
+        EXPECT_EQ(records.size(), completed_rounds * 3);
+        return completed_rounds == 2;
+      });
+
+  EXPECT_EQ(result.status, TlbScheduleExecutionStatus::Complete);
+  EXPECT_TRUE(result.converged);
+  EXPECT_EQ(result.rounds_completed, 2u);
+  EXPECT_EQ(result.records.size(), 6u);
+}
+
+TEST(TlbMeasurementSchedulerTest, ReportsMaximumRoundsWithoutConvergence) {
+  const std::vector<TlbMeasurementTask> schedule = build_tlb_measurement_schedule(
+      make_points(2), 3, 7, TlbMeasurementPass::Base);
+
+  const TlbScheduleExecutionResult result = execute_tlb_measurement_schedule(
+      schedule,
+      []() { return false; },
+      [](const TlbMeasurementTask&, TlbMeasurementSample& sample) {
+        sample.latency_ns = 1.0;
+        return TlbTaskMeasureStatus::Success;
+      },
+      [](size_t, const std::vector<TlbMeasurementRecord>&) {
+        return false;
+      });
+
+  EXPECT_EQ(result.status, TlbScheduleExecutionStatus::Complete);
+  EXPECT_FALSE(result.converged);
+  EXPECT_EQ(result.rounds_completed, 3u);
+  EXPECT_EQ(result.records.size(), 6u);
+}
+
 TEST(TlbMeasurementSchedulerTest, PreservesPairedMeasurementMetadata) {
   const std::vector<TlbMeasurementTask> schedule = build_tlb_measurement_schedule(
       make_points(1), 1, 7, TlbMeasurementPass::Base);

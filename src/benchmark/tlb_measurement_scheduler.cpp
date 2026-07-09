@@ -105,11 +105,13 @@ std::vector<TlbMeasurementTask> build_tlb_measurement_schedule(
 TlbScheduleExecutionResult execute_tlb_measurement_schedule(
     const std::vector<TlbMeasurementTask>& schedule,
     const TlbStopRequested& stop_requested,
-    const TlbTaskMeasureFunction& measure_task) {
+    const TlbTaskMeasureFunction& measure_task,
+    const TlbRoundCompleteFunction& stop_when_converged) {
   TlbScheduleExecutionResult result;
   result.records.reserve(schedule.size());
 
-  for (const TlbMeasurementTask& task : schedule) {
+  for (size_t task_index = 0; task_index < schedule.size(); ++task_index) {
+    const TlbMeasurementTask& task = schedule[task_index];
     if (stop_requested && stop_requested()) {
       result.status = TlbScheduleExecutionStatus::Interrupted;
       return result;
@@ -132,8 +134,20 @@ TlbScheduleExecutionResult execute_tlb_measurement_schedule(
         sample.paired,
     });
 
+    const bool round_complete =
+        task_index + 1 == schedule.size() ||
+        schedule[task_index + 1].round_index != task.round_index;
+    if (round_complete) {
+      ++result.rounds_completed;
+    }
+
     if (stop_requested && stop_requested()) {
       result.status = TlbScheduleExecutionStatus::Interrupted;
+      return result;
+    }
+    if (round_complete && stop_when_converged &&
+        stop_when_converged(result.rounds_completed, result.records)) {
+      result.converged = true;
       return result;
     }
   }

@@ -147,9 +147,10 @@ std::string usage_options(const std::string& prog_name) {
       << "                        -S/--sweep <key=...>,\n"
       << "                        and -X/--sweep-max-runs <count> only).\n"
       << "  -D, --tlb-density <level>\n"
-      << "                        Sweep density for --analyze-tlb: low, medium, high (default: high).\n"
-      << "                        low = 15-point base sweep, no refinement. medium = 15-point base + refinement.\n"
-      << "                        high = 29-point base + refinement.\n"
+      << "                        Runtime profile for --analyze-tlb: low, medium, high (default: medium).\n"
+      << "                        low/quick = 15 points, no refinement, 7-12 adaptive rounds.\n"
+      << "                        medium/standard = 15 points + refinement, 10-20 rounds.\n"
+      << "                        high/exhaustive = 29 points + refinement, 15-30 rounds.\n"
       << "      --seed <uint64>\n"
       << "                        Reproducible planner, round-order, and pointer-chain seed for\n"
       << "                        --analyze-tlb. Generated once per command when omitted.\n"
@@ -212,7 +213,8 @@ std::string usage_options(const std::string& prog_name) {
       << "                        and tlb-density. With --analyze-core2core,\n"
       << "                        supported keys are count and latency-samples. Requires --output <file>.\n"
       << "  -X, --sweep-max-runs <n>\n"
-      << "                        Maximum generated sweep runs (default: " << Constants::DEFAULT_SWEEP_MAX_RUNS << ").\n"
+      << "                        Maximum generated sweep runs (default: " << Constants::DEFAULT_SWEEP_MAX_RUNS
+      << "; --analyze-tlb: " << Constants::DEFAULT_ANALYZE_TLB_SWEEP_MAX_RUNS << ").\n"
       << "  -h, --help            Show this help message and exit\n\n";
   return oss.str();
 }
@@ -292,9 +294,68 @@ std::string report_tlb_chain_mode_effective(const std::string& chain_mode_name) 
   return "Effective Chain Mode: " + chain_mode_name;
 }
 
-std::string report_tlb_loop_config(size_t loops_per_point, size_t accesses_per_loop) {
+std::string report_tlb_runtime_profile(const std::string& profile_name,
+                                       size_t min_rounds,
+                                       size_t max_rounds,
+                                       double target_duration_ms,
+                                       size_t minimum_chain_cycles,
+                                       size_t profile_access_cap,
+                                       double ci_width_target_ns) {
   std::ostringstream oss;
-  oss << "Loops per Point: " << loops_per_point << ", Accesses per Loop: " << accesses_per_loop;
+  oss << std::fixed << std::setprecision(2)
+      << "Runtime Profile: " << profile_name << " (" << min_rounds << "-"
+      << max_rounds << " adaptive rounds, " << target_duration_ms
+      << " ms target per chain, >=" << minimum_chain_cycles
+      << " whole-chain cycles, profile access cap " << profile_access_cap
+      << ", CI width <= " << ci_width_target_ns << " ns)";
+  return oss.str();
+}
+
+std::string report_tlb_memory_budget(size_t available_memory_mb,
+                                     size_t memory_budget_mb,
+                                     size_t estimated_peak_memory_bytes) {
+  const double peak_memory_mb =
+      static_cast<double>(estimated_peak_memory_bytes) / (1024.0 * 1024.0);
+  std::ostringstream oss;
+  oss << std::fixed << std::setprecision(1) << "Memory Budget: ";
+  if (available_memory_mb == 0) {
+    oss << "available memory unavailable, fallback limit "
+        << memory_budget_mb << " MB";
+  } else {
+    oss << available_memory_mb << " MB available, limit "
+        << memory_budget_mb << " MB";
+  }
+  oss << ", estimated peak " << peak_memory_mb << " MB";
+  return oss.str();
+}
+
+std::string report_tlb_work_estimate(const std::string& pass_name,
+                                     size_t point_count,
+                                     size_t min_rounds,
+                                     size_t max_rounds,
+                                     size_t maximum_pointer_accesses,
+                                     size_t estimated_peak_memory_bytes,
+                                     double estimated_min_duration_sec,
+                                     double estimated_max_duration_sec) {
+  const double peak_memory_mb =
+      static_cast<double>(estimated_peak_memory_bytes) / (1024.0 * 1024.0);
+  std::ostringstream oss;
+  oss << std::fixed << std::setprecision(2)
+      << "Work Estimate [" << pass_name << "]: " << point_count
+      << " points, " << min_rounds << "-" << max_rounds
+      << " rounds, up to " << maximum_pointer_accesses
+      << " pointer accesses, peak " << peak_memory_mb
+      << " MB, rough duration " << estimated_min_duration_sec << "-"
+      << estimated_max_duration_sec << " s";
+  return oss.str();
+}
+
+std::string report_tlb_pass_completion(const std::string& pass_name,
+                                       size_t rounds_completed,
+                                       const std::string& completion_reason) {
+  std::ostringstream oss;
+  oss << "Pass Completion [" << pass_name << "]: " << rounds_completed
+      << " rounds (" << completion_reason << ")";
   return oss.str();
 }
 

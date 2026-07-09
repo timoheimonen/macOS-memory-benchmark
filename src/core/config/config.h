@@ -47,9 +47,9 @@
  * @brief Sweep density profile for standalone `--analyze-tlb` mode
  */
 enum class TlbSweepDensity {
-  Low = 0,    ///< 15-point base sweep, no refinement
-  Medium,     ///< 15-point base sweep + boundary refinement
-  High,       ///< 29-point base sweep + boundary refinement
+  Low = 0,    ///< Quick: 15 points, no refinement, 7-12 rounds
+  Medium,     ///< Standard: 15 points + refinement, 10-20 rounds
+  High,       ///< Exhaustive: 29 points + refinement, 15-30 rounds
 };
 
 /**
@@ -74,7 +74,7 @@ struct SweepValue {
   std::string raw_value;
   long long integer_value = 0;
   LatencyChainMode latency_chain_mode = LatencyChainMode::Auto;
-  TlbSweepDensity tlb_sweep_density = TlbSweepDensity::High;
+  TlbSweepDensity tlb_sweep_density = TlbSweepDensity::Medium;
 };
 
 /**
@@ -105,7 +105,7 @@ struct BenchmarkConfig {
   size_t latency_stride_bytes = Constants::LATENCY_STRIDE_BYTES;  ///< Stride used for latency pointer chains (bytes)
   LatencyChainMode latency_chain_mode = LatencyChainMode::Auto;  ///< Pointer-chain construction policy (auto preserves default behavior)
   size_t latency_tlb_locality_bytes = Constants::DEFAULT_LATENCY_TLB_LOCALITY_KB * Constants::BYTES_PER_KB;  ///< TLB-locality window for latency chains (default 1 MB; 0 = global random)
-  TlbSweepDensity tlb_sweep_density = TlbSweepDensity::High;  ///< Sweep density for standalone --analyze-tlb mode
+  TlbSweepDensity tlb_sweep_density = TlbSweepDensity::Medium;  ///< Standard profile for standalone --analyze-tlb
   uint64_t tlb_seed = 0;  ///< Reproducible standalone TLB planner/chain seed
   
   // Calculated sizes

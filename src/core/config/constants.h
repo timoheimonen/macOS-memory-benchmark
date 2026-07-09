@@ -102,6 +102,7 @@ namespace Constants {
   constexpr int DEFAULT_LOOP_COUNT = 1;     // Default number of full benchmark loops
   constexpr int DEFAULT_LATENCY_SAMPLE_COUNT = 1000;  // Default number of latency samples per test
   constexpr size_t DEFAULT_SWEEP_MAX_RUNS = 256;  // Default guardrail for generated sweep combinations
+  constexpr size_t DEFAULT_ANALYZE_TLB_SWEEP_MAX_RUNS = 16;  // Safer standalone TLB Cartesian sweep limit
 
   // Core-to-core standalone mode constants
   constexpr int CORE_TO_CORE_DEFAULT_LOOP_COUNT = DEFAULT_LOOP_COUNT;  // Default loop count for standalone core-to-core mode

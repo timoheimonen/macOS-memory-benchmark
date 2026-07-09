@@ -199,12 +199,18 @@ nlohmann::ordered_json build_tlb_measurement_record_json(
       {"spread",
        {{"seed", record.paired.spread.seed},
         {"latency_ns", record.paired.spread.latency_ns},
+        {"pilot_access_count", record.paired.spread.pilot_access_count},
+        {"pilot_duration_ns", record.paired.spread.pilot_duration_ns},
+        {"access_count", record.paired.spread.access_count},
         {"chain",
          build_tlb_chain_diagnostics_json(
              record.paired.spread.diagnostics)}}},
       {"packed",
        {{"seed", record.paired.packed.seed},
         {"latency_ns", record.paired.packed.latency_ns},
+        {"pilot_access_count", record.paired.packed.pilot_access_count},
+        {"pilot_duration_ns", record.paired.packed.pilot_duration_ns},
+        {"access_count", record.paired.packed.access_count},
         {"chain",
          build_tlb_chain_diagnostics_json(
              record.paired.packed.diagnostics)}}},
@@ -223,12 +229,20 @@ int save_tlb_analysis_to_json(const TlbAnalysisJsonContext& context) {
   const LatencyChainMode effective_chain_mode =
       resolve_latency_chain_mode(context.config.latency_chain_mode,
                                  context.page_walk_baseline_locality_bytes);
+  const size_t minimum_rounds = context.runtime_profile.min_rounds > 0
+                                    ? context.runtime_profile.min_rounds
+                                    : context.maximum_rounds_per_pass;
+  const size_t maximum_rounds = context.runtime_profile.max_rounds > 0
+                                    ? context.runtime_profile.max_rounds
+                                    : context.maximum_rounds_per_pass;
+  const std::string runtime_profile_name =
+      context.runtime_profile.name.empty() ? "fixed" : context.runtime_profile.name;
 
   nlohmann::ordered_json json_output;
   json_output[JsonKeys::CONFIGURATION] = {
       {JsonKeys::MODE, Constants::TLB_ANALYSIS_JSON_MODE_NAME},
       {"schema_version", 4},
-      {"methodology_version", "page-native-paired-validated-v4"},
+      {"methodology_version", "page-native-paired-adaptive-validated-v4"},
       {JsonKeys::CPU_NAME, context.cpu_name},
       {JsonKeys::MACOS_VERSION, context.config.macos_version},
       {JsonKeys::PERFORMANCE_CORES, context.perf_cores},
@@ -252,11 +266,55 @@ int save_tlb_analysis_to_json(const TlbAnalysisJsonContext& context) {
       {"minimum_effect_ns", 0.5},
       {"persistence_points_required", 2},
       {"independent_validation_required", true},
-      {JsonKeys::LATENCY_SAMPLE_COUNT, static_cast<int>(context.loops_per_point)},
-      {"accesses_per_loop", context.accesses_per_loop},
+      {JsonKeys::LATENCY_SAMPLE_COUNT, static_cast<int>(maximum_rounds)},
+      {"runtime_profile", runtime_profile_name},
+      {"adaptive_rounds",
+       {{"minimum", minimum_rounds},
+        {"maximum", maximum_rounds},
+        {"ci_width_target_ns", context.runtime_profile.ci_width_target_ns},
+        {"bootstrap_resamples",
+         context.runtime_profile.convergence_bootstrap_resamples}}},
+      {"access_calibration",
+       {{"target_duration_ns", context.runtime_profile.target_measurement_ns},
+        {"minimum_chain_cycles",
+         context.runtime_profile.minimum_chain_cycles},
+        {"profile_access_cap",
+         context.runtime_profile.maximum_accesses > 0
+             ? context.runtime_profile.maximum_accesses
+             : context.profile_access_cap},
+        {"policy",
+         "pilot-timed whole-chain cycles; minimum cycles may exceed profile access cap"}}},
       {"tlb_guard_bytes", context.tlb_guard_bytes},
       {"buffer_size_mb", context.selected_buffer_mb},
       {"buffer_locked", context.buffer_locked},
+      {"memory_budget",
+       {{"available_memory_mb", context.available_memory_mb},
+        {"budget_mb", context.memory_budget_mb},
+        {"estimated_peak_memory_bytes",
+         context.estimated_peak_memory_bytes},
+        {"policy",
+         "largest 1024/512/256 MB candidate whose predicted peak fits the available-memory budget"}}},
+      {"buffer_lock",
+       {{"locked", context.buffer_locked},
+        {"errno", context.buffer_lock_errno},
+        {"error", context.buffer_lock_error},
+        {"policy", "best-effort; continue unlocked on failure"}}},
+      {"base_work_estimate",
+       {{"point_count", context.base_work_estimate.point_count},
+        {"minimum_rounds", context.base_work_estimate.min_rounds},
+        {"maximum_rounds", context.base_work_estimate.max_rounds},
+        {"maximum_pilot_accesses_per_measurement",
+         context.base_work_estimate.maximum_pilot_accesses_per_measurement},
+        {"maximum_accesses_per_measurement",
+         context.base_work_estimate.maximum_accesses_per_measurement},
+        {"maximum_pointer_accesses",
+         context.base_work_estimate.maximum_pointer_accesses},
+        {"estimated_peak_memory_bytes",
+         context.base_work_estimate.estimated_peak_memory_bytes},
+        {"rough_minimum_duration_sec",
+         context.base_work_estimate.estimated_min_duration_sec},
+        {"rough_maximum_duration_sec",
+         context.base_work_estimate.estimated_max_duration_sec}}},
       {"fine_sweep_added_points", context.fine_sweep_added_points}};
   json_output[JsonKeys::EXECUTION_TIME_SEC] = context.total_execution_time_sec;
 
@@ -369,27 +427,44 @@ int save_tlb_analysis_to_json(const TlbAnalysisJsonContext& context) {
                                    context.validation_planned_points
           ? std::numeric_limits<size_t>::max()
           : context.planned_points + context.validation_planned_points;
-  const size_t planned_measurements =
-      context.loops_per_point != 0 &&
+  const size_t maximum_planned_measurements =
+      maximum_rounds != 0 &&
               total_planned_points >
-                  std::numeric_limits<size_t>::max() / context.loops_per_point
+                  std::numeric_limits<size_t>::max() / maximum_rounds
           ? std::numeric_limits<size_t>::max()
-          : total_planned_points * context.loops_per_point;
+          : total_planned_points * maximum_rounds;
+  const size_t minimum_planned_measurements =
+      minimum_rounds != 0 &&
+              total_planned_points >
+                  std::numeric_limits<size_t>::max() / minimum_rounds
+          ? std::numeric_limits<size_t>::max()
+          : total_planned_points * minimum_rounds;
   const size_t completed_measurements = static_cast<size_t>(std::count_if(
       context.measurement_records.begin(),
       context.measurement_records.end(),
       [](const TlbMeasurementRecord& record) {
         return record.pass != TlbMeasurementPass::LargeLocality;
       }));
-  tlb_json["rounds_per_pass"] = context.loops_per_point;
-  tlb_json["planned_measurements"] = planned_measurements;
+  tlb_json["rounds_per_pass"] = {
+      {"minimum", minimum_rounds},
+      {"maximum", maximum_rounds},
+      {"adaptive", context.runtime_profile.max_rounds > 0}};
+  tlb_json["minimum_planned_measurements"] =
+      minimum_planned_measurements;
+  tlb_json["maximum_planned_measurements"] =
+      maximum_planned_measurements;
+  tlb_json["planned_measurements"] = maximum_planned_measurements;
   tlb_json["completed_measurements"] = completed_measurements;
-  tlb_json["planned_measurement_pairs"] = planned_measurements;
+  tlb_json["minimum_planned_measurement_pairs"] =
+      minimum_planned_measurements;
+  tlb_json["maximum_planned_measurement_pairs"] =
+      maximum_planned_measurements;
+  tlb_json["planned_measurement_pairs"] = maximum_planned_measurements;
   tlb_json["completed_measurement_pairs"] = completed_measurements;
   tlb_json["planned_raw_measurements"] =
-      planned_measurements > std::numeric_limits<size_t>::max() / 2
+      maximum_planned_measurements > std::numeric_limits<size_t>::max() / 2
           ? std::numeric_limits<size_t>::max()
-          : planned_measurements * 2;
+          : maximum_planned_measurements * 2;
   const size_t completed_pairs = static_cast<size_t>(std::count_if(
       context.measurement_records.begin(),
       context.measurement_records.end(),
@@ -401,6 +476,20 @@ int save_tlb_analysis_to_json(const TlbAnalysisJsonContext& context) {
       completed_pairs > std::numeric_limits<size_t>::max() / 2
           ? std::numeric_limits<size_t>::max()
           : completed_pairs * 2;
+  tlb_json["pass_summaries"] = nlohmann::ordered_json::array();
+  for (const TlbPassExecutionSummary& summary : context.pass_summaries) {
+    tlb_json["pass_summaries"].push_back({
+        {"pass", tlb_measurement_pass_to_string(summary.pass)},
+        {"point_count", summary.point_count},
+        {"rounds_completed", summary.rounds_completed},
+        {"converged", summary.converged},
+        {"status", summary.complete ? "complete" : "interrupted"},
+        {"completion_reason",
+         summary.converged
+             ? "ci-target-reached"
+             : (summary.complete ? "maximum-rounds-reached" : "interrupted")},
+    });
+  }
   tlb_json["measurement_records"] = nlohmann::ordered_json::array();
   for (const TlbMeasurementRecord& record : context.measurement_records) {
     tlb_json["measurement_records"].push_back(

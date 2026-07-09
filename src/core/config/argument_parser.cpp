@@ -312,7 +312,8 @@ int parse_arguments(int argc, char* argv[], BenchmarkConfig& config) {
 
   if (analyze_tlb_present) {
     config.analyze_tlb = true;
-    config.tlb_sweep_density = TlbSweepDensity::High;
+    config.tlb_sweep_density = TlbSweepDensity::Medium;
+    config.sweep_max_runs = Constants::DEFAULT_ANALYZE_TLB_SWEEP_MAX_RUNS;
     bool output_seen = false;
     bool latency_stride_seen = false;
     bool latency_chain_mode_seen = false;
@@ -530,7 +531,7 @@ int parse_arguments(int argc, char* argv[], BenchmarkConfig& config) {
         }
 
         const std::string density_value = argv[i];
-        TlbSweepDensity parsed_density = TlbSweepDensity::High;
+        TlbSweepDensity parsed_density = TlbSweepDensity::Medium;
         if (!tlb_sweep_density_from_string(density_value, parsed_density)) {
           std::cerr << Messages::error_prefix()
                     << Messages::error_invalid_value(

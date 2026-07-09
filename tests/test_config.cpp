@@ -348,6 +348,20 @@ TEST(ConfigTest, ParseAnalyzeTlbStandalone) {
   int result = parse_arguments(argc, const_cast<char**>(argv), config);
   EXPECT_EQ(result, EXIT_SUCCESS);
   EXPECT_TRUE(config.analyze_tlb);
+  EXPECT_EQ(config.tlb_sweep_density, TlbSweepDensity::Medium);
+  EXPECT_EQ(config.sweep_max_runs,
+            Constants::DEFAULT_ANALYZE_TLB_SWEEP_MAX_RUNS);
+}
+
+TEST(ConfigTest, ParseAnalyzeTlbExplicitSweepLimitOverridesSafeDefault) {
+  BenchmarkConfig config;
+  const char* argv[] = {
+      "program", "--analyze-tlb", "--sweep-max-runs", "24"};
+  int argc = 4;
+
+  int result = parse_arguments(argc, const_cast<char**>(argv), config);
+  EXPECT_EQ(result, EXIT_SUCCESS);
+  EXPECT_EQ(config.sweep_max_runs, 24u);
 }
 
 TEST(ConfigTest, ParseAnalyzeTlbWithOtherArgumentsFails) {
@@ -484,6 +498,17 @@ TEST(ConfigTest, ParseAnalyzeTlbWithTlbDensityMediumSucceeds) {
   EXPECT_EQ(result, EXIT_SUCCESS);
   EXPECT_TRUE(config.analyze_tlb);
   EXPECT_EQ(config.tlb_sweep_density, TlbSweepDensity::Medium);
+}
+
+TEST(ConfigTest, ParseAnalyzeTlbWithTlbDensityHighSucceeds) {
+  BenchmarkConfig config;
+  const char* argv[] = {"program", "--analyze-tlb", "--tlb-density", "high"};
+  int argc = 4;
+
+  int result = parse_arguments(argc, const_cast<char**>(argv), config);
+  EXPECT_EQ(result, EXIT_SUCCESS);
+  EXPECT_TRUE(config.analyze_tlb);
+  EXPECT_EQ(config.tlb_sweep_density, TlbSweepDensity::High);
 }
 
 TEST(ConfigTest, ParseAnalyzeTlbWithInvalidTlbDensityFails) {

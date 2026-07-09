@@ -52,7 +52,19 @@ struct TlbMeasurementTask {
 struct TlbChainMeasurement {
   uint64_t seed = 0;
   double latency_ns = 0.0;
+  size_t pilot_access_count = 0;
+  double pilot_duration_ns = 0.0;
+  size_t access_count = 0;
   TlbChainDiagnostics diagnostics;
+};
+
+/** Compact completion metadata for one adaptive measurement pass. */
+struct TlbPassExecutionSummary {
+  TlbMeasurementPass pass = TlbMeasurementPass::Base;
+  size_t point_count = 0;
+  size_t rounds_completed = 0;
+  bool converged = false;
+  bool complete = false;
 };
 
 /** Same-round spread/packed control pair. */
@@ -96,12 +108,16 @@ enum class TlbScheduleExecutionStatus {
 struct TlbScheduleExecutionResult {
   TlbScheduleExecutionStatus status = TlbScheduleExecutionStatus::Complete;
   std::vector<TlbMeasurementRecord> records;
+  size_t rounds_completed = 0;
+  bool converged = false;
 };
 
 using TlbStopRequested = std::function<bool()>;
 using TlbTaskMeasureFunction =
     std::function<TlbTaskMeasureStatus(const TlbMeasurementTask&,
                                        TlbMeasurementSample&)>;
+using TlbRoundCompleteFunction =
+    std::function<bool(size_t, const std::vector<TlbMeasurementRecord>&)>;
 
 const char* tlb_measurement_pass_to_string(TlbMeasurementPass pass);
 
@@ -120,10 +136,11 @@ std::vector<TlbMeasurementTask> build_tlb_measurement_schedule(
     uint64_t base_seed,
     TlbMeasurementPass pass);
 
-/** Execute tasks through an injected measurement callback and non-blocking stop predicate. */
+/** Execute tasks with non-blocking stop and optional whole-round convergence callbacks. */
 TlbScheduleExecutionResult execute_tlb_measurement_schedule(
     const std::vector<TlbMeasurementTask>& schedule,
     const TlbStopRequested& stop_requested,
-    const TlbTaskMeasureFunction& measure_task);
+    const TlbTaskMeasureFunction& measure_task,
+    const TlbRoundCompleteFunction& stop_when_converged = {});
 
 #endif  // TLB_MEASUREMENT_SCHEDULER_H

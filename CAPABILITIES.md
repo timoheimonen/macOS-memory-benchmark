@@ -59,7 +59,10 @@ access behavior.
 The standalone TLB analysis mode, `--analyze-tlb`, estimates translation-related behavior by sweeping exact active-page
 counts. Every scheduled point measures a verified one-node-per-page spread chain and a packed control with the same node
 and unique-cache-line counts. Locality pairs are measured once per round in a reproducible seeded cyclic Latin order, so
-each locality rotates through different elapsed-time positions instead of being measured as one contiguous block.
+each locality rotates through different elapsed-time positions instead of being measured as one contiguous block. A pilot
+calibrates accesses toward the selected quick/standard/exhaustive target duration, and complete rounds stop when every
+point meets the profile CI-width target or the maximum round count is reached. Buffer choice is gated by a predicted
+buffer-plus-scratch peak and a conservative available-memory budget.
 
 It can report:
 
@@ -70,6 +73,7 @@ It can report:
 - Boundary confidence and inferred entry ranges
 - Seed, round/order metadata, and derived chain seed for each raw measurement
 - Same-round spread/packed raw latencies, physical-chain diagnostics, and paired translation delta
+- Runtime profile, calibrated access counts, memory/work estimate, and realized adaptive-round completion metadata
 
 These values should be interpreted as practical microarchitectural estimates, not as guaranteed architectural TLB sizes.
 Apple Silicon does not expose every internal translation structure directly to user-space code, so the analysis is based
@@ -122,7 +126,8 @@ Supported sweep targets include:
 - Core-to-core loop count via `--sweep count=...`
 - Core-to-core sample depth via `--sweep latency-samples=...`
 
-Multiple `--sweep` options are combined as a Cartesian product. `--sweep-max-runs` caps the generated run count, and
+Multiple `--sweep` options are combined as a Cartesian product. `--sweep-max-runs` caps the generated run count (default
+`16` for `--analyze-tlb`, `256` otherwise), and
 `--output` is required for the combined JSON result.
 
 ## Core-to-Core Cache-Line Handoff

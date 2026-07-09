@@ -68,9 +68,9 @@ validated before its first benchmark run.
 
 Sweep density applies only to `--analyze-tlb`.
 
-- `low`: 15-point base sweep, no refinement pass
-- `medium`: 15-point base sweep + refinement pass
-- `high` (default): 29-point base sweep + refinement pass
+- `low` (`quick`): 15-point base sweep, no refinement pass, 7-12 adaptive rounds
+- `medium` (`standard`, default): 15-point base sweep + refinement pass, 10-20 adaptive rounds
+- `high` (`exhaustive`): 29-point base sweep + refinement pass, 15-30 adaptive rounds
 
 ### 3.4 Reproducibility Seed (`--seed`)
 
@@ -90,7 +90,7 @@ Allowed `--analyze-tlb` sweep keys:
 - `latency-chain-mode`
 - `tlb-density`
 
-Sweep mode requires `--output <file>`. `--sweep-max-runs <count>` limits the number of generated combinations; the default guardrail is `256`.
+Sweep mode requires `--output <file>`. `--sweep-max-runs <count>` limits the number of generated combinations. Its default is `16` for `--analyze-tlb` and `256` for other modes; an explicit value overrides the mode default.
 
 Each sweep parameter key may appear only once. The combined JSON is atomically checkpointed after each completed run
 and records top-level `status`, `planned_runs`, `completed_runs`, and `conclusions_valid` fields.
@@ -113,25 +113,51 @@ memory_benchmark --analyze-tlb --latency-chain-mode global-random
 
 ### 4.1 Buffer Allocation Policy
 
-The analysis tries these buffers in order:
+The analysis considers these buffers in order:
 
 1. `1024 MB`
 2. `512 MB`
 3. `256 MB`
 
-If all fail, mode exits with an insufficient-memory error.
+Before `mmap()`, each candidate receives a conservative peak estimate:
 
-`mlock()` is attempted for the selected buffer; report shows whether lock succeeded.
+```text
+peak = candidate buffer + 1 MB + 256 bytes * (candidate bytes / page size)
+```
+
+The memory budget is the smaller of 30% of currently available memory and the amount that preserves a 1 GB reserve.
+On systems reporting at most 1 GB available, half is retained; if available-memory detection fails, the fallback budget is
+384 MB. The first candidate whose predicted peak fits this budget is attempted. If no budget-safe candidate can be allocated,
+the mode exits with an insufficient-memory error. An `mmap()` success alone therefore cannot select an unsafe candidate.
+
+`mlock()` is best-effort. On failure, the mode reports errno and its message, records the failure and policy in JSON, and
+continues unlocked. The settings block also reports available memory, the selected budget, and predicted peak use.
 
 The page-native builder validates each requested spread footprint and packed footprint against the selected buffer before
 writing any pointer slots.
 
-### 4.2 Fixed Measurement Parameters
+### 4.2 Calibrated Measurement Parameters and Adaptive Rounds
 
-The mode uses fixed constants:
+The three runtime profiles are:
 
-- `loops_per_point = 30`
-- `accesses_per_loop = 25,000,000`
+| Profile | Density | Rounds | Target per chain | Minimum chain cycles | Profile access cap | CI-width target |
+|---|---|---:|---:|---:|---:|---:|
+| quick | low | 7-12 | 5 ms | 8 | 1,000,000 | 0.50 ns |
+| standard | medium | 10-20 | 10 ms | 16 | 2,000,000 | 0.30 ns |
+| exhaustive | high | 15-30 | 20 ms | 32 | 5,000,000 | 0.15 ns |
+
+Each chain first runs a pilot covering at least two whole cycles and 4,096 accesses. Pilot time determines the main access
+count for the profile target duration. The result is rounded to a whole-chain multiple and cannot fall below the profile's
+minimum cycle count. For a very large chain, that minimum takes precedence over the nominal profile access cap.
+
+After the profile minimum round count, every completed round evaluates the deterministic bootstrap 95% median-CI width of
+the translation delta at every point. The pass stops only when every width meets the profile target; otherwise it continues
+to the maximum. Convergence bootstrap storage and chain-construction/validation scratch containers are reused between serial
+measurements to avoid repeated inner-loop allocation.
+
+Before every pass, console output reports point count, round range, conservative maximum pointer accesses, predicted peak
+memory, and a rough duration based on target measurement time. JSON stores the base estimate, runtime policy, per-chain pilot
+and calibrated access counts, and realized per-pass round/convergence summaries.
 
 Stride behavior:
 
@@ -155,8 +181,8 @@ corresponding randomized or increasing logical traversal policy.
 
 **Memory prefaulting:** After buffer allocation, the code calls `madvise(ptr, size_bytes, MADV_WILLNEED)` to prefault pages and reduce page-fault noise during early measurement.
 
-**Balanced round scheduler:** The pure scheduler creates 30 rounds. Every round contains every planned locality exactly
-once. A seed-shuffled initial point order is cyclically rotated on subsequent rounds, so a point traverses different
+**Balanced round scheduler:** The pure scheduler creates the active profile's maximum schedule and stops only after a whole
+round. Every round contains every planned locality exactly once. A seed-shuffled initial point order is cyclically rotated on subsequent rounds, so a point traverses different
 order positions instead of always being early or late in the run. For a full point-count cycle, each point occupies every
 order position once.
 
@@ -166,7 +192,7 @@ which layout runs first alternates by round/order parity and is recorded. The ta
 `translation_delta_ns = spread_latency_ns - packed_latency_ns`. The regular benchmark path still uses its existing
 latency-chain implementation and random-device behavior.
 
-Per-point output contains spread, packed, and paired-delta P50 values over 30 rounds. Boundary inference uses a
+Per-point output contains spread, packed, and paired-delta P50 values over the completed adaptive rounds. Boundary inference uses a
 round-by-point matrix of `translation_delta_ns`, and JSON identifies this with
 `boundary_signal = "translation_delta_ns"`. Spread latency remains available for compatibility plots and the separate
 private-cache/refinement heuristics; it is not the accepted L1/L2 boundary signal.
@@ -377,19 +403,20 @@ When `--output <file>` is provided with `--analyze-tlb` without `--sweep`, outpu
 
 - `configuration` contains mode and run constants:
   - CPU info, page size, L1D size, TLB guard bytes, stride
-  - `latency_sample_count` (fixed at 30 loops per point)
-  - `accesses_per_loop` (fixed at 25,000,000)
+  - `runtime_profile`, adaptive minimum/maximum rounds, CI-width target, and convergence bootstrap count
+  - access-calibration target, minimum whole-chain cycles, and profile access cap
   - **`latency_chain_mode`** (resolved chain mode used)
   - **`performance_cores`** and **`efficiency_cores`** (CPU core configuration)
-  - selected buffer size and whether mlock succeeded
-  - `schema_version = 4` and `methodology_version = "page-native-paired-validated-v4"`
+  - selected buffer, available-memory budget, estimated peak, and best-effort `mlock()` status/errno/error
+  - base-pass point/access/memory/duration work estimate
+  - `schema_version = 4` and `methodology_version = "page-native-paired-adaptive-validated-v4"`
   - base `seed`, `seed_source`, `schedule_policy = "seeded-cyclic-latin"`, chain model, delta definition, and `boundary_signal = "translation_delta_ns"`
   - paired-bootstrap method, 2,000 resamples, `0.5ns` minimum effect, two-point persistence, and independent-validation requirement
 
 - `tlb_analysis` contains:
-  - status, discovery/validation point and round counts, scheduled-pair counts, raw-measurement counts, and `conclusions_valid`
+  - status, discovery/validation point counts, adaptive round bounds, per-pass realized round/convergence summaries, scheduled-pair bounds, raw-measurement counts, and `conclusions_valid`
   - `measurement_records[]` in execution order with pass, point, locality, round, order, task seed, legacy spread `latency_ns`, and a `paired_control` object
-  - each `paired_control` contains pair order, spread/packed seeds and raw latencies, verified chain diagnostics, and same-round `translation_delta_ns`
+  - each `paired_control` contains pair order, spread/packed seeds, pilot timing/accesses, calibrated accesses, raw latencies, verified chain diagnostics, and same-round `translation_delta_ns`
   - `sweep[]` contains requested/effective/actual pages, actual node and unique-cache-line counts, both chain diagnostics, raw spread/packed/delta arrays, their P50 values, refinement source/bracket, and per-task records
   - `private_cache_knee` (with `detected`, `boundary_locality_kb`, `confidence`, and `may_interfere_with_tlb`)
   - `l1_tlb_detection` (with `detected`, validated bracket, primary entry range, midpoint estimate, confidence, discovery/validation evidence, and accepted/rejected candidates)

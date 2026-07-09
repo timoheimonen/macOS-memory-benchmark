@@ -87,10 +87,10 @@ Version 0.57.0
 | `--output <file>` | ✅ | |
 | `--latency-stride-bytes <n>` | ✅ | |
 | `--latency-chain-mode <mode>` | ✅ | `global-random` is rejected with `--analyze-tlb` |
-| `--tlb-density <low\|medium\|high>` | ✅ | |
+| `--tlb-density <low\|medium\|high>` | ✅ | Default `medium`/standard; low=quick, high=exhaustive |
 | `--seed <uint64>` | ✅ | Fixed reproducibility seed; generated once when omitted |
 | `--sweep <key=a,b>` | ✅ | Requires `--output`; supported keys: `latency-stride-bytes`, `latency-chain-mode`, `tlb-density` |
-| `--sweep-max-runs <n>` | ✅ with `--sweep` | Default `256` |
+| `--sweep-max-runs <n>` | ✅ with `--sweep` | Default `16`; explicit value overrides |
 | All others | ❌ | Must be used alone |
 
 ### Modifiers with `--analyze-core2core` (standalone mode)
@@ -121,7 +121,7 @@ results are written as one combined JSON document with `configuration.mode: "swe
 
 Additional sweep rules:
 
-- `--sweep-max-runs <n>` limits the generated Cartesian product; default is `256`.
+- `--sweep-max-runs <n>` limits the generated Cartesian product; default is `16` with `--analyze-tlb` and `256` otherwise.
 - `--sweep latency-chain-mode=global-random` is invalid with `--analyze-tlb`.
 - Direct options outside `--sweep` are used as fixed values for every generated run.
 - If the same parameter is provided both directly and through `--sweep`, the sweep value is applied per run.

@@ -25,6 +25,10 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <unordered_map>
+#include <unordered_set>
+#include <utility>
+#include <vector>
 
 enum class TlbChainLayout {
   Spread = 0,
@@ -82,6 +86,17 @@ struct TlbChainBuildResult {
   TlbChainDiagnostics diagnostics;
 };
 
+/** Reusable builder and integrity-validation storage for serial TLB tasks. */
+struct TlbChainScratch {
+  std::vector<size_t> physical_offsets;
+  std::vector<size_t> traversal;
+  std::vector<std::pair<size_t, size_t>> physical_writes;
+  std::unordered_set<uintptr_t> visited_nodes;
+  std::unordered_set<size_t> visited_pages;
+  std::unordered_set<size_t> visited_cache_lines;
+  std::unordered_map<size_t, size_t> nodes_per_page;
+};
+
 const char* tlb_chain_layout_to_string(TlbChainLayout layout);
 const char* tlb_chain_traversal_policy_to_string(
     TlbChainTraversalPolicy policy);
@@ -111,6 +126,18 @@ TlbChainBuildResult build_tlb_chain(
     TlbChainLayout layout,
     TlbChainTraversalPolicy traversal_policy,
     uint64_t seed);
+
+/** Build a TLB chain while retaining scratch capacity for the next task. */
+TlbChainBuildResult build_tlb_chain(
+    void* buffer,
+    size_t buffer_size_bytes,
+    size_t requested_pages,
+    size_t page_size_bytes,
+    size_t requested_stride_bytes,
+    TlbChainLayout layout,
+    TlbChainTraversalPolicy traversal_policy,
+    uint64_t seed,
+    TlbChainScratch& scratch);
 
 /** Traverse and independently verify one complete chain cycle. */
 TlbChainValidationStatus validate_tlb_chain(

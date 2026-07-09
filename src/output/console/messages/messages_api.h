@@ -156,6 +156,8 @@ std::string warning_qos_failed(int code);
 std::string warning_stride_not_aligned(size_t stride);
 std::string warning_qos_failed_worker_thread(int code);
 std::string warning_madvise_random_failed(const std::string& buffer_name, const std::string& error_msg);
+std::string warning_tlb_mlock_failed(int error_code,
+                                     const std::string& error_message);
 const std::string& warning_core_count_detection_failed();
 const std::string& warning_mach_host_self_failed();
 std::string warning_host_page_size_failed(const std::string& error_details);
@@ -225,7 +227,27 @@ const std::string& report_tlb_chain_model();
 std::string report_tlb_chain_mode(const std::string& chain_mode_name);
 std::string report_tlb_chain_mode_requested(const std::string& chain_mode_name);
 std::string report_tlb_chain_mode_effective(const std::string& chain_mode_name);
-std::string report_tlb_loop_config(size_t loops_per_point, size_t accesses_per_loop);
+std::string report_tlb_runtime_profile(const std::string& profile_name,
+                                       size_t min_rounds,
+                                       size_t max_rounds,
+                                       double target_duration_ms,
+                                       size_t minimum_chain_cycles,
+                                       size_t profile_access_cap,
+                                       double ci_width_target_ns);
+std::string report_tlb_memory_budget(size_t available_memory_mb,
+                                     size_t memory_budget_mb,
+                                     size_t estimated_peak_memory_bytes);
+std::string report_tlb_work_estimate(const std::string& pass_name,
+                                     size_t point_count,
+                                     size_t min_rounds,
+                                     size_t max_rounds,
+                                     size_t maximum_pointer_accesses,
+                                     size_t estimated_peak_memory_bytes,
+                                     double estimated_min_duration_sec,
+                                     double estimated_max_duration_sec);
+std::string report_tlb_pass_completion(const std::string& pass_name,
+                                       size_t rounds_completed,
+                                       const std::string& completion_reason);
 std::string report_tlb_sweep_range(size_t start_locality_bytes,
                                    size_t end_locality_bytes,
                                    size_t point_count);

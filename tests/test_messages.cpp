@@ -364,6 +364,14 @@ TEST_F(MessagesWarningTest, WarningBufferSizeExceedsLimit) {
   EXPECT_NE(msg.find("Requested buffer size"), std::string::npos);
 }
 
+TEST_F(MessagesWarningTest, WarningTlbMlockFailureIsBestEffort) {
+  const std::string msg =
+      Messages::warning_tlb_mlock_failed(12, "Cannot allocate memory");
+  EXPECT_NE(msg.find("mlock()"), std::string::npos);
+  EXPECT_NE(msg.find("errno 12"), std::string::npos);
+  EXPECT_NE(msg.find("continuing"), std::string::npos);
+}
+
 // ============================================================================
 // Info Messages Tests (using fixture)
 // ============================================================================
@@ -525,6 +533,31 @@ TEST_F(MessagesFormattingTest, ReportTlbDensity) {
   EXPECT_NE(msg.find("high"), std::string::npos);
 }
 
+TEST_F(MessagesFormattingTest, ReportTlbAdaptiveRuntimePolicy) {
+  const std::string profile = Messages::report_tlb_runtime_profile(
+      "standard", 10, 20, 10.0, 16, 2000000, 0.30);
+  EXPECT_NE(profile.find("standard"), std::string::npos);
+  EXPECT_NE(profile.find("10-20 adaptive rounds"), std::string::npos);
+  EXPECT_NE(profile.find("whole-chain cycles"), std::string::npos);
+
+  const std::string budget = Messages::report_tlb_memory_budget(
+      4096, 1228, 600 * Constants::BYTES_PER_MB);
+  EXPECT_NE(budget.find("4096 MB available"), std::string::npos);
+  EXPECT_NE(budget.find("estimated peak 600.0 MB"), std::string::npos);
+
+  const std::string work = Messages::report_tlb_work_estimate(
+      "base", 15, 10, 20, 600000000, 600 * Constants::BYTES_PER_MB,
+      3.75, 7.5);
+  EXPECT_NE(work.find("Work Estimate [base]"), std::string::npos);
+  EXPECT_NE(work.find("600000000 pointer accesses"), std::string::npos);
+  EXPECT_NE(work.find("3.75-7.50 s"), std::string::npos);
+
+  const std::string completion = Messages::report_tlb_pass_completion(
+      "base", 12, "CI target reached");
+  EXPECT_NE(completion.find("12 rounds"), std::string::npos);
+  EXPECT_NE(completion.find("CI target reached"), std::string::npos);
+}
+
 TEST_F(MessagesFormattingTest, ReportTlbSeedAndSchedule) {
   const std::string generated = Messages::report_tlb_seed(12345, false);
   EXPECT_NE(generated.find("12345"), std::string::npos);
@@ -644,6 +677,8 @@ TEST_F(MessagesFormattingTest, UsageOptions) {
   EXPECT_NE(msg.find("--count"), std::string::npos);
   EXPECT_NE(msg.find("--analyze-tlb"), std::string::npos);
   EXPECT_NE(msg.find("--tlb-density"), std::string::npos);
+  EXPECT_NE(msg.find("default: medium"), std::string::npos);
+  EXPECT_NE(msg.find("--analyze-tlb: 16"), std::string::npos);
   EXPECT_NE(msg.find("--latency-samples"), std::string::npos);
   EXPECT_NE(msg.find("--latency-stride-bytes"), std::string::npos);
   EXPECT_NE(msg.find("--latency-chain-mode"), std::string::npos);

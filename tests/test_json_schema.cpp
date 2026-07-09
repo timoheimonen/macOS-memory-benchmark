@@ -68,6 +68,9 @@ TlbMeasurementRecord make_paired_tlb_record(TlbMeasurementPass pass,
   record.paired.spread_measured_first = (round_index % 2) == 0;
   record.paired.spread.seed = task_seed + 1;
   record.paired.spread.latency_ns = spread_latency_ns;
+  record.paired.spread.pilot_access_count = 4096;
+  record.paired.spread.pilot_duration_ns = 40960.0;
+  record.paired.spread.access_count = 1000000;
   record.paired.spread.diagnostics = {
       TlbChainLayout::Spread,
       TlbChainTraversalPolicy::RandomPagesRandomOffsets,
@@ -85,6 +88,9 @@ TlbMeasurementRecord make_paired_tlb_record(TlbMeasurementPass pass,
   };
   record.paired.packed.seed = task_seed + 2;
   record.paired.packed.latency_ns = spread_latency_ns - 5.0;
+  record.paired.packed.pilot_access_count = 4096;
+  record.paired.packed.pilot_duration_ns = 32768.0;
+  record.paired.packed.access_count = 1250000;
   record.paired.packed.diagnostics = {
       TlbChainLayout::Packed,
       TlbChainTraversalPolicy::RandomPagesRandomOffsets,
@@ -248,6 +254,16 @@ TEST(JsonSchemaTest, TlbAnalysisExporterIncludesModeAndCoreCounts) {
       "discovery-not-accepted";
   l2_boundary.candidates.push_back(rejected_candidate);
   const PrivateCacheKneeDetection private_cache_knee;
+  const TlbRuntimeProfile runtime_profile = {
+      "exhaustive", 2, 4, 20 * 1000 * 1000ULL, 32, 5 * 1000 * 1000,
+      0.15, 1000};
+  const TlbWorkEstimate base_work_estimate = estimate_tlb_work(
+      1, 1050 * Constants::BYTES_PER_MB, 1, runtime_profile);
+  const std::vector<TlbPassExecutionSummary> pass_summaries = {
+      {TlbMeasurementPass::Base, 1, 2, true, true},
+      {TlbMeasurementPass::Validation, 1, 2, true, true},
+      {TlbMeasurementPass::LargeLocality, 1, 2, true, true},
+  };
 
   const TlbAnalysisJsonContext context = {
       config,
@@ -296,6 +312,14 @@ TEST(JsonSchemaTest, TlbAnalysisExporterIncludesModeAndCoreCounts) {
       15.0,
       80.5,
       3.0,
+      runtime_profile,
+      4096,
+      1228,
+      1050 * Constants::BYTES_PER_MB,
+      0,
+      "",
+      base_work_estimate,
+      pass_summaries,
   };
 
   ASSERT_EQ(save_tlb_analysis_to_json(context), EXIT_SUCCESS);
@@ -306,7 +330,7 @@ TEST(JsonSchemaTest, TlbAnalysisExporterIncludesModeAndCoreCounts) {
   EXPECT_EQ(output_json[JsonKeys::CONFIGURATION][JsonKeys::EFFICIENCY_CORES], 6);
   EXPECT_EQ(output_json[JsonKeys::CONFIGURATION]["schema_version"], 4);
   EXPECT_EQ(output_json[JsonKeys::CONFIGURATION]["methodology_version"],
-            "page-native-paired-validated-v4");
+            "page-native-paired-adaptive-validated-v4");
   EXPECT_EQ(output_json[JsonKeys::CONFIGURATION]["boundary_signal"],
             "translation_delta_ns");
   EXPECT_EQ(output_json[JsonKeys::CONFIGURATION]["seed"], 12345);
@@ -319,6 +343,19 @@ TEST(JsonSchemaTest, TlbAnalysisExporterIncludesModeAndCoreCounts) {
   EXPECT_TRUE(output_json[JsonKeys::CONFIGURATION].contains(JsonKeys::TLB_DENSITY));
   EXPECT_EQ(output_json[JsonKeys::CONFIGURATION][JsonKeys::TLB_DENSITY], "high");
   EXPECT_TRUE(output_json[JsonKeys::CONFIGURATION].contains("fine_sweep_added_points"));
+  EXPECT_EQ(output_json[JsonKeys::CONFIGURATION]["runtime_profile"],
+            "exhaustive");
+  EXPECT_EQ(output_json[JsonKeys::CONFIGURATION]["adaptive_rounds"]["minimum"],
+            2);
+  EXPECT_EQ(output_json[JsonKeys::CONFIGURATION]["adaptive_rounds"]["maximum"],
+            4);
+  EXPECT_EQ(output_json[JsonKeys::CONFIGURATION]["memory_budget"]["budget_mb"],
+            1228);
+  EXPECT_EQ(output_json[JsonKeys::CONFIGURATION]["buffer_lock"]["errno"], 0);
+  EXPECT_EQ(output_json[JsonKeys::CONFIGURATION]["base_work_estimate"]["point_count"],
+            1);
+  EXPECT_TRUE(output_json[JsonKeys::CONFIGURATION]["base_work_estimate"].contains(
+      "maximum_pilot_accesses_per_measurement"));
   EXPECT_TRUE(output_json["tlb_analysis"].contains("private_cache_knee"));
   EXPECT_EQ(output_json["tlb_analysis"]["l1_tlb_detection"]["inferred_entries"], 248);
   EXPECT_EQ(output_json["tlb_analysis"]["l1_tlb_detection"]["inferred_entries_method"],
@@ -338,11 +375,13 @@ TEST(JsonSchemaTest, TlbAnalysisExporterIncludesModeAndCoreCounts) {
   EXPECT_EQ(output_json["tlb_analysis"]["validation_planned_points"], 1);
   EXPECT_EQ(output_json["tlb_analysis"]["validation_measured_points"], 1);
   EXPECT_TRUE(output_json["tlb_analysis"]["validation_complete"]);
-  EXPECT_EQ(output_json["tlb_analysis"]["planned_measurements"], 4);
+  EXPECT_EQ(output_json["tlb_analysis"]["minimum_planned_measurements"], 4);
+  EXPECT_EQ(output_json["tlb_analysis"]["maximum_planned_measurements"], 8);
+  EXPECT_EQ(output_json["tlb_analysis"]["planned_measurements"], 8);
   EXPECT_EQ(output_json["tlb_analysis"]["completed_measurements"], 4);
-  EXPECT_EQ(output_json["tlb_analysis"]["planned_measurement_pairs"], 4);
+  EXPECT_EQ(output_json["tlb_analysis"]["planned_measurement_pairs"], 8);
   EXPECT_EQ(output_json["tlb_analysis"]["completed_measurement_pairs"], 4);
-  EXPECT_EQ(output_json["tlb_analysis"]["planned_raw_measurements"], 8);
+  EXPECT_EQ(output_json["tlb_analysis"]["planned_raw_measurements"], 16);
   EXPECT_EQ(output_json["tlb_analysis"]["completed_raw_measurements"], 8);
   EXPECT_TRUE(output_json["tlb_analysis"]["conclusions_valid"]);
   EXPECT_EQ(output_json["tlb_analysis"]["measurement_records"].size(), 6u);
@@ -354,6 +393,11 @@ TEST(JsonSchemaTest, TlbAnalysisExporterIncludesModeAndCoreCounts) {
   EXPECT_DOUBLE_EQ(output_json["tlb_analysis"]["measurement_records"][0]
                               ["paired_control"]["translation_delta_ns"],
                    5.0);
+  EXPECT_EQ(output_json["tlb_analysis"]["measurement_records"][0]
+                       ["paired_control"]["spread"]["access_count"],
+            1000000);
+  ASSERT_EQ(output_json["tlb_analysis"]["pass_summaries"].size(), 3u);
+  EXPECT_TRUE(output_json["tlb_analysis"]["pass_summaries"][0]["converged"]);
   EXPECT_EQ(output_json["tlb_analysis"]["sweep"][0]["requested_pages"], 1);
   EXPECT_EQ(output_json["tlb_analysis"]["sweep"][0]["actual_pages"], 1);
   EXPECT_EQ(output_json["tlb_analysis"]["sweep"][0]["actual_node_count"], 1);

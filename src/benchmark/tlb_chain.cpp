@@ -151,12 +151,13 @@ uint64_t derive_tlb_chain_layout_seed(uint64_t task_seed,
                                                        : kPackedSalt));
 }
 
-TlbChainValidationStatus validate_tlb_chain(
+TlbChainValidationStatus validate_tlb_chain_with_scratch(
     void* buffer,
     size_t buffer_size_bytes,
     void* chain_head,
     const TlbChainDiagnostics& expected,
-    TlbChainDiagnostics* observed) {
+    TlbChainDiagnostics* observed,
+    TlbChainScratch& scratch) {
   const size_t cache_line_bytes = Constants::CACHE_LINE_SIZE_BYTES;
   if (buffer == nullptr || chain_head == nullptr ||
       buffer_size_bytes < sizeof(uintptr_t) || expected.node_count == 0 ||
@@ -179,14 +180,26 @@ TlbChainValidationStatus validate_tlb_chain(
     return TlbChainValidationStatus::InvalidArgument;
   }
 
-  std::unordered_set<uintptr_t> visited_nodes;
-  std::unordered_set<size_t> visited_pages;
-  std::unordered_set<size_t> visited_cache_lines;
-  std::unordered_map<size_t, size_t> nodes_per_page;
-  visited_nodes.reserve(expected.node_count);
-  visited_pages.reserve(expected.node_count);
-  visited_cache_lines.reserve(expected.node_count);
-  nodes_per_page.reserve(expected.node_count);
+  auto& visited_nodes = scratch.visited_nodes;
+  auto& visited_pages = scratch.visited_pages;
+  auto& visited_cache_lines = scratch.visited_cache_lines;
+  auto& nodes_per_page = scratch.nodes_per_page;
+  visited_nodes.clear();
+  visited_pages.clear();
+  visited_cache_lines.clear();
+  nodes_per_page.clear();
+  if (visited_nodes.bucket_count() < expected.node_count) {
+    visited_nodes.reserve(expected.node_count);
+  }
+  if (visited_pages.bucket_count() < expected.node_count) {
+    visited_pages.reserve(expected.node_count);
+  }
+  if (visited_cache_lines.bucket_count() < expected.node_count) {
+    visited_cache_lines.reserve(expected.node_count);
+  }
+  if (nodes_per_page.bucket_count() < expected.node_count) {
+    nodes_per_page.reserve(expected.node_count);
+  }
 
   uintptr_t current = reinterpret_cast<uintptr_t>(chain_head);
   uintptr_t minimum_address = current;
@@ -252,6 +265,21 @@ TlbChainValidationStatus validate_tlb_chain(
   return TlbChainValidationStatus::Valid;
 }
 
+TlbChainValidationStatus validate_tlb_chain(
+    void* buffer,
+    size_t buffer_size_bytes,
+    void* chain_head,
+    const TlbChainDiagnostics& expected,
+    TlbChainDiagnostics* observed) {
+  TlbChainScratch scratch;
+  return validate_tlb_chain_with_scratch(buffer,
+                                         buffer_size_bytes,
+                                         chain_head,
+                                         expected,
+                                         observed,
+                                         scratch);
+}
+
 TlbChainBuildResult build_tlb_chain(
     void* buffer,
     size_t buffer_size_bytes,
@@ -261,6 +289,28 @@ TlbChainBuildResult build_tlb_chain(
     TlbChainLayout layout,
     TlbChainTraversalPolicy traversal_policy,
     uint64_t seed) {
+  TlbChainScratch scratch;
+  return build_tlb_chain(buffer,
+                         buffer_size_bytes,
+                         requested_pages,
+                         page_size_bytes,
+                         requested_stride_bytes,
+                         layout,
+                         traversal_policy,
+                         seed,
+                         scratch);
+}
+
+TlbChainBuildResult build_tlb_chain(
+    void* buffer,
+    size_t buffer_size_bytes,
+    size_t requested_pages,
+    size_t page_size_bytes,
+    size_t requested_stride_bytes,
+    TlbChainLayout layout,
+    TlbChainTraversalPolicy traversal_policy,
+    uint64_t seed,
+    TlbChainScratch& scratch) {
   TlbChainBuildResult result;
   result.diagnostics.layout = layout;
   result.diagnostics.traversal_policy = traversal_policy;
@@ -308,7 +358,8 @@ TlbChainBuildResult build_tlb_chain(
   }
 
   try {
-    std::vector<size_t> physical_offsets(requested_pages);
+    auto& physical_offsets = scratch.physical_offsets;
+    physical_offsets.resize(requested_pages);
     std::mt19937_64 offset_rng(splitmix64(seed ^ 0x4f464653455453ULL));
 
     if (layout == TlbChainLayout::Spread) {
@@ -339,7 +390,8 @@ TlbChainBuildResult build_tlb_chain(
       }
     }
 
-    std::vector<size_t> traversal(requested_pages);
+    auto& traversal = scratch.traversal;
+    traversal.resize(requested_pages);
     std::iota(traversal.begin(), traversal.end(), 0);
     if (traversal_policy ==
         TlbChainTraversalPolicy::RandomPagesRandomOffsets) {
@@ -348,7 +400,8 @@ TlbChainBuildResult build_tlb_chain(
       std::shuffle(traversal.begin(), traversal.end(), traversal_rng);
     }
 
-    std::vector<std::pair<size_t, size_t>> physical_writes;
+    auto& physical_writes = scratch.physical_writes;
+    physical_writes.clear();
     physical_writes.reserve(requested_pages);
     for (size_t traversal_index = 0; traversal_index < requested_pages;
          ++traversal_index) {
@@ -369,11 +422,13 @@ TlbChainBuildResult build_tlb_chain(
 
     result.chain_head = bytes + physical_offsets[traversal.front()];
     TlbChainDiagnostics observed;
-    result.validation_status = validate_tlb_chain(buffer,
-                                                  buffer_size_bytes,
-                                                  result.chain_head,
-                                                  result.diagnostics,
-                                                  &observed);
+    result.validation_status = validate_tlb_chain_with_scratch(
+        buffer,
+        buffer_size_bytes,
+        result.chain_head,
+        result.diagnostics,
+        &observed,
+        scratch);
     if (result.validation_status != TlbChainValidationStatus::Valid) {
       result.status = TlbChainBuildStatus::IntegrityFailure;
       result.chain_head = nullptr;

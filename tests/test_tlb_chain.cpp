@@ -288,6 +288,45 @@ TEST(TlbChainTest, LayoutSeedsAreStableAndDistinct) {
             derive_tlb_chain_layout_seed(43, TlbChainLayout::Spread));
 }
 
+TEST(TlbChainTest, ReusesScratchCapacityAcrossSerialBuilds) {
+  const size_t page_size = static_cast<size_t>(getpagesize());
+  PageBuffer buffer(64 * page_size);
+  ASSERT_NE(buffer.get(), nullptr);
+  TlbChainScratch scratch;
+
+  const TlbChainBuildResult first = build_tlb_chain(
+      buffer.get(),
+      buffer.size(),
+      64,
+      page_size,
+      256,
+      TlbChainLayout::Spread,
+      TlbChainTraversalPolicy::RandomPagesRandomOffsets,
+      1234,
+      scratch);
+  ASSERT_EQ(first.status, TlbChainBuildStatus::Success);
+  const size_t offsets_capacity = scratch.physical_offsets.capacity();
+  const size_t traversal_capacity = scratch.traversal.capacity();
+  const size_t writes_capacity = scratch.physical_writes.capacity();
+  const size_t visited_buckets = scratch.visited_nodes.bucket_count();
+
+  const TlbChainBuildResult second = build_tlb_chain(
+      buffer.get(),
+      buffer.size(),
+      16,
+      page_size,
+      256,
+      TlbChainLayout::Packed,
+      TlbChainTraversalPolicy::RandomPagesRandomOffsets,
+      5678,
+      scratch);
+  ASSERT_EQ(second.status, TlbChainBuildStatus::Success);
+  EXPECT_GE(scratch.physical_offsets.capacity(), offsets_capacity);
+  EXPECT_GE(scratch.traversal.capacity(), traversal_capacity);
+  EXPECT_GE(scratch.physical_writes.capacity(), writes_capacity);
+  EXPECT_GE(scratch.visited_nodes.bucket_count(), visited_buckets);
+}
+
 TEST(TlbChainTest, SpreadAndPackedRunThroughLatencyKernelIntegration) {
   const size_t page_size = static_cast<size_t>(getpagesize());
   constexpr size_t kRequestedPages = 32;
