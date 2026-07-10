@@ -143,6 +143,140 @@ TEST(JsonSchemaTest, BenchmarkExporterIncludesBenchmarkModeAndOmitsEmptySections
   std::filesystem::remove(config.output_file);
 }
 
+TEST(JsonSchemaTest, BenchmarkSchemaV2IncludesCompletionAndNullableMeasurements) {
+  BenchmarkConfig config;
+  config.output_file = make_temp_json_path("benchmark_v2").string();
+  config.run_benchmark = true;
+  config.only_bandwidth = true;
+  config.buffer_size = 4096;
+  config.buffer_size_mb = 1;
+  config.benchmark_seed = 18446744073709551615ULL;
+  config.user_specified_benchmark_seed = true;
+
+  BenchmarkResults loop;
+  loop.status = BenchmarkRunStatus::Partial;
+  loop.status_reason = "interrupted by user";
+  loop.loop_index = 0;
+  loop.planned_phases = 1;
+  loop.completed_phases = 0;
+  loop.planned_measurements = 3;
+  loop.completed_measurements = 1;
+  loop.planned_phase_order = {"main-bandwidth"};
+  loop.realized_phase_order = {"main-bandwidth"};
+  set_measurement_value(loop.main_read_bandwidth, 12.5, 0.150);
+  loop.main_read_bandwidth.target = "main-memory";
+  loop.main_read_bandwidth.operation = "read";
+  loop.main_read_bandwidth.work_policy = "automatic-duration-calibration";
+  loop.main_read_bandwidth.automatic_calibration = true;
+  loop.main_read_bandwidth.duration_within_target = true;
+  loop.main_read_bandwidth.duration_quality = "within-target-window";
+  loop.main_read_bandwidth.pilot_elapsed_seconds = 0.010;
+  loop.main_read_bandwidth.buffer_size_bytes = 4096;
+  loop.main_read_bandwidth.passes = 16;
+  loop.main_read_bandwidth.exact_payload_bytes = 65536;
+  loop.main_read_bandwidth.requested_threads = 4;
+  loop.main_read_bandwidth.effective_threads = 4;
+  set_measurement_unavailable(loop.main_write_bandwidth,
+                              BenchmarkMeasurementStatus::Interrupted,
+                              "interrupted during measured operation");
+
+  BenchmarkStatistics stats;
+  stats.status = BenchmarkRunStatus::Partial;
+  stats.status_reason = "interrupted by user";
+  stats.planned_loops = 2;
+  stats.completed_loops = 0;
+  stats.planned_measurements = 6;
+  stats.completed_measurements = 1;
+  stats.loop_results.push_back(loop);
+
+  ASSERT_EQ(save_results_to_json(config, stats, 1.0), EXIT_SUCCESS);
+  const nlohmann::json output = read_json_file(config.output_file);
+  EXPECT_EQ(output["configuration"]["benchmark_schema_version"], 2);
+  EXPECT_EQ(output["configuration"]["methodology_version"],
+            "benchmark-v2-calibrated-seeded-balanced");
+  EXPECT_EQ(output["configuration"]["benchmark_seed"],
+            "18446744073709551615");
+  EXPECT_EQ(output["status"], "partial");
+  EXPECT_FALSE(output["results_complete"].get<bool>());
+  EXPECT_EQ(output["planned_loops"], 2u);
+  ASSERT_EQ(output["loops"].size(), 1u);
+  const nlohmann::json measurements = output["loops"][0]["measurements"];
+  EXPECT_EQ(measurements["main_read_bandwidth"]["status"], "measured");
+  EXPECT_DOUBLE_EQ(measurements["main_read_bandwidth"]["value"].get<double>(),
+                   12.5);
+  EXPECT_EQ(measurements["main_read_bandwidth"]["passes"], 16u);
+  EXPECT_EQ(measurements["main_write_bandwidth"]["status"], "interrupted");
+  EXPECT_TRUE(measurements["main_write_bandwidth"]["value"].is_null());
+  EXPECT_EQ(output["main_memory"]["bandwidth"]["read_gb_s"]["value"], 12.5);
+  EXPECT_TRUE(output["main_memory"]["bandwidth"]["write_gb_s"]["value"].is_null());
+  EXPECT_FALSE(output.dump().find("page_walk_penalty_ns") != std::string::npos);
+
+  std::filesystem::remove(config.output_file);
+}
+
+TEST(JsonSchemaTest, BenchmarkAggregateHeadlineUsesMedianAndReportsCvAndMad) {
+  BenchmarkConfig config;
+  config.only_bandwidth = true;
+  config.buffer_size = 4096;
+  BenchmarkStatistics stats;
+  stats.status = BenchmarkRunStatus::Complete;
+  stats.planned_loops = 3;
+  stats.completed_loops = 3;
+  stats.planned_measurements = 9;
+  stats.completed_measurements = 9;
+  for (size_t index = 0; index < 3; ++index) {
+    BenchmarkResults loop;
+    loop.status = BenchmarkRunStatus::Complete;
+    loop.loop_index = index;
+    const double value = index == 0 ? 10.0 : index == 1 ? 20.0 : 100.0;
+    set_measurement_value(loop.main_read_bandwidth, value, 0.150);
+    loop.main_read_bandwidth.duration_within_target = true;
+    stats.loop_results.push_back(loop);
+  }
+
+  const nlohmann::json output = build_results_json(config, stats, 1.0);
+  const nlohmann::json aggregate =
+      output["main_memory"]["bandwidth"]["read_gb_s"];
+  EXPECT_DOUBLE_EQ(aggregate["value"].get<double>(), 20.0);
+  EXPECT_EQ(aggregate["headline_semantics"],
+            "median-p50-across-loop-headlines");
+  EXPECT_TRUE(aggregate["statistics"].contains(
+      "coefficient_of_variation_pct"));
+  EXPECT_TRUE(aggregate["statistics"].contains(
+      "median_absolute_deviation"));
+  EXPECT_DOUBLE_EQ(
+      aggregate["statistics"]["median_absolute_deviation"].get<double>(),
+      10.0);
+}
+
+TEST(JsonSchemaTest, BenchmarkCheckpointAtomicallyProgressesToComplete) {
+  BenchmarkConfig config;
+  config.output_file = make_temp_json_path("benchmark_checkpoint").string();
+  config.only_bandwidth = true;
+  config.only_latency = true;
+  BenchmarkStatistics stats;
+  stats.status = BenchmarkRunStatus::Partial;
+  stats.status_reason = "benchmark loops remain";
+  stats.planned_loops = 2;
+  stats.completed_loops = 1;
+
+  ASSERT_EQ(save_results_to_json(config, stats, 0.5, false), EXIT_SUCCESS);
+  nlohmann::json output = read_json_file(config.output_file);
+  EXPECT_EQ(output["status"], "partial");
+  EXPECT_FALSE(output["results_complete"].get<bool>());
+
+  stats.status = BenchmarkRunStatus::Complete;
+  stats.status_reason.clear();
+  stats.completed_loops = 2;
+  ASSERT_EQ(save_results_to_json(config, stats, 1.0, false), EXIT_SUCCESS);
+  output = read_json_file(config.output_file);
+  EXPECT_EQ(output["status"], "complete");
+  EXPECT_TRUE(output["results_complete"].get<bool>());
+  EXPECT_FALSE(std::filesystem::exists(config.output_file + ".tmp"));
+
+  std::filesystem::remove(config.output_file);
+}
+
 TEST(JsonSchemaTest, PatternExporterIncludesPatternsMode) {
   BenchmarkConfig config;
   config.output_file = make_temp_json_path("patterns_schema").string();

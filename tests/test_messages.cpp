@@ -998,21 +998,20 @@ TEST_F(MessagesFormattingTest, ResultsLatencyAverage) {
 
 TEST_F(MessagesFormattingTest, ResultsLatencyTlbHit) {
   std::string msg = Messages::results_latency_tlb_hit(24.10);
-  EXPECT_NE(msg.find("TLB hit latency"), std::string::npos);
-  EXPECT_NE(msg.find("16 KB locality"), std::string::npos);
+  EXPECT_NE(msg.find("16 KiB locality latency"), std::string::npos);
   EXPECT_NE(msg.find("24.10"), std::string::npos);
 }
 
 TEST_F(MessagesFormattingTest, ResultsLatencyTlbMiss) {
   std::string msg = Messages::results_latency_tlb_miss(86.70);
-  EXPECT_NE(msg.find("TLB miss latency"), std::string::npos);
-  EXPECT_NE(msg.find("global random locality"), std::string::npos);
+  EXPECT_NE(msg.find("Global-random latency"), std::string::npos);
   EXPECT_NE(msg.find("86.70"), std::string::npos);
 }
 
 TEST_F(MessagesFormattingTest, ResultsLatencyPageWalkPenalty) {
   std::string msg = Messages::results_latency_page_walk_penalty(62.60);
-  EXPECT_NE(msg.find("Estimated page-walk penalty"), std::string::npos);
+  EXPECT_NE(msg.find("Locality latency delta"), std::string::npos);
+  EXPECT_NE(msg.find("global - 16 KiB"), std::string::npos);
   EXPECT_NE(msg.find("62.60"), std::string::npos);
   EXPECT_NE(msg.find("ns"), std::string::npos);
 }
@@ -1272,21 +1271,34 @@ TEST_F(MessagesFormattingTest, StatisticsMainMemoryLatencyHeader) {
   EXPECT_NE(msg.find("ns"), std::string::npos);
 }
 
+TEST_F(MessagesFormattingTest, StatisticsMedianAbsoluteDeviation) {
+  EXPECT_EQ(Messages::statistics_median_absolute_deviation(1.234, 2),
+            "  Median absolute deviation: 1.23");
+}
+
+TEST_F(MessagesFormattingTest, WarningBenchmarkHighCv) {
+  const std::string msg =
+      Messages::warning_benchmark_high_cv("read bandwidth", 9.25, 7.5);
+  EXPECT_NE(msg.find("read bandwidth"), std::string::npos);
+  EXPECT_NE(msg.find("9.2%"), std::string::npos);
+  EXPECT_NE(msg.find("7.5%"), std::string::npos);
+}
+
 TEST_F(MessagesFormattingTest, StatisticsTlbHitLatencyMetricName) {
   std::string msg = Messages::statistics_tlb_hit_latency_metric_name();
-  EXPECT_NE(msg.find("TLB Hit Latency"), std::string::npos);
+  EXPECT_NE(msg.find("16 KiB Locality Latency"), std::string::npos);
   EXPECT_NE(msg.find("ns"), std::string::npos);
 }
 
 TEST_F(MessagesFormattingTest, StatisticsTlbMissLatencyMetricName) {
   std::string msg = Messages::statistics_tlb_miss_latency_metric_name();
-  EXPECT_NE(msg.find("TLB Miss Latency"), std::string::npos);
+  EXPECT_NE(msg.find("Global-Random Latency"), std::string::npos);
   EXPECT_NE(msg.find("ns"), std::string::npos);
 }
 
 TEST_F(MessagesFormattingTest, StatisticsPageWalkPenaltyMetricName) {
   std::string msg = Messages::statistics_page_walk_penalty_metric_name();
-  EXPECT_NE(msg.find("Page-Walk Penalty"), std::string::npos);
+  EXPECT_NE(msg.find("Locality Latency Delta"), std::string::npos);
   EXPECT_NE(msg.find("ns"), std::string::npos);
 }
 

@@ -24,6 +24,7 @@
  */
 
 #include "messages_api.h"
+#include <iomanip>
 #include <sstream>
 
 namespace Messages {
@@ -129,6 +130,16 @@ std::string warning_threads_capped(int requested, int max_cores) {
   std::ostringstream oss;
   oss << "Requested threads (" << requested << ") exceeds maximum available cores ("
       << max_cores << "). Using " << max_cores << " threads.";
+  return oss.str();
+}
+
+std::string warning_benchmark_high_cv(const std::string& metric_name,
+                                      double cv_pct,
+                                      double threshold_pct) {
+  std::ostringstream oss;
+  oss << std::fixed << std::setprecision(1)
+      << metric_name << " CV " << cv_pct << "% exceeds the "
+      << threshold_pct << "% repeatability warning threshold";
   return oss.str();
 }
 

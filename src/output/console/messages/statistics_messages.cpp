@@ -113,6 +113,13 @@ std::string statistics_coefficient_of_variation(double value, int precision) {
   return oss.str();
 }
 
+std::string statistics_median_absolute_deviation(double value, int precision) {
+  std::ostringstream oss;
+  oss << std::fixed << std::setprecision(precision);
+  oss << "  Median absolute deviation: " << value;
+  return oss.str();
+}
+
 std::string statistics_cache_read() {
   return "  Read:";
 }
@@ -145,15 +152,15 @@ std::string statistics_main_memory_latency_header() {
 }
 
 std::string statistics_tlb_hit_latency_metric_name() {
-  return "TLB Hit Latency (ns)";
+  return "16 KiB Locality Latency (ns)";
 }
 
 std::string statistics_tlb_miss_latency_metric_name() {
-  return "TLB Miss Latency (ns)";
+  return "Global-Random Latency (ns)";
 }
 
 std::string statistics_page_walk_penalty_metric_name() {
-  return "Estimated Page-Walk Penalty (ns)";
+  return "Locality Latency Delta, Global - 16 KiB (ns)";
 }
 
 std::string statistics_footer() {

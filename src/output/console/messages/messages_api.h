@@ -169,6 +169,9 @@ const std::string& warning_l2_cache_size_detection_failed_m1();
 const std::string& warning_l2_cache_size_detection_failed_m2_m3_m4_m5();
 const std::string& warning_l2_cache_size_detection_failed_generic();
 std::string warning_threads_capped(int requested, int max_cores);
+std::string warning_benchmark_high_cv(const std::string& metric_name,
+                                      double cv_pct,
+                                      double threshold_pct);
 
 // --- Info Messages ---
 std::string info_setting_max_fallback(unsigned long max_mb);
@@ -383,6 +386,7 @@ std::string statistics_max(double value, int precision = 3);
 std::string statistics_cache_bandwidth_header(const std::string& cache_name);
 std::string statistics_pattern_bandwidth_header(const std::string& pattern_name);
 std::string statistics_coefficient_of_variation(double value, int precision = 1);
+std::string statistics_median_absolute_deviation(double value, int precision = 3);
 std::string statistics_cache_read();
 std::string statistics_cache_write();
 std::string statistics_cache_copy();

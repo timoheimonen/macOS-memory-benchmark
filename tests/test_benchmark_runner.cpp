@@ -285,6 +285,34 @@ TEST(BenchmarkStatisticsCollectorTest, CollectLoopResultsSkipsMainLatencyWhenDis
   EXPECT_TRUE(stats.all_main_mem_latency_samples.empty());
 }
 
+TEST(BenchmarkStatisticsCollectorTest, InterruptedMeasurementsNeverEnterAggregates) {
+  BenchmarkConfig config = make_collector_config();
+  BenchmarkStatistics stats;
+  initialize_statistics(stats, config);
+
+  BenchmarkResults results = make_collector_results();
+  results.status = BenchmarkRunStatus::Interrupted;
+  results.planned_measurements = 12;
+  results.completed_measurements = 10;
+  set_measurement_unavailable(results.main_write_bandwidth,
+                              BenchmarkMeasurementStatus::Interrupted,
+                              "interrupted during measured operation");
+  set_measurement_unavailable(results.main_latency,
+                              BenchmarkMeasurementStatus::Invalid,
+                              "invalid latency duration");
+
+  collect_loop_results(stats, results, config);
+
+  expect_double_vector_eq(stats.all_read_bw_gb_s, {10.0});
+  EXPECT_TRUE(stats.all_write_bw_gb_s.empty());
+  EXPECT_TRUE(stats.all_average_latency_ns.empty());
+  EXPECT_EQ(stats.completed_measurements, 10u);
+  ASSERT_EQ(stats.loop_results.size(), 1u);
+  EXPECT_EQ(stats.loop_results[0].main_write_bandwidth.status,
+            BenchmarkMeasurementStatus::Interrupted);
+  EXPECT_FALSE(stats.loop_results[0].main_write_bandwidth.value.has_value());
+}
+
 // Test statistics structure after run_all_benchmarks clears vectors
 // Note: This test verifies the clearing behavior without running actual benchmarks
 TEST(BenchmarkRunnerTest, StatisticsClearing) {

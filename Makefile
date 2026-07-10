@@ -50,7 +50,7 @@ CPP_SRCS_BENCHMARK = bandwidth_tests.cpp latency_tests.cpp benchmark_work_plan.c
 # Files in the src/warmup subdirectory
 CPP_SRCS_WARMUP = basic_warmup.cpp latency_warmup.cpp cache_warmup.cpp pattern_warmup.cpp
 # Files in the src/output/json/json_output subdirectory
-CPP_SRCS_JSON_OUTPUT = output/json/json_output/builder.cpp output/json/json_output/main_memory.cpp output/json/json_output/cache.cpp output/json/json_output/patterns.cpp output/json/json_output/file_writer.cpp output/json/json_output/json_output.cpp
+CPP_SRCS_JSON_OUTPUT = output/json/json_output/builder.cpp output/json/json_output/main_memory.cpp output/json/json_output/cache.cpp output/json/json_output/standard.cpp output/json/json_output/patterns.cpp output/json/json_output/file_writer.cpp output/json/json_output/json_output.cpp
 # Files in the src/pattern_benchmark subdirectory
 CPP_SRCS_PATTERN_BENCHMARK = helpers.cpp validation.cpp pattern_work_plan.cpp pattern_coordinator.cpp pattern_statistics_manager.cpp execution_utils.cpp execution_strided.cpp execution_patterns.cpp output.cpp
 

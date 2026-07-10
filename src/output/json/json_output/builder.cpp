@@ -160,6 +160,48 @@ nlohmann::json build_config_json(const BenchmarkConfig& config, const char* mode
     config_json["thread_selection_policy"] =
         config.user_specified_threads ? "explicit-request-capped-to-detected-cores"
                                       : "detected-core-count-default";
+  } else if (std::string(mode_name) == Constants::BENCHMARK_JSON_MODE_NAME) {
+    config_json["benchmark_schema_version"] =
+        Constants::BENCHMARK_JSON_SCHEMA_VERSION;
+    config_json["methodology_version"] =
+        Constants::BENCHMARK_METHODOLOGY_VERSION;
+    config_json["benchmark_seed"] = std::to_string(config.benchmark_seed);
+    config_json["benchmark_seed_source"] =
+        config.user_specified_benchmark_seed ? "user" : "generated";
+    config_json["benchmark_seed_encoding"] = "uint64-decimal-string";
+    config_json["bandwidth_work_policy"] =
+        config.user_specified_iterations ? "explicit-iterations"
+                                         : "automatic-duration-calibration";
+    config_json["bandwidth_calibration_target_seconds"] =
+        Constants::BENCHMARK_CALIBRATION_TARGET_SECONDS;
+    config_json["bandwidth_calibration_window_min_seconds"] =
+        Constants::BENCHMARK_CALIBRATION_MIN_SECONDS;
+    config_json["bandwidth_calibration_window_max_seconds"] =
+        Constants::BENCHMARK_CALIBRATION_MAX_SECONDS;
+    config_json["calibration_max_corrections"] =
+        Constants::BENCHMARK_CALIBRATION_MAX_CORRECTIONS;
+    config_json["latency_calibration_target_seconds"] =
+        Constants::BENCHMARK_LATENCY_TARGET_SECONDS;
+    config_json["latency_minimum_complete_chain_cycles"] =
+        Constants::BENCHMARK_LATENCY_MIN_COMPLETE_CYCLES;
+    config_json["phase_execution_order_policy"] =
+        "cyclic-latin-square-across-count-loops";
+    config_json["operation_execution_order_policy"] =
+        "cyclic-read-write-copy-with-operation-specific-warmup";
+    config_json["latency_headline_semantics"] =
+        "one-continuous-pointer-chase-pass";
+    config_json["latency_sample_semantics"] =
+        "separate-continuing-window-pass";
+    config_json["locality_comparison_semantics"] =
+        "paired-alternating-rounds-global-minus-locality-16k";
+    config_json["warmup_semantics"] = "steady-state-warm-memory";
+    config_json["native_page_size_bytes"] =
+        static_cast<size_t>(getpagesize());
+    config_json["qos_policy"] =
+        "best-effort-scheduler-hint-no-core-pinning";
+    config_json["thread_selection_policy"] =
+        config.user_specified_threads ? "explicit-request-capped-to-detected-cores"
+                                      : "detected-core-count-default";
   }
   
   if (config.use_custom_cache_size) {

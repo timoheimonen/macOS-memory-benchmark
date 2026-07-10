@@ -115,21 +115,21 @@ std::string results_latency_average(double latency_ns, size_t locality_bytes) {
 std::string results_latency_tlb_hit(double latency_ns) {
   std::ostringstream oss;
   oss << std::fixed << std::setprecision(Constants::LATENCY_PRECISION);
-  oss << "  TLB hit latency (16 KB locality): " << latency_ns << " ns";
+  oss << "  16 KiB locality latency: " << latency_ns << " ns";
   return oss.str();
 }
 
 std::string results_latency_tlb_miss(double latency_ns) {
   std::ostringstream oss;
   oss << std::fixed << std::setprecision(Constants::LATENCY_PRECISION);
-  oss << "  TLB miss latency (global random locality): " << latency_ns << " ns";
+  oss << "  Global-random latency: " << latency_ns << " ns";
   return oss.str();
 }
 
 std::string results_latency_page_walk_penalty(double penalty_ns) {
   std::ostringstream oss;
   oss << std::fixed << std::setprecision(Constants::LATENCY_PRECISION);
-  oss << "  Estimated page-walk penalty: " << penalty_ns << " ns";
+  oss << "  Locality latency delta (global - 16 KiB): " << penalty_ns << " ns";
   return oss.str();
 }
 
