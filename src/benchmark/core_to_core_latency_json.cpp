@@ -26,12 +26,8 @@
 
 #include "benchmark/core_to_core_latency_json.h"
 
-#include <chrono>
 #include <cstdlib>
-#include <ctime>
 #include <filesystem>
-#include <iomanip>
-#include <sstream>
 #include <vector>
 
 #include "core/config/version.h"
@@ -93,17 +89,6 @@ nlohmann::ordered_json build_loop_record_json(const CoreToCoreLoopRecord& record
       {"responder", build_thread_hint_json(record.responder_hint)},
   };
   return loop_json;
-}
-
-std::string build_utc_timestamp() {
-  const auto now = std::chrono::system_clock::now();
-  const auto time_t_now = std::chrono::system_clock::to_time_t(now);
-  std::tm utc_time;
-  gmtime_r(&time_t_now, &utc_time);
-
-  std::ostringstream timestamp_str;
-  timestamp_str << std::put_time(&utc_time, "%Y-%m-%dT%H:%M:%SZ");
-  return timestamp_str.str();
 }
 
 nlohmann::ordered_json build_scenario_json(const CoreToCoreLatencyScenarioResult& scenario_result) {

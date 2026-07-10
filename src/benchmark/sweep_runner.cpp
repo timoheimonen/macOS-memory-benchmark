@@ -21,12 +21,8 @@
 #include "benchmark/sweep_runner.h"
 
 #include <algorithm>
-#include <chrono>
-#include <ctime>
 #include <filesystem>
-#include <iomanip>
 #include <iostream>
-#include <sstream>
 #include <string>
 #include <unistd.h>
 #include <vector>
@@ -60,16 +56,6 @@ struct SweepAssignment {
   const SweepSpec* spec = nullptr;
   const SweepValue* value = nullptr;
 };
-
-std::string build_utc_timestamp() {
-  auto now = std::chrono::system_clock::now();
-  auto time_t = std::chrono::system_clock::to_time_t(now);
-  std::tm utc_time;
-  gmtime_r(&time_t, &utc_time);
-  std::ostringstream timestamp_str;
-  timestamp_str << std::put_time(&utc_time, "%Y-%m-%dT%H:%M:%SZ");
-  return timestamp_str.str();
-}
 
 std::string base_mode_name(const BenchmarkConfig& config) {
   if (config.analyze_tlb) {

@@ -37,11 +37,7 @@
 // Library: https://github.com/nlohmann/json
 // License: MIT License
 //
-#include <sstream>    // Required for std::ostringstream
 #include <filesystem> // Required for std::filesystem::path
-#include <chrono>     // Required for std::chrono
-#include <ctime>      // Required for std::time, std::localtime, std::strftime
-#include <iomanip>    // Required for std::put_time
 
 #include "output/json/json_output/json_output_api.h"
 #include "core/config/version.h"  // SOFTVERSION
@@ -50,20 +46,7 @@
 #include "benchmark/benchmark_runner.h"  // For BenchmarkStatistics
 #include "pattern_benchmark/pattern_benchmark.h" // For PatternStatistics
 #include "third_party/nlohmann/json.hpp"   // JSON library
-
-namespace {
-
-std::string build_utc_timestamp() {
-  auto now = std::chrono::system_clock::now();
-  auto time_t = std::chrono::system_clock::to_time_t(now);
-  std::tm utc_time;
-  gmtime_r(&time_t, &utc_time);
-  std::ostringstream timestamp_str;
-  timestamp_str << std::put_time(&utc_time, "%Y-%m-%dT%H:%M:%SZ");
-  return timestamp_str.str();
-}
-
-}  // namespace
+#include "utils/json_utils.h"
 
 nlohmann::ordered_json build_results_json(const BenchmarkConfig& config,
                                           const BenchmarkStatistics& stats,

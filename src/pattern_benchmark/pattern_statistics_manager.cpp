@@ -35,10 +35,8 @@
 #include "output/console/messages/messages_api.h"
 #include <algorithm>
 #include <array>
-#include <cmath>
 #include <cstdlib>
 #include <iostream>
-#include <numeric>
 #include <utility>
 #include <vector>
 
@@ -132,50 +130,7 @@ void set_pattern_measurement(PatternResults& results, PatternKind kind,
 }
 
 PatternStatisticsData calculate_pattern_statistics(const std::vector<double>& values) {
-  if (values.empty()) {
-    return {};
-  }
-
-  const double sum = std::accumulate(values.begin(), values.end(), 0.0);
-  const double average = sum / static_cast<double>(values.size());
-  const double min_value = *std::min_element(values.begin(), values.end());
-  const double max_value = *std::max_element(values.begin(), values.end());
-  std::vector<double> sorted = values;
-  std::sort(sorted.begin(), sorted.end());
-  const size_t count = sorted.size();
-  auto percentile = [&sorted, count](double fraction) {
-    if (count == 1) return sorted.front();
-    const double index = fraction * static_cast<double>(count - 1);
-    const size_t lower = static_cast<size_t>(index);
-    const size_t upper = std::min(lower + 1, count - 1);
-    const double weight = index - static_cast<double>(lower);
-    return sorted[lower] * (1.0 - weight) + sorted[upper] * weight;
-  };
-
-  double variance_sum = 0.0;
-  for (double value : values) {
-    variance_sum += (value - average) * (value - average);
-  }
-  const double stddev = count > 1
-                            ? std::sqrt(variance_sum / static_cast<double>(count - 1))
-                            : 0.0;
-  const double cv = average != 0.0 ? stddev / std::abs(average) * 100.0 : 0.0;
-  const double median = percentile(0.50);
-  std::vector<double> absolute_deviations;
-  absolute_deviations.reserve(count);
-  for (double value : values) {
-    absolute_deviations.push_back(std::abs(value - median));
-  }
-  std::sort(absolute_deviations.begin(), absolute_deviations.end());
-  const double median_absolute_deviation =
-      count % 2 == 0
-          ? (absolute_deviations[count / 2 - 1] +
-             absolute_deviations[count / 2]) /
-                2.0
-          : absolute_deviations[count / 2];
-  return {average, min_value, max_value, median, percentile(0.90),
-          percentile(0.95), percentile(0.99), stddev, cv,
-          median_absolute_deviation};
+  return calculate_descriptive_statistics(values);
 }
 
 void initialize_pattern_statistics(PatternStatistics& stats,

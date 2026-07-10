@@ -34,6 +34,7 @@
 #include <vector>
 
 #include "pattern_benchmark/pattern_work_plan.h"
+#include "utils/descriptive_statistics.h"
 
 // Forward declarations
 struct BenchmarkConfig;
@@ -176,18 +177,7 @@ struct PatternStatistics {
   std::vector<double> all_random_copy_bw;         ///< Random copy bandwidth from each loop (GB/s)
 };
 
-struct PatternStatisticsData {
-  double average = 0.0;
-  double min = 0.0;
-  double max = 0.0;
-  double median = 0.0;
-  double p90 = 0.0;
-  double p95 = 0.0;
-  double p99 = 0.0;
-  double stddev = 0.0;
-  double coefficient_of_variation_pct = 0.0;
-  double median_absolute_deviation = 0.0;
-};
+using PatternStatisticsData = DescriptiveStatistics;
 
 PatternMeasurement& get_pattern_measurement(PatternResults& results, PatternKind kind,
                                             PatternOperation operation);

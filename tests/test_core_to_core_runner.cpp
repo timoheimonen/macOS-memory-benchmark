@@ -143,7 +143,7 @@ TEST(CoreToCoreRunnerTest, SummaryStatisticsUseExactLinearPercentilesAndSampleVa
   EXPECT_DOUBLE_EQ(stats.p90, 4.6);
   EXPECT_DOUBLE_EQ(stats.p95, 4.8);
   EXPECT_DOUBLE_EQ(stats.p99, 4.96);
-  EXPECT_DOUBLE_EQ(stats.sample_stddev, expected_sample_stddev);
+  EXPECT_DOUBLE_EQ(stats.stddev, expected_sample_stddev);
   EXPECT_DOUBLE_EQ(stats.coefficient_of_variation_pct, expected_sample_stddev / 3.0 * 100.0);
   EXPECT_DOUBLE_EQ(stats.median_absolute_deviation, 1.0);
 }

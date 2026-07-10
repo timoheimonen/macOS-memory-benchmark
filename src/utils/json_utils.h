@@ -36,9 +36,21 @@
 #ifndef JSON_UTILS_H
 #define JSON_UTILS_H
 
-#include <vector>
+#include <chrono>
 #include <string>
+#include <vector>
+
 #include "third_party/nlohmann/json.hpp"
+
+/**
+ * @brief Build an ISO 8601 UTC timestamp with one-second resolution.
+ *
+ * @param time_point System-clock time to format. Defaults to the current time.
+ * @return Timestamp in `YYYY-MM-DDTHH:MM:SSZ` form.
+ */
+std::string build_utc_timestamp(
+    std::chrono::system_clock::time_point time_point =
+        std::chrono::system_clock::now());
 
 /**
  * @brief Calculate statistical measures from a dataset and return as JSON

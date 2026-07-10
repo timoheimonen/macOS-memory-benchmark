@@ -24,7 +24,6 @@
 #include "benchmark/core_to_core_latency.h"
 #include "benchmark/core_to_core_latency_internal.h"
 
-#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cmath>
@@ -49,6 +48,7 @@
 #include "core/system/system_info.h"
 #include "core/timing/timer.h"
 #include "output/console/messages/messages_api.h"
+#include "output/console/statistics_renderer.h"
 #include "output/json/json_output/json_output_api.h"
 #include "utils/numeric_utils.h"
 
@@ -69,80 +69,12 @@ struct SharedPingPongState {
   SharedFlags flags;
 };
 
-double calculate_average(const std::vector<double>& values) {
-  if (values.empty()) {
-    return 0.0;
-  }
-
-  double sum = 0.0;
-  for (double value : values) {
-    sum += value;
-  }
-  return sum / static_cast<double>(values.size());
-}
-
 bool positive_finite(double value) { return value > 0.0 && std::isfinite(value); }
 
 }  // namespace
 
 CoreToCoreSummaryStats calculate_core_to_core_summary_stats(const std::vector<double>& values) {
-  CoreToCoreSummaryStats stats;
-  if (values.empty()) {
-    return stats;
-  }
-
-  stats.average = calculate_average(values);
-  stats.min = *std::min_element(values.begin(), values.end());
-  stats.max = *std::max_element(values.begin(), values.end());
-
-  std::vector<double> sorted = values;
-  std::sort(sorted.begin(), sorted.end());
-  const size_t count = sorted.size();
-  const auto percentile = [&sorted, count](double percentile_value) {
-    if (count == 1) {
-      return sorted[0];
-    }
-    const double index = percentile_value * static_cast<double>(count - 1);
-    const size_t lower = static_cast<size_t>(index);
-    const size_t upper = lower + 1;
-    if (upper >= count) {
-      return sorted[count - 1];
-    }
-    const double weight = index - static_cast<double>(lower);
-    return sorted[lower] * (1.0 - weight) + sorted[upper] * weight;
-  };
-
-  stats.median = percentile(0.50);
-  stats.p90 = percentile(0.90);
-  stats.p95 = percentile(0.95);
-  stats.p99 = percentile(0.99);
-
-  std::vector<double> absolute_deviations;
-  absolute_deviations.reserve(values.size());
-  for (double value : values) {
-    absolute_deviations.push_back(std::abs(value - stats.median));
-  }
-  std::sort(absolute_deviations.begin(), absolute_deviations.end());
-  if (absolute_deviations.size() % 2 == 0) {
-    const size_t upper = absolute_deviations.size() / 2;
-    stats.median_absolute_deviation = (absolute_deviations[upper - 1] + absolute_deviations[upper]) * 0.5;
-  } else {
-    stats.median_absolute_deviation = absolute_deviations[absolute_deviations.size() / 2];
-  }
-
-  if (values.size() > 1) {
-    double variance_sum = 0.0;
-    for (double value : values) {
-      const double difference = value - stats.average;
-      variance_sum += difference * difference;
-    }
-    stats.sample_stddev = std::sqrt(variance_sum / static_cast<double>(values.size() - 1));
-    if (stats.average != 0.0) {
-      stats.coefficient_of_variation_pct = std::abs(stats.sample_stddev / stats.average) * 100.0;
-    }
-  }
-
-  return stats;
+  return calculate_descriptive_statistics(values);
 }
 
 std::string classify_core_to_core_duration_quality(double elapsed_seconds) {
@@ -246,19 +178,11 @@ CoreToCoreWorkPlan build_calibration_pilot_plan() {
 }
 
 void print_statistics(const CoreToCoreSummaryStats& stats) {
-  std::cout << "    " << Messages::statistics_average(stats.average, Constants::LATENCY_PRECISION) << std::endl;
-  std::cout << "    " << Messages::statistics_median_p50(stats.median, Constants::LATENCY_PRECISION) << std::endl;
-  std::cout << "    " << Messages::statistics_p90(stats.p90, Constants::LATENCY_PRECISION) << std::endl;
-  std::cout << "    " << Messages::statistics_p95(stats.p95, Constants::LATENCY_PRECISION) << std::endl;
-  std::cout << "    " << Messages::statistics_p99(stats.p99, Constants::LATENCY_PRECISION) << std::endl;
-  std::cout << "    " << Messages::statistics_stddev(stats.sample_stddev, Constants::LATENCY_PRECISION) << std::endl;
-  std::cout << "    " << Messages::statistics_coefficient_of_variation(stats.coefficient_of_variation_pct) << std::endl;
-  std::cout << "    "
-            << Messages::statistics_median_absolute_deviation(stats.median_absolute_deviation,
-                                                              Constants::LATENCY_PRECISION)
-            << std::endl;
-  std::cout << "    " << Messages::statistics_min(stats.min, Constants::LATENCY_PRECISION) << std::endl;
-  std::cout << "    " << Messages::statistics_max(stats.max, Constants::LATENCY_PRECISION) << std::endl;
+  StatisticsSummaryRenderOptions options;
+  options.precision = Constants::LATENCY_PRECISION;
+  options.line_prefix = "    ";
+  options.variability_prefix = "    ";
+  render_statistics_summary(std::cout, stats, options);
 }
 
 void print_scenario_report(const CoreToCoreLatencyScenarioResult& scenario_result) {
