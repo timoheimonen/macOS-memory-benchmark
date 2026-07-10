@@ -48,6 +48,15 @@
 #include <limits>
 #include <cmath>
 
+size_t get_config_page_size_bytes() {
+  const ConfigTestHooks* hooks = get_config_test_hooks();
+  if (hooks != nullptr && hooks->page_size_bytes != 0) {
+    return hooks->page_size_bytes;
+  }
+  const int page_size = getpagesize();
+  return page_size > 0 ? static_cast<size_t>(page_size) : 0;
+}
+
 /**
  * @brief Calculate appropriate buffer sizes for cache-level benchmarks
  *
@@ -64,7 +73,7 @@
  * @note Handles overflow conditions gracefully with error messages
  */
 void calculate_buffer_sizes(BenchmarkConfig& config) {
-  size_t page_size_check = getpagesize();
+  const size_t page_size_check = get_config_page_size_bytes();
   const size_t latency_stride =
       (config.latency_stride_bytes > 0) ? config.latency_stride_bytes : Constants::LATENCY_STRIDE_BYTES;
   const size_t min_latency_buffer_size =

@@ -80,14 +80,19 @@ int write_json_to_file(const std::filesystem::path& file_path,
   try {
     std::ofstream out_file(temp_file_path, std::ios::out | std::ios::trunc);
     if (!out_file.is_open()) {
+      const int open_errno = errno;
+      // A stale path (including a directory at the temporary name) must not
+      // survive a failed checkpoint attempt.
+      std::error_code cleanup_error;
+      std::filesystem::remove(temp_file_path, cleanup_error);
       // Check for permission errors
-      if (errno == EACCES || errno == EPERM) {
+      if (open_errno == EACCES || open_errno == EPERM) {
         std::cerr << Messages::error_prefix() 
                   << Messages::error_file_permission_denied(file_path.string()) 
                   << std::endl;
       } else {
         std::ostringstream oss;
-        oss << "Failed to open temporary file: " << std::strerror(errno);
+        oss << "Failed to open temporary file: " << std::strerror(open_errno);
         std::cerr << Messages::error_prefix() 
                   << Messages::error_file_write_failed(temp_file_path.string(), oss.str()) 
                   << std::endl;
@@ -120,6 +125,15 @@ int write_json_to_file(const std::filesystem::path& file_path,
     }
     
     out_file.close();
+    if (out_file.fail() || out_file.bad()) {
+      std::error_code cleanup_error;
+      std::filesystem::remove(temp_file_path, cleanup_error);
+      std::cerr << Messages::error_prefix()
+                << Messages::error_file_write_failed(
+                       temp_file_path.string(), "Close operation failed")
+                << std::endl;
+      return EXIT_FAILURE;
+    }
     
     // Atomically rename temporary file to final destination
     try {

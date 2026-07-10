@@ -82,6 +82,14 @@ struct LatencyChainDiagnostics {
   size_t stride_bytes = 0;          ///< Stride used to build the chain
 };
 
+/** Deterministic platform/random inputs used only by memory utility unit tests. */
+struct MemoryUtilsTestHooks {
+  size_t page_size_bytes = 0;
+  uint64_t generated_seed = 0;
+};
+
+void set_memory_utils_test_hooks(const MemoryUtilsTestHooks* hooks);
+
 /**
  * @brief Align an offset to the next cache line boundary (rounds up)
  * @param offset The offset to align

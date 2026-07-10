@@ -2,7 +2,7 @@
 
 **memory_benchmark — Technical Whitepaper**
 
-*Revision 2026-07-10 — Applies to version 0.58.1; archived examples may use older methodologies*
+*Revision 2026-07-10 — Applies to version 0.59.0; archived examples may use older methodologies*
 
 ---
 
@@ -356,7 +356,7 @@ The mode identifier remains `analyze_core2core`. The methodology contract is ide
   },
   "execution_time_sec": 4.2,
   "timestamp": "2026-07-10T12:00:00Z",
-  "version": "0.58.1"
+  "version": "0.59.0"
 }
 ```
 
@@ -415,9 +415,11 @@ memory_benchmark --analyze-core2core --count 3 --latency-samples 2000 --output c
 memory_benchmark -C --count 3 --sweep latency-samples=500,1000,2000 --output core2core_sweep.json
 ```
 
-Core-to-core sweep output is written through the atomic temporary-file-and-rename path after every run. Its envelope
-records `status`, `planned_runs`, `completed_runs`, and `conclusions_valid`. An interruption or later failure therefore
-does not erase previously checkpointed runs. `conclusions_valid` is true only for a complete sweep.
+Core-to-core sweep output is written through the atomic temporary-file-and-rename path after every attempted run. Its
+envelope records `status`, `status_reason`, `planned_runs`, `attempted_runs`, `completed_runs`, and
+`conclusions_valid`. Every run entry has its own `status` and `status_reason`; interrupted and failed attempts are
+retained but do not increment `completed_runs`. An interruption or later failure therefore does not erase previously
+checkpointed runs. `conclusions_valid` is true only for a complete sweep.
 
 ---
 

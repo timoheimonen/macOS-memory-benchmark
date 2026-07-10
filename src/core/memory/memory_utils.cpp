@@ -39,6 +39,9 @@
 
 namespace {
 
+MemoryUtilsTestHooks active_test_hooks;
+bool test_hooks_active = false;
+
 std::string normalize_mode_token(const std::string& value) {
   std::string normalized;
   normalized.reserve(value.size());
@@ -125,6 +128,16 @@ void reorder_indices_with_mode(std::vector<size_t>& indices,
 }
 
 }  // namespace
+
+void set_memory_utils_test_hooks(const MemoryUtilsTestHooks* hooks) {
+  if (hooks == nullptr) {
+    active_test_hooks = MemoryUtilsTestHooks{};
+    test_hooks_active = false;
+    return;
+  }
+  active_test_hooks = *hooks;
+  test_hooks_active = true;
+}
 
 const char* latency_chain_mode_to_string(LatencyChainMode mode) {
   switch (mode) {
@@ -252,6 +265,13 @@ static int setup_latency_chain_impl(void *buffer, size_t buffer_size, size_t str
         std::cerr << Messages::error_prefix() << Messages::error_stride_zero_latency_chain() << std::endl;
         return EXIT_FAILURE;
     }
+
+    if (stride < sizeof(uintptr_t) || (stride % sizeof(uintptr_t)) != 0) {
+        std::cerr << Messages::error_prefix()
+                  << Messages::error_latency_stride_alignment(stride, sizeof(uintptr_t))
+                  << std::endl;
+        return EXIT_FAILURE;
+    }
     
     // Calculate how many pointers fit in the buffer with the given stride.
     size_t num_pointers = buffer_size / stride;
@@ -262,8 +282,10 @@ static int setup_latency_chain_impl(void *buffer, size_t buffer_size, size_t str
         return EXIT_FAILURE;
     }
 
-    const int page_size_raw = getpagesize();
-    const size_t page_size = (page_size_raw > 0) ? static_cast<size_t>(page_size_raw) : 0;
+    const int page_size_raw = test_hooks_active ? 0 : getpagesize();
+    const size_t page_size = test_hooks_active && active_test_hooks.page_size_bytes != 0
+                                 ? active_test_hooks.page_size_bytes
+                                 : (page_size_raw > 0 ? static_cast<size_t>(page_size_raw) : 0);
     const bool collect_page_diagnostics = (diagnostics != nullptr && page_size > 0);
     std::vector<uint8_t> page_seen;
     size_t unique_pages_touched = 0;
@@ -294,6 +316,8 @@ static int setup_latency_chain_impl(void *buffer, size_t buffer_size, size_t str
     std::mt19937_64 g;
     if (deterministic_seed.has_value()) {
         g.seed(*deterministic_seed);
+    } else if (test_hooks_active && active_test_hooks.generated_seed != 0) {
+        g.seed(active_test_hooks.generated_seed);
     } else {
         std::random_device rd;
         g.seed(rd());

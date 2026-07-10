@@ -62,9 +62,6 @@ double run_pattern_write_random_test(void* buffer, const std::vector<PatternRand
 double run_pattern_copy_random_test(void* dst, void* src, const std::vector<PatternRandomWorkerIndices>& worker_indices,
                                     int iterations, HighResTimer& timer);
 
-// Forward declarations from validation.cpp
-bool validate_random_indices(const std::vector<size_t>& indices, size_t buffer_size);
-
 // Forward declarations from execution_utils.cpp
 double calculate_bandwidth(size_t data_size, int iterations, double elapsed_time_ns);
 

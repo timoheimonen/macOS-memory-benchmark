@@ -95,11 +95,6 @@ const std::string& pattern_bandwidth_unit() {
   return msg;
 }
 
-const std::string& pattern_bandwidth_unit_newline() {
-  static const std::string msg = " GB/s\n";
-  return msg;
-}
-
 std::string pattern_measurement_unavailable(const std::string& status,
                                             const std::string& reason) {
   return "N/A [" + status + (reason.empty() ? "" : ": " + reason) + "]";

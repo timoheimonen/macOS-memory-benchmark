@@ -5,6 +5,25 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.59.0] - Unreleased
+
+### Added
+  - **Deterministic orchestration and platform seams**: Added injected sweep, core-to-core, TLB, mmap/madvise, Mach timer, and system-information providers so interruption, failure, fallback, cleanup, status, and counter contracts can be tested without running benchmark kernels or depending on host-specific failures.
+  - **Direct output and filesystem coverage**: Added status-aware console composition tests, strict JSON parsing/statistics tests, atomic file replacement and failure-path tests, argv-safe subprocess coverage, and RAII-managed unique test paths under `/tmp`.
+  - **Reproducible LLVM coverage targets**: Added `make coverage-unit` and `make coverage-all`. Coverage builds run in an isolated temporary copy, report production C++ line/function/branch coverage, and leave normal workspace binaries untouched.
+
+### Changed
+  - **Test suite now emphasizes observable contracts**: Replaced duplicate positive-value hardware workflows, allocation smoke tests, empty fixtures, pointer-identity checks, and assignment/readback tests with exact planner, status, payload, checksum, cleanup, statistics, output, and state-transition assertions. Hardware, assembly, subprocess, and real-thread smoke tests are explicitly classified as integration tests.
+  - **Dead test-only implementations removed**: Removed the legacy standard result/executor API, inactive main-memory/cache JSON builders, twelve unused fixed-stride assembly files, unused unphased strided exports, and message helpers that had no production callers. Active schema-2 and phase-rotating paths remain the tested source of truth.
+  - **Sweep checkpoints retain every attempt**: General and core-to-core sweep envelopes now include per-attempt status/reason and `attempted_runs`; `completed_runs` counts only mode-specific nested results that prove completion. Failed and interrupted attempts are checkpointed without discarding earlier complete runs.
+
+### Fixed
+  - **Numeric CLI parsing is strict**: Integer options and sweep values now reject whitespace, leading plus signs, trailing characters, overflow, invalid unsigned signs, and empty comma-list items instead of accepting a valid numeric prefix.
+  - **Reverse-read checksum includes both SIMD lanes**: The reverse ARM64 read kernel now folds both 64-bit halves of its final vector accumulator, with guard, tail, exact-access, and AAPCS64 regression coverage shared with the random kernels.
+  - **Unavailable statistics are never fabricated as zeroes**: Partial read/write/copy and locality populations are rendered or omitted independently, while empty JSON statistic populations serialize as `null` rather than measured numeric zero structures.
+  - **Latency-chain slots enforce pointer safety**: Chain setup rejects strides smaller than or misaligned to `uintptr_t`, and full-cycle tests verify uniqueness, bounds, return-to-head, locality, and seed behavior.
+  - **Atomic writer cleans failed temporary paths**: Temporary output paths are removed after open, write, flush, close, or rename failures, preserving the previous destination when replacement cannot complete.
+
 ## [0.58.1] - 2026-07-10
 
 ### Changed

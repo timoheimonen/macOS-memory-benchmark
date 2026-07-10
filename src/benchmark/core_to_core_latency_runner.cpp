@@ -54,19 +54,6 @@
 
 namespace {
 
-struct SummaryStats {
-  double average = 0.0;
-  double min = 0.0;
-  double max = 0.0;
-  double median = 0.0;
-  double p90 = 0.0;
-  double p95 = 0.0;
-  double p99 = 0.0;
-  double stddev = 0.0;
-  double coefficient_of_variation_pct = 0.0;
-  double median_absolute_deviation = 0.0;
-};
-
 struct alignas(Constants::CACHE_LINE_SIZE_BYTES) SharedTurn {
   uint32_t value = Constants::CORE_TO_CORE_INITIATOR_TURN_VALUE;
 };
@@ -94,8 +81,12 @@ double calculate_average(const std::vector<double>& values) {
   return sum / static_cast<double>(values.size());
 }
 
-SummaryStats calculate_summary_stats(const std::vector<double>& values) {
-  SummaryStats stats;
+bool positive_finite(double value) { return value > 0.0 && std::isfinite(value); }
+
+}  // namespace
+
+CoreToCoreSummaryStats calculate_core_to_core_summary_stats(const std::vector<double>& values) {
+  CoreToCoreSummaryStats stats;
   if (values.empty()) {
     return stats;
   }
@@ -145,18 +136,16 @@ SummaryStats calculate_summary_stats(const std::vector<double>& values) {
       const double difference = value - stats.average;
       variance_sum += difference * difference;
     }
-    stats.stddev = std::sqrt(variance_sum / static_cast<double>(values.size() - 1));
+    stats.sample_stddev = std::sqrt(variance_sum / static_cast<double>(values.size() - 1));
     if (stats.average != 0.0) {
-      stats.coefficient_of_variation_pct = std::abs(stats.stddev / stats.average) * 100.0;
+      stats.coefficient_of_variation_pct = std::abs(stats.sample_stddev / stats.average) * 100.0;
     }
   }
 
   return stats;
 }
 
-bool positive_finite(double value) { return value > 0.0 && std::isfinite(value); }
-
-std::string classify_duration_quality(double elapsed_seconds) {
+std::string classify_core_to_core_duration_quality(double elapsed_seconds) {
   if (!positive_finite(elapsed_seconds)) {
     return "invalid-elapsed";
   }
@@ -168,6 +157,8 @@ std::string classify_duration_quality(double elapsed_seconds) {
   }
   return "within-target-window";
 }
+
+namespace {
 
 ThreadHintStatus apply_thread_hints(bool request_affinity, int affinity_tag) {
   ThreadHintStatus status;
@@ -251,13 +242,13 @@ CoreToCoreWorkPlan build_calibration_pilot_plan() {
   return plan;
 }
 
-void print_statistics(const SummaryStats& stats) {
+void print_statistics(const CoreToCoreSummaryStats& stats) {
   std::cout << "    " << Messages::statistics_average(stats.average, Constants::LATENCY_PRECISION) << std::endl;
   std::cout << "    " << Messages::statistics_median_p50(stats.median, Constants::LATENCY_PRECISION) << std::endl;
   std::cout << "    " << Messages::statistics_p90(stats.p90, Constants::LATENCY_PRECISION) << std::endl;
   std::cout << "    " << Messages::statistics_p95(stats.p95, Constants::LATENCY_PRECISION) << std::endl;
   std::cout << "    " << Messages::statistics_p99(stats.p99, Constants::LATENCY_PRECISION) << std::endl;
-  std::cout << "    " << Messages::statistics_stddev(stats.stddev, Constants::LATENCY_PRECISION) << std::endl;
+  std::cout << "    " << Messages::statistics_stddev(stats.sample_stddev, Constants::LATENCY_PRECISION) << std::endl;
   std::cout << "    " << Messages::statistics_coefficient_of_variation(stats.coefficient_of_variation_pct) << std::endl;
   std::cout << "    "
             << Messages::statistics_median_absolute_deviation(stats.median_absolute_deviation,
@@ -288,7 +279,8 @@ void print_scenario_report(const CoreToCoreLatencyScenarioResult& scenario_resul
     return;
   }
 
-  const SummaryStats headline_stats = calculate_summary_stats(scenario_result.loop_round_trip_ns);
+  const CoreToCoreSummaryStats headline_stats =
+      calculate_core_to_core_summary_stats(scenario_result.loop_round_trip_ns);
   std::cout << Messages::report_core_to_core_round_trip(headline_stats.median) << std::endl;
   std::cout << Messages::report_core_to_core_one_way_estimate(headline_stats.median * 0.5) << std::endl;
   std::cout << Messages::report_core_to_core_headline_statistics(scenario_result.loop_round_trip_ns.size())
@@ -304,7 +296,8 @@ void print_scenario_report(const CoreToCoreLatencyScenarioResult& scenario_resul
   }
 
   if (!scenario_result.sample_round_trip_ns.empty()) {
-    const SummaryStats sample_stats = calculate_summary_stats(scenario_result.sample_round_trip_ns);
+    const CoreToCoreSummaryStats sample_stats =
+        calculate_core_to_core_summary_stats(scenario_result.sample_round_trip_ns);
     std::cout << Messages::report_core_to_core_sample_statistics(scenario_result.sample_round_trip_ns.size())
               << std::endl;
     print_statistics(sample_stats);
@@ -460,7 +453,8 @@ bool execute_single_scenario(const ScenarioDescriptor& scenario, const CoreToCor
       const double headline_total_ns = timer.stop_ns();
       out_measurement.headline_elapsed_seconds = headline_total_ns / 1e9;
       out_measurement.round_trip_ns = headline_total_ns / static_cast<double>(work_plan.headline_round_trips);
-      out_measurement.duration_quality = classify_duration_quality(out_measurement.headline_elapsed_seconds);
+      out_measurement.duration_quality =
+          classify_core_to_core_duration_quality(out_measurement.headline_elapsed_seconds);
 
       for (int sample_index = 0; sample_index < sample_count; ++sample_index) {
         timer.start();

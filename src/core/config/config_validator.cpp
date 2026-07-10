@@ -159,7 +159,7 @@ std::string mode_name_for_sweep(const BenchmarkConfig& config) {
  * Callers should check return value and handle EXIT_FAILURE appropriately.
  */
 int validate_config(BenchmarkConfig& config) {
-  const size_t page_size = static_cast<size_t>(getpagesize());
+  const size_t page_size = get_config_page_size_bytes();
 
   if (config.run_sweep) {
     if (config.sweep_specs.empty()) {
@@ -226,13 +226,14 @@ int validate_config(BenchmarkConfig& config) {
   }
 
   if (config.user_specified_pattern_seed && !config.run_patterns) {
-    std::cerr << Messages::error_prefix() << Messages::error_seed_requires_patterns()
+    std::cerr << Messages::error_prefix()
+              << Messages::error_seed_requires_supported_mode()
               << std::endl;
     return EXIT_FAILURE;
   }
   if (config.user_specified_benchmark_seed && !config.run_benchmark) {
     std::cerr << Messages::error_prefix()
-              << Messages::error_seed_requires_benchmark_or_patterns()
+              << Messages::error_seed_requires_supported_mode()
               << std::endl;
     return EXIT_FAILURE;
   }

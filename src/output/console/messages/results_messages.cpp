@@ -200,13 +200,6 @@ std::string results_buffer_size_mb(double buffer_size_mb) {
   return oss.str();
 }
 
-std::string results_cache_latency_ns(double latency_ns) {
-  std::ostringstream oss;
-  oss << std::fixed << std::setprecision(Constants::LATENCY_PRECISION);
-  oss << " " << latency_ns << " ns";
-  return oss.str();
-}
-
 std::string results_separator() {
   return "--------------";
 }

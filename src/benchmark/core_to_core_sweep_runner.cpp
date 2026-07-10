@@ -20,14 +20,10 @@
 
 #include "benchmark/core_to_core_sweep_runner.h"
 
-#include <chrono>
-#include <ctime>
 #include <filesystem>
-#include <iomanip>
 #include <iostream>
 #include <limits>
-#include <sstream>
-#include <string>
+#include <utility>
 #include <vector>
 
 #include "benchmark/core_to_core_latency.h"
@@ -45,16 +41,6 @@ struct CoreToCoreSweepAssignment {
   const CoreToCoreSweepSpec* spec = nullptr;
   const CoreToCoreSweepValue* value = nullptr;
 };
-
-std::string build_utc_timestamp() {
-  auto now = std::chrono::system_clock::now();
-  auto time_t = std::chrono::system_clock::to_time_t(now);
-  std::tm utc_time;
-  gmtime_r(&time_t, &utc_time);
-  std::ostringstream timestamp_str;
-  timestamp_str << std::put_time(&utc_time, "%Y-%m-%dT%H:%M:%SZ");
-  return timestamp_str.str();
-}
 
 nlohmann::ordered_json build_sweep_parameters_json(const CoreToCoreLatencyConfig& config) {
   nlohmann::ordered_json params;
@@ -124,25 +110,6 @@ std::vector<std::vector<CoreToCoreSweepAssignment>> build_assignments(const Core
   return assignments;
 }
 
-void update_sweep_output(nlohmann::ordered_json& output_json, const nlohmann::ordered_json& runs_json,
-                         const std::string& status, size_t planned_runs, double elapsed_seconds) {
-  size_t completed_runs = 0;
-  for (const nlohmann::ordered_json& run_json : runs_json) {
-    if (run_json.contains("result") && run_json["result"].contains("core_to_core_latency") &&
-        run_json["result"]["core_to_core_latency"].value("status", "failed") == "complete") {
-      ++completed_runs;
-    }
-  }
-  output_json["status"] = status;
-  output_json["planned_runs"] = planned_runs;
-  output_json["completed_runs"] = completed_runs;
-  output_json["conclusions_valid"] = status == "complete" && completed_runs == planned_runs;
-  output_json["runs"] = runs_json;
-  output_json[JsonKeys::EXECUTION_TIME_SEC] = elapsed_seconds;
-  output_json[JsonKeys::TIMESTAMP] = build_utc_timestamp();
-  output_json[JsonKeys::VERSION] = SOFTVERSION;
-}
-
 }  // namespace
 
 size_t calculate_core_to_core_sweep_run_count(const CoreToCoreLatencyConfig& config) {
@@ -157,6 +124,12 @@ size_t calculate_core_to_core_sweep_run_count(const CoreToCoreLatencyConfig& con
     run_count *= spec.values.size();
   }
   return run_count;
+}
+
+SweepExecutionResult execute_core_to_core_sweep_plan(const std::vector<nlohmann::ordered_json>& run_parameters,
+                                                     nlohmann::ordered_json initial_output,
+                                                     const SweepExecutionHooks& hooks) {
+  return execute_sweep_plan(SweepNestedMode::CoreToCore, run_parameters, std::move(initial_output), hooks);
 }
 
 int run_core_to_core_latency_sweep(const CoreToCoreLatencyConfig& base_config) {
@@ -182,57 +155,47 @@ int run_core_to_core_latency_sweep(const CoreToCoreLatencyConfig& base_config) {
                                           {"sweep_max_runs", base_config.sweep_max_runs},
                                           {"sweep_parameters", build_sweep_parameters_json(base_config)}};
 
-  nlohmann::ordered_json runs_json = nlohmann::ordered_json::array();
   const std::vector<std::vector<CoreToCoreSweepAssignment>> assignments = build_assignments(base_config);
   std::filesystem::path file_path(base_config.output_file);
   if (file_path.is_relative()) {
     file_path = std::filesystem::current_path() / file_path;
   }
-  for (size_t i = 0; i < assignments.size(); ++i) {
-    if (signal_received()) {
-      std::cout << Messages::msg_interrupted_by_user() << std::endl;
-      break;
-    }
 
-    std::cout << Messages::msg_sweep_run_progress(i + 1, assignments.size()) << std::endl;
-    CoreToCoreLatencyConfig run_config = build_run_config(base_config, assignments[i]);
-    nlohmann::ordered_json result_json;
-    const int run_result = run_core_to_core_latency_collect(run_config, result_json);
-
-    nlohmann::ordered_json run_json;
-    run_json["index"] = i;
-    run_json["parameters"] = build_assignment_json(assignments[i]);
-    run_json["result"] = result_json;
-    runs_json.push_back(run_json);
-
-    if (run_result != EXIT_SUCCESS) {
-      update_sweep_output(output_json, runs_json, "failed", run_count, total_timer.stop());
-      (void)write_json_to_file(file_path, output_json, false);
-      restore_signal_mask();
-      return EXIT_FAILURE;
-    }
-
-    const bool interrupted_now = signal_received();
-    update_sweep_output(output_json, runs_json, interrupted_now ? "interrupted" : "partial", run_count,
-                        total_timer.stop());
-    if (write_json_to_file(file_path, output_json, false) != EXIT_SUCCESS) {
-      restore_signal_mask();
-      return EXIT_FAILURE;
-    }
-    if (interrupted_now) {
-      break;
-    }
+  std::vector<nlohmann::ordered_json> run_parameters;
+  run_parameters.reserve(assignments.size());
+  for (const std::vector<CoreToCoreSweepAssignment>& assignment : assignments) {
+    run_parameters.push_back(build_assignment_json(assignment));
   }
 
-  const double total_elapsed_sec = total_timer.stop();
-  const bool sweep_complete = runs_json.size() == assignments.size() && !signal_received();
-  update_sweep_output(output_json, runs_json, sweep_complete ? "complete" : "interrupted", run_count,
-                      total_elapsed_sec);
+  SweepExecutionHooks hooks;
+  hooks.execute_run = [&](size_t run_index) {
+    std::cout << Messages::msg_sweep_run_progress(run_index + 1, assignments.size()) << std::endl;
+    CoreToCoreLatencyConfig run_config = build_run_config(base_config, assignments[run_index]);
+    SweepRunOutcome outcome;
+    outcome.exit_code = run_core_to_core_latency_collect(run_config, outcome.result_json);
+    if (outcome.exit_code != EXIT_SUCCESS) {
+      outcome.failure_reason = "nested-core-to-core-run-failed";
+    }
+    return outcome;
+  };
+  hooks.stop_requested = []() { return signal_received(); };
+  hooks.elapsed_seconds = [&]() { return total_timer.stop(); };
+  hooks.write_checkpoint = [&](const nlohmann::ordered_json& checkpoint, bool announce_success) {
+    return write_json_to_file(file_path, checkpoint, announce_success);
+  };
+
+  const SweepExecutionResult execution = execute_core_to_core_sweep_plan(run_parameters, std::move(output_json), hooks);
 
   restore_signal_mask();
-  const int write_result = write_json_to_file(file_path, output_json);
-  if (write_result == EXIT_SUCCESS) {
+  if (execution.output_json.value("status", "failed") == "interrupted") {
+    const nlohmann::ordered_json& runs = execution.output_json["runs"];
+    if (!runs.is_array() || runs.empty() || runs.back().value("status", "failed") == "complete") {
+      std::cout << Messages::msg_interrupted_by_user() << std::endl;
+    }
+  }
+  if (execution.exit_code == EXIT_SUCCESS) {
+    const double total_elapsed_sec = execution.output_json.value(JsonKeys::EXECUTION_TIME_SEC, 0.0);
     std::cout << Messages::msg_done_total_time(total_elapsed_sec) << std::endl;
   }
-  return write_result;
+  return execution.exit_code;
 }

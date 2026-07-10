@@ -32,6 +32,7 @@
 #include <cstring>
 #include <iostream>
 #include <limits>
+#include <optional>
 #include <sstream>
 #include <string>
 #include <utility>
@@ -109,7 +110,8 @@ TlbPassExecutionSummary summarize_tlb_pass(
           point_count,
           result.rounds_completed,
           result.converged,
-          result.status == TlbScheduleExecutionStatus::Complete};
+          result.status == TlbScheduleExecutionStatus::Complete,
+          result.status};
 }
 
 void print_tlb_pass_completion(
@@ -421,6 +423,30 @@ TlbTaskMeasureStatus measure_tlb_chain(
   return TlbTaskMeasureStatus::Success;
 }
 
+void append_measurement_records(
+    const std::vector<TlbMeasurementRecord>& records,
+    std::vector<LocalityMeasurement>& measurements) {
+  for (const TlbMeasurementRecord& record : records) {
+    auto existing = std::find_if(
+        measurements.begin(),
+        measurements.end(),
+        [&record](const LocalityMeasurement& measurement) {
+          return measurement.locality_bytes == record.locality_bytes;
+        });
+    if (existing == measurements.end()) {
+      measurements.push_back(LocalityMeasurement{
+          record.locality_bytes, record.latency_ns, {record.latency_ns}});
+    } else {
+      existing->loop_latencies_ns.push_back(record.latency_ns);
+    }
+  }
+  for (LocalityMeasurement& measurement : measurements) {
+    if (!measurement.loop_latencies_ns.empty()) {
+      measurement.p50_latency_ns = median(measurement.loop_latencies_ns);
+    }
+  }
+}
+
 /**
  * @brief Execute a balanced seeded round schedule and aggregate locality medians.
  *
@@ -524,25 +550,7 @@ TlbScheduleExecutionResult measure_scheduled_points(
         return convergence.converged;
       });
 
-  for (const TlbMeasurementRecord& record : result.records) {
-    auto existing = std::find_if(
-        measurements.begin(),
-        measurements.end(),
-        [&record](const LocalityMeasurement& measurement) {
-          return measurement.locality_bytes == record.locality_bytes;
-        });
-    if (existing == measurements.end()) {
-      measurements.push_back(LocalityMeasurement{
-          record.locality_bytes, record.latency_ns, {record.latency_ns}});
-    } else {
-      existing->loop_latencies_ns.push_back(record.latency_ns);
-    }
-  }
-  for (LocalityMeasurement& measurement : measurements) {
-    if (!measurement.loop_latencies_ns.empty()) {
-      measurement.p50_latency_ns = median(measurement.loop_latencies_ns);
-    }
-  }
+  append_measurement_records(result.records, measurements);
   return result;
 }
 
@@ -635,13 +643,41 @@ TlbPairedPointSummary summarize_tlb_paired_point(
  *
  * @return EXIT_SUCCESS on success, EXIT_FAILURE on allocation or measurement error.
  */
+namespace {
+
+int run_tlb_analysis_impl(
+    const BenchmarkConfig& config,
+    const TlbStopRequested& stop_requested,
+    const TlbAnalysisExecutionSeam* execution_seam);
+
+}  // namespace
+
 int run_tlb_analysis(const BenchmarkConfig& config) {
-  return run_tlb_analysis(config, []() { return signal_received(); });
+  return run_tlb_analysis_impl(
+      config, []() { return signal_received(); }, nullptr);
 }
 
 int run_tlb_analysis(const BenchmarkConfig& config,
                      const TlbStopRequested& stop_requested) {
-  const auto analysis_start = std::chrono::steady_clock::now();
+  return run_tlb_analysis_impl(config, stop_requested, nullptr);
+}
+
+int run_tlb_analysis(const BenchmarkConfig& config,
+                     const TlbStopRequested& stop_requested,
+                     const TlbAnalysisExecutionSeam& execution_seam) {
+  return run_tlb_analysis_impl(config, stop_requested, &execution_seam);
+}
+
+namespace {
+
+int run_tlb_analysis_impl(
+    const BenchmarkConfig& config,
+    const TlbStopRequested& stop_requested,
+    const TlbAnalysisExecutionSeam* execution_seam) {
+  std::optional<std::chrono::steady_clock::time_point> analysis_start;
+  if (execution_seam == nullptr || !execution_seam->elapsed_seconds) {
+    analysis_start = std::chrono::steady_clock::now();
+  }
   std::cout << Messages::usage_header(SOFTVERSION);
   std::cout << Messages::msg_running_tlb_analysis() << std::endl;
 
@@ -660,7 +696,18 @@ int run_tlb_analysis(const BenchmarkConfig& config,
       tlb_runtime_profile_for_density(sweep_density);
   const bool refinement_enabled = tlb_density_enables_refinement(sweep_density);
 
-  const size_t page_size_bytes = static_cast<size_t>(getpagesize());
+  if (execution_seam != nullptr &&
+      (execution_seam->page_size_bytes < sizeof(uintptr_t) ||
+       execution_seam->l1_cache_size_bytes == 0 ||
+       execution_seam->selected_buffer_mb == 0 ||
+       execution_seam->available_memory_mb == 0 ||
+       !execution_seam->execute_pass)) {
+    return EXIT_FAILURE;
+  }
+
+  const size_t page_size_bytes = execution_seam != nullptr
+                                     ? execution_seam->page_size_bytes
+                                     : static_cast<size_t>(getpagesize());
   if (analysis_stride_bytes == 0) {
     std::cerr << Messages::error_prefix()
               << Messages::error_latency_stride_invalid(0, 1, std::numeric_limits<long long>::max())
@@ -679,37 +726,55 @@ int run_tlb_analysis(const BenchmarkConfig& config,
               << std::endl;
     return EXIT_FAILURE;
   }
-  const size_t l1_cache_size_bytes = get_l1_cache_size();
-  const std::string cpu_name = get_processor_name();
+  const size_t l1_cache_size_bytes = execution_seam != nullptr
+                                         ? execution_seam->l1_cache_size_bytes
+                                         : get_l1_cache_size();
+  const std::string cpu_name = execution_seam != nullptr
+                                   ? execution_seam->cpu_name
+                                   : get_processor_name();
 
   MmapPtr latency_buffer(nullptr, MmapDeleter{0});
   size_t selected_buffer_mb = 0;
   size_t selected_buffer_bytes = 0;
   size_t estimated_peak_memory_bytes = 0;
-  const size_t available_memory_mb = get_available_memory_mb();
+  const size_t available_memory_mb = execution_seam != nullptr
+                                         ? execution_seam->available_memory_mb
+                                         : get_available_memory_mb();
   const size_t memory_budget_mb =
       calculate_tlb_memory_budget_mb(available_memory_mb);
 
-  for (size_t candidate_mb : kBufferCandidateMb) {
-    size_t candidate_peak_memory_bytes = 0;
-    if (!tlb_buffer_fits_memory_budget(candidate_mb,
-                                       page_size_bytes,
-                                       memory_budget_mb,
-                                       candidate_peak_memory_bytes)) {
-      continue;
+  if (execution_seam != nullptr) {
+    if (execution_seam->selected_buffer_mb >
+        std::numeric_limits<size_t>::max() / Constants::BYTES_PER_MB) {
+      return EXIT_FAILURE;
     }
-    const size_t candidate_bytes = candidate_mb * Constants::BYTES_PER_MB;
-    MmapPtr candidate_buffer = try_allocate_analysis_buffer(candidate_bytes);
-    if (candidate_buffer != nullptr) {
-      latency_buffer = std::move(candidate_buffer);
-      selected_buffer_mb = candidate_mb;
-      selected_buffer_bytes = candidate_bytes;
-      estimated_peak_memory_bytes = candidate_peak_memory_bytes;
-      break;
+    selected_buffer_mb = execution_seam->selected_buffer_mb;
+    selected_buffer_bytes = selected_buffer_mb * Constants::BYTES_PER_MB;
+    estimated_peak_memory_bytes = estimate_tlb_peak_memory_bytes(
+        selected_buffer_bytes, selected_buffer_bytes / page_size_bytes);
+  } else {
+    for (size_t candidate_mb : kBufferCandidateMb) {
+      size_t candidate_peak_memory_bytes = 0;
+      if (!tlb_buffer_fits_memory_budget(candidate_mb,
+                                         page_size_bytes,
+                                         memory_budget_mb,
+                                         candidate_peak_memory_bytes)) {
+        continue;
+      }
+      const size_t candidate_bytes = candidate_mb * Constants::BYTES_PER_MB;
+      MmapPtr candidate_buffer = try_allocate_analysis_buffer(candidate_bytes);
+      if (candidate_buffer != nullptr) {
+        latency_buffer = std::move(candidate_buffer);
+        selected_buffer_mb = candidate_mb;
+        selected_buffer_bytes = candidate_bytes;
+        estimated_peak_memory_bytes = candidate_peak_memory_bytes;
+        break;
+      }
     }
   }
 
-  if (latency_buffer == nullptr || selected_buffer_mb == 0) {
+  if ((execution_seam == nullptr && latency_buffer == nullptr) ||
+      selected_buffer_mb == 0) {
     std::cerr << Messages::error_prefix()
               << Messages::error_tlb_analysis_insufficient_memory()
               << std::endl;
@@ -744,19 +809,24 @@ int run_tlb_analysis(const BenchmarkConfig& config,
   bool buffer_locked = false;
   int buffer_lock_errno = 0;
   std::string buffer_lock_error;
-  if (mlock(latency_buffer.get(), selected_buffer_bytes) == 0) {
-    buffer_locked = true;
-  } else {
-    buffer_lock_errno = errno;
-    buffer_lock_error = std::strerror(buffer_lock_errno);
-    std::cerr << Messages::warning_prefix()
-              << Messages::warning_tlb_mlock_failed(buffer_lock_errno,
-                                                     buffer_lock_error)
-              << std::endl;
+  if (execution_seam == nullptr) {
+    if (mlock(latency_buffer.get(), selected_buffer_bytes) == 0) {
+      buffer_locked = true;
+    } else {
+      buffer_lock_errno = errno;
+      buffer_lock_error = std::strerror(buffer_lock_errno);
+      std::cerr << Messages::warning_prefix()
+                << Messages::warning_tlb_mlock_failed(buffer_lock_errno,
+                                                       buffer_lock_error)
+                << std::endl;
+    }
   }
 
-  auto timer_opt = HighResTimer::create();
-  if (!timer_opt) {
+  std::optional<HighResTimer> timer_opt;
+  if (execution_seam == nullptr) {
+    timer_opt = HighResTimer::create();
+  }
+  if (execution_seam == nullptr && !timer_opt) {
     if (buffer_locked) {
       (void)munlock(latency_buffer.get(), selected_buffer_bytes);
     }
@@ -765,7 +835,6 @@ int run_tlb_analysis(const BenchmarkConfig& config,
               << std::endl;
     return EXIT_FAILURE;
   }
-  auto& timer = *timer_opt;
   const TlbWorkEstimate base_work_estimate = estimate_tlb_work(
       sweep_points.size(),
       estimated_peak_memory_bytes,
@@ -812,31 +881,48 @@ int run_tlb_analysis(const BenchmarkConfig& config,
       localities_bytes.size() * runtime_profile.max_rounds);
   std::vector<TlbPassExecutionSummary> pass_summaries;
   pass_summaries.reserve(4);
+  bool measurement_error = false;
+
+  auto execute_measurement_pass =
+      [&](const std::vector<TlbSweepPoint>& points,
+          TlbMeasurementPass pass,
+          std::vector<LocalityMeasurement>& pass_measurements) {
+        if (execution_seam != nullptr && stop_requested && stop_requested()) {
+          TlbScheduleExecutionResult result;
+          result.status = TlbScheduleExecutionStatus::Interrupted;
+          return result;
+        }
+        if (execution_seam != nullptr) {
+          TlbScheduleExecutionResult result =
+              execution_seam->execute_pass(pass, points);
+          append_measurement_records(result.records, pass_measurements);
+          return result;
+        }
+        return measure_scheduled_points(
+            latency_buffer.get(),
+            selected_buffer_bytes,
+            analysis_stride_bytes,
+            page_size_bytes,
+            points,
+            effective_chain_mode,
+            *timer_opt,
+            config.tlb_seed,
+            pass,
+            runtime_profile,
+            stop_requested,
+            pass_measurements);
+      };
 
   std::cout << std::fixed;
   std::cout.precision(Constants::LATENCY_PRECISION);
 
-  const TlbScheduleExecutionResult base_result = measure_scheduled_points(
-      latency_buffer.get(),
-      selected_buffer_bytes,
-      analysis_stride_bytes,
-      page_size_bytes,
-      sweep_points,
-      effective_chain_mode,
-      timer,
-      config.tlb_seed,
-      TlbMeasurementPass::Base,
-      runtime_profile,
-      stop_requested,
-      measurements);
+  const TlbScheduleExecutionResult base_result = execute_measurement_pass(
+      sweep_points, TlbMeasurementPass::Base, measurements);
   measurement_records.insert(measurement_records.end(),
                              base_result.records.begin(),
                              base_result.records.end());
   if (base_result.status == TlbScheduleExecutionStatus::Error) {
-    if (buffer_locked) {
-      (void)munlock(latency_buffer.get(), selected_buffer_bytes);
-    }
-    return EXIT_FAILURE;
+    measurement_error = true;
   }
   pass_summaries.push_back(summarize_tlb_pass(
       TlbMeasurementPass::Base, sweep_points.size(), base_result));
@@ -846,7 +932,7 @@ int run_tlb_analysis(const BenchmarkConfig& config,
     report_interrupt_once();
   }
 
-  if (measurements.empty() && !interrupted) {
+  if (measurements.empty() && !interrupted && !measurement_error) {
     if (buffer_locked) {
       (void)munlock(latency_buffer.get(), selected_buffer_bytes);
     }
@@ -934,7 +1020,7 @@ int run_tlb_analysis(const BenchmarkConfig& config,
   }
   const size_t planned_points = sweep_points.size() + refinement_points.size();
 
-  if (!refinement_points.empty() && !interrupted) {
+  if (!refinement_points.empty() && !interrupted && !measurement_error) {
     std::cout << Messages::msg_tlb_analysis_refinement_start(refinement_points.size()) << std::endl;
     print_tlb_work_estimate(
         "refinement",
@@ -946,29 +1032,17 @@ int run_tlb_analysis(const BenchmarkConfig& config,
 
   size_t fine_sweep_added_points = 0;
   bool refinement_complete = refinement_points.empty();
-  if (!refinement_points.empty() && !interrupted) {
+  if (!refinement_points.empty() && !interrupted && !measurement_error) {
     const size_t measurements_before_refinement = measurements.size();
-    const TlbScheduleExecutionResult refinement_result = measure_scheduled_points(
-        latency_buffer.get(),
-        selected_buffer_bytes,
-        analysis_stride_bytes,
-        page_size_bytes,
-        refinement_points,
-        effective_chain_mode,
-        timer,
-        config.tlb_seed,
-        TlbMeasurementPass::Refinement,
-        runtime_profile,
-        stop_requested,
-        measurements);
+    const TlbScheduleExecutionResult refinement_result =
+        execute_measurement_pass(refinement_points,
+                                 TlbMeasurementPass::Refinement,
+                                 measurements);
     measurement_records.insert(measurement_records.end(),
                                refinement_result.records.begin(),
                                refinement_result.records.end());
     if (refinement_result.status == TlbScheduleExecutionStatus::Error) {
-      if (buffer_locked) {
-        (void)munlock(latency_buffer.get(), selected_buffer_bytes);
-      }
-      return EXIT_FAILURE;
+      measurement_error = true;
     }
     pass_summaries.push_back(summarize_tlb_pass(
         TlbMeasurementPass::Refinement,
@@ -997,6 +1071,7 @@ int run_tlb_analysis(const BenchmarkConfig& config,
   }
   const bool main_sweep_complete =
       base_sweep_complete && refinement_complete && !interrupted &&
+      !measurement_error &&
       final_localities_bytes.size() == planned_points;
 
   private_cache_knee = detect_private_cache_knee(final_localities_bytes, p50_latency_ns, &sweep_loop_latencies_ns);
@@ -1039,7 +1114,7 @@ int run_tlb_analysis(const BenchmarkConfig& config,
       sweep_points.size());
   bool validation_complete = validation_points.empty();
   size_t validation_measured_points = 0;
-  if (!validation_points.empty() && !interrupted) {
+  if (!validation_points.empty() && !interrupted && !measurement_error) {
     std::cout << Messages::msg_tlb_analysis_validation_start(
                      validation_points.size())
               << std::endl;
@@ -1050,28 +1125,16 @@ int run_tlb_analysis(const BenchmarkConfig& config,
                           maximum_tlb_node_count(validation_points),
                           runtime_profile));
     std::vector<LocalityMeasurement> validation_measurements;
-    const TlbScheduleExecutionResult validation_result = measure_scheduled_points(
-        latency_buffer.get(),
-        selected_buffer_bytes,
-        analysis_stride_bytes,
-        page_size_bytes,
-        validation_points,
-        effective_chain_mode,
-        timer,
-        config.tlb_seed,
-        TlbMeasurementPass::Validation,
-        runtime_profile,
-        stop_requested,
-        validation_measurements);
+    const TlbScheduleExecutionResult validation_result =
+        execute_measurement_pass(validation_points,
+                                 TlbMeasurementPass::Validation,
+                                 validation_measurements);
     measurement_records.insert(measurement_records.end(),
                                validation_result.records.begin(),
                                validation_result.records.end());
     validation_measured_points = validation_measurements.size();
     if (validation_result.status == TlbScheduleExecutionStatus::Error) {
-      if (buffer_locked) {
-        (void)munlock(latency_buffer.get(), selected_buffer_bytes);
-      }
-      return EXIT_FAILURE;
+      measurement_error = true;
     }
     pass_summaries.push_back(summarize_tlb_pass(
         TlbMeasurementPass::Validation,
@@ -1095,7 +1158,8 @@ int run_tlb_analysis(const BenchmarkConfig& config,
           {TlbMeasurementPass::Validation});
   l1_boundary = TlbBoundaryDetection{};
   l2_boundary = TlbBoundaryDetection{};
-  if (main_sweep_complete && validation_complete && !interrupted) {
+  if (main_sweep_complete && validation_complete && !interrupted &&
+      !measurement_error) {
     l1_boundary = detect_tlb_boundary_robust(final_localities_bytes,
                                              discovery_matrix,
                                              &validation_matrix,
@@ -1148,8 +1212,11 @@ int run_tlb_analysis(const BenchmarkConfig& config,
   double page_walk_512mb_p50_ns = 0.0;
   TlbPairedPointSummary large_locality_summary;
   bool page_walk_comparison_completed = false;
-  if (can_measure_page_walk_penalty && main_sweep_complete &&
-      validation_complete && !interrupted) {
+  bool large_locality_pass_completed = false;
+  const bool large_locality_planned =
+      can_measure_page_walk_penalty && main_sweep_complete &&
+      validation_complete && !interrupted && !measurement_error;
+  if (large_locality_planned) {
     TlbSweepPoint comparison_point;
     comparison_point.point_index =
         planned_points + validation_points.size();
@@ -1166,40 +1233,25 @@ int run_tlb_analysis(const BenchmarkConfig& config,
                           comparison_point.requested_pages,
                           runtime_profile));
     std::vector<LocalityMeasurement> comparison_measurements;
-    const TlbScheduleExecutionResult comparison_result = measure_scheduled_points(
-        latency_buffer.get(),
-        selected_buffer_bytes,
-        analysis_stride_bytes,
-        page_size_bytes,
-        {comparison_point},
-        effective_chain_mode,
-        timer,
-        config.tlb_seed,
-        TlbMeasurementPass::LargeLocality,
-        runtime_profile,
-        stop_requested,
-        comparison_measurements);
+    const TlbScheduleExecutionResult comparison_result =
+        execute_measurement_pass({comparison_point},
+                                 TlbMeasurementPass::LargeLocality,
+                                 comparison_measurements);
     measurement_records.insert(measurement_records.end(),
                                comparison_result.records.begin(),
                                comparison_result.records.end());
+    pass_summaries.push_back(summarize_tlb_pass(
+        TlbMeasurementPass::LargeLocality, 1, comparison_result));
+    print_tlb_pass_completion(TlbMeasurementPass::LargeLocality,
+                              comparison_result);
     if (comparison_result.status == TlbScheduleExecutionStatus::Interrupted) {
-      pass_summaries.push_back(summarize_tlb_pass(
-          TlbMeasurementPass::LargeLocality, 1, comparison_result));
-      print_tlb_pass_completion(TlbMeasurementPass::LargeLocality,
-                                comparison_result);
       interrupted = true;
       report_interrupt_once();
     } else if (comparison_result.status == TlbScheduleExecutionStatus::Error) {
-      if (buffer_locked) {
-        (void)munlock(latency_buffer.get(), selected_buffer_bytes);
-      }
-      return EXIT_FAILURE;
-    } else {
-      pass_summaries.push_back(summarize_tlb_pass(
-          TlbMeasurementPass::LargeLocality, 1, comparison_result));
-      print_tlb_pass_completion(TlbMeasurementPass::LargeLocality,
-                                comparison_result);
+      measurement_error = true;
     }
+    large_locality_pass_completed =
+        comparison_result.status == TlbScheduleExecutionStatus::Complete;
     if (comparison_result.status == TlbScheduleExecutionStatus::Complete &&
         !comparison_measurements.empty()) {
       page_walk_512mb_p50_ns = comparison_measurements.front().p50_latency_ns;
@@ -1219,10 +1271,15 @@ int run_tlb_analysis(const BenchmarkConfig& config,
   }
 
   const bool conclusions_valid =
-      main_sweep_complete && validation_complete && !interrupted;
-  const std::string analysis_status = conclusions_valid
-                                          ? "complete"
-                                          : (interrupted ? "interrupted" : "partial");
+      main_sweep_complete && validation_complete && !interrupted &&
+      !measurement_error;
+  const std::string analysis_status = measurement_error
+                                          ? "error"
+                                          : (conclusions_valid
+                                                 ? "complete"
+                                                 : (interrupted
+                                                        ? "interrupted"
+                                                        : "partial"));
   if (!conclusions_valid) {
     private_cache_knee = PrivateCacheKneeDetection{};
     l1_boundary = TlbBoundaryDetection{};
@@ -1391,9 +1448,43 @@ int run_tlb_analysis(const BenchmarkConfig& config,
               << std::endl;
   }
 
-  const auto analysis_end = std::chrono::steady_clock::now();
   const double total_execution_time_sec =
-      std::chrono::duration<double>(analysis_end - analysis_start).count();
+      execution_seam != nullptr && execution_seam->elapsed_seconds
+          ? execution_seam->elapsed_seconds()
+          : std::chrono::duration<double>(
+                std::chrono::steady_clock::now() - *analysis_start)
+                .count();
+  if (execution_seam != nullptr && execution_seam->observe_summary) {
+    TlbAnalysisCoordinatorSummary summary;
+    if (measurement_error) {
+      summary.status = TlbAnalysisCoordinatorStatus::Error;
+    } else if (interrupted) {
+      summary.status = TlbAnalysisCoordinatorStatus::Interrupted;
+    } else if (conclusions_valid) {
+      summary.status = TlbAnalysisCoordinatorStatus::Complete;
+    } else {
+      summary.status = TlbAnalysisCoordinatorStatus::Partial;
+    }
+    summary.status_text = analysis_status;
+    summary.planned_points = planned_points;
+    summary.completed_points = final_localities_bytes.size();
+    summary.validation_planned_points = validation_points.size();
+    summary.validation_completed_points = validation_measured_points;
+    summary.planned_passes = pass_summaries.size();
+    summary.completed_passes = static_cast<size_t>(std::count_if(
+        pass_summaries.begin(),
+        pass_summaries.end(),
+        [](const TlbPassExecutionSummary& pass_summary) {
+          return pass_summary.complete;
+        }));
+    summary.measurement_record_count = measurement_records.size();
+    summary.elapsed_seconds = total_execution_time_sec;
+    summary.conclusions_valid = conclusions_valid;
+    summary.large_locality_planned = large_locality_planned;
+    summary.large_locality_completed = large_locality_pass_completed;
+    summary.pass_summaries = pass_summaries;
+    execution_seam->observe_summary(summary);
+  }
   const TlbAnalysisJsonContext json_context = {
       config,
       cpu_name,
@@ -1455,5 +1546,7 @@ int run_tlb_analysis(const BenchmarkConfig& config,
     return EXIT_FAILURE;
   }
 
-  return EXIT_SUCCESS;
+  return measurement_error ? EXIT_FAILURE : EXIT_SUCCESS;
 }
+
+}  // namespace

@@ -51,6 +51,35 @@
 #include "core/timing/timer.h"
 #include "output/console/messages/messages_api.h"
 
+namespace {
+
+const TimerSystemCalls kDefaultTimerSystemCalls{};
+TimerSystemCalls active_timer_system_calls = kDefaultTimerSystemCalls;
+
+}  // namespace
+
+void set_timer_system_calls_for_testing(const TimerSystemCalls& calls) {
+  active_timer_system_calls = {
+      calls.absolute_time != nullptr ? calls.absolute_time
+                                     : kDefaultTimerSystemCalls.absolute_time,
+      calls.timebase_info != nullptr ? calls.timebase_info
+                                     : kDefaultTimerSystemCalls.timebase_info};
+}
+
+void reset_timer_system_calls_for_testing() {
+  active_timer_system_calls = kDefaultTimerSystemCalls;
+}
+
+std::optional<double> convert_mach_ticks_to_nanoseconds(uint64_t ticks,
+                                                        uint32_t numer,
+                                                        uint32_t denom) {
+  if (denom == 0) {
+    return std::nullopt;
+  }
+  return static_cast<double>(ticks) * static_cast<double>(numer) /
+         static_cast<double>(denom);
+}
+
 /**
  * @brief Private constructor for HighResTimer
  *
@@ -70,7 +99,8 @@ std::optional<HighResTimer> HighResTimer::create() {
   HighResTimer timer;
 
   // Get the timebase info for converting ticks to nanoseconds
-  kern_return_t kern_ret = mach_timebase_info(&timer.timebase_info);
+  kern_return_t kern_ret =
+      active_timer_system_calls.timebase_info(&timer.timebase_info);
   if (kern_ret != KERN_SUCCESS) {
     std::cerr << Messages::error_prefix()
               << Messages::error_mach_timebase_info_failed(mach_error_string(kern_ret))
@@ -103,7 +133,7 @@ std::optional<HighResTimer> HighResTimer::create() {
 // timestamp read and the measured region, introducing run-to-run jitter.
 void HighResTimer::start() {
   asm volatile("dsb ish\n\tisb" ::: "memory");
-  start_ticks = mach_absolute_time();
+  start_ticks = active_timer_system_calls.absolute_time();
 }
 
 // stop: Calculates elapsed time since start() in seconds.
@@ -114,7 +144,7 @@ void HighResTimer::start() {
 // the end timestamp is captured.
 double HighResTimer::stop() {
   asm volatile("dsb ish\n\tisb" ::: "memory");
-  uint64_t end = mach_absolute_time();  // Get current time.
+  uint64_t end = active_timer_system_calls.absolute_time();
   // Calculate elapsed ticks. Unsigned arithmetic automatically handles wrap-around.
   uint64_t elapsed_ticks = end - start_ticks;
   // Convert ticks to nanoseconds using the timebase info.
@@ -125,9 +155,13 @@ double HighResTimer::stop() {
               << std::endl;
     return 0.0;  // Return 0 to avoid division by zero
   }
-  double elapsed_nanos = static_cast<double>(elapsed_ticks) * timebase_info.numer / timebase_info.denom;
+  const std::optional<double> elapsed_nanos = convert_mach_ticks_to_nanoseconds(
+      elapsed_ticks, timebase_info.numer, timebase_info.denom);
+  if (!elapsed_nanos.has_value()) {
+    return 0.0;
+  }
   // Convert nanoseconds to seconds.
-  return elapsed_nanos / 1e9;
+  return *elapsed_nanos / 1e9;
 }
 
 // stop_ns: Calculates elapsed time since start() in nanoseconds.
@@ -138,7 +172,7 @@ double HighResTimer::stop() {
 // the end timestamp is captured.
 double HighResTimer::stop_ns() {
   asm volatile("dsb ish\n\tisb" ::: "memory");
-  uint64_t end = mach_absolute_time();  // Get current time.
+  uint64_t end = active_timer_system_calls.absolute_time();
   // Calculate elapsed ticks. Unsigned arithmetic automatically handles wrap-around.
   uint64_t elapsed_ticks = end - start_ticks;
   // Convert ticks to nanoseconds and return.
@@ -149,5 +183,7 @@ double HighResTimer::stop_ns() {
               << std::endl;
     return 0.0;  // Return 0 to avoid division by zero
   }
-  return static_cast<double>(elapsed_ticks) * timebase_info.numer / timebase_info.denom;
+  return convert_mach_ticks_to_nanoseconds(elapsed_ticks, timebase_info.numer,
+                                           timebase_info.denom)
+      .value_or(0.0);
 }

@@ -21,13 +21,17 @@
 #include "core/memory/buffer_manager.h"
 #include "core/config/config.h"
 #include "core/config/constants.h"
+#include "output/console/messages/messages_api.h"
 #include "utils/benchmark.h"  // Declares system_info functions
 #include "test_config_helpers.h"
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <cstdint>
 #include <cstring>
 #include <cstdlib>
+#include <optional>
+#include <string>
 #include <utility>
 #include <vector>
 extern "C" uint64_t verify_pattern_callee_saved_registers_asm(
@@ -184,6 +188,16 @@ BenchmarkConfig make_pattern_config(size_t buffer_size, int iterations, int num_
   return config;
 }
 
+PatternMeasurement make_test_measurement(
+    PatternMeasurementStatus status, const std::string& reason,
+    std::optional<double> bandwidth_gb_s = std::nullopt) {
+  PatternMeasurement measurement;
+  measurement.status = status;
+  measurement.status_reason = reason;
+  measurement.bandwidth_gb_s = bandwidth_gb_s;
+  return measurement;
+}
+
 unsigned char* align_to_cache_line(unsigned char* pointer) {
   const uintptr_t address = reinterpret_cast<uintptr_t>(pointer);
   const uintptr_t aligned =
@@ -210,48 +224,38 @@ unsigned char* align_to_cache_line(unsigned char* pointer) {
 }
 
 void expect_core_pattern_bandwidths_positive(const PatternResults& results) {
-  EXPECT_GT(results.forward_read_bw, 0.0);
-  EXPECT_GT(results.forward_write_bw, 0.0);
-  EXPECT_GT(results.forward_copy_bw, 0.0);
-
-  EXPECT_GT(results.reverse_read_bw, 0.0);
-  EXPECT_GT(results.reverse_write_bw, 0.0);
-  EXPECT_GT(results.reverse_copy_bw, 0.0);
-
-  EXPECT_GT(results.strided_64_read_bw, 0.0);
-  EXPECT_GT(results.strided_64_write_bw, 0.0);
-  EXPECT_GT(results.strided_64_copy_bw, 0.0);
-
-  EXPECT_GT(results.strided_4096_read_bw, 0.0);
-  EXPECT_GT(results.strided_4096_write_bw, 0.0);
-  EXPECT_GT(results.strided_4096_copy_bw, 0.0);
-
-  EXPECT_GT(results.strided_16384_read_bw, 0.0);
-  EXPECT_GT(results.strided_16384_write_bw, 0.0);
-  EXPECT_GT(results.strided_16384_copy_bw, 0.0);
-
-  EXPECT_GT(results.random_read_bw, 0.0);
-  EXPECT_GT(results.random_write_bw, 0.0);
-  EXPECT_GT(results.random_copy_bw, 0.0);
+  const std::array<PatternKind, 6> core_kinds = {
+      PatternKind::SequentialForward, PatternKind::SequentialReverse,
+      PatternKind::Strided64, PatternKind::Strided4096,
+      PatternKind::Strided16384, PatternKind::Random};
+  for (PatternKind kind : core_kinds) {
+    for (PatternOperation operation : {PatternOperation::Read,
+                                       PatternOperation::Write,
+                                       PatternOperation::Copy}) {
+      const PatternMeasurement& measurement =
+          get_pattern_measurement(results, kind, operation);
+      EXPECT_EQ(measurement.status, PatternMeasurementStatus::Measured);
+      ASSERT_TRUE(measurement.bandwidth_gb_s.has_value());
+      EXPECT_GT(*measurement.bandwidth_gb_s, 0.0);
+      EXPECT_GT(measurement.elapsed_seconds, 0.0);
+      EXPECT_GT(measurement.total_payload_bytes, 0u);
+    }
+  }
 }
 
 void expect_2mb_pattern_bandwidths_zero(const PatternResults& results) {
-  EXPECT_EQ(results.strided_2mb_read_bw, 0.0);
-  EXPECT_EQ(results.strided_2mb_write_bw, 0.0);
-  EXPECT_EQ(results.strided_2mb_copy_bw, 0.0);
   for (PatternOperation operation : {PatternOperation::Read, PatternOperation::Write,
                                      PatternOperation::Copy}) {
     const PatternMeasurement& measurement =
         get_pattern_measurement(results, PatternKind::Strided2MiB, operation);
     EXPECT_EQ(measurement.status, PatternMeasurementStatus::Skipped);
     EXPECT_FALSE(measurement.bandwidth_gb_s.has_value());
+    EXPECT_EQ(measurement.status_reason,
+              Messages::pattern_reason_stride_transition_unavailable());
   }
 }
 
 void expect_2mb_pattern_bandwidths_positive(const PatternResults& results) {
-  EXPECT_GT(results.strided_2mb_read_bw, 0.0);
-  EXPECT_GT(results.strided_2mb_write_bw, 0.0);
-  EXPECT_GT(results.strided_2mb_copy_bw, 0.0);
   for (PatternOperation operation : {PatternOperation::Read, PatternOperation::Write,
                                      PatternOperation::Copy}) {
     const PatternMeasurement& measurement =
@@ -260,6 +264,7 @@ void expect_2mb_pattern_bandwidths_positive(const PatternResults& results) {
     ASSERT_TRUE(measurement.bandwidth_gb_s.has_value());
     EXPECT_GT(measurement.elapsed_seconds, 0.0);
     EXPECT_GT(measurement.total_payload_bytes, 0u);
+    EXPECT_GT(measurement.total_accesses, 0u);
     EXPECT_EQ(measurement.stride_bytes,
               Constants::PATTERN_STRIDE_SUPERPAGE_2MB);
     EXPECT_FALSE(measurement.large_page_backing_verified);
@@ -268,53 +273,13 @@ void expect_2mb_pattern_bandwidths_positive(const PatternResults& results) {
 
 }  // namespace
 
-// Test PatternResults default initialization
 TEST(PatternBenchmarkTest, PatternResultsDefaultValues) {
   PatternResults results;
-  
-  // All values should be initialized to 0.0
-  EXPECT_EQ(results.forward_read_bw, 0.0);
-  EXPECT_EQ(results.forward_write_bw, 0.0);
-  EXPECT_EQ(results.forward_copy_bw, 0.0);
-  EXPECT_EQ(results.reverse_read_bw, 0.0);
-  EXPECT_EQ(results.reverse_write_bw, 0.0);
-  EXPECT_EQ(results.reverse_copy_bw, 0.0);
-  EXPECT_EQ(results.strided_64_read_bw, 0.0);
-  EXPECT_EQ(results.strided_64_write_bw, 0.0);
-  EXPECT_EQ(results.strided_64_copy_bw, 0.0);
-  EXPECT_EQ(results.strided_4096_read_bw, 0.0);
-  EXPECT_EQ(results.strided_4096_write_bw, 0.0);
-  EXPECT_EQ(results.strided_4096_copy_bw, 0.0);
-  EXPECT_EQ(results.strided_16384_read_bw, 0.0);
-  EXPECT_EQ(results.strided_16384_write_bw, 0.0);
-  EXPECT_EQ(results.strided_16384_copy_bw, 0.0);
-  EXPECT_EQ(results.strided_2mb_read_bw, 0.0);
-  EXPECT_EQ(results.strided_2mb_write_bw, 0.0);
-  EXPECT_EQ(results.strided_2mb_copy_bw, 0.0);
-  EXPECT_EQ(results.random_read_bw, 0.0);
-  EXPECT_EQ(results.random_write_bw, 0.0);
-  EXPECT_EQ(results.random_copy_bw, 0.0);
+
   for (const PatternMeasurement& measurement : results.measurements) {
     EXPECT_EQ(measurement.status, PatternMeasurementStatus::Invalid);
     EXPECT_FALSE(measurement.bandwidth_gb_s.has_value());
   }
-}
-
-// Test PatternResults can be set and read
-TEST(PatternBenchmarkTest, PatternResultsSetValues) {
-  PatternResults results;
-  
-  // Set some values
-  results.forward_read_bw = 10.5;
-  results.reverse_write_bw = 8.3;
-  results.strided_64_copy_bw = 7.2;
-  results.random_read_bw = 5.1;
-  
-  // Verify they can be read back
-  EXPECT_DOUBLE_EQ(results.forward_read_bw, 10.5);
-  EXPECT_DOUBLE_EQ(results.reverse_write_bw, 8.3);
-  EXPECT_DOUBLE_EQ(results.strided_64_copy_bw, 7.2);
-  EXPECT_DOUBLE_EQ(results.random_read_bw, 5.1);
 }
 
 TEST(PatternBenchmarkTest, ExecutionOrderIsDeterministicAndRotatesAcrossLoops) {
@@ -369,16 +334,11 @@ TEST(PatternBenchmarkTest, RunPatternBenchmarksCorePatternsIntegration) {
   EXPECT_EQ(random_read.seed, config.pattern_seed);
 }
 
-// Test large-page stride variants with a larger buffer
-TEST(PatternBenchmarkTest, StridedLargePagePatternsIntegration) {
+TEST(PatternBenchmarkTest, Strided2MiBRouteAndKernelIntegration) {
   BenchmarkConfig config = make_pattern_config(8 * 1024 * 1024, 1);
 
   PatternResults results;
   ASSERT_TRUE(run_pattern_benchmarks_with_fresh_buffers(config, results));
-
-  EXPECT_GT(results.strided_16384_read_bw, 0.0);
-  EXPECT_GT(results.strided_16384_write_bw, 0.0);
-  EXPECT_GT(results.strided_16384_copy_bw, 0.0);
 
   expect_2mb_pattern_bandwidths_positive(results);
 }
@@ -522,41 +482,165 @@ TEST(PatternBenchmarkTest, FinalizedWorkPlanDrivesInstrumentedExecutorIntegratio
             measured_plan.total_payload_bytes);
 }
 
-TEST(PatternBenchmarkTest, StatisticsUseMedianAndCoefficientOfVariation) {
+TEST(PatternBenchmarkTest, PureCollectionFiltersUnavailableValuesAndPreservesEvidence) {
+  PatternStatistics statistics;
+  statistics.all_forward_read_bw = {999.0};
+  statistics.all_reverse_write_bw = {999.0};
+  statistics.all_random_copy_bw = {999.0};
+  statistics.loop_results.emplace_back();
+  initialize_pattern_statistics(statistics, 4);
+
+  EXPECT_TRUE(statistics.loop_results.empty());
+  EXPECT_TRUE(statistics.all_forward_read_bw.empty());
+  EXPECT_TRUE(statistics.all_reverse_write_bw.empty());
+  EXPECT_TRUE(statistics.all_random_copy_bw.empty());
+
+  PatternResults measured_loop;
+  set_pattern_measurement(
+      measured_loop, PatternKind::SequentialForward, PatternOperation::Read,
+      make_test_measurement(PatternMeasurementStatus::Measured, "", 12.5));
+  set_pattern_measurement(
+      measured_loop, PatternKind::SequentialReverse, PatternOperation::Write,
+      make_test_measurement(PatternMeasurementStatus::Measured, "", 7.5));
+  set_pattern_measurement(
+      measured_loop, PatternKind::Random, PatternOperation::Copy,
+      make_test_measurement(PatternMeasurementStatus::Measured, "", 3.25));
+  collect_pattern_loop_result(statistics, std::move(measured_loop));
+
+  const std::array<PatternMeasurementStatus, 3> unavailable_statuses = {
+      PatternMeasurementStatus::Skipped,
+      PatternMeasurementStatus::Interrupted,
+      PatternMeasurementStatus::Invalid};
+  const std::array<std::string, 3> unavailable_reasons = {
+      "unsupported test pattern", "interrupted after preparation",
+      "invalid measured duration"};
+  for (size_t index = 0; index < unavailable_statuses.size(); ++index) {
+    PatternResults loop;
+    set_pattern_measurement(
+        loop, PatternKind::SequentialForward, PatternOperation::Read,
+        make_test_measurement(unavailable_statuses[index],
+                              unavailable_reasons[index]));
+    collect_pattern_loop_result(statistics, std::move(loop));
+  }
+
+  ASSERT_EQ(statistics.all_forward_read_bw.size(), 1u);
+  EXPECT_DOUBLE_EQ(statistics.all_forward_read_bw.front(), 12.5);
+  ASSERT_EQ(statistics.all_reverse_write_bw.size(), 1u);
+  EXPECT_DOUBLE_EQ(statistics.all_reverse_write_bw.front(), 7.5);
+  ASSERT_EQ(statistics.all_random_copy_bw.size(), 1u);
+  EXPECT_DOUBLE_EQ(statistics.all_random_copy_bw.front(), 3.25);
+  EXPECT_TRUE(statistics.all_forward_write_bw.empty());
+  EXPECT_TRUE(statistics.all_strided_2mb_read_bw.empty());
+
+  ASSERT_EQ(statistics.loop_results.size(), 4u);
+  const PatternMeasurement& measured = get_pattern_measurement(
+      statistics.loop_results[0], PatternKind::SequentialForward,
+      PatternOperation::Read);
+  EXPECT_EQ(measured.status, PatternMeasurementStatus::Measured);
+  EXPECT_TRUE(measured.status_reason.empty());
+  ASSERT_TRUE(measured.bandwidth_gb_s.has_value());
+  EXPECT_DOUBLE_EQ(*measured.bandwidth_gb_s, 12.5);
+  for (size_t index = 0; index < unavailable_statuses.size(); ++index) {
+    const PatternMeasurement& unavailable = get_pattern_measurement(
+        statistics.loop_results[index + 1], PatternKind::SequentialForward,
+        PatternOperation::Read);
+    EXPECT_EQ(unavailable.status, unavailable_statuses[index]);
+    EXPECT_EQ(unavailable.status_reason, unavailable_reasons[index]);
+    EXPECT_FALSE(unavailable.bandwidth_gb_s.has_value());
+  }
+}
+
+TEST(PatternBenchmarkTest,
+     MedianHeadlineUsesMeasuredPopulationAndPreservesUnavailableEvidence) {
+  PatternStatistics statistics;
+  initialize_pattern_statistics(statistics, 4);
+  const std::array<std::optional<double>, 4> read_values = {
+      10.0, 30.0, 20.0, std::nullopt};
+  for (const std::optional<double>& read_value : read_values) {
+    PatternResults loop;
+    set_pattern_measurement(
+        loop, PatternKind::SequentialForward, PatternOperation::Read,
+        read_value.has_value()
+            ? make_test_measurement(PatternMeasurementStatus::Measured, "",
+                                    read_value)
+            : make_test_measurement(PatternMeasurementStatus::Skipped,
+                                    "read unavailable"));
+    set_pattern_measurement(
+        loop, PatternKind::SequentialForward, PatternOperation::Write,
+        make_test_measurement(PatternMeasurementStatus::Skipped,
+                              "write unsupported"));
+    set_pattern_measurement(
+        loop, PatternKind::SequentialForward, PatternOperation::Copy,
+        make_test_measurement(PatternMeasurementStatus::Interrupted,
+                              "copy interrupted"));
+    set_pattern_measurement(
+        loop, PatternKind::SequentialReverse, PatternOperation::Read,
+        make_test_measurement(PatternMeasurementStatus::Invalid,
+                              "reverse timing invalid"));
+    collect_pattern_loop_result(statistics, std::move(loop));
+  }
+
+  ASSERT_EQ(statistics.all_forward_read_bw.size(), 3u);
+  EXPECT_DOUBLE_EQ(statistics.all_forward_read_bw[0], 10.0);
+  EXPECT_DOUBLE_EQ(statistics.all_forward_read_bw[1], 30.0);
+  EXPECT_DOUBLE_EQ(statistics.all_forward_read_bw[2], 20.0);
+  EXPECT_TRUE(statistics.all_forward_write_bw.empty());
+  EXPECT_TRUE(statistics.all_forward_copy_bw.empty());
+  EXPECT_TRUE(statistics.all_reverse_read_bw.empty());
+
+  const PatternResults headline = extract_pattern_median_results(statistics);
+  const PatternMeasurement& read = get_pattern_measurement(
+      headline, PatternKind::SequentialForward, PatternOperation::Read);
+  EXPECT_EQ(read.status, PatternMeasurementStatus::Measured);
+  EXPECT_TRUE(read.status_reason.empty());
+  ASSERT_TRUE(read.bandwidth_gb_s.has_value());
+  EXPECT_DOUBLE_EQ(*read.bandwidth_gb_s, 20.0);
+  EXPECT_DOUBLE_EQ(headline.forward_read_bw, 20.0);
+
+  const PatternMeasurement& write = get_pattern_measurement(
+      headline, PatternKind::SequentialForward, PatternOperation::Write);
+  EXPECT_EQ(write.status, PatternMeasurementStatus::Skipped);
+  EXPECT_EQ(write.status_reason, "write unsupported");
+  EXPECT_FALSE(write.bandwidth_gb_s.has_value());
+
+  const PatternMeasurement& copy = get_pattern_measurement(
+      headline, PatternKind::SequentialForward, PatternOperation::Copy);
+  EXPECT_EQ(copy.status, PatternMeasurementStatus::Interrupted);
+  EXPECT_EQ(copy.status_reason, "copy interrupted");
+  EXPECT_FALSE(copy.bandwidth_gb_s.has_value());
+
+  const PatternMeasurement& invalid = get_pattern_measurement(
+      headline, PatternKind::SequentialReverse, PatternOperation::Read);
+  EXPECT_EQ(invalid.status, PatternMeasurementStatus::Invalid);
+  EXPECT_EQ(invalid.status_reason, "reverse timing invalid");
+  EXPECT_FALSE(invalid.bandwidth_gb_s.has_value());
+}
+
+TEST(PatternBenchmarkTest, StatisticsUseExactMedianCvAndMad) {
   const PatternStatisticsData statistics =
       calculate_pattern_statistics({10.0, 20.0, 30.0});
   EXPECT_DOUBLE_EQ(statistics.average, 20.0);
+  EXPECT_DOUBLE_EQ(statistics.min, 10.0);
+  EXPECT_DOUBLE_EQ(statistics.max, 30.0);
   EXPECT_DOUBLE_EQ(statistics.median, 20.0);
+  EXPECT_DOUBLE_EQ(statistics.p90, 28.0);
+  EXPECT_DOUBLE_EQ(statistics.p95, 29.0);
+  EXPECT_DOUBLE_EQ(statistics.p99, 29.8);
   EXPECT_DOUBLE_EQ(statistics.stddev, 10.0);
   EXPECT_DOUBLE_EQ(statistics.coefficient_of_variation_pct, 50.0);
-}
+  EXPECT_DOUBLE_EQ(statistics.median_absolute_deviation, 10.0);
 
-TEST(PatternBenchmarkTest, MedianHeadlineExcludesSkippedMeasurements) {
-  PatternStatistics statistics;
-  for (double value : {10.0, 30.0, 20.0}) {
-    PatternResults loop;
-    PatternMeasurement measurement;
-    measurement.status = PatternMeasurementStatus::Measured;
-    measurement.status_reason.clear();
-    measurement.bandwidth_gb_s = value;
-    set_pattern_measurement(loop, PatternKind::SequentialForward,
-                            PatternOperation::Read, std::move(measurement));
-    statistics.loop_results.push_back(loop);
-  }
-  PatternResults skipped_loop;
-  PatternMeasurement skipped;
-  skipped.status = PatternMeasurementStatus::Skipped;
-  skipped.status_reason = "not supported";
-  set_pattern_measurement(skipped_loop, PatternKind::SequentialForward,
-                          PatternOperation::Read, std::move(skipped));
-  statistics.loop_results.push_back(skipped_loop);
+  const PatternStatisticsData even =
+      calculate_pattern_statistics({1.0, 2.0, 100.0, 101.0});
+  EXPECT_DOUBLE_EQ(even.median, 51.0);
+  EXPECT_DOUBLE_EQ(even.median_absolute_deviation, 49.5);
 
-  const PatternResults headline = extract_pattern_median_results(statistics);
-  const PatternMeasurement& measurement = get_pattern_measurement(
-      headline, PatternKind::SequentialForward, PatternOperation::Read);
-  ASSERT_TRUE(measurement.bandwidth_gb_s.has_value());
-  EXPECT_DOUBLE_EQ(*measurement.bandwidth_gb_s, 20.0);
-  EXPECT_DOUBLE_EQ(headline.forward_read_bw, 20.0);
+  const PatternStatisticsData zero_mean =
+      calculate_pattern_statistics({-1.0, 1.0});
+  EXPECT_DOUBLE_EQ(zero_mean.average, 0.0);
+  EXPECT_DOUBLE_EQ(zero_mean.median, 0.0);
+  EXPECT_DOUBLE_EQ(zero_mean.coefficient_of_variation_pct, 0.0);
+  EXPECT_DOUBLE_EQ(zero_mean.median_absolute_deviation, 1.0);
 }
 
 TEST(PatternBenchmarkTest, ConsoleRendersUnavailableMeasurementsAsStatusNotZero) {
@@ -597,23 +681,7 @@ TEST(PatternBenchmarkTest, StatisticsExposeCvAndEmitNoiseWarning) {
   EXPECT_NE(standard_output.find("Pattern Bandwidth"), std::string::npos);
   EXPECT_NE(standard_output.find("Median (P50):"), std::string::npos);
   EXPECT_NE(standard_output.find("CV:"), std::string::npos);
+  EXPECT_NE(standard_output.find("Median absolute deviation:"),
+            std::string::npos);
   EXPECT_NE(error_output.find("Noisy pattern measurement"), std::string::npos);
-}
-
-TEST(PatternBenchmarkTest, SkippedPatternsDoNotEnterStatisticsIntegration) {
-  BenchmarkConfig config = make_pattern_config(512 * 1024, 1);
-  BenchmarkBuffers buffers;
-  ASSERT_TRUE(allocate_and_initialize_buffers(config, buffers));
-  PatternStatistics statistics;
-
-  ASSERT_EQ(run_all_pattern_benchmarks(buffers, config, statistics), EXIT_SUCCESS);
-  ASSERT_EQ(statistics.loop_results.size(), 1u);
-  EXPECT_TRUE(statistics.all_strided_2mb_read_bw.empty());
-  EXPECT_TRUE(statistics.all_strided_2mb_write_bw.empty());
-  EXPECT_TRUE(statistics.all_strided_2mb_copy_bw.empty());
-  EXPECT_EQ(get_pattern_measurement(statistics.loop_results.front(),
-                                    PatternKind::Strided2MiB,
-                                    PatternOperation::Read)
-                .status,
-            PatternMeasurementStatus::Skipped);
 }

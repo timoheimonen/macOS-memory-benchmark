@@ -37,6 +37,7 @@ namespace {
 
 const std::vector<double>& kE = test_statistics_helpers::empty_values();
 using test_statistics_helpers::capture_bw;
+using test_statistics_helpers::capture_main_bandwidth;
 using test_statistics_helpers::capture_lat;
 using test_statistics_helpers::capture_auto_tlb_breakdown;
 
@@ -233,6 +234,42 @@ TEST(StatisticsTest, OnlyBandwidthModeOmitsLatencySection) {
   std::string out = testing::internal::GetCapturedStdout();
   EXPECT_EQ(out.find("Main Memory Latency"), std::string::npos);
   EXPECT_NE(out.find("Read Bandwidth"), std::string::npos);
+}
+
+TEST(StatisticsTest, ReadOnlyBandwidthOmitsUnavailableWriteAndCopyMetrics) {
+  const std::string output =
+      capture_main_bandwidth({10.0, 12.0}, kE, kE);
+
+  EXPECT_NE(output.find("Read Bandwidth (GB/s):"), std::string::npos);
+  EXPECT_EQ(output.find("Write Bandwidth (GB/s):"), std::string::npos);
+  EXPECT_EQ(output.find("Copy Bandwidth (GB/s):"), std::string::npos);
+}
+
+TEST(StatisticsTest, WriteOnlyBandwidthIsNotSuppressedByMissingReadMetrics) {
+  const std::string output =
+      capture_main_bandwidth(kE, {20.0, 22.0}, kE);
+
+  EXPECT_EQ(output.find("Read Bandwidth (GB/s):"), std::string::npos);
+  EXPECT_NE(output.find("Write Bandwidth (GB/s):"), std::string::npos);
+  EXPECT_EQ(output.find("Copy Bandwidth (GB/s):"), std::string::npos);
+}
+
+TEST(StatisticsTest, CopyOnlyBandwidthIsNotSuppressedByMissingReadMetrics) {
+  const std::string output =
+      capture_main_bandwidth(kE, kE, {30.0, 32.0});
+
+  EXPECT_EQ(output.find("Read Bandwidth (GB/s):"), std::string::npos);
+  EXPECT_EQ(output.find("Write Bandwidth (GB/s):"), std::string::npos);
+  EXPECT_NE(output.find("Copy Bandwidth (GB/s):"), std::string::npos);
+}
+
+TEST(StatisticsTest, MixedBandwidthPrintsOnlyAvailableMetricPopulations) {
+  const std::string output =
+      capture_main_bandwidth({10.0, 12.0}, kE, {30.0, 32.0});
+
+  EXPECT_NE(output.find("Read Bandwidth (GB/s):"), std::string::npos);
+  EXPECT_EQ(output.find("Write Bandwidth (GB/s):"), std::string::npos);
+  EXPECT_NE(output.find("Copy Bandwidth (GB/s):"), std::string::npos);
 }
 
 // ---------------------------------------------------------------------------

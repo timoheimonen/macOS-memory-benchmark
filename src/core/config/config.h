@@ -87,6 +87,52 @@ struct SweepSpec {
   std::vector<SweepValue> values;
 };
 
+/** Deterministic parser/platform values used only by unit tests. */
+struct ConfigTestHooks {
+  bool use_system_info = false;
+  std::string cpu_name;
+  std::string macos_version;
+  int performance_cores = 0;
+  int efficiency_cores = 0;
+  int total_logical_cores = 1;
+  size_t l1_cache_size = 0;
+  size_t l2_cache_size = 0;
+  uint64_t generated_seed = 0;
+  size_t page_size_bytes = 0;
+};
+
+void set_config_test_hooks(const ConfigTestHooks* hooks);
+const ConfigTestHooks* get_config_test_hooks();
+size_t get_config_page_size_bytes();
+
+/**
+ * @enum StrictIntegerParseStatus
+ * @brief Result of parsing one complete base-10 CLI integer token.
+ */
+enum class StrictIntegerParseStatus {
+  Success = 0,
+  Invalid,
+  OutOfRange,
+};
+
+/**
+ * @brief Parse a complete signed base-10 token without whitespace or a leading plus sign.
+ */
+StrictIntegerParseStatus parse_strict_signed_decimal(const std::string& value,
+                                                     long long& out_value);
+
+/**
+ * @brief Parse a complete unsigned base-10 token without whitespace or any sign.
+ */
+StrictIntegerParseStatus parse_strict_unsigned_decimal(const std::string& value,
+                                                       uint64_t& out_value);
+
+/** @brief Stable user-facing reason for a failed signed-token parse. */
+const char* strict_signed_decimal_error_reason(StrictIntegerParseStatus status);
+
+/** @brief Stable user-facing reason for a failed unsigned-token parse. */
+const char* strict_unsigned_decimal_error_reason(StrictIntegerParseStatus status);
+
 /**
  * @struct BenchmarkConfig
  * @brief Configuration structure containing all benchmark settings

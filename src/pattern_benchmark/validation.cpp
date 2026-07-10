@@ -33,7 +33,6 @@
 #include "core/config/constants.h"
 #include "output/console/messages/messages_api.h"
 #include <iostream>
-#include <algorithm>
 
 // ============================================================================
 // Validation Functions
@@ -65,12 +64,11 @@ bool validate_random_indices(const std::vector<size_t>& indices, size_t buffer_s
     return false;
   }
   
-  // Validate that indices are within buffer bounds and properly aligned
-  // Each access loads/stores PATTERN_ACCESS_SIZE_BYTES bytes
-  size_t validation_limit = std::min(indices.size(), 
-                                     static_cast<size_t>(PATTERN_VALIDATION_INDICES_LIMIT));
-  for (size_t i = 0; i < validation_limit; ++i) {
-    if (indices[i] + PATTERN_ACCESS_SIZE_BYTES > buffer_size) {
+  // Validate every offset. The subtraction form avoids overflow when an
+  // untrusted offset is close to SIZE_MAX.
+  for (size_t i = 0; i < indices.size(); ++i) {
+    if (buffer_size < PATTERN_ACCESS_SIZE_BYTES ||
+        indices[i] > buffer_size - PATTERN_ACCESS_SIZE_BYTES) {
       std::cerr << Messages::error_prefix() 
                 << Messages::error_index_out_of_bounds(i, indices[i], buffer_size) << std::endl;
       return false;

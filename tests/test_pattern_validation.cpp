@@ -12,159 +12,112 @@
 //
 // You should have received a copy of the GNU General Public License
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
-//
+
 #include <gtest/gtest.h>
+
+#include <limits>
+#include <string>
+#include <vector>
+
 #include "core/config/constants.h"
+#include "output/console/messages/messages_api.h"
 #include "pattern_benchmark/pattern_benchmark.h"
-#include "core/memory/buffer_manager.h"
-#include "core/config/config.h"
-#include "utils/benchmark.h"
-#include "test_config_helpers.h"
-#include <iostream>
-#include <cstdlib>
 
-// Shared helper: configure for pattern-only mode with minimal buffers
-// run_patterns=true skips latency/cache buffer allocation and initialization,
-// allowing tests to use buffer sizes below LATENCY_STRIDE_BYTES * 2.
-static BenchmarkConfig make_pattern_validation_config(size_t buffer_size) {
-  using namespace Constants;
-  BenchmarkConfig config;
-  config.buffer_size = buffer_size;
-  config.l1_buffer_size = 0;
-  config.l2_buffer_size = 0;
-  config.use_custom_cache_size = false;
-  config.iterations = 1;
-  config.user_specified_iterations = true;
-  config.num_threads = 1;
-  config.run_patterns = true;
-  initialize_system_info(config);
-  return config;
+namespace {
+
+template <typename Callable>
+std::string capture_stderr(Callable&& callable) {
+  testing::internal::CaptureStderr();
+  callable();
+  return testing::internal::GetCapturedStderr();
 }
 
-// ============================================================================
-// 64B (cache line) stride boundary tests
-//
-// The exact planner requires two complete 32-byte payloads separated by the
-// stride. Thus the 64B pattern is measured at 96 bytes and explicitly skipped
-// below that boundary.
-// ============================================================================
+}  // namespace
 
-// buffer_size=95 = stride+31: 64B strided pattern skipped, other patterns succeed
-TEST(PatternValidationTest, ValidateStride64SkippedBelowEffectiveBoundaryIntegration) {
+TEST(PatternValidationTest, StrideAcceptsSupportedBounds) {
   using namespace Constants;
-  auto config = make_pattern_validation_config(PATTERN_STRIDE_CACHE_LINE + PATTERN_ACCESS_SIZE_BYTES - 1);
+  const struct {
+    size_t stride;
+    size_t buffer_size;
+  } cases[] = {
+      {PATTERN_MIN_BUFFER_SIZE_BYTES, PATTERN_MIN_BUFFER_SIZE_BYTES},
+      {PATTERN_STRIDE_CACHE_LINE, PATTERN_STRIDE_CACHE_LINE},
+      {PATTERN_STRIDE_PAGE, PATTERN_STRIDE_PAGE + PATTERN_ACCESS_SIZE_BYTES},
+  };
 
-  BenchmarkBuffers buffers;
-  ASSERT_TRUE(allocate_and_initialize_buffers(config, buffers));
-
-  PatternResults results;
-  EXPECT_EQ(run_pattern_benchmarks(buffers, config, results), EXIT_SUCCESS);
-  EXPECT_GT(results.forward_read_bw, 0.0);
-  EXPECT_EQ(results.strided_64_read_bw, 0.0);
-  EXPECT_EQ(results.strided_4096_read_bw, 0.0);
+  for (const auto& test_case : cases) {
+    EXPECT_TRUE(validate_stride(test_case.stride, test_case.buffer_size));
+  }
 }
 
-// buffer_size=96 = stride+32: 64B strided pattern produces results
-TEST(PatternValidationTest, ValidateStride64AtEffectiveBoundaryIntegration) {
-  using namespace Constants;
-  auto config = make_pattern_validation_config(PATTERN_STRIDE_CACHE_LINE + PATTERN_ACCESS_SIZE_BYTES);
+TEST(PatternValidationTest, StrideRejectsTooSmallValueWithCentralizedReason) {
+  bool result = true;
+  const std::string output = capture_stderr([&] {
+    result = validate_stride(Constants::PATTERN_MIN_BUFFER_SIZE_BYTES - 1,
+                             Constants::PATTERN_MIN_BUFFER_SIZE_BYTES);
+  });
 
-  BenchmarkBuffers buffers;
-  ASSERT_TRUE(allocate_and_initialize_buffers(config, buffers));
-
-  PatternResults results;
-  EXPECT_EQ(run_pattern_benchmarks(buffers, config, results), EXIT_SUCCESS);
-  EXPECT_GT(results.strided_64_read_bw, 0.0);
-  EXPECT_EQ(results.strided_4096_read_bw, 0.0);
+  EXPECT_FALSE(result);
+  EXPECT_EQ(output, Messages::error_prefix() + Messages::error_stride_too_small() + "\n");
 }
 
-// ============================================================================
-// Page (4096B) stride boundary tests
-//
-// Strided 4096B pattern produces results only when buffer_size >= 4128 (= 4096 + 32).
-// ============================================================================
-
-// buffer_size=4095 < stride: validate_stride fails (silently skips)
-TEST(PatternValidationTest, ValidateStridePageBelowStrideBoundaryIntegration) {
-  using namespace Constants;
-  auto config = make_pattern_validation_config(PATTERN_STRIDE_PAGE - 1);
-
-  BenchmarkBuffers buffers;
-  ASSERT_TRUE(allocate_and_initialize_buffers(config, buffers));
-
-  PatternResults results;
-  EXPECT_EQ(run_pattern_benchmarks(buffers, config, results), EXIT_SUCCESS);
-  EXPECT_EQ(results.strided_4096_read_bw, 0.0);
-  EXPECT_EQ(results.strided_16384_read_bw, 0.0);
-  EXPECT_EQ(results.strided_2mb_read_bw, 0.0);
+TEST(PatternValidationTest, StrideRejectsValueBeyondBufferWithoutBenchmarkExecution) {
+  EXPECT_FALSE(validate_stride(Constants::PATTERN_STRIDE_PAGE,
+                               Constants::PATTERN_STRIDE_PAGE - 1));
 }
 
-// buffer_size=4096 == stride: validation passes but the planner cannot fit the
-// second complete 32-byte payload, so the measurement is skipped.
-TEST(PatternValidationTest, ValidateStridePageAtStrideBoundaryIntegration) {
-  using namespace Constants;
-  auto config = make_pattern_validation_config(PATTERN_STRIDE_PAGE);
-
-  BenchmarkBuffers buffers;
-  ASSERT_TRUE(allocate_and_initialize_buffers(config, buffers));
-
-  PatternResults results;
-  EXPECT_EQ(run_pattern_benchmarks(buffers, config, results), EXIT_SUCCESS);
-  EXPECT_EQ(results.strided_4096_read_bw, 0.0);
-  EXPECT_EQ(results.strided_16384_read_bw, 0.0);
-  EXPECT_EQ(results.strided_2mb_read_bw, 0.0);
+TEST(PatternValidationTest, RandomIndicesAcceptEveryAlignedExactlyFittingAccess) {
+  constexpr size_t kAccess = Constants::PATTERN_ACCESS_SIZE_BYTES;
+  EXPECT_TRUE(validate_random_indices({0, kAccess, 2 * kAccess}, 3 * kAccess));
 }
 
-// buffer_size=4128 = stride+32: 4096B strided pattern produces results
-TEST(PatternValidationTest, ValidateStridePageAtEffectiveBoundaryIntegration) {
-  using namespace Constants;
-  auto config = make_pattern_validation_config(PATTERN_STRIDE_PAGE + PATTERN_ACCESS_SIZE_BYTES);
+TEST(PatternValidationTest, RandomIndicesRejectEmptyInputWithCentralizedReason) {
+  bool result = true;
+  const std::string output = capture_stderr([&] {
+    result = validate_random_indices({}, 1024);
+  });
 
-  BenchmarkBuffers buffers;
-  ASSERT_TRUE(allocate_and_initialize_buffers(config, buffers));
-
-  PatternResults results;
-  EXPECT_EQ(run_pattern_benchmarks(buffers, config, results), EXIT_SUCCESS);
-  EXPECT_GT(results.strided_4096_read_bw, 0.0);
-  EXPECT_EQ(results.strided_16384_read_bw, 0.0);
-  EXPECT_EQ(results.strided_2mb_read_bw, 0.0);
+  EXPECT_FALSE(result);
+  EXPECT_EQ(output, Messages::error_prefix() + Messages::error_indices_empty() + "\n");
 }
 
-// ============================================================================
-// 16KB page stride boundary tests
-// ============================================================================
+TEST(PatternValidationTest, RandomIndicesRejectMisalignedOffsetWithExactIndex) {
+  bool result = true;
+  const std::string output = capture_stderr([&] {
+    result = validate_random_indices({0, 1}, 1024);
+  });
 
-// buffer_size=16416 = 16K+32: 16K strided pattern produces results
-TEST(PatternValidationTest, ValidateStride16KAtEffectiveBoundaryIntegration) {
-  using namespace Constants;
-  auto config = make_pattern_validation_config(PATTERN_STRIDE_PAGE_16K + PATTERN_ACCESS_SIZE_BYTES);
-
-  BenchmarkBuffers buffers;
-  ASSERT_TRUE(allocate_and_initialize_buffers(config, buffers));
-
-  PatternResults results;
-  EXPECT_EQ(run_pattern_benchmarks(buffers, config, results), EXIT_SUCCESS);
-  EXPECT_GT(results.strided_4096_read_bw, 0.0);
-  EXPECT_GT(results.strided_16384_read_bw, 0.0);
-  EXPECT_EQ(results.strided_2mb_read_bw, 0.0);
+  EXPECT_FALSE(result);
+  EXPECT_EQ(output, Messages::error_prefix() + Messages::error_index_not_aligned(1, 1) + "\n");
 }
 
-// ============================================================================
-// 2 MiB stride boundary test
-// ============================================================================
+TEST(PatternValidationTest, RandomIndicesRejectExactlyPastEndAndSizeMaxWithoutOverflow) {
+  constexpr size_t kBufferSize = 64;
+  for (const size_t offset : {kBufferSize, std::numeric_limits<size_t>::max()}) {
+    bool result = true;
+    const std::string output = capture_stderr([&] {
+      result = validate_random_indices({offset}, kBufferSize);
+    });
 
-// buffer_size=2MiB+32: the 2 MiB-stride pattern produces results
-TEST(PatternValidationTest, ValidateStrideSuperpage2MBAtEffectiveBoundaryIntegration) {
-  using namespace Constants;
-  auto config = make_pattern_validation_config(PATTERN_STRIDE_SUPERPAGE_2MB + PATTERN_ACCESS_SIZE_BYTES);
+    EXPECT_FALSE(result);
+    EXPECT_EQ(output, Messages::error_prefix() +
+                          Messages::error_index_out_of_bounds(0, offset, kBufferSize) + "\n");
+  }
+}
 
-  BenchmarkBuffers buffers;
-  ASSERT_TRUE(allocate_and_initialize_buffers(config, buffers));
+TEST(PatternValidationTest, RandomIndicesValidateItemsBeyondFormerSamplingLimit) {
+  std::vector<size_t> indices(Constants::PATTERN_VALIDATION_INDICES_LIMIT + 1, 0);
+  indices.back() = std::numeric_limits<size_t>::max();
 
-  PatternResults results;
-  EXPECT_EQ(run_pattern_benchmarks(buffers, config, results), EXIT_SUCCESS);
-  EXPECT_GT(results.strided_64_read_bw, 0.0);
-  EXPECT_GT(results.strided_4096_read_bw, 0.0);
-  EXPECT_GT(results.strided_16384_read_bw, 0.0);
-  EXPECT_GT(results.strided_2mb_read_bw, 0.0);
+  bool result = true;
+  const std::string output = capture_stderr([&] {
+    result = validate_random_indices(indices, 1024);
+  });
+
+  EXPECT_FALSE(result);
+  const size_t invalid_index = indices.size() - 1;
+  EXPECT_EQ(output, Messages::error_prefix() +
+                        Messages::error_index_out_of_bounds(
+                            invalid_index, indices.back(), 1024) +
+                        "\n");
 }

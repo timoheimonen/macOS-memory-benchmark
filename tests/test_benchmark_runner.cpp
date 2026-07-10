@@ -15,28 +15,38 @@
 //
 #include <gtest/gtest.h>
 #include "benchmark/benchmark_executor.h"
-#include "benchmark/benchmark_results.h"
 #include "benchmark/benchmark_runner.h"
 #include "benchmark/benchmark_statistics_collector.h"
 #include "core/memory/buffer_manager.h"
 #include "core/config/config.h"
-#include "output/json/json_output/json_output_api.h"
-#include "utils/benchmark.h"
-#include "core/config/constants.h"
-#include "test_config_helpers.h"
+#include "core/timing/timer.h"
 #include "test_statistics_helpers.h"
 #include <cstdlib>
-#include <cmath>     // std::isnan, std::isinf
-#include <limits>
 #include <stdexcept>
 #include <vector>
-#include <unistd.h>  // getpagesize
 
 namespace {
 
-constexpr size_t kDecimalGbBytes = 1000ULL * 1000ULL * 1000ULL;
-constexpr size_t kHundredMbBytes = 100ULL * 1000ULL * 1000ULL;
-constexpr size_t kTwoHundredMbBytes = 200ULL * 1000ULL * 1000ULL;
+uint64_t deterministic_timer_ticks() { return 100; }
+
+kern_return_t deterministic_timebase_info(mach_timebase_info_t info) {
+  info->numer = 1;
+  info->denom = 1;
+  return KERN_SUCCESS;
+}
+
+class ScopedDeterministicTimerSystemCalls {
+ public:
+  ScopedDeterministicTimerSystemCalls() {
+    set_timer_system_calls_for_testing({deterministic_timer_ticks, deterministic_timebase_info});
+  }
+
+  ~ScopedDeterministicTimerSystemCalls() { reset_timer_system_calls_for_testing(); }
+};
+
+void inject_deterministic_elapsed(BenchmarkRunnerTestHooks& hooks) {
+  hooks.elapsed_seconds = []() { return 1.0; };
+}
 
 void expect_double_vector_eq(const std::vector<double>& actual, const std::vector<double>& expected) {
   ASSERT_EQ(actual.size(), expected.size());
@@ -92,130 +102,6 @@ BenchmarkResults make_collector_results() {
 }
 
 }  // namespace
-
-TEST(BenchmarkResultsTest, CalculateSingleBandwidthUsesDecimalGbAndCopyMultiplier) {
-  double read_bw = 0.0;
-  double write_bw = 0.0;
-  double copy_bw = 0.0;
-
-  calculate_single_bandwidth(kDecimalGbBytes, 2, 2.0, 4.0, 1.0, read_bw, write_bw, copy_bw);
-
-  EXPECT_DOUBLE_EQ(read_bw, 1.0);
-  EXPECT_DOUBLE_EQ(write_bw, 0.5);
-  EXPECT_DOUBLE_EQ(copy_bw, 4.0);
-}
-
-TEST(BenchmarkResultsTest, CalculateSingleBandwidthRejectsInvalidInputs) {
-  double read_bw = 1.0;
-  double write_bw = 1.0;
-  double copy_bw = 1.0;
-
-  calculate_single_bandwidth(kDecimalGbBytes, 1, 0.0, -1.0, std::numeric_limits<double>::infinity(),
-                             read_bw, write_bw, copy_bw);
-
-  EXPECT_EQ(read_bw, 0.0);
-  EXPECT_EQ(write_bw, 0.0);
-  EXPECT_EQ(copy_bw, 0.0);
-
-  calculate_single_bandwidth(kDecimalGbBytes, 0, 1.0, 1.0, 1.0, read_bw, write_bw, copy_bw);
-
-  EXPECT_EQ(read_bw, 0.0);
-  EXPECT_EQ(write_bw, 0.0);
-  EXPECT_EQ(copy_bw, 0.0);
-}
-
-TEST(BenchmarkResultsTest, CalculateSingleBandwidthHandlesCopyByteCountOverflow) {
-  const size_t large_buffer = (std::numeric_limits<size_t>::max() / Constants::COPY_OPERATION_MULTIPLIER) + 1;
-  double read_bw = 0.0;
-  double write_bw = 0.0;
-  double copy_bw = 0.0;
-
-  calculate_single_bandwidth(large_buffer, 1, 1.0, 1.0, 1.0, read_bw, write_bw, copy_bw);
-
-  ASSERT_GT(read_bw, 0.0);
-  EXPECT_DOUBLE_EQ(write_bw, read_bw);
-  EXPECT_NEAR(copy_bw, read_bw * Constants::COPY_OPERATION_MULTIPLIER, read_bw * 1e-12);
-}
-
-TEST(BenchmarkResultsTest, CalculateBandwidthResultsPopulatesMainAndDetectedCacheLevels) {
-  BenchmarkConfig config;
-  config.buffer_size = kDecimalGbBytes;
-  config.iterations = 2;
-  config.use_custom_cache_size = false;
-  config.l1_buffer_size = kHundredMbBytes;
-  config.l2_buffer_size = kTwoHundredMbBytes;
-
-  TimingResults timings;
-  timings.total_read_time = 2.0;
-  timings.total_write_time = 4.0;
-  timings.total_copy_time = 1.0;
-  timings.l1_read_time = 1.0;
-  timings.l1_write_time = 2.0;
-  timings.l1_copy_time = 1.0;
-  timings.l2_read_time = 1.0;
-  timings.l2_write_time = 2.0;
-  timings.l2_copy_time = 1.0;
-  timings.total_read_status = BenchmarkMeasurementStatus::Measured;
-  timings.total_write_status = BenchmarkMeasurementStatus::Measured;
-  timings.total_copy_status = BenchmarkMeasurementStatus::Measured;
-  timings.l1_read_status = BenchmarkMeasurementStatus::Measured;
-  timings.l1_write_status = BenchmarkMeasurementStatus::Measured;
-  timings.l1_copy_status = BenchmarkMeasurementStatus::Measured;
-  timings.l2_read_status = BenchmarkMeasurementStatus::Measured;
-  timings.l2_write_status = BenchmarkMeasurementStatus::Measured;
-  timings.l2_copy_status = BenchmarkMeasurementStatus::Measured;
-
-  BenchmarkResults results;
-  calculate_bandwidth_results(config, timings, results);
-
-  ASSERT_TRUE(results.main_read_bandwidth.value.has_value());
-  ASSERT_TRUE(results.main_write_bandwidth.value.has_value());
-  ASSERT_TRUE(results.main_copy_bandwidth.value.has_value());
-  EXPECT_DOUBLE_EQ(*results.main_read_bandwidth.value, 1.0);
-  EXPECT_DOUBLE_EQ(*results.main_write_bandwidth.value, 0.5);
-  EXPECT_DOUBLE_EQ(*results.main_copy_bandwidth.value, 4.0);
-
-  EXPECT_DOUBLE_EQ(*results.l1_read_bandwidth.value, 2.0);
-  EXPECT_DOUBLE_EQ(*results.l1_write_bandwidth.value, 1.0);
-  EXPECT_DOUBLE_EQ(*results.l1_copy_bandwidth.value, 4.0);
-
-  EXPECT_DOUBLE_EQ(*results.l2_read_bandwidth.value, 4.0);
-  EXPECT_DOUBLE_EQ(*results.l2_write_bandwidth.value, 2.0);
-  EXPECT_DOUBLE_EQ(*results.l2_copy_bandwidth.value, 8.0);
-
-  EXPECT_FALSE(results.custom_read_bandwidth.value.has_value());
-  EXPECT_FALSE(results.custom_write_bandwidth.value.has_value());
-  EXPECT_FALSE(results.custom_copy_bandwidth.value.has_value());
-}
-
-TEST(BenchmarkResultsTest, CalculateBandwidthResultsUsesCustomCacheInsteadOfDetectedCaches) {
-  BenchmarkConfig config;
-  config.buffer_size = kDecimalGbBytes;
-  config.iterations = 2;
-  config.use_custom_cache_size = true;
-  config.custom_buffer_size = kHundredMbBytes;
-  config.l1_buffer_size = kHundredMbBytes;
-  config.l2_buffer_size = kTwoHundredMbBytes;
-
-  TimingResults timings;
-  timings.custom_read_time = 1.0;
-  timings.custom_write_time = 2.0;
-  timings.custom_copy_time = 1.0;
-  timings.l1_read_time = 1.0;
-  timings.l2_read_time = 1.0;
-  timings.custom_read_status = BenchmarkMeasurementStatus::Measured;
-  timings.custom_write_status = BenchmarkMeasurementStatus::Measured;
-  timings.custom_copy_status = BenchmarkMeasurementStatus::Measured;
-
-  BenchmarkResults results;
-  calculate_bandwidth_results(config, timings, results);
-
-  EXPECT_DOUBLE_EQ(*results.custom_read_bandwidth.value, 2.0);
-  EXPECT_DOUBLE_EQ(*results.custom_write_bandwidth.value, 1.0);
-  EXPECT_DOUBLE_EQ(*results.custom_copy_bandwidth.value, 4.0);
-  EXPECT_FALSE(results.l1_read_bandwidth.value.has_value());
-  EXPECT_FALSE(results.l2_read_bandwidth.value.has_value());
-}
 
 TEST(BenchmarkStatisticsCollectorTest, CollectLoopResultsAggregatesMainAndDetectedCacheMetrics) {
   BenchmarkConfig config = make_collector_config();
@@ -307,6 +193,7 @@ TEST(BenchmarkStatisticsCollectorTest, InterruptedMeasurementsNeverEnterAggregat
   expect_double_vector_eq(stats.all_read_bw_gb_s, {10.0});
   EXPECT_TRUE(stats.all_write_bw_gb_s.empty());
   EXPECT_TRUE(stats.all_average_latency_ns.empty());
+  EXPECT_TRUE(stats.all_main_mem_latency_samples.empty());
   EXPECT_EQ(stats.completed_measurements, 10u);
   ASSERT_EQ(stats.loop_results.size(), 1u);
   EXPECT_EQ(stats.loop_results[0].main_write_bandwidth.status,
@@ -314,42 +201,42 @@ TEST(BenchmarkStatisticsCollectorTest, InterruptedMeasurementsNeverEnterAggregat
   EXPECT_FALSE(stats.loop_results[0].main_write_bandwidth.value.has_value());
 }
 
-// Test statistics structure after run_all_benchmarks clears vectors
-// Note: This test verifies the clearing behavior without running actual benchmarks
-TEST(BenchmarkRunnerTest, StatisticsClearing) {
+TEST(BenchmarkStatisticsCollectorTest, InitializationResetsStateAndReservesExactPopulations) {
   BenchmarkConfig config;
-  BenchmarkBuffers buffers;
+  config.loop_count = 4;
+  config.latency_sample_count = 3;
+  config.l1_buffer_size = 1024;
+  config.l2_buffer_size = 2048;
   BenchmarkStatistics stats;
-  
-  initialize_system_info(config);
-  
-  // Set minimal config for testing
-  config.buffer_size = getpagesize();  // Minimum size
-  config.buffer_size_mb = 1;
-  config.iterations = 1;
-  config.loop_count = 0;  // No loops to avoid running actual benchmarks
-  config.use_custom_cache_size = false;
-  
-  // Calculate buffer sizes and access counts (required for cache tests)
-  calculate_buffer_sizes(config);
-  calculate_access_counts(config);
+  stats.status = BenchmarkRunStatus::Failed;
+  stats.status_reason = "stale";
+  stats.planned_loops = 99;
+  stats.completed_loops = 98;
+  stats.planned_measurements = 97;
+  stats.completed_measurements = 96;
+  stats.loop_results.push_back(BenchmarkResults{});
+  stats.all_read_bw_gb_s = {1.0};
+  stats.all_l1_latency_ns = {2.0};
+  stats.all_main_mem_latency_samples = {3.0};
 
-  // Allocate minimal buffers
-  ASSERT_TRUE(allocate_and_initialize_buffers(config, buffers));
-  
-  // Run with 0 loops - should just clear statistics
-  int result = run_all_benchmarks(buffers, config, stats);
-  
-  // Should succeed even with 0 loops
-  EXPECT_EQ(result, EXIT_SUCCESS);
-  
-  // Statistics should be cleared/empty
+  initialize_statistics(stats, config);
+
+  EXPECT_EQ(stats.status, BenchmarkRunStatus::NotStarted);
+  EXPECT_TRUE(stats.status_reason.empty());
+  EXPECT_EQ(stats.planned_loops, 4u);
+  EXPECT_EQ(stats.completed_loops, 0u);
+  EXPECT_EQ(stats.planned_measurements, 0u);
+  EXPECT_EQ(stats.completed_measurements, 0u);
+  EXPECT_TRUE(stats.loop_results.empty());
+  EXPECT_GE(stats.loop_results.capacity(), 4u);
   EXPECT_TRUE(stats.all_read_bw_gb_s.empty());
-  EXPECT_TRUE(stats.all_write_bw_gb_s.empty());
-  EXPECT_TRUE(stats.all_copy_bw_gb_s.empty());
-  EXPECT_TRUE(stats.all_tlb_hit_latency_ns.empty());
-  EXPECT_TRUE(stats.all_tlb_miss_latency_ns.empty());
-  EXPECT_TRUE(stats.all_page_walk_penalty_ns.empty());
+  EXPECT_GE(stats.all_read_bw_gb_s.capacity(), 4u);
+  EXPECT_TRUE(stats.all_l1_latency_ns.empty());
+  EXPECT_GE(stats.all_l1_latency_ns.capacity(), 4u);
+  EXPECT_TRUE(stats.all_main_mem_latency_samples.empty());
+  EXPECT_GE(stats.all_main_mem_latency_samples.capacity(), 12u);
+  EXPECT_GE(stats.all_l1_latency_samples.capacity(), 12u);
+  EXPECT_GE(stats.all_l2_latency_samples.capacity(), 12u);
 }
 
 TEST(BenchmarkRunnerTest, InjectedTimerCreationFailureIsReportedAndCheckpointed) {
@@ -361,6 +248,7 @@ TEST(BenchmarkRunnerTest, InjectedTimerCreationFailureIsReportedAndCheckpointed)
   size_t checkpoints = 0;
   BenchmarkRunnerTestHooks hooks;
   hooks.force_timer_creation_failure = true;
+  inject_deterministic_elapsed(hooks);
   hooks.checkpoint = [&](const BenchmarkConfig&, const BenchmarkStatistics&,
                          double, bool) {
     ++checkpoints;
@@ -378,7 +266,43 @@ TEST(BenchmarkRunnerTest, InjectedTimerCreationFailureIsReportedAndCheckpointed)
   EXPECT_NE(error_output.find(stats.status_reason), std::string::npos);
 }
 
-TEST(BenchmarkRunnerTest, InjectedCheckpointFailureRejectsCompletedLoop) {
+TEST(BenchmarkRunnerTest, InjectedLoopExceptionIsFailedAndCheckpointedWithExactReason) {
+  const ScopedDeterministicTimerSystemCalls timer_system_calls;
+  BenchmarkConfig config;
+  config.loop_count = 1;
+  config.output_file = "/tmp/benchmark-runner-hook-unused.json";
+  BenchmarkBuffers buffers;
+  BenchmarkStatistics stats;
+  size_t checkpoints = 0;
+  BenchmarkRunnerTestHooks hooks;
+  inject_deterministic_elapsed(hooks);
+  hooks.execute_loop = [](const BenchmarkBuffers&, BenchmarkConfig&, int,
+                          HighResTimer&, BenchmarkExecutionState*)
+      -> BenchmarkResults { throw std::runtime_error("injected loop failure"); };
+  hooks.checkpoint = [&](const BenchmarkConfig&, const BenchmarkStatistics& snapshot,
+                         double, bool) {
+    ++checkpoints;
+    EXPECT_EQ(snapshot.status, BenchmarkRunStatus::Failed);
+    EXPECT_EQ(snapshot.status_reason, "injected loop failure");
+    return EXIT_SUCCESS;
+  };
+
+  testing::internal::CaptureStderr();
+  const int result = run_all_benchmarks(buffers, config, stats, &hooks);
+  const std::string error = testing::internal::GetCapturedStderr();
+
+  EXPECT_EQ(result, EXIT_FAILURE);
+  EXPECT_EQ(stats.status, BenchmarkRunStatus::Failed);
+  EXPECT_EQ(stats.status_reason, "injected loop failure");
+  EXPECT_EQ(stats.completed_loops, 0u);
+  EXPECT_TRUE(stats.loop_results.empty());
+  EXPECT_EQ(checkpoints, 1u);
+  EXPECT_EQ(error, Messages::error_benchmark_loop(0, "injected loop failure") +
+                       "\n");
+}
+
+TEST(BenchmarkRunnerTest, InjectedCheckpointFailurePreservesCompletedLoopButFailsCommand) {
+  const ScopedDeterministicTimerSystemCalls timer_system_calls;
   BenchmarkConfig config;
   config.loop_count = 1;
   config.output_file = "/tmp/benchmark-runner-hook-unused.json";
@@ -386,6 +310,7 @@ TEST(BenchmarkRunnerTest, InjectedCheckpointFailureRejectsCompletedLoop) {
   BenchmarkBuffers buffers;
   BenchmarkStatistics stats;
   BenchmarkRunnerTestHooks hooks;
+  inject_deterministic_elapsed(hooks);
   hooks.execute_loop = [](const BenchmarkBuffers&, BenchmarkConfig&, int loop,
                           HighResTimer&, BenchmarkExecutionState*) {
     BenchmarkResults results;
@@ -408,6 +333,7 @@ TEST(BenchmarkRunnerTest, InjectedCheckpointFailureRejectsCompletedLoop) {
 }
 
 TEST(BenchmarkRunnerTest, InjectedStopBetweenLoopsPreservesCompletedLoop) {
+  const ScopedDeterministicTimerSystemCalls timer_system_calls;
   BenchmarkConfig config;
   config.loop_count = 3;
   config.output_file = "/tmp/benchmark-runner-hook-unused.json";
@@ -417,6 +343,7 @@ TEST(BenchmarkRunnerTest, InjectedStopBetweenLoopsPreservesCompletedLoop) {
   size_t stop_checks = 0;
   size_t checkpoints = 0;
   BenchmarkRunnerTestHooks hooks;
+  inject_deterministic_elapsed(hooks);
   hooks.stop_requested = [&] { return stop_checks++ >= 1; };
   hooks.execute_loop = [](const BenchmarkBuffers&, BenchmarkConfig&, int loop,
                           HighResTimer&, BenchmarkExecutionState*) {
@@ -442,115 +369,6 @@ TEST(BenchmarkRunnerTest, InjectedStopBetweenLoopsPreservesCompletedLoop) {
   EXPECT_EQ(checkpoints, 2u);
 }
 
-// Integration test: Test that statistics vectors are properly reserved
-// NOTE: This is an integration test that performs actual system operations.
-// It runs real benchmarks which may be slower and can fail on slow systems or under load.
-// Use 'make test-integration' to run integration tests, or 'make test' for unit tests only.
-TEST(BenchmarkRunnerTest, StatisticsReservationIntegration) {
-  BenchmarkConfig config;
-  BenchmarkBuffers buffers;
-  BenchmarkStatistics stats;
-  
-  initialize_system_info(config);
-  
-  // Set config with loop_count > 0
-  config.buffer_size = getpagesize();
-  config.buffer_size_mb = 1;
-  config.iterations = 1;
-  config.loop_count = 3;  // 3 loops
-  config.use_custom_cache_size = false;
-  
-  // Calculate buffer sizes and access counts (required for cache tests)
-  calculate_buffer_sizes(config);
-  calculate_access_counts(config);
-
-  // Allocate minimal buffers
-  ASSERT_TRUE(allocate_and_initialize_buffers(config, buffers));
-  
-  // Note: This will run actual benchmarks, which may take a moment
-  // but tests the full integration
-  int result = run_all_benchmarks(buffers, config, stats);
-  
-  // Should succeed
-  EXPECT_EQ(result, EXIT_SUCCESS);
-  
-  // Should have collected results for each loop
-  EXPECT_EQ(static_cast<int>(stats.all_read_bw_gb_s.size()), config.loop_count);
-  EXPECT_EQ(static_cast<int>(stats.all_write_bw_gb_s.size()), config.loop_count);
-  EXPECT_EQ(static_cast<int>(stats.all_copy_bw_gb_s.size()), config.loop_count);
-  EXPECT_EQ(static_cast<int>(stats.all_average_latency_ns.size()), config.loop_count);
-  EXPECT_EQ(static_cast<int>(stats.all_tlb_hit_latency_ns.size()), config.loop_count);
-  EXPECT_EQ(static_cast<int>(stats.all_tlb_miss_latency_ns.size()), config.loop_count);
-  EXPECT_EQ(static_cast<int>(stats.all_page_walk_penalty_ns.size()), config.loop_count);
-}
-
-// Test that benchmark results are valid and reasonable
-// This validates that the refactored calculation functions produce correct results
-TEST(BenchmarkRunnerTest, ResultsValidationIntegration) {
-  BenchmarkConfig config;
-  BenchmarkBuffers buffers;
-  BenchmarkStatistics stats;
-  
-  initialize_system_info(config);
-  
-  // Set config with loop_count > 0
-  config.buffer_size = getpagesize();
-  config.buffer_size_mb = 1;
-  config.iterations = 1;
-  config.loop_count = 1;  // Single loop for validation
-  config.use_custom_cache_size = false;
-  
-  // Calculate buffer sizes and access counts (required for cache tests)
-  calculate_buffer_sizes(config);
-  calculate_access_counts(config);
-
-  // Allocate minimal buffers
-  ASSERT_TRUE(allocate_and_initialize_buffers(config, buffers));
-  
-  // Run benchmarks
-  int result = run_all_benchmarks(buffers, config, stats);
-  ASSERT_EQ(result, EXIT_SUCCESS);
-  
-  // Validate that results were collected
-  ASSERT_EQ(static_cast<int>(stats.all_read_bw_gb_s.size()), 1);
-  ASSERT_EQ(static_cast<int>(stats.all_write_bw_gb_s.size()), 1);
-  ASSERT_EQ(static_cast<int>(stats.all_copy_bw_gb_s.size()), 1);
-  ASSERT_EQ(static_cast<int>(stats.all_average_latency_ns.size()), 1);
-  ASSERT_EQ(static_cast<int>(stats.all_tlb_hit_latency_ns.size()), 1);
-  ASSERT_EQ(static_cast<int>(stats.all_tlb_miss_latency_ns.size()), 1);
-  ASSERT_EQ(static_cast<int>(stats.all_page_walk_penalty_ns.size()), 1);
-  
-  // Validate main memory bandwidth results are reasonable
-  // Bandwidth should be positive (even if small for minimal test)
-  EXPECT_GE(stats.all_read_bw_gb_s[0], 0.0);
-  EXPECT_GE(stats.all_write_bw_gb_s[0], 0.0);
-  EXPECT_GE(stats.all_copy_bw_gb_s[0], 0.0);
-  
-  // Validate latency results are reasonable
-  // Latency should be positive
-  EXPECT_GT(stats.all_average_latency_ns[0], 0.0);
-  EXPECT_GT(stats.all_tlb_hit_latency_ns[0], 0.0);
-  EXPECT_GT(stats.all_tlb_miss_latency_ns[0], 0.0);
-  
-  // Validate that bandwidth calculations are consistent
-  // Copy bandwidth should typically be >= read or write (it's both operations)
-  // But we allow for variance, so just check they're not negative
-  EXPECT_FALSE(std::isnan(stats.all_read_bw_gb_s[0]));
-  EXPECT_FALSE(std::isnan(stats.all_write_bw_gb_s[0]));
-  EXPECT_FALSE(std::isnan(stats.all_copy_bw_gb_s[0]));
-  EXPECT_FALSE(std::isnan(stats.all_average_latency_ns[0]));
-  EXPECT_FALSE(std::isnan(stats.all_tlb_hit_latency_ns[0]));
-  EXPECT_FALSE(std::isnan(stats.all_tlb_miss_latency_ns[0]));
-  EXPECT_FALSE(std::isnan(stats.all_page_walk_penalty_ns[0]));
-  EXPECT_FALSE(std::isinf(stats.all_read_bw_gb_s[0]));
-  EXPECT_FALSE(std::isinf(stats.all_write_bw_gb_s[0]));
-  EXPECT_FALSE(std::isinf(stats.all_copy_bw_gb_s[0]));
-  EXPECT_FALSE(std::isinf(stats.all_average_latency_ns[0]));
-  EXPECT_FALSE(std::isinf(stats.all_tlb_hit_latency_ns[0]));
-  EXPECT_FALSE(std::isinf(stats.all_tlb_miss_latency_ns[0]));
-  EXPECT_FALSE(std::isinf(stats.all_page_walk_penalty_ns[0]));
-}
-
 TEST(BenchmarkRunnerTest, StatisticsPrintsPairedLocalityMetrics) {
   const std::vector<double> all_main_mem_latency = {15.0, 16.0};
   const std::vector<double> all_tlb_hit_latency = {14.0, 15.0};
@@ -564,48 +382,4 @@ TEST(BenchmarkRunnerTest, StatisticsPrintsPairedLocalityMetrics) {
   EXPECT_NE(output.find("Global-Random Latency (ns):"), std::string::npos);
   EXPECT_NE(output.find("Locality Latency Delta, Global - 16 KiB (ns):"),
             std::string::npos);
-}
-
-TEST(BenchmarkRunnerTest, MainMemoryJsonIncludesAutoTlbBreakdownWhenAvailable) {
-  BenchmarkConfig config;
-  config.only_bandwidth = false;
-  config.only_latency = true;
-
-  BenchmarkStatistics stats;
-  stats.all_average_latency_ns = {15.10, 15.90};
-  stats.all_main_mem_latency_samples = {15.20, 15.80, 16.00, 15.60};
-  stats.all_tlb_hit_latency_ns = {15.10, 15.90};
-  stats.all_tlb_miss_latency_ns = {95.10, 97.90};
-  stats.all_page_walk_penalty_ns = {80.00, 82.00};
-
-  const nlohmann::json main_memory_json = build_main_memory_json(config, stats);
-  ASSERT_TRUE(main_memory_json.contains(JsonKeys::LATENCY));
-  ASSERT_TRUE(main_memory_json[JsonKeys::LATENCY].contains(JsonKeys::AUTO_TLB_BREAKDOWN));
-
-  const nlohmann::json auto_tlb_json = main_memory_json[JsonKeys::LATENCY][JsonKeys::AUTO_TLB_BREAKDOWN];
-  ASSERT_TRUE(auto_tlb_json.contains(JsonKeys::TLB_HIT_NS));
-  ASSERT_TRUE(auto_tlb_json.contains(JsonKeys::TLB_MISS_NS));
-  ASSERT_TRUE(auto_tlb_json.contains(JsonKeys::PAGE_WALK_PENALTY_NS));
-
-  ASSERT_EQ(auto_tlb_json[JsonKeys::TLB_HIT_NS][JsonKeys::VALUES].size(), 2u);
-  ASSERT_EQ(auto_tlb_json[JsonKeys::TLB_MISS_NS][JsonKeys::VALUES].size(), 2u);
-  ASSERT_EQ(auto_tlb_json[JsonKeys::PAGE_WALK_PENALTY_NS][JsonKeys::VALUES].size(), 2u);
-
-  EXPECT_TRUE(auto_tlb_json[JsonKeys::TLB_HIT_NS].contains(JsonKeys::STATISTICS));
-  EXPECT_TRUE(auto_tlb_json[JsonKeys::TLB_MISS_NS].contains(JsonKeys::STATISTICS));
-  EXPECT_TRUE(auto_tlb_json[JsonKeys::PAGE_WALK_PENALTY_NS].contains(JsonKeys::STATISTICS));
-}
-
-TEST(BenchmarkRunnerTest, MainMemoryJsonOmitsAutoTlbBreakdownWhenUnavailable) {
-  BenchmarkConfig config;
-  config.only_bandwidth = false;
-  config.only_latency = true;
-
-  BenchmarkStatistics stats;
-  stats.all_average_latency_ns = {15.10, 15.90};
-  stats.all_main_mem_latency_samples = {15.20, 15.80, 16.00, 15.60};
-
-  const nlohmann::json main_memory_json = build_main_memory_json(config, stats);
-  ASSERT_TRUE(main_memory_json.contains(JsonKeys::LATENCY));
-  EXPECT_FALSE(main_memory_json[JsonKeys::LATENCY].contains(JsonKeys::AUTO_TLB_BREAKDOWN));
 }

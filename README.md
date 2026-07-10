@@ -90,6 +90,23 @@ Run unit tests:
 make test
 ```
 
+Run Apple Silicon integration tests or the complete suite:
+
+```bash
+make test-integration
+make test-all
+```
+
+Generate isolated LLVM production-source coverage reports under `/tmp`:
+
+```bash
+make coverage-unit
+make coverage-all
+```
+
+Reports are written to `/tmp/membenchmark-coverage-{unit,all}/report.txt`. They cover production C++ only; tests,
+GoogleTest, the bundled JSON header, generated files, and assembly are excluded from the denominator.
+
 ## Quick Usage
 
 Examples below use the Homebrew/`PATH` form (`memory_benchmark ...`).
@@ -180,6 +197,10 @@ Long options require `--`. A single dash is only valid for one-character short o
 | `-X` | `--sweep-max-runs` |
 | `-h` | `--help` |
 
+Numeric option values are parsed as complete decimal tokens: whitespace,
+leading `+`, trailing text, overflow, and signs on unsigned seeds are rejected.
+Sweep value lists also reject empty leading, middle, or trailing items.
+
 - `--benchmark`: Run standard memory benchmark. Mutually exclusive with `--patterns`. Required for standard, `--only-bandwidth`, and `--only-latency` modes.
 
 - `--buffer-size <MB>`: Main buffer size (default `512`; auto-capped by memory safety rules).
@@ -211,7 +232,7 @@ Long options require `--`. A single dash is only valid for one-character short o
 - `--sweep <key=a,b>`: Sweep supported parameters. Standard benchmark keys: `buffer-size`, `cache-size`, `threads`, `latency-tlb-locality-kb`, `latency-stride-bytes`, `latency-chain-mode`; pattern keys: `buffer-size`, `threads`; TLB analysis keys: `latency-stride-bytes`, `latency-chain-mode`, `tlb-density`; core-to-core keys: `count`, `latency-samples`.
 - `--sweep-max-runs <count>`: Maximum generated sweep runs (general default `256`; `--analyze-tlb` default `16`). An explicit value overrides the mode default.
 
-Sweep configurations are fully validated before the first run. A parameter key may appear only once in a sweep command. Standard, pattern, and TLB sweep JSON is atomically checkpointed after each stored run result; in those envelopes, `completed_runs` is the number of stored `runs` entries, so a gracefully interrupted nested result can be included in that count. A later hard failure preserves earlier entries and records top-level `status: "failed"`. Core-to-core sweeps checkpoint after every attempted run and retain the failed attempt's nested result, but their `completed_runs` counts only nested runs whose status is `complete`, so `runs` may contain more entries than `completed_runs`. Every sweep envelope also includes `planned_runs` and `conclusions_valid`.
+Sweep configurations are fully validated before the first run. A parameter key may appear only once in a sweep command. Standard, pattern, and TLB sweep JSON is atomically checkpointed after every attempted run. Each stored run records its own `status` and `status_reason`; `attempted_runs` counts those entries, while `completed_runs` counts only mode-specific nested results that are genuinely complete. Interrupted, partial, and failed attempts therefore remain auditable without making conclusions valid, and a later failure preserves earlier entries. Core-to-core sweeps use the same attempted-run records and count a nested run only when its status is complete and `measurements_complete` is true. Every sweep envelope also includes `planned_runs` and `conclusions_valid`.
 
 ## Typical Workflows
 

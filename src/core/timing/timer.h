@@ -30,6 +30,23 @@
 // macOS specific: High-resolution timer
 #include <mach/mach_time.h>
 
+/** @brief Injectable Mach clock operations for deterministic timer tests. */
+struct TimerSystemCalls {
+    uint64_t (*absolute_time)() = ::mach_absolute_time;
+    kern_return_t (*timebase_info)(mach_timebase_info_t) = ::mach_timebase_info;
+};
+
+void set_timer_system_calls_for_testing(const TimerSystemCalls& calls);
+void reset_timer_system_calls_for_testing();
+
+/**
+ * @brief Convert Mach ticks to nanoseconds with a validated timebase.
+ * @return Converted value, or nullopt when the denominator is zero.
+ */
+std::optional<double> convert_mach_ticks_to_nanoseconds(uint64_t ticks,
+                                                        uint32_t numer,
+                                                        uint32_t denom);
+
 // --- High-resolution timer helper ---
 /**
  * @struct HighResTimer
@@ -73,4 +90,3 @@ private:
 };
 
 #endif // TIMER_H
-

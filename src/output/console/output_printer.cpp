@@ -296,18 +296,33 @@ void print_results(int loop, const BenchmarkConfig& config,
                                           results.main_latency)
                 << std::endl;
     }
-    if (results.locality_16k_latency.is_measured() &&
-        results.global_random_latency.is_measured() &&
-        results.locality_latency_delta.is_measured()) {
-      std::cout << Messages::results_latency_tlb_hit(
-                       *results.locality_16k_latency.value)
-                << std::endl;
-      std::cout << Messages::results_latency_tlb_miss(
-                       *results.global_random_latency.value)
-                << std::endl;
-      std::cout << Messages::results_latency_page_walk_penalty(
-                       *results.locality_latency_delta.value)
-                << std::endl;
+    const bool locality_comparison_attempted =
+        results.locality_16k_latency.status != BenchmarkMeasurementStatus::NotRun ||
+        results.global_random_latency.status != BenchmarkMeasurementStatus::NotRun ||
+        results.locality_latency_delta.status != BenchmarkMeasurementStatus::NotRun;
+    if (locality_comparison_attempted) {
+      std::cout
+          << (results.locality_16k_latency.is_measured()
+                  ? Messages::results_latency_tlb_hit(
+                        *results.locality_16k_latency.value)
+                  : unavailable_measurement("  16 KiB locality latency",
+                                            results.locality_16k_latency))
+          << std::endl;
+      std::cout
+          << (results.global_random_latency.is_measured()
+                  ? Messages::results_latency_tlb_miss(
+                        *results.global_random_latency.value)
+                  : unavailable_measurement("  Global-random latency",
+                                            results.global_random_latency))
+          << std::endl;
+      std::cout
+          << (results.locality_latency_delta.is_measured()
+                  ? Messages::results_latency_page_walk_penalty(
+                        *results.locality_latency_delta.value)
+                  : unavailable_measurement(
+                        "  Locality latency delta (global - 16 KiB)",
+                        results.locality_latency_delta))
+          << std::endl;
     }
   }
 
@@ -377,7 +392,9 @@ void print_results(int loop, const BenchmarkConfig& config,
  * @param use_custom_cache_size Flag indicating if custom cache size is being used
  * @param custom_cache_size_bytes Custom cache size in bytes
  */
-void print_cache_info(size_t l1_cache_size, size_t l2_cache_size, bool use_custom_cache_size, size_t custom_cache_size_bytes) {
+void print_cache_info(size_t l1_cache_size, size_t l2_cache_size,
+                      bool use_custom_cache_size,
+                      size_t custom_cache_size_bytes) {
   std::cout << Messages::cache_info_header() << std::endl;
   std::cout << std::fixed << std::setprecision(Constants::LATENCY_PRECISION);
   

@@ -73,11 +73,9 @@ std::string error_latency_tlb_locality_page_multiple(size_t value_kb, size_t pag
 std::string error_latency_tlb_locality_too_small_for_stride(size_t locality_bytes, size_t stride_bytes);
 std::string error_threads_invalid(long long value, long long min_val, long long max_val);
 const std::string& error_analyze_tlb_must_be_used_alone();
-const std::string& error_seed_requires_patterns();
-const std::string& error_seed_requires_benchmark_or_patterns();
+const std::string& error_seed_requires_supported_mode();
 std::string error_duplicate_sweep_parameter(const std::string& parameter_name);
 const std::string& error_analyze_core_to_core_must_be_used_alone();
-const std::string& error_core_to_core_timer_creation_failed();
 std::string error_core_to_core_measurement_failed(const std::string& reason);
 const std::string& error_tlb_analysis_insufficient_memory();
 const std::string& error_tlb_analysis_timer_creation_failed();
@@ -94,8 +92,6 @@ std::string error_sysctlbyname_failed(const std::string& operation, const std::s
 std::string error_mach_timebase_info_failed(const std::string& error_details);
 std::string error_benchmark_tests(const std::string& error);
 std::string error_benchmark_loop(int loop, const std::string& error);
-std::string error_json_parse_failed(const std::string& error_details);
-std::string error_json_file_read_failed(const std::string& file_path, const std::string& error_details);
 std::string error_file_write_failed(const std::string& file_path, const std::string& error_details);
 std::string error_file_permission_denied(const std::string& file_path);
 std::string error_file_directory_creation_failed(const std::string& dir_path, const std::string& error_details);
@@ -105,7 +101,6 @@ std::string error_indices_empty();
 std::string error_index_out_of_bounds(size_t index, size_t index_value, size_t buffer_size);
 std::string error_index_not_aligned(size_t index, size_t index_value);
 std::string error_buffer_too_small_strided(size_t min_bytes);
-std::string error_no_iterations_strided();
 std::string error_buffer_size_zero(const std::string& buffer_name);
 const std::string& error_main_buffer_size_zero();
 const std::string& error_buffer_size_overflow_calculation();
@@ -141,7 +136,6 @@ const std::string& error_only_bandwidth_with_latency_samples();
 const std::string& error_buffersize_zero_requires_only_latency();
 const std::string& error_cache_size_zero_requires_only_latency();
 const std::string& error_only_latency_requires_latency_target();
-const std::string& error_only_latency_with_buffersize();
 const std::string& error_only_latency_with_iterations();
 std::string error_mutually_exclusive_modes(const std::string& mode1, const std::string& mode2);
 const std::string& error_only_flags_require_benchmark();
@@ -221,7 +215,6 @@ std::string report_core_to_core_work_plan(size_t calibration_round_trips,
                                          size_t sample_window_round_trips);
 std::string report_core_to_core_round_trip(double round_trip_ns);
 std::string report_core_to_core_one_way_estimate(double one_way_ns);
-std::string report_core_to_core_samples(size_t sample_count);
 std::string report_core_to_core_headline_statistics(size_t loop_count);
 std::string report_core_to_core_sample_statistics(size_t sample_count);
 std::string report_core_to_core_hint_status(const std::string& thread_role,
@@ -354,8 +347,6 @@ std::string cache_size_custom(size_t size_bytes);
 std::string cache_size_custom_disabled();
 std::string cache_size_l1(size_t size_bytes);
 std::string cache_size_l2(size_t size_bytes);
-std::string cache_size_per_pcore();
-std::string cache_size_per_pcore_cluster();
 
 // --- Results Output Messages ---
 std::string results_loop_header(int loop);
@@ -380,7 +371,6 @@ std::string results_cache_copy_bandwidth(double bw_gb_s);
 std::string results_buffer_size_bytes(size_t buffer_size);
 std::string results_buffer_size_kb(double buffer_size_kb);
 std::string results_buffer_size_mb(double buffer_size_mb);
-std::string results_cache_latency_ns(double latency_ns);
 std::string results_separator();
 std::string results_cache_latency_custom_ns(double latency_ns, size_t buffer_size);
 std::string results_cache_latency_custom_ns_kb(double latency_ns, double buffer_size_kb);
@@ -467,7 +457,6 @@ const std::string& pattern_read_label();
 const std::string& pattern_write_label();
 const std::string& pattern_copy_label();
 const std::string& pattern_bandwidth_unit();
-const std::string& pattern_bandwidth_unit_newline();
 std::string pattern_measurement_unavailable(const std::string& status,
                                             const std::string& reason);
 std::string warning_pattern_measurement_noisy(const std::string& metric,

@@ -2,7 +2,7 @@
 
 ## 1. Purpose
 
-This document specifies how `macOS-memory-benchmark` implements standalone TLB analysis mode (`--analyze-tlb`) in version `0.58.1`.
+This document specifies how `macOS-memory-benchmark` implements standalone TLB analysis mode (`--analyze-tlb`) in version `0.59.0`.
 
 The goal is to provide a reproducible, implementation-accurate description of:
 
@@ -525,7 +525,7 @@ the production serializer. Its deliberately synthetic inputs make this a contrac
       "active_cache_line_footprint_bytes": 2097152
     }
   },
-  "version": "0.58.1"
+  "version": "0.59.0"
 }
 ```
 

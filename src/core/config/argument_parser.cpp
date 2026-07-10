@@ -49,15 +49,84 @@
 #include "core/system/system_info.h"
 #include "output/console/messages/messages_api.h"
 #include "utils/benchmark.h"
+#include <charconv>
 #include <chrono>
 #include <iostream>
 #include <limits>
 #include <random>
 #include <stdexcept>
-#include <sstream>
 #include <cmath>
 #include <cstdlib>
 #include <vector>
+
+StrictIntegerParseStatus parse_strict_signed_decimal(const std::string& value,
+                                                     long long& out_value) {
+  if (value.empty()) {
+    return StrictIntegerParseStatus::Invalid;
+  }
+
+  const char* const begin = value.data();
+  const char* const end = begin + value.size();
+  const std::from_chars_result result = std::from_chars(begin, end, out_value, 10);
+  if (result.ec == std::errc::result_out_of_range) {
+    return StrictIntegerParseStatus::OutOfRange;
+  }
+  if (result.ec != std::errc{} || result.ptr != end) {
+    return StrictIntegerParseStatus::Invalid;
+  }
+  return StrictIntegerParseStatus::Success;
+}
+
+StrictIntegerParseStatus parse_strict_unsigned_decimal(const std::string& value,
+                                                       uint64_t& out_value) {
+  if (value.empty()) {
+    return StrictIntegerParseStatus::Invalid;
+  }
+
+  const char* const begin = value.data();
+  const char* const end = begin + value.size();
+  const std::from_chars_result result = std::from_chars(begin, end, out_value, 10);
+  if (result.ec == std::errc::result_out_of_range) {
+    return StrictIntegerParseStatus::OutOfRange;
+  }
+  if (result.ec != std::errc{} || result.ptr != end) {
+    return StrictIntegerParseStatus::Invalid;
+  }
+  return StrictIntegerParseStatus::Success;
+}
+
+const char* strict_signed_decimal_error_reason(StrictIntegerParseStatus status) {
+  return status == StrictIntegerParseStatus::OutOfRange
+             ? "out of range"
+             : "must be an integer without whitespace, a plus sign, or trailing characters";
+}
+
+const char* strict_unsigned_decimal_error_reason(StrictIntegerParseStatus status) {
+  return status == StrictIntegerParseStatus::OutOfRange
+             ? "out of range for an unsigned 64-bit integer"
+             : "must be an unsigned 64-bit integer without whitespace, a sign, or trailing characters";
+}
+
+namespace {
+
+ConfigTestHooks active_test_hooks;
+bool test_hooks_active = false;
+
+}  // namespace
+
+void set_config_test_hooks(const ConfigTestHooks* hooks) {
+  if (hooks == nullptr) {
+    active_test_hooks = ConfigTestHooks{};
+    test_hooks_active = false;
+    return;
+  }
+  active_test_hooks = *hooks;
+  test_hooks_active = true;
+}
+
+const ConfigTestHooks* get_config_test_hooks() {
+  return test_hooks_active ? &active_test_hooks : nullptr;
+}
 
 namespace {
 
@@ -107,7 +176,29 @@ bool is_option(const std::string& arg, const char* short_option, const char* lon
   return arg == short_option || arg == long_option;
 }
 
+long long parse_signed_decimal_or_throw(const std::string& value) {
+  long long parsed = 0;
+  const StrictIntegerParseStatus status = parse_strict_signed_decimal(value, parsed);
+  if (status != StrictIntegerParseStatus::Success) {
+    throw std::out_of_range(strict_signed_decimal_error_reason(status));
+  }
+  return parsed;
+}
+
+uint64_t parse_unsigned_decimal_or_throw(const std::string& value) {
+  uint64_t parsed = 0;
+  const StrictIntegerParseStatus status = parse_strict_unsigned_decimal(value, parsed);
+  if (status != StrictIntegerParseStatus::Success) {
+    throw std::out_of_range(strict_unsigned_decimal_error_reason(status));
+  }
+  return parsed;
+}
+
 uint64_t generate_seed() {
+  const ConfigTestHooks* hooks = get_config_test_hooks();
+  if (hooks != nullptr && hooks->generated_seed != 0) {
+    return hooks->generated_seed;
+  }
   try {
     std::random_device random_device;
     const uint64_t high = static_cast<uint64_t>(random_device()) << 32U;
@@ -141,10 +232,15 @@ bool tlb_sweep_density_from_string(const std::string& value, TlbSweepDensity& ou
 
 std::vector<std::string> split_comma_values(const std::string& input) {
   std::vector<std::string> values;
-  std::stringstream stream(input);
-  std::string item;
-  while (std::getline(stream, item, ',')) {
-    values.push_back(item);
+  size_t value_start = 0;
+  while (value_start <= input.size()) {
+    const size_t comma = input.find(',', value_start);
+    if (comma == std::string::npos) {
+      values.push_back(input.substr(value_start));
+      break;
+    }
+    values.push_back(input.substr(value_start, comma - value_start));
+    value_start = comma + 1;
   }
   return values;
 }
@@ -226,7 +322,7 @@ SweepSpec parse_sweep_spec(const std::string& spec_text) {
         throw std::out_of_range("must be one of: low, medium, high");
       }
     } else {
-      const long long parsed = std::stoll(raw_value);
+      const long long parsed = parse_signed_decimal_or_throw(raw_value);
       switch (spec.parameter) {
         case SweepParameter::BufferSizeMb:
           if (parsed < 0 || parsed > std::numeric_limits<unsigned long>::max()) {
@@ -285,7 +381,7 @@ SweepSpec parse_sweep_spec(const std::string& spec_text) {
  * 
  * Rationale:
  * - Argument parsing involves multiple validation points with complex logic
- * - Standard library functions (std::stoll) throw exceptions naturally
+ * - Strict numeric conversion reports malformed and out-of-range tokens through exceptions
  * - Exceptions allow early termination without deeply nested conditionals
  * - Cleaner code flow for validation logic
  * - BUT: Must convert to return codes at boundary (called from main())
@@ -396,7 +492,7 @@ int parse_arguments(int argc, char* argv[], BenchmarkConfig& config) {
           return EXIT_FAILURE;
         }
         try {
-          const long long val_ll = std::stoll(argv[i]);
+          const long long val_ll = parse_signed_decimal_or_throw(argv[i]);
           if (val_ll <= 0) {
             throw std::out_of_range("must be a positive integer");
           }
@@ -437,16 +533,10 @@ int parse_arguments(int argc, char* argv[], BenchmarkConfig& config) {
         const std::string stride_value = argv[i];
         long long val_ll = 0;
         try {
-          val_ll = std::stoll(stride_value);
-        } catch (const std::invalid_argument&) {
+          val_ll = parse_signed_decimal_or_throw(stride_value);
+        } catch (const std::out_of_range& e) {
           std::cerr << Messages::error_prefix()
-                    << Messages::error_invalid_value(arg, stride_value, "must be an integer")
-                    << std::endl;
-          print_usage(argv[0]);
-          return EXIT_FAILURE;
-        } catch (const std::out_of_range&) {
-          std::cerr << Messages::error_prefix()
-                    << Messages::error_invalid_value(arg, stride_value, "out of range")
+                    << Messages::error_invalid_value(arg, stride_value, e.what())
                     << std::endl;
           print_usage(argv[0]);
           return EXIT_FAILURE;
@@ -570,21 +660,7 @@ int parse_arguments(int argc, char* argv[], BenchmarkConfig& config) {
 
         const std::string seed_value = argv[i];
         try {
-          if (!seed_value.empty() && seed_value.front() == '-') {
-            throw std::out_of_range("must be an unsigned 64-bit integer");
-          }
-          size_t parsed_characters = 0;
-          const unsigned long long parsed_seed = std::stoull(seed_value, &parsed_characters);
-          if (parsed_characters != seed_value.size()) {
-            throw std::invalid_argument("must be an unsigned 64-bit integer");
-          }
-          config.tlb_seed = static_cast<uint64_t>(parsed_seed);
-        } catch (const std::invalid_argument& e) {
-          std::cerr << Messages::error_prefix()
-                    << Messages::error_invalid_value(arg, seed_value, e.what())
-                    << std::endl;
-          print_usage(argv[0]);
-          return EXIT_FAILURE;
+          config.tlb_seed = parse_unsigned_decimal_or_throw(seed_value);
         } catch (const std::out_of_range& e) {
           std::cerr << Messages::error_prefix()
                     << Messages::error_invalid_value(arg, seed_value, e.what())
@@ -624,9 +700,7 @@ int parse_arguments(int argc, char* argv[], BenchmarkConfig& config) {
         if (cache_size_seen)
           throw std::invalid_argument(Messages::error_duplicate_option(OPT_CACHE_SIZE_LONG));
         if (++i < argc) {
-          // std::stoll() throws std::invalid_argument if conversion fails
-          // std::stoll() throws std::out_of_range if value out of range
-          long long val_ll = std::stoll(argv[i]);
+          long long val_ll = parse_signed_decimal_or_throw(argv[i]);
           // Error: Value validation - out of valid range
           // Note: 0 is accepted here and validated later (allowed only with --only-latency)
           if (val_ll < 0 || val_ll > Constants::MAX_CACHE_SIZE_KB ||
@@ -653,12 +727,14 @@ int parse_arguments(int argc, char* argv[], BenchmarkConfig& config) {
     }
   }
 
-  // Get system info
-  config.cpu_name = get_processor_name();
-  config.macos_version = get_macos_version();
-  config.perf_cores = get_performance_cores();
-  config.eff_cores = get_efficiency_cores();
-  int max_cores = get_total_logical_cores();
+  // Get system info. Unit tests may provide a deterministic platform snapshot.
+  const ConfigTestHooks* test_hooks = get_config_test_hooks();
+  const bool use_injected_system_info = test_hooks != nullptr && test_hooks->use_system_info;
+  config.cpu_name = use_injected_system_info ? test_hooks->cpu_name : get_processor_name();
+  config.macos_version = use_injected_system_info ? test_hooks->macos_version : get_macos_version();
+  config.perf_cores = use_injected_system_info ? test_hooks->performance_cores : get_performance_cores();
+  config.eff_cores = use_injected_system_info ? test_hooks->efficiency_cores : get_efficiency_cores();
+  int max_cores = use_injected_system_info ? test_hooks->total_logical_cores : get_total_logical_cores();
   config.num_threads = max_cores;  // Default: use all available cores
   
   // Determine if custom cache size is being used
@@ -668,8 +744,8 @@ int parse_arguments(int argc, char* argv[], BenchmarkConfig& config) {
   if (config.use_custom_cache_size) {
     config.custom_cache_size_bytes = static_cast<size_t>(config.custom_cache_size_kb_ll) * Constants::BYTES_PER_KB;
   } else {
-    config.l1_cache_size = get_l1_cache_size();
-    config.l2_cache_size = get_l2_cache_size();
+    config.l1_cache_size = use_injected_system_info ? test_hooks->l1_cache_size : get_l1_cache_size();
+    config.l2_cache_size = use_injected_system_info ? test_hooks->l2_cache_size : get_l2_cache_size();
   }
   
   // Set default access counts from constants
@@ -699,8 +775,7 @@ int parse_arguments(int argc, char* argv[], BenchmarkConfig& config) {
         if (iterations_seen)
           throw std::invalid_argument(Messages::error_duplicate_option(OPT_ITERATIONS_LONG));
         if (++i < argc) {
-          // Error: std::stoll() may throw std::invalid_argument or std::out_of_range
-          long long val_ll = std::stoll(argv[i]);
+          long long val_ll = parse_signed_decimal_or_throw(argv[i]);
           // Error: Value validation - out of valid range
           if (val_ll <= 0 || val_ll > std::numeric_limits<int>::max())
             throw std::out_of_range(Messages::error_iterations_invalid(val_ll, 1, std::numeric_limits<int>::max()));
@@ -714,8 +789,7 @@ int parse_arguments(int argc, char* argv[], BenchmarkConfig& config) {
         if (buffersize_seen)
           throw std::invalid_argument(Messages::error_duplicate_option(OPT_BUFFER_SIZE_LONG));
         if (++i < argc) {
-          // Error: std::stoll() may throw exceptions
-          long long val_ll = std::stoll(argv[i]);
+          long long val_ll = parse_signed_decimal_or_throw(argv[i]);
           // Error: Value validation - out of valid range
           // Note: 0 is accepted here and validated later (allowed only with --only-latency)
           if (val_ll < 0 || val_ll > std::numeric_limits<unsigned long>::max())
@@ -730,8 +804,7 @@ int parse_arguments(int argc, char* argv[], BenchmarkConfig& config) {
         if (count_seen)
           throw std::invalid_argument(Messages::error_duplicate_option(OPT_COUNT_LONG));
         if (++i < argc) {
-          // Error: std::stoll() may throw exceptions
-          long long val_ll = std::stoll(argv[i]);
+          long long val_ll = parse_signed_decimal_or_throw(argv[i]);
           // Error: Value validation - out of valid range
           if (val_ll <= 0 || val_ll > std::numeric_limits<int>::max())
             throw std::out_of_range(Messages::error_count_invalid(val_ll, 1, std::numeric_limits<int>::max()));
@@ -744,8 +817,7 @@ int parse_arguments(int argc, char* argv[], BenchmarkConfig& config) {
         if (latency_samples_seen)
           throw std::invalid_argument(Messages::error_duplicate_option(OPT_LATENCY_SAMPLES_LONG));
         if (++i < argc) {
-          // Error: std::stoll() may throw exceptions
-          long long val_ll = std::stoll(argv[i]);
+          long long val_ll = parse_signed_decimal_or_throw(argv[i]);
           // Error: Value validation - out of valid range
           if (val_ll <= 0 || val_ll > std::numeric_limits<int>::max())
             throw std::out_of_range(Messages::error_latency_samples_invalid(val_ll, 1, std::numeric_limits<int>::max()));
@@ -759,7 +831,7 @@ int parse_arguments(int argc, char* argv[], BenchmarkConfig& config) {
         if (latency_stride_seen)
           throw std::invalid_argument(Messages::error_duplicate_option(OPT_LATENCY_STRIDE_LONG));
         if (++i < argc) {
-          long long val_ll = std::stoll(argv[i]);
+          long long val_ll = parse_signed_decimal_or_throw(argv[i]);
           if (val_ll <= 0) {
             throw std::out_of_range(Messages::error_latency_stride_invalid(
                 val_ll, 1, std::numeric_limits<long long>::max()));
@@ -788,7 +860,7 @@ int parse_arguments(int argc, char* argv[], BenchmarkConfig& config) {
         if (latency_tlb_locality_seen)
           throw std::invalid_argument(Messages::error_duplicate_option(OPT_LATENCY_TLB_LOCALITY_LONG));
         if (++i < argc) {
-          long long val_ll = std::stoll(argv[i]);
+          long long val_ll = parse_signed_decimal_or_throw(argv[i]);
           const long long max_locality_kb =
               static_cast<long long>(std::numeric_limits<size_t>::max() / Constants::BYTES_PER_KB);
           if (val_ll < 0 || val_ll > max_locality_kb) {
@@ -819,7 +891,7 @@ int parse_arguments(int argc, char* argv[], BenchmarkConfig& config) {
         if (sweep_max_runs_seen)
           throw std::invalid_argument(Messages::error_duplicate_option(OPT_SWEEP_MAX_RUNS_LONG));
         if (++i < argc) {
-          long long val_ll = std::stoll(argv[i]);
+          long long val_ll = parse_signed_decimal_or_throw(argv[i]);
           if (val_ll <= 0) {
             throw std::out_of_range("sweep-max-runs must be a positive integer");
           }
@@ -841,16 +913,7 @@ int parse_arguments(int argc, char* argv[], BenchmarkConfig& config) {
         if (seed_seen)
           throw std::invalid_argument(Messages::error_duplicate_option(OPT_SEED_LONG));
         if (++i < argc) {
-          const std::string seed_value = argv[i];
-          if (!seed_value.empty() && seed_value.front() == '-') {
-            throw std::out_of_range("must be an unsigned 64-bit integer");
-          }
-          size_t parsed_characters = 0;
-          const unsigned long long parsed_seed = std::stoull(seed_value, &parsed_characters);
-          if (parsed_characters != seed_value.size()) {
-            throw std::invalid_argument("must be an unsigned 64-bit integer");
-          }
-          parsed_general_seed = static_cast<uint64_t>(parsed_seed);
+          parsed_general_seed = parse_unsigned_decimal_or_throw(argv[i]);
         } else {
           throw std::invalid_argument(Messages::error_missing_value(OPT_SEED_LONG));
         }
@@ -875,8 +938,7 @@ int parse_arguments(int argc, char* argv[], BenchmarkConfig& config) {
         if (threads_seen)
           throw std::invalid_argument(Messages::error_duplicate_option(OPT_THREADS_LONG));
         if (++i < argc) {
-          // Error: std::stoll() may throw exceptions
-          long long val_ll = std::stoll(argv[i]);
+          long long val_ll = parse_signed_decimal_or_throw(argv[i]);
           // Error: Value validation - out of valid range
           if (val_ll <= 0 || val_ll > std::numeric_limits<int>::max())
             throw std::out_of_range(Messages::error_threads_invalid(val_ll, 1, std::numeric_limits<int>::max()));
@@ -896,7 +958,13 @@ int parse_arguments(int argc, char* argv[], BenchmarkConfig& config) {
     } catch (const std::invalid_argument &e) {
       // Exception caught: Convert to return code
       // Error: Invalid argument (missing value, unknown option, etc.)
-      std::cerr << Messages::error_prefix() << e.what() << std::endl;
+      std::cerr << Messages::error_prefix();
+      if (is_option(arg, OPT_SWEEP_SHORT, OPT_SWEEP_LONG) && i < argc) {
+        std::cerr << Messages::error_invalid_value(arg, argv[i], e.what());
+      } else {
+        std::cerr << e.what();
+      }
+      std::cerr << std::endl;
       print_usage(argv[0]);
       return EXIT_FAILURE;  // Convert exception to return code
     } catch (const std::out_of_range &e) {

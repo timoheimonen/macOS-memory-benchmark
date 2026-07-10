@@ -51,9 +51,6 @@ double run_pattern_read_strided_test(void* buffer, const PatternWorkPlan& plan, 
 double run_pattern_write_strided_test(void* buffer, const PatternWorkPlan& plan, HighResTimer& timer);
 double run_pattern_copy_strided_test(void* dst, void* src, const PatternWorkPlan& plan, HighResTimer& timer);
 
-// Forward declarations from validation.cpp
-bool validate_stride(size_t stride, size_t buffer_size);
-
 // Forward declarations from execution_utils.cpp
 double calculate_bandwidth(size_t data_size, int iterations, double elapsed_time_ns);
 

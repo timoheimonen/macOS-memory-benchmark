@@ -1,4 +1,4 @@
-// Copyright 2025 Timo Heimonen <timo.heimonen@proton.me>
+// Copyright 2026 Timo Heimonen <timo.heimonen@proton.me>
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -12,275 +12,195 @@
 //
 // You should have received a copy of the GNU General Public License
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
-//
+
 #include <gtest/gtest.h>
-#include "core/memory/buffer_manager.h"
-#include "core/config/config.h"
-#include "core/config/constants.h"
-#include "utils/benchmark.h"  // Declares system_info functions
-#include "test_config_helpers.h"
+
+#include <cstddef>
 #include <cstdlib>
 #include <limits>
+#include <string>
 
-// Test buffer allocation with valid config
-TEST(BufferManagerTest, AllocateAllBuffersValid) {
+#include "core/config/config.h"
+#include "core/config/constants.h"
+#include "core/memory/buffer_manager.h"
+#include "output/console/messages/messages_api.h"
+#include "test_config_helpers.h"
+#include "test_memory_system_calls.h"
+
+class BufferManagerTest : public FakeMemorySystemCallsTest {};
+
+namespace {
+
+BenchmarkConfig make_bandwidth_config() {
   BenchmarkConfig config;
-  config.buffer_size = 1024 * 1024;  // 1 MB
-  config.l1_buffer_size = 64 * 1024;  // 64 KB
-  config.l2_buffer_size = 512 * 1024;  // 512 KB
-  config.use_custom_cache_size = false;
-  
-  initialize_system_info(config);
-  
-  BenchmarkBuffers buffers;
-  int result = allocate_all_buffers(config, buffers);
-  
-  EXPECT_EQ(result, EXIT_SUCCESS);
-  EXPECT_NE(buffers.src_buffer(), nullptr);
-  EXPECT_NE(buffers.dst_buffer(), nullptr);
-  EXPECT_NE(buffers.lat_buffer(), nullptr);
-  EXPECT_NE(buffers.l1_buffer(), nullptr);
-  EXPECT_NE(buffers.l2_buffer(), nullptr);
+  config.buffer_size = 512;
+  config.only_bandwidth = true;
+  config.only_latency = false;
+  config.max_total_allowed_mb = 0;
+  return config;
 }
 
-// Test buffer allocation with custom cache size
-TEST(BufferManagerTest, AllocateAllBuffersCustomCache) {
-  BenchmarkConfig config;
-  config.buffer_size = 1024 * 1024;  // 1 MB
-  config.use_custom_cache_size = true;
-  config.custom_buffer_size = 128 * 1024;  // 128 KB
-  
-  initialize_system_info(config);
-  config.custom_cache_size_bytes = config.custom_buffer_size;
-  
-  BenchmarkBuffers buffers;
-  int result = allocate_all_buffers(config, buffers);
-  
-  EXPECT_EQ(result, EXIT_SUCCESS);
-  EXPECT_NE(buffers.src_buffer(), nullptr);
-  EXPECT_NE(buffers.dst_buffer(), nullptr);
-  EXPECT_NE(buffers.lat_buffer(), nullptr);
-  EXPECT_NE(buffers.custom_buffer(), nullptr);
+}  // namespace
+
+TEST_F(BufferManagerTest, DefaultCacheAllocationHasExactModeShape) {
+  BenchmarkConfig config = make_bandwidth_config();
+  config.l1_buffer_size = 64;
+  config.l2_buffer_size = 128;
+
+  {
+    BenchmarkBuffers buffers;
+    ASSERT_EQ(allocate_all_buffers(config, buffers), EXIT_SUCCESS);
+
+    EXPECT_NE(buffers.src_buffer(), nullptr);
+    EXPECT_NE(buffers.dst_buffer(), nullptr);
+    EXPECT_EQ(buffers.lat_buffer(), nullptr);
+    EXPECT_EQ(buffers.l1_buffer(), nullptr);
+    EXPECT_EQ(buffers.l2_buffer(), nullptr);
+    EXPECT_NE(buffers.l1_bw_src(), nullptr);
+    EXPECT_NE(buffers.l1_bw_dst(), nullptr);
+    EXPECT_NE(buffers.l2_bw_src(), nullptr);
+    EXPECT_NE(buffers.l2_bw_dst(), nullptr);
+    EXPECT_EQ(buffers.custom_buffer(), nullptr);
+    EXPECT_EQ(state.map_calls, 6u);
+    EXPECT_EQ(state.advise_calls, 6u);
+    EXPECT_EQ(state.last_advice, MADV_WILLNEED);
+  }
+  EXPECT_EQ(state.unmap_calls, 6u);
 }
 
-// Test buffer helper methods return valid pointers
-TEST(BufferManagerTest, BufferHelperMethods) {
-  BenchmarkConfig config;
-  config.buffer_size = 1024 * 1024;  // 1 MB
-  config.l1_buffer_size = 64 * 1024;  // 64 KB
-  config.l2_buffer_size = 512 * 1024;  // 512 KB
-  config.use_custom_cache_size = false;
-  
-  initialize_system_info(config);
-  
-  BenchmarkBuffers buffers;
-  int result = allocate_all_buffers(config, buffers);
-  ASSERT_EQ(result, EXIT_SUCCESS);
-  
-  // Test helper methods
-  EXPECT_EQ(buffers.src_buffer(), buffers.src_buffer_ptr.get());
-  EXPECT_EQ(buffers.dst_buffer(), buffers.dst_buffer_ptr.get());
-  EXPECT_EQ(buffers.lat_buffer(), buffers.lat_buffer_ptr.get());
-  EXPECT_EQ(buffers.l1_buffer(), buffers.l1_buffer_ptr.get());
-  EXPECT_EQ(buffers.l2_buffer(), buffers.l2_buffer_ptr.get());
+TEST_F(BufferManagerTest, PatternNonCacheableModeRequestsOnlyTwoRandomHintedBuffers) {
+  BenchmarkConfig config = make_bandwidth_config();
+  config.run_patterns = true;
+  config.use_non_cacheable = true;
+  config.l1_buffer_size = 128;
+  config.l2_buffer_size = 256;
+
+  {
+    BenchmarkBuffers buffers;
+    ASSERT_EQ(allocate_all_buffers(config, buffers), EXIT_SUCCESS);
+    EXPECT_NE(buffers.src_buffer(), nullptr);
+    EXPECT_NE(buffers.dst_buffer(), nullptr);
+    EXPECT_EQ(buffers.l1_bw_src(), nullptr);
+    EXPECT_EQ(buffers.l2_bw_src(), nullptr);
+    EXPECT_EQ(state.map_calls, 2u);
+    EXPECT_EQ(state.advise_calls, 2u);
+    EXPECT_EQ(state.last_advice, MADV_RANDOM);
+  }
+  EXPECT_EQ(state.unmap_calls, 2u);
 }
 
-// Test buffer initialization
-TEST(BufferManagerTest, InitializeAllBuffers) {
-  BenchmarkConfig config;
-  config.buffer_size = 1024 * 1024;  // 1 MB
-  config.l1_buffer_size = 64 * 1024;  // 64 KB
-  config.l2_buffer_size = 512 * 1024;  // 512 KB
-  config.use_custom_cache_size = false;
-  
-  initialize_system_info(config);
-  
-  BenchmarkBuffers buffers;
-  ASSERT_TRUE(allocate_and_initialize_buffers(config, buffers));
+TEST_F(BufferManagerTest, NthAllocationFailureKeepsOwnershipUntilPartialStateDestruction) {
+  BenchmarkConfig config = make_bandwidth_config();
+  config.run_patterns = true;
+  state.fail_map_on_call = 2;
+
+  {
+    BenchmarkBuffers buffers;
+    testing::internal::CaptureStderr();
+    EXPECT_EQ(allocate_all_buffers(config, buffers), EXIT_FAILURE);
+    const std::string error = testing::internal::GetCapturedStderr();
+
+    EXPECT_NE(buffers.src_buffer(), nullptr);
+    EXPECT_EQ(buffers.dst_buffer(), nullptr);
+    EXPECT_EQ(state.map_calls, 2u);
+    EXPECT_EQ(state.unmap_calls, 0u);
+    EXPECT_NE(error.find(Messages::error_mmap_failed("dst_buffer")),
+              std::string::npos);
+  }
+  EXPECT_EQ(state.unmap_calls, 1u);
 }
 
-// Test that all buffers use non-cacheable allocation when flag is set
-TEST(BufferManagerTest, AllocateAllBuffersNonCacheable) {
-  BenchmarkConfig config;
-  config.buffer_size = 1024 * 1024;  // 1 MB
-  config.l1_buffer_size = 64 * 1024;  // 64 KB
-  config.l2_buffer_size = 512 * 1024;  // 512 KB
-  config.use_custom_cache_size = false;
-  config.use_non_cacheable = true;  // Enable non-cacheable allocation
-  
-  initialize_system_info(config);
-  
-  BenchmarkBuffers buffers;
-  int result = allocate_all_buffers(config, buffers);
-  
-  EXPECT_EQ(result, EXIT_SUCCESS);
-  // Verify all main buffers are allocated
-  EXPECT_NE(buffers.src_buffer(), nullptr);
-  EXPECT_NE(buffers.dst_buffer(), nullptr);
-  EXPECT_NE(buffers.lat_buffer(), nullptr);
-  EXPECT_NE(buffers.l1_buffer(), nullptr);
-  EXPECT_NE(buffers.l2_buffer(), nullptr);
-  // Verify cache bandwidth test buffers are allocated
-  EXPECT_NE(buffers.l1_bw_src(), nullptr);
-  EXPECT_NE(buffers.l1_bw_dst(), nullptr);
-  EXPECT_NE(buffers.l2_bw_src(), nullptr);
-  EXPECT_NE(buffers.l2_bw_dst(), nullptr);
+TEST_F(BufferManagerTest, InitializationWritesExactSourcePatternAndZeroDestination) {
+  BenchmarkConfig config = make_bandwidth_config();
+  config.run_patterns = true;
+
+  {
+    BenchmarkBuffers buffers;
+    ASSERT_TRUE(allocate_and_initialize_buffers(config, buffers));
+    const auto* source = static_cast<const unsigned char*>(buffers.src_buffer());
+    const auto* destination =
+        static_cast<const unsigned char*>(buffers.dst_buffer());
+    ASSERT_NE(source, nullptr);
+    ASSERT_NE(destination, nullptr);
+    for (size_t index = 0; index < config.buffer_size; ++index) {
+      EXPECT_EQ(source[index], static_cast<unsigned char>(index & 0xff));
+      EXPECT_EQ(destination[index], 0u);
+    }
+  }
+  EXPECT_EQ(state.unmap_calls, 2u);
 }
 
-// Test that all buffers use non-cacheable allocation with custom cache size when flag is set
-TEST(BufferManagerTest, AllocateAllBuffersNonCacheableCustomCache) {
-  BenchmarkConfig config;
-  config.buffer_size = 1024 * 1024;  // 1 MB
-  config.use_custom_cache_size = true;
-  config.custom_buffer_size = 128 * 1024;  // 128 KB
-  config.use_non_cacheable = true;  // Enable non-cacheable allocation
-  
-  initialize_system_info(config);
-  config.custom_cache_size_bytes = config.custom_buffer_size;
-  
-  BenchmarkBuffers buffers;
-  int result = allocate_all_buffers(config, buffers);
-  
-  EXPECT_EQ(result, EXIT_SUCCESS);
-  // Verify all main buffers are allocated
-  EXPECT_NE(buffers.src_buffer(), nullptr);
-  EXPECT_NE(buffers.dst_buffer(), nullptr);
-  EXPECT_NE(buffers.lat_buffer(), nullptr);
-  EXPECT_NE(buffers.custom_buffer(), nullptr);
-  // Verify custom cache bandwidth test buffers are allocated
-  EXPECT_NE(buffers.custom_bw_src(), nullptr);
-  EXPECT_NE(buffers.custom_bw_dst(), nullptr);
-}
+TEST_F(BufferManagerTest, ZeroMainBufferFailsBeforeAllocationWithExactReason) {
+  BenchmarkConfig config = make_bandwidth_config();
+  config.buffer_size = 0;
 
-// Test that non-cacheable buffers can be initialized and used
-TEST(BufferManagerTest, InitializeAllBuffersNonCacheable) {
-  BenchmarkConfig config;
-  config.buffer_size = 1024 * 1024;  // 1 MB
-  config.l1_buffer_size = 64 * 1024;  // 64 KB
-  config.l2_buffer_size = 512 * 1024;  // 512 KB
-  config.use_custom_cache_size = false;
-  config.use_non_cacheable = true;  // Enable non-cacheable allocation
-  
-  initialize_system_info(config);
-  
-  BenchmarkBuffers buffers;
-  // Verify buffers can be initialized (tests that they're usable)
-  ASSERT_TRUE(allocate_and_initialize_buffers(config, buffers));
-}
-
-// Test allocation failure when buffer_size is zero - should fail early with error message
-TEST(BufferManagerTest, AllocateAllBuffersFirstBufferFails) {
-  BenchmarkConfig config;
-  config.buffer_size = 0;  // Invalid size - should fail early
-  config.l1_buffer_size = 64 * 1024;
-  config.l2_buffer_size = 512 * 1024;
-  config.use_custom_cache_size = false;
-  
-  initialize_system_info(config);
-  
   testing::internal::CaptureStderr();
   BenchmarkBuffers buffers;
-  int result = allocate_all_buffers(config, buffers);
-  std::string error_output = testing::internal::GetCapturedStderr();
-  
-  // Verify allocation failed
+  const int result = allocate_all_buffers(config, buffers);
+  const std::string error = testing::internal::GetCapturedStderr();
+
   EXPECT_EQ(result, EXIT_FAILURE);
-  
-  // Verify error message contains expected content
-  EXPECT_NE(error_output.find("Error: "), std::string::npos);
-  EXPECT_NE(error_output.find("Main buffer size is zero"), std::string::npos);
-  
-  // Verify all buffers are nullptr (properly initialized to nullptr on failure)
+  EXPECT_EQ(error, Messages::error_prefix() +
+                       Messages::error_main_buffer_size_zero() + "\n");
+  EXPECT_EQ(state.map_calls, 0u);
   EXPECT_EQ(buffers.src_buffer(), nullptr);
   EXPECT_EQ(buffers.dst_buffer(), nullptr);
-  EXPECT_EQ(buffers.lat_buffer(), nullptr);
-  EXPECT_EQ(buffers.l1_buffer(), nullptr);
-  EXPECT_EQ(buffers.l2_buffer(), nullptr);
 }
 
-// Test overflow check when adding main latency buffer to total memory
-TEST(BufferManagerTest, AllocateAllBuffersMainLatencyAdditionOverflow) {
+TEST_F(BufferManagerTest, MainLatencyAdditionOverflowIsRejectedBeforeAllocation) {
   BenchmarkConfig config;
   config.buffer_size = std::numeric_limits<size_t>::max() / 2;
   config.only_latency = false;
   config.only_bandwidth = false;
-  config.run_patterns = false;
 
   testing::internal::CaptureStderr();
   BenchmarkBuffers buffers;
-  int result = allocate_all_buffers(config, buffers);
-  std::string error_output = testing::internal::GetCapturedStderr();
+  const int result = allocate_all_buffers(config, buffers);
+  const std::string error = testing::internal::GetCapturedStderr();
 
   EXPECT_EQ(result, EXIT_FAILURE);
-  EXPECT_NE(error_output.find("Error: "), std::string::npos);
-  EXPECT_NE(error_output.find("Total memory requirement would overflow"), std::string::npos);
+  EXPECT_NE(error.find(Messages::error_total_memory_overflow()),
+            std::string::npos);
+  EXPECT_EQ(state.map_calls, 0u);
 }
 
-TEST(BufferManagerTest, CalculateTotalAllocationBytesOnlyLatencyCustomCache) {
+TEST_F(BufferManagerTest, PeakAccountingUsesLargerCachePhaseInsteadOfMainPhase) {
   BenchmarkConfig config;
   config.buffer_size = Constants::BYTES_PER_MB;
-  config.only_latency = true;
-  config.only_bandwidth = false;
-  config.run_patterns = false;
-  config.use_custom_cache_size = true;
-  config.custom_buffer_size = 43 * Constants::BYTES_PER_MB;
+  config.l1_buffer_size = Constants::BYTES_PER_MB;
+  config.l2_buffer_size = 2 * Constants::BYTES_PER_MB;
+  config.max_total_allowed_mb = 0;
 
   size_t total_memory_bytes = 0;
-  int result = calculate_total_allocation_bytes(config, total_memory_bytes);
+  ASSERT_EQ(calculate_total_allocation_bytes(config, total_memory_bytes),
+            EXIT_SUCCESS);
+  EXPECT_EQ(total_memory_bytes, 6 * Constants::BYTES_PER_MB);
+}
 
-  EXPECT_EQ(result, EXIT_SUCCESS);
+TEST_F(BufferManagerTest, PeakAccountingHandlesLatencyOnlyCustomCacheWithMainDisabled) {
+  BenchmarkConfig config;
+  config.buffer_size = 0;
+  config.only_latency = true;
+  config.use_custom_cache_size = true;
+  config.custom_buffer_size = 43 * Constants::BYTES_PER_MB;
+  config.max_total_allowed_mb = 0;
+
+  size_t total_memory_bytes = 0;
+  ASSERT_EQ(calculate_total_allocation_bytes(config, total_memory_bytes),
+            EXIT_SUCCESS);
   EXPECT_EQ(total_memory_bytes, 43 * Constants::BYTES_PER_MB);
 }
 
-TEST(BufferManagerTest, CalculateTotalAllocationBytesDefaultModeIncludesCacheBuffers) {
+TEST_F(BufferManagerTest, PeakAccountingPatternsSkipLatencyAndCacheBuffers) {
   BenchmarkConfig config;
   config.buffer_size = Constants::BYTES_PER_MB;
-  config.l1_buffer_size = 64 * Constants::BYTES_PER_KB;
-  config.l2_buffer_size = 512 * Constants::BYTES_PER_KB;
-  config.only_latency = false;
-  config.only_bandwidth = false;
-  config.run_patterns = false;
-  config.use_custom_cache_size = false;
-
-  size_t total_memory_bytes = 0;
-  int result = calculate_total_allocation_bytes(config, total_memory_bytes);
-
-  const size_t expected_bytes = 2 * Constants::BYTES_PER_MB;
-  EXPECT_EQ(result, EXIT_SUCCESS);
-  EXPECT_EQ(total_memory_bytes, expected_bytes);
-}
-
-TEST(BufferManagerTest, CalculateTotalAllocationBytesPatternsSkipsLatencyAndCacheBuffers) {
-  BenchmarkConfig config;
-  config.buffer_size = Constants::BYTES_PER_MB;
-  config.l1_buffer_size = 64 * Constants::BYTES_PER_KB;
-  config.l2_buffer_size = 512 * Constants::BYTES_PER_KB;
-  config.only_latency = false;
-  config.only_bandwidth = false;
   config.run_patterns = true;
   config.use_custom_cache_size = true;
   config.custom_buffer_size = 43 * Constants::BYTES_PER_MB;
+  config.max_total_allowed_mb = 0;
 
   size_t total_memory_bytes = 0;
-  int result = calculate_total_allocation_bytes(config, total_memory_bytes);
-
-  EXPECT_EQ(result, EXIT_SUCCESS);
+  ASSERT_EQ(calculate_total_allocation_bytes(config, total_memory_bytes),
+            EXIT_SUCCESS);
   EXPECT_EQ(total_memory_bytes, 2 * Constants::BYTES_PER_MB);
-}
-
-TEST(BufferManagerTest, InitializeAllBuffersOnlyLatencyWithMainDisabledAndCustomCacheEnabled) {
-  BenchmarkConfig config;
-  config.only_latency = true;
-  config.buffer_size_mb = 0;
-  config.buffer_size = 0;
-  config.lat_num_accesses = 0;
-  config.use_custom_cache_size = true;
-  config.custom_cache_size_bytes = 8 * Constants::BYTES_PER_MB;
-  config.custom_buffer_size = config.custom_cache_size_bytes;
-  config.custom_num_accesses = Constants::CUSTOM_LATENCY_ACCESSES;
-
-  BenchmarkBuffers buffers;
-  ASSERT_TRUE(allocate_and_initialize_buffers(config, buffers));
-  EXPECT_EQ(buffers.lat_buffer(), nullptr);
-  EXPECT_NE(buffers.custom_buffer(), nullptr);
 }

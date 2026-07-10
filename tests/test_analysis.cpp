@@ -18,11 +18,12 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
 #include <utility>
 #include <vector>
 
 #include "benchmark/tlb_analysis.h"
-#include "benchmark/tlb_sweep_planner.h"
+#include "core/config/config.h"
 #include "core/config/constants.h"
 
 namespace {
@@ -66,7 +67,215 @@ TlbMeasurementRecord make_paired_summary_record(
   return record;
 }
 
+TlbAnalysisExecutionSeam make_tlb_execution_seam() {
+  TlbAnalysisExecutionSeam seam;
+  seam.page_size_bytes = 16 * Constants::BYTES_PER_KB;
+  seam.l1_cache_size_bytes = 128 * Constants::BYTES_PER_KB;
+  seam.selected_buffer_mb = 256;
+  seam.available_memory_mb = 4096;
+  seam.cpu_name = "Injected Apple CPU";
+  seam.elapsed_seconds = []() { return 1.0; };
+  return seam;
+}
+
+TlbScheduleExecutionResult make_pass_result(
+    TlbMeasurementPass pass,
+    const std::vector<TlbSweepPoint>& points,
+    TlbScheduleExecutionStatus status,
+    size_t completed_point_count,
+    size_t rounds_completed) {
+  TlbScheduleExecutionResult result;
+  result.status = status;
+  result.rounds_completed = rounds_completed;
+  result.converged = status == TlbScheduleExecutionStatus::Complete;
+  completed_point_count = std::min(completed_point_count, points.size());
+  for (size_t i = 0; i < completed_point_count; ++i) {
+    TlbMeasurementRecord record;
+    record.pass = pass;
+    record.point_index = points[i].point_index;
+    record.locality_bytes = points[i].locality_bytes;
+    record.round_index = 0;
+    record.order_index = i;
+    record.latency_ns = 10.0 + static_cast<double>(i);
+    result.records.push_back(record);
+  }
+  return result;
+}
+
+int run_tlb_analysis_silently(
+    const BenchmarkConfig& config,
+    const TlbStopRequested& stop_requested,
+    const TlbAnalysisExecutionSeam& seam) {
+  testing::internal::CaptureStdout();
+  testing::internal::CaptureStderr();
+  const int result = run_tlb_analysis(config, stop_requested, seam);
+  (void)testing::internal::GetCapturedStderr();
+  (void)testing::internal::GetCapturedStdout();
+  return result;
+}
+
 }  // namespace
+
+TEST(AnalysisTest, CoordinatorStopsBeforeFirstTaskWithExactCounters) {
+  BenchmarkConfig config;
+  config.tlb_sweep_density = TlbSweepDensity::Low;
+  TlbAnalysisExecutionSeam seam = make_tlb_execution_seam();
+  size_t executor_calls = 0;
+  bool observed = false;
+  TlbAnalysisCoordinatorSummary summary;
+  seam.execute_pass = [&](TlbMeasurementPass,
+                          const std::vector<TlbSweepPoint>&) {
+    ++executor_calls;
+    return TlbScheduleExecutionResult{};
+  };
+  seam.observe_summary = [&](const TlbAnalysisCoordinatorSummary& value) {
+    observed = true;
+    summary = value;
+  };
+
+  EXPECT_EQ(run_tlb_analysis_silently(config, []() { return true; }, seam),
+            EXIT_SUCCESS);
+  EXPECT_EQ(executor_calls, 0u);
+  ASSERT_TRUE(observed);
+  EXPECT_EQ(summary.status, TlbAnalysisCoordinatorStatus::Interrupted);
+  EXPECT_EQ(summary.status_text, "interrupted");
+  EXPECT_EQ(summary.planned_points, 15u);
+  EXPECT_EQ(summary.completed_points, 0u);
+  EXPECT_EQ(summary.planned_passes, 1u);
+  EXPECT_EQ(summary.completed_passes, 0u);
+  EXPECT_EQ(summary.measurement_record_count, 0u);
+  EXPECT_FALSE(summary.conclusions_valid);
+  EXPECT_FALSE(summary.large_locality_planned);
+  ASSERT_EQ(summary.pass_summaries.size(), 1u);
+  EXPECT_EQ(summary.pass_summaries[0].pass, TlbMeasurementPass::Base);
+  EXPECT_EQ(summary.pass_summaries[0].point_count, 15u);
+  EXPECT_EQ(summary.pass_summaries[0].rounds_completed, 0u);
+  EXPECT_FALSE(summary.pass_summaries[0].complete);
+  EXPECT_EQ(summary.pass_summaries[0].status,
+            TlbScheduleExecutionStatus::Interrupted);
+}
+
+TEST(AnalysisTest, CoordinatorRejectsMissingPassExecutor) {
+  BenchmarkConfig config;
+  config.tlb_sweep_density = TlbSweepDensity::Low;
+  TlbAnalysisExecutionSeam seam = make_tlb_execution_seam();
+  bool observed = false;
+  seam.observe_summary = [&](const TlbAnalysisCoordinatorSummary&) {
+    observed = true;
+  };
+
+  EXPECT_EQ(run_tlb_analysis_silently(config, []() { return false; }, seam),
+            EXIT_FAILURE);
+  EXPECT_FALSE(observed);
+}
+
+TEST(AnalysisTest, CoordinatorRetainsMidPassRecordsOnInterruption) {
+  BenchmarkConfig config;
+  config.tlb_sweep_density = TlbSweepDensity::Low;
+  TlbAnalysisExecutionSeam seam = make_tlb_execution_seam();
+  TlbAnalysisCoordinatorSummary summary;
+  seam.execute_pass = [](TlbMeasurementPass pass,
+                         const std::vector<TlbSweepPoint>& points) {
+    return make_pass_result(pass,
+                            points,
+                            TlbScheduleExecutionStatus::Interrupted,
+                            4,
+                            0);
+  };
+  seam.observe_summary = [&](const TlbAnalysisCoordinatorSummary& value) {
+    summary = value;
+  };
+
+  EXPECT_EQ(run_tlb_analysis_silently(config, []() { return false; }, seam),
+            EXIT_SUCCESS);
+  EXPECT_EQ(summary.status, TlbAnalysisCoordinatorStatus::Interrupted);
+  EXPECT_EQ(summary.status_text, "interrupted");
+  EXPECT_EQ(summary.planned_points, 15u);
+  EXPECT_EQ(summary.completed_points, 4u);
+  EXPECT_EQ(summary.planned_passes, 1u);
+  EXPECT_EQ(summary.completed_passes, 0u);
+  EXPECT_EQ(summary.measurement_record_count, 4u);
+  EXPECT_FALSE(summary.conclusions_valid);
+  ASSERT_EQ(summary.pass_summaries.size(), 1u);
+  EXPECT_EQ(summary.pass_summaries[0].status,
+            TlbScheduleExecutionStatus::Interrupted);
+}
+
+TEST(AnalysisTest, CoordinatorRetainsValidRecordsAndInvalidatesConclusionsOnError) {
+  BenchmarkConfig config;
+  config.tlb_sweep_density = TlbSweepDensity::Low;
+  TlbAnalysisExecutionSeam seam = make_tlb_execution_seam();
+  TlbAnalysisCoordinatorSummary summary;
+  seam.execute_pass = [](TlbMeasurementPass pass,
+                         const std::vector<TlbSweepPoint>& points) {
+    return make_pass_result(pass,
+                            points,
+                            TlbScheduleExecutionStatus::Error,
+                            5,
+                            1);
+  };
+  seam.observe_summary = [&](const TlbAnalysisCoordinatorSummary& value) {
+    summary = value;
+  };
+
+  EXPECT_EQ(run_tlb_analysis_silently(config, []() { return false; }, seam),
+            EXIT_FAILURE);
+  EXPECT_EQ(summary.status, TlbAnalysisCoordinatorStatus::Error);
+  EXPECT_EQ(summary.status_text, "error");
+  EXPECT_EQ(summary.planned_points, 15u);
+  EXPECT_EQ(summary.completed_points, 5u);
+  EXPECT_EQ(summary.planned_passes, 1u);
+  EXPECT_EQ(summary.completed_passes, 0u);
+  EXPECT_EQ(summary.measurement_record_count, 5u);
+  EXPECT_FALSE(summary.conclusions_valid);
+  ASSERT_EQ(summary.pass_summaries.size(), 1u);
+  EXPECT_EQ(summary.pass_summaries[0].status,
+            TlbScheduleExecutionStatus::Error);
+}
+
+TEST(AnalysisTest, CoordinatorCompletesWithoutLargeLocalityWithExactCounters) {
+  BenchmarkConfig config;
+  config.tlb_sweep_density = TlbSweepDensity::Low;
+  TlbAnalysisExecutionSeam seam = make_tlb_execution_seam();
+  TlbAnalysisCoordinatorSummary summary;
+  std::vector<TlbMeasurementPass> executed_passes;
+  seam.execute_pass = [&](TlbMeasurementPass pass,
+                          const std::vector<TlbSweepPoint>& points) {
+    executed_passes.push_back(pass);
+    return make_pass_result(pass,
+                            points,
+                            TlbScheduleExecutionStatus::Complete,
+                            points.size(),
+                            7);
+  };
+  seam.observe_summary = [&](const TlbAnalysisCoordinatorSummary& value) {
+    summary = value;
+  };
+
+  EXPECT_EQ(run_tlb_analysis_silently(config, []() { return false; }, seam),
+            EXIT_SUCCESS);
+  EXPECT_EQ(executed_passes,
+            (std::vector<TlbMeasurementPass>{TlbMeasurementPass::Base}));
+  EXPECT_EQ(summary.status, TlbAnalysisCoordinatorStatus::Complete);
+  EXPECT_EQ(summary.status_text, "complete");
+  EXPECT_EQ(summary.planned_points, 15u);
+  EXPECT_EQ(summary.completed_points, 15u);
+  EXPECT_EQ(summary.validation_planned_points, 0u);
+  EXPECT_EQ(summary.validation_completed_points, 0u);
+  EXPECT_EQ(summary.planned_passes, 1u);
+  EXPECT_EQ(summary.completed_passes, 1u);
+  EXPECT_EQ(summary.measurement_record_count, 15u);
+  EXPECT_DOUBLE_EQ(summary.elapsed_seconds, 1.0);
+  EXPECT_TRUE(summary.conclusions_valid);
+  EXPECT_FALSE(summary.large_locality_planned);
+  EXPECT_FALSE(summary.large_locality_completed);
+  ASSERT_EQ(summary.pass_summaries.size(), 1u);
+  EXPECT_EQ(summary.pass_summaries[0].rounds_completed, 7u);
+  EXPECT_TRUE(summary.pass_summaries[0].converged);
+  EXPECT_TRUE(summary.pass_summaries[0].complete);
+  EXPECT_EQ(summary.pass_summaries[0].status,
+            TlbScheduleExecutionStatus::Complete);
+}
 
 TEST(AnalysisTest, PairedSummaryUsesMedianOfSameRoundDeltasAndFiltersPasses) {
   const size_t locality = 2 * Constants::BYTES_PER_MB;
@@ -549,25 +758,4 @@ TEST(AnalysisTest, DetectBoundaryLastPointStrongStepGetsMediumConfidence) {
   EXPECT_EQ(boundary.boundary_index, 4u);
   EXPECT_TRUE(boundary.persistent_jump);
   EXPECT_NE(boundary.confidence, "Low");
-}
-
-TEST(AnalysisTest, RefinementPointsArePageAlignedAndInsideBracket) {
-  const size_t page_size = 16 * Constants::BYTES_PER_KB;
-  const std::vector<size_t> localities = {
-      page_size,
-      2 * page_size,
-      4 * page_size,
-  };
-
-  const std::vector<size_t> points =
-      build_tlb_refinement_points(localities, 1, page_size, 4 * page_size, page_size);
-
-  ASSERT_FALSE(points.empty());
-  EXPECT_TRUE(std::is_sorted(points.begin(), points.end()));
-  EXPECT_EQ(std::adjacent_find(points.begin(), points.end()), points.end());
-  for (size_t point : points) {
-    EXPECT_EQ(point % page_size, 0u);
-    EXPECT_GT(point, page_size);
-    EXPECT_LT(point, 4 * page_size);
-  }
 }

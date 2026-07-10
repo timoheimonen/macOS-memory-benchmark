@@ -40,11 +40,6 @@ const std::string& error_analyze_core_to_core_must_be_used_alone() {
   return msg;
 }
 
-const std::string& error_core_to_core_timer_creation_failed() {
-  static const std::string msg = "Failed to create timer for core-to-core analysis";
-  return msg;
-}
-
 std::string error_core_to_core_measurement_failed(const std::string& reason) {
   return "Core-to-core measurement failed: " + reason;
 }
@@ -134,12 +129,6 @@ std::string report_core_to_core_one_way_estimate(double one_way_ns) {
   std::ostringstream oss;
   oss << std::fixed << std::setprecision(Constants::LATENCY_PRECISION);
   oss << "  Median one-way estimate: " << one_way_ns << " ns";
-  return oss.str();
-}
-
-std::string report_core_to_core_samples(size_t sample_count) {
-  std::ostringstream oss;
-  oss << "  Samples: " << sample_count;
   return oss.str();
 }
 

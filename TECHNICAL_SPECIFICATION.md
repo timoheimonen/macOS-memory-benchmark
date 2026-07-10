@@ -2,7 +2,7 @@
 
 ## 1. Scope and Status
 
-This document specifies the current implementation in this repository (version `0.58.1`) for `memory_benchmark` on macOS Apple Silicon.
+This document specifies the current implementation in this repository (version `0.59.0`) for `memory_benchmark` on macOS Apple Silicon.
 
 It is intentionally implementation-driven and reflects real behavior in code paths under `main.cpp`, `src/core`, `src/benchmark`, `src/pattern_benchmark`, `src/output`, and `src/asm`.
 

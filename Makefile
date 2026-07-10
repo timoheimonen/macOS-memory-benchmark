@@ -46,11 +46,11 @@ CPP_SRCS_OUTPUT_CONSOLE_MESSAGES = output/console/messages/error_messages.cpp ou
 CPP_SRCS_UTILS = utils/utils.cpp utils/json_utils.cpp
 CPP_SRCS_SRC = $(CPP_SRCS_CORE_CONFIG) $(CPP_SRCS_CORE_MEMORY) $(CPP_SRCS_CORE_SIGNAL) $(CPP_SRCS_CORE_SYSTEM) $(CPP_SRCS_CORE_TIMING) $(CPP_SRCS_OUTPUT_CONSOLE) $(CPP_SRCS_OUTPUT_CONSOLE_MESSAGES) $(CPP_SRCS_UTILS)
 # Files in the src/benchmark subdirectory
-CPP_SRCS_BENCHMARK = bandwidth_tests.cpp latency_tests.cpp benchmark_work_plan.cpp benchmark_runner.cpp benchmark_executor.cpp benchmark_results.cpp benchmark_statistics_collector.cpp tlb_analysis.cpp tlb_boundary_detector.cpp tlb_chain.cpp tlb_sweep_planner.cpp tlb_measurement_scheduler.cpp tlb_runtime_policy.cpp tlb_analysis_json.cpp core_to_core_latency_cli.cpp core_to_core_latency_runner.cpp core_to_core_latency_json.cpp core_to_core_sweep_runner.cpp sweep_runner.cpp
+CPP_SRCS_BENCHMARK = bandwidth_tests.cpp latency_tests.cpp benchmark_work_plan.cpp benchmark_runner.cpp benchmark_executor.cpp benchmark_statistics_collector.cpp tlb_analysis.cpp tlb_boundary_detector.cpp tlb_chain.cpp tlb_sweep_planner.cpp tlb_measurement_scheduler.cpp tlb_runtime_policy.cpp tlb_analysis_json.cpp core_to_core_latency_cli.cpp core_to_core_latency_runner.cpp core_to_core_latency_json.cpp core_to_core_sweep_runner.cpp sweep_runner.cpp
 # Files in the src/warmup subdirectory
 CPP_SRCS_WARMUP = basic_warmup.cpp latency_warmup.cpp cache_warmup.cpp pattern_warmup.cpp
 # Files in the src/output/json/json_output subdirectory
-CPP_SRCS_JSON_OUTPUT = output/json/json_output/builder.cpp output/json/json_output/main_memory.cpp output/json/json_output/cache.cpp output/json/json_output/standard.cpp output/json/json_output/patterns.cpp output/json/json_output/file_writer.cpp output/json/json_output/json_output.cpp
+CPP_SRCS_JSON_OUTPUT = output/json/json_output/builder.cpp output/json/json_output/standard.cpp output/json/json_output/patterns.cpp output/json/json_output/file_writer.cpp output/json/json_output/json_output.cpp
 # Files in the src/pattern_benchmark subdirectory
 CPP_SRCS_PATTERN_BENCHMARK = helpers.cpp validation.cpp pattern_work_plan.cpp pattern_coordinator.cpp pattern_statistics_manager.cpp execution_utils.cpp execution_strided.cpp execution_patterns.cpp output.cpp
 
@@ -73,9 +73,6 @@ ASM_SRCS = src/asm/memory_copy.s src/asm/memory_read.s src/asm/memory_write.s sr
             src/asm/memory_read_cache.s src/asm/memory_write_cache.s src/asm/memory_copy_cache.s \
             src/asm/memory_read_reverse.s src/asm/memory_write_reverse.s src/asm/memory_copy_reverse.s \
             src/asm/memory_read_strided.s src/asm/memory_write_strided.s src/asm/memory_copy_strided.s \
-            src/asm/memory_read_strided_64.s src/asm/memory_read_strided_4096.s src/asm/memory_read_strided_16384.s src/asm/memory_read_strided_2mb.s \
-            src/asm/memory_write_strided_64.s src/asm/memory_write_strided_4096.s src/asm/memory_write_strided_16384.s src/asm/memory_write_strided_2mb.s \
-            src/asm/memory_copy_strided_64.s src/asm/memory_copy_strided_4096.s src/asm/memory_copy_strided_16384.s src/asm/memory_copy_strided_2mb.s \
             src/asm/memory_read_random.s src/asm/memory_write_random.s src/asm/memory_copy_random.s \
             src/asm/core_to_core_latency.s
 
@@ -223,6 +220,13 @@ test-all: $(TARGET) $(TEST_TARGET)
 	@echo "Running all tests (unit + integration)..."
 	./$(TEST_TARGET)
 
+# Reproducible production C++ source coverage in an isolated /tmp build.
+coverage-unit:
+	./coverage.sh unit
+
+coverage-all:
+	./coverage.sh all
+
 # Build test executable
 $(TEST_TARGET): $(TEST_OBJS) $(TEST_LIB_OBJS)
 	@echo "Linking $(TEST_TARGET)..."
@@ -292,4 +296,4 @@ uninstall:
 	@echo "$(TARGET) uninstalled successfully."
 
 # Define targets that don't correspond to files
-.PHONY: all clean test clean-test docs clean-docs install uninstall
+.PHONY: all clean test test-integration test-all coverage-unit coverage-all clean-test docs clean-docs install uninstall

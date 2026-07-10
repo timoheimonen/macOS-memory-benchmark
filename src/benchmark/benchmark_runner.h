@@ -136,6 +136,7 @@ struct BenchmarkStatistics {
 struct BenchmarkRunnerTestHooks {
   bool force_timer_creation_failure = false;
   std::function<bool()> stop_requested;
+  std::function<double()> elapsed_seconds;
   std::function<BenchmarkResults(const BenchmarkBuffers&, BenchmarkConfig&, int,
                                  HighResTimer&, BenchmarkExecutionState*)>
       execute_loop;

@@ -12,118 +12,141 @@
 //
 // You should have received a copy of the GNU General Public License
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
-//
-/**
- * @file test_timer.cpp
- * @brief Unit tests for HighResTimer (src/core/timing/timer.cpp)
- *
- * Tests cover factory construction, basic elapsed-time correctness, monotonicity,
- * and nanosecond vs. seconds consistency.  All tests rely only on spin-wait
- * loops (no OS sleep) to keep them fast and deterministic.
- */
+
 #include <gtest/gtest.h>
-#include <cmath>
+
+#include <array>
+#include <cstddef>
+#include <limits>
+#include <mach/mach_error.h>
+#include <string>
+
 #include "core/timing/timer.h"
+#include "output/console/messages/messages_api.h"
 
-// ---------------------------------------------------------------------------
-// Factory: create() must succeed on Apple Silicon macOS.
-// ---------------------------------------------------------------------------
+namespace {
 
-TEST(HighResTimerTest, CreateReturnsValidTimer) {
-  auto t = HighResTimer::create();
-  EXPECT_TRUE(t.has_value()) << "HighResTimer::create() returned nullopt";
+struct FakeTimerState {
+  std::array<uint64_t, 8> ticks{};
+  size_t tick_count = 0;
+  size_t next_tick = 0;
+  kern_return_t timebase_result = KERN_SUCCESS;
+  uint32_t numer = 1;
+  uint32_t denom = 1;
+};
+
+FakeTimerState* active_fake_timer = nullptr;
+
+uint64_t fake_absolute_time() {
+  if (active_fake_timer->next_tick >= active_fake_timer->tick_count) {
+    return active_fake_timer->ticks[active_fake_timer->tick_count - 1];
+  }
+  return active_fake_timer->ticks[active_fake_timer->next_tick++];
 }
 
-// ---------------------------------------------------------------------------
-// Basic elapsed-time correctness
-// ---------------------------------------------------------------------------
-
-// After start() and immediate stop(), elapsed seconds must be non-negative.
-TEST(HighResTimerTest, ElapsedSecondsNonNegative) {
-  auto t = HighResTimer::create();
-  ASSERT_TRUE(t.has_value());
-  t->start();
-  double elapsed = t->stop();
-  EXPECT_GE(elapsed, 0.0);
+kern_return_t fake_timebase_info(mach_timebase_info_t info) {
+  info->numer = active_fake_timer->numer;
+  info->denom = active_fake_timer->denom;
+  return active_fake_timer->timebase_result;
 }
 
-// After start() and immediate stop_ns(), elapsed nanoseconds must be
-// non-negative.
-TEST(HighResTimerTest, ElapsedNanosecondsNonNegative) {
-  auto t = HighResTimer::create();
-  ASSERT_TRUE(t.has_value());
-  t->start();
-  double elapsed_ns = t->stop_ns();
-  EXPECT_GE(elapsed_ns, 0.0);
+class HighResTimerTest : public testing::Test {
+ protected:
+  void SetUp() override {
+    active_fake_timer = &state;
+    set_timer_system_calls_for_testing(
+        {fake_absolute_time, fake_timebase_info});
+  }
+
+  void TearDown() override {
+    reset_timer_system_calls_for_testing();
+    active_fake_timer = nullptr;
+  }
+
+  void set_ticks(std::initializer_list<uint64_t> ticks) {
+    state.tick_count = ticks.size();
+    state.next_tick = 0;
+    size_t index = 0;
+    for (uint64_t tick : ticks) {
+      state.ticks[index++] = tick;
+    }
+  }
+
+  FakeTimerState state;
+};
+
+}  // namespace
+
+TEST_F(HighResTimerTest, TickConversionUsesExactTimebaseRatio) {
+  const std::optional<double> first =
+      convert_mach_ticks_to_nanoseconds(3, 125, 3);
+  const std::optional<double> second =
+      convert_mach_ticks_to_nanoseconds(250, 2, 5);
+  ASSERT_TRUE(first.has_value());
+  ASSERT_TRUE(second.has_value());
+  EXPECT_DOUBLE_EQ(*first, 125.0);
+  EXPECT_DOUBLE_EQ(*second, 100.0);
+  EXPECT_FALSE(convert_mach_ticks_to_nanoseconds(1, 1, 0).has_value());
 }
 
-// ---------------------------------------------------------------------------
-// Monotonicity: two consecutive stop() calls must be non-decreasing.
-// ---------------------------------------------------------------------------
+TEST_F(HighResTimerTest, CreateRejectsMachFailureWithCentralizedError) {
+  state.timebase_result = KERN_FAILURE;
+  testing::internal::CaptureStderr();
+  const std::optional<HighResTimer> timer = HighResTimer::create();
+  const std::string error = testing::internal::GetCapturedStderr();
 
-TEST(HighResTimerTest, ConsecutiveStopsAreMonotonic) {
-  auto t = HighResTimer::create();
-  ASSERT_TRUE(t.has_value());
-  t->start();
-  // Burn a few cycles so the two samples are distinguishable.
-  volatile int x = 0;
-  for (int i = 0; i < 10000; ++i) x += i;
-  double first = t->stop();
-  for (int i = 0; i < 10000; ++i) x += i;
-  double second = t->stop();
-  (void)x;
+  EXPECT_FALSE(timer.has_value());
+  EXPECT_EQ(error, Messages::error_prefix() +
+                       Messages::error_mach_timebase_info_failed(
+                           mach_error_string(KERN_FAILURE)) +
+                       "\n");
+}
+
+TEST_F(HighResTimerTest, CreateRejectsZeroDenominator) {
+  state.denom = 0;
+  testing::internal::CaptureStderr();
+  const std::optional<HighResTimer> timer = HighResTimer::create();
+  const std::string error = testing::internal::GetCapturedStderr();
+
+  EXPECT_FALSE(timer.has_value());
+  EXPECT_EQ(error, Messages::error_prefix() +
+                       "timebase denominator is zero (invalid timebase)\n");
+}
+
+TEST_F(HighResTimerTest, DeterministicClockProducesExactNanosecondsAndSeconds) {
+  state.numer = 2;
+  state.denom = 5;
+  set_ticks({100, 350, 500, 750});
+  std::optional<HighResTimer> timer = HighResTimer::create();
+  ASSERT_TRUE(timer.has_value());
+
+  timer->start();
+  EXPECT_DOUBLE_EQ(timer->stop_ns(), 100.0);
+  timer->start();
+  EXPECT_DOUBLE_EQ(timer->stop(), 100.0 / 1e9);
+}
+
+TEST_F(HighResTimerTest, UnsignedTickSubtractionPreservesWraparound) {
+  state.numer = 1;
+  state.denom = 1;
+  set_ticks({std::numeric_limits<uint64_t>::max() - 4, 5});
+  std::optional<HighResTimer> timer = HighResTimer::create();
+  ASSERT_TRUE(timer.has_value());
+
+  timer->start();
+  EXPECT_DOUBLE_EQ(timer->stop_ns(), 10.0);
+}
+
+TEST(HighResTimerIntegrationTest, MonotonicReusableSmokeIntegration) {
+  std::optional<HighResTimer> timer = HighResTimer::create();
+  ASSERT_TRUE(timer.has_value());
+
+  timer->start();
+  const double first = timer->stop_ns();
+  const double second = timer->stop_ns();
+  EXPECT_GE(first, 0.0);
   EXPECT_GE(second, first);
-}
 
-// ---------------------------------------------------------------------------
-// Seconds / nanoseconds consistency
-// ---------------------------------------------------------------------------
-
-// stop_ns() should return a value approximately 1e9× larger than stop()
-// for the same interval.  We verify with a very loose ratio bound to avoid
-// timer-resolution sensitivity.
-TEST(HighResTimerTest, NanosecondsConsistentWithSeconds) {
-  auto ts = HighResTimer::create();
-  auto tns = HighResTimer::create();
-  ASSERT_TRUE(ts.has_value());
-  ASSERT_TRUE(tns.has_value());
-
-  volatile int x = 0;
-  ts->start();
-  for (int i = 0; i < 1000000; ++i) x += i;
-  double sec = ts->stop();
-
-  tns->start();
-  for (int i = 0; i < 1000000; ++i) x += i;
-  double ns = tns->stop_ns();
-  (void)x;
-
-  // Both intervals should be in a similar ballpark (within 100×) given the
-  // same workload.  Primary check: ns ≈ sec * 1e9 within two orders of
-  // magnitude.
-  EXPECT_GT(sec, 0.0);
-  EXPECT_GT(ns, 0.0);
-  if (sec > 0.0) {
-    double ratio = ns / (sec * 1e9);
-    EXPECT_GT(ratio, 0.01) << "ns/sec*1e9 ratio too small: " << ratio;
-    EXPECT_LT(ratio, 100.0) << "ns/sec*1e9 ratio too large: " << ratio;
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Repeated start()/stop() — timer is reusable.
-// ---------------------------------------------------------------------------
-
-TEST(HighResTimerTest, TimerIsReusable) {
-  auto t = HighResTimer::create();
-  ASSERT_TRUE(t.has_value());
-
-  for (int round = 0; round < 5; ++round) {
-    t->start();
-    volatile double sink = 0.0;
-    for (int i = 0; i < 5000; ++i) sink += static_cast<double>(i);
-    (void)sink;
-    double elapsed = t->stop();
-    EXPECT_GE(elapsed, 0.0) << "Non-negative elapsed on round " << round;
-  }
+  timer->start();
+  EXPECT_GE(timer->stop(), 0.0);
 }

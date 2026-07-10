@@ -33,15 +33,40 @@
 #include "benchmark/benchmark_executor.h"
 #include "benchmark/benchmark_runner.h"
 #include "benchmark/benchmark_tests.h"
+#include "benchmark/benchmark_work_plan.h"
 #include "benchmark/parallel_test_framework.h"
 #include "core/config/config.h"
 #include "core/config/constants.h"
 #include "core/memory/buffer_manager.h"
 #include "core/memory/memory_utils.h"
 #include "core/timing/timer.h"
+#include "output/console/messages/messages_api.h"
 #include "test_config_helpers.h"
 
 namespace {
+
+uint64_t deterministic_timer_tick = 0;
+
+uint64_t deterministic_timer_ticks() {
+  deterministic_timer_tick += 100;
+  return deterministic_timer_tick;
+}
+
+kern_return_t deterministic_timebase_info(mach_timebase_info_t info) {
+  info->numer = 1;
+  info->denom = 1;
+  return KERN_SUCCESS;
+}
+
+class ScopedDeterministicTimerSystemCalls {
+ public:
+  ScopedDeterministicTimerSystemCalls() {
+    deterministic_timer_tick = 0;
+    set_timer_system_calls_for_testing({deterministic_timer_ticks, deterministic_timebase_info});
+  }
+
+  ~ScopedDeterministicTimerSystemCalls() { reset_timer_system_calls_for_testing(); }
+};
 
 BenchmarkConfig build_base_config() {
   BenchmarkConfig config;
@@ -55,6 +80,22 @@ BenchmarkConfig build_base_config() {
 
   calculate_buffer_sizes(config);
   calculate_access_counts(config);
+  return config;
+}
+
+BenchmarkConfig build_injected_failure_config() {
+  BenchmarkConfig config;
+  config.buffer_size = 16 * Constants::BYTES_PER_KB;
+  config.buffer_size_mb = 1;
+  config.iterations = 1;
+  config.loop_count = 1;
+  config.num_threads = 1;
+  config.l1_buffer_size = 16 * Constants::BYTES_PER_KB;
+  config.l2_buffer_size = 32 * Constants::BYTES_PER_KB;
+  config.lat_num_accesses = 64;
+  config.l1_num_accesses = 64;
+  config.l2_num_accesses = 64;
+  config.benchmark_seed = 1;
   return config;
 }
 
@@ -154,94 +195,100 @@ TEST(BenchmarkExecutorTest, LatencySamplingClampsToAccessCountIntegration) {
   }
 }
 
-TEST(BenchmarkExecutorTest, MainMemoryLatencyCollectsSamplesWhenConfiguredIntegration) {
-  BenchmarkConfig config = build_base_config();
-  config.only_latency = true;
-  config.latency_sample_count = 17;
+TEST(BenchmarkExecutorTest, LatencySamplingContinuesFromPriorTerminalPointer) {
+  const ScopedDeterministicTimerSystemCalls timer_system_calls;
+  auto timer = HighResTimer::create();
+  ASSERT_TRUE(timer.has_value());
 
-  BenchmarkBuffers buffers;
-  ASSERT_TRUE(allocate_and_initialize_buffers(config, buffers));
+  std::array<uintptr_t, 4> nodes{};
+  std::vector<uintptr_t*> observed_starts;
+  std::vector<size_t> observed_access_counts;
+  size_t chase_calls = 0;
+  LatencyMeasurementTestHooks hooks;
+  hooks.chase = [&](uintptr_t* start, size_t access_count) {
+    observed_starts.push_back(start);
+    observed_access_counts.push_back(access_count);
+    ++chase_calls;
+    return &nodes[chase_calls];
+  };
 
-  auto timer_opt = HighResTimer::create();
-  ASSERT_TRUE(timer_opt.has_value());
+  std::vector<double> samples;
+  const double total_duration_ns =
+      run_latency_test(&nodes[0], 7, *timer, &samples, 3, &hooks);
 
-  TimingResults timings;
-  BenchmarkResults results;
-  run_main_memory_latency_test(buffers, config, timings, results, *timer_opt);
-
-  EXPECT_GT(timings.total_lat_time_ns, 0.0);
-  EXPECT_EQ(results.main_latency.samples.size(),
-            static_cast<size_t>(config.latency_sample_count));
-  ASSERT_TRUE(results.locality_16k_latency.is_measured());
-  ASSERT_TRUE(results.global_random_latency.is_measured());
-  EXPECT_GT(*results.locality_16k_latency.value, 0.0);
-  EXPECT_GT(*results.global_random_latency.value, 0.0);
-  for (const BenchmarkMeasurement* measurement : {
-           &results.main_latency, &results.locality_16k_latency,
-           &results.global_random_latency, &results.locality_latency_delta}) {
-    EXPECT_EQ(measurement->requested_threads, 1);
-    EXPECT_EQ(measurement->effective_threads, 1);
-    EXPECT_EQ(measurement->created_workers, 1);
-  }
+  EXPECT_DOUBLE_EQ(total_duration_ns, 300.0);
+  EXPECT_EQ(samples, (std::vector<double>{100.0 / 3.0, 50.0, 50.0}));
+  EXPECT_EQ(observed_starts, (std::vector<uintptr_t*>{&nodes[0], &nodes[1], &nodes[2]}));
+  EXPECT_EQ(observed_access_counts, (std::vector<size_t>{3, 2, 2}));
 }
 
-TEST(BenchmarkExecutorTest, MainMemoryLatencySkipsAutoTlbBreakdownWhenLocalitySpecifiedIntegration) {
+TEST(BenchmarkExecutorTest, ActiveLatencyPathReportsAndReusesAuditableWorkIntegration) {
   BenchmarkConfig config = build_base_config();
   config.only_latency = true;
-  config.user_specified_latency_tlb_locality = true;
-  config.latency_tlb_locality_bytes = static_cast<size_t>(16) * Constants::BYTES_PER_KB;
-
-  BenchmarkBuffers buffers;
-  ASSERT_TRUE(allocate_and_initialize_buffers(config, buffers));
-
-  auto timer_opt = HighResTimer::create();
-  ASSERT_TRUE(timer_opt.has_value());
-
-  TimingResults timings;
-  BenchmarkResults results;
-  run_main_memory_latency_test(buffers, config, timings, results, *timer_opt);
-
-  EXPECT_GT(timings.total_lat_time_ns, 0.0);
-  EXPECT_EQ(results.locality_16k_latency.status,
-            BenchmarkMeasurementStatus::NotRun);
-  EXPECT_EQ(results.global_random_latency.status,
-            BenchmarkMeasurementStatus::NotRun);
-  EXPECT_EQ(results.locality_latency_delta.status,
-            BenchmarkMeasurementStatus::NotRun);
-  EXPECT_FALSE(results.locality_16k_latency.value.has_value());
-  EXPECT_FALSE(results.global_random_latency.value.has_value());
-  EXPECT_FALSE(results.locality_latency_delta.value.has_value());
-}
-
-TEST(BenchmarkExecutorTest, MainMemoryLatencySkipsWhenMainLatencyDisabledIntegration) {
-  BenchmarkConfig config = build_base_config();
-  config.only_latency = true;
-  config.buffer_size_mb = 0;
-  config.buffer_size = 0;
-  config.custom_cache_size_kb_ll = 8096;
+  config.only_bandwidth = false;
   config.use_custom_cache_size = true;
-  config.custom_cache_size_bytes = static_cast<size_t>(8096) * Constants::BYTES_PER_KB;
+  config.custom_cache_size_bytes = 0;
+  config.custom_buffer_size = 0;
+  config.user_specified_latency_tlb_locality = true;
+  config.latency_sample_count = 0;
 
-  calculate_buffer_sizes(config);
-  calculate_access_counts(config);
+  BenchmarkBuffers unused_buffers;
+  auto timer = HighResTimer::create();
+  ASSERT_TRUE(timer.has_value());
+  BenchmarkExecutionState execution_state;
 
-  BenchmarkBuffers buffers;
-  ASSERT_TRUE(allocate_and_initialize_buffers(config, buffers));
+  const BenchmarkResults first = run_single_benchmark_loop(
+      unused_buffers, config, 0, *timer, &execution_state);
+  ASSERT_EQ(first.status, BenchmarkRunStatus::Complete);
+  EXPECT_EQ(first.planned_phases, 1u);
+  EXPECT_EQ(first.completed_phases, 1u);
+  EXPECT_EQ(first.planned_measurements, 1u);
+  EXPECT_EQ(first.completed_measurements, 1u);
+  EXPECT_EQ(first.planned_phase_order,
+            (std::vector<std::string>{"main-latency"}));
+  EXPECT_EQ(first.realized_phase_order, first.planned_phase_order);
 
-  auto timer_opt = HighResTimer::create();
-  ASSERT_TRUE(timer_opt.has_value());
+  const BenchmarkMeasurement& first_latency = first.main_latency;
+  ASSERT_TRUE(first_latency.is_measured());
+  EXPECT_EQ(first_latency.target, "main-memory");
+  EXPECT_EQ(first_latency.operation, "latency");
+  EXPECT_EQ(first_latency.work_policy, "automatic-duration-calibration");
+  EXPECT_TRUE(first_latency.automatic_calibration);
+  EXPECT_GT(first_latency.pilot_elapsed_seconds, 0.0);
+  EXPECT_GT(first_latency.access_count, 0u);
+  EXPECT_GT(first_latency.chain_node_count, 1u);
+  EXPECT_GE(first_latency.complete_chain_cycles,
+            Constants::BENCHMARK_LATENCY_MIN_COMPLETE_CYCLES);
+  EXPECT_EQ(first_latency.requested_threads, 1);
+  EXPECT_EQ(first_latency.effective_threads, 1);
+  EXPECT_EQ(first_latency.created_workers, 1);
+  EXPECT_EQ(first.locality_16k_latency.status,
+            BenchmarkMeasurementStatus::NotRun);
+  EXPECT_EQ(first.global_random_latency.status,
+            BenchmarkMeasurementStatus::NotRun);
+  EXPECT_EQ(first.locality_latency_delta.status,
+            BenchmarkMeasurementStatus::NotRun);
 
-  TimingResults timings;
-  BenchmarkResults results;
-  run_main_memory_latency_test(buffers, config, timings, results, *timer_opt);
+  ASSERT_TRUE(execution_state.latency[
+                  benchmark_latency_state_index(BenchmarkTarget::MainMemory)]
+                  .initialized);
+  const size_t resolved_access_count = first_latency.access_count;
+  const double pilot_elapsed_seconds = first_latency.pilot_elapsed_seconds;
 
-  EXPECT_EQ(timings.total_lat_time_ns, 0.0);
-  EXPECT_TRUE(results.main_latency.samples.empty());
-  EXPECT_EQ(results.main_latency.status, BenchmarkMeasurementStatus::NotRun);
+  const BenchmarkResults second = run_single_benchmark_loop(
+      unused_buffers, config, 1, *timer, &execution_state);
+  ASSERT_EQ(second.status, BenchmarkRunStatus::Complete);
+  ASSERT_TRUE(second.main_latency.is_measured());
+  EXPECT_EQ(second.loop_index, 1u);
+  EXPECT_EQ(second.main_latency.access_count, resolved_access_count);
+  EXPECT_DOUBLE_EQ(second.main_latency.pilot_elapsed_seconds,
+                   pilot_elapsed_seconds);
+  EXPECT_EQ(second.main_latency.seed, first_latency.seed);
 }
 
 TEST(BenchmarkExecutorTest, InjectedPreparationFailureCoversEveryPhaseBoundary) {
-  BenchmarkConfig config = build_base_config();
+  const ScopedDeterministicTimerSystemCalls timer_system_calls;
+  BenchmarkConfig config = build_injected_failure_config();
   config.only_bandwidth = false;
   config.only_latency = false;
   BenchmarkBuffers unused_buffers;
@@ -256,18 +303,28 @@ TEST(BenchmarkExecutorTest, InjectedPreparationFailureCoversEveryPhaseBoundary) 
     hooks.fail_phase_preparation = [&](const std::string& phase_name) {
       return phase_name == failing_phase;
     };
+    const std::string expected_reason =
+        Messages::benchmark_reason_prepare_failed(failing_phase);
+    std::string caught_reason;
     testing::internal::CaptureStderr();
-    EXPECT_THROW(run_single_benchmark_loop(
-                     unused_buffers, config, static_cast<int>(phase_index),
-                     *timer, nullptr, &hooks),
-                 std::runtime_error)
+    try {
+      static_cast<void>(run_single_benchmark_loop(
+          unused_buffers, config, static_cast<int>(phase_index), *timer,
+          nullptr, &hooks));
+    } catch (const std::runtime_error& error) {
+      caught_reason = error.what();
+    }
+    const std::string error_output =
+        testing::internal::GetCapturedStderr();
+    EXPECT_EQ(caught_reason, expected_reason) << failing_phase;
+    EXPECT_NE(error_output.find(expected_reason), std::string::npos)
         << failing_phase;
-    static_cast<void>(testing::internal::GetCapturedStderr());
   }
 }
 
 TEST(BenchmarkExecutorTest, InjectedLatencyChainFailureCoversCacheAndMainPhases) {
-  BenchmarkConfig config = build_base_config();
+  const ScopedDeterministicTimerSystemCalls timer_system_calls;
+  BenchmarkConfig config = build_injected_failure_config();
   config.only_bandwidth = false;
   config.only_latency = false;
   BenchmarkBuffers unused_buffers;
@@ -282,11 +339,20 @@ TEST(BenchmarkExecutorTest, InjectedLatencyChainFailureCoversCacheAndMainPhases)
     hooks.fail_latency_chain_setup = [&](const std::string& phase_name) {
       return phase_name == phase.first;
     };
+    const std::string expected_reason =
+        Messages::benchmark_reason_latency_chain_setup_failed(phase.first);
+    std::string caught_reason;
     testing::internal::CaptureStderr();
-    EXPECT_THROW(run_single_benchmark_loop(unused_buffers, config, phase.second,
-                                           *timer, nullptr, &hooks),
-                 std::runtime_error)
+    try {
+      static_cast<void>(run_single_benchmark_loop(
+          unused_buffers, config, phase.second, *timer, nullptr, &hooks));
+    } catch (const std::runtime_error& error) {
+      caught_reason = error.what();
+    }
+    const std::string error_output =
+        testing::internal::GetCapturedStderr();
+    EXPECT_EQ(caught_reason, expected_reason) << phase.first;
+    EXPECT_NE(error_output.find(expected_reason), std::string::npos)
         << phase.first;
-    static_cast<void>(testing::internal::GetCapturedStderr());
   }
 }

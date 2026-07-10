@@ -16,11 +16,70 @@
 #include <gtest/gtest.h>
 #include "core/config/config.h"
 #include "core/config/constants.h"
-#include "core/system/system_info.h"
+#include "output/console/messages/messages_api.h"
 #include <cstdlib>
-#include <limits>
 #include <cstdint>
-#include <unistd.h>  // getpagesize
+#include <limits>
+#include <string>
+#include <vector>
+
+namespace {
+
+class ScopedConfigTestHooks {
+ public:
+  ScopedConfigTestHooks() {
+    hooks_.use_system_info = true;
+    hooks_.cpu_name = "Injected Apple CPU";
+    hooks_.macos_version = "15.5.1";
+    hooks_.performance_cores = 6;
+    hooks_.efficiency_cores = 4;
+    hooks_.total_logical_cores = 10;
+    hooks_.l1_cache_size = 128 * Constants::BYTES_PER_KB;
+    hooks_.l2_cache_size = 4 * Constants::BYTES_PER_MB;
+    hooks_.generated_seed = 0x123456789abcdef0ULL;
+    hooks_.page_size_bytes = 16 * Constants::BYTES_PER_KB;
+    set_config_test_hooks(&hooks_);
+  }
+
+  ~ScopedConfigTestHooks() { set_config_test_hooks(nullptr); }
+
+  size_t page_size_bytes() const { return hooks_.page_size_bytes; }
+  int total_logical_cores() const { return hooks_.total_logical_cores; }
+
+ private:
+  ConfigTestHooks hooks_;
+};
+
+ScopedConfigTestHooks scoped_config_test_hooks;
+
+struct CapturedParseResult {
+  int result = EXIT_FAILURE;
+  std::string stderr_output;
+};
+
+CapturedParseResult parse_capturing_stderr(const std::vector<std::string>& arguments,
+                                           BenchmarkConfig& config) {
+  std::vector<std::string> mutable_arguments = arguments;
+  std::vector<char*> argv;
+  argv.reserve(mutable_arguments.size());
+  for (std::string& argument : mutable_arguments) {
+    argv.push_back(argument.data());
+  }
+
+  testing::internal::CaptureStderr();
+  const int result =
+      parse_arguments(static_cast<int>(argv.size()), argv.data(), config);
+  return {result, testing::internal::GetCapturedStderr()};
+}
+
+std::string expected_invalid_value(const std::string& option,
+                                   const std::string& value,
+                                   const std::string& reason) {
+  return Messages::error_prefix() +
+         Messages::error_invalid_value(option, value, reason);
+}
+
+}  // namespace
 
 // Test default configuration values
 TEST(ConfigTest, DefaultValues) {
@@ -102,6 +161,98 @@ TEST(ConfigTest, ParseSweepValid) {
   EXPECT_EQ(config.sweep_max_runs, 4u);
 }
 
+TEST(ConfigTest, RejectsMalformedNumericTokensWithCentralizedErrors) {
+  struct InvalidNumericCase {
+    std::vector<std::string> arguments;
+    const char* option;
+    const char* value;
+    const char* reason;
+  };
+
+  constexpr const char* kInvalidSignedReason =
+      "must be an integer without whitespace, a plus sign, or trailing characters";
+  constexpr const char* kInvalidUnsignedReason =
+      "must be an unsigned 64-bit integer without whitespace, a sign, or trailing characters";
+  const InvalidNumericCase cases[] = {
+      {{"program", "--iterations", "5x"}, "--iterations", "5x", kInvalidSignedReason},
+      {{"program", "--buffer-size", "1junk"}, "--buffer-size", "1junk", kInvalidSignedReason},
+      {{"program", "--count", "2x"}, "--count", "2x", kInvalidSignedReason},
+      {{"program", "--latency-samples", "3x"}, "--latency-samples", "3x", kInvalidSignedReason},
+      {{"program", "--latency-stride-bytes", "64x"}, "--latency-stride-bytes", "64x", kInvalidSignedReason},
+      {{"program", "--latency-tlb-locality-kb", "16x"}, "--latency-tlb-locality-kb", "16x", kInvalidSignedReason},
+      {{"program", "--cache-size", "16x"}, "--cache-size", "16x", kInvalidSignedReason},
+      {{"program", "--threads", "1x"}, "--threads", "1x", kInvalidSignedReason},
+      {{"program", "--sweep-max-runs", "4x"}, "--sweep-max-runs", "4x", kInvalidSignedReason},
+      {{"program", "--benchmark", "--seed", "9x"}, "--seed", "9x", kInvalidUnsignedReason},
+      {{"program", "--iterations", " 5"}, "--iterations", " 5", kInvalidSignedReason},
+      {{"program", "--iterations", "5 "}, "--iterations", "5 ", kInvalidSignedReason},
+      {{"program", "--iterations", "+5"}, "--iterations", "+5", kInvalidSignedReason},
+      {{"program", "--benchmark", "--seed", "+5"}, "--seed", "+5", kInvalidUnsignedReason},
+      {{"program", "--iterations", "9223372036854775808"}, "--iterations", "9223372036854775808", "out of range"},
+      {{"program", "--benchmark", "--seed", "18446744073709551616"},
+       "--seed", "18446744073709551616",
+       "out of range for an unsigned 64-bit integer"},
+      {{"program", "--analyze-tlb", "--latency-stride-bytes", "64x"},
+       "--latency-stride-bytes", "64x", kInvalidSignedReason},
+      {{"program", "--analyze-tlb", "--sweep-max-runs", "4x"}, "--sweep-max-runs", "4x", kInvalidSignedReason},
+      {{"program", "--analyze-tlb", "--seed", "+5"}, "--seed", "+5", kInvalidUnsignedReason},
+  };
+
+  for (const InvalidNumericCase& test_case : cases) {
+    SCOPED_TRACE(test_case.option);
+    SCOPED_TRACE(test_case.value);
+    BenchmarkConfig config;
+    const CapturedParseResult parsed =
+        parse_capturing_stderr(test_case.arguments, config);
+    EXPECT_EQ(parsed.result, EXIT_FAILURE);
+    EXPECT_NE(parsed.stderr_output.find(expected_invalid_value(
+                  test_case.option, test_case.value, test_case.reason)),
+              std::string::npos);
+  }
+}
+
+TEST(ConfigTest, RejectsMalformedSweepListsAndNumericValues) {
+  struct InvalidSweepCase {
+    const char* specification;
+    const char* reason;
+    bool analyze_tlb;
+  };
+
+  constexpr const char* kInvalidSignedReason =
+      "must be an integer without whitespace, a plus sign, or trailing characters";
+  const InvalidSweepCase cases[] = {
+      {"buffer-size=,1", "sweep value list cannot contain empty values", false},
+      {"buffer-size=1,", "sweep value list cannot contain empty values", false},
+      {"buffer-size=1,,2", "sweep value list cannot contain empty values", false},
+      {"buffer-size=1x", kInvalidSignedReason, false},
+      {"cache-size=16x", kInvalidSignedReason, false},
+      {"threads=1x", kInvalidSignedReason, false},
+      {"latency-tlb-locality-kb=16x", kInvalidSignedReason, false},
+      {"latency-stride-bytes=64x", kInvalidSignedReason, false},
+      {"buffer-size= 1", kInvalidSignedReason, false},
+      {"buffer-size=+1", kInvalidSignedReason, false},
+      {"buffer-size=9223372036854775808", "out of range", false},
+      {"latency-stride-bytes=64x", kInvalidSignedReason, true},
+      {"latency-stride-bytes=64,", "sweep value list cannot contain empty values", true},
+  };
+
+  for (const InvalidSweepCase& test_case : cases) {
+    SCOPED_TRACE(test_case.specification);
+    std::vector<std::string> arguments = {"program"};
+    arguments.push_back(test_case.analyze_tlb ? "--analyze-tlb" : "--benchmark");
+    arguments.push_back("--sweep");
+    arguments.push_back(test_case.specification);
+
+    BenchmarkConfig config;
+    const CapturedParseResult parsed =
+        parse_capturing_stderr(arguments, config);
+    EXPECT_EQ(parsed.result, EXIT_FAILURE);
+    EXPECT_NE(parsed.stderr_output.find(expected_invalid_value(
+                  "--sweep", test_case.specification, test_case.reason)),
+              std::string::npos);
+  }
+}
+
 TEST(ConfigTest, ParseSweepRejectsUnsupportedParameter) {
   BenchmarkConfig config;
   const char* argv[] = {"program", "--benchmark", "--sweep", "latency-samples=100,200"};
@@ -170,7 +321,7 @@ TEST(ConfigTest, ValidateAnalyzeTlbSweepRejectsGlobalRandom) {
 TEST(ConfigTest, ValidateAnalyzeTlbRejectsStrideLargerThanPage) {
   BenchmarkConfig config;
   config.analyze_tlb = true;
-  config.latency_stride_bytes = static_cast<size_t>(getpagesize()) * 2;
+  config.latency_stride_bytes = scoped_config_test_hooks.page_size_bytes() * 2;
 
   EXPECT_EQ(validate_config(config), EXIT_FAILURE);
 }
@@ -181,7 +332,7 @@ TEST(ConfigTest, ValidateAnalyzeTlbAllowsAlignedStrideThatDoesNotDividePage) {
   config.latency_stride_bytes = 136;
 
   ASSERT_EQ(136u % sizeof(uintptr_t), 0u);
-  ASSERT_NE(static_cast<size_t>(getpagesize()) % config.latency_stride_bytes, 0u);
+  ASSERT_NE(scoped_config_test_hooks.page_size_bytes() % config.latency_stride_bytes, 0u);
   EXPECT_EQ(validate_config(config), EXIT_SUCCESS);
 }
 
@@ -471,7 +622,7 @@ TEST(ConfigTest, ParsePatternsDefaultsToDetectedCoreCount) {
   const char* argv[] = {"program", "--patterns"};
 
   ASSERT_EQ(parse_arguments(2, const_cast<char**>(argv), config), EXIT_SUCCESS);
-  EXPECT_EQ(config.num_threads, get_total_logical_cores());
+  EXPECT_EQ(config.num_threads, scoped_config_test_hooks.total_logical_cores());
   EXPECT_FALSE(config.user_specified_threads);
 }
 
@@ -985,7 +1136,7 @@ TEST(ConfigTest, ValidateConfigRejectsOnlyLatencyWithNoTargets) {
 
 TEST(ConfigTest, ValidateConfigRejectsLatencyTlbLocalityNotPageMultiple) {
   BenchmarkConfig config;
-  const size_t page_size = static_cast<size_t>(getpagesize());
+  const size_t page_size = scoped_config_test_hooks.page_size_bytes();
   config.latency_tlb_locality_bytes = page_size + Constants::BYTES_PER_KB;
 
   int result = validate_config(config);
@@ -1002,7 +1153,7 @@ TEST(ConfigTest, ValidateConfigRejectsLatencyStrideNotPointerAligned) {
 
 TEST(ConfigTest, ValidateConfigRejectsLatencyTlbLocalityTooSmallForStride) {
   BenchmarkConfig config;
-  const size_t page_size = static_cast<size_t>(getpagesize());
+  const size_t page_size = scoped_config_test_hooks.page_size_bytes();
   config.latency_stride_bytes = page_size;
   config.latency_tlb_locality_bytes = page_size;
 
@@ -1012,7 +1163,7 @@ TEST(ConfigTest, ValidateConfigRejectsLatencyTlbLocalityTooSmallForStride) {
 
 TEST(ConfigTest, ValidateConfigAllowsLatencyTlbLocalityForStride) {
   BenchmarkConfig config;
-  const size_t page_size = static_cast<size_t>(getpagesize());
+  const size_t page_size = scoped_config_test_hooks.page_size_bytes();
   config.latency_stride_bytes = page_size;
   config.latency_tlb_locality_bytes = page_size * 2;
 
@@ -1022,7 +1173,7 @@ TEST(ConfigTest, ValidateConfigAllowsLatencyTlbLocalityForStride) {
 
 TEST(ConfigTest, ValidateConfigAllowsLatencyTlbLocalityPageMultiple) {
   BenchmarkConfig config;
-  const size_t page_size = static_cast<size_t>(getpagesize());
+  const size_t page_size = scoped_config_test_hooks.page_size_bytes();
   config.latency_tlb_locality_bytes = page_size * 2;
 
   int result = validate_config(config);
