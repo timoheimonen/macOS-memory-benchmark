@@ -1396,3 +1396,13 @@ TEST_F(MessagesFormattingTest, ConfigPatternAutomaticIterations) {
   EXPECT_EQ(Messages::config_pattern_iterations_auto(0.150, 0.100, 0.250),
             "Pattern Passes: automatic duration calibration (target 150 ms; intended window 100-250 ms)");
 }
+
+TEST_F(MessagesFormattingTest, ConfigBenchmarkAutomaticIterations) {
+  EXPECT_EQ(Messages::config_benchmark_iterations_auto(0.150, 0.100, 0.250),
+            "Bandwidth Passes: automatic duration calibration (target 150 ms; intended window 100-250 ms)");
+}
+
+TEST_F(MessagesFormattingTest, ConfigLatencyCalibration) {
+  EXPECT_EQ(Messages::config_latency_calibration(0.250, 0.100, 0.300, 16),
+            "Latency Headline: automatic continuous-pass calibration (target 250 ms; intended window 100-300 ms; minimum 16 complete cycles)");
+}

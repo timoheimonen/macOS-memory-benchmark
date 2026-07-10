@@ -312,9 +312,16 @@ std::string config_license();
 std::string config_buffer_size(double buffer_size_mib, unsigned long buffer_size_mb);
 std::string config_total_allocation(double total_mib);
 std::string config_iterations(int iterations);
+std::string config_benchmark_iterations_auto(double target_seconds,
+                                             double min_seconds,
+                                             double max_seconds);
 std::string config_pattern_iterations_auto(double target_seconds,
                                            double min_seconds,
                                            double max_seconds);
+std::string config_latency_calibration(double target_seconds,
+                                       double min_seconds,
+                                       double max_seconds,
+                                       size_t minimum_complete_cycles);
 std::string config_loop_count(int loop_count);
 std::string config_non_cacheable(bool use_non_cacheable);
 std::string config_latency_stride(size_t stride_bytes);

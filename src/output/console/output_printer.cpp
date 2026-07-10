@@ -171,8 +171,6 @@ void print_configuration(size_t buffer_size, size_t buffer_size_mb, size_t total
                          const std::string &cpu_name, int perf_cores, int eff_cores, int num_threads,
                          bool only_bandwidth, bool only_latency, bool run_patterns,
                          bool user_specified_iterations) {
-  (void)only_bandwidth;
-
   // Print benchmark header and copyright/license info.
   std::cout << Messages::config_header(SOFTVERSION) << std::endl;
   std::cout << Messages::config_copyright() << std::endl;
@@ -197,9 +195,23 @@ void print_configuration(size_t buffer_size, size_t buffer_size_mb, size_t total
                        Constants::PATTERN_CALIBRATION_MIN_SECONDS,
                        Constants::PATTERN_CALIBRATION_MAX_SECONDS)
                 << std::endl;
+    } else if (!user_specified_iterations) {
+      std::cout << Messages::config_benchmark_iterations_auto(
+                       Constants::BENCHMARK_CALIBRATION_TARGET_SECONDS,
+                       Constants::BENCHMARK_CALIBRATION_MIN_SECONDS,
+                       Constants::BENCHMARK_CALIBRATION_MAX_SECONDS)
+                << std::endl;
     } else {
       std::cout << Messages::config_iterations(iterations) << std::endl;
     }
+  }
+  if (!only_bandwidth && !run_patterns) {
+    std::cout << Messages::config_latency_calibration(
+                     Constants::BENCHMARK_LATENCY_TARGET_SECONDS,
+                     Constants::BENCHMARK_LATENCY_CALIBRATION_MIN_SECONDS,
+                     Constants::BENCHMARK_LATENCY_CALIBRATION_MAX_SECONDS,
+                     Constants::BENCHMARK_LATENCY_MIN_COMPLETE_CYCLES)
+              << std::endl;
   }
   std::cout << Messages::config_loop_count(loop_count) << std::endl;
   // Display non-cacheable memory hints status.
