@@ -43,8 +43,10 @@
 #include "core/system/system_info.h"
 #include "output/console/messages/messages_api.h"
 #include "utils/benchmark.h"
+#include <chrono>
 #include <iostream>
 #include <limits>
+#include <random>
 #include <stdexcept>
 #include <sstream>
 #include <cmath>
@@ -85,6 +87,7 @@ constexpr const char* OPT_OUTPUT_SHORT = "-o";
 constexpr const char* OPT_OUTPUT_LONG = "--output";
 constexpr const char* OPT_PATTERNS_SHORT = "-P";
 constexpr const char* OPT_PATTERNS_LONG = "--patterns";
+constexpr const char* OPT_SEED_LONG = "--seed";
 constexpr const char* OPT_SWEEP_SHORT = "-S";
 constexpr const char* OPT_SWEEP_LONG = "--sweep";
 constexpr const char* OPT_SWEEP_MAX_RUNS_SHORT = "-X";
@@ -96,6 +99,22 @@ constexpr const char* OPT_TLB_DENSITY_LONG = "--tlb-density";
 
 bool is_option(const std::string& arg, const char* short_option, const char* long_option) {
   return arg == short_option || arg == long_option;
+}
+
+uint64_t generate_tlb_seed() {
+  try {
+    std::random_device random_device;
+    const uint64_t high = static_cast<uint64_t>(random_device()) << 32U;
+    const uint64_t seed = high ^ static_cast<uint64_t>(random_device());
+    if (seed != 0) {
+      return seed;
+    }
+  } catch (...) {
+    // Fall through to a local monotonic-clock seed if random_device is unavailable.
+  }
+  const uint64_t clock_seed = static_cast<uint64_t>(
+      std::chrono::steady_clock::now().time_since_epoch().count());
+  return clock_seed != 0 ? clock_seed : 0x9e3779b97f4a7c15ULL;
 }
 
 bool tlb_sweep_density_from_string(const std::string& value, TlbSweepDensity& out_density) {
@@ -293,11 +312,13 @@ int parse_arguments(int argc, char* argv[], BenchmarkConfig& config) {
 
   if (analyze_tlb_present) {
     config.analyze_tlb = true;
-    config.tlb_sweep_density = TlbSweepDensity::High;
+    config.tlb_sweep_density = TlbSweepDensity::Medium;
+    config.sweep_max_runs = Constants::DEFAULT_ANALYZE_TLB_SWEEP_MAX_RUNS;
     bool output_seen = false;
     bool latency_stride_seen = false;
     bool latency_chain_mode_seen = false;
     bool tlb_density_seen = false;
+    bool seed_seen = false;
     bool sweep_max_runs_seen = false;
 
     for (int i = 1; i < argc; ++i) {
@@ -510,7 +531,7 @@ int parse_arguments(int argc, char* argv[], BenchmarkConfig& config) {
         }
 
         const std::string density_value = argv[i];
-        TlbSweepDensity parsed_density = TlbSweepDensity::High;
+        TlbSweepDensity parsed_density = TlbSweepDensity::Medium;
         if (!tlb_sweep_density_from_string(density_value, parsed_density)) {
           std::cerr << Messages::error_prefix()
                     << Messages::error_invalid_value(
@@ -525,6 +546,51 @@ int parse_arguments(int argc, char* argv[], BenchmarkConfig& config) {
         continue;
       }
 
+      if (arg == OPT_SEED_LONG) {
+        if (seed_seen) {
+          std::cerr << Messages::error_prefix()
+                    << Messages::error_duplicate_option(OPT_SEED_LONG)
+                    << std::endl;
+          print_usage(argv[0]);
+          return EXIT_FAILURE;
+        }
+        if (++i >= argc) {
+          std::cerr << Messages::error_prefix()
+                    << Messages::error_missing_value(OPT_SEED_LONG)
+                    << std::endl;
+          print_usage(argv[0]);
+          return EXIT_FAILURE;
+        }
+
+        const std::string seed_value = argv[i];
+        try {
+          if (!seed_value.empty() && seed_value.front() == '-') {
+            throw std::out_of_range("must be an unsigned 64-bit integer");
+          }
+          size_t parsed_characters = 0;
+          const unsigned long long parsed_seed = std::stoull(seed_value, &parsed_characters);
+          if (parsed_characters != seed_value.size()) {
+            throw std::invalid_argument("must be an unsigned 64-bit integer");
+          }
+          config.tlb_seed = static_cast<uint64_t>(parsed_seed);
+        } catch (const std::invalid_argument& e) {
+          std::cerr << Messages::error_prefix()
+                    << Messages::error_invalid_value(arg, seed_value, e.what())
+                    << std::endl;
+          print_usage(argv[0]);
+          return EXIT_FAILURE;
+        } catch (const std::out_of_range& e) {
+          std::cerr << Messages::error_prefix()
+                    << Messages::error_invalid_value(arg, seed_value, e.what())
+                    << std::endl;
+          print_usage(argv[0]);
+          return EXIT_FAILURE;
+        }
+        config.user_specified_tlb_seed = true;
+        seed_seen = true;
+        continue;
+      }
+
       std::cerr << Messages::error_prefix()
                 << Messages::error_analyze_tlb_must_be_used_alone()
                 << std::endl;
@@ -532,6 +598,9 @@ int parse_arguments(int argc, char* argv[], BenchmarkConfig& config) {
       return EXIT_FAILURE;
     }
 
+    if (!seed_seen) {
+      config.tlb_seed = generate_tlb_seed();
+    }
     config.cpu_name = get_processor_name();
     config.macos_version = get_macos_version();
     config.perf_cores = get_performance_cores();

@@ -16,6 +16,7 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -45,6 +46,68 @@ nlohmann::json read_json_file(const std::filesystem::path& path) {
   nlohmann::json parsed;
   in >> parsed;
   return parsed;
+}
+
+TlbMeasurementRecord make_paired_tlb_record(TlbMeasurementPass pass,
+                                            size_t point_index,
+                                            size_t locality_bytes,
+                                            size_t round_index,
+                                            size_t order_index,
+                                            uint64_t task_seed,
+                                            double spread_latency_ns) {
+  TlbMeasurementRecord record{pass,
+                              point_index,
+                              locality_bytes,
+                              round_index,
+                              order_index,
+                              task_seed,
+                              spread_latency_ns};
+  const size_t page_size = 16384;
+  const size_t requested_pages = locality_bytes / page_size;
+  record.paired.available = true;
+  record.paired.spread_measured_first = (round_index % 2) == 0;
+  record.paired.spread.seed = task_seed + 1;
+  record.paired.spread.latency_ns = spread_latency_ns;
+  record.paired.spread.pilot_access_count = 4096;
+  record.paired.spread.pilot_duration_ns = 40960.0;
+  record.paired.spread.access_count = 1000000;
+  record.paired.spread.diagnostics = {
+      TlbChainLayout::Spread,
+      TlbChainTraversalPolicy::RandomPagesRandomOffsets,
+      requested_pages,
+      requested_pages,
+      requested_pages,
+      requested_pages,
+      1,
+      locality_bytes,
+      page_size,
+      64,
+      64,
+      task_seed + 1,
+      true,
+  };
+  record.paired.packed.seed = task_seed + 2;
+  record.paired.packed.latency_ns = spread_latency_ns - 5.0;
+  record.paired.packed.pilot_access_count = 4096;
+  record.paired.packed.pilot_duration_ns = 32768.0;
+  record.paired.packed.access_count = 1250000;
+  record.paired.packed.diagnostics = {
+      TlbChainLayout::Packed,
+      TlbChainTraversalPolicy::RandomPagesRandomOffsets,
+      requested_pages,
+      std::max<size_t>(1, (requested_pages + 255) / 256),
+      requested_pages,
+      requested_pages,
+      std::min<size_t>(requested_pages, 256),
+      requested_pages * 64,
+      page_size,
+      64,
+      64,
+      task_seed + 2,
+      true,
+  };
+  record.paired.translation_delta_ns = 5.0;
+  return record;
 }
 
 }  // namespace
@@ -93,23 +156,132 @@ TEST(JsonSchemaTest, PatternExporterIncludesPatternsMode) {
 }
 
 TEST(JsonSchemaTest, TlbAnalysisExporterIncludesModeAndCoreCounts) {
+  constexpr uint64_t kConfigSeed = 18446744073709551615ULL;
+  constexpr uint64_t kFirstTaskSeed = 18446744073709551613ULL;
   BenchmarkConfig config;
   config.output_file = make_temp_json_path("tlb_schema").string();
   config.tlb_sweep_density = TlbSweepDensity::High;
+  config.tlb_seed = kConfigSeed;
+  config.user_specified_tlb_seed = true;
+  config.main_thread_qos_requested = true;
+  config.main_thread_qos_applied = true;
+  config.main_thread_qos_code = 0;
 
   const std::string cpu_name = "test-cpu";
   const std::vector<size_t> localities_bytes = {16 * Constants::BYTES_PER_KB};
   const std::vector<std::vector<double>> sweep_loop_latencies_ns = {{15.0, 15.1}};
   const std::vector<double> p50_latency_ns = {15.0};
   const std::vector<double> page_walk_comparison_loop_latencies_ns = {95.0, 96.0};
+  const std::vector<TlbSweepPoint> sweep_points = {{
+      0, 1, 1, 16 * Constants::BYTES_PER_KB, 64, 256, "base",
+      16 * Constants::BYTES_PER_KB, 16 * Constants::BYTES_PER_KB}};
+  std::vector<TlbMeasurementRecord> measurement_records = {
+      make_paired_tlb_record(TlbMeasurementPass::Base,
+                             0,
+                             16 * Constants::BYTES_PER_KB,
+                             0,
+                             0,
+                             kFirstTaskSeed,
+                             15.0),
+      make_paired_tlb_record(TlbMeasurementPass::Base,
+                             0,
+                             16 * Constants::BYTES_PER_KB,
+                             1,
+                             0,
+                             101,
+                             15.1),
+      make_paired_tlb_record(TlbMeasurementPass::Validation,
+                             2,
+                             16 * Constants::BYTES_PER_KB,
+                             0,
+                             0,
+                             300,
+                             14.9),
+      make_paired_tlb_record(TlbMeasurementPass::Validation,
+                             2,
+                             16 * Constants::BYTES_PER_KB,
+                             1,
+                             0,
+                             301,
+                             15.0),
+      make_paired_tlb_record(TlbMeasurementPass::LargeLocality,
+                             1,
+                             512 * Constants::BYTES_PER_MB,
+                             0,
+                             0,
+                             200,
+                             95.0),
+      make_paired_tlb_record(TlbMeasurementPass::LargeLocality,
+                             1,
+                             512 * Constants::BYTES_PER_MB,
+                             1,
+                             0,
+                             201,
+                             100.0),
+      make_paired_tlb_record(TlbMeasurementPass::LargeLocality,
+                             1,
+                             512 * Constants::BYTES_PER_MB,
+                             2,
+                             0,
+                             202,
+                             101.0),
+  };
+  measurement_records[4].paired.packed.latency_ns = 94.0;
+  measurement_records[4].paired.translation_delta_ns = 1.0;
+  measurement_records[5].paired.packed.latency_ns = 90.0;
+  measurement_records[5].paired.translation_delta_ns = 10.0;
+  measurement_records[6].paired.packed.latency_ns = 100.0;
+  measurement_records[6].paired.translation_delta_ns = 1.0;
   TlbBoundaryDetection l1_boundary;
   l1_boundary.detected = true;
   l1_boundary.boundary_index = 0;
   l1_boundary.boundary_locality_bytes = 16 * Constants::BYTES_PER_KB;
+  l1_boundary.bracket_lower_bytes = 8 * Constants::BYTES_PER_KB;
+  l1_boundary.bracket_upper_bytes = 16 * Constants::BYTES_PER_KB;
   l1_boundary.overlaps_private_cache_knee = true;
   l1_boundary.confidence = "Medium";
-  const TlbBoundaryDetection l2_boundary;
+  l1_boundary.discovery.available = true;
+  l1_boundary.discovery.passed = true;
+  l1_boundary.discovery.effect_ns = 2.0;
+  l1_boundary.discovery.minimum_effect_ns = 0.5;
+  l1_boundary.discovery.noise_floor_ns = 0.1;
+  l1_boundary.discovery.effect_ci = {1.5, 2.5, 0.95, 30, 2000};
+  l1_boundary.discovery.persistence_points_passed = 2;
+  l1_boundary.validation = l1_boundary.discovery;
+  TlbBoundaryCandidate accepted_candidate;
+  accepted_candidate.accepted = true;
+  accepted_candidate.boundary_index = 0;
+  accepted_candidate.boundary_locality_bytes = 16 * Constants::BYTES_PER_KB;
+  accepted_candidate.bracket_lower_bytes = 8 * Constants::BYTES_PER_KB;
+  accepted_candidate.bracket_upper_bytes = 16 * Constants::BYTES_PER_KB;
+  accepted_candidate.discovery = l1_boundary.discovery;
+  accepted_candidate.validation = l1_boundary.validation;
+  l1_boundary.candidates.push_back(accepted_candidate);
+  TlbBoundaryDetection l2_boundary;
+  TlbBoundaryCandidate rejected_candidate;
+  rejected_candidate.boundary_index = 1;
+  rejected_candidate.boundary_locality_bytes = 32 * Constants::BYTES_PER_KB;
+  rejected_candidate.bracket_lower_bytes = 16 * Constants::BYTES_PER_KB;
+  rejected_candidate.bracket_upper_bytes = 32 * Constants::BYTES_PER_KB;
+  rejected_candidate.discovery.available = true;
+  rejected_candidate.discovery.effect_ns = 1.0;
+  rejected_candidate.discovery.minimum_effect_ns = 0.5;
+  rejected_candidate.discovery.rejection_reason =
+      "persistence-not-confirmed";
+  rejected_candidate.validation.rejection_reason =
+      "discovery-not-accepted";
+  l2_boundary.candidates.push_back(rejected_candidate);
   const PrivateCacheKneeDetection private_cache_knee;
+  const TlbRuntimeProfile runtime_profile = {
+      "exhaustive", 2, 4, 20 * 1000 * 1000ULL, 32, 5 * 1000 * 1000,
+      0.15, 1000};
+  const TlbWorkEstimate base_work_estimate = estimate_tlb_work(
+      1, 1050 * Constants::BYTES_PER_MB, 1, runtime_profile);
+  const std::vector<TlbPassExecutionSummary> pass_summaries = {
+      {TlbMeasurementPass::Base, 1, 2, true, true},
+      {TlbMeasurementPass::Validation, 1, 2, true, true},
+      {TlbMeasurementPass::LargeLocality, 1, 2, true, true},
+  };
 
   const TlbAnalysisJsonContext context = {
       config,
@@ -126,6 +298,15 @@ TEST(JsonSchemaTest, TlbAnalysisExporterIncludesModeAndCoreCounts) {
       512 * Constants::BYTES_PER_MB,
       1024,
       true,
+      "complete",
+      1,
+      1,
+      1,
+      1,
+      true,
+      true,
+      sweep_points,
+      measurement_records,
       localities_bytes,
       sweep_loop_latencies_ns,
       p50_latency_ns,
@@ -149,6 +330,14 @@ TEST(JsonSchemaTest, TlbAnalysisExporterIncludesModeAndCoreCounts) {
       15.0,
       80.5,
       3.0,
+      runtime_profile,
+      4096,
+      1228,
+      1050 * Constants::BYTES_PER_MB,
+      0,
+      "",
+      base_work_estimate,
+      pass_summaries,
   };
 
   ASSERT_EQ(save_tlb_analysis_to_json(context), EXIT_SUCCESS);
@@ -157,20 +346,208 @@ TEST(JsonSchemaTest, TlbAnalysisExporterIncludesModeAndCoreCounts) {
   EXPECT_EQ(output_json[JsonKeys::CONFIGURATION][JsonKeys::MODE], Constants::TLB_ANALYSIS_JSON_MODE_NAME);
   EXPECT_EQ(output_json[JsonKeys::CONFIGURATION][JsonKeys::PERFORMANCE_CORES], 4);
   EXPECT_EQ(output_json[JsonKeys::CONFIGURATION][JsonKeys::EFFICIENCY_CORES], 6);
+  EXPECT_EQ(output_json[JsonKeys::CONFIGURATION]["schema_version"], 4);
+  EXPECT_EQ(output_json[JsonKeys::CONFIGURATION]["methodology_version"],
+            "page-native-paired-adaptive-validated-v4");
+  EXPECT_EQ(output_json[JsonKeys::CONFIGURATION]["boundary_signal"],
+            "translation_delta_ns");
+  EXPECT_NE(output_json[JsonKeys::CONFIGURATION]["latency_interpretation"]
+                .get<std::string>()
+                .find("not direct DRAM latency"),
+            std::string::npos);
+  EXPECT_EQ(output_json[JsonKeys::CONFIGURATION]["seed"],
+            "18446744073709551615");
+  EXPECT_EQ(output_json[JsonKeys::CONFIGURATION]["seed_encoding"],
+            "uint64-decimal-string");
+  EXPECT_EQ(output_json[JsonKeys::CONFIGURATION]["seed_source"], "user");
+  EXPECT_TRUE(output_json[JsonKeys::CONFIGURATION]["seed_derivation"].contains(
+      "measurement_task"));
+  EXPECT_TRUE(output_json[JsonKeys::CONFIGURATION]["seed_derivation"].contains(
+      "chain_layout"));
+  EXPECT_TRUE(output_json[JsonKeys::CONFIGURATION]["main_thread_qos"]["requested"]);
+  EXPECT_TRUE(output_json[JsonKeys::CONFIGURATION]["main_thread_qos"]["applied"]);
+  EXPECT_FALSE(output_json[JsonKeys::CONFIGURATION].contains(
+      "schema_compatibility"));
+  EXPECT_FALSE(output_json[JsonKeys::CONFIGURATION].contains(
+      JsonKeys::LATENCY_SAMPLE_COUNT));
+  EXPECT_FALSE(output_json[JsonKeys::CONFIGURATION].contains(
+      "buffer_locked"));
+  EXPECT_EQ(output_json[JsonKeys::CONFIGURATION]["schedule_policy"],
+            "seeded-cyclic-latin");
+  EXPECT_EQ(output_json[JsonKeys::CONFIGURATION]["latency_chain_mode_requested"], "auto");
   EXPECT_TRUE(output_json[JsonKeys::CONFIGURATION].contains(JsonKeys::LATENCY_CHAIN_MODE));
   EXPECT_EQ(output_json[JsonKeys::CONFIGURATION][JsonKeys::LATENCY_CHAIN_MODE], "random-box");
+  EXPECT_TRUE(output_json[JsonKeys::CONFIGURATION]["chain_mode_comparability"]
+                  .get<std::string>()
+                  .find("identical effective chain mode") != std::string::npos);
   EXPECT_TRUE(output_json[JsonKeys::CONFIGURATION].contains(JsonKeys::TLB_DENSITY));
   EXPECT_EQ(output_json[JsonKeys::CONFIGURATION][JsonKeys::TLB_DENSITY], "high");
   EXPECT_TRUE(output_json[JsonKeys::CONFIGURATION].contains("fine_sweep_added_points"));
+  EXPECT_EQ(output_json[JsonKeys::CONFIGURATION]["runtime_profile"],
+            "exhaustive");
+  EXPECT_EQ(output_json[JsonKeys::CONFIGURATION]["adaptive_rounds"]["minimum"],
+            2);
+  EXPECT_EQ(output_json[JsonKeys::CONFIGURATION]["adaptive_rounds"]["maximum"],
+            4);
+  EXPECT_EQ(output_json[JsonKeys::CONFIGURATION]["memory_budget"]["budget_mb"],
+            1228);
+  EXPECT_EQ(output_json[JsonKeys::CONFIGURATION]["buffer_lock"]["errno"], 0);
+  EXPECT_EQ(output_json[JsonKeys::CONFIGURATION]["base_work_estimate"]["point_count"],
+            1);
+  EXPECT_TRUE(output_json[JsonKeys::CONFIGURATION]["base_work_estimate"].contains(
+      "maximum_pilot_accesses_per_measurement"));
   EXPECT_TRUE(output_json["tlb_analysis"].contains("private_cache_knee"));
   EXPECT_EQ(output_json["tlb_analysis"]["l1_tlb_detection"]["inferred_entries"], 248);
-  EXPECT_EQ(output_json["tlb_analysis"]["l1_tlb_detection"]["inferred_entries_method"], "range_midpoint");
+  EXPECT_EQ(output_json["tlb_analysis"]["l1_tlb_detection"]["inferred_entries_method"],
+            "validated-bracket-range-midpoint-estimate");
+  EXPECT_TRUE(output_json["tlb_analysis"]["l1_tlb_detection"]["discovery"]["passed"]);
+  EXPECT_TRUE(output_json["tlb_analysis"]["l1_tlb_detection"]["validation"]["passed"]);
+  EXPECT_TRUE(output_json["tlb_analysis"]["l1_tlb_detection"]["candidates"][0]["accepted"]);
+  EXPECT_FALSE(output_json["tlb_analysis"]["l2_tlb_detection"]["detected"]);
+  EXPECT_EQ(output_json["tlb_analysis"]["l2_tlb_detection"]["candidates"].size(), 1u);
+  EXPECT_EQ(output_json["tlb_analysis"]["l2_tlb_detection"]["candidates"][0]
+                       ["discovery"]["rejection_reason"],
+            "persistence-not-confirmed");
   EXPECT_TRUE(output_json["tlb_analysis"]["l1_tlb_detection"]["overlaps_private_cache_knee"]);
-
+  EXPECT_EQ(output_json["tlb_analysis"]["status"], "complete");
+  EXPECT_EQ(output_json["tlb_analysis"]["planned_points"], 1);
+  EXPECT_EQ(output_json["tlb_analysis"]["measured_points"], 1);
+  EXPECT_EQ(output_json["tlb_analysis"]["validation_planned_points"], 1);
+  EXPECT_EQ(output_json["tlb_analysis"]["validation_measured_points"], 1);
+  EXPECT_TRUE(output_json["tlb_analysis"]["validation_required"]);
+  EXPECT_EQ(output_json["tlb_analysis"]["validation_status"], "complete");
+  EXPECT_TRUE(output_json["tlb_analysis"]["validation_complete"]);
+  EXPECT_EQ(output_json["tlb_analysis"]
+                       ["minimum_planned_base_validation_pairs"],
+            4);
+  EXPECT_EQ(output_json["tlb_analysis"]
+                       ["maximum_planned_base_validation_pairs"],
+            8);
+  EXPECT_EQ(output_json["tlb_analysis"]["planned_base_validation_pairs"],
+            8);
+  EXPECT_EQ(output_json["tlb_analysis"]
+                       ["planned_base_validation_raw_measurements"],
+            16);
+  EXPECT_EQ(output_json["tlb_analysis"]
+                       ["completed_base_validation_measurement_records"],
+            4);
+  EXPECT_EQ(output_json["tlb_analysis"]["completed_base_validation_pairs"],
+            4);
+  EXPECT_EQ(output_json["tlb_analysis"]
+                       ["completed_base_validation_raw_measurements"],
+            8);
+  EXPECT_EQ(output_json["tlb_analysis"]
+                       ["completed_large_locality_measurement_records"],
+            3);
+  EXPECT_EQ(output_json["tlb_analysis"]["completed_large_locality_pairs"],
+            3);
+  EXPECT_EQ(output_json["tlb_analysis"]
+                       ["completed_large_locality_raw_measurements"],
+            6);
+  EXPECT_EQ(output_json["tlb_analysis"]["total_completed_measurement_records"],
+            7);
+  EXPECT_EQ(output_json["tlb_analysis"]["total_completed_measurement_pairs"],
+            7);
+  EXPECT_EQ(output_json["tlb_analysis"]["total_completed_raw_measurements"],
+            14);
+  EXPECT_EQ(output_json["tlb_analysis"]["measurement_counter_scope"]
+                       ["total"],
+            "all serialized measurement passes");
+  EXPECT_FALSE(output_json["tlb_analysis"].contains(
+      "completed_measurement_pairs"));
+  EXPECT_FALSE(output_json["tlb_analysis"].contains(
+      "completed_raw_measurements"));
+  EXPECT_TRUE(output_json["tlb_analysis"]["conclusions_valid"]);
+  EXPECT_EQ(output_json["tlb_analysis"]["measurement_records"].size(), 7u);
+  EXPECT_EQ(output_json["tlb_analysis"]["measurement_records"][0]["pass"], "base");
+  EXPECT_EQ(output_json["tlb_analysis"]["measurement_records"][0]
+                       ["seed"],
+            "18446744073709551613");
+  EXPECT_EQ(output_json["tlb_analysis"]["measurement_records"][0]
+                       ["paired_control"]["spread"]["seed"],
+            "18446744073709551614");
+  EXPECT_EQ(output_json["tlb_analysis"]["measurement_records"][0]
+                       ["paired_control"]["packed"]["seed"],
+            "18446744073709551615");
+  EXPECT_FALSE(output_json["tlb_analysis"]["measurement_records"][0]
+                           .contains("latency_ns"));
+  EXPECT_EQ(output_json["tlb_analysis"]["measurement_records"][2]["pass"],
+            "validation");
+  EXPECT_TRUE(output_json["tlb_analysis"]["measurement_records"][0]
+                         ["paired_control"]["available"]);
+  EXPECT_DOUBLE_EQ(output_json["tlb_analysis"]["measurement_records"][0]
+                              ["paired_control"]["translation_delta_ns"],
+                   5.0);
+  EXPECT_EQ(output_json["tlb_analysis"]["measurement_records"][0]
+                       ["paired_control"]["spread"]["access_count"],
+            1000000);
+  ASSERT_EQ(output_json["tlb_analysis"]["pass_summaries"].size(), 3u);
+  EXPECT_TRUE(output_json["tlb_analysis"]["pass_summaries"][0]["converged"]);
+  EXPECT_EQ(output_json["tlb_analysis"]["sweep"][0]["requested_pages"], 1);
+  EXPECT_EQ(output_json["tlb_analysis"]["sweep"][0]["actual_pages"], 1);
+  EXPECT_FALSE(output_json["tlb_analysis"]["sweep"][0].contains(
+      "pointer_count"));
+  EXPECT_FALSE(output_json["tlb_analysis"]["sweep"][0].contains(
+      "actual_node_count"));
+  EXPECT_EQ(output_json["tlb_analysis"]["sweep"][0]["pointer_nodes"], 1);
+  EXPECT_EQ(output_json["tlb_analysis"]["sweep"][0]
+                       ["spread_pointers_per_page_max"],
+            1);
+  EXPECT_EQ(output_json["tlb_analysis"]["sweep"][0]
+                       ["packed_pointers_per_page_max"],
+            1);
+  EXPECT_EQ(output_json["tlb_analysis"]["sweep"][0]["actual_unique_cache_lines"], 1);
+  EXPECT_EQ(output_json["tlb_analysis"]["sweep"][0]
+                       ["active_cache_line_footprint_bytes"],
+            Constants::CACHE_LINE_SIZE_BYTES);
+  EXPECT_TRUE(output_json["tlb_analysis"]["sweep"][0]
+                         ["short_cycle_diagnostic"]);
+  EXPECT_FALSE(output_json["tlb_analysis"]["sweep"][0].contains(
+      "p50_latency_ns"));
+  EXPECT_FALSE(output_json["tlb_analysis"]["sweep"][0].contains(
+      "loop_latencies_ns"));
+  EXPECT_DOUBLE_EQ(output_json["tlb_analysis"]["sweep"][0]
+                              ["translation_delta_p50_ns"],
+                   5.0);
+  EXPECT_EQ(output_json["tlb_analysis"]["sweep"][0]["measurements"].size(), 4u);
+  EXPECT_EQ(output_json["tlb_analysis"]["sweep"][0]["measurements"][1]["round_index"], 1);
+  EXPECT_TRUE(output_json["tlb_analysis"]["sweep"][0].contains(
+      "validation_translation_deltas_ns"));
+  const nlohmann::json spread_chain =
+      output_json["tlb_analysis"]["sweep"][0]["spread_chain"];
+  EXPECT_EQ(spread_chain["pointer_nodes"], 1);
+  EXPECT_EQ(spread_chain["pointers_per_page_max"], 1);
+  EXPECT_FALSE(spread_chain.contains("node_count"));
+  EXPECT_FALSE(spread_chain.contains("max_nodes_per_page"));
+  ASSERT_TRUE(output_json["tlb_analysis"].contains(
+      "large_locality_paired_comparison"));
+  EXPECT_FALSE(output_json["tlb_analysis"].contains(
+      "large_locality_latency_delta"));
+  EXPECT_FALSE(output_json["tlb_analysis"].contains("page_walk_penalty"));
+  const nlohmann::json paired_large =
+      output_json["tlb_analysis"]["large_locality_paired_comparison"];
+  EXPECT_TRUE(paired_large["available"]);
+  EXPECT_DOUBLE_EQ(paired_large["spread_p50_ns"], 100.0);
+  EXPECT_DOUBLE_EQ(paired_large["packed_p50_ns"], 94.0);
+  EXPECT_DOUBLE_EQ(paired_large["translation_delta_p50_ns"], 1.0);
+  EXPECT_NE(paired_large["translation_delta_p50_ns"].get<double>(),
+            paired_large["spread_p50_ns"].get<double>() -
+                paired_large["packed_p50_ns"].get<double>());
+  EXPECT_EQ(paired_large["spread_actual_pages"], 32768);
+  EXPECT_EQ(paired_large["packed_actual_pages"], 128);
+  EXPECT_EQ(paired_large["unique_cache_lines"], 32768);
+  EXPECT_EQ(paired_large["active_cache_line_footprint_bytes"],
+            2 * Constants::BYTES_PER_MB);
+  EXPECT_EQ(paired_large["pointer_nodes"], 32768);
+  EXPECT_FALSE(paired_large.contains("node_count"));
+  EXPECT_EQ(paired_large["measurements"].size(), 3u);
+  EXPECT_NE(paired_large["interpretation"].get<std::string>().find(
+                "not DRAM latency"),
+            std::string::npos);
   std::filesystem::remove(config.output_file);
 }
 
-TEST(JsonSchemaTest, TlbAnalysisExporterOmitsPageWalkPenaltyWhenComparisonIncomplete) {
+TEST(JsonSchemaTest, TlbAnalysisExporterOmitsRemovedAliasesAndHandlesUnavailableComparison) {
   BenchmarkConfig config;
   config.output_file = make_temp_json_path("tlb_page_walk_incomplete").string();
 
@@ -179,11 +556,23 @@ TEST(JsonSchemaTest, TlbAnalysisExporterOmitsPageWalkPenaltyWhenComparisonIncomp
   const std::vector<std::vector<double>> sweep_loop_latencies_ns = {{15.0, 15.1}};
   const std::vector<double> p50_latency_ns = {15.0};
   const std::vector<double> page_walk_comparison_loop_latencies_ns;
+  const std::vector<TlbSweepPoint> sweep_points = {{
+      0, 1, 1, 16 * Constants::BYTES_PER_KB, 64, 256, "base",
+      16 * Constants::BYTES_PER_KB, 16 * Constants::BYTES_PER_KB}};
+  const std::vector<TlbMeasurementRecord> measurement_records = {
+      make_paired_tlb_record(TlbMeasurementPass::Base,
+                             0,
+                             16 * Constants::BYTES_PER_KB,
+                             0,
+                             0,
+                             100,
+                             15.0),
+  };
   const TlbBoundaryDetection l1_boundary;
   const TlbBoundaryDetection l2_boundary;
   const PrivateCacheKneeDetection private_cache_knee;
 
-  const TlbAnalysisJsonContext context = {
+  TlbAnalysisJsonContext context = {
       config,
       cpu_name,
       4,
@@ -198,6 +587,15 @@ TEST(JsonSchemaTest, TlbAnalysisExporterOmitsPageWalkPenaltyWhenComparisonIncomp
       512 * Constants::BYTES_PER_MB,
       1024,
       true,
+      "interrupted",
+      2,
+      1,
+      1,
+      0,
+      false,
+      false,
+      sweep_points,
+      measurement_records,
       localities_bytes,
       sweep_loop_latencies_ns,
       p50_latency_ns,
@@ -225,12 +623,48 @@ TEST(JsonSchemaTest, TlbAnalysisExporterOmitsPageWalkPenaltyWhenComparisonIncomp
 
   ASSERT_EQ(save_tlb_analysis_to_json(context), EXIT_SUCCESS);
   const nlohmann::json output_json = read_json_file(config.output_file);
-  const nlohmann::json page_walk_json = output_json["tlb_analysis"]["page_walk_penalty"];
+  const nlohmann::json paired_large =
+      output_json["tlb_analysis"]["large_locality_paired_comparison"];
 
-  EXPECT_FALSE(page_walk_json["available"]);
-  EXPECT_FALSE(page_walk_json.contains("comparison_p50_ns"));
-  EXPECT_FALSE(page_walk_json.contains("penalty_ns"));
-  EXPECT_NE(page_walk_json["reason"].get<std::string>().find("did not complete"), std::string::npos);
+  EXPECT_EQ(output_json["tlb_analysis"]["status"], "interrupted");
+  EXPECT_FALSE(output_json["tlb_analysis"]["conclusions_valid"]);
+  EXPECT_TRUE(output_json["tlb_analysis"]["validation_required"]);
+  EXPECT_EQ(output_json["tlb_analysis"]["validation_status"], "not-run");
+  EXPECT_FALSE(output_json["tlb_analysis"]["validation_complete"]);
+  EXPECT_FALSE(output_json["tlb_analysis"]["l1_tlb_detection"]["detected"]);
+  EXPECT_NE(output_json["tlb_analysis"]["l1_tlb_detection"]["reason"]
+                .get<std::string>()
+                .find("suppressed"),
+            std::string::npos);
+  EXPECT_FALSE(output_json["tlb_analysis"].contains("page_walk_penalty"));
+  EXPECT_FALSE(output_json["tlb_analysis"].contains(
+      "large_locality_latency_delta"));
+  EXPECT_FALSE(paired_large["available"]);
+  EXPECT_FALSE(paired_large.contains("translation_delta_p50_ns"));
+  EXPECT_NE(paired_large["reason"].get<std::string>().find("incomplete"),
+            std::string::npos);
+
+  std::filesystem::remove(config.output_file);
+
+  config.output_file = make_temp_json_path("tlb_256mb_fallback").string();
+  context.analysis_status = "complete";
+  context.conclusions_valid = true;
+  context.validation_planned_points = 0;
+  context.validation_measured_points = 0;
+  context.validation_complete = true;
+  context.selected_buffer_mb = 256;
+  context.can_measure_page_walk_penalty = false;
+  ASSERT_EQ(save_tlb_analysis_to_json(context), EXIT_SUCCESS);
+  const nlohmann::json fallback_json = read_json_file(config.output_file);
+  const nlohmann::json fallback_large =
+      fallback_json["tlb_analysis"]["large_locality_paired_comparison"];
+  EXPECT_FALSE(fallback_json["tlb_analysis"]["validation_required"]);
+  EXPECT_EQ(fallback_json["tlb_analysis"]["validation_status"],
+            "not-required");
+  EXPECT_TRUE(fallback_json["tlb_analysis"]["validation_complete"]);
+  EXPECT_FALSE(fallback_large["available"]);
+  EXPECT_NE(fallback_large["reason"].get<std::string>().find("512 MiB"),
+            std::string::npos);
 
   std::filesystem::remove(config.output_file);
 }

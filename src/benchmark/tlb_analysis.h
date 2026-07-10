@@ -24,12 +24,65 @@
 #define TLB_ANALYSIS_H
 
 #include <cstddef>  // size_t
-#include <utility>
+#include <cstdint>
 #include <string>
+#include <utility>
 #include <vector>
+
+#include "benchmark/tlb_measurement_scheduler.h"
 
 // Forward declaration
 struct BenchmarkConfig;
+
+/** Deterministic percentile-bootstrap interval for a paired median effect. */
+struct TlbBootstrapInterval {
+  double lower_ns = 0.0;
+  double upper_ns = 0.0;
+  double confidence_level = 0.95;
+  size_t paired_sample_count = 0;
+  size_t bootstrap_resamples = 0;
+};
+
+/** Discovery or validation evidence for one boundary candidate. */
+struct TlbBoundaryEvidence {
+  bool available = false;
+  bool passed = false;
+  double effect_ns = 0.0;
+  double minimum_effect_ns = 0.0;
+  double noise_floor_ns = 0.0;
+  TlbBootstrapInterval effect_ci;
+  size_t persistence_points_passed = 0;
+  size_t persistence_points_required = 2;
+  std::string rejection_reason;
+};
+
+/** Accepted or rejected changepoint candidate retained for diagnostics. */
+struct TlbBoundaryCandidate {
+  size_t boundary_index = 0;
+  size_t boundary_locality_bytes = 0;
+  size_t bracket_lower_bytes = 0;
+  size_t bracket_upper_bytes = 0;
+  TlbBoundaryEvidence discovery;
+  TlbBoundaryEvidence validation;
+  bool accepted = false;
+};
+
+/** Round-major matrix. Rows are rounds and columns are locality points. */
+using TlbRoundPointMatrix = std::vector<std::vector<double>>;
+
+/** Deterministic aggregate of same-round spread/packed measurements for one locality. */
+struct TlbPairedPointSummary {
+  bool available = false;
+  double spread_p50_ns = 0.0;
+  double packed_p50_ns = 0.0;
+  double translation_delta_p50_ns = 0.0;
+  size_t spread_actual_pages = 0;
+  size_t packed_actual_pages = 0;
+  size_t unique_cache_lines = 0;
+  size_t active_cache_line_footprint_bytes = 0;
+  size_t node_count = 0;
+  bool short_cycle_diagnostic = false;
+};
 
 /**
  * @struct TlbBoundaryDetection
@@ -46,6 +99,11 @@ struct TlbBoundaryDetection {
   double step_percent = 0.0;
   bool persistent_jump = false;
   bool overlaps_private_cache_knee = false;
+  size_t bracket_lower_bytes = 0;
+  size_t bracket_upper_bytes = 0;
+  TlbBoundaryEvidence discovery;
+  TlbBoundaryEvidence validation;
+  std::vector<TlbBoundaryCandidate> candidates;
   std::string confidence;
 };
 
@@ -83,6 +141,45 @@ TlbBoundaryDetection detect_tlb_boundary(const std::vector<size_t>& locality_byt
                                          size_t segment_start_index,
                                          size_t min_locality_bytes = 0,
                                          const std::vector<std::vector<double>>* loop_latencies = nullptr);
+
+/**
+ * @brief Build a round x point translation-delta matrix from measurement records.
+ *
+ * Only records from the requested pass set are included. Missing cells are NaN.
+ */
+TlbRoundPointMatrix build_tlb_translation_delta_matrix(
+    const std::vector<size_t>& locality_bytes,
+    const std::vector<TlbMeasurementRecord>& records,
+    const std::vector<TlbMeasurementPass>& included_passes);
+
+/**
+ * @brief Aggregate one locality without mixing measurement passes.
+ *
+ * The translation-delta P50 is the median of stored same-round deltas, not the
+ * difference between independently aggregated spread and packed medians. Chain
+ * diagnostics must agree across every included record or the summary is unavailable.
+ */
+TlbPairedPointSummary summarize_tlb_paired_point(
+    const std::vector<TlbMeasurementRecord>& records,
+    size_t locality_bytes,
+    const std::vector<TlbMeasurementPass>& included_passes);
+
+/**
+ * @brief Detect a persistent translation-delta changepoint with independent validation.
+ *
+ * Discovery and validation use paired point-to-point effects, a deterministic
+ * percentile-bootstrap 95% interval, a predefined minimum effect, and two
+ * following persistence points. A boundary is accepted only when both passes
+ * satisfy the same criteria. When validation_matrix is null, discovery evidence
+ * and candidates are returned but `detected` remains false.
+ */
+TlbBoundaryDetection detect_tlb_boundary_robust(
+    const std::vector<size_t>& locality_bytes,
+    const TlbRoundPointMatrix& discovery_matrix,
+    const TlbRoundPointMatrix* validation_matrix,
+    size_t segment_start_index,
+    size_t min_locality_bytes,
+    uint64_t bootstrap_seed);
 
 /**
  * @brief Infer TLB entries from locality boundary and page size.
@@ -141,5 +238,13 @@ PrivateCacheKneeDetection detect_private_cache_knee(
  * @return EXIT_SUCCESS on success, EXIT_FAILURE on error
  */
 int run_tlb_analysis(const BenchmarkConfig& config);
+
+/**
+ * @brief Run standalone TLB analysis with an injectable stop predicate.
+ * @param config Benchmark configuration.
+ * @param stop_requested Non-blocking stop predicate checked between scheduled measurements.
+ */
+int run_tlb_analysis(const BenchmarkConfig& config,
+                     const TlbStopRequested& stop_requested);
 
 #endif  // TLB_ANALYSIS_H

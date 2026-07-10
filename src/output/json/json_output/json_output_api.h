@@ -140,7 +140,9 @@ nlohmann::json build_config_json(const BenchmarkConfig& config, const char* mode
 nlohmann::json build_main_memory_json(const BenchmarkConfig& config, const BenchmarkStatistics& stats);
 nlohmann::json build_cache_json(const BenchmarkConfig& config, const BenchmarkStatistics& stats);
 nlohmann::json build_patterns_json(const PatternStatistics& stats);
-int write_json_to_file(const std::filesystem::path& file_path, const nlohmann::ordered_json& json_output);
+int write_json_to_file(const std::filesystem::path& file_path,
+                       const nlohmann::ordered_json& json_output,
+                       bool announce_success = true);
 nlohmann::ordered_json build_results_json(const BenchmarkConfig& config,
                                           const BenchmarkStatistics& stats,
                                           double total_execution_time_sec);

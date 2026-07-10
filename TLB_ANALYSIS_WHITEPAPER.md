@@ -2,14 +2,14 @@
 
 ## 1. Purpose
 
-This document specifies how `macOS-memory-benchmark` implements standalone TLB analysis mode (`--analyze-tlb`) in version `0.56.1`.
+This document specifies how `macOS-memory-benchmark` implements standalone TLB analysis mode (`--analyze-tlb`) in version `0.57.0`.
 
 The goal is to provide a reproducible, implementation-accurate description of:
 
 - measurement workflow,
 - boundary detection logic,
 - confidence scoring,
-- derived metrics (entry reach and page-walk penalty),
+- derived metrics (entry reach and a large-locality latency delta),
 - JSON verification payload.
 
 This is an implementation whitepaper, not a generic architecture theory paper.
@@ -38,7 +38,7 @@ Related whitepaper for the other standalone analysis mode:
 
 ### 3.1 Accepted Forms
 
-`--analyze-tlb` runs a dedicated analysis path and accepts only optional JSON output, optional latency stride override, optional chain-mode override, optional sweep density, optional parameter sweep specs, and an optional sweep run-count guardrail:
+`--analyze-tlb` runs a dedicated analysis path and accepts only optional JSON output, optional latency stride override, optional chain-mode override, optional sweep density, optional reproducibility seed, optional parameter sweep specs, and an optional sweep run-count guardrail:
 
 ```bash
 memory_benchmark --analyze-tlb
@@ -46,6 +46,7 @@ memory_benchmark --analyze-tlb --output tlb_analysis.json
 memory_benchmark --output tlb_analysis.json --analyze-tlb
 memory_benchmark --analyze-tlb --latency-stride-bytes 128 --output tlb_analysis_stride128.json
 memory_benchmark --analyze-tlb --latency-chain-mode random-box --tlb-density medium --output tlb_analysis_medium.json
+memory_benchmark --analyze-tlb --seed 123456789 --output tlb_analysis_seeded.json
 memory_benchmark --analyze-tlb --sweep tlb-density=low,medium,high --output tlb_density_sweep.json
 memory_benchmark --analyze-tlb --sweep latency-stride-bytes=64,128 --sweep tlb-density=medium,high --sweep-max-runs 4 --output tlb_stride_density_sweep.json
 ```
@@ -54,15 +55,34 @@ memory_benchmark --analyze-tlb --sweep latency-stride-bytes=64,128 --sweep tlb-d
 
 If `--latency-stride-bytes` is not provided, the default stride is **256 bytes**, which matches the standard latency mode default (`Constants::LATENCY_STRIDE_BYTES`).
 
+For the page-native paired methodology, analyze-TLB stride must:
+
+- be pointer-size aligned,
+- be no larger than the system page size.
+
+The builder rounds effective node spacing up to a cache-line multiple, so stride does not need to divide the system page
+size. These rules apply to direct options and every stride value in a parameter sweep. The complete Cartesian sweep is
+validated before its first benchmark run.
+
 ### 3.3 Sweep Density (`--tlb-density`)
 
 Sweep density applies only to `--analyze-tlb`.
 
-- `low`: 15-point base sweep, no refinement pass
-- `medium`: 15-point base sweep + refinement pass
-- `high` (default): 29-point base sweep + refinement pass
+- `low` (`quick`): 15-point base sweep, no refinement pass, 7-12 adaptive rounds
+- `medium` (`standard`, default): 15-point base sweep + refinement pass, 10-20 adaptive rounds
+- `high` (`exhaustive`): 29-point base sweep + refinement pass, 15-30 adaptive rounds
 
-### 3.4 Parameter Sweep (`--sweep`)
+### 3.4 Reproducibility Seed (`--seed`)
+
+`--seed <uint64>` fixes the planner order, derived per-task seeds, and standalone TLB pointer-chain permutations. If the
+option is omitted, one 64-bit seed is generated when the command is parsed. A Cartesian parameter sweep reuses that
+same base seed for every generated run, which makes parameter comparisons share the same deterministic schedule policy.
+
+The base seed, whether it was user-provided or generated, and every derived measurement seed are stored in JSON. Task seeds
+apply SplitMix64 successively to the base seed, pass, round index, and point index. Spread and packed layout seeds apply
+SplitMix64 again with a layout-specific domain constant. The `seed_derivation` object records both rules.
+
+### 3.5 Parameter Sweep (`--sweep`)
 
 Sweep mode applies a Cartesian product over supported TLB-analysis parameters and writes one combined JSON file.
 
@@ -72,11 +92,14 @@ Allowed `--analyze-tlb` sweep keys:
 - `latency-chain-mode`
 - `tlb-density`
 
-Sweep mode requires `--output <file>`. `--sweep-max-runs <count>` limits the number of generated combinations; the default guardrail is `256`.
+Sweep mode requires `--output <file>`. `--sweep-max-runs <count>` limits the number of generated combinations. Its default is `16` for `--analyze-tlb` and `256` for other modes; an explicit value overrides the mode default.
+
+Each sweep parameter key may appear only once. The combined JSON is atomically checkpointed after each completed run
+and records top-level `status`, `planned_runs`, `completed_runs`, and `conclusions_valid` fields.
 
 `--sweep latency-chain-mode=...` follows the same chain-mode rule as direct `--latency-chain-mode`: `global-random` is rejected for `--analyze-tlb`.
 
-### 3.5 Rejected Combinations
+### 3.6 Rejected Combinations
 
 All options outside the accepted set are rejected when `--analyze-tlb` is present.
 `--latency-chain-mode global-random` is also rejected for `--analyze-tlb`, because it ignores locality windows and would turn the locality sweep into repeated full-buffer random measurements with misleading boundary labels.
@@ -92,36 +115,108 @@ memory_benchmark --analyze-tlb --latency-chain-mode global-random
 
 ### 4.1 Buffer Allocation Policy
 
-The analysis tries these buffers in order:
+The analysis considers these buffers in order:
 
 1. `1024 MB`
 2. `512 MB`
 3. `256 MB`
 
-If all fail, mode exits with an insufficient-memory error.
+Before `mmap()`, each candidate receives a conservative peak estimate:
 
-`mlock()` is attempted for the selected buffer; report shows whether lock succeeded.
+```text
+peak = candidate buffer + 1 MB + 256 bytes * (candidate bytes / page size)
+```
 
-After allocation, the code validates that `pointer_count = buffer_size / stride >= 2`. If stride is very large relative to the selected buffer, mode exits with an error before any measurement begins.
+The memory budget is the smaller of 30% of currently available memory and the amount that preserves a 1 GB reserve.
+On systems reporting at most 1 GB available, half is retained; if available-memory detection fails, the fallback budget is
+384 MB. The first candidate whose predicted peak fits this budget is attempted. If no budget-safe candidate can be allocated,
+the mode exits with an insufficient-memory error. An `mmap()` success alone therefore cannot select an unsafe candidate.
 
-### 4.2 Fixed Measurement Parameters
+`mlock()` is best-effort. On failure, the mode reports errno and its message, records the failure and policy in JSON, and
+continues unlocked. The settings block also reports available memory, the selected budget, and predicted peak use.
 
-The mode uses fixed constants:
+The main thread also requests `user-interactive` QoS before measurement. This is a best-effort scheduler hint: console and
+JSON record whether it was requested/applied and the API return code, and failure emits a warning without aborting the run.
 
-- `loops_per_point = 30`
-- `accesses_per_loop = 25,000,000`
+The page-native builder validates each requested spread footprint and packed footprint against the selected buffer before
+writing any pointer slots.
+
+### 4.2 Calibrated Measurement Parameters and Adaptive Rounds
+
+The three runtime profiles are:
+
+| Profile | Density | Rounds | Target per chain | Minimum chain cycles | Profile access cap | CI-width target |
+|---|---|---:|---:|---:|---:|---:|
+| quick | low | 7-12 | 5 ms | 8 | 1,000,000 | 0.50 ns |
+| standard | medium | 10-20 | 10 ms | 16 | 2,000,000 | 0.30 ns |
+| exhaustive | high | 15-30 | 20 ms | 32 | 5,000,000 | 0.15 ns |
+
+Each chain first runs a pilot covering at least two whole cycles and 4,096 accesses. Pilot time determines the main access
+count for the profile target duration. The result is rounded to a whole-chain multiple and cannot fall below the profile's
+minimum cycle count. For a very large chain, that minimum takes precedence over the nominal profile access cap.
+
+After the profile minimum round count, every completed round evaluates the deterministic bootstrap 95% median-CI width of
+the translation delta at every point. The pass stops only when every width meets the profile target; otherwise it continues
+to the maximum. Convergence bootstrap storage and chain-construction/validation scratch containers are reused between serial
+measurements to avoid repeated inner-loop allocation.
+
+Before every pass, console output reports point count, round range, conservative maximum pointer accesses, predicted peak
+memory, and a rough duration based on target measurement time. JSON stores the base estimate, runtime policy, per-chain pilot
+and calibrated access counts, and realized per-pass round/convergence summaries.
 
 Stride behavior:
 
-- Effective stride is taken from `--latency-stride-bytes` (default: **256 bytes**).
+- Requested stride is taken from `--latency-stride-bytes` (default: **256 bytes**).
+- Spread node-slot spacing is `cache_line_align_up(max(stride, 64 bytes))`; packed node spacing is one 64-byte cache line. Effective spacing is recorded per chain.
 
-**Chain mode:** The latency chain mode is resolved via `resolve_latency_chain_mode(config.latency_chain_mode, page_walk_baseline_locality_bytes)`. This determines the method used to build the pointer-chase chain for each locality measurement. The resolved mode is reported in the console output and stored in the JSON metadata. In `--analyze-tlb`, `global-random` is rejected; `auto` resolves to `random-box` because the baseline locality is non-zero.
+**Page-native chain pair:** Every task uses one logical node per requested page. The spread layout places exactly one node
+on every requested page. The packed layout places the same number of nodes on consecutive distinct cache lines, minimizing
+the page footprint while preserving node and unique-cache-line counts. Pointer
+values are written in sorted physical-slot order only after traversal has been planned; setup writes therefore do not
+replay the measured traversal order. An independent chain-integrity traversal requires every node to stay in bounds, occur once,
+use a unique cache line, and return to the chain head after the exact node count. Spread validation additionally requires
+`actual_pages == requested_pages`.
+
+Virtual locality is a translation working-set label, not the amount of active pointer data. Each logical node occupies one
+64-byte cache line. With 16 KiB pages, the 512 MiB comparison therefore has `512 MiB / 16 KiB = 32,768` nodes and a
+`32,768 * 64 B = 2 MiB` active cache-line footprint. Runtime profiles traverse every chain for multiple complete cycles, so
+spread and packed timings are intentionally cache-hot and must not be interpreted as direct DRAM latency. Packed preserves
+the same node and cache-line counts while reducing the translation footprint.
+
+**Chain mode mapping:** The latency chain mode is resolved through
+`resolve_latency_chain_mode(config.latency_chain_mode, page_walk_baseline_locality_bytes)` and reported in console/JSON.
+`auto` resolves to `random-box`; `global-random` remains invalid. In the page-native builder, `random-box` means randomized
+page order plus randomized page-internal offsets, `same-random-in-box` means increasing page order with one shared offset,
+and `diff-random-in-box` means increasing page order with independently selected offsets. Packed controls preserve the
+corresponding randomized or increasing logical traversal policy. Results are comparable only when the effective chain mode
+matches. Increasing-page modes intentionally change address order and prefetch exposure, so their latency, detected brackets,
+and runtime must not be treated as interchangeable with `random-box`.
 
 **Memory prefaulting:** After buffer allocation, the code calls `madvise(ptr, size_bytes, MADV_WILLNEED)` to prefault pages and reduce page-fault noise during early measurement.
 
-**Measurement loop:** Each loop rebuilds the latency chain for the target locality, performs warmup, runs pointer chase, and stores latency as `ns/access`.
+**Balanced round scheduler:** The pure scheduler creates the active profile's maximum schedule and stops only after a whole
+round. Every round contains every planned locality exactly once. A seed-shuffled initial point order is cyclically rotated on subsequent rounds, so a point traverses different
+order positions instead of always being early or late in the run. For a full point-count cycle, each point occupies every
+order position once.
 
-Per-point central value is `P50` (median) over 30 loops.
+**Measurement task:** Each scheduled task derives a stable task seed from the base seed, pass, round, and point index,
+then derives separate spread and packed layout seeds. Both chains are built, warmed, and measured inside that one task;
+which layout runs first alternates by round/order parity and is recorded. The task stores both raw `ns/access` values and
+`translation_delta_ns = spread_latency_ns - packed_latency_ns`. The regular benchmark path still uses its existing
+latency-chain implementation and random-device behavior.
+
+The compact console uses one row per point: paired-delta P50 first, spread and packed P50 controls, active cache-line
+footprint, and a `*` marker below 64 nodes. One shared legend explains the marker; spread/packed page counts, unique-line
+counts, full chain diagnostics, and raw samples remain in JSON. The 64-node marker matches the existing minimum
+`64 * page_size` TLB guard and is diagnostic only; it does not alter the grid or boundary acceptance. Sub-resolution
+negative values are displayed as `0.00 ns`, while JSON retains the measured value. Boundary inference uses a
+round-by-point matrix of `translation_delta_ns`, and JSON identifies this with
+`boundary_signal = "translation_delta_ns"`. Spread latency remains available for compatibility plots and the separate
+private-cache/refinement heuristics; it is not the accepted L1/L2 boundary signal.
+
+The `quick` profile is explicitly labeled a screening estimate in the final console report because its coarse, fixed grid
+can bracket a different boundary than the refined `standard` or `exhaustive` profiles. Hardware conclusions from `quick`
+should be confirmed with `medium` or `high`.
 
 ### 4.3 Locality Sweep
 
@@ -143,32 +238,50 @@ Refinement policy by density:
 
 Effective sweep start is stride-aware:
 
-- `min_sweep_locality = max(16KB, 2 * stride)`
+- `min_sweep_locality = page_align_up(max(16KB, 2 * stride))`
 - points below `min_sweep_locality` are skipped
-- if `min_sweep_locality` is not in the canonical set, it is inserted as the first sweep point
+- canonical points and an inserted minimum are aligned to the system page size and deduplicated
 
 The final sweep vector is deduplicated (via `std::sort` followed by `std::unique`). This prevents duplicates if `min_sweep_locality` exactly matches one of the canonical points.
 
-Separate page-walk comparison point:
+Refinement candidates are rounded down to system-page boundaries, deduplicated across targets, and filtered against every
+locality already present in the measured base grid. The planned, measured, and added-point counters therefore describe the
+same unique locality set. A narrow bracket can produce fewer than seven unique refinement points; this is intentional because
+sub-page refinement would invalidate the entry-count interpretation under the current methodology.
+
+Refinement points form a separate balanced round pass. Each point records whether it came from the private-cache, L1,
+L2, or a merged refinement target and stores the bracket that produced it. After refinement, discovery candidates that
+pass the robust statistical gates cause their bracket baseline, candidate, and two following points to be measured again
+in an independent validation pass.
+
+Separate large-locality comparison point:
 
 - `512MB` (run only when selected buffer is at least `512MB`)
 
 ## 5. Boundary Detection Algorithm
 
-Boundary detection uses a recency-weighted segment baseline with multi-point persistence, adaptive noise thresholding, and IQR-overlap rejection.
+Accepted L1/L2 detection is based on same-round spread/packed differences, not pointwise spread P50 values. Let
+`D[r,i]` be `translation_delta_ns` at round `r` and sorted locality point `i`. For a candidate index `i`, the detector
+forms paired point-to-point effects:
 
-For candidate index `i`:
+`E[r,i] = D[r,i] - D[r,i-1]`
 
-- `baseline_ns = recency_weighted_average(p50[segment_start, i))` — weighted average where point `j` receives weight `(j - segment_start + 1)`. Recent measurements carry more influence, reducing drag from early points that may have had different thermal or frequency conditions.
-- `step_ns = p50[i] - baseline_ns`
-- `noise_boost_ns = median(IQR of baseline loop-latency rows)` (when loop rows are available and baseline has at least 3 points)
-- `threshold_ns = max(2.0ns, baseline_ns * 0.10, noise_boost_ns)`
+Only rounds containing both cells participate. At least seven paired samples are required. The candidate effect is
+`median(E[:,i])`, and its uncertainty is a deterministic 2,000-resample percentile-bootstrap 95% interval derived from
+the command seed and candidate index.
 
-Candidate passes threshold when:
+The predefined minimum effect is `0.5ns`. The adaptive noise floor is:
 
-- `step_ns >= threshold_ns`
+`max(0.1ns, 1.5 * median(abs(prior adjacent paired effects)))`
 
-The algorithm scans from `segment_start_index + 1` and returns the **first** candidate that satisfies threshold, guard, and IQR conditions. If no candidate passes, detection returns `detected = false`.
+A discovery candidate must satisfy all of the following:
+
+- median paired effect is at least `0.5ns`;
+- the bootstrap 95% CI lower bound is above the adaptive noise floor;
+- both of the next two locality points remain above the same pre-boundary point by at least `0.5ns`;
+- both persistence effects also have bootstrap 95% CI lower bounds above the noise floor.
+
+Material candidates rejected by CI, persistence, or validation are retained in JSON with their rejection reason.
 
 ### 5.1 TLB Guard (Cache-Transition Filter)
 
@@ -182,53 +295,31 @@ where:
 
 The guard acts as a hard lower-bound filter on the candidate index `i`; it does not shift the segment start or baseline calculation.
 
-### 5.2 Adaptive Noise Floor and IQR-Overlap Rejection
+### 5.2 Independent Validation Pass
 
-When per-point raw loop latencies are available (the 30 individual loop measurements), the detector first estimates a baseline-noise floor from IQR values and raises the candidate threshold when needed:
+Discovery evidence never creates an accepted boundary by itself. All points needed to check a discovery candidate are
+deduplicated into a separate `validation` scheduler pass. This pass uses pass-specific task and chain seeds and repeats
+the bracket baseline, candidate, and two persistence points. The same minimum-effect, noise-floor, paired-sample,
+bootstrap-CI, and two-point persistence gates are applied to the validation matrix. `detected = true` requires both
+`discovery.passed` and `validation.passed`.
 
-- `IQR(point_j) = Q3_j - Q1_j`
-- `noise_boost_ns = median(IQR(point_j))` for `j in [segment_start, i)`
-- effective threshold includes this term: `max(2.0ns, 10% baseline, noise_boost_ns)`
+### 5.3 Strict Two-Point Persistence
 
-Then it applies an IQR-overlap check to reject candidates whose step still falls inside baseline noise overlap:
+Both following locality points are mandatory. A final-point candidate or a candidate with only one following point is
+rejected as `insufficient-persistence-points`; there is no strong-last-point exception. A single high point followed by a
+return to baseline is rejected as `persistence-not-confirmed`.
 
-- `avg_baseline_q3 = average(Q3 of raw loops for each point in [segment_start, i))`
-- `candidate_q1 = Q1 of raw loops at point i`
-- If `avg_baseline_q3 >= candidate_q1`, the baseline's upper noise band overlaps the candidate's lower band → candidate is **rejected** even if the P50 step exceeds threshold.
+### 5.4 L1 and L2 Boundary Selection
 
-This prevents false positives from "lucky medians" where a noisy point happens to have a high P50 due to sampling variance.
+- `L1 TLB boundary`: first candidate above the TLB guard that passes discovery and validation.
+- `L2 TLB boundary`: first independently validated candidate from the offset segment after L1.
 
-### 5.3 Multi-Point Persistence
-
-Instead of checking a single future point, the detector checks up to **3 future points**:
-
-- `persistent_count = count of j in [i+1, min(i+4, size)) where p50[j] - baseline >= threshold`
-- `persistent_jump = persistent_count >= 2` (majority of up to 3)
-
-This makes detection robust against single-point noise dips after a genuine boundary. A boundary at index `i` followed by one noisy dip and two confirming points will still be classified as persistent.
-
-### 5.4 Last-Point Strong-Step Compensation
-
-When the candidate is at or near the last sweep point, there are few or no future points for persistence evaluation. In this case, if the step itself is very large:
-
-- `strong_last_point = (step_ns >= 8.0) || (step_percent >= 0.25)`
-
-Then `effective_persistent = persistent_jump || strong_last_point`. This prevents downgrading a massive final-point step to Low confidence purely due to lack of future data.
-
-### 5.5 L1 and L2 Boundary Selection
-
-- `L1 TLB boundary`: first candidate passing threshold + guard + IQR check, scanning from sweep start.
-- `L2 TLB boundary`: first candidate passing threshold + guard + IQR check, scanning from an **offset segment start** past the L1 boundary.
-
-Private-cache overlap handling:
-
-- The analyzer first checks the direct L1 candidate from sweep start.
-- If that candidate is the same locality as a detected private-cache knee, it is preserved as an ambiguous L1 TLB candidate and marked with `overlaps_private_cache_knee = true`.
-- If the direct candidate does not overlap the private-cache knee, the analyzer also tries the cache-knee-offset scan used to avoid obvious cache-knee contamination.
+Private-cache knee detection remains a separate spread-latency diagnostic. The packed control and translation-delta
+signal are the primary protection against turning a data-cache step into an accepted translation boundary.
 
 L2 detection specifics:
 
-- **Segment start offset**: L2 scanning starts at `min(L1_boundary_index + 2, size - 2)`, excluding the L1 boundary point and its immediate neighbour from the L2 baseline. This prevents L1 transition noise from contaminating the L2 baseline.
+- **Segment start offset**: candidate scanning resumes after the L1 boundary and its immediate neighbour, preventing the L1 transition from becoming the next paired baseline.
 - **L2-specific guard**: `max(tlb_guard_bytes, L1_boundary_locality_bytes)`, preventing L2 from re-detecting at or below the L1 boundary locality.
 
 L2 detection only runs when L1 is detected and its boundary index is not at the last two sweep points.
@@ -240,16 +331,13 @@ Technical note (Apple Silicon):
 
 ## 6. Confidence Model
 
-Boundary confidence is classified by step strength and multi-point persistence:
+Only candidates with complete discovery and validation evidence receive an accepted confidence label:
 
-- `strong_step = (step_ns >= 4.0) || (step_percent >= 0.15)`
-- `persistent_jump`: majority of up to 3 future points exceed threshold (see section 5.3). At the last sweep point, a strong step (`step_ns >= 8.0` or `step_percent >= 0.25`) compensates for the lack of future data.
+- **High**: both discovery and validation 95% CI lower bounds are at least `max(1.0ns, 2 * discovery_noise_floor)`.
+- **Medium**: all acceptance gates pass, but the High-strength condition does not.
 
-Confidence levels:
-
-- **High**: `strong_step && persistent_jump`
-- **Medium**: `strong_step || persistent_jump`
-- **Low**: otherwise (still passed threshold)
+Rejected candidates receive no accepted confidence label. Their discovery and validation objects still expose effect,
+95% CI, noise floor, paired sample count, persistence count, and rejection reason.
 
 ## 7. Derived Metrics
 
@@ -263,19 +351,23 @@ For detected boundaries:
 
 `inferred_entries = midpoint(inferred_entries_min, inferred_entries_max)`
 
-Point estimate and range are reported separately for L1 and L2 sections. The point estimate is intentionally the midpoint of the detected locality window, not the upper boundary edge, so the headline value does not imply more precision than the sweep grid supports.
+The range from the final refined and validated bracket is the primary result for L1 and L2. The midpoint remains an
+explicitly secondary estimate and must not be interpreted as exact architectural capacity.
 
-### 7.2 Page-Walk Penalty
+### 7.2 Large-Locality Paired Comparison
 
-Page-walk penalty is intentionally computed independently from L1/L2 boundary step values:
+The primary 512 MiB result aggregates the same paired records used by the rest of the methodology:
 
-`page_walk_penalty_ns = P50(512MB) - P50(effective baseline locality)`
+`large_locality_translation_delta_p50_ns = median(spread_latency_ns[r] - packed_latency_ns[r])`
 
-where:
+The median is taken over stored same-round deltas. It is deliberately not computed as
+`median(spread_latency_ns) - median(packed_latency_ns)`, because those operations are not generally equivalent. Console and
+JSON also expose the independent spread and packed P50 values, page counts, node/cache-line counts, and active cache-line
+footprint. The result describes cache-hot paired translation stress; it is neither direct DRAM latency nor an isolated
+page-table-walk cost.
 
-- `effective baseline locality = P50 latency of the first point in the stride-aware sweep` (i.e., `p50_latency_ns[0]`; this is measured during the main run, not a separate reference measurement)
-
-The penalty is computed as-is; a negative value indicates measurement noise (e.g., due to thermal variance or CPU frequency scaling) rather than a genuine negative penalty. If the 512MB comparison pass cannot run or is interrupted, page-walk penalty is reported unavailable and `penalty_ns` is omitted from JSON.
+Schema 4 publishes this only as `large_locality_paired_comparison`. It contains no raw-spread locality-delta or
+page-walk alias, preventing a cache-hot spread difference from being mistaken for the primary paired signal.
 
 Availability rule:
 
@@ -291,7 +383,8 @@ Report always includes:
 - Fine--sweep refinement summary (added points, total points)
 - `[Private Cache Knee Detection]`
 - `[L1 TLB Detection]`
-- `[L2 TLB / Page Walk]`
+- `[L2 TLB Detection]`
+- `[Large-Locality Paired Comparison]`
 
 Boundary detection sections:
 
@@ -303,10 +396,21 @@ When a boundary is detected, the report shows:
 
 When a boundary is **not detected**, the section reports "Not detected."
 
-Page-walk section:
+Large-locality paired section:
 
-- When available: shows page-walk penalty in `ns`, with explicit dynamic endpoints (`baseline -> 512MB`)
+- When available: shows virtual locality, active footprint, spread/packed page counts, spread P50, packed P50, and same-round translation-delta P50
 - When unavailable: shows "N/A" with the reason (e.g., buffer < 512 MB)
+- Always states that raw timings are cache-hot and are not direct DRAM or isolated page-table-walk latency
+- Always shows analysis status, measured/planned point counts, and whether conclusions are valid.
+- Interrupted or partial analyses suppress private-cache and L1/L2 conclusions.
+
+A user interrupt uses the existing graceful-shutdown contract and may return process success after writing partial JSON.
+Machine consumers must require `status == "complete"` and `conclusions_valid == true`; exit status alone is not a
+completeness signal.
+
+`validation_required` describes whether candidate-specific validation points were planned, not whether the methodology
+generally requires independent validation. An interruption during the base pass can leave this field `false` with
+`validation_status = "not-run"` and zero planned validation points. `validation_complete` remains `false` in that state.
 
 ## 9. JSON Output Contract (`--output`)
 
@@ -323,18 +427,26 @@ When `--output <file>` is provided with `--analyze-tlb` without `--sweep`, outpu
 
 - `configuration` contains mode and run constants:
   - CPU info, page size, L1D size, TLB guard bytes, stride
-  - `latency_sample_count` (fixed at 30 loops per point)
-  - `accesses_per_sample` (fixed at 25,000,000)
+  - `runtime_profile`, adaptive minimum/maximum rounds, CI-width target, and convergence bootstrap count
+  - access-calibration target, minimum whole-chain cycles, and profile access cap
   - **`latency_chain_mode`** (resolved chain mode used)
   - **`performance_cores`** and **`efficiency_cores`** (CPU core configuration)
-  - selected buffer size and whether mlock succeeded
+  - selected buffer, available-memory budget, estimated peak, and best-effort `mlock()` status/errno/error
+  - base-pass point/access/memory/duration work estimate
+  - `schema_version = 4` and `methodology_version = "page-native-paired-adaptive-validated-v4"`
+  - exact uint64 decimal-string base `seed`, `seed_source`, explicit task/layout `seed_derivation`, `schedule_policy = "seeded-cyclic-latin"`, chain model, effective-mode comparability guidance, delta definition, and `boundary_signal = "translation_delta_ns"`
+  - main-thread QoS request/applied/code metadata and its best-effort policy
+  - paired-bootstrap method, 2,000 resamples, `0.5ns` minimum effect, two-point persistence, and independent-validation requirement
 
 - `tlb_analysis` contains:
-  - `sweep[]` with raw `loop_latencies_ns` and per-point `p50_latency_ns`
+  - status, discovery/validation point counts, `validation_required`/`validation_status`/`validation_complete`, adaptive round bounds, per-pass realized round/convergence summaries, explicitly scoped base+validation/large-locality/total pair and raw-measurement counts, and `conclusions_valid`
+  - `measurement_records[]` in execution order with pass, point, locality, round, order, exact decimal-string task seed, and a `paired_control` object
+  - each `paired_control` contains pair order, exact decimal-string spread/packed seeds, pilot timing/accesses, calibrated accesses, raw latencies, verified chain diagnostics, and same-round `translation_delta_ns`
+  - `sweep[]` contains requested/effective/actual pages, pointer-node and pointers-per-page counts, unique-cache-line and active-footprint counts, short-cycle diagnostics, both chain diagnostics, raw spread/packed/delta arrays, their P50 values, refinement source/bracket, and per-task records
   - `private_cache_knee` (with `detected`, `boundary_locality_kb`, `confidence`, and `may_interfere_with_tlb`)
-  - `l1_tlb_detection` (with `detected`, `boundary_locality_kb`, `inferred_entries`, `inferred_entries_method`, `inferred_entries_min`, `inferred_entries_max`, `overlaps_private_cache_knee`, `confidence`, and step metadata)
+  - `l1_tlb_detection` (with `detected`, validated bracket, primary entry range, midpoint estimate, confidence, discovery/validation evidence, and accepted/rejected candidates)
   - `l2_tlb_detection` (same structure as L1)
-  - `page_walk_penalty` block (`available`, baseline/comparison metadata, raw comparison loops, `penalty_ns` when the comparison completed, otherwise `reason`)
+  - sole `large_locality_paired_comparison` block with same-round delta P50, spread/packed P50 values, physical page/cache-line diagnostics, active footprint, raw paired records, and explicit interpretation
 
 This payload is designed for full post-run verification and reproducibility checks.
 
@@ -353,37 +465,68 @@ When `--sweep` is used with `--analyze-tlb`, output uses the common sweep envelo
   - `result`
 
 Each `runs[].result` entry is the same single-run TLB analysis JSON payload described in section 9.1.
+The top-level sweep object also includes `status`, `planned_runs`, `completed_runs`, and `conclusions_valid`. It is
+atomically rewritten after every completed run, so a later failure or interrupt leaves a readable checkpoint.
 
-## 10. Worked Example (Apple M4)
+## 10. Current Schema Worked Example (Deterministic Exporter Fixture)
 
-Example file:
+The regression test `JsonSchemaTest.TlbAnalysisExporterIncludesModeAndCoreCounts` generates a current-version payload with
+the production serializer. Its deliberately synthetic inputs make this a contract example, not an Apple hardware claim:
 
-- `results/0.53.7/MacMiniM4_analyzetlb.json`
+```json
+{
+  "configuration": {
+    "mode": "analyze_tlb",
+    "schema_version": 4,
+    "methodology_version": "page-native-paired-adaptive-validated-v4",
+    "seed": "18446744073709551615",
+    "seed_encoding": "uint64-decimal-string",
+    "main_thread_qos": {"requested": true, "applied": true, "code": 0},
+    "seed_source": "user"
+  },
+  "tlb_analysis": {
+    "status": "complete",
+    "planned_points": 1,
+    "measured_points": 1,
+    "validation_required": true,
+    "validation_status": "complete",
+    "validation_complete": true,
+    "conclusions_valid": true,
+    "completed_base_validation_pairs": 4,
+    "completed_large_locality_pairs": 3,
+    "total_completed_measurement_pairs": 7,
+    "total_completed_raw_measurements": 14,
+    "sweep": [{
+      "requested_pages": 1,
+      "actual_pages": 1,
+      "pointer_nodes": 1,
+      "spread_pointers_per_page_max": 1,
+      "packed_pointers_per_page_max": 1,
+      "active_cache_line_footprint_bytes": 64,
+      "short_cycle_diagnostic": true,
+      "translation_delta_p50_ns": 5.0
+    }],
+    "large_locality_paired_comparison": {
+      "available": true,
+      "spread_p50_ns": 100.0,
+      "packed_p50_ns": 94.0,
+      "translation_delta_p50_ns": 1.0,
+      "spread_actual_pages": 32768,
+      "packed_actual_pages": 128,
+      "active_cache_line_footprint_bytes": 2097152
+    }
+  },
+  "version": "0.57.0"
+}
+```
 
-Observed fields in this sample:
-
-- `tlb_guard_bytes = 1048576` (`1MB`)
-- `l1_tlb_detection.boundary_locality_kb = 4096` and `inferred_entries` near the midpoint of its detected entry range
-- `l2_tlb_detection.boundary_locality_kb = 8192` and `inferred_entries` near the midpoint of its detected entry range
-- `page_walk_penalty.penalty_ns ~= 81.93`
-
-### Algorithm Walkthrough (M4 L1 Detection)
-
-The sweep includes points: `[16KB, 32KB, 64KB, 96KB, 128KB, 192KB, 256KB, 384KB, 512KB, 768KB, 1MB, 1536KB, 2MB, 3MB, 4MB, 6MB, 8MB, ...]`.
-
-The L1 scan begins at `16KB` (min_sweep_locality with stride 64 bytes). It computes:
-
-1. At `16KB`: `baseline = P50(16KB) = X ns`, `step = 0`, fails threshold.
-2. At `64KB`: `baseline = avg(P50[16KB])`, `step = P50(64KB) - baseline`, still low.
-3. ... (continuing through `1MB`, `2MB`)
-4. At `4MB`: `baseline = avg(P50[16KB..2MB])`, `step = P50(4MB) - baseline ≥ threshold`, `locality(4MB) = 4096KB ≥ guard`, **first match** → detected at `4MB`.
-
-With a high-density sweep, a `4MB` boundary following a `3MB` prior point yields `inferred_entries_min = 192`, `inferred_entries_max = 256`, and `inferred_entries = 224` as a midpoint estimate. The upper edge (`256`) is still visible in the range and is typical for a first-level TLB on Apple M4.
+New hardware baselines were explicitly excluded from this change series. Historical 0.53.x result files remain available
+only for legacy-schema compatibility checks and are not presented as current-methodology measurements.
 
 ### Limitations and Edge Cases
 
 - If the entire sweep remained below threshold (e.g., very small buffer or very large stride), L1 would report "Not detected."
-- If the 256 MB buffer fallback is used, or if the 512MB comparison pass is interrupted, `page_walk_penalty` will report `N/A` and explain why.
+- If the 256 MiB buffer fallback is used, or if the 512 MiB comparison pass is interrupted, `large_locality_paired_comparison` reports `available: false` and explains why.
 - On machines with 4 KB pages (instead of macOS's 16 KB), the same entry count would correspond to a 1 MB boundary.
 
 Interpretation note for Apple Silicon:
@@ -413,7 +556,7 @@ If L1 detection reports "Not detected":
 
 1. **Check the selected buffer size:** Is it large enough to sweep through the TLB capacity? The 16 KB sweep start may be insufficient if stride is large.
 2. **Review the stride:** If `--latency-stride-bytes` is large (e.g., 512 bytes), `min_sweep_locality = max(16KB, 2 * stride)` may skip the actual L1 TLB boundary. Try re-running with a smaller stride.
-3. **Check the raw JSON data:** Export with `--output` and inspect `sweep[].p50_latency_ns` to see if the expected inflection point is present in the raw data.
+3. **Check the paired JSON data:** Export with `--output` and inspect `sweep[].translation_delta_p50_ns` for the accepted signal. Use `spread_p50_latency_ns`, `packed_p50_latency_ns`, and `active_cache_line_footprint_bytes` only as explicitly named cache-hot diagnostics.
 4. **Verify CPU/system state:** Thermal throttling or power-saving modes can obscure boundaries; run in a stable, idle state.
 
 ### Best Practices for Comparable Runs

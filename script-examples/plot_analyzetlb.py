@@ -73,6 +73,13 @@ def load_tlb_json(path: Path):
     raise RuntimeError(
         f"Unsupported configuration.mode '{mode}'. Expected 'analyze_tlb'.")
 
+  schema_version = config.get("schema_version", 1)
+  if not isinstance(schema_version, int) or isinstance(schema_version, bool):
+    raise RuntimeError("configuration.schema_version must be an integer when present.")
+  if schema_version < 1 or schema_version > 4:
+    raise RuntimeError(
+        f"Unsupported analyze-TLB schema version {schema_version}; supported versions are 1-4.")
+
   tlb = data.get("tlb_analysis")
   if not isinstance(tlb, dict):
     raise RuntimeError("Missing 'tlb_analysis' object in JSON.")
@@ -84,8 +91,18 @@ def load_tlb_json(path: Path):
   points = []
   for entry in sweep:
     locality_kb = int(entry["locality_kb"])
-    p50_latency_ns = float(entry["p50_latency_ns"])
-    loop_values = entry.get("loop_latencies_ns", [])
+    if schema_version == 4:
+      spread_value = entry.get("spread_p50_latency_ns")
+      loop_values = entry.get("spread_loop_latencies_ns", [])
+    else:
+      spread_value = entry.get("spread_p50_latency_ns", entry.get("p50_latency_ns"))
+      loop_values = entry.get("spread_loop_latencies_ns", entry.get("loop_latencies_ns", []))
+    if spread_value is None:
+      required_field = "spread_p50_latency_ns" if schema_version == 4 else "a supported spread P50 field"
+      raise RuntimeError(f"Sweep point is missing {required_field}.")
+    spread_latency_ns = float(spread_value)
+    packed_latency = entry.get("packed_p50_latency_ns")
+    translation_delta = entry.get("translation_delta_p50_ns")
     if isinstance(loop_values, list) and loop_values:
       loops = sorted(float(v) for v in loop_values)
       p10 = percentile(loops, 0.10)
@@ -96,9 +113,16 @@ def load_tlb_json(path: Path):
 
     points.append({
         "locality_kb": locality_kb,
-        "p50_latency_ns": p50_latency_ns,
+        "spread_latency_ns": spread_latency_ns,
+        "packed_latency_ns": (
+            float(packed_latency) if packed_latency is not None else None),
         "p10_latency_ns": p10,
         "p90_latency_ns": p90,
+        "translation_delta_ns": (
+            float(translation_delta) if translation_delta is not None else None),
+        "active_cache_line_footprint_bytes": entry.get(
+            "active_cache_line_footprint_bytes"),
+        "short_cycle_diagnostic": bool(entry.get("short_cycle_diagnostic", False)),
     })
 
   points.sort(key=lambda item: item["locality_kb"])
@@ -111,23 +135,69 @@ def draw_vertical_marker(ax, locality_kb: int, label: str, color: str, linestyle
   ax.axvline(locality_kb, color=color, linestyle=linestyle, linewidth=1.4, alpha=0.9, label=label)
 
 
+def format_entry_result(detection: dict) -> str:
+  minimum = detection.get("inferred_entries_min")
+  maximum = detection.get("inferred_entries_max")
+  estimate = int(detection.get("inferred_entries", 0))
+  if isinstance(minimum, int) and isinstance(maximum, int):
+    return f"{minimum}-{maximum} entries (midpoint estimate {estimate})"
+  return f"midpoint estimate {estimate} entries"
+
+
 def main():
   args = parse_args()
   input_path = resolve_input_path(args.file)
   data, config, tlb, points = load_tlb_json(input_path)
 
   x_kb = [p["locality_kb"] for p in points]
-  y_p50 = [p["p50_latency_ns"] for p in points]
+  y_spread = [p["spread_latency_ns"] for p in points]
+  y_packed = [p["packed_latency_ns"] for p in points]
+  y_delta = [p["translation_delta_ns"] for p in points]
 
   p10_values = [p["p10_latency_ns"] for p in points]
   p90_values = [p["p90_latency_ns"] for p in points]
   has_spread_band = all(v is not None for v in p10_values) and all(v is not None for v in p90_values)
+  has_paired_series = all(value is not None for value in y_delta)
+  has_packed_series = all(value is not None for value in y_packed)
 
   fig, ax = plt.subplots(figsize=(12, 6.5))
-  ax.plot(x_kb, y_p50, marker="o", linewidth=2.2, color="#0b5d8f", label="P50 latency")
+  if has_paired_series:
+    ax.plot(x_kb,
+            y_delta,
+            marker="s",
+            linewidth=2.4,
+            color="#0b5d8f",
+            label="Primary paired translation delta (spread - packed)")
+    ax.plot(x_kb,
+            y_spread,
+            marker="o",
+            linewidth=1.5,
+            linestyle="--",
+            color="#6c757d",
+            label="Cache-hot spread P50 (raw diagnostic)")
+    if has_packed_series:
+      ax.plot(x_kb,
+              y_packed,
+              marker="^",
+              linewidth=1.4,
+              linestyle=":",
+              color="#7b5ea7",
+              label="Cache-hot packed P50 (control)")
+  else:
+    ax.plot(x_kb,
+            y_spread,
+            marker="o",
+            linewidth=2.2,
+            color="#0b5d8f",
+            label="Spread P50 latency (legacy schema)")
 
   if has_spread_band:
-    ax.fill_between(x_kb, p10_values, p90_values, alpha=0.20, color="#6aaed6", label="P10-P90 band")
+    ax.fill_between(x_kb,
+                    p10_values,
+                    p90_values,
+                    alpha=0.15,
+                    color="#9aa0a6",
+                    label="Spread P10-P90 raw band")
 
   tlb_guard_bytes = config.get("tlb_guard_bytes")
   guard_kb = None
@@ -152,30 +222,67 @@ def main():
   page_size_kb = int(round(float(page_size_bytes) / 1024.0)) if isinstance(page_size_bytes, (int, float)) else 0
 
   ax.set_xscale("log", base=2)
-  ax.set_xticks(x_kb)
-  ax.set_xticklabels([format_kb(v) for v in x_kb], rotation=45, ha="right")
+  power_of_two_ticks = [value for value in x_kb if value > 0 and (value & (value - 1)) == 0]
+  visible_ticks = power_of_two_ticks if len(power_of_two_ticks) >= 2 else x_kb
+  ax.set_xticks(visible_ticks)
+  ax.set_xticklabels([format_kb(v) for v in visible_ticks], rotation=45, ha="right")
   ax.set_xlabel("TLB Locality Window")
-  ax.set_ylabel("Latency (ns/access)")
+  ax.set_ylabel("Latency or paired effect (ns/access)")
   ax.set_title(
-      f"TLB Analysis Trend (P50) - {cpu_name}\n"
+      f"TLB Analysis Trend (paired delta primary; cache-hot raw controls) - {cpu_name}\n"
       f"Stride: {stride_bytes} B, Page Size: {page_size_kb} KB")
   ax.grid(True, which="both", alpha=0.3)
 
   note_lines = []
+  analysis_status = str(tlb.get("status", "legacy/unknown"))
+  conclusions_valid = bool(tlb.get("conclusions_valid", True))
+  note_lines.append(f"Status: {analysis_status}")
+  if not conclusions_valid:
+    note_lines.append("Boundary conclusions suppressed")
   if l1.get("detected"):
     note_lines.append(
         f"L1: {format_kb(int(l1.get('boundary_locality_kb', 0)))}"
-        f", {int(l1.get('inferred_entries', 0))} entries")
+        f", {format_entry_result(l1)}")
   if l2.get("detected"):
     note_lines.append(
         f"L2: {format_kb(int(l2.get('boundary_locality_kb', 0)))}"
-        f", {int(l2.get('inferred_entries', 0))} entries")
+        f", {format_entry_result(l2)}")
+  rejected_candidates = sum(
+      1
+      for detection in (l1, l2)
+      for candidate in detection.get("candidates", [])
+      if not candidate.get("accepted", False))
+  if rejected_candidates:
+    note_lines.append(f"Rejected boundary candidates: {rejected_candidates}")
+  note_lines.append("Raw spread/packed curves are cache-hot, not direct DRAM latency")
 
-  page_walk = tlb.get("page_walk_penalty", {})
-  if page_walk.get("available") and "penalty_ns" in page_walk:
-    note_lines.append(f"Page walk 16KB->512MB: {float(page_walk['penalty_ns']):.2f} ns")
+  schema_version = int(config.get("schema_version", 1))
+  paired_large = tlb.get("large_locality_paired_comparison", {})
+  if paired_large.get("available") and "translation_delta_p50_ns" in paired_large:
+    footprint_bytes = paired_large.get("active_cache_line_footprint_bytes")
+    footprint_text = ""
+    if isinstance(footprint_bytes, (int, float)) and footprint_bytes >= 0:
+      footprint_text = f", {format_kb(int(footprint_bytes) // 1024)} active footprint"
+    note_lines.append(
+        "Large-locality paired delta: "
+        f"{float(paired_large['translation_delta_p50_ns']):.2f} ns"
+        f"{footprint_text}")
+  elif schema_version <= 3:
+    raw_large = tlb.get("large_locality_latency_delta", {})
+    if raw_large.get("available") and "delta_ns" in raw_large:
+      note_lines.append(
+          "Large-locality raw spread delta (legacy schema): "
+          f"{float(raw_large['delta_ns']):.2f} ns")
+    else:
+      legacy_page_walk = tlb.get("page_walk_penalty", {})
+      if legacy_page_walk.get("available") and "penalty_ns" in legacy_page_walk:
+        note_lines.append(
+            "Large-locality raw spread delta (legacy): "
+            f"{float(legacy_page_walk['penalty_ns']):.2f} ns")
+      else:
+        note_lines.append("Large-locality paired comparison: N/A")
   else:
-    note_lines.append("Page walk 16KB->512MB: N/A")
+    note_lines.append("Large-locality paired comparison: N/A")
 
   if note_lines:
     ax.text(0.02,

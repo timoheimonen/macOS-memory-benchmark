@@ -1,6 +1,6 @@
 # Project Structure — macOS-memory-benchmark
 
-**Version:** 0.56.1
+**Version:** 0.57.0
 **Platform:** ARM64 / AArch64 (Apple Silicon macOS)
 **License:** GNU General Public License v3.0
 
