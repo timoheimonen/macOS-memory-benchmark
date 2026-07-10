@@ -42,17 +42,17 @@
 namespace {
 
 inline bool calculate_strided_chunk_params(size_t chunk_size, size_t stride,
-                                           size_t& effective_size,
+                                           size_t& byte_count,
                                            size_t& num_accesses) {
   using namespace Constants;
 
-  if (chunk_size <= PATTERN_ACCESS_SIZE_BYTES) {
+  if (stride == 0 || chunk_size < PATTERN_ACCESS_SIZE_BYTES) {
     return false;
   }
 
-  effective_size = chunk_size - PATTERN_ACCESS_SIZE_BYTES;
-  num_accesses = (effective_size + stride - 1) / stride;
-  return true;
+  byte_count = chunk_size;
+  num_accesses = 1 + (chunk_size - PATTERN_ACCESS_SIZE_BYTES) / stride;
+  return num_accesses >= 2;
 }
 
 inline void build_random_chunk_indices(const std::vector<size_t>& indices,

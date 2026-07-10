@@ -159,6 +159,17 @@ Pattern mode (`--patterns`) measures bandwidth sensitivity across:
 - Strided (Superpage - 2MB)
 - Random Uniform
 
+Strided results use a deterministic per-worker work plan. Each valid strided address contributes a 32-byte payload;
+this is half of a 64-byte cache line, not a complete cache-line payload. A worker's last candidate address is included
+when the complete 32-byte access fits within its cache-line-aligned chunk. Reported read/write bandwidth is calculated
+from the exact sum of these worker payloads, while copy bandwidth counts both the read and write sides. The pass count
+is the larger of `--iterations` and the number required to reach at least 256 MiB of effective payload.
+
+Every active strided worker must have at least two valid addresses and therefore make at least one genuine stride
+transition. If the requested thread count cannot satisfy that rule, the benchmark automatically uses fewer workers for
+that strided pattern. Sequential and random patterns continue to use the configured thread count. This distinction is
+especially important for large strides and small buffers.
+
 ---
 
 ## Command-Line Options
@@ -367,6 +378,9 @@ forms such as `-buffersize` or `-benchmark` are invalid.
 - Supported keys: `buffer-size`, `cache-size`, `threads`, `latency-tlb-locality-kb`, `latency-stride-bytes`, `latency-chain-mode`, `tlb-density`, `count`, `latency-samples`
 - `tlb-density` applies only with `--analyze-tlb`
 - `--patterns` supports `buffer-size` and `threads`
+- In a `--patterns` thread sweep, each `threads` value is the requested count. A strided pattern may reduce its
+  effective worker count to keep at least two valid strided addresses per active worker, so sparse-stride results must
+  not be interpreted as requested-thread scaling when this reduction applies
 - `--benchmark --only-bandwidth` supports `buffer-size` and `threads`
 - `--benchmark --only-latency` supports `buffer-size`, `cache-size`, and latency chain/locality/stride keys
 - `--analyze-tlb` supports `latency-stride-bytes`, `latency-chain-mode`, and `tlb-density`

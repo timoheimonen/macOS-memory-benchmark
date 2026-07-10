@@ -113,7 +113,7 @@ caffeinate -i -d memory_benchmark --benchmark --count 10 --buffer-size 1024
 ## Benchmark Modes
 
 - **`--benchmark`**: Runs standard memory benchmark (main bandwidth + main latency + cache bandwidth + cache latency). **Required** to execute standard benchmarks. Mutually exclusive with `--patterns`.
-- **`--patterns`**: Runs pattern bandwidth suite only (`sequential_forward`, `sequential_reverse`, `strided_64`, `strided_4096`, `strided_16384`, `strided_2mb`, `random`). Mutually exclusive with `--benchmark`.
+- **`--patterns`**: Runs pattern bandwidth suite only (`sequential_forward`, `sequential_reverse`, `strided_64`, `strided_4096`, `strided_16384`, `strided_2mb`, `random`). Mutually exclusive with `--benchmark`. Strided cases use exact per-worker access accounting and may reduce the requested thread count so every active worker performs at least one real stride transition; consequently, `--threads` and pattern thread sweeps specify a requested count, not necessarily the effective count for every stride.
 - **`--only-bandwidth`**: Runs bandwidth paths only. **Requires `--benchmark`**. Cannot be used with `--patterns`, `--cache-size`, or `--latency-samples`.
 - **`--only-latency`**: Runs latency paths only. **Requires `--benchmark`**. Cannot be used with `--patterns` or `--iterations`.
 - **`--analyze-tlb`**: Runs standalone TLB analysis with page-native spread/packed pairs, calibrated measurement windows, adaptive balanced rounds, paired bootstrap confidence intervals, and an independent boundary-validation pass; only optional `--output <file>`, `--latency-stride-bytes <bytes>`, `--latency-chain-mode <mode>`, `--tlb-density <low|medium|high>`, `--seed <uint64>`, `--sweep <key=...>`, and `--sweep-max-runs <count>` may be combined with it.

@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.57.1] - UNRELEASED
+
+### Fixed
+  - **Exact per-worker strided pattern accounting**: `--patterns` now builds a deterministic cache-line-aligned work plan before each strided measurement, includes the final exactly fitting access, derives reported payload bytes from the finalized worker ranges, and reduces the effective worker count when a requested split would leave a worker without a genuine stride transition. This prevents small-buffer or high-thread-count 2 MiB stride runs from repeatedly touching only offset zero while being reported as a valid 2 MiB-stride workload.
+
 ## [0.57.0] - 2026-07-10
 
 ### Added
