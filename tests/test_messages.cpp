@@ -1251,6 +1251,9 @@ TEST(MessagesFormattingTest, BenchmarkStatusReasonsAreCentralized) {
       Messages::benchmark_reason_invalid_bandwidth_measurement(),
       Messages::benchmark_reason_loops_remain(),
       Messages::benchmark_reason_checkpoint_failed(),
+      Messages::benchmark_reason_unknown_loop_exception(),
+      Messages::benchmark_reason_coordinator_exception("boom"),
+      Messages::benchmark_reason_unknown_coordinator_exception(),
       Messages::benchmark_reason_latency_chain_setup_failed("main-latency"),
       Messages::benchmark_reason_prepare_failed("cache latency"),
       Messages::benchmark_reason_invalid_bandwidth_plan(),
@@ -1265,6 +1268,8 @@ TEST(MessagesFormattingTest, BenchmarkStatusReasonsAreCentralized) {
   for (const std::string& reason : reasons) {
     EXPECT_FALSE(reason.empty());
   }
+  EXPECT_NE(Messages::benchmark_reason_coordinator_exception("boom").find("boom"),
+            std::string::npos);
 }
 
 TEST(MessagesFormattingTest, StatisticsTlbHitLatencyMetricName) {

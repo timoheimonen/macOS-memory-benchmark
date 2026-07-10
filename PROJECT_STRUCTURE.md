@@ -164,7 +164,7 @@ Core infrastructure for configuration, memory management, macOS system introspec
 
 | File | Purpose |
 |---|---|
-| `signal_handler.h` / `.cpp` | Installs SIGINT/SIGTERM handling and coordinates benchmark interruption between main and worker threads |
+| `signal_handler.h` / `.cpp` | Installs SIGINT/SIGTERM handling, exposes an exact-mask-restoring RAII guard for worker lifetimes, and reports pending interruption between phases |
 
 #### src/core/memory/
 
@@ -272,7 +272,7 @@ bandwidth warm-up covers the full target buffer, and latency warm-up page-touche
 | File | Purpose |
 |---|---|
 | `benchmark.h` | Convenience umbrella header that includes all benchmark-related headers |
-| `utils.h` / `.cpp` | Shared thread-joining and progress-indicator helpers |
+| `utils.h` / `.cpp` | Shared thread-joining helpers and the TTY-aware stderr progress spinner used by benchmark modes |
 | `json_utils.h` / `.cpp` | JSON helper functions shared between the TLB, core-to-core, and standard output serializers |
 
 ---

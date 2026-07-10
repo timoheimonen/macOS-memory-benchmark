@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
   - **Shared DRY primitives replace parallel implementations**: Centralized overflow-safe arithmetic, calibration scaling, sweep parsing/counting, deterministic seed mixing, descriptive statistics, console summaries, UTC timestamps, native page-size queries, and standard phase selection while preserving mode-specific contracts.
+  - **Signal masks and progress rendering have shared lifecycle owners**: Benchmark entry points now use one scope-bound signal-mask guard that restores the calling thread's exact prior mask, while standard, pattern, and TLB progress use the same TTY-aware stderr spinner.
   - **Pattern buffers have one explicit owner**: Replaced the legacy all-mode allocation/initialization API with an atomic two-mapping `PatternBuffers` lifecycle owned by the pattern command coordinator; standard execution continues to allocate only its active phase.
   - **Pattern completion is explicit in schema 3**: Pattern commands now retain status/reason plus exact planned/completed loop and 21-per-loop measurement counters. JSON exposes `results_complete`, direct and sweep execution preserve partial or failed evidence, and sweep classification consumes this top-level contract instead of reconstructing completion from nested operations.
   - **Pattern measurements have one source of truth**: Removed the 21 duplicate scalar bandwidth fields and aggregate-vector reconstruction fallback from per-loop results; collection, headlines, console output, and JSON now consume the status-bearing measurement array.
@@ -16,6 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
   - **Warmups follow measured work plans**: Cache reads use the cache kernel, strided and random warmups consume finalized worker partitions, and partially started warmup thread sets are joined safely on construction failure.
+  - **Progress output is cleaned on every coordinator exit**: Standard and pattern success, failure, interruption, hook failure, and typed or unknown exception paths clear the active spinner; redirected subprocess output no longer contains terminal carriage-return control characters.
   - **Incomplete pattern loops cannot contaminate aggregates**: Only Complete loops contribute to pattern vectors, statistics, JSON headlines, and console medians; partial, interrupted, and failed measurements remain serialized as raw evidence. Invalid evidence fails the command even if a low-level executor returned success, and coordinator exception boundaries convert preparation and execution failures into explicit status instead of allowing exceptions to escape.
 
 ## [0.59.0] - 2026-07-10

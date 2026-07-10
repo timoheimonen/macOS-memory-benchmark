@@ -21,16 +21,15 @@
  * @date 2026
  *
  * Provides signal handling infrastructure for graceful shutdown on SIGINT/SIGTERM.
- * The design blocks signals in worker threads so that only the main thread receives
- * interruptions. The main thread can then check for pending signals between benchmark
- * loops and break out cleanly.
+ * The coordinator blocks signals before creating workers, so the workers inherit the
+ * blocked mask. The coordinator then checks pending signals between benchmark loops
+ * and breaks out cleanly before restoring its exact previous mask.
  *
  * Architecture:
  * - install_signal_handlers() registers the handler (call once in main())
- * - block_benchmark_signals() must be called before spawning any worker threads
- *   so they inherit the blocked signal mask
- * - signal_received() checks for pending signals (non-blocking, async-signal-safe)
- * - restore_signal_mask() unblocks signals after benchmarks complete
+ * - BenchmarkSignalMaskGuard blocks benchmark signals while workers exist and
+ *   restores the calling thread's exact previous mask at scope exit
+ * - signal_received() checks for pending signals between benchmark phases
  *
  * @note Assembly kernels cannot be interrupted mid-flight — signal checks happen
  *       between test phases and between benchmark loops only.
@@ -38,6 +37,34 @@
  */
 #ifndef SIGNAL_HANDLER_H
 #define SIGNAL_HANDLER_H
+
+#include <signal.h>
+
+/**
+ * @brief Scope-bound SIGINT/SIGTERM blocking for benchmark worker creation
+ *
+ * The constructor adds the benchmark interruption signals to the calling
+ * thread's mask and saves the complete previous mask. The destructor restores
+ * that exact mask, which makes nested guards safe and preserves signal state
+ * owned by callers.
+ *
+ * @note Construct and destroy the guard on the same thread. Threads created
+ *       while the guard is alive inherit the blocked benchmark signals.
+ */
+class BenchmarkSignalMaskGuard {
+ public:
+  BenchmarkSignalMaskGuard() noexcept;
+  ~BenchmarkSignalMaskGuard() noexcept;
+
+  BenchmarkSignalMaskGuard(const BenchmarkSignalMaskGuard&) = delete;
+  BenchmarkSignalMaskGuard& operator=(const BenchmarkSignalMaskGuard&) = delete;
+  BenchmarkSignalMaskGuard(BenchmarkSignalMaskGuard&&) = delete;
+  BenchmarkSignalMaskGuard& operator=(BenchmarkSignalMaskGuard&&) = delete;
+
+ private:
+  sigset_t previous_mask_{};
+  bool mask_changed_ = false;
+};
 
 /**
  * @brief Register SIGINT and SIGTERM handlers
@@ -51,26 +78,6 @@
 void install_signal_handlers();
 
 /**
- * @brief Block SIGINT and SIGTERM in the calling thread
- *
- * Must be called before spawning worker threads so they inherit the blocked mask.
- * This ensures only the main thread can receive Ctrl+C, preventing signal delivery
- * to worker threads in the middle of assembly kernels.
- *
- * @note Call after install_signal_handlers() and before any thread creation.
- */
-void block_benchmark_signals();
-
-/**
- * @brief Restore original signal mask (unblock SIGINT/SIGTERM)
- *
- * Called after benchmark execution is complete to restore normal signal behavior.
- *
- * @note Safe to call even if block_benchmark_signals() was not called.
- */
-void restore_signal_mask();
-
-/**
  * @brief Check if Ctrl+C (or SIGTERM) was received
  *
  * Non-blocking check combining the atomic handler flag and sigpending().
@@ -80,4 +87,4 @@ void restore_signal_mask();
  */
 bool signal_received();
 
-#endif // SIGNAL_HANDLER_H
+#endif  // SIGNAL_HANDLER_H

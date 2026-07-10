@@ -20,19 +20,19 @@
  * @author Timo Heimonen <timo.heimonen@proton.me>
  * @date 2026
  *
- * Implements signal handling for graceful benchmark shutdown. The approach blocks
- * SIGINT/SIGTERM in worker threads (they inherit the blocked mask from the main thread)
- * and uses sigpending() in the main thread to detect pending signals between test phases.
+ * Implements signal handling for graceful benchmark shutdown. The coordinator blocks
+ * SIGINT/SIGTERM before worker creation, workers inherit that mask, and the coordinator
+ * uses sigpending() to detect pending signals between test phases.
  *
  * The handler itself only sets an atomic flag — no async-signal-unsafe operations.
  * signal_received() checks both the flag and sigpending() for completeness.
  */
 
 #include "core/signal/signal_handler.h"
+
 #include <atomic>
 #include <csignal>
-#include <iostream>
-#include "output/console/messages/messages_api.h"
+#include <pthread.h>
 
 namespace {
 
@@ -46,6 +46,24 @@ void signal_handler(int /* sig */) {
 
 }  // namespace
 
+BenchmarkSignalMaskGuard::BenchmarkSignalMaskGuard() noexcept {
+  sigset_t benchmark_signals;
+  if (sigemptyset(&benchmark_signals) != 0 ||
+      sigaddset(&benchmark_signals, SIGINT) != 0 ||
+      sigaddset(&benchmark_signals, SIGTERM) != 0) {
+    return;
+  }
+
+  mask_changed_ =
+      pthread_sigmask(SIG_BLOCK, &benchmark_signals, &previous_mask_) == 0;
+}
+
+BenchmarkSignalMaskGuard::~BenchmarkSignalMaskGuard() noexcept {
+  if (mask_changed_) {
+    pthread_sigmask(SIG_SETMASK, &previous_mask_, nullptr);
+  }
+}
+
 void install_signal_handlers() {
   struct sigaction sa{};
   sa.sa_handler = signal_handler;
@@ -54,22 +72,6 @@ void install_signal_handlers() {
 
   sigaction(SIGINT, &sa, nullptr);
   sigaction(SIGTERM, &sa, nullptr);
-}
-
-void block_benchmark_signals() {
-  sigset_t set;
-  sigemptyset(&set);
-  sigaddset(&set, SIGINT);
-  sigaddset(&set, SIGTERM);
-  pthread_sigmask(SIG_BLOCK, &set, nullptr);
-}
-
-void restore_signal_mask() {
-  sigset_t set;
-  sigemptyset(&set);
-  sigaddset(&set, SIGINT);
-  sigaddset(&set, SIGTERM);
-  pthread_sigmask(SIG_UNBLOCK, &set, nullptr);
 }
 
 bool signal_received() {

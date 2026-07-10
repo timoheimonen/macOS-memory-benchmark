@@ -27,7 +27,6 @@
 #include <chrono>
 #include <cmath>
 #include <cstddef>
-#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <iostream>
@@ -39,8 +38,6 @@
 #include <vector>
 
 #include <sys/mman.h>
-#include <unistd.h>
-
 #include "benchmark/benchmark_tests.h"
 #include "benchmark/tlb_analysis_json.h"
 #include "benchmark/tlb_chain.h"
@@ -57,6 +54,7 @@
 #include "core/system/system_info.h"
 #include "core/timing/timer.h"
 #include "output/console/messages/messages_api.h"
+#include "utils/utils.h"
 #include "warmup/warmup.h"
 
 namespace {
@@ -124,54 +122,6 @@ void print_tlb_pass_completion(
                    tlb_pass_completion_reason(result))
             << std::endl;
 }
-
-class TlbMeasureSpinner {
- public:
-  TlbMeasureSpinner() : enabled_(isatty(fileno(stderr)) == 1) {}
-
-  ~TlbMeasureSpinner() {
-    clear();
-  }
-
-  void tick(size_t locality_kb, size_t loop_index, size_t loop_total) {
-    if (!enabled_) {
-      return;
-    }
-
-    static constexpr char kFrames[] = {'|', '/', '-', '\\'};
-    const char frame = kFrames[frame_index_ % 4];
-    ++frame_index_;
-
-    std::ostringstream oss;
-    oss << frame << " Measuring locality " << locality_kb << " KB"
-        << " (loop " << loop_index << "/" << loop_total << ")";
-    render(oss.str());
-  }
-
- private:
-  void render(const std::string& text) {
-    std::string padded = text;
-    if (last_text_len_ > text.size()) {
-      padded.append(last_text_len_ - text.size(), ' ');
-    }
-    std::fputs(("\r" + padded).c_str(), stderr);
-    std::fflush(stderr);
-    last_text_len_ = text.size();
-  }
-
-  void clear() {
-    if (!enabled_ || last_text_len_ == 0) {
-      return;
-    }
-    std::fputs(("\r" + std::string(last_text_len_, ' ') + "\r").c_str(), stderr);
-    std::fflush(stderr);
-    last_text_len_ = 0;
-  }
-
-  bool enabled_ = false;
-  size_t frame_index_ = 0;
-  size_t last_text_len_ = 0;
-};
 
 void flatten_measurements(const std::vector<LocalityMeasurement>& measurements,
                           std::vector<size_t>& out_localities,
@@ -467,7 +417,7 @@ TlbScheduleExecutionResult measure_scheduled_points(
     const TlbRuntimeProfile& runtime_profile,
     const TlbStopRequested& stop_requested,
     std::vector<LocalityMeasurement>& measurements) {
-  TlbMeasureSpinner spinner;
+  ProgressSpinner spinner;
   TlbChainScratch chain_scratch;
   TlbConvergenceScratch convergence_scratch;
   std::vector<std::vector<double>> convergence_samples(points.size());
@@ -479,9 +429,11 @@ TlbScheduleExecutionResult measure_scheduled_points(
       stop_requested,
       [&](const TlbMeasurementTask& task, TlbMeasurementSample& sample) {
         const size_t locality_kb = task.locality_bytes / Constants::BYTES_PER_KB;
-        spinner.tick(locality_kb,
-                     task.round_index + 1,
-                     runtime_profile.max_rounds);
+        std::ostringstream progress_message;
+        progress_message << "Measuring locality " << locality_kb << " KB"
+                         << " (loop " << task.round_index + 1 << "/"
+                         << runtime_profile.max_rounds << ")";
+        spinner.tick(progress_message.str());
 
         sample.paired.available = true;
         sample.paired.spread_measured_first =

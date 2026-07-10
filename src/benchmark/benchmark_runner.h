@@ -131,7 +131,8 @@ struct BenchmarkStatistics {
  * @brief Optional dependency seams for deterministic coordinator failure tests.
  *
  * Production callers leave this null. Tests can fail timer/checkpoint creation,
- * inject a kernel-free loop result, or request a stop between loops.
+ * inject a kernel-free loop result, request a stop between loops, or throw from
+ * a dependency callback to verify the coordinator exception boundary.
  */
 struct BenchmarkRunnerTestHooks {
   bool force_timer_creation_failure = false;
@@ -157,6 +158,8 @@ struct BenchmarkRunnerTestHooks {
  * aggregates all results into the BenchmarkStatistics structure for statistical analysis.
  * In phased execution mode, per-test buffers are allocated inside loop execution
  * rather than passed through this API.
+ * Exceptions from execution and injected dependencies are converted to failed
+ * status and do not propagate across this coordinator boundary.
  */
 int run_all_benchmarks(const BenchmarkBuffers& buffers, BenchmarkConfig& config,
                        BenchmarkStatistics& stats,

@@ -361,8 +361,6 @@ int run_core_to_core_latency_mode(int argc, char* argv[]) {
   }
 
   // Execute benchmark only after successful parse and non-help path.
-  block_benchmark_signals();
-  const int run_result = run_core_to_core_latency(config);
-  restore_signal_mask();
-  return run_result;
+  BenchmarkSignalMaskGuard signal_guard;
+  return run_core_to_core_latency(config);
 }

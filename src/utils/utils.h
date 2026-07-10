@@ -25,8 +25,44 @@
 #ifndef UTILS_H
 #define UTILS_H
 
-#include <vector>  // std::vector
-#include <thread>   // std::thread
+#include <cstddef>
+#include <iosfwd>
+#include <string>
+#include <thread>
+#include <vector>
+
+/**
+ * @brief Terminal progress spinner with injectable output and enablement.
+ *
+ * The default constructor writes to stderr only when stderr is a terminal.
+ * The injectable constructor is intended for deterministic rendering tests
+ * and callers that already know whether progress output is appropriate.
+ * Calls must be serialized by the caller.
+ */
+class ProgressSpinner {
+ public:
+  ProgressSpinner();
+  ProgressSpinner(std::ostream& output, bool enabled);
+  ~ProgressSpinner();
+
+  ProgressSpinner(const ProgressSpinner&) = delete;
+  ProgressSpinner& operator=(const ProgressSpinner&) = delete;
+
+  /**
+   * @brief Render the next spinner frame and message on the current line.
+   * @param message Progress message without the spinner frame.
+   */
+  void tick(const std::string& message);
+
+  /** @brief Erase the rendered line, if any. Safe to call repeatedly. */
+  void clear();
+
+ private:
+  std::ostream& output_;
+  bool enabled_ = false;
+  size_t frame_index_ = 0;
+  size_t rendered_width_ = 0;
+};
 
 // --- Utility Functions ---
 /**
@@ -42,5 +78,7 @@ void join_threads(std::vector<std::thread>& threads);
  */
 void show_progress();
 
-#endif // UTILS_H
+/** @brief Clear the shared progress indicator, if it has been rendered. */
+void clear_progress();
 
+#endif  // UTILS_H

@@ -357,6 +357,11 @@ BENCHMARK_REASON_FUNCTION(benchmark_reason_loops_remain,
                           "benchmark loops remain")
 BENCHMARK_REASON_FUNCTION(benchmark_reason_checkpoint_failed,
                           "failed to checkpoint standard benchmark JSON")
+BENCHMARK_REASON_FUNCTION(benchmark_reason_unknown_loop_exception,
+                          "standard benchmark loop threw an unknown exception")
+BENCHMARK_REASON_FUNCTION(
+    benchmark_reason_unknown_coordinator_exception,
+    "standard benchmark coordinator threw an unknown exception")
 BENCHMARK_REASON_FUNCTION(benchmark_reason_invalid_bandwidth_plan,
                           "invalid bandwidth work-plan parameters")
 BENCHMARK_REASON_FUNCTION(benchmark_reason_no_worker_partition,
@@ -378,6 +383,10 @@ BENCHMARK_REASON_FUNCTION(benchmark_reason_rounded_accesses_exceed_limit,
 
 std::string benchmark_reason_prepare_failed(const std::string& phase_name) {
   return "failed to prepare " + phase_name + " buffers";
+}
+
+std::string benchmark_reason_coordinator_exception(const std::string& error) {
+  return "standard benchmark coordinator exception: " + error;
 }
 
 std::string benchmark_reason_latency_chain_setup_failed(

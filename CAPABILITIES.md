@@ -7,6 +7,10 @@ The tool is intended for practical microarchitectural investigation rather than 
 bandwidth, latency, access-pattern sensitivity, TLB behavior, and core-to-core cache-line handoff characteristics using
 native ARM64 code paths.
 
+Long-running benchmark entry points block SIGINT/SIGTERM while worker threads exist, poll for interruption between safe
+phases, and restore the caller's exact prior signal mask at scope exit. Live progress is emitted only to an interactive
+`stderr` terminal; redirected output remains free of spinner carriage-return sequences.
+
 ## Main Memory and Cache Bandwidth
 
 The standard benchmark mode can measure read, write, and copy bandwidth for both main memory and cache-sized working

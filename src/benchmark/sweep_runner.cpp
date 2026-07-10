@@ -611,12 +611,11 @@ int run_sweep_mode(const BenchmarkConfig& base_config) {
     std::cerr << Messages::warning_prefix() << Messages::warning_qos_failed(qos_ret) << std::endl;
   }
 
-  block_benchmark_signals();
+  BenchmarkSignalMaskGuard signal_guard;
 
   auto total_timer_opt = HighResTimer::create();
   if (!total_timer_opt) {
     std::cerr << Messages::error_prefix() << Messages::error_timer_creation_failed() << std::endl;
-    restore_signal_mask();
     return EXIT_FAILURE;
   }
   auto& total_timer = *total_timer_opt;
@@ -669,7 +668,6 @@ int run_sweep_mode(const BenchmarkConfig& base_config) {
   const SweepExecutionResult execution =
       execute_sweep_plan(nested_mode_for_config(base_config), run_parameters, std::move(output_json), hooks);
 
-  restore_signal_mask();
   if (execution.output_json.value("status", "failed") == "interrupted") {
     const nlohmann::ordered_json& runs = execution.output_json["runs"];
     if (!runs.is_array() || runs.empty() || runs.back().value("status", "failed") == "complete") {

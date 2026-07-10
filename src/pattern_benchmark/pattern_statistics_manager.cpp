@@ -37,6 +37,7 @@
 #include "core/signal/signal_handler.h"
 #include "output/console/messages/messages_api.h"
 #include "utils/numeric_utils.h"
+#include "utils/utils.h"
 #include <algorithm>
 #include <array>
 #include <cstdlib>
@@ -277,6 +278,7 @@ int run_all_pattern_benchmarks_impl(
   if (allocation_status != EXIT_SUCCESS) {
     stats.status = PatternRunStatus::Failed;
     stats.status_reason = Messages::pattern_reason_buffers_allocation_failed();
+    clear_progress();
     return EXIT_FAILURE;
   }
   const int initialization_status =
@@ -287,6 +289,7 @@ int run_all_pattern_benchmarks_impl(
     stats.status = PatternRunStatus::Failed;
     stats.status_reason =
         Messages::pattern_reason_buffers_initialization_failed();
+    clear_progress();
     return EXIT_FAILURE;
   }
 
@@ -304,6 +307,7 @@ int run_all_pattern_benchmarks_impl(
     if (stop_requested()) {
       stats.status = PatternRunStatus::Interrupted;
       stats.status_reason = Messages::pattern_reason_loop_interrupted();
+      clear_progress();
       std::cout << std::endl << Messages::msg_interrupted_by_user() << std::endl;
       return EXIT_SUCCESS;
     }
@@ -326,6 +330,7 @@ int run_all_pattern_benchmarks_impl(
               loop_results, true, false,
               Messages::pattern_reason_loop_exception(e.what())));
       collect_pattern_loop_result(stats, std::move(loop_results));
+      clear_progress();
       std::cerr << Messages::error_benchmark_loop(loop, e.what()) << std::endl;
       return EXIT_FAILURE;
     } catch (...) {
@@ -336,6 +341,7 @@ int run_all_pattern_benchmarks_impl(
               loop_results, true, false,
               Messages::pattern_reason_unknown_loop_exception()));
       collect_pattern_loop_result(stats, std::move(loop_results));
+      clear_progress();
       std::cerr << Messages::error_prefix()
                 << Messages::pattern_reason_unknown_loop_exception()
                 << std::endl;
@@ -352,9 +358,11 @@ int run_all_pattern_benchmarks_impl(
     collect_pattern_loop_result(stats, std::move(loop_results));
 
     if (status != EXIT_SUCCESS) {
+      clear_progress();
       return EXIT_FAILURE;
     }
     if (stats.loop_results.back().status == PatternRunStatus::Failed) {
+      clear_progress();
       return EXIT_FAILURE;
     }
     if (interrupted_after_execution &&
@@ -362,11 +370,13 @@ int run_all_pattern_benchmarks_impl(
         loop + 1 < config.loop_count) {
       stats.status = PatternRunStatus::Interrupted;
       stats.status_reason = Messages::pattern_reason_loop_interrupted();
+      clear_progress();
       std::cout << std::endl << Messages::msg_interrupted_by_user()
                 << std::endl;
       return EXIT_SUCCESS;
     }
     if (stats.loop_results.back().status == PatternRunStatus::Interrupted) {
+      clear_progress();
       std::cout << std::endl << Messages::msg_interrupted_by_user()
                 << std::endl;
       return EXIT_SUCCESS;
@@ -374,7 +384,7 @@ int run_all_pattern_benchmarks_impl(
 
     // Print simple progress message for each loop
     if (config.loop_count > 1) {
-      std::cout << '\r' << std::flush;  // Clear progress indicator
+      clear_progress();
       std::cout
           << Messages::msg_pattern_benchmark_loop_completed(loop + 1,
                                                              config.loop_count)
@@ -393,6 +403,7 @@ int run_all_pattern_benchmarks_impl(
       stats.status_reason = Messages::pattern_reason_loops_remain();
     }
   }
+  clear_progress();
   return EXIT_SUCCESS;
 }
 
@@ -406,12 +417,14 @@ int run_all_pattern_benchmarks(const BenchmarkConfig& config,
   } catch (const std::exception& e) {
     stats.status = PatternRunStatus::Failed;
     stats.status_reason = Messages::pattern_reason_coordinator_exception(e.what());
+    clear_progress();
     std::cerr << Messages::error_prefix() << stats.status_reason << std::endl;
     return EXIT_FAILURE;
   } catch (...) {
     stats.status = PatternRunStatus::Failed;
     stats.status_reason =
         Messages::pattern_reason_unknown_coordinator_exception();
+    clear_progress();
     std::cerr << Messages::error_prefix() << stats.status_reason << std::endl;
     return EXIT_FAILURE;
   }

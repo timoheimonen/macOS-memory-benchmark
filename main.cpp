@@ -70,20 +70,6 @@ void set_benchmark_qos(BenchmarkConfig& config) {
   }
 }
 
-class BenchmarkSignalMaskGuard {
- public:
-  BenchmarkSignalMaskGuard() {
-    block_benchmark_signals();
-  }
-
-  BenchmarkSignalMaskGuard(const BenchmarkSignalMaskGuard&) = delete;
-  BenchmarkSignalMaskGuard& operator=(const BenchmarkSignalMaskGuard&) = delete;
-
-  ~BenchmarkSignalMaskGuard() {
-    restore_signal_mask();
-  }
-};
-
 template <typename Fn>
 int run_with_benchmark_preparation(BenchmarkConfig& config, Fn&& fn) {
   set_benchmark_qos(config);

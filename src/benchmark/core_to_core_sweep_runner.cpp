@@ -127,12 +127,11 @@ int run_core_to_core_latency_sweep(const CoreToCoreLatencyConfig& base_config) {
   std::cout << Messages::usage_header(SOFTVERSION);
   std::cout << Messages::msg_running_sweep(run_count) << std::endl;
 
-  block_benchmark_signals();
+  BenchmarkSignalMaskGuard signal_guard;
 
   auto total_timer_opt = HighResTimer::create();
   if (!total_timer_opt) {
     std::cerr << Messages::error_prefix() << Messages::error_timer_creation_failed() << std::endl;
-    restore_signal_mask();
     return EXIT_FAILURE;
   }
   auto& total_timer = *total_timer_opt;
@@ -176,7 +175,6 @@ int run_core_to_core_latency_sweep(const CoreToCoreLatencyConfig& base_config) {
 
   const SweepExecutionResult execution = execute_core_to_core_sweep_plan(run_parameters, std::move(output_json), hooks);
 
-  restore_signal_mask();
   if (execution.output_json.value("status", "failed") == "interrupted") {
     const nlohmann::ordered_json& runs = execution.output_json["runs"];
     if (!runs.is_array() || runs.empty() || runs.back().value("status", "failed") == "complete") {
