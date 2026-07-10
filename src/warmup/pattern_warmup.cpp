@@ -40,7 +40,7 @@ bool validate_strided_warmup_stride(size_t stride, size_t size) {
     std::cerr << Messages::error_prefix() << Messages::error_stride_too_small() << std::endl;
     return false;
   }
-  if (stride > size) {
+  if (stride > size || size - stride < Constants::PATTERN_ACCESS_SIZE_BYTES) {
     std::cerr << Messages::error_prefix() << Messages::error_stride_too_large(stride, size) << std::endl;
     return false;
   }
@@ -71,45 +71,16 @@ uint64_t run_strided_read_warmup_kernel(const void* src,
                                         size_t byte_count,
                                         size_t stride,
                                         size_t num_iterations) {
-  using namespace Constants;
-
-  switch (stride) {
-    case PATTERN_STRIDE_CACHE_LINE:
-      return memory_read_strided_64_loop_asm(src, byte_count, num_iterations);
-    case PATTERN_STRIDE_PAGE:
-      return memory_read_strided_4096_loop_asm(src, byte_count, num_iterations);
-    case PATTERN_STRIDE_PAGE_16K:
-      return memory_read_strided_16384_loop_asm(src, byte_count, num_iterations);
-    case PATTERN_STRIDE_SUPERPAGE_2MB:
-      return memory_read_strided_2mb_loop_asm(src, byte_count, num_iterations);
-    default:
-      return memory_read_strided_loop_asm(src, byte_count, stride, num_iterations);
-  }
+  return memory_read_strided_phased_loop_asm(src, byte_count, stride,
+                                              num_iterations, 0);
 }
 
 void run_strided_write_warmup_kernel(void* dst,
                                      size_t byte_count,
                                      size_t stride,
                                      size_t num_iterations) {
-  using namespace Constants;
-
-  switch (stride) {
-    case PATTERN_STRIDE_CACHE_LINE:
-      memory_write_strided_64_loop_asm(dst, byte_count, num_iterations);
-      return;
-    case PATTERN_STRIDE_PAGE:
-      memory_write_strided_4096_loop_asm(dst, byte_count, num_iterations);
-      return;
-    case PATTERN_STRIDE_PAGE_16K:
-      memory_write_strided_16384_loop_asm(dst, byte_count, num_iterations);
-      return;
-    case PATTERN_STRIDE_SUPERPAGE_2MB:
-      memory_write_strided_2mb_loop_asm(dst, byte_count, num_iterations);
-      return;
-    default:
-      memory_write_strided_loop_asm(dst, byte_count, stride, num_iterations);
-      return;
-  }
+  memory_write_strided_phased_loop_asm(dst, byte_count, stride,
+                                       num_iterations, 0);
 }
 
 void run_strided_copy_warmup_kernel(void* dst,
@@ -117,25 +88,8 @@ void run_strided_copy_warmup_kernel(void* dst,
                                     size_t byte_count,
                                     size_t stride,
                                     size_t num_iterations) {
-  using namespace Constants;
-
-  switch (stride) {
-    case PATTERN_STRIDE_CACHE_LINE:
-      memory_copy_strided_64_loop_asm(dst, src, byte_count, num_iterations);
-      return;
-    case PATTERN_STRIDE_PAGE:
-      memory_copy_strided_4096_loop_asm(dst, src, byte_count, num_iterations);
-      return;
-    case PATTERN_STRIDE_PAGE_16K:
-      memory_copy_strided_16384_loop_asm(dst, src, byte_count, num_iterations);
-      return;
-    case PATTERN_STRIDE_SUPERPAGE_2MB:
-      memory_copy_strided_2mb_loop_asm(dst, src, byte_count, num_iterations);
-      return;
-    default:
-      memory_copy_strided_loop_asm(dst, src, byte_count, stride, num_iterations);
-      return;
-  }
+  memory_copy_strided_phased_loop_asm(dst, src, byte_count, stride,
+                                      num_iterations, 0);
 }
 
 template<typename RandomOp>
@@ -202,17 +156,11 @@ void warmup_read_strided(void* buffer, size_t size, size_t stride, int num_threa
     return;
   }
   
-  size_t warmup_size = calculate_warmup_size(size);
-  auto read_chunk_op = [stride](char* chunk_start, char* /* src_chunk */, size_t chunk_size,
-                                 std::atomic<uint64_t>* checksum) {
-    // Use strided read for warmup
-    size_t num_iterations = (chunk_size + stride - 1) / stride;
-    uint64_t result = run_strided_read_warmup_kernel(chunk_start, chunk_size, stride, num_iterations);
-    if (checksum) {
-      checksum->fetch_xor(result, std::memory_order_release);
-    }
-  };
-  warmup_parallel(buffer, size, num_threads, read_chunk_op, true, nullptr, &dummy_checksum, warmup_size);
+  static_cast<void>(num_threads);
+  const size_t phase_cycle_passes = stride / Constants::PATTERN_ACCESS_SIZE_BYTES;
+  const uint64_t result =
+      run_strided_read_warmup_kernel(buffer, size, stride, phase_cycle_passes);
+  dummy_checksum.fetch_xor(result, std::memory_order_release);
 }
 
 /**
@@ -228,14 +176,9 @@ void warmup_write_strided(void* buffer, size_t size, size_t stride, int num_thre
     return;
   }
   
-  size_t warmup_size = calculate_warmup_size(size);
-  auto write_chunk_op = [stride](char* chunk_start, char* /* src_chunk */, size_t chunk_size,
-                                  std::atomic<uint64_t>* /* checksum */) {
-    // Use strided write for warmup
-    size_t num_iterations = (chunk_size + stride - 1) / stride;
-    run_strided_write_warmup_kernel(chunk_start, chunk_size, stride, num_iterations);
-  };
-  warmup_parallel(buffer, size, num_threads, write_chunk_op, true, nullptr, nullptr, warmup_size);
+  static_cast<void>(num_threads);
+  const size_t phase_cycle_passes = stride / Constants::PATTERN_ACCESS_SIZE_BYTES;
+  run_strided_write_warmup_kernel(buffer, size, stride, phase_cycle_passes);
 }
 
 /**
@@ -252,14 +195,9 @@ void warmup_copy_strided(void* dst, void* src, size_t size, size_t stride, int n
     return;
   }
   
-  size_t warmup_size = calculate_warmup_size(size);
-  auto copy_chunk_op = [stride](char* dst_chunk, char* src_chunk, size_t chunk_size,
-                                 std::atomic<uint64_t>* /* checksum */) {
-    // Use strided copy for warmup
-    size_t num_iterations = (chunk_size + stride - 1) / stride;
-    run_strided_copy_warmup_kernel(dst_chunk, src_chunk, chunk_size, stride, num_iterations);
-  };
-  warmup_parallel(dst, size, num_threads, copy_chunk_op, true, src, nullptr, warmup_size);
+  static_cast<void>(num_threads);
+  const size_t phase_cycle_passes = stride / Constants::PATTERN_ACCESS_SIZE_BYTES;
+  run_strided_copy_warmup_kernel(dst, src, size, stride, phase_cycle_passes);
 }
 
 /**

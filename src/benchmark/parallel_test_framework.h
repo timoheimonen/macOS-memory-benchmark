@@ -159,7 +159,9 @@ double run_parallel_test_common(void* alignment_base, size_t size, int iteration
     }
 
     size_t thread_chunk_size = chunk_end_offset - chunk_start_offset;
-    auto measured_work = make_work(chunk_start_offset, thread_chunk_size, iterations);
+    const size_t worker_index = threads.size();
+    auto measured_work =
+        make_work(chunk_start_offset, thread_chunk_size, iterations, worker_index);
     threads.emplace_back([measured_work = std::move(measured_work), &state_mutex, &state_cv,
                           &ready_workers, &start_flag, &measurement_complete,
                           &measured_duration, &remaining_workers, &timer, thread_name]() mutable {
@@ -244,7 +246,8 @@ double run_parallel_test(void *buffer, size_t size, int iterations, int num_thre
                          WorkFunction work_function, const char *thread_name) {
   char* buffer_start = static_cast<char*>(buffer);
   auto make_work = [buffer_start, work_function](size_t chunk_start_offset, size_t thread_chunk_size,
-                                                  int iterations_local) {
+                                                  int iterations_local,
+                                                  size_t /* worker_index */) {
     char* thread_chunk_start = buffer_start + chunk_start_offset;
     return [thread_chunk_start, thread_chunk_size, iterations_local, work_function]() {
       work_function(thread_chunk_start, thread_chunk_size, iterations_local);
@@ -252,6 +255,34 @@ double run_parallel_test(void *buffer, size_t size, int iterations, int num_thre
   };
 
   return run_parallel_test_common(buffer, size, iterations, num_threads, timer, thread_name, make_work);
+}
+
+/**
+ * @brief Run single-buffer work that needs a stable per-worker output slot.
+ *
+ * The indexed callback can publish a worker-local checksum without a contended
+ * atomic. Callers combine those slots after this function returns, outside the
+ * measured interval.
+ */
+template<typename WorkFunction>
+double run_parallel_test_indexed(void* buffer, size_t size, int iterations,
+                                 int num_threads, HighResTimer& timer,
+                                 WorkFunction work_function,
+                                 const char* thread_name) {
+  char* buffer_start = static_cast<char*>(buffer);
+  auto make_work = [buffer_start, work_function](size_t chunk_start_offset,
+                                                  size_t thread_chunk_size,
+                                                  int iterations_local,
+                                                  size_t worker_index) {
+    char* thread_chunk_start = buffer_start + chunk_start_offset;
+    return [thread_chunk_start, thread_chunk_size, iterations_local, worker_index,
+            work_function]() {
+      work_function(thread_chunk_start, thread_chunk_size, iterations_local, worker_index);
+    };
+  };
+
+  return run_parallel_test_common(buffer, size, iterations, num_threads, timer,
+                                  thread_name, make_work);
 }
 
 /**
@@ -284,7 +315,8 @@ double run_parallel_test_copy(void *dst, void *src, size_t size, int iterations,
   char* src_start = static_cast<char*>(src);
   auto make_work = [dst_start, src_start, work_function](size_t chunk_start_offset,
                                                          size_t thread_chunk_size,
-                                                         int iterations_local) {
+                                                         int iterations_local,
+                                                         size_t /* worker_index */) {
     char* thread_dst_chunk = dst_start + chunk_start_offset;
     char* thread_src_chunk = src_start + chunk_start_offset;
     return [thread_dst_chunk, thread_src_chunk, thread_chunk_size, iterations_local,

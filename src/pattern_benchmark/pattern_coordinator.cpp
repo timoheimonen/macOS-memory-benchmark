@@ -67,7 +67,6 @@ bool validate_random_indices(const std::vector<size_t>& indices, size_t buffer_s
 
 // Forward declarations from execution_utils.cpp
 double calculate_bandwidth(size_t data_size, int iterations, double elapsed_time_ns);
-std::vector<size_t> generate_random_indices(size_t buffer_size, size_t num_accesses);
 size_t calculate_num_random_accesses(size_t buffer_size);
 
 // Forward declarations from execution_strided.cpp
@@ -105,7 +104,8 @@ int run_pattern_benchmarks(const BenchmarkBuffers& buffers, const BenchmarkConfi
   size_t num_random_accesses = calculate_num_random_accesses(config.buffer_size);
   
   // Generate random indices once
-  std::vector<size_t> random_indices = generate_random_indices(config.buffer_size, num_random_accesses);
+  std::vector<size_t> random_indices =
+      generate_random_indices(config.buffer_size, num_random_accesses, config.pattern_seed);
   std::vector<PatternRandomWorkerIndices> random_worker_indices = build_random_worker_indices(
       config.buffer_size, PATTERN_ACCESS_SIZE_BYTES, config.num_threads, random_indices);
   

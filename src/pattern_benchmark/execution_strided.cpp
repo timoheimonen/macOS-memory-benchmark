@@ -56,6 +56,27 @@ bool validate_stride(size_t stride, size_t buffer_size);
 // Forward declarations from execution_utils.cpp
 double calculate_bandwidth(size_t data_size, int iterations, double elapsed_time_ns);
 
+namespace {
+
+template <typename PilotRunner>
+bool calibrate_strided_plan(const BenchmarkConfig& config,
+                            const PatternWorkPlan& pilot_plan,
+                            PilotRunner pilot_runner,
+                            PatternWorkPlan& measured_plan) {
+  using namespace Constants;
+  const double pilot_duration = pilot_runner(static_cast<int>(pilot_plan.passes));
+  size_t measured_passes = static_cast<size_t>(config.iterations);
+  if (!config.user_specified_iterations) {
+    measured_passes = calculate_pattern_calibrated_passes(
+        pilot_duration, pilot_plan.passes, PATTERN_CALIBRATION_TARGET_SECONDS, 1,
+        PATTERN_CALIBRATION_MAX_PASSES);
+  }
+  measured_plan = pilot_plan;
+  return measured_passes > 0 && set_strided_pattern_passes(measured_plan, measured_passes);
+}
+
+}  // namespace
+
 // ============================================================================
 // Strided Pattern Execution Functions
 // ============================================================================
@@ -78,50 +99,69 @@ int run_strided_pattern_benchmarks(const BenchmarkBuffers& buffers, const Benchm
     return EXIT_SUCCESS;
   }
 
-  const PatternWorkPlan plan =
+  const PatternWorkPlan pilot_plan =
       build_strided_pattern_work_plan(config.buffer_size, stride, PATTERN_ACCESS_SIZE_BYTES,
-                                      config.num_threads, config.iterations,
-                                      PATTERN_STRIDED_MIN_TOUCHED_BYTES);
-  if (plan.status == PatternMeasurementStatus::Skipped) {
+                                      config.num_threads, 1,
+                                      PATTERN_CALIBRATION_MIN_PILOT_BYTES);
+  if (pilot_plan.status == PatternMeasurementStatus::Skipped) {
     return EXIT_SUCCESS;
   }
-  if (plan.status != PatternMeasurementStatus::Measured) {
+  if (pilot_plan.status != PatternMeasurementStatus::Measured) {
     return EXIT_FAILURE;
   }
-
-  const int effective_iterations = static_cast<int>(plan.passes);
   
   // Execute read benchmark
   show_progress();
   std::atomic<uint64_t> checksum{0};
   warmup_read_strided(buffers.src_buffer(), config.buffer_size, stride,
-                      plan.effective_threads, checksum);
-  double read_time = run_pattern_read_strided_test(buffers.src_buffer(), config.buffer_size,
-                                                   stride, effective_iterations, checksum, timer,
-                                                   plan.effective_threads);
-  read_bw = calculate_bandwidth(plan.payload_bytes_per_pass, effective_iterations, read_time);
+                      pilot_plan.effective_threads, checksum);
+  auto run_read = [&](int passes) {
+    return run_pattern_read_strided_test(buffers.src_buffer(), config.buffer_size, stride,
+                                         passes, checksum, timer,
+                                         pilot_plan.effective_threads);
+  };
+  PatternWorkPlan read_plan;
+  if (!calibrate_strided_plan(config, pilot_plan, run_read, read_plan)) {
+    return EXIT_FAILURE;
+  }
+  const double read_time = run_read(static_cast<int>(read_plan.passes));
+  read_bw = calculate_bandwidth(read_plan.total_payload_bytes, 1, read_time);
 
   // Execute write benchmark
   show_progress();
-  warmup_write_strided(buffers.dst_buffer(), config.buffer_size, stride, plan.effective_threads);
-  double write_time = run_pattern_write_strided_test(buffers.dst_buffer(), config.buffer_size,
-                                                     stride, effective_iterations, timer,
-                                                     plan.effective_threads);
-  write_bw = calculate_bandwidth(plan.payload_bytes_per_pass, effective_iterations, write_time);
+  warmup_write_strided(buffers.dst_buffer(), config.buffer_size, stride,
+                       pilot_plan.effective_threads);
+  auto run_write = [&](int passes) {
+    return run_pattern_write_strided_test(buffers.dst_buffer(), config.buffer_size, stride,
+                                          passes, timer, pilot_plan.effective_threads);
+  };
+  PatternWorkPlan write_plan;
+  if (!calibrate_strided_plan(config, pilot_plan, run_write, write_plan)) {
+    return EXIT_FAILURE;
+  }
+  const double write_time = run_write(static_cast<int>(write_plan.passes));
+  write_bw = calculate_bandwidth(write_plan.total_payload_bytes, 1, write_time);
 
   // Execute copy benchmark
   show_progress();
   warmup_copy_strided(buffers.dst_buffer(), buffers.src_buffer(), config.buffer_size, stride,
-                      plan.effective_threads);
-  double copy_time = run_pattern_copy_strided_test(buffers.dst_buffer(), buffers.src_buffer(),
-                                                   config.buffer_size, stride, effective_iterations,
-                                                   timer, plan.effective_threads);
-  if (plan.payload_bytes_per_pass >
+                      pilot_plan.effective_threads);
+  auto run_copy = [&](int passes) {
+    return run_pattern_copy_strided_test(buffers.dst_buffer(), buffers.src_buffer(),
+                                         config.buffer_size, stride, passes, timer,
+                                         pilot_plan.effective_threads);
+  };
+  PatternWorkPlan copy_plan;
+  if (!calibrate_strided_plan(config, pilot_plan, run_copy, copy_plan)) {
+    return EXIT_FAILURE;
+  }
+  const double copy_time = run_copy(static_cast<int>(copy_plan.passes));
+  if (copy_plan.total_payload_bytes >
       std::numeric_limits<size_t>::max() / Constants::COPY_OPERATION_MULTIPLIER) {
     return EXIT_FAILURE;
   }
-  copy_bw = calculate_bandwidth(plan.payload_bytes_per_pass * Constants::COPY_OPERATION_MULTIPLIER,
-                                effective_iterations, copy_time);
+  copy_bw = calculate_bandwidth(
+      copy_plan.total_payload_bytes * Constants::COPY_OPERATION_MULTIPLIER, 1, copy_time);
   
   return EXIT_SUCCESS;
 }

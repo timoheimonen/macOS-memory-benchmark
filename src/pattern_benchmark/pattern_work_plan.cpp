@@ -20,6 +20,7 @@
 #include "pattern_benchmark/pattern_work_plan.h"
 
 #include <algorithm>
+#include <cmath>
 #include <limits>
 #include <utility>
 
@@ -109,6 +110,92 @@ bool populate_worker_ranges(PatternWorkPlan& plan, size_t buffer_size, int worke
   return true;
 }
 
+bool calculate_phase_metrics(const PatternWorkPlan& plan, size_t passes,
+                             size_t& total_accesses, size_t& distinct_addresses,
+                             size_t& logical_working_set_bytes,
+                             size_t& completed_phase_cycles) {
+  if (passes == 0 || plan.access_size_bytes == 0 || plan.stride_bytes == 0 ||
+      plan.stride_bytes % plan.access_size_bytes != 0 || plan.workers.empty() ||
+      passes > static_cast<size_t>(std::numeric_limits<int>::max())) {
+    return false;
+  }
+
+  const size_t phase_period = plan.stride_bytes / plan.access_size_bytes;
+  if (phase_period == 0) {
+    return false;
+  }
+
+  size_t accesses_per_cycle = 0;
+  for (const PatternWorkerRange& worker : plan.workers) {
+    const size_t aligned_slots = worker.span_bytes / plan.access_size_bytes;
+    if (aligned_slots < 2 || !checked_add(accesses_per_cycle, aligned_slots,
+                                          accesses_per_cycle)) {
+      return false;
+    }
+  }
+
+  completed_phase_cycles = passes / phase_period;
+  const size_t remaining_phases = passes % phase_period;
+  if (!checked_multiply(completed_phase_cycles, accesses_per_cycle, total_accesses)) {
+    return false;
+  }
+
+  for (const PatternWorkerRange& worker : plan.workers) {
+    const size_t aligned_slots = worker.span_bytes / plan.access_size_bytes;
+    const size_t full_blocks = aligned_slots / phase_period;
+    const size_t tail_slots = aligned_slots % phase_period;
+    size_t full_block_accesses = 0;
+    if (!checked_multiply(full_blocks, remaining_phases, full_block_accesses)) {
+      return false;
+    }
+    const size_t partial_accesses = full_block_accesses +
+                                    std::min(tail_slots, remaining_phases);
+    if (!checked_add(total_accesses, partial_accesses, total_accesses)) {
+      return false;
+    }
+  }
+
+  const size_t distinct_phases = std::min(passes, phase_period);
+  distinct_addresses = 0;
+  logical_working_set_bytes = 0;
+  for (const PatternWorkerRange& worker : plan.workers) {
+    const size_t aligned_slots = worker.span_bytes / plan.access_size_bytes;
+    const size_t full_blocks = aligned_slots / phase_period;
+    const size_t tail_slots = aligned_slots % phase_period;
+    size_t full_block_accesses = 0;
+    if (!checked_multiply(full_blocks, distinct_phases, full_block_accesses)) {
+      return false;
+    }
+    const size_t selected_tail_slots = std::min(tail_slots, distinct_phases);
+    const size_t worker_distinct = full_block_accesses + selected_tail_slots;
+    if (!checked_add(distinct_addresses, worker_distinct, distinct_addresses)) {
+      return false;
+    }
+
+    size_t last_selected_slot = 0;
+    bool has_selected_slot = false;
+    if (full_blocks > 0 && distinct_phases > 0) {
+      last_selected_slot = (full_blocks - 1) * phase_period + distinct_phases - 1;
+      has_selected_slot = true;
+    }
+    if (selected_tail_slots > 0) {
+      last_selected_slot = full_blocks * phase_period + selected_tail_slots - 1;
+      has_selected_slot = true;
+    }
+    if (has_selected_slot) {
+      size_t worker_logical_bytes = 0;
+      if (!checked_multiply(last_selected_slot + 1, plan.access_size_bytes,
+                            worker_logical_bytes) ||
+          !checked_add(logical_working_set_bytes, worker_logical_bytes,
+                       logical_working_set_bytes)) {
+        return false;
+      }
+    }
+  }
+
+  return true;
+}
+
 }  // namespace
 
 PatternWorkPlan build_strided_pattern_work_plan(size_t buffer_size, size_t stride, size_t access_size,
@@ -161,18 +248,40 @@ PatternWorkPlan build_strided_pattern_work_plan(size_t buffer_size, size_t strid
     return plan;
   }
 
-  const size_t required_passes = minimum_total_payload_bytes / plan.payload_bytes_per_pass +
-                                 (minimum_total_payload_bytes % plan.payload_bytes_per_pass != 0 ? 1 : 0);
-  plan.passes = std::max(static_cast<size_t>(base_passes), required_passes);
-  if (plan.passes > static_cast<size_t>(std::numeric_limits<int>::max())) {
-    plan.status = PatternMeasurementStatus::Invalid;
-    plan.status_reason = "strided work plan exceeds executor pass limit";
-    plan.workers.clear();
-    return plan;
+  const size_t minimum_passes = static_cast<size_t>(base_passes);
+  const size_t maximum_passes = static_cast<size_t>(std::numeric_limits<int>::max());
+  size_t selected_passes = minimum_passes;
+  if (minimum_total_payload_bytes > 0) {
+    PatternWorkPlan maximum_plan = plan;
+    if (!set_strided_pattern_passes(maximum_plan, maximum_passes) ||
+        maximum_plan.total_payload_bytes < minimum_total_payload_bytes) {
+      plan.status = PatternMeasurementStatus::Invalid;
+      plan.status_reason = "strided work plan exceeds executor pass limit";
+      plan.workers.clear();
+      return plan;
+    }
+
+    size_t lower = minimum_passes;
+    size_t upper = maximum_passes;
+    while (lower < upper) {
+      const size_t middle = lower + (upper - lower) / 2;
+      PatternWorkPlan candidate = plan;
+      if (!set_strided_pattern_passes(candidate, middle)) {
+        plan.status = PatternMeasurementStatus::Invalid;
+        plan.status_reason = "strided work-plan total accounting overflow";
+        plan.workers.clear();
+        return plan;
+      }
+      if (candidate.total_payload_bytes >= minimum_total_payload_bytes) {
+        upper = middle;
+      } else {
+        lower = middle + 1;
+      }
+    }
+    selected_passes = lower;
   }
 
-  if (!checked_multiply(plan.accesses_per_pass, plan.passes, plan.total_accesses) ||
-      !checked_multiply(plan.payload_bytes_per_pass, plan.passes, plan.total_payload_bytes)) {
+  if (!set_strided_pattern_passes(plan, selected_passes)) {
     plan.status = PatternMeasurementStatus::Invalid;
     plan.status_reason = "strided work-plan total accounting overflow";
     plan.workers.clear();
@@ -182,6 +291,61 @@ PatternWorkPlan build_strided_pattern_work_plan(size_t buffer_size, size_t strid
   plan.status = PatternMeasurementStatus::Measured;
   plan.status_reason.clear();
   return plan;
+}
+
+bool set_strided_pattern_passes(PatternWorkPlan& plan, size_t passes) {
+  size_t total_accesses = 0;
+  size_t distinct_addresses = 0;
+  size_t logical_working_set_bytes = 0;
+  size_t completed_phase_cycles = 0;
+  if (!calculate_phase_metrics(plan, passes, total_accesses, distinct_addresses,
+                               logical_working_set_bytes, completed_phase_cycles) ||
+      !checked_multiply(total_accesses, plan.access_size_bytes,
+                        plan.total_payload_bytes)) {
+    return false;
+  }
+
+  plan.passes = passes;
+  plan.total_accesses = total_accesses;
+  plan.phase_period_passes = plan.stride_bytes / plan.access_size_bytes;
+  plan.distinct_address_count = distinct_addresses;
+  plan.logical_working_set_bytes = logical_working_set_bytes;
+  plan.completed_phase_cycles = completed_phase_cycles;
+  return true;
+}
+
+size_t calculate_pattern_pilot_passes(size_t payload_bytes_per_pass,
+                                      size_t minimum_pilot_payload_bytes,
+                                      size_t maximum_passes) {
+  if (payload_bytes_per_pass == 0 || maximum_passes == 0) {
+    return 0;
+  }
+  const size_t quotient = minimum_pilot_payload_bytes / payload_bytes_per_pass;
+  const size_t remainder = minimum_pilot_payload_bytes % payload_bytes_per_pass;
+  const size_t required = quotient + (remainder != 0 ? 1 : 0);
+  return std::min(maximum_passes, std::max<size_t>(1, required));
+}
+
+size_t calculate_pattern_calibrated_passes(double pilot_duration_seconds,
+                                           size_t pilot_passes,
+                                           double target_duration_seconds,
+                                           size_t minimum_passes,
+                                           size_t maximum_passes) {
+  if (!std::isfinite(pilot_duration_seconds) || pilot_duration_seconds <= 0.0 ||
+      pilot_passes == 0 || !std::isfinite(target_duration_seconds) ||
+      target_duration_seconds <= 0.0 || minimum_passes == 0 ||
+      maximum_passes < minimum_passes) {
+    return 0;
+  }
+
+  const long double scaled =
+      static_cast<long double>(pilot_passes) * target_duration_seconds /
+      pilot_duration_seconds;
+  if (scaled >= static_cast<long double>(maximum_passes)) {
+    return maximum_passes;
+  }
+  const size_t rounded_up = static_cast<size_t>(std::ceil(scaled));
+  return std::max(minimum_passes, rounded_up);
 }
 
 const char* pattern_measurement_status_to_string(PatternMeasurementStatus status) {

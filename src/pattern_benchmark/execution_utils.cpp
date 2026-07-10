@@ -36,6 +36,7 @@
 #include <algorithm>
 #include <limits>  // std::numeric_limits
 #include <cmath>   // std::isnan, std::isinf
+#include <numeric>
 
 // ============================================================================
 // Utility Functions
@@ -95,28 +96,41 @@ static size_t calculate_max_aligned_offset(size_t buffer_size) {
   return ((buffer_size - PATTERN_ACCESS_SIZE_BYTES) / PATTERN_ACCESS_SIZE_BYTES) * PATTERN_ACCESS_SIZE_BYTES;
 }
 
-// Helper function to generate random indices for random access pattern
-std::vector<size_t> generate_random_indices(size_t buffer_size, size_t num_accesses) {
+// Generate a deterministic no-replacement permutation prefix of aligned offsets.
+std::vector<size_t> generate_random_indices(size_t buffer_size, size_t num_accesses,
+                                            uint64_t seed) {
   using namespace Constants;
   std::vector<size_t> indices;
-  indices.reserve(num_accesses);
-  
-  // Generate random offsets that are aligned (for aligned loads)
-  // Each access loads PATTERN_ACCESS_SIZE_BYTES bytes, so we need offset + PATTERN_ACCESS_SIZE_BYTES <= buffer_size
-  size_t max_offset = calculate_max_aligned_offset(buffer_size);
-  if (max_offset == 0) {
-    return indices;  // Return empty vector if buffer too small
+  if (buffer_size < PATTERN_ACCESS_SIZE_BYTES) {
+    return indices;
   }
-  
-  std::random_device rd;
-  std::mt19937 gen(rd());
-  std::uniform_int_distribution<size_t> dis(0, max_offset / PATTERN_ACCESS_SIZE_BYTES);  // Index in units
-  
-  for (size_t i = 0; i < num_accesses; ++i) {
-    size_t offset = dis(gen) * PATTERN_ACCESS_SIZE_BYTES;  // Convert to byte offset
-    indices.push_back(offset);
+
+  const size_t aligned_slot_count = calculate_max_aligned_offset(buffer_size) /
+                                        PATTERN_ACCESS_SIZE_BYTES +
+                                    1;
+  const size_t selected_count = std::min(num_accesses, aligned_slot_count);
+  indices.reserve(selected_count);
+  if (selected_count == 0) {
+    return indices;
   }
-  
+  if (aligned_slot_count == 1) {
+    indices.push_back(0);
+    return indices;
+  }
+
+  std::mt19937_64 random(seed);
+  size_t slot = static_cast<size_t>(random() % aligned_slot_count);
+  size_t step = static_cast<size_t>(random() % (aligned_slot_count - 1)) + 1;
+  while (std::gcd(step, aligned_slot_count) != 1) {
+    step = step == aligned_slot_count - 1 ? 1 : step + 1;
+  }
+
+  for (size_t index = 0; index < selected_count; ++index) {
+    indices.push_back(slot * PATTERN_ACCESS_SIZE_BYTES);
+    slot = step >= aligned_slot_count - slot
+               ? step - (aligned_slot_count - slot)
+               : slot + step;
+  }
   return indices;
 }
 
@@ -132,4 +146,3 @@ size_t calculate_num_random_accesses(size_t buffer_size) {
   }
   return num_accesses;
 }
-

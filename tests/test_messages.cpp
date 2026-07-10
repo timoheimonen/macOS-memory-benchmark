@@ -303,6 +303,11 @@ TEST_F(MessagesErrorTest, ErrorAnalyzeTlbMustBeUsedAlone) {
   EXPECT_NE(msg.find("-X/--sweep-max-runs <count>"), std::string::npos);
 }
 
+TEST_F(MessagesErrorTest, ErrorSeedRequiresPatterns) {
+  EXPECT_EQ(Messages::error_seed_requires_patterns(),
+            "--seed is supported only with --patterns or --analyze-tlb");
+}
+
 TEST_F(MessagesErrorTest, ErrorMadviseFailed) {
   std::string msg = Messages::error_madvise_failed("lat_buffer");
   EXPECT_EQ(msg, "madvise failed for lat_buffer");
@@ -716,6 +721,8 @@ TEST_F(MessagesFormattingTest, UsageOptions) {
   EXPECT_NE(msg.find("--tlb-density"), std::string::npos);
   EXPECT_NE(msg.find("default: medium"), std::string::npos);
   EXPECT_NE(msg.find("--analyze-tlb: 16"), std::string::npos);
+  EXPECT_NE(msg.find("automatic 150 ms calibration"), std::string::npos);
+  EXPECT_NE(msg.find("random workload seed for --patterns"), std::string::npos);
   EXPECT_NE(msg.find("--latency-samples"), std::string::npos);
   EXPECT_NE(msg.find("--latency-stride-bytes"), std::string::npos);
   EXPECT_NE(msg.find("--latency-chain-mode"), std::string::npos);

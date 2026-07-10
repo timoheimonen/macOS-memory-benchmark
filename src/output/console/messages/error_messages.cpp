@@ -171,6 +171,12 @@ const std::string& error_analyze_tlb_must_be_used_alone() {
   return msg;
 }
 
+const std::string& error_seed_requires_patterns() {
+  static const std::string msg =
+      "--seed is supported only with --patterns or --analyze-tlb";
+  return msg;
+}
+
 std::string error_duplicate_sweep_parameter(const std::string& parameter_name) {
   return "sweep parameter specified more than once: " + parameter_name;
 }

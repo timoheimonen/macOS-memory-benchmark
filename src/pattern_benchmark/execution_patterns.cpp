@@ -68,6 +68,36 @@ bool validate_random_indices(const std::vector<size_t>& indices, size_t buffer_s
 // Forward declarations from execution_utils.cpp
 double calculate_bandwidth(size_t data_size, int iterations, double elapsed_time_ns);
 
+namespace {
+
+template <typename PilotRunner>
+int resolve_pattern_passes(const BenchmarkConfig& config, size_t payload_bytes_per_pass,
+                           PilotRunner pilot_runner) {
+  using namespace Constants;
+  const size_t pilot_passes = calculate_pattern_pilot_passes(
+      payload_bytes_per_pass, PATTERN_CALIBRATION_MIN_PILOT_BYTES,
+      PATTERN_CALIBRATION_MAX_PASSES);
+  if (pilot_passes == 0 || pilot_passes > static_cast<size_t>(std::numeric_limits<int>::max())) {
+    return 0;
+  }
+
+  const double pilot_duration = pilot_runner(static_cast<int>(pilot_passes));
+  if (config.user_specified_iterations) {
+    return config.iterations;
+  }
+
+  const size_t calibrated_passes = calculate_pattern_calibrated_passes(
+      pilot_duration, pilot_passes, PATTERN_CALIBRATION_TARGET_SECONDS, 1,
+      PATTERN_CALIBRATION_MAX_PASSES);
+  if (calibrated_passes == 0 ||
+      calibrated_passes > static_cast<size_t>(std::numeric_limits<int>::max())) {
+    return 0;
+  }
+  return static_cast<int>(calibrated_passes);
+}
+
+}  // namespace
+
 // ============================================================================
 // Pattern Benchmark Execution Functions
 // ============================================================================
@@ -78,22 +108,36 @@ void run_forward_pattern_benchmarks(const BenchmarkBuffers& buffers, const Bench
   show_progress();
   std::atomic<uint64_t> checksum{0};
   warmup_read(buffers.src_buffer(), config.buffer_size, config.num_threads, checksum);
-  double read_time = run_read_test(buffers.src_buffer(), config.buffer_size, config.iterations,
-                                    config.num_threads, checksum, timer);
-  results.forward_read_bw = calculate_bandwidth(config.buffer_size, config.iterations, read_time);
+  auto run_read = [&](int passes) {
+    return run_pattern_read_test(buffers.src_buffer(), config.buffer_size, passes,
+                                 memory_read_loop_asm, checksum, timer,
+                                 config.num_threads);
+  };
+  const int read_passes = resolve_pattern_passes(config, config.buffer_size, run_read);
+  const double read_time = run_read(read_passes);
+  results.forward_read_bw = calculate_bandwidth(config.buffer_size, read_passes, read_time);
   
   show_progress();
   warmup_write(buffers.dst_buffer(), config.buffer_size, config.num_threads);
-  double write_time = run_write_test(buffers.dst_buffer(), config.buffer_size, config.iterations,
-                                      config.num_threads, timer);
-  results.forward_write_bw = calculate_bandwidth(config.buffer_size, config.iterations, write_time);
+  auto run_write = [&](int passes) {
+    return run_write_test(buffers.dst_buffer(), config.buffer_size, passes,
+                          config.num_threads, timer);
+  };
+  const int write_passes = resolve_pattern_passes(config, config.buffer_size, run_write);
+  const double write_time = run_write(write_passes);
+  results.forward_write_bw = calculate_bandwidth(config.buffer_size, write_passes, write_time);
   
   show_progress();
   warmup_copy(buffers.dst_buffer(), buffers.src_buffer(), config.buffer_size, config.num_threads);
-  double copy_time = run_copy_test(buffers.dst_buffer(), buffers.src_buffer(), config.buffer_size,
-                                   config.iterations, config.num_threads, timer);
+  auto run_copy = [&](int passes) {
+    return run_copy_test(buffers.dst_buffer(), buffers.src_buffer(), config.buffer_size,
+                         passes, config.num_threads, timer);
+  };
+  const int copy_passes = resolve_pattern_passes(
+      config, config.buffer_size * Constants::COPY_OPERATION_MULTIPLIER, run_copy);
+  const double copy_time = run_copy(copy_passes);
   results.forward_copy_bw = calculate_bandwidth(config.buffer_size * Constants::COPY_OPERATION_MULTIPLIER, 
-                                                config.iterations, copy_time);
+                                                copy_passes, copy_time);
 }
 
 // Run reverse pattern benchmarks (backward sequential access)
@@ -102,33 +146,37 @@ void run_reverse_pattern_benchmarks(const BenchmarkBuffers& buffers, const Bench
   show_progress();
   std::atomic<uint64_t> checksum{0};
   warmup_read(buffers.src_buffer(), config.buffer_size, config.num_threads, checksum);
-  double read_time = run_pattern_read_test(buffers.src_buffer(), config.buffer_size, config.iterations,
-                                            memory_read_reverse_loop_asm, checksum, timer, config.num_threads);
-  results.reverse_read_bw = calculate_bandwidth(config.buffer_size, config.iterations, read_time);
+  auto run_read = [&](int passes) {
+    return run_pattern_read_test(buffers.src_buffer(), config.buffer_size, passes,
+                                 memory_read_reverse_loop_asm, checksum, timer,
+                                 config.num_threads);
+  };
+  const int read_passes = resolve_pattern_passes(config, config.buffer_size, run_read);
+  const double read_time = run_read(read_passes);
+  results.reverse_read_bw = calculate_bandwidth(config.buffer_size, read_passes, read_time);
 
   show_progress();
   warmup_write(buffers.dst_buffer(), config.buffer_size, config.num_threads);
-  double write_time = run_pattern_write_test(buffers.dst_buffer(), config.buffer_size, config.iterations,
-                                             memory_write_reverse_loop_asm, timer, config.num_threads);
-  results.reverse_write_bw = calculate_bandwidth(config.buffer_size, config.iterations, write_time);
+  auto run_write = [&](int passes) {
+    return run_pattern_write_test(buffers.dst_buffer(), config.buffer_size, passes,
+                                  memory_write_reverse_loop_asm, timer, config.num_threads);
+  };
+  const int write_passes = resolve_pattern_passes(config, config.buffer_size, run_write);
+  const double write_time = run_write(write_passes);
+  results.reverse_write_bw = calculate_bandwidth(config.buffer_size, write_passes, write_time);
 
   show_progress();
   warmup_copy(buffers.dst_buffer(), buffers.src_buffer(), config.buffer_size, config.num_threads);
-  double copy_time = run_pattern_copy_test(buffers.dst_buffer(), buffers.src_buffer(), config.buffer_size,
-                                            config.iterations, memory_copy_reverse_loop_asm, timer, config.num_threads);
+  auto run_copy = [&](int passes) {
+    return run_pattern_copy_test(buffers.dst_buffer(), buffers.src_buffer(), config.buffer_size,
+                                 passes, memory_copy_reverse_loop_asm, timer,
+                                 config.num_threads);
+  };
+  const int copy_passes = resolve_pattern_passes(
+      config, config.buffer_size * Constants::COPY_OPERATION_MULTIPLIER, run_copy);
+  const double copy_time = run_copy(copy_passes);
   results.reverse_copy_bw = calculate_bandwidth(config.buffer_size * Constants::COPY_OPERATION_MULTIPLIER,
-                                                config.iterations, copy_time);
-}
-
-// Prepare warmup indices for random pattern
-static std::vector<size_t> prepare_warmup_indices(const std::vector<size_t>& random_indices) {
-  using namespace Constants;
-  size_t warmup_indices_count = std::min(static_cast<size_t>(PATTERN_WARMUP_INDICES_MAX), 
-                                         random_indices.size() / PATTERN_WARMUP_INDICES_FRACTION);
-  if (warmup_indices_count == 0) {
-    warmup_indices_count = 1;  // At least one index
-  }
-  return std::vector<size_t>(random_indices.begin(), random_indices.begin() + warmup_indices_count);
+                                                copy_passes, copy_time);
 }
 
 // Run random pattern benchmarks (uniform random access)
@@ -162,37 +210,47 @@ int run_random_pattern_benchmarks(const BenchmarkBuffers& buffers, const Benchma
     return EXIT_FAILURE;
   }
   
-  // Prepare warmup indices
-  std::vector<size_t> warmup_indices = prepare_warmup_indices(random_indices);
-  
   // Execute read benchmark
   show_progress();
   std::atomic<uint64_t> checksum{0};
-  warmup_read_random(buffers.src_buffer(), warmup_indices, config.num_threads, checksum);
-  double read_time = run_pattern_read_random_test(buffers.src_buffer(), worker_indices,
-                                                   config.iterations, checksum, timer,
-                                                   config.num_threads, config.buffer_size);
+  warmup_read_random(buffers.src_buffer(), random_indices, config.num_threads, checksum);
+  auto run_read = [&](int passes) {
+    return run_pattern_read_random_test(buffers.src_buffer(), worker_indices, passes,
+                                        checksum, timer, config.num_threads,
+                                        config.buffer_size);
+  };
+  const size_t payload_bytes_per_pass = num_accesses * PATTERN_ACCESS_SIZE_BYTES;
+  const int read_passes = resolve_pattern_passes(config, payload_bytes_per_pass, run_read);
+  const double read_time = run_read(read_passes);
   // For random, we use num_accesses * PATTERN_ACCESS_SIZE_BYTES instead of buffer_size
-  results.random_read_bw = calculate_bandwidth(num_accesses * PATTERN_ACCESS_SIZE_BYTES,
-                                               config.iterations, read_time);
+  results.random_read_bw = calculate_bandwidth(payload_bytes_per_pass, read_passes, read_time);
 
   // Execute write benchmark
   show_progress();
-  warmup_write_random(buffers.dst_buffer(), warmup_indices, config.num_threads);
-  double write_time = run_pattern_write_random_test(buffers.dst_buffer(), worker_indices,
-                                                      config.iterations, timer,
-                                                      config.num_threads, config.buffer_size);
-  results.random_write_bw = calculate_bandwidth(num_accesses * PATTERN_ACCESS_SIZE_BYTES,
-                                                config.iterations, write_time);
+  warmup_write_random(buffers.dst_buffer(), random_indices, config.num_threads);
+  auto run_write = [&](int passes) {
+    return run_pattern_write_random_test(buffers.dst_buffer(), worker_indices, passes,
+                                         timer, config.num_threads, config.buffer_size);
+  };
+  const int write_passes = resolve_pattern_passes(config, payload_bytes_per_pass, run_write);
+  const double write_time = run_write(write_passes);
+  results.random_write_bw = calculate_bandwidth(payload_bytes_per_pass, write_passes, write_time);
 
   // Execute copy benchmark
   show_progress();
-  warmup_copy_random(buffers.dst_buffer(), buffers.src_buffer(), warmup_indices, config.num_threads);
-  double copy_time = run_pattern_copy_random_test(buffers.dst_buffer(), buffers.src_buffer(), worker_indices,
-                                                   config.iterations, timer,
-                                                   config.num_threads, config.buffer_size);
-  results.random_copy_bw = calculate_bandwidth(num_accesses * PATTERN_ACCESS_SIZE_BYTES * Constants::COPY_OPERATION_MULTIPLIER,
-                                              config.iterations, copy_time);
+  warmup_copy_random(buffers.dst_buffer(), buffers.src_buffer(), random_indices,
+                     config.num_threads);
+  auto run_copy = [&](int passes) {
+    return run_pattern_copy_random_test(buffers.dst_buffer(), buffers.src_buffer(),
+                                        worker_indices, passes, timer, config.num_threads,
+                                        config.buffer_size);
+  };
+  const size_t copy_payload_bytes_per_pass =
+      payload_bytes_per_pass * Constants::COPY_OPERATION_MULTIPLIER;
+  const int copy_passes = resolve_pattern_passes(config, copy_payload_bytes_per_pass, run_copy);
+  const double copy_time = run_copy(copy_passes);
+  results.random_copy_bw =
+      calculate_bandwidth(copy_payload_bytes_per_pass, copy_passes, copy_time);
   
   return EXIT_SUCCESS;
 }

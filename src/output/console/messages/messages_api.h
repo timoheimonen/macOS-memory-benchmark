@@ -73,6 +73,7 @@ std::string error_latency_tlb_locality_page_multiple(size_t value_kb, size_t pag
 std::string error_latency_tlb_locality_too_small_for_stride(size_t locality_bytes, size_t stride_bytes);
 std::string error_threads_invalid(long long value, long long min_val, long long max_val);
 const std::string& error_analyze_tlb_must_be_used_alone();
+const std::string& error_seed_requires_patterns();
 std::string error_duplicate_sweep_parameter(const std::string& parameter_name);
 const std::string& error_analyze_core_to_core_must_be_used_alone();
 const std::string& error_core_to_core_timer_creation_failed();

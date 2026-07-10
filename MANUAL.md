@@ -162,8 +162,10 @@ Pattern mode (`--patterns`) measures bandwidth sensitivity across:
 Strided results use a deterministic per-worker work plan. Each valid strided address contributes a 32-byte payload;
 this is half of a 64-byte cache line, not a complete cache-line payload. A worker's last candidate address is included
 when the complete 32-byte access fits within its cache-line-aligned chunk. Reported read/write bandwidth is calculated
-from the exact sum of these worker payloads, while copy bandwidth counts both the read and write sides. The pass count
-is the larger of `--iterations` and the number required to reach at least 256 MiB of effective payload.
+from the exact sum of these worker payloads, while copy bandwidth counts both the read and write sides. On every pass,
+the ARM64 kernel advances the starting phase by 32 bytes modulo the stride, so sparse tests do not repeatedly touch
+only the phase-zero addresses. All passes for one worker execute inside one assembly call, and the bandwidth numerator
+uses the exact phase-aware access count. Strided warmup executes one complete phase cycle (`stride / 32` passes).
 
 Every active strided worker must have at least two valid addresses and therefore make at least one genuine stride
 transition. If the requested thread count cannot satisfy that rule, the benchmark automatically uses fewer workers for
@@ -174,6 +176,20 @@ Parallel pattern timing begins only after every actual worker has completed its 
 reached the ready gate. It stops when the last worker finishes its measured work; worker teardown and thread joining
 remain outside the measured interval. For the random pattern, the global access list is partitioned into per-worker
 local index lists before any timed call, so index filtering and list allocation are not included in reported bandwidth.
+
+Unless `--iterations` is supplied explicitly, each sequential, strided, and random read/write/copy sample first runs an
+excluded pilot and scales the measured pass count toward 150 ms; 100–250 ms is the intended measurement window. The
+pilot uses the same operation, access pattern, and worker shape as the measured sample, so it also provides
+preconditioning. If `--iterations` is explicit, that value is the measured pass count; the excluded pilot still runs
+for same-shape preconditioning but does not change the requested count.
+
+Random offsets are the unique, no-replacement prefix of a deterministic seeded permutation of valid 32-byte-aligned
+slots. `--seed` selects that permutation. If omitted, one seed is generated once for the command; regenerating the list
+from the same resolved seed means every `--count` loop uses the same random workload. Random read, write, and copy
+warmups traverse the full measured address list rather than a prefix.
+
+Pattern results therefore describe steady-state, warm-memory bandwidth. They do not measure cold allocation, first
+touch, or a cold-cache/cold-TLB start; warmup and the excluded pilot intentionally prepare the tested access shape.
 
 ---
 
@@ -224,6 +240,10 @@ forms such as `-buffersize` or `-benchmark` are invalid.
 - Default: `1000`
 - Positive integer
 - Not allowed with `--only-latency`
+- In `--patterns`, automatic calibration is used when this option is omitted; the default value is not forced as the
+  measured pass count
+- In `--patterns`, an explicitly supplied value is the measured pass count for each read/write/copy sample; an excluded
+  same-shape pilot still runs for preconditioning
 
 #### `--count <count>`
 
@@ -252,6 +272,8 @@ forms such as `-buffersize` or `-benchmark` are invalid.
 
 - Runs only access-pattern benchmarks
 - Skips standard bandwidth/latency sections
+- Automatically calibrates each read/write/copy sample toward 150 ms (intended window 100–250 ms) unless
+  `--iterations` is explicitly supplied
 
 #### `--only-bandwidth`
 
@@ -301,11 +323,16 @@ forms such as `-buffersize` or `-benchmark` are invalid.
 
 #### `--seed <uint64>`
 
-- Applies only to `--analyze-tlb`
-- Controls base/refinement/validation/large-locality round order, pointer-chain construction, and deterministic bootstrap resampling
-- The same seed reproduces planner order, derived task seeds, and chain permutations
-- If omitted, one unsigned 64-bit seed is generated for the command and reused by every TLB run in a Cartesian sweep
-- The resolved seed, source (`user` or `generated`), schedule policy, and each task seed are stored in JSON
+- Applies only to `--patterns` or `--analyze-tlb`
+- In `--patterns`, selects the deterministic unique/no-replacement permutation prefix of valid 32-byte-aligned random
+  offsets; the same resolved seed reproduces the workload, and every `--count` loop repeats it
+- In `--patterns`, one unsigned 64-bit seed is generated once for the command when omitted
+- In `--analyze-tlb`, controls base/refinement/validation/large-locality round order, pointer-chain construction, and
+  deterministic bootstrap resampling
+- In `--analyze-tlb`, the same seed reproduces planner order, derived task seeds, and chain permutations
+- In `--analyze-tlb`, one unsigned 64-bit seed is generated for the command when omitted and reused by every TLB run in
+  a Cartesian sweep
+- Standalone TLB JSON stores the resolved seed, source (`user` or `generated`), schedule policy, and each task seed
 
 #### `--analyze-core2core`
 

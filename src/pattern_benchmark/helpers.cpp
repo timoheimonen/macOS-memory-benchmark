@@ -43,18 +43,12 @@
 
 namespace {
 
-inline bool calculate_strided_chunk_params(size_t chunk_size, size_t stride,
-                                           size_t& byte_count,
-                                           size_t& num_accesses) {
+inline bool is_valid_strided_chunk(size_t chunk_size, size_t stride) {
   using namespace Constants;
-
-  if (stride == 0 || chunk_size < PATTERN_ACCESS_SIZE_BYTES) {
-    return false;
-  }
-
-  byte_count = chunk_size;
-  num_accesses = 1 + (chunk_size - PATTERN_ACCESS_SIZE_BYTES) / stride;
-  return num_accesses >= 2;
+  return stride >= PATTERN_ACCESS_SIZE_BYTES &&
+         stride % PATTERN_ACCESS_SIZE_BYTES == 0 &&
+         chunk_size >= stride &&
+         chunk_size - stride >= PATTERN_ACCESS_SIZE_BYTES;
 }
 
 const PatternRandomWorkerIndices* find_random_worker_indices(
@@ -73,77 +67,6 @@ const PatternRandomWorkerIndices* find_random_worker_indices(
   return &*worker;
 }
 
-inline uint64_t run_strided_read_kernel(const void* src,
-                                        size_t byte_count,
-                                        size_t stride,
-                                        size_t num_iterations) {
-  using namespace Constants;
-
-  switch (stride) {
-    case PATTERN_STRIDE_CACHE_LINE:
-      return memory_read_strided_64_loop_asm(src, byte_count, num_iterations);
-    case PATTERN_STRIDE_PAGE:
-      return memory_read_strided_4096_loop_asm(src, byte_count, num_iterations);
-    case PATTERN_STRIDE_PAGE_16K:
-      return memory_read_strided_16384_loop_asm(src, byte_count, num_iterations);
-    case PATTERN_STRIDE_SUPERPAGE_2MB:
-      return memory_read_strided_2mb_loop_asm(src, byte_count, num_iterations);
-    default:
-      return memory_read_strided_loop_asm(src, byte_count, stride, num_iterations);
-  }
-}
-
-inline void run_strided_write_kernel(void* dst,
-                                     size_t byte_count,
-                                     size_t stride,
-                                     size_t num_iterations) {
-  using namespace Constants;
-
-  switch (stride) {
-    case PATTERN_STRIDE_CACHE_LINE:
-      memory_write_strided_64_loop_asm(dst, byte_count, num_iterations);
-      return;
-    case PATTERN_STRIDE_PAGE:
-      memory_write_strided_4096_loop_asm(dst, byte_count, num_iterations);
-      return;
-    case PATTERN_STRIDE_PAGE_16K:
-      memory_write_strided_16384_loop_asm(dst, byte_count, num_iterations);
-      return;
-    case PATTERN_STRIDE_SUPERPAGE_2MB:
-      memory_write_strided_2mb_loop_asm(dst, byte_count, num_iterations);
-      return;
-    default:
-      memory_write_strided_loop_asm(dst, byte_count, stride, num_iterations);
-      return;
-  }
-}
-
-inline void run_strided_copy_kernel(void* dst,
-                                    const void* src,
-                                    size_t byte_count,
-                                    size_t stride,
-                                    size_t num_iterations) {
-  using namespace Constants;
-
-  switch (stride) {
-    case PATTERN_STRIDE_CACHE_LINE:
-      memory_copy_strided_64_loop_asm(dst, src, byte_count, num_iterations);
-      return;
-    case PATTERN_STRIDE_PAGE:
-      memory_copy_strided_4096_loop_asm(dst, src, byte_count, num_iterations);
-      return;
-    case PATTERN_STRIDE_PAGE_16K:
-      memory_copy_strided_16384_loop_asm(dst, src, byte_count, num_iterations);
-      return;
-    case PATTERN_STRIDE_SUPERPAGE_2MB:
-      memory_copy_strided_2mb_loop_asm(dst, src, byte_count, num_iterations);
-      return;
-    default:
-      memory_copy_strided_loop_asm(dst, src, byte_count, stride, num_iterations);
-      return;
-  }
-}
-
 }  // namespace
 
 // Helper function to run a pattern read test (multi-threaded)
@@ -152,18 +75,29 @@ double run_pattern_read_test(void* buffer, size_t size, int iterations,
                              std::atomic<uint64_t>& checksum, HighResTimer& timer,
                              int num_threads) {
   checksum.store(0, std::memory_order_relaxed);
+  if (num_threads <= 0) {
+    return 0.0;
+  }
+  std::vector<uint64_t> worker_checksums(static_cast<size_t>(num_threads), 0);
 
-  // Create work function that captures the read_func pointer
-  auto read_work = [&checksum, read_func](char *chunk_start, size_t chunk_size, int iters) {
+  auto read_work = [&worker_checksums, read_func](char *chunk_start, size_t chunk_size,
+                                                  int iters, size_t worker_index) {
     uint64_t local_checksum = 0;
     for (int i = 0; i < iters; ++i) {
       uint64_t result = read_func(chunk_start, chunk_size);
       local_checksum ^= result;
     }
-    checksum.fetch_xor(local_checksum, std::memory_order_release);
+    worker_checksums[worker_index] = local_checksum;
   };
 
-  return run_parallel_test(buffer, size, iterations, num_threads, timer, read_work, "pattern_read");
+  const double duration = run_parallel_test_indexed(
+      buffer, size, iterations, num_threads, timer, read_work, "pattern_read");
+  uint64_t combined_checksum = 0;
+  for (uint64_t worker_checksum : worker_checksums) {
+    combined_checksum ^= worker_checksum;
+  }
+  checksum.store(combined_checksum, std::memory_order_release);
+  return duration;
 }
 
 // Helper function to run a pattern write test (multi-threaded)
@@ -200,25 +134,30 @@ double run_pattern_read_strided_test(void* buffer, size_t size, size_t stride, i
                                      int num_threads) {
   using namespace Constants;
   checksum.store(0, std::memory_order_relaxed);
+  if (num_threads <= 0) {
+    return 0.0;
+  }
+  std::vector<uint64_t> worker_checksums(static_cast<size_t>(num_threads), 0);
 
-  // Create work function that captures stride
-  auto strided_read_work = [&checksum, stride](char *chunk_start, size_t chunk_size, int iters) {
-    uint64_t local_checksum = 0;
-
-    size_t effective_size = 0;
-    size_t num_accesses = 0;
-    if (!calculate_strided_chunk_params(chunk_size, stride, effective_size, num_accesses)) {
+  auto strided_read_work = [&worker_checksums, stride](char *chunk_start,
+                                                       size_t chunk_size, int iters,
+                                                       size_t worker_index) {
+    if (!is_valid_strided_chunk(chunk_size, stride)) {
       return;
     }
-
-    for (int i = 0; i < iters; ++i) {
-      uint64_t result = run_strided_read_kernel(chunk_start, effective_size, stride, num_accesses);
-      local_checksum ^= result;
-    }
-    checksum.fetch_xor(local_checksum, std::memory_order_release);
+    const uint64_t result = memory_read_strided_phased_loop_asm(
+        chunk_start, chunk_size, stride, static_cast<size_t>(iters), 0);
+    worker_checksums[worker_index] = result;
   };
 
-  return run_parallel_test(buffer, size, iterations, num_threads, timer, strided_read_work, "strided_read");
+  const double duration = run_parallel_test_indexed(
+      buffer, size, iterations, num_threads, timer, strided_read_work, "strided_read");
+  uint64_t combined_checksum = 0;
+  for (uint64_t worker_checksum : worker_checksums) {
+    combined_checksum ^= worker_checksum;
+  }
+  checksum.store(combined_checksum, std::memory_order_release);
+  return duration;
 }
 
 // Helper function to run a strided pattern write test (multi-threaded)
@@ -228,15 +167,11 @@ double run_pattern_write_strided_test(void* buffer, size_t size, size_t stride, 
 
   // Create work function that captures stride
   auto strided_write_work = [stride](char *chunk_start, size_t chunk_size, int iters) {
-    size_t effective_size = 0;
-    size_t num_accesses = 0;
-    if (!calculate_strided_chunk_params(chunk_size, stride, effective_size, num_accesses)) {
+    if (!is_valid_strided_chunk(chunk_size, stride)) {
       return;
     }
-
-    for (int i = 0; i < iters; ++i) {
-      run_strided_write_kernel(chunk_start, effective_size, stride, num_accesses);
-    }
+    memory_write_strided_phased_loop_asm(chunk_start, chunk_size, stride,
+                                         static_cast<size_t>(iters), 0);
   };
 
   return run_parallel_test(buffer, size, iterations, num_threads, timer, strided_write_work, "strided_write");
@@ -249,15 +184,11 @@ double run_pattern_copy_strided_test(void* dst, void* src, size_t size, size_t s
 
   // Create work function that captures stride
   auto strided_copy_work = [stride](char *dst_chunk, char *src_chunk, size_t chunk_size, int iters) {
-    size_t effective_size = 0;
-    size_t num_accesses = 0;
-    if (!calculate_strided_chunk_params(chunk_size, stride, effective_size, num_accesses)) {
+    if (!is_valid_strided_chunk(chunk_size, stride)) {
       return;
     }
-
-    for (int i = 0; i < iters; ++i) {
-      run_strided_copy_kernel(dst_chunk, src_chunk, effective_size, stride, num_accesses);
-    }
+    memory_copy_strided_phased_loop_asm(dst_chunk, src_chunk, chunk_size, stride,
+                                        static_cast<size_t>(iters), 0);
   };
 
   return run_parallel_test_copy(dst, src, size, iterations, num_threads, timer, strided_copy_work, "strided_copy");
@@ -273,10 +204,15 @@ double run_pattern_read_random_test(
     int num_threads,
     size_t buffer_size) {
   checksum.store(0, std::memory_order_relaxed);
+  if (num_threads <= 0) {
+    return 0.0;
+  }
+  std::vector<uint64_t> worker_checksums(static_cast<size_t>(num_threads), 0);
   char* buffer_start = static_cast<char*>(buffer);
 
-  auto random_read_work = [&checksum, &worker_indices, buffer_start](
-                          char *chunk_start, size_t chunk_size, int iters) {
+  auto random_read_work = [&worker_checksums, &worker_indices, buffer_start](
+                          char *chunk_start, size_t chunk_size, int iters,
+                          size_t worker_index) {
     uint64_t local_checksum = 0;
     const size_t chunk_offset = static_cast<size_t>(chunk_start - buffer_start);
     const PatternRandomWorkerIndices* worker =
@@ -290,11 +226,18 @@ double run_pattern_read_random_test(
           memory_read_random_loop_asm(chunk_start, worker->indices.data(), worker->indices.size());
       local_checksum ^= result;
     }
-    checksum.fetch_xor(local_checksum, std::memory_order_release);
+    worker_checksums[worker_index] = local_checksum;
   };
 
-  return run_parallel_test(buffer, buffer_size, iterations, num_threads, timer,
-                          random_read_work, "random_read");
+  const double duration = run_parallel_test_indexed(
+      buffer, buffer_size, iterations, num_threads, timer, random_read_work,
+      "random_read");
+  uint64_t combined_checksum = 0;
+  for (uint64_t worker_checksum : worker_checksums) {
+    combined_checksum ^= worker_checksum;
+  }
+  checksum.store(combined_checksum, std::memory_order_release);
+  return duration;
 }
 
 // Helper function to run a random pattern write test (multi-threaded)

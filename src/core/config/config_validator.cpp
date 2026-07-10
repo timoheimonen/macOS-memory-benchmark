@@ -225,6 +225,12 @@ int validate_config(BenchmarkConfig& config) {
     return validate_analyze_tlb_stride(config.latency_stride_bytes, page_size);
   }
 
+  if (config.user_specified_pattern_seed && !config.run_patterns) {
+    std::cerr << Messages::error_prefix() << Messages::error_seed_requires_patterns()
+              << std::endl;
+    return EXIT_FAILURE;
+  }
+
   // Error: Validate latency stride settings.
   if (config.latency_stride_bytes == 0) {
     std::cerr << Messages::error_prefix()

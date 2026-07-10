@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.57.1] - UNRELEASED
 
+### Added
+  - **Reproducible pattern workloads**: `--seed <uint64>` now applies to `--patterns` as well as standalone TLB analysis. Random pattern offsets are generated once as a deterministic, aligned, no-replacement permutation prefix; an omitted seed is generated once per command, and every `--count` loop reuses the same workload.
+  - **Phase-rotating ARM64 strided kernels**: New read, write, and copy hot paths execute all calibrated passes inside one assembly call while advancing the 32-byte starting phase on every pass. Exact planner metadata tracks phase cycles, distinct addresses, logical working-set span, and phase-aware payload totals without out-of-range accesses.
+
+### Changed
+  - **Duration-calibrated pattern samples**: When `--iterations` is omitted, every pattern read, write, and copy measurement uses an excluded same-shape pilot to calibrate toward a 150 ms sample (100-250 ms intended window). An explicit `--iterations` value remains an exact measured-pass override. Strided warmup covers a complete phase cycle, random warmup covers the full deterministic address list, and read checksum aggregation now happens after timing from per-worker slots.
+
 ### Fixed
   - **Exact per-worker strided pattern accounting**: `--patterns` now builds a deterministic cache-line-aligned work plan before each strided measurement, includes the final exactly fitting access, derives reported payload bytes from the finalized worker ranges, and reduces the effective worker count when a requested split would leave a worker without a genuine stride transition. This prevents small-buffer or high-thread-count 2 MiB stride runs from repeatedly touching only offset zero while being reported as a valid 2 MiB-stride workload.
   - **Parallel pattern timing excludes worker lifecycle overhead**: Worker QoS setup and ready-gate synchronization now complete before the timer starts, and the last worker stops the timer after publishing all measured memory effects. Thread teardown and joins remain outside the reported interval.
