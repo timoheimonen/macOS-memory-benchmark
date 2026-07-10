@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.59.0] - Unreleased
+## [0.59.0] - 2026-07-10
 
 ### Added
   - **Deterministic orchestration and platform seams**: Added injected sweep, core-to-core, TLB, mmap/madvise, Mach timer, and system-information providers so interruption, failure, fallback, cleanup, status, and counter contracts can be tested without running benchmark kernels or depending on host-specific failures.
