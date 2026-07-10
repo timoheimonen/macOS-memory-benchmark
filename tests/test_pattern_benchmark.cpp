@@ -15,19 +15,21 @@
 //
 #include <gtest/gtest.h>
 #include "asm/asm_functions.h"
+#include "benchmark/parallel_test_framework.h"
 #include "pattern_benchmark/pattern_benchmark.h"
+#include "pattern_benchmark/pattern_work_plan.h"
 #include "core/memory/buffer_manager.h"
 #include "core/config/config.h"
-#include "utils/benchmark.h"  // Declares system_info functions
 #include "core/config/constants.h"
+#include "utils/benchmark.h"  // Declares system_info functions
 #include "test_config_helpers.h"
 #include <algorithm>
+#include <atomic>
 #include <cstdint>
 #include <cstring>
 #include <cstdlib>
 #include <utility>
 #include <vector>
-
 extern "C" uint64_t verify_pattern_callee_saved_registers_asm(
     uintptr_t function_address, uintptr_t arg0, uintptr_t arg1, uintptr_t arg2,
     uintptr_t arg3, uintptr_t arg4, uintptr_t arg5);
@@ -464,6 +466,60 @@ TEST(PatternBenchmarkTest, PhasedStridedKernelsPreserveAapcs64RegistersIntegrati
                   0),
               1u);
   }
+}
+
+TEST(PatternBenchmarkTest, FinalizedWorkPlanDrivesInstrumentedExecutorIntegration) {
+  constexpr size_t buffer_size = 8 * 1024 * 1024;
+  const PatternWorkPlan pilot_plan = build_strided_pattern_work_plan(
+      buffer_size, Constants::PATTERN_STRIDE_SUPERPAGE_2MB, Constants::PATTERN_ACCESS_SIZE_BYTES, 10, 1, 0);
+  ASSERT_EQ(pilot_plan.status, PatternMeasurementStatus::Measured);
+
+  PatternWorkPlan measured_plan = pilot_plan;
+  ASSERT_TRUE(set_strided_pattern_passes(measured_plan, measured_plan.phase_period_passes + 3));
+
+  std::vector<size_t> boundaries;
+  boundaries.reserve(measured_plan.workers.size() + 1);
+  boundaries.push_back(0);
+  for (const PatternWorkerRange& worker : measured_plan.workers) {
+    ASSERT_EQ(worker.offset_bytes, boundaries.back());
+    boundaries.push_back(worker.offset_bytes + worker.span_bytes);
+  }
+  ASSERT_EQ(boundaries.back(), buffer_size);
+
+  std::vector<unsigned char> buffer(buffer_size, 0);
+  auto timer = HighResTimer::create();
+  ASSERT_TRUE(timer.has_value());
+  std::atomic<size_t> executed_accesses{0};
+  std::atomic<size_t> range_mismatches{0};
+
+  const double duration = run_parallel_test_indexed_with_boundaries(
+      buffer.data(), buffer.size(), static_cast<int>(measured_plan.passes), *timer, boundaries,
+      [&](char* chunk_start, size_t chunk_size, int passes, size_t worker_index) {
+        const PatternWorkerRange& worker = measured_plan.workers[worker_index];
+        if (chunk_start != reinterpret_cast<char*>(buffer.data()) + worker.offset_bytes ||
+            chunk_size != worker.span_bytes) {
+          range_mismatches.fetch_add(1, std::memory_order_relaxed);
+          return;
+        }
+
+        size_t local_accesses = 0;
+        for (int pass = 0; pass < passes; ++pass) {
+          const size_t phase =
+              (static_cast<size_t>(pass) * measured_plan.access_size_bytes) % measured_plan.stride_bytes;
+          for (size_t offset = phase; offset <= chunk_size - measured_plan.access_size_bytes;
+               offset += measured_plan.stride_bytes) {
+            ++local_accesses;
+          }
+        }
+        executed_accesses.fetch_add(local_accesses, std::memory_order_relaxed);
+      },
+      "instrumented_pattern");
+
+  EXPECT_GT(duration, 0.0);
+  EXPECT_EQ(range_mismatches.load(std::memory_order_relaxed), 0u);
+  EXPECT_EQ(executed_accesses.load(std::memory_order_relaxed), measured_plan.total_accesses);
+  EXPECT_EQ(executed_accesses.load(std::memory_order_relaxed) * measured_plan.access_size_bytes,
+            measured_plan.total_payload_bytes);
 }
 
 TEST(PatternBenchmarkTest, StatisticsUseMedianAndCoefficientOfVariation) {

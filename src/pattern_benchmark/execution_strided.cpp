@@ -46,13 +46,10 @@
 #include <utility>
 
 // Forward declarations from helpers.cpp
-double run_pattern_read_strided_test(void* buffer, size_t size, size_t stride, int iterations,
-                                     std::atomic<uint64_t>& checksum, HighResTimer& timer,
-                                     int num_threads);
-double run_pattern_write_strided_test(void* buffer, size_t size, size_t stride, int iterations,
-                                      HighResTimer& timer, int num_threads);
-double run_pattern_copy_strided_test(void* dst, void* src, size_t size, size_t stride, int iterations,
-                                     HighResTimer& timer, int num_threads);
+double run_pattern_read_strided_test(void* buffer, const PatternWorkPlan& plan, std::atomic<uint64_t>& checksum,
+                                     HighResTimer& timer);
+double run_pattern_write_strided_test(void* buffer, const PatternWorkPlan& plan, HighResTimer& timer);
+double run_pattern_copy_strided_test(void* dst, void* src, const PatternWorkPlan& plan, HighResTimer& timer);
 
 // Forward declarations from validation.cpp
 bool validate_stride(size_t stride, size_t buffer_size);
@@ -76,7 +73,7 @@ bool calibrate_strided_plan(const BenchmarkConfig& config,
            set_strided_pattern_passes(measured_plan,
                                       static_cast<size_t>(config.iterations));
   }
-  pilot_elapsed_seconds = pilot_runner(static_cast<int>(pilot_plan.passes));
+  pilot_elapsed_seconds = pilot_runner(pilot_plan);
   const size_t measured_passes = calculate_pattern_calibrated_passes(
       pilot_elapsed_seconds, pilot_plan.passes, PATTERN_CALIBRATION_TARGET_SECONDS, 1,
       PATTERN_CALIBRATION_MAX_PASSES);
@@ -88,7 +85,7 @@ template <typename Runner>
 double run_strided_sample(const BenchmarkConfig& config, Runner runner,
                           PatternWorkPlan& plan) {
   using namespace Constants;
-  double elapsed_seconds = runner(static_cast<int>(plan.passes));
+  double elapsed_seconds = runner(plan);
   for (size_t correction = 0;
        !config.user_specified_iterations &&
        correction < PATTERN_CALIBRATION_MAX_CORRECTIONS;
@@ -105,7 +102,7 @@ double run_strided_sample(const BenchmarkConfig& config, Runner runner,
         !set_strided_pattern_passes(plan, corrected_passes)) {
       break;
     }
-    elapsed_seconds = runner(static_cast<int>(plan.passes));
+    elapsed_seconds = runner(plan);
   }
   return elapsed_seconds;
 }
@@ -240,10 +237,8 @@ int run_strided_pattern_benchmarks(const BenchmarkBuffers& buffers, const Benchm
   std::atomic<uint64_t> checksum{0};
   warmup_read_strided(buffers.src_buffer(), config.buffer_size, stride,
                       pilot_plan.effective_threads, checksum);
-  auto run_read = [&](int passes) {
-    return run_pattern_read_strided_test(buffers.src_buffer(), config.buffer_size, stride,
-                                         passes, checksum, timer,
-                                         pilot_plan.effective_threads);
+  auto run_read = [&](const PatternWorkPlan& plan) {
+    return run_pattern_read_strided_test(buffers.src_buffer(), plan, checksum, timer);
   };
   PatternWorkPlan read_plan;
   double read_pilot_time = 0.0;
@@ -263,9 +258,8 @@ int run_strided_pattern_benchmarks(const BenchmarkBuffers& buffers, const Benchm
   show_progress();
   warmup_write_strided(buffers.dst_buffer(), config.buffer_size, stride,
                        pilot_plan.effective_threads);
-  auto run_write = [&](int passes) {
-    return run_pattern_write_strided_test(buffers.dst_buffer(), config.buffer_size, stride,
-                                          passes, timer, pilot_plan.effective_threads);
+  auto run_write = [&](const PatternWorkPlan& plan) {
+    return run_pattern_write_strided_test(buffers.dst_buffer(), plan, timer);
   };
   PatternWorkPlan write_plan;
   double write_pilot_time = 0.0;
@@ -285,10 +279,8 @@ int run_strided_pattern_benchmarks(const BenchmarkBuffers& buffers, const Benchm
   show_progress();
   warmup_copy_strided(buffers.dst_buffer(), buffers.src_buffer(), config.buffer_size, stride,
                       pilot_plan.effective_threads);
-  auto run_copy = [&](int passes) {
-    return run_pattern_copy_strided_test(buffers.dst_buffer(), buffers.src_buffer(),
-                                         config.buffer_size, stride, passes, timer,
-                                         pilot_plan.effective_threads);
+  auto run_copy = [&](const PatternWorkPlan& plan) {
+    return run_pattern_copy_strided_test(buffers.dst_buffer(), buffers.src_buffer(), plan, timer);
   };
   PatternWorkPlan copy_plan;
   double copy_pilot_time = 0.0;

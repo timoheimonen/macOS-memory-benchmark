@@ -132,6 +132,9 @@ exact payload bytes, and working-set details. Because phase rotation can change 
 `total_accesses` and `total_payload_bytes` are authoritative exact totals; do not derive them by multiplying
 `accesses_per_pass` by `passes`.
 
+The executor consumes finalized strided worker ranges directly, without repartitioning them. Random worker boundaries
+and per-worker index lists are built before timing; the timed callback performs no worker lookup or index filtering.
+
 Across `--count` loops, pattern groups rotate in deterministic cyclic Latin-square order to spread first/last-position
 effects. Operations within a group remain fixed read, write, copy, each with operation-specific warmup. Workers request a
 macOS QoS class as a best-effort scheduler hint; the benchmark does not pin threads to cores. When `--count > 1`, the

@@ -55,15 +55,12 @@ double run_pattern_write_test(void* buffer, size_t size, int iterations,
 double run_pattern_copy_test(void* dst, void* src, size_t size, int iterations,
                              void (*copy_func)(void*, const void*, size_t),
                              HighResTimer& timer, int num_threads);
-double run_pattern_read_random_test(
-    void* buffer, const std::vector<PatternRandomWorkerIndices>& worker_indices, int iterations,
-    std::atomic<uint64_t>& checksum, HighResTimer& timer, int num_threads, size_t buffer_size);
-double run_pattern_write_random_test(
-    void* buffer, const std::vector<PatternRandomWorkerIndices>& worker_indices, int iterations,
-    HighResTimer& timer, int num_threads, size_t buffer_size);
-double run_pattern_copy_random_test(
-    void* dst, void* src, const std::vector<PatternRandomWorkerIndices>& worker_indices,
-    int iterations, HighResTimer& timer, int num_threads, size_t buffer_size);
+double run_pattern_read_random_test(void* buffer, const std::vector<PatternRandomWorkerIndices>& worker_indices,
+                                    int iterations, std::atomic<uint64_t>& checksum, HighResTimer& timer);
+double run_pattern_write_random_test(void* buffer, const std::vector<PatternRandomWorkerIndices>& worker_indices,
+                                     int iterations, HighResTimer& timer);
+double run_pattern_copy_random_test(void* dst, void* src, const std::vector<PatternRandomWorkerIndices>& worker_indices,
+                                    int iterations, HighResTimer& timer);
 
 // Forward declarations from validation.cpp
 bool validate_random_indices(const std::vector<size_t>& indices, size_t buffer_size);
@@ -406,9 +403,7 @@ int run_random_pattern_benchmarks(const BenchmarkBuffers& buffers, const Benchma
   std::atomic<uint64_t> checksum{0};
   warmup_read_random(buffers.src_buffer(), random_indices, config.num_threads, checksum);
   auto run_read = [&](int passes) {
-    return run_pattern_read_random_test(buffers.src_buffer(), worker_indices, passes,
-                                        checksum, timer, config.num_threads,
-                                        config.buffer_size);
+    return run_pattern_read_random_test(buffers.src_buffer(), worker_indices, passes, checksum, timer);
   };
   const size_t payload_bytes_per_pass = num_accesses * PATTERN_ACCESS_SIZE_BYTES;
   PatternCalibrationDecision read_calibration =
@@ -431,8 +426,7 @@ int run_random_pattern_benchmarks(const BenchmarkBuffers& buffers, const Benchma
   show_progress();
   warmup_write_random(buffers.dst_buffer(), random_indices, config.num_threads);
   auto run_write = [&](int passes) {
-    return run_pattern_write_random_test(buffers.dst_buffer(), worker_indices, passes,
-                                         timer, config.num_threads, config.buffer_size);
+    return run_pattern_write_random_test(buffers.dst_buffer(), worker_indices, passes, timer);
   };
   PatternCalibrationDecision write_calibration =
       resolve_pattern_passes(config, payload_bytes_per_pass, run_write);
@@ -451,9 +445,7 @@ int run_random_pattern_benchmarks(const BenchmarkBuffers& buffers, const Benchma
   warmup_copy_random(buffers.dst_buffer(), buffers.src_buffer(), random_indices,
                      config.num_threads);
   auto run_copy = [&](int passes) {
-    return run_pattern_copy_random_test(buffers.dst_buffer(), buffers.src_buffer(),
-                                        worker_indices, passes, timer, config.num_threads,
-                                        config.buffer_size);
+    return run_pattern_copy_random_test(buffers.dst_buffer(), buffers.src_buffer(), worker_indices, passes, timer);
   };
   const size_t copy_payload_bytes_per_pass =
       payload_bytes_per_pass * Constants::COPY_OPERATION_MULTIPLIER;

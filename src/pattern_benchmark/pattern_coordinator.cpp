@@ -39,35 +39,10 @@
 #include "core/signal/signal_handler.h"
 #include "output/console/messages/messages_api.h"
 #include <array>
-#include <iostream>
 #include <vector>
-#include <atomic>
 #include <cstdlib>
 
-// Forward declarations from helpers.cpp
-double run_pattern_read_test(void* buffer, size_t size, int iterations,
-                             uint64_t (*read_func)(const void*, size_t),
-                             std::atomic<uint64_t>& checksum, HighResTimer& timer,
-                             int num_threads);
-double run_pattern_write_test(void* buffer, size_t size, int iterations,
-                              void (*write_func)(void*, size_t),
-                              HighResTimer& timer, int num_threads);
-double run_pattern_copy_test(void* dst, void* src, size_t size, int iterations,
-                             void (*copy_func)(void*, const void*, size_t),
-                             HighResTimer& timer, int num_threads);
-double run_pattern_read_strided_test(void* buffer, size_t size, size_t stride, int iterations,
-                                     std::atomic<uint64_t>& checksum, HighResTimer& timer,
-                                     int num_threads);
-double run_pattern_write_strided_test(void* buffer, size_t size, size_t stride, int iterations,
-                                      HighResTimer& timer, int num_threads);
-double run_pattern_copy_strided_test(void* dst, void* src, size_t size, size_t stride, int iterations,
-                                     HighResTimer& timer, int num_threads);
-// Forward declarations from validation.cpp
-bool validate_stride(size_t stride, size_t buffer_size);
-bool validate_random_indices(const std::vector<size_t>& indices, size_t buffer_size);
-
 // Forward declarations from execution_utils.cpp
-double calculate_bandwidth(size_t data_size, int iterations, double elapsed_time_ns);
 size_t calculate_num_random_accesses(size_t buffer_size);
 
 // Forward declarations from execution_strided.cpp

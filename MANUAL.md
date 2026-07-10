@@ -166,7 +166,8 @@ The bandwidth numerator is the exact planned payload completed by every worker a
 
 Strided results use a deterministic per-worker work plan. A worker's last candidate address is included when the complete
 32-byte access fits within its cache-line-aligned chunk. Reported read/write bandwidth is calculated from the exact sum
-of these worker payloads, while copy bandwidth counts both the read and write sides. On every pass,
+of these worker payloads, while copy bandwidth counts both the read and write sides. The executor receives the finalized
+worker ranges directly and does not repartition them. On every pass,
 the ARM64 kernel advances the starting phase by 32 bytes modulo the stride, so sparse tests do not repeatedly touch
 only the phase-zero addresses. All passes for one worker execute inside one assembly call, and the bandwidth numerator
 uses the exact phase-aware access count. Strided warmup executes one complete phase cycle (`stride / 32` passes).
@@ -188,7 +189,8 @@ Parallel pattern timing begins only after every actual worker has completed its 
 reached the ready gate. It stops when the last worker finishes its measured work; worker teardown and thread joining
 remain outside the measured interval. Work planning, random-list creation and partitioning, thread creation, QoS setup,
 and ready-gate waiting are also excluded. For the random pattern, the global access list is partitioned into per-worker
-local index lists before any timed call, so index filtering and list allocation are not included in reported bandwidth.
+local index lists and finalized worker boundaries before any timed call. The timed callback uses those lists directly;
+worker lookup, index filtering, and list allocation are not included in reported bandwidth.
 QoS is a best-effort macOS scheduler hint; workers are not pinned to cores, and effective placement can still vary.
 
 Unless `--iterations` is supplied explicitly, each sequential, strided, and random read/write/copy sample first runs an

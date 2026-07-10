@@ -44,6 +44,7 @@
 #include <cstdio>                // For fprintf, stderr
 #include <functional>            // For std::function
 #include <iostream>              // For std::cout
+#include <limits>                // For std::numeric_limits
 #include <mutex>                 // For std::mutex
 #include <thread>                // For std::thread
 #include <utility>               // For std::move
@@ -126,10 +127,10 @@ inline std::vector<size_t> build_aligned_chunk_boundaries(void* alignment_base, 
  * @param make_work Function that builds measured work for one chunk
  * @return Total duration in seconds, or 0.0 if no work was performed
  */
-template<typename MakeWorkFunction>
-double run_parallel_test_common(void* alignment_base, size_t size, int iterations, int num_threads,
-                                HighResTimer& timer, const char* thread_name,
-                                MakeWorkFunction make_work) {
+template <typename MakeWorkFunction>
+double run_parallel_test_common(void* alignment_base, size_t size, int iterations, int num_threads, HighResTimer& timer,
+                                const char* thread_name, MakeWorkFunction make_work,
+                                const std::vector<size_t>* planned_boundaries = nullptr) {
   // Early validation: return 0.0 if no work to do or invalid thread count.
   // This avoids unnecessary setup and prevents division-by-zero in partitioning.
   if (size == 0 || num_threads <= 0) {
@@ -147,8 +148,21 @@ double run_parallel_test_common(void* alignment_base, size_t size, int iteration
   double measured_duration = 0.0;
   std::atomic<size_t> remaining_workers{0};
 
-  // Build contiguous chunk boundaries with aligned internal split points.
-  std::vector<size_t> boundaries = build_aligned_chunk_boundaries(alignment_base, size, num_threads);
+  // Use a finalized external plan when supplied; otherwise build the normal
+  // contiguous chunk boundaries before worker creation and timing.
+  std::vector<size_t> boundaries = planned_boundaries != nullptr
+                                       ? *planned_boundaries
+                                       : build_aligned_chunk_boundaries(alignment_base, size, num_threads);
+  if (boundaries.size() != static_cast<size_t>(num_threads) + 1 || boundaries.front() != 0 ||
+      boundaries.back() != size) {
+    return 0.0;
+  }
+  for (size_t index = 1; index < boundaries.size(); ++index) {
+    if (boundaries[index] < boundaries[index - 1] ||
+        (planned_boundaries != nullptr && boundaries[index] == boundaries[index - 1])) {
+      return 0.0;
+    }
+  }
 
   // Launch threads once; each handles its chunk for all iterations.
   for (size_t t = 0; t < static_cast<size_t>(num_threads); ++t) {
@@ -218,6 +232,53 @@ double run_parallel_test_common(void* alignment_base, size_t size, int iteration
   // Thread exit and join are deliberately outside the measured interval.
   join_threads(threads);
   return measured_duration;
+}
+
+/**
+ * @brief Run indexed single-buffer work with finalized worker boundaries.
+ *
+ * This is used by pattern planners whose exact work accounting depends on the
+ * executor consuming the same worker ranges without repartitioning.
+ */
+template <typename WorkFunction>
+double run_parallel_test_indexed_with_boundaries(void* buffer, size_t size, int iterations, HighResTimer& timer,
+                                                 const std::vector<size_t>& boundaries, WorkFunction work_function,
+                                                 const char* thread_name) {
+  if (boundaries.size() < 2 || boundaries.size() - 1 > static_cast<size_t>(std::numeric_limits<int>::max())) {
+    return 0.0;
+  }
+  char* buffer_start = static_cast<char*>(buffer);
+  auto make_work = [buffer_start, work_function](size_t chunk_start_offset, size_t thread_chunk_size,
+                                                 int iterations_local, size_t worker_index) {
+    char* thread_chunk_start = buffer_start + chunk_start_offset;
+    return [thread_chunk_start, thread_chunk_size, iterations_local, worker_index, work_function]() {
+      work_function(thread_chunk_start, thread_chunk_size, iterations_local, worker_index);
+    };
+  };
+  return run_parallel_test_common(buffer, size, iterations, static_cast<int>(boundaries.size() - 1), timer, thread_name,
+                                  make_work, &boundaries);
+}
+
+/** @brief Run indexed copy work with finalized worker boundaries. */
+template <typename WorkFunction>
+double run_parallel_test_copy_indexed_with_boundaries(void* dst, void* src, size_t size, int iterations,
+                                                      HighResTimer& timer, const std::vector<size_t>& boundaries,
+                                                      WorkFunction work_function, const char* thread_name) {
+  if (boundaries.size() < 2 || boundaries.size() - 1 > static_cast<size_t>(std::numeric_limits<int>::max())) {
+    return 0.0;
+  }
+  char* dst_start = static_cast<char*>(dst);
+  char* src_start = static_cast<char*>(src);
+  auto make_work = [dst_start, src_start, work_function](size_t chunk_start_offset, size_t thread_chunk_size,
+                                                         int iterations_local, size_t worker_index) {
+    char* thread_dst_chunk = dst_start + chunk_start_offset;
+    char* thread_src_chunk = src_start + chunk_start_offset;
+    return [thread_dst_chunk, thread_src_chunk, thread_chunk_size, iterations_local, worker_index, work_function]() {
+      work_function(thread_dst_chunk, thread_src_chunk, thread_chunk_size, iterations_local, worker_index);
+    };
+  };
+  return run_parallel_test_common(dst, size, iterations, static_cast<int>(boundaries.size() - 1), timer, thread_name,
+                                  make_work, &boundaries);
 }
 
 /**
