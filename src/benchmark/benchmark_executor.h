@@ -112,6 +112,9 @@ void run_main_memory_bandwidth_tests(const BenchmarkBuffers& buffers, const Benc
  * @param cache_iterations Number of iterations for the cache test
  * @param num_threads Number of threads to use for the test
  * @param test_timer Reference to high-resolution timer
+ * @param read_kernel Cache read kernel selected for this target
+ * @param write_kernel Cache write kernel selected for this target
+ * @param copy_kernel Cache copy kernel selected for this target
  * @param[out] read_time Output parameter for read time (seconds)
  * @param[out] write_time Output parameter for write time (seconds)
  * @param[out] copy_time Output parameter for copy time (seconds)
@@ -119,6 +122,9 @@ void run_main_memory_bandwidth_tests(const BenchmarkBuffers& buffers, const Benc
  */
 void run_single_cache_bandwidth_test(void* src_buffer, void* dst_buffer, size_t buffer_size,
                                      int cache_iterations, int num_threads, HighResTimer& test_timer,
+                                     uint64_t (*read_kernel)(const void*, size_t),
+                                     void (*write_kernel)(void*, size_t),
+                                     void (*copy_kernel)(void*, const void*, size_t),
                                      double& read_time, double& write_time, double& copy_time,
                                      std::atomic<uint64_t>& read_checksum);
 
@@ -139,9 +145,8 @@ void run_cache_bandwidth_tests(const BenchmarkBuffers& buffers, const BenchmarkC
  * @param num_accesses Number of pointer-chasing accesses to perform
  * @param test_timer Reference to high-resolution timer
  * @param[out] lat_time_ns Output parameter for total latency time (nanoseconds)
- * @param[out] latency_ns Output parameter for average latency per access (nanoseconds)
- * @param[out] latency_samples Optional pointer to vector to store individual latency samples
- * @param sample_count Number of samples to collect (0 = collect all)
+ * @param[out] measurement Status-aware average, elapsed time, access count, and optional samples
+ * @param sample_count Requested sample-window count (0 = do not collect samples)
  */
 void run_single_cache_latency_test(void* buffer, size_t buffer_size, size_t num_accesses,
                                    HighResTimer& test_timer, double& lat_time_ns,
@@ -174,8 +179,10 @@ void run_main_memory_latency_test(const BenchmarkBuffers& buffers, const Benchma
  * @brief Run a single benchmark loop and return results
  * @param buffers Reference to benchmark buffers structure (unused in phase-local allocation mode)
  * @param config Reference to benchmark configuration (updated for per-loop diagnostics)
- * @param loop Loop number (for display purposes)
+ * @param loop Zero-based loop index used for cyclic phase/operation order and diagnostics
  * @param test_timer Reference to high-resolution timer for measurements
+ * @param execution_state Optional cross-loop calibration state; a local state is used when null
+ * @param test_hooks Optional deterministic failure seams used by tests
  * @return BenchmarkResults structure containing all results from the loop
  *
  * Executes one complete benchmark loop, running all configured tests

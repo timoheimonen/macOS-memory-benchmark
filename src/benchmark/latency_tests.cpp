@@ -19,8 +19,8 @@
  * @brief Latency test implementations
  *
  * Implements single-threaded latency benchmark functions for main memory and cache.
- * Uses pointer-chasing methodology to measure true memory access latency by defeating
- * hardware prefetchers through randomized access patterns.
+ * Dependent pointer chasing serializes address generation to measure load-to-use latency.
+ * Results still include layout-, cache-, translation-, prefetch-, and platform-dependent effects.
  *
  * Key features:
  * - Single-threaded execution (latency is serial by nature)
@@ -30,7 +30,7 @@
  *
  * Methodology:
  * - Buffer contains circular linked list with random ordering
- * - Each access depends on previous result (defeats prefetching)
+ * - Each access address depends on the previous loaded pointer
  * - Latency = total_time / number_of_accesses
  */
 

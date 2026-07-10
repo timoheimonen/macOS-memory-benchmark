@@ -2,7 +2,7 @@
 
 ## 1. Purpose
 
-This document explains how `macOS-memory-benchmark` measures memory latency on Apple Silicon.
+This document explains how `macOS-memory-benchmark` version 0.58.1 measures memory latency on Apple Silicon.
 
 The latency path is designed to measure **load-to-use delay** (pointer chasing), not bulk throughput.
 It combines:
@@ -87,6 +87,12 @@ The function returns `EXIT_FAILURE` for invalid setup cases, including:
 3. Link reordered indices into a circular chain
 4. Bounds-check each write target and next-pointer target
 
+Standard `--benchmark` execution always calls the seeded overload. One command-level `--seed` is generated or parsed,
+then domain-separated seeds are derived for main memory, L1, L2, custom-cache, and the per-round automatic-locality
+chains. The separate sample pass continues on the already prepared target chain.
+The unseeded overload retains `std::random_device` behavior for direct callers and legacy tests, but it is not the
+standard benchmark workload policy.
+
 ### 4.3 Chain Construction Modes
 
 The `--latency-chain-mode` flag selects the pointer-chain construction policy.
@@ -132,17 +138,23 @@ The following behaviors are explicitly covered by unit tests:
 - **Diagnostics populated correctly** (`SetupLatencyChainCollectsDiagnostics`)
 - **`SameRandomInBoxIncreasingBox` mode accepted** (`SetupLatencyChainWithSameRandomInBoxMode`)
 - **Locality-using mode with zero locality window rejected** (`SetupLatencyChainWithBoxModeAndZeroLocalityFails`)
+- **Explicit seed reconstructs the same chain** (`SetupLatencyChainExplicitSeedIsReproducible`)
 
 These tests validate setup correctness and failure handling before timing is run.
 
 ## 6. Timing and Sampling Semantics (`src/benchmark/latency_tests.cpp`)
 
-The timing wrapper provides two modes:
+The low-level timing wrapper supports a continuous pass and a segmented sample-collection pass. Standard benchmark
+orchestration uses both as separate populations:
 
-- **Single-shot mode** (no sample vector): one continuous chase of `num_accesses`
-- **Sampled mode**: split total accesses across samples while preserving exact total accesses
+1. On the first loop, an excluded continuous pilot resolves work toward a 250 ms target. The final access count is
+   rounded to at least 16 complete chain cycles and evaluated against a 100-300 ms intended window.
+2. Every benchmark loop runs one continuous headline chase. This pass alone produces the loop's reported latency
+   headline.
+3. If sampling is enabled, a second pass executes the same total access count in continuing sample windows. These
+   windows populate the separate sample distribution and never replace or weight the continuous headline.
 
-Key sampled-mode behavior:
+The resolved access count is reused across `--count` loops. Key sample-pass behavior:
 
 - `effective_samples = min(requested_samples, num_accesses)`
 - Access remainder is distributed over early samples
@@ -156,6 +168,9 @@ of each sample to measure a hot-cache hit rather than the steady-state latency. 
 per-sample latencies systematically downward. By passing the final pointer of sample `i` as the
 start of sample `i+1`, every sample begins from an arbitrary point in the chain, preventing
 that cold-start artifact.
+
+The sample pass executes exactly `num_accesses` dereferences in addition to the headline pass; `--latency-samples` is
+therefore a distribution-depth control, not a way to divide or redefine headline work.
 
 `run_latency_test()` is the entry point for main-memory latency measurement.
 `run_cache_latency_test()` is the corresponding entry point for L1, L2, and custom--cache-size
@@ -171,13 +186,15 @@ result field is populated.
 |---|---|---|
 | `--latency-stride-bytes` | `256` | Byte spacing between pointer-chain nodes. Must be a multiple of 8 (pointer size on AArch64). |
 | `--latency-tlb-locality-kb` | `1024` | Locality window size in KB. `0` selects global-random mode when `--latency-chain-mode auto` is used; explicit box modes require non-zero locality. |
-| `--latency-samples` | `1000` | Number of sub-samples per benchmark loop. Higher values improve statistical resolution. |
+| `--latency-samples` | `1000` | Number of windows in the separate sample pass per benchmark loop. It does not change the continuous headline definition. |
 | `--latency-chain-mode` | `auto` | Chain construction policy. `auto` selects `global-random` when locality is 0, `random-box` otherwise. |
+| `--seed` | generated once | Exact uint64 command seed used to derive reproducible target/layout chains. |
+| `--count` | `1` | Number of measured loops. Repeated-loop headline is the median P50 of completed continuous loop headlines. |
 
 ### 7.1 Baseline Main-Memory Latency (Global Random Chain)
 
 ```bash
-memory_benchmark \
+./memory_benchmark \
   --benchmark \
   --only-latency \
   --buffer-size 1024 \
@@ -190,9 +207,9 @@ memory_benchmark \
 ### 7.2 Locality-Window Latency Runs
 
 ```bash
-memory_benchmark --benchmark --only-latency --buffer-size 1024 --count 10 --latency-samples 1000 --latency-tlb-locality-kb 16 --output latency_tlb16.json
-memory_benchmark --benchmark --only-latency --buffer-size 1024 --count 10 --latency-samples 1000 --latency-tlb-locality-kb 2048 --output latency_tlb2048.json
-memory_benchmark --benchmark --only-latency --buffer-size 1024 --count 10 --latency-samples 1000 --latency-tlb-locality-kb 32768 --output latency_tlb32768.json
+./memory_benchmark --benchmark --only-latency --buffer-size 1024 --count 10 --latency-samples 1000 --latency-tlb-locality-kb 16 --output latency_tlb16.json
+./memory_benchmark --benchmark --only-latency --buffer-size 1024 --count 10 --latency-samples 1000 --latency-tlb-locality-kb 2048 --output latency_tlb2048.json
+./memory_benchmark --benchmark --only-latency --buffer-size 1024 --count 10 --latency-samples 1000 --latency-tlb-locality-kb 32768 --output latency_tlb32768.json
 ```
 
 ### 7.3 Cache-Scale Sweep (Custom Cache Size)
@@ -219,16 +236,22 @@ analysis.
 - Use **P95/P99** to evaluate tail sensitivity and instability.
 - Treat isolated very large `max` values as outlier diagnostics, not central tendency.
 - Compare locality settings at the same cache size, then compare cache-size transitions.
-- For page-pressure investigations, inspect `chain_diagnostics.unique_pages_touched` in the JSON
-  output. The full paths are:
-  - Main memory: `main_memory.latency.chain_diagnostics.unique_pages_touched`
-  - Custom cache size: `cache.custom.latency.chain_diagnostics.unique_pages_touched`
-  - L1: `cache.l1.latency.chain_diagnostics.unique_pages_touched`
-  - L2: `cache.l2.latency.chain_diagnostics.unique_pages_touched`
+- Read the continuous aggregate from `main_memory.latency.headline_ns`; cache aggregates use
+  `cache.custom.latency.headline_ns`, `cache.l1.latency.headline_ns`, or `cache.l2.latency.headline_ns`.
+- Exact loop work and chain metadata are under `loops[].measurements.main_latency`, `l1_latency`, `l2_latency`, or
+  `custom_latency`. These records include access count, chain-node count, complete cycles, seed, elapsed time,
+  calibration quality, and status.
+- When present, segmented windows are under each headline aggregate's `pooled_sample_distribution`, with values and
+  loop-boundary metadata kept separate from continuous loop headlines.
+- The current standard schema 2 does not serialize the legacy `chain_diagnostics.unique_pages_touched` blocks. Do not
+  use the old `main_memory.latency.chain_diagnostics` or `cache.*.latency.chain_diagnostics` paths for version 0.58.1
+  output.
 
-  **Note:** `chain_diagnostics` is only emitted when `--latency-stride-bytes` is explicitly
-  specified on the command line with a non-default value. Runs using the default stride will not
-  include this block.
+When `--latency-tlb-locality-kb` is not explicitly supplied, standard main-memory latency also runs three paired rounds
+of 16 KiB-locality and global-random chains. The first-measured layout alternates by round, and
+`main_memory.latency.automatic_locality_comparison.locality_latency_delta_ns` is the median of same-round
+`global - locality` deltas. This mixed locality/cache comparison is not an isolated page-table-walk measurement; use
+`--analyze-tlb` for validated translation-boundary analysis.
 
 ### 8a. ARM64 Reference Latency Ranges
 

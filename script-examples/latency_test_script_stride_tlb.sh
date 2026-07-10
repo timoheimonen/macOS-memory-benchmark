@@ -25,7 +25,8 @@ LOOP_COUNT="${LOOP_COUNT:-5}"
 # Keep main-memory latency disabled for cache-focused sweeps.
 MAIN_BUFFER_MB="${MAIN_BUFFER_MB:-0}"
 
-# Set to "1" to add --non-cacheable.
+# Set to "1" to request best-effort cache-discouraging madvise() hints.
+# This does not create truly uncached memory.
 USE_NON_CACHEABLE="${USE_NON_CACHEABLE:-0}"
 
 # Default sweep knobs. Override by editing arrays below.
@@ -137,10 +138,24 @@ for path in sorted(json_dir.glob("*.json")):
             headline = latency.get("headline_ns", {}) or {}
             samples = headline.get("pooled_sample_distribution", {}) or {}
             stats = samples.get("statistics", {}) or {}
+            measurements = headline.get("measurements", []) or []
+            chain_node_count = next(
+                (
+                    measurement.get("chain_node_count")
+                    for measurement in measurements
+                    if measurement.get("chain_node_count") is not None
+                ),
+                "",
+            )
+            unique_pages_touched = ""
+            page_size_bytes = cfg.get("native_page_size_bytes", "")
         else:
             samples = latency.get("samples_ns", {}) or {}
             stats = samples.get("statistics", {}) or {}
-        diag = latency.get("chain_diagnostics", {}) or {}
+            diag = latency.get("chain_diagnostics", {}) or {}
+            chain_node_count = diag.get("pointer_count", "")
+            unique_pages_touched = diag.get("unique_pages_touched", "")
+            page_size_bytes = diag.get("page_size_bytes", "")
 
         rows.append({
             "file": path.name,
@@ -155,9 +170,9 @@ for path in sorted(json_dir.glob("*.json")):
             "min": stats.get("min", ""),
             "max": stats.get("max", ""),
             "stddev": stats.get("stddev", ""),
-            "pointer_count": diag.get("pointer_count", ""),
-            "unique_pages_touched": diag.get("unique_pages_touched", ""),
-            "page_size_bytes": diag.get("page_size_bytes", ""),
+            "chain_node_count": chain_node_count,
+            "unique_pages_touched": unique_pages_touched,
+            "page_size_bytes": page_size_bytes,
         })
     except Exception as exc:
         print(f"Warning: failed to parse {path.name}: {exc}")
@@ -176,7 +191,7 @@ fieldnames = [
     "min",
     "max",
     "stddev",
-    "pointer_count",
+    "chain_node_count",
     "unique_pages_touched",
     "page_size_bytes",
 ]

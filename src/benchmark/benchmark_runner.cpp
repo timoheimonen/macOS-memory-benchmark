@@ -80,9 +80,10 @@
  * @param[in]  buffers  Benchmark buffers (unused in phase-local allocation mode)
  * @param[in]  config   Benchmark configuration (buffer sizes, threads, loops, flags)
  * @param[out] stats    Statistics structure to populate with all loop results
+ * @param[in]  test_hooks Optional deterministic coordinator seams used by tests
  *
- * @return EXIT_SUCCESS (0) if all loops complete successfully
- * @return EXIT_FAILURE (1) if timer creation fails or any loop throws exception
+ * @return EXIT_SUCCESS (0) when execution completes or stops through graceful interruption; inspect stats.status
+ * @return EXIT_FAILURE (1) if timer creation/checkpointing fails or a loop throws an exception
  *
  * @note Statistics structure is used for final aggregate calculations.
  * @note Progress indicators are cleared before printing each loop's results.

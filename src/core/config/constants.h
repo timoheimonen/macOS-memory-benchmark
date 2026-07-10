@@ -98,7 +98,7 @@ namespace Constants {
   constexpr int SINGLE_THREAD = 1;  // Single-threaded execution for cache tests
   
   // Default configuration values
-  constexpr int DEFAULT_ITERATIONS = 1000;  // Default number of iterations for R/W/Copy tests
+  constexpr int DEFAULT_ITERATIONS = 1000;  // Initial calibration pilot/fallback; fixed only with --iterations
   constexpr int DEFAULT_LOOP_COUNT = 1;     // Default number of full benchmark loops
   constexpr int DEFAULT_LATENCY_SAMPLE_COUNT = 1000;  // Default number of latency samples per test
   constexpr double BENCHMARK_CALIBRATION_TARGET_SECONDS = 0.150;
@@ -171,7 +171,7 @@ namespace Constants {
   constexpr size_t PATTERN_STRIDE_CACHE_LINE = 64;  // Cache line stride (bytes)
   constexpr size_t PATTERN_STRIDE_PAGE = 4096;  // Page stride (bytes)
   constexpr size_t PATTERN_STRIDE_PAGE_16K = 16 * 1024;  // Apple Silicon page-size stride candidate (bytes)
-  constexpr size_t PATTERN_STRIDE_SUPERPAGE_2MB = 2 * 1024 * 1024;  // Large-page stride candidate (bytes)
+  constexpr size_t PATTERN_STRIDE_SUPERPAGE_2MB = 2 * 1024 * 1024;  // 2 MiB virtual-address stride (bytes)
   constexpr double PATTERN_CALIBRATION_TARGET_SECONDS = 0.150;  // Automatic pattern sample target
   constexpr double PATTERN_CALIBRATION_MIN_SECONDS = 0.100;  // Lower target-window bound
   constexpr double PATTERN_CALIBRATION_MAX_SECONDS = 0.250;  // Upper target-window bound

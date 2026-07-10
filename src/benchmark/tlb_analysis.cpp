@@ -620,7 +620,8 @@ TlbPairedPointSummary summarize_tlb_paired_point(
  *
  * Workflow:
  * - Print program header and run banner.
- * - Allocate the largest 1024/512/256MB buffer whose predicted peak fits the memory budget.
+ * - Try 1024/512/256MB buffers in descending order and select the largest candidate whose
+ *   predicted peak fits the memory budget and whose allocation succeeds.
  * - Use configured latency stride (default from `--latency-stride-bytes`).
  * - Calibrate whole-chain access counts and measure adaptive balanced seeded rounds.
  * - Optionally run a separate 512MB large-locality comparison pass.

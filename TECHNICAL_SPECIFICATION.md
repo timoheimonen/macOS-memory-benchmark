@@ -2,7 +2,7 @@
 
 ## 1. Scope and Status
 
-This document specifies the current implementation in this repository (version series `0.58.x`) for `memory_benchmark` on macOS Apple Silicon.
+This document specifies the current implementation in this repository (version `0.58.1`) for `memory_benchmark` on macOS Apple Silicon.
 
 It is intentionally implementation-driven and reflects real behavior in code paths under `main.cpp`, `src/core`, `src/benchmark`, `src/pattern_benchmark`, `src/output`, and `src/asm`.
 
@@ -52,13 +52,15 @@ Impact:
 Recommendation:
 
 - For reliable baseline measurement on fanless systems, run single benchmark iterations with thermal cool-down intervals between runs.
-- Use `caffeinate -i -d memory_benchmark ...` to prevent system sleep during longer measurement sessions on cooler systems.
+- Use `caffeinate -i -d ./memory_benchmark ...` to prevent system sleep during longer measurement sessions on cooler systems.
 
 ## 4. High-Level Runtime Architecture
 
 Main orchestration (`main.cpp`) follows this pipeline:
 
-Standalone modes (`--analyze-tlb`, `--analyze-core2core`) are dispatched early and use dedicated runners.
+Standalone modes use dedicated runners but enter through different configuration paths. `--analyze-core2core` is
+pre-routed before the general parser and uses `CoreToCoreLatencyConfig`. `--analyze-tlb` is parsed into
+`BenchmarkConfig` by a dedicated branch in `parse_arguments`, then dispatched after shared validation and preparation.
 The pipeline below applies to standard/pattern benchmark execution.
 
 1. Create high-resolution total-execution timer.
@@ -86,10 +88,10 @@ Configuration state is represented by `BenchmarkConfig` (`src/core/config/config
 ### 5.1 User-facing control fields
 
 - Main options: buffer size MB, iterations, loop count, output path, threads.
-- Mode flags: `run_patterns`, `only_bandwidth`, `only_latency`.
-- Standalone analysis flags are handled outside `BenchmarkConfig` orchestration flow:
-  - `--analyze-tlb`
-  - `--analyze-core2core`
+- General mode/config flags: `run_benchmark`, `run_patterns`, `analyze_tlb`, `only_bandwidth`, and `only_latency`.
+- Standalone TLB state remains in `BenchmarkConfig` (`analyze_tlb`, density, seed, stride/chain settings, and common sweep
+  fields) and is populated by the dedicated `--analyze-tlb` branch in `argument_parser.cpp`.
+- `--analyze-core2core` is pre-routed in `main.cpp` and uses the separate `CoreToCoreLatencyConfig` parser/runner path.
 - Cache behavior: auto L1/L2 or user-provided `--cache-size`.
 - Latency sampling: `latency_sample_count`.
 - Latency-chain construction mode:
@@ -137,8 +139,8 @@ Zero-disabling semantics (supported only in `--only-latency`):
 
 TLB-locality constraints:
 
-- Non-zero `--latency-tlb-locality-kb` must be a multiple of system page size.
-- Non-zero locality window must span at least two latency-stride steps.
+- When the effective chain mode uses locality, `--latency-tlb-locality-kb` must be a non-zero multiple of system page
+  size and span at least two latency-stride steps. Explicit `GlobalRandom` ignores the configured locality value.
 
 Latency stride constraints:
 
@@ -209,7 +211,7 @@ Initialization entrypoints:
 Initialization semantics:
 
 - Bandwidth buffers: deterministic source pattern + zeroed destination.
-- Latency buffers: randomized pointer-chasing circular chain via `setup_latency_chain`.
+- Latency buffers: deterministically seeded, randomized pointer-chasing circular chain via `setup_latency_chain`.
 - Allocation/initialization happen before phase timing starts and are excluded from measured benchmark durations.
 
 ## 9. Latency-Chain Construction Contract
@@ -225,8 +227,10 @@ The `LatencyChainMode` enum (from `src/core/memory/memory_utils.h`) defines four
   - If `tlb_locality_bytes > 0`, behaves as `RandomInBoxRandomBox`.
 - `GlobalRandom`: Global random permutation across entire buffer (ignores locality).
 - `RandomInBoxRandomBox`: Randomize within locality windows, then randomize window order.
-- `SameRandomInBoxIncreasingBox`: Locality windows grow (doubling each step), randomization within each box.
-- `DiffRandomInBoxIncreasingBox`: Randomization offset by locality window step.
+- `SameRandomInBoxIncreasingBox`: Reuses one random within-window permutation for every locality window and visits
+  windows in increasing address order.
+- `DiffRandomInBoxIncreasingBox`: Generates an independent random within-window permutation for each locality window
+  and visits windows in increasing address order.
 
 ### 9.2 Key Properties
 
@@ -237,8 +241,10 @@ The `LatencyChainMode` enum (from `src/core/memory/memory_utils.h`) defines four
 
 ### 9.3 Randomization Behavior
 
-- `tlb_locality_bytes == 0`: global random permutation (mode-independent).
-- `tlb_locality_bytes > 0`: randomization within locality windows, then randomized window order (specific behavior mode-dependent).
+- `tlb_locality_bytes == 0`: `Auto` resolves to `GlobalRandom`, and explicit `GlobalRandom` is valid. Explicit
+  locality-using box modes are rejected because they require a non-zero locality window.
+- `tlb_locality_bytes > 0`: mode-specific randomization within locality windows; `RandomInBoxRandomBox` also shuffles
+  window order, while the two increasing-box modes visit windows in increasing address order.
 
 ### 9.4 Purpose
 
@@ -264,6 +270,10 @@ When standard main-memory locality is not explicitly supplied, the executor runs
 16 KiB-locality chain with a global-random chain. The first-measured layout alternates by round. Both chains use recorded,
 domain-separated seeds and the calibrated complete-chain access count. Results retain both raw point values and the
 same-round `global - locality` deltas; the delta headline is the median of paired deltas.
+
+This auxiliary fixed-window comparison requires at least two stride-spaced nodes inside 16 KiB (stride at most 8192
+bytes). It is not part of config-validator target eligibility: if an otherwise valid standard configuration uses a larger
+stride, the comparison records an unavailable status while the configured target measurements can still run.
 
 Schema 2 serializes these as `locality_16k_latency_ns`, `global_random_latency_ns`, and
 `locality_latency_delta_ns` under `main_memory.latency.automatic_locality_comparison`. The comparison does not isolate
@@ -310,9 +320,17 @@ Each pattern reports read/write/copy bandwidth metrics.
 
 Implementation notes:
 
-- Random indices generated once per pattern loop for random benchmarks.
+- Random offsets are generated once per pattern loop as a deterministic, aligned, no-replacement permutation prefix
+  from the command-level pattern seed. The same finalized offsets are reused by read, write, and copy; repeated
+  `--count` loops reconstruct the same workload.
+- Omitted `--iterations` gives every read/write/copy operation an excluded same-shape pilot and automatic calibration
+  toward 150 ms (100-250 ms intended window). An explicit value is the exact measured pass count.
+- Pattern order rotates across outer loops. Strided plans also rotate the 32-byte starting phase by pass and record
+  phase-aware access and payload totals.
+- Requested workers may be reduced when a small buffer or large stride cannot give every worker a genuine stride
+  transition. JSON records requested and effective workers.
 - Large-stride patterns can be skipped when constraints invalidate execution.
-- Pattern statistics are aggregated across outer loop count.
+- Pattern statistics are aggregated across completed outer-loop measurements; unavailable operations are excluded.
 
 ## 13. Assembly Kernel Layer
 
@@ -334,8 +352,10 @@ Latency kernel (`memory_latency_chase_asm`) performs strictly dependent pointer 
 
 Core-to-core kernels:
 
-- `core_to_core_initiator_round_trips_asm`: Waits for responder token, sends initiator token; repeats for specified round trips.
-- `core_to_core_responder_round_trips_asm`: Mirrors initiator; coordinates via shared token word.
+- `core_to_core_initiator_round_trips_asm`: Waits until the initiator owns the token, hands it to the responder, then
+  waits for the responder to return it; repeats for the specified round trips.
+- `core_to_core_responder_round_trips_asm`: Waits until the responder owns the token and hands it back to the
+  initiator; coordinates via the shared token word.
 
 ## 14. Timing Model
 
@@ -401,7 +421,8 @@ JSON writer API (`src/output/json/json_output/json_output.cpp`):
 In addition to standard fields (buffer size, iterations, loop count, thread count, CPU/OS info):
 
 - `latency_chain_mode` (string): Resolved pointer-chain construction mode.
-- `use_latency_tlb_locality` (boolean): Whether TLB-locality window is in use.
+- `use_latency_tlb_locality` (boolean): Whether the configured locality value is greater than zero; an explicit
+  `global-random` mode can still ignore that value.
 - `latency_tlb_locality_bytes` (number): TLB-locality window size in bytes.
 - `latency_tlb_locality_kb` (number): TLB-locality window size in KB.
 - `benchmark_schema_version` (number): `2`.
@@ -462,7 +483,8 @@ Principle: no uncaught exceptions should escape to `main()` control flow.
 
 - Bandwidth and pattern bandwidth paths are parallelized by thread--count configuration.
 - Latency tests are intentionally single-threaded pointer-chase measurements.
-- Cache tests default to single-thread unless user overrides thread count.
+- Cache bandwidth tests default to one worker unless the user explicitly overrides `--threads`. Cache and
+  main-memory latency tests remain single-threaded dependent pointer chases regardless of the bandwidth worker count.
 - Threaded work partitioning attempts cache-line-aware chunk handling to reduce false sharing effects.
 
 ## 20. Measurement Caveats and Interpretation Under Load
@@ -486,7 +508,7 @@ Recommended validation commands:
 - Unit tests (non-integration): `make test`
 - Integration-only: `make test-integration`
 - Full test set: `make test-all`
-- CLI help smoke check: `memory_benchmark -h`
+- CLI help smoke check: `./memory_benchmark -h`
 
 For narrow changes, prefer targeted `gtest` filters via `./test_runner --gtest_filter=...`.
 

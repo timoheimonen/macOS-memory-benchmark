@@ -98,7 +98,8 @@ struct SweepSpec {
 struct BenchmarkConfig {
   // User-provided settings
   unsigned long buffer_size_mb = Constants::DEFAULT_BUFFER_SIZE_MB;  ///< Buffer size in megabytes
-  int iterations = Constants::DEFAULT_ITERATIONS;  ///< Number of test iterations per benchmark
+  /// Fixed iteration count when explicitly set; otherwise the calibration pilot/fallback value.
+  int iterations = Constants::DEFAULT_ITERATIONS;
   int loop_count = Constants::DEFAULT_LOOP_COUNT;  ///< Number of benchmark loops to run
   long long custom_cache_size_kb_ll = -1;  ///< User-requested custom cache size in KB (-1 = none)
   int latency_sample_count = Constants::DEFAULT_LATENCY_SAMPLE_COUNT;  ///< Number of latency samples to collect per test

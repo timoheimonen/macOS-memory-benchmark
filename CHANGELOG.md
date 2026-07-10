@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.58.1] - 2026-07-10
+
+### Changed
+  - **Documentation synchronized with runtime behavior**: Updated the user manual, README, parameter/capability references, technical whitepapers, project inventory, Doxygen comments, and bundled visualization workflow for current worker defaults, latency constraints and sampling, JSON schema paths, completion semantics, deterministic seeds, and conservative interpretation terminology.
+  - **Bundled documentation examples are runnable**: Replaced the empty percentile sample with valid example statistics, corrected plot input paths and dependency guidance, and updated extraction scripts for standard benchmark schema 2 while preserving explicit historical-schema fallbacks.
+
+### Fixed
+  - **Zero-locality configuration output is unambiguous**: The startup summary now labels a zero-byte TLB-locality window as `Global random` instead of `Disabled`, matching the pointer-chain behavior.
+  - **Thread defaults are described consistently**: CLI help now states that main-memory and pattern bandwidth default to the detected core count, cache bandwidth defaults to one worker, and latency remains single-threaded.
+  - **Public benchmark helper documentation matches the implementation**: Corrected the cache-bandwidth helper declaration and refreshed stale function signatures, parameter lists, timing units, and calibration comments used by generated API documentation.
+
 ## [0.58.0] - 2026-07-10
 
 ### Added

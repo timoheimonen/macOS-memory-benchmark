@@ -127,7 +127,7 @@ struct PatternResults {
   double strided_16384_write_bw = 0.0;  ///< Strided (16384B stride) write bandwidth (GB/s)
   double strided_16384_copy_bw = 0.0;   ///< Strided (16384B stride) copy bandwidth (GB/s)
 
-  // Strided (Superpage - 2MB)
+  // Strided (2 MiB virtual-address interval; physical large-page backing is not asserted)
   double strided_2mb_read_bw = 0.0;   ///< Strided (2MB stride) read bandwidth (GB/s)
   double strided_2mb_write_bw = 0.0;  ///< Strided (2MB stride) write bandwidth (GB/s)
   double strided_2mb_copy_bw = 0.0;   ///< Strided (2MB stride) copy bandwidth (GB/s)

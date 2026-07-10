@@ -26,6 +26,10 @@ a measured pass count near 150 ms. The exact pass count, finalized worker bounda
 across `--count` loops. Explicit `--iterations` remains an exact override. Read/write/copy order and enabled phase order
 rotate across repeated loops. Worker QoS is a best-effort scheduler hint; it is not core pinning.
 
+Main-memory bandwidth defaults to all detected CPU cores. Cache bandwidth defaults to one worker when `--threads` is
+omitted; an explicit thread count applies to both standard bandwidth targets. Pattern mode also defaults to all detected
+cores, although sparse strided work may reduce its effective worker count.
+
 ## Memory Latency
 
 The tool measures latency using dependent pointer-chase chains. This approach serializes memory accesses so that each
@@ -48,14 +52,21 @@ not explicit, the standard benchmark reports a paired 16 KiB-locality/global-ran
 delta. That result combines cache, locality, and translation effects; only `--analyze-tlb` supports controlled
 translation-boundary conclusions.
 
+The effective standard sample count is capped to the measurement access count. Stride is positive and pointer-aligned,
+and each enabled main/cache target and configured locality window must retain at least two stride-spaced nodes. The
+automatic fixed 16 KiB comparison additionally requires stride at most 8192 bytes; if that setup cannot form two nodes,
+the comparison is unavailable without redefining the validated target measurements. The system-page-size maximum
+applies only to standalone TLB analysis.
+
 Standard schema-v2 JSON records completion, nullable measurement state, exact work, calibration, seed, schedule, and
 requested/effective worker metadata. Only measured values enter median/CV/MAD summaries. Output is atomically
 checkpointed after completed loops, and `results_complete` lets consumers reject partial runs.
 
 ## Access Pattern Analysis
 
-Pattern mode measures how bandwidth changes under different memory access patterns. This helps expose how sequential,
-strided, and random access interact with cache behavior, TLB pressure, and hardware prefetching.
+Pattern mode compares effective bandwidth under different access orders, regularities, and virtual strides. It does not
+isolate cache, translation, prefetch, or DRAM effects, so a result difference must not be attributed to one mechanism
+without a controlled follow-up experiment.
 
 The pattern suite includes:
 
@@ -67,8 +78,12 @@ The pattern suite includes:
 - `strided_2mb`
 - `random`
 
-These patterns are useful for comparing favorable access streams against page-sized, superpage-sized, and unpredictable
-access behavior.
+These patterns are useful for comparing regular streams, different virtual-address strides, and unpredictable access
+orders. In particular, `strided_2mb` means a 2 MiB virtual-address interval; it does not assert 2 MiB physical-page
+backing. Use `--analyze-tlb` for controlled translation-related conclusions.
+
+Pattern JSON records measurement-level status but has no top-level loop-completeness fields. A consumer that requires a
+complete result must compare per-operation measurement counts and statuses with the requested `configuration.loop_count`.
 
 ## TLB Behavior
 
@@ -95,22 +110,18 @@ These values should be interpreted as practical microarchitectural estimates, no
 Apple Silicon does not expose every internal translation structure directly to user-space code, so the analysis is based
 on observable latency behavior.
 
-## Hardware Prefetch Investigation
+## Access-Regularity and Prefetch Hypotheses
 
-The tool does not directly control or measure the hardware prefetcher. However, it can be used to investigate prefetch
-effects indirectly.
+The tool does not directly control or measure the hardware prefetcher. Sequential, reverse, strided, and random workloads
+can establish effective-bandwidth differences that motivate a prefetch hypothesis, but the same difference can also
+contain cache, translation, memory-controller, or scheduling effects.
 
-Sequential, reverse, strided, and random access patterns can be compared to observe where prefetching appears effective
-and where it no longer helps. Custom stride and locality controls can also be used to deliberately stress specific access
-patterns and "tickle" the prefetcher:
+- Small virtual strides increase address regularity and potential cache-line reuse.
+- Page-sized and larger virtual strides reduce spatial locality, but do not by themselves identify a TLB boundary.
+- Global-random pointer chains reduce address regularity, but their latency is not an isolated prefetch measurement.
 
-- Small strides can favor cache-line reuse and regular streams.
-- Page-sized strides can increase TLB and page-walk pressure.
-- Large strides can reduce spatial locality.
-- Global random chains make hardware prefetching much less useful.
-
-This makes the tool useful for exploring the interaction between hardware prefetching, cache hierarchy, TLB behavior, and
-main-memory latency.
+Treat pattern results as access-regularity comparisons. Test prefetch hypotheses with matched buffer, stride, thread, and
+system conditions, and use `--analyze-tlb` when the question specifically concerns translation behavior.
 
 ## Custom Stride and Locality Experiments
 
@@ -122,6 +133,9 @@ Advanced latency experiments can be configured with:
 
 These options allow manual exploration of boundary cases where cache locality, TLB locality, prefetch behavior, and DRAM
 access begin to dominate results differently.
+
+`auto` resolves to `global-random` when locality is zero and to `random-box` otherwise. The locality-using box modes
+require a non-zero locality window; standalone TLB analysis rejects explicit `global-random`.
 
 ## Built-in Parameter Sweeps
 
@@ -145,7 +159,10 @@ Supported sweep targets include:
 Multiple `--sweep` options are combined as a Cartesian product. `--sweep-max-runs` caps the generated run count (default
 `16` for `--analyze-tlb`, `256` otherwise), and
 `--output` is required for the combined JSON result. A sweep parameter key may appear only once. Combined sweep JSON is
-atomically checkpointed after each run and exposes status, planned/completed run counts, and conclusion validity.
+atomically checkpointed and exposes status, planned/completed run counts, and conclusion validity. For standard, pattern,
+and TLB sweeps, `completed_runs` is the number of stored `runs` entries; a mode that returns a graceful interruption may
+therefore store an interrupted nested result in that count. Core-to-core sweeps also retain the latest failed or
+interrupted attempt in `runs`, but only nested results with status `complete` contribute to their `completed_runs`.
 
 ## Core-to-Core Cache-Line Handoff
 

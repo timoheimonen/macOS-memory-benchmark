@@ -154,7 +154,7 @@ void print_help(const char *prog_name) {
  * @param use_non_cacheable Flag indicating if non-cacheable memory hints are enabled
  * @param latency_stride_bytes Stride used by latency pointer chains
  * @param latency_chain_mode_name Chain construction mode used by latency pointer chains
- * @param latency_tlb_locality_bytes TLB-locality window for latency chains (0 = disabled)
+ * @param latency_tlb_locality_bytes TLB-locality window for latency chains (0 = global random)
  * @param cpu_name Detected processor name string
  * @param perf_cores Number of detected performance cores
  * @param eff_cores Number of detected efficiency cores
@@ -162,6 +162,7 @@ void print_help(const char *prog_name) {
  * @param only_bandwidth Whether only bandwidth tests are run
  * @param only_latency Whether only latency tests are run
  * @param run_patterns Whether pattern benchmarks are run (bandwidth-only, uses 2x buffers)
+ * @param user_specified_iterations Whether --iterations was explicitly supplied
  */
 void print_configuration(size_t buffer_size, size_t buffer_size_mb, size_t total_allocation_bytes,
                          int iterations, int loop_count, bool use_non_cacheable,
@@ -239,42 +240,8 @@ void print_configuration(size_t buffer_size, size_t buffer_size_mb, size_t total
  * @brief Outputs the performance results measured during one complete benchmark loop.
  *
  * @param loop Index of the loop being reported (0-based)
- * @param buffer_size Buffer size in bytes
- * @param buffer_size_mb Buffer size in megabytes
- * @param iterations Number of iterations per test
- * @param num_threads Number of threads used
- * @param read_bw_gb_s Read bandwidth in GB/s
- * @param total_read_time Total read test time in seconds
- * @param write_bw_gb_s Write bandwidth in GB/s
- * @param total_write_time Total write test time in seconds
- * @param copy_bw_gb_s Copy bandwidth in GB/s
- * @param total_copy_time Total copy test time in seconds
- * @param l1_latency_ns L1 cache latency in nanoseconds
- * @param l2_latency_ns L2 cache latency in nanoseconds
- * @param l1_buffer_size L1 cache buffer size in bytes
- * @param l2_buffer_size L2 cache buffer size in bytes
- * @param l1_read_bw_gb_s L1 cache read bandwidth in GB/s
- * @param l1_write_bw_gb_s L1 cache write bandwidth in GB/s
- * @param l1_copy_bw_gb_s L1 cache copy bandwidth in GB/s
- * @param l2_read_bw_gb_s L2 cache read bandwidth in GB/s
- * @param l2_write_bw_gb_s L2 cache write bandwidth in GB/s
- * @param l2_copy_bw_gb_s L2 cache copy bandwidth in GB/s
- * @param average_latency_ns Main memory average latency in nanoseconds
- * @param latency_tlb_locality_bytes Active locality window used for headline latency (0 = global random)
- * @param total_lat_time_ns Main memory total latency test time in nanoseconds
- * @param use_custom_cache_size Flag indicating if custom cache size is being used
- * @param custom_latency_ns Custom cache latency in nanoseconds
- * @param custom_buffer_size Custom cache buffer size in bytes
- * @param custom_read_bw_gb_s Custom cache read bandwidth in GB/s
- * @param custom_write_bw_gb_s Custom cache write bandwidth in GB/s
- * @param custom_copy_bw_gb_s Custom cache copy bandwidth in GB/s
- * @param has_auto_tlb_breakdown Whether the automatic paired locality comparison is available
- * @param tlb_hit_latency_ns Legacy internal name for 16 KiB locality latency
- * @param tlb_miss_latency_ns Legacy internal name for global-random latency
- * @param page_walk_penalty_ns Legacy internal name for the paired global-random minus 16 KiB locality delta
- * @param user_specified_threads Whether user specified thread count
- * @param only_bandwidth Whether only bandwidth tests are run
- * @param only_latency Whether only latency tests are run
+ * @param config Configuration used for the loop and output selection
+ * @param results Status-aware measurements produced by the loop
  */
 void print_results(int loop, const BenchmarkConfig& config,
                    const BenchmarkResults& results) {

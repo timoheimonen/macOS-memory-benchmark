@@ -141,6 +141,9 @@ inline std::vector<size_t> build_aligned_chunk_boundaries(void* alignment_base, 
  * @param timer Reference to high-resolution timer for measuring execution time
  * @param thread_name Name used for worker QoS diagnostics
  * @param make_work Function that builds measured work for one chunk
+ * @param planned_boundaries Optional precomputed worker boundaries; null builds aligned boundaries automatically
+ * @param[out] execution_metadata Optional worker-creation and QoS outcome record
+ * @param test_control Optional deterministic worker-creation failure seam used by tests
  * @return Total duration in seconds, or 0.0 if no work was performed
  */
 template <typename MakeWorkFunction>

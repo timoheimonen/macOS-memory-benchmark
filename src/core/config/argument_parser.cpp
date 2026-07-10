@@ -22,15 +22,21 @@
  * It handles parsing and validation of all command-line options including:
  * - Buffer size configuration (-b, --buffer-size)
  * - Iteration counts (-i, --iterations; -r, --count)
- * - Latency pointer-chain stride (-s, --latency-stride-bytes)
+ * - Latency sampling and pointer-chain controls (--latency-samples, -s/--latency-stride-bytes,
+ *   --latency-chain-mode, --latency-tlb-locality-kb)
  * - Cache size specification (-k, --cache-size)
  * - Thread count configuration (-t, --threads)
- * - Test mode selection (-P, --patterns; -W, --only-bandwidth; -L, --only-latency)
+ * - Test mode selection (-B/--benchmark, -P/--patterns, --analyze-tlb,
+ *   -W/--only-bandwidth, -L/--only-latency)
+ * - Reproducible workload selection (--seed) and TLB density (--tlb-density)
+ * - Multi-configuration sweeps (--sweep, --sweep-max-runs)
+ * - Best-effort cache-discouraging allocation hints (--non-cacheable)
  * - Output options (-o, --output)
  * - Help display (-h, --help)
  *
- * The parser uses a two-pass approach: first parsing cache size (needed for
- * system detection), then parsing all other arguments. It employs exception
+ * The parser first discovers the selected mode and cache size, then parses the
+ * complete standard/pattern/TLB option set. Core-to-core mode is routed to its
+ * dedicated parser before this function. It employs exception
  * handling internally for validation, converting exceptions to return codes
  * at the function boundary.
  *

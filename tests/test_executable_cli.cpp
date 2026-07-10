@@ -115,7 +115,7 @@ TEST(ExecutableCliIntegrationTest, CoreToCoreWritesCalibratedAuditJsonIntegratio
 
   EXPECT_EQ(result.exit_code, EXIT_SUCCESS);
   const nlohmann::json output = nlohmann::json::parse(read_file(output_path));
-  EXPECT_EQ(output["version"], "0.58.0");
+  EXPECT_EQ(output["version"], "0.58.1");
   EXPECT_EQ(output["configuration"]["schema_version"], 2);
   EXPECT_EQ(output["core_to_core_latency"]["status"], "complete");
   EXPECT_TRUE(output["core_to_core_latency"]["measurements_complete"]);
@@ -135,7 +135,7 @@ TEST(ExecutableCliIntegrationTest, CoreToCoreSweepWritesCompletionMetadataIntegr
 
   EXPECT_EQ(result.exit_code, EXIT_SUCCESS);
   const nlohmann::json output = nlohmann::json::parse(read_file(output_path));
-  EXPECT_EQ(output["version"], "0.58.0");
+  EXPECT_EQ(output["version"], "0.58.1");
   EXPECT_EQ(output["status"], "complete");
   EXPECT_EQ(output["planned_runs"], 2u);
   EXPECT_EQ(output["completed_runs"], 2u);

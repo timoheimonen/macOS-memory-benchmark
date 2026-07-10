@@ -7,7 +7,8 @@ from pathlib import Path
 
 import matplotlib.pyplot as plt # pyright: ignore[reportMissingModuleSource]
 
-# uses json output from file "memory_benchmark --benchmark --count (>1) --only-latency --output results/<file>.json"
+# Uses JSON output from, for example:
+# memory_benchmark --benchmark --count 5 --only-latency --output results/<file>.json
 
 ALLOWED_METRICS = {
     "average": "Average",
@@ -28,8 +29,8 @@ def parse_args():
     parser.add_argument(
         "-f",
         "--file",
-        default="results/macminim4_count5_latency.json",
-        help="Path to benchmark JSON/text file (default: results/macminim4_count5_latency.json)",
+        default="results/old/macminim4_count5_latency.json",
+        help="Path to benchmark JSON/text file (default: results/old/macminim4_count5_latency.json)",
     )
     parser.add_argument(
         "--metric",
@@ -66,6 +67,10 @@ def resolve_input_path(raw_path: str) -> Path:
     script_relative = Path(__file__).resolve().parent / path
     if script_relative.exists():
         return script_relative
+
+    repo_relative = Path(__file__).resolve().parent.parent / path
+    if repo_relative.exists():
+        return repo_relative
 
     raise RuntimeError(f"Input file not found: {raw_path}")
 

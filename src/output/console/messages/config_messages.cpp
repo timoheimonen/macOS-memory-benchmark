@@ -132,7 +132,7 @@ std::string config_latency_tlb_locality(size_t locality_bytes) {
   std::ostringstream oss;
   oss << "Latency TLB Locality: ";
   if (locality_bytes == 0) {
-    oss << "Disabled";
+    oss << "Global random";
     return oss.str();
   }
 

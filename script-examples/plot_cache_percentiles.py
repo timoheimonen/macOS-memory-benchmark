@@ -8,6 +8,8 @@ import matplotlib.pyplot as plt # pyright: ignore[reportMissingModuleSource]
 
 #run ./latency_test_script.sh to get final_output.txt
 
+SCRIPT_DIR = Path(__file__).resolve().parent
+
 ALLOWED_METRICS = {
     "median": "Median",
     "p90": "P90",
@@ -28,7 +30,7 @@ def print_usage(script_name: str):
 
 
 def parse_args(argv):
-    src = Path("final_output.txt")
+    src = SCRIPT_DIR / "final_output.txt"
     metric = "median"
 
     i = 1

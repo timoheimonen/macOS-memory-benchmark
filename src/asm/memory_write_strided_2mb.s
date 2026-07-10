@@ -20,7 +20,7 @@
 //                                                      size_t byteCount,
 //                                                      size_t num_iterations);
 // Purpose:
-//   Write zeros using a fixed 2MB superpage stride with wraparound.
+//   Write zeros using a fixed 2 MiB virtual-address stride with wraparound.
 // Arguments:
 //   x0 = dst (void*)
 //   x1 = byteCount (size_t)

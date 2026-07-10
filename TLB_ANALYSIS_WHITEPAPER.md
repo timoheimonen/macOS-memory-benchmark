@@ -2,7 +2,7 @@
 
 ## 1. Purpose
 
-This document specifies how `macOS-memory-benchmark` implements standalone TLB analysis mode (`--analyze-tlb`) in version `0.57.0`.
+This document specifies how `macOS-memory-benchmark` implements standalone TLB analysis mode (`--analyze-tlb`) in version `0.58.1`.
 
 The goal is to provide a reproducible, implementation-accurate description of:
 
@@ -94,8 +94,10 @@ Allowed `--analyze-tlb` sweep keys:
 
 Sweep mode requires `--output <file>`. `--sweep-max-runs <count>` limits the number of generated combinations. Its default is `16` for `--analyze-tlb` and `256` for other modes; an explicit value overrides the mode default.
 
-Each sweep parameter key may appear only once. The combined JSON is atomically checkpointed after each completed run
-and records top-level `status`, `planned_runs`, `completed_runs`, and `conclusions_valid` fields.
+Each sweep parameter key may appear only once. The combined JSON is atomically checkpointed after each stored run result
+and records top-level `status`, `planned_runs`, `completed_runs`, and `conclusions_valid` fields. In the common
+standard/pattern/TLB sweep envelope, `completed_runs` is the number of stored `runs` entries; a gracefully interrupted
+TLB payload can therefore be stored and included in that count.
 
 `--sweep latency-chain-mode=...` follows the same chain-mode rule as direct `--latency-chain-mode`: `global-random` is rejected for `--analyze-tlb`.
 
@@ -129,8 +131,9 @@ peak = candidate buffer + 1 MB + 256 bytes * (candidate bytes / page size)
 
 The memory budget is the smaller of 30% of currently available memory and the amount that preserves a 1 GB reserve.
 On systems reporting at most 1 GB available, half is retained; if available-memory detection fails, the fallback budget is
-384 MB. The first candidate whose predicted peak fits this budget is attempted. If no budget-safe candidate can be allocated,
-the mode exits with an insufficient-memory error. An `mmap()` success alone therefore cannot select an unsafe candidate.
+384 MB. Budget-safe candidates are attempted in descending order; an allocation failure falls through to the next smaller
+budget-safe candidate. If none can be allocated, the mode exits with an insufficient-memory error. An `mmap()` success
+alone therefore cannot select an unsafe candidate.
 
 `mlock()` is best-effort. On failure, the mode reports errno and its message, records the failure and policy in JSON, and
 continues unlocked. The settings block also reports available memory, the selected budget, and predicted peak use.
@@ -192,7 +195,9 @@ corresponding randomized or increasing logical traversal policy. Results are com
 matches. Increasing-page modes intentionally change address order and prefetch exposure, so their latency, detected brackets,
 and runtime must not be treated as interchangeable with `random-box`.
 
-**Memory prefaulting:** After buffer allocation, the code calls `madvise(ptr, size_bytes, MADV_WILLNEED)` to prefault pages and reduce page-fault noise during early measurement.
+**Memory residency hint:** After buffer allocation, the code calls `madvise(ptr, size_bytes, MADV_WILLNEED)`. This is a
+best-effort advisory request intended to reduce early page-fault noise; it does not guarantee that every page is faulted
+in immediately.
 
 **Balanced round scheduler:** The pure scheduler creates the active profile's maximum schedule and stops only after a whole
 round. Every round contains every planned locality exactly once. A seed-shuffled initial point order is cyclically rotated on subsequent rounds, so a point traverses different
@@ -202,8 +207,10 @@ order position once.
 **Measurement task:** Each scheduled task derives a stable task seed from the base seed, pass, round, and point index,
 then derives separate spread and packed layout seeds. Both chains are built, warmed, and measured inside that one task;
 which layout runs first alternates by round/order parity and is recorded. The task stores both raw `ns/access` values and
-`translation_delta_ns = spread_latency_ns - packed_latency_ns`. The regular benchmark path still uses its existing
-latency-chain implementation and random-device behavior.
+`translation_delta_ns = spread_latency_ns - packed_latency_ns`. The regular benchmark path uses its separate
+latency-chain implementation. It parses `--seed`, or generates one command-level seed with a random-device/clock
+fallback when the option is omitted, then derives domain-separated target/layout seeds; chain construction does not
+draw fresh random-device entropy and does not use the standalone page-native TLB chain builder.
 
 The compact console uses one row per point: paired-delta P50 first, spread and packed P50 controls, active cache-line
 footprint, and a `*` marker below 64 nodes. One shared legend explains the marker; spread/packed page counts, unique-line
@@ -466,7 +473,9 @@ When `--sweep` is used with `--analyze-tlb`, output uses the common sweep envelo
 
 Each `runs[].result` entry is the same single-run TLB analysis JSON payload described in section 9.1.
 The top-level sweep object also includes `status`, `planned_runs`, `completed_runs`, and `conclusions_valid`. It is
-atomically rewritten after every completed run, so a later failure or interrupt leaves a readable checkpoint.
+atomically rewritten after every stored run result, so a later failure or interrupt leaves a readable checkpoint.
+`completed_runs` is the length of `runs`, not a claim that every nested TLB payload has status `complete`; consumers must
+also inspect `runs[].result.tlb_analysis.status` and the top-level `conclusions_valid` flag.
 
 ## 10. Current Schema Worked Example (Deterministic Exporter Fixture)
 
@@ -516,7 +525,7 @@ the production serializer. Its deliberately synthetic inputs make this a contrac
       "active_cache_line_footprint_bytes": 2097152
     }
   },
-  "version": "0.57.0"
+  "version": "0.58.1"
 }
 ```
 

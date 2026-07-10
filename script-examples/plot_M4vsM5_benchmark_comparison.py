@@ -15,7 +15,7 @@
 # along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 """
-@file plot_M4vsM5.py
+@file plot_M4vsM5_benchmark_comparison.py
 @brief Side-by-side memory bandwidth and latency comparison: Apple M4 vs M5.
 
 Reads two benchmark JSON files produced by macos-memory-benchmark and renders
