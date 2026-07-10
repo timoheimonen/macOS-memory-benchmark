@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.57.0] - Unreleased
+## [0.57.0] - 2026-07-10
 
 ### Added
   - **Deterministic TLB planner and adaptive balanced round scheduler**: Standalone TLB analysis uses pure sweep-planning and measurement-scheduling modules. Every completed round measures each locality once in seeded cyclic Latin order. Quick, standard, and exhaustive profiles use 7-12, 10-20, and 15-30 rounds respectively; a pass stops after its minimum when every point meets the deterministic bootstrap CI-width target. `--seed <uint64>` reproduces planner order, derived task seeds, standalone TLB pointer-chain permutations, and convergence bootstrap sampling; one seed is generated per command when omitted.
