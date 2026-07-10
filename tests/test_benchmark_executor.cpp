@@ -176,6 +176,13 @@ TEST(BenchmarkExecutorTest, MainMemoryLatencyCollectsSamplesWhenConfiguredIntegr
   ASSERT_TRUE(results.global_random_latency.is_measured());
   EXPECT_GT(*results.locality_16k_latency.value, 0.0);
   EXPECT_GT(*results.global_random_latency.value, 0.0);
+  for (const BenchmarkMeasurement* measurement : {
+           &results.main_latency, &results.locality_16k_latency,
+           &results.global_random_latency, &results.locality_latency_delta}) {
+    EXPECT_EQ(measurement->requested_threads, 1);
+    EXPECT_EQ(measurement->effective_threads, 1);
+    EXPECT_EQ(measurement->created_workers, 1);
+  }
 }
 
 TEST(BenchmarkExecutorTest, MainMemoryLatencySkipsAutoTlbBreakdownWhenLocalitySpecifiedIntegration) {

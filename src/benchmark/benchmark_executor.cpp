@@ -459,6 +459,8 @@ void run_paired_locality_comparison(void* buffer,
                                     size_t stride_bytes,
                                     size_t num_accesses,
                                     uint64_t base_seed,
+                                    bool main_thread_qos_requested,
+                                    bool main_thread_qos_applied,
                                     HighResTimer& timer,
                                     BenchmarkResults& results,
                                     size_t phase_order_index) {
@@ -471,6 +473,17 @@ void run_paired_locality_comparison(void* buffer,
     measurement->operation = "locality-comparison";
     measurement->buffer_size_bytes = buffer_size;
     measurement->access_count = num_accesses;
+    measurement->requested_threads = 1;
+    measurement->effective_threads = 1;
+    measurement->created_workers = 1;
+    measurement->qos_successful_workers = main_thread_qos_applied ? 1 : 0;
+    measurement->qos_failed_workers =
+        main_thread_qos_requested && !main_thread_qos_applied ? 1 : 0;
+    measurement->qos_outcome = main_thread_qos_applied
+                                   ? "main-thread-qos-applied"
+                               : main_thread_qos_requested
+                                   ? "main-thread-qos-failed"
+                                   : "main-thread-qos-not-requested";
     measurement->phase_order_index = phase_order_index;
     measurement->work_policy = "paired-alternating-rounds";
   }
@@ -1204,6 +1217,18 @@ void run_main_memory_latency_test(const BenchmarkBuffers& buffers, const Benchma
                                                 nullptr, 0);
   timings.total_latency_status = status_from_elapsed(timings.total_lat_time_ns);
   results.main_latency.access_count = config.lat_num_accesses;
+  results.main_latency.requested_threads = 1;
+  results.main_latency.effective_threads = 1;
+  results.main_latency.created_workers = 1;
+  results.main_latency.qos_successful_workers =
+      config.main_thread_qos_applied ? 1 : 0;
+  results.main_latency.qos_failed_workers =
+      config.main_thread_qos_requested && !config.main_thread_qos_applied ? 1 : 0;
+  results.main_latency.qos_outcome = config.main_thread_qos_applied
+                                         ? "main-thread-qos-applied"
+                                     : config.main_thread_qos_requested
+                                         ? "main-thread-qos-failed"
+                                         : "main-thread-qos-not-requested";
   if (timings.total_latency_status == BenchmarkMeasurementStatus::Measured) {
     set_measurement_value(results.main_latency,
                           timings.total_lat_time_ns /
@@ -1224,7 +1249,9 @@ void run_main_memory_latency_test(const BenchmarkBuffers& buffers, const Benchma
   if (!config.user_specified_latency_tlb_locality) {
     run_paired_locality_comparison(
         buffers.lat_buffer(), config.buffer_size, config.latency_stride_bytes,
-        config.lat_num_accesses, config.benchmark_seed, test_timer, results,
+        config.lat_num_accesses, config.benchmark_seed,
+        config.main_thread_qos_requested, config.main_thread_qos_applied,
+        test_timer, results,
         results.phase_order_index);
 
     (void)setup_latency_chain(buffers.lat_buffer(),
@@ -1397,7 +1424,9 @@ BenchmarkResults run_single_benchmark_loop(const BenchmarkBuffers& buffers,
     measurement.created_workers = 1;
     measurement.qos_outcome = config.main_thread_qos_applied
                                   ? "main-thread-qos-applied"
-                                  : "main-thread-qos-failed";
+                              : config.main_thread_qos_requested
+                                  ? "main-thread-qos-failed"
+                                  : "main-thread-qos-not-requested";
   };
 
   bool phase_execution_interrupted = false;
@@ -1519,6 +1548,8 @@ BenchmarkResults run_single_benchmark_loop(const BenchmarkBuffers& buffers,
                 phase_buffers.lat_buffer(), config.buffer_size,
                 config.latency_stride_bytes,
                 results.main_latency.access_count, config.benchmark_seed,
+                config.main_thread_qos_requested,
+                config.main_thread_qos_applied,
                 test_timer, results, phase_position);
           }
           break;
