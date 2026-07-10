@@ -770,12 +770,15 @@ Includes values such as:
 - Coefficient of variation (CV)
 - Min / Max
 
-When automatic TLB comparison is active (you did not explicitly set `--latency-tlb-locality-kb`),
+When the automatic locality comparison is active (you did not explicitly set `--latency-tlb-locality-kb`),
 statistics also include dedicated sections for:
 
-- `TLB Hit Latency (ns)`
-- `TLB Miss Latency (ns)`
-- `Estimated Page-Walk Penalty (ns)`
+- `16 KiB Locality Latency (ns)`
+- `Global-Random Latency (ns)`
+- `Locality Latency Delta, Global - 16 KiB (ns)`
+
+The locality delta is the median same-round difference from paired, alternating-order measurements. It is not an
+isolated page-table-walk penalty; use `--analyze-tlb` for controlled translation analysis.
 
 For noisy systems, prioritize median and P95/P99 rather than single fastest/slowest values.
 

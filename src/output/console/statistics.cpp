@@ -283,9 +283,9 @@ static void print_cache_latency_statistics(const std::string &cache_name,
  * @param all_l2_write_bw Vector holding L2 cache write bandwidth results from each loop
  * @param all_l2_copy_bw Vector holding L2 cache copy bandwidth results from each loop
  * @param all_main_mem_latency Vector holding main memory latency results from each loop
- * @param all_tlb_hit_latency Vector holding TLB hit-biased latency results from each loop
- * @param all_tlb_miss_latency Vector holding TLB miss-biased latency results from each loop
- * @param all_page_walk_penalty Vector holding estimated page-walk penalty results from each loop
+ * @param all_tlb_hit_latency Legacy internal name for 16 KiB locality latency results
+ * @param all_tlb_miss_latency Legacy internal name for global-random latency results
+ * @param all_page_walk_penalty Legacy internal name for paired global-random minus 16 KiB locality deltas
  * @param use_custom_cache_size Flag indicating if custom cache size is being used
  * @param all_custom_latency Vector holding custom cache latency results from each loop
  * @param all_custom_read_bw Vector holding custom cache read bandwidth results from each loop

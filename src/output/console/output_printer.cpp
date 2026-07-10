@@ -268,10 +268,10 @@ void print_configuration(size_t buffer_size, size_t buffer_size_mb, size_t total
  * @param custom_read_bw_gb_s Custom cache read bandwidth in GB/s
  * @param custom_write_bw_gb_s Custom cache write bandwidth in GB/s
  * @param custom_copy_bw_gb_s Custom cache copy bandwidth in GB/s
- * @param has_auto_tlb_breakdown Whether automatic TLB hit/miss breakdown is available
- * @param tlb_hit_latency_ns TLB hit-biased latency in nanoseconds
- * @param tlb_miss_latency_ns TLB miss-biased latency in nanoseconds
- * @param page_walk_penalty_ns Estimated page-walk penalty in nanoseconds
+ * @param has_auto_tlb_breakdown Whether the automatic paired locality comparison is available
+ * @param tlb_hit_latency_ns Legacy internal name for 16 KiB locality latency
+ * @param tlb_miss_latency_ns Legacy internal name for global-random latency
+ * @param page_walk_penalty_ns Legacy internal name for the paired global-random minus 16 KiB locality delta
  * @param user_specified_threads Whether user specified thread count
  * @param only_bandwidth Whether only bandwidth tests are run
  * @param only_latency Whether only latency tests are run
