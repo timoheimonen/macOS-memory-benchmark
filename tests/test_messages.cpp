@@ -1406,3 +1406,14 @@ TEST_F(MessagesFormattingTest, ConfigLatencyCalibration) {
   EXPECT_EQ(Messages::config_latency_calibration(0.250, 0.100, 0.300, 16),
             "Latency Headline: automatic continuous-pass calibration (target 250 ms; intended window 100-300 ms; minimum 16 complete cycles)");
 }
+
+TEST_F(MessagesFormattingTest, CoreToCoreCalibratedAuditMessages) {
+  EXPECT_EQ(Messages::error_core_to_core_measurement_failed("invalid-headline-elapsed"),
+            "Core-to-core measurement failed: invalid-headline-elapsed");
+  EXPECT_NE(Messages::report_core_to_core_round_trip(70.0).find("Median headline"),
+            std::string::npos);
+  EXPECT_NE(Messages::report_core_to_core_headline_statistics(3).find("3 loops"),
+            std::string::npos);
+  EXPECT_NE(Messages::report_core_to_core_sample_statistics(1000).find("1000 windows"),
+            std::string::npos);
+}

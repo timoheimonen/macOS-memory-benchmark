@@ -280,7 +280,8 @@ forms such as `-buffersize` or `-benchmark` are invalid.
 #### `--count <count>`
 
 - Full benchmark loop count
-- Default: `1`
+- General default: `1`
+- Core-to-core default: `3`; this mode-specific default does not change standard or pattern execution
 - Positive integer
 - Use `5` to `10` for stable statistics
 
@@ -385,11 +386,19 @@ forms such as `-buffersize` or `-benchmark` are invalid.
 #### `--analyze-core2core`
 
 - Runs standalone two-thread cache-line handoff (ping-pong) mode only
+- Defaults to three measured loops per scenario, so bare `--analyze-core2core` reports a median headline and CV/MAD instead of only a single-loop value
 - Can be combined only with optional `--output <file>`, `--count <count>`, `--latency-samples <count>`, `--sweep count=...`, `--sweep latency-samples=...`, and `--sweep-max-runs <count>`
 - Executes three scheduler-hint scenarios: `no_affinity_hint`, `same_affinity_tag`, and `different_affinity_tags`
-- Reports round-trip latency, one-way estimate (`round_trip / 2`), and sample distribution stats (P50/P90/P95/P99/stddev/min/max)
-- Includes per-thread QoS/affinity hint status in console and JSON output
+- Calibrates each scenario independently with an excluded 100,000-round-trip pilot after a 1,000,000-round-trip calibration warmup; that scenario's resolved plan is reused across its measured `--count` loops
+- Targets 25 ms for the final untimed warmup, 250 ms for the continuous headline (100-300 ms intended window), and 1 ms for each separate sample window. The work cannot fall below 20,000 warmup, 1,000,000 headline, or 2,000 sample-window round trips
+- Rotates scenario order across loops in cyclic Latin-square style: loop starts advance through no-hint, same-tag, and different-tags to spread first/last-position effects
+- Reports the median P50 of completed continuous loop headlines as the scenario headline and the corresponding one-way estimate (`round_trip / 2`)
+- Reports loop repeatability separately from pooled sample-window statistics. Both include average, P50/P90/P95/P99, sample stddev, CV, MAD, min, and max; headline CV above 7.5% emits a diagnostic warning without filtering or invalidating measured values
+- With the default 1,000 windows targeting about 1 ms, sampling alone targets roughly 9 seconds across three scenarios and three loops; add continuous headlines, warmups, calibration, thread setup, and scheduler overhead when estimating the bare command's runtime
+- Includes per-loop order, status, elapsed-duration quality, sample boundaries, and per-thread QoS/affinity hint status in JSON schema 2
+- Missing, interrupted, invalid, or failed measurements are unavailable/`null`, never numeric zero. Command/scenario completion metadata states whether all planned measurements completed
 - Notes explicitly that macOS user-space cannot hard-pin exact core IDs
+- Sets `affinity_hint_comparison_interpretable` only when the command completed and every requested affinity hint in every measured loop was actually applied; otherwise affinity-scenario deltas must not be treated as an affinity-policy comparison
 - Detailed methodology and JSON contract: [CORE_TO_CORE_WHITEPAPER.md](CORE_TO_CORE_WHITEPAPER.md)
 
 ### Latency-specific controls
@@ -399,8 +408,9 @@ forms such as `-buffersize` or `-benchmark` are invalid.
 - Sample count per latency test
 - Default: `1000`
 - Positive integer
-- Samples are collected in a separate pass whose windows continue from the preceding window's terminal pointer
-- Sample count/granularity does not define or change the separate continuous headline calculation
+- In standard pointer-chase latency, samples are collected in a separate pass whose windows continue from the preceding window's terminal pointer
+- In core-to-core mode, each sample is a separately timed handoff window calibrated toward 1 ms with a 2,000-round-trip minimum
+- In both modes, sample count/granularity does not define or change the separate continuous headline calculation
 
 #### `--latency-stride-bytes <bytes>`
 
@@ -477,6 +487,7 @@ forms such as `-buffersize` or `-benchmark` are invalid.
 - Every generated configuration is validated before the first run
 - Combined JSON is atomically checkpointed after each completed run and records `status`, `planned_runs`, `completed_runs`, and `conclusions_valid`
 - A parameter key may appear only once in one sweep command
+- Core-to-core sweeps preserve the latest completed run even when a later run fails or the command is interrupted
 
 #### `-h`, `--help`
 
@@ -936,6 +947,87 @@ the complete work plan. They can differ from `accesses_per_pass * passes` and mu
 
 `strided_2mb` names a 2 MiB virtual address stride. It is not evidence that macOS supplied 2 MiB physical pages:
 `large_page_backing_status: "not-verified"` and `large_page_backing_verified: false` must be interpreted literally.
+
+### Core-to-core JSON shape
+
+Core-to-core output uses schema 2 and methodology
+`core2core-v2-calibrated-balanced-auditable`. This abbreviated example shows the audit hierarchy:
+
+```json
+{
+  "configuration": {
+    "mode": "analyze_core2core",
+    "schema_version": 2,
+    "methodology_version": "core2core-v2-calibrated-balanced-auditable",
+    "calibration_round_trips": 100000,
+    "calibration_warmup_round_trips": 1000000,
+    "warmup_target_seconds": 0.025,
+    "headline_target_seconds": 0.25,
+    "headline_duration_window_seconds": {"minimum": 0.1, "maximum": 0.3},
+    "sample_window_target_seconds": 0.001,
+    "scenario_schedule": "cyclic-latin-square-across-count-loops",
+    "headline_aggregate": "median-p50",
+    "repeatability_cv_warning_pct": 7.5
+  },
+  "core_to_core_latency": {
+    "status": "complete",
+    "planned_measurements": 9,
+    "completed_measurements": 9,
+    "measurements_complete": true,
+    "scenarios": [
+      {
+        "name": "no_affinity_hint",
+        "status": "measured",
+        "planned_loops": 3,
+        "completed_loops": 3,
+        "work_plan": {
+          "automatic_calibration": true,
+          "calibration_excluded_from_results": true,
+          "warmup_round_trips": 250000,
+          "headline_round_trips": 2500000,
+          "sample_window_round_trips": 10000
+        },
+        "headline_round_trip_ns": 100.0,
+        "headline_statistic": "median-p50-across-completed-continuous-loops",
+        "round_trip_ns": {
+          "values": [99.0, 100.0, 101.0],
+          "statistics": {
+            "median": 100.0,
+            "coefficient_of_variation_pct": 1.0,
+            "median_absolute_deviation": 1.0
+          }
+        },
+        "samples_ns": {
+          "values": [100.2, 99.8],
+          "statistics": {"median": 100.0}
+        },
+        "loop_records": [
+          {
+            "loop_index": 0,
+            "order_position": 0,
+            "status": "measured",
+            "round_trip_ns": 99.0,
+            "headline_elapsed_seconds": 0.2475,
+            "duration_quality": "within-target-window",
+            "sample_window_range": {"start_index": 0, "count": 2},
+            "thread_hints": {"initiator": {}, "responder": {}}
+          }
+        ]
+      }
+    ],
+    "hard_pinning_supported": false,
+    "affinity_tags_are_hints": true,
+    "affinity_hint_comparison_interpretable": false
+  }
+}
+```
+
+The numeric work-plan values above are illustrative calibrated outcomes; the actual values are scenario-specific and
+bounded by the documented minimums. `round_trip_ns.values` contains only measured continuous headlines, while
+`samples_ns` is a separate pooled sample-window population. A loop that does not produce a valid measurement carries a
+status/reason and `null` values in its record instead of zeros. Consumers should require `measurements_complete: true`
+for a complete comparison and additionally require `affinity_hint_comparison_interpretable: true` before interpreting
+differences between affinity-tag scenarios as evidence about the requested hint policy.
 
 ### Sweep JSON shape
 

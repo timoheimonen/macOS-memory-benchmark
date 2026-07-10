@@ -24,12 +24,11 @@
  * logic can format output without hardcoded text literals.
  */
 
-#include "messages_api.h"
-
 #include <iomanip>
 #include <sstream>
 
 #include "core/config/constants.h"
+#include "messages_api.h"
 
 namespace Messages {
 
@@ -46,13 +45,16 @@ const std::string& error_core_to_core_timer_creation_failed() {
   return msg;
 }
 
+std::string error_core_to_core_measurement_failed(const std::string& reason) {
+  return "Core-to-core measurement failed: " + reason;
+}
+
 const std::string& msg_running_core_to_core_analysis() {
   static const std::string msg = "\nRunning standalone core-to-core latency analysis...";
   return msg;
 }
 
-std::string msg_core_to_core_scenario_progress(size_t current_loop,
-                                               size_t total_loops,
+std::string msg_core_to_core_scenario_progress(size_t current_loop, size_t total_loops,
                                                const std::string& scenario_name) {
   std::ostringstream oss;
   oss << "  [Loop " << current_loop << "/" << total_loops << "] Scenario: " << scenario_name;
@@ -84,14 +86,14 @@ std::string report_core_to_core_cores(int perf_cores, int eff_cores) {
   return oss.str();
 }
 
-std::string report_core_to_core_loop_config(int loop_count,
-                                            int sample_count,
-                                            size_t headline_round_trips,
-                                            size_t sample_window_round_trips) {
+std::string report_core_to_core_loop_config(int loop_count, int sample_count, double headline_target_seconds,
+                                            double headline_min_seconds, double headline_max_seconds,
+                                            double sample_target_seconds) {
   std::ostringstream oss;
   oss << "Config: loops=" << loop_count << ", samples/loop=" << sample_count
-      << ", headline_round_trips=" << headline_round_trips
-      << ", sample_window_round_trips=" << sample_window_round_trips;
+      << ", calibrated headline target=" << headline_target_seconds * 1000.0 << " ms (window "
+      << headline_min_seconds * 1000.0 << "-" << headline_max_seconds * 1000.0 << " ms)"
+      << ", sample-window target=" << sample_target_seconds * 1000.0 << " ms";
   return oss.str();
 }
 
@@ -99,17 +101,39 @@ std::string report_core_to_core_scenario_title(const std::string& scenario_name)
   return "[Scenario] " + scenario_name;
 }
 
+std::string report_core_to_core_measurement_status(const std::string& status, const std::string& reason,
+                                                   size_t completed_loops, size_t planned_loops) {
+  std::ostringstream oss;
+  oss << "  Status: " << status << " (" << completed_loops << "/" << planned_loops << " loops measured)";
+  if (!reason.empty()) {
+    oss << ", reason=" << reason;
+  }
+  return oss.str();
+}
+
+std::string report_core_to_core_work_plan(size_t calibration_round_trips, double calibration_round_trip_ns,
+                                          size_t warmup_round_trips, size_t headline_round_trips,
+                                          size_t sample_window_round_trips) {
+  std::ostringstream oss;
+  oss << std::fixed << std::setprecision(Constants::LATENCY_PRECISION);
+  oss << "  Calibrated work: pilot=" << calibration_round_trips << " round trips (" << calibration_round_trip_ns
+      << " ns/round trip)"
+      << ", warmup=" << warmup_round_trips << ", headline=" << headline_round_trips
+      << ", sample window=" << sample_window_round_trips;
+  return oss.str();
+}
+
 std::string report_core_to_core_round_trip(double round_trip_ns) {
   std::ostringstream oss;
   oss << std::fixed << std::setprecision(Constants::LATENCY_PRECISION);
-  oss << "  Round-trip latency: " << round_trip_ns << " ns";
+  oss << "  Median headline round-trip latency: " << round_trip_ns << " ns";
   return oss.str();
 }
 
 std::string report_core_to_core_one_way_estimate(double one_way_ns) {
   std::ostringstream oss;
   oss << std::fixed << std::setprecision(Constants::LATENCY_PRECISION);
-  oss << "  One-way estimate: " << one_way_ns << " ns";
+  oss << "  Median one-way estimate: " << one_way_ns << " ns";
   return oss.str();
 }
 
@@ -119,19 +143,26 @@ std::string report_core_to_core_samples(size_t sample_count) {
   return oss.str();
 }
 
-std::string report_core_to_core_hint_status(const std::string& thread_role,
-                                            bool qos_applied,
-                                            int qos_code,
-                                            bool affinity_requested,
-                                            bool affinity_applied,
-                                            int affinity_code,
+std::string report_core_to_core_headline_statistics(size_t loop_count) {
+  std::ostringstream oss;
+  oss << "  Continuous headline repeatability (" << loop_count << " loops):";
+  return oss.str();
+}
+
+std::string report_core_to_core_sample_statistics(size_t sample_count) {
+  std::ostringstream oss;
+  oss << "  Pooled separate sample-window distribution (" << sample_count << " windows):";
+  return oss.str();
+}
+
+std::string report_core_to_core_hint_status(const std::string& thread_role, bool qos_applied, int qos_code,
+                                            bool affinity_requested, bool affinity_applied, int affinity_code,
                                             int affinity_tag) {
   std::ostringstream oss;
-  oss << "  " << thread_role
-      << " hints: qos=" << (qos_applied ? "ok" : "failed(" + std::to_string(qos_code) + ")");
+  oss << "  " << thread_role << " hints: qos=" << (qos_applied ? "ok" : "failed(" + std::to_string(qos_code) + ")");
   if (affinity_requested) {
-    oss << ", affinity(tag=" << affinity_tag << ")="
-        << (affinity_applied ? "ok" : "failed(" + std::to_string(affinity_code) + ")");
+    oss << ", affinity(tag=" << affinity_tag
+        << ")=" << (affinity_applied ? "ok" : "failed(" + std::to_string(affinity_code) + ")");
   } else {
     oss << ", affinity=not requested";
   }

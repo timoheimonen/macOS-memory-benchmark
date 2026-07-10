@@ -78,6 +78,7 @@ const std::string& error_seed_requires_benchmark_or_patterns();
 std::string error_duplicate_sweep_parameter(const std::string& parameter_name);
 const std::string& error_analyze_core_to_core_must_be_used_alone();
 const std::string& error_core_to_core_timer_creation_failed();
+std::string error_core_to_core_measurement_failed(const std::string& reason);
 const std::string& error_tlb_analysis_insufficient_memory();
 const std::string& error_tlb_analysis_timer_creation_failed();
 const std::string& error_timer_creation_failed();
@@ -204,12 +205,25 @@ std::string report_core_to_core_cpu(const std::string& cpu_name);
 std::string report_core_to_core_cores(int perf_cores, int eff_cores);
 std::string report_core_to_core_loop_config(int loop_count,
                                             int sample_count,
-                                            size_t headline_round_trips,
-                                            size_t sample_window_round_trips);
+                                            double headline_target_seconds,
+                                            double headline_min_seconds,
+                                            double headline_max_seconds,
+                                            double sample_target_seconds);
 std::string report_core_to_core_scenario_title(const std::string& scenario_name);
+std::string report_core_to_core_measurement_status(const std::string& status,
+                                                   const std::string& reason,
+                                                   size_t completed_loops,
+                                                   size_t planned_loops);
+std::string report_core_to_core_work_plan(size_t calibration_round_trips,
+                                         double calibration_round_trip_ns,
+                                         size_t warmup_round_trips,
+                                         size_t headline_round_trips,
+                                         size_t sample_window_round_trips);
 std::string report_core_to_core_round_trip(double round_trip_ns);
 std::string report_core_to_core_one_way_estimate(double one_way_ns);
 std::string report_core_to_core_samples(size_t sample_count);
+std::string report_core_to_core_headline_statistics(size_t loop_count);
+std::string report_core_to_core_sample_statistics(size_t sample_count);
 std::string report_core_to_core_hint_status(const std::string& thread_role,
                                             bool qos_applied,
                                             int qos_code,

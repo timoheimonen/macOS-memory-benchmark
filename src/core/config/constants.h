@@ -120,11 +120,23 @@ namespace Constants {
   constexpr size_t DEFAULT_ANALYZE_TLB_SWEEP_MAX_RUNS = 16;  // Safer standalone TLB Cartesian sweep limit
 
   // Core-to-core standalone mode constants
-  constexpr int CORE_TO_CORE_DEFAULT_LOOP_COUNT = DEFAULT_LOOP_COUNT;  // Default loop count for standalone core-to-core mode
+  constexpr int CORE_TO_CORE_DEFAULT_LOOP_COUNT = 3;  // Default repeats provide a median and repeatability diagnostics
   constexpr int CORE_TO_CORE_DEFAULT_LATENCY_SAMPLE_COUNT = DEFAULT_LATENCY_SAMPLE_COUNT;  // Default sample count per loop for core-to-core mode
-  constexpr size_t CORE_TO_CORE_WARMUP_ROUND_TRIPS = 20 * 1000;  // Warmup handoff count before timed measurements
-  constexpr size_t CORE_TO_CORE_HEADLINE_ROUND_TRIPS = 1 * 1000 * 1000;  // Round-trips used for headline latency metric
-  constexpr size_t CORE_TO_CORE_SAMPLE_WINDOW_ROUND_TRIPS = 2 * 1000;  // Round-trips per sampled measurement window
+  constexpr size_t CORE_TO_CORE_WARMUP_ROUND_TRIPS = 20 * 1000;  // Minimum warmup handoff count
+  constexpr size_t CORE_TO_CORE_HEADLINE_ROUND_TRIPS = 1 * 1000 * 1000;  // Minimum headline handoff count
+  constexpr size_t CORE_TO_CORE_SAMPLE_WINDOW_ROUND_TRIPS = 2 * 1000;  // Minimum handoffs per sample window
+  constexpr size_t CORE_TO_CORE_CALIBRATION_WARMUP_ROUND_TRIPS = 1 * 1000 * 1000;  // Excluded pilot-pair warmup
+  constexpr size_t CORE_TO_CORE_CALIBRATION_ROUND_TRIPS = 100 * 1000;  // Excluded pilot handoff count
+  constexpr size_t CORE_TO_CORE_MAX_ROUND_TRIPS = 100 * 1000 * 1000;  // Calibration arithmetic guardrail
+  constexpr double CORE_TO_CORE_WARMUP_TARGET_SECONDS = 0.025;  // Per-pair steady-state warmup target
+  constexpr double CORE_TO_CORE_HEADLINE_TARGET_SECONDS = 0.250;  // Continuous headline target
+  constexpr double CORE_TO_CORE_HEADLINE_MIN_SECONDS = 0.100;  // Intended headline duration lower bound
+  constexpr double CORE_TO_CORE_HEADLINE_MAX_SECONDS = 0.300;  // Intended headline duration upper bound
+  constexpr double CORE_TO_CORE_SAMPLE_TARGET_SECONDS = 0.001;  // Comparable sampled-window duration target
+  constexpr double CORE_TO_CORE_CV_WARNING_PCT = 7.5;  // Repeatability diagnostic threshold
+  constexpr int CORE_TO_CORE_JSON_SCHEMA_VERSION = 2;
+  constexpr const char* CORE_TO_CORE_METHODOLOGY_VERSION =
+      "core2core-v2-calibrated-balanced-auditable";
   constexpr int CORE_TO_CORE_READY_THREADS_TARGET = 2;  // Required thread count before benchmark start signal
   constexpr uint32_t CORE_TO_CORE_INITIATOR_TURN_VALUE = 0;  // Turn token value for initiator thread ownership
   constexpr uint32_t CORE_TO_CORE_RESPONDER_TURN_VALUE = 1;  // Turn token value for responder thread ownership
