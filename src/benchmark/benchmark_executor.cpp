@@ -632,6 +632,7 @@ void populate_parallel_execution_metadata(
   measurement.qos_successful_workers =
       execution_metadata.qos_successful_workers;
   measurement.qos_failed_workers = execution_metadata.qos_failed_workers;
+  measurement.created_workers = execution_metadata.created_workers;
   measurement.worker_startup_failed =
       execution_metadata.worker_startup_failed;
   if (execution_metadata.worker_startup_failed) {
@@ -1393,6 +1394,7 @@ BenchmarkResults run_single_benchmark_loop(const BenchmarkBuffers& buffers,
     measurement.qos_successful_workers = config.main_thread_qos_applied ? 1 : 0;
     measurement.qos_failed_workers =
         config.main_thread_qos_requested && !config.main_thread_qos_applied ? 1 : 0;
+    measurement.created_workers = 1;
     measurement.qos_outcome = config.main_thread_qos_applied
                                   ? "main-thread-qos-applied"
                                   : "main-thread-qos-failed";

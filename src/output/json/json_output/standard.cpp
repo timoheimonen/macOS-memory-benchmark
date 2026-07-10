@@ -48,6 +48,7 @@ nlohmann::json measurement_json(const BenchmarkMeasurement& measurement,
   json["exact_payload_bytes"] = measurement.exact_payload_bytes;
   json["requested_threads"] = measurement.requested_threads;
   json["effective_threads"] = measurement.effective_threads;
+  json["created_workers"] = measurement.created_workers;
   json["qos_outcome"] = measurement.qos_outcome;
   json["qos_successful_workers"] = measurement.qos_successful_workers;
   json["qos_failed_workers"] = measurement.qos_failed_workers;
