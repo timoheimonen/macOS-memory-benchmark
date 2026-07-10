@@ -34,6 +34,7 @@
 
 // Forward declaration
 struct HighResTimer;
+struct ParallelExecutionMetadata;
 
 // --- Benchmark Test Functions ---
 /**
@@ -71,7 +72,8 @@ double run_read_test_with_plan(void* buffer,
                                const BenchmarkWorkPlan& plan,
                                uint64_t& checksum,
                                HighResTimer& timer,
-                               uint64_t (*read_func)(const void*, size_t));
+                               uint64_t (*read_func)(const void*, size_t),
+                               ParallelExecutionMetadata* execution_metadata = nullptr);
 
 /**
  * @brief Run write benchmark test
@@ -104,7 +106,8 @@ double run_write_test_with_kernel(void* buffer,
 double run_write_test_with_plan(void* buffer,
                                 const BenchmarkWorkPlan& plan,
                                 HighResTimer& timer,
-                                void (*write_func)(void*, size_t));
+                                void (*write_func)(void*, size_t),
+                                ParallelExecutionMetadata* execution_metadata = nullptr);
 
 /**
  * @brief Run copy benchmark test
@@ -141,7 +144,8 @@ double run_copy_test_with_plan(void* dst,
                                void* src,
                                const BenchmarkWorkPlan& plan,
                                HighResTimer& timer,
-                               void (*copy_func)(void*, const void*, size_t));
+                               void (*copy_func)(void*, const void*, size_t),
+                               ParallelExecutionMetadata* execution_metadata = nullptr);
 
 /**
  * @brief Run latency benchmark test

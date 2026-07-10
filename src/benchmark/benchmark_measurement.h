@@ -98,6 +98,9 @@ struct BenchmarkMeasurement {
   std::string target;
   std::string operation;
   std::string qos_outcome = "best-effort-request-not-observed";
+  size_t qos_successful_workers = 0;
+  size_t qos_failed_workers = 0;
+  bool worker_startup_failed = false;
   size_t calibration_corrections = 0;
   size_t buffer_size_bytes = 0;
   size_t passes = 0;

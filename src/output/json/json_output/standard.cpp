@@ -49,6 +49,9 @@ nlohmann::json measurement_json(const BenchmarkMeasurement& measurement,
   json["requested_threads"] = measurement.requested_threads;
   json["effective_threads"] = measurement.effective_threads;
   json["qos_outcome"] = measurement.qos_outcome;
+  json["qos_successful_workers"] = measurement.qos_successful_workers;
+  json["qos_failed_workers"] = measurement.qos_failed_workers;
+  json["worker_startup_failed"] = measurement.worker_startup_failed;
   json["seed"] = std::to_string(measurement.seed);
   json["seed_encoding"] = "uint64-decimal-string";
   json["pilot_elapsed_seconds"] = measurement.pilot_elapsed_seconds;

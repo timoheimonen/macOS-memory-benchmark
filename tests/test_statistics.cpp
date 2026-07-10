@@ -38,6 +38,7 @@ namespace {
 const std::vector<double>& kE = test_statistics_helpers::empty_values();
 using test_statistics_helpers::capture_bw;
 using test_statistics_helpers::capture_lat;
+using test_statistics_helpers::capture_auto_tlb_breakdown;
 
 // ---------------------------------------------------------------------------
 // Parse the first floating-point number that follows the given label string.
@@ -252,4 +253,26 @@ TEST(StatisticsTest, LatencyStddevCorrect) {
 // Median of {80, 100, 120} (odd count, middle element) = 100.0
 TEST(StatisticsTest, LatencyMedianCorrect) {
   EXPECT_NEAR(after(capture_lat({80.0, 100.0, 120.0}), "Median (P50):"), 100.0, 1e-2);
+}
+
+TEST(StatisticsTest, LatencySamplesRemainSeparateFromLoopHeadlineStatistics) {
+  testing::internal::CaptureStdout();
+  print_statistics(
+      2, kE, kE, kE, kE, kE, kE, kE, kE, kE, kE, kE,
+      {10.0, 20.0}, kE, kE, kE, false, kE, kE, kE, kE,
+      {100.0, 200.0}, kE, kE, kE, false, true);
+  const std::string output = testing::internal::GetCapturedStdout();
+
+  EXPECT_NE(output.find("Median (P50): 15.00"), std::string::npos);
+  EXPECT_NE(output.find("Pooled Separate Sample-Window Distribution (2 samples)"),
+            std::string::npos);
+  EXPECT_NE(output.find("Median (P50): 150.00 (from 2 samples)"),
+            std::string::npos);
+}
+
+TEST(StatisticsTest, HeaderReportsRequestedAndMeasuredLoopCountsSeparately) {
+  const std::string output = capture_auto_tlb_breakdown(
+      {10.0, 11.0}, {9.0, 10.0}, {20.0, 21.0}, {11.0, 11.0}, 5);
+  EXPECT_NE(output.find("Statistics Across 2 Measured Loops (5 Requested)"),
+            std::string::npos);
 }

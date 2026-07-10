@@ -39,6 +39,7 @@
 #include "benchmark/benchmark_runner.h" // BenchmarkResults
 #include "benchmark/benchmark_executor.h" // TimingResults
 #include "core/config/constants.h"
+#include "output/console/messages/messages_api.h"
 #include <limits>  // std::numeric_limits
 #include <cmath>   // std::isnan, std::isinf
 
@@ -97,7 +98,7 @@ void set_bandwidth_measurements(size_t buffer_size,
     if (bandwidth <= 0.0 || !std::isfinite(bandwidth) || elapsed_seconds <= 0.0 ||
         !std::isfinite(elapsed_seconds)) {
       set_measurement_unavailable(measurement, BenchmarkMeasurementStatus::Invalid,
-                                  "invalid measured bandwidth or duration");
+                                  Messages::benchmark_reason_invalid_bandwidth_measurement());
       return;
     }
     set_measurement_value(measurement, bandwidth, elapsed_seconds);

@@ -21,6 +21,11 @@ Supported bandwidth targets include:
 Bandwidth results are reported in GB/s. These results are useful for comparing throughput behavior across buffer sizes,
 thread counts, access modes, and system conditions.
 
+When `--iterations` is omitted, each target/operation uses an excluded same-shape pilot and bounded correction to select
+a measured pass count near 150 ms. The exact pass count, finalized worker boundaries, and payload accounting are reused
+across `--count` loops. Explicit `--iterations` remains an exact override. Read/write/copy order and enabled phase order
+rotate across repeated loops. Worker QoS is a best-effort scheduler hint; it is not core pinning.
+
 ## Memory Latency
 
 The tool measures latency using dependent pointer-chase chains. This approach serializes memory accesses so that each
@@ -35,6 +40,17 @@ Latency tests can target:
 - Custom locality windows via `--latency-tlb-locality-kb`
 
 Latency results are reported in nanoseconds per access.
+
+Every standard main/L1/L2/custom headline comes from one continuous pointer chase calibrated near 250 ms and rounded to
+complete chain cycles. Optional sample windows run separately and continue from one window's terminal pointer to the
+next. A resolved `--seed` reproduces chain and schedule metadata across loops, not performance values. When locality is
+not explicit, the standard benchmark reports a paired 16 KiB-locality/global-random comparison and median same-round
+delta. That result combines cache, locality, and translation effects; only `--analyze-tlb` supports controlled
+translation-boundary conclusions.
+
+Standard schema-v2 JSON records completion, nullable measurement state, exact work, calibration, seed, schedule, and
+requested/effective worker metadata. Only measured values enter median/CV/MAD summaries. Output is atomically
+checkpointed after completed loops, and `results_complete` lets consumers reject partial runs.
 
 ## Access Pattern Analysis
 

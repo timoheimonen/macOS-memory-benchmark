@@ -199,6 +199,10 @@ nlohmann::json build_config_json(const BenchmarkConfig& config, const char* mode
         static_cast<size_t>(getpagesize());
     config_json["qos_policy"] =
         "best-effort-scheduler-hint-no-core-pinning";
+    config_json["main_thread_qos"] = {
+        {"requested", config.main_thread_qos_requested},
+        {"applied", config.main_thread_qos_applied},
+        {"code", config.main_thread_qos_code}};
     config_json["thread_selection_policy"] =
         config.user_specified_threads ? "explicit-request-capped-to-detected-cores"
                                       : "detected-core-count-default";

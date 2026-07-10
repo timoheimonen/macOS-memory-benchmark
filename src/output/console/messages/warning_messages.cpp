@@ -65,6 +65,14 @@ std::string warning_qos_failed_worker_thread(int code) {
   return oss.str();
 }
 
+std::string warning_qos_failed_benchmark_worker(const std::string& worker_name,
+                                                int code) {
+  std::ostringstream oss;
+  oss << "Failed to set QoS class for " << worker_name
+      << " benchmark worker thread (code: " << code << ")";
+  return oss.str();
+}
+
 std::string warning_madvise_random_failed(const std::string& buffer_name, const std::string& error_msg) {
   std::ostringstream oss;
   oss << "madvise(MADV_RANDOM) failed for " << buffer_name

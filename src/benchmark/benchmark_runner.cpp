@@ -153,7 +153,7 @@ int run_all_benchmarks(const BenchmarkBuffers& buffers, BenchmarkConfig& config,
                            : BenchmarkRunStatus::Partial;
         stats.status_reason = stats.status == BenchmarkRunStatus::Complete
                                   ? ""
-                                  : "benchmark loops remain";
+                                  : Messages::benchmark_reason_loops_remain();
       } else {
         stats.status = BenchmarkRunStatus::Partial;
         stats.status_reason = loop_results.status_reason;
@@ -161,7 +161,7 @@ int run_all_benchmarks(const BenchmarkBuffers& buffers, BenchmarkConfig& config,
 
       if (checkpoint() != EXIT_SUCCESS) {
         stats.status = BenchmarkRunStatus::Failed;
-        stats.status_reason = "failed to checkpoint standard benchmark JSON";
+        stats.status_reason = Messages::benchmark_reason_checkpoint_failed();
         return EXIT_FAILURE;
       }
       if (loop_results.status == BenchmarkRunStatus::Interrupted) {

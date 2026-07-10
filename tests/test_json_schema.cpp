@@ -176,6 +176,8 @@ TEST(JsonSchemaTest, BenchmarkSchemaV2IncludesCompletionAndNullableMeasurements)
   loop.main_read_bandwidth.exact_payload_bytes = 65536;
   loop.main_read_bandwidth.requested_threads = 4;
   loop.main_read_bandwidth.effective_threads = 4;
+  loop.main_read_bandwidth.qos_outcome = "applied-to-all-workers";
+  loop.main_read_bandwidth.qos_successful_workers = 4;
   set_measurement_unavailable(loop.main_write_bandwidth,
                               BenchmarkMeasurementStatus::Interrupted,
                               "interrupted during measured operation");
@@ -205,6 +207,10 @@ TEST(JsonSchemaTest, BenchmarkSchemaV2IncludesCompletionAndNullableMeasurements)
   EXPECT_DOUBLE_EQ(measurements["main_read_bandwidth"]["value"].get<double>(),
                    12.5);
   EXPECT_EQ(measurements["main_read_bandwidth"]["passes"], 16u);
+  EXPECT_EQ(measurements["main_read_bandwidth"]["qos_outcome"],
+            "applied-to-all-workers");
+  EXPECT_EQ(measurements["main_read_bandwidth"]["qos_successful_workers"],
+            4u);
   EXPECT_EQ(measurements["main_write_bandwidth"]["status"], "interrupted");
   EXPECT_TRUE(measurements["main_write_bandwidth"]["value"].is_null());
   EXPECT_EQ(output["main_memory"]["bandwidth"]["read_gb_s"]["value"], 12.5);

@@ -18,6 +18,7 @@
 
 #include "asm/asm_functions.h"
 #include "benchmark/benchmark_tests.h"
+#include "benchmark/parallel_test_framework.h"
 #include "benchmark/benchmark_work_plan.h"
 #include "core/memory/memory_utils.h"
 #include "core/timing/timer.h"
@@ -240,13 +241,19 @@ TEST(StandardKernelIntegrationTest, ExecutorConsumesPlannerAccountingExactly) {
   fake_read_bytes.store(0, std::memory_order_relaxed);
   fake_read_calls.store(0, std::memory_order_relaxed);
   uint64_t checksum = 0;
+  ParallelExecutionMetadata read_metadata;
   EXPECT_GT(run_read_test_with_plan(source.data(), read_plan, checksum, *timer,
-                                    fake_read_kernel),
+                                    fake_read_kernel, &read_metadata),
             0.0);
   EXPECT_EQ(fake_read_bytes.load(std::memory_order_relaxed),
             read_plan.total_payload_bytes);
   EXPECT_EQ(fake_read_calls.load(std::memory_order_relaxed) / kPasses,
             static_cast<size_t>(read_plan.effective_threads));
+  EXPECT_EQ(read_metadata.created_workers, read_plan.effective_threads);
+  EXPECT_EQ(read_metadata.qos_successful_workers +
+                read_metadata.qos_failed_workers,
+            static_cast<size_t>(read_plan.effective_threads));
+  EXPECT_FALSE(read_metadata.worker_startup_failed);
 
   BenchmarkWorkPlan copy_plan = build_benchmark_bandwidth_work_plan(
       kSize, 4, kPasses, BenchmarkTarget::MainMemory,
@@ -254,11 +261,13 @@ TEST(StandardKernelIntegrationTest, ExecutorConsumesPlannerAccountingExactly) {
   ASSERT_EQ(copy_plan.status, BenchmarkMeasurementStatus::Measured);
   fake_copy_bytes.store(0, std::memory_order_relaxed);
   fake_copy_calls.store(0, std::memory_order_relaxed);
+  ParallelExecutionMetadata copy_metadata;
   EXPECT_GT(run_copy_test_with_plan(destination.data(), source.data(), copy_plan,
-                                    *timer, fake_copy_kernel),
+                                    *timer, fake_copy_kernel, &copy_metadata),
             0.0);
   EXPECT_EQ(fake_copy_bytes.load(std::memory_order_relaxed) * 2,
             copy_plan.total_payload_bytes);
   EXPECT_EQ(fake_copy_calls.load(std::memory_order_relaxed) / kPasses,
             static_cast<size_t>(copy_plan.effective_threads));
+  EXPECT_EQ(copy_metadata.created_workers, copy_plan.effective_threads);
 }

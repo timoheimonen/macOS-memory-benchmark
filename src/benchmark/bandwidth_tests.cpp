@@ -145,7 +145,8 @@ double run_read_test_with_plan(void* buffer,
                                const BenchmarkWorkPlan& plan,
                                uint64_t& checksum,
                                HighResTimer& timer,
-                               uint64_t (*read_func)(const void*, size_t)) {
+                               uint64_t (*read_func)(const void*, size_t),
+                               ParallelExecutionMetadata* execution_metadata) {
   if (plan.status != BenchmarkMeasurementStatus::Measured ||
       plan.operation != BenchmarkOperation::Read || plan.passes == 0 ||
       plan.passes > static_cast<size_t>(std::numeric_limits<int>::max())) {
@@ -164,7 +165,7 @@ double run_read_test_with_plan(void* buffer,
         }
         worker_checksums[worker_index] = local_checksum;
       },
-      "read");
+      "read", execution_metadata);
 
   checksum = 0;
   for (const uint64_t worker_checksum : worker_checksums) {
@@ -217,7 +218,8 @@ double run_write_test_with_kernel(void* buffer,
 double run_write_test_with_plan(void* buffer,
                                 const BenchmarkWorkPlan& plan,
                                 HighResTimer& timer,
-                                void (*write_func)(void*, size_t)) {
+                                void (*write_func)(void*, size_t),
+                                ParallelExecutionMetadata* execution_metadata) {
   if (plan.status != BenchmarkMeasurementStatus::Measured ||
       plan.operation != BenchmarkOperation::Write || plan.passes == 0 ||
       plan.passes > static_cast<size_t>(std::numeric_limits<int>::max())) {
@@ -232,7 +234,7 @@ double run_write_test_with_plan(void* buffer,
           write_func(chunk_start, chunk_size);
         }
       },
-      "write");
+      "write", execution_metadata);
 }
 
 /**
@@ -287,7 +289,8 @@ double run_copy_test_with_plan(void* dst,
                                void* src,
                                const BenchmarkWorkPlan& plan,
                                HighResTimer& timer,
-                               void (*copy_func)(void*, const void*, size_t)) {
+                               void (*copy_func)(void*, const void*, size_t),
+                               ParallelExecutionMetadata* execution_metadata) {
   if (plan.status != BenchmarkMeasurementStatus::Measured ||
       plan.operation != BenchmarkOperation::Copy || plan.passes == 0 ||
       plan.passes > static_cast<size_t>(std::numeric_limits<int>::max())) {
@@ -302,5 +305,5 @@ double run_copy_test_with_plan(void* dst,
           copy_func(dst_chunk, src_chunk, chunk_size);
         }
       },
-      "copy");
+      "copy", execution_metadata);
 }

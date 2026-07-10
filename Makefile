@@ -129,7 +129,7 @@ TEST_LIB_SRCS = $(filter-out main.cpp, $(ALL_CPP_SRCS))
 TEST_LIB_OBJS = $(filter-out main.o, $(OBJ_FILES))
 
 # Rule for compiling test files (must come before generic %.o rule)
-$(TEST_DIR)/%.o: $(TEST_DIR)/%.cpp
+$(TEST_DIR)/%.o: $(TEST_DIR)/%.cpp $(HEADERS)
 	@echo "Compiling test $< -> $@..."
 	$(CXX) $(TEST_CXXFLAGS) -c $< -o $@
 

@@ -460,7 +460,7 @@ TEST(BenchmarkRunnerTest, ResultsValidationIntegration) {
   EXPECT_FALSE(std::isinf(stats.all_page_walk_penalty_ns[0]));
 }
 
-TEST(BenchmarkRunnerTest, StatisticsPrintsAutoTlbBreakdownMetrics) {
+TEST(BenchmarkRunnerTest, StatisticsPrintsPairedLocalityMetrics) {
   const std::vector<double> all_main_mem_latency = {15.0, 16.0};
   const std::vector<double> all_tlb_hit_latency = {14.0, 15.0};
   const std::vector<double> all_tlb_miss_latency = {90.0, 92.0};
@@ -469,9 +469,10 @@ TEST(BenchmarkRunnerTest, StatisticsPrintsAutoTlbBreakdownMetrics) {
   const std::string output = test_statistics_helpers::capture_auto_tlb_breakdown(
       all_main_mem_latency, all_tlb_hit_latency, all_tlb_miss_latency, all_page_walk_penalty);
 
-  EXPECT_NE(output.find("TLB Hit Latency (ns):"), std::string::npos);
-  EXPECT_NE(output.find("TLB Miss Latency (ns):"), std::string::npos);
-  EXPECT_NE(output.find("Estimated Page-Walk Penalty (ns):"), std::string::npos);
+  EXPECT_NE(output.find("16 KiB Locality Latency (ns):"), std::string::npos);
+  EXPECT_NE(output.find("Global-Random Latency (ns):"), std::string::npos);
+  EXPECT_NE(output.find("Locality Latency Delta, Global - 16 KiB (ns):"),
+            std::string::npos);
 }
 
 TEST(BenchmarkRunnerTest, MainMemoryJsonIncludesAutoTlbBreakdownWhenAvailable) {

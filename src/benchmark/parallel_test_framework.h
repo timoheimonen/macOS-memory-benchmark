@@ -47,6 +47,8 @@
 #include <limits>                // For std::numeric_limits
 #include <mutex>                 // For std::mutex
 #include <thread>                // For std::thread
+#include <string>                // For std::string
+#include <system_error>          // For std::system_error
 #include <utility>               // For std::move
 #include <vector>                // For std::vector
 
@@ -56,8 +58,17 @@
 
 #include "utils/benchmark.h"  // Include benchmark definitions (assembly funcs, HighResTimer)
 #include "core/memory/memory_utils.h"  // For align_ptr_to_cache_line
+#include "output/console/messages/messages_api.h"
 
 // --- Generic Parallel Test Framework ---
+
+struct ParallelExecutionMetadata {
+  int requested_workers = 0;
+  int created_workers = 0;
+  size_t qos_successful_workers = 0;
+  size_t qos_failed_workers = 0;
+  bool worker_startup_failed = false;
+};
 
 /**
  * @brief Build contiguous per-thread ranges with aligned internal boundaries.
@@ -130,7 +141,12 @@ inline std::vector<size_t> build_aligned_chunk_boundaries(void* alignment_base, 
 template <typename MakeWorkFunction>
 double run_parallel_test_common(void* alignment_base, size_t size, int iterations, int num_threads, HighResTimer& timer,
                                 const char* thread_name, MakeWorkFunction make_work,
-                                const std::vector<size_t>* planned_boundaries = nullptr) {
+                                const std::vector<size_t>* planned_boundaries = nullptr,
+                                ParallelExecutionMetadata* execution_metadata = nullptr) {
+  if (execution_metadata != nullptr) {
+    *execution_metadata = {};
+    execution_metadata->requested_workers = num_threads;
+  }
   // Early validation: return 0.0 if no work to do or invalid thread count.
   // This avoids unnecessary setup and prevents division-by-zero in partitioning.
   if (size == 0 || num_threads <= 0) {
@@ -147,6 +163,8 @@ double run_parallel_test_common(void* alignment_base, size_t size, int iteration
   bool measurement_complete = false;
   double measured_duration = 0.0;
   std::atomic<size_t> remaining_workers{0};
+  std::atomic<size_t> qos_successful_workers{0};
+  std::atomic<size_t> qos_failed_workers{0};
 
   // Use a finalized external plan when supplied; otherwise build the normal
   // contiguous chunk boundaries before worker creation and timing.
@@ -164,54 +182,70 @@ double run_parallel_test_common(void* alignment_base, size_t size, int iteration
     }
   }
 
+  bool worker_startup_failed = false;
   // Launch threads once; each handles its chunk for all iterations.
-  for (size_t t = 0; t < static_cast<size_t>(num_threads); ++t) {
-    size_t chunk_start_offset = boundaries[t];
-    size_t chunk_end_offset = boundaries[t + 1];
-    if (chunk_end_offset <= chunk_start_offset) {
-      continue;
-    }
-
-    size_t thread_chunk_size = chunk_end_offset - chunk_start_offset;
-    const size_t worker_index = threads.size();
-    auto measured_work =
-        make_work(chunk_start_offset, thread_chunk_size, iterations, worker_index);
-    threads.emplace_back([measured_work = std::move(measured_work), &state_mutex, &state_cv,
-                          &ready_workers, &start_flag, &measurement_complete,
-                          &measured_duration, &remaining_workers, &timer, thread_name]() mutable {
-      // QoS setup is preparation and must complete before the timed start gate.
-      kern_return_t qos_ret = pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
-      if (qos_ret != KERN_SUCCESS) {
-        fprintf(stderr, "Warning: Failed to set QoS class for %s worker thread (code: %d)\n",
-                thread_name, qos_ret);
+  try {
+    for (size_t t = 0; t < static_cast<size_t>(num_threads); ++t) {
+      size_t chunk_start_offset = boundaries[t];
+      size_t chunk_end_offset = boundaries[t + 1];
+      if (chunk_end_offset <= chunk_start_offset) {
+        continue;
       }
 
-      {
-        std::unique_lock<std::mutex> lock(state_mutex);
-        ++ready_workers;
-        state_cv.notify_all();
-        state_cv.wait(lock, [&start_flag] { return start_flag; });
-      }
-
-      measured_work();
-
-      // Complete this worker's memory effects before publishing completion.
-      asm volatile("dsb ish" ::: "memory");
-      if (remaining_workers.fetch_sub(1, std::memory_order_acq_rel) == 1) {
-        const double duration = timer.stop();
-        {
-          std::lock_guard<std::mutex> lock(state_mutex);
-          measured_duration = duration;
-          measurement_complete = true;
+      size_t thread_chunk_size = chunk_end_offset - chunk_start_offset;
+      const size_t worker_index = threads.size();
+      auto measured_work =
+          make_work(chunk_start_offset, thread_chunk_size, iterations, worker_index);
+      threads.emplace_back([measured_work = std::move(measured_work), &state_mutex, &state_cv,
+                            &ready_workers, &start_flag, &measurement_complete,
+                            &measured_duration, &remaining_workers,
+                            &qos_successful_workers, &qos_failed_workers,
+                            &timer, thread_name]() mutable {
+        // QoS setup is preparation and must complete before the timed start gate.
+        kern_return_t qos_ret =
+            pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
+        if (qos_ret != KERN_SUCCESS) {
+          qos_failed_workers.fetch_add(1, std::memory_order_relaxed);
+          std::cerr << Messages::warning_prefix()
+                    << Messages::warning_qos_failed_benchmark_worker(thread_name,
+                                                                     qos_ret)
+                    << std::endl;
+        } else {
+          qos_successful_workers.fetch_add(1, std::memory_order_relaxed);
         }
-        state_cv.notify_one();
-      }
-    });
+
+        {
+          std::unique_lock<std::mutex> lock(state_mutex);
+          ++ready_workers;
+          state_cv.notify_all();
+          state_cv.wait(lock, [&start_flag] { return start_flag; });
+        }
+
+        measured_work();
+
+        // Complete this worker's memory effects before publishing completion.
+        asm volatile("dsb ish" ::: "memory");
+        if (remaining_workers.fetch_sub(1, std::memory_order_acq_rel) == 1) {
+          const double duration = timer.stop();
+          {
+            std::lock_guard<std::mutex> lock(state_mutex);
+            measured_duration = duration;
+            measurement_complete = true;
+          }
+          state_cv.notify_one();
+        }
+      });
+    }
+  } catch (const std::system_error&) {
+    worker_startup_failed = true;
   }
 
   // Check if any threads were created. If all chunks were zero after alignment,
   // no threads were created and we should return 0.0 to avoid misleading timer measurements.
   if (threads.empty()) {
+    if (execution_metadata != nullptr) {
+      execution_metadata->worker_startup_failed = worker_startup_failed;
+    }
     return 0.0;  // No threads created (all chunks were zero after alignment)
   }
 
@@ -229,9 +263,18 @@ double run_parallel_test_common(void* alignment_base, size_t size, int iteration
     state_cv.wait(lock, [&measurement_complete] { return measurement_complete; });
   }
 
+  const int created_workers = static_cast<int>(threads.size());
   // Thread exit and join are deliberately outside the measured interval.
   join_threads(threads);
-  return measured_duration;
+  if (execution_metadata != nullptr) {
+    execution_metadata->created_workers = created_workers;
+    execution_metadata->qos_successful_workers =
+        qos_successful_workers.load(std::memory_order_relaxed);
+    execution_metadata->qos_failed_workers =
+        qos_failed_workers.load(std::memory_order_relaxed);
+    execution_metadata->worker_startup_failed = worker_startup_failed;
+  }
+  return worker_startup_failed ? 0.0 : measured_duration;
 }
 
 /**
@@ -243,7 +286,8 @@ double run_parallel_test_common(void* alignment_base, size_t size, int iteration
 template <typename WorkFunction>
 double run_parallel_test_indexed_with_boundaries(void* buffer, size_t size, int iterations, HighResTimer& timer,
                                                  const std::vector<size_t>& boundaries, WorkFunction work_function,
-                                                 const char* thread_name) {
+                                                 const char* thread_name,
+                                                 ParallelExecutionMetadata* execution_metadata = nullptr) {
   if (boundaries.size() < 2 || boundaries.size() - 1 > static_cast<size_t>(std::numeric_limits<int>::max())) {
     return 0.0;
   }
@@ -256,14 +300,15 @@ double run_parallel_test_indexed_with_boundaries(void* buffer, size_t size, int 
     };
   };
   return run_parallel_test_common(buffer, size, iterations, static_cast<int>(boundaries.size() - 1), timer, thread_name,
-                                  make_work, &boundaries);
+                                  make_work, &boundaries, execution_metadata);
 }
 
 /** @brief Run indexed copy work with finalized worker boundaries. */
 template <typename WorkFunction>
 double run_parallel_test_copy_indexed_with_boundaries(void* dst, void* src, size_t size, int iterations,
                                                       HighResTimer& timer, const std::vector<size_t>& boundaries,
-                                                      WorkFunction work_function, const char* thread_name) {
+                                                      WorkFunction work_function, const char* thread_name,
+                                                      ParallelExecutionMetadata* execution_metadata = nullptr) {
   if (boundaries.size() < 2 || boundaries.size() - 1 > static_cast<size_t>(std::numeric_limits<int>::max())) {
     return 0.0;
   }
@@ -278,7 +323,7 @@ double run_parallel_test_copy_indexed_with_boundaries(void* dst, void* src, size
     };
   };
   return run_parallel_test_common(dst, size, iterations, static_cast<int>(boundaries.size() - 1), timer, thread_name,
-                                  make_work, &boundaries);
+                                  make_work, &boundaries, execution_metadata);
 }
 
 /**

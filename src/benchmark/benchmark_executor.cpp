@@ -43,6 +43,7 @@
  
 #include "benchmark/benchmark_executor.h"
 #include "benchmark/benchmark_work_plan.h"
+#include "benchmark/parallel_test_framework.h"
 #include "core/memory/buffer_manager.h"  // BenchmarkBuffers
 #include "core/config/config.h"           // BenchmarkConfig
 #include "core/memory/memory_manager.h"   // allocate_buffer, allocate_buffer_non_cacheable
@@ -167,7 +168,7 @@ void finalize_loop_results(BenchmarkResults& results,
     if (interrupted && measurement->status == BenchmarkMeasurementStatus::NotRun) {
       set_measurement_unavailable(*measurement,
                                   BenchmarkMeasurementStatus::Interrupted,
-                                  "interrupted before measurement");
+                                  Messages::benchmark_reason_interrupted_before_measurement());
     }
     if (measurement->is_measured()) {
       ++results.completed_measurements;
@@ -176,13 +177,14 @@ void finalize_loop_results(BenchmarkResults& results,
 
   if (interrupted) {
     results.status = BenchmarkRunStatus::Interrupted;
-    results.status_reason = "interrupted by user";
+    results.status_reason = Messages::benchmark_reason_interrupted_by_user();
   } else if (results.completed_measurements == results.planned_measurements) {
     results.status = BenchmarkRunStatus::Complete;
     results.status_reason.clear();
   } else {
     results.status = BenchmarkRunStatus::Partial;
-    results.status_reason = "one or more planned measurements unavailable";
+    results.status_reason =
+        Messages::benchmark_reason_planned_measurements_unavailable();
   }
 }
 
@@ -480,7 +482,7 @@ void run_paired_locality_comparison(void* buffer,
     for (BenchmarkMeasurement* measurement : {&locality, &global, &delta}) {
       set_measurement_unavailable(*measurement,
                                   BenchmarkMeasurementStatus::Invalid,
-                                  "invalid locality-comparison work");
+                                  Messages::benchmark_reason_invalid_locality_work());
     }
     return;
   }
@@ -524,7 +526,7 @@ void run_paired_locality_comparison(void* buffer,
                             : BenchmarkMeasurementStatus::Invalid;
       for (BenchmarkMeasurement* measurement : {&locality, &global, &delta}) {
         set_measurement_unavailable(*measurement, status,
-                                    "paired locality comparison unavailable");
+                                    Messages::benchmark_reason_locality_comparison_unavailable());
       }
       return;
     }
@@ -598,27 +600,51 @@ void warmup_bandwidth_operation(void* src_buffer,
 double execute_bandwidth_plan(void* src_buffer,
                               void* dst_buffer,
                               const BenchmarkWorkPlan& plan,
-                              HighResTimer& timer) {
+                              HighResTimer& timer,
+                              ParallelExecutionMetadata* execution_metadata) {
   const bool cache_target = plan.target != BenchmarkTarget::MainMemory;
   switch (plan.operation) {
     case BenchmarkOperation::Read: {
       uint64_t checksum = 0;
       return run_read_test_with_plan(
           src_buffer, plan, checksum, timer,
-          cache_target ? memory_read_cache_loop_asm : memory_read_loop_asm);
+          cache_target ? memory_read_cache_loop_asm : memory_read_loop_asm,
+          execution_metadata);
     }
     case BenchmarkOperation::Write:
       return run_write_test_with_plan(
           dst_buffer, plan, timer,
-          cache_target ? memory_write_cache_loop_asm : memory_write_loop_asm);
+          cache_target ? memory_write_cache_loop_asm : memory_write_loop_asm,
+          execution_metadata);
     case BenchmarkOperation::Copy:
       return run_copy_test_with_plan(
           dst_buffer, src_buffer, plan, timer,
-          cache_target ? memory_copy_cache_loop_asm : memory_copy_loop_asm);
+          cache_target ? memory_copy_cache_loop_asm : memory_copy_loop_asm,
+          execution_metadata);
     case BenchmarkOperation::Latency:
       return 0.0;
   }
   return 0.0;
+}
+
+void populate_parallel_execution_metadata(
+    BenchmarkMeasurement& measurement,
+    const ParallelExecutionMetadata& execution_metadata) {
+  measurement.qos_successful_workers =
+      execution_metadata.qos_successful_workers;
+  measurement.qos_failed_workers = execution_metadata.qos_failed_workers;
+  measurement.worker_startup_failed =
+      execution_metadata.worker_startup_failed;
+  if (execution_metadata.worker_startup_failed) {
+    measurement.qos_outcome = "worker-startup-failed";
+  } else if (execution_metadata.qos_failed_workers == 0 &&
+             execution_metadata.qos_successful_workers > 0) {
+    measurement.qos_outcome = "applied-to-all-workers";
+  } else if (execution_metadata.qos_successful_workers > 0) {
+    measurement.qos_outcome = "partially-applied";
+  } else {
+    measurement.qos_outcome = "failed-for-all-workers";
+  }
 }
 
 void populate_bandwidth_metadata(BenchmarkMeasurement& measurement,
@@ -671,12 +697,14 @@ void run_calibrated_bandwidth_measurement(
 
     if (!explicit_iterations) {
       warmup_bandwidth_operation(src_buffer, dst_buffer, initial_plan);
+      ParallelExecutionMetadata pilot_metadata;
       state.pilot_elapsed_seconds =
-          execute_bandwidth_plan(src_buffer, dst_buffer, initial_plan, timer);
+          execute_bandwidth_plan(src_buffer, dst_buffer, initial_plan, timer,
+                                 &pilot_metadata);
       if (signal_received()) {
         set_measurement_unavailable(measurement,
                                     BenchmarkMeasurementStatus::Interrupted,
-                                    "interrupted during calibration pilot");
+                                    Messages::benchmark_reason_interrupted_calibration_pilot());
         return;
       }
       const size_t calibrated_passes = calculate_benchmark_calibrated_count(
@@ -686,7 +714,7 @@ void run_calibrated_bandwidth_measurement(
       if (calibrated_passes == 0) {
         set_measurement_unavailable(measurement,
                                     BenchmarkMeasurementStatus::Invalid,
-                                    "invalid calibration pilot duration");
+                                    Messages::benchmark_reason_invalid_calibration_pilot());
         return;
       }
       state.plan = build_benchmark_bandwidth_work_plan(
@@ -703,16 +731,19 @@ void run_calibrated_bandwidth_measurement(
   }
 
   double elapsed_seconds = 0.0;
+  ParallelExecutionMetadata execution_metadata;
   for (size_t attempt = 0;; ++attempt) {
     show_progress();
     warmup_bandwidth_operation(src_buffer, dst_buffer, state.plan);
-    elapsed_seconds = execute_bandwidth_plan(src_buffer, dst_buffer, state.plan, timer);
+    elapsed_seconds = execute_bandwidth_plan(src_buffer, dst_buffer, state.plan,
+                                             timer, &execution_metadata);
     if (signal_received()) {
       populate_bandwidth_metadata(measurement, state, phase_order_index,
                                   operation_order_index);
+      populate_parallel_execution_metadata(measurement, execution_metadata);
       set_measurement_unavailable(measurement,
                                   BenchmarkMeasurementStatus::Interrupted,
-                                  "interrupted during measured operation");
+                                  Messages::benchmark_reason_interrupted_measured_operation());
       return;
     }
     if (explicit_iterations || !first_execution ||
@@ -740,12 +771,13 @@ void run_calibrated_bandwidth_measurement(
   state.initialized = true;
   populate_bandwidth_metadata(measurement, state, phase_order_index,
                               operation_order_index);
+  populate_parallel_execution_metadata(measurement, execution_metadata);
   measurement.duration_within_target =
       explicit_iterations || duration_in_target_window(elapsed_seconds);
   if (!(elapsed_seconds > 0.0) || !std::isfinite(elapsed_seconds)) {
     set_measurement_unavailable(measurement,
                                 BenchmarkMeasurementStatus::Invalid,
-                                "invalid measured bandwidth duration");
+                                Messages::benchmark_reason_invalid_bandwidth_duration());
     return;
   }
   const double bandwidth_gb_s =
@@ -754,7 +786,7 @@ void run_calibrated_bandwidth_measurement(
   if (!(bandwidth_gb_s > 0.0) || !std::isfinite(bandwidth_gb_s)) {
     set_measurement_unavailable(measurement,
                                 BenchmarkMeasurementStatus::Invalid,
-                                "invalid measured bandwidth value");
+                                Messages::benchmark_reason_invalid_bandwidth_value());
     return;
   }
   set_measurement_value(measurement, bandwidth_gb_s, elapsed_seconds);
@@ -805,7 +837,7 @@ void run_calibrated_latency_measurement(
     if (signal_received()) {
       set_measurement_unavailable(measurement,
                                   BenchmarkMeasurementStatus::Interrupted,
-                                  "interrupted during latency calibration pilot");
+                                  Messages::benchmark_reason_interrupted_latency_pilot());
       return;
     }
     const size_t minimum_accesses =
@@ -844,7 +876,7 @@ void run_calibrated_latency_measurement(
       populate_latency_metadata(measurement, state, phase_order_index);
       set_measurement_unavailable(measurement,
                                   BenchmarkMeasurementStatus::Interrupted,
-                                  "interrupted during latency measurement");
+                                  Messages::benchmark_reason_interrupted_latency_measurement());
       return;
     }
     if (!first_execution || duration_in_target_window(elapsed_seconds) ||
@@ -880,7 +912,7 @@ void run_calibrated_latency_measurement(
       state.plan.access_count == 0) {
     set_measurement_unavailable(measurement,
                                 BenchmarkMeasurementStatus::Invalid,
-                                "invalid latency duration or access count");
+                                Messages::benchmark_reason_invalid_latency_measurement());
     return;
   }
   set_measurement_value(measurement,
@@ -1091,7 +1123,7 @@ void run_single_cache_latency_test(void* buffer, size_t buffer_size, size_t num_
   measurement.access_count = num_accesses;
   if (num_accesses == 0 || lat_time_ns <= 0.0 || !std::isfinite(lat_time_ns)) {
     set_measurement_unavailable(measurement, BenchmarkMeasurementStatus::Invalid,
-                                "invalid cache latency duration or access count");
+                                Messages::benchmark_reason_invalid_cache_latency_measurement());
     return;
   }
 
@@ -1181,7 +1213,7 @@ void run_main_memory_latency_test(const BenchmarkBuffers& buffers, const Benchma
   } else {
     set_measurement_unavailable(results.main_latency,
                                 BenchmarkMeasurementStatus::Invalid,
-                                "invalid main-memory latency duration");
+                                Messages::benchmark_reason_invalid_main_latency_measurement());
   }
 
   if (config.latency_sample_count > 0) {
@@ -1358,6 +1390,12 @@ BenchmarkResults run_single_benchmark_loop(const BenchmarkBuffers& buffers,
         fallback_access_count, target,
         derive_benchmark_seed(config.benchmark_seed, domain), latency_state,
         measurement, test_timer, config.latency_sample_count, phase_position);
+    measurement.qos_successful_workers = config.main_thread_qos_applied ? 1 : 0;
+    measurement.qos_failed_workers =
+        config.main_thread_qos_requested && !config.main_thread_qos_applied ? 1 : 0;
+    measurement.qos_outcome = config.main_thread_qos_applied
+                                  ? "main-thread-qos-applied"
+                                  : "main-thread-qos-failed";
   };
 
   try {
@@ -1373,7 +1411,8 @@ BenchmarkResults run_single_benchmark_loop(const BenchmarkBuffers& buffers,
           if (prepare_main_memory_bandwidth_buffers(config, phase_buffers) !=
               EXIT_SUCCESS) {
             throw std::runtime_error(
-                "Failed to prepare main memory bandwidth buffers");
+                Messages::benchmark_reason_prepare_failed(
+                    "main-memory bandwidth"));
           }
           run_bandwidth_target(
               phase_buffers.src_buffer(), phase_buffers.dst_buffer(),
@@ -1387,7 +1426,8 @@ BenchmarkResults run_single_benchmark_loop(const BenchmarkBuffers& buffers,
           BenchmarkBuffers phase_buffers;
           if (prepare_cache_bandwidth_buffers(config, phase_buffers) !=
               EXIT_SUCCESS) {
-            throw std::runtime_error("Failed to prepare cache bandwidth buffers");
+            throw std::runtime_error(Messages::benchmark_reason_prepare_failed(
+                "cache bandwidth"));
           }
           const int cache_threads = config.user_specified_threads
                                         ? config.num_threads
@@ -1421,7 +1461,8 @@ BenchmarkResults run_single_benchmark_loop(const BenchmarkBuffers& buffers,
           BenchmarkBuffers phase_buffers;
           if (prepare_cache_latency_buffers(config, phase_buffers) !=
               EXIT_SUCCESS) {
-            throw std::runtime_error("Failed to prepare cache latency buffers");
+            throw std::runtime_error(Messages::benchmark_reason_prepare_failed(
+                "cache latency"));
           }
           if (config.use_custom_cache_size) {
             run_latency_target(
@@ -1449,7 +1490,8 @@ BenchmarkResults run_single_benchmark_loop(const BenchmarkBuffers& buffers,
           if (prepare_main_memory_latency_buffer(config, phase_buffers) !=
               EXIT_SUCCESS) {
             throw std::runtime_error(
-                "Failed to prepare main memory latency buffer");
+                Messages::benchmark_reason_prepare_failed(
+                    "main-memory latency"));
           }
           run_latency_target(phase_buffers.lat_buffer(), config.buffer_size,
                              config.lat_num_accesses,

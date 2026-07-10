@@ -25,6 +25,7 @@
 #include <limits>
 
 #include "core/config/constants.h"
+#include "output/console/messages/messages_api.h"
 
 namespace {
 
@@ -120,7 +121,7 @@ BenchmarkWorkPlan build_benchmark_bandwidth_work_plan(
 
   if (buffer_size_bytes == 0 || requested_threads <= 0 || passes == 0 ||
       operation == BenchmarkOperation::Latency) {
-    plan.status_reason = "invalid bandwidth work-plan parameters";
+    plan.status_reason = Messages::benchmark_reason_invalid_bandwidth_plan();
     return plan;
   }
 
@@ -136,7 +137,7 @@ BenchmarkWorkPlan build_benchmark_bandwidth_work_plan(
     }
   }
   if (!populated) {
-    plan.status_reason = "no valid aligned worker partition";
+    plan.status_reason = Messages::benchmark_reason_no_worker_partition();
     return plan;
   }
 
@@ -145,12 +146,12 @@ BenchmarkWorkPlan build_benchmark_bandwidth_work_plan(
     if (!checked_multiply(plan.payload_bytes_per_pass,
                           Constants::COPY_OPERATION_MULTIPLIER,
                           plan.payload_bytes_per_pass)) {
-      plan.status_reason = "copy payload overflow";
+      plan.status_reason = Messages::benchmark_reason_copy_payload_overflow();
       return plan;
     }
   }
   if (!set_benchmark_work_plan_passes(plan, passes)) {
-    plan.status_reason = "total payload overflow or pass limit";
+    plan.status_reason = Messages::benchmark_reason_total_payload_overflow();
     return plan;
   }
   plan.status = BenchmarkMeasurementStatus::Measured;
@@ -184,13 +185,13 @@ BenchmarkLatencyWorkPlan build_benchmark_latency_work_plan(
 
   if (buffer_size_bytes == 0 || stride_bytes == 0 || minimum_complete_cycles == 0 ||
       maximum_access_count == 0) {
-    plan.status_reason = "invalid latency work-plan parameters";
+    plan.status_reason = Messages::benchmark_reason_invalid_latency_plan();
     return plan;
   }
   plan.chain_node_count = buffer_size_bytes / stride_bytes;
   if (plan.chain_node_count < 2) {
     plan.status = BenchmarkMeasurementStatus::Skipped;
-    plan.status_reason = "latency chain requires at least two nodes";
+    plan.status_reason = Messages::benchmark_reason_latency_chain_too_short();
     return plan;
   }
 
@@ -198,13 +199,15 @@ BenchmarkLatencyWorkPlan build_benchmark_latency_work_plan(
   if (!checked_multiply(plan.chain_node_count, minimum_complete_cycles,
                         minimum_accesses) ||
       minimum_accesses > maximum_access_count) {
-    plan.status_reason = "minimum complete-cycle access count exceeds limit";
+    plan.status_reason =
+        Messages::benchmark_reason_minimum_cycles_exceed_limit();
     return plan;
   }
   const size_t requested = std::max(desired_access_count, minimum_accesses);
   const size_t rounded = round_up_to_quantum(requested, plan.chain_node_count);
   if (rounded == 0 || rounded > maximum_access_count) {
-    plan.status_reason = "rounded complete-cycle access count exceeds limit";
+    plan.status_reason =
+        Messages::benchmark_reason_rounded_accesses_exceed_limit();
     return plan;
   }
   plan.access_count = rounded;

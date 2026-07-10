@@ -31,8 +31,16 @@ namespace Messages {
 
 // --- Statistics Messages ---
 std::string statistics_header(int loop_count) {
+  return statistics_header(loop_count, static_cast<size_t>(loop_count));
+}
+
+std::string statistics_header(int requested_loop_count, size_t measured_loop_count) {
   std::ostringstream oss;
-  oss << "\n--- Statistics Across " << loop_count << " Loops ---";
+  oss << "\n--- Statistics Across " << measured_loop_count << " Measured Loops";
+  if (measured_loop_count != static_cast<size_t>(requested_loop_count)) {
+    oss << " (" << requested_loop_count << " Requested)";
+  }
+  oss << " ---";
   return oss.str();
 }
 
@@ -144,6 +152,13 @@ std::string statistics_median_p50_from_samples(double value, size_t sample_count
   std::ostringstream oss;
   oss << std::fixed << std::setprecision(precision);
   oss << "    Median (P50): " << value << " (from " << sample_count << " samples)";
+  return oss.str();
+}
+
+std::string statistics_pooled_sample_distribution(size_t sample_count) {
+  std::ostringstream oss;
+  oss << "    Pooled Separate Sample-Window Distribution (" << sample_count
+      << " samples):";
   return oss.str();
 }
 

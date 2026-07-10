@@ -157,6 +157,8 @@ std::string warning_buffer_size_exceeds_limit(unsigned long requested_mb, unsign
 std::string warning_qos_failed(int code);
 std::string warning_stride_not_aligned(size_t stride);
 std::string warning_qos_failed_worker_thread(int code);
+std::string warning_qos_failed_benchmark_worker(const std::string& worker_name,
+                                                int code);
 std::string warning_madvise_random_failed(const std::string& buffer_name, const std::string& error_msg);
 std::string warning_tlb_mlock_failed(int error_code,
                                      const std::string& error_message);
@@ -371,9 +373,37 @@ std::string results_cache_latency_l2_ns_mb(double latency_ns, double buffer_size
 std::string results_measurement_unavailable(const std::string& label,
                                             const std::string& status,
                                             const std::string& reason);
+const std::string& benchmark_reason_interrupted_before_measurement();
+const std::string& benchmark_reason_interrupted_by_user();
+const std::string& benchmark_reason_planned_measurements_unavailable();
+const std::string& benchmark_reason_invalid_locality_work();
+const std::string& benchmark_reason_locality_comparison_unavailable();
+const std::string& benchmark_reason_interrupted_calibration_pilot();
+const std::string& benchmark_reason_invalid_calibration_pilot();
+const std::string& benchmark_reason_interrupted_measured_operation();
+const std::string& benchmark_reason_invalid_bandwidth_duration();
+const std::string& benchmark_reason_invalid_bandwidth_value();
+const std::string& benchmark_reason_interrupted_latency_pilot();
+const std::string& benchmark_reason_interrupted_latency_measurement();
+const std::string& benchmark_reason_invalid_latency_measurement();
+const std::string& benchmark_reason_invalid_cache_latency_measurement();
+const std::string& benchmark_reason_invalid_main_latency_measurement();
+const std::string& benchmark_reason_invalid_bandwidth_measurement();
+const std::string& benchmark_reason_loops_remain();
+const std::string& benchmark_reason_checkpoint_failed();
+std::string benchmark_reason_prepare_failed(const std::string& phase_name);
+const std::string& benchmark_reason_invalid_bandwidth_plan();
+const std::string& benchmark_reason_no_worker_partition();
+const std::string& benchmark_reason_copy_payload_overflow();
+const std::string& benchmark_reason_total_payload_overflow();
+const std::string& benchmark_reason_invalid_latency_plan();
+const std::string& benchmark_reason_latency_chain_too_short();
+const std::string& benchmark_reason_minimum_cycles_exceed_limit();
+const std::string& benchmark_reason_rounded_accesses_exceed_limit();
 
 // --- Statistics Messages ---
 std::string statistics_header(int loop_count);
+std::string statistics_header(int requested_loop_count, size_t measured_loop_count);
 std::string statistics_metric_name(const std::string& metric_name);
 std::string statistics_average(double value, int precision = 3);
 std::string statistics_median_p50(double value, int precision = 3);
@@ -393,6 +423,7 @@ std::string statistics_cache_copy();
 std::string statistics_cache_latency_header();
 std::string statistics_cache_latency_name(const std::string& cache_name);
 std::string statistics_median_p50_from_samples(double value, size_t sample_count, int precision = 2);
+std::string statistics_pooled_sample_distribution(size_t sample_count);
 std::string statistics_main_memory_latency_header();
 std::string statistics_tlb_hit_latency_metric_name();
 std::string statistics_tlb_miss_latency_metric_name();

@@ -723,8 +723,9 @@ TEST_F(MessagesFormattingTest, UsageOptions) {
   EXPECT_NE(msg.find("--tlb-density"), std::string::npos);
   EXPECT_NE(msg.find("default: medium"), std::string::npos);
   EXPECT_NE(msg.find("--analyze-tlb: 16"), std::string::npos);
-  EXPECT_NE(msg.find("automatic 150 ms calibration"), std::string::npos);
-  EXPECT_NE(msg.find("random workload seed for --patterns"), std::string::npos);
+  EXPECT_NE(msg.find("calibrate toward 150 ms"), std::string::npos);
+  EXPECT_NE(msg.find("Reproducible workload/schedule seed for --benchmark and --patterns"),
+            std::string::npos);
   EXPECT_NE(msg.find("--latency-samples"), std::string::npos);
   EXPECT_NE(msg.find("--latency-stride-bytes"), std::string::npos);
   EXPECT_NE(msg.find("--latency-chain-mode"), std::string::npos);
@@ -1282,6 +1283,48 @@ TEST_F(MessagesFormattingTest, WarningBenchmarkHighCv) {
   EXPECT_NE(msg.find("read bandwidth"), std::string::npos);
   EXPECT_NE(msg.find("9.2%"), std::string::npos);
   EXPECT_NE(msg.find("7.5%"), std::string::npos);
+}
+
+TEST_F(MessagesFormattingTest, WarningQosFailedBenchmarkWorker) {
+  const std::string msg =
+      Messages::warning_qos_failed_benchmark_worker("read", 5);
+  EXPECT_NE(msg.find("read benchmark worker"), std::string::npos);
+  EXPECT_NE(msg.find("5"), std::string::npos);
+}
+
+TEST_F(MessagesFormattingTest, BenchmarkStatusReasonsAreCentralized) {
+  const std::vector<std::string> reasons = {
+      Messages::benchmark_reason_interrupted_before_measurement(),
+      Messages::benchmark_reason_interrupted_by_user(),
+      Messages::benchmark_reason_planned_measurements_unavailable(),
+      Messages::benchmark_reason_invalid_locality_work(),
+      Messages::benchmark_reason_locality_comparison_unavailable(),
+      Messages::benchmark_reason_interrupted_calibration_pilot(),
+      Messages::benchmark_reason_invalid_calibration_pilot(),
+      Messages::benchmark_reason_interrupted_measured_operation(),
+      Messages::benchmark_reason_invalid_bandwidth_duration(),
+      Messages::benchmark_reason_invalid_bandwidth_value(),
+      Messages::benchmark_reason_interrupted_latency_pilot(),
+      Messages::benchmark_reason_interrupted_latency_measurement(),
+      Messages::benchmark_reason_invalid_latency_measurement(),
+      Messages::benchmark_reason_invalid_cache_latency_measurement(),
+      Messages::benchmark_reason_invalid_main_latency_measurement(),
+      Messages::benchmark_reason_invalid_bandwidth_measurement(),
+      Messages::benchmark_reason_loops_remain(),
+      Messages::benchmark_reason_checkpoint_failed(),
+      Messages::benchmark_reason_prepare_failed("cache latency"),
+      Messages::benchmark_reason_invalid_bandwidth_plan(),
+      Messages::benchmark_reason_no_worker_partition(),
+      Messages::benchmark_reason_copy_payload_overflow(),
+      Messages::benchmark_reason_total_payload_overflow(),
+      Messages::benchmark_reason_invalid_latency_plan(),
+      Messages::benchmark_reason_latency_chain_too_short(),
+      Messages::benchmark_reason_minimum_cycles_exceed_limit(),
+      Messages::benchmark_reason_rounded_accesses_exceed_limit(),
+  };
+  for (const std::string& reason : reasons) {
+    EXPECT_FALSE(reason.empty());
+  }
 }
 
 TEST_F(MessagesFormattingTest, StatisticsTlbHitLatencyMetricName) {

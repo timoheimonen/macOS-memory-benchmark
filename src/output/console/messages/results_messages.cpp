@@ -322,4 +322,69 @@ std::string results_measurement_unavailable(const std::string& label,
   return oss.str();
 }
 
+#define BENCHMARK_REASON_FUNCTION(name, text) \
+  const std::string& name() {                 \
+    static const std::string message = text;  \
+    return message;                           \
+  }
+
+BENCHMARK_REASON_FUNCTION(benchmark_reason_interrupted_before_measurement,
+                          "interrupted before measurement")
+BENCHMARK_REASON_FUNCTION(benchmark_reason_interrupted_by_user,
+                          "interrupted by user")
+BENCHMARK_REASON_FUNCTION(benchmark_reason_planned_measurements_unavailable,
+                          "one or more planned measurements unavailable")
+BENCHMARK_REASON_FUNCTION(benchmark_reason_invalid_locality_work,
+                          "invalid locality-comparison work")
+BENCHMARK_REASON_FUNCTION(benchmark_reason_locality_comparison_unavailable,
+                          "paired locality comparison unavailable")
+BENCHMARK_REASON_FUNCTION(benchmark_reason_interrupted_calibration_pilot,
+                          "interrupted during calibration pilot")
+BENCHMARK_REASON_FUNCTION(benchmark_reason_invalid_calibration_pilot,
+                          "invalid calibration pilot duration")
+BENCHMARK_REASON_FUNCTION(benchmark_reason_interrupted_measured_operation,
+                          "interrupted during measured operation")
+BENCHMARK_REASON_FUNCTION(benchmark_reason_invalid_bandwidth_duration,
+                          "invalid measured bandwidth duration")
+BENCHMARK_REASON_FUNCTION(benchmark_reason_invalid_bandwidth_value,
+                          "invalid measured bandwidth value")
+BENCHMARK_REASON_FUNCTION(benchmark_reason_interrupted_latency_pilot,
+                          "interrupted during latency calibration pilot")
+BENCHMARK_REASON_FUNCTION(benchmark_reason_interrupted_latency_measurement,
+                          "interrupted during latency measurement")
+BENCHMARK_REASON_FUNCTION(benchmark_reason_invalid_latency_measurement,
+                          "invalid latency duration or access count")
+BENCHMARK_REASON_FUNCTION(benchmark_reason_invalid_cache_latency_measurement,
+                          "invalid cache latency duration or access count")
+BENCHMARK_REASON_FUNCTION(benchmark_reason_invalid_main_latency_measurement,
+                          "invalid main-memory latency duration")
+BENCHMARK_REASON_FUNCTION(benchmark_reason_invalid_bandwidth_measurement,
+                          "invalid measured bandwidth or duration")
+BENCHMARK_REASON_FUNCTION(benchmark_reason_loops_remain,
+                          "benchmark loops remain")
+BENCHMARK_REASON_FUNCTION(benchmark_reason_checkpoint_failed,
+                          "failed to checkpoint standard benchmark JSON")
+BENCHMARK_REASON_FUNCTION(benchmark_reason_invalid_bandwidth_plan,
+                          "invalid bandwidth work-plan parameters")
+BENCHMARK_REASON_FUNCTION(benchmark_reason_no_worker_partition,
+                          "no valid aligned worker partition")
+BENCHMARK_REASON_FUNCTION(benchmark_reason_copy_payload_overflow,
+                          "copy payload overflow")
+BENCHMARK_REASON_FUNCTION(benchmark_reason_total_payload_overflow,
+                          "total payload overflow or pass limit")
+BENCHMARK_REASON_FUNCTION(benchmark_reason_invalid_latency_plan,
+                          "invalid latency work-plan parameters")
+BENCHMARK_REASON_FUNCTION(benchmark_reason_latency_chain_too_short,
+                          "latency chain requires at least two nodes")
+BENCHMARK_REASON_FUNCTION(benchmark_reason_minimum_cycles_exceed_limit,
+                          "minimum complete-cycle access count exceeds limit")
+BENCHMARK_REASON_FUNCTION(benchmark_reason_rounded_accesses_exceed_limit,
+                          "rounded complete-cycle access count exceeds limit")
+
+#undef BENCHMARK_REASON_FUNCTION
+
+std::string benchmark_reason_prepare_failed(const std::string& phase_name) {
+  return "failed to prepare " + phase_name + " buffers";
+}
+
 } // namespace Messages
