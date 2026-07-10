@@ -146,9 +146,9 @@ require a non-zero locality window; standalone TLB analysis rejects explicit `gl
 
 ## Built-in Parameter Sweeps
 
-Sweep mode runs repeated measurements across parameter lists and stores every run in one combined JSON file. This makes
-buffer-size, cache-size, thread-scaling, stride, locality, chain-mode, TLB-density, and core-to-core sample-depth
-experiments reproducible without external shell orchestration.
+Sweep mode runs repeated measurements across parameter lists and stores every attempted run in one combined JSON file.
+This makes buffer-size, cache-size, thread-scaling, stride, locality, chain-mode, TLB-density, and core-to-core
+sample-depth experiments reproducible without external shell orchestration.
 
 Supported sweep targets include:
 
@@ -166,10 +166,12 @@ Supported sweep targets include:
 Multiple `--sweep` options are combined as a Cartesian product. `--sweep-max-runs` caps the generated run count (default
 `16` for `--analyze-tlb`, `256` otherwise), and
 `--output` is required for the combined JSON result. A sweep parameter key may appear only once. Combined sweep JSON is
-atomically checkpointed and exposes status, planned/completed run counts, and conclusion validity. For standard, pattern,
-and TLB sweeps, `completed_runs` is the number of stored `runs` entries; a mode that returns a graceful interruption may
-therefore store an interrupted nested result in that count. Core-to-core sweeps also retain the latest failed or
-interrupted attempt in `runs`, but only nested results with status `complete` contribute to their `completed_runs`.
+atomically checkpointed and exposes status/reason, planned/attempted/completed run counts, and conclusion validity.
+`attempted_runs` always equals the number of stored `runs` entries. An entry increments `completed_runs` only when its
+nested command is genuinely complete: standard and pattern require `status: "complete"` plus `results_complete: true`,
+TLB requires `tlb_analysis.status: "complete"` plus `tlb_analysis.conclusions_valid: true`, and core-to-core requires
+`core_to_core_latency.status: "complete"` plus `measurements_complete: true`. Partial, interrupted, and failed attempts
+remain auditable, stop further attempts, and never make the sweep conclusions valid.
 
 ## Core-to-Core Cache-Line Handoff
 

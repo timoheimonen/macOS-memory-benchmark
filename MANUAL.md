@@ -524,15 +524,20 @@ middle, and trailing items.
 - Prevents accidental very large Cartesian sweeps
 - Every generated configuration is validated before the first run
 - Standard, pattern, and TLB combined JSON is atomically checkpointed after every attempted run and records `status`,
-  `planned_runs`, `attempted_runs`, `completed_runs`, and `conclusions_valid`
+  `status_reason`, `planned_runs`, `attempted_runs`, `completed_runs`, and `conclusions_valid`
 - For standard, pattern, and TLB sweeps, every attempted run is retained with its own `status` and `status_reason`.
   `attempted_runs` counts stored entries, while `completed_runs` counts only mode-specific nested results that are
-  genuinely complete; partial, interrupted, and failed nested results never increment it
+  genuinely complete: standard and pattern require nested `status: "complete"` with `results_complete: true`, while
+  TLB requires nested `tlb_analysis.status: "complete"` with `tlb_analysis.conclusions_valid: true`. Partial,
+  interrupted, and failed nested results never increment it
 - A parameter key may appear only once in one sweep command
 - Core-to-core sweeps also append and checkpoint the latest attempted run when it is interrupted or fails. Each entry
   records `status` and `status_reason`; `attempted_runs` counts those entries, while `completed_runs` counts only nested
   core-to-core results with `status: "complete"` and `measurements_complete: true`. Therefore `runs` can contain more
   entries than `completed_runs`
+- Any partial, interrupted, or failed attempt stops further attempts; a pre-run interruption or checkpoint failure can
+  also stop execution without adding or completing another run. Top-level `conclusions_valid` is true only when
+  top-level `status` is `complete` and `completed_runs == planned_runs`
 
 #### `-h`, `--help`
 
@@ -1505,7 +1510,7 @@ The repository's historical `results/0.53.7/MacMiniM4_benchmark.json` sample rep
 
 Under heavy concurrent load, expect lower throughput and higher variance than this historical sample. It is an empirical
 0.53.7 result, not a guaranteed current-version baseline. Historical pattern files from earlier methodology versions are
-not a schema-2 stability baseline and should not be compared numerically with
+not a stability baseline for current pattern schema 3 and should not be compared numerically with
 `pattern-v2-phase-calibrated-seeded` results without accounting for the methodology change.
 
 ---

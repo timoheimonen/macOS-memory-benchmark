@@ -19,6 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - **Warmups follow measured work plans**: Cache reads use the cache kernel, strided and random warmups consume finalized worker partitions, and partially started warmup thread sets are joined safely on construction failure.
   - **Progress output is cleaned on every coordinator exit**: Standard and pattern success, failure, interruption, hook failure, and typed or unknown exception paths clear the active spinner; redirected subprocess output no longer contains terminal carriage-return control characters.
   - **Incomplete pattern loops cannot contaminate aggregates**: Only Complete loops contribute to pattern vectors, statistics, JSON headlines, and console medians; partial, interrupted, and failed measurements remain serialized as raw evidence. Invalid evidence fails the command even if a low-level executor returned success, and coordinator exception boundaries convert preparation and execution failures into explicit status instead of allowing exceptions to escape.
+  - **Sweep completion documentation matches runtime classification**: Current documentation now distinguishes stored attempts from genuinely complete nested results for every mode and states the exact condition required before sweep conclusions are valid.
 
 ## [0.59.0] - 2026-07-10
 
