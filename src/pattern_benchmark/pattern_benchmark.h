@@ -186,6 +186,7 @@ struct PatternStatisticsData {
   double p99 = 0.0;
   double stddev = 0.0;
   double coefficient_of_variation_pct = 0.0;
+  double median_absolute_deviation = 0.0;
 };
 
 PatternMeasurement& get_pattern_measurement(PatternResults& results, PatternKind kind,
@@ -197,8 +198,39 @@ void set_pattern_measurement(PatternResults& results, PatternKind kind,
                              PatternOperation operation,
                              PatternMeasurement measurement);
 PatternStatisticsData calculate_pattern_statistics(const std::vector<double>& values);
+
+/**
+ * @brief Clear pattern-loop evidence and aggregates, reserving optional loop capacity.
+ * @param stats Statistics object whose prior contents are discarded.
+ * @param expected_loop_count Expected number of loop results; zero disables reservation.
+ */
+void initialize_pattern_statistics(PatternStatistics& stats,
+                                   size_t expected_loop_count = 0);
+
+/**
+ * @brief Collect one completed loop without executing benchmark kernels.
+ * @param stats Destination for exact loop evidence and measured-only aggregates.
+ * @param loop_result Status-bearing result for one loop.
+ *
+ * Only measurements with status `Measured` and a numeric value enter aggregate
+ * populations. The complete loop result, including unavailable statuses and
+ * reasons, is retained verbatim in `PatternStatistics::loop_results`.
+ */
+void collect_pattern_loop_result(PatternStatistics& stats,
+                                 PatternResults loop_result);
 std::array<PatternKind, static_cast<size_t>(PatternKind::Count)>
 build_pattern_execution_order(size_t loop_index);
+
+/** @brief Validate a strided pattern's basic buffer bounds before planning. */
+bool validate_stride(size_t stride, size_t buffer_size);
+
+/**
+ * @brief Validate every random-access offset for alignment and complete access bounds.
+ * @param indices Byte offsets relative to the benchmark buffer.
+ * @param buffer_size Available buffer bytes.
+ * @return true only when every access is aligned and fully contained.
+ */
+bool validate_random_indices(const std::vector<size_t>& indices, size_t buffer_size);
 
 /**
  * @brief Run pattern benchmarks for various memory access patterns

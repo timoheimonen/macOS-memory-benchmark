@@ -171,15 +171,9 @@ const std::string& error_analyze_tlb_must_be_used_alone() {
   return msg;
 }
 
-const std::string& error_seed_requires_patterns() {
+const std::string& error_seed_requires_supported_mode() {
   static const std::string msg =
-      "--seed is supported only with --patterns or --analyze-tlb";
-  return msg;
-}
-
-const std::string& error_seed_requires_benchmark_or_patterns() {
-  static const std::string msg =
-      "--seed requires --benchmark or --patterns (or use it with --analyze-tlb)";
+      "--seed requires --benchmark, --patterns, or --analyze-tlb";
   return msg;
 }
 
@@ -251,14 +245,6 @@ std::string error_benchmark_loop(int loop, const std::string& error) {
   return oss.str();
 }
 
-std::string error_json_parse_failed(const std::string& error_details) {
-  return "JSON parsing failed: " + error_details;
-}
-
-std::string error_json_file_read_failed(const std::string& file_path, const std::string& error_details) {
-  return "Failed to read JSON file \"" + file_path + "\": " + error_details;
-}
-
 std::string error_file_write_failed(const std::string& file_path, const std::string& error_details) {
   return "Failed to write file \"" + file_path + "\": " + error_details;
 }
@@ -301,10 +287,6 @@ std::string error_buffer_too_small_strided(size_t min_bytes) {
   std::ostringstream oss;
   oss << "Buffer too small for strided access (minimum " << min_bytes << " bytes)";
   return oss.str();
-}
-
-std::string error_no_iterations_strided() {
-  return "No iterations possible for strided pattern (buffer too small)";
 }
 
 std::string error_buffer_size_zero(const std::string& buffer_name) {
@@ -483,11 +465,6 @@ const std::string& error_cache_size_zero_requires_only_latency() {
 
 const std::string& error_only_latency_requires_latency_target() {
   static const std::string msg = "--only-latency requires at least one target enabled: main memory (--buffer-size > 0) or cache (--cache-size > 0 or omit --cache-size)";
-  return msg;
-}
-
-const std::string& error_only_latency_with_buffersize() {
-  static const std::string msg = "--only-latency cannot be used with --buffer-size (buffer-size is only relevant for bandwidth tests)";
   return msg;
 }
 

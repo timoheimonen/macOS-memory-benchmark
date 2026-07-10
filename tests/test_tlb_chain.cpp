@@ -29,6 +29,8 @@
 
 namespace {
 
+constexpr size_t kTestPageSizeBytes = 16 * 1024;
+
 class PageBuffer {
  public:
   explicit PageBuffer(size_t size_bytes) : size_bytes_(size_bytes) {
@@ -73,10 +75,33 @@ std::vector<size_t> traversal_offsets(void* buffer,
   return offsets;
 }
 
+uintptr_t address_at(void* buffer, size_t offset) {
+  return reinterpret_cast<uintptr_t>(buffer) + offset;
+}
+
+void write_link(void* buffer, size_t current_offset, uintptr_t next_address) {
+  auto* bytes = static_cast<unsigned char*>(buffer);
+  std::memcpy(bytes + current_offset, &next_address, sizeof(next_address));
+}
+
+TlbChainDiagnostics expected_chain(size_t page_size,
+                                   size_t node_count,
+                                   size_t requested_pages,
+                                   TlbChainLayout layout = TlbChainLayout::Spread) {
+  TlbChainDiagnostics expected;
+  expected.layout = layout;
+  expected.traversal_policy =
+      TlbChainTraversalPolicy::RandomPagesRandomOffsets;
+  expected.requested_pages = requested_pages;
+  expected.node_count = node_count;
+  expected.page_size_bytes = page_size;
+  return expected;
+}
+
 }  // namespace
 
 TEST(TlbChainTest, SpreadVisitsExactlyEveryRequestedPage) {
-  const size_t page_size = static_cast<size_t>(getpagesize());
+  constexpr size_t page_size = kTestPageSizeBytes;
   constexpr size_t kRequestedPages = 17;
   PageBuffer buffer(kRequestedPages * page_size);
   ASSERT_NE(buffer.get(), nullptr);
@@ -107,7 +132,7 @@ TEST(TlbChainTest, SpreadVisitsExactlyEveryRequestedPage) {
 }
 
 TEST(TlbChainTest, PackedControlPreservesNodeAndCacheLineCounts) {
-  const size_t page_size = static_cast<size_t>(getpagesize());
+  constexpr size_t page_size = kTestPageSizeBytes;
   constexpr size_t kRequestedPages = 65;
   PageBuffer buffer(kRequestedPages * page_size);
   ASSERT_NE(buffer.get(), nullptr);
@@ -145,7 +170,7 @@ TEST(TlbChainTest, PackedControlPreservesNodeAndCacheLineCounts) {
 }
 
 TEST(TlbChainTest, PackedControlStaysDenseWithPageSizedRequestedStride) {
-  const size_t page_size = static_cast<size_t>(getpagesize());
+  constexpr size_t page_size = kTestPageSizeBytes;
   constexpr size_t kRequestedPages = 32;
   PageBuffer buffer(kRequestedPages * page_size);
   ASSERT_NE(buffer.get(), nullptr);
@@ -168,7 +193,7 @@ TEST(TlbChainTest, PackedControlStaysDenseWithPageSizedRequestedStride) {
 }
 
 TEST(TlbChainTest, SameSeedReproducesTraversalAndDifferentSeedChangesIt) {
-  const size_t page_size = static_cast<size_t>(getpagesize());
+  constexpr size_t page_size = kTestPageSizeBytes;
   constexpr size_t kRequestedPages = 32;
   PageBuffer buffer(kRequestedPages * page_size);
   ASSERT_NE(buffer.get(), nullptr);
@@ -195,7 +220,7 @@ TEST(TlbChainTest, SameSeedReproducesTraversalAndDifferentSeedChangesIt) {
 }
 
 TEST(TlbChainTest, ValidationRejectsPointerOutsideBuffer) {
-  const size_t page_size = static_cast<size_t>(getpagesize());
+  constexpr size_t page_size = kTestPageSizeBytes;
   constexpr size_t kRequestedPages = 8;
   PageBuffer buffer(kRequestedPages * page_size);
   ASSERT_NE(buffer.get(), nullptr);
@@ -221,8 +246,117 @@ TEST(TlbChainTest, ValidationRejectsPointerOutsideBuffer) {
             TlbChainValidationStatus::NodeOutOfBounds);
 }
 
+TEST(TlbChainTest, ValidationReportsInvalidArgumentBeforeTraversal) {
+  constexpr size_t page_size = kTestPageSizeBytes;
+  PageBuffer buffer(page_size);
+  ASSERT_NE(buffer.get(), nullptr);
+  const TlbChainDiagnostics expected = expected_chain(page_size, 1, 1);
+
+  EXPECT_EQ(validate_tlb_chain(nullptr,
+                               buffer.size(),
+                               buffer.get(),
+                               expected),
+            TlbChainValidationStatus::InvalidArgument);
+  EXPECT_EQ(validate_tlb_chain(buffer.get(),
+                               buffer.size(),
+                               nullptr,
+                               expected),
+            TlbChainValidationStatus::InvalidArgument);
+  TlbChainDiagnostics zero_nodes = expected;
+  zero_nodes.node_count = 0;
+  EXPECT_EQ(validate_tlb_chain(buffer.get(),
+                               buffer.size(),
+                               buffer.get(),
+                               zero_nodes),
+            TlbChainValidationStatus::InvalidArgument);
+}
+
+TEST(TlbChainTest, ValidationReportsMisalignedNode) {
+  constexpr size_t page_size = kTestPageSizeBytes;
+  PageBuffer buffer(page_size);
+  ASSERT_NE(buffer.get(), nullptr);
+
+  EXPECT_EQ(validate_tlb_chain(buffer.get(),
+                               buffer.size(),
+                               static_cast<unsigned char*>(buffer.get()) + 1,
+                               expected_chain(page_size, 1, 1)),
+            TlbChainValidationStatus::NodeMisaligned);
+}
+
+TEST(TlbChainTest, ValidationReportsEarlyCycle) {
+  constexpr size_t page_size = kTestPageSizeBytes;
+  PageBuffer buffer(page_size);
+  ASSERT_NE(buffer.get(), nullptr);
+  write_link(buffer.get(), 0, address_at(buffer.get(), 0));
+
+  EXPECT_EQ(validate_tlb_chain(buffer.get(),
+                               buffer.size(),
+                               buffer.get(),
+                               expected_chain(page_size, 3, 1)),
+            TlbChainValidationStatus::EarlyCycle);
+}
+
+TEST(TlbChainTest, ValidationReportsDuplicateNodeAtExpectedCycleLength) {
+  constexpr size_t page_size = kTestPageSizeBytes;
+  PageBuffer buffer(page_size);
+  ASSERT_NE(buffer.get(), nullptr);
+  write_link(buffer.get(), 0, address_at(buffer.get(), 64));
+  write_link(buffer.get(), 64, address_at(buffer.get(), 128));
+  write_link(buffer.get(), 128, address_at(buffer.get(), 64));
+
+  EXPECT_EQ(validate_tlb_chain(buffer.get(),
+                               buffer.size(),
+                               buffer.get(),
+                               expected_chain(page_size, 4, 1)),
+            TlbChainValidationStatus::DuplicateNode);
+}
+
+TEST(TlbChainTest, ValidationReportsChainThatDoesNotReturnToHead) {
+  constexpr size_t page_size = kTestPageSizeBytes;
+  PageBuffer buffer(page_size);
+  ASSERT_NE(buffer.get(), nullptr);
+  write_link(buffer.get(), 0, address_at(buffer.get(), 64));
+  write_link(buffer.get(), 64, address_at(buffer.get(), 128));
+  write_link(buffer.get(), 128, address_at(buffer.get(), 192));
+
+  EXPECT_EQ(validate_tlb_chain(buffer.get(),
+                               buffer.size(),
+                               buffer.get(),
+                               expected_chain(page_size, 3, 1)),
+            TlbChainValidationStatus::DoesNotReturnToHead);
+}
+
+TEST(TlbChainTest, ValidationReportsCacheLineReuse) {
+  constexpr size_t page_size = kTestPageSizeBytes;
+  PageBuffer buffer(page_size);
+  ASSERT_NE(buffer.get(), nullptr);
+  write_link(buffer.get(), 0, address_at(buffer.get(), sizeof(uintptr_t)));
+  write_link(buffer.get(), sizeof(uintptr_t), address_at(buffer.get(), 0));
+
+  EXPECT_EQ(validate_tlb_chain(
+                buffer.get(),
+                buffer.size(),
+                buffer.get(),
+                expected_chain(page_size, 2, 2, TlbChainLayout::Packed)),
+            TlbChainValidationStatus::CacheLineReuse);
+}
+
+TEST(TlbChainTest, ValidationReportsSpreadPageCountMismatch) {
+  constexpr size_t page_size = kTestPageSizeBytes;
+  PageBuffer buffer(2 * page_size);
+  ASSERT_NE(buffer.get(), nullptr);
+  write_link(buffer.get(), 0, address_at(buffer.get(), 64));
+  write_link(buffer.get(), 64, address_at(buffer.get(), 0));
+
+  EXPECT_EQ(validate_tlb_chain(buffer.get(),
+                               buffer.size(),
+                               buffer.get(),
+                               expected_chain(page_size, 2, 2)),
+            TlbChainValidationStatus::PageCountMismatch);
+}
+
 TEST(TlbChainTest, RejectsInvalidStrideAndInsufficientSpreadBuffer) {
-  const size_t page_size = static_cast<size_t>(getpagesize());
+  constexpr size_t page_size = kTestPageSizeBytes;
   PageBuffer buffer(4 * page_size);
   ASSERT_NE(buffer.get(), nullptr);
 
@@ -259,7 +393,7 @@ TEST(TlbChainTest, RejectsInvalidStrideAndInsufficientSpreadBuffer) {
 }
 
 TEST(TlbChainTest, AcceptsAlignedStrideThatDoesNotDividePage) {
-  const size_t page_size = static_cast<size_t>(getpagesize());
+  constexpr size_t page_size = kTestPageSizeBytes;
   PageBuffer buffer(8 * page_size);
   ASSERT_NE(buffer.get(), nullptr);
   ASSERT_EQ(136U % alignof(uintptr_t), 0U);
@@ -279,6 +413,39 @@ TEST(TlbChainTest, AcceptsAlignedStrideThatDoesNotDividePage) {
   EXPECT_EQ(result.diagnostics.effective_node_spacing_bytes, 192U);
 }
 
+TEST(TlbChainTest, EveryTraversalPolicyBuildsAValidSpreadChain) {
+  constexpr size_t page_size = kTestPageSizeBytes;
+  constexpr size_t kRequestedPages = 12;
+  PageBuffer buffer(kRequestedPages * page_size);
+  ASSERT_NE(buffer.get(), nullptr);
+
+  for (TlbChainTraversalPolicy policy : {
+           TlbChainTraversalPolicy::RandomPagesRandomOffsets,
+           TlbChainTraversalPolicy::IncreasingPagesSharedOffset,
+           TlbChainTraversalPolicy::IncreasingPagesRandomOffsets,
+       }) {
+    SCOPED_TRACE(tlb_chain_traversal_policy_to_string(policy));
+    const TlbChainBuildResult result = build_tlb_chain(
+        buffer.get(),
+        buffer.size(),
+        kRequestedPages,
+        page_size,
+        256,
+        TlbChainLayout::Spread,
+        policy,
+        1234);
+
+    ASSERT_EQ(result.status, TlbChainBuildStatus::Success);
+    EXPECT_EQ(result.validation_status, TlbChainValidationStatus::Valid);
+    EXPECT_EQ(result.diagnostics.traversal_policy, policy);
+    EXPECT_EQ(validate_tlb_chain(buffer.get(),
+                                 buffer.size(),
+                                 result.chain_head,
+                                 result.diagnostics),
+              TlbChainValidationStatus::Valid);
+  }
+}
+
 TEST(TlbChainTest, LayoutSeedsAreStableAndDistinct) {
   EXPECT_EQ(derive_tlb_chain_layout_seed(42, TlbChainLayout::Spread),
             derive_tlb_chain_layout_seed(42, TlbChainLayout::Spread));
@@ -288,15 +455,17 @@ TEST(TlbChainTest, LayoutSeedsAreStableAndDistinct) {
             derive_tlb_chain_layout_seed(43, TlbChainLayout::Spread));
 }
 
-TEST(TlbChainTest, ReusesScratchCapacityAcrossSerialBuilds) {
-  const size_t page_size = static_cast<size_t>(getpagesize());
-  PageBuffer buffer(64 * page_size);
-  ASSERT_NE(buffer.get(), nullptr);
+TEST(TlbChainTest, ScratchReusePreservesSemanticsWithoutGrowingCapacity) {
+  constexpr size_t page_size = kTestPageSizeBytes;
+  PageBuffer reused_buffer(64 * page_size);
+  PageBuffer fresh_buffer(64 * page_size);
+  ASSERT_NE(reused_buffer.get(), nullptr);
+  ASSERT_NE(fresh_buffer.get(), nullptr);
   TlbChainScratch scratch;
 
   const TlbChainBuildResult first = build_tlb_chain(
-      buffer.get(),
-      buffer.size(),
+      reused_buffer.get(),
+      reused_buffer.size(),
       64,
       page_size,
       256,
@@ -308,23 +477,58 @@ TEST(TlbChainTest, ReusesScratchCapacityAcrossSerialBuilds) {
   const size_t offsets_capacity = scratch.physical_offsets.capacity();
   const size_t traversal_capacity = scratch.traversal.capacity();
   const size_t writes_capacity = scratch.physical_writes.capacity();
-  const size_t visited_buckets = scratch.visited_nodes.bucket_count();
+  const size_t node_buckets = scratch.visited_nodes.bucket_count();
+  const size_t page_buckets = scratch.visited_pages.bucket_count();
+  const size_t cache_line_buckets = scratch.visited_cache_lines.bucket_count();
+  const size_t per_page_buckets = scratch.nodes_per_page.bucket_count();
 
-  const TlbChainBuildResult second = build_tlb_chain(
-      buffer.get(),
-      buffer.size(),
+  const TlbChainBuildResult reused = build_tlb_chain(
+      reused_buffer.get(),
+      reused_buffer.size(),
       16,
       page_size,
       256,
-      TlbChainLayout::Packed,
-      TlbChainTraversalPolicy::RandomPagesRandomOffsets,
+      TlbChainLayout::Spread,
+      TlbChainTraversalPolicy::IncreasingPagesRandomOffsets,
       5678,
       scratch);
-  ASSERT_EQ(second.status, TlbChainBuildStatus::Success);
-  EXPECT_GE(scratch.physical_offsets.capacity(), offsets_capacity);
-  EXPECT_GE(scratch.traversal.capacity(), traversal_capacity);
-  EXPECT_GE(scratch.physical_writes.capacity(), writes_capacity);
-  EXPECT_GE(scratch.visited_nodes.bucket_count(), visited_buckets);
+  ASSERT_EQ(reused.status, TlbChainBuildStatus::Success);
+  const std::vector<size_t> reused_offsets = traversal_offsets(
+      reused_buffer.get(), reused.chain_head, reused.diagnostics.node_count);
+
+  TlbChainScratch fresh_scratch;
+  const TlbChainBuildResult fresh = build_tlb_chain(
+      fresh_buffer.get(),
+      fresh_buffer.size(),
+      16,
+      page_size,
+      256,
+      TlbChainLayout::Spread,
+      TlbChainTraversalPolicy::IncreasingPagesRandomOffsets,
+      5678,
+      fresh_scratch);
+  ASSERT_EQ(fresh.status, TlbChainBuildStatus::Success);
+  const std::vector<size_t> fresh_offsets = traversal_offsets(
+      fresh_buffer.get(), fresh.chain_head, fresh.diagnostics.node_count);
+
+  EXPECT_EQ(reused_offsets, fresh_offsets);
+  EXPECT_EQ(reused.validation_status, fresh.validation_status);
+  EXPECT_EQ(reused.diagnostics.actual_pages, fresh.diagnostics.actual_pages);
+  EXPECT_EQ(reused.diagnostics.node_count, fresh.diagnostics.node_count);
+  EXPECT_EQ(reused.diagnostics.unique_cache_lines,
+            fresh.diagnostics.unique_cache_lines);
+  EXPECT_EQ(reused.diagnostics.max_nodes_per_page,
+            fresh.diagnostics.max_nodes_per_page);
+  EXPECT_EQ(reused.diagnostics.byte_span, fresh.diagnostics.byte_span);
+  EXPECT_EQ(reused.diagnostics.effective_node_spacing_bytes,
+            fresh.diagnostics.effective_node_spacing_bytes);
+  EXPECT_EQ(scratch.physical_offsets.capacity(), offsets_capacity);
+  EXPECT_EQ(scratch.traversal.capacity(), traversal_capacity);
+  EXPECT_EQ(scratch.physical_writes.capacity(), writes_capacity);
+  EXPECT_EQ(scratch.visited_nodes.bucket_count(), node_buckets);
+  EXPECT_EQ(scratch.visited_pages.bucket_count(), page_buckets);
+  EXPECT_EQ(scratch.visited_cache_lines.bucket_count(), cache_line_buckets);
+  EXPECT_EQ(scratch.nodes_per_page.bucket_count(), per_page_buckets);
 }
 
 TEST(TlbChainTest, SpreadAndPackedRunThroughLatencyKernelIntegration) {

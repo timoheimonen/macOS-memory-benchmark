@@ -51,6 +51,7 @@
  */
 struct MmapDeleter {
   size_t allocation_size;  ///< Store the size needed for munmap (must match mmap size)
+  int (*unmap)(void*, size_t) = ::munmap;  ///< Captured release operation.
 
   /**
    * @brief Function call operator invoked by unique_ptr upon destruction
@@ -64,7 +65,7 @@ struct MmapDeleter {
    */
   void operator()(void *ptr) const {
     if (ptr && ptr != MAP_FAILED) {
-      if (munmap(ptr, allocation_size) == -1) {
+      if (unmap(ptr, allocation_size) == -1) {
         // Log error if munmap fails, but don't throw from destructor
         std::cerr << Messages::error_prefix() << Messages::error_munmap_failed() 
                   << ": " << strerror(errno) << std::endl;
@@ -81,6 +82,22 @@ struct MmapDeleter {
  * unmaps the memory when the pointer goes out of scope.
  */
 using MmapPtr = std::unique_ptr<void, MmapDeleter>;
+
+/**
+ * @brief Injectable mmap-family operations for deterministic allocation tests.
+ *
+ * Production uses the defaults below. Tests may install a provider only while
+ * no benchmark worker threads are running; the provider is process-global and
+ * intentionally not a runtime configuration API.
+ */
+struct MemorySystemCalls {
+  void* (*map)(void*, size_t, int, int, int, off_t) = ::mmap;
+  int (*advise)(void*, size_t, int) = ::madvise;
+  int (*unmap)(void*, size_t) = ::munmap;
+};
+
+void set_memory_system_calls_for_testing(const MemorySystemCalls& calls);
+void reset_memory_system_calls_for_testing();
 
 /**
  * @brief Allocate a buffer using mmap with proper error handling and madvise hints

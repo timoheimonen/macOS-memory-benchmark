@@ -58,6 +58,12 @@ struct TlbChainMeasurement {
   TlbChainDiagnostics diagnostics;
 };
 
+enum class TlbScheduleExecutionStatus {
+  Complete = 0,
+  Interrupted,
+  Error,
+};
+
 /** Compact completion metadata for one adaptive measurement pass. */
 struct TlbPassExecutionSummary {
   TlbMeasurementPass pass = TlbMeasurementPass::Base;
@@ -65,6 +71,7 @@ struct TlbPassExecutionSummary {
   size_t rounds_completed = 0;
   bool converged = false;
   bool complete = false;
+  TlbScheduleExecutionStatus status = TlbScheduleExecutionStatus::Complete;
 };
 
 /** Same-round spread/packed control pair. */
@@ -96,12 +103,6 @@ struct TlbMeasurementRecord {
 
 enum class TlbTaskMeasureStatus {
   Success = 0,
-  Error,
-};
-
-enum class TlbScheduleExecutionStatus {
-  Complete = 0,
-  Interrupted,
   Error,
 };
 

@@ -73,6 +73,10 @@ TEST(TlbSweepPlannerTest, RefinementPlanIsAlignedDeduplicatedAndTracksSources) {
       {1, "l1"},
   };
 
+  const std::vector<size_t> raw_points = build_tlb_refinement_points(
+      localities, 1, page_size, 4 * page_size, page_size);
+  EXPECT_EQ(raw_points, (std::vector<size_t>{3 * page_size}));
+
   const std::vector<TlbSweepPoint> points = build_tlb_refinement_plan(
       localities, targets, 256, page_size, page_size, 4 * page_size);
 

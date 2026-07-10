@@ -48,9 +48,11 @@
  * variation, and median absolute deviation.
  *
  * @param values Vector of numerical values to analyze
- * @return JSON object containing all calculated statistics
+ * @return JSON object containing all calculated statistics, or JSON null when
+ *         the input is empty
  *
- * @note Returns empty JSON object if input vector is empty
+ * @note An empty population has no defined statistics; no zero-valued
+ *       measurements are fabricated.
  */
 nlohmann::json calculate_json_statistics(const std::vector<double>& values);
 

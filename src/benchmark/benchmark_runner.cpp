@@ -102,14 +102,20 @@ int run_all_benchmarks(const BenchmarkBuffers& buffers, BenchmarkConfig& config,
 
   // Initialize statistics structure
   initialize_statistics(stats, config);
-  const auto run_start = std::chrono::steady_clock::now();
+  const bool use_injected_elapsed = test_hooks != nullptr && test_hooks->elapsed_seconds;
+  std::optional<std::chrono::steady_clock::time_point> run_start;
+  if (!use_injected_elapsed) {
+    run_start = std::chrono::steady_clock::now();
+  }
 
   auto checkpoint = [&config, &stats, &run_start, test_hooks]() {
     if (config.output_file.empty()) {
       return EXIT_SUCCESS;
     }
-    const double elapsed_seconds = std::chrono::duration<double>(
-        std::chrono::steady_clock::now() - run_start).count();
+    const double elapsed_seconds = test_hooks != nullptr && test_hooks->elapsed_seconds
+                                       ? test_hooks->elapsed_seconds()
+                                       : std::chrono::duration<double>(std::chrono::steady_clock::now() - *run_start)
+                                             .count();
     if (test_hooks != nullptr && test_hooks->checkpoint) {
       return test_hooks->checkpoint(config, stats, elapsed_seconds, false);
     }

@@ -563,16 +563,24 @@ int save_tlb_analysis_to_json(const TlbAnalysisJsonContext& context) {
   };
   tlb_json["pass_summaries"] = nlohmann::ordered_json::array();
   for (const TlbPassExecutionSummary& summary : context.pass_summaries) {
+    const char* status = "complete";
+    const char* completion_reason = summary.converged
+                                        ? "ci-target-reached"
+                                        : "maximum-rounds-reached";
+    if (summary.status == TlbScheduleExecutionStatus::Interrupted) {
+      status = "interrupted";
+      completion_reason = "interrupted";
+    } else if (summary.status == TlbScheduleExecutionStatus::Error) {
+      status = "error";
+      completion_reason = "measurement-error";
+    }
     tlb_json["pass_summaries"].push_back({
         {"pass", tlb_measurement_pass_to_string(summary.pass)},
         {"point_count", summary.point_count},
         {"rounds_completed", summary.rounds_completed},
         {"converged", summary.converged},
-        {"status", summary.complete ? "complete" : "interrupted"},
-        {"completion_reason",
-         summary.converged
-             ? "ci-target-reached"
-             : (summary.complete ? "maximum-rounds-reached" : "interrupted")},
+        {"status", status},
+        {"completion_reason", completion_reason},
     });
   }
   tlb_json["measurement_records"] = nlohmann::ordered_json::array();

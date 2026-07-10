@@ -17,6 +17,7 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <atomic>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -35,12 +36,33 @@
 
 namespace {
 
-std::filesystem::path make_temp_json_path(const char* stem) {
-  const std::filesystem::path tmp_dir = std::filesystem::temp_directory_path();
-  const std::string file_name =
-      std::string(stem) + "_" + std::to_string(::getpid()) + "_" + std::to_string(std::rand()) + ".json";
-  return tmp_dir / file_name;
-}
+class TemporaryJsonFile {
+ public:
+  explicit TemporaryJsonFile(const std::string& stem) {
+    static std::atomic<unsigned long> sequence{0};
+    path_ = std::filesystem::path("/tmp") /
+            ("membenchmark_schema_" + stem + "_" +
+             std::to_string(::getpid()) + "_" +
+             std::to_string(sequence.fetch_add(1)) + ".json");
+    std::error_code ignored;
+    std::filesystem::remove(path_, ignored);
+    std::filesystem::remove(path_.string() + ".tmp", ignored);
+  }
+
+  ~TemporaryJsonFile() {
+    std::error_code ignored;
+    std::filesystem::remove(path_, ignored);
+    std::filesystem::remove(path_.string() + ".tmp", ignored);
+  }
+
+  TemporaryJsonFile(const TemporaryJsonFile&) = delete;
+  TemporaryJsonFile& operator=(const TemporaryJsonFile&) = delete;
+
+  const std::filesystem::path& path() const { return path_; }
+
+ private:
+  std::filesystem::path path_;
+};
 
 nlohmann::json read_json_file(const std::filesystem::path& path) {
   std::ifstream in(path);
@@ -113,21 +135,10 @@ TlbMeasurementRecord make_paired_tlb_record(TlbMeasurementPass pass,
 
 }  // namespace
 
-TEST(JsonSchemaTest, LatencySamplesUseMetricContainerShape) {
-  nlohmann::json json_obj;
-  add_latency_results(json_obj, {15.0, 16.0}, {15.1, 15.2, 15.3});
-
-  ASSERT_TRUE(json_obj.contains(JsonKeys::LATENCY));
-  ASSERT_TRUE(json_obj[JsonKeys::LATENCY].contains(JsonKeys::SAMPLES_NS));
-  const nlohmann::json samples_json = json_obj[JsonKeys::LATENCY][JsonKeys::SAMPLES_NS];
-  ASSERT_TRUE(samples_json.is_object());
-  EXPECT_TRUE(samples_json.contains(JsonKeys::VALUES));
-  EXPECT_TRUE(samples_json.contains(JsonKeys::STATISTICS));
-}
-
 TEST(JsonSchemaTest, BenchmarkExporterIncludesBenchmarkModeAndOmitsEmptySections) {
+  const TemporaryJsonFile output_file("benchmark_schema");
   BenchmarkConfig config;
-  config.output_file = make_temp_json_path("benchmark_schema").string();
+  config.output_file = output_file.path().string();
   config.only_bandwidth = true;
   config.only_latency = true;
 
@@ -139,13 +150,12 @@ TEST(JsonSchemaTest, BenchmarkExporterIncludesBenchmarkModeAndOmitsEmptySections
   EXPECT_TRUE(output_json[JsonKeys::CONFIGURATION].contains(JsonKeys::LATENCY_CHAIN_MODE));
   EXPECT_FALSE(output_json.contains(JsonKeys::MAIN_MEMORY));
   EXPECT_FALSE(output_json.contains(JsonKeys::CACHE));
-
-  std::filesystem::remove(config.output_file);
 }
 
 TEST(JsonSchemaTest, BenchmarkSchemaV2IncludesCompletionAndNullableMeasurements) {
+  const TemporaryJsonFile output_file("benchmark_v2");
   BenchmarkConfig config;
-  config.output_file = make_temp_json_path("benchmark_v2").string();
+  config.output_file = output_file.path().string();
   config.run_benchmark = true;
   config.only_bandwidth = true;
   config.buffer_size = 4096;
@@ -221,8 +231,6 @@ TEST(JsonSchemaTest, BenchmarkSchemaV2IncludesCompletionAndNullableMeasurements)
   EXPECT_EQ(output["main_memory"]["bandwidth"]["read_gb_s"]["value"], 12.5);
   EXPECT_TRUE(output["main_memory"]["bandwidth"]["write_gb_s"]["value"].is_null());
   EXPECT_FALSE(output.dump().find("page_walk_penalty_ns") != std::string::npos);
-
-  std::filesystem::remove(config.output_file);
 }
 
 TEST(JsonSchemaTest, BenchmarkAggregateHeadlineUsesMedianAndReportsCvAndMad) {
@@ -261,8 +269,9 @@ TEST(JsonSchemaTest, BenchmarkAggregateHeadlineUsesMedianAndReportsCvAndMad) {
 }
 
 TEST(JsonSchemaTest, BenchmarkCheckpointAtomicallyProgressesToComplete) {
+  const TemporaryJsonFile output_file("benchmark_checkpoint");
   BenchmarkConfig config;
-  config.output_file = make_temp_json_path("benchmark_checkpoint").string();
+  config.output_file = output_file.path().string();
   config.only_bandwidth = true;
   config.only_latency = true;
   BenchmarkStatistics stats;
@@ -284,13 +293,12 @@ TEST(JsonSchemaTest, BenchmarkCheckpointAtomicallyProgressesToComplete) {
   EXPECT_EQ(output["status"], "complete");
   EXPECT_TRUE(output["results_complete"].get<bool>());
   EXPECT_FALSE(std::filesystem::exists(config.output_file + ".tmp"));
-
-  std::filesystem::remove(config.output_file);
 }
 
 TEST(JsonSchemaTest, PatternExporterIncludesPatternsMode) {
+  const TemporaryJsonFile output_file("patterns_schema");
   BenchmarkConfig config;
-  config.output_file = make_temp_json_path("patterns_schema").string();
+  config.output_file = output_file.path().string();
   config.pattern_seed = 42;
   config.user_specified_pattern_seed = true;
 
@@ -304,13 +312,12 @@ TEST(JsonSchemaTest, PatternExporterIncludesPatternsMode) {
   EXPECT_EQ(output_json[JsonKeys::CONFIGURATION]["pattern_seed"], "42");
   EXPECT_EQ(output_json[JsonKeys::CONFIGURATION]["thread_selection_policy"],
             "detected-core-count-default");
-
-  std::filesystem::remove(config.output_file);
 }
 
 TEST(JsonSchemaTest, PatternMeasurementsIncludeStatusAndMethodologyMetadata) {
+  const TemporaryJsonFile output_file("patterns_metadata");
   BenchmarkConfig config;
-  config.output_file = make_temp_json_path("patterns_metadata").string();
+  config.output_file = output_file.path().string();
   config.pattern_seed = 18446744073709551615ULL;
   config.user_specified_pattern_seed = true;
 
@@ -383,6 +390,8 @@ TEST(JsonSchemaTest, PatternMeasurementsIncludeStatusAndMethodologyMetadata) {
       forward[JsonKeys::BANDWIDTH][JsonKeys::READ_GB_S];
   EXPECT_EQ(read["status"], "measured");
   EXPECT_DOUBLE_EQ(read["value_gb_s"].get<double>(), 12.5);
+  EXPECT_DOUBLE_EQ(
+      read["statistics"]["median_absolute_deviation"].get<double>(), 0.0);
   ASSERT_EQ(read["measurements"].size(), 1u);
   EXPECT_EQ(read["measurements"][0]["passes"], 10u);
   EXPECT_EQ(read["measurements"][0]["accesses_per_pass_semantics"],
@@ -413,15 +422,14 @@ TEST(JsonSchemaTest, PatternMeasurementsIncludeStatusAndMethodologyMetadata) {
   const nlohmann::json random_json =
       output[JsonKeys::PATTERNS][JsonKeys::RANDOM];
   EXPECT_EQ(random_json["seed"], "18446744073709551615");
-
-  std::filesystem::remove(config.output_file);
 }
 
 TEST(JsonSchemaTest, TlbAnalysisExporterIncludesModeAndCoreCounts) {
   constexpr uint64_t kConfigSeed = 18446744073709551615ULL;
   constexpr uint64_t kFirstTaskSeed = 18446744073709551613ULL;
+  const TemporaryJsonFile output_file("tlb_schema");
   BenchmarkConfig config;
-  config.output_file = make_temp_json_path("tlb_schema").string();
+  config.output_file = output_file.path().string();
   config.tlb_sweep_density = TlbSweepDensity::High;
   config.tlb_seed = kConfigSeed;
   config.user_specified_tlb_seed = true;
@@ -806,12 +814,13 @@ TEST(JsonSchemaTest, TlbAnalysisExporterIncludesModeAndCoreCounts) {
   EXPECT_NE(paired_large["interpretation"].get<std::string>().find(
                 "not DRAM latency"),
             std::string::npos);
-  std::filesystem::remove(config.output_file);
 }
 
 TEST(JsonSchemaTest, TlbAnalysisExporterOmitsRemovedAliasesAndHandlesUnavailableComparison) {
+  const TemporaryJsonFile incomplete_output("tlb_page_walk_incomplete");
+  const TemporaryJsonFile fallback_output("tlb_256mb_fallback");
   BenchmarkConfig config;
-  config.output_file = make_temp_json_path("tlb_page_walk_incomplete").string();
+  config.output_file = incomplete_output.path().string();
 
   const std::string cpu_name = "test-cpu";
   const std::vector<size_t> localities_bytes = {16 * Constants::BYTES_PER_KB};
@@ -906,9 +915,7 @@ TEST(JsonSchemaTest, TlbAnalysisExporterOmitsRemovedAliasesAndHandlesUnavailable
   EXPECT_NE(paired_large["reason"].get<std::string>().find("incomplete"),
             std::string::npos);
 
-  std::filesystem::remove(config.output_file);
-
-  config.output_file = make_temp_json_path("tlb_256mb_fallback").string();
+  config.output_file = fallback_output.path().string();
   context.analysis_status = "complete";
   context.conclusions_valid = true;
   context.validation_planned_points = 0;
@@ -927,13 +934,12 @@ TEST(JsonSchemaTest, TlbAnalysisExporterOmitsRemovedAliasesAndHandlesUnavailable
   EXPECT_FALSE(fallback_large["available"]);
   EXPECT_NE(fallback_large["reason"].get<std::string>().find("512 MiB"),
             std::string::npos);
-
-  std::filesystem::remove(config.output_file);
 }
 
 TEST(JsonSchemaTest, CoreToCoreExporterUsesSharedModeKeyAndSamplesContainer) {
+  const TemporaryJsonFile output_file("core2core_schema");
   CoreToCoreLatencyConfig config;
-  config.output_file = make_temp_json_path("core2core_schema").string();
+  config.output_file = output_file.path().string();
   config.loop_count = 1;
   config.latency_sample_count = 2;
 
@@ -968,8 +974,6 @@ TEST(JsonSchemaTest, CoreToCoreExporterUsesSharedModeKeyAndSamplesContainer) {
   const nlohmann::json samples_json = output_json["core_to_core_latency"]["scenarios"][0][JsonKeys::SAMPLES_NS];
   EXPECT_TRUE(samples_json.contains(JsonKeys::VALUES));
   EXPECT_TRUE(samples_json.contains(JsonKeys::STATISTICS));
-
-  std::filesystem::remove(config.output_file);
 }
 
 TEST(JsonSchemaTest, CoreToCoreJsonBuilderReturnsInMemoryPayload) {
@@ -1094,8 +1098,9 @@ TEST(JsonSchemaTest, CoreToCoreExporterReturnsSuccessWhenOutputPathIsEmpty) {
 }
 
 TEST(JsonSchemaTest, CoreToCoreExporterSerializesOneWayValuesAndThreadHints) {
+  const TemporaryJsonFile output_file("core2core_values");
   CoreToCoreLatencyConfig config;
-  config.output_file = make_temp_json_path("core2core_values").string();
+  config.output_file = output_file.path().string();
   config.loop_count = 2;
   config.latency_sample_count = 2;
 
@@ -1156,13 +1161,12 @@ TEST(JsonSchemaTest, CoreToCoreExporterSerializesOneWayValuesAndThreadHints) {
   EXPECT_TRUE(scenario_json["thread_hints"]["initiator"].contains("affinity_applied"));
   EXPECT_TRUE(scenario_json["thread_hints"]["initiator"].contains("affinity_code"));
   EXPECT_TRUE(scenario_json["thread_hints"]["initiator"].contains("affinity_tag"));
-
-  std::filesystem::remove(config.output_file);
 }
 
 TEST(JsonSchemaTest, CoreToCoreExporterOmitsStatisticsWhenOnlySingleValueExists) {
+  const TemporaryJsonFile output_file("core2core_single");
   CoreToCoreLatencyConfig config;
-  config.output_file = make_temp_json_path("core2core_single").string();
+  config.output_file = output_file.path().string();
   config.loop_count = 1;
   config.latency_sample_count = 1;
 
@@ -1196,8 +1200,6 @@ TEST(JsonSchemaTest, CoreToCoreExporterOmitsStatisticsWhenOnlySingleValueExists)
   EXPECT_FALSE(scenario_json["round_trip_ns"].contains(JsonKeys::STATISTICS));
   EXPECT_FALSE(scenario_json["one_way_estimate_ns"].contains(JsonKeys::STATISTICS));
   EXPECT_FALSE(scenario_json[JsonKeys::SAMPLES_NS].contains(JsonKeys::STATISTICS));
-
-  std::filesystem::remove(config.output_file);
 }
 
 TEST(JsonSchemaTest, CoreToCoreExporterReturnsFailureForInvalidOutputPath) {

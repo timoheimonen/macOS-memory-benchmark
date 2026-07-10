@@ -78,12 +78,4 @@ std::string cache_size_l2(size_t size_bytes) {
   return oss.str();
 }
 
-std::string cache_size_per_pcore() {
-  return " (per P-core)";
-}
-
-std::string cache_size_per_pcore_cluster() {
-  return " (per P-core cluster)";
-}
-
 } // namespace Messages

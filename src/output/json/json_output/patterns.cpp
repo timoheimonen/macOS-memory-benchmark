@@ -89,6 +89,8 @@ nlohmann::json serialize_pattern_statistics(const std::vector<double>& values) {
           {"stddev", statistics.stddev},
           {"coefficient_of_variation_pct",
            statistics.coefficient_of_variation_pct},
+          {"median_absolute_deviation",
+           statistics.median_absolute_deviation},
           {"min", statistics.min},
           {"max", statistics.max}};
 }

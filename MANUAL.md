@@ -70,6 +70,19 @@ cd macOS-memory-benchmark
 make
 ```
 
+Test and coverage targets:
+
+```bash
+make test              # deterministic unit suite
+make test-integration  # real Apple Silicon/CLI workflows
+make test-all          # both suites
+make coverage-unit     # isolated LLVM report under /tmp
+make coverage-all
+```
+
+Coverage reports are written to `/tmp/membenchmark-coverage-{unit,all}/report.txt`. The denominator contains
+production C++ only and excludes tests, GoogleTest, the bundled JSON header, generated files, and assembly.
+
 ### First run
 
 Running with no arguments shows help:
@@ -238,6 +251,11 @@ each parameter key at most once.
 
 Long options require a double dash (`--`). A single dash is reserved for one-character short options, so legacy
 forms such as `-buffersize` or `-benchmark` are invalid.
+
+Numeric values must be complete decimal tokens. Leading/trailing whitespace,
+leading `+`, trailing characters, and overflow are rejected; unsigned seeds
+also reject either sign. Comma-separated sweep lists reject empty leading,
+middle, and trailing items.
 
 | Short | Long |
 |---|---|
@@ -505,13 +523,16 @@ forms such as `-buffersize` or `-benchmark` are invalid.
 - An explicit `--sweep-max-runs` value overrides the mode-specific default
 - Prevents accidental very large Cartesian sweeps
 - Every generated configuration is validated before the first run
-- Combined JSON is atomically checkpointed after each stored run result and records `status`, `planned_runs`, `completed_runs`, and `conclusions_valid`
-- For standard, pattern, and TLB sweeps, `completed_runs` equals the number of stored `runs` entries. A gracefully
-  interrupted nested result can therefore be stored and included in that count
+- Standard, pattern, and TLB combined JSON is atomically checkpointed after every attempted run and records `status`,
+  `planned_runs`, `attempted_runs`, `completed_runs`, and `conclusions_valid`
+- For standard, pattern, and TLB sweeps, every attempted run is retained with its own `status` and `status_reason`.
+  `attempted_runs` counts stored entries, while `completed_runs` counts only mode-specific nested results that are
+  genuinely complete; partial, interrupted, and failed nested results never increment it
 - A parameter key may appear only once in one sweep command
-- Core-to-core sweeps also append and checkpoint the latest attempted run when it is interrupted or fails. Such an entry
-  remains in `runs`, while `completed_runs` counts only nested core-to-core results whose status is `complete`; therefore
-  `runs` can contain more entries than `completed_runs`
+- Core-to-core sweeps also append and checkpoint the latest attempted run when it is interrupted or fails. Each entry
+  records `status` and `status_reason`; `attempted_runs` counts those entries, while `completed_runs` counts only nested
+  core-to-core results with `status: "complete"` and `measurements_complete: true`. Therefore `runs` can contain more
+  entries than `completed_runs`
 
 #### `-h`, `--help`
 
@@ -871,7 +892,7 @@ not the compact console report.
   "main_memory": { ... },
   "cache": { ... },
   "timestamp": "2026-03-09T14:57:56Z",
-  "version": "0.58.1"
+  "version": "0.59.0"
 }
 ```
 
@@ -1068,6 +1089,7 @@ differences between affinity-tag scenarios as evidence about the requested hint 
 {
   "status": "complete",
   "planned_runs": 6,
+  "attempted_runs": 6,
   "completed_runs": 6,
   "conclusions_valid": true,
   "configuration": {
@@ -1083,6 +1105,8 @@ differences between affinity-tag scenarios as evidence about the requested hint 
   "runs": [
     {
       "index": 0,
+      "status": "complete",
+      "status_reason": null,
       "parameters": {
         "buffer-size": 256,
         "latency-stride-bytes": 64
@@ -1092,7 +1116,7 @@ differences between affinity-tag scenarios as evidence about the requested hint 
   ],
   "execution_time_sec": 123.4,
   "timestamp": "2026-04-29T12:00:00Z",
-  "version": "0.58.1"
+  "version": "0.59.0"
 }
 ```
 
@@ -1151,7 +1175,7 @@ When run with `--analyze-tlb --output tlb_analysis.json`, the payload includes a
 The following is a structure-focused schema-version-4 illustration. It is not presented as a hardware result; the current
 serializer contract and concrete deterministic values are exercised by
 `JsonSchemaTest.TlbAnalysisExporterIncludesModeAndCoreCounts`. New hardware baselines remain outside this release series by
-project decision, so historical 0.53.x measurements are not relabeled as 0.58.1 results:
+project decision, so historical 0.53.x measurements are not relabeled as 0.59.0 results:
 
 ```json
 {

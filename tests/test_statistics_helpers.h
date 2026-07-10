@@ -15,13 +15,16 @@ inline const std::vector<double>& empty_values() {
   return k_empty_values;
 }
 
-inline std::string capture_bw(const std::vector<double>& values) {
+inline std::string capture_main_bandwidth(
+    const std::vector<double>& read_values,
+    const std::vector<double>& write_values,
+    const std::vector<double>& copy_values) {
   const std::vector<double>& empty = empty_values();
   testing::internal::CaptureStdout();
   print_statistics(2,
-                   values,
-                   values,
-                   values,
+                   read_values,
+                   write_values,
+                   copy_values,
                    empty,
                    empty,
                    empty,
@@ -46,6 +49,10 @@ inline std::string capture_bw(const std::vector<double>& values) {
                    false,
                    false);
   return testing::internal::GetCapturedStdout();
+}
+
+inline std::string capture_bw(const std::vector<double>& values) {
+  return capture_main_bandwidth(values, values, values);
 }
 
 inline std::string capture_lat(const std::vector<double>& values) {

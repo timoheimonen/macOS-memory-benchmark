@@ -31,11 +31,10 @@
 #include <cstdlib>
 #include <iostream>
 #include <limits>
-#include <sstream>
-#include <stdexcept>
 #include <string>
 #include <vector>
 
+#include "core/config/config.h"
 #include "core/config/constants.h"
 #include "core/signal/signal_handler.h"
 #include "output/console/messages/messages_api.h"
@@ -68,17 +67,13 @@ bool parse_positive_int_option(const std::string& option,
                                int& out_value,
                                const char* prog_name) {
   long long parsed = 0;
-  try {
-    parsed = std::stoll(value);
-  } catch (const std::invalid_argument&) {
+  const StrictIntegerParseStatus parse_status =
+      parse_strict_signed_decimal(value, parsed);
+  if (parse_status != StrictIntegerParseStatus::Success) {
     std::cerr << Messages::error_prefix()
-              << Messages::error_invalid_value(option, value, "must be an integer")
-              << std::endl;
-    print_usage(prog_name);
-    return false;
-  } catch (const std::out_of_range&) {
-    std::cerr << Messages::error_prefix()
-              << Messages::error_invalid_value(option, value, "out of range")
+              << Messages::error_invalid_value(
+                     option, value,
+                     strict_signed_decimal_error_reason(parse_status))
               << std::endl;
     print_usage(prog_name);
     return false;
@@ -101,10 +96,15 @@ bool parse_positive_int_option(const std::string& option,
 
 std::vector<std::string> split_comma_values(const std::string& input) {
   std::vector<std::string> values;
-  std::stringstream stream(input);
-  std::string item;
-  while (std::getline(stream, item, ',')) {
-    values.push_back(item);
+  size_t value_start = 0;
+  while (value_start <= input.size()) {
+    const size_t comma = input.find(',', value_start);
+    if (comma == std::string::npos) {
+      values.push_back(input.substr(value_start));
+      break;
+    }
+    values.push_back(input.substr(value_start, comma - value_start));
+    value_start = comma + 1;
   }
   return values;
 }

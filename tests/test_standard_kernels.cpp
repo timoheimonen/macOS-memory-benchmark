@@ -61,6 +61,12 @@ class GuardedMapping {
   GuardedMapping& operator=(const GuardedMapping&) = delete;
 
   unsigned char* payload() const { return payload_; }
+  unsigned char* accessible_begin() const {
+    return static_cast<unsigned char*>(mapping_) + page_size_;
+  }
+  size_t prefix_size() const {
+    return static_cast<size_t>(payload_ - accessible_begin());
+  }
   bool valid() const { return mapping_ != nullptr; }
 
  private:
@@ -81,6 +87,33 @@ uint64_t expected_streaming_checksum(const unsigned char* data, size_t size) {
     byte_tail_checksum ^= data[index];
   }
   return checksum ^ byte_tail_checksum;
+}
+
+uint64_t expected_reverse_checksum(const unsigned char* data, size_t size) {
+  const size_t byte_prefix = size % 32;
+  uint64_t checksum = 0;
+  for (size_t index = byte_prefix; index < size; ++index) {
+    checksum ^= static_cast<uint64_t>(data[index])
+                << (((index - byte_prefix) % 8) * 8);
+  }
+  uint64_t byte_prefix_checksum = 0;
+  for (size_t index = 0; index < byte_prefix; ++index) {
+    byte_prefix_checksum ^= data[index];
+  }
+  return checksum ^ byte_prefix_checksum;
+}
+
+uint64_t expected_random_checksum(const unsigned char* data,
+                                  const std::vector<size_t>& indices) {
+  uint64_t checksum = 0;
+  for (size_t offset : indices) {
+    for (size_t lane = 0; lane < 4; ++lane) {
+      uint64_t value = 0;
+      std::memcpy(&value, data + offset + lane * sizeof(value), sizeof(value));
+      checksum ^= value;
+    }
+  }
+  return checksum;
 }
 
 using ReadKernel = uint64_t (*)(const void*, size_t);
@@ -158,6 +191,94 @@ void verify_copy_kernel_boundaries(CopyKernel kernel) {
   }
 }
 
+void verify_reverse_read_kernel_boundaries(ReadKernel kernel) {
+  for (size_t size : kTailSizes) {
+    GuardedMapping source(size);
+    ASSERT_TRUE(source.valid());
+    std::memset(source.accessible_begin(), 0xd3, source.prefix_size());
+    for (size_t index = 0; index < size; ++index) {
+      source.payload()[index] =
+          static_cast<unsigned char>((index * 41 + 13) & 0xff);
+    }
+    const std::vector<unsigned char> prefix_before(
+        source.accessible_begin(), source.payload());
+    const std::vector<unsigned char> payload_before(source.payload(),
+                                                    source.payload() + size);
+
+    EXPECT_EQ(kernel(source.payload(), size),
+              expected_reverse_checksum(source.payload(), size))
+        << "size=" << size;
+    EXPECT_TRUE(std::equal(prefix_before.begin(), prefix_before.end(),
+                           source.accessible_begin()))
+        << "size=" << size;
+    EXPECT_TRUE(std::equal(payload_before.begin(), payload_before.end(),
+                           source.payload()))
+        << "size=" << size;
+  }
+}
+
+void verify_reverse_write_kernel_boundaries(WriteKernel kernel) {
+  for (size_t size : kTailSizes) {
+    GuardedMapping destination(size);
+    ASSERT_TRUE(destination.valid());
+    std::memset(destination.accessible_begin(), 0xd3,
+                destination.prefix_size());
+    std::memset(destination.payload(), 0xa5, size);
+    const std::vector<unsigned char> prefix_before(
+        destination.accessible_begin(), destination.payload());
+
+    kernel(destination.payload(), size);
+
+    EXPECT_TRUE(std::equal(prefix_before.begin(), prefix_before.end(),
+                           destination.accessible_begin()))
+        << "size=" << size;
+    for (size_t index = 0; index < size; ++index) {
+      EXPECT_EQ(destination.payload()[index], 0u)
+          << "size=" << size << " index=" << index;
+    }
+  }
+}
+
+void verify_reverse_copy_kernel_boundaries(CopyKernel kernel) {
+  for (size_t size : kTailSizes) {
+    GuardedMapping source(size);
+    GuardedMapping destination(size);
+    ASSERT_TRUE(source.valid());
+    ASSERT_TRUE(destination.valid());
+    std::memset(source.accessible_begin(), 0xc7, source.prefix_size());
+    std::memset(destination.accessible_begin(), 0xd3,
+                destination.prefix_size());
+    for (size_t index = 0; index < size; ++index) {
+      source.payload()[index] =
+          static_cast<unsigned char>((index * 23 + 5) & 0xff);
+    }
+    std::memset(destination.payload(), 0xa5, size);
+    const std::vector<unsigned char> source_prefix_before(
+        source.accessible_begin(), source.payload());
+    const std::vector<unsigned char> destination_prefix_before(
+        destination.accessible_begin(), destination.payload());
+    const std::vector<unsigned char> source_before(source.payload(),
+                                                   source.payload() + size);
+
+    kernel(destination.payload(), source.payload(), size);
+
+    EXPECT_TRUE(std::equal(source_prefix_before.begin(),
+                           source_prefix_before.end(),
+                           source.accessible_begin()))
+        << "size=" << size;
+    EXPECT_TRUE(std::equal(destination_prefix_before.begin(),
+                           destination_prefix_before.end(),
+                           destination.accessible_begin()))
+        << "size=" << size;
+    EXPECT_TRUE(std::equal(source_before.begin(), source_before.end(),
+                           source.payload()))
+        << "size=" << size;
+    EXPECT_TRUE(std::equal(source_before.begin(), source_before.end(),
+                           destination.payload()))
+        << "size=" << size;
+  }
+}
+
 }  // namespace
 
 TEST(StandardKernelIntegrationTest, MainReadHonorsTailsAndChecksum) {
@@ -172,6 +293,116 @@ TEST(StandardKernelIntegrationTest, CacheReadChecksumIncludesUpperVectorLane) {
   alignas(64) std::array<unsigned char, 32> data{};
   data[8] = 0x5a;
   EXPECT_EQ(memory_read_cache_loop_asm(data.data(), data.size()), 0x5aULL);
+}
+
+TEST(PatternKernelIntegrationTest, ReverseReadChecksumIncludesUpperVectorLane) {
+  alignas(64) std::array<unsigned char, 32> data{};
+  data[8] = 0x5a;
+  EXPECT_EQ(memory_read_reverse_loop_asm(data.data(), data.size()), 0x5aULL);
+}
+
+TEST(PatternKernelIntegrationTest, ReverseReadHonorsTailsGuardsAndChecksum) {
+  verify_reverse_read_kernel_boundaries(memory_read_reverse_loop_asm);
+}
+
+TEST(PatternKernelIntegrationTest, ReverseWriteHonorsExactGuardedBoundaries) {
+  verify_reverse_write_kernel_boundaries(memory_write_reverse_loop_asm);
+}
+
+TEST(PatternKernelIntegrationTest, ReverseCopyHonorsExactGuardedBoundaries) {
+  verify_reverse_copy_kernel_boundaries(memory_copy_reverse_loop_asm);
+}
+
+TEST(PatternKernelIntegrationTest, RandomReadHonorsIndicesLastAccessAndChecksum) {
+  constexpr size_t kPayloadSize = 160;
+  const std::vector<size_t> indices = {0, 64, 128};
+  GuardedMapping source(kPayloadSize);
+  ASSERT_TRUE(source.valid());
+  std::memset(source.accessible_begin(), 0xd3, source.prefix_size());
+  for (size_t index = 0; index < kPayloadSize; ++index) {
+    source.payload()[index] =
+        static_cast<unsigned char>((index * 29 + 17) & 0xff);
+  }
+  const std::vector<unsigned char> prefix_before(source.accessible_begin(),
+                                                 source.payload());
+  const std::vector<unsigned char> payload_before(
+      source.payload(), source.payload() + kPayloadSize);
+
+  EXPECT_EQ(memory_read_random_loop_asm(source.payload(), indices.data(),
+                                        indices.size()),
+            expected_random_checksum(source.payload(), indices));
+  EXPECT_TRUE(std::equal(prefix_before.begin(), prefix_before.end(),
+                         source.accessible_begin()));
+  EXPECT_TRUE(std::equal(payload_before.begin(), payload_before.end(),
+                         source.payload()));
+  EXPECT_EQ(memory_read_random_loop_asm(source.payload(), indices.data(), 0),
+            0u);
+}
+
+TEST(PatternKernelIntegrationTest, RandomWriteTouchesOnlySelectedAccesses) {
+  constexpr size_t kPayloadSize = 160;
+  const std::vector<size_t> indices = {0, 64, 128};
+  GuardedMapping destination(kPayloadSize);
+  ASSERT_TRUE(destination.valid());
+  std::memset(destination.accessible_begin(), 0xd3,
+              destination.prefix_size());
+  std::memset(destination.payload(), 0xa5, kPayloadSize);
+  const std::vector<unsigned char> prefix_before(
+      destination.accessible_begin(), destination.payload());
+
+  memory_write_random_loop_asm(destination.payload(), indices.data(),
+                               indices.size());
+
+  EXPECT_TRUE(std::equal(prefix_before.begin(), prefix_before.end(),
+                         destination.accessible_begin()));
+  for (size_t index = 0; index < kPayloadSize; ++index) {
+    const bool selected = index < 32 || (index >= 64 && index < 96) ||
+                          (index >= 128 && index < 160);
+    EXPECT_EQ(destination.payload()[index], selected ? 0u : 0xa5u)
+        << "index=" << index;
+  }
+}
+
+TEST(PatternKernelIntegrationTest, RandomCopyTouchesOnlySelectedAccesses) {
+  constexpr size_t kPayloadSize = 160;
+  const std::vector<size_t> indices = {0, 64, 128};
+  GuardedMapping source(kPayloadSize);
+  GuardedMapping destination(kPayloadSize);
+  ASSERT_TRUE(source.valid());
+  ASSERT_TRUE(destination.valid());
+  std::memset(source.accessible_begin(), 0xc7, source.prefix_size());
+  std::memset(destination.accessible_begin(), 0xd3,
+              destination.prefix_size());
+  for (size_t index = 0; index < kPayloadSize; ++index) {
+    source.payload()[index] =
+        static_cast<unsigned char>((index * 31 + 7) & 0xff);
+  }
+  std::memset(destination.payload(), 0xa5, kPayloadSize);
+  const std::vector<unsigned char> source_prefix_before(
+      source.accessible_begin(), source.payload());
+  const std::vector<unsigned char> destination_prefix_before(
+      destination.accessible_begin(), destination.payload());
+  const std::vector<unsigned char> source_before(
+      source.payload(), source.payload() + kPayloadSize);
+
+  memory_copy_random_loop_asm(destination.payload(), source.payload(),
+                              indices.data(), indices.size());
+
+  EXPECT_TRUE(std::equal(source_prefix_before.begin(),
+                         source_prefix_before.end(),
+                         source.accessible_begin()));
+  EXPECT_TRUE(std::equal(destination_prefix_before.begin(),
+                         destination_prefix_before.end(),
+                         destination.accessible_begin()));
+  EXPECT_TRUE(std::equal(source_before.begin(), source_before.end(),
+                         source.payload()));
+  for (size_t index = 0; index < kPayloadSize; ++index) {
+    const bool selected = index < 32 || (index >= 64 && index < 96) ||
+                          (index >= 128 && index < 160);
+    EXPECT_EQ(destination.payload()[index],
+              selected ? source.payload()[index] : 0xa5u)
+        << "index=" << index;
+  }
 }
 
 TEST(StandardKernelIntegrationTest, MainAndCacheWritesHonorExactBoundaries) {
@@ -223,6 +454,53 @@ TEST(StandardKernelIntegrationTest, StandardKernelsPreserveCalleeSavedRegisters)
   EXPECT_EQ(verify_pattern_callee_saved_registers_asm(
                 reinterpret_cast<uintptr_t>(memory_latency_chase_asm),
                 reinterpret_cast<uintptr_t>(source.data()), 16, 0, 0, 0, 0),
+              1u);
+}
+
+TEST(PatternKernelIntegrationTest, ReverseAndRandomKernelsPreserveCalleeSavedRegisters) {
+  alignas(64) std::array<unsigned char, 1024> source{};
+  alignas(64) std::array<unsigned char, 1024> destination{};
+  const std::array<size_t, 3> indices = {0, 64, 128};
+  for (size_t index = 0; index < source.size(); ++index) {
+    source[index] = static_cast<unsigned char>((index * 17 + 3) & 0xff);
+  }
+  constexpr size_t kReverseSize = 513;
+
+  EXPECT_EQ(verify_pattern_callee_saved_registers_asm(
+                reinterpret_cast<uintptr_t>(memory_read_reverse_loop_asm),
+                reinterpret_cast<uintptr_t>(source.data()), kReverseSize, 0, 0,
+                0, 0),
+            1u);
+  EXPECT_EQ(verify_pattern_callee_saved_registers_asm(
+                reinterpret_cast<uintptr_t>(memory_write_reverse_loop_asm),
+                reinterpret_cast<uintptr_t>(destination.data()), kReverseSize,
+                0, 0, 0, 0),
+            1u);
+  EXPECT_EQ(verify_pattern_callee_saved_registers_asm(
+                reinterpret_cast<uintptr_t>(memory_copy_reverse_loop_asm),
+                reinterpret_cast<uintptr_t>(destination.data()),
+                reinterpret_cast<uintptr_t>(source.data()), kReverseSize, 0, 0,
+                0),
+            1u);
+
+  EXPECT_EQ(verify_pattern_callee_saved_registers_asm(
+                reinterpret_cast<uintptr_t>(memory_read_random_loop_asm),
+                reinterpret_cast<uintptr_t>(source.data()),
+                reinterpret_cast<uintptr_t>(indices.data()), indices.size(), 0,
+                0, 0),
+            1u);
+  EXPECT_EQ(verify_pattern_callee_saved_registers_asm(
+                reinterpret_cast<uintptr_t>(memory_write_random_loop_asm),
+                reinterpret_cast<uintptr_t>(destination.data()),
+                reinterpret_cast<uintptr_t>(indices.data()), indices.size(), 0,
+                0, 0),
+            1u);
+  EXPECT_EQ(verify_pattern_callee_saved_registers_asm(
+                reinterpret_cast<uintptr_t>(memory_copy_random_loop_asm),
+                reinterpret_cast<uintptr_t>(destination.data()),
+                reinterpret_cast<uintptr_t>(source.data()),
+                reinterpret_cast<uintptr_t>(indices.data()), indices.size(), 0,
+                0),
             1u);
 }
 

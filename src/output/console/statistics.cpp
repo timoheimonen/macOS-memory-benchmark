@@ -22,6 +22,7 @@
 #include <algorithm>  // Required for std::min_element, std::max_element, std::sort (finding min/max, sorting)
 #include <cmath>       // Required for std::sqrt (standard deviation calculation)
 #include <iomanip>     // Required for std::setprecision, std::fixed (output formatting)
+#include <initializer_list>
 #include <iostream>    // Required for std::cout
 #include <numeric>     // Required for std::accumulate (calculating sums)
 #include <vector>      // Required for std::vector
@@ -320,13 +321,37 @@ void print_statistics(int loop_count, const std::vector<double> &all_read_bw, co
                       const std::vector<double> &all_custom_latency_samples,
                       bool only_bandwidth,
                       bool only_latency) {
-  // Don't print statistics if only one loop ran or if there's no data.
-  // For only_latency mode, check latency data instead of bandwidth data
+  // Don't print statistics if only one loop ran or if no enabled metric has data.
   if (loop_count <= 1) return;
-  if (only_latency) {
-    if (all_main_mem_latency.empty() && all_l1_latency.empty() && all_l2_latency.empty() && all_custom_latency.empty()) return;
-  } else {
-    if (all_read_bw.empty()) return;
+
+  const auto has_any_population = [](std::initializer_list<const std::vector<double>*> populations) {
+    return std::any_of(populations.begin(), populations.end(),
+                       [](const std::vector<double>* values) {
+                         return values != nullptr && !values->empty();
+                       });
+  };
+  const bool has_main_bandwidth =
+      has_any_population({&all_read_bw, &all_write_bw, &all_copy_bw});
+  const bool has_cache_bandwidth = use_custom_cache_size
+                                       ? has_any_population({&all_custom_read_bw,
+                                                             &all_custom_write_bw,
+                                                             &all_custom_copy_bw})
+                                       : has_any_population({&all_l1_read_bw,
+                                                             &all_l1_write_bw,
+                                                             &all_l1_copy_bw,
+                                                             &all_l2_read_bw,
+                                                             &all_l2_write_bw,
+                                                             &all_l2_copy_bw});
+  const bool has_bandwidth = has_main_bandwidth || has_cache_bandwidth;
+  const bool has_cache_latency = use_custom_cache_size
+                                     ? !all_custom_latency.empty()
+                                     : (!all_l1_latency.empty() || !all_l2_latency.empty());
+  const bool has_latency = !all_main_mem_latency.empty() || has_cache_latency;
+
+  if ((only_latency && !has_latency) ||
+      (only_bandwidth && !has_bandwidth) ||
+      (!only_latency && !only_bandwidth && !has_bandwidth && !has_latency)) {
+    return;
   }
 
   size_t measured_loop_count = 0;
@@ -351,15 +376,23 @@ void print_statistics(int loop_count, const std::vector<double> &all_read_bw, co
 
   // Display Main Memory Bandwidth statistics (skip if only latency tests).
   if (!only_latency) {
-    Statistics read_stats = calculate_statistics(all_read_bw);
-    Statistics write_stats = calculate_statistics(all_write_bw);
-    Statistics copy_stats = calculate_statistics(all_copy_bw);
-    
-    print_metric_statistics("Read Bandwidth (GB/s)", read_stats);
-    std::cout << "\n";
-    print_metric_statistics("Write Bandwidth (GB/s)", write_stats);
-    std::cout << "\n";
-    print_metric_statistics("Copy Bandwidth (GB/s)", copy_stats);
+    bool printed_main_bandwidth = false;
+    const auto print_main_bandwidth = [&printed_main_bandwidth](
+                                          const std::string& name,
+                                          const std::vector<double>& values) {
+      if (values.empty()) {
+        return;
+      }
+      if (printed_main_bandwidth) {
+        std::cout << "\n";
+      }
+      print_metric_statistics(name, calculate_statistics(values));
+      printed_main_bandwidth = true;
+    };
+
+    print_main_bandwidth("Read Bandwidth (GB/s)", all_read_bw);
+    print_main_bandwidth("Write Bandwidth (GB/s)", all_write_bw);
+    print_main_bandwidth("Copy Bandwidth (GB/s)", all_copy_bw);
 
     // Display Cache Bandwidth statistics.
     if (use_custom_cache_size) {

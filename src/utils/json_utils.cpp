@@ -37,20 +37,10 @@
 // Calculate statistics (average, min, max, percentiles, stddev) from a vector of values
 // Returns a JSON object containing the calculated statistics
 nlohmann::json calculate_json_statistics(const std::vector<double>& values) {
-  nlohmann::json stats;
   if (values.empty()) {
-    stats["average"] = 0.0;
-    stats["min"] = 0.0;
-    stats["max"] = 0.0;
-    stats["median"] = 0.0;
-    stats["p90"] = 0.0;
-    stats["p95"] = 0.0;
-    stats["p99"] = 0.0;
-    stats["stddev"] = 0.0;
-    stats["coefficient_of_variation_pct"] = nullptr;
-    stats["median_absolute_deviation"] = 0.0;
-    return stats;
+    return nullptr;
   }
+  nlohmann::json stats = nlohmann::json::object();
 
   // Calculate basic statistics
   double sum = 0.0;
@@ -112,6 +102,7 @@ nlohmann::json calculate_json_statistics(const std::vector<double>& values) {
 // Returns true on success, false on error
 // On error, error_message is populated with a descriptive error message
 bool parse_json_from_string(const std::string& json_string, nlohmann::json& result, std::string& error_message) {
+  error_message.clear();
   if (json_string.empty()) {
     error_message = "Empty JSON string";
     return false;
@@ -142,6 +133,7 @@ bool parse_json_from_string(const std::string& json_string, nlohmann::json& resu
 // Returns true on success, false on error
 // On error, error_message is populated with a descriptive error message
 bool parse_json_from_file(const std::string& file_path, nlohmann::json& result, std::string& error_message) {
+  error_message.clear();
   std::filesystem::path path(file_path);
   
   // Check if file exists

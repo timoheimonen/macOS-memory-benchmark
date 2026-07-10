@@ -23,11 +23,13 @@
 
 #include <gtest/gtest.h>
 
+#include <limits>
 #include <string>
 #include <vector>
 
 #include "benchmark/core_to_core_latency.h"
 #include "core/config/constants.h"
+#include "output/console/messages/messages_api.h"
 
 namespace {
 
@@ -40,6 +42,26 @@ int parse_with_args(const std::vector<std::string>& args, CoreToCoreLatencyConfi
     argv.push_back(const_cast<char*>(arg.c_str()));
   }
   return parse_core_to_core_mode_arguments(static_cast<int>(argv.size()), argv.data(), config);
+}
+
+struct CapturedCoreCliParse {
+  int result = EXIT_FAILURE;
+  std::string stderr_output;
+};
+
+CapturedCoreCliParse parse_capturing_stderr(
+    const std::vector<std::string>& args,
+    CoreToCoreLatencyConfig& config) {
+  testing::internal::CaptureStderr();
+  const int result = parse_with_args(args, config);
+  return {result, testing::internal::GetCapturedStderr()};
+}
+
+std::string expected_invalid_value(const std::string& option,
+                                   const std::string& value,
+                                   const std::string& reason) {
+  return Messages::error_prefix() +
+         Messages::error_invalid_value(option, value, reason);
 }
 
 }  // namespace
@@ -191,6 +213,127 @@ TEST(CoreToCoreCliTest, RejectsInvalidCountValues) {
       parse_with_args({"memory_benchmark", "--analyze-core2core", "--count", "0"}, config);
 
   EXPECT_EQ(parse_result, EXIT_FAILURE);
+}
+
+TEST(CoreToCoreCliTest, ParsesStrictPositiveIntegerBoundaries) {
+  CoreToCoreLatencyConfig config;
+  const std::string int_max =
+      std::to_string(std::numeric_limits<int>::max());
+  const int parse_result = parse_with_args(
+      {"memory_benchmark", "--analyze-core2core", "--count", int_max,
+       "--latency-samples", int_max, "--sweep-max-runs", int_max},
+      config);
+
+  EXPECT_EQ(parse_result, EXIT_SUCCESS);
+  EXPECT_EQ(config.loop_count, std::numeric_limits<int>::max());
+  EXPECT_EQ(config.latency_sample_count, std::numeric_limits<int>::max());
+  EXPECT_EQ(config.sweep_max_runs,
+            static_cast<size_t>(std::numeric_limits<int>::max()));
+}
+
+TEST(CoreToCoreCliTest, RejectsMalformedNumericTokensWithCentralizedErrors) {
+  struct InvalidNumericCase {
+    const char* option;
+    const char* value;
+    const char* reason;
+  };
+
+  constexpr const char* kInvalidReason =
+      "must be an integer without whitespace, a plus sign, or trailing characters";
+  const std::string positive_range_reason =
+      "must be between 1 and " +
+      std::to_string(std::numeric_limits<int>::max());
+  const InvalidNumericCase cases[] = {
+      {"--count", "5junk", kInvalidReason},
+      {"--latency-samples", "8junk", kInvalidReason},
+      {"--sweep-max-runs", "4junk", kInvalidReason},
+      {"--count", " 5", kInvalidReason},
+      {"--count", "5 ", kInvalidReason},
+      {"--count", "+5", kInvalidReason},
+      {"--count", "abc", kInvalidReason},
+      {"--count", "9223372036854775808", "out of range"},
+      {"--count", "0", positive_range_reason.c_str()},
+      {"--count", "-1", positive_range_reason.c_str()},
+  };
+
+  for (const InvalidNumericCase& test_case : cases) {
+    SCOPED_TRACE(test_case.option);
+    SCOPED_TRACE(test_case.value);
+    CoreToCoreLatencyConfig config;
+    const CapturedCoreCliParse parsed = parse_capturing_stderr(
+        {"memory_benchmark", "--analyze-core2core", test_case.option,
+         test_case.value},
+        config);
+    EXPECT_EQ(parsed.result, EXIT_FAILURE);
+    EXPECT_NE(parsed.stderr_output.find(expected_invalid_value(
+                  test_case.option, test_case.value, test_case.reason)),
+              std::string::npos);
+  }
+}
+
+TEST(CoreToCoreCliTest, RejectsMalformedSweepListsAndValues) {
+  struct InvalidSweepCase {
+    const char* specification;
+    const char* option;
+    const char* value;
+    const char* reason;
+  };
+
+  constexpr const char* kInvalidReason =
+      "must be an integer without whitespace, a plus sign, or trailing characters";
+  const InvalidSweepCase cases[] = {
+      {"count=,1", "--sweep", "count=,1", "sweep value list cannot contain empty values"},
+      {"count=1,", "--sweep", "count=1,", "sweep value list cannot contain empty values"},
+      {"count=1,,2", "--sweep", "count=1,,2", "sweep value list cannot contain empty values"},
+      {"count=1x", "--count", "1x", kInvalidReason},
+      {"latency-samples=4x", "--latency-samples", "4x", kInvalidReason},
+      {"count= 1", "--count", " 1", kInvalidReason},
+      {"count=+1", "--count", "+1", kInvalidReason},
+      {"count=9223372036854775808", "--count", "9223372036854775808", "out of range"},
+  };
+
+  for (const InvalidSweepCase& test_case : cases) {
+    SCOPED_TRACE(test_case.specification);
+    CoreToCoreLatencyConfig config;
+    const CapturedCoreCliParse parsed = parse_capturing_stderr(
+        {"memory_benchmark", "--analyze-core2core", "--output",
+         "core2core_sweep.json", "--sweep", test_case.specification},
+        config);
+    EXPECT_EQ(parsed.result, EXIT_FAILURE);
+    EXPECT_NE(parsed.stderr_output.find(expected_invalid_value(
+                  test_case.option, test_case.value, test_case.reason)),
+              std::string::npos);
+  }
+}
+
+TEST(CoreToCoreCliTest, RejectsMissingAndDuplicateNumericOptions) {
+  const char* missing_options[] = {
+      "--count", "--latency-samples", "--sweep-max-runs"};
+  for (const char* option : missing_options) {
+    SCOPED_TRACE(option);
+    CoreToCoreLatencyConfig config;
+    const CapturedCoreCliParse parsed = parse_capturing_stderr(
+        {"memory_benchmark", "--analyze-core2core", option}, config);
+    EXPECT_EQ(parsed.result, EXIT_FAILURE);
+    EXPECT_NE(parsed.stderr_output.find(
+                  Messages::error_prefix() + Messages::error_missing_value(option)),
+              std::string::npos);
+  }
+
+  const char* duplicate_options[] = {
+      "--count", "--latency-samples", "--sweep-max-runs"};
+  for (const char* option : duplicate_options) {
+    SCOPED_TRACE(option);
+    CoreToCoreLatencyConfig config;
+    const CapturedCoreCliParse parsed = parse_capturing_stderr(
+        {"memory_benchmark", "--analyze-core2core", option, "1", option,
+         "2"},
+        config);
+    EXPECT_EQ(parsed.result, EXIT_FAILURE);
+    EXPECT_NE(parsed.stderr_output.find(
+                  Messages::error_prefix() + Messages::error_duplicate_option(option)),
+              std::string::npos);
+  }
 }
 
 TEST(CoreToCoreCliTest, HelpFlagReturnsSuccessAndSetsHelpRequested) {

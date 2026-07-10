@@ -28,6 +28,7 @@
 #include <cstddef>  // size_t
 #include <cstdint>  // uint64_t
 #include <atomic>   // std::atomic
+#include <functional>
 #include <vector>   // std::vector
 
 #include "benchmark/benchmark_work_plan.h"
@@ -35,6 +36,11 @@
 // Forward declaration
 struct HighResTimer;
 struct ParallelExecutionMetadata;
+
+/** Optional kernel seam for deterministic latency sampling tests. */
+struct LatencyMeasurementTestHooks {
+  std::function<uintptr_t*(uintptr_t*, size_t)> chase;
+};
 
 // --- Benchmark Test Functions ---
 /**
@@ -47,7 +53,12 @@ struct ParallelExecutionMetadata;
  * @param timer Reference to high-resolution timer
  * @return Total elapsed time in seconds
  */
-double run_read_test(void* buffer, size_t size, int iterations, int num_threads, std::atomic<uint64_t>& checksum, HighResTimer& timer);
+double run_read_test(void* buffer,
+                     size_t size,
+                     int iterations,
+                     int num_threads,
+                     std::atomic<uint64_t>& checksum,
+                     HighResTimer& timer);
 
 /**
  * @brief Run read benchmark test with a specific assembly read kernel
@@ -154,9 +165,12 @@ double run_copy_test_with_plan(void* dst,
  * @param timer Reference to high-resolution timer
  * @param latency_samples Optional pointer to vector to store individual latency samples
  * @param sample_count Number of samples to collect (0 = collect all)
+ * @param test_hooks Optional injected chase callback for deterministic tests; production callers leave this null
  * @return Average latency per access in nanoseconds
  */
-double run_latency_test(void* buffer, size_t num_accesses, HighResTimer& timer, std::vector<double>* latency_samples = nullptr, int sample_count = 0);
+double run_latency_test(void* buffer, size_t num_accesses, HighResTimer& timer,
+                        std::vector<double>* latency_samples = nullptr, int sample_count = 0,
+                        const LatencyMeasurementTestHooks* test_hooks = nullptr);
 
 /**
  * @brief Run cache latency benchmark test
@@ -166,8 +180,11 @@ double run_latency_test(void* buffer, size_t num_accesses, HighResTimer& timer, 
  * @param timer Reference to high-resolution timer
  * @param latency_samples Optional pointer to vector to store individual latency samples
  * @param sample_count Number of samples to collect (0 = collect all)
+ * @param test_hooks Optional injected chase callback for deterministic tests; production callers leave this null
  * @return Average latency per access in nanoseconds
  */
-double run_cache_latency_test(void* buffer, size_t buffer_size, size_t num_accesses, HighResTimer& timer, std::vector<double>* latency_samples = nullptr, int sample_count = 0);
+double run_cache_latency_test(void* buffer, size_t buffer_size, size_t num_accesses, HighResTimer& timer,
+                              std::vector<double>* latency_samples = nullptr, int sample_count = 0,
+                              const LatencyMeasurementTestHooks* test_hooks = nullptr);
 
 #endif // BENCHMARK_TESTS_H

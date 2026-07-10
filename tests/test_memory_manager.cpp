@@ -1,4 +1,4 @@
-// Copyright 2025 Timo Heimonen <timo.heimonen@proton.me>
+// Copyright 2026 Timo Heimonen <timo.heimonen@proton.me>
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -12,154 +12,122 @@
 //
 // You should have received a copy of the GNU General Public License
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
-//
+
 #include <gtest/gtest.h>
-#include "core/memory/memory_manager.h"
+
+#include <cerrno>
 #include <cstring>
-#include <unistd.h>  // getpagesize
+#include <string>
+#include <sys/mman.h>
 
-// Test successful buffer allocation
-TEST(MemoryManagerTest, AllocateBufferSuccess) {
-  size_t buffer_size = 1024 * 1024;  // 1 MB
-  MmapPtr buffer = allocate_buffer(buffer_size, "test_buffer");
-  
-  EXPECT_NE(buffer.get(), nullptr);
-}
+#include "core/memory/memory_manager.h"
+#include "output/console/messages/messages_api.h"
+#include "test_memory_system_calls.h"
 
-// Test buffer allocation with page-aligned size
-TEST(MemoryManagerTest, AllocateBufferPageAligned) {
-  size_t page_size = getpagesize();
-  size_t buffer_size = page_size * 4;  // 4 pages
-  MmapPtr buffer = allocate_buffer(buffer_size, "test_buffer");
+class MemoryManagerTest : public FakeMemorySystemCallsTest {};
 
-  EXPECT_NE(buffer.get(), nullptr);
-}
-
-// Test buffer allocation with default buffer name
-TEST(MemoryManagerTest, AllocateBufferDefaultName) {
-  size_t buffer_size = 64 * 1024;  // 64 KB
-  MmapPtr buffer = allocate_buffer(buffer_size);
-
-  EXPECT_NE(buffer.get(), nullptr);
-}
-
-// Test that allocated buffer can be written to
-TEST(MemoryManagerTest, AllocateBufferWritable) {
-  size_t buffer_size = 1024;  // 1 KB
-  MmapPtr buffer = allocate_buffer(buffer_size, "writable_buffer");
-  
-  ASSERT_NE(buffer.get(), nullptr);
-  
-  // Write to buffer
-  char* ptr = static_cast<char*>(buffer.get());
-  std::strncpy(ptr, "test data", buffer_size - 1);
-  ptr[buffer_size - 1] = '\0';  // Ensure null termination
-  
-  // Read back
-  EXPECT_STREQ(ptr, "test data");
-}
-
-// Test that allocated buffer can be read from
-TEST(MemoryManagerTest, AllocateBufferReadable) {
-  size_t buffer_size = 1024;  // 1 KB
-  MmapPtr buffer = allocate_buffer(buffer_size, "readable_buffer");
-  
-  ASSERT_NE(buffer.get(), nullptr);
-  
-  // Write pattern
-  unsigned char* ptr = static_cast<unsigned char*>(buffer.get());
-  for (size_t i = 0; i < buffer_size; ++i) {
-    ptr[i] = static_cast<unsigned char>(i % 256);
-  }
-  
-  // Read back and verify
-  for (size_t i = 0; i < buffer_size; ++i) {
-    EXPECT_EQ(ptr[i], static_cast<unsigned char>(i % 256));
-  }
-}
-
-// Test multiple buffer allocations
-TEST(MemoryManagerTest, AllocateMultipleBuffers) {
-  size_t buffer_size = 64 * 1024;  // 64 KB
-  
-  MmapPtr buffer1 = allocate_buffer(buffer_size, "buffer1");
-  MmapPtr buffer2 = allocate_buffer(buffer_size, "buffer2");
-  MmapPtr buffer3 = allocate_buffer(buffer_size, "buffer3");
-  
-  EXPECT_NE(buffer1.get(), nullptr);
-  EXPECT_NE(buffer2.get(), nullptr);
-  EXPECT_NE(buffer3.get(), nullptr);
-  
-  // Verify they are different memory locations
-  EXPECT_NE(buffer1.get(), buffer2.get());
-  EXPECT_NE(buffer1.get(), buffer3.get());
-  EXPECT_NE(buffer2.get(), buffer3.get());
-}
-
-// Test buffer with minimum size (page size)
-TEST(MemoryManagerTest, AllocateBufferMinimumSize) {
-  size_t page_size = getpagesize();
-  MmapPtr buffer = allocate_buffer(page_size, "min_buffer");
-
-  EXPECT_NE(buffer.get(), nullptr);
-}
-
-// Test that buffer is automatically freed when going out of scope
-TEST(MemoryManagerTest, BufferAutoCleanup) {
+TEST_F(MemoryManagerTest, RegularAllocationRequestsWillNeedAndReleasesExactMapping) {
+  void* mapped_pointer = nullptr;
   {
-    size_t buffer_size = 1024 * 1024;  // 1 MB
-    MmapPtr buffer = allocate_buffer(buffer_size, "auto_cleanup_buffer");
-    EXPECT_NE(buffer.get(), nullptr);
-    // Buffer should be automatically freed here when going out of scope
+    MmapPtr buffer = allocate_buffer(128, "regular");
+    ASSERT_NE(buffer.get(), nullptr);
+    mapped_pointer = buffer.get();
+    EXPECT_EQ(state.map_calls, 1u);
+    EXPECT_EQ(state.advise_calls, 1u);
+    EXPECT_EQ(state.last_map_size, 128u);
+    EXPECT_EQ(state.last_advise_size, 128u);
+    EXPECT_EQ(state.last_protection, PROT_READ | PROT_WRITE);
+    EXPECT_EQ(state.last_flags, MAP_PRIVATE | MAP_ANONYMOUS);
+    EXPECT_EQ(state.last_advice, MADV_WILLNEED);
+    EXPECT_EQ(state.unmap_calls, 0u);
   }
-  // If we get here without crashing, cleanup worked
-  SUCCEED();
+
+  EXPECT_EQ(state.unmap_calls, 1u);
+  EXPECT_EQ(state.last_unmapped_pointer, mapped_pointer);
+  EXPECT_EQ(state.last_unmapped_size, 128u);
 }
 
-// Test large buffer allocation
-TEST(MemoryManagerTest, AllocateLargeBuffer) {
-  size_t buffer_size = 10 * 1024 * 1024;  // 10 MB
-  MmapPtr buffer = allocate_buffer(buffer_size, "large_buffer");
-  
-  EXPECT_NE(buffer.get(), nullptr);
+TEST_F(MemoryManagerTest, NonCacheableAllocationRequestsRandomHintAndReleasesMapping) {
+  {
+    MmapPtr buffer = allocate_buffer_non_cacheable(256, "cache-discouraged");
+    ASSERT_NE(buffer.get(), nullptr);
+    EXPECT_EQ(state.map_calls, 1u);
+    EXPECT_EQ(state.advise_calls, 1u);
+    EXPECT_EQ(state.last_advice, MADV_RANDOM);
+    EXPECT_EQ(state.last_map_size, 256u);
+    EXPECT_EQ(state.last_advise_size, 256u);
+  }
+  EXPECT_EQ(state.unmap_calls, 1u);
+  EXPECT_EQ(state.last_unmapped_size, 256u);
 }
 
-// Test successful non-cacheable buffer allocation
-TEST(MemoryManagerTest, AllocateNonCacheableBufferSuccess) {
-  size_t buffer_size = 1024 * 1024;  // 1 MB
-  MmapPtr buffer = allocate_buffer_non_cacheable(buffer_size, "test_non_cacheable_buffer");
-
-  EXPECT_NE(buffer.get(), nullptr);
-}
-
-// Test buffer allocation with size 0 - should return nullptr and log error
-TEST(MemoryManagerTest, AllocateBufferSizeZero) {
+TEST_F(MemoryManagerTest, MappingFailureReturnsNullWithoutAdviceOrUnmap) {
+  state.fail_map_on_call = 1;
   testing::internal::CaptureStderr();
-  MmapPtr buffer = allocate_buffer(0, "test_buffer_zero");
-  std::string error_output = testing::internal::GetCapturedStderr();
-  
-  // Verify buffer is nullptr
+  MmapPtr buffer = allocate_buffer(64, "failed-map");
+  const std::string error = testing::internal::GetCapturedStderr();
+
   EXPECT_EQ(buffer.get(), nullptr);
-  
-  // Verify error message contains expected content
-  EXPECT_NE(error_output.find("Error: "), std::string::npos);
-  EXPECT_NE(error_output.find("test_buffer_zero"), std::string::npos);
-  EXPECT_NE(error_output.find("Buffer size is zero"), std::string::npos);
+  EXPECT_EQ(state.map_calls, 1u);
+  EXPECT_EQ(state.advise_calls, 0u);
+  EXPECT_EQ(state.unmap_calls, 0u);
+  EXPECT_EQ(error, Messages::error_prefix() +
+                       Messages::error_mmap_failed("failed-map") + ": " +
+                       std::strerror(ENOMEM) + "\n");
 }
 
-// Test non-cacheable buffer allocation with size 0 - should return nullptr and log error
-TEST(MemoryManagerTest, AllocateNonCacheableBufferSizeZero) {
+TEST_F(MemoryManagerTest, AdviceFailureIsReportedButAllocationRemainsOwned) {
+  state.advise_result = -1;
+  state.advise_errno = EINVAL;
+  bool allocation_succeeded = false;
   testing::internal::CaptureStderr();
-  MmapPtr buffer = allocate_buffer_non_cacheable(0, "test_non_cacheable_buffer_zero");
-  std::string error_output = testing::internal::GetCapturedStderr();
-  
-  // Verify buffer is nullptr
-  EXPECT_EQ(buffer.get(), nullptr);
-  
-  // Verify error message contains expected content
-  EXPECT_NE(error_output.find("Error: "), std::string::npos);
-  EXPECT_NE(error_output.find("test_non_cacheable_buffer_zero"), std::string::npos);
-  EXPECT_NE(error_output.find("Buffer size is zero"), std::string::npos);
+  {
+    MmapPtr buffer = allocate_buffer_non_cacheable(64, "advice-failure");
+    allocation_succeeded = buffer != nullptr;
+  }
+  const std::string error = testing::internal::GetCapturedStderr();
+
+  ASSERT_TRUE(allocation_succeeded);
+  EXPECT_EQ(state.map_calls, 1u);
+  EXPECT_EQ(state.advise_calls, 1u);
+  EXPECT_EQ(state.unmap_calls, 1u);
+  EXPECT_EQ(error, Messages::warning_prefix() +
+                       Messages::warning_madvise_random_failed(
+                           "advice-failure", std::strerror(EINVAL)) +
+                       "\n");
 }
 
+TEST_F(MemoryManagerTest, UnmapFailureIsReportedAfterOwnedBufferDestruction) {
+  state.unmap_result = -1;
+  state.unmap_errno = EINVAL;
 
+  bool allocation_succeeded = false;
+  testing::internal::CaptureStderr();
+  {
+    MmapPtr buffer = allocate_buffer(64, "unmap-failure");
+    allocation_succeeded = buffer != nullptr;
+  }
+  const std::string error = testing::internal::GetCapturedStderr();
+
+  ASSERT_TRUE(allocation_succeeded);
+  EXPECT_EQ(state.unmap_calls, 1u);
+  EXPECT_EQ(error, Messages::error_prefix() + Messages::error_munmap_failed() +
+                       ": " + std::strerror(EINVAL) + "\n");
+}
+
+TEST_F(MemoryManagerTest, ZeroSizeFailsBeforeAnySystemCallWithExactMessage) {
+  for (const bool non_cacheable : {false, true}) {
+    const char* name = non_cacheable ? "zero-non-cacheable" : "zero-regular";
+    testing::internal::CaptureStderr();
+    MmapPtr buffer = non_cacheable ? allocate_buffer_non_cacheable(0, name)
+                                   : allocate_buffer(0, name);
+    const std::string error = testing::internal::GetCapturedStderr();
+
+    EXPECT_EQ(buffer.get(), nullptr);
+    EXPECT_EQ(error, Messages::error_prefix() +
+                         Messages::error_buffer_size_zero(name) + "\n");
+  }
+  EXPECT_EQ(state.map_calls, 0u);
+  EXPECT_EQ(state.advise_calls, 0u);
+  EXPECT_EQ(state.unmap_calls, 0u);
+}

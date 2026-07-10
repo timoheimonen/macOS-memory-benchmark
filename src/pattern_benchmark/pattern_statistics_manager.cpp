@@ -31,18 +31,47 @@
  */
 #include "pattern_benchmark/pattern_benchmark.h"
 #include "core/config/config.h"
-#include "core/config/constants.h"
 #include "core/signal/signal_handler.h"
 #include "output/console/messages/messages_api.h"
 #include <algorithm>
+#include <array>
 #include <cmath>
+#include <cstdlib>
 #include <iostream>
 #include <numeric>
-#include <vector>
-#include <cstdlib>
 #include <utility>
+#include <vector>
 
 namespace {
+
+using PatternValuesMember = std::vector<double> PatternStatistics::*;
+
+constexpr std::array<PatternValuesMember,
+                     static_cast<size_t>(PatternKind::Count) *
+                         static_cast<size_t>(PatternOperation::Count)>
+    kPatternValueMembers = {
+        &PatternStatistics::all_forward_read_bw,
+        &PatternStatistics::all_forward_write_bw,
+        &PatternStatistics::all_forward_copy_bw,
+        &PatternStatistics::all_reverse_read_bw,
+        &PatternStatistics::all_reverse_write_bw,
+        &PatternStatistics::all_reverse_copy_bw,
+        &PatternStatistics::all_strided_64_read_bw,
+        &PatternStatistics::all_strided_64_write_bw,
+        &PatternStatistics::all_strided_64_copy_bw,
+        &PatternStatistics::all_strided_4096_read_bw,
+        &PatternStatistics::all_strided_4096_write_bw,
+        &PatternStatistics::all_strided_4096_copy_bw,
+        &PatternStatistics::all_strided_16384_read_bw,
+        &PatternStatistics::all_strided_16384_write_bw,
+        &PatternStatistics::all_strided_16384_copy_bw,
+        &PatternStatistics::all_strided_2mb_read_bw,
+        &PatternStatistics::all_strided_2mb_write_bw,
+        &PatternStatistics::all_strided_2mb_copy_bw,
+        &PatternStatistics::all_random_read_bw,
+        &PatternStatistics::all_random_write_bw,
+        &PatternStatistics::all_random_copy_bw,
+};
 
 double& legacy_bandwidth(PatternResults& results, PatternKind kind,
                          PatternOperation operation) {
@@ -79,17 +108,6 @@ double& legacy_bandwidth(PatternResults& results, PatternKind kind,
       break;
   }
   return results.forward_read_bw;
-}
-
-void append_if_measured(std::vector<double>& destination,
-                        const PatternResults& results, PatternKind kind,
-                        PatternOperation operation) {
-  const PatternMeasurement& measurement =
-      get_pattern_measurement(results, kind, operation);
-  if (measurement.status == PatternMeasurementStatus::Measured &&
-      measurement.bandwidth_gb_s.has_value()) {
-    destination.push_back(*measurement.bandwidth_gb_s);
-  }
 }
 
 }  // namespace
@@ -142,69 +160,64 @@ PatternStatisticsData calculate_pattern_statistics(const std::vector<double>& va
                             ? std::sqrt(variance_sum / static_cast<double>(count - 1))
                             : 0.0;
   const double cv = average != 0.0 ? stddev / std::abs(average) * 100.0 : 0.0;
-  return {average, min_value, max_value, percentile(0.50), percentile(0.90),
-          percentile(0.95), percentile(0.99), stddev, cv};
+  const double median = percentile(0.50);
+  std::vector<double> absolute_deviations;
+  absolute_deviations.reserve(count);
+  for (double value : values) {
+    absolute_deviations.push_back(std::abs(value - median));
+  }
+  std::sort(absolute_deviations.begin(), absolute_deviations.end());
+  const double median_absolute_deviation =
+      count % 2 == 0
+          ? (absolute_deviations[count / 2 - 1] +
+             absolute_deviations[count / 2]) /
+                2.0
+          : absolute_deviations[count / 2];
+  return {average, min_value, max_value, median, percentile(0.90),
+          percentile(0.95), percentile(0.99), stddev, cv,
+          median_absolute_deviation};
+}
+
+void initialize_pattern_statistics(PatternStatistics& stats,
+                                   size_t expected_loop_count) {
+  stats.loop_results.clear();
+  if (expected_loop_count > 0) {
+    stats.loop_results.reserve(expected_loop_count);
+  }
+  for (PatternValuesMember member : kPatternValueMembers) {
+    std::vector<double>& values = stats.*member;
+    values.clear();
+    if (expected_loop_count > 0) {
+      values.reserve(expected_loop_count);
+    }
+  }
+}
+
+void collect_pattern_loop_result(PatternStatistics& stats,
+                                 PatternResults loop_result) {
+  for (size_t index = 0; index < loop_result.measurements.size(); ++index) {
+    const PatternMeasurement& measurement = loop_result.measurements[index];
+    if (measurement.status == PatternMeasurementStatus::Measured &&
+        measurement.bandwidth_gb_s.has_value()) {
+      (stats.*kPatternValueMembers[index])
+          .push_back(*measurement.bandwidth_gb_s);
+    }
+  }
+  stats.loop_results.push_back(std::move(loop_result));
 }
 
 // ============================================================================
 // Public API Functions
 // ============================================================================
 
-int run_all_pattern_benchmarks(const BenchmarkBuffers& buffers, const BenchmarkConfig& config, PatternStatistics& stats) {
-  using namespace Constants;
-  
-  // Initialize result vectors
-  stats.loop_results.clear();
-  stats.all_forward_read_bw.clear();
-  stats.all_forward_write_bw.clear();
-  stats.all_forward_copy_bw.clear();
-  stats.all_reverse_read_bw.clear();
-  stats.all_reverse_write_bw.clear();
-  stats.all_reverse_copy_bw.clear();
-  stats.all_strided_64_read_bw.clear();
-  stats.all_strided_64_write_bw.clear();
-  stats.all_strided_64_copy_bw.clear();
-  stats.all_strided_4096_read_bw.clear();
-  stats.all_strided_4096_write_bw.clear();
-  stats.all_strided_4096_copy_bw.clear();
-  stats.all_strided_16384_read_bw.clear();
-  stats.all_strided_16384_write_bw.clear();
-  stats.all_strided_16384_copy_bw.clear();
-  stats.all_strided_2mb_read_bw.clear();
-  stats.all_strided_2mb_write_bw.clear();
-  stats.all_strided_2mb_copy_bw.clear();
-  stats.all_random_read_bw.clear();
-  stats.all_random_write_bw.clear();
-  stats.all_random_copy_bw.clear();
-  
-  // Pre-allocate vector space if needed
-  if (config.loop_count > 0) {
-    stats.loop_results.reserve(config.loop_count);
-    stats.all_forward_read_bw.reserve(config.loop_count);
-    stats.all_forward_write_bw.reserve(config.loop_count);
-    stats.all_forward_copy_bw.reserve(config.loop_count);
-    stats.all_reverse_read_bw.reserve(config.loop_count);
-    stats.all_reverse_write_bw.reserve(config.loop_count);
-    stats.all_reverse_copy_bw.reserve(config.loop_count);
-    stats.all_strided_64_read_bw.reserve(config.loop_count);
-    stats.all_strided_64_write_bw.reserve(config.loop_count);
-    stats.all_strided_64_copy_bw.reserve(config.loop_count);
-    stats.all_strided_4096_read_bw.reserve(config.loop_count);
-    stats.all_strided_4096_write_bw.reserve(config.loop_count);
-    stats.all_strided_4096_copy_bw.reserve(config.loop_count);
-    stats.all_strided_16384_read_bw.reserve(config.loop_count);
-    stats.all_strided_16384_write_bw.reserve(config.loop_count);
-    stats.all_strided_16384_copy_bw.reserve(config.loop_count);
-    stats.all_strided_2mb_read_bw.reserve(config.loop_count);
-    stats.all_strided_2mb_write_bw.reserve(config.loop_count);
-    stats.all_strided_2mb_copy_bw.reserve(config.loop_count);
-    stats.all_random_read_bw.reserve(config.loop_count);
-    stats.all_random_write_bw.reserve(config.loop_count);
-    stats.all_random_copy_bw.reserve(config.loop_count);
-  }
-  
+int run_all_pattern_benchmarks(const BenchmarkBuffers& buffers,
+                               const BenchmarkConfig& config,
+                               PatternStatistics& stats) {
+  initialize_pattern_statistics(
+      stats, config.loop_count > 0 ? static_cast<size_t>(config.loop_count) : 0);
+
   std::cout << Messages::msg_running_pattern_benchmarks() << std::flush;
-  
+
   // Main pattern benchmark loop
   for (int loop = 0; loop < config.loop_count; ++loop) {
     // Check for Ctrl+C between pattern loops
@@ -223,50 +236,7 @@ int run_all_pattern_benchmarks(const BenchmarkBuffers& buffers, const BenchmarkC
         return status;
       }
       
-      // Store results for this loop
-      append_if_measured(stats.all_forward_read_bw, loop_results,
-                         PatternKind::SequentialForward, PatternOperation::Read);
-      append_if_measured(stats.all_forward_write_bw, loop_results,
-                         PatternKind::SequentialForward, PatternOperation::Write);
-      append_if_measured(stats.all_forward_copy_bw, loop_results,
-                         PatternKind::SequentialForward, PatternOperation::Copy);
-      append_if_measured(stats.all_reverse_read_bw, loop_results,
-                         PatternKind::SequentialReverse, PatternOperation::Read);
-      append_if_measured(stats.all_reverse_write_bw, loop_results,
-                         PatternKind::SequentialReverse, PatternOperation::Write);
-      append_if_measured(stats.all_reverse_copy_bw, loop_results,
-                         PatternKind::SequentialReverse, PatternOperation::Copy);
-      append_if_measured(stats.all_strided_64_read_bw, loop_results,
-                         PatternKind::Strided64, PatternOperation::Read);
-      append_if_measured(stats.all_strided_64_write_bw, loop_results,
-                         PatternKind::Strided64, PatternOperation::Write);
-      append_if_measured(stats.all_strided_64_copy_bw, loop_results,
-                         PatternKind::Strided64, PatternOperation::Copy);
-      append_if_measured(stats.all_strided_4096_read_bw, loop_results,
-                         PatternKind::Strided4096, PatternOperation::Read);
-      append_if_measured(stats.all_strided_4096_write_bw, loop_results,
-                         PatternKind::Strided4096, PatternOperation::Write);
-      append_if_measured(stats.all_strided_4096_copy_bw, loop_results,
-                         PatternKind::Strided4096, PatternOperation::Copy);
-      append_if_measured(stats.all_strided_16384_read_bw, loop_results,
-                         PatternKind::Strided16384, PatternOperation::Read);
-      append_if_measured(stats.all_strided_16384_write_bw, loop_results,
-                         PatternKind::Strided16384, PatternOperation::Write);
-      append_if_measured(stats.all_strided_16384_copy_bw, loop_results,
-                         PatternKind::Strided16384, PatternOperation::Copy);
-      append_if_measured(stats.all_strided_2mb_read_bw, loop_results,
-                         PatternKind::Strided2MiB, PatternOperation::Read);
-      append_if_measured(stats.all_strided_2mb_write_bw, loop_results,
-                         PatternKind::Strided2MiB, PatternOperation::Write);
-      append_if_measured(stats.all_strided_2mb_copy_bw, loop_results,
-                         PatternKind::Strided2MiB, PatternOperation::Copy);
-      append_if_measured(stats.all_random_read_bw, loop_results,
-                         PatternKind::Random, PatternOperation::Read);
-      append_if_measured(stats.all_random_write_bw, loop_results,
-                         PatternKind::Random, PatternOperation::Write);
-      append_if_measured(stats.all_random_copy_bw, loop_results,
-                         PatternKind::Random, PatternOperation::Copy);
-      stats.loop_results.push_back(loop_results);
+      collect_pattern_loop_result(stats, std::move(loop_results));
       
       // Print simple progress message for each loop
       if (config.loop_count > 1) {

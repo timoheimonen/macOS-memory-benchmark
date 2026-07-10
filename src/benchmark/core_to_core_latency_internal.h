@@ -53,6 +53,24 @@ struct CoreToCoreFailureInjection {
   bool fail_initiator_startup = false;
 };
 
+/** Pure summary values used by core-to-core console reporting. */
+struct CoreToCoreSummaryStats {
+  double average = 0.0;
+  double min = 0.0;
+  double max = 0.0;
+  double median = 0.0;
+  double p90 = 0.0;
+  double p95 = 0.0;
+  double p99 = 0.0;
+  double sample_stddev = 0.0;
+  double coefficient_of_variation_pct = 0.0;
+  double median_absolute_deviation = 0.0;
+};
+
+CoreToCoreSummaryStats calculate_core_to_core_summary_stats(const std::vector<double>& values);
+
+std::string classify_core_to_core_duration_quality(double elapsed_seconds);
+
 size_t calculate_core_to_core_calibrated_round_trips(double pilot_elapsed_seconds, size_t pilot_round_trips,
                                                      double target_duration_seconds, size_t minimum_round_trips,
                                                      size_t maximum_round_trips);

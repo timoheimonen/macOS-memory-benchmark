@@ -1,6 +1,6 @@
 # Project Structure — macOS-memory-benchmark
 
-**Version:** 0.58.1
+**Version:** 0.59.0
 **Platform:** ARM64 / AArch64 (Apple Silicon macOS)
 **License:** GNU General Public License v3.0
 
@@ -40,6 +40,7 @@ This document describes the layout of project files, organized by purpose. It is
 | File | Purpose |
 |---|---|
 | `Makefile` | Primary build system; produces the `memory_benchmark` release binary and the `test_runner` test binary |
+| `coverage.sh` | Runs isolated LLVM unit/all-test source coverage builds under `/tmp` without replacing normal workspace binaries |
 | `.clang-format` | Clang-Format style baseline for C++ sources |
 
 ### User-facing documentation
@@ -79,29 +80,17 @@ Hand-written AArch64 assembly implementing the hot inner loops that must not be 
 | `memory_copy_cache.s` | Sequential forward memory copy (cache-focused) |
 | `memory_copy_random.s` | Random-order memory copy |
 | `memory_copy_reverse.s` | Reverse-order memory copy |
-| `memory_copy_strided.s` | Strided memory copy (generic stride parameter) |
-| `memory_copy_strided_64.s` | Strided memory copy — 64-byte stride |
-| `memory_copy_strided_4096.s` | Strided memory copy — 4096-byte stride |
-| `memory_copy_strided_16384.s` | Strided memory copy — 16384-byte stride |
-| `memory_copy_strided_2mb.s` | Strided memory copy — 2 MB stride |
+| `memory_copy_strided.s` | Phase-rotating strided memory copy (generic stride parameter) |
 | `memory_read.s` | Sequential forward memory read (main-memory) |
 | `memory_read_cache.s` | Sequential forward memory read (cache-focused) |
 | `memory_read_random.s` | Random-order memory read |
 | `memory_read_reverse.s` | Reverse-order memory read |
-| `memory_read_strided.s` | Strided memory read (generic stride parameter) |
-| `memory_read_strided_64.s` | Strided memory read — 64-byte stride |
-| `memory_read_strided_4096.s` | Strided memory read — 4096-byte stride |
-| `memory_read_strided_16384.s` | Strided memory read — 16384-byte stride |
-| `memory_read_strided_2mb.s` | Strided memory read — 2 MB stride |
+| `memory_read_strided.s` | Phase-rotating strided memory read (generic stride parameter) |
 | `memory_write.s` | Sequential forward memory write (main-memory, non-temporal stores) |
 | `memory_write_cache.s` | Sequential forward memory write (cache-focused) |
 | `memory_write_random.s` | Random-order memory write |
 | `memory_write_reverse.s` | Reverse-order memory write |
-| `memory_write_strided.s` | Strided memory write (generic stride parameter) |
-| `memory_write_strided_64.s` | Strided memory write — 64-byte stride |
-| `memory_write_strided_4096.s` | Strided memory write — 4096-byte stride |
-| `memory_write_strided_16384.s` | Strided memory write — 16384-byte stride |
-| `memory_write_strided_2mb.s` | Strided memory write — 2 MB stride |
+| `memory_write_strided.s` | Phase-rotating strided memory write (generic stride parameter) |
 | `memory_latency.s` | Pointer-chase latency measurement loop |
 | `core_to_core_latency.s` | Cache-line handoff ping-pong loop for core-to-core latency |
 
@@ -126,7 +115,6 @@ The benchmark subsystem owns all measurement logic: executing tests, collecting 
 |---|---|
 | `benchmark_executor.h` / `.cpp` | Executes individual benchmark passes (bandwidth and latency) at each cache/memory level; drives the parallel test framework |
 | `benchmark_runner.h` / `.cpp` | Outer loop: runs multiple benchmark iterations, collects result vectors, and invokes the statistics collector |
-| `benchmark_results.h` / `.cpp` | Data structures holding per-run and aggregated benchmark results |
 | `benchmark_statistics_collector.h` / `.cpp` | Initializes/preallocates statistics storage and accumulates measured per-loop values and latency samples for later aggregation |
 | `benchmark_work_plan.h` / `.cpp` | Pure standard-benchmark work planning, calibration arithmetic, seed derivation, and cyclic scheduling helpers |
 | `parallel_test_framework.h` | Template-based framework for dispatching multi-threaded benchmark work with synchronized start, cache-line-aligned per-thread state, and macOS QoS thread attributes |
@@ -167,7 +155,7 @@ Core infrastructure for configuration, memory management, macOS system introspec
 |---|---|
 | `config.h` | `BenchmarkConfig` structure for standard, pattern, standalone TLB, and their common sweep settings; core-to-core uses a separate config type |
 | `constants.h` | Named constants for memory limits, cache size bounds, stride values, buffer sizing factors, and latency access counts |
-| `version.h` | `SOFTVERSION` macro (semantic version string, currently `"0.58.1"`) |
+| `version.h` | `SOFTVERSION` macro (semantic version string, currently `"0.59.0"`) |
 | `argument_parser.cpp` | Parses standard, pattern, and standalone TLB options into `BenchmarkConfig`; core-to-core is pre-routed to its dedicated parser |
 | `config_validator.cpp` | Validates the parsed configuration; emits errors for out-of-range or conflicting settings |
 | `buffer_calculator.cpp` | Derives buffer sizes for each cache/memory level from the validated configuration and detected system parameters |
@@ -182,7 +170,7 @@ Core infrastructure for configuration, memory management, macOS system introspec
 
 | File | Purpose |
 |---|---|
-| `memory_manager.h` / `.cpp` | Low-level normal and cache-discouraging `mmap` allocation; returns RAII `MmapPtr` owners that call `munmap` |
+| `memory_manager.h` / `.cpp` | Low-level normal and cache-discouraging `mmap` allocation; returns RAII `MmapPtr` owners and exposes a test-only mmap-family provider seam |
 | `buffer_manager.h` | Defines the named `BenchmarkBuffers` RAII owner passed between allocation, initialization, and execution code |
 | `buffer_allocator.h` / `.cpp` | Allocates the mode-required buffer set and performs overflow-safe peak-concurrent memory accounting |
 | `buffer_initializer.h` / `.cpp` | Initializes deterministic source/zeroed destination data and pointer-chase chains before benchmark runs |
@@ -192,13 +180,13 @@ Core infrastructure for configuration, memory management, macOS system introspec
 
 | File | Purpose |
 |---|---|
-| `system_info.h` / `.cpp` | Queries the OS for CPU core topology, L1/L2 cache sizes, macOS version, and available memory via sysctl and Mach APIs |
+| `system_info.h` / `.cpp` | Queries CPU/cache/OS/memory data through a macOS provider and a deterministic provider seam for fallback/error tests |
 
 #### src/core/timing/
 
 | File | Purpose |
 |---|---|
-| `timer.h` / `.cpp` | High-resolution timer wrapping `mach_absolute_time()` on macOS; provides nanosecond-resolution elapsed-time measurement |
+| `timer.h` / `.cpp` | High-resolution Mach timer with exact tick conversion plus a deterministic clock/timebase provider seam |
 
 ---
 
@@ -239,8 +227,6 @@ All user-facing text strings are centralized here. Each `.cpp` file implements a
 | `json_output.cpp` | Builds standard/pattern root payloads, adds timestamp/version metadata, and triggers file output |
 | `builder.cpp` | Builds common mode configuration metadata, including resolved chain, seed, calibration, scheduling, and worker policies |
 | `standard.cpp` | Active standard schema-2 serializer for completion state, loop measurements, and main/cache aggregates |
-| `cache.cpp` | Legacy standalone cache-result builder retained and directly tested; it is not called by the active schema-2 path |
-| `main_memory.cpp` | Legacy standalone main-memory builder retained and directly tested; it is not called by the active schema-2 path |
 | `patterns.cpp` | Serializes pattern benchmark results |
 | `file_writer.cpp` | Atomically writes the completed JSON document to the requested output path, creating parent directories as needed |
 
@@ -305,16 +291,19 @@ GoogleTest-based unit test suite. All files are picked up automatically by the M
 
 | File | Suite name | Coverage focus |
 |---|---|---|
-| `test_config.cpp` | `ConfigTest` | CLI argument parsing, config validation, buffer size calculation |
+| `test_config.cpp` | `ConfigTest` | Strict whole-token CLI/sweep parsing, validation, defaults, and derived buffer/access math |
 | `test_messages.cpp` | `Messages*Test` | Console message string functions across all categories |
 | `test_memory_utils.cpp` | `MemoryUtilsTest` | Memory helpers: pointer-chase chain construction and verification |
-| `test_memory_manager.cpp` | `MemoryManagerTest` | `mmap`-based allocation, RAII cleanup, alignment |
-| `test_buffer_manager.cpp` | `BufferManagerTest` | Named buffer set management |
-| `test_benchmark_executor.cpp` | `BenchmarkExecutorTest` | Per-level executor dispatch and result structure |
-| `test_benchmark_runner.cpp` | `BenchmarkResultsTest`, `BenchmarkStatisticsCollectorTest`, `BenchmarkRunnerTest` | Status-bearing result math, collection, aggregation, checkpointing, and runner failure seams |
+| `test_memory_manager.cpp` | `MemoryManagerTest` | Injected mmap/madvise policy, failures, and exact RAII unmapping |
+| `test_buffer_manager.cpp` | `BufferManagerTest` | Allocation shape, nth-allocation cleanup, initialized content, and peak accounting |
+| `test_benchmark_executor.cpp` | `BenchmarkExecutorTest` | Injected phase/chain failures, continuous latency sampling, and hardware executor contracts |
+| `test_benchmark_runner.cpp` | `BenchmarkStatisticsCollectorTest`, `BenchmarkRunnerTest` | Status-bearing collection, reset/reserve contracts, checkpointing, and runner failure seams |
 | `test_benchmark_work_plan.cpp` | `BenchmarkWorkPlanTest` | Exact payload/access planning, calibration, cyclic order, seed derivation, and duration classification |
-| `test_analysis.cpp` | `AnalysisTest` | TLB boundary detection logic |
+| `test_analysis.cpp` | `AnalysisTest` | Injected TLB coordination, counters/status, boundary detection, validation, and paired analysis |
 | `test_json_schema.cpp` | `JsonSchemaTest` | JSON output structure and field presence |
+| `test_json_utils.cpp` | `JsonUtilsTest`, `JsonFileWriterTest` | JSON parse/statistics and atomic writer success/failure contracts |
+| `test_output_printer.cpp` | `OutputPrinterTest` | Status-aware partial output, mode/cache composition, and size-unit boundaries |
+| `test_sweep_runner.cpp` | `SweepRunnerTest` | Complete/partial/interrupted/failed attempt accounting and checkpoint behavior |
 | `test_pattern_validation.cpp` | `PatternValidationTest` | Pattern benchmark parameter validation |
 | `test_pattern_benchmark.cpp` | `PatternBenchmarkTest` | Pattern execution and statistics |
 | `test_pattern_work_plan.cpp` | `PatternWorkPlanTest` | Strided phases, worker reduction, random partitions, exact payload work, and calibration |
@@ -324,27 +313,27 @@ GoogleTest-based unit test suite. All files are picked up automatically by the M
 | `test_executable_cli.cpp` | `ExecutableCliIntegrationTest` | Executable-level CLI routing, invalid config, JSON output, and pattern orchestration smoke coverage |
 | `test_standard_kernels.cpp` | `StandardKernelIntegrationTest` | Real ARM64 standard-kernel ABI, tails, boundaries, checksums, and multi-worker execution |
 | `test_statistics.cpp` | `StatisticsTest` | Statistical computations: median, percentiles, stddev, min, max |
-| `test_timer.cpp` | `HighResTimerTest` | Timer resolution, monotonicity, and elapsed-time accuracy |
-| `test_system_info.cpp` | `SystemInfoTest` | `sysctlbyname`-based system queries on macOS |
-| `test_tlb_chain.cpp` | `TlbChainTest` | Page-native spread/packed chain planning, construction, and integrity invariants |
-| `test_tlb_measurement_scheduler.cpp` | `TlbMeasurementSchedulerTest` | Seeded schedule balance, adaptive stopping, and pass accounting |
+| `test_timer.cpp` | `HighResTimerTest`, `HighResTimerIntegrationTest` | Exact conversion/failure seams plus one real monotonic smoke |
+| `test_system_info.cpp` | `SystemInfoTest`, `SystemInfoIntegrationTest` | Deterministic fallbacks/errors plus four coherent hardware contracts |
+| `test_tlb_chain.cpp` | `TlbChainTest` | Spread/packed planning, every traversal policy, explicit corruption statuses, and one ASM smoke |
+| `test_tlb_measurement_scheduler.cpp` | `TlbMeasurementSchedulerTest` | Seeded balance, stop/error boundaries, callback contracts, convergence, and exact pass accounting |
 | `test_tlb_runtime_policy.cpp` | `TlbRuntimePolicyTest` | Runtime profiles, calibration, convergence, memory budgets, and work estimates |
 | `test_tlb_sweep_planner.cpp` | `TlbSweepPlannerTest` | Page-aligned base/refinement planning, stride bounds, deduplication, and source tracking |
 
-**Current source inventory:** 25 test translation units contain 516 `TEST`/`TEST_F`/`TEST_P` declarations across 37
-suite names as of 2026-07-10. Parameterized instantiations expand the executable's runtime test count beyond the raw
-declaration count.
+**Current source inventory:** 28 test translation units contain 563 `TEST`/`TEST_F`/`TEST_P` declarations across 44
+suite names as of 2026-07-10. Parameterized instantiations expand the executable to 584 runtime tests.
 
 ---
 
 ### Shared test helper headers
 
-Two shared helper headers provide functionality reused across multiple test suites:
+Three shared helper headers provide functionality reused across multiple test suites:
 
 | File | Purpose |
 |---|---|
 | `test_config_helpers.h` | Provides `initialize_system_info(BenchmarkConfig&)` and `allocate_and_initialize_buffers(BenchmarkConfig&, BenchmarkBuffers&)` — used by multiple suites to set up system config and buffer allocation |
 | `test_statistics_helpers.h` | Provides `capture_bw()`, `capture_lat()`, `capture_auto_tlb_breakdown()` helpers in `namespace test_statistics_helpers` — used by `StatisticsTest` to capture statistics output |
+| `test_memory_system_calls.h` | Provides deterministic mmap/madvise/munmap state and a resetting fixture for allocation tests |
 
 ---
 

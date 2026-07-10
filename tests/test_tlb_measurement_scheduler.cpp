@@ -106,9 +106,51 @@ TEST(TlbMeasurementSchedulerTest, SchedulePreservesPlannerPointIdentifiers) {
   EXPECT_EQ(identifiers, (std::set<size_t>{10, 20}));
 }
 
-TEST(TlbMeasurementSchedulerTest, InjectedStopReturnsDeterministicPartialRecords) {
+TEST(TlbMeasurementSchedulerTest, StopBeforeFirstTaskProducesNoRecordsOrRounds) {
+  const std::vector<TlbMeasurementTask> schedule = build_tlb_measurement_schedule(
+      make_points(3), 2, 99, TlbMeasurementPass::Base);
+  size_t measure_calls = 0;
+
+  const TlbScheduleExecutionResult result = execute_tlb_measurement_schedule(
+      schedule,
+      []() { return true; },
+      [&measure_calls](const TlbMeasurementTask&, TlbMeasurementSample&) {
+        ++measure_calls;
+        return TlbTaskMeasureStatus::Success;
+      });
+
+  EXPECT_EQ(result.status, TlbScheduleExecutionStatus::Interrupted);
+  EXPECT_EQ(measure_calls, 0u);
+  EXPECT_TRUE(result.records.empty());
+  EXPECT_EQ(result.rounds_completed, 0u);
+  EXPECT_FALSE(result.converged);
+}
+
+TEST(TlbMeasurementSchedulerTest, StopMidRoundRetainsOnlyValidPartialRecords) {
   const std::vector<TlbMeasurementTask> schedule = build_tlb_measurement_schedule(
       make_points(4), 3, 99, TlbMeasurementPass::Refinement);
+  size_t measured_count = 0;
+
+  const TlbScheduleExecutionResult result = execute_tlb_measurement_schedule(
+      schedule,
+      [&measured_count]() { return measured_count >= 2; },
+      [&measured_count](const TlbMeasurementTask&,
+                        TlbMeasurementSample& sample) {
+        ++measured_count;
+        sample.latency_ns = static_cast<double>(measured_count);
+        return TlbTaskMeasureStatus::Success;
+      });
+
+  EXPECT_EQ(result.status, TlbScheduleExecutionStatus::Interrupted);
+  ASSERT_EQ(result.records.size(), 2u);
+  EXPECT_DOUBLE_EQ(result.records.back().latency_ns, 2.0);
+  EXPECT_EQ(result.rounds_completed, 0u);
+  EXPECT_FALSE(result.converged);
+}
+
+TEST(TlbMeasurementSchedulerTest, StopAfterCompleteRoundCountsThatRoundExactlyOnce) {
+  const std::vector<TlbMeasurementTask> schedule = build_tlb_measurement_schedule(
+      make_points(3), 3, 99, TlbMeasurementPass::Validation);
   size_t measured_count = 0;
 
   const TlbScheduleExecutionResult result = execute_tlb_measurement_schedule(
@@ -122,8 +164,9 @@ TEST(TlbMeasurementSchedulerTest, InjectedStopReturnsDeterministicPartialRecords
       });
 
   EXPECT_EQ(result.status, TlbScheduleExecutionStatus::Interrupted);
-  ASSERT_EQ(result.records.size(), 3u);
-  EXPECT_DOUBLE_EQ(result.records.back().latency_ns, 3.0);
+  EXPECT_EQ(result.records.size(), 3u);
+  EXPECT_EQ(result.rounds_completed, 1u);
+  EXPECT_FALSE(result.converged);
 }
 
 TEST(TlbMeasurementSchedulerTest, MeasurementErrorStopsWithoutAppendingInvalidRecord) {
@@ -139,6 +182,85 @@ TEST(TlbMeasurementSchedulerTest, MeasurementErrorStopsWithoutAppendingInvalidRe
 
   EXPECT_EQ(result.status, TlbScheduleExecutionStatus::Error);
   EXPECT_TRUE(result.records.empty());
+  EXPECT_EQ(result.rounds_completed, 0u);
+}
+
+TEST(TlbMeasurementSchedulerTest, MeasurementErrorAfterRecordsPreservesValidPrefix) {
+  const std::vector<TlbMeasurementTask> schedule = build_tlb_measurement_schedule(
+      make_points(3), 2, 7, TlbMeasurementPass::Base);
+  size_t measure_calls = 0;
+
+  const TlbScheduleExecutionResult result = execute_tlb_measurement_schedule(
+      schedule,
+      []() { return false; },
+      [&measure_calls](const TlbMeasurementTask&,
+                       TlbMeasurementSample& sample) {
+        ++measure_calls;
+        if (measure_calls == 3) {
+          return TlbTaskMeasureStatus::Error;
+        }
+        sample.latency_ns = static_cast<double>(measure_calls);
+        return TlbTaskMeasureStatus::Success;
+      });
+
+  EXPECT_EQ(result.status, TlbScheduleExecutionStatus::Error);
+  ASSERT_EQ(result.records.size(), 2u);
+  EXPECT_DOUBLE_EQ(result.records[0].latency_ns, 1.0);
+  EXPECT_DOUBLE_EQ(result.records[1].latency_ns, 2.0);
+  EXPECT_EQ(result.rounds_completed, 0u);
+  EXPECT_FALSE(result.converged);
+}
+
+TEST(TlbMeasurementSchedulerTest, EmptyScheduleIsACompleteNoOp) {
+  size_t stop_calls = 0;
+  size_t measure_calls = 0;
+  const TlbScheduleExecutionResult result = execute_tlb_measurement_schedule(
+      {},
+      [&stop_calls]() {
+        ++stop_calls;
+        return false;
+      },
+      [&measure_calls](const TlbMeasurementTask&, TlbMeasurementSample&) {
+        ++measure_calls;
+        return TlbTaskMeasureStatus::Success;
+      });
+
+  EXPECT_EQ(result.status, TlbScheduleExecutionStatus::Complete);
+  EXPECT_EQ(stop_calls, 0u);
+  EXPECT_EQ(measure_calls, 0u);
+  EXPECT_TRUE(result.records.empty());
+  EXPECT_EQ(result.rounds_completed, 0u);
+}
+
+TEST(TlbMeasurementSchedulerTest, MissingMeasureCallbackIsAnErrorForNonEmptySchedule) {
+  const std::vector<TlbMeasurementTask> schedule = build_tlb_measurement_schedule(
+      make_points(1), 1, 7, TlbMeasurementPass::Base);
+
+  const TlbScheduleExecutionResult result = execute_tlb_measurement_schedule(
+      schedule, {}, {});
+
+  EXPECT_EQ(result.status, TlbScheduleExecutionStatus::Error);
+  EXPECT_TRUE(result.records.empty());
+  EXPECT_EQ(result.rounds_completed, 0u);
+}
+
+TEST(TlbMeasurementSchedulerTest, EmptyOptionalCallbacksAllowFullExecution) {
+  const std::vector<TlbMeasurementTask> schedule = build_tlb_measurement_schedule(
+      make_points(2), 1, 7, TlbMeasurementPass::Base);
+
+  const TlbScheduleExecutionResult result = execute_tlb_measurement_schedule(
+      schedule,
+      {},
+      [](const TlbMeasurementTask&, TlbMeasurementSample& sample) {
+        sample.latency_ns = 1.0;
+        return TlbTaskMeasureStatus::Success;
+      },
+      {});
+
+  EXPECT_EQ(result.status, TlbScheduleExecutionStatus::Complete);
+  EXPECT_EQ(result.records.size(), 2u);
+  EXPECT_EQ(result.rounds_completed, 1u);
+  EXPECT_FALSE(result.converged);
 }
 
 TEST(TlbMeasurementSchedulerTest, ConvergenceCallbackStopsOnlyAfterCompleteRound) {

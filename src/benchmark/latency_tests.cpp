@@ -53,14 +53,19 @@ static double run_latency_measurement(uintptr_t* lat_start_ptr,
                                       size_t num_accesses,
                                       HighResTimer& timer,
                                       std::vector<double>* latency_samples,
-                                      int sample_count) {
+                                      int sample_count,
+                                      const LatencyMeasurementTestHooks* test_hooks) {
   if (num_accesses == 0) {
     return 0.0;
   }
 
   if (latency_samples == nullptr || sample_count <= 0) {
     timer.start();
-    (void)memory_latency_chase_asm(lat_start_ptr, num_accesses);
+    if (test_hooks != nullptr && test_hooks->chase) {
+      (void)test_hooks->chase(lat_start_ptr, num_accesses);
+    } else {
+      (void)memory_latency_chase_asm(lat_start_ptr, num_accesses);
+    }
     return timer.stop_ns();
   }
 
@@ -83,7 +88,9 @@ static double run_latency_measurement(uintptr_t* lat_start_ptr,
     size_t accesses_this_sample = base_accesses + (i < remainder_accesses ? 1 : 0);
 
     timer.start();
-    current_ptr = memory_latency_chase_asm(current_ptr, accesses_this_sample);
+    current_ptr = test_hooks != nullptr && test_hooks->chase
+                      ? test_hooks->chase(current_ptr, accesses_this_sample)
+                      : memory_latency_chase_asm(current_ptr, accesses_this_sample);
     double sample_duration_ns = timer.stop_ns();
     double sample_latency_ns = sample_duration_ns / static_cast<double>(accesses_this_sample);
 
@@ -104,13 +111,14 @@ static double run_latency_test_common(void* buffer,
                                       size_t num_accesses,
                                       HighResTimer& timer,
                                       std::vector<double>* latency_samples,
-                                      int sample_count) {
+                                      int sample_count,
+                                      const LatencyMeasurementTestHooks* test_hooks) {
   if (num_accesses == 0) {
     return 0.0;
   }
 
   uintptr_t* lat_start_ptr = static_cast<uintptr_t*>(buffer);
-  return run_latency_measurement(lat_start_ptr, num_accesses, timer, latency_samples, sample_count);
+  return run_latency_measurement(lat_start_ptr, num_accesses, timer, latency_samples, sample_count, test_hooks);
 }
 
 /**
@@ -148,9 +156,10 @@ static double run_latency_test_common(void* buffer,
  * @see memory_latency_chase_asm() for the low-level pointer chase implementation
  * @see setup_latency_chain() for buffer initialization
  */
-double run_latency_test(void *buffer, size_t num_accesses, HighResTimer &timer,
-                          std::vector<double> *latency_samples, int sample_count) {
-  return run_latency_test_common(buffer, num_accesses, timer, latency_samples, sample_count);
+double run_latency_test(void* buffer, size_t num_accesses, HighResTimer& timer,
+                        std::vector<double>* latency_samples, int sample_count,
+                        const LatencyMeasurementTestHooks* test_hooks) {
+  return run_latency_test_common(buffer, num_accesses, timer, latency_samples, sample_count, test_hooks);
 }
 
 /**
@@ -190,8 +199,9 @@ double run_latency_test(void *buffer, size_t num_accesses, HighResTimer &timer,
  * @see memory_latency_chase_asm() for the low-level pointer chase implementation
  * @see setup_latency_chain() for buffer initialization
  */
-double run_cache_latency_test(void *buffer, size_t buffer_size, size_t num_accesses, HighResTimer &timer,
-                                std::vector<double> *latency_samples, int sample_count) {
+double run_cache_latency_test(void* buffer, size_t buffer_size, size_t num_accesses, HighResTimer& timer,
+                              std::vector<double>* latency_samples, int sample_count,
+                              const LatencyMeasurementTestHooks* test_hooks) {
   (void)buffer_size;
-  return run_latency_test_common(buffer, num_accesses, timer, latency_samples, sample_count);
+  return run_latency_test_common(buffer, num_accesses, timer, latency_samples, sample_count, test_hooks);
 }

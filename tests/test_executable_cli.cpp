@@ -16,16 +16,21 @@
 
 #include <gtest/gtest.h>
 
-#include <array>
+#include <atomic>
 #include <cstdio>
 #include <cstdlib>
 #include <fstream>
+#include <spawn.h>
 #include <sstream>
 #include <string>
 #include <sys/wait.h>
 #include <unistd.h>
+#include <vector>
 
+#include "core/config/version.h"
 #include "third_party/nlohmann/json.hpp"
+
+extern char** environ;
 
 namespace {
 
@@ -34,30 +39,82 @@ struct CliResult {
   std::string output;
 };
 
-CliResult run_memory_benchmark(const std::string& args) {
+CliResult run_memory_benchmark(const std::vector<std::string>& args) {
   CliResult result;
-  const std::string command = "./memory_benchmark " + args + " 2>&1";
-
-  FILE* pipe = popen(command.c_str(), "r");
-  if (pipe == nullptr) {
+  int output_pipe[2] = {-1, -1};
+  if (pipe(output_pipe) != 0) {
     return result;
   }
 
-  std::array<char, 4096> buffer{};
-  while (fgets(buffer.data(), static_cast<int>(buffer.size()), pipe) != nullptr) {
-    result.output += buffer.data();
+  posix_spawn_file_actions_t actions;
+  posix_spawn_file_actions_init(&actions);
+  posix_spawn_file_actions_adddup2(&actions, output_pipe[1], STDOUT_FILENO);
+  posix_spawn_file_actions_adddup2(&actions, output_pipe[1], STDERR_FILENO);
+  posix_spawn_file_actions_addclose(&actions, output_pipe[0]);
+  posix_spawn_file_actions_addclose(&actions, output_pipe[1]);
+
+  std::vector<std::string> argument_storage;
+  argument_storage.reserve(args.size() + 1);
+  argument_storage.push_back("./memory_benchmark");
+  argument_storage.insert(argument_storage.end(), args.begin(), args.end());
+  std::vector<char*> argv;
+  argv.reserve(argument_storage.size() + 1);
+  for (std::string& argument : argument_storage) {
+    argv.push_back(argument.data());
+  }
+  argv.push_back(nullptr);
+
+  pid_t child = -1;
+  const int spawn_result = posix_spawn(&child, "./memory_benchmark", &actions,
+                                       nullptr, argv.data(), environ);
+  posix_spawn_file_actions_destroy(&actions);
+  close(output_pipe[1]);
+  if (spawn_result != 0) {
+    close(output_pipe[0]);
+    return result;
   }
 
-  const int status = pclose(pipe);
+  char buffer[4096];
+  ssize_t bytes_read = 0;
+  while ((bytes_read = read(output_pipe[0], buffer, sizeof(buffer))) > 0) {
+    result.output.append(buffer, static_cast<size_t>(bytes_read));
+  }
+  close(output_pipe[0]);
+
+  int status = 0;
+  if (waitpid(child, &status, 0) == -1) {
+    return result;
+  }
   if (status != -1 && WIFEXITED(status)) {
     result.exit_code = WEXITSTATUS(status);
   }
   return result;
 }
 
-std::string make_temp_json_path(const std::string& test_name) {
-  return "/tmp/membenchmark_cli_" + std::to_string(getpid()) + "_" + test_name + ".json";
-}
+class TemporaryJsonFile {
+ public:
+  explicit TemporaryJsonFile(const std::string& test_name) {
+    static std::atomic<unsigned long> sequence{0};
+    path_ = "/tmp/membenchmark_cli_" + std::to_string(getpid()) + "_" +
+            std::to_string(sequence.fetch_add(1)) + "_" + test_name +
+            ".json";
+    std::remove(path_.c_str());
+    std::remove((path_ + ".tmp").c_str());
+  }
+
+  ~TemporaryJsonFile() {
+    std::remove(path_.c_str());
+    std::remove((path_ + ".tmp").c_str());
+  }
+
+  TemporaryJsonFile(const TemporaryJsonFile&) = delete;
+  TemporaryJsonFile& operator=(const TemporaryJsonFile&) = delete;
+
+  const std::string& path() const { return path_; }
+
+ private:
+  std::string path_;
+};
 
 std::string read_file(const std::string& path) {
   std::ifstream file(path);
@@ -69,7 +126,7 @@ std::string read_file(const std::string& path) {
 }  // namespace
 
 TEST(ExecutableCliIntegrationTest, NoArgumentsShowsHelpAndReturnsSuccessIntegration) {
-  const CliResult result = run_memory_benchmark("");
+  const CliResult result = run_memory_benchmark({});
 
   EXPECT_EQ(result.exit_code, EXIT_SUCCESS);
   EXPECT_NE(result.output.find("Usage:"), std::string::npos);
@@ -77,7 +134,7 @@ TEST(ExecutableCliIntegrationTest, NoArgumentsShowsHelpAndReturnsSuccessIntegrat
 }
 
 TEST(ExecutableCliIntegrationTest, HelpFlagShowsHelpAndReturnsSuccessIntegration) {
-  const CliResult result = run_memory_benchmark("-h");
+  const CliResult result = run_memory_benchmark({"-h"});
 
   EXPECT_EQ(result.exit_code, EXIT_SUCCESS);
   EXPECT_NE(result.output.find("Usage:"), std::string::npos);
@@ -85,7 +142,7 @@ TEST(ExecutableCliIntegrationTest, HelpFlagShowsHelpAndReturnsSuccessIntegration
 }
 
 TEST(ExecutableCliIntegrationTest, OptionsWithoutModeShowHelpAndReturnSuccessIntegration) {
-  const CliResult result = run_memory_benchmark("--threads 1");
+  const CliResult result = run_memory_benchmark({"--threads", "1"});
 
   EXPECT_EQ(result.exit_code, EXIT_SUCCESS);
   EXPECT_NE(result.output.find("Usage:"), std::string::npos);
@@ -93,111 +150,107 @@ TEST(ExecutableCliIntegrationTest, OptionsWithoutModeShowHelpAndReturnSuccessInt
 }
 
 TEST(ExecutableCliIntegrationTest, InvalidStandardModeConfigReturnsFailureIntegration) {
-  const CliResult result = run_memory_benchmark("--benchmark --only-bandwidth --latency-samples 1");
+  const CliResult result = run_memory_benchmark(
+      {"--benchmark", "--only-bandwidth", "--latency-samples", "1"});
 
   EXPECT_EQ(result.exit_code, EXIT_FAILURE);
   EXPECT_NE(result.output.find("--only-bandwidth cannot be used with --latency-samples"), std::string::npos);
 }
 
 TEST(ExecutableCliIntegrationTest, CoreToCoreArgumentsAreRoutedBeforeNormalParserIntegration) {
-  const CliResult result = run_memory_benchmark("--analyze-core2core --buffer-size 256");
+  const CliResult result = run_memory_benchmark(
+      {"--analyze-core2core", "--buffer-size", "256"});
 
   EXPECT_EQ(result.exit_code, EXIT_FAILURE);
   EXPECT_NE(result.output.find("--analyze-core2core allows only optional"), std::string::npos);
 }
 
 TEST(ExecutableCliIntegrationTest, CoreToCoreWritesCalibratedAuditJsonIntegration) {
-  const std::string output_path = make_temp_json_path("core2core_v2");
-  std::remove(output_path.c_str());
+  const TemporaryJsonFile output("core2core_v2");
 
-  const CliResult result = run_memory_benchmark(
-      "--analyze-core2core --count 1 --latency-samples 1 --output " + output_path);
+  const CliResult result = run_memory_benchmark({
+      "--analyze-core2core", "--count", "1", "--latency-samples", "1",
+      "--output", output.path()});
 
   EXPECT_EQ(result.exit_code, EXIT_SUCCESS);
-  const nlohmann::json output = nlohmann::json::parse(read_file(output_path));
-  EXPECT_EQ(output["version"], "0.58.1");
-  EXPECT_EQ(output["configuration"]["schema_version"], 2);
-  EXPECT_EQ(output["core_to_core_latency"]["status"], "complete");
-  EXPECT_TRUE(output["core_to_core_latency"]["measurements_complete"]);
-  ASSERT_EQ(output["core_to_core_latency"]["scenarios"].size(), 3u);
-  EXPECT_EQ(output["core_to_core_latency"]["scenarios"][0]["loop_records"].size(), 1u);
-
-  std::remove(output_path.c_str());
+  const nlohmann::json json = nlohmann::json::parse(read_file(output.path()));
+  EXPECT_EQ(json["version"], SOFTVERSION);
+  EXPECT_EQ(json["configuration"]["schema_version"], 2);
+  EXPECT_EQ(json["core_to_core_latency"]["status"], "complete");
+  EXPECT_TRUE(json["core_to_core_latency"]["measurements_complete"]);
+  ASSERT_EQ(json["core_to_core_latency"]["scenarios"].size(), 3u);
+  EXPECT_EQ(json["core_to_core_latency"]["scenarios"][0]["loop_records"].size(), 1u);
 }
 
 TEST(ExecutableCliIntegrationTest, CoreToCoreSweepWritesCompletionMetadataIntegration) {
-  const std::string output_path = make_temp_json_path("core2core_sweep_v2");
-  std::remove(output_path.c_str());
+  const TemporaryJsonFile output("core2core_sweep_v2");
 
-  const CliResult result = run_memory_benchmark(
-      "--analyze-core2core --count 1 --sweep latency-samples=1,2 "
-      "--sweep-max-runs 2 --output " + output_path);
+  const CliResult result = run_memory_benchmark({
+      "--analyze-core2core", "--count", "1", "--sweep",
+      "latency-samples=1,2", "--sweep-max-runs", "2", "--output",
+      output.path()});
 
   EXPECT_EQ(result.exit_code, EXIT_SUCCESS);
-  const nlohmann::json output = nlohmann::json::parse(read_file(output_path));
-  EXPECT_EQ(output["version"], "0.58.1");
-  EXPECT_EQ(output["status"], "complete");
-  EXPECT_EQ(output["planned_runs"], 2u);
-  EXPECT_EQ(output["completed_runs"], 2u);
-  EXPECT_TRUE(output["conclusions_valid"]);
-  ASSERT_EQ(output["runs"].size(), 2u);
-  EXPECT_EQ(output["runs"][0]["result"]["configuration"]["schema_version"], 2);
-
-  std::remove(output_path.c_str());
+  const nlohmann::json json = nlohmann::json::parse(read_file(output.path()));
+  EXPECT_EQ(json["version"], SOFTVERSION);
+  EXPECT_EQ(json["status"], "complete");
+  EXPECT_EQ(json["planned_runs"], 2u);
+  EXPECT_EQ(json["completed_runs"], 2u);
+  EXPECT_TRUE(json["conclusions_valid"]);
+  ASSERT_EQ(json["runs"].size(), 2u);
+  EXPECT_EQ(json["runs"][0]["result"]["configuration"]["schema_version"], 2);
 }
 
 TEST(ExecutableCliIntegrationTest, AnalyzeTlbInvalidStrideSweepFailsBeforeExecutionIntegration) {
-  const std::string output_path = make_temp_json_path("tlb_invalid_stride_sweep");
-  std::remove(output_path.c_str());
+  const TemporaryJsonFile output("tlb_invalid_stride_sweep");
 
-  const CliResult result = run_memory_benchmark(
-      "--analyze-tlb --sweep latency-stride-bytes=64,130 --output " + output_path);
+  const CliResult result = run_memory_benchmark({
+      "--analyze-tlb", "--sweep", "latency-stride-bytes=64,130",
+      "--output", output.path()});
 
   EXPECT_EQ(result.exit_code, EXIT_FAILURE);
   EXPECT_NE(result.output.find("must be a multiple of 8 bytes"), std::string::npos);
   EXPECT_EQ(result.output.find("Running sweep"), std::string::npos);
-  EXPECT_EQ(access(output_path.c_str(), F_OK), -1);
+  EXPECT_EQ(access(output.path().c_str(), F_OK), -1);
 }
 
 TEST(ExecutableCliIntegrationTest, StandardBenchmarkWritesJsonIntegration) {
-  const std::string output_path = make_temp_json_path("standard");
-  std::remove(output_path.c_str());
+  const TemporaryJsonFile output("standard output with spaces");
 
-  const CliResult result = run_memory_benchmark("--benchmark --only-bandwidth --buffer-size 1 --iterations 1 "
-                                                "--count 1 --threads 1 --output " + output_path);
+  const CliResult result = run_memory_benchmark({
+      "--benchmark", "--only-bandwidth", "--buffer-size", "1",
+      "--iterations", "1", "--count", "1", "--threads", "1", "--output",
+      output.path()});
 
   EXPECT_EQ(result.exit_code, EXIT_SUCCESS);
   EXPECT_NE(result.output.find("Running benchmarks"), std::string::npos);
   EXPECT_NE(result.output.find("Results saved to:"), std::string::npos);
 
-  const std::string json = read_file(output_path);
+  const std::string json = read_file(output.path());
   EXPECT_NE(json.find("\"mode\": \"benchmark\""), std::string::npos);
   EXPECT_NE(json.find("\"main_memory\""), std::string::npos);
   EXPECT_NE(json.find("\"bandwidth\""), std::string::npos);
-
-  std::remove(output_path.c_str());
 }
 
 TEST(ExecutableCliIntegrationTest, StandardSweepWritesCompletionMetadataIntegration) {
-  const std::string output_path = make_temp_json_path("standard_sweep_status");
-  std::remove(output_path.c_str());
+  const TemporaryJsonFile output("standard_sweep_status");
 
-  const CliResult result = run_memory_benchmark(
-      "--benchmark --only-bandwidth --iterations 1 --count 1 --threads 1 "
-      "--sweep buffer-size=1,2 --sweep-max-runs 2 --output " + output_path);
+  const CliResult result = run_memory_benchmark({
+      "--benchmark", "--only-bandwidth", "--iterations", "1", "--count",
+      "1", "--threads", "1", "--sweep", "buffer-size=1,2",
+      "--sweep-max-runs", "2", "--output", output.path()});
 
   EXPECT_EQ(result.exit_code, EXIT_SUCCESS);
-  const std::string json = read_file(output_path);
+  const std::string json = read_file(output.path());
   EXPECT_NE(json.find("\"status\": \"complete\""), std::string::npos);
   EXPECT_NE(json.find("\"planned_runs\": 2"), std::string::npos);
   EXPECT_NE(json.find("\"completed_runs\": 2"), std::string::npos);
   EXPECT_NE(json.find("\"conclusions_valid\": true"), std::string::npos);
-
-  std::remove(output_path.c_str());
 }
 
 TEST(ExecutableCliIntegrationTest, PatternModeRunsPatternOrchestrationIntegration) {
-  const CliResult result = run_memory_benchmark("--patterns --buffer-size 1 --iterations 1 --count 1");
+  const CliResult result = run_memory_benchmark(
+      {"--patterns", "--buffer-size", "1", "--iterations", "1", "--count", "1"});
 
   EXPECT_EQ(result.exit_code, EXIT_SUCCESS);
   EXPECT_NE(result.output.find("Running Pattern Benchmarks"), std::string::npos);
@@ -209,20 +262,23 @@ TEST(ExecutableCliIntegrationTest, PatternModeRunsPatternOrchestrationIntegratio
 }
 
 TEST(ExecutableCliIntegrationTest, PatternSeedReproducesWorkloadMetadataIntegration) {
-  const std::string first_path = make_temp_json_path("patterns_seed_first");
-  const std::string second_path = make_temp_json_path("patterns_seed_second");
-  std::remove(first_path.c_str());
-  std::remove(second_path.c_str());
+  const TemporaryJsonFile first_output("patterns_seed_first");
+  const TemporaryJsonFile second_output("patterns_seed_second");
 
-  const std::string common_args =
-      "--patterns --buffer-size 1 --iterations 1 --count 2 --threads 2 --seed 42 --output ";
-  const CliResult first_run = run_memory_benchmark(common_args + first_path);
-  const CliResult second_run = run_memory_benchmark(common_args + second_path);
+  const std::vector<std::string> common_args = {
+      "--patterns", "--buffer-size", "1", "--iterations", "1", "--count",
+      "2", "--threads", "2", "--seed", "42", "--output"};
+  std::vector<std::string> first_args = common_args;
+  first_args.push_back(first_output.path());
+  std::vector<std::string> second_args = common_args;
+  second_args.push_back(second_output.path());
+  const CliResult first_run = run_memory_benchmark(first_args);
+  const CliResult second_run = run_memory_benchmark(second_args);
   ASSERT_EQ(first_run.exit_code, EXIT_SUCCESS);
   ASSERT_EQ(second_run.exit_code, EXIT_SUCCESS);
 
-  const nlohmann::json first = nlohmann::json::parse(read_file(first_path));
-  const nlohmann::json second = nlohmann::json::parse(read_file(second_path));
+  const nlohmann::json first = nlohmann::json::parse(read_file(first_output.path()));
+  const nlohmann::json second = nlohmann::json::parse(read_file(second_output.path()));
   EXPECT_EQ(first["configuration"]["pattern_seed"], "42");
   EXPECT_EQ(first["configuration"]["pattern_seed"],
             second["configuration"]["pattern_seed"]);
@@ -247,23 +303,19 @@ TEST(ExecutableCliIntegrationTest, PatternSeedReproducesWorkloadMetadataIntegrat
                 second_samples[sample]["pattern_order_index"]);
     }
   }
-
-  std::remove(first_path.c_str());
-  std::remove(second_path.c_str());
 }
 
 TEST(ExecutableCliIntegrationTest, PatternAutomaticCalibrationWritesMetadataIntegration) {
-  const std::string output_path = make_temp_json_path("patterns_calibration");
-  std::remove(output_path.c_str());
+  const TemporaryJsonFile output_file("patterns_calibration");
 
-  const CliResult result = run_memory_benchmark(
-      "--patterns --buffer-size 1 --count 1 --threads 1 --seed 42 --output " +
-      output_path);
+  const CliResult result = run_memory_benchmark({
+      "--patterns", "--buffer-size", "1", "--count", "1", "--threads",
+      "1", "--seed", "42", "--output", output_file.path()});
   ASSERT_EQ(result.exit_code, EXIT_SUCCESS);
   EXPECT_NE(result.output.find("automatic duration calibration"),
             std::string::npos);
 
-  const nlohmann::json output = nlohmann::json::parse(read_file(output_path));
+  const nlohmann::json output = nlohmann::json::parse(read_file(output_file.path()));
   EXPECT_EQ(output["configuration"]["pattern_pass_policy"],
             "automatic-duration-calibration");
   EXPECT_EQ(output["configuration"]["calibration_max_corrections"], 2u);
@@ -280,6 +332,4 @@ TEST(ExecutableCliIntegrationTest, PatternAutomaticCalibrationWritesMetadataInte
       }
     }
   }
-
-  std::remove(output_path.c_str());
 }

@@ -35,6 +35,24 @@
 #include <iostream> // std::cerr
 #include <cerrno>   // errno
 
+namespace {
+
+const MemorySystemCalls kDefaultMemorySystemCalls{};
+MemorySystemCalls active_memory_system_calls = kDefaultMemorySystemCalls;
+
+}  // namespace
+
+void set_memory_system_calls_for_testing(const MemorySystemCalls& calls) {
+  active_memory_system_calls = {
+      calls.map != nullptr ? calls.map : kDefaultMemorySystemCalls.map,
+      calls.advise != nullptr ? calls.advise : kDefaultMemorySystemCalls.advise,
+      calls.unmap != nullptr ? calls.unmap : kDefaultMemorySystemCalls.unmap};
+}
+
+void reset_memory_system_calls_for_testing() {
+  active_memory_system_calls = kDefaultMemorySystemCalls;
+}
+
 /**
  * @brief Allocates a memory buffer using mmap with prefaulting hints.
  *
@@ -78,7 +96,8 @@ MmapPtr allocate_buffer(size_t size, const char* buffer_name) {
   }
   
   // Allocate memory using mmap (C-style API returns MAP_FAILED on error)
-  void *ptr = mmap(nullptr, size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+  void *ptr = active_memory_system_calls.map(
+      nullptr, size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
   
   // Error: System call failed - mmap returns MAP_FAILED on error
   if (ptr == MAP_FAILED) {
@@ -89,11 +108,11 @@ MmapPtr allocate_buffer(size_t size, const char* buffer_name) {
   }
   
   // Create MmapPtr with custom deleter
-  MmapPtr buffer_ptr(ptr, MmapDeleter{size});
+  MmapPtr buffer_ptr(ptr, MmapDeleter{size, active_memory_system_calls.unmap});
   
   // Advise the kernel that we will need this memory (prefault optimization)
   // Note: Non-fatal error - madvise failure doesn't prevent memory from being usable
-  if (madvise(ptr, size, MADV_WILLNEED) == -1) {
+  if (active_memory_system_calls.advise(ptr, size, MADV_WILLNEED) == -1) {
     std::cerr << Messages::error_prefix() << Messages::error_madvise_failed(buffer_name) 
               << ": " << strerror(errno) << std::endl;
     // Non-fatal error, continue anyway - allocation succeeded
@@ -142,7 +161,8 @@ MmapPtr allocate_buffer_non_cacheable(size_t size, const char* buffer_name) {
   
   // Allocate memory using mmap (same as regular allocation)
   // Error: System call failed - mmap returns MAP_FAILED on error
-  void *ptr = mmap(nullptr, size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+  void *ptr = active_memory_system_calls.map(
+      nullptr, size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
   
   if (ptr == MAP_FAILED) {
     // Create specific error message with errno details
@@ -152,7 +172,7 @@ MmapPtr allocate_buffer_non_cacheable(size_t size, const char* buffer_name) {
   }
   
   // Create MmapPtr with custom deleter
-  MmapPtr buffer_ptr(ptr, MmapDeleter{size});
+  MmapPtr buffer_ptr(ptr, MmapDeleter{size, active_memory_system_calls.unmap});
   
   // Apply cache-discouraging hints (best-effort approach)
   // Note: User-space on macOS cannot achieve true non-cacheable memory because:
@@ -164,8 +184,11 @@ MmapPtr allocate_buffer_non_cacheable(size_t size, const char* buffer_name) {
   // Use MADV_RANDOM to hint that access pattern is random, discouraging aggressive caching
   // This is a best-effort hint; it does not guarantee non-cacheable behavior
   // Note: Non-fatal error - madvise failure doesn't prevent memory from being usable
-  if (madvise(ptr, size, MADV_RANDOM) == -1) {
-    std::cerr << Messages::warning_prefix() << Messages::warning_madvise_random_failed(buffer_name, strerror(errno)) << std::endl;
+  if (active_memory_system_calls.advise(ptr, size, MADV_RANDOM) == -1) {
+    std::cerr << Messages::warning_prefix()
+              << Messages::warning_madvise_random_failed(buffer_name,
+                                                         strerror(errno))
+              << std::endl;
     // Non-fatal error, continue anyway - allocation succeeded
   }
   

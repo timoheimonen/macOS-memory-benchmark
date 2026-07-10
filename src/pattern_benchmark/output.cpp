@@ -210,6 +210,10 @@ static void print_pattern_type_statistics(const std::string &pattern_name,
     std::cout << "    " << Messages::statistics_coefficient_of_variation(
                                   read_stats.coefficient_of_variation_pct)
               << std::endl;
+    std::cout << "    " << Messages::statistics_median_absolute_deviation(
+                                  read_stats.median_absolute_deviation,
+                                  Constants::PATTERN_BANDWIDTH_PRECISION)
+              << std::endl;
     if (read_stats.coefficient_of_variation_pct > cv_threshold_pct) {
       noise_warnings.push_back(Messages::warning_pattern_measurement_noisy(
           pattern_name + " read", read_stats.coefficient_of_variation_pct,
@@ -231,6 +235,10 @@ static void print_pattern_type_statistics(const std::string &pattern_name,
     std::cout << "    " << Messages::statistics_coefficient_of_variation(
                                   write_stats.coefficient_of_variation_pct)
               << std::endl;
+    std::cout << "    " << Messages::statistics_median_absolute_deviation(
+                                  write_stats.median_absolute_deviation,
+                                  Constants::PATTERN_BANDWIDTH_PRECISION)
+              << std::endl;
     if (write_stats.coefficient_of_variation_pct > cv_threshold_pct) {
       noise_warnings.push_back(Messages::warning_pattern_measurement_noisy(
           pattern_name + " write", write_stats.coefficient_of_variation_pct,
@@ -251,6 +259,10 @@ static void print_pattern_type_statistics(const std::string &pattern_name,
     std::cout << "    " << Messages::statistics_stddev(copy_stats.stddev, Constants::PATTERN_BANDWIDTH_PRECISION) << std::endl;
     std::cout << "    " << Messages::statistics_coefficient_of_variation(
                                   copy_stats.coefficient_of_variation_pct)
+              << std::endl;
+    std::cout << "    " << Messages::statistics_median_absolute_deviation(
+                                  copy_stats.median_absolute_deviation,
+                                  Constants::PATTERN_BANDWIDTH_PRECISION)
               << std::endl;
     if (copy_stats.coefficient_of_variation_pct > cv_threshold_pct) {
       noise_warnings.push_back(Messages::warning_pattern_measurement_noisy(

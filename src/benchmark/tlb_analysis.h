@@ -25,6 +25,7 @@
 
 #include <cstddef>  // size_t
 #include <cstdint>
+#include <functional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -82,6 +83,55 @@ struct TlbPairedPointSummary {
   size_t active_cache_line_footprint_bytes = 0;
   size_t node_count = 0;
   bool short_cycle_diagnostic = false;
+};
+
+/** Terminal coordinator state for one standalone TLB analysis run. */
+enum class TlbAnalysisCoordinatorStatus {
+  Complete = 0,
+  Interrupted,
+  Error,
+  Partial,
+};
+
+/** Exact pass and point accounting exposed by the injectable coordinator seam. */
+struct TlbAnalysisCoordinatorSummary {
+  TlbAnalysisCoordinatorStatus status = TlbAnalysisCoordinatorStatus::Error;
+  std::string status_text = "error";
+  size_t planned_points = 0;
+  size_t completed_points = 0;
+  size_t validation_planned_points = 0;
+  size_t validation_completed_points = 0;
+  size_t planned_passes = 0;
+  size_t completed_passes = 0;
+  size_t measurement_record_count = 0;
+  double elapsed_seconds = 0.0;
+  bool conclusions_valid = false;
+  bool large_locality_planned = false;
+  bool large_locality_completed = false;
+  std::vector<TlbPassExecutionSummary> pass_summaries;
+};
+
+using TlbAnalysisPassExecutor = std::function<TlbScheduleExecutionResult(
+    TlbMeasurementPass, const std::vector<TlbSweepPoint>&)>;
+using TlbAnalysisSummaryObserver =
+    std::function<void(const TlbAnalysisCoordinatorSummary&)>;
+
+/**
+ * @brief Minimal non-hardware execution seam for the real TLB coordinator.
+ *
+ * The provider values replace sysctl/allocation setup, while `execute_pass`
+ * replaces the timer/ASM measurement boundary. Planning, interruption,
+ * aggregation, status, and conclusion logic remain production code.
+ */
+struct TlbAnalysisExecutionSeam {
+  size_t page_size_bytes = 0;
+  size_t l1_cache_size_bytes = 0;
+  size_t selected_buffer_mb = 0;
+  size_t available_memory_mb = 0;
+  std::string cpu_name;
+  TlbAnalysisPassExecutor execute_pass;
+  TlbAnalysisSummaryObserver observe_summary;
+  std::function<double()> elapsed_seconds;
 };
 
 /**
@@ -246,5 +296,15 @@ int run_tlb_analysis(const BenchmarkConfig& config);
  */
 int run_tlb_analysis(const BenchmarkConfig& config,
                      const TlbStopRequested& stop_requested);
+
+/**
+ * @brief Run the production coordinator with injected setup and pass execution.
+ *
+ * This overload performs no allocation, timer creation, or assembly work.
+ * Invalid seam metadata or a missing pass callback returns `EXIT_FAILURE`.
+ */
+int run_tlb_analysis(const BenchmarkConfig& config,
+                     const TlbStopRequested& stop_requested,
+                     const TlbAnalysisExecutionSeam& execution_seam);
 
 #endif  // TLB_ANALYSIS_H

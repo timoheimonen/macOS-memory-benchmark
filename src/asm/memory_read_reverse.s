@@ -247,8 +247,12 @@ read_reverse_loop_combine_sum:         // Final reduction + result write-back
     eor v2.16b, v2.16b, v3.16b  // Combine v2 and v3 into v2
     eor v0.16b, v0.16b, v2.16b  // Combine v0 and v2 into v0 (final vector)
 
-    // Combine byte checksum (x12) into final result (x0 from v0)
+    // Fold both 64-bit lanes before combining the byte-tail checksum. Returning
+    // only d[0] would make bytes 8..15 of every 16-byte vector lane invisible
+    // to the observable checksum even though the loads still execute.
     umov x0, v0.d[0]            // Extract lower 64 bits of combined vector sum
+    umov x13, v0.d[1]           // Extract upper 64 bits of combined vector sum
+    eor x0, x0, x13             // Fold both vector lanes
     eor x0, x0, x12             // Combine with byte checksum accumulator
 
     ret                         // Return checksum in x0

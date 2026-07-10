@@ -81,6 +81,16 @@ std::string base_mode_name(const BenchmarkConfig& config) {
   return Constants::BENCHMARK_JSON_MODE_NAME;
 }
 
+SweepNestedMode nested_mode_for_config(const BenchmarkConfig& config) {
+  if (config.analyze_tlb) {
+    return SweepNestedMode::TlbAnalysis;
+  }
+  if (config.run_patterns) {
+    return SweepNestedMode::Patterns;
+  }
+  return SweepNestedMode::Standard;
+}
+
 nlohmann::ordered_json build_sweep_parameters_json(const BenchmarkConfig& config) {
   nlohmann::ordered_json params;
   for (const SweepSpec& spec : config.sweep_specs) {
@@ -325,23 +335,325 @@ int run_sweep_point(BenchmarkConfig& run_config,
   return run_standard_sweep_point(run_config, result_json);
 }
 
-void update_sweep_output(nlohmann::ordered_json& output_json,
-                         const nlohmann::ordered_json& runs_json,
-                         const std::string& status,
-                         size_t planned_runs,
-                         double elapsed_sec) {
+std::string optional_string(const nlohmann::ordered_json& object, const char* key) {
+  if (!object.is_object() || !object.contains(key) || !object[key].is_string()) {
+    return "";
+  }
+  return object[key].get<std::string>();
+}
+
+bool optional_bool(const nlohmann::ordered_json& object, const char* key, bool fallback = false) {
+  if (!object.is_object() || !object.contains(key) || !object[key].is_boolean()) {
+    return fallback;
+  }
+  return object[key].get<bool>();
+}
+
+size_t completed_run_count(const nlohmann::ordered_json& runs_json) {
+  size_t completed_runs = 0;
+  if (!runs_json.is_array()) {
+    return completed_runs;
+  }
+  for (const nlohmann::ordered_json& run_json : runs_json) {
+    if (optional_string(run_json, "status") == "complete") {
+      ++completed_runs;
+    }
+  }
+  return completed_runs;
+}
+
+void update_sweep_output(nlohmann::ordered_json& output_json, const nlohmann::ordered_json& runs_json,
+                         const std::string& status, const std::string& status_reason, size_t planned_runs,
+                         double elapsed_sec, const std::string& timestamp) {
+  const size_t completed_runs = completed_run_count(runs_json);
   output_json["status"] = status;
+  output_json["status_reason"] =
+      status_reason.empty() ? nlohmann::ordered_json(nullptr) : nlohmann::ordered_json(status_reason);
   output_json["planned_runs"] = planned_runs;
-  output_json["completed_runs"] = runs_json.size();
-  output_json["conclusions_valid"] =
-      status == "complete" && runs_json.size() == planned_runs;
+  output_json["attempted_runs"] = runs_json.is_array() ? runs_json.size() : 0;
+  output_json["completed_runs"] = completed_runs;
+  output_json["conclusions_valid"] = status == "complete" && completed_runs == planned_runs;
   output_json["runs"] = runs_json;
   output_json[JsonKeys::EXECUTION_TIME_SEC] = elapsed_sec;
-  output_json[JsonKeys::TIMESTAMP] = build_utc_timestamp();
+  output_json[JsonKeys::TIMESTAMP] = timestamp;
   output_json[JsonKeys::VERSION] = SOFTVERSION;
 }
 
+SweepNestedCompletion classify_standard_completion(const nlohmann::ordered_json& result_json) {
+  const std::string status = optional_string(result_json, "status");
+  const std::string reason = optional_string(result_json, "status_reason");
+  if (status == "complete" && optional_bool(result_json, "results_complete")) {
+    return {SweepAttemptStatus::Complete, ""};
+  }
+  if (status == "interrupted") {
+    return {SweepAttemptStatus::Interrupted, reason.empty() ? "nested-run-interrupted" : reason};
+  }
+  if (status == "failed") {
+    return {SweepAttemptStatus::Failed, reason.empty() ? "nested-run-failed" : reason};
+  }
+  return {SweepAttemptStatus::Partial, reason.empty() ? "nested-standard-result-incomplete" : reason};
+}
+
+SweepNestedCompletion classify_tlb_completion(const nlohmann::ordered_json& result_json) {
+  if (!result_json.is_object() || !result_json.contains("tlb_analysis") || !result_json["tlb_analysis"].is_object()) {
+    return {SweepAttemptStatus::Partial, "missing-tlb-analysis-result"};
+  }
+  const nlohmann::ordered_json& analysis = result_json["tlb_analysis"];
+  const std::string status = optional_string(analysis, "status");
+  const std::string reason = optional_string(analysis, "status_reason");
+  if (status == "complete" && optional_bool(analysis, "conclusions_valid")) {
+    return {SweepAttemptStatus::Complete, ""};
+  }
+  if (status == "interrupted") {
+    return {SweepAttemptStatus::Interrupted, reason.empty() ? "nested-tlb-run-interrupted" : reason};
+  }
+  if (status == "failed") {
+    return {SweepAttemptStatus::Failed, reason.empty() ? "nested-tlb-run-failed" : reason};
+  }
+  return {SweepAttemptStatus::Partial, reason.empty() ? "nested-tlb-result-incomplete" : reason};
+}
+
+SweepNestedCompletion classify_core_to_core_completion(const nlohmann::ordered_json& result_json) {
+  if (!result_json.is_object() || !result_json.contains("core_to_core_latency") ||
+      !result_json["core_to_core_latency"].is_object()) {
+    return {SweepAttemptStatus::Partial, "missing-core-to-core-result"};
+  }
+  const nlohmann::ordered_json& result = result_json["core_to_core_latency"];
+  const std::string status = optional_string(result, "status");
+  if (status == "complete" && optional_bool(result, "measurements_complete")) {
+    return {SweepAttemptStatus::Complete, ""};
+  }
+  if (status == "interrupted") {
+    return {SweepAttemptStatus::Interrupted, "nested-core-to-core-run-interrupted"};
+  }
+  if (status == "failed") {
+    return {SweepAttemptStatus::Failed, "nested-core-to-core-run-failed"};
+  }
+  return {SweepAttemptStatus::Partial, "nested-core-to-core-result-incomplete"};
+}
+
+SweepNestedCompletion classify_pattern_completion(const nlohmann::ordered_json& result_json) {
+  if (!result_json.is_object() || !result_json.contains(JsonKeys::CONFIGURATION) ||
+      !result_json[JsonKeys::CONFIGURATION].is_object() ||
+      !result_json[JsonKeys::CONFIGURATION].contains(JsonKeys::LOOP_COUNT) ||
+      !result_json[JsonKeys::CONFIGURATION][JsonKeys::LOOP_COUNT].is_number_integer() ||
+      !result_json.contains(JsonKeys::PATTERNS) || !result_json[JsonKeys::PATTERNS].is_object()) {
+    return {SweepAttemptStatus::Partial, "missing-pattern-completion-metadata"};
+  }
+
+  const long long configured_loops = result_json[JsonKeys::CONFIGURATION][JsonKeys::LOOP_COUNT].get<long long>();
+  if (configured_loops <= 0) {
+    return {SweepAttemptStatus::Partial, "invalid-pattern-loop-count"};
+  }
+  const size_t expected_loops = static_cast<size_t>(configured_loops);
+  const size_t expected_operation_count =
+      static_cast<size_t>(PatternKind::Count) * static_cast<size_t>(PatternOperation::Count);
+
+  size_t operation_count = 0;
+  bool partial = false;
+  bool interrupted = false;
+  bool failed = false;
+  std::string first_reason;
+  for (const auto& pattern_entry : result_json[JsonKeys::PATTERNS].items()) {
+    const nlohmann::ordered_json& pattern = pattern_entry.value();
+    if (!pattern.is_object() || !pattern.contains(JsonKeys::BANDWIDTH) || !pattern[JsonKeys::BANDWIDTH].is_object()) {
+      partial = true;
+      continue;
+    }
+    for (const auto& operation_entry : pattern[JsonKeys::BANDWIDTH].items()) {
+      ++operation_count;
+      const nlohmann::ordered_json& operation = operation_entry.value();
+      if (!operation.is_object() || !operation.contains("measurements") || !operation["measurements"].is_array()) {
+        partial = true;
+        continue;
+      }
+      const nlohmann::ordered_json& measurements = operation["measurements"];
+      if (measurements.size() != expected_loops) {
+        partial = true;
+      }
+      for (const nlohmann::ordered_json& measurement : measurements) {
+        const std::string status = optional_string(measurement, "status");
+        const std::string reason = optional_string(measurement, "reason");
+        if (first_reason.empty() && !reason.empty()) {
+          first_reason = reason;
+        }
+        if (status == "interrupted") {
+          interrupted = true;
+        } else if (status == "failed" || status == "invalid") {
+          failed = true;
+        } else if (status != "measured" && status != "skipped") {
+          partial = true;
+        }
+      }
+    }
+  }
+
+  if (operation_count != expected_operation_count) {
+    partial = true;
+  }
+  if (failed) {
+    return {SweepAttemptStatus::Failed, first_reason.empty() ? "nested-pattern-run-failed" : first_reason};
+  }
+  if (interrupted) {
+    return {SweepAttemptStatus::Interrupted, first_reason.empty() ? "nested-pattern-run-interrupted" : first_reason};
+  }
+  if (partial) {
+    return {SweepAttemptStatus::Partial, first_reason.empty() ? "nested-pattern-result-incomplete" : first_reason};
+  }
+  return {SweepAttemptStatus::Complete, ""};
+}
+
 }  // namespace
+
+const char* sweep_attempt_status_to_string(SweepAttemptStatus status) {
+  switch (status) {
+    case SweepAttemptStatus::Complete:
+      return "complete";
+    case SweepAttemptStatus::Partial:
+      return "partial";
+    case SweepAttemptStatus::Interrupted:
+      return "interrupted";
+    case SweepAttemptStatus::Failed:
+      return "failed";
+  }
+  return "failed";
+}
+
+SweepNestedCompletion classify_sweep_nested_completion(SweepNestedMode mode,
+                                                       const nlohmann::ordered_json& result_json) {
+  switch (mode) {
+    case SweepNestedMode::Standard:
+      return classify_standard_completion(result_json);
+    case SweepNestedMode::Patterns:
+      return classify_pattern_completion(result_json);
+    case SweepNestedMode::TlbAnalysis:
+      return classify_tlb_completion(result_json);
+    case SweepNestedMode::CoreToCore:
+      return classify_core_to_core_completion(result_json);
+  }
+  return {SweepAttemptStatus::Failed, "unknown-sweep-nested-mode"};
+}
+
+SweepExecutionResult execute_sweep_plan(SweepNestedMode mode, const std::vector<nlohmann::ordered_json>& run_parameters,
+                                        nlohmann::ordered_json initial_output, const SweepExecutionHooks& hooks) {
+  SweepExecutionResult execution;
+  execution.output_json = std::move(initial_output);
+  nlohmann::ordered_json runs_json = nlohmann::ordered_json::array();
+
+  const auto elapsed_seconds = [&hooks]() { return hooks.elapsed_seconds ? hooks.elapsed_seconds() : 0.0; };
+  const auto utc_timestamp = [&hooks]() {
+    return hooks.utc_timestamp ? hooks.utc_timestamp() : build_utc_timestamp();
+  };
+  const auto stop_requested = [&hooks]() { return hooks.stop_requested && hooks.stop_requested(); };
+  const auto write_checkpoint = [&hooks](const nlohmann::ordered_json& output, bool announce_success) {
+    if (!hooks.write_checkpoint) {
+      return EXIT_FAILURE;
+    }
+    return hooks.write_checkpoint(output, announce_success);
+  };
+  const auto checkpoint = [&](const std::string& status, const std::string& reason, bool announce_success) {
+    update_sweep_output(execution.output_json, runs_json, status, reason, run_parameters.size(), elapsed_seconds(),
+                        utc_timestamp());
+    return write_checkpoint(execution.output_json, announce_success);
+  };
+
+  if (!hooks.execute_run) {
+    update_sweep_output(execution.output_json, runs_json, "failed", "missing-sweep-run-executor", run_parameters.size(),
+                        elapsed_seconds(), utc_timestamp());
+    execution.exit_code = EXIT_FAILURE;
+    return execution;
+  }
+
+  if (run_parameters.empty()) {
+    if (checkpoint("complete", "", true) != EXIT_SUCCESS) {
+      update_sweep_output(execution.output_json, runs_json, "failed", "checkpoint-write-failed", 0, elapsed_seconds(),
+                          utc_timestamp());
+      execution.exit_code = EXIT_FAILURE;
+      return execution;
+    }
+    execution.exit_code = EXIT_SUCCESS;
+    return execution;
+  }
+
+  for (size_t run_index = 0; run_index < run_parameters.size(); ++run_index) {
+    if (stop_requested()) {
+      if (checkpoint("interrupted", "interruption-requested-before-run", true) != EXIT_SUCCESS) {
+        update_sweep_output(execution.output_json, runs_json, "failed", "checkpoint-write-failed",
+                            run_parameters.size(), elapsed_seconds(), utc_timestamp());
+        execution.exit_code = EXIT_FAILURE;
+        return execution;
+      }
+      execution.exit_code = EXIT_SUCCESS;
+      return execution;
+    }
+
+    const SweepRunOutcome outcome = hooks.execute_run(run_index);
+    SweepNestedCompletion completion;
+    if (outcome.exit_code == EXIT_SUCCESS) {
+      completion = classify_sweep_nested_completion(mode, outcome.result_json);
+    } else {
+      completion.status = SweepAttemptStatus::Failed;
+      completion.reason = outcome.failure_reason.empty() ? "nested-run-execution-failed" : outcome.failure_reason;
+    }
+
+    nlohmann::ordered_json run_json;
+    run_json["index"] = run_index;
+    run_json["parameters"] = run_parameters[run_index];
+    run_json["status"] = sweep_attempt_status_to_string(completion.status);
+    run_json["status_reason"] =
+        completion.reason.empty() ? nlohmann::ordered_json(nullptr) : nlohmann::ordered_json(completion.reason);
+    run_json["result"] = outcome.result_json.empty() ? nlohmann::ordered_json(nullptr) : outcome.result_json;
+    runs_json.push_back(std::move(run_json));
+
+    const bool interrupted_after_run = stop_requested();
+    std::string sweep_status;
+    std::string sweep_reason;
+    bool terminal = false;
+    int terminal_exit_code = EXIT_SUCCESS;
+    if (outcome.exit_code != EXIT_SUCCESS || completion.status == SweepAttemptStatus::Failed) {
+      sweep_status = "failed";
+      sweep_reason = completion.reason;
+      terminal = true;
+      terminal_exit_code = EXIT_FAILURE;
+    } else if (completion.status == SweepAttemptStatus::Interrupted) {
+      sweep_status = "interrupted";
+      sweep_reason = completion.reason;
+      terminal = true;
+    } else if (interrupted_after_run) {
+      sweep_status = "interrupted";
+      sweep_reason = completion.status == SweepAttemptStatus::Complete ? "interruption-requested-after-complete-run"
+                                                                       : "interruption-requested-after-incomplete-run";
+      terminal = true;
+    } else if (completion.status == SweepAttemptStatus::Partial) {
+      sweep_status = "partial";
+      sweep_reason = completion.reason;
+      terminal = true;
+    } else if (run_index + 1 == run_parameters.size()) {
+      sweep_status = "complete";
+      terminal = true;
+    } else {
+      sweep_status = "partial";
+      sweep_reason = "sweep-runs-remain";
+    }
+
+    const bool announce_success = terminal && terminal_exit_code == EXIT_SUCCESS;
+    if (checkpoint(sweep_status, sweep_reason, announce_success) != EXIT_SUCCESS) {
+      update_sweep_output(execution.output_json, runs_json, "failed", "checkpoint-write-failed", run_parameters.size(),
+                          elapsed_seconds(), utc_timestamp());
+      execution.exit_code = EXIT_FAILURE;
+      return execution;
+    }
+    if (terminal) {
+      execution.exit_code = terminal_exit_code;
+      return execution;
+    }
+  }
+
+  update_sweep_output(execution.output_json, runs_json, "failed", "sweep-coordinator-ended-without-terminal-status",
+                      run_parameters.size(), elapsed_seconds(), utc_timestamp());
+  execution.exit_code = EXIT_FAILURE;
+  return execution;
+}
 
 size_t calculate_sweep_run_count(const BenchmarkConfig& config) {
   size_t run_count = 1;
@@ -389,77 +701,62 @@ int run_sweep_mode(const BenchmarkConfig& base_config) {
   total_timer.start();
 
   nlohmann::ordered_json output_json;
-  output_json[JsonKeys::CONFIGURATION] = {
-      {JsonKeys::MODE, Constants::SWEEP_JSON_MODE_NAME},
-      {"base_mode", base_mode_name(base_config)},
-      {"run_count", run_count},
-      {"sweep_max_runs", base_config.sweep_max_runs},
-      {"sweep_parameters", build_sweep_parameters_json(base_config)},
-      {"main_thread_qos",
-       {{"requested", true},
-        {"requested_class", "user-interactive"},
-        {"applied", qos_ret == KERN_SUCCESS},
-        {"code", qos_ret},
-        {"policy", "best-effort; continue on failure"}}}};
+  output_json[JsonKeys::CONFIGURATION] = {{JsonKeys::MODE, Constants::SWEEP_JSON_MODE_NAME},
+                                          {"base_mode", base_mode_name(base_config)},
+                                          {"run_count", run_count},
+                                          {"sweep_max_runs", base_config.sweep_max_runs},
+                                          {"sweep_parameters", build_sweep_parameters_json(base_config)},
+                                          {"main_thread_qos",
+                                           {{"requested", true},
+                                            {"requested_class", "user-interactive"},
+                                            {"applied", qos_ret == KERN_SUCCESS},
+                                            {"code", qos_ret},
+                                            {"policy", "best-effort; continue on failure"}}}};
 
-  nlohmann::ordered_json runs_json = nlohmann::ordered_json::array();
   std::filesystem::path file_path(base_config.output_file);
   if (file_path.is_relative()) {
     file_path = std::filesystem::current_path() / file_path;
   }
 
-  for (size_t i = 0; i < assignments.size(); ++i) {
-    if (signal_received()) {
-      std::cout << Messages::msg_interrupted_by_user() << std::endl;
-      break;
-    }
+  std::vector<nlohmann::ordered_json> run_parameters;
+  run_parameters.reserve(assignments.size());
+  for (const std::vector<SweepAssignment>& assignment : assignments) {
+    run_parameters.push_back(build_assignment_json(assignment));
+  }
 
-    std::cout << Messages::msg_sweep_run_progress(i + 1, assignments.size()) << std::endl;
-    BenchmarkConfig run_config = build_run_config(base_config, assignments[i]);
+  SweepExecutionHooks hooks;
+  hooks.execute_run = [&](size_t run_index) {
+    std::cout << Messages::msg_sweep_run_progress(run_index + 1, assignments.size()) << std::endl;
+    BenchmarkConfig run_config = build_run_config(base_config, assignments[run_index]);
     run_config.main_thread_qos_requested = true;
     run_config.main_thread_qos_applied = qos_ret == KERN_SUCCESS;
     run_config.main_thread_qos_code = qos_ret;
-    nlohmann::ordered_json result_json;
-    if (run_sweep_point(run_config, i, result_json) != EXIT_SUCCESS) {
-      update_sweep_output(output_json, runs_json, "failed", run_count, total_timer.stop());
-      (void)write_json_to_file(file_path, output_json, false);
-      restore_signal_mask();
-      return EXIT_FAILURE;
+    SweepRunOutcome outcome;
+    outcome.exit_code = run_sweep_point(run_config, run_index, outcome.result_json);
+    if (outcome.exit_code != EXIT_SUCCESS) {
+      outcome.failure_reason = "nested-run-execution-failed";
     }
+    return outcome;
+  };
+  hooks.stop_requested = []() { return signal_received(); };
+  hooks.elapsed_seconds = [&]() { return total_timer.stop(); };
+  hooks.write_checkpoint = [&](const nlohmann::ordered_json& checkpoint, bool announce_success) {
+    return write_json_to_file(file_path, checkpoint, announce_success);
+  };
 
-    nlohmann::ordered_json run_json;
-    run_json["index"] = i;
-    run_json["parameters"] = build_assignment_json(assignments[i]);
-    run_json["result"] = result_json;
-    runs_json.push_back(run_json);
-
-    const bool interrupted_now = signal_received();
-    update_sweep_output(output_json,
-                        runs_json,
-                        interrupted_now ? "interrupted" : "partial",
-                        run_count,
-                        total_timer.stop());
-    if (write_json_to_file(file_path, output_json, false) != EXIT_SUCCESS) {
-      restore_signal_mask();
-      return EXIT_FAILURE;
-    }
-    if (interrupted_now) {
-      break;
-    }
-  }
-
-  const double total_elapsed_sec = total_timer.stop();
-  const bool sweep_complete = runs_json.size() == assignments.size() && !signal_received();
-  update_sweep_output(output_json,
-                      runs_json,
-                      sweep_complete ? "complete" : "interrupted",
-                      run_count,
-                      total_elapsed_sec);
+  const SweepExecutionResult execution =
+      execute_sweep_plan(nested_mode_for_config(base_config), run_parameters, std::move(output_json), hooks);
 
   restore_signal_mask();
-  const int write_result = write_json_to_file(file_path, output_json);
-  if (write_result == EXIT_SUCCESS) {
+  if (execution.output_json.value("status", "failed") == "interrupted") {
+    const nlohmann::ordered_json& runs = execution.output_json["runs"];
+    if (!runs.is_array() || runs.empty() || runs.back().value("status", "failed") == "complete") {
+      std::cout << Messages::msg_interrupted_by_user() << std::endl;
+    }
+  }
+  if (execution.exit_code == EXIT_SUCCESS) {
+    const double total_elapsed_sec = execution.output_json.value(JsonKeys::EXECUTION_TIME_SEC, 0.0);
     std::cout << Messages::msg_done_total_time(total_elapsed_sec) << std::endl;
   }
-  return write_result;
+  return execution.exit_code;
 }

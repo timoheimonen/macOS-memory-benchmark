@@ -126,19 +126,7 @@ namespace JsonKeys {
   constexpr const char* RANDOM = "random";
 }
 
-// Internal helper functions (used by implementation files)
-void add_bandwidth_results(nlohmann::json& json_obj, 
-                           const std::vector<double>& read_values,
-                           const std::vector<double>& write_values,
-                           const std::vector<double>& copy_values);
-
-void add_latency_results(nlohmann::json& json_obj,
-                         const std::vector<double>& average_values,
-                         const std::vector<double>& samples);
-
 nlohmann::json build_config_json(const BenchmarkConfig& config, const char* mode_name);
-nlohmann::json build_main_memory_json(const BenchmarkConfig& config, const BenchmarkStatistics& stats);
-nlohmann::json build_cache_json(const BenchmarkConfig& config, const BenchmarkStatistics& stats);
 nlohmann::json build_patterns_json(const PatternStatistics& stats);
 void add_standard_benchmark_results(nlohmann::ordered_json& output,
                                     const BenchmarkConfig& config,
