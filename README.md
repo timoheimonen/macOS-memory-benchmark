@@ -183,8 +183,9 @@ Long options require `--`. A single dash is only valid for one-character short o
 - `--iterations <count>`: Bandwidth iterations per loop (default `1000`). In `--patterns` mode, the default does not force 1000 measured passes: samples are calibrated automatically unless this option is explicitly supplied. An explicit value bypasses the pattern calibration pilot but not the operation-specific warmup.
 - `--count <count>`: Full benchmark repetitions (default `1`; use `5-10` for statistics).
 - `--threads <count>`: Bandwidth thread count (latency tests remain single-threaded). In `--patterns`, the default is the
-  detected performance-core count for repeatability; explicitly request a larger detected-core count to include more
-  workers. This is a requested count, and sparse strides may reduce the effective count.
+  historical count of all detected CPU cores to preserve comparison compatibility. Use an explicit `--threads` value
+  equal to the detected P-core count for a matching worker-count profile; macOS placement remains unpinned. This is a
+  requested count, and sparse strides may reduce the effective count.
 - `--cache-size <KB>`: Custom cache target. Non-zero range is `16` to `1048576` KB (1 GB).
 - `--analyze-tlb`: Standalone TLB-boundary benchmark. It selects the largest `1024/512/256 MiB` candidate whose predicted buffer-plus-scratch peak fits a conservative available-memory budget. The compact settings block reports the run identity, buffer-lock/QoS outcome, estimated peak versus budget, sweep range, and rough duration; full access and memory estimates remain in JSON. Every scheduled point is a same-round page-native spread/packed pair. Each console point is one line containing cache-hot spread and packed P50 values, the primary paired translation delta, and the active cache-line footprint; detailed page/cache-line diagnostics remain in JSON. Virtual locality is not the active data footprint: with 16 KiB pages, the 512 MiB comparison has 32,768 one-line nodes, or a 2 MiB active cache-line footprint. Points below 64 nodes carry a compact `*` diagnostic marker explained once in the sweep legend. A pilot times each chain and calibrates the main measurement toward the profile target while retaining a minimum number of whole-chain cycles. Seeded cyclic-Latin rounds stop at the profile CI-width target or its maximum round count. Boundary inference operates on round-matched `spread - packed` deltas and requires independent validation. Stride must be pointer-aligned and no larger than the system page size; it need not divide the page size. Main-thread `user-interactive` QoS and `mlock()` are best-effort; their success/error status is reported in console/JSON and failures do not abort the analysis.
 - `--tlb-density <low|medium|high>`: Selects the TLB runtime profile. `low`/`quick` uses a 15-point base sweep without refinement and 7-12 rounds; its console conclusions are explicitly labeled screening estimates that should be confirmed with `medium` or `high`. `medium`/`standard` is the default and uses a 15-point base sweep with refinement and 10-20 rounds; `high`/`exhaustive` uses a 29-point base sweep with refinement and 15-30 rounds.
@@ -345,7 +346,8 @@ policy, warmup and execution-order policies, native page size, and best-effort Q
 an aggregate `status`, a median-or-single `value_gb_s`, raw `values_gb_s`, statistics (including CV), and per-loop
 `measurements` with exact work and timing metadata. Unavailable values are `null`. `strided_2mb` describes a 2 MiB virtual
 address stride only: `large_page_backing_verified` remains false unless backing is actually verified, so the label is not
-a superpage claim.
+a superpage claim. `thread_selection_policy` distinguishes the detected-core-count default from an explicit thread
+request; use the recorded requested/effective counts when comparing results.
 
 Current latency payload is nested (not scalar):
 

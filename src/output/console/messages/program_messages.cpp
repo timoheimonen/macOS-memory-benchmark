@@ -193,7 +193,6 @@ std::string usage_options(const std::string& prog_name) {
       << "                        Must be a multiple of system page size (typically 4 KB or 16 KB).\n"
       << "  -t, --threads <count> Number of threads to use for benchmarks (default: detected\n"
       << "                        CPU core count). Applies to all benchmarks including cache tests.\n"
-      << "                        --patterns defaults to the detected P-core count for repeatability.\n"
       << "                        If specified value exceeds available cores, it will be capped to\n"
       << "                        the maximum number of cores with a warning.\n"
       << "  -k, --cache-size <size_kb>\n"

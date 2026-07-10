@@ -159,7 +159,7 @@ nlohmann::json build_config_json(const BenchmarkConfig& config, const char* mode
     config_json["qos_policy"] = "best-effort-scheduler-hint-no-core-pinning";
     config_json["thread_selection_policy"] =
         config.user_specified_threads ? "explicit-request-capped-to-detected-cores"
-                                      : "performance-core-count-default";
+                                      : "detected-core-count-default";
   }
   
   if (config.use_custom_cache_size) {

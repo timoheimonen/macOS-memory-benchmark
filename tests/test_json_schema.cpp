@@ -157,6 +157,8 @@ TEST(JsonSchemaTest, PatternExporterIncludesPatternsMode) {
   EXPECT_EQ(output_json[JsonKeys::CONFIGURATION]["methodology_version"],
             "pattern-v2-phase-calibrated-seeded");
   EXPECT_EQ(output_json[JsonKeys::CONFIGURATION]["pattern_seed"], "42");
+  EXPECT_EQ(output_json[JsonKeys::CONFIGURATION]["thread_selection_policy"],
+            "detected-core-count-default");
 
   std::filesystem::remove(config.output_file);
 }

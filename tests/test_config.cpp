@@ -16,6 +16,7 @@
 #include <gtest/gtest.h>
 #include "core/config/config.h"
 #include "core/config/constants.h"
+#include "core/system/system_info.h"
 #include <cstdlib>
 #include <limits>
 #include <cstdint>
@@ -443,13 +444,12 @@ TEST(ConfigTest, ParsePatternsGeneratesSeedWhenOmitted) {
   EXPECT_FALSE(config.user_specified_pattern_seed);
 }
 
-TEST(ConfigTest, ParsePatternsDefaultsToPerformanceCoreCount) {
+TEST(ConfigTest, ParsePatternsDefaultsToDetectedCoreCount) {
   BenchmarkConfig config;
   const char* argv[] = {"program", "--patterns"};
 
   ASSERT_EQ(parse_arguments(2, const_cast<char**>(argv), config), EXIT_SUCCESS);
-  ASSERT_GT(config.perf_cores, 0);
-  EXPECT_EQ(config.num_threads, config.perf_cores);
+  EXPECT_EQ(config.num_threads, get_total_logical_cores());
   EXPECT_FALSE(config.user_specified_threads);
 }
 

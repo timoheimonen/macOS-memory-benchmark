@@ -286,9 +286,10 @@ forms such as `-buffersize` or `-benchmark` are invalid.
 #### `--threads <count>`
 
 - Thread count for bandwidth tests
-- Default: detected core count in standard benchmark mode; detected performance-core count in `--patterns` mode
+- Default: count of all detected CPU cores in both standard and `--patterns` modes
 - If above available cores, it is capped
-- An explicit `--threads` value may request more than the performance-core default, up to the detected cap
+- To reproduce a worker-count profile matching the detected P-core count, set that count explicitly with `--threads`;
+  this does not pin those workers to P-cores
 - In pattern mode this is a requested count; sparse strided work may use fewer effective workers so each worker performs
   at least one genuine stride transition
 - Pattern workers request best-effort macOS QoS but are not pinned to specific cores
@@ -309,7 +310,8 @@ forms such as `-buffersize` or `-benchmark` are invalid.
 - Skips standard bandwidth/latency sections
 - Automatically calibrates each read/write/copy sample toward 150 ms (intended window 100–250 ms) unless
   `--iterations` is explicitly supplied
-- Uses detected performance-core count by default; explicit `--threads` can request a different detected-core count
+- Uses the historical all-detected-CPU-core default for comparison compatibility; a matching explicit worker-count
+  profile can use `--threads <detected P-core count>`, but placement remains unpinned
 - Rotates pattern groups across repeated loops; read/write/copy order within each group stays fixed
 
 #### `--only-bandwidth`
@@ -593,27 +595,35 @@ line for comparisons; inspect the median, CV, requested/effective worker counts,
 
 ### Manual pattern stability matrix
 
-Run this matrix separately from routine unit/integration tests on an idle Apple Silicon system. These are test recipes,
-not benchmark results; this manual does not claim that the matrix has been run on a particular machine.
+Run this matrix separately from routine unit/integration tests on an idle Apple Silicon system. Earlier matrix records
+used a four-worker profile that was then called the "P-core default" because its worker count matched the four detected
+P-cores on that machine. Treat it as an **explicit 4-worker profile with unpinned placement**, not as the current default
+or proof that workers ran on P-cores. The commands below are recipes and do not claim new results for cells without a
+separately recorded run.
 
-| Buffer | Thread configurations | Count | Purpose |
+| Buffer | Thread profiles | Count | Purpose |
 |---|---|---:|---|
-| 8 MiB | 1, detected P-core default, all detected cores | 10 | Cache-resident and sparse-stride regression |
-| 64 MiB | 1, detected P-core default, all detected cores | 10 | Transition around cluster-cache-sized workloads |
-| 512 MiB | 1, detected P-core default, all detected cores | 10 | DRAM-oriented pattern stability |
-| 1 GiB | detected P-core default, all detected cores | 5 | Large working set and thermal/order behavior |
+| 8 MiB | 1, explicit 4-worker profile, detected-core default | 10 | Cache-resident and sparse-stride regression |
+| 64 MiB | 1, explicit 4-worker profile, detected-core default | 10 | Transition around cluster-cache-sized workloads |
+| 512 MiB | 1, explicit 4-worker profile, detected-core default | 10 | DRAM-oriented pattern stability |
+| 1 GiB | explicit 4-worker profile, detected-core default | 5 | Large working set and thermal/order behavior |
 
-Use one explicit seed for the complete matrix. Omit `--threads` for the detected P-core default; use `--threads 1` for
-the single-worker case and `--threads <all-detected-cores>` for the all-core request. For example:
+Use one explicit seed for the complete matrix. Omit `--threads` for the current detected-core default; use `--threads 1`
+for the single-worker case and `--threads 4` for the recorded explicit 4-worker profile. The count happened to match the
+detected P-core count on that machine; QoS remains best-effort and worker placement is not pinned. For example:
 
 ```bash
 # Repeat for buffer sizes/thread configurations in the table.
 caffeinate -i -d ./memory_benchmark --patterns --buffer-size 64 --threads 1 \
   --count 10 --seed 123456789 --output pattern-stability-64m-t1.json
 
-# P-core default: intentionally omit --threads.
+# Current detected-core default: intentionally omit --threads.
 caffeinate -i -d ./memory_benchmark --patterns --buffer-size 64 \
-  --count 10 --seed 123456789 --output pattern-stability-64m-pcores.json
+  --count 10 --seed 123456789 --output pattern-stability-64m-detected-default.json
+
+# Explicit 4-worker profile; count matched detected P-cores, placement remained unpinned.
+caffeinate -i -d ./memory_benchmark --patterns --buffer-size 64 --threads 4 \
+  --count 10 --seed 123456789 --output pattern-stability-64m-workers-t4.json
 ```
 
 Record the environment before comparing files: hardware/CPU, macOS and benchmark version, power source/mode, thermal
@@ -818,7 +828,7 @@ Note: The `configuration` block includes fields such as `latency_chain_mode` (th
     "warmup_semantics": "steady-state-same-shape",
     "pattern_execution_order_policy": "cyclic-latin-square-across-count-loops",
     "operation_execution_order_policy": "fixed-read-write-copy-with-operation-specific-warmup",
-    "thread_selection_policy": "performance-core-count-default",
+    "thread_selection_policy": "detected-core-count-default",
     "qos_policy": "best-effort-scheduler-hint-no-core-pinning"
   },
   "patterns": {
@@ -876,6 +886,13 @@ or partial value set as applicable, and a `status`/`reason`; it is not serialize
 single measurement for one loop or median P50 for multiple measured loops. Copy `total_payload_bytes` includes both read
 and write payload. Per-loop records retain pilot/final timing, exact access/pass/payload accounting, working-set and phase
 metadata, seed, requested/effective threads, native page comparison, and execution-order indexes.
+
+`thread_selection_policy: "detected-core-count-default"` means `--threads` was omitted and the historical default
+covering all detected CPU cores was used. An explicit request is recorded separately; use
+`--threads <detected P-core count>` to reproduce a matching worker-count profile, not guaranteed P-core placement.
+Compare pattern results only when thread-selection policy and requested/effective thread counts are compatible. In
+particular, older files that called a four-worker run the "P-core default" represent that explicit four-worker profile
+with unpinned placement, not the current detected-core default.
 
 For phase-rotated strided records, `accesses_per_pass` is the phase-zero count, not an average. The minimum/maximum and
 phase-period fields describe pass-to-pass variation, while `total_accesses` and `total_payload_bytes` are computed from
@@ -1325,8 +1342,8 @@ compared numerically with `pattern-v2-phase-calibrated-seeded` results without a
 - Use `--count > 1` and inspect percentiles.
 - For cache-focused runs, prefer `--threads 1` unless testing aggregate behavior.
 - For pattern comparisons, keep seed, buffer, requested threads, count, and iteration/calibration policy identical.
-- Prefer the pattern-mode P-core default for repeatability; request all cores explicitly only when that is the workload
-  being studied.
+- Keep the detected-core default when preserving historical default-profile comparability. To match a prior worker count,
+  request that count explicitly and label it as an unpinned worker-count profile, not a core-placement profile.
 - Inspect status, effective threads, exact payload/work metadata, median, and CV together.
 
 ### Common pitfalls
