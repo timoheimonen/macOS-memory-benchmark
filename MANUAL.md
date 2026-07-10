@@ -910,7 +910,7 @@ main-thread outcome. These fields describe a best-effort scheduler hint, never h
 {
   "configuration": {
     "mode": "patterns",
-    "pattern_schema_version": 2,
+    "pattern_schema_version": 3,
     "methodology_version": "pattern-v2-phase-calibrated-seeded",
     "pattern_seed": "123456789",
     "pattern_seed_source": "user",
@@ -926,6 +926,14 @@ main-thread outcome. These fields describe a best-effort scheduler hint, never h
     "thread_selection_policy": "detected-core-count-default",
     "qos_policy": "best-effort-scheduler-hint-no-core-pinning"
   },
+  "execution_time_sec": 7.5,
+  "status": "complete",
+  "status_reason": "",
+  "planned_loops": 3,
+  "completed_loops": 3,
+  "planned_measurements": 63,
+  "completed_measurements": 63,
+  "results_complete": true,
   "patterns": {
     "strided_2mb": {
       "methodology_version": "pattern-v2-phase-calibrated-seeded",
@@ -969,24 +977,28 @@ main-thread outcome. These fields describe a best-effort scheduler hint, never h
       }
     }
   },
-  "execution_time_sec": 7.5,
   "timestamp": "...",
   "version": "..."
 }
 ```
 
 This is a structure example, not a recorded performance result; omitted patterns and operations use the same shape.
-Schema 2 stores explicit measurement state. A skipped, invalid, or interrupted operation has `value_gb_s: null`, an empty
+Schema 3 stores explicit measurement state. A skipped, invalid, or interrupted operation has `value_gb_s: null`, an empty
 or partial value set as applicable, and a `status`/`reason`; it is not serialized as zero. Aggregate `value_gb_s` is the
 single measurement for one loop or median P50 for multiple measured loops. Copy `total_payload_bytes` includes both read
 and write payload. Per-loop records retain pilot/final timing, exact access/pass/payload accounting, working-set and phase
 metadata, seed, requested/effective threads, native page comparison, and execution-order indexes.
 
-Pattern schema 2 has measurement-level status but no standard-benchmark-style top-level `planned_loops`,
-`completed_loops`, or `results_complete` fields. A graceful interrupt between requested loops can therefore leave fewer
-measurement records than `configuration.loop_count` without a separate command-completeness flag. Consumers that
-require a complete pattern run must verify the per-operation measurement counts and statuses against the requested loop
-count.
+Pattern schema 3 adds top-level `status`, `status_reason`, `planned_loops`, `completed_loops`, `planned_measurements`,
+`completed_measurements`, and `results_complete`. Every requested loop plans 21 measurements: seven patterns times the
+read, write, and copy operations. A `measured` record counts as complete only with a numeric value; an intentional
+`skipped` record is also terminal. Invalid evidence or executor failure makes the loop failed. A fully completed loop is
+not reclassified when interruption arrives after its final operation, but the command is interrupted if requested loops
+remain. Partial, interrupted, and failed commands retain all produced loop evidence; allocation or initialization failure
+can produce completion metadata without a `patterns` object. Consumers that require a complete pattern run must require
+both `status: "complete"` and `results_complete: true`. Aggregate `values_gb_s`, statistics, median headlines, and
+console summaries use only Complete loops. Measurements from partial, interrupted, and failed loops remain serialized
+as raw evidence but cannot bias the cyclic-balanced aggregate.
 
 `thread_selection_policy: "detected-core-count-default"` means `--threads` was omitted and the historical default
 covering all detected CPU cores was used. An explicit request is recorded separately; use
@@ -1378,7 +1390,7 @@ requires independent validation before accepting a boundary.
 - `random`
 
 Each pattern key contains methodology and workload metadata plus a `bandwidth` object. Its `read_gb_s`, `write_gb_s`,
-and `copy_gb_s` entries use the pattern-schema-v2 structure shown above: explicit status/reason, headline policy,
+and `copy_gb_s` entries use the pattern-schema-v3 structure shown above: explicit status/reason, headline policy,
 nullable aggregate value, measured values, statistics including CV, and detailed per-loop measurements. This is not the
 same structure as the standard `main_memory.bandwidth` object.
 
@@ -1402,6 +1414,9 @@ jq 'select(.results_complete == true)' results.json
 
 # Pattern random read median and status
 jq '{status: .patterns.random.bandwidth.read_gb_s.status, median: .patterns.random.bandwidth.read_gb_s.statistics.median_p50}' patterns.json
+
+# Reject incomplete pattern output
+jq 'select(.status == "complete" and .results_complete == true)' patterns.json
 
 # Pattern phase-count semantics, requested/effective threads, and exact totals
 jq '.patterns.strided_2mb.bandwidth.read_gb_s.measurements[] | {requested_threads, effective_threads, accesses_per_pass, accesses_per_pass_semantics, min_accesses_per_pass, max_accesses_per_pass, phase_period_passes, total_accesses, total_payload_bytes}' patterns.json

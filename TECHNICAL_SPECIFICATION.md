@@ -413,10 +413,17 @@ JSON writer API (`src/output/json/json_output/json_output.cpp`):
 
 - Standard mode schema 2: `configuration`, `execution_time_sec`, completion counters/status, `results_complete`,
   per-loop `loops`, `main_memory`, `cache`, `timestamp`, and `version`.
-- Pattern mode: `configuration`, `execution_time_sec`, `patterns`, `timestamp`, `version`.
+- Pattern mode schema 3: `configuration`, `execution_time_sec`, command status/reason, planned/completed loop and
+  measurement counters, `results_complete`, optional retained `patterns` evidence, `timestamp`, and `version`.
 - TLB analysis mode: `configuration`, `execution_time_sec`, `tlb_analysis`, `timestamp`, `version`.
 - Core-to-core schema 2: calibrated methodology configuration, `core_to_core_latency` command completion metadata, scenario work plans, nullable aggregate values, per-loop order/status/duration/hint/sample-boundary records, and affinity-comparison interpretability metadata.
 - Sweep mode: `configuration.mode = "sweep"`, `configuration.base_mode`, `configuration.sweep_parameters`, top-level status/completion/conclusion fields, `runs[].result`, `execution_time_sec`, `timestamp`, `version`. For `--analyze-tlb --sweep`, `base_mode` is `analyze_tlb` and each `runs[].result` contains a TLB analysis payload. Core-to-core sweeps use `base_mode: "analyze_core2core"` and checkpoint after every run.
+
+Pattern schema 3 plans 21 measurements per loop and treats numeric measured values plus intentional skips as terminal.
+Only Complete loops feed aggregate vectors, medians, statistics, and console summaries. Partial, interrupted, and failed
+loop measurements remain in JSON as evidence, while command status/counters keep `results_complete` false. Preparation
+failure may omit `patterns`; main and sweep orchestration still build the completion payload before returning or
+classifying the failure.
 
 ### 17.1 Configuration keys
 

@@ -252,11 +252,9 @@ int run_pattern_sweep_point(BenchmarkConfig& run_config, nlohmann::ordered_json&
   }
 
   PatternStatistics stats;
-  if (run_all_pattern_benchmarks(run_config, stats) != EXIT_SUCCESS) {
-    return EXIT_FAILURE;
-  }
+  const int run_status = run_all_pattern_benchmarks(run_config, stats);
 
-  if (run_config.loop_count == 1) {
+  if (run_config.loop_count == 1 && !stats.loop_results.empty()) {
     print_pattern_results(extract_pattern_results_at(stats, 0));
   } else if (!stats.loop_results.empty()) {
     print_pattern_results(extract_pattern_median_results(stats));
@@ -265,6 +263,10 @@ int run_pattern_sweep_point(BenchmarkConfig& run_config, nlohmann::ordered_json&
 
   const double elapsed_sec = timer.stop();
   result_json = build_pattern_results_json(run_config, stats, elapsed_sec);
+  // The nested completion contract carries failed/partial/interrupted states.
+  // Returning success here lets the sweep classifier preserve that exact state
+  // and reason instead of replacing it with a generic execution failure.
+  (void)run_status;
   return EXIT_SUCCESS;
 }
 
@@ -410,74 +412,27 @@ SweepNestedCompletion classify_core_to_core_completion(const nlohmann::ordered_j
 }
 
 SweepNestedCompletion classify_pattern_completion(const nlohmann::ordered_json& result_json) {
-  if (!result_json.is_object() || !result_json.contains(JsonKeys::CONFIGURATION) ||
-      !result_json[JsonKeys::CONFIGURATION].is_object() ||
-      !result_json[JsonKeys::CONFIGURATION].contains(JsonKeys::LOOP_COUNT) ||
-      !result_json[JsonKeys::CONFIGURATION][JsonKeys::LOOP_COUNT].is_number_integer() ||
-      !result_json.contains(JsonKeys::PATTERNS) || !result_json[JsonKeys::PATTERNS].is_object()) {
+  if (!result_json.is_object() || !result_json.contains("status") ||
+      !result_json["status"].is_string() ||
+      !result_json.contains("results_complete") ||
+      !result_json["results_complete"].is_boolean()) {
     return {SweepAttemptStatus::Partial, "missing-pattern-completion-metadata"};
   }
-
-  const long long configured_loops = result_json[JsonKeys::CONFIGURATION][JsonKeys::LOOP_COUNT].get<long long>();
-  if (configured_loops <= 0) {
-    return {SweepAttemptStatus::Partial, "invalid-pattern-loop-count"};
+  const std::string status = optional_string(result_json, "status");
+  const std::string reason = optional_string(result_json, "status_reason");
+  if (status == "complete" && optional_bool(result_json, "results_complete")) {
+    return {SweepAttemptStatus::Complete, ""};
   }
-  const size_t expected_loops = static_cast<size_t>(configured_loops);
-  const size_t expected_operation_count =
-      static_cast<size_t>(PatternKind::Count) * static_cast<size_t>(PatternOperation::Count);
-
-  size_t operation_count = 0;
-  bool partial = false;
-  bool interrupted = false;
-  bool failed = false;
-  std::string first_reason;
-  for (const auto& pattern_entry : result_json[JsonKeys::PATTERNS].items()) {
-    const nlohmann::ordered_json& pattern = pattern_entry.value();
-    if (!pattern.is_object() || !pattern.contains(JsonKeys::BANDWIDTH) || !pattern[JsonKeys::BANDWIDTH].is_object()) {
-      partial = true;
-      continue;
-    }
-    for (const auto& operation_entry : pattern[JsonKeys::BANDWIDTH].items()) {
-      ++operation_count;
-      const nlohmann::ordered_json& operation = operation_entry.value();
-      if (!operation.is_object() || !operation.contains("measurements") || !operation["measurements"].is_array()) {
-        partial = true;
-        continue;
-      }
-      const nlohmann::ordered_json& measurements = operation["measurements"];
-      if (measurements.size() != expected_loops) {
-        partial = true;
-      }
-      for (const nlohmann::ordered_json& measurement : measurements) {
-        const std::string status = optional_string(measurement, "status");
-        const std::string reason = optional_string(measurement, "reason");
-        if (first_reason.empty() && !reason.empty()) {
-          first_reason = reason;
-        }
-        if (status == "interrupted") {
-          interrupted = true;
-        } else if (status == "failed" || status == "invalid") {
-          failed = true;
-        } else if (status != "measured" && status != "skipped") {
-          partial = true;
-        }
-      }
-    }
+  if (status == "interrupted") {
+    return {SweepAttemptStatus::Interrupted,
+            reason.empty() ? "nested-pattern-run-interrupted" : reason};
   }
-
-  if (operation_count != expected_operation_count) {
-    partial = true;
+  if (status == "failed") {
+    return {SweepAttemptStatus::Failed,
+            reason.empty() ? "nested-pattern-run-failed" : reason};
   }
-  if (failed) {
-    return {SweepAttemptStatus::Failed, first_reason.empty() ? "nested-pattern-run-failed" : first_reason};
-  }
-  if (interrupted) {
-    return {SweepAttemptStatus::Interrupted, first_reason.empty() ? "nested-pattern-run-interrupted" : first_reason};
-  }
-  if (partial) {
-    return {SweepAttemptStatus::Partial, first_reason.empty() ? "nested-pattern-result-incomplete" : first_reason};
-  }
-  return {SweepAttemptStatus::Complete, ""};
+  return {SweepAttemptStatus::Partial,
+          reason.empty() ? "nested-pattern-result-incomplete" : reason};
 }
 
 }  // namespace

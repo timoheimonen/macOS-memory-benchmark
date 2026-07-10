@@ -194,7 +194,7 @@ namespace Constants {
       BANDWIDTH_CALIBRATION_MAX_SECONDS;
   constexpr size_t PATTERN_CALIBRATION_MAX_CORRECTIONS =
       BANDWIDTH_CALIBRATION_MAX_CORRECTIONS;
-  constexpr int PATTERN_JSON_SCHEMA_VERSION = 2;
+  constexpr int PATTERN_JSON_SCHEMA_VERSION = 3;
   constexpr const char* PATTERN_METHODOLOGY_VERSION =
       "pattern-v2-phase-calibrated-seeded";
   constexpr size_t PATTERN_CALIBRATION_MIN_PILOT_BYTES =

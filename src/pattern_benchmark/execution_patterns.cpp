@@ -362,11 +362,6 @@ int run_random_pattern_benchmarks(const PatternBuffers& buffers, const Benchmark
                                    PatternResults& results, HighResTimer& timer) {
   using namespace Constants;
   
-  // Initialize results to 0 in case we skip this pattern
-  results.random_read_bw = 0.0;
-  results.random_write_bw = 0.0;
-  results.random_copy_bw = 0.0;
-  
   // Validate indices - if validation fails due to buffer size, skip pattern gracefully
   if (!validate_random_indices(random_indices, config.buffer_size)) {
     // No valid indices or buffer too small - skip pattern (not an error)

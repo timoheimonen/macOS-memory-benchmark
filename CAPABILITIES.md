@@ -82,8 +82,11 @@ These patterns are useful for comparing regular streams, different virtual-addre
 orders. In particular, `strided_2mb` means a 2 MiB virtual-address interval; it does not assert 2 MiB physical-page
 backing. Use `--analyze-tlb` for controlled translation-related conclusions.
 
-Pattern JSON records measurement-level status but has no top-level loop-completeness fields. A consumer that requires a
-complete result must compare per-operation measurement counts and statuses with the requested `configuration.loop_count`.
+Pattern schema-3 JSON records measurement-level evidence plus top-level status/reason, exact planned/completed loop and
+measurement counters, and `results_complete`. Each loop plans 21 operations. Numeric measured values and intentional
+skips count as completed; invalid or failed execution does not. Interrupted, partial, and failed runs preserve completed
+evidence, but only Complete loops feed aggregate values and headlines. Consumers that require completeness must require
+both `status: "complete"` and `results_complete: true`.
 
 ## TLB Behavior
 

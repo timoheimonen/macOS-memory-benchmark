@@ -219,14 +219,13 @@ int main(int argc, char *argv[]) {
     if (config.run_patterns) {
       // The pattern coordinator owns its shared src/dst mappings.
       PatternStatistics pattern_stats;
-      if (run_all_pattern_benchmarks(config, pattern_stats) != EXIT_SUCCESS) {
-        return EXIT_FAILURE;
-      }
+      const int pattern_run_status =
+          run_all_pattern_benchmarks(config, pattern_stats);
 
       // Print detailed single-loop results or robust median headlines for repeated loops.
-      if (config.loop_count == 1) {
+      if (config.loop_count == 1 && !pattern_stats.loop_results.empty()) {
         print_pattern_results(extract_pattern_results_at(pattern_stats, 0));
-      } else {
+      } else if (!pattern_stats.loop_results.empty()) {
         print_pattern_results(extract_pattern_median_results(pattern_stats));
 
         // Print summary statistics
@@ -239,6 +238,10 @@ int main(int argc, char *argv[]) {
         if (save_pattern_results_to_json(config, pattern_stats, total_elapsed_time_sec) != EXIT_SUCCESS) {
           return EXIT_FAILURE;
         }
+      }
+
+      if (pattern_run_status != EXIT_SUCCESS) {
+        return pattern_run_status;
       }
     } else {
       // Run standard benchmarks

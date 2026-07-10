@@ -22,6 +22,7 @@
 #include "core/config/config.h"
 #include "core/config/constants.h"
 #include "output/console/messages/messages_api.h"
+#include "output/json/json_output/json_output_api.h"
 #include "utils/benchmark.h"  // Declares system_info functions
 #include "warmup/warmup.h"
 #include "test_config_helpers.h"
@@ -32,6 +33,7 @@
 #include <cstring>
 #include <cstdlib>
 #include <optional>
+#include <stdexcept>
 #include <string>
 #include <utility>
 #include <vector>
@@ -199,6 +201,38 @@ PatternMeasurement make_test_measurement(
   return measurement;
 }
 
+PatternResults make_complete_pattern_loop(double bandwidth = 1.0) {
+  PatternResults results;
+  for (PatternMeasurement& measurement : results.measurements) {
+    measurement.status = PatternMeasurementStatus::Measured;
+    measurement.bandwidth_gb_s = bandwidth;
+  }
+  return results;
+}
+
+PatternResults make_skipped_pattern_loop(
+    const std::string& reason = "intentional test skip") {
+  PatternResults results;
+  for (PatternMeasurement& measurement : results.measurements) {
+    measurement.status = PatternMeasurementStatus::Skipped;
+    measurement.status_reason = reason;
+    measurement.bandwidth_gb_s.reset();
+  }
+  return results;
+}
+
+PatternRunnerTestHooks make_pattern_runner_hooks() {
+  PatternRunnerTestHooks hooks;
+  hooks.allocate_buffers = [](const BenchmarkConfig&, PatternBuffers&) {
+    return EXIT_SUCCESS;
+  };
+  hooks.initialize_buffers = [](const PatternBuffers&, size_t) {
+    return EXIT_SUCCESS;
+  };
+  hooks.stop_requested = []() { return false; };
+  return hooks;
+}
+
 unsigned char* align_to_cache_line(unsigned char* pointer) {
   const uintptr_t address = reinterpret_cast<uintptr_t>(pointer);
   const uintptr_t aligned =
@@ -278,10 +312,414 @@ void expect_2mb_pattern_bandwidths_positive(const PatternResults& results) {
 TEST(PatternBenchmarkTest, PatternResultsDefaultValues) {
   PatternResults results;
 
+  EXPECT_EQ(results.status, PatternRunStatus::NotStarted);
+  EXPECT_EQ(results.planned_measurements, kPatternMeasurementsPerLoop);
+  EXPECT_EQ(results.completed_measurements, 0u);
+
   for (const PatternMeasurement& measurement : results.measurements) {
     EXPECT_EQ(measurement.status, PatternMeasurementStatus::Invalid);
     EXPECT_FALSE(measurement.bandwidth_gb_s.has_value());
   }
+}
+
+TEST(PatternBenchmarkTest, PatternRunStatusStringsAreStable) {
+  EXPECT_STREQ(pattern_run_status_to_string(PatternRunStatus::NotStarted),
+               "not-started");
+  EXPECT_STREQ(pattern_run_status_to_string(PatternRunStatus::Complete),
+               "complete");
+  EXPECT_STREQ(pattern_run_status_to_string(PatternRunStatus::Partial),
+               "partial");
+  EXPECT_STREQ(pattern_run_status_to_string(PatternRunStatus::Interrupted),
+               "interrupted");
+  EXPECT_STREQ(pattern_run_status_to_string(PatternRunStatus::Failed),
+               "failed");
+}
+
+TEST(PatternBenchmarkTest, LoopSummaryAcceptsMeasuredValuesAndSkippedMeasurements) {
+  PatternResults results = make_complete_pattern_loop();
+  results.measurements[4].status = PatternMeasurementStatus::Skipped;
+  results.measurements[4].status_reason = "unsupported by this buffer";
+  results.measurements[4].bandwidth_gb_s.reset();
+
+  const PatternLoopSummary summary = summarize_pattern_loop(results);
+  EXPECT_EQ(summary.status, PatternRunStatus::Complete);
+  EXPECT_TRUE(summary.status_reason.empty());
+  EXPECT_EQ(summary.planned_measurements, 21u);
+  EXPECT_EQ(summary.completed_measurements, 21u);
+}
+
+TEST(PatternBenchmarkTest, LoopSummaryClassifiesIncompleteInterruptedInvalidAndExecutionFailure) {
+  PatternResults incomplete = make_complete_pattern_loop();
+  incomplete.measurements[3].bandwidth_gb_s.reset();
+  EXPECT_EQ(summarize_pattern_loop(incomplete).status,
+            PatternRunStatus::Partial);
+
+  PatternResults interrupted = incomplete;
+  interrupted.measurements[3].status = PatternMeasurementStatus::Interrupted;
+  interrupted.measurements[3].status_reason = "stop observed";
+  const PatternLoopSummary interrupted_summary =
+      summarize_pattern_loop(interrupted);
+  EXPECT_EQ(interrupted_summary.status, PatternRunStatus::Interrupted);
+  EXPECT_EQ(interrupted_summary.status_reason, "stop observed");
+
+  PatternResults invalid = incomplete;
+  invalid.measurements[3].status = PatternMeasurementStatus::Invalid;
+  invalid.measurements[3].status_reason = "invalid duration";
+  const PatternLoopSummary invalid_summary = summarize_pattern_loop(invalid);
+  EXPECT_EQ(invalid_summary.status, PatternRunStatus::Failed);
+  EXPECT_EQ(invalid_summary.status_reason, "invalid duration");
+
+  const PatternLoopSummary execution_failure = summarize_pattern_loop(
+      make_complete_pattern_loop(), true, true, "executor failed");
+  EXPECT_EQ(execution_failure.status, PatternRunStatus::Failed);
+  EXPECT_EQ(execution_failure.status_reason, "executor failed");
+}
+
+TEST(PatternBenchmarkTest, CompleteLoopWinsLateInterruptionFlag) {
+  const PatternLoopSummary summary =
+      summarize_pattern_loop(make_complete_pattern_loop(), false, true);
+  EXPECT_EQ(summary.status, PatternRunStatus::Complete);
+  EXPECT_EQ(summary.completed_measurements, 21u);
+}
+
+TEST(PatternBenchmarkTest, CollectorSumsExactCompletionCounters) {
+  PatternStatistics statistics;
+  initialize_pattern_statistics(statistics, 2);
+
+  collect_pattern_loop_result(statistics, make_complete_pattern_loop());
+  EXPECT_EQ(statistics.status, PatternRunStatus::Partial);
+  EXPECT_EQ(statistics.planned_loops, 2u);
+  EXPECT_EQ(statistics.completed_loops, 1u);
+  EXPECT_EQ(statistics.planned_measurements, 42u);
+  EXPECT_EQ(statistics.completed_measurements, 21u);
+
+  PatternResults partial = make_complete_pattern_loop();
+  partial.measurements.back().bandwidth_gb_s.reset();
+  collect_pattern_loop_result(statistics, std::move(partial));
+  EXPECT_EQ(statistics.status, PatternRunStatus::Partial);
+  EXPECT_EQ(statistics.completed_loops, 1u);
+  EXPECT_EQ(statistics.completed_measurements, 41u);
+  ASSERT_EQ(statistics.loop_results.size(), 2u);
+  EXPECT_EQ(statistics.loop_results[1].status, PatternRunStatus::Partial);
+}
+
+TEST(PatternBenchmarkTest, LaterCompleteLoopPreservesEarlierPartialReason) {
+  PatternStatistics statistics;
+  initialize_pattern_statistics(statistics, 2);
+  PatternResults partial = make_complete_pattern_loop();
+  partial.measurements.back().bandwidth_gb_s.reset();
+  collect_pattern_loop_result(statistics, std::move(partial));
+  const std::string partial_reason = statistics.status_reason;
+
+  collect_pattern_loop_result(statistics, make_complete_pattern_loop());
+  EXPECT_EQ(statistics.status, PatternRunStatus::Partial);
+  EXPECT_EQ(statistics.status_reason, partial_reason);
+  EXPECT_EQ(statistics.completed_loops, 1u);
+  EXPECT_EQ(statistics.planned_loops, 2u);
+  EXPECT_EQ(statistics.completed_measurements, 41u);
+  EXPECT_EQ(statistics.planned_measurements, 42u);
+}
+
+TEST(PatternBenchmarkTest, CoordinatorReportsBufferPreparationFailuresWithPlannedCounts) {
+  BenchmarkConfig config;
+  config.loop_count = 2;
+  config.buffer_size = 4096;
+
+  PatternRunnerTestHooks allocation_failure = make_pattern_runner_hooks();
+  allocation_failure.allocate_buffers =
+      [](const BenchmarkConfig&, PatternBuffers&) { return EXIT_FAILURE; };
+  PatternStatistics statistics;
+  EXPECT_EQ(run_all_pattern_benchmarks(config, statistics,
+                                       &allocation_failure),
+            EXIT_FAILURE);
+  EXPECT_EQ(statistics.status, PatternRunStatus::Failed);
+  EXPECT_EQ(statistics.status_reason,
+            Messages::pattern_reason_buffers_allocation_failed());
+  EXPECT_EQ(statistics.planned_loops, 2u);
+  EXPECT_EQ(statistics.completed_loops, 0u);
+  EXPECT_EQ(statistics.planned_measurements, 42u);
+  EXPECT_EQ(statistics.completed_measurements, 0u);
+  EXPECT_TRUE(statistics.loop_results.empty());
+
+  PatternRunnerTestHooks initialization_failure = make_pattern_runner_hooks();
+  initialization_failure.initialize_buffers =
+      [](const PatternBuffers&, size_t) { return EXIT_FAILURE; };
+  EXPECT_EQ(run_all_pattern_benchmarks(config, statistics,
+                                       &initialization_failure),
+            EXIT_FAILURE);
+  EXPECT_EQ(statistics.status, PatternRunStatus::Failed);
+  EXPECT_EQ(statistics.status_reason,
+            Messages::pattern_reason_buffers_initialization_failed());
+  EXPECT_EQ(statistics.planned_measurements, 42u);
+  EXPECT_EQ(statistics.completed_measurements, 0u);
+  EXPECT_TRUE(statistics.loop_results.empty());
+}
+
+TEST(PatternBenchmarkTest, CoordinatorStopsBeforeFirstLoopWithPlannedCounts) {
+  BenchmarkConfig config;
+  config.loop_count = 2;
+  config.buffer_size = 4096;
+  PatternRunnerTestHooks hooks = make_pattern_runner_hooks();
+  hooks.stop_requested = []() { return true; };
+  hooks.execute_loop = [](const PatternBuffers&, const BenchmarkConfig&,
+                          PatternResults&, size_t) {
+    ADD_FAILURE() << "executor must not run after a pre-loop stop";
+    return EXIT_FAILURE;
+  };
+
+  PatternStatistics statistics;
+  EXPECT_EQ(run_all_pattern_benchmarks(config, statistics, &hooks),
+            EXIT_SUCCESS);
+  EXPECT_EQ(statistics.status, PatternRunStatus::Interrupted);
+  EXPECT_EQ(statistics.status_reason,
+            Messages::pattern_reason_loop_interrupted());
+  EXPECT_EQ(statistics.planned_loops, 2u);
+  EXPECT_EQ(statistics.completed_loops, 0u);
+  EXPECT_EQ(statistics.planned_measurements, 42u);
+  EXPECT_EQ(statistics.completed_measurements, 0u);
+  EXPECT_TRUE(statistics.loop_results.empty());
+}
+
+TEST(PatternBenchmarkTest, CoordinatorConvertsLoopExceptionToFailedEvidence) {
+  BenchmarkConfig config;
+  config.loop_count = 1;
+  config.buffer_size = 4096;
+  PatternRunnerTestHooks hooks = make_pattern_runner_hooks();
+  hooks.execute_loop = [](const PatternBuffers&, const BenchmarkConfig&,
+                          PatternResults&, size_t) -> int {
+    throw std::runtime_error("injected exception");
+  };
+
+  PatternStatistics statistics;
+  testing::internal::CaptureStderr();
+  const int status = run_all_pattern_benchmarks(config, statistics, &hooks);
+  const std::string error_output = testing::internal::GetCapturedStderr();
+  EXPECT_EQ(status, EXIT_FAILURE);
+  ASSERT_EQ(statistics.loop_results.size(), 1u);
+  EXPECT_EQ(statistics.status, PatternRunStatus::Failed);
+  EXPECT_EQ(statistics.status_reason,
+            Messages::pattern_reason_loop_exception("injected exception"));
+  EXPECT_EQ(statistics.completed_measurements, 0u);
+  EXPECT_NE(error_output.find("injected exception"), std::string::npos);
+
+  hooks.execute_loop = [](const PatternBuffers&, const BenchmarkConfig&,
+                          PatternResults&, size_t) -> int { throw 7; };
+  testing::internal::CaptureStderr();
+  EXPECT_EQ(run_all_pattern_benchmarks(config, statistics, &hooks),
+            EXIT_FAILURE);
+  (void)testing::internal::GetCapturedStderr();
+  ASSERT_EQ(statistics.loop_results.size(), 1u);
+  EXPECT_EQ(statistics.status_reason,
+            Messages::pattern_reason_unknown_loop_exception());
+}
+
+TEST(PatternBenchmarkTest, CoordinatorContainsPreparationHookExceptions) {
+  BenchmarkConfig config;
+  config.loop_count = 2;
+  config.buffer_size = 4096;
+  PatternStatistics statistics;
+
+  PatternRunnerTestHooks hooks = make_pattern_runner_hooks();
+  hooks.allocate_buffers = [](const BenchmarkConfig&, PatternBuffers&) -> int {
+    throw std::runtime_error("allocation hook exception");
+  };
+  testing::internal::CaptureStderr();
+  EXPECT_EQ(run_all_pattern_benchmarks(config, statistics, &hooks),
+            EXIT_FAILURE);
+  (void)testing::internal::GetCapturedStderr();
+  EXPECT_EQ(statistics.status, PatternRunStatus::Failed);
+  EXPECT_EQ(
+      statistics.status_reason,
+      Messages::pattern_reason_coordinator_exception(
+          "allocation hook exception"));
+  EXPECT_EQ(statistics.planned_measurements, 42u);
+  EXPECT_TRUE(statistics.loop_results.empty());
+
+  hooks = make_pattern_runner_hooks();
+  hooks.initialize_buffers = [](const PatternBuffers&, size_t) -> int {
+    throw 9;
+  };
+  testing::internal::CaptureStderr();
+  EXPECT_EQ(run_all_pattern_benchmarks(config, statistics, &hooks),
+            EXIT_FAILURE);
+  (void)testing::internal::GetCapturedStderr();
+  EXPECT_EQ(statistics.status_reason,
+            Messages::pattern_reason_unknown_coordinator_exception());
+  EXPECT_EQ(statistics.planned_measurements, 42u);
+  EXPECT_TRUE(statistics.loop_results.empty());
+}
+
+TEST(PatternBenchmarkTest, CoordinatorPreservesFailedAndPartialLoopEvidence) {
+  BenchmarkConfig config;
+  config.loop_count = 1;
+  config.buffer_size = 4096;
+
+  PatternRunnerTestHooks failure = make_pattern_runner_hooks();
+  failure.execute_loop = [](const PatternBuffers&, const BenchmarkConfig&,
+                            PatternResults& results, size_t) {
+    results = make_complete_pattern_loop(4.0);
+    return EXIT_FAILURE;
+  };
+  PatternStatistics statistics;
+  EXPECT_EQ(run_all_pattern_benchmarks(config, statistics, &failure),
+            EXIT_FAILURE);
+  ASSERT_EQ(statistics.loop_results.size(), 1u);
+  EXPECT_EQ(statistics.status, PatternRunStatus::Failed);
+  EXPECT_EQ(statistics.loop_results[0].status, PatternRunStatus::Failed);
+  EXPECT_EQ(statistics.completed_loops, 0u);
+  EXPECT_EQ(statistics.completed_measurements, 21u);
+
+  PatternRunnerTestHooks partial = make_pattern_runner_hooks();
+  partial.execute_loop = [](const PatternBuffers&, const BenchmarkConfig&,
+                            PatternResults& results, size_t) {
+    results = make_complete_pattern_loop(5.0);
+    results.measurements.back().bandwidth_gb_s.reset();
+    return EXIT_SUCCESS;
+  };
+  EXPECT_EQ(run_all_pattern_benchmarks(config, statistics, &partial),
+            EXIT_SUCCESS);
+  ASSERT_EQ(statistics.loop_results.size(), 1u);
+  EXPECT_EQ(statistics.status, PatternRunStatus::Partial);
+  EXPECT_EQ(statistics.status_reason,
+            Messages::pattern_reason_loop_incomplete());
+  EXPECT_EQ(statistics.loop_results[0].status, PatternRunStatus::Partial);
+  EXPECT_EQ(statistics.completed_loops, 0u);
+  EXPECT_EQ(statistics.completed_measurements, 20u);
+}
+
+TEST(PatternBenchmarkTest, InvalidEvidenceFailsEvenWhenExecutorReturnsSuccess) {
+  BenchmarkConfig config;
+  config.loop_count = 1;
+  config.buffer_size = 4096;
+  PatternRunnerTestHooks hooks = make_pattern_runner_hooks();
+  hooks.execute_loop = [](const PatternBuffers&, const BenchmarkConfig&,
+                          PatternResults& results, size_t) {
+    results = make_complete_pattern_loop();
+    results.measurements.back().status = PatternMeasurementStatus::Invalid;
+    results.measurements.back().status_reason = "invalid injected timing";
+    results.measurements.back().bandwidth_gb_s.reset();
+    return EXIT_SUCCESS;
+  };
+
+  PatternStatistics statistics;
+  EXPECT_EQ(run_all_pattern_benchmarks(config, statistics, &hooks),
+            EXIT_FAILURE);
+  ASSERT_EQ(statistics.loop_results.size(), 1u);
+  EXPECT_EQ(statistics.status, PatternRunStatus::Failed);
+  EXPECT_EQ(statistics.status_reason, "invalid injected timing");
+  EXPECT_EQ(statistics.completed_loops, 0u);
+  EXPECT_EQ(statistics.completed_measurements, 20u);
+}
+
+TEST(PatternBenchmarkTest, FailedLoopEvidenceIsExcludedFromJsonAggregate) {
+  BenchmarkConfig config;
+  config.loop_count = 2;
+  config.buffer_size = 4096;
+  PatternRunnerTestHooks hooks = make_pattern_runner_hooks();
+  hooks.execute_loop = [](const PatternBuffers&, const BenchmarkConfig&,
+                          PatternResults& results, size_t loop_index) {
+    results = make_skipped_pattern_loop();
+    set_pattern_measurement(
+        results, PatternKind::SequentialForward, PatternOperation::Read,
+        make_test_measurement(PatternMeasurementStatus::Measured, "",
+                              loop_index == 0 ? 10.0 : 100.0));
+    if (loop_index == 0) {
+      return EXIT_SUCCESS;
+    }
+    results.measurements.back().status = PatternMeasurementStatus::Measured;
+    results.measurements.back().status_reason = "missing injected value";
+    results.measurements.back().bandwidth_gb_s.reset();
+    return EXIT_FAILURE;
+  };
+
+  PatternStatistics statistics;
+  EXPECT_EQ(run_all_pattern_benchmarks(config, statistics, &hooks),
+            EXIT_FAILURE);
+  ASSERT_EQ(statistics.all_forward_read_bw.size(), 1u);
+  EXPECT_DOUBLE_EQ(statistics.all_forward_read_bw.front(), 10.0);
+  const PatternResults headline = extract_pattern_median_results(statistics);
+  const PatternMeasurement& headline_read = get_pattern_measurement(
+      headline, PatternKind::SequentialForward, PatternOperation::Read);
+  ASSERT_TRUE(headline_read.bandwidth_gb_s.has_value());
+  EXPECT_DOUBLE_EQ(*headline_read.bandwidth_gb_s, 10.0);
+
+  const nlohmann::ordered_json output =
+      build_pattern_results_json(config, statistics, 0.5);
+  EXPECT_EQ(output["status"], "failed");
+  EXPECT_EQ(output["completed_loops"], 1u);
+  EXPECT_EQ(output["planned_loops"], 2u);
+  EXPECT_EQ(output["completed_measurements"], 41u);
+  EXPECT_EQ(output["planned_measurements"], 42u);
+  EXPECT_FALSE(output["results_complete"].get<bool>());
+  const nlohmann::ordered_json& read =
+      output[JsonKeys::PATTERNS][JsonKeys::SEQUENTIAL_FORWARD]
+            [JsonKeys::BANDWIDTH][JsonKeys::READ_GB_S];
+  ASSERT_EQ(read["values_gb_s"].size(), 1u);
+  EXPECT_DOUBLE_EQ(read["values_gb_s"][0].get<double>(), 10.0);
+  EXPECT_DOUBLE_EQ(read["value_gb_s"].get<double>(), 10.0);
+  EXPECT_DOUBLE_EQ(read["statistics"]["median_p50"].get<double>(), 10.0);
+  ASSERT_EQ(read["measurements"].size(), 2u);
+  EXPECT_DOUBLE_EQ(read["measurements"][0]["value_gb_s"].get<double>(),
+                   10.0);
+  EXPECT_DOUBLE_EQ(read["measurements"][1]["value_gb_s"].get<double>(),
+                   100.0);
+}
+
+TEST(PatternBenchmarkTest, CoordinatorPreservesInterruptedLoopEvidence) {
+  BenchmarkConfig config;
+  config.loop_count = 1;
+  config.buffer_size = 4096;
+  PatternRunnerTestHooks hooks = make_pattern_runner_hooks();
+  hooks.execute_loop = [](const PatternBuffers&, const BenchmarkConfig&,
+                          PatternResults& results, size_t) {
+    results = make_complete_pattern_loop();
+    results.measurements.back().status = PatternMeasurementStatus::Interrupted;
+    results.measurements.back().status_reason = "injected interruption";
+    results.measurements.back().bandwidth_gb_s.reset();
+    return EXIT_SUCCESS;
+  };
+
+  PatternStatistics statistics;
+  EXPECT_EQ(run_all_pattern_benchmarks(config, statistics, &hooks),
+            EXIT_SUCCESS);
+  ASSERT_EQ(statistics.loop_results.size(), 1u);
+  EXPECT_EQ(statistics.status, PatternRunStatus::Interrupted);
+  EXPECT_EQ(statistics.status_reason, "injected interruption");
+  EXPECT_EQ(statistics.completed_measurements, 20u);
+}
+
+TEST(PatternBenchmarkTest, OneShotLateStopInterruptsOnlyWhenLoopsRemain) {
+  auto run_with_loop_count = [](int loop_count) {
+    BenchmarkConfig config;
+    config.loop_count = loop_count;
+    config.buffer_size = 4096;
+    PatternRunnerTestHooks hooks = make_pattern_runner_hooks();
+    hooks.execute_loop = [](const PatternBuffers&, const BenchmarkConfig&,
+                            PatternResults& results, size_t) {
+      results = make_complete_pattern_loop();
+      return EXIT_SUCCESS;
+    };
+    size_t stop_checks = 0;
+    hooks.stop_requested = [&stop_checks]() {
+      ++stop_checks;
+      return stop_checks == 2;
+    };
+    PatternStatistics statistics;
+    EXPECT_EQ(run_all_pattern_benchmarks(config, statistics, &hooks),
+              EXIT_SUCCESS);
+    return statistics;
+  };
+
+  const PatternStatistics unfinished = run_with_loop_count(2);
+  EXPECT_EQ(unfinished.status, PatternRunStatus::Interrupted);
+  EXPECT_EQ(unfinished.completed_loops, 1u);
+  EXPECT_EQ(unfinished.completed_measurements, 21u);
+
+  const PatternStatistics finished = run_with_loop_count(1);
+  EXPECT_EQ(finished.status, PatternRunStatus::Complete);
+  EXPECT_TRUE(finished.status_reason.empty());
+  EXPECT_EQ(finished.completed_loops, 1u);
+  EXPECT_EQ(finished.completed_measurements, 21u);
 }
 
 TEST(PatternBenchmarkTest, ExecutionOrderIsDeterministicAndRotatesAcrossLoops) {
@@ -612,7 +1050,7 @@ TEST(PatternBenchmarkTest, PureCollectionFiltersUnavailableValuesAndPreservesEvi
   EXPECT_TRUE(statistics.all_reverse_write_bw.empty());
   EXPECT_TRUE(statistics.all_random_copy_bw.empty());
 
-  PatternResults measured_loop;
+  PatternResults measured_loop = make_skipped_pattern_loop();
   set_pattern_measurement(
       measured_loop, PatternKind::SequentialForward, PatternOperation::Read,
       make_test_measurement(PatternMeasurementStatus::Measured, "", 12.5));
@@ -632,7 +1070,7 @@ TEST(PatternBenchmarkTest, PureCollectionFiltersUnavailableValuesAndPreservesEvi
       "unsupported test pattern", "interrupted after preparation",
       "invalid measured duration"};
   for (size_t index = 0; index < unavailable_statuses.size(); ++index) {
-    PatternResults loop;
+    PatternResults loop = make_skipped_pattern_loop();
     set_pattern_measurement(
         loop, PatternKind::SequentialForward, PatternOperation::Read,
         make_test_measurement(unavailable_statuses[index],
@@ -673,8 +1111,9 @@ TEST(PatternBenchmarkTest,
   initialize_pattern_statistics(statistics, 4);
   const std::array<std::optional<double>, 4> read_values = {
       10.0, 30.0, 20.0, std::nullopt};
-  for (const std::optional<double>& read_value : read_values) {
-    PatternResults loop;
+  for (size_t index = 0; index < read_values.size(); ++index) {
+    const std::optional<double>& read_value = read_values[index];
+    PatternResults loop = make_skipped_pattern_loop();
     set_pattern_measurement(
         loop, PatternKind::SequentialForward, PatternOperation::Read,
         read_value.has_value()
@@ -688,12 +1127,20 @@ TEST(PatternBenchmarkTest,
                               "write unsupported"));
     set_pattern_measurement(
         loop, PatternKind::SequentialForward, PatternOperation::Copy,
-        make_test_measurement(PatternMeasurementStatus::Interrupted,
-                              "copy interrupted"));
+        make_test_measurement(
+            index + 1 == read_values.size()
+                ? PatternMeasurementStatus::Interrupted
+                : PatternMeasurementStatus::Skipped,
+            index + 1 == read_values.size() ? "copy interrupted"
+                                            : "copy unsupported"));
     set_pattern_measurement(
         loop, PatternKind::SequentialReverse, PatternOperation::Read,
-        make_test_measurement(PatternMeasurementStatus::Invalid,
-                              "reverse timing invalid"));
+        make_test_measurement(
+            index + 1 == read_values.size()
+                ? PatternMeasurementStatus::Invalid
+                : PatternMeasurementStatus::Skipped,
+            index + 1 == read_values.size() ? "reverse timing invalid"
+                                            : "reverse unsupported"));
     collect_pattern_loop_result(statistics, std::move(loop));
   }
 
@@ -712,7 +1159,6 @@ TEST(PatternBenchmarkTest,
   EXPECT_TRUE(read.status_reason.empty());
   ASSERT_TRUE(read.bandwidth_gb_s.has_value());
   EXPECT_DOUBLE_EQ(*read.bandwidth_gb_s, 20.0);
-  EXPECT_DOUBLE_EQ(headline.forward_read_bw, 20.0);
 
   const PatternMeasurement& write = get_pattern_measurement(
       headline, PatternKind::SequentialForward, PatternOperation::Write);
@@ -722,15 +1168,25 @@ TEST(PatternBenchmarkTest,
 
   const PatternMeasurement& copy = get_pattern_measurement(
       headline, PatternKind::SequentialForward, PatternOperation::Copy);
-  EXPECT_EQ(copy.status, PatternMeasurementStatus::Interrupted);
-  EXPECT_EQ(copy.status_reason, "copy interrupted");
+  EXPECT_EQ(copy.status, PatternMeasurementStatus::Skipped);
+  EXPECT_EQ(copy.status_reason, "copy unsupported");
   EXPECT_FALSE(copy.bandwidth_gb_s.has_value());
 
   const PatternMeasurement& invalid = get_pattern_measurement(
       headline, PatternKind::SequentialReverse, PatternOperation::Read);
-  EXPECT_EQ(invalid.status, PatternMeasurementStatus::Invalid);
-  EXPECT_EQ(invalid.status_reason, "reverse timing invalid");
+  EXPECT_EQ(invalid.status, PatternMeasurementStatus::Skipped);
+  EXPECT_EQ(invalid.status_reason, "reverse unsupported");
   EXPECT_FALSE(invalid.bandwidth_gb_s.has_value());
+
+  const PatternMeasurement& retained_interruption = get_pattern_measurement(
+      statistics.loop_results.back(), PatternKind::SequentialForward,
+      PatternOperation::Copy);
+  EXPECT_EQ(retained_interruption.status,
+            PatternMeasurementStatus::Interrupted);
+  const PatternMeasurement& retained_invalid = get_pattern_measurement(
+      statistics.loop_results.back(), PatternKind::SequentialReverse,
+      PatternOperation::Read);
+  EXPECT_EQ(retained_invalid.status, PatternMeasurementStatus::Invalid);
 }
 
 TEST(PatternBenchmarkTest, StatisticsUseExactMedianCvAndMad) {

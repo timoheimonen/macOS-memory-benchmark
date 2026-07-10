@@ -29,6 +29,7 @@
 #include <cstddef>  // size_t
 #include <cstdint>
 #include <cstdlib>  // EXIT_SUCCESS, EXIT_FAILURE
+#include <functional>
 #include <optional>
 #include <string>
 #include <vector>
@@ -58,6 +59,18 @@ enum class PatternOperation {
   Copy,
   Count,
 };
+
+enum class PatternRunStatus {
+  NotStarted,
+  Complete,
+  Partial,
+  Interrupted,
+  Failed,
+};
+
+constexpr size_t kPatternMeasurementsPerLoop =
+    static_cast<size_t>(PatternKind::Count) *
+    static_cast<size_t>(PatternOperation::Count);
 
 struct PatternMeasurement {
   PatternMeasurementStatus status = PatternMeasurementStatus::Invalid;
@@ -97,51 +110,27 @@ constexpr size_t pattern_measurement_index(PatternKind kind,
 
 /**
  * @struct PatternResults
- * @brief Structure to hold pattern benchmark results
+ * @brief Status-bearing evidence from one pattern benchmark loop.
  *
- * Stores bandwidth measurements (in GB/s) for various memory access patterns.
- * All bandwidth values are in gigabytes per second.
+ * The fixed measurement array is the sole per-operation source of truth. Loop
+ * status and counters summarize whether all 21 planned operations reached a
+ * terminal measured-or-skipped state.
  */
 struct PatternResults {
-  // Sequential Forward (baseline)
-  double forward_read_bw = 0.0;   ///< Sequential forward read bandwidth (GB/s)
-  double forward_write_bw = 0.0;  ///< Sequential forward write bandwidth (GB/s)
-  double forward_copy_bw = 0.0;   ///< Sequential forward copy bandwidth (GB/s)
-  
-  // Sequential Reverse
-  double reverse_read_bw = 0.0;   ///< Sequential reverse read bandwidth (GB/s)
-  double reverse_write_bw = 0.0;  ///< Sequential reverse write bandwidth (GB/s)
-  double reverse_copy_bw = 0.0;   ///< Sequential reverse copy bandwidth (GB/s)
-  
-  // Strided (Cache Line - 64B)
-  double strided_64_read_bw = 0.0;   ///< Strided (64B stride) read bandwidth (GB/s)
-  double strided_64_write_bw = 0.0; ///< Strided (64B stride) write bandwidth (GB/s)
-  double strided_64_copy_bw = 0.0;  ///< Strided (64B stride) copy bandwidth (GB/s)
-  
-  // Strided (Page - 4096B)
-  double strided_4096_read_bw = 0.0;   ///< Strided (4096B stride) read bandwidth (GB/s)
-  double strided_4096_write_bw = 0.0;  ///< Strided (4096B stride) write bandwidth (GB/s)
-  double strided_4096_copy_bw = 0.0;   ///< Strided (4096B stride) copy bandwidth (GB/s)
+  PatternRunStatus status = PatternRunStatus::NotStarted;
+  std::string status_reason;
+  size_t loop_index = 0;
+  size_t planned_measurements = kPatternMeasurementsPerLoop;
+  size_t completed_measurements = 0;
+  std::array<PatternMeasurement, kPatternMeasurementsPerLoop> measurements;
+};
 
-  // Strided (Page - 16384B)
-  double strided_16384_read_bw = 0.0;   ///< Strided (16384B stride) read bandwidth (GB/s)
-  double strided_16384_write_bw = 0.0;  ///< Strided (16384B stride) write bandwidth (GB/s)
-  double strided_16384_copy_bw = 0.0;   ///< Strided (16384B stride) copy bandwidth (GB/s)
-
-  // Strided (2 MiB virtual-address interval; physical large-page backing is not asserted)
-  double strided_2mb_read_bw = 0.0;   ///< Strided (2MB stride) read bandwidth (GB/s)
-  double strided_2mb_write_bw = 0.0;  ///< Strided (2MB stride) write bandwidth (GB/s)
-  double strided_2mb_copy_bw = 0.0;   ///< Strided (2MB stride) copy bandwidth (GB/s)
-  
-  // Random Uniform
-  double random_read_bw = 0.0;   ///< Random access read bandwidth (GB/s)
-  double random_write_bw = 0.0; ///< Random access write bandwidth (GB/s)
-  double random_copy_bw = 0.0;  ///< Random access copy bandwidth (GB/s)
-
-  std::array<PatternMeasurement,
-             static_cast<size_t>(PatternKind::Count) *
-                 static_cast<size_t>(PatternOperation::Count)>
-      measurements;
+/** @brief Pure completion summary for one pattern loop. */
+struct PatternLoopSummary {
+  PatternRunStatus status = PatternRunStatus::NotStarted;
+  std::string status_reason;
+  size_t planned_measurements = kPatternMeasurementsPerLoop;
+  size_t completed_measurements = 0;
 };
 
 /**
@@ -152,6 +141,12 @@ struct PatternResults {
  * including mean, min, max, and percentile calculations.
  */
 struct PatternStatistics {
+  PatternRunStatus status = PatternRunStatus::NotStarted;
+  std::string status_reason;
+  size_t planned_loops = 0;
+  size_t completed_loops = 0;
+  size_t planned_measurements = 0;
+  size_t completed_measurements = 0;
   std::vector<PatternResults> loop_results;  ///< Status-bearing per-loop results and metadata
   // Vectors storing results from each loop
   std::vector<double> all_forward_read_bw;        ///< Forward read bandwidth from each loop (GB/s)
@@ -188,6 +183,24 @@ void set_pattern_measurement(PatternResults& results, PatternKind kind,
                              PatternOperation operation,
                              PatternMeasurement measurement);
 PatternStatisticsData calculate_pattern_statistics(const std::vector<double>& values);
+const char* pattern_run_status_to_string(PatternRunStatus status);
+
+/**
+ * @brief Summarize one loop without mutating the supplied evidence.
+ * @param results Status-bearing measurements produced for the loop.
+ * @param execution_failed Whether the loop executor returned failure.
+ * @param interruption_requested Whether a stop was observed after execution.
+ * @param execution_failure_reason Optional executor diagnostic.
+ * @return Completion status and exact planned/completed counters.
+ *
+ * Measured values and intentional skips are complete measurements. Invalid
+ * evidence or executor failure makes the loop failed. A fully complete loop
+ * remains complete when a stop arrives only after its final measurement.
+ */
+PatternLoopSummary summarize_pattern_loop(
+    const PatternResults& results, bool execution_failed = false,
+    bool interruption_requested = false,
+    const std::string& execution_failure_reason = "");
 
 /**
  * @brief Clear pattern-loop evidence and aggregates, reserving optional loop capacity.
@@ -198,7 +211,8 @@ void initialize_pattern_statistics(PatternStatistics& stats,
                                    size_t expected_loop_count = 0);
 
 /**
- * @brief Collect one completed loop without executing benchmark kernels.
+ * @brief Collect one complete, partial, interrupted, or failed loop without
+ *        executing benchmark kernels.
  * @param stats Destination for exact loop evidence and measured-only aggregates.
  * @param loop_result Status-bearing result for one loop.
  *
@@ -208,6 +222,16 @@ void initialize_pattern_statistics(PatternStatistics& stats,
  */
 void collect_pattern_loop_result(PatternStatistics& stats,
                                  PatternResults loop_result);
+
+/** @brief Optional dependency seams for deterministic coordinator tests. */
+struct PatternRunnerTestHooks {
+  std::function<int(const BenchmarkConfig&, PatternBuffers&)> allocate_buffers;
+  std::function<int(const PatternBuffers&, size_t)> initialize_buffers;
+  std::function<int(const PatternBuffers&, const BenchmarkConfig&,
+                    PatternResults&, size_t)>
+      execute_loop;
+  std::function<bool()> stop_requested;
+};
 std::array<PatternKind, static_cast<size_t>(PatternKind::Count)>
 build_pattern_execution_order(size_t loop_index);
 
@@ -240,15 +264,19 @@ int run_pattern_benchmarks(const PatternBuffers& buffers, const BenchmarkConfig&
  * @brief Run all pattern benchmark loops and collect statistics
  * @param config Reference to benchmark configuration
  * @param[out] stats Reference to PatternStatistics structure to store aggregated results
- * @return EXIT_SUCCESS on success, EXIT_FAILURE on error
+ * @param test_hooks Optional deterministic dependency seams; null in production.
+ * @return EXIT_SUCCESS for complete, partial, or graceful interrupted runs;
+ *         EXIT_FAILURE for preparation, execution, or exception failures.
  *
  * Executes multiple pattern benchmark loops as specified by config.loop_count and
  * aggregates all results into the PatternStatistics structure for statistical analysis.
  * The coordinator allocates and initializes one PatternBuffers owner before the
- * first loop and releases both mappings before returning.
+ * first loop and releases both mappings before returning. `stats.status` is the
+ * authoritative completion outcome, including when this function returns success.
  */
 int run_all_pattern_benchmarks(const BenchmarkConfig& config,
-                               PatternStatistics& stats);
+                               PatternStatistics& stats,
+                               const PatternRunnerTestHooks* test_hooks = nullptr);
 
 /**
  * @brief Print pattern benchmark results to console
@@ -270,10 +298,10 @@ void print_pattern_statistics(int loop_count, const PatternStatistics& stats);
  * @brief Extract a PatternResults snapshot at a specific loop index from PatternStatistics
  * @param stats Reference to PatternStatistics structure containing aggregated results
  * @param index Loop index to extract from (must be < vector sizes)
- * @return PatternResults populated from the given index, or default PatternResults if vectors are empty
+ * @return Retained loop evidence at the clamped index, or a default not-started
+ *         result when no loop evidence exists.
  *
- * Convenience function that extracts a single loop's results from the multi-loop statistics
- * vectors. Returns a default-constructed PatternResults (all zeros) when the statistics are empty.
+ * This function never reconstructs measurements from aggregate value vectors.
  */
 PatternResults extract_pattern_results_at(const PatternStatistics& stats, size_t index);
 

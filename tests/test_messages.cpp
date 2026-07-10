@@ -1328,6 +1328,20 @@ TEST(MessagesFormattingTest, PatternMeasurementStatusReasons) {
       Messages::pattern_reason_no_valid_strided_worker_partition().empty());
   EXPECT_FALSE(Messages::pattern_reason_work_plan_pass_limit().empty());
   EXPECT_FALSE(Messages::pattern_reason_work_plan_total_overflow().empty());
+  EXPECT_FALSE(Messages::pattern_reason_buffers_allocation_failed().empty());
+  EXPECT_FALSE(Messages::pattern_reason_buffers_initialization_failed().empty());
+  EXPECT_FALSE(Messages::pattern_reason_loop_execution_failed().empty());
+  EXPECT_FALSE(Messages::pattern_reason_loop_interrupted().empty());
+  EXPECT_FALSE(Messages::pattern_reason_loop_incomplete().empty());
+  EXPECT_FALSE(Messages::pattern_reason_invalid_measurement().empty());
+  EXPECT_FALSE(Messages::pattern_reason_loops_remain().empty());
+  EXPECT_NE(Messages::pattern_reason_loop_exception("boom").find("boom"),
+            std::string::npos);
+  EXPECT_FALSE(Messages::pattern_reason_unknown_loop_exception().empty());
+  EXPECT_NE(Messages::pattern_reason_coordinator_exception("boom").find("boom"),
+            std::string::npos);
+  EXPECT_FALSE(
+      Messages::pattern_reason_unknown_coordinator_exception().empty());
 }
 
 TEST(MessagesFormattingTest, ConfigPatternAutomaticIterations) {

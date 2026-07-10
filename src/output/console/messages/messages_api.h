@@ -476,6 +476,17 @@ const std::string& pattern_reason_buffer_lacks_two_strided_accesses();
 const std::string& pattern_reason_no_valid_strided_worker_partition();
 const std::string& pattern_reason_work_plan_pass_limit();
 const std::string& pattern_reason_work_plan_total_overflow();
+const std::string& pattern_reason_buffers_allocation_failed();
+const std::string& pattern_reason_buffers_initialization_failed();
+const std::string& pattern_reason_loop_execution_failed();
+const std::string& pattern_reason_loop_interrupted();
+const std::string& pattern_reason_loop_incomplete();
+const std::string& pattern_reason_invalid_measurement();
+const std::string& pattern_reason_loops_remain();
+std::string pattern_reason_loop_exception(const std::string& error);
+const std::string& pattern_reason_unknown_loop_exception();
+std::string pattern_reason_coordinator_exception(const std::string& error);
+const std::string& pattern_reason_unknown_coordinator_exception();
 
 } // namespace Messages
 
