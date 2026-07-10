@@ -21,6 +21,7 @@
 #include "core/config/config.h"
 #include "core/timing/timer.h"
 #include "test_statistics_helpers.h"
+#include "test_timer_system_calls.h"
 #include <cstdlib>
 #include <stdexcept>
 #include <vector>
@@ -29,20 +30,8 @@ namespace {
 
 uint64_t deterministic_timer_ticks() { return 100; }
 
-kern_return_t deterministic_timebase_info(mach_timebase_info_t info) {
-  info->numer = 1;
-  info->denom = 1;
-  return KERN_SUCCESS;
-}
-
-class ScopedDeterministicTimerSystemCalls {
- public:
-  ScopedDeterministicTimerSystemCalls() {
-    set_timer_system_calls_for_testing({deterministic_timer_ticks, deterministic_timebase_info});
-  }
-
-  ~ScopedDeterministicTimerSystemCalls() { reset_timer_system_calls_for_testing(); }
-};
+using ScopedDeterministicTimerSystemCalls =
+    test_timer_system_calls::ScopedTimerSystemCalls<deterministic_timer_ticks>;
 
 void inject_deterministic_elapsed(BenchmarkRunnerTestHooks& hooks) {
   hooks.elapsed_seconds = []() { return 1.0; };

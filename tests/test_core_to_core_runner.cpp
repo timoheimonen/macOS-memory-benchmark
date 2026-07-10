@@ -33,25 +33,14 @@
 #include "benchmark/core_to_core_sweep_runner.h"
 #include "core/config/constants.h"
 #include "core/timing/timer.h"
+#include "test_timer_system_calls.h"
 
 namespace {
 
 uint64_t deterministic_timer_ticks() { return 100; }
 
-kern_return_t deterministic_timebase_info(mach_timebase_info_t info) {
-  info->numer = 1;
-  info->denom = 1;
-  return KERN_SUCCESS;
-}
-
-class ScopedDeterministicTimerSystemCalls {
- public:
-  ScopedDeterministicTimerSystemCalls() {
-    set_timer_system_calls_for_testing({deterministic_timer_ticks, deterministic_timebase_info});
-  }
-
-  ~ScopedDeterministicTimerSystemCalls() { reset_timer_system_calls_for_testing(); }
-};
+using ScopedDeterministicTimerSystemCalls =
+    test_timer_system_calls::ScopedTimerSystemCalls<deterministic_timer_ticks>;
 
 CoreToCoreWorkPlan make_small_work_plan() {
   CoreToCoreWorkPlan plan;

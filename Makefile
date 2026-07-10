@@ -32,63 +32,30 @@ ASFLAGS = -arch arm64
 # Linker flags (pthread is already in CXXFLAGS, but can be here too)
 LDFLAGS = -pthread
 
-# C++ Source files
-# Files in the root directory
-CPP_SRCS_ROOT = main.cpp
-# Files in the src directory (now organized in subdirectories)
-CPP_SRCS_CORE_CONFIG = core/config/argument_parser.cpp core/config/config_validator.cpp core/config/buffer_calculator.cpp
-CPP_SRCS_CORE_MEMORY = core/memory/buffer_allocator.cpp core/memory/buffer_initializer.cpp core/memory/memory_manager.cpp core/memory/memory_utils.cpp
-CPP_SRCS_CORE_SIGNAL = core/signal/signal_handler.cpp
-CPP_SRCS_CORE_SYSTEM = core/system/system_info.cpp
-CPP_SRCS_CORE_TIMING = core/timing/timer.cpp
-CPP_SRCS_OUTPUT_CONSOLE = output/console/output_printer.cpp output/console/statistics.cpp
-CPP_SRCS_OUTPUT_CONSOLE_MESSAGES = output/console/messages/error_messages.cpp output/console/messages/warning_messages.cpp output/console/messages/info_messages.cpp output/console/messages/program_messages.cpp output/console/messages/core_to_core_messages.cpp output/console/messages/config_messages.cpp output/console/messages/cache_messages.cpp output/console/messages/results_messages.cpp output/console/messages/statistics_messages.cpp output/console/messages/pattern_messages.cpp
-CPP_SRCS_UTILS = utils/utils.cpp utils/json_utils.cpp
-CPP_SRCS_SRC = $(CPP_SRCS_CORE_CONFIG) $(CPP_SRCS_CORE_MEMORY) $(CPP_SRCS_CORE_SIGNAL) $(CPP_SRCS_CORE_SYSTEM) $(CPP_SRCS_CORE_TIMING) $(CPP_SRCS_OUTPUT_CONSOLE) $(CPP_SRCS_OUTPUT_CONSOLE_MESSAGES) $(CPP_SRCS_UTILS)
-# Files in the src/benchmark subdirectory
-CPP_SRCS_BENCHMARK = bandwidth_tests.cpp latency_tests.cpp benchmark_work_plan.cpp benchmark_runner.cpp benchmark_executor.cpp benchmark_statistics_collector.cpp tlb_analysis.cpp tlb_boundary_detector.cpp tlb_chain.cpp tlb_sweep_planner.cpp tlb_measurement_scheduler.cpp tlb_runtime_policy.cpp tlb_analysis_json.cpp core_to_core_latency_cli.cpp core_to_core_latency_runner.cpp core_to_core_latency_json.cpp core_to_core_sweep_runner.cpp sweep_runner.cpp
-# Files in the src/warmup subdirectory
-CPP_SRCS_WARMUP = basic_warmup.cpp latency_warmup.cpp cache_warmup.cpp pattern_warmup.cpp
-# Files in the src/output/json/json_output subdirectory
-CPP_SRCS_JSON_OUTPUT = output/json/json_output/builder.cpp output/json/json_output/standard.cpp output/json/json_output/patterns.cpp output/json/json_output/file_writer.cpp output/json/json_output/json_output.cpp
-# Files in the src/pattern_benchmark subdirectory
-CPP_SRCS_PATTERN_BENCHMARK = helpers.cpp validation.cpp pattern_work_plan.cpp pattern_coordinator.cpp pattern_statistics_manager.cpp execution_utils.cpp execution_strided.cpp execution_patterns.cpp output.cpp
+# Generate compiler dependency files next to C++ object files. Keeping this
+# separate from CXXFLAGS ensures coverage builds still emit dependencies when
+# they override the optimization/instrumentation flags.
+DEPFLAGS = -MMD -MP -MF $(@:.o=.d) -MT $@
 
-# Add src/ prefix to source files
-CPP_SRCS_SRC_FULL = $(addprefix $(SRC_DIR)/, $(CPP_SRCS_SRC))
-# Add src/benchmark/ prefix to source files in the benchmark subdirectory
-CPP_SRCS_BENCHMARK_FULL = $(addprefix $(SRC_DIR)/benchmark/, $(CPP_SRCS_BENCHMARK))
-# Add src/ prefix to source files in the json_output subdirectory (already includes path)
-CPP_SRCS_JSON_OUTPUT_FULL = $(addprefix $(SRC_DIR)/, $(CPP_SRCS_JSON_OUTPUT))
-# Add src/warmup/ prefix to source files in the warmup subdirectory
-CPP_SRCS_WARMUP_FULL = $(addprefix $(SRC_DIR)/warmup/, $(CPP_SRCS_WARMUP))
-# Add src/pattern_benchmark/ prefix to source files in the pattern_benchmark subdirectory
-CPP_SRCS_PATTERN_BENCHMARK_FULL = $(addprefix $(SRC_DIR)/pattern_benchmark/, $(CPP_SRCS_PATTERN_BENCHMARK))
-
-# All C++ source files with correct paths
-ALL_CPP_SRCS = $(CPP_SRCS_ROOT) $(CPP_SRCS_SRC_FULL) $(CPP_SRCS_BENCHMARK_FULL) $(CPP_SRCS_JSON_OUTPUT_FULL) $(CPP_SRCS_WARMUP_FULL) $(CPP_SRCS_PATTERN_BENCHMARK_FULL)
+# Production sources are discovered from the governed source directories so a
+# new translation unit cannot be present in the repository but absent from the
+# build. The bundled third-party directory currently contains headers only and
+# is excluded defensively.
+CPP_SRCS_ROOT := main.cpp
+CPP_SRCS_SRC := $(sort $(shell find $(SRC_DIR) -type f -name '*.cpp' ! -path '*/third_party/*'))
+ALL_CPP_SRCS := $(CPP_SRCS_ROOT) $(CPP_SRCS_SRC)
 
 # Assembly source files (in src/asm)
-ASM_SRCS = src/asm/memory_copy.s src/asm/memory_read.s src/asm/memory_write.s src/asm/memory_latency.s \
-            src/asm/memory_read_cache.s src/asm/memory_write_cache.s src/asm/memory_copy_cache.s \
-            src/asm/memory_read_reverse.s src/asm/memory_write_reverse.s src/asm/memory_copy_reverse.s \
-            src/asm/memory_read_strided.s src/asm/memory_write_strided.s src/asm/memory_copy_strided.s \
-            src/asm/memory_read_random.s src/asm/memory_write_random.s src/asm/memory_copy_random.s \
-            src/asm/core_to_core_latency.s
+ASM_SRCS := $(sort $(wildcard $(SRC_DIR)/asm/*.s))
 
 # Object files (derived from source files, maintaining directory structure)
 # main.cpp -> main.o
 # src/timer.cpp -> src/timer.o
 # memory_copy.s / memory_read.s / memory_write.s / memory_latency.s -> *.o
-OBJ_FILES = $(ALL_CPP_SRCS:.cpp=.o) $(ASM_SRCS:.s=.o)
+OBJ_FILES := $(ALL_CPP_SRCS:.cpp=.o) $(ASM_SRCS:.s=.o)
 
 # Target executable name
 TARGET = memory_benchmark
-
-# Header changes can alter shared configuration/result layouts. Rebuild C++
-# objects after any project header changes so incremental builds cannot mix
-# incompatible object layouts.
-HEADERS = $(shell find $(SRC_DIR) -type f -name '*.h')
 
 # Default target: build the executable
 all:
@@ -115,89 +82,36 @@ $(TARGET): $(OBJ_FILES)
 
 # Test directory and files
 TEST_DIR = tests
-TEST_SRCS = $(wildcard $(TEST_DIR)/*.cpp)
-TEST_OBJS = $(TEST_SRCS:.cpp=.o)
+TEST_SRCS := $(sort $(wildcard $(TEST_DIR)/*.cpp))
+TEST_OBJS := $(TEST_SRCS:.cpp=.o)
+
+# Dependency files generated by DEPFLAGS. Test dependencies include tests/*.h
+# helpers through the compiler's actual include graph rather than a manually
+# maintained header list.
+PROD_DEP_FILES := $(ALL_CPP_SRCS:.cpp=.d)
+TEST_DEP_FILES := $(TEST_OBJS:.o=.d)
+DEP_FILES := $(PROD_DEP_FILES) $(TEST_DEP_FILES)
 
 # Test executable name
 TEST_TARGET = test_runner
 
 # Source files needed for tests (excluding main.cpp)
-TEST_LIB_SRCS = $(filter-out main.cpp, $(ALL_CPP_SRCS))
-TEST_LIB_OBJS = $(filter-out main.o, $(OBJ_FILES))
+TEST_LIB_OBJS := $(filter-out main.o, $(OBJ_FILES))
+
+# Recompile once after a Makefile change so an existing pre-dependency-file
+# workspace cannot keep stale objects. Subsequent header changes are tracked by
+# the generated .d files.
+$(OBJ_FILES) $(TEST_OBJS): Makefile
 
 # Rule for compiling test files (must come before generic %.o rule)
-$(TEST_DIR)/%.o: $(TEST_DIR)/%.cpp $(HEADERS)
+$(TEST_DIR)/%.o: $(TEST_DIR)/%.cpp
 	@echo "Compiling test $< -> $@..."
-	$(CXX) $(TEST_CXXFLAGS) -c $< -o $@
+	$(CXX) $(TEST_CXXFLAGS) $(DEPFLAGS) -c $< -o $@
 
-# Rule for compiling C++ source files in the src/core/config/ directory into object files
-$(SRC_DIR)/core/config/%.o: $(SRC_DIR)/core/config/%.cpp $(HEADERS)
-	@echo "Compiling (core/config) $< -> $@..."
-	$(CXX) $(CXXFLAGS) -c $< -o $@
-
-# Rule for compiling C++ source files in the src/core/memory/ directory into object files
-$(SRC_DIR)/core/memory/%.o: $(SRC_DIR)/core/memory/%.cpp $(HEADERS)
-	@echo "Compiling (core/memory) $< -> $@..."
-	$(CXX) $(CXXFLAGS) -c $< -o $@
-
-# Rule for compiling C++ source files in the src/core/signal/ directory into object files
-$(SRC_DIR)/core/signal/%.o: $(SRC_DIR)/core/signal/%.cpp $(HEADERS)
-	@echo "Compiling (core/signal) $< -> $@..."
-	$(CXX) $(CXXFLAGS) -c $< -o $@
-
-# Rule for compiling C++ source files in the src/core/system/ directory into object files
-$(SRC_DIR)/core/system/%.o: $(SRC_DIR)/core/system/%.cpp $(HEADERS)
-	@echo "Compiling (core/system) $< -> $@..."
-	$(CXX) $(CXXFLAGS) -c $< -o $@
-
-# Rule for compiling C++ source files in the src/core/timing/ directory into object files
-$(SRC_DIR)/core/timing/%.o: $(SRC_DIR)/core/timing/%.cpp $(HEADERS)
-	@echo "Compiling (core/timing) $< -> $@..."
-	$(CXX) $(CXXFLAGS) -c $< -o $@
-
-# Rule for compiling C++ source files in the src/output/console/messages/ directory into object files
-$(SRC_DIR)/output/console/messages/%.o: $(SRC_DIR)/output/console/messages/%.cpp $(HEADERS)
-	@echo "Compiling (messages) $< -> $@..."
-	$(CXX) $(CXXFLAGS) -c $< -o $@
-
-# Rule for compiling C++ source files in the src/output/console/ directory into object files
-$(SRC_DIR)/output/console/%.o: $(SRC_DIR)/output/console/%.cpp $(HEADERS)
-	@echo "Compiling (output/console) $< -> $@..."
-	$(CXX) $(CXXFLAGS) -c $< -o $@
-
-# Rule for compiling C++ source files in the src/output/json/json_output/ directory into object files
-$(SRC_DIR)/output/json/json_output/%.o: $(SRC_DIR)/output/json/json_output/%.cpp $(HEADERS)
-	@echo "Compiling (json_output) $< -> $@..."
-	$(CXX) $(CXXFLAGS) -c $< -o $@
-
-# Rule for compiling C++ source files in the src/utils/ directory into object files
-$(SRC_DIR)/utils/%.o: $(SRC_DIR)/utils/%.cpp $(HEADERS)
-	@echo "Compiling (utils) $< -> $@..."
-	$(CXX) $(CXXFLAGS) -c $< -o $@
-
-# Rule for compiling C++ source files in the src/benchmark/ directory into object files
-$(SRC_DIR)/benchmark/%.o: $(SRC_DIR)/benchmark/%.cpp $(HEADERS)
-	@echo "Compiling (benchmark) $< -> $@..."
-	$(CXX) $(CXXFLAGS) -c $< -o $@
-
-# Rule for compiling C++ source files in the src/warmup/ directory into object files
-$(SRC_DIR)/warmup/%.o: $(SRC_DIR)/warmup/%.cpp $(HEADERS)
-	@echo "Compiling (warmup) $< -> $@..."
-	$(CXX) $(CXXFLAGS) -c $< -o $@
-
-# Rule for compiling C++ source files in the src/pattern_benchmark/ directory into object files
-$(SRC_DIR)/pattern_benchmark/%.o: $(SRC_DIR)/pattern_benchmark/%.cpp $(HEADERS)
-	@echo "Compiling (pattern_benchmark) $< -> $@..."
-	$(CXX) $(CXXFLAGS) -c $< -o $@
-
-# Rule for compiling C++ source files in the root directory into object files
-# $< means the first prerequisite (source file)
-# $@ means the target (object file)
-# This rule handles main.cpp -> main.o
-# NOTE: This must come AFTER all specific subdirectory rules
-%.o: %.cpp $(HEADERS)
-	@echo "Compiling (root) $< -> $@..."
-	$(CXX) $(CXXFLAGS) -c $< -o $@
+# One production C++ rule covers the root and every src subdirectory.
+%.o: %.cpp
+	@echo "Compiling $< -> $@..."
+	$(CXX) $(CXXFLAGS) $(DEPFLAGS) -c $< -o $@
 
 # Rule for assembling assembly source files in src/asm into object files
 $(SRC_DIR)/asm/%.o: $(SRC_DIR)/asm/%.s
@@ -236,13 +150,13 @@ $(TEST_TARGET): $(TEST_OBJS) $(TEST_LIB_OBJS)
 # Clean test files
 clean-test:
 	@echo "Cleaning test files..."
-	rm -f $(TEST_TARGET) $(TEST_OBJS)
+	rm -f $(TEST_TARGET) $(TEST_OBJS) $(TEST_DEP_FILES)
 	@echo "Test cleanup complete."
 
 # Clean target: remove object files (from root and src/) and the executable
 clean: clean-test
 	@echo "Cleaning up object files and target..."
-	rm -f $(TARGET) $(OBJ_FILES) .build_start_time
+	rm -f $(TARGET) $(OBJ_FILES) $(PROD_DEP_FILES) .build_start_time
 	@echo "Cleanup complete."
 
 # Documentation directory
@@ -297,3 +211,7 @@ uninstall:
 
 # Define targets that don't correspond to files
 .PHONY: all clean test test-integration test-all coverage-unit coverage-all clean-test docs clean-docs install uninstall
+
+# Missing dependency files are expected on a clean tree. Existing files carry
+# the exact source and project/test-header prerequisites emitted by clang++.
+-include $(DEP_FILES)

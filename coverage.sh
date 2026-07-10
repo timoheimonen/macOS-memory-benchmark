@@ -23,6 +23,7 @@ trap 'rm -rf "$WORK_DIR"' EXIT INT TERM
 rsync -a \
   --exclude '.git/' \
   --exclude '*.o' \
+  --exclude '*.d' \
   --exclude 'memory_benchmark' \
   --exclude 'test_runner' \
   --exclude 'docs/' \
