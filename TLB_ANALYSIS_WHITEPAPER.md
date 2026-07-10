@@ -177,12 +177,20 @@ replay the measured traversal order. An independent chain-integrity traversal re
 use a unique cache line, and return to the chain head after the exact node count. Spread validation additionally requires
 `actual_pages == requested_pages`.
 
+Virtual locality is a translation working-set label, not the amount of active pointer data. Each logical node occupies one
+64-byte cache line. With 16 KiB pages, the 512 MiB comparison therefore has `512 MiB / 16 KiB = 32,768` nodes and a
+`32,768 * 64 B = 2 MiB` active cache-line footprint. Runtime profiles traverse every chain for multiple complete cycles, so
+spread and packed timings are intentionally cache-hot and must not be interpreted as direct DRAM latency. Packed preserves
+the same node and cache-line counts while reducing the translation footprint.
+
 **Chain mode mapping:** The latency chain mode is resolved through
 `resolve_latency_chain_mode(config.latency_chain_mode, page_walk_baseline_locality_bytes)` and reported in console/JSON.
 `auto` resolves to `random-box`; `global-random` remains invalid. In the page-native builder, `random-box` means randomized
 page order plus randomized page-internal offsets, `same-random-in-box` means increasing page order with one shared offset,
 and `diff-random-in-box` means increasing page order with independently selected offsets. Packed controls preserve the
-corresponding randomized or increasing logical traversal policy.
+corresponding randomized or increasing logical traversal policy. Results are comparable only when the effective chain mode
+matches. Increasing-page modes intentionally change address order and prefetch exposure, so their latency, detected brackets,
+and runtime must not be treated as interchangeable with `random-box`.
 
 **Memory prefaulting:** After buffer allocation, the code calls `madvise(ptr, size_bytes, MADV_WILLNEED)` to prefault pages and reduce page-fault noise during early measurement.
 
@@ -197,10 +205,18 @@ which layout runs first alternates by round/order parity and is recorded. The ta
 `translation_delta_ns = spread_latency_ns - packed_latency_ns`. The regular benchmark path still uses its existing
 latency-chain implementation and random-device behavior.
 
-Per-point output contains spread, packed, and paired-delta P50 values over the completed adaptive rounds. Boundary inference uses a
+The compact console uses one row per point: paired-delta P50 first, spread and packed P50 controls, active cache-line
+footprint, and a `*` marker below 64 nodes. One shared legend explains the marker; spread/packed page counts, unique-line
+counts, full chain diagnostics, and raw samples remain in JSON. The 64-node marker matches the existing minimum
+`64 * page_size` TLB guard and is diagnostic only; it does not alter the grid or boundary acceptance. Sub-resolution
+negative values are displayed as `0.00 ns`, while JSON retains the measured value. Boundary inference uses a
 round-by-point matrix of `translation_delta_ns`, and JSON identifies this with
 `boundary_signal = "translation_delta_ns"`. Spread latency remains available for compatibility plots and the separate
 private-cache/refinement heuristics; it is not the accepted L1/L2 boundary signal.
+
+The `quick` profile is explicitly labeled a screening estimate in the final console report because its coarse, fixed grid
+can bracket a different boundary than the refined `standard` or `exhaustive` profiles. Hardware conclusions from `quick`
+should be confirmed with `medium` or `high`.
 
 ### 4.3 Locality Sweep
 
@@ -228,9 +244,10 @@ Effective sweep start is stride-aware:
 
 The final sweep vector is deduplicated (via `std::sort` followed by `std::unique`). This prevents duplicates if `min_sweep_locality` exactly matches one of the canonical points.
 
-Refinement candidates are rounded down to system-page boundaries and deduplicated again. A narrow bracket can therefore
-produce fewer than seven unique refinement points; this is intentional because sub-page refinement would invalidate the
-entry-count interpretation under the current methodology.
+Refinement candidates are rounded down to system-page boundaries, deduplicated across targets, and filtered against every
+locality already present in the measured base grid. The planned, measured, and added-point counters therefore describe the
+same unique locality set. A narrow bracket can produce fewer than seven unique refinement points; this is intentional because
+sub-page refinement would invalidate the entry-count interpretation under the current methodology.
 
 Refinement points form a separate balanced round pass. Each point records whether it came from the private-cache, L1,
 L2, or a merged refinement target and stores the bracket that produced it. After refinement, discovery candidates that
@@ -337,25 +354,20 @@ For detected boundaries:
 The range from the final refined and validated bracket is the primary result for L1 and L2. The midpoint remains an
 explicitly secondary estimate and must not be interpreted as exact architectural capacity.
 
-### 7.2 Large-Locality Latency Delta
+### 7.2 Large-Locality Paired Comparison
 
-The compatibility methodology computes this delta independently from L1/L2 boundary step values:
+The primary 512 MiB result aggregates the same paired records used by the rest of the methodology:
 
-`large_locality_latency_delta_ns = P50(512MB) - P50(effective baseline locality)`
+`large_locality_translation_delta_p50_ns = median(spread_latency_ns[r] - packed_latency_ns[r])`
 
-where:
+The median is taken over stored same-round deltas. It is deliberately not computed as
+`median(spread_latency_ns) - median(packed_latency_ns)`, because those operations are not generally equivalent. Console and
+JSON also expose the independent spread and packed P50 values, page counts, node/cache-line counts, and active cache-line
+footprint. The result describes cache-hot paired translation stress; it is neither direct DRAM latency nor an isolated
+page-table-walk cost.
 
-- `effective baseline locality = P50 latency of the first point in the stride-aware sweep` (i.e., `p50_latency_ns[0]`; this is measured during the main run, not a separate reference measurement)
-
-The delta is computed as-is; a negative value indicates measurement noise (for example thermal variance or CPU
-frequency scaling). This comparison changes locality and address-order behavior and therefore **does not isolate a
-page-table-walk cost**. Console output uses `Large-Locality Latency Delta`, and JSON uses
-`large_locality_latency_delta.delta_ns`.
-
-The old `page_walk_penalty` object retains its legacy large-locality-difference semantics as a deprecated alias through
-`0.57.x`. It names `large_locality_latency_delta` as its replacement and records
-`removal_not_before: "0.58.0"`. If the comparison cannot run or analysis is interrupted, the delta is unavailable and its
-numerical value is omitted.
+Schema 4 publishes this only as `large_locality_paired_comparison`. It contains no raw-spread locality-delta or
+page-walk alias, preventing a cache-hot spread difference from being mistaken for the primary paired signal.
 
 Availability rule:
 
@@ -371,7 +383,8 @@ Report always includes:
 - Fine--sweep refinement summary (added points, total points)
 - `[Private Cache Knee Detection]`
 - `[L1 TLB Detection]`
-- `[L2 TLB / Large-Locality Delta]`
+- `[L2 TLB Detection]`
+- `[Large-Locality Paired Comparison]`
 
 Boundary detection sections:
 
@@ -383,16 +396,21 @@ When a boundary is detected, the report shows:
 
 When a boundary is **not detected**, the section reports "Not detected."
 
-Page-walk section:
+Large-locality paired section:
 
-- When available: shows the large-locality latency delta in `ns`, with explicit dynamic endpoints (`baseline -> 512MB`)
+- When available: shows virtual locality, active footprint, spread/packed page counts, spread P50, packed P50, and same-round translation-delta P50
 - When unavailable: shows "N/A" with the reason (e.g., buffer < 512 MB)
+- Always states that raw timings are cache-hot and are not direct DRAM or isolated page-table-walk latency
 - Always shows analysis status, measured/planned point counts, and whether conclusions are valid.
 - Interrupted or partial analyses suppress private-cache and L1/L2 conclusions.
 
 A user interrupt uses the existing graceful-shutdown contract and may return process success after writing partial JSON.
 Machine consumers must require `status == "complete"` and `conclusions_valid == true`; exit status alone is not a
 completeness signal.
+
+`validation_required` describes whether candidate-specific validation points were planned, not whether the methodology
+generally requires independent validation. An interruption during the base pass can leave this field `false` with
+`validation_status = "not-run"` and zero planned validation points. `validation_complete` remains `false` in that state.
 
 ## 9. JSON Output Contract (`--output`)
 
@@ -416,20 +434,19 @@ When `--output <file>` is provided with `--analyze-tlb` without `--sweep`, outpu
   - selected buffer, available-memory budget, estimated peak, and best-effort `mlock()` status/errno/error
   - base-pass point/access/memory/duration work estimate
   - `schema_version = 4` and `methodology_version = "page-native-paired-adaptive-validated-v4"`
-  - base `seed`, `seed_source`, explicit task/layout `seed_derivation`, `schedule_policy = "seeded-cyclic-latin"`, chain model, delta definition, and `boundary_signal = "translation_delta_ns"`
+  - exact uint64 decimal-string base `seed`, `seed_source`, explicit task/layout `seed_derivation`, `schedule_policy = "seeded-cyclic-latin"`, chain model, effective-mode comparability guidance, delta definition, and `boundary_signal = "translation_delta_ns"`
   - main-thread QoS request/applied/code metadata and its best-effort policy
   - paired-bootstrap method, 2,000 resamples, `0.5ns` minimum effect, two-point persistence, and independent-validation requirement
 
 - `tlb_analysis` contains:
-  - status, discovery/validation point counts, adaptive round bounds, per-pass realized round/convergence summaries, scheduled-pair bounds, raw-measurement counts, and `conclusions_valid`
-  - `measurement_records[]` in execution order with pass, point, locality, round, order, task seed, legacy spread `latency_ns`, and a `paired_control` object
-  - each `paired_control` contains pair order, spread/packed seeds, pilot timing/accesses, calibrated accesses, raw latencies, verified chain diagnostics, and same-round `translation_delta_ns`
-  - `sweep[]` contains requested/effective/actual pages, pointer-node and pointers-per-page counts, unique-cache-line counts, both chain diagnostics, raw spread/packed/delta arrays, their P50 values, refinement source/bracket, and per-task records
+  - status, discovery/validation point counts, `validation_required`/`validation_status`/`validation_complete`, adaptive round bounds, per-pass realized round/convergence summaries, explicitly scoped base+validation/large-locality/total pair and raw-measurement counts, and `conclusions_valid`
+  - `measurement_records[]` in execution order with pass, point, locality, round, order, exact decimal-string task seed, and a `paired_control` object
+  - each `paired_control` contains pair order, exact decimal-string spread/packed seeds, pilot timing/accesses, calibrated accesses, raw latencies, verified chain diagnostics, and same-round `translation_delta_ns`
+  - `sweep[]` contains requested/effective/actual pages, pointer-node and pointers-per-page counts, unique-cache-line and active-footprint counts, short-cycle diagnostics, both chain diagnostics, raw spread/packed/delta arrays, their P50 values, refinement source/bracket, and per-task records
   - `private_cache_knee` (with `detected`, `boundary_locality_kb`, `confidence`, and `may_interfere_with_tlb`)
   - `l1_tlb_detection` (with `detected`, validated bracket, primary entry range, midpoint estimate, confidence, discovery/validation evidence, and accepted/rejected candidates)
   - `l2_tlb_detection` (same structure as L1)
-  - `large_locality_latency_delta` block (`available`, baseline/comparison metadata, raw comparison loops, `delta_ns` when the comparison completed, otherwise `reason`)
-  - deprecated `page_walk_penalty` compatibility alias with its legacy semantics, explicit replacement, and `removal_not_before = "0.58.0"`
+  - sole `large_locality_paired_comparison` block with same-round delta P50, spread/packed P50 values, physical page/cache-line diagnostics, active footprint, raw paired records, and explicit interpretation
 
 This payload is designed for full post-run verification and reproducibility checks.
 
@@ -462,29 +479,41 @@ the production serializer. Its deliberately synthetic inputs make this a contrac
     "mode": "analyze_tlb",
     "schema_version": 4,
     "methodology_version": "page-native-paired-adaptive-validated-v4",
-    "seed": 12345,
+    "seed": "18446744073709551615",
+    "seed_encoding": "uint64-decimal-string",
     "main_thread_qos": {"requested": true, "applied": true, "code": 0},
-    "schema_compatibility": {"legacy_window": "0.57.x", "removal_not_before": "0.58.0"}
+    "seed_source": "user"
   },
   "tlb_analysis": {
     "status": "complete",
     "planned_points": 1,
     "measured_points": 1,
+    "validation_required": true,
+    "validation_status": "complete",
     "validation_complete": true,
     "conclusions_valid": true,
+    "completed_base_validation_pairs": 4,
+    "completed_large_locality_pairs": 3,
+    "total_completed_measurement_pairs": 7,
+    "total_completed_raw_measurements": 14,
     "sweep": [{
       "requested_pages": 1,
       "actual_pages": 1,
       "pointer_nodes": 1,
       "spread_pointers_per_page_max": 1,
       "packed_pointers_per_page_max": 1,
+      "active_cache_line_footprint_bytes": 64,
+      "short_cycle_diagnostic": true,
       "translation_delta_p50_ns": 5.0
     }],
-    "large_locality_latency_delta": {"available": true, "delta_ns": 80.5},
-    "page_walk_penalty": {
-      "deprecated": true,
-      "replacement": "large_locality_latency_delta",
-      "removal_not_before": "0.58.0"
+    "large_locality_paired_comparison": {
+      "available": true,
+      "spread_p50_ns": 100.0,
+      "packed_p50_ns": 94.0,
+      "translation_delta_p50_ns": 1.0,
+      "spread_actual_pages": 32768,
+      "packed_actual_pages": 128,
+      "active_cache_line_footprint_bytes": 2097152
     }
   },
   "version": "0.57.0"
@@ -497,7 +526,7 @@ only for legacy-schema compatibility checks and are not presented as current-met
 ### Limitations and Edge Cases
 
 - If the entire sweep remained below threshold (e.g., very small buffer or very large stride), L1 would report "Not detected."
-- If the 256 MB buffer fallback is used, or if the 512MB comparison pass is interrupted, `large_locality_latency_delta` will report `N/A` and explain why.
+- If the 256 MiB buffer fallback is used, or if the 512 MiB comparison pass is interrupted, `large_locality_paired_comparison` reports `available: false` and explains why.
 - On machines with 4 KB pages (instead of macOS's 16 KB), the same entry count would correspond to a 1 MB boundary.
 
 Interpretation note for Apple Silicon:
@@ -527,7 +556,7 @@ If L1 detection reports "Not detected":
 
 1. **Check the selected buffer size:** Is it large enough to sweep through the TLB capacity? The 16 KB sweep start may be insufficient if stride is large.
 2. **Review the stride:** If `--latency-stride-bytes` is large (e.g., 512 bytes), `min_sweep_locality = max(16KB, 2 * stride)` may skip the actual L1 TLB boundary. Try re-running with a smaller stride.
-3. **Check the raw JSON data:** Export with `--output` and inspect `sweep[].p50_latency_ns` to see if the expected inflection point is present in the raw data.
+3. **Check the paired JSON data:** Export with `--output` and inspect `sweep[].translation_delta_p50_ns` for the accepted signal. Use `spread_p50_latency_ns`, `packed_p50_latency_ns`, and `active_cache_line_footprint_bytes` only as explicitly named cache-hot diagnostics.
 4. **Verify CPU/system state:** Thermal throttling or power-saving modes can obscure boundaries; run in a stable, idle state.
 
 ### Best Practices for Comparable Runs

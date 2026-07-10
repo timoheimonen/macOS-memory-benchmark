@@ -70,6 +70,20 @@ struct TlbBoundaryCandidate {
 /** Round-major matrix. Rows are rounds and columns are locality points. */
 using TlbRoundPointMatrix = std::vector<std::vector<double>>;
 
+/** Deterministic aggregate of same-round spread/packed measurements for one locality. */
+struct TlbPairedPointSummary {
+  bool available = false;
+  double spread_p50_ns = 0.0;
+  double packed_p50_ns = 0.0;
+  double translation_delta_p50_ns = 0.0;
+  size_t spread_actual_pages = 0;
+  size_t packed_actual_pages = 0;
+  size_t unique_cache_lines = 0;
+  size_t active_cache_line_footprint_bytes = 0;
+  size_t node_count = 0;
+  bool short_cycle_diagnostic = false;
+};
+
 /**
  * @struct TlbBoundaryDetection
  * @brief Boundary-detection result for TLB working-set transition analysis
@@ -136,6 +150,18 @@ TlbBoundaryDetection detect_tlb_boundary(const std::vector<size_t>& locality_byt
 TlbRoundPointMatrix build_tlb_translation_delta_matrix(
     const std::vector<size_t>& locality_bytes,
     const std::vector<TlbMeasurementRecord>& records,
+    const std::vector<TlbMeasurementPass>& included_passes);
+
+/**
+ * @brief Aggregate one locality without mixing measurement passes.
+ *
+ * The translation-delta P50 is the median of stored same-round deltas, not the
+ * difference between independently aggregated spread and packed medians. Chain
+ * diagnostics must agree across every included record or the summary is unavailable.
+ */
+TlbPairedPointSummary summarize_tlb_paired_point(
+    const std::vector<TlbMeasurementRecord>& records,
+    size_t locality_bytes,
     const std::vector<TlbMeasurementPass>& included_passes);
 
 /**

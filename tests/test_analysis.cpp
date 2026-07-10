@@ -43,7 +43,120 @@ TlbRoundPointMatrix make_round_point_matrix(
   return matrix;
 }
 
+TlbMeasurementRecord make_paired_summary_record(
+    TlbMeasurementPass pass,
+    size_t locality_bytes,
+    double spread_latency_ns,
+    double packed_latency_ns,
+    double translation_delta_ns,
+    size_t node_count = 128) {
+  TlbMeasurementRecord record;
+  record.pass = pass;
+  record.locality_bytes = locality_bytes;
+  record.paired.available = true;
+  record.paired.spread.latency_ns = spread_latency_ns;
+  record.paired.packed.latency_ns = packed_latency_ns;
+  record.paired.translation_delta_ns = translation_delta_ns;
+  record.paired.spread.diagnostics.actual_pages = node_count;
+  record.paired.spread.diagnostics.node_count = node_count;
+  record.paired.spread.diagnostics.unique_cache_lines = node_count;
+  record.paired.packed.diagnostics.actual_pages = 1;
+  record.paired.packed.diagnostics.node_count = node_count;
+  record.paired.packed.diagnostics.unique_cache_lines = node_count;
+  return record;
+}
+
 }  // namespace
+
+TEST(AnalysisTest, PairedSummaryUsesMedianOfSameRoundDeltasAndFiltersPasses) {
+  const size_t locality = 2 * Constants::BYTES_PER_MB;
+  std::vector<TlbMeasurementRecord> records = {
+      make_paired_summary_record(TlbMeasurementPass::Base,
+                                 locality,
+                                 10.0,
+                                 9.0,
+                                 1.0),
+      make_paired_summary_record(TlbMeasurementPass::Base,
+                                 locality,
+                                 100.0,
+                                 90.0,
+                                 10.0),
+      make_paired_summary_record(TlbMeasurementPass::Base,
+                                 locality,
+                                 101.0,
+                                 100.0,
+                                 1.0),
+      make_paired_summary_record(TlbMeasurementPass::Validation,
+                                 locality,
+                                 1000.0,
+                                 1.0,
+                                 999.0),
+  };
+
+  const TlbPairedPointSummary summary = summarize_tlb_paired_point(
+      records, locality, {TlbMeasurementPass::Base});
+
+  ASSERT_TRUE(summary.available);
+  EXPECT_DOUBLE_EQ(summary.spread_p50_ns, 100.0);
+  EXPECT_DOUBLE_EQ(summary.packed_p50_ns, 90.0);
+  EXPECT_DOUBLE_EQ(summary.translation_delta_p50_ns, 1.0);
+  EXPECT_NE(summary.translation_delta_p50_ns,
+            summary.spread_p50_ns - summary.packed_p50_ns);
+  EXPECT_EQ(summary.spread_actual_pages, 128u);
+  EXPECT_EQ(summary.packed_actual_pages, 1u);
+  EXPECT_EQ(summary.unique_cache_lines, 128u);
+  EXPECT_EQ(summary.active_cache_line_footprint_bytes,
+            128u * Constants::CACHE_LINE_SIZE_BYTES);
+  EXPECT_EQ(summary.node_count, 128u);
+  EXPECT_FALSE(summary.short_cycle_diagnostic);
+}
+
+TEST(AnalysisTest, PairedSummaryRejectsInconsistentDiagnostics) {
+  const size_t locality = Constants::BYTES_PER_MB;
+  TlbMeasurementRecord first = make_paired_summary_record(
+      TlbMeasurementPass::Base, locality, 10.0, 8.0, 2.0, 32);
+  TlbMeasurementRecord second = first;
+  second.paired.packed.diagnostics.unique_cache_lines = 31;
+
+  EXPECT_FALSE(summarize_tlb_paired_point(
+                   {first, second}, locality, {TlbMeasurementPass::Base})
+                   .available);
+
+  const TlbPairedPointSummary short_summary = summarize_tlb_paired_point(
+      {first}, locality, {TlbMeasurementPass::Base});
+  ASSERT_TRUE(short_summary.available);
+  EXPECT_TRUE(short_summary.short_cycle_diagnostic);
+}
+
+TEST(AnalysisTest, PairedSummaryRequiresAvailableMatchingRecords) {
+  const size_t locality = Constants::BYTES_PER_MB;
+  TlbMeasurementRecord unavailable = make_paired_summary_record(
+      TlbMeasurementPass::Base, locality, 10.0, 8.0, 2.0);
+  unavailable.paired.available = false;
+
+  EXPECT_FALSE(summarize_tlb_paired_point(
+                   {unavailable}, locality, {TlbMeasurementPass::Base})
+                   .available);
+  EXPECT_FALSE(summarize_tlb_paired_point(
+                   {make_paired_summary_record(TlbMeasurementPass::Base,
+                                               locality,
+                                               10.0,
+                                               8.0,
+                                               2.0),
+                    unavailable},
+                   locality,
+                   {TlbMeasurementPass::Base})
+                   .available);
+  EXPECT_FALSE(summarize_tlb_paired_point(
+                   {make_paired_summary_record(TlbMeasurementPass::Validation,
+                                               locality,
+                                               10.0,
+                                               8.0,
+                                               2.0)},
+                   locality,
+                   {TlbMeasurementPass::Base})
+                   .available);
+}
 
 TEST(AnalysisTest, DetectBoundaryFindsL1Transition) {
   const std::vector<size_t> localities = {

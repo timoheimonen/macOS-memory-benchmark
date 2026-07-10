@@ -57,7 +57,7 @@ std::vector<TlbSweepPoint> build_tlb_base_sweep_plan(size_t stride_bytes,
                                                      size_t page_size_bytes,
                                                      TlbSweepDensity density);
 
-/** Build deduplicated page-aligned refinement points for boundary targets. */
+/** Build deduplicated page-aligned refinement points not present in the measured base grid. */
 std::vector<TlbSweepPoint> build_tlb_refinement_plan(
     const std::vector<size_t>& localities_bytes,
     const std::vector<TlbRefinementTarget>& targets,
@@ -66,7 +66,7 @@ std::vector<TlbSweepPoint> build_tlb_refinement_plan(
     size_t min_locality_bytes,
     size_t max_locality_bytes);
 
-/** Build raw refinement localities strictly inside one measured bracket. */
+/** Build raw refinement localities strictly inside one bracket and outside the measured grid. */
 std::vector<size_t> build_tlb_refinement_points(const std::vector<size_t>& localities_bytes,
                                                 size_t boundary_index,
                                                 size_t min_locality_bytes,

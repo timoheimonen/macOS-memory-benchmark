@@ -452,13 +452,6 @@ TEST_F(MessagesFormattingTest, MsgPatternBenchmarkLoopCompleted) {
   EXPECT_NE(msg.find("3/10"), std::string::npos);
 }
 
-TEST_F(MessagesFormattingTest, MsgTlbAnalysisPageWalkProgress) {
-  std::string msg = Messages::msg_tlb_analysis_page_walk_progress(512);
-  EXPECT_NE(msg.find("Large Locality"), std::string::npos);
-  EXPECT_NE(msg.find("512"), std::string::npos);
-  EXPECT_NE(msg.find("MB"), std::string::npos);
-}
-
 TEST_F(MessagesFormattingTest, MsgTlbAnalysisRefinementStart) {
   std::string msg = Messages::msg_tlb_analysis_refinement_start(20);
   EXPECT_NE(msg.find("Starting refinement sweep"), std::string::npos);
@@ -480,12 +473,31 @@ TEST_F(MessagesFormattingTest, ReportTlbStatisticalConfidence) {
   EXPECT_NE(msg.find("validation 95% CI"), std::string::npos);
 }
 
-TEST_F(MessagesFormattingTest, ReportTlbPageWalkPenaltyWindow) {
-  std::string msg = Messages::report_tlb_page_walk_penalty(62.4, 16, 512);
-  EXPECT_NE(msg.find("16KB -> 512MB"), std::string::npos);
-  EXPECT_NE(msg.find("~62.4ns"), std::string::npos);
-  EXPECT_NE(msg.find("Large-Locality Latency Delta"), std::string::npos);
-  EXPECT_EQ(msg.find("Page Table Walk Penalty"), std::string::npos);
+TEST_F(MessagesFormattingTest, ReportTlbPairedLocalityIsCompactAndNamesEverySignal) {
+  const std::string latency = Messages::report_tlb_paired_locality_progress(
+      29, 29, 256 * Constants::BYTES_PER_MB, 12.43, 3.61, 8.82,
+      Constants::BYTES_PER_MB, true);
+  EXPECT_NE(latency.find("[29/29] 256 MiB"), std::string::npos);
+  EXPECT_NE(latency.find("delta 8.82 ns"), std::string::npos);
+  EXPECT_NE(latency.find("spread 12.43, packed 3.61"), std::string::npos);
+  EXPECT_NE(latency.find("active 1 MiB"), std::string::npos);
+  EXPECT_EQ(latency.back(), '*');
+  EXPECT_EQ(latency.find("pages"), std::string::npos);
+  EXPECT_EQ(latency.find('\n'), std::string::npos);
+
+  const std::string legend = Messages::report_tlb_sweep_legend();
+  EXPECT_NE(legend.find("cache-line footprint"), std::string::npos);
+  EXPECT_NE(legend.find("<64-node short-cycle diagnostic"),
+            std::string::npos);
+}
+
+TEST_F(MessagesFormattingTest, ReportTlbLatencyNormalizesNegativeZero) {
+  const std::string latency = Messages::report_tlb_paired_locality_progress(
+      1, 1, 16 * Constants::BYTES_PER_KB, 0.08, 0.08, -0.001,
+      Constants::CACHE_LINE_SIZE_BYTES, false);
+  EXPECT_NE(latency.find("delta 0.00 ns"), std::string::npos);
+  EXPECT_EQ(latency.find("-0.00"), std::string::npos);
+  EXPECT_NE(latency.find("16 KiB"), std::string::npos);
 }
 
 TEST_F(MessagesFormattingTest, AnalyzeTlbStrideGuardMessages) {
@@ -521,35 +533,46 @@ TEST_F(MessagesFormattingTest, ReportTlbAnalysisStatusAndSuppressedConclusions) 
   EXPECT_NE(unavailable.find("interrupted"), std::string::npos);
 }
 
-TEST_F(MessagesFormattingTest, ReportTlbChainMode) {
-  std::string msg = Messages::report_tlb_chain_mode("random-box");
-  EXPECT_NE(msg.find("Chain Mode"), std::string::npos);
-  EXPECT_NE(msg.find("random-box"), std::string::npos);
+TEST_F(MessagesFormattingTest, ReportTlbRunAndResourceSummariesAreCompact) {
+  const std::string run = Messages::report_tlb_run_summary(
+      "Apple M5", 16 * Constants::BYTES_PER_KB, 256, "quick", "auto",
+      "random-box", 570001, true);
+  EXPECT_NE(run.find("Apple M5"), std::string::npos);
+  EXPECT_NE(run.find("page 16 KiB"), std::string::npos);
+  EXPECT_NE(run.find("stride 256 B | quick"), std::string::npos);
+  EXPECT_NE(run.find("mode auto->random-box"), std::string::npos);
+  EXPECT_NE(run.find("seed 570001 (user)"), std::string::npos);
+  EXPECT_EQ(run.find('\n'), std::string::npos);
+
+  const std::string resources = Messages::report_tlb_resource_summary(
+      1024, true, true, true, 0, 2048,
+      1041 * Constants::BYTES_PER_MB);
+  EXPECT_NE(resources.find("1024 MiB buffer (locked)"), std::string::npos);
+  EXPECT_NE(resources.find("QoS applied"), std::string::npos);
+  EXPECT_NE(resources.find("estimated peak/budget 1041.0/2048 MiB"),
+            std::string::npos);
 }
 
-TEST_F(MessagesFormattingTest, ReportTlbDensity) {
-  std::string msg = Messages::report_tlb_density("high");
-  EXPECT_NE(msg.find("Sweep Density"), std::string::npos);
-  EXPECT_NE(msg.find("high"), std::string::npos);
+TEST_F(MessagesFormattingTest, ReportTlbResourceSummaryRetainsFailures) {
+  const std::string failed = Messages::report_tlb_resource_summary(
+      256, false, true, false, 6, 512,
+      300 * Constants::BYTES_PER_MB);
+  EXPECT_NE(failed.find("unlocked"), std::string::npos);
+  EXPECT_NE(failed.find("failed (code 6; best-effort)"),
+            std::string::npos);
+
+  const std::string not_requested = Messages::report_tlb_resource_summary(
+      256, false, false, false, 0, 512,
+      300 * Constants::BYTES_PER_MB);
+  EXPECT_NE(not_requested.find("QoS not requested"), std::string::npos);
 }
 
-TEST_F(MessagesFormattingTest, ReportTlbAdaptiveRuntimePolicy) {
-  const std::string profile = Messages::report_tlb_runtime_profile(
-      "standard", 10, 20, 10.0, 16, 2000000, 0.30);
-  EXPECT_NE(profile.find("standard"), std::string::npos);
-  EXPECT_NE(profile.find("10-20 adaptive rounds"), std::string::npos);
-  EXPECT_NE(profile.find("whole-chain cycles"), std::string::npos);
-
-  const std::string budget = Messages::report_tlb_memory_budget(
-      4096, 1228, 600 * Constants::BYTES_PER_MB);
-  EXPECT_NE(budget.find("4096 MB available"), std::string::npos);
-  EXPECT_NE(budget.find("estimated peak 600.0 MB"), std::string::npos);
-
+TEST_F(MessagesFormattingTest, ReportTlbWorkEstimateIsConcise) {
   const std::string work = Messages::report_tlb_work_estimate(
-      "base", 15, 10, 20, 600000000, 600 * Constants::BYTES_PER_MB,
-      3.75, 7.5);
+      "base", 15, 10, 20, 3.75, 7.5);
   EXPECT_NE(work.find("Work Estimate [base]"), std::string::npos);
-  EXPECT_NE(work.find("600000000 pointer accesses"), std::string::npos);
+  EXPECT_EQ(work.find("pointer accesses"), std::string::npos);
+  EXPECT_EQ(work.find("peak"), std::string::npos);
   EXPECT_NE(work.find("3.75-7.50 s"), std::string::npos);
 
   const std::string completion = Messages::report_tlb_pass_completion(
@@ -558,74 +581,71 @@ TEST_F(MessagesFormattingTest, ReportTlbAdaptiveRuntimePolicy) {
   EXPECT_NE(completion.find("CI target reached"), std::string::npos);
 }
 
-TEST_F(MessagesFormattingTest, ReportTlbSeedAndSchedule) {
-  const std::string generated = Messages::report_tlb_seed(12345, false);
-  EXPECT_NE(generated.find("12345"), std::string::npos);
-  EXPECT_NE(generated.find("generated"), std::string::npos);
-
-  const std::string user = Messages::report_tlb_seed(7, true);
-  EXPECT_NE(user.find("user"), std::string::npos);
-  EXPECT_NE(Messages::report_tlb_schedule_policy().find("Latin"), std::string::npos);
-  EXPECT_NE(Messages::report_tlb_chain_model().find("spread/packed"),
+TEST_F(MessagesFormattingTest, ReportTlbSweepPlanUsesIecUnits) {
+  const std::string enabled = Messages::report_tlb_sweep_plan(
+      16 * Constants::BYTES_PER_KB, 256 * Constants::BYTES_PER_MB, 15,
+      true, 512 * Constants::BYTES_PER_MB, 512, 1024);
+  EXPECT_NE(enabled.find("16 KiB -> 256 MiB"), std::string::npos);
+  EXPECT_NE(enabled.find("15 points"), std::string::npos);
+  EXPECT_NE(enabled.find("large comparison 512 MiB enabled"),
             std::string::npos);
+
+  const std::string disabled = Messages::report_tlb_sweep_plan(
+      16 * Constants::BYTES_PER_KB, 256 * Constants::BYTES_PER_MB, 15,
+      false, 512 * Constants::BYTES_PER_MB, 512, 256);
+  EXPECT_NE(disabled.find("unavailable"), std::string::npos);
+  EXPECT_NE(disabled.find("requires 512 MiB"), std::string::npos);
+  EXPECT_NE(disabled.find("selected 256 MiB"), std::string::npos);
 }
 
-TEST_F(MessagesFormattingTest, ReportTlbQosOutcome) {
-  EXPECT_NE(Messages::report_tlb_qos(true, true, 0).find("applied"),
-            std::string::npos);
-  const std::string failed = Messages::report_tlb_qos(true, false, 6);
-  EXPECT_NE(failed.find("failed, code 6"), std::string::npos);
-  EXPECT_NE(failed.find("best-effort"), std::string::npos);
-  EXPECT_NE(Messages::report_tlb_qos(false, false, 0).find("not requested"),
-            std::string::npos);
-}
-
-TEST_F(MessagesFormattingTest, ReportTlbRequestedAndEffectiveChainMode) {
-  std::string requested = Messages::report_tlb_chain_mode_requested("auto");
-  EXPECT_NE(requested.find("Requested Chain Mode"), std::string::npos);
-  EXPECT_NE(requested.find("auto"), std::string::npos);
-
-  std::string effective = Messages::report_tlb_chain_mode_effective("random-box");
-  EXPECT_NE(effective.find("Effective Chain Mode"), std::string::npos);
-  EXPECT_NE(effective.find("random-box"), std::string::npos);
-}
-
-TEST_F(MessagesFormattingTest, ReportTlbSweepRangeAndPageWalkConfig) {
-  std::string sweep = Messages::report_tlb_sweep_range(16 * 1024, 256 * 1024 * 1024, 15);
-  EXPECT_NE(sweep.find("16 KB"), std::string::npos);
-  EXPECT_NE(sweep.find("256 MB"), std::string::npos);
-  EXPECT_NE(sweep.find("15 points"), std::string::npos);
-
-  std::string enabled = Messages::report_tlb_page_walk_config(true, 512, 512, 1024);
-  EXPECT_NE(enabled.find("Enabled"), std::string::npos);
-  EXPECT_NE(enabled.find("512 MB locality"), std::string::npos);
-  EXPECT_NE(enabled.find("Large-Locality Comparison"), std::string::npos);
-
-  std::string disabled = Messages::report_tlb_page_walk_config(false, 512, 512, 256);
-  EXPECT_NE(disabled.find("Disabled"), std::string::npos);
-  EXPECT_NE(disabled.find("requires 512 MB"), std::string::npos);
-  EXPECT_NE(disabled.find("selected 256 MB"), std::string::npos);
-}
-
-TEST_F(MessagesFormattingTest, ReportTlbPageWalkPenaltyUnavailable) {
-  std::string msg = Messages::report_tlb_page_walk_penalty_unavailable(32, 512, 512, 256);
+TEST_F(MessagesFormattingTest, ReportTlbLargeLocalityUnavailable) {
+  const std::string msg =
+      Messages::report_tlb_large_locality_paired_unavailable(512, 256);
+  EXPECT_NE(msg.find("Large-Locality Paired Comparison"), std::string::npos);
   EXPECT_NE(msg.find("N/A"), std::string::npos);
-  EXPECT_NE(msg.find("32KB -> 512MB"), std::string::npos);
-  EXPECT_NE(msg.find("requires 512 MB"), std::string::npos);
-  EXPECT_NE(msg.find("selected 256 MB"), std::string::npos);
+  EXPECT_NE(msg.find("requires 512 MiB"), std::string::npos);
+  EXPECT_NE(msg.find("selected 256 MiB"), std::string::npos);
 }
 
-TEST_F(MessagesFormattingTest, ReportTlbPageWalkPenaltyInterrupted) {
-  std::string msg = Messages::report_tlb_page_walk_penalty_interrupted(32, 512);
+TEST_F(MessagesFormattingTest, ReportTlbLargeLocalityInterrupted) {
+  const std::string msg =
+      Messages::report_tlb_large_locality_paired_interrupted();
   EXPECT_NE(msg.find("N/A"), std::string::npos);
-  EXPECT_NE(msg.find("32KB -> 512MB"), std::string::npos);
   EXPECT_NE(msg.find("did not complete"), std::string::npos);
+}
+
+TEST_F(MessagesFormattingTest, ReportTlbLargeLocalityPairedComparisonIsExplicit) {
+  const std::string msg = Messages::report_tlb_large_locality_paired_comparison(
+      512 * Constants::BYTES_PER_MB,
+      13.20,
+      6.40,
+      6.80,
+      32768,
+      128,
+      32768,
+      2 * Constants::BYTES_PER_MB);
+  EXPECT_NE(msg.find("512 MiB"), std::string::npos);
+  EXPECT_NE(msg.find("2 MiB"), std::string::npos);
+  EXPECT_NE(msg.find("32768/128"), std::string::npos);
+  EXPECT_NE(msg.find("P50: delta 6.80 ns/access"),
+            std::string::npos);
+  EXPECT_NE(msg.find("not DRAM latency"), std::string::npos);
+  EXPECT_NE(msg.find("isolated page-table-walk cost"),
+            std::string::npos);
+  EXPECT_EQ(msg.find("Virtual Locality:"), std::string::npos);
+}
+
+TEST_F(MessagesFormattingTest, ReportTlbQuickProfileNoteRequiresConfirmation) {
+  const std::string msg = Messages::report_tlb_quick_profile_note();
+  EXPECT_NE(msg.find("screening estimates"), std::string::npos);
+  EXPECT_NE(msg.find("confirm boundaries with medium or high"),
+            std::string::npos);
 }
 
 TEST_F(MessagesFormattingTest, ReportTlbFineSweepAndPrivateCacheInfo) {
   std::string sweep = Messages::report_tlb_fine_sweep(6, 21);
-  EXPECT_NE(sweep.find("Added 6"), std::string::npos);
-  EXPECT_NE(sweep.find("total 21"), std::string::npos);
+  EXPECT_NE(sweep.find("Refinement: +6 points"), std::string::npos);
+  EXPECT_NE(sweep.find("21 total"), std::string::npos);
 
   const std::string& section = Messages::report_tlb_private_cache_section();
   EXPECT_NE(section.find("Private Cache"), std::string::npos);
@@ -638,14 +658,18 @@ TEST_F(MessagesFormattingTest, ReportTlbFineSweepAndPrivateCacheInfo) {
 
   std::string risk_high = Messages::report_tlb_private_cache_interference(true, 512);
   EXPECT_NE(risk_high.find("Elevated"), std::string::npos);
-  EXPECT_NE(risk_high.find("512"), std::string::npos);
+  EXPECT_NE(risk_high.find("512 KiB"), std::string::npos);
 
   std::string risk_low = Messages::report_tlb_private_cache_interference(false, 512);
   EXPECT_NE(risk_low.find("Low"), std::string::npos);
 
   std::string distance = Messages::report_tlb_private_cache_l1_distance(4608, 288);
-  EXPECT_NE(distance.find("4608"), std::string::npos);
+  EXPECT_NE(distance.find("4608 KiB"), std::string::npos);
   EXPECT_NE(distance.find("288"), std::string::npos);
+
+  const std::string boundary = Messages::report_tlb_boundary_kb(4096);
+  EXPECT_NE(boundary.find("4096 KiB"), std::string::npos);
+  EXPECT_EQ(boundary.find("4096 KB"), std::string::npos);
 }
 
 TEST_F(MessagesFormattingTest, ReportTlbInferredEntriesRange) {
@@ -687,7 +711,8 @@ TEST_F(MessagesFormattingTest, UsageOptions) {
   EXPECT_NE(msg.find("--count"), std::string::npos);
   EXPECT_NE(msg.find("--analyze-tlb"), std::string::npos);
   EXPECT_NE(msg.find("schema 4"), std::string::npos);
-  EXPECT_NE(msg.find("0.57.x"), std::string::npos);
+  EXPECT_NE(msg.find("exact string seeds"), std::string::npos);
+  EXPECT_NE(msg.find("scoped counters"), std::string::npos);
   EXPECT_NE(msg.find("--tlb-density"), std::string::npos);
   EXPECT_NE(msg.find("default: medium"), std::string::npos);
   EXPECT_NE(msg.find("--analyze-tlb: 16"), std::string::npos);

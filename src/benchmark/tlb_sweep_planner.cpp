@@ -144,7 +144,7 @@ std::vector<TlbSweepPoint> build_tlb_base_sweep_plan(size_t stride_bytes,
   std::vector<TlbSweepPoint> points;
   if (stride_bytes == 0 || page_size_bytes == 0 ||
       (stride_bytes % sizeof(uintptr_t)) != 0 || stride_bytes > page_size_bytes ||
-      (page_size_bytes % stride_bytes) != 0) {
+      page_size_bytes < sizeof(uintptr_t)) {
     return points;
   }
 
@@ -216,7 +216,9 @@ std::vector<size_t> build_tlb_refinement_points(const std::vector<size_t>& local
     size_t candidate = lower + ((upper - lower) * step) / kRefinementSubdivisions;
     candidate -= candidate % alignment_bytes;
     if (candidate > lower && candidate < upper && candidate >= min_locality_bytes &&
-        candidate <= max_locality_bytes) {
+        candidate <= max_locality_bytes &&
+        std::find(localities_bytes.begin(), localities_bytes.end(), candidate) ==
+            localities_bytes.end()) {
       points.push_back(candidate);
     }
   }

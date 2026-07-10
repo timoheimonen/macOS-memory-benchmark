@@ -96,8 +96,6 @@ void print_tlb_work_estimate(const std::string& pass_name,
                    estimate.point_count,
                    estimate.min_rounds,
                    estimate.max_rounds,
-                   estimate.maximum_pointer_accesses,
-                   estimate.estimated_peak_memory_bytes,
                    estimate.estimated_min_duration_sec,
                    estimate.estimated_max_duration_sec)
             << std::endl;
@@ -550,6 +548,73 @@ TlbScheduleExecutionResult measure_scheduled_points(
 
 }  // namespace
 
+TlbPairedPointSummary summarize_tlb_paired_point(
+    const std::vector<TlbMeasurementRecord>& records,
+    size_t locality_bytes,
+    const std::vector<TlbMeasurementPass>& included_passes) {
+  TlbPairedPointSummary summary;
+  std::vector<double> spread_latencies_ns;
+  std::vector<double> packed_latencies_ns;
+  std::vector<double> translation_deltas_ns;
+  bool diagnostics_initialized = false;
+
+  for (const TlbMeasurementRecord& record : records) {
+    if (record.locality_bytes != locality_bytes ||
+        std::find(included_passes.begin(), included_passes.end(), record.pass) ==
+            included_passes.end()) {
+      continue;
+    }
+    if (!record.paired.available ||
+        !std::isfinite(record.paired.spread.latency_ns) ||
+        !std::isfinite(record.paired.packed.latency_ns) ||
+        !std::isfinite(record.paired.translation_delta_ns)) {
+      return TlbPairedPointSummary{};
+    }
+
+    const TlbChainDiagnostics& spread = record.paired.spread.diagnostics;
+    const TlbChainDiagnostics& packed = record.paired.packed.diagnostics;
+    if (spread.node_count == 0 || spread.actual_pages == 0 ||
+        packed.actual_pages == 0 || spread.unique_cache_lines == 0 ||
+        spread.node_count != packed.node_count ||
+        spread.unique_cache_lines != packed.unique_cache_lines ||
+        spread.unique_cache_lines >
+            std::numeric_limits<size_t>::max() /
+                Constants::CACHE_LINE_SIZE_BYTES) {
+      return TlbPairedPointSummary{};
+    }
+
+    if (!diagnostics_initialized) {
+      summary.spread_actual_pages = spread.actual_pages;
+      summary.packed_actual_pages = packed.actual_pages;
+      summary.unique_cache_lines = spread.unique_cache_lines;
+      summary.node_count = spread.node_count;
+      diagnostics_initialized = true;
+    } else if (summary.spread_actual_pages != spread.actual_pages ||
+               summary.packed_actual_pages != packed.actual_pages ||
+               summary.unique_cache_lines != spread.unique_cache_lines ||
+               summary.node_count != spread.node_count) {
+      return TlbPairedPointSummary{};
+    }
+
+    spread_latencies_ns.push_back(record.paired.spread.latency_ns);
+    packed_latencies_ns.push_back(record.paired.packed.latency_ns);
+    translation_deltas_ns.push_back(record.paired.translation_delta_ns);
+  }
+
+  if (!diagnostics_initialized || spread_latencies_ns.empty()) {
+    return TlbPairedPointSummary{};
+  }
+
+  summary.spread_p50_ns = median(std::move(spread_latencies_ns));
+  summary.packed_p50_ns = median(std::move(packed_latencies_ns));
+  summary.translation_delta_p50_ns = median(std::move(translation_deltas_ns));
+  summary.active_cache_line_footprint_bytes =
+      summary.unique_cache_lines * Constants::CACHE_LINE_SIZE_BYTES;
+  summary.short_cycle_diagnostic = summary.node_count < 64;
+  summary.available = true;
+  return summary;
+}
+
 /**
  * @brief Run standalone TLB analysis benchmark mode.
  *
@@ -561,9 +626,11 @@ TlbScheduleExecutionResult measure_scheduled_points(
  * - Optionally run a separate 512MB large-locality comparison pass.
  * - Infer L1/L2 boundaries and emit the TLB analysis report.
  *
- * Large-locality delta:
- * - Reported as P50(512MB) - P50(effective baseline locality).
- * - Only computed when selected analysis buffer is at least 512MB and the comparison pass completes.
+ * Large-locality paired comparison:
+ * - Reports spread, packed, and same-round translation-delta P50 values plus the
+ *   active cache-line footprint.
+ * - Only available when the selected buffer is at least 512MB and the paired
+ *   comparison pass completes; the raw spread baseline delta is JSON compatibility data.
  *
  * @return EXIT_SUCCESS on success, EXIT_FAILURE on allocation or measurement error.
  */
@@ -706,49 +773,33 @@ int run_tlb_analysis(const BenchmarkConfig& config,
 
   std::cout << std::endl;
   std::cout << Messages::report_tlb_settings_header() << std::endl;
-  std::cout << Messages::report_tlb_cpu(cpu_name) << std::endl;
-  std::cout << Messages::report_tlb_page_size(page_size_bytes) << std::endl;
-  std::cout << Messages::report_tlb_buffer(selected_buffer_mb, buffer_locked) << std::endl;
-  std::cout << Messages::report_tlb_stride(analysis_stride_bytes) << std::endl;
-  std::cout << Messages::report_tlb_density(tlb_sweep_density_to_string(sweep_density)) << std::endl;
-  std::cout << Messages::report_tlb_seed(config.tlb_seed,
-                                         config.user_specified_tlb_seed)
-            << std::endl;
-  std::cout << Messages::report_tlb_qos(config.main_thread_qos_requested,
-                                        config.main_thread_qos_applied,
-                                        config.main_thread_qos_code)
-            << std::endl;
-  std::cout << Messages::report_tlb_schedule_policy() << std::endl;
-  std::cout << Messages::report_tlb_chain_model() << std::endl;
-  std::cout << Messages::report_tlb_chain_mode_requested(
-                   latency_chain_mode_to_string(config.latency_chain_mode))
-            << std::endl;
-  std::cout << Messages::report_tlb_chain_mode_effective(
-                   latency_chain_mode_to_string(effective_chain_mode))
-            << std::endl;
-  std::cout << Messages::report_tlb_runtime_profile(
+  std::cout << Messages::report_tlb_run_summary(
+                   cpu_name,
+                   page_size_bytes,
+                   analysis_stride_bytes,
                    runtime_profile.name,
-                   runtime_profile.min_rounds,
-                   runtime_profile.max_rounds,
-                   static_cast<double>(runtime_profile.target_measurement_ns) /
-                       1.0e6,
-                   runtime_profile.minimum_chain_cycles,
-                   runtime_profile.maximum_accesses,
-                   runtime_profile.ci_width_target_ns)
+                   latency_chain_mode_to_string(config.latency_chain_mode),
+                   latency_chain_mode_to_string(effective_chain_mode),
+                   config.tlb_seed,
+                   config.user_specified_tlb_seed)
             << std::endl;
-  std::cout << Messages::report_tlb_memory_budget(
-                   available_memory_mb,
+  std::cout << Messages::report_tlb_resource_summary(
+                   selected_buffer_mb,
+                   buffer_locked,
+                   config.main_thread_qos_requested,
+                   config.main_thread_qos_applied,
+                   config.main_thread_qos_code,
                    memory_budget_mb,
                    estimated_peak_memory_bytes)
             << std::endl;
-  std::cout << Messages::report_tlb_sweep_range(localities_bytes.front(),
-                                                localities_bytes.back(),
-                                                localities_bytes.size())
-            << std::endl;
-  std::cout << Messages::report_tlb_page_walk_config(can_measure_page_walk_penalty,
-                                                     kPageWalkComparisonLocalityBytes / Constants::BYTES_PER_MB,
-                                                     kPageWalkMinimumBufferMb,
-                                                     selected_buffer_mb)
+  std::cout << Messages::report_tlb_sweep_plan(
+                   localities_bytes.front(),
+                   localities_bytes.back(),
+                   localities_bytes.size(),
+                   can_measure_page_walk_penalty,
+                   kPageWalkComparisonLocalityBytes,
+                   kPageWalkMinimumBufferMb,
+                   selected_buffer_mb)
             << std::endl;
   print_tlb_work_estimate("base", base_work_estimate);
   std::cout << std::endl;
@@ -804,15 +855,28 @@ int run_tlb_analysis(const BenchmarkConfig& config,
   const bool base_sweep_complete =
       base_result.status == TlbScheduleExecutionStatus::Complete;
 
+  std::cout << Messages::report_tlb_sweep_legend() << std::endl;
   std::sort(measurements.begin(), measurements.end(), [](const LocalityMeasurement& a, const LocalityMeasurement& b) {
     return a.locality_bytes < b.locality_bytes;
   });
   for (size_t locality_index = 0; locality_index < measurements.size(); ++locality_index) {
-    std::cout << Messages::msg_tlb_analysis_locality_progress(
+    const TlbPairedPointSummary summary = summarize_tlb_paired_point(
+        measurement_records,
+        measurements[locality_index].locality_bytes,
+        {TlbMeasurementPass::Base});
+    if (!summary.available) {
+      continue;
+    }
+    std::cout << Messages::report_tlb_paired_locality_progress(
                      locality_index + 1,
                      localities_bytes.size(),
-                     measurements[locality_index].locality_bytes / Constants::BYTES_PER_KB)
-              << " — " << measurements[locality_index].p50_latency_ns << " ns" << std::endl;
+                     measurements[locality_index].locality_bytes,
+                     summary.spread_p50_ns,
+                     summary.packed_p50_ns,
+                     summary.translation_delta_p50_ns,
+                     summary.active_cache_line_footprint_bytes,
+                     summary.short_cycle_diagnostic)
+              << std::endl;
   }
 
   std::vector<size_t> final_localities_bytes;
@@ -1081,6 +1145,7 @@ int run_tlb_analysis(const BenchmarkConfig& config,
 
   std::vector<double> page_walk_512mb_loop_latencies_ns;
   double page_walk_512mb_p50_ns = 0.0;
+  TlbPairedPointSummary large_locality_summary;
   bool page_walk_comparison_completed = false;
   if (can_measure_page_walk_penalty && main_sweep_complete &&
       validation_complete && !interrupted) {
@@ -1139,10 +1204,11 @@ int run_tlb_analysis(const BenchmarkConfig& config,
       page_walk_512mb_p50_ns = comparison_measurements.front().p50_latency_ns;
       page_walk_512mb_loop_latencies_ns =
           comparison_measurements.front().loop_latencies_ns;
-      std::cout << Messages::msg_tlb_analysis_page_walk_progress(
-                       kPageWalkComparisonLocalityBytes / Constants::BYTES_PER_MB)
-                << " — " << page_walk_512mb_p50_ns << " ns" << std::endl;
-      page_walk_comparison_completed = true;
+      large_locality_summary = summarize_tlb_paired_point(
+          measurement_records,
+          kPageWalkComparisonLocalityBytes,
+          {TlbMeasurementPass::LargeLocality});
+      page_walk_comparison_completed = large_locality_summary.available;
     }
   }
 
@@ -1193,47 +1259,30 @@ int run_tlb_analysis(const BenchmarkConfig& config,
 
   std::cout << std::endl;
   std::cout << Messages::report_tlb_header() << std::endl;
-  std::cout << Messages::report_tlb_cpu(cpu_name) << std::endl;
-  std::cout << Messages::report_tlb_page_size(page_size_bytes) << std::endl;
-  std::cout << Messages::report_tlb_buffer(selected_buffer_mb, buffer_locked) << std::endl;
-  std::cout << Messages::report_tlb_stride(analysis_stride_bytes) << std::endl;
-  std::cout << Messages::report_tlb_density(tlb_sweep_density_to_string(sweep_density)) << std::endl;
-  std::cout << Messages::report_tlb_seed(config.tlb_seed,
-                                         config.user_specified_tlb_seed)
-            << std::endl;
-  std::cout << Messages::report_tlb_schedule_policy() << std::endl;
-  std::cout << Messages::report_tlb_chain_mode(
-                   latency_chain_mode_to_string(effective_chain_mode))
-            << std::endl;
-  std::cout << Messages::report_tlb_runtime_profile(
+  std::cout << Messages::report_tlb_run_summary(
+                   cpu_name,
+                   page_size_bytes,
+                   analysis_stride_bytes,
                    runtime_profile.name,
-                   runtime_profile.min_rounds,
-                   runtime_profile.max_rounds,
-                   static_cast<double>(runtime_profile.target_measurement_ns) /
-                       1.0e6,
-                   runtime_profile.minimum_chain_cycles,
-                   runtime_profile.maximum_accesses,
-                   runtime_profile.ci_width_target_ns)
+                   latency_chain_mode_to_string(config.latency_chain_mode),
+                   latency_chain_mode_to_string(effective_chain_mode),
+                   config.tlb_seed,
+                   config.user_specified_tlb_seed)
             << std::endl;
-  std::cout << Messages::report_tlb_memory_budget(
-                   available_memory_mb,
-                   memory_budget_mb,
-                   estimated_peak_memory_bytes)
-            << std::endl;
-  if (!final_localities_bytes.empty()) {
-    std::cout << Messages::report_tlb_sweep_range(final_localities_bytes.front(),
-                                                  final_localities_bytes.back(),
-                                                  final_localities_bytes.size())
+  if (fine_sweep_added_points > 0) {
+    std::cout << Messages::report_tlb_fine_sweep(
+                     fine_sweep_added_points,
+                     final_localities_bytes.size())
               << std::endl;
   }
-  std::cout << Messages::report_tlb_fine_sweep(fine_sweep_added_points,
-                                               final_localities_bytes.size())
-            << std::endl;
   std::cout << Messages::report_tlb_analysis_status(analysis_status,
                                                     planned_points,
                                                     final_localities_bytes.size(),
                                                     conclusions_valid)
             << std::endl;
+  if (runtime_profile.name == "quick") {
+    std::cout << Messages::report_tlb_quick_profile_note() << std::endl;
+  }
 
   std::cout << std::endl;
   std::cout << Messages::report_tlb_private_cache_section() << std::endl;
@@ -1318,21 +1367,24 @@ int run_tlb_analysis(const BenchmarkConfig& config,
   } else {
     std::cout << Messages::report_tlb_not_detected() << std::endl;
   }
-  if (!conclusions_valid || (can_measure_page_walk_penalty && !page_walk_comparison_completed)) {
-    std::cout << Messages::report_tlb_page_walk_penalty_interrupted(
-                     page_walk_baseline_locality_bytes / Constants::BYTES_PER_KB,
-                     kPageWalkComparisonLocalityBytes / Constants::BYTES_PER_MB)
+  std::cout << std::endl;
+  if (!conclusions_valid ||
+      (can_measure_page_walk_penalty && !page_walk_comparison_completed)) {
+    std::cout << Messages::report_tlb_large_locality_paired_interrupted()
               << std::endl;
   } else if (page_walk_comparison_completed) {
-    std::cout << Messages::report_tlb_page_walk_penalty(
-                     page_walk_penalty_ns,
-                     page_walk_baseline_locality_bytes / Constants::BYTES_PER_KB,
-                     kPageWalkComparisonLocalityBytes / Constants::BYTES_PER_MB)
+    std::cout << Messages::report_tlb_large_locality_paired_comparison(
+                     kPageWalkComparisonLocalityBytes,
+                     large_locality_summary.spread_p50_ns,
+                     large_locality_summary.packed_p50_ns,
+                     large_locality_summary.translation_delta_p50_ns,
+                     large_locality_summary.spread_actual_pages,
+                     large_locality_summary.packed_actual_pages,
+                     large_locality_summary.unique_cache_lines,
+                     large_locality_summary.active_cache_line_footprint_bytes)
               << std::endl;
   } else {
-    std::cout << Messages::report_tlb_page_walk_penalty_unavailable(
-                     page_walk_baseline_locality_bytes / Constants::BYTES_PER_KB,
-                     kPageWalkComparisonLocalityBytes / Constants::BYTES_PER_MB,
+    std::cout << Messages::report_tlb_large_locality_paired_unavailable(
                      kPageWalkMinimumBufferMb,
                      selected_buffer_mb)
               << std::endl;
