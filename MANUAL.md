@@ -173,6 +173,12 @@ uses the exact phase-aware access count. Strided warmup executes one complete ph
 Stride labels are byte distances, not page-size claims. For example, 4096 bytes is not one native page on a macOS
 system with 16 KiB pages; JSON records the native page size and whether the configured stride equals it.
 
+Phase rotation means a strided pass can contain a different number of valid accesses than the preceding pass. In JSON,
+`accesses_per_pass` deliberately retains the phase-zero count and `accesses_per_pass_semantics` identifies it as
+`"phase-zero-count"`; `min_accesses_per_pass`, `max_accesses_per_pass`, and `phase_period_passes` describe the variation.
+Use `total_accesses` and `total_payload_bytes` as the authoritative exact totals. Do not calculate either total as
+`accesses_per_pass * passes`. Non-strided measurements use `"constant-count"` semantics and equal minimum/maximum counts.
+
 Every active strided worker must have at least two valid addresses and therefore make at least one genuine stride
 transition. If the requested thread count cannot satisfy that rule, the benchmark automatically uses fewer workers for
 that strided pattern. Sequential and random patterns continue to use the configured thread count. This distinction is
@@ -612,9 +618,9 @@ Record the environment before comparing files: hardware/CPU, macOS and benchmark
 state, active displays and notable background load, command, seed, and start time. Then record one row per
 pattern/operation using this template:
 
-| Pattern | Operation | Status | Median GB/s | CV % | Requested/effective threads | Median duration s | Accesses/pass | Passes | Total payload bytes | Logical working set bytes | Notes |
-|---|---|---|---:|---:|---|---:|---:|---:|---:|---:|---|
-| _example: strided_2mb_ | _read_ | _measured/skipped/..._ | _from JSON_ | _from JSON_ | _requested/effective_ | _from per-loop records_ | _from JSON_ | _from JSON_ | _from JSON_ | _from JSON_ | _noise/status reason_ |
+| Pattern | Operation | Status | Median GB/s | CV % | Requested/effective threads | Median duration s | Phase-zero / min-max accesses | Phase period | Passes | Exact total accesses/payload bytes | Logical working set bytes | Notes |
+|---|---|---|---:|---:|---|---:|---|---:|---:|---|---:|---|
+| _example: strided_2mb_ | _read_ | _measured/skipped/..._ | _from JSON_ | _from JSON_ | _requested/effective_ | _from per-loop records_ | _from JSON_ | _from JSON_ | _from JSON_ | _from exact total fields_ | _from JSON_ | _noise/status reason_ |
 
 Check that measured samples have positive duration and internally consistent exact payload accounting, sparse cases
 report their effective worker reduction, and unavailable cases use explicit status rather than zero. As a stability
@@ -826,24 +832,28 @@ Note: The `configuration` block includes fields such as `latency_chain_mode` (th
         "read_gb_s": {
           "status": "measured",
           "headline": "median_p50",
-          "value_gb_s": 0.224,
-          "values_gb_s": [0.220, 0.224, 0.228],
+          "value_gb_s": 0.222,
+          "values_gb_s": [0.218, 0.222, 0.226],
           "statistics": {
-            "median_p50": 0.224,
+            "median_p50": 0.222,
             "coefficient_of_variation_pct": 1.8
           },
           "measurements": [
             {
               "status": "measured",
-              "value_gb_s": 0.224,
+              "value_gb_s": 0.222,
               "elapsed_seconds": 0.15,
               "access_size_bytes": 32,
               "requested_threads": 4,
               "effective_threads": 2,
               "accesses_per_pass": 256,
+              "accesses_per_pass_semantics": "phase-zero-count",
+              "min_accesses_per_pass": 252,
+              "max_accesses_per_pass": 256,
               "passes": 4096,
-              "total_accesses": 1048576,
-              "total_payload_bytes": 33554432,
+              "total_accesses": 1040384,
+              "total_payload_bytes": 33292288,
+              "phase_period_passes": 65536,
               "benchmark_loop_index": 0,
               "pattern_order_index": 5
             }
@@ -864,6 +874,10 @@ or partial value set as applicable, and a `status`/`reason`; it is not serialize
 single measurement for one loop or median P50 for multiple measured loops. Copy `total_payload_bytes` includes both read
 and write payload. Per-loop records retain pilot/final timing, exact access/pass/payload accounting, working-set and phase
 metadata, seed, requested/effective threads, native page comparison, and execution-order indexes.
+
+For phase-rotated strided records, `accesses_per_pass` is the phase-zero count, not an average. The minimum/maximum and
+phase-period fields describe pass-to-pass variation, while `total_accesses` and `total_payload_bytes` are computed from
+the complete work plan. They can differ from `accesses_per_pass * passes` and must be consumed directly.
 
 `strided_2mb` names a 2 MiB virtual address stride. It is not evidence that macOS supplied 2 MiB physical pages:
 `large_page_backing_status: "not-verified"` and `large_page_backing_verified: false` must be interpreted literally.
@@ -1219,8 +1233,8 @@ jq '.main_memory.latency.auto_tlb_breakdown.tlb_miss_ns.statistics.median' resul
 # Pattern random read median and status
 jq '{status: .patterns.random.bandwidth.read_gb_s.status, median: .patterns.random.bandwidth.read_gb_s.statistics.median_p50}' patterns.json
 
-# Pattern requested/effective threads and exact per-loop payload bytes
-jq '.patterns.strided_2mb.bandwidth.read_gb_s.measurements[] | {requested_threads, effective_threads, total_payload_bytes}' patterns.json
+# Pattern phase-count semantics, requested/effective threads, and exact totals
+jq '.patterns.strided_2mb.bandwidth.read_gb_s.measurements[] | {requested_threads, effective_threads, accesses_per_pass, accesses_per_pass_semantics, min_accesses_per_pass, max_accesses_per_pass, phase_period_passes, total_accesses, total_payload_bytes}' patterns.json
 
 # TLB L1 boundary locality (KB)
 jq '.tlb_analysis.l1_tlb_detection.boundary_locality_kb' tlb_analysis.json

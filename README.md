@@ -127,7 +127,10 @@ the measured workload shape.
 Pattern bandwidth means **effective payload bandwidth**, not an estimate of physical DRAM or cache-bus traffic. A read or
 write access contributes its 32-byte kernel payload; copy contributes both sides (32-byte read + 32-byte write). The
 numerator is the exact planned payload completed by all workers and passes. Sparse-stride metadata reports requested and
-effective worker counts, access/pass counts, pass counts, total accesses, exact payload bytes, and working-set details.
+effective worker counts, phase-zero and minimum/maximum access counts per pass, phase period, pass count, total accesses,
+exact payload bytes, and working-set details. Because phase rotation can change the access count between passes,
+`total_accesses` and `total_payload_bytes` are authoritative exact totals; do not derive them by multiplying
+`accesses_per_pass` by `passes`.
 
 Across `--count` loops, pattern groups rotate in deterministic cyclic Latin-square order to spread first/last-position
 effects. Operations within a group remain fixed read, write, copy, each with operation-specific warmup. Workers request a

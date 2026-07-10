@@ -157,6 +157,8 @@ PatternMeasurement build_pattern_measurement(
   measurement.requested_threads = config.num_threads;
   measurement.effective_threads = config.num_threads;
   measurement.accesses_per_pass = accesses_per_pass;
+  measurement.min_accesses_per_pass = accesses_per_pass;
+  measurement.max_accesses_per_pass = accesses_per_pass;
   measurement.passes = calibration.passes > 0
                            ? static_cast<size_t>(calibration.passes)
                            : 0;

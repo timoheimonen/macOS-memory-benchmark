@@ -115,7 +115,9 @@ bool populate_worker_ranges(PatternWorkPlan& plan, size_t buffer_size, int worke
 bool calculate_phase_metrics(const PatternWorkPlan& plan, size_t passes,
                              size_t& total_accesses, size_t& distinct_addresses,
                              size_t& logical_working_set_bytes,
-                             size_t& completed_phase_cycles) {
+                             size_t& completed_phase_cycles,
+                             size_t& min_accesses_per_pass,
+                             size_t& max_accesses_per_pass) {
   if (passes == 0 || plan.access_size_bytes == 0 || plan.stride_bytes == 0 ||
       plan.stride_bytes % plan.access_size_bytes != 0 || plan.workers.empty() ||
       passes > static_cast<size_t>(std::numeric_limits<int>::max())) {
@@ -140,6 +142,26 @@ bool calculate_phase_metrics(const PatternWorkPlan& plan, size_t passes,
   const size_t remaining_phases = passes % phase_period;
   if (!checked_multiply(completed_phase_cycles, accesses_per_cycle, total_accesses)) {
     return false;
+  }
+
+  const size_t executed_phase_count = std::min(passes, phase_period);
+  const size_t last_executed_phase = executed_phase_count - 1;
+  min_accesses_per_pass = 0;
+  max_accesses_per_pass = 0;
+  for (const PatternWorkerRange& worker : plan.workers) {
+    const size_t aligned_slots = worker.span_bytes / plan.access_size_bytes;
+    const size_t phase_zero_accesses =
+        1 + (aligned_slots - 1) / phase_period;
+    const size_t last_phase_accesses =
+        last_executed_phase < aligned_slots
+            ? 1 + (aligned_slots - 1 - last_executed_phase) / phase_period
+            : 0;
+    if (!checked_add(max_accesses_per_pass, phase_zero_accesses,
+                     max_accesses_per_pass) ||
+        !checked_add(min_accesses_per_pass, last_phase_accesses,
+                     min_accesses_per_pass)) {
+      return false;
+    }
   }
 
   for (const PatternWorkerRange& worker : plan.workers) {
@@ -240,7 +262,7 @@ PatternWorkPlan build_strided_pattern_work_plan(size_t buffer_size, size_t strid
       populated = true;
       break;
     }
-    if (plan.status_reason == "strided work-plan byte accounting overflow") {
+    if (plan.status_reason == Messages::pattern_reason_work_plan_byte_overflow()) {
       return plan;
     }
   }
@@ -302,8 +324,11 @@ bool set_strided_pattern_passes(PatternWorkPlan& plan, size_t passes) {
   size_t distinct_addresses = 0;
   size_t logical_working_set_bytes = 0;
   size_t completed_phase_cycles = 0;
+  size_t min_accesses_per_pass = 0;
+  size_t max_accesses_per_pass = 0;
   if (!calculate_phase_metrics(plan, passes, total_accesses, distinct_addresses,
-                               logical_working_set_bytes, completed_phase_cycles) ||
+                               logical_working_set_bytes, completed_phase_cycles,
+                               min_accesses_per_pass, max_accesses_per_pass) ||
       !checked_multiply(total_accesses, plan.access_size_bytes,
                         plan.total_payload_bytes)) {
     return false;
@@ -312,6 +337,8 @@ bool set_strided_pattern_passes(PatternWorkPlan& plan, size_t passes) {
   plan.passes = passes;
   plan.total_accesses = total_accesses;
   plan.phase_period_passes = plan.stride_bytes / plan.access_size_bytes;
+  plan.min_accesses_per_pass = min_accesses_per_pass;
+  plan.max_accesses_per_pass = max_accesses_per_pass;
   plan.distinct_address_count = distinct_addresses;
   plan.logical_working_set_bytes = logical_working_set_bytes;
   plan.completed_phase_cycles = completed_phase_cycles;

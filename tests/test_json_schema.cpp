@@ -178,6 +178,8 @@ TEST(JsonSchemaTest, PatternMeasurementsIncludeStatusAndMethodologyMetadata) {
   measured.requested_threads = 4;
   measured.effective_threads = 4;
   measured.accesses_per_pass = 100;
+  measured.min_accesses_per_pass = 100;
+  measured.max_accesses_per_pass = 100;
   measured.passes = 10;
   measured.total_accesses = 1000;
   measured.total_payload_bytes = 32000;
@@ -189,6 +191,15 @@ TEST(JsonSchemaTest, PatternMeasurementsIncludeStatusAndMethodologyMetadata) {
   measured.pattern_order_index = 2;
   set_pattern_measurement(loop, PatternKind::SequentialForward,
                           PatternOperation::Read, measured);
+
+  PatternMeasurement phased = measured;
+  phased.stride_bytes = Constants::PATTERN_STRIDE_CACHE_LINE;
+  phased.accesses_per_pass = 2;
+  phased.min_accesses_per_pass = 1;
+  phased.max_accesses_per_pass = 2;
+  phased.phase_period_passes = 2;
+  set_pattern_measurement(loop, PatternKind::Strided64,
+                          PatternOperation::Read, std::move(phased));
 
   for (PatternOperation operation : {PatternOperation::Read, PatternOperation::Write,
                                      PatternOperation::Copy}) {
@@ -227,16 +238,27 @@ TEST(JsonSchemaTest, PatternMeasurementsIncludeStatusAndMethodologyMetadata) {
   EXPECT_DOUBLE_EQ(read["value_gb_s"].get<double>(), 12.5);
   ASSERT_EQ(read["measurements"].size(), 1u);
   EXPECT_EQ(read["measurements"][0]["passes"], 10u);
+  EXPECT_EQ(read["measurements"][0]["accesses_per_pass_semantics"],
+            "constant-count");
   EXPECT_EQ(read["measurements"][0]["total_payload_bytes"], 32000u);
   EXPECT_EQ(read["measurements"][0]["benchmark_loop_index"], 3u);
   EXPECT_EQ(read["measurements"][0]["pattern_order_index"], 2u);
   EXPECT_EQ(output[JsonKeys::CONFIGURATION]["pattern_execution_order_policy"],
             "cyclic-latin-square-across-count-loops");
+  const nlohmann::json phased_json =
+      output[JsonKeys::PATTERNS][JsonKeys::STRIDED_64][JsonKeys::BANDWIDTH]
+            [JsonKeys::READ_GB_S]["measurements"][0];
+  EXPECT_EQ(phased_json["accesses_per_pass_semantics"], "phase-zero-count");
+  EXPECT_EQ(phased_json["min_accesses_per_pass"], 1u);
+  EXPECT_EQ(phased_json["max_accesses_per_pass"], 2u);
+  EXPECT_EQ(phased_json["phase_period_passes"], 2u);
 
   const nlohmann::json skipped = output[JsonKeys::PATTERNS][JsonKeys::STRIDED_2MB]
       [JsonKeys::BANDWIDTH][JsonKeys::READ_GB_S];
   EXPECT_EQ(skipped["status"], "skipped");
   EXPECT_TRUE(skipped["value_gb_s"].is_null());
+  EXPECT_EQ(skipped["measurements"][0]["accesses_per_pass_semantics"],
+            "phase-zero-count");
   EXPECT_FALSE(output[JsonKeys::PATTERNS][JsonKeys::STRIDED_2MB]
                    ["large_page_backing_verified"]
                        .get<bool>());

@@ -68,13 +68,16 @@ struct PatternMeasurement {
   size_t stride_bytes = 0;
   int requested_threads = 0;
   int effective_threads = 0;
-  size_t accesses_per_pass = 0;
+  size_t accesses_per_pass = 0;  ///< Constant count or phase-zero count
+  size_t min_accesses_per_pass = 0;
+  size_t max_accesses_per_pass = 0;
   size_t passes = 0;
   size_t total_accesses = 0;
   size_t total_payload_bytes = 0;
   size_t distinct_address_count = 0;
   size_t logical_working_set_bytes = 0;
   size_t completed_phase_cycles = 0;
+  size_t phase_period_passes = 0;
   uint64_t seed = 0;
   bool has_seed = false;
   bool automatic_calibration = false;

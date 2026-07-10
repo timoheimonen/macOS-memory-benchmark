@@ -55,12 +55,17 @@ nlohmann::json serialize_pattern_measurement(const PatternMeasurement& measureme
   output["requested_threads"] = measurement.requested_threads;
   output["effective_threads"] = measurement.effective_threads;
   output["accesses_per_pass"] = measurement.accesses_per_pass;
+  output["accesses_per_pass_semantics"] =
+      measurement.stride_bytes > 0 ? "phase-zero-count" : "constant-count";
+  output["min_accesses_per_pass"] = measurement.min_accesses_per_pass;
+  output["max_accesses_per_pass"] = measurement.max_accesses_per_pass;
   output["passes"] = measurement.passes;
   output["total_accesses"] = measurement.total_accesses;
   output["total_payload_bytes"] = measurement.total_payload_bytes;
   output["distinct_address_count"] = measurement.distinct_address_count;
   output["logical_working_set_bytes"] = measurement.logical_working_set_bytes;
   output["completed_phase_cycles"] = measurement.completed_phase_cycles;
+  output["phase_period_passes"] = measurement.phase_period_passes;
   output["native_page_size_bytes"] = measurement.native_page_size_bytes;
   output["stride_equals_native_page_size"] =
       measurement.stride_equals_native_page_size;

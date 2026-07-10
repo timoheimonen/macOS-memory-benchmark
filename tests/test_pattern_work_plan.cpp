@@ -56,6 +56,8 @@ TEST(PatternWorkPlanTest, IncludesLastExactlyFittingAccess) {
   EXPECT_EQ(plan.workers[0].span_bytes, buffer_size);
   EXPECT_EQ(plan.workers[0].accesses_per_pass, 2u);
   EXPECT_EQ(plan.accesses_per_pass, 2u);
+  EXPECT_EQ(plan.min_accesses_per_pass, 2u);
+  EXPECT_EQ(plan.max_accesses_per_pass, 2u);
   EXPECT_EQ(plan.payload_bytes_per_pass, 2u * Constants::PATTERN_ACCESS_SIZE_BYTES);
 }
 
@@ -163,6 +165,8 @@ TEST(PatternWorkPlanTest, RotatesPhaseAndCountsEveryAccessExactly) {
   EXPECT_EQ(plan.distinct_address_count, 3u);
   EXPECT_EQ(plan.logical_working_set_bytes, 96u);
   EXPECT_EQ(plan.completed_phase_cycles, 1u);
+  EXPECT_EQ(plan.min_accesses_per_pass, 1u);
+  EXPECT_EQ(plan.max_accesses_per_pass, 2u);
 }
 
 TEST(PatternWorkPlanTest, FullSparsePhaseCycleCoversAlignedBufferSlots) {

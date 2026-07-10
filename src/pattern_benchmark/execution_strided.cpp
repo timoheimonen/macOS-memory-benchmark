@@ -130,6 +130,10 @@ void set_strided_triplet_status(PatternResults& results, PatternKind kind,
     measurement.status_reason = reason;
     measurement.access_size_bytes = Constants::PATTERN_ACCESS_SIZE_BYTES;
     measurement.stride_bytes = stride;
+    measurement.phase_period_passes =
+        stride % Constants::PATTERN_ACCESS_SIZE_BYTES == 0
+            ? stride / Constants::PATTERN_ACCESS_SIZE_BYTES
+            : 0;
     measurement.requested_threads = config.num_threads;
     measurement.effective_threads = effective_threads;
     measurement.native_page_size_bytes = static_cast<size_t>(getpagesize());
@@ -149,12 +153,15 @@ PatternMeasurement build_strided_measurement(
   measurement.requested_threads = plan.requested_threads;
   measurement.effective_threads = plan.effective_threads;
   measurement.accesses_per_pass = plan.accesses_per_pass;
+  measurement.min_accesses_per_pass = plan.min_accesses_per_pass;
+  measurement.max_accesses_per_pass = plan.max_accesses_per_pass;
   measurement.passes = plan.passes;
   measurement.total_accesses = plan.total_accesses;
   measurement.total_payload_bytes = plan.total_payload_bytes;
   measurement.distinct_address_count = plan.distinct_address_count;
   measurement.logical_working_set_bytes = plan.logical_working_set_bytes;
   measurement.completed_phase_cycles = plan.completed_phase_cycles;
+  measurement.phase_period_passes = plan.phase_period_passes;
   measurement.elapsed_seconds = elapsed_seconds;
   measurement.pilot_elapsed_seconds = pilot_elapsed_seconds;
   measurement.automatic_calibration = !config.user_specified_iterations;

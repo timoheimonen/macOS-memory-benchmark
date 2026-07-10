@@ -46,7 +46,9 @@ struct PatternWorkPlan {
   size_t access_size_bytes = 0;
   int requested_threads = 0;
   int effective_threads = 0;
-  size_t accesses_per_pass = 0;
+  size_t accesses_per_pass = 0;  ///< Phase-zero access count
+  size_t min_accesses_per_pass = 0;
+  size_t max_accesses_per_pass = 0;
   size_t payload_bytes_per_pass = 0;
   size_t passes = 0;
   size_t total_accesses = 0;
