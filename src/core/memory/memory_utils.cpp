@@ -196,11 +196,11 @@ bool latency_chain_mode_uses_locality(LatencyChainMode mode) {
 }
 
 /**
- * @brief Sets up a randomly shuffled pointer chain within the buffer for latency measurement.
+ * @brief Sets up a mode-selected circular pointer chain for latency measurement.
  *
  * Creates a circular linked list of pointers within the buffer where each pointer points to
- * the next element in a randomly shuffled sequence. This ensures unpredictable memory access
- * patterns that defeat hardware prefetchers and measure true memory latency.
+ * the next element in the selected global or locality-aware order. Dependent traversal measures
+ * load-to-use latency; cache, translation, prefetch, and platform effects remain layout-dependent.
  *
  * The function:
  * 1. Calculates how many pointers can fit in the buffer based on the stride
@@ -212,13 +212,16 @@ bool latency_chain_mode_uses_locality(LatencyChainMode mode) {
  * @param[in]     buffer_size  Total size of the buffer in bytes. Must be >= stride * 2.
  * @param[in]     stride       The distance between consecutive pointer locations in bytes.
  *                             Must be >= sizeof(uintptr_t) and non-zero.
- * @param[in]     tlb_locality_bytes Optional locality window in bytes.
- *                             0 = global random chain. >0 = random within local windows,
- *                             then randomized window order.
+ * @param[in]     tlb_locality_bytes Optional locality window in bytes. With Auto, 0 selects
+ *                             global random and a non-zero value selects random-box. Explicit
+ *                             box modes randomize within windows; only random-box randomizes
+ *                             window order, while same/diff modes visit windows in order.
  * @param[in]     deterministic_seed Optional reproducible shuffle seed.
  *
  * @return EXIT_SUCCESS (0) on success
- * @return EXIT_FAILURE (1) if buffer is null, stride is zero, or buffer is too small
+ * @return EXIT_FAILURE (1) for invalid parameters or layout, including a null buffer, zero stride,
+ *         fewer than two buffer nodes, a locality-using mode without a usable two-node window,
+ *         or a pointer-slot bounds failure
  *
  * @note The buffer must be large enough to hold at least 2 pointers at the given stride.
  * @note Uses std::random_device by default; an explicit seed makes chain order reproducible.

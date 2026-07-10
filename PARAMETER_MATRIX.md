@@ -1,6 +1,6 @@
 # Parameter Compatibility Matrix
 
-Working version 0.58.0
+Working version 0.58.1
 
 ## All Flags
 
@@ -16,6 +16,7 @@ Working version 0.58.0
 | `--latency-stride-bytes <n>` | Latency pointer chain stride |
 | `--latency-chain-mode <mode>` | Chain construction policy |
 | `--latency-tlb-locality-kb <n>` | TLB-locality window |
+| `-D, --tlb-density <low\|medium\|high>` | Standalone TLB runtime profile |
 | `--threads <n>` | Thread count |
 | `--cache-size <KB>` | Custom cache size |
 | `--only-bandwidth` | Bandwidth tests only |
@@ -47,11 +48,11 @@ Working version 0.58.0
 | `--buffer-size <MB>` | ✅ | |
 | `--count <n>` | ✅ | |
 | `--seed <uint64>` | ✅ | Reproduces workload/schedule metadata across count loops; generated once when omitted |
-| `--latency-samples <n>` | ✅ | |
-| `--latency-stride-bytes <n>` | ✅ | Pointer-aligned and no larger than system page size; exact page-size divisibility is not required |
+| `--latency-samples <n>` | ✅ | Effective standard sample count is capped to the measurement access count |
+| `--latency-stride-bytes <n>` | ✅ | Positive and pointer-aligned; each enabled target/configured locality window needs two nodes. The optional fixed 16 KiB comparison is unavailable above an 8192 B stride |
 | `--latency-chain-mode <mode>` | ✅ | Box modes require `--latency-tlb-locality-kb > 0`; `global-random` works with locality `0` |
-| `--latency-tlb-locality-kb <n>` | ✅ | |
-| `--threads <n>` | ✅ | |
+| `--latency-tlb-locality-kb <n>` | ✅ | Locality-using modes require a non-zero page-size multiple; explicit `global-random` ignores the value |
+| `--threads <n>` | ✅ | Explicit value applies to main-memory and cache bandwidth; omitted cache bandwidth uses one worker |
 | `--cache-size <KB>` | ✅ | Replaces auto L1/L2 cache tests with one custom cache target |
 | `--only-bandwidth` | ✅ | ❌ with `--cache-size`, ❌ with `--latency-samples` |
 | `--only-latency` | ✅ | ❌ with `--iterations`, needs `--buffer-size > 0` or `--cache-size > 0` |
@@ -129,7 +130,10 @@ Additional sweep rules:
 - `--sweep latency-chain-mode=global-random` is invalid with `--analyze-tlb`.
 - Direct options outside `--sweep` are used as fixed values for every generated run.
 - If the same parameter is provided both directly and through `--sweep`, the sweep value is applied per run.
-- Combined sweep JSON is atomically checkpointed after each run and records completion/conclusion metadata.
+- Combined sweep JSON is atomically checkpointed after each stored standard/pattern/TLB result and records
+  completion/conclusion metadata. For these modes, `completed_runs` equals stored `runs` entries and can include a
+  gracefully interrupted nested result. Core-to-core sweeps also store the latest failed or interrupted attempt, but
+  their `completed_runs` counts only nested results with status `complete`, so `runs` may be longer than `completed_runs`.
 
 ### Incompatible Modifier Combinations
 

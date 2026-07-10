@@ -22,9 +22,13 @@
  * of memory benchmarks. It handles configuration parsing, mode-specific buffer
  * preparation, benchmark execution, and results output in both console and JSON formats.
  *
- * The program supports two primary benchmark modes:
+ * The program supports four benchmark modes:
  * - Standard benchmarks: Memory bandwidth and latency tests for different cache levels
  * - Pattern benchmarks: Access pattern-specific tests (forward, reverse, strided, random)
+ * - TLB analysis: Page-native paired locality measurements and boundary analysis
+ * - Core-to-core analysis: Best-effort inter-core round-trip latency measurements
+ *
+ * Standard, pattern, TLB, and core-to-core modes also support validated parameter sweeps.
  *
  * @author Timo Heimonen
  * @date 2026
@@ -96,13 +100,16 @@ int run_with_benchmark_preparation(BenchmarkConfig& config, Fn&& fn) {
  * 1. Parses and validates command-line arguments
  * 2. Configures system settings (QoS, cache parameters)
  * 3. Prepares benchmark buffers using mode-appropriate strategy
- * 4. Executes requested benchmarks (standard or pattern-based)
+ * 4. Executes the requested standard, pattern, TLB, or core-to-core mode
  * 5. Outputs results to console and optionally to JSON file
  *
  * The program supports multiple execution modes:
  * - Bandwidth-only measurements (--only-bandwidth)
  * - Latency-only measurements (--only-latency)
  * - Pattern-specific benchmarks (--patterns)
+ * - Standalone TLB analysis (--analyze-tlb)
+ * - Standalone core-to-core analysis (--analyze-core2core)
+ * - Validated multi-configuration runs (--sweep)
  * - Multiple loop iterations for statistical analysis (--count)
  *
  * @param argc Number of command-line arguments

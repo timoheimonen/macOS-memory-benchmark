@@ -429,8 +429,8 @@ int prepare_main_memory_latency_buffer(BenchmarkConfig& config, BenchmarkBuffers
 /**
  * @brief Returns the median value from a small latency sample set.
  *
- * Used for automatic TLB hit/miss comparison where a single interrupted pass can
- * otherwise dominate the reported page-walk penalty. The input is intentionally
+ * Used for the automatic paired locality comparison where one inflated pass can
+ * otherwise dominate a three-round point estimate. The input is intentionally
  * copied because the caller owns a very small vector.
  */
 double median_latency(std::vector<double> values) {
@@ -1001,6 +1001,9 @@ void run_main_memory_bandwidth_tests(const BenchmarkBuffers& buffers, const Benc
  * @param[in]     cache_iterations Iteration count (typically higher than main memory)
  * @param[in]     num_threads      Thread count for parallel execution
  * @param[in,out] test_timer       High-resolution timer
+ * @param[in]     read_kernel      Cache read kernel selected for this target
+ * @param[in]     write_kernel     Cache write kernel selected for this target
+ * @param[in]     copy_kernel      Cache copy kernel selected for this target
  * @param[out]    read_time        Read timing result
  * @param[out]    write_time       Write timing result
  * @param[out]    copy_time        Copy timing result
@@ -1124,12 +1127,11 @@ void run_cache_bandwidth_tests(const BenchmarkBuffers& buffers, const BenchmarkC
  * @param[in]     num_accesses     Number of pointer dereferences
  * @param[in,out] test_timer       High-resolution timer
  * @param[out]    lat_time_ns      Total latency time in nanoseconds
- * @param[out]    latency_ns       Average latency per access in nanoseconds
- * @param[out]    latency_samples  Optional sample collection vector
- * @param[in]     sample_count     Number of samples to collect
+ * @param[out]    measurement      Status-aware average, elapsed time, access count, and samples
+ * @param[in]     sample_count     Requested sample-window count (0 disables sampling)
  *
  * @note Calculates average latency as total_time / num_accesses.
- * @note Handles zero num_accesses by setting latency to 0.0.
+ * @note Zero accesses or an invalid elapsed time make the measurement unavailable.
  */
 void run_single_cache_latency_test(void* buffer, size_t buffer_size, size_t num_accesses,
                                    HighResTimer& test_timer, double& lat_time_ns,
@@ -1291,8 +1293,10 @@ void run_main_memory_latency_test(const BenchmarkBuffers& buffers, const Benchma
  *
  * @param[in]     buffers     Benchmark buffers (unused in phase-local allocation mode)
  * @param[in]     config      Benchmark configuration (sizes, counts, flags)
- * @param[in]     loop        Loop number (for error reporting, not used internally)
+ * @param[in]     loop        Zero-based loop index used for cyclic phase/operation order and diagnostics
  * @param[in,out] test_timer  High-resolution timer for measurements
+ * @param[in,out] execution_state Optional cross-loop calibration state; a local state is used when null
+ * @param[in]     test_hooks  Optional deterministic failure seams used by tests
  *
  * @return BenchmarkResults structure with all calculated results for this loop
  *

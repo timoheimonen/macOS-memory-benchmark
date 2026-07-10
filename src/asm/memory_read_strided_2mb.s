@@ -20,7 +20,7 @@
 //                                                         size_t byteCount,
 //                                                         size_t num_iterations);
 // Purpose:
-//   Read memory using a fixed 2MB superpage stride with wraparound.
+//   Read memory using a fixed 2 MiB virtual-address stride with wraparound.
 // Arguments:
 //   x0 = src (const void*)
 //   x1 = byteCount (size_t)

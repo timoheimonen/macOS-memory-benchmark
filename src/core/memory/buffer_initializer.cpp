@@ -65,9 +65,9 @@
  * - Destination: Zeroed to detect copy operations
  *
  * Latency buffer initialization:
- * - Circular pointer chain with randomized ordering
- * - Stride of LATENCY_STRIDE_BYTES between consecutive pointers
- * - Defeats hardware prefetchers for accurate latency measurement
+ * - Circular pointer chain with the configured global or locality-aware ordering
+ * - Configured byte stride between pointer slots
+ * - Dependent traversal for load-to-use latency; it does not isolate prefetch or translation effects
  *
  * @param[in,out] buffers  Buffer management structure with allocated buffers to initialize
  * @param[in]     config   Benchmark configuration with buffer sizes and flags

@@ -133,9 +133,9 @@ void set_bandwidth_measurements(size_t buffer_size,
  *
  * @param[in]  buffer_size   Size of the buffer in bytes
  * @param[in]  iterations    Number of times the operation was repeated
- * @param[in]  read_time     Total read time in nanoseconds
- * @param[in]  write_time    Total write time in nanoseconds
- * @param[in]  copy_time     Total copy time in nanoseconds
+ * @param[in]  read_time     Total read time in seconds
+ * @param[in]  write_time    Total write time in seconds
+ * @param[in]  copy_time     Total copy time in seconds
  * @param[out] read_bw_gb_s  Calculated read bandwidth in GB/s (0.0 on error)
  * @param[out] write_bw_gb_s Calculated write bandwidth in GB/s (0.0 on error)
  * @param[out] copy_bw_gb_s  Calculated copy bandwidth in GB/s (0.0 on error)

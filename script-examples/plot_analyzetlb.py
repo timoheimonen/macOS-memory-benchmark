@@ -13,8 +13,9 @@ def parse_args():
   parser.add_argument(
       "-f",
       "--file",
-      default="macminim4_analyte-tbl.json",
-      help="Path to --analyze-tlb JSON file (default: macminim4_analyte-tbl.json)")
+      default="results/0.53.7/MacMiniM4_analyzetlb.json",
+      help=("Path to --analyze-tlb JSON file "
+            "(default: results/0.53.7/MacMiniM4_analyzetlb.json)"))
   parser.add_argument(
       "--save",
       default=None,
@@ -37,6 +38,10 @@ def resolve_input_path(raw_path: str) -> Path:
   script_relative = Path(__file__).resolve().parent / path
   if script_relative.exists():
     return script_relative
+
+  repo_relative = Path(__file__).resolve().parent.parent / path
+  if repo_relative.exists():
+    return repo_relative
 
   raise RuntimeError(f"Input JSON file not found: {raw_path}")
 

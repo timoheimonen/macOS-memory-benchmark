@@ -51,10 +51,10 @@ void print_help(const char* prog_name);
  * @param total_allocation_bytes Peak concurrently allocated bytes across enabled benchmark phases
  * @param iterations Number of iterations
  * @param loop_count Number of loops
- * @param use_non_cacheable Whether non-cacheable memory is used
+ * @param use_non_cacheable Whether best-effort cache-discouraging allocation hints were requested
  * @param latency_stride_bytes Stride used by latency pointer chains
  * @param latency_chain_mode_name Chain construction mode used by latency pointer chains
- * @param latency_tlb_locality_bytes TLB-locality window for latency chains (0 = disabled)
+ * @param latency_tlb_locality_bytes TLB-locality window for latency chains (0 = global random)
  * @param cpu_name CPU name
  * @param perf_cores Number of performance cores
  * @param eff_cores Number of efficiency cores
@@ -66,54 +66,18 @@ void print_help(const char* prog_name);
  */
 void print_configuration(size_t buffer_size, size_t buffer_size_mb, size_t total_allocation_bytes, int iterations,
                           int loop_count, bool use_non_cacheable, size_t latency_stride_bytes,
-                          const std::string& latency_chain_mode_name,
-                          size_t latency_tlb_locality_bytes,
-                         const std::string& cpu_name, int perf_cores,
-                         int eff_cores, int num_threads, bool only_bandwidth, bool only_latency,
-                         bool run_patterns, bool user_specified_iterations);
+                          const std::string& latency_chain_mode_name, size_t latency_tlb_locality_bytes,
+                          const std::string& cpu_name, int perf_cores, int eff_cores, int num_threads,
+                          bool only_bandwidth, bool only_latency, bool run_patterns,
+                          bool user_specified_iterations);
 
 /**
  * @brief Print results for one loop
- * @param loop Loop number
- * @param buffer_size Buffer size in bytes
- * @param buffer_size_mb Buffer size in megabytes
- * @param iterations Number of iterations
- * @param num_threads Number of threads
- * @param read_bw_gb_s Read bandwidth in GB/s
- * @param total_read_time Total read time in seconds
- * @param write_bw_gb_s Write bandwidth in GB/s
- * @param total_write_time Total write time in seconds
- * @param copy_bw_gb_s Copy bandwidth in GB/s
- * @param total_copy_time Total copy time in seconds
- * @param l1_latency_ns L1 cache latency in nanoseconds
- * @param l2_latency_ns L2 cache latency in nanoseconds
- * @param l1_buffer_size L1 buffer size in bytes
- * @param l2_buffer_size L2 buffer size in bytes
- * @param l1_read_bw_gb_s L1 read bandwidth in GB/s
- * @param l1_write_bw_gb_s L1 write bandwidth in GB/s
- * @param l1_copy_bw_gb_s L1 copy bandwidth in GB/s
- * @param l2_read_bw_gb_s L2 read bandwidth in GB/s
- * @param l2_write_bw_gb_s L2 write bandwidth in GB/s
- * @param l2_copy_bw_gb_s L2 copy bandwidth in GB/s
- * @param average_latency_ns Average latency in nanoseconds
- * @param latency_tlb_locality_bytes Active locality window used for headline latency (0 = global random)
- * @param total_lat_time_ns Total latency time in nanoseconds
- * @param use_custom_cache_size Whether custom cache size is used
- * @param custom_latency_ns Custom cache latency in nanoseconds
- * @param custom_buffer_size Custom buffer size in bytes
- * @param custom_read_bw_gb_s Custom read bandwidth in GB/s
- * @param custom_write_bw_gb_s Custom write bandwidth in GB/s
- * @param custom_copy_bw_gb_s Custom copy bandwidth in GB/s
- * @param has_auto_tlb_breakdown Whether the automatic paired locality comparison is available
- * @param tlb_hit_latency_ns Legacy internal name for 16 KiB locality latency
- * @param tlb_miss_latency_ns Legacy internal name for global-random latency
- * @param page_walk_penalty_ns Legacy internal name for the paired global-random minus 16 KiB locality delta
- * @param user_specified_threads Whether user specified thread count
- * @param only_bandwidth Whether only bandwidth tests are run
- * @param only_latency Whether only latency tests are run
+ * @param loop Zero-based loop index
+ * @param config Configuration used for the loop and output selection
+ * @param results Status-aware measurements produced by the loop
  */
-void print_results(int loop, const BenchmarkConfig& config,
-                   const BenchmarkResults& results);
+void print_results(int loop, const BenchmarkConfig& config, const BenchmarkResults& results);
 
 /**
  * @brief Print cache size information

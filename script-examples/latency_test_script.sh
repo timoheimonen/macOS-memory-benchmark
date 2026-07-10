@@ -20,7 +20,8 @@ ONLY_LATENCY=true
 tlb_locality_sizes_kb=(16 512 1024 2048 4096 8192 16384 32768)
 
 # Leave empty by default for cleaner cache-hierarchy latency runs.
-# Set to "--non-cacheable" if you specifically want MADV_RANDOM behavior.
+# Set to "--non-cacheable" to request best-effort cache-discouraging madvise()
+# hints. This does not create truly uncached memory.
 NON_CACHEABLE=""
 
 # Cache sizes in KB, choose list from the following or make your own

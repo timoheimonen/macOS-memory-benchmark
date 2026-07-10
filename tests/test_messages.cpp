@@ -731,6 +731,11 @@ TEST_F(MessagesFormattingTest, UsageOptions) {
   EXPECT_NE(msg.find("--latency-stride-bytes"), std::string::npos);
   EXPECT_NE(msg.find("--latency-chain-mode"), std::string::npos);
   EXPECT_NE(msg.find("--latency-tlb-locality-kb"), std::string::npos);
+  EXPECT_NE(msg.find("Locality-using modes require"), std::string::npos);
+  EXPECT_NE(msg.find("explicit global-random ignores"), std::string::npos);
+  EXPECT_NE(msg.find("cache bandwidth uses one"), std::string::npos);
+  EXPECT_NE(msg.find("latency remains"), std::string::npos);
+  EXPECT_NE(msg.find("single-threaded"), std::string::npos);
   EXPECT_NE(msg.find("--cache-size"), std::string::npos);
   EXPECT_NE(msg.find("-h"), std::string::npos);
   // Check that default values are included
@@ -828,7 +833,7 @@ TEST_F(MessagesFormattingTest, ConfigLatencyChainMode) {
 TEST_F(MessagesFormattingTest, ConfigLatencyTlbLocality) {
   std::string msg = Messages::config_latency_tlb_locality(0);
   EXPECT_NE(msg.find("Latency TLB Locality"), std::string::npos);
-  EXPECT_NE(msg.find("Disabled"), std::string::npos);
+  EXPECT_NE(msg.find("Global random"), std::string::npos);
 
   msg = Messages::config_latency_tlb_locality(16 * 1024);
   EXPECT_NE(msg.find("16.00"), std::string::npos);
