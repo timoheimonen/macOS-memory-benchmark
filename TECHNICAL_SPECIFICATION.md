@@ -370,6 +370,9 @@ Computed from collected value vectors:
 - **Min**: Minimum observed value.
 - **Max**: Maximum observed value.
 
+Standard repeated-loop aggregates set a diagnostic quality warning above 7.5% CV. Values are retained without outlier
+filtering, and the warning does not by itself invalidate the result.
+
 ## 16. Console Output Contract
 
 Console rendering is centralized in `src/output/console` and message helpers in `src/output/console/messages`.

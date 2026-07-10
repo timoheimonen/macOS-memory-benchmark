@@ -184,6 +184,8 @@ Long options require `--`. A single dash is only valid for one-character short o
 - Standard main/L1/L2/custom latency headlines target 250 ms in a distinct 100–300 ms acceptance window and retain at
   least 16 complete pointer-chain cycles. A cycle-minimum-limited overrun is reported explicitly.
 - `--count <count>`: Full benchmark repetitions (default `1`; use `5-10` for statistics).
+- Standard repeated-loop aggregates warn when CV exceeds 7.5%. The warning is diagnostic: values are not filtered and
+  the aggregate is not automatically invalidated.
 - `--threads <count>`: Bandwidth thread count (latency tests remain single-threaded). In `--patterns`, the default is the
   historical count of all detected CPU cores to preserve comparison compatibility. Use an explicit `--threads` value
   equal to the detected P-core count for a matching worker-count profile; macOS placement remains unpinned. This is a

@@ -782,6 +782,9 @@ isolated page-table-walk penalty; use `--analyze-tlb` for controlled translation
 
 For noisy systems, prioritize median and P95/P99 rather than single fastest/slowest values.
 
+Standard repeated-loop headline aggregates emit a warning when CV exceeds 7.5%. This hardware-validated threshold is
+diagnostic only: the benchmark does not filter outliers or automatically invalidate the aggregate.
+
 Pattern statistics emit noise warnings above a pattern-specific CV threshold: 5% for sequential and 64-byte stride,
 and 10% for 4096-byte, 16 KiB, 2 MiB, and random patterns. Treat a warning as a request to repeat under steadier
 conditions or increase `--count`; it does not invalidate the sample automatically.
