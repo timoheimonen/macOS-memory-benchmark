@@ -28,6 +28,9 @@
 #include <cstddef>  // size_t
 #include <string>   // std::string
 
+struct BenchmarkConfig;
+struct BenchmarkResults;
+
 // --- Output/Printing Functions ---
 /**
  * @brief Print command-line usage instructions
@@ -59,6 +62,7 @@ void print_help(const char* prog_name);
  * @param only_bandwidth Whether only bandwidth tests are run
  * @param only_latency Whether only latency tests are run
  * @param run_patterns Whether pattern benchmarks are run (bandwidth-only, uses 2x buffers)
+ * @param user_specified_iterations Whether --iterations explicitly disables pattern auto-calibration
  */
 void print_configuration(size_t buffer_size, size_t buffer_size_mb, size_t total_allocation_bytes, int iterations,
                           int loop_count, bool use_non_cacheable, size_t latency_stride_bytes,
@@ -66,7 +70,7 @@ void print_configuration(size_t buffer_size, size_t buffer_size_mb, size_t total
                           size_t latency_tlb_locality_bytes,
                          const std::string& cpu_name, int perf_cores,
                          int eff_cores, int num_threads, bool only_bandwidth, bool only_latency,
-                         bool run_patterns);
+                         bool run_patterns, bool user_specified_iterations);
 
 /**
  * @brief Print results for one loop
@@ -100,28 +104,16 @@ void print_configuration(size_t buffer_size, size_t buffer_size_mb, size_t total
  * @param custom_read_bw_gb_s Custom read bandwidth in GB/s
  * @param custom_write_bw_gb_s Custom write bandwidth in GB/s
  * @param custom_copy_bw_gb_s Custom copy bandwidth in GB/s
- * @param has_auto_tlb_breakdown Whether automatic TLB hit/miss breakdown is available
- * @param tlb_hit_latency_ns TLB hit-biased latency in nanoseconds
- * @param tlb_miss_latency_ns TLB miss-biased latency in nanoseconds
- * @param page_walk_penalty_ns Estimated page-walk penalty in nanoseconds
+ * @param has_auto_tlb_breakdown Whether the automatic paired locality comparison is available
+ * @param tlb_hit_latency_ns Legacy internal name for 16 KiB locality latency
+ * @param tlb_miss_latency_ns Legacy internal name for global-random latency
+ * @param page_walk_penalty_ns Legacy internal name for the paired global-random minus 16 KiB locality delta
  * @param user_specified_threads Whether user specified thread count
  * @param only_bandwidth Whether only bandwidth tests are run
  * @param only_latency Whether only latency tests are run
  */
-void print_results(int loop, size_t buffer_size, size_t buffer_size_mb, int iterations, int num_threads,
-    double read_bw_gb_s, double total_read_time,
-    double write_bw_gb_s, double total_write_time,
-    double copy_bw_gb_s, double total_copy_time,
-    double l1_latency_ns, double l2_latency_ns,
-    size_t l1_buffer_size, size_t l2_buffer_size,
-     double l1_read_bw_gb_s, double l1_write_bw_gb_s, double l1_copy_bw_gb_s,
-     double l2_read_bw_gb_s, double l2_write_bw_gb_s, double l2_copy_bw_gb_s,
-    double average_latency_ns, size_t latency_tlb_locality_bytes, double total_lat_time_ns,
-    bool use_custom_cache_size, double custom_latency_ns, size_t custom_buffer_size,
-    double custom_read_bw_gb_s, double custom_write_bw_gb_s, double custom_copy_bw_gb_s,
-    bool has_auto_tlb_breakdown, double tlb_hit_latency_ns, double tlb_miss_latency_ns,
-    double page_walk_penalty_ns,
-    bool user_specified_threads, bool only_bandwidth, bool only_latency);
+void print_results(int loop, const BenchmarkConfig& config,
+                   const BenchmarkResults& results);
 
 /**
  * @brief Print cache size information

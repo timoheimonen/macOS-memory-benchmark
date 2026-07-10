@@ -78,17 +78,8 @@ nlohmann::ordered_json build_results_json(const BenchmarkConfig& config,
   // Add execution time (second)
   json_output[JsonKeys::EXECUTION_TIME_SEC] = total_execution_time_sec;
   
-  // Add main memory results (third)
-  const nlohmann::json main_memory_json = build_main_memory_json(config, stats);
-  if (!main_memory_json.is_null()) {
-    json_output[JsonKeys::MAIN_MEMORY] = main_memory_json;
-  }
-  
-  // Add cache results (fourth)
-  const nlohmann::json cache_json = build_cache_json(config, stats);
-  if (!cache_json.is_null()) {
-    json_output[JsonKeys::CACHE] = cache_json;
-  }
+  // Add completion, per-loop measurements, and aggregate schema-v2 sections.
+  add_standard_benchmark_results(json_output, config, stats);
   
   // Add timestamp (fifth)
   json_output[JsonKeys::TIMESTAMP] = build_utc_timestamp();
@@ -101,7 +92,10 @@ nlohmann::ordered_json build_results_json(const BenchmarkConfig& config,
 
 // Save benchmark results to JSON file
 // Returns EXIT_SUCCESS on success, EXIT_FAILURE on error
-int save_results_to_json(const BenchmarkConfig& config, const BenchmarkStatistics& stats, double total_execution_time_sec) {
+int save_results_to_json(const BenchmarkConfig& config,
+                         const BenchmarkStatistics& stats,
+                         double total_execution_time_sec,
+                         bool announce_success) {
   if (config.output_file.empty()) {
     return EXIT_SUCCESS;  // No output file specified, nothing to do
   }
@@ -116,7 +110,7 @@ int save_results_to_json(const BenchmarkConfig& config, const BenchmarkStatistic
   }
   
   // Write JSON to file
-  return write_json_to_file(file_path, json_output);
+  return write_json_to_file(file_path, json_output, announce_success);
 }
 
 nlohmann::ordered_json build_pattern_results_json(const BenchmarkConfig& config,

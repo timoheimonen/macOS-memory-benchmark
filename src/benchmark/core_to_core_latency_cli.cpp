@@ -37,6 +37,7 @@
 #include <vector>
 
 #include "core/config/constants.h"
+#include "core/signal/signal_handler.h"
 #include "output/console/messages/messages_api.h"
 #include "output/console/output_printer.h"
 
@@ -242,6 +243,16 @@ int parse_core_to_core_mode_arguments(int argc, char* argv[], CoreToCoreLatencyC
       if (!parse_core_to_core_sweep_spec(argv[i], spec, argv[0])) {
         return EXIT_FAILURE;
       }
+      for (const CoreToCoreSweepSpec& existing_spec : config.sweep_specs) {
+        if (existing_spec.parameter == spec.parameter) {
+          std::cerr << Messages::error_prefix()
+                    << Messages::error_duplicate_option(
+                           std::string(OPT_SWEEP_LONG) + " " + spec.parameter_name)
+                    << std::endl;
+          print_usage(argv[0]);
+          return EXIT_FAILURE;
+        }
+      }
       config.sweep_specs.push_back(std::move(spec));
       config.run_sweep = true;
       continue;
@@ -380,5 +391,8 @@ int run_core_to_core_latency_mode(int argc, char* argv[]) {
   }
 
   // Execute benchmark only after successful parse and non-help path.
-  return run_core_to_core_latency(config);
+  block_benchmark_signals();
+  const int run_result = run_core_to_core_latency(config);
+  restore_signal_mask();
+  return run_result;
 }

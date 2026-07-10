@@ -41,15 +41,19 @@
 
 #include "benchmark/benchmark_runner.h"
 #include "benchmark/benchmark_executor.h"  // run_single_benchmark_loop
+#include "benchmark/benchmark_work_plan.h"
 #include "benchmark/benchmark_statistics_collector.h"  // initialize_statistics, collect_loop_results
 #include "core/memory/buffer_manager.h"      // BenchmarkBuffers
 #include "core/config/config.h"               // BenchmarkConfig
 #include "core/timing/timer.h"                // HighResTimer
 #include "utils/benchmark.h"            // All benchmark functions and print functions
 #include "output/console/messages/messages_api.h"             // Centralized messages
+#include "output/json/json_output/json_output_api.h"
 #include "core/signal/signal_handler.h"
+#include <chrono>
 #include <iostream>
 #include <cstdlib>  // EXIT_SUCCESS, EXIT_FAILURE
+#include <optional>
 
 /**
  * @brief Runs all benchmarks for the specified number of loops and collects statistics.
@@ -90,58 +94,113 @@
  * @see collect_loop_results() for result collection
  * @see print_results() for output formatting
  */
-int run_all_benchmarks(const BenchmarkBuffers& buffers, BenchmarkConfig& config, BenchmarkStatistics& stats) {
+int run_all_benchmarks(const BenchmarkBuffers& buffers, BenchmarkConfig& config,
+                       BenchmarkStatistics& stats,
+                       const BenchmarkRunnerTestHooks* test_hooks) {
   (void)buffers;
 
   // Initialize statistics structure
   initialize_statistics(stats, config);
+  const auto run_start = std::chrono::steady_clock::now();
+
+  auto checkpoint = [&config, &stats, &run_start, test_hooks]() {
+    if (config.output_file.empty()) {
+      return EXIT_SUCCESS;
+    }
+    const double elapsed_seconds = std::chrono::duration<double>(
+        std::chrono::steady_clock::now() - run_start).count();
+    if (test_hooks != nullptr && test_hooks->checkpoint) {
+      return test_hooks->checkpoint(config, stats, elapsed_seconds, false);
+    }
+    return save_results_to_json(config, stats, elapsed_seconds, false);
+  };
+
+  auto stop_requested = [test_hooks]() {
+    return test_hooks != nullptr && test_hooks->stop_requested
+               ? test_hooks->stop_requested()
+               : signal_received();
+  };
 
   // Create timer for benchmark execution
-  auto test_timer_opt = HighResTimer::create();
+  std::optional<HighResTimer> test_timer_opt;
+  if (test_hooks == nullptr || !test_hooks->force_timer_creation_failure) {
+    test_timer_opt = HighResTimer::create();
+  }
   if (!test_timer_opt) {
-    std::cerr << Messages::error_prefix()
-              << "Failed to create benchmark timer."
-              << std::endl;
+    stats.status = BenchmarkRunStatus::Failed;
+    stats.status_reason = Messages::error_timer_creation_failed();
+    std::cerr << Messages::error_prefix() << stats.status_reason << std::endl;
+    (void)checkpoint();
     return EXIT_FAILURE;
   }
   auto& test_timer = *test_timer_opt;
+  BenchmarkExecutionState execution_state;
 
   // Main benchmark loop
   for (int loop = 0; loop < config.loop_count; ++loop) {
     // Check for Ctrl+C between loops
-    if (signal_received()) {
+    if (stop_requested()) {
+      stats.status = BenchmarkRunStatus::Interrupted;
+      stats.status_reason = Messages::msg_interrupted_by_user();
+      (void)checkpoint();
       std::cout << std::endl << Messages::msg_interrupted_by_user() << std::endl;
       return EXIT_SUCCESS;
     }
 
     try {
       // Run single benchmark loop
-      BenchmarkResults loop_results = run_single_benchmark_loop(buffers, config, loop, test_timer);
+      BenchmarkResults loop_results =
+          test_hooks != nullptr && test_hooks->execute_loop
+              ? test_hooks->execute_loop(buffers, config, loop, test_timer,
+                                         &execution_state)
+              : run_single_benchmark_loop(buffers, config, loop, test_timer,
+                                          &execution_state);
 
       // Collect results into statistics
       collect_loop_results(stats, loop_results, config);
 
       // Print results for this loop
       std::cout << '\r' << std::flush;  // Clear progress indicator
-      print_results(loop, config.buffer_size, config.buffer_size_mb, config.iterations, config.num_threads, 
-                    loop_results.read_bw_gb_s, loop_results.total_read_time,
-                    loop_results.write_bw_gb_s, loop_results.total_write_time, 
-                    loop_results.copy_bw_gb_s, loop_results.total_copy_time,
-                    loop_results.l1_latency_ns, loop_results.l2_latency_ns,
-                    config.l1_buffer_size, config.l2_buffer_size,
-                     loop_results.l1_read_bw_gb_s, loop_results.l1_write_bw_gb_s, loop_results.l1_copy_bw_gb_s,
-                     loop_results.l2_read_bw_gb_s, loop_results.l2_write_bw_gb_s, loop_results.l2_copy_bw_gb_s,
-                     loop_results.average_latency_ns, config.latency_tlb_locality_bytes, loop_results.total_lat_time_ns,
-                     config.use_custom_cache_size, loop_results.custom_latency_ns, config.custom_buffer_size,
-                    loop_results.custom_read_bw_gb_s, loop_results.custom_write_bw_gb_s, loop_results.custom_copy_bw_gb_s,
-                    loop_results.has_auto_tlb_breakdown, loop_results.tlb_hit_latency_ns,
-                    loop_results.tlb_miss_latency_ns, loop_results.page_walk_penalty_ns,
-                    config.user_specified_threads, config.only_bandwidth, config.only_latency);
+      print_results(loop, config, loop_results);
+
+      if (loop_results.status == BenchmarkRunStatus::Interrupted) {
+        stats.status = BenchmarkRunStatus::Interrupted;
+        stats.status_reason = loop_results.status_reason;
+      } else if (loop_results.status == BenchmarkRunStatus::Complete) {
+        stats.status = (stats.completed_loops == stats.planned_loops)
+                           ? BenchmarkRunStatus::Complete
+                           : BenchmarkRunStatus::Partial;
+        stats.status_reason = stats.status == BenchmarkRunStatus::Complete
+                                  ? ""
+                                  : Messages::benchmark_reason_loops_remain();
+      } else {
+        stats.status = BenchmarkRunStatus::Partial;
+        stats.status_reason = loop_results.status_reason;
+      }
+
+      if (checkpoint() != EXIT_SUCCESS) {
+        stats.status = BenchmarkRunStatus::Failed;
+        stats.status_reason = Messages::benchmark_reason_checkpoint_failed();
+        return EXIT_FAILURE;
+      }
+      if (loop_results.status == BenchmarkRunStatus::Interrupted) {
+        std::cout << std::endl << Messages::msg_interrupted_by_user() << std::endl;
+        return EXIT_SUCCESS;
+      }
     } catch (const std::exception &e) {
+      stats.status = BenchmarkRunStatus::Failed;
+      stats.status_reason = e.what();
+      (void)checkpoint();
       std::cerr << Messages::error_benchmark_loop(loop, e.what()) << std::endl;
       return EXIT_FAILURE;
     }
   }
 
+  stats.status = stats.completed_loops == stats.planned_loops
+                     ? BenchmarkRunStatus::Complete
+                     : BenchmarkRunStatus::Partial;
+  if (stats.status == BenchmarkRunStatus::Complete) {
+    stats.status_reason.clear();
+  }
   return EXIT_SUCCESS;
 }

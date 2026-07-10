@@ -303,6 +303,13 @@ TEST_F(MessagesErrorTest, ErrorAnalyzeTlbMustBeUsedAlone) {
   EXPECT_NE(msg.find("-X/--sweep-max-runs <count>"), std::string::npos);
 }
 
+TEST_F(MessagesErrorTest, ErrorSeedRequiresPatterns) {
+  EXPECT_EQ(Messages::error_seed_requires_patterns(),
+            "--seed is supported only with --patterns or --analyze-tlb");
+  EXPECT_NE(Messages::error_seed_requires_benchmark_or_patterns().find("--benchmark"),
+            std::string::npos);
+}
+
 TEST_F(MessagesErrorTest, ErrorMadviseFailed) {
   std::string msg = Messages::error_madvise_failed("lat_buffer");
   EXPECT_EQ(msg, "madvise failed for lat_buffer");
@@ -706,6 +713,7 @@ TEST_F(MessagesFormattingTest, UsageOptions) {
   std::string msg = Messages::usage_options("memory_benchmark");
   EXPECT_NE(msg.find("memory_benchmark"), std::string::npos);
   EXPECT_NE(msg.find("--benchmark"), std::string::npos);
+  EXPECT_NE(msg.find("100-300 ms window"), std::string::npos);
   EXPECT_NE(msg.find("--iterations"), std::string::npos);
   EXPECT_NE(msg.find("--buffer-size"), std::string::npos);
   EXPECT_NE(msg.find("--count"), std::string::npos);
@@ -716,6 +724,9 @@ TEST_F(MessagesFormattingTest, UsageOptions) {
   EXPECT_NE(msg.find("--tlb-density"), std::string::npos);
   EXPECT_NE(msg.find("default: medium"), std::string::npos);
   EXPECT_NE(msg.find("--analyze-tlb: 16"), std::string::npos);
+  EXPECT_NE(msg.find("calibrate toward 150 ms"), std::string::npos);
+  EXPECT_NE(msg.find("Reproducible workload/schedule seed for --benchmark and --patterns"),
+            std::string::npos);
   EXPECT_NE(msg.find("--latency-samples"), std::string::npos);
   EXPECT_NE(msg.find("--latency-stride-bytes"), std::string::npos);
   EXPECT_NE(msg.find("--latency-chain-mode"), std::string::npos);
@@ -853,6 +864,12 @@ TEST_F(MessagesFormattingTest, ConfigTotalCores) {
   EXPECT_NE(msg.find("Total CPU Cores"), std::string::npos);
 }
 
+TEST_F(MessagesFormattingTest, ConfigBenchmarkThreads) {
+  const std::string msg = Messages::config_benchmark_threads(4);
+  EXPECT_NE(msg.find("Benchmark Threads Requested"), std::string::npos);
+  EXPECT_NE(msg.find("4"), std::string::npos);
+}
+
 // ============================================================================
 // Cache Info Messages Tests (using formatting fixture)
 // ============================================================================
@@ -983,21 +1000,20 @@ TEST_F(MessagesFormattingTest, ResultsLatencyAverage) {
 
 TEST_F(MessagesFormattingTest, ResultsLatencyTlbHit) {
   std::string msg = Messages::results_latency_tlb_hit(24.10);
-  EXPECT_NE(msg.find("TLB hit latency"), std::string::npos);
-  EXPECT_NE(msg.find("16 KB locality"), std::string::npos);
+  EXPECT_NE(msg.find("16 KiB locality latency"), std::string::npos);
   EXPECT_NE(msg.find("24.10"), std::string::npos);
 }
 
 TEST_F(MessagesFormattingTest, ResultsLatencyTlbMiss) {
   std::string msg = Messages::results_latency_tlb_miss(86.70);
-  EXPECT_NE(msg.find("TLB miss latency"), std::string::npos);
-  EXPECT_NE(msg.find("global random locality"), std::string::npos);
+  EXPECT_NE(msg.find("Global-random latency"), std::string::npos);
   EXPECT_NE(msg.find("86.70"), std::string::npos);
 }
 
 TEST_F(MessagesFormattingTest, ResultsLatencyPageWalkPenalty) {
   std::string msg = Messages::results_latency_page_walk_penalty(62.60);
-  EXPECT_NE(msg.find("Estimated page-walk penalty"), std::string::npos);
+  EXPECT_NE(msg.find("Locality latency delta"), std::string::npos);
+  EXPECT_NE(msg.find("global - 16 KiB"), std::string::npos);
   EXPECT_NE(msg.find("62.60"), std::string::npos);
   EXPECT_NE(msg.find("ns"), std::string::npos);
 }
@@ -1257,21 +1273,77 @@ TEST_F(MessagesFormattingTest, StatisticsMainMemoryLatencyHeader) {
   EXPECT_NE(msg.find("ns"), std::string::npos);
 }
 
+TEST_F(MessagesFormattingTest, StatisticsMedianAbsoluteDeviation) {
+  EXPECT_EQ(Messages::statistics_median_absolute_deviation(1.234, 2),
+            "  Median absolute deviation: 1.23");
+}
+
+TEST_F(MessagesFormattingTest, WarningBenchmarkHighCv) {
+  const std::string msg =
+      Messages::warning_benchmark_high_cv("read bandwidth", 9.25, 7.5);
+  EXPECT_NE(msg.find("read bandwidth"), std::string::npos);
+  EXPECT_NE(msg.find("9.2%"), std::string::npos);
+  EXPECT_NE(msg.find("7.5%"), std::string::npos);
+}
+
+TEST_F(MessagesFormattingTest, WarningQosFailedBenchmarkWorker) {
+  const std::string msg =
+      Messages::warning_qos_failed_benchmark_worker("read", 5);
+  EXPECT_NE(msg.find("read benchmark worker"), std::string::npos);
+  EXPECT_NE(msg.find("5"), std::string::npos);
+}
+
+TEST_F(MessagesFormattingTest, BenchmarkStatusReasonsAreCentralized) {
+  const std::vector<std::string> reasons = {
+      Messages::benchmark_reason_interrupted_before_measurement(),
+      Messages::benchmark_reason_interrupted_by_user(),
+      Messages::benchmark_reason_planned_measurements_unavailable(),
+      Messages::benchmark_reason_invalid_locality_work(),
+      Messages::benchmark_reason_locality_comparison_unavailable(),
+      Messages::benchmark_reason_interrupted_calibration_pilot(),
+      Messages::benchmark_reason_invalid_calibration_pilot(),
+      Messages::benchmark_reason_interrupted_measured_operation(),
+      Messages::benchmark_reason_invalid_bandwidth_duration(),
+      Messages::benchmark_reason_invalid_bandwidth_value(),
+      Messages::benchmark_reason_interrupted_latency_pilot(),
+      Messages::benchmark_reason_interrupted_latency_measurement(),
+      Messages::benchmark_reason_invalid_latency_measurement(),
+      Messages::benchmark_reason_invalid_cache_latency_measurement(),
+      Messages::benchmark_reason_invalid_main_latency_measurement(),
+      Messages::benchmark_reason_invalid_bandwidth_measurement(),
+      Messages::benchmark_reason_loops_remain(),
+      Messages::benchmark_reason_checkpoint_failed(),
+      Messages::benchmark_reason_latency_chain_setup_failed("main-latency"),
+      Messages::benchmark_reason_prepare_failed("cache latency"),
+      Messages::benchmark_reason_invalid_bandwidth_plan(),
+      Messages::benchmark_reason_no_worker_partition(),
+      Messages::benchmark_reason_copy_payload_overflow(),
+      Messages::benchmark_reason_total_payload_overflow(),
+      Messages::benchmark_reason_invalid_latency_plan(),
+      Messages::benchmark_reason_latency_chain_too_short(),
+      Messages::benchmark_reason_minimum_cycles_exceed_limit(),
+      Messages::benchmark_reason_rounded_accesses_exceed_limit(),
+  };
+  for (const std::string& reason : reasons) {
+    EXPECT_FALSE(reason.empty());
+  }
+}
+
 TEST_F(MessagesFormattingTest, StatisticsTlbHitLatencyMetricName) {
   std::string msg = Messages::statistics_tlb_hit_latency_metric_name();
-  EXPECT_NE(msg.find("TLB Hit Latency"), std::string::npos);
+  EXPECT_NE(msg.find("16 KiB Locality Latency"), std::string::npos);
   EXPECT_NE(msg.find("ns"), std::string::npos);
 }
 
 TEST_F(MessagesFormattingTest, StatisticsTlbMissLatencyMetricName) {
   std::string msg = Messages::statistics_tlb_miss_latency_metric_name();
-  EXPECT_NE(msg.find("TLB Miss Latency"), std::string::npos);
+  EXPECT_NE(msg.find("Global-Random Latency"), std::string::npos);
   EXPECT_NE(msg.find("ns"), std::string::npos);
 }
 
 TEST_F(MessagesFormattingTest, StatisticsPageWalkPenaltyMetricName) {
   std::string msg = Messages::statistics_page_walk_penalty_metric_name();
-  EXPECT_NE(msg.find("Page-Walk Penalty"), std::string::npos);
+  EXPECT_NE(msg.find("Locality Latency Delta"), std::string::npos);
   EXPECT_NE(msg.find("ns"), std::string::npos);
 }
 
@@ -1281,7 +1353,67 @@ TEST_F(MessagesFormattingTest, StatisticsFooter) {
 }
 
 TEST_F(MessagesFormattingTest, PatternStrideLabels) {
-  EXPECT_EQ(Messages::pattern_page_4096b(), "Page - 4096B");
-  EXPECT_EQ(Messages::pattern_page_16384b(), "Page - 16384B");
-  EXPECT_EQ(Messages::pattern_superpage_2mb(), "Superpage - 2MB");
+  EXPECT_EQ(Messages::pattern_cache_line_64b(), "64 B stride");
+  EXPECT_EQ(Messages::pattern_page_4096b(), "4096 B stride");
+  EXPECT_EQ(Messages::pattern_page_16384b(), "16 KiB stride");
+  EXPECT_EQ(Messages::pattern_superpage_2mb(), "2 MiB stride");
+}
+
+TEST_F(MessagesFormattingTest, PatternStatusAndNoiseMessages) {
+  EXPECT_EQ(Messages::pattern_measurement_unavailable("skipped", "buffer too small"),
+            "N/A [skipped: buffer too small]");
+  EXPECT_EQ(Messages::statistics_pattern_bandwidth_header("Random"),
+            "\nRandom Pattern Bandwidth (GB/s):");
+  EXPECT_EQ(Messages::statistics_coefficient_of_variation(12.34, 1),
+            "  CV:      12.3%");
+  const std::string warning =
+      Messages::warning_pattern_measurement_noisy("Random read", 12.3, 10.0);
+  EXPECT_NE(warning.find("Random read"), std::string::npos);
+  EXPECT_NE(warning.find("12.3%"), std::string::npos);
+}
+
+TEST_F(MessagesFormattingTest, PatternMeasurementStatusReasons) {
+  EXPECT_FALSE(Messages::pattern_reason_measurement_not_completed().empty());
+  EXPECT_FALSE(Messages::pattern_reason_timer_creation_failed().empty());
+  EXPECT_FALSE(
+      Messages::pattern_reason_calibration_or_accounting_failed().empty());
+  EXPECT_FALSE(Messages::pattern_reason_no_valid_random_workload().empty());
+  EXPECT_FALSE(Messages::pattern_reason_stride_transition_unavailable().empty());
+  EXPECT_FALSE(Messages::pattern_reason_copy_accounting_overflow().empty());
+  EXPECT_FALSE(Messages::pattern_reason_invalid_strided_timing().empty());
+  EXPECT_FALSE(Messages::pattern_reason_work_plan_byte_overflow().empty());
+  EXPECT_FALSE(Messages::pattern_reason_invalid_work_plan_parameters().empty());
+  EXPECT_FALSE(Messages::pattern_reason_stride_access_sum_overflow().empty());
+  EXPECT_FALSE(
+      Messages::pattern_reason_buffer_lacks_two_strided_accesses().empty());
+  EXPECT_FALSE(
+      Messages::pattern_reason_no_valid_strided_worker_partition().empty());
+  EXPECT_FALSE(Messages::pattern_reason_work_plan_pass_limit().empty());
+  EXPECT_FALSE(Messages::pattern_reason_work_plan_total_overflow().empty());
+}
+
+TEST_F(MessagesFormattingTest, ConfigPatternAutomaticIterations) {
+  EXPECT_EQ(Messages::config_pattern_iterations_auto(0.150, 0.100, 0.250),
+            "Pattern Passes: automatic duration calibration (target 150 ms; intended window 100-250 ms)");
+}
+
+TEST_F(MessagesFormattingTest, ConfigBenchmarkAutomaticIterations) {
+  EXPECT_EQ(Messages::config_benchmark_iterations_auto(0.150, 0.100, 0.250),
+            "Bandwidth Passes: automatic duration calibration (target 150 ms; intended window 100-250 ms)");
+}
+
+TEST_F(MessagesFormattingTest, ConfigLatencyCalibration) {
+  EXPECT_EQ(Messages::config_latency_calibration(0.250, 0.100, 0.300, 16),
+            "Latency Headline: automatic continuous-pass calibration (target 250 ms; intended window 100-300 ms; minimum 16 complete cycles)");
+}
+
+TEST_F(MessagesFormattingTest, CoreToCoreCalibratedAuditMessages) {
+  EXPECT_EQ(Messages::error_core_to_core_measurement_failed("invalid-headline-elapsed"),
+            "Core-to-core measurement failed: invalid-headline-elapsed");
+  EXPECT_NE(Messages::report_core_to_core_round_trip(70.0).find("Median headline"),
+            std::string::npos);
+  EXPECT_NE(Messages::report_core_to_core_headline_statistics(3).find("3 loops"),
+            std::string::npos);
+  EXPECT_NE(Messages::report_core_to_core_sample_statistics(1000).find("1000 windows"),
+            std::string::npos);
 }

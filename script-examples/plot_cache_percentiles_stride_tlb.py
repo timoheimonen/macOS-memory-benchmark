@@ -36,7 +36,7 @@ def parse_args():
         "--metric",
         default="median",
         choices=sorted(ALLOWED_METRICS.keys()),
-        help="Which samples_ns.statistics metric to plot",
+        help="Which separate latency-sample statistic to plot",
     )
     parser.add_argument(
         "--stride",

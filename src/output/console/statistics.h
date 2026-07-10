@@ -43,9 +43,9 @@
  * @param all_l2_write_bw Vector of L2 write bandwidth measurements
  * @param all_l2_copy_bw Vector of L2 copy bandwidth measurements
  * @param all_main_mem_latency Vector of main memory latency measurements
- * @param all_tlb_hit_latency Vector of TLB hit-biased latency measurements
- * @param all_tlb_miss_latency Vector of TLB miss-biased latency measurements
- * @param all_page_walk_penalty Vector of estimated page-walk penalty measurements
+ * @param all_tlb_hit_latency Legacy internal name for 16 KiB locality latency measurements
+ * @param all_tlb_miss_latency Legacy internal name for global-random latency measurements
+ * @param all_page_walk_penalty Legacy internal name for paired global-random minus 16 KiB locality deltas
  * @param use_custom_cache_size Whether custom cache size is used
  * @param all_custom_latency Vector of custom cache latency measurements
  * @param all_custom_read_bw Vector of custom cache read bandwidth measurements

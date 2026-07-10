@@ -101,15 +101,42 @@ namespace Constants {
   constexpr int DEFAULT_ITERATIONS = 1000;  // Default number of iterations for R/W/Copy tests
   constexpr int DEFAULT_LOOP_COUNT = 1;     // Default number of full benchmark loops
   constexpr int DEFAULT_LATENCY_SAMPLE_COUNT = 1000;  // Default number of latency samples per test
+  constexpr double BENCHMARK_CALIBRATION_TARGET_SECONDS = 0.150;
+  constexpr double BENCHMARK_CALIBRATION_MIN_SECONDS = 0.100;
+  constexpr double BENCHMARK_CALIBRATION_MAX_SECONDS = 0.250;
+  constexpr size_t BENCHMARK_CALIBRATION_MAX_CORRECTIONS = 2;
+  constexpr size_t BENCHMARK_CALIBRATION_MIN_PILOT_BYTES = 8 * 1024 * 1024;
+  constexpr size_t BENCHMARK_CALIBRATION_MAX_PASSES = 1000000000;
+  constexpr double BENCHMARK_LATENCY_TARGET_SECONDS = 0.250;
+  constexpr double BENCHMARK_LATENCY_CALIBRATION_MIN_SECONDS = 0.100;
+  constexpr double BENCHMARK_LATENCY_CALIBRATION_MAX_SECONDS = 0.300;
+  constexpr size_t BENCHMARK_LATENCY_MIN_COMPLETE_CYCLES = 16;
+  constexpr size_t BENCHMARK_LATENCY_MAX_ACCESSES = 4000000000ULL;
+  constexpr double BENCHMARK_CV_WARNING_PCT = 7.5;
+  constexpr int BENCHMARK_JSON_SCHEMA_VERSION = 2;
+  constexpr const char* BENCHMARK_METHODOLOGY_VERSION =
+      "benchmark-v2-calibrated-seeded-balanced";
   constexpr size_t DEFAULT_SWEEP_MAX_RUNS = 256;  // Default guardrail for generated sweep combinations
   constexpr size_t DEFAULT_ANALYZE_TLB_SWEEP_MAX_RUNS = 16;  // Safer standalone TLB Cartesian sweep limit
 
   // Core-to-core standalone mode constants
-  constexpr int CORE_TO_CORE_DEFAULT_LOOP_COUNT = DEFAULT_LOOP_COUNT;  // Default loop count for standalone core-to-core mode
+  constexpr int CORE_TO_CORE_DEFAULT_LOOP_COUNT = 3;  // Default repeats provide a median and repeatability diagnostics
   constexpr int CORE_TO_CORE_DEFAULT_LATENCY_SAMPLE_COUNT = DEFAULT_LATENCY_SAMPLE_COUNT;  // Default sample count per loop for core-to-core mode
-  constexpr size_t CORE_TO_CORE_WARMUP_ROUND_TRIPS = 20 * 1000;  // Warmup handoff count before timed measurements
-  constexpr size_t CORE_TO_CORE_HEADLINE_ROUND_TRIPS = 1 * 1000 * 1000;  // Round-trips used for headline latency metric
-  constexpr size_t CORE_TO_CORE_SAMPLE_WINDOW_ROUND_TRIPS = 2 * 1000;  // Round-trips per sampled measurement window
+  constexpr size_t CORE_TO_CORE_WARMUP_ROUND_TRIPS = 20 * 1000;  // Minimum warmup handoff count
+  constexpr size_t CORE_TO_CORE_HEADLINE_ROUND_TRIPS = 1 * 1000 * 1000;  // Minimum headline handoff count
+  constexpr size_t CORE_TO_CORE_SAMPLE_WINDOW_ROUND_TRIPS = 2 * 1000;  // Minimum handoffs per sample window
+  constexpr size_t CORE_TO_CORE_CALIBRATION_WARMUP_ROUND_TRIPS = 1 * 1000 * 1000;  // Excluded pilot-pair warmup
+  constexpr size_t CORE_TO_CORE_CALIBRATION_ROUND_TRIPS = 100 * 1000;  // Excluded pilot handoff count
+  constexpr size_t CORE_TO_CORE_MAX_ROUND_TRIPS = 100 * 1000 * 1000;  // Calibration arithmetic guardrail
+  constexpr double CORE_TO_CORE_WARMUP_TARGET_SECONDS = 0.025;  // Per-pair steady-state warmup target
+  constexpr double CORE_TO_CORE_HEADLINE_TARGET_SECONDS = 0.250;  // Continuous headline target
+  constexpr double CORE_TO_CORE_HEADLINE_MIN_SECONDS = 0.100;  // Intended headline duration lower bound
+  constexpr double CORE_TO_CORE_HEADLINE_MAX_SECONDS = 0.300;  // Intended headline duration upper bound
+  constexpr double CORE_TO_CORE_SAMPLE_TARGET_SECONDS = 0.001;  // Comparable sampled-window duration target
+  constexpr double CORE_TO_CORE_CV_WARNING_PCT = 7.5;  // Repeatability diagnostic threshold
+  constexpr int CORE_TO_CORE_JSON_SCHEMA_VERSION = 2;
+  constexpr const char* CORE_TO_CORE_METHODOLOGY_VERSION =
+      "core2core-v2-calibrated-balanced-auditable";
   constexpr int CORE_TO_CORE_READY_THREADS_TARGET = 2;  // Required thread count before benchmark start signal
   constexpr uint32_t CORE_TO_CORE_INITIATOR_TURN_VALUE = 0;  // Turn token value for initiator thread ownership
   constexpr uint32_t CORE_TO_CORE_RESPONDER_TURN_VALUE = 1;  // Turn token value for responder thread ownership
@@ -145,19 +172,23 @@ namespace Constants {
   constexpr size_t PATTERN_STRIDE_PAGE = 4096;  // Page stride (bytes)
   constexpr size_t PATTERN_STRIDE_PAGE_16K = 16 * 1024;  // Apple Silicon page-size stride candidate (bytes)
   constexpr size_t PATTERN_STRIDE_SUPERPAGE_2MB = 2 * 1024 * 1024;  // Large-page stride candidate (bytes)
-  constexpr size_t PATTERN_STRIDED_MIN_TOUCHED_BYTES = 256 * 1024 * 1024;  // Minimum touched bytes target for strided pattern stability
+  constexpr double PATTERN_CALIBRATION_TARGET_SECONDS = 0.150;  // Automatic pattern sample target
+  constexpr double PATTERN_CALIBRATION_MIN_SECONDS = 0.100;  // Lower target-window bound
+  constexpr double PATTERN_CALIBRATION_MAX_SECONDS = 0.250;  // Upper target-window bound
+  constexpr size_t PATTERN_CALIBRATION_MAX_CORRECTIONS = 2;
+  constexpr int PATTERN_JSON_SCHEMA_VERSION = 2;
+  constexpr const char* PATTERN_METHODOLOGY_VERSION =
+      "pattern-v2-phase-calibrated-seeded";
+  constexpr size_t PATTERN_CALIBRATION_MIN_PILOT_BYTES = 8 * 1024 * 1024;  // Pilot payload floor
+  constexpr size_t PATTERN_CALIBRATION_MAX_PASSES = 1000000000;  // Fits the int executor interface
   constexpr size_t PATTERN_RANDOM_ACCESS_MIN = 1000;  // Minimum number of random accesses
   constexpr size_t PATTERN_RANDOM_ACCESS_MAX = 1000000;  // Maximum number of random accesses
-  constexpr size_t PATTERN_WARMUP_INDICES_MAX = 10000;  // Maximum indices to use for warmup
-  constexpr size_t PATTERN_WARMUP_INDICES_FRACTION = 10;  // Use 1/N of indices for warmup
   constexpr size_t PATTERN_VALIDATION_INDICES_LIMIT = 100;  // Maximum indices to validate
   constexpr double PATTERN_MIN_TIME_NS = 1e-9;  // Minimum time for bandwidth calculation (nanoseconds)
-  constexpr double PATTERN_CACHE_THRASHING_HIGH_THRESHOLD = 70.0;  // Cache thrashing threshold (percentage)
-  constexpr double PATTERN_CACHE_THRASHING_MEDIUM_THRESHOLD = 40.0;  // Cache thrashing medium threshold (percentage)
-  constexpr double PATTERN_TLB_PRESSURE_MINIMAL_THRESHOLD = 50.0;  // TLB pressure minimal threshold (percentage)
-  constexpr double PATTERN_TLB_PRESSURE_MODERATE_THRESHOLD = 20.0;  // TLB pressure moderate threshold (percentage)
   constexpr int PATTERN_PERCENTAGE_PRECISION = 1;  // Decimal places for percentage values
   constexpr int PATTERN_BANDWIDTH_PRECISION = 3;  // Decimal places for bandwidth values in pattern results
+  constexpr double PATTERN_STREAMING_CV_WARNING_PCT = 5.0;
+  constexpr double PATTERN_SPARSE_CV_WARNING_PCT = 10.0;
   
   // Cache fallback sizes (bytes) - used when cache detection fails
   constexpr size_t L1_CACHE_FALLBACK_SIZE_BYTES = 128 * 1024;  // 128 KB - typical Apple Silicon P-core L1 size

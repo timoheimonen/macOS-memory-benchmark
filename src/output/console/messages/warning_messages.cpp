@@ -24,6 +24,7 @@
  */
 
 #include "messages_api.h"
+#include <iomanip>
 #include <sstream>
 
 namespace Messages {
@@ -61,6 +62,14 @@ std::string warning_stride_not_aligned(size_t stride) {
 std::string warning_qos_failed_worker_thread(int code) {
   std::ostringstream oss;
   oss << "Failed to set QoS class for warmup worker thread (code: " << code << ")";
+  return oss.str();
+}
+
+std::string warning_qos_failed_benchmark_worker(const std::string& worker_name,
+                                                int code) {
+  std::ostringstream oss;
+  oss << "Failed to set QoS class for " << worker_name
+      << " benchmark worker thread (code: " << code << ")";
   return oss.str();
 }
 
@@ -129,6 +138,16 @@ std::string warning_threads_capped(int requested, int max_cores) {
   std::ostringstream oss;
   oss << "Requested threads (" << requested << ") exceeds maximum available cores ("
       << max_cores << "). Using " << max_cores << " threads.";
+  return oss.str();
+}
+
+std::string warning_benchmark_high_cv(const std::string& metric_name,
+                                      double cv_pct,
+                                      double threshold_pct) {
+  std::ostringstream oss;
+  oss << std::fixed << std::setprecision(1)
+      << metric_name << " CV " << cv_pct << "% exceeds the "
+      << threshold_pct << "% repeatability warning threshold";
   return oss.str();
 }
 

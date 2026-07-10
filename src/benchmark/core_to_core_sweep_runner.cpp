@@ -100,8 +100,7 @@ CoreToCoreLatencyConfig build_run_config(const CoreToCoreLatencyConfig& base_con
   return run_config;
 }
 
-void append_assignments_recursive(const CoreToCoreLatencyConfig& config,
-                                  size_t spec_index,
+void append_assignments_recursive(const CoreToCoreLatencyConfig& config, size_t spec_index,
                                   std::vector<CoreToCoreSweepAssignment>& current,
                                   std::vector<std::vector<CoreToCoreSweepAssignment>>& out_assignments) {
   if (spec_index == config.sweep_specs.size()) {
@@ -123,6 +122,25 @@ std::vector<std::vector<CoreToCoreSweepAssignment>> build_assignments(const Core
   std::vector<CoreToCoreSweepAssignment> current;
   append_assignments_recursive(config, 0, current, assignments);
   return assignments;
+}
+
+void update_sweep_output(nlohmann::ordered_json& output_json, const nlohmann::ordered_json& runs_json,
+                         const std::string& status, size_t planned_runs, double elapsed_seconds) {
+  size_t completed_runs = 0;
+  for (const nlohmann::ordered_json& run_json : runs_json) {
+    if (run_json.contains("result") && run_json["result"].contains("core_to_core_latency") &&
+        run_json["result"]["core_to_core_latency"].value("status", "failed") == "complete") {
+      ++completed_runs;
+    }
+  }
+  output_json["status"] = status;
+  output_json["planned_runs"] = planned_runs;
+  output_json["completed_runs"] = completed_runs;
+  output_json["conclusions_valid"] = status == "complete" && completed_runs == planned_runs;
+  output_json["runs"] = runs_json;
+  output_json[JsonKeys::EXECUTION_TIME_SEC] = elapsed_seconds;
+  output_json[JsonKeys::TIMESTAMP] = build_utc_timestamp();
+  output_json[JsonKeys::VERSION] = SOFTVERSION;
 }
 
 }  // namespace
@@ -158,15 +176,18 @@ int run_core_to_core_latency_sweep(const CoreToCoreLatencyConfig& base_config) {
   total_timer.start();
 
   nlohmann::ordered_json output_json;
-  output_json[JsonKeys::CONFIGURATION] = {
-      {JsonKeys::MODE, Constants::SWEEP_JSON_MODE_NAME},
-      {"base_mode", Constants::CORE_TO_CORE_JSON_MODE_NAME},
-      {"run_count", run_count},
-      {"sweep_max_runs", base_config.sweep_max_runs},
-      {"sweep_parameters", build_sweep_parameters_json(base_config)}};
+  output_json[JsonKeys::CONFIGURATION] = {{JsonKeys::MODE, Constants::SWEEP_JSON_MODE_NAME},
+                                          {"base_mode", Constants::CORE_TO_CORE_JSON_MODE_NAME},
+                                          {"run_count", run_count},
+                                          {"sweep_max_runs", base_config.sweep_max_runs},
+                                          {"sweep_parameters", build_sweep_parameters_json(base_config)}};
 
   nlohmann::ordered_json runs_json = nlohmann::ordered_json::array();
   const std::vector<std::vector<CoreToCoreSweepAssignment>> assignments = build_assignments(base_config);
+  std::filesystem::path file_path(base_config.output_file);
+  if (file_path.is_relative()) {
+    file_path = std::filesystem::current_path() / file_path;
+  }
   for (size_t i = 0; i < assignments.size(); ++i) {
     if (signal_received()) {
       std::cout << Messages::msg_interrupted_by_user() << std::endl;
@@ -176,28 +197,37 @@ int run_core_to_core_latency_sweep(const CoreToCoreLatencyConfig& base_config) {
     std::cout << Messages::msg_sweep_run_progress(i + 1, assignments.size()) << std::endl;
     CoreToCoreLatencyConfig run_config = build_run_config(base_config, assignments[i]);
     nlohmann::ordered_json result_json;
-    if (run_core_to_core_latency_collect(run_config, result_json) != EXIT_SUCCESS) {
-      restore_signal_mask();
-      return EXIT_FAILURE;
-    }
+    const int run_result = run_core_to_core_latency_collect(run_config, result_json);
 
     nlohmann::ordered_json run_json;
     run_json["index"] = i;
     run_json["parameters"] = build_assignment_json(assignments[i]);
     run_json["result"] = result_json;
     runs_json.push_back(run_json);
+
+    if (run_result != EXIT_SUCCESS) {
+      update_sweep_output(output_json, runs_json, "failed", run_count, total_timer.stop());
+      (void)write_json_to_file(file_path, output_json, false);
+      restore_signal_mask();
+      return EXIT_FAILURE;
+    }
+
+    const bool interrupted_now = signal_received();
+    update_sweep_output(output_json, runs_json, interrupted_now ? "interrupted" : "partial", run_count,
+                        total_timer.stop());
+    if (write_json_to_file(file_path, output_json, false) != EXIT_SUCCESS) {
+      restore_signal_mask();
+      return EXIT_FAILURE;
+    }
+    if (interrupted_now) {
+      break;
+    }
   }
 
   const double total_elapsed_sec = total_timer.stop();
-  output_json["runs"] = runs_json;
-  output_json[JsonKeys::EXECUTION_TIME_SEC] = total_elapsed_sec;
-  output_json[JsonKeys::TIMESTAMP] = build_utc_timestamp();
-  output_json[JsonKeys::VERSION] = SOFTVERSION;
-
-  std::filesystem::path file_path(base_config.output_file);
-  if (file_path.is_relative()) {
-    file_path = std::filesystem::current_path() / file_path;
-  }
+  const bool sweep_complete = runs_json.size() == assignments.size() && !signal_received();
+  update_sweep_output(output_json, runs_json, sweep_complete ? "complete" : "interrupted", run_count,
+                      total_elapsed_sec);
 
   restore_signal_mask();
   const int write_result = write_json_to_file(file_path, output_json);

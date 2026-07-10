@@ -38,6 +38,25 @@
 #include "benchmark/benchmark_runner.h"  // BenchmarkStatistics, BenchmarkResults
 #include "core/config/config.h"           // BenchmarkConfig
 
+namespace {
+
+void append_measured_value(std::vector<double>& values,
+                           const BenchmarkMeasurement& measurement) {
+  if (measurement.is_measured()) {
+    values.push_back(*measurement.value);
+  }
+}
+
+void append_measurement_samples(std::vector<double>& samples,
+                                const BenchmarkMeasurement& measurement) {
+  if (measurement.is_measured() && !measurement.samples.empty()) {
+    samples.insert(samples.end(), measurement.samples.begin(),
+                   measurement.samples.end());
+  }
+}
+
+}  // namespace
+
 /**
  * @brief Initialize statistics structure by clearing and pre-allocating vectors.
  *
@@ -66,6 +85,13 @@
  * @see collect_loop_results() which populates the initialized structure
  */
 void initialize_statistics(BenchmarkStatistics& stats, const BenchmarkConfig& config) {
+  stats.status = BenchmarkRunStatus::NotStarted;
+  stats.status_reason.clear();
+  stats.planned_loops = config.loop_count > 0 ? static_cast<size_t>(config.loop_count) : 0;
+  stats.completed_loops = 0;
+  stats.planned_measurements = 0;
+  stats.completed_measurements = 0;
+  stats.loop_results.clear();
   // Initialize result vectors
   stats.all_read_bw_gb_s.clear();
   stats.all_write_bw_gb_s.clear();
@@ -95,6 +121,7 @@ void initialize_statistics(BenchmarkStatistics& stats, const BenchmarkConfig& co
 
   // Pre-allocate vector space if needed
   if (config.loop_count > 0) {
+    stats.loop_results.reserve(static_cast<size_t>(config.loop_count));
     stats.all_read_bw_gb_s.reserve(config.loop_count);
     stats.all_write_bw_gb_s.reserve(config.loop_count);
     stats.all_copy_bw_gb_s.reserve(config.loop_count);
@@ -165,65 +192,79 @@ void initialize_statistics(BenchmarkStatistics& stats, const BenchmarkConfig& co
  * @see BenchmarkResults for loop results structure
  */
 void collect_loop_results(BenchmarkStatistics& stats, const BenchmarkResults& loop_results, const BenchmarkConfig& config) {
-  const bool main_latency_enabled = (!config.only_bandwidth && config.buffer_size > 0 && config.lat_num_accesses > 0);
+  const bool main_latency_enabled =
+      (!config.only_bandwidth && config.buffer_size > 0 && config.lat_num_accesses > 0);
+
+  stats.loop_results.push_back(loop_results);
+  stats.planned_measurements += loop_results.planned_measurements;
+  stats.completed_measurements += loop_results.completed_measurements;
+  if (loop_results.status == BenchmarkRunStatus::Complete) {
+    ++stats.completed_loops;
+  }
 
   // Store results for this loop
-  stats.all_read_bw_gb_s.push_back(loop_results.read_bw_gb_s);
-  stats.all_write_bw_gb_s.push_back(loop_results.write_bw_gb_s);
-  stats.all_copy_bw_gb_s.push_back(loop_results.copy_bw_gb_s);
+  append_measured_value(stats.all_read_bw_gb_s, loop_results.main_read_bandwidth);
+  append_measured_value(stats.all_write_bw_gb_s, loop_results.main_write_bandwidth);
+  append_measured_value(stats.all_copy_bw_gb_s, loop_results.main_copy_bandwidth);
   if (config.use_custom_cache_size) {
     if (config.custom_buffer_size > 0) {
-      stats.all_custom_latency_ns.push_back(loop_results.custom_latency_ns);
-      stats.all_custom_read_bw_gb_s.push_back(loop_results.custom_read_bw_gb_s);
-      stats.all_custom_write_bw_gb_s.push_back(loop_results.custom_write_bw_gb_s);
-      stats.all_custom_copy_bw_gb_s.push_back(loop_results.custom_copy_bw_gb_s);
+      append_measured_value(stats.all_custom_latency_ns, loop_results.custom_latency);
+      append_measured_value(stats.all_custom_read_bw_gb_s,
+                            loop_results.custom_read_bandwidth);
+      append_measured_value(stats.all_custom_write_bw_gb_s,
+                            loop_results.custom_write_bandwidth);
+      append_measured_value(stats.all_custom_copy_bw_gb_s,
+                            loop_results.custom_copy_bandwidth);
     }
   } else {
     if (config.l1_buffer_size > 0) {
-      stats.all_l1_latency_ns.push_back(loop_results.l1_latency_ns);
-      stats.all_l1_read_bw_gb_s.push_back(loop_results.l1_read_bw_gb_s);
-      stats.all_l1_write_bw_gb_s.push_back(loop_results.l1_write_bw_gb_s);
-      stats.all_l1_copy_bw_gb_s.push_back(loop_results.l1_copy_bw_gb_s);
+      append_measured_value(stats.all_l1_latency_ns, loop_results.l1_latency);
+      append_measured_value(stats.all_l1_read_bw_gb_s,
+                            loop_results.l1_read_bandwidth);
+      append_measured_value(stats.all_l1_write_bw_gb_s,
+                            loop_results.l1_write_bandwidth);
+      append_measured_value(stats.all_l1_copy_bw_gb_s,
+                            loop_results.l1_copy_bandwidth);
     }
     if (config.l2_buffer_size > 0) {
-      stats.all_l2_latency_ns.push_back(loop_results.l2_latency_ns);
-      stats.all_l2_read_bw_gb_s.push_back(loop_results.l2_read_bw_gb_s);
-      stats.all_l2_write_bw_gb_s.push_back(loop_results.l2_write_bw_gb_s);
-      stats.all_l2_copy_bw_gb_s.push_back(loop_results.l2_copy_bw_gb_s);
+      append_measured_value(stats.all_l2_latency_ns, loop_results.l2_latency);
+      append_measured_value(stats.all_l2_read_bw_gb_s,
+                            loop_results.l2_read_bandwidth);
+      append_measured_value(stats.all_l2_write_bw_gb_s,
+                            loop_results.l2_write_bandwidth);
+      append_measured_value(stats.all_l2_copy_bw_gb_s,
+                            loop_results.l2_copy_bandwidth);
     }
   }
   if (main_latency_enabled) {
-    stats.all_average_latency_ns.push_back(loop_results.average_latency_ns);
-    if (loop_results.has_auto_tlb_breakdown) {
-      stats.all_tlb_hit_latency_ns.push_back(loop_results.tlb_hit_latency_ns);
-      stats.all_tlb_miss_latency_ns.push_back(loop_results.tlb_miss_latency_ns);
-      stats.all_page_walk_penalty_ns.push_back(loop_results.page_walk_penalty_ns);
-    }
+    append_measured_value(stats.all_average_latency_ns, loop_results.main_latency);
+    append_measured_value(stats.all_tlb_hit_latency_ns,
+                          loop_results.locality_16k_latency);
+    append_measured_value(stats.all_tlb_miss_latency_ns,
+                          loop_results.global_random_latency);
+    append_measured_value(stats.all_page_walk_penalty_ns,
+                          loop_results.locality_latency_delta);
   }
   
   // Collect latency samples from this loop
-  if (main_latency_enabled && !loop_results.latency_samples.empty()) {
-    stats.all_main_mem_latency_samples.insert(stats.all_main_mem_latency_samples.end(),
-                                               loop_results.latency_samples.begin(),
-                                               loop_results.latency_samples.end());
+  if (main_latency_enabled) {
+    append_measurement_samples(stats.all_main_mem_latency_samples,
+                               loop_results.main_latency);
   }
   
   if (config.use_custom_cache_size) {
-    if (config.custom_buffer_size > 0 && !loop_results.custom_latency_samples.empty()) {
-      stats.all_custom_latency_samples.insert(stats.all_custom_latency_samples.end(),
-                                             loop_results.custom_latency_samples.begin(),
-                                             loop_results.custom_latency_samples.end());
+    if (config.custom_buffer_size > 0) {
+      append_measurement_samples(stats.all_custom_latency_samples,
+                                 loop_results.custom_latency);
     }
   } else {
-    if (config.l1_buffer_size > 0 && !loop_results.l1_latency_samples.empty()) {
-      stats.all_l1_latency_samples.insert(stats.all_l1_latency_samples.end(),
-                                           loop_results.l1_latency_samples.begin(),
-                                           loop_results.l1_latency_samples.end());
+    if (config.l1_buffer_size > 0) {
+      append_measurement_samples(stats.all_l1_latency_samples,
+                                 loop_results.l1_latency);
     }
-    if (config.l2_buffer_size > 0 && !loop_results.l2_latency_samples.empty()) {
-      stats.all_l2_latency_samples.insert(stats.all_l2_latency_samples.end(),
-                                           loop_results.l2_latency_samples.begin(),
-                                           loop_results.l2_latency_samples.end());
+    if (config.l2_buffer_size > 0) {
+      append_measurement_samples(stats.all_l2_latency_samples,
+                                 loop_results.l2_latency);
     }
   }
 }

@@ -271,8 +271,8 @@ int run_pattern_sweep_point(BenchmarkConfig& run_config, nlohmann::ordered_json&
 
   if (run_config.loop_count == 1) {
     print_pattern_results(extract_pattern_results_at(stats, 0));
-  } else if (!stats.all_forward_read_bw.empty()) {
-    print_pattern_results(extract_pattern_results_at(stats, stats.all_forward_read_bw.size() - 1));
+  } else if (!stats.loop_results.empty()) {
+    print_pattern_results(extract_pattern_median_results(stats));
     print_pattern_statistics(run_config.loop_count, stats);
   }
 

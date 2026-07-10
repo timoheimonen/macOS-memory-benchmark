@@ -121,12 +121,16 @@ def parse_text_statistics(path: Path, metric: str):
     section_aliases = {
         "L1 Cache": "l1",
         "L2 Cache": "l2",
-        "TLB Hit Latency (ns)": "tlb_hit",
-        "TLB Miss Latency (ns)": "tlb_miss",
-        "Estimated Page-Walk Penalty (ns)": "page_walk_penalty",
+        "16 KiB Locality Latency (ns)": "locality_16k",
+        "Global-Random Latency (ns)": "global_random",
+        "Locality Latency Delta, Global - 16 KiB (ns)": "locality_delta",
+        # Historical pre-schema-2 console labels remain readable.
+        "TLB Hit Latency (ns)": "locality_16k",
+        "TLB Miss Latency (ns)": "global_random",
+        "Estimated Page-Walk Penalty (ns)": "locality_delta",
     }
 
-    results = {"l1": {}, "l2": {}, "tlb_hit": {}, "tlb_miss": {}, "page_walk_penalty": {}}
+    results = {"l1": {}, "l2": {}, "locality_16k": {}, "global_random": {}, "locality_delta": {}}
     current_section = None
 
     for raw_line in path.read_text(encoding="utf-8", errors="replace").splitlines():
@@ -162,17 +166,17 @@ def parse_text_statistics(path: Path, metric: str):
     categories = [
         "L1 Cache",
         "L2 Cache",
-        "Main Memory\n(TLB Hit)",
-        "Main Memory\n(TLB Miss)",
+        "Main Memory\n(16 KiB locality)",
+        "Main Memory\n(Global random)",
     ]
     latencies = [
         require_metric("l1", "L1 Cache"),
         require_metric("l2", "L2 Cache"),
-        require_metric("tlb_hit", "TLB Hit Latency"),
-        require_metric("tlb_miss", "TLB Miss Latency"),
+        require_metric("locality_16k", "16 KiB locality latency"),
+        require_metric("global_random", "Global-random latency"),
     ]
-    penalty = require_metric("page_walk_penalty", "Estimated Page-Walk Penalty")
-    return infer_cpu_name_from_path(path), categories, latencies, penalty, None
+    delta = require_metric("locality_delta", "Locality latency delta")
+    return infer_cpu_name_from_path(path), categories, latencies, delta, None
 
 
 def load_latency_data(path: Path, metric: str):
@@ -188,39 +192,50 @@ def load_latency_data(path: Path, metric: str):
     if version is not None:
         version = str(version)
 
+    schema_version = config.get("benchmark_schema_version")
     try:
-        l1_block = data["cache"]["l1"]["latency"]["average_ns"]
-        l2_block = data["cache"]["l2"]["latency"]["average_ns"]
-        tlb = data["main_memory"]["latency"]["auto_tlb_breakdown"]
-        hit_block = tlb["tlb_hit_ns"]
-        miss_block = tlb["tlb_miss_ns"]
-        penalty_block = tlb["page_walk_penalty_ns"]
+        if schema_version == 2:
+            if not data.get("results_complete", False):
+                raise RuntimeError("Standard benchmark JSON is incomplete (results_complete is false).")
+            l1_block = data["cache"]["l1"]["latency"]["headline_ns"]
+            l2_block = data["cache"]["l2"]["latency"]["headline_ns"]
+            locality = data["main_memory"]["latency"]["automatic_locality_comparison"]
+            hit_block = locality["locality_16k_latency_ns"]
+            miss_block = locality["global_random_latency_ns"]
+            penalty_block = locality["locality_latency_delta_ns"]
+        else:
+            l1_block = data["cache"]["l1"]["latency"]["average_ns"]
+            l2_block = data["cache"]["l2"]["latency"]["average_ns"]
+            tlb = data["main_memory"]["latency"]["auto_tlb_breakdown"]
+            hit_block = tlb["tlb_hit_ns"]
+            miss_block = tlb["tlb_miss_ns"]
+            penalty_block = tlb["page_walk_penalty_ns"]
     except (KeyError, TypeError) as exc:
         raise RuntimeError(
             "JSON is missing required fields for memory hierarchy plot. "
-            "Expected cache.l1/l2 latency and main_memory.latency.auto_tlb_breakdown."
+            "Expected schema-2 headline/locality fields or historical benchmark latency fields."
         ) from exc
 
     categories = [
         "L1 Cache",
         "L2 Cache",
-        "Main Memory\n(TLB Hit)",
-        "Main Memory\n(TLB Miss)",
+        "Main Memory\n(16 KiB locality)",
+        "Main Memory\n(Global random)",
     ]
     latencies = [
         pick_stat_or_values(l1_block, metric, "L1 latency"),
         pick_stat_or_values(l2_block, metric, "L2 latency"),
-        pick_stat_or_values(hit_block, metric, "TLB hit latency"),
-        pick_stat_or_values(miss_block, metric, "TLB miss latency"),
+        pick_stat_or_values(hit_block, metric, "16 KiB locality latency"),
+        pick_stat_or_values(miss_block, metric, "Global-random latency"),
     ]
-    penalty = pick_stat_or_values(penalty_block, metric, "Page-walk penalty")
-    return cpu_name, categories, latencies, penalty, version
+    delta = pick_stat_or_values(penalty_block, metric, "Locality latency delta")
+    return cpu_name, categories, latencies, delta, version
 
 
 def main():
     args = parse_args()
     input_path = resolve_input_path(args.file)
-    cpu_name, categories, latencies, page_walk_penalty, version = load_latency_data(input_path, args.metric)
+    cpu_name, categories, latencies, locality_delta, version = load_latency_data(input_path, args.metric)
     if args.cpu_name:
         cpu_name = args.cpu_name
 
@@ -258,7 +273,7 @@ def main():
     miss_x = 3
     miss_y = latencies[3]
     ax.annotate(
-        f"Page-Walk Penalty\n~{page_walk_penalty:.2f} ns",
+        f"Locality Delta\n~{locality_delta:.2f} ns",
         xy=(miss_x, miss_y),
         xycoords="data",
         xytext=(2.35, ymax * 0.58),

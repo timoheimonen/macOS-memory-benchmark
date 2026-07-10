@@ -16,6 +16,7 @@
 #include <gtest/gtest.h>
 #include "core/config/config.h"
 #include "core/config/constants.h"
+#include "core/system/system_info.h"
 #include <cstdlib>
 #include <limits>
 #include <cstdint>
@@ -32,6 +33,10 @@ TEST(ConfigTest, DefaultValues) {
             Constants::DEFAULT_LATENCY_TLB_LOCALITY_KB * Constants::BYTES_PER_KB);
   EXPECT_EQ(config.tlb_seed, 0u);
   EXPECT_FALSE(config.user_specified_tlb_seed);
+  EXPECT_EQ(config.pattern_seed, 0u);
+  EXPECT_FALSE(config.user_specified_pattern_seed);
+  EXPECT_EQ(config.benchmark_seed, 0u);
+  EXPECT_FALSE(config.user_specified_benchmark_seed);
   EXPECT_EQ(config.custom_cache_size_kb_ll, -1);
   EXPECT_FALSE(config.use_custom_cache_size);
 }
@@ -421,6 +426,85 @@ TEST(ConfigTest, ParseAnalyzeTlbRejectsDuplicateSeed) {
       "program", "--analyze-tlb", "--seed", "42", "--seed", "43"};
 
   EXPECT_EQ(parse_arguments(6, const_cast<char**>(argv), config), EXIT_FAILURE);
+}
+
+TEST(ConfigTest, ParsePatternsWithExplicitSeedSucceeds) {
+  BenchmarkConfig config;
+  const char* argv[] = {"program", "--patterns", "--seed", "18446744073709551615"};
+
+  EXPECT_EQ(parse_arguments(4, const_cast<char**>(argv), config), EXIT_SUCCESS);
+  EXPECT_EQ(config.pattern_seed, std::numeric_limits<uint64_t>::max());
+  EXPECT_TRUE(config.user_specified_pattern_seed);
+}
+
+TEST(ConfigTest, ParsePatternsGeneratesSeedWhenOmitted) {
+  BenchmarkConfig config;
+  const char* argv[] = {"program", "--patterns"};
+
+  EXPECT_EQ(parse_arguments(2, const_cast<char**>(argv), config), EXIT_SUCCESS);
+  EXPECT_NE(config.pattern_seed, 0u);
+  EXPECT_FALSE(config.user_specified_pattern_seed);
+}
+
+TEST(ConfigTest, ParseBenchmarkWithExplicitSeedSucceeds) {
+  BenchmarkConfig config;
+  const char* argv[] = {"program", "--benchmark", "--seed",
+                        "18446744073709551615"};
+
+  EXPECT_EQ(parse_arguments(4, const_cast<char**>(argv), config), EXIT_SUCCESS);
+  EXPECT_EQ(config.benchmark_seed, std::numeric_limits<uint64_t>::max());
+  EXPECT_TRUE(config.user_specified_benchmark_seed);
+  EXPECT_FALSE(config.user_specified_pattern_seed);
+}
+
+TEST(ConfigTest, ParseBenchmarkGeneratesSeedWhenOmitted) {
+  BenchmarkConfig config;
+  const char* argv[] = {"program", "--benchmark"};
+
+  EXPECT_EQ(parse_arguments(2, const_cast<char**>(argv), config), EXIT_SUCCESS);
+  EXPECT_NE(config.benchmark_seed, 0u);
+  EXPECT_FALSE(config.user_specified_benchmark_seed);
+}
+
+TEST(ConfigTest, ParsePatternsDefaultsToDetectedCoreCount) {
+  BenchmarkConfig config;
+  const char* argv[] = {"program", "--patterns"};
+
+  ASSERT_EQ(parse_arguments(2, const_cast<char**>(argv), config), EXIT_SUCCESS);
+  EXPECT_EQ(config.num_threads, get_total_logical_cores());
+  EXPECT_FALSE(config.user_specified_threads);
+}
+
+TEST(ConfigTest, ParsePatternsHonorsExplicitThreadCount) {
+  BenchmarkConfig config;
+  const char* argv[] = {"program", "--patterns", "--threads", "1"};
+
+  ASSERT_EQ(parse_arguments(4, const_cast<char**>(argv), config), EXIT_SUCCESS);
+  EXPECT_EQ(config.num_threads, 1);
+  EXPECT_TRUE(config.user_specified_threads);
+}
+
+TEST(ConfigTest, ParsePatternsRejectsDuplicateSeed) {
+  BenchmarkConfig config;
+  const char* argv[] = {
+      "program", "--patterns", "--seed", "42", "--seed", "43"};
+
+  EXPECT_EQ(parse_arguments(6, const_cast<char**>(argv), config), EXIT_FAILURE);
+}
+
+TEST(ConfigTest, ParsePatternsRejectsInvalidSeed) {
+  BenchmarkConfig config;
+  const char* argv[] = {"program", "--patterns", "--seed", "42x"};
+
+  EXPECT_EQ(parse_arguments(4, const_cast<char**>(argv), config), EXIT_FAILURE);
+}
+
+TEST(ConfigTest, ValidateConfigRejectsPatternSeedWithoutPatterns) {
+  BenchmarkConfig config;
+  config.pattern_seed = 42;
+  config.user_specified_pattern_seed = true;
+
+  EXPECT_EQ(validate_config(config), EXIT_FAILURE);
 }
 
 TEST(ConfigTest, ParseAnalyzeTlbWithOutputFirstSucceeds) {

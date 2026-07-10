@@ -21,6 +21,11 @@ Supported bandwidth targets include:
 Bandwidth results are reported in GB/s. These results are useful for comparing throughput behavior across buffer sizes,
 thread counts, access modes, and system conditions.
 
+When `--iterations` is omitted, each target/operation uses an excluded same-shape pilot and bounded correction to select
+a measured pass count near 150 ms. The exact pass count, finalized worker boundaries, and payload accounting are reused
+across `--count` loops. Explicit `--iterations` remains an exact override. Read/write/copy order and enabled phase order
+rotate across repeated loops. Worker QoS is a best-effort scheduler hint; it is not core pinning.
+
 ## Memory Latency
 
 The tool measures latency using dependent pointer-chase chains. This approach serializes memory accesses so that each
@@ -35,6 +40,17 @@ Latency tests can target:
 - Custom locality windows via `--latency-tlb-locality-kb`
 
 Latency results are reported in nanoseconds per access.
+
+Every standard main/L1/L2/custom headline comes from one continuous pointer chase calibrated near 250 ms, evaluated
+against a 100–300 ms window, and rounded to complete chain cycles. Optional sample windows run separately and continue from one window's terminal pointer to the
+next. A resolved `--seed` reproduces chain and schedule metadata across loops, not performance values. When locality is
+not explicit, the standard benchmark reports a paired 16 KiB-locality/global-random comparison and median same-round
+delta. That result combines cache, locality, and translation effects; only `--analyze-tlb` supports controlled
+translation-boundary conclusions.
+
+Standard schema-v2 JSON records completion, nullable measurement state, exact work, calibration, seed, schedule, and
+requested/effective worker metadata. Only measured values enter median/CV/MAD summaries. Output is atomically
+checkpointed after completed loops, and `results_complete` lets consumers reject partial runs.
 
 ## Access Pattern Analysis
 
@@ -128,22 +144,30 @@ Supported sweep targets include:
 
 Multiple `--sweep` options are combined as a Cartesian product. `--sweep-max-runs` caps the generated run count (default
 `16` for `--analyze-tlb`, `256` otherwise), and
-`--output` is required for the combined JSON result.
+`--output` is required for the combined JSON result. A sweep parameter key may appear only once. Combined sweep JSON is
+atomically checkpointed after each run and exposes status, planned/completed run counts, and conclusion validity.
 
 ## Core-to-Core Cache-Line Handoff
 
 The standalone core-to-core mode, `--analyze-core2core`, measures two-thread cache-line handoff behavior using a ping-pong
-style benchmark.
+style benchmark. Each scheduler-hint scenario uses an excluded pilot after a 1,000,000-round-trip calibration warmup to
+resolve a 25 ms final warmup, a 250 ms continuous headline, and 1 ms sample windows while retaining minimum work. The
+scenario order rotates across repeated loops to balance position effects. Core-to-core mode defaults to three loops, so
+the bare command produces a median plus CV/MAD; the 1,000 approximately 1 ms sample windows per scenario/loop make this
+default intentionally longer than the former single-loop run.
 
 It reports:
 
-- Round-trip latency
+- Median P50 round-trip latency across completed continuous loop windows
 - One-way latency estimate
-- Percentile statistics
+- Headline repeatability statistics including CV/MAD and a 7.5% CV warning
+- A separate pooled sample-window percentile distribution
 - Scheduler-affinity hint scenarios
+- Schema-2 work plans, per-loop audit records, completion metadata, and affinity-comparison interpretability
 
 On macOS, user-space programs cannot guarantee exact physical core pinning. For that reason, core-to-core results should
 be interpreted as scheduler-influenced cache-line handoff measurements rather than strict physical-core topology probes.
+Unavailable measurements carry status/reason and nullable values rather than numeric zeroes.
 
 ## Interpretation Notes
 

@@ -101,7 +101,7 @@ bool is_option(const std::string& arg, const char* short_option, const char* lon
   return arg == short_option || arg == long_option;
 }
 
-uint64_t generate_tlb_seed() {
+uint64_t generate_seed() {
   try {
     std::random_device random_device;
     const uint64_t high = static_cast<uint64_t>(random_device()) << 32U;
@@ -599,7 +599,7 @@ int parse_arguments(int argc, char* argv[], BenchmarkConfig& config) {
     }
 
     if (!seed_seen) {
-      config.tlb_seed = generate_tlb_seed();
+      config.tlb_seed = generate_seed();
     }
     config.cpu_name = get_processor_name();
     config.macos_version = get_macos_version();
@@ -682,6 +682,8 @@ int parse_arguments(int argc, char* argv[], BenchmarkConfig& config) {
   bool latency_tlb_locality_seen = false;
   bool threads_seen = false;
   bool output_seen = false;
+  bool seed_seen = false;
+  uint64_t parsed_general_seed = 0;
   bool sweep_max_runs_seen = false;
 
   for (int i = 1; i < argc; ++i) {
@@ -829,6 +831,24 @@ int parse_arguments(int argc, char* argv[], BenchmarkConfig& config) {
           // Error: Missing required value
           throw std::invalid_argument(Messages::error_missing_value(OPT_OUTPUT_LONG));
         output_seen = true;
+      } else if (arg == OPT_SEED_LONG) {
+        if (seed_seen)
+          throw std::invalid_argument(Messages::error_duplicate_option(OPT_SEED_LONG));
+        if (++i < argc) {
+          const std::string seed_value = argv[i];
+          if (!seed_value.empty() && seed_value.front() == '-') {
+            throw std::out_of_range("must be an unsigned 64-bit integer");
+          }
+          size_t parsed_characters = 0;
+          const unsigned long long parsed_seed = std::stoull(seed_value, &parsed_characters);
+          if (parsed_characters != seed_value.size()) {
+            throw std::invalid_argument("must be an unsigned 64-bit integer");
+          }
+          parsed_general_seed = static_cast<uint64_t>(parsed_seed);
+        } else {
+          throw std::invalid_argument(Messages::error_missing_value(OPT_SEED_LONG));
+        }
+        seed_seen = true;
       } else if (is_option(arg, OPT_BENCHMARK_SHORT, OPT_BENCHMARK_LONG)) {
         config.run_benchmark = true;
         if (config.run_patterns) {
@@ -903,6 +923,20 @@ int parse_arguments(int argc, char* argv[], BenchmarkConfig& config) {
   if (requested_latency_tlb_locality_kb_ll != -1) {
     config.latency_tlb_locality_bytes =
         static_cast<size_t>(requested_latency_tlb_locality_kb_ll) * Constants::BYTES_PER_KB;
+  }
+
+  if (seed_seen) {
+    if (config.run_benchmark) {
+      config.benchmark_seed = parsed_general_seed;
+      config.user_specified_benchmark_seed = true;
+    } else {
+      config.pattern_seed = parsed_general_seed;
+      config.user_specified_pattern_seed = true;
+    }
+  } else if (config.run_patterns) {
+    config.pattern_seed = generate_seed();
+  } else if (config.run_benchmark) {
+    config.benchmark_seed = generate_seed();
   }
 
   return EXIT_SUCCESS;  // All arguments parsed successfully

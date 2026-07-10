@@ -151,6 +151,18 @@ extern "C" {
     uint64_t memory_read_strided_loop_asm(const void* src, size_t byteCount, size_t stride, size_t num_iterations);
 
     /**
+     * @brief Execute complete strided passes while rotating the 32-byte phase
+     * @param src Source buffer pointer
+     * @param byteCount Finalized worker span in bytes
+     * @param stride Stride size in bytes between accesses
+     * @param passes Number of complete phase-rotated passes
+     * @param initial_phase Initial byte phase in [0, stride)
+     * @return Checksum of read data
+     */
+    uint64_t memory_read_strided_phased_loop_asm(const void* src, size_t byteCount, size_t stride,
+                                                  size_t passes, size_t initial_phase);
+
+    /**
      * @brief Optimized strided memory read loop for 64-byte stride
      * @param src Source buffer pointer
      * @param byteCount Total buffer size in bytes (for modulo wrapping)
@@ -196,6 +208,12 @@ extern "C" {
     void memory_write_strided_loop_asm(void* dst, size_t byteCount, size_t stride, size_t num_iterations);
 
     /**
+     * @brief Execute complete strided write passes while rotating the 32-byte phase
+     */
+    void memory_write_strided_phased_loop_asm(void* dst, size_t byteCount, size_t stride,
+                                               size_t passes, size_t initial_phase);
+
+    /**
      * @brief Optimized strided memory write loop for 64-byte stride
      * @param dst Destination buffer pointer
      * @param byteCount Total buffer size in bytes (for modulo wrapping)
@@ -236,6 +254,12 @@ extern "C" {
      * @param num_iterations Number of strided accesses to perform
      */
     void memory_copy_strided_loop_asm(void* dst, const void* src, size_t byteCount, size_t stride, size_t num_iterations);
+
+    /**
+     * @brief Execute complete strided copy passes while rotating the 32-byte phase
+     */
+    void memory_copy_strided_phased_loop_asm(void* dst, const void* src, size_t byteCount,
+                                              size_t stride, size_t passes, size_t initial_phase);
 
     /**
      * @brief Optimized strided memory copy loop for 64-byte stride

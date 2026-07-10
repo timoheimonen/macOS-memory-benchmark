@@ -41,6 +41,9 @@ struct CoreToCoreLatencyJsonContext {
   size_t sample_window_round_trips;
   const std::vector<CoreToCoreLatencyScenarioResult>& scenario_results;
   double total_execution_time_sec;
+  std::string status = "complete";
+  size_t planned_measurements = 0;
+  size_t completed_measurements = 0;
 };
 
 nlohmann::ordered_json build_core_to_core_latency_json(const CoreToCoreLatencyJsonContext& context);

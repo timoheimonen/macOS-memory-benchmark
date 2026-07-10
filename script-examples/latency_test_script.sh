@@ -117,7 +117,7 @@ done
 
 echo ""
 echo "=========================================="
-echo "Extracting samples_ns.statistics from output files..."
+echo "Extracting separate latency-sample statistics from output files..."
 echo ""
 
 # Output file for aggregated statistics (in script directory)
@@ -126,18 +126,20 @@ final_output="${SCRIPT_DIR}/final_output.txt"
 # Clear/create the final output file
 > "${final_output}"
 
-# Function to extract samples_ns.statistics using jq
+# Function to extract schema-2 pooled sample statistics (with historical fallback)
 extract_with_jq() {
     local json_file=$1
     local cache_size=$2
     local tlb_kb=$3
     echo "TLB Locality: ${tlb_kb} KB, Cache Size: ${cache_size} KB" >> "${final_output}"
     echo "----------------------------------------" >> "${final_output}"
-    jq '.cache.custom.latency.samples_ns.statistics' "${json_file}" >> "${final_output}"
+    jq 'if .configuration.benchmark_schema_version == 2 then
+          .cache.custom.latency.headline_ns.pooled_sample_distribution.statistics
+        else .cache.custom.latency.samples_ns.statistics end' "${json_file}" >> "${final_output}"
     echo "" >> "${final_output}"
 }
 
-# Function to extract samples_ns.statistics using Python
+# Function to extract schema-2 pooled sample statistics (with historical fallback)
 extract_with_python() {
     local json_file=$1
     local cache_size=$2
@@ -150,7 +152,13 @@ import sys
 try:
     with open('${json_file}', 'r') as f:
         data = json.load(f)
-        stats = data['cache']['custom']['latency']['samples_ns']['statistics']
+        latency = data['cache']['custom']['latency']
+        if data.get('configuration', {}).get('benchmark_schema_version') == 2:
+            if not data.get('results_complete', False):
+                raise RuntimeError('incomplete benchmark result')
+            stats = latency['headline_ns']['pooled_sample_distribution']['statistics']
+        else:
+            stats = latency['samples_ns']['statistics']
         print(json.dumps(stats, indent=2))
 except Exception as e:
     print(f'Error: {e}', file=sys.stderr)
@@ -161,17 +169,17 @@ EOF
 
 # Check if jq is available, otherwise use Python
 if command -v jq &> /dev/null; then
-    echo "Using jq to extract samples_ns.statistics..."
+    echo "Using jq to extract latency sample statistics..."
     USE_JQ=true
 elif command -v python3 &> /dev/null; then
-    echo "Using Python to extract samples_ns.statistics..."
+    echo "Using Python to extract latency sample statistics..."
     USE_JQ=false
 else
-    echo "Error: Neither jq nor python3 is available. Cannot extract samples_ns.statistics."
+    echo "Error: Neither jq nor python3 is available. Cannot extract latency sample statistics."
     exit 1
 fi
 
-# Extract samples_ns.statistics from each output file
+# Extract latency sample statistics from each output file
 for tlb_kb in "${tlb_locality_sizes_kb[@]}"; do
     for cache_size in "${cache_sizes[@]}"; do
         output_file="${TMP_DIR}/output_tlb_${tlb_kb}_cache_${cache_size}.json"
@@ -189,7 +197,7 @@ for tlb_kb in "${tlb_locality_sizes_kb[@]}"; do
 done
 
 echo "=========================================="
-echo "All samples_ns.statistics extracted to ${final_output}"
+echo "All latency sample statistics extracted to ${final_output}"
 
 # Clear tmp folder after final_output.txt is created
 echo ""

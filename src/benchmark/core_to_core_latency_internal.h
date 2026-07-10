@@ -37,14 +37,32 @@ struct ScenarioDescriptor {
 };
 
 struct ScenarioMeasurement {
+  CoreToCoreMeasurementStatus status = CoreToCoreMeasurementStatus::NotRun;
+  std::string status_reason;
   double round_trip_ns = 0.0;
+  double headline_elapsed_seconds = 0.0;
+  std::string duration_quality;
   std::vector<double> samples_ns;
   ThreadHintStatus initiator_hint;
   ThreadHintStatus responder_hint;
 };
 
-bool execute_single_scenario(const ScenarioDescriptor& scenario,
-                             int sample_count,
-                             ScenarioMeasurement& out_measurement);
+struct CoreToCoreFailureInjection {
+  bool fail_timer_creation = false;
+  bool fail_responder_startup = false;
+  bool fail_initiator_startup = false;
+};
+
+size_t calculate_core_to_core_calibrated_round_trips(double pilot_elapsed_seconds, size_t pilot_round_trips,
+                                                     double target_duration_seconds, size_t minimum_round_trips,
+                                                     size_t maximum_round_trips);
+
+std::vector<size_t> build_core_to_core_scenario_order(size_t scenario_count, size_t loop_index);
+
+bool build_core_to_core_work_plan(double pilot_elapsed_seconds, CoreToCoreWorkPlan& out_plan);
+
+bool execute_single_scenario(const ScenarioDescriptor& scenario, const CoreToCoreWorkPlan& work_plan, int sample_count,
+                             ScenarioMeasurement& out_measurement,
+                             const CoreToCoreFailureInjection* failure_injection = nullptr);
 
 #endif  // CORE_TO_CORE_LATENCY_INTERNAL_H

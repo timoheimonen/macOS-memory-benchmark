@@ -22,6 +22,7 @@
 #include <fstream>
 #include <string>
 #include <unistd.h>
+#include <utility>
 #include <vector>
 
 #include "benchmark/core_to_core_latency_json.h"
@@ -142,15 +143,276 @@ TEST(JsonSchemaTest, BenchmarkExporterIncludesBenchmarkModeAndOmitsEmptySections
   std::filesystem::remove(config.output_file);
 }
 
+TEST(JsonSchemaTest, BenchmarkSchemaV2IncludesCompletionAndNullableMeasurements) {
+  BenchmarkConfig config;
+  config.output_file = make_temp_json_path("benchmark_v2").string();
+  config.run_benchmark = true;
+  config.only_bandwidth = true;
+  config.buffer_size = 4096;
+  config.buffer_size_mb = 1;
+  config.benchmark_seed = 18446744073709551615ULL;
+  config.user_specified_benchmark_seed = true;
+
+  BenchmarkResults loop;
+  loop.status = BenchmarkRunStatus::Partial;
+  loop.status_reason = "interrupted by user";
+  loop.loop_index = 0;
+  loop.planned_phases = 1;
+  loop.completed_phases = 0;
+  loop.planned_measurements = 3;
+  loop.completed_measurements = 1;
+  loop.planned_phase_order = {"main-bandwidth"};
+  loop.realized_phase_order = {"main-bandwidth"};
+  set_measurement_value(loop.main_read_bandwidth, 12.5, 0.150);
+  loop.main_read_bandwidth.target = "main-memory";
+  loop.main_read_bandwidth.operation = "read";
+  loop.main_read_bandwidth.work_policy = "automatic-duration-calibration";
+  loop.main_read_bandwidth.automatic_calibration = true;
+  loop.main_read_bandwidth.duration_within_target = true;
+  loop.main_read_bandwidth.duration_quality = "within-target-window";
+  loop.main_read_bandwidth.pilot_elapsed_seconds = 0.010;
+  loop.main_read_bandwidth.buffer_size_bytes = 4096;
+  loop.main_read_bandwidth.passes = 16;
+  loop.main_read_bandwidth.exact_payload_bytes = 65536;
+  loop.main_read_bandwidth.requested_threads = 4;
+  loop.main_read_bandwidth.effective_threads = 4;
+  loop.main_read_bandwidth.created_workers = 4;
+  loop.main_read_bandwidth.qos_outcome = "applied-to-all-workers";
+  loop.main_read_bandwidth.qos_successful_workers = 4;
+  set_measurement_unavailable(loop.main_write_bandwidth,
+                              BenchmarkMeasurementStatus::Interrupted,
+                              "interrupted during measured operation");
+
+  BenchmarkStatistics stats;
+  stats.status = BenchmarkRunStatus::Partial;
+  stats.status_reason = "interrupted by user";
+  stats.planned_loops = 2;
+  stats.completed_loops = 0;
+  stats.planned_measurements = 6;
+  stats.completed_measurements = 1;
+  stats.loop_results.push_back(loop);
+
+  ASSERT_EQ(save_results_to_json(config, stats, 1.0), EXIT_SUCCESS);
+  const nlohmann::json output = read_json_file(config.output_file);
+  EXPECT_EQ(output["configuration"]["benchmark_schema_version"], 2);
+  EXPECT_EQ(output["configuration"]["methodology_version"],
+            "benchmark-v2-calibrated-seeded-balanced");
+  EXPECT_DOUBLE_EQ(
+      output["configuration"]["latency_calibration_window_max_seconds"],
+      0.300);
+  EXPECT_EQ(output["configuration"]["benchmark_seed"],
+            "18446744073709551615");
+  EXPECT_EQ(output["status"], "partial");
+  EXPECT_FALSE(output["results_complete"].get<bool>());
+  EXPECT_EQ(output["planned_loops"], 2u);
+  ASSERT_EQ(output["loops"].size(), 1u);
+  const nlohmann::json measurements = output["loops"][0]["measurements"];
+  EXPECT_EQ(measurements["main_read_bandwidth"]["status"], "measured");
+  EXPECT_DOUBLE_EQ(measurements["main_read_bandwidth"]["value"].get<double>(),
+                   12.5);
+  EXPECT_EQ(measurements["main_read_bandwidth"]["passes"], 16u);
+  EXPECT_EQ(measurements["main_read_bandwidth"]["qos_outcome"],
+            "applied-to-all-workers");
+  EXPECT_EQ(measurements["main_read_bandwidth"]["qos_successful_workers"],
+            4u);
+  EXPECT_EQ(measurements["main_read_bandwidth"]["created_workers"], 4);
+  EXPECT_EQ(measurements["main_write_bandwidth"]["status"], "interrupted");
+  EXPECT_TRUE(measurements["main_write_bandwidth"]["value"].is_null());
+  EXPECT_EQ(output["main_memory"]["bandwidth"]["read_gb_s"]["value"], 12.5);
+  EXPECT_TRUE(output["main_memory"]["bandwidth"]["write_gb_s"]["value"].is_null());
+  EXPECT_FALSE(output.dump().find("page_walk_penalty_ns") != std::string::npos);
+
+  std::filesystem::remove(config.output_file);
+}
+
+TEST(JsonSchemaTest, BenchmarkAggregateHeadlineUsesMedianAndReportsCvAndMad) {
+  BenchmarkConfig config;
+  config.only_bandwidth = true;
+  config.buffer_size = 4096;
+  BenchmarkStatistics stats;
+  stats.status = BenchmarkRunStatus::Complete;
+  stats.planned_loops = 3;
+  stats.completed_loops = 3;
+  stats.planned_measurements = 9;
+  stats.completed_measurements = 9;
+  for (size_t index = 0; index < 3; ++index) {
+    BenchmarkResults loop;
+    loop.status = BenchmarkRunStatus::Complete;
+    loop.loop_index = index;
+    const double value = index == 0 ? 10.0 : index == 1 ? 20.0 : 100.0;
+    set_measurement_value(loop.main_read_bandwidth, value, 0.150);
+    loop.main_read_bandwidth.duration_within_target = true;
+    stats.loop_results.push_back(loop);
+  }
+
+  const nlohmann::json output = build_results_json(config, stats, 1.0);
+  const nlohmann::json aggregate =
+      output["main_memory"]["bandwidth"]["read_gb_s"];
+  EXPECT_DOUBLE_EQ(aggregate["value"].get<double>(), 20.0);
+  EXPECT_EQ(aggregate["headline_semantics"],
+            "median-p50-across-loop-headlines");
+  EXPECT_TRUE(aggregate["statistics"].contains(
+      "coefficient_of_variation_pct"));
+  EXPECT_TRUE(aggregate["statistics"].contains(
+      "median_absolute_deviation"));
+  EXPECT_DOUBLE_EQ(
+      aggregate["statistics"]["median_absolute_deviation"].get<double>(),
+      10.0);
+}
+
+TEST(JsonSchemaTest, BenchmarkCheckpointAtomicallyProgressesToComplete) {
+  BenchmarkConfig config;
+  config.output_file = make_temp_json_path("benchmark_checkpoint").string();
+  config.only_bandwidth = true;
+  config.only_latency = true;
+  BenchmarkStatistics stats;
+  stats.status = BenchmarkRunStatus::Partial;
+  stats.status_reason = "benchmark loops remain";
+  stats.planned_loops = 2;
+  stats.completed_loops = 1;
+
+  ASSERT_EQ(save_results_to_json(config, stats, 0.5, false), EXIT_SUCCESS);
+  nlohmann::json output = read_json_file(config.output_file);
+  EXPECT_EQ(output["status"], "partial");
+  EXPECT_FALSE(output["results_complete"].get<bool>());
+
+  stats.status = BenchmarkRunStatus::Complete;
+  stats.status_reason.clear();
+  stats.completed_loops = 2;
+  ASSERT_EQ(save_results_to_json(config, stats, 1.0, false), EXIT_SUCCESS);
+  output = read_json_file(config.output_file);
+  EXPECT_EQ(output["status"], "complete");
+  EXPECT_TRUE(output["results_complete"].get<bool>());
+  EXPECT_FALSE(std::filesystem::exists(config.output_file + ".tmp"));
+
+  std::filesystem::remove(config.output_file);
+}
+
 TEST(JsonSchemaTest, PatternExporterIncludesPatternsMode) {
   BenchmarkConfig config;
   config.output_file = make_temp_json_path("patterns_schema").string();
+  config.pattern_seed = 42;
+  config.user_specified_pattern_seed = true;
 
   PatternStatistics stats;
   ASSERT_EQ(save_pattern_results_to_json(config, stats, 2.0), EXIT_SUCCESS);
 
   const nlohmann::json output_json = read_json_file(config.output_file);
   EXPECT_EQ(output_json[JsonKeys::CONFIGURATION][JsonKeys::MODE], Constants::PATTERNS_JSON_MODE_NAME);
+  EXPECT_EQ(output_json[JsonKeys::CONFIGURATION]["methodology_version"],
+            "pattern-v2-phase-calibrated-seeded");
+  EXPECT_EQ(output_json[JsonKeys::CONFIGURATION]["pattern_seed"], "42");
+  EXPECT_EQ(output_json[JsonKeys::CONFIGURATION]["thread_selection_policy"],
+            "detected-core-count-default");
+
+  std::filesystem::remove(config.output_file);
+}
+
+TEST(JsonSchemaTest, PatternMeasurementsIncludeStatusAndMethodologyMetadata) {
+  BenchmarkConfig config;
+  config.output_file = make_temp_json_path("patterns_metadata").string();
+  config.pattern_seed = 18446744073709551615ULL;
+  config.user_specified_pattern_seed = true;
+
+  PatternResults loop;
+  PatternMeasurement measured;
+  measured.status = PatternMeasurementStatus::Measured;
+  measured.status_reason.clear();
+  measured.bandwidth_gb_s = 12.5;
+  measured.elapsed_seconds = 0.150;
+  measured.pilot_elapsed_seconds = 0.010;
+  measured.access_size_bytes = 32;
+  measured.requested_threads = 4;
+  measured.effective_threads = 4;
+  measured.accesses_per_pass = 100;
+  measured.min_accesses_per_pass = 100;
+  measured.max_accesses_per_pass = 100;
+  measured.passes = 10;
+  measured.total_accesses = 1000;
+  measured.total_payload_bytes = 32000;
+  measured.distinct_address_count = 100;
+  measured.logical_working_set_bytes = 4096;
+  measured.native_page_size_bytes = 16384;
+  measured.automatic_calibration = true;
+  measured.benchmark_loop_index = 3;
+  measured.pattern_order_index = 2;
+  set_pattern_measurement(loop, PatternKind::SequentialForward,
+                          PatternOperation::Read, measured);
+
+  PatternMeasurement phased = measured;
+  phased.stride_bytes = Constants::PATTERN_STRIDE_CACHE_LINE;
+  phased.accesses_per_pass = 2;
+  phased.min_accesses_per_pass = 1;
+  phased.max_accesses_per_pass = 2;
+  phased.phase_period_passes = 2;
+  set_pattern_measurement(loop, PatternKind::Strided64,
+                          PatternOperation::Read, std::move(phased));
+
+  for (PatternOperation operation : {PatternOperation::Read, PatternOperation::Write,
+                                     PatternOperation::Copy}) {
+    PatternMeasurement skipped;
+    skipped.status = PatternMeasurementStatus::Skipped;
+    skipped.status_reason = "buffer cannot provide a valid stride transition";
+    skipped.access_size_bytes = 32;
+    skipped.stride_bytes = Constants::PATTERN_STRIDE_SUPERPAGE_2MB;
+    skipped.requested_threads = 4;
+    skipped.native_page_size_bytes = 16384;
+    set_pattern_measurement(loop, PatternKind::Strided2MiB, operation,
+                            std::move(skipped));
+  }
+
+  PatternMeasurement random = measured;
+  random.has_seed = true;
+  random.seed = config.pattern_seed;
+  set_pattern_measurement(loop, PatternKind::Random, PatternOperation::Read,
+                          std::move(random));
+
+  PatternStatistics statistics;
+  statistics.loop_results.push_back(loop);
+  statistics.all_forward_read_bw.push_back(12.5);
+  statistics.all_random_read_bw.push_back(12.5);
+
+  ASSERT_EQ(save_pattern_results_to_json(config, statistics, 1.0), EXIT_SUCCESS);
+  const nlohmann::json output = read_json_file(config.output_file);
+  const nlohmann::json forward =
+      output[JsonKeys::PATTERNS][JsonKeys::SEQUENTIAL_FORWARD];
+  EXPECT_EQ(forward["methodology_version"],
+            "pattern-v2-phase-calibrated-seeded");
+  EXPECT_EQ(forward["warmup_semantics"], "steady-state-same-shape");
+  const nlohmann::json read =
+      forward[JsonKeys::BANDWIDTH][JsonKeys::READ_GB_S];
+  EXPECT_EQ(read["status"], "measured");
+  EXPECT_DOUBLE_EQ(read["value_gb_s"].get<double>(), 12.5);
+  ASSERT_EQ(read["measurements"].size(), 1u);
+  EXPECT_EQ(read["measurements"][0]["passes"], 10u);
+  EXPECT_EQ(read["measurements"][0]["accesses_per_pass_semantics"],
+            "constant-count");
+  EXPECT_EQ(read["measurements"][0]["total_payload_bytes"], 32000u);
+  EXPECT_EQ(read["measurements"][0]["benchmark_loop_index"], 3u);
+  EXPECT_EQ(read["measurements"][0]["pattern_order_index"], 2u);
+  EXPECT_EQ(output[JsonKeys::CONFIGURATION]["pattern_execution_order_policy"],
+            "cyclic-latin-square-across-count-loops");
+  const nlohmann::json phased_json =
+      output[JsonKeys::PATTERNS][JsonKeys::STRIDED_64][JsonKeys::BANDWIDTH]
+            [JsonKeys::READ_GB_S]["measurements"][0];
+  EXPECT_EQ(phased_json["accesses_per_pass_semantics"], "phase-zero-count");
+  EXPECT_EQ(phased_json["min_accesses_per_pass"], 1u);
+  EXPECT_EQ(phased_json["max_accesses_per_pass"], 2u);
+  EXPECT_EQ(phased_json["phase_period_passes"], 2u);
+
+  const nlohmann::json skipped = output[JsonKeys::PATTERNS][JsonKeys::STRIDED_2MB]
+      [JsonKeys::BANDWIDTH][JsonKeys::READ_GB_S];
+  EXPECT_EQ(skipped["status"], "skipped");
+  EXPECT_TRUE(skipped["value_gb_s"].is_null());
+  EXPECT_EQ(skipped["measurements"][0]["accesses_per_pass_semantics"],
+            "phase-zero-count");
+  EXPECT_FALSE(output[JsonKeys::PATTERNS][JsonKeys::STRIDED_2MB]
+                   ["large_page_backing_verified"]
+                       .get<bool>());
+
+  const nlohmann::json random_json =
+      output[JsonKeys::PATTERNS][JsonKeys::RANDOM];
+  EXPECT_EQ(random_json["seed"], "18446744073709551615");
 
   std::filesystem::remove(config.output_file);
 }
@@ -744,6 +1006,68 @@ TEST(JsonSchemaTest, CoreToCoreJsonBuilderReturnsInMemoryPayload) {
   EXPECT_TRUE(output_json.contains("core_to_core_latency"));
   EXPECT_EQ(output_json["core_to_core_latency"]["scenarios"][0]["name"],
             Constants::CORE_TO_CORE_SCENARIO_NO_AFFINITY);
+}
+
+TEST(JsonSchemaTest, CoreToCoreV2SerializesCalibratedBalancedAuditTrail) {
+  CoreToCoreLatencyConfig config;
+  config.loop_count = 1;
+  config.latency_sample_count = 2;
+
+  ThreadHintStatus initiator_hint;
+  initiator_hint.qos_applied = true;
+  initiator_hint.affinity_requested = true;
+  initiator_hint.affinity_applied = true;
+  initiator_hint.affinity_tag = 1;
+  ThreadHintStatus responder_hint = initiator_hint;
+
+  CoreToCoreLoopRecord loop_record;
+  loop_record.loop_index = 0;
+  loop_record.order_position = 1;
+  loop_record.status = CoreToCoreMeasurementStatus::Measured;
+  loop_record.round_trip_ns = 70.0;
+  loop_record.headline_elapsed_seconds = 0.250;
+  loop_record.duration_quality = "within-target-window";
+  loop_record.sample_start_index = 0;
+  loop_record.completed_sample_windows = 2;
+  loop_record.initiator_hint = initiator_hint;
+  loop_record.responder_hint = responder_hint;
+
+  CoreToCoreLatencyScenarioResult scenario;
+  scenario.scenario_name = Constants::CORE_TO_CORE_SCENARIO_SAME_AFFINITY;
+  scenario.loop_round_trip_ns = {70.0};
+  scenario.sample_round_trip_ns = {69.0, 71.0};
+  scenario.initiator_hint = initiator_hint;
+  scenario.responder_hint = responder_hint;
+  scenario.work_plan = {true, 100000, 0.007, 70.0, 350000, 3500000, 14000};
+  scenario.loop_records = {loop_record};
+  scenario.status = CoreToCoreMeasurementStatus::Measured;
+  scenario.planned_loops = 1;
+  scenario.completed_loops = 1;
+
+  const std::string cpu_name = "test-cpu";
+  const std::vector<CoreToCoreLatencyScenarioResult> scenarios = {scenario};
+  const CoreToCoreLatencyJsonContext context = {
+      config, cpu_name, 4, 6, 20000, 1000000, 2000, scenarios, 1.5,
+      "complete", 1, 1};
+
+  const nlohmann::json output = build_core_to_core_latency_json(context);
+  EXPECT_EQ(output[JsonKeys::CONFIGURATION]["schema_version"], 2);
+  EXPECT_EQ(output[JsonKeys::CONFIGURATION]["methodology_version"],
+            "core2core-v2-calibrated-balanced-auditable");
+  EXPECT_EQ(output[JsonKeys::CONFIGURATION]["scenario_schedule"],
+            "cyclic-latin-square-across-count-loops");
+  EXPECT_EQ(output[JsonKeys::CONFIGURATION]["calibration_warmup_round_trips"],
+            Constants::CORE_TO_CORE_CALIBRATION_WARMUP_ROUND_TRIPS);
+
+  const nlohmann::json result = output["core_to_core_latency"];
+  EXPECT_EQ(result["status"], "complete");
+  EXPECT_TRUE(result["measurements_complete"]);
+  EXPECT_TRUE(result["affinity_hint_comparison_interpretable"]);
+  const nlohmann::json scenario_json = result["scenarios"][0];
+  EXPECT_EQ(scenario_json["headline_round_trip_ns"], 70.0);
+  EXPECT_EQ(scenario_json["work_plan"]["headline_round_trips"], 3500000u);
+  EXPECT_EQ(scenario_json["loop_records"][0]["order_position"], 1u);
+  EXPECT_EQ(scenario_json["loop_records"][0]["sample_window_range"]["count"], 2u);
 }
 
 TEST(JsonSchemaTest, CoreToCoreExporterReturnsSuccessWhenOutputPathIsEmpty) {

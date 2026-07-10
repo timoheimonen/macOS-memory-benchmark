@@ -29,25 +29,27 @@
  * - Page stride (4096 bytes): Tests TLB behavior and page boundary crossing
  */
 #include "pattern_benchmark/pattern_benchmark.h"
+#include "pattern_benchmark/pattern_work_plan.h"
 #include "utils/benchmark.h"
 #include "core/memory/buffer_manager.h"
 #include "core/config/config.h"
 #include "core/config/constants.h"
+#include "output/console/messages/messages_api.h"
 #include "warmup/warmup.h"
 #include <iostream>
 #include <atomic>
+#include <cmath>
 #include <cstdlib>
 #include <algorithm>
 #include <limits>
+#include <unistd.h>
+#include <utility>
 
 // Forward declarations from helpers.cpp
-double run_pattern_read_strided_test(void* buffer, size_t size, size_t stride, int iterations,
-                                     std::atomic<uint64_t>& checksum, HighResTimer& timer,
-                                     int num_threads);
-double run_pattern_write_strided_test(void* buffer, size_t size, size_t stride, int iterations,
-                                      HighResTimer& timer, int num_threads);
-double run_pattern_copy_strided_test(void* dst, void* src, size_t size, size_t stride, int iterations,
-                                     HighResTimer& timer, int num_threads);
+double run_pattern_read_strided_test(void* buffer, const PatternWorkPlan& plan, std::atomic<uint64_t>& checksum,
+                                     HighResTimer& timer);
+double run_pattern_write_strided_test(void* buffer, const PatternWorkPlan& plan, HighResTimer& timer);
+double run_pattern_copy_strided_test(void* dst, void* src, const PatternWorkPlan& plan, HighResTimer& timer);
 
 // Forward declarations from validation.cpp
 bool validate_stride(size_t stride, size_t buffer_size);
@@ -55,61 +57,139 @@ bool validate_stride(size_t stride, size_t buffer_size);
 // Forward declarations from execution_utils.cpp
 double calculate_bandwidth(size_t data_size, int iterations, double elapsed_time_ns);
 
-// ============================================================================
-// Strided Pattern Helper Functions
-// ============================================================================
+namespace {
 
-// Calculate effective buffer size for strided pattern
-static bool calculate_strided_params(size_t buffer_size, size_t stride, 
-                                       size_t& effective_buffer_size, 
-                                       size_t& num_iterations, 
-                                       size_t& actual_data_accessed) {
+template <typename PilotRunner>
+bool calibrate_strided_plan(const BenchmarkConfig& config,
+                            const PatternWorkPlan& pilot_plan,
+                            PilotRunner pilot_runner,
+                            PatternWorkPlan& measured_plan,
+                            double& pilot_elapsed_seconds) {
   using namespace Constants;
-  
-  // The strided assembly functions use modulo arithmetic: addr = base + (offset % byteCount)
-  // Each access loads/stores PATTERN_ACCESS_SIZE_BYTES bytes, so we need to ensure 
-  // addr + PATTERN_ACCESS_SIZE_BYTES <= buffer_size
-  // Therefore, we pass (buffer_size - PATTERN_ACCESS_SIZE_BYTES) as the effective buffer size
-  effective_buffer_size = buffer_size - PATTERN_ACCESS_SIZE_BYTES;
-  
-  // Ensure effective buffer size is at least as large as stride
-  if (effective_buffer_size < stride) {
-    return false;
+  if (config.user_specified_iterations) {
+    pilot_elapsed_seconds = 0.0;
+    measured_plan = pilot_plan;
+    return config.iterations > 0 &&
+           set_strided_pattern_passes(measured_plan,
+                                      static_cast<size_t>(config.iterations));
   }
-  
-  // Calculate actual data accessed for strided pattern
-  // The strided loop accesses PATTERN_ACCESS_SIZE_BYTES bytes per iteration, advancing by stride each time
-  // Number of iterations = ceil(effective_buffer_size / stride)
-  num_iterations = (effective_buffer_size + stride - 1) / stride;  // Ceiling division
-  
-  // Ensure we have at least one iteration
-  if (num_iterations == 0) {
-    return false;
-  }
-  
-  actual_data_accessed = num_iterations * PATTERN_ACCESS_SIZE_BYTES;
-  return true;
+  pilot_elapsed_seconds = pilot_runner(pilot_plan);
+  const size_t measured_passes = calculate_pattern_calibrated_passes(
+      pilot_elapsed_seconds, pilot_plan.passes, PATTERN_CALIBRATION_TARGET_SECONDS, 1,
+      PATTERN_CALIBRATION_MAX_PASSES);
+  measured_plan = pilot_plan;
+  return measured_passes > 0 && set_strided_pattern_passes(measured_plan, measured_passes);
 }
 
-static int calculate_effective_iterations_for_stride(size_t actual_data_accessed, int base_iterations) {
+template <typename Runner>
+double run_strided_sample(const BenchmarkConfig& config, Runner runner,
+                          PatternWorkPlan& plan) {
   using namespace Constants;
-
-  if (base_iterations <= 0 || actual_data_accessed == 0) {
-    return 0;
+  double elapsed_seconds = runner(plan);
+  for (size_t correction = 0;
+       !config.user_specified_iterations &&
+       correction < PATTERN_CALIBRATION_MAX_CORRECTIONS;
+       ++correction) {
+    if (elapsed_seconds <= 0.0 || !std::isfinite(elapsed_seconds) ||
+        (elapsed_seconds >= PATTERN_CALIBRATION_MIN_SECONDS &&
+         elapsed_seconds <= PATTERN_CALIBRATION_MAX_SECONDS)) {
+      break;
+    }
+    const size_t corrected_passes = calculate_pattern_calibrated_passes(
+        elapsed_seconds, plan.passes, PATTERN_CALIBRATION_TARGET_SECONDS, 1,
+        PATTERN_CALIBRATION_MAX_PASSES);
+    if (corrected_passes == 0 || corrected_passes == plan.passes ||
+        !set_strided_pattern_passes(plan, corrected_passes)) {
+      break;
+    }
+    elapsed_seconds = runner(plan);
   }
-
-  size_t required_iterations =
-      PATTERN_STRIDED_MIN_TOUCHED_BYTES / actual_data_accessed +
-      ((PATTERN_STRIDED_MIN_TOUCHED_BYTES % actual_data_accessed) != 0 ? 1 : 0);
-  size_t effective_iterations =
-      std::max(static_cast<size_t>(base_iterations), required_iterations);
-
-  if (effective_iterations > static_cast<size_t>(std::numeric_limits<int>::max())) {
-    return std::numeric_limits<int>::max();
-  }
-
-  return static_cast<int>(effective_iterations);
+  return elapsed_seconds;
 }
+
+PatternKind pattern_kind_for_stride(size_t stride) {
+  using namespace Constants;
+  if (stride == PATTERN_STRIDE_CACHE_LINE) return PatternKind::Strided64;
+  if (stride == PATTERN_STRIDE_PAGE) return PatternKind::Strided4096;
+  if (stride == PATTERN_STRIDE_PAGE_16K) return PatternKind::Strided16384;
+  return PatternKind::Strided2MiB;
+}
+
+void set_strided_triplet_status(PatternResults& results, PatternKind kind,
+                                PatternMeasurementStatus status,
+                                const std::string& reason,
+                                const BenchmarkConfig& config, size_t stride,
+                                int effective_threads) {
+  for (PatternOperation operation : {PatternOperation::Read, PatternOperation::Write,
+                                     PatternOperation::Copy}) {
+    PatternMeasurement measurement;
+    measurement.status = status;
+    measurement.status_reason = reason;
+    measurement.access_size_bytes = Constants::PATTERN_ACCESS_SIZE_BYTES;
+    measurement.stride_bytes = stride;
+    measurement.phase_period_passes =
+        stride % Constants::PATTERN_ACCESS_SIZE_BYTES == 0
+            ? stride / Constants::PATTERN_ACCESS_SIZE_BYTES
+            : 0;
+    measurement.requested_threads = config.num_threads;
+    measurement.effective_threads = effective_threads;
+    measurement.native_page_size_bytes = static_cast<size_t>(getpagesize());
+    measurement.stride_equals_native_page_size =
+        stride == measurement.native_page_size_bytes;
+    set_pattern_measurement(results, kind, operation, std::move(measurement));
+  }
+}
+
+PatternMeasurement build_strided_measurement(
+    const BenchmarkConfig& config, const PatternWorkPlan& plan,
+    double bandwidth_gb_s, double elapsed_seconds, double pilot_elapsed_seconds,
+    bool copy_operation) {
+  PatternMeasurement measurement;
+  measurement.access_size_bytes = plan.access_size_bytes;
+  measurement.stride_bytes = plan.stride_bytes;
+  measurement.requested_threads = plan.requested_threads;
+  measurement.effective_threads = plan.effective_threads;
+  measurement.accesses_per_pass = plan.accesses_per_pass;
+  measurement.min_accesses_per_pass = plan.min_accesses_per_pass;
+  measurement.max_accesses_per_pass = plan.max_accesses_per_pass;
+  measurement.passes = plan.passes;
+  measurement.total_accesses = plan.total_accesses;
+  measurement.total_payload_bytes = plan.total_payload_bytes;
+  measurement.distinct_address_count = plan.distinct_address_count;
+  measurement.logical_working_set_bytes = plan.logical_working_set_bytes;
+  measurement.completed_phase_cycles = plan.completed_phase_cycles;
+  measurement.phase_period_passes = plan.phase_period_passes;
+  measurement.elapsed_seconds = elapsed_seconds;
+  measurement.pilot_elapsed_seconds = pilot_elapsed_seconds;
+  measurement.automatic_calibration = !config.user_specified_iterations;
+  measurement.native_page_size_bytes = static_cast<size_t>(getpagesize());
+  measurement.stride_equals_native_page_size =
+      plan.stride_bytes == measurement.native_page_size_bytes;
+
+  if (copy_operation) {
+    if (measurement.total_payload_bytes >
+        std::numeric_limits<size_t>::max() / Constants::COPY_OPERATION_MULTIPLIER) {
+      measurement.status = PatternMeasurementStatus::Invalid;
+      measurement.status_reason =
+          Messages::pattern_reason_copy_accounting_overflow();
+      return measurement;
+    }
+    measurement.total_payload_bytes *= Constants::COPY_OPERATION_MULTIPLIER;
+  }
+
+  if (elapsed_seconds <= 0.0 || !std::isfinite(elapsed_seconds) ||
+      bandwidth_gb_s <= 0.0 || !std::isfinite(bandwidth_gb_s)) {
+    measurement.status = PatternMeasurementStatus::Invalid;
+    measurement.status_reason = Messages::pattern_reason_invalid_strided_timing();
+    return measurement;
+  }
+  measurement.status = PatternMeasurementStatus::Measured;
+  measurement.status_reason.clear();
+  measurement.bandwidth_gb_s = bandwidth_gb_s;
+  return measurement;
+}
+
+}  // namespace
 
 // ============================================================================
 // Strided Pattern Execution Functions
@@ -118,60 +198,107 @@ static int calculate_effective_iterations_for_stride(size_t actual_data_accessed
 // Run strided pattern benchmarks (access with specified stride)
 // Returns EXIT_SUCCESS on success, EXIT_FAILURE on error, or skips pattern if buffer too small
 int run_strided_pattern_benchmarks(const BenchmarkBuffers& buffers, const BenchmarkConfig& config,
-                                      size_t stride, double& read_bw, double& write_bw, double& copy_bw,
-                                      HighResTimer& timer) {
+                                   size_t stride, PatternResults& results,
+                                   HighResTimer& timer) {
   using namespace Constants;
-  
-  // Initialize results to 0 in case we skip this pattern
-  read_bw = 0.0;
-  write_bw = 0.0;
-  copy_bw = 0.0;
+  const PatternKind pattern_kind = pattern_kind_for_stride(stride);
   
   // Validate stride - if validation fails due to buffer size, skip pattern gracefully
   if (!validate_stride(stride, config.buffer_size)) {
     // Buffer too small for this stride - skip pattern (not an error)
-    return EXIT_SUCCESS;
-  }
-  
-  // Calculate strided parameters - if calculation fails, skip pattern gracefully
-  size_t effective_buffer_size;
-  size_t num_iterations;
-  size_t actual_data_accessed;
-  if (!calculate_strided_params(config.buffer_size, stride, effective_buffer_size, 
-                                 num_iterations, actual_data_accessed)) {
-    // Buffer too small for this stride - skip pattern (not an error)
+    set_strided_triplet_status(results, pattern_kind,
+                               PatternMeasurementStatus::Skipped,
+                               Messages::pattern_reason_stride_transition_unavailable(),
+                               config, stride, 0);
     return EXIT_SUCCESS;
   }
 
-  const int effective_iterations = calculate_effective_iterations_for_stride(actual_data_accessed, config.iterations);
-  if (effective_iterations <= 0) {
+  const PatternWorkPlan pilot_plan =
+      build_strided_pattern_work_plan(config.buffer_size, stride, PATTERN_ACCESS_SIZE_BYTES,
+                                      config.num_threads, 1,
+                                      PATTERN_CALIBRATION_MIN_PILOT_BYTES);
+  if (pilot_plan.status == PatternMeasurementStatus::Skipped) {
+    set_strided_triplet_status(results, pattern_kind,
+                               PatternMeasurementStatus::Skipped,
+                               pilot_plan.status_reason, config, stride,
+                               pilot_plan.effective_threads);
     return EXIT_SUCCESS;
+  }
+  if (pilot_plan.status != PatternMeasurementStatus::Measured) {
+    set_strided_triplet_status(results, pattern_kind,
+                               PatternMeasurementStatus::Invalid,
+                               pilot_plan.status_reason, config, stride,
+                               pilot_plan.effective_threads);
+    return EXIT_FAILURE;
   }
   
   // Execute read benchmark
   show_progress();
   std::atomic<uint64_t> checksum{0};
-  warmup_read_strided(buffers.src_buffer(), effective_buffer_size, stride, config.num_threads, checksum);
-  double read_time = run_pattern_read_strided_test(buffers.src_buffer(), effective_buffer_size, stride,
-                                                     effective_iterations, checksum, timer, config.num_threads);
-  read_bw = calculate_bandwidth(actual_data_accessed, effective_iterations, read_time);
+  warmup_read_strided(buffers.src_buffer(), config.buffer_size, stride,
+                      pilot_plan.effective_threads, checksum);
+  auto run_read = [&](const PatternWorkPlan& plan) {
+    return run_pattern_read_strided_test(buffers.src_buffer(), plan, checksum, timer);
+  };
+  PatternWorkPlan read_plan;
+  double read_pilot_time = 0.0;
+  if (!calibrate_strided_plan(config, pilot_plan, run_read, read_plan,
+                              read_pilot_time)) {
+    return EXIT_FAILURE;
+  }
+  const double read_time = run_strided_sample(config, run_read, read_plan);
+  const double read_bw =
+      calculate_bandwidth(read_plan.total_payload_bytes, 1, read_time);
+  set_pattern_measurement(
+      results, pattern_kind, PatternOperation::Read,
+      build_strided_measurement(config, read_plan, read_bw, read_time,
+                                read_pilot_time, false));
 
   // Execute write benchmark
   show_progress();
-  warmup_write_strided(buffers.dst_buffer(), effective_buffer_size, stride, config.num_threads);
-  double write_time = run_pattern_write_strided_test(buffers.dst_buffer(), effective_buffer_size, stride,
-                                                       effective_iterations, timer, config.num_threads);
-  write_bw = calculate_bandwidth(actual_data_accessed, effective_iterations, write_time);
+  warmup_write_strided(buffers.dst_buffer(), config.buffer_size, stride,
+                       pilot_plan.effective_threads);
+  auto run_write = [&](const PatternWorkPlan& plan) {
+    return run_pattern_write_strided_test(buffers.dst_buffer(), plan, timer);
+  };
+  PatternWorkPlan write_plan;
+  double write_pilot_time = 0.0;
+  if (!calibrate_strided_plan(config, pilot_plan, run_write, write_plan,
+                              write_pilot_time)) {
+    return EXIT_FAILURE;
+  }
+  const double write_time = run_strided_sample(config, run_write, write_plan);
+  const double write_bw =
+      calculate_bandwidth(write_plan.total_payload_bytes, 1, write_time);
+  set_pattern_measurement(
+      results, pattern_kind, PatternOperation::Write,
+      build_strided_measurement(config, write_plan, write_bw, write_time,
+                                write_pilot_time, false));
 
   // Execute copy benchmark
   show_progress();
-  warmup_copy_strided(buffers.dst_buffer(), buffers.src_buffer(), effective_buffer_size, stride, config.num_threads);
-  double copy_time = run_pattern_copy_strided_test(buffers.dst_buffer(), buffers.src_buffer(),
-                                                     effective_buffer_size, stride, effective_iterations, timer,
-                                                     config.num_threads);
-  // For copy: actual_data_accessed bytes are read + actual_data_accessed bytes are written per iteration
-  copy_bw = calculate_bandwidth(actual_data_accessed * Constants::COPY_OPERATION_MULTIPLIER,
-                                effective_iterations, copy_time);
+  warmup_copy_strided(buffers.dst_buffer(), buffers.src_buffer(), config.buffer_size, stride,
+                      pilot_plan.effective_threads);
+  auto run_copy = [&](const PatternWorkPlan& plan) {
+    return run_pattern_copy_strided_test(buffers.dst_buffer(), buffers.src_buffer(), plan, timer);
+  };
+  PatternWorkPlan copy_plan;
+  double copy_pilot_time = 0.0;
+  if (!calibrate_strided_plan(config, pilot_plan, run_copy, copy_plan,
+                              copy_pilot_time)) {
+    return EXIT_FAILURE;
+  }
+  const double copy_time = run_strided_sample(config, run_copy, copy_plan);
+  if (copy_plan.total_payload_bytes >
+      std::numeric_limits<size_t>::max() / Constants::COPY_OPERATION_MULTIPLIER) {
+    return EXIT_FAILURE;
+  }
+  const double copy_bw = calculate_bandwidth(
+      copy_plan.total_payload_bytes * Constants::COPY_OPERATION_MULTIPLIER, 1, copy_time);
+  set_pattern_measurement(
+      results, pattern_kind, PatternOperation::Copy,
+      build_strided_measurement(config, copy_plan, copy_bw, copy_time,
+                                copy_pilot_time, true));
   
   return EXIT_SUCCESS;
 }
