@@ -25,14 +25,12 @@
 
 #include "messages_api.h"
 
+#include <iomanip>
+#include <sstream>
+
 namespace Messages {
 
 // --- Pattern Benchmark Messages ---
-const std::string& pattern_na() {
-  static const std::string msg = "N/A";
-  return msg;
-}
-
 const std::string& pattern_sequential_forward() {
   static const std::string msg = "Sequential Forward:";
   return msg;
@@ -53,77 +51,22 @@ const std::string& pattern_random_uniform() {
 }
 
 const std::string& pattern_cache_line_64b() {
-  static const std::string msg = "Cache Line - 64B";
+  static const std::string msg = "64 B stride";
   return msg;
 }
 
 const std::string& pattern_page_4096b() {
-  static const std::string msg = "Page - 4096B";
+  static const std::string msg = "4096 B stride";
   return msg;
 }
 
 const std::string& pattern_page_16384b() {
-  static const std::string msg = "Page - 16384B";
+  static const std::string msg = "16 KiB stride";
   return msg;
 }
 
 const std::string& pattern_superpage_2mb() {
-  static const std::string msg = "Superpage - 2MB";
-  return msg;
-}
-
-const std::string& pattern_efficiency_analysis() {
-  static const std::string msg = "Pattern Efficiency Analysis:";
-  return msg;
-}
-
-const std::string& pattern_sequential_coherence() {
-  static const std::string msg = "Sequential coherence:";
-  return msg;
-}
-
-const std::string& pattern_prefetcher_effectiveness() {
-  static const std::string msg = "Prefetcher effectiveness:";
-  return msg;
-}
-
-const std::string& pattern_cache_thrashing_potential() {
-  static const std::string msg = "Cache thrashing potential:";
-  return msg;
-}
-
-const std::string& pattern_tlb_pressure() {
-  static const std::string msg = "TLB pressure:";
-  return msg;
-}
-
-const std::string& pattern_cache_thrashing_low() {
-  static const std::string msg = "Low";
-  return msg;
-}
-
-const std::string& pattern_cache_thrashing_medium() {
-  static const std::string msg = "Medium";
-  return msg;
-}
-
-const std::string& pattern_cache_thrashing_high() {
-  static const std::string msg = "High";
-  return msg;
-}
-
-const std::string& pattern_tlb_pressure_minimal() {
-  static const std::string msg = "Minimal";
-  return msg;
-}
-
-const std::string& pattern_tlb_pressure_moderate() {
-  static const std::string msg = "Moderate";
-  return msg;
-}
-
-const std::string& pattern_tlb_pressure_high() {
-  static const std::string msg = "High";
+  static const std::string msg = "2 MiB stride";
   return msg;
 }
 
@@ -154,6 +97,92 @@ const std::string& pattern_bandwidth_unit() {
 
 const std::string& pattern_bandwidth_unit_newline() {
   static const std::string msg = " GB/s\n";
+  return msg;
+}
+
+std::string pattern_measurement_unavailable(const std::string& status,
+                                            const std::string& reason) {
+  return "N/A [" + status + (reason.empty() ? "" : ": " + reason) + "]";
+}
+
+std::string warning_pattern_measurement_noisy(const std::string& metric,
+                                              double cv_pct,
+                                              double threshold_pct) {
+  std::ostringstream oss;
+  oss << std::fixed << std::setprecision(1)
+      << "Noisy pattern measurement: " << metric << " CV " << cv_pct
+      << "% exceeds " << threshold_pct << "%";
+  return oss.str();
+}
+
+const std::string& pattern_reason_measurement_not_completed() {
+  static const std::string msg = "measurement not completed";
+  return msg;
+}
+
+const std::string& pattern_reason_timer_creation_failed() {
+  static const std::string msg = "Failed to create pattern benchmark timer.";
+  return msg;
+}
+
+const std::string& pattern_reason_calibration_or_accounting_failed() {
+  static const std::string msg = "pattern calibration or byte accounting failed";
+  return msg;
+}
+
+const std::string& pattern_reason_no_valid_random_workload() {
+  static const std::string msg = "no valid random access workload";
+  return msg;
+}
+
+const std::string& pattern_reason_stride_transition_unavailable() {
+  static const std::string msg = "buffer cannot provide a valid stride transition";
+  return msg;
+}
+
+const std::string& pattern_reason_copy_accounting_overflow() {
+  static const std::string msg = "copy payload byte accounting overflow";
+  return msg;
+}
+
+const std::string& pattern_reason_invalid_strided_timing() {
+  static const std::string msg = "invalid strided timing result";
+  return msg;
+}
+
+const std::string& pattern_reason_work_plan_byte_overflow() {
+  static const std::string msg = "strided work-plan byte accounting overflow";
+  return msg;
+}
+
+const std::string& pattern_reason_invalid_work_plan_parameters() {
+  static const std::string msg = "invalid strided work-plan parameters";
+  return msg;
+}
+
+const std::string& pattern_reason_stride_access_sum_overflow() {
+  static const std::string msg = "stride and access-size sum overflows";
+  return msg;
+}
+
+const std::string& pattern_reason_buffer_lacks_two_strided_accesses() {
+  static const std::string msg = "buffer cannot provide two strided accesses";
+  return msg;
+}
+
+const std::string& pattern_reason_no_valid_strided_worker_partition() {
+  static const std::string msg =
+      "no valid worker partition contains a stride transition";
+  return msg;
+}
+
+const std::string& pattern_reason_work_plan_pass_limit() {
+  static const std::string msg = "strided work plan exceeds executor pass limit";
+  return msg;
+}
+
+const std::string& pattern_reason_work_plan_total_overflow() {
+  static const std::string msg = "strided work-plan total accounting overflow";
   return msg;
 }
 

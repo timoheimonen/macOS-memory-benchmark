@@ -43,6 +43,7 @@
 #include "core/system/system_info.h"
 #include "output/console/messages/messages_api.h"
 #include "utils/benchmark.h"
+#include <algorithm>
 #include <chrono>
 #include <iostream>
 #include <limits>
@@ -918,6 +919,10 @@ int parse_arguments(int argc, char* argv[], BenchmarkConfig& config) {
       config.num_threads = requested_threads;
     }
     config.user_specified_threads = true;
+  } else if (config.run_patterns && config.perf_cores > 0) {
+    // Favor repeatability in pattern mode by avoiding an implicit P/E-core mix.
+    // Users can still request all detected cores explicitly with --threads.
+    config.num_threads = std::min(config.perf_cores, max_cores);
   }
 
   if (requested_latency_tlb_locality_kb_ll != -1) {

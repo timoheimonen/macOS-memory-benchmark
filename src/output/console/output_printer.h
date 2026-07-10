@@ -59,6 +59,7 @@ void print_help(const char* prog_name);
  * @param only_bandwidth Whether only bandwidth tests are run
  * @param only_latency Whether only latency tests are run
  * @param run_patterns Whether pattern benchmarks are run (bandwidth-only, uses 2x buffers)
+ * @param user_specified_iterations Whether --iterations explicitly disables pattern auto-calibration
  */
 void print_configuration(size_t buffer_size, size_t buffer_size_mb, size_t total_allocation_bytes, int iterations,
                           int loop_count, bool use_non_cacheable, size_t latency_stride_bytes,
@@ -66,7 +67,7 @@ void print_configuration(size_t buffer_size, size_t buffer_size_mb, size_t total
                           size_t latency_tlb_locality_bytes,
                          const std::string& cpu_name, int perf_cores,
                          int eff_cores, int num_threads, bool only_bandwidth, bool only_latency,
-                         bool run_patterns);
+                         bool run_patterns, bool user_specified_iterations);
 
 /**
  * @brief Print results for one loop

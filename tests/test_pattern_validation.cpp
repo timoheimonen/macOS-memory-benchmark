@@ -34,6 +34,7 @@ static BenchmarkConfig make_pattern_validation_config(size_t buffer_size) {
   config.l2_buffer_size = 0;
   config.use_custom_cache_size = false;
   config.iterations = 1;
+  config.user_specified_iterations = true;
   config.num_threads = 1;
   config.run_patterns = true;
   initialize_system_info(config);
@@ -43,10 +44,9 @@ static BenchmarkConfig make_pattern_validation_config(size_t buffer_size) {
 // ============================================================================
 // 64B (cache line) stride boundary tests
 //
-// calculate_strided_params subtracts PATTERN_ACCESS_SIZE_BYTES (32) from
-// buffer_size before comparing with stride. So strided 64B pattern produces
-// results only when buffer_size >= 96 (= 64 + 32). Below 96, the pattern is
-// gracefully skipped (bw=0, EXIT_SUCCESS).
+// The exact planner requires two complete 32-byte payloads separated by the
+// stride. Thus the 64B pattern is measured at 96 bytes and explicitly skipped
+// below that boundary.
 // ============================================================================
 
 // buffer_size=95 = stride+31: 64B strided pattern skipped, other patterns succeed
@@ -99,7 +99,8 @@ TEST(PatternValidationTest, ValidateStridePageBelowStrideBoundaryIntegration) {
   EXPECT_EQ(results.strided_2mb_read_bw, 0.0);
 }
 
-// buffer_size=4096 == stride: validate passes but calculate_strided_params skips (effective < stride)
+// buffer_size=4096 == stride: validation passes but the planner cannot fit the
+// second complete 32-byte payload, so the measurement is skipped.
 TEST(PatternValidationTest, ValidateStridePageAtStrideBoundaryIntegration) {
   using namespace Constants;
   auto config = make_pattern_validation_config(PATTERN_STRIDE_PAGE);
@@ -149,10 +150,10 @@ TEST(PatternValidationTest, ValidateStride16KAtEffectiveBoundaryIntegration) {
 }
 
 // ============================================================================
-// 2MB superpage stride boundary test
+// 2 MiB stride boundary test
 // ============================================================================
 
-// buffer_size=2MB+32: 2MB strided pattern produces results
+// buffer_size=2MiB+32: the 2 MiB-stride pattern produces results
 TEST(PatternValidationTest, ValidateStrideSuperpage2MBAtEffectiveBoundaryIntegration) {
   using namespace Constants;
   auto config = make_pattern_validation_config(PATTERN_STRIDE_SUPERPAGE_2MB + PATTERN_ACCESS_SIZE_BYTES);

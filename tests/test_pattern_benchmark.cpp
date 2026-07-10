@@ -25,6 +25,7 @@
 #include <cstdint>
 #include <cstring>
 #include <cstdlib>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -94,12 +95,31 @@ void expect_2mb_pattern_bandwidths_zero(const PatternResults& results) {
   EXPECT_EQ(results.strided_2mb_read_bw, 0.0);
   EXPECT_EQ(results.strided_2mb_write_bw, 0.0);
   EXPECT_EQ(results.strided_2mb_copy_bw, 0.0);
+  for (PatternOperation operation : {PatternOperation::Read, PatternOperation::Write,
+                                     PatternOperation::Copy}) {
+    const PatternMeasurement& measurement =
+        get_pattern_measurement(results, PatternKind::Strided2MiB, operation);
+    EXPECT_EQ(measurement.status, PatternMeasurementStatus::Skipped);
+    EXPECT_FALSE(measurement.bandwidth_gb_s.has_value());
+  }
 }
 
 void expect_2mb_pattern_bandwidths_positive(const PatternResults& results) {
   EXPECT_GT(results.strided_2mb_read_bw, 0.0);
   EXPECT_GT(results.strided_2mb_write_bw, 0.0);
   EXPECT_GT(results.strided_2mb_copy_bw, 0.0);
+  for (PatternOperation operation : {PatternOperation::Read, PatternOperation::Write,
+                                     PatternOperation::Copy}) {
+    const PatternMeasurement& measurement =
+        get_pattern_measurement(results, PatternKind::Strided2MiB, operation);
+    EXPECT_EQ(measurement.status, PatternMeasurementStatus::Measured);
+    ASSERT_TRUE(measurement.bandwidth_gb_s.has_value());
+    EXPECT_GT(measurement.elapsed_seconds, 0.0);
+    EXPECT_GT(measurement.total_payload_bytes, 0u);
+    EXPECT_EQ(measurement.stride_bytes,
+              Constants::PATTERN_STRIDE_SUPERPAGE_2MB);
+    EXPECT_FALSE(measurement.large_page_backing_verified);
+  }
 }
 
 }  // namespace
@@ -130,6 +150,10 @@ TEST(PatternBenchmarkTest, PatternResultsDefaultValues) {
   EXPECT_EQ(results.random_read_bw, 0.0);
   EXPECT_EQ(results.random_write_bw, 0.0);
   EXPECT_EQ(results.random_copy_bw, 0.0);
+  for (const PatternMeasurement& measurement : results.measurements) {
+    EXPECT_EQ(measurement.status, PatternMeasurementStatus::Invalid);
+    EXPECT_FALSE(measurement.bandwidth_gb_s.has_value());
+  }
 }
 
 // Test PatternResults can be set and read
@@ -149,6 +173,34 @@ TEST(PatternBenchmarkTest, PatternResultsSetValues) {
   EXPECT_DOUBLE_EQ(results.random_read_bw, 5.1);
 }
 
+TEST(PatternBenchmarkTest, ExecutionOrderIsDeterministicAndRotatesAcrossLoops) {
+  const auto first = build_pattern_execution_order(0);
+  const auto repeated = build_pattern_execution_order(0);
+  const auto next = build_pattern_execution_order(1);
+
+  EXPECT_EQ(first, repeated);
+  EXPECT_NE(first, next);
+  for (size_t position = 0; position < first.size(); ++position) {
+    EXPECT_EQ(next[position], first[(position + 1) % first.size()]);
+  }
+}
+
+TEST(PatternBenchmarkTest, ExecutionOrderBalancesEveryPatternAcrossPositions) {
+  constexpr size_t pattern_count = static_cast<size_t>(PatternKind::Count);
+  std::array<std::array<size_t, pattern_count>, pattern_count> positions{};
+
+  for (size_t loop = 0; loop < pattern_count; ++loop) {
+    const auto order = build_pattern_execution_order(loop);
+    for (size_t position = 0; position < pattern_count; ++position) {
+      ++positions[static_cast<size_t>(order[position])][position];
+    }
+  }
+
+  for (const auto& pattern_positions : positions) {
+    for (size_t count : pattern_positions) EXPECT_EQ(count, 1u);
+  }
+}
+
 // Integration test: Test that the representative pattern benchmark run produces every core pattern result.
 // NOTE: This is an integration test that performs actual system operations.
 // It runs real pattern benchmarks which may be slower and can fail on slow systems or under load.
@@ -161,6 +213,16 @@ TEST(PatternBenchmarkTest, RunPatternBenchmarksCorePatternsIntegration) {
 
   expect_core_pattern_bandwidths_positive(results);
   expect_2mb_pattern_bandwidths_zero(results);
+  const PatternMeasurement& forward_read = get_pattern_measurement(
+      results, PatternKind::SequentialForward, PatternOperation::Read);
+  EXPECT_EQ(forward_read.status, PatternMeasurementStatus::Measured);
+  EXPECT_EQ(forward_read.passes, 1u);
+  EXPECT_GT(forward_read.total_payload_bytes, 0u);
+  const PatternMeasurement& random_read = get_pattern_measurement(
+      results, PatternKind::Random, PatternOperation::Read);
+  EXPECT_EQ(random_read.status, PatternMeasurementStatus::Measured);
+  EXPECT_TRUE(random_read.has_seed);
+  EXPECT_EQ(random_read.seed, config.pattern_seed);
 }
 
 // Test large-page stride variants with a larger buffer
@@ -224,4 +286,100 @@ TEST(PatternBenchmarkTest, PhasedStridedKernelsRespectAccessBoundariesIntegratio
       EXPECT_EQ(destination[span + guard - 1], 0x5A);
     }
   }
+}
+
+TEST(PatternBenchmarkTest, StatisticsUseMedianAndCoefficientOfVariation) {
+  const PatternStatisticsData statistics =
+      calculate_pattern_statistics({10.0, 20.0, 30.0});
+  EXPECT_DOUBLE_EQ(statistics.average, 20.0);
+  EXPECT_DOUBLE_EQ(statistics.median, 20.0);
+  EXPECT_DOUBLE_EQ(statistics.stddev, 10.0);
+  EXPECT_DOUBLE_EQ(statistics.coefficient_of_variation_pct, 50.0);
+}
+
+TEST(PatternBenchmarkTest, MedianHeadlineExcludesSkippedMeasurements) {
+  PatternStatistics statistics;
+  for (double value : {10.0, 30.0, 20.0}) {
+    PatternResults loop;
+    PatternMeasurement measurement;
+    measurement.status = PatternMeasurementStatus::Measured;
+    measurement.status_reason.clear();
+    measurement.bandwidth_gb_s = value;
+    set_pattern_measurement(loop, PatternKind::SequentialForward,
+                            PatternOperation::Read, std::move(measurement));
+    statistics.loop_results.push_back(loop);
+  }
+  PatternResults skipped_loop;
+  PatternMeasurement skipped;
+  skipped.status = PatternMeasurementStatus::Skipped;
+  skipped.status_reason = "not supported";
+  set_pattern_measurement(skipped_loop, PatternKind::SequentialForward,
+                          PatternOperation::Read, std::move(skipped));
+  statistics.loop_results.push_back(skipped_loop);
+
+  const PatternResults headline = extract_pattern_median_results(statistics);
+  const PatternMeasurement& measurement = get_pattern_measurement(
+      headline, PatternKind::SequentialForward, PatternOperation::Read);
+  ASSERT_TRUE(measurement.bandwidth_gb_s.has_value());
+  EXPECT_DOUBLE_EQ(*measurement.bandwidth_gb_s, 20.0);
+  EXPECT_DOUBLE_EQ(headline.forward_read_bw, 20.0);
+}
+
+TEST(PatternBenchmarkTest, ConsoleRendersUnavailableMeasurementsAsStatusNotZero) {
+  PatternResults results;
+  for (size_t kind_index = 0;
+       kind_index < static_cast<size_t>(PatternKind::Count); ++kind_index) {
+    for (size_t operation_index = 0;
+         operation_index < static_cast<size_t>(PatternOperation::Count);
+         ++operation_index) {
+      PatternMeasurement measurement;
+      measurement.status = PatternMeasurementStatus::Skipped;
+      measurement.status_reason = "test skip";
+      set_pattern_measurement(results, static_cast<PatternKind>(kind_index),
+                              static_cast<PatternOperation>(operation_index),
+                              std::move(measurement));
+    }
+  }
+
+  testing::internal::CaptureStdout();
+  print_pattern_results(results);
+  const std::string output = testing::internal::GetCapturedStdout();
+  EXPECT_NE(output.find("N/A [skipped: test skip]"), std::string::npos);
+  EXPECT_EQ(output.find("0.000 GB/s"), std::string::npos);
+  EXPECT_EQ(output.find("Pattern Efficiency Analysis"), std::string::npos);
+  EXPECT_NE(output.find("2 MiB stride"), std::string::npos);
+}
+
+TEST(PatternBenchmarkTest, StatisticsExposeCvAndEmitNoiseWarning) {
+  PatternStatistics statistics;
+  statistics.all_forward_read_bw = {10.0, 30.0};
+
+  testing::internal::CaptureStdout();
+  testing::internal::CaptureStderr();
+  print_pattern_statistics(2, statistics);
+  const std::string error_output = testing::internal::GetCapturedStderr();
+  const std::string standard_output = testing::internal::GetCapturedStdout();
+
+  EXPECT_NE(standard_output.find("Pattern Bandwidth"), std::string::npos);
+  EXPECT_NE(standard_output.find("Median (P50):"), std::string::npos);
+  EXPECT_NE(standard_output.find("CV:"), std::string::npos);
+  EXPECT_NE(error_output.find("Noisy pattern measurement"), std::string::npos);
+}
+
+TEST(PatternBenchmarkTest, SkippedPatternsDoNotEnterStatisticsIntegration) {
+  BenchmarkConfig config = make_pattern_config(512 * 1024, 1);
+  BenchmarkBuffers buffers;
+  ASSERT_TRUE(allocate_and_initialize_buffers(config, buffers));
+  PatternStatistics statistics;
+
+  ASSERT_EQ(run_all_pattern_benchmarks(buffers, config, statistics), EXIT_SUCCESS);
+  ASSERT_EQ(statistics.loop_results.size(), 1u);
+  EXPECT_TRUE(statistics.all_strided_2mb_read_bw.empty());
+  EXPECT_TRUE(statistics.all_strided_2mb_write_bw.empty());
+  EXPECT_TRUE(statistics.all_strided_2mb_copy_bw.empty());
+  EXPECT_EQ(get_pattern_measurement(statistics.loop_results.front(),
+                                    PatternKind::Strided2MiB,
+                                    PatternOperation::Read)
+                .status,
+            PatternMeasurementStatus::Skipped);
 }

@@ -19,6 +19,8 @@
  */
 #include "pattern_benchmark/pattern_work_plan.h"
 
+#include "output/console/messages/messages_api.h"
+
 #include <algorithm>
 #include <cmath>
 #include <limits>
@@ -96,7 +98,7 @@ bool populate_worker_ranges(PatternWorkPlan& plan, size_t buffer_size, int worke
         !checked_add(total_accesses, accesses, total_accesses) ||
         !checked_add(total_payload, worker_payload, total_payload)) {
       plan.status = PatternMeasurementStatus::Invalid;
-      plan.status_reason = "strided work-plan byte accounting overflow";
+      plan.status_reason = Messages::pattern_reason_work_plan_byte_overflow();
       return false;
     }
 
@@ -207,18 +209,19 @@ PatternWorkPlan build_strided_pattern_work_plan(size_t buffer_size, size_t strid
   plan.requested_threads = requested_threads;
 
   if (stride == 0 || access_size == 0 || requested_threads <= 0 || base_passes <= 0) {
-    plan.status_reason = "invalid strided work-plan parameters";
+    plan.status_reason = Messages::pattern_reason_invalid_work_plan_parameters();
     return plan;
   }
 
   size_t minimum_worker_span = 0;
   if (!checked_add(stride, access_size, minimum_worker_span)) {
-    plan.status_reason = "stride and access-size sum overflows";
+    plan.status_reason = Messages::pattern_reason_stride_access_sum_overflow();
     return plan;
   }
   if (buffer_size < minimum_worker_span) {
     plan.status = PatternMeasurementStatus::Skipped;
-    plan.status_reason = "buffer cannot provide two strided accesses";
+    plan.status_reason =
+        Messages::pattern_reason_buffer_lacks_two_strided_accesses();
     return plan;
   }
 
@@ -244,7 +247,8 @@ PatternWorkPlan build_strided_pattern_work_plan(size_t buffer_size, size_t strid
 
   if (!populated || plan.payload_bytes_per_pass == 0) {
     plan.status = PatternMeasurementStatus::Skipped;
-    plan.status_reason = "no valid worker partition contains a stride transition";
+    plan.status_reason =
+        Messages::pattern_reason_no_valid_strided_worker_partition();
     return plan;
   }
 
@@ -256,7 +260,7 @@ PatternWorkPlan build_strided_pattern_work_plan(size_t buffer_size, size_t strid
     if (!set_strided_pattern_passes(maximum_plan, maximum_passes) ||
         maximum_plan.total_payload_bytes < minimum_total_payload_bytes) {
       plan.status = PatternMeasurementStatus::Invalid;
-      plan.status_reason = "strided work plan exceeds executor pass limit";
+      plan.status_reason = Messages::pattern_reason_work_plan_pass_limit();
       plan.workers.clear();
       return plan;
     }
@@ -268,7 +272,7 @@ PatternWorkPlan build_strided_pattern_work_plan(size_t buffer_size, size_t strid
       PatternWorkPlan candidate = plan;
       if (!set_strided_pattern_passes(candidate, middle)) {
         plan.status = PatternMeasurementStatus::Invalid;
-        plan.status_reason = "strided work-plan total accounting overflow";
+        plan.status_reason = Messages::pattern_reason_work_plan_total_overflow();
         plan.workers.clear();
         return plan;
       }
@@ -283,7 +287,7 @@ PatternWorkPlan build_strided_pattern_work_plan(size_t buffer_size, size_t strid
 
   if (!set_strided_pattern_passes(plan, selected_passes)) {
     plan.status = PatternMeasurementStatus::Invalid;
-    plan.status_reason = "strided work-plan total accounting overflow";
+    plan.status_reason = Messages::pattern_reason_work_plan_total_overflow();
     plan.workers.clear();
     return plan;
   }

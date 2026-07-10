@@ -77,9 +77,9 @@ void print_configuration(size_t buffer_size, size_t buffer_size_mb, size_t total
                          const std::string& latency_chain_mode_name,
                          size_t latency_tlb_locality_bytes,
                          const std::string &cpu_name, int perf_cores, int eff_cores, int num_threads,
-                         bool only_bandwidth, bool only_latency, bool run_patterns) {
+                         bool only_bandwidth, bool only_latency, bool run_patterns,
+                         bool user_specified_iterations) {
   (void)only_bandwidth;
-  (void)run_patterns;
 
   // Print benchmark header and copyright/license info.
   std::cout << Messages::config_header(SOFTVERSION) << std::endl;
@@ -99,7 +99,15 @@ void print_configuration(size_t buffer_size, size_t buffer_size_mb, size_t total
   
   // Display test repetition counts conditionally
   if (!only_latency) {
-    std::cout << Messages::config_iterations(iterations) << std::endl;
+    if (run_patterns && !user_specified_iterations) {
+      std::cout << Messages::config_pattern_iterations_auto(
+                       Constants::PATTERN_CALIBRATION_TARGET_SECONDS,
+                       Constants::PATTERN_CALIBRATION_MIN_SECONDS,
+                       Constants::PATTERN_CALIBRATION_MAX_SECONDS)
+                << std::endl;
+    } else {
+      std::cout << Messages::config_iterations(iterations) << std::endl;
+    }
   }
   std::cout << Messages::config_loop_count(loop_count) << std::endl;
   // Display non-cacheable memory hints status.
@@ -119,7 +127,8 @@ void print_configuration(size_t buffer_size, size_t buffer_size_mb, size_t total
     std::cout << Messages::config_efficiency_cores(eff_cores) << std::endl;
   }
   // Display total cores detected and threads used for bandwidth tests.
-  std::cout << Messages::config_total_cores(num_threads) << std::endl;
+  std::cout << Messages::config_total_cores(perf_cores + eff_cores) << std::endl;
+  std::cout << Messages::config_benchmark_threads(num_threads) << std::endl;
 }
 
 /**

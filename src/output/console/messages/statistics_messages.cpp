@@ -102,6 +102,17 @@ std::string statistics_cache_bandwidth_header(const std::string& cache_name) {
   return oss.str();
 }
 
+std::string statistics_pattern_bandwidth_header(const std::string& pattern_name) {
+  return "\n" + pattern_name + " Pattern Bandwidth (GB/s):";
+}
+
+std::string statistics_coefficient_of_variation(double value, int precision) {
+  std::ostringstream oss;
+  oss << std::fixed << std::setprecision(precision)
+      << "  CV:      " << value << "%";
+  return oss.str();
+}
+
 std::string statistics_cache_read() {
   return "  Read:";
 }

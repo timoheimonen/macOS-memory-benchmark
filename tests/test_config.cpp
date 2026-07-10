@@ -443,6 +443,25 @@ TEST(ConfigTest, ParsePatternsGeneratesSeedWhenOmitted) {
   EXPECT_FALSE(config.user_specified_pattern_seed);
 }
 
+TEST(ConfigTest, ParsePatternsDefaultsToPerformanceCoreCount) {
+  BenchmarkConfig config;
+  const char* argv[] = {"program", "--patterns"};
+
+  ASSERT_EQ(parse_arguments(2, const_cast<char**>(argv), config), EXIT_SUCCESS);
+  ASSERT_GT(config.perf_cores, 0);
+  EXPECT_EQ(config.num_threads, config.perf_cores);
+  EXPECT_FALSE(config.user_specified_threads);
+}
+
+TEST(ConfigTest, ParsePatternsHonorsExplicitThreadCount) {
+  BenchmarkConfig config;
+  const char* argv[] = {"program", "--patterns", "--threads", "1"};
+
+  ASSERT_EQ(parse_arguments(4, const_cast<char**>(argv), config), EXIT_SUCCESS);
+  EXPECT_EQ(config.num_threads, 1);
+  EXPECT_TRUE(config.user_specified_threads);
+}
+
 TEST(ConfigTest, ParsePatternsRejectsDuplicateSeed) {
   BenchmarkConfig config;
   const char* argv[] = {

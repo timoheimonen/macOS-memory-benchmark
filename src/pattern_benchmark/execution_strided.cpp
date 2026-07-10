@@ -34,12 +34,16 @@
 #include "core/memory/buffer_manager.h"
 #include "core/config/config.h"
 #include "core/config/constants.h"
+#include "output/console/messages/messages_api.h"
 #include "warmup/warmup.h"
 #include <iostream>
 #include <atomic>
+#include <cmath>
 #include <cstdlib>
 #include <algorithm>
 #include <limits>
+#include <unistd.h>
+#include <utility>
 
 // Forward declarations from helpers.cpp
 double run_pattern_read_strided_test(void* buffer, size_t size, size_t stride, int iterations,
@@ -62,17 +66,123 @@ template <typename PilotRunner>
 bool calibrate_strided_plan(const BenchmarkConfig& config,
                             const PatternWorkPlan& pilot_plan,
                             PilotRunner pilot_runner,
-                            PatternWorkPlan& measured_plan) {
+                            PatternWorkPlan& measured_plan,
+                            double& pilot_elapsed_seconds) {
   using namespace Constants;
-  const double pilot_duration = pilot_runner(static_cast<int>(pilot_plan.passes));
-  size_t measured_passes = static_cast<size_t>(config.iterations);
-  if (!config.user_specified_iterations) {
-    measured_passes = calculate_pattern_calibrated_passes(
-        pilot_duration, pilot_plan.passes, PATTERN_CALIBRATION_TARGET_SECONDS, 1,
-        PATTERN_CALIBRATION_MAX_PASSES);
+  if (config.user_specified_iterations) {
+    pilot_elapsed_seconds = 0.0;
+    measured_plan = pilot_plan;
+    return config.iterations > 0 &&
+           set_strided_pattern_passes(measured_plan,
+                                      static_cast<size_t>(config.iterations));
   }
+  pilot_elapsed_seconds = pilot_runner(static_cast<int>(pilot_plan.passes));
+  const size_t measured_passes = calculate_pattern_calibrated_passes(
+      pilot_elapsed_seconds, pilot_plan.passes, PATTERN_CALIBRATION_TARGET_SECONDS, 1,
+      PATTERN_CALIBRATION_MAX_PASSES);
   measured_plan = pilot_plan;
   return measured_passes > 0 && set_strided_pattern_passes(measured_plan, measured_passes);
+}
+
+template <typename Runner>
+double run_strided_sample(const BenchmarkConfig& config, Runner runner,
+                          PatternWorkPlan& plan) {
+  using namespace Constants;
+  double elapsed_seconds = runner(static_cast<int>(plan.passes));
+  for (size_t correction = 0;
+       !config.user_specified_iterations &&
+       correction < PATTERN_CALIBRATION_MAX_CORRECTIONS;
+       ++correction) {
+    if (elapsed_seconds <= 0.0 || !std::isfinite(elapsed_seconds) ||
+        (elapsed_seconds >= PATTERN_CALIBRATION_MIN_SECONDS &&
+         elapsed_seconds <= PATTERN_CALIBRATION_MAX_SECONDS)) {
+      break;
+    }
+    const size_t corrected_passes = calculate_pattern_calibrated_passes(
+        elapsed_seconds, plan.passes, PATTERN_CALIBRATION_TARGET_SECONDS, 1,
+        PATTERN_CALIBRATION_MAX_PASSES);
+    if (corrected_passes == 0 || corrected_passes == plan.passes ||
+        !set_strided_pattern_passes(plan, corrected_passes)) {
+      break;
+    }
+    elapsed_seconds = runner(static_cast<int>(plan.passes));
+  }
+  return elapsed_seconds;
+}
+
+PatternKind pattern_kind_for_stride(size_t stride) {
+  using namespace Constants;
+  if (stride == PATTERN_STRIDE_CACHE_LINE) return PatternKind::Strided64;
+  if (stride == PATTERN_STRIDE_PAGE) return PatternKind::Strided4096;
+  if (stride == PATTERN_STRIDE_PAGE_16K) return PatternKind::Strided16384;
+  return PatternKind::Strided2MiB;
+}
+
+void set_strided_triplet_status(PatternResults& results, PatternKind kind,
+                                PatternMeasurementStatus status,
+                                const std::string& reason,
+                                const BenchmarkConfig& config, size_t stride,
+                                int effective_threads) {
+  for (PatternOperation operation : {PatternOperation::Read, PatternOperation::Write,
+                                     PatternOperation::Copy}) {
+    PatternMeasurement measurement;
+    measurement.status = status;
+    measurement.status_reason = reason;
+    measurement.access_size_bytes = Constants::PATTERN_ACCESS_SIZE_BYTES;
+    measurement.stride_bytes = stride;
+    measurement.requested_threads = config.num_threads;
+    measurement.effective_threads = effective_threads;
+    measurement.native_page_size_bytes = static_cast<size_t>(getpagesize());
+    measurement.stride_equals_native_page_size =
+        stride == measurement.native_page_size_bytes;
+    set_pattern_measurement(results, kind, operation, std::move(measurement));
+  }
+}
+
+PatternMeasurement build_strided_measurement(
+    const BenchmarkConfig& config, const PatternWorkPlan& plan,
+    double bandwidth_gb_s, double elapsed_seconds, double pilot_elapsed_seconds,
+    bool copy_operation) {
+  PatternMeasurement measurement;
+  measurement.access_size_bytes = plan.access_size_bytes;
+  measurement.stride_bytes = plan.stride_bytes;
+  measurement.requested_threads = plan.requested_threads;
+  measurement.effective_threads = plan.effective_threads;
+  measurement.accesses_per_pass = plan.accesses_per_pass;
+  measurement.passes = plan.passes;
+  measurement.total_accesses = plan.total_accesses;
+  measurement.total_payload_bytes = plan.total_payload_bytes;
+  measurement.distinct_address_count = plan.distinct_address_count;
+  measurement.logical_working_set_bytes = plan.logical_working_set_bytes;
+  measurement.completed_phase_cycles = plan.completed_phase_cycles;
+  measurement.elapsed_seconds = elapsed_seconds;
+  measurement.pilot_elapsed_seconds = pilot_elapsed_seconds;
+  measurement.automatic_calibration = !config.user_specified_iterations;
+  measurement.native_page_size_bytes = static_cast<size_t>(getpagesize());
+  measurement.stride_equals_native_page_size =
+      plan.stride_bytes == measurement.native_page_size_bytes;
+
+  if (copy_operation) {
+    if (measurement.total_payload_bytes >
+        std::numeric_limits<size_t>::max() / Constants::COPY_OPERATION_MULTIPLIER) {
+      measurement.status = PatternMeasurementStatus::Invalid;
+      measurement.status_reason =
+          Messages::pattern_reason_copy_accounting_overflow();
+      return measurement;
+    }
+    measurement.total_payload_bytes *= Constants::COPY_OPERATION_MULTIPLIER;
+  }
+
+  if (elapsed_seconds <= 0.0 || !std::isfinite(elapsed_seconds) ||
+      bandwidth_gb_s <= 0.0 || !std::isfinite(bandwidth_gb_s)) {
+    measurement.status = PatternMeasurementStatus::Invalid;
+    measurement.status_reason = Messages::pattern_reason_invalid_strided_timing();
+    return measurement;
+  }
+  measurement.status = PatternMeasurementStatus::Measured;
+  measurement.status_reason.clear();
+  measurement.bandwidth_gb_s = bandwidth_gb_s;
+  return measurement;
 }
 
 }  // namespace
@@ -84,18 +194,18 @@ bool calibrate_strided_plan(const BenchmarkConfig& config,
 // Run strided pattern benchmarks (access with specified stride)
 // Returns EXIT_SUCCESS on success, EXIT_FAILURE on error, or skips pattern if buffer too small
 int run_strided_pattern_benchmarks(const BenchmarkBuffers& buffers, const BenchmarkConfig& config,
-                                   size_t stride, double& read_bw, double& write_bw, double& copy_bw,
+                                   size_t stride, PatternResults& results,
                                    HighResTimer& timer) {
   using namespace Constants;
-  
-  // Initialize results to 0 in case we skip this pattern
-  read_bw = 0.0;
-  write_bw = 0.0;
-  copy_bw = 0.0;
+  const PatternKind pattern_kind = pattern_kind_for_stride(stride);
   
   // Validate stride - if validation fails due to buffer size, skip pattern gracefully
   if (!validate_stride(stride, config.buffer_size)) {
     // Buffer too small for this stride - skip pattern (not an error)
+    set_strided_triplet_status(results, pattern_kind,
+                               PatternMeasurementStatus::Skipped,
+                               Messages::pattern_reason_stride_transition_unavailable(),
+                               config, stride, 0);
     return EXIT_SUCCESS;
   }
 
@@ -104,9 +214,17 @@ int run_strided_pattern_benchmarks(const BenchmarkBuffers& buffers, const Benchm
                                       config.num_threads, 1,
                                       PATTERN_CALIBRATION_MIN_PILOT_BYTES);
   if (pilot_plan.status == PatternMeasurementStatus::Skipped) {
+    set_strided_triplet_status(results, pattern_kind,
+                               PatternMeasurementStatus::Skipped,
+                               pilot_plan.status_reason, config, stride,
+                               pilot_plan.effective_threads);
     return EXIT_SUCCESS;
   }
   if (pilot_plan.status != PatternMeasurementStatus::Measured) {
+    set_strided_triplet_status(results, pattern_kind,
+                               PatternMeasurementStatus::Invalid,
+                               pilot_plan.status_reason, config, stride,
+                               pilot_plan.effective_threads);
     return EXIT_FAILURE;
   }
   
@@ -121,11 +239,18 @@ int run_strided_pattern_benchmarks(const BenchmarkBuffers& buffers, const Benchm
                                          pilot_plan.effective_threads);
   };
   PatternWorkPlan read_plan;
-  if (!calibrate_strided_plan(config, pilot_plan, run_read, read_plan)) {
+  double read_pilot_time = 0.0;
+  if (!calibrate_strided_plan(config, pilot_plan, run_read, read_plan,
+                              read_pilot_time)) {
     return EXIT_FAILURE;
   }
-  const double read_time = run_read(static_cast<int>(read_plan.passes));
-  read_bw = calculate_bandwidth(read_plan.total_payload_bytes, 1, read_time);
+  const double read_time = run_strided_sample(config, run_read, read_plan);
+  const double read_bw =
+      calculate_bandwidth(read_plan.total_payload_bytes, 1, read_time);
+  set_pattern_measurement(
+      results, pattern_kind, PatternOperation::Read,
+      build_strided_measurement(config, read_plan, read_bw, read_time,
+                                read_pilot_time, false));
 
   // Execute write benchmark
   show_progress();
@@ -136,11 +261,18 @@ int run_strided_pattern_benchmarks(const BenchmarkBuffers& buffers, const Benchm
                                           passes, timer, pilot_plan.effective_threads);
   };
   PatternWorkPlan write_plan;
-  if (!calibrate_strided_plan(config, pilot_plan, run_write, write_plan)) {
+  double write_pilot_time = 0.0;
+  if (!calibrate_strided_plan(config, pilot_plan, run_write, write_plan,
+                              write_pilot_time)) {
     return EXIT_FAILURE;
   }
-  const double write_time = run_write(static_cast<int>(write_plan.passes));
-  write_bw = calculate_bandwidth(write_plan.total_payload_bytes, 1, write_time);
+  const double write_time = run_strided_sample(config, run_write, write_plan);
+  const double write_bw =
+      calculate_bandwidth(write_plan.total_payload_bytes, 1, write_time);
+  set_pattern_measurement(
+      results, pattern_kind, PatternOperation::Write,
+      build_strided_measurement(config, write_plan, write_bw, write_time,
+                                write_pilot_time, false));
 
   // Execute copy benchmark
   show_progress();
@@ -152,16 +284,22 @@ int run_strided_pattern_benchmarks(const BenchmarkBuffers& buffers, const Benchm
                                          pilot_plan.effective_threads);
   };
   PatternWorkPlan copy_plan;
-  if (!calibrate_strided_plan(config, pilot_plan, run_copy, copy_plan)) {
+  double copy_pilot_time = 0.0;
+  if (!calibrate_strided_plan(config, pilot_plan, run_copy, copy_plan,
+                              copy_pilot_time)) {
     return EXIT_FAILURE;
   }
-  const double copy_time = run_copy(static_cast<int>(copy_plan.passes));
+  const double copy_time = run_strided_sample(config, run_copy, copy_plan);
   if (copy_plan.total_payload_bytes >
       std::numeric_limits<size_t>::max() / Constants::COPY_OPERATION_MULTIPLIER) {
     return EXIT_FAILURE;
   }
-  copy_bw = calculate_bandwidth(
+  const double copy_bw = calculate_bandwidth(
       copy_plan.total_payload_bytes * Constants::COPY_OPERATION_MULTIPLIER, 1, copy_time);
+  set_pattern_measurement(
+      results, pattern_kind, PatternOperation::Copy,
+      build_strided_measurement(config, copy_plan, copy_bw, copy_time,
+                                copy_pilot_time, true));
   
   return EXIT_SUCCESS;
 }

@@ -34,12 +34,15 @@
 #include "core/memory/buffer_manager.h"
 #include "core/config/config.h"
 #include "core/config/constants.h"
+#include "output/console/messages/messages_api.h"
 #include "warmup/warmup.h"
 #include <atomic>
 #include <vector>
 #include <algorithm>
 #include <cstdlib>
 #include <limits>
+#include <unistd.h>
+#include <utility>
 
 // Forward declarations from helpers.cpp
 double run_pattern_read_test(void* buffer, size_t size, int iterations,
@@ -70,30 +73,144 @@ double calculate_bandwidth(size_t data_size, int iterations, double elapsed_time
 
 namespace {
 
+struct PatternCalibrationDecision {
+  int passes = 0;
+  double pilot_elapsed_seconds = 0.0;
+  bool automatic = false;
+};
+
 template <typename PilotRunner>
-int resolve_pattern_passes(const BenchmarkConfig& config, size_t payload_bytes_per_pass,
-                           PilotRunner pilot_runner) {
+PatternCalibrationDecision resolve_pattern_passes(
+    const BenchmarkConfig& config, size_t payload_bytes_per_pass,
+    PilotRunner pilot_runner) {
   using namespace Constants;
+  PatternCalibrationDecision decision;
+  decision.automatic = !config.user_specified_iterations;
+  if (config.user_specified_iterations) {
+    decision.passes = config.iterations;
+    return decision;
+  }
   const size_t pilot_passes = calculate_pattern_pilot_passes(
       payload_bytes_per_pass, PATTERN_CALIBRATION_MIN_PILOT_BYTES,
       PATTERN_CALIBRATION_MAX_PASSES);
   if (pilot_passes == 0 || pilot_passes > static_cast<size_t>(std::numeric_limits<int>::max())) {
-    return 0;
+    return decision;
   }
 
-  const double pilot_duration = pilot_runner(static_cast<int>(pilot_passes));
-  if (config.user_specified_iterations) {
-    return config.iterations;
-  }
-
+  decision.pilot_elapsed_seconds = pilot_runner(static_cast<int>(pilot_passes));
   const size_t calibrated_passes = calculate_pattern_calibrated_passes(
-      pilot_duration, pilot_passes, PATTERN_CALIBRATION_TARGET_SECONDS, 1,
+      decision.pilot_elapsed_seconds, pilot_passes,
+      PATTERN_CALIBRATION_TARGET_SECONDS, 1,
       PATTERN_CALIBRATION_MAX_PASSES);
   if (calibrated_passes == 0 ||
       calibrated_passes > static_cast<size_t>(std::numeric_limits<int>::max())) {
-    return 0;
+    return decision;
   }
-  return static_cast<int>(calibrated_passes);
+  decision.passes = static_cast<int>(calibrated_passes);
+  return decision;
+}
+
+template <typename Runner>
+double run_pattern_sample(const BenchmarkConfig& config, Runner runner,
+                          PatternCalibrationDecision& decision) {
+  using namespace Constants;
+  double elapsed_seconds = runner(decision.passes);
+  for (size_t correction = 0;
+       decision.automatic && correction < PATTERN_CALIBRATION_MAX_CORRECTIONS;
+       ++correction) {
+    if (elapsed_seconds <= 0.0 || !std::isfinite(elapsed_seconds) ||
+        (elapsed_seconds >= PATTERN_CALIBRATION_MIN_SECONDS &&
+         elapsed_seconds <= PATTERN_CALIBRATION_MAX_SECONDS)) {
+      break;
+    }
+    const size_t corrected_passes = calculate_pattern_calibrated_passes(
+        elapsed_seconds, static_cast<size_t>(decision.passes),
+        PATTERN_CALIBRATION_TARGET_SECONDS, 1, PATTERN_CALIBRATION_MAX_PASSES);
+    if (corrected_passes == 0 ||
+        corrected_passes > static_cast<size_t>(std::numeric_limits<int>::max()) ||
+        corrected_passes == static_cast<size_t>(decision.passes)) {
+      break;
+    }
+    decision.passes = static_cast<int>(corrected_passes);
+    elapsed_seconds = runner(decision.passes);
+  }
+  return elapsed_seconds;
+}
+
+bool checked_multiply_size(size_t left, size_t right, size_t& result) {
+  if (left != 0 && right > std::numeric_limits<size_t>::max() / left) {
+    return false;
+  }
+  result = left * right;
+  return true;
+}
+
+PatternMeasurement build_pattern_measurement(
+    const BenchmarkConfig& config, double bandwidth_gb_s, double elapsed_seconds,
+    const PatternCalibrationDecision& calibration, size_t payload_bytes_per_pass,
+    size_t accesses_per_pass, size_t distinct_address_count,
+    size_t logical_working_set_bytes, size_t stride_bytes = 0,
+    bool has_seed = false) {
+  PatternMeasurement measurement;
+  measurement.access_size_bytes = Constants::PATTERN_ACCESS_SIZE_BYTES;
+  measurement.stride_bytes = stride_bytes;
+  measurement.requested_threads = config.num_threads;
+  measurement.effective_threads = config.num_threads;
+  measurement.accesses_per_pass = accesses_per_pass;
+  measurement.passes = calibration.passes > 0
+                           ? static_cast<size_t>(calibration.passes)
+                           : 0;
+  measurement.distinct_address_count = distinct_address_count;
+  measurement.logical_working_set_bytes = logical_working_set_bytes;
+  measurement.elapsed_seconds = elapsed_seconds;
+  measurement.pilot_elapsed_seconds = calibration.pilot_elapsed_seconds;
+  measurement.automatic_calibration = calibration.automatic;
+  measurement.native_page_size_bytes = static_cast<size_t>(getpagesize());
+  measurement.stride_equals_native_page_size =
+      stride_bytes != 0 && stride_bytes == measurement.native_page_size_bytes;
+  measurement.has_seed = has_seed;
+  measurement.seed = has_seed ? config.pattern_seed : 0;
+
+  if (measurement.passes == 0 || elapsed_seconds <= 0.0 ||
+      !std::isfinite(elapsed_seconds) || !std::isfinite(bandwidth_gb_s) ||
+      bandwidth_gb_s <= 0.0 ||
+      !checked_multiply_size(accesses_per_pass, measurement.passes,
+                             measurement.total_accesses) ||
+      !checked_multiply_size(payload_bytes_per_pass, measurement.passes,
+                             measurement.total_payload_bytes)) {
+    measurement.status = PatternMeasurementStatus::Invalid;
+    measurement.status_reason =
+        Messages::pattern_reason_calibration_or_accounting_failed();
+    measurement.bandwidth_gb_s.reset();
+    return measurement;
+  }
+
+  measurement.status = PatternMeasurementStatus::Measured;
+  measurement.status_reason.clear();
+  measurement.bandwidth_gb_s = bandwidth_gb_s;
+  return measurement;
+}
+
+void set_triplet_status(PatternResults& results, PatternKind kind,
+                        PatternMeasurementStatus status,
+                        const std::string& reason, const BenchmarkConfig& config,
+                        size_t stride_bytes = 0, bool has_seed = false) {
+  for (PatternOperation operation : {PatternOperation::Read, PatternOperation::Write,
+                                     PatternOperation::Copy}) {
+    PatternMeasurement measurement;
+    measurement.status = status;
+    measurement.status_reason = reason;
+    measurement.access_size_bytes = Constants::PATTERN_ACCESS_SIZE_BYTES;
+    measurement.stride_bytes = stride_bytes;
+    measurement.requested_threads = config.num_threads;
+    measurement.effective_threads = config.num_threads;
+    measurement.native_page_size_bytes = static_cast<size_t>(getpagesize());
+    measurement.stride_equals_native_page_size =
+        stride_bytes != 0 && stride_bytes == measurement.native_page_size_bytes;
+    measurement.has_seed = has_seed;
+    measurement.seed = has_seed ? config.pattern_seed : 0;
+    set_pattern_measurement(results, kind, operation, std::move(measurement));
+  }
 }
 
 }  // namespace
@@ -113,9 +230,20 @@ void run_forward_pattern_benchmarks(const BenchmarkBuffers& buffers, const Bench
                                  memory_read_loop_asm, checksum, timer,
                                  config.num_threads);
   };
-  const int read_passes = resolve_pattern_passes(config, config.buffer_size, run_read);
-  const double read_time = run_read(read_passes);
-  results.forward_read_bw = calculate_bandwidth(config.buffer_size, read_passes, read_time);
+  PatternCalibrationDecision read_calibration =
+      resolve_pattern_passes(config, config.buffer_size, run_read);
+  const double read_time = run_pattern_sample(config, run_read, read_calibration);
+  const double read_bandwidth =
+      calculate_bandwidth(config.buffer_size, read_calibration.passes, read_time);
+  set_pattern_measurement(
+      results, PatternKind::SequentialForward, PatternOperation::Read,
+      build_pattern_measurement(
+          config, read_bandwidth, read_time, read_calibration, config.buffer_size,
+          (config.buffer_size + Constants::PATTERN_ACCESS_SIZE_BYTES - 1) /
+              Constants::PATTERN_ACCESS_SIZE_BYTES,
+          (config.buffer_size + Constants::PATTERN_ACCESS_SIZE_BYTES - 1) /
+              Constants::PATTERN_ACCESS_SIZE_BYTES,
+          config.buffer_size));
   
   show_progress();
   warmup_write(buffers.dst_buffer(), config.buffer_size, config.num_threads);
@@ -123,9 +251,20 @@ void run_forward_pattern_benchmarks(const BenchmarkBuffers& buffers, const Bench
     return run_write_test(buffers.dst_buffer(), config.buffer_size, passes,
                           config.num_threads, timer);
   };
-  const int write_passes = resolve_pattern_passes(config, config.buffer_size, run_write);
-  const double write_time = run_write(write_passes);
-  results.forward_write_bw = calculate_bandwidth(config.buffer_size, write_passes, write_time);
+  PatternCalibrationDecision write_calibration =
+      resolve_pattern_passes(config, config.buffer_size, run_write);
+  const double write_time = run_pattern_sample(config, run_write, write_calibration);
+  const double write_bandwidth =
+      calculate_bandwidth(config.buffer_size, write_calibration.passes, write_time);
+  set_pattern_measurement(
+      results, PatternKind::SequentialForward, PatternOperation::Write,
+      build_pattern_measurement(
+          config, write_bandwidth, write_time, write_calibration, config.buffer_size,
+          (config.buffer_size + Constants::PATTERN_ACCESS_SIZE_BYTES - 1) /
+              Constants::PATTERN_ACCESS_SIZE_BYTES,
+          (config.buffer_size + Constants::PATTERN_ACCESS_SIZE_BYTES - 1) /
+              Constants::PATTERN_ACCESS_SIZE_BYTES,
+          config.buffer_size));
   
   show_progress();
   warmup_copy(buffers.dst_buffer(), buffers.src_buffer(), config.buffer_size, config.num_threads);
@@ -133,11 +272,23 @@ void run_forward_pattern_benchmarks(const BenchmarkBuffers& buffers, const Bench
     return run_copy_test(buffers.dst_buffer(), buffers.src_buffer(), config.buffer_size,
                          passes, config.num_threads, timer);
   };
-  const int copy_passes = resolve_pattern_passes(
+  PatternCalibrationDecision copy_calibration = resolve_pattern_passes(
       config, config.buffer_size * Constants::COPY_OPERATION_MULTIPLIER, run_copy);
-  const double copy_time = run_copy(copy_passes);
-  results.forward_copy_bw = calculate_bandwidth(config.buffer_size * Constants::COPY_OPERATION_MULTIPLIER, 
-                                                copy_passes, copy_time);
+  const double copy_time = run_pattern_sample(config, run_copy, copy_calibration);
+  const size_t copy_payload_per_pass =
+      config.buffer_size * Constants::COPY_OPERATION_MULTIPLIER;
+  const double copy_bandwidth = calculate_bandwidth(
+      copy_payload_per_pass, copy_calibration.passes, copy_time);
+  set_pattern_measurement(
+      results, PatternKind::SequentialForward, PatternOperation::Copy,
+      build_pattern_measurement(
+          config, copy_bandwidth, copy_time, copy_calibration,
+          copy_payload_per_pass,
+          (config.buffer_size + Constants::PATTERN_ACCESS_SIZE_BYTES - 1) /
+              Constants::PATTERN_ACCESS_SIZE_BYTES,
+          (config.buffer_size + Constants::PATTERN_ACCESS_SIZE_BYTES - 1) /
+              Constants::PATTERN_ACCESS_SIZE_BYTES,
+          config.buffer_size));
 }
 
 // Run reverse pattern benchmarks (backward sequential access)
@@ -151,9 +302,20 @@ void run_reverse_pattern_benchmarks(const BenchmarkBuffers& buffers, const Bench
                                  memory_read_reverse_loop_asm, checksum, timer,
                                  config.num_threads);
   };
-  const int read_passes = resolve_pattern_passes(config, config.buffer_size, run_read);
-  const double read_time = run_read(read_passes);
-  results.reverse_read_bw = calculate_bandwidth(config.buffer_size, read_passes, read_time);
+  PatternCalibrationDecision read_calibration =
+      resolve_pattern_passes(config, config.buffer_size, run_read);
+  const double read_time = run_pattern_sample(config, run_read, read_calibration);
+  const double read_bandwidth =
+      calculate_bandwidth(config.buffer_size, read_calibration.passes, read_time);
+  set_pattern_measurement(
+      results, PatternKind::SequentialReverse, PatternOperation::Read,
+      build_pattern_measurement(
+          config, read_bandwidth, read_time, read_calibration, config.buffer_size,
+          (config.buffer_size + Constants::PATTERN_ACCESS_SIZE_BYTES - 1) /
+              Constants::PATTERN_ACCESS_SIZE_BYTES,
+          (config.buffer_size + Constants::PATTERN_ACCESS_SIZE_BYTES - 1) /
+              Constants::PATTERN_ACCESS_SIZE_BYTES,
+          config.buffer_size));
 
   show_progress();
   warmup_write(buffers.dst_buffer(), config.buffer_size, config.num_threads);
@@ -161,9 +323,20 @@ void run_reverse_pattern_benchmarks(const BenchmarkBuffers& buffers, const Bench
     return run_pattern_write_test(buffers.dst_buffer(), config.buffer_size, passes,
                                   memory_write_reverse_loop_asm, timer, config.num_threads);
   };
-  const int write_passes = resolve_pattern_passes(config, config.buffer_size, run_write);
-  const double write_time = run_write(write_passes);
-  results.reverse_write_bw = calculate_bandwidth(config.buffer_size, write_passes, write_time);
+  PatternCalibrationDecision write_calibration =
+      resolve_pattern_passes(config, config.buffer_size, run_write);
+  const double write_time = run_pattern_sample(config, run_write, write_calibration);
+  const double write_bandwidth =
+      calculate_bandwidth(config.buffer_size, write_calibration.passes, write_time);
+  set_pattern_measurement(
+      results, PatternKind::SequentialReverse, PatternOperation::Write,
+      build_pattern_measurement(
+          config, write_bandwidth, write_time, write_calibration, config.buffer_size,
+          (config.buffer_size + Constants::PATTERN_ACCESS_SIZE_BYTES - 1) /
+              Constants::PATTERN_ACCESS_SIZE_BYTES,
+          (config.buffer_size + Constants::PATTERN_ACCESS_SIZE_BYTES - 1) /
+              Constants::PATTERN_ACCESS_SIZE_BYTES,
+          config.buffer_size));
 
   show_progress();
   warmup_copy(buffers.dst_buffer(), buffers.src_buffer(), config.buffer_size, config.num_threads);
@@ -172,11 +345,23 @@ void run_reverse_pattern_benchmarks(const BenchmarkBuffers& buffers, const Bench
                                  passes, memory_copy_reverse_loop_asm, timer,
                                  config.num_threads);
   };
-  const int copy_passes = resolve_pattern_passes(
+  PatternCalibrationDecision copy_calibration = resolve_pattern_passes(
       config, config.buffer_size * Constants::COPY_OPERATION_MULTIPLIER, run_copy);
-  const double copy_time = run_copy(copy_passes);
-  results.reverse_copy_bw = calculate_bandwidth(config.buffer_size * Constants::COPY_OPERATION_MULTIPLIER,
-                                                copy_passes, copy_time);
+  const double copy_time = run_pattern_sample(config, run_copy, copy_calibration);
+  const size_t copy_payload_per_pass =
+      config.buffer_size * Constants::COPY_OPERATION_MULTIPLIER;
+  const double copy_bandwidth = calculate_bandwidth(
+      copy_payload_per_pass, copy_calibration.passes, copy_time);
+  set_pattern_measurement(
+      results, PatternKind::SequentialReverse, PatternOperation::Copy,
+      build_pattern_measurement(
+          config, copy_bandwidth, copy_time, copy_calibration,
+          copy_payload_per_pass,
+          (config.buffer_size + Constants::PATTERN_ACCESS_SIZE_BYTES - 1) /
+              Constants::PATTERN_ACCESS_SIZE_BYTES,
+          (config.buffer_size + Constants::PATTERN_ACCESS_SIZE_BYTES - 1) /
+              Constants::PATTERN_ACCESS_SIZE_BYTES,
+          config.buffer_size));
 }
 
 // Run random pattern benchmarks (uniform random access)
@@ -195,6 +380,10 @@ int run_random_pattern_benchmarks(const BenchmarkBuffers& buffers, const Benchma
   // Validate indices - if validation fails due to buffer size, skip pattern gracefully
   if (!validate_random_indices(random_indices, config.buffer_size)) {
     // No valid indices or buffer too small - skip pattern (not an error)
+    set_triplet_status(results, PatternKind::Random,
+                       PatternMeasurementStatus::Skipped,
+                       Messages::pattern_reason_no_valid_random_workload(),
+                       config, 0, true);
     return EXIT_SUCCESS;
   }
 
@@ -220,10 +409,21 @@ int run_random_pattern_benchmarks(const BenchmarkBuffers& buffers, const Benchma
                                         config.buffer_size);
   };
   const size_t payload_bytes_per_pass = num_accesses * PATTERN_ACCESS_SIZE_BYTES;
-  const int read_passes = resolve_pattern_passes(config, payload_bytes_per_pass, run_read);
-  const double read_time = run_read(read_passes);
+  PatternCalibrationDecision read_calibration =
+      resolve_pattern_passes(config, payload_bytes_per_pass, run_read);
+  const double read_time = run_pattern_sample(config, run_read, read_calibration);
   // For random, we use num_accesses * PATTERN_ACCESS_SIZE_BYTES instead of buffer_size
-  results.random_read_bw = calculate_bandwidth(payload_bytes_per_pass, read_passes, read_time);
+  const double read_bandwidth = calculate_bandwidth(
+      payload_bytes_per_pass, read_calibration.passes, read_time);
+  const auto [minimum_index, maximum_index] =
+      std::minmax_element(random_indices.begin(), random_indices.end());
+  const size_t logical_working_set_bytes =
+      *maximum_index - *minimum_index + PATTERN_ACCESS_SIZE_BYTES;
+  set_pattern_measurement(
+      results, PatternKind::Random, PatternOperation::Read,
+      build_pattern_measurement(config, read_bandwidth, read_time, read_calibration,
+                                payload_bytes_per_pass, num_accesses, num_accesses,
+                                logical_working_set_bytes, 0, true));
 
   // Execute write benchmark
   show_progress();
@@ -232,9 +432,17 @@ int run_random_pattern_benchmarks(const BenchmarkBuffers& buffers, const Benchma
     return run_pattern_write_random_test(buffers.dst_buffer(), worker_indices, passes,
                                          timer, config.num_threads, config.buffer_size);
   };
-  const int write_passes = resolve_pattern_passes(config, payload_bytes_per_pass, run_write);
-  const double write_time = run_write(write_passes);
-  results.random_write_bw = calculate_bandwidth(payload_bytes_per_pass, write_passes, write_time);
+  PatternCalibrationDecision write_calibration =
+      resolve_pattern_passes(config, payload_bytes_per_pass, run_write);
+  const double write_time = run_pattern_sample(config, run_write, write_calibration);
+  const double write_bandwidth = calculate_bandwidth(
+      payload_bytes_per_pass, write_calibration.passes, write_time);
+  set_pattern_measurement(
+      results, PatternKind::Random, PatternOperation::Write,
+      build_pattern_measurement(config, write_bandwidth, write_time,
+                                write_calibration, payload_bytes_per_pass,
+                                num_accesses, num_accesses,
+                                logical_working_set_bytes, 0, true));
 
   // Execute copy benchmark
   show_progress();
@@ -247,10 +455,17 @@ int run_random_pattern_benchmarks(const BenchmarkBuffers& buffers, const Benchma
   };
   const size_t copy_payload_bytes_per_pass =
       payload_bytes_per_pass * Constants::COPY_OPERATION_MULTIPLIER;
-  const int copy_passes = resolve_pattern_passes(config, copy_payload_bytes_per_pass, run_copy);
-  const double copy_time = run_copy(copy_passes);
-  results.random_copy_bw =
-      calculate_bandwidth(copy_payload_bytes_per_pass, copy_passes, copy_time);
+  PatternCalibrationDecision copy_calibration = resolve_pattern_passes(
+      config, copy_payload_bytes_per_pass, run_copy);
+  const double copy_time = run_pattern_sample(config, run_copy, copy_calibration);
+  const double copy_bandwidth = calculate_bandwidth(
+      copy_payload_bytes_per_pass, copy_calibration.passes, copy_time);
+  set_pattern_measurement(
+      results, PatternKind::Random, PatternOperation::Copy,
+      build_pattern_measurement(config, copy_bandwidth, copy_time,
+                                copy_calibration, copy_payload_bytes_per_pass,
+                                num_accesses, num_accesses,
+                                logical_working_set_bytes, 0, true));
   
   return EXIT_SUCCESS;
 }

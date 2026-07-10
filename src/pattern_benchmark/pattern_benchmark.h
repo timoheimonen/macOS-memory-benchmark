@@ -25,14 +25,71 @@
 #ifndef PATTERN_BENCHMARK_H
 #define PATTERN_BENCHMARK_H
 
+#include <array>
 #include <cstddef>  // size_t
-#include <vector>
+#include <cstdint>
 #include <cstdlib>  // EXIT_SUCCESS, EXIT_FAILURE
+#include <optional>
+#include <string>
+#include <vector>
+
+#include "pattern_benchmark/pattern_work_plan.h"
 
 // Forward declarations
 struct BenchmarkConfig;
 struct BenchmarkBuffers;
 struct HighResTimer;
+
+enum class PatternKind {
+  SequentialForward = 0,
+  SequentialReverse,
+  Strided64,
+  Strided4096,
+  Strided16384,
+  Strided2MiB,
+  Random,
+  Count,
+};
+
+enum class PatternOperation {
+  Read = 0,
+  Write,
+  Copy,
+  Count,
+};
+
+struct PatternMeasurement {
+  PatternMeasurementStatus status = PatternMeasurementStatus::Invalid;
+  std::string status_reason;
+  std::optional<double> bandwidth_gb_s;
+  double elapsed_seconds = 0.0;
+  double pilot_elapsed_seconds = 0.0;
+  size_t access_size_bytes = 0;
+  size_t stride_bytes = 0;
+  int requested_threads = 0;
+  int effective_threads = 0;
+  size_t accesses_per_pass = 0;
+  size_t passes = 0;
+  size_t total_accesses = 0;
+  size_t total_payload_bytes = 0;
+  size_t distinct_address_count = 0;
+  size_t logical_working_set_bytes = 0;
+  size_t completed_phase_cycles = 0;
+  uint64_t seed = 0;
+  bool has_seed = false;
+  bool automatic_calibration = false;
+  size_t native_page_size_bytes = 0;
+  bool stride_equals_native_page_size = false;
+  bool large_page_backing_verified = false;
+  size_t benchmark_loop_index = 0;
+  size_t pattern_order_index = 0;
+};
+
+constexpr size_t pattern_measurement_index(PatternKind kind,
+                                           PatternOperation operation) {
+  return static_cast<size_t>(kind) * static_cast<size_t>(PatternOperation::Count) +
+         static_cast<size_t>(operation);
+}
 
 /**
  * @struct PatternResults
@@ -76,6 +133,11 @@ struct PatternResults {
   double random_read_bw = 0.0;   ///< Random access read bandwidth (GB/s)
   double random_write_bw = 0.0; ///< Random access write bandwidth (GB/s)
   double random_copy_bw = 0.0;  ///< Random access copy bandwidth (GB/s)
+
+  std::array<PatternMeasurement,
+             static_cast<size_t>(PatternKind::Count) *
+                 static_cast<size_t>(PatternOperation::Count)>
+      measurements;
 };
 
 /**
@@ -86,6 +148,7 @@ struct PatternResults {
  * including mean, min, max, and percentile calculations.
  */
 struct PatternStatistics {
+  std::vector<PatternResults> loop_results;  ///< Status-bearing per-loop results and metadata
   // Vectors storing results from each loop
   std::vector<double> all_forward_read_bw;        ///< Forward read bandwidth from each loop (GB/s)
   std::vector<double> all_forward_write_bw;       ///< Forward write bandwidth from each loop (GB/s)
@@ -110,17 +173,43 @@ struct PatternStatistics {
   std::vector<double> all_random_copy_bw;         ///< Random copy bandwidth from each loop (GB/s)
 };
 
+struct PatternStatisticsData {
+  double average = 0.0;
+  double min = 0.0;
+  double max = 0.0;
+  double median = 0.0;
+  double p90 = 0.0;
+  double p95 = 0.0;
+  double p99 = 0.0;
+  double stddev = 0.0;
+  double coefficient_of_variation_pct = 0.0;
+};
+
+PatternMeasurement& get_pattern_measurement(PatternResults& results, PatternKind kind,
+                                            PatternOperation operation);
+const PatternMeasurement& get_pattern_measurement(const PatternResults& results,
+                                                  PatternKind kind,
+                                                  PatternOperation operation);
+void set_pattern_measurement(PatternResults& results, PatternKind kind,
+                             PatternOperation operation,
+                             PatternMeasurement measurement);
+PatternStatisticsData calculate_pattern_statistics(const std::vector<double>& values);
+std::array<PatternKind, static_cast<size_t>(PatternKind::Count)>
+build_pattern_execution_order(size_t loop_index);
+
 /**
  * @brief Run pattern benchmarks for various memory access patterns
  * @param buffers Reference to benchmark buffers structure
  * @param config Reference to benchmark configuration
  * @param results Reference to PatternResults structure to store results
+ * @param loop_index Zero-based outer-loop index used to balance pattern order
  * @return EXIT_SUCCESS on success, EXIT_FAILURE on error
  *
  * Executes benchmarks for sequential forward, sequential reverse, strided (64B and 4096B),
  * and random access patterns. Results are stored in the PatternResults structure.
  */
-int run_pattern_benchmarks(const BenchmarkBuffers& buffers, const BenchmarkConfig& config, PatternResults& results);
+int run_pattern_benchmarks(const BenchmarkBuffers& buffers, const BenchmarkConfig& config,
+                           PatternResults& results, size_t loop_index = 0);
 
 /**
  * @brief Run all pattern benchmark loops and collect statistics
@@ -160,5 +249,8 @@ void print_pattern_statistics(int loop_count, const PatternStatistics& stats);
  * vectors. Returns a default-constructed PatternResults (all zeros) when the statistics are empty.
  */
 PatternResults extract_pattern_results_at(const PatternStatistics& stats, size_t index);
+
+/** @brief Build median headline results while preserving representative metadata. */
+PatternResults extract_pattern_median_results(const PatternStatistics& stats);
 
 #endif // PATTERN_BENCHMARK_H
