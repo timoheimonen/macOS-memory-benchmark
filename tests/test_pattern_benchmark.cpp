@@ -28,6 +28,148 @@
 #include <utility>
 #include <vector>
 
+extern "C" uint64_t verify_pattern_callee_saved_registers_asm(
+    uintptr_t function_address, uintptr_t arg0, uintptr_t arg1, uintptr_t arg2,
+    uintptr_t arg3, uintptr_t arg4, uintptr_t arg5);
+
+// Test-only AAPCS64 probe. It seeds x19-x29 and the preserved low 64 bits of
+// d8-d15, calls a pattern kernel with up to six integer arguments, and returns
+// one only when every callee-saved value survives.
+__asm__(R"ASM(
+.text
+.p2align 4
+.global _verify_pattern_callee_saved_registers_asm
+_verify_pattern_callee_saved_registers_asm:
+    stp x29, x30, [sp, #-160]!
+    mov x29, sp
+    stp x19, x20, [sp, #16]
+    stp x21, x22, [sp, #32]
+    stp x23, x24, [sp, #48]
+    stp x25, x26, [sp, #64]
+    stp x27, x28, [sp, #80]
+    stp d8, d9, [sp, #96]
+    stp d10, d11, [sp, #112]
+    stp d12, d13, [sp, #128]
+    stp d14, d15, [sp, #144]
+
+    mov x16, x0
+    mov x0, x1
+    mov x1, x2
+    mov x2, x3
+    mov x3, x4
+    mov x4, x5
+    mov x5, x6
+
+    mov x19, #0x1919
+    mov x20, #0x2020
+    mov x21, #0x2121
+    mov x22, #0x2222
+    mov x23, #0x2323
+    mov x24, #0x2424
+    mov x25, #0x2525
+    mov x26, #0x2626
+    mov x27, #0x2727
+    mov x28, #0x2828
+    mov x9, #0xd8
+    fmov d8, x9
+    mov x9, #0xd9
+    fmov d9, x9
+    mov x9, #0xda
+    fmov d10, x9
+    mov x9, #0xdb
+    fmov d11, x9
+    mov x9, #0xdc
+    fmov d12, x9
+    mov x9, #0xdd
+    fmov d13, x9
+    mov x9, #0xde
+    fmov d14, x9
+    mov x9, #0xdf
+    fmov d15, x9
+
+    blr x16
+
+    mov x17, #1
+    mov x9, sp
+    cmp x29, x9
+    csel x17, x17, xzr, eq
+    mov x9, #0x1919
+    cmp x19, x9
+    csel x17, x17, xzr, eq
+    mov x9, #0x2020
+    cmp x20, x9
+    csel x17, x17, xzr, eq
+    mov x9, #0x2121
+    cmp x21, x9
+    csel x17, x17, xzr, eq
+    mov x9, #0x2222
+    cmp x22, x9
+    csel x17, x17, xzr, eq
+    mov x9, #0x2323
+    cmp x23, x9
+    csel x17, x17, xzr, eq
+    mov x9, #0x2424
+    cmp x24, x9
+    csel x17, x17, xzr, eq
+    mov x9, #0x2525
+    cmp x25, x9
+    csel x17, x17, xzr, eq
+    mov x9, #0x2626
+    cmp x26, x9
+    csel x17, x17, xzr, eq
+    mov x9, #0x2727
+    cmp x27, x9
+    csel x17, x17, xzr, eq
+    mov x9, #0x2828
+    cmp x28, x9
+    csel x17, x17, xzr, eq
+    mov x9, #0xd8
+    fmov x10, d8
+    cmp x10, x9
+    csel x17, x17, xzr, eq
+    mov x9, #0xd9
+    fmov x10, d9
+    cmp x10, x9
+    csel x17, x17, xzr, eq
+    mov x9, #0xda
+    fmov x10, d10
+    cmp x10, x9
+    csel x17, x17, xzr, eq
+    mov x9, #0xdb
+    fmov x10, d11
+    cmp x10, x9
+    csel x17, x17, xzr, eq
+    mov x9, #0xdc
+    fmov x10, d12
+    cmp x10, x9
+    csel x17, x17, xzr, eq
+    mov x9, #0xdd
+    fmov x10, d13
+    cmp x10, x9
+    csel x17, x17, xzr, eq
+    mov x9, #0xde
+    fmov x10, d14
+    cmp x10, x9
+    csel x17, x17, xzr, eq
+    mov x9, #0xdf
+    fmov x10, d15
+    cmp x10, x9
+    csel x17, x17, xzr, eq
+
+    ldp d14, d15, [sp, #144]
+    ldp d12, d13, [sp, #128]
+    ldp d10, d11, [sp, #112]
+    ldp d8, d9, [sp, #96]
+    ldp x27, x28, [sp, #80]
+    ldp x25, x26, [sp, #64]
+    ldp x23, x24, [sp, #48]
+    ldp x21, x22, [sp, #32]
+    ldp x19, x20, [sp, #16]
+    ldp x29, x30, [sp], #160
+    mov x0, x17
+    ret
+)ASM");
+
 namespace {
 
 BenchmarkConfig make_pattern_config(size_t buffer_size, int iterations, int num_threads = 1) {
@@ -285,6 +427,42 @@ TEST(PatternBenchmarkTest, PhasedStridedKernelsRespectAccessBoundariesIntegratio
       EXPECT_EQ(destination[-static_cast<ptrdiff_t>(guard)], 0x5A);
       EXPECT_EQ(destination[span + guard - 1], 0x5A);
     }
+  }
+}
+
+TEST(PatternBenchmarkTest, PhasedStridedKernelsPreserveAapcs64RegistersIntegration) {
+  const std::vector<size_t> strides = {
+      Constants::PATTERN_STRIDE_CACHE_LINE,
+      Constants::PATTERN_STRIDE_PAGE,
+      Constants::PATTERN_STRIDE_PAGE_16K,
+      Constants::PATTERN_STRIDE_SUPERPAGE_2MB,
+  };
+
+  for (size_t stride : strides) {
+    SCOPED_TRACE(stride);
+    const size_t span = stride + Constants::PATTERN_ACCESS_SIZE_BYTES;
+    std::vector<unsigned char> source(span, 0xA5);
+    std::vector<unsigned char> destination(span, 0x5A);
+
+    EXPECT_EQ(verify_pattern_callee_saved_registers_asm(
+                  reinterpret_cast<uintptr_t>(
+                      &memory_read_strided_phased_loop_asm),
+                  reinterpret_cast<uintptr_t>(source.data()), span, stride, 2,
+                  0, 0),
+              1u);
+    EXPECT_EQ(verify_pattern_callee_saved_registers_asm(
+                  reinterpret_cast<uintptr_t>(
+                      &memory_write_strided_phased_loop_asm),
+                  reinterpret_cast<uintptr_t>(destination.data()), span, stride,
+                  2, 0, 0),
+              1u);
+    EXPECT_EQ(verify_pattern_callee_saved_registers_asm(
+                  reinterpret_cast<uintptr_t>(
+                      &memory_copy_strided_phased_loop_asm),
+                  reinterpret_cast<uintptr_t>(destination.data()),
+                  reinterpret_cast<uintptr_t>(source.data()), span, stride, 2,
+                  0),
+              1u);
   }
 }
 
