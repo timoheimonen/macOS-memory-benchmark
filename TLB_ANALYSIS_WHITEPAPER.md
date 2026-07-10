@@ -78,7 +78,9 @@ Sweep density applies only to `--analyze-tlb`.
 option is omitted, one 64-bit seed is generated when the command is parsed. A Cartesian parameter sweep reuses that
 same base seed for every generated run, which makes parameter comparisons share the same deterministic schedule policy.
 
-The base seed, whether it was user-provided or generated, and every derived measurement seed are stored in JSON.
+The base seed, whether it was user-provided or generated, and every derived measurement seed are stored in JSON. Task seeds
+apply SplitMix64 successively to the base seed, pass, round index, and point index. Spread and packed layout seeds apply
+SplitMix64 again with a layout-specific domain constant. The `seed_derivation` object records both rules.
 
 ### 3.5 Parameter Sweep (`--sweep`)
 
@@ -132,6 +134,9 @@ the mode exits with an insufficient-memory error. An `mmap()` success alone ther
 
 `mlock()` is best-effort. On failure, the mode reports errno and its message, records the failure and policy in JSON, and
 continues unlocked. The settings block also reports available memory, the selected budget, and predicted peak use.
+
+The main thread also requests `user-interactive` QoS before measurement. This is a best-effort scheduler hint: console and
+JSON record whether it was requested/applied and the API return code, and failure emits a warning without aborting the run.
 
 The page-native builder validates each requested spread footprint and packed footprint against the selected buffer before
 writing any pointer slots.
@@ -347,9 +352,10 @@ frequency scaling). This comparison changes locality and address-order behavior 
 page-table-walk cost**. Console output uses `Large-Locality Latency Delta`, and JSON uses
 `large_locality_latency_delta.delta_ns`.
 
-The old `page_walk_penalty` object remains for one compatibility window with `deprecated: true` and
-`replacement: "large_locality_latency_delta"`. If the comparison cannot run or analysis is interrupted, the delta is
-unavailable and its numerical value is omitted.
+The old `page_walk_penalty` object retains its legacy large-locality-difference semantics as a deprecated alias through
+`0.57.x`. It names `large_locality_latency_delta` as its replacement and records
+`removal_not_before: "0.58.0"`. If the comparison cannot run or analysis is interrupted, the delta is unavailable and its
+numerical value is omitted.
 
 Availability rule:
 
@@ -410,19 +416,20 @@ When `--output <file>` is provided with `--analyze-tlb` without `--sweep`, outpu
   - selected buffer, available-memory budget, estimated peak, and best-effort `mlock()` status/errno/error
   - base-pass point/access/memory/duration work estimate
   - `schema_version = 4` and `methodology_version = "page-native-paired-adaptive-validated-v4"`
-  - base `seed`, `seed_source`, `schedule_policy = "seeded-cyclic-latin"`, chain model, delta definition, and `boundary_signal = "translation_delta_ns"`
+  - base `seed`, `seed_source`, explicit task/layout `seed_derivation`, `schedule_policy = "seeded-cyclic-latin"`, chain model, delta definition, and `boundary_signal = "translation_delta_ns"`
+  - main-thread QoS request/applied/code metadata and its best-effort policy
   - paired-bootstrap method, 2,000 resamples, `0.5ns` minimum effect, two-point persistence, and independent-validation requirement
 
 - `tlb_analysis` contains:
   - status, discovery/validation point counts, adaptive round bounds, per-pass realized round/convergence summaries, scheduled-pair bounds, raw-measurement counts, and `conclusions_valid`
   - `measurement_records[]` in execution order with pass, point, locality, round, order, task seed, legacy spread `latency_ns`, and a `paired_control` object
   - each `paired_control` contains pair order, spread/packed seeds, pilot timing/accesses, calibrated accesses, raw latencies, verified chain diagnostics, and same-round `translation_delta_ns`
-  - `sweep[]` contains requested/effective/actual pages, actual node and unique-cache-line counts, both chain diagnostics, raw spread/packed/delta arrays, their P50 values, refinement source/bracket, and per-task records
+  - `sweep[]` contains requested/effective/actual pages, pointer-node and pointers-per-page counts, unique-cache-line counts, both chain diagnostics, raw spread/packed/delta arrays, their P50 values, refinement source/bracket, and per-task records
   - `private_cache_knee` (with `detected`, `boundary_locality_kb`, `confidence`, and `may_interfere_with_tlb`)
   - `l1_tlb_detection` (with `detected`, validated bracket, primary entry range, midpoint estimate, confidence, discovery/validation evidence, and accepted/rejected candidates)
   - `l2_tlb_detection` (same structure as L1)
   - `large_locality_latency_delta` block (`available`, baseline/comparison metadata, raw comparison loops, `delta_ns` when the comparison completed, otherwise `reason`)
-  - deprecated `page_walk_penalty` compatibility alias with an explicit replacement field
+  - deprecated `page_walk_penalty` compatibility alias with its legacy semantics, explicit replacement, and `removal_not_before = "0.58.0"`
 
 This payload is designed for full post-run verification and reproducibility checks.
 
@@ -444,35 +451,48 @@ Each `runs[].result` entry is the same single-run TLB analysis JSON payload desc
 The top-level sweep object also includes `status`, `planned_runs`, `completed_runs`, and `conclusions_valid`. It is
 atomically rewritten after every completed run, so a later failure or interrupt leaves a readable checkpoint.
 
-## 10. Historical Worked Example (Apple M4)
+## 10. Current Schema Worked Example (Deterministic Exporter Fixture)
 
-Example file:
+The regression test `JsonSchemaTest.TlbAnalysisExporterIncludesModeAndCoreCounts` generates a current-version payload with
+the production serializer. Its deliberately synthetic inputs make this a contract example, not an Apple hardware claim:
 
-- `results/0.53.7/MacMiniM4_analyzetlb.json`
+```json
+{
+  "configuration": {
+    "mode": "analyze_tlb",
+    "schema_version": 4,
+    "methodology_version": "page-native-paired-adaptive-validated-v4",
+    "seed": 12345,
+    "main_thread_qos": {"requested": true, "applied": true, "code": 0},
+    "schema_compatibility": {"legacy_window": "0.57.x", "removal_not_before": "0.58.0"}
+  },
+  "tlb_analysis": {
+    "status": "complete",
+    "planned_points": 1,
+    "measured_points": 1,
+    "validation_complete": true,
+    "conclusions_valid": true,
+    "sweep": [{
+      "requested_pages": 1,
+      "actual_pages": 1,
+      "pointer_nodes": 1,
+      "spread_pointers_per_page_max": 1,
+      "packed_pointers_per_page_max": 1,
+      "translation_delta_p50_ns": 5.0
+    }],
+    "large_locality_latency_delta": {"available": true, "delta_ns": 80.5},
+    "page_walk_penalty": {
+      "deprecated": true,
+      "replacement": "large_locality_latency_delta",
+      "removal_not_before": "0.58.0"
+    }
+  },
+  "version": "0.57.0"
+}
+```
 
-This file predates schema version 4, page-native pairing, page-aligned refinement, independent validation, completion metadata, and bracket-first entry ranges. It remains
-useful only as historical latency input; it is not a byte-for-byte example of current output. Observed legacy fields:
-
-- `tlb_guard_bytes = 1048576` (`1MB`)
-- `l1_tlb_detection.boundary_locality_kb = 4096` and `inferred_entries` near the midpoint of its detected entry range
-- `l2_tlb_detection.boundary_locality_kb = 8192` and `inferred_entries` near the midpoint of its detected entry range
-- legacy `page_walk_penalty.penalty_ns ~= 81.93` (now reported as a large-locality latency delta)
-
-### Algorithm Walkthrough (M4 L1 Detection)
-
-The sweep includes points: `[16KB, 32KB, 64KB, 96KB, 128KB, 192KB, 256KB, 384KB, 512KB, 768KB, 1MB, 1536KB, 2MB, 3MB, 4MB, 6MB, 8MB, ...]`.
-
-The L1 scan begins at `16KB` (min_sweep_locality with stride 64 bytes). It computes:
-
-1. At `16KB`: `baseline = P50(16KB) = X ns`, `step = 0`, fails threshold.
-2. At `64KB`: `baseline = avg(P50[16KB])`, `step = P50(64KB) - baseline`, still low.
-3. ... (continuing through `1MB`, `2MB`)
-4. At `4MB`: `baseline = avg(P50[16KB..2MB])`, `step = P50(4MB) - baseline ≥ threshold`, `locality(4MB) = 4096KB ≥ guard`, **first match** → detected at `4MB`.
-
-Under the current high-density grid, a `4MB` boundary following a `3MB` prior point would yield
-`inferred_entries_min = 192`, `inferred_entries_max = 256`, and `inferred_entries = 224` as a midpoint estimate. This
-calculation illustrates the current algorithm; those fields are not present in the historical 0.53.7 sample. The value
-must be treated as a methodology-dependent candidate rather than an independently verified architectural entry count.
+New hardware baselines were explicitly excluded from this change series. Historical 0.53.x result files remain available
+only for legacy-schema compatibility checks and are not presented as current-methodology measurements.
 
 ### Limitations and Edge Cases
 

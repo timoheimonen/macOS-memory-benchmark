@@ -144,6 +144,11 @@ struct BenchmarkConfig {
   bool help_printed = false;           ///< Whether -h/--help was invoked (usage already printed)
   size_t sweep_max_runs = Constants::DEFAULT_SWEEP_MAX_RUNS;  ///< Maximum allowed sweep combinations
 
+  // Best-effort benchmark preparation status
+  bool main_thread_qos_requested = false;  ///< Whether USER_INTERACTIVE QoS was requested
+  bool main_thread_qos_applied = false;    ///< Whether the QoS request succeeded
+  int main_thread_qos_code = 0;            ///< Return code from pthread_set_qos_class_self_np()
+
   // Tracking flags for user-specified parameters
   bool user_specified_buffersize = false;      ///< Whether user explicitly set --buffer-size
   bool user_specified_iterations = false;      ///< Whether user explicitly set --iterations

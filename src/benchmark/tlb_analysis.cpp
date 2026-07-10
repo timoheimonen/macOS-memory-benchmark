@@ -714,6 +714,10 @@ int run_tlb_analysis(const BenchmarkConfig& config,
   std::cout << Messages::report_tlb_seed(config.tlb_seed,
                                          config.user_specified_tlb_seed)
             << std::endl;
+  std::cout << Messages::report_tlb_qos(config.main_thread_qos_requested,
+                                        config.main_thread_qos_applied,
+                                        config.main_thread_qos_code)
+            << std::endl;
   std::cout << Messages::report_tlb_schedule_policy() << std::endl;
   std::cout << Messages::report_tlb_chain_model() << std::endl;
   std::cout << Messages::report_tlb_chain_mode_requested(

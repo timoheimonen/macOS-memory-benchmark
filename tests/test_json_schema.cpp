@@ -161,6 +161,9 @@ TEST(JsonSchemaTest, TlbAnalysisExporterIncludesModeAndCoreCounts) {
   config.tlb_sweep_density = TlbSweepDensity::High;
   config.tlb_seed = 12345;
   config.user_specified_tlb_seed = true;
+  config.main_thread_qos_requested = true;
+  config.main_thread_qos_applied = true;
+  config.main_thread_qos_code = 0;
 
   const std::string cpu_name = "test-cpu";
   const std::vector<size_t> localities_bytes = {16 * Constants::BYTES_PER_KB};
@@ -335,6 +338,15 @@ TEST(JsonSchemaTest, TlbAnalysisExporterIncludesModeAndCoreCounts) {
             "translation_delta_ns");
   EXPECT_EQ(output_json[JsonKeys::CONFIGURATION]["seed"], 12345);
   EXPECT_EQ(output_json[JsonKeys::CONFIGURATION]["seed_source"], "user");
+  EXPECT_TRUE(output_json[JsonKeys::CONFIGURATION]["seed_derivation"].contains(
+      "measurement_task"));
+  EXPECT_TRUE(output_json[JsonKeys::CONFIGURATION]["seed_derivation"].contains(
+      "chain_layout"));
+  EXPECT_TRUE(output_json[JsonKeys::CONFIGURATION]["main_thread_qos"]["requested"]);
+  EXPECT_TRUE(output_json[JsonKeys::CONFIGURATION]["main_thread_qos"]["applied"]);
+  EXPECT_EQ(output_json[JsonKeys::CONFIGURATION]["schema_compatibility"]
+                       ["removal_not_before"],
+            "0.58.0");
   EXPECT_EQ(output_json[JsonKeys::CONFIGURATION]["schedule_policy"],
             "seeded-cyclic-latin");
   EXPECT_EQ(output_json[JsonKeys::CONFIGURATION]["latency_chain_mode_requested"], "auto");
@@ -401,6 +413,13 @@ TEST(JsonSchemaTest, TlbAnalysisExporterIncludesModeAndCoreCounts) {
   EXPECT_EQ(output_json["tlb_analysis"]["sweep"][0]["requested_pages"], 1);
   EXPECT_EQ(output_json["tlb_analysis"]["sweep"][0]["actual_pages"], 1);
   EXPECT_EQ(output_json["tlb_analysis"]["sweep"][0]["actual_node_count"], 1);
+  EXPECT_EQ(output_json["tlb_analysis"]["sweep"][0]["pointer_nodes"], 1);
+  EXPECT_EQ(output_json["tlb_analysis"]["sweep"][0]
+                       ["spread_pointers_per_page_max"],
+            1);
+  EXPECT_EQ(output_json["tlb_analysis"]["sweep"][0]
+                       ["packed_pointers_per_page_max"],
+            1);
   EXPECT_EQ(output_json["tlb_analysis"]["sweep"][0]["actual_unique_cache_lines"], 1);
   EXPECT_DOUBLE_EQ(output_json["tlb_analysis"]["sweep"][0]
                               ["translation_delta_p50_ns"],
@@ -415,6 +434,11 @@ TEST(JsonSchemaTest, TlbAnalysisExporterIncludesModeAndCoreCounts) {
   EXPECT_TRUE(output_json["tlb_analysis"]["page_walk_penalty"]["deprecated"]);
   EXPECT_EQ(output_json["tlb_analysis"]["page_walk_penalty"]["replacement"],
             "large_locality_latency_delta");
+  EXPECT_EQ(output_json["tlb_analysis"]["page_walk_penalty"]
+                       ["removal_not_before"],
+            "0.58.0");
+  EXPECT_TRUE(output_json["tlb_analysis"]["page_walk_penalty"].contains(
+      "legacy_semantics"));
 
   std::filesystem::remove(config.output_file);
 }

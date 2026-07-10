@@ -269,6 +269,7 @@ forms such as `-buffersize` or `-benchmark` are invalid.
 - Calibrates each spread and packed measurement from a timed pilot toward the active profile's target duration while requiring a minimum number of complete chain cycles
 - Uses adaptive balanced rounds: every round measures each planned locality once in seeded cyclic-Latin order, and a pass stops after its minimum when every point's deterministic bootstrap median CI is narrow enough, or at the profile maximum
 - Attempts `mlock()` as a best-effort noise reduction. Failure reports errno and its message, records the failure in JSON, and continues with the allocated buffer unlocked
+- Requests `user-interactive` QoS for the main benchmark thread as a best-effort hint. Console and JSON report whether the request was applied and its return code; failure emits a warning and continues
 - Rebuilds every standalone TLB pair from recorded task and layout seeds; pointer values are written in physical-slot order and every chain is verified to visit all nodes and return to its head. Latency-chain behavior outside standalone TLB analysis remains unchanged
 - A user interrupt remains a successful graceful-shutdown return when partial JSON can be written; consumers must use `status` and `conclusions_valid` rather than the process code to accept conclusions
 - Detailed methodology and JSON contract: `TLB_ANALYSIS_WHITEPAPER.md`
@@ -787,9 +788,10 @@ When `--latency-stride-bytes` is explicitly set (with a non-default value), late
 ### TLB analysis JSON (analyze mode)
 
 When run with `--analyze-tlb --output tlb_analysis.json`, the payload includes a dedicated `tlb_analysis` block.
-The following is an illustrative schema-version-4 payload; its latency values are adapted from the historical
-`results/0.53.8/MacMiniM4_analyze-tlb-chain-mode-random-box.json` run rather than presented as a newly generated
-version-0.57.0 result:
+The following is a structure-focused schema-version-4 illustration. It is not presented as a hardware result; the current
+serializer contract and concrete deterministic values are exercised by
+`JsonSchemaTest.TlbAnalysisExporterIncludesModeAndCoreCounts`. New hardware baselines remain outside this release series by
+project decision, so historical 0.53.x measurements are not relabeled as 0.57.0 results:
 
 ```json
 {
@@ -822,6 +824,22 @@ version-0.57.0 result:
     },
     "seed": 123456789,
     "seed_source": "user",
+    "seed_derivation": {
+      "measurement_task": "splitmix64(splitmix64(splitmix64(base_seed xor pass) xor round_index) xor point_index)",
+      "chain_layout": "splitmix64(task_seed xor layout-domain-constant)"
+    },
+    "main_thread_qos": {
+      "requested": true,
+      "requested_class": "user-interactive",
+      "applied": true,
+      "code": 0,
+      "policy": "best-effort; continue on failure"
+    },
+    "schema_compatibility": {
+      "legacy_window": "0.57.x",
+      "removal_not_before": "0.58.0",
+      "legacy_schema_default": 1
+    },
     "schedule_policy": "seeded-cyclic-latin",
     "chain_model": "one-node-per-spread-page-with-packed-control",
     "translation_delta_definition": "same-round spread_latency_ns - packed_latency_ns",
@@ -851,6 +869,9 @@ version-0.57.0 result:
         "actual_pages": 1,
         "packed_actual_pages": 1,
         "actual_node_count": 1,
+        "pointer_nodes": 1,
+        "spread_pointers_per_page_max": 1,
+        "packed_pointers_per_page_max": 1,
         "actual_unique_cache_lines": 1,
         "refinement_source": "base",
         "loop_latencies_ns": [25.957278, 25.965990, 25.916902],
@@ -940,8 +961,12 @@ for each executed pass. Raw-measurement counters count the spread and packed mem
 `p50_latency_ns` are compatibility spread values. Boundary inference uses the round-matched translation-delta matrix. Accepted and rejected candidates retain separate discovery/validation evidence and rejection reasons.
 
 If the 512MB comparison cannot run, `large_locality_latency_delta.available` is `false` and comparison values are omitted.
-The former `page_walk_penalty` object remains as a deprecated compatibility alias for one minor-version window; it
-contains `deprecated: true` and `replacement: "large_locality_latency_delta"`. When analysis is interrupted,
+The former `page_walk_penalty` object remains as a deprecated compatibility alias through `0.57.x`; it contains
+`deprecated: true`, `replacement: "large_locality_latency_delta"`, its legacy semantics, and
+`removal_not_before: "0.58.0"`. Schema 1-3 files remain readable by the bundled plotter during this window. The legacy
+fixed `configuration.accesses_per_loop` field is replaced by the calibrated
+`paired_control.spread.access_count` and `paired_control.packed.access_count` values on each measurement. When analysis is
+interrupted,
 `conclusions_valid` is `false`, boundary objects contain a suppression reason, and no delta is published.
 
 ### Pattern keys (current)

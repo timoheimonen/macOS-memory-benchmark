@@ -222,6 +222,7 @@ std::string report_tlb_buffer(size_t buffer_mb, bool locked);
 std::string report_tlb_stride(size_t stride_bytes);
 std::string report_tlb_density(const std::string& density_name);
 std::string report_tlb_seed(uint64_t seed, bool user_specified);
+std::string report_tlb_qos(bool requested, bool applied, int code);
 const std::string& report_tlb_schedule_policy();
 const std::string& report_tlb_chain_model();
 std::string report_tlb_chain_mode(const std::string& chain_mode_name);

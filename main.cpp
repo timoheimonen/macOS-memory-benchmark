@@ -55,8 +55,11 @@
 
 namespace {
 
-void set_benchmark_qos() {
+void set_benchmark_qos(BenchmarkConfig& config) {
+  config.main_thread_qos_requested = true;
   kern_return_t qos_ret = pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
+  config.main_thread_qos_applied = qos_ret == KERN_SUCCESS;
+  config.main_thread_qos_code = qos_ret;
   if (qos_ret != KERN_SUCCESS) {
     // Non-critical error, just print a warning
     std::cerr << Messages::warning_prefix() << Messages::warning_qos_failed(qos_ret) << std::endl;
@@ -78,8 +81,8 @@ class BenchmarkSignalMaskGuard {
 };
 
 template <typename Fn>
-int run_with_benchmark_preparation(Fn&& fn) {
-  set_benchmark_qos();
+int run_with_benchmark_preparation(BenchmarkConfig& config, Fn&& fn) {
+  set_benchmark_qos(config);
   BenchmarkSignalMaskGuard signal_guard;
   return fn();
 }
@@ -173,7 +176,7 @@ int main(int argc, char *argv[]) {
     if (validate_config(config) != EXIT_SUCCESS) {
       return EXIT_FAILURE;
     }
-    return run_with_benchmark_preparation([&]() {
+    return run_with_benchmark_preparation(config, [&]() {
       return run_tlb_analysis(config);
     });
   }
@@ -204,7 +207,7 @@ int main(int argc, char *argv[]) {
 
   // --- Run Benchmarks ---
   BenchmarkBuffers buffers;
-  const int benchmark_result = run_with_benchmark_preparation([&]() {
+  const int benchmark_result = run_with_benchmark_preparation(config, [&]() {
     if (config.run_patterns) {
       // Pattern mode uses pre-allocated src/dst buffers across pattern tests.
       if (allocate_all_buffers(config, buffers) != EXIT_SUCCESS) {

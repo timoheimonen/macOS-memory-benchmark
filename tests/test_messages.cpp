@@ -570,6 +570,16 @@ TEST_F(MessagesFormattingTest, ReportTlbSeedAndSchedule) {
             std::string::npos);
 }
 
+TEST_F(MessagesFormattingTest, ReportTlbQosOutcome) {
+  EXPECT_NE(Messages::report_tlb_qos(true, true, 0).find("applied"),
+            std::string::npos);
+  const std::string failed = Messages::report_tlb_qos(true, false, 6);
+  EXPECT_NE(failed.find("failed, code 6"), std::string::npos);
+  EXPECT_NE(failed.find("best-effort"), std::string::npos);
+  EXPECT_NE(Messages::report_tlb_qos(false, false, 0).find("not requested"),
+            std::string::npos);
+}
+
 TEST_F(MessagesFormattingTest, ReportTlbRequestedAndEffectiveChainMode) {
   std::string requested = Messages::report_tlb_chain_mode_requested("auto");
   EXPECT_NE(requested.find("Requested Chain Mode"), std::string::npos);
@@ -676,6 +686,8 @@ TEST_F(MessagesFormattingTest, UsageOptions) {
   EXPECT_NE(msg.find("--buffer-size"), std::string::npos);
   EXPECT_NE(msg.find("--count"), std::string::npos);
   EXPECT_NE(msg.find("--analyze-tlb"), std::string::npos);
+  EXPECT_NE(msg.find("schema 4"), std::string::npos);
+  EXPECT_NE(msg.find("0.57.x"), std::string::npos);
   EXPECT_NE(msg.find("--tlb-density"), std::string::npos);
   EXPECT_NE(msg.find("default: medium"), std::string::npos);
   EXPECT_NE(msg.find("--analyze-tlb: 16"), std::string::npos);

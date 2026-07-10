@@ -164,8 +164,10 @@ nlohmann::ordered_json build_tlb_chain_diagnostics_json(
       {"requested_pages", diagnostics.requested_pages},
       {"actual_pages", diagnostics.actual_pages},
       {"node_count", diagnostics.node_count},
+      {"pointer_nodes", diagnostics.node_count},
       {"unique_cache_lines", diagnostics.unique_cache_lines},
       {"max_nodes_per_page", diagnostics.max_nodes_per_page},
+      {"pointers_per_page_max", diagnostics.max_nodes_per_page},
       {"byte_span", diagnostics.byte_span},
       {"page_size_bytes", diagnostics.page_size_bytes},
       {"requested_stride_bytes", diagnostics.requested_stride_bytes},
@@ -255,6 +257,11 @@ int save_tlb_analysis_to_json(const TlbAnalysisJsonContext& context) {
       {JsonKeys::TLB_DENSITY, tlb_sweep_density_to_string(context.config.tlb_sweep_density)},
       {"seed", context.config.tlb_seed},
       {"seed_source", context.config.user_specified_tlb_seed ? "user" : "generated"},
+      {"seed_derivation",
+       {{"measurement_task",
+         "splitmix64(splitmix64(splitmix64(base_seed xor pass) xor round_index) xor point_index)"},
+        {"chain_layout",
+         "splitmix64(task_seed xor layout-domain-constant)"}}},
       {"schedule_policy", "seeded-cyclic-latin"},
       {"chain_model", "one-node-per-spread-page-with-packed-control"},
       {"translation_delta_definition",
@@ -287,6 +294,19 @@ int save_tlb_analysis_to_json(const TlbAnalysisJsonContext& context) {
       {"tlb_guard_bytes", context.tlb_guard_bytes},
       {"buffer_size_mb", context.selected_buffer_mb},
       {"buffer_locked", context.buffer_locked},
+      {"main_thread_qos",
+       {{"requested", context.config.main_thread_qos_requested},
+        {"requested_class", "user-interactive"},
+        {"applied", context.config.main_thread_qos_applied},
+        {"code", context.config.main_thread_qos_code},
+        {"policy", "best-effort; continue on failure"}}},
+      {"schema_compatibility",
+       {{"legacy_window", "0.57.x"},
+        {"removal_not_before", "0.58.0"},
+        {"legacy_schema_default", 1},
+        {"notes",
+         {"schema versions 1-3 remain readable by the bundled plotter; schema 4 is the current writer contract",
+          "configuration.accesses_per_loop is replaced by per-measurement paired_control.*.access_count"}}}},
       {"memory_budget",
        {{"available_memory_mb", context.available_memory_mb},
         {"budget_mb", context.memory_budget_mb},
@@ -379,6 +399,12 @@ int save_tlb_analysis_to_json(const TlbAnalysisJsonContext& context) {
             record.paired.packed.diagnostics.actual_pages;
         point["actual_node_count"] =
             record.paired.spread.diagnostics.node_count;
+        point["pointer_nodes"] =
+            record.paired.spread.diagnostics.node_count;
+        point["spread_pointers_per_page_max"] =
+            record.paired.spread.diagnostics.max_nodes_per_page;
+        point["packed_pointers_per_page_max"] =
+            record.paired.packed.diagnostics.max_nodes_per_page;
         point["actual_unique_cache_lines"] =
             record.paired.spread.diagnostics.unique_cache_lines;
         point["spread_chain"] = build_tlb_chain_diagnostics_json(
@@ -559,6 +585,10 @@ int save_tlb_analysis_to_json(const TlbAnalysisJsonContext& context) {
   nlohmann::ordered_json deprecated_page_walk_penalty = large_locality_delta;
   deprecated_page_walk_penalty["deprecated"] = true;
   deprecated_page_walk_penalty["replacement"] = "large_locality_latency_delta";
+  deprecated_page_walk_penalty["deprecated_since"] = "0.57.0";
+  deprecated_page_walk_penalty["removal_not_before"] = "0.58.0";
+  deprecated_page_walk_penalty["legacy_semantics"] =
+      "P50(large locality) - P50(baseline locality); not an isolated page-table-walk cost";
   if (large_locality_delta_available) {
     deprecated_page_walk_penalty.erase("delta_ns");
     deprecated_page_walk_penalty["penalty_ns"] = context.page_walk_penalty_ns;

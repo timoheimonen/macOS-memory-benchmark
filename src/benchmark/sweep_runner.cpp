@@ -394,7 +394,13 @@ int run_sweep_mode(const BenchmarkConfig& base_config) {
       {"base_mode", base_mode_name(base_config)},
       {"run_count", run_count},
       {"sweep_max_runs", base_config.sweep_max_runs},
-      {"sweep_parameters", build_sweep_parameters_json(base_config)}};
+      {"sweep_parameters", build_sweep_parameters_json(base_config)},
+      {"main_thread_qos",
+       {{"requested", true},
+        {"requested_class", "user-interactive"},
+        {"applied", qos_ret == KERN_SUCCESS},
+        {"code", qos_ret},
+        {"policy", "best-effort; continue on failure"}}}};
 
   nlohmann::ordered_json runs_json = nlohmann::ordered_json::array();
   std::filesystem::path file_path(base_config.output_file);
@@ -410,6 +416,9 @@ int run_sweep_mode(const BenchmarkConfig& base_config) {
 
     std::cout << Messages::msg_sweep_run_progress(i + 1, assignments.size()) << std::endl;
     BenchmarkConfig run_config = build_run_config(base_config, assignments[i]);
+    run_config.main_thread_qos_requested = true;
+    run_config.main_thread_qos_applied = qos_ret == KERN_SUCCESS;
+    run_config.main_thread_qos_code = qos_ret;
     nlohmann::ordered_json result_json;
     if (run_sweep_point(run_config, i, result_json) != EXIT_SUCCESS) {
       update_sweep_output(output_json, runs_json, "failed", run_count, total_timer.stop());

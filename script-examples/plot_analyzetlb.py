@@ -73,6 +73,13 @@ def load_tlb_json(path: Path):
     raise RuntimeError(
         f"Unsupported configuration.mode '{mode}'. Expected 'analyze_tlb'.")
 
+  schema_version = config.get("schema_version", 1)
+  if not isinstance(schema_version, int) or isinstance(schema_version, bool):
+    raise RuntimeError("configuration.schema_version must be an integer when present.")
+  if schema_version < 1 or schema_version > 4:
+    raise RuntimeError(
+        f"Unsupported analyze-TLB schema version {schema_version}; supported versions are 1-4.")
+
   tlb = data.get("tlb_analysis")
   if not isinstance(tlb, dict):
     raise RuntimeError("Missing 'tlb_analysis' object in JSON.")

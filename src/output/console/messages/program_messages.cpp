@@ -146,6 +146,7 @@ std::string usage_options(const std::string& prog_name) {
       << "                        -D/--tlb-density <low|medium|high>, --seed <uint64>,\n"
       << "                        -S/--sweep <key=...>,\n"
       << "                        and -X/--sweep-max-runs <count> only).\n"
+      << "                        JSON output uses schema 4; deprecated aliases are retained through 0.57.x.\n"
       << "  -D, --tlb-density <level>\n"
       << "                        Runtime profile for --analyze-tlb: low, medium, high (default: medium).\n"
       << "                        low/quick = 15 points, no refinement, 7-12 adaptive rounds.\n"
@@ -267,6 +268,20 @@ std::string report_tlb_density(const std::string& density_name) {
 std::string report_tlb_seed(uint64_t seed, bool user_specified) {
   std::ostringstream oss;
   oss << "Seed: " << seed << " (" << (user_specified ? "user" : "generated") << ")";
+  return oss.str();
+}
+
+std::string report_tlb_qos(bool requested, bool applied, int code) {
+  if (!requested) {
+    return "Main Thread QoS: not requested";
+  }
+  if (applied) {
+    return "Main Thread QoS: user-interactive (applied)";
+  }
+
+  std::ostringstream oss;
+  oss << "Main Thread QoS: user-interactive (failed, code " << code
+      << "; continuing best-effort)";
   return oss.str();
 }
 
