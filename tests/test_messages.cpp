@@ -1312,6 +1312,7 @@ TEST_F(MessagesFormattingTest, BenchmarkStatusReasonsAreCentralized) {
       Messages::benchmark_reason_invalid_bandwidth_measurement(),
       Messages::benchmark_reason_loops_remain(),
       Messages::benchmark_reason_checkpoint_failed(),
+      Messages::benchmark_reason_latency_chain_setup_failed("main-latency"),
       Messages::benchmark_reason_prepare_failed("cache latency"),
       Messages::benchmark_reason_invalid_bandwidth_plan(),
       Messages::benchmark_reason_no_worker_partition(),

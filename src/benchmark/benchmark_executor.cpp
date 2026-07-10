@@ -506,8 +506,7 @@ void run_paired_locality_comparison(void* buffer,
     warmup_latency(buffer, buffer_size);
     const double elapsed_ns =
         run_latency_test(buffer, num_accesses, timer, nullptr, 0);
-    if (signal_received() || !(elapsed_ns > 0.0) ||
-        !std::isfinite(elapsed_ns)) {
+    if (signal_received() || !benchmark_elapsed_is_valid(elapsed_ns)) {
       return false;
     }
     measurement.samples.push_back(
@@ -774,7 +773,7 @@ void run_calibrated_bandwidth_measurement(
   populate_parallel_execution_metadata(measurement, execution_metadata);
   measurement.duration_within_target =
       explicit_iterations || duration_in_target_window(elapsed_seconds);
-  if (!(elapsed_seconds > 0.0) || !std::isfinite(elapsed_seconds)) {
+  if (!benchmark_elapsed_is_valid(elapsed_seconds)) {
     set_measurement_unavailable(measurement,
                                 BenchmarkMeasurementStatus::Invalid,
                                 Messages::benchmark_reason_invalid_bandwidth_duration());
@@ -783,7 +782,7 @@ void run_calibrated_bandwidth_measurement(
   const double bandwidth_gb_s =
       static_cast<double>(state.plan.total_payload_bytes) /
       elapsed_seconds / Constants::NANOSECONDS_PER_SECOND;
-  if (!(bandwidth_gb_s > 0.0) || !std::isfinite(bandwidth_gb_s)) {
+  if (!benchmark_elapsed_is_valid(bandwidth_gb_s)) {
     set_measurement_unavailable(measurement,
                                 BenchmarkMeasurementStatus::Invalid,
                                 Messages::benchmark_reason_invalid_bandwidth_value());
@@ -908,7 +907,7 @@ void run_calibrated_latency_measurement(
   state.initialized = true;
   populate_latency_metadata(measurement, state, phase_order_index);
   measurement.duration_within_target = duration_in_target_window(elapsed_seconds);
-  if (!(elapsed_ns > 0.0) || !std::isfinite(elapsed_ns) ||
+  if (!benchmark_elapsed_is_valid(elapsed_ns) ||
       state.plan.access_count == 0) {
     set_measurement_unavailable(measurement,
                                 BenchmarkMeasurementStatus::Invalid,
@@ -1280,7 +1279,8 @@ BenchmarkResults run_single_benchmark_loop(const BenchmarkBuffers& buffers,
                                            BenchmarkConfig& config,
                                            int loop,
                                            HighResTimer& test_timer,
-                                           BenchmarkExecutionState* execution_state) {
+                                           BenchmarkExecutionState* execution_state,
+                                           const BenchmarkExecutorTestHooks* test_hooks) {
   BenchmarkResults results;
   BenchmarkExecutionState local_execution_state;
   BenchmarkExecutionState& state = execution_state != nullptr
@@ -1398,13 +1398,27 @@ BenchmarkResults run_single_benchmark_loop(const BenchmarkBuffers& buffers,
                                   : "main-thread-qos-failed";
   };
 
+  bool phase_execution_interrupted = false;
   try {
-    for (size_t phase_position = 0; phase_position < phase_order.size();
-         ++phase_position) {
-      if (signal_received()) break;
-      const EnabledPhase& enabled_phase =
-          enabled_phases[phase_order[phase_position]];
+    const BenchmarkPhaseExecutionResult phase_execution =
+        execute_benchmark_phase_schedule(
+            phase_order, [] { return signal_received(); },
+            [&](size_t phase_position, size_t phase_index) {
+      const EnabledPhase& enabled_phase = enabled_phases[phase_index];
       results.realized_phase_order.push_back(enabled_phase.name);
+      if (test_hooks != nullptr && test_hooks->fail_phase_preparation &&
+          test_hooks->fail_phase_preparation(enabled_phase.name)) {
+        throw std::runtime_error(
+            Messages::benchmark_reason_prepare_failed(enabled_phase.name));
+      }
+      if (test_hooks != nullptr && test_hooks->fail_latency_chain_setup &&
+          (enabled_phase.phase == Phase::CacheLatency ||
+           enabled_phase.phase == Phase::MainLatency) &&
+          test_hooks->fail_latency_chain_setup(enabled_phase.name)) {
+        throw std::runtime_error(
+            Messages::benchmark_reason_latency_chain_setup_failed(
+                enabled_phase.name));
+      }
       switch (enabled_phase.phase) {
         case Phase::MainBandwidth: {
           BenchmarkBuffers phase_buffers;
@@ -1508,16 +1522,16 @@ BenchmarkResults run_single_benchmark_loop(const BenchmarkBuffers& buffers,
           break;
         }
       }
-      if (!signal_received()) {
-        ++results.completed_phases;
-      }
-    }
+    });
+    results.completed_phases = phase_execution.completed_phases;
+    phase_execution_interrupted = phase_execution.interrupted;
   } catch (const std::exception &e) {
     std::cerr << Messages::error_benchmark_tests(e.what()) << std::endl;
     throw;  // Re-throw to be handled by caller
   }
 
-  finalize_loop_results(results, config, signal_received());
+  finalize_loop_results(results, config,
+                        phase_execution_interrupted || signal_received());
 
   return results;
 }

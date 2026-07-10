@@ -16,7 +16,9 @@
 
 #include <gtest/gtest.h>
 
+#include <cmath>
 #include <limits>
+#include <stdexcept>
 
 #include "benchmark/benchmark_work_plan.h"
 #include "core/config/constants.h"
@@ -133,4 +135,56 @@ TEST(BenchmarkWorkPlanTest, SeedDerivationIsStableAndDomainSeparated) {
   EXPECT_NE(derive_benchmark_seed(42, 1), derive_benchmark_seed(42, 2));
   EXPECT_NE(derive_benchmark_seed(42, 1), derive_benchmark_seed(43, 1));
   EXPECT_NE(derive_benchmark_seed(0, 0), 0u);
+}
+
+TEST(BenchmarkWorkPlanTest, PhaseScheduleChecksEveryBoundaryWithoutExecutingKernels) {
+  const std::vector<size_t> order = {2, 0, 3, 1};
+  for (size_t stop_check = 0; stop_check < order.size() * 2; ++stop_check) {
+    size_t check_index = 0;
+    size_t callback_count = 0;
+    const BenchmarkPhaseExecutionResult result =
+        execute_benchmark_phase_schedule(
+            order,
+            [&] { return check_index++ == stop_check; },
+            [&](size_t, size_t) { ++callback_count; });
+
+    EXPECT_TRUE(result.interrupted) << "stop check " << stop_check;
+    EXPECT_EQ(result.completed_phases, stop_check / 2)
+        << "stop check " << stop_check;
+    EXPECT_EQ(callback_count,
+              stop_check / 2 + (stop_check % 2 == 0 ? 0 : 1))
+        << "stop check " << stop_check;
+    EXPECT_EQ(result.realized_phase_indexes.size(), callback_count);
+  }
+
+  const BenchmarkPhaseExecutionResult complete =
+      execute_benchmark_phase_schedule(order, [] { return false; },
+                                       [](size_t, size_t) {});
+  EXPECT_FALSE(complete.interrupted);
+  EXPECT_EQ(complete.completed_phases, order.size());
+  EXPECT_EQ(complete.realized_phase_indexes, order);
+}
+
+TEST(BenchmarkWorkPlanTest, PhaseSchedulePropagatesInjectedPreparationFailures) {
+  for (size_t failing_phase = 0; failing_phase < 4; ++failing_phase) {
+    EXPECT_THROW(
+        execute_benchmark_phase_schedule(
+            {0, 1, 2, 3}, [] { return false; },
+            [&](size_t, size_t phase_index) {
+              if (phase_index == failing_phase) {
+                throw std::runtime_error("injected phase preparation failure");
+              }
+            }),
+        std::runtime_error);
+  }
+}
+
+TEST(BenchmarkWorkPlanTest, ElapsedValidationRejectsInjectedInvalidTiming) {
+  EXPECT_FALSE(benchmark_elapsed_is_valid(0.0));
+  EXPECT_FALSE(benchmark_elapsed_is_valid(-1.0));
+  EXPECT_FALSE(benchmark_elapsed_is_valid(
+      std::numeric_limits<double>::quiet_NaN()));
+  EXPECT_FALSE(benchmark_elapsed_is_valid(
+      std::numeric_limits<double>::infinity()));
+  EXPECT_TRUE(benchmark_elapsed_is_valid(0.001));
 }

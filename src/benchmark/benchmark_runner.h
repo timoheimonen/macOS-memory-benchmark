@@ -30,6 +30,7 @@
 #include <vector>
 #include <cstddef>  // size_t
 #include <cstdlib>  // EXIT_SUCCESS, EXIT_FAILURE
+#include <functional>
 #include <string>
 
 #include "benchmark/benchmark_measurement.h"
@@ -37,6 +38,8 @@
 // Forward declarations to avoid including headers
 struct BenchmarkConfig;
 struct BenchmarkBuffers;
+struct BenchmarkExecutionState;
+struct HighResTimer;
 
 /**
  * @struct BenchmarkResults
@@ -125,10 +128,28 @@ struct BenchmarkStatistics {
 };
 
 /**
+ * @brief Optional dependency seams for deterministic coordinator failure tests.
+ *
+ * Production callers leave this null. Tests can fail timer/checkpoint creation,
+ * inject a kernel-free loop result, or request a stop between loops.
+ */
+struct BenchmarkRunnerTestHooks {
+  bool force_timer_creation_failure = false;
+  std::function<bool()> stop_requested;
+  std::function<BenchmarkResults(const BenchmarkBuffers&, BenchmarkConfig&, int,
+                                 HighResTimer&, BenchmarkExecutionState*)>
+      execute_loop;
+  std::function<int(const BenchmarkConfig&, const BenchmarkStatistics&, double,
+                    bool)>
+      checkpoint;
+};
+
+/**
  * @brief Run all benchmark loops and collect statistics
  * @param buffers Reference to benchmark buffers structure (unused in phase-local allocation mode)
  * @param config Reference to benchmark configuration
  * @param[out] stats Reference to BenchmarkStatistics structure to store aggregated results
+ * @param test_hooks Optional deterministic dependency seams; null in production
  * @return EXIT_SUCCESS on success, EXIT_FAILURE on error
  *
  * Executes multiple benchmark loops as specified by config.loop_count and
@@ -137,6 +158,7 @@ struct BenchmarkStatistics {
  * rather than passed through this API.
  */
 int run_all_benchmarks(const BenchmarkBuffers& buffers, BenchmarkConfig& config,
-                       BenchmarkStatistics& stats);
+                       BenchmarkStatistics& stats,
+                       const BenchmarkRunnerTestHooks* test_hooks = nullptr);
 
 #endif // BENCHMARK_RUNNER_H

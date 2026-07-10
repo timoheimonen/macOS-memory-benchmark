@@ -271,3 +271,25 @@ TEST(StandardKernelIntegrationTest, ExecutorConsumesPlannerAccountingExactly) {
             static_cast<size_t>(copy_plan.effective_threads));
   EXPECT_EQ(copy_metadata.created_workers, copy_plan.effective_threads);
 }
+
+TEST(StandardKernelIntegrationTest, WorkerStartupFailureIsDeterministicAndNotMeasured) {
+  alignas(64) std::array<unsigned char, 4096> buffer{};
+  auto timer = HighResTimer::create();
+  ASSERT_TRUE(timer.has_value());
+  ParallelExecutionMetadata metadata;
+  ParallelExecutionTestControl control;
+  control.fail_before_worker_index = 1;
+  auto make_work = [](size_t, size_t, int, size_t) {
+    return [] {};
+  };
+
+  const double elapsed = run_parallel_test_common(
+      buffer.data(), buffer.size(), 1, 2, *timer, "startup-injection",
+      make_work, nullptr, &metadata, &control);
+
+  EXPECT_EQ(elapsed, 0.0);
+  EXPECT_TRUE(metadata.worker_startup_failed);
+  EXPECT_EQ(metadata.requested_workers, 2);
+  EXPECT_EQ(metadata.created_workers, 1);
+  EXPECT_EQ(metadata.qos_successful_workers + metadata.qos_failed_workers, 1u);
+}

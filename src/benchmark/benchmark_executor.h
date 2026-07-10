@@ -29,6 +29,8 @@
 #include <vector>   // std::vector
 #include <atomic>
 #include <cstdint>
+#include <functional>
+#include <string>
 
 #include "benchmark/benchmark_measurement.h"
 
@@ -38,6 +40,12 @@ struct BenchmarkConfig;
 struct BenchmarkResults;
 struct HighResTimer;
 struct BenchmarkExecutionState;
+
+/** @brief Optional kernel-free fault seams for phase preparation tests. */
+struct BenchmarkExecutorTestHooks {
+  std::function<bool(const std::string&)> fail_phase_preparation;
+  std::function<bool(const std::string&)> fail_latency_chain_setup;
+};
 
 /**
  * @struct TimingResults
@@ -175,6 +183,7 @@ void run_main_memory_latency_test(const BenchmarkBuffers& buffers, const Benchma
  */
 BenchmarkResults run_single_benchmark_loop(const BenchmarkBuffers& buffers, BenchmarkConfig& config, int loop,
                                            HighResTimer& test_timer,
-                                           BenchmarkExecutionState* execution_state = nullptr);
+                                           BenchmarkExecutionState* execution_state = nullptr,
+                                           const BenchmarkExecutorTestHooks* test_hooks = nullptr);
 
 #endif // BENCHMARK_EXECUTOR_H

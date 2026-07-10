@@ -24,6 +24,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -97,6 +98,13 @@ struct BenchmarkExecutionState {
   std::array<BenchmarkLatencyExecutionState, 4> latency;
 };
 
+/** @brief Result of executing a cold-path phase schedule with stop checks. */
+struct BenchmarkPhaseExecutionResult {
+  size_t completed_phases = 0;
+  bool interrupted = false;
+  std::vector<size_t> realized_phase_indexes;
+};
+
 size_t benchmark_bandwidth_state_index(BenchmarkTarget target,
                                        BenchmarkOperation operation);
 size_t benchmark_latency_state_index(BenchmarkTarget target);
@@ -125,6 +133,13 @@ size_t calculate_benchmark_calibrated_count(double pilot_duration_seconds,
 
 std::vector<size_t> build_benchmark_cyclic_order(size_t item_count,
                                                  size_t loop_index);
+
+BenchmarkPhaseExecutionResult execute_benchmark_phase_schedule(
+    const std::vector<size_t>& phase_order,
+    const std::function<bool()>& stop_requested,
+    const std::function<void(size_t, size_t)>& execute_phase);
+
+bool benchmark_elapsed_is_valid(double elapsed);
 
 uint64_t derive_benchmark_seed(uint64_t base_seed, uint64_t domain);
 

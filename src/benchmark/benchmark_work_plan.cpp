@@ -270,6 +270,33 @@ std::vector<size_t> build_benchmark_cyclic_order(size_t item_count,
   return order;
 }
 
+BenchmarkPhaseExecutionResult execute_benchmark_phase_schedule(
+    const std::vector<size_t>& phase_order,
+    const std::function<bool()>& stop_requested,
+    const std::function<void(size_t, size_t)>& execute_phase) {
+  BenchmarkPhaseExecutionResult result;
+  result.realized_phase_indexes.reserve(phase_order.size());
+  for (size_t position = 0; position < phase_order.size(); ++position) {
+    if (stop_requested && stop_requested()) {
+      result.interrupted = true;
+      break;
+    }
+    const size_t phase_index = phase_order[position];
+    result.realized_phase_indexes.push_back(phase_index);
+    execute_phase(position, phase_index);
+    if (stop_requested && stop_requested()) {
+      result.interrupted = true;
+      break;
+    }
+    ++result.completed_phases;
+  }
+  return result;
+}
+
+bool benchmark_elapsed_is_valid(double elapsed) {
+  return elapsed > 0.0 && std::isfinite(elapsed);
+}
+
 uint64_t derive_benchmark_seed(uint64_t base_seed, uint64_t domain) {
   uint64_t value = base_seed ^ (domain + 0x9e3779b97f4a7c15ULL);
   value = (value ^ (value >> 30U)) * 0xbf58476d1ce4e5b9ULL;

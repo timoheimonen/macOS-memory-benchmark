@@ -28,6 +28,7 @@
 #include <cstdlib>
 #include <cmath>     // std::isnan, std::isinf
 #include <limits>
+#include <stdexcept>
 #include <vector>
 #include <unistd.h>  // getpagesize
 
@@ -349,6 +350,96 @@ TEST(BenchmarkRunnerTest, StatisticsClearing) {
   EXPECT_TRUE(stats.all_tlb_hit_latency_ns.empty());
   EXPECT_TRUE(stats.all_tlb_miss_latency_ns.empty());
   EXPECT_TRUE(stats.all_page_walk_penalty_ns.empty());
+}
+
+TEST(BenchmarkRunnerTest, InjectedTimerCreationFailureIsReportedAndCheckpointed) {
+  BenchmarkConfig config;
+  config.loop_count = 1;
+  config.output_file = "/tmp/benchmark-runner-hook-unused.json";
+  BenchmarkBuffers buffers;
+  BenchmarkStatistics stats;
+  size_t checkpoints = 0;
+  BenchmarkRunnerTestHooks hooks;
+  hooks.force_timer_creation_failure = true;
+  hooks.checkpoint = [&](const BenchmarkConfig&, const BenchmarkStatistics&,
+                         double, bool) {
+    ++checkpoints;
+    return EXIT_SUCCESS;
+  };
+
+  testing::internal::CaptureStderr();
+  const int result = run_all_benchmarks(buffers, config, stats, &hooks);
+  const std::string error_output = testing::internal::GetCapturedStderr();
+
+  EXPECT_EQ(result, EXIT_FAILURE);
+  EXPECT_EQ(stats.status, BenchmarkRunStatus::Failed);
+  EXPECT_EQ(stats.status_reason, Messages::error_timer_creation_failed());
+  EXPECT_EQ(checkpoints, 1u);
+  EXPECT_NE(error_output.find(stats.status_reason), std::string::npos);
+}
+
+TEST(BenchmarkRunnerTest, InjectedCheckpointFailureRejectsCompletedLoop) {
+  BenchmarkConfig config;
+  config.loop_count = 1;
+  config.output_file = "/tmp/benchmark-runner-hook-unused.json";
+  config.only_bandwidth = true;
+  BenchmarkBuffers buffers;
+  BenchmarkStatistics stats;
+  BenchmarkRunnerTestHooks hooks;
+  hooks.execute_loop = [](const BenchmarkBuffers&, BenchmarkConfig&, int loop,
+                          HighResTimer&, BenchmarkExecutionState*) {
+    BenchmarkResults results;
+    results.status = BenchmarkRunStatus::Complete;
+    results.loop_index = static_cast<size_t>(loop);
+    return results;
+  };
+  hooks.checkpoint = [](const BenchmarkConfig&, const BenchmarkStatistics&,
+                        double, bool) { return EXIT_FAILURE; };
+
+  testing::internal::CaptureStdout();
+  const int result = run_all_benchmarks(buffers, config, stats, &hooks);
+  static_cast<void>(testing::internal::GetCapturedStdout());
+
+  EXPECT_EQ(result, EXIT_FAILURE);
+  EXPECT_EQ(stats.status, BenchmarkRunStatus::Failed);
+  EXPECT_EQ(stats.status_reason,
+            Messages::benchmark_reason_checkpoint_failed());
+  EXPECT_EQ(stats.completed_loops, 1u);
+}
+
+TEST(BenchmarkRunnerTest, InjectedStopBetweenLoopsPreservesCompletedLoop) {
+  BenchmarkConfig config;
+  config.loop_count = 3;
+  config.output_file = "/tmp/benchmark-runner-hook-unused.json";
+  config.only_bandwidth = true;
+  BenchmarkBuffers buffers;
+  BenchmarkStatistics stats;
+  size_t stop_checks = 0;
+  size_t checkpoints = 0;
+  BenchmarkRunnerTestHooks hooks;
+  hooks.stop_requested = [&] { return stop_checks++ >= 1; };
+  hooks.execute_loop = [](const BenchmarkBuffers&, BenchmarkConfig&, int loop,
+                          HighResTimer&, BenchmarkExecutionState*) {
+    BenchmarkResults results;
+    results.status = BenchmarkRunStatus::Complete;
+    results.loop_index = static_cast<size_t>(loop);
+    return results;
+  };
+  hooks.checkpoint = [&](const BenchmarkConfig&, const BenchmarkStatistics&,
+                         double, bool) {
+    ++checkpoints;
+    return EXIT_SUCCESS;
+  };
+
+  testing::internal::CaptureStdout();
+  const int result = run_all_benchmarks(buffers, config, stats, &hooks);
+  static_cast<void>(testing::internal::GetCapturedStdout());
+
+  EXPECT_EQ(result, EXIT_SUCCESS);
+  EXPECT_EQ(stats.status, BenchmarkRunStatus::Interrupted);
+  EXPECT_EQ(stats.completed_loops, 1u);
+  EXPECT_EQ(stats.loop_results.size(), 1u);
+  EXPECT_EQ(checkpoints, 2u);
 }
 
 // Integration test: Test that statistics vectors are properly reserved

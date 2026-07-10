@@ -70,6 +70,11 @@ struct ParallelExecutionMetadata {
   bool worker_startup_failed = false;
 };
 
+/** @brief Deterministic test-only fault seam for worker creation handling. */
+struct ParallelExecutionTestControl {
+  int fail_before_worker_index = -1;
+};
+
 /**
  * @brief Build contiguous per-thread ranges with aligned internal boundaries.
  *
@@ -142,7 +147,8 @@ template <typename MakeWorkFunction>
 double run_parallel_test_common(void* alignment_base, size_t size, int iterations, int num_threads, HighResTimer& timer,
                                 const char* thread_name, MakeWorkFunction make_work,
                                 const std::vector<size_t>* planned_boundaries = nullptr,
-                                ParallelExecutionMetadata* execution_metadata = nullptr) {
+                                ParallelExecutionMetadata* execution_metadata = nullptr,
+                                const ParallelExecutionTestControl* test_control = nullptr) {
   if (execution_metadata != nullptr) {
     *execution_metadata = {};
     execution_metadata->requested_workers = num_threads;
@@ -196,6 +202,12 @@ double run_parallel_test_common(void* alignment_base, size_t size, int iteration
       const size_t worker_index = threads.size();
       auto measured_work =
           make_work(chunk_start_offset, thread_chunk_size, iterations, worker_index);
+      if (test_control != nullptr && test_control->fail_before_worker_index >= 0 &&
+          worker_index ==
+              static_cast<size_t>(test_control->fail_before_worker_index)) {
+        throw std::system_error(
+            std::make_error_code(std::errc::resource_unavailable_try_again));
+      }
       threads.emplace_back([measured_work = std::move(measured_work), &state_mutex, &state_cv,
                             &ready_workers, &start_flag, &measurement_complete,
                             &measured_duration, &remaining_workers,

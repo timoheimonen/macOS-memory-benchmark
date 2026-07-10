@@ -53,6 +53,7 @@
 #include <chrono>
 #include <iostream>
 #include <cstdlib>  // EXIT_SUCCESS, EXIT_FAILURE
+#include <optional>
 
 /**
  * @brief Runs all benchmarks for the specified number of loops and collects statistics.
@@ -93,24 +94,38 @@
  * @see collect_loop_results() for result collection
  * @see print_results() for output formatting
  */
-int run_all_benchmarks(const BenchmarkBuffers& buffers, BenchmarkConfig& config, BenchmarkStatistics& stats) {
+int run_all_benchmarks(const BenchmarkBuffers& buffers, BenchmarkConfig& config,
+                       BenchmarkStatistics& stats,
+                       const BenchmarkRunnerTestHooks* test_hooks) {
   (void)buffers;
 
   // Initialize statistics structure
   initialize_statistics(stats, config);
   const auto run_start = std::chrono::steady_clock::now();
 
-  auto checkpoint = [&config, &stats, &run_start]() {
+  auto checkpoint = [&config, &stats, &run_start, test_hooks]() {
     if (config.output_file.empty()) {
       return EXIT_SUCCESS;
     }
     const double elapsed_seconds = std::chrono::duration<double>(
         std::chrono::steady_clock::now() - run_start).count();
+    if (test_hooks != nullptr && test_hooks->checkpoint) {
+      return test_hooks->checkpoint(config, stats, elapsed_seconds, false);
+    }
     return save_results_to_json(config, stats, elapsed_seconds, false);
   };
 
+  auto stop_requested = [test_hooks]() {
+    return test_hooks != nullptr && test_hooks->stop_requested
+               ? test_hooks->stop_requested()
+               : signal_received();
+  };
+
   // Create timer for benchmark execution
-  auto test_timer_opt = HighResTimer::create();
+  std::optional<HighResTimer> test_timer_opt;
+  if (test_hooks == nullptr || !test_hooks->force_timer_creation_failure) {
+    test_timer_opt = HighResTimer::create();
+  }
   if (!test_timer_opt) {
     stats.status = BenchmarkRunStatus::Failed;
     stats.status_reason = Messages::error_timer_creation_failed();
@@ -124,7 +139,7 @@ int run_all_benchmarks(const BenchmarkBuffers& buffers, BenchmarkConfig& config,
   // Main benchmark loop
   for (int loop = 0; loop < config.loop_count; ++loop) {
     // Check for Ctrl+C between loops
-    if (signal_received()) {
+    if (stop_requested()) {
       stats.status = BenchmarkRunStatus::Interrupted;
       stats.status_reason = Messages::msg_interrupted_by_user();
       (void)checkpoint();
@@ -134,8 +149,12 @@ int run_all_benchmarks(const BenchmarkBuffers& buffers, BenchmarkConfig& config,
 
     try {
       // Run single benchmark loop
-      BenchmarkResults loop_results = run_single_benchmark_loop(
-          buffers, config, loop, test_timer, &execution_state);
+      BenchmarkResults loop_results =
+          test_hooks != nullptr && test_hooks->execute_loop
+              ? test_hooks->execute_loop(buffers, config, loop, test_timer,
+                                         &execution_state)
+              : run_single_benchmark_loop(buffers, config, loop, test_timer,
+                                          &execution_state);
 
       // Collect results into statistics
       collect_loop_results(stats, loop_results, config);

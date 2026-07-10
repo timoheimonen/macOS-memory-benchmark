@@ -387,4 +387,9 @@ std::string benchmark_reason_prepare_failed(const std::string& phase_name) {
   return "failed to prepare " + phase_name + " buffers";
 }
 
+std::string benchmark_reason_latency_chain_setup_failed(
+    const std::string& phase_name) {
+  return "failed to construct " + phase_name + " latency chain";
+}
+
 } // namespace Messages
