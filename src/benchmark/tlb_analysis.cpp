@@ -53,6 +53,7 @@
 #include "core/memory/memory_manager.h"
 #include "core/memory/memory_utils.h"
 #include "core/signal/signal_handler.h"
+#include "core/system/page_size.h"
 #include "core/system/system_info.h"
 #include "core/timing/timer.h"
 #include "output/console/messages/messages_api.h"
@@ -697,8 +698,7 @@ int run_tlb_analysis_impl(
   const bool refinement_enabled = tlb_density_enables_refinement(sweep_density);
 
   if (execution_seam != nullptr &&
-      (execution_seam->page_size_bytes < sizeof(uintptr_t) ||
-       execution_seam->l1_cache_size_bytes == 0 ||
+      (execution_seam->l1_cache_size_bytes == 0 ||
        execution_seam->selected_buffer_mb == 0 ||
        execution_seam->available_memory_mb == 0 ||
        !execution_seam->execute_pass)) {
@@ -707,7 +707,10 @@ int run_tlb_analysis_impl(
 
   const size_t page_size_bytes = execution_seam != nullptr
                                      ? execution_seam->page_size_bytes
-                                     : static_cast<size_t>(getpagesize());
+                                     : get_system_page_size_bytes();
+  if (page_size_bytes < sizeof(uintptr_t)) {
+    return EXIT_FAILURE;
+  }
   if (analysis_stride_bytes == 0) {
     std::cerr << Messages::error_prefix()
               << Messages::error_latency_stride_invalid(0, 1, std::numeric_limits<long long>::max())

@@ -34,6 +34,7 @@
 #include "core/memory/buffer_manager.h"
 #include "core/config/config.h"
 #include "core/config/constants.h"
+#include "core/system/page_size.h"
 #include "output/console/messages/messages_api.h"
 #include "warmup/warmup.h"
 #include <iostream>
@@ -42,7 +43,6 @@
 #include <cstdlib>
 #include <algorithm>
 #include <limits>
-#include <unistd.h>
 #include <utility>
 
 // Forward declarations from helpers.cpp
@@ -130,7 +130,7 @@ void set_strided_triplet_status(PatternResults& results, PatternKind kind,
             : 0;
     measurement.requested_threads = config.num_threads;
     measurement.effective_threads = effective_threads;
-    measurement.native_page_size_bytes = static_cast<size_t>(getpagesize());
+    measurement.native_page_size_bytes = get_system_page_size_bytes();
     measurement.stride_equals_native_page_size =
         stride == measurement.native_page_size_bytes;
     set_pattern_measurement(results, kind, operation, std::move(measurement));
@@ -159,7 +159,7 @@ PatternMeasurement build_strided_measurement(
   measurement.elapsed_seconds = elapsed_seconds;
   measurement.pilot_elapsed_seconds = pilot_elapsed_seconds;
   measurement.automatic_calibration = !config.user_specified_iterations;
-  measurement.native_page_size_bytes = static_cast<size_t>(getpagesize());
+  measurement.native_page_size_bytes = get_system_page_size_bytes();
   measurement.stride_equals_native_page_size =
       plan.stride_bytes == measurement.native_page_size_bytes;
 
@@ -232,8 +232,7 @@ int run_strided_pattern_benchmarks(const BenchmarkBuffers& buffers, const Benchm
   // Execute read benchmark
   show_progress();
   std::atomic<uint64_t> checksum{0};
-  warmup_read_strided(buffers.src_buffer(), config.buffer_size, stride,
-                      pilot_plan.effective_threads, checksum);
+  warmup_read_strided(buffers.src_buffer(), pilot_plan, checksum);
   auto run_read = [&](const PatternWorkPlan& plan) {
     return run_pattern_read_strided_test(buffers.src_buffer(), plan, checksum, timer);
   };
@@ -253,8 +252,7 @@ int run_strided_pattern_benchmarks(const BenchmarkBuffers& buffers, const Benchm
 
   // Execute write benchmark
   show_progress();
-  warmup_write_strided(buffers.dst_buffer(), config.buffer_size, stride,
-                       pilot_plan.effective_threads);
+  warmup_write_strided(buffers.dst_buffer(), pilot_plan);
   auto run_write = [&](const PatternWorkPlan& plan) {
     return run_pattern_write_strided_test(buffers.dst_buffer(), plan, timer);
   };
@@ -274,8 +272,7 @@ int run_strided_pattern_benchmarks(const BenchmarkBuffers& buffers, const Benchm
 
   // Execute copy benchmark
   show_progress();
-  warmup_copy_strided(buffers.dst_buffer(), buffers.src_buffer(), config.buffer_size, stride,
-                      pilot_plan.effective_threads);
+  warmup_copy_strided(buffers.dst_buffer(), buffers.src_buffer(), pilot_plan);
   auto run_copy = [&](const PatternWorkPlan& plan) {
     return run_pattern_copy_strided_test(buffers.dst_buffer(), buffers.src_buffer(), plan, timer);
   };

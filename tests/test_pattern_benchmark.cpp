@@ -23,6 +23,7 @@
 #include "core/config/constants.h"
 #include "output/console/messages/messages_api.h"
 #include "utils/benchmark.h"  // Declares system_info functions
+#include "warmup/warmup.h"
 #include "test_config_helpers.h"
 #include <algorithm>
 #include <array>
@@ -389,6 +390,121 @@ TEST(PatternBenchmarkTest, PhasedStridedKernelsRespectAccessBoundariesIntegratio
       EXPECT_EQ(destination[-static_cast<ptrdiff_t>(guard)], 0x5A);
       EXPECT_EQ(destination[span + guard - 1], 0x5A);
     }
+  }
+}
+
+TEST(PatternBenchmarkTest, FinalizedPatternPlansDriveWarmupKernelsIntegration) {
+  constexpr size_t buffer_size = 256;
+  constexpr uint64_t initial_checksum = 0x123456789abcdef0ULL;
+  std::vector<unsigned char> source_storage(
+      buffer_size + Constants::CACHE_LINE_SIZE_BYTES);
+  std::vector<unsigned char> destination_storage(
+      buffer_size + Constants::CACHE_LINE_SIZE_BYTES);
+  unsigned char* source = align_to_cache_line(source_storage.data());
+  unsigned char* destination =
+      align_to_cache_line(destination_storage.data());
+  for (size_t offset = 0; offset < buffer_size; ++offset) {
+    source[offset] = static_cast<unsigned char>((offset * 29 + 17) & 0xff);
+  }
+
+  const PatternWorkPlan strided_plan = build_strided_pattern_work_plan(
+      buffer_size, Constants::PATTERN_STRIDE_CACHE_LINE,
+      Constants::PATTERN_ACCESS_SIZE_BYTES, 2, 1, 0);
+  ASSERT_EQ(strided_plan.status, PatternMeasurementStatus::Measured);
+  ASSERT_EQ(strided_plan.workers.size(), 2u);
+
+  uint64_t expected_checksum = initial_checksum;
+  for (const PatternWorkerRange& worker : strided_plan.workers) {
+    expected_checksum ^= memory_read_strided_phased_loop_asm(
+        source + worker.offset_bytes, worker.span_bytes,
+        strided_plan.stride_bytes, strided_plan.phase_period_passes, 0);
+  }
+  std::atomic<uint64_t> checksum{initial_checksum};
+  warmup_read_strided(source, strided_plan, checksum);
+  EXPECT_EQ(checksum.load(std::memory_order_acquire), expected_checksum);
+
+  std::fill(destination, destination + buffer_size, 0xa5);
+  warmup_write_strided(destination, strided_plan);
+  EXPECT_TRUE(std::all_of(destination, destination + buffer_size,
+                          [](unsigned char value) { return value == 0; }));
+
+  std::fill(destination, destination + buffer_size, 0xa5);
+  warmup_copy_strided(destination, source, strided_plan);
+  EXPECT_TRUE(std::equal(source, source + buffer_size, destination));
+
+  const std::vector<size_t> global_indices = {0, 96, 128, 224};
+  const std::vector<PatternRandomWorkerIndices> random_workers =
+      build_random_worker_indices(buffer_size,
+                                  Constants::PATTERN_ACCESS_SIZE_BYTES, 2,
+                                  global_indices);
+  ASSERT_EQ(random_workers.size(), 2u);
+
+  expected_checksum = initial_checksum;
+  for (const PatternRandomWorkerIndices& worker : random_workers) {
+    expected_checksum ^= memory_read_random_loop_asm(
+        source + worker.offset_bytes, worker.indices.data(),
+        worker.indices.size());
+  }
+  checksum.store(initial_checksum, std::memory_order_relaxed);
+  warmup_read_random(source, random_workers, checksum);
+  EXPECT_EQ(checksum.load(std::memory_order_acquire), expected_checksum);
+}
+
+TEST(PatternBenchmarkTest, CacheReadWarmupUsesCacheKernelIntegration) {
+  constexpr size_t buffer_size = 1024;
+  std::vector<unsigned char> storage(
+      buffer_size + Constants::CACHE_LINE_SIZE_BYTES);
+  unsigned char* source = align_to_cache_line(storage.data());
+  for (size_t offset = 0; offset < buffer_size; ++offset) {
+    source[offset] = static_cast<unsigned char>((offset * 37 + 11) & 0xff);
+  }
+
+  const uint64_t expected_checksum =
+      memory_read_cache_loop_asm(source, buffer_size);
+  std::atomic<uint64_t> checksum{0};
+  warmup_cache_read(source, buffer_size, 1, checksum);
+
+  EXPECT_EQ(checksum.load(std::memory_order_acquire), expected_checksum);
+}
+
+TEST(PatternBenchmarkTest, RandomWarmupUsesChunkRelativeWorkerOffsetsIntegration) {
+  constexpr size_t buffer_size = 256;
+  std::vector<unsigned char> source_storage(
+      buffer_size + Constants::CACHE_LINE_SIZE_BYTES);
+  std::vector<unsigned char> destination_storage(
+      buffer_size + Constants::CACHE_LINE_SIZE_BYTES);
+  unsigned char* source = align_to_cache_line(source_storage.data());
+  unsigned char* destination =
+      align_to_cache_line(destination_storage.data());
+  for (size_t offset = 0; offset < buffer_size; ++offset) {
+    source[offset] = static_cast<unsigned char>((offset * 31 + 7) & 0xff);
+  }
+
+  const std::vector<size_t> global_indices = {0, 96, 128, 224};
+  const std::vector<PatternRandomWorkerIndices> workers =
+      build_random_worker_indices(buffer_size,
+                                  Constants::PATTERN_ACCESS_SIZE_BYTES, 2,
+                                  global_indices);
+  ASSERT_EQ(workers.size(), 2u);
+  EXPECT_EQ(workers[0].indices, (std::vector<size_t>{0, 96}));
+  EXPECT_EQ(workers[1].indices, (std::vector<size_t>{0, 96}));
+
+  std::fill(destination, destination + buffer_size, 0xa5);
+  warmup_copy_random(destination, source, workers);
+  for (size_t offset = 0; offset < buffer_size; ++offset) {
+    const bool selected = offset < 32 || (offset >= 96 && offset < 160) ||
+                          offset >= 224;
+    EXPECT_EQ(destination[offset], selected ? source[offset] : 0xa5)
+        << "offset=" << offset;
+  }
+
+  std::fill(destination, destination + buffer_size, 0xa5);
+  warmup_write_random(destination, workers);
+  for (size_t offset = 0; offset < buffer_size; ++offset) {
+    const bool selected = offset < 32 || (offset >= 96 && offset < 160) ||
+                          offset >= 224;
+    EXPECT_EQ(destination[offset], selected ? 0u : 0xa5u)
+        << "offset=" << offset;
   }
 }
 

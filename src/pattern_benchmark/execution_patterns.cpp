@@ -34,6 +34,7 @@
 #include "core/memory/buffer_manager.h"
 #include "core/config/config.h"
 #include "core/config/constants.h"
+#include "core/system/page_size.h"
 #include "output/console/messages/messages_api.h"
 #include "utils/numeric_utils.h"
 #include "warmup/warmup.h"
@@ -42,7 +43,6 @@
 #include <algorithm>
 #include <cstdlib>
 #include <limits>
-#include <unistd.h>
 #include <utility>
 
 // Forward declarations from helpers.cpp
@@ -154,7 +154,7 @@ PatternMeasurement build_pattern_measurement(
   measurement.elapsed_seconds = elapsed_seconds;
   measurement.pilot_elapsed_seconds = calibration.pilot_elapsed_seconds;
   measurement.automatic_calibration = calibration.automatic;
-  measurement.native_page_size_bytes = static_cast<size_t>(getpagesize());
+  measurement.native_page_size_bytes = get_system_page_size_bytes();
   measurement.stride_equals_native_page_size =
       stride_bytes != 0 && stride_bytes == measurement.native_page_size_bytes;
   measurement.has_seed = has_seed;
@@ -194,7 +194,7 @@ void set_triplet_status(PatternResults& results, PatternKind kind,
     measurement.stride_bytes = stride_bytes;
     measurement.requested_threads = config.num_threads;
     measurement.effective_threads = config.num_threads;
-    measurement.native_page_size_bytes = static_cast<size_t>(getpagesize());
+    measurement.native_page_size_bytes = get_system_page_size_bytes();
     measurement.stride_equals_native_page_size =
         stride_bytes != 0 && stride_bytes == measurement.native_page_size_bytes;
     measurement.has_seed = has_seed;
@@ -392,7 +392,7 @@ int run_random_pattern_benchmarks(const BenchmarkBuffers& buffers, const Benchma
   // Execute read benchmark
   show_progress();
   std::atomic<uint64_t> checksum{0};
-  warmup_read_random(buffers.src_buffer(), random_indices, config.num_threads, checksum);
+  warmup_read_random(buffers.src_buffer(), worker_indices, checksum);
   auto run_read = [&](int passes) {
     return run_pattern_read_random_test(buffers.src_buffer(), worker_indices, passes, checksum, timer);
   };
@@ -415,7 +415,7 @@ int run_random_pattern_benchmarks(const BenchmarkBuffers& buffers, const Benchma
 
   // Execute write benchmark
   show_progress();
-  warmup_write_random(buffers.dst_buffer(), random_indices, config.num_threads);
+  warmup_write_random(buffers.dst_buffer(), worker_indices);
   auto run_write = [&](int passes) {
     return run_pattern_write_random_test(buffers.dst_buffer(), worker_indices, passes, timer);
   };
@@ -433,8 +433,7 @@ int run_random_pattern_benchmarks(const BenchmarkBuffers& buffers, const Benchma
 
   // Execute copy benchmark
   show_progress();
-  warmup_copy_random(buffers.dst_buffer(), buffers.src_buffer(), random_indices,
-                     config.num_threads);
+  warmup_copy_random(buffers.dst_buffer(), buffers.src_buffer(), worker_indices);
   auto run_copy = [&](int passes) {
     return run_pattern_copy_random_test(buffers.dst_buffer(), buffers.src_buffer(), worker_indices, passes, timer);
   };

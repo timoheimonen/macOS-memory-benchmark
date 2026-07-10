@@ -46,7 +46,6 @@
 #include <iostream>
 #include <limits>
 #include <set>
-#include <unistd.h>  // getpagesize
 
 namespace {
 
