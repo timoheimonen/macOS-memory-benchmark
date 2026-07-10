@@ -1008,6 +1008,68 @@ TEST(JsonSchemaTest, CoreToCoreJsonBuilderReturnsInMemoryPayload) {
             Constants::CORE_TO_CORE_SCENARIO_NO_AFFINITY);
 }
 
+TEST(JsonSchemaTest, CoreToCoreV2SerializesCalibratedBalancedAuditTrail) {
+  CoreToCoreLatencyConfig config;
+  config.loop_count = 1;
+  config.latency_sample_count = 2;
+
+  ThreadHintStatus initiator_hint;
+  initiator_hint.qos_applied = true;
+  initiator_hint.affinity_requested = true;
+  initiator_hint.affinity_applied = true;
+  initiator_hint.affinity_tag = 1;
+  ThreadHintStatus responder_hint = initiator_hint;
+
+  CoreToCoreLoopRecord loop_record;
+  loop_record.loop_index = 0;
+  loop_record.order_position = 1;
+  loop_record.status = CoreToCoreMeasurementStatus::Measured;
+  loop_record.round_trip_ns = 70.0;
+  loop_record.headline_elapsed_seconds = 0.250;
+  loop_record.duration_quality = "within-target-window";
+  loop_record.sample_start_index = 0;
+  loop_record.completed_sample_windows = 2;
+  loop_record.initiator_hint = initiator_hint;
+  loop_record.responder_hint = responder_hint;
+
+  CoreToCoreLatencyScenarioResult scenario;
+  scenario.scenario_name = Constants::CORE_TO_CORE_SCENARIO_SAME_AFFINITY;
+  scenario.loop_round_trip_ns = {70.0};
+  scenario.sample_round_trip_ns = {69.0, 71.0};
+  scenario.initiator_hint = initiator_hint;
+  scenario.responder_hint = responder_hint;
+  scenario.work_plan = {true, 100000, 0.007, 70.0, 350000, 3500000, 14000};
+  scenario.loop_records = {loop_record};
+  scenario.status = CoreToCoreMeasurementStatus::Measured;
+  scenario.planned_loops = 1;
+  scenario.completed_loops = 1;
+
+  const std::string cpu_name = "test-cpu";
+  const std::vector<CoreToCoreLatencyScenarioResult> scenarios = {scenario};
+  const CoreToCoreLatencyJsonContext context = {
+      config, cpu_name, 4, 6, 20000, 1000000, 2000, scenarios, 1.5,
+      "complete", 1, 1};
+
+  const nlohmann::json output = build_core_to_core_latency_json(context);
+  EXPECT_EQ(output[JsonKeys::CONFIGURATION]["schema_version"], 2);
+  EXPECT_EQ(output[JsonKeys::CONFIGURATION]["methodology_version"],
+            "core2core-v2-calibrated-balanced-auditable");
+  EXPECT_EQ(output[JsonKeys::CONFIGURATION]["scenario_schedule"],
+            "cyclic-latin-square-across-count-loops");
+  EXPECT_EQ(output[JsonKeys::CONFIGURATION]["calibration_warmup_round_trips"],
+            Constants::CORE_TO_CORE_CALIBRATION_WARMUP_ROUND_TRIPS);
+
+  const nlohmann::json result = output["core_to_core_latency"];
+  EXPECT_EQ(result["status"], "complete");
+  EXPECT_TRUE(result["measurements_complete"]);
+  EXPECT_TRUE(result["affinity_hint_comparison_interpretable"]);
+  const nlohmann::json scenario_json = result["scenarios"][0];
+  EXPECT_EQ(scenario_json["headline_round_trip_ns"], 70.0);
+  EXPECT_EQ(scenario_json["work_plan"]["headline_round_trips"], 3500000u);
+  EXPECT_EQ(scenario_json["loop_records"][0]["order_position"], 1u);
+  EXPECT_EQ(scenario_json["loop_records"][0]["sample_window_range"]["count"], 2u);
+}
+
 TEST(JsonSchemaTest, CoreToCoreExporterReturnsSuccessWhenOutputPathIsEmpty) {
   CoreToCoreLatencyConfig config;
   config.output_file.clear();

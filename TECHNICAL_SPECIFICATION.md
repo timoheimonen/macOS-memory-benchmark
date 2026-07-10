@@ -118,7 +118,7 @@ Configuration state is represented by `BenchmarkConfig` (`src/core/config/config
 - Help (`-h`, `--help`) prints usage and exits successfully.
 - `--latency-chain-mode` accepts string values and resolves to `LatencyChainMode` enum.
 - `--analyze-tlb` uses an early dedicated parse branch in `argument_parser.cpp`. It only allows optional `--output`, `--latency-stride-bytes`, `--latency-chain-mode`, `--tlb-density`, `--seed`, `--sweep`, and `--sweep-max-runs`. TLB sweep supports `latency-stride-bytes`, `latency-chain-mode`, and `tlb-density`; its default run guard is `16`, and `global-random` chain mode is rejected. One generated or user-provided seed drives the pure sweep planner, seeded cyclic Latin round scheduler, derived task seeds, layout-specific page-native chain permutations, and deterministic convergence bootstrap. Each task measures a verified one-node-per-page spread chain and an equal-cache-line packed control in the same round. A pilot calibrates whole-chain accesses toward the quick/standard/exhaustive target duration; rounds stop at the per-point CI-width target or profile maximum. Candidate buffers are admitted only when their predicted buffer-plus-scratch peak fits the available-memory budget. Full methodology and JSON contract: [TLB_ANALYSIS_WHITEPAPER.md](TLB_ANALYSIS_WHITEPAPER.md).
-- `--analyze-core2core` uses dedicated mode parsing (outside `argument_parser.cpp`) and only allows optional `--output`, `--count`, `--latency-samples`, `--sweep`, and `--sweep-max-runs`. Core-to-core sweep supports `count` and `latency-samples`. Full methodology and JSON contract: [CORE_TO_CORE_WHITEPAPER.md](CORE_TO_CORE_WHITEPAPER.md).
+- `--analyze-core2core` uses dedicated mode parsing (outside `argument_parser.cpp`) and only allows optional `--output`, `--count`, `--latency-samples`, `--sweep`, and `--sweep-max-runs`. Its mode-specific loop default is `3`; the general loop default remains `1`. Core-to-core sweep supports `count` and `latency-samples`, rejects duplicate sweep keys, and atomically checkpoints the combined output after every run. Direct execution prepares/restores the benchmark signal mask before creating workers. Each scheduler-hint scenario runs an excluded pilot after a 1,000,000-round-trip calibration warmup, reuses its duration-calibrated plan across measured loops, and participates in a cyclic Latin-square scenario schedule. Full methodology and JSON schema 2 contract: [CORE_TO_CORE_WHITEPAPER.md](CORE_TO_CORE_WHITEPAPER.md).
 
 ### 6.2 Validation behavior (`config_validator.cpp`)
 
@@ -393,7 +393,8 @@ JSON writer API (`src/output/json/json_output/json_output.cpp`):
   per-loop `loops`, `main_memory`, `cache`, `timestamp`, and `version`.
 - Pattern mode: `configuration`, `execution_time_sec`, `patterns`, `timestamp`, `version`.
 - TLB analysis mode: `configuration`, `execution_time_sec`, `tlb_analysis`, `timestamp`, `version`.
-- Sweep mode: `configuration.mode = "sweep"`, `configuration.base_mode`, `configuration.sweep_parameters`, `runs[].result`, `execution_time_sec`, `timestamp`, `version`. For `--analyze-tlb --sweep`, `base_mode` is `analyze_tlb` and each `runs[].result` contains a TLB analysis payload.
+- Core-to-core schema 2: calibrated methodology configuration, `core_to_core_latency` command completion metadata, scenario work plans, nullable aggregate values, per-loop order/status/duration/hint/sample-boundary records, and affinity-comparison interpretability metadata.
+- Sweep mode: `configuration.mode = "sweep"`, `configuration.base_mode`, `configuration.sweep_parameters`, top-level status/completion/conclusion fields, `runs[].result`, `execution_time_sec`, `timestamp`, `version`. For `--analyze-tlb --sweep`, `base_mode` is `analyze_tlb` and each `runs[].result` contains a TLB analysis payload. Core-to-core sweeps use `base_mode: "analyze_core2core"` and checkpoint after every run.
 
 ### 17.1 Configuration keys
 
@@ -425,7 +426,25 @@ In addition to standard fields (buffer size, iterations, loop count, thread coun
 - Statistics include average, median, P90/P95/P99, sample stddev, CV, MAD, min, and max.
 - Unavailable measurements use `null` plus status/reason, never numeric zero.
 
-### 17.4 Path behavior
+### 17.4 Core-to-core schema 2
+
+- `configuration.schema_version` (number): `2`.
+- `configuration.methodology_version` (string): `core2core-v2-calibrated-balanced-auditable`.
+- Calibration metadata: excluded 100,000-round-trip pilot after a 1,000,000-round-trip calibration warmup; 25 ms
+  final warmup target, 250 ms continuous headline target with a 100-300 ms intended window, and 1 ms sample-window
+  target. Minimum work is 20,000/1,000,000/2,000 round trips respectively.
+- `core_to_core_latency.status`, `planned_measurements`, `completed_measurements`, and `measurements_complete` describe
+  command completion.
+- Each scenario contains `status`, `status_reason`, planned/completed loops, a calibrated `work_plan`, continuous
+  headline values/statistics, a nullable median headline, a distinct pooled `samples_ns` distribution, and
+  `loop_records`.
+- Loop records retain cyclic schedule position, status/reason, nullable round-trip and one-way estimates, headline
+  duration/quality, pooled-sample index range, and both workers' observed QoS/affinity hint outcomes.
+- `affinity_hint_comparison_interpretable` is true only for a complete command when every requested hint was applied in
+  every measured record. It does not imply hard core pinning.
+- Invalid, failed, interrupted, and not-run measurements never become numeric zeroes.
+
+### 17.5 Path behavior
 
 - Relative `--output` paths are resolved against current working directory.
 

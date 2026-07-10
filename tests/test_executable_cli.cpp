@@ -106,6 +106,46 @@ TEST(ExecutableCliIntegrationTest, CoreToCoreArgumentsAreRoutedBeforeNormalParse
   EXPECT_NE(result.output.find("--analyze-core2core allows only optional"), std::string::npos);
 }
 
+TEST(ExecutableCliIntegrationTest, CoreToCoreWritesCalibratedAuditJsonIntegration) {
+  const std::string output_path = make_temp_json_path("core2core_v2");
+  std::remove(output_path.c_str());
+
+  const CliResult result = run_memory_benchmark(
+      "--analyze-core2core --count 1 --latency-samples 1 --output " + output_path);
+
+  EXPECT_EQ(result.exit_code, EXIT_SUCCESS);
+  const nlohmann::json output = nlohmann::json::parse(read_file(output_path));
+  EXPECT_EQ(output["version"], "0.58.0");
+  EXPECT_EQ(output["configuration"]["schema_version"], 2);
+  EXPECT_EQ(output["core_to_core_latency"]["status"], "complete");
+  EXPECT_TRUE(output["core_to_core_latency"]["measurements_complete"]);
+  ASSERT_EQ(output["core_to_core_latency"]["scenarios"].size(), 3u);
+  EXPECT_EQ(output["core_to_core_latency"]["scenarios"][0]["loop_records"].size(), 1u);
+
+  std::remove(output_path.c_str());
+}
+
+TEST(ExecutableCliIntegrationTest, CoreToCoreSweepWritesCompletionMetadataIntegration) {
+  const std::string output_path = make_temp_json_path("core2core_sweep_v2");
+  std::remove(output_path.c_str());
+
+  const CliResult result = run_memory_benchmark(
+      "--analyze-core2core --count 1 --sweep latency-samples=1,2 "
+      "--sweep-max-runs 2 --output " + output_path);
+
+  EXPECT_EQ(result.exit_code, EXIT_SUCCESS);
+  const nlohmann::json output = nlohmann::json::parse(read_file(output_path));
+  EXPECT_EQ(output["version"], "0.58.0");
+  EXPECT_EQ(output["status"], "complete");
+  EXPECT_EQ(output["planned_runs"], 2u);
+  EXPECT_EQ(output["completed_runs"], 2u);
+  EXPECT_TRUE(output["conclusions_valid"]);
+  ASSERT_EQ(output["runs"].size(), 2u);
+  EXPECT_EQ(output["runs"][0]["result"]["configuration"]["schema_version"], 2);
+
+  std::remove(output_path.c_str());
+}
+
 TEST(ExecutableCliIntegrationTest, AnalyzeTlbInvalidStrideSweepFailsBeforeExecutionIntegration) {
   const std::string output_path = make_temp_json_path("tlb_invalid_stride_sweep");
   std::remove(output_path.c_str());

@@ -25,6 +25,7 @@
 #define CORE_TO_CORE_LATENCY_H
 
 #include <cstddef>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -66,12 +67,66 @@ struct ThreadHintStatus {
   int affinity_tag = 0;
 };
 
+enum class CoreToCoreMeasurementStatus {
+  NotRun = 0,
+  Measured,
+  Interrupted,
+  Invalid,
+  Failed,
+};
+
+inline const char* core_to_core_measurement_status_to_string(CoreToCoreMeasurementStatus status) {
+  switch (status) {
+    case CoreToCoreMeasurementStatus::NotRun:
+      return "not-run";
+    case CoreToCoreMeasurementStatus::Measured:
+      return "measured";
+    case CoreToCoreMeasurementStatus::Interrupted:
+      return "interrupted";
+    case CoreToCoreMeasurementStatus::Invalid:
+      return "invalid";
+    case CoreToCoreMeasurementStatus::Failed:
+      return "failed";
+  }
+  return "unknown";
+}
+
+struct CoreToCoreWorkPlan {
+  bool calibrated = false;
+  size_t calibration_round_trips = 0;
+  double calibration_elapsed_seconds = 0.0;
+  double calibration_round_trip_ns = 0.0;
+  size_t warmup_round_trips = 0;
+  size_t headline_round_trips = 0;
+  size_t sample_window_round_trips = 0;
+};
+
+struct CoreToCoreLoopRecord {
+  size_t loop_index = 0;
+  size_t order_position = 0;
+  CoreToCoreMeasurementStatus status = CoreToCoreMeasurementStatus::NotRun;
+  std::string status_reason;
+  std::optional<double> round_trip_ns;
+  std::optional<double> headline_elapsed_seconds;
+  std::string duration_quality;
+  size_t sample_start_index = 0;
+  size_t completed_sample_windows = 0;
+  ThreadHintStatus initiator_hint;
+  ThreadHintStatus responder_hint;
+};
+
 struct CoreToCoreLatencyScenarioResult {
   std::string scenario_name;
   std::vector<double> loop_round_trip_ns;
   std::vector<double> sample_round_trip_ns;
   ThreadHintStatus initiator_hint;
   ThreadHintStatus responder_hint;
+  CoreToCoreWorkPlan work_plan;
+  std::vector<CoreToCoreLoopRecord> loop_records;
+  CoreToCoreMeasurementStatus status = CoreToCoreMeasurementStatus::NotRun;
+  std::string status_reason;
+  size_t planned_loops = 0;
+  size_t completed_loops = 0;
 };
 
 /**
@@ -96,8 +151,7 @@ int run_core_to_core_latency(const CoreToCoreLatencyConfig& config);
  * @param[out] result_json JSON payload with the normal core-to-core schema.
  * @return EXIT_SUCCESS on success, EXIT_FAILURE on runtime error.
  */
-int run_core_to_core_latency_collect(const CoreToCoreLatencyConfig& config,
-                                     nlohmann::ordered_json& result_json);
+int run_core_to_core_latency_collect(const CoreToCoreLatencyConfig& config, nlohmann::ordered_json& result_json);
 
 /**
  * @brief Parse and run standalone core-to-core mode from main().

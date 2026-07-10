@@ -144,22 +144,30 @@ Supported sweep targets include:
 
 Multiple `--sweep` options are combined as a Cartesian product. `--sweep-max-runs` caps the generated run count (default
 `16` for `--analyze-tlb`, `256` otherwise), and
-`--output` is required for the combined JSON result.
+`--output` is required for the combined JSON result. A sweep parameter key may appear only once. Combined sweep JSON is
+atomically checkpointed after each run and exposes status, planned/completed run counts, and conclusion validity.
 
 ## Core-to-Core Cache-Line Handoff
 
 The standalone core-to-core mode, `--analyze-core2core`, measures two-thread cache-line handoff behavior using a ping-pong
-style benchmark.
+style benchmark. Each scheduler-hint scenario uses an excluded pilot after a 1,000,000-round-trip calibration warmup to
+resolve a 25 ms final warmup, a 250 ms continuous headline, and 1 ms sample windows while retaining minimum work. The
+scenario order rotates across repeated loops to balance position effects. Core-to-core mode defaults to three loops, so
+the bare command produces a median plus CV/MAD; the 1,000 approximately 1 ms sample windows per scenario/loop make this
+default intentionally longer than the former single-loop run.
 
 It reports:
 
-- Round-trip latency
+- Median P50 round-trip latency across completed continuous loop windows
 - One-way latency estimate
-- Percentile statistics
+- Headline repeatability statistics including CV/MAD and a 7.5% CV warning
+- A separate pooled sample-window percentile distribution
 - Scheduler-affinity hint scenarios
+- Schema-2 work plans, per-loop audit records, completion metadata, and affinity-comparison interpretability
 
 On macOS, user-space programs cannot guarantee exact physical core pinning. For that reason, core-to-core results should
 be interpreted as scheduler-influenced cache-line handoff measurements rather than strict physical-core topology probes.
+Unavailable measurements carry status/reason and nullable values rather than numeric zeroes.
 
 ## Interpretation Notes
 

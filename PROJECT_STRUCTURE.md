@@ -56,7 +56,7 @@ This document describes the layout of project files, organized by purpose. It is
 | `SECURITY.md` | Vulnerability disclosure policy |
 | `TLB_ANALYSIS_WHITEPAPER.md` | Whitepaper: TLB analysis methodology and Apple Silicon results |
 | `LATENCY_WHITEPAPER.md` | Whitepaper: cache and memory latency measurement methodology |
-| `CORE_TO_CORE_WHITEPAPER.md` | Whitepaper: core-to-core cache-line handoff latency methodology and results |
+| `CORE_TO_CORE_WHITEPAPER.md` | Whitepaper: calibrated core-to-core methodology, audit schema, and interpretation limits |
 | `PROJECT_STRUCTURE.md` | This file |
 
 ---
@@ -142,9 +142,10 @@ The benchmark subsystem owns all measurement logic: executing tests, collecting 
 |---|---|
 | `core_to_core_latency.h` | Public interface for the `--analyze-core2core` mode |
 | `core_to_core_latency_internal.h` | Internal runner interfaces not exposed outside the module |
-| `core_to_core_latency_runner.cpp` | Measurement loop: coordinates two threads on selected CPU cores, runs the assembly ping-pong hot loop, and collects round-trip latency samples |
+| `core_to_core_latency_runner.cpp` | Per-scenario calibration, balanced loop scheduling, unpinned two-thread ping-pong execution, and robust summaries |
 | `core_to_core_latency_cli.cpp` | CLI argument parsing and entry point for the core-to-core mode |
-| `core_to_core_latency_json.h` / `.cpp` | Serializes core-to-core results to JSON |
+| `core_to_core_latency_json.h` / `.cpp` | Serializes schema-2 work plans, loop audit records, completion state, and results |
+| `core_to_core_sweep_runner.h` / `.cpp` | Core-to-core Cartesian sweeps and atomic per-run checkpoints |
 
 ---
 

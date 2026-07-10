@@ -52,6 +52,7 @@ TEST(CoreToCoreCliTest, ParsesDefaultStandaloneModeValues) {
   EXPECT_EQ(parse_result, EXIT_SUCCESS);
   EXPECT_FALSE(config.help_requested);
   EXPECT_EQ(config.loop_count, Constants::CORE_TO_CORE_DEFAULT_LOOP_COUNT);
+  EXPECT_EQ(config.loop_count, 3);
   EXPECT_EQ(config.latency_sample_count, Constants::CORE_TO_CORE_DEFAULT_LATENCY_SAMPLE_COUNT);
   EXPECT_TRUE(config.output_file.empty());
 }
@@ -153,6 +154,22 @@ TEST(CoreToCoreCliTest, RejectsSweepExceedingMaxRuns) {
                        "--sweep-max-runs",
                        "3"},
                       config);
+
+  EXPECT_EQ(parse_result, EXIT_FAILURE);
+}
+
+TEST(CoreToCoreCliTest, RejectsDuplicateSweepParameters) {
+  CoreToCoreLatencyConfig config;
+  const int parse_result = parse_with_args(
+      {"memory_benchmark",
+       "--analyze-core2core",
+       "--output",
+       "core2core_sweep.json",
+       "--sweep",
+       "count=1,2",
+       "--sweep",
+       "count=3,4"},
+      config);
 
   EXPECT_EQ(parse_result, EXIT_FAILURE);
 }

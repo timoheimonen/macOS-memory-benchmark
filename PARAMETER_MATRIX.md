@@ -101,8 +101,8 @@ Working version 0.58.0
 | Modifier | Compatible | Notes |
 |----------|------------|-------|
 | `--output <file>` | ✅ | |
-| `--count <n>` | ✅ | |
-| `--latency-samples <n>` | ✅ | |
+| `--count <n>` | ✅ | Core-to-core default `3` (general default remains `1`); scenario order rotates and the headline is the loop median P50 |
+| `--latency-samples <n>` | ✅ | Separate calibrated sample windows per scenario/loop; does not define the continuous headline |
 | `--sweep <key=a,b>` | ✅ | Requires `--output`; supported keys: `count`, `latency-samples` |
 | `--sweep-max-runs <n>` | ✅ with `--sweep` | Default `256` |
 | All others | ❌ | Must be used alone |
@@ -125,9 +125,11 @@ results are written as one combined JSON document with `configuration.mode: "swe
 Additional sweep rules:
 
 - `--sweep-max-runs <n>` limits the generated Cartesian product; default is `16` with `--analyze-tlb` and `256` otherwise.
+- A sweep parameter key may appear only once; duplicate keys are rejected before execution.
 - `--sweep latency-chain-mode=global-random` is invalid with `--analyze-tlb`.
 - Direct options outside `--sweep` are used as fixed values for every generated run.
 - If the same parameter is provided both directly and through `--sweep`, the sweep value is applied per run.
+- Combined sweep JSON is atomically checkpointed after each run and records completion/conclusion metadata.
 
 ### Incompatible Modifier Combinations
 
