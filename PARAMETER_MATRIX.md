@@ -1,6 +1,6 @@
 # Parameter Compatibility Matrix
 
-Working version 0.59.0
+Working version 0.59.1
 
 ## All Flags
 

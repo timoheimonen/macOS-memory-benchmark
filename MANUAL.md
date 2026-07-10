@@ -897,7 +897,7 @@ not the compact console report.
   "main_memory": { ... },
   "cache": { ... },
   "timestamp": "2026-03-09T14:57:56Z",
-  "version": "0.59.0"
+  "version": "0.59.1"
 }
 ```
 
@@ -1133,7 +1133,7 @@ differences between affinity-tag scenarios as evidence about the requested hint 
   ],
   "execution_time_sec": 123.4,
   "timestamp": "2026-04-29T12:00:00Z",
-  "version": "0.59.0"
+  "version": "0.59.1"
 }
 ```
 
@@ -1192,7 +1192,7 @@ When run with `--analyze-tlb --output tlb_analysis.json`, the payload includes a
 The following is a structure-focused schema-version-4 illustration. It is not presented as a hardware result; the current
 serializer contract and concrete deterministic values are exercised by
 `JsonSchemaTest.TlbAnalysisExporterIncludesModeAndCoreCounts`. New hardware baselines remain outside this release series by
-project decision, so historical 0.53.x measurements are not relabeled as 0.59.0 results:
+project decision, so historical 0.53.x measurements are not relabeled as 0.59.1 results:
 
 ```json
 {
