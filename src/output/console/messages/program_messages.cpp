@@ -24,10 +24,35 @@
 
 #include "messages_api.h"
 #include "core/config/constants.h"  // For default values
-#include <sstream>
+
+#include <cmath>
 #include <iomanip>
+#include <sstream>
 
 namespace Messages {
+
+namespace {
+
+std::string format_binary_size(size_t bytes) {
+  std::ostringstream oss;
+  if (bytes >= Constants::BYTES_PER_MB &&
+      (bytes % Constants::BYTES_PER_MB) == 0) {
+    oss << bytes / Constants::BYTES_PER_MB << " MiB";
+  } else if (bytes >= Constants::BYTES_PER_KB &&
+             (bytes % Constants::BYTES_PER_KB) == 0) {
+    oss << bytes / Constants::BYTES_PER_KB << " KiB";
+  } else {
+    oss << bytes << " bytes";
+  }
+  return oss.str();
+}
+
+double normalize_tlb_display_latency(double latency_ns) {
+  constexpr double kHalfLastDisplayedUnitNs = 0.005;
+  return std::abs(latency_ns) < kHalfLastDisplayedUnitNs ? 0.0 : latency_ns;
+}
+
+}  // namespace
 
 // --- Main Program Messages ---
 const std::string& msg_running_benchmarks() {
@@ -83,21 +108,16 @@ std::string msg_sweep_run_progress(size_t current_run, size_t total_runs) {
   return oss.str();
 }
 
-std::string msg_tlb_analysis_locality_progress(size_t current_index, size_t total_count, size_t locality_kb) {
-  std::ostringstream oss;
-  oss << "  [" << current_index << "/" << total_count << "] Locality " << locality_kb << " KB";
-  return oss.str();
-}
-
-std::string msg_tlb_analysis_page_walk_progress(size_t locality_mb) {
-  std::ostringstream oss;
-  oss << "  [Page Walk] Locality " << locality_mb << " MB";
-  return oss.str();
-}
-
 std::string msg_tlb_analysis_refinement_start(size_t point_count) {
   std::ostringstream oss;
   oss << "Starting refinement sweep (" << point_count << " points)...";
+  return oss.str();
+}
+
+std::string msg_tlb_analysis_validation_start(size_t point_count) {
+  std::ostringstream oss;
+  oss << "Running independent TLB boundary validation pass (" << point_count
+      << " locality points)...";
   return oss.str();
 }
 
@@ -133,13 +153,21 @@ std::string usage_options(const std::string& prog_name) {
       << "                        In --only-latency mode, --buffer-size 0 disables main memory latency.\n"
       << "  -r, --count <count>   Number of full loops (read/write/copy/latency) (default: " << Constants::DEFAULT_LOOP_COUNT << ").\n"
       << "                        When count > 1, statistics include percentiles (P50/P90/P95/P99) and stddev.\n"
-      << "  -T, --analyze-tlb     Run standalone TLB analysis benchmark mode (allows optional -o/--output <file>,\n"
+      << "  -T, --analyze-tlb     Run standalone TLB analysis with paired bootstrap CI and independent\n"
+      << "                        boundary validation (allows optional -o/--output <file>,\n"
       << "                        -s/--latency-stride-bytes <bytes>, -m/--latency-chain-mode <mode>,\n"
-      << "                        and -D/--tlb-density <low|medium|high> only).\n"
+      << "                        -D/--tlb-density <low|medium|high>, --seed <uint64>,\n"
+      << "                        -S/--sweep <key=...>,\n"
+      << "                        and -X/--sweep-max-runs <count> only).\n"
+      << "                        JSON output uses schema 4 with exact string seeds and scoped counters.\n"
       << "  -D, --tlb-density <level>\n"
-      << "                        Sweep density for --analyze-tlb: low, medium, high (default: high).\n"
-      << "                        low = 15-point base sweep, no refinement. medium = 15-point base + refinement.\n"
-      << "                        high = 29-point base + refinement.\n"
+      << "                        Runtime profile for --analyze-tlb: low, medium, high (default: medium).\n"
+      << "                        low/quick = 15 points, no refinement, 7-12 adaptive rounds.\n"
+      << "                        medium/standard = 15 points + refinement, 10-20 rounds.\n"
+      << "                        high/exhaustive = 29 points + refinement, 15-30 rounds.\n"
+      << "      --seed <uint64>\n"
+      << "                        Reproducible planner, round-order, and pointer-chain seed for\n"
+      << "                        --analyze-tlb. Generated once per command when omitted.\n"
       << "  -C, --analyze-core2core\n"
       << "                        Run standalone core-to-core cache-line handoff benchmark mode\n"
       << "                        (allows optional -o/--output <file>, -r/--count <count>, -n/--latency-samples <count>,\n"
@@ -150,6 +178,8 @@ std::string usage_options(const std::string& prog_name) {
       << "                        Stride used by latency pointer chains (default: "
       << Constants::LATENCY_STRIDE_BYTES << " bytes).\n"
       << "                        Must be > 0 and a multiple of pointer size (typically 8 bytes).\n"
+      << "                        With --analyze-tlb, stride must not exceed the system page size;\n"
+      << "                        page-size divisibility is not required. Sweep values are preflight checked.\n"
       << "  -m, --latency-chain-mode <mode>\n"
       << "                        Pointer-chain construction policy. Modes: auto (default), global-random,\n"
       << "                        random-box, same-random-in-box, diff-random-in-box.\n"
@@ -192,10 +222,13 @@ std::string usage_options(const std::string& prog_name) {
       << "  -S, --sweep <key=a,b> Run a Cartesian sweep over one parameter. Repeat for multiple\n"
       << "                        parameters. Supported keys: buffer-size, cache-size, threads,\n"
       << "                        latency-tlb-locality-kb, latency-stride-bytes,\n"
-      << "                        latency-chain-mode, tlb-density. With --analyze-core2core,\n"
+      << "                        latency-chain-mode, tlb-density. With --analyze-tlb,\n"
+      << "                        supported keys are latency-stride-bytes, latency-chain-mode,\n"
+      << "                        and tlb-density. With --analyze-core2core,\n"
       << "                        supported keys are count and latency-samples. Requires --output <file>.\n"
       << "  -X, --sweep-max-runs <n>\n"
-      << "                        Maximum generated sweep runs (default: " << Constants::DEFAULT_SWEEP_MAX_RUNS << ").\n"
+      << "                        Maximum generated sweep runs (default: " << Constants::DEFAULT_SWEEP_MAX_RUNS
+      << "; --analyze-tlb: " << Constants::DEFAULT_ANALYZE_TLB_SWEEP_MAX_RUNS << ").\n"
       << "  -h, --help            Show this help message and exit\n\n";
   return oss.str();
 }
@@ -216,99 +249,151 @@ const std::string& report_tlb_settings_header() {
   return msg;
 }
 
-std::string report_tlb_cpu(const std::string& cpu_name) {
-  if (cpu_name.empty()) {
-    return "CPU: Unknown";
+std::string report_tlb_run_summary(const std::string& cpu_name,
+                                   size_t page_size_bytes,
+                                   size_t stride_bytes,
+                                   const std::string& profile_name,
+                                   const std::string& requested_chain_mode,
+                                   const std::string& effective_chain_mode,
+                                   uint64_t seed,
+                                   bool user_specified_seed) {
+  std::ostringstream oss;
+  oss << "Run: " << (cpu_name.empty() ? "Unknown CPU" : cpu_name)
+      << " | page " << format_binary_size(page_size_bytes)
+      << " | stride " << stride_bytes << " B | " << profile_name
+      << " | mode " << requested_chain_mode;
+  if (requested_chain_mode != effective_chain_mode) {
+    oss << "->" << effective_chain_mode;
   }
-  return "CPU: " + cpu_name;
-}
-
-std::string report_tlb_page_size(size_t page_size_bytes) {
-  std::ostringstream oss;
-  oss << "Page Size: " << page_size_bytes << " bytes";
+  oss << " | seed " << seed << " ("
+      << (user_specified_seed ? "user" : "generated") << ")";
   return oss.str();
 }
 
-std::string report_tlb_buffer(size_t buffer_mb, bool locked) {
+std::string report_tlb_resource_summary(size_t buffer_mb,
+                                        bool buffer_locked,
+                                        bool qos_requested,
+                                        bool qos_applied,
+                                        int qos_code,
+                                        size_t memory_budget_mb,
+                                        size_t estimated_peak_memory_bytes) {
+  const double peak_memory_mib =
+      static_cast<double>(estimated_peak_memory_bytes) /
+      static_cast<double>(Constants::BYTES_PER_MB);
   std::ostringstream oss;
-  oss << "Buffer: " << buffer_mb << " MB (" << (locked ? "Locked" : "Allocated") << ")";
-  return oss.str();
-}
-
-std::string report_tlb_stride(size_t stride_bytes) {
-  std::ostringstream oss;
-  oss << "Stride: " << stride_bytes << " bytes";
-  return oss.str();
-}
-
-std::string report_tlb_density(const std::string& density_name) {
-  return "Sweep Density: " + density_name;
-}
-
-std::string report_tlb_chain_mode(const std::string& chain_mode_name) {
-  return "Chain Mode: " + chain_mode_name;
-}
-
-std::string report_tlb_chain_mode_requested(const std::string& chain_mode_name) {
-  return "Requested Chain Mode: " + chain_mode_name;
-}
-
-std::string report_tlb_chain_mode_effective(const std::string& chain_mode_name) {
-  return "Effective Chain Mode: " + chain_mode_name;
-}
-
-std::string report_tlb_loop_config(size_t loops_per_point, size_t accesses_per_loop) {
-  std::ostringstream oss;
-  oss << "Loops per Point: " << loops_per_point << ", Accesses per Loop: " << accesses_per_loop;
-  return oss.str();
-}
-
-std::string report_tlb_sweep_range(size_t start_locality_bytes,
-                                   size_t end_locality_bytes,
-                                   size_t point_count) {
-  std::ostringstream oss;
-  oss << "Sweep Locality Range: ";
-
-  if (start_locality_bytes < 1024 * 1024) {
-    oss << (start_locality_bytes / 1024) << " KB";
+  oss << std::fixed << std::setprecision(1)
+      << "Resources: " << buffer_mb << " MiB buffer ("
+      << (buffer_locked ? "locked" : "unlocked") << ") | QoS ";
+  if (!qos_requested) {
+    oss << "not requested";
+  } else if (qos_applied) {
+    oss << "applied";
   } else {
-    oss << (start_locality_bytes / (1024 * 1024)) << " MB";
+    oss << "failed (code " << qos_code << "; best-effort)";
   }
-
-  oss << " -> ";
-
-  if (end_locality_bytes < 1024 * 1024) {
-    oss << (end_locality_bytes / 1024) << " KB";
-  } else {
-    oss << (end_locality_bytes / (1024 * 1024)) << " MB";
-  }
-
-  oss << " (" << point_count << " points)";
+  oss << " | estimated peak/budget " << peak_memory_mib << "/"
+      << memory_budget_mb << " MiB";
   return oss.str();
 }
 
-std::string report_tlb_page_walk_config(bool enabled,
-                                        size_t comparison_locality_mb,
-                                        size_t required_buffer_mb,
-                                        size_t selected_buffer_mb) {
+std::string report_tlb_sweep_plan(size_t start_locality_bytes,
+                                  size_t end_locality_bytes,
+                                  size_t point_count,
+                                  bool large_comparison_enabled,
+                                  size_t comparison_locality_bytes,
+                                  size_t required_buffer_mb,
+                                  size_t selected_buffer_mb) {
   std::ostringstream oss;
-  if (enabled) {
-    oss << "Page-Walk Comparison: Enabled (" << comparison_locality_mb << " MB locality)";
-    return oss.str();
+  oss << "Sweep: " << format_binary_size(start_locality_bytes) << " -> "
+      << format_binary_size(end_locality_bytes) << " (" << point_count
+      << " points) | large comparison ";
+  if (large_comparison_enabled) {
+    oss << format_binary_size(comparison_locality_bytes) << " enabled";
+  } else {
+    oss << "unavailable (requires " << required_buffer_mb
+        << " MiB buffer, selected " << selected_buffer_mb << " MiB)";
   }
+  return oss.str();
+}
 
-  oss << "Page-Walk Comparison: Disabled (requires " << required_buffer_mb
-      << " MB analysis buffer, selected " << selected_buffer_mb << " MB)";
+const std::string& report_tlb_sweep_legend() {
+  static const std::string msg =
+      "  Cache-hot P50 ns/access: delta=spread-packed; active=cache-line "
+      "footprint; * <64-node short-cycle diagnostic";
+  return msg;
+}
+
+const std::string& report_tlb_quick_profile_note() {
+  static const std::string msg =
+      "Profile Note: quick results are screening estimates; confirm boundaries "
+      "with medium or high.";
+  return msg;
+}
+
+std::string report_tlb_paired_locality_progress(
+    size_t current_index,
+    size_t total_count,
+    size_t locality_bytes,
+    double spread_p50_ns,
+    double packed_p50_ns,
+    double translation_delta_p50_ns,
+    size_t active_cache_line_footprint_bytes,
+    bool short_cycle_diagnostic) {
+  std::ostringstream oss;
+  oss << std::fixed << std::setprecision(Constants::LATENCY_PRECISION)
+      << "  [" << current_index << "/" << total_count << "] "
+      << format_binary_size(locality_bytes) << " — delta "
+      << normalize_tlb_display_latency(translation_delta_p50_ns)
+      << " ns (spread " << normalize_tlb_display_latency(spread_p50_ns)
+      << ", packed " << normalize_tlb_display_latency(packed_p50_ns)
+      << "; active " << format_binary_size(active_cache_line_footprint_bytes)
+      << ")";
+  if (short_cycle_diagnostic) {
+    oss << " *";
+  }
+  return oss.str();
+}
+
+std::string report_tlb_work_estimate(const std::string& pass_name,
+                                     size_t point_count,
+                                     size_t min_rounds,
+                                     size_t max_rounds,
+                                     double estimated_min_duration_sec,
+                                     double estimated_max_duration_sec) {
+  std::ostringstream oss;
+  oss << std::fixed << std::setprecision(2)
+      << "Work Estimate [" << pass_name << "]: " << point_count
+      << " points, " << min_rounds << "-" << max_rounds
+      << " rounds, rough duration " << estimated_min_duration_sec << "-"
+      << estimated_max_duration_sec << " s";
+  return oss.str();
+}
+
+std::string report_tlb_pass_completion(const std::string& pass_name,
+                                       size_t rounds_completed,
+                                       const std::string& completion_reason) {
+  std::ostringstream oss;
+  oss << "Pass Completion [" << pass_name << "]: " << rounds_completed
+      << " rounds (" << completion_reason << ")";
   return oss.str();
 }
 
 std::string report_tlb_fine_sweep(size_t added_points, size_t total_points) {
   std::ostringstream oss;
-  oss << "Fine Sweep: Added " << added_points << " refinement point";
-  if (added_points != 1) {
-    oss << "s";
-  }
-  oss << ", total " << total_points << " points";
+  oss << "Refinement: +" << added_points << " point";
+  if (added_points != 1) oss << "s";
+  oss << " (" << total_points << " total)";
+  return oss.str();
+}
+
+std::string report_tlb_analysis_status(const std::string& status,
+                                       size_t planned_points,
+                                       size_t measured_points,
+                                       bool conclusions_valid) {
+  std::ostringstream oss;
+  oss << "Analysis Status: " << status << " (measured " << measured_points << "/"
+      << planned_points << " planned points, conclusions "
+      << (conclusions_valid ? "valid" : "suppressed") << ")";
   return oss.str();
 }
 
@@ -323,13 +408,13 @@ const std::string& report_tlb_l1_section() {
 }
 
 const std::string& report_tlb_l2_section() {
-  static const std::string msg = "[L2 TLB / Page Walk]";
+  static const std::string msg = "[L2 TLB Detection]";
   return msg;
 }
 
 std::string report_tlb_boundary_kb(size_t boundary_kb) {
   std::ostringstream oss;
-  oss << "  Boundary: " << boundary_kb << " KB";
+  oss << "  Boundary: " << boundary_kb << " KiB";
   return oss.str();
 }
 
@@ -369,6 +454,21 @@ std::string report_tlb_confidence(const std::string& confidence, double step_ns,
   return oss.str();
 }
 
+std::string report_tlb_statistical_confidence(const std::string& confidence,
+                                              double effect_ns,
+                                              double discovery_ci_lower_ns,
+                                              double discovery_ci_upper_ns,
+                                              double validation_ci_lower_ns,
+                                              double validation_ci_upper_ns) {
+  std::ostringstream oss;
+  oss << std::fixed << std::setprecision(2);
+  oss << "  Confidence: " << confidence << " (paired effect " << effect_ns
+      << "ns; discovery 95% CI " << discovery_ci_lower_ns << ".."
+      << discovery_ci_upper_ns << "ns; validation 95% CI "
+      << validation_ci_lower_ns << ".." << validation_ci_upper_ns << "ns)";
+  return oss.str();
+}
+
 std::string report_tlb_private_cache_candidate(bool strong_private_cache_candidate) {
   if (strong_private_cache_candidate) {
     return "  Candidate Type: Strong private-cache candidate";
@@ -379,43 +479,66 @@ std::string report_tlb_private_cache_candidate(bool strong_private_cache_candida
 std::string report_tlb_private_cache_interference(bool elevated_risk, size_t locality_kb) {
   std::ostringstream oss;
   if (elevated_risk) {
-    oss << "  TLB Interference Risk: Elevated near " << locality_kb << " KB locality";
+    oss << "  TLB Interference Risk: Elevated near " << locality_kb << " KiB locality";
     return oss.str();
   }
-  oss << "  TLB Interference Risk: Low near " << locality_kb << " KB locality";
+  oss << "  TLB Interference Risk: Low near " << locality_kb << " KiB locality";
   return oss.str();
 }
 
 std::string report_tlb_private_cache_l1_distance(size_t distance_kb, size_t distance_pages) {
   std::ostringstream oss;
-  oss << "  Distance to L1 TLB Boundary: " << distance_kb << " KB (" << distance_pages << " pages)";
+  oss << "  Distance to L1 TLB Boundary: " << distance_kb << " KiB ("
+      << distance_pages << " pages)";
   return oss.str();
 }
 
-std::string report_tlb_page_walk_penalty(double penalty_ns, size_t from_kb, size_t to_mb) {
+std::string report_tlb_large_locality_paired_comparison(
+    size_t locality_bytes,
+    double spread_p50_ns,
+    double packed_p50_ns,
+    double translation_delta_p50_ns,
+    size_t spread_actual_pages,
+    size_t packed_actual_pages,
+    size_t unique_cache_lines,
+    size_t active_cache_line_footprint_bytes) {
   std::ostringstream oss;
-  oss << std::fixed << std::setprecision(1);
-  oss << "  Page Table Walk Penalty (" << from_kb << "KB -> " << to_mb << "MB): ~"
-      << penalty_ns << "ns";
+  oss << std::fixed << std::setprecision(Constants::LATENCY_PRECISION)
+      << "[Large-Locality Paired Comparison]\n"
+      << "  " << format_binary_size(locality_bytes) << " virtual | "
+      << format_binary_size(active_cache_line_footprint_bytes) << " active ("
+      << unique_cache_lines << " lines) | " << spread_actual_pages << "/"
+      << packed_actual_pages << " spread/packed pages\n"
+      << "  P50: delta "
+      << normalize_tlb_display_latency(translation_delta_p50_ns)
+      << " ns/access (spread "
+      << normalize_tlb_display_latency(spread_p50_ns) << ", packed "
+      << normalize_tlb_display_latency(packed_p50_ns) << ")\n"
+      << "  Cache-hot paired translation stress; not DRAM latency or an "
+         "isolated page-table-walk cost";
   return oss.str();
 }
 
-std::string report_tlb_page_walk_penalty_unavailable(size_t from_kb,
-                                                     size_t to_mb,
-                                                     size_t required_buffer_mb,
-                                                     size_t selected_buffer_mb) {
+std::string report_tlb_large_locality_paired_unavailable(
+    size_t required_buffer_mb,
+    size_t selected_buffer_mb) {
   std::ostringstream oss;
-  oss << "  Page Table Walk Penalty (" << from_kb << "KB -> " << to_mb << "MB): N/A "
-      << "(requires " << required_buffer_mb << " MB or larger analysis buffer, selected "
-      << selected_buffer_mb << " MB)";
+  oss << "[Large-Locality Paired Comparison]\n"
+      << "  Result: N/A (requires " << required_buffer_mb
+      << " MiB or larger analysis buffer, selected " << selected_buffer_mb
+      << " MiB)";
   return oss.str();
 }
 
-std::string report_tlb_page_walk_penalty_interrupted(size_t from_kb, size_t to_mb) {
-  std::ostringstream oss;
-  oss << "  Page Table Walk Penalty (" << from_kb << "KB -> " << to_mb
-      << "MB): N/A (comparison measurement did not complete)";
-  return oss.str();
+const std::string& report_tlb_large_locality_paired_interrupted() {
+  static const std::string msg =
+      "[Large-Locality Paired Comparison]\n"
+      "  Result: N/A (analysis incomplete or comparison measurement did not complete)";
+  return msg;
+}
+
+std::string report_tlb_conclusions_unavailable(const std::string& status) {
+  return "  Conclusion: Suppressed because analysis status is " + status;
 }
 
 const std::string& report_tlb_not_detected() {

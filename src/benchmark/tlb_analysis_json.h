@@ -29,6 +29,7 @@
 #include <vector>
 
 #include "benchmark/tlb_analysis.h"
+#include "benchmark/tlb_runtime_policy.h"
 
 struct BenchmarkConfig;
 
@@ -45,12 +46,21 @@ struct TlbAnalysisJsonContext {
   size_t l1_cache_size_bytes;
   size_t tlb_guard_bytes;
   size_t stride_bytes;
-  size_t loops_per_point;
-  size_t accesses_per_loop;
+  size_t maximum_rounds_per_pass;
+  size_t profile_access_cap;
   size_t page_walk_baseline_locality_bytes;
   size_t page_walk_comparison_locality_bytes;
   size_t selected_buffer_mb;
   bool buffer_locked;
+  std::string analysis_status;
+  size_t planned_points;
+  size_t measured_points;
+  size_t validation_planned_points;
+  size_t validation_measured_points;
+  bool validation_complete;
+  bool conclusions_valid;
+  const std::vector<TlbSweepPoint>& sweep_points;
+  const std::vector<TlbMeasurementRecord>& measurement_records;
   const std::vector<size_t>& localities_bytes;
   const std::vector<std::vector<double>>& sweep_loop_latencies_ns;
   const std::vector<double>& p50_latency_ns;
@@ -74,6 +84,14 @@ struct TlbAnalysisJsonContext {
   double page_walk_baseline_ns;
   double page_walk_penalty_ns;
   double total_execution_time_sec;
+  TlbRuntimeProfile runtime_profile;
+  size_t available_memory_mb = 0;
+  size_t memory_budget_mb = 0;
+  size_t estimated_peak_memory_bytes = 0;
+  int buffer_lock_errno = 0;
+  std::string buffer_lock_error;
+  TlbWorkEstimate base_work_estimate;
+  std::vector<TlbPassExecutionSummary> pass_summaries;
 };
 
 /**

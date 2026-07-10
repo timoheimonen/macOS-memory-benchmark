@@ -222,6 +222,8 @@ read_loop_combine_sum:         // Final reduction + result write-back
     eor v0.16b, v0.16b, v2.16b
 
     umov x0, v0.d[0]
+    umov x13, v0.d[1]
+    eor x0, x0, x13
     eor x0, x0, x12
 
     ret                         // Return checksum in x0

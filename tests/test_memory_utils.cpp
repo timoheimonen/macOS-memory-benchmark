@@ -19,6 +19,7 @@
 #include "core/config/constants.h"
 #include <cstdlib>
 #include <cstdint>
+#include <vector>
 #include <unistd.h>  // getpagesize
 
 // Test setup_latency_chain with null buffer - should fail with error message
@@ -243,4 +244,56 @@ TEST(MemoryUtilsTest, SetupLatencyChainWithBoxModeAndZeroLocalityFails) {
 
   EXPECT_EQ(result, EXIT_FAILURE);
   EXPECT_NE(error_output.find("latency-chain-mode"), std::string::npos);
+}
+
+TEST(MemoryUtilsTest, SetupLatencyChainExplicitSeedIsReproducible) {
+  const size_t stride = 64;
+  const size_t page_size = static_cast<size_t>(getpagesize());
+  const size_t buffer_size = 4 * page_size;
+  MmapPtr buffer = allocate_buffer(buffer_size, "test_buffer");
+  ASSERT_NE(buffer.get(), nullptr);
+
+  auto snapshot_next_indices = [&]() {
+    std::vector<size_t> next_indices;
+    const uintptr_t base = reinterpret_cast<uintptr_t>(buffer.get());
+    for (size_t offset = 0; offset < buffer_size; offset += stride) {
+      const uintptr_t next = *reinterpret_cast<uintptr_t*>(
+          static_cast<char*>(buffer.get()) + offset);
+      next_indices.push_back((next - base) / stride);
+    }
+    return next_indices;
+  };
+
+  ASSERT_EQ(setup_latency_chain(buffer.get(),
+                                buffer_size,
+                                stride,
+                                page_size,
+                                nullptr,
+                                LatencyChainMode::RandomInBoxRandomBox,
+                                uint64_t{12345}),
+            EXIT_SUCCESS);
+  const std::vector<size_t> first = snapshot_next_indices();
+
+  ASSERT_EQ(setup_latency_chain(buffer.get(),
+                                buffer_size,
+                                stride,
+                                page_size,
+                                nullptr,
+                                LatencyChainMode::RandomInBoxRandomBox,
+                                uint64_t{12345}),
+            EXIT_SUCCESS);
+  const std::vector<size_t> second = snapshot_next_indices();
+
+  ASSERT_EQ(setup_latency_chain(buffer.get(),
+                                buffer_size,
+                                stride,
+                                page_size,
+                                nullptr,
+                                LatencyChainMode::RandomInBoxRandomBox,
+                                uint64_t{54321}),
+            EXIT_SUCCESS);
+  const std::vector<size_t> different = snapshot_next_indices();
+
+  EXPECT_EQ(first, second);
+  EXPECT_NE(first, different);
 }

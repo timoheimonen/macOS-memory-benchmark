@@ -30,6 +30,8 @@ TEST(ConfigTest, DefaultValues) {
   EXPECT_EQ(config.latency_stride_bytes, static_cast<size_t>(Constants::LATENCY_STRIDE_BYTES));
   EXPECT_EQ(config.latency_tlb_locality_bytes,
             Constants::DEFAULT_LATENCY_TLB_LOCALITY_KB * Constants::BYTES_PER_KB);
+  EXPECT_EQ(config.tlb_seed, 0u);
+  EXPECT_FALSE(config.user_specified_tlb_seed);
   EXPECT_EQ(config.custom_cache_size_kb_ll, -1);
   EXPECT_FALSE(config.use_custom_cache_size);
 }
@@ -158,6 +160,58 @@ TEST(ConfigTest, ValidateAnalyzeTlbSweepRejectsGlobalRandom) {
 
   int result = validate_config(config);
   EXPECT_EQ(result, EXIT_FAILURE);
+}
+
+TEST(ConfigTest, ValidateAnalyzeTlbRejectsStrideLargerThanPage) {
+  BenchmarkConfig config;
+  config.analyze_tlb = true;
+  config.latency_stride_bytes = static_cast<size_t>(getpagesize()) * 2;
+
+  EXPECT_EQ(validate_config(config), EXIT_FAILURE);
+}
+
+TEST(ConfigTest, ValidateAnalyzeTlbAllowsAlignedStrideThatDoesNotDividePage) {
+  BenchmarkConfig config;
+  config.analyze_tlb = true;
+  config.latency_stride_bytes = 136;
+
+  ASSERT_EQ(136u % sizeof(uintptr_t), 0u);
+  ASSERT_NE(static_cast<size_t>(getpagesize()) % config.latency_stride_bytes, 0u);
+  EXPECT_EQ(validate_config(config), EXIT_SUCCESS);
+}
+
+TEST(ConfigTest, ValidateAnalyzeTlbSweepAllowsAlignedNonDivisorStride) {
+  BenchmarkConfig config;
+  config.analyze_tlb = true;
+  config.run_sweep = true;
+  config.output_file = "sweep.json";
+  SweepValue value;
+  value.raw_value = "136";
+  value.integer_value = 136;
+  config.sweep_specs = {
+      {SweepParameter::LatencyStrideBytes, "latency-stride-bytes", {value}},
+  };
+
+  EXPECT_EQ(validate_config(config), EXIT_SUCCESS);
+}
+
+TEST(ConfigTest, ValidateSweepRejectsDuplicateParameter) {
+  BenchmarkConfig config;
+  config.analyze_tlb = true;
+  config.run_sweep = true;
+  config.output_file = "sweep.json";
+  SweepValue first;
+  first.raw_value = "64";
+  first.integer_value = 64;
+  SweepValue second;
+  second.raw_value = "128";
+  second.integer_value = 128;
+  config.sweep_specs = {
+      {SweepParameter::LatencyStrideBytes, "latency-stride-bytes", {first}},
+      {SweepParameter::LatencyStrideBytes, "latency-stride-bytes", {second}},
+  };
+
+  EXPECT_EQ(validate_config(config), EXIT_FAILURE);
 }
 
 // Test parsing custom cache size
@@ -294,6 +348,20 @@ TEST(ConfigTest, ParseAnalyzeTlbStandalone) {
   int result = parse_arguments(argc, const_cast<char**>(argv), config);
   EXPECT_EQ(result, EXIT_SUCCESS);
   EXPECT_TRUE(config.analyze_tlb);
+  EXPECT_EQ(config.tlb_sweep_density, TlbSweepDensity::Medium);
+  EXPECT_EQ(config.sweep_max_runs,
+            Constants::DEFAULT_ANALYZE_TLB_SWEEP_MAX_RUNS);
+}
+
+TEST(ConfigTest, ParseAnalyzeTlbExplicitSweepLimitOverridesSafeDefault) {
+  BenchmarkConfig config;
+  const char* argv[] = {
+      "program", "--analyze-tlb", "--sweep-max-runs", "24"};
+  int argc = 4;
+
+  int result = parse_arguments(argc, const_cast<char**>(argv), config);
+  EXPECT_EQ(result, EXIT_SUCCESS);
+  EXPECT_EQ(config.sweep_max_runs, 24u);
 }
 
 TEST(ConfigTest, ParseAnalyzeTlbWithOtherArgumentsFails) {
@@ -314,6 +382,45 @@ TEST(ConfigTest, ParseAnalyzeTlbWithOutputSucceeds) {
   EXPECT_EQ(result, EXIT_SUCCESS);
   EXPECT_TRUE(config.analyze_tlb);
   EXPECT_EQ(config.output_file, "tlb.json");
+}
+
+TEST(ConfigTest, ParseAnalyzeTlbWithExplicitSeedSucceeds) {
+  BenchmarkConfig config;
+  const char* argv[] = {"program", "--analyze-tlb", "--seed", "18446744073709551615"};
+
+  EXPECT_EQ(parse_arguments(4, const_cast<char**>(argv), config), EXIT_SUCCESS);
+  EXPECT_EQ(config.tlb_seed, std::numeric_limits<uint64_t>::max());
+  EXPECT_TRUE(config.user_specified_tlb_seed);
+}
+
+TEST(ConfigTest, ParseAnalyzeTlbGeneratesSeedWhenOmitted) {
+  BenchmarkConfig config;
+  const char* argv[] = {"program", "--analyze-tlb"};
+
+  EXPECT_EQ(parse_arguments(2, const_cast<char**>(argv), config), EXIT_SUCCESS);
+  EXPECT_FALSE(config.user_specified_tlb_seed);
+}
+
+TEST(ConfigTest, ParseAnalyzeTlbRejectsInvalidSeed) {
+  BenchmarkConfig config;
+  const char* argv[] = {"program", "--analyze-tlb", "--seed", "-1"};
+
+  EXPECT_EQ(parse_arguments(4, const_cast<char**>(argv), config), EXIT_FAILURE);
+}
+
+TEST(ConfigTest, ParseAnalyzeTlbRejectsSeedWithTrailingCharacters) {
+  BenchmarkConfig config;
+  const char* argv[] = {"program", "--analyze-tlb", "--seed", "42x"};
+
+  EXPECT_EQ(parse_arguments(4, const_cast<char**>(argv), config), EXIT_FAILURE);
+}
+
+TEST(ConfigTest, ParseAnalyzeTlbRejectsDuplicateSeed) {
+  BenchmarkConfig config;
+  const char* argv[] = {
+      "program", "--analyze-tlb", "--seed", "42", "--seed", "43"};
+
+  EXPECT_EQ(parse_arguments(6, const_cast<char**>(argv), config), EXIT_FAILURE);
 }
 
 TEST(ConfigTest, ParseAnalyzeTlbWithOutputFirstSucceeds) {
@@ -391,6 +498,17 @@ TEST(ConfigTest, ParseAnalyzeTlbWithTlbDensityMediumSucceeds) {
   EXPECT_EQ(result, EXIT_SUCCESS);
   EXPECT_TRUE(config.analyze_tlb);
   EXPECT_EQ(config.tlb_sweep_density, TlbSweepDensity::Medium);
+}
+
+TEST(ConfigTest, ParseAnalyzeTlbWithTlbDensityHighSucceeds) {
+  BenchmarkConfig config;
+  const char* argv[] = {"program", "--analyze-tlb", "--tlb-density", "high"};
+  int argc = 4;
+
+  int result = parse_arguments(argc, const_cast<char**>(argv), config);
+  EXPECT_EQ(result, EXIT_SUCCESS);
+  EXPECT_TRUE(config.analyze_tlb);
+  EXPECT_EQ(config.tlb_sweep_density, TlbSweepDensity::High);
 }
 
 TEST(ConfigTest, ParseAnalyzeTlbWithInvalidTlbDensityFails) {
@@ -845,12 +963,12 @@ TEST(ConfigTest, ValidateConfigAllowsGlobalLatencyChainModeWithoutLocality) {
   EXPECT_EQ(result, EXIT_SUCCESS);
 }
 
-TEST(ConfigTest, ValidateConfigAnalyzeTlbBypassesRegularValidation) {
+TEST(ConfigTest, ValidateConfigAnalyzeTlbSkipsUnrelatedStandardModeRules) {
   BenchmarkConfig config;
   config.analyze_tlb = true;
   config.only_bandwidth = true;
   config.only_latency = true;
-  config.latency_stride_bytes = 0;
+  config.latency_stride_bytes = Constants::LATENCY_STRIDE_BYTES;
 
   int result = validate_config(config);
   EXPECT_EQ(result, EXIT_SUCCESS);

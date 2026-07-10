@@ -111,6 +111,13 @@ std::string error_latency_stride_alignment(size_t value_bytes, size_t alignment_
   return oss.str();
 }
 
+std::string error_analyze_tlb_stride_exceeds_page(size_t stride_bytes, size_t page_size_bytes) {
+  std::ostringstream oss;
+  oss << "--analyze-tlb latency-stride-bytes must not exceed the system page size ("
+      << page_size_bytes << " bytes), got " << stride_bytes << " bytes";
+  return oss.str();
+}
+
 std::string error_latency_tlb_locality_invalid(long long value, long long max_val) {
   std::ostringstream oss;
   oss << "latency-tlb-locality-kb invalid (must be >= 0 and <= " << max_val
@@ -160,8 +167,12 @@ std::string error_threads_invalid(long long value, long long min_val, long long 
 
 const std::string& error_analyze_tlb_must_be_used_alone() {
   static const std::string msg =
-      "--analyze-tlb allows only optional -o/--output <file>, -s/--latency-stride-bytes <bytes>, -m/--latency-chain-mode <mode>, and -D/--tlb-density <low|medium|high> (no other options allowed)";
+      "--analyze-tlb allows only optional -o/--output <file>, -s/--latency-stride-bytes <bytes>, -m/--latency-chain-mode <mode>, -D/--tlb-density <low|medium|high>, --seed <uint64>, -S/--sweep <key=...>, and -X/--sweep-max-runs <count> (no other options allowed)";
   return msg;
+}
+
+std::string error_duplicate_sweep_parameter(const std::string& parameter_name) {
+  return "sweep parameter specified more than once: " + parameter_name;
 }
 
 const std::string& error_tlb_analysis_insufficient_memory() {
@@ -184,6 +195,17 @@ std::string error_tlb_analysis_invalid_measurement(size_t locality_kb, int loop_
   std::ostringstream oss;
   oss << "Invalid latency measurement during TLB analysis (locality=" << locality_kb
       << " KB, loop=" << loop_number << ")";
+  return oss.str();
+}
+
+std::string error_tlb_chain_setup_failed(size_t locality_kb,
+                                         const std::string& layout,
+                                         const std::string& build_status,
+                                         const std::string& validation_status) {
+  std::ostringstream oss;
+  oss << "TLB " << layout << " chain setup failed (locality=" << locality_kb
+      << " KB, build_status=" << build_status
+      << ", validation_status=" << validation_status << ")";
   return oss.str();
 }
 

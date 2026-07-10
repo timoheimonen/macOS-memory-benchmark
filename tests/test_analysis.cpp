@@ -17,11 +17,146 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <cmath>
 #include <utility>
 #include <vector>
 
 #include "benchmark/tlb_analysis.h"
+#include "benchmark/tlb_sweep_planner.h"
 #include "core/config/constants.h"
+
+namespace {
+
+TlbRoundPointMatrix make_round_point_matrix(
+    const std::vector<double>& point_levels,
+    size_t round_count = 12) {
+  TlbRoundPointMatrix matrix(
+      round_count, std::vector<double>(point_levels.size(), 0.0));
+  for (size_t round = 0; round < round_count; ++round) {
+    const double common_drift = static_cast<double>(round) * 0.02;
+    for (size_t point = 0; point < point_levels.size(); ++point) {
+      const double bounded_noise =
+          (static_cast<double>((round + point) % 3) - 1.0) * 0.01;
+      matrix[round][point] = point_levels[point] + common_drift + bounded_noise;
+    }
+  }
+  return matrix;
+}
+
+TlbMeasurementRecord make_paired_summary_record(
+    TlbMeasurementPass pass,
+    size_t locality_bytes,
+    double spread_latency_ns,
+    double packed_latency_ns,
+    double translation_delta_ns,
+    size_t node_count = 128) {
+  TlbMeasurementRecord record;
+  record.pass = pass;
+  record.locality_bytes = locality_bytes;
+  record.paired.available = true;
+  record.paired.spread.latency_ns = spread_latency_ns;
+  record.paired.packed.latency_ns = packed_latency_ns;
+  record.paired.translation_delta_ns = translation_delta_ns;
+  record.paired.spread.diagnostics.actual_pages = node_count;
+  record.paired.spread.diagnostics.node_count = node_count;
+  record.paired.spread.diagnostics.unique_cache_lines = node_count;
+  record.paired.packed.diagnostics.actual_pages = 1;
+  record.paired.packed.diagnostics.node_count = node_count;
+  record.paired.packed.diagnostics.unique_cache_lines = node_count;
+  return record;
+}
+
+}  // namespace
+
+TEST(AnalysisTest, PairedSummaryUsesMedianOfSameRoundDeltasAndFiltersPasses) {
+  const size_t locality = 2 * Constants::BYTES_PER_MB;
+  std::vector<TlbMeasurementRecord> records = {
+      make_paired_summary_record(TlbMeasurementPass::Base,
+                                 locality,
+                                 10.0,
+                                 9.0,
+                                 1.0),
+      make_paired_summary_record(TlbMeasurementPass::Base,
+                                 locality,
+                                 100.0,
+                                 90.0,
+                                 10.0),
+      make_paired_summary_record(TlbMeasurementPass::Base,
+                                 locality,
+                                 101.0,
+                                 100.0,
+                                 1.0),
+      make_paired_summary_record(TlbMeasurementPass::Validation,
+                                 locality,
+                                 1000.0,
+                                 1.0,
+                                 999.0),
+  };
+
+  const TlbPairedPointSummary summary = summarize_tlb_paired_point(
+      records, locality, {TlbMeasurementPass::Base});
+
+  ASSERT_TRUE(summary.available);
+  EXPECT_DOUBLE_EQ(summary.spread_p50_ns, 100.0);
+  EXPECT_DOUBLE_EQ(summary.packed_p50_ns, 90.0);
+  EXPECT_DOUBLE_EQ(summary.translation_delta_p50_ns, 1.0);
+  EXPECT_NE(summary.translation_delta_p50_ns,
+            summary.spread_p50_ns - summary.packed_p50_ns);
+  EXPECT_EQ(summary.spread_actual_pages, 128u);
+  EXPECT_EQ(summary.packed_actual_pages, 1u);
+  EXPECT_EQ(summary.unique_cache_lines, 128u);
+  EXPECT_EQ(summary.active_cache_line_footprint_bytes,
+            128u * Constants::CACHE_LINE_SIZE_BYTES);
+  EXPECT_EQ(summary.node_count, 128u);
+  EXPECT_FALSE(summary.short_cycle_diagnostic);
+}
+
+TEST(AnalysisTest, PairedSummaryRejectsInconsistentDiagnostics) {
+  const size_t locality = Constants::BYTES_PER_MB;
+  TlbMeasurementRecord first = make_paired_summary_record(
+      TlbMeasurementPass::Base, locality, 10.0, 8.0, 2.0, 32);
+  TlbMeasurementRecord second = first;
+  second.paired.packed.diagnostics.unique_cache_lines = 31;
+
+  EXPECT_FALSE(summarize_tlb_paired_point(
+                   {first, second}, locality, {TlbMeasurementPass::Base})
+                   .available);
+
+  const TlbPairedPointSummary short_summary = summarize_tlb_paired_point(
+      {first}, locality, {TlbMeasurementPass::Base});
+  ASSERT_TRUE(short_summary.available);
+  EXPECT_TRUE(short_summary.short_cycle_diagnostic);
+}
+
+TEST(AnalysisTest, PairedSummaryRequiresAvailableMatchingRecords) {
+  const size_t locality = Constants::BYTES_PER_MB;
+  TlbMeasurementRecord unavailable = make_paired_summary_record(
+      TlbMeasurementPass::Base, locality, 10.0, 8.0, 2.0);
+  unavailable.paired.available = false;
+
+  EXPECT_FALSE(summarize_tlb_paired_point(
+                   {unavailable}, locality, {TlbMeasurementPass::Base})
+                   .available);
+  EXPECT_FALSE(summarize_tlb_paired_point(
+                   {make_paired_summary_record(TlbMeasurementPass::Base,
+                                               locality,
+                                               10.0,
+                                               8.0,
+                                               2.0),
+                    unavailable},
+                   locality,
+                   {TlbMeasurementPass::Base})
+                   .available);
+  EXPECT_FALSE(summarize_tlb_paired_point(
+                   {make_paired_summary_record(TlbMeasurementPass::Validation,
+                                               locality,
+                                               10.0,
+                                               8.0,
+                                               2.0)},
+                   locality,
+                   {TlbMeasurementPass::Base})
+                   .available);
+}
 
 TEST(AnalysisTest, DetectBoundaryFindsL1Transition) {
   const std::vector<size_t> localities = {
@@ -57,6 +192,128 @@ TEST(AnalysisTest, DetectBoundaryReturnsNotDetectedForFlatData) {
 
   const TlbBoundaryDetection boundary = detect_tlb_boundary(localities, latencies_ns, 0);
   EXPECT_FALSE(boundary.detected);
+}
+
+TEST(AnalysisTest, RobustBoundaryAcceptsPersistentStepWithIndependentValidation) {
+  const size_t page_size = 16 * Constants::BYTES_PER_KB;
+  const std::vector<size_t> localities = {
+      page_size, 2 * page_size, 4 * page_size,
+      8 * page_size, 16 * page_size, 32 * page_size,
+  };
+  const TlbRoundPointMatrix discovery =
+      make_round_point_matrix({0.10, 0.12, 2.10, 2.20, 2.25, 2.30});
+  const TlbRoundPointMatrix validation =
+      make_round_point_matrix({0.08, 0.10, 2.00, 2.15, 2.20, 2.25});
+
+  const TlbBoundaryDetection boundary = detect_tlb_boundary_robust(
+      localities, discovery, &validation, 0, 0, 123456);
+
+  ASSERT_TRUE(boundary.detected);
+  EXPECT_EQ(boundary.boundary_index, 2u);
+  EXPECT_EQ(boundary.bracket_lower_bytes, 2u * page_size);
+  EXPECT_EQ(boundary.bracket_upper_bytes, 4u * page_size);
+  EXPECT_TRUE(boundary.discovery.passed);
+  EXPECT_TRUE(boundary.validation.passed);
+  EXPECT_EQ(boundary.discovery.persistence_points_passed, 2u);
+  EXPECT_GT(boundary.discovery.effect_ci.lower_ns,
+            boundary.discovery.noise_floor_ns);
+}
+
+TEST(AnalysisTest, RobustBoundaryRejectsSingleSpikeThatReturnsToBaseline) {
+  const size_t page_size = 16 * Constants::BYTES_PER_KB;
+  const std::vector<size_t> localities = {
+      page_size, 2 * page_size, 4 * page_size,
+      8 * page_size, 16 * page_size, 32 * page_size,
+  };
+  const TlbRoundPointMatrix discovery =
+      make_round_point_matrix({0.10, 0.12, 5.00, 0.15, 0.14, 0.16});
+  const TlbRoundPointMatrix validation = discovery;
+
+  const TlbBoundaryDetection boundary = detect_tlb_boundary_robust(
+      localities, discovery, &validation, 0, 0, 77);
+
+  EXPECT_FALSE(boundary.detected);
+  ASSERT_FALSE(boundary.candidates.empty());
+  EXPECT_EQ(boundary.candidates.front().boundary_index, 2u);
+  EXPECT_FALSE(boundary.candidates.front().discovery.passed);
+  EXPECT_EQ(boundary.candidates.front().discovery.rejection_reason,
+            "persistence-not-confirmed");
+}
+
+TEST(AnalysisTest, RobustBoundaryRequiresIndependentValidationEvidence) {
+  const size_t page_size = 16 * Constants::BYTES_PER_KB;
+  const std::vector<size_t> localities = {
+      page_size, 2 * page_size, 4 * page_size,
+      8 * page_size, 16 * page_size, 32 * page_size,
+  };
+  const TlbRoundPointMatrix discovery =
+      make_round_point_matrix({0.10, 0.12, 2.10, 2.20, 2.25, 2.30});
+  const TlbRoundPointMatrix flat_validation =
+      make_round_point_matrix({0.10, 0.12, 0.13, 0.14, 0.15, 0.16});
+
+  const TlbBoundaryDetection boundary = detect_tlb_boundary_robust(
+      localities, discovery, &flat_validation, 0, 0, 99);
+
+  EXPECT_FALSE(boundary.detected);
+  ASSERT_FALSE(boundary.candidates.empty());
+  EXPECT_TRUE(boundary.candidates.front().discovery.passed);
+  EXPECT_FALSE(boundary.candidates.front().validation.passed);
+  EXPECT_EQ(boundary.candidates.front().validation.rejection_reason,
+            "effect-below-minimum");
+}
+
+TEST(AnalysisTest, RobustBoundaryBootstrapIsDeterministicForSameSeed) {
+  const size_t page_size = 16 * Constants::BYTES_PER_KB;
+  const std::vector<size_t> localities = {
+      page_size, 2 * page_size, 4 * page_size,
+      8 * page_size, 16 * page_size, 32 * page_size,
+  };
+  const TlbRoundPointMatrix discovery =
+      make_round_point_matrix({0.10, 0.12, 2.10, 2.20, 2.25, 2.30});
+  const TlbRoundPointMatrix validation =
+      make_round_point_matrix({0.08, 0.10, 2.00, 2.15, 2.20, 2.25});
+
+  const TlbBoundaryDetection first = detect_tlb_boundary_robust(
+      localities, discovery, &validation, 0, 0, 4242);
+  const TlbBoundaryDetection second = detect_tlb_boundary_robust(
+      localities, discovery, &validation, 0, 0, 4242);
+
+  ASSERT_TRUE(first.detected);
+  ASSERT_TRUE(second.detected);
+  EXPECT_EQ(first.confidence, second.confidence);
+  EXPECT_DOUBLE_EQ(first.discovery.effect_ci.lower_ns,
+                   second.discovery.effect_ci.lower_ns);
+  EXPECT_DOUBLE_EQ(first.discovery.effect_ci.upper_ns,
+                   second.discovery.effect_ci.upper_ns);
+  EXPECT_DOUBLE_EQ(first.validation.effect_ci.lower_ns,
+                   second.validation.effect_ci.lower_ns);
+  EXPECT_DOUBLE_EQ(first.validation.effect_ci.upper_ns,
+                   second.validation.effect_ci.upper_ns);
+}
+
+TEST(AnalysisTest, TranslationDeltaMatrixPreservesRoundAndPointCoordinates) {
+  const std::vector<size_t> localities = {16384, 32768};
+  TlbMeasurementRecord base;
+  base.pass = TlbMeasurementPass::Base;
+  base.locality_bytes = localities[1];
+  base.round_index = 1;
+  base.paired.available = true;
+  base.paired.translation_delta_ns = 3.5;
+  TlbMeasurementRecord validation = base;
+  validation.pass = TlbMeasurementPass::Validation;
+  validation.locality_bytes = localities[0];
+  validation.round_index = 0;
+  validation.paired.translation_delta_ns = 1.25;
+
+  const TlbRoundPointMatrix matrix = build_tlb_translation_delta_matrix(
+      localities, {base, validation}, {TlbMeasurementPass::Base});
+
+  ASSERT_EQ(matrix.size(), 2u);
+  ASSERT_EQ(matrix[0].size(), 2u);
+  EXPECT_TRUE(std::isnan(matrix[0][0]));
+  EXPECT_TRUE(std::isnan(matrix[0][1]));
+  EXPECT_TRUE(std::isnan(matrix[1][0]));
+  EXPECT_DOUBLE_EQ(matrix[1][1], 3.5);
 }
 
 TEST(AnalysisTest, DetectBoundaryFindsSecondTransitionFromNewSegment) {
@@ -292,4 +549,25 @@ TEST(AnalysisTest, DetectBoundaryLastPointStrongStepGetsMediumConfidence) {
   EXPECT_EQ(boundary.boundary_index, 4u);
   EXPECT_TRUE(boundary.persistent_jump);
   EXPECT_NE(boundary.confidence, "Low");
+}
+
+TEST(AnalysisTest, RefinementPointsArePageAlignedAndInsideBracket) {
+  const size_t page_size = 16 * Constants::BYTES_PER_KB;
+  const std::vector<size_t> localities = {
+      page_size,
+      2 * page_size,
+      4 * page_size,
+  };
+
+  const std::vector<size_t> points =
+      build_tlb_refinement_points(localities, 1, page_size, 4 * page_size, page_size);
+
+  ASSERT_FALSE(points.empty());
+  EXPECT_TRUE(std::is_sorted(points.begin(), points.end()));
+  EXPECT_EQ(std::adjacent_find(points.begin(), points.end()), points.end());
+  for (size_t point : points) {
+    EXPECT_EQ(point % page_size, 0u);
+    EXPECT_GT(point, page_size);
+    EXPECT_LT(point, 4 * page_size);
+  }
 }

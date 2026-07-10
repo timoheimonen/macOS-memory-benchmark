@@ -1,6 +1,6 @@
 # Parameter Compatibility Matrix
 
-Version 0.56.0
+Version 0.57.0
 
 ## All Flags
 
@@ -46,7 +46,7 @@ Version 0.56.0
 | `--buffer-size <MB>` | ✅ | |
 | `--count <n>` | ✅ | |
 | `--latency-samples <n>` | ✅ | |
-| `--latency-stride-bytes <n>` | ✅ | |
+| `--latency-stride-bytes <n>` | ✅ | Pointer-aligned and no larger than system page size; exact page-size divisibility is not required |
 | `--latency-chain-mode <mode>` | ✅ | Box modes require `--latency-tlb-locality-kb > 0`; `global-random` works with locality `0` |
 | `--latency-tlb-locality-kb <n>` | ✅ | |
 | `--threads <n>` | ✅ | |
@@ -86,10 +86,11 @@ Version 0.56.0
 |----------|------------|-------|
 | `--output <file>` | ✅ | |
 | `--latency-stride-bytes <n>` | ✅ | |
-| `--latency-chain-mode <mode>` | ✅ | |
-| `--tlb-density <low\|medium\|high>` | ✅ | |
+| `--latency-chain-mode <mode>` | ✅ | `global-random` is rejected with `--analyze-tlb` |
+| `--tlb-density <low\|medium\|high>` | ✅ | Default `medium`/standard; low=quick, high=exhaustive |
+| `--seed <uint64>` | ✅ | Fixed reproducibility seed; generated once when omitted |
 | `--sweep <key=a,b>` | ✅ | Requires `--output`; supported keys: `latency-stride-bytes`, `latency-chain-mode`, `tlb-density` |
-| `--sweep-max-runs <n>` | ✅ with `--sweep` | Default `256` |
+| `--sweep-max-runs <n>` | ✅ with `--sweep` | Default `16`; explicit value overrides |
 | All others | ❌ | Must be used alone |
 
 ### Modifiers with `--analyze-core2core` (standalone mode)
@@ -120,7 +121,7 @@ results are written as one combined JSON document with `configuration.mode: "swe
 
 Additional sweep rules:
 
-- `--sweep-max-runs <n>` limits the generated Cartesian product; default is `256`.
+- `--sweep-max-runs <n>` limits the generated Cartesian product; default is `16` with `--analyze-tlb` and `256` otherwise.
 - `--sweep latency-chain-mode=global-random` is invalid with `--analyze-tlb`.
 - Direct options outside `--sweep` are used as fixed values for every generated run.
 - If the same parameter is provided both directly and through `--sweep`, the sweep value is applied per run.

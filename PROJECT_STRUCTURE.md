@@ -1,6 +1,6 @@
 # Project Structure — macOS-memory-benchmark
 
-**Version:** 0.56.0
+**Version:** 0.57.0
 **Platform:** ARM64 / AArch64 (Apple Silicon macOS)
 **License:** GNU General Public License v3.0
 
@@ -132,7 +132,7 @@ The benchmark subsystem owns all measurement logic: executing tests, collecting 
 
 | File | Purpose |
 |---|---|
-| `tlb_analysis.h` / `.cpp` | Standalone `--analyze-tlb` mode: sweeps buffer sizes and strides to locate TLB capacity boundaries |
+| `tlb_analysis.h` / `.cpp` | Standalone `--analyze-tlb` mode: sweeps locality windows, supports stride/chain-mode/density controls, and infers TLB capacity boundaries |
 | `tlb_analysis_json.h` / `.cpp` | Serializes TLB analysis results to JSON |
 | `tlb_boundary_detector.cpp` | Heuristic that identifies TLB miss inflection points in the latency-vs-buffer-size curve |
 

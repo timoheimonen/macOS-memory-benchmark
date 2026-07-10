@@ -35,6 +35,7 @@
 #define CONFIG_H
 
 #include <cstddef>  // size_t
+#include <cstdint>
 #include <string>
 #include <vector>
 #include <cstdlib>  // EXIT_SUCCESS, EXIT_FAILURE
@@ -46,9 +47,9 @@
  * @brief Sweep density profile for standalone `--analyze-tlb` mode
  */
 enum class TlbSweepDensity {
-  Low = 0,    ///< 15-point base sweep, no refinement
-  Medium,     ///< 15-point base sweep + boundary refinement
-  High,       ///< 29-point base sweep + boundary refinement
+  Low = 0,    ///< Quick: 15 points, no refinement, 7-12 rounds
+  Medium,     ///< Standard: 15 points + refinement, 10-20 rounds
+  High,       ///< Exhaustive: 29 points + refinement, 15-30 rounds
 };
 
 /**
@@ -73,7 +74,7 @@ struct SweepValue {
   std::string raw_value;
   long long integer_value = 0;
   LatencyChainMode latency_chain_mode = LatencyChainMode::Auto;
-  TlbSweepDensity tlb_sweep_density = TlbSweepDensity::High;
+  TlbSweepDensity tlb_sweep_density = TlbSweepDensity::Medium;
 };
 
 /**
@@ -104,7 +105,8 @@ struct BenchmarkConfig {
   size_t latency_stride_bytes = Constants::LATENCY_STRIDE_BYTES;  ///< Stride used for latency pointer chains (bytes)
   LatencyChainMode latency_chain_mode = LatencyChainMode::Auto;  ///< Pointer-chain construction policy (auto preserves default behavior)
   size_t latency_tlb_locality_bytes = Constants::DEFAULT_LATENCY_TLB_LOCALITY_KB * Constants::BYTES_PER_KB;  ///< TLB-locality window for latency chains (default 1 MB; 0 = global random)
-  TlbSweepDensity tlb_sweep_density = TlbSweepDensity::High;  ///< Sweep density for standalone --analyze-tlb mode
+  TlbSweepDensity tlb_sweep_density = TlbSweepDensity::Medium;  ///< Standard profile for standalone --analyze-tlb
+  uint64_t tlb_seed = 0;  ///< Reproducible standalone TLB planner/chain seed
   
   // Calculated sizes
   size_t buffer_size = 0;        ///< Final buffer size in bytes (calculated from buffer_size_mb)
@@ -142,6 +144,11 @@ struct BenchmarkConfig {
   bool help_printed = false;           ///< Whether -h/--help was invoked (usage already printed)
   size_t sweep_max_runs = Constants::DEFAULT_SWEEP_MAX_RUNS;  ///< Maximum allowed sweep combinations
 
+  // Best-effort benchmark preparation status
+  bool main_thread_qos_requested = false;  ///< Whether USER_INTERACTIVE QoS was requested
+  bool main_thread_qos_applied = false;    ///< Whether the QoS request succeeded
+  int main_thread_qos_code = 0;            ///< Return code from pthread_set_qos_class_self_np()
+
   // Tracking flags for user-specified parameters
   bool user_specified_buffersize = false;      ///< Whether user explicitly set --buffer-size
   bool user_specified_iterations = false;      ///< Whether user explicitly set --iterations
@@ -149,6 +156,7 @@ struct BenchmarkConfig {
   bool user_specified_latency_stride = false;  ///< Whether user explicitly set --latency-stride-bytes
   bool user_specified_latency_chain_mode = false; ///< Whether user explicitly set --latency-chain-mode
   bool user_specified_latency_tlb_locality = false; ///< Whether user explicitly set --latency-tlb-locality-kb
+  bool user_specified_tlb_seed = false;  ///< Whether user explicitly set --seed
 
   // Latency-chain diagnostics (populated during chain setup)
   LatencyChainDiagnostics main_latency_chain_diagnostics;

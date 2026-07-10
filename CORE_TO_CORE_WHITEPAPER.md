@@ -1,7 +1,7 @@
 # Core-to-Core Cache-Line Handoff Latency Benchmark
 
 **memory_benchmark — Technical Whitepaper**
-*Revision 2026-04-26 — Applies to release 0.56.x; historical data examples may use 0.53.7 sample files*
+*Revision 2026-04-26 — Applies to release 0.57.x; historical data examples may use 0.53.7 sample files*
 
 ---
 
