@@ -31,6 +31,7 @@
  * - Handle errors and gracefully skip patterns when buffer constraints prevent execution
  */
 #include "pattern_benchmark/pattern_benchmark.h"
+#include "pattern_benchmark/pattern_work_plan.h"
 #include "utils/benchmark.h"
 #include "core/memory/buffer_manager.h"
 #include "core/config/config.h"
@@ -60,14 +61,6 @@ double run_pattern_write_strided_test(void* buffer, size_t size, size_t stride, 
                                       HighResTimer& timer, int num_threads);
 double run_pattern_copy_strided_test(void* dst, void* src, size_t size, size_t stride, int iterations,
                                      HighResTimer& timer, int num_threads);
-double run_pattern_read_random_test(void* buffer, const std::vector<size_t>& indices, int iterations,
-                                    std::atomic<uint64_t>& checksum, HighResTimer& timer,
-                                    int num_threads, size_t buffer_size);
-double run_pattern_write_random_test(void* buffer, const std::vector<size_t>& indices, int iterations,
-                                     HighResTimer& timer, int num_threads, size_t buffer_size);
-double run_pattern_copy_random_test(void* dst, void* src, const std::vector<size_t>& indices, int iterations,
-                                    HighResTimer& timer, int num_threads, size_t buffer_size);
-
 // Forward declarations from validation.cpp
 bool validate_stride(size_t stride, size_t buffer_size);
 bool validate_random_indices(const std::vector<size_t>& indices, size_t buffer_size);
@@ -88,7 +81,8 @@ void run_forward_pattern_benchmarks(const BenchmarkBuffers& buffers, const Bench
 void run_reverse_pattern_benchmarks(const BenchmarkBuffers& buffers, const BenchmarkConfig& config,
                                    PatternResults& results, HighResTimer& timer);
 int run_random_pattern_benchmarks(const BenchmarkBuffers& buffers, const BenchmarkConfig& config,
-                                   const std::vector<size_t>& random_indices, size_t num_accesses,
+                                   const std::vector<size_t>& random_indices,
+                                   const std::vector<PatternRandomWorkerIndices>& worker_indices,
                                    PatternResults& results, HighResTimer& timer);
 
 // ============================================================================
@@ -112,6 +106,8 @@ int run_pattern_benchmarks(const BenchmarkBuffers& buffers, const BenchmarkConfi
   
   // Generate random indices once
   std::vector<size_t> random_indices = generate_random_indices(config.buffer_size, num_random_accesses);
+  std::vector<PatternRandomWorkerIndices> random_worker_indices = build_random_worker_indices(
+      config.buffer_size, PATTERN_ACCESS_SIZE_BYTES, config.num_threads, random_indices);
   
   std::cout << Messages::msg_running_pattern_benchmarks() << std::flush;
   
@@ -164,7 +160,8 @@ int run_pattern_benchmarks(const BenchmarkBuffers& buffers, const BenchmarkConfi
   if (signal_received()) return EXIT_SUCCESS;
   
   // Random Uniform - may be skipped if buffer too small or no valid indices
-  status = run_random_pattern_benchmarks(buffers, config, random_indices, num_random_accesses, results, timer);
+  status = run_random_pattern_benchmarks(buffers, config, random_indices, random_worker_indices,
+                                         results, timer);
   if (status != EXIT_SUCCESS) {
     return status;
   }

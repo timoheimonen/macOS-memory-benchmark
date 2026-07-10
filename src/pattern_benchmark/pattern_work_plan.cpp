@@ -197,3 +197,47 @@ const char* pattern_measurement_status_to_string(PatternMeasurementStatus status
   }
   return "invalid";
 }
+
+std::vector<PatternRandomWorkerIndices> build_random_worker_indices(
+    size_t buffer_size, size_t access_size, int requested_threads,
+    const std::vector<size_t>& global_indices) {
+  if (buffer_size < access_size || access_size == 0 || requested_threads <= 0) {
+    return {};
+  }
+
+  const size_t maximum_workers =
+      std::min(static_cast<size_t>(requested_threads), buffer_size / access_size);
+  if (maximum_workers == 0 ||
+      maximum_workers > static_cast<size_t>(std::numeric_limits<int>::max())) {
+    return {};
+  }
+
+  const std::vector<size_t> boundaries =
+      build_aligned_boundaries(buffer_size, static_cast<int>(maximum_workers));
+  std::vector<PatternRandomWorkerIndices> workers(maximum_workers);
+  for (size_t worker = 0; worker < maximum_workers; ++worker) {
+    workers[worker].offset_bytes = boundaries[worker];
+    workers[worker].span_bytes = boundaries[worker + 1] - boundaries[worker];
+    workers[worker].indices.reserve(global_indices.size() / maximum_workers + 1);
+  }
+
+  const size_t last_valid_offset = buffer_size - access_size;
+  for (size_t index : global_indices) {
+    if (index > last_valid_offset) {
+      continue;
+    }
+
+    const auto boundary = std::upper_bound(boundaries.begin() + 1, boundaries.end(), index);
+    if (boundary == boundaries.end()) {
+      continue;
+    }
+    const size_t worker = static_cast<size_t>(boundary - boundaries.begin() - 1);
+    const size_t worker_end = boundaries[worker + 1];
+    if (index > worker_end || access_size > worker_end - index) {
+      continue;
+    }
+    workers[worker].indices.push_back(index - boundaries[worker]);
+  }
+
+  return workers;
+}

@@ -53,6 +53,12 @@ struct PatternWorkPlan {
   std::vector<PatternWorkerRange> workers;
 };
 
+struct PatternRandomWorkerIndices {
+  size_t offset_bytes = 0;
+  size_t span_bytes = 0;
+  std::vector<size_t> indices;
+};
+
 /**
  * @brief Build an exact strided work plan from finalized worker chunks.
  *
@@ -64,6 +70,17 @@ struct PatternWorkPlan {
 PatternWorkPlan build_strided_pattern_work_plan(size_t buffer_size, size_t stride, size_t access_size,
                                                 int requested_threads, int base_passes,
                                                 size_t minimum_total_payload_bytes);
+
+/**
+ * @brief Partition global random offsets into finalized per-worker arrays.
+ *
+ * Returned indices are relative to the worker's chunk and include an access
+ * ending exactly at a chunk boundary. Invalid or boundary-crossing accesses are
+ * omitted. Preparation is deterministic and intended to run outside timing.
+ */
+std::vector<PatternRandomWorkerIndices> build_random_worker_indices(
+    size_t buffer_size, size_t access_size, int requested_threads,
+    const std::vector<size_t>& global_indices);
 
 const char* pattern_measurement_status_to_string(PatternMeasurementStatus status);
 

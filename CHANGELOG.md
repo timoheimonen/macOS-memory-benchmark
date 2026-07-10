@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
   - **Exact per-worker strided pattern accounting**: `--patterns` now builds a deterministic cache-line-aligned work plan before each strided measurement, includes the final exactly fitting access, derives reported payload bytes from the finalized worker ranges, and reduces the effective worker count when a requested split would leave a worker without a genuine stride transition. This prevents small-buffer or high-thread-count 2 MiB stride runs from repeatedly touching only offset zero while being reported as a valid 2 MiB-stride workload.
+  - **Parallel pattern timing excludes worker lifecycle overhead**: Worker QoS setup and ready-gate synchronization now complete before the timer starts, and the last worker stops the timer after publishing all measured memory effects. Thread teardown and joins remain outside the reported interval.
+  - **Random pattern setup moved outside measurement**: Cache-line-aligned random offsets are partitioned into finalized per-worker index arrays before benchmarking, eliminating per-worker allocation and index filtering from random read, write, and copy timing.
 
 ## [0.57.0] - 2026-07-10
 

@@ -170,6 +170,11 @@ transition. If the requested thread count cannot satisfy that rule, the benchmar
 that strided pattern. Sequential and random patterns continue to use the configured thread count. This distinction is
 especially important for large strides and small buffers.
 
+Parallel pattern timing begins only after every actual worker has completed its best-effort QoS setup attempt and
+reached the ready gate. It stops when the last worker finishes its measured work; worker teardown and thread joining
+remain outside the measured interval. For the random pattern, the global access list is partitioned into per-worker
+local index lists before any timed call, so index filtering and list allocation are not included in reported bandwidth.
+
 ---
 
 ## Command-Line Options

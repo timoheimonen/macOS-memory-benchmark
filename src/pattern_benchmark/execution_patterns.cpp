@@ -29,6 +29,7 @@
  * - Random uniform: Pseudo-random memory access at cache-line-aligned offsets
  */
 #include "pattern_benchmark/pattern_benchmark.h"
+#include "pattern_benchmark/pattern_work_plan.h"
 #include "utils/benchmark.h"
 #include "core/memory/buffer_manager.h"
 #include "core/config/config.h"
@@ -38,6 +39,7 @@
 #include <vector>
 #include <algorithm>
 #include <cstdlib>
+#include <limits>
 
 // Forward declarations from helpers.cpp
 double run_pattern_read_test(void* buffer, size_t size, int iterations,
@@ -50,13 +52,15 @@ double run_pattern_write_test(void* buffer, size_t size, int iterations,
 double run_pattern_copy_test(void* dst, void* src, size_t size, int iterations,
                              void (*copy_func)(void*, const void*, size_t),
                              HighResTimer& timer, int num_threads);
-double run_pattern_read_random_test(void* buffer, const std::vector<size_t>& indices, int iterations,
-                                    std::atomic<uint64_t>& checksum, HighResTimer& timer,
-                                    int num_threads, size_t buffer_size);
-double run_pattern_write_random_test(void* buffer, const std::vector<size_t>& indices, int iterations,
-                                     HighResTimer& timer, int num_threads, size_t buffer_size);
-double run_pattern_copy_random_test(void* dst, void* src, const std::vector<size_t>& indices, int iterations,
-                                    HighResTimer& timer, int num_threads, size_t buffer_size);
+double run_pattern_read_random_test(
+    void* buffer, const std::vector<PatternRandomWorkerIndices>& worker_indices, int iterations,
+    std::atomic<uint64_t>& checksum, HighResTimer& timer, int num_threads, size_t buffer_size);
+double run_pattern_write_random_test(
+    void* buffer, const std::vector<PatternRandomWorkerIndices>& worker_indices, int iterations,
+    HighResTimer& timer, int num_threads, size_t buffer_size);
+double run_pattern_copy_random_test(
+    void* dst, void* src, const std::vector<PatternRandomWorkerIndices>& worker_indices,
+    int iterations, HighResTimer& timer, int num_threads, size_t buffer_size);
 
 // Forward declarations from validation.cpp
 bool validate_random_indices(const std::vector<size_t>& indices, size_t buffer_size);
@@ -130,7 +134,8 @@ static std::vector<size_t> prepare_warmup_indices(const std::vector<size_t>& ran
 // Run random pattern benchmarks (uniform random access)
 // Returns EXIT_SUCCESS on success, EXIT_FAILURE on error, or skips pattern if buffer too small
 int run_random_pattern_benchmarks(const BenchmarkBuffers& buffers, const BenchmarkConfig& config,
-                                   const std::vector<size_t>& random_indices, size_t num_accesses,
+                                   const std::vector<size_t>& random_indices,
+                                   const std::vector<PatternRandomWorkerIndices>& worker_indices,
                                    PatternResults& results, HighResTimer& timer) {
   using namespace Constants;
   
@@ -144,6 +149,18 @@ int run_random_pattern_benchmarks(const BenchmarkBuffers& buffers, const Benchma
     // No valid indices or buffer too small - skip pattern (not an error)
     return EXIT_SUCCESS;
   }
+
+  size_t num_accesses = 0;
+  for (const PatternRandomWorkerIndices& worker : worker_indices) {
+    if (worker.indices.size() > std::numeric_limits<size_t>::max() - num_accesses) {
+      return EXIT_FAILURE;
+    }
+    num_accesses += worker.indices.size();
+  }
+  if (num_accesses == 0 ||
+      num_accesses > std::numeric_limits<size_t>::max() / PATTERN_ACCESS_SIZE_BYTES) {
+    return EXIT_FAILURE;
+  }
   
   // Prepare warmup indices
   std::vector<size_t> warmup_indices = prepare_warmup_indices(random_indices);
@@ -152,7 +169,7 @@ int run_random_pattern_benchmarks(const BenchmarkBuffers& buffers, const Benchma
   show_progress();
   std::atomic<uint64_t> checksum{0};
   warmup_read_random(buffers.src_buffer(), warmup_indices, config.num_threads, checksum);
-  double read_time = run_pattern_read_random_test(buffers.src_buffer(), random_indices,
+  double read_time = run_pattern_read_random_test(buffers.src_buffer(), worker_indices,
                                                    config.iterations, checksum, timer,
                                                    config.num_threads, config.buffer_size);
   // For random, we use num_accesses * PATTERN_ACCESS_SIZE_BYTES instead of buffer_size
@@ -162,7 +179,7 @@ int run_random_pattern_benchmarks(const BenchmarkBuffers& buffers, const Benchma
   // Execute write benchmark
   show_progress();
   warmup_write_random(buffers.dst_buffer(), warmup_indices, config.num_threads);
-  double write_time = run_pattern_write_random_test(buffers.dst_buffer(), random_indices,
+  double write_time = run_pattern_write_random_test(buffers.dst_buffer(), worker_indices,
                                                       config.iterations, timer,
                                                       config.num_threads, config.buffer_size);
   results.random_write_bw = calculate_bandwidth(num_accesses * PATTERN_ACCESS_SIZE_BYTES,
@@ -171,7 +188,7 @@ int run_random_pattern_benchmarks(const BenchmarkBuffers& buffers, const Benchma
   // Execute copy benchmark
   show_progress();
   warmup_copy_random(buffers.dst_buffer(), buffers.src_buffer(), warmup_indices, config.num_threads);
-  double copy_time = run_pattern_copy_random_test(buffers.dst_buffer(), buffers.src_buffer(), random_indices,
+  double copy_time = run_pattern_copy_random_test(buffers.dst_buffer(), buffers.src_buffer(), worker_indices,
                                                    config.iterations, timer,
                                                    config.num_threads, config.buffer_size);
   results.random_copy_bw = calculate_bandwidth(num_accesses * PATTERN_ACCESS_SIZE_BYTES * Constants::COPY_OPERATION_MULTIPLIER,
@@ -179,4 +196,3 @@ int run_random_pattern_benchmarks(const BenchmarkBuffers& buffers, const Benchma
   
   return EXIT_SUCCESS;
 }
-

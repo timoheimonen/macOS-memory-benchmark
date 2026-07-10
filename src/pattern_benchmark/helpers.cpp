@@ -29,10 +29,12 @@
  * thread coordination.
  */
 #include "pattern_benchmark/pattern_benchmark.h"
+#include "pattern_benchmark/pattern_work_plan.h"
 #include "utils/benchmark.h"
 #include "benchmark/parallel_test_framework.h"
 #include "asm/asm_functions.h"
 #include "core/config/constants.h"
+#include <algorithm>
 #include <atomic>
 
 // ============================================================================
@@ -55,20 +57,20 @@ inline bool calculate_strided_chunk_params(size_t chunk_size, size_t stride,
   return num_accesses >= 2;
 }
 
-inline void build_random_chunk_indices(const std::vector<size_t>& indices,
-                                       size_t chunk_offset,
-                                       size_t chunk_size,
-                                       std::vector<size_t>& chunk_indices) {
-  using namespace Constants;
-
-  chunk_indices.reserve(indices.size() / 4);
-
-  size_t chunk_end = chunk_offset + chunk_size;
-  for (size_t idx : indices) {
-    if (idx >= chunk_offset && idx < chunk_end - PATTERN_ACCESS_SIZE_BYTES) {
-      chunk_indices.push_back(idx - chunk_offset);
-    }
+const PatternRandomWorkerIndices* find_random_worker_indices(
+    const std::vector<PatternRandomWorkerIndices>& worker_indices,
+    size_t chunk_offset,
+    size_t chunk_size) {
+  const auto worker = std::lower_bound(
+      worker_indices.begin(), worker_indices.end(), chunk_offset,
+      [](const PatternRandomWorkerIndices& candidate, size_t offset) {
+        return candidate.offset_bytes < offset;
+      });
+  if (worker == worker_indices.end() || worker->offset_bytes != chunk_offset ||
+      worker->span_bytes != chunk_size) {
+    return nullptr;
   }
+  return &*worker;
 }
 
 inline uint64_t run_strided_read_kernel(const void* src,
@@ -262,33 +264,30 @@ double run_pattern_copy_strided_test(void* dst, void* src, size_t size, size_t s
 }
 
 // Helper function to run a random pattern read test (multi-threaded)
-double run_pattern_read_random_test(void* buffer, const std::vector<size_t>& indices, int iterations,
-                                    std::atomic<uint64_t>& checksum, HighResTimer& timer,
-                                    int num_threads, size_t buffer_size) {
-  using namespace Constants;
+double run_pattern_read_random_test(
+    void* buffer,
+    const std::vector<PatternRandomWorkerIndices>& worker_indices,
+    int iterations,
+    std::atomic<uint64_t>& checksum,
+    HighResTimer& timer,
+    int num_threads,
+    size_t buffer_size) {
   checksum.store(0, std::memory_order_relaxed);
-
   char* buffer_start = static_cast<char*>(buffer);
 
-  // Create work function that filters indices for each chunk
-  auto random_read_work = [&checksum, &indices, buffer_start](
+  auto random_read_work = [&checksum, &worker_indices, buffer_start](
                           char *chunk_start, size_t chunk_size, int iters) {
     uint64_t local_checksum = 0;
-
-    // Calculate this chunk's offset from buffer start
-    size_t chunk_offset = chunk_start - buffer_start;
-    std::vector<size_t> chunk_indices;
-    build_random_chunk_indices(indices, chunk_offset, chunk_size, chunk_indices);
-
-    // Skip if no valid indices for this chunk
-    if (chunk_indices.empty()) {
+    const size_t chunk_offset = static_cast<size_t>(chunk_start - buffer_start);
+    const PatternRandomWorkerIndices* worker =
+        find_random_worker_indices(worker_indices, chunk_offset, chunk_size);
+    if (worker == nullptr || worker->indices.empty()) {
       return;
     }
 
-    // Run iterations with chunk-specific indices
     for (int i = 0; i < iters; ++i) {
-      uint64_t result = memory_read_random_loop_asm(chunk_start, chunk_indices.data(),
-                                                     chunk_indices.size());
+      uint64_t result =
+          memory_read_random_loop_asm(chunk_start, worker->indices.data(), worker->indices.size());
       local_checksum ^= result;
     }
     checksum.fetch_xor(local_checksum, std::memory_order_release);
@@ -299,26 +298,26 @@ double run_pattern_read_random_test(void* buffer, const std::vector<size_t>& ind
 }
 
 // Helper function to run a random pattern write test (multi-threaded)
-double run_pattern_write_random_test(void* buffer, const std::vector<size_t>& indices, int iterations,
-                                     HighResTimer& timer, int num_threads, size_t buffer_size) {
-  using namespace Constants;
+double run_pattern_write_random_test(
+    void* buffer,
+    const std::vector<PatternRandomWorkerIndices>& worker_indices,
+    int iterations,
+    HighResTimer& timer,
+    int num_threads,
+    size_t buffer_size) {
   char* buffer_start = static_cast<char*>(buffer);
 
-  // Create work function that filters indices for each chunk
-  auto random_write_work = [&indices, buffer_start](char *chunk_start, size_t chunk_size, int iters) {
-    // Calculate this chunk's offset from buffer start
-    size_t chunk_offset = chunk_start - buffer_start;
-    std::vector<size_t> chunk_indices;
-    build_random_chunk_indices(indices, chunk_offset, chunk_size, chunk_indices);
-
-    // Skip if no valid indices for this chunk
-    if (chunk_indices.empty()) {
+  auto random_write_work = [&worker_indices, buffer_start](
+                           char *chunk_start, size_t chunk_size, int iters) {
+    const size_t chunk_offset = static_cast<size_t>(chunk_start - buffer_start);
+    const PatternRandomWorkerIndices* worker =
+        find_random_worker_indices(worker_indices, chunk_offset, chunk_size);
+    if (worker == nullptr || worker->indices.empty()) {
       return;
     }
 
-    // Run iterations with chunk-specific indices
     for (int i = 0; i < iters; ++i) {
-      memory_write_random_loop_asm(chunk_start, chunk_indices.data(), chunk_indices.size());
+      memory_write_random_loop_asm(chunk_start, worker->indices.data(), worker->indices.size());
     }
   };
 
@@ -327,27 +326,28 @@ double run_pattern_write_random_test(void* buffer, const std::vector<size_t>& in
 }
 
 // Helper function to run a random pattern copy test (multi-threaded)
-double run_pattern_copy_random_test(void* dst, void* src, const std::vector<size_t>& indices, int iterations,
-                                    HighResTimer& timer, int num_threads, size_t buffer_size) {
-  using namespace Constants;
+double run_pattern_copy_random_test(
+    void* dst,
+    void* src,
+    const std::vector<PatternRandomWorkerIndices>& worker_indices,
+    int iterations,
+    HighResTimer& timer,
+    int num_threads,
+    size_t buffer_size) {
   char* dst_buffer_start = static_cast<char*>(dst);
 
-  // Create work function that filters indices for each chunk
-  auto random_copy_work = [&indices, dst_buffer_start](
+  auto random_copy_work = [&worker_indices, dst_buffer_start](
                           char *dst_chunk, char *src_chunk, size_t chunk_size, int iters) {
-    // Calculate this chunk's offset from buffer start
-    size_t chunk_offset = dst_chunk - dst_buffer_start;
-    std::vector<size_t> chunk_indices;
-    build_random_chunk_indices(indices, chunk_offset, chunk_size, chunk_indices);
-
-    // Skip if no valid indices for this chunk
-    if (chunk_indices.empty()) {
+    const size_t chunk_offset = static_cast<size_t>(dst_chunk - dst_buffer_start);
+    const PatternRandomWorkerIndices* worker =
+        find_random_worker_indices(worker_indices, chunk_offset, chunk_size);
+    if (worker == nullptr || worker->indices.empty()) {
       return;
     }
 
-    // Run iterations with chunk-specific indices
     for (int i = 0; i < iters; ++i) {
-      memory_copy_random_loop_asm(dst_chunk, src_chunk, chunk_indices.data(), chunk_indices.size());
+      memory_copy_random_loop_asm(dst_chunk, src_chunk, worker->indices.data(),
+                                  worker->indices.size());
     }
   };
 

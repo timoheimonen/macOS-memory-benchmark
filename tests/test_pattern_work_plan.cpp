@@ -123,3 +123,24 @@ TEST(PatternWorkPlanTest, SerializesMeasurementStatus) {
   EXPECT_STREQ(pattern_measurement_status_to_string(PatternMeasurementStatus::Interrupted), "interrupted");
   EXPECT_STREQ(pattern_measurement_status_to_string(PatternMeasurementStatus::Invalid), "invalid");
 }
+
+TEST(PatternWorkPlanTest, PartitionsRandomIndicesBeforeMeasurement) {
+  const std::vector<size_t> global_indices = {0, 96, 128, 224, 225, 256};
+  const std::vector<PatternRandomWorkerIndices> workers =
+      build_random_worker_indices(256, Constants::PATTERN_ACCESS_SIZE_BYTES, 2, global_indices);
+
+  ASSERT_EQ(workers.size(), 2u);
+  EXPECT_EQ(workers[0].offset_bytes, 0u);
+  EXPECT_EQ(workers[0].span_bytes, 128u);
+  EXPECT_EQ(workers[0].indices, (std::vector<size_t>{0, 96}));
+  EXPECT_EQ(workers[1].offset_bytes, 128u);
+  EXPECT_EQ(workers[1].span_bytes, 128u);
+  EXPECT_EQ(workers[1].indices, (std::vector<size_t>{0, 96}));
+}
+
+TEST(PatternWorkPlanTest, RejectsInvalidRandomPartitionParameters) {
+  const std::vector<size_t> indices = {0, 32};
+  EXPECT_TRUE(build_random_worker_indices(64, 0, 1, indices).empty());
+  EXPECT_TRUE(build_random_worker_indices(64, 32, 0, indices).empty());
+  EXPECT_TRUE(build_random_worker_indices(16, 32, 1, indices).empty());
+}
