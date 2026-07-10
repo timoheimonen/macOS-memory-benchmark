@@ -310,4 +310,16 @@ std::string results_cache_latency_l2_ns_mb(double latency_ns, double buffer_size
   return oss.str();
 }
 
+std::string results_measurement_unavailable(const std::string& label,
+                                            const std::string& status,
+                                            const std::string& reason) {
+  std::ostringstream oss;
+  oss << label << ": N/A [" << status;
+  if (!reason.empty()) {
+    oss << ": " << reason;
+  }
+  oss << "]";
+  return oss.str();
+}
+
 } // namespace Messages

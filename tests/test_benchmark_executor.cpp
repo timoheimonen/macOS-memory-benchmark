@@ -168,10 +168,12 @@ TEST(BenchmarkExecutorTest, MainMemoryLatencyCollectsSamplesWhenConfiguredIntegr
   run_main_memory_latency_test(buffers, config, timings, results, *timer_opt);
 
   EXPECT_GT(timings.total_lat_time_ns, 0.0);
-  EXPECT_EQ(results.latency_samples.size(), static_cast<size_t>(config.latency_sample_count));
-  EXPECT_TRUE(results.has_auto_tlb_breakdown);
-  EXPECT_GT(results.tlb_hit_latency_ns, 0.0);
-  EXPECT_GT(results.tlb_miss_latency_ns, 0.0);
+  EXPECT_EQ(results.main_latency.samples.size(),
+            static_cast<size_t>(config.latency_sample_count));
+  ASSERT_TRUE(results.locality_16k_latency.is_measured());
+  ASSERT_TRUE(results.global_random_latency.is_measured());
+  EXPECT_GT(*results.locality_16k_latency.value, 0.0);
+  EXPECT_GT(*results.global_random_latency.value, 0.0);
 }
 
 TEST(BenchmarkExecutorTest, MainMemoryLatencySkipsAutoTlbBreakdownWhenLocalitySpecifiedIntegration) {
@@ -191,10 +193,15 @@ TEST(BenchmarkExecutorTest, MainMemoryLatencySkipsAutoTlbBreakdownWhenLocalitySp
   run_main_memory_latency_test(buffers, config, timings, results, *timer_opt);
 
   EXPECT_GT(timings.total_lat_time_ns, 0.0);
-  EXPECT_FALSE(results.has_auto_tlb_breakdown);
-  EXPECT_EQ(results.tlb_hit_latency_ns, 0.0);
-  EXPECT_EQ(results.tlb_miss_latency_ns, 0.0);
-  EXPECT_EQ(results.page_walk_penalty_ns, 0.0);
+  EXPECT_EQ(results.locality_16k_latency.status,
+            BenchmarkMeasurementStatus::NotRun);
+  EXPECT_EQ(results.global_random_latency.status,
+            BenchmarkMeasurementStatus::NotRun);
+  EXPECT_EQ(results.locality_latency_delta.status,
+            BenchmarkMeasurementStatus::NotRun);
+  EXPECT_FALSE(results.locality_16k_latency.value.has_value());
+  EXPECT_FALSE(results.global_random_latency.value.has_value());
+  EXPECT_FALSE(results.locality_latency_delta.value.has_value());
 }
 
 TEST(BenchmarkExecutorTest, MainMemoryLatencySkipsWhenMainLatencyDisabledIntegration) {
@@ -220,5 +227,6 @@ TEST(BenchmarkExecutorTest, MainMemoryLatencySkipsWhenMainLatencyDisabledIntegra
   run_main_memory_latency_test(buffers, config, timings, results, *timer_opt);
 
   EXPECT_EQ(timings.total_lat_time_ns, 0.0);
-  EXPECT_TRUE(results.latency_samples.empty());
+  EXPECT_TRUE(results.main_latency.samples.empty());
+  EXPECT_EQ(results.main_latency.status, BenchmarkMeasurementStatus::NotRun);
 }

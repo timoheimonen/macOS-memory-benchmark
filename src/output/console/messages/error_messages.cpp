@@ -177,6 +177,12 @@ const std::string& error_seed_requires_patterns() {
   return msg;
 }
 
+const std::string& error_seed_requires_benchmark_or_patterns() {
+  static const std::string msg =
+      "--seed requires --benchmark or --patterns (or use it with --analyze-tlb)";
+  return msg;
+}
+
 std::string error_duplicate_sweep_parameter(const std::string& parameter_name) {
   return "sweep parameter specified more than once: " + parameter_name;
 }

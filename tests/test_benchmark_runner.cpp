@@ -57,33 +57,35 @@ BenchmarkConfig make_collector_config() {
 
 BenchmarkResults make_collector_results() {
   BenchmarkResults results;
-  results.read_bw_gb_s = 10.0;
-  results.write_bw_gb_s = 20.0;
-  results.copy_bw_gb_s = 30.0;
-  results.average_latency_ns = 40.0;
-  results.has_auto_tlb_breakdown = true;
-  results.tlb_hit_latency_ns = 41.0;
-  results.tlb_miss_latency_ns = 90.0;
-  results.page_walk_penalty_ns = 49.0;
-  results.latency_samples = {40.1, 40.2};
+  results.status = BenchmarkRunStatus::Complete;
+  results.planned_measurements = 12;
+  results.completed_measurements = 12;
+  set_measurement_value(results.main_read_bandwidth, 10.0, 1.0);
+  set_measurement_value(results.main_write_bandwidth, 20.0, 1.0);
+  set_measurement_value(results.main_copy_bandwidth, 30.0, 1.0);
+  set_measurement_value(results.main_latency, 40.0, 1.0);
+  set_measurement_value(results.locality_16k_latency, 41.0, 1.0);
+  set_measurement_value(results.global_random_latency, 90.0, 1.0);
+  set_measurement_value(results.locality_latency_delta, 49.0, 1.0);
+  results.main_latency.samples = {40.1, 40.2};
 
-  results.l1_latency_ns = 5.0;
-  results.l1_read_bw_gb_s = 50.0;
-  results.l1_write_bw_gb_s = 60.0;
-  results.l1_copy_bw_gb_s = 70.0;
-  results.l1_latency_samples = {5.1, 5.2};
+  set_measurement_value(results.l1_latency, 5.0, 1.0);
+  set_measurement_value(results.l1_read_bandwidth, 50.0, 1.0);
+  set_measurement_value(results.l1_write_bandwidth, 60.0, 1.0);
+  set_measurement_value(results.l1_copy_bandwidth, 70.0, 1.0);
+  results.l1_latency.samples = {5.1, 5.2};
 
-  results.l2_latency_ns = 8.0;
-  results.l2_read_bw_gb_s = 80.0;
-  results.l2_write_bw_gb_s = 90.0;
-  results.l2_copy_bw_gb_s = 100.0;
-  results.l2_latency_samples = {8.1, 8.2};
+  set_measurement_value(results.l2_latency, 8.0, 1.0);
+  set_measurement_value(results.l2_read_bandwidth, 80.0, 1.0);
+  set_measurement_value(results.l2_write_bandwidth, 90.0, 1.0);
+  set_measurement_value(results.l2_copy_bandwidth, 100.0, 1.0);
+  results.l2_latency.samples = {8.1, 8.2};
 
-  results.custom_latency_ns = 12.0;
-  results.custom_read_bw_gb_s = 110.0;
-  results.custom_write_bw_gb_s = 120.0;
-  results.custom_copy_bw_gb_s = 130.0;
-  results.custom_latency_samples = {12.1, 12.2};
+  set_measurement_value(results.custom_latency, 12.0, 1.0);
+  set_measurement_value(results.custom_read_bandwidth, 110.0, 1.0);
+  set_measurement_value(results.custom_write_bandwidth, 120.0, 1.0);
+  set_measurement_value(results.custom_copy_bandwidth, 130.0, 1.0);
+  results.custom_latency.samples = {12.1, 12.2};
 
   return results;
 }
@@ -152,25 +154,37 @@ TEST(BenchmarkResultsTest, CalculateBandwidthResultsPopulatesMainAndDetectedCach
   timings.l2_read_time = 1.0;
   timings.l2_write_time = 2.0;
   timings.l2_copy_time = 1.0;
+  timings.total_read_status = BenchmarkMeasurementStatus::Measured;
+  timings.total_write_status = BenchmarkMeasurementStatus::Measured;
+  timings.total_copy_status = BenchmarkMeasurementStatus::Measured;
+  timings.l1_read_status = BenchmarkMeasurementStatus::Measured;
+  timings.l1_write_status = BenchmarkMeasurementStatus::Measured;
+  timings.l1_copy_status = BenchmarkMeasurementStatus::Measured;
+  timings.l2_read_status = BenchmarkMeasurementStatus::Measured;
+  timings.l2_write_status = BenchmarkMeasurementStatus::Measured;
+  timings.l2_copy_status = BenchmarkMeasurementStatus::Measured;
 
   BenchmarkResults results;
   calculate_bandwidth_results(config, timings, results);
 
-  EXPECT_DOUBLE_EQ(results.read_bw_gb_s, 1.0);
-  EXPECT_DOUBLE_EQ(results.write_bw_gb_s, 0.5);
-  EXPECT_DOUBLE_EQ(results.copy_bw_gb_s, 4.0);
+  ASSERT_TRUE(results.main_read_bandwidth.value.has_value());
+  ASSERT_TRUE(results.main_write_bandwidth.value.has_value());
+  ASSERT_TRUE(results.main_copy_bandwidth.value.has_value());
+  EXPECT_DOUBLE_EQ(*results.main_read_bandwidth.value, 1.0);
+  EXPECT_DOUBLE_EQ(*results.main_write_bandwidth.value, 0.5);
+  EXPECT_DOUBLE_EQ(*results.main_copy_bandwidth.value, 4.0);
 
-  EXPECT_DOUBLE_EQ(results.l1_read_bw_gb_s, 2.0);
-  EXPECT_DOUBLE_EQ(results.l1_write_bw_gb_s, 1.0);
-  EXPECT_DOUBLE_EQ(results.l1_copy_bw_gb_s, 4.0);
+  EXPECT_DOUBLE_EQ(*results.l1_read_bandwidth.value, 2.0);
+  EXPECT_DOUBLE_EQ(*results.l1_write_bandwidth.value, 1.0);
+  EXPECT_DOUBLE_EQ(*results.l1_copy_bandwidth.value, 4.0);
 
-  EXPECT_DOUBLE_EQ(results.l2_read_bw_gb_s, 4.0);
-  EXPECT_DOUBLE_EQ(results.l2_write_bw_gb_s, 2.0);
-  EXPECT_DOUBLE_EQ(results.l2_copy_bw_gb_s, 8.0);
+  EXPECT_DOUBLE_EQ(*results.l2_read_bandwidth.value, 4.0);
+  EXPECT_DOUBLE_EQ(*results.l2_write_bandwidth.value, 2.0);
+  EXPECT_DOUBLE_EQ(*results.l2_copy_bandwidth.value, 8.0);
 
-  EXPECT_EQ(results.custom_read_bw_gb_s, 0.0);
-  EXPECT_EQ(results.custom_write_bw_gb_s, 0.0);
-  EXPECT_EQ(results.custom_copy_bw_gb_s, 0.0);
+  EXPECT_FALSE(results.custom_read_bandwidth.value.has_value());
+  EXPECT_FALSE(results.custom_write_bandwidth.value.has_value());
+  EXPECT_FALSE(results.custom_copy_bandwidth.value.has_value());
 }
 
 TEST(BenchmarkResultsTest, CalculateBandwidthResultsUsesCustomCacheInsteadOfDetectedCaches) {
@@ -188,15 +202,18 @@ TEST(BenchmarkResultsTest, CalculateBandwidthResultsUsesCustomCacheInsteadOfDete
   timings.custom_copy_time = 1.0;
   timings.l1_read_time = 1.0;
   timings.l2_read_time = 1.0;
+  timings.custom_read_status = BenchmarkMeasurementStatus::Measured;
+  timings.custom_write_status = BenchmarkMeasurementStatus::Measured;
+  timings.custom_copy_status = BenchmarkMeasurementStatus::Measured;
 
   BenchmarkResults results;
   calculate_bandwidth_results(config, timings, results);
 
-  EXPECT_DOUBLE_EQ(results.custom_read_bw_gb_s, 2.0);
-  EXPECT_DOUBLE_EQ(results.custom_write_bw_gb_s, 1.0);
-  EXPECT_DOUBLE_EQ(results.custom_copy_bw_gb_s, 4.0);
-  EXPECT_EQ(results.l1_read_bw_gb_s, 0.0);
-  EXPECT_EQ(results.l2_read_bw_gb_s, 0.0);
+  EXPECT_DOUBLE_EQ(*results.custom_read_bandwidth.value, 2.0);
+  EXPECT_DOUBLE_EQ(*results.custom_write_bandwidth.value, 1.0);
+  EXPECT_DOUBLE_EQ(*results.custom_copy_bandwidth.value, 4.0);
+  EXPECT_FALSE(results.l1_read_bandwidth.value.has_value());
+  EXPECT_FALSE(results.l2_read_bandwidth.value.has_value());
 }
 
 TEST(BenchmarkStatisticsCollectorTest, CollectLoopResultsAggregatesMainAndDetectedCacheMetrics) {

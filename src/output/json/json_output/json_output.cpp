@@ -101,7 +101,10 @@ nlohmann::ordered_json build_results_json(const BenchmarkConfig& config,
 
 // Save benchmark results to JSON file
 // Returns EXIT_SUCCESS on success, EXIT_FAILURE on error
-int save_results_to_json(const BenchmarkConfig& config, const BenchmarkStatistics& stats, double total_execution_time_sec) {
+int save_results_to_json(const BenchmarkConfig& config,
+                         const BenchmarkStatistics& stats,
+                         double total_execution_time_sec,
+                         bool announce_success) {
   if (config.output_file.empty()) {
     return EXIT_SUCCESS;  // No output file specified, nothing to do
   }
@@ -116,7 +119,7 @@ int save_results_to_json(const BenchmarkConfig& config, const BenchmarkStatistic
   }
   
   // Write JSON to file
-  return write_json_to_file(file_path, json_output);
+  return write_json_to_file(file_path, json_output, announce_success);
 }
 
 nlohmann::ordered_json build_pattern_results_json(const BenchmarkConfig& config,

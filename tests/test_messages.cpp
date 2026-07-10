@@ -306,6 +306,8 @@ TEST_F(MessagesErrorTest, ErrorAnalyzeTlbMustBeUsedAlone) {
 TEST_F(MessagesErrorTest, ErrorSeedRequiresPatterns) {
   EXPECT_EQ(Messages::error_seed_requires_patterns(),
             "--seed is supported only with --patterns or --analyze-tlb");
+  EXPECT_NE(Messages::error_seed_requires_benchmark_or_patterns().find("--benchmark"),
+            std::string::npos);
 }
 
 TEST_F(MessagesErrorTest, ErrorMadviseFailed) {

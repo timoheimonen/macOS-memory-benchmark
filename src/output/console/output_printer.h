@@ -28,6 +28,9 @@
 #include <cstddef>  // size_t
 #include <string>   // std::string
 
+struct BenchmarkConfig;
+struct BenchmarkResults;
+
 // --- Output/Printing Functions ---
 /**
  * @brief Print command-line usage instructions
@@ -109,20 +112,8 @@ void print_configuration(size_t buffer_size, size_t buffer_size_mb, size_t total
  * @param only_bandwidth Whether only bandwidth tests are run
  * @param only_latency Whether only latency tests are run
  */
-void print_results(int loop, size_t buffer_size, size_t buffer_size_mb, int iterations, int num_threads,
-    double read_bw_gb_s, double total_read_time,
-    double write_bw_gb_s, double total_write_time,
-    double copy_bw_gb_s, double total_copy_time,
-    double l1_latency_ns, double l2_latency_ns,
-    size_t l1_buffer_size, size_t l2_buffer_size,
-     double l1_read_bw_gb_s, double l1_write_bw_gb_s, double l1_copy_bw_gb_s,
-     double l2_read_bw_gb_s, double l2_write_bw_gb_s, double l2_copy_bw_gb_s,
-    double average_latency_ns, size_t latency_tlb_locality_bytes, double total_lat_time_ns,
-    bool use_custom_cache_size, double custom_latency_ns, size_t custom_buffer_size,
-    double custom_read_bw_gb_s, double custom_write_bw_gb_s, double custom_copy_bw_gb_s,
-    bool has_auto_tlb_breakdown, double tlb_hit_latency_ns, double tlb_miss_latency_ns,
-    double page_walk_penalty_ns,
-    bool user_specified_threads, bool only_bandwidth, bool only_latency);
+void print_results(int loop, const BenchmarkConfig& config,
+                   const BenchmarkResults& results);
 
 /**
  * @brief Print cache size information

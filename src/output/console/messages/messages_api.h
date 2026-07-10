@@ -74,6 +74,7 @@ std::string error_latency_tlb_locality_too_small_for_stride(size_t locality_byte
 std::string error_threads_invalid(long long value, long long min_val, long long max_val);
 const std::string& error_analyze_tlb_must_be_used_alone();
 const std::string& error_seed_requires_patterns();
+const std::string& error_seed_requires_benchmark_or_patterns();
 std::string error_duplicate_sweep_parameter(const std::string& parameter_name);
 const std::string& error_analyze_core_to_core_must_be_used_alone();
 const std::string& error_core_to_core_timer_creation_failed();
@@ -364,6 +365,9 @@ std::string results_cache_latency_l1_ns_mb(double latency_ns, double buffer_size
 std::string results_cache_latency_l2_ns(double latency_ns, size_t buffer_size);
 std::string results_cache_latency_l2_ns_kb(double latency_ns, double buffer_size_kb);
 std::string results_cache_latency_l2_ns_mb(double latency_ns, double buffer_size_mb);
+std::string results_measurement_unavailable(const std::string& label,
+                                            const std::string& status,
+                                            const std::string& reason);
 
 // --- Statistics Messages ---
 std::string statistics_header(int loop_count);

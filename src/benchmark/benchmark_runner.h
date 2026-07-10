@@ -30,6 +30,9 @@
 #include <vector>
 #include <cstddef>  // size_t
 #include <cstdlib>  // EXIT_SUCCESS, EXIT_FAILURE
+#include <string>
+
+#include "benchmark/benchmark_measurement.h"
 
 // Forward declarations to avoid including headers
 struct BenchmarkConfig;
@@ -43,41 +46,38 @@ struct BenchmarkBuffers;
  * including bandwidth (GB/s) and latency (nanoseconds) for main memory and caches.
  */
 struct BenchmarkResults {
-  // Main memory bandwidth results
-  double read_bw_gb_s = 0.0;      ///< Main memory read bandwidth (GB/s)
-  double write_bw_gb_s = 0.0;     ///< Main memory write bandwidth (GB/s)
-  double copy_bw_gb_s = 0.0;      ///< Main memory copy bandwidth (GB/s)
-  double total_read_time = 0.0;   ///< Total main memory read time (seconds)
-  double total_write_time = 0.0;  ///< Total main memory write time (seconds)
-  double total_copy_time = 0.0;   ///< Total main memory copy time (seconds)
-  
-  // Main memory latency results
-  double average_latency_ns = 0.0;  ///< Average main memory latency (nanoseconds)
-  double total_lat_time_ns = 0.0;   ///< Total main memory latency time (nanoseconds)
-  std::vector<double> latency_samples;  ///< Per-sample latencies for main memory (nanoseconds)
-  bool has_auto_tlb_breakdown = false;  ///< True when automatic TLB hit/miss breakdown was measured
-  double tlb_hit_latency_ns = 0.0;      ///< TLB hit-biased latency (16 KB locality)
-  double tlb_miss_latency_ns = 0.0;     ///< TLB miss-biased latency (global random locality)
-  double page_walk_penalty_ns = 0.0;    ///< Estimated page-walk penalty (miss - hit)
-  
-  // Cache latency results
-  double l1_latency_ns = 0.0;  ///< L1 cache latency (nanoseconds)
-  double l2_latency_ns = 0.0;  ///< L2 cache latency (nanoseconds)
-  double custom_latency_ns = 0.0;  ///< Custom cache latency (nanoseconds)
-  std::vector<double> l1_latency_samples;  ///< Per-sample L1 cache latencies (nanoseconds)
-  std::vector<double> l2_latency_samples;  ///< Per-sample L2 cache latencies (nanoseconds)
-  std::vector<double> custom_latency_samples;  ///< Per-sample custom cache latencies (nanoseconds)
-  
-  // Cache bandwidth results
-  double l1_read_bw_gb_s = 0.0;   ///< L1 cache read bandwidth (GB/s)
-  double l1_write_bw_gb_s = 0.0;  ///< L1 cache write bandwidth (GB/s)
-  double l1_copy_bw_gb_s = 0.0;   ///< L1 cache copy bandwidth (GB/s)
-  double l2_read_bw_gb_s = 0.0;   ///< L2 cache read bandwidth (GB/s)
-  double l2_write_bw_gb_s = 0.0;  ///< L2 cache write bandwidth (GB/s)
-  double l2_copy_bw_gb_s = 0.0;   ///< L2 cache copy bandwidth (GB/s)
-  double custom_read_bw_gb_s = 0.0;   ///< Custom cache read bandwidth (GB/s)
-  double custom_write_bw_gb_s = 0.0;  ///< Custom cache write bandwidth (GB/s)
-  double custom_copy_bw_gb_s = 0.0;   ///< Custom cache copy bandwidth (GB/s)
+  BenchmarkRunStatus status = BenchmarkRunStatus::NotStarted;
+  std::string status_reason;
+  size_t loop_index = 0;
+  size_t planned_phases = 0;
+  size_t completed_phases = 0;
+  size_t planned_measurements = 0;
+  size_t completed_measurements = 0;
+  size_t phase_order_index = 0;
+  size_t operation_order_index = 0;
+  std::vector<std::string> planned_phase_order;
+  std::vector<std::string> realized_phase_order;
+
+  BenchmarkMeasurement main_read_bandwidth;
+  BenchmarkMeasurement main_write_bandwidth;
+  BenchmarkMeasurement main_copy_bandwidth;
+  BenchmarkMeasurement main_latency;
+  BenchmarkMeasurement locality_16k_latency;
+  BenchmarkMeasurement global_random_latency;
+  BenchmarkMeasurement locality_latency_delta;
+
+  BenchmarkMeasurement l1_read_bandwidth;
+  BenchmarkMeasurement l1_write_bandwidth;
+  BenchmarkMeasurement l1_copy_bandwidth;
+  BenchmarkMeasurement l1_latency;
+  BenchmarkMeasurement l2_read_bandwidth;
+  BenchmarkMeasurement l2_write_bandwidth;
+  BenchmarkMeasurement l2_copy_bandwidth;
+  BenchmarkMeasurement l2_latency;
+  BenchmarkMeasurement custom_read_bandwidth;
+  BenchmarkMeasurement custom_write_bandwidth;
+  BenchmarkMeasurement custom_copy_bandwidth;
+  BenchmarkMeasurement custom_latency;
 };
 
 /**
@@ -88,6 +88,14 @@ struct BenchmarkResults {
  * including mean, min, max, and percentile calculations.
  */
 struct BenchmarkStatistics {
+  BenchmarkRunStatus status = BenchmarkRunStatus::NotStarted;
+  std::string status_reason;
+  size_t planned_loops = 0;
+  size_t completed_loops = 0;
+  size_t planned_measurements = 0;
+  size_t completed_measurements = 0;
+  std::vector<BenchmarkResults> loop_results;
+
   // Vectors storing results from each loop
   std::vector<double> all_read_bw_gb_s;        ///< Read bandwidth from each loop (GB/s)
   std::vector<double> all_write_bw_gb_s;      ///< Write bandwidth from each loop (GB/s)

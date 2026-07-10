@@ -108,6 +108,7 @@ struct BenchmarkConfig {
   TlbSweepDensity tlb_sweep_density = TlbSweepDensity::Medium;  ///< Standard profile for standalone --analyze-tlb
   uint64_t tlb_seed = 0;  ///< Reproducible standalone TLB planner/chain seed
   uint64_t pattern_seed = 0;  ///< Reproducible random workload seed for --patterns
+  uint64_t benchmark_seed = 0;  ///< Reproducible workload/schedule seed for --benchmark
   
   // Calculated sizes
   size_t buffer_size = 0;        ///< Final buffer size in bytes (calculated from buffer_size_mb)
@@ -159,6 +160,7 @@ struct BenchmarkConfig {
   bool user_specified_latency_tlb_locality = false; ///< Whether user explicitly set --latency-tlb-locality-kb
   bool user_specified_tlb_seed = false;  ///< Whether user explicitly set --seed
   bool user_specified_pattern_seed = false;  ///< Whether user explicitly set --seed for --patterns
+  bool user_specified_benchmark_seed = false;  ///< Whether user explicitly set --seed for --benchmark
 
   // Latency-chain diagnostics (populated during chain setup)
   LatencyChainDiagnostics main_latency_chain_diagnostics;
