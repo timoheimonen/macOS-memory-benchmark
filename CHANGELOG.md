@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.58.0] - UNRELEASED
+## [0.58.0] - 2026-07-10
 
 ### Added
   - **Auditable core-to-core JSON schema v2**: `-C` / `--analyze-core2core` now emits schema version `2` with methodology `core2core-v2-calibrated-balanced-auditable`, per-scenario calibrated work plans, per-loop order/status/duration/hint/sample-boundary records, command completion counters, and `affinity_hint_comparison_interpretable`. Missing, interrupted, invalid, or failed measurements remain unavailable/`null` rather than becoming numeric zeroes.

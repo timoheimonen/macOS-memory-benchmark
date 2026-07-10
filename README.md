@@ -24,6 +24,9 @@ Macbook Air M5 Cache Latency by example-script provided. Using different size TL
 3. Main memory latency (dependent pointer chase).
 4. Cache latency (dependent pointer chase).
 5. Pattern bandwidth behavior (sequential, strided, random).
+6. Standalone TLB-boundary analysis with paired spread/packed chains and validation.
+7. Standalone core-to-core cache-line handoff analysis.
+8. Cartesian parameter sweeps for the standard, pattern, TLB, and core-to-core modes.
 
 The benchmark uses ARM64 assembly kernels, warmup passes, and loop statistics to produce stable and comparable results.
 
@@ -196,15 +199,15 @@ Long options require `--`. A single dash is only valid for one-character short o
 - `--analyze-core2core`: Standalone two-thread cache-line ping-pong benchmark for coherence handoff latency, with three scheduler-hint scenarios (`no_affinity_hint`, `same_affinity_tag`, `different_affinity_tags`). Before measured loops, each scenario runs an excluded 100,000-round-trip pilot after a 1,000,000-round-trip calibration warmup. The pilot calibrates the final warmup toward 25 ms, the continuous headline toward 250 ms (100-300 ms intended window), and each sample window toward 1 ms; the respective 20,000, 1,000,000, and 2,000 round-trip minimums still apply. Scenario order rotates across loops. Bare core-to-core mode defaults to three loops, so the reported headline is a three-loop median P50 with CV/MAD repeatability metadata; CV above 7.5% produces a diagnostic warning. The default 1,000 sample windows per scenario/loop contribute about 9 seconds of target sampling time across three scenarios and three loops, before headline, warmup, calibration, and scheduling overhead, so the new default intentionally runs longer. Pooled sample-window percentiles remain a separate distribution.
 - `--latency-samples <count>`: Samples per latency test (default `1000`). In core-to-core mode this is the number of separately timed, calibrated sample windows per scenario and loop; it does not replace or alter the continuous headline measurement.
 - `--latency-stride-bytes <bytes>`: Pointer-chain stride for latency tests (default `256`; must be > 0 and pointer-size aligned). With `--analyze-tlb`, it must also be no larger than the system page size. The page-native spread builder rounds spacing up to a cache-line multiple; the packed control uses one node per cache line. Page-size divisibility is not required.
-- `--latency-chain-mode <mode>`: Pointer-chain construction policy. Modes: `auto` (default), `global-random`, `random-box`, `same-random-in-box`, `diff-random-in-box`. Analyze-TLB results are comparable only when the effective mode matches; the increasing-page `same-random-in-box` and `diff-random-in-box` modes are intentionally order/prefetch-sensitive.
+- `--latency-chain-mode <mode>`: Pointer-chain construction policy. Modes: `auto` (default), `global-random`, `random-box`, `same-random-in-box`, `diff-random-in-box`. `--analyze-tlb` rejects `global-random` because it would make the locality sweep labels misleading. Analyze-TLB results are comparable only when the effective mode matches; the increasing-page `same-random-in-box` and `diff-random-in-box` modes are intentionally order/prefetch-sensitive.
 - `--seed <uint64>`: Reproducible workload/schedule seed for `--benchmark` and `--patterns`, or planner/round/chain seed for `--analyze-tlb`. In standard mode it derives separate main/L1/L2/custom and locality-layout seeds; equivalent chains and schedules are rebuilt across `--count` loops. The guarantee covers workload metadata, not identical performance. When omitted, one non-zero seed is generated for the command.
 - `--latency-tlb-locality-kb <KB>`: Pointer-chain locality window (default `1024`; `0` = global random chain; non-zero values must be page-size multiples). If omitted, regular main-memory latency also runs three paired rounds comparing 16 KiB locality with global random; first-measured layout alternates, and `locality_latency_delta_ns` is the median of same-round `global - locality` deltas. This is a mixed locality/cache comparison, not an isolated page-walk cost; use `--analyze-tlb` for translation-boundary conclusions.
 - `--non-cacheable`: Best-effort cache-discouraging hints (not true uncached memory).
-- `--output <file>`: Save JSON output. Standard mode atomically checkpoints schema-v2 JSON after completed loops, so interrupted/failed runs retain completed work and expose `results_complete: false`. Core-to-core schema 2 records nullable measurement state, calibrated work plans, loop records, completion counters, and whether the affinity-hint comparison is interpretable.
-- `--sweep <key=a,b>`: Sweep supported parameters. General benchmark keys: `buffer-size`, `cache-size`, `threads`, `latency-tlb-locality-kb`, `latency-stride-bytes`, `latency-chain-mode`; TLB analysis keys: `latency-stride-bytes`, `latency-chain-mode`, `tlb-density`; core-to-core keys: `count`, `latency-samples`.
+- `--output <file>`: Save JSON output. Standard mode atomically checkpoints schema-v2 JSON after completed loops, so interrupted/failed runs retain completed work and expose `results_complete: false`. A direct core-to-core run writes its auditable result even when it fails or is interrupted, provided an audit payload was built; completed measurements are preserved with `measurements_complete: false`, and unavailable values remain `null`.
+- `--sweep <key=a,b>`: Sweep supported parameters. Standard benchmark keys: `buffer-size`, `cache-size`, `threads`, `latency-tlb-locality-kb`, `latency-stride-bytes`, `latency-chain-mode`; pattern keys: `buffer-size`, `threads`; TLB analysis keys: `latency-stride-bytes`, `latency-chain-mode`, `tlb-density`; core-to-core keys: `count`, `latency-samples`.
 - `--sweep-max-runs <count>`: Maximum generated sweep runs (general default `256`; `--analyze-tlb` default `16`). An explicit value overrides the mode default.
 
-Sweep configurations are fully validated before the first run. A parameter key may appear only once in a sweep command. Combined sweep JSON is atomically checkpointed after every completed run and includes `status`, `planned_runs`, `completed_runs`, and `conclusions_valid`.
+Sweep configurations are fully validated before the first run. A parameter key may appear only once in a sweep command. Standard, pattern, and TLB sweep JSON is atomically checkpointed after each stored run result; a later hard failure preserves earlier entries and records top-level `status: "failed"`. Core-to-core sweeps checkpoint after every attempted run and retain the failed attempt's nested result. Their `completed_runs` counts only nested core-to-core runs whose status is `complete`, so `runs` may contain more entries than `completed_runs`. Every sweep envelope also includes `planned_runs` and `conclusions_valid`.
 
 ## Typical Workflows
 
@@ -239,13 +242,13 @@ memory_benchmark --benchmark --only-latency --buffer-size 1024 --count 10 --late
 memory_benchmark --benchmark --only-latency --buffer-size 1024 --count 10 --latency-samples 5000 --latency-tlb-locality-kb 0 --output lat_global.json
 ```
 
-Regular benchmark with default latency profile (`256B` stride, `1024KB` locality) and automatic TLB breakdown (omit `--latency-tlb-locality-kb`):
+Regular benchmark with default latency profile (`256B` stride, `1024KB` locality) and the automatic paired 16 KiB-locality/global-random comparison (omit `--latency-tlb-locality-kb`):
 
 ```bash
 memory_benchmark --benchmark --count 1
 ```
 
-TLB-vs-cache isolation (smaller stride within pages):
+Smaller-stride, 16 KiB-locality profile (not an isolated page-walk measurement):
 
 ```bash
 memory_benchmark --benchmark --only-latency --buffer-size 1024 --cache-size 4096 --latency-stride-bytes 64 --latency-tlb-locality-kb 16 --count 10 --latency-samples 5000 --output lat_stride64_tlb16.json
@@ -312,7 +315,8 @@ Console output includes:
 - Resolved configuration and cache information.
 - Per-loop benchmark results.
 - Main-memory latency may include `16 KiB locality latency`, `Global-random latency`, and `Locality latency delta (global - 16 KiB)` when `--latency-tlb-locality-kb` is omitted. These are paired, alternating-order comparison rounds; the delta is not labeled as page-walk cost.
-- Aggregate statistics when `--count > 1`: median P50 headline, average, P90/P95/P99, sample stddev, CV, MAD, min, and max. Unavailable/interrupted values are excluded rather than converted to zero.
+- Standard and core-to-core aggregate statistics when `--count > 1`: median P50 headline, average, P90/P95/P99, sample stddev, CV, MAD, min, and max.
+- Repeated pattern aggregates use a median headline and report average, P90/P95/P99, sample stddev, CV, min, and max, without MAD. Unavailable/interrupted values are excluded from every mode's aggregates rather than converted to zero.
 - Standalone `--analyze-tlb` uses IEC units and one compact row per locality, reports `Analysis Status`, and suppresses boundary conclusions when the sweep is interrupted or incomplete. A `*` identifies a below-64-node diagnostic point, and the `quick` profile visibly advises confirmation with `medium` or `high`. Its primary 512 MiB result is the compact `Large-Locality Paired Comparison`: same-round spread, packed, and translation-delta P50 values plus the active cache-line footprint. These are cache-hot pointer-chain timings, not direct DRAM latency or an isolated page-table-walk cost.
 
 Standalone TLB JSON uses `schema_version: 4` and `methodology_version: "page-native-paired-adaptive-validated-v4"`. It includes the runtime profile, adaptive-round bounds and completion reason, access-calibration data, memory budget, predicted peak, best-effort QoS/lock results, work estimate, exact uint64 decimal-string seeds and derivation policy, execution-ordered discovery/validation records, raw pair latencies, requested/actual pages, pointer-node density, active cache-line footprints, short-cycle diagnostics, effective chain-mode comparability guidance, verified physical diagnostics, and same-round `translation_delta_ns = spread - packed`. Explicit base+validation, large-locality, and total counters state their pass scope, while `validation_required`, `validation_status`, and `validation_complete` distinguish validation completion from not-run/not-required states. Boundary objects retain accepted and rejected candidates with discovery/validation evidence, deterministic bootstrap 95% CIs, noise floor, persistence counts, rejection reasons, and the final bracket. The only large-locality result object is `tlb_analysis.large_locality_paired_comparison`; its delta P50 is the median of same-round deltas, not the difference of independently aggregated medians. Schema 4 contains only the current fields. The bundled plotter separately retains read support for historical schema 1-3 files and does not accept their field names in a schema 4 document.
@@ -363,6 +367,13 @@ an aggregate `status`, a median-or-single `value_gb_s`, raw `values_gb_s`, stati
 address stride only: `large_page_backing_verified` remains false unless backing is actually verified, so the label is not
 a superpage claim. `thread_selection_policy` distinguishes the detected-core-count default from an explicit thread
 request; use the recorded requested/effective counts when comparing results.
+
+Core-to-core JSON uses `schema_version: 2` and
+`methodology_version: "core2core-v2-calibrated-balanced-auditable"`. It records per-scenario calibrated work plans,
+per-loop order, status, duration, scheduler-hint and sample-boundary metadata, command completion counters, and
+`affinity_hint_comparison_interpretable`. Failed or interrupted direct runs with `--output` preserve completed records when
+an audit payload was built, use `measurements_complete: false`, and keep missing measurements unavailable/`null` rather
+than fabricating zeroes.
 
 Standard schema 2 keeps continuous headlines, pooled sample windows, and the paired locality comparison separate:
 
