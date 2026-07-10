@@ -38,7 +38,7 @@
 
 // Forward declarations
 struct BenchmarkConfig;
-struct BenchmarkBuffers;
+struct PatternBuffers;
 struct HighResTimer;
 
 enum class PatternKind {
@@ -224,7 +224,7 @@ bool validate_random_indices(const std::vector<size_t>& indices, size_t buffer_s
 
 /**
  * @brief Run pattern benchmarks for various memory access patterns
- * @param buffers Reference to benchmark buffers structure
+ * @param buffers Shared source/destination pattern mappings.
  * @param config Reference to benchmark configuration
  * @param results Reference to PatternResults structure to store results
  * @param loop_index Zero-based outer-loop index used to balance pattern order
@@ -233,20 +233,22 @@ bool validate_random_indices(const std::vector<size_t>& indices, size_t buffer_s
  * Executes benchmarks for sequential forward, sequential reverse, strided (64B and 4096B),
  * and random access patterns. Results are stored in the PatternResults structure.
  */
-int run_pattern_benchmarks(const BenchmarkBuffers& buffers, const BenchmarkConfig& config,
+int run_pattern_benchmarks(const PatternBuffers& buffers, const BenchmarkConfig& config,
                            PatternResults& results, size_t loop_index = 0);
 
 /**
  * @brief Run all pattern benchmark loops and collect statistics
- * @param buffers Reference to benchmark buffers structure
  * @param config Reference to benchmark configuration
  * @param[out] stats Reference to PatternStatistics structure to store aggregated results
  * @return EXIT_SUCCESS on success, EXIT_FAILURE on error
  *
  * Executes multiple pattern benchmark loops as specified by config.loop_count and
  * aggregates all results into the PatternStatistics structure for statistical analysis.
+ * The coordinator allocates and initializes one PatternBuffers owner before the
+ * first loop and releases both mappings before returning.
  */
-int run_all_pattern_benchmarks(const BenchmarkBuffers& buffers, const BenchmarkConfig& config, PatternStatistics& stats);
+int run_all_pattern_benchmarks(const BenchmarkConfig& config,
+                               PatternStatistics& stats);
 
 /**
  * @brief Print pattern benchmark results to console

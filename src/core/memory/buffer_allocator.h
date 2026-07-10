@@ -19,8 +19,7 @@
  * @author Timo Heimonen <timo.heimonen@proton.me>
  * @date 2026
  *
- * This header provides functions to allocate all benchmark buffers based on
- * configuration settings.
+ * This header provides pattern-buffer allocation and peak-memory accounting.
  */
 #ifndef BUFFER_ALLOCATOR_H
 #define BUFFER_ALLOCATOR_H
@@ -30,19 +29,22 @@
 
 // Forward declarations to avoid including headers in header
 struct BenchmarkConfig;
-struct BenchmarkBuffers;
+struct PatternBuffers;
 
 /**
- * @brief Allocate all buffers based on configuration
- * @param config Reference to benchmark configuration
- * @param[out] buffers Reference to BenchmarkBuffers structure to populate
- * @return EXIT_SUCCESS on success, EXIT_FAILURE on error
+ * @brief Allocate the two mappings shared by all pattern benchmark loops.
+ * @param config Pattern benchmark configuration.
+ * @param[in,out] buffers Destination owner, replaced only after both mappings
+ *                       have been allocated successfully.
+ * @return EXIT_SUCCESS on success, EXIT_FAILURE on validation, overflow,
+ *         memory-limit, or mapping failure.
  *
- * Allocates all required buffers for main memory, cache latency, and cache
- * bandwidth tests based on the configuration settings. Performs validation
- * and overflow checks before allocation.
+ * Allocation is atomic from the caller's perspective: if either mapping
+ * fails, any newly created mapping is released and `buffers` is unchanged.
+ * `config.use_non_cacheable` selects the best-effort MADV_RANDOM path.
  */
-int allocate_all_buffers(const BenchmarkConfig& config, BenchmarkBuffers& buffers);
+int allocate_pattern_buffers(const BenchmarkConfig& config,
+                             PatternBuffers& buffers);
 
 /**
  * @brief Calculate peak concurrent bytes required based on configuration

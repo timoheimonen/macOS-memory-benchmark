@@ -74,7 +74,8 @@ The pipeline below applies to standard/pattern benchmark execution.
 6. Raise main thread QoS (`QOS_CLASS_USER_INTERACTIVE`) best-effort.
 7. Execute one mode:
    - Standard benchmark mode (`run_all_benchmarks`), which allocates/initializes buffers per phase and releases them after the phase.
-   - Pattern benchmark mode (`run_pattern_benchmarks`), which pre-allocates/initializes required buffers (`allocate_all_buffers` + `initialize_all_buffers`).
+   - Pattern benchmark mode (`run_all_pattern_benchmarks`), whose coordinator owns and prepares one shared
+     `PatternBuffers` source/destination pair for every pattern and loop.
 8. Print loop results and aggregate statistics.
 9. Optionally serialize JSON output.
 10. Print total elapsed runtime.
@@ -177,12 +178,13 @@ Memory-limit model:
 Allocation entrypoints:
 
 - Standard benchmark mode: per-phase allocators in `src/benchmark/benchmark_executor.cpp` (`prepare_*_buffers` helpers).
-- Pattern benchmark mode: `allocate_all_buffers` (`src/core/memory/buffer_allocator.cpp`).
+- Pattern benchmark mode: `allocate_pattern_buffers` (`src/core/memory/buffer_allocator.cpp`). The pattern
+  coordinator retains the pair for the full command and releases it on return.
 
 Shared allocation behavior:
 
 - Uses `mmap` anonymous private mappings (macOS-specific behavior and limits apply).
-- Uses mode-aware conditional allocation to avoid unused buffers.
+- Uses phase- or mode-specific allocation to avoid unused buffers.
 - Performs overflow-safe byte arithmetic before allocation.
 - Enforces global memory-limit checks from peak-concurrent requirements.
 
@@ -206,7 +208,7 @@ Pattern mode intentionally allocates and uses only main source/destination buffe
 Initialization entrypoints:
 
 - Standard benchmark mode: per-phase initialization in `run_single_benchmark_loop` before each measured phase.
-- Pattern benchmark mode: `initialize_all_buffers` (`src/core/memory/buffer_initializer.cpp`).
+- Pattern benchmark mode: `initialize_pattern_buffers` (`src/core/memory/buffer_initializer.cpp`).
 
 Initialization semantics:
 

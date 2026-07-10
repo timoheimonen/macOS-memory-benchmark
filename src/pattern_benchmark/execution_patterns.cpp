@@ -210,7 +210,7 @@ void set_triplet_status(PatternResults& results, PatternKind kind,
 // ============================================================================
 
 // Run forward pattern benchmarks (baseline sequential access)
-void run_forward_pattern_benchmarks(const BenchmarkBuffers& buffers, const BenchmarkConfig& config,
+void run_forward_pattern_benchmarks(const PatternBuffers& buffers, const BenchmarkConfig& config,
                                     PatternResults& results, HighResTimer& timer) {
   show_progress();
   std::atomic<uint64_t> checksum{0};
@@ -282,7 +282,7 @@ void run_forward_pattern_benchmarks(const BenchmarkBuffers& buffers, const Bench
 }
 
 // Run reverse pattern benchmarks (backward sequential access)
-void run_reverse_pattern_benchmarks(const BenchmarkBuffers& buffers, const BenchmarkConfig& config,
+void run_reverse_pattern_benchmarks(const PatternBuffers& buffers, const BenchmarkConfig& config,
                                    PatternResults& results, HighResTimer& timer) {
   show_progress();
   std::atomic<uint64_t> checksum{0};
@@ -356,7 +356,7 @@ void run_reverse_pattern_benchmarks(const BenchmarkBuffers& buffers, const Bench
 
 // Run random pattern benchmarks (uniform random access)
 // Returns EXIT_SUCCESS on success, EXIT_FAILURE on error, or skips pattern if buffer too small
-int run_random_pattern_benchmarks(const BenchmarkBuffers& buffers, const BenchmarkConfig& config,
+int run_random_pattern_benchmarks(const PatternBuffers& buffers, const BenchmarkConfig& config,
                                    const std::vector<size_t>& random_indices,
                                    const std::vector<PatternRandomWorkerIndices>& worker_indices,
                                    PatternResults& results, HighResTimer& timer) {

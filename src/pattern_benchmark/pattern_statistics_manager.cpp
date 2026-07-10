@@ -31,6 +31,9 @@
  */
 #include "pattern_benchmark/pattern_benchmark.h"
 #include "core/config/config.h"
+#include "core/memory/buffer_allocator.h"
+#include "core/memory/buffer_initializer.h"
+#include "core/memory/buffer_manager.h"
 #include "core/signal/signal_handler.h"
 #include "output/console/messages/messages_api.h"
 #include <algorithm>
@@ -165,11 +168,18 @@ void collect_pattern_loop_result(PatternStatistics& stats,
 // Public API Functions
 // ============================================================================
 
-int run_all_pattern_benchmarks(const BenchmarkBuffers& buffers,
-                               const BenchmarkConfig& config,
+int run_all_pattern_benchmarks(const BenchmarkConfig& config,
                                PatternStatistics& stats) {
   initialize_pattern_statistics(
       stats, config.loop_count > 0 ? static_cast<size_t>(config.loop_count) : 0);
+
+  PatternBuffers buffers;
+  if (allocate_pattern_buffers(config, buffers) != EXIT_SUCCESS) {
+    return EXIT_FAILURE;
+  }
+  if (initialize_pattern_buffers(buffers, config.buffer_size) != EXIT_SUCCESS) {
+    return EXIT_FAILURE;
+  }
 
   std::cout << Messages::msg_running_pattern_benchmarks() << std::flush;
 

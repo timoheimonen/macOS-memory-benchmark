@@ -209,8 +209,9 @@ unsigned char* align_to_cache_line(unsigned char* pointer) {
 
 ::testing::AssertionResult run_pattern_benchmarks_with_fresh_buffers(BenchmarkConfig& config,
                                                                       PatternResults& results) {
-  BenchmarkBuffers buffers;
-  const ::testing::AssertionResult alloc_init_result = allocate_and_initialize_buffers(config, buffers);
+  PatternBuffers buffers;
+  const ::testing::AssertionResult alloc_init_result =
+      allocate_and_initialize_pattern_buffers(config, buffers);
   if (!alloc_init_result) {
     return alloc_init_result;
   }

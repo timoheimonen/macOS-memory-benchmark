@@ -19,20 +19,13 @@
  * @author Timo Heimonen <timo.heimonen@proton.me>
  * @date 2026
  *
- * This header provides structures and functions to manage all benchmark buffers,
- * including allocation, initialization, and accessor methods.
+ * This header provides owning structures for standard and pattern benchmark
+ * mappings. Allocation and initialization are exposed by dedicated headers.
  */
 #ifndef BUFFER_MANAGER_H
 #define BUFFER_MANAGER_H
 
 #include "core/memory/memory_manager.h"  // MmapPtr
-#include "core/memory/buffer_allocator.h"  // allocate_all_buffers
-#include "core/memory/buffer_initializer.h"  // initialize_all_buffers
-#include <cstddef>  // size_t
-#include <cstdlib>  // EXIT_SUCCESS, EXIT_FAILURE
-
-// Forward declaration to avoid including config.h in header
-struct BenchmarkConfig;
 
 /**
  * @struct BenchmarkBuffers
@@ -135,5 +128,24 @@ struct BenchmarkBuffers {
   void* custom_bw_dst() const { return custom_bw_dst_ptr.get(); }
 };
 
-#endif // BUFFER_MANAGER_H
+/**
+ * @struct PatternBuffers
+ * @brief Owning source/destination mappings for a complete pattern run.
+ *
+ * Pattern benchmarks reuse exactly two equally sized mappings across every
+ * pattern and loop. Keeping this ownership separate from BenchmarkBuffers
+ * prevents the pattern path from depending on standard benchmark cache and
+ * latency buffer fields.
+ */
+struct PatternBuffers {
+  MmapPtr src_buffer_ptr{nullptr, MmapDeleter{0}};
+  MmapPtr dst_buffer_ptr{nullptr, MmapDeleter{0}};
 
+  /** @return Raw source mapping, or nullptr when not allocated. */
+  void* src_buffer() const { return src_buffer_ptr.get(); }
+
+  /** @return Raw destination mapping, or nullptr when not allocated. */
+  void* dst_buffer() const { return dst_buffer_ptr.get(); }
+};
+
+#endif // BUFFER_MANAGER_H

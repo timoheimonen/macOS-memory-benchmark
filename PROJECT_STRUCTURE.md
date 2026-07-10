@@ -171,9 +171,9 @@ Core infrastructure for configuration, memory management, macOS system introspec
 | File | Purpose |
 |---|---|
 | `memory_manager.h` / `.cpp` | Low-level normal and cache-discouraging `mmap` allocation; returns RAII `MmapPtr` owners and exposes a test-only mmap-family provider seam |
-| `buffer_manager.h` | Defines the named `BenchmarkBuffers` RAII owner passed between allocation, initialization, and execution code |
-| `buffer_allocator.h` / `.cpp` | Allocates the mode-required buffer set and performs overflow-safe peak-concurrent memory accounting |
-| `buffer_initializer.h` / `.cpp` | Initializes deterministic source/zeroed destination data and pointer-chase chains before benchmark runs |
+| `buffer_manager.h` | Defines the phase-local `BenchmarkBuffers` and command-local `PatternBuffers` RAII owners |
+| `buffer_allocator.h` / `.cpp` | Atomically allocates the pattern source/destination pair and performs overflow-safe peak-concurrent memory accounting |
+| `buffer_initializer.h` / `.cpp` | Initializes deterministic pattern source data and the zeroed pattern destination before execution |
 | `memory_utils.h` / `.cpp` | Cache-line alignment helpers, deterministic/unseeded latency-chain construction and diagnostics, and basic buffer initialization |
 
 #### src/core/system/
@@ -239,14 +239,14 @@ Benchmarks characterizing memory access patterns: sequential forward, sequential
 | File | Purpose |
 |---|---|
 | `pattern_benchmark.h` | Public interface for the pattern benchmark mode |
-| `pattern_coordinator.cpp` | Orchestrates pattern selection, buffer preparation, and result collection across all configured patterns |
+| `pattern_coordinator.cpp` | Orchestrates per-loop pattern selection, balanced order, timer setup, and status-bearing measurements |
 | `pattern_work_plan.h` / `.cpp` | Finalizes strided/random worker ranges, phase-aware access/payload accounting, calibration arithmetic, and deterministic random offsets |
 | `execution_patterns.cpp` | Orchestrates sequential forward/reverse and random read/write/copy warmup, calibration, measurement, and result construction |
 | `execution_strided.cpp` | Orchestrates finalized phase-aware strided read/write/copy measurements and unavailable states |
 | `execution_utils.cpp` | Calculates effective bandwidth and creates deterministic aligned random-offset sets/access counts |
 | `helpers.cpp` | Connects sequential, strided, and random ARM64 kernels to the parallel framework and validates finalized worker plans |
 | `validation.cpp` | Validates pattern benchmark configuration parameters |
-| `pattern_statistics_manager.cpp` | Manages per-pattern statistical accumulators |
+| `pattern_statistics_manager.cpp` | Owns command-local pattern buffers and manages loop execution plus per-pattern statistical accumulators |
 | `output.cpp` | Formats pattern benchmark results for console output |
 
 ---
@@ -295,7 +295,7 @@ GoogleTest-based unit test suite. All files are picked up automatically by the M
 | `test_messages.cpp` | `Messages*Test` | Console message string functions across all categories |
 | `test_memory_utils.cpp` | `MemoryUtilsTest` | Memory helpers: pointer-chase chain construction and verification |
 | `test_memory_manager.cpp` | `MemoryManagerTest` | Injected mmap/madvise policy, failures, and exact RAII unmapping |
-| `test_buffer_manager.cpp` | `BufferManagerTest` | Allocation shape, nth-allocation cleanup, initialized content, and peak accounting |
+| `test_buffer_manager.cpp` | `BufferManagerTest` | Pattern mapping policy, atomic allocation cleanup, initialized content, validation, and peak accounting |
 | `test_benchmark_executor.cpp` | `BenchmarkExecutorTest` | Injected phase/chain failures, continuous latency sampling, and hardware executor contracts |
 | `test_benchmark_runner.cpp` | `BenchmarkStatisticsCollectorTest`, `BenchmarkRunnerTest` | Status-bearing collection, reset/reserve contracts, checkpointing, and runner failure seams |
 | `test_benchmark_work_plan.cpp` | `BenchmarkWorkPlanTest` | Exact payload/access planning, calibration, cyclic order, seed derivation, and duration classification |
@@ -331,7 +331,7 @@ Three shared helper headers provide functionality reused across multiple test su
 
 | File | Purpose |
 |---|---|
-| `test_config_helpers.h` | Provides `initialize_system_info(BenchmarkConfig&)` and `allocate_and_initialize_buffers(BenchmarkConfig&, BenchmarkBuffers&)` — used by multiple suites to set up system config and buffer allocation |
+| `test_config_helpers.h` | Provides `initialize_system_info(BenchmarkConfig&)` and `allocate_and_initialize_pattern_buffers(const BenchmarkConfig&, PatternBuffers&)` for shared system and pattern-buffer setup |
 | `test_statistics_helpers.h` | Provides `capture_bw()`, `capture_lat()`, `capture_auto_tlb_breakdown()` helpers in `namespace test_statistics_helpers` — used by `StatisticsTest` to capture statistics output |
 | `test_memory_system_calls.h` | Provides deterministic mmap/madvise/munmap state and a resetting fixture for allocation tests |
 

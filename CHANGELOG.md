@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.59.1] - 2026-07-10
+
+### Changed
+  - **Shared DRY primitives replace parallel implementations**: Centralized overflow-safe arithmetic, calibration scaling, sweep parsing/counting, deterministic seed mixing, descriptive statistics, console summaries, UTC timestamps, native page-size queries, and standard phase selection while preserving mode-specific contracts.
+  - **Pattern buffers have one explicit owner**: Replaced the legacy all-mode allocation/initialization API with an atomic two-mapping `PatternBuffers` lifecycle owned by the pattern command coordinator; standard execution continues to allocate only its active phase.
+  - **Build inputs are discovered automatically**: Production and test C++ sources, ARM64 assembly sources, headers, and generated dependency files now participate in the Makefile graph without duplicated hand-maintained inventories.
+
+### Fixed
+  - **Warmups follow measured work plans**: Cache reads use the cache kernel, strided and random warmups consume finalized worker partitions, and partially started warmup thread sets are joined safely on construction failure.
+
 ## [0.59.0] - 2026-07-10
 
 ### Added

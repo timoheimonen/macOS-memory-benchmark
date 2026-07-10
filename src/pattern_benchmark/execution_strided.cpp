@@ -194,7 +194,7 @@ PatternMeasurement build_strided_measurement(
 
 // Run strided pattern benchmarks (access with specified stride)
 // Returns EXIT_SUCCESS on success, EXIT_FAILURE on error, or skips pattern if buffer too small
-int run_strided_pattern_benchmarks(const BenchmarkBuffers& buffers, const BenchmarkConfig& config,
+int run_strided_pattern_benchmarks(const PatternBuffers& buffers, const BenchmarkConfig& config,
                                    size_t stride, PatternResults& results,
                                    HighResTimer& timer) {
   using namespace Constants;

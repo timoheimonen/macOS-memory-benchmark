@@ -37,7 +37,6 @@
 #include "core/config/sweep_utils.h"
 #include "core/config/version.h"
 #include "core/memory/buffer_allocator.h"
-#include "core/memory/buffer_initializer.h"
 #include "core/memory/buffer_manager.h"
 #include "core/signal/signal_handler.h"
 #include "core/system/system_info.h"
@@ -252,16 +251,8 @@ int run_pattern_sweep_point(BenchmarkConfig& run_config, nlohmann::ordered_json&
     return EXIT_FAILURE;
   }
 
-  BenchmarkBuffers buffers;
-  if (allocate_all_buffers(run_config, buffers) != EXIT_SUCCESS) {
-    return EXIT_FAILURE;
-  }
-  if (initialize_all_buffers(buffers, run_config) != EXIT_SUCCESS) {
-    return EXIT_FAILURE;
-  }
-
   PatternStatistics stats;
-  if (run_all_pattern_benchmarks(buffers, run_config, stats) != EXIT_SUCCESS) {
+  if (run_all_pattern_benchmarks(run_config, stats) != EXIT_SUCCESS) {
     return EXIT_FAILURE;
   }
 
