@@ -303,6 +303,11 @@ TEST_F(MessagesErrorTest, ErrorAnalyzeTlbMustBeUsedAlone) {
   EXPECT_NE(msg.find("-X/--sweep-max-runs <count>"), std::string::npos);
 }
 
+TEST_F(MessagesErrorTest, ErrorSeedRequiresPatterns) {
+  EXPECT_EQ(Messages::error_seed_requires_patterns(),
+            "--seed is supported only with --patterns or --analyze-tlb");
+}
+
 TEST_F(MessagesErrorTest, ErrorMadviseFailed) {
   std::string msg = Messages::error_madvise_failed("lat_buffer");
   EXPECT_EQ(msg, "madvise failed for lat_buffer");
@@ -716,6 +721,8 @@ TEST_F(MessagesFormattingTest, UsageOptions) {
   EXPECT_NE(msg.find("--tlb-density"), std::string::npos);
   EXPECT_NE(msg.find("default: medium"), std::string::npos);
   EXPECT_NE(msg.find("--analyze-tlb: 16"), std::string::npos);
+  EXPECT_NE(msg.find("automatic 150 ms calibration"), std::string::npos);
+  EXPECT_NE(msg.find("random workload seed for --patterns"), std::string::npos);
   EXPECT_NE(msg.find("--latency-samples"), std::string::npos);
   EXPECT_NE(msg.find("--latency-stride-bytes"), std::string::npos);
   EXPECT_NE(msg.find("--latency-chain-mode"), std::string::npos);
@@ -851,6 +858,12 @@ TEST_F(MessagesFormattingTest, ConfigTotalCores) {
   std::string msg = Messages::config_total_cores(10);
   EXPECT_NE(msg.find("10"), std::string::npos);
   EXPECT_NE(msg.find("Total CPU Cores"), std::string::npos);
+}
+
+TEST_F(MessagesFormattingTest, ConfigBenchmarkThreads) {
+  const std::string msg = Messages::config_benchmark_threads(4);
+  EXPECT_NE(msg.find("Benchmark Threads Requested"), std::string::npos);
+  EXPECT_NE(msg.find("4"), std::string::npos);
 }
 
 // ============================================================================
@@ -1281,7 +1294,46 @@ TEST_F(MessagesFormattingTest, StatisticsFooter) {
 }
 
 TEST_F(MessagesFormattingTest, PatternStrideLabels) {
-  EXPECT_EQ(Messages::pattern_page_4096b(), "Page - 4096B");
-  EXPECT_EQ(Messages::pattern_page_16384b(), "Page - 16384B");
-  EXPECT_EQ(Messages::pattern_superpage_2mb(), "Superpage - 2MB");
+  EXPECT_EQ(Messages::pattern_cache_line_64b(), "64 B stride");
+  EXPECT_EQ(Messages::pattern_page_4096b(), "4096 B stride");
+  EXPECT_EQ(Messages::pattern_page_16384b(), "16 KiB stride");
+  EXPECT_EQ(Messages::pattern_superpage_2mb(), "2 MiB stride");
+}
+
+TEST_F(MessagesFormattingTest, PatternStatusAndNoiseMessages) {
+  EXPECT_EQ(Messages::pattern_measurement_unavailable("skipped", "buffer too small"),
+            "N/A [skipped: buffer too small]");
+  EXPECT_EQ(Messages::statistics_pattern_bandwidth_header("Random"),
+            "\nRandom Pattern Bandwidth (GB/s):");
+  EXPECT_EQ(Messages::statistics_coefficient_of_variation(12.34, 1),
+            "  CV:      12.3%");
+  const std::string warning =
+      Messages::warning_pattern_measurement_noisy("Random read", 12.3, 10.0);
+  EXPECT_NE(warning.find("Random read"), std::string::npos);
+  EXPECT_NE(warning.find("12.3%"), std::string::npos);
+}
+
+TEST_F(MessagesFormattingTest, PatternMeasurementStatusReasons) {
+  EXPECT_FALSE(Messages::pattern_reason_measurement_not_completed().empty());
+  EXPECT_FALSE(Messages::pattern_reason_timer_creation_failed().empty());
+  EXPECT_FALSE(
+      Messages::pattern_reason_calibration_or_accounting_failed().empty());
+  EXPECT_FALSE(Messages::pattern_reason_no_valid_random_workload().empty());
+  EXPECT_FALSE(Messages::pattern_reason_stride_transition_unavailable().empty());
+  EXPECT_FALSE(Messages::pattern_reason_copy_accounting_overflow().empty());
+  EXPECT_FALSE(Messages::pattern_reason_invalid_strided_timing().empty());
+  EXPECT_FALSE(Messages::pattern_reason_work_plan_byte_overflow().empty());
+  EXPECT_FALSE(Messages::pattern_reason_invalid_work_plan_parameters().empty());
+  EXPECT_FALSE(Messages::pattern_reason_stride_access_sum_overflow().empty());
+  EXPECT_FALSE(
+      Messages::pattern_reason_buffer_lacks_two_strided_accesses().empty());
+  EXPECT_FALSE(
+      Messages::pattern_reason_no_valid_strided_worker_partition().empty());
+  EXPECT_FALSE(Messages::pattern_reason_work_plan_pass_limit().empty());
+  EXPECT_FALSE(Messages::pattern_reason_work_plan_total_overflow().empty());
+}
+
+TEST_F(MessagesFormattingTest, ConfigPatternAutomaticIterations) {
+  EXPECT_EQ(Messages::config_pattern_iterations_auto(0.150, 0.100, 0.250),
+            "Pattern Passes: automatic duration calibration (target 150 ms; intended window 100-250 ms)");
 }

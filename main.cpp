@@ -201,7 +201,8 @@ int main(int argc, char *argv[]) {
                           config.latency_chain_mode, config.latency_tlb_locality_bytes)),
                       config.latency_tlb_locality_bytes,
                       config.cpu_name, config.perf_cores, config.eff_cores, config.num_threads,
-                      config.only_bandwidth, config.only_latency, config.run_patterns);
+                      config.only_bandwidth, config.only_latency, config.run_patterns,
+                      config.user_specified_iterations);
   print_cache_info(config.l1_cache_size, config.l2_cache_size, config.use_custom_cache_size,
                    config.custom_cache_size_bytes);
 
@@ -224,12 +225,11 @@ int main(int argc, char *argv[]) {
         return EXIT_FAILURE;
       }
 
-      // Print results - if single loop, print detailed results; if multiple loops, print last loop's results
+      // Print detailed single-loop results or robust median headlines for repeated loops.
       if (config.loop_count == 1) {
         print_pattern_results(extract_pattern_results_at(pattern_stats, 0));
       } else {
-        size_t last_idx = pattern_stats.all_forward_read_bw.size() - 1;
-        print_pattern_results(extract_pattern_results_at(pattern_stats, last_idx));
+        print_pattern_results(extract_pattern_median_results(pattern_stats));
 
         // Print summary statistics
         print_pattern_statistics(config.loop_count, pattern_stats);

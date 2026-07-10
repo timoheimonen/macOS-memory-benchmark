@@ -145,19 +145,23 @@ namespace Constants {
   constexpr size_t PATTERN_STRIDE_PAGE = 4096;  // Page stride (bytes)
   constexpr size_t PATTERN_STRIDE_PAGE_16K = 16 * 1024;  // Apple Silicon page-size stride candidate (bytes)
   constexpr size_t PATTERN_STRIDE_SUPERPAGE_2MB = 2 * 1024 * 1024;  // Large-page stride candidate (bytes)
-  constexpr size_t PATTERN_STRIDED_MIN_TOUCHED_BYTES = 256 * 1024 * 1024;  // Minimum touched bytes target for strided pattern stability
+  constexpr double PATTERN_CALIBRATION_TARGET_SECONDS = 0.150;  // Automatic pattern sample target
+  constexpr double PATTERN_CALIBRATION_MIN_SECONDS = 0.100;  // Lower target-window bound
+  constexpr double PATTERN_CALIBRATION_MAX_SECONDS = 0.250;  // Upper target-window bound
+  constexpr size_t PATTERN_CALIBRATION_MAX_CORRECTIONS = 2;
+  constexpr int PATTERN_JSON_SCHEMA_VERSION = 2;
+  constexpr const char* PATTERN_METHODOLOGY_VERSION =
+      "pattern-v2-phase-calibrated-seeded";
+  constexpr size_t PATTERN_CALIBRATION_MIN_PILOT_BYTES = 8 * 1024 * 1024;  // Pilot payload floor
+  constexpr size_t PATTERN_CALIBRATION_MAX_PASSES = 1000000000;  // Fits the int executor interface
   constexpr size_t PATTERN_RANDOM_ACCESS_MIN = 1000;  // Minimum number of random accesses
   constexpr size_t PATTERN_RANDOM_ACCESS_MAX = 1000000;  // Maximum number of random accesses
-  constexpr size_t PATTERN_WARMUP_INDICES_MAX = 10000;  // Maximum indices to use for warmup
-  constexpr size_t PATTERN_WARMUP_INDICES_FRACTION = 10;  // Use 1/N of indices for warmup
   constexpr size_t PATTERN_VALIDATION_INDICES_LIMIT = 100;  // Maximum indices to validate
   constexpr double PATTERN_MIN_TIME_NS = 1e-9;  // Minimum time for bandwidth calculation (nanoseconds)
-  constexpr double PATTERN_CACHE_THRASHING_HIGH_THRESHOLD = 70.0;  // Cache thrashing threshold (percentage)
-  constexpr double PATTERN_CACHE_THRASHING_MEDIUM_THRESHOLD = 40.0;  // Cache thrashing medium threshold (percentage)
-  constexpr double PATTERN_TLB_PRESSURE_MINIMAL_THRESHOLD = 50.0;  // TLB pressure minimal threshold (percentage)
-  constexpr double PATTERN_TLB_PRESSURE_MODERATE_THRESHOLD = 20.0;  // TLB pressure moderate threshold (percentage)
   constexpr int PATTERN_PERCENTAGE_PRECISION = 1;  // Decimal places for percentage values
   constexpr int PATTERN_BANDWIDTH_PRECISION = 3;  // Decimal places for bandwidth values in pattern results
+  constexpr double PATTERN_STREAMING_CV_WARNING_PCT = 5.0;
+  constexpr double PATTERN_SPARSE_CV_WARNING_PCT = 10.0;
   
   // Cache fallback sizes (bytes) - used when cache detection fails
   constexpr size_t L1_CACHE_FALLBACK_SIZE_BYTES = 128 * 1024;  // 128 KB - typical Apple Silicon P-core L1 size

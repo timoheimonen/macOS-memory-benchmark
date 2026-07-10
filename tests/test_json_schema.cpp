@@ -22,6 +22,7 @@
 #include <fstream>
 #include <string>
 #include <unistd.h>
+#include <utility>
 #include <vector>
 
 #include "benchmark/core_to_core_latency_json.h"
@@ -145,12 +146,128 @@ TEST(JsonSchemaTest, BenchmarkExporterIncludesBenchmarkModeAndOmitsEmptySections
 TEST(JsonSchemaTest, PatternExporterIncludesPatternsMode) {
   BenchmarkConfig config;
   config.output_file = make_temp_json_path("patterns_schema").string();
+  config.pattern_seed = 42;
+  config.user_specified_pattern_seed = true;
 
   PatternStatistics stats;
   ASSERT_EQ(save_pattern_results_to_json(config, stats, 2.0), EXIT_SUCCESS);
 
   const nlohmann::json output_json = read_json_file(config.output_file);
   EXPECT_EQ(output_json[JsonKeys::CONFIGURATION][JsonKeys::MODE], Constants::PATTERNS_JSON_MODE_NAME);
+  EXPECT_EQ(output_json[JsonKeys::CONFIGURATION]["methodology_version"],
+            "pattern-v2-phase-calibrated-seeded");
+  EXPECT_EQ(output_json[JsonKeys::CONFIGURATION]["pattern_seed"], "42");
+  EXPECT_EQ(output_json[JsonKeys::CONFIGURATION]["thread_selection_policy"],
+            "detected-core-count-default");
+
+  std::filesystem::remove(config.output_file);
+}
+
+TEST(JsonSchemaTest, PatternMeasurementsIncludeStatusAndMethodologyMetadata) {
+  BenchmarkConfig config;
+  config.output_file = make_temp_json_path("patterns_metadata").string();
+  config.pattern_seed = 18446744073709551615ULL;
+  config.user_specified_pattern_seed = true;
+
+  PatternResults loop;
+  PatternMeasurement measured;
+  measured.status = PatternMeasurementStatus::Measured;
+  measured.status_reason.clear();
+  measured.bandwidth_gb_s = 12.5;
+  measured.elapsed_seconds = 0.150;
+  measured.pilot_elapsed_seconds = 0.010;
+  measured.access_size_bytes = 32;
+  measured.requested_threads = 4;
+  measured.effective_threads = 4;
+  measured.accesses_per_pass = 100;
+  measured.min_accesses_per_pass = 100;
+  measured.max_accesses_per_pass = 100;
+  measured.passes = 10;
+  measured.total_accesses = 1000;
+  measured.total_payload_bytes = 32000;
+  measured.distinct_address_count = 100;
+  measured.logical_working_set_bytes = 4096;
+  measured.native_page_size_bytes = 16384;
+  measured.automatic_calibration = true;
+  measured.benchmark_loop_index = 3;
+  measured.pattern_order_index = 2;
+  set_pattern_measurement(loop, PatternKind::SequentialForward,
+                          PatternOperation::Read, measured);
+
+  PatternMeasurement phased = measured;
+  phased.stride_bytes = Constants::PATTERN_STRIDE_CACHE_LINE;
+  phased.accesses_per_pass = 2;
+  phased.min_accesses_per_pass = 1;
+  phased.max_accesses_per_pass = 2;
+  phased.phase_period_passes = 2;
+  set_pattern_measurement(loop, PatternKind::Strided64,
+                          PatternOperation::Read, std::move(phased));
+
+  for (PatternOperation operation : {PatternOperation::Read, PatternOperation::Write,
+                                     PatternOperation::Copy}) {
+    PatternMeasurement skipped;
+    skipped.status = PatternMeasurementStatus::Skipped;
+    skipped.status_reason = "buffer cannot provide a valid stride transition";
+    skipped.access_size_bytes = 32;
+    skipped.stride_bytes = Constants::PATTERN_STRIDE_SUPERPAGE_2MB;
+    skipped.requested_threads = 4;
+    skipped.native_page_size_bytes = 16384;
+    set_pattern_measurement(loop, PatternKind::Strided2MiB, operation,
+                            std::move(skipped));
+  }
+
+  PatternMeasurement random = measured;
+  random.has_seed = true;
+  random.seed = config.pattern_seed;
+  set_pattern_measurement(loop, PatternKind::Random, PatternOperation::Read,
+                          std::move(random));
+
+  PatternStatistics statistics;
+  statistics.loop_results.push_back(loop);
+  statistics.all_forward_read_bw.push_back(12.5);
+  statistics.all_random_read_bw.push_back(12.5);
+
+  ASSERT_EQ(save_pattern_results_to_json(config, statistics, 1.0), EXIT_SUCCESS);
+  const nlohmann::json output = read_json_file(config.output_file);
+  const nlohmann::json forward =
+      output[JsonKeys::PATTERNS][JsonKeys::SEQUENTIAL_FORWARD];
+  EXPECT_EQ(forward["methodology_version"],
+            "pattern-v2-phase-calibrated-seeded");
+  EXPECT_EQ(forward["warmup_semantics"], "steady-state-same-shape");
+  const nlohmann::json read =
+      forward[JsonKeys::BANDWIDTH][JsonKeys::READ_GB_S];
+  EXPECT_EQ(read["status"], "measured");
+  EXPECT_DOUBLE_EQ(read["value_gb_s"].get<double>(), 12.5);
+  ASSERT_EQ(read["measurements"].size(), 1u);
+  EXPECT_EQ(read["measurements"][0]["passes"], 10u);
+  EXPECT_EQ(read["measurements"][0]["accesses_per_pass_semantics"],
+            "constant-count");
+  EXPECT_EQ(read["measurements"][0]["total_payload_bytes"], 32000u);
+  EXPECT_EQ(read["measurements"][0]["benchmark_loop_index"], 3u);
+  EXPECT_EQ(read["measurements"][0]["pattern_order_index"], 2u);
+  EXPECT_EQ(output[JsonKeys::CONFIGURATION]["pattern_execution_order_policy"],
+            "cyclic-latin-square-across-count-loops");
+  const nlohmann::json phased_json =
+      output[JsonKeys::PATTERNS][JsonKeys::STRIDED_64][JsonKeys::BANDWIDTH]
+            [JsonKeys::READ_GB_S]["measurements"][0];
+  EXPECT_EQ(phased_json["accesses_per_pass_semantics"], "phase-zero-count");
+  EXPECT_EQ(phased_json["min_accesses_per_pass"], 1u);
+  EXPECT_EQ(phased_json["max_accesses_per_pass"], 2u);
+  EXPECT_EQ(phased_json["phase_period_passes"], 2u);
+
+  const nlohmann::json skipped = output[JsonKeys::PATTERNS][JsonKeys::STRIDED_2MB]
+      [JsonKeys::BANDWIDTH][JsonKeys::READ_GB_S];
+  EXPECT_EQ(skipped["status"], "skipped");
+  EXPECT_TRUE(skipped["value_gb_s"].is_null());
+  EXPECT_EQ(skipped["measurements"][0]["accesses_per_pass_semantics"],
+            "phase-zero-count");
+  EXPECT_FALSE(output[JsonKeys::PATTERNS][JsonKeys::STRIDED_2MB]
+                   ["large_page_backing_verified"]
+                       .get<bool>());
+
+  const nlohmann::json random_json =
+      output[JsonKeys::PATTERNS][JsonKeys::RANDOM];
+  EXPECT_EQ(random_json["seed"], "18446744073709551615");
 
   std::filesystem::remove(config.output_file);
 }

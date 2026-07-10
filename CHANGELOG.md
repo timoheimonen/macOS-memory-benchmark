@@ -5,6 +5,30 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.58.0] - UNRELEASED
+
+### Added
+  - **Reproducible pattern workloads**: `--seed <uint64>` now applies to `--patterns` as well as standalone TLB analysis. Random pattern offsets are generated once as a deterministic, aligned, no-replacement permutation prefix; an omitted seed is generated once per command, and every `--count` loop reuses the same workload.
+  - **Phase-rotating ARM64 strided kernels**: New read, write, and copy hot paths execute all calibrated passes inside one assembly call while advancing the 32-byte starting phase on every pass. Exact planner metadata tracks phase cycles, distinct addresses, logical working-set span, and phase-aware payload totals without out-of-range accesses.
+  - **Auditable pattern JSON schema v2**: Pattern output now uses methodology version `pattern-v2-phase-calibrated-seeded` and records measurement status/reason, effective payload bandwidth, elapsed and pilot durations, requested/effective threads, exact access/pass/payload accounting, working-set and phase metadata, native-page relationships, unverified large-page backing, exact decimal-string seeds, and balanced-order positions for every loop and operation.
+  - **Pattern measurement quality indicators**: Repeated pattern runs report coefficient of variation (CV) alongside mean, median, percentiles, standard deviation, minimum, and maximum. Results remain available with a warning when streaming or 64 B-stride CV exceeds 5%, or sparse/random CV exceeds 10%.
+  - **ARM64 pattern-kernel ABI validation**: Apple Silicon integration coverage now seeds and verifies every AAPCS64 callee-saved general-purpose register and preserved SIMD lane across the phased strided read, write, and copy kernels for all supported stride sizes, alongside existing access-boundary guard checks.
+  - **Unambiguous phase-aware pass metadata**: Pattern schema v2 identifies `accesses_per_pass` as the phase-zero count and adds minimum/maximum accesses per executed pass plus the phase period. Consumers can audit phase-rotated workloads without incorrectly assuming that phase-zero accesses multiplied by passes equals the authoritative exact totals.
+
+### Changed
+  - **Duration-calibrated pattern samples**: When `--iterations` is omitted, every pattern read, write, and copy measurement uses an excluded same-shape pilot to calibrate toward a 150 ms sample (100-250 ms intended window). An explicit `--iterations` value remains an exact measured-pass override. Strided warmup covers a complete phase cycle, random warmup covers the full deterministic address list, and read checksum aggregation now happens after timing from per-worker slots.
+  - **Robust and balanced repeated pattern summaries**: `--count > 1` now uses the median as the headline value instead of the last loop and rotates the seven pattern groups in a deterministic cyclic Latin-square schedule. Read/write/copy order remains fixed, with operation-specific same-shape warmup before each measurement.
+  - **Explicit pattern thread-selection metadata**: `--patterns` retains the historical detected-core-count default so sequential results remain comparable with earlier releases. Explicit `--threads N` selects a worker-count profile without promising core placement, while JSON records whether the detected-core default or an explicit capped request was used and documents that QoS is a best-effort scheduler hint without core pinning.
+  - **Pattern terminology now matches measured behavior**: Console statistics say `Pattern Bandwidth`; stride labels describe byte distances, including `2 MiB stride`, without claiming superpage backing. Unsupported prefetcher, cache-thrashing, and TLB-pressure diagnoses were removed; dedicated TLB interpretation remains under `--analyze-tlb`.
+
+### Fixed
+  - **Exact per-worker strided pattern accounting**: `--patterns` now builds a deterministic cache-line-aligned work plan before each strided measurement, includes the final exactly fitting access, derives reported payload bytes from the finalized worker ranges, and reduces the effective worker count when a requested split would leave a worker without a genuine stride transition. This prevents small-buffer or high-thread-count 2 MiB stride runs from repeatedly touching only offset zero while being reported as a valid 2 MiB-stride workload.
+  - **Parallel pattern timing excludes worker lifecycle overhead**: Worker QoS setup and ready-gate synchronization now complete before the timer starts, and the last worker stops the timer after publishing all measured memory effects. Thread teardown and joins remain outside the reported interval.
+  - **Random pattern setup moved outside measurement**: Cache-line-aligned random offsets are partitioned into finalized per-worker index arrays before benchmarking, eliminating per-worker allocation and index filtering from random read, write, and copy timing.
+  - **Pattern execution now consumes finalized worker ranges directly**: Strided and random executors use the planner's exact contiguous worker boundaries without repartitioning. Random callbacks address their prebuilt worker-local index list directly, eliminating the remaining timed worker lookup and keeping reported access/payload totals identical to executed work.
+  - **Missing pattern measurements are no longer numeric zeroes**: Measured, skipped, interrupted, and invalid operations now carry explicit status and optional values. Console output uses `N/A` with a reason, JSON uses `null`, and unavailable operations are excluded from aggregates and percentile calculations.
+  - **Automatic calibration corrects unstable pilot estimates**: Auto-calibrated samples may apply up to two bounded pass-count corrections when a first measured attempt falls outside the intended 100-250 ms window. Explicit `--iterations` runs skip both the pilot and calibration corrections.
+
 ## [0.57.0] - 2026-07-10
 
 ### Added

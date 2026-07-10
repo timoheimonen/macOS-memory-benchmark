@@ -18,17 +18,20 @@
 
 #include <array>
 #include <algorithm>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
 #include <cmath>
 #include <vector>
+#include <thread>
 #include <unistd.h>
 
 #include "asm/asm_functions.h"
 #include "benchmark/benchmark_executor.h"
 #include "benchmark/benchmark_runner.h"
 #include "benchmark/benchmark_tests.h"
+#include "benchmark/parallel_test_framework.h"
 #include "core/config/config.h"
 #include "core/config/constants.h"
 #include "core/memory/buffer_manager.h"
@@ -52,6 +55,12 @@ BenchmarkConfig build_base_config() {
   calculate_access_counts(config);
   return config;
 }
+
+struct DelayedThreadExit {
+  ~DelayedThreadExit() {
+    std::this_thread::sleep_for(std::chrono::milliseconds(40));
+  }
+};
 
 }  // namespace
 
@@ -87,6 +96,27 @@ TEST(BenchmarkExecutorTest, WriteTestReturnsZeroForInvalidThreadCountsIntegratio
     return value == 0xCD;
   });
   EXPECT_TRUE(unchanged);
+}
+
+TEST(BenchmarkExecutorTest, ParallelTimingStopsBeforeWorkerTeardownIntegration) {
+  std::array<unsigned char, 4096> buffer{};
+  auto timer_opt = HighResTimer::create();
+  ASSERT_TRUE(timer_opt.has_value());
+
+  const auto wall_start = std::chrono::steady_clock::now();
+  const double measured_duration = run_parallel_test(
+      buffer.data(), buffer.size(), 1, 1, *timer_opt,
+      [](char* /* chunk_start */, size_t /* chunk_size */, int /* iterations */) {
+        thread_local DelayedThreadExit delayed_exit;
+        static_cast<void>(delayed_exit);
+      },
+      "timing_test");
+  const double wall_duration =
+      std::chrono::duration<double>(std::chrono::steady_clock::now() - wall_start).count();
+
+  EXPECT_GE(wall_duration, 0.035);
+  EXPECT_GT(measured_duration, 0.0);
+  EXPECT_LT(measured_duration, wall_duration - 0.020);
 }
 
 TEST(BenchmarkExecutorTest, ReadLoopChecksumFoldsUpperVectorLaneIntegration) {

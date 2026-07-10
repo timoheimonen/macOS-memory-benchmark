@@ -44,8 +44,10 @@
 #include <cstdio>                // For fprintf, stderr
 #include <functional>            // For std::function
 #include <iostream>              // For std::cout
+#include <limits>                // For std::numeric_limits
 #include <mutex>                 // For std::mutex
 #include <thread>                // For std::thread
+#include <utility>               // For std::move
 #include <vector>                // For std::vector
 
 // macOS specific includes
@@ -115,18 +117,20 @@ inline std::vector<size_t> build_aligned_chunk_boundaries(void* alignment_base, 
 
 /**
  * @brief Shared parallel test runner for single-buffer and copy variants.
- * @tparam MakeThreadFunction Function type creating a worker callable for std::thread
+ * @tparam MakeWorkFunction Function type creating the measured work callable for one worker
  * @param alignment_base Base pointer used for chunk-boundary alignment
  * @param size Total size of the covered range in bytes
  * @param iterations Number of operation iterations executed by each worker
  * @param num_threads Number of worker threads to launch
  * @param timer Reference to high-resolution timer for measuring execution time
- * @param make_thread Function that builds a worker callable for one chunk
+ * @param thread_name Name used for worker QoS diagnostics
+ * @param make_work Function that builds measured work for one chunk
  * @return Total duration in seconds, or 0.0 if no work was performed
  */
-template<typename MakeThreadFunction>
-double run_parallel_test_common(void* alignment_base, size_t size, int iterations, int num_threads,
-                                HighResTimer& timer, MakeThreadFunction make_thread) {
+template <typename MakeWorkFunction>
+double run_parallel_test_common(void* alignment_base, size_t size, int iterations, int num_threads, HighResTimer& timer,
+                                const char* thread_name, MakeWorkFunction make_work,
+                                const std::vector<size_t>* planned_boundaries = nullptr) {
   // Early validation: return 0.0 if no work to do or invalid thread count.
   // This avoids unnecessary setup and prevents division-by-zero in partitioning.
   if (size == 0 || num_threads <= 0) {
@@ -136,12 +140,29 @@ double run_parallel_test_common(void* alignment_base, size_t size, int iteration
   std::vector<std::thread> threads;
   threads.reserve(static_cast<size_t>(num_threads));  // Pre-allocate vector space for threads.
 
-  std::mutex start_mutex;
-  std::condition_variable start_cv;
-  bool start_flag = false;  // Gate so timing starts after threads are ready
+  std::mutex state_mutex;
+  std::condition_variable state_cv;
+  size_t ready_workers = 0;
+  bool start_flag = false;
+  bool measurement_complete = false;
+  double measured_duration = 0.0;
+  std::atomic<size_t> remaining_workers{0};
 
-  // Build contiguous chunk boundaries with aligned internal split points.
-  std::vector<size_t> boundaries = build_aligned_chunk_boundaries(alignment_base, size, num_threads);
+  // Use a finalized external plan when supplied; otherwise build the normal
+  // contiguous chunk boundaries before worker creation and timing.
+  std::vector<size_t> boundaries = planned_boundaries != nullptr
+                                       ? *planned_boundaries
+                                       : build_aligned_chunk_boundaries(alignment_base, size, num_threads);
+  if (boundaries.size() != static_cast<size_t>(num_threads) + 1 || boundaries.front() != 0 ||
+      boundaries.back() != size) {
+    return 0.0;
+  }
+  for (size_t index = 1; index < boundaries.size(); ++index) {
+    if (boundaries[index] < boundaries[index - 1] ||
+        (planned_boundaries != nullptr && boundaries[index] == boundaries[index - 1])) {
+      return 0.0;
+    }
+  }
 
   // Launch threads once; each handles its chunk for all iterations.
   for (size_t t = 0; t < static_cast<size_t>(num_threads); ++t) {
@@ -152,8 +173,40 @@ double run_parallel_test_common(void* alignment_base, size_t size, int iteration
     }
 
     size_t thread_chunk_size = chunk_end_offset - chunk_start_offset;
-    threads.emplace_back(make_thread(chunk_start_offset, thread_chunk_size, iterations, start_mutex, start_cv,
-                                     start_flag));
+    const size_t worker_index = threads.size();
+    auto measured_work =
+        make_work(chunk_start_offset, thread_chunk_size, iterations, worker_index);
+    threads.emplace_back([measured_work = std::move(measured_work), &state_mutex, &state_cv,
+                          &ready_workers, &start_flag, &measurement_complete,
+                          &measured_duration, &remaining_workers, &timer, thread_name]() mutable {
+      // QoS setup is preparation and must complete before the timed start gate.
+      kern_return_t qos_ret = pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
+      if (qos_ret != KERN_SUCCESS) {
+        fprintf(stderr, "Warning: Failed to set QoS class for %s worker thread (code: %d)\n",
+                thread_name, qos_ret);
+      }
+
+      {
+        std::unique_lock<std::mutex> lock(state_mutex);
+        ++ready_workers;
+        state_cv.notify_all();
+        state_cv.wait(lock, [&start_flag] { return start_flag; });
+      }
+
+      measured_work();
+
+      // Complete this worker's memory effects before publishing completion.
+      asm volatile("dsb ish" ::: "memory");
+      if (remaining_workers.fetch_sub(1, std::memory_order_acq_rel) == 1) {
+        const double duration = timer.stop();
+        {
+          std::lock_guard<std::mutex> lock(state_mutex);
+          measured_duration = duration;
+          measurement_complete = true;
+        }
+        state_cv.notify_one();
+      }
+    });
   }
 
   // Check if any threads were created. If all chunks were zero after alignment,
@@ -162,16 +215,70 @@ double run_parallel_test_common(void* alignment_base, size_t size, int iteration
     return 0.0;  // No threads created (all chunks were zero after alignment)
   }
 
+  remaining_workers.store(threads.size(), std::memory_order_relaxed);
   {
-    std::unique_lock<std::mutex> lk(start_mutex);
-    timer.start();  // Start timing after all threads are created and waiting.
+    std::unique_lock<std::mutex> lock(state_mutex);
+    state_cv.wait(lock, [&ready_workers, &threads] { return ready_workers == threads.size(); });
+    timer.start();
     start_flag = true;
   }
-  start_cv.notify_all();
+  state_cv.notify_all();
 
-  join_threads(threads);           // Wait for all threads to finish (joined once after all iterations).
-  double duration = timer.stop();  // Stop timing after all work.
-  return duration;                 // Return total time elapsed.
+  {
+    std::unique_lock<std::mutex> lock(state_mutex);
+    state_cv.wait(lock, [&measurement_complete] { return measurement_complete; });
+  }
+
+  // Thread exit and join are deliberately outside the measured interval.
+  join_threads(threads);
+  return measured_duration;
+}
+
+/**
+ * @brief Run indexed single-buffer work with finalized worker boundaries.
+ *
+ * This is used by pattern planners whose exact work accounting depends on the
+ * executor consuming the same worker ranges without repartitioning.
+ */
+template <typename WorkFunction>
+double run_parallel_test_indexed_with_boundaries(void* buffer, size_t size, int iterations, HighResTimer& timer,
+                                                 const std::vector<size_t>& boundaries, WorkFunction work_function,
+                                                 const char* thread_name) {
+  if (boundaries.size() < 2 || boundaries.size() - 1 > static_cast<size_t>(std::numeric_limits<int>::max())) {
+    return 0.0;
+  }
+  char* buffer_start = static_cast<char*>(buffer);
+  auto make_work = [buffer_start, work_function](size_t chunk_start_offset, size_t thread_chunk_size,
+                                                 int iterations_local, size_t worker_index) {
+    char* thread_chunk_start = buffer_start + chunk_start_offset;
+    return [thread_chunk_start, thread_chunk_size, iterations_local, worker_index, work_function]() {
+      work_function(thread_chunk_start, thread_chunk_size, iterations_local, worker_index);
+    };
+  };
+  return run_parallel_test_common(buffer, size, iterations, static_cast<int>(boundaries.size() - 1), timer, thread_name,
+                                  make_work, &boundaries);
+}
+
+/** @brief Run indexed copy work with finalized worker boundaries. */
+template <typename WorkFunction>
+double run_parallel_test_copy_indexed_with_boundaries(void* dst, void* src, size_t size, int iterations,
+                                                      HighResTimer& timer, const std::vector<size_t>& boundaries,
+                                                      WorkFunction work_function, const char* thread_name) {
+  if (boundaries.size() < 2 || boundaries.size() - 1 > static_cast<size_t>(std::numeric_limits<int>::max())) {
+    return 0.0;
+  }
+  char* dst_start = static_cast<char*>(dst);
+  char* src_start = static_cast<char*>(src);
+  auto make_work = [dst_start, src_start, work_function](size_t chunk_start_offset, size_t thread_chunk_size,
+                                                         int iterations_local, size_t worker_index) {
+    char* thread_dst_chunk = dst_start + chunk_start_offset;
+    char* thread_src_chunk = src_start + chunk_start_offset;
+    return [thread_dst_chunk, thread_src_chunk, thread_chunk_size, iterations_local, worker_index, work_function]() {
+      work_function(thread_dst_chunk, thread_src_chunk, thread_chunk_size, iterations_local, worker_index);
+    };
+  };
+  return run_parallel_test_common(dst, size, iterations, static_cast<int>(boundaries.size() - 1), timer, thread_name,
+                                  make_work, &boundaries);
 }
 
 /**
@@ -199,31 +306,44 @@ template<typename WorkFunction>
 double run_parallel_test(void *buffer, size_t size, int iterations, int num_threads, HighResTimer &timer,
                          WorkFunction work_function, const char *thread_name) {
   char* buffer_start = static_cast<char*>(buffer);
-  auto make_thread = [buffer_start, work_function, thread_name](size_t chunk_start_offset, size_t thread_chunk_size,
-                                                                 int iterations_local, std::mutex& start_mutex,
-                                                                 std::condition_variable& start_cv,
-                                                                 bool& start_flag) {
+  auto make_work = [buffer_start, work_function](size_t chunk_start_offset, size_t thread_chunk_size,
+                                                  int iterations_local,
+                                                  size_t /* worker_index */) {
     char* thread_chunk_start = buffer_start + chunk_start_offset;
-    return [thread_chunk_start, thread_chunk_size, iterations_local, &start_mutex, &start_cv, &start_flag,
-            work_function, thread_name]() {
-      // Set QoS for this worker thread
-      kern_return_t qos_ret = pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
-      if (qos_ret != KERN_SUCCESS) {
-        fprintf(stderr, "Warning: Failed to set QoS class for %s worker thread (code: %d)\n", thread_name, qos_ret);
-      }
-
-      // Wait for the main thread to start the timer before beginning work.
-      {
-        std::unique_lock<std::mutex> lk(start_mutex);
-        start_cv.wait(lk, [&start_flag] { return start_flag; });
-      }
-
-      // Execute the work function for this chunk with aligned pointer
+    return [thread_chunk_start, thread_chunk_size, iterations_local, work_function]() {
       work_function(thread_chunk_start, thread_chunk_size, iterations_local);
     };
   };
 
-  return run_parallel_test_common(buffer, size, iterations, num_threads, timer, make_thread);
+  return run_parallel_test_common(buffer, size, iterations, num_threads, timer, thread_name, make_work);
+}
+
+/**
+ * @brief Run single-buffer work that needs a stable per-worker output slot.
+ *
+ * The indexed callback can publish a worker-local checksum without a contended
+ * atomic. Callers combine those slots after this function returns, outside the
+ * measured interval.
+ */
+template<typename WorkFunction>
+double run_parallel_test_indexed(void* buffer, size_t size, int iterations,
+                                 int num_threads, HighResTimer& timer,
+                                 WorkFunction work_function,
+                                 const char* thread_name) {
+  char* buffer_start = static_cast<char*>(buffer);
+  auto make_work = [buffer_start, work_function](size_t chunk_start_offset,
+                                                  size_t thread_chunk_size,
+                                                  int iterations_local,
+                                                  size_t worker_index) {
+    char* thread_chunk_start = buffer_start + chunk_start_offset;
+    return [thread_chunk_start, thread_chunk_size, iterations_local, worker_index,
+            work_function]() {
+      work_function(thread_chunk_start, thread_chunk_size, iterations_local, worker_index);
+    };
+  };
+
+  return run_parallel_test_common(buffer, size, iterations, num_threads, timer,
+                                  thread_name, make_work);
 }
 
 /**
@@ -254,31 +374,19 @@ double run_parallel_test_copy(void *dst, void *src, size_t size, int iterations,
                                  WorkFunction work_function, const char *thread_name) {
   char* dst_start = static_cast<char*>(dst);
   char* src_start = static_cast<char*>(src);
-  auto make_thread = [dst_start, src_start, work_function,
-                      thread_name](size_t chunk_start_offset, size_t thread_chunk_size, int iterations_local,
-                                   std::mutex& start_mutex, std::condition_variable& start_cv, bool& start_flag) {
+  auto make_work = [dst_start, src_start, work_function](size_t chunk_start_offset,
+                                                         size_t thread_chunk_size,
+                                                         int iterations_local,
+                                                         size_t /* worker_index */) {
     char* thread_dst_chunk = dst_start + chunk_start_offset;
     char* thread_src_chunk = src_start + chunk_start_offset;
-    return [thread_dst_chunk, thread_src_chunk, thread_chunk_size, iterations_local, &start_mutex, &start_cv,
-            &start_flag, work_function, thread_name]() {
-      // Set QoS for this worker thread
-      kern_return_t qos_ret = pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
-      if (qos_ret != KERN_SUCCESS) {
-        fprintf(stderr, "Warning: Failed to set QoS class for %s worker thread (code: %d)\n", thread_name, qos_ret);
-      }
-
-      // Wait for the main thread to start the timer before beginning work.
-      {
-        std::unique_lock<std::mutex> lk(start_mutex);
-        start_cv.wait(lk, [&start_flag] { return start_flag; });
-      }
-
-      // Execute the work function for this chunk with aligned pointers
+    return [thread_dst_chunk, thread_src_chunk, thread_chunk_size, iterations_local,
+            work_function]() {
       work_function(thread_dst_chunk, thread_src_chunk, thread_chunk_size, iterations_local);
     };
   };
 
-  return run_parallel_test_common(dst, size, iterations, num_threads, timer, make_thread);
+  return run_parallel_test_common(dst, size, iterations, num_threads, timer, thread_name, make_work);
 }
 
 #endif // PARALLEL_TEST_FRAMEWORK_H

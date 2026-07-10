@@ -26,8 +26,7 @@
  * Output features:
  * - Individual pattern results with percentage comparisons to baseline
  * - Statistical analysis across multiple loops (average, percentiles, stddev)
- * - Efficiency metrics (sequential coherence, prefetcher effectiveness,
- *   cache thrashing potential, TLB pressure)
+ * - Explicit unavailable statuses and robust repeated-loop summaries
  * - Formatted tables with appropriate precision and units
  */
 #include "pattern_benchmark/pattern_benchmark.h"
@@ -45,11 +44,17 @@
 // Output Formatting Functions
 // ============================================================================
 
-// Format percentage difference from baseline
-static std::string format_percentage(double baseline, double value) {
+// Format percentage difference from a measured baseline.
+static std::string format_percentage(const PatternMeasurement& baseline,
+                                     const PatternMeasurement& value) {
   using namespace Constants;
-  if (baseline == 0.0) return Messages::pattern_na();
-  double pct = ((value - baseline) / baseline) * 100.0;
+  if (!baseline.bandwidth_gb_s.has_value() || !value.bandwidth_gb_s.has_value() ||
+      *baseline.bandwidth_gb_s == 0.0) {
+    return {};
+  }
+  const double pct = ((*value.bandwidth_gb_s - *baseline.bandwidth_gb_s) /
+                      *baseline.bandwidth_gb_s) *
+                     100.0;
   std::ostringstream oss;
   oss << std::fixed << std::setprecision(PATTERN_PERCENTAGE_PRECISION);
   if (pct >= 0) {
@@ -60,117 +65,101 @@ static std::string format_percentage(double baseline, double value) {
   return oss.str();
 }
 
+static void print_measurement_line(const std::string& label,
+                                   const PatternMeasurement& measurement,
+                                   const PatternMeasurement* baseline = nullptr) {
+  std::cout << label;
+  if (measurement.status != PatternMeasurementStatus::Measured ||
+      !measurement.bandwidth_gb_s.has_value()) {
+    std::cout << Messages::pattern_measurement_unavailable(
+                     pattern_measurement_status_to_string(measurement.status),
+                     measurement.status_reason)
+              << "\n";
+    return;
+  }
+
+  std::cout << std::fixed << std::setprecision(Constants::PATTERN_BANDWIDTH_PRECISION)
+            << *measurement.bandwidth_gb_s << Messages::pattern_bandwidth_unit();
+  if (baseline != nullptr) {
+    std::cout << format_percentage(*baseline, measurement);
+  }
+  std::cout << "\n";
+}
+
 // Print sequential pattern results
 static void print_sequential_results(const PatternResults& results) {
-  using namespace Constants;
-  
-  // Sequential Forward (baseline)
   std::cout << Messages::pattern_sequential_forward() << "\n";
-  std::cout << Messages::pattern_read_label() << std::fixed << std::setprecision(PATTERN_BANDWIDTH_PRECISION) 
-            << results.forward_read_bw << Messages::pattern_bandwidth_unit_newline();
-  std::cout << Messages::pattern_write_label() << results.forward_write_bw << Messages::pattern_bandwidth_unit_newline();
-  std::cout << Messages::pattern_copy_label() << results.forward_copy_bw << Messages::pattern_bandwidth_unit_newline() << "\n";
-  
-  // Sequential Reverse
+  const PatternMeasurement& forward_read = get_pattern_measurement(
+      results, PatternKind::SequentialForward, PatternOperation::Read);
+  const PatternMeasurement& forward_write = get_pattern_measurement(
+      results, PatternKind::SequentialForward, PatternOperation::Write);
+  const PatternMeasurement& forward_copy = get_pattern_measurement(
+      results, PatternKind::SequentialForward, PatternOperation::Copy);
+  print_measurement_line(Messages::pattern_read_label(), forward_read);
+  print_measurement_line(Messages::pattern_write_label(), forward_write);
+  print_measurement_line(Messages::pattern_copy_label(), forward_copy);
+  std::cout << "\n";
+
   std::cout << Messages::pattern_sequential_reverse() << "\n";
-  std::cout << Messages::pattern_read_label() << results.reverse_read_bw << Messages::pattern_bandwidth_unit()
-            << format_percentage(results.forward_read_bw, results.reverse_read_bw) << "\n";
-  std::cout << Messages::pattern_write_label() << results.reverse_write_bw << Messages::pattern_bandwidth_unit()
-            << format_percentage(results.forward_write_bw, results.reverse_write_bw) << "\n";
-  std::cout << Messages::pattern_copy_label() << results.reverse_copy_bw << Messages::pattern_bandwidth_unit()
-            << format_percentage(results.forward_copy_bw, results.reverse_copy_bw) << "\n\n";
+  print_measurement_line(
+      Messages::pattern_read_label(),
+      get_pattern_measurement(results, PatternKind::SequentialReverse,
+                              PatternOperation::Read),
+      &forward_read);
+  print_measurement_line(
+      Messages::pattern_write_label(),
+      get_pattern_measurement(results, PatternKind::SequentialReverse,
+                              PatternOperation::Write),
+      &forward_write);
+  print_measurement_line(
+      Messages::pattern_copy_label(),
+      get_pattern_measurement(results, PatternKind::SequentialReverse,
+                              PatternOperation::Copy),
+      &forward_copy);
+  std::cout << "\n";
 }
 
 // Print strided pattern results
-static void print_strided_results(const PatternResults& results, const std::string& stride_name, 
-                                  double read_bw, double write_bw, double copy_bw) {
+static void print_strided_results(const PatternResults& results,
+                                  const std::string& stride_name,
+                                  PatternKind kind) {
   std::cout << Messages::pattern_strided(stride_name) << "\n";
-  std::cout << Messages::pattern_read_label() << read_bw << Messages::pattern_bandwidth_unit()
-            << format_percentage(results.forward_read_bw, read_bw) << "\n";
-  std::cout << Messages::pattern_write_label() << write_bw << Messages::pattern_bandwidth_unit()
-            << format_percentage(results.forward_write_bw, write_bw) << "\n";
-  std::cout << Messages::pattern_copy_label() << copy_bw << Messages::pattern_bandwidth_unit()
-            << format_percentage(results.forward_copy_bw, copy_bw) << "\n\n";
+  print_measurement_line(
+      Messages::pattern_read_label(),
+      get_pattern_measurement(results, kind, PatternOperation::Read),
+      &get_pattern_measurement(results, PatternKind::SequentialForward,
+                               PatternOperation::Read));
+  print_measurement_line(
+      Messages::pattern_write_label(),
+      get_pattern_measurement(results, kind, PatternOperation::Write),
+      &get_pattern_measurement(results, PatternKind::SequentialForward,
+                               PatternOperation::Write));
+  print_measurement_line(
+      Messages::pattern_copy_label(),
+      get_pattern_measurement(results, kind, PatternOperation::Copy),
+      &get_pattern_measurement(results, PatternKind::SequentialForward,
+                               PatternOperation::Copy));
+  std::cout << "\n";
 }
 
 // Print random pattern results
 static void print_random_results(const PatternResults& results) {
   std::cout << Messages::pattern_random_uniform() << "\n";
-  std::cout << Messages::pattern_read_label() << results.random_read_bw << Messages::pattern_bandwidth_unit()
-            << format_percentage(results.forward_read_bw, results.random_read_bw) << "\n";
-  std::cout << Messages::pattern_write_label() << results.random_write_bw << Messages::pattern_bandwidth_unit()
-            << format_percentage(results.forward_write_bw, results.random_write_bw) << "\n";
-  std::cout << Messages::pattern_copy_label() << results.random_copy_bw << Messages::pattern_bandwidth_unit()
-            << format_percentage(results.forward_copy_bw, results.random_copy_bw) << "\n\n";
-}
-
-// Calculate pattern efficiency metrics
-static void calculate_efficiency_metrics(const PatternResults& results,
-                                         double& seq_coherence,
-                                         double& prefetch_effectiveness,
-                                         double& cache_thrashing,
-                                         double& tlb_pressure) {
-  using namespace Constants;
-  
-  double forward_total = results.forward_read_bw + results.forward_write_bw + results.forward_copy_bw;
-  double reverse_total = results.reverse_read_bw + results.reverse_write_bw + results.reverse_copy_bw;
-  double strided_64_total = results.strided_64_read_bw + results.strided_64_write_bw + results.strided_64_copy_bw;
-  double strided_4096_total = results.strided_4096_read_bw + results.strided_4096_write_bw + results.strided_4096_copy_bw;
-  double random_total = results.random_read_bw + results.random_write_bw + results.random_copy_bw;
-  
-  // Sequential coherence: ratio of reverse to forward
-  seq_coherence = (reverse_total / forward_total) * 100.0;
-  
-  // Prefetcher effectiveness: ratio of strided 64B to forward (cache line stride should be well-prefetched)
-  prefetch_effectiveness = (strided_64_total / forward_total) * 100.0;
-  
-  // Cache thrashing potential: based on strided 4096B performance (page stride causes more misses)
-  cache_thrashing = (strided_4096_total / forward_total) * 100.0;
-  
-  // TLB pressure: based on random vs strided 4096B (random has more TLB misses)
-  tlb_pressure = (random_total / strided_4096_total) * 100.0;
-}
-
-// Get cache thrashing level string
-static const std::string& get_cache_thrashing_level(double cache_thrashing) {
-  using namespace Constants;
-  if (cache_thrashing > PATTERN_CACHE_THRASHING_HIGH_THRESHOLD) {
-    return Messages::pattern_cache_thrashing_low();
-  } else if (cache_thrashing > PATTERN_CACHE_THRASHING_MEDIUM_THRESHOLD) {
-    return Messages::pattern_cache_thrashing_medium();
-  } else {
-    return Messages::pattern_cache_thrashing_high();
-  }
-}
-
-// Get TLB pressure level string
-static const std::string& get_tlb_pressure_level(double tlb_pressure) {
-  using namespace Constants;
-  if (tlb_pressure > PATTERN_TLB_PRESSURE_MINIMAL_THRESHOLD) {
-    return Messages::pattern_tlb_pressure_minimal();
-  } else if (tlb_pressure > PATTERN_TLB_PRESSURE_MODERATE_THRESHOLD) {
-    return Messages::pattern_tlb_pressure_moderate();
-  } else {
-    return Messages::pattern_tlb_pressure_high();
-  }
-}
-
-// Print pattern efficiency analysis
-static void print_efficiency_analysis(const PatternResults& results) {
-  using namespace Constants;
-  
-  double seq_coherence, prefetch_effectiveness, cache_thrashing, tlb_pressure;
-  calculate_efficiency_metrics(results, seq_coherence, prefetch_effectiveness, 
-                                cache_thrashing, tlb_pressure);
-  
-  std::cout << Messages::pattern_efficiency_analysis() << "\n";
-  std::cout << "- " << Messages::pattern_sequential_coherence() << " " << std::fixed 
-            << std::setprecision(PATTERN_PERCENTAGE_PRECISION) << seq_coherence << "%\n";
-  std::cout << "- " << Messages::pattern_prefetcher_effectiveness() << " " << prefetch_effectiveness << "%\n";
-  std::cout << "- " << Messages::pattern_cache_thrashing_potential() << " " 
-            << get_cache_thrashing_level(cache_thrashing) << "\n";
-  std::cout << "- " << Messages::pattern_tlb_pressure() << " " 
-            << get_tlb_pressure_level(tlb_pressure) << "\n";
+  print_measurement_line(
+      Messages::pattern_read_label(),
+      get_pattern_measurement(results, PatternKind::Random, PatternOperation::Read),
+      &get_pattern_measurement(results, PatternKind::SequentialForward,
+                               PatternOperation::Read));
+  print_measurement_line(
+      Messages::pattern_write_label(),
+      get_pattern_measurement(results, PatternKind::Random, PatternOperation::Write),
+      &get_pattern_measurement(results, PatternKind::SequentialForward,
+                               PatternOperation::Write));
+  print_measurement_line(
+      Messages::pattern_copy_label(),
+      get_pattern_measurement(results, PatternKind::Random, PatternOperation::Copy),
+      &get_pattern_measurement(results, PatternKind::SequentialForward,
+                               PatternOperation::Copy));
   std::cout << "\n";
 }
 
@@ -181,96 +170,33 @@ void print_pattern_results(const PatternResults& results) {
   
   // Print all pattern results
   print_sequential_results(results);
-  print_strided_results(results, Messages::pattern_cache_line_64b(), 
-                        results.strided_64_read_bw, 
-                        results.strided_64_write_bw, 
-                        results.strided_64_copy_bw);
-  print_strided_results(results, Messages::pattern_page_4096b(), 
-                        results.strided_4096_read_bw, 
-                        results.strided_4096_write_bw, 
-                        results.strided_4096_copy_bw);
+  print_strided_results(results, Messages::pattern_cache_line_64b(),
+                        PatternKind::Strided64);
+  print_strided_results(results, Messages::pattern_page_4096b(),
+                        PatternKind::Strided4096);
   print_strided_results(results, Messages::pattern_page_16384b(),
-                        results.strided_16384_read_bw,
-                        results.strided_16384_write_bw,
-                        results.strided_16384_copy_bw);
+                        PatternKind::Strided16384);
   print_strided_results(results, Messages::pattern_superpage_2mb(),
-                        results.strided_2mb_read_bw,
-                        results.strided_2mb_write_bw,
-                        results.strided_2mb_copy_bw);
+                        PatternKind::Strided2MiB);
   print_random_results(results);
-  
-  // Print efficiency analysis
-  print_efficiency_analysis(results);
 }
 
 // ============================================================================
 // Pattern Statistics Functions
 // ============================================================================
 
-// Structure to hold calculated statistics (average, min, max, percentiles, stddev)
-struct PatternStatisticsData {
-  double average;
-  double min;
-  double max;
-  double median;    // P50
-  double p90;
-  double p95;
-  double p99;
-  double stddev;
-};
-
-// Calculate statistics (average, min, max, percentiles, stddev) from a vector of values
-static PatternStatisticsData calculate_pattern_statistics(const std::vector<double> &values) {
-  if (values.empty()) {
-    return {0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
-  }
-
-  double sum = std::accumulate(values.begin(), values.end(), 0.0);
-  double avg = sum / values.size();
-  double min_val = *std::min_element(values.begin(), values.end());
-  double max_val = *std::max_element(values.begin(), values.end());
-
-  // Sort copy for percentiles
-  std::vector<double> sorted = values;
-  std::sort(sorted.begin(), sorted.end());
-  size_t n = sorted.size();
-
-  // Helper function for percentile calculation (linear interpolation)
-  auto percentile = [&sorted, n](double p) -> double {
-    if (n == 0) return 0.0;
-    if (n == 1) return sorted[0];
-    double index = p * (n - 1);
-    size_t lower = static_cast<size_t>(index);
-    size_t upper = lower + 1;
-    if (upper >= n) return sorted[n - 1];
-    double weight = index - lower;
-    return sorted[lower] * (1.0 - weight) + sorted[upper] * weight;
-  };
-
-  // Calculate percentiles
-  double median = percentile(0.50);  // P50
-  double p90 = percentile(0.90);
-  double p95 = percentile(0.95);
-  double p99 = percentile(0.99);
-
-  // Stddev (using sample standard deviation with Bessel's correction)
-  double variance = 0.0;
-  for (double v : values) variance += (v - avg) * (v - avg);
-  double stddev_val = (n > 1) ? std::sqrt(variance / (n - 1)) : 0.0;
-
-  return {avg, min_val, max_val, median, p90, p95, p99, stddev_val};
-}
-
 // Print statistics for a pattern type (read, write, copy)
 static void print_pattern_type_statistics(const std::string &pattern_name,
                                           const std::vector<double> &read_bw,
                                           const std::vector<double> &write_bw,
-                                          const std::vector<double> &copy_bw) {
+                                          const std::vector<double> &copy_bw,
+                                          double cv_threshold_pct,
+                                          std::vector<std::string>& noise_warnings) {
   if (read_bw.empty() && write_bw.empty() && copy_bw.empty()) {
     return;
   }
   
-  std::cout << Messages::statistics_cache_bandwidth_header(pattern_name) << std::endl;
+  std::cout << Messages::statistics_pattern_bandwidth_header(pattern_name) << std::endl;
   
   if (!read_bw.empty()) {
     PatternStatisticsData read_stats = calculate_pattern_statistics(read_bw);
@@ -281,6 +207,14 @@ static void print_pattern_type_statistics(const std::string &pattern_name,
     std::cout << "    " << Messages::statistics_p95(read_stats.p95, Constants::PATTERN_BANDWIDTH_PRECISION) << std::endl;
     std::cout << "    " << Messages::statistics_p99(read_stats.p99, Constants::PATTERN_BANDWIDTH_PRECISION) << std::endl;
     std::cout << "    " << Messages::statistics_stddev(read_stats.stddev, Constants::PATTERN_BANDWIDTH_PRECISION) << std::endl;
+    std::cout << "    " << Messages::statistics_coefficient_of_variation(
+                                  read_stats.coefficient_of_variation_pct)
+              << std::endl;
+    if (read_stats.coefficient_of_variation_pct > cv_threshold_pct) {
+      noise_warnings.push_back(Messages::warning_pattern_measurement_noisy(
+          pattern_name + " read", read_stats.coefficient_of_variation_pct,
+          cv_threshold_pct));
+    }
     std::cout << "    " << Messages::statistics_min(read_stats.min, Constants::PATTERN_BANDWIDTH_PRECISION) << std::endl;
     std::cout << "    " << Messages::statistics_max(read_stats.max, Constants::PATTERN_BANDWIDTH_PRECISION) << std::endl;
   }
@@ -294,6 +228,14 @@ static void print_pattern_type_statistics(const std::string &pattern_name,
     std::cout << "    " << Messages::statistics_p95(write_stats.p95, Constants::PATTERN_BANDWIDTH_PRECISION) << std::endl;
     std::cout << "    " << Messages::statistics_p99(write_stats.p99, Constants::PATTERN_BANDWIDTH_PRECISION) << std::endl;
     std::cout << "    " << Messages::statistics_stddev(write_stats.stddev, Constants::PATTERN_BANDWIDTH_PRECISION) << std::endl;
+    std::cout << "    " << Messages::statistics_coefficient_of_variation(
+                                  write_stats.coefficient_of_variation_pct)
+              << std::endl;
+    if (write_stats.coefficient_of_variation_pct > cv_threshold_pct) {
+      noise_warnings.push_back(Messages::warning_pattern_measurement_noisy(
+          pattern_name + " write", write_stats.coefficient_of_variation_pct,
+          cv_threshold_pct));
+    }
     std::cout << "    " << Messages::statistics_min(write_stats.min, Constants::PATTERN_BANDWIDTH_PRECISION) << std::endl;
     std::cout << "    " << Messages::statistics_max(write_stats.max, Constants::PATTERN_BANDWIDTH_PRECISION) << std::endl;
   }
@@ -307,6 +249,14 @@ static void print_pattern_type_statistics(const std::string &pattern_name,
     std::cout << "    " << Messages::statistics_p95(copy_stats.p95, Constants::PATTERN_BANDWIDTH_PRECISION) << std::endl;
     std::cout << "    " << Messages::statistics_p99(copy_stats.p99, Constants::PATTERN_BANDWIDTH_PRECISION) << std::endl;
     std::cout << "    " << Messages::statistics_stddev(copy_stats.stddev, Constants::PATTERN_BANDWIDTH_PRECISION) << std::endl;
+    std::cout << "    " << Messages::statistics_coefficient_of_variation(
+                                  copy_stats.coefficient_of_variation_pct)
+              << std::endl;
+    if (copy_stats.coefficient_of_variation_pct > cv_threshold_pct) {
+      noise_warnings.push_back(Messages::warning_pattern_measurement_noisy(
+          pattern_name + " copy", copy_stats.coefficient_of_variation_pct,
+          cv_threshold_pct));
+    }
     std::cout << "    " << Messages::statistics_min(copy_stats.min, Constants::PATTERN_BANDWIDTH_PRECISION) << std::endl;
     std::cout << "    " << Messages::statistics_max(copy_stats.max, Constants::PATTERN_BANDWIDTH_PRECISION) << std::endl;
   }
@@ -323,6 +273,7 @@ void print_pattern_statistics(int loop_count, const PatternStatistics& stats) {
   // Print statistics header
   std::cout << Messages::statistics_header(loop_count) << std::endl;
   std::cout << std::fixed;
+  std::vector<std::string> noise_warnings;
 
   // Display Sequential Forward (baseline) statistics
   std::string forward_name = Messages::pattern_sequential_forward();
@@ -332,7 +283,9 @@ void print_pattern_statistics(int loop_count, const PatternStatistics& stats) {
   print_pattern_type_statistics(forward_name, 
                                  stats.all_forward_read_bw,
                                  stats.all_forward_write_bw,
-                                 stats.all_forward_copy_bw);
+                                 stats.all_forward_copy_bw,
+                                 PATTERN_STREAMING_CV_WARNING_PCT,
+                                 noise_warnings);
   std::cout << "\n";
 
   // Display Sequential Reverse statistics
@@ -343,7 +296,9 @@ void print_pattern_statistics(int loop_count, const PatternStatistics& stats) {
   print_pattern_type_statistics(reverse_name,
                                  stats.all_reverse_read_bw,
                                  stats.all_reverse_write_bw,
-                                 stats.all_reverse_copy_bw);
+                                 stats.all_reverse_copy_bw,
+                                 PATTERN_STREAMING_CV_WARNING_PCT,
+                                 noise_warnings);
   std::cout << "\n";
 
   // Display Strided 64B statistics
@@ -354,7 +309,9 @@ void print_pattern_statistics(int loop_count, const PatternStatistics& stats) {
   print_pattern_type_statistics(strided_64_name,
                                  stats.all_strided_64_read_bw,
                                  stats.all_strided_64_write_bw,
-                                 stats.all_strided_64_copy_bw);
+                                 stats.all_strided_64_copy_bw,
+                                 PATTERN_STREAMING_CV_WARNING_PCT,
+                                 noise_warnings);
   std::cout << "\n";
 
   // Display Strided 4096B statistics
@@ -365,7 +322,9 @@ void print_pattern_statistics(int loop_count, const PatternStatistics& stats) {
   print_pattern_type_statistics(strided_4096_name,
                                  stats.all_strided_4096_read_bw,
                                  stats.all_strided_4096_write_bw,
-                                 stats.all_strided_4096_copy_bw);
+                                 stats.all_strided_4096_copy_bw,
+                                 PATTERN_SPARSE_CV_WARNING_PCT,
+                                 noise_warnings);
   std::cout << "\n";
 
   // Display Strided 16384B statistics
@@ -376,7 +335,9 @@ void print_pattern_statistics(int loop_count, const PatternStatistics& stats) {
   print_pattern_type_statistics(strided_16384_name,
                                  stats.all_strided_16384_read_bw,
                                  stats.all_strided_16384_write_bw,
-                                 stats.all_strided_16384_copy_bw);
+                                 stats.all_strided_16384_copy_bw,
+                                 PATTERN_SPARSE_CV_WARNING_PCT,
+                                 noise_warnings);
   std::cout << "\n";
 
   // Display Strided 2MB statistics
@@ -387,7 +348,9 @@ void print_pattern_statistics(int loop_count, const PatternStatistics& stats) {
   print_pattern_type_statistics(strided_2mb_name,
                                  stats.all_strided_2mb_read_bw,
                                  stats.all_strided_2mb_write_bw,
-                                 stats.all_strided_2mb_copy_bw);
+                                 stats.all_strided_2mb_copy_bw,
+                                 PATTERN_SPARSE_CV_WARNING_PCT,
+                                 noise_warnings);
   std::cout << "\n";
 
   // Display Random Uniform statistics
@@ -398,8 +361,14 @@ void print_pattern_statistics(int loop_count, const PatternStatistics& stats) {
   print_pattern_type_statistics(random_name,
                                  stats.all_random_read_bw,
                                  stats.all_random_write_bw,
-                                 stats.all_random_copy_bw);
+                                 stats.all_random_copy_bw,
+                                 PATTERN_SPARSE_CV_WARNING_PCT,
+                                 noise_warnings);
   
   // Print a final separator after statistics
   std::cout << Messages::statistics_footer() << std::endl;
+  std::cout.flush();
+  for (const std::string& warning : noise_warnings) {
+    std::cerr << Messages::warning_prefix() << warning << std::endl;
+  }
 }

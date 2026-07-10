@@ -38,6 +38,9 @@
 #include "core/config/constants.h"
 #include "third_party/nlohmann/json.hpp"   // JSON library
 
+#include <string>
+#include <unistd.h>
+
 // Helper function to add bandwidth results to JSON
 // Adds read, write, and copy bandwidth with values and statistics if applicable
 void add_bandwidth_results(nlohmann::json& json_obj, 
@@ -126,6 +129,38 @@ nlohmann::json build_config_json(const BenchmarkConfig& config, const char* mode
   config_json[JsonKeys::TOTAL_THREADS] = config.num_threads;
   config_json[JsonKeys::USE_CUSTOM_CACHE_SIZE] = config.use_custom_cache_size;
   config_json[JsonKeys::USE_NON_CACHEABLE] = config.use_non_cacheable;
+
+  if (std::string(mode_name) == Constants::PATTERNS_JSON_MODE_NAME) {
+    config_json["pattern_schema_version"] =
+        Constants::PATTERN_JSON_SCHEMA_VERSION;
+    config_json["methodology_version"] =
+        Constants::PATTERN_METHODOLOGY_VERSION;
+    config_json["pattern_seed"] = std::to_string(config.pattern_seed);
+    config_json["pattern_seed_source"] =
+        config.user_specified_pattern_seed ? "user" : "generated";
+    config_json["pattern_seed_encoding"] = "uint64-decimal-string";
+    config_json["pattern_pass_policy"] = config.user_specified_iterations
+                                              ? "explicit-iterations"
+                                              : "automatic-duration-calibration";
+    config_json["calibration_target_seconds"] =
+        Constants::PATTERN_CALIBRATION_TARGET_SECONDS;
+    config_json["calibration_window_min_seconds"] =
+        Constants::PATTERN_CALIBRATION_MIN_SECONDS;
+    config_json["calibration_window_max_seconds"] =
+        Constants::PATTERN_CALIBRATION_MAX_SECONDS;
+    config_json["calibration_max_corrections"] =
+        Constants::PATTERN_CALIBRATION_MAX_CORRECTIONS;
+    config_json["warmup_semantics"] = "steady-state-same-shape";
+    config_json["pattern_execution_order_policy"] =
+        "cyclic-latin-square-across-count-loops";
+    config_json["operation_execution_order_policy"] =
+        "fixed-read-write-copy-with-operation-specific-warmup";
+    config_json["native_page_size_bytes"] = static_cast<size_t>(getpagesize());
+    config_json["qos_policy"] = "best-effort-scheduler-hint-no-core-pinning";
+    config_json["thread_selection_policy"] =
+        config.user_specified_threads ? "explicit-request-capped-to-detected-cores"
+                                      : "detected-core-count-default";
+  }
   
   if (config.use_custom_cache_size) {
     config_json[JsonKeys::CUSTOM_CACHE_SIZE_BYTES] = config.custom_cache_size_bytes;
