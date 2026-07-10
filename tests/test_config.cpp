@@ -35,6 +35,8 @@ TEST(ConfigTest, DefaultValues) {
   EXPECT_FALSE(config.user_specified_tlb_seed);
   EXPECT_EQ(config.pattern_seed, 0u);
   EXPECT_FALSE(config.user_specified_pattern_seed);
+  EXPECT_EQ(config.benchmark_seed, 0u);
+  EXPECT_FALSE(config.user_specified_benchmark_seed);
   EXPECT_EQ(config.custom_cache_size_kb_ll, -1);
   EXPECT_FALSE(config.use_custom_cache_size);
 }
@@ -442,6 +444,26 @@ TEST(ConfigTest, ParsePatternsGeneratesSeedWhenOmitted) {
   EXPECT_EQ(parse_arguments(2, const_cast<char**>(argv), config), EXIT_SUCCESS);
   EXPECT_NE(config.pattern_seed, 0u);
   EXPECT_FALSE(config.user_specified_pattern_seed);
+}
+
+TEST(ConfigTest, ParseBenchmarkWithExplicitSeedSucceeds) {
+  BenchmarkConfig config;
+  const char* argv[] = {"program", "--benchmark", "--seed",
+                        "18446744073709551615"};
+
+  EXPECT_EQ(parse_arguments(4, const_cast<char**>(argv), config), EXIT_SUCCESS);
+  EXPECT_EQ(config.benchmark_seed, std::numeric_limits<uint64_t>::max());
+  EXPECT_TRUE(config.user_specified_benchmark_seed);
+  EXPECT_FALSE(config.user_specified_pattern_seed);
+}
+
+TEST(ConfigTest, ParseBenchmarkGeneratesSeedWhenOmitted) {
+  BenchmarkConfig config;
+  const char* argv[] = {"program", "--benchmark"};
+
+  EXPECT_EQ(parse_arguments(2, const_cast<char**>(argv), config), EXIT_SUCCESS);
+  EXPECT_NE(config.benchmark_seed, 0u);
+  EXPECT_FALSE(config.user_specified_benchmark_seed);
 }
 
 TEST(ConfigTest, ParsePatternsDefaultsToDetectedCoreCount) {

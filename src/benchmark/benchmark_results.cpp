@@ -39,6 +39,7 @@
 #include "benchmark/benchmark_runner.h" // BenchmarkResults
 #include "benchmark/benchmark_executor.h" // TimingResults
 #include "core/config/constants.h"
+#include "output/console/messages/messages_api.h"
 #include <limits>  // std::numeric_limits
 #include <cmath>   // std::isnan, std::isinf
 
@@ -54,6 +55,58 @@ int calculate_cache_iterations_saturated(int iterations) {
   }
 
   return iterations * Constants::CACHE_ITERATIONS_MULTIPLIER;
+}
+
+void set_bandwidth_measurements(size_t buffer_size,
+                                int iterations,
+                                double read_time,
+                                double write_time,
+                                double copy_time,
+                                BenchmarkMeasurementStatus read_status,
+                                BenchmarkMeasurementStatus write_status,
+                                BenchmarkMeasurementStatus copy_status,
+                                BenchmarkMeasurement& read_measurement,
+                                BenchmarkMeasurement& write_measurement,
+                                BenchmarkMeasurement& copy_measurement) {
+  double read_bandwidth = 0.0;
+  double write_bandwidth = 0.0;
+  double copy_bandwidth = 0.0;
+  calculate_single_bandwidth(buffer_size, iterations, read_time, write_time, copy_time,
+                             read_bandwidth, write_bandwidth, copy_bandwidth);
+
+  auto set_one = [buffer_size, iterations](BenchmarkMeasurementStatus status,
+                                           double bandwidth,
+                                           double elapsed_seconds,
+                                           bool is_copy,
+                                           BenchmarkMeasurement& measurement) {
+    measurement.status = status;
+    measurement.passes = iterations > 0 ? static_cast<size_t>(iterations) : 0;
+    if (iterations > 0 && buffer_size <= std::numeric_limits<size_t>::max() /
+                                               static_cast<size_t>(iterations)) {
+      const size_t base_payload = buffer_size * static_cast<size_t>(iterations);
+      if (!is_copy || base_payload <= std::numeric_limits<size_t>::max() /
+                                         Constants::COPY_OPERATION_MULTIPLIER) {
+        measurement.exact_payload_bytes =
+            is_copy ? base_payload * Constants::COPY_OPERATION_MULTIPLIER : base_payload;
+      }
+    }
+
+    if (status != BenchmarkMeasurementStatus::Measured) {
+      measurement.value.reset();
+      return;
+    }
+    if (bandwidth <= 0.0 || !std::isfinite(bandwidth) || elapsed_seconds <= 0.0 ||
+        !std::isfinite(elapsed_seconds)) {
+      set_measurement_unavailable(measurement, BenchmarkMeasurementStatus::Invalid,
+                                  Messages::benchmark_reason_invalid_bandwidth_measurement());
+      return;
+    }
+    set_measurement_value(measurement, bandwidth, elapsed_seconds);
+  };
+
+  set_one(read_status, read_bandwidth, read_time, false, read_measurement);
+  set_one(write_status, write_bandwidth, write_time, false, write_measurement);
+  set_one(copy_status, copy_bandwidth, copy_time, true, copy_measurement);
 }
 
 }  // namespace
@@ -182,29 +235,44 @@ void calculate_single_bandwidth(size_t buffer_size, int iterations,
 void calculate_bandwidth_results(const BenchmarkConfig& config, const TimingResults& timings,
                                  BenchmarkResults& results) {
   // Main memory bandwidth calculations
-  calculate_single_bandwidth(config.buffer_size, config.iterations,
-                             timings.total_read_time, timings.total_write_time, timings.total_copy_time,
-                             results.read_bw_gb_s, results.write_bw_gb_s, results.copy_bw_gb_s);
+  set_bandwidth_measurements(config.buffer_size, config.iterations,
+                             timings.total_read_time, timings.total_write_time,
+                             timings.total_copy_time, timings.total_read_status,
+                             timings.total_write_status, timings.total_copy_status,
+                             results.main_read_bandwidth, results.main_write_bandwidth,
+                             results.main_copy_bandwidth);
   
   // Cache bandwidth calculations
   int cache_iterations = calculate_cache_iterations_saturated(config.iterations);
   
   if (config.use_custom_cache_size) {
     if (config.custom_buffer_size > 0) {
-      calculate_single_bandwidth(config.custom_buffer_size, cache_iterations,
-                                 timings.custom_read_time, timings.custom_write_time, timings.custom_copy_time,
-                                 results.custom_read_bw_gb_s, results.custom_write_bw_gb_s, results.custom_copy_bw_gb_s);
+      set_bandwidth_measurements(config.custom_buffer_size, cache_iterations,
+                                 timings.custom_read_time, timings.custom_write_time,
+                                 timings.custom_copy_time, timings.custom_read_status,
+                                 timings.custom_write_status, timings.custom_copy_status,
+                                 results.custom_read_bandwidth,
+                                 results.custom_write_bandwidth,
+                                 results.custom_copy_bandwidth);
     }
   } else {
     if (config.l1_buffer_size > 0) {
-      calculate_single_bandwidth(config.l1_buffer_size, cache_iterations,
-                                 timings.l1_read_time, timings.l1_write_time, timings.l1_copy_time,
-                                 results.l1_read_bw_gb_s, results.l1_write_bw_gb_s, results.l1_copy_bw_gb_s);
+      set_bandwidth_measurements(config.l1_buffer_size, cache_iterations,
+                                 timings.l1_read_time, timings.l1_write_time,
+                                 timings.l1_copy_time, timings.l1_read_status,
+                                 timings.l1_write_status, timings.l1_copy_status,
+                                 results.l1_read_bandwidth,
+                                 results.l1_write_bandwidth,
+                                 results.l1_copy_bandwidth);
     }
     if (config.l2_buffer_size > 0) {
-      calculate_single_bandwidth(config.l2_buffer_size, cache_iterations,
-                                 timings.l2_read_time, timings.l2_write_time, timings.l2_copy_time,
-                                 results.l2_read_bw_gb_s, results.l2_write_bw_gb_s, results.l2_copy_bw_gb_s);
+      set_bandwidth_measurements(config.l2_buffer_size, cache_iterations,
+                                 timings.l2_read_time, timings.l2_write_time,
+                                 timings.l2_copy_time, timings.l2_read_status,
+                                 timings.l2_write_status, timings.l2_copy_status,
+                                 results.l2_read_bandwidth,
+                                 results.l2_write_bandwidth,
+                                 results.l2_copy_bandwidth);
     }
   }
 }

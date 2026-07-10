@@ -101,6 +101,21 @@ namespace Constants {
   constexpr int DEFAULT_ITERATIONS = 1000;  // Default number of iterations for R/W/Copy tests
   constexpr int DEFAULT_LOOP_COUNT = 1;     // Default number of full benchmark loops
   constexpr int DEFAULT_LATENCY_SAMPLE_COUNT = 1000;  // Default number of latency samples per test
+  constexpr double BENCHMARK_CALIBRATION_TARGET_SECONDS = 0.150;
+  constexpr double BENCHMARK_CALIBRATION_MIN_SECONDS = 0.100;
+  constexpr double BENCHMARK_CALIBRATION_MAX_SECONDS = 0.250;
+  constexpr size_t BENCHMARK_CALIBRATION_MAX_CORRECTIONS = 2;
+  constexpr size_t BENCHMARK_CALIBRATION_MIN_PILOT_BYTES = 8 * 1024 * 1024;
+  constexpr size_t BENCHMARK_CALIBRATION_MAX_PASSES = 1000000000;
+  constexpr double BENCHMARK_LATENCY_TARGET_SECONDS = 0.250;
+  constexpr double BENCHMARK_LATENCY_CALIBRATION_MIN_SECONDS = 0.100;
+  constexpr double BENCHMARK_LATENCY_CALIBRATION_MAX_SECONDS = 0.300;
+  constexpr size_t BENCHMARK_LATENCY_MIN_COMPLETE_CYCLES = 16;
+  constexpr size_t BENCHMARK_LATENCY_MAX_ACCESSES = 4000000000ULL;
+  constexpr double BENCHMARK_CV_WARNING_PCT = 7.5;
+  constexpr int BENCHMARK_JSON_SCHEMA_VERSION = 2;
+  constexpr const char* BENCHMARK_METHODOLOGY_VERSION =
+      "benchmark-v2-calibrated-seeded-balanced";
   constexpr size_t DEFAULT_SWEEP_MAX_RUNS = 256;  // Default guardrail for generated sweep combinations
   constexpr size_t DEFAULT_ANALYZE_TLB_SWEEP_MAX_RUNS = 16;  // Safer standalone TLB Cartesian sweep limit
 

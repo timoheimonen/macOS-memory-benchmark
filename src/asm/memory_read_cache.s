@@ -223,7 +223,9 @@ cache_read_loop_combine_sum:  // Final reduction and return value
     eor v0.16b, v0.16b, v1.16b
     eor v2.16b, v2.16b, v3.16b
     eor v0.16b, v0.16b, v2.16b
-    // Extract low 64b lane and fold byte-tail checksum (x12) into return value.
+    // Fold both 64-bit lanes and the byte-tail checksum into the return value.
     umov x0, v0.d[0]
+    umov x13, v0.d[1]
+    eor x0, x0, x13
     eor x0, x0, x12
     ret

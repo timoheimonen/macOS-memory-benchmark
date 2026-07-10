@@ -47,6 +47,8 @@ nlohmann::json calculate_json_statistics(const std::vector<double>& values) {
     stats["p95"] = 0.0;
     stats["p99"] = 0.0;
     stats["stddev"] = 0.0;
+    stats["coefficient_of_variation_pct"] = nullptr;
+    stats["median_absolute_deviation"] = 0.0;
     return stats;
   }
 
@@ -75,15 +77,33 @@ nlohmann::json calculate_json_statistics(const std::vector<double>& values) {
   // Use n-1 for sample standard deviation (Bessel's correction)
   // Handle n == 1 case to avoid division by zero (stddev is 0 for single value)
   double stddev = (n > 1) ? std::sqrt(variance / (n - 1)) : 0.0;
+  std::vector<double> absolute_deviations;
+  absolute_deviations.reserve(n);
+  const double median = percentile(0.50);
+  for (double value : values) {
+    absolute_deviations.push_back(std::abs(value - median));
+  }
+  std::sort(absolute_deviations.begin(), absolute_deviations.end());
+  const double mad = n % 2 == 0
+                         ? 0.5 * (absolute_deviations[n / 2 - 1] +
+                                  absolute_deviations[n / 2])
+                         : absolute_deviations[n / 2];
   
   stats["average"] = avg;
   stats["min"] = sorted[0];
   stats["max"] = sorted[n - 1];
-  stats["median"] = percentile(0.50);
+  stats["median"] = median;
   stats["p90"] = percentile(0.90);
   stats["p95"] = percentile(0.95);
   stats["p99"] = percentile(0.99);
   stats["stddev"] = stddev;
+  if (std::isfinite(avg) && avg != 0.0) {
+    stats["coefficient_of_variation_pct"] =
+        std::abs(stddev / avg) * 100.0;
+  } else {
+    stats["coefficient_of_variation_pct"] = nullptr;
+  }
+  stats["median_absolute_deviation"] = mad;
   
   return stats;
 }
@@ -158,4 +178,3 @@ bool parse_json_from_file(const std::string& file_path, nlohmann::json& result, 
   // Parse JSON from file content
   return parse_json_from_string(content.str(), result, error_message);
 }
-

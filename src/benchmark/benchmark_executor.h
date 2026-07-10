@@ -29,12 +29,23 @@
 #include <vector>   // std::vector
 #include <atomic>
 #include <cstdint>
+#include <functional>
+#include <string>
+
+#include "benchmark/benchmark_measurement.h"
 
 // Forward declarations
 struct BenchmarkBuffers;
 struct BenchmarkConfig;
 struct BenchmarkResults;
 struct HighResTimer;
+struct BenchmarkExecutionState;
+
+/** @brief Optional kernel-free fault seams for phase preparation tests. */
+struct BenchmarkExecutorTestHooks {
+  std::function<bool(const std::string&)> fail_phase_preparation;
+  std::function<bool(const std::string&)> fail_latency_chain_setup;
+};
 
 /**
  * @struct TimingResults
@@ -64,6 +75,23 @@ struct TimingResults {
   std::atomic<uint64_t> l1_read_checksum{0};     ///< L1 cache read checksum
   std::atomic<uint64_t> l2_read_checksum{0};      ///< L2 cache read checksum
   std::atomic<uint64_t> custom_read_checksum{0};   ///< Custom cache read checksum
+
+  BenchmarkMeasurementStatus total_read_status = BenchmarkMeasurementStatus::NotRun;
+  BenchmarkMeasurementStatus total_write_status = BenchmarkMeasurementStatus::NotRun;
+  BenchmarkMeasurementStatus total_copy_status = BenchmarkMeasurementStatus::NotRun;
+  BenchmarkMeasurementStatus total_latency_status = BenchmarkMeasurementStatus::NotRun;
+  BenchmarkMeasurementStatus l1_latency_status = BenchmarkMeasurementStatus::NotRun;
+  BenchmarkMeasurementStatus l2_latency_status = BenchmarkMeasurementStatus::NotRun;
+  BenchmarkMeasurementStatus custom_latency_status = BenchmarkMeasurementStatus::NotRun;
+  BenchmarkMeasurementStatus l1_read_status = BenchmarkMeasurementStatus::NotRun;
+  BenchmarkMeasurementStatus l1_write_status = BenchmarkMeasurementStatus::NotRun;
+  BenchmarkMeasurementStatus l1_copy_status = BenchmarkMeasurementStatus::NotRun;
+  BenchmarkMeasurementStatus l2_read_status = BenchmarkMeasurementStatus::NotRun;
+  BenchmarkMeasurementStatus l2_write_status = BenchmarkMeasurementStatus::NotRun;
+  BenchmarkMeasurementStatus l2_copy_status = BenchmarkMeasurementStatus::NotRun;
+  BenchmarkMeasurementStatus custom_read_status = BenchmarkMeasurementStatus::NotRun;
+  BenchmarkMeasurementStatus custom_write_status = BenchmarkMeasurementStatus::NotRun;
+  BenchmarkMeasurementStatus custom_copy_status = BenchmarkMeasurementStatus::NotRun;
 };
 
 /**
@@ -116,8 +144,9 @@ void run_cache_bandwidth_tests(const BenchmarkBuffers& buffers, const BenchmarkC
  * @param sample_count Number of samples to collect (0 = collect all)
  */
 void run_single_cache_latency_test(void* buffer, size_t buffer_size, size_t num_accesses,
-                                   HighResTimer& test_timer, double& lat_time_ns, double& latency_ns,
-                                   std::vector<double>* latency_samples = nullptr, int sample_count = 0);
+                                   HighResTimer& test_timer, double& lat_time_ns,
+                                   BenchmarkMeasurement& measurement,
+                                   int sample_count = 0);
 
 /**
  * @brief Run cache latency tests (L1, L2, or custom)
@@ -153,6 +182,8 @@ void run_main_memory_latency_test(const BenchmarkBuffers& buffers, const Benchma
  * (bandwidth and/or latency) and calculating results.
  */
 BenchmarkResults run_single_benchmark_loop(const BenchmarkBuffers& buffers, BenchmarkConfig& config, int loop,
-                                           HighResTimer& test_timer);
+                                           HighResTimer& test_timer,
+                                           BenchmarkExecutionState* execution_state = nullptr,
+                                           const BenchmarkExecutorTestHooks* test_hooks = nullptr);
 
 #endif // BENCHMARK_EXECUTOR_H

@@ -31,8 +31,16 @@ namespace Messages {
 
 // --- Statistics Messages ---
 std::string statistics_header(int loop_count) {
+  return statistics_header(loop_count, static_cast<size_t>(loop_count));
+}
+
+std::string statistics_header(int requested_loop_count, size_t measured_loop_count) {
   std::ostringstream oss;
-  oss << "\n--- Statistics Across " << loop_count << " Loops ---";
+  oss << "\n--- Statistics Across " << measured_loop_count << " Measured Loops";
+  if (measured_loop_count != static_cast<size_t>(requested_loop_count)) {
+    oss << " (" << requested_loop_count << " Requested)";
+  }
+  oss << " ---";
   return oss.str();
 }
 
@@ -113,6 +121,13 @@ std::string statistics_coefficient_of_variation(double value, int precision) {
   return oss.str();
 }
 
+std::string statistics_median_absolute_deviation(double value, int precision) {
+  std::ostringstream oss;
+  oss << std::fixed << std::setprecision(precision);
+  oss << "  Median absolute deviation: " << value;
+  return oss.str();
+}
+
 std::string statistics_cache_read() {
   return "  Read:";
 }
@@ -140,20 +155,27 @@ std::string statistics_median_p50_from_samples(double value, size_t sample_count
   return oss.str();
 }
 
+std::string statistics_pooled_sample_distribution(size_t sample_count) {
+  std::ostringstream oss;
+  oss << "    Pooled Separate Sample-Window Distribution (" << sample_count
+      << " samples):";
+  return oss.str();
+}
+
 std::string statistics_main_memory_latency_header() {
   return "\nMain Memory Latency (ns):";
 }
 
 std::string statistics_tlb_hit_latency_metric_name() {
-  return "TLB Hit Latency (ns)";
+  return "16 KiB Locality Latency (ns)";
 }
 
 std::string statistics_tlb_miss_latency_metric_name() {
-  return "TLB Miss Latency (ns)";
+  return "Global-Random Latency (ns)";
 }
 
 std::string statistics_page_walk_penalty_metric_name() {
-  return "Estimated Page-Walk Penalty (ns)";
+  return "Locality Latency Delta, Global - 16 KiB (ns)";
 }
 
 std::string statistics_footer() {

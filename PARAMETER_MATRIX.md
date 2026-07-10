@@ -1,6 +1,6 @@
 # Parameter Compatibility Matrix
 
-Version 0.57.0
+Working version 0.58.0
 
 ## All Flags
 
@@ -11,6 +11,7 @@ Version 0.57.0
 | `--iterations <n>` | Iterations for R/W/Copy tests |
 | `--buffer-size <MB>` | Main memory buffer size |
 | `--count <n>` | Number of benchmark loops |
+| `--seed <uint64>` | Reproducible benchmark/pattern/TLB workload seed |
 | `--latency-samples <n>` | Latency samples per test |
 | `--latency-stride-bytes <n>` | Latency pointer chain stride |
 | `--latency-chain-mode <mode>` | Chain construction policy |
@@ -42,9 +43,10 @@ Version 0.57.0
 
 | Modifier | Compatible | Notes |
 |----------|------------|-------|
-| `--iterations <n>` | ✅ | |
+| `--iterations <n>` | ✅ | Exact pass override; omission enables automatic duration calibration |
 | `--buffer-size <MB>` | ✅ | |
 | `--count <n>` | ✅ | |
+| `--seed <uint64>` | ✅ | Reproduces workload/schedule metadata across count loops; generated once when omitted |
 | `--latency-samples <n>` | ✅ | |
 | `--latency-stride-bytes <n>` | ✅ | Pointer-aligned and no larger than system page size; exact page-size divisibility is not required |
 | `--latency-chain-mode <mode>` | ✅ | Box modes require `--latency-tlb-locality-kb > 0`; `global-random` works with locality `0` |
@@ -66,6 +68,7 @@ Version 0.57.0
 |----------|------------|-------|
 | `--buffer-size <MB>` | ✅ | |
 | `--count <n>` | ✅ | |
+| `--seed <uint64>` | ✅ | Reproduces random workload; generated once when omitted |
 | `--latency-samples <n>` | Accepted, ignored | Value must parse; pattern mode has no latency path |
 | `--latency-stride-bytes <n>` | Accepted, ignored | Value must validate; pattern mode has no latency pointer chain |
 | `--latency-chain-mode <mode>` | Accepted, ignored | Mode/locality combination must validate; pattern mode has no latency pointer chain |
@@ -78,7 +81,7 @@ Version 0.57.0
 | `--output <file>` | ✅ | |
 | `--sweep <key=a,b>` | ✅ | Requires `--output`; supported keys: `buffer-size`, `threads` |
 | `--sweep-max-runs <n>` | ✅ with `--sweep` | Default `256` |
-| `--iterations <n>` | ✅ | Used by pattern benchmark execution loops |
+| `--iterations <n>` | ✅ | Exact pass override; omission enables automatic duration calibration |
 
 ### Modifiers with `--analyze-tlb` (standalone mode)
 

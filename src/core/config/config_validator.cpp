@@ -230,6 +230,12 @@ int validate_config(BenchmarkConfig& config) {
               << std::endl;
     return EXIT_FAILURE;
   }
+  if (config.user_specified_benchmark_seed && !config.run_benchmark) {
+    std::cerr << Messages::error_prefix()
+              << Messages::error_seed_requires_benchmark_or_patterns()
+              << std::endl;
+    return EXIT_FAILURE;
+  }
 
   // Error: Validate latency stride settings.
   if (config.latency_stride_bytes == 0) {

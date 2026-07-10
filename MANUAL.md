@@ -138,12 +138,14 @@ Use `0` when you explicitly want stronger translation effects in the measured pa
 When `--latency-tlb-locality-kb` is omitted in regular benchmark mode, main-memory latency output also runs an
 automatic comparison and prints:
 
-- TLB hit latency (16 KB locality)
-- TLB miss latency (global random locality, `0`)
-- Estimated page-walk penalty (`miss - hit`)
+- 16 KiB locality latency
+- Global-random latency
+- Locality latency delta (`global - 16 KiB`)
 
-Each automatic comparison point is measured as P50 over three complete pointer-chase passes. This reduces the impact of
-a single IRQ-inflated timing pass while keeping every candidate pass continuous.
+The comparison uses three paired rounds. Each round rebuilds both layouts from recorded derived seeds, alternates which
+layout is measured first, and retains the same-round delta. The reported delta is the median of those paired deltas, not
+the difference of independently grouped medians. It combines locality, cache, and translation effects and is not an
+isolated page-walk cost; use `--analyze-tlb` for controlled translation-boundary conclusions.
 
 If you explicitly set `--latency-tlb-locality-kb` (including `16` or `0`), this auto comparison is skipped.
 
@@ -267,14 +269,13 @@ forms such as `-buffersize` or `-benchmark` are invalid.
 
 #### `--iterations <count>`
 
-- Bandwidth loop iterations
-- Default: `1000`
+- Exact measured bandwidth pass count when explicitly supplied
 - Positive integer
 - Not allowed with `--only-latency`
-- In `--patterns`, automatic calibration is used when this option is omitted; the default value is not forced as the
-  measured pass count
-- In `--patterns`, an explicitly supplied value is the measured pass count for each read/write/copy sample and bypasses
-  the calibration pilot; operation-specific warmup still runs
+- In `--benchmark` and `--patterns`, omission enables an excluded same-shape pilot and automatic calibration toward
+  150 ms (100–250 ms intended window, at most two corrections)
+- Standard calibration is target- and operation-specific and its resolved pass count is reused across `--count` loops
+- An explicit value bypasses pilot/corrections but not the operation-specific warmup
 
 #### `--count <count>`
 
@@ -302,6 +303,11 @@ forms such as `-buffersize` or `-benchmark` are invalid.
 - **Required** to run standard memory benchmark (bandwidth + latency)
 - Mutually exclusive with `--patterns`
 - Can be combined with `--only-bandwidth`, `--only-latency`, `--cache-size`, `--threads`, and other modifier flags
+- Rotates enabled phase groups and read/write/copy order in deterministic cyclic schedules across `--count` loops
+- Uses continuous latency headlines calibrated toward 250 ms, accepted in a 100–300 ms window, and rounded to at least
+  16 complete pointer-chain cycles. If the cycle minimum itself exceeds 300 ms, metadata reports
+  `minimum-complete-cycles-exceed-window` instead of treating it as an ordinary calibration miss
+- Reuses calibrated work and seeded logical chains so repeated loops vary runtime conditions rather than workload shape
 - Running without this flag (or `--patterns`) shows help and exits
 
 #### `--patterns`
@@ -362,7 +368,10 @@ forms such as `-buffersize` or `-benchmark` are invalid.
 
 #### `--seed <uint64>`
 
-- Applies only to `--patterns` or `--analyze-tlb`
+- Applies to `--benchmark`, `--patterns`, or `--analyze-tlb`
+- In `--benchmark`, derives domain-separated seeds for main, L1, L2, custom, sampling, and both automatic-locality
+  layouts; repeated loops rebuild equivalent logical chains and schedules
+- A standard seed reproduces workload/schedule metadata, not performance values or macOS thread placement
 - In `--patterns`, selects the deterministic unique/no-replacement permutation prefix of valid 32-byte-aligned random
   offsets; the same resolved seed reproduces the workload, and every `--count` loop repeats it
 - In `--patterns`, one unsigned 64-bit seed is generated once for the command when omitted
@@ -390,7 +399,8 @@ forms such as `-buffersize` or `-benchmark` are invalid.
 - Sample count per latency test
 - Default: `1000`
 - Positive integer
-- More samples improve percentile stability at the cost of run time
+- Samples are collected in a separate pass whose windows continue from the preceding window's terminal pointer
+- Sample count/granularity does not define or change the separate continuous headline calculation
 
 #### `--latency-stride-bytes <bytes>`
 
@@ -417,7 +427,8 @@ forms such as `-buffersize` or `-benchmark` are invalid.
 - Default: `1024`
 - `0` disables locality mode (global random chain)
 - Non-zero values must be exact multiples of system page size
-- In regular benchmark mode, explicitly setting this option disables automatic TLB hit/miss comparison lines
+- In regular benchmark mode, explicitly setting this option disables the automatic paired locality comparison
+- When omitted, the paired comparison uses conservative locality terminology and does not claim an isolated page walk
 
 ### Cache and memory hint controls
 
@@ -652,14 +663,14 @@ memory_benchmark --benchmark --only-latency --buffer-size 1024 --latency-samples
 memory_benchmark --benchmark --only-latency --buffer-size 1024 --latency-samples 5000 --latency-tlb-locality-kb 16 --latency-chain-mode same-random-in-box --count 10 --output lat_same_box.json
 ```
 
-### Regular benchmark with automatic DRAM TLB breakdown
+### Regular benchmark with automatic locality comparison
 
 ```bash
 memory_benchmark --benchmark --count 1
 ```
 
-This prints `Average latency` plus auto-derived `TLB hit latency`, `TLB miss latency`, and
-`Estimated page-walk penalty` when `--latency-tlb-locality-kb` is not explicitly set.
+This prints the continuous `Average latency` headline plus the paired `16 KiB locality latency`, `Global-random
+latency`, and `Locality latency delta (global - 16 KiB)` when `--latency-tlb-locality-kb` is not explicitly set.
 
 ### Canonical standalone TLB analysis
 
@@ -726,12 +737,12 @@ Average latency in ns. Lower is better.
 
 When `--latency-tlb-locality-kb` is not explicitly provided, this section also prints:
 
-- `TLB hit latency (16 KB locality)`
-- `TLB miss latency (global random locality)`
-- `Estimated page-walk penalty (miss - hit)`
+- `16 KiB locality latency`
+- `Global-random latency`
+- `Locality latency delta (global - 16 KiB)`
 
-The auto-TLB hit/miss values are P50 values from three complete comparison passes per point. The main `Average latency`
-headline remains one continuous pointer-chase pass.
+The locality values come from three alternating-order paired rounds and the delta is the median same-round difference.
+The main `Average latency` headline remains a separate continuous pointer-chase pass. Sampling is another separate pass.
 
 ### 4) Cache bandwidth and latency
 
@@ -759,14 +770,20 @@ Includes values such as:
 - Coefficient of variation (CV)
 - Min / Max
 
-When automatic TLB comparison is active (you did not explicitly set `--latency-tlb-locality-kb`),
+When the automatic locality comparison is active (you did not explicitly set `--latency-tlb-locality-kb`),
 statistics also include dedicated sections for:
 
-- `TLB Hit Latency (ns)`
-- `TLB Miss Latency (ns)`
-- `Estimated Page-Walk Penalty (ns)`
+- `16 KiB Locality Latency (ns)`
+- `Global-Random Latency (ns)`
+- `Locality Latency Delta, Global - 16 KiB (ns)`
+
+The locality delta is the median same-round difference from paired, alternating-order measurements. It is not an
+isolated page-table-walk penalty; use `--analyze-tlb` for controlled translation analysis.
 
 For noisy systems, prioritize median and P95/P99 rather than single fastest/slowest values.
+
+Standard repeated-loop headline aggregates emit a warning when CV exceeds 7.5%. This hardware-validated threshold is
+diagnostic only: the benchmark does not filter outliers or automatically invalidate the aggregate.
 
 Pattern statistics emit noise warnings above a pattern-specific CV threshold: 5% for sequential and 64-byte stride,
 and 10% for 4096-byte, 16 KiB, 2 MiB, and random patterns. Treat a warning as a request to repeat under steadier
@@ -798,16 +815,35 @@ The large-locality result remains cache-hot paired translation stress, not DRAM 
 
 ```json
 {
-  "configuration": { ... },
+  "configuration": {
+    "mode": "benchmark",
+    "benchmark_schema_version": 2,
+    "methodology_version": "benchmark-v2-calibrated-seeded-balanced",
+    "benchmark_seed": "123456789",
+    "bandwidth_work_policy": "automatic-duration-calibration"
+  },
   "execution_time_sec": 427.5,
+  "status": "complete",
+  "planned_loops": 5,
+  "completed_loops": 5,
+  "planned_measurements": 75,
+  "completed_measurements": 75,
+  "results_complete": true,
+  "loops": [ ... ],
   "main_memory": { ... },
   "cache": { ... },
   "timestamp": "2026-03-09T14:57:56Z",
-  "version": "0.55.4"
+  "version": "0.58.0"
 }
 ```
 
-Note: The `configuration` block includes fields such as `latency_chain_mode` (the resolved pointer-chain mode used), `latency_tlb_locality_kb`, `use_custom_cache_size`, and other runtime settings. For the complete configuration schema, inspect a sample output file or examine the configuration builder code.
+Schema 2 stores exact uint64 seeds as decimal strings. Every per-loop measurement has status/reason, nullable value,
+exact passes/accesses/payload, requested/effective workers, seed, pilot/final duration, calibration quality, and schedule
+position. Only `measured` values enter aggregates. One measured loop is its own headline; multiple loop headlines use
+median P50. Statistics include average, P90/P95/P99, sample standard deviation, CV, MAD, min, and max. Standard output
+is atomically checkpointed after completed loops; consumers must require `results_complete: true` when completeness is
+mandatory. Bandwidth QoS metadata includes created workers plus per-worker success/failure counts; latency carries the
+main-thread outcome. These fields describe a best-effort scheduler hint, never hard core pinning.
 
 ### Pattern benchmark JSON shape
 
@@ -937,89 +973,52 @@ the complete work plan. They can differ from `accesses_per_pass * passes` and mu
 
 ### Latency payload structure (current)
 
-Latency values are structured objects, not scalars. The example below uses real values from a benchmark run.
-
-When `--latency-stride-bytes` is explicitly set (with a non-default value), latency sections also include `chain_diagnostics`.
+Standard schema 2 separates per-loop continuous headlines, pooled sample-window distributions, and paired locality
+comparisons. The values below illustrate structure only.
 
 ```json
 "latency": {
-  "auto_tlb_breakdown": {
-    "page_walk_penalty_ns": {
-      "statistics": {
-        "average": 80.94071304166667,
-        "max": 81.21026791666667,
-        "median": 80.93019520833334,
-        "min": 80.71570645833333,
-        "p90": 81.10030966666667,
-        "p95": 81.15528879166668,
-        "p99": 81.19927209166667,
-        "stddev": 0.1762455963793484
-      },
-      "values": [80.71570645833333, 80.91202333333334, 80.93019520833334, 81.21026791666667, 80.93537229166668]
+  "headline_ns": {
+    "status": "measured",
+    "value": 84.2,
+    "headline_semantics": "median-p50-across-loop-headlines",
+    "values": [83.7, 84.2, 85.0],
+    "statistics": {
+      "median": 84.2,
+      "coefficient_of_variation_pct": 0.8,
+      "median_absolute_deviation": 0.5
     },
-    "tlb_hit_ns": {
-      "statistics": {
-        "average": 15.289083916666666,
-        "max": 16.014336875,
-        "median": 15.122818125,
-        "min": 15.072767291666667,
-        "p90": 15.668637291666668,
-        "p95": 15.841487083333334,
-        "p99": 15.97976691666667,
-        "stddev": 0.4065809440444531
-      },
-      "values": [15.072767291666667, 16.014336875, 15.085409375, 15.122818125, 15.150087916666667]
-    },
-    "tlb_miss_ns": {
-      "statistics": {
-        "average": 96.22979695833334,
-        "max": 96.92636020833334,
-        "median": 96.08546020833334,
-        "min": 95.78847375,
-        "p90": 96.68905054166666,
-        "p95": 96.807705375,
-        "p99": 96.90262924166667,
-        "stddev": 0.4351283262178906
-      },
-      "values": [95.78847375, 96.92636020833334, 96.01560458333334, 96.33308604166666, 96.08546020833334]
+    "measurements": [
+      {
+        "status": "measured",
+        "value": 83.7,
+        "access_count": 33554432,
+        "chain_node_count": 2097152,
+        "complete_chain_cycles": 16,
+        "seed": "987654321",
+        "pilot_elapsed_seconds": 0.018,
+        "elapsed_seconds": 0.25,
+        "duration_quality": "within-target-window"
+      }
+    ],
+    "pooled_sample_distribution": {
+      "semantics": "pooled-separate-sample-window-distribution",
+      "values_ns": [],
+      "loop_ranges": [
+        {"benchmark_loop_index": 0, "start_index": 0, "sample_count": 1000}
+      ]
     }
   },
-  "average_ns": {
-    "statistics": {
-      "average": 15.289083916666666,
-      "max": 16.014336875,
-      "median": 15.122818125,
-      "min": 15.072767291666667,
-      "p90": 15.668637291666668,
-      "p95": 15.841487083333334,
-      "p99": 15.97976691666667,
-      "stddev": 0.4065809440444531
-    },
-    "values": [15.072767291666667, 16.014336875, 15.085409375, 15.122818125, 15.150087916666667]
-  },
-  "chain_diagnostics": {
-    "page_size_bytes": 16384,
-    "pointer_count": 1057030,
-    "stride_bytes": 128,
-    "unique_pages_touched": 65536
-  },
-  "samples_ns": {
-    "statistics": {
-      "average": 15.289083916666666,
-      "max": 16.014336875,
-      "median": 15.122818125,
-      "min": 15.072767291666667,
-      "p90": 15.668637291666668,
-      "p95": 15.841487083333334,
-      "p99": 15.97976691666667,
-      "stddev": 0.4065809440444531
-    },
-    "values": [15.072767291666667, 16.014336875, 15.085409375, 15.122818125, 15.150087916666667]
+  "automatic_locality_comparison": {
+    "locality_16k_latency_ns": {"value": 23.1, "measurements": []},
+    "global_random_latency_ns": {"value": 91.4, "measurements": []},
+    "locality_latency_delta_ns": {"value": 68.3, "measurements": []}
   }
 }
 ```
 
-**Source**: Real values extracted from `results/0.53.7/MacMiniM4_benchmark.json` (5-run sample)
+An interrupted, skipped, invalid, or failed measurement has `value: null` and an explicit reason. The locality delta's
+per-loop `samples_ns` are same-round `global - 16 KiB` differences; they must not be interpreted as isolated page walks.
 
 ### TLB analysis JSON (analyze mode)
 
@@ -1243,11 +1242,14 @@ python3 -m json.tool results.json
 # Main memory read median
 jq '.main_memory.bandwidth.read_gb_s.statistics.median' results.json
 
-# Main memory latency P95 from sample distribution
-jq '.main_memory.latency.samples_ns.statistics.p95' results.json
+# Main memory latency P95 from the pooled, separate sample pass
+jq '.main_memory.latency.headline_ns.pooled_sample_distribution.statistics.p95' results.json
 
-# Auto TLB miss latency median (when auto comparison is active)
-jq '.main_memory.latency.auto_tlb_breakdown.tlb_miss_ns.statistics.median' results.json
+# Paired automatic locality delta median
+jq '.main_memory.latency.automatic_locality_comparison.locality_latency_delta_ns.statistics.median' results.json
+
+# Reject incomplete standard output
+jq 'select(.results_complete == true)' results.json
 
 # Pattern random read median and status
 jq '{status: .patterns.random.bandwidth.read_gb_s.status, median: .patterns.random.bandwidth.read_gb_s.statistics.median_p50}' patterns.json

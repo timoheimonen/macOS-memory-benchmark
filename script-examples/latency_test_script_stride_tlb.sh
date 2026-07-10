@@ -131,8 +131,15 @@ for path in sorted(json_dir.glob("*.json")):
         cache = data.get("cache", {}) or {}
         custom = cache.get("custom", {}) or {}
         latency = custom.get("latency", {}) or {}
-        samples = latency.get("samples_ns", {}) or {}
-        stats = samples.get("statistics", {}) or {}
+        if cfg.get("benchmark_schema_version") == 2:
+            if not data.get("results_complete", False):
+                raise RuntimeError("incomplete benchmark result")
+            headline = latency.get("headline_ns", {}) or {}
+            samples = headline.get("pooled_sample_distribution", {}) or {}
+            stats = samples.get("statistics", {}) or {}
+        else:
+            samples = latency.get("samples_ns", {}) or {}
+            stats = samples.get("statistics", {}) or {}
         diag = latency.get("chain_diagnostics", {}) or {}
 
         rows.append({

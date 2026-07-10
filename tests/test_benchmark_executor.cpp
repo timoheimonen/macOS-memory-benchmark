@@ -23,6 +23,8 @@
 #include <cstdint>
 #include <cstdlib>
 #include <cmath>
+#include <stdexcept>
+#include <utility>
 #include <vector>
 #include <thread>
 #include <unistd.h>
@@ -168,10 +170,19 @@ TEST(BenchmarkExecutorTest, MainMemoryLatencyCollectsSamplesWhenConfiguredIntegr
   run_main_memory_latency_test(buffers, config, timings, results, *timer_opt);
 
   EXPECT_GT(timings.total_lat_time_ns, 0.0);
-  EXPECT_EQ(results.latency_samples.size(), static_cast<size_t>(config.latency_sample_count));
-  EXPECT_TRUE(results.has_auto_tlb_breakdown);
-  EXPECT_GT(results.tlb_hit_latency_ns, 0.0);
-  EXPECT_GT(results.tlb_miss_latency_ns, 0.0);
+  EXPECT_EQ(results.main_latency.samples.size(),
+            static_cast<size_t>(config.latency_sample_count));
+  ASSERT_TRUE(results.locality_16k_latency.is_measured());
+  ASSERT_TRUE(results.global_random_latency.is_measured());
+  EXPECT_GT(*results.locality_16k_latency.value, 0.0);
+  EXPECT_GT(*results.global_random_latency.value, 0.0);
+  for (const BenchmarkMeasurement* measurement : {
+           &results.main_latency, &results.locality_16k_latency,
+           &results.global_random_latency, &results.locality_latency_delta}) {
+    EXPECT_EQ(measurement->requested_threads, 1);
+    EXPECT_EQ(measurement->effective_threads, 1);
+    EXPECT_EQ(measurement->created_workers, 1);
+  }
 }
 
 TEST(BenchmarkExecutorTest, MainMemoryLatencySkipsAutoTlbBreakdownWhenLocalitySpecifiedIntegration) {
@@ -191,10 +202,15 @@ TEST(BenchmarkExecutorTest, MainMemoryLatencySkipsAutoTlbBreakdownWhenLocalitySp
   run_main_memory_latency_test(buffers, config, timings, results, *timer_opt);
 
   EXPECT_GT(timings.total_lat_time_ns, 0.0);
-  EXPECT_FALSE(results.has_auto_tlb_breakdown);
-  EXPECT_EQ(results.tlb_hit_latency_ns, 0.0);
-  EXPECT_EQ(results.tlb_miss_latency_ns, 0.0);
-  EXPECT_EQ(results.page_walk_penalty_ns, 0.0);
+  EXPECT_EQ(results.locality_16k_latency.status,
+            BenchmarkMeasurementStatus::NotRun);
+  EXPECT_EQ(results.global_random_latency.status,
+            BenchmarkMeasurementStatus::NotRun);
+  EXPECT_EQ(results.locality_latency_delta.status,
+            BenchmarkMeasurementStatus::NotRun);
+  EXPECT_FALSE(results.locality_16k_latency.value.has_value());
+  EXPECT_FALSE(results.global_random_latency.value.has_value());
+  EXPECT_FALSE(results.locality_latency_delta.value.has_value());
 }
 
 TEST(BenchmarkExecutorTest, MainMemoryLatencySkipsWhenMainLatencyDisabledIntegration) {
@@ -220,5 +236,57 @@ TEST(BenchmarkExecutorTest, MainMemoryLatencySkipsWhenMainLatencyDisabledIntegra
   run_main_memory_latency_test(buffers, config, timings, results, *timer_opt);
 
   EXPECT_EQ(timings.total_lat_time_ns, 0.0);
-  EXPECT_TRUE(results.latency_samples.empty());
+  EXPECT_TRUE(results.main_latency.samples.empty());
+  EXPECT_EQ(results.main_latency.status, BenchmarkMeasurementStatus::NotRun);
+}
+
+TEST(BenchmarkExecutorTest, InjectedPreparationFailureCoversEveryPhaseBoundary) {
+  BenchmarkConfig config = build_base_config();
+  config.only_bandwidth = false;
+  config.only_latency = false;
+  BenchmarkBuffers unused_buffers;
+  auto timer = HighResTimer::create();
+  ASSERT_TRUE(timer.has_value());
+  const std::array<const char*, 4> phases = {
+      "main-bandwidth", "cache-bandwidth", "cache-latency", "main-latency"};
+
+  for (size_t phase_index = 0; phase_index < phases.size(); ++phase_index) {
+    const std::string failing_phase = phases[phase_index];
+    BenchmarkExecutorTestHooks hooks;
+    hooks.fail_phase_preparation = [&](const std::string& phase_name) {
+      return phase_name == failing_phase;
+    };
+    testing::internal::CaptureStderr();
+    EXPECT_THROW(run_single_benchmark_loop(
+                     unused_buffers, config, static_cast<int>(phase_index),
+                     *timer, nullptr, &hooks),
+                 std::runtime_error)
+        << failing_phase;
+    static_cast<void>(testing::internal::GetCapturedStderr());
+  }
+}
+
+TEST(BenchmarkExecutorTest, InjectedLatencyChainFailureCoversCacheAndMainPhases) {
+  BenchmarkConfig config = build_base_config();
+  config.only_bandwidth = false;
+  config.only_latency = false;
+  BenchmarkBuffers unused_buffers;
+  auto timer = HighResTimer::create();
+  ASSERT_TRUE(timer.has_value());
+
+  for (const auto& phase :
+       std::array<std::pair<const char*, int>, 2>{
+           std::pair<const char*, int>{"cache-latency", 2},
+           std::pair<const char*, int>{"main-latency", 3}}) {
+    BenchmarkExecutorTestHooks hooks;
+    hooks.fail_latency_chain_setup = [&](const std::string& phase_name) {
+      return phase_name == phase.first;
+    };
+    testing::internal::CaptureStderr();
+    EXPECT_THROW(run_single_benchmark_loop(unused_buffers, config, phase.second,
+                                           *timer, nullptr, &hooks),
+                 std::runtime_error)
+        << phase.first;
+    static_cast<void>(testing::internal::GetCapturedStderr());
+  }
 }

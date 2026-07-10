@@ -2,7 +2,7 @@
 
 ## 1. Scope and Status
 
-This document specifies the current implementation in this repository (version series `0.57.x`) for `memory_benchmark` on macOS Apple Silicon.
+This document specifies the current implementation in this repository (version series `0.58.x`) for `memory_benchmark` on macOS Apple Silicon.
 
 It is intentionally implementation-driven and reflects real behavior in code paths under `main.cpp`, `src/core`, `src/benchmark`, `src/pattern_benchmark`, `src/output`, and `src/asm`.
 
@@ -258,39 +258,39 @@ Adaptive warmup size (`warmup_internal.h`):
 
 - `min(buffer_size, max(64MB, 10% of buffer_size))`.
 
-## 10.1 Auto TLB Breakdown (when `latency_chain_mode == Auto`)
+## 10.1 Automatic Locality Comparison
 
-When the user selects or defaults to `latency_chain_mode=Auto`, the implementation runs two latency-chain passes to decompose memory latency into TLB-related components:
+When standard main-memory locality is not explicitly supplied, the executor runs three paired rounds comparing a
+16 KiB-locality chain with a global-random chain. The first-measured layout alternates by round. Both chains use recorded,
+domain-separated seeds and the calibrated complete-chain access count. Results retain both raw point values and the
+same-round `global - locality` deltas; the delta headline is the median of paired deltas.
 
-1. **TLB-hit pass**: Chain with 16 KB locality window (within typical TLB entry footprint).
-2. **Global-random pass**: Chain with global randomization (no locality).
-
-Results from both passes are stored in `BenchmarkResults` and `BenchmarkStatistics`:
-
-- `tlb_hit_latency_ns`: Average latency from 16 KB locality pass.
-- `tlb_miss_latency_ns`: Average latency from global-random pass.
-- `page_walk_penalty_ns`: `tlb_miss_latency_ns - tlb_hit_latency_ns` (approximate TLB miss cost).
-
-These breakdown metrics are optionally serialized to JSON under `main_memory.latency.auto_tlb_breakdown`.
+Schema 2 serializes these as `locality_16k_latency_ns`, `global_random_latency_ns`, and
+`locality_latency_delta_ns` under `main_memory.latency.automatic_locality_comparison`. The comparison does not isolate
+page-table walks and must not be used as a substitute for `--analyze-tlb`.
 
 ## 11. Standard Benchmark Execution
 
 Standard mode coordinator: `run_all_benchmarks` -> `run_single_benchmark_loop`.
 
-Per loop, conditional by flags:
-
-1. Main-memory bandwidth tests (read/write/copy).
-2. Cache bandwidth tests (L1/L2 or custom).
-3. Cache latency tests (L1/L2 or custom).
-4. Main-memory latency test.
+Enabled phase groups are main bandwidth, cache bandwidth, cache latency, and main latency. Their order rotates by outer
+loop index using a deterministic cyclic Latin schedule. Read/write/copy order rotates independently by loop. Each
+measurement records its phase and operation position.
 
 Important execution semantics:
 
 - Phase-local buffers are allocated and initialized immediately before each phase and released after the phase, reducing standard-mode peak footprint.
-- Cache bandwidth uses `iterations * CACHE_ITERATIONS_MULTIPLIER` (saturated) for stability.
+- `benchmark_work_plan` finalizes cache-line-aligned worker boundaries, effective workers, passes/accesses, and exact
+  payload before execution. Executors consume those boundaries unchanged; copy payload counts both read and write.
+- Omitted `--iterations` uses an excluded same-shape pilot to target 150 ms, with a 100–250 ms intended window and at
+  most two corrections. Explicit iterations are exact. Resolved per-target/per-operation work is reused across loops.
 - Cache bandwidth defaults to single-thread unless user explicitly provides `--threads`.
-- Main-memory latency headline is computed from one continuous chase pass.
-- If latency samples are enabled, sample collection runs in a separate pass.
+- All latency targets use one continuous headline pass calibrated toward 250 ms, evaluated against a 100–300 ms
+  window, and rounded to at least 16 complete chain cycles. A cycle-minimum-limited overrun is classified explicitly;
+  samples run separately and continue between windows.
+- One command-level seed derives target/layout seeds; repeated loops rebuild equivalent logical chains.
+- Each operation has explicit measurement status and optional value. Interrupted/incomplete work is excluded from
+  aggregate vectors. Standard JSON is atomically checkpointed after completed loops.
 
 ## 12. Pattern Benchmark Execution
 
@@ -365,8 +365,13 @@ Computed from collected value vectors:
 - **P95**: 95th percentile value.
 - **P99**: 99th percentile value.
 - **Stddev**: Standard deviation.
+- **CV**: Sample standard deviation divided by the absolute mean, as a percentage when the mean is valid.
+- **MAD**: Median absolute deviation from the median.
 - **Min**: Minimum observed value.
 - **Max**: Maximum observed value.
+
+Standard repeated-loop aggregates set a diagnostic quality warning above 7.5% CV. Values are retained without outlier
+filtering, and the warning does not by itself invalidate the result.
 
 ## 16. Console Output Contract
 
@@ -384,7 +389,8 @@ Contract highlights:
 
 JSON writer API (`src/output/json/json_output/json_output.cpp`):
 
-- Standard mode: `configuration`, `execution_time_sec`, `main_memory`, `cache`, `timestamp`, `version`.
+- Standard mode schema 2: `configuration`, `execution_time_sec`, completion counters/status, `results_complete`,
+  per-loop `loops`, `main_memory`, `cache`, `timestamp`, and `version`.
 - Pattern mode: `configuration`, `execution_time_sec`, `patterns`, `timestamp`, `version`.
 - TLB analysis mode: `configuration`, `execution_time_sec`, `tlb_analysis`, `timestamp`, `version`.
 - Sweep mode: `configuration.mode = "sweep"`, `configuration.base_mode`, `configuration.sweep_parameters`, `runs[].result`, `execution_time_sec`, `timestamp`, `version`. For `--analyze-tlb --sweep`, `base_mode` is `analyze_tlb` and each `runs[].result` contains a TLB analysis payload.
@@ -397,24 +403,27 @@ In addition to standard fields (buffer size, iterations, loop count, thread coun
 - `use_latency_tlb_locality` (boolean): Whether TLB-locality window is in use.
 - `latency_tlb_locality_bytes` (number): TLB-locality window size in bytes.
 - `latency_tlb_locality_kb` (number): TLB-locality window size in KB.
+- `benchmark_schema_version` (number): `2`.
+- `methodology_version` (string): `benchmark-v2-calibrated-seeded-balanced`.
+- `benchmark_seed` (string): exact uint64 decimal string plus source/encoding fields.
+- Calibration targets/windows and phase/operation schedule policies.
 
 ### 17.2 Main-memory latency keys
 
-- `main_memory.latency.average_ns.values` (array): Latency sample values per loop.
-- `main_memory.latency.average_ns.statistics` (object, optional): Aggregate stats (average, median, P90, P95, P99, stddev, min, max).
-- `main_memory.latency.samples_ns.values` (array, optional): Per-sample latency values.
-- `main_memory.latency.samples_ns.statistics` (object, optional): Per-sample aggregate statistics.
-- `main_memory.latency.chain_diagnostics` (object): Pointer chain metadata (pointer_count, unique_pages_touched, page_size_bytes, stride_bytes).
-- `main_memory.latency.auto_tlb_breakdown` (object, optional): TLB breakdown when `latency_chain_mode==Auto`:
-  - `tlb_hit_ns.values` (array): TLB-hit latency per loop.
-  - `tlb_miss_ns.values` (array): Global-random latency per loop.
-  - `page_walk_penalty_ns.values` (array): Approximate TLB miss cost.
+- `main_memory.latency.headline_ns`: status, median-or-single headline, loop values, robust statistics, measurement
+  records, quality, and optional pooled separate-sample distribution with loop boundaries.
+- `main_memory.latency.automatic_locality_comparison.locality_16k_latency_ns`.
+- `main_memory.latency.automatic_locality_comparison.global_random_latency_ns`.
+- `main_memory.latency.automatic_locality_comparison.locality_latency_delta_ns`.
+- `loops[].measurements`: nullable per-loop status/value plus exact work, worker, seed, timing, calibration, and order
+  metadata.
 
 ### 17.3 Structure conventions
 
 - Ordered JSON is used for stable key order.
-- Bandwidth metrics are nested as arrays in `values` with optional `statistics`.
-- Latency is nested as described in §17.2.
+- Aggregate `value` is a single measured loop or median P50; `values` contains only measured loop headlines.
+- Statistics include average, median, P90/P95/P99, sample stddev, CV, MAD, min, and max.
+- Unavailable measurements use `null` plus status/reason, never numeric zero.
 
 ### 17.4 Path behavior
 

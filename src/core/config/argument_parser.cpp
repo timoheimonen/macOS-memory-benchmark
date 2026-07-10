@@ -683,6 +683,7 @@ int parse_arguments(int argc, char* argv[], BenchmarkConfig& config) {
   bool threads_seen = false;
   bool output_seen = false;
   bool seed_seen = false;
+  uint64_t parsed_general_seed = 0;
   bool sweep_max_runs_seen = false;
 
   for (int i = 1; i < argc; ++i) {
@@ -843,8 +844,7 @@ int parse_arguments(int argc, char* argv[], BenchmarkConfig& config) {
           if (parsed_characters != seed_value.size()) {
             throw std::invalid_argument("must be an unsigned 64-bit integer");
           }
-          config.pattern_seed = static_cast<uint64_t>(parsed_seed);
-          config.user_specified_pattern_seed = true;
+          parsed_general_seed = static_cast<uint64_t>(parsed_seed);
         } else {
           throw std::invalid_argument(Messages::error_missing_value(OPT_SEED_LONG));
         }
@@ -925,8 +925,18 @@ int parse_arguments(int argc, char* argv[], BenchmarkConfig& config) {
         static_cast<size_t>(requested_latency_tlb_locality_kb_ll) * Constants::BYTES_PER_KB;
   }
 
-  if (config.run_patterns && !seed_seen) {
+  if (seed_seen) {
+    if (config.run_benchmark) {
+      config.benchmark_seed = parsed_general_seed;
+      config.user_specified_benchmark_seed = true;
+    } else {
+      config.pattern_seed = parsed_general_seed;
+      config.user_specified_pattern_seed = true;
+    }
+  } else if (config.run_patterns) {
     config.pattern_seed = generate_seed();
+  } else if (config.run_benchmark) {
+    config.benchmark_seed = generate_seed();
   }
 
   return EXIT_SUCCESS;  // All arguments parsed successfully

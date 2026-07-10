@@ -140,6 +140,9 @@ nlohmann::json build_config_json(const BenchmarkConfig& config, const char* mode
 nlohmann::json build_main_memory_json(const BenchmarkConfig& config, const BenchmarkStatistics& stats);
 nlohmann::json build_cache_json(const BenchmarkConfig& config, const BenchmarkStatistics& stats);
 nlohmann::json build_patterns_json(const PatternStatistics& stats);
+void add_standard_benchmark_results(nlohmann::ordered_json& output,
+                                    const BenchmarkConfig& config,
+                                    const BenchmarkStatistics& stats);
 int write_json_to_file(const std::filesystem::path& file_path,
                        const nlohmann::ordered_json& json_output,
                        bool announce_success = true);
@@ -153,7 +156,10 @@ nlohmann::ordered_json build_pattern_results_json(const BenchmarkConfig& config,
 // Public API functions
 // Save benchmark results to JSON file
 // Returns EXIT_SUCCESS on success, EXIT_FAILURE on error
-int save_results_to_json(const BenchmarkConfig& config, const BenchmarkStatistics& stats, double total_execution_time_sec);
+int save_results_to_json(const BenchmarkConfig& config,
+                         const BenchmarkStatistics& stats,
+                         double total_execution_time_sec,
+                         bool announce_success = true);
 
 // Save pattern benchmark results to JSON file
 // Returns EXIT_SUCCESS on success, EXIT_FAILURE on error

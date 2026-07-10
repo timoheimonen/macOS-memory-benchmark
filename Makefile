@@ -46,11 +46,11 @@ CPP_SRCS_OUTPUT_CONSOLE_MESSAGES = output/console/messages/error_messages.cpp ou
 CPP_SRCS_UTILS = utils/utils.cpp utils/json_utils.cpp
 CPP_SRCS_SRC = $(CPP_SRCS_CORE_CONFIG) $(CPP_SRCS_CORE_MEMORY) $(CPP_SRCS_CORE_SIGNAL) $(CPP_SRCS_CORE_SYSTEM) $(CPP_SRCS_CORE_TIMING) $(CPP_SRCS_OUTPUT_CONSOLE) $(CPP_SRCS_OUTPUT_CONSOLE_MESSAGES) $(CPP_SRCS_UTILS)
 # Files in the src/benchmark subdirectory
-CPP_SRCS_BENCHMARK = bandwidth_tests.cpp latency_tests.cpp benchmark_runner.cpp benchmark_executor.cpp benchmark_results.cpp benchmark_statistics_collector.cpp tlb_analysis.cpp tlb_boundary_detector.cpp tlb_chain.cpp tlb_sweep_planner.cpp tlb_measurement_scheduler.cpp tlb_runtime_policy.cpp tlb_analysis_json.cpp core_to_core_latency_cli.cpp core_to_core_latency_runner.cpp core_to_core_latency_json.cpp core_to_core_sweep_runner.cpp sweep_runner.cpp
+CPP_SRCS_BENCHMARK = bandwidth_tests.cpp latency_tests.cpp benchmark_work_plan.cpp benchmark_runner.cpp benchmark_executor.cpp benchmark_results.cpp benchmark_statistics_collector.cpp tlb_analysis.cpp tlb_boundary_detector.cpp tlb_chain.cpp tlb_sweep_planner.cpp tlb_measurement_scheduler.cpp tlb_runtime_policy.cpp tlb_analysis_json.cpp core_to_core_latency_cli.cpp core_to_core_latency_runner.cpp core_to_core_latency_json.cpp core_to_core_sweep_runner.cpp sweep_runner.cpp
 # Files in the src/warmup subdirectory
 CPP_SRCS_WARMUP = basic_warmup.cpp latency_warmup.cpp cache_warmup.cpp pattern_warmup.cpp
 # Files in the src/output/json/json_output subdirectory
-CPP_SRCS_JSON_OUTPUT = output/json/json_output/builder.cpp output/json/json_output/main_memory.cpp output/json/json_output/cache.cpp output/json/json_output/patterns.cpp output/json/json_output/file_writer.cpp output/json/json_output/json_output.cpp
+CPP_SRCS_JSON_OUTPUT = output/json/json_output/builder.cpp output/json/json_output/main_memory.cpp output/json/json_output/cache.cpp output/json/json_output/standard.cpp output/json/json_output/patterns.cpp output/json/json_output/file_writer.cpp output/json/json_output/json_output.cpp
 # Files in the src/pattern_benchmark subdirectory
 CPP_SRCS_PATTERN_BENCHMARK = helpers.cpp validation.cpp pattern_work_plan.cpp pattern_coordinator.cpp pattern_statistics_manager.cpp execution_utils.cpp execution_strided.cpp execution_patterns.cpp output.cpp
 
@@ -88,9 +88,10 @@ OBJ_FILES = $(ALL_CPP_SRCS:.cpp=.o) $(ASM_SRCS:.s=.o)
 # Target executable name
 TARGET = memory_benchmark
 
-# Header file(s) that C++ files depend on (now in src/utils/)
-# If benchmark.h changes, recompile C++ files that include it
-HEADERS = $(SRC_DIR)/utils/benchmark.h
+# Header changes can alter shared configuration/result layouts. Rebuild C++
+# objects after any project header changes so incremental builds cannot mix
+# incompatible object layouts.
+HEADERS = $(shell find $(SRC_DIR) -type f -name '*.h')
 
 # Default target: build the executable
 all:
@@ -128,7 +129,7 @@ TEST_LIB_SRCS = $(filter-out main.cpp, $(ALL_CPP_SRCS))
 TEST_LIB_OBJS = $(filter-out main.o, $(OBJ_FILES))
 
 # Rule for compiling test files (must come before generic %.o rule)
-$(TEST_DIR)/%.o: $(TEST_DIR)/%.cpp
+$(TEST_DIR)/%.o: $(TEST_DIR)/%.cpp $(HEADERS)
 	@echo "Compiling test $< -> $@..."
 	$(CXX) $(TEST_CXXFLAGS) -c $< -o $@
 

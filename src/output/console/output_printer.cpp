@@ -25,8 +25,100 @@
 
 #include "core/config/version.h"  // SOFTVERSION
 #include "core/config/constants.h"  // Include constants for default values
+#include "core/config/config.h"
+#include "benchmark/benchmark_runner.h"
 #include "output/console/messages/messages_api.h"   // Include centralized messages
 #include "output/console/output_printer.h"  // Function declarations
+
+namespace {
+
+std::string unavailable_measurement(const std::string& label,
+                                    const BenchmarkMeasurement& measurement) {
+  return Messages::results_measurement_unavailable(
+      label, benchmark_measurement_status_to_string(measurement.status),
+      measurement.status_reason);
+}
+
+void print_cache_buffer_suffix(size_t buffer_size) {
+  if (buffer_size < 1024) {
+    std::cout << Messages::results_buffer_size_bytes(buffer_size) << std::endl;
+  } else if (buffer_size < 1024 * 1024) {
+    std::cout << Messages::results_buffer_size_kb(buffer_size / 1024.0) << std::endl;
+  } else {
+    std::cout << Messages::results_buffer_size_mb(
+                     buffer_size / (1024.0 * 1024.0))
+              << std::endl;
+  }
+}
+
+void print_cache_bandwidth_measurements(const BenchmarkMeasurement& read,
+                                        const BenchmarkMeasurement& write,
+                                        const BenchmarkMeasurement& copy,
+                                        size_t buffer_size) {
+  if (read.is_measured()) {
+    std::cout << Messages::results_cache_read_bandwidth(*read.value);
+  } else {
+    std::cout << unavailable_measurement("    Read ", read);
+  }
+  print_cache_buffer_suffix(buffer_size);
+
+  std::cout << (write.is_measured()
+                    ? Messages::results_cache_write_bandwidth(*write.value)
+                    : unavailable_measurement("    Write", write))
+            << std::endl;
+  std::cout << (copy.is_measured()
+                    ? Messages::results_cache_copy_bandwidth(*copy.value)
+                    : unavailable_measurement("    Copy ", copy))
+            << std::endl;
+}
+
+void print_cache_latency_measurement(const std::string& label,
+                                     const BenchmarkMeasurement& measurement,
+                                     size_t buffer_size) {
+  if (!measurement.is_measured()) {
+    std::cout << unavailable_measurement("  " + label, measurement);
+    print_cache_buffer_suffix(buffer_size);
+    return;
+  }
+
+  const double latency_ns = *measurement.value;
+  if (label == "Custom Cache") {
+    if (buffer_size < 1024) {
+      std::cout << Messages::results_cache_latency_custom_ns(latency_ns, buffer_size)
+                << std::endl;
+    } else if (buffer_size < 1024 * 1024) {
+      std::cout << Messages::results_cache_latency_custom_ns_kb(
+                       latency_ns, buffer_size / 1024.0)
+                << std::endl;
+    } else {
+      std::cout << Messages::results_cache_latency_custom_ns_mb(
+                       latency_ns, buffer_size / (1024.0 * 1024.0))
+                << std::endl;
+    }
+    return;
+  }
+
+  const bool is_l1 = label == "L1 Cache";
+  if (buffer_size < 1024) {
+    std::cout << (is_l1 ? Messages::results_cache_latency_l1_ns(latency_ns, buffer_size)
+                        : Messages::results_cache_latency_l2_ns(latency_ns, buffer_size))
+              << std::endl;
+  } else if (buffer_size < 1024 * 1024) {
+    std::cout << (is_l1 ? Messages::results_cache_latency_l1_ns_kb(
+                              latency_ns, buffer_size / 1024.0)
+                        : Messages::results_cache_latency_l2_ns_kb(
+                              latency_ns, buffer_size / 1024.0))
+              << std::endl;
+  } else {
+    std::cout << (is_l1 ? Messages::results_cache_latency_l1_ns_mb(
+                              latency_ns, buffer_size / (1024.0 * 1024.0))
+                        : Messages::results_cache_latency_l2_ns_mb(
+                              latency_ns, buffer_size / (1024.0 * 1024.0)))
+              << std::endl;
+  }
+}
+
+}  // namespace
 
 /**
  * @brief Displays program usage instructions via command-line arguments.
@@ -79,8 +171,6 @@ void print_configuration(size_t buffer_size, size_t buffer_size_mb, size_t total
                          const std::string &cpu_name, int perf_cores, int eff_cores, int num_threads,
                          bool only_bandwidth, bool only_latency, bool run_patterns,
                          bool user_specified_iterations) {
-  (void)only_bandwidth;
-
   // Print benchmark header and copyright/license info.
   std::cout << Messages::config_header(SOFTVERSION) << std::endl;
   std::cout << Messages::config_copyright() << std::endl;
@@ -105,9 +195,23 @@ void print_configuration(size_t buffer_size, size_t buffer_size_mb, size_t total
                        Constants::PATTERN_CALIBRATION_MIN_SECONDS,
                        Constants::PATTERN_CALIBRATION_MAX_SECONDS)
                 << std::endl;
+    } else if (!user_specified_iterations) {
+      std::cout << Messages::config_benchmark_iterations_auto(
+                       Constants::BENCHMARK_CALIBRATION_TARGET_SECONDS,
+                       Constants::BENCHMARK_CALIBRATION_MIN_SECONDS,
+                       Constants::BENCHMARK_CALIBRATION_MAX_SECONDS)
+                << std::endl;
     } else {
       std::cout << Messages::config_iterations(iterations) << std::endl;
     }
+  }
+  if (!only_bandwidth && !run_patterns) {
+    std::cout << Messages::config_latency_calibration(
+                     Constants::BENCHMARK_LATENCY_TARGET_SECONDS,
+                     Constants::BENCHMARK_LATENCY_CALIBRATION_MIN_SECONDS,
+                     Constants::BENCHMARK_LATENCY_CALIBRATION_MAX_SECONDS,
+                     Constants::BENCHMARK_LATENCY_MIN_COMPLETE_CYCLES)
+              << std::endl;
   }
   std::cout << Messages::config_loop_count(loop_count) << std::endl;
   // Display non-cacheable memory hints status.
@@ -164,143 +268,133 @@ void print_configuration(size_t buffer_size, size_t buffer_size_mb, size_t total
  * @param custom_read_bw_gb_s Custom cache read bandwidth in GB/s
  * @param custom_write_bw_gb_s Custom cache write bandwidth in GB/s
  * @param custom_copy_bw_gb_s Custom cache copy bandwidth in GB/s
- * @param has_auto_tlb_breakdown Whether automatic TLB hit/miss breakdown is available
- * @param tlb_hit_latency_ns TLB hit-biased latency in nanoseconds
- * @param tlb_miss_latency_ns TLB miss-biased latency in nanoseconds
- * @param page_walk_penalty_ns Estimated page-walk penalty in nanoseconds
+ * @param has_auto_tlb_breakdown Whether the automatic paired locality comparison is available
+ * @param tlb_hit_latency_ns Legacy internal name for 16 KiB locality latency
+ * @param tlb_miss_latency_ns Legacy internal name for global-random latency
+ * @param page_walk_penalty_ns Legacy internal name for the paired global-random minus 16 KiB locality delta
  * @param user_specified_threads Whether user specified thread count
  * @param only_bandwidth Whether only bandwidth tests are run
  * @param only_latency Whether only latency tests are run
  */
-void print_results(int loop, size_t buffer_size, size_t buffer_size_mb, int iterations, int num_threads,
-                   double read_bw_gb_s, double total_read_time, double write_bw_gb_s, double total_write_time,
-                   double copy_bw_gb_s, double total_copy_time,
-                   double l1_latency_ns, double l2_latency_ns,
-                   size_t l1_buffer_size, size_t l2_buffer_size,
-                   double l1_read_bw_gb_s, double l1_write_bw_gb_s, double l1_copy_bw_gb_s,
-                    double l2_read_bw_gb_s, double l2_write_bw_gb_s, double l2_copy_bw_gb_s,
-                     double average_latency_ns, size_t latency_tlb_locality_bytes, double total_lat_time_ns,
-                     bool use_custom_cache_size, double custom_latency_ns, size_t custom_buffer_size,
-                    double custom_read_bw_gb_s, double custom_write_bw_gb_s, double custom_copy_bw_gb_s,
-                    bool has_auto_tlb_breakdown, double tlb_hit_latency_ns, double tlb_miss_latency_ns,
-                    double page_walk_penalty_ns,
-                    bool user_specified_threads, bool only_bandwidth, bool only_latency) {
+void print_results(int loop, const BenchmarkConfig& config,
+                   const BenchmarkResults& results) {
   // Print a header indicating the current loop number.
   std::cout << Messages::results_loop_header(loop) << std::endl;
   // Set output to fixed-point notation for consistent formatting.
   std::cout << std::fixed;
 
   // Display Main Memory Bandwidth test results (skip if only latency tests).
-  if (!only_latency) {
-    std::cout << Messages::results_main_memory_bandwidth(num_threads) << std::endl;
+  if (!config.only_latency) {
+    std::cout << Messages::results_main_memory_bandwidth(config.num_threads)
+              << std::endl;
     std::cout << std::setprecision(Constants::BANDWIDTH_PRECISION);
-    std::cout << Messages::results_read_bandwidth(read_bw_gb_s, total_read_time) << std::endl;
-    std::cout << Messages::results_write_bandwidth(write_bw_gb_s, total_write_time) << std::endl;
-    std::cout << Messages::results_copy_bandwidth(copy_bw_gb_s, total_copy_time) << std::endl;
+    std::cout << (results.main_read_bandwidth.is_measured()
+                      ? Messages::results_read_bandwidth(
+                            *results.main_read_bandwidth.value,
+                            results.main_read_bandwidth.elapsed_seconds)
+                      : unavailable_measurement("  Read ",
+                                                results.main_read_bandwidth))
+              << std::endl;
+    std::cout << (results.main_write_bandwidth.is_measured()
+                      ? Messages::results_write_bandwidth(
+                            *results.main_write_bandwidth.value,
+                            results.main_write_bandwidth.elapsed_seconds)
+                      : unavailable_measurement("  Write",
+                                                results.main_write_bandwidth))
+              << std::endl;
+    std::cout << (results.main_copy_bandwidth.is_measured()
+                      ? Messages::results_copy_bandwidth(
+                            *results.main_copy_bandwidth.value,
+                            results.main_copy_bandwidth.elapsed_seconds)
+                      : unavailable_measurement("  Copy ",
+                                                results.main_copy_bandwidth))
+              << std::endl;
   }
-  
+
   // Display main memory latency test results (skip if only bandwidth tests
   // or when main memory latency path is disabled).
-  if (!only_bandwidth && buffer_size > 0) {
+  if (!config.only_bandwidth && config.buffer_size > 0) {
     std::cout << Messages::results_main_memory_latency() << std::endl;
-    std::cout << Messages::results_latency_total_time(total_lat_time_ns / 1e9) << std::endl;
     std::cout << std::setprecision(Constants::LATENCY_PRECISION);
-    std::cout << Messages::results_latency_average(average_latency_ns, latency_tlb_locality_bytes) << std::endl;
-    if (has_auto_tlb_breakdown) {
-      std::cout << Messages::results_latency_tlb_hit(tlb_hit_latency_ns) << std::endl;
-      std::cout << Messages::results_latency_tlb_miss(tlb_miss_latency_ns) << std::endl;
-      std::cout << Messages::results_latency_page_walk_penalty(page_walk_penalty_ns) << std::endl;
+    if (results.main_latency.is_measured()) {
+      std::cout << Messages::results_latency_total_time(
+                       results.main_latency.elapsed_seconds)
+                << std::endl;
+      std::cout << Messages::results_latency_average(
+                       *results.main_latency.value,
+                       config.latency_tlb_locality_bytes)
+                << std::endl;
+    } else {
+      std::cout << unavailable_measurement("  Average latency",
+                                          results.main_latency)
+                << std::endl;
+    }
+    if (results.locality_16k_latency.is_measured() &&
+        results.global_random_latency.is_measured() &&
+        results.locality_latency_delta.is_measured()) {
+      std::cout << Messages::results_latency_tlb_hit(
+                       *results.locality_16k_latency.value)
+                << std::endl;
+      std::cout << Messages::results_latency_tlb_miss(
+                       *results.global_random_latency.value)
+                << std::endl;
+      std::cout << Messages::results_latency_page_walk_penalty(
+                       *results.locality_latency_delta.value)
+                << std::endl;
     }
   }
 
   // Display cache bandwidth test results (skip if only latency tests).
-  if (!only_latency) {
+  if (!config.only_latency) {
     // Cache tests use user-specified threads if set, otherwise single-threaded
-    int cache_threads = user_specified_threads ? num_threads : Constants::SINGLE_THREAD;
+    int cache_threads = config.user_specified_threads ? config.num_threads
+                                                      : Constants::SINGLE_THREAD;
     std::cout << Messages::results_cache_bandwidth(cache_threads) << std::endl;
     std::cout << std::setprecision(Constants::BANDWIDTH_PRECISION);
-    if (use_custom_cache_size) {
-    // Display custom cache bandwidth results
-    if (custom_buffer_size > 0) {
-      std::cout << Messages::results_custom_cache() << std::endl;
-      std::cout << Messages::results_cache_read_bandwidth(custom_read_bw_gb_s);
-      if (custom_buffer_size < 1024) {
-        std::cout << Messages::results_buffer_size_bytes(custom_buffer_size) << std::endl;
-      } else if (custom_buffer_size < 1024 * 1024) {
-        std::cout << Messages::results_buffer_size_kb(custom_buffer_size / 1024.0) << std::endl;
-      } else {
-        std::cout << Messages::results_buffer_size_mb(custom_buffer_size / (1024.0 * 1024.0)) << std::endl;
+    if (config.use_custom_cache_size) {
+      if (config.custom_buffer_size > 0) {
+        std::cout << Messages::results_custom_cache() << std::endl;
+        print_cache_bandwidth_measurements(
+            results.custom_read_bandwidth, results.custom_write_bandwidth,
+            results.custom_copy_bandwidth, config.custom_buffer_size);
       }
-      std::cout << Messages::results_cache_write_bandwidth(custom_write_bw_gb_s) << std::endl;
-      std::cout << Messages::results_cache_copy_bandwidth(custom_copy_bw_gb_s) << std::endl;
-    }
-  } else {
-    // Display L1/L2 cache bandwidth results
-    if (l1_buffer_size > 0) {
-      std::cout << Messages::results_l1_cache() << std::endl;
-      std::cout << Messages::results_cache_read_bandwidth(l1_read_bw_gb_s);
-      if (l1_buffer_size < 1024) {
-        std::cout << Messages::results_buffer_size_bytes(l1_buffer_size) << std::endl;
-      } else if (l1_buffer_size < 1024 * 1024) {
-        std::cout << Messages::results_buffer_size_kb(l1_buffer_size / 1024.0) << std::endl;
-      } else {
-        std::cout << Messages::results_buffer_size_mb(l1_buffer_size / (1024.0 * 1024.0)) << std::endl;
+    } else {
+      if (config.l1_buffer_size > 0) {
+        std::cout << Messages::results_l1_cache() << std::endl;
+        print_cache_bandwidth_measurements(
+            results.l1_read_bandwidth, results.l1_write_bandwidth,
+            results.l1_copy_bandwidth, config.l1_buffer_size);
       }
-      std::cout << Messages::results_cache_write_bandwidth(l1_write_bw_gb_s) << std::endl;
-      std::cout << Messages::results_cache_copy_bandwidth(l1_copy_bw_gb_s) << std::endl;
-    }
-    if (l2_buffer_size > 0) {
-      std::cout << Messages::results_l2_cache() << std::endl;
-      std::cout << Messages::results_cache_read_bandwidth(l2_read_bw_gb_s);
-      if (l2_buffer_size < 1024) {
-        std::cout << Messages::results_buffer_size_bytes(l2_buffer_size) << std::endl;
-      } else if (l2_buffer_size < 1024 * 1024) {
-        std::cout << Messages::results_buffer_size_kb(l2_buffer_size / 1024.0) << std::endl;
-      } else {
-        std::cout << Messages::results_buffer_size_mb(l2_buffer_size / (1024.0 * 1024.0)) << std::endl;
+      if (config.l2_buffer_size > 0) {
+        std::cout << Messages::results_l2_cache() << std::endl;
+        print_cache_bandwidth_measurements(
+            results.l2_read_bandwidth, results.l2_write_bandwidth,
+            results.l2_copy_bandwidth, config.l2_buffer_size);
       }
-      std::cout << Messages::results_cache_write_bandwidth(l2_write_bw_gb_s) << std::endl;
-      std::cout << Messages::results_cache_copy_bandwidth(l2_copy_bw_gb_s) << std::endl;
-    }
     }
   }
 
   // Display cache latency test results (skip if only bandwidth tests).
-  const bool has_cache_latency_results = use_custom_cache_size ? (custom_buffer_size > 0)
-                                                                : (l1_buffer_size > 0 || l2_buffer_size > 0);
-  if (!only_bandwidth && has_cache_latency_results) {
+  const bool has_cache_latency_results =
+      config.use_custom_cache_size
+          ? config.custom_buffer_size > 0
+          : (config.l1_buffer_size > 0 || config.l2_buffer_size > 0);
+  if (!config.only_bandwidth && has_cache_latency_results) {
     std::cout << Messages::results_cache_latency() << std::endl;
     std::cout << std::setprecision(Constants::LATENCY_PRECISION);
-    if (use_custom_cache_size) {
-      // Display custom cache latency results
-      if (custom_buffer_size > 0) {
-        if (custom_buffer_size < 1024) {
-          std::cout << Messages::results_cache_latency_custom_ns(custom_latency_ns, custom_buffer_size) << std::endl;
-        } else if (custom_buffer_size < 1024 * 1024) {
-          std::cout << Messages::results_cache_latency_custom_ns_kb(custom_latency_ns, custom_buffer_size / 1024.0) << std::endl;
-        } else {
-          std::cout << Messages::results_cache_latency_custom_ns_mb(custom_latency_ns, custom_buffer_size / (1024.0 * 1024.0)) << std::endl;
-        }
+    if (config.use_custom_cache_size) {
+      if (config.custom_buffer_size > 0) {
+        print_cache_latency_measurement("Custom Cache", results.custom_latency,
+                                        config.custom_buffer_size);
       }
     } else {
-      // Display L1/L2 cache latency results
-      if (l1_buffer_size > 0) {
-        if (l1_buffer_size < 1024) {
-          std::cout << Messages::results_cache_latency_l1_ns(l1_latency_ns, l1_buffer_size) << std::endl;
-        } else if (l1_buffer_size < 1024 * 1024) {
-          std::cout << Messages::results_cache_latency_l1_ns_kb(l1_latency_ns, l1_buffer_size / 1024.0) << std::endl;
-        } else {
-          std::cout << Messages::results_cache_latency_l1_ns_mb(l1_latency_ns, l1_buffer_size / (1024.0 * 1024.0)) << std::endl;
-        }
+      if (config.l1_buffer_size > 0) {
+        print_cache_latency_measurement("L1 Cache", results.l1_latency,
+                                        config.l1_buffer_size);
       }
-      if (l2_buffer_size > 0) {
-        if (l2_buffer_size < 1024) {
-          std::cout << Messages::results_cache_latency_l2_ns(l2_latency_ns, l2_buffer_size) << std::endl;
-        } else if (l2_buffer_size < 1024 * 1024) {
-          std::cout << Messages::results_cache_latency_l2_ns_kb(l2_latency_ns, l2_buffer_size / 1024.0) << std::endl;
-        } else {
-          std::cout << Messages::results_cache_latency_l2_ns_mb(l2_latency_ns, l2_buffer_size / (1024.0 * 1024.0)) << std::endl;
-        }
+      if (config.l2_buffer_size > 0) {
+        print_cache_latency_measurement("L2 Cache", results.l2_latency,
+                                        config.l2_buffer_size);
       }
     }
   }

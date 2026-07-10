@@ -21,7 +21,7 @@
 Reads two benchmark JSON files produced by macos-memory-benchmark and renders
 a two-subplot figure:
   - Top:    Memory bandwidth (Copy / Read / Write, GB/s)
-  - Bottom: Memory latency  (L1 / L2 / TLB Hit / TLB Miss, ns)
+  - Bottom: Memory latency  (L1 / L2 / 16 KiB locality / global random, ns)
 """
 
 import argparse
@@ -100,7 +100,19 @@ def load_data(path: Path, metric: str) -> dict:
     mm = data.get("main_memory", {})
     bw = mm.get("bandwidth", {})
     cache = data.get("cache", {})
-    tlb = mm.get("latency", {}).get("auto_tlb_breakdown", {})
+    schema_version = config.get("benchmark_schema_version")
+    if schema_version == 2:
+        if not data.get("results_complete", False):
+            raise RuntimeError(f"Incomplete standard benchmark result: {path}")
+        locality = mm.get("latency", {}).get("automatic_locality_comparison", {})
+        l1_latency_key = "headline_ns"
+        locality_16k_key = "locality_16k_latency_ns"
+        global_random_key = "global_random_latency_ns"
+    else:
+        locality = mm.get("latency", {}).get("auto_tlb_breakdown", {})
+        l1_latency_key = "average_ns"
+        locality_16k_key = "tlb_hit_ns"
+        global_random_key = "tlb_miss_ns"
 
     return {
         "cpu_name": cpu_name,
@@ -108,10 +120,10 @@ def load_data(path: Path, metric: str) -> dict:
         "bw_copy":   _stat(bw,    "copy_gb_s",  metric=metric),
         "bw_read":   _stat(bw,    "read_gb_s",  metric=metric),
         "bw_write":  _stat(bw,    "write_gb_s", metric=metric),
-        "l1_lat":    _stat(cache, "l1", "latency", "average_ns", metric=metric),
-        "l2_lat":    _stat(cache, "l2", "latency", "average_ns", metric=metric),
-        "tlb_hit":   _stat(tlb,   "tlb_hit_ns",  metric=metric),
-        "tlb_miss":  _stat(tlb,   "tlb_miss_ns", metric=metric),
+        "l1_lat":    _stat(cache, "l1", "latency", l1_latency_key, metric=metric),
+        "l2_lat":    _stat(cache, "l2", "latency", l1_latency_key, metric=metric),
+        "locality_16k": _stat(locality, locality_16k_key, metric=metric),
+        "global_random": _stat(locality, global_random_key, metric=metric),
     }
 
 
@@ -173,9 +185,9 @@ def main():
     ax_bw.set_ylim(0, max(m4_bw + m5_bw) * 1.18)
 
     # --- Latency subplot ---
-    lat_labels = ["L1 Cache", "L2 Cache", "TLB Hit", "TLB Miss"]
-    m4_lat = [m4["l1_lat"], m4["l2_lat"], m4["tlb_hit"], m4["tlb_miss"]]
-    m5_lat = [m5["l1_lat"], m5["l2_lat"], m5["tlb_hit"], m5["tlb_miss"]]
+    lat_labels = ["L1 Cache", "L2 Cache", "16 KiB Locality", "Global Random"]
+    m4_lat = [m4["l1_lat"], m4["l2_lat"], m4["locality_16k"], m4["global_random"]]
+    m5_lat = [m5["l1_lat"], m5["l2_lat"], m5["locality_16k"], m5["global_random"]]
 
     x2 = np.arange(len(lat_labels))
 

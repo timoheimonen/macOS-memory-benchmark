@@ -28,6 +28,7 @@
 #include <cstdlib>
 #include <cmath>     // std::isnan, std::isinf
 #include <limits>
+#include <stdexcept>
 #include <vector>
 #include <unistd.h>  // getpagesize
 
@@ -57,33 +58,35 @@ BenchmarkConfig make_collector_config() {
 
 BenchmarkResults make_collector_results() {
   BenchmarkResults results;
-  results.read_bw_gb_s = 10.0;
-  results.write_bw_gb_s = 20.0;
-  results.copy_bw_gb_s = 30.0;
-  results.average_latency_ns = 40.0;
-  results.has_auto_tlb_breakdown = true;
-  results.tlb_hit_latency_ns = 41.0;
-  results.tlb_miss_latency_ns = 90.0;
-  results.page_walk_penalty_ns = 49.0;
-  results.latency_samples = {40.1, 40.2};
+  results.status = BenchmarkRunStatus::Complete;
+  results.planned_measurements = 12;
+  results.completed_measurements = 12;
+  set_measurement_value(results.main_read_bandwidth, 10.0, 1.0);
+  set_measurement_value(results.main_write_bandwidth, 20.0, 1.0);
+  set_measurement_value(results.main_copy_bandwidth, 30.0, 1.0);
+  set_measurement_value(results.main_latency, 40.0, 1.0);
+  set_measurement_value(results.locality_16k_latency, 41.0, 1.0);
+  set_measurement_value(results.global_random_latency, 90.0, 1.0);
+  set_measurement_value(results.locality_latency_delta, 49.0, 1.0);
+  results.main_latency.samples = {40.1, 40.2};
 
-  results.l1_latency_ns = 5.0;
-  results.l1_read_bw_gb_s = 50.0;
-  results.l1_write_bw_gb_s = 60.0;
-  results.l1_copy_bw_gb_s = 70.0;
-  results.l1_latency_samples = {5.1, 5.2};
+  set_measurement_value(results.l1_latency, 5.0, 1.0);
+  set_measurement_value(results.l1_read_bandwidth, 50.0, 1.0);
+  set_measurement_value(results.l1_write_bandwidth, 60.0, 1.0);
+  set_measurement_value(results.l1_copy_bandwidth, 70.0, 1.0);
+  results.l1_latency.samples = {5.1, 5.2};
 
-  results.l2_latency_ns = 8.0;
-  results.l2_read_bw_gb_s = 80.0;
-  results.l2_write_bw_gb_s = 90.0;
-  results.l2_copy_bw_gb_s = 100.0;
-  results.l2_latency_samples = {8.1, 8.2};
+  set_measurement_value(results.l2_latency, 8.0, 1.0);
+  set_measurement_value(results.l2_read_bandwidth, 80.0, 1.0);
+  set_measurement_value(results.l2_write_bandwidth, 90.0, 1.0);
+  set_measurement_value(results.l2_copy_bandwidth, 100.0, 1.0);
+  results.l2_latency.samples = {8.1, 8.2};
 
-  results.custom_latency_ns = 12.0;
-  results.custom_read_bw_gb_s = 110.0;
-  results.custom_write_bw_gb_s = 120.0;
-  results.custom_copy_bw_gb_s = 130.0;
-  results.custom_latency_samples = {12.1, 12.2};
+  set_measurement_value(results.custom_latency, 12.0, 1.0);
+  set_measurement_value(results.custom_read_bandwidth, 110.0, 1.0);
+  set_measurement_value(results.custom_write_bandwidth, 120.0, 1.0);
+  set_measurement_value(results.custom_copy_bandwidth, 130.0, 1.0);
+  results.custom_latency.samples = {12.1, 12.2};
 
   return results;
 }
@@ -152,25 +155,37 @@ TEST(BenchmarkResultsTest, CalculateBandwidthResultsPopulatesMainAndDetectedCach
   timings.l2_read_time = 1.0;
   timings.l2_write_time = 2.0;
   timings.l2_copy_time = 1.0;
+  timings.total_read_status = BenchmarkMeasurementStatus::Measured;
+  timings.total_write_status = BenchmarkMeasurementStatus::Measured;
+  timings.total_copy_status = BenchmarkMeasurementStatus::Measured;
+  timings.l1_read_status = BenchmarkMeasurementStatus::Measured;
+  timings.l1_write_status = BenchmarkMeasurementStatus::Measured;
+  timings.l1_copy_status = BenchmarkMeasurementStatus::Measured;
+  timings.l2_read_status = BenchmarkMeasurementStatus::Measured;
+  timings.l2_write_status = BenchmarkMeasurementStatus::Measured;
+  timings.l2_copy_status = BenchmarkMeasurementStatus::Measured;
 
   BenchmarkResults results;
   calculate_bandwidth_results(config, timings, results);
 
-  EXPECT_DOUBLE_EQ(results.read_bw_gb_s, 1.0);
-  EXPECT_DOUBLE_EQ(results.write_bw_gb_s, 0.5);
-  EXPECT_DOUBLE_EQ(results.copy_bw_gb_s, 4.0);
+  ASSERT_TRUE(results.main_read_bandwidth.value.has_value());
+  ASSERT_TRUE(results.main_write_bandwidth.value.has_value());
+  ASSERT_TRUE(results.main_copy_bandwidth.value.has_value());
+  EXPECT_DOUBLE_EQ(*results.main_read_bandwidth.value, 1.0);
+  EXPECT_DOUBLE_EQ(*results.main_write_bandwidth.value, 0.5);
+  EXPECT_DOUBLE_EQ(*results.main_copy_bandwidth.value, 4.0);
 
-  EXPECT_DOUBLE_EQ(results.l1_read_bw_gb_s, 2.0);
-  EXPECT_DOUBLE_EQ(results.l1_write_bw_gb_s, 1.0);
-  EXPECT_DOUBLE_EQ(results.l1_copy_bw_gb_s, 4.0);
+  EXPECT_DOUBLE_EQ(*results.l1_read_bandwidth.value, 2.0);
+  EXPECT_DOUBLE_EQ(*results.l1_write_bandwidth.value, 1.0);
+  EXPECT_DOUBLE_EQ(*results.l1_copy_bandwidth.value, 4.0);
 
-  EXPECT_DOUBLE_EQ(results.l2_read_bw_gb_s, 4.0);
-  EXPECT_DOUBLE_EQ(results.l2_write_bw_gb_s, 2.0);
-  EXPECT_DOUBLE_EQ(results.l2_copy_bw_gb_s, 8.0);
+  EXPECT_DOUBLE_EQ(*results.l2_read_bandwidth.value, 4.0);
+  EXPECT_DOUBLE_EQ(*results.l2_write_bandwidth.value, 2.0);
+  EXPECT_DOUBLE_EQ(*results.l2_copy_bandwidth.value, 8.0);
 
-  EXPECT_EQ(results.custom_read_bw_gb_s, 0.0);
-  EXPECT_EQ(results.custom_write_bw_gb_s, 0.0);
-  EXPECT_EQ(results.custom_copy_bw_gb_s, 0.0);
+  EXPECT_FALSE(results.custom_read_bandwidth.value.has_value());
+  EXPECT_FALSE(results.custom_write_bandwidth.value.has_value());
+  EXPECT_FALSE(results.custom_copy_bandwidth.value.has_value());
 }
 
 TEST(BenchmarkResultsTest, CalculateBandwidthResultsUsesCustomCacheInsteadOfDetectedCaches) {
@@ -188,15 +203,18 @@ TEST(BenchmarkResultsTest, CalculateBandwidthResultsUsesCustomCacheInsteadOfDete
   timings.custom_copy_time = 1.0;
   timings.l1_read_time = 1.0;
   timings.l2_read_time = 1.0;
+  timings.custom_read_status = BenchmarkMeasurementStatus::Measured;
+  timings.custom_write_status = BenchmarkMeasurementStatus::Measured;
+  timings.custom_copy_status = BenchmarkMeasurementStatus::Measured;
 
   BenchmarkResults results;
   calculate_bandwidth_results(config, timings, results);
 
-  EXPECT_DOUBLE_EQ(results.custom_read_bw_gb_s, 2.0);
-  EXPECT_DOUBLE_EQ(results.custom_write_bw_gb_s, 1.0);
-  EXPECT_DOUBLE_EQ(results.custom_copy_bw_gb_s, 4.0);
-  EXPECT_EQ(results.l1_read_bw_gb_s, 0.0);
-  EXPECT_EQ(results.l2_read_bw_gb_s, 0.0);
+  EXPECT_DOUBLE_EQ(*results.custom_read_bandwidth.value, 2.0);
+  EXPECT_DOUBLE_EQ(*results.custom_write_bandwidth.value, 1.0);
+  EXPECT_DOUBLE_EQ(*results.custom_copy_bandwidth.value, 4.0);
+  EXPECT_FALSE(results.l1_read_bandwidth.value.has_value());
+  EXPECT_FALSE(results.l2_read_bandwidth.value.has_value());
 }
 
 TEST(BenchmarkStatisticsCollectorTest, CollectLoopResultsAggregatesMainAndDetectedCacheMetrics) {
@@ -268,6 +286,34 @@ TEST(BenchmarkStatisticsCollectorTest, CollectLoopResultsSkipsMainLatencyWhenDis
   EXPECT_TRUE(stats.all_main_mem_latency_samples.empty());
 }
 
+TEST(BenchmarkStatisticsCollectorTest, InterruptedMeasurementsNeverEnterAggregates) {
+  BenchmarkConfig config = make_collector_config();
+  BenchmarkStatistics stats;
+  initialize_statistics(stats, config);
+
+  BenchmarkResults results = make_collector_results();
+  results.status = BenchmarkRunStatus::Interrupted;
+  results.planned_measurements = 12;
+  results.completed_measurements = 10;
+  set_measurement_unavailable(results.main_write_bandwidth,
+                              BenchmarkMeasurementStatus::Interrupted,
+                              "interrupted during measured operation");
+  set_measurement_unavailable(results.main_latency,
+                              BenchmarkMeasurementStatus::Invalid,
+                              "invalid latency duration");
+
+  collect_loop_results(stats, results, config);
+
+  expect_double_vector_eq(stats.all_read_bw_gb_s, {10.0});
+  EXPECT_TRUE(stats.all_write_bw_gb_s.empty());
+  EXPECT_TRUE(stats.all_average_latency_ns.empty());
+  EXPECT_EQ(stats.completed_measurements, 10u);
+  ASSERT_EQ(stats.loop_results.size(), 1u);
+  EXPECT_EQ(stats.loop_results[0].main_write_bandwidth.status,
+            BenchmarkMeasurementStatus::Interrupted);
+  EXPECT_FALSE(stats.loop_results[0].main_write_bandwidth.value.has_value());
+}
+
 // Test statistics structure after run_all_benchmarks clears vectors
 // Note: This test verifies the clearing behavior without running actual benchmarks
 TEST(BenchmarkRunnerTest, StatisticsClearing) {
@@ -304,6 +350,96 @@ TEST(BenchmarkRunnerTest, StatisticsClearing) {
   EXPECT_TRUE(stats.all_tlb_hit_latency_ns.empty());
   EXPECT_TRUE(stats.all_tlb_miss_latency_ns.empty());
   EXPECT_TRUE(stats.all_page_walk_penalty_ns.empty());
+}
+
+TEST(BenchmarkRunnerTest, InjectedTimerCreationFailureIsReportedAndCheckpointed) {
+  BenchmarkConfig config;
+  config.loop_count = 1;
+  config.output_file = "/tmp/benchmark-runner-hook-unused.json";
+  BenchmarkBuffers buffers;
+  BenchmarkStatistics stats;
+  size_t checkpoints = 0;
+  BenchmarkRunnerTestHooks hooks;
+  hooks.force_timer_creation_failure = true;
+  hooks.checkpoint = [&](const BenchmarkConfig&, const BenchmarkStatistics&,
+                         double, bool) {
+    ++checkpoints;
+    return EXIT_SUCCESS;
+  };
+
+  testing::internal::CaptureStderr();
+  const int result = run_all_benchmarks(buffers, config, stats, &hooks);
+  const std::string error_output = testing::internal::GetCapturedStderr();
+
+  EXPECT_EQ(result, EXIT_FAILURE);
+  EXPECT_EQ(stats.status, BenchmarkRunStatus::Failed);
+  EXPECT_EQ(stats.status_reason, Messages::error_timer_creation_failed());
+  EXPECT_EQ(checkpoints, 1u);
+  EXPECT_NE(error_output.find(stats.status_reason), std::string::npos);
+}
+
+TEST(BenchmarkRunnerTest, InjectedCheckpointFailureRejectsCompletedLoop) {
+  BenchmarkConfig config;
+  config.loop_count = 1;
+  config.output_file = "/tmp/benchmark-runner-hook-unused.json";
+  config.only_bandwidth = true;
+  BenchmarkBuffers buffers;
+  BenchmarkStatistics stats;
+  BenchmarkRunnerTestHooks hooks;
+  hooks.execute_loop = [](const BenchmarkBuffers&, BenchmarkConfig&, int loop,
+                          HighResTimer&, BenchmarkExecutionState*) {
+    BenchmarkResults results;
+    results.status = BenchmarkRunStatus::Complete;
+    results.loop_index = static_cast<size_t>(loop);
+    return results;
+  };
+  hooks.checkpoint = [](const BenchmarkConfig&, const BenchmarkStatistics&,
+                        double, bool) { return EXIT_FAILURE; };
+
+  testing::internal::CaptureStdout();
+  const int result = run_all_benchmarks(buffers, config, stats, &hooks);
+  static_cast<void>(testing::internal::GetCapturedStdout());
+
+  EXPECT_EQ(result, EXIT_FAILURE);
+  EXPECT_EQ(stats.status, BenchmarkRunStatus::Failed);
+  EXPECT_EQ(stats.status_reason,
+            Messages::benchmark_reason_checkpoint_failed());
+  EXPECT_EQ(stats.completed_loops, 1u);
+}
+
+TEST(BenchmarkRunnerTest, InjectedStopBetweenLoopsPreservesCompletedLoop) {
+  BenchmarkConfig config;
+  config.loop_count = 3;
+  config.output_file = "/tmp/benchmark-runner-hook-unused.json";
+  config.only_bandwidth = true;
+  BenchmarkBuffers buffers;
+  BenchmarkStatistics stats;
+  size_t stop_checks = 0;
+  size_t checkpoints = 0;
+  BenchmarkRunnerTestHooks hooks;
+  hooks.stop_requested = [&] { return stop_checks++ >= 1; };
+  hooks.execute_loop = [](const BenchmarkBuffers&, BenchmarkConfig&, int loop,
+                          HighResTimer&, BenchmarkExecutionState*) {
+    BenchmarkResults results;
+    results.status = BenchmarkRunStatus::Complete;
+    results.loop_index = static_cast<size_t>(loop);
+    return results;
+  };
+  hooks.checkpoint = [&](const BenchmarkConfig&, const BenchmarkStatistics&,
+                         double, bool) {
+    ++checkpoints;
+    return EXIT_SUCCESS;
+  };
+
+  testing::internal::CaptureStdout();
+  const int result = run_all_benchmarks(buffers, config, stats, &hooks);
+  static_cast<void>(testing::internal::GetCapturedStdout());
+
+  EXPECT_EQ(result, EXIT_SUCCESS);
+  EXPECT_EQ(stats.status, BenchmarkRunStatus::Interrupted);
+  EXPECT_EQ(stats.completed_loops, 1u);
+  EXPECT_EQ(stats.loop_results.size(), 1u);
+  EXPECT_EQ(checkpoints, 2u);
 }
 
 // Integration test: Test that statistics vectors are properly reserved
@@ -415,7 +551,7 @@ TEST(BenchmarkRunnerTest, ResultsValidationIntegration) {
   EXPECT_FALSE(std::isinf(stats.all_page_walk_penalty_ns[0]));
 }
 
-TEST(BenchmarkRunnerTest, StatisticsPrintsAutoTlbBreakdownMetrics) {
+TEST(BenchmarkRunnerTest, StatisticsPrintsPairedLocalityMetrics) {
   const std::vector<double> all_main_mem_latency = {15.0, 16.0};
   const std::vector<double> all_tlb_hit_latency = {14.0, 15.0};
   const std::vector<double> all_tlb_miss_latency = {90.0, 92.0};
@@ -424,9 +560,10 @@ TEST(BenchmarkRunnerTest, StatisticsPrintsAutoTlbBreakdownMetrics) {
   const std::string output = test_statistics_helpers::capture_auto_tlb_breakdown(
       all_main_mem_latency, all_tlb_hit_latency, all_tlb_miss_latency, all_page_walk_penalty);
 
-  EXPECT_NE(output.find("TLB Hit Latency (ns):"), std::string::npos);
-  EXPECT_NE(output.find("TLB Miss Latency (ns):"), std::string::npos);
-  EXPECT_NE(output.find("Estimated Page-Walk Penalty (ns):"), std::string::npos);
+  EXPECT_NE(output.find("16 KiB Locality Latency (ns):"), std::string::npos);
+  EXPECT_NE(output.find("Global-Random Latency (ns):"), std::string::npos);
+  EXPECT_NE(output.find("Locality Latency Delta, Global - 16 KiB (ns):"),
+            std::string::npos);
 }
 
 TEST(BenchmarkRunnerTest, MainMemoryJsonIncludesAutoTlbBreakdownWhenAvailable) {

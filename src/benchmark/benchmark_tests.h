@@ -30,8 +30,11 @@
 #include <atomic>   // std::atomic
 #include <vector>   // std::vector
 
+#include "benchmark/benchmark_work_plan.h"
+
 // Forward declaration
 struct HighResTimer;
+struct ParallelExecutionMetadata;
 
 // --- Benchmark Test Functions ---
 /**
@@ -65,6 +68,13 @@ double run_read_test_with_kernel(void* buffer,
                                  HighResTimer& timer,
                                  uint64_t (*read_func)(const void*, size_t));
 
+double run_read_test_with_plan(void* buffer,
+                               const BenchmarkWorkPlan& plan,
+                               uint64_t& checksum,
+                               HighResTimer& timer,
+                               uint64_t (*read_func)(const void*, size_t),
+                               ParallelExecutionMetadata* execution_metadata = nullptr);
+
 /**
  * @brief Run write benchmark test
  * @param buffer Pointer to buffer to write to
@@ -92,6 +102,12 @@ double run_write_test_with_kernel(void* buffer,
                                   int num_threads,
                                   HighResTimer& timer,
                                   void (*write_func)(void*, size_t));
+
+double run_write_test_with_plan(void* buffer,
+                                const BenchmarkWorkPlan& plan,
+                                HighResTimer& timer,
+                                void (*write_func)(void*, size_t),
+                                ParallelExecutionMetadata* execution_metadata = nullptr);
 
 /**
  * @brief Run copy benchmark test
@@ -123,6 +139,13 @@ double run_copy_test_with_kernel(void* dst,
                                  int num_threads,
                                  HighResTimer& timer,
                                  void (*copy_func)(void*, const void*, size_t));
+
+double run_copy_test_with_plan(void* dst,
+                               void* src,
+                               const BenchmarkWorkPlan& plan,
+                               HighResTimer& timer,
+                               void (*copy_func)(void*, const void*, size_t),
+                               ParallelExecutionMetadata* execution_metadata = nullptr);
 
 /**
  * @brief Run latency benchmark test

@@ -44,7 +44,8 @@
  * @brief Calculate statistical measures from a dataset and return as JSON
  *
  * Computes comprehensive statistics including average, min, max, median (p50),
- * percentiles (p90, p95, p99), and standard deviation.
+ * percentiles (p90, p95, p99), sample standard deviation, coefficient of
+ * variation, and median absolute deviation.
  *
  * @param values Vector of numerical values to analyze
  * @return JSON object containing all calculated statistics
@@ -78,4 +79,3 @@ bool parse_json_from_string(const std::string& json_string, nlohmann::json& resu
 bool parse_json_from_file(const std::string& file_path, nlohmann::json& result, std::string& error_message);
 
 #endif // JSON_UTILS_H
-
