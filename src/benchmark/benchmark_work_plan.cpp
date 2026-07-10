@@ -297,6 +297,30 @@ bool benchmark_elapsed_is_valid(double elapsed) {
   return elapsed > 0.0 && std::isfinite(elapsed);
 }
 
+bool benchmark_duration_in_window(double elapsed_seconds,
+                                  double minimum_seconds,
+                                  double maximum_seconds) {
+  return elapsed_seconds >= minimum_seconds &&
+         elapsed_seconds <= maximum_seconds;
+}
+
+std::string classify_benchmark_duration_quality(
+    double elapsed_seconds, size_t count, double minimum_seconds,
+    double maximum_seconds, bool minimum_work_limited) {
+  if (benchmark_duration_in_window(elapsed_seconds, minimum_seconds,
+                                   maximum_seconds)) {
+    return "within-target-window";
+  }
+  if (minimum_work_limited && elapsed_seconds > maximum_seconds) {
+    return "minimum-complete-cycles-exceed-window";
+  }
+  if (count == 1 && elapsed_seconds > maximum_seconds) {
+    return "single-pass-exceeds-window";
+  }
+  return elapsed_seconds < minimum_seconds ? "below-target-window"
+                                           : "above-target-window";
+}
+
 uint64_t derive_benchmark_seed(uint64_t base_seed, uint64_t domain) {
   uint64_t value = base_seed ^ (domain + 0x9e3779b97f4a7c15ULL);
   value = (value ^ (value >> 30U)) * 0xbf58476d1ce4e5b9ULL;

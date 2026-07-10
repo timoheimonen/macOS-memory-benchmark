@@ -41,8 +41,8 @@ Latency tests can target:
 
 Latency results are reported in nanoseconds per access.
 
-Every standard main/L1/L2/custom headline comes from one continuous pointer chase calibrated near 250 ms and rounded to
-complete chain cycles. Optional sample windows run separately and continue from one window's terminal pointer to the
+Every standard main/L1/L2/custom headline comes from one continuous pointer chase calibrated near 250 ms, evaluated
+against a 100–300 ms window, and rounded to complete chain cycles. Optional sample windows run separately and continue from one window's terminal pointer to the
 next. A resolved `--seed` reproduces chain and schedule metadata across loops, not performance values. When locality is
 not explicit, the standard benchmark reports a paired 16 KiB-locality/global-random comparison and median same-round
 delta. That result combines cache, locality, and translation effects; only `--analyze-tlb` supports controlled

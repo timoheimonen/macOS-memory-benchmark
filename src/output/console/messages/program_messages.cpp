@@ -146,6 +146,7 @@ std::string usage_options(const std::string& prog_name) {
       << "  -B, --benchmark       Run calibrated, seeded, balanced standard bandwidth/latency benchmark.\n"
       << "                        JSON uses standard schema 2 methodology "
       << Constants::BENCHMARK_METHODOLOGY_VERSION << ".\n"
+      << "                        Continuous latency targets 250 ms in a 100-300 ms window.\n"
       << "  -i, --iterations <count>\n"
       << "                        Exact measured R/W/Copy pass count when explicitly supplied.\n"
       << "                        When omitted, --benchmark and --patterns calibrate toward 150 ms.\n"

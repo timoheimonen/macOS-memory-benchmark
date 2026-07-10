@@ -188,3 +188,14 @@ TEST(BenchmarkWorkPlanTest, ElapsedValidationRejectsInjectedInvalidTiming) {
       std::numeric_limits<double>::infinity()));
   EXPECT_TRUE(benchmark_elapsed_is_valid(0.001));
 }
+
+TEST(BenchmarkWorkPlanTest, DurationQualityDistinguishesMinimumWorkLimit) {
+  EXPECT_TRUE(benchmark_duration_in_window(0.250, 0.100, 0.300));
+  EXPECT_EQ(classify_benchmark_duration_quality(0.250, 16, 0.100, 0.300),
+            "within-target-window");
+  EXPECT_EQ(classify_benchmark_duration_quality(0.410, 16, 0.100, 0.300,
+                                                true),
+            "minimum-complete-cycles-exceed-window");
+  EXPECT_EQ(classify_benchmark_duration_quality(0.410, 16, 0.100, 0.300),
+            "above-target-window");
+}

@@ -181,6 +181,8 @@ Long options require `--`. A single dash is only valid for one-character short o
 
 - `--buffer-size <MB>`: Main buffer size (default `512`; auto-capped by memory safety rules).
 - `--iterations <count>`: Exact measured bandwidth pass count when explicitly supplied. When omitted, both `--benchmark` and `--patterns` use an excluded same-shape pilot to calibrate each operation toward 150 ms (100–250 ms intended window, at most two corrections). The resolved standard workload is reused across `--count` loops. Operation-specific warmup still runs immediately before every measured attempt.
+- Standard main/L1/L2/custom latency headlines target 250 ms in a distinct 100–300 ms acceptance window and retain at
+  least 16 complete pointer-chain cycles. A cycle-minimum-limited overrun is reported explicitly.
 - `--count <count>`: Full benchmark repetitions (default `1`; use `5-10` for statistics).
 - `--threads <count>`: Bandwidth thread count (latency tests remain single-threaded). In `--patterns`, the default is the
   historical count of all detected CPU cores to preserve comparison compatibility. Use an explicit `--threads` value

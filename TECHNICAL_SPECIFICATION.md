@@ -285,8 +285,9 @@ Important execution semantics:
 - Omitted `--iterations` uses an excluded same-shape pilot to target 150 ms, with a 100–250 ms intended window and at
   most two corrections. Explicit iterations are exact. Resolved per-target/per-operation work is reused across loops.
 - Cache bandwidth defaults to single-thread unless user explicitly provides `--threads`.
-- All latency targets use one continuous headline pass calibrated toward 250 ms and rounded to at least 16 complete
-  chain cycles. Samples run separately and continue between windows.
+- All latency targets use one continuous headline pass calibrated toward 250 ms, evaluated against a 100–300 ms
+  window, and rounded to at least 16 complete chain cycles. A cycle-minimum-limited overrun is classified explicitly;
+  samples run separately and continue between windows.
 - One command-level seed derives target/layout seeds; repeated loops rebuild equivalent logical chains.
 - Each operation has explicit measurement status and optional value. Interrupted/incomplete work is excluded from
   aggregate vectors. Standard JSON is atomically checkpointed after completed loops.

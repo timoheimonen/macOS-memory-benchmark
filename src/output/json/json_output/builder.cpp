@@ -182,6 +182,10 @@ nlohmann::json build_config_json(const BenchmarkConfig& config, const char* mode
         Constants::BENCHMARK_CALIBRATION_MAX_CORRECTIONS;
     config_json["latency_calibration_target_seconds"] =
         Constants::BENCHMARK_LATENCY_TARGET_SECONDS;
+    config_json["latency_calibration_window_min_seconds"] =
+        Constants::BENCHMARK_LATENCY_CALIBRATION_MIN_SECONDS;
+    config_json["latency_calibration_window_max_seconds"] =
+        Constants::BENCHMARK_LATENCY_CALIBRATION_MAX_SECONDS;
     config_json["latency_minimum_complete_chain_cycles"] =
         Constants::BENCHMARK_LATENCY_MIN_COMPLETE_CYCLES;
     config_json["phase_execution_order_policy"] =

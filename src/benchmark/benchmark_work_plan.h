@@ -141,6 +141,14 @@ BenchmarkPhaseExecutionResult execute_benchmark_phase_schedule(
 
 bool benchmark_elapsed_is_valid(double elapsed);
 
+bool benchmark_duration_in_window(double elapsed_seconds,
+                                  double minimum_seconds,
+                                  double maximum_seconds);
+
+std::string classify_benchmark_duration_quality(
+    double elapsed_seconds, size_t count, double minimum_seconds,
+    double maximum_seconds, bool minimum_work_limited = false);
+
 uint64_t derive_benchmark_seed(uint64_t base_seed, uint64_t domain);
 
 const char* benchmark_target_to_string(BenchmarkTarget target);

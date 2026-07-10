@@ -197,6 +197,9 @@ TEST(JsonSchemaTest, BenchmarkSchemaV2IncludesCompletionAndNullableMeasurements)
   EXPECT_EQ(output["configuration"]["benchmark_schema_version"], 2);
   EXPECT_EQ(output["configuration"]["methodology_version"],
             "benchmark-v2-calibrated-seeded-balanced");
+  EXPECT_DOUBLE_EQ(
+      output["configuration"]["latency_calibration_window_max_seconds"],
+      0.300);
   EXPECT_EQ(output["configuration"]["benchmark_seed"],
             "18446744073709551615");
   EXPECT_EQ(output["status"], "partial");

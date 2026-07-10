@@ -553,23 +553,6 @@ void run_paired_locality_comparison(void* buffer,
                         total_elapsed_seconds);
 }
 
-bool duration_in_target_window(double elapsed_seconds) {
-  return elapsed_seconds >= Constants::BENCHMARK_CALIBRATION_MIN_SECONDS &&
-         elapsed_seconds <= Constants::BENCHMARK_CALIBRATION_MAX_SECONDS;
-}
-
-std::string duration_quality(double elapsed_seconds, size_t count) {
-  if (duration_in_target_window(elapsed_seconds)) {
-    return "within-target-window";
-  }
-  if (count == 1 && elapsed_seconds > Constants::BENCHMARK_CALIBRATION_MAX_SECONDS) {
-    return "single-pass-exceeds-window";
-  }
-  return elapsed_seconds < Constants::BENCHMARK_CALIBRATION_MIN_SECONDS
-             ? "below-target-window"
-             : "above-target-window";
-}
-
 void warmup_bandwidth_operation(void* src_buffer,
                                 void* dst_buffer,
                                 const BenchmarkWorkPlan& plan) {
@@ -760,7 +743,9 @@ void run_calibrated_bandwidth_measurement(
       return;
     }
     if (explicit_iterations || !first_execution ||
-        duration_in_target_window(elapsed_seconds) ||
+        benchmark_duration_in_window(
+            elapsed_seconds, Constants::BENCHMARK_CALIBRATION_MIN_SECONDS,
+            Constants::BENCHMARK_CALIBRATION_MAX_SECONDS) ||
         (state.plan.passes == 1 &&
          elapsed_seconds > Constants::BENCHMARK_CALIBRATION_MAX_SECONDS) ||
         attempt >= Constants::BENCHMARK_CALIBRATION_MAX_CORRECTIONS) {
@@ -779,14 +764,19 @@ void run_calibrated_bandwidth_measurement(
 
   state.duration_quality = explicit_iterations
                                ? "explicit-work-policy"
-                               : duration_quality(elapsed_seconds,
-                                                  state.plan.passes);
+                               : classify_benchmark_duration_quality(
+                                     elapsed_seconds, state.plan.passes,
+                                     Constants::BENCHMARK_CALIBRATION_MIN_SECONDS,
+                                     Constants::BENCHMARK_CALIBRATION_MAX_SECONDS);
   state.initialized = true;
   populate_bandwidth_metadata(measurement, state, phase_order_index,
                               operation_order_index);
   populate_parallel_execution_metadata(measurement, execution_metadata);
   measurement.duration_within_target =
-      explicit_iterations || duration_in_target_window(elapsed_seconds);
+      explicit_iterations ||
+      benchmark_duration_in_window(
+          elapsed_seconds, Constants::BENCHMARK_CALIBRATION_MIN_SECONDS,
+          Constants::BENCHMARK_CALIBRATION_MAX_SECONDS);
   if (!benchmark_elapsed_is_valid(elapsed_seconds)) {
     set_measurement_unavailable(measurement,
                                 BenchmarkMeasurementStatus::Invalid,
@@ -892,7 +882,11 @@ void run_calibrated_latency_measurement(
                                   Messages::benchmark_reason_interrupted_latency_measurement());
       return;
     }
-    if (!first_execution || duration_in_target_window(elapsed_seconds) ||
+    if (!first_execution ||
+        benchmark_duration_in_window(
+            elapsed_seconds,
+            Constants::BENCHMARK_LATENCY_CALIBRATION_MIN_SECONDS,
+            Constants::BENCHMARK_LATENCY_CALIBRATION_MAX_SECONDS) ||
         attempt >= Constants::BENCHMARK_CALIBRATION_MAX_CORRECTIONS) {
       break;
     }
@@ -916,11 +910,22 @@ void run_calibrated_latency_measurement(
   }
 
   const double elapsed_seconds = elapsed_ns / Constants::NANOSECONDS_PER_SECOND;
-  state.duration_quality = duration_quality(elapsed_seconds,
-                                            state.plan.complete_chain_cycles);
+  const size_t minimum_accesses =
+      state.plan.chain_node_count *
+      Constants::BENCHMARK_LATENCY_MIN_COMPLETE_CYCLES;
+  const bool minimum_cycles_limit_duration =
+      state.plan.access_count == minimum_accesses &&
+      elapsed_seconds > Constants::BENCHMARK_LATENCY_CALIBRATION_MAX_SECONDS;
+  state.duration_quality = classify_benchmark_duration_quality(
+      elapsed_seconds, state.plan.complete_chain_cycles,
+      Constants::BENCHMARK_LATENCY_CALIBRATION_MIN_SECONDS,
+      Constants::BENCHMARK_LATENCY_CALIBRATION_MAX_SECONDS,
+      minimum_cycles_limit_duration);
   state.initialized = true;
   populate_latency_metadata(measurement, state, phase_order_index);
-  measurement.duration_within_target = duration_in_target_window(elapsed_seconds);
+  measurement.duration_within_target = benchmark_duration_in_window(
+      elapsed_seconds, Constants::BENCHMARK_LATENCY_CALIBRATION_MIN_SECONDS,
+      Constants::BENCHMARK_LATENCY_CALIBRATION_MAX_SECONDS);
   if (!benchmark_elapsed_is_valid(elapsed_ns) ||
       state.plan.access_count == 0) {
     set_measurement_unavailable(measurement,

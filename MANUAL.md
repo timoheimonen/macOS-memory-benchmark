@@ -304,7 +304,9 @@ forms such as `-buffersize` or `-benchmark` are invalid.
 - Mutually exclusive with `--patterns`
 - Can be combined with `--only-bandwidth`, `--only-latency`, `--cache-size`, `--threads`, and other modifier flags
 - Rotates enabled phase groups and read/write/copy order in deterministic cyclic schedules across `--count` loops
-- Uses continuous latency headlines calibrated toward 250 ms and rounded to at least 16 complete pointer-chain cycles
+- Uses continuous latency headlines calibrated toward 250 ms, accepted in a 100–300 ms window, and rounded to at least
+  16 complete pointer-chain cycles. If the cycle minimum itself exceeds 300 ms, metadata reports
+  `minimum-complete-cycles-exceed-window` instead of treating it as an ordinary calibration miss
 - Reuses calibrated work and seeded logical chains so repeated loops vary runtime conditions rather than workload shape
 - Running without this flag (or `--patterns`) shows help and exits
 

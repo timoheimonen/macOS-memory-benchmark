@@ -713,6 +713,7 @@ TEST_F(MessagesFormattingTest, UsageOptions) {
   std::string msg = Messages::usage_options("memory_benchmark");
   EXPECT_NE(msg.find("memory_benchmark"), std::string::npos);
   EXPECT_NE(msg.find("--benchmark"), std::string::npos);
+  EXPECT_NE(msg.find("100-300 ms window"), std::string::npos);
   EXPECT_NE(msg.find("--iterations"), std::string::npos);
   EXPECT_NE(msg.find("--buffer-size"), std::string::npos);
   EXPECT_NE(msg.find("--count"), std::string::npos);
