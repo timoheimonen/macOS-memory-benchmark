@@ -130,25 +130,6 @@ std::vector<BenchmarkMeasurement*> expected_measurements(BenchmarkResults& resul
   return measurements;
 }
 
-size_t planned_phase_count(const BenchmarkConfig& config) {
-  size_t phases = 0;
-  if (!config.only_latency) {
-    if (config.buffer_size > 0) ++phases;
-    const bool has_cache_bandwidth = config.use_custom_cache_size
-                                         ? config.custom_buffer_size > 0
-                                         : (config.l1_buffer_size > 0 || config.l2_buffer_size > 0);
-    if (has_cache_bandwidth) ++phases;
-  }
-  if (!config.only_bandwidth) {
-    const bool has_cache_latency = config.use_custom_cache_size
-                                       ? config.custom_buffer_size > 0
-                                       : (config.l1_buffer_size > 0 || config.l2_buffer_size > 0);
-    if (has_cache_latency) ++phases;
-    if (config.buffer_size > 0 && config.lat_num_accesses > 0) ++phases;
-  }
-  return phases;
-}
-
 void finalize_loop_results(BenchmarkResults& results,
                            const BenchmarkConfig& config,
                            bool interrupted) {
@@ -967,10 +948,6 @@ BenchmarkResults run_single_benchmark_loop(const BenchmarkBuffers& buffers,
   (void)buffers;
   results.status = BenchmarkRunStatus::Partial;
   results.loop_index = loop >= 0 ? static_cast<size_t>(loop) : 0;
-  results.planned_phases = planned_phase_count(config);
-  results.phase_order_index = results.planned_phases == 0
-                                  ? 0
-                                  : results.loop_index % results.planned_phases;
   results.operation_order_index = results.loop_index % 3;
 
   reset_latency_chain_diagnostics(config);
@@ -1002,6 +979,10 @@ BenchmarkResults run_single_benchmark_loop(const BenchmarkBuffers& buffers,
       config.lat_num_accesses > 0) {
     enabled_phases.push_back({Phase::MainLatency, "main-latency"});
   }
+  results.planned_phases = enabled_phases.size();
+  results.phase_order_index = results.planned_phases == 0
+                                  ? 0
+                                  : results.loop_index % results.planned_phases;
   const std::vector<size_t> phase_order = build_benchmark_cyclic_order(
       enabled_phases.size(), results.loop_index);
   for (const size_t phase_index : phase_order) {

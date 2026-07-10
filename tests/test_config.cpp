@@ -221,6 +221,7 @@ TEST(ConfigTest, RejectsMalformedSweepListsAndNumericValues) {
   constexpr const char* kInvalidSignedReason =
       "must be an integer without whitespace, a plus sign, or trailing characters";
   const InvalidSweepCase cases[] = {
+      {"buffer-size", "sweep must use key=value1,value2 syntax", false},
       {"buffer-size=,1", "sweep value list cannot contain empty values", false},
       {"buffer-size=1,", "sweep value list cannot contain empty values", false},
       {"buffer-size=1,,2", "sweep value list cannot contain empty values", false},
@@ -233,6 +234,7 @@ TEST(ConfigTest, RejectsMalformedSweepListsAndNumericValues) {
       {"buffer-size=+1", kInvalidSignedReason, false},
       {"buffer-size=9223372036854775808", "out of range", false},
       {"latency-stride-bytes=64x", kInvalidSignedReason, true},
+      {"latency-stride-bytes=", "sweep must use key=value1,value2 syntax", true},
       {"latency-stride-bytes=64,", "sweep value list cannot contain empty values", true},
   };
 

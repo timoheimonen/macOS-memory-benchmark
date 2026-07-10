@@ -100,6 +100,13 @@ TlbChainDiagnostics expected_chain(size_t page_size,
 
 }  // namespace
 
+TEST(TlbChainTest, LayoutSeedDerivationMatchesGoldenValues) {
+  EXPECT_EQ(derive_tlb_chain_layout_seed(42, TlbChainLayout::Spread),
+            0xea98f6ee088b8b6cULL);
+  EXPECT_EQ(derive_tlb_chain_layout_seed(42, TlbChainLayout::Packed),
+            0x79f604e46045df73ULL);
+}
+
 TEST(TlbChainTest, SpreadVisitsExactlyEveryRequestedPage) {
   constexpr size_t page_size = kTestPageSizeBytes;
   constexpr size_t kRequestedPages = 17;

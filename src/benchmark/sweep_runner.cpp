@@ -26,7 +26,6 @@
 #include <filesystem>
 #include <iomanip>
 #include <iostream>
-#include <limits>
 #include <sstream>
 #include <string>
 #include <unistd.h>
@@ -39,6 +38,7 @@
 #include "benchmark/tlb_analysis.h"
 #include "core/config/config.h"
 #include "core/config/constants.h"
+#include "core/config/sweep_utils.h"
 #include "core/config/version.h"
 #include "core/memory/buffer_allocator.h"
 #include "core/memory/buffer_initializer.h"
@@ -656,17 +656,7 @@ SweepExecutionResult execute_sweep_plan(SweepNestedMode mode, const std::vector<
 }
 
 size_t calculate_sweep_run_count(const BenchmarkConfig& config) {
-  size_t run_count = 1;
-  for (const SweepSpec& spec : config.sweep_specs) {
-    if (spec.values.empty()) {
-      return 0;
-    }
-    if (run_count > std::numeric_limits<size_t>::max() / spec.values.size()) {
-      return std::numeric_limits<size_t>::max();
-    }
-    run_count *= spec.values.size();
-  }
-  return run_count;
+  return calculate_sweep_run_count_from_specs(config.sweep_specs);
 }
 
 int run_sweep_mode(const BenchmarkConfig& base_config) {

@@ -31,7 +31,6 @@
 #include <exception>
 #include <filesystem>
 #include <iostream>
-#include <limits>
 #include <string>
 #include <system_error>
 #include <thread>
@@ -51,6 +50,7 @@
 #include "core/timing/timer.h"
 #include "output/console/messages/messages_api.h"
 #include "output/json/json_output/json_output_api.h"
+#include "utils/numeric_utils.h"
 
 namespace {
 
@@ -199,16 +199,19 @@ bool calculate_total_responder_round_trips(const CoreToCoreWorkPlan& work_plan, 
     return false;
   }
 
-  const size_t maximum = std::numeric_limits<size_t>::max();
-  if (work_plan.warmup_round_trips > maximum - work_plan.headline_round_trips) {
+  size_t total = 0;
+  if (!NumericUtils::checked_add(work_plan.warmup_round_trips,
+                                 work_plan.headline_round_trips, total)) {
     return false;
   }
-  size_t total = work_plan.warmup_round_trips + work_plan.headline_round_trips;
   const size_t sample_count_size = static_cast<size_t>(sample_count);
-  if (sample_count_size > 0 && work_plan.sample_window_round_trips > (maximum - total) / sample_count_size) {
+  size_t sample_round_trips = 0;
+  if (!NumericUtils::checked_multiply(sample_count_size,
+                                      work_plan.sample_window_round_trips,
+                                      sample_round_trips) ||
+      !NumericUtils::checked_add(total, sample_round_trips, total)) {
     return false;
   }
-  total += sample_count_size * work_plan.sample_window_round_trips;
   out_round_trips = total;
   return true;
 }
@@ -320,18 +323,9 @@ void print_scenario_report(const CoreToCoreLatencyScenarioResult& scenario_resul
 size_t calculate_core_to_core_calibrated_round_trips(double pilot_elapsed_seconds, size_t pilot_round_trips,
                                                      double target_duration_seconds, size_t minimum_round_trips,
                                                      size_t maximum_round_trips) {
-  if (!positive_finite(pilot_elapsed_seconds) || pilot_round_trips == 0 ||
-      !positive_finite(target_duration_seconds) || minimum_round_trips == 0 ||
-      maximum_round_trips < minimum_round_trips) {
-    return 0;
-  }
-
-  const long double scaled =
-      static_cast<long double>(pilot_round_trips) * target_duration_seconds / pilot_elapsed_seconds;
-  size_t result = scaled >= static_cast<long double>(maximum_round_trips) ? maximum_round_trips
-                                                                          : static_cast<size_t>(std::ceil(scaled));
-  result = std::max(result, minimum_round_trips);
-  return std::min(result, maximum_round_trips);
+  return NumericUtils::calculate_duration_scaled_count(
+      pilot_elapsed_seconds, pilot_round_trips, target_duration_seconds,
+      minimum_round_trips, maximum_round_trips);
 }
 
 std::vector<size_t> build_core_to_core_scenario_order(size_t scenario_count, size_t loop_index) {

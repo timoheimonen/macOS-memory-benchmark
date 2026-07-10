@@ -101,12 +101,26 @@ namespace Constants {
   constexpr int DEFAULT_ITERATIONS = 1000;  // Initial calibration pilot/fallback; fixed only with --iterations
   constexpr int DEFAULT_LOOP_COUNT = 1;     // Default number of full benchmark loops
   constexpr int DEFAULT_LATENCY_SAMPLE_COUNT = 1000;  // Default number of latency samples per test
-  constexpr double BENCHMARK_CALIBRATION_TARGET_SECONDS = 0.150;
-  constexpr double BENCHMARK_CALIBRATION_MIN_SECONDS = 0.100;
-  constexpr double BENCHMARK_CALIBRATION_MAX_SECONDS = 0.250;
-  constexpr size_t BENCHMARK_CALIBRATION_MAX_CORRECTIONS = 2;
-  constexpr size_t BENCHMARK_CALIBRATION_MIN_PILOT_BYTES = 8 * 1024 * 1024;
-  constexpr size_t BENCHMARK_CALIBRATION_MAX_PASSES = 1000000000;
+  // Shared automatic bandwidth/pass calibration policy. Mode-specific aliases
+  // below keep ownership explicit at call sites and in serialized metadata.
+  constexpr double BANDWIDTH_CALIBRATION_TARGET_SECONDS = 0.150;
+  constexpr double BANDWIDTH_CALIBRATION_MIN_SECONDS = 0.100;
+  constexpr double BANDWIDTH_CALIBRATION_MAX_SECONDS = 0.250;
+  constexpr size_t BANDWIDTH_CALIBRATION_MAX_CORRECTIONS = 2;
+  constexpr size_t BANDWIDTH_CALIBRATION_MIN_PILOT_BYTES = 8 * BYTES_PER_MB;
+  constexpr size_t BANDWIDTH_CALIBRATION_MAX_PASSES = 1000000000;
+  constexpr double BENCHMARK_CALIBRATION_TARGET_SECONDS =
+      BANDWIDTH_CALIBRATION_TARGET_SECONDS;
+  constexpr double BENCHMARK_CALIBRATION_MIN_SECONDS =
+      BANDWIDTH_CALIBRATION_MIN_SECONDS;
+  constexpr double BENCHMARK_CALIBRATION_MAX_SECONDS =
+      BANDWIDTH_CALIBRATION_MAX_SECONDS;
+  constexpr size_t BENCHMARK_CALIBRATION_MAX_CORRECTIONS =
+      BANDWIDTH_CALIBRATION_MAX_CORRECTIONS;
+  constexpr size_t BENCHMARK_CALIBRATION_MIN_PILOT_BYTES =
+      BANDWIDTH_CALIBRATION_MIN_PILOT_BYTES;
+  constexpr size_t BENCHMARK_CALIBRATION_MAX_PASSES =
+      BANDWIDTH_CALIBRATION_MAX_PASSES;
   constexpr double BENCHMARK_LATENCY_TARGET_SECONDS = 0.250;
   constexpr double BENCHMARK_LATENCY_CALIBRATION_MIN_SECONDS = 0.100;
   constexpr double BENCHMARK_LATENCY_CALIBRATION_MAX_SECONDS = 0.300;
@@ -172,15 +186,21 @@ namespace Constants {
   constexpr size_t PATTERN_STRIDE_PAGE = 4096;  // Page stride (bytes)
   constexpr size_t PATTERN_STRIDE_PAGE_16K = 16 * 1024;  // Apple Silicon page-size stride candidate (bytes)
   constexpr size_t PATTERN_STRIDE_SUPERPAGE_2MB = 2 * 1024 * 1024;  // 2 MiB virtual-address stride (bytes)
-  constexpr double PATTERN_CALIBRATION_TARGET_SECONDS = 0.150;  // Automatic pattern sample target
-  constexpr double PATTERN_CALIBRATION_MIN_SECONDS = 0.100;  // Lower target-window bound
-  constexpr double PATTERN_CALIBRATION_MAX_SECONDS = 0.250;  // Upper target-window bound
-  constexpr size_t PATTERN_CALIBRATION_MAX_CORRECTIONS = 2;
+  constexpr double PATTERN_CALIBRATION_TARGET_SECONDS =
+      BANDWIDTH_CALIBRATION_TARGET_SECONDS;
+  constexpr double PATTERN_CALIBRATION_MIN_SECONDS =
+      BANDWIDTH_CALIBRATION_MIN_SECONDS;
+  constexpr double PATTERN_CALIBRATION_MAX_SECONDS =
+      BANDWIDTH_CALIBRATION_MAX_SECONDS;
+  constexpr size_t PATTERN_CALIBRATION_MAX_CORRECTIONS =
+      BANDWIDTH_CALIBRATION_MAX_CORRECTIONS;
   constexpr int PATTERN_JSON_SCHEMA_VERSION = 2;
   constexpr const char* PATTERN_METHODOLOGY_VERSION =
       "pattern-v2-phase-calibrated-seeded";
-  constexpr size_t PATTERN_CALIBRATION_MIN_PILOT_BYTES = 8 * 1024 * 1024;  // Pilot payload floor
-  constexpr size_t PATTERN_CALIBRATION_MAX_PASSES = 1000000000;  // Fits the int executor interface
+  constexpr size_t PATTERN_CALIBRATION_MIN_PILOT_BYTES =
+      BANDWIDTH_CALIBRATION_MIN_PILOT_BYTES;
+  constexpr size_t PATTERN_CALIBRATION_MAX_PASSES =
+      BANDWIDTH_CALIBRATION_MAX_PASSES;
   constexpr size_t PATTERN_RANDOM_ACCESS_MIN = 1000;  // Minimum number of random accesses
   constexpr size_t PATTERN_RANDOM_ACCESS_MAX = 1000000;  // Maximum number of random accesses
   constexpr size_t PATTERN_VALIDATION_INDICES_LIMIT = 100;  // Maximum indices to validate

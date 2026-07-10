@@ -35,6 +35,7 @@
 #include "core/config/config.h"
 #include "core/config/constants.h"
 #include "output/console/messages/messages_api.h"
+#include "utils/numeric_utils.h"
 #include "warmup/warmup.h"
 #include <atomic>
 #include <vector>
@@ -131,14 +132,6 @@ double run_pattern_sample(const BenchmarkConfig& config, Runner runner,
   return elapsed_seconds;
 }
 
-bool checked_multiply_size(size_t left, size_t right, size_t& result) {
-  if (left != 0 && right > std::numeric_limits<size_t>::max() / left) {
-    return false;
-  }
-  result = left * right;
-  return true;
-}
-
 PatternMeasurement build_pattern_measurement(
     const BenchmarkConfig& config, double bandwidth_gb_s, double elapsed_seconds,
     const PatternCalibrationDecision& calibration, size_t payload_bytes_per_pass,
@@ -170,10 +163,11 @@ PatternMeasurement build_pattern_measurement(
   if (measurement.passes == 0 || elapsed_seconds <= 0.0 ||
       !std::isfinite(elapsed_seconds) || !std::isfinite(bandwidth_gb_s) ||
       bandwidth_gb_s <= 0.0 ||
-      !checked_multiply_size(accesses_per_pass, measurement.passes,
-                             measurement.total_accesses) ||
-      !checked_multiply_size(payload_bytes_per_pass, measurement.passes,
-                             measurement.total_payload_bytes)) {
+      !NumericUtils::checked_multiply(accesses_per_pass, measurement.passes,
+                                      measurement.total_accesses) ||
+      !NumericUtils::checked_multiply(payload_bytes_per_pass,
+                                      measurement.passes,
+                                      measurement.total_payload_bytes)) {
     measurement.status = PatternMeasurementStatus::Invalid;
     measurement.status_reason =
         Messages::pattern_reason_calibration_or_accounting_failed();
