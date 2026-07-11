@@ -36,7 +36,7 @@ const std::string& error_analyze_core_to_core_must_be_used_alone() {
   static const std::string msg =
       "--analyze-core2core allows only optional -o/--output <file>, -r/--count <count>, and "
       "-n/--latency-samples <count>; sweep mode additionally allows -S/--sweep count=..., "
-      "-S/--sweep latency-samples=..., and -X/--sweep-max-runs <count>";
+      "-S/--sweep latency-samples=..., and -X/--sweep-max-runs <count>; -h/--help prints help";
   return msg;
 }
 
@@ -45,7 +45,7 @@ std::string error_core_to_core_measurement_failed(const std::string& reason) {
 }
 
 const std::string& msg_running_core_to_core_analysis() {
-  static const std::string msg = "\nRunning standalone core-to-core latency analysis...";
+  static const std::string msg = "\nRunning standalone core-to-core token-handoff protocol analysis...";
   return msg;
 }
 
@@ -57,7 +57,7 @@ std::string msg_core_to_core_scenario_progress(size_t current_loop, size_t total
 }
 
 const std::string& report_core_to_core_header() {
-  static const std::string msg = "--- Core-to-Core Cache-Line Handoff Report ---";
+  static const std::string msg = "--- Core-to-Core Token-Handoff Protocol Report ---";
   return msg;
 }
 

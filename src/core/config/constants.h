@@ -73,8 +73,11 @@ namespace Constants {
   constexpr size_t BYTES_PER_KB = 1024;
   constexpr size_t BYTES_PER_MB = 1024 * 1024;
   
-  // Cache line alignment constant
-  constexpr size_t CACHE_LINE_SIZE_BYTES = 64;  // Cache line size for alignment (64 bytes on Apple Silicon)
+  // Project work/alignment granularity
+  // Project-wide 64-byte work/accounting granularity. This is not a runtime
+  // query of every supported CPU's physical cache-line size; core-to-core
+  // shared-state isolation therefore uses its own conservative boundary.
+  constexpr size_t CACHE_LINE_SIZE_BYTES = 64;
   
   // Latency test constants
   constexpr size_t LATENCY_STRIDE_BYTES = 256;  // Latency test access stride (8-byte aligned, DRAM-oriented default)
@@ -164,6 +167,8 @@ namespace Constants {
   constexpr size_t DEFAULT_ANALYZE_TLB_SWEEP_MAX_RUNS = 16;  // Safer standalone TLB Cartesian sweep limit
 
   // Core-to-core standalone mode constants
+  constexpr size_t CORE_TO_CORE_SHARED_STATE_ISOLATION_BYTES =
+      128;  // Conservative storage-block isolation for token and control state
   constexpr int CORE_TO_CORE_DEFAULT_LOOP_COUNT = 3;  // Default repeats provide a median and repeatability diagnostics
   constexpr int CORE_TO_CORE_DEFAULT_LATENCY_SAMPLE_COUNT = DEFAULT_LATENCY_SAMPLE_COUNT;  // Default sample count per loop for core-to-core mode
   constexpr size_t CORE_TO_CORE_WARMUP_ROUND_TRIPS = 20 * 1000;  // Minimum warmup handoff count
@@ -172,7 +177,7 @@ namespace Constants {
   constexpr size_t CORE_TO_CORE_CALIBRATION_WARMUP_ROUND_TRIPS = 1 * 1000 * 1000;  // Excluded pilot-pair warmup
   constexpr size_t CORE_TO_CORE_CALIBRATION_ROUND_TRIPS = 100 * 1000;  // Excluded pilot handoff count
   constexpr size_t CORE_TO_CORE_MAX_ROUND_TRIPS = 100 * 1000 * 1000;  // Calibration arithmetic guardrail
-  constexpr double CORE_TO_CORE_WARMUP_TARGET_SECONDS = 0.025;  // Per-pair steady-state warmup target
+  constexpr double CORE_TO_CORE_WARMUP_TARGET_SECONDS = 0.025;  // Per-pair final warmup duration target
   constexpr double CORE_TO_CORE_HEADLINE_TARGET_SECONDS = 0.250;  // Continuous headline target
   constexpr double CORE_TO_CORE_HEADLINE_MIN_SECONDS = 0.100;  // Intended headline duration lower bound
   constexpr double CORE_TO_CORE_HEADLINE_MAX_SECONDS = 0.300;  // Intended headline duration upper bound
@@ -180,7 +185,7 @@ namespace Constants {
   constexpr double CORE_TO_CORE_CV_WARNING_PCT = 7.5;  // Repeatability diagnostic threshold
   constexpr int CORE_TO_CORE_JSON_SCHEMA_VERSION = 2;
   constexpr const char* CORE_TO_CORE_METHODOLOGY_VERSION =
-      "core2core-v2-calibrated-balanced-auditable";
+      "core2core-v3-calibrated-balanced-auditable-128b-isolation";
   constexpr int CORE_TO_CORE_READY_THREADS_TARGET = 2;  // Required thread count before benchmark start signal
   constexpr uint32_t CORE_TO_CORE_INITIATOR_TURN_VALUE = 0;  // Turn token value for initiator thread ownership
   constexpr uint32_t CORE_TO_CORE_RESPONDER_TURN_VALUE = 1;  // Turn token value for responder thread ownership

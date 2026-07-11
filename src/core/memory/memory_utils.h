@@ -16,18 +16,20 @@
 
 /**
  * @file memory_utils.h
- * @brief Memory utility functions for buffer management and cache line alignment
+ * @brief Memory utility functions for buffer management and 64-byte work alignment
  *
  * This file provides utility functions for memory operations commonly used in benchmarks:
- * - Cache line alignment functions to prevent false sharing in multi-threaded scenarios
+ * - Helpers for aligning benchmark work to the project's 64-byte granularity
  * - Pointer alignment utilities for optimal memory access patterns
  * - Latency chain setup for pointer-chasing memory latency tests
  * - Buffer initialization routines for benchmark preparation
  *
- * All inline alignment functions ensure 64-byte (cache line) boundaries to optimize
- * memory access and prevent performance degradation from false sharing.
+ * The inline alignment functions round to the project's fixed 64-byte work boundary.
+ * This supports consistent buffer partitioning but does not by itself guarantee
+ * physical cache-line separation on every supported CPU.
  *
- * @note Cache line size is defined as 64 bytes (Constants::CACHE_LINE_SIZE_BYTES)
+ * @note The project's chain-layout granularity is 64 bytes (Constants::CACHE_LINE_SIZE_BYTES); this is not a runtime
+ *       claim about the physical cache-line size of every supported CPU.
  */
 
 #ifndef MEMORY_UTILS_H
@@ -91,12 +93,12 @@ struct MemoryUtilsTestHooks {
 void set_memory_utils_test_hooks(const MemoryUtilsTestHooks* hooks);
 
 /**
- * @brief Align an offset to the next cache line boundary (rounds up)
+ * @brief Align an offset to the next project 64-byte boundary (rounds up)
  * @param offset The offset to align
  * @return The aligned offset (rounded up to next 64-byte boundary)
  * 
- * This function ensures that memory offsets are aligned to cache line boundaries
- * to prevent false sharing between threads accessing adjacent memory regions.
+ * This function applies the project's fixed work-alignment granularity; callers
+ * must not treat it as a runtime physical cache-line-size query.
  */
 inline size_t align_to_cache_line(size_t offset) {
   const size_t mask = Constants::CACHE_LINE_SIZE_BYTES - 1;
@@ -104,12 +106,12 @@ inline size_t align_to_cache_line(size_t offset) {
 }
 
 /**
- * @brief Align a pointer to the next cache line boundary (rounds up)
+ * @brief Align a pointer to the next project 64-byte boundary (rounds up)
  * @param ptr The pointer to align
  * @return The aligned pointer (rounded up to next 64-byte boundary)
  * 
- * This function ensures that memory pointers are aligned to cache line boundaries
- * to prevent false sharing between threads accessing adjacent memory regions.
+ * This function applies the project's fixed work-alignment granularity; callers
+ * must not treat it as a runtime physical cache-line-size query.
  */
 inline void* align_ptr_to_cache_line(void* ptr) {
   uintptr_t addr = reinterpret_cast<uintptr_t>(ptr);
@@ -118,9 +120,9 @@ inline void* align_ptr_to_cache_line(void* ptr) {
 }
 
 /**
- * @brief Calculate the offset needed to align a pointer to cache line boundary
+ * @brief Calculate the offset needed to align a pointer to the project 64-byte boundary
  * @param ptr The pointer to align
- * @return The number of bytes to add to ptr to reach the next cache line boundary
+ * @return The number of bytes to add to ptr to reach the next project boundary
  */
 inline size_t alignment_offset_to_cache_line(void* ptr) {
   uintptr_t addr = reinterpret_cast<uintptr_t>(ptr);

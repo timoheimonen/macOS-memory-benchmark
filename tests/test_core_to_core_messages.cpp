@@ -23,9 +23,16 @@
 TEST(CoreToCoreMessagesTest, UsageMentionsStandaloneMode) {
   const std::string usage = Messages::usage_options("memory_benchmark");
   EXPECT_NE(usage.find("--analyze-core2core"), std::string::npos);
+  EXPECT_NE(usage.find("acquire/release token-handoff"), std::string::npos);
+  EXPECT_NE(usage.find("protocol, coherence, and scheduler effects"), std::string::npos);
   EXPECT_NE(usage.find("core-to-core schema 2"), std::string::npos);
   EXPECT_NE(usage.find("target 250 ms"), std::string::npos);
   EXPECT_NE(usage.find("Defaults to 3 loops"), std::string::npos);
+}
+
+TEST(CoreToCoreMessagesTest, ReportLabelsMeasurementAsTokenHandoffProtocol) {
+  EXPECT_NE(Messages::msg_running_core_to_core_analysis().find("token-handoff protocol"), std::string::npos);
+  EXPECT_NE(Messages::report_core_to_core_header().find("Token-Handoff Protocol"), std::string::npos);
 }
 
 TEST(CoreToCoreMessagesTest, StandaloneModeErrorMessageExists) {
@@ -35,6 +42,7 @@ TEST(CoreToCoreMessagesTest, StandaloneModeErrorMessageExists) {
   EXPECT_NE(msg.find("--count"), std::string::npos);
   EXPECT_NE(msg.find("--latency-samples"), std::string::npos);
   EXPECT_NE(msg.find("--sweep"), std::string::npos);
+  EXPECT_NE(msg.find("--help"), std::string::npos);
 }
 
 TEST(CoreToCoreMessagesTest, HintStatusMessageContainsRoleAndCodes) {
