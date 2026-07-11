@@ -225,6 +225,7 @@ TEST(ExecutableCliIntegrationTest, StandardBenchmarkWritesJsonIntegration) {
   EXPECT_EQ(result.exit_code, EXIT_SUCCESS);
   EXPECT_NE(result.output.find("Running benchmarks"), std::string::npos);
   EXPECT_NE(result.output.find("Results saved to:"), std::string::npos);
+  EXPECT_EQ(result.output.find('\r'), std::string::npos);
 
   const std::string json = read_file(output.path());
   EXPECT_NE(json.find("\"mode\": \"benchmark\""), std::string::npos);
@@ -255,6 +256,7 @@ TEST(ExecutableCliIntegrationTest, PatternModeRunsPatternOrchestrationIntegratio
   EXPECT_EQ(result.exit_code, EXIT_SUCCESS);
   EXPECT_NE(result.output.find("Running Pattern Benchmarks"), std::string::npos);
   EXPECT_NE(result.output.find("Sequential Forward:"), std::string::npos);
+  EXPECT_EQ(result.output.find('\r'), std::string::npos);
   EXPECT_EQ(result.output.find("Pattern Efficiency Analysis:"), std::string::npos);
   EXPECT_EQ(result.output.find("Prefetcher effectiveness"), std::string::npos);
   EXPECT_EQ(result.output.find("TLB pressure"), std::string::npos);

@@ -1,6 +1,6 @@
 # Parameter Compatibility Matrix
 
-Working version 0.59.0
+Working version 0.60.0
 
 ## All Flags
 
@@ -130,10 +130,13 @@ Additional sweep rules:
 - `--sweep latency-chain-mode=global-random` is invalid with `--analyze-tlb`.
 - Direct options outside `--sweep` are used as fixed values for every generated run.
 - If the same parameter is provided both directly and through `--sweep`, the sweep value is applied per run.
-- Combined sweep JSON is atomically checkpointed after each stored standard/pattern/TLB result and records
-  completion/conclusion metadata. For these modes, `completed_runs` equals stored `runs` entries and can include a
-  gracefully interrupted nested result. Core-to-core sweeps also store the latest failed or interrupted attempt, but
-  their `completed_runs` counts only nested results with status `complete`, so `runs` may be longer than `completed_runs`.
+- Combined sweep JSON is atomically checkpointed after every attempted run. `attempted_runs` equals stored `runs`
+  entries; partial, interrupted, and failed attempts remain in that array but stop further execution and do not
+  increment `completed_runs`. A standard or pattern attempt is complete only with nested `status: "complete"` and
+  `results_complete: true`; TLB requires nested `tlb_analysis.status: "complete"` and
+  `tlb_analysis.conclusions_valid: true`; core-to-core requires nested `core_to_core_latency.status: "complete"` and
+  `measurements_complete: true`. Top-level `conclusions_valid` is true only when the sweep status is complete and
+  `completed_runs == planned_runs`.
 
 ### Incompatible Modifier Combinations
 

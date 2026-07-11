@@ -2,7 +2,7 @@
 
 ## 1. Purpose
 
-This document specifies how `macOS-memory-benchmark` implements standalone TLB analysis mode (`--analyze-tlb`) in version `0.59.0`.
+This document specifies how `macOS-memory-benchmark` implements standalone TLB analysis mode (`--analyze-tlb`) in version `0.60.0`.
 
 The goal is to provide a reproducible, implementation-accurate description of:
 
@@ -94,10 +94,13 @@ Allowed `--analyze-tlb` sweep keys:
 
 Sweep mode requires `--output <file>`. `--sweep-max-runs <count>` limits the number of generated combinations. Its default is `16` for `--analyze-tlb` and `256` for other modes; an explicit value overrides the mode default.
 
-Each sweep parameter key may appear only once. The combined JSON is atomically checkpointed after each stored run result
-and records top-level `status`, `planned_runs`, `completed_runs`, and `conclusions_valid` fields. In the common
-standard/pattern/TLB sweep envelope, `completed_runs` is the number of stored `runs` entries; a gracefully interrupted
-TLB payload can therefore be stored and included in that count.
+Each sweep parameter key may appear only once. The combined JSON is atomically checkpointed after each attempted run and
+records top-level `status`, `status_reason`, `planned_runs`, `attempted_runs`, `completed_runs`, and
+`conclusions_valid` fields. Every attempted run is retained with its own `status` and `status_reason`, so
+`attempted_runs` equals the length of `runs`. A TLB attempt increments `completed_runs` only when its nested
+`tlb_analysis.status` is `complete` and its nested `tlb_analysis.conclusions_valid` is `true`; partial, interrupted, and
+failed attempts remain auditable but do not increment the completed count. The first incomplete attempt stops further
+runs.
 
 `--sweep latency-chain-mode=...` follows the same chain-mode rule as direct `--latency-chain-mode`: `global-random` is rejected for `--analyze-tlb`.
 
@@ -469,13 +472,16 @@ When `--sweep` is used with `--analyze-tlb`, output uses the common sweep envelo
 - `runs[]`, where each run contains:
   - `index`
   - `parameters`
+  - `status`
+  - `status_reason`
   - `result`
 
 Each `runs[].result` entry is the same single-run TLB analysis JSON payload described in section 9.1.
-The top-level sweep object also includes `status`, `planned_runs`, `completed_runs`, and `conclusions_valid`. It is
-atomically rewritten after every stored run result, so a later failure or interrupt leaves a readable checkpoint.
-`completed_runs` is the length of `runs`, not a claim that every nested TLB payload has status `complete`; consumers must
-also inspect `runs[].result.tlb_analysis.status` and the top-level `conclusions_valid` flag.
+The top-level sweep object also includes `status`, `status_reason`, `planned_runs`, `attempted_runs`, `completed_runs`,
+and `conclusions_valid`. It is atomically rewritten after every attempted run, so a later failure or interrupt leaves a
+readable checkpoint. `attempted_runs` equals the length of `runs`; `completed_runs` includes only entries whose nested
+`tlb_analysis.status` is `complete` and nested `tlb_analysis.conclusions_valid` is `true`. Partial, interrupted, and
+failed attempts stay in `runs` without validating the sweep conclusions.
 
 ## 10. Current Schema Worked Example (Deterministic Exporter Fixture)
 
@@ -525,7 +531,7 @@ the production serializer. Its deliberately synthetic inputs make this a contrac
       "active_cache_line_footprint_bytes": 2097152
     }
   },
-  "version": "0.59.0"
+  "version": "0.60.0"
 }
 ```
 

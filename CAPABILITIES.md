@@ -7,6 +7,10 @@ The tool is intended for practical microarchitectural investigation rather than 
 bandwidth, latency, access-pattern sensitivity, TLB behavior, and core-to-core cache-line handoff characteristics using
 native ARM64 code paths.
 
+Long-running benchmark entry points block SIGINT/SIGTERM while worker threads exist, poll for interruption between safe
+phases, and restore the caller's exact prior signal mask at scope exit. Live progress is emitted only to an interactive
+`stderr` terminal; redirected output remains free of spinner carriage-return sequences.
+
 ## Main Memory and Cache Bandwidth
 
 The standard benchmark mode can measure read, write, and copy bandwidth for both main memory and cache-sized working
@@ -82,8 +86,11 @@ These patterns are useful for comparing regular streams, different virtual-addre
 orders. In particular, `strided_2mb` means a 2 MiB virtual-address interval; it does not assert 2 MiB physical-page
 backing. Use `--analyze-tlb` for controlled translation-related conclusions.
 
-Pattern JSON records measurement-level status but has no top-level loop-completeness fields. A consumer that requires a
-complete result must compare per-operation measurement counts and statuses with the requested `configuration.loop_count`.
+Pattern schema-3 JSON records measurement-level evidence plus top-level status/reason, exact planned/completed loop and
+measurement counters, and `results_complete`. Each loop plans 21 operations. Numeric measured values and intentional
+skips count as completed; invalid or failed execution does not. Interrupted, partial, and failed runs preserve completed
+evidence, but only Complete loops feed aggregate values and headlines. Consumers that require completeness must require
+both `status: "complete"` and `results_complete: true`.
 
 ## TLB Behavior
 
@@ -139,9 +146,9 @@ require a non-zero locality window; standalone TLB analysis rejects explicit `gl
 
 ## Built-in Parameter Sweeps
 
-Sweep mode runs repeated measurements across parameter lists and stores every run in one combined JSON file. This makes
-buffer-size, cache-size, thread-scaling, stride, locality, chain-mode, TLB-density, and core-to-core sample-depth
-experiments reproducible without external shell orchestration.
+Sweep mode runs repeated measurements across parameter lists and stores every attempted run in one combined JSON file.
+This makes buffer-size, cache-size, thread-scaling, stride, locality, chain-mode, TLB-density, and core-to-core
+sample-depth experiments reproducible without external shell orchestration.
 
 Supported sweep targets include:
 
@@ -159,10 +166,12 @@ Supported sweep targets include:
 Multiple `--sweep` options are combined as a Cartesian product. `--sweep-max-runs` caps the generated run count (default
 `16` for `--analyze-tlb`, `256` otherwise), and
 `--output` is required for the combined JSON result. A sweep parameter key may appear only once. Combined sweep JSON is
-atomically checkpointed and exposes status, planned/completed run counts, and conclusion validity. For standard, pattern,
-and TLB sweeps, `completed_runs` is the number of stored `runs` entries; a mode that returns a graceful interruption may
-therefore store an interrupted nested result in that count. Core-to-core sweeps also retain the latest failed or
-interrupted attempt in `runs`, but only nested results with status `complete` contribute to their `completed_runs`.
+atomically checkpointed and exposes status/reason, planned/attempted/completed run counts, and conclusion validity.
+`attempted_runs` always equals the number of stored `runs` entries. An entry increments `completed_runs` only when its
+nested command is genuinely complete: standard and pattern require `status: "complete"` plus `results_complete: true`,
+TLB requires `tlb_analysis.status: "complete"` plus `tlb_analysis.conclusions_valid: true`, and core-to-core requires
+`core_to_core_latency.status: "complete"` plus `measurements_complete: true`. Partial, interrupted, and failed attempts
+remain auditable, stop further attempts, and never make the sweep conclusions valid.
 
 ## Core-to-Core Cache-Line Handoff
 

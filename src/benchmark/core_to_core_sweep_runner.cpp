@@ -22,12 +22,12 @@
 
 #include <filesystem>
 #include <iostream>
-#include <limits>
 #include <utility>
 #include <vector>
 
 #include "benchmark/core_to_core_latency.h"
 #include "core/config/constants.h"
+#include "core/config/sweep_utils.h"
 #include "core/config/version.h"
 #include "core/signal/signal_handler.h"
 #include "core/timing/timer.h"
@@ -113,17 +113,7 @@ std::vector<std::vector<CoreToCoreSweepAssignment>> build_assignments(const Core
 }  // namespace
 
 size_t calculate_core_to_core_sweep_run_count(const CoreToCoreLatencyConfig& config) {
-  size_t run_count = 1;
-  for (const CoreToCoreSweepSpec& spec : config.sweep_specs) {
-    if (spec.values.empty()) {
-      return 0;
-    }
-    if (run_count > std::numeric_limits<size_t>::max() / spec.values.size()) {
-      return std::numeric_limits<size_t>::max();
-    }
-    run_count *= spec.values.size();
-  }
-  return run_count;
+  return calculate_sweep_run_count_from_specs(config.sweep_specs);
 }
 
 SweepExecutionResult execute_core_to_core_sweep_plan(const std::vector<nlohmann::ordered_json>& run_parameters,
@@ -137,12 +127,11 @@ int run_core_to_core_latency_sweep(const CoreToCoreLatencyConfig& base_config) {
   std::cout << Messages::usage_header(SOFTVERSION);
   std::cout << Messages::msg_running_sweep(run_count) << std::endl;
 
-  block_benchmark_signals();
+  BenchmarkSignalMaskGuard signal_guard;
 
   auto total_timer_opt = HighResTimer::create();
   if (!total_timer_opt) {
     std::cerr << Messages::error_prefix() << Messages::error_timer_creation_failed() << std::endl;
-    restore_signal_mask();
     return EXIT_FAILURE;
   }
   auto& total_timer = *total_timer_opt;
@@ -186,7 +175,6 @@ int run_core_to_core_latency_sweep(const CoreToCoreLatencyConfig& base_config) {
 
   const SweepExecutionResult execution = execute_core_to_core_sweep_plan(run_parameters, std::move(output_json), hooks);
 
-  restore_signal_mask();
   if (execution.output_json.value("status", "failed") == "interrupted") {
     const nlohmann::ordered_json& runs = execution.output_json["runs"];
     if (!runs.is_array() || runs.empty() || runs.back().value("status", "failed") == "complete") {

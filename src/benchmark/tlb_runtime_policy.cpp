@@ -27,6 +27,7 @@
 #include <vector>
 
 #include "core/config/constants.h"
+#include "utils/numeric_utils.h"
 
 namespace {
 
@@ -39,36 +40,6 @@ constexpr size_t kFallbackMemoryBudgetMb = 384;
 constexpr size_t kScratchFixedOverheadBytes = Constants::BYTES_PER_MB;
 constexpr size_t kScratchBytesPerNode = 256;
 constexpr double kDurationOverheadFactor = 1.25;
-
-size_t saturating_multiply(size_t left, size_t right) {
-  if (left == 0 || right == 0) {
-    return 0;
-  }
-  if (left > std::numeric_limits<size_t>::max() / right) {
-    return std::numeric_limits<size_t>::max();
-  }
-  return left * right;
-}
-
-size_t saturating_add(size_t left, size_t right) {
-  return left > std::numeric_limits<size_t>::max() - right
-             ? std::numeric_limits<size_t>::max()
-             : left + right;
-}
-
-size_t round_up_to_multiple(size_t value, size_t multiple) {
-  if (multiple == 0) {
-    return 0;
-  }
-  const size_t remainder = value % multiple;
-  if (remainder == 0) {
-    return value;
-  }
-  const size_t increment = multiple - remainder;
-  return value > std::numeric_limits<size_t>::max() - increment
-             ? std::numeric_limits<size_t>::max()
-             : value + increment;
-}
 
 double median_in_place(std::vector<double>& values) {
   if (values.empty()) {
@@ -145,8 +116,8 @@ size_t calculate_tlb_pilot_accesses(size_t node_count) {
     return 0;
   }
   const size_t minimum_cycle_accesses =
-      saturating_multiply(node_count, kPilotMinimumCycles);
-  return round_up_to_multiple(
+      NumericUtils::saturating_multiply(node_count, kPilotMinimumCycles);
+  return NumericUtils::saturating_round_up(
       std::max(kPilotAccessFloor, minimum_cycle_accesses), node_count);
 }
 
@@ -166,7 +137,7 @@ size_t calculate_tlb_calibrated_accesses(
     return 0;
   }
 
-  const size_t minimum_accesses = saturating_multiply(
+  const size_t minimum_accesses = NumericUtils::saturating_multiply(
       node_count, profile.minimum_chain_cycles);
   const double ns_per_access =
       pilot_duration_ns / static_cast<double>(pilot_accesses);
@@ -181,7 +152,8 @@ size_t calculate_tlb_calibrated_accesses(
       std::max(profile.maximum_accesses, minimum_accesses);
   desired_accesses =
       std::clamp(desired_accesses, minimum_accesses, effective_maximum);
-  const size_t rounded = round_up_to_multiple(desired_accesses, node_count);
+  const size_t rounded =
+      NumericUtils::saturating_round_up(desired_accesses, node_count);
   return std::min(rounded, effective_maximum - (effective_maximum % node_count));
 }
 
@@ -239,8 +211,8 @@ size_t calculate_tlb_memory_budget_mb(size_t available_memory_mb) {
 }
 
 size_t estimate_tlb_scratch_bytes(size_t maximum_node_count) {
-  const size_t variable_bytes =
-      saturating_multiply(maximum_node_count, kScratchBytesPerNode);
+  const size_t variable_bytes = NumericUtils::saturating_multiply(
+      maximum_node_count, kScratchBytesPerNode);
   if (variable_bytes > std::numeric_limits<size_t>::max() -
                            kScratchFixedOverheadBytes) {
     return std::numeric_limits<size_t>::max();
@@ -292,15 +264,17 @@ TlbWorkEstimate estimate_tlb_work(size_t point_count,
   estimate.estimated_peak_memory_bytes = estimated_peak_memory_bytes;
   estimate.maximum_pilot_accesses_per_measurement =
       calculate_tlb_pilot_accesses(maximum_node_count);
-  estimate.maximum_accesses_per_measurement = std::max(
-      profile.maximum_accesses,
-      saturating_multiply(maximum_node_count, profile.minimum_chain_cycles));
-  const size_t maximum_combined_accesses = saturating_add(
+  estimate.maximum_accesses_per_measurement =
+      std::max(profile.maximum_accesses,
+               NumericUtils::saturating_multiply(
+                   maximum_node_count, profile.minimum_chain_cycles));
+  const size_t maximum_combined_accesses = NumericUtils::saturating_add(
       estimate.maximum_pilot_accesses_per_measurement,
       estimate.maximum_accesses_per_measurement);
-  estimate.maximum_pointer_accesses = saturating_multiply(
-      saturating_multiply(
-          saturating_multiply(point_count, profile.max_rounds), 2),
+  estimate.maximum_pointer_accesses = NumericUtils::saturating_multiply(
+      NumericUtils::saturating_multiply(
+          NumericUtils::saturating_multiply(point_count, profile.max_rounds),
+          2),
       maximum_combined_accesses);
   const double measurement_sec =
       static_cast<double>(profile.target_measurement_ns) / 1.0e9;

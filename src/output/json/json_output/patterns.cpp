@@ -96,8 +96,7 @@ nlohmann::json serialize_pattern_statistics(const std::vector<double>& values) {
 }
 
 nlohmann::json build_operation_json(const PatternStatistics& stats, PatternKind kind,
-                                    PatternOperation operation,
-                                    const std::vector<double>& fallback_values) {
+                                    PatternOperation operation) {
   std::vector<double> values;
   nlohmann::json samples = nlohmann::json::array();
   const PatternMeasurement* representative = nullptr;
@@ -105,6 +104,9 @@ nlohmann::json build_operation_json(const PatternStatistics& stats, PatternKind 
     const PatternMeasurement& measurement =
         get_pattern_measurement(loop_result, kind, operation);
     samples.push_back(serialize_pattern_measurement(measurement));
+    if (loop_result.status != PatternRunStatus::Complete) {
+      continue;
+    }
     if (representative == nullptr ||
         (representative->status != PatternMeasurementStatus::Measured &&
          measurement.status == PatternMeasurementStatus::Measured)) {
@@ -115,10 +117,6 @@ nlohmann::json build_operation_json(const PatternStatistics& stats, PatternKind 
       values.push_back(*measurement.bandwidth_gb_s);
     }
   }
-  if (stats.loop_results.empty()) {
-    values = fallback_values;
-  }
-
   nlohmann::json output;
   output["status"] = !values.empty()
                          ? "measured"
@@ -142,14 +140,14 @@ nlohmann::json build_operation_json(const PatternStatistics& stats, PatternKind 
   return output;
 }
 
-nlohmann::json build_pattern_json(
-    const PatternStatistics& stats, PatternKind kind,
-    const std::vector<double>& read_values,
-    const std::vector<double>& write_values,
-    const std::vector<double>& copy_values) {
+nlohmann::json build_pattern_json(const PatternStatistics& stats,
+                                  PatternKind kind) {
   nlohmann::json output;
   const PatternMeasurement* representative = nullptr;
   for (const PatternResults& loop_result : stats.loop_results) {
+    if (loop_result.status != PatternRunStatus::Complete) {
+      continue;
+    }
     for (PatternOperation operation : {PatternOperation::Read,
                                        PatternOperation::Write,
                                        PatternOperation::Copy}) {
@@ -193,11 +191,11 @@ nlohmann::json build_pattern_json(
 
   output[JsonKeys::BANDWIDTH] = {
       {JsonKeys::READ_GB_S,
-       build_operation_json(stats, kind, PatternOperation::Read, read_values)},
+       build_operation_json(stats, kind, PatternOperation::Read)},
       {JsonKeys::WRITE_GB_S,
-       build_operation_json(stats, kind, PatternOperation::Write, write_values)},
+       build_operation_json(stats, kind, PatternOperation::Write)},
       {JsonKeys::COPY_GB_S,
-       build_operation_json(stats, kind, PatternOperation::Copy, copy_values)}};
+       build_operation_json(stats, kind, PatternOperation::Copy)}};
   return output;
 }
 
@@ -207,31 +205,22 @@ nlohmann::json build_pattern_json(
 nlohmann::json build_patterns_json(const PatternStatistics& stats) {
   nlohmann::json patterns;
 
-  const bool has_results = !stats.loop_results.empty() ||
-                           !stats.all_forward_read_bw.empty();
-  if (!has_results) return patterns;
+  if (stats.loop_results.empty()) return patterns;
 
   patterns[JsonKeys::SEQUENTIAL_FORWARD] = build_pattern_json(
-      stats, PatternKind::SequentialForward, stats.all_forward_read_bw,
-      stats.all_forward_write_bw, stats.all_forward_copy_bw);
+      stats, PatternKind::SequentialForward);
   patterns[JsonKeys::SEQUENTIAL_REVERSE] = build_pattern_json(
-      stats, PatternKind::SequentialReverse, stats.all_reverse_read_bw,
-      stats.all_reverse_write_bw, stats.all_reverse_copy_bw);
+      stats, PatternKind::SequentialReverse);
   patterns[JsonKeys::STRIDED_64] = build_pattern_json(
-      stats, PatternKind::Strided64, stats.all_strided_64_read_bw,
-      stats.all_strided_64_write_bw, stats.all_strided_64_copy_bw);
+      stats, PatternKind::Strided64);
   patterns[JsonKeys::STRIDED_4096] = build_pattern_json(
-      stats, PatternKind::Strided4096, stats.all_strided_4096_read_bw,
-      stats.all_strided_4096_write_bw, stats.all_strided_4096_copy_bw);
+      stats, PatternKind::Strided4096);
   patterns[JsonKeys::STRIDED_16384] = build_pattern_json(
-      stats, PatternKind::Strided16384, stats.all_strided_16384_read_bw,
-      stats.all_strided_16384_write_bw, stats.all_strided_16384_copy_bw);
+      stats, PatternKind::Strided16384);
   patterns[JsonKeys::STRIDED_2MB] = build_pattern_json(
-      stats, PatternKind::Strided2MiB, stats.all_strided_2mb_read_bw,
-      stats.all_strided_2mb_write_bw, stats.all_strided_2mb_copy_bw);
+      stats, PatternKind::Strided2MiB);
   patterns[JsonKeys::RANDOM] = build_pattern_json(
-      stats, PatternKind::Random, stats.all_random_read_bw,
-      stats.all_random_write_bw, stats.all_random_copy_bw);
+      stats, PatternKind::Random);
   
   return patterns;
 }

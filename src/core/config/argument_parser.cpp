@@ -46,6 +46,7 @@
 
 #include "core/config/config.h"
 #include "core/config/constants.h"
+#include "core/config/sweep_utils.h"
 #include "core/system/system_info.h"
 #include "output/console/messages/messages_api.h"
 #include "utils/benchmark.h"
@@ -57,7 +58,6 @@
 #include <stdexcept>
 #include <cmath>
 #include <cstdlib>
-#include <vector>
 
 StrictIntegerParseStatus parse_strict_signed_decimal(const std::string& value,
                                                      long long& out_value) {
@@ -230,21 +230,6 @@ bool tlb_sweep_density_from_string(const std::string& value, TlbSweepDensity& ou
   return false;
 }
 
-std::vector<std::string> split_comma_values(const std::string& input) {
-  std::vector<std::string> values;
-  size_t value_start = 0;
-  while (value_start <= input.size()) {
-    const size_t comma = input.find(',', value_start);
-    if (comma == std::string::npos) {
-      values.push_back(input.substr(value_start));
-      break;
-    }
-    values.push_back(input.substr(value_start, comma - value_start));
-    value_start = comma + 1;
-  }
-  return values;
-}
-
 bool sweep_parameter_from_string(const std::string& value,
                                  SweepParameter& out_parameter,
                                  std::string& out_name) {
@@ -287,29 +272,14 @@ bool sweep_parameter_from_string(const std::string& value,
 }
 
 SweepSpec parse_sweep_spec(const std::string& spec_text) {
-  const size_t equals_pos = spec_text.find('=');
-  if (equals_pos == std::string::npos || equals_pos == 0 || equals_pos == spec_text.size() - 1) {
-    throw std::invalid_argument("sweep must use key=value1,value2 syntax");
-  }
-
-  const std::string key = spec_text.substr(0, equals_pos);
-  const std::string value_text = spec_text.substr(equals_pos + 1);
+  const ParsedSweepText parsed_text = parse_sweep_text(spec_text);
 
   SweepSpec spec;
-  if (!sweep_parameter_from_string(key, spec.parameter, spec.parameter_name)) {
-    throw std::invalid_argument("unsupported sweep parameter: " + key);
+  if (!sweep_parameter_from_string(parsed_text.key, spec.parameter, spec.parameter_name)) {
+    throw std::invalid_argument("unsupported sweep parameter: " + parsed_text.key);
   }
 
-  const std::vector<std::string> raw_values = split_comma_values(value_text);
-  if (raw_values.empty()) {
-    throw std::invalid_argument("sweep value list cannot be empty");
-  }
-
-  for (const std::string& raw_value : raw_values) {
-    if (raw_value.empty()) {
-      throw std::invalid_argument("sweep value list cannot contain empty values");
-    }
-
+  for (const std::string& raw_value : parsed_text.values) {
     SweepValue value;
     value.raw_value = raw_value;
 

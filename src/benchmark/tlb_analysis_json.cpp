@@ -22,13 +22,9 @@
 #include "benchmark/tlb_analysis_json.h"
 
 #include <algorithm>
-#include <chrono>
 #include <cstdlib>
-#include <ctime>
 #include <filesystem>
-#include <iomanip>
 #include <limits>
-#include <sstream>
 #include <string>
 
 #include "benchmark/tlb_analysis.h"
@@ -37,6 +33,7 @@
 #include "core/config/version.h"
 #include "core/memory/memory_utils.h"
 #include "output/json/json_output/json_output_api.h"
+#include "utils/json_utils.h"
 
 namespace {
 
@@ -131,16 +128,6 @@ nlohmann::ordered_json build_private_cache_knee_json(const PrivateCacheKneeDetec
   knee_json["distance_to_l1_bytes"] = distance_to_l1_bytes;
   knee_json["distance_to_l1_pages"] = distance_to_l1_pages;
   return knee_json;
-}
-
-std::string build_utc_timestamp() {
-  auto now = std::chrono::system_clock::now();
-  auto time_t = std::chrono::system_clock::to_time_t(now);
-  std::tm utc_time;
-  gmtime_r(&time_t, &utc_time);
-  std::ostringstream timestamp_str;
-  timestamp_str << std::put_time(&utc_time, "%Y-%m-%dT%H:%M:%SZ");
-  return timestamp_str.str();
 }
 
 double median_values(std::vector<double> values) {

@@ -12,7 +12,6 @@
 #include <vector>
 
 #include "benchmark/sweep_runner.h"
-#include "pattern_benchmark/pattern_benchmark.h"
 
 namespace {
 
@@ -35,21 +34,11 @@ Json make_tlb_result(const std::string& status, bool conclusions_valid, const st
   return {{"tlb_analysis", {{"status", status}, {"status_reason", reason}, {"conclusions_valid", conclusions_valid}}}};
 }
 
-Json make_complete_pattern_result(size_t loop_count) {
-  Json patterns = Json::object();
-  for (size_t pattern_index = 0; pattern_index < static_cast<size_t>(PatternKind::Count); ++pattern_index) {
-    Json bandwidth = Json::object();
-    for (size_t operation_index = 0; operation_index < static_cast<size_t>(PatternOperation::Count);
-         ++operation_index) {
-      Json measurements = Json::array();
-      for (size_t loop_index = 0; loop_index < loop_count; ++loop_index) {
-        measurements.push_back({{"status", "measured"}, {"reason", ""}});
-      }
-      bandwidth["operation_" + std::to_string(operation_index)] = {{"measurements", std::move(measurements)}};
-    }
-    patterns["pattern_" + std::to_string(pattern_index)] = {{"bandwidth", std::move(bandwidth)}};
-  }
-  return {{"configuration", {{"loop_count", loop_count}}}, {"patterns", std::move(patterns)}};
+Json make_pattern_result(const std::string& status, bool results_complete,
+                         const std::string& reason = "") {
+  return {{"status", status},
+          {"status_reason", reason},
+          {"results_complete", results_complete}};
 }
 
 SweepExecutionHooks make_hooks(const std::vector<SweepRunOutcome>& outcomes, std::vector<Json>& checkpoints,
@@ -81,19 +70,47 @@ TEST(SweepRunnerTest, NestedCompletionIsModeAware) {
       classify_sweep_nested_completion(SweepNestedMode::TlbAnalysis, make_tlb_result("complete", true));
   EXPECT_EQ(tlb.status, SweepAttemptStatus::Complete);
 
-  Json patterns = make_complete_pattern_result(2);
-  patterns["patterns"]["pattern_5"]["bandwidth"]["operation_2"]["measurements"][0]["status"] = "skipped";
-  const SweepNestedCompletion pattern = classify_sweep_nested_completion(SweepNestedMode::Patterns, patterns);
+  const SweepNestedCompletion pattern = classify_sweep_nested_completion(
+      SweepNestedMode::Patterns, make_pattern_result("complete", true));
   EXPECT_EQ(pattern.status, SweepAttemptStatus::Complete);
 
   const SweepNestedCompletion unvalidated_tlb =
       classify_sweep_nested_completion(SweepNestedMode::TlbAnalysis, make_tlb_result("complete", false));
   EXPECT_EQ(unvalidated_tlb.status, SweepAttemptStatus::Partial);
 
-  patterns["patterns"].erase("pattern_6");
-  const SweepNestedCompletion incomplete_pattern =
-      classify_sweep_nested_completion(SweepNestedMode::Patterns, patterns);
+  const SweepNestedCompletion incomplete_pattern = classify_sweep_nested_completion(
+      SweepNestedMode::Patterns,
+      make_pattern_result("partial", false, "pattern loops remain"));
   EXPECT_EQ(incomplete_pattern.status, SweepAttemptStatus::Partial);
+  EXPECT_EQ(incomplete_pattern.reason, "pattern loops remain");
+
+  const SweepNestedCompletion inconsistent_complete =
+      classify_sweep_nested_completion(
+          SweepNestedMode::Patterns,
+          make_pattern_result("complete", false));
+  EXPECT_EQ(inconsistent_complete.status, SweepAttemptStatus::Partial);
+  EXPECT_EQ(inconsistent_complete.reason,
+            "nested-pattern-result-incomplete");
+
+  const SweepNestedCompletion interrupted_pattern =
+      classify_sweep_nested_completion(
+          SweepNestedMode::Patterns,
+          make_pattern_result("interrupted", false, "stop requested"));
+  EXPECT_EQ(interrupted_pattern.status, SweepAttemptStatus::Interrupted);
+  EXPECT_EQ(interrupted_pattern.reason, "stop requested");
+
+  const SweepNestedCompletion failed_pattern = classify_sweep_nested_completion(
+      SweepNestedMode::Patterns,
+      make_pattern_result("failed", false, "allocation failed"));
+  EXPECT_EQ(failed_pattern.status, SweepAttemptStatus::Failed);
+  EXPECT_EQ(failed_pattern.reason, "allocation failed");
+
+  const SweepNestedCompletion malformed_pattern =
+      classify_sweep_nested_completion(SweepNestedMode::Patterns,
+                                       {{"status", "complete"}});
+  EXPECT_EQ(malformed_pattern.status, SweepAttemptStatus::Partial);
+  EXPECT_EQ(malformed_pattern.reason,
+            "missing-pattern-completion-metadata");
 }
 
 TEST(SweepRunnerTest, CompleteSweepCheckpointsEveryRunAndValidatesConclusions) {

@@ -18,229 +18,167 @@
  * @brief Pattern benchmark warmup functions
  */
 
-#include <atomic>    // For std::atomic
-#include <iostream>  // For std::cerr
-#include <thread>    // For std::thread
-#include <vector>    // For std::vector
+#include "warmup/warmup.h"
+
+#include <atomic>
+#include <iostream>
+#include <system_error>
+#include <thread>
+#include <vector>
 
 // macOS specific QoS
-#include <mach/mach.h>    // For kern_return_t
-#include <pthread/qos.h>  // For pthread_set_qos_class_self_np
+#include <mach/mach.h>
+#include <pthread/qos.h>
 
-#include "utils/benchmark.h"  // Includes definitions for assembly loops etc.
-#include "output/console/messages/messages_api.h"   // For error and warning messages
-#include "warmup/warmup.h"
+#include "asm/asm_functions.h"
+#include "output/console/messages/messages_api.h"
+#include "pattern_benchmark/pattern_work_plan.h"
 #include "warmup/warmup_internal.h"
-#include "core/config/constants.h"
 
 namespace {
 
-bool validate_strided_warmup_stride(size_t stride, size_t size) {
-  if (stride < 32) {
-    std::cerr << Messages::error_prefix() << Messages::error_stride_too_small() << std::endl;
-    return false;
-  }
-  if (stride > size || size - stride < Constants::PATTERN_ACCESS_SIZE_BYTES) {
-    std::cerr << Messages::error_prefix() << Messages::error_stride_too_large(stride, size) << std::endl;
-    return false;
-  }
-  if (stride % 32 != 0) {
-    std::cerr << Messages::warning_prefix() << Messages::warning_stride_not_aligned(stride) << std::endl;
-  }
-  return true;
-}
-
-bool validate_random_warmup_indices(const std::vector<size_t>& indices) {
-  if (indices.empty()) {
-    std::cerr << Messages::error_prefix() << Messages::error_indices_empty() << std::endl;
-    return false;
-  }
-
-  size_t sample_size = (indices.size() < 100) ? indices.size() : 100;
-  for (size_t i = 0; i < sample_size; ++i) {
-    if (indices[i] % 32 != 0) {
-      std::cerr << Messages::error_prefix() << Messages::error_index_not_aligned(i, indices[i]) << std::endl;
-      return false;
-    }
-  }
-
-  return true;
-}
-
-uint64_t run_strided_read_warmup_kernel(const void* src,
-                                        size_t byte_count,
-                                        size_t stride,
-                                        size_t num_iterations) {
-  return memory_read_strided_phased_loop_asm(src, byte_count, stride,
-                                              num_iterations, 0);
-}
-
-void run_strided_write_warmup_kernel(void* dst,
-                                     size_t byte_count,
-                                     size_t stride,
-                                     size_t num_iterations) {
-  memory_write_strided_phased_loop_asm(dst, byte_count, stride,
-                                       num_iterations, 0);
-}
-
-void run_strided_copy_warmup_kernel(void* dst,
-                                    const void* src,
-                                    size_t byte_count,
-                                    size_t stride,
-                                    size_t num_iterations) {
-  memory_copy_strided_phased_loop_asm(dst, src, byte_count, stride,
-                                      num_iterations, 0);
-}
-
-template<typename RandomOp>
-void run_random_warmup_operation(const std::vector<size_t>& indices, int num_threads, RandomOp operation) {
-  if (!validate_random_warmup_indices(indices)) {
+/**
+ * @brief Execute one warmup operation per finalized worker partition.
+ *
+ * Multi-worker warmups retain the worker QoS behavior used by the previous
+ * random warmup implementation. A single worker runs on the calling thread,
+ * matching the existing one-worker behavior.
+ */
+template <typename Worker, typename WorkerOperation>
+void run_pattern_warmup_workers(const std::vector<Worker>& workers,
+                                WorkerOperation operation) {
+  if (workers.empty()) {
     return;
   }
-
-  if (num_threads <= 0) {
-    return;
-  }
-
-  if (num_threads == 1 || indices.size() <= static_cast<size_t>(num_threads)) {
-    operation(indices.data(), indices.size());
+  if (workers.size() == 1) {
+    operation(workers.front());
     return;
   }
 
   std::vector<std::thread> threads;
-  threads.reserve(num_threads);
-
-  size_t indices_per_thread = indices.size() / num_threads;
-  size_t remainder = indices.size() % num_threads;
-
-  size_t offset = 0;
-  for (int t = 0; t < num_threads; ++t) {
-    size_t thread_count = indices_per_thread + (t < static_cast<int>(remainder) ? 1 : 0);
-    if (thread_count == 0 || offset >= indices.size()) continue;
-
-    size_t start_idx = offset;
-    size_t end_idx = offset + thread_count;
-    if (end_idx > indices.size()) end_idx = indices.size();
-    offset = end_idx;
-
-    std::vector<size_t> thread_indices(indices.begin() + start_idx, indices.begin() + end_idx);
-
-    threads.emplace_back([thread_indices = std::move(thread_indices), operation]() {
-      kern_return_t qos_ret = pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
-      if (qos_ret != KERN_SUCCESS) {
-        std::cerr << Messages::warning_prefix() << Messages::warning_qos_failed_worker_thread(qos_ret) << std::endl;
-      }
-
-      if (!thread_indices.empty()) {
-        operation(thread_indices.data(), thread_indices.size());
-      }
-    });
+  threads.reserve(workers.size());
+  WarmupThreadJoinGuard thread_join_guard(threads);
+  for (const Worker& worker : workers) {
+    const Worker* worker_ptr = &worker;
+    try {
+      threads.emplace_back([worker_ptr, operation]() {
+        kern_return_t qos_ret = pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
+        if (qos_ret != KERN_SUCCESS) {
+          std::cerr << Messages::warning_prefix() << Messages::warning_qos_failed_worker_thread(qos_ret) << std::endl;
+        }
+        operation(*worker_ptr);
+      });
+    } catch (const std::system_error&) {
+      return;
+    }
   }
-
-  join_threads(threads);
 }
 
 }  // namespace
 
-/**
- * @brief Warms up memory by reading from the buffer using strided access pattern.
- *
- * @param buffer Memory region to read from
- * @param size Total size of the buffer in bytes
- * @param stride Stride size in bytes (must be >= 32, aligned, and <= size)
- * @param num_threads Number of concurrent threads to use
- * @param dummy_checksum Atomic variable to accumulate a dummy result (prevents optimization)
- */
-void warmup_read_strided(void* buffer, size_t size, size_t stride, int num_threads, std::atomic<uint64_t>& dummy_checksum) {
-  if (!validate_strided_warmup_stride(stride, size)) {
+void warmup_read_strided(void* buffer, const PatternWorkPlan& plan,
+                         std::atomic<uint64_t>& dummy_checksum) {
+  if (buffer == nullptr || plan.phase_period_passes == 0) {
     return;
   }
-  
-  static_cast<void>(num_threads);
-  const size_t phase_cycle_passes = stride / Constants::PATTERN_ACCESS_SIZE_BYTES;
-  const uint64_t result =
-      run_strided_read_warmup_kernel(buffer, size, stride, phase_cycle_passes);
-  dummy_checksum.fetch_xor(result, std::memory_order_release);
+
+  char* buffer_start = static_cast<char*>(buffer);
+  run_pattern_warmup_workers(
+      plan.workers, [buffer_start, &plan, &dummy_checksum](const PatternWorkerRange& worker) {
+        const uint64_t result = memory_read_strided_phased_loop_asm(
+            buffer_start + worker.offset_bytes, worker.span_bytes,
+            plan.stride_bytes, plan.phase_period_passes, 0);
+        dummy_checksum.fetch_xor(result, std::memory_order_release);
+      });
 }
 
-/**
- * @brief Warms up memory by writing to the buffer using strided access pattern.
- *
- * @param buffer Memory region to write to
- * @param size Total size of the buffer in bytes
- * @param stride Stride size in bytes (must be >= 32, aligned, and <= size)
- * @param num_threads Number of concurrent threads to use
- */
-void warmup_write_strided(void* buffer, size_t size, size_t stride, int num_threads) {
-  if (!validate_strided_warmup_stride(stride, size)) {
+void warmup_write_strided(void* buffer, const PatternWorkPlan& plan) {
+  if (buffer == nullptr || plan.phase_period_passes == 0) {
     return;
   }
-  
-  static_cast<void>(num_threads);
-  const size_t phase_cycle_passes = stride / Constants::PATTERN_ACCESS_SIZE_BYTES;
-  run_strided_write_warmup_kernel(buffer, size, stride, phase_cycle_passes);
+
+  char* buffer_start = static_cast<char*>(buffer);
+  run_pattern_warmup_workers(
+      plan.workers, [buffer_start, &plan](const PatternWorkerRange& worker) {
+        memory_write_strided_phased_loop_asm(
+            buffer_start + worker.offset_bytes, worker.span_bytes,
+            plan.stride_bytes, plan.phase_period_passes, 0);
+      });
 }
 
-/**
- * @brief Warms up memory by copying data between buffers using strided access pattern.
- *
- * @param dst Destination memory region
- * @param src Source memory region
- * @param size Total size of data to copy in bytes
- * @param stride Stride size in bytes (must be >= 32, aligned, and <= size)
- * @param num_threads Number of concurrent threads to use
- */
-void warmup_copy_strided(void* dst, void* src, size_t size, size_t stride, int num_threads) {
-  if (!validate_strided_warmup_stride(stride, size)) {
+void warmup_copy_strided(void* dst, void* src, const PatternWorkPlan& plan) {
+  if (dst == nullptr || src == nullptr || plan.phase_period_passes == 0) {
     return;
   }
-  
-  static_cast<void>(num_threads);
-  const size_t phase_cycle_passes = stride / Constants::PATTERN_ACCESS_SIZE_BYTES;
-  run_strided_copy_warmup_kernel(dst, src, size, stride, phase_cycle_passes);
+
+  char* dst_start = static_cast<char*>(dst);
+  const char* src_start = static_cast<const char*>(src);
+  run_pattern_warmup_workers(
+      plan.workers, [dst_start, src_start, &plan](const PatternWorkerRange& worker) {
+        memory_copy_strided_phased_loop_asm(
+            dst_start + worker.offset_bytes, src_start + worker.offset_bytes,
+            worker.span_bytes, plan.stride_bytes, plan.phase_period_passes, 0);
+      });
 }
 
-/**
- * @brief Warms up memory by reading from the buffer using random access pattern.
- *
- * @param buffer Memory region to read from
- * @param indices Vector of byte offsets (must be 32-byte aligned and within buffer bounds)
- * @param num_threads Number of concurrent threads to use
- * @param dummy_checksum Atomic variable to accumulate a dummy result (prevents optimization)
- */
-void warmup_read_random(void* buffer, const std::vector<size_t>& indices, int num_threads, std::atomic<uint64_t>& dummy_checksum) {
-  run_random_warmup_operation(indices, num_threads,
-                              [buffer, &dummy_checksum](const size_t* random_indices, size_t random_count) {
-                                uint64_t result = memory_read_random_loop_asm(buffer, random_indices, random_count);
-                                dummy_checksum.fetch_xor(result, std::memory_order_release);
-                              });
+void warmup_read_random(
+    void* buffer,
+    const std::vector<PatternRandomWorkerIndices>& worker_indices,
+    std::atomic<uint64_t>& dummy_checksum) {
+  if (buffer == nullptr) {
+    return;
+  }
+
+  char* buffer_start = static_cast<char*>(buffer);
+  run_pattern_warmup_workers(
+      worker_indices,
+      [buffer_start, &dummy_checksum](const PatternRandomWorkerIndices& worker) {
+        if (worker.indices.empty()) {
+          return;
+        }
+        const uint64_t result = memory_read_random_loop_asm(
+            buffer_start + worker.offset_bytes, worker.indices.data(),
+            worker.indices.size());
+        dummy_checksum.fetch_xor(result, std::memory_order_release);
+      });
 }
 
-/**
- * @brief Warms up memory by writing to the buffer using random access pattern.
- *
- * @param buffer Memory region to write to
- * @param indices Vector of byte offsets (must be 32-byte aligned and within buffer bounds)
- * @param num_threads Number of concurrent threads to use
- */
-void warmup_write_random(void* buffer, const std::vector<size_t>& indices, int num_threads) {
-  run_random_warmup_operation(indices, num_threads,
-                              [buffer](const size_t* random_indices, size_t random_count) {
-                                memory_write_random_loop_asm(buffer, random_indices, random_count);
-                              });
+void warmup_write_random(
+    void* buffer,
+    const std::vector<PatternRandomWorkerIndices>& worker_indices) {
+  if (buffer == nullptr) {
+    return;
+  }
+
+  char* buffer_start = static_cast<char*>(buffer);
+  run_pattern_warmup_workers(
+      worker_indices, [buffer_start](const PatternRandomWorkerIndices& worker) {
+        if (worker.indices.empty()) {
+          return;
+        }
+        memory_write_random_loop_asm(buffer_start + worker.offset_bytes,
+                                     worker.indices.data(),
+                                     worker.indices.size());
+      });
 }
 
-/**
- * @brief Warms up memory by copying data between buffers using random access pattern.
- *
- * @param dst Destination memory region
- * @param src Source memory region
- * @param indices Vector of byte offsets (must be 32-byte aligned and within buffer bounds)
- * @param num_threads Number of concurrent threads to use
- */
-void warmup_copy_random(void* dst, void* src, const std::vector<size_t>& indices, int num_threads) {
-  run_random_warmup_operation(indices, num_threads,
-                              [dst, src](const size_t* random_indices, size_t random_count) {
-                                memory_copy_random_loop_asm(dst, src, random_indices, random_count);
-                              });
+void warmup_copy_random(
+    void* dst, void* src,
+    const std::vector<PatternRandomWorkerIndices>& worker_indices) {
+  if (dst == nullptr || src == nullptr) {
+    return;
+  }
+
+  char* dst_start = static_cast<char*>(dst);
+  const char* src_start = static_cast<const char*>(src);
+  run_pattern_warmup_workers(
+      worker_indices,
+      [dst_start, src_start](const PatternRandomWorkerIndices& worker) {
+        if (worker.indices.empty()) {
+          return;
+        }
+        memory_copy_random_loop_asm(
+            dst_start + worker.offset_bytes, src_start + worker.offset_bytes,
+            worker.indices.data(), worker.indices.size());
+      });
 }

@@ -31,6 +31,7 @@
 #include "benchmark/benchmark_runner.h"
 #include "core/config/config.h"
 #include "core/config/constants.h"
+#include "output/console/messages/messages_api.h"
 #include "output/json/json_output/json_output_api.h"
 #include "pattern_benchmark/pattern_benchmark.h"
 
@@ -307,11 +308,77 @@ TEST(JsonSchemaTest, PatternExporterIncludesPatternsMode) {
 
   const nlohmann::json output_json = read_json_file(config.output_file);
   EXPECT_EQ(output_json[JsonKeys::CONFIGURATION][JsonKeys::MODE], Constants::PATTERNS_JSON_MODE_NAME);
+  EXPECT_EQ(output_json[JsonKeys::CONFIGURATION]["pattern_schema_version"], 3);
   EXPECT_EQ(output_json[JsonKeys::CONFIGURATION]["methodology_version"],
             "pattern-v2-phase-calibrated-seeded");
   EXPECT_EQ(output_json[JsonKeys::CONFIGURATION]["pattern_seed"], "42");
   EXPECT_EQ(output_json[JsonKeys::CONFIGURATION]["thread_selection_policy"],
             "detected-core-count-default");
+  EXPECT_EQ(output_json["status"], "not-started");
+  EXPECT_FALSE(output_json["results_complete"].get<bool>());
+  EXPECT_FALSE(output_json.contains(JsonKeys::PATTERNS));
+}
+
+TEST(JsonSchemaTest, PatternSchemaV3SerializesExactCompletionContract) {
+  BenchmarkConfig config;
+  config.loop_count = 1;
+  PatternStatistics statistics;
+  initialize_pattern_statistics(statistics, 1);
+  PatternResults loop;
+  for (PatternMeasurement& measurement : loop.measurements) {
+    measurement.status = PatternMeasurementStatus::Skipped;
+    measurement.status_reason = "intentional test skip";
+  }
+  collect_pattern_loop_result(statistics, std::move(loop));
+
+  nlohmann::json output = build_pattern_results_json(config, statistics, 1.0);
+  EXPECT_EQ(output["status"], "complete");
+  EXPECT_EQ(output["status_reason"], "");
+  EXPECT_EQ(output["planned_loops"], 1u);
+  EXPECT_EQ(output["completed_loops"], 1u);
+  EXPECT_EQ(output["planned_measurements"], 21u);
+  EXPECT_EQ(output["completed_measurements"], 21u);
+  EXPECT_TRUE(output["results_complete"].get<bool>());
+  EXPECT_TRUE(output.contains(JsonKeys::PATTERNS));
+
+  initialize_pattern_statistics(statistics, 2);
+  statistics.status = PatternRunStatus::Failed;
+  statistics.status_reason =
+      Messages::pattern_reason_buffers_allocation_failed();
+  output = build_pattern_results_json(config, statistics, 0.0);
+  EXPECT_EQ(output["status"], "failed");
+  EXPECT_EQ(output["status_reason"],
+            Messages::pattern_reason_buffers_allocation_failed());
+  EXPECT_EQ(output["planned_loops"], 2u);
+  EXPECT_EQ(output["completed_loops"], 0u);
+  EXPECT_EQ(output["planned_measurements"], 42u);
+  EXPECT_EQ(output["completed_measurements"], 0u);
+  EXPECT_FALSE(output["results_complete"].get<bool>());
+  EXPECT_FALSE(output.contains(JsonKeys::PATTERNS));
+
+  statistics.status = PatternRunStatus::Partial;
+  statistics.status_reason = "pattern loop incomplete";
+  statistics.completed_loops = 1;
+  statistics.completed_measurements = 21;
+  output = build_pattern_results_json(config, statistics, 0.5);
+  EXPECT_EQ(output["status"], "partial");
+  EXPECT_EQ(output["status_reason"], "pattern loop incomplete");
+  EXPECT_EQ(output["planned_loops"], 2u);
+  EXPECT_EQ(output["completed_loops"], 1u);
+  EXPECT_EQ(output["planned_measurements"], 42u);
+  EXPECT_EQ(output["completed_measurements"], 21u);
+  EXPECT_FALSE(output["results_complete"].get<bool>());
+
+  statistics.status = PatternRunStatus::Interrupted;
+  statistics.status_reason = "stop requested";
+  output = build_pattern_results_json(config, statistics, 0.6);
+  EXPECT_EQ(output["status"], "interrupted");
+  EXPECT_EQ(output["status_reason"], "stop requested");
+  EXPECT_EQ(output["planned_loops"], 2u);
+  EXPECT_EQ(output["completed_loops"], 1u);
+  EXPECT_EQ(output["planned_measurements"], 42u);
+  EXPECT_EQ(output["completed_measurements"], 21u);
+  EXPECT_FALSE(output["results_complete"].get<bool>());
 }
 
 TEST(JsonSchemaTest, PatternMeasurementsIncludeStatusAndMethodologyMetadata) {
@@ -322,6 +389,10 @@ TEST(JsonSchemaTest, PatternMeasurementsIncludeStatusAndMethodologyMetadata) {
   config.user_specified_pattern_seed = true;
 
   PatternResults loop;
+  for (PatternMeasurement& measurement : loop.measurements) {
+    measurement.status = PatternMeasurementStatus::Skipped;
+    measurement.status_reason = "intentional test skip";
+  }
   PatternMeasurement measured;
   measured.status = PatternMeasurementStatus::Measured;
   measured.status_reason.clear();
@@ -375,9 +446,8 @@ TEST(JsonSchemaTest, PatternMeasurementsIncludeStatusAndMethodologyMetadata) {
                           std::move(random));
 
   PatternStatistics statistics;
-  statistics.loop_results.push_back(loop);
-  statistics.all_forward_read_bw.push_back(12.5);
-  statistics.all_random_read_bw.push_back(12.5);
+  initialize_pattern_statistics(statistics, 1);
+  collect_pattern_loop_result(statistics, std::move(loop));
 
   ASSERT_EQ(save_pattern_results_to_json(config, statistics, 1.0), EXIT_SUCCESS);
   const nlohmann::json output = read_json_file(config.output_file);

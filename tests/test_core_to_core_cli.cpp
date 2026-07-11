@@ -282,6 +282,7 @@ TEST(CoreToCoreCliTest, RejectsMalformedSweepListsAndValues) {
   constexpr const char* kInvalidReason =
       "must be an integer without whitespace, a plus sign, or trailing characters";
   const InvalidSweepCase cases[] = {
+      {"count", "--sweep", "count", "sweep must use key=value1,value2 syntax"},
       {"count=,1", "--sweep", "count=,1", "sweep value list cannot contain empty values"},
       {"count=1,", "--sweep", "count=1,", "sweep value list cannot contain empty values"},
       {"count=1,,2", "--sweep", "count=1,,2", "sweep value list cannot contain empty values"},

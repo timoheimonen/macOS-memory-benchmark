@@ -38,6 +38,7 @@
 
 #include "core/config/config.h"
 #include "core/config/constants.h"
+#include "core/config/sweep_utils.h"
 #include "core/system/system_info.h"
 #include "output/console/messages/messages_api.h"
 #include <cstdlib>
@@ -45,23 +46,8 @@
 #include <iostream>
 #include <limits>
 #include <set>
-#include <unistd.h>  // getpagesize
 
 namespace {
-
-size_t calculate_sweep_run_count(const BenchmarkConfig& config) {
-  size_t run_count = 1;
-  for (const SweepSpec& spec : config.sweep_specs) {
-    if (spec.values.empty()) {
-      return 0;
-    }
-    if (run_count > std::numeric_limits<size_t>::max() / spec.values.size()) {
-      return std::numeric_limits<size_t>::max();
-    }
-    run_count *= spec.values.size();
-  }
-  return run_count;
-}
 
 int validate_analyze_tlb_stride(size_t stride_bytes, size_t page_size_bytes) {
   if (stride_bytes == 0) {
@@ -212,7 +198,7 @@ int validate_config(BenchmarkConfig& config) {
       }
     }
 
-    const size_t sweep_run_count = calculate_sweep_run_count(config);
+    const size_t sweep_run_count = calculate_sweep_run_count_from_specs(config.sweep_specs);
     if (sweep_run_count == 0 || sweep_run_count > config.sweep_max_runs) {
       std::cerr << Messages::error_prefix()
                 << Messages::error_sweep_too_many_runs(sweep_run_count, config.sweep_max_runs)

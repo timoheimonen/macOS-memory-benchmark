@@ -32,10 +32,10 @@
 #include "output/json/json_output/json_output_api.h"
 #include "core/config/config.h"     // For BenchmarkConfig
 #include "core/config/constants.h"
+#include "core/system/page_size.h"
 #include "third_party/nlohmann/json.hpp"   // JSON library
 
 #include <string>
-#include <unistd.h>
 
 // Build configuration JSON object
 nlohmann::json build_config_json(const BenchmarkConfig& config, const char* mode_name) {
@@ -86,7 +86,7 @@ nlohmann::json build_config_json(const BenchmarkConfig& config, const char* mode
         "cyclic-latin-square-across-count-loops";
     config_json["operation_execution_order_policy"] =
         "fixed-read-write-copy-with-operation-specific-warmup";
-    config_json["native_page_size_bytes"] = static_cast<size_t>(getpagesize());
+    config_json["native_page_size_bytes"] = get_system_page_size_bytes();
     config_json["qos_policy"] = "best-effort-scheduler-hint-no-core-pinning";
     config_json["thread_selection_policy"] =
         config.user_specified_threads ? "explicit-request-capped-to-detected-cores"
@@ -130,8 +130,7 @@ nlohmann::json build_config_json(const BenchmarkConfig& config, const char* mode
     config_json["locality_comparison_semantics"] =
         "paired-alternating-rounds-global-minus-locality-16k";
     config_json["warmup_semantics"] = "steady-state-warm-memory";
-    config_json["native_page_size_bytes"] =
-        static_cast<size_t>(getpagesize());
+    config_json["native_page_size_bytes"] = get_system_page_size_bytes();
     config_json["qos_policy"] =
         "best-effort-scheduler-hint-no-core-pinning";
     config_json["main_thread_qos"] = {

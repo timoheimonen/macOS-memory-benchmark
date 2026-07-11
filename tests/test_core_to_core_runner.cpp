@@ -33,25 +33,14 @@
 #include "benchmark/core_to_core_sweep_runner.h"
 #include "core/config/constants.h"
 #include "core/timing/timer.h"
+#include "test_timer_system_calls.h"
 
 namespace {
 
 uint64_t deterministic_timer_ticks() { return 100; }
 
-kern_return_t deterministic_timebase_info(mach_timebase_info_t info) {
-  info->numer = 1;
-  info->denom = 1;
-  return KERN_SUCCESS;
-}
-
-class ScopedDeterministicTimerSystemCalls {
- public:
-  ScopedDeterministicTimerSystemCalls() {
-    set_timer_system_calls_for_testing({deterministic_timer_ticks, deterministic_timebase_info});
-  }
-
-  ~ScopedDeterministicTimerSystemCalls() { reset_timer_system_calls_for_testing(); }
-};
+using ScopedDeterministicTimerSystemCalls =
+    test_timer_system_calls::ScopedTimerSystemCalls<deterministic_timer_ticks>;
 
 CoreToCoreWorkPlan make_small_work_plan() {
   CoreToCoreWorkPlan plan;
@@ -117,6 +106,35 @@ TEST(CoreToCoreRunnerTest, WorkPlanUsesDurationTargetsFromExcludedPilot) {
   EXPECT_EQ(plan.sample_window_round_trips, 10000u);
 }
 
+TEST(CoreToCoreRunnerTest, ResponderWorkAccountingRejectsOverflowBeforeThreads) {
+  const ScopedDeterministicTimerSystemCalls timer_system_calls;
+  const ScenarioDescriptor scenario = {
+      Constants::CORE_TO_CORE_SCENARIO_NO_AFFINITY,
+      Constants::CORE_TO_CORE_AFFINITY_HINT_DISABLED,
+      Constants::CORE_TO_CORE_AFFINITY_TAG_NONE,
+      Constants::CORE_TO_CORE_AFFINITY_TAG_NONE,
+  };
+
+  CoreToCoreWorkPlan plan = make_small_work_plan();
+  plan.warmup_round_trips = std::numeric_limits<size_t>::max();
+  plan.headline_round_trips = 1;
+  ScenarioMeasurement add_overflow;
+  EXPECT_FALSE(execute_single_scenario(scenario, plan, 0, add_overflow));
+  EXPECT_EQ(add_overflow.status, CoreToCoreMeasurementStatus::Failed);
+  EXPECT_EQ(add_overflow.status_reason, "invalid-or-overflowing-work-plan");
+
+  plan = make_small_work_plan();
+  plan.warmup_round_trips = 1;
+  plan.headline_round_trips = 1;
+  plan.sample_window_round_trips = std::numeric_limits<size_t>::max();
+  ScenarioMeasurement multiply_overflow;
+  EXPECT_FALSE(
+      execute_single_scenario(scenario, plan, 2, multiply_overflow));
+  EXPECT_EQ(multiply_overflow.status, CoreToCoreMeasurementStatus::Failed);
+  EXPECT_EQ(multiply_overflow.status_reason,
+            "invalid-or-overflowing-work-plan");
+}
+
 TEST(CoreToCoreRunnerTest, SummaryStatisticsUseExactLinearPercentilesAndSampleVariance) {
   const CoreToCoreSummaryStats stats = calculate_core_to_core_summary_stats({5.0, 1.0, 4.0, 2.0, 3.0});
   const double expected_sample_stddev = std::sqrt(2.5);
@@ -125,7 +143,7 @@ TEST(CoreToCoreRunnerTest, SummaryStatisticsUseExactLinearPercentilesAndSampleVa
   EXPECT_DOUBLE_EQ(stats.p90, 4.6);
   EXPECT_DOUBLE_EQ(stats.p95, 4.8);
   EXPECT_DOUBLE_EQ(stats.p99, 4.96);
-  EXPECT_DOUBLE_EQ(stats.sample_stddev, expected_sample_stddev);
+  EXPECT_DOUBLE_EQ(stats.stddev, expected_sample_stddev);
   EXPECT_DOUBLE_EQ(stats.coefficient_of_variation_pct, expected_sample_stddev / 3.0 * 100.0);
   EXPECT_DOUBLE_EQ(stats.median_absolute_deviation, 1.0);
 }
