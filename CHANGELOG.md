@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.61.0] - Unreleased
+## [0.61.0] - 2026-07-11
 
 ### Added
   - **Standalone Metal GPU memory-bandwidth benchmark**: Added `-G` / `--gpu-bandwidth` for effective compute-payload read and write bandwidth plus copy bandwidth (aggregate read + write payload) on Apple Silicon. The standalone mode uses two private/tracked buffers, a 512 MB per-buffer default, a 64 MB methodology minimum, three balanced loops by default, exact work with `--iterations`, duration-calibrated automatic work otherwise, and median/repeatability reporting for repeated loops.
