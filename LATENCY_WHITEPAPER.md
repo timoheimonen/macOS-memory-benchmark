@@ -2,7 +2,7 @@
 
 ## 1. Purpose
 
-This document explains how `macOS-memory-benchmark` version 0.59.1 measures memory latency on Apple Silicon.
+This document explains how `macOS-memory-benchmark` version 0.60.0 measures memory latency on Apple Silicon.
 
 The latency path is designed to measure **load-to-use delay** (pointer chasing), not bulk throughput.
 It combines:
@@ -244,7 +244,7 @@ analysis.
 - When present, segmented windows are under each headline aggregate's `pooled_sample_distribution`, with values and
   loop-boundary metadata kept separate from continuous loop headlines.
 - The current standard schema 2 does not serialize the legacy `chain_diagnostics.unique_pages_touched` blocks. Do not
-  use the old `main_memory.latency.chain_diagnostics` or `cache.*.latency.chain_diagnostics` paths for version 0.59.1
+  use the old `main_memory.latency.chain_diagnostics` or `cache.*.latency.chain_diagnostics` paths for version 0.60.0
   output.
 
 When `--latency-tlb-locality-kb` is not explicitly supplied, standard main-memory latency also runs three paired rounds

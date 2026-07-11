@@ -1,6 +1,6 @@
 # Project Structure — macOS-memory-benchmark
 
-**Version:** 0.59.1
+**Version:** 0.60.0
 **Platform:** ARM64 / AArch64 (Apple Silicon macOS)
 **License:** GNU General Public License v3.0
 
@@ -155,7 +155,7 @@ Core infrastructure for configuration, memory management, macOS system introspec
 |---|---|
 | `config.h` | `BenchmarkConfig` structure for standard, pattern, standalone TLB, and their common sweep settings; core-to-core uses a separate config type |
 | `constants.h` | Named constants for memory limits, cache size bounds, stride values, buffer sizing factors, and latency access counts |
-| `version.h` | `SOFTVERSION` macro (semantic version string, currently `"0.59.1"`) |
+| `version.h` | `SOFTVERSION` macro (semantic version string, currently `"0.60.0"`) |
 | `argument_parser.cpp` | Parses standard, pattern, and standalone TLB options into `BenchmarkConfig`; core-to-core is pre-routed to its dedicated parser |
 | `config_validator.cpp` | Validates the parsed configuration; emits errors for out-of-range or conflicting settings |
 | `buffer_calculator.cpp` | Derives buffer sizes for each cache/memory level from the validated configuration and detected system parameters |

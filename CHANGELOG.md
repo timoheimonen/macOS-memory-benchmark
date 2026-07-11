@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.59.1] - 2026-07-10
+## [0.60.0] - 2026-07-11
 
 ### Changed
   - **Shared DRY primitives replace parallel implementations**: Centralized overflow-safe arithmetic, calibration scaling, sweep parsing/counting, deterministic seed mixing, descriptive statistics, console summaries, UTC timestamps, native page-size queries, and standard phase selection while preserving mode-specific contracts.
@@ -14,7 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - **Pattern completion is explicit in schema 3**: Pattern commands now retain status/reason plus exact planned/completed loop and 21-per-loop measurement counters. JSON exposes `results_complete`, direct and sweep execution preserve partial or failed evidence, and sweep classification consumes this top-level contract instead of reconstructing completion from nested operations.
   - **Pattern measurements have one source of truth**: Removed the 21 duplicate scalar bandwidth fields and aggregate-vector reconstruction fallback from per-loop results; collection, headlines, console output, and JSON now consume the status-bearing measurement array.
   - **Build inputs are discovered automatically**: Production and test C++ sources, ARM64 assembly sources, headers, and generated dependency files now participate in the Makefile graph without duplicated hand-maintained inventories.
-  - **Versioned documentation describes 0.59.1 consistently**: Current specifications, whitepapers, JSON examples, and the source/test inventory now carry the release version while archived results retain their original version metadata.
+  - **Versioned documentation describes 0.60.0 consistently**: Current specifications, whitepapers, JSON examples, and the source/test inventory now carry the release version while archived results retain their original version metadata.
 
 ### Fixed
   - **Warmups follow measured work plans**: Cache reads use the cache kernel, strided and random warmups consume finalized worker partitions, and partially started warmup thread sets are joined safely on construction failure.
