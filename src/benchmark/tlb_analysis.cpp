@@ -591,7 +591,7 @@ TlbPairedPointSummary summarize_tlb_paired_point(
  * - Reports spread, packed, and same-round translation-delta P50 values plus the
  *   active cache-line footprint.
  * - Only available when the selected buffer is at least 512MB and the paired
- *   comparison pass completes; the raw spread baseline delta is JSON compatibility data.
+ *   comparison pass completes; JSON retains the paired measurements and derived summary.
  *
  * @return EXIT_SUCCESS on success, EXIT_FAILURE on allocation or measurement error.
  */

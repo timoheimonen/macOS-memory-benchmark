@@ -282,11 +282,6 @@ int main(int argc, char *argv[]) {
     return benchmark_result;
   }
 
-  // --- Free Memory ---
-  // std::cout << "\nFreeing memory..." << std::endl;
-  // Memory is freed automatically when src_buffer_ptr, dst_buffer_ptr,
-  // and lat_buffer_ptr go out of scope. No manual munmap needed.
-
   // --- Print Total Time ---
   double total_elapsed_time_sec = total_execution_timer.stop();                      // Stop overall timer
   std::cout << Messages::msg_done_total_time(total_elapsed_time_sec) << std::endl;  // Print duration
