@@ -289,7 +289,7 @@ int run_gpu_bandwidth_mode(int argc, char* argv[]) {
     return EXIT_SUCCESS;
   }
 
-  print_program_banner();
+  print_runtime_banner();
 
   GpuRunResult result;
   result.main_thread_qos = prepare_main_thread_benchmark_qos();

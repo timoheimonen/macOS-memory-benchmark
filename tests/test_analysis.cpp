@@ -19,12 +19,15 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdlib>
+#include <string>
 #include <utility>
 #include <vector>
 
 #include "benchmark/tlb_analysis.h"
 #include "core/config/config.h"
 #include "core/config/constants.h"
+#include "core/config/version.h"
+#include "output/console/messages/messages_api.h"
 
 namespace {
 
@@ -110,7 +113,13 @@ int run_tlb_analysis_silently(
   testing::internal::CaptureStderr();
   const int result = run_tlb_analysis(config, stop_requested, seam);
   (void)testing::internal::GetCapturedStderr();
-  (void)testing::internal::GetCapturedStdout();
+  const std::string standard_output = testing::internal::GetCapturedStdout();
+  EXPECT_EQ(standard_output.find(Messages::config_header(SOFTVERSION)),
+            std::string::npos)
+      << standard_output;
+  EXPECT_EQ(standard_output.find(Messages::usage_header(SOFTVERSION)),
+            std::string::npos)
+      << standard_output;
   return result;
 }
 

@@ -35,9 +35,9 @@ std::string capture_results(const BenchmarkConfig& config,
 
 }  // namespace
 
-TEST(OutputPrinterTest, ProgramBannerUsesSharedRuntimeContract) {
+TEST(OutputPrinterTest, RuntimeBannerUsesSharedContract) {
   testing::internal::CaptureStdout();
-  print_program_banner();
+  print_runtime_banner();
   const std::string output = testing::internal::GetCapturedStdout();
 
   const std::string expected =

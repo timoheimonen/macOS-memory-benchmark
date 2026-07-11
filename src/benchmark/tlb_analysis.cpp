@@ -46,7 +46,6 @@
 #include "benchmark/tlb_sweep_planner.h"
 #include "core/config/config.h"
 #include "core/config/constants.h"
-#include "core/config/version.h"
 #include "core/memory/memory_manager.h"
 #include "core/memory/memory_utils.h"
 #include "core/signal/signal_handler.h"
@@ -580,7 +579,7 @@ TlbPairedPointSummary summarize_tlb_paired_point(
  * @brief Run standalone TLB analysis benchmark mode.
  *
  * Workflow:
- * - Print program header and run banner.
+ * - Print mode-specific run status; the top-level caller owns the shared runtime banner.
  * - Try 1024/512/256MB buffers in descending order and select the largest candidate whose
  *   predicted peak fits the memory budget and whose allocation succeeds.
  * - Use configured latency stride (default from `--latency-stride-bytes`).
@@ -631,7 +630,6 @@ int run_tlb_analysis_impl(
   if (execution_seam == nullptr || !execution_seam->elapsed_seconds) {
     analysis_start = std::chrono::steady_clock::now();
   }
-  std::cout << Messages::usage_header(SOFTVERSION);
   std::cout << Messages::msg_running_tlb_analysis() << std::endl;
 
   bool interrupted = false;

@@ -887,6 +887,10 @@ sweeps use the same envelope with `base_mode: "analyze_tlb"` and support `latenc
 
 ## Understanding Console Output
 
+Every successfully started direct mode and parameter sweep begins with one shared version, copyright, and GPL
+banner before mode-specific configuration or status output. Nested runs within a sweep do not repeat it. Help and
+usage diagnostics retain the separate usage preamble; preflight failures do not emit the runtime banner.
+
 ### 1) Configuration section
 
 Shows active settings and detected hardware.

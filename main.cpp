@@ -178,6 +178,7 @@ int main(int argc, char *argv[]) {
     if (validate_config(config) != EXIT_SUCCESS) {
       return EXIT_FAILURE;
     }
+    print_runtime_banner();
     return run_with_benchmark_preparation(config, [&]() {
       return run_tlb_analysis(config);
     });
@@ -196,6 +197,7 @@ int main(int argc, char *argv[]) {
   }
 
   // --- Print Config ---
+  print_runtime_banner();
   print_configuration(config.buffer_size, config.buffer_size_mb, peak_allocation_bytes,
                       config.iterations, config.loop_count,
                       config.use_non_cacheable, config.latency_stride_bytes,

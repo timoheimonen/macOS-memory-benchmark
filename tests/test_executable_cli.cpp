@@ -124,12 +124,42 @@ std::string read_file(const std::string& path) {
   return contents.str();
 }
 
+size_t count_occurrences(const std::string& text, const std::string& needle) {
+  size_t count = 0;
+  size_t position = 0;
+  while (!needle.empty() &&
+         (position = text.find(needle, position)) != std::string::npos) {
+    ++count;
+    position += needle.size();
+  }
+  return count;
+}
+
+void expect_single_runtime_banner(const CliResult& result) {
+  EXPECT_EQ(count_occurrences(result.output,
+                              Messages::config_header(SOFTVERSION)),
+            1u)
+      << result.output;
+  EXPECT_EQ(count_occurrences(result.output, Messages::config_copyright()),
+            1u)
+      << result.output;
+  EXPECT_EQ(count_occurrences(result.output, Messages::config_license()), 1u)
+      << result.output;
+}
+
+void expect_no_runtime_banner(const CliResult& result) {
+  EXPECT_EQ(result.output.find(Messages::config_header(SOFTVERSION)),
+            std::string::npos)
+      << result.output;
+}
+
 }  // namespace
 
 TEST(ExecutableCliIntegrationTest, NoArgumentsShowsHelpAndReturnsSuccessIntegration) {
   const CliResult result = run_memory_benchmark({});
 
   EXPECT_EQ(result.exit_code, EXIT_SUCCESS);
+  expect_no_runtime_banner(result);
   EXPECT_NE(result.output.find("Usage:"), std::string::npos);
   EXPECT_NE(result.output.find("--benchmark"), std::string::npos);
 }
@@ -138,6 +168,7 @@ TEST(ExecutableCliIntegrationTest, HelpFlagShowsHelpAndReturnsSuccessIntegration
   const CliResult result = run_memory_benchmark({"-h"});
 
   EXPECT_EQ(result.exit_code, EXIT_SUCCESS);
+  expect_no_runtime_banner(result);
   EXPECT_NE(result.output.find("Usage:"), std::string::npos);
   EXPECT_NE(result.output.find("--patterns"), std::string::npos);
   EXPECT_NE(result.output.find("--gpu-bandwidth"), std::string::npos);
@@ -148,6 +179,7 @@ TEST(ExecutableCliIntegrationTest, GpuHelpUsesDedicatedStandaloneParserIntegrati
       run_memory_benchmark({"--gpu-bandwidth", "--help"});
 
   EXPECT_EQ(result.exit_code, EXIT_SUCCESS);
+  expect_no_runtime_banner(result);
   EXPECT_NE(result.output.find(
                 "Usage: ./memory_benchmark --gpu-bandwidth [options]"),
             std::string::npos);
@@ -163,6 +195,7 @@ TEST(ExecutableCliIntegrationTest, GpuModeConflictIsOrderIndependentIntegration)
                                     "--gpu-bandwidth"}}) {
     const CliResult result = run_memory_benchmark(arguments);
     EXPECT_EQ(result.exit_code, EXIT_FAILURE);
+    expect_no_runtime_banner(result);
     EXPECT_NE(result.output.find("mutually exclusive"), std::string::npos);
     EXPECT_EQ(result.output.find("Running GPU memory bandwidth"),
               std::string::npos);
@@ -176,6 +209,7 @@ TEST(ExecutableCliIntegrationTest, GpuMinimumFailsBeforeOutputIntegration) {
        output.path()});
 
   EXPECT_EQ(result.exit_code, EXIT_FAILURE);
+  expect_no_runtime_banner(result);
   EXPECT_NE(result.output.find("at least 64 MB"), std::string::npos);
   EXPECT_EQ(access(output.path().c_str(), F_OK), -1);
 }
@@ -186,10 +220,7 @@ TEST(ExecutableCliIntegrationTest, GpuWritesValidatedSchemaV1Integration) {
       {"--gpu-bandwidth", "--buffer-size", "64", "--iterations", "1",
        "--count", "1", "--seed", "42", "--output", output.path()});
 
-  EXPECT_NE(result.output.find(Messages::config_header(SOFTVERSION)),
-            std::string::npos);
-  EXPECT_NE(result.output.find(Messages::config_copyright()), std::string::npos);
-  EXPECT_NE(result.output.find(Messages::config_license()), std::string::npos);
+  expect_single_runtime_banner(result);
   ASSERT_EQ(access(output.path().c_str(), F_OK), 0);
   const nlohmann::json json =
       nlohmann::json::parse(read_file(output.path()));
@@ -263,6 +294,7 @@ TEST(ExecutableCliIntegrationTest, OptionsWithoutModeShowHelpAndReturnSuccessInt
   const CliResult result = run_memory_benchmark({"--threads", "1"});
 
   EXPECT_EQ(result.exit_code, EXIT_SUCCESS);
+  expect_no_runtime_banner(result);
   EXPECT_NE(result.output.find("Usage:"), std::string::npos);
   EXPECT_NE(result.output.find("--threads <count>"), std::string::npos);
 }
@@ -272,6 +304,7 @@ TEST(ExecutableCliIntegrationTest, InvalidStandardModeConfigReturnsFailureIntegr
       {"--benchmark", "--only-bandwidth", "--latency-samples", "1"});
 
   EXPECT_EQ(result.exit_code, EXIT_FAILURE);
+  expect_no_runtime_banner(result);
   EXPECT_NE(result.output.find("--only-bandwidth cannot be used with --latency-samples"), std::string::npos);
 }
 
@@ -280,6 +313,7 @@ TEST(ExecutableCliIntegrationTest, CoreToCoreArgumentsAreRoutedBeforeNormalParse
       {"--analyze-core2core", "--buffer-size", "256"});
 
   EXPECT_EQ(result.exit_code, EXIT_FAILURE);
+  expect_no_runtime_banner(result);
   EXPECT_NE(result.output.find("--analyze-core2core allows only optional"), std::string::npos);
 }
 
@@ -291,6 +325,7 @@ TEST(ExecutableCliIntegrationTest, CoreToCoreWritesCalibratedAuditJsonIntegratio
       "--output", output.path()});
 
   EXPECT_EQ(result.exit_code, EXIT_SUCCESS);
+  expect_single_runtime_banner(result);
   const nlohmann::json json = nlohmann::json::parse(read_file(output.path()));
   EXPECT_EQ(json["version"], SOFTVERSION);
   EXPECT_EQ(json["configuration"]["schema_version"], 2);
@@ -309,6 +344,7 @@ TEST(ExecutableCliIntegrationTest, CoreToCoreSweepWritesCompletionMetadataIntegr
       output.path()});
 
   EXPECT_EQ(result.exit_code, EXIT_SUCCESS);
+  expect_single_runtime_banner(result);
   const nlohmann::json json = nlohmann::json::parse(read_file(output.path()));
   EXPECT_EQ(json["version"], SOFTVERSION);
   EXPECT_EQ(json["status"], "complete");
@@ -327,6 +363,7 @@ TEST(ExecutableCliIntegrationTest, AnalyzeTlbInvalidStrideSweepFailsBeforeExecut
       "--output", output.path()});
 
   EXPECT_EQ(result.exit_code, EXIT_FAILURE);
+  expect_no_runtime_banner(result);
   EXPECT_NE(result.output.find("must be a multiple of 8 bytes"), std::string::npos);
   EXPECT_EQ(result.output.find("Running sweep"), std::string::npos);
   EXPECT_EQ(access(output.path().c_str(), F_OK), -1);
@@ -341,6 +378,7 @@ TEST(ExecutableCliIntegrationTest, StandardBenchmarkWritesJsonIntegration) {
       output.path()});
 
   EXPECT_EQ(result.exit_code, EXIT_SUCCESS);
+  expect_single_runtime_banner(result);
   EXPECT_NE(result.output.find("Running benchmarks"), std::string::npos);
   EXPECT_NE(result.output.find("Results saved to:"), std::string::npos);
   EXPECT_EQ(result.output.find('\r'), std::string::npos);
@@ -360,6 +398,7 @@ TEST(ExecutableCliIntegrationTest, StandardSweepWritesCompletionMetadataIntegrat
       "--sweep-max-runs", "2", "--output", output.path()});
 
   EXPECT_EQ(result.exit_code, EXIT_SUCCESS);
+  expect_single_runtime_banner(result);
   const std::string json = read_file(output.path());
   EXPECT_NE(json.find("\"status\": \"complete\""), std::string::npos);
   EXPECT_NE(json.find("\"planned_runs\": 2"), std::string::npos);
@@ -372,6 +411,7 @@ TEST(ExecutableCliIntegrationTest, PatternModeRunsPatternOrchestrationIntegratio
       {"--patterns", "--buffer-size", "1", "--iterations", "1", "--count", "1"});
 
   EXPECT_EQ(result.exit_code, EXIT_SUCCESS);
+  expect_single_runtime_banner(result);
   EXPECT_NE(result.output.find("Running Pattern Benchmarks"), std::string::npos);
   EXPECT_NE(result.output.find("Sequential Forward:"), std::string::npos);
   EXPECT_EQ(result.output.find('\r'), std::string::npos);

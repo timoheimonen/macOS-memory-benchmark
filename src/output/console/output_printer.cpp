@@ -143,7 +143,7 @@ void print_help(const char *prog_name) {
             << Messages::usage_example(prog_name);
 }
 
-void print_program_banner() {
+void print_runtime_banner() {
   std::cout << Messages::config_header(SOFTVERSION) << std::endl;
   std::cout << Messages::config_copyright() << std::endl;
   std::cout << Messages::config_license() << std::endl;
@@ -178,8 +178,6 @@ void print_configuration(size_t buffer_size, size_t buffer_size_mb, size_t total
                          const std::string &cpu_name, int perf_cores, int eff_cores, int num_threads,
                          bool only_bandwidth, bool only_latency, bool run_patterns,
                          bool user_specified_iterations) {
-  print_program_banner();
-  
   // Display buffer sizes conditionally
   if (buffer_size > 0) {
     // Display buffer sizes (actual MiB and requested/capped MB).

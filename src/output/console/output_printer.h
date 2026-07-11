@@ -47,7 +47,7 @@ void print_help(const char* prog_name);
 /**
  * @brief Print the shared runtime version, copyright, and GPL banner.
  */
-void print_program_banner();
+void print_runtime_banner();
 
 /**
  * @brief Print benchmark setup details

@@ -378,7 +378,9 @@ memory_benchmark --analyze-core2core --count 5 --latency-samples 2000 --output c
 
 Console output includes:
 
-- Standard and standalone GPU benchmark executions begin with the same version, copyright, and GPL banner.
+- Every successfully started direct mode and parameter sweep begins with the same version, copyright, and GPL banner.
+  Help output and usage diagnostics retain the separate usage preamble; preflight failures do not emit the runtime
+  banner.
 - Resolved configuration and cache information.
 - Per-loop benchmark results.
 - Main-memory latency may include `16 KiB locality latency`, `Global-random latency`, and `Locality latency delta (global - 16 KiB)` when `--latency-tlb-locality-kb` is omitted. These are paired, alternating-order comparison rounds; the delta is not labeled as page-walk cost.

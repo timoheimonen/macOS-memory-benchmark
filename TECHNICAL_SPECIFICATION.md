@@ -616,8 +616,9 @@ Console rendering is centralized in `src/output/console` and message helpers in 
 
 Contract highlights:
 
-- Standard and GPU benchmark executions emit the same shared version, copyright, and GPL banner before mode-specific
-  configuration or status output.
+- Every successfully started direct mode and parameter sweep emits one shared version, copyright, and GPL banner
+  before mode-specific configuration or status output. Nested sweep runs do not repeat it. Help output and usage
+  diagnostics retain the separate usage preamble; preflight failures do not emit the runtime banner.
 - Configuration and cache info printed before execution.
 - Per-loop results are printed in standard mode.
 - Pattern mode prints pattern table-style sections and derived efficiency indicators.

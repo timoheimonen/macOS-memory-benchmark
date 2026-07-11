@@ -601,7 +601,7 @@ int run_sweep_mode(const BenchmarkConfig& base_config) {
     }
   }
 
-  std::cout << Messages::usage_header(SOFTVERSION);
+  print_runtime_banner();
   std::cout << Messages::msg_running_sweep(run_count) << std::endl;
 
   const MainThreadQosResult qos_result = prepare_main_thread_benchmark_qos();
