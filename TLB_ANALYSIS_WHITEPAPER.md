@@ -2,7 +2,7 @@
 
 ## 1. Purpose
 
-This document specifies how `macOS-memory-benchmark` implements standalone TLB analysis mode (`--analyze-tlb`) in version `0.61.0`.
+This document specifies how `macOS-memory-benchmark` implements standalone TLB analysis mode (`--analyze-tlb`) in version `0.61.1`.
 
 The goal is to provide a reproducible, implementation-accurate description of:
 
@@ -68,9 +68,9 @@ validated before its first benchmark run.
 
 Sweep density applies only to `--analyze-tlb`.
 
-- `low` (`quick`): 15-point base sweep, no refinement pass, 7-12 adaptive rounds
-- `medium` (`standard`, default): 15-point base sweep + refinement pass, 10-20 adaptive rounds
-- `high` (`exhaustive`): 29-point base sweep + refinement pass, 15-30 adaptive rounds
+- `low` (`quick`): up to 15 canonical base points after stride-aware filtering, no refinement pass, 7-12 adaptive rounds
+- `medium` (`standard`, default): up to 15 canonical base points after stride-aware filtering, optional refinement around detected transitions, 10-20 adaptive rounds
+- `high` (`exhaustive`): up to 29 canonical base points after stride-aware filtering, optional refinement around detected transitions, 15-30 adaptive rounds
 
 ### 3.4 Reproducibility Seed (`--seed`)
 
@@ -162,9 +162,11 @@ count for the profile target duration. The result is rounded to a whole-chain mu
 minimum cycle count. For a very large chain, that minimum takes precedence over the nominal profile access cap.
 
 After the profile minimum round count, every completed round evaluates the deterministic bootstrap 95% median-CI width of
-the translation delta at every point. The pass stops only when every width meets the profile target; otherwise it continues
-to the maximum. Convergence bootstrap storage and chain-construction/validation scratch containers are reused between serial
-measurements to avoid repeated inner-loop allocation.
+the translation delta at every point. Adaptive convergence is evaluated only at a complete-round boundary: the pass stops
+when every width meets the profile target or continues to the maximum. An interruption or measurement error can stop a
+pass mid-round while retaining only its valid completed-record prefix. Convergence bootstrap storage and
+chain-construction/validation scratch containers are reused between serial measurements to avoid repeated inner-loop
+allocation.
 
 Before every pass, console output reports point count, round range, conservative maximum pointer accesses, predicted peak
 memory, and a rough duration based on target measurement time. JSON stores the base estimate, runtime policy, per-chain pilot
@@ -178,7 +180,7 @@ Stride behavior:
 **Page-native chain pair:** Every task uses one logical node per requested page. The spread layout places exactly one node
 on every requested page. The packed layout places the same number of nodes on consecutive distinct cache lines, minimizing
 the page footprint while preserving node and unique-cache-line counts. Pointer
-values are written in sorted physical-slot order only after traversal has been planned; setup writes therefore do not
+values are written in sorted buffer-offset order only after traversal has been planned; setup writes therefore do not
 replay the measured traversal order. An independent chain-integrity traversal requires every node to stay in bounds, occur once,
 use a unique cache line, and return to the chain head after the exact node count. Spread validation additionally requires
 `actual_pages == requested_pages`.
@@ -202,8 +204,9 @@ and runtime must not be treated as interchangeable with `random-box`.
 best-effort advisory request intended to reduce early page-fault noise; it does not guarantee that every page is faulted
 in immediately.
 
-**Balanced round scheduler:** The pure scheduler creates the active profile's maximum schedule and stops only after a whole
-round. Every round contains every planned locality exactly once. A seed-shuffled initial point order is cyclically rotated on subsequent rounds, so a point traverses different
+**Balanced round scheduler:** The pure scheduler creates the active profile's maximum schedule. Adaptive convergence can
+stop only after a whole round; interruption or measurement error can stop mid-round. Every complete round contains every
+planned locality exactly once. A seed-shuffled initial point order is cyclically rotated on subsequent rounds, so a point traverses different
 order positions instead of always being early or late in the run. For a full point-count cycle, each point occupies every
 order position once.
 
@@ -276,7 +279,9 @@ forms paired point-to-point effects:
 
 `E[r,i] = D[r,i] - D[r,i-1]`
 
-Only rounds containing both cells participate. At least seven paired samples are required. The candidate effect is
+Only round indexes containing both cells participate. Each `D[r,i]` is a same-task spread/packed delta. When adjacent
+localities originate from separate base and refinement passes, matching `round_index` values do not imply that the two
+points were measured in the same scheduler task or pass. At least seven paired samples are required. The candidate effect is
 `median(E[:,i])`, and its uncertainty is a deterministic 2,000-resample percentile-bootstrap 95% interval derived from
 the command seed and candidate index.
 
@@ -361,8 +366,9 @@ For detected boundaries:
 
 `inferred_entries = midpoint(inferred_entries_min, inferred_entries_max)`
 
-The range from the final refined and validated bracket is the primary result for L1 and L2. The midpoint remains an
-explicitly secondary estimate and must not be interpreted as exact architectural capacity.
+The range from the final measured and validated bracket is the primary result for L1 and L2. For profiles that enable and
+produce refinement points, this is the refined bracket. The midpoint remains an explicitly secondary estimate and must
+not be interpreted as exact architectural capacity.
 
 ### 7.2 Large-Locality Paired Comparison
 
@@ -381,37 +387,39 @@ page-walk alias, preventing a cache-hot spread difference from being mistaken fo
 
 Availability rule:
 
-- available only when selected analysis buffer is `>= 512MB`
-- otherwise reported as unavailable (`N/A`) with reason.
+- the comparison is planned only when the selected analysis buffer is at least `512 MiB`
+- numeric values are available only when the analysis remains valid and the large-locality pass completes successfully
+- otherwise it is reported as unavailable (`N/A`) with a reason.
 
 ## 8. Console Report Contract
 
-Report always includes:
+Before and during execution, the console reports the selected resources, base/pass work estimates, adaptive-round ranges,
+and pass completion reasons. The final report always includes:
 
-- CPU, page size, selected buffer, stride, loops/accesses config
-- Resolved **latency chain mode**
-- Fine--sweep refinement summary (added points, total points)
-- `[Private Cache Knee Detection]`
+- CPU, page size, stride, runtime profile, seed, and resolved **latency chain mode**
+- analysis status and main discovery-grid measured/planned point counts
+- a refinement summary only when refinement added points
+- `[Private Cache Detection]`
 - `[L1 TLB Detection]`
 - `[L2 TLB Detection]`
 - `[Large-Locality Paired Comparison]`
 
 Boundary detection sections:
 
-When a boundary is detected, the report shows:
-
-- boundary locality,
-- inferred entries,
-- confidence string with step (`ns` and `%`).
+- A detected private-cache candidate reports its boundary, step-based confidence (`ns` and `%`), candidate type, and
+  interference relationship to the L1 result.
+- Detected L1/L2 results report boundary locality, the primary inferred-entry range, the secondary midpoint estimate,
+  and paired-effect confidence with discovery and validation 95% intervals.
 
 When a boundary is **not detected**, the section reports "Not detected."
 
 Large-locality paired section:
 
 - When available: shows virtual locality, active footprint, spread/packed page counts, spread P50, packed P50, and same-round translation-delta P50
-- When unavailable: shows "N/A" with the reason (e.g., buffer < 512 MB)
-- Always states that raw timings are cache-hot and are not direct DRAM or isolated page-table-walk latency
-- Always shows analysis status, measured/planned point counts, and whether conclusions are valid.
+- When unavailable: shows "N/A" with the reason (for example, buffer < 512 MiB or an incomplete comparison pass)
+- When available: states that raw timings are cache-hot and are not direct DRAM or isolated page-table-walk latency
+- Analysis status separately reports main-grid measured/planned point counts and whether conclusions are valid; validation
+  and large-locality completion have their own JSON counters and pass summaries.
 - Interrupted or partial analyses suppress private-cache and L1/L2 conclusions.
 
 A user interrupt uses the existing graceful-shutdown contract and may return process success after writing partial JSON.
@@ -456,7 +464,7 @@ When `--output <file>` is provided with `--analyze-tlb` without `--sweep`, outpu
   - `private_cache_knee` (with `detected`, `boundary_locality_kb`, `confidence`, and `may_interfere_with_tlb`)
   - `l1_tlb_detection` (with `detected`, validated bracket, primary entry range, midpoint estimate, confidence, discovery/validation evidence, and accepted/rejected candidates)
   - `l2_tlb_detection` (same structure as L1)
-  - sole `large_locality_paired_comparison` block with same-round delta P50, spread/packed P50 values, physical page/cache-line diagnostics, active footprint, raw paired records, and explicit interpretation
+  - sole `large_locality_paired_comparison` block with same-round delta P50, spread/packed P50 values, verified virtual-page counts, buffer-relative cache-line diagnostics, active footprint, raw paired records, and explicit interpretation
 
 This payload is designed for full post-run verification and reproducibility checks.
 
@@ -531,7 +539,7 @@ the production serializer. Its deliberately synthetic inputs make this a contrac
       "active_cache_line_footprint_bytes": 2097152
     }
   },
-  "version": "0.61.0"
+  "version": "0.61.1"
 }
 ```
 
@@ -542,7 +550,8 @@ only for legacy-schema compatibility checks and are not presented as current-met
 
 - If the entire sweep remained below threshold (e.g., very small buffer or very large stride), L1 would report "Not detected."
 - If the 256 MiB buffer fallback is used, or if the 512 MiB comparison pass is interrupted, `large_locality_paired_comparison` reports `available: false` and explains why.
-- On machines with 4 KB pages (instead of macOS's 16 KB), the same entry count would correspond to a 1 MB boundary.
+- Entry-range conversion always uses the runtime page size recorded in the result; this project supports native Apple
+  Silicon macOS runs, where the reported page size is normally 16 KiB.
 
 Interpretation note for Apple Silicon:
 
@@ -559,11 +568,14 @@ Interpretation note for Apple Silicon:
 
 ### Comparing Results Across Apple Silicon Models
 
-All Apple Silicon Macs use a fixed **16 KB page size**. When comparing `--analyze-tlb` results across different Apple Silicon generations (M1, M2, M3, M4, M5, etc.):
+When comparing `--analyze-tlb` results across different Apple Silicon generations, first require the same schema and
+methodology, runtime page size, density/profile, stride, effective chain mode, selected-buffer policy, OS context, and
+comparable run conditions. Use the same explicit seed when workload identity must match:
 
 - `inferred_entries` is calculated as the midpoint of the detected entry range; use `inferred_entries_min` and `inferred_entries_max` when comparing uncertainty windows.
 - The actual entry counts may differ between generations due to microarchitectural changes.
-- Comparing `inferred_entries` directly across models is valid (same page size), but be aware that TLB capacity has evolved across generations.
+- Compare the primary `inferred_entries_min..inferred_entries_max` uncertainty ranges. Treat the midpoint
+  `inferred_entries` as a secondary empirical estimate, not a directly observed or guaranteed architectural capacity.
 
 ### When L1 TLB Is Not Detected
 
@@ -576,8 +588,10 @@ If L1 detection reports "Not detected":
 
 ### Best Practices for Comparable Runs
 
-1. Keep command line fixed (buffer size, stride, output file).
+1. Keep the supported analysis controls fixed (density/profile, stride, chain mode, and explicit seed), and verify the same
+   selected buffer and effective mode from JSON. `--analyze-tlb` selects its buffer automatically and does not accept
+   `--buffer-size`; the output filename does not affect comparability.
 2. Keep thermal/load background stable.
 3. Use repeated runs (3–5) to verify consistency.
-4. Verify with exported JSON raw loops and P50 values.
+4. Verify with exported JSON paired rounds/measurement records, bracket ranges, and P50 values.
 5. Inspect `execution_time_sec` and `latency_chain_mode` to ensure measurement conditions were consistent.

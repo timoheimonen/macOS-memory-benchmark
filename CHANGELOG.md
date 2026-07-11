@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.61.1] - 2026-07-11
+
+### Changed
+  - **Core-to-core interpretation is explicitly protocol-level**: Documentation now defines the result as the effective elapsed time of the complete acquire/release token exchange, including instruction, coherence, and scheduler effects, rather than an isolated physical cache-line migration or coherence-fabric latency.
+  - **Core-to-core methodology identity advances to v3**: Schema 2 remains structurally compatible, while `core2core-v3-calibrated-balanced-auditable-128b-isolation` distinguishes the corrected 128-byte shared-state layout from older v2 measurements.
+  - **Current documentation targets 0.61.1**: Updated current-version specifications, whitepapers, examples, and repository navigation while retaining 0.61.0 references that identify the historical GPU validation cohort.
+
+### Fixed
+  - **Core-to-core shared state uses a conservative isolation boundary**: The timed token and startup/control flags now occupy distinct 128-byte-aligned storage blocks instead of relying on the project's separate 64-byte logical cache-line granularity. This covers the 128-byte cache-line size reported by current Apple Silicon targets without changing the 64-byte accounting used by other benchmark methodologies.
+  - **Core-to-core pooled sample ranges remain exact on invalid paths**: Loop records count only sample windows actually contributed to the pooled sample array, so an invalid measurement cannot advertise a range beyond the serialized population.
+  - **Core-to-core audit terminology matches the implementation**: Clarified that affinity interpretability covers successful affinity API returns in measured loops only, separated compiler behavior from ARM acquire/release ordering, and documented calibration, sample-window, schema, and abbreviated-example limits precisely.
+
 ## [0.61.0] - 2026-07-11
 
 ### Added

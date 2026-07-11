@@ -22,8 +22,8 @@
 
 `macOS-memory-benchmark` is a low-level Apple Silicon benchmark tool for:
 
-- Main memory (DRAM) bandwidth and latency
-- Cache bandwidth and latency
+- Effective CPU read/write/copy payload bandwidth for cache-sized and main-memory-sized working sets
+- Dependent pointer-chase latency for cache-sized and large working sets
 - Memory access pattern analysis (sequential/strided/random)
 - Standalone paired TLB analysis
 - Standalone core-to-core cache-line handoff latency analysis
@@ -128,7 +128,7 @@ If running a local build, use `./memory_benchmark` instead of `memory_benchmark`
 
 ### Bandwidth vs latency
 
-- **Bandwidth (GB/s)**: throughput for moving large amounts of data
+- **Bandwidth (GB/s)**: effective workload payload divided by measured time, not directly observed physical traffic
 - **Latency (ns)**: per-access delay, measured using dependent pointer chasing
 
 Both matter: some workloads are throughput-bound, others are access-latency-bound.
@@ -159,9 +159,9 @@ boundaries, parallelism, cache behavior, resource modes, and validation overhead
 
 ### Memory hierarchy behavior
 
-- L1 and L2 are much faster than DRAM
+- L1 and L2 normally serve accesses with much lower latency than a main-memory-sized working set
 - Small test buffers can become cache-dominated
-- Large buffers are needed for DRAM-focused measurement
+- Larger working sets reduce cache dominance but do not prove that every access was served by physical DRAM
 - Auto cache tests target full detected L1/L2 capacity, then apply stride/page alignment (so printed buffer sizes can be slightly smaller)
 
 ### Pointer-chase latency and TLB locality
@@ -377,7 +377,7 @@ middle, and trailing items.
   16 complete pointer-chain cycles. If the cycle minimum itself exceeds 300 ms, metadata reports
   `minimum-complete-cycles-exceed-window` instead of treating it as an ordinary calibration miss
 - Reuses calibrated work and seeded logical chains so repeated loops vary runtime conditions rather than workload shape
-- Running without this flag (or `--patterns`) shows help and exits
+- Running without any primary mode flag shows help and exits
 
 #### `--patterns`
 
@@ -436,14 +436,14 @@ middle, and trailing items.
 
 - Runs standalone TLB analysis mode only
 - Can be combined only with optional `--output <file>`, `--latency-stride-bytes <bytes>`, `--latency-chain-mode <mode>`, `--tlb-density <low|medium|high>`, `--seed <uint64>`, `--sweep <key=...>`, and `--sweep-max-runs <count>`
-- Uses latency stride from `--latency-stride-bytes` (same default as standard latency mode). Analyze-TLB stride must be pointer-aligned and must not exceed the system page size; it does not need to divide the page size. The default standard profile performs a 15-point base locality sweep, stride-clamped to `max(16KB, 2*stride)` up to `256MB`, then inserts page-aligned refinement points near detected knees/boundaries
+- Uses latency stride from `--latency-stride-bytes` (same default as standard latency mode). Analyze-TLB stride must be pointer-aligned and must not exceed the system page size; it does not need to divide the page size. The default standard profile performs a base locality sweep of up to 15 canonical points, stride-clamped to `max(16KB, 2*stride)` up to `256MB`, and may insert page-aligned refinement points near detected knees/boundaries
 - Builds a page-native spread chain with exactly one pointer node per requested page and a cache-line-dense packed control with the same node and unique-cache-line counts. Each scheduler task measures both layouts in one round, alternates pair order, and stores the same-round `spread - packed` translation delta
 - Detects likely private-cache knee candidates from spread latency as a separate diagnostic and reports whether the region may interfere with interpretation; accepted L1/L2 claims still require the paired translation-delta and validation gates
 - Reports the validated bracket range (`inferred_entries_min`/`inferred_entries_max`) as the primary L1/L2 result; `inferred_entries` is an explicitly secondary midpoint estimate
 - Builds a round-by-point matrix from same-round `spread - packed` deltas. Acceptance requires a paired median effect of at least `0.5ns`, a deterministic percentile-bootstrap 95% CI above the measured noise floor, persistence at both following points, and the same evidence in an independent validation pass
 - Retains rejected boundary candidates, their confidence intervals, persistence counts, and rejection reasons in JSON
-- Reports one 512 MiB paired comparison object when the analysis buffer is at least `512 MiB`: spread P50, packed P50, the median of same-round `spread - packed` deltas, spread/packed page counts, and active cache-line footprint. These are cache-hot translation-stress timings, not direct DRAM latency or an isolated page-table-walk cost
-- Emits explicit `complete`, `interrupted`, or `partial` status. Boundary conclusions are suppressed unless the planned sweep completed
+- Plans one 512 MiB paired comparison when the analysis buffer is at least `512 MiB` and the main sweep plus any required validation completed successfully. Its spread P50, packed P50, median same-round `spread - packed` delta, spread/packed virtual-page counts, and active cache-line footprint are available only after the separate large-locality pass completes successfully with a valid summary; otherwise the object is unavailable. These are cache-hot translation-stress timings, not direct DRAM latency or an isolated page-table-walk cost
+- Emits explicit `complete`, `interrupted`, `partial`, or `error` status. Boundary conclusions are suppressed unless the planned sweep completed
 - Tries `1024/512/256 MiB` buffers in descending order, selecting the largest candidate whose predicted
   buffer-plus-scratch peak fits the available-memory budget and whose allocation succeeds. If allocation fails, it tries
   the next smaller budget-safe candidate. The compact settings block reports the run identity, buffer-lock/QoS outcome,
@@ -452,7 +452,7 @@ middle, and trailing items.
 - Uses adaptive balanced rounds: every round measures each planned locality once in seeded cyclic-Latin order, and a pass stops after its minimum when every point's deterministic bootstrap median CI is narrow enough, or at the profile maximum
 - Attempts `mlock()` as a best-effort noise reduction. Failure reports errno and its message, records the failure in JSON, and continues with the allocated buffer unlocked
 - Requests `user-interactive` QoS for the main benchmark thread as a best-effort hint. Console and JSON report whether the request was applied and its return code; failure emits a warning and continues
-- Rebuilds every standalone TLB pair from recorded task and layout seeds; pointer values are written in physical-slot order and every chain is verified to visit all nodes and return to its head. Latency-chain behavior outside standalone TLB analysis remains unchanged
+- Rebuilds every standalone TLB pair from recorded task and layout seeds; pointer values are written in buffer-offset order and every chain is verified to visit all nodes and return to its head. The recorded page and cache-line diagnostics are virtual-page and buffer-relative quantities; the tool does not translate virtual addresses to physical addresses. Latency-chain behavior outside standalone TLB analysis remains unchanged
 - A user interrupt remains a successful graceful-shutdown return when partial JSON can be written; consumers must use `status` and `conclusions_valid` rather than the process code to accept conclusions
 - Detailed methodology and JSON contract: `TLB_ANALYSIS_WHITEPAPER.md`
 
@@ -461,9 +461,9 @@ middle, and trailing items.
 - Applies only to `--analyze-tlb`
 - Default: `medium` (`standard`)
 - Accepted values: `low`, `medium`, `high`
-- `low` (`quick`): 15-point base sweep, no refinement pass, 7-12 rounds, 5 ms target per chain. Its console conclusions are screening estimates and explicitly advise confirmation with `medium` or `high`
-- `medium` (`standard`): 15-point base sweep + refinement pass, 10-20 rounds, 10 ms target per chain
-- `high` (`exhaustive`): 29-point base sweep + refinement pass, 15-30 rounds, 20 ms target per chain
+- `low` (`quick`): up to 15 base points, no refinement pass, 7-12 rounds, 5 ms target per chain. Its console conclusions are screening estimates and explicitly advise confirmation with `medium` or `high`
+- `medium` (`standard`): up to 15 base points, with refinement points added only when detected targets produce them, 10-20 rounds, 10 ms target per chain
+- `high` (`exhaustive`): up to 29 base points, with refinement points added only when detected targets produce them, 15-30 rounds, 20 ms target per chain
 
 #### `--seed <uint64>`
 
@@ -485,20 +485,34 @@ middle, and trailing items.
 
 #### `--analyze-core2core`
 
-- Runs standalone two-thread cache-line handoff (ping-pong) mode only
+- Runs standalone repeated two-thread acquire/release token-exchange (cache-line handoff/ping-pong) mode only
+- Reports effective protocol round-trip time, including token-loop instructions, coherence behavior, and scheduler effects;
+  it does not directly observe physical cache-line migration or isolate coherence-fabric latency
+- Places the timed token and startup/control state in distinct 128-byte-aligned storage blocks. This is a conservative
+  interference-isolation boundary for current Apple Silicon targets, not evidence of a particular physical handoff path
 - Defaults to three measured loops per scenario, so bare `--analyze-core2core` reports a median headline and CV/MAD instead of only a single-loop value
-- Can be combined only with optional `--output <file>`, `--count <count>`, `--latency-samples <count>`, `--sweep count=...`, `--sweep latency-samples=...`, and `--sweep-max-runs <count>`
+- Can be combined only with optional `--output <file>`, `--count <count>`, `--latency-samples <count>`, `--sweep count=...`, `--sweep latency-samples=...`, `--sweep-max-runs <count>`, and `--help`
 - Executes three scheduler-hint scenarios: `no_affinity_hint`, `same_affinity_tag`, and `different_affinity_tags`
-- Calibrates each scenario independently with an excluded 100,000-round-trip pilot after a 1,000,000-round-trip calibration warmup; that scenario's resolved plan is reused across its measured `--count` loops
+- Calibrates each scenario independently with an excluded 100,000-round-trip pilot after a 1,000,000-round-trip warmup
+  intended to reduce pilot startup transients; that scenario's resolved plan is reused across its measured `--count`
+  loops. Pilots run in fixed scenario order, measured loops create new thread pairs, and pilot hint outcomes are not
+  serialized
 - Targets 25 ms for the final untimed warmup, 250 ms for the continuous headline (100-300 ms intended window), and 1 ms for each separate sample window. The work cannot fall below 20,000 warmup, 1,000,000 headline, or 2,000 sample-window round trips
-- Rotates scenario order across loops in cyclic Latin-square style: loop starts advance through no-hint, same-tag, and different-tags to spread first/last-position effects
-- Reports the median P50 of completed continuous loop headlines as the scenario headline and the corresponding one-way estimate (`round_trip / 2`)
-- Reports loop repeatability separately from pooled sample-window statistics. Both include average, P50/P90/P95/P99, sample stddev, CV, MAD, min, and max; headline CV above 7.5% emits a diagnostic warning without filtering or invalidating measured values
+- Rotates scenario order across loops in cyclic Latin-square style: loop starts advance through no-affinity-hint,
+  same-tag, and different-tags to spread first/last-position effects
+- Reports one completed loop's window mean directly, or the median (P50) of multiple completed continuous loop headlines,
+  plus the corresponding derived one-way estimate (`round_trip / 2`)
+- Reports loop repeatability separately from pooled sample-window-mean statistics. Both include average, P50/P90/P95/P99,
+  sample stddev, CV, MAD, min, and max; headline CV above the project's 7.5% diagnostic threshold emits a warning
+  without filtering or invalidating measured values
 - With the default 1,000 windows targeting about 1 ms, sampling alone targets roughly 9 seconds across three scenarios and three loops; add continuous headlines, warmups, calibration, thread setup, and scheduler overhead when estimating the bare command's runtime
-- Includes per-loop order, status, elapsed-duration quality, sample boundaries, and per-thread QoS/affinity hint status in JSON schema 2
+- Includes per-loop order, status, elapsed-duration quality, measured pooled-sample boundaries, and per-thread QoS/affinity
+  API outcomes in JSON schema 2. Invalid loops contribute no pooled samples and serialize a zero-length sample range
 - Missing, interrupted, invalid, or failed measurements are unavailable/`null`, never numeric zero. Command/scenario completion metadata states whether all planned measurements completed
 - Notes explicitly that macOS user-space cannot hard-pin exact core IDs
-- Sets `affinity_hint_comparison_interpretable` only when the command completed and every requested affinity hint in every measured loop was actually applied; otherwise affinity-scenario deltas must not be treated as an affinity-policy comparison
+- Sets `affinity_hint_comparison_interpretable` only when the command completed and both workers' affinity API calls
+  returned success in every measured affinity-tag loop. The field excludes QoS and calibration-pilot outcomes and does
+  not prove physical placement; otherwise affinity-scenario deltas must not be treated as an affinity-policy comparison
 - Detailed methodology and JSON contract: [CORE_TO_CORE_WHITEPAPER.md](CORE_TO_CORE_WHITEPAPER.md)
 
 ### Latency-specific controls
@@ -789,7 +803,7 @@ separately recorded run.
 |---|---|---:|---|
 | 8 MiB | 1, explicit 4-worker profile, detected-core default | 10 | Cache-resident and sparse-stride regression |
 | 64 MiB | 1, explicit 4-worker profile, detected-core default | 10 | Transition around cluster-cache-sized workloads |
-| 512 MiB | 1, explicit 4-worker profile, detected-core default | 10 | DRAM-oriented pattern stability |
+| 512 MiB | 1, explicit 4-worker profile, detected-core default | 10 | Main-memory-focused pattern stability |
 | 1 GiB | explicit 4-worker profile, detected-core default | 5 | Large working set and thermal/order behavior |
 
 Use one explicit seed for the complete matrix. Omit `--threads` for the current detected-core default; use `--threads 1`
@@ -976,7 +990,9 @@ conditions or increase `--count`; it does not invalidate the sample automaticall
 - Each locality occupies one line: paired translation delta first, followed by spread/packed P50 controls and active cache-line footprint.
 - A shared legend defines `*` as a below-64-node short-cycle diagnostic; per-point page counts and full chain diagnostics remain in JSON.
 - Work estimates show points, adaptive round range, and rough duration. Pointer-access envelopes remain in JSON.
-- The final report contains one compact run identifier, optional refinement count, completion status, L1/L2 conclusions, and the large-locality paired comparison.
+- The final report contains one compact run identifier, the refinement count when refinement points were inserted,
+  completion status, L1/L2 conclusions, and a large-locality paired comparison only after its pass completed
+  successfully with valid data.
 - `quick` conclusions carry a visible screening-estimate note and should be confirmed with `medium` or `high` before being treated as hardware boundaries.
 
 Displayed TLB sizes use `KiB`/`MiB`, and sub-resolution negative deltas are rendered as `0.00 ns` rather than `-0.00 ns`.
@@ -997,9 +1013,10 @@ duration outside 100–250 ms are warnings. They do not cause performance-based 
 invalid measurement is not printed as zero and remains status-bearing/null in JSON.
 
 **Note:** Standard schema 2 per-loop latency measurements record `chain_node_count` whether the stride was explicit or
-defaulted. Standalone TLB schema 4 records physical diagnostics such as `requested_pages`, `actual_pages`,
-`pointer_nodes`, `unique_cache_lines`, `spread_chain`, and `packed_chain`. These detailed fields are retained in JSON,
-not the compact console report.
+defaulted. Standalone TLB schema 4 records buffer-relative chain diagnostics such as requested/effective/actual
+virtual-page counts, `pointer_nodes`, `unique_cache_lines`, `spread_chain`, and `packed_chain`. These fields do not
+describe physical-page identities or prove physical placement. They are retained in JSON, not the compact console
+report.
 
 ---
 
@@ -1027,7 +1044,7 @@ not the compact console report.
   "main_memory": { ... },
   "cache": { ... },
   "timestamp": "2026-03-09T14:57:56Z",
-  "version": "0.61.0"
+  "version": "0.61.1"
 }
 ```
 
@@ -1152,12 +1169,13 @@ the complete work plan. They can differ from `accesses_per_pass * passes` and mu
 ### GPU bandwidth JSON shape
 
 GPU output is a separate top-level schema. It must not be sent to a standard-schema parser merely because it contains
-read/write/copy values:
+read/write/copy values. The following valid JSON object is an abbreviated field-selection fragment representing a
+complete automatic run; it deliberately omits, rather than empties, the populated nested evidence arrays:
 
 ```json
 {
-  "software_version": "0.61.0",
-  "version": "0.61.0",
+  "software_version": "0.61.1",
+  "version": "0.61.1",
   "timestamp": "...",
   "schema_version": 1,
   "mode": "gpu_bandwidth",
@@ -1168,7 +1186,6 @@ read/write/copy values:
   "results_complete": true,
   "conclusions_valid": true,
   "operation_order_balance_complete": true,
-  "execution_time_sec": 0.0,
   "dram_residency": "unverified",
   "payload_semantics": "effective-kernel-payload-divided-by-metal-gpu-time",
   "copy_payload_semantics": "aggregate-read-plus-write",
@@ -1192,34 +1209,14 @@ read/write/copy values:
     "terminal_measurements": 9,
     "completed_measurements": 9,
     "validated_measurements": 9
-  },
-  "environment": {"start": {}, "end": {}},
-  "backend": {
-    "initialization_status": "success",
-    "device": {
-      "has_unified_memory": true,
-      "required_apple7_family_supported": true,
-      "supported_families": ["apple7"]
-    },
-    "compilation": {
-      "compilation_mode": "runtime-source",
-      "msl_language_version": "2.3",
-      "kernel_revision": "gpu-linear-word-mod32-tg-reduce-v2",
-      "kernel_source_sha256": "..."
-    },
-    "allocation": {}
-  },
-  "memory_budget": {},
-  "work_plans": [],
-  "excluded_calibration_attempts": {"read": [], "write": [], "copy": []},
-  "measurements": [],
-  "loop_records": [],
-  "aggregates": {"read": {}, "write": {}, "copy": {}},
-  "quality_warnings": []
+  }
 }
 ```
 
-The example is structural and deliberately omits nested diagnostic fields. The authoritative rules are:
+An actual complete output matching those counters contains three populated operation work plans, non-empty excluded
+calibration evidence for each automatically calibrated operation, nine measurement records, three loop records, and
+populated read/write/copy aggregates. With explicit `--iterations`, the excluded calibration arrays are legitimately
+empty. The authoritative rules are:
 
 - Top-level run status vocabulary is `not-started`, `complete`, `partial`, `interrupted`, `failed`, `unsupported`.
   Consumers accepting a full result require `status: "complete"`, `results_complete: true`, and
@@ -1230,8 +1227,10 @@ The example is structural and deliberately omits nested diagnostic fields. The a
   three operations are measured. `planned_measurements = planned_loops × 3`; attempted starts at operation warmup;
   terminal counts every non-`not-run` slot; completed requires a completed timed command and terminal validation;
   validated counts only measured values.
-- `operation_order_balance_complete` additionally requires a complete run and a completed-loop count divisible by
-  three. A complete one- or two-loop run can have valid values while correctly reporting incomplete order balance.
+- `operation_order_balance_complete` requires all planned measurements to be validated and the completed-loop count to
+  be divisible by three; it is computed independently of top-level `status`. A one- or two-loop run can have valid
+  values while correctly reporting incomplete order balance. A stop first observed at the final checkpoint can leave
+  order balance true even when top-level completeness is false.
 - Each work plan records exact requested/effective bytes, passes, payload multiplier, bytes per pass, exact payload,
   dispatch/payload limits, seeds, 16-byte vector/tail geometry, the frozen 8192-threadgroup maximum and resolved grid
   geometry, one measured command buffer, one measured encoder, dispatch count, `gpu-dual-mod32-v2` timed identity,
@@ -1264,14 +1263,16 @@ at most one additional interruption checkpoint. Completion of the current task w
 ### Core-to-core JSON shape
 
 Core-to-core output uses schema 2 and methodology
-`core2core-v2-calibrated-balanced-auditable`. This abbreviated example shows the audit hierarchy:
+`core2core-v3-calibrated-balanced-auditable-128b-isolation`. This abbreviated structural excerpt shows one of three scenarios and only
+its first loop record, while omitting detailed statistics/hint fields. Its counters describe the unabridged payload, and
+the displayed continuous and sample arrays are complete for the illustrated three-loop scenario:
 
 ```json
 {
   "configuration": {
     "mode": "analyze_core2core",
     "schema_version": 2,
-    "methodology_version": "core2core-v2-calibrated-balanced-auditable",
+    "methodology_version": "core2core-v3-calibrated-balanced-auditable-128b-isolation",
     "calibration_round_trips": 100000,
     "calibration_warmup_round_trips": 1000000,
     "warmup_target_seconds": 0.025,
@@ -1311,7 +1312,7 @@ Core-to-core output uses schema 2 and methodology
           }
         },
         "samples_ns": {
-          "values": [100.2, 99.8],
+          "values": [100.2, 99.8, 100.1, 99.9, 100.3, 99.7],
           "statistics": {"median": 100.0}
         },
         "loop_records": [
@@ -1337,10 +1338,12 @@ Core-to-core output uses schema 2 and methodology
 
 The numeric work-plan values above are illustrative calibrated outcomes; the actual values are scenario-specific and
 bounded by the documented minimums. `round_trip_ns.values` contains only measured continuous headlines, while
-`samples_ns` is a separate pooled sample-window population. A loop that does not produce a valid measurement carries a
-status/reason and `null` values in its record instead of zeros. Consumers should require `measurements_complete: true`
-for a complete comparison and additionally require `affinity_hint_comparison_interpretable: true` before interpreting
-differences between affinity-tag scenarios as evidence about the requested hint policy.
+`samples_ns` is a separate pooled sample-window-mean population. A measured loop's range covers exactly the values it
+appended to that pool; a non-measured loop has a zero-length range and contributes neither headline nor sample values. A
+loop that does not produce a valid measurement carries status/reason and `null` values instead of numeric zeros.
+Consumers should require `measurements_complete: true` for a complete comparison. Before interpreting affinity-tag
+differences, additionally require `affinity_hint_comparison_interpretable: true`; that field covers measured affinity API
+returns only, excludes QoS and pilot outcomes, and does not prove physical placement.
 
 ### Sweep JSON shape
 
@@ -1375,7 +1378,7 @@ differences between affinity-tag scenarios as evidence about the requested hint 
   ],
   "execution_time_sec": 123.4,
   "timestamp": "2026-04-29T12:00:00Z",
-  "version": "0.61.0"
+  "version": "0.61.1"
 }
 ```
 
@@ -1434,7 +1437,7 @@ When run with `--analyze-tlb --output tlb_analysis.json`, the payload includes a
 The following is a structure-focused schema-version-4 illustration. It is not presented as a hardware result; the current
 serializer contract and concrete deterministic values are exercised by
 `JsonSchemaTest.TlbAnalysisExporterIncludesModeAndCoreCounts`. New hardware baselines remain outside this release series by
-project decision, so historical 0.53.x measurements are not relabeled as 0.61.0 results:
+project decision, so historical 0.53.x measurements are not relabeled as current-release results:
 
 ```json
 {
@@ -1457,7 +1460,7 @@ project decision, so historical 0.53.x measurements are not relabeled as 0.61.0 
     "memory_budget": {
       "available_memory_mb": 4096,
       "budget_mb": 1228,
-      "estimated_peak_memory_bytes": 1082130432
+      "estimated_peak_memory_bytes": 1091567616
     },
     "buffer_lock": {
       "locked": false,
@@ -1605,7 +1608,8 @@ project decision, so historical 0.53.x measurements are not relabeled as 0.61.0 
 
 The example abbreviates the adaptive rounds and most chain-diagnostic fields. Actual output includes
 `tlb_analysis.measurement_records` in execution order and per-point `measurements`; every complete record carries both raw
-pair members, pilot duration/access count, calibrated access count, physical diagnostics, pair order, and same-round delta.
+pair members, pilot duration/access count, calibrated access count, verified virtual-page and buffer-relative cache-line
+diagnostics, pair order, and same-round delta. These diagnostics do not identify physical pages.
 `minimum_planned_base_validation_pairs` and `maximum_planned_base_validation_pairs` bound the adaptive base/validation
 scheduler tasks. `completed_base_validation_pairs`, `completed_large_locality_pairs`, and
 `total_completed_measurement_pairs` state their pass scope explicitly; corresponding raw-measurement counters count the
@@ -1772,7 +1776,8 @@ not a stability baseline for current pattern schema 3 and should not be compared
 ### Best practices
 
 - Use `caffeinate -i -d` for long runs.
-- Use larger buffers (`512 MB` to `1024 MB+`) when targeting DRAM behavior.
+- Use larger buffers (`512 MB` to `1024 MB+`) for main-memory-focused work. They reduce cache dominance but do not
+  prove physical DRAM service.
 - Use `--count > 1` and inspect percentiles.
 - For cache-focused runs, prefer `--threads 1` unless testing aggregate behavior.
 - For pattern comparisons, keep seed, buffer, requested threads, count, and iteration/calibration policy identical.
@@ -1786,7 +1791,8 @@ not a stability baseline for current pattern schema 3 and should not be compared
 
 ### Common pitfalls
 
-- **Small buffers for DRAM claims**: often cache-dominated.
+- **Small buffers for main-memory claims**: often cache-dominated; buffer size alone does not establish physical DRAM
+  service.
 - **Assuming `--non-cacheable` is true uncached memory**: it is only a hint.
 - **Comparing runs with different parameters**: invalidates conclusions.
 - **Interpreting global-random and locality-window latency as identical tests**: chain construction differs intentionally.

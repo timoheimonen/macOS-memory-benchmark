@@ -2,18 +2,23 @@
 
 **memory_benchmark — Technical Whitepaper**
 
-*Revision 2026-07-11 — Applies to version 0.61.0; archived examples may use older methodologies*
+*Revision 2026-07-11 — Applies to version 0.61.1; archived examples may use older methodologies*
 
 ---
 
 ## TL;DR
 
-`-C` / `--analyze-core2core` measures the round-trip time of one cache line handed between two POSIX threads through an
-ARM64 acquire/release ping-pong loop. Version 0.58.0 changes the mode from fixed work in a fixed scenario order to the
-auditable `core2core-v2-calibrated-balanced-auditable` methodology:
+`-C` / `--analyze-core2core` measures the effective round-trip latency of a repeated ARM64 acquire/release token
+protocol between two POSIX threads. The result includes the complete polling and handoff loop plus coherence and
+scheduler effects; it is not an isolated measurement of one physical cache-line migration or the coherence fabric.
+Software version 0.58.0 introduced the change from fixed work in a fixed scenario order to the auditable
+v2 calibrated/balanced design. Version 0.61.1 retains that design, isolates token and control state in distinct
+128-byte blocks, and identifies the current methodology as
+`core2core-v3-calibrated-balanced-auditable-128b-isolation`:
 
 - every scheduler-hint scenario receives its own excluded pilot after a long calibration warmup;
-- final warmup, continuous headline, and separate sample windows are duration-calibrated with fixed minimum work;
+- final warmup, continuous headline, and separate sample windows use pilot-derived duration targets with fixed minimum
+  work;
 - scenario order rotates across repeated loops;
 - core-to-core mode defaults to three measured loops, without changing other modes' one-loop default;
 - the scenario headline is the median P50 of completed continuous loop measurements;
@@ -21,16 +26,17 @@ auditable `core2core-v2-calibrated-balanced-auditable` methodology:
 - JSON schema 2 records the work plan, every attempted loop, completion state, and observed thread hints;
 - unavailable measurements are status-bearing `null` values, never numeric latency zeroes.
 
-The benchmark still cannot hard-pin threads to exact macOS core IDs. Its results describe scheduler-influenced cache-line
-handoff, not a guaranteed physical-core topology.
+The benchmark still cannot hard-pin threads to exact macOS core IDs. Its results describe a scheduler-influenced token
+handoff protocol, not a guaranteed physical-core topology.
 
 ---
 
 ## 1. Measurement Scope
 
-A 64-byte-aligned shared cache line contains a 32-bit turn token. The initiator waits for its token, stores the responder
-token, and waits for the responder to return ownership. The responder mirrors the handoff. One round trip ends when the
-initiator receives the returned token.
+The shared-state object uses 128-byte alignment and isolation slots. A 32-bit turn token occupies the first slot,
+while start and control flags occupy a separate slot at least 128 bytes away. The initiator waits for its token, stores
+the responder token, and waits for the responder to return ownership. The responder mirrors the handoff. One round trip
+ends when the initiator receives the returned token.
 
 For one continuous headline window:
 
@@ -41,6 +47,11 @@ one_way_estimate_ns   = round_trip_latency_ns / 2
 
 The one-way value is an estimate, not an independently timed direction. It assumes symmetry and can be misleading if
 the scheduler places the workers on different core types or migrates them during a window.
+
+The round-trip value is the effective cost of the complete token protocol. It includes `LDAR` polling, `STLR` stores,
+comparisons, branches, loop bookkeeping, cache-coherence activity, and any scheduler influence during the timed window.
+It is not a direct measurement of one physical cache-line transfer, raw load-to-use latency, or coherence-interconnect
+latency.
 
 Three scenarios exercise the same handoff kernel with different scheduler hints:
 
@@ -55,8 +66,9 @@ Those tags are advisory and do not identify or pin a physical core.
 
 ## 2. ARM64 Handoff Kernel
 
-The hot loop is implemented in `src/asm/core_to_core_latency.s`. It uses `LDAR` and `STLR` so the compiler cannot remove
-or reorder the acquire/release handoff:
+The hot loop is implemented as hand-written assembly in `src/asm/core_to_core_latency.s`, so a C++ compiler cannot
+remove or transform it. `LDAR` and `STLR` provide the ARM architectural acquire/release ordering used by the token
+protocol:
 
 ```asm
 c2c_initiator_wait_turn:
@@ -76,7 +88,8 @@ c2c_initiator_wait_return:
 ```
 
 The responder performs one acquire-spin and one release-store per iteration. The turn token and the start/control flags
-live on separate 64-byte-aligned cache lines, preventing control-state traffic from false-sharing the timed token line.
+begin in separate 128-byte-aligned isolation blocks, preventing them from occupying the same 128-byte block. This is a
+conservative false-sharing boundary for current Apple Silicon targets, not a runtime cache-line-size measurement.
 
 Timing uses `HighResTimer`, whose start/stop path applies the project's ARM64 timing fences before reading
 `mach_absolute_time()`. Thread creation, scheduler-hint calls, readiness synchronization, and thread joining remain
@@ -96,9 +109,13 @@ Before any measured `--count` loop, each scenario is calibrated independently. I
 | Calibration pilot | 100,000 | Yes | No |
 | Sample windows | 0 | — | No |
 
-The million-round-trip calibration warmup brings that thread pair and hint scenario into a steady handoff state before
-the pilot estimates round-trip cost. Pilot latency is excluded from both the continuous headline population and the
-sample-window population.
+The million-round-trip calibration warmup is intended to reduce startup and transient effects before the pilot estimates
+round-trip cost; it does not prove that the system reached a steady state. Pilot latency is excluded from both the
+continuous headline population and the sample-window population.
+
+The three pilots run once in fixed scenario order before the balanced measured schedule. Each pilot uses a newly created
+worker pair, and every later measured scenario execution creates another pair. Pilot affinity/QoS application outcomes
+are not serialized; only the excluded pilot timing and the resolved work plan are retained.
 
 One scenario's pilot resolves one `CoreToCoreWorkPlan`, and the same plan is reused for that scenario in every measured
 loop. This avoids changing workload size in response to normal loop-to-loop noise.
@@ -119,7 +136,9 @@ resolved_round_trips = clamp(resolved_round_trips, minimum_round_trips, 100,000,
 | Sample window | 1 ms | 2,000 | Each requested window timed separately |
 
 The 20,000/1,000,000/2,000 values are minimum work, not fixed work. Slow or fast systems may retain a minimum or receive
-a larger calibrated count. The 100,000,000 cap is an arithmetic/runtime guardrail.
+a larger calibrated count. Calibration targets each phase's nominal duration from the excluded pilot; it neither
+normalizes nor guarantees the observed duration. The 100,000,000 guardrail applies independently to the resolved final
+warmup count, headline count, and per-sample-window count, not to their combined work.
 
 The continuous headline duration is classified as:
 
@@ -142,10 +161,13 @@ For one scenario in one loop:
 5. execute the calibrated final warmup without timing;
 6. time one continuous calibrated headline window;
 7. time `--latency-samples` separate calibrated sample windows;
-8. join both workers and validate all elapsed values.
+8. join both workers and validate the headline and all requested sample-window elapsed values as one record.
 
 The responder is given the exact combined number of warmup, headline, and sample-window handoffs, with overflow checks.
 The initiator and responder therefore finish the same token exchange without a partially consumed batch.
+
+Record validity is all-or-nothing. A record is `measured` only when its headline and every requested sample window are
+valid. Otherwise it contributes neither a continuous headline nor sample-window values to scenario aggregates.
 
 ### 3.4 Safe worker startup
 
@@ -162,13 +184,13 @@ thread observe graceful interruption between completed measurements.
 ## 4. Balanced Scenario Schedule
 
 The old fixed order could confound a scenario with first/last-position, frequency, thermal, or background-load effects.
-Version 0.58.0 rotates the starting scenario by loop:
+Software version 0.58.0 introduced rotation of the starting scenario by loop:
 
 | Loop index | Scenario order |
 |---:|---|
-| 0 | no hint → same tag → different tags |
-| 1 | same tag → different tags → no hint |
-| 2 | different tags → no hint → same tag |
+| 0 | no affinity hint → same tag → different tags |
+| 1 | same tag → different tags → no affinity hint |
+| 2 | different tags → no affinity hint → same tag |
 | 3 | repeats loop 0 |
 
 This cyclic Latin-square-style schedule gives each scenario each order position once per three loops. For counts that are
@@ -199,14 +221,15 @@ are not filtered as outliers.
 If headline CV exceeds 7.5%, the console prints a diagnostic warning. The warning does not discard values or by itself
 change a measured scenario to invalid.
 
-### 5.2 Separate sample-window distribution
+### 5.2 Separate sample-window-mean distribution
 
-Every requested sample window contributes its own average round-trip latency to `samples_ns`. These windows are pooled
-only for a separate fine-grained distribution with the same statistical fields. They do not replace, weight, or modify
-the continuous loop headline.
+Every requested sample window contributes its average round-trip latency to `samples_ns`. These window means are pooled
+only for a separate distribution with the same statistical fields. They do not replace, weight, or modify the continuous
+loop headline, and they do not expose the distribution or tail latency of individual handoffs within a window.
 
-Each loop record stores the start index and count of its contributed sample windows, allowing a consumer to reconstruct
-loop boundaries within the pooled array.
+Each measured loop record stores the start index and count of the sample-window means it contributed, allowing a
+consumer to reconstruct loop boundaries within the pooled array. A non-measured record contributes no sample-window
+values and has a serialized range count of zero.
 
 ### 5.3 One-way estimate
 
@@ -233,11 +256,11 @@ summary; loop records are authoritative for audit.
 
 1. the command status is `complete`;
 2. at least one measured record requested affinity; and
-3. both workers successfully applied every requested hint in every measured affinity record.
+3. both workers reported successful affinity-tag API calls in every measured record that requested affinity.
 
-Even when true, this field means only that the requested hint calls succeeded. It does not prove physical placement or
-hard pinning. When false, differences between affinity scenarios must not be presented as evidence of the requested
-affinity policy.
+Even when true, this field means only that the requested affinity API calls in measured records succeeded. It does not
+incorporate QoS success, pilot hint outcomes, or observed physical placement, and it does not prove hard pinning. When
+false, differences between affinity scenarios must not be presented as evidence of the requested affinity policy.
 
 ---
 
@@ -258,6 +281,10 @@ Each scenario separately records planned/completed loops and status/reason. Aggr
 values. When no valid continuous headline exists, `headline_round_trip_ns` is `null`. Failed, invalid, interrupted, and
 not-run measurements are never synthesized as numeric zeroes.
 
+The aggregate contribution is all-or-nothing per scenario/loop record: an invalid headline or requested sample window
+makes the record non-measured, leaves its sample range count at zero, and contributes neither headline nor sample
+values.
+
 When `--output` is set, direct execution writes the in-memory audit payload even after a measurement failure or graceful
 interruption, provided a payload was built. Consumers should use completion fields rather than treating file existence or
 process success alone as proof of a complete comparison.
@@ -266,14 +293,17 @@ process success alone as proof of a complete comparison.
 
 ## 8. JSON Schema 2
 
-The mode identifier remains `analyze_core2core`. The methodology contract is identified independently:
+The mode identifier remains `analyze_core2core`. The methodology contract is identified independently. The following is
+an abbreviated structural excerpt: scenario entries, loop records, sample-array members, and statistical/hint fields are
+intentionally omitted. Count fields describe the corresponding unabridged payload; the displayed continuous round-trip
+and one-way arrays are complete for the illustrated scenario.
 
 ```json
 {
   "configuration": {
     "mode": "analyze_core2core",
     "schema_version": 2,
-    "methodology_version": "core2core-v2-calibrated-balanced-auditable",
+    "methodology_version": "core2core-v3-calibrated-balanced-auditable-128b-isolation",
     "loop_count": 3,
     "latency_sample_count": 2,
     "minimum_warmup_round_trips": 20000,
@@ -356,13 +386,14 @@ The mode identifier remains `analyze_core2core`. The methodology contract is ide
   },
   "execution_time_sec": 4.2,
   "timestamp": "2026-07-10T12:00:00Z",
-  "version": "0.61.0"
+  "version": "0.61.1"
 }
 ```
 
 The numbers are structural examples, not recorded performance results. Only the first of three scenario entries and its
-first loop record are shown, and statistical/hint sub-objects are abbreviated. Actual `thread_hints` objects also contain
-the raw QoS/affinity codes, application status, and tag. Statistics contain the full common statistics set when emitted.
+first loop record are shown, and the pooled sample array is truncated. Statistical and hint sub-objects are abbreviated
+as well. Actual `thread_hints` objects also contain raw QoS/affinity codes, the `*_applied` booleans, and the affinity tag.
+Statistics contain the full common statistics set when emitted.
 
 ### 8.1 Work plan
 
@@ -373,7 +404,9 @@ work. A consumer should not assume all scenarios received equal work counts.
 ### 8.2 Loop records
 
 `loop_records` are the authoritative link between scenario schedule, measurement status, duration quality, pooled sample
-boundaries, and observed worker hints. Nullable values distinguish unavailable results from real measured latency.
+boundaries, and observed worker hints. A measured record's range identifies all sample-window means it contributed; a
+non-measured record contributes none and has range count zero. Nullable values distinguish unavailable results from real
+measured latency.
 
 ### 8.3 Completion metadata
 
@@ -427,13 +460,19 @@ previously checkpointed runs. `conclusions_valid` is true only when top-level st
 
 ## 10. Comparability With Older Results
 
-Archived 0.53.x/0.57.x core-to-core files used fixed 20,000/1,000,000/2,000 work and fixed scenario order. Schema 2 can
-retain those counts as minimums, but its duration-calibrated work, balanced schedule, loop-median headline, and explicit
-completion semantics form a new methodology. Do not merge old and v2 values into one homogeneous population without
-labeling the methodology difference.
+Archived 0.53.x/0.57.x core-to-core files used fixed 20,000/1,000,000/2,000 work and fixed scenario order. Versions
+0.58.0 through 0.61.0 used the calibrated/balanced v2 methodology with 64-byte token/control separation. Version 0.61.1
+advances the methodology identity to v3 for the corrected 128-byte isolation boundary while retaining JSON schema 2.
+The current methodology also uses duration-targeted work, a balanced schedule, a loop-median headline, and explicit
+completion semantics.
+
+JSON schema version and measurement methodology are separate contracts: schema 2 serializes the audit data but does not
+itself calibrate work, identify the isolation layout, or define the measurement procedure. Use `methodology_version`,
+not schema version alone, to decide comparability, and do not merge populations with different methodology identifiers
+without explicitly labeling and justifying that difference.
 
 Older result files remain useful as historical observations. Their hardware-specific values should not be read as
-validation of current affinity behavior, current scheduler placement, or schema-2 duration quality.
+validation of current affinity behavior, current scheduler placement, or current-methodology duration quality.
 
 ---
 
@@ -469,9 +508,11 @@ For manual validation, prefer several loops and inspect:
 2. **Affinity tags are advisory:** an applied call is not proof of a physical placement, and a rejected call makes the
    affinity-scenario comparison uninterpretable.
 3. **One-way latency is derived:** half round trip assumes symmetric directions.
-4. **Sample windows average many handoffs:** the benchmark does not expose instantaneous single-handoff latency.
+4. **Sample windows average many handoffs:** their statistics describe window means, not instantaneous single-handoff
+   values or fine-grained handoff tails.
 5. **System state matters:** thermal state, frequency policy, background load, and scheduler activity can move both
-   headline and tail values. Calibration normalizes duration, not environmental noise.
+   headline and sample-window means. Calibration targets a duration but does not normalize or guarantee it, and it does
+   not normalize environmental noise.
 6. **No topology annotation:** the mode does not record the actual core type, cluster, or die used during a window.
 7. **macOS/Apple Silicon implementation:** Mach thread policy, pthread QoS, Mach timing, and ARM64 assembly make the
    current implementation platform-specific.
@@ -482,6 +523,7 @@ For manual validation, prefer several loops and inspect:
 
 | Constant | Value | Meaning |
 |---|---:|---|
+| `CORE_TO_CORE_SHARED_STATE_ISOLATION_BYTES` | 128 | Token/control alignment and minimum slot separation |
 | `CORE_TO_CORE_DEFAULT_LOOP_COUNT` | 3 | Core-to-core-only default measured loop count |
 | `CORE_TO_CORE_DEFAULT_LATENCY_SAMPLE_COUNT` | 1,000 | Default sample windows per scenario/loop |
 | `CORE_TO_CORE_CALIBRATION_WARMUP_ROUND_TRIPS` | 1,000,000 | Excluded warmup before each scenario pilot |
@@ -494,10 +536,10 @@ For manual validation, prefer several loops and inspect:
 | `CORE_TO_CORE_WARMUP_ROUND_TRIPS` | 20,000 | Final warmup minimum |
 | `CORE_TO_CORE_HEADLINE_ROUND_TRIPS` | 1,000,000 | Continuous headline minimum |
 | `CORE_TO_CORE_SAMPLE_WINDOW_ROUND_TRIPS` | 2,000 | Sample-window minimum |
-| `CORE_TO_CORE_MAX_ROUND_TRIPS` | 100,000,000 | Per-phase calibration cap |
+| `CORE_TO_CORE_MAX_ROUND_TRIPS` | 100,000,000 | Independent cap for each resolved phase count |
 | `CORE_TO_CORE_CV_WARNING_PCT` | 7.5 | Headline repeatability warning threshold |
 | `CORE_TO_CORE_JSON_SCHEMA_VERSION` | 2 | Core-to-core schema version |
-| `CORE_TO_CORE_METHODOLOGY_VERSION` | `core2core-v2-calibrated-balanced-auditable` | Methodology identifier |
+| `CORE_TO_CORE_METHODOLOGY_VERSION` | `core2core-v3-calibrated-balanced-auditable-128b-isolation` | Methodology identifier |
 
 ---
 
@@ -509,10 +551,13 @@ For manual validation, prefer several loops and inspect:
 | `src/benchmark/core_to_core_latency_internal.h` | Planner/scheduler/runner testable interface |
 | `src/benchmark/core_to_core_latency_runner.cpp` | Calibration, worker execution, schedule, statistics, and console report |
 | `src/benchmark/core_to_core_latency_cli.cpp` | Standalone parsing, sweep validation, and direct signal-mask setup |
-| `src/benchmark/core_to_core_latency_json.cpp` | Schema-2 serialization and affinity interpretability |
+| `src/benchmark/core_to_core_latency_json.cpp` | Schema 2 serialization and affinity interpretability |
 | `src/benchmark/core_to_core_sweep_runner.cpp` | Cartesian sweep execution and atomic checkpoints |
+| `src/core/config/constants.h` | Shared-state isolation and core-to-core methodology constants |
+| `src/core/config/sweep_utils.cpp` | Shared sweep-value parsing and Cartesian run-count validation |
 | `src/asm/core_to_core_latency.s` | ARM64 initiator/responder hot loops |
 | `src/output/console/messages/core_to_core_messages.cpp` | User-facing core-to-core messages |
+| `src/output/json/json_output/file_writer.cpp` | Shared atomic temporary-file-and-rename writer |
 | `tests/test_core_to_core_cli.cpp` | CLI and sweep validation coverage |
 | `tests/test_core_to_core_messages.cpp` | Console message contract coverage |
 | `tests/test_core_to_core_runner.cpp` | Calibration, schedule, and hardware integration coverage |

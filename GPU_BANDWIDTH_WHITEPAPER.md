@@ -1,6 +1,6 @@
 # Metal GPU Memory Bandwidth Whitepaper
 
-- **Software version:** 0.61.0
+- **Software version:** 0.61.1
 - **JSON schema:** 1
 - **Methodology:** `gpu-bandwidth-v1-private-runtime-single-cmdbuf-calibrated-balanced`
 - **Platform:** macOS on Apple Silicon
@@ -44,7 +44,8 @@ make the result a one-direction bus rate, and it is not a CPU↔GPU transfer num
 
 Apple Silicon uses unified system memory. `MTLStorageModePrivate` means that the Metal resource is GPU-private from the
 CPU access/API perspective; it does not mean that a separate VRAM device exists. The benchmark therefore calls the
-results GPU memory read/write/copy bandwidth.
+mode GPU memory read/write/copy bandwidth, while interpreting its values more precisely as effective Metal
+compute-payload bandwidth.
 
 The result is effective payload bandwidth for the exact versioned compute kernel at one Metal command-buffer timing
 boundary. It does not prove that every byte reached physical DRAM. GPU caches, command processing, the observable
@@ -238,7 +239,7 @@ still contributes data/index evidence.
 ### Write
 
 Each pass writes a deterministic pass-specific full-buffer pattern without reading the destination. The timed v2 dual
-accumulator proves that each planned pass contributed. An excluded `gpu-dual-mod32-v1` final checksum command
+accumulator provides evidence that each planned pass contributed. An excluded `gpu-dual-mod32-v1` final checksum command
 additionally verifies the last written buffer.
 
 ### Copy
@@ -338,8 +339,11 @@ The planned loop order rotates:
 2. write → copy → read
 3. copy → read → write
 
-Every loop records planned and realized order; every measurement records its order position. Order balance is true only
-when results are complete and completed loop count is divisible by three.
+Every loop records planned and realized order; every measurement records its order position.
+`operation_order_balance_complete` is true when every planned measurement is validated and the completed-loop count is
+divisible by three. This field is computed independently of the top-level run status: an interruption first observed at
+the final checkpoint boundary can leave all measurements validated and the order balanced while run completeness remains
+false.
 
 Aggregates use only `measured` values:
 
@@ -534,6 +538,11 @@ Removing three unread `KernelParams` fields later in the same 0.61.0 development
 source SHA-256 to `21def2d75d3545dba31aa4897ea57ec2fd0e4481cd86ce21725338ab0f322ac5` without changing any kernel operation or
 payload count. Runtime Metal integration covers the current source's compilation and correctness; the performance
 figures below remain evidence for the exact frozen pre-remediation identity.
+
+The cohort figures in this section are project-reported release evidence, not independently reproducible from a Git
+checkout because the raw campaign artifacts are retained locally. Repository-only consumers can verify the current
+methodology, source identity, deterministic tests, and runtime contract, but not reconstruct the empirical population
+from versioned artifacts.
 
 Both final five-process acceptance populations passed the 5% gate. Automatic cross-process CV was
 0.221498348705% read, 0.967311621904% write, and 0.310543092510% copy; fixed-24 cross-process CV was

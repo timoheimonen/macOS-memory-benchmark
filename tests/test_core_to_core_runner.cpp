@@ -168,6 +168,37 @@ TEST(CoreToCoreRunnerTest, ScenarioOrderRotatesAcrossLoops) {
   EXPECT_TRUE(build_core_to_core_scenario_order(0, 4).empty());
 }
 
+TEST(CoreToCoreRunnerTest, LoopRecordSampleRangesCountOnlySamplesAppendedToPool) {
+  CoreToCoreLatencyScenarioResult scenario_result;
+  scenario_result.sample_round_trip_ns = {5.0};
+
+  ScenarioMeasurement invalid_measurement;
+  invalid_measurement.status = CoreToCoreMeasurementStatus::Invalid;
+  invalid_measurement.status_reason = "invalid-sample-elapsed";
+  invalid_measurement.samples_ns = {10.0, 11.0};
+  append_core_to_core_loop_record(scenario_result, 0, 2, invalid_measurement);
+
+  ASSERT_EQ(scenario_result.loop_records.size(), 1u);
+  EXPECT_EQ(scenario_result.sample_round_trip_ns, (std::vector<double>{5.0}));
+  EXPECT_EQ(scenario_result.loop_records[0].sample_start_index, 1u);
+  EXPECT_EQ(scenario_result.loop_records[0].completed_sample_windows, 0u);
+  EXPECT_EQ(scenario_result.completed_loops, 0u);
+
+  ScenarioMeasurement measured;
+  measured.status = CoreToCoreMeasurementStatus::Measured;
+  measured.round_trip_ns = 20.0;
+  measured.headline_elapsed_seconds = 0.2;
+  measured.duration_quality = "within-target-window";
+  measured.samples_ns = {21.0, 22.0};
+  append_core_to_core_loop_record(scenario_result, 1, 0, measured);
+
+  ASSERT_EQ(scenario_result.loop_records.size(), 2u);
+  EXPECT_EQ(scenario_result.sample_round_trip_ns, (std::vector<double>{5.0, 21.0, 22.0}));
+  EXPECT_EQ(scenario_result.loop_records[1].sample_start_index, 1u);
+  EXPECT_EQ(scenario_result.loop_records[1].completed_sample_windows, 2u);
+  EXPECT_EQ(scenario_result.completed_loops, 1u);
+}
+
 TEST(CoreToCoreRunnerTest, DeterministicFailureSeamsReturnExplicitStatus) {
   const ScopedDeterministicTimerSystemCalls timer_system_calls;
   const ScenarioDescriptor scenario = {

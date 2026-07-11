@@ -67,6 +67,16 @@ size_t calculate_core_to_core_calibrated_round_trips(double pilot_elapsed_second
 
 std::vector<size_t> build_core_to_core_scenario_order(size_t scenario_count, size_t loop_index);
 
+/**
+ * @brief Append one audit record and aggregate only values from a measured loop.
+ *
+ * The record's sample range counts exactly the samples appended to the scenario's
+ * pooled sample array. Invalid and failed measurements retain their audit status
+ * but claim an empty sample range even if diagnostic sample data is present.
+ */
+void append_core_to_core_loop_record(CoreToCoreLatencyScenarioResult& scenario_result, size_t loop_index,
+                                     size_t order_position, const ScenarioMeasurement& measurement);
+
 bool build_core_to_core_work_plan(double pilot_elapsed_seconds, CoreToCoreWorkPlan& out_plan);
 
 bool execute_single_scenario(const ScenarioDescriptor& scenario, const CoreToCoreWorkPlan& work_plan, int sample_count,

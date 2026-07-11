@@ -2,7 +2,7 @@
 
 ## 1. Purpose
 
-This document explains how `macOS-memory-benchmark` version 0.61.0 measures memory latency on Apple Silicon.
+This document explains how `macOS-memory-benchmark` version 0.61.1 measures memory latency on Apple Silicon.
 
 The latency path is designed to measure **load-to-use delay** (pointer chasing), not bulk throughput.
 It combines:
@@ -15,7 +15,7 @@ It combines:
 ## 2. Why Pointer Chasing
 
 A conventional loop over contiguous memory can be heavily assisted by OoO execution and prefetchers,
-which tends to reflect throughput, not true per-access latency.
+which tends to reflect throughput rather than the dependent load-to-use latency targeted here.
 
 This project uses a circular linked list in memory, then repeatedly dereferences the next address:
 
@@ -23,10 +23,11 @@ This project uses a circular linked list in memory, then repeatedly dereferences
 p = *p
 ```
 
-Because each load address depends on the previous load result, the out-of-order engine cannot issue
-load `n+1` until the result of load `n` is committed to the register file — a true RAW (read-after-write)
-register dependency. The load pipeline is therefore serialized on the critical-path latency of each
-individual cache or DRAM access, making the measurement suitable for latency characterization.
+Because each load address depends on the previous load result, load `n+1` cannot obtain its address
+until load `n` has produced the next pointer. This loop-carried RAW (read-after-write) dependency limits
+overlap between the dependent loads. The reported time per dereference therefore characterizes the
+observed dependent load-to-use critical path, including cache, translation, and system effects; it is
+not a direct observation that isolates any one physical memory service.
 
 ## 3. Assembly Kernel Design (`src/asm/memory_latency.s`)
 
@@ -46,7 +47,7 @@ The kernel uses three key safeguards:
 
 1. **Zero-access fast return**
    - If `count == 0`, it returns immediately.
-2. **Exact--count execution with 8x unroll**
+2. **Exact-count execution with 8x unroll**
    - `count / 8` iterations of 8 dependent loads, then `count % 8` remainder loads.
 3. **Correct unsigned loop termination**
    - Remainder loop uses `subs`/`b.ne` rather than compare-and-branch to correctly handle the full
@@ -74,8 +75,13 @@ The function returns `EXIT_FAILURE` for invalid setup cases, including:
 - fewer than 2 pointers fit in the provided buffer (`buffer_size / stride < 2`)
 - a locality-using `LatencyChainMode` is selected explicitly while `tlb_locality_bytes == 0`
   (the mode requires a locality window but none is provided)
-- `tlb_locality_bytes > 0` but the locality window is too small to hold 2 pointers
+- a locality-using mode has `tlb_locality_bytes > 0` but the locality window is too small to hold 2 pointers
   (`tlb_locality_bytes / stride < 2`)
+
+Standard CLI validation adds one user-facing constraint: a non-zero locality window used by the effective chain mode
+must be a multiple of the detected system page size. It must also contain at least two stride-spaced nodes. An
+explicit `global-random` mode does not use the locality value; if one is supplied, it is ignored for chain construction
+and the locality-specific page-multiple and node-count checks do not apply.
 
 ### 4.2 Chain Construction Flow
 
@@ -100,7 +106,7 @@ The `--latency-chain-mode` flag selects the pointer-chain construction policy.
 
 | Mode enum | CLI name | `--latency-tlb-locality-kb` required | Behavior |
 |---|---|---|---|
-| `GlobalRandom` | `global-random` | No (ignored if provided) | Single `std::shuffle` across the full index space. Maximum address randomness; highest TLB and cache pressure. |
+| `GlobalRandom` | `global-random` | No (ignored if provided) | Single `std::shuffle` across the full index space. Full-space randomization may increase TLB and cache pressure relative to locality-window modes. |
 | `RandomInBoxRandomBox` | `random-box` | Yes | Independent random permutation within each locality window; window visit order is also randomized. Default when `tlb_locality_bytes > 0` and mode is `auto`. |
 | `SameRandomInBoxIncreasingBox` | `same-random-in-box` | Yes | One random permutation is generated and applied identically to every locality window; windows are visited in sequential order. Useful for isolating within-window access variance. |
 | `DiffRandomInBoxIncreasingBox` | `diff-random-in-box` | Yes | Independent random permutation per window; windows are visited in sequential order. Combines per-window randomness with a predictable inter-window traversal order. |
@@ -144,15 +150,18 @@ These tests validate setup correctness and failure handling before timing is run
 
 ## 6. Timing and Sampling Semantics (`src/benchmark/latency_tests.cpp`)
 
-The low-level timing wrapper supports a continuous pass and a segmented sample-collection pass. Standard benchmark
+The low-level timing wrapper supports a continuous pass and a segmented sample-collection pass. Standard CLI
 orchestration uses both as separate populations:
 
-1. On the first loop, an excluded continuous pilot resolves work toward a 250 ms target. The final access count is
-   rounded to at least 16 complete chain cycles and evaluated against a 100-300 ms intended window.
-2. Every benchmark loop runs one continuous headline chase. This pass alone produces the loop's reported latency
-   headline.
-3. If sampling is enabled, a second pass executes the same total access count in continuing sample windows. These
-   windows populate the separate sample distribution and never replace or weight the continuous headline.
+1. On the first loop, an excluded continuous pilot resolves an initial work plan toward a 250 ms target. Access count
+   is rounded to at least 16 complete chain cycles and evaluated against a 100-300 ms intended window.
+2. After the pilot, the first loop may discard at most two out-of-window continuous duration trials while correcting
+   the work plan. Only the retained continuous pass produces that loop's headline; correction trials are excluded.
+   The resolved plan is then reused across later `--count` loops, each with one retained continuous headline pass.
+3. After every retained headline pass, a separate sample pass executes the same total access count in continuing
+   windows. The CLI requests 1,000 windows by default, and `--latency-samples` selects a positive requested count; it
+   cannot disable the sample pass. These windows populate a separate distribution and never replace or weight the
+   continuous headline.
 
 The resolved access count is reused across `--count` loops. Key sample-pass behavior:
 
@@ -183,7 +192,7 @@ assembly kernel; the executor selects the buffer and stores the result in the ap
 | Flag | Default | Effect |
 |---|---|---|
 | `--latency-stride-bytes` | `256` | Byte spacing between pointer-chain nodes. Must be a multiple of 8 (pointer size on AArch64). |
-| `--latency-tlb-locality-kb` | `1024` | Locality window size in KB. `0` selects global-random mode when `--latency-chain-mode auto` is used; explicit box modes require non-zero locality. |
+| `--latency-tlb-locality-kb` | `1024` | Locality window size in KB. `0` selects global-random mode when `--latency-chain-mode auto` is used. Effective locality modes require a non-zero system-page multiple containing at least two stride-spaced nodes; explicit `global-random` ignores this value. |
 | `--latency-samples` | `1000` | Number of windows in the separate sample pass per benchmark loop. It does not change the continuous headline definition. |
 | `--latency-chain-mode` | `auto` | Chain construction policy. `auto` selects `global-random` when locality is 0, `random-box` otherwise. |
 | `--seed` | generated once | Exact uint64 command seed used to derive reproducible target/layout chains. |
@@ -239,10 +248,10 @@ analysis.
 - Exact loop work and chain metadata are under `loops[].measurements.main_latency`, `l1_latency`, `l2_latency`, or
   `custom_latency`. These records include access count, chain-node count, complete cycles, seed, elapsed time,
   calibration quality, and status.
-- When present, segmented windows are under each headline aggregate's `pooled_sample_distribution`, with values and
-  loop-boundary metadata kept separate from continuous loop headlines.
+- For completed standard CLI latency measurements, segmented windows are under each headline aggregate's
+  `pooled_sample_distribution`, with values and loop-boundary metadata kept separate from continuous loop headlines.
 - The current standard schema 2 does not serialize the legacy `chain_diagnostics.unique_pages_touched` blocks. Do not
-  use the old `main_memory.latency.chain_diagnostics` or `cache.*.latency.chain_diagnostics` paths for version 0.61.0
+  use the old `main_memory.latency.chain_diagnostics` or `cache.*.latency.chain_diagnostics` paths for version 0.61.1
   output.
 
 When `--latency-tlb-locality-kb` is not explicitly supplied, standard main-memory latency also runs three paired rounds
@@ -251,20 +260,24 @@ of 16 KiB-locality and global-random chains. The first-measured layout alternate
 `global - locality` deltas. This mixed locality/cache comparison is not an isolated page-table-walk measurement; use
 `--analyze-tlb` for validated translation-boundary analysis.
 
-### 8a. ARM64 Reference Latency Ranges
+The 16 KiB locality chain requires at least two nodes, so this automatic comparison supports strides up to 8192 bytes.
+The separately configured main latency target can validate and run with a larger stride when its own working set and
+locality window contain enough nodes. If the subsequent automatic comparison cannot construct its 16 KiB chain, its
+three comparison measurements are marked invalid, the loop is `partial`, and top-level `results_complete` is `false`.
+Use a stride no larger than 8192 bytes when the automatic comparison is required, or explicitly select a locality
+value to omit that comparison.
 
-The table below provides approximate latency ranges for Apple Silicon as a sanity-check reference.
-Exact values vary by M-series generation, operating frequency, and thermal state.
+### 8a. No Fixed Reference Ranges
 
-| Memory level | Typical cycles | Typical latency (@ ~4 GHz) |
-|---|---|---|
-| L1 data cache hit | ~4 cycles | ~1 ns |
-| L2 cache hit | ~12 cycles | ~3 ns |
-| Main memory (DRAM) | ~100–150 cycles | ~25–40 ns |
+This project does not define canonical nanosecond or cycle ranges for Apple Silicon cache or main-memory latency.
+Observed values depend on the SoC generation, frequency and power state, working-set size, stride, chain layout,
+translation behavior, macOS scheduling, thermals, and background activity. A cache-sized buffer does not guarantee
+that every load is served by that cache, and a main-memory-sized working set does not prove physical DRAM service for
+every load.
 
-If measured latency deviates substantially from these ranges at the expected cache size (e.g.,
-measured L1 latency is 20 ns), the buffer size or stride likely places accesses outside the
-intended cache level, or system interference is present.
+Use matched commands and system conditions to establish a baseline, then compare medians, tails, completion state,
+and serialized work metadata. An unexpected value is a reason to inspect the configuration and run conditions, not
+enough evidence by itself to assign the result to a particular hierarchy level.
 
 ## 9. Limitations and Non-Goals
 
@@ -275,7 +288,7 @@ intended cache level, or system interference is present.
 
 ## 10. Summary
 
-The latency path in this project is built around a strict dependent pointer chase with exact--count execution and tested chain setup boundaries.
+The latency path in this project is built around a strict dependent pointer chase with exact-count execution and tested chain setup boundaries.
 It is suitable for comparative latency studies across cache sizes and locality-window policies when interpreted with robust statistics (median and tails) rather than single-point extremes.
 
 ## 11. Related Documents

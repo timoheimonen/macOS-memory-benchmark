@@ -1109,7 +1109,7 @@ TEST(JsonSchemaTest, CoreToCoreV2SerializesCalibratedBalancedAuditTrail) {
   const nlohmann::json output = build_core_to_core_latency_json(context);
   EXPECT_EQ(output[JsonKeys::CONFIGURATION]["schema_version"], 2);
   EXPECT_EQ(output[JsonKeys::CONFIGURATION]["methodology_version"],
-            "core2core-v2-calibrated-balanced-auditable");
+            "core2core-v3-calibrated-balanced-auditable-128b-isolation");
   EXPECT_EQ(output[JsonKeys::CONFIGURATION]["scenario_schedule"],
             "cyclic-latin-square-across-count-loops");
   EXPECT_EQ(output[JsonKeys::CONFIGURATION]["calibration_warmup_round_trips"],

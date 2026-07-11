@@ -27,6 +27,7 @@
 #include <atomic>
 #include <chrono>
 #include <cmath>
+#include <cstddef>
 #include <exception>
 #include <filesystem>
 #include <iostream>
@@ -54,11 +55,11 @@
 
 namespace {
 
-struct alignas(Constants::CACHE_LINE_SIZE_BYTES) SharedTurn {
+struct alignas(Constants::CORE_TO_CORE_SHARED_STATE_ISOLATION_BYTES) SharedTurn {
   uint32_t value = Constants::CORE_TO_CORE_INITIATOR_TURN_VALUE;
 };
 
-struct alignas(Constants::CACHE_LINE_SIZE_BYTES) SharedFlags {
+struct alignas(Constants::CORE_TO_CORE_SHARED_STATE_ISOLATION_BYTES) SharedFlags {
   std::atomic<bool> start{false};
   std::atomic<bool> cancel{false};
   std::atomic<int> ready_threads{0};
@@ -68,6 +69,27 @@ struct SharedPingPongState {
   SharedTurn turn;
   SharedFlags flags;
 };
+
+static_assert(Constants::CORE_TO_CORE_SHARED_STATE_ISOLATION_BYTES >= 128,
+              "Core-to-core shared-state isolation must cover a conservative 128-byte cache line");
+static_assert((Constants::CORE_TO_CORE_SHARED_STATE_ISOLATION_BYTES &
+               (Constants::CORE_TO_CORE_SHARED_STATE_ISOLATION_BYTES - 1)) == 0,
+              "Core-to-core shared-state isolation must be a power of two");
+static_assert(alignof(SharedTurn) == Constants::CORE_TO_CORE_SHARED_STATE_ISOLATION_BYTES,
+              "Turn storage must use the dedicated core-to-core alignment");
+static_assert(sizeof(SharedTurn) == Constants::CORE_TO_CORE_SHARED_STATE_ISOLATION_BYTES,
+              "Turn storage must occupy exactly one isolated block");
+static_assert(alignof(SharedFlags) == Constants::CORE_TO_CORE_SHARED_STATE_ISOLATION_BYTES,
+              "Control storage must use the dedicated core-to-core alignment");
+static_assert(sizeof(SharedFlags) == Constants::CORE_TO_CORE_SHARED_STATE_ISOLATION_BYTES,
+              "Control storage must occupy exactly one isolated block");
+static_assert(alignof(SharedPingPongState) == Constants::CORE_TO_CORE_SHARED_STATE_ISOLATION_BYTES,
+              "Shared ping-pong state must preserve the isolated-block alignment");
+static_assert(offsetof(SharedPingPongState, turn) == 0, "Turn storage must begin at the first isolated block");
+static_assert(offsetof(SharedPingPongState, flags) == Constants::CORE_TO_CORE_SHARED_STATE_ISOLATION_BYTES,
+              "Turn and control state must occupy distinct isolated blocks");
+static_assert(sizeof(SharedPingPongState) == 2 * Constants::CORE_TO_CORE_SHARED_STATE_ISOLATION_BYTES,
+              "Shared ping-pong state must contain exactly two isolated blocks");
 
 bool positive_finite(double value) { return value > 0.0 && std::isfinite(value); }
 
@@ -263,6 +285,35 @@ std::vector<size_t> build_core_to_core_scenario_order(size_t scenario_count, siz
     order.push_back((first + position) % scenario_count);
   }
   return order;
+}
+
+void append_core_to_core_loop_record(CoreToCoreLatencyScenarioResult& scenario_result, size_t loop_index,
+                                     size_t order_position, const ScenarioMeasurement& measurement) {
+  CoreToCoreLoopRecord record;
+  record.loop_index = loop_index;
+  record.order_position = order_position;
+  record.status = measurement.status;
+  record.status_reason = measurement.status_reason;
+  record.sample_start_index = scenario_result.sample_round_trip_ns.size();
+  record.initiator_hint = measurement.initiator_hint;
+  record.responder_hint = measurement.responder_hint;
+
+  if (measurement.status == CoreToCoreMeasurementStatus::Measured) {
+    record.round_trip_ns = measurement.round_trip_ns;
+    record.headline_elapsed_seconds = measurement.headline_elapsed_seconds;
+    record.duration_quality = measurement.duration_quality;
+    scenario_result.loop_round_trip_ns.push_back(measurement.round_trip_ns);
+    scenario_result.sample_round_trip_ns.insert(scenario_result.sample_round_trip_ns.end(),
+                                                measurement.samples_ns.begin(), measurement.samples_ns.end());
+    record.completed_sample_windows = scenario_result.sample_round_trip_ns.size() - record.sample_start_index;
+    if (scenario_result.completed_loops == 0) {
+      scenario_result.initiator_hint = measurement.initiator_hint;
+      scenario_result.responder_hint = measurement.responder_hint;
+    }
+    ++scenario_result.completed_loops;
+  }
+
+  scenario_result.loop_records.push_back(std::move(record));
 }
 
 bool build_core_to_core_work_plan(double pilot_elapsed_seconds, CoreToCoreWorkPlan& out_plan) {
@@ -480,29 +531,7 @@ int run_core_to_core_latency_collect(const CoreToCoreLatencyConfig& config, nloh
         const bool execution_succeeded =
             execute_single_scenario(scenario, scenario_result.work_plan, config.latency_sample_count, measurement);
 
-        CoreToCoreLoopRecord record;
-        record.loop_index = static_cast<size_t>(loop_index);
-        record.order_position = order_position;
-        record.status = measurement.status;
-        record.status_reason = measurement.status_reason;
-        record.sample_start_index = scenario_result.sample_round_trip_ns.size();
-        record.completed_sample_windows = measurement.samples_ns.size();
-        record.initiator_hint = measurement.initiator_hint;
-        record.responder_hint = measurement.responder_hint;
-        if (measurement.status == CoreToCoreMeasurementStatus::Measured) {
-          record.round_trip_ns = measurement.round_trip_ns;
-          record.headline_elapsed_seconds = measurement.headline_elapsed_seconds;
-          record.duration_quality = measurement.duration_quality;
-          scenario_result.loop_round_trip_ns.push_back(measurement.round_trip_ns);
-          scenario_result.sample_round_trip_ns.insert(scenario_result.sample_round_trip_ns.end(),
-                                                      measurement.samples_ns.begin(), measurement.samples_ns.end());
-          if (scenario_result.completed_loops == 0) {
-            scenario_result.initiator_hint = measurement.initiator_hint;
-            scenario_result.responder_hint = measurement.responder_hint;
-          }
-          ++scenario_result.completed_loops;
-        }
-        scenario_result.loop_records.push_back(std::move(record));
+        append_core_to_core_loop_record(scenario_result, static_cast<size_t>(loop_index), order_position, measurement);
 
         if (!execution_succeeded || measurement.status == CoreToCoreMeasurementStatus::Failed ||
             measurement.status == CoreToCoreMeasurementStatus::Invalid) {
