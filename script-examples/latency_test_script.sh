@@ -134,7 +134,9 @@ extract_with_jq() {
     local tlb_kb=$3
     echo "TLB Locality: ${tlb_kb} KB, Cache Size: ${cache_size} KB" >> "${final_output}"
     echo "----------------------------------------" >> "${final_output}"
-    jq 'if .configuration.benchmark_schema_version == 2 then
+    jq 'if .mode == "gpu_bandwidth" and .schema_version == 1 then
+          error("GPU bandwidth schema 1 is not supported by this standard CPU latency extractor")
+        elif .configuration.benchmark_schema_version == 2 then
           .cache.custom.latency.headline_ns.pooled_sample_distribution.statistics
         else .cache.custom.latency.samples_ns.statistics end' "${json_file}" >> "${final_output}"
     echo "" >> "${final_output}"
@@ -153,6 +155,10 @@ import sys
 try:
     with open('${json_file}', 'r') as f:
         data = json.load(f)
+        if data.get('mode') == 'gpu_bandwidth' and data.get('schema_version') == 1:
+            raise RuntimeError(
+                'GPU bandwidth schema 1 is not supported by this standard CPU latency extractor'
+            )
         latency = data['cache']['custom']['latency']
         if data.get('configuration', {}).get('benchmark_schema_version') == 2:
             if not data.get('results_complete', False):

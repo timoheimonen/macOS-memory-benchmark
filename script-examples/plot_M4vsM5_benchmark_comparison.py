@@ -93,6 +93,10 @@ def load_data(path: Path, metric: str) -> dict:
     with path.open("r", encoding="utf-8") as fh:
         data = json.load(fh)
 
+    if data.get("mode") == "gpu_bandwidth" and data.get("schema_version") == 1:
+        raise RuntimeError(
+            f"GPU bandwidth schema 1 is not supported by this standard CPU benchmark plotter: {path}")
+
     config = data.get("configuration", {})
     cpu_name = config.get("cpu_name") or data.get("cpu_name") or "Unknown CPU"
     version = data.get("version", "?")

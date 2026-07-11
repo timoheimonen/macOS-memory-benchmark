@@ -383,13 +383,8 @@ int validate_config(BenchmarkConfig& config) {
   // Calculate memory limit
   unsigned long available_mem_mb = get_available_memory_mb();
   unsigned long max_allowed_mb_per_buffer = 0;
-  unsigned long required_main_buffers = 2;  // Default mode peak: src + dst
-
-  if (config.only_latency) {
-    required_main_buffers = 1;  // Latency-only mode: lat
-  } else if (config.only_bandwidth || config.run_patterns) {
-    required_main_buffers = 2;  // Bandwidth/pattern mode: src + dst
-  }
+  const unsigned long required_main_buffers =
+      config.only_latency ? 1 : 2;  // Latency: lat; all other modes: src + dst.
 
   if (available_mem_mb > 0) {
     config.max_total_allowed_mb = static_cast<unsigned long>(available_mem_mb * Constants::MEMORY_LIMIT_FACTOR);

@@ -141,6 +141,22 @@ TEST(JsonFileWriterTest, RenameFailurePreservesDestinationAndCleansTemporaryFile
   EXPECT_FALSE(std::filesystem::exists(target.string() + ".tmp"));
 }
 
+TEST(JsonFileWriterTest, ParentPathFilesystemErrorCannotEscapeBoundary) {
+  const std::filesystem::path target =
+      std::filesystem::path("/tmp") / std::string(5000, 'x') /
+      "result.json";
+
+  testing::internal::CaptureStderr();
+  int result = EXIT_SUCCESS;
+  EXPECT_NO_THROW(result =
+                      write_json_to_file(target, {{"ok", true}}, false));
+  const std::string error = testing::internal::GetCapturedStderr();
+
+  EXPECT_EQ(result, EXIT_FAILURE);
+  EXPECT_NE(error.find(Messages::error_prefix()), std::string::npos);
+  EXPECT_NE(error.find("Failed to write file"), std::string::npos);
+}
+
 TEST(JsonUtilsTest, ParseStringRejectsEmptyAndMalformedAndAcceptsValidJson) {
   nlohmann::json parsed;
   std::string error;

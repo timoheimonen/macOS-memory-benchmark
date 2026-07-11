@@ -39,7 +39,6 @@ struct BenchmarkConfig;
 struct TlbBootstrapInterval {
   double lower_ns = 0.0;
   double upper_ns = 0.0;
-  double confidence_level = 0.95;
   size_t paired_sample_count = 0;
   size_t bootstrap_resamples = 0;
 };
@@ -288,14 +287,6 @@ PrivateCacheKneeDetection detect_private_cache_knee(
  * @return EXIT_SUCCESS on success, EXIT_FAILURE on error
  */
 int run_tlb_analysis(const BenchmarkConfig& config);
-
-/**
- * @brief Run standalone TLB analysis with an injectable stop predicate.
- * @param config Benchmark configuration.
- * @param stop_requested Non-blocking stop predicate checked between scheduled measurements.
- */
-int run_tlb_analysis(const BenchmarkConfig& config,
-                     const TlbStopRequested& stop_requested);
 
 /**
  * @brief Run the production coordinator with injected setup and pass execution.

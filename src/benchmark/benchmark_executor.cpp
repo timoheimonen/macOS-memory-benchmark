@@ -176,19 +176,6 @@ MmapPtr allocate_phase_buffer(const BenchmarkConfig& config, size_t size, const 
 }
 
 /**
- * @brief Clears latency-chain diagnostics before each benchmark loop.
- *
- * Diagnostics are re-populated when latency buffers are prepared. Resetting at
- * loop start prevents stale values from a previously executed path.
- */
-void reset_latency_chain_diagnostics(BenchmarkConfig& config) {
-  config.main_latency_chain_diagnostics = {};
-  config.l1_latency_chain_diagnostics = {};
-  config.l2_latency_chain_diagnostics = {};
-  config.custom_latency_chain_diagnostics = {};
-}
-
-/**
  * @brief Prepares main-memory bandwidth buffers for one phase.
  *
  * Allocates source and destination buffers and initializes deterministic data
@@ -283,12 +270,9 @@ int prepare_cache_bandwidth_buffers(const BenchmarkConfig& config, BenchmarkBuff
 /**
  * @brief Prepares cache-latency buffers and pointer chains for one phase.
  *
- * Builds latency chains using current stride/locality settings and optionally
- * records chain diagnostics when the user explicitly sets latency stride.
+ * Builds latency chains using current stride/locality settings.
  */
 int prepare_cache_latency_buffers(BenchmarkConfig& config, BenchmarkBuffers& buffers) {
-  const bool collect_chain_diagnostics = config.user_specified_latency_stride;
-
   if (config.use_custom_cache_size) {
     if (config.custom_buffer_size == 0) {
       return EXIT_SUCCESS;
@@ -303,8 +287,7 @@ int prepare_cache_latency_buffers(BenchmarkConfig& config, BenchmarkBuffers& buf
                                config.custom_buffer_size,
                                config.latency_stride_bytes,
                                config.latency_tlb_locality_bytes,
-                               collect_chain_diagnostics ? &config.custom_latency_chain_diagnostics
-                                                          : nullptr,
+                               nullptr,
                                config.latency_chain_mode,
                                derive_benchmark_seed(config.benchmark_seed,
                                                      kSeedDomainCustomLatency));
@@ -320,8 +303,7 @@ int prepare_cache_latency_buffers(BenchmarkConfig& config, BenchmarkBuffers& buf
                             config.l1_buffer_size,
                             config.latency_stride_bytes,
                             config.latency_tlb_locality_bytes,
-                            collect_chain_diagnostics ? &config.l1_latency_chain_diagnostics
-                                                      : nullptr,
+                            nullptr,
                             config.latency_chain_mode,
                             derive_benchmark_seed(config.benchmark_seed,
                                                   kSeedDomainL1Latency)) != EXIT_SUCCESS) {
@@ -339,8 +321,7 @@ int prepare_cache_latency_buffers(BenchmarkConfig& config, BenchmarkBuffers& buf
                             config.l2_buffer_size,
                             config.latency_stride_bytes,
                             config.latency_tlb_locality_bytes,
-                            collect_chain_diagnostics ? &config.l2_latency_chain_diagnostics
-                                                      : nullptr,
+                            nullptr,
                             config.latency_chain_mode,
                             derive_benchmark_seed(config.benchmark_seed,
                                                   kSeedDomainL2Latency)) != EXIT_SUCCESS) {
@@ -367,12 +348,11 @@ int prepare_main_memory_latency_buffer(BenchmarkConfig& config, BenchmarkBuffers
     return EXIT_FAILURE;
   }
 
-  const bool collect_chain_diagnostics = config.user_specified_latency_stride;
   return setup_latency_chain(buffers.lat_buffer(),
                              config.buffer_size,
                              config.latency_stride_bytes,
                              config.latency_tlb_locality_bytes,
-                             collect_chain_diagnostics ? &config.main_latency_chain_diagnostics : nullptr,
+                             nullptr,
                              config.latency_chain_mode,
                              derive_benchmark_seed(config.benchmark_seed,
                                                    kSeedDomainMainLatency));
@@ -915,7 +895,6 @@ void run_calibrated_latency_measurement(
  * - Logs error message to stderr
  * - Re-throws exception for caller to handle
  *
- * @param[in]     buffers     Benchmark buffers (unused in phase-local allocation mode)
  * @param[in]     config      Benchmark configuration (sizes, counts, flags)
  * @param[in]     loop        Zero-based loop index used for cyclic phase/operation order and diagnostics
  * @param[in,out] test_timer  High-resolution timer for measurements
@@ -933,8 +912,7 @@ void run_calibrated_latency_measurement(
  * @see run_calibrated_bandwidth_measurement() for bandwidth execution
  * @see run_calibrated_latency_measurement() for latency execution
  */
-BenchmarkResults run_single_benchmark_loop(const BenchmarkBuffers& buffers,
-                                           BenchmarkConfig& config,
+BenchmarkResults run_single_benchmark_loop(BenchmarkConfig& config,
                                            int loop,
                                            HighResTimer& test_timer,
                                            BenchmarkExecutionState* execution_state,
@@ -945,12 +923,9 @@ BenchmarkResults run_single_benchmark_loop(const BenchmarkBuffers& buffers,
                                        ? *execution_state
                                        : local_execution_state;
 
-  (void)buffers;
   results.status = BenchmarkRunStatus::Partial;
   results.loop_index = loop >= 0 ? static_cast<size_t>(loop) : 0;
   results.operation_order_index = results.loop_index % 3;
-
-  reset_latency_chain_diagnostics(config);
 
   enum class Phase {
     MainBandwidth,

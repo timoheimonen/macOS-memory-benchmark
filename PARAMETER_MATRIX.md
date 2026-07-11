@@ -1,6 +1,6 @@
 # Parameter Compatibility Matrix
 
-Working version 0.60.0
+Working version 0.61.0
 
 ## All Flags
 
@@ -8,10 +8,11 @@ Working version 0.60.0
 |------|-------------|
 | `--benchmark` | Run standard benchmark |
 | `--patterns` | Run pattern benchmark |
+| `-G, --gpu-bandwidth` | Run standalone Metal GPU memory bandwidth |
 | `--iterations <n>` | Iterations for R/W/Copy tests |
 | `--buffer-size <MB>` | Main memory buffer size |
 | `--count <n>` | Number of benchmark loops |
-| `--seed <uint64>` | Reproducible benchmark/pattern/TLB workload seed |
+| `--seed <uint64>` | Reproducible benchmark/pattern/TLB/GPU workload seed |
 | `--latency-samples <n>` | Latency samples per test |
 | `--latency-stride-bytes <n>` | Latency pointer chain stride |
 | `--latency-chain-mode <mode>` | Chain construction policy |
@@ -33,12 +34,13 @@ Working version 0.60.0
 
 ### Mode Flags (exactly one required for execution)
 
-| | `--benchmark` | `--patterns` | `--analyze-tlb` | `--analyze-core2core` |
-|---|---|---|---|---|
-| `--benchmark` | ✅ | ❌ mutually exclusive | ❌ | ❌ |
-| `--patterns` | ❌ mutually exclusive | ✅ | ❌ | ❌ |
-| `--analyze-tlb` | ❌ | ❌ | ✅ | ❌ |
-| `--analyze-core2core` | ❌ | ❌ | ❌ | ✅ |
+| | `--benchmark` | `--patterns` | `--analyze-tlb` | `--analyze-core2core` | `--gpu-bandwidth` |
+|---|---|---|---|---|---|
+| `--benchmark` | ✅ | ❌ mutually exclusive | ❌ | ❌ | ❌ |
+| `--patterns` | ❌ mutually exclusive | ✅ | ❌ | ❌ | ❌ |
+| `--analyze-tlb` | ❌ | ❌ | ✅ | ❌ | ❌ |
+| `--analyze-core2core` | ❌ | ❌ | ❌ | ✅ | ❌ |
+| `--gpu-bandwidth` | ❌ | ❌ | ❌ | ❌ | ✅ |
 
 ### Modifiers with `--benchmark`
 
@@ -108,6 +110,27 @@ Working version 0.60.0
 | `--sweep-max-runs <n>` | ✅ with `--sweep` | Default `256` |
 | All others | ❌ | Must be used alone |
 
+### Modifiers with `--gpu-bandwidth` (standalone mode)
+
+GPU schema 1 has an exact whitelist. Short and long aliases are equivalent, and duplicate occurrences are rejected.
+
+| Modifier | Compatible | Notes |
+|----------|------------|-------|
+| `-b, --buffer-size <MB>` | ✅ | Default `512` MB per private buffer; hard minimum `64` MB; requested size is never silently reduced |
+| `-i, --iterations <n>` | ✅ | Exact full-buffer pass/dispatch count. Omission calibrates each operation toward 150 ms; explicit values must fit 16,384 dispatches and 64 GiB exact payload, with copy 2× defining the strict shared ceiling |
+| `-r, --count <n>` | ✅ | GPU-local default `3`; order rotates read/write/copy and balances only in complete multiples of three |
+| `--seed <uint64>` | ✅ | Exact base seed; generated once when omitted; domain-separated operation seeds are recorded |
+| `-o, --output <file>` | ✅ | Atomically checkpoints GPU schema 1 after each terminal measurement and for valid post-parse pre-run failures |
+| `-h, --help` | ✅ | Prints GPU-mode help and exits without Metal work |
+| `--sweep`, `--sweep-max-runs` | ❌ | No GPU sweep support in schema 1 |
+| `--threads`, cache/latency/pattern/TLB/core-to-core modifiers | ❌ | Outside the standalone whitelist |
+| Any other primary mode | ❌ | Primary modes are mutually exclusive |
+
+GPU config validation, including the 64 MB minimum and strict number parsing, happens before Metal initialization and
+does not write result JSON. After valid parsing, unsupported device/capability and backend/allocation failures are
+status-bearing GPU schema 1 checkpoints when `--output` is present. Grid geometry is not a CLI parameter: schema 1 uses
+the frozen 8192-threadgroup maximum and records both that maximum and the resolved grid in each work plan.
+
 ### Sweep Compatibility
 
 `--sweep` runs a Cartesian product over one or more parameter lists. It always requires `--output <file>` because sweep
@@ -122,6 +145,7 @@ results are written as one combined JSON document with `configuration.mode: "swe
 | `--patterns` | `buffer-size`, `threads` | `cache-size`, latency keys, `tlb-density` |
 | `--analyze-tlb` | `latency-stride-bytes`, `latency-chain-mode`, `tlb-density` | `buffer-size`, `cache-size`, `threads`, `latency-tlb-locality-kb` |
 | `--analyze-core2core` | `count`, `latency-samples` | `buffer-size`, `cache-size`, `threads`, latency chain/locality/stride keys, `tlb-density` |
+| `--gpu-bandwidth` | none | GPU schema 1 rejects all sweep keys and `--sweep-max-runs` |
 
 Additional sweep rules:
 
@@ -149,9 +173,12 @@ Additional sweep rules:
 | `--only-bandwidth` + `--patterns` | Separate modes |
 | `--only-latency` + `--patterns` | Separate modes |
 | `--benchmark` + `--patterns` | Mutually exclusive |
+| `--gpu-bandwidth` + any other primary mode | GPU is a standalone primary mode |
+| `--gpu-bandwidth` + any option outside `buffer-size`, `iterations`, `count`, `seed`, `output`, `help` | GPU schema 1 exact whitelist |
 | `--sweep` without `--output` | Sweep mode requires a combined JSON output file |
 | `--sweep` generated runs > `--sweep-max-runs` | Guardrail against accidental large Cartesian sweeps |
 
 ### No Mode Flag (shows help)
 
-Running with only modifier flags and no mode flag (`--benchmark`, `--patterns`, `--analyze-tlb`, `--analyze-core2core`) shows help and exits.
+Running with only modifier flags and no mode flag (`--benchmark`, `--patterns`, `--analyze-tlb`, `--analyze-core2core`,
+`--gpu-bandwidth`) shows help and exits.

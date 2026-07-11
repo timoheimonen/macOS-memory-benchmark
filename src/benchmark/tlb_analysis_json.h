@@ -62,8 +62,6 @@ struct TlbAnalysisJsonContext {
   const std::vector<TlbSweepPoint>& sweep_points;
   const std::vector<TlbMeasurementRecord>& measurement_records;
   const std::vector<size_t>& localities_bytes;
-  const std::vector<std::vector<double>>& sweep_loop_latencies_ns;
-  const std::vector<double>& p50_latency_ns;
   const TlbBoundaryDetection& l1_boundary;
   const TlbBoundaryDetection& l2_boundary;
   const PrivateCacheKneeDetection& private_cache_knee;
@@ -79,10 +77,6 @@ struct TlbAnalysisJsonContext {
   size_t private_cache_to_l1_distance_pages;
   bool can_measure_page_walk_penalty;
   bool page_walk_comparison_completed;
-  const std::vector<double>& page_walk_comparison_loop_latencies_ns;
-  double page_walk_comparison_p50_ns;
-  double page_walk_baseline_ns;
-  double page_walk_penalty_ns;
   double total_execution_time_sec;
   TlbRuntimeProfile runtime_profile;
   size_t available_memory_mb = 0;

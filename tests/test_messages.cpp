@@ -263,7 +263,22 @@ TEST(MessagesErrorTest, ErrorAnalyzeTlbMustBeUsedAlone) {
 
 TEST(MessagesErrorTest, ErrorSeedRequiresEverySupportedMode) {
   EXPECT_EQ(Messages::error_seed_requires_supported_mode(),
-            "--seed requires --benchmark, --patterns, or --analyze-tlb");
+            "--seed requires --benchmark, --patterns, --analyze-tlb, or --gpu-bandwidth");
+}
+
+TEST(MessagesErrorTest, GpuErrorsUseStableMethodologyTerms) {
+  EXPECT_NE(Messages::error_gpu_bandwidth_must_be_used_alone().find(
+                "--gpu-bandwidth"),
+            std::string::npos);
+  EXPECT_NE(Messages::error_gpu_buffer_size_below_minimum(32, 64).find(
+                "64 MB"),
+            std::string::npos);
+  EXPECT_NE(Messages::error_gpu_iterations_exceed_limit(513, 512).find(
+                "maximum 512"),
+            std::string::npos);
+  EXPECT_NE(Messages::error_gpu_run_failed("test-reason").find(
+                "test-reason"),
+            std::string::npos);
 }
 
 TEST(MessagesErrorTest, ErrorMadviseFailed) {
@@ -674,8 +689,11 @@ TEST(MessagesFormattingTest, UsageOptions) {
   EXPECT_NE(msg.find("default: medium"), std::string::npos);
   EXPECT_NE(msg.find("--analyze-tlb: 16"), std::string::npos);
   EXPECT_NE(msg.find("calibrate toward 150 ms"), std::string::npos);
-  EXPECT_NE(msg.find("Reproducible workload/schedule seed for --benchmark and --patterns"),
+  EXPECT_NE(msg.find("Reproducible workload/schedule seed for --benchmark, --patterns"),
             std::string::npos);
+  EXPECT_NE(msg.find("--gpu-bandwidth"), std::string::npos);
+  EXPECT_NE(msg.find(Constants::GPU_METHODOLOGY_VERSION), std::string::npos);
+  EXPECT_NE(msg.find("minimum buffer size is 64 MB"), std::string::npos);
   EXPECT_NE(msg.find("--latency-samples"), std::string::npos);
   EXPECT_NE(msg.find("--latency-stride-bytes"), std::string::npos);
   EXPECT_NE(msg.find("--latency-chain-mode"), std::string::npos);
@@ -694,6 +712,38 @@ TEST(MessagesFormattingTest, UsageOptions) {
   EXPECT_NE(msg.find(std::to_string(Constants::DEFAULT_LATENCY_SAMPLE_COUNT)), std::string::npos);
   EXPECT_NE(msg.find(std::to_string(Constants::MIN_CACHE_SIZE_KB)), std::string::npos);
   EXPECT_NE(msg.find(std::to_string(Constants::MAX_CACHE_SIZE_KB)), std::string::npos);
+}
+
+TEST(MessagesFormattingTest, GpuUsageAndReportComposition) {
+  EXPECT_EQ(Messages::gpu_unknown_device_name(), "unknown Apple GPU");
+  const std::string usage = Messages::gpu_usage_options("memory_benchmark");
+  EXPECT_NE(usage.find("--gpu-bandwidth"), std::string::npos);
+  EXPECT_NE(usage.find("default: 512 MB"), std::string::npos);
+  EXPECT_NE(usage.find("minimum: 64 MB"), std::string::npos);
+  EXPECT_NE(usage.find("default: 3"), std::string::npos);
+
+  EXPECT_NE(Messages::report_gpu_bandwidth_header(
+                "Apple M4", 3, true).find("headline: median"),
+            std::string::npos);
+  EXPECT_NE(Messages::report_gpu_bandwidth_value(
+                "Copy", 123.456, true).find(
+                "aggregate read + write payload"),
+            std::string::npos);
+  EXPECT_NE(Messages::report_gpu_bandwidth_repeatability(
+                1.0, 2.0, 3.0, true).find("copy CV 3.00%"),
+            std::string::npos);
+  EXPECT_NE(Messages::report_gpu_bandwidth_interpretation_note().find(
+                "DRAM residency is unverified"),
+            std::string::npos);
+  EXPECT_NE(Messages::warning_gpu_high_cv("read", 5.1, 5.0).find(
+                "5.10%"),
+            std::string::npos);
+  EXPECT_FALSE(Messages::warning_gpu_order_not_balanced().empty());
+  EXPECT_FALSE(Messages::warning_gpu_duration_quality(
+                   "write", "payload-cap-below-target").empty());
+  EXPECT_FALSE(Messages::warning_gpu_environment_not_nominal().empty());
+  EXPECT_FALSE(
+      Messages::warning_gpu_recommended_working_set_exceeded().empty());
 }
 
 TEST(MessagesFormattingTest, UsageExample) {

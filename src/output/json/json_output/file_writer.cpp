@@ -46,12 +46,11 @@
 #include "output/console/messages/messages_api.h"   // Include centralized messages
 #include "third_party/nlohmann/json.hpp"   // JSON library
 
-// Write JSON to file with proper error handling and atomic writes
-// Uses atomic file writing: writes to a temporary file, then renames it to the final destination
-// Returns EXIT_SUCCESS on success, EXIT_FAILURE on error
-int write_json_to_file(const std::filesystem::path& file_path,
-                       const nlohmann::ordered_json& json_output,
-                       bool announce_success) {
+namespace {
+
+int write_json_to_file_impl(const std::filesystem::path& file_path,
+                            const nlohmann::ordered_json& json_output,
+                            bool announce_success) {
   // Ensure parent directory exists
   std::filesystem::path parent_dir = file_path.parent_path();
   if (!parent_dir.empty() && !std::filesystem::exists(parent_dir)) {
@@ -187,4 +186,27 @@ int write_json_to_file(const std::filesystem::path& file_path,
   }
   
   return EXIT_SUCCESS;
+}
+
+}  // namespace
+
+// Write JSON atomically and contain every filesystem/library exception at the
+// output boundary so callers can reliably convert failure to a return code.
+int write_json_to_file(const std::filesystem::path& file_path,
+                       const nlohmann::ordered_json& json_output,
+                       bool announce_success) {
+  try {
+    return write_json_to_file_impl(file_path, json_output, announce_success);
+  } catch (const std::exception& error) {
+    std::cerr << Messages::error_prefix()
+              << Messages::error_file_write_failed(file_path.string(),
+                                                    error.what())
+              << std::endl;
+  } catch (...) {
+    std::cerr << Messages::error_prefix()
+              << Messages::error_file_write_failed(
+                     file_path.string(), "Unknown file writer exception")
+              << std::endl;
+  }
+  return EXIT_FAILURE;
 }

@@ -30,7 +30,6 @@
 #include <string>
 
 // Forward declarations
-struct BenchmarkBuffers;
 struct BenchmarkConfig;
 struct BenchmarkResults;
 struct HighResTimer;
@@ -44,9 +43,8 @@ struct BenchmarkExecutorTestHooks {
 
 /**
  * @brief Run a single benchmark loop and return results
- * @param buffers Reference to benchmark buffers structure (unused in phase-local allocation mode)
- * @param config Reference to benchmark configuration (updated for per-loop diagnostics)
- * @param loop Zero-based loop index used for cyclic phase/operation order and diagnostics
+ * @param config Reference to benchmark configuration
+ * @param loop Zero-based loop index used for cyclic phase/operation order and audit metadata
  * @param test_timer Reference to high-resolution timer for measurements
  * @param execution_state Optional cross-loop calibration state; a local state is used when null
  * @param test_hooks Optional deterministic failure seams used by tests
@@ -55,8 +53,7 @@ struct BenchmarkExecutorTestHooks {
  * Executes one complete benchmark loop, running all configured tests
  * (bandwidth and/or latency) and calculating results.
  */
-BenchmarkResults run_single_benchmark_loop(const BenchmarkBuffers& buffers, BenchmarkConfig& config, int loop,
-                                           HighResTimer& test_timer,
+BenchmarkResults run_single_benchmark_loop(BenchmarkConfig& config, int loop, HighResTimer& test_timer,
                                            BenchmarkExecutionState* execution_state = nullptr,
                                            const BenchmarkExecutorTestHooks* test_hooks = nullptr);
 

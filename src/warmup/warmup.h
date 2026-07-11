@@ -70,14 +70,6 @@ void warmup_copy(void* dst, void* src, size_t size, int num_threads);
  */
 void warmup_latency(void* buffer, size_t buffer_size);
 
-/**
- * @brief Warms up memory for cache latency test by page prefaulting (single thread).
- * @param buffer Pointer to the buffer to warm up
- * @param buffer_size Size of the buffer in bytes
- * @note Uses single-threaded page prefaulting to ensure pages are resident in memory
- */
-void warmup_cache_latency(void* buffer, size_t buffer_size);
-
 // --- Cache Warmup Functions ---
 /**
  * @brief Warms up cache bandwidth test by reading from the buffer.

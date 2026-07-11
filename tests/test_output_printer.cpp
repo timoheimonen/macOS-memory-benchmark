@@ -20,6 +20,7 @@
 #include "benchmark/benchmark_runner.h"
 #include "core/config/config.h"
 #include "core/config/constants.h"
+#include "core/config/version.h"
 #include "output/console/messages/messages_api.h"
 #include "output/console/output_printer.h"
 
@@ -33,6 +34,17 @@ std::string capture_results(const BenchmarkConfig& config,
 }
 
 }  // namespace
+
+TEST(OutputPrinterTest, RuntimeBannerUsesSharedContract) {
+  testing::internal::CaptureStdout();
+  print_runtime_banner();
+  const std::string output = testing::internal::GetCapturedStdout();
+
+  const std::string expected =
+      Messages::config_header(SOFTVERSION) + "\n" +
+      Messages::config_copyright() + "\n" + Messages::config_license() + "\n";
+  EXPECT_EQ(output, expected);
+}
 
 TEST(OutputPrinterTest, PartialBandwidthPrintsEachMetricWithStatusInsteadOfZero) {
   BenchmarkConfig config;

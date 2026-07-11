@@ -44,7 +44,6 @@
 .global _memory_copy_reverse_loop_asm
 .align 4
 _memory_copy_reverse_loop_asm:
-    mov x3, xzr             // offset = 0 (tracked as end pointers)
     add x3, x0, x2          // dst_end = dst + byteCount
     add x4, x1, x2          // src_end = src + byteCount
     // 512B blocks chosen as sweet spot: large enough for high throughput,
@@ -125,8 +124,6 @@ copy_reverse_cleanup:          // Tail handling when <512B remain
     b.ls copy_reverse_loop_end      // If done (unsigned <=), exit
 
     subs x6, x3, x0         // Recalc remaining (x6)
-    sub x7, x3, x6           // dst_block_start = dst_end - remaining
-    sub x8, x4, x6           // src_block_start = src_end - remaining
 
     // Handle 256B chunks (8 ldp/stnp pairs)
     cmp x6, #256              // Check if >= 256 bytes remain
