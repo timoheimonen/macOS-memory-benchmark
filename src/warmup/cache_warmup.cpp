@@ -38,7 +38,14 @@ void warmup_cache_read(void* src_buffer, size_t size, int num_threads, std::atom
     return;
   }
   size_t warmup_size = size;
-  warmup_parallel(src_buffer, size, num_threads, warmup_read_chunk_op, true, nullptr, &dummy_checksum, warmup_size);
+  auto cache_read_chunk_op = [](char* chunk_start, char* /* src_chunk */, size_t chunk_size,
+                                std::atomic<uint64_t>* checksum) {
+    const uint64_t result = memory_read_cache_loop_asm(chunk_start, chunk_size);
+    if (checksum != nullptr) {
+      checksum->fetch_xor(result, std::memory_order_release);
+    }
+  };
+  warmup_parallel(src_buffer, size, num_threads, cache_read_chunk_op, true, nullptr, &dummy_checksum, warmup_size);
 }
 
 /**

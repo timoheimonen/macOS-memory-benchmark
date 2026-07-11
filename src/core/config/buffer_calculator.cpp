@@ -42,9 +42,9 @@
 
 #include "core/config/config.h"
 #include "core/config/constants.h"
+#include "core/system/page_size.h"
 #include "output/console/messages/messages_api.h"
 #include <iostream>
-#include <unistd.h>  // getpagesize
 #include <limits>
 #include <cmath>
 
@@ -53,8 +53,7 @@ size_t get_config_page_size_bytes() {
   if (hooks != nullptr && hooks->page_size_bytes != 0) {
     return hooks->page_size_bytes;
   }
-  const int page_size = getpagesize();
-  return page_size > 0 ? static_cast<size_t>(page_size) : 0;
+  return get_system_page_size_bytes();
 }
 
 /**

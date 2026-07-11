@@ -19,27 +19,26 @@
  * @author Timo Heimonen <timo.heimonen@proton.me>
  * @date 2026
  *
- * This header provides functions to initialize all benchmark buffers by
- * filling them with data and setting up latency chains.
+ * This header provides deterministic initialization for pattern mappings.
  */
 #ifndef BUFFER_INITIALIZER_H
 #define BUFFER_INITIALIZER_H
 
-#include <cstdlib>  // EXIT_SUCCESS, EXIT_FAILURE
+#include <cstddef>
 
-// Forward declarations to avoid including headers in header
-struct BenchmarkConfig;
-struct BenchmarkBuffers;
+struct PatternBuffers;
 
 /**
- * @brief Initialize all buffers (fill data and setup latency chains)
- * @param buffers Reference to BenchmarkBuffers structure
- * @param config Reference to benchmark configuration
- * @return EXIT_SUCCESS on success, EXIT_FAILURE on error
+ * @brief Initialize the pattern source and destination mappings.
+ * @param buffers Allocated pattern mappings.
+ * @param buffer_size Size of each mapping in bytes.
+ * @return EXIT_SUCCESS on success, EXIT_FAILURE if either mapping or the size
+ *         is invalid.
  *
- * Initializes buffers by filling them with data and setting up pointer-chasing
- * chains for latency tests.
+ * Fills the source with the deterministic byte pattern and zeroes the
+ * destination. The function does not modify configuration state.
  */
-int initialize_all_buffers(BenchmarkBuffers& buffers, BenchmarkConfig& config);
+int initialize_pattern_buffers(const PatternBuffers& buffers,
+                               size_t buffer_size);
 
 #endif // BUFFER_INITIALIZER_H

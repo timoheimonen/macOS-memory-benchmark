@@ -6,6 +6,8 @@
 #include <cstdlib>
 
 #include "core/config/config.h"
+#include "core/memory/buffer_allocator.h"
+#include "core/memory/buffer_initializer.h"
 #include "core/memory/buffer_manager.h"
 #include "utils/benchmark.h"
 
@@ -18,18 +20,21 @@ inline void initialize_system_info(BenchmarkConfig& config) {
   config.l2_cache_size = get_l2_cache_size();
 }
 
-inline ::testing::AssertionResult allocate_and_initialize_buffers(BenchmarkConfig& config,
-                                                                  BenchmarkBuffers& buffers) {
-  const int alloc_result = allocate_all_buffers(config, buffers);
+inline ::testing::AssertionResult allocate_and_initialize_pattern_buffers(
+    const BenchmarkConfig& config, PatternBuffers& buffers) {
+  const int alloc_result = allocate_pattern_buffers(config, buffers);
   if (alloc_result != EXIT_SUCCESS) {
     return ::testing::AssertionFailure()
-           << "allocate_all_buffers(config, buffers) failed with code " << alloc_result;
+           << "allocate_pattern_buffers(config, buffers) failed with code "
+           << alloc_result;
   }
 
-  const int init_result = initialize_all_buffers(buffers, config);
+  const int init_result =
+      initialize_pattern_buffers(buffers, config.buffer_size);
   if (init_result != EXIT_SUCCESS) {
     return ::testing::AssertionFailure()
-           << "initialize_all_buffers(buffers, config) failed with code " << init_result;
+           << "initialize_pattern_buffers(buffers, config) failed with code "
+           << init_result;
   }
 
   return ::testing::AssertionSuccess();

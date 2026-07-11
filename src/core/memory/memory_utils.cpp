@@ -24,6 +24,7 @@
  */
 
 #include "core/memory/memory_utils.h"
+#include "core/system/page_size.h"
 #include "output/console/messages/messages_api.h"
 #include <vector>
 #include <string>
@@ -35,7 +36,6 @@
 #include <cctype>
 #include <iostream>  // Needed for std::cout, std::cerr
 #include <cstdlib>   // Needed for EXIT_SUCCESS, EXIT_FAILURE
-#include <unistd.h>  // getpagesize
 
 namespace {
 
@@ -282,10 +282,9 @@ static int setup_latency_chain_impl(void *buffer, size_t buffer_size, size_t str
         return EXIT_FAILURE;
     }
 
-    const int page_size_raw = test_hooks_active ? 0 : getpagesize();
-    const size_t page_size = test_hooks_active && active_test_hooks.page_size_bytes != 0
+    const size_t page_size = test_hooks_active
                                  ? active_test_hooks.page_size_bytes
-                                 : (page_size_raw > 0 ? static_cast<size_t>(page_size_raw) : 0);
+                                 : get_system_page_size_bytes();
     const bool collect_page_diagnostics = (diagnostics != nullptr && page_size > 0);
     std::vector<uint8_t> page_seen;
     size_t unique_pages_touched = 0;

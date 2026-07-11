@@ -46,16 +46,16 @@
 size_t calculate_num_random_accesses(size_t buffer_size);
 
 // Forward declarations from execution_strided.cpp
-int run_strided_pattern_benchmarks(const BenchmarkBuffers& buffers, const BenchmarkConfig& config,
+int run_strided_pattern_benchmarks(const PatternBuffers& buffers, const BenchmarkConfig& config,
                                    size_t stride, PatternResults& results,
                                    HighResTimer& timer);
 
 // Forward declarations from execution_patterns.cpp
-void run_forward_pattern_benchmarks(const BenchmarkBuffers& buffers, const BenchmarkConfig& config,
+void run_forward_pattern_benchmarks(const PatternBuffers& buffers, const BenchmarkConfig& config,
                                     PatternResults& results, HighResTimer& timer);
-void run_reverse_pattern_benchmarks(const BenchmarkBuffers& buffers, const BenchmarkConfig& config,
+void run_reverse_pattern_benchmarks(const PatternBuffers& buffers, const BenchmarkConfig& config,
                                    PatternResults& results, HighResTimer& timer);
-int run_random_pattern_benchmarks(const BenchmarkBuffers& buffers, const BenchmarkConfig& config,
+int run_random_pattern_benchmarks(const PatternBuffers& buffers, const BenchmarkConfig& config,
                                    const std::vector<size_t>& random_indices,
                                    const std::vector<PatternRandomWorkerIndices>& worker_indices,
                                    PatternResults& results, HighResTimer& timer);
@@ -82,7 +82,7 @@ build_pattern_execution_order(size_t loop_index) {
   return order;
 }
 
-int run_pattern_benchmarks(const BenchmarkBuffers& buffers, const BenchmarkConfig& config,
+int run_pattern_benchmarks(const PatternBuffers& buffers, const BenchmarkConfig& config,
                            PatternResults& results, size_t loop_index) {
   using namespace Constants;
 

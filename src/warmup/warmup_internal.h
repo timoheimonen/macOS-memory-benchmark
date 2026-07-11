@@ -41,6 +41,7 @@
 
 #include <atomic>
 #include <iostream>
+#include <system_error>
 #include <thread>
 #include <vector>
 #include <cstddef>
@@ -56,6 +57,26 @@
 
 // Forward declaration for join_threads (defined in utils.cpp, declared in benchmark.h)
 void join_threads(std::vector<std::thread>& threads);
+
+/**
+ * @brief Join every successfully started warmup worker on all exit paths.
+ *
+ * Thread construction can fail after earlier workers have already started.
+ * Destroying a joinable `std::thread` terminates the process, so warmup
+ * launchers keep this guard alive for the complete startup window.
+ */
+class WarmupThreadJoinGuard {
+ public:
+  explicit WarmupThreadJoinGuard(std::vector<std::thread>& threads) noexcept
+      : threads_(threads) {}
+  ~WarmupThreadJoinGuard() { join_threads(threads_); }
+
+  WarmupThreadJoinGuard(const WarmupThreadJoinGuard&) = delete;
+  WarmupThreadJoinGuard& operator=(const WarmupThreadJoinGuard&) = delete;
+
+ private:
+  std::vector<std::thread>& threads_;
+};
 
 /**
  * @brief Calculate adaptive warmup size based on buffer size
@@ -136,6 +157,7 @@ void warmup_parallel(void* buffer, size_t size, int num_threads, ChunkOp chunk_o
   std::vector<std::thread> threads;
   // Pre-allocate space for efficiency.
   threads.reserve(num_threads);
+  WarmupThreadJoinGuard thread_join_guard(threads);
 
   // Process unaligned prefix bytes before the main loop to ensure full buffer coverage
   // This ensures that bytes between buffer and the first cache-line boundary are warmed up
@@ -258,18 +280,23 @@ void warmup_parallel(void* buffer, size_t size, int num_threads, ChunkOp chunk_o
       continue;
     }
 
-    // Create a new thread to execute the chunk operation.
-    threads.emplace_back([chunk_start, src_chunk, current_chunk_size, chunk_operation, set_qos, dummy_checksum]() {
-      // Set QoS for this worker thread if requested.
-      if (set_qos) {
-        kern_return_t qos_ret = pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
-        if (qos_ret != KERN_SUCCESS) {
-          std::cerr << Messages::warning_prefix() << Messages::warning_qos_failed_worker_thread(qos_ret) << std::endl;
+    // Create a new thread to execute the chunk operation. A failed later
+    // construction is handled while the join guard owns earlier workers.
+    try {
+      threads.emplace_back([chunk_start, src_chunk, current_chunk_size, chunk_operation, set_qos, dummy_checksum]() {
+        // Set QoS for this worker thread if requested.
+        if (set_qos) {
+          kern_return_t qos_ret = pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
+          if (qos_ret != KERN_SUCCESS) {
+            std::cerr << Messages::warning_prefix() << Messages::warning_qos_failed_worker_thread(qos_ret) << std::endl;
+          }
         }
-      }
-      // Execute the chunk operation.
-      chunk_operation(chunk_start, src_chunk, current_chunk_size, dummy_checksum);
-    });
+        // Execute the chunk operation.
+        chunk_operation(chunk_start, src_chunk, current_chunk_size, dummy_checksum);
+      });
+    } catch (const std::system_error&) {
+      return;
+    }
     
     // Move offset forward using original chunk end to ensure forward progress
     // This prevents negative pointer differences when aligned_end_ptr would be before buffer
@@ -282,8 +309,7 @@ void warmup_parallel(void* buffer, size_t size, int num_threads, ChunkOp chunk_o
     return;  // No threads created (all chunks were zero after alignment)
   }
 
-  // Wait for all worker threads to complete.
-  join_threads(threads);
+  // The scope guard waits for all worker threads to complete.
 }
 
 // Generic single-threaded warmup function.

@@ -31,11 +31,12 @@
 #include <cstdlib>
 #include <iostream>
 #include <limits>
+#include <stdexcept>
 #include <string>
-#include <vector>
 
 #include "core/config/config.h"
 #include "core/config/constants.h"
+#include "core/config/sweep_utils.h"
 #include "core/signal/signal_handler.h"
 #include "output/console/messages/messages_api.h"
 #include "output/console/output_printer.h"
@@ -94,21 +95,6 @@ bool parse_positive_int_option(const std::string& option,
   return true;
 }
 
-std::vector<std::string> split_comma_values(const std::string& input) {
-  std::vector<std::string> values;
-  size_t value_start = 0;
-  while (value_start <= input.size()) {
-    const size_t comma = input.find(',', value_start);
-    if (comma == std::string::npos) {
-      values.push_back(input.substr(value_start));
-      break;
-    }
-    values.push_back(input.substr(value_start, comma - value_start));
-    value_start = comma + 1;
-  }
-  return values;
-}
-
 bool core_to_core_sweep_parameter_from_string(const std::string& key,
                                               CoreToCoreSweepParameter& out_parameter,
                                               std::string& out_name) {
@@ -128,45 +114,29 @@ bool core_to_core_sweep_parameter_from_string(const std::string& key,
 bool parse_core_to_core_sweep_spec(const std::string& spec_text,
                                    CoreToCoreSweepSpec& out_spec,
                                    const char* prog_name) {
-  const size_t equals_pos = spec_text.find('=');
-  if (equals_pos == std::string::npos || equals_pos == 0 || equals_pos == spec_text.size() - 1) {
+  ParsedSweepText parsed_text;
+  try {
+    parsed_text = parse_sweep_text(spec_text);
+  } catch (const std::invalid_argument& error) {
     std::cerr << Messages::error_prefix()
-              << Messages::error_invalid_value(OPT_SWEEP_LONG, spec_text, "sweep must use key=value1,value2 syntax")
+              << Messages::error_invalid_value(OPT_SWEEP_LONG, spec_text, error.what())
               << std::endl;
     print_usage(prog_name);
     return false;
   }
-
-  const std::string key = spec_text.substr(0, equals_pos);
-  const std::string value_text = spec_text.substr(equals_pos + 1);
 
   CoreToCoreSweepSpec spec;
-  if (!core_to_core_sweep_parameter_from_string(key, spec.parameter, spec.parameter_name)) {
+  if (!core_to_core_sweep_parameter_from_string(parsed_text.key, spec.parameter, spec.parameter_name)) {
     std::cerr << Messages::error_prefix()
-              << Messages::error_invalid_value(OPT_SWEEP_LONG, spec_text, "unsupported core-to-core sweep parameter: " + key)
+              << Messages::error_invalid_value(
+                     OPT_SWEEP_LONG, spec_text,
+                     "unsupported core-to-core sweep parameter: " + parsed_text.key)
               << std::endl;
     print_usage(prog_name);
     return false;
   }
 
-  const std::vector<std::string> raw_values = split_comma_values(value_text);
-  if (raw_values.empty()) {
-    std::cerr << Messages::error_prefix()
-              << Messages::error_invalid_value(OPT_SWEEP_LONG, spec_text, "sweep value list cannot be empty")
-              << std::endl;
-    print_usage(prog_name);
-    return false;
-  }
-
-  for (const std::string& raw_value : raw_values) {
-    if (raw_value.empty()) {
-      std::cerr << Messages::error_prefix()
-                << Messages::error_invalid_value(OPT_SWEEP_LONG, spec_text, "sweep value list cannot contain empty values")
-                << std::endl;
-      print_usage(prog_name);
-      return false;
-    }
-
+  for (const std::string& raw_value : parsed_text.values) {
     int parsed = 0;
     const std::string option_name =
         (spec.parameter == CoreToCoreSweepParameter::Count) ? OPT_COUNT_LONG : OPT_LATENCY_SAMPLES_LONG;
@@ -391,8 +361,6 @@ int run_core_to_core_latency_mode(int argc, char* argv[]) {
   }
 
   // Execute benchmark only after successful parse and non-help path.
-  block_benchmark_signals();
-  const int run_result = run_core_to_core_latency(config);
-  restore_signal_mask();
-  return run_result;
+  BenchmarkSignalMaskGuard signal_guard;
+  return run_core_to_core_latency(config);
 }

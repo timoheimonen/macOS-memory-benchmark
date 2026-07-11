@@ -21,6 +21,7 @@
 #include <gtest/gtest.h>
 
 #include "core/config/constants.h"
+#include "core/system/page_size.h"
 #include "core/system/system_info.h"
 #include "output/console/messages/messages_api.h"
 
@@ -328,6 +329,14 @@ TEST(SystemInfoIntegrationTest, CacheHierarchyContract) {
   EXPECT_GE(l1_size, static_cast<size_t>(64 * 1024));
   EXPECT_GE(l2_size, static_cast<size_t>(4 * 1024 * 1024));
   EXPECT_GT(l2_size, l1_size) << "L2=" << l2_size << " L1=" << l1_size;
+}
+
+TEST(SystemInfoIntegrationTest, NativePageSizeContract) {
+  const size_t page_size = get_system_page_size_bytes();
+
+  ASSERT_GT(page_size, 0U);
+  EXPECT_EQ(page_size % sizeof(uintptr_t), 0U);
+  EXPECT_EQ(page_size & (page_size - 1), 0U);
 }
 
 TEST(SystemInfoIntegrationTest, MacOSVersionContract) {

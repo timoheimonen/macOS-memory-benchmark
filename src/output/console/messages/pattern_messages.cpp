@@ -181,4 +181,58 @@ const std::string& pattern_reason_work_plan_total_overflow() {
   return msg;
 }
 
+const std::string& pattern_reason_buffers_allocation_failed() {
+  static const std::string msg = "pattern buffer allocation failed";
+  return msg;
+}
+
+const std::string& pattern_reason_buffers_initialization_failed() {
+  static const std::string msg = "pattern buffer initialization failed";
+  return msg;
+}
+
+const std::string& pattern_reason_loop_execution_failed() {
+  static const std::string msg = "pattern loop execution failed";
+  return msg;
+}
+
+const std::string& pattern_reason_loop_interrupted() {
+  static const std::string msg = "pattern loop interrupted by user";
+  return msg;
+}
+
+const std::string& pattern_reason_loop_incomplete() {
+  static const std::string msg = "pattern loop has incomplete measurements";
+  return msg;
+}
+
+const std::string& pattern_reason_invalid_measurement() {
+  static const std::string msg = "pattern loop contains an invalid measurement";
+  return msg;
+}
+
+const std::string& pattern_reason_loops_remain() {
+  static const std::string msg = "pattern benchmark loops remain";
+  return msg;
+}
+
+std::string pattern_reason_loop_exception(const std::string& error) {
+  return "pattern loop threw an exception: " + error;
+}
+
+const std::string& pattern_reason_unknown_loop_exception() {
+  static const std::string msg = "pattern loop threw an unknown exception";
+  return msg;
+}
+
+std::string pattern_reason_coordinator_exception(const std::string& error) {
+  return "pattern coordinator threw an exception: " + error;
+}
+
+const std::string& pattern_reason_unknown_coordinator_exception() {
+  static const std::string msg =
+      "pattern coordinator threw an unknown exception";
+  return msg;
+}
+
 } // namespace Messages

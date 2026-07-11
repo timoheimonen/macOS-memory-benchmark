@@ -21,22 +21,12 @@
  */
 
 #include "benchmark/tlb_measurement_scheduler.h"
+#include "utils/seed_utils.h"
 
 #include <algorithm>
 #include <limits>
 #include <numeric>
 #include <random>
-
-namespace {
-
-uint64_t splitmix64(uint64_t value) {
-  value += 0x9e3779b97f4a7c15ULL;
-  value = (value ^ (value >> 30U)) * 0xbf58476d1ce4e5b9ULL;
-  value = (value ^ (value >> 27U)) * 0x94d049bb133111ebULL;
-  return value ^ (value >> 31U);
-}
-
-}  // namespace
 
 const char* tlb_measurement_pass_to_string(TlbMeasurementPass pass) {
   switch (pass) {
@@ -56,9 +46,10 @@ uint64_t derive_tlb_measurement_seed(uint64_t base_seed,
                                      TlbMeasurementPass pass,
                                      size_t round_index,
                                      size_t point_index) {
-  uint64_t value = splitmix64(base_seed ^ static_cast<uint64_t>(pass));
-  value = splitmix64(value ^ static_cast<uint64_t>(round_index));
-  return splitmix64(value ^ static_cast<uint64_t>(point_index));
+  uint64_t value =
+      SeedUtils::splitmix64(base_seed ^ static_cast<uint64_t>(pass));
+  value = SeedUtils::splitmix64(value ^ static_cast<uint64_t>(round_index));
+  return SeedUtils::splitmix64(value ^ static_cast<uint64_t>(point_index));
 }
 
 bool tlb_measure_spread_first(const TlbMeasurementTask& task) {

@@ -18,8 +18,7 @@
  * @brief Latency test warmup functions
  */
 
-#include <unistd.h>  // For getpagesize()
-
+#include "core/system/page_size.h"
 #include "warmup/warmup.h"
 #include "warmup/warmup_internal.h"
 
@@ -39,8 +38,10 @@ void warmup_latency(void* buffer, size_t buffer_size) {
       return;
     }
     
-    // Get actual system page size (4KB on most systems, 16KB on some Apple Silicon)
-    const size_t page_size = static_cast<size_t>(getpagesize());
+    const size_t page_size = get_system_page_size_bytes();
+    if (page_size == 0) {
+      return;
+    }
     char* buf = static_cast<char*>(buffer);
     
     // Touch each page with a 1-byte read/write to ensure it's mapped
@@ -69,4 +70,3 @@ void warmup_cache_latency(void* buffer, size_t buffer_size) {
   // Use the same implementation as warmup_latency since they're identical.
   warmup_latency(buffer, buffer_size);
 }
-

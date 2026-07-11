@@ -23,29 +23,74 @@
  * benchmark application.
  */
 
-#include <atomic>     // Required for std::atomic (progress indicator)
-#include <iostream>   // Required for std::cout
-#include <thread>     // Required for std::thread
-#include <vector>     // Required for std::vector
-
 #include "utils/utils.h"
 
-// --- Progress Indicator ---
-// Simple spinner for showing progress without affecting performance
-// Uses a static counter to cycle through spinner characters
-static std::atomic<int> spinner_counter{0};
-static const char spinner_chars[] = {'|', '/', '-', '\\'};
+#include <algorithm>
+#include <iostream>
+#include <ostream>
+#include <string>
+#include <unistd.h>
+
+namespace {
+
+ProgressSpinner& shared_progress_spinner() {
+  static ProgressSpinner spinner;
+  return spinner;
+}
+
+}  // namespace
+
+ProgressSpinner::ProgressSpinner()
+    : ProgressSpinner(std::cerr, isatty(STDERR_FILENO) == 1) {}
+
+ProgressSpinner::ProgressSpinner(std::ostream& output, bool enabled)
+    : output_(output), enabled_(enabled) {}
+
+ProgressSpinner::~ProgressSpinner() {
+  clear();
+}
+
+void ProgressSpinner::tick(const std::string& message) {
+  if (!enabled_) {
+    return;
+  }
+
+  static constexpr char kFrames[] = {'|', '/', '-', '\\'};
+  std::string text;
+  text.reserve(message.size() + 2);
+  text.push_back(kFrames[frame_index_ % (sizeof(kFrames) / sizeof(kFrames[0]))]);
+  text.push_back(' ');
+  text.append(message);
+  ++frame_index_;
+
+  const size_t width = std::max(rendered_width_, text.size());
+  text.append(width - text.size(), ' ');
+  output_ << '\r' << text << std::flush;
+  rendered_width_ = width;
+}
+
+void ProgressSpinner::clear() {
+  if (!enabled_ || rendered_width_ == 0) {
+    return;
+  }
+
+  output_ << '\r' << std::string(rendered_width_, ' ') << '\r' << std::flush;
+  rendered_width_ = 0;
+}
 
 void show_progress() {
-  int idx = spinner_counter.fetch_add(1, std::memory_order_relaxed) % (sizeof(spinner_chars) / sizeof(spinner_chars[0]));
-  std::cout << '\r' << spinner_chars[idx] << " Running tests... " << std::flush;
+  shared_progress_spinner().tick("Running tests...");
+}
+
+void clear_progress() {
+  shared_progress_spinner().clear();
 }
 
 // --- Thread Utility Functions ---
 // Joins all threads in the provided vector and clears the vector.
 // 'threads': Vector of thread objects to join.
-void join_threads(std::vector<std::thread> &threads) {
-  for (auto &t : threads) {
+void join_threads(std::vector<std::thread>& threads) {
+  for (auto& t : threads) {
     if (t.joinable()) {  // Check if thread is joinable
       t.join();          // Wait for thread completion
     }

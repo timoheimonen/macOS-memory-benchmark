@@ -32,12 +32,10 @@
 #include "pattern_benchmark/pattern_benchmark.h"
 #include "core/config/constants.h"
 #include "output/console/messages/messages_api.h"
+#include "output/console/statistics_renderer.h"
 #include <iostream>
 #include <iomanip>
 #include <sstream>
-#include <algorithm>
-#include <cmath>
-#include <numeric>
 #include <vector>
 
 // ============================================================================
@@ -185,11 +183,35 @@ void print_pattern_results(const PatternResults& results) {
 // Pattern Statistics Functions
 // ============================================================================
 
+static void print_pattern_operation_statistics(
+    const std::string& label, const std::string& warning_metric,
+    const std::vector<double>& values, double cv_threshold_pct,
+    std::vector<std::string>& noise_warnings) {
+  if (values.empty()) {
+    return;
+  }
+
+  const PatternStatisticsData statistics =
+      calculate_pattern_statistics(values);
+  std::cout << label << std::endl;
+  StatisticsSummaryRenderOptions options;
+  options.precision = Constants::PATTERN_BANDWIDTH_PRECISION;
+  options.line_prefix = "    ";
+  options.variability_prefix = "    ";
+  render_statistics_summary(std::cout, statistics, options);
+
+  if (statistics.coefficient_of_variation_pct > cv_threshold_pct) {
+    noise_warnings.push_back(Messages::warning_pattern_measurement_noisy(
+        warning_metric, statistics.coefficient_of_variation_pct,
+        cv_threshold_pct));
+  }
+}
+
 // Print statistics for a pattern type (read, write, copy)
-static void print_pattern_type_statistics(const std::string &pattern_name,
-                                          const std::vector<double> &read_bw,
-                                          const std::vector<double> &write_bw,
-                                          const std::vector<double> &copy_bw,
+static void print_pattern_type_statistics(const std::string& pattern_name,
+                                          const std::vector<double>& read_bw,
+                                          const std::vector<double>& write_bw,
+                                          const std::vector<double>& copy_bw,
                                           double cv_threshold_pct,
                                           std::vector<std::string>& noise_warnings) {
   if (read_bw.empty() && write_bw.empty() && copy_bw.empty()) {
@@ -197,81 +219,16 @@ static void print_pattern_type_statistics(const std::string &pattern_name,
   }
   
   std::cout << Messages::statistics_pattern_bandwidth_header(pattern_name) << std::endl;
-  
-  if (!read_bw.empty()) {
-    PatternStatisticsData read_stats = calculate_pattern_statistics(read_bw);
-    std::cout << Messages::statistics_cache_read() << std::endl;
-    std::cout << "    " << Messages::statistics_average(read_stats.average, Constants::PATTERN_BANDWIDTH_PRECISION) << std::endl;
-    std::cout << "    " << Messages::statistics_median_p50(read_stats.median, Constants::PATTERN_BANDWIDTH_PRECISION) << std::endl;
-    std::cout << "    " << Messages::statistics_p90(read_stats.p90, Constants::PATTERN_BANDWIDTH_PRECISION) << std::endl;
-    std::cout << "    " << Messages::statistics_p95(read_stats.p95, Constants::PATTERN_BANDWIDTH_PRECISION) << std::endl;
-    std::cout << "    " << Messages::statistics_p99(read_stats.p99, Constants::PATTERN_BANDWIDTH_PRECISION) << std::endl;
-    std::cout << "    " << Messages::statistics_stddev(read_stats.stddev, Constants::PATTERN_BANDWIDTH_PRECISION) << std::endl;
-    std::cout << "    " << Messages::statistics_coefficient_of_variation(
-                                  read_stats.coefficient_of_variation_pct)
-              << std::endl;
-    std::cout << "    " << Messages::statistics_median_absolute_deviation(
-                                  read_stats.median_absolute_deviation,
-                                  Constants::PATTERN_BANDWIDTH_PRECISION)
-              << std::endl;
-    if (read_stats.coefficient_of_variation_pct > cv_threshold_pct) {
-      noise_warnings.push_back(Messages::warning_pattern_measurement_noisy(
-          pattern_name + " read", read_stats.coefficient_of_variation_pct,
-          cv_threshold_pct));
-    }
-    std::cout << "    " << Messages::statistics_min(read_stats.min, Constants::PATTERN_BANDWIDTH_PRECISION) << std::endl;
-    std::cout << "    " << Messages::statistics_max(read_stats.max, Constants::PATTERN_BANDWIDTH_PRECISION) << std::endl;
-  }
-  
-  if (!write_bw.empty()) {
-    PatternStatisticsData write_stats = calculate_pattern_statistics(write_bw);
-    std::cout << Messages::statistics_cache_write() << std::endl;
-    std::cout << "    " << Messages::statistics_average(write_stats.average, Constants::PATTERN_BANDWIDTH_PRECISION) << std::endl;
-    std::cout << "    " << Messages::statistics_median_p50(write_stats.median, Constants::PATTERN_BANDWIDTH_PRECISION) << std::endl;
-    std::cout << "    " << Messages::statistics_p90(write_stats.p90, Constants::PATTERN_BANDWIDTH_PRECISION) << std::endl;
-    std::cout << "    " << Messages::statistics_p95(write_stats.p95, Constants::PATTERN_BANDWIDTH_PRECISION) << std::endl;
-    std::cout << "    " << Messages::statistics_p99(write_stats.p99, Constants::PATTERN_BANDWIDTH_PRECISION) << std::endl;
-    std::cout << "    " << Messages::statistics_stddev(write_stats.stddev, Constants::PATTERN_BANDWIDTH_PRECISION) << std::endl;
-    std::cout << "    " << Messages::statistics_coefficient_of_variation(
-                                  write_stats.coefficient_of_variation_pct)
-              << std::endl;
-    std::cout << "    " << Messages::statistics_median_absolute_deviation(
-                                  write_stats.median_absolute_deviation,
-                                  Constants::PATTERN_BANDWIDTH_PRECISION)
-              << std::endl;
-    if (write_stats.coefficient_of_variation_pct > cv_threshold_pct) {
-      noise_warnings.push_back(Messages::warning_pattern_measurement_noisy(
-          pattern_name + " write", write_stats.coefficient_of_variation_pct,
-          cv_threshold_pct));
-    }
-    std::cout << "    " << Messages::statistics_min(write_stats.min, Constants::PATTERN_BANDWIDTH_PRECISION) << std::endl;
-    std::cout << "    " << Messages::statistics_max(write_stats.max, Constants::PATTERN_BANDWIDTH_PRECISION) << std::endl;
-  }
-  
-  if (!copy_bw.empty()) {
-    PatternStatisticsData copy_stats = calculate_pattern_statistics(copy_bw);
-    std::cout << Messages::statistics_cache_copy() << std::endl;
-    std::cout << "    " << Messages::statistics_average(copy_stats.average, Constants::PATTERN_BANDWIDTH_PRECISION) << std::endl;
-    std::cout << "    " << Messages::statistics_median_p50(copy_stats.median, Constants::PATTERN_BANDWIDTH_PRECISION) << std::endl;
-    std::cout << "    " << Messages::statistics_p90(copy_stats.p90, Constants::PATTERN_BANDWIDTH_PRECISION) << std::endl;
-    std::cout << "    " << Messages::statistics_p95(copy_stats.p95, Constants::PATTERN_BANDWIDTH_PRECISION) << std::endl;
-    std::cout << "    " << Messages::statistics_p99(copy_stats.p99, Constants::PATTERN_BANDWIDTH_PRECISION) << std::endl;
-    std::cout << "    " << Messages::statistics_stddev(copy_stats.stddev, Constants::PATTERN_BANDWIDTH_PRECISION) << std::endl;
-    std::cout << "    " << Messages::statistics_coefficient_of_variation(
-                                  copy_stats.coefficient_of_variation_pct)
-              << std::endl;
-    std::cout << "    " << Messages::statistics_median_absolute_deviation(
-                                  copy_stats.median_absolute_deviation,
-                                  Constants::PATTERN_BANDWIDTH_PRECISION)
-              << std::endl;
-    if (copy_stats.coefficient_of_variation_pct > cv_threshold_pct) {
-      noise_warnings.push_back(Messages::warning_pattern_measurement_noisy(
-          pattern_name + " copy", copy_stats.coefficient_of_variation_pct,
-          cv_threshold_pct));
-    }
-    std::cout << "    " << Messages::statistics_min(copy_stats.min, Constants::PATTERN_BANDWIDTH_PRECISION) << std::endl;
-    std::cout << "    " << Messages::statistics_max(copy_stats.max, Constants::PATTERN_BANDWIDTH_PRECISION) << std::endl;
-  }
+
+  print_pattern_operation_statistics(
+      Messages::statistics_cache_read(), pattern_name + " read", read_bw,
+      cv_threshold_pct, noise_warnings);
+  print_pattern_operation_statistics(
+      Messages::statistics_cache_write(), pattern_name + " write", write_bw,
+      cv_threshold_pct, noise_warnings);
+  print_pattern_operation_statistics(
+      Messages::statistics_cache_copy(), pattern_name + " copy", copy_bw,
+      cv_threshold_pct, noise_warnings);
 }
 
 void print_pattern_statistics(int loop_count, const PatternStatistics& stats) {

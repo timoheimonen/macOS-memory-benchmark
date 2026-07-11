@@ -21,6 +21,7 @@
 #include "core/config/config.h"
 #include "core/timing/timer.h"
 #include "test_statistics_helpers.h"
+#include "test_timer_system_calls.h"
 #include <cstdlib>
 #include <stdexcept>
 #include <vector>
@@ -29,20 +30,8 @@ namespace {
 
 uint64_t deterministic_timer_ticks() { return 100; }
 
-kern_return_t deterministic_timebase_info(mach_timebase_info_t info) {
-  info->numer = 1;
-  info->denom = 1;
-  return KERN_SUCCESS;
-}
-
-class ScopedDeterministicTimerSystemCalls {
- public:
-  ScopedDeterministicTimerSystemCalls() {
-    set_timer_system_calls_for_testing({deterministic_timer_ticks, deterministic_timebase_info});
-  }
-
-  ~ScopedDeterministicTimerSystemCalls() { reset_timer_system_calls_for_testing(); }
-};
+using ScopedDeterministicTimerSystemCalls =
+    test_timer_system_calls::ScopedTimerSystemCalls<deterministic_timer_ticks>;
 
 void inject_deterministic_elapsed(BenchmarkRunnerTestHooks& hooks) {
   hooks.elapsed_seconds = []() { return 1.0; };
@@ -299,6 +288,96 @@ TEST(BenchmarkRunnerTest, InjectedLoopExceptionIsFailedAndCheckpointedWithExactR
   EXPECT_EQ(checkpoints, 1u);
   EXPECT_EQ(error, Messages::error_benchmark_loop(0, "injected loop failure") +
                        "\n");
+}
+
+TEST(BenchmarkRunnerTest, UnknownLoopExceptionIsContainedWithCentralizedReason) {
+  const ScopedDeterministicTimerSystemCalls timer_system_calls;
+  BenchmarkConfig config;
+  config.loop_count = 1;
+  BenchmarkBuffers buffers;
+  BenchmarkStatistics stats;
+  BenchmarkRunnerTestHooks hooks;
+  hooks.execute_loop = [](const BenchmarkBuffers&, BenchmarkConfig&, int,
+                          HighResTimer&, BenchmarkExecutionState*)
+      -> BenchmarkResults { throw 7; };
+
+  testing::internal::CaptureStderr();
+  int result = EXIT_SUCCESS;
+  EXPECT_NO_THROW(
+      result = run_all_benchmarks(buffers, config, stats, &hooks));
+  const std::string error = testing::internal::GetCapturedStderr();
+
+  EXPECT_EQ(result, EXIT_FAILURE);
+  EXPECT_EQ(stats.status, BenchmarkRunStatus::Failed);
+  EXPECT_EQ(stats.status_reason,
+            Messages::benchmark_reason_unknown_loop_exception());
+  EXPECT_EQ(error,
+            Messages::error_benchmark_loop(0, stats.status_reason) + "\n");
+}
+
+TEST(BenchmarkRunnerTest, StopHookExceptionIsContainedAtCoordinatorBoundary) {
+  const ScopedDeterministicTimerSystemCalls timer_system_calls;
+  BenchmarkConfig config;
+  config.loop_count = 1;
+  BenchmarkBuffers buffers;
+  BenchmarkStatistics stats;
+  BenchmarkRunnerTestHooks hooks;
+  hooks.stop_requested = []() -> bool {
+    throw std::runtime_error("injected stop failure");
+  };
+
+  testing::internal::CaptureStderr();
+  int result = EXIT_SUCCESS;
+  EXPECT_NO_THROW(
+      result = run_all_benchmarks(buffers, config, stats, &hooks));
+  const std::string error = testing::internal::GetCapturedStderr();
+
+  EXPECT_EQ(result, EXIT_FAILURE);
+  EXPECT_EQ(stats.status, BenchmarkRunStatus::Failed);
+  EXPECT_EQ(stats.status_reason,
+            Messages::benchmark_reason_coordinator_exception(
+                "injected stop failure"));
+  EXPECT_EQ(error,
+            Messages::error_prefix() + stats.status_reason + "\n");
+}
+
+TEST(BenchmarkRunnerTest,
+     UnknownCheckpointExceptionPreservesLoopAtCoordinatorBoundary) {
+  const ScopedDeterministicTimerSystemCalls timer_system_calls;
+  BenchmarkConfig config;
+  config.loop_count = 1;
+  config.output_file = "/tmp/benchmark-runner-hook-unused.json";
+  config.only_bandwidth = true;
+  BenchmarkBuffers buffers;
+  BenchmarkStatistics stats;
+  BenchmarkRunnerTestHooks hooks;
+  inject_deterministic_elapsed(hooks);
+  hooks.execute_loop = [](const BenchmarkBuffers&, BenchmarkConfig&, int loop,
+                          HighResTimer&, BenchmarkExecutionState*) {
+    BenchmarkResults results;
+    results.status = BenchmarkRunStatus::Complete;
+    results.loop_index = static_cast<size_t>(loop);
+    return results;
+  };
+  hooks.checkpoint = [](const BenchmarkConfig&, const BenchmarkStatistics&,
+                        double, bool) -> int { throw 11; };
+
+  testing::internal::CaptureStdout();
+  testing::internal::CaptureStderr();
+  int result = EXIT_SUCCESS;
+  EXPECT_NO_THROW(
+      result = run_all_benchmarks(buffers, config, stats, &hooks));
+  const std::string error = testing::internal::GetCapturedStderr();
+  static_cast<void>(testing::internal::GetCapturedStdout());
+
+  EXPECT_EQ(result, EXIT_FAILURE);
+  EXPECT_EQ(stats.status, BenchmarkRunStatus::Failed);
+  EXPECT_EQ(stats.status_reason,
+            Messages::benchmark_reason_unknown_coordinator_exception());
+  EXPECT_EQ(stats.completed_loops, 1u);
+  ASSERT_EQ(stats.loop_results.size(), 1u);
+  EXPECT_EQ(error,
+            Messages::error_prefix() + stats.status_reason + "\n");
 }
 
 TEST(BenchmarkRunnerTest, InjectedCheckpointFailurePreservesCompletedLoopButFailsCommand) {

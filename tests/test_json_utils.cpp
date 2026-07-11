@@ -17,6 +17,7 @@
 
 #include <atomic>
 #include <cerrno>
+#include <chrono>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -154,6 +155,19 @@ TEST(JsonUtilsTest, ParseStringRejectsEmptyAndMalformedAndAcceptsValidJson) {
   EXPECT_TRUE(parse_json_from_string("{\"value\":42}", parsed, error));
   EXPECT_EQ(parsed["value"], 42);
   EXPECT_TRUE(error.empty());
+}
+
+TEST(JsonUtilsTest, UtcTimestampFormatsUnixEpoch) {
+  const auto unix_epoch = std::chrono::system_clock::from_time_t(0);
+
+  EXPECT_EQ(build_utc_timestamp(unix_epoch), "1970-01-01T00:00:00Z");
+}
+
+TEST(JsonUtilsTest, UtcTimestampFormatsFixedTimeIndependentOfLocalTimezone) {
+  const auto fixed_time =
+      std::chrono::system_clock::from_time_t(1577934245);
+
+  EXPECT_EQ(build_utc_timestamp(fixed_time), "2020-01-02T03:04:05Z");
 }
 
 TEST(JsonUtilsTest, StatisticsNeverFabricateZeroesForAnEmptyPopulation) {

@@ -50,10 +50,28 @@
 #include "output/console/messages/messages_api.h"             // Centralized messages
 #include "output/json/json_output/json_output_api.h"
 #include "core/signal/signal_handler.h"
+#include "utils/utils.h"
 #include <chrono>
-#include <iostream>
 #include <cstdlib>  // EXIT_SUCCESS, EXIT_FAILURE
+#include <exception>
+#include <iostream>
 #include <optional>
+
+namespace {
+
+class ProgressCleanupGuard {
+ public:
+  ProgressCleanupGuard() = default;
+
+  ~ProgressCleanupGuard() noexcept {
+    clear_progress();
+  }
+
+  ProgressCleanupGuard(const ProgressCleanupGuard&) = delete;
+  ProgressCleanupGuard& operator=(const ProgressCleanupGuard&) = delete;
+};
+
+}  // namespace
 
 /**
  * @brief Runs all benchmarks for the specified number of loops and collects statistics.
@@ -74,8 +92,9 @@
  *
  * Error handling:
  * - Timer creation failure returns EXIT_FAILURE
- * - Exceptions during benchmark loops are caught and reported
- * - Loop number and error details are included in error messages
+ * - Typed and unknown loop exceptions are caught and reported
+ * - Coordinator and injected-hook exceptions are contained at the API boundary
+ * - Loop number and available error details are included in error messages
  *
  * @param[in]  buffers  Benchmark buffers (unused in phase-local allocation mode)
  * @param[in]  config   Benchmark configuration (buffer sizes, threads, loops, flags)
@@ -83,7 +102,7 @@
  * @param[in]  test_hooks Optional deterministic coordinator seams used by tests
  *
  * @return EXIT_SUCCESS (0) when execution completes or stops through graceful interruption; inspect stats.status
- * @return EXIT_FAILURE (1) if timer creation/checkpointing fails or a loop throws an exception
+ * @return EXIT_FAILURE (1) if timer creation/checkpointing fails or execution throws an exception
  *
  * @note Statistics structure is used for final aggregate calculations.
  * @note Progress indicators are cleared before printing each loop's results.
@@ -97,7 +116,8 @@
  */
 int run_all_benchmarks(const BenchmarkBuffers& buffers, BenchmarkConfig& config,
                        BenchmarkStatistics& stats,
-                       const BenchmarkRunnerTestHooks* test_hooks) {
+                       const BenchmarkRunnerTestHooks* test_hooks) try {
+  ProgressCleanupGuard progress_cleanup;
   (void)buffers;
 
   // Initialize statistics structure
@@ -154,20 +174,22 @@ int run_all_benchmarks(const BenchmarkBuffers& buffers, BenchmarkConfig& config,
       return EXIT_SUCCESS;
     }
 
+    BenchmarkResults loop_results;
     try {
       // Run single benchmark loop
-      BenchmarkResults loop_results =
-          test_hooks != nullptr && test_hooks->execute_loop
-              ? test_hooks->execute_loop(buffers, config, loop, test_timer,
-                                         &execution_state)
-              : run_single_benchmark_loop(buffers, config, loop, test_timer,
-                                          &execution_state);
+      loop_results = test_hooks != nullptr && test_hooks->execute_loop
+                         ? test_hooks->execute_loop(
+                               buffers, config, loop, test_timer,
+                               &execution_state)
+                         : run_single_benchmark_loop(
+                               buffers, config, loop, test_timer,
+                               &execution_state);
 
       // Collect results into statistics
       collect_loop_results(stats, loop_results, config);
 
       // Print results for this loop
-      std::cout << '\r' << std::flush;  // Clear progress indicator
+      clear_progress();
       print_results(loop, config, loop_results);
 
       if (loop_results.status == BenchmarkRunStatus::Interrupted) {
@@ -184,22 +206,30 @@ int run_all_benchmarks(const BenchmarkBuffers& buffers, BenchmarkConfig& config,
         stats.status = BenchmarkRunStatus::Partial;
         stats.status_reason = loop_results.status_reason;
       }
-
-      if (checkpoint() != EXIT_SUCCESS) {
-        stats.status = BenchmarkRunStatus::Failed;
-        stats.status_reason = Messages::benchmark_reason_checkpoint_failed();
-        return EXIT_FAILURE;
-      }
-      if (loop_results.status == BenchmarkRunStatus::Interrupted) {
-        std::cout << std::endl << Messages::msg_interrupted_by_user() << std::endl;
-        return EXIT_SUCCESS;
-      }
     } catch (const std::exception &e) {
       stats.status = BenchmarkRunStatus::Failed;
       stats.status_reason = e.what();
       (void)checkpoint();
       std::cerr << Messages::error_benchmark_loop(loop, e.what()) << std::endl;
       return EXIT_FAILURE;
+    } catch (...) {
+      stats.status = BenchmarkRunStatus::Failed;
+      stats.status_reason =
+          Messages::benchmark_reason_unknown_loop_exception();
+      (void)checkpoint();
+      std::cerr << Messages::error_benchmark_loop(loop, stats.status_reason)
+                << std::endl;
+      return EXIT_FAILURE;
+    }
+
+    if (checkpoint() != EXIT_SUCCESS) {
+      stats.status = BenchmarkRunStatus::Failed;
+      stats.status_reason = Messages::benchmark_reason_checkpoint_failed();
+      return EXIT_FAILURE;
+    }
+    if (loop_results.status == BenchmarkRunStatus::Interrupted) {
+      std::cout << std::endl << Messages::msg_interrupted_by_user() << std::endl;
+      return EXIT_SUCCESS;
     }
   }
 
@@ -210,4 +240,16 @@ int run_all_benchmarks(const BenchmarkBuffers& buffers, BenchmarkConfig& config,
     stats.status_reason.clear();
   }
   return EXIT_SUCCESS;
+} catch (const std::exception& e) {
+  stats.status = BenchmarkRunStatus::Failed;
+  stats.status_reason =
+      Messages::benchmark_reason_coordinator_exception(e.what());
+  std::cerr << Messages::error_prefix() << stats.status_reason << std::endl;
+  return EXIT_FAILURE;
+} catch (...) {
+  stats.status = BenchmarkRunStatus::Failed;
+  stats.status_reason =
+      Messages::benchmark_reason_unknown_coordinator_exception();
+  std::cerr << Messages::error_prefix() << stats.status_reason << std::endl;
+  return EXIT_FAILURE;
 }

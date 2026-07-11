@@ -34,15 +34,9 @@
 #include <vector>
 
 #include "core/config/constants.h"
+#include "utils/seed_utils.h"
 
 namespace {
-
-uint64_t splitmix64(uint64_t value) {
-  value += 0x9e3779b97f4a7c15ULL;
-  value = (value ^ (value >> 30U)) * 0xbf58476d1ce4e5b9ULL;
-  value = (value ^ (value >> 27U)) * 0x94d049bb133111ebULL;
-  return value ^ (value >> 31U);
-}
 
 bool add_would_overflow(size_t left, size_t right) {
   return left > std::numeric_limits<size_t>::max() - right;
@@ -146,9 +140,9 @@ uint64_t derive_tlb_chain_layout_seed(uint64_t task_seed,
                                       TlbChainLayout layout) {
   constexpr uint64_t kSpreadSalt = 0x535052454144ULL;
   constexpr uint64_t kPackedSalt = 0x5041434b4544ULL;
-  return splitmix64(task_seed ^
-                    (layout == TlbChainLayout::Spread ? kSpreadSalt
-                                                       : kPackedSalt));
+  return SeedUtils::splitmix64(
+      task_seed ^ (layout == TlbChainLayout::Spread ? kSpreadSalt
+                                                    : kPackedSalt));
 }
 
 TlbChainValidationStatus validate_tlb_chain_with_scratch(
@@ -360,7 +354,8 @@ TlbChainBuildResult build_tlb_chain(
   try {
     auto& physical_offsets = scratch.physical_offsets;
     physical_offsets.resize(requested_pages);
-    std::mt19937_64 offset_rng(splitmix64(seed ^ 0x4f464653455453ULL));
+    std::mt19937_64 offset_rng(
+        SeedUtils::splitmix64(seed ^ 0x4f464653455453ULL));
 
     if (layout == TlbChainLayout::Spread) {
       const size_t slot_count =
@@ -396,7 +391,7 @@ TlbChainBuildResult build_tlb_chain(
     if (traversal_policy ==
         TlbChainTraversalPolicy::RandomPagesRandomOffsets) {
       std::mt19937_64 traversal_rng(
-          splitmix64(seed ^ 0x5452415645525345ULL));
+          SeedUtils::splitmix64(seed ^ 0x5452415645525345ULL));
       std::shuffle(traversal.begin(), traversal.end(), traversal_rng);
     }
 

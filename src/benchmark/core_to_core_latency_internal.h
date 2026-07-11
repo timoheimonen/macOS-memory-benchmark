@@ -28,6 +28,7 @@
 #include <vector>
 
 #include "benchmark/core_to_core_latency.h"
+#include "utils/descriptive_statistics.h"
 
 struct ScenarioDescriptor {
   std::string name;
@@ -53,19 +54,8 @@ struct CoreToCoreFailureInjection {
   bool fail_initiator_startup = false;
 };
 
-/** Pure summary values used by core-to-core console reporting. */
-struct CoreToCoreSummaryStats {
-  double average = 0.0;
-  double min = 0.0;
-  double max = 0.0;
-  double median = 0.0;
-  double p90 = 0.0;
-  double p95 = 0.0;
-  double p99 = 0.0;
-  double sample_stddev = 0.0;
-  double coefficient_of_variation_pct = 0.0;
-  double median_absolute_deviation = 0.0;
-};
+/** Shared summary values used by core-to-core console reporting. */
+using CoreToCoreSummaryStats = DescriptiveStatistics;
 
 CoreToCoreSummaryStats calculate_core_to_core_summary_stats(const std::vector<double>& values);
 

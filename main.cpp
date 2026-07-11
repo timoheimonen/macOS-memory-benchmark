@@ -40,8 +40,8 @@
 #include <string>
 
 #include "utils/benchmark.h"
-#include "core/memory/memory_manager.h"
 #include "core/config/config.h"
+#include "core/memory/buffer_allocator.h"
 #include "core/memory/buffer_manager.h"
 #include "benchmark/benchmark_runner.h"
 #include "benchmark/core_to_core_latency.h"
@@ -69,20 +69,6 @@ void set_benchmark_qos(BenchmarkConfig& config) {
     std::cerr << Messages::warning_prefix() << Messages::warning_qos_failed(qos_ret) << std::endl;
   }
 }
-
-class BenchmarkSignalMaskGuard {
- public:
-  BenchmarkSignalMaskGuard() {
-    block_benchmark_signals();
-  }
-
-  BenchmarkSignalMaskGuard(const BenchmarkSignalMaskGuard&) = delete;
-  BenchmarkSignalMaskGuard& operator=(const BenchmarkSignalMaskGuard&) = delete;
-
-  ~BenchmarkSignalMaskGuard() {
-    restore_signal_mask();
-  }
-};
 
 template <typename Fn>
 int run_with_benchmark_preparation(BenchmarkConfig& config, Fn&& fn) {
@@ -120,7 +106,8 @@ int run_with_benchmark_preparation(BenchmarkConfig& config, Fn&& fn) {
  *
  * @note The main thread is set to QOS_CLASS_USER_INTERACTIVE for optimal latency test performance
  * @note All allocated buffers are automatically freed when going out of scope
- * @note Standard mode uses per-phase allocation; pattern mode uses pre-allocated buffers
+ * @note Standard mode uses per-phase allocation; pattern mode owns one shared
+ *       source/destination pair for the command lifetime.
  *
  * @see parse_arguments() for command-line argument details
  * @see run_all_benchmarks() for standard benchmark execution
@@ -214,28 +201,17 @@ int main(int argc, char *argv[]) {
                    config.custom_cache_size_bytes);
 
   // --- Run Benchmarks ---
-  BenchmarkBuffers buffers;
   const int benchmark_result = run_with_benchmark_preparation(config, [&]() {
     if (config.run_patterns) {
-      // Pattern mode uses pre-allocated src/dst buffers across pattern tests.
-      if (allocate_all_buffers(config, buffers) != EXIT_SUCCESS) {
-        return EXIT_FAILURE;
-      }
-
-      if (initialize_all_buffers(buffers, config) != EXIT_SUCCESS) {
-        return EXIT_FAILURE;
-      }
-
-      // Run pattern benchmarks only
+      // The pattern coordinator owns its shared src/dst mappings.
       PatternStatistics pattern_stats;
-      if (run_all_pattern_benchmarks(buffers, config, pattern_stats) != EXIT_SUCCESS) {
-        return EXIT_FAILURE;
-      }
+      const int pattern_run_status =
+          run_all_pattern_benchmarks(config, pattern_stats);
 
       // Print detailed single-loop results or robust median headlines for repeated loops.
-      if (config.loop_count == 1) {
+      if (config.loop_count == 1 && !pattern_stats.loop_results.empty()) {
         print_pattern_results(extract_pattern_results_at(pattern_stats, 0));
-      } else {
+      } else if (!pattern_stats.loop_results.empty()) {
         print_pattern_results(extract_pattern_median_results(pattern_stats));
 
         // Print summary statistics
@@ -249,10 +225,15 @@ int main(int argc, char *argv[]) {
           return EXIT_FAILURE;
         }
       }
+
+      if (pattern_run_status != EXIT_SUCCESS) {
+        return pattern_run_status;
+      }
     } else {
       // Run standard benchmarks
       std::cout << Messages::msg_running_benchmarks() << std::endl;
 
+      BenchmarkBuffers buffers;
       BenchmarkStatistics stats;
       if (run_all_benchmarks(buffers, config, stats) != EXIT_SUCCESS) {
         return EXIT_FAILURE;

@@ -19,133 +19,57 @@
  * @brief Statistics calculation and display
  */
 
-#include <algorithm>  // Required for std::min_element, std::max_element, std::sort (finding min/max, sorting)
-#include <cmath>       // Required for std::sqrt (standard deviation calculation)
-#include <iomanip>     // Required for std::setprecision, std::fixed (output formatting)
+#include "output/console/statistics.h"
+
+#include "core/config/constants.h"
+#include "output/console/messages/messages_api.h"
+#include "output/console/statistics_renderer.h"
+#include "utils/descriptive_statistics.h"
+
+#include <algorithm>
+#include <iomanip>
 #include <initializer_list>
-#include <iostream>    // Required for std::cout
-#include <numeric>     // Required for std::accumulate (calculating sums)
-#include <vector>      // Required for std::vector
-#include "core/config/constants.h" // Constants for precision values
-#include "output/console/messages/messages_api.h"  // Centralized messages
-#include "output/console/statistics.h"  // Function declaration
+#include <iostream>
+#include <string>
+#include <vector>
 
 /**
- * @brief Structure to hold calculated statistics (average, min, max, percentiles, stddev)
+ * @brief Render a summary with standard benchmark variability diagnostics.
  */
-struct Statistics {
-  double average;
-  double min;
-  double max;
-  double median;    // P50
-  double p90;
-  double p95;
-  double p99;
-  double stddev;
-  double coefficient_of_variation_pct;
-  double median_absolute_deviation;
-};
-
-/**
- * @brief Calculate statistics (average, min, max, percentiles, stddev) from a vector of values.
- *
- * @param values Vector of values to calculate statistics from
- * @return Statistics structure containing calculated values
- */
-static Statistics calculate_statistics(const std::vector<double> &values) {
-  if (values.empty()) {
-    return {0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
+static void print_statistics_summary(
+    const DescriptiveStatistics& statistics, int precision,
+    const std::string& line_prefix, const std::string& variability_prefix,
+    const std::string& metric_name, bool warn_high_cv = true,
+    size_t sample_count = 0) {
+  StatisticsSummaryRenderOptions options;
+  options.precision = precision;
+  options.line_prefix = line_prefix;
+  options.variability_prefix = variability_prefix;
+  options.median_from_samples = sample_count != 0;
+  options.sample_count = sample_count;
+  if (warn_high_cv && statistics.coefficient_of_variation_pct >
+                          Constants::BENCHMARK_CV_WARNING_PCT) {
+    options.inline_diagnostic =
+        Messages::warning_prefix() +
+        Messages::warning_benchmark_high_cv(
+            metric_name, statistics.coefficient_of_variation_pct,
+            Constants::BENCHMARK_CV_WARNING_PCT);
   }
-
-  double sum = std::accumulate(values.begin(), values.end(), 0.0);
-  double avg = sum / values.size();
-  double min_val = *std::min_element(values.begin(), values.end());
-  double max_val = *std::max_element(values.begin(), values.end());
-
-  // Sort copy for percentiles
-  std::vector<double> sorted = values;
-  std::sort(sorted.begin(), sorted.end());
-  size_t n = sorted.size();
-
-  // Helper function for percentile calculation (linear interpolation)
-  auto percentile = [&sorted, n](double p) -> double {
-    if (n == 0) return 0.0;
-    if (n == 1) return sorted[0];
-    double index = p * (n - 1);
-    size_t lower = static_cast<size_t>(index);
-    size_t upper = lower + 1;
-    if (upper >= n) return sorted[n - 1];
-    double weight = index - lower;
-    return sorted[lower] * (1.0 - weight) + sorted[upper] * weight;
-  };
-
-  // Calculate percentiles
-  double median = percentile(0.50);  // P50
-  double p90 = percentile(0.90);
-  double p95 = percentile(0.95);
-  double p99 = percentile(0.99);
-
-  // Stddev (using sample standard deviation with Bessel's correction)
-  double variance = 0.0;
-  for (double v : values) variance += (v - avg) * (v - avg);
-  double stddev_val = (n > 1) ? std::sqrt(variance / (n - 1)) : 0.0;
-  std::vector<double> absolute_deviations;
-  absolute_deviations.reserve(n);
-  for (double value : values) {
-    absolute_deviations.push_back(std::abs(value - median));
-  }
-  std::sort(absolute_deviations.begin(), absolute_deviations.end());
-  const double mad = n % 2 == 0
-                         ? 0.5 * (absolute_deviations[n / 2 - 1] +
-                                  absolute_deviations[n / 2])
-                         : absolute_deviations[n / 2];
-  const double cv_pct = avg != 0.0 ? std::abs(stddev_val / avg) * 100.0 : 0.0;
-
-  return {avg, min_val, max_val, median, p90, p95, p99, stddev_val,
-          cv_pct, mad};
-}
-
-static void print_variability_statistics(const Statistics& stats,
-                                         int precision,
-                                         const char* indent = "",
-                                         const std::string& metric_name = "measurement",
-                                         bool warn_high_cv = true) {
-  std::cout << indent
-            << Messages::statistics_coefficient_of_variation(
-                   stats.coefficient_of_variation_pct, 1)
-            << std::endl;
-  std::cout << indent
-            << Messages::statistics_median_absolute_deviation(
-                   stats.median_absolute_deviation, precision)
-            << std::endl;
-  if (warn_high_cv && stats.coefficient_of_variation_pct >
-      Constants::BENCHMARK_CV_WARNING_PCT) {
-    std::cout << indent << Messages::warning_prefix()
-              << Messages::warning_benchmark_high_cv(
-                     metric_name, stats.coefficient_of_variation_pct,
-                     Constants::BENCHMARK_CV_WARNING_PCT)
-              << std::endl;
-  }
+  render_statistics_summary(std::cout, statistics, options);
 }
 
 /**
  * @brief Print statistics for a single metric (used for main memory bandwidth).
  *
  * @param metric_name Name of the metric being displayed
- * @param stats Statistics structure containing calculated values
+ * @param statistics Calculated descriptive statistics
  * @param precision Output precision for formatting (default: BANDWIDTH_PRECISION)
  */
-static void print_metric_statistics(const std::string &metric_name, const Statistics &stats, int precision = Constants::BANDWIDTH_PRECISION) {
+static void print_metric_statistics(
+    const std::string& metric_name, const DescriptiveStatistics& statistics,
+    int precision = Constants::BANDWIDTH_PRECISION) {
   std::cout << Messages::statistics_metric_name(metric_name) << std::endl;
-  std::cout << Messages::statistics_average(stats.average, precision) << std::endl;
-  std::cout << Messages::statistics_median_p50(stats.median, precision) << std::endl;
-  std::cout << Messages::statistics_p90(stats.p90, precision) << std::endl;
-  std::cout << Messages::statistics_p95(stats.p95, precision) << std::endl;
-  std::cout << Messages::statistics_p99(stats.p99, precision) << std::endl;
-  std::cout << Messages::statistics_stddev(stats.stddev, precision) << std::endl;
-  print_variability_statistics(stats, precision, "", metric_name);
-  std::cout << Messages::statistics_min(stats.min, precision) << std::endl;
-  std::cout << Messages::statistics_max(stats.max, precision) << std::endl;
+  print_statistics_summary(statistics, precision, "", "", metric_name);
 }
 
 /**
@@ -165,51 +89,24 @@ static void print_cache_bandwidth_statistics(const std::string &cache_name,
   }
   
   std::cout << Messages::statistics_cache_bandwidth_header(cache_name) << std::endl;
-  
-  if (!read_bw.empty()) {
-    Statistics read_stats = calculate_statistics(read_bw);
-    std::cout << Messages::statistics_cache_read() << std::endl;
-    std::cout << "    " << Messages::statistics_average(read_stats.average, Constants::BANDWIDTH_PRECISION) << std::endl;
-    std::cout << "    " << Messages::statistics_median_p50(read_stats.median, Constants::BANDWIDTH_PRECISION) << std::endl;
-    std::cout << "    " << Messages::statistics_p90(read_stats.p90, Constants::BANDWIDTH_PRECISION) << std::endl;
-    std::cout << "    " << Messages::statistics_p95(read_stats.p95, Constants::BANDWIDTH_PRECISION) << std::endl;
-    std::cout << "    " << Messages::statistics_p99(read_stats.p99, Constants::BANDWIDTH_PRECISION) << std::endl;
-    std::cout << "    " << Messages::statistics_stddev(read_stats.stddev, Constants::BANDWIDTH_PRECISION) << std::endl;
-    print_variability_statistics(read_stats, Constants::BANDWIDTH_PRECISION,
-                                 "  ", cache_name + " read bandwidth");
-    std::cout << "    " << Messages::statistics_min(read_stats.min, Constants::BANDWIDTH_PRECISION) << std::endl;
-    std::cout << "    " << Messages::statistics_max(read_stats.max, Constants::BANDWIDTH_PRECISION) << std::endl;
-  }
-  
-  if (!write_bw.empty()) {
-    Statistics write_stats = calculate_statistics(write_bw);
-    std::cout << Messages::statistics_cache_write() << std::endl;
-    std::cout << "    " << Messages::statistics_average(write_stats.average, Constants::BANDWIDTH_PRECISION) << std::endl;
-    std::cout << "    " << Messages::statistics_median_p50(write_stats.median, Constants::BANDWIDTH_PRECISION) << std::endl;
-    std::cout << "    " << Messages::statistics_p90(write_stats.p90, Constants::BANDWIDTH_PRECISION) << std::endl;
-    std::cout << "    " << Messages::statistics_p95(write_stats.p95, Constants::BANDWIDTH_PRECISION) << std::endl;
-    std::cout << "    " << Messages::statistics_p99(write_stats.p99, Constants::BANDWIDTH_PRECISION) << std::endl;
-    std::cout << "    " << Messages::statistics_stddev(write_stats.stddev, Constants::BANDWIDTH_PRECISION) << std::endl;
-    print_variability_statistics(write_stats, Constants::BANDWIDTH_PRECISION,
-                                 "  ", cache_name + " write bandwidth");
-    std::cout << "    " << Messages::statistics_min(write_stats.min, Constants::BANDWIDTH_PRECISION) << std::endl;
-    std::cout << "    " << Messages::statistics_max(write_stats.max, Constants::BANDWIDTH_PRECISION) << std::endl;
-  }
-  
-  if (!copy_bw.empty()) {
-    Statistics copy_stats = calculate_statistics(copy_bw);
-    std::cout << Messages::statistics_cache_copy() << std::endl;
-    std::cout << "    " << Messages::statistics_average(copy_stats.average, Constants::BANDWIDTH_PRECISION) << std::endl;
-    std::cout << "    " << Messages::statistics_median_p50(copy_stats.median, Constants::BANDWIDTH_PRECISION) << std::endl;
-    std::cout << "    " << Messages::statistics_p90(copy_stats.p90, Constants::BANDWIDTH_PRECISION) << std::endl;
-    std::cout << "    " << Messages::statistics_p95(copy_stats.p95, Constants::BANDWIDTH_PRECISION) << std::endl;
-    std::cout << "    " << Messages::statistics_p99(copy_stats.p99, Constants::BANDWIDTH_PRECISION) << std::endl;
-    std::cout << "    " << Messages::statistics_stddev(copy_stats.stddev, Constants::BANDWIDTH_PRECISION) << std::endl;
-    print_variability_statistics(copy_stats, Constants::BANDWIDTH_PRECISION,
-                                 "  ", cache_name + " copy bandwidth");
-    std::cout << "    " << Messages::statistics_min(copy_stats.min, Constants::BANDWIDTH_PRECISION) << std::endl;
-    std::cout << "    " << Messages::statistics_max(copy_stats.max, Constants::BANDWIDTH_PRECISION) << std::endl;
-  }
+
+  const auto print_population = [&cache_name](
+                                    const std::vector<double>& values,
+                                    const std::string& heading,
+                                    const std::string& operation_name) {
+    if (values.empty()) {
+      return;
+    }
+    std::cout << heading << std::endl;
+    print_statistics_summary(calculate_descriptive_statistics(values),
+                             Constants::BANDWIDTH_PRECISION, "    ", "  ",
+                             cache_name + " " + operation_name +
+                                 " bandwidth");
+  };
+
+  print_population(read_bw, Messages::statistics_cache_read(), "read");
+  print_population(write_bw, Messages::statistics_cache_write(), "write");
+  print_population(copy_bw, Messages::statistics_cache_copy(), "copy");
 }
 
 /**
@@ -230,41 +127,27 @@ static void print_cache_latency_statistics(const std::string &cache_name,
   }
   
   // Calculate repeatability only from continuous per-loop headlines.
-  Statistics latency_stats = calculate_statistics(latency);
+  DescriptiveStatistics latency_stats =
+      calculate_descriptive_statistics(latency);
   
   // Use full sample distribution for percentiles if available
-  Statistics sample_stats;
+  DescriptiveStatistics sample_stats{};
   bool use_samples = !latency_samples.empty();
   if (use_samples) {
-    sample_stats = calculate_statistics(latency_samples);
+    sample_stats = calculate_descriptive_statistics(latency_samples);
   }
   
   std::cout << Messages::statistics_cache_latency_name(cache_name) << std::endl;
-  std::cout << "    " << Messages::statistics_average(latency_stats.average, Constants::LATENCY_PRECISION) << std::endl;
-  std::cout << "    " << Messages::statistics_median_p50(latency_stats.median, Constants::LATENCY_PRECISION) << std::endl;
-  std::cout << "    " << Messages::statistics_p90(latency_stats.p90, Constants::LATENCY_PRECISION) << std::endl;
-  std::cout << "    " << Messages::statistics_p95(latency_stats.p95, Constants::LATENCY_PRECISION) << std::endl;
-  std::cout << "    " << Messages::statistics_p99(latency_stats.p99, Constants::LATENCY_PRECISION) << std::endl;
-  std::cout << "    " << Messages::statistics_stddev(latency_stats.stddev, Constants::LATENCY_PRECISION) << std::endl;
-  print_variability_statistics(latency_stats, Constants::LATENCY_PRECISION,
-                               "  ", cache_name + " latency");
-  std::cout << "    " << Messages::statistics_min(latency_stats.min, Constants::LATENCY_PRECISION) << std::endl;
-  std::cout << "    " << Messages::statistics_max(latency_stats.max, Constants::LATENCY_PRECISION) << std::endl;
+  print_statistics_summary(latency_stats, Constants::LATENCY_PRECISION,
+                           "    ", "  ", cache_name + " latency");
 
   if (use_samples) {
     std::cout << Messages::statistics_pooled_sample_distribution(
                      latency_samples.size())
               << std::endl;
-    std::cout << "  " << Messages::statistics_average(sample_stats.average, Constants::LATENCY_PRECISION) << std::endl;
-    std::cout << Messages::statistics_median_p50_from_samples(sample_stats.median, latency_samples.size(), Constants::LATENCY_PRECISION) << std::endl;
-    std::cout << "  " << Messages::statistics_p90(sample_stats.p90, Constants::LATENCY_PRECISION) << std::endl;
-    std::cout << "  " << Messages::statistics_p95(sample_stats.p95, Constants::LATENCY_PRECISION) << std::endl;
-    std::cout << "  " << Messages::statistics_p99(sample_stats.p99, Constants::LATENCY_PRECISION) << std::endl;
-    std::cout << "  " << Messages::statistics_stddev(sample_stats.stddev, Constants::LATENCY_PRECISION) << std::endl;
-    print_variability_statistics(sample_stats, Constants::LATENCY_PRECISION,
-                                 "  ", cache_name + " latency samples", false);
-    std::cout << "  " << Messages::statistics_min(sample_stats.min, Constants::LATENCY_PRECISION) << std::endl;
-    std::cout << "  " << Messages::statistics_max(sample_stats.max, Constants::LATENCY_PRECISION) << std::endl;
+    print_statistics_summary(sample_stats, Constants::LATENCY_PRECISION,
+                             "  ", "  ", cache_name + " latency samples",
+                             false, latency_samples.size());
   }
 }
 
@@ -386,7 +269,7 @@ void print_statistics(int loop_count, const std::vector<double> &all_read_bw, co
       if (printed_main_bandwidth) {
         std::cout << "\n";
       }
-      print_metric_statistics(name, calculate_statistics(values));
+      print_metric_statistics(name, calculate_descriptive_statistics(values));
       printed_main_bandwidth = true;
     };
 
@@ -420,61 +303,48 @@ void print_statistics(int loop_count, const std::vector<double> &all_read_bw, co
 
     // Display Main Memory Latency statistics.
     if (!all_main_mem_latency.empty()) {
-      Statistics main_mem_latency_stats = calculate_statistics(all_main_mem_latency);
+      DescriptiveStatistics main_mem_latency_stats =
+          calculate_descriptive_statistics(all_main_mem_latency);
       bool use_main_mem_samples = !all_main_mem_latency_samples.empty();
-      Statistics main_mem_sample_stats;
+      DescriptiveStatistics main_mem_sample_stats{};
       if (use_main_mem_samples) {
-        main_mem_sample_stats = calculate_statistics(all_main_mem_latency_samples);
+        main_mem_sample_stats =
+            calculate_descriptive_statistics(all_main_mem_latency_samples);
       }
 
       std::cout << Messages::statistics_main_memory_latency_header() << std::endl;
-      std::cout << Messages::statistics_average(main_mem_latency_stats.average, Constants::LATENCY_PRECISION) << std::endl;
-      std::cout << Messages::statistics_median_p50(main_mem_latency_stats.median, Constants::LATENCY_PRECISION) << std::endl;
-      std::cout << Messages::statistics_p90(main_mem_latency_stats.p90, Constants::LATENCY_PRECISION) << std::endl;
-      std::cout << Messages::statistics_p95(main_mem_latency_stats.p95, Constants::LATENCY_PRECISION) << std::endl;
-      std::cout << Messages::statistics_p99(main_mem_latency_stats.p99, Constants::LATENCY_PRECISION) << std::endl;
-      std::cout << Messages::statistics_stddev(main_mem_latency_stats.stddev, Constants::LATENCY_PRECISION) << std::endl;
-      print_variability_statistics(main_mem_latency_stats,
-                                   Constants::LATENCY_PRECISION, "",
-                                   "main-memory latency");
-      std::cout << Messages::statistics_min(main_mem_latency_stats.min, Constants::LATENCY_PRECISION) << std::endl;
-      std::cout << Messages::statistics_max(main_mem_latency_stats.max, Constants::LATENCY_PRECISION) << std::endl;
+      print_statistics_summary(main_mem_latency_stats,
+                               Constants::LATENCY_PRECISION, "", "",
+                               "main-memory latency");
       if (use_main_mem_samples) {
         std::cout << Messages::statistics_pooled_sample_distribution(
                          all_main_mem_latency_samples.size())
                   << std::endl;
-        std::cout << "  " << Messages::statistics_average(main_mem_sample_stats.average, Constants::LATENCY_PRECISION) << std::endl;
-        std::cout << Messages::statistics_median_p50_from_samples(main_mem_sample_stats.median, all_main_mem_latency_samples.size(), Constants::LATENCY_PRECISION) << std::endl;
-        std::cout << "  " << Messages::statistics_p90(main_mem_sample_stats.p90, Constants::LATENCY_PRECISION) << std::endl;
-        std::cout << "  " << Messages::statistics_p95(main_mem_sample_stats.p95, Constants::LATENCY_PRECISION) << std::endl;
-        std::cout << "  " << Messages::statistics_p99(main_mem_sample_stats.p99, Constants::LATENCY_PRECISION) << std::endl;
-        std::cout << "  " << Messages::statistics_stddev(main_mem_sample_stats.stddev, Constants::LATENCY_PRECISION) << std::endl;
-        print_variability_statistics(main_mem_sample_stats,
-                                     Constants::LATENCY_PRECISION, "  ",
-                                     "main-memory latency samples", false);
-        std::cout << "  " << Messages::statistics_min(main_mem_sample_stats.min, Constants::LATENCY_PRECISION) << std::endl;
-        std::cout << "  " << Messages::statistics_max(main_mem_sample_stats.max, Constants::LATENCY_PRECISION) << std::endl;
+        print_statistics_summary(
+            main_mem_sample_stats, Constants::LATENCY_PRECISION, "  ", "  ",
+            "main-memory latency samples", false,
+            all_main_mem_latency_samples.size());
       }
 
       if (!all_tlb_hit_latency.empty()) {
         std::cout << "\n";
-        Statistics tlb_hit_stats = calculate_statistics(all_tlb_hit_latency);
         print_metric_statistics(Messages::statistics_tlb_hit_latency_metric_name(),
-                                tlb_hit_stats,
+                                calculate_descriptive_statistics(
+                                    all_tlb_hit_latency),
                                 Constants::LATENCY_PRECISION);
       }
       if (!all_tlb_miss_latency.empty()) {
         std::cout << "\n";
-        Statistics tlb_miss_stats = calculate_statistics(all_tlb_miss_latency);
         print_metric_statistics(Messages::statistics_tlb_miss_latency_metric_name(),
-                                tlb_miss_stats,
+                                calculate_descriptive_statistics(
+                                    all_tlb_miss_latency),
                                 Constants::LATENCY_PRECISION);
       }
       if (!all_page_walk_penalty.empty()) {
         std::cout << "\n";
-        Statistics page_walk_penalty_stats = calculate_statistics(all_page_walk_penalty);
         print_metric_statistics(Messages::statistics_page_walk_penalty_metric_name(),
-                                page_walk_penalty_stats,
+                                calculate_descriptive_statistics(
+                                    all_page_walk_penalty),
                                 Constants::LATENCY_PRECISION);
       }
     }

@@ -17,10 +17,10 @@
  * @file test_statistics.cpp
  * @brief Unit tests for statistics calculation logic exercised via print_statistics()
  *
- * calculate_statistics() is file-scoped (static) in statistics.cpp so it
- * cannot be called directly.  These tests drive it via print_statistics(),
- * capture stdout, and parse the numeric values embedded in the message strings
- * to verify mathematical correctness.
+ * These tests exercise the standard benchmark integration via
+ * print_statistics(), capture stdout, and parse the numeric values embedded in
+ * the message strings. The shared calculator and renderer have focused unit
+ * tests in their respective test files.
  *
  * Actual output label format (from statistics_messages.cpp):
  *   "Average:"  "Median (P50):"  "P90:"  "P95:"  "P99:"  "Stddev:"  "Min:"  "Max:"
@@ -184,7 +184,7 @@ TEST(StatisticsTest, P99LinearInterpolation) {
 // Standard deviation (Bessel-corrected sample stddev)
 // ---------------------------------------------------------------------------
 
-// Single value: stddev must be 0 (n==1 branch in calculate_statistics).
+// Single value: sample stddev must be 0.
 TEST(StatisticsTest, SingleValueStddevIsZero) {
   EXPECT_NEAR(after(capture_bw({7.5}), "Stddev:"), 0.0, 1e-9);
 }

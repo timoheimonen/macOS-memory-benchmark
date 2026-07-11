@@ -11,10 +11,6 @@ Application [measurement capabilities](CAPABILITIES.md) information.
 ![Macbook Air M5 Cache Latency from multiple JSON-files](pictures/MacBookAirM5_latency_vs_cache-stride-tlb.png)  
 Macbook Air M5 Cache Latency by example-script provided. Using different size TLB locality and Stride size. 
 
-## Star History
-
-[![Star History Chart](https://api.star-history.com/chart?repos=timoheimonen/macOS-memory-benchmark&type=date&legend=top-left)](https://www.star-history.com/?repos=timoheimonen%2FmacOS-memory-benchmark&type=date&legend=top-left)
-
 ## Description
 
 `memory_benchmark` measures memory behavior on macOS Apple Silicon with an implementation focused on practical low-level analysis:
@@ -228,7 +224,7 @@ Sweep value lists also reject empty leading, middle, or trailing items.
 - `--seed <uint64>`: Reproducible workload/schedule seed for `--benchmark` and `--patterns`, or planner/round/chain seed for `--analyze-tlb`. In standard mode it derives separate main/L1/L2/custom and locality-layout seeds; equivalent chains and schedules are rebuilt across `--count` loops. The guarantee covers workload metadata, not identical performance. When omitted, one non-zero seed is generated for the command.
 - `--latency-tlb-locality-kb <KB>`: Pointer-chain locality window (default `1024`; with `auto`, `0` selects global random). When the effective mode uses locality, the value must be a non-zero page-size multiple containing at least two stride-spaced nodes. Explicit `global-random` ignores the locality window. If this option is omitted, regular main-memory latency also runs three paired rounds comparing 16 KiB locality with global random; first-measured layout alternates, and `locality_latency_delta_ns` is the median of same-round `global - locality` deltas. This is a mixed locality/cache comparison, not an isolated page-walk cost; use `--analyze-tlb` for translation-boundary conclusions.
 - `--non-cacheable`: Best-effort cache-discouraging hints (not true uncached memory).
-- `--output <file>`: Save JSON output. Standard mode atomically checkpoints schema-v2 JSON after completed loops, so interrupted/failed runs retain completed work and expose `results_complete: false`. A direct core-to-core run writes its auditable result even when it fails or is interrupted, provided an audit payload was built; completed measurements are preserved with `measurements_complete: false`, and unavailable values remain `null`.
+- `--output <file>`: Save JSON output. Standard mode atomically checkpoints schema-v2 JSON after completed loops, so interrupted/failed runs retain completed work and expose `results_complete: false`. Pattern schema 3 likewise preserves completed loop/measurement evidence and explicit command status on failure or interruption. A direct core-to-core run writes its auditable result even when it fails or is interrupted, provided an audit payload was built; completed measurements are preserved with `measurements_complete: false`, and unavailable values remain `null`.
 - `--sweep <key=a,b>`: Sweep supported parameters. Standard benchmark keys: `buffer-size`, `cache-size`, `threads`, `latency-tlb-locality-kb`, `latency-stride-bytes`, `latency-chain-mode`; pattern keys: `buffer-size`, `threads`; TLB analysis keys: `latency-stride-bytes`, `latency-chain-mode`, `tlb-density`; core-to-core keys: `count`, `latency-samples`.
 - `--sweep-max-runs <count>`: Maximum generated sweep runs (general default `256`; `--analyze-tlb` default `16`). An explicit value overrides the mode default.
 
@@ -376,15 +372,25 @@ JSON output shape:
 
 ```json
 {
-  "configuration": {},
+  "configuration": {
+    "pattern_schema_version": 3,
+    "methodology_version": "pattern-v2-phase-calibrated-seeded"
+  },
   "execution_time_sec": 0,
+  "status": "complete",
+  "status_reason": "",
+  "planned_loops": 2,
+  "completed_loops": 2,
+  "planned_measurements": 42,
+  "completed_measurements": 42,
+  "results_complete": true,
   "patterns": {},
   "timestamp": "...",
   "version": "..."
 }
 ```
 
-Pattern JSON configuration uses `pattern_schema_version: 2` and
+Pattern JSON configuration uses `pattern_schema_version: 3` and
 `methodology_version: "pattern-v2-phase-calibrated-seeded"`. It records the exact decimal-string seed, pass/calibration
 policy, warmup and execution-order policies, native page size, and best-effort QoS/no-pinning policy. Every operation has
 an aggregate `status`, a median-or-single `value_gb_s`, raw `values_gb_s`, statistics (including CV), and per-loop
@@ -393,9 +399,14 @@ address stride only: `large_page_backing_verified` remains false unless backing 
 a superpage claim. `thread_selection_policy` distinguishes the detected-core-count default from an explicit thread
 request; use the recorded requested/effective counts when comparing results.
 
-Pattern schema 2 has per-operation status but no top-level `planned_loops`, `completed_loops`, or `results_complete`
-fields. After a graceful interrupt between loops, consumers that require completeness must compare per-operation
-measurement counts and statuses with `configuration.loop_count`.
+Pattern schema 3 adds top-level `status`, `status_reason`, planned/completed loop and measurement counters, and
+`results_complete`. Each requested loop plans exactly 21 operations (seven patterns times read/write/copy). A measured
+operation with a numeric value and an intentional `skipped` operation are terminal; invalid evidence or an execution
+failure makes the run failed. Partial, interrupted, and failed commands retain completed evidence, while a preparation
+failure can legitimately omit `patterns`. Consumers that require completeness must require `status: "complete"` and
+`results_complete: true`. Aggregate `values_gb_s`, statistics, median headlines, and console summaries use only Complete
+loops; measurements from partial, interrupted, and failed loops remain raw evidence without biasing the cyclic-balanced
+headline.
 
 Core-to-core JSON uses `schema_version: 2` and
 `methodology_version: "core2core-v2-calibrated-balanced-auditable"`. It records per-scenario calibrated work plans,
@@ -478,7 +489,7 @@ Reference sample result files in this repository:
 - `results/0.53.7/MacMiniM4_benchmark.json`
 - `results/0.53.7/MacMiniM4_patterns.json`
 
-The 0.53.7 pattern file predates pattern schema 2 and is not a direct numerical baseline for
+The 0.53.7 pattern file predates current pattern schema 3 and is not a direct numerical baseline for
 `pattern-v2-phase-calibrated-seeded` results.
 
 ## Documentation

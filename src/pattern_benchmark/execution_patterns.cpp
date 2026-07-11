@@ -34,14 +34,15 @@
 #include "core/memory/buffer_manager.h"
 #include "core/config/config.h"
 #include "core/config/constants.h"
+#include "core/system/page_size.h"
 #include "output/console/messages/messages_api.h"
+#include "utils/numeric_utils.h"
 #include "warmup/warmup.h"
 #include <atomic>
 #include <vector>
 #include <algorithm>
 #include <cstdlib>
 #include <limits>
-#include <unistd.h>
 #include <utility>
 
 // Forward declarations from helpers.cpp
@@ -131,14 +132,6 @@ double run_pattern_sample(const BenchmarkConfig& config, Runner runner,
   return elapsed_seconds;
 }
 
-bool checked_multiply_size(size_t left, size_t right, size_t& result) {
-  if (left != 0 && right > std::numeric_limits<size_t>::max() / left) {
-    return false;
-  }
-  result = left * right;
-  return true;
-}
-
 PatternMeasurement build_pattern_measurement(
     const BenchmarkConfig& config, double bandwidth_gb_s, double elapsed_seconds,
     const PatternCalibrationDecision& calibration, size_t payload_bytes_per_pass,
@@ -161,7 +154,7 @@ PatternMeasurement build_pattern_measurement(
   measurement.elapsed_seconds = elapsed_seconds;
   measurement.pilot_elapsed_seconds = calibration.pilot_elapsed_seconds;
   measurement.automatic_calibration = calibration.automatic;
-  measurement.native_page_size_bytes = static_cast<size_t>(getpagesize());
+  measurement.native_page_size_bytes = get_system_page_size_bytes();
   measurement.stride_equals_native_page_size =
       stride_bytes != 0 && stride_bytes == measurement.native_page_size_bytes;
   measurement.has_seed = has_seed;
@@ -170,10 +163,11 @@ PatternMeasurement build_pattern_measurement(
   if (measurement.passes == 0 || elapsed_seconds <= 0.0 ||
       !std::isfinite(elapsed_seconds) || !std::isfinite(bandwidth_gb_s) ||
       bandwidth_gb_s <= 0.0 ||
-      !checked_multiply_size(accesses_per_pass, measurement.passes,
-                             measurement.total_accesses) ||
-      !checked_multiply_size(payload_bytes_per_pass, measurement.passes,
-                             measurement.total_payload_bytes)) {
+      !NumericUtils::checked_multiply(accesses_per_pass, measurement.passes,
+                                      measurement.total_accesses) ||
+      !NumericUtils::checked_multiply(payload_bytes_per_pass,
+                                      measurement.passes,
+                                      measurement.total_payload_bytes)) {
     measurement.status = PatternMeasurementStatus::Invalid;
     measurement.status_reason =
         Messages::pattern_reason_calibration_or_accounting_failed();
@@ -200,7 +194,7 @@ void set_triplet_status(PatternResults& results, PatternKind kind,
     measurement.stride_bytes = stride_bytes;
     measurement.requested_threads = config.num_threads;
     measurement.effective_threads = config.num_threads;
-    measurement.native_page_size_bytes = static_cast<size_t>(getpagesize());
+    measurement.native_page_size_bytes = get_system_page_size_bytes();
     measurement.stride_equals_native_page_size =
         stride_bytes != 0 && stride_bytes == measurement.native_page_size_bytes;
     measurement.has_seed = has_seed;
@@ -216,7 +210,7 @@ void set_triplet_status(PatternResults& results, PatternKind kind,
 // ============================================================================
 
 // Run forward pattern benchmarks (baseline sequential access)
-void run_forward_pattern_benchmarks(const BenchmarkBuffers& buffers, const BenchmarkConfig& config,
+void run_forward_pattern_benchmarks(const PatternBuffers& buffers, const BenchmarkConfig& config,
                                     PatternResults& results, HighResTimer& timer) {
   show_progress();
   std::atomic<uint64_t> checksum{0};
@@ -288,7 +282,7 @@ void run_forward_pattern_benchmarks(const BenchmarkBuffers& buffers, const Bench
 }
 
 // Run reverse pattern benchmarks (backward sequential access)
-void run_reverse_pattern_benchmarks(const BenchmarkBuffers& buffers, const BenchmarkConfig& config,
+void run_reverse_pattern_benchmarks(const PatternBuffers& buffers, const BenchmarkConfig& config,
                                    PatternResults& results, HighResTimer& timer) {
   show_progress();
   std::atomic<uint64_t> checksum{0};
@@ -362,16 +356,11 @@ void run_reverse_pattern_benchmarks(const BenchmarkBuffers& buffers, const Bench
 
 // Run random pattern benchmarks (uniform random access)
 // Returns EXIT_SUCCESS on success, EXIT_FAILURE on error, or skips pattern if buffer too small
-int run_random_pattern_benchmarks(const BenchmarkBuffers& buffers, const BenchmarkConfig& config,
+int run_random_pattern_benchmarks(const PatternBuffers& buffers, const BenchmarkConfig& config,
                                    const std::vector<size_t>& random_indices,
                                    const std::vector<PatternRandomWorkerIndices>& worker_indices,
                                    PatternResults& results, HighResTimer& timer) {
   using namespace Constants;
-  
-  // Initialize results to 0 in case we skip this pattern
-  results.random_read_bw = 0.0;
-  results.random_write_bw = 0.0;
-  results.random_copy_bw = 0.0;
   
   // Validate indices - if validation fails due to buffer size, skip pattern gracefully
   if (!validate_random_indices(random_indices, config.buffer_size)) {
@@ -398,7 +387,7 @@ int run_random_pattern_benchmarks(const BenchmarkBuffers& buffers, const Benchma
   // Execute read benchmark
   show_progress();
   std::atomic<uint64_t> checksum{0};
-  warmup_read_random(buffers.src_buffer(), random_indices, config.num_threads, checksum);
+  warmup_read_random(buffers.src_buffer(), worker_indices, checksum);
   auto run_read = [&](int passes) {
     return run_pattern_read_random_test(buffers.src_buffer(), worker_indices, passes, checksum, timer);
   };
@@ -421,7 +410,7 @@ int run_random_pattern_benchmarks(const BenchmarkBuffers& buffers, const Benchma
 
   // Execute write benchmark
   show_progress();
-  warmup_write_random(buffers.dst_buffer(), random_indices, config.num_threads);
+  warmup_write_random(buffers.dst_buffer(), worker_indices);
   auto run_write = [&](int passes) {
     return run_pattern_write_random_test(buffers.dst_buffer(), worker_indices, passes, timer);
   };
@@ -439,8 +428,7 @@ int run_random_pattern_benchmarks(const BenchmarkBuffers& buffers, const Benchma
 
   // Execute copy benchmark
   show_progress();
-  warmup_copy_random(buffers.dst_buffer(), buffers.src_buffer(), random_indices,
-                     config.num_threads);
+  warmup_copy_random(buffers.dst_buffer(), buffers.src_buffer(), worker_indices);
   auto run_copy = [&](int passes) {
     return run_pattern_copy_random_test(buffers.dst_buffer(), buffers.src_buffer(), worker_indices, passes, timer);
   };

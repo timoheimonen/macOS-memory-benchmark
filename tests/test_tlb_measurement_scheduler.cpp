@@ -19,6 +19,7 @@
 #include <vector>
 
 #include "benchmark/tlb_measurement_scheduler.h"
+#include "utils/seed_utils.h"
 
 namespace {
 
@@ -54,6 +55,19 @@ TEST(TlbMeasurementSchedulerTest, SameSeedProducesSameScheduleAndTaskSeeds) {
       build_tlb_measurement_schedule(points, 7, 123456, TlbMeasurementPass::Base);
 
   expect_same_schedule(first, second);
+}
+
+TEST(TlbMeasurementSchedulerTest, SplitMixAndTaskSeedDerivationMatchGoldenValues) {
+  EXPECT_EQ(SeedUtils::splitmix64(0), 0xe220a8397b1dcdafULL);
+  EXPECT_EQ(SeedUtils::splitmix64(1), 0x910a2dec89025cc1ULL);
+  EXPECT_EQ(SeedUtils::splitmix64(0xffffffffffffffffULL),
+            0xe4d971771b652c20ULL);
+  EXPECT_EQ(derive_tlb_measurement_seed(
+                42, TlbMeasurementPass::Base, 0, 0),
+            0x6310bf04d8207f46ULL);
+  EXPECT_EQ(derive_tlb_measurement_seed(
+                42, TlbMeasurementPass::Refinement, 2, 3),
+            0x64a0c8a842e4f6b4ULL);
 }
 
 TEST(TlbMeasurementSchedulerTest, DifferentBaseSeedsDeriveDifferentTaskSeeds) {

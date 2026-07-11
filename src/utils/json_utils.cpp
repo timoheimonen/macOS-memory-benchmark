@@ -28,11 +28,26 @@
  */
 
 #include "json_utils.h"
-#include <algorithm>  // Required for std::sort
-#include <cmath>      // Required for std::sqrt
-#include <fstream>    // Required for std::ifstream
-#include <filesystem> // Required for std::filesystem
-#include <sstream>    // Required for std::ostringstream
+
+#include <chrono>
+#include <ctime>
+#include <filesystem>
+#include <fstream>
+#include <iomanip>
+#include <sstream>
+
+#include "utils/descriptive_statistics.h"
+
+std::string build_utc_timestamp(
+    std::chrono::system_clock::time_point time_point) {
+  const std::time_t time = std::chrono::system_clock::to_time_t(time_point);
+  std::tm utc_time{};
+  gmtime_r(&time, &utc_time);
+
+  std::ostringstream timestamp;
+  timestamp << std::put_time(&utc_time, "%Y-%m-%dT%H:%M:%SZ");
+  return timestamp.str();
+}
 
 // Calculate statistics (average, min, max, percentiles, stddev) from a vector of values
 // Returns a JSON object containing the calculated statistics
@@ -40,62 +55,28 @@ nlohmann::json calculate_json_statistics(const std::vector<double>& values) {
   if (values.empty()) {
     return nullptr;
   }
-  nlohmann::json stats = nlohmann::json::object();
 
-  // Calculate basic statistics
-  double sum = 0.0;
-  for (double v : values) sum += v;
-  double avg = sum / values.size();
-  
-  std::vector<double> sorted = values;
-  std::sort(sorted.begin(), sorted.end());
-  size_t n = sorted.size();
-  
-  auto percentile = [&sorted, n](double p) -> double {
-    if (n == 0) return 0.0;
-    if (n == 1) return sorted[0];
-    double index = p * (n - 1);
-    size_t lower = static_cast<size_t>(index);
-    size_t upper = lower + 1;
-    if (upper >= n) return sorted[n - 1];
-    double weight = index - lower;
-    return sorted[lower] * (1.0 - weight) + sorted[upper] * weight;
-  };
-  
-  double variance = 0.0;
-  for (double v : values) variance += (v - avg) * (v - avg);
-  // Use n-1 for sample standard deviation (Bessel's correction)
-  // Handle n == 1 case to avoid division by zero (stddev is 0 for single value)
-  double stddev = (n > 1) ? std::sqrt(variance / (n - 1)) : 0.0;
-  std::vector<double> absolute_deviations;
-  absolute_deviations.reserve(n);
-  const double median = percentile(0.50);
-  for (double value : values) {
-    absolute_deviations.push_back(std::abs(value - median));
-  }
-  std::sort(absolute_deviations.begin(), absolute_deviations.end());
-  const double mad = n % 2 == 0
-                         ? 0.5 * (absolute_deviations[n / 2 - 1] +
-                                  absolute_deviations[n / 2])
-                         : absolute_deviations[n / 2];
-  
-  stats["average"] = avg;
-  stats["min"] = sorted[0];
-  stats["max"] = sorted[n - 1];
-  stats["median"] = median;
-  stats["p90"] = percentile(0.90);
-  stats["p95"] = percentile(0.95);
-  stats["p99"] = percentile(0.99);
-  stats["stddev"] = stddev;
-  if (std::isfinite(avg) && avg != 0.0) {
-    stats["coefficient_of_variation_pct"] =
-        std::abs(stddev / avg) * 100.0;
+  const DescriptiveStatistics statistics =
+      calculate_descriptive_statistics(values);
+  nlohmann::json json_statistics = nlohmann::json::object();
+  json_statistics["average"] = statistics.average;
+  json_statistics["min"] = statistics.min;
+  json_statistics["max"] = statistics.max;
+  json_statistics["median"] = statistics.median;
+  json_statistics["p90"] = statistics.p90;
+  json_statistics["p95"] = statistics.p95;
+  json_statistics["p99"] = statistics.p99;
+  json_statistics["stddev"] = statistics.stddev;
+  if (statistics.coefficient_of_variation_defined) {
+    json_statistics["coefficient_of_variation_pct"] =
+        statistics.coefficient_of_variation_pct;
   } else {
-    stats["coefficient_of_variation_pct"] = nullptr;
+    json_statistics["coefficient_of_variation_pct"] = nullptr;
   }
-  stats["median_absolute_deviation"] = mad;
-  
-  return stats;
+  json_statistics["median_absolute_deviation"] =
+      statistics.median_absolute_deviation;
+
+  return json_statistics;
 }
 
 // Parse JSON from a string with validation

@@ -524,15 +524,20 @@ middle, and trailing items.
 - Prevents accidental very large Cartesian sweeps
 - Every generated configuration is validated before the first run
 - Standard, pattern, and TLB combined JSON is atomically checkpointed after every attempted run and records `status`,
-  `planned_runs`, `attempted_runs`, `completed_runs`, and `conclusions_valid`
+  `status_reason`, `planned_runs`, `attempted_runs`, `completed_runs`, and `conclusions_valid`
 - For standard, pattern, and TLB sweeps, every attempted run is retained with its own `status` and `status_reason`.
   `attempted_runs` counts stored entries, while `completed_runs` counts only mode-specific nested results that are
-  genuinely complete; partial, interrupted, and failed nested results never increment it
+  genuinely complete: standard and pattern require nested `status: "complete"` with `results_complete: true`, while
+  TLB requires nested `tlb_analysis.status: "complete"` with `tlb_analysis.conclusions_valid: true`. Partial,
+  interrupted, and failed nested results never increment it
 - A parameter key may appear only once in one sweep command
 - Core-to-core sweeps also append and checkpoint the latest attempted run when it is interrupted or fails. Each entry
   records `status` and `status_reason`; `attempted_runs` counts those entries, while `completed_runs` counts only nested
   core-to-core results with `status: "complete"` and `measurements_complete: true`. Therefore `runs` can contain more
   entries than `completed_runs`
+- Any partial, interrupted, or failed attempt stops further attempts; a pre-run interruption or checkpoint failure can
+  also stop execution without adding or completing another run. Top-level `conclusions_valid` is true only when
+  top-level `status` is `complete` and `completed_runs == planned_runs`
 
 #### `-h`, `--help`
 
@@ -892,7 +897,7 @@ not the compact console report.
   "main_memory": { ... },
   "cache": { ... },
   "timestamp": "2026-03-09T14:57:56Z",
-  "version": "0.59.0"
+  "version": "0.60.0"
 }
 ```
 
@@ -910,7 +915,7 @@ main-thread outcome. These fields describe a best-effort scheduler hint, never h
 {
   "configuration": {
     "mode": "patterns",
-    "pattern_schema_version": 2,
+    "pattern_schema_version": 3,
     "methodology_version": "pattern-v2-phase-calibrated-seeded",
     "pattern_seed": "123456789",
     "pattern_seed_source": "user",
@@ -926,6 +931,14 @@ main-thread outcome. These fields describe a best-effort scheduler hint, never h
     "thread_selection_policy": "detected-core-count-default",
     "qos_policy": "best-effort-scheduler-hint-no-core-pinning"
   },
+  "execution_time_sec": 7.5,
+  "status": "complete",
+  "status_reason": "",
+  "planned_loops": 3,
+  "completed_loops": 3,
+  "planned_measurements": 63,
+  "completed_measurements": 63,
+  "results_complete": true,
   "patterns": {
     "strided_2mb": {
       "methodology_version": "pattern-v2-phase-calibrated-seeded",
@@ -969,24 +982,28 @@ main-thread outcome. These fields describe a best-effort scheduler hint, never h
       }
     }
   },
-  "execution_time_sec": 7.5,
   "timestamp": "...",
   "version": "..."
 }
 ```
 
 This is a structure example, not a recorded performance result; omitted patterns and operations use the same shape.
-Schema 2 stores explicit measurement state. A skipped, invalid, or interrupted operation has `value_gb_s: null`, an empty
+Schema 3 stores explicit measurement state. A skipped, invalid, or interrupted operation has `value_gb_s: null`, an empty
 or partial value set as applicable, and a `status`/`reason`; it is not serialized as zero. Aggregate `value_gb_s` is the
 single measurement for one loop or median P50 for multiple measured loops. Copy `total_payload_bytes` includes both read
 and write payload. Per-loop records retain pilot/final timing, exact access/pass/payload accounting, working-set and phase
 metadata, seed, requested/effective threads, native page comparison, and execution-order indexes.
 
-Pattern schema 2 has measurement-level status but no standard-benchmark-style top-level `planned_loops`,
-`completed_loops`, or `results_complete` fields. A graceful interrupt between requested loops can therefore leave fewer
-measurement records than `configuration.loop_count` without a separate command-completeness flag. Consumers that
-require a complete pattern run must verify the per-operation measurement counts and statuses against the requested loop
-count.
+Pattern schema 3 adds top-level `status`, `status_reason`, `planned_loops`, `completed_loops`, `planned_measurements`,
+`completed_measurements`, and `results_complete`. Every requested loop plans 21 measurements: seven patterns times the
+read, write, and copy operations. A `measured` record counts as complete only with a numeric value; an intentional
+`skipped` record is also terminal. Invalid evidence or executor failure makes the loop failed. A fully completed loop is
+not reclassified when interruption arrives after its final operation, but the command is interrupted if requested loops
+remain. Partial, interrupted, and failed commands retain all produced loop evidence; allocation or initialization failure
+can produce completion metadata without a `patterns` object. Consumers that require a complete pattern run must require
+both `status: "complete"` and `results_complete: true`. Aggregate `values_gb_s`, statistics, median headlines, and
+console summaries use only Complete loops. Measurements from partial, interrupted, and failed loops remain serialized
+as raw evidence but cannot bias the cyclic-balanced aggregate.
 
 `thread_selection_policy: "detected-core-count-default"` means `--threads` was omitted and the historical default
 covering all detected CPU cores was used. An explicit request is recorded separately; use
@@ -1116,7 +1133,7 @@ differences between affinity-tag scenarios as evidence about the requested hint 
   ],
   "execution_time_sec": 123.4,
   "timestamp": "2026-04-29T12:00:00Z",
-  "version": "0.59.0"
+  "version": "0.60.0"
 }
 ```
 
@@ -1175,7 +1192,7 @@ When run with `--analyze-tlb --output tlb_analysis.json`, the payload includes a
 The following is a structure-focused schema-version-4 illustration. It is not presented as a hardware result; the current
 serializer contract and concrete deterministic values are exercised by
 `JsonSchemaTest.TlbAnalysisExporterIncludesModeAndCoreCounts`. New hardware baselines remain outside this release series by
-project decision, so historical 0.53.x measurements are not relabeled as 0.59.0 results:
+project decision, so historical 0.53.x measurements are not relabeled as 0.60.0 results:
 
 ```json
 {
@@ -1378,7 +1395,7 @@ requires independent validation before accepting a boundary.
 - `random`
 
 Each pattern key contains methodology and workload metadata plus a `bandwidth` object. Its `read_gb_s`, `write_gb_s`,
-and `copy_gb_s` entries use the pattern-schema-v2 structure shown above: explicit status/reason, headline policy,
+and `copy_gb_s` entries use the pattern-schema-v3 structure shown above: explicit status/reason, headline policy,
 nullable aggregate value, measured values, statistics including CV, and detailed per-loop measurements. This is not the
 same structure as the standard `main_memory.bandwidth` object.
 
@@ -1402,6 +1419,9 @@ jq 'select(.results_complete == true)' results.json
 
 # Pattern random read median and status
 jq '{status: .patterns.random.bandwidth.read_gb_s.status, median: .patterns.random.bandwidth.read_gb_s.statistics.median_p50}' patterns.json
+
+# Reject incomplete pattern output
+jq 'select(.status == "complete" and .results_complete == true)' patterns.json
 
 # Pattern phase-count semantics, requested/effective threads, and exact totals
 jq '.patterns.strided_2mb.bandwidth.read_gb_s.measurements[] | {requested_threads, effective_threads, accesses_per_pass, accesses_per_pass_semantics, min_accesses_per_pass, max_accesses_per_pass, phase_period_passes, total_accesses, total_payload_bytes}' patterns.json
@@ -1490,7 +1510,7 @@ The repository's historical `results/0.53.7/MacMiniM4_benchmark.json` sample rep
 
 Under heavy concurrent load, expect lower throughput and higher variance than this historical sample. It is an empirical
 0.53.7 result, not a guaranteed current-version baseline. Historical pattern files from earlier methodology versions are
-not a schema-2 stability baseline and should not be compared numerically with
+not a stability baseline for current pattern schema 3 and should not be compared numerically with
 `pattern-v2-phase-calibrated-seeded` results without accounting for the methodology change.
 
 ---

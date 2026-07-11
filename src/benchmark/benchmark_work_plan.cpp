@@ -26,16 +26,9 @@
 
 #include "core/config/constants.h"
 #include "output/console/messages/messages_api.h"
+#include "utils/numeric_utils.h"
 
 namespace {
-
-bool checked_multiply(size_t lhs, size_t rhs, size_t& result) {
-  if (lhs != 0 && rhs > std::numeric_limits<size_t>::max() / lhs) {
-    return false;
-  }
-  result = lhs * rhs;
-  return true;
-}
 
 std::vector<size_t> build_boundaries(size_t size, int worker_count) {
   const size_t workers = static_cast<size_t>(worker_count);
@@ -80,21 +73,6 @@ bool populate_workers(BenchmarkWorkPlan& plan, int worker_count) {
   plan.workers = workers;
   plan.effective_threads = worker_count;
   return true;
-}
-
-size_t round_up_to_quantum(size_t value, size_t quantum) {
-  if (quantum <= 1 || value == 0) {
-    return value;
-  }
-  const size_t remainder = value % quantum;
-  if (remainder == 0) {
-    return value;
-  }
-  const size_t adjustment = quantum - remainder;
-  if (value > std::numeric_limits<size_t>::max() - adjustment) {
-    return 0;
-  }
-  return value + adjustment;
 }
 
 }  // namespace
@@ -143,9 +121,10 @@ BenchmarkWorkPlan build_benchmark_bandwidth_work_plan(
 
   plan.payload_bytes_per_pass = buffer_size_bytes;
   if (operation == BenchmarkOperation::Copy) {
-    if (!checked_multiply(plan.payload_bytes_per_pass,
-                          Constants::COPY_OPERATION_MULTIPLIER,
-                          plan.payload_bytes_per_pass)) {
+    if (!NumericUtils::checked_multiply(
+            plan.payload_bytes_per_pass,
+            Constants::COPY_OPERATION_MULTIPLIER,
+            plan.payload_bytes_per_pass)) {
       plan.status_reason = Messages::benchmark_reason_copy_payload_overflow();
       return plan;
     }
@@ -165,7 +144,8 @@ bool set_benchmark_work_plan_passes(BenchmarkWorkPlan& plan, size_t passes) {
     return false;
   }
   size_t total_payload = 0;
-  if (!checked_multiply(plan.payload_bytes_per_pass, passes, total_payload)) {
+  if (!NumericUtils::checked_multiply(plan.payload_bytes_per_pass, passes,
+                                      total_payload)) {
     return false;
   }
   plan.passes = passes;
@@ -196,16 +176,19 @@ BenchmarkLatencyWorkPlan build_benchmark_latency_work_plan(
   }
 
   size_t minimum_accesses = 0;
-  if (!checked_multiply(plan.chain_node_count, minimum_complete_cycles,
-                        minimum_accesses) ||
+  if (!NumericUtils::checked_multiply(plan.chain_node_count,
+                                      minimum_complete_cycles,
+                                      minimum_accesses) ||
       minimum_accesses > maximum_access_count) {
     plan.status_reason =
         Messages::benchmark_reason_minimum_cycles_exceed_limit();
     return plan;
   }
   const size_t requested = std::max(desired_access_count, minimum_accesses);
-  const size_t rounded = round_up_to_quantum(requested, plan.chain_node_count);
-  if (rounded == 0 || rounded > maximum_access_count) {
+  size_t rounded = 0;
+  if (!NumericUtils::checked_round_up(requested, plan.chain_node_count,
+                                      rounded) ||
+      rounded == 0 || rounded > maximum_access_count) {
     plan.status_reason =
         Messages::benchmark_reason_rounded_accesses_exceed_limit();
     return plan;
@@ -219,13 +202,8 @@ BenchmarkLatencyWorkPlan build_benchmark_latency_work_plan(
 size_t calculate_benchmark_pilot_passes(size_t payload_bytes_per_pass,
                                         size_t minimum_pilot_payload_bytes,
                                         size_t maximum_passes) {
-  if (payload_bytes_per_pass == 0 || maximum_passes == 0) {
-    return 0;
-  }
-  const size_t quotient = minimum_pilot_payload_bytes / payload_bytes_per_pass;
-  const size_t remainder = minimum_pilot_payload_bytes % payload_bytes_per_pass;
-  const size_t required = quotient + (remainder != 0 ? 1 : 0);
-  return std::min(maximum_passes, std::max<size_t>(1, required));
+  return NumericUtils::calculate_minimum_pilot_count(
+      payload_bytes_per_pass, minimum_pilot_payload_bytes, maximum_passes);
 }
 
 size_t calculate_benchmark_calibrated_count(double pilot_duration_seconds,
@@ -234,26 +212,9 @@ size_t calculate_benchmark_calibrated_count(double pilot_duration_seconds,
                                             size_t minimum_count,
                                             size_t maximum_count,
                                             size_t quantum) {
-  if (!std::isfinite(pilot_duration_seconds) || pilot_duration_seconds <= 0.0 ||
-      pilot_count == 0 || !std::isfinite(target_duration_seconds) ||
-      target_duration_seconds <= 0.0 || minimum_count == 0 ||
-      maximum_count < minimum_count || quantum == 0) {
-    return 0;
-  }
-
-  const long double scaled =
-      static_cast<long double>(pilot_count) * target_duration_seconds /
-      pilot_duration_seconds;
-  size_t count = scaled >= static_cast<long double>(maximum_count)
-                     ? maximum_count
-                     : static_cast<size_t>(std::ceil(scaled));
-  count = std::max(count, minimum_count);
-  count = round_up_to_quantum(count, quantum);
-  if (count == 0 || count > maximum_count) {
-    const size_t maximum_quantized = maximum_count - maximum_count % quantum;
-    return maximum_quantized >= minimum_count ? maximum_quantized : 0;
-  }
-  return count;
+  return NumericUtils::calculate_duration_scaled_count(
+      pilot_duration_seconds, pilot_count, target_duration_seconds,
+      minimum_count, maximum_count, quantum);
 }
 
 std::vector<size_t> build_benchmark_cyclic_order(size_t item_count,

@@ -2,7 +2,7 @@
 
 ## 1. Scope and Status
 
-This document specifies the current implementation in this repository (version `0.59.0`) for `memory_benchmark` on macOS Apple Silicon.
+This document specifies the current implementation in this repository (version `0.60.0`) for `memory_benchmark` on macOS Apple Silicon.
 
 It is intentionally implementation-driven and reflects real behavior in code paths under `main.cpp`, `src/core`, `src/benchmark`, `src/pattern_benchmark`, `src/output`, and `src/asm`.
 
@@ -74,7 +74,8 @@ The pipeline below applies to standard/pattern benchmark execution.
 6. Raise main thread QoS (`QOS_CLASS_USER_INTERACTIVE`) best-effort.
 7. Execute one mode:
    - Standard benchmark mode (`run_all_benchmarks`), which allocates/initializes buffers per phase and releases them after the phase.
-   - Pattern benchmark mode (`run_pattern_benchmarks`), which pre-allocates/initializes required buffers (`allocate_all_buffers` + `initialize_all_buffers`).
+   - Pattern benchmark mode (`run_all_pattern_benchmarks`), whose coordinator owns and prepares one shared
+     `PatternBuffers` source/destination pair for every pattern and loop.
 8. Print loop results and aggregate statistics.
 9. Optionally serialize JSON output.
 10. Print total elapsed runtime.
@@ -120,7 +121,7 @@ Configuration state is represented by `BenchmarkConfig` (`src/core/config/config
 - Help (`-h`, `--help`) prints usage and exits successfully.
 - `--latency-chain-mode` accepts string values and resolves to `LatencyChainMode` enum.
 - `--analyze-tlb` uses an early dedicated parse branch in `argument_parser.cpp`. It only allows optional `--output`, `--latency-stride-bytes`, `--latency-chain-mode`, `--tlb-density`, `--seed`, `--sweep`, and `--sweep-max-runs`. TLB sweep supports `latency-stride-bytes`, `latency-chain-mode`, and `tlb-density`; its default run guard is `16`, and `global-random` chain mode is rejected. One generated or user-provided seed drives the pure sweep planner, seeded cyclic Latin round scheduler, derived task seeds, layout-specific page-native chain permutations, and deterministic convergence bootstrap. Each task measures a verified one-node-per-page spread chain and an equal-cache-line packed control in the same round. A pilot calibrates whole-chain accesses toward the quick/standard/exhaustive target duration; rounds stop at the per-point CI-width target or profile maximum. Candidate buffers are admitted only when their predicted buffer-plus-scratch peak fits the available-memory budget. Full methodology and JSON contract: [TLB_ANALYSIS_WHITEPAPER.md](TLB_ANALYSIS_WHITEPAPER.md).
-- `--analyze-core2core` uses dedicated mode parsing (outside `argument_parser.cpp`) and only allows optional `--output`, `--count`, `--latency-samples`, `--sweep`, and `--sweep-max-runs`. Its mode-specific loop default is `3`; the general loop default remains `1`. Core-to-core sweep supports `count` and `latency-samples`, rejects duplicate sweep keys, and atomically checkpoints the combined output after every run. Direct execution prepares/restores the benchmark signal mask before creating workers. Each scheduler-hint scenario runs an excluded pilot after a 1,000,000-round-trip calibration warmup, reuses its duration-calibrated plan across measured loops, and participates in a cyclic Latin-square scenario schedule. Full methodology and JSON schema 2 contract: [CORE_TO_CORE_WHITEPAPER.md](CORE_TO_CORE_WHITEPAPER.md).
+- `--analyze-core2core` uses dedicated mode parsing (outside `argument_parser.cpp`) and only allows optional `--output`, `--count`, `--latency-samples`, `--sweep`, and `--sweep-max-runs`. Its mode-specific loop default is `3`; the general loop default remains `1`. Core-to-core sweep supports `count` and `latency-samples`, rejects duplicate sweep keys, and atomically checkpoints the combined output after every attempted run; only a nested `status: "complete"` result with `measurements_complete: true` increments `completed_runs`. Direct and sweep execution use the shared scope-bound signal guard before creating workers and restore the calling thread's exact previous mask on every return path. Each scheduler-hint scenario runs an excluded pilot after a 1,000,000-round-trip calibration warmup, reuses its duration-calibrated plan across measured loops, and participates in a cyclic Latin-square scenario schedule. Full methodology and JSON schema 2 contract: [CORE_TO_CORE_WHITEPAPER.md](CORE_TO_CORE_WHITEPAPER.md).
 
 ### 6.2 Validation behavior (`config_validator.cpp`)
 
@@ -177,12 +178,13 @@ Memory-limit model:
 Allocation entrypoints:
 
 - Standard benchmark mode: per-phase allocators in `src/benchmark/benchmark_executor.cpp` (`prepare_*_buffers` helpers).
-- Pattern benchmark mode: `allocate_all_buffers` (`src/core/memory/buffer_allocator.cpp`).
+- Pattern benchmark mode: `allocate_pattern_buffers` (`src/core/memory/buffer_allocator.cpp`). The pattern
+  coordinator retains the pair for the full command and releases it on return.
 
 Shared allocation behavior:
 
 - Uses `mmap` anonymous private mappings (macOS-specific behavior and limits apply).
-- Uses mode-aware conditional allocation to avoid unused buffers.
+- Uses phase- or mode-specific allocation to avoid unused buffers.
 - Performs overflow-safe byte arithmetic before allocation.
 - Enforces global memory-limit checks from peak-concurrent requirements.
 
@@ -206,7 +208,7 @@ Pattern mode intentionally allocates and uses only main source/destination buffe
 Initialization entrypoints:
 
 - Standard benchmark mode: per-phase initialization in `run_single_benchmark_loop` before each measured phase.
-- Pattern benchmark mode: `initialize_all_buffers` (`src/core/memory/buffer_initializer.cpp`).
+- Pattern benchmark mode: `initialize_pattern_buffers` (`src/core/memory/buffer_initializer.cpp`).
 
 Initialization semantics:
 
@@ -404,6 +406,7 @@ Contract highlights:
 - Pattern mode prints pattern table-style sections and derived efficiency indicators.
 - Aggregate statistics printed when loop count > 1.
 - Errors and warnings use `Messages::error_prefix()` / `Messages::warning_prefix()` conventions.
+- Live progress uses the shared spinner on `stderr` only when it is a TTY; redirected standard and pattern output contains no carriage-return control sequences.
 
 ## 17. JSON Output Contract
 
@@ -411,10 +414,17 @@ JSON writer API (`src/output/json/json_output/json_output.cpp`):
 
 - Standard mode schema 2: `configuration`, `execution_time_sec`, completion counters/status, `results_complete`,
   per-loop `loops`, `main_memory`, `cache`, `timestamp`, and `version`.
-- Pattern mode: `configuration`, `execution_time_sec`, `patterns`, `timestamp`, `version`.
+- Pattern mode schema 3: `configuration`, `execution_time_sec`, command status/reason, planned/completed loop and
+  measurement counters, `results_complete`, optional retained `patterns` evidence, `timestamp`, and `version`.
 - TLB analysis mode: `configuration`, `execution_time_sec`, `tlb_analysis`, `timestamp`, `version`.
 - Core-to-core schema 2: calibrated methodology configuration, `core_to_core_latency` command completion metadata, scenario work plans, nullable aggregate values, per-loop order/status/duration/hint/sample-boundary records, and affinity-comparison interpretability metadata.
-- Sweep mode: `configuration.mode = "sweep"`, `configuration.base_mode`, `configuration.sweep_parameters`, top-level status/completion/conclusion fields, `runs[].result`, `execution_time_sec`, `timestamp`, `version`. For `--analyze-tlb --sweep`, `base_mode` is `analyze_tlb` and each `runs[].result` contains a TLB analysis payload. Core-to-core sweeps use `base_mode: "analyze_core2core"` and checkpoint after every run.
+- Sweep mode: `configuration.mode = "sweep"`, `configuration.base_mode`, `configuration.sweep_parameters`, top-level `status`, `status_reason`, `planned_runs`, `attempted_runs`, `completed_runs`, and `conclusions_valid`, plus per-entry `runs[].status`, `status_reason`, and `result`. Every attempted run is checkpointed and `attempted_runs == runs.size()`. `completed_runs` requires nested `status: "complete"` and `results_complete: true` for standard/pattern, `tlb_analysis.status: "complete"` and `tlb_analysis.conclusions_valid: true` for TLB, or `core_to_core_latency.status: "complete"` and `measurements_complete: true` for core-to-core. Partial, interrupted, and failed attempts remain as evidence without incrementing the completed count. Top-level `conclusions_valid` is true only when top-level status is complete and `completed_runs == planned_runs`.
+
+Pattern schema 3 plans 21 measurements per loop and treats numeric measured values plus intentional skips as terminal.
+Only Complete loops feed aggregate vectors, medians, statistics, and console summaries. Partial, interrupted, and failed
+loop measurements remain in JSON as evidence, while command status/counters keep `results_complete` false. Preparation
+failure may omit `patterns`; main and sweep orchestration still build the completion payload before returning or
+classifying the failure.
 
 ### 17.1 Configuration keys
 

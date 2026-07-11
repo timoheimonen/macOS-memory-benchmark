@@ -42,6 +42,7 @@
 #include "core/timing/timer.h"
 #include "output/console/messages/messages_api.h"
 #include "test_config_helpers.h"
+#include "test_timer_system_calls.h"
 
 namespace {
 
@@ -52,21 +53,11 @@ uint64_t deterministic_timer_ticks() {
   return deterministic_timer_tick;
 }
 
-kern_return_t deterministic_timebase_info(mach_timebase_info_t info) {
-  info->numer = 1;
-  info->denom = 1;
-  return KERN_SUCCESS;
-}
+void reset_deterministic_timer_ticks() { deterministic_timer_tick = 0; }
 
-class ScopedDeterministicTimerSystemCalls {
- public:
-  ScopedDeterministicTimerSystemCalls() {
-    deterministic_timer_tick = 0;
-    set_timer_system_calls_for_testing({deterministic_timer_ticks, deterministic_timebase_info});
-  }
-
-  ~ScopedDeterministicTimerSystemCalls() { reset_timer_system_calls_for_testing(); }
-};
+using ScopedDeterministicTimerSystemCalls =
+    test_timer_system_calls::ScopedTimerSystemCalls<
+        deterministic_timer_ticks, reset_deterministic_timer_ticks>;
 
 BenchmarkConfig build_base_config() {
   BenchmarkConfig config;

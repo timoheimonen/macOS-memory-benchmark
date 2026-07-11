@@ -22,29 +22,13 @@
 #include "output/console/messages/messages_api.h"
 
 #include <algorithm>
-#include <cmath>
 #include <limits>
 #include <utility>
 
 #include "core/config/constants.h"
+#include "utils/numeric_utils.h"
 
 namespace {
-
-bool checked_add(size_t lhs, size_t rhs, size_t& result) {
-  if (lhs > std::numeric_limits<size_t>::max() - rhs) {
-    return false;
-  }
-  result = lhs + rhs;
-  return true;
-}
-
-bool checked_multiply(size_t lhs, size_t rhs, size_t& result) {
-  if (lhs != 0 && rhs > std::numeric_limits<size_t>::max() / lhs) {
-    return false;
-  }
-  result = lhs * rhs;
-  return true;
-}
 
 std::vector<size_t> build_aligned_boundaries(size_t size, int num_threads) {
   const size_t thread_count = static_cast<size_t>(num_threads);
@@ -94,9 +78,11 @@ bool populate_worker_ranges(PatternWorkPlan& plan, size_t buffer_size, int worke
     }
 
     size_t worker_payload = 0;
-    if (!checked_multiply(accesses, plan.access_size_bytes, worker_payload) ||
-        !checked_add(total_accesses, accesses, total_accesses) ||
-        !checked_add(total_payload, worker_payload, total_payload)) {
+    if (!NumericUtils::checked_multiply(accesses, plan.access_size_bytes,
+                                        worker_payload) ||
+        !NumericUtils::checked_add(total_accesses, accesses, total_accesses) ||
+        !NumericUtils::checked_add(total_payload, worker_payload,
+                                   total_payload)) {
       plan.status = PatternMeasurementStatus::Invalid;
       plan.status_reason = Messages::pattern_reason_work_plan_byte_overflow();
       return false;
@@ -132,15 +118,17 @@ bool calculate_phase_metrics(const PatternWorkPlan& plan, size_t passes,
   size_t accesses_per_cycle = 0;
   for (const PatternWorkerRange& worker : plan.workers) {
     const size_t aligned_slots = worker.span_bytes / plan.access_size_bytes;
-    if (aligned_slots < 2 || !checked_add(accesses_per_cycle, aligned_slots,
-                                          accesses_per_cycle)) {
+    if (aligned_slots < 2 ||
+        !NumericUtils::checked_add(accesses_per_cycle, aligned_slots,
+                                   accesses_per_cycle)) {
       return false;
     }
   }
 
   completed_phase_cycles = passes / phase_period;
   const size_t remaining_phases = passes % phase_period;
-  if (!checked_multiply(completed_phase_cycles, accesses_per_cycle, total_accesses)) {
+  if (!NumericUtils::checked_multiply(completed_phase_cycles,
+                                      accesses_per_cycle, total_accesses)) {
     return false;
   }
 
@@ -156,10 +144,12 @@ bool calculate_phase_metrics(const PatternWorkPlan& plan, size_t passes,
         last_executed_phase < aligned_slots
             ? 1 + (aligned_slots - 1 - last_executed_phase) / phase_period
             : 0;
-    if (!checked_add(max_accesses_per_pass, phase_zero_accesses,
-                     max_accesses_per_pass) ||
-        !checked_add(min_accesses_per_pass, last_phase_accesses,
-                     min_accesses_per_pass)) {
+    if (!NumericUtils::checked_add(max_accesses_per_pass,
+                                   phase_zero_accesses,
+                                   max_accesses_per_pass) ||
+        !NumericUtils::checked_add(min_accesses_per_pass,
+                                   last_phase_accesses,
+                                   min_accesses_per_pass)) {
       return false;
     }
   }
@@ -169,12 +159,14 @@ bool calculate_phase_metrics(const PatternWorkPlan& plan, size_t passes,
     const size_t full_blocks = aligned_slots / phase_period;
     const size_t tail_slots = aligned_slots % phase_period;
     size_t full_block_accesses = 0;
-    if (!checked_multiply(full_blocks, remaining_phases, full_block_accesses)) {
+    if (!NumericUtils::checked_multiply(full_blocks, remaining_phases,
+                                        full_block_accesses)) {
       return false;
     }
     const size_t partial_accesses = full_block_accesses +
                                     std::min(tail_slots, remaining_phases);
-    if (!checked_add(total_accesses, partial_accesses, total_accesses)) {
+    if (!NumericUtils::checked_add(total_accesses, partial_accesses,
+                                   total_accesses)) {
       return false;
     }
   }
@@ -187,12 +179,14 @@ bool calculate_phase_metrics(const PatternWorkPlan& plan, size_t passes,
     const size_t full_blocks = aligned_slots / phase_period;
     const size_t tail_slots = aligned_slots % phase_period;
     size_t full_block_accesses = 0;
-    if (!checked_multiply(full_blocks, distinct_phases, full_block_accesses)) {
+    if (!NumericUtils::checked_multiply(full_blocks, distinct_phases,
+                                        full_block_accesses)) {
       return false;
     }
     const size_t selected_tail_slots = std::min(tail_slots, distinct_phases);
     const size_t worker_distinct = full_block_accesses + selected_tail_slots;
-    if (!checked_add(distinct_addresses, worker_distinct, distinct_addresses)) {
+    if (!NumericUtils::checked_add(distinct_addresses, worker_distinct,
+                                   distinct_addresses)) {
       return false;
     }
 
@@ -208,10 +202,12 @@ bool calculate_phase_metrics(const PatternWorkPlan& plan, size_t passes,
     }
     if (has_selected_slot) {
       size_t worker_logical_bytes = 0;
-      if (!checked_multiply(last_selected_slot + 1, plan.access_size_bytes,
-                            worker_logical_bytes) ||
-          !checked_add(logical_working_set_bytes, worker_logical_bytes,
-                       logical_working_set_bytes)) {
+      if (!NumericUtils::checked_multiply(last_selected_slot + 1,
+                                          plan.access_size_bytes,
+                                          worker_logical_bytes) ||
+          !NumericUtils::checked_add(logical_working_set_bytes,
+                                     worker_logical_bytes,
+                                     logical_working_set_bytes)) {
         return false;
       }
     }
@@ -236,7 +232,7 @@ PatternWorkPlan build_strided_pattern_work_plan(size_t buffer_size, size_t strid
   }
 
   size_t minimum_worker_span = 0;
-  if (!checked_add(stride, access_size, minimum_worker_span)) {
+  if (!NumericUtils::checked_add(stride, access_size, minimum_worker_span)) {
     plan.status_reason = Messages::pattern_reason_stride_access_sum_overflow();
     return plan;
   }
@@ -329,8 +325,8 @@ bool set_strided_pattern_passes(PatternWorkPlan& plan, size_t passes) {
   if (!calculate_phase_metrics(plan, passes, total_accesses, distinct_addresses,
                                logical_working_set_bytes, completed_phase_cycles,
                                min_accesses_per_pass, max_accesses_per_pass) ||
-      !checked_multiply(total_accesses, plan.access_size_bytes,
-                        plan.total_payload_bytes)) {
+      !NumericUtils::checked_multiply(total_accesses, plan.access_size_bytes,
+                                      plan.total_payload_bytes)) {
     return false;
   }
 
@@ -348,13 +344,8 @@ bool set_strided_pattern_passes(PatternWorkPlan& plan, size_t passes) {
 size_t calculate_pattern_pilot_passes(size_t payload_bytes_per_pass,
                                       size_t minimum_pilot_payload_bytes,
                                       size_t maximum_passes) {
-  if (payload_bytes_per_pass == 0 || maximum_passes == 0) {
-    return 0;
-  }
-  const size_t quotient = minimum_pilot_payload_bytes / payload_bytes_per_pass;
-  const size_t remainder = minimum_pilot_payload_bytes % payload_bytes_per_pass;
-  const size_t required = quotient + (remainder != 0 ? 1 : 0);
-  return std::min(maximum_passes, std::max<size_t>(1, required));
+  return NumericUtils::calculate_minimum_pilot_count(
+      payload_bytes_per_pass, minimum_pilot_payload_bytes, maximum_passes);
 }
 
 size_t calculate_pattern_calibrated_passes(double pilot_duration_seconds,
@@ -362,21 +353,9 @@ size_t calculate_pattern_calibrated_passes(double pilot_duration_seconds,
                                            double target_duration_seconds,
                                            size_t minimum_passes,
                                            size_t maximum_passes) {
-  if (!std::isfinite(pilot_duration_seconds) || pilot_duration_seconds <= 0.0 ||
-      pilot_passes == 0 || !std::isfinite(target_duration_seconds) ||
-      target_duration_seconds <= 0.0 || minimum_passes == 0 ||
-      maximum_passes < minimum_passes) {
-    return 0;
-  }
-
-  const long double scaled =
-      static_cast<long double>(pilot_passes) * target_duration_seconds /
-      pilot_duration_seconds;
-  if (scaled >= static_cast<long double>(maximum_passes)) {
-    return maximum_passes;
-  }
-  const size_t rounded_up = static_cast<size_t>(std::ceil(scaled));
-  return std::max(minimum_passes, rounded_up);
+  return NumericUtils::calculate_duration_scaled_count(
+      pilot_duration_seconds, pilot_passes, target_duration_seconds,
+      minimum_passes, maximum_passes);
 }
 
 const char* pattern_measurement_status_to_string(PatternMeasurementStatus status) {
