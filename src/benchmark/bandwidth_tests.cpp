@@ -24,12 +24,11 @@
  *
  * Key features:
  * - Multi-threaded execution with automatic work division
- * - Atomic checksum accumulation for read validation
+ * - Per-worker checksum aggregation for read validation
  * - Alignment-aware chunking handled by parallel framework
  * - High-resolution timing via HighResTimer
  */
 
-#include <atomic>                // For std::atomic
 #include <cstdint>               // For uint64_t
 #include <limits>
 #include <vector>
@@ -40,27 +39,6 @@
 #include "benchmark/parallel_test_framework.h"
 
 namespace {
-
-double run_read_test_impl(void* buffer,
-                          size_t size,
-                          int iterations,
-                          int num_threads,
-                          std::atomic<uint64_t>& checksum,
-                          HighResTimer& timer,
-                          uint64_t (*read_func)(const void*, size_t)) {
-  checksum.store(0, std::memory_order_relaxed);
-
-  auto read_work = [&checksum, read_func](char* chunk_start, size_t chunk_size, int iters) {
-    uint64_t local_checksum = 0;
-    for (int i = 0; i < iters; ++i) {
-      uint64_t thread_checksum = read_func(chunk_start, chunk_size);
-      local_checksum ^= thread_checksum;
-    }
-    checksum.fetch_xor(local_checksum, std::memory_order_release);
-  };
-
-  return run_parallel_test(buffer, size, iterations, num_threads, timer, read_work, "read");
-}
 
 double run_write_test_impl(void* buffer,
                            size_t size,
@@ -94,52 +72,6 @@ double run_copy_test_impl(void* dst,
 }
 
 }  // namespace
-
-/**
- * @brief Executes the multi-threaded read bandwidth benchmark.
- *
- * Measures memory read bandwidth using multiple threads. Each thread reads its assigned
- * portion of the buffer multiple times, accumulating a checksum to prevent compiler
- * optimizations from eliminating the read operations.
- *
- * Thread coordination:
- * - Work is divided among threads by the parallel test framework
- * - Each thread accumulates checksums locally to reduce atomic contention
- * - Final checksums are combined atomically using XOR (commutative and associative)
- * - Uses memory_order_release for proper synchronization
- *
- * @param[in]     buffer       Pointer to the memory buffer to read. Must be non-null.
- * @param[in]     size         Size of the buffer in bytes.
- * @param[in]     iterations   How many times to read the entire buffer.
- * @param[in]     num_threads  Number of threads to use for parallel execution.
- * @param[in,out] checksum     Atomic variable to accumulate checksums from threads.
- *                             Initialized to 0 before measurement, prevents optimization.
- * @param[in,out] timer        High-resolution timer for measuring execution time.
- *
- * @return Total duration in seconds
- *
- * @note The checksum accumulation ensures the compiler cannot optimize away read operations.
- * @note Uses assembly function memory_read_loop_asm() for actual memory reads.
- * @note Thread synchronization and alignment are handled by run_parallel_test().
- *
- * @see run_write_test() for write bandwidth measurement
- * @see run_copy_test() for copy bandwidth measurement
- * @see memory_read_loop_asm() for the low-level read implementation
- */
-double run_read_test(void *buffer, size_t size, int iterations, int num_threads, std::atomic<uint64_t> &checksum,
-                     HighResTimer &timer) {
-  return run_read_test_impl(buffer, size, iterations, num_threads, checksum, timer, memory_read_loop_asm);
-}
-
-double run_read_test_with_kernel(void* buffer,
-                                 size_t size,
-                                 int iterations,
-                                 int num_threads,
-                                 std::atomic<uint64_t>& checksum,
-                                 HighResTimer& timer,
-                                 uint64_t (*read_func)(const void*, size_t)) {
-  return run_read_test_impl(buffer, size, iterations, num_threads, checksum, timer, read_func);
-}
 
 double run_read_test_with_plan(void* buffer,
                                const BenchmarkWorkPlan& plan,
@@ -198,21 +130,12 @@ double run_read_test_with_plan(void* buffer,
  * @note Thread synchronization and alignment are handled by run_parallel_test().
  * @note No checksum validation needed - writes have observable side effects.
  *
- * @see run_read_test() for read bandwidth measurement
+ * @see run_read_test_with_plan() for read bandwidth measurement
  * @see run_copy_test() for copy bandwidth measurement
  * @see memory_write_loop_asm() for the low-level write implementation
  */
 double run_write_test(void *buffer, size_t size, int iterations, int num_threads, HighResTimer &timer) {
   return run_write_test_impl(buffer, size, iterations, num_threads, timer, memory_write_loop_asm);
-}
-
-double run_write_test_with_kernel(void* buffer,
-                                  size_t size,
-                                  int iterations,
-                                  int num_threads,
-                                  HighResTimer& timer,
-                                  void (*write_func)(void*, size_t)) {
-  return run_write_test_impl(buffer, size, iterations, num_threads, timer, write_func);
 }
 
 double run_write_test_with_plan(void* buffer,
@@ -267,22 +190,12 @@ double run_write_test_with_plan(void* buffer,
  * @note Thread synchronization and alignment are handled by run_parallel_test_copy().
  * @note Copy bandwidth includes both read and write operations.
  *
- * @see run_read_test() for read bandwidth measurement
+ * @see run_read_test_with_plan() for read bandwidth measurement
  * @see run_write_test() for write bandwidth measurement
  * @see memory_copy_loop_asm() for the low-level copy implementation
  */
 double run_copy_test(void *dst, void *src, size_t size, int iterations, int num_threads, HighResTimer &timer) {
   return run_copy_test_impl(dst, src, size, iterations, num_threads, timer, memory_copy_loop_asm);
-}
-
-double run_copy_test_with_kernel(void* dst,
-                                 void* src,
-                                 size_t size,
-                                 int iterations,
-                                 int num_threads,
-                                 HighResTimer& timer,
-                                 void (*copy_func)(void*, const void*, size_t)) {
-  return run_copy_test_impl(dst, src, size, iterations, num_threads, timer, copy_func);
 }
 
 double run_copy_test_with_plan(void* dst,

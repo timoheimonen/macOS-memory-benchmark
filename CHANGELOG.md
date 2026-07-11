@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.61.0] - Unreleased
+
+### Added
+  - **Standalone Metal GPU memory-bandwidth benchmark**: Added `-G` / `--gpu-bandwidth` for effective compute-payload read and write bandwidth plus copy bandwidth (aggregate read + write payload) on Apple Silicon. The standalone mode uses two private/tracked buffers, a 512 MB per-buffer default, a 64 MB methodology minimum, three balanced loops by default, exact work with `--iterations`, duration-calibrated automatic work otherwise, and median/repeatability reporting for repeated loops.
+  - **Versioned and validated GPU methodology**: Runtime-compiled MSL 2.3 initialization, read, write, copy, and validation kernels use suite-resident resources, deterministic capped grid-stride work, exact payload accounting, and one measured command buffer with one serial compute encoder per attempt. Deterministic seeds, balanced operation order, timed accumulators, final validation, and explicit interruption/status handling make completed measurements auditable without claiming verified DRAM residency.
+  - **Auditable GPU JSON schema 1**: Atomic checkpoints record nullable measurement states, completion counters, exact decimal-string payloads and seeds, frozen work plans, excluded calibration attempts, operation order, validation evidence, Metal resource and compilation properties, device/OS/environment provenance, QoS outcome, and repeatability quality.
+  - **GPU documentation and verification**: Added a dedicated GPU bandwidth whitepaper and synchronized the README, manual, capability and parameter references, project structure, technical specification, CLI help, and plot-script schema handling. Fake-backend tests and real-Metal integration coverage verify orchestration, resource modes, exact work, tails, accumulators, checksums, and private-buffer readback; Apple M4 acceptance runs for the GPU methodology met the documented 5% repeatability gates. DRAM residency and timed-reduction overhead remain explicitly unverified because suitable public counters were unavailable.
+
+### Changed
+  - **One runtime banner per command**: Every successfully started direct mode and parameter sweep emits the same version, copyright, and GPL banner exactly once. Repeated `--count` loops and nested sweep runs do not repeat it; help and usage output retain their separate preamble, while argument parsing and validation failures emit no runtime banner.
+  - **Primary mode selection is order-independent**: Conflicting standard, pattern, TLB, core-to-core, and GPU selectors are rejected before dispatch regardless of argument order, while duplicate handling remains with each mode's parser.
+  - **Build and coverage support Objective-C++**: Production, test, and coverage builds discover `.mm` sources, link Metal and Foundation once, track their dependencies and cleanup, and use the shared macOS 11.0 deployment target.
+  - **Dead implementation paths removed without contract changes**: Removed unused benchmark wrappers, message and JSON-key aliases, write-only diagnostics and TLB context data, dummy orchestration parameters, redundant control branches, seven overwritten ARM64 register writes, and three unread Metal parameter fields while preserving benchmark work, timing boundaries, console output, and JSON schemas.
+
+### Fixed
+  - **Atomic JSON writing contains filesystem exceptions**: The shared writer now converts filesystem and library exceptions, including parent-path checks, to `EXIT_FAILURE` instead of allowing them to escape into `main()`.
+
 ## [0.60.0] - 2026-07-11
 
 ### Changed

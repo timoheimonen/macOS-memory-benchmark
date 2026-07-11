@@ -5,7 +5,7 @@
 Copyright 2025-2026 Timo Heimonen <timo.heimonen@proton.me>  
 License: GPL-3.0 license  
   
-**Low-level tool** to measure memory read/write/copy bandwidth, cache/main memory latency, and access pattern performance on macOS Apple Silicon (ARM64).  
+**Low-level tool** to measure CPU and Metal GPU memory read/write/copy bandwidth, cache/main memory latency, and access pattern performance on macOS Apple Silicon (ARM64).
 Application [measurement capabilities](CAPABILITIES.md) information.
 
 ![Macbook Air M5 Cache Latency from multiple JSON-files](pictures/MacBookAirM5_latency_vs_cache-stride-tlb.png)  
@@ -22,9 +22,12 @@ Macbook Air M5 Cache Latency by example-script provided. Using different size TL
 5. Pattern bandwidth behavior (sequential, strided, random).
 6. Standalone TLB-boundary analysis with paired spread/packed chains and validation.
 7. Standalone core-to-core cache-line handoff analysis.
-8. Cartesian parameter sweeps for the standard, pattern, TLB, and core-to-core modes.
+8. Standalone Metal GPU memory read/write/copy bandwidth.
+9. Cartesian parameter sweeps for the standard, pattern, TLB, and core-to-core modes.
 
-The benchmark uses ARM64 assembly kernels, warmup passes, and loop statistics to produce stable and comparable results.
+CPU modes use ARM64 assembly kernels; GPU mode uses runtime-compiled Metal compute kernels. Both expose warmup/work and
+repeatability metadata so controlled runs can be compared without treating a positive value as an automatic stability
+claim.
 
 ## Why This Tool?
 
@@ -45,6 +48,9 @@ Compared to generic benchmark suites, it is intentionally focused on:
 
 - macOS
 - Apple Silicon (ARM64)
+- GPU mode additionally requires a unified-memory Metal device with `MTLGPUFamilyApple7` capability or newer compatible
+  capability support. Passing the capability check does not by itself mean that the device belongs to a
+  performance-validated cohort.
 
 ## Install with Homebrew
 
@@ -57,6 +63,10 @@ brew install timoheimonen/macOS-memory-benchmark/memory-benchmark
 Prerequisites:
 
 - Xcode Command Line Tools (`xcode-select --install`)
+
+The build targets macOS 11.0, compiles the Objective-C++ backend with ARC, and links the system Metal and Foundation
+frameworks. GPU kernels are embedded MSL 2.3 source compiled at runtime, so the optional offline Metal Toolchain is not
+required.
 
 Build:
 
@@ -100,8 +110,8 @@ make coverage-unit
 make coverage-all
 ```
 
-Reports are written to `/tmp/membenchmark-coverage-{unit,all}/report.txt`. They cover production C++ only; tests,
-GoogleTest, the bundled JSON header, generated files, and assembly are excluded from the denominator.
+Reports are written to `/tmp/membenchmark-coverage-{unit,all}/report.txt`. They cover production C++ and Objective-C++;
+tests, GoogleTest, the bundled JSON header, generated files, and assembly are excluded from the denominator.
 
 ## Quick Usage
 
@@ -120,6 +130,12 @@ Standard benchmark:
 memory_benchmark --benchmark
 ```
 
+Standalone GPU bandwidth:
+
+```bash
+memory_benchmark --gpu-bandwidth
+```
+
 For longer runs, prevent sleep:
 
 ```bash
@@ -130,11 +146,22 @@ caffeinate -i -d memory_benchmark --benchmark --count 10 --buffer-size 1024
 
 - **`--benchmark`**: Runs the calibrated, seeded, balanced standard benchmark (main/cache bandwidth and continuous-pass main/cache latency). **Required** to execute standard benchmarks. Mutually exclusive with `--patterns`. Omitted `--iterations` enables per-target/per-operation duration calibration; `--count` loops reuse the resolved work and rotate phase and read/write/copy order.
 - **`--patterns`**: Runs pattern bandwidth suite only (`sequential_forward`, `sequential_reverse`, `strided_64`, `strided_4096`, `strided_16384`, `strided_2mb`, `random`). Mutually exclusive with `--benchmark`. Unless `--iterations` is explicit, each read/write/copy sample uses an excluded same-shape pilot to calibrate toward 150 ms; 100–250 ms is the intended measurement window. An explicit `--iterations` value is the measured pass count and bypasses the calibration pilot. Every operation still receives its own same-shape warmup. Strided cases rotate their 32-byte starting phase on every pass inside one ARM64 assembly call, use exact phase-aware payload accounting, and may reduce the requested thread count so every active worker performs at least one real stride transition; consequently, `--threads` and pattern thread sweeps specify a requested count, not necessarily the effective count for every stride. Pattern timing starts only after every actual worker has completed its best-effort QoS setup attempt and reached the ready gate, and ends when the last worker finishes measured work; workload preparation, thread creation, teardown, and joining are excluded. Random per-worker index lists are also prepared before timing.
+- **`--gpu-bandwidth`**: Runs the standalone Metal compute bandwidth suite. Its option whitelist is `--buffer-size`,
+  `--iterations`, `--count`, `--seed`, `--output`, and `--help` (including documented short aliases). The defaults are
+  512 MB per private data buffer, three balanced loops, one generated command seed, and automatic per-operation
+  calibration toward 150 ms. The hard CLI minimum is 64 MB. An explicit `--iterations` is the exact full-buffer pass
+  count and is rejected rather than silently capped if it exceeds the dispatch or exact-payload guardrail. See
+  [GPU_BANDWIDTH_WHITEPAPER.md](GPU_BANDWIDTH_WHITEPAPER.md) for methodology and GPU schema 1.
 - **`--only-bandwidth`**: Runs bandwidth paths only. **Requires `--benchmark`**. Cannot be used with `--patterns`, `--cache-size`, or `--latency-samples`.
 - **`--only-latency`**: Runs latency paths only. **Requires `--benchmark`**. Cannot be used with `--patterns` or `--iterations`.
 - **`--analyze-tlb`**: Runs standalone TLB analysis with page-native spread/packed pairs, calibrated measurement windows, adaptive balanced rounds, paired bootstrap confidence intervals, and an independent boundary-validation pass; only optional `--output <file>`, `--latency-stride-bytes <bytes>`, `--latency-chain-mode <mode>`, `--tlb-density <low|medium|high>`, `--seed <uint64>`, `--sweep <key=...>`, and `--sweep-max-runs <count>` may be combined with it.
 - **`--analyze-core2core`**: Runs calibrated, balanced standalone core-to-core cache-line handoff analysis. Each scheduler-hint scenario receives its own excluded pilot and work plan, scenarios rotate across `--count` loops, and the loop-median continuous headline is kept separate from the pooled sample-window distribution. Only optional `--output <file>`, `--count <count>`, `--latency-samples <count>`, `--sweep count=...`, `--sweep latency-samples=...`, and `--sweep-max-runs <count>` may be combined with it. See [CORE_TO_CORE_WHITEPAPER.md](CORE_TO_CORE_WHITEPAPER.md) for methodology and JSON schema 2 contract.
-- **`--sweep <key=a,b>`**: Runs a Cartesian parameter sweep for `--benchmark`, `--patterns`, `--analyze-tlb`, or `--analyze-core2core` and writes one combined JSON file. Repeat `--sweep` to sweep multiple parameters. Requires `--output <file>`.
+- **`--sweep <key=a,b>`**: Runs a Cartesian parameter sweep for `--benchmark`, `--patterns`, `--analyze-tlb`, or `--analyze-core2core` and writes one combined JSON file. Repeat `--sweep` to sweep multiple parameters. Requires `--output <file>`. GPU schema 1 does not support sweeps.
+
+GPU output is effective compute-payload bandwidth measured with Metal GPU timestamps. Copy reports aggregate read plus
+write payload, private storage is unified memory rather than separate VRAM, and physical DRAM residency remains
+unverified. See [GPU_BANDWIDTH_WHITEPAPER.md](GPU_BANDWIDTH_WHITEPAPER.md) for the complete methodology, schema,
+validation protocol, and interpretation limits.
 
 Pattern samples have steady-state, warm-memory semantics rather than cold-start semantics. Random read/write/copy warmup
 traverses the complete measured address list, and in automatic-calibration mode the excluded pilot further preconditions
@@ -177,6 +204,7 @@ Long options require `--`. A single dash is only valid for one-character short o
 | `-L` | `--only-latency` |
 | `-T` | `--analyze-tlb` |
 | `-C` | `--analyze-core2core` |
+| `-G` | `--gpu-bandwidth` |
 | `-b` | `--buffer-size` |
 | `-i` | `--iterations` |
 | `-r` | `--count` |
@@ -199,11 +227,17 @@ Sweep value lists also reject empty leading, middle, or trailing items.
 
 - `--benchmark`: Run standard memory benchmark. Mutually exclusive with `--patterns`. Required for standard, `--only-bandwidth`, and `--only-latency` modes.
 
-- `--buffer-size <MB>`: Main buffer size (default `512`; auto-capped by memory safety rules).
-- `--iterations <count>`: Exact measured bandwidth pass count when explicitly supplied. When omitted, both `--benchmark` and `--patterns` use an excluded same-shape pilot to calibrate each operation toward 150 ms (100–250 ms intended window, at most two corrections). The resolved standard workload is reused across `--count` loops. Operation-specific warmup still runs immediately before every measured attempt.
+- `--buffer-size <MB>`: Main buffer size (default `512`; standard/pattern paths apply their existing safety rules). In
+  GPU mode this is the exact size of each of two private buffers, has a hard 64 MB minimum, and is never silently reduced.
+- `--iterations <count>`: Exact measured bandwidth pass count when explicitly supplied. When omitted, `--benchmark`,
+  `--patterns`, and `--gpu-bandwidth` use excluded operation-specific work to calibrate toward 150 ms (100–250 ms
+  intended window, at most two corrections). GPU explicit work is also bounded by 16,384 dispatches and 64 GiB exact
+  payload per measurement; copy's 2× payload makes its payload-derived pass ceiling the strict shared CLI ceiling.
 - Standard main/L1/L2/custom latency headlines target 250 ms in a distinct 100–300 ms acceptance window and retain at
   least 16 complete pointer-chain cycles. A cycle-minimum-limited overrun is reported explicitly.
-- `--count <count>`: Full benchmark repetitions. The general default is `1`; `-C` / `--analyze-core2core` alone defaults to `3` so its normal output has a loop-median headline plus CV/MAD repeatability metadata. Use `5-10` for deeper statistics.
+- `--count <count>`: Full benchmark repetitions. The general default is `1`; `--analyze-core2core` and
+  `--gpu-bandwidth` each use a mode-local default of `3`. GPU order balance is complete only for a complete run whose
+  loop count is a multiple of three. Use `5-10` for deeper statistics where the mode permits it.
 - Standard repeated-loop aggregates warn when CV exceeds 7.5%. The warning is diagnostic: values are not filtered and
   the aggregate is not automatically invalidated.
 - `--threads <count>`: Bandwidth thread count (latency tests remain single-threaded). Standard main-memory bandwidth and
@@ -221,10 +255,15 @@ Sweep value lists also reject empty leading, middle, or trailing items.
   the continuous headline measurement.
 - `--latency-stride-bytes <bytes>`: Pointer-chain stride for latency tests (default `256`; must be > 0 and pointer-size aligned). Every enabled standard main/cache target and configured locality window must retain at least two stride-spaced nodes. The additional automatic 16 KiB locality comparison also needs two nodes in that fixed window (stride at most `8192` bytes); otherwise that comparison is reported unavailable while the validated standard targets can still run. With `--analyze-tlb`, stride must also be no larger than the system page size. The page-native spread builder rounds spacing up to a cache-line multiple; the packed control uses one node per cache line. Page-size divisibility is not required.
 - `--latency-chain-mode <mode>`: Pointer-chain construction policy. Modes: `auto` (default), `global-random`, `random-box`, `same-random-in-box`, `diff-random-in-box`. `--analyze-tlb` rejects `global-random` because it would make the locality sweep labels misleading. Analyze-TLB results are comparable only when the effective mode matches; the increasing-page `same-random-in-box` and `diff-random-in-box` modes are intentionally order/prefetch-sensitive.
-- `--seed <uint64>`: Reproducible workload/schedule seed for `--benchmark` and `--patterns`, or planner/round/chain seed for `--analyze-tlb`. In standard mode it derives separate main/L1/L2/custom and locality-layout seeds; equivalent chains and schedules are rebuilt across `--count` loops. The guarantee covers workload metadata, not identical performance. When omitted, one non-zero seed is generated for the command.
+- `--seed <uint64>`: Reproducible workload/schedule seed for `--benchmark`, `--patterns`, `--analyze-tlb`, or
+  `--gpu-bandwidth`. GPU mode derives domain-separated read/write/copy seeds and records them in frozen work plans. The
+  guarantee covers work/data identity, not identical performance. When omitted, one non-zero seed is generated once.
 - `--latency-tlb-locality-kb <KB>`: Pointer-chain locality window (default `1024`; with `auto`, `0` selects global random). When the effective mode uses locality, the value must be a non-zero page-size multiple containing at least two stride-spaced nodes. Explicit `global-random` ignores the locality window. If this option is omitted, regular main-memory latency also runs three paired rounds comparing 16 KiB locality with global random; first-measured layout alternates, and `locality_latency_delta_ns` is the median of same-round `global - locality` deltas. This is a mixed locality/cache comparison, not an isolated page-walk cost; use `--analyze-tlb` for translation-boundary conclusions.
 - `--non-cacheable`: Best-effort cache-discouraging hints (not true uncached memory).
-- `--output <file>`: Save JSON output. Standard mode atomically checkpoints schema-v2 JSON after completed loops, so interrupted/failed runs retain completed work and expose `results_complete: false`. Pattern schema 3 likewise preserves completed loop/measurement evidence and explicit command status on failure or interruption. A direct core-to-core run writes its auditable result even when it fails or is interrupted, provided an audit payload was built; completed measurements are preserved with `measurements_complete: false`, and unavailable values remain `null`.
+- `--output <file>`: Save JSON output. In GPU mode, schema 1 is atomically checkpointed after every terminal measurement
+  and also records valid post-parse pre-run failures or unsupported capability outcomes. Syntax/config failures such as a
+  buffer below 64 MB do not create result JSON. Standard, pattern, and core-to-core modes retain their existing
+  checkpoint contracts; unavailable values remain `null` rather than zero.
 - `--sweep <key=a,b>`: Sweep supported parameters. Standard benchmark keys: `buffer-size`, `cache-size`, `threads`, `latency-tlb-locality-kb`, `latency-stride-bytes`, `latency-chain-mode`; pattern keys: `buffer-size`, `threads`; TLB analysis keys: `latency-stride-bytes`, `latency-chain-mode`, `tlb-density`; core-to-core keys: `count`, `latency-samples`.
 - `--sweep-max-runs <count>`: Maximum generated sweep runs (general default `256`; `--analyze-tlb` default `16`). An explicit value overrides the mode default.
 
@@ -254,6 +293,12 @@ Core-to-core sample-depth sweep:
 
 ```bash
 memory_benchmark --analyze-core2core --count 3 --sweep latency-samples=500,1000,2000 --output core2core_sample_sweep.json
+```
+
+Reproducible GPU fixed-work run:
+
+```bash
+caffeinate -i -d memory_benchmark --gpu-bandwidth --buffer-size 512 --iterations 24 --count 9 --seed 123456789 --output gpu_bandwidth.json
 ```
 
 Latency locality comparison:
@@ -333,12 +378,18 @@ memory_benchmark --analyze-core2core --count 5 --latency-samples 2000 --output c
 
 Console output includes:
 
+- Every successfully started direct mode and parameter sweep begins with the same version, copyright, and GPL banner.
+  Help output and usage diagnostics retain the separate usage preamble; preflight failures do not emit the runtime
+  banner.
 - Resolved configuration and cache information.
 - Per-loop benchmark results.
 - Main-memory latency may include `16 KiB locality latency`, `Global-random latency`, and `Locality latency delta (global - 16 KiB)` when `--latency-tlb-locality-kb` is omitted. These are paired, alternating-order comparison rounds; the delta is not labeled as page-walk cost.
 - Standard and core-to-core aggregate statistics when `--count > 1`: median P50 headline, average, P90/P95/P99, sample stddev, CV, MAD, min, and max.
 - Repeated pattern aggregates use a median headline and report average, P90/P95/P99, sample stddev, CV, min, and max, without MAD. Unavailable/interrupted values are excluded from every mode's aggregates rather than converted to zero.
 - Standalone `--analyze-tlb` uses IEC units and one compact row per locality, reports `Analysis Status`, and suppresses boundary conclusions when the sweep is interrupted or incomplete. A `*` identifies a below-64-node diagnostic point, and the `quick` profile visibly advises confirmation with `medium` or `high`. Its primary 512 MiB result is the compact `Large-Locality Paired Comparison`: same-round spread, packed, and translation-delta P50 values plus the active cache-line footprint. These are cache-hot pointer-chain timings, not direct DRAM latency or an isolated page-table-walk cost.
+- Standalone `--gpu-bandwidth` reports read/write/copy effective compute payload bandwidth. With multiple measured loops
+  the headline is the median; repeatability becomes meaningful at three samples and warns above 5% CV. Copy is labeled
+  aggregate read + write, and the interpretation note keeps DRAM residency explicitly unverified.
 
 Standalone TLB JSON uses `schema_version: 4` and `methodology_version: "page-native-paired-adaptive-validated-v4"`. It includes the runtime profile, adaptive-round bounds and completion reason, access-calibration data, memory budget, predicted peak, best-effort QoS/lock results, work estimate, exact uint64 decimal-string seeds and derivation policy, execution-ordered discovery/validation records, raw pair latencies, requested/actual pages, pointer-node density, active cache-line footprints, short-cycle diagnostics, effective chain-mode comparability guidance, verified physical diagnostics, and same-round `translation_delta_ns = spread - packed`. Explicit base+validation, large-locality, and total counters state their pass scope, while `validation_required`, `validation_status`, and `validation_complete` distinguish validation completion from not-run/not-required states. Boundary objects retain accepted and rejected candidates with discovery/validation evidence, deterministic bootstrap 95% CIs, noise floor, persistence counts, rejection reasons, and the final bracket. The only large-locality result object is `tlb_analysis.large_locality_paired_comparison`; its delta P50 is the median of same-round deltas, not the difference of independently aggregated medians. Schema 4 contains only the current fields. The bundled plotter separately retains read support for historical schema 1-3 files and does not accept their field names in a schema 4 document.
 
@@ -408,6 +459,46 @@ failure can legitimately omit `patterns`. Consumers that require completeness mu
 loops; measurements from partial, interrupted, and failed loops remain raw evidence without biasing the cyclic-balanced
 headline.
 
+GPU bandwidth uses a separate top-level schema rather than standard schema 2:
+
+```json
+{
+  "software_version": "0.61.0",
+  "schema_version": 1,
+  "mode": "gpu_bandwidth",
+  "methodology_version": "gpu-bandwidth-v1-private-runtime-single-cmdbuf-calibrated-balanced",
+  "status": "complete",
+  "results_complete": true,
+  "conclusions_valid": true,
+  "operation_order_balance_complete": true,
+  "dram_residency": "unverified",
+  "configuration": {
+    "buffer_size_mb": 512,
+    "iterations": null,
+    "work_policy": "automatic-calibration",
+    "loop_count": 3,
+    "base_seed_uint64_decimal": "123456789",
+    "seed_source": "user"
+  },
+  "counters": {
+    "planned_measurements": 9,
+    "validated_measurements": 9
+  },
+  "work_plans": [],
+  "excluded_calibration_attempts": {},
+  "measurements": [],
+  "loop_records": [],
+  "aggregates": {}
+}
+```
+
+Each measurement has explicit status/reason and nullable `value_gb_s`, its frozen exact-payload plan, warmup,
+precondition, timed-command and validation records, resource metadata, environment snapshots, and kernel provenance.
+Only `measured` plus passed validation contributes a number. Top-level statuses are `not-started`, `complete`,
+`partial`, `interrupted`, `failed`, and `unsupported`; measurement statuses are `not-run`, `measured`, `interrupted`,
+`invalid`, and `failed`. Consumers accepting conclusions must require `status: "complete"`, `results_complete: true`,
+and `conclusions_valid: true`. See the whitepaper for exact counters and completion-wins interruption behavior.
+
 Core-to-core JSON uses `schema_version: 2` and
 `methodology_version: "core2core-v2-calibrated-balanced-auditable"`. It records per-scenario calibrated work plans,
 per-loop order, status, duration, scheduler-hint and sample-boundary metadata, command completion counters, and
@@ -467,6 +558,9 @@ python3 script-examples/plot_cache_percentiles.py script-examples/final_output.t
 
 Supported metrics: `median`, `p90`, `p95`, `p99`, `average`, `min`, `max`, `stddev`.
 
+These standard-memory/TLB plotters do not implement GPU schema 1 and explicitly reject top-level
+`mode: "gpu_bandwidth"`, `schema_version: 1` input instead of treating it as a historical standard result.
+
 Note: `script-examples/latency_test_script.sh` invokes `memory_benchmark --benchmark` from `PATH`. If you only built locally as `./memory_benchmark`, either install it or update `BENCHMARK_CMD` in the script.
 
 ## Interpreting Results Under Active System Load
@@ -500,6 +594,8 @@ The 0.53.7 pattern file predates current pattern schema 3 and is not a direct nu
 - **[Latency Whitepaper](LATENCY_WHITEPAPER.md)**: dependent pointer-chase design, chain construction, and sampling methodology.
 - **[TLB Analysis Whitepaper](TLB_ANALYSIS_WHITEPAPER.md)**: standalone `--analyze-tlb` methodology, boundary/guard rules, confidence model, and JSON verification contract.
 - **[Core-to-Core Cache-Line Handoff Latency Whitepaper](CORE_TO_CORE_WHITEPAPER.md)**: standalone `--analyze-core2core` methodology, LDAR/STLR assembly protocol, scheduler-hint scenarios, and JSON contract.
+- **[GPU Memory Bandwidth Whitepaper](GPU_BANDWIDTH_WHITEPAPER.md)**: Metal compute methodology, private unified-memory
+  resource model, GPU timing, validation, interruption, and GPU schema 1 contract.
 
 ## Non-Goals
 
@@ -516,6 +612,11 @@ Here are some things what are not goals to this application.
 - TLB-locality mode controls pointer-chain construction policy; it does not directly control hardware TLB residency.
 - Background activity, thermals, and scheduling can materially affect tails and variance.
 - Pattern GB/s is effective kernel payload bandwidth, not observed physical memory-bus traffic.
+- GPU GB/s is effective versioned-kernel payload divided by Metal GPU time, not verified physical DRAM traffic. Private
+  storage is not separate VRAM, copy uses aggregate 2× payload, and CPU/GPU results are not directly comparable despite
+  using the same decimal GB/s unit.
+- GPU capability support currently means unified memory plus Apple7-family support; it is not a performance guarantee.
+  See the [GPU whitepaper](GPU_BANDWIDTH_WHITEPAPER.md) for the controlled M4 evidence and device-support boundary.
 - `strided_2mb` specifies a 2 MiB virtual-address stride; it does not establish physical superpage backing.
 - Pattern ratios alone do not prove prefetch, cache-thrashing, or TLB mechanisms; use controlled follow-up tests and
   `--analyze-tlb` for supported TLB analysis.

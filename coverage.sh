@@ -1,6 +1,6 @@
 #!/bin/sh
-# Reproducible LLVM source coverage for production C++ without modifying the
-# normal workspace build artifacts.
+# Reproducible LLVM source coverage for production C++ and Objective-C++
+# without modifying the normal workspace build artifacts.
 set -eu
 
 MODE="${1:-}"
@@ -39,9 +39,10 @@ else
   COVERAGE_BINARY="$WORK_DIR/memory_benchmark"
 fi
 
-# Instrument production objects only. Test translation units still link against
-# the coverage runtime but cannot pollute the production report or collide with
-# executable profiles through test-only inline/template functions.
+# Instrument production C++ and Objective-C++ objects only. Test translation
+# units still link against the coverage runtime but cannot pollute the production
+# report or collide with executable profiles through test-only inline/template
+# functions.
 make -C "$WORK_DIR" $BUILD_TARGETS \
   CXXFLAGS="-Wall -O0 -g -std=c++17 -arch arm64 -pthread -Isrc $COVERAGE_FLAGS" \
   TEST_CXXFLAGS="-Wall -O0 -g -std=c++17 -arch arm64 -pthread -Isrc "\
@@ -69,13 +70,14 @@ xcrun llvm-profdata merge -sparse "$OUTPUT_DIR"/*.profraw \
 
 # llvm-cov source filters are file paths, not directory roots. Build the
 # argument vector one path at a time so spaces remain quoted and only
-# production C++ translation units (including main.cpp) enter the report.
+# production C++/Objective-C++ translation units (including main.cpp) enter the
+# report.
 SOURCE_LIST="$OUTPUT_DIR/production-sources.txt"
 {
   if [ "$MODE" = all ]; then
     printf '%s\n' "$WORK_DIR/main.cpp"
   fi
-  find "$WORK_DIR/src" -type f -name '*.cpp' \
+  find "$WORK_DIR/src" -type f \( -name '*.cpp' -o -name '*.mm' \) \
     ! -path '*/third_party/*' -print
 } | LC_ALL=C sort > "$SOURCE_LIST"
 

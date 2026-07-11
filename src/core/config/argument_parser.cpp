@@ -50,11 +50,10 @@
 #include "core/system/system_info.h"
 #include "output/console/messages/messages_api.h"
 #include "utils/benchmark.h"
+#include "utils/seed_utils.h"
 #include <charconv>
-#include <chrono>
 #include <iostream>
 #include <limits>
-#include <random>
 #include <stdexcept>
 #include <cmath>
 #include <cstdlib>
@@ -109,23 +108,32 @@ const char* strict_unsigned_decimal_error_reason(StrictIntegerParseStatus status
 
 namespace {
 
-ConfigTestHooks active_test_hooks;
-bool test_hooks_active = false;
+struct ConfigTestHookState {
+  ConfigTestHooks hooks;
+  bool active = false;
+};
+
+ConfigTestHookState& config_test_hook_state() {
+  static ConfigTestHookState state;
+  return state;
+}
 
 }  // namespace
 
 void set_config_test_hooks(const ConfigTestHooks* hooks) {
+  ConfigTestHookState& state = config_test_hook_state();
   if (hooks == nullptr) {
-    active_test_hooks = ConfigTestHooks{};
-    test_hooks_active = false;
+    state.hooks = ConfigTestHooks{};
+    state.active = false;
     return;
   }
-  active_test_hooks = *hooks;
-  test_hooks_active = true;
+  state.hooks = *hooks;
+  state.active = true;
 }
 
 const ConfigTestHooks* get_config_test_hooks() {
-  return test_hooks_active ? &active_test_hooks : nullptr;
+  const ConfigTestHookState& state = config_test_hook_state();
+  return state.active ? &state.hooks : nullptr;
 }
 
 namespace {
@@ -194,24 +202,14 @@ uint64_t parse_unsigned_decimal_or_throw(const std::string& value) {
   return parsed;
 }
 
-uint64_t generate_seed() {
+uint64_t generate_config_seed() {
   const ConfigTestHooks* hooks = get_config_test_hooks();
   if (hooks != nullptr && hooks->generated_seed != 0) {
-    return hooks->generated_seed;
+    const uint64_t injected_seed = hooks->generated_seed;
+    return SeedUtils::generate_seed(
+        [injected_seed]() { return injected_seed; });
   }
-  try {
-    std::random_device random_device;
-    const uint64_t high = static_cast<uint64_t>(random_device()) << 32U;
-    const uint64_t seed = high ^ static_cast<uint64_t>(random_device());
-    if (seed != 0) {
-      return seed;
-    }
-  } catch (...) {
-    // Fall through to a local monotonic-clock seed if random_device is unavailable.
-  }
-  const uint64_t clock_seed = static_cast<uint64_t>(
-      std::chrono::steady_clock::now().time_since_epoch().count());
-  return clock_seed != 0 ? clock_seed : 0x9e3779b97f4a7c15ULL;
+  return SeedUtils::generate_seed();
 }
 
 bool tlb_sweep_density_from_string(const std::string& value, TlbSweepDensity& out_density) {
@@ -293,45 +291,33 @@ SweepSpec parse_sweep_spec(const std::string& spec_text) {
       }
     } else {
       const long long parsed = parse_signed_decimal_or_throw(raw_value);
-      switch (spec.parameter) {
-        case SweepParameter::BufferSizeMb:
-          if (parsed < 0 || parsed > std::numeric_limits<unsigned long>::max()) {
-            throw std::out_of_range(Messages::error_buffersize_invalid(
-                parsed, std::numeric_limits<unsigned long>::max()));
-          }
-          break;
-        case SweepParameter::CacheSizeKb:
-          if (parsed < 0 || parsed > Constants::MAX_CACHE_SIZE_KB ||
-              (parsed > 0 && parsed < Constants::MIN_CACHE_SIZE_KB)) {
-            throw std::out_of_range(Messages::error_cache_size_invalid(
-                Constants::MIN_CACHE_SIZE_KB,
-                Constants::MAX_CACHE_SIZE_KB,
-                Constants::MAX_CACHE_SIZE_KB / 1024));
-          }
-          break;
-        case SweepParameter::Threads:
-          if (parsed <= 0 || parsed > std::numeric_limits<int>::max()) {
-            throw std::out_of_range(Messages::error_threads_invalid(
-                parsed, 1, std::numeric_limits<int>::max()));
-          }
-          break;
-        case SweepParameter::LatencyTlbLocalityKb: {
-          const long long max_locality_kb =
-              static_cast<long long>(std::numeric_limits<size_t>::max() / Constants::BYTES_PER_KB);
-          if (parsed < 0 || parsed > max_locality_kb) {
-            throw std::out_of_range(Messages::error_latency_tlb_locality_invalid(parsed, max_locality_kb));
-          }
-          break;
+      if (spec.parameter == SweepParameter::BufferSizeMb) {
+        if (parsed < 0 || parsed > std::numeric_limits<unsigned long>::max()) {
+          throw std::out_of_range(Messages::error_buffersize_invalid(
+              parsed, std::numeric_limits<unsigned long>::max()));
         }
-        case SweepParameter::LatencyStrideBytes:
-          if (parsed <= 0) {
-            throw std::out_of_range(Messages::error_latency_stride_invalid(
-                parsed, 1, std::numeric_limits<long long>::max()));
-          }
-          break;
-        case SweepParameter::LatencyChainMode:
-        case SweepParameter::TlbDensity:
-          break;
+      } else if (spec.parameter == SweepParameter::CacheSizeKb) {
+        if (parsed < 0 || parsed > Constants::MAX_CACHE_SIZE_KB ||
+            (parsed > 0 && parsed < Constants::MIN_CACHE_SIZE_KB)) {
+          throw std::out_of_range(Messages::error_cache_size_invalid(
+              Constants::MIN_CACHE_SIZE_KB,
+              Constants::MAX_CACHE_SIZE_KB,
+              Constants::MAX_CACHE_SIZE_KB / 1024));
+        }
+      } else if (spec.parameter == SweepParameter::Threads) {
+        if (parsed <= 0 || parsed > std::numeric_limits<int>::max()) {
+          throw std::out_of_range(Messages::error_threads_invalid(
+              parsed, 1, std::numeric_limits<int>::max()));
+        }
+      } else if (spec.parameter == SweepParameter::LatencyTlbLocalityKb) {
+        const long long max_locality_kb =
+            static_cast<long long>(std::numeric_limits<size_t>::max() / Constants::BYTES_PER_KB);
+        if (parsed < 0 || parsed > max_locality_kb) {
+          throw std::out_of_range(Messages::error_latency_tlb_locality_invalid(parsed, max_locality_kb));
+        }
+      } else if (spec.parameter == SweepParameter::LatencyStrideBytes && parsed <= 0) {
+        throw std::out_of_range(Messages::error_latency_stride_invalid(
+            parsed, 1, std::numeric_limits<long long>::max()));
       }
       value.integer_value = parsed;
     }
@@ -467,12 +453,6 @@ int parse_arguments(int argc, char* argv[], BenchmarkConfig& config) {
             throw std::out_of_range("must be a positive integer");
           }
           config.sweep_max_runs = static_cast<size_t>(val_ll);
-        } catch (const std::invalid_argument& e) {
-          std::cerr << Messages::error_prefix()
-                    << Messages::error_invalid_value(arg, argv[i], e.what())
-                    << std::endl;
-          print_usage(argv[0]);
-          return EXIT_FAILURE;
         } catch (const std::out_of_range& e) {
           std::cerr << Messages::error_prefix()
                     << Messages::error_invalid_value(arg, argv[i], e.what())
@@ -535,7 +515,6 @@ int parse_arguments(int argc, char* argv[], BenchmarkConfig& config) {
           return EXIT_FAILURE;
         }
 
-        config.user_specified_latency_stride = true;
         latency_stride_seen = true;
         continue;
       }
@@ -575,7 +554,6 @@ int parse_arguments(int argc, char* argv[], BenchmarkConfig& config) {
         }
 
         config.latency_chain_mode = parsed_mode;
-        config.user_specified_latency_chain_mode = true;
         latency_chain_mode_seen = true;
         continue;
       }
@@ -651,7 +629,7 @@ int parse_arguments(int argc, char* argv[], BenchmarkConfig& config) {
     }
 
     if (!seed_seen) {
-      config.tlb_seed = generate_seed();
+      config.tlb_seed = generate_config_seed();
     }
     config.cpu_name = get_processor_name();
     config.macos_version = get_macos_version();
@@ -765,7 +743,6 @@ int parse_arguments(int argc, char* argv[], BenchmarkConfig& config) {
           if (val_ll < 0 || val_ll > std::numeric_limits<unsigned long>::max())
             throw std::out_of_range(Messages::error_buffersize_invalid(val_ll, std::numeric_limits<unsigned long>::max()));
           requested_buffer_size_mb_ll = val_ll;
-          config.user_specified_buffersize = true;
         } else
           // Error: Missing required value
           throw std::invalid_argument(Messages::error_missing_value(OPT_BUFFER_SIZE_LONG));
@@ -807,7 +784,6 @@ int parse_arguments(int argc, char* argv[], BenchmarkConfig& config) {
                 val_ll, 1, std::numeric_limits<long long>::max()));
           }
           config.latency_stride_bytes = static_cast<size_t>(val_ll);
-          config.user_specified_latency_stride = true;
         } else {
           throw std::invalid_argument(Messages::error_missing_value(OPT_LATENCY_STRIDE_LONG));
         }
@@ -821,7 +797,6 @@ int parse_arguments(int argc, char* argv[], BenchmarkConfig& config) {
             throw std::out_of_range(Messages::error_latency_chain_mode_invalid());
           }
           config.latency_chain_mode = parsed_mode;
-          config.user_specified_latency_chain_mode = true;
         } else {
           throw std::invalid_argument(Messages::error_missing_value(OPT_LATENCY_CHAIN_MODE_LONG));
         }
@@ -844,10 +819,7 @@ int parse_arguments(int argc, char* argv[], BenchmarkConfig& config) {
         latency_tlb_locality_seen = true;
       } else if (is_option(arg, OPT_CACHE_SIZE_SHORT, OPT_CACHE_SIZE_LONG)) {
         // Already parsed in first pass, skip it and its value in second pass
-        if (++i >= argc) {
-          // Error: This shouldn't happen (first pass should have validated it), but handle defensively
-          throw std::invalid_argument(Messages::error_missing_value(OPT_CACHE_SIZE_LONG));
-        }
+        ++i;
         // Silently skip - already parsed and validated in first pass
         continue;
       } else if (is_option(arg, OPT_SWEEP_SHORT, OPT_SWEEP_LONG)) {
@@ -978,9 +950,9 @@ int parse_arguments(int argc, char* argv[], BenchmarkConfig& config) {
       config.user_specified_pattern_seed = true;
     }
   } else if (config.run_patterns) {
-    config.pattern_seed = generate_seed();
+    config.pattern_seed = generate_config_seed();
   } else if (config.run_benchmark) {
-    config.benchmark_seed = generate_seed();
+    config.benchmark_seed = generate_config_seed();
   }
 
   return EXIT_SUCCESS;  // All arguments parsed successfully

@@ -59,7 +59,6 @@ namespace Constants {
   // Buffer size factors
   constexpr double L1_BUFFER_SIZE_FACTOR = 1.0;  // Use 100% of L1 cache size
   constexpr double L2_BUFFER_SIZE_FACTOR = 1.0;  // Use 100% of L2 cache size
-  constexpr double CUSTOM_BUFFER_SIZE_FACTOR = 1.0;  // Use 100% of custom cache size
   
   // Memory limit constants
   constexpr double MEMORY_LIMIT_FACTOR = 0.80;  // Use 80% of available memory
@@ -80,7 +79,6 @@ namespace Constants {
   // Latency test constants
   constexpr size_t LATENCY_STRIDE_BYTES = 256;  // Latency test access stride (8-byte aligned, DRAM-oriented default)
   constexpr size_t DEFAULT_LATENCY_TLB_LOCALITY_KB = 1024;  // Default locality window for latency chains (1 MB)
-  constexpr size_t MIN_LATENCY_BUFFER_SIZE = LATENCY_STRIDE_BYTES * 2;  // Minimum size (2 pointers worth)
   static_assert((LATENCY_STRIDE_BYTES % sizeof(void*)) == 0,
                 "LATENCY_STRIDE_BYTES must be pointer-size aligned for latency chain");
   
@@ -94,7 +92,6 @@ namespace Constants {
   constexpr size_t CUSTOM_LATENCY_ACCESSES = 100 * 1000 * 1000;  // Custom cache latency test accesses
   
   // Benchmark execution constants
-  constexpr int CACHE_ITERATIONS_MULTIPLIER = 10;  // Cache tests use 10x iterations for accuracy
   constexpr int SINGLE_THREAD = 1;  // Single-threaded execution for cache tests
   
   // Default configuration values
@@ -121,6 +118,39 @@ namespace Constants {
       BANDWIDTH_CALIBRATION_MIN_PILOT_BYTES;
   constexpr size_t BENCHMARK_CALIBRATION_MAX_PASSES =
       BANDWIDTH_CALIBRATION_MAX_PASSES;
+
+  // Standalone GPU memory-bandwidth mode. The calibration values are aliases
+  // of the shared bandwidth policy; the dispatch, payload, and grid limits are
+  // methodology guardrails serialized by GPU schema v1.
+  constexpr unsigned long GPU_DEFAULT_BUFFER_SIZE_MB =
+      DEFAULT_BUFFER_SIZE_MB;
+  constexpr unsigned long GPU_MIN_BUFFER_SIZE_MB = 64;
+  constexpr size_t GPU_DEFAULT_LOOP_COUNT = 3;
+  constexpr double GPU_CALIBRATION_TARGET_SECONDS =
+      BANDWIDTH_CALIBRATION_TARGET_SECONDS;
+  constexpr double GPU_CALIBRATION_MIN_SECONDS =
+      BANDWIDTH_CALIBRATION_MIN_SECONDS;
+  constexpr double GPU_CALIBRATION_MAX_SECONDS =
+      BANDWIDTH_CALIBRATION_MAX_SECONDS;
+  constexpr size_t GPU_CALIBRATION_MAX_CORRECTIONS =
+      BANDWIDTH_CALIBRATION_MAX_CORRECTIONS;
+  constexpr size_t GPU_CALIBRATION_MIN_PILOT_BYTES =
+      BANDWIDTH_CALIBRATION_MIN_PILOT_BYTES;
+  constexpr size_t GPU_MAX_DISPATCHES_PER_MEASUREMENT = 16384;
+  constexpr size_t GPU_MAX_EXACT_PAYLOAD_BYTES =
+      64ULL * 1024ULL * BYTES_PER_MB;
+  constexpr size_t GPU_VECTOR_WIDTH_BYTES = 16;
+  constexpr size_t GPU_THREADS_PER_THREADGROUP_CAP = 256;
+  constexpr size_t GPU_MAX_THREADGROUPS_PER_GRID = 8192;
+  constexpr size_t GPU_AUXILIARY_BUFFER_BYTES = 4096;
+  constexpr double GPU_STREAMING_CV_WARNING_PCT = 5.0;
+  constexpr int GPU_JSON_SCHEMA_VERSION = 1;
+  constexpr const char* GPU_JSON_MODE_NAME = "gpu_bandwidth";
+  constexpr const char* GPU_METHODOLOGY_VERSION =
+      "gpu-bandwidth-v1-private-runtime-single-cmdbuf-calibrated-balanced";
+  constexpr const char* GPU_WORK_PLAN_IDENTITY_VERSION =
+      "gpu-work-plan-v1";
+
   constexpr double BENCHMARK_LATENCY_TARGET_SECONDS = 0.250;
   constexpr double BENCHMARK_LATENCY_CALIBRATION_MIN_SECONDS = 0.100;
   constexpr double BENCHMARK_LATENCY_CALIBRATION_MAX_SECONDS = 0.300;
@@ -203,7 +233,6 @@ namespace Constants {
       BANDWIDTH_CALIBRATION_MAX_PASSES;
   constexpr size_t PATTERN_RANDOM_ACCESS_MIN = 1000;  // Minimum number of random accesses
   constexpr size_t PATTERN_RANDOM_ACCESS_MAX = 1000000;  // Maximum number of random accesses
-  constexpr size_t PATTERN_VALIDATION_INDICES_LIMIT = 100;  // Maximum indices to validate
   constexpr double PATTERN_MIN_TIME_NS = 1e-9;  // Minimum time for bandwidth calculation (nanoseconds)
   constexpr int PATTERN_PERCENTAGE_PRECISION = 1;  // Decimal places for percentage values
   constexpr int PATTERN_BANDWIDTH_PRECISION = 3;  // Decimal places for bandwidth values in pattern results
@@ -215,9 +244,6 @@ namespace Constants {
   constexpr size_t L2_CACHE_M1_FALLBACK_SIZE_BYTES = 12 * 1024 * 1024;  // 12 MB - M1 L2 cache per P-core cluster
   constexpr size_t L2_CACHE_M2_M3_M4_M5_FALLBACK_SIZE_BYTES = 16 * 1024 * 1024;  // 16 MB - M2/M3/M4/M5 L2 cache per P-core cluster
   constexpr size_t L2_CACHE_GENERIC_FALLBACK_SIZE_BYTES = 16 * 1024 * 1024;  // 16 MB - generic fallback L2 cache size
-  
-  // UI constants
-  constexpr size_t SPINNER_CHARACTER_COUNT = 4;  // Number of characters in progress spinner
 }
 
 #endif // CONSTANTS_H

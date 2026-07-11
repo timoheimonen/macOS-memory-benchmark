@@ -53,12 +53,6 @@ std::string warning_qos_failed(int code) {
   return oss.str();
 }
 
-std::string warning_stride_not_aligned(size_t stride) {
-  std::ostringstream oss;
-  oss << "stride (" << stride << ") is not 32-byte aligned, may cause issues";
-  return oss.str();
-}
-
 std::string warning_qos_failed_worker_thread(int code) {
   std::ostringstream oss;
   oss << "Failed to set QoS class for warmup worker thread (code: " << code << ")";

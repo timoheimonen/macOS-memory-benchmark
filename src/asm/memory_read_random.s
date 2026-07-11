@@ -49,8 +49,6 @@
 .align 4
 _memory_read_random_loop_asm:
     mov x3, xzr             // i = 0 (loop counter)
-    mov x12, xzr            // Zero vector checksum accumulator (lower)
-    mov x13, xzr            // Zero vector checksum accumulator (upper)
     
     // Zero accumulators (v0-v1) using XOR self-operation.
     // Use caller-saved registers q0-q7,q16-q31 only (avoid q8-q15 per AAPCS64).

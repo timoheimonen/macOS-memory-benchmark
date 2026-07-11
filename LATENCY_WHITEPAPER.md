@@ -2,7 +2,7 @@
 
 ## 1. Purpose
 
-This document explains how `macOS-memory-benchmark` version 0.60.0 measures memory latency on Apple Silicon.
+This document explains how `macOS-memory-benchmark` version 0.61.0 measures memory latency on Apple Silicon.
 
 The latency path is designed to measure **load-to-use delay** (pointer chasing), not bulk throughput.
 It combines:
@@ -172,11 +172,9 @@ that cold-start artifact.
 The sample pass executes exactly `num_accesses` dereferences in addition to the headline pass; `--latency-samples` is
 therefore a distribution-depth control, not a way to divide or redefine headline work.
 
-`run_latency_test()` is the entry point for main-memory latency measurement.
-`run_cache_latency_test()` is the corresponding entry point for L1, L2, and custom--cache-size
-latency measurements. Both functions share the same internal `run_latency_measurement()` path
-and the same assembly kernel; the distinction is only in which buffer is passed and which
-result field is populated.
+`run_latency_test()` is the shared entry point for main-memory, L1, L2, and custom-cache-size
+latency measurements. Every case uses the same internal `run_latency_measurement()` path and
+assembly kernel; the executor selects the buffer and stores the result in the appropriate field.
 
 ## 7. Experimental Protocols
 
@@ -244,7 +242,7 @@ analysis.
 - When present, segmented windows are under each headline aggregate's `pooled_sample_distribution`, with values and
   loop-boundary metadata kept separate from continuous loop headlines.
 - The current standard schema 2 does not serialize the legacy `chain_diagnostics.unique_pages_touched` blocks. Do not
-  use the old `main_memory.latency.chain_diagnostics` or `cache.*.latency.chain_diagnostics` paths for version 0.60.0
+  use the old `main_memory.latency.chain_diagnostics` or `cache.*.latency.chain_diagnostics` paths for version 0.61.0
   output.
 
 When `--latency-tlb-locality-kb` is not explicitly supplied, standard main-memory latency also runs three paired rounds

@@ -62,7 +62,7 @@ size_t get_config_page_size_bytes() {
  * Computes buffer sizes for L1, L2, or custom cache level tests based on
  * detected cache sizes and configuration. Ensures buffers are:
  * - Aligned to stride boundaries (for pointer-chasing tests)
- * - At least minimum size (MIN_LATENCY_BUFFER_SIZE)
+ * - Large enough for at least two latency-stride pointer slots
  * - Page-aligned for optimal memory access
  * - Scaled appropriately to fit within target cache level
  *

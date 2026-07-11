@@ -48,11 +48,9 @@ void signal_handler(int /* sig */) {
 
 BenchmarkSignalMaskGuard::BenchmarkSignalMaskGuard() noexcept {
   sigset_t benchmark_signals;
-  if (sigemptyset(&benchmark_signals) != 0 ||
-      sigaddset(&benchmark_signals, SIGINT) != 0 ||
-      sigaddset(&benchmark_signals, SIGTERM) != 0) {
-    return;
-  }
+  sigemptyset(&benchmark_signals);
+  sigaddset(&benchmark_signals, SIGINT);
+  sigaddset(&benchmark_signals, SIGTERM);
 
   mask_changed_ =
       pthread_sigmask(SIG_BLOCK, &benchmark_signals, &previous_mask_) == 0;

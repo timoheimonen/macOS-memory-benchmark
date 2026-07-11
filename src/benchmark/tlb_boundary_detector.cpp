@@ -226,7 +226,6 @@ TlbBootstrapInterval bootstrap_median_interval(const std::vector<double>& effect
   TlbBootstrapInterval interval;
   interval.paired_sample_count = effects.size();
   interval.bootstrap_resamples = kBootstrapResamples;
-  interval.confidence_level = kBootstrapConfidenceLevel;
   if (effects.empty()) {
     return interval;
   }

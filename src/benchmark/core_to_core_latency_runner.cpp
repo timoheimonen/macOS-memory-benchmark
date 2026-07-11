@@ -43,11 +43,11 @@
 #include "asm/asm_functions.h"
 #include "benchmark/core_to_core_latency_json.h"
 #include "core/config/constants.h"
-#include "core/config/version.h"
 #include "core/signal/signal_handler.h"
 #include "core/system/system_info.h"
 #include "core/timing/timer.h"
 #include "output/console/messages/messages_api.h"
+#include "output/console/output_printer.h"
 #include "output/console/statistics_renderer.h"
 #include "output/json/json_output/json_output_api.h"
 #include "utils/numeric_utils.h"
@@ -420,7 +420,6 @@ bool execute_single_scenario(const ScenarioDescriptor& scenario, const CoreToCor
 int run_core_to_core_latency_collect(const CoreToCoreLatencyConfig& config, nlohmann::ordered_json& result_json) {
   const auto analysis_start = std::chrono::steady_clock::now();
 
-  std::cout << Messages::usage_header(SOFTVERSION);
   std::cout << Messages::msg_running_core_to_core_analysis() << std::endl;
 
   const std::string cpu_name = get_processor_name();
@@ -586,6 +585,7 @@ int run_core_to_core_latency_collect(const CoreToCoreLatencyConfig& config, nloh
 }
 
 int run_core_to_core_latency(const CoreToCoreLatencyConfig& config) {
+  print_runtime_banner();
   nlohmann::ordered_json result_json;
   const int run_result = run_core_to_core_latency_collect(config, result_json);
 

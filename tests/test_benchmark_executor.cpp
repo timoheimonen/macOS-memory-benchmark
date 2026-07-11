@@ -37,7 +37,6 @@
 #include "benchmark/parallel_test_framework.h"
 #include "core/config/config.h"
 #include "core/config/constants.h"
-#include "core/memory/buffer_manager.h"
 #include "core/memory/memory_utils.h"
 #include "core/timing/timer.h"
 #include "output/console/messages/messages_api.h"
@@ -223,13 +222,12 @@ TEST(BenchmarkExecutorTest, ActiveLatencyPathReportsAndReusesAuditableWorkIntegr
   config.user_specified_latency_tlb_locality = true;
   config.latency_sample_count = 0;
 
-  BenchmarkBuffers unused_buffers;
   auto timer = HighResTimer::create();
   ASSERT_TRUE(timer.has_value());
   BenchmarkExecutionState execution_state;
 
   const BenchmarkResults first = run_single_benchmark_loop(
-      unused_buffers, config, 0, *timer, &execution_state);
+      config, 0, *timer, &execution_state);
   ASSERT_EQ(first.status, BenchmarkRunStatus::Complete);
   EXPECT_EQ(first.planned_phases, 1u);
   EXPECT_EQ(first.completed_phases, 1u);
@@ -267,7 +265,7 @@ TEST(BenchmarkExecutorTest, ActiveLatencyPathReportsAndReusesAuditableWorkIntegr
   const double pilot_elapsed_seconds = first_latency.pilot_elapsed_seconds;
 
   const BenchmarkResults second = run_single_benchmark_loop(
-      unused_buffers, config, 1, *timer, &execution_state);
+      config, 1, *timer, &execution_state);
   ASSERT_EQ(second.status, BenchmarkRunStatus::Complete);
   ASSERT_TRUE(second.main_latency.is_measured());
   EXPECT_EQ(second.loop_index, 1u);
@@ -282,7 +280,6 @@ TEST(BenchmarkExecutorTest, InjectedPreparationFailureCoversEveryPhaseBoundary) 
   BenchmarkConfig config = build_injected_failure_config();
   config.only_bandwidth = false;
   config.only_latency = false;
-  BenchmarkBuffers unused_buffers;
   auto timer = HighResTimer::create();
   ASSERT_TRUE(timer.has_value());
   const std::array<const char*, 4> phases = {
@@ -300,8 +297,7 @@ TEST(BenchmarkExecutorTest, InjectedPreparationFailureCoversEveryPhaseBoundary) 
     testing::internal::CaptureStderr();
     try {
       static_cast<void>(run_single_benchmark_loop(
-          unused_buffers, config, static_cast<int>(phase_index), *timer,
-          nullptr, &hooks));
+          config, static_cast<int>(phase_index), *timer, nullptr, &hooks));
     } catch (const std::runtime_error& error) {
       caught_reason = error.what();
     }
@@ -318,7 +314,6 @@ TEST(BenchmarkExecutorTest, InjectedLatencyChainFailureCoversCacheAndMainPhases)
   BenchmarkConfig config = build_injected_failure_config();
   config.only_bandwidth = false;
   config.only_latency = false;
-  BenchmarkBuffers unused_buffers;
   auto timer = HighResTimer::create();
   ASSERT_TRUE(timer.has_value());
 
@@ -336,7 +331,7 @@ TEST(BenchmarkExecutorTest, InjectedLatencyChainFailureCoversCacheAndMainPhases)
     testing::internal::CaptureStderr();
     try {
       static_cast<void>(run_single_benchmark_loop(
-          unused_buffers, config, phase.second, *timer, nullptr, &hooks));
+          config, phase.second, *timer, nullptr, &hooks));
     } catch (const std::runtime_error& error) {
       caught_reason = error.what();
     }

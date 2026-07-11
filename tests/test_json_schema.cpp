@@ -509,9 +509,6 @@ TEST(JsonSchemaTest, TlbAnalysisExporterIncludesModeAndCoreCounts) {
 
   const std::string cpu_name = "test-cpu";
   const std::vector<size_t> localities_bytes = {16 * Constants::BYTES_PER_KB};
-  const std::vector<std::vector<double>> sweep_loop_latencies_ns = {{15.0, 15.1}};
-  const std::vector<double> p50_latency_ns = {15.0};
-  const std::vector<double> page_walk_comparison_loop_latencies_ns = {95.0, 96.0};
   const std::vector<TlbSweepPoint> sweep_points = {{
       0, 1, 1, 16 * Constants::BYTES_PER_KB, 64, 256, "base",
       16 * Constants::BYTES_PER_KB, 16 * Constants::BYTES_PER_KB}};
@@ -585,7 +582,7 @@ TEST(JsonSchemaTest, TlbAnalysisExporterIncludesModeAndCoreCounts) {
   l1_boundary.discovery.effect_ns = 2.0;
   l1_boundary.discovery.minimum_effect_ns = 0.5;
   l1_boundary.discovery.noise_floor_ns = 0.1;
-  l1_boundary.discovery.effect_ci = {1.5, 2.5, 0.95, 30, 2000};
+  l1_boundary.discovery.effect_ci = {1.5, 2.5, 30, 2000};
   l1_boundary.discovery.persistence_points_passed = 2;
   l1_boundary.validation = l1_boundary.discovery;
   TlbBoundaryCandidate accepted_candidate;
@@ -648,8 +645,6 @@ TEST(JsonSchemaTest, TlbAnalysisExporterIncludesModeAndCoreCounts) {
       sweep_points,
       measurement_records,
       localities_bytes,
-      sweep_loop_latencies_ns,
-      p50_latency_ns,
       l1_boundary,
       l2_boundary,
       private_cache_knee,
@@ -665,10 +660,6 @@ TEST(JsonSchemaTest, TlbAnalysisExporterIncludesModeAndCoreCounts) {
       256,
       true,
       true,
-      page_walk_comparison_loop_latencies_ns,
-      95.5,
-      15.0,
-      80.5,
       3.0,
       runtime_profile,
       4096,
@@ -894,9 +885,6 @@ TEST(JsonSchemaTest, TlbAnalysisExporterOmitsRemovedAliasesAndHandlesUnavailable
 
   const std::string cpu_name = "test-cpu";
   const std::vector<size_t> localities_bytes = {16 * Constants::BYTES_PER_KB};
-  const std::vector<std::vector<double>> sweep_loop_latencies_ns = {{15.0, 15.1}};
-  const std::vector<double> p50_latency_ns = {15.0};
-  const std::vector<double> page_walk_comparison_loop_latencies_ns;
   const std::vector<TlbSweepPoint> sweep_points = {{
       0, 1, 1, 16 * Constants::BYTES_PER_KB, 64, 256, "base",
       16 * Constants::BYTES_PER_KB, 16 * Constants::BYTES_PER_KB}};
@@ -938,8 +926,6 @@ TEST(JsonSchemaTest, TlbAnalysisExporterOmitsRemovedAliasesAndHandlesUnavailable
       sweep_points,
       measurement_records,
       localities_bytes,
-      sweep_loop_latencies_ns,
-      p50_latency_ns,
       l1_boundary,
       l2_boundary,
       private_cache_knee,
@@ -955,10 +941,6 @@ TEST(JsonSchemaTest, TlbAnalysisExporterOmitsRemovedAliasesAndHandlesUnavailable
       0,
       true,
       false,
-      page_walk_comparison_loop_latencies_ns,
-      0.0,
-      15.0,
-      0.0,
       3.0,
   };
 

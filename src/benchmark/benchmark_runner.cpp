@@ -43,7 +43,6 @@
 #include "benchmark/benchmark_executor.h"  // run_single_benchmark_loop
 #include "benchmark/benchmark_work_plan.h"
 #include "benchmark/benchmark_statistics_collector.h"  // initialize_statistics, collect_loop_results
-#include "core/memory/buffer_manager.h"      // BenchmarkBuffers
 #include "core/config/config.h"               // BenchmarkConfig
 #include "core/timing/timer.h"                // HighResTimer
 #include "utils/benchmark.h"            // All benchmark functions and print functions
@@ -96,7 +95,6 @@ class ProgressCleanupGuard {
  * - Coordinator and injected-hook exceptions are contained at the API boundary
  * - Loop number and available error details are included in error messages
  *
- * @param[in]  buffers  Benchmark buffers (unused in phase-local allocation mode)
  * @param[in]  config   Benchmark configuration (buffer sizes, threads, loops, flags)
  * @param[out] stats    Statistics structure to populate with all loop results
  * @param[in]  test_hooks Optional deterministic coordinator seams used by tests
@@ -114,11 +112,9 @@ class ProgressCleanupGuard {
  * @see collect_loop_results() for result collection
  * @see print_results() for output formatting
  */
-int run_all_benchmarks(const BenchmarkBuffers& buffers, BenchmarkConfig& config,
-                       BenchmarkStatistics& stats,
+int run_all_benchmarks(BenchmarkConfig& config, BenchmarkStatistics& stats,
                        const BenchmarkRunnerTestHooks* test_hooks) try {
   ProgressCleanupGuard progress_cleanup;
-  (void)buffers;
 
   // Initialize statistics structure
   initialize_statistics(stats, config);
@@ -179,11 +175,9 @@ int run_all_benchmarks(const BenchmarkBuffers& buffers, BenchmarkConfig& config,
       // Run single benchmark loop
       loop_results = test_hooks != nullptr && test_hooks->execute_loop
                          ? test_hooks->execute_loop(
-                               buffers, config, loop, test_timer,
-                               &execution_state)
+                               config, loop, test_timer, &execution_state)
                          : run_single_benchmark_loop(
-                               buffers, config, loop, test_timer,
-                               &execution_state);
+                               config, loop, test_timer, &execution_state);
 
       // Collect results into statistics
       collect_loop_results(stats, loop_results, config);

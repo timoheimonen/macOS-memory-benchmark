@@ -173,7 +173,7 @@ const std::string& error_analyze_tlb_must_be_used_alone() {
 
 const std::string& error_seed_requires_supported_mode() {
   static const std::string msg =
-      "--seed requires --benchmark, --patterns, or --analyze-tlb";
+      "--seed requires --benchmark, --patterns, --analyze-tlb, or --gpu-bandwidth";
   return msg;
 }
 
@@ -261,12 +261,6 @@ std::string error_stride_too_small() {
   return "stride must be >= 32 bytes";
 }
 
-std::string error_stride_too_large(size_t stride, size_t buffer_size) {
-  std::ostringstream oss;
-  oss << "stride (" << stride << ") must be <= buffer size (" << buffer_size << ")";
-  return oss.str();
-}
-
 std::string error_indices_empty() {
   return "indices vector is empty";
 }
@@ -316,36 +310,6 @@ std::string error_total_memory_exceeds_limit(unsigned long total_mb, unsigned lo
 
 const std::string& error_main_buffers_not_allocated() {
   static const std::string msg = "Main buffers not allocated";
-  return msg;
-}
-
-const std::string& error_custom_buffer_not_allocated() {
-  static const std::string msg = "Custom buffer not allocated but size > 0";
-  return msg;
-}
-
-const std::string& error_l1_buffer_not_allocated() {
-  static const std::string msg = "L1 buffer not allocated but size > 0";
-  return msg;
-}
-
-const std::string& error_l2_buffer_not_allocated() {
-  static const std::string msg = "L2 buffer not allocated but size > 0";
-  return msg;
-}
-
-const std::string& error_custom_bandwidth_buffers_not_allocated() {
-  static const std::string msg = "Custom bandwidth buffers not allocated but size > 0";
-  return msg;
-}
-
-const std::string& error_l1_bandwidth_buffers_not_allocated() {
-  static const std::string msg = "L1 bandwidth buffers not allocated but size > 0";
-  return msg;
-}
-
-const std::string& error_l2_bandwidth_buffers_not_allocated() {
-  static const std::string msg = "L2 bandwidth buffers not allocated but size > 0";
   return msg;
 }
 

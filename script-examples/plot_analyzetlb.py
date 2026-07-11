@@ -72,6 +72,10 @@ def load_tlb_json(path: Path):
   with path.open("r", encoding="utf-8") as handle:
     data = json.load(handle)
 
+  if data.get("mode") == "gpu_bandwidth" and data.get("schema_version") == 1:
+    raise RuntimeError(
+        "GPU bandwidth schema 1 is not supported by the analyze-TLB plotter.")
+
   config = data.get("configuration", {})
   mode = config.get("mode")
   if mode != "analyze_tlb":

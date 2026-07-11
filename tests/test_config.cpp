@@ -45,6 +45,7 @@ class ScopedConfigTestHooks {
 
   size_t page_size_bytes() const { return hooks_.page_size_bytes; }
   int total_logical_cores() const { return hooks_.total_logical_cores; }
+  uint64_t generated_seed() const { return hooks_.generated_seed; }
 
  private:
   ConfigTestHooks hooks_;
@@ -255,6 +256,58 @@ TEST(ConfigTest, RejectsMalformedSweepListsAndNumericValues) {
   }
 }
 
+TEST(ConfigTest, RejectsSweepValuesOutsideSemanticDomains) {
+  struct InvalidSweepCase {
+    std::string specification;
+    std::string reason;
+    bool analyze_tlb;
+  };
+
+  const long long max_locality_kb =
+      static_cast<long long>(std::numeric_limits<size_t>::max() /
+                             Constants::BYTES_PER_KB);
+  const InvalidSweepCase cases[] = {
+      {"buffer-size=-1",
+       Messages::error_buffersize_invalid(
+           -1, std::numeric_limits<unsigned long>::max()),
+       false},
+      {"cache-size=8",
+       Messages::error_cache_size_invalid(
+           Constants::MIN_CACHE_SIZE_KB, Constants::MAX_CACHE_SIZE_KB,
+           Constants::MAX_CACHE_SIZE_KB / 1024),
+       false},
+      {"threads=0",
+       Messages::error_threads_invalid(0, 1,
+                                       std::numeric_limits<int>::max()),
+       false},
+      {"latency-tlb-locality-kb=-1",
+       Messages::error_latency_tlb_locality_invalid(-1, max_locality_kb),
+       false},
+      {"latency-stride-bytes=0",
+       Messages::error_latency_stride_invalid(
+           0, 1, std::numeric_limits<long long>::max()),
+       false},
+      {"latency-chain-mode=invalid",
+       Messages::error_latency_chain_mode_invalid(), false},
+      {"tlb-density=invalid", "must be one of: low, medium, high", true},
+  };
+
+  for (const InvalidSweepCase& test_case : cases) {
+    SCOPED_TRACE(test_case.specification);
+    std::vector<std::string> arguments = {
+        "program", test_case.analyze_tlb ? "--analyze-tlb" : "--benchmark",
+        "--sweep", test_case.specification};
+
+    BenchmarkConfig config;
+    const CapturedParseResult parsed =
+        parse_capturing_stderr(arguments, config);
+    EXPECT_EQ(parsed.result, EXIT_FAILURE);
+    EXPECT_NE(parsed.stderr_output.find(expected_invalid_value(
+                  "--sweep", test_case.specification, test_case.reason)),
+              std::string::npos);
+  }
+}
+
 TEST(ConfigTest, ParseSweepRejectsUnsupportedParameter) {
   BenchmarkConfig config;
   const char* argv[] = {"program", "--benchmark", "--sweep", "latency-samples=100,200"};
@@ -386,6 +439,18 @@ TEST(ConfigTest, ParseCustomCacheSize) {
   EXPECT_EQ(result, EXIT_SUCCESS);
   EXPECT_EQ(config.custom_cache_size_kb_ll, 256);
   EXPECT_TRUE(config.use_custom_cache_size);
+}
+
+TEST(ConfigTest, ParseMissingCacheSizeValueFailsInFirstPass) {
+  BenchmarkConfig config;
+  const CapturedParseResult parsed =
+      parse_capturing_stderr({"program", "--cache-size"}, config);
+
+  EXPECT_EQ(parsed.result, EXIT_FAILURE);
+  EXPECT_NE(parsed.stderr_output.find(
+                Messages::error_prefix() +
+                Messages::error_missing_value("--cache-size")),
+            std::string::npos);
 }
 
 // Test parsing invalid cache size (too small)
@@ -556,6 +621,7 @@ TEST(ConfigTest, ParseAnalyzeTlbGeneratesSeedWhenOmitted) {
   const char* argv[] = {"program", "--analyze-tlb"};
 
   EXPECT_EQ(parse_arguments(2, const_cast<char**>(argv), config), EXIT_SUCCESS);
+  EXPECT_EQ(config.tlb_seed, scoped_config_test_hooks.generated_seed());
   EXPECT_FALSE(config.user_specified_tlb_seed);
 }
 
@@ -595,7 +661,7 @@ TEST(ConfigTest, ParsePatternsGeneratesSeedWhenOmitted) {
   const char* argv[] = {"program", "--patterns"};
 
   EXPECT_EQ(parse_arguments(2, const_cast<char**>(argv), config), EXIT_SUCCESS);
-  EXPECT_NE(config.pattern_seed, 0u);
+  EXPECT_EQ(config.pattern_seed, scoped_config_test_hooks.generated_seed());
   EXPECT_FALSE(config.user_specified_pattern_seed);
 }
 
@@ -615,7 +681,7 @@ TEST(ConfigTest, ParseBenchmarkGeneratesSeedWhenOmitted) {
   const char* argv[] = {"program", "--benchmark"};
 
   EXPECT_EQ(parse_arguments(2, const_cast<char**>(argv), config), EXIT_SUCCESS);
-  EXPECT_NE(config.benchmark_seed, 0u);
+  EXPECT_EQ(config.benchmark_seed, scoped_config_test_hooks.generated_seed());
   EXPECT_FALSE(config.user_specified_benchmark_seed);
 }
 
@@ -880,6 +946,7 @@ TEST(ConfigTest, ParseHelpFlag) {
   
   int result = parse_arguments(argc, const_cast<char**>(argv), config);
   EXPECT_EQ(result, EXIT_SUCCESS);  // Help returns SUCCESS
+  EXPECT_TRUE(config.help_printed);
 }
 
 // Test parsing --benchmark flag

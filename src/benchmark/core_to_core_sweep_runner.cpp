@@ -28,10 +28,10 @@
 #include "benchmark/core_to_core_latency.h"
 #include "core/config/constants.h"
 #include "core/config/sweep_utils.h"
-#include "core/config/version.h"
 #include "core/signal/signal_handler.h"
 #include "core/timing/timer.h"
 #include "output/console/messages/messages_api.h"
+#include "output/console/output_printer.h"
 #include "output/json/json_output/json_output_api.h"
 #include "third_party/nlohmann/json.hpp"
 
@@ -124,7 +124,7 @@ SweepExecutionResult execute_core_to_core_sweep_plan(const std::vector<nlohmann:
 
 int run_core_to_core_latency_sweep(const CoreToCoreLatencyConfig& base_config) {
   const size_t run_count = calculate_core_to_core_sweep_run_count(base_config);
-  std::cout << Messages::usage_header(SOFTVERSION);
+  print_runtime_banner();
   std::cout << Messages::msg_running_sweep(run_count) << std::endl;
 
   BenchmarkSignalMaskGuard signal_guard;

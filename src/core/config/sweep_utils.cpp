@@ -44,9 +44,6 @@ ParsedSweepText parse_sweep_text(const std::string& specification) {
     value_start = comma + 1;
   }
 
-  if (parsed.values.empty()) {
-    throw std::invalid_argument("sweep value list cannot be empty");
-  }
   for (const std::string& value : parsed.values) {
     if (value.empty()) {
       throw std::invalid_argument("sweep value list cannot contain empty values");

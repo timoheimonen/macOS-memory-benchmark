@@ -15,17 +15,46 @@
 
 /**
  * @file test_utils.cpp
- * @brief Unit tests for shared progress and thread utilities
+ * @brief Unit tests for shared seed, progress, and thread utilities
  */
 
 #include <gtest/gtest.h>
 
+#include "utils/seed_utils.h"
 #include "utils/utils.h"
 
 #include <atomic>
 #include <sstream>
 #include <thread>
 #include <vector>
+
+TEST(SeedUtilsTest, GenerateSeedUsesInjectedProviderExactlyOnce) {
+  size_t provider_calls = 0;
+
+  const uint64_t seed = SeedUtils::generate_seed([&provider_calls]() {
+    ++provider_calls;
+    return 0x123456789abcdef0ULL;
+  });
+
+  EXPECT_EQ(seed, 0x123456789abcdef0ULL);
+  EXPECT_EQ(provider_calls, 1U);
+}
+
+TEST(SeedUtilsTest, GenerateSeedAlwaysReturnsNonZero) {
+  EXPECT_NE(SeedUtils::generate_seed(), 0U);
+}
+
+TEST(SeedUtilsTest, ZeroProviderResultFallsBackToNonZeroGeneration) {
+  size_t provider_calls = 0;
+
+  const uint64_t seed = SeedUtils::generate_seed([&provider_calls]() {
+    ++provider_calls;
+    return 0;
+  });
+
+  EXPECT_NE(seed, 0U);
+  EXPECT_EQ(provider_calls, 1U);
+}
 
 TEST(ProgressSpinnerTest, ForcedDisabledModeProducesNoOutput) {
   std::ostringstream output;

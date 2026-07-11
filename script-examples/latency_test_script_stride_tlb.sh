@@ -128,6 +128,10 @@ rows = []
 for path in sorted(json_dir.glob("*.json")):
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
+        if data.get("mode") == "gpu_bandwidth" and data.get("schema_version") == 1:
+            raise RuntimeError(
+                "GPU bandwidth schema 1 is not supported by this standard CPU latency extractor"
+            )
         cfg = data.get("configuration", {})
         cache = data.get("cache", {}) or {}
         custom = cache.get("custom", {}) or {}

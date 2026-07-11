@@ -37,7 +37,6 @@
 
 // Forward declarations to avoid including headers
 struct BenchmarkConfig;
-struct BenchmarkBuffers;
 struct BenchmarkExecutionState;
 struct HighResTimer;
 
@@ -138,8 +137,8 @@ struct BenchmarkRunnerTestHooks {
   bool force_timer_creation_failure = false;
   std::function<bool()> stop_requested;
   std::function<double()> elapsed_seconds;
-  std::function<BenchmarkResults(const BenchmarkBuffers&, BenchmarkConfig&, int,
-                                 HighResTimer&, BenchmarkExecutionState*)>
+  std::function<BenchmarkResults(BenchmarkConfig&, int, HighResTimer&,
+                                 BenchmarkExecutionState*)>
       execute_loop;
   std::function<int(const BenchmarkConfig&, const BenchmarkStatistics&, double,
                     bool)>
@@ -148,7 +147,6 @@ struct BenchmarkRunnerTestHooks {
 
 /**
  * @brief Run all benchmark loops and collect statistics
- * @param buffers Reference to benchmark buffers structure (unused in phase-local allocation mode)
  * @param config Reference to benchmark configuration
  * @param[out] stats Reference to BenchmarkStatistics structure to store aggregated results
  * @param test_hooks Optional deterministic dependency seams; null in production
@@ -161,8 +159,7 @@ struct BenchmarkRunnerTestHooks {
  * Exceptions from execution and injected dependencies are converted to failed
  * status and do not propagate across this coordinator boundary.
  */
-int run_all_benchmarks(const BenchmarkBuffers& buffers, BenchmarkConfig& config,
-                       BenchmarkStatistics& stats,
+int run_all_benchmarks(BenchmarkConfig& config, BenchmarkStatistics& stats,
                        const BenchmarkRunnerTestHooks* test_hooks = nullptr);
 
 #endif // BENCHMARK_RUNNER_H

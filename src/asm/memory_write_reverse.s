@@ -44,7 +44,6 @@
 .global _memory_write_reverse_loop_asm
 .align 4
 _memory_write_reverse_loop_asm:
-    mov x3, xzr             // offset = 0 (tracked as end_ptr)
     add x3, x0, x1          // end_ptr = dst + byteCount
     // 512B blocks chosen as sweet spot: large enough for high throughput,
     // small enough to fit in L2 cache, avoids TLB pressure on large regions
@@ -103,7 +102,6 @@ write_reverse_cleanup:         // Tail handling when <512B remain
     b.ls write_reverse_loop_end     // If done (unsigned <=), exit
 
     subs x5, x3, x0         // Recalc remaining (x5)
-    sub x7, x3, x5          // block_start = end_ptr - remaining
 
     // Handle 256B chunks (8 stnp pairs)
     cmp x5, #256

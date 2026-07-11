@@ -2,9 +2,10 @@
 
 ## 1. Scope and Status
 
-This document specifies the current implementation in this repository (version `0.60.0`) for `memory_benchmark` on macOS Apple Silicon.
+This document specifies the current implementation in this repository (version `0.61.0`) for `memory_benchmark` on macOS Apple Silicon.
 
-It is intentionally implementation-driven and reflects real behavior in code paths under `main.cpp`, `src/core`, `src/benchmark`, `src/pattern_benchmark`, `src/output`, and `src/asm`.
+It is intentionally implementation-driven and reflects real behavior in code paths under `main.cpp`, `src/core`,
+`src/benchmark`, `src/pattern_benchmark`, `src/gpu_bandwidth`, `src/output`, and `src/asm`.
 
 Primary goals:
 
@@ -19,17 +20,27 @@ Out of scope:
 - Generic memory-performance theory (see [LATENCY_WHITEPAPER.md](LATENCY_WHITEPAPER.md)).
 - `--analyze-tlb` methodology details (see [TLB_ANALYSIS_WHITEPAPER.md](TLB_ANALYSIS_WHITEPAPER.md)).
 - `--analyze-core2core` methodology details (see [CORE_TO_CORE_WHITEPAPER.md](CORE_TO_CORE_WHITEPAPER.md)).
+- Detailed `--gpu-bandwidth` methodology and schema field catalog (see
+  [GPU_BANDWIDTH_WHITEPAPER.md](GPU_BANDWIDTH_WHITEPAPER.md)).
 - Historical behavior from older releases.
 
 ## 2. Platform and Build Constraints
 
 - Target OS: macOS.
 - Target CPU architecture: ARM64 Apple Silicon.
-- Language: C++17 with ARM64 Apple Silicon assembly kernels.
+- Language: C++17 with ARM64 Apple Silicon assembly kernels and one Objective-C++ Metal backend.
 - Build: `Makefile` (`clang++`, `as`).
 - Test framework: GoogleTest (`test_runner`).
+- Deployment target: macOS 11.0 for production, tests, assembly, and links.
+- First-party link dependencies: `-framework Metal -framework Foundation`; no new third-party production dependency.
+- Objective-C++ sources are auto-discovered and compiled with ARC. Production/test links share one framework list, and
+  coverage includes production `.mm` beside `.cpp`.
+- GPU MSL is embedded canonical source compiled at runtime as MSL 2.3. The build does not require an offline `.metallib`,
+  binary archive, persistent pipeline cache, or the optional Metal Toolchain component.
 
-The tool is designed and tuned for Apple Silicon execution characteristics (cache hierarchy, page behavior, QoS, and assembly kernels).
+The tool is designed and tuned for Apple Silicon execution characteristics (cache hierarchy, page behavior, unified
+memory, QoS, ARM64 assembly, and Metal compute). GPU mode requires a default Metal device with unified memory and
+`supportsFamily(MTLGPUFamilyApple7)`. This is a capability boundary, not a throughput baseline.
 
 ## 3. Hardware Limitations
 
@@ -58,10 +69,12 @@ Recommendation:
 
 Main orchestration (`main.cpp`) follows this pipeline:
 
-Standalone modes use dedicated runners but enter through different configuration paths. `--analyze-core2core` is
-pre-routed before the general parser and uses `CoreToCoreLatencyConfig`. `--analyze-tlb` is parsed into
-`BenchmarkConfig` by a dedicated branch in `parse_arguments`, then dispatched after shared validation and preparation.
-The pipeline below applies to standard/pattern benchmark execution.
+`select_primary_benchmark_mode` scans all mode flags before mode-specific parsing, so a command containing multiple
+primary modes
+fails deterministically instead of being routed by the first token. Core-to-core uses `CoreToCoreLatencyConfig`; GPU uses
+`GpuBandwidthConfig`; TLB uses a dedicated branch that populates `BenchmarkConfig`. GPU is dispatched before the general
+timer/parser pipeline and never calls CPU config validation or buffer/access derivation. The numbered pipeline below
+applies to standard/pattern execution.
 
 1. Create high-resolution total-execution timer.
 2. Parse CLI arguments into `BenchmarkConfig` (`parse_arguments`).
@@ -82,6 +95,20 @@ The pipeline below applies to standard/pattern benchmark execution.
 
 Memory cleanup is RAII-based through `MmapPtr` custom deleters (`munmap` on scope exit).
 
+GPU mode follows its own synchronous pipeline:
+
+1. Parse and validate the exact GPU option whitelist and derive buffer bytes/seed.
+2. Apply shared best-effort main-thread QoS and enter `BenchmarkSignalMaskGuard`.
+3. Create the pure-C++ `GpuBackend` factory product and initialize the private Metal backend.
+4. Verify default device, unified memory, Apple7 family, runtime MSL compilation/pipelines, `maxBufferLength`, and
+   two-buffer memory budget.
+5. Allocate two private/tracked data buffers plus one shared/tracked status buffer for the suite lifetime.
+6. Resolve excluded automatic calibration or exact explicit work, then freeze read/write/copy plans.
+7. Execute cyclic operation tasks. Each logical task is warmup → precondition → one timed command buffer → required
+   validation, followed by status/counter/aggregate update and optional atomic checkpoint.
+8. Release Metal resources, record the final allocation/environment snapshot, replace the final production checkpoint,
+   render console results, and return success/failure according to explicit run status.
+
 ## 5. Configuration Model
 
 Configuration state is represented by `BenchmarkConfig` (`src/core/config/config.h`).
@@ -93,11 +120,12 @@ Configuration state is represented by `BenchmarkConfig` (`src/core/config/config
 - Standalone TLB state remains in `BenchmarkConfig` (`analyze_tlb`, density, seed, stride/chain settings, and common sweep
   fields) and is populated by the dedicated `--analyze-tlb` branch in `argument_parser.cpp`.
 - `--analyze-core2core` is pre-routed in `main.cpp` and uses the separate `CoreToCoreLatencyConfig` parser/runner path.
+- `--gpu-bandwidth` is pre-routed in `main.cpp` and uses separate `GpuBandwidthConfig`: per-buffer MB/bytes, optional
+  explicit passes, loop count, output path, base seed/source, help state, and exact argv.
 - Cache behavior: auto L1/L2 or user-provided `--cache-size`.
 - Latency sampling: `latency_sample_count`.
-- Latency-chain construction mode:
-  - `latency_chain_mode` (type `LatencyChainMode`, CLI flag `--latency-chain-mode`)
-  - `user_specified_latency_chain_mode` flag
+- Latency-chain construction mode: `latency_chain_mode` (type `LatencyChainMode`,
+  CLI flag `--latency-chain-mode`).
 - TLB-locality control for latency chain construction:
   - `latency_tlb_locality_bytes` (default 1024 KB)
   - `0` means global random chain.
@@ -122,6 +150,13 @@ Configuration state is represented by `BenchmarkConfig` (`src/core/config/config
 - `--latency-chain-mode` accepts string values and resolves to `LatencyChainMode` enum.
 - `--analyze-tlb` uses an early dedicated parse branch in `argument_parser.cpp`. It only allows optional `--output`, `--latency-stride-bytes`, `--latency-chain-mode`, `--tlb-density`, `--seed`, `--sweep`, and `--sweep-max-runs`. TLB sweep supports `latency-stride-bytes`, `latency-chain-mode`, and `tlb-density`; its default run guard is `16`, and `global-random` chain mode is rejected. One generated or user-provided seed drives the pure sweep planner, seeded cyclic Latin round scheduler, derived task seeds, layout-specific page-native chain permutations, and deterministic convergence bootstrap. Each task measures a verified one-node-per-page spread chain and an equal-cache-line packed control in the same round. A pilot calibrates whole-chain accesses toward the quick/standard/exhaustive target duration; rounds stop at the per-point CI-width target or profile maximum. Candidate buffers are admitted only when their predicted buffer-plus-scratch peak fits the available-memory budget. Full methodology and JSON contract: [TLB_ANALYSIS_WHITEPAPER.md](TLB_ANALYSIS_WHITEPAPER.md).
 - `--analyze-core2core` uses dedicated mode parsing (outside `argument_parser.cpp`) and only allows optional `--output`, `--count`, `--latency-samples`, `--sweep`, and `--sweep-max-runs`. Its mode-specific loop default is `3`; the general loop default remains `1`. Core-to-core sweep supports `count` and `latency-samples`, rejects duplicate sweep keys, and atomically checkpoints the combined output after every attempted run; only a nested `status: "complete"` result with `measurements_complete: true` increments `completed_runs`. Direct and sweep execution use the shared scope-bound signal guard before creating workers and restore the calling thread's exact previous mask on every return path. Each scheduler-hint scenario runs an excluded pilot after a 1,000,000-round-trip calibration warmup, reuses its duration-calibrated plan across measured loops, and participates in a cyclic Latin-square scenario schedule. Full methodology and JSON schema 2 contract: [CORE_TO_CORE_WHITEPAPER.md](CORE_TO_CORE_WHITEPAPER.md).
+- `--gpu-bandwidth` uses a dedicated parser outside `argument_parser.cpp`. It accepts only `-G`/`--gpu-bandwidth`,
+  `-b`/`--buffer-size`, `-i`/`--iterations`, `-r`/`--count`, `--seed`, `-o`/`--output`, and
+  `-h`/`--help`. Duplicates, unknown/incompatible options, missing values, partial numeric tokens, non-positive
+  iterations/count, and signed seeds fail before Metal work. Defaults are 512 MB per buffer, three loops, generated
+  seed, and automatic passes. Buffer size must be at least 64 MB; checked MB→bytes overflow and explicit work guardrails
+  are resolved before backend creation. Copy's 2× payload makes its pass limit the strict CLI ceiling shared by all three
+  operations. GPU schema 1 rejects sweep options.
 
 ### 6.2 Validation behavior (`config_validator.cpp`)
 
@@ -154,6 +189,18 @@ Memory-limit model:
 - Global cap uses `MEMORY_LIMIT_FACTOR` (80%).
 - Per-main-buffer cap is mode-aware (1 or 2 main buffers, depending on active mode/phase needs).
 - A second peak-concurrent allocation check validates the highest active phase footprint (main + cache paths).
+
+GPU validation is separate from `config_validator.cpp`:
+
+- The requested buffer is never silently reduced. Each data buffer must fit `MTLDevice.maxBufferLength`, and
+  `2 × buffer + 4096 auxiliary bytes` must fit 80% of the project's available-memory estimate. When that estimate is
+  zero, the existing 2048 MiB fallback total budget applies.
+- `recommendedMaxWorkingSetSize` is advisory and serialized with signed byte/relative headroom plus an exceeded flag; it
+  is not the hard allocation limit.
+- Each measured plan is bounded by 16,384 dispatches and 64 GiB exact payload. Read/write count one buffer per pass;
+  copy counts two.
+- Device initialization is unsupported without a default Metal device, unified memory, or Apple7-family capability.
+  Unknown future device names are not rejected when required capabilities succeed.
 
 ## 7. Size and Access Derivation
 
@@ -197,6 +244,18 @@ Allocated buffer families (conditional):
 
 Pattern mode intentionally allocates and uses only main source/destination buffers.
 
+GPU mode does not use `mmap` buffers. The Metal backend allocates once before calibration and retains for the full suite:
+
+- `buffer_a` and `buffer_b`: each exactly the requested size with
+  `MTLResourceStorageModePrivate | MTLResourceHazardTrackingModeTracked`.
+- `status_buffer`: 4096 bytes with
+  `MTLResourceStorageModeShared | MTLResourceHazardTrackingModeTracked` for timed/validation checksums.
+
+The backend reads back and serializes actual storage, CPU-cache, hazard-tracking, resource-option, label, and length
+metadata. On Apple Silicon, private resources remain allocations in unified system memory and must not be documented as
+separate VRAM. Partial allocation is released, and `currentAllocatedSize` is captured before allocation, at suite peak,
+and after release.
+
 ### 8.2 Best-effort non-cacheable mode
 
 - `allocate_buffer_non_cacheable` still uses normal user-space mappings.
@@ -215,6 +274,12 @@ Initialization semantics:
 - Bandwidth buffers: deterministic source pattern + zeroed destination.
 - Latency buffers: deterministically seeded, randomized pointer-chasing circular chain via `setup_latency_chain`.
 - Allocation/initialization happen before phase timing starts and are excluded from measured benchmark durations.
+
+GPU initialization/precondition is compute-based and deterministic. Read fills A with a seed-derived source pattern;
+write poisons A before the timed kernel writes a pass-derived pattern; copy fills A with source data and B with poison.
+Every excluded calibration attempt and measured task runs a same-shape warmup and then restores this deterministic state
+before timing. Timed/final dual checksum words are reset outside the primary duration. GPU caches are not flushed, so the
+contract is steady-state warm-memory.
 
 ## 9. Latency-Chain Construction Contract
 
@@ -239,7 +304,8 @@ The `LatencyChainMode` enum (from `src/core/memory/memory_utils.h`) defines four
 - Uses stride-spaced pointer slots across buffer.
 - Requires at least two pointers.
 - Produces a circular linked structure.
-- Collects chain diagnostics (pointer count, unique pages touched, page size, stride).
+- Supports optional chain diagnostics (pointer count, unique pages touched, page size, stride)
+  when a caller supplies an output object; production benchmark setup does not request them.
 
 ### 9.3 Randomization Behavior
 
@@ -334,7 +400,151 @@ Implementation notes:
 - Large-stride patterns can be skipped when constraints invalidate execution.
 - Pattern statistics are aggregated across completed outer-loop measurements; unavailable operations are excluded.
 
-## 13. Assembly Kernel Layer
+## 13. GPU Bandwidth Execution
+
+GPU mode is implemented in `src/gpu_bandwidth/` behind a pure C++ `GpuBackend` interface. The concrete Objective-C++
+backend is synchronous, uses bounded autorelease pools, retains suite resources until explicit release/destruction, and
+converts nil/NSError/command failures into status-bearing C++ results. No Objective-C type crosses the public boundary.
+
+### 13.1 Runtime compilation and capability contract
+
+`MTLCreateSystemDefaultDevice` must succeed, `hasUnifiedMemory` must be true, and
+`supportsFamily(MTLGPUFamilyApple7)` must succeed. Supported Apple family names plus availability-guarded Metal3/Metal4
+families are diagnostic metadata; a future GPU is accepted by capability rather than a device-name allowlist.
+
+The embedded canonical source is compiled once outside measured work with `newLibraryWithSource` using:
+
+- `MTLLanguageVersion2_3`
+- Integer-only kernels (`floating_point_math: "not_applicable_integer_only"`)
+- Empty preprocessor macros
+- Kernel revision `gpu-linear-word-mod32-tg-reduce-v2`
+- SHA-256 over the exact canonical UTF-8 source bytes
+
+Compilation metadata includes the source hash, compiler identifier, build SDK, deployment target, macOS product/build,
+and compiler diagnostics. A non-nil `MTLLibrary` is runtime success even if NSError carries a warning; a nil library is
+failure. The source hash identifies input bytes, not generated GPU machine code, so macOS build remains part of a strict
+comparison cohort.
+
+### 13.2 Work plan and compute geometry
+
+Read, write, and copy derive domain-separated operation seeds with SplitMix64. Each immutable plan records requested and
+effective bytes (identical; no silent reduction), pass and exact-payload accounting, guardrail ceilings, vector/tail
+shape, pipeline limits, dispatch geometry, and a canonical `gpu-work-plan-v1` identity.
+
+The grid contract is deterministic:
+
+1. Process full regions as consecutive 16-byte `uint4` values; a direct backend path safely handles a 0–15 byte tail.
+2. Choose the largest `threadExecutionWidth` multiple not exceeding
+   `min(256, maxTotalThreadsPerThreadgroup)`.
+3. Choose `min(ceil(vector_count / threads_per_threadgroup), 8192)` threadgroups, at least one.
+4. Cover all vectors with a grid-stride loop.
+5. Encode one full-buffer dispatch per pass. A measured attempt records exactly one command buffer and one serial compute
+   encoder; maximum dispatch count is 16,384 and maximum exact payload is 64 GiB.
+
+Read/write bytes per pass equal the buffer size. Copy bytes per pass equal twice the buffer size and alternates A→B/B→A
+by pass parity. Every operation's `gpu-dual-mod32-v2` timed kernel contributes an observable dual modulo-2^32
+accumulator. Each word affects the data/index reduction; after its loop, each GPU thread multiplies its two local lanes
+once by pass-specific odd domain weights. Global thread zero then contributes one nonzero token per lane and dispatch.
+The versioned weight/token keys mix operation seed, 64-bit buffer size, pass, operation, and copy direction, avoiding the
+power-of-two population collapse of per-word pass terms. The independent CPU oracle uses closed-form pattern summaries
+and O(passes) work. Reduction/status traffic is inside GPU time but outside exact payload. Write/copy retain the separate
+`gpu-dual-mod32-v1` final-buffer checksum.
+
+### 13.3 Calibration, warmup, ordering, and aggregation
+
+Automatic mode resolves each operation once before loop 0:
+
+1. Pick a pilot that covers at least 8 MiB when guardrails permit.
+2. Run excluded warmup, deterministic precondition, timed pilot, and mandatory validation.
+3. Scale toward 150 ms, run an excluded duration trial, and make at most two excluded corrections when outside the
+   inclusive 100–250 ms window.
+4. Freeze the last valid plan and reuse it unchanged in all measured loops.
+
+Explicit `--iterations` skips pilot/trial/corrections but not measured-task warmup/preconditioning. All excluded attempts
+remain in JSON. A later out-of-window measurement is retained/classified, not retried or recalibrated. Duration quality
+distinguishes within/below/above window, single-pass overrun, and dispatch/payload-cap-limited short work.
+
+Loop order rotates read→write→copy, write→copy→read, and copy→read→write. Only `measured` plus passed validation values
+enter aggregates. A single value is its own headline; multiple values use median P50 and shared descriptive statistics.
+Fewer than three values is `insufficient-samples`; CV above 5% is `noisy`; otherwise `stable`. No outlier filtering or
+winsorization occurs. Order balance is complete only when the whole run is complete and completed loops are divisible by
+three.
+
+### 13.4 Timing and correctness boundaries
+
+The primary duration is read after completion as:
+
+```text
+gpu_elapsed_seconds = command_buffer.GPUEndTime - command_buffer.GPUStartTime
+value_gb_s = exact_payload_bytes / gpu_elapsed_seconds / 1e9
+```
+
+The timestamp delta must be finite, positive, ordered, and consistent with the stored elapsed value. Host submit,
+wait-end, and wall duration are diagnostic and never the GB/s denominator. The timed command buffer contains only one
+operation's frozen dispatches. Pipeline creation, fill/poison, warmup, precondition, final checksum, and test readback are
+excluded command buffers.
+
+Read correctness is established by comparing the timed dual accumulator against the independent CPU formula, without a
+new GPU validation command. Write/copy require the same timed accumulator plus one excluded full-buffer final-checksum
+dispatch. The direct Metal integration test additionally blits the private output to a shared staging buffer and compares
+bytes against an independent CPU oracle, including multi-pass copy parity and tail sizes. A checksum mismatch is
+`invalid`; a Metal/validation command error is `failed`; an invalid timestamp is `invalid` with validation
+`not-run-timer-invalid`. Phase lifecycle metadata records zero validation status resets for read and one host reset for
+write/copy before the final-checksum dispatch. Only a passed terminal attempt gets numeric bandwidth.
+
+### 13.5 Interruption and checkpoint linearization
+
+The runner uses task-level completion-wins. Stop is checked before a logical task and after its terminal result, not
+between warmup, precondition, timed command, and required validation. Once started, that sequence finishes subject to
+normal error short-circuiting. A valid current result stays measured even if SIGINT/SIGTERM arrived during it; no next
+task starts. A genuine command/timer/validation/checkpoint failure has priority over interruption.
+
+Every planned loop has three pre-created measurement slots. Interruption finalization preserves terminal slots and turns
+every remaining `not-run` slot into `interrupted`, `value_gb_s: null`, reason `interruption-before-task`. Such slots do
+not increment attempted/completed counters. `results_complete` and `conclusions_valid` are true only for top-level
+complete with every planned measurement validated. A graceful interrupt returns `EXIT_SUCCESS` but serializes
+`status: "interrupted"` and false conclusions.
+
+With output enabled, the shared atomic writer checkpoints after each terminal measurement. The runner reads stop once
+before and once immediately after that checkpoint; if the second read first observes the signal, it writes at most one
+additional interruption checkpoint. Valid post-parse pre-run unsupported/backend/compile/allocation/work-plan failures
+also produce one checkpoint. CLI/config errors, including a buffer below 64 MB, do not. A checkpoint failure stops the
+run as failed; the file may remain at the preceding successful checkpoint.
+
+### 13.6 Interpretation and validation boundary
+
+The result is effective versioned-kernel payload bandwidth at the Metal command-buffer timing boundary. JSON fixes
+`dram_residency` to `unverified`. Private storage, buffer size, or a positive result cannot prove DRAM traffic; GPU cache,
+dispatch processing, checksum reduction, other GPU load, thermals, Low Power Mode, compiler, and driver remain factors.
+Copy is aggregate read-plus-write and may numerically exceed a one-direction bus figure. CPU/GPU values are not directly
+comparable despite sharing decimal GB/s and copy 2× accounting.
+
+The M4 Instruments audit exposed no usable memory-traffic counter, so it could not isolate or quantify timed accumulator
+reduction/status-atomic traffic. That auxiliary traffic is included in GPU elapsed time but excluded from the logical
+payload numerator; the separate final checksum remains outside primary timing.
+
+Apple7 plus unified memory defines capability support. It does not validate performance. M4 is the schema-1 release
+reference cohort: the completed 0.61.0 automatic and fixed-work populations establish a stable effective-payload baseline
+for their exact hardware, OS, compiler, kernel, and methodology identity. The frozen pre-remediation validation identity uses
+`gpu-linear-word-mod32-tg-reduce-v2`, the frozen 8192-threadgroup cap, canonical MSL SHA-256
+`b9a242d2b959c9c11f6f130a52afd66f111d6761be2193beec1f051baa094296`, and the exact executable identity retained
+with the local validation record. The current 0.61.0 source SHA-256 is
+`21def2d75d3545dba31aa4897ea57ec2fd0e4481cd86ce21725338ab0f322ac5` after removing three unread shared-parameter
+fields; runtime Metal integration revalidates compilation and correctness, while the performance population remains
+tied to the frozen pre-remediation identity. Automatic read/write/copy
+median-of-process-medians are 88.606742648049/74.383866793814/78.583784905446 GB/s with cross-process CV
+0.221498348705/0.967311621904/0.310543092510%; fixed-24 values are
+91.074797816490/75.240302989483/78.508461231110 GB/s with CV
+0.506707339121/0.827667144983/0.326577301613%. The accepted grid gate retained 8192 because 4096 write was more than 2%
+below the best candidate. The final Instruments audits did not expose a usable memory-traffic counter or a way to
+isolate timed reduction overhead, so neither the baseline nor private storage proves DRAM throughput and
+`dram_residency` remains `unverified`. Complete rejected populations were retained without cherry-picking. The large
+raw validation record is local-only and intentionally excluded from Git. An admitted M1/Apple7 or newer GPU remains
+capability-supported and performance-unvalidated until runtime compilation, exact correctness, timestamp smoke, and
+the appropriate controlled performance campaign are recorded. Integration tests deliberately have no minimum-GB/s
+assert.
+
+## 14. Assembly Kernel Layer
 
 Assembly entrypoints are declared in `src/asm/asm_functions.h` and used by benchmark/warmup code:
 
@@ -359,7 +569,7 @@ Core-to-core kernels:
 - `core_to_core_responder_round_trips_asm`: Waits until the responder owns the token and hands it back to the
   initiator; coordinates via the shared token word.
 
-## 14. Timing Model
+## 15. Timing Model
 
 Timing API: `HighResTimer` (`src/core/timing/timer.*`).
 
@@ -367,7 +577,11 @@ Timing API: `HighResTimer` (`src/core/timing/timer.*`).
 - Used for both macro (test durations) and micro (latency sample windows) timing.
 - Factory creation returns optional; failure is treated as fatal at call sites.
 
-## 15. Statistics and Aggregation
+GPU primary timing does not use `HighResTimer`: it uses completed Metal command-buffer `GPUStartTime` and `GPUEndTime`.
+Host steady-clock submit/wait/wall values are diagnostic. Total GPU-mode host execution time uses steady clock and is
+separate from every operation denominator.
+
+## 16. Statistics and Aggregation
 
 `BenchmarkStatistics` and pattern statistics collect vectors per metric across outer loops.
 
@@ -377,7 +591,7 @@ Timing API: `HighResTimer` (`src/core/timing/timer.*`).
 
 For contention-prone environments, percentiles (P50/P95/P99) are more informative than mean-only interpretation.
 
-### 15.1 Statistics Fields
+### 16.1 Statistics Fields
 
 Computed from collected value vectors:
 
@@ -395,20 +609,29 @@ Computed from collected value vectors:
 Standard repeated-loop aggregates set a diagnostic quality warning above 7.5% CV. Values are retained without outlier
 filtering, and the warning does not by itself invalidate the result.
 
-## 16. Console Output Contract
+GPU aggregates use the same descriptive-statistics implementation, a 5% CV threshold, and only validated measured
+values. Multiple GPU loop values use median P50; fewer than three cannot receive a repeatability classification stronger
+than `insufficient-samples`.
+
+## 17. Console Output Contract
 
 Console rendering is centralized in `src/output/console` and message helpers in `src/output/console/messages`.
 
 Contract highlights:
 
+- Every successfully started direct mode and parameter sweep emits one shared version, copyright, and GPL banner
+  before mode-specific configuration or status output. Nested sweep runs do not repeat it. Help output and usage
+  diagnostics retain the separate usage preamble; preflight failures do not emit the runtime banner.
 - Configuration and cache info printed before execution.
 - Per-loop results are printed in standard mode.
 - Pattern mode prints pattern table-style sections and derived efficiency indicators.
+- GPU mode prints a separate device/private-tracked header, read/write/copy effective-payload headlines, repeatability,
+  and interpretation note. Copy is explicitly aggregate read + write and DRAM residency remains unverified.
 - Aggregate statistics printed when loop count > 1.
 - Errors and warnings use `Messages::error_prefix()` / `Messages::warning_prefix()` conventions.
 - Live progress uses the shared spinner on `stderr` only when it is a TTY; redirected standard and pattern output contains no carriage-return control sequences.
 
-## 17. JSON Output Contract
+## 18. JSON Output Contract
 
 JSON writer API (`src/output/json/json_output/json_output.cpp`):
 
@@ -418,6 +641,9 @@ JSON writer API (`src/output/json/json_output/json_output.cpp`):
   measurement counters, `results_complete`, optional retained `patterns` evidence, `timestamp`, and `version`.
 - TLB analysis mode: `configuration`, `execution_time_sec`, `tlb_analysis`, `timestamp`, `version`.
 - Core-to-core schema 2: calibrated methodology configuration, `core_to_core_latency` command completion metadata, scenario work plans, nullable aggregate values, per-loop order/status/duration/hint/sample-boundary records, and affinity-comparison interpretability metadata.
+- GPU schema 1: top-level mode/schema/methodology/status, exact counters and completeness, effective/copy/DRAM semantics,
+  config/argv, environment, backend device/compile/allocation, memory budget, frozen plans, excluded calibration,
+  status-bearing measurements/loop records, aggregates, and warnings.
 - Sweep mode: `configuration.mode = "sweep"`, `configuration.base_mode`, `configuration.sweep_parameters`, top-level `status`, `status_reason`, `planned_runs`, `attempted_runs`, `completed_runs`, and `conclusions_valid`, plus per-entry `runs[].status`, `status_reason`, and `result`. Every attempted run is checkpointed and `attempted_runs == runs.size()`. `completed_runs` requires nested `status: "complete"` and `results_complete: true` for standard/pattern, `tlb_analysis.status: "complete"` and `tlb_analysis.conclusions_valid: true` for TLB, or `core_to_core_latency.status: "complete"` and `measurements_complete: true` for core-to-core. Partial, interrupted, and failed attempts remain as evidence without incrementing the completed count. Top-level `conclusions_valid` is true only when top-level status is complete and `completed_runs == planned_runs`.
 
 Pattern schema 3 plans 21 measurements per loop and treats numeric measured values plus intentional skips as terminal.
@@ -426,7 +652,7 @@ loop measurements remain in JSON as evidence, while command status/counters keep
 failure may omit `patterns`; main and sweep orchestration still build the completion payload before returning or
 classifying the failure.
 
-### 17.1 Configuration keys
+### 18.1 Configuration keys
 
 In addition to standard fields (buffer size, iterations, loop count, thread count, CPU/OS info):
 
@@ -440,7 +666,7 @@ In addition to standard fields (buffer size, iterations, loop count, thread coun
 - `benchmark_seed` (string): exact uint64 decimal string plus source/encoding fields.
 - Calibration targets/windows and phase/operation schedule policies.
 
-### 17.2 Main-memory latency keys
+### 18.2 Main-memory latency keys
 
 - `main_memory.latency.headline_ns`: status, median-or-single headline, loop values, robust statistics, measurement
   records, quality, and optional pooled separate-sample distribution with loop boundaries.
@@ -450,14 +676,14 @@ In addition to standard fields (buffer size, iterations, loop count, thread coun
 - `loops[].measurements`: nullable per-loop status/value plus exact work, worker, seed, timing, calibration, and order
   metadata.
 
-### 17.3 Structure conventions
+### 18.3 Structure conventions
 
 - Ordered JSON is used for stable key order.
 - Aggregate `value` is a single measured loop or median P50; `values` contains only measured loop headlines.
 - Statistics include average, median, P90/P95/P99, sample stddev, CV, MAD, min, and max.
 - Unavailable measurements use `null` plus status/reason, never numeric zero.
 
-### 17.4 Core-to-core schema 2
+### 18.4 Core-to-core schema 2
 
 - `configuration.schema_version` (number): `2`.
 - `configuration.methodology_version` (string): `core2core-v2-calibrated-balanced-auditable`.
@@ -475,29 +701,55 @@ In addition to standard fields (buffer size, iterations, loop count, thread coun
   every measured record. It does not imply hard core pinning.
 - Invalid, failed, interrupted, and not-run measurements never become numeric zeroes.
 
-### 17.5 Path behavior
+### 18.5 GPU schema 1
+
+- Top-level discriminator is `schema_version: 1`, `mode: "gpu_bandwidth"`, methodology
+  `gpu-bandwidth-v1-private-runtime-single-cmdbuf-calibrated-balanced`; it is not nested under standard configuration.
+- Run statuses: `not-started`, `complete`, `partial`, `interrupted`, `failed`, `unsupported`. Measurement statuses:
+  `not-run`, `measured`, `interrupted`, `invalid`, `failed`. Only measured has finite positive `value_gb_s`; unavailable
+  state is `null` plus reason.
+- Exact counters distinguish planned/attempted/completed loops and planned/attempted/terminal/completed/validated
+  measurements. Completeness/conclusions require every planned measurement validated; order balance additionally requires
+  a multiple of three completed loops.
+- Payload semantics, copy 2× semantics, `dram_residency: "unverified"`, exact argv/configuration/seed, environment,
+  device/capabilities, compilation provenance, allocation/budget, work plans, excluded calibration attempts,
+  status-bearing measurements, planned/realized loop records, aggregates, and warnings are all explicit.
+- Seeds, buffer/payload/resource sizes, source-derived values that can exceed IEEE-754 exact-integer range, registry ID,
+  and checksums use schema-named decimal strings. Non-finite numeric diagnostics serialize as null.
+- Per-phase backend status, command status, command-buffer/encoder/dispatch counts, stable reason, and raw NSError
+  domain/code/description remain separate. Measurement timing includes GPU and host diagnostics; validation includes
+  separate `timed_accumulator_algorithm` and `final_checksum_algorithm` identities plus expected/actual checksums.
+- See [GPU_BANDWIDTH_WHITEPAPER.md](GPU_BANDWIDTH_WHITEPAPER.md) for the complete consumer/maintenance contract.
+
+### 18.6 Path behavior
 
 - Relative `--output` paths are resolved against current working directory.
 
-## 18. Error-Handling Model
+## 19. Error-Handling Model
 
 This codebase uses boundary-aware mixed error handling:
 
 - Program orchestration and most modules: return codes (`EXIT_SUCCESS`/`EXIT_FAILURE`).
 - Argument parsing internals: exceptions for parsing/validation, converted to return codes at API boundary.
 - Allocation internals: null smart-pointer returns for allocation failure.
+- Metal backend calls: synchronous/noexcept status results; nil/NSError/command failures become stable reason codes plus
+  separate raw diagnostics. GPU correctness/timer invalidity fails the run, unsupported capability remains distinct, and
+  graceful interruption is process success with invalid conclusions.
 
 Principle: no uncaught exceptions should escape to `main()` control flow.
 
-## 19. Concurrency Model
+## 20. Concurrency Model
 
 - Bandwidth and pattern bandwidth paths are parallelized by thread--count configuration.
 - Latency tests are intentionally single-threaded pointer-chase measurements.
 - Cache bandwidth tests default to one worker unless the user explicitly overrides `--threads`. Cache and
   main-memory latency tests remain single-threaded dependent pointer chases regardless of the bandwidth worker count.
 - Threaded work partitioning attempts cache-line-aware chunk handling to reduce false sharing effects.
+- GPU mode uses one Metal command queue and serial compute encoders. GPU grid threads are selected from pipeline
+  execution width and do not map to CPU `--threads`; the CLI rejects that option. The host runner does not submit the next
+  operation until the synchronous current task and required validation reach terminal state.
 
-## 20. Measurement Caveats and Interpretation Under Load
+## 21. Measurement Caveats and Interpretation Under Load
 
 The tool can be run on active systems with concurrent workloads, but interpretation must account for scheduler and memory-system contention.
 
@@ -507,10 +759,14 @@ Practical caveats:
 - Tail metrics (`P95`, `P99`) usually reveal contention more clearly than averages.
 - Comparing runs across time requires similar background-load conditions.
 - Small buffers can become cache-dominated and hide DRAM behavior.
+- GPU private buffers live in unified memory, not separate VRAM. GPU schema 1 cannot verify DRAM residency, and both
+  small and large buffers can include cache/dispatch/reduction effects. Copy uses logical read+write payload.
+- CPU and GPU GB/s should not be directly compared because timing, kernels, parallelism, resource modes, cache effects,
+  dispatch processing, and observable validation work differ.
 
 For high-confidence baselines, run repeated loops and analyze distributions rather than single-point values.
 
-## 21. Verification and Test Expectations
+## 22. Verification and Test Expectations
 
 Recommended validation commands:
 
@@ -519,13 +775,18 @@ Recommended validation commands:
 - Integration-only: `make test-integration`
 - Full test set: `make test-all`
 - CLI help smoke check: `./memory_benchmark -h`
+- GPU help smoke check: `./memory_benchmark --gpu-bandwidth --help`
+- GPU pure tests: `./test_runner --gtest_filter='GpuWorkPlanTest.*:ModeSelectorTest.*:HashUtilsTest.*'`
+- Real Metal contract: `./test_runner '--gtest_filter=GpuMetalBackendIntegrationTest.*'`; unsupported hardware may skip
+  this integration suite but does not replace deterministic unsupported-path coverage.
 
 For narrow changes, prefer targeted `gtest` filters via `./test_runner --gtest_filter=...`.
 
-## 22. Source Map (Primary Entry Points)
+## 23. Source Map (Primary Entry Points)
 
 - Program entry: `main.cpp`
 - Config parse/validate/derive:
+  - `src/core/config/mode_selector.cpp`
   - `src/core/config/argument_parser.cpp`
   - `src/core/config/config_validator.cpp`
   - `src/core/config/buffer_calculator.cpp`
@@ -546,9 +807,37 @@ For narrow changes, prefer targeted `gtest` filters via `./test_runner --gtest_f
 - Pattern benchmark:
   - `src/pattern_benchmark/pattern_coordinator.cpp`
   - `src/pattern_benchmark/output.cpp`
+- Standalone GPU bandwidth:
+  - `src/gpu_bandwidth/gpu_bandwidth.cpp`
+  - `src/gpu_bandwidth/gpu_work_plan.cpp`
+  - `src/gpu_bandwidth/gpu_runner.cpp`
+  - `src/gpu_bandwidth/gpu_json.cpp`
+  - `src/gpu_bandwidth/gpu_backend.h`
+  - `src/gpu_bandwidth/metal_gpu_backend.mm`
+  - `src/gpu_bandwidth/gpu_kernels_source.h`
 - Output:
   - `src/output/console/output_printer.cpp`
   - `src/output/json/json_output/*.cpp`
 - Assembly kernels:
   - `src/asm/*.s`
   - `src/asm/core_to_core_latency.s` (core-to-core latency measurements; see [CORE_TO_CORE_WHITEPAPER.md](CORE_TO_CORE_WHITEPAPER.md))
+
+## 24. GPU Metal Maintenance Policy
+
+- Every macOS major/minor/security build change defines a new GPU comparison cohort. Before baseline comparison, rerun
+  runtime compilation, exact read/write/copy/tail correctness, valid timestamp checks, automatic calibration, and a
+  fixed-seed/fixed-work repeatability campaign.
+- Every Xcode/Command Line Tools/SDK change requires clean production/test/coverage builds and real-Metal integration.
+- A new Apple GPU is admitted by capabilities, then starts a new hardware cohort. Capability success must not be
+  presented as performance validation.
+- Changes to MSL version/source/compile options, storage or hazard modes, checksum/reduction, grid cap/geometry, payload
+  accounting, timed command-buffer boundary, or interruption/completion semantics require methodology-version review and
+  normally a new validation population/schema compatibility decision.
+- Runtime source compilation is intentional: it preserves Command Line Tools builds without an optional Metal Toolchain,
+  but it does not freeze driver-generated machine code. The exact source SHA-256 and macOS build are both cohort keys.
+- More than a 10% fixed-work operation-median shift across macOS builds stops automatic rebaselining even if the new
+  cohort's CV is acceptable; compiler/driver, environment, and counter evidence must be investigated and documented.
+- Optional APIs such as Low Power Mode metadata remain availability-guarded. Missing optional metadata is unavailable,
+  not a crash or fabricated value. Historical files are never rewritten to resemble a newer methodology.
+- Instruments/GPU counters are an auditable separate run with tool/counter/raw-trace provenance. Capture overhead can
+  perturb timing, and counter traffic is not substituted for the production exact-payload/GPU-time value.

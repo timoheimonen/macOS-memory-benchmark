@@ -26,6 +26,7 @@
 
 #include "core/config/constants.h"
 #include "output/console/messages/messages_api.h"
+#include "utils/cyclic_order.h"
 #include "utils/numeric_utils.h"
 
 namespace {
@@ -219,16 +220,7 @@ size_t calculate_benchmark_calibrated_count(double pilot_duration_seconds,
 
 std::vector<size_t> build_benchmark_cyclic_order(size_t item_count,
                                                  size_t loop_index) {
-  std::vector<size_t> order;
-  order.reserve(item_count);
-  if (item_count == 0) {
-    return order;
-  }
-  const size_t start = loop_index % item_count;
-  for (size_t position = 0; position < item_count; ++position) {
-    order.push_back((start + position) % item_count);
-  }
-  return order;
+  return build_cyclic_order(item_count, loop_index);
 }
 
 BenchmarkPhaseExecutionResult execute_benchmark_phase_schedule(

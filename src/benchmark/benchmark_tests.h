@@ -27,7 +27,6 @@
 
 #include <cstddef>  // size_t
 #include <cstdint>  // uint64_t
-#include <atomic>   // std::atomic
 #include <functional>
 #include <vector>   // std::vector
 
@@ -43,42 +42,6 @@ struct LatencyMeasurementTestHooks {
 };
 
 // --- Benchmark Test Functions ---
-/**
- * @brief Run read benchmark test
- * @param buffer Pointer to buffer to read from
- * @param size Size of buffer in bytes
- * @param iterations Number of iterations to run
- * @param num_threads Number of threads to use
- * @param checksum Reference to atomic checksum accumulator
- * @param timer Reference to high-resolution timer
- * @return Total elapsed time in seconds
- */
-double run_read_test(void* buffer,
-                     size_t size,
-                     int iterations,
-                     int num_threads,
-                     std::atomic<uint64_t>& checksum,
-                     HighResTimer& timer);
-
-/**
- * @brief Run read benchmark test with a specific assembly read kernel
- * @param buffer Pointer to buffer to read from
- * @param size Size of buffer in bytes
- * @param iterations Number of iterations to run
- * @param num_threads Number of threads to use
- * @param checksum Reference to atomic checksum accumulator
- * @param timer Reference to high-resolution timer
- * @param read_func Assembly read kernel to invoke
- * @return Total elapsed time in seconds
- */
-double run_read_test_with_kernel(void* buffer,
-                                 size_t size,
-                                 int iterations,
-                                 int num_threads,
-                                 std::atomic<uint64_t>& checksum,
-                                 HighResTimer& timer,
-                                 uint64_t (*read_func)(const void*, size_t));
-
 double run_read_test_with_plan(void* buffer,
                                const BenchmarkWorkPlan& plan,
                                uint64_t& checksum,
@@ -97,23 +60,6 @@ double run_read_test_with_plan(void* buffer,
  */
 double run_write_test(void* buffer, size_t size, int iterations, int num_threads, HighResTimer& timer);
 
-/**
- * @brief Run write benchmark test with a specific assembly write kernel
- * @param buffer Pointer to buffer to write to
- * @param size Size of buffer in bytes
- * @param iterations Number of iterations to run
- * @param num_threads Number of threads to use
- * @param timer Reference to high-resolution timer
- * @param write_func Assembly write kernel to invoke
- * @return Total elapsed time in seconds
- */
-double run_write_test_with_kernel(void* buffer,
-                                  size_t size,
-                                  int iterations,
-                                  int num_threads,
-                                  HighResTimer& timer,
-                                  void (*write_func)(void*, size_t));
-
 double run_write_test_with_plan(void* buffer,
                                 const BenchmarkWorkPlan& plan,
                                 HighResTimer& timer,
@@ -131,25 +77,6 @@ double run_write_test_with_plan(void* buffer,
  * @return Total elapsed time in seconds
  */
 double run_copy_test(void* dst, void* src, size_t size, int iterations, int num_threads, HighResTimer& timer);
-
-/**
- * @brief Run copy benchmark test with a specific assembly copy kernel
- * @param dst Pointer to destination buffer
- * @param src Pointer to source buffer
- * @param size Size of buffers in bytes
- * @param iterations Number of iterations to run
- * @param num_threads Number of threads to use
- * @param timer Reference to high-resolution timer
- * @param copy_func Assembly copy kernel to invoke
- * @return Total elapsed time in seconds
- */
-double run_copy_test_with_kernel(void* dst,
-                                 void* src,
-                                 size_t size,
-                                 int iterations,
-                                 int num_threads,
-                                 HighResTimer& timer,
-                                 void (*copy_func)(void*, const void*, size_t));
 
 double run_copy_test_with_plan(void* dst,
                                void* src,
@@ -171,20 +98,5 @@ double run_copy_test_with_plan(void* dst,
 double run_latency_test(void* buffer, size_t num_accesses, HighResTimer& timer,
                         std::vector<double>* latency_samples = nullptr, int sample_count = 0,
                         const LatencyMeasurementTestHooks* test_hooks = nullptr);
-
-/**
- * @brief Run cache latency benchmark test
- * @param buffer Pointer to cache latency test buffer (must be initialized with setup_latency_chain)
- * @param buffer_size Size of buffer in bytes
- * @param num_accesses Number of pointer-chasing accesses to perform
- * @param timer Reference to high-resolution timer
- * @param latency_samples Optional pointer to vector to store individual latency samples
- * @param sample_count Number of samples to collect (0 = collect all)
- * @param test_hooks Optional injected chase callback for deterministic tests; production callers leave this null
- * @return Average latency per access in nanoseconds
- */
-double run_cache_latency_test(void* buffer, size_t buffer_size, size_t num_accesses, HighResTimer& timer,
-                              std::vector<double>* latency_samples = nullptr, int sample_count = 0,
-                              const LatencyMeasurementTestHooks* test_hooks = nullptr);
 
 #endif // BENCHMARK_TESTS_H
