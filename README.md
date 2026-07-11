@@ -11,10 +11,6 @@ Application [measurement capabilities](CAPABILITIES.md) information.
 ![Macbook Air M5 Cache Latency from multiple JSON-files](pictures/MacBookAirM5_latency_vs_cache-stride-tlb.png)  
 Macbook Air M5 Cache Latency by example-script provided. Using different size TLB locality and Stride size. 
 
-## Star History
-
-[![Star History Chart](https://api.star-history.com/chart?repos=timoheimonen/macOS-memory-benchmark&type=date&legend=top-left)](https://www.star-history.com/?repos=timoheimonen%2FmacOS-memory-benchmark&type=date&legend=top-left)
-
 ## Description
 
 `memory_benchmark` measures memory behavior on macOS Apple Silicon with an implementation focused on practical low-level analysis:
