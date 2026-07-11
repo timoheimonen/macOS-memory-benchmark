@@ -218,7 +218,7 @@ TEST(ExecutableCliIntegrationTest, GpuWritesValidatedSchemaV1Integration) {
   const TemporaryJsonFile output("gpu_schema_v1");
   const CliResult result = run_memory_benchmark(
       {"--gpu-bandwidth", "--buffer-size", "64", "--iterations", "1",
-       "--count", "1", "--seed", "42", "--output", output.path()});
+       "--count", "3", "--seed", "42", "--output", output.path()});
 
   expect_single_runtime_banner(result);
   ASSERT_EQ(access(output.path().c_str(), F_OK), 0);
@@ -234,10 +234,12 @@ TEST(ExecutableCliIntegrationTest, GpuWritesValidatedSchemaV1Integration) {
   EXPECT_EQ(json["status"], "complete");
   EXPECT_TRUE(json["results_complete"].get<bool>());
   EXPECT_TRUE(json["conclusions_valid"].get<bool>());
-  EXPECT_EQ(json["counters"]["planned_measurements"], 3u);
-  EXPECT_EQ(json["counters"]["validated_measurements"], 3u);
+  EXPECT_EQ(json["counters"]["planned_loops"], 3u);
+  EXPECT_EQ(json["counters"]["completed_loops"], 3u);
+  EXPECT_EQ(json["counters"]["planned_measurements"], 9u);
+  EXPECT_EQ(json["counters"]["validated_measurements"], 9u);
   EXPECT_EQ(json["configuration"]["base_seed_uint64_decimal"], "42");
-  ASSERT_EQ(json["measurements"].size(), 3u);
+  ASSERT_EQ(json["measurements"].size(), 9u);
   for (const nlohmann::json& measurement : json["measurements"]) {
     EXPECT_EQ(measurement["status"], "measured");
     EXPECT_GT(measurement["value_gb_s"].get<double>(), 0.0);
@@ -321,7 +323,7 @@ TEST(ExecutableCliIntegrationTest, CoreToCoreWritesCalibratedAuditJsonIntegratio
   const TemporaryJsonFile output("core2core_v2");
 
   const CliResult result = run_memory_benchmark({
-      "--analyze-core2core", "--count", "1", "--latency-samples", "1",
+      "--analyze-core2core", "--count", "2", "--latency-samples", "1",
       "--output", output.path()});
 
   EXPECT_EQ(result.exit_code, EXIT_SUCCESS);
@@ -332,7 +334,7 @@ TEST(ExecutableCliIntegrationTest, CoreToCoreWritesCalibratedAuditJsonIntegratio
   EXPECT_EQ(json["core_to_core_latency"]["status"], "complete");
   EXPECT_TRUE(json["core_to_core_latency"]["measurements_complete"]);
   ASSERT_EQ(json["core_to_core_latency"]["scenarios"].size(), 3u);
-  EXPECT_EQ(json["core_to_core_latency"]["scenarios"][0]["loop_records"].size(), 1u);
+  EXPECT_EQ(json["core_to_core_latency"]["scenarios"][0]["loop_records"].size(), 2u);
 }
 
 TEST(ExecutableCliIntegrationTest, CoreToCoreSweepWritesCompletionMetadataIntegration) {
@@ -340,7 +342,7 @@ TEST(ExecutableCliIntegrationTest, CoreToCoreSweepWritesCompletionMetadataIntegr
 
   const CliResult result = run_memory_benchmark({
       "--analyze-core2core", "--count", "1", "--sweep",
-      "latency-samples=1,2", "--sweep-max-runs", "2", "--output",
+      "latency-samples=1,2,3", "--sweep-max-runs", "3", "--output",
       output.path()});
 
   EXPECT_EQ(result.exit_code, EXIT_SUCCESS);
@@ -348,10 +350,10 @@ TEST(ExecutableCliIntegrationTest, CoreToCoreSweepWritesCompletionMetadataIntegr
   const nlohmann::json json = nlohmann::json::parse(read_file(output.path()));
   EXPECT_EQ(json["version"], SOFTVERSION);
   EXPECT_EQ(json["status"], "complete");
-  EXPECT_EQ(json["planned_runs"], 2u);
-  EXPECT_EQ(json["completed_runs"], 2u);
+  EXPECT_EQ(json["planned_runs"], 3u);
+  EXPECT_EQ(json["completed_runs"], 3u);
   EXPECT_TRUE(json["conclusions_valid"]);
-  ASSERT_EQ(json["runs"].size(), 2u);
+  ASSERT_EQ(json["runs"].size(), 3u);
   EXPECT_EQ(json["runs"][0]["result"]["configuration"]["schema_version"], 2);
 }
 
@@ -374,7 +376,7 @@ TEST(ExecutableCliIntegrationTest, StandardBenchmarkWritesJsonIntegration) {
 
   const CliResult result = run_memory_benchmark({
       "--benchmark", "--only-bandwidth", "--buffer-size", "1",
-      "--iterations", "1", "--count", "1", "--threads", "1", "--output",
+      "--iterations", "1", "--count", "3", "--threads", "1", "--output",
       output.path()});
 
   EXPECT_EQ(result.exit_code, EXIT_SUCCESS);
@@ -383,10 +385,13 @@ TEST(ExecutableCliIntegrationTest, StandardBenchmarkWritesJsonIntegration) {
   EXPECT_NE(result.output.find("Results saved to:"), std::string::npos);
   EXPECT_EQ(result.output.find('\r'), std::string::npos);
 
-  const std::string json = read_file(output.path());
-  EXPECT_NE(json.find("\"mode\": \"benchmark\""), std::string::npos);
-  EXPECT_NE(json.find("\"main_memory\""), std::string::npos);
-  EXPECT_NE(json.find("\"bandwidth\""), std::string::npos);
+  const nlohmann::json json = nlohmann::json::parse(read_file(output.path()));
+  EXPECT_EQ(json["configuration"]["mode"], "benchmark");
+  EXPECT_EQ(json["planned_loops"], 3u);
+  EXPECT_EQ(json["completed_loops"], 3u);
+  EXPECT_EQ(json["loops"].size(), 3u);
+  EXPECT_TRUE(json.contains("main_memory"));
+  EXPECT_TRUE(json["main_memory"].contains("bandwidth"));
 }
 
 TEST(ExecutableCliIntegrationTest, StandardSweepWritesCompletionMetadataIntegration) {
@@ -394,16 +399,38 @@ TEST(ExecutableCliIntegrationTest, StandardSweepWritesCompletionMetadataIntegrat
 
   const CliResult result = run_memory_benchmark({
       "--benchmark", "--only-bandwidth", "--iterations", "1", "--count",
-      "1", "--threads", "1", "--sweep", "buffer-size=1,2",
-      "--sweep-max-runs", "2", "--output", output.path()});
+      "1", "--threads", "1", "--sweep", "buffer-size=1,2,3",
+      "--sweep-max-runs", "3", "--output", output.path()});
 
   EXPECT_EQ(result.exit_code, EXIT_SUCCESS);
   expect_single_runtime_banner(result);
   const std::string json = read_file(output.path());
   EXPECT_NE(json.find("\"status\": \"complete\""), std::string::npos);
-  EXPECT_NE(json.find("\"planned_runs\": 2"), std::string::npos);
-  EXPECT_NE(json.find("\"completed_runs\": 2"), std::string::npos);
+  EXPECT_NE(json.find("\"planned_runs\": 3"), std::string::npos);
+  EXPECT_NE(json.find("\"completed_runs\": 3"), std::string::npos);
   EXPECT_NE(json.find("\"conclusions_valid\": true"), std::string::npos);
+}
+
+TEST(ExecutableCliIntegrationTest, PatternSweepPrintsOneBannerAcrossNestedLoopsIntegration) {
+  const TemporaryJsonFile output("pattern_sweep_banner");
+
+  const CliResult result = run_memory_benchmark({
+      "--patterns", "--iterations", "1", "--count", "2", "--threads",
+      "1", "--seed", "42", "--sweep", "buffer-size=1,2,3",
+      "--sweep-max-runs", "3", "--output", output.path()});
+
+  EXPECT_EQ(result.exit_code, EXIT_SUCCESS);
+  expect_single_runtime_banner(result);
+  const nlohmann::json json = nlohmann::json::parse(read_file(output.path()));
+  EXPECT_EQ(json["status"], "complete");
+  EXPECT_EQ(json["planned_runs"], 3u);
+  EXPECT_EQ(json["completed_runs"], 3u);
+  ASSERT_EQ(json["runs"].size(), 3u);
+  for (const nlohmann::json& run : json["runs"]) {
+    EXPECT_EQ(run["status"], "complete");
+    EXPECT_EQ(run["result"]["planned_loops"], 2u);
+    EXPECT_EQ(run["result"]["completed_loops"], 2u);
+  }
 }
 
 TEST(ExecutableCliIntegrationTest, PatternModeRunsPatternOrchestrationIntegration) {
@@ -427,7 +454,7 @@ TEST(ExecutableCliIntegrationTest, PatternSeedReproducesWorkloadMetadataIntegrat
 
   const std::vector<std::string> common_args = {
       "--patterns", "--buffer-size", "1", "--iterations", "1", "--count",
-      "2", "--threads", "2", "--seed", "42", "--output"};
+      "3", "--threads", "2", "--seed", "42", "--output"};
   std::vector<std::string> first_args = common_args;
   first_args.push_back(first_output.path());
   std::vector<std::string> second_args = common_args;
@@ -436,6 +463,8 @@ TEST(ExecutableCliIntegrationTest, PatternSeedReproducesWorkloadMetadataIntegrat
   const CliResult second_run = run_memory_benchmark(second_args);
   ASSERT_EQ(first_run.exit_code, EXIT_SUCCESS);
   ASSERT_EQ(second_run.exit_code, EXIT_SUCCESS);
+  expect_single_runtime_banner(first_run);
+  expect_single_runtime_banner(second_run);
 
   const nlohmann::json first = nlohmann::json::parse(read_file(first_output.path()));
   const nlohmann::json second = nlohmann::json::parse(read_file(second_output.path()));
@@ -448,7 +477,7 @@ TEST(ExecutableCliIntegrationTest, PatternSeedReproducesWorkloadMetadataIntegrat
         first["patterns"]["random"]["bandwidth"][operation]["measurements"];
     const nlohmann::json& second_samples =
         second["patterns"]["random"]["bandwidth"][operation]["measurements"];
-    ASSERT_EQ(first_samples.size(), 2u);
+    ASSERT_EQ(first_samples.size(), 3u);
     ASSERT_EQ(second_samples.size(), first_samples.size());
     for (size_t sample = 0; sample < first_samples.size(); ++sample) {
       EXPECT_EQ(first_samples[sample]["seed"], "42");
