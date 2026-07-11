@@ -45,6 +45,11 @@ void print_usage(const char* prog_name);
 void print_help(const char* prog_name);
 
 /**
+ * @brief Print the shared runtime version, copyright, and GPL banner.
+ */
+void print_program_banner();
+
+/**
  * @brief Print benchmark setup details
  * @param buffer_size Buffer size in bytes
  * @param buffer_size_mb Buffer size in megabytes

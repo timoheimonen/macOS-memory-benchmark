@@ -528,8 +528,8 @@ There is deliberately no minimum GB/s and no required read/write/copy ranking.
 The controlled 0.61.0 M4 campaign was retained and audited locally; its large raw JSON, console, XML, and trace files
 are intentionally excluded from Git. Its final identity is kernel revision
 `gpu-linear-word-mod32-tg-reduce-v2`, canonical MSL SHA-256
-`b9a242d2b959c9c11f6f130a52afd66f111d6761be2193beec1f051baa094296`, and release-binary SHA-256
-`31ce0285dc5fde382d40e6d7b769c20e6f3363754bb3c7c0afbb4f13cd71a6a7`.
+`b9a242d2b959c9c11f6f130a52afd66f111d6761be2193beec1f051baa094296`. The exact executable SHA-256 remains with
+the local validation record and machine-readable artifacts rather than being duplicated in general documentation.
 
 Both final five-process acceptance populations passed the 5% gate. Automatic cross-process CV was
 0.221498348705% read, 0.967311621904% write, and 0.310543092510% copy; fixed-24 cross-process CV was

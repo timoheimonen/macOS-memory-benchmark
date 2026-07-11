@@ -26,6 +26,7 @@
 #include "gpu_bandwidth/gpu_backend.h"
 #include "gpu_bandwidth/gpu_runner.h"
 #include "output/console/messages/messages_api.h"
+#include "output/console/output_printer.h"
 #include "utils/numeric_utils.h"
 #include "utils/seed_utils.h"
 
@@ -287,6 +288,8 @@ int run_gpu_bandwidth_mode(int argc, char* argv[]) {
   if (config.help_printed) {
     return EXIT_SUCCESS;
   }
+
+  print_program_banner();
 
   GpuRunResult result;
   result.main_thread_qos = prepare_main_thread_benchmark_qos();

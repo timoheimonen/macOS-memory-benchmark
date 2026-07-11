@@ -526,9 +526,9 @@ payload numerator; the separate final checksum remains outside primary timing.
 Apple7 plus unified memory defines capability support. It does not validate performance. M4 is the schema-1 release
 reference cohort: the completed 0.61.0 automatic and fixed-work populations establish a stable effective-payload baseline
 for their exact hardware, OS, compiler, kernel, and methodology identity. The release-validation identity uses
-`gpu-linear-word-mod32-tg-reduce-v2`, the frozen 8192-threadgroup cap, and canonical MSL SHA-256
-`b9a242d2b959c9c11f6f130a52afd66f111d6761be2193beec1f051baa094296` and frozen release-binary SHA-256
-`31ce0285dc5fde382d40e6d7b769c20e6f3363754bb3c7c0afbb4f13cd71a6a7`. Automatic read/write/copy
+`gpu-linear-word-mod32-tg-reduce-v2`, the frozen 8192-threadgroup cap, canonical MSL SHA-256
+`b9a242d2b959c9c11f6f130a52afd66f111d6761be2193beec1f051baa094296`, and the exact executable identity retained
+with the local validation record. Automatic read/write/copy
 median-of-process-medians are 88.606742648049/74.383866793814/78.583784905446 GB/s with cross-process CV
 0.221498348705/0.967311621904/0.310543092510%; fixed-24 values are
 91.074797816490/75.240302989483/78.508461231110 GB/s with CV
@@ -616,6 +616,8 @@ Console rendering is centralized in `src/output/console` and message helpers in 
 
 Contract highlights:
 
+- Standard and GPU benchmark executions emit the same shared version, copyright, and GPL banner before mode-specific
+  configuration or status output.
 - Configuration and cache info printed before execution.
 - Per-loop results are printed in standard mode.
 - Pattern mode prints pattern table-style sections and derived efficiency indicators.

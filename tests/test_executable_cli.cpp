@@ -28,6 +28,7 @@
 #include <vector>
 
 #include "core/config/version.h"
+#include "output/console/messages/messages_api.h"
 #include "third_party/nlohmann/json.hpp"
 
 extern char** environ;
@@ -185,6 +186,10 @@ TEST(ExecutableCliIntegrationTest, GpuWritesValidatedSchemaV1Integration) {
       {"--gpu-bandwidth", "--buffer-size", "64", "--iterations", "1",
        "--count", "1", "--seed", "42", "--output", output.path()});
 
+  EXPECT_NE(result.output.find(Messages::config_header(SOFTVERSION)),
+            std::string::npos);
+  EXPECT_NE(result.output.find(Messages::config_copyright()), std::string::npos);
+  EXPECT_NE(result.output.find(Messages::config_license()), std::string::npos);
   ASSERT_EQ(access(output.path().c_str(), F_OK), 0);
   const nlohmann::json json =
       nlohmann::json::parse(read_file(output.path()));

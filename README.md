@@ -158,31 +158,10 @@ caffeinate -i -d memory_benchmark --benchmark --count 10 --buffer-size 1024
 - **`--analyze-core2core`**: Runs calibrated, balanced standalone core-to-core cache-line handoff analysis. Each scheduler-hint scenario receives its own excluded pilot and work plan, scenarios rotate across `--count` loops, and the loop-median continuous headline is kept separate from the pooled sample-window distribution. Only optional `--output <file>`, `--count <count>`, `--latency-samples <count>`, `--sweep count=...`, `--sweep latency-samples=...`, and `--sweep-max-runs <count>` may be combined with it. See [CORE_TO_CORE_WHITEPAPER.md](CORE_TO_CORE_WHITEPAPER.md) for methodology and JSON schema 2 contract.
 - **`--sweep <key=a,b>`**: Runs a Cartesian parameter sweep for `--benchmark`, `--patterns`, `--analyze-tlb`, or `--analyze-core2core` and writes one combined JSON file. Repeat `--sweep` to sweep multiple parameters. Requires `--output <file>`. GPU schema 1 does not support sweeps.
 
-GPU data buffers use `MTLStorageModePrivate | MTLResourceHazardTrackingModeTracked`; the small status/checksum buffer is
-shared and tracked. On Apple Silicon, private storage is still backed by unified system memory and is not separate VRAM.
-Each read or write pass contributes exactly one buffer size to effective payload, while copy ping-pongs between the two
-buffers and contributes `2 × buffer size` per pass. GB/s is the exact payload divided by Metal command-buffer GPU time
-and `1e9`; copy is aggregate read-plus-write throughput, not a CPU-to-GPU transfer.
-
-GPU attempts use steady-state warm-memory semantics: an excluded full-buffer warmup and deterministic precondition run
-before each timed operation. Omitted iterations use excluded pilot/trial work and at most two corrections; the resolved
-read, write, and copy plans are frozen before measured loops. Loop order rotates read/write/copy so three complete loops
-place every operation first, middle, and last once. Multiple-loop headlines are medians, and CV above 5% is a diagnostic
-warning rather than an outlier filter.
-
-The primary GPU time is one completed command buffer's `GPUEndTime - GPUStartTime`. One measured attempt contains one
-serial compute encoder and one full-buffer dispatch per pass; initialization, warmup, precondition, and final validation
-are outside that time. The deterministic grid-stride plan is capped at 8192 threadgroups and is never device-name tuned
-at runtime. `dram_residency` remains `unverified`: private storage, a 64 MB minimum, or a large buffer does not prove that
-every byte reached DRAM, and small/fast work can remain cache- or dispatch-dominated.
-
-The 0.61.0 M4 frozen-binary validation passed both five-process acceptance gates. Automatic read/write/copy
-median-of-process-medians are 88.607/74.384/78.584 GB/s; fixed-24 values are 91.075/75.240/78.508 GB/s. The release
-binary SHA-256 is `31ce0285dc5fde382d40e6d7b769c20e6f3363754bb3c7c0afbb4f13cd71a6a7`, and the canonical MSL
-SHA-256 is `b9a242d2b959c9c11f6f130a52afd66f111d6761be2193beec1f051baa094296`. The final Instruments audit exposed neither
-a usable DRAM counter nor a way to isolate timed reduction overhead, so both remain unverified. Complete rejected
-cohorts and the large raw validation record are retained locally and intentionally excluded from Git; see
-[GPU_BANDWIDTH_WHITEPAPER.md](GPU_BANDWIDTH_WHITEPAPER.md) for the controlled protocol and interpretation boundary.
+GPU output is effective compute-payload bandwidth measured with Metal GPU timestamps. Copy reports aggregate read plus
+write payload, private storage is unified memory rather than separate VRAM, and physical DRAM residency remains
+unverified. See [GPU_BANDWIDTH_WHITEPAPER.md](GPU_BANDWIDTH_WHITEPAPER.md) for the complete methodology, schema,
+validation protocol, and interpretation limits.
 
 Pattern samples have steady-state, warm-memory semantics rather than cold-start semantics. Random read/write/copy warmup
 traverses the complete measured address list, and in automatic-calibration mode the excluded pilot further preconditions
@@ -399,6 +378,7 @@ memory_benchmark --analyze-core2core --count 5 --latency-samples 2000 --output c
 
 Console output includes:
 
+- Standard and standalone GPU benchmark executions begin with the same version, copyright, and GPL banner.
 - Resolved configuration and cache information.
 - Per-loop benchmark results.
 - Main-memory latency may include `16 KiB locality latency`, `Global-random latency`, and `Locality latency delta (global - 16 KiB)` when `--latency-tlb-locality-kb` is omitted. These are paired, alternating-order comparison rounds; the delta is not labeled as page-walk cost.
@@ -407,9 +387,7 @@ Console output includes:
 - Standalone `--analyze-tlb` uses IEC units and one compact row per locality, reports `Analysis Status`, and suppresses boundary conclusions when the sweep is interrupted or incomplete. A `*` identifies a below-64-node diagnostic point, and the `quick` profile visibly advises confirmation with `medium` or `high`. Its primary 512 MiB result is the compact `Large-Locality Paired Comparison`: same-round spread, packed, and translation-delta P50 values plus the active cache-line footprint. These are cache-hot pointer-chain timings, not direct DRAM latency or an isolated page-table-walk cost.
 - Standalone `--gpu-bandwidth` reports read/write/copy effective compute payload bandwidth. With multiple measured loops
   the headline is the median; repeatability becomes meaningful at three samples and warns above 5% CV. Copy is labeled
-  aggregate read + write, and the interpretation note keeps DRAM residency explicitly unverified. Correctness uses the
-  power-of-two-hardened `gpu-dual-mod32-v2` timed accumulator, which avoids the prior structured 512 MiB × 64-pass
-  collapse, and a separate `gpu-dual-mod32-v1` final checksum for write/copy.
+  aggregate read + write, and the interpretation note keeps DRAM residency explicitly unverified.
 
 Standalone TLB JSON uses `schema_version: 4` and `methodology_version: "page-native-paired-adaptive-validated-v4"`. It includes the runtime profile, adaptive-round bounds and completion reason, access-calibration data, memory budget, predicted peak, best-effort QoS/lock results, work estimate, exact uint64 decimal-string seeds and derivation policy, execution-ordered discovery/validation records, raw pair latencies, requested/actual pages, pointer-node density, active cache-line footprints, short-cycle diagnostics, effective chain-mode comparability guidance, verified physical diagnostics, and same-round `translation_delta_ns = spread - packed`. Explicit base+validation, large-locality, and total counters state their pass scope, while `validation_required`, `validation_status`, and `validation_complete` distinguish validation completion from not-run/not-required states. Boundary objects retain accepted and rejected candidates with discovery/validation evidence, deterministic bootstrap 95% CIs, noise floor, persistence counts, rejection reasons, and the final bracket. The only large-locality result object is `tlb_analysis.large_locality_paired_comparison`; its delta P50 is the median of same-round deltas, not the difference of independently aggregated medians. Schema 4 contains only the current fields. The bundled plotter separately retains read support for historical schema 1-3 files and does not accept their field names in a schema 4 document.
 
@@ -635,12 +613,8 @@ Here are some things what are not goals to this application.
 - GPU GB/s is effective versioned-kernel payload divided by Metal GPU time, not verified physical DRAM traffic. Private
   storage is not separate VRAM, copy uses aggregate 2× payload, and CPU/GPU results are not directly comparable despite
   using the same decimal GB/s unit.
-- GPU capability support currently means unified memory plus Apple7-family support. The controlled 0.61.0 M4
-  validation campaign makes that exact M4/OS/compiler cohort performance-validated for the versioned effective-payload
-  methodology using the accumulator-v2 kernel revision and frozen 8192-threadgroup cap, while physical DRAM residency
-  remains unverified. Its large raw record is retained locally rather than versioned in Git; the tracked
-  [GPU whitepaper](GPU_BANDWIDTH_WHITEPAPER.md) contains the final hashes and concise acceptance summary. Other capable
-  devices remain performance-unvalidated until equivalent controlled evidence is recorded.
+- GPU capability support currently means unified memory plus Apple7-family support; it is not a performance guarantee.
+  See the [GPU whitepaper](GPU_BANDWIDTH_WHITEPAPER.md) for the controlled M4 evidence and device-support boundary.
 - `strided_2mb` specifies a 2 MiB virtual-address stride; it does not establish physical superpage backing.
 - Pattern ratios alone do not prove prefetch, cache-thrashing, or TLB mechanisms; use controlled follow-up tests and
   `--analyze-tlb` for supported TLB analysis.
