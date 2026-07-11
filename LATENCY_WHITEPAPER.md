@@ -172,11 +172,9 @@ that cold-start artifact.
 The sample pass executes exactly `num_accesses` dereferences in addition to the headline pass; `--latency-samples` is
 therefore a distribution-depth control, not a way to divide or redefine headline work.
 
-`run_latency_test()` is the entry point for main-memory latency measurement.
-`run_cache_latency_test()` is the corresponding entry point for L1, L2, and custom--cache-size
-latency measurements. Both functions share the same internal `run_latency_measurement()` path
-and the same assembly kernel; the distinction is only in which buffer is passed and which
-result field is populated.
+`run_latency_test()` is the shared entry point for main-memory, L1, L2, and custom-cache-size
+latency measurements. Every case uses the same internal `run_latency_measurement()` path and
+assembly kernel; the executor selects the buffer and stores the result in the appropriate field.
 
 ## 7. Experimental Protocols
 

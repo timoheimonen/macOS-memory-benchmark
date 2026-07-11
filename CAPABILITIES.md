@@ -83,8 +83,12 @@ completion, environment, and 5% repeatability gates; the separate `xctrace` audi
 counter, so physical DRAM residency remains unverified. The final accumulator-v2 campaign uses the frozen 8192-group
 cap; automatic read/write/copy median-of-process-medians are 88.607/74.384/78.584 GB/s and fixed-24 values are
 91.075/75.240/78.508 GB/s. Cross-process CVs are 0.221/0.967/0.311% and 0.507/0.828/0.327%, respectively. The frozen
-validation campaign uses canonical MSL SHA-256
-`b9a242d2b959c9c11f6f130a52afd66f111d6761be2193beec1f051baa094296`; its exact executable identity remains in the
+validation campaign used the pre-remediation canonical MSL SHA-256
+`b9a242d2b959c9c11f6f130a52afd66f111d6761be2193beec1f051baa094296`. Removing three unread parameter fields later
+in the same 0.61.0 development cycle changed the current source hash to
+`21def2d75d3545dba31aa4897ea57ec2fd0e4481cd86ce21725338ab0f322ac5` without changing dispatched operations or
+payload accounting. Runtime Metal integration revalidates compilation and correctness, while the recorded performance
+population remains tied to the frozen pre-remediation source identity; its exact executable identity remains in the
 local validation record. This exact M4/OS/compiler cohort is
 performance-validated only for the versioned effective-payload methodology. The final counter audit left both physical
 DRAM residency and timed reduction overhead unverified. Other Apple7-capable devices remain capability-supported and

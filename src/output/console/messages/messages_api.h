@@ -96,7 +96,6 @@ std::string error_file_write_failed(const std::string& file_path, const std::str
 std::string error_file_permission_denied(const std::string& file_path);
 std::string error_file_directory_creation_failed(const std::string& dir_path, const std::string& error_details);
 std::string error_stride_too_small();
-std::string error_stride_too_large(size_t stride, size_t buffer_size);
 std::string error_indices_empty();
 std::string error_index_out_of_bounds(size_t index, size_t index_value, size_t buffer_size);
 std::string error_index_not_aligned(size_t index, size_t index_value);
@@ -107,12 +106,6 @@ const std::string& error_buffer_size_overflow_calculation();
 const std::string& error_total_memory_overflow();
 std::string error_total_memory_exceeds_limit(unsigned long total_mb, unsigned long max_mb);
 const std::string& error_main_buffers_not_allocated();
-const std::string& error_custom_buffer_not_allocated();
-const std::string& error_l1_buffer_not_allocated();
-const std::string& error_l2_buffer_not_allocated();
-const std::string& error_custom_bandwidth_buffers_not_allocated();
-const std::string& error_l1_bandwidth_buffers_not_allocated();
-const std::string& error_l2_bandwidth_buffers_not_allocated();
 const std::string& error_buffer_pointer_null_latency_chain();
 const std::string& error_stride_zero_latency_chain();
 std::string error_buffer_stride_invalid_latency_chain(size_t num_pointers, size_t buffer_size, size_t stride);
@@ -159,7 +152,6 @@ const std::string& warning_prefix();
 const std::string& warning_cannot_get_memory();
 std::string warning_buffer_size_exceeds_limit(unsigned long requested_mb, unsigned long limit_mb);
 std::string warning_qos_failed(int code);
-std::string warning_stride_not_aligned(size_t stride);
 std::string warning_qos_failed_worker_thread(int code);
 std::string warning_qos_failed_benchmark_worker(const std::string& worker_name,
                                                 int code);

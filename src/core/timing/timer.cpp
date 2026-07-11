@@ -155,13 +155,11 @@ double HighResTimer::stop() {
               << std::endl;
     return 0.0;  // Return 0 to avoid division by zero
   }
-  const std::optional<double> elapsed_nanos = convert_mach_ticks_to_nanoseconds(
-      elapsed_ticks, timebase_info.numer, timebase_info.denom);
-  if (!elapsed_nanos.has_value()) {
-    return 0.0;
-  }
   // Convert nanoseconds to seconds.
-  return *elapsed_nanos / 1e9;
+  return convert_mach_ticks_to_nanoseconds(elapsed_ticks, timebase_info.numer,
+                                           timebase_info.denom)
+             .value() /
+         1e9;
 }
 
 // stop_ns: Calculates elapsed time since start() in nanoseconds.
@@ -185,5 +183,5 @@ double HighResTimer::stop_ns() {
   }
   return convert_mach_ticks_to_nanoseconds(elapsed_ticks, timebase_info.numer,
                                            timebase_info.denom)
-      .value_or(0.0);
+      .value();
 }

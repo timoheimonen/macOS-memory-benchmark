@@ -96,25 +96,14 @@ namespace JsonKeys {
   constexpr const char* READ_GB_S = "read_gb_s";
   constexpr const char* WRITE_GB_S = "write_gb_s";
   constexpr const char* COPY_GB_S = "copy_gb_s";
-  constexpr const char* LATENCY = "latency";
-  constexpr const char* AVERAGE_NS = "average_ns";
   constexpr const char* SAMPLES_NS = "samples_ns";
-  constexpr const char* AUTO_TLB_BREAKDOWN = "auto_tlb_breakdown";
-  constexpr const char* TLB_HIT_NS = "tlb_hit_ns";
-  constexpr const char* TLB_MISS_NS = "tlb_miss_ns";
-  constexpr const char* PAGE_WALK_PENALTY_NS = "page_walk_penalty_ns";
-  constexpr const char* CHAIN_DIAGNOSTICS = "chain_diagnostics";
-  constexpr const char* POINTER_COUNT = "pointer_count";
-  constexpr const char* UNIQUE_PAGES_TOUCHED = "unique_pages_touched";
   constexpr const char* PAGE_SIZE_BYTES = "page_size_bytes";
-  constexpr const char* STRIDE_BYTES = "stride_bytes";
   constexpr const char* VALUES = "values";
   constexpr const char* STATISTICS = "statistics";
   
   // Cache keys
   constexpr const char* L1 = "l1";
   constexpr const char* L2 = "l2";
-  constexpr const char* CUSTOM = "custom";
   
   // Pattern keys
   constexpr const char* SEQUENTIAL_FORWARD = "sequential_forward";

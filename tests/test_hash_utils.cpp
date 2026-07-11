@@ -37,6 +37,6 @@ TEST(HashUtilsTest, AbcMatchesStandardSha256Vector) {
 
 TEST(HashUtilsTest, CanonicalGpuSourceBytesMatchLockedRevisionHash) {
   EXPECT_EQ(canonical_gpu_kernel_source_sha256(),
-            "b9a242d2b959c9c11f6f130a52afd66f"
-            "111d6761be2193beec1f051baa094296");
+            "21def2d75d3545dba31aa4897ea57ec2f"
+            "d0e4481cd86ce21725338ab0f322ac5");
 }

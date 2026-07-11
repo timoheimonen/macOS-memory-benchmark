@@ -124,9 +124,8 @@ Configuration state is represented by `BenchmarkConfig` (`src/core/config/config
   explicit passes, loop count, output path, base seed/source, help state, and exact argv.
 - Cache behavior: auto L1/L2 or user-provided `--cache-size`.
 - Latency sampling: `latency_sample_count`.
-- Latency-chain construction mode:
-  - `latency_chain_mode` (type `LatencyChainMode`, CLI flag `--latency-chain-mode`)
-  - `user_specified_latency_chain_mode` flag
+- Latency-chain construction mode: `latency_chain_mode` (type `LatencyChainMode`,
+  CLI flag `--latency-chain-mode`).
 - TLB-locality control for latency chain construction:
   - `latency_tlb_locality_bytes` (default 1024 KB)
   - `0` means global random chain.
@@ -305,7 +304,8 @@ The `LatencyChainMode` enum (from `src/core/memory/memory_utils.h`) defines four
 - Uses stride-spaced pointer slots across buffer.
 - Requires at least two pointers.
 - Produces a circular linked structure.
-- Collects chain diagnostics (pointer count, unique pages touched, page size, stride).
+- Supports optional chain diagnostics (pointer count, unique pages touched, page size, stride)
+  when a caller supplies an output object; production benchmark setup does not request them.
 
 ### 9.3 Randomization Behavior
 
@@ -525,10 +525,13 @@ payload numerator; the separate final checksum remains outside primary timing.
 
 Apple7 plus unified memory defines capability support. It does not validate performance. M4 is the schema-1 release
 reference cohort: the completed 0.61.0 automatic and fixed-work populations establish a stable effective-payload baseline
-for their exact hardware, OS, compiler, kernel, and methodology identity. The release-validation identity uses
+for their exact hardware, OS, compiler, kernel, and methodology identity. The frozen pre-remediation validation identity uses
 `gpu-linear-word-mod32-tg-reduce-v2`, the frozen 8192-threadgroup cap, canonical MSL SHA-256
 `b9a242d2b959c9c11f6f130a52afd66f111d6761be2193beec1f051baa094296`, and the exact executable identity retained
-with the local validation record. Automatic read/write/copy
+with the local validation record. The current 0.61.0 source SHA-256 is
+`21def2d75d3545dba31aa4897ea57ec2fd0e4481cd86ce21725338ab0f322ac5` after removing three unread shared-parameter
+fields; runtime Metal integration revalidates compilation and correctness, while the performance population remains
+tied to the frozen pre-remediation identity. Automatic read/write/copy
 median-of-process-medians are 88.606742648049/74.383866793814/78.583784905446 GB/s with cross-process CV
 0.221498348705/0.967311621904/0.310543092510%; fixed-24 values are
 91.074797816490/75.240302989483/78.508461231110 GB/s with CV

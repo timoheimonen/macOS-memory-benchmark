@@ -610,11 +610,6 @@ int run_tlb_analysis(const BenchmarkConfig& config) {
 }
 
 int run_tlb_analysis(const BenchmarkConfig& config,
-                     const TlbStopRequested& stop_requested) {
-  return run_tlb_analysis_impl(config, stop_requested, nullptr);
-}
-
-int run_tlb_analysis(const BenchmarkConfig& config,
                      const TlbStopRequested& stop_requested,
                      const TlbAnalysisExecutionSeam& execution_seam) {
   return run_tlb_analysis_impl(config, stop_requested, &execution_seam);
@@ -1161,8 +1156,6 @@ int run_tlb_analysis_impl(
     }
   }
 
-  std::vector<double> page_walk_512mb_loop_latencies_ns;
-  double page_walk_512mb_p50_ns = 0.0;
   TlbPairedPointSummary large_locality_summary;
   bool page_walk_comparison_completed = false;
   bool large_locality_pass_completed = false;
@@ -1207,9 +1200,6 @@ int run_tlb_analysis_impl(
         comparison_result.status == TlbScheduleExecutionStatus::Complete;
     if (comparison_result.status == TlbScheduleExecutionStatus::Complete &&
         !comparison_measurements.empty()) {
-      page_walk_512mb_p50_ns = comparison_measurements.front().p50_latency_ns;
-      page_walk_512mb_loop_latencies_ns =
-          comparison_measurements.front().loop_latencies_ns;
       large_locality_summary = summarize_tlb_paired_point(
           measurement_records,
           kPageWalkComparisonLocalityBytes,
@@ -1263,10 +1253,6 @@ int run_tlb_analysis_impl(
                                          l2_entry_range.first) /
                                         2)
                                  : 0;
-
-  const double page_walk_baseline_ns = p50_latency_ns.empty() ? 0.0 : p50_latency_ns.front();
-  const double page_walk_penalty_ns =
-      page_walk_comparison_completed ? (page_walk_512mb_p50_ns - page_walk_baseline_ns) : 0.0;
 
   std::cout << std::endl;
   std::cout << Messages::report_tlb_header() << std::endl;
@@ -1463,8 +1449,6 @@ int run_tlb_analysis_impl(
       sweep_points,
       measurement_records,
       final_localities_bytes,
-      sweep_loop_latencies_ns,
-      p50_latency_ns,
       l1_boundary,
       l2_boundary,
       private_cache_knee,
@@ -1480,10 +1464,6 @@ int run_tlb_analysis_impl(
       private_cache_to_l1_distance_pages,
       can_measure_page_walk_penalty,
       page_walk_comparison_completed,
-      page_walk_512mb_loop_latencies_ns,
-      page_walk_512mb_p50_ns,
-      page_walk_baseline_ns,
-      page_walk_penalty_ns,
       total_execution_time_sec,
       runtime_profile,
       available_memory_mb,

@@ -106,7 +106,8 @@ TEST(PatternValidationTest, RandomIndicesRejectExactlyPastEndAndSizeMaxWithoutOv
 }
 
 TEST(PatternValidationTest, RandomIndicesValidateItemsBeyondFormerSamplingLimit) {
-  std::vector<size_t> indices(Constants::PATTERN_VALIDATION_INDICES_LIMIT + 1, 0);
+  constexpr size_t kFormerSamplingLimit = 100;
+  std::vector<size_t> indices(kFormerSamplingLimit + 1, 0);
   indices.back() = std::numeric_limits<size_t>::max();
 
   bool result = true;

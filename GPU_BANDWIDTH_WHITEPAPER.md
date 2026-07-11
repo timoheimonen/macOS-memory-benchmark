@@ -526,10 +526,14 @@ and cross-process operation CV at or below 5%, nominal thermal state, Low Power 
 There is deliberately no minimum GB/s and no required read/write/copy ranking.
 
 The controlled 0.61.0 M4 campaign was retained and audited locally; its large raw JSON, console, XML, and trace files
-are intentionally excluded from Git. Its final identity is kernel revision
+are intentionally excluded from Git. Its frozen pre-remediation identity is kernel revision
 `gpu-linear-word-mod32-tg-reduce-v2`, canonical MSL SHA-256
 `b9a242d2b959c9c11f6f130a52afd66f111d6761be2193beec1f051baa094296`. The exact executable SHA-256 remains with
 the local validation record and machine-readable artifacts rather than being duplicated in general documentation.
+Removing three unread `KernelParams` fields later in the same 0.61.0 development cycle changed the current canonical
+source SHA-256 to `21def2d75d3545dba31aa4897ea57ec2fd0e4481cd86ce21725338ab0f322ac5` without changing any kernel operation or
+payload count. Runtime Metal integration covers the current source's compilation and correctness; the performance
+figures below remain evidence for the exact frozen pre-remediation identity.
 
 Both final five-process acceptance populations passed the 5% gate. Automatic cross-process CV was
 0.221498348705% read, 0.967311621904% write, and 0.310543092510% copy; fixed-24 cross-process CV was

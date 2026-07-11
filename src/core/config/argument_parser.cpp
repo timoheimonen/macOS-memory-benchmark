@@ -291,45 +291,33 @@ SweepSpec parse_sweep_spec(const std::string& spec_text) {
       }
     } else {
       const long long parsed = parse_signed_decimal_or_throw(raw_value);
-      switch (spec.parameter) {
-        case SweepParameter::BufferSizeMb:
-          if (parsed < 0 || parsed > std::numeric_limits<unsigned long>::max()) {
-            throw std::out_of_range(Messages::error_buffersize_invalid(
-                parsed, std::numeric_limits<unsigned long>::max()));
-          }
-          break;
-        case SweepParameter::CacheSizeKb:
-          if (parsed < 0 || parsed > Constants::MAX_CACHE_SIZE_KB ||
-              (parsed > 0 && parsed < Constants::MIN_CACHE_SIZE_KB)) {
-            throw std::out_of_range(Messages::error_cache_size_invalid(
-                Constants::MIN_CACHE_SIZE_KB,
-                Constants::MAX_CACHE_SIZE_KB,
-                Constants::MAX_CACHE_SIZE_KB / 1024));
-          }
-          break;
-        case SweepParameter::Threads:
-          if (parsed <= 0 || parsed > std::numeric_limits<int>::max()) {
-            throw std::out_of_range(Messages::error_threads_invalid(
-                parsed, 1, std::numeric_limits<int>::max()));
-          }
-          break;
-        case SweepParameter::LatencyTlbLocalityKb: {
-          const long long max_locality_kb =
-              static_cast<long long>(std::numeric_limits<size_t>::max() / Constants::BYTES_PER_KB);
-          if (parsed < 0 || parsed > max_locality_kb) {
-            throw std::out_of_range(Messages::error_latency_tlb_locality_invalid(parsed, max_locality_kb));
-          }
-          break;
+      if (spec.parameter == SweepParameter::BufferSizeMb) {
+        if (parsed < 0 || parsed > std::numeric_limits<unsigned long>::max()) {
+          throw std::out_of_range(Messages::error_buffersize_invalid(
+              parsed, std::numeric_limits<unsigned long>::max()));
         }
-        case SweepParameter::LatencyStrideBytes:
-          if (parsed <= 0) {
-            throw std::out_of_range(Messages::error_latency_stride_invalid(
-                parsed, 1, std::numeric_limits<long long>::max()));
-          }
-          break;
-        case SweepParameter::LatencyChainMode:
-        case SweepParameter::TlbDensity:
-          break;
+      } else if (spec.parameter == SweepParameter::CacheSizeKb) {
+        if (parsed < 0 || parsed > Constants::MAX_CACHE_SIZE_KB ||
+            (parsed > 0 && parsed < Constants::MIN_CACHE_SIZE_KB)) {
+          throw std::out_of_range(Messages::error_cache_size_invalid(
+              Constants::MIN_CACHE_SIZE_KB,
+              Constants::MAX_CACHE_SIZE_KB,
+              Constants::MAX_CACHE_SIZE_KB / 1024));
+        }
+      } else if (spec.parameter == SweepParameter::Threads) {
+        if (parsed <= 0 || parsed > std::numeric_limits<int>::max()) {
+          throw std::out_of_range(Messages::error_threads_invalid(
+              parsed, 1, std::numeric_limits<int>::max()));
+        }
+      } else if (spec.parameter == SweepParameter::LatencyTlbLocalityKb) {
+        const long long max_locality_kb =
+            static_cast<long long>(std::numeric_limits<size_t>::max() / Constants::BYTES_PER_KB);
+        if (parsed < 0 || parsed > max_locality_kb) {
+          throw std::out_of_range(Messages::error_latency_tlb_locality_invalid(parsed, max_locality_kb));
+        }
+      } else if (spec.parameter == SweepParameter::LatencyStrideBytes && parsed <= 0) {
+        throw std::out_of_range(Messages::error_latency_stride_invalid(
+            parsed, 1, std::numeric_limits<long long>::max()));
       }
       value.integer_value = parsed;
     }
@@ -465,12 +453,6 @@ int parse_arguments(int argc, char* argv[], BenchmarkConfig& config) {
             throw std::out_of_range("must be a positive integer");
           }
           config.sweep_max_runs = static_cast<size_t>(val_ll);
-        } catch (const std::invalid_argument& e) {
-          std::cerr << Messages::error_prefix()
-                    << Messages::error_invalid_value(arg, argv[i], e.what())
-                    << std::endl;
-          print_usage(argv[0]);
-          return EXIT_FAILURE;
         } catch (const std::out_of_range& e) {
           std::cerr << Messages::error_prefix()
                     << Messages::error_invalid_value(arg, argv[i], e.what())
@@ -533,7 +515,6 @@ int parse_arguments(int argc, char* argv[], BenchmarkConfig& config) {
           return EXIT_FAILURE;
         }
 
-        config.user_specified_latency_stride = true;
         latency_stride_seen = true;
         continue;
       }
@@ -573,7 +554,6 @@ int parse_arguments(int argc, char* argv[], BenchmarkConfig& config) {
         }
 
         config.latency_chain_mode = parsed_mode;
-        config.user_specified_latency_chain_mode = true;
         latency_chain_mode_seen = true;
         continue;
       }
@@ -763,7 +743,6 @@ int parse_arguments(int argc, char* argv[], BenchmarkConfig& config) {
           if (val_ll < 0 || val_ll > std::numeric_limits<unsigned long>::max())
             throw std::out_of_range(Messages::error_buffersize_invalid(val_ll, std::numeric_limits<unsigned long>::max()));
           requested_buffer_size_mb_ll = val_ll;
-          config.user_specified_buffersize = true;
         } else
           // Error: Missing required value
           throw std::invalid_argument(Messages::error_missing_value(OPT_BUFFER_SIZE_LONG));
@@ -805,7 +784,6 @@ int parse_arguments(int argc, char* argv[], BenchmarkConfig& config) {
                 val_ll, 1, std::numeric_limits<long long>::max()));
           }
           config.latency_stride_bytes = static_cast<size_t>(val_ll);
-          config.user_specified_latency_stride = true;
         } else {
           throw std::invalid_argument(Messages::error_missing_value(OPT_LATENCY_STRIDE_LONG));
         }
@@ -819,7 +797,6 @@ int parse_arguments(int argc, char* argv[], BenchmarkConfig& config) {
             throw std::out_of_range(Messages::error_latency_chain_mode_invalid());
           }
           config.latency_chain_mode = parsed_mode;
-          config.user_specified_latency_chain_mode = true;
         } else {
           throw std::invalid_argument(Messages::error_missing_value(OPT_LATENCY_CHAIN_MODE_LONG));
         }
@@ -842,10 +819,7 @@ int parse_arguments(int argc, char* argv[], BenchmarkConfig& config) {
         latency_tlb_locality_seen = true;
       } else if (is_option(arg, OPT_CACHE_SIZE_SHORT, OPT_CACHE_SIZE_LONG)) {
         // Already parsed in first pass, skip it and its value in second pass
-        if (++i >= argc) {
-          // Error: This shouldn't happen (first pass should have validated it), but handle defensively
-          throw std::invalid_argument(Messages::error_missing_value(OPT_CACHE_SIZE_LONG));
-        }
+        ++i;
         // Silently skip - already parsed and validated in first pass
         continue;
       } else if (is_option(arg, OPT_SWEEP_SHORT, OPT_SWEEP_LONG)) {

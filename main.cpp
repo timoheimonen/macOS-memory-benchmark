@@ -45,7 +45,6 @@
 #include "core/config/config.h"
 #include "core/config/mode_selector.h"
 #include "core/memory/buffer_allocator.h"
-#include "core/memory/buffer_manager.h"
 #include "benchmark/benchmark_runner.h"
 #include "benchmark/core_to_core_latency.h"
 #include "benchmark/sweep_runner.h"
@@ -162,7 +161,7 @@ int main(int argc, char *argv[]) {
   }
 
   // If no mode flag is set (neither --benchmark nor --patterns nor --analyze-tlb), show help
-  if (!config.analyze_tlb && !config.run_benchmark && !config.run_patterns && !config.help_printed) {
+  if (!config.analyze_tlb && !config.run_benchmark && !config.run_patterns) {
     print_help(argv[0]);
     return EXIT_SUCCESS;
   }
@@ -243,9 +242,8 @@ int main(int argc, char *argv[]) {
       // Run standard benchmarks
       std::cout << Messages::msg_running_benchmarks() << std::endl;
 
-      BenchmarkBuffers buffers;
       BenchmarkStatistics stats;
-      if (run_all_benchmarks(buffers, config, stats) != EXIT_SUCCESS) {
+      if (run_all_benchmarks(config, stats) != EXIT_SUCCESS) {
         return EXIT_FAILURE;
       }
 

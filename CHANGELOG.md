@@ -17,6 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - **One runtime banner per command**: Every successfully started direct mode and parameter sweep emits the same version, copyright, and GPL banner exactly once. Repeated `--count` loops and nested sweep runs do not repeat it; help and usage output retain their separate preamble, while argument parsing and validation failures emit no runtime banner.
   - **Primary mode selection is order-independent**: Conflicting standard, pattern, TLB, core-to-core, and GPU selectors are rejected before dispatch regardless of argument order, while duplicate handling remains with each mode's parser.
   - **Build and coverage support Objective-C++**: Production, test, and coverage builds discover `.mm` sources, link Metal and Foundation once, track their dependencies and cleanup, and use the shared macOS 11.0 deployment target.
+  - **Dead implementation paths removed without contract changes**: Removed unused benchmark wrappers, message and JSON-key aliases, write-only diagnostics and TLB context data, dummy orchestration parameters, redundant control branches, seven overwritten ARM64 register writes, and three unread Metal parameter fields while preserving benchmark work, timing boundaries, console output, and JSON schemas.
 
 ### Fixed
   - **Atomic JSON writing contains filesystem exceptions**: The shared writer now converts filesystem and library exceptions, including parent-path checks, to `EXIT_FAILURE` instead of allowing them to escape into `main()`.

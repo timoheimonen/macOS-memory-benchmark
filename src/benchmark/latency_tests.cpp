@@ -152,56 +152,11 @@ static double run_latency_test_common(void* buffer,
  * @note Buffer must be initialized with setup_latency_chain() before calling.
  * @note Average latency = total_duration / num_accesses.
  *
- * @see run_cache_latency_test() for cache-specific latency measurement
  * @see memory_latency_chase_asm() for the low-level pointer chase implementation
  * @see setup_latency_chain() for buffer initialization
  */
 double run_latency_test(void* buffer, size_t num_accesses, HighResTimer& timer,
                         std::vector<double>* latency_samples, int sample_count,
                         const LatencyMeasurementTestHooks* test_hooks) {
-  return run_latency_test_common(buffer, num_accesses, timer, latency_samples, sample_count, test_hooks);
-}
-
-/**
- * @brief Executes the single-threaded cache latency benchmark for a specific cache level.
- *
- * Measures cache access latency using the same pointer-chasing methodology as the main
- * memory latency test. The buffer size should be chosen to fit within the target cache
- * level (L1, L2, or custom) for accurate cache-specific latency measurement.
- *
- * Cache-specific considerations:
- * - Buffer size determines which cache level is measured
- * - L1 buffer: Should fit in L1 data cache (typically 32-64KB)
- * - L2 buffer: Should fit in L2 cache but exceed L1 (typically 256KB-1MB)
- * - Random access pattern ensures cache hits/misses are measured accurately
- *
- * Identical methodology to run_latency_test():
- * - Same pointer-chasing algorithm
- * - Same sample collection options
- * - Uses same assembly function
- *
- * @param[in]     buffer           Pointer to the buffer containing the pointer chain.
- *                                 Should fit in target cache level.
- * @param[in]     buffer_size      Size of the buffer in bytes (for validation/future use).
- * @param[in]     num_accesses     Total number of pointer dereferences to perform.
- * @param[in,out] timer            High-resolution timer for measuring execution time.
- * @param[out]    latency_samples  Optional output vector to store per-sample latencies.
- * @param[in]     sample_count     Number of samples to collect (if 0, uses single measurement).
- *
- * @return Total duration in nanoseconds
- *
- * @note Returns 0.0 if num_accesses is 0 (early validation).
- * @note Buffer must be initialized with setup_latency_chain() before calling.
- * @note Buffer size should match target cache level for accurate results.
- * @note Uses the same memory_latency_chase_asm() as main memory latency test.
- *
- * @see run_latency_test() for main memory latency measurement
- * @see memory_latency_chase_asm() for the low-level pointer chase implementation
- * @see setup_latency_chain() for buffer initialization
- */
-double run_cache_latency_test(void* buffer, size_t buffer_size, size_t num_accesses, HighResTimer& timer,
-                              std::vector<double>* latency_samples, int sample_count,
-                              const LatencyMeasurementTestHooks* test_hooks) {
-  (void)buffer_size;
   return run_latency_test_common(buffer, num_accesses, timer, latency_samples, sample_count, test_hooks);
 }

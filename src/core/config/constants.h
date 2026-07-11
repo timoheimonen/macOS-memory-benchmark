@@ -59,7 +59,6 @@ namespace Constants {
   // Buffer size factors
   constexpr double L1_BUFFER_SIZE_FACTOR = 1.0;  // Use 100% of L1 cache size
   constexpr double L2_BUFFER_SIZE_FACTOR = 1.0;  // Use 100% of L2 cache size
-  constexpr double CUSTOM_BUFFER_SIZE_FACTOR = 1.0;  // Use 100% of custom cache size
   
   // Memory limit constants
   constexpr double MEMORY_LIMIT_FACTOR = 0.80;  // Use 80% of available memory
@@ -80,7 +79,6 @@ namespace Constants {
   // Latency test constants
   constexpr size_t LATENCY_STRIDE_BYTES = 256;  // Latency test access stride (8-byte aligned, DRAM-oriented default)
   constexpr size_t DEFAULT_LATENCY_TLB_LOCALITY_KB = 1024;  // Default locality window for latency chains (1 MB)
-  constexpr size_t MIN_LATENCY_BUFFER_SIZE = LATENCY_STRIDE_BYTES * 2;  // Minimum size (2 pointers worth)
   static_assert((LATENCY_STRIDE_BYTES % sizeof(void*)) == 0,
                 "LATENCY_STRIDE_BYTES must be pointer-size aligned for latency chain");
   
@@ -94,7 +92,6 @@ namespace Constants {
   constexpr size_t CUSTOM_LATENCY_ACCESSES = 100 * 1000 * 1000;  // Custom cache latency test accesses
   
   // Benchmark execution constants
-  constexpr int CACHE_ITERATIONS_MULTIPLIER = 10;  // Cache tests use 10x iterations for accuracy
   constexpr int SINGLE_THREAD = 1;  // Single-threaded execution for cache tests
   
   // Default configuration values
@@ -139,8 +136,6 @@ namespace Constants {
       BANDWIDTH_CALIBRATION_MAX_CORRECTIONS;
   constexpr size_t GPU_CALIBRATION_MIN_PILOT_BYTES =
       BANDWIDTH_CALIBRATION_MIN_PILOT_BYTES;
-  constexpr size_t GPU_CALIBRATION_MAX_PASSES =
-      BANDWIDTH_CALIBRATION_MAX_PASSES;
   constexpr size_t GPU_MAX_DISPATCHES_PER_MEASUREMENT = 16384;
   constexpr size_t GPU_MAX_EXACT_PAYLOAD_BYTES =
       64ULL * 1024ULL * BYTES_PER_MB;
@@ -238,7 +233,6 @@ namespace Constants {
       BANDWIDTH_CALIBRATION_MAX_PASSES;
   constexpr size_t PATTERN_RANDOM_ACCESS_MIN = 1000;  // Minimum number of random accesses
   constexpr size_t PATTERN_RANDOM_ACCESS_MAX = 1000000;  // Maximum number of random accesses
-  constexpr size_t PATTERN_VALIDATION_INDICES_LIMIT = 100;  // Maximum indices to validate
   constexpr double PATTERN_MIN_TIME_NS = 1e-9;  // Minimum time for bandwidth calculation (nanoseconds)
   constexpr int PATTERN_PERCENTAGE_PRECISION = 1;  // Decimal places for percentage values
   constexpr int PATTERN_BANDWIDTH_PRECISION = 3;  // Decimal places for bandwidth values in pattern results
@@ -250,9 +244,6 @@ namespace Constants {
   constexpr size_t L2_CACHE_M1_FALLBACK_SIZE_BYTES = 12 * 1024 * 1024;  // 12 MB - M1 L2 cache per P-core cluster
   constexpr size_t L2_CACHE_M2_M3_M4_M5_FALLBACK_SIZE_BYTES = 16 * 1024 * 1024;  // 16 MB - M2/M3/M4/M5 L2 cache per P-core cluster
   constexpr size_t L2_CACHE_GENERIC_FALLBACK_SIZE_BYTES = 16 * 1024 * 1024;  // 16 MB - generic fallback L2 cache size
-  
-  // UI constants
-  constexpr size_t SPINNER_CHARACTER_COUNT = 4;  // Number of characters in progress spinner
 }
 
 #endif // CONSTANTS_H

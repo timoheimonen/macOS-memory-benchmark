@@ -17,9 +17,9 @@
 #include "benchmark/benchmark_executor.h"
 #include "benchmark/benchmark_runner.h"
 #include "benchmark/benchmark_statistics_collector.h"
-#include "core/memory/buffer_manager.h"
 #include "core/config/config.h"
 #include "core/timing/timer.h"
+#include "output/console/messages/messages_api.h"
 #include "test_statistics_helpers.h"
 #include "test_timer_system_calls.h"
 #include <cstdlib>
@@ -232,7 +232,6 @@ TEST(BenchmarkRunnerTest, InjectedTimerCreationFailureIsReportedAndCheckpointed)
   BenchmarkConfig config;
   config.loop_count = 1;
   config.output_file = "/tmp/benchmark-runner-hook-unused.json";
-  BenchmarkBuffers buffers;
   BenchmarkStatistics stats;
   size_t checkpoints = 0;
   BenchmarkRunnerTestHooks hooks;
@@ -245,7 +244,7 @@ TEST(BenchmarkRunnerTest, InjectedTimerCreationFailureIsReportedAndCheckpointed)
   };
 
   testing::internal::CaptureStderr();
-  const int result = run_all_benchmarks(buffers, config, stats, &hooks);
+  const int result = run_all_benchmarks(config, stats, &hooks);
   const std::string error_output = testing::internal::GetCapturedStderr();
 
   EXPECT_EQ(result, EXIT_FAILURE);
@@ -260,13 +259,12 @@ TEST(BenchmarkRunnerTest, InjectedLoopExceptionIsFailedAndCheckpointedWithExactR
   BenchmarkConfig config;
   config.loop_count = 1;
   config.output_file = "/tmp/benchmark-runner-hook-unused.json";
-  BenchmarkBuffers buffers;
   BenchmarkStatistics stats;
   size_t checkpoints = 0;
   BenchmarkRunnerTestHooks hooks;
   inject_deterministic_elapsed(hooks);
-  hooks.execute_loop = [](const BenchmarkBuffers&, BenchmarkConfig&, int,
-                          HighResTimer&, BenchmarkExecutionState*)
+  hooks.execute_loop = [](BenchmarkConfig&, int, HighResTimer&,
+                          BenchmarkExecutionState*)
       -> BenchmarkResults { throw std::runtime_error("injected loop failure"); };
   hooks.checkpoint = [&](const BenchmarkConfig&, const BenchmarkStatistics& snapshot,
                          double, bool) {
@@ -277,7 +275,7 @@ TEST(BenchmarkRunnerTest, InjectedLoopExceptionIsFailedAndCheckpointedWithExactR
   };
 
   testing::internal::CaptureStderr();
-  const int result = run_all_benchmarks(buffers, config, stats, &hooks);
+  const int result = run_all_benchmarks(config, stats, &hooks);
   const std::string error = testing::internal::GetCapturedStderr();
 
   EXPECT_EQ(result, EXIT_FAILURE);
@@ -294,17 +292,16 @@ TEST(BenchmarkRunnerTest, UnknownLoopExceptionIsContainedWithCentralizedReason) 
   const ScopedDeterministicTimerSystemCalls timer_system_calls;
   BenchmarkConfig config;
   config.loop_count = 1;
-  BenchmarkBuffers buffers;
   BenchmarkStatistics stats;
   BenchmarkRunnerTestHooks hooks;
-  hooks.execute_loop = [](const BenchmarkBuffers&, BenchmarkConfig&, int,
-                          HighResTimer&, BenchmarkExecutionState*)
+  hooks.execute_loop = [](BenchmarkConfig&, int, HighResTimer&,
+                          BenchmarkExecutionState*)
       -> BenchmarkResults { throw 7; };
 
   testing::internal::CaptureStderr();
   int result = EXIT_SUCCESS;
   EXPECT_NO_THROW(
-      result = run_all_benchmarks(buffers, config, stats, &hooks));
+      result = run_all_benchmarks(config, stats, &hooks));
   const std::string error = testing::internal::GetCapturedStderr();
 
   EXPECT_EQ(result, EXIT_FAILURE);
@@ -319,7 +316,6 @@ TEST(BenchmarkRunnerTest, StopHookExceptionIsContainedAtCoordinatorBoundary) {
   const ScopedDeterministicTimerSystemCalls timer_system_calls;
   BenchmarkConfig config;
   config.loop_count = 1;
-  BenchmarkBuffers buffers;
   BenchmarkStatistics stats;
   BenchmarkRunnerTestHooks hooks;
   hooks.stop_requested = []() -> bool {
@@ -329,7 +325,7 @@ TEST(BenchmarkRunnerTest, StopHookExceptionIsContainedAtCoordinatorBoundary) {
   testing::internal::CaptureStderr();
   int result = EXIT_SUCCESS;
   EXPECT_NO_THROW(
-      result = run_all_benchmarks(buffers, config, stats, &hooks));
+      result = run_all_benchmarks(config, stats, &hooks));
   const std::string error = testing::internal::GetCapturedStderr();
 
   EXPECT_EQ(result, EXIT_FAILURE);
@@ -348,12 +344,11 @@ TEST(BenchmarkRunnerTest,
   config.loop_count = 1;
   config.output_file = "/tmp/benchmark-runner-hook-unused.json";
   config.only_bandwidth = true;
-  BenchmarkBuffers buffers;
   BenchmarkStatistics stats;
   BenchmarkRunnerTestHooks hooks;
   inject_deterministic_elapsed(hooks);
-  hooks.execute_loop = [](const BenchmarkBuffers&, BenchmarkConfig&, int loop,
-                          HighResTimer&, BenchmarkExecutionState*) {
+  hooks.execute_loop = [](BenchmarkConfig&, int loop, HighResTimer&,
+                          BenchmarkExecutionState*) {
     BenchmarkResults results;
     results.status = BenchmarkRunStatus::Complete;
     results.loop_index = static_cast<size_t>(loop);
@@ -366,7 +361,7 @@ TEST(BenchmarkRunnerTest,
   testing::internal::CaptureStderr();
   int result = EXIT_SUCCESS;
   EXPECT_NO_THROW(
-      result = run_all_benchmarks(buffers, config, stats, &hooks));
+      result = run_all_benchmarks(config, stats, &hooks));
   const std::string error = testing::internal::GetCapturedStderr();
   static_cast<void>(testing::internal::GetCapturedStdout());
 
@@ -386,12 +381,11 @@ TEST(BenchmarkRunnerTest, InjectedCheckpointFailurePreservesCompletedLoopButFail
   config.loop_count = 1;
   config.output_file = "/tmp/benchmark-runner-hook-unused.json";
   config.only_bandwidth = true;
-  BenchmarkBuffers buffers;
   BenchmarkStatistics stats;
   BenchmarkRunnerTestHooks hooks;
   inject_deterministic_elapsed(hooks);
-  hooks.execute_loop = [](const BenchmarkBuffers&, BenchmarkConfig&, int loop,
-                          HighResTimer&, BenchmarkExecutionState*) {
+  hooks.execute_loop = [](BenchmarkConfig&, int loop, HighResTimer&,
+                          BenchmarkExecutionState*) {
     BenchmarkResults results;
     results.status = BenchmarkRunStatus::Complete;
     results.loop_index = static_cast<size_t>(loop);
@@ -401,7 +395,7 @@ TEST(BenchmarkRunnerTest, InjectedCheckpointFailurePreservesCompletedLoopButFail
                         double, bool) { return EXIT_FAILURE; };
 
   testing::internal::CaptureStdout();
-  const int result = run_all_benchmarks(buffers, config, stats, &hooks);
+  const int result = run_all_benchmarks(config, stats, &hooks);
   static_cast<void>(testing::internal::GetCapturedStdout());
 
   EXPECT_EQ(result, EXIT_FAILURE);
@@ -417,15 +411,14 @@ TEST(BenchmarkRunnerTest, InjectedStopBetweenLoopsPreservesCompletedLoop) {
   config.loop_count = 3;
   config.output_file = "/tmp/benchmark-runner-hook-unused.json";
   config.only_bandwidth = true;
-  BenchmarkBuffers buffers;
   BenchmarkStatistics stats;
   size_t stop_checks = 0;
   size_t checkpoints = 0;
   BenchmarkRunnerTestHooks hooks;
   inject_deterministic_elapsed(hooks);
   hooks.stop_requested = [&] { return stop_checks++ >= 1; };
-  hooks.execute_loop = [](const BenchmarkBuffers&, BenchmarkConfig&, int loop,
-                          HighResTimer&, BenchmarkExecutionState*) {
+  hooks.execute_loop = [](BenchmarkConfig&, int loop, HighResTimer&,
+                          BenchmarkExecutionState*) {
     BenchmarkResults results;
     results.status = BenchmarkRunStatus::Complete;
     results.loop_index = static_cast<size_t>(loop);
@@ -438,7 +431,7 @@ TEST(BenchmarkRunnerTest, InjectedStopBetweenLoopsPreservesCompletedLoop) {
   };
 
   testing::internal::CaptureStdout();
-  const int result = run_all_benchmarks(buffers, config, stats, &hooks);
+  const int result = run_all_benchmarks(config, stats, &hooks);
   static_cast<void>(testing::internal::GetCapturedStdout());
 
   EXPECT_EQ(result, EXIT_SUCCESS);

@@ -30,6 +30,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstddef>
 #include <cstring>
 #include <exception>
 #include <limits>
@@ -43,15 +44,12 @@ constexpr size_t kStatusWordCount = 4;
 constexpr size_t kStatusBytes = kStatusWordCount * sizeof(uint32_t);
 
 struct alignas(8) KernelParams {
-  uint64_t byte_count = 0;
   uint64_t vector_count = 0;
   uint32_t seed_low = 0;
   uint32_t seed_high = 0;
   uint32_t pattern_tag = 0;
   uint32_t pattern_pass = 0;
   uint32_t pass_index = 0;
-  uint32_t operation_tag = 0;
-  uint32_t direction = 0;
   uint32_t tail_bytes = 0;
   uint32_t timed_element_weight_first = 0;
   uint32_t timed_element_weight_second = 0;
@@ -59,8 +57,21 @@ struct alignas(8) KernelParams {
   uint32_t timed_dispatch_token_second = 0;
 };
 
-static_assert(sizeof(KernelParams) == 64,
+static_assert(alignof(KernelParams) == 8,
+              "KernelParams alignment must match the canonical MSL layout");
+static_assert(sizeof(KernelParams) == 48,
               "KernelParams must match the canonical MSL layout");
+static_assert(offsetof(KernelParams, vector_count) == 0);
+static_assert(offsetof(KernelParams, seed_low) == 8);
+static_assert(offsetof(KernelParams, seed_high) == 12);
+static_assert(offsetof(KernelParams, pattern_tag) == 16);
+static_assert(offsetof(KernelParams, pattern_pass) == 20);
+static_assert(offsetof(KernelParams, pass_index) == 24);
+static_assert(offsetof(KernelParams, tail_bytes) == 28);
+static_assert(offsetof(KernelParams, timed_element_weight_first) == 32);
+static_assert(offsetof(KernelParams, timed_element_weight_second) == 36);
+static_assert(offsetof(KernelParams, timed_dispatch_token_first) == 40);
+static_assert(offsetof(KernelParams, timed_dispatch_token_second) == 44);
 
 std::string ns_string(NSString* value) {
   if (value == nil) {
@@ -428,15 +439,12 @@ KernelParams make_params(const GpuBackendAttemptRequest& request,
                          uint32_t pattern_tag, uint32_t pattern_pass,
                          uint32_t pass_index, uint32_t direction) {
   KernelParams params;
-  params.byte_count = request.buffer_size_bytes;
   params.vector_count = request.vector_count;
   params.seed_low = low32(request.operation_seed);
   params.seed_high = low32(request.operation_seed >> 32U);
   params.pattern_tag = pattern_tag;
   params.pattern_pass = pattern_pass;
   params.pass_index = pass_index;
-  params.operation_tag = operation_tag(request.operation);
-  params.direction = direction;
   params.tail_bytes = static_cast<uint32_t>(request.tail_bytes);
   const TimedAccumulatorDomains domains =
       derive_timed_accumulator_domains(request, pass_index, direction);

@@ -56,17 +56,3 @@ void warmup_latency(void* buffer, size_t buffer_size) {
   };
   warmup_single(latency_op);
 }
-
-/**
- * @brief Warms up memory for cache latency test by page prefaulting (single thread).
- *
- * This ensures pages are mapped and page faults are removed, but does not
- * build/run the pointer chain, allowing for more accurate "cold-ish" cache latency measurements.
- *
- * @param buffer Memory region to warm up
- * @param buffer_size Total size of the buffer in bytes
- */
-void warmup_cache_latency(void* buffer, size_t buffer_size) {
-  // Use the same implementation as warmup_latency since they're identical.
-  warmup_latency(buffer, buffer_size);
-}

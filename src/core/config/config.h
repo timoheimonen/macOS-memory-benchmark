@@ -27,7 +27,8 @@
  * - Cache size validation (MIN_CACHE_SIZE_KB, MAX_CACHE_SIZE_KB)
  * - Size conversion (BYTES_PER_KB, BYTES_PER_MB)
  * - Buffer sizing factors (L1_BUFFER_SIZE_FACTOR, L2_BUFFER_SIZE_FACTOR)
- * - Latency test parameters (LATENCY_STRIDE_BYTES, MIN_LATENCY_BUFFER_SIZE, BASE_LATENCY_ACCESSES, L1_LATENCY_ACCESSES, L2_LATENCY_ACCESSES, CUSTOM_LATENCY_ACCESSES)
+ * - Latency test parameters (LATENCY_STRIDE_BYTES, BASE_LATENCY_ACCESSES,
+ *   L1_LATENCY_ACCESSES, L2_LATENCY_ACCESSES, CUSTOM_LATENCY_ACCESSES)
  *
  * @see constants.h for detailed constant definitions and values.
  */
@@ -199,21 +200,12 @@ struct BenchmarkConfig {
   int main_thread_qos_code = 0;            ///< Return code from pthread_set_qos_class_self_np()
 
   // Tracking flags for user-specified parameters
-  bool user_specified_buffersize = false;      ///< Whether user explicitly set --buffer-size
   bool user_specified_iterations = false;      ///< Whether user explicitly set --iterations
   bool user_specified_latency_samples = false; ///< Whether user explicitly set --latency-samples
-  bool user_specified_latency_stride = false;  ///< Whether user explicitly set --latency-stride-bytes
-  bool user_specified_latency_chain_mode = false; ///< Whether user explicitly set --latency-chain-mode
   bool user_specified_latency_tlb_locality = false; ///< Whether user explicitly set --latency-tlb-locality-kb
   bool user_specified_tlb_seed = false;  ///< Whether user explicitly set --seed
   bool user_specified_pattern_seed = false;  ///< Whether user explicitly set --seed for --patterns
   bool user_specified_benchmark_seed = false;  ///< Whether user explicitly set --seed for --benchmark
-
-  // Latency-chain diagnostics (populated during chain setup)
-  LatencyChainDiagnostics main_latency_chain_diagnostics;
-  LatencyChainDiagnostics l1_latency_chain_diagnostics;
-  LatencyChainDiagnostics l2_latency_chain_diagnostics;
-  LatencyChainDiagnostics custom_latency_chain_diagnostics;
   
   // Output file
   std::string output_file;  ///< JSON output file path (empty = no JSON output)
@@ -249,7 +241,6 @@ int parse_arguments(int argc, char* argv[], BenchmarkConfig& config);
  * @see Constants::MINIMUM_LIMIT_MB_PER_BUFFER
  * @see Constants::DEFAULT_BUFFER_SIZE_MB
  * @see Constants::BYTES_PER_MB
- * @see Constants::MIN_LATENCY_BUFFER_SIZE
  */
 int validate_config(BenchmarkConfig& config);
 
@@ -262,7 +253,6 @@ int validate_config(BenchmarkConfig& config);
  * @see Constants::L1_BUFFER_SIZE_FACTOR
  * @see Constants::L2_BUFFER_SIZE_FACTOR
  * @see Constants::LATENCY_STRIDE_BYTES
- * @see Constants::MIN_LATENCY_BUFFER_SIZE
  * @see Constants::BYTES_PER_KB
  */
 void calculate_buffer_sizes(BenchmarkConfig& config);

@@ -82,15 +82,12 @@ inline constexpr std::string_view kSource = R"MSL(
 using namespace metal;
 
 struct KernelParams {
-  ulong byte_count;
   ulong vector_count;
   uint seed_low;
   uint seed_high;
   uint pattern_tag;
   uint pattern_pass;
   uint pass_index;
-  uint operation_tag;
-  uint direction;
   uint tail_bytes;
   uint timed_element_weight_first;
   uint timed_element_weight_second;

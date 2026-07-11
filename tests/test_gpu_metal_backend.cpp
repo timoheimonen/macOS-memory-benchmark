@@ -354,7 +354,7 @@ TEST_F(GpuMetalBackendIntegrationTest,
   EXPECT_EQ(initialization_.compilation.kernel_revision,
             "gpu-linear-word-mod32-tg-reduce-v2");
   EXPECT_EQ(initialization_.compilation.kernel_source_sha256,
-            "b9a242d2b959c9c11f6f130a52afd66f111d6761be2193beec1f051baa094296");
+            "21def2d75d3545dba31aa4897ea57ec2fd0e4481cd86ce21725338ab0f322ac5");
   for (char character :
        initialization_.compilation.kernel_source_sha256) {
     EXPECT_TRUE((character >= '0' && character <= '9') ||

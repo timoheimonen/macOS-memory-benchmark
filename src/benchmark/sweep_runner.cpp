@@ -34,7 +34,6 @@
 #include "core/config/sweep_utils.h"
 #include "core/config/version.h"
 #include "core/memory/buffer_allocator.h"
-#include "core/memory/buffer_manager.h"
 #include "core/signal/signal_handler.h"
 #include "core/system/benchmark_qos.h"
 #include "core/system/system_info.h"
@@ -113,7 +112,6 @@ void apply_assignment(BenchmarkConfig& config, const SweepAssignment& assignment
   switch (spec.parameter) {
     case SweepParameter::BufferSizeMb:
       config.buffer_size_mb = static_cast<unsigned long>(value.integer_value);
-      config.user_specified_buffersize = true;
       break;
     case SweepParameter::CacheSizeKb:
       config.custom_cache_size_kb_ll = value.integer_value;
@@ -135,11 +133,9 @@ void apply_assignment(BenchmarkConfig& config, const SweepAssignment& assignment
       break;
     case SweepParameter::LatencyStrideBytes:
       config.latency_stride_bytes = static_cast<size_t>(value.integer_value);
-      config.user_specified_latency_stride = true;
       break;
     case SweepParameter::LatencyChainMode:
       config.latency_chain_mode = value.latency_chain_mode;
-      config.user_specified_latency_chain_mode = true;
       break;
     case SweepParameter::TlbDensity:
       config.tlb_sweep_density = value.tlb_sweep_density;
@@ -208,9 +204,8 @@ int run_standard_sweep_point(BenchmarkConfig& run_config, nlohmann::ordered_json
     return EXIT_FAILURE;
   }
 
-  BenchmarkBuffers buffers;
   BenchmarkStatistics stats;
-  if (run_all_benchmarks(buffers, run_config, stats) != EXIT_SUCCESS) {
+  if (run_all_benchmarks(run_config, stats) != EXIT_SUCCESS) {
     return EXIT_FAILURE;
   }
 
@@ -250,7 +245,7 @@ int run_pattern_sweep_point(BenchmarkConfig& run_config, nlohmann::ordered_json&
   }
 
   PatternStatistics stats;
-  const int run_status = run_all_pattern_benchmarks(run_config, stats);
+  run_all_pattern_benchmarks(run_config, stats);
 
   if (run_config.loop_count == 1 && !stats.loop_results.empty()) {
     print_pattern_results(extract_pattern_results_at(stats, 0));
@@ -264,7 +259,6 @@ int run_pattern_sweep_point(BenchmarkConfig& run_config, nlohmann::ordered_json&
   // The nested completion contract carries failed/partial/interrupted states.
   // Returning success here lets the sweep classifier preserve that exact state
   // and reason instead of replacing it with a generic execution failure.
-  (void)run_status;
   return EXIT_SUCCESS;
 }
 

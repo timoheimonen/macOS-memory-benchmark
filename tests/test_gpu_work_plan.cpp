@@ -58,8 +58,6 @@ TEST(GpuWorkPlanTest, ConstantsMatchLockedGpuMethodology) {
   EXPECT_EQ(Constants::GPU_CALIBRATION_MAX_CORRECTIONS, 2u);
   EXPECT_EQ(Constants::GPU_CALIBRATION_MIN_PILOT_BYTES,
             8 * Constants::BYTES_PER_MB);
-  EXPECT_EQ(Constants::GPU_CALIBRATION_MAX_PASSES,
-            Constants::BANDWIDTH_CALIBRATION_MAX_PASSES);
   EXPECT_EQ(Constants::GPU_MAX_DISPATCHES_PER_MEASUREMENT, 16384u);
   EXPECT_EQ(Constants::GPU_MAX_EXACT_PAYLOAD_BYTES,
             64ULL * 1024ULL * Constants::BYTES_PER_MB);
@@ -116,7 +114,7 @@ TEST(GpuWorkPlanTest, OperationSeedsHaveStableSplitMixDomains) {
             0u);
 }
 
-TEST(GpuWorkPlanTest, PassLimitsUseExactReadWriteAndCopyPayloads) {
+TEST(GpuWorkPlanTest, PassLimitsUseExactPayloadsAndEffectiveCaps) {
   const size_t buffer_bytes = 64 * Constants::BYTES_PER_MB;
   const GpuPassLimits read =
       calculate_gpu_pass_limits(buffer_bytes, GpuOperation::Read);
