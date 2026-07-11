@@ -2,7 +2,7 @@
 
 ![Platform](https://img.shields.io/badge/platform-Apple%20Silicon-000000?logo=apple) ![CLI](https://img.shields.io/badge/CLI-Tool-00A8CC?logo=terminal) ![License](https://img.shields.io/badge/license-GPL--3.0-blue) ![Assembly](https://img.shields.io/badge/Assembly-ARM64-6E4C13) ![C++](https://img.shields.io/badge/C++-00599C?logo=cplusplus&logoColor=white)
 
-`memory_benchmark` is a low-level command-line tool for measuring CPU and Metal GPU memory bandwidth, cache and main-memory latency, access-pattern performance, TLB behavior, and core-to-core cache-line handoff latency on Apple Silicon Macs.
+`memory_benchmark` is a low-level command-line tool for measuring CPU and Metal GPU memory bandwidth, cache and main-memory latency, access-pattern performance, TLB behavior, and two-thread cache-line handoff protocol latency on Apple Silicon Macs.
 
 It is designed for controlled microarchitectural investigation rather than a single synthetic score. CPU measurement paths use native ARM64 kernels; the standalone GPU mode uses runtime-compiled Metal compute kernels. Runs expose calibration, workload, completion, and repeatability metadata so results can be audited and compared.
 
@@ -16,7 +16,7 @@ It is designed for controlled microarchitectural investigation rather than a sin
 - **Bandwidth and latency:** main-memory and cache read/write/copy throughput plus dependent pointer-chase latency.
 - **Access-pattern analysis:** sequential, reverse, strided, and random workloads with exact effective-payload accounting.
 - **Dedicated TLB analysis:** paired spread/packed chains, adaptive rounds, confidence intervals, and independent boundary validation.
-- **Core-to-core analysis:** calibrated cache-line handoff measurements under scheduler-hint scenarios.
+- **Core-to-core analysis:** calibrated acquire/release token-exchange measurements under scheduler-hint scenarios.
 - **Metal GPU bandwidth:** standalone read/write/copy compute kernels with GPU timestamps and validation metadata.
 - **Reproducible experiments:** explicit seeds, repeated loops, built-in Cartesian parameter sweeps, and checkpointed JSON output.
 
@@ -82,13 +82,13 @@ caffeinate -i -d memory_benchmark --benchmark --count 10 --buffer-size 1024 --ou
 | `--benchmark` | Calibrated and balanced standard CPU benchmark for main-memory and cache bandwidth plus continuous-pass latency. Use `--only-bandwidth` or `--only-latency` to narrow the run. |
 | `--patterns` | Effective read/write/copy bandwidth for sequential-forward, sequential-reverse, 64 B, 4096 B, 16384 B and 2 MiB virtual strides, and random access. |
 | `--analyze-tlb` | Standalone paired spread/packed TLB analysis with adaptive measurement rounds, confidence intervals, and boundary validation. |
-| `--analyze-core2core` | Calibrated two-thread cache-line handoff latency under best-effort macOS scheduler hints. |
+| `--analyze-core2core` | Calibrated two-thread acquire/release token-protocol round-trip latency under best-effort macOS scheduler hints. |
 | `--gpu-bandwidth` | Standalone Metal GPU read/write/copy effective compute-payload bandwidth. |
 | `--sweep <key=a,b>` | Cartesian parameter sweep for supported CPU, pattern, TLB, and core-to-core modes; requires `--output`. GPU schema 1 does not support sweeps. |
 
 Primary modes are intentionally separate and accept different option sets. Use `memory_benchmark -h` or the [User Manual](MANUAL.md) for defaults, valid combinations, and the complete option reference.
 
-When `--iterations` is omitted, standard bandwidth, pattern, and GPU operations calibrate their work toward a bounded measurement duration. An explicit `--iterations` value selects fixed work. Standard latency headlines always come from a continuous dependent pointer-chase pass; optional sample windows are a separate distribution and do not define the headline.
+When `--iterations` is omitted, standard bandwidth, pattern, and GPU operations calibrate their work toward a bounded measurement duration. An explicit `--iterations` value selects fixed work. Standard latency headlines always come from a continuous dependent pointer-chase pass. A separate sample pass runs by default with 1,000 windows; `--latency-samples` controls that positive window count, and the sampled distribution does not define or weight the headline.
 
 ## Representative Workflows
 
@@ -141,13 +141,16 @@ Treat benchmark values as measurements of the configured workload under the obse
 - Use identical commands, seeds, software versions, and system conditions when comparing runs.
 - Prefer repeated loops. When `--count > 1`, the median (P50) is the headline; output also reports tail percentiles and variability metrics where applicable.
 - Keep background load, power state, and thermal conditions consistent. Scheduling and other macOS activity can materially affect latency tails and variance.
-- Use sufficiently large buffers for DRAM-focused CPU experiments. Small working sets can be cache-dominated.
+- Use sufficiently large buffers for main-memory-focused CPU experiments. Small working sets can be cache-dominated,
+  while buffer size alone does not prove physical DRAM service.
 - `--non-cacheable` applies best-effort cache-discouraging `madvise` hints; it does not create truly uncached memory.
 - Pattern GB/s is exact **effective kernel payload bandwidth**, not observed physical cache-bus or DRAM traffic. `strided_2mb` describes a 2 MiB virtual-address stride and does not prove superpage backing.
 - GPU GB/s is exact **effective compute-payload bandwidth** divided by Metal GPU time. Private storage is unified memory rather than separate VRAM, copy counts aggregate read plus write payload, and physical DRAM residency remains unverified.
 - CPU and GPU GB/s values are not directly comparable: the kernels, timing boundaries, parallelism, resource modes, and validation work differ.
 - TLB-locality controls pointer-chain construction, not hardware TLB residency. Standard locality comparisons combine cache, locality, and translation effects; use `--analyze-tlb` for controlled translation-boundary conclusions.
-- Core-to-core results are scheduler-influenced handoff measurements. macOS user space cannot guarantee physical core pinning.
+- Core-to-core results are scheduler-influenced acquire/release token-protocol measurements. They do not directly observe
+  physical cache-line migration or isolate coherence-fabric latency, and macOS user space cannot guarantee physical core
+  pinning.
 
 JSON output records completion and nullable measurement state instead of using zero for unavailable results. Consumers making conclusions should reject incomplete or interrupted runs according to the mode-specific status fields. Exact schema contracts and checkpoint behavior are documented in the [User Manual](MANUAL.md), [Technical Specification](TECHNICAL_SPECIFICATION.md), and mode whitepapers.
 

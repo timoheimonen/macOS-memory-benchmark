@@ -2,7 +2,7 @@
 
 ## 1. Scope and Status
 
-This document specifies the current implementation in this repository (version `0.61.0`) for `memory_benchmark` on macOS Apple Silicon.
+This document specifies the current implementation in this repository (version `0.61.1`) for `memory_benchmark` on macOS Apple Silicon.
 
 It is intentionally implementation-driven and reflects real behavior in code paths under `main.cpp`, `src/core`,
 `src/benchmark`, `src/pattern_benchmark`, `src/gpu_bandwidth`, `src/output`, and `src/asm`.
@@ -46,13 +46,9 @@ memory, QoS, ARM64 assembly, and Metal compute). GPU mode requires a default Met
 
 ### 3.1 Thermal constraints on fanless systems
 
-Fanless Apple Silicon systems (e.g., MacBook Air M5) have limited thermal capacity and cannot sustain heavy benchmarking for extended durations.
-
-Observed behavior:
-
-- MacBook Air M5 typically enters Heavy thermal state after approximately 2 pattern benchmark runs.
-- Thermal state transitions depend significantly on ambient environment temperature.
-- Thermal throttling during benchmarking invalidates measurement reliability and comparability.
+Fanless Apple Silicon systems have limited thermal headroom and may enter elevated thermal states during sustained
+benchmarking. The transition depends on the device, starting temperature, ambient conditions, background activity, and
+workload; this repository does not define a model-specific time-to-throttle or run-count threshold.
 
 Impact:
 
@@ -81,14 +77,15 @@ applies to standard/pattern execution.
 3. Validate configuration (`validate_config`).
 4. Calculate derived sizes and counts:
    - `calculate_buffer_sizes`
-   - `calculate_access_counts`
+   - `calculate_access_counts` (fallback latency access counts)
    - `calculate_total_allocation_bytes`
 5. Print resolved configuration and cache info.
 6. Raise main thread QoS (`QOS_CLASS_USER_INTERACTIVE`) best-effort.
 7. Execute one mode:
    - Standard benchmark mode (`run_all_benchmarks`), which allocates/initializes buffers per phase and releases them after the phase.
-   - Pattern benchmark mode (`run_all_pattern_benchmarks`), whose coordinator owns and prepares one shared
-     `PatternBuffers` source/destination pair for every pattern and loop.
+   - Pattern benchmark mode (`run_all_pattern_benchmarks`), whose command-level orchestration in
+     `pattern_statistics_manager.cpp` owns and prepares one shared `PatternBuffers` source/destination pair for every
+     pattern and loop; `pattern_coordinator.cpp` executes one outer loop.
 8. Print loop results and aggregate statistics.
 9. Optionally serialize JSON output.
 10. Print total elapsed runtime.
@@ -134,7 +131,7 @@ Configuration state is represented by `BenchmarkConfig` (`src/core/config/config
 ### 5.2 Derived fields
 
 - Resolved byte sizes for main and cache buffers.
-- Access counts for latency paths.
+- Fallback access counts for latency paths; normal measured work is resolved by pilot calibration.
 - System metadata (CPU name, macOS version, core counts).
 - Max memory limits and bookkeeping flags.
 
@@ -149,7 +146,7 @@ Configuration state is represented by `BenchmarkConfig` (`src/core/config/config
 - Help (`-h`, `--help`) prints usage and exits successfully.
 - `--latency-chain-mode` accepts string values and resolves to `LatencyChainMode` enum.
 - `--analyze-tlb` uses an early dedicated parse branch in `argument_parser.cpp`. It only allows optional `--output`, `--latency-stride-bytes`, `--latency-chain-mode`, `--tlb-density`, `--seed`, `--sweep`, and `--sweep-max-runs`. TLB sweep supports `latency-stride-bytes`, `latency-chain-mode`, and `tlb-density`; its default run guard is `16`, and `global-random` chain mode is rejected. One generated or user-provided seed drives the pure sweep planner, seeded cyclic Latin round scheduler, derived task seeds, layout-specific page-native chain permutations, and deterministic convergence bootstrap. Each task measures a verified one-node-per-page spread chain and an equal-cache-line packed control in the same round. A pilot calibrates whole-chain accesses toward the quick/standard/exhaustive target duration; rounds stop at the per-point CI-width target or profile maximum. Candidate buffers are admitted only when their predicted buffer-plus-scratch peak fits the available-memory budget. Full methodology and JSON contract: [TLB_ANALYSIS_WHITEPAPER.md](TLB_ANALYSIS_WHITEPAPER.md).
-- `--analyze-core2core` uses dedicated mode parsing (outside `argument_parser.cpp`) and only allows optional `--output`, `--count`, `--latency-samples`, `--sweep`, and `--sweep-max-runs`. Its mode-specific loop default is `3`; the general loop default remains `1`. Core-to-core sweep supports `count` and `latency-samples`, rejects duplicate sweep keys, and atomically checkpoints the combined output after every attempted run; only a nested `status: "complete"` result with `measurements_complete: true` increments `completed_runs`. Direct and sweep execution use the shared scope-bound signal guard before creating workers and restore the calling thread's exact previous mask on every return path. Each scheduler-hint scenario runs an excluded pilot after a 1,000,000-round-trip calibration warmup, reuses its duration-calibrated plan across measured loops, and participates in a cyclic Latin-square scenario schedule. Full methodology and JSON schema 2 contract: [CORE_TO_CORE_WHITEPAPER.md](CORE_TO_CORE_WHITEPAPER.md).
+- `--analyze-core2core` uses dedicated mode parsing (outside `argument_parser.cpp`) and only allows optional `--output`, `--count`, `--latency-samples`, `--sweep`, `--sweep-max-runs`, and `--help`. Its mode-specific loop default is `3`; the general loop default remains `1`. Core-to-core sweep supports `count` and `latency-samples`, rejects duplicate sweep keys, and atomically checkpoints the combined output after every attempted run; only a nested `status: "complete"` result with `measurements_complete: true` increments `completed_runs`. Direct and sweep execution use the shared scope-bound signal guard before creating workers and restore the calling thread's exact previous mask on every return path. Each scheduler-hint scenario runs an excluded pilot after a 1,000,000-round-trip warmup intended to reduce pilot startup transients, reuses its duration-calibrated plan across measured loops, and participates in a cyclic Latin-square scenario schedule. The result is effective acquire/release token-protocol round-trip time, not an isolated physical cache-line migration or coherence-fabric latency. Full methodology and JSON schema 2 contract: [CORE_TO_CORE_WHITEPAPER.md](CORE_TO_CORE_WHITEPAPER.md).
 - `--gpu-bandwidth` uses a dedicated parser outside `argument_parser.cpp`. It accepts only `-G`/`--gpu-bandwidth`,
   `-b`/`--buffer-size`, `-i`/`--iterations`, `-r`/`--count`, `--seed`, `-o`/`--output`, and
   `-h`/`--help`. Duplicates, unknown/incompatible options, missing values, partial numeric tokens, non-positive
@@ -214,9 +211,12 @@ GPU validation is separate from `config_validator.cpp`:
 
 ### 7.2 Latency access counts
 
-- Main-memory latency accesses scale from base count relative to default buffer size.
-- Cache latency access counts use fixed constants (`L1`, `L2`, `CUSTOM`).
-- `--buffer-size 0` (in allowed mode) sets main latency accesses to zero.
+- `calculate_access_counts` populates fallback desired counts; it does not normally determine the measured latency work.
+- Standard latency execution runs an excluded whole-chain pilot, calibrates a duration-targeted
+  `BenchmarkLatencyWorkPlan`, rounds to complete chain cycles, and reuses the resolved plan across outer loops.
+- The main-memory fallback scales from a base count relative to the default buffer size. Cache fallbacks use fixed
+  `L1`, `L2`, and `CUSTOM` constants.
+- `--buffer-size 0` (in allowed mode) sets the main-memory fallback to zero and disables that latency target.
 
 ## 8. Memory Allocation and Initialization
 
@@ -225,8 +225,9 @@ GPU validation is separate from `config_validator.cpp`:
 Allocation entrypoints:
 
 - Standard benchmark mode: per-phase allocators in `src/benchmark/benchmark_executor.cpp` (`prepare_*_buffers` helpers).
-- Pattern benchmark mode: `allocate_pattern_buffers` (`src/core/memory/buffer_allocator.cpp`). The pattern
-  coordinator retains the pair for the full command and releases it on return.
+- Pattern benchmark mode: `run_all_pattern_benchmarks` in `pattern_statistics_manager.cpp` calls
+  `allocate_pattern_buffers` (`src/core/memory/buffer_allocator.cpp`), retains the pair for the full command, and
+  releases it on return.
 
 Shared allocation behavior:
 
@@ -324,13 +325,14 @@ The `LatencyChainMode` enum (from `src/core/memory/memory_utils.h`) defines four
 
 Warmup functions (`src/warmup`) run before measured tests.
 
-- Bandwidth warmups are multi-threaded and adaptive in size.
-- Latency warmups are single-threaded page-touch prefault style, avoiding chain execution.
+- Main-memory bandwidth warmups are multi-threaded and use the adaptive byte limit
+  `min(buffer_size, max(64 MiB, 10% of buffer_size))` from `warmup_internal.h`.
+- Cache-bandwidth warmups are multi-threaded and touch the full cache-sized buffer.
+- Latency warmups are single-threaded page-prefault passes that read and write one byte per native page; they do not
+  execute the pointer chain.
+- Sequential pattern warmups use the main-memory adaptive policy. Strided warmups execute one complete 32-byte phase
+  period over the finalized worker partitions, while random warmups traverse each finalized worker's index list once.
 - Worker and/or single-thread warmups attempt high QoS class best-effort.
-
-Adaptive warmup size (`warmup_internal.h`):
-
-- `min(buffer_size, max(64MB, 10% of buffer_size))`.
 
 ## 10.1 Automatic Locality Comparison
 
@@ -341,7 +343,9 @@ same-round `global - locality` deltas; the delta headline is the median of paire
 
 This auxiliary fixed-window comparison requires at least two stride-spaced nodes inside 16 KiB (stride at most 8192
 bytes). It is not part of config-validator target eligibility: if an otherwise valid standard configuration uses a larger
-stride, the comparison records an unavailable status while the configured target measurements can still run.
+stride, the comparison records unavailable measurements while the configured target measurements can still run. Because
+the three comparison measurements remain part of the loop's plan, that loop is `partial` and top-level
+`results_complete` remains `false`.
 
 Schema 2 serializes these as `locality_16k_latency_ns`, `global_random_latency_ns`, and
 `locality_latency_delta_ns` under `main_memory.latency.automatic_locality_comparison`. The comparison does not isolate
@@ -365,14 +369,18 @@ Important execution semantics:
 - Cache bandwidth defaults to single-thread unless user explicitly provides `--threads`.
 - All latency targets use one continuous headline pass calibrated toward 250 ms, evaluated against a 100–300 ms
   window, and rounded to at least 16 complete chain cycles. A cycle-minimum-limited overrun is classified explicitly;
-  samples run separately and continue between windows.
+  the CLI then runs a separate sample pass with 1,000 windows by default. `--latency-samples` selects a positive window
+  count, and sampling continues from one window's terminal pointer to the next without defining the headline.
 - One command-level seed derives target/layout seeds; repeated loops rebuild equivalent logical chains.
 - Each operation has explicit measurement status and optional value. Interrupted/incomplete work is excluded from
   aggregate vectors. Standard JSON is atomically checkpointed after completed loops.
 
 ## 12. Pattern Benchmark Execution
 
-Pattern mode coordinator: `run_pattern_benchmarks` (`src/pattern_benchmark/pattern_coordinator.cpp`).
+Command-level pattern orchestration is `run_all_pattern_benchmarks`
+(`src/pattern_benchmark/pattern_statistics_manager.cpp`): it owns allocation, initialization, outer-loop control,
+interruption handling, and aggregation. `run_pattern_benchmarks` (`src/pattern_benchmark/pattern_coordinator.cpp`)
+executes one outer loop and coordinates its seven pattern families.
 
 Executed pattern families:
 
@@ -528,7 +536,7 @@ reference cohort: the completed 0.61.0 automatic and fixed-work populations esta
 for their exact hardware, OS, compiler, kernel, and methodology identity. The frozen pre-remediation validation identity uses
 `gpu-linear-word-mod32-tg-reduce-v2`, the frozen 8192-threadgroup cap, canonical MSL SHA-256
 `b9a242d2b959c9c11f6f130a52afd66f111d6761be2193beec1f051baa094296`, and the exact executable identity retained
-with the local validation record. The current 0.61.0 source SHA-256 is
+with the local validation record. The current canonical source SHA-256 retained by 0.61.1 is
 `21def2d75d3545dba31aa4897ea57ec2fd0e4481cd86ce21725338ab0f322ac5` after removing three unread shared-parameter
 fields; runtime Metal integration revalidates compilation and correctness, while the performance population remains
 tied to the frozen pre-remediation identity. Automatic read/write/copy
@@ -551,7 +559,9 @@ Assembly entrypoints are declared in `src/asm/asm_functions.h` and used by bench
 - Main-memory kernels: read, write, copy (non-temporal stores).
 - Cache kernels: read, write, copy (cache-focused variants).
 - Latency kernel: pointer-chase loop.
-- Pattern kernels: reverse (read/write/copy), strided generic (read/write/copy), strided fixed-stride variants (64B, 4096B, 16384B, 2MB — each as read/write/copy), random (read/write/copy).
+- Pattern kernels: reverse (read/write/copy), three parameterized phased strided entrypoints
+  (`memory_{read,write,copy}_strided_phased_loop_asm`) that accept stride, pass count, and initial 32-byte phase, and
+  random (read/write/copy). The 64 B, 4096 B, 16384 B, and 2 MiB patterns use the same phased strided API.
 - Core-to-core kernels: initiator and responder round-trip loops.
 
 Design intent:
@@ -568,6 +578,8 @@ Core-to-core kernels:
   waits for the responder to return it; repeats for the specified round trips.
 - `core_to_core_responder_round_trips_asm`: Waits until the responder owns the token and hands it back to the
   initiator; coordinates via the shared token word.
+- The timed token and startup/control flags occupy distinct 128-byte-aligned storage blocks. The elapsed result covers the
+  complete assembly token protocol and system effects; it does not directly observe a physical coherence path.
 
 ## 15. Timing Model
 
@@ -669,7 +681,7 @@ In addition to standard fields (buffer size, iterations, loop count, thread coun
 ### 18.2 Main-memory latency keys
 
 - `main_memory.latency.headline_ns`: status, median-or-single headline, loop values, robust statistics, measurement
-  records, quality, and optional pooled separate-sample distribution with loop boundaries.
+  records, quality, and the pooled separate-sample distribution with loop boundaries.
 - `main_memory.latency.automatic_locality_comparison.locality_16k_latency_ns`.
 - `main_memory.latency.automatic_locality_comparison.global_random_latency_ns`.
 - `main_memory.latency.automatic_locality_comparison.locality_latency_delta_ns`.
@@ -686,19 +698,22 @@ In addition to standard fields (buffer size, iterations, loop count, thread coun
 ### 18.4 Core-to-core schema 2
 
 - `configuration.schema_version` (number): `2`.
-- `configuration.methodology_version` (string): `core2core-v2-calibrated-balanced-auditable`.
+- `configuration.methodology_version` (string): `core2core-v3-calibrated-balanced-auditable-128b-isolation`.
 - Calibration metadata: excluded 100,000-round-trip pilot after a 1,000,000-round-trip calibration warmup; 25 ms
   final warmup target, 250 ms continuous headline target with a 100-300 ms intended window, and 1 ms sample-window
-  target. Minimum work is 20,000/1,000,000/2,000 round trips respectively.
+  target. Minimum work is 20,000/1,000,000/2,000 round trips respectively. Pilot warmup is intended to reduce startup
+  transients; the calibration targets comparable durations but does not control environmental noise.
 - `core_to_core_latency.status`, `planned_measurements`, `completed_measurements`, and `measurements_complete` describe
   command completion.
 - Each scenario contains `status`, `status_reason`, planned/completed loops, a calibrated `work_plan`, continuous
   headline values/statistics, a nullable median headline, a distinct pooled `samples_ns` distribution, and
   `loop_records`.
 - Loop records retain cyclic schedule position, status/reason, nullable round-trip and one-way estimates, headline
-  duration/quality, pooled-sample index range, and both workers' observed QoS/affinity hint outcomes.
-- `affinity_hint_comparison_interpretable` is true only for a complete command when every requested hint was applied in
-  every measured record. It does not imply hard core pinning.
+  duration/quality, the exact pooled-sample range contributed by measured loops, and both workers' observed QoS/affinity
+  API outcomes. Invalid loops contribute no pooled samples and have a zero-length range.
+- `affinity_hint_comparison_interpretable` is true only for a complete command when both workers' affinity API calls
+  returned success in every measured affinity-tag record. It excludes QoS and calibration-pilot outcomes and does not
+  imply that macOS honored a particular physical placement or hard core pinning.
 - Invalid, failed, interrupted, and not-run measurements never become numeric zeroes.
 
 ### 18.5 GPU schema 1
@@ -758,7 +773,8 @@ Practical caveats:
 - Heavy concurrent activity can inflate tail latency and depress bandwidth.
 - Tail metrics (`P95`, `P99`) usually reveal contention more clearly than averages.
 - Comparing runs across time requires similar background-load conditions.
-- Small buffers can become cache-dominated and hide DRAM behavior.
+- Small buffers can become cache-dominated. Larger main-memory-sized working sets reduce that effect, but buffer size
+  alone does not prove that physical DRAM served the measured traffic.
 - GPU private buffers live in unified memory, not separate VRAM. GPU schema 1 cannot verify DRAM residency, and both
   small and large buffers can include cache/dispatch/reduction effects. Copy uses logical read+write payload.
 - CPU and GPU GB/s should not be directly compared because timing, kernels, parallelism, resource modes, cache effects,
@@ -798,14 +814,28 @@ For narrow changes, prefer targeted `gtest` filters via `./test_runner --gtest_f
 - Standard benchmark:
   - `src/benchmark/benchmark_runner.cpp`
   - `src/benchmark/benchmark_executor.cpp`
+  - `src/benchmark/benchmark_work_plan.cpp`
+  - `src/benchmark/benchmark_statistics_collector.cpp`
+  - `src/benchmark/sweep_runner.cpp`
   - `src/benchmark/bandwidth_tests.cpp`
   - `src/benchmark/latency_tests.cpp`
 - Standalone TLB planning and scheduling:
   - `src/benchmark/tlb_sweep_planner.cpp`
   - `src/benchmark/tlb_measurement_scheduler.cpp`
+  - `src/benchmark/tlb_runtime_policy.cpp`
+  - `src/benchmark/tlb_chain.cpp`
+  - `src/benchmark/tlb_boundary_detector.cpp`
   - `src/benchmark/tlb_analysis.cpp`
+  - `src/benchmark/tlb_analysis_json.cpp`
+- Standalone core-to-core latency:
+  - `src/benchmark/core_to_core_latency_cli.cpp`
+  - `src/benchmark/core_to_core_latency_runner.cpp`
+  - `src/benchmark/core_to_core_sweep_runner.cpp`
+  - `src/benchmark/core_to_core_latency_json.cpp`
 - Pattern benchmark:
+  - `src/pattern_benchmark/pattern_statistics_manager.cpp`
   - `src/pattern_benchmark/pattern_coordinator.cpp`
+  - `src/pattern_benchmark/pattern_work_plan.cpp`
   - `src/pattern_benchmark/output.cpp`
 - Standalone GPU bandwidth:
   - `src/gpu_bandwidth/gpu_bandwidth.cpp`

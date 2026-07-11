@@ -1,6 +1,6 @@
 # Project Structure — macOS-memory-benchmark
 
-**Version:** 0.61.0
+**Version:** 0.61.1
 **Platform:** ARM64 / AArch64 (Apple Silicon macOS)
 **License:** GNU General Public License v3.0
 
@@ -21,10 +21,11 @@ This document describes the layout of project files, organized by purpose. It is
    - [src/warmup/](#27-srcwarmup--pre-benchmark-warm-up)
    - [src/utils/](#28-srcutils--shared-utilities)
    - [src/third_party/](#29-srcthird_party--vendored-dependencies)
-3. [tests/ — Unit tests](#3-tests--unit-tests)
+3. [tests/ — Test suite](#3-tests--test-suite)
 4. [results/ — Benchmark result data](#4-results---benchmark-result-data)
 5. [pictures/ — Documentation images](#5-pictures--documentation-images)
-6. [.github/ — GitHub integration](#6-github--github-integration)
+6. [script-examples/ — Run and plotting helpers](#6-script-examples--run-and-plotting-helpers)
+7. [.github/ — GitHub integration](#7-github--github-integration)
 
 ---
 
@@ -59,9 +60,10 @@ This document describes the layout of project files, organized by purpose. It is
 | `SECURITY.md` | Vulnerability disclosure policy |
 | `TLB_ANALYSIS_WHITEPAPER.md` | Whitepaper: current TLB analysis methodology, schema, and interpretation limits |
 | `LATENCY_WHITEPAPER.md` | Whitepaper: cache and memory latency measurement methodology |
-| `CORE_TO_CORE_WHITEPAPER.md` | Whitepaper: calibrated core-to-core methodology, audit schema, and interpretation limits |
+| `CORE_TO_CORE_WHITEPAPER.md` | Whitepaper: calibrated two-thread token-handoff methodology, audit schema, and interpretation limits |
 | `GPU_BANDWIDTH_WHITEPAPER.md` | Whitepaper: Metal compute bandwidth methodology, GPU schema 1, validation, capability limits, and maintenance policy |
 | `PROJECT_STRUCTURE.md` | This file |
+| `LICENSE` | GNU General Public License v3.0 license text |
 
 ---
 
@@ -95,13 +97,13 @@ Hand-written AArch64 assembly implementing the hot inner loops that must not be 
 | `memory_write_reverse.s` | Reverse-order memory write |
 | `memory_write_strided.s` | Phase-rotating strided memory write (generic stride parameter) |
 | `memory_latency.s` | Pointer-chase latency measurement loop |
-| `core_to_core_latency.s` | Cache-line handoff ping-pong loop for core-to-core latency |
+| `core_to_core_latency.s` | Acquire/release token-exchange ping-pong loop for core-to-core protocol latency |
 
 ---
 
 ### 2.2 src/benchmark/ — Benchmarking infrastructure
 
-The benchmark subsystem owns all measurement logic: executing tests, collecting per-iteration samples, computing statistics, and coordinating TLB and core-to-core analysis modes.
+The benchmark subsystem owns the standard CPU pipeline, standalone TLB analysis, core-to-core analysis, and shared sweep execution. Pattern and GPU measurement pipelines live in dedicated subtrees, while reusable statistics and output helpers live under `src/utils/` and `src/output/`.
 
 #### Bandwidth and latency tests
 
@@ -121,13 +123,13 @@ The benchmark subsystem owns all measurement logic: executing tests, collecting 
 | `benchmark_statistics_collector.h` / `.cpp` | Initializes/preallocates statistics storage and accumulates measured per-loop values and latency samples for later aggregation |
 | `benchmark_work_plan.h` / `.cpp` | Pure standard-benchmark work planning, calibration arithmetic, seed derivation, and cyclic scheduling helpers |
 | `parallel_test_framework.h` | Template-based framework for dispatching multi-threaded benchmark work with synchronized start, cache-line-aligned per-thread state, and macOS QoS thread attributes |
-| `sweep_runner.h` / `.cpp` | Common Cartesian sweeps for standard, pattern, and standalone TLB modes, including validation and checkpoints |
+| `sweep_runner.h` / `.cpp` | Shared deterministic sweep executor, completion classification, and checkpointing; provides the standard/pattern/TLB wrapper and is reused by the core-to-core sweep wrapper |
 
 #### TLB analysis mode
 
 | File | Purpose |
 |---|---|
-| `tlb_analysis.h` / `.cpp` | Standalone `--analyze-tlb` mode: sweeps locality windows, supports stride/chain-mode/density controls, and infers TLB capacity boundaries |
+| `tlb_analysis.h` / `.cpp` | Standalone `--analyze-tlb` mode: compares spread/packed chains across locality sweeps, supports stride/chain-mode/density controls, and produces empirical translation-related boundary estimates |
 | `tlb_analysis_json.h` / `.cpp` | Serializes TLB analysis results to JSON |
 | `tlb_boundary_detector.cpp` | Robust paired-delta boundary detection, bootstrap confidence intervals, persistence gates, and independent validation |
 | `tlb_chain.h` / `.cpp` | Builds and verifies page-native spread/packed pointer-chain controls |
@@ -141,7 +143,7 @@ The benchmark subsystem owns all measurement logic: executing tests, collecting 
 |---|---|
 | `core_to_core_latency.h` | Public interface for the `--analyze-core2core` mode |
 | `core_to_core_latency_internal.h` | Internal runner interfaces not exposed outside the module |
-| `core_to_core_latency_runner.cpp` | Per-scenario calibration, balanced loop scheduling, unpinned two-thread ping-pong execution, and robust summaries |
+| `core_to_core_latency_runner.cpp` | Per-scenario calibration, 128-byte shared-state isolation, balanced loop scheduling, unpinned two-thread ping-pong execution, and robust summaries |
 | `core_to_core_latency_cli.cpp` | CLI argument parsing and entry point for the core-to-core mode |
 | `core_to_core_latency_json.h` / `.cpp` | Serializes schema-2 work plans, loop audit records, completion state, and results |
 | `core_to_core_sweep_runner.h` / `.cpp` | Core-to-core Cartesian sweeps and atomic per-run checkpoints |
@@ -158,11 +160,12 @@ Core infrastructure for configuration, memory management, macOS system introspec
 |---|---|
 | `config.h` | `BenchmarkConfig` structure for standard, pattern, standalone TLB, and their common sweep settings; core-to-core and GPU use separate config types |
 | `constants.h` | Named constants for CPU/GPU memory limits, calibration, grid/dispatch/payload guardrails, buffer sizing, and latency access counts |
-| `version.h` | `SOFTVERSION` macro (semantic version string, currently `"0.61.0"`) |
+| `version.h` | `SOFTVERSION` macro (semantic version string, currently `"0.61.1"`) |
 | `mode_selector.h` / `.cpp` | Pure primary-mode scan and conflict detection before mode-specific parsing; routes standard, pattern, TLB, core-to-core, and GPU deterministically |
 | `argument_parser.cpp` | Parses standard, pattern, and standalone TLB options into `BenchmarkConfig`; core-to-core and GPU are pre-routed to dedicated parsers |
 | `config_validator.cpp` | Validates the parsed configuration; emits errors for out-of-range or conflicting settings |
 | `buffer_calculator.cpp` | Derives buffer sizes for each cache/memory level from the validated configuration and detected system parameters |
+| `sweep_utils.h` / `.cpp` | Shared structural sweep parsing and overflow-safe Cartesian run counting used by standard and core-to-core sweep parsers |
 
 #### src/core/signal/
 
@@ -186,6 +189,7 @@ Core infrastructure for configuration, memory management, macOS system introspec
 |---|---|
 | `system_info.h` / `.cpp` | Queries CPU/cache/OS/memory data through a macOS provider and a deterministic provider seam for fallback/error tests |
 | `benchmark_qos.h` / `.cpp` | Shared best-effort main-thread QoS preparation with requested/applied/code audit result |
+| `page_size.h` / `.cpp` | Shared native page-size query boundary for accounting, validation, metadata, and page-prefault operations |
 
 #### src/core/timing/
 
@@ -197,14 +201,15 @@ Core infrastructure for configuration, memory management, macOS system introspec
 
 ### 2.4 src/output/ — Output layer
 
-All user-visible output is isolated in this subsystem. The split between console messages and JSON output allows each to evolve independently.
+This subsystem contains shared console messages, standard-benchmark formatters, descriptive-statistics rendering, and JSON serialization. Mode-specific output orchestration can remain beside the corresponding benchmark mode, while user-facing message text is centralized under `messages/`.
 
 #### src/output/console/
 
 | File | Purpose |
 |---|---|
-| `output_printer.h` / `.cpp` | Formats and prints benchmark results and statistics to stdout in human-readable form |
-| `statistics.h` / `.cpp` | Computes and prints statistical summaries (average, median, P90, P95, P99, stddev, min, max) for a result vector |
+| `output_printer.h` / `.cpp` | Prints standard CLI help/banner text, configuration and cache information, and status-aware per-loop standard benchmark results |
+| `statistics.h` / `.cpp` | Coordinates standard multi-loop summary selection, diagnostics, and console output using the shared calculator and renderer |
+| `statistics_renderer.h` / `.cpp` | Renders descriptive-statistics summaries in the canonical field order with shared precision, indentation, and diagnostic controls |
 
 ##### src/output/console/messages/
 
@@ -294,12 +299,14 @@ bandwidth warm-up covers the full target buffer, and latency warm-up page-touche
 
 | File | Purpose |
 |---|---|
-| `benchmark.h` | Convenience umbrella header that includes all benchmark-related headers |
+| `benchmark.h` | Convenience umbrella header for commonly used standard-benchmark, timing, memory, output, assembly, and warm-up interfaces |
 | `utils.h` / `.cpp` | Shared thread-joining helpers and the TTY-aware stderr progress spinner used by benchmark modes |
 | `json_utils.h` / `.cpp` | JSON helper functions shared between the TLB, core-to-core, and standard output serializers |
 | `cyclic_order.h` / `.cpp` | Shared deterministic cyclic ordering used by CPU and GPU planners |
 | `seed_utils.h` / `.cpp` | Shared SplitMix64 derivation and generate-once seed helper with deterministic provider seam |
 | `hash_utils.h` / `.cpp` | CommonCrypto-based SHA-256 helper used for exact embedded MSL source provenance |
+| `numeric_utils.h` / `.cpp` | Overflow-safe size arithmetic plus bounded pilot-count and duration-calibration helpers |
+| `descriptive_statistics.h` / `.cpp` | Canonical average, percentile, sample-deviation, coefficient-of-variation, and median-absolute-deviation calculations |
 
 ---
 
@@ -311,9 +318,9 @@ bandwidth warm-up covers the full target buffer, and latency warm-up page-touche
 
 ---
 
-## 3. tests/ — Unit tests
+## 3. tests/ — Test suite
 
-GoogleTest-based unit test suite. All files are picked up automatically by the Makefile. Tests named `*Integration*` are excluded from `make test` (unit-only) and must be run explicitly.
+GoogleTest-based unit and integration test suite. All `.cpp` files are picked up automatically by the Makefile. Tests named `*Integration*` are excluded from `make test` (unit-only) and run through the integration or all-test targets.
 
 | File | Suite name | Coverage focus |
 |---|---|---|
@@ -346,7 +353,7 @@ GoogleTest-based unit test suite. All files are picked up automatically by the M
 | `test_core_to_core_runner.cpp` | `CoreToCoreRunnerTest` | Calibration, work planning, cyclic scenario order, deterministic failure seams, and real ARM64 integration paths |
 | `test_executable_cli.cpp` | `ExecutableCliIntegrationTest` | Executable-level CLI routing, invalid config, JSON output, and pattern orchestration smoke coverage |
 | `test_standard_kernels.cpp` | `StandardKernelIntegrationTest` | Real ARM64 standard-kernel ABI, tails, boundaries, checksums, and multi-worker execution |
-| `test_statistics.cpp` | `StatisticsTest` | Statistical computations: median, percentiles, stddev, min, max |
+| `test_statistics.cpp` | `StatisticsTest` | Standard multi-loop summary composition, mode filtering, loop/sample population separation, and rendered values |
 | `test_descriptive_statistics.cpp` | `DescriptiveStatisticsTest` | Canonical shared percentiles, deviation, CV, and MAD contracts |
 | `test_statistics_renderer.cpp` | `StatisticsRendererTest` | Shared console-summary ordering, precision, indentation, and diagnostics |
 | `test_timer.cpp` | `HighResTimerTest`, `HighResTimerIntegrationTest` | Exact conversion/failure seams plus one real monotonic smoke |
@@ -376,7 +383,7 @@ Four shared helper headers provide functionality reused across multiple test sui
 
 ## 4. results/ — Benchmark result data
 
-Reference JSON (and legacy CSV/text) output from benchmark runs on specific hardware. Organized by software version subdirectory. These files are used for regression comparison and whitepaper data.
+Historical JSON, CSV, and text output from benchmark runs on specific hardware, organized by software-version subdirectory. The files are retained as examples, plot-script inputs, and legacy-schema reference data; they are not current 0.61.1 methodology baselines unless explicitly identified as such.
 
 ```
 results/
@@ -398,26 +405,43 @@ results/
 
 ## 5. pictures/ — Documentation images
 
-PNG charts generated from benchmark result data, used in the whitepapers and README.
+Tracked PNG chart archive generated from benchmark result data. Several files are historical and are not referenced by current documentation; their filenames preserve historical labels rather than establishing current causal interpretations.
 
 | File | Content |
 |---|---|
-| `MacMiniM4_memory_hierarchy_v0_53_5.png` | Full memory hierarchy bandwidth/latency overview, Mac Mini M4 |
-| `MacMiniM4_cache_latency_with_TLB.png` | Cache latency curve with TLB miss inflection, Mac Mini M4 |
+| `MacMiniM4_memory_hierarchy_v0_53_5.png` | Historical memory hierarchy bandwidth/latency overview, Mac Mini M4 |
+| `MacMiniM4_cache_latency_with_TLB.png` | Historical cache-latency/locality chart, Mac Mini M4 |
 | `MacMiniM4_cache_latency_with_TLB_5loops_p50_values.png` | P50 latency across 5 measurement loops, Mac Mini M4 |
 | `MacMiniM4_cache_latency_with_TLB_5loops_p50_values_2.png` | Alternate P50 latency chart, Mac Mini M4 |
-| `MacMiniM4_cache_latency_with_STRIDE_TLB.png` | Latency vs. stride size showing TLB effects, Mac Mini M4 |
-| `MacMiniM4_TLB_analysis_with_64_STRIDE.png` | TLB analysis at 64-byte stride, Mac Mini M4 |
-| `MacMiniM4_TLB_analysis_with_128_STRIDE.png` | TLB analysis at 128-byte stride, Mac Mini M4 |
-| `MacMiniM4_cache_latency_TLB_16KB.png` | Cache latency detail at 16 KB (L1 TLB boundary), Mac Mini M4 |
-| `MacMiniM4_cache_latency_2_TLB_16KB.png` | Second chart at the 16 KB boundary, Mac Mini M4 |
+| `MacMiniM4_cache_latency_with_STRIDE_TLB.png` | Historical latency-by-stride/locality chart, Mac Mini M4 |
+| `MacMiniM4_TLB_analysis_with_64_STRIDE.png` | Historical analyze-TLB trend at 64-byte stride, Mac Mini M4 |
+| `MacMiniM4_TLB_analysis_with_128_STRIDE.png` | Historical analyze-TLB trend at 128-byte stride, Mac Mini M4 |
+| `MacMiniM4_cache_latency_TLB_16KB.png` | Historical cache-latency detail around 16 KiB locality, Mac Mini M4 |
+| `MacMiniM4_cache_latency_2_TLB_16KB.png` | Second historical cache-latency chart around 16 KiB locality, Mac Mini M4 |
 | `MacBookAirM5_latency_memory_hierarchy.png` | Memory hierarchy latency, MacBook Air M5 |
-| `MacBookAirM5_latency_vs_cache-stride-tlb.png` | Latency vs. cache/stride/TLB interactions, MacBook Air M5 |
+| `MacBookAirM5_latency_vs_cache-stride-tlb.png` | Latency across cache-size, stride, and configured locality settings, MacBook Air M5 |
 | `MacMiniM4vsMacbookAirM5_benchmark_comparison.png` | Historical Mac Mini M4 and MacBook Air M5 benchmark comparison |
 
 ---
 
-## 6. .github/ — GitHub integration
+## 6. script-examples/ — Run and plotting helpers
+
+Example shell workflows and Python/Matplotlib plotters for tracked benchmark outputs. These helpers consume standard CPU or standalone TLB JSON schemas; they do not accept the separate GPU schema unless explicitly documented.
+
+| File | Purpose |
+|---|---|
+| `final_output.txt` | Small bundled sample of pooled latency statistics for `plot_cache_percentiles.py`; regenerated by `latency_test_script.sh` |
+| `latency_test_script.sh` | Sweeps custom cache size and configured latency-locality windows, writes per-run JSON, and extracts pooled sample statistics into `final_output.txt` |
+| `latency_test_script_stride_tlb.sh` | Sweeps cache size, configured locality, and latency stride; retains per-run JSON and builds a CSV summary |
+| `plot_M4vsM5_benchmark_comparison.py` | Compares effective payload bandwidth and latency from two standard benchmark JSON files; defaults to the historical M4/M5 samples |
+| `plot_analyzetlb.py` | Plots standalone TLB locality trends, including the paired spread/packed delta in current schemas and supported legacy data |
+| `plot_bechmark-memory-latency-hierarcy.py` | Plots memory-hierarchy latency from standard benchmark JSON or compatible text statistics output |
+| `plot_cache_percentiles.py` | Plots a selected pooled latency statistic by cache size and configured locality from `final_output.txt` |
+| `plot_cache_percentiles_stride_tlb.py` | Plots a selected pooled latency statistic from the stride/locality sweep CSV, with optional stride and locality filters |
+
+---
+
+## 7. .github/ — GitHub integration
 
 | File | Purpose |
 |---|---|
