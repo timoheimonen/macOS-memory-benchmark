@@ -15,12 +15,13 @@
 //
 /**
  * @file test_system_info.cpp
- * @brief Deterministic system-query tests plus Apple Silicon integration contracts
+ * @brief Deterministic system/QoS tests plus Apple Silicon integration contracts
  */
 
 #include <gtest/gtest.h>
 
 #include "core/config/constants.h"
+#include "core/system/benchmark_qos.h"
 #include "core/system/page_size.h"
 #include "core/system/system_info.h"
 #include "output/console/messages/messages_api.h"
@@ -122,6 +123,38 @@ std::string expected_sysctl_error(const std::string& operation,
 }
 
 }  // namespace
+
+TEST(BenchmarkQosTest, SuccessfulRequestIsReportedWithoutWarning) {
+  size_t setter_calls = 0;
+  testing::internal::CaptureStderr();
+  const MainThreadQosResult result = prepare_main_thread_benchmark_qos(
+      [&setter_calls]() {
+        ++setter_calls;
+        return 0;
+      });
+  const std::string stderr_output = testing::internal::GetCapturedStderr();
+
+  EXPECT_TRUE(result.requested);
+  EXPECT_TRUE(result.applied);
+  EXPECT_EQ(result.code, 0);
+  EXPECT_EQ(setter_calls, 1U);
+  EXPECT_TRUE(stderr_output.empty());
+}
+
+TEST(BenchmarkQosTest, FailedRequestPreservesCodeAndPrintsCentralizedWarning) {
+  constexpr int kFailureCode = 17;
+  testing::internal::CaptureStderr();
+  const MainThreadQosResult result = prepare_main_thread_benchmark_qos(
+      []() { return kFailureCode; });
+  const std::string stderr_output = testing::internal::GetCapturedStderr();
+
+  EXPECT_TRUE(result.requested);
+  EXPECT_FALSE(result.applied);
+  EXPECT_EQ(result.code, kFailureCode);
+  EXPECT_EQ(stderr_output,
+            Messages::warning_prefix() +
+                Messages::warning_qos_failed(kFailureCode) + "\n");
+}
 
 TEST(SystemInfoTest, CoreQueriesUseValidTopologyValuesAndRejectInvalidOnes) {
   FakeSystemInfoProvider provider;

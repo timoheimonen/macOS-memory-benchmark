@@ -27,6 +27,7 @@
 - Memory access pattern analysis (sequential/strided/random)
 - Standalone paired TLB analysis
 - Standalone core-to-core cache-line handoff latency analysis
+- Standalone Metal GPU memory read/write/copy bandwidth
 - Cartesian parameter sweeps for supported benchmark modes
 
 Target platform is **macOS on Apple Silicon**.
@@ -38,6 +39,7 @@ This manual focuses on practical usage and interpretation. For implementation de
 - [TECHNICAL_SPECIFICATION.md](TECHNICAL_SPECIFICATION.md)
 - [LATENCY_WHITEPAPER.md](LATENCY_WHITEPAPER.md)
 - [CORE_TO_CORE_WHITEPAPER.md](CORE_TO_CORE_WHITEPAPER.md)
+- [GPU_BANDWIDTH_WHITEPAPER.md](GPU_BANDWIDTH_WHITEPAPER.md)
 
 ---
 
@@ -47,6 +49,8 @@ This manual focuses on practical usage and interpretation. For implementation de
 
 - Apple Silicon Mac
 - Xcode Command Line Tools
+- For `--gpu-bandwidth`: a unified-memory Metal device supporting `MTLGPUFamilyApple7` or a compatible later family.
+  Capability support is distinct from a controlled performance-validation cohort.
 
 Install tools:
 
@@ -81,7 +85,9 @@ make coverage-all
 ```
 
 Coverage reports are written to `/tmp/membenchmark-coverage-{unit,all}/report.txt`. The denominator contains
-production C++ only and excludes tests, GoogleTest, the bundled JSON header, generated files, and assembly.
+production C++ and Objective-C++ only and excludes tests, GoogleTest, the bundled JSON header, generated files, and
+assembly. The macOS 11.0 build links the system Metal and Foundation frameworks. GPU kernels are embedded MSL 2.3
+source compiled at runtime; the optional offline Metal Toolchain is not required.
 
 ### First run
 
@@ -95,6 +101,12 @@ To run the standard memory benchmark:
 
 ```bash
 memory_benchmark --benchmark
+```
+
+To run the standalone GPU bandwidth suite:
+
+```bash
+memory_benchmark --gpu-bandwidth
 ```
 
 If built from source, use `./memory_benchmark` instead.
@@ -120,6 +132,30 @@ If running a local build, use `./memory_benchmark` instead of `memory_benchmark`
 - **Latency (ns)**: per-access delay, measured using dependent pointer chasing
 
 Both matter: some workloads are throughput-bound, others are access-latency-bound.
+
+### GPU effective memory bandwidth
+
+GPU mode measures the versioned Metal compute kernels' effective read, write, and copy payload rate. It uses two
+suite-resident private/tracked data buffers in Apple Silicon unified memory plus a small shared/tracked status buffer.
+`MTLStorageModePrivate` limits CPU access to the Metal resource; it does not mean a discrete VRAM allocation.
+
+The exact numerator is:
+
+| Operation | Exact payload per pass |
+|---|---:|
+| Read | `buffer_size_bytes` |
+| Write | `buffer_size_bytes` |
+| Copy | `2 × buffer_size_bytes` |
+
+The reported decimal GB/s is `exact_payload_bytes / gpu_elapsed_seconds / 1e9`. Copy ping-pongs A→B and B→A and is
+aggregate read-plus-write throughput. It is not a CPU↔GPU transfer measurement. The primary duration is one completed
+Metal command buffer's `GPUEndTime - GPUStartTime`, not host wall time.
+
+GPU samples have steady-state warm-memory semantics. Initialization, one same-shape warmup, deterministic
+preconditioning, and validation are excluded from the primary time. GPU caches are not flushed, and the implementation
+cannot prove physical traffic: JSON always records `dram_residency: "unverified"`. A 64 MB or larger private buffer may
+still be cache- or dispatch-dominated. CPU and GPU GB/s values are not directly comparable because their kernels, timing
+boundaries, parallelism, cache behavior, resource modes, and validation overhead differ.
 
 ### Memory hierarchy behavior
 
@@ -265,6 +301,7 @@ middle, and trailing items.
 | `-L` | `--only-latency` |
 | `-T` | `--analyze-tlb` |
 | `-C` | `--analyze-core2core` |
+| `-G` | `--gpu-bandwidth` |
 | `-b` | `--buffer-size` |
 | `-i` | `--iterations` |
 | `-r` | `--count` |
@@ -287,24 +324,30 @@ middle, and trailing items.
 
 - Main buffer size in MB (per main buffer)
 - Default: `512`
-- Auto-capped to memory safety limit
+- Standard/pattern paths apply their documented memory safety size rules
 - `--buffer-size 0` is valid only with `--only-latency` and disables main-memory latency path
+- In GPU mode, this is the exact size of each of two private buffers, the hard minimum is `64` MB, and the requested
+  value is rejected rather than silently reduced if it exceeds the Metal or suite memory budget
 
 #### `--iterations <count>`
 
 - Exact measured bandwidth pass count when explicitly supplied
 - Positive integer
 - Not allowed with `--only-latency`
-- In `--benchmark` and `--patterns`, omission enables an excluded same-shape pilot and automatic calibration toward
+- In `--benchmark`, `--patterns`, and `--gpu-bandwidth`, omission enables excluded operation-specific work and automatic calibration toward
   150 ms (100–250 ms intended window, at most two corrections)
 - Standard calibration is target- and operation-specific and its resolved pass count is reused across `--count` loops
 - An explicit value bypasses pilot/corrections but not the operation-specific warmup
+- In GPU mode, the value is an exact full-buffer dispatch count. It must fit both the 16,384-dispatch limit and the
+  64 GiB exact-payload limit; copy's 2× numerator defines the strict shared CLI ceiling
 
 #### `--count <count>`
 
 - Full benchmark loop count
 - General default: `1`
 - Core-to-core default: `3`; this mode-specific default does not change standard or pattern execution
+- GPU-bandwidth default: `3`; its operation order rotates so one complete three-loop block gives read/write/copy one
+  first, middle, and last position each
 - Positive integer
 - Use `5` to `10` for stable statistics
 
@@ -345,6 +388,33 @@ middle, and trailing items.
 - Uses the historical all-detected-CPU-core default for comparison compatibility; a matching explicit worker-count
   profile can use `--threads <detected P-core count>`, but placement remains unpinned
 - Rotates pattern groups across repeated loops; read/write/copy order within each group stays fixed
+
+#### `--gpu-bandwidth`
+
+- Runs only the standalone Metal GPU read/write/copy suite; it does not enter `BenchmarkConfig`, the CPU benchmark, or
+  the sweep runner
+- May be combined only with `-b`/`--buffer-size`, `-i`/`--iterations`, `-r`/`--count`, `--seed`,
+  `-o`/`--output`, and `-h`/`--help`; every other option and every other mode flag is rejected
+- Defaults to 512 MB per private buffer, three loops, generated seed, and automatic per-operation calibration
+- Requires at least 64 MB per buffer, unified memory, and `MTLGPUFamilyApple7` capability. Capability admission is not a
+  throughput promise
+- Allocates two `private + tracked` data buffers for the full suite and one `shared + tracked` status buffer. On Apple
+  Silicon all are resources in unified system memory; private storage is not separate VRAM
+- Uses one excluded warmup and deterministic precondition before each attempt. Automatic mode runs an excluded pilot,
+  duration trial, and at most two corrections per operation, then freezes each operation's plan for all loops
+- Uses one measured command buffer and one `MTLDispatchTypeSerial` compute encoder per attempt. Each pass is one
+  full-buffer dispatch; the deterministic grid-stride plan is capped at 8192 threadgroups, and copy alternates
+  source/destination by pass parity
+- Uses Metal `GPUStartTime`/`GPUEndTime` after command completion. Host wall/submit/wait data is diagnostic only
+- Validates the `gpu-dual-mod32-v2` timed accumulator for every operation and the separate `gpu-dual-mod32-v1` final
+  checksum for write/copy. V2 uses pass-specific odd lane weights plus one independently mixed nonzero token per lane
+  and dispatch, including seed, buffer size, pass, operation, and copy direction. Only a completed, validly timed,
+  passed-validation attempt becomes `measured`
+- Rotates operation order `read/write/copy`, `write/copy/read`, `copy/read/write`; multiple values use median P50 and
+  CV above 5% produces a warning without filtering samples
+- Has warm-memory/cache-inclusive semantics and always reports DRAM residency as unverified. Copy GB/s counts aggregate
+  read + write payload and is not CPU↔GPU transfer bandwidth
+- Detailed methodology and GPU schema 1 contract: [GPU_BANDWIDTH_WHITEPAPER.md](GPU_BANDWIDTH_WHITEPAPER.md)
 
 #### `--only-bandwidth`
 
@@ -397,7 +467,7 @@ middle, and trailing items.
 
 #### `--seed <uint64>`
 
-- Applies to `--benchmark`, `--patterns`, or `--analyze-tlb`
+- Applies to `--benchmark`, `--patterns`, `--analyze-tlb`, or `--gpu-bandwidth`
 - In `--benchmark`, derives domain-separated seeds for main, L1, L2, custom, sampling, and both automatic-locality
   layouts; repeated loops rebuild equivalent logical chains and schedules
 - A standard seed reproduces workload/schedule metadata, not performance values or macOS thread placement
@@ -410,6 +480,8 @@ middle, and trailing items.
 - In `--analyze-tlb`, one unsigned 64-bit seed is generated for the command when omitted and reused by every TLB run in
   a Cartesian sweep
 - Standalone TLB JSON stores the resolved seed, source (`user` or `generated`), schedule policy, and each task seed
+- In GPU mode, the base seed is generated once when omitted, recorded as an exact decimal string, and used to derive
+  stable domain-separated read/write/copy operation seeds. It reproduces data/work identity, not performance
 
 #### `--analyze-core2core`
 
@@ -499,6 +571,9 @@ middle, and trailing items.
 - Saves JSON output
 - Relative path writes under current working directory
 - Parent directories are created automatically
+- GPU schema 1 is atomically checkpointed after every terminal measurement. A valid post-parse pre-run backend,
+  capability, compilation, allocation, or work-plan failure also writes an auditable checkpoint. Syntax/config errors,
+  including a buffer below 64 MB, fail before result JSON is created
 
 #### `--sweep <key=value1,value2>`
 
@@ -515,6 +590,7 @@ middle, and trailing items.
 - `--benchmark --only-latency` supports `buffer-size`, `cache-size`, and latency chain/locality/stride keys
 - `--analyze-tlb` supports `latency-stride-bytes`, `latency-chain-mode`, and `tlb-density`
 - `--analyze-core2core` supports `count` and `latency-samples`
+- `--gpu-bandwidth` does not support `--sweep` or `--sweep-max-runs` in schema 1
 
 #### `--sweep-max-runs <count>`
 
@@ -598,6 +674,12 @@ memory_benchmark --analyze-core2core --count 5 --latency-samples 2000 --output c
 # Standalone core-to-core sample-depth sweep
 memory_benchmark --analyze-core2core --count 3 --sweep latency-samples=500,1000,2000 --output core2core_sample_sweep.json
 
+# Standalone GPU bandwidth, automatic calibrated work
+memory_benchmark --gpu-bandwidth --output gpu_bandwidth.json
+
+# Standalone GPU bandwidth, reproducible fixed work
+memory_benchmark --gpu-bandwidth --buffer-size 512 --iterations 24 --count 9 --seed 123456789 --output gpu_fixed.json
+
 # Benchmark latency sweep over 3 buffer sizes and 3 locality windows (9 runs)
 memory_benchmark --benchmark --only-latency --count 5 --sweep buffer-size=256,512,1024 --sweep latency-tlb-locality-kb=16,1024,0 --output latency_sweep.json
 
@@ -634,6 +716,15 @@ memory_benchmark --analyze-core2core --threads 4
 
 # invalid: analyze-core2core sweep supports only count and latency-samples
 memory_benchmark --analyze-core2core --sweep threads=1,2 --output core2core_sweep.json
+
+# invalid: GPU mode accepts only its standalone whitelist
+memory_benchmark --gpu-bandwidth --threads 4
+
+# invalid: GPU mode has no schema-v1 sweep support
+memory_benchmark --gpu-bandwidth --sweep buffer-size=64,128 --output gpu_sweep.json
+
+# invalid: multiple primary modes
+memory_benchmark --gpu-bandwidth --benchmark
 ```
 
 ---
@@ -655,6 +746,27 @@ caffeinate -i -d memory_benchmark --benchmark --count 10 --buffer-size 1024 --ou
 ```
 
 Use this for comparisons across machines or software versions.
+
+### GPU bandwidth characterization
+
+Start with the user-facing automatic policy:
+
+```bash
+caffeinate -i -d memory_benchmark --gpu-bandwidth --buffer-size 512 --count 9 --seed 123456789 --output gpu_auto.json
+```
+
+For a strict same-work cohort, resolve and deliberately lock one valid pass count, then keep buffer size, iterations,
+count, seed, hardware/GPU, macOS build, kernel source SHA-256, MSL/options, resource options, and frozen plan identity the
+same. For example:
+
+```bash
+caffeinate -i -d memory_benchmark --gpu-bandwidth --buffer-size 512 --iterations 24 --count 9 --seed 123456789 --output gpu_fixed.json
+```
+
+The example is a protocol shape, not a published 24-pass performance baseline for every GPU. Require nominal thermal
+state, Low Power Mode off, complete/valid schema state, and CV at or below 5% before calling one process stable. A new
+macOS build or GPU is a new cohort. The repository does not infer verified DRAM traffic or a minimum GB/s from these
+commands; a separate Instruments counter capture can provide audit evidence but is not the production value source.
 
 ### Pattern analysis
 
@@ -866,6 +978,20 @@ conditions or increase `--count`; it does not invalidate the sample automaticall
 Displayed TLB sizes use `KiB`/`MiB`, and sub-resolution negative deltas are rendered as `0.00 ns` rather than `-0.00 ns`.
 The large-locality result remains cache-hot paired translation stress, not DRAM latency or an isolated page-table-walk cost.
 
+### 8) Standalone GPU bandwidth
+
+`--gpu-bandwidth` prints a separate Metal section rather than the CPU main-memory table:
+
+- Device name, private/tracked resource policy, loop count, and whether the headline is a single value or median
+- Read and write effective compute payload GB/s
+- Copy aggregate read-plus-write payload GB/s
+- Read/write/copy CV when at least three measured values exist
+- An interpretation note that DRAM residency is unverified and results can be cache/dispatch dominated
+
+CV above 5%, non-nominal thermal/Low Power Mode state, incomplete three-position order balance, and an automatic/fixed
+duration outside 100–250 ms are warnings. They do not cause performance-based retry or sample filtering. A missing or
+invalid measurement is not printed as zero and remains status-bearing/null in JSON.
+
 **Note:** Standard schema 2 per-loop latency measurements record `chain_node_count` whether the stride was explicit or
 defaulted. Standalone TLB schema 4 records physical diagnostics such as `requested_pages`, `actual_pages`,
 `pointer_nodes`, `unique_cache_lines`, `spread_chain`, and `packed_chain`. These detailed fields are retained in JSON,
@@ -897,7 +1023,7 @@ not the compact console report.
   "main_memory": { ... },
   "cache": { ... },
   "timestamp": "2026-03-09T14:57:56Z",
-  "version": "0.60.0"
+  "version": "0.61.0"
 }
 ```
 
@@ -1019,6 +1145,118 @@ the complete work plan. They can differ from `accesses_per_pass * passes` and mu
 `strided_2mb` names a 2 MiB virtual address stride. It is not evidence that macOS supplied 2 MiB physical pages:
 `large_page_backing_status: "not-verified"` and `large_page_backing_verified: false` must be interpreted literally.
 
+### GPU bandwidth JSON shape
+
+GPU output is a separate top-level schema. It must not be sent to a standard-schema parser merely because it contains
+read/write/copy values:
+
+```json
+{
+  "software_version": "0.61.0",
+  "version": "0.61.0",
+  "timestamp": "...",
+  "schema_version": 1,
+  "mode": "gpu_bandwidth",
+  "methodology_version": "gpu-bandwidth-v1-private-runtime-single-cmdbuf-calibrated-balanced",
+  "status": "complete",
+  "reason_code": "complete",
+  "interruption_requested": false,
+  "results_complete": true,
+  "conclusions_valid": true,
+  "operation_order_balance_complete": true,
+  "execution_time_sec": 0.0,
+  "dram_residency": "unverified",
+  "payload_semantics": "effective-kernel-payload-divided-by-metal-gpu-time",
+  "copy_payload_semantics": "aggregate-read-plus-write",
+  "configuration": {
+    "buffer_size_mb": 512,
+    "buffer_size_bytes": "536870912",
+    "iterations": null,
+    "work_policy": "automatic-calibration",
+    "loop_count": 3,
+    "base_seed_uint64_decimal": "123456789",
+    "seed_source": "user",
+    "output_file": "gpu.json",
+    "argv": ["memory_benchmark", "--gpu-bandwidth", "--seed", "123456789", "--output", "gpu.json"]
+  },
+  "counters": {
+    "planned_loops": 3,
+    "attempted_loops": 3,
+    "completed_loops": 3,
+    "planned_measurements": 9,
+    "attempted_measurements": 9,
+    "terminal_measurements": 9,
+    "completed_measurements": 9,
+    "validated_measurements": 9
+  },
+  "environment": {"start": {}, "end": {}},
+  "backend": {
+    "initialization_status": "success",
+    "device": {
+      "has_unified_memory": true,
+      "required_apple7_family_supported": true,
+      "supported_families": ["apple7"]
+    },
+    "compilation": {
+      "compilation_mode": "runtime-source",
+      "msl_language_version": "2.3",
+      "kernel_revision": "gpu-linear-word-mod32-tg-reduce-v2",
+      "kernel_source_sha256": "..."
+    },
+    "allocation": {}
+  },
+  "memory_budget": {},
+  "work_plans": [],
+  "excluded_calibration_attempts": {"read": [], "write": [], "copy": []},
+  "measurements": [],
+  "loop_records": [],
+  "aggregates": {"read": {}, "write": {}, "copy": {}},
+  "quality_warnings": []
+}
+```
+
+The example is structural and deliberately omits nested diagnostic fields. The authoritative rules are:
+
+- Top-level run status vocabulary is `not-started`, `complete`, `partial`, `interrupted`, `failed`, `unsupported`.
+  Consumers accepting a full result require `status: "complete"`, `results_complete: true`, and
+  `conclusions_valid: true`.
+- Measurement status vocabulary is `not-run`, `measured`, `interrupted`, `invalid`, `failed`. Only `measured` has a
+  finite positive `value_gb_s`; every other status serializes it as `null` with a stable `reason_code`.
+- `planned_loops` equals requested count. A loop is attempted when its first operation starts and completed only when all
+  three operations are measured. `planned_measurements = planned_loops × 3`; attempted starts at operation warmup;
+  terminal counts every non-`not-run` slot; completed requires a completed timed command and terminal validation;
+  validated counts only measured values.
+- `operation_order_balance_complete` additionally requires a complete run and a completed-loop count divisible by
+  three. A complete one- or two-loop run can have valid values while correctly reporting incomplete order balance.
+- Each work plan records exact requested/effective bytes, passes, payload multiplier, bytes per pass, exact payload,
+  dispatch/payload limits, seeds, 16-byte vector/tail geometry, the frozen 8192-threadgroup maximum and resolved grid
+  geometry, one measured command buffer, one measured encoder, dispatch count, `gpu-dual-mod32-v2` timed identity,
+  operation-specific final-checksum identity, and `gpu-work-plan-v1` identity. Large exact integers and seeds use
+  decimal strings.
+- `excluded_calibration_attempts` retains each pilot/trial/correction's purpose, passes, exact payload, phases, GPU time,
+  validation, duration quality, and reason. Explicit iterations produce empty calibration arrays.
+- Each measurement records warmup, precondition, timed and validation phase command/encoder/dispatch counts, stable
+  backend errors separately from raw NSError domain/code/description, GPU start/end/elapsed and host timing diagnostics,
+  expected/actual dual checksums, explicit `timed_accumulator_algorithm` and `final_checksum_algorithm` validation
+  identities, resources, thermal/Low Power Mode/allocation snapshots, and kernel provenance.
+- `aggregates` contains only measured values. One sample is its own headline; multiple samples use median P50. Fewer than
+  three samples are `insufficient-samples`; CV above 5% is `noisy`; otherwise stability is `stable`. Values are not
+  filtered or retried because of performance.
+- `backend.device` records the Apple7 capability result, supported families, unified-memory flag, Metal limits, pipeline
+  geometry, and available-memory source. `backend.allocation` records private/tracked A/B buffers, the shared/tracked
+  status buffer, exact budget components, current-allocation snapshots, and the advisory recommended-working-set result.
+- `backend.compilation` records runtime source mode, MSL 2.3, integer-only math, no preprocessor macros, kernel revision,
+  exact source SHA-256, compiler identifier, SDK, deployment target, and any compiler diagnostic. A non-null runtime
+  library succeeds even if a warning diagnostic exists; a nil library fails.
+
+GPU checkpoints use the shared atomic file writer after every terminal measurement and once for auditable post-parse
+pre-run failures. On interruption, a started logical task is allowed to finish warmup/precondition/timing/required
+validation; a valid current result remains measured. All not-started slots become `interrupted` with
+`value_gb_s: null` and `reason_code: "interruption-before-task"`. A real command, timer, validation, or checkpoint error
+wins over interruption. Graceful interruption returns success at the process boundary but has top-level
+`status: "interrupted"` and false completeness/conclusions. A stop first observed after a terminal checkpoint may cause
+at most one additional interruption checkpoint. Completion of the current task wins; completeness never does.
+
 ### Core-to-core JSON shape
 
 Core-to-core output uses schema 2 and methodology
@@ -1133,7 +1371,7 @@ differences between affinity-tag scenarios as evidence about the requested hint 
   ],
   "execution_time_sec": 123.4,
   "timestamp": "2026-04-29T12:00:00Z",
-  "version": "0.60.0"
+  "version": "0.61.0"
 }
 ```
 
@@ -1192,7 +1430,7 @@ When run with `--analyze-tlb --output tlb_analysis.json`, the payload includes a
 The following is a structure-focused schema-version-4 illustration. It is not presented as a hardware result; the current
 serializer contract and concrete deterministic values are exercised by
 `JsonSchemaTest.TlbAnalysisExporterIncludesModeAndCoreCounts`. New hardware baselines remain outside this release series by
-project decision, so historical 0.53.x measurements are not relabeled as 0.60.0 results:
+project decision, so historical 0.53.x measurements are not relabeled as 0.61.0 results:
 
 ```json
 {
@@ -1431,6 +1669,12 @@ jq '.tlb_analysis.l1_tlb_detection.boundary_locality_kb' tlb_analysis.json
 
 # Standalone TLB large-locality paired translation delta P50 (ns)
 jq '.tlb_analysis.large_locality_paired_comparison.translation_delta_p50_ns' tlb_analysis.json
+
+# Reject incomplete GPU schema 1 output and inspect validated headlines
+jq 'select(.mode == "gpu_bandwidth" and .schema_version == 1 and .status == "complete" and .results_complete == true and .conclusions_valid == true) | .aggregates | with_entries(.value = {headline_gb_s: .value.headline_gb_s, sample_count: .value.sample_count, stability_quality: .value.stability_quality})' gpu_bandwidth.json
+
+# Inspect GPU exact payload, pass count, timing, and validation status
+jq '.measurements[] | {operation, status, value_gb_s, passes: .work_plan.passes, exact_payload_bytes: .work_plan.exact_payload_bytes, gpu_elapsed_seconds: .timed.gpu_elapsed_seconds, validation_status: .validation.validation_status}' gpu_bandwidth.json
 ```
 
 ---
@@ -1442,6 +1686,10 @@ Plotting requires Python 3 and `matplotlib`; the M4/M5 comparison script additio
 ```bash
 python3 -m pip install matplotlib numpy
 ```
+
+The bundled standard-memory and TLB plotters do not plot GPU schema 1. They explicitly reject a top-level
+`mode: "gpu_bandwidth"`, `schema_version: 1` document instead of sending it through a historical standard-schema
+fallback.
 
 ### `script-examples/latency_test_script.sh`
 
@@ -1527,6 +1775,10 @@ not a stability baseline for current pattern schema 3 and should not be compared
 - Keep the detected-core default when preserving historical default-profile comparability. To match a prior worker count,
   request that count explicitly and label it as an unpinned worker-count profile, not a core-placement profile.
 - Inspect status, effective threads, exact payload/work metadata, median, and CV together.
+- For GPU comparisons, require identical mode/schema/methodology, hardware/GPU, macOS build, MSL/options, kernel source
+  SHA-256, resource modes, and fixed work-plan identity. Treat automatic-policy and fixed-work cohorts separately.
+- Keep GPU reference runs at nominal thermal state with Low Power Mode off and minimal competing GPU work. A separate
+  counter capture is useful audit evidence, but its instrumented timing is not the production headline.
 
 ### Common pitfalls
 
@@ -1539,6 +1791,11 @@ not a stability baseline for current pattern schema 3 and should not be compared
 - **Calling `strided_2mb` a superpage test**: the stride is 2 MiB, but physical large-page backing is not verified.
 - **Inferring prefetch, cache-thrash, or TLB diagnoses from pattern ratios alone**: use controlled follow-up experiments;
   use `--analyze-tlb` for the supported TLB analysis.
+- **Calling GPU private storage VRAM or GPU GB/s verified DRAM bandwidth**: Apple Silicon private resources live in
+  unified system memory, and schema 1 deliberately says `dram_residency: "unverified"`.
+- **Treating GPU copy as one-way or CPU↔GPU bandwidth**: its exact numerator counts both the buffer read and write.
+- **Comparing CPU and GPU GB/s directly**: the shared unit and 2× copy convention do not align timing, kernels, cache,
+  resource mode, dispatch, or validation semantics.
 
 ---
 
@@ -1560,7 +1817,23 @@ If using a box mode (`random-box`, `same-random-in-box`, `diff-random-in-box`), 
 
 ### Buffer size warnings/capping
 
-The tool caps per-buffer size against memory safety limits. Use the printed configuration summary to see actual applied sizes.
+Standard/pattern paths apply their documented size safety rules. GPU mode never silently caps its requested private
+buffer: below 64 MB, above Metal `maxBufferLength`, or above the two-buffer memory budget is rejected with a stable
+reason code.
+
+### GPU mode reports unsupported
+
+GPU schema 1 requires `MTLCreateSystemDefaultDevice`, `hasUnifiedMemory`, and Apple7-family capability. With `--output`,
+a valid command writes an `unsupported` audit checkpoint even when no measurement starts. This is different from a CLI
+validation error, which does not create result JSON. Passing the capability check means the kernel contract is admitted;
+it does not make an unvalidated device a performance baseline.
+
+### GPU result is incomplete or interrupted
+
+Check top-level `status`, `reason_code`, completeness booleans, counters, and each measurement's status. Graceful
+interruption deliberately returns process success while schema conclusions remain false. A measurement already started
+may remain valid and numeric because completion wins; not-started slots are interrupted/null. Never accept a result only
+because the process exit code was zero.
 
 ### Script cannot find benchmark binary
 
@@ -1579,6 +1852,8 @@ Make sure you are passing `script-examples/final_output.txt` generated by the la
 - [LATENCY_WHITEPAPER.md](LATENCY_WHITEPAPER.md) - pointer-chase latency methodology deep dive
 - [TLB_ANALYSIS_WHITEPAPER.md](TLB_ANALYSIS_WHITEPAPER.md) - TLB analysis methodology and JSON schema
 - [CORE_TO_CORE_WHITEPAPER.md](CORE_TO_CORE_WHITEPAPER.md) - Core-to-Core Cache-Line Handoff Latency Benchmark: methodology, assembly protocol, scheduler-hint scenarios, and JSON contract
+- [GPU_BANDWIDTH_WHITEPAPER.md](GPU_BANDWIDTH_WHITEPAPER.md) - Metal GPU memory-bandwidth methodology, validation,
+  schema 1, capability boundaries, and maintenance policy
 - [TECHNICAL_SPECIFICATION.md](TECHNICAL_SPECIFICATION.md) - architecture and implementation details
 - [CHANGELOG.md](CHANGELOG.md) - release history
 
@@ -1597,4 +1872,4 @@ memory_benchmark -h
 
 ---
 
-**Last Updated**: 2026-07-10
+**Last Updated**: 2026-07-11

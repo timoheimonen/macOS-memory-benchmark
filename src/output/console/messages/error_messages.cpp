@@ -173,7 +173,7 @@ const std::string& error_analyze_tlb_must_be_used_alone() {
 
 const std::string& error_seed_requires_supported_mode() {
   static const std::string msg =
-      "--seed requires --benchmark, --patterns, or --analyze-tlb";
+      "--seed requires --benchmark, --patterns, --analyze-tlb, or --gpu-bandwidth";
   return msg;
 }
 

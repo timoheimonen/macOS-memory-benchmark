@@ -50,11 +50,10 @@
 #include "core/system/system_info.h"
 #include "output/console/messages/messages_api.h"
 #include "utils/benchmark.h"
+#include "utils/seed_utils.h"
 #include <charconv>
-#include <chrono>
 #include <iostream>
 #include <limits>
-#include <random>
 #include <stdexcept>
 #include <cmath>
 #include <cstdlib>
@@ -109,23 +108,32 @@ const char* strict_unsigned_decimal_error_reason(StrictIntegerParseStatus status
 
 namespace {
 
-ConfigTestHooks active_test_hooks;
-bool test_hooks_active = false;
+struct ConfigTestHookState {
+  ConfigTestHooks hooks;
+  bool active = false;
+};
+
+ConfigTestHookState& config_test_hook_state() {
+  static ConfigTestHookState state;
+  return state;
+}
 
 }  // namespace
 
 void set_config_test_hooks(const ConfigTestHooks* hooks) {
+  ConfigTestHookState& state = config_test_hook_state();
   if (hooks == nullptr) {
-    active_test_hooks = ConfigTestHooks{};
-    test_hooks_active = false;
+    state.hooks = ConfigTestHooks{};
+    state.active = false;
     return;
   }
-  active_test_hooks = *hooks;
-  test_hooks_active = true;
+  state.hooks = *hooks;
+  state.active = true;
 }
 
 const ConfigTestHooks* get_config_test_hooks() {
-  return test_hooks_active ? &active_test_hooks : nullptr;
+  const ConfigTestHookState& state = config_test_hook_state();
+  return state.active ? &state.hooks : nullptr;
 }
 
 namespace {
@@ -194,24 +202,14 @@ uint64_t parse_unsigned_decimal_or_throw(const std::string& value) {
   return parsed;
 }
 
-uint64_t generate_seed() {
+uint64_t generate_config_seed() {
   const ConfigTestHooks* hooks = get_config_test_hooks();
   if (hooks != nullptr && hooks->generated_seed != 0) {
-    return hooks->generated_seed;
+    const uint64_t injected_seed = hooks->generated_seed;
+    return SeedUtils::generate_seed(
+        [injected_seed]() { return injected_seed; });
   }
-  try {
-    std::random_device random_device;
-    const uint64_t high = static_cast<uint64_t>(random_device()) << 32U;
-    const uint64_t seed = high ^ static_cast<uint64_t>(random_device());
-    if (seed != 0) {
-      return seed;
-    }
-  } catch (...) {
-    // Fall through to a local monotonic-clock seed if random_device is unavailable.
-  }
-  const uint64_t clock_seed = static_cast<uint64_t>(
-      std::chrono::steady_clock::now().time_since_epoch().count());
-  return clock_seed != 0 ? clock_seed : 0x9e3779b97f4a7c15ULL;
+  return SeedUtils::generate_seed();
 }
 
 bool tlb_sweep_density_from_string(const std::string& value, TlbSweepDensity& out_density) {
@@ -651,7 +649,7 @@ int parse_arguments(int argc, char* argv[], BenchmarkConfig& config) {
     }
 
     if (!seed_seen) {
-      config.tlb_seed = generate_seed();
+      config.tlb_seed = generate_config_seed();
     }
     config.cpu_name = get_processor_name();
     config.macos_version = get_macos_version();
@@ -978,9 +976,9 @@ int parse_arguments(int argc, char* argv[], BenchmarkConfig& config) {
       config.user_specified_pattern_seed = true;
     }
   } else if (config.run_patterns) {
-    config.pattern_seed = generate_seed();
+    config.pattern_seed = generate_config_seed();
   } else if (config.run_benchmark) {
-    config.benchmark_seed = generate_seed();
+    config.benchmark_seed = generate_config_seed();
   }
 
   return EXIT_SUCCESS;  // All arguments parsed successfully

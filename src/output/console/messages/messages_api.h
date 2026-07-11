@@ -138,6 +138,15 @@ const std::string& error_cache_size_zero_requires_only_latency();
 const std::string& error_only_latency_requires_latency_target();
 const std::string& error_only_latency_with_iterations();
 std::string error_mutually_exclusive_modes(const std::string& mode1, const std::string& mode2);
+const std::string& error_gpu_bandwidth_must_be_used_alone();
+std::string error_gpu_buffer_size_below_minimum(unsigned long requested_mb,
+                                                unsigned long minimum_mb);
+std::string error_gpu_iterations_exceed_limit(size_t requested,
+                                              size_t maximum);
+std::string error_gpu_run_failed(const std::string& reason_code);
+const std::string& gpu_reason_positive_integer();
+const std::string& gpu_reason_nonnegative_unsigned_long();
+const std::string& gpu_reason_loop_count_out_of_range();
 const std::string& error_only_flags_require_benchmark();
 const std::string& error_sweep_requires_parameter();
 std::string error_sweep_too_many_runs(size_t run_count, size_t max_runs);
@@ -183,6 +192,8 @@ std::string msg_pattern_benchmark_loop_completed(int current_loop, int total_loo
 std::string msg_results_saved_to(const std::string& file_path);
 const std::string& msg_running_tlb_analysis();
 const std::string& msg_running_core_to_core_analysis();
+const std::string& msg_running_gpu_bandwidth();
+const std::string& gpu_unknown_device_name();
 const std::string& msg_interrupted_by_user();
 std::string msg_running_sweep(size_t run_count);
 std::string msg_sweep_run_progress(size_t current_run, size_t total_runs);
@@ -191,6 +202,28 @@ std::string msg_core_to_core_scenario_progress(size_t current_loop,
                                                const std::string& scenario_name);
 std::string msg_tlb_analysis_refinement_start(size_t point_count);
 std::string msg_tlb_analysis_validation_start(size_t point_count);
+
+// --- GPU memory-bandwidth usage and report messages ---
+std::string gpu_usage_options(const std::string& prog_name);
+std::string report_gpu_bandwidth_header(const std::string& device_name,
+                                        size_t loop_count,
+                                        bool median_headline);
+std::string report_gpu_bandwidth_value(const std::string& operation,
+                                       double value_gb_s,
+                                       bool aggregate_copy_payload);
+std::string report_gpu_bandwidth_repeatability(double read_cv_pct,
+                                               double write_cv_pct,
+                                               double copy_cv_pct,
+                                               bool available);
+const std::string& report_gpu_bandwidth_interpretation_note();
+std::string warning_gpu_high_cv(const std::string& operation,
+                                double cv_pct,
+                                double threshold_pct);
+const std::string& warning_gpu_order_not_balanced();
+std::string warning_gpu_duration_quality(const std::string& operation,
+                                         const std::string& quality);
+const std::string& warning_gpu_environment_not_nominal();
+const std::string& warning_gpu_recommended_working_set_exceeded();
 
 // --- Core-to-Core Report Messages ---
 const std::string& report_core_to_core_header();

@@ -121,6 +121,41 @@ namespace Constants {
       BANDWIDTH_CALIBRATION_MIN_PILOT_BYTES;
   constexpr size_t BENCHMARK_CALIBRATION_MAX_PASSES =
       BANDWIDTH_CALIBRATION_MAX_PASSES;
+
+  // Standalone GPU memory-bandwidth mode. The calibration values are aliases
+  // of the shared bandwidth policy; the dispatch, payload, and grid limits are
+  // methodology guardrails serialized by GPU schema v1.
+  constexpr unsigned long GPU_DEFAULT_BUFFER_SIZE_MB =
+      DEFAULT_BUFFER_SIZE_MB;
+  constexpr unsigned long GPU_MIN_BUFFER_SIZE_MB = 64;
+  constexpr size_t GPU_DEFAULT_LOOP_COUNT = 3;
+  constexpr double GPU_CALIBRATION_TARGET_SECONDS =
+      BANDWIDTH_CALIBRATION_TARGET_SECONDS;
+  constexpr double GPU_CALIBRATION_MIN_SECONDS =
+      BANDWIDTH_CALIBRATION_MIN_SECONDS;
+  constexpr double GPU_CALIBRATION_MAX_SECONDS =
+      BANDWIDTH_CALIBRATION_MAX_SECONDS;
+  constexpr size_t GPU_CALIBRATION_MAX_CORRECTIONS =
+      BANDWIDTH_CALIBRATION_MAX_CORRECTIONS;
+  constexpr size_t GPU_CALIBRATION_MIN_PILOT_BYTES =
+      BANDWIDTH_CALIBRATION_MIN_PILOT_BYTES;
+  constexpr size_t GPU_CALIBRATION_MAX_PASSES =
+      BANDWIDTH_CALIBRATION_MAX_PASSES;
+  constexpr size_t GPU_MAX_DISPATCHES_PER_MEASUREMENT = 16384;
+  constexpr size_t GPU_MAX_EXACT_PAYLOAD_BYTES =
+      64ULL * 1024ULL * BYTES_PER_MB;
+  constexpr size_t GPU_VECTOR_WIDTH_BYTES = 16;
+  constexpr size_t GPU_THREADS_PER_THREADGROUP_CAP = 256;
+  constexpr size_t GPU_MAX_THREADGROUPS_PER_GRID = 8192;
+  constexpr size_t GPU_AUXILIARY_BUFFER_BYTES = 4096;
+  constexpr double GPU_STREAMING_CV_WARNING_PCT = 5.0;
+  constexpr int GPU_JSON_SCHEMA_VERSION = 1;
+  constexpr const char* GPU_JSON_MODE_NAME = "gpu_bandwidth";
+  constexpr const char* GPU_METHODOLOGY_VERSION =
+      "gpu-bandwidth-v1-private-runtime-single-cmdbuf-calibrated-balanced";
+  constexpr const char* GPU_WORK_PLAN_IDENTITY_VERSION =
+      "gpu-work-plan-v1";
+
   constexpr double BENCHMARK_LATENCY_TARGET_SECONDS = 0.250;
   constexpr double BENCHMARK_LATENCY_CALIBRATION_MIN_SECONDS = 0.100;
   constexpr double BENCHMARK_LATENCY_CALIBRATION_MAX_SECONDS = 0.300;

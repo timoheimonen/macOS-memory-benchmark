@@ -2,7 +2,7 @@
 
 **memory_benchmark — Technical Whitepaper**
 
-*Revision 2026-07-11 — Applies to version 0.60.0; archived examples may use older methodologies*
+*Revision 2026-07-11 — Applies to version 0.61.0; archived examples may use older methodologies*
 
 ---
 
@@ -356,7 +356,7 @@ The mode identifier remains `analyze_core2core`. The methodology contract is ide
   },
   "execution_time_sec": 4.2,
   "timestamp": "2026-07-10T12:00:00Z",
-  "version": "0.60.0"
+  "version": "0.61.0"
 }
 ```
 

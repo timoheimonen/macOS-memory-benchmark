@@ -1,6 +1,6 @@
 # Project Structure — macOS-memory-benchmark
 
-**Version:** 0.60.0
+**Version:** 0.61.0
 **Platform:** ARM64 / AArch64 (Apple Silicon macOS)
 **License:** GNU General Public License v3.0
 
@@ -16,10 +16,11 @@ This document describes the layout of project files, organized by purpose. It is
    - [src/benchmark/](#22-srcbenchmark---benchmarking-infrastructure)
    - [src/core/](#23-srccore--core-utilities)
    - [src/output/](#24-srcoutput---output-layer)
-   - [src/pattern_benchmark/](#25-srcpattern_benchmark--pattern-access--benchmarks)
-   - [src/warmup/](#26-srcwarmup--pre--benchmark-warm-up)
-   - [src/utils/](#27-srcutils--shared-utilities)
-   - [src/third_party/](#28-srcthird_party--vendored-dependencies)
+   - [src/gpu_bandwidth/](#25-srcgpu_bandwidth--metal-gpu-bandwidth)
+   - [src/pattern_benchmark/](#26-srcpattern_benchmark--pattern-access-benchmarks)
+   - [src/warmup/](#27-srcwarmup--pre-benchmark-warm-up)
+   - [src/utils/](#28-srcutils--shared-utilities)
+   - [src/third_party/](#29-srcthird_party--vendored-dependencies)
 3. [tests/ — Unit tests](#3-tests--unit-tests)
 4. [results/ — Benchmark result data](#4-results---benchmark-result-data)
 5. [pictures/ — Documentation images](#5-pictures--documentation-images)
@@ -33,14 +34,14 @@ This document describes the layout of project files, organized by purpose. It is
 
 | File | Purpose |
 |---|---|
-| `main.cpp` | Program entry point; parses configuration, dispatches to the appropriate benchmark or analysis mode |
+| `main.cpp` | Program entry point; performs primary-mode conflict scan, dispatches dedicated GPU/core-to-core paths, and runs the general standard/pattern/TLB pipeline |
 
 ### Build and tooling
 
 | File | Purpose |
 |---|---|
-| `Makefile` | Primary build system; produces the `memory_benchmark` release binary and the `test_runner` test binary |
-| `coverage.sh` | Runs isolated LLVM unit/all-test source coverage builds under `/tmp` without replacing normal workspace binaries |
+| `Makefile` | Primary build system; discovers C++/Objective-C++/assembly, targets macOS 11.0, compiles `.mm` with ARC, links Metal/Foundation, and produces release/test binaries |
+| `coverage.sh` | Runs isolated LLVM unit/all-test C++/Objective-C++ source coverage builds under `/tmp` without replacing normal workspace binaries |
 | `.clang-format` | Clang-Format style baseline for C++ sources |
 
 ### User-facing documentation
@@ -59,13 +60,15 @@ This document describes the layout of project files, organized by purpose. It is
 | `TLB_ANALYSIS_WHITEPAPER.md` | Whitepaper: current TLB analysis methodology, schema, and interpretation limits |
 | `LATENCY_WHITEPAPER.md` | Whitepaper: cache and memory latency measurement methodology |
 | `CORE_TO_CORE_WHITEPAPER.md` | Whitepaper: calibrated core-to-core methodology, audit schema, and interpretation limits |
+| `GPU_BANDWIDTH_WHITEPAPER.md` | Whitepaper: Metal compute bandwidth methodology, GPU schema 1, validation, capability limits, and maintenance policy |
 | `PROJECT_STRUCTURE.md` | This file |
 
 ---
 
 ## 2. src/ — Source code
 
-All production C++ and ARM64 assembly lives under `src/`. Headers use include paths relative to `src/` (e.g., `#include "core/config/config.h"`).
+All production C++, Objective-C++, and ARM64 assembly lives under `src/`. Headers use include paths relative to `src/`
+(e.g., `#include "core/config/config.h"`). Metal/Objective-C types are confined to one private `.mm` backend.
 
 ---
 
@@ -153,10 +156,11 @@ Core infrastructure for configuration, memory management, macOS system introspec
 
 | File | Purpose |
 |---|---|
-| `config.h` | `BenchmarkConfig` structure for standard, pattern, standalone TLB, and their common sweep settings; core-to-core uses a separate config type |
-| `constants.h` | Named constants for memory limits, cache size bounds, stride values, buffer sizing factors, and latency access counts |
-| `version.h` | `SOFTVERSION` macro (semantic version string, currently `"0.60.0"`) |
-| `argument_parser.cpp` | Parses standard, pattern, and standalone TLB options into `BenchmarkConfig`; core-to-core is pre-routed to its dedicated parser |
+| `config.h` | `BenchmarkConfig` structure for standard, pattern, standalone TLB, and their common sweep settings; core-to-core and GPU use separate config types |
+| `constants.h` | Named constants for CPU/GPU memory limits, calibration, grid/dispatch/payload guardrails, buffer sizing, and latency access counts |
+| `version.h` | `SOFTVERSION` macro (semantic version string, currently `"0.61.0"`) |
+| `mode_selector.h` / `.cpp` | Pure primary-mode scan and conflict detection before mode-specific parsing; routes standard, pattern, TLB, core-to-core, and GPU deterministically |
+| `argument_parser.cpp` | Parses standard, pattern, and standalone TLB options into `BenchmarkConfig`; core-to-core and GPU are pre-routed to dedicated parsers |
 | `config_validator.cpp` | Validates the parsed configuration; emits errors for out-of-range or conflicting settings |
 | `buffer_calculator.cpp` | Derives buffer sizes for each cache/memory level from the validated configuration and detected system parameters |
 
@@ -181,6 +185,7 @@ Core infrastructure for configuration, memory management, macOS system introspec
 | File | Purpose |
 |---|---|
 | `system_info.h` / `.cpp` | Queries CPU/cache/OS/memory data through a macOS provider and a deterministic provider seam for fallback/error tests |
+| `benchmark_qos.h` / `.cpp` | Shared best-effort main-thread QoS preparation with requested/applied/code audit result |
 
 #### src/core/timing/
 
@@ -211,6 +216,7 @@ All user-facing text strings are centralized here. Each `.cpp` file implements a
 | `cache_messages.cpp` | Cache-level result labels and headings |
 | `config_messages.cpp` | Configuration echo and validation error text |
 | `core_to_core_messages.cpp` | Core-to-core mode status and result messages |
+| `gpu_bandwidth_messages.cpp` | GPU help, status, result, interpretation, warning, and validation messages |
 | `error_messages.cpp` | Fatal error messages |
 | `info_messages.cpp` | General informational messages |
 | `pattern_messages.cpp` | Pattern benchmark descriptive labels |
@@ -224,7 +230,7 @@ All user-facing text strings are centralized here. Each `.cpp` file implements a
 | File | Purpose |
 |---|---|
 | `json_output_api.h` | Public API for writing benchmark results to JSON files |
-| `json_output.cpp` | Builds standard/pattern root payloads, adds timestamp/version metadata, and triggers file output |
+| `json_output.cpp` | Builds standard/pattern root payloads, adds timestamp/version metadata, and triggers file output; GPU schema 1 is built in `src/gpu_bandwidth/gpu_json.cpp` and reuses the same atomic writer |
 | `builder.cpp` | Builds common mode configuration metadata, including resolved chain, seed, calibration, scheduling, and worker policies |
 | `standard.cpp` | Active standard schema-2 serializer for completion state, loop measurements, and main/cache aggregates |
 | `patterns.cpp` | Serializes pattern benchmark results |
@@ -232,7 +238,24 @@ All user-facing text strings are centralized here. Each `.cpp` file implements a
 
 ---
 
-### 2.5 src/pattern_benchmark/ — Pattern access benchmarks
+### 2.5 src/gpu_bandwidth/ — Metal GPU bandwidth
+
+Standalone GPU schema 1 implementation. The pure C++ planner/runner/result model is isolated from the private
+Objective-C++ Metal backend so deterministic unit tests do not require GPU work.
+
+| File | Purpose |
+|---|---|
+| `gpu_bandwidth.h` / `.cpp` | Dedicated `GpuBandwidthConfig`, exact option-whitelist parser, GPU help, standalone entry point, QoS/signal scope, and console handoff |
+| `gpu_work_plan.h` / `.cpp` | Pure read/write/copy pass limits, exact payload, seed derivation, cyclic order, calibration arithmetic, frozen 8192-threadgroup grid cap/geometry, and `gpu-work-plan-v1` identity |
+| `gpu_backend.h` / `.cpp` | Objective-C-free synchronous/noexcept backend contract, device/resource/phase/validation metadata, factory declaration, and status string mappings |
+| `gpu_runner.h` / `.cpp` | Backend-independent calibration, warmup/precondition/timing/validation orchestration, completion-wins interruption, counters, aggregates, resource lifecycle, and checkpoints |
+| `gpu_json.h` / `.cpp` | GPU schema 1 builder and shared atomic-writer adapter; preserves exact integer strings, nullable state, errors, provenance, and nested audit records |
+| `gpu_kernels_source.h` | Private canonical embedded MSL 2.3 source, kernel revision, integer pattern/checksum contract, and exact source bytes hashed at runtime |
+| `metal_gpu_backend.mm` | Only Objective-C++/Metal boundary: ARC/autorelease pools, capability checks, runtime compilation, private/tracked buffers, shared/tracked status, serial command buffers, timestamps, validation, and test readback |
+
+---
+
+### 2.6 src/pattern_benchmark/ — Pattern access benchmarks
 
 Benchmarks characterizing memory access patterns: sequential forward, sequential reverse, strided, and random. Results expose how access regularity and stride distance affect effective payload bandwidth.
 
@@ -251,7 +274,7 @@ Benchmarks characterizing memory access patterns: sequential forward, sequential
 
 ---
 
-### 2.6 src/warmup/ — Pre--benchmark warm-up
+### 2.7 src/warmup/ — Pre-benchmark warm-up
 
 Warm-up passes reduce selected cold-start effects before timing. Main-memory bandwidth warm-up is bounded, cache
 bandwidth warm-up covers the full target buffer, and latency warm-up page-touches without pre-traversing the chain.
@@ -267,17 +290,20 @@ bandwidth warm-up covers the full target buffer, and latency warm-up page-touche
 
 ---
 
-### 2.7 src/utils/ — Shared utilities
+### 2.8 src/utils/ — Shared utilities
 
 | File | Purpose |
 |---|---|
 | `benchmark.h` | Convenience umbrella header that includes all benchmark-related headers |
 | `utils.h` / `.cpp` | Shared thread-joining helpers and the TTY-aware stderr progress spinner used by benchmark modes |
 | `json_utils.h` / `.cpp` | JSON helper functions shared between the TLB, core-to-core, and standard output serializers |
+| `cyclic_order.h` / `.cpp` | Shared deterministic cyclic ordering used by CPU and GPU planners |
+| `seed_utils.h` / `.cpp` | Shared SplitMix64 derivation and generate-once seed helper with deterministic provider seam |
+| `hash_utils.h` / `.cpp` | CommonCrypto-based SHA-256 helper used for exact embedded MSL source provenance |
 
 ---
 
-### 2.8 src/third_party/ — Vendored dependencies
+### 2.9 src/third_party/ — Vendored dependencies
 
 | File | Purpose |
 |---|---|
@@ -301,6 +327,11 @@ GoogleTest-based unit test suite. All files are picked up automatically by the M
 | `test_benchmark_executor.cpp` | `BenchmarkExecutorTest` | Injected phase/chain failures, continuous latency sampling, and hardware executor contracts |
 | `test_benchmark_runner.cpp` | `BenchmarkStatisticsCollectorTest`, `BenchmarkRunnerTest` | Status-bearing collection, reset/reserve contracts, checkpointing, and runner failure seams |
 | `test_benchmark_work_plan.cpp` | `BenchmarkWorkPlanTest` | Exact payload/access planning, calibration, cyclic order, seed derivation, and duration classification |
+| `test_gpu_bandwidth.cpp` | `GpuBandwidthParserTest`, `GpuMemoryBudgetTest`, `GpuRunnerTest`, `GpuJsonTest` | Strict standalone parsing, memory budgets, fake-backend calibration/execution/failure/interruption semantics, counters, and schema-1 serialization |
+| `test_gpu_work_plan.cpp` | `GpuWorkPlanTest` | GPU constants, cyclic order, seed domains, pass/payload caps, calibration, vector/tail/grid geometry, and frozen identities |
+| `test_gpu_metal_backend.cpp` | `GpuMetalBackendIntegrationTest` | Real-Metal capability/runtime compile, private/shared tracked resources, read/write/copy/tail correctness, timestamps, validation, and byte readback |
+| `test_mode_selector.cpp` | `ModeSelectorTest` | Primary-mode detection, GPU aliases, and deterministic multi-mode conflicts |
+| `test_hash_utils.cpp` | `HashUtilsTest` | CommonCrypto SHA-256 standard vectors and source-provenance helper behavior |
 | `test_analysis.cpp` | `AnalysisTest` | Injected TLB coordination, counters/status, boundary detection, validation, and paired analysis |
 | `test_json_schema.cpp` | `JsonSchemaTest` | JSON output structure and field presence |
 | `test_json_utils.cpp` | `JsonUtilsTest`, `JsonFileWriterTest` | JSON parse/statistics and atomic writer success/failure contracts |
@@ -326,8 +357,7 @@ GoogleTest-based unit test suite. All files are picked up automatically by the M
 | `test_tlb_sweep_planner.cpp` | `TlbSweepPlannerTest` | Page-aligned base/refinement planning, stride bounds, deduplication, and source tracking |
 | `test_utils.cpp` | `ProgressSpinnerTest`, `UtilsTest` | TTY-gated spinner rendering/cleanup and worker-thread joining |
 
-**Current source inventory:** 34 test translation units contain 634 `TEST`/`TEST_F`/`TEST_P` declarations across 51
-suite names as of 2026-07-10. Parameterized instantiations expand the executable to 653 runtime tests.
+Volatile source/test counts and the authoritative generated inventory are maintained in `DRY_CHECK.md`.
 
 ---
 

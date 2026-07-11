@@ -27,9 +27,6 @@
 #include <unistd.h>
 #include <vector>
 
-#include <mach/mach.h>
-#include <pthread/qos.h>
-
 #include "benchmark/benchmark_runner.h"
 #include "benchmark/tlb_analysis.h"
 #include "core/config/config.h"
@@ -39,6 +36,7 @@
 #include "core/memory/buffer_allocator.h"
 #include "core/memory/buffer_manager.h"
 #include "core/signal/signal_handler.h"
+#include "core/system/benchmark_qos.h"
 #include "core/system/system_info.h"
 #include "core/timing/timer.h"
 #include "output/console/messages/messages_api.h"
@@ -606,10 +604,7 @@ int run_sweep_mode(const BenchmarkConfig& base_config) {
   std::cout << Messages::usage_header(SOFTVERSION);
   std::cout << Messages::msg_running_sweep(run_count) << std::endl;
 
-  kern_return_t qos_ret = pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
-  if (qos_ret != KERN_SUCCESS) {
-    std::cerr << Messages::warning_prefix() << Messages::warning_qos_failed(qos_ret) << std::endl;
-  }
+  const MainThreadQosResult qos_result = prepare_main_thread_benchmark_qos();
 
   BenchmarkSignalMaskGuard signal_guard;
 
@@ -628,10 +623,10 @@ int run_sweep_mode(const BenchmarkConfig& base_config) {
                                           {"sweep_max_runs", base_config.sweep_max_runs},
                                           {"sweep_parameters", build_sweep_parameters_json(base_config)},
                                           {"main_thread_qos",
-                                           {{"requested", true},
+                                           {{"requested", qos_result.requested},
                                             {"requested_class", "user-interactive"},
-                                            {"applied", qos_ret == KERN_SUCCESS},
-                                            {"code", qos_ret},
+                                            {"applied", qos_result.applied},
+                                            {"code", qos_result.code},
                                             {"policy", "best-effort; continue on failure"}}}};
 
   std::filesystem::path file_path(base_config.output_file);
@@ -649,9 +644,9 @@ int run_sweep_mode(const BenchmarkConfig& base_config) {
   hooks.execute_run = [&](size_t run_index) {
     std::cout << Messages::msg_sweep_run_progress(run_index + 1, assignments.size()) << std::endl;
     BenchmarkConfig run_config = build_run_config(base_config, assignments[run_index]);
-    run_config.main_thread_qos_requested = true;
-    run_config.main_thread_qos_applied = qos_ret == KERN_SUCCESS;
-    run_config.main_thread_qos_code = qos_ret;
+    run_config.main_thread_qos_requested = qos_result.requested;
+    run_config.main_thread_qos_applied = qos_result.applied;
+    run_config.main_thread_qos_code = qos_result.code;
     SweepRunOutcome outcome;
     outcome.exit_code = run_sweep_point(run_config, run_index, outcome.result_json);
     if (outcome.exit_code != EXIT_SUCCESS) {

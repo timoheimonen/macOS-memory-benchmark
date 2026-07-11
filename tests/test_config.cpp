@@ -45,6 +45,7 @@ class ScopedConfigTestHooks {
 
   size_t page_size_bytes() const { return hooks_.page_size_bytes; }
   int total_logical_cores() const { return hooks_.total_logical_cores; }
+  uint64_t generated_seed() const { return hooks_.generated_seed; }
 
  private:
   ConfigTestHooks hooks_;
@@ -556,6 +557,7 @@ TEST(ConfigTest, ParseAnalyzeTlbGeneratesSeedWhenOmitted) {
   const char* argv[] = {"program", "--analyze-tlb"};
 
   EXPECT_EQ(parse_arguments(2, const_cast<char**>(argv), config), EXIT_SUCCESS);
+  EXPECT_EQ(config.tlb_seed, scoped_config_test_hooks.generated_seed());
   EXPECT_FALSE(config.user_specified_tlb_seed);
 }
 
@@ -595,7 +597,7 @@ TEST(ConfigTest, ParsePatternsGeneratesSeedWhenOmitted) {
   const char* argv[] = {"program", "--patterns"};
 
   EXPECT_EQ(parse_arguments(2, const_cast<char**>(argv), config), EXIT_SUCCESS);
-  EXPECT_NE(config.pattern_seed, 0u);
+  EXPECT_EQ(config.pattern_seed, scoped_config_test_hooks.generated_seed());
   EXPECT_FALSE(config.user_specified_pattern_seed);
 }
 
@@ -615,7 +617,7 @@ TEST(ConfigTest, ParseBenchmarkGeneratesSeedWhenOmitted) {
   const char* argv[] = {"program", "--benchmark"};
 
   EXPECT_EQ(parse_arguments(2, const_cast<char**>(argv), config), EXIT_SUCCESS);
-  EXPECT_NE(config.benchmark_seed, 0u);
+  EXPECT_EQ(config.benchmark_seed, scoped_config_test_hooks.generated_seed());
   EXPECT_FALSE(config.user_specified_benchmark_seed);
 }
 

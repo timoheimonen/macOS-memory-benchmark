@@ -22,13 +22,15 @@
  * of memory benchmarks. It handles configuration parsing, mode-specific buffer
  * preparation, benchmark execution, and results output in both console and JSON formats.
  *
- * The program supports four benchmark modes:
+ * The program supports five benchmark modes:
  * - Standard benchmarks: Memory bandwidth and latency tests for different cache levels
  * - Pattern benchmarks: Access pattern-specific tests (forward, reverse, strided, random)
  * - TLB analysis: Page-native paired locality measurements and boundary analysis
  * - Core-to-core analysis: Best-effort inter-core round-trip latency measurements
+ * - GPU bandwidth: Standalone Metal GPU memory read/write/copy measurements
  *
  * Standard, pattern, TLB, and core-to-core modes also support validated parameter sweeps.
+ * GPU bandwidth is intentionally standalone and does not participate in sweeps.
  *
  * @author Timo Heimonen
  * @date 2026
@@ -41,6 +43,7 @@
 
 #include "utils/benchmark.h"
 #include "core/config/config.h"
+#include "core/config/mode_selector.h"
 #include "core/memory/buffer_allocator.h"
 #include "core/memory/buffer_manager.h"
 #include "benchmark/benchmark_runner.h"
@@ -52,22 +55,16 @@
 #include "output/json/json_output/json_output_api.h"
 #include "pattern_benchmark/pattern_benchmark.h"
 #include "core/signal/signal_handler.h"
-
-// macOS specific memory management
-#include <mach/mach.h>  // kern_return_t
-#include <pthread/qos.h>
+#include "core/system/benchmark_qos.h"
+#include "gpu_bandwidth/gpu_bandwidth.h"
 
 namespace {
 
 void set_benchmark_qos(BenchmarkConfig& config) {
-  config.main_thread_qos_requested = true;
-  kern_return_t qos_ret = pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
-  config.main_thread_qos_applied = qos_ret == KERN_SUCCESS;
-  config.main_thread_qos_code = qos_ret;
-  if (qos_ret != KERN_SUCCESS) {
-    // Non-critical error, just print a warning
-    std::cerr << Messages::warning_prefix() << Messages::warning_qos_failed(qos_ret) << std::endl;
-  }
+  const MainThreadQosResult qos_result = prepare_main_thread_benchmark_qos();
+  config.main_thread_qos_requested = qos_result.requested;
+  config.main_thread_qos_applied = qos_result.applied;
+  config.main_thread_qos_code = qos_result.code;
 }
 
 template <typename Fn>
@@ -86,7 +83,7 @@ int run_with_benchmark_preparation(BenchmarkConfig& config, Fn&& fn) {
  * 1. Parses and validates command-line arguments
  * 2. Configures system settings (QoS, cache parameters)
  * 3. Prepares benchmark buffers using mode-appropriate strategy
- * 4. Executes the requested standard, pattern, TLB, or core-to-core mode
+ * 4. Executes the requested standard, pattern, TLB, core-to-core, or GPU mode
  * 5. Outputs results to console and optionally to JSON file
  *
  * The program supports multiple execution modes:
@@ -95,6 +92,7 @@ int run_with_benchmark_preparation(BenchmarkConfig& config, Fn&& fn) {
  * - Pattern-specific benchmarks (--patterns)
  * - Standalone TLB analysis (--analyze-tlb)
  * - Standalone core-to-core analysis (--analyze-core2core)
+ * - Standalone GPU memory bandwidth (--gpu-bandwidth)
  * - Validated multi-configuration runs (--sweep)
  * - Multiple loop iterations for statistical analysis (--count)
  *
@@ -117,11 +115,21 @@ int main(int argc, char *argv[]) {
   // Install signal handlers early (before any benchmark logic)
   install_signal_handlers();
 
-  for (int i = 1; i < argc; ++i) {
-    const std::string arg = argv[i];
-    if (arg == "-C" || arg == "--analyze-core2core") {
-      return run_core_to_core_latency_mode(argc, argv);
-    }
+  const PrimaryModeSelection mode_selection =
+      select_primary_benchmark_mode(argc, argv);
+  if (mode_selection.mode == PrimaryBenchmarkMode::Conflict) {
+    std::cerr << Messages::error_prefix()
+              << Messages::error_mutually_exclusive_modes(
+                     mode_selection.selected_options[0],
+                     mode_selection.selected_options[1])
+              << std::endl;
+    return EXIT_FAILURE;
+  }
+  if (mode_selection.mode == PrimaryBenchmarkMode::GpuBandwidth) {
+    return run_gpu_bandwidth_mode(argc, argv);
+  }
+  if (mode_selection.mode == PrimaryBenchmarkMode::AnalyzeCoreToCore) {
+    return run_core_to_core_latency_mode(argc, argv);
   }
 
   // Start total execution timer

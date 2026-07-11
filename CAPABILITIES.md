@@ -5,7 +5,7 @@ running on Apple Silicon.
 
 The tool is intended for practical microarchitectural investigation rather than abstract synthetic scoring. It measures
 bandwidth, latency, access-pattern sensitivity, TLB behavior, and core-to-core cache-line handoff characteristics using
-native ARM64 code paths.
+native ARM64 code paths plus a standalone Metal compute path.
 
 Long-running benchmark entry points block SIGINT/SIGTERM while worker threads exist, poll for interruption between safe
 phases, and restore the caller's exact prior signal mask at scope exit. Live progress is emitted only to an interactive
@@ -33,6 +33,63 @@ rotate across repeated loops. Worker QoS is a best-effort scheduler hint; it is 
 Main-memory bandwidth defaults to all detected CPU cores. Cache bandwidth defaults to one worker when `--threads` is
 omitted; an explicit thread count applies to both standard bandwidth targets. Pattern mode also defaults to all detected
 cores, although sparse strided work may reduce its effective worker count.
+
+## Metal GPU Memory Bandwidth
+
+The standalone `--gpu-bandwidth` mode measures effective read, write, and copy payload bandwidth for versioned Metal
+compute kernels. It is independent of standard CPU bandwidth and uses a strict option whitelist: buffer size, iterations,
+count, seed, output, and help. The default is two 512 MB data buffers, three loops, a generated seed, and automatic
+operation-specific calibration; the hard per-buffer minimum is 64 MB. GPU schema 1 does not support parameter sweeps.
+
+The two data resources use private storage with tracked hazards, while the small checksum/status resource is shared and
+tracked. Apple Silicon is a unified-memory architecture: private Metal storage is GPU-only from the resource-access
+perspective but is not separate VRAM. The backend requires `hasUnifiedMemory` and `MTLGPUFamilyApple7` support. That
+capability gate admits the kernel contract; it is not a performance guarantee for every admitted GPU.
+
+The reported decimal GB/s uses exact effective payload divided by a completed Metal command buffer's GPU time:
+
+- Read: `buffer_size × passes`
+- Write: `buffer_size × passes`
+- Copy: `2 × buffer_size × passes`, because the numerator includes both read and write sides
+
+Each pass is one full-buffer dispatch. One measured attempt is exactly one command buffer and one serial compute encoder;
+initialization, warmup, preconditioning, and validation are separate and excluded. Host wall time is retained only as a
+diagnostic. The deterministic grid-stride plan uses a frozen maximum of 8192 threadgroups and is not runtime-tuned by
+device name. Copy ping-pongs between the two buffers and is not a CPU↔GPU transfer benchmark.
+
+Omitted iterations use an excluded minimum-payload pilot, a trial, and at most two corrections toward 150 ms in a
+100–250 ms window. The final read/write/copy plans are frozen before loop 0. Explicit iterations are exact and rejected
+rather than capped if they exceed the 16,384-dispatch or 64 GiB exact-payload guardrail. Every attempt has a same-shape
+warmup and deterministic precondition, so the semantics are steady-state warm-memory rather than cold-cache.
+
+Loop order rotates read/write/copy. Three complete loops place each operation first, middle, and last once. Aggregates
+contain only completed, validly timed, passed-validation measurements; multiple values use median P50. Repeatability is
+insufficient below three samples, stable at or below 5% CV, and noisy above 5% CV. The warning does not filter values or
+trigger a performance retry.
+
+GPU schema 1 records explicit run/measurement statuses, nullable unavailable values, exact work/payload strings,
+planned/attempted/completed/validated counters, frozen plan identities, excluded calibration attempts, resource and
+pipeline geometry, command/encoder/dispatch counts, checksums, Metal errors, thermal/power/allocation snapshots, and
+runtime-compile provenance. Output is atomically checkpointed after each terminal measurement. Its interruption policy is
+completion-wins: a started task finishes required validation and keeps a valid current value, while all not-started slots
+become interrupted/null. A real error wins over interruption; only a complete, fully validated run has valid conclusions.
+
+This capability does not verify physical DRAM traffic. GPU caches, dispatch/command processing, other GPU work, thermal
+and power state, and the runtime Metal compiler/driver all influence the value. Every production JSON records
+`dram_residency: "unverified"`; a 64 MB minimum or private storage does not change that. CPU and GPU GB/s are not directly
+comparable even though both use exact payload and the same decimal unit. The repository defines M4 as the reference
+performance-validation cohort. The completed 0.61.0 automatic and fixed-work populations pass their correctness,
+completion, environment, and 5% repeatability gates; the separate `xctrace` audit exposed no usable memory-traffic
+counter, so physical DRAM residency remains unverified. The final accumulator-v2 campaign uses the frozen 8192-group
+cap; automatic read/write/copy median-of-process-medians are 88.607/74.384/78.584 GB/s and fixed-24 values are
+91.075/75.240/78.508 GB/s. Cross-process CVs are 0.221/0.967/0.311% and 0.507/0.828/0.327%, respectively. The frozen
+release binary SHA-256 is `31ce0285dc5fde382d40e6d7b769c20e6f3363754bb3c7c0afbb4f13cd71a6a7`; the canonical MSL
+SHA-256 is `b9a242d2b959c9c11f6f130a52afd66f111d6761be2193beec1f051baa094296`. This exact M4/OS/compiler cohort is
+performance-validated only for the versioned effective-payload methodology. The final counter audit left both physical
+DRAM residency and timed reduction overhead unverified. Other Apple7-capable devices remain capability-supported and
+performance-unvalidated until equivalent evidence is recorded. See
+[GPU_BANDWIDTH_WHITEPAPER.md](GPU_BANDWIDTH_WHITEPAPER.md). The large raw validation record is retained locally and is
+intentionally not versioned in Git.
 
 ## Memory Latency
 
@@ -206,3 +263,6 @@ caffeinate -i -d memory_benchmark --benchmark --count 10 --buffer-size 1024
 
 For DRAM-focused results, use sufficiently large buffers so that the working set is not dominated by cache residency.
 For latency and TLB experiments, compare multiple stride and locality settings rather than relying on a single run.
+For GPU comparisons, also require matching GPU/macOS build, MSL/options, kernel SHA-256, storage/hazard modes, seed, and
+frozen work plan. Treat Instruments counter captures as separate audit evidence rather than the source of production
+GB/s, and never promote `dram_residency: "unverified"` to a DRAM claim from buffer size alone.

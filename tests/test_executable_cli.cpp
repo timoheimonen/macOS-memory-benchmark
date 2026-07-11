@@ -139,6 +139,119 @@ TEST(ExecutableCliIntegrationTest, HelpFlagShowsHelpAndReturnsSuccessIntegration
   EXPECT_EQ(result.exit_code, EXIT_SUCCESS);
   EXPECT_NE(result.output.find("Usage:"), std::string::npos);
   EXPECT_NE(result.output.find("--patterns"), std::string::npos);
+  EXPECT_NE(result.output.find("--gpu-bandwidth"), std::string::npos);
+}
+
+TEST(ExecutableCliIntegrationTest, GpuHelpUsesDedicatedStandaloneParserIntegration) {
+  const CliResult result =
+      run_memory_benchmark({"--gpu-bandwidth", "--help"});
+
+  EXPECT_EQ(result.exit_code, EXIT_SUCCESS);
+  EXPECT_NE(result.output.find(
+                "Usage: ./memory_benchmark --gpu-bandwidth [options]"),
+            std::string::npos);
+  EXPECT_NE(result.output.find("minimum: 64 MB"), std::string::npos);
+  EXPECT_NE(result.output.find("default: 3"), std::string::npos);
+}
+
+TEST(ExecutableCliIntegrationTest, GpuModeConflictIsOrderIndependentIntegration) {
+  for (const std::vector<std::string>& arguments : {
+           std::vector<std::string>{"--gpu-bandwidth",
+                                    "--analyze-core2core"},
+           std::vector<std::string>{"--analyze-core2core",
+                                    "--gpu-bandwidth"}}) {
+    const CliResult result = run_memory_benchmark(arguments);
+    EXPECT_EQ(result.exit_code, EXIT_FAILURE);
+    EXPECT_NE(result.output.find("mutually exclusive"), std::string::npos);
+    EXPECT_EQ(result.output.find("Running GPU memory bandwidth"),
+              std::string::npos);
+  }
+}
+
+TEST(ExecutableCliIntegrationTest, GpuMinimumFailsBeforeOutputIntegration) {
+  const TemporaryJsonFile output("gpu_below_minimum");
+  const CliResult result = run_memory_benchmark(
+      {"--gpu-bandwidth", "--buffer-size", "63", "--output",
+       output.path()});
+
+  EXPECT_EQ(result.exit_code, EXIT_FAILURE);
+  EXPECT_NE(result.output.find("at least 64 MB"), std::string::npos);
+  EXPECT_EQ(access(output.path().c_str(), F_OK), -1);
+}
+
+TEST(ExecutableCliIntegrationTest, GpuWritesValidatedSchemaV1Integration) {
+  const TemporaryJsonFile output("gpu_schema_v1");
+  const CliResult result = run_memory_benchmark(
+      {"--gpu-bandwidth", "--buffer-size", "64", "--iterations", "1",
+       "--count", "1", "--seed", "42", "--output", output.path()});
+
+  ASSERT_EQ(access(output.path().c_str(), F_OK), 0);
+  const nlohmann::json json =
+      nlohmann::json::parse(read_file(output.path()));
+  if (json["status"] == "unsupported") {
+    GTEST_SKIP() << json["reason_code"].get<std::string>();
+  }
+  ASSERT_EQ(result.exit_code, EXIT_SUCCESS) << result.output;
+  EXPECT_EQ(json["software_version"], SOFTVERSION);
+  EXPECT_EQ(json["schema_version"], 1);
+  EXPECT_EQ(json["mode"], "gpu_bandwidth");
+  EXPECT_EQ(json["status"], "complete");
+  EXPECT_TRUE(json["results_complete"].get<bool>());
+  EXPECT_TRUE(json["conclusions_valid"].get<bool>());
+  EXPECT_EQ(json["counters"]["planned_measurements"], 3u);
+  EXPECT_EQ(json["counters"]["validated_measurements"], 3u);
+  EXPECT_EQ(json["configuration"]["base_seed_uint64_decimal"], "42");
+  ASSERT_EQ(json["measurements"].size(), 3u);
+  for (const nlohmann::json& measurement : json["measurements"]) {
+    EXPECT_EQ(measurement["status"], "measured");
+    EXPECT_GT(measurement["value_gb_s"].get<double>(), 0.0);
+    EXPECT_EQ(measurement["timed"]["command_buffer_count"], 1u);
+    EXPECT_EQ(measurement["timed"]["compute_encoder_count"], 1u);
+    EXPECT_EQ(measurement["validation"]["validation_status"], "passed");
+  }
+  EXPECT_EQ(json["work_plans"][2]["exact_payload_bytes"], "134217728");
+  EXPECT_EQ(json["backend"]["allocation"]["buffer_a"]["storage_mode"],
+            "private");
+  EXPECT_EQ(json["backend"]["allocation"]["buffer_a"]
+                ["hazard_tracking_mode"],
+            "tracked");
+  EXPECT_EQ(json["backend"]["compilation"]["kernel_source_sha256"]
+                .get<std::string>()
+                .size(),
+            64u);
+}
+
+TEST(ExecutableCliIntegrationTest, GpuAutomaticCalibrationFreezesPlansIntegration) {
+  const TemporaryJsonFile output("gpu_automatic_calibration");
+  const CliResult result = run_memory_benchmark(
+      {"--gpu-bandwidth", "--buffer-size", "64", "--count", "1",
+       "--seed", "42", "--output", output.path()});
+
+  ASSERT_EQ(access(output.path().c_str(), F_OK), 0);
+  const nlohmann::json json =
+      nlohmann::json::parse(read_file(output.path()));
+  if (json["status"] == "unsupported") {
+    GTEST_SKIP() << json["reason_code"].get<std::string>();
+  }
+  ASSERT_EQ(result.exit_code, EXIT_SUCCESS) << result.output;
+  for (const char* operation : {"read", "write", "copy"}) {
+    const nlohmann::json& attempts =
+        json["excluded_calibration_attempts"][operation];
+    ASSERT_GE(attempts.size(), 2u);
+    EXPECT_EQ(attempts[0]["purpose"], "pilot");
+    EXPECT_EQ(attempts[1]["purpose"], "duration-trial");
+    EXPECT_TRUE(attempts.back()["valid"].get<bool>());
+  }
+  for (const nlohmann::json& measurement : json["measurements"]) {
+    EXPECT_EQ(measurement["status"], "measured");
+    const std::string quality =
+        measurement["duration_quality"].get<std::string>();
+    EXPECT_TRUE(quality == "within-target-window" ||
+                quality == "dispatch-cap-below-target" ||
+                quality == "payload-cap-below-target" ||
+                quality == "single-pass-exceeds-window")
+        << quality;
+  }
 }
 
 TEST(ExecutableCliIntegrationTest, OptionsWithoutModeShowHelpAndReturnSuccessIntegration) {

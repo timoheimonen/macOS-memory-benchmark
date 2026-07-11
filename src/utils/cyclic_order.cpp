@@ -12,23 +12,27 @@
 //
 // You should have received a copy of the GNU General Public License
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
-//
-/**
- * @file version.h
- * @brief Software version information
- * @author Timo Heimonen <timo.heimonen@proton.me>
- * @date 2026
- *
- * This header defines the software version number.
- */
-#ifndef VERSION_H
-#define VERSION_H
 
-// --- Version Information ---
 /**
- * @def SOFTVERSION
- * @brief Software version number (semantic versioning format as string)
+ * @file cyclic_order.cpp
+ * @brief Shared deterministic cyclic-order implementation
  */
-#define SOFTVERSION "0.61.0"
 
-#endif // VERSION_H
+#include "utils/cyclic_order.h"
+
+std::vector<size_t> build_cyclic_order(size_t item_count,
+                                       size_t rotation_index) {
+  std::vector<size_t> order;
+  order.reserve(item_count);
+  if (item_count == 0) {
+    return order;
+  }
+
+  const size_t start = rotation_index % item_count;
+  const size_t suffix_count = item_count - start;
+  for (size_t position = 0; position < item_count; ++position) {
+    order.push_back(position < suffix_count ? start + position
+                                            : position - suffix_count);
+  }
+  return order;
+}

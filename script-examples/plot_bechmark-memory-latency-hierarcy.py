@@ -191,6 +191,11 @@ def load_latency_data(path: Path, metric: str):
     except json.JSONDecodeError:
         return parse_text_statistics(path, metric)
 
+    if data.get("mode") == "gpu_bandwidth" and data.get("schema_version") == 1:
+        raise RuntimeError(
+            "GPU bandwidth schema 1 is not supported by this standard CPU latency plotter."
+        )
+
     config = data.get("configuration", {})
     cpu_name = str(config.get("cpu_name", "Unknown CPU"))
     version = data.get("version")

@@ -12,23 +12,26 @@
 //
 // You should have received a copy of the GNU General Public License
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
-//
+
 /**
- * @file version.h
- * @brief Software version information
- * @author Timo Heimonen <timo.heimonen@proton.me>
- * @date 2026
+ * @file cyclic_order.h
+ * @brief Deterministic cyclic rotation shared by benchmark schedulers
+ */
+
+#ifndef CYCLIC_ORDER_H
+#define CYCLIC_ORDER_H
+
+#include <cstddef>
+#include <vector>
+
+/**
+ * @brief Build one zero-based cyclic rotation of `item_count` indexes.
  *
- * This header defines the software version number.
+ * The returned order starts at `rotation_index % item_count` and contains
+ * every index exactly once. An empty item set produces an empty order without
+ * evaluating the modulo expression.
  */
-#ifndef VERSION_H
-#define VERSION_H
+std::vector<size_t> build_cyclic_order(size_t item_count,
+                                       size_t rotation_index);
 
-// --- Version Information ---
-/**
- * @def SOFTVERSION
- * @brief Software version number (semantic versioning format as string)
- */
-#define SOFTVERSION "0.61.0"
-
-#endif // VERSION_H
+#endif  // CYCLIC_ORDER_H

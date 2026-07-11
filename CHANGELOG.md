@@ -5,6 +5,28 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.61.0] - Unreleased
+
+### Added
+  - **Standalone Metal GPU memory-bandwidth mode**: Added `-G` / `--gpu-bandwidth` with dedicated strict parsing, a 512 MiB default private-buffer size, 64 MiB methodology minimum, three balanced read/write/copy loops, exact explicit passes, duration-calibrated automatic work, deterministic seeds, and atomic schema-1 JSON checkpoints.
+  - **Versioned private/tracked GPU methodology**: Added runtime-compiled MSL 2.3 read, write, copy, initialization, and validation kernels; suite-resident private buffers; a shared status buffer; serial one-command-buffer/one-encoder attempts; capped deterministic grid-stride work; exact payload accounting; power-of-two-hardened `gpu-dual-mod32-v2` timed accumulators with per-dispatch domain tokens that avoid the prior structured 512 MiB × 64-pass collapse; and separate `gpu-dual-mod32-v1` final write/copy checksums.
+  - **Auditable GPU result model and provenance**: GPU schema 1 records nullable status-bearing measurements, counters, balanced order, exact decimal-string payloads and seeds, frozen work plans, excluded calibration attempts, resource and pipeline properties, Metal source SHA-256, compiler/OS/device metadata, thermal and Low Power Mode snapshots, QoS outcome, and repeatability quality.
+  - **GPU correctness and orchestration coverage**: Added fake-backend unit coverage for parsing, planning, memory budgets, calibration, errors, completion-wins interruption, checkpoint races, statistics, and JSON; Metal integration coverage verifies runtime compilation, resource modes, multi-pass ping-pong, capped grid stride, byte tails, exact accumulators, checksums, and private-buffer readback.
+  - **GPU methodology documentation**: Added a dedicated GPU bandwidth whitepaper and synchronized the quick start, manual, capability matrix, parameter matrix, project structure, technical specification, CLI help, and plot-script schema rejection behavior.
+  - **Apple M4 GPU acceptance validation**: Completed the 0.61.0 frozen-binary geometric series, automatic-final3 and fixed24-final4 five-process populations, excluded preconditioning runs, 2048/4096/8192 grid gate, direct Ctrl+C audit, real-Metal integration run, and final3 Instruments audits. Both final acceptance populations pass the 5% within- and cross-process CV gates; automatic read/write/copy median-of-process-medians are 88.607/74.384/78.584 GB/s with 0.221/0.967/0.311% cross-process CV, and fixed-24 values are 91.075/75.240/78.508 GB/s with 0.507/0.828/0.327% CV. The grid audit rejected 4096 for write and retained the frozen 8192-threadgroup production cap under the 2%-of-best rule. The identity is kernel revision `gpu-linear-word-mod32-tg-reduce-v2`, canonical MSL SHA-256 `b9a242d2b959c9c11f6f130a52afd66f111d6761be2193beec1f051baa094296`, and release-binary SHA-256 `31ce0285dc5fde382d40e6d7b769c20e6f3363754bb3c7c0afbb4f13cd71a6a7`. `Metal GPU Counters` is unsupported on this target and `Game Performance` exposes only `RT Unit Active`, so DRAM residency and timed reduction overhead remain explicitly unverified. Complete rejected CV/grid cohorts—including fixed24-final3 after its process-4 write CV reached 6.669560665481%—and the large raw validation record are retained locally, intentionally excluded from Git, and never cherry-picked into final populations.
+
+### Changed
+  - **Primary mode selection is order-independent**: A shared pre-scan now detects conflicting standard, pattern, TLB, core-to-core, and GPU selectors before routing while leaving duplicate handling to each mode's parser.
+  - **Shared reproducibility and lifecycle primitives cover GPU execution**: Seed generation, cyclic ordering, main-thread QoS preparation, SHA-256 hashing, statistics, signal masking, timestamps, atomic JSON writing, and overflow-safe calibration/accounting are reused across CPU and GPU paths.
+  - **Build and coverage include Objective-C++**: Production and test links use Metal and Foundation once, `.mm` sources participate in dependency tracking, cleaning, and LLVM coverage, and all compile/link paths share the macOS 11.0 deployment target.
+
+### Fixed
+  - **GPU validation reset accounting matches execution**: Write/copy validation now records the one host reset of its final-checksum status lanes, while read validation correctly records zero because it needs no separate checksum dispatch.
+  - **GPU planned-work overflow fails before allocation**: The runner now rejects a `planned_loops × 3` counter overflow before reserving result vectors or initializing Metal, and parser coverage locks the public loop-count boundary.
+  - **GPU terminal checkpoint failures win every runtime exit**: Early calibration failures, interruption paths, and contained runner exceptions now propagate a failed atomic JSON save as `checkpoint-write-failed`, preventing a false saved-result announcement.
+  - **GPU console fallback text is centralized**: The unknown-device label now comes from the shared message boundary and has direct formatting coverage.
+  - **Atomic JSON writing contains parent-path exceptions**: The shared writer now converts every filesystem/library exception, including failures from parent existence checks, to `EXIT_FAILURE` so error checkpoint retries cannot escape into `main()`.
+
 ## [0.60.0] - 2026-07-11
 
 ### Changed
