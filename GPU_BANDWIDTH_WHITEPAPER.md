@@ -521,9 +521,10 @@ M4 is the defined schema 1 reference cohort. The controlled protocol uses nomina
 `--iterations 24`/same-seed/count-9 cohort. Five predeclared acceptance processes follow one excluded preconditioning
 process for each policy. No noisy or ineligible run is silently replaced.
 
-The frozen 8192-threadgroup methodology has a test-only 2048/4096/8192 comparison protocol using the same fixed work.
-The production candidate is acceptable only when its per-operation count-9 median is within 2% of the best candidate;
-runtime never auto-tunes this geometry. That audit is release evidence, not a user-facing runtime option.
+The frozen 8192-threadgroup methodology was validated with a controlled 2048/4096/8192 comparison using the same
+fixed work. The production candidate is acceptable only when its per-operation count-9 median is within 2% of the best
+candidate; runtime never auto-tunes this geometry. That retained audit is historical release evidence, not an
+executable repository test or a user-facing runtime option.
 
 The acceptance gate requires exact correctness/payload/counters/order, valid duration or exact cap reason, per-process
 and cross-process operation CV at or below 5%, nominal thermal state, Low Power Mode off, and console/JSON agreement.

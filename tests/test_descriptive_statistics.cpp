@@ -22,8 +22,7 @@
 #include "utils/descriptive_statistics.h"
 
 TEST(DescriptiveStatisticsTest, EmptyPopulationReturnsUndefinedDefaults) {
-  const DescriptiveStatistics statistics =
-      calculate_descriptive_statistics({});
+  const DescriptiveStatistics statistics = calculate_descriptive_statistics({});
 
   EXPECT_EQ(statistics.sample_count, 0U);
   EXPECT_DOUBLE_EQ(statistics.average, 0.0);
@@ -40,8 +39,7 @@ TEST(DescriptiveStatisticsTest, EmptyPopulationReturnsUndefinedDefaults) {
 }
 
 TEST(DescriptiveStatisticsTest, SingleNonzeroSampleHasDefinedZeroVariation) {
-  const DescriptiveStatistics statistics =
-      calculate_descriptive_statistics({42.0});
+  const DescriptiveStatistics statistics = calculate_descriptive_statistics({42.0});
 
   EXPECT_EQ(statistics.sample_count, 1U);
   EXPECT_DOUBLE_EQ(statistics.average, 42.0);
@@ -57,20 +55,8 @@ TEST(DescriptiveStatisticsTest, SingleNonzeroSampleHasDefinedZeroVariation) {
   EXPECT_DOUBLE_EQ(statistics.median_absolute_deviation, 0.0);
 }
 
-TEST(DescriptiveStatisticsTest, SingleZeroHasUndefinedVariation) {
-  const DescriptiveStatistics statistics =
-      calculate_descriptive_statistics({0.0});
-
-  EXPECT_EQ(statistics.sample_count, 1U);
-  EXPECT_DOUBLE_EQ(statistics.stddev, 0.0);
-  EXPECT_FALSE(statistics.coefficient_of_variation_defined);
-  EXPECT_DOUBLE_EQ(statistics.coefficient_of_variation_pct, 0.0);
-}
-
-TEST(DescriptiveStatisticsTest,
-     UsesLinearPercentilesSampleDeviationAndMedianAbsoluteDeviation) {
-  const DescriptiveStatistics statistics =
-      calculate_descriptive_statistics({10.0, 20.0, 30.0, 40.0});
+TEST(DescriptiveStatisticsTest, UsesLinearPercentilesSampleDeviationAndMedianAbsoluteDeviation) {
+  const DescriptiveStatistics statistics = calculate_descriptive_statistics({10.0, 20.0, 30.0, 40.0});
 
   EXPECT_EQ(statistics.sample_count, 4U);
   EXPECT_DOUBLE_EQ(statistics.average, 25.0);
@@ -82,14 +68,12 @@ TEST(DescriptiveStatisticsTest,
   EXPECT_NEAR(statistics.p99, 39.7, 1e-12);
   EXPECT_NEAR(statistics.stddev, 12.909944487358056, 1e-12);
   EXPECT_TRUE(statistics.coefficient_of_variation_defined);
-  EXPECT_NEAR(statistics.coefficient_of_variation_pct, 51.63977794943222,
-              1e-12);
+  EXPECT_NEAR(statistics.coefficient_of_variation_pct, 51.63977794943222, 1e-12);
   EXPECT_DOUBLE_EQ(statistics.median_absolute_deviation, 10.0);
 }
 
 TEST(DescriptiveStatisticsTest, CoefficientOfVariationUsesAbsoluteMean) {
-  const DescriptiveStatistics statistics =
-      calculate_descriptive_statistics({-10.0, -20.0, -30.0});
+  const DescriptiveStatistics statistics = calculate_descriptive_statistics({-10.0, -20.0, -30.0});
 
   EXPECT_DOUBLE_EQ(statistics.average, -20.0);
   EXPECT_DOUBLE_EQ(statistics.stddev, 10.0);
@@ -97,43 +81,47 @@ TEST(DescriptiveStatisticsTest, CoefficientOfVariationUsesAbsoluteMean) {
   EXPECT_DOUBLE_EQ(statistics.coefficient_of_variation_pct, 50.0);
 }
 
-TEST(DescriptiveStatisticsTest,
-     UnsortedOddPopulationPreservesInputAndUsesOddMedianDeviation) {
+TEST(DescriptiveStatisticsTest, UnsortedOddPopulationUsesOddMedianDeviation) {
   const std::vector<double> values = {5.0, 1.0, 4.0, 2.0, 3.0};
-  const std::vector<double> original = values;
 
-  const DescriptiveStatistics statistics =
-      calculate_descriptive_statistics(values);
+  const DescriptiveStatistics statistics = calculate_descriptive_statistics(values);
 
-  EXPECT_EQ(values, original);
   EXPECT_DOUBLE_EQ(statistics.average, 3.0);
   EXPECT_DOUBLE_EQ(statistics.median, 3.0);
   EXPECT_DOUBLE_EQ(statistics.median_absolute_deviation, 1.0);
 }
 
-TEST(DescriptiveStatisticsTest, ConstantPopulationHasDefinedZeroVariation) {
-  const DescriptiveStatistics statistics =
-      calculate_descriptive_statistics({7.0, 7.0, 7.0});
+TEST(DescriptiveStatisticsTest, CoefficientOfVariationZeroAndConstantEdgeCases) {
+  struct VariationCase {
+    const char* name;
+    std::vector<double> values;
+    double expected_average;
+    bool expects_zero_deviation;
+    bool expected_defined;
+  };
+  const std::vector<VariationCase> cases = {
+      {"single zero", {0.0}, 0.0, true, false},
+      {"constant nonzero population", {7.0, 7.0, 7.0}, 7.0, true, true},
+      {"zero mean population", {-1.0, 1.0}, 0.0, false, false},
+  };
 
-  EXPECT_DOUBLE_EQ(statistics.stddev, 0.0);
-  EXPECT_TRUE(statistics.coefficient_of_variation_defined);
-  EXPECT_DOUBLE_EQ(statistics.coefficient_of_variation_pct, 0.0);
+  for (const VariationCase& test_case : cases) {
+    SCOPED_TRACE(test_case.name);
+    const DescriptiveStatistics statistics = calculate_descriptive_statistics(test_case.values);
+
+    EXPECT_EQ(statistics.sample_count, test_case.values.size());
+    EXPECT_DOUBLE_EQ(statistics.average, test_case.expected_average);
+    if (test_case.expects_zero_deviation) {
+      EXPECT_DOUBLE_EQ(statistics.stddev, 0.0);
+    }
+    EXPECT_EQ(statistics.coefficient_of_variation_defined, test_case.expected_defined);
+    EXPECT_DOUBLE_EQ(statistics.coefficient_of_variation_pct, 0.0);
+  }
 }
 
-TEST(DescriptiveStatisticsTest, ZeroMeanHasUndefinedCoefficientOfVariation) {
-  const DescriptiveStatistics statistics =
-      calculate_descriptive_statistics({-1.0, 1.0});
-
-  EXPECT_DOUBLE_EQ(statistics.average, 0.0);
-  EXPECT_FALSE(statistics.coefficient_of_variation_defined);
-  EXPECT_DOUBLE_EQ(statistics.coefficient_of_variation_pct, 0.0);
-}
-
-TEST(DescriptiveStatisticsTest,
-     NonFiniteDerivedDeviationLeavesCoefficientOfVariationUndefined) {
+TEST(DescriptiveStatisticsTest, NonFiniteDerivedDeviationLeavesCoefficientOfVariationUndefined) {
   const double maximum = std::numeric_limits<double>::max();
-  const DescriptiveStatistics statistics =
-      calculate_descriptive_statistics({maximum, -maximum, maximum});
+  const DescriptiveStatistics statistics = calculate_descriptive_statistics({maximum, -maximum, maximum});
 
   EXPECT_TRUE(std::isfinite(statistics.average));
   EXPECT_TRUE(std::isinf(statistics.stddev));

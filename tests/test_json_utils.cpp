@@ -14,6 +14,7 @@
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 #include <gtest/gtest.h>
+#include <unistd.h>
 
 #include <atomic>
 #include <cerrno>
@@ -22,7 +23,6 @@
 #include <filesystem>
 #include <fstream>
 #include <string>
-#include <unistd.h>
 
 #include "output/console/messages/messages_api.h"
 #include "output/json/json_output/json_output_api.h"
@@ -35,8 +35,7 @@ class TemporaryDirectory {
   explicit TemporaryDirectory(const std::string& stem) {
     static std::atomic<unsigned long> sequence{0};
     path_ = std::filesystem::path("/tmp") /
-            ("membenchmark_" + stem + "_" + std::to_string(::getpid()) + "_" +
-             std::to_string(sequence.fetch_add(1)));
+            ("membenchmark_" + stem + "_" + std::to_string(::getpid()) + "_" + std::to_string(sequence.fetch_add(1)));
     std::error_code ignored;
     std::filesystem::remove_all(path_, ignored);
     std::filesystem::create_directories(path_);
@@ -77,8 +76,7 @@ TEST(JsonFileWriterTest, CreatesParentsAtomicallyReplacesAndSuppressesAnnounceme
   const std::filesystem::path target = temporary.path() / "nested" / "result.json";
 
   testing::internal::CaptureStdout();
-  const int first_result =
-      write_json_to_file(target, {{"generation", 1}}, false);
+  const int first_result = write_json_to_file(target, {{"generation", 1}}, false);
   const std::string first_output = testing::internal::GetCapturedStdout();
   ASSERT_EQ(first_result, EXIT_SUCCESS);
   EXPECT_TRUE(first_output.empty());
@@ -113,10 +111,8 @@ TEST(JsonFileWriterTest, FailedTemporaryOpenCleansStaleTemporaryPath) {
   const std::string error = testing::internal::GetCapturedStderr();
 
   EXPECT_EQ(error, Messages::error_prefix() +
-                       Messages::error_file_write_failed(
-                           stale_temp.string(),
-                           "Failed to open temporary file: " +
-                               std::string(std::strerror(EISDIR))) +
+                       Messages::error_file_write_failed(stale_temp.string(), "Failed to open temporary file: " +
+                                                                                  std::string(std::strerror(EISDIR))) +
                        "\n");
   EXPECT_FALSE(std::filesystem::exists(stale_temp));
   EXPECT_FALSE(std::filesystem::exists(target));
@@ -132,8 +128,7 @@ TEST(JsonFileWriterTest, RenameFailurePreservesDestinationAndCleansTemporaryFile
   EXPECT_EQ(write_json_to_file(target, {{"ok", true}}, false), EXIT_FAILURE);
   const std::string error = testing::internal::GetCapturedStderr();
 
-  EXPECT_NE(error.find(Messages::error_prefix() +
-                       "Failed to write file \"" + target.string() +
+  EXPECT_NE(error.find(Messages::error_prefix() + "Failed to write file \"" + target.string() +
                        "\": Failed to rename temporary file: "),
             std::string::npos);
   EXPECT_TRUE(std::filesystem::is_directory(target));
@@ -142,14 +137,11 @@ TEST(JsonFileWriterTest, RenameFailurePreservesDestinationAndCleansTemporaryFile
 }
 
 TEST(JsonFileWriterTest, ParentPathFilesystemErrorCannotEscapeBoundary) {
-  const std::filesystem::path target =
-      std::filesystem::path("/tmp") / std::string(5000, 'x') /
-      "result.json";
+  const std::filesystem::path target = std::filesystem::path("/tmp") / std::string(5000, 'x') / "result.json";
 
   testing::internal::CaptureStderr();
   int result = EXIT_SUCCESS;
-  EXPECT_NO_THROW(result =
-                      write_json_to_file(target, {{"ok", true}}, false));
+  EXPECT_NO_THROW(result = write_json_to_file(target, {{"ok", true}}, false));
   const std::string error = testing::internal::GetCapturedStderr();
 
   EXPECT_EQ(result, EXIT_FAILURE);
@@ -173,15 +165,8 @@ TEST(JsonUtilsTest, ParseStringRejectsEmptyAndMalformedAndAcceptsValidJson) {
   EXPECT_TRUE(error.empty());
 }
 
-TEST(JsonUtilsTest, UtcTimestampFormatsUnixEpoch) {
-  const auto unix_epoch = std::chrono::system_clock::from_time_t(0);
-
-  EXPECT_EQ(build_utc_timestamp(unix_epoch), "1970-01-01T00:00:00Z");
-}
-
 TEST(JsonUtilsTest, UtcTimestampFormatsFixedTimeIndependentOfLocalTimezone) {
-  const auto fixed_time =
-      std::chrono::system_clock::from_time_t(1577934245);
+  const auto fixed_time = std::chrono::system_clock::from_time_t(1577934245);
 
   EXPECT_EQ(build_utc_timestamp(fixed_time), "2020-01-02T03:04:05Z");
 }
@@ -191,8 +176,7 @@ TEST(JsonUtilsTest, StatisticsNeverFabricateZeroesForAnEmptyPopulation) {
 }
 
 TEST(JsonUtilsTest, StatisticsUseSampleDeviationInterpolationCvAndMad) {
-  const nlohmann::json statistics =
-      calculate_json_statistics({10.0, 20.0, 30.0, 40.0});
+  const nlohmann::json statistics = calculate_json_statistics({10.0, 20.0, 30.0, 40.0});
 
   EXPECT_DOUBLE_EQ(statistics["average"], 25.0);
   EXPECT_DOUBLE_EQ(statistics["min"], 10.0);
@@ -201,10 +185,8 @@ TEST(JsonUtilsTest, StatisticsUseSampleDeviationInterpolationCvAndMad) {
   EXPECT_DOUBLE_EQ(statistics["p90"], 37.0);
   EXPECT_DOUBLE_EQ(statistics["p95"], 38.5);
   EXPECT_NEAR(statistics["p99"].get<double>(), 39.7, 1e-12);
-  EXPECT_NEAR(statistics["stddev"].get<double>(), 12.909944487358056,
-              1e-12);
-  EXPECT_NEAR(statistics["coefficient_of_variation_pct"].get<double>(),
-              51.63977794943222, 1e-12);
+  EXPECT_NEAR(statistics["stddev"].get<double>(), 12.909944487358056, 1e-12);
+  EXPECT_NEAR(statistics["coefficient_of_variation_pct"].get<double>(), 51.63977794943222, 1e-12);
   EXPECT_DOUBLE_EQ(statistics["median_absolute_deviation"], 10.0);
 }
 

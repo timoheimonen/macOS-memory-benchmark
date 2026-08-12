@@ -51,43 +51,6 @@ inline std::string capture_main_bandwidth(
   return testing::internal::GetCapturedStdout();
 }
 
-inline std::string capture_bw(const std::vector<double>& values) {
-  return capture_main_bandwidth(values, values, values);
-}
-
-inline std::string capture_lat(const std::vector<double>& values) {
-  const std::vector<double>& empty = empty_values();
-  testing::internal::CaptureStdout();
-  print_statistics(2,
-                   empty,
-                   empty,
-                   empty,
-                   empty,
-                   empty,
-                   empty,
-                   empty,
-                   empty,
-                   empty,
-                   empty,
-                   empty,
-                   values,
-                   empty,
-                   empty,
-                   empty,
-                   false,
-                   empty,
-                   empty,
-                   empty,
-                   empty,
-                   empty,
-                   empty,
-                   empty,
-                   empty,
-                   false,
-                   true);
-  return testing::internal::GetCapturedStdout();
-}
-
 inline std::string capture_auto_tlb_breakdown(const std::vector<double>& all_main_mem_latency,
                                               const std::vector<double>& all_tlb_hit_latency,
                                               const std::vector<double>& all_tlb_miss_latency,

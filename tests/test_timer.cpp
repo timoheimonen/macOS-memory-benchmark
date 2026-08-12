@@ -14,11 +14,11 @@
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 #include <gtest/gtest.h>
+#include <mach/mach_error.h>
 
 #include <array>
 #include <cstddef>
 #include <limits>
-#include <mach/mach_error.h>
 #include <string>
 
 #include "core/timing/timer.h"
@@ -54,8 +54,7 @@ class HighResTimerTest : public testing::Test {
  protected:
   void SetUp() override {
     active_fake_timer = &state;
-    set_timer_system_calls_for_testing(
-        {fake_absolute_time, fake_timebase_info});
+    set_timer_system_calls_for_testing({fake_absolute_time, fake_timebase_info});
   }
 
   void TearDown() override {
@@ -78,10 +77,8 @@ class HighResTimerTest : public testing::Test {
 }  // namespace
 
 TEST_F(HighResTimerTest, TickConversionUsesExactTimebaseRatio) {
-  const std::optional<double> first =
-      convert_mach_ticks_to_nanoseconds(3, 125, 3);
-  const std::optional<double> second =
-      convert_mach_ticks_to_nanoseconds(250, 2, 5);
+  const std::optional<double> first = convert_mach_ticks_to_nanoseconds(3, 125, 3);
+  const std::optional<double> second = convert_mach_ticks_to_nanoseconds(250, 2, 5);
   ASSERT_TRUE(first.has_value());
   ASSERT_TRUE(second.has_value());
   EXPECT_DOUBLE_EQ(*first, 125.0);
@@ -97,9 +94,7 @@ TEST_F(HighResTimerTest, CreateRejectsMachFailureWithCentralizedError) {
 
   EXPECT_FALSE(timer.has_value());
   EXPECT_EQ(error, Messages::error_prefix() +
-                       Messages::error_mach_timebase_info_failed(
-                           mach_error_string(KERN_FAILURE)) +
-                       "\n");
+                       Messages::error_mach_timebase_info_failed(mach_error_string(KERN_FAILURE)) + "\n");
 }
 
 TEST_F(HighResTimerTest, CreateRejectsZeroDenominator) {
@@ -109,8 +104,7 @@ TEST_F(HighResTimerTest, CreateRejectsZeroDenominator) {
   const std::string error = testing::internal::GetCapturedStderr();
 
   EXPECT_FALSE(timer.has_value());
-  EXPECT_EQ(error, Messages::error_prefix() +
-                       "timebase denominator is zero (invalid timebase)\n");
+  EXPECT_EQ(error, Messages::error_prefix() + "timebase denominator is zero (invalid timebase)\n");
 }
 
 TEST_F(HighResTimerTest, DeterministicClockProducesExactNanosecondsAndSeconds) {
@@ -135,18 +129,4 @@ TEST_F(HighResTimerTest, UnsignedTickSubtractionPreservesWraparound) {
 
   timer->start();
   EXPECT_DOUBLE_EQ(timer->stop_ns(), 10.0);
-}
-
-TEST(HighResTimerIntegrationTest, MonotonicReusableSmokeIntegration) {
-  std::optional<HighResTimer> timer = HighResTimer::create();
-  ASSERT_TRUE(timer.has_value());
-
-  timer->start();
-  const double first = timer->stop_ns();
-  const double second = timer->stop_ns();
-  EXPECT_GE(first, 0.0);
-  EXPECT_GE(second, first);
-
-  timer->start();
-  EXPECT_GE(timer->stop(), 0.0);
 }

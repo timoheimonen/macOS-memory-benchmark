@@ -33,8 +33,7 @@ struct TestSweepSpec {
   std::vector<int> values;
 };
 
-void expect_sweep_parse_failure(const std::string& specification,
-                                const std::string& expected_reason) {
+void expect_sweep_parse_failure(const std::string& specification, const std::string& expected_reason) {
   try {
     static_cast<void>(parse_sweep_text(specification));
     FAIL() << "Expected parse failure for: " << specification;
@@ -45,19 +44,24 @@ void expect_sweep_parse_failure(const std::string& specification,
 
 }  // namespace
 
-TEST(SweepUtilsTest, ParsesKeyAndCommaSeparatedValues) {
-  const ParsedSweepText parsed = parse_sweep_text("threads=1,2,4");
+TEST(SweepUtilsTest, ParsesCommaSeparatedValuesAndPreservesTokens) {
+  struct ParseCase {
+    const char* specification;
+    const char* expected_key;
+    std::vector<std::string> expected_values;
+  };
 
-  EXPECT_EQ(parsed.key, "threads");
-  EXPECT_EQ(parsed.values, (std::vector<std::string>{"1", "2", "4"}));
-}
+  const ParseCase cases[] = {
+      {"threads=1,2,4", "threads", {"1", "2", "4"}},
+      {" key = value=with=equals, second ", " key ", {" value=with=equals", " second "}},
+  };
 
-TEST(SweepUtilsTest, PreservesTokensAndUsesOnlyTheFirstEqualsAsSeparator) {
-  const ParsedSweepText parsed = parse_sweep_text(" key = value=with=equals, second ");
-
-  EXPECT_EQ(parsed.key, " key ");
-  EXPECT_EQ(parsed.values,
-            (std::vector<std::string>{" value=with=equals", " second "}));
+  for (const ParseCase& test_case : cases) {
+    SCOPED_TRACE(test_case.specification);
+    const ParsedSweepText parsed = parse_sweep_text(test_case.specification);
+    EXPECT_EQ(parsed.key, test_case.expected_key);
+    EXPECT_EQ(parsed.values, test_case.expected_values);
+  }
 }
 
 TEST(SweepUtilsTest, RejectsMissingKeyValueStructureWithExactReason) {
@@ -69,32 +73,26 @@ TEST(SweepUtilsTest, RejectsMissingKeyValueStructureWithExactReason) {
 }
 
 TEST(SweepUtilsTest, RejectsEmptyValueTokensWithExactReason) {
-  constexpr const char* kExpectedReason =
-      "sweep value list cannot contain empty values";
-  for (const std::string& specification :
-       {"threads=,1", "threads=1,", "threads=1,,2"}) {
+  constexpr const char* kExpectedReason = "sweep value list cannot contain empty values";
+  for (const std::string& specification : {"threads=,1", "threads=1,", "threads=1,,2"}) {
     SCOPED_TRACE(specification);
     expect_sweep_parse_failure(specification, kExpectedReason);
   }
 }
 
-TEST(SweepUtilsTest, CalculatesCartesianProductAndIdentity) {
+TEST(SweepUtilsTest, CalculatesCartesianProductIdentityAndEmptyDimensions) {
   EXPECT_EQ(calculate_cartesian_run_count({}), 1u);
   EXPECT_EQ(calculate_cartesian_run_count({2, 3, 4}), 24u);
+  EXPECT_EQ(calculate_cartesian_run_count({2, 0, 4}), 0u);
 
   const std::vector<TestSweepSpec> specs = {{{1, 2}}, {{3, 4, 5}}};
   EXPECT_EQ(calculate_sweep_run_count_from_specs(specs), 6u);
-}
 
-TEST(SweepUtilsTest, EmptyDimensionProducesNoRuns) {
-  EXPECT_EQ(calculate_cartesian_run_count({2, 0, 4}), 0u);
-
-  const std::vector<TestSweepSpec> specs = {{{1, 2}}, {{}}, {{3, 4}}};
-  EXPECT_EQ(calculate_sweep_run_count_from_specs(specs), 0u);
+  const std::vector<TestSweepSpec> specs_with_empty_dimension = {{{1, 2}}, {{}}, {{3, 4}}};
+  EXPECT_EQ(calculate_sweep_run_count_from_specs(specs_with_empty_dimension), 0u);
 }
 
 TEST(SweepUtilsTest, CartesianProductSaturatesOnOverflow) {
   const size_t overflowing_factor = std::numeric_limits<size_t>::max() / 2 + 1;
-  EXPECT_EQ(calculate_cartesian_run_count({overflowing_factor, 2}),
-            std::numeric_limits<size_t>::max());
+  EXPECT_EQ(calculate_cartesian_run_count({overflowing_factor, 2}), std::numeric_limits<size_t>::max());
 }
