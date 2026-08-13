@@ -26,6 +26,7 @@
 #include <vector>
 
 #include "benchmark/core_to_core_latency.h"
+#include "benchmark/sweep_runner.h"
 #include "core/config/constants.h"
 #include "core/config/sweep_utils.h"
 #include "core/signal/signal_handler.h"
@@ -116,12 +117,6 @@ size_t calculate_core_to_core_sweep_run_count(const CoreToCoreLatencyConfig& con
   return calculate_sweep_run_count_from_specs(config.sweep_specs);
 }
 
-SweepExecutionResult execute_core_to_core_sweep_plan(const std::vector<nlohmann::ordered_json>& run_parameters,
-                                                     nlohmann::ordered_json initial_output,
-                                                     const SweepExecutionHooks& hooks) {
-  return execute_sweep_plan(SweepNestedMode::CoreToCore, run_parameters, std::move(initial_output), hooks);
-}
-
 int run_core_to_core_latency_sweep(const CoreToCoreLatencyConfig& base_config) {
   const size_t run_count = calculate_core_to_core_sweep_run_count(base_config);
   print_runtime_banner();
@@ -173,7 +168,8 @@ int run_core_to_core_latency_sweep(const CoreToCoreLatencyConfig& base_config) {
     return write_json_to_file(file_path, checkpoint, announce_success);
   };
 
-  const SweepExecutionResult execution = execute_core_to_core_sweep_plan(run_parameters, std::move(output_json), hooks);
+  const SweepExecutionResult execution =
+      execute_sweep_plan(SweepNestedMode::CoreToCore, run_parameters, std::move(output_json), hooks);
 
   if (execution.output_json.value("status", "failed") == "interrupted") {
     const nlohmann::ordered_json& runs = execution.output_json["runs"];

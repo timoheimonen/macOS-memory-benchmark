@@ -91,6 +91,17 @@ double bootstrap_median_ci_width(const std::vector<double>& samples,
          percentile(scratch.medians, tail);
 }
 
+/** Estimate retained chain-builder and validator scratch storage. */
+size_t estimate_tlb_scratch_bytes(size_t maximum_node_count) {
+  const size_t variable_bytes = NumericUtils::saturating_multiply(
+      maximum_node_count, kScratchBytesPerNode);
+  if (variable_bytes > std::numeric_limits<size_t>::max() -
+                           kScratchFixedOverheadBytes) {
+    return std::numeric_limits<size_t>::max();
+  }
+  return variable_bytes + kScratchFixedOverheadBytes;
+}
+
 }  // namespace
 
 TlbRuntimeProfile tlb_runtime_profile_for_density(TlbSweepDensity density) {
@@ -208,16 +219,6 @@ size_t calculate_tlb_memory_budget_mb(size_t available_memory_mb) {
                                     ? available_memory_mb - kTlbMemoryReserveMb
                                     : available_memory_mb / 2;
   return std::min(fractional_budget, reserve_budget);
-}
-
-size_t estimate_tlb_scratch_bytes(size_t maximum_node_count) {
-  const size_t variable_bytes = NumericUtils::saturating_multiply(
-      maximum_node_count, kScratchBytesPerNode);
-  if (variable_bytes > std::numeric_limits<size_t>::max() -
-                           kScratchFixedOverheadBytes) {
-    return std::numeric_limits<size_t>::max();
-  }
-  return variable_bytes + kScratchFixedOverheadBytes;
 }
 
 size_t estimate_tlb_peak_memory_bytes(size_t buffer_size_bytes,

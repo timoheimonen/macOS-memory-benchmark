@@ -27,8 +27,9 @@
 <!-- Describe how you verified the change -->
 
 - [ ] Built successfully
-- [ ] Tests run locally (make test), if applicable
-- [ ] Ran locally on Apple Silicon
+- [ ] Deterministic unit tests passed (`make test`)
+- [ ] Hardware/runtime integration tests passed when applicable (`make test-integration` or `make test-all`)
+- [ ] CLI help and affected documentation/examples were verified when user-visible behavior changed
 - [ ] Benchmarks executed (if applicable)
 
 **Notes / output:**

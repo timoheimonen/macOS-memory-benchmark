@@ -34,11 +34,12 @@ Json make_tlb_result(const std::string& status, bool conclusions_valid, const st
   return {{"tlb_analysis", {{"status", status}, {"status_reason", reason}, {"conclusions_valid", conclusions_valid}}}};
 }
 
-Json make_pattern_result(const std::string& status, bool results_complete,
-                         const std::string& reason = "") {
-  return {{"status", status},
-          {"status_reason", reason},
-          {"results_complete", results_complete}};
+Json make_pattern_result(const std::string& status, bool results_complete, const std::string& reason = "") {
+  return {{"status", status}, {"status_reason", reason}, {"results_complete", results_complete}};
+}
+
+Json make_core_to_core_result(const std::string& status, bool measurements_complete) {
+  return {{"core_to_core_latency", {{"status", status}, {"measurements_complete", measurements_complete}}}};
 }
 
 SweepExecutionHooks make_hooks(const std::vector<SweepRunOutcome>& outcomes, std::vector<Json>& checkpoints,
@@ -70,47 +71,57 @@ TEST(SweepRunnerTest, NestedCompletionIsModeAware) {
       classify_sweep_nested_completion(SweepNestedMode::TlbAnalysis, make_tlb_result("complete", true));
   EXPECT_EQ(tlb.status, SweepAttemptStatus::Complete);
 
-  const SweepNestedCompletion pattern = classify_sweep_nested_completion(
-      SweepNestedMode::Patterns, make_pattern_result("complete", true));
+  const SweepNestedCompletion pattern =
+      classify_sweep_nested_completion(SweepNestedMode::Patterns, make_pattern_result("complete", true));
   EXPECT_EQ(pattern.status, SweepAttemptStatus::Complete);
+
+  const SweepNestedCompletion core_to_core =
+      classify_sweep_nested_completion(SweepNestedMode::CoreToCore, make_core_to_core_result("complete", true));
+  EXPECT_EQ(core_to_core.status, SweepAttemptStatus::Complete);
+
+  const SweepNestedCompletion incomplete_core_to_core =
+      classify_sweep_nested_completion(SweepNestedMode::CoreToCore, make_core_to_core_result("complete", false));
+  EXPECT_EQ(incomplete_core_to_core.status, SweepAttemptStatus::Partial);
+  EXPECT_EQ(incomplete_core_to_core.reason, "nested-core-to-core-result-incomplete");
+
+  const SweepNestedCompletion interrupted_core_to_core =
+      classify_sweep_nested_completion(SweepNestedMode::CoreToCore, make_core_to_core_result("interrupted", false));
+  EXPECT_EQ(interrupted_core_to_core.status, SweepAttemptStatus::Interrupted);
+  EXPECT_EQ(interrupted_core_to_core.reason, "nested-core-to-core-run-interrupted");
+
+  const SweepNestedCompletion wrong_core_to_core_shape =
+      classify_sweep_nested_completion(SweepNestedMode::CoreToCore, make_standard_result("complete", true));
+  EXPECT_EQ(wrong_core_to_core_shape.status, SweepAttemptStatus::Partial);
+  EXPECT_EQ(wrong_core_to_core_shape.reason, "missing-core-to-core-result");
 
   const SweepNestedCompletion unvalidated_tlb =
       classify_sweep_nested_completion(SweepNestedMode::TlbAnalysis, make_tlb_result("complete", false));
   EXPECT_EQ(unvalidated_tlb.status, SweepAttemptStatus::Partial);
 
   const SweepNestedCompletion incomplete_pattern = classify_sweep_nested_completion(
-      SweepNestedMode::Patterns,
-      make_pattern_result("partial", false, "pattern loops remain"));
+      SweepNestedMode::Patterns, make_pattern_result("partial", false, "pattern loops remain"));
   EXPECT_EQ(incomplete_pattern.status, SweepAttemptStatus::Partial);
   EXPECT_EQ(incomplete_pattern.reason, "pattern loops remain");
 
   const SweepNestedCompletion inconsistent_complete =
-      classify_sweep_nested_completion(
-          SweepNestedMode::Patterns,
-          make_pattern_result("complete", false));
+      classify_sweep_nested_completion(SweepNestedMode::Patterns, make_pattern_result("complete", false));
   EXPECT_EQ(inconsistent_complete.status, SweepAttemptStatus::Partial);
-  EXPECT_EQ(inconsistent_complete.reason,
-            "nested-pattern-result-incomplete");
+  EXPECT_EQ(inconsistent_complete.reason, "nested-pattern-result-incomplete");
 
-  const SweepNestedCompletion interrupted_pattern =
-      classify_sweep_nested_completion(
-          SweepNestedMode::Patterns,
-          make_pattern_result("interrupted", false, "stop requested"));
+  const SweepNestedCompletion interrupted_pattern = classify_sweep_nested_completion(
+      SweepNestedMode::Patterns, make_pattern_result("interrupted", false, "stop requested"));
   EXPECT_EQ(interrupted_pattern.status, SweepAttemptStatus::Interrupted);
   EXPECT_EQ(interrupted_pattern.reason, "stop requested");
 
   const SweepNestedCompletion failed_pattern = classify_sweep_nested_completion(
-      SweepNestedMode::Patterns,
-      make_pattern_result("failed", false, "allocation failed"));
+      SweepNestedMode::Patterns, make_pattern_result("failed", false, "allocation failed"));
   EXPECT_EQ(failed_pattern.status, SweepAttemptStatus::Failed);
   EXPECT_EQ(failed_pattern.reason, "allocation failed");
 
   const SweepNestedCompletion malformed_pattern =
-      classify_sweep_nested_completion(SweepNestedMode::Patterns,
-                                       {{"status", "complete"}});
+      classify_sweep_nested_completion(SweepNestedMode::Patterns, {{"status", "complete"}});
   EXPECT_EQ(malformed_pattern.status, SweepAttemptStatus::Partial);
-  EXPECT_EQ(malformed_pattern.reason,
-            "missing-pattern-completion-metadata");
+  EXPECT_EQ(malformed_pattern.reason, "missing-pattern-completion-metadata");
 }
 
 TEST(SweepRunnerTest, CompleteSweepCheckpointsEveryRunAndValidatesConclusions) {

@@ -101,7 +101,9 @@ int run_with_benchmark_preparation(BenchmarkConfig& config, Fn&& fn) {
  * @return EXIT_SUCCESS (0) on successful completion
  * @return EXIT_FAILURE (1) on error (configuration, allocation, or benchmark failure)
  *
- * @note The main thread is set to QOS_CLASS_USER_INTERACTIVE for optimal latency test performance
+ * @note Standard, pattern, TLB, sweep, and GPU entry paths make a best-effort
+ *       QOS_CLASS_USER_INTERACTIVE request for the command thread. Core-to-core
+ *       mode instead requests QoS independently for its worker threads.
  * @note All allocated buffers are automatically freed when going out of scope
  * @note Standard mode uses per-phase allocation; pattern mode owns one shared
  *       source/destination pair for the command lifetime.

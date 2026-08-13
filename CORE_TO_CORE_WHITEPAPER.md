@@ -2,7 +2,7 @@
 
 **memory_benchmark — Technical Whitepaper**
 
-*Revision 2026-07-11 — Applies to version 0.61.1; archived examples may use older methodologies*
+*Revision 2026-08-13 — Applies to version 0.61.2; archived examples may use older methodologies*
 
 ---
 
@@ -12,8 +12,8 @@
 protocol between two POSIX threads. The result includes the complete polling and handoff loop plus coherence and
 scheduler effects; it is not an isolated measurement of one physical cache-line migration or the coherence fabric.
 Software version 0.58.0 introduced the change from fixed work in a fixed scenario order to the auditable
-v2 calibrated/balanced design. Version 0.61.1 retains that design, isolates token and control state in distinct
-128-byte blocks, and identifies the current methodology as
+v2 calibrated/balanced design. Version 0.61.1 introduced distinct 128-byte token and control blocks and the current
+methodology identity; version 0.61.2 retains that design as
 `core2core-v3-calibrated-balanced-auditable-128b-isolation`:
 
 - every scheduler-hint scenario receives its own excluded pilot after a long calibration warmup;
@@ -386,7 +386,7 @@ and one-way arrays are complete for the illustrated scenario.
   },
   "execution_time_sec": 4.2,
   "timestamp": "2026-07-10T12:00:00Z",
-  "version": "0.61.1"
+  "version": "0.61.2"
 }
 ```
 
@@ -480,9 +480,10 @@ validation of current affinity behavior, current scheduler placement, or current
 
 Relevant deterministic coverage includes:
 
-- calibration scaling, rounding, validation, and min/max clamping;
-- work-plan targets derived from an excluded pilot;
+- work-plan targets derived from an excluded pilot and exact duration-window boundary classification;
+- responder-work overflow rejection and deterministic timer/thread-startup failure states;
 - scenario-order rotation;
+- loop-record sample ranges that count only samples appended to the pooled population;
 - CLI short/long options, supported sweeps, duplicate sweep-key rejection, and run-count guards;
 - calibrated console/audit messages;
 - schema-2 work plans, loop records, completion fields, nullable values, and affinity interpretability.

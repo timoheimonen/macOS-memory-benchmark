@@ -305,6 +305,7 @@ middle, and trailing items.
 | `-b` | `--buffer-size` |
 | `-i` | `--iterations` |
 | `-r` | `--count` |
+| — | `--seed` |
 | `-t` | `--threads` |
 | `-k` | `--cache-size` |
 | `-n` | `--latency-samples` |
@@ -1044,7 +1045,7 @@ report.
   "main_memory": { ... },
   "cache": { ... },
   "timestamp": "2026-03-09T14:57:56Z",
-  "version": "0.61.1"
+  "version": "0.61.2"
 }
 ```
 
@@ -1174,8 +1175,8 @@ complete automatic run; it deliberately omits, rather than empties, the populate
 
 ```json
 {
-  "software_version": "0.61.1",
-  "version": "0.61.1",
+  "software_version": "0.61.2",
+  "version": "0.61.2",
   "timestamp": "...",
   "schema_version": 1,
   "mode": "gpu_bandwidth",
@@ -1378,7 +1379,7 @@ returns only, excludes QoS and pilot outcomes, and does not prove physical place
   ],
   "execution_time_sec": 123.4,
   "timestamp": "2026-04-29T12:00:00Z",
-  "version": "0.61.1"
+  "version": "0.61.2"
 }
 ```
 
@@ -1709,8 +1710,14 @@ What it does:
 - Extracts `.cache.custom.latency.headline_ns.pooled_sample_distribution.statistics` from current schema 2 files into
   `script-examples/final_output.txt`; `.cache.custom.latency.samples_ns.statistics` is a historical-schema fallback
 - Clears `tmp` after extraction
+- Returns a non-zero status after cleanup if any benchmark failed, an expected output is missing, or a current-schema
+  result is incomplete or cannot be parsed
 
-Important: the script currently invokes `memory_benchmark --benchmark` from `PATH`. If you only built locally as `./memory_benchmark`, either install it to `PATH` or update `BENCHMARK_CMD` in the script.
+The script prefers the executable built at the repository root, falls back to `memory_benchmark` from `PATH` when that
+file is unavailable, and honors an explicit `BENCHMARK_CMD=/path/to/memory_benchmark` override.
+
+`latency_test_script_stride_tlb.sh` applies the same local-binary/override policy, retains its timestamped JSON files,
+and returns non-zero unless every planned run produces one complete CSV row.
 
 ### `script-examples/plot_cache_percentiles.py`
 
@@ -1847,7 +1854,8 @@ because the process exit code was zero.
 
 ### Script cannot find benchmark binary
 
-`script-examples/latency_test_script.sh` calls `memory_benchmark` from `PATH`. Install the binary or adjust `BENCHMARK_CMD`.
+The script first uses the repository-root `memory_benchmark` when it is executable, then tries `memory_benchmark` from
+`PATH`. If neither is suitable, set `BENCHMARK_CMD` to an executable path.
 
 ### Plot script says no blocks found
 
@@ -1882,4 +1890,4 @@ memory_benchmark -h
 
 ---
 
-**Last Updated**: 2026-07-11
+**Last Updated**: 2026-08-12

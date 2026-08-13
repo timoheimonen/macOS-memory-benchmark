@@ -22,19 +22,10 @@
 #define CORE_TO_CORE_SWEEP_RUNNER_H
 
 #include <cstddef>
-#include <cstdlib>
-#include <vector>
-
-#include "benchmark/sweep_runner.h"
 
 struct CoreToCoreLatencyConfig;
 
 size_t calculate_core_to_core_sweep_run_count(const CoreToCoreLatencyConfig& config);
-
-/** Execute a core-to-core sweep plan through injected run/stop/write seams. */
-SweepExecutionResult execute_core_to_core_sweep_plan(const std::vector<nlohmann::ordered_json>& run_parameters,
-                                                     nlohmann::ordered_json initial_output,
-                                                     const SweepExecutionHooks& hooks);
 
 int run_core_to_core_latency_sweep(const CoreToCoreLatencyConfig& base_config);
 

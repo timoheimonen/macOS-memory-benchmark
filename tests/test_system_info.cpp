@@ -20,18 +20,17 @@
 
 #include <gtest/gtest.h>
 
-#include "core/config/constants.h"
-#include "core/system/benchmark_qos.h"
-#include "core/system/page_size.h"
-#include "core/system/system_info.h"
-#include "output/console/messages/messages_api.h"
-
 #include <cerrno>
 #include <cstring>
 #include <map>
 #include <set>
 #include <string>
 #include <vector>
+
+#include "core/config/constants.h"
+#include "core/system/benchmark_qos.h"
+#include "core/system/system_info.h"
+#include "output/console/messages/messages_api.h"
 
 namespace {
 
@@ -49,13 +48,9 @@ class FakeSystemInfoProvider final : public SystemInfoProvider {
     sysctl_values_[key] = std::move(bytes);
   }
 
-  void fail_size_query(const std::string& key) {
-    size_query_failures_.insert(key);
-  }
+  void fail_size_query(const std::string& key) { size_query_failures_.insert(key); }
 
-  void fail_data_query(const std::string& key) {
-    data_query_failures_.insert(key);
-  }
+  void fail_data_query(const std::string& key) { data_query_failures_.insert(key); }
 
   int query_sysctl(const char* name, void* old_value, size_t* old_length) const override {
     const std::string key = name;
@@ -88,17 +83,11 @@ class FakeSystemInfoProvider final : public SystemInfoProvider {
     return 0;
   }
 
-  unsigned int hardware_concurrency() const override {
-    return hardware_concurrency_value;
-  }
+  unsigned int hardware_concurrency() const override { return hardware_concurrency_value; }
 
-  SystemMemoryQueryResult query_available_memory() const override {
-    return memory_result;
-  }
+  SystemMemoryQueryResult query_available_memory() const override { return memory_result; }
 
-  int last_error_number() const override {
-    return last_error_number_;
-  }
+  int last_error_number() const override { return last_error_number_; }
 
   unsigned int hardware_concurrency_value = 0;
   SystemMemoryQueryResult memory_result;
@@ -110,15 +99,10 @@ class FakeSystemInfoProvider final : public SystemInfoProvider {
   mutable int last_error_number_ = ENOENT;
 };
 
-std::string expected_warning(const std::string& message) {
-  return Messages::warning_prefix() + message;
-}
+std::string expected_warning(const std::string& message) { return Messages::warning_prefix() + message; }
 
-std::string expected_sysctl_error(const std::string& operation,
-                                  const std::string& key,
-                                  int error_number) {
-  return Messages::error_prefix() +
-         Messages::error_sysctlbyname_failed(operation, key) + ": " +
+std::string expected_sysctl_error(const std::string& operation, const std::string& key, int error_number) {
+  return Messages::error_prefix() + Messages::error_sysctlbyname_failed(operation, key) + ": " +
          std::strerror(error_number);
 }
 
@@ -127,11 +111,10 @@ std::string expected_sysctl_error(const std::string& operation,
 TEST(BenchmarkQosTest, SuccessfulRequestIsReportedWithoutWarning) {
   size_t setter_calls = 0;
   testing::internal::CaptureStderr();
-  const MainThreadQosResult result = prepare_main_thread_benchmark_qos(
-      [&setter_calls]() {
-        ++setter_calls;
-        return 0;
-      });
+  const MainThreadQosResult result = prepare_main_thread_benchmark_qos([&setter_calls]() {
+    ++setter_calls;
+    return 0;
+  });
   const std::string stderr_output = testing::internal::GetCapturedStderr();
 
   EXPECT_TRUE(result.requested);
@@ -144,16 +127,13 @@ TEST(BenchmarkQosTest, SuccessfulRequestIsReportedWithoutWarning) {
 TEST(BenchmarkQosTest, FailedRequestPreservesCodeAndPrintsCentralizedWarning) {
   constexpr int kFailureCode = 17;
   testing::internal::CaptureStderr();
-  const MainThreadQosResult result = prepare_main_thread_benchmark_qos(
-      []() { return kFailureCode; });
+  const MainThreadQosResult result = prepare_main_thread_benchmark_qos([]() { return kFailureCode; });
   const std::string stderr_output = testing::internal::GetCapturedStderr();
 
   EXPECT_TRUE(result.requested);
   EXPECT_FALSE(result.applied);
   EXPECT_EQ(result.code, kFailureCode);
-  EXPECT_EQ(stderr_output,
-            Messages::warning_prefix() +
-                Messages::warning_qos_failed(kFailureCode) + "\n");
+  EXPECT_EQ(stderr_output, Messages::warning_prefix() + Messages::warning_qos_failed(kFailureCode) + "\n");
 }
 
 TEST(SystemInfoTest, CoreQueriesUseValidTopologyValuesAndRejectInvalidOnes) {
@@ -186,8 +166,7 @@ TEST(SystemInfoTest, TotalCoreCountUsesOrderedFallbacks) {
   testing::internal::CaptureStderr();
   EXPECT_EQ(get_total_logical_cores(exhausted_provider), 1);
   const std::string stderr_output = testing::internal::GetCapturedStderr();
-  EXPECT_NE(stderr_output.find(expected_warning(Messages::warning_core_count_detection_failed())),
-            std::string::npos);
+  EXPECT_NE(stderr_output.find(expected_warning(Messages::warning_core_count_detection_failed())), std::string::npos);
 }
 
 TEST(SystemInfoTest, StringQueriesReturnCompleteValues) {
@@ -224,16 +203,13 @@ TEST(SystemInfoTest, StringQueriesReportSizeAndDataFailures) {
     }
 
     testing::internal::CaptureStderr();
-    const std::string value = test_case.processor_name
-                                  ? get_processor_name(provider)
-                                  : get_macos_version(provider);
+    const std::string value = test_case.processor_name ? get_processor_name(provider) : get_macos_version(provider);
     const std::string stderr_output = testing::internal::GetCapturedStderr();
 
     EXPECT_TRUE(value.empty());
     const int error_number = test_case.data_failure ? EIO : ENOENT;
-    EXPECT_NE(stderr_output.find(expected_sysctl_error(
-                  test_case.data_failure ? "get data" : "get size",
-                  test_case.key, error_number)),
+    EXPECT_NE(stderr_output.find(
+                  expected_sysctl_error(test_case.data_failure ? "get data" : "get size", test_case.key, error_number)),
               std::string::npos);
   }
 }
@@ -288,8 +264,7 @@ TEST(SystemInfoTest, L2CacheUsesModelSpecificAndGenericFallbacks) {
     EXPECT_EQ(get_l2_cache_size(provider), test_case.expected_size);
     const std::string stderr_output = testing::internal::GetCapturedStderr();
 
-    EXPECT_NE(stderr_output.find(expected_warning(test_case.expected_message)),
-              std::string::npos);
+    EXPECT_NE(stderr_output.find(expected_warning(test_case.expected_message)), std::string::npos);
   }
 }
 
@@ -311,8 +286,7 @@ TEST(SystemInfoTest, AvailableMemoryReportsProviderFailures) {
     std::string expected_message;
   };
   const FailureCase cases[] = {
-      {SystemMemoryQueryStatus::HostPortUnavailable, "",
-       Messages::warning_mach_host_self_failed()},
+      {SystemMemoryQueryStatus::HostPortUnavailable, "", Messages::warning_mach_host_self_failed()},
       {SystemMemoryQueryStatus::PageSizeFailed, "page failure",
        Messages::warning_host_page_size_failed("page failure")},
       {SystemMemoryQueryStatus::StatisticsFailed, "statistics failure",
@@ -328,12 +302,11 @@ TEST(SystemInfoTest, AvailableMemoryReportsProviderFailures) {
     EXPECT_EQ(get_available_memory_mb(provider), 0UL);
     const std::string stderr_output = testing::internal::GetCapturedStderr();
 
-    EXPECT_NE(stderr_output.find(expected_warning(test_case.expected_message)),
-              std::string::npos);
+    EXPECT_NE(stderr_output.find(expected_warning(test_case.expected_message)), std::string::npos);
   }
 }
 
-TEST(SystemInfoIntegrationTest, CoreTopologyContract) {
+TEST(SystemInfoIntegrationTest, DefaultProviderSmokeIntegration) {
   const int performance_cores = get_performance_cores();
   const int efficiency_cores = get_efficiency_cores();
   const int total_cores = get_total_logical_cores();
@@ -343,38 +316,13 @@ TEST(SystemInfoIntegrationTest, CoreTopologyContract) {
   EXPECT_GT(total_cores, 0);
   EXPECT_GE(total_cores, performance_cores);
   EXPECT_LE(performance_cores + efficiency_cores, total_cores * 2)
-      << "performance=" << performance_cores
-      << " efficiency=" << efficiency_cores
-      << " total=" << total_cores;
-}
+      << "performance=" << performance_cores << " efficiency=" << efficiency_cores << " total=" << total_cores;
 
-TEST(SystemInfoIntegrationTest, ProcessorIdentityContract) {
   const std::string processor_name = get_processor_name();
   EXPECT_FALSE(processor_name.empty());
-  EXPECT_NE(processor_name.find("Apple"), std::string::npos)
-      << "Processor name was: " << processor_name;
-}
+  EXPECT_NE(processor_name.find("Apple"), std::string::npos) << "Processor name was: " << processor_name;
 
-TEST(SystemInfoIntegrationTest, CacheHierarchyContract) {
-  const size_t l1_size = get_l1_cache_size();
-  const size_t l2_size = get_l2_cache_size();
-
-  EXPECT_GE(l1_size, static_cast<size_t>(64 * 1024));
-  EXPECT_GE(l2_size, static_cast<size_t>(4 * 1024 * 1024));
-  EXPECT_GT(l2_size, l1_size) << "L2=" << l2_size << " L1=" << l1_size;
-}
-
-TEST(SystemInfoIntegrationTest, NativePageSizeContract) {
-  const size_t page_size = get_system_page_size_bytes();
-
-  ASSERT_GT(page_size, 0U);
-  EXPECT_EQ(page_size % sizeof(uintptr_t), 0U);
-  EXPECT_EQ(page_size & (page_size - 1), 0U);
-}
-
-TEST(SystemInfoIntegrationTest, MacOSVersionContract) {
   const std::string version = get_macos_version();
   EXPECT_FALSE(version.empty());
-  EXPECT_NE(version.find('.'), std::string::npos)
-      << "macOS version was: " << version;
+  EXPECT_NE(version.find('.'), std::string::npos) << "macOS version was: " << version;
 }

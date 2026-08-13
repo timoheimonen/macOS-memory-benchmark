@@ -79,6 +79,21 @@ bool gpu_timer_is_valid(const GpuTimedResult& timed) {
   return std::abs(timestamp_delta - timed.gpu_elapsed_seconds) <= tolerance;
 }
 
+GpuBackendAttemptRequest build_gpu_backend_attempt_request(
+    const GpuWorkPlan& plan) {
+  GpuBackendAttemptRequest request;
+  request.operation = plan.operation;
+  request.buffer_size_bytes = plan.effective_buffer_bytes;
+  request.passes = plan.passes;
+  request.operation_seed = plan.operation_seed;
+  request.vector_count = plan.vector_count;
+  request.tail_bytes = plan.tail_bytes;
+  request.threads_per_threadgroup = plan.threads_per_threadgroup;
+  request.threadgroups_per_grid = plan.threadgroups_per_grid;
+  request.grid_threads = plan.grid_threads;
+  return request;
+}
+
 struct AttemptExecution {
   GpuBackendPhaseResult warmup;
   GpuBackendPhaseResult precondition;
@@ -687,21 +702,6 @@ GpuMemoryBudget calculate_gpu_memory_budget(size_t buffer_size_bytes,
   budget.valid = true;
   budget.reason_code = "within-memory-budget";
   return budget;
-}
-
-GpuBackendAttemptRequest build_gpu_backend_attempt_request(
-    const GpuWorkPlan& plan) {
-  GpuBackendAttemptRequest request;
-  request.operation = plan.operation;
-  request.buffer_size_bytes = plan.effective_buffer_bytes;
-  request.passes = plan.passes;
-  request.operation_seed = plan.operation_seed;
-  request.vector_count = plan.vector_count;
-  request.tail_bytes = plan.tail_bytes;
-  request.threads_per_threadgroup = plan.threads_per_threadgroup;
-  request.threadgroups_per_grid = plan.threadgroups_per_grid;
-  request.grid_threads = plan.grid_threads;
-  return request;
 }
 
 int run_gpu_bandwidth_suite(const GpuBandwidthConfig& config,

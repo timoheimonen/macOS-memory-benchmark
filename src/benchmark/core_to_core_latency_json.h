@@ -48,6 +48,4 @@ struct CoreToCoreLatencyJsonContext {
 
 nlohmann::ordered_json build_core_to_core_latency_json(const CoreToCoreLatencyJsonContext& context);
 
-int save_core_to_core_latency_to_json(const CoreToCoreLatencyJsonContext& context);
-
 #endif  // CORE_TO_CORE_LATENCY_JSON_H

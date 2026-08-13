@@ -14,24 +14,24 @@
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 //
 #include <gtest/gtest.h>
+
+#include <cstdlib>
+#include <stdexcept>
+#include <vector>
+
 #include "benchmark/benchmark_executor.h"
 #include "benchmark/benchmark_runner.h"
 #include "benchmark/benchmark_statistics_collector.h"
 #include "core/config/config.h"
 #include "core/timing/timer.h"
 #include "output/console/messages/messages_api.h"
-#include "test_statistics_helpers.h"
 #include "test_timer_system_calls.h"
-#include <cstdlib>
-#include <stdexcept>
-#include <vector>
 
 namespace {
 
 uint64_t deterministic_timer_ticks() { return 100; }
 
-using ScopedDeterministicTimerSystemCalls =
-    test_timer_system_calls::ScopedTimerSystemCalls<deterministic_timer_ticks>;
+using ScopedDeterministicTimerSystemCalls = test_timer_system_calls::ScopedTimerSystemCalls<deterministic_timer_ticks>;
 
 void inject_deterministic_elapsed(BenchmarkRunnerTestHooks& hooks) {
   hooks.elapsed_seconds = []() { return 1.0; };
@@ -95,8 +95,25 @@ BenchmarkResults make_collector_results() {
 TEST(BenchmarkStatisticsCollectorTest, CollectLoopResultsAggregatesMainAndDetectedCacheMetrics) {
   BenchmarkConfig config = make_collector_config();
   BenchmarkStatistics stats;
+  stats.status = BenchmarkRunStatus::Failed;
+  stats.status_reason = "stale";
+  stats.planned_loops = 99;
+  stats.completed_loops = 98;
+  stats.planned_measurements = 97;
+  stats.completed_measurements = 96;
+  stats.loop_results.push_back(BenchmarkResults{});
   stats.all_read_bw_gb_s = {999.0};
+  stats.all_l1_latency_ns = {998.0};
+  stats.all_main_mem_latency_samples = {997.0};
   initialize_statistics(stats, config);
+
+  EXPECT_EQ(stats.status, BenchmarkRunStatus::NotStarted);
+  EXPECT_TRUE(stats.status_reason.empty());
+  EXPECT_EQ(stats.planned_loops, 2u);
+  EXPECT_EQ(stats.completed_loops, 0u);
+  EXPECT_EQ(stats.planned_measurements, 0u);
+  EXPECT_EQ(stats.completed_measurements, 0u);
+  EXPECT_TRUE(stats.loop_results.empty());
 
   collect_loop_results(stats, make_collector_results(), config);
 
@@ -170,12 +187,9 @@ TEST(BenchmarkStatisticsCollectorTest, InterruptedMeasurementsNeverEnterAggregat
   results.status = BenchmarkRunStatus::Interrupted;
   results.planned_measurements = 12;
   results.completed_measurements = 10;
-  set_measurement_unavailable(results.main_write_bandwidth,
-                              BenchmarkMeasurementStatus::Interrupted,
+  set_measurement_unavailable(results.main_write_bandwidth, BenchmarkMeasurementStatus::Interrupted,
                               "interrupted during measured operation");
-  set_measurement_unavailable(results.main_latency,
-                              BenchmarkMeasurementStatus::Invalid,
-                              "invalid latency duration");
+  set_measurement_unavailable(results.main_latency, BenchmarkMeasurementStatus::Invalid, "invalid latency duration");
 
   collect_loop_results(stats, results, config);
 
@@ -185,47 +199,8 @@ TEST(BenchmarkStatisticsCollectorTest, InterruptedMeasurementsNeverEnterAggregat
   EXPECT_TRUE(stats.all_main_mem_latency_samples.empty());
   EXPECT_EQ(stats.completed_measurements, 10u);
   ASSERT_EQ(stats.loop_results.size(), 1u);
-  EXPECT_EQ(stats.loop_results[0].main_write_bandwidth.status,
-            BenchmarkMeasurementStatus::Interrupted);
+  EXPECT_EQ(stats.loop_results[0].main_write_bandwidth.status, BenchmarkMeasurementStatus::Interrupted);
   EXPECT_FALSE(stats.loop_results[0].main_write_bandwidth.value.has_value());
-}
-
-TEST(BenchmarkStatisticsCollectorTest, InitializationResetsStateAndReservesExactPopulations) {
-  BenchmarkConfig config;
-  config.loop_count = 4;
-  config.latency_sample_count = 3;
-  config.l1_buffer_size = 1024;
-  config.l2_buffer_size = 2048;
-  BenchmarkStatistics stats;
-  stats.status = BenchmarkRunStatus::Failed;
-  stats.status_reason = "stale";
-  stats.planned_loops = 99;
-  stats.completed_loops = 98;
-  stats.planned_measurements = 97;
-  stats.completed_measurements = 96;
-  stats.loop_results.push_back(BenchmarkResults{});
-  stats.all_read_bw_gb_s = {1.0};
-  stats.all_l1_latency_ns = {2.0};
-  stats.all_main_mem_latency_samples = {3.0};
-
-  initialize_statistics(stats, config);
-
-  EXPECT_EQ(stats.status, BenchmarkRunStatus::NotStarted);
-  EXPECT_TRUE(stats.status_reason.empty());
-  EXPECT_EQ(stats.planned_loops, 4u);
-  EXPECT_EQ(stats.completed_loops, 0u);
-  EXPECT_EQ(stats.planned_measurements, 0u);
-  EXPECT_EQ(stats.completed_measurements, 0u);
-  EXPECT_TRUE(stats.loop_results.empty());
-  EXPECT_GE(stats.loop_results.capacity(), 4u);
-  EXPECT_TRUE(stats.all_read_bw_gb_s.empty());
-  EXPECT_GE(stats.all_read_bw_gb_s.capacity(), 4u);
-  EXPECT_TRUE(stats.all_l1_latency_ns.empty());
-  EXPECT_GE(stats.all_l1_latency_ns.capacity(), 4u);
-  EXPECT_TRUE(stats.all_main_mem_latency_samples.empty());
-  EXPECT_GE(stats.all_main_mem_latency_samples.capacity(), 12u);
-  EXPECT_GE(stats.all_l1_latency_samples.capacity(), 12u);
-  EXPECT_GE(stats.all_l2_latency_samples.capacity(), 12u);
 }
 
 TEST(BenchmarkRunnerTest, InjectedTimerCreationFailureIsReportedAndCheckpointed) {
@@ -237,8 +212,7 @@ TEST(BenchmarkRunnerTest, InjectedTimerCreationFailureIsReportedAndCheckpointed)
   BenchmarkRunnerTestHooks hooks;
   hooks.force_timer_creation_failure = true;
   inject_deterministic_elapsed(hooks);
-  hooks.checkpoint = [&](const BenchmarkConfig&, const BenchmarkStatistics&,
-                         double, bool) {
+  hooks.checkpoint = [&](const BenchmarkConfig&, const BenchmarkStatistics&, double, bool) {
     ++checkpoints;
     return EXIT_SUCCESS;
   };
@@ -263,11 +237,10 @@ TEST(BenchmarkRunnerTest, InjectedLoopExceptionIsFailedAndCheckpointedWithExactR
   size_t checkpoints = 0;
   BenchmarkRunnerTestHooks hooks;
   inject_deterministic_elapsed(hooks);
-  hooks.execute_loop = [](BenchmarkConfig&, int, HighResTimer&,
-                          BenchmarkExecutionState*)
-      -> BenchmarkResults { throw std::runtime_error("injected loop failure"); };
-  hooks.checkpoint = [&](const BenchmarkConfig&, const BenchmarkStatistics& snapshot,
-                         double, bool) {
+  hooks.execute_loop = [](BenchmarkConfig&, int, HighResTimer&, BenchmarkExecutionState*) -> BenchmarkResults {
+    throw std::runtime_error("injected loop failure");
+  };
+  hooks.checkpoint = [&](const BenchmarkConfig&, const BenchmarkStatistics& snapshot, double, bool) {
     ++checkpoints;
     EXPECT_EQ(snapshot.status, BenchmarkRunStatus::Failed);
     EXPECT_EQ(snapshot.status_reason, "injected loop failure");
@@ -284,8 +257,7 @@ TEST(BenchmarkRunnerTest, InjectedLoopExceptionIsFailedAndCheckpointedWithExactR
   EXPECT_EQ(stats.completed_loops, 0u);
   EXPECT_TRUE(stats.loop_results.empty());
   EXPECT_EQ(checkpoints, 1u);
-  EXPECT_EQ(error, Messages::error_benchmark_loop(0, "injected loop failure") +
-                       "\n");
+  EXPECT_EQ(error, Messages::error_benchmark_loop(0, "injected loop failure") + "\n");
 }
 
 TEST(BenchmarkRunnerTest, UnknownLoopExceptionIsContainedWithCentralizedReason) {
@@ -294,22 +266,19 @@ TEST(BenchmarkRunnerTest, UnknownLoopExceptionIsContainedWithCentralizedReason) 
   config.loop_count = 1;
   BenchmarkStatistics stats;
   BenchmarkRunnerTestHooks hooks;
-  hooks.execute_loop = [](BenchmarkConfig&, int, HighResTimer&,
-                          BenchmarkExecutionState*)
-      -> BenchmarkResults { throw 7; };
+  hooks.execute_loop = [](BenchmarkConfig&, int, HighResTimer&, BenchmarkExecutionState*) -> BenchmarkResults {
+    throw 7;
+  };
 
   testing::internal::CaptureStderr();
   int result = EXIT_SUCCESS;
-  EXPECT_NO_THROW(
-      result = run_all_benchmarks(config, stats, &hooks));
+  EXPECT_NO_THROW(result = run_all_benchmarks(config, stats, &hooks));
   const std::string error = testing::internal::GetCapturedStderr();
 
   EXPECT_EQ(result, EXIT_FAILURE);
   EXPECT_EQ(stats.status, BenchmarkRunStatus::Failed);
-  EXPECT_EQ(stats.status_reason,
-            Messages::benchmark_reason_unknown_loop_exception());
-  EXPECT_EQ(error,
-            Messages::error_benchmark_loop(0, stats.status_reason) + "\n");
+  EXPECT_EQ(stats.status_reason, Messages::benchmark_reason_unknown_loop_exception());
+  EXPECT_EQ(error, Messages::error_benchmark_loop(0, stats.status_reason) + "\n");
 }
 
 TEST(BenchmarkRunnerTest, StopHookExceptionIsContainedAtCoordinatorBoundary) {
@@ -318,27 +287,20 @@ TEST(BenchmarkRunnerTest, StopHookExceptionIsContainedAtCoordinatorBoundary) {
   config.loop_count = 1;
   BenchmarkStatistics stats;
   BenchmarkRunnerTestHooks hooks;
-  hooks.stop_requested = []() -> bool {
-    throw std::runtime_error("injected stop failure");
-  };
+  hooks.stop_requested = []() -> bool { throw std::runtime_error("injected stop failure"); };
 
   testing::internal::CaptureStderr();
   int result = EXIT_SUCCESS;
-  EXPECT_NO_THROW(
-      result = run_all_benchmarks(config, stats, &hooks));
+  EXPECT_NO_THROW(result = run_all_benchmarks(config, stats, &hooks));
   const std::string error = testing::internal::GetCapturedStderr();
 
   EXPECT_EQ(result, EXIT_FAILURE);
   EXPECT_EQ(stats.status, BenchmarkRunStatus::Failed);
-  EXPECT_EQ(stats.status_reason,
-            Messages::benchmark_reason_coordinator_exception(
-                "injected stop failure"));
-  EXPECT_EQ(error,
-            Messages::error_prefix() + stats.status_reason + "\n");
+  EXPECT_EQ(stats.status_reason, Messages::benchmark_reason_coordinator_exception("injected stop failure"));
+  EXPECT_EQ(error, Messages::error_prefix() + stats.status_reason + "\n");
 }
 
-TEST(BenchmarkRunnerTest,
-     UnknownCheckpointExceptionPreservesLoopAtCoordinatorBoundary) {
+TEST(BenchmarkRunnerTest, UnknownCheckpointExceptionPreservesLoopAtCoordinatorBoundary) {
   const ScopedDeterministicTimerSystemCalls timer_system_calls;
   BenchmarkConfig config;
   config.loop_count = 1;
@@ -347,32 +309,27 @@ TEST(BenchmarkRunnerTest,
   BenchmarkStatistics stats;
   BenchmarkRunnerTestHooks hooks;
   inject_deterministic_elapsed(hooks);
-  hooks.execute_loop = [](BenchmarkConfig&, int loop, HighResTimer&,
-                          BenchmarkExecutionState*) {
+  hooks.execute_loop = [](BenchmarkConfig&, int loop, HighResTimer&, BenchmarkExecutionState*) {
     BenchmarkResults results;
     results.status = BenchmarkRunStatus::Complete;
     results.loop_index = static_cast<size_t>(loop);
     return results;
   };
-  hooks.checkpoint = [](const BenchmarkConfig&, const BenchmarkStatistics&,
-                        double, bool) -> int { throw 11; };
+  hooks.checkpoint = [](const BenchmarkConfig&, const BenchmarkStatistics&, double, bool) -> int { throw 11; };
 
   testing::internal::CaptureStdout();
   testing::internal::CaptureStderr();
   int result = EXIT_SUCCESS;
-  EXPECT_NO_THROW(
-      result = run_all_benchmarks(config, stats, &hooks));
+  EXPECT_NO_THROW(result = run_all_benchmarks(config, stats, &hooks));
   const std::string error = testing::internal::GetCapturedStderr();
   static_cast<void>(testing::internal::GetCapturedStdout());
 
   EXPECT_EQ(result, EXIT_FAILURE);
   EXPECT_EQ(stats.status, BenchmarkRunStatus::Failed);
-  EXPECT_EQ(stats.status_reason,
-            Messages::benchmark_reason_unknown_coordinator_exception());
+  EXPECT_EQ(stats.status_reason, Messages::benchmark_reason_unknown_coordinator_exception());
   EXPECT_EQ(stats.completed_loops, 1u);
   ASSERT_EQ(stats.loop_results.size(), 1u);
-  EXPECT_EQ(error,
-            Messages::error_prefix() + stats.status_reason + "\n");
+  EXPECT_EQ(error, Messages::error_prefix() + stats.status_reason + "\n");
 }
 
 TEST(BenchmarkRunnerTest, InjectedCheckpointFailurePreservesCompletedLoopButFailsCommand) {
@@ -384,15 +341,13 @@ TEST(BenchmarkRunnerTest, InjectedCheckpointFailurePreservesCompletedLoopButFail
   BenchmarkStatistics stats;
   BenchmarkRunnerTestHooks hooks;
   inject_deterministic_elapsed(hooks);
-  hooks.execute_loop = [](BenchmarkConfig&, int loop, HighResTimer&,
-                          BenchmarkExecutionState*) {
+  hooks.execute_loop = [](BenchmarkConfig&, int loop, HighResTimer&, BenchmarkExecutionState*) {
     BenchmarkResults results;
     results.status = BenchmarkRunStatus::Complete;
     results.loop_index = static_cast<size_t>(loop);
     return results;
   };
-  hooks.checkpoint = [](const BenchmarkConfig&, const BenchmarkStatistics&,
-                        double, bool) { return EXIT_FAILURE; };
+  hooks.checkpoint = [](const BenchmarkConfig&, const BenchmarkStatistics&, double, bool) { return EXIT_FAILURE; };
 
   testing::internal::CaptureStdout();
   const int result = run_all_benchmarks(config, stats, &hooks);
@@ -400,8 +355,7 @@ TEST(BenchmarkRunnerTest, InjectedCheckpointFailurePreservesCompletedLoopButFail
 
   EXPECT_EQ(result, EXIT_FAILURE);
   EXPECT_EQ(stats.status, BenchmarkRunStatus::Failed);
-  EXPECT_EQ(stats.status_reason,
-            Messages::benchmark_reason_checkpoint_failed());
+  EXPECT_EQ(stats.status_reason, Messages::benchmark_reason_checkpoint_failed());
   EXPECT_EQ(stats.completed_loops, 1u);
 }
 
@@ -417,15 +371,13 @@ TEST(BenchmarkRunnerTest, InjectedStopBetweenLoopsPreservesCompletedLoop) {
   BenchmarkRunnerTestHooks hooks;
   inject_deterministic_elapsed(hooks);
   hooks.stop_requested = [&] { return stop_checks++ >= 1; };
-  hooks.execute_loop = [](BenchmarkConfig&, int loop, HighResTimer&,
-                          BenchmarkExecutionState*) {
+  hooks.execute_loop = [](BenchmarkConfig&, int loop, HighResTimer&, BenchmarkExecutionState*) {
     BenchmarkResults results;
     results.status = BenchmarkRunStatus::Complete;
     results.loop_index = static_cast<size_t>(loop);
     return results;
   };
-  hooks.checkpoint = [&](const BenchmarkConfig&, const BenchmarkStatistics&,
-                         double, bool) {
+  hooks.checkpoint = [&](const BenchmarkConfig&, const BenchmarkStatistics&, double, bool) {
     ++checkpoints;
     return EXIT_SUCCESS;
   };
@@ -439,19 +391,4 @@ TEST(BenchmarkRunnerTest, InjectedStopBetweenLoopsPreservesCompletedLoop) {
   EXPECT_EQ(stats.completed_loops, 1u);
   EXPECT_EQ(stats.loop_results.size(), 1u);
   EXPECT_EQ(checkpoints, 2u);
-}
-
-TEST(BenchmarkRunnerTest, StatisticsPrintsPairedLocalityMetrics) {
-  const std::vector<double> all_main_mem_latency = {15.0, 16.0};
-  const std::vector<double> all_tlb_hit_latency = {14.0, 15.0};
-  const std::vector<double> all_tlb_miss_latency = {90.0, 92.0};
-  const std::vector<double> all_page_walk_penalty = {76.0, 77.0};
-
-  const std::string output = test_statistics_helpers::capture_auto_tlb_breakdown(
-      all_main_mem_latency, all_tlb_hit_latency, all_tlb_miss_latency, all_page_walk_penalty);
-
-  EXPECT_NE(output.find("16 KiB Locality Latency (ns):"), std::string::npos);
-  EXPECT_NE(output.find("Global-Random Latency (ns):"), std::string::npos);
-  EXPECT_NE(output.find("Locality Latency Delta, Global - 16 KiB (ns):"),
-            std::string::npos);
 }

@@ -2,7 +2,7 @@
 
 ## 1. Purpose
 
-This document explains how `macOS-memory-benchmark` version 0.61.1 measures memory latency on Apple Silicon.
+This document explains how `macOS-memory-benchmark` version 0.61.2 measures memory latency on Apple Silicon.
 
 The latency path is designed to measure **load-to-use delay** (pointer chasing), not bulk throughput.
 It combines:
@@ -133,18 +133,20 @@ so stride must be a multiple of 8.
 
 The following behaviors are explicitly covered by unit tests:
 
-- **Null buffer rejected** (`SetupLatencyChainNullBuffer`)
-- **Zero stride rejected** (`SetupLatencyChainZeroStride`)
-- **Insufficient buffer capacity rejected** (`SetupLatencyChainBufferSmallerThanStride`, `SetupLatencyChainBufferEqualToStride`)
-- **Minimum valid chain accepted** (`SetupLatencyChainBufferJustLargerThanStride`)
-- **Small valid chains accepted** (`SetupLatencyChainThreePointers`)
-- **Constructed pointers stay inside buffer bounds** (`SetupLatencyChainCreatesValidChain`)
-- **Page-sized locality accepted** (`SetupLatencyChainWithTlbLocality`)
-- **Too-small locality-span rejected** (`SetupLatencyChainWithTooSmallTlbLocalityFails`)
-- **Diagnostics populated correctly** (`SetupLatencyChainCollectsDiagnostics`)
-- **`SameRandomInBoxIncreasingBox` mode accepted** (`SetupLatencyChainWithSameRandomInBoxMode`)
-- **Locality-using mode with zero locality window rejected** (`SetupLatencyChainWithBoxModeAndZeroLocalityFails`)
-- **Explicit seed reconstructs the same chain** (`SetupLatencyChainExplicitSeedIsReproducible`)
+- **Null buffers, zero/misaligned strides, and one-node buffers are rejected with exact reasons**
+  (`SetupLatencyChainRejectsInvalidInputsWithExactReasons`)
+- **The minimum two-node chain is accepted at pointer-sized and default strides**
+  (`SetupLatencyChainAcceptsMinimumTwoNodeChainsAtSupportedStrides`)
+- **A constructed chain visits every aligned in-buffer node exactly once and returns to its head**
+  (`SetupLatencyChainCreatesValidChain`)
+- **Pointer count, touched-page count, page size, and stride diagnostics are exact**
+  (`SetupLatencyChainCollectsDiagnostics`)
+- **A locality window that cannot contain two stride-spaced nodes is rejected**
+  (`SetupLatencyChainWithTooSmallTlbLocalityFails`)
+- **A locality-using box mode with a zero locality window is rejected**
+  (`SetupLatencyChainWithBoxModeAndZeroLocalityFails`)
+- **Equal explicit seeds reproduce the chain, different seeds change it, and same-random box mode reuses one
+  permutation across boxes** (`ExplicitSeedsAreReproducibleAndSameRandomModeReusesBoxPermutation`)
 
 These tests validate setup correctness and failure handling before timing is run.
 
@@ -251,7 +253,7 @@ analysis.
 - For completed standard CLI latency measurements, segmented windows are under each headline aggregate's
   `pooled_sample_distribution`, with values and loop-boundary metadata kept separate from continuous loop headlines.
 - The current standard schema 2 does not serialize the legacy `chain_diagnostics.unique_pages_touched` blocks. Do not
-  use the old `main_memory.latency.chain_diagnostics` or `cache.*.latency.chain_diagnostics` paths for version 0.61.1
+  use the old `main_memory.latency.chain_diagnostics` or `cache.*.latency.chain_diagnostics` paths for version 0.61.2
   output.
 
 When `--latency-tlb-locality-kb` is not explicitly supplied, standard main-memory latency also runs three paired rounds

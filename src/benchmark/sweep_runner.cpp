@@ -25,6 +25,7 @@
 #include <iostream>
 #include <string>
 #include <unistd.h>
+#include <utility>
 #include <vector>
 
 #include "benchmark/benchmark_runner.h"
@@ -175,7 +176,7 @@ void append_assignments_recursive(const BenchmarkConfig& config,
 
 std::vector<std::vector<SweepAssignment>> build_sweep_assignments(const BenchmarkConfig& config) {
   std::vector<std::vector<SweepAssignment>> assignments;
-  assignments.reserve(calculate_sweep_run_count(config));
+  assignments.reserve(calculate_sweep_run_count_from_specs(config.sweep_specs));
   std::vector<SweepAssignment> current;
   append_assignments_recursive(config, 0, current, assignments);
   return assignments;
@@ -427,8 +428,6 @@ SweepNestedCompletion classify_pattern_completion(const nlohmann::ordered_json& 
           reason.empty() ? "nested-pattern-result-incomplete" : reason};
 }
 
-}  // namespace
-
 const char* sweep_attempt_status_to_string(SweepAttemptStatus status) {
   switch (status) {
     case SweepAttemptStatus::Complete:
@@ -442,6 +441,8 @@ const char* sweep_attempt_status_to_string(SweepAttemptStatus status) {
   }
   return "failed";
 }
+
+}  // namespace
 
 SweepNestedCompletion classify_sweep_nested_completion(SweepNestedMode mode,
                                                        const nlohmann::ordered_json& result_json) {
@@ -579,12 +580,8 @@ SweepExecutionResult execute_sweep_plan(SweepNestedMode mode, const std::vector<
   return execution;
 }
 
-size_t calculate_sweep_run_count(const BenchmarkConfig& config) {
-  return calculate_sweep_run_count_from_specs(config.sweep_specs);
-}
-
 int run_sweep_mode(const BenchmarkConfig& base_config) {
-  const size_t run_count = calculate_sweep_run_count(base_config);
+  const size_t run_count = calculate_sweep_run_count_from_specs(base_config.sweep_specs);
   const std::vector<std::vector<SweepAssignment>> assignments = build_sweep_assignments(base_config);
 
   // Validate every generated configuration before starting the first potentially long run.

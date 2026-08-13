@@ -988,10 +988,9 @@ TEST(JsonSchemaTest, TlbAnalysisExporterOmitsRemovedAliasesAndHandlesUnavailable
             std::string::npos);
 }
 
-TEST(JsonSchemaTest, CoreToCoreExporterUsesSharedModeKeyAndSamplesContainer) {
+TEST(JsonSchemaTest, CoreToCorePayloadPersistsThroughSharedWriter) {
   const TemporaryJsonFile output_file("core2core_schema");
   CoreToCoreLatencyConfig config;
-  config.output_file = output_file.path().string();
   config.loop_count = 1;
   config.latency_sample_count = 2;
 
@@ -1018,8 +1017,9 @@ TEST(JsonSchemaTest, CoreToCoreExporterUsesSharedModeKeyAndSamplesContainer) {
       4.5,
   };
 
-  ASSERT_EQ(save_core_to_core_latency_to_json(context), EXIT_SUCCESS);
-  const nlohmann::json output_json = read_json_file(config.output_file);
+  const nlohmann::ordered_json payload = build_core_to_core_latency_json(context);
+  ASSERT_EQ(write_json_to_file(output_file.path(), payload, false), EXIT_SUCCESS);
+  const nlohmann::json output_json = read_json_file(output_file.path());
 
   EXPECT_EQ(output_json[JsonKeys::CONFIGURATION][JsonKeys::MODE], Constants::CORE_TO_CORE_JSON_MODE_NAME);
   ASSERT_TRUE(output_json["core_to_core_latency"]["scenarios"][0].contains(JsonKeys::SAMPLES_NS));
@@ -1126,33 +1126,8 @@ TEST(JsonSchemaTest, CoreToCoreV2SerializesCalibratedBalancedAuditTrail) {
   EXPECT_EQ(scenario_json["loop_records"][0]["sample_window_range"]["count"], 2u);
 }
 
-TEST(JsonSchemaTest, CoreToCoreExporterReturnsSuccessWhenOutputPathIsEmpty) {
+TEST(JsonSchemaTest, CoreToCoreBuilderSerializesOneWayValuesAndThreadHints) {
   CoreToCoreLatencyConfig config;
-  config.output_file.clear();
-  config.loop_count = 1;
-  config.latency_sample_count = 1;
-
-  const std::string cpu_name = "test-cpu";
-  const std::vector<CoreToCoreLatencyScenarioResult> scenarios;
-  const CoreToCoreLatencyJsonContext context = {
-      config,
-      cpu_name,
-      4,
-      6,
-      100,
-      200,
-      20,
-      scenarios,
-      1.0,
-  };
-
-  EXPECT_EQ(save_core_to_core_latency_to_json(context), EXIT_SUCCESS);
-}
-
-TEST(JsonSchemaTest, CoreToCoreExporterSerializesOneWayValuesAndThreadHints) {
-  const TemporaryJsonFile output_file("core2core_values");
-  CoreToCoreLatencyConfig config;
-  config.output_file = output_file.path().string();
   config.loop_count = 2;
   config.latency_sample_count = 2;
 
@@ -1195,8 +1170,7 @@ TEST(JsonSchemaTest, CoreToCoreExporterSerializesOneWayValuesAndThreadHints) {
       4.5,
   };
 
-  ASSERT_EQ(save_core_to_core_latency_to_json(context), EXIT_SUCCESS);
-  const nlohmann::json output_json = read_json_file(config.output_file);
+  const nlohmann::json output_json = build_core_to_core_latency_json(context);
 
   const nlohmann::json scenario_json = output_json["core_to_core_latency"]["scenarios"][0];
   ASSERT_EQ(scenario_json["one_way_estimate_ns"][JsonKeys::VALUES].size(), 2u);
@@ -1215,10 +1189,8 @@ TEST(JsonSchemaTest, CoreToCoreExporterSerializesOneWayValuesAndThreadHints) {
   EXPECT_TRUE(scenario_json["thread_hints"]["initiator"].contains("affinity_tag"));
 }
 
-TEST(JsonSchemaTest, CoreToCoreExporterOmitsStatisticsWhenOnlySingleValueExists) {
-  const TemporaryJsonFile output_file("core2core_single");
+TEST(JsonSchemaTest, CoreToCoreBuilderOmitsStatisticsWhenOnlySingleValueExists) {
   CoreToCoreLatencyConfig config;
-  config.output_file = output_file.path().string();
   config.loop_count = 1;
   config.latency_sample_count = 1;
 
@@ -1245,48 +1217,10 @@ TEST(JsonSchemaTest, CoreToCoreExporterOmitsStatisticsWhenOnlySingleValueExists)
       4.5,
   };
 
-  ASSERT_EQ(save_core_to_core_latency_to_json(context), EXIT_SUCCESS);
-  const nlohmann::json output_json = read_json_file(config.output_file);
+  const nlohmann::json output_json = build_core_to_core_latency_json(context);
 
   const nlohmann::json scenario_json = output_json["core_to_core_latency"]["scenarios"][0];
   EXPECT_FALSE(scenario_json["round_trip_ns"].contains(JsonKeys::STATISTICS));
   EXPECT_FALSE(scenario_json["one_way_estimate_ns"].contains(JsonKeys::STATISTICS));
   EXPECT_FALSE(scenario_json[JsonKeys::SAMPLES_NS].contains(JsonKeys::STATISTICS));
-}
-
-TEST(JsonSchemaTest, CoreToCoreExporterReturnsFailureForInvalidOutputPath) {
-  CoreToCoreLatencyConfig config;
-  config.output_file = "/dev/null/core2core.json";
-  config.loop_count = 1;
-  config.latency_sample_count = 1;
-
-  const std::string cpu_name = "test-cpu";
-  const std::vector<CoreToCoreLatencyScenarioResult> scenarios = {
-      {
-          Constants::CORE_TO_CORE_SCENARIO_NO_AFFINITY,
-          {10.0},
-          {10.5},
-          {},
-          {},
-      },
-  };
-
-  const CoreToCoreLatencyJsonContext context = {
-      config,
-      cpu_name,
-      4,
-      6,
-      100,
-      200,
-      20,
-      scenarios,
-      4.5,
-  };
-
-  testing::internal::CaptureStderr();
-  const int result = save_core_to_core_latency_to_json(context);
-  const std::string error_output = testing::internal::GetCapturedStderr();
-
-  EXPECT_EQ(result, EXIT_FAILURE);
-  EXPECT_FALSE(error_output.empty());
 }

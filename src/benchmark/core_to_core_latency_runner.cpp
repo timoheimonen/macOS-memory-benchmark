@@ -51,6 +51,7 @@
 #include "output/console/output_printer.h"
 #include "output/console/statistics_renderer.h"
 #include "output/json/json_output/json_output_api.h"
+#include "utils/descriptive_statistics.h"
 #include "utils/numeric_utils.h"
 
 namespace {
@@ -94,10 +95,6 @@ static_assert(sizeof(SharedPingPongState) == 2 * Constants::CORE_TO_CORE_SHARED_
 bool positive_finite(double value) { return value > 0.0 && std::isfinite(value); }
 
 }  // namespace
-
-CoreToCoreSummaryStats calculate_core_to_core_summary_stats(const std::vector<double>& values) {
-  return calculate_descriptive_statistics(values);
-}
 
 std::string classify_core_to_core_duration_quality(double elapsed_seconds) {
   if (!positive_finite(elapsed_seconds)) {
@@ -199,7 +196,7 @@ CoreToCoreWorkPlan build_calibration_pilot_plan() {
   return plan;
 }
 
-void print_statistics(const CoreToCoreSummaryStats& stats) {
+void print_statistics(const DescriptiveStatistics& stats) {
   StatisticsSummaryRenderOptions options;
   options.precision = Constants::LATENCY_PRECISION;
   options.line_prefix = "    ";
@@ -228,8 +225,7 @@ void print_scenario_report(const CoreToCoreLatencyScenarioResult& scenario_resul
     return;
   }
 
-  const CoreToCoreSummaryStats headline_stats =
-      calculate_core_to_core_summary_stats(scenario_result.loop_round_trip_ns);
+  const DescriptiveStatistics headline_stats = calculate_descriptive_statistics(scenario_result.loop_round_trip_ns);
   std::cout << Messages::report_core_to_core_round_trip(headline_stats.median) << std::endl;
   std::cout << Messages::report_core_to_core_one_way_estimate(headline_stats.median * 0.5) << std::endl;
   std::cout << Messages::report_core_to_core_headline_statistics(scenario_result.loop_round_trip_ns.size())
@@ -245,8 +241,7 @@ void print_scenario_report(const CoreToCoreLatencyScenarioResult& scenario_resul
   }
 
   if (!scenario_result.sample_round_trip_ns.empty()) {
-    const CoreToCoreSummaryStats sample_stats =
-        calculate_core_to_core_summary_stats(scenario_result.sample_round_trip_ns);
+    const DescriptiveStatistics sample_stats = calculate_descriptive_statistics(scenario_result.sample_round_trip_ns);
     std::cout << Messages::report_core_to_core_sample_statistics(scenario_result.sample_round_trip_ns.size())
               << std::endl;
     print_statistics(sample_stats);
@@ -265,14 +260,6 @@ void print_scenario_report(const CoreToCoreLatencyScenarioResult& scenario_resul
 }
 
 }  // namespace
-
-size_t calculate_core_to_core_calibrated_round_trips(double pilot_elapsed_seconds, size_t pilot_round_trips,
-                                                     double target_duration_seconds, size_t minimum_round_trips,
-                                                     size_t maximum_round_trips) {
-  return NumericUtils::calculate_duration_scaled_count(
-      pilot_elapsed_seconds, pilot_round_trips, target_duration_seconds,
-      minimum_round_trips, maximum_round_trips);
-}
 
 std::vector<size_t> build_core_to_core_scenario_order(size_t scenario_count, size_t loop_index) {
   std::vector<size_t> order;
@@ -324,13 +311,13 @@ bool build_core_to_core_work_plan(double pilot_elapsed_seconds, CoreToCoreWorkPl
     return false;
   }
   plan.calibration_round_trip_ns = pilot_elapsed_seconds * 1e9 / static_cast<double>(plan.calibration_round_trips);
-  plan.warmup_round_trips = calculate_core_to_core_calibrated_round_trips(
+  plan.warmup_round_trips = NumericUtils::calculate_duration_scaled_count(
       pilot_elapsed_seconds, plan.calibration_round_trips, Constants::CORE_TO_CORE_WARMUP_TARGET_SECONDS,
       Constants::CORE_TO_CORE_WARMUP_ROUND_TRIPS, Constants::CORE_TO_CORE_MAX_ROUND_TRIPS);
-  plan.headline_round_trips = calculate_core_to_core_calibrated_round_trips(
+  plan.headline_round_trips = NumericUtils::calculate_duration_scaled_count(
       pilot_elapsed_seconds, plan.calibration_round_trips, Constants::CORE_TO_CORE_HEADLINE_TARGET_SECONDS,
       Constants::CORE_TO_CORE_HEADLINE_ROUND_TRIPS, Constants::CORE_TO_CORE_MAX_ROUND_TRIPS);
-  plan.sample_window_round_trips = calculate_core_to_core_calibrated_round_trips(
+  plan.sample_window_round_trips = NumericUtils::calculate_duration_scaled_count(
       pilot_elapsed_seconds, plan.calibration_round_trips, Constants::CORE_TO_CORE_SAMPLE_TARGET_SECONDS,
       Constants::CORE_TO_CORE_SAMPLE_WINDOW_ROUND_TRIPS, Constants::CORE_TO_CORE_MAX_ROUND_TRIPS);
   plan.calibrated = plan.warmup_round_trips > 0 && plan.headline_round_trips > 0 &&

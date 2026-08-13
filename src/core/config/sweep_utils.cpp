@@ -15,7 +15,7 @@
 //
 /**
  * @file sweep_utils.cpp
- * @brief Shared structural parsing and Cartesian run counting for sweeps.
+ * @brief Shared structural parsing implementation for sweeps.
  */
 
 #include "core/config/sweep_utils.h"
@@ -51,9 +51,4 @@ ParsedSweepText parse_sweep_text(const std::string& specification) {
   }
 
   return parsed;
-}
-
-size_t calculate_cartesian_run_count(const std::vector<size_t>& dimension_sizes) noexcept {
-  return SweepUtilsDetail::calculate_cartesian_run_count(
-      dimension_sizes, [](size_t dimension_size) { return dimension_size; });
 }

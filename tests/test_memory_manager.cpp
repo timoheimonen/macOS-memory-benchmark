@@ -14,11 +14,11 @@
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 #include <gtest/gtest.h>
+#include <sys/mman.h>
 
 #include <cerrno>
 #include <cstring>
 #include <string>
-#include <sys/mman.h>
 
 #include "core/memory/memory_manager.h"
 #include "output/console/messages/messages_api.h"
@@ -26,7 +26,7 @@
 
 class MemoryManagerTest : public FakeMemorySystemCallsTest {};
 
-TEST_F(MemoryManagerTest, RegularAllocationRequestsWillNeedAndReleasesExactMapping) {
+TEST_F(MemoryManagerTest, RegularAllocationUsesWillNeedAndOwnedMappingsReportUnmapFailures) {
   void* mapped_pointer = nullptr;
   {
     MmapPtr buffer = allocate_buffer(128, "regular");
@@ -45,20 +45,22 @@ TEST_F(MemoryManagerTest, RegularAllocationRequestsWillNeedAndReleasesExactMappi
   EXPECT_EQ(state.unmap_calls, 1u);
   EXPECT_EQ(state.last_unmapped_pointer, mapped_pointer);
   EXPECT_EQ(state.last_unmapped_size, 128u);
-}
 
-TEST_F(MemoryManagerTest, NonCacheableAllocationRequestsRandomHintAndReleasesMapping) {
+  state.unmap_result = -1;
+  state.unmap_errno = EINVAL;
+
+  bool allocation_succeeded = false;
+  testing::internal::CaptureStderr();
   {
-    MmapPtr buffer = allocate_buffer_non_cacheable(256, "cache-discouraged");
-    ASSERT_NE(buffer.get(), nullptr);
-    EXPECT_EQ(state.map_calls, 1u);
-    EXPECT_EQ(state.advise_calls, 1u);
-    EXPECT_EQ(state.last_advice, MADV_RANDOM);
-    EXPECT_EQ(state.last_map_size, 256u);
-    EXPECT_EQ(state.last_advise_size, 256u);
+    MmapPtr buffer = allocate_buffer(64, "unmap-failure");
+    allocation_succeeded = buffer != nullptr;
   }
-  EXPECT_EQ(state.unmap_calls, 1u);
-  EXPECT_EQ(state.last_unmapped_size, 256u);
+  const std::string error = testing::internal::GetCapturedStderr();
+
+  ASSERT_TRUE(allocation_succeeded);
+  EXPECT_EQ(state.unmap_calls, 2u);
+  EXPECT_EQ(state.last_unmapped_size, 64u);
+  EXPECT_EQ(error, Messages::error_prefix() + Messages::error_munmap_failed() + ": " + std::strerror(EINVAL) + "\n");
 }
 
 TEST_F(MemoryManagerTest, MappingFailureReturnsNullWithoutAdviceOrUnmap) {
@@ -71,9 +73,8 @@ TEST_F(MemoryManagerTest, MappingFailureReturnsNullWithoutAdviceOrUnmap) {
   EXPECT_EQ(state.map_calls, 1u);
   EXPECT_EQ(state.advise_calls, 0u);
   EXPECT_EQ(state.unmap_calls, 0u);
-  EXPECT_EQ(error, Messages::error_prefix() +
-                       Messages::error_mmap_failed("failed-map") + ": " +
-                       std::strerror(ENOMEM) + "\n");
+  EXPECT_EQ(error,
+            Messages::error_prefix() + Messages::error_mmap_failed("failed-map") + ": " + std::strerror(ENOMEM) + "\n");
 }
 
 TEST_F(MemoryManagerTest, AdviceFailureIsReportedButAllocationRemainsOwned) {
@@ -92,40 +93,18 @@ TEST_F(MemoryManagerTest, AdviceFailureIsReportedButAllocationRemainsOwned) {
   EXPECT_EQ(state.advise_calls, 1u);
   EXPECT_EQ(state.unmap_calls, 1u);
   EXPECT_EQ(error, Messages::warning_prefix() +
-                       Messages::warning_madvise_random_failed(
-                           "advice-failure", std::strerror(EINVAL)) +
-                       "\n");
-}
-
-TEST_F(MemoryManagerTest, UnmapFailureIsReportedAfterOwnedBufferDestruction) {
-  state.unmap_result = -1;
-  state.unmap_errno = EINVAL;
-
-  bool allocation_succeeded = false;
-  testing::internal::CaptureStderr();
-  {
-    MmapPtr buffer = allocate_buffer(64, "unmap-failure");
-    allocation_succeeded = buffer != nullptr;
-  }
-  const std::string error = testing::internal::GetCapturedStderr();
-
-  ASSERT_TRUE(allocation_succeeded);
-  EXPECT_EQ(state.unmap_calls, 1u);
-  EXPECT_EQ(error, Messages::error_prefix() + Messages::error_munmap_failed() +
-                       ": " + std::strerror(EINVAL) + "\n");
+                       Messages::warning_madvise_random_failed("advice-failure", std::strerror(EINVAL)) + "\n");
 }
 
 TEST_F(MemoryManagerTest, ZeroSizeFailsBeforeAnySystemCallWithExactMessage) {
   for (const bool non_cacheable : {false, true}) {
     const char* name = non_cacheable ? "zero-non-cacheable" : "zero-regular";
     testing::internal::CaptureStderr();
-    MmapPtr buffer = non_cacheable ? allocate_buffer_non_cacheable(0, name)
-                                   : allocate_buffer(0, name);
+    MmapPtr buffer = non_cacheable ? allocate_buffer_non_cacheable(0, name) : allocate_buffer(0, name);
     const std::string error = testing::internal::GetCapturedStderr();
 
     EXPECT_EQ(buffer.get(), nullptr);
-    EXPECT_EQ(error, Messages::error_prefix() +
-                         Messages::error_buffer_size_zero(name) + "\n");
+    EXPECT_EQ(error, Messages::error_prefix() + Messages::error_buffer_size_zero(name) + "\n");
   }
   EXPECT_EQ(state.map_calls, 0u);
   EXPECT_EQ(state.advise_calls, 0u);

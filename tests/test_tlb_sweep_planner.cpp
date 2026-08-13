@@ -24,8 +24,7 @@ TEST(TlbSweepPlannerTest, HighDensityBasePlanIsPageConsistent) {
   const size_t page_size = 16 * Constants::BYTES_PER_KB;
   const size_t stride = 256;
 
-  const std::vector<TlbSweepPoint> points =
-      build_tlb_base_sweep_plan(stride, page_size, TlbSweepDensity::High);
+  const std::vector<TlbSweepPoint> points = build_tlb_base_sweep_plan(stride, page_size, TlbSweepDensity::High);
 
   ASSERT_EQ(points.size(), 29u);
   for (size_t i = 0; i < points.size(); ++i) {
@@ -50,8 +49,7 @@ TEST(TlbSweepPlannerTest, BasePlanAcceptsAlignedStrideThatDoesNotDividePage) {
   ASSERT_EQ(stride % sizeof(uintptr_t), 0u);
   ASSERT_NE(page_size % stride, 0u);
 
-  const std::vector<TlbSweepPoint> points =
-      build_tlb_base_sweep_plan(stride, page_size, TlbSweepDensity::Low);
+  const std::vector<TlbSweepPoint> points = build_tlb_base_sweep_plan(stride, page_size, TlbSweepDensity::Low);
 
   ASSERT_EQ(points.size(), 15u);
   for (const TlbSweepPoint& point : points) {
@@ -73,12 +71,12 @@ TEST(TlbSweepPlannerTest, RefinementPlanIsAlignedDeduplicatedAndTracksSources) {
       {1, "l1"},
   };
 
-  const std::vector<size_t> raw_points = build_tlb_refinement_points(
-      localities, 1, page_size, 4 * page_size, page_size);
+  const std::vector<size_t> raw_points =
+      build_tlb_refinement_points(localities, 1, page_size, 4 * page_size, page_size);
   EXPECT_EQ(raw_points, (std::vector<size_t>{3 * page_size}));
 
-  const std::vector<TlbSweepPoint> points = build_tlb_refinement_plan(
-      localities, targets, 256, page_size, page_size, 4 * page_size);
+  const std::vector<TlbSweepPoint> points =
+      build_tlb_refinement_plan(localities, targets, 256, page_size, page_size, 4 * page_size);
 
   ASSERT_FALSE(points.empty());
   for (size_t i = 0; i < points.size(); ++i) {
@@ -91,42 +89,27 @@ TEST(TlbSweepPlannerTest, RefinementPlanIsAlignedDeduplicatedAndTracksSources) {
   }
   const std::vector<size_t> point_localities = tlb_point_localities(points);
   EXPECT_TRUE(std::is_sorted(point_localities.begin(), point_localities.end()));
-  EXPECT_EQ(std::adjacent_find(point_localities.begin(), point_localities.end()),
-            point_localities.end());
-  EXPECT_EQ(std::find(point_localities.begin(), point_localities.end(), 2 * page_size),
-            point_localities.end());
-}
+  EXPECT_EQ(std::adjacent_find(point_localities.begin(), point_localities.end()), point_localities.end());
+  EXPECT_EQ(std::find(point_localities.begin(), point_localities.end(), 2 * page_size), point_localities.end());
 
-TEST(TlbSweepPlannerTest, RefinementExcludesMeasuredHardwareRegressionPoint) {
-  const size_t page_size = 16 * Constants::BYTES_PER_KB;
   const size_t stride = 256;
-  const std::vector<TlbSweepPoint> base_points =
-      build_tlb_base_sweep_plan(stride, page_size, TlbSweepDensity::Low);
+  const std::vector<TlbSweepPoint> base_points = build_tlb_base_sweep_plan(stride, page_size, TlbSweepDensity::Low);
   const std::vector<size_t> base_localities = tlb_point_localities(base_points);
   ASSERT_EQ(base_localities.size(), 15u);
 
-  const std::vector<TlbRefinementTarget> targets = {
+  const std::vector<TlbRefinementTarget> hardware_targets = {
       {8, "l1"},
       {12, "l2"},
   };
   const std::vector<TlbSweepPoint> refinement_points = build_tlb_refinement_plan(
-      base_localities,
-      targets,
-      stride,
-      page_size,
-      base_localities.front(),
-      base_localities.back());
+      base_localities, hardware_targets, stride, page_size, base_localities.front(), base_localities.back());
 
   ASSERT_EQ(refinement_points.size(), 13u);
   for (const TlbSweepPoint& point : refinement_points) {
-    EXPECT_EQ(std::find(base_localities.begin(), base_localities.end(),
-                        point.locality_bytes),
-              base_localities.end());
+    EXPECT_EQ(std::find(base_localities.begin(), base_localities.end(), point.locality_bytes), base_localities.end());
   }
-  EXPECT_EQ(std::find_if(refinement_points.begin(), refinement_points.end(),
-                         [](const TlbSweepPoint& point) {
-                           return point.locality_bytes ==
-                                  8 * Constants::BYTES_PER_MB;
-                         }),
-            refinement_points.end());
+  EXPECT_EQ(
+      std::find_if(refinement_points.begin(), refinement_points.end(),
+                   [](const TlbSweepPoint& point) { return point.locality_bytes == 8 * Constants::BYTES_PER_MB; }),
+      refinement_points.end());
 }

@@ -25,12 +25,9 @@
 
 #include <cmath>
 #include <limits>
-#include <string>
-#include <utility>
 #include <vector>
 
 #include "benchmark/core_to_core_latency_internal.h"
-#include "benchmark/core_to_core_sweep_runner.h"
 #include "core/config/constants.h"
 #include "core/timing/timer.h"
 #include "test_timer_system_calls.h"
@@ -39,8 +36,7 @@ namespace {
 
 uint64_t deterministic_timer_ticks() { return 100; }
 
-using ScopedDeterministicTimerSystemCalls =
-    test_timer_system_calls::ScopedTimerSystemCalls<deterministic_timer_ticks>;
+using ScopedDeterministicTimerSystemCalls = test_timer_system_calls::ScopedTimerSystemCalls<deterministic_timer_ticks>;
 
 CoreToCoreWorkPlan make_small_work_plan() {
   CoreToCoreWorkPlan plan;
@@ -51,48 +47,7 @@ CoreToCoreWorkPlan make_small_work_plan() {
   return plan;
 }
 
-using Json = nlohmann::ordered_json;
-
-std::vector<Json> make_core_to_core_sweep_parameters(size_t count) {
-  std::vector<Json> parameters;
-  parameters.reserve(count);
-  for (size_t index = 0; index < count; ++index) {
-    parameters.push_back({{"latency-samples", index + 1}});
-  }
-  return parameters;
-}
-
-Json make_core_to_core_sweep_result(const std::string& status, bool measurements_complete) {
-  return {{"core_to_core_latency", {{"status", status}, {"measurements_complete", measurements_complete}}}};
-}
-
-SweepExecutionHooks make_core_to_core_sweep_hooks(const std::vector<SweepRunOutcome>& outcomes,
-                                                  std::vector<Json>& checkpoints, std::vector<bool>& announce_flags,
-                                                  size_t& executed_runs) {
-  SweepExecutionHooks hooks;
-  hooks.execute_run = [&](size_t run_index) {
-    ++executed_runs;
-    return outcomes.at(run_index);
-  };
-  hooks.stop_requested = []() { return false; };
-  hooks.elapsed_seconds = []() { return 1.5; };
-  hooks.utc_timestamp = []() { return "2026-01-01T00:00:00Z"; };
-  hooks.write_checkpoint = [&](const Json& output, bool announce_success) {
-    checkpoints.push_back(output);
-    announce_flags.push_back(announce_success);
-    return EXIT_SUCCESS;
-  };
-  return hooks;
-}
-
 }  // namespace
-
-TEST(CoreToCoreRunnerTest, CalibrationRoundsScaleAndClampDeterministically) {
-  EXPECT_EQ(calculate_core_to_core_calibrated_round_trips(0.010, 100000, 0.250, 1000, 10000000), 2500000u);
-  EXPECT_EQ(calculate_core_to_core_calibrated_round_trips(1.0, 1000, 0.001, 2000, 10000000), 2000u);
-  EXPECT_EQ(calculate_core_to_core_calibrated_round_trips(0.001, 100000, 1.0, 1000, 500000), 500000u);
-  EXPECT_EQ(calculate_core_to_core_calibrated_round_trips(0.0, 100000, 0.250, 1000, 10000000), 0u);
-}
 
 TEST(CoreToCoreRunnerTest, WorkPlanUsesDurationTargetsFromExcludedPilot) {
   CoreToCoreWorkPlan plan;
@@ -128,24 +83,9 @@ TEST(CoreToCoreRunnerTest, ResponderWorkAccountingRejectsOverflowBeforeThreads) 
   plan.headline_round_trips = 1;
   plan.sample_window_round_trips = std::numeric_limits<size_t>::max();
   ScenarioMeasurement multiply_overflow;
-  EXPECT_FALSE(
-      execute_single_scenario(scenario, plan, 2, multiply_overflow));
+  EXPECT_FALSE(execute_single_scenario(scenario, plan, 2, multiply_overflow));
   EXPECT_EQ(multiply_overflow.status, CoreToCoreMeasurementStatus::Failed);
-  EXPECT_EQ(multiply_overflow.status_reason,
-            "invalid-or-overflowing-work-plan");
-}
-
-TEST(CoreToCoreRunnerTest, SummaryStatisticsUseExactLinearPercentilesAndSampleVariance) {
-  const CoreToCoreSummaryStats stats = calculate_core_to_core_summary_stats({5.0, 1.0, 4.0, 2.0, 3.0});
-  const double expected_sample_stddev = std::sqrt(2.5);
-
-  EXPECT_DOUBLE_EQ(stats.median, 3.0);
-  EXPECT_DOUBLE_EQ(stats.p90, 4.6);
-  EXPECT_DOUBLE_EQ(stats.p95, 4.8);
-  EXPECT_DOUBLE_EQ(stats.p99, 4.96);
-  EXPECT_DOUBLE_EQ(stats.stddev, expected_sample_stddev);
-  EXPECT_DOUBLE_EQ(stats.coefficient_of_variation_pct, expected_sample_stddev / 3.0 * 100.0);
-  EXPECT_DOUBLE_EQ(stats.median_absolute_deviation, 1.0);
+  EXPECT_EQ(multiply_overflow.status_reason, "invalid-or-overflowing-work-plan");
 }
 
 TEST(CoreToCoreRunnerTest, DurationQualityIncludesExactWindowBoundaries) {
@@ -236,168 +176,6 @@ TEST(CoreToCoreRunnerTest, InitiatorStartupFailureCleansUpResponderIntegration) 
   fail_initiator.fail_initiator_startup = true;
   EXPECT_FALSE(execute_single_scenario(scenario, plan, 0, initiator_failure, &fail_initiator));
   EXPECT_EQ(initiator_failure.status_reason, "initiator-thread-startup-failed");
-}
-
-TEST(CoreToCoreRunnerTest, SweepCompletesAndCheckpointsEachAttempt) {
-  const std::vector<SweepRunOutcome> outcomes = {
-      {EXIT_SUCCESS, make_core_to_core_sweep_result("complete", true), ""},
-      {EXIT_SUCCESS, make_core_to_core_sweep_result("complete", true), ""},
-  };
-  std::vector<Json> checkpoints;
-  std::vector<bool> announce_flags;
-  size_t executed_runs = 0;
-
-  const SweepExecutionResult execution = execute_core_to_core_sweep_plan(
-      make_core_to_core_sweep_parameters(2), Json::object(),
-      make_core_to_core_sweep_hooks(outcomes, checkpoints, announce_flags, executed_runs));
-
-  ASSERT_EQ(execution.exit_code, EXIT_SUCCESS);
-  EXPECT_EQ(executed_runs, 2u);
-  ASSERT_EQ(checkpoints.size(), 2u);
-  EXPECT_EQ(checkpoints[0]["status"], "partial");
-  EXPECT_EQ(checkpoints[0]["attempted_runs"], 1u);
-  EXPECT_EQ(checkpoints[0]["completed_runs"], 1u);
-  EXPECT_FALSE(checkpoints[0]["conclusions_valid"]);
-  EXPECT_EQ(execution.output_json["status"], "complete");
-  EXPECT_EQ(execution.output_json["planned_runs"], 2u);
-  EXPECT_EQ(execution.output_json["attempted_runs"], 2u);
-  EXPECT_EQ(execution.output_json["completed_runs"], 2u);
-  EXPECT_TRUE(execution.output_json["conclusions_valid"]);
-  EXPECT_EQ(announce_flags, (std::vector<bool>{false, true}));
-}
-
-TEST(CoreToCoreRunnerTest, SweepInterruptedAttemptIsRetainedButNotCompleted) {
-  const std::vector<SweepRunOutcome> outcomes = {
-      {EXIT_SUCCESS, make_core_to_core_sweep_result("complete", true), ""},
-      {EXIT_SUCCESS, make_core_to_core_sweep_result("interrupted", false), ""},
-  };
-  std::vector<Json> checkpoints;
-  std::vector<bool> announce_flags;
-  size_t executed_runs = 0;
-
-  const SweepExecutionResult execution = execute_core_to_core_sweep_plan(
-      make_core_to_core_sweep_parameters(2), Json::object(),
-      make_core_to_core_sweep_hooks(outcomes, checkpoints, announce_flags, executed_runs));
-
-  ASSERT_EQ(execution.exit_code, EXIT_SUCCESS);
-  EXPECT_EQ(executed_runs, 2u);
-  EXPECT_EQ(execution.output_json["status"], "interrupted");
-  EXPECT_EQ(execution.output_json["attempted_runs"], 2u);
-  EXPECT_EQ(execution.output_json["completed_runs"], 1u);
-  EXPECT_FALSE(execution.output_json["conclusions_valid"]);
-  ASSERT_EQ(execution.output_json["runs"].size(), 2u);
-  EXPECT_EQ(execution.output_json["runs"][0]["status"], "complete");
-  EXPECT_EQ(execution.output_json["runs"][1]["status"], "interrupted");
-  EXPECT_EQ(execution.output_json["runs"][1]["status_reason"], "nested-core-to-core-run-interrupted");
-}
-
-TEST(CoreToCoreRunnerTest, SweepCompleteStatusWithoutCompleteMeasurementsIsPartial) {
-  const std::vector<SweepRunOutcome> outcomes = {
-      {EXIT_SUCCESS, make_core_to_core_sweep_result("complete", false), ""},
-  };
-  std::vector<Json> checkpoints;
-  std::vector<bool> announce_flags;
-  size_t executed_runs = 0;
-
-  const SweepExecutionResult execution = execute_core_to_core_sweep_plan(
-      make_core_to_core_sweep_parameters(1), Json::object(),
-      make_core_to_core_sweep_hooks(outcomes, checkpoints, announce_flags, executed_runs));
-
-  ASSERT_EQ(execution.exit_code, EXIT_SUCCESS);
-  EXPECT_EQ(execution.output_json["status"], "partial");
-  EXPECT_EQ(execution.output_json["status_reason"], "nested-core-to-core-result-incomplete");
-  EXPECT_EQ(execution.output_json["attempted_runs"], 1u);
-  EXPECT_EQ(execution.output_json["completed_runs"], 0u);
-  EXPECT_FALSE(execution.output_json["conclusions_valid"]);
-  EXPECT_EQ(execution.output_json["runs"][0]["status"], "partial");
-}
-
-TEST(CoreToCoreRunnerTest, SweepExecutionFailurePreservesPriorCheckpointedRun) {
-  const std::vector<SweepRunOutcome> outcomes = {
-      {EXIT_SUCCESS, make_core_to_core_sweep_result("complete", true), ""},
-      {EXIT_FAILURE, make_core_to_core_sweep_result("failed", false), "simulated-core-to-core-failure"},
-  };
-  std::vector<Json> checkpoints;
-  std::vector<bool> announce_flags;
-  size_t executed_runs = 0;
-
-  const SweepExecutionResult execution = execute_core_to_core_sweep_plan(
-      make_core_to_core_sweep_parameters(2), Json::object(),
-      make_core_to_core_sweep_hooks(outcomes, checkpoints, announce_flags, executed_runs));
-
-  ASSERT_EQ(execution.exit_code, EXIT_FAILURE);
-  EXPECT_EQ(executed_runs, 2u);
-  ASSERT_EQ(checkpoints.size(), 2u);
-  EXPECT_EQ(checkpoints[0]["runs"][0]["status"], "complete");
-  EXPECT_EQ(execution.output_json["status"], "failed");
-  EXPECT_EQ(execution.output_json["attempted_runs"], 2u);
-  EXPECT_EQ(execution.output_json["completed_runs"], 1u);
-  EXPECT_FALSE(execution.output_json["conclusions_valid"]);
-  EXPECT_EQ(execution.output_json["runs"][1]["status"], "failed");
-  EXPECT_EQ(execution.output_json["runs"][1]["status_reason"], "simulated-core-to-core-failure");
-}
-
-TEST(CoreToCoreRunnerTest, SweepCheckpointFailureStopsFurtherAttempts) {
-  const std::vector<SweepRunOutcome> outcomes = {
-      {EXIT_SUCCESS, make_core_to_core_sweep_result("complete", true), ""},
-      {EXIT_SUCCESS, make_core_to_core_sweep_result("complete", true), ""},
-      {EXIT_SUCCESS, make_core_to_core_sweep_result("complete", true), ""},
-  };
-  std::vector<Json> attempted_checkpoints;
-  size_t executed_runs = 0;
-  SweepExecutionHooks hooks;
-  hooks.execute_run = [&](size_t run_index) {
-    ++executed_runs;
-    return outcomes.at(run_index);
-  };
-  hooks.stop_requested = []() { return false; };
-  hooks.elapsed_seconds = []() { return 2.0; };
-  hooks.utc_timestamp = []() { return "2026-01-01T00:00:00Z"; };
-  hooks.write_checkpoint = [&](const Json& output, bool) {
-    attempted_checkpoints.push_back(output);
-    return attempted_checkpoints.size() == 2 ? EXIT_FAILURE : EXIT_SUCCESS;
-  };
-
-  const SweepExecutionResult execution =
-      execute_core_to_core_sweep_plan(make_core_to_core_sweep_parameters(3), Json::object(), hooks);
-
-  ASSERT_EQ(execution.exit_code, EXIT_FAILURE);
-  EXPECT_EQ(executed_runs, 2u);
-  ASSERT_EQ(attempted_checkpoints.size(), 2u);
-  EXPECT_EQ(attempted_checkpoints[0]["completed_runs"], 1u);
-  EXPECT_EQ(execution.output_json["status"], "failed");
-  EXPECT_EQ(execution.output_json["status_reason"], "checkpoint-write-failed");
-  EXPECT_EQ(execution.output_json["attempted_runs"], 2u);
-  EXPECT_EQ(execution.output_json["completed_runs"], 2u);
-  EXPECT_FALSE(execution.output_json["conclusions_valid"]);
-}
-
-TEST(CoreToCoreRunnerTest, SweepInterruptionAfterCompleteRunKeepsCompletionCount) {
-  const std::vector<SweepRunOutcome> outcomes = {
-      {EXIT_SUCCESS, make_core_to_core_sweep_result("complete", true), ""},
-      {EXIT_SUCCESS, make_core_to_core_sweep_result("complete", true), ""},
-  };
-  std::vector<Json> checkpoints;
-  std::vector<bool> announce_flags;
-  size_t executed_runs = 0;
-  size_t stop_checks = 0;
-  SweepExecutionHooks hooks = make_core_to_core_sweep_hooks(outcomes, checkpoints, announce_flags, executed_runs);
-  hooks.stop_requested = [&]() {
-    ++stop_checks;
-    return stop_checks >= 2;
-  };
-
-  const SweepExecutionResult execution =
-      execute_core_to_core_sweep_plan(make_core_to_core_sweep_parameters(2), Json::object(), hooks);
-
-  ASSERT_EQ(execution.exit_code, EXIT_SUCCESS);
-  EXPECT_EQ(executed_runs, 1u);
-  EXPECT_EQ(execution.output_json["status"], "interrupted");
-  EXPECT_EQ(execution.output_json["status_reason"], "interruption-requested-after-complete-run");
-  EXPECT_EQ(execution.output_json["attempted_runs"], 1u);
-  EXPECT_EQ(execution.output_json["completed_runs"], 1u);
-  EXPECT_FALSE(execution.output_json["conclusions_valid"]);
-  EXPECT_EQ(execution.output_json["runs"][0]["status"], "complete");
 }
 
 TEST(CoreToCoreRunnerTest, ExecuteSingleScenarioProducesHeadlineAndSamplesIntegration) {

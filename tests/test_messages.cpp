@@ -14,211 +14,101 @@
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 //
 #include <gtest/gtest.h>
-#include "output/console/messages/messages_api.h"
-#include "core/config/constants.h"
-#include <string>
+
+#include <limits>
 #include <sstream>
-#include <tuple>
+#include <string>
+#include <vector>
 
-// ============================================================================
-// Parameterized Tests
-// ============================================================================
+#include "core/config/constants.h"
+#include "output/console/messages/messages_api.h"
 
-// Parameterized test for error_missing_value
-class MessagesErrorMissingValueTest : public ::testing::TestWithParam<std::string> {};
+namespace {
 
-TEST_P(MessagesErrorMissingValueTest, ErrorMissingValue) {
-  std::string option = GetParam();
-  std::string msg = Messages::error_missing_value(option);
-  std::string expected = "Missing value for " + option;
-  EXPECT_EQ(msg, expected);
+struct MessageCase {
+  const char* name;
+  std::string actual;
+  std::string expected;
+};
+
+void expect_exact_messages(const std::vector<MessageCase>& cases) {
+  for (const MessageCase& test_case : cases) {
+    SCOPED_TRACE(test_case.name);
+    EXPECT_EQ(test_case.actual, test_case.expected);
+  }
 }
 
-INSTANTIATE_TEST_SUITE_P(
-  ErrorMissingValueVariants,
-  MessagesErrorMissingValueTest,
-  ::testing::Values("--iterations", "--buffer-size", "--count", "--cache-size")
-);
+}  // namespace
 
-// Parameterized test for error_unknown_option
-class MessagesErrorUnknownOptionTest : public ::testing::TestWithParam<std::string> {};
+TEST(MessagesFormattingTest, LinearHelpersHaveExactOutput) {
+  const std::vector<MessageCase> cases = {
+      {"missing iterations", Messages::error_missing_value("--iterations"), "Missing value for --iterations"},
+      {"missing buffer size", Messages::error_missing_value("--buffer-size"), "Missing value for --buffer-size"},
+      {"missing count", Messages::error_missing_value("--count"), "Missing value for --count"},
+      {"missing cache size", Messages::error_missing_value("--cache-size"), "Missing value for --cache-size"},
+      {"unknown short", Messages::error_unknown_option("-unknown"), "Unknown option: -unknown"},
+      {"unknown long", Messages::error_unknown_option("--invalid"), "Unknown option: --invalid"},
+      {"unknown flag", Messages::error_unknown_option("-bad-flag"), "Unknown option: -bad-flag"},
+      {"invalid iterations", Messages::error_invalid_value("--iterations", "abc", "must be a number"),
+       "Invalid value for --iterations: abc (must be a number)"},
+      {"invalid cache size", Messages::error_invalid_value("--cache-size", "-1", "must be positive"),
+       "Invalid value for --cache-size: -1 (must be positive)"},
+      {"invalid buffer size", Messages::error_invalid_value("--buffer-size", "0", "must be greater than zero"),
+       "Invalid value for --buffer-size: 0 (must be greater than zero)"},
+      {"mmap source", Messages::error_mmap_failed("src_buffer"), "mmap failed for src_buffer"},
+      {"mmap destination", Messages::error_mmap_failed("dst_buffer"), "mmap failed for dst_buffer"},
+      {"mmap latency", Messages::error_mmap_failed("lat_buffer"), "mmap failed for lat_buffer"},
+      {"benchmark loop 1", Messages::error_benchmark_loop(1, "memory error"),
+       "Error during benchmark loop 1: memory error"},
+      {"benchmark loop 5", Messages::error_benchmark_loop(5, "timeout"), "Error during benchmark loop 5: timeout"},
+      {"benchmark loop 10", Messages::error_benchmark_loop(10, "allocation failed"),
+       "Error during benchmark loop 10: allocation failed"},
+      {"qos code 1", Messages::warning_qos_failed(1), "Failed to set QoS class for main thread (code: 1)"},
+      {"qos code 42", Messages::warning_qos_failed(42), "Failed to set QoS class for main thread (code: 42)"},
+      {"qos code 100", Messages::warning_qos_failed(100), "Failed to set QoS class for main thread (code: 100)"},
+      {"qos code -1", Messages::warning_qos_failed(-1), "Failed to set QoS class for main thread (code: -1)"},
+  };
 
-TEST_P(MessagesErrorUnknownOptionTest, ErrorUnknownOption) {
-  std::string option = GetParam();
-  std::string msg = Messages::error_unknown_option(option);
-  std::string expected = "Unknown option: " + option;
-  EXPECT_EQ(msg, expected);
+  expect_exact_messages(cases);
 }
-
-INSTANTIATE_TEST_SUITE_P(
-  ErrorUnknownOptionVariants,
-  MessagesErrorUnknownOptionTest,
-  ::testing::Values("-unknown", "--invalid", "-bad-flag")
-);
-
-// Parameterized test for error_invalid_value
-class MessagesErrorInvalidValueTest : public ::testing::TestWithParam<std::tuple<std::string, std::string, std::string>> {};
-
-TEST_P(MessagesErrorInvalidValueTest, ErrorInvalidValue) {
-  auto [option, value, reason] = GetParam();
-  std::string msg = Messages::error_invalid_value(option, value, reason);
-  std::string expected = "Invalid value for " + option + ": " + value + " (" + reason + ")";
-  EXPECT_EQ(msg, expected);
-}
-
-INSTANTIATE_TEST_SUITE_P(
-  ErrorInvalidValueVariants,
-  MessagesErrorInvalidValueTest,
-  ::testing::Values(
-    std::make_tuple("--iterations", "abc", "must be a number"),
-    std::make_tuple("--cache-size", "-1", "must be positive"),
-    std::make_tuple("--buffer-size", "0", "must be greater than zero")
-  )
-);
-
-// Parameterized test for error_mmap_failed
-class MessagesErrorMmapFailedTest : public ::testing::TestWithParam<std::string> {};
-
-TEST_P(MessagesErrorMmapFailedTest, ErrorMmapFailed) {
-  std::string buffer_name = GetParam();
-  std::string msg = Messages::error_mmap_failed(buffer_name);
-  std::string expected = "mmap failed for " + buffer_name;
-  EXPECT_EQ(msg, expected);
-}
-
-INSTANTIATE_TEST_SUITE_P(
-  ErrorMmapFailedVariants,
-  MessagesErrorMmapFailedTest,
-  ::testing::Values("src_buffer", "dst_buffer", "lat_buffer")
-);
-
-// Parameterized test for error_benchmark_loop
-class MessagesErrorBenchmarkLoopTest : public ::testing::TestWithParam<std::tuple<int, std::string>> {};
-
-TEST_P(MessagesErrorBenchmarkLoopTest, ErrorBenchmarkLoop) {
-  auto [loop, error] = GetParam();
-  std::string msg = Messages::error_benchmark_loop(loop, error);
-  EXPECT_NE(msg.find(std::to_string(loop)), std::string::npos);
-  EXPECT_NE(msg.find(error), std::string::npos);
-}
-
-INSTANTIATE_TEST_SUITE_P(
-  ErrorBenchmarkLoopVariants,
-  MessagesErrorBenchmarkLoopTest,
-  ::testing::Values(
-    std::make_tuple(1, "memory error"),
-    std::make_tuple(5, "timeout"),
-    std::make_tuple(10, "allocation failed")
-  )
-);
-
-// Parameterized test for warning_qos_failed
-class MessagesWarningQosFailedTest : public ::testing::TestWithParam<int> {};
-
-TEST_P(MessagesWarningQosFailedTest, WarningQosFailed) {
-  int code = GetParam();
-  std::string msg = Messages::warning_qos_failed(code);
-  EXPECT_NE(msg.find("Failed to set QoS"), std::string::npos);
-  EXPECT_NE(msg.find(std::to_string(code)), std::string::npos);
-}
-
-INSTANTIATE_TEST_SUITE_P(
-  WarningQosFailedVariants,
-  MessagesWarningQosFailedTest,
-  ::testing::Values(1, 42, 100, -1)
-);
-
-// Parameterized test for statistics_metric_name
-class MessagesStatisticsMetricNameTest : public ::testing::TestWithParam<std::string> {};
-
-TEST_P(MessagesStatisticsMetricNameTest, StatisticsMetricName) {
-  std::string metric_name = GetParam();
-  std::string msg = Messages::statistics_metric_name(metric_name);
-  std::string expected = metric_name + ":";
-  EXPECT_EQ(msg, expected);
-}
-
-INSTANTIATE_TEST_SUITE_P(
-  StatisticsMetricNameVariants,
-  MessagesStatisticsMetricNameTest,
-  ::testing::Values("Read Bandwidth", "Latency", "Write Bandwidth")
-);
 
 // ============================================================================
 // Error Messages Tests
 // ============================================================================
 
-TEST(MessagesErrorTest, ErrorPrefix) {
-  const std::string& prefix = Messages::error_prefix();
-  EXPECT_EQ(prefix, "Error: ");
-}
+TEST(MessagesErrorTest, NumericValidationErrorsHaveExactOutput) {
+  const std::vector<MessageCase> cases = {
+      {"buffer calculation", Messages::error_buffer_size_calculation(1024), "Buffer size calculation error (1024 MB)."},
+      {"buffer too small", Messages::error_buffer_size_too_small(1024), "Final buffer size (1024 bytes) is too small."},
+      {"cache size", Messages::error_cache_size_invalid(16, 524288, 512),
+       "cache-size invalid (must be between 16 KB and 524288 KB (512 MB))"},
+      {"iterations negative", Messages::error_iterations_invalid(-5, 1, 2147483647),
+       "iterations invalid (must be between 1 and 2147483647, got -5)"},
+      {"iterations zero", Messages::error_iterations_invalid(0, 1, 100),
+       "iterations invalid (must be between 1 and 100, got 0)"},
+      {"buffer size negative", Messages::error_buffersize_invalid(-100, 18446744073709551615UL),
+       "buffer-size invalid (must be >= 0 and <= 18446744073709551615, got -100)"},
+      {"buffer size zero", Messages::error_buffersize_invalid(0, 1000),
+       "buffer-size invalid (must be >= 0 and <= 1000, got 0)"},
+      {"count zero", Messages::error_count_invalid(0, 1, 2147483647),
+       "count invalid (must be between 1 and 2147483647, got 0)"},
+      {"count negative", Messages::error_count_invalid(-10, 1, 1000),
+       "count invalid (must be between 1 and 1000, got -10)"},
+      {"latency samples zero", Messages::error_latency_samples_invalid(0, 1, 2147483647),
+       "latency-samples invalid (must be between 1 and 2147483647, got 0)"},
+      {"latency samples negative", Messages::error_latency_samples_invalid(-1, 1, 5000),
+       "latency-samples invalid (must be between 1 and 5000, got -1)"},
+      {"latency stride range", Messages::error_latency_stride_invalid(0, 1, 9223372036854775807LL),
+       "latency-stride-bytes invalid (must be between 1 and 9223372036854775807, got 0)"},
+      {"latency stride alignment", Messages::error_latency_stride_alignment(65, 8),
+       "latency-stride-bytes must be a multiple of 8 bytes, got 65"},
+      {"latency locality range", Messages::error_latency_tlb_locality_invalid(-1, 1024),
+       "latency-tlb-locality-kb invalid (must be >= 0 and <= 1024, got -1)"},
+      {"latency locality page multiple", Messages::error_latency_tlb_locality_page_multiple(10, 16),
+       "latency-tlb-locality-kb must be a multiple of system page size (16 KB), got 10 KB"},
+  };
 
-TEST(MessagesErrorTest, ErrorBufferSizeCalculation) {
-  std::string msg = Messages::error_buffer_size_calculation(1024);
-  EXPECT_NE(msg.find("1024"), std::string::npos);
-  EXPECT_NE(msg.find("MB"), std::string::npos);
-}
-
-TEST(MessagesErrorTest, ErrorBufferSizeTooSmall) {
-  std::string msg = Messages::error_buffer_size_too_small(1024);
-  EXPECT_NE(msg.find("1024"), std::string::npos);
-  EXPECT_NE(msg.find("bytes"), std::string::npos);
-}
-
-TEST(MessagesErrorTest, ErrorCacheSizeInvalid) {
-  std::string msg = Messages::error_cache_size_invalid(16, 524288, 512);
-  EXPECT_NE(msg.find("16"), std::string::npos);
-  EXPECT_NE(msg.find("524288"), std::string::npos);
-  EXPECT_NE(msg.find("512"), std::string::npos);
-}
-
-TEST(MessagesErrorTest, ErrorIterationsInvalid) {
-  std::string msg = Messages::error_iterations_invalid(-5, 1, 2147483647);
-  EXPECT_EQ(msg, "iterations invalid (must be between 1 and 2147483647, got -5)");
-  // Test with different values
-  std::string msg2 = Messages::error_iterations_invalid(0, 1, 100);
-  EXPECT_EQ(msg2, "iterations invalid (must be between 1 and 100, got 0)");
-}
-
-TEST(MessagesErrorTest, ErrorBuffersizeInvalid) {
-  std::string msg = Messages::error_buffersize_invalid(-100, 18446744073709551615UL);
-  EXPECT_TRUE(msg.find("buffer-size invalid") != std::string::npos);
-  EXPECT_TRUE(msg.find("got -100") != std::string::npos);
-  // Test with zero
-  std::string msg2 = Messages::error_buffersize_invalid(0, 1000);
-  EXPECT_EQ(msg2, "buffer-size invalid (must be >= 0 and <= 1000, got 0)");
-}
-
-TEST(MessagesErrorTest, ErrorCountInvalid) {
-  std::string msg = Messages::error_count_invalid(0, 1, 2147483647);
-  EXPECT_EQ(msg, "count invalid (must be between 1 and 2147483647, got 0)");
-  // Test with negative value
-  std::string msg2 = Messages::error_count_invalid(-10, 1, 1000);
-  EXPECT_EQ(msg2, "count invalid (must be between 1 and 1000, got -10)");
-}
-
-TEST(MessagesErrorTest, ErrorLatencySamplesInvalid) {
-  std::string msg = Messages::error_latency_samples_invalid(0, 1, 2147483647);
-  EXPECT_EQ(msg, "latency-samples invalid (must be between 1 and 2147483647, got 0)");
-  // Test with negative value
-  std::string msg2 = Messages::error_latency_samples_invalid(-1, 1, 5000);
-  EXPECT_EQ(msg2, "latency-samples invalid (must be between 1 and 5000, got -1)");
-}
-
-TEST(MessagesErrorTest, ErrorLatencyStrideInvalid) {
-  std::string msg = Messages::error_latency_stride_invalid(0, 1, 9223372036854775807LL);
-  EXPECT_NE(msg.find("latency-stride-bytes invalid"), std::string::npos);
-  EXPECT_NE(msg.find("got 0"), std::string::npos);
-}
-
-TEST(MessagesErrorTest, ErrorLatencyStrideAlignment) {
-  std::string msg = Messages::error_latency_stride_alignment(65, 8);
-  EXPECT_EQ(msg, "latency-stride-bytes must be a multiple of 8 bytes, got 65");
-}
-
-TEST(MessagesErrorTest, ErrorLatencyTlbLocalityInvalid) {
-  std::string msg = Messages::error_latency_tlb_locality_invalid(-1, 1024);
-  EXPECT_EQ(msg, "latency-tlb-locality-kb invalid (must be >= 0 and <= 1024, got -1)");
+  expect_exact_messages(cases);
 }
 
 TEST(MessagesErrorTest, ErrorLatencyChainModeInvalid) {
@@ -228,19 +118,15 @@ TEST(MessagesErrorTest, ErrorLatencyChainModeInvalid) {
 }
 
 TEST(MessagesErrorTest, ErrorLatencyChainModeRequiresLocality) {
-  std::string msg = Messages::error_latency_chain_mode_requires_locality("same-random-in-box-increasing-box");
-  EXPECT_NE(msg.find("requires --latency-tlb-locality-kb > 0"), std::string::npos);
+  const std::string mode = "same-random-in-box-increasing-box";
+  EXPECT_EQ(Messages::error_latency_chain_mode_requires_locality(mode),
+            "latency-chain-mode 'same-random-in-box-increasing-box' requires --latency-tlb-locality-kb > 0");
 }
 
 TEST(MessagesErrorTest, ErrorAnalyzeTlbGlobalRandomUnsupported) {
   const std::string& msg = Messages::error_analyze_tlb_global_random_unsupported();
   EXPECT_NE(msg.find("--analyze-tlb"), std::string::npos);
   EXPECT_NE(msg.find("global-random"), std::string::npos);
-}
-
-TEST(MessagesErrorTest, ErrorLatencyTlbLocalityPageMultiple) {
-  std::string msg = Messages::error_latency_tlb_locality_page_multiple(10, 16);
-  EXPECT_EQ(msg, "latency-tlb-locality-kb must be a multiple of system page size (16 KB), got 10 KB");
 }
 
 TEST(MessagesErrorTest, ErrorLatencyTlbLocalityTooSmallForStride) {
@@ -266,19 +152,59 @@ TEST(MessagesErrorTest, ErrorSeedRequiresEverySupportedMode) {
             "--seed requires --benchmark, --patterns, --analyze-tlb, or --gpu-bandwidth");
 }
 
-TEST(MessagesErrorTest, GpuErrorsUseStableMethodologyTerms) {
-  EXPECT_NE(Messages::error_gpu_bandwidth_must_be_used_alone().find(
-                "--gpu-bandwidth"),
-            std::string::npos);
-  EXPECT_NE(Messages::error_gpu_buffer_size_below_minimum(32, 64).find(
-                "64 MB"),
-            std::string::npos);
-  EXPECT_NE(Messages::error_gpu_iterations_exceed_limit(513, 512).find(
-                "maximum 512"),
-            std::string::npos);
-  EXPECT_NE(Messages::error_gpu_run_failed("test-reason").find(
-                "test-reason"),
-            std::string::npos);
+TEST(MessagesErrorTest, GpuMessagesHaveExactMethodologyOutput) {
+  const std::string expected_usage =
+      "Usage: memory_benchmark --gpu-bandwidth [options]\n"
+      "Options for standalone GPU memory bandwidth mode:\n"
+      "  -G, --gpu-bandwidth   Measure Metal GPU memory read/write/copy bandwidth.\n"
+      "  -b, --buffer-size <MB>\n"
+      "                        Size of each private GPU buffer (default: " +
+      std::to_string(Constants::GPU_DEFAULT_BUFFER_SIZE_MB) +
+      " MB; minimum: " + std::to_string(Constants::GPU_MIN_BUFFER_SIZE_MB) +
+      " MB).\n"
+      "  -i, --iterations <count>\n"
+      "                        Exact full-buffer pass count. When omitted, each operation\n"
+      "                        calibrates toward 150 ms in a 100-250 ms window.\n"
+      "  -r, --count <count>   Number of balanced read/write/copy loops (default: " +
+      std::to_string(Constants::GPU_DEFAULT_LOOP_COUNT) +
+      ").\n"
+      "      --seed <uint64>   Reproducible base seed; generated once when omitted.\n"
+      "  -o, --output <file>   Atomically checkpoint GPU schema 1 JSON after each result.\n"
+      "  -h, --help            Show this GPU-mode help and exit\n";
+  const std::vector<MessageCase> cases = {
+      {"mode isolation", Messages::error_gpu_bandwidth_must_be_used_alone(),
+       "--gpu-bandwidth allows only optional -b/--buffer-size <MB>, "
+       "-i/--iterations <count>, -r/--count <count>, -o/--output <file>, "
+       "--seed <uint64>, and -h/--help (no other options allowed)"},
+      {"minimum buffer", Messages::error_gpu_buffer_size_below_minimum(32, 64),
+       "GPU buffer-size must be at least 64 MB (got 32 MB)"},
+      {"iteration guard", Messages::error_gpu_iterations_exceed_limit(513, 512),
+       "GPU iterations exceed the exact-work guardrail (requested 513, maximum 512)"},
+      {"run failure", Messages::error_gpu_run_failed("test-reason"),
+       "GPU memory bandwidth benchmark failed (reason_code=test-reason)"},
+      {"unknown device", Messages::gpu_unknown_device_name(), "unknown Apple GPU"},
+      {"usage", Messages::gpu_usage_options("memory_benchmark"), expected_usage},
+      {"report header", Messages::report_gpu_bandwidth_header("Apple M4", 3, true),
+       "GPU memory bandwidth (Apple M4, private/tracked, 3 loops; headline: median)"},
+      {"copy payload", Messages::report_gpu_bandwidth_value("Copy", 123.456, true),
+       "  Copy:  123.46 GB/s  (aggregate read + write payload)"},
+      {"repeatability", Messages::report_gpu_bandwidth_repeatability(1.0, 2.0, 3.0, true),
+       "  Repeatability: read CV 1.00%, write CV 2.00%, copy CV 3.00%"},
+      {"interpretation", Messages::report_gpu_bandwidth_interpretation_note(),
+       "  Note: copy is aggregate read+write throughput; DRAM residency is unverified. "
+       "Results can remain cache/dispatch-dominant even at the 64 MB methodology minimum."},
+      {"high CV", Messages::warning_gpu_high_cv("read", 5.1, 5.0), "GPU read repeatability CV 5.10% exceeds 5.00%"},
+      {"unbalanced order", Messages::warning_gpu_order_not_balanced(),
+       "GPU operation order is not fully balanced across completed loops"},
+      {"duration quality", Messages::warning_gpu_duration_quality("write", "payload-cap-below-target"),
+       "GPU write duration quality is payload-cap-below-target"},
+      {"environment", Messages::warning_gpu_environment_not_nominal(),
+       "GPU result environment is not reference-eligible (thermal state or Low Power Mode)"},
+      {"working set", Messages::warning_gpu_recommended_working_set_exceeded(),
+       "GPU allocation exceeds Metal's advisory recommended working-set size"},
+  };
+
+  expect_exact_messages(cases);
 }
 
 TEST(MessagesErrorTest, ErrorMadviseFailed) {
@@ -291,12 +217,6 @@ TEST(MessagesErrorTest, ErrorBenchmarkTests) {
   EXPECT_EQ(msg, "Error during benchmark tests: test failure");
 }
 
-TEST(MessagesErrorTest, ErrorTimerCreationFailed) {
-  const std::string& msg = Messages::error_timer_creation_failed();
-  EXPECT_NE(msg.find("timer"), std::string::npos);
-  EXPECT_NE(msg.find("Failed"), std::string::npos);
-}
-
 TEST(MessagesErrorTest, ErrorOnlyFlagsRequireBenchmark) {
   const std::string& msg = Messages::error_only_flags_require_benchmark();
   EXPECT_NE(msg.find("--only-bandwidth"), std::string::npos);
@@ -305,31 +225,25 @@ TEST(MessagesErrorTest, ErrorOnlyFlagsRequireBenchmark) {
 }
 
 TEST(MessagesErrorTest, ErrorSweepMessages) {
-  EXPECT_NE(Messages::error_sweep_requires_parameter().find("--sweep"), std::string::npos);
-  EXPECT_NE(Messages::error_sweep_requires_output().find("--output"), std::string::npos);
+  const std::vector<MessageCase> cases = {
+      {"missing parameter", Messages::error_sweep_requires_parameter(),
+       "--sweep requires at least one parameter specification"},
+      {"missing output", Messages::error_sweep_requires_output(),
+       "--sweep requires --output <file> for the combined JSON result"},
+      {"run cap", Messages::error_sweep_too_many_runs(12, 10),
+       "Sweep would generate 12 runs, exceeding --sweep-max-runs 10"},
+      {"parameter not allowed", Messages::error_sweep_parameter_not_allowed("cache-size", "--patterns"),
+       "Sweep parameter 'cache-size' is not allowed with --patterns"},
+      {"temporary JSON parse", Messages::error_sweep_temp_json_parse_failed("/tmp/run.json", "bad json"),
+       "Failed to read sweep run JSON from /tmp/run.json: bad json"},
+  };
 
-  std::string too_many = Messages::error_sweep_too_many_runs(12, 10);
-  EXPECT_NE(too_many.find("12"), std::string::npos);
-  EXPECT_NE(too_many.find("10"), std::string::npos);
-
-  std::string not_allowed = Messages::error_sweep_parameter_not_allowed("cache-size", "--patterns");
-  EXPECT_NE(not_allowed.find("cache-size"), std::string::npos);
-  EXPECT_NE(not_allowed.find("--patterns"), std::string::npos);
-
-  std::string parse_failed = Messages::error_sweep_temp_json_parse_failed("/tmp/run.json", "bad json");
-  EXPECT_NE(parse_failed.find("/tmp/run.json"), std::string::npos);
-  EXPECT_NE(parse_failed.find("bad json"), std::string::npos);
+  expect_exact_messages(cases);
 }
 
 // ============================================================================
 // Warning Messages Tests
 // ============================================================================
-
-TEST(MessagesWarningTest, WarningCannotGetMemory) {
-  const std::string& msg = Messages::warning_cannot_get_memory();
-  EXPECT_NE(msg.find("Cannot get"), std::string::npos);
-  EXPECT_NE(msg.find("memory"), std::string::npos);
-}
 
 TEST(MessagesWarningTest, WarningBufferSizeExceedsLimit) {
   std::string msg = Messages::warning_buffer_size_exceeds_limit(2048, 1024);
@@ -339,8 +253,7 @@ TEST(MessagesWarningTest, WarningBufferSizeExceedsLimit) {
 }
 
 TEST(MessagesWarningTest, WarningTlbMlockFailureIsBestEffort) {
-  const std::string msg =
-      Messages::warning_tlb_mlock_failed(12, "Cannot allocate memory");
+  const std::string msg = Messages::warning_tlb_mlock_failed(12, "Cannot allocate memory");
   EXPECT_NE(msg.find("mlock()"), std::string::npos);
   EXPECT_NE(msg.find("errno 12"), std::string::npos);
   EXPECT_NE(msg.find("continuing"), std::string::npos);
@@ -374,15 +287,34 @@ TEST(MessagesInfoTest, InfoCustomCacheRoundedUp) {
 // Main Program Messages Tests
 // ============================================================================
 
-TEST(MessagesFormattingTest, MsgRunningBenchmarks) {
-  const std::string& msg = Messages::msg_running_benchmarks();
-  EXPECT_NE(msg.find("Running benchmarks"), std::string::npos);
-}
+TEST(MessagesFormattingTest, LiteralMessagesHaveExactOutput) {
+  const std::vector<MessageCase> cases = {
+      {"timer creation error", Messages::error_timer_creation_failed(),
+       "Failed to create high-resolution timer. Exiting."},
+      {"memory fallback warning", Messages::warning_cannot_get_memory(),
+       "Cannot get available memory. Using fallback limit."},
+      {"interrupted", Messages::msg_interrupted_by_user(), "\nInterrupted by user. Partial results shown."},
+      {"copyright", Messages::config_copyright(), "Copyright 2025-2026 Timo Heimonen <timo.heimonen@proton.me>"},
+      {"processor error", Messages::config_processor_name_error(), "Could not retrieve processor name."},
+      {"cache header", Messages::cache_info_header(), "\nDetected Cache Sizes:"},
+      {"main latency methodology", Messages::results_main_memory_latency(),
+       "\nMain Memory Latency Test (single-threaded, pointer chase):"},
+      {"cache latency methodology", Messages::results_cache_latency(),
+       "\nCache Latency Tests (single-threaded, pointer chase):"},
+      {"custom cache", Messages::results_custom_cache(), "  Custom Cache:"},
+      {"L1 cache", Messages::results_l1_cache(), "  L1 Cache:"},
+      {"L2 cache", Messages::results_l2_cache(), "  L2 Cache:"},
+      {"results separator", Messages::results_separator(), "--------------"},
+      {"statistics cache read", Messages::statistics_cache_read(), "  Read:"},
+      {"statistics cache write", Messages::statistics_cache_write(), "  Write:"},
+      {"statistics cache copy", Messages::statistics_cache_copy(), "  Copy:"},
+      {"statistics cache latency header", Messages::statistics_cache_latency_header(), "\nCache Latency (ns):"},
+      {"statistics main latency header", Messages::statistics_main_memory_latency_header(),
+       "\nMain Memory Latency (ns):"},
+      {"statistics footer", Messages::statistics_footer(), "----------------------------------"},
+  };
 
-TEST(MessagesFormattingTest, MsgInterruptedByUser) {
-  const std::string& msg = Messages::msg_interrupted_by_user();
-  EXPECT_NE(msg.find("Interrupted"), std::string::npos);
-  EXPECT_NE(msg.find("Partial results"), std::string::npos);
+  expect_exact_messages(cases);
 }
 
 TEST(MessagesFormattingTest, MsgSweepProgress) {
@@ -395,12 +327,12 @@ TEST(MessagesFormattingTest, MsgSweepProgress) {
 }
 
 TEST(MessagesFormattingTest, MsgDoneTotalTime) {
-  std::string msg = Messages::msg_done_total_time(123.456);
-  EXPECT_NE(msg.find("123.456"), std::string::npos);
-  EXPECT_NE(msg.find("s"), std::string::npos);
-  
-  msg = Messages::msg_done_total_time(0.001);
-  EXPECT_NE(msg.find("0.001"), std::string::npos);
+  const std::vector<MessageCase> cases = {
+      {"ordinary duration", Messages::msg_done_total_time(123.456), "\nDone. Total execution time: 123.45600 s"},
+      {"short duration", Messages::msg_done_total_time(0.001), "\nDone. Total execution time: 0.00100 s"},
+  };
+
+  expect_exact_messages(cases);
 }
 
 TEST(MessagesFormattingTest, MsgResultsSavedTo) {
@@ -437,8 +369,7 @@ TEST(MessagesFormattingTest, MsgTlbAnalysisValidationStart) {
 }
 
 TEST(MessagesFormattingTest, ReportTlbStatisticalConfidence) {
-  const std::string msg = Messages::report_tlb_statistical_confidence(
-      "High", 2.5, 2.1, 2.9, 2.0, 2.8);
+  const std::string msg = Messages::report_tlb_statistical_confidence("High", 2.5, 2.1, 2.9, 2.0, 2.8);
   EXPECT_NE(msg.find("paired effect"), std::string::npos);
   EXPECT_NE(msg.find("discovery 95% CI"), std::string::npos);
   EXPECT_NE(msg.find("validation 95% CI"), std::string::npos);
@@ -446,8 +377,7 @@ TEST(MessagesFormattingTest, ReportTlbStatisticalConfidence) {
 
 TEST(MessagesFormattingTest, ReportTlbPairedLocalityIsCompactAndNamesEverySignal) {
   const std::string latency = Messages::report_tlb_paired_locality_progress(
-      29, 29, 256 * Constants::BYTES_PER_MB, 12.43, 3.61, 8.82,
-      Constants::BYTES_PER_MB, true);
+      29, 29, 256 * Constants::BYTES_PER_MB, 12.43, 3.61, 8.82, Constants::BYTES_PER_MB, true);
   EXPECT_NE(latency.find("[29/29] 256 MiB"), std::string::npos);
   EXPECT_NE(latency.find("delta 8.82 ns"), std::string::npos);
   EXPECT_NE(latency.find("spread 12.43, packed 3.61"), std::string::npos);
@@ -458,14 +388,12 @@ TEST(MessagesFormattingTest, ReportTlbPairedLocalityIsCompactAndNamesEverySignal
 
   const std::string legend = Messages::report_tlb_sweep_legend();
   EXPECT_NE(legend.find("cache-line footprint"), std::string::npos);
-  EXPECT_NE(legend.find("<64-node short-cycle diagnostic"),
-            std::string::npos);
+  EXPECT_NE(legend.find("<64-node short-cycle diagnostic"), std::string::npos);
 }
 
 TEST(MessagesFormattingTest, ReportTlbLatencyNormalizesNegativeZero) {
   const std::string latency = Messages::report_tlb_paired_locality_progress(
-      1, 1, 16 * Constants::BYTES_PER_KB, 0.08, 0.08, -0.001,
-      Constants::CACHE_LINE_SIZE_BYTES, false);
+      1, 1, 16 * Constants::BYTES_PER_KB, 0.08, 0.08, -0.001, Constants::CACHE_LINE_SIZE_BYTES, false);
   EXPECT_NE(latency.find("delta 0.00 ns"), std::string::npos);
   EXPECT_EQ(latency.find("-0.00"), std::string::npos);
   EXPECT_NE(latency.find("16 KiB"), std::string::npos);
@@ -479,8 +407,7 @@ TEST(MessagesFormattingTest, AnalyzeTlbStrideGuardMessages) {
 }
 
 TEST(MessagesFormattingTest, TlbChainSetupFailureMessage) {
-  const std::string msg = Messages::error_tlb_chain_setup_failed(
-      256, "packed", "integrity-failure", "early-cycle");
+  const std::string msg = Messages::error_tlb_chain_setup_failed(256, "packed", "integrity-failure", "early-cycle");
   EXPECT_NE(msg.find("packed"), std::string::npos);
   EXPECT_NE(msg.find("256"), std::string::npos);
   EXPECT_NE(msg.find("integrity-failure"), std::string::npos);
@@ -505,9 +432,8 @@ TEST(MessagesFormattingTest, ReportTlbAnalysisStatusAndSuppressedConclusions) {
 }
 
 TEST(MessagesFormattingTest, ReportTlbRunAndResourceSummariesAreCompact) {
-  const std::string run = Messages::report_tlb_run_summary(
-      "Apple M5", 16 * Constants::BYTES_PER_KB, 256, "quick", "auto",
-      "random-box", 570001, true);
+  const std::string run = Messages::report_tlb_run_summary("Apple M5", 16 * Constants::BYTES_PER_KB, 256, "quick",
+                                                           "auto", "random-box", 570001, true);
   EXPECT_NE(run.find("Apple M5"), std::string::npos);
   EXPECT_NE(run.find("page 16 KiB"), std::string::npos);
   EXPECT_NE(run.find("stride 256 B | quick"), std::string::npos);
@@ -515,63 +441,52 @@ TEST(MessagesFormattingTest, ReportTlbRunAndResourceSummariesAreCompact) {
   EXPECT_NE(run.find("seed 570001 (user)"), std::string::npos);
   EXPECT_EQ(run.find('\n'), std::string::npos);
 
-  const std::string resources = Messages::report_tlb_resource_summary(
-      1024, true, true, true, 0, 2048,
-      1041 * Constants::BYTES_PER_MB);
+  const std::string resources =
+      Messages::report_tlb_resource_summary(1024, true, true, true, 0, 2048, 1041 * Constants::BYTES_PER_MB);
   EXPECT_NE(resources.find("1024 MiB buffer (locked)"), std::string::npos);
   EXPECT_NE(resources.find("QoS applied"), std::string::npos);
-  EXPECT_NE(resources.find("estimated peak/budget 1041.0/2048 MiB"),
-            std::string::npos);
+  EXPECT_NE(resources.find("estimated peak/budget 1041.0/2048 MiB"), std::string::npos);
 }
 
 TEST(MessagesFormattingTest, ReportTlbResourceSummaryRetainsFailures) {
-  const std::string failed = Messages::report_tlb_resource_summary(
-      256, false, true, false, 6, 512,
-      300 * Constants::BYTES_PER_MB);
+  const std::string failed =
+      Messages::report_tlb_resource_summary(256, false, true, false, 6, 512, 300 * Constants::BYTES_PER_MB);
   EXPECT_NE(failed.find("unlocked"), std::string::npos);
-  EXPECT_NE(failed.find("failed (code 6; best-effort)"),
-            std::string::npos);
+  EXPECT_NE(failed.find("failed (code 6; best-effort)"), std::string::npos);
 
-  const std::string not_requested = Messages::report_tlb_resource_summary(
-      256, false, false, false, 0, 512,
-      300 * Constants::BYTES_PER_MB);
+  const std::string not_requested =
+      Messages::report_tlb_resource_summary(256, false, false, false, 0, 512, 300 * Constants::BYTES_PER_MB);
   EXPECT_NE(not_requested.find("QoS not requested"), std::string::npos);
 }
 
 TEST(MessagesFormattingTest, ReportTlbWorkEstimateIsConcise) {
-  const std::string work = Messages::report_tlb_work_estimate(
-      "base", 15, 10, 20, 3.75, 7.5);
+  const std::string work = Messages::report_tlb_work_estimate("base", 15, 10, 20, 3.75, 7.5);
   EXPECT_NE(work.find("Work Estimate [base]"), std::string::npos);
   EXPECT_EQ(work.find("pointer accesses"), std::string::npos);
   EXPECT_EQ(work.find("peak"), std::string::npos);
   EXPECT_NE(work.find("3.75-7.50 s"), std::string::npos);
 
-  const std::string completion = Messages::report_tlb_pass_completion(
-      "base", 12, "CI target reached");
+  const std::string completion = Messages::report_tlb_pass_completion("base", 12, "CI target reached");
   EXPECT_NE(completion.find("12 rounds"), std::string::npos);
   EXPECT_NE(completion.find("CI target reached"), std::string::npos);
 }
 
 TEST(MessagesFormattingTest, ReportTlbSweepPlanUsesIecUnits) {
   const std::string enabled = Messages::report_tlb_sweep_plan(
-      16 * Constants::BYTES_PER_KB, 256 * Constants::BYTES_PER_MB, 15,
-      true, 512 * Constants::BYTES_PER_MB, 512, 1024);
+      16 * Constants::BYTES_PER_KB, 256 * Constants::BYTES_PER_MB, 15, true, 512 * Constants::BYTES_PER_MB, 512, 1024);
   EXPECT_NE(enabled.find("16 KiB -> 256 MiB"), std::string::npos);
   EXPECT_NE(enabled.find("15 points"), std::string::npos);
-  EXPECT_NE(enabled.find("large comparison 512 MiB enabled"),
-            std::string::npos);
+  EXPECT_NE(enabled.find("large comparison 512 MiB enabled"), std::string::npos);
 
   const std::string disabled = Messages::report_tlb_sweep_plan(
-      16 * Constants::BYTES_PER_KB, 256 * Constants::BYTES_PER_MB, 15,
-      false, 512 * Constants::BYTES_PER_MB, 512, 256);
+      16 * Constants::BYTES_PER_KB, 256 * Constants::BYTES_PER_MB, 15, false, 512 * Constants::BYTES_PER_MB, 512, 256);
   EXPECT_NE(disabled.find("unavailable"), std::string::npos);
   EXPECT_NE(disabled.find("requires 512 MiB"), std::string::npos);
   EXPECT_NE(disabled.find("selected 256 MiB"), std::string::npos);
 }
 
 TEST(MessagesFormattingTest, ReportTlbLargeLocalityUnavailable) {
-  const std::string msg =
-      Messages::report_tlb_large_locality_paired_unavailable(512, 256);
+  const std::string msg = Messages::report_tlb_large_locality_paired_unavailable(512, 256);
   EXPECT_NE(msg.find("Large-Locality Paired Comparison"), std::string::npos);
   EXPECT_NE(msg.find("N/A"), std::string::npos);
   EXPECT_NE(msg.find("requires 512 MiB"), std::string::npos);
@@ -579,86 +494,52 @@ TEST(MessagesFormattingTest, ReportTlbLargeLocalityUnavailable) {
 }
 
 TEST(MessagesFormattingTest, ReportTlbLargeLocalityInterrupted) {
-  const std::string msg =
-      Messages::report_tlb_large_locality_paired_interrupted();
+  const std::string msg = Messages::report_tlb_large_locality_paired_interrupted();
   EXPECT_NE(msg.find("N/A"), std::string::npos);
   EXPECT_NE(msg.find("did not complete"), std::string::npos);
 }
 
 TEST(MessagesFormattingTest, ReportTlbLargeLocalityPairedComparisonIsExplicit) {
   const std::string msg = Messages::report_tlb_large_locality_paired_comparison(
-      512 * Constants::BYTES_PER_MB,
-      13.20,
-      6.40,
-      6.80,
-      32768,
-      128,
-      32768,
-      2 * Constants::BYTES_PER_MB);
+      512 * Constants::BYTES_PER_MB, 13.20, 6.40, 6.80, 32768, 128, 32768, 2 * Constants::BYTES_PER_MB);
   EXPECT_NE(msg.find("512 MiB"), std::string::npos);
   EXPECT_NE(msg.find("2 MiB"), std::string::npos);
   EXPECT_NE(msg.find("32768/128"), std::string::npos);
-  EXPECT_NE(msg.find("P50: delta 6.80 ns/access"),
-            std::string::npos);
+  EXPECT_NE(msg.find("P50: delta 6.80 ns/access"), std::string::npos);
   EXPECT_NE(msg.find("not DRAM latency"), std::string::npos);
-  EXPECT_NE(msg.find("isolated page-table-walk cost"),
-            std::string::npos);
+  EXPECT_NE(msg.find("isolated page-table-walk cost"), std::string::npos);
   EXPECT_EQ(msg.find("Virtual Locality:"), std::string::npos);
 }
 
 TEST(MessagesFormattingTest, ReportTlbQuickProfileNoteRequiresConfirmation) {
   const std::string msg = Messages::report_tlb_quick_profile_note();
   EXPECT_NE(msg.find("screening estimates"), std::string::npos);
-  EXPECT_NE(msg.find("confirm boundaries with medium or high"),
-            std::string::npos);
+  EXPECT_NE(msg.find("confirm boundaries with medium or high"), std::string::npos);
 }
 
-TEST(MessagesFormattingTest, ReportTlbFineSweepAndPrivateCacheInfo) {
-  std::string sweep = Messages::report_tlb_fine_sweep(6, 21);
-  EXPECT_NE(sweep.find("Refinement: +6 points"), std::string::npos);
-  EXPECT_NE(sweep.find("21 total"), std::string::npos);
+TEST(MessagesFormattingTest, TlbPrivateCacheMessagesHaveExactOutput) {
+  const std::vector<MessageCase> cases = {
+      {"fine sweep", Messages::report_tlb_fine_sweep(6, 21), "Refinement: +6 points (21 total)"},
+      {"private cache section", Messages::report_tlb_private_cache_section(), "[Private Cache Detection]"},
+      {"strong candidate", Messages::report_tlb_private_cache_candidate(true),
+       "  Candidate Type: Strong private-cache candidate"},
+      {"early candidate", Messages::report_tlb_private_cache_candidate(false),
+       "  Candidate Type: Early-cache candidate"},
+      {"elevated risk", Messages::report_tlb_private_cache_interference(true, 512),
+       "  TLB Interference Risk: Elevated near 512 KiB locality"},
+      {"low risk", Messages::report_tlb_private_cache_interference(false, 512),
+       "  TLB Interference Risk: Low near 512 KiB locality"},
+      {"L1 distance", Messages::report_tlb_private_cache_l1_distance(4608, 288),
+       "  Distance to L1 TLB Boundary: 4608 KiB (288 pages)"},
+      {"boundary", Messages::report_tlb_boundary_kb(4096), "  Boundary: 4096 KiB"},
+      {"size estimate", Messages::report_tlb_inferred_size_entries(248), "  Inferred Size Estimate: ~248 entries"},
+      {"reach estimate", Messages::report_tlb_inferred_reach_entries(2000), "  Inferred Reach Estimate: ~2000 entries"},
+      {"entry range", Messages::report_tlb_inferred_entries_range(240, 256), "  Inferred Entry Range: 240-256 entries"},
+      {"private cache overlap", Messages::report_tlb_private_cache_overlap(),
+       "  Private Cache Overlap: yes (kept as ambiguous L1 TLB candidate)"},
+  };
 
-  const std::string& section = Messages::report_tlb_private_cache_section();
-  EXPECT_NE(section.find("Private Cache"), std::string::npos);
-
-  std::string candidate_strong = Messages::report_tlb_private_cache_candidate(true);
-  EXPECT_NE(candidate_strong.find("Strong"), std::string::npos);
-
-  std::string candidate_early = Messages::report_tlb_private_cache_candidate(false);
-  EXPECT_NE(candidate_early.find("Early"), std::string::npos);
-
-  std::string risk_high = Messages::report_tlb_private_cache_interference(true, 512);
-  EXPECT_NE(risk_high.find("Elevated"), std::string::npos);
-  EXPECT_NE(risk_high.find("512 KiB"), std::string::npos);
-
-  std::string risk_low = Messages::report_tlb_private_cache_interference(false, 512);
-  EXPECT_NE(risk_low.find("Low"), std::string::npos);
-
-  std::string distance = Messages::report_tlb_private_cache_l1_distance(4608, 288);
-  EXPECT_NE(distance.find("4608 KiB"), std::string::npos);
-  EXPECT_NE(distance.find("288"), std::string::npos);
-
-  const std::string boundary = Messages::report_tlb_boundary_kb(4096);
-  EXPECT_NE(boundary.find("4096 KiB"), std::string::npos);
-  EXPECT_EQ(boundary.find("4096 KB"), std::string::npos);
-}
-
-TEST(MessagesFormattingTest, ReportTlbInferredEntriesRange) {
-  std::string size = Messages::report_tlb_inferred_size_entries(248);
-  EXPECT_NE(size.find("Estimate"), std::string::npos);
-  EXPECT_NE(size.find("~248"), std::string::npos);
-
-  std::string reach = Messages::report_tlb_inferred_reach_entries(2000);
-  EXPECT_NE(reach.find("Estimate"), std::string::npos);
-  EXPECT_NE(reach.find("~2000"), std::string::npos);
-
-  std::string msg = Messages::report_tlb_inferred_entries_range(240, 256);
-  EXPECT_NE(msg.find("240-256"), std::string::npos);
-  EXPECT_NE(msg.find("entries"), std::string::npos);
-
-  const std::string& overlap = Messages::report_tlb_private_cache_overlap();
-  EXPECT_NE(overlap.find("Private Cache Overlap"), std::string::npos);
-  EXPECT_NE(overlap.find("ambiguous"), std::string::npos);
+  expect_exact_messages(cases);
 }
 
 // ============================================================================
@@ -689,11 +570,16 @@ TEST(MessagesFormattingTest, UsageOptions) {
   EXPECT_NE(msg.find("default: medium"), std::string::npos);
   EXPECT_NE(msg.find("--analyze-tlb: 16"), std::string::npos);
   EXPECT_NE(msg.find("calibrate toward 150 ms"), std::string::npos);
-  EXPECT_NE(msg.find("Reproducible workload/schedule seed for --benchmark, --patterns"),
-            std::string::npos);
+  EXPECT_NE(msg.find("Reproducible workload/schedule seed for --benchmark, --patterns"), std::string::npos);
   EXPECT_NE(msg.find("--gpu-bandwidth"), std::string::npos);
   EXPECT_NE(msg.find(Constants::GPU_METHODOLOGY_VERSION), std::string::npos);
   EXPECT_NE(msg.find("minimum buffer size is 64 MB"), std::string::npos);
+  EXPECT_NE(msg.find("--analyze-core2core"), std::string::npos);
+  EXPECT_NE(msg.find("acquire/release token-handoff"), std::string::npos);
+  EXPECT_NE(msg.find("protocol, coherence, and scheduler effects"), std::string::npos);
+  EXPECT_NE(msg.find("core-to-core schema 2"), std::string::npos);
+  EXPECT_NE(msg.find("target 250 ms"), std::string::npos);
+  EXPECT_NE(msg.find("Defaults to 3 loops"), std::string::npos);
   EXPECT_NE(msg.find("--latency-samples"), std::string::npos);
   EXPECT_NE(msg.find("--latency-stride-bytes"), std::string::npos);
   EXPECT_NE(msg.find("--latency-chain-mode"), std::string::npos);
@@ -714,38 +600,6 @@ TEST(MessagesFormattingTest, UsageOptions) {
   EXPECT_NE(msg.find(std::to_string(Constants::MAX_CACHE_SIZE_KB)), std::string::npos);
 }
 
-TEST(MessagesFormattingTest, GpuUsageAndReportComposition) {
-  EXPECT_EQ(Messages::gpu_unknown_device_name(), "unknown Apple GPU");
-  const std::string usage = Messages::gpu_usage_options("memory_benchmark");
-  EXPECT_NE(usage.find("--gpu-bandwidth"), std::string::npos);
-  EXPECT_NE(usage.find("default: 512 MB"), std::string::npos);
-  EXPECT_NE(usage.find("minimum: 64 MB"), std::string::npos);
-  EXPECT_NE(usage.find("default: 3"), std::string::npos);
-
-  EXPECT_NE(Messages::report_gpu_bandwidth_header(
-                "Apple M4", 3, true).find("headline: median"),
-            std::string::npos);
-  EXPECT_NE(Messages::report_gpu_bandwidth_value(
-                "Copy", 123.456, true).find(
-                "aggregate read + write payload"),
-            std::string::npos);
-  EXPECT_NE(Messages::report_gpu_bandwidth_repeatability(
-                1.0, 2.0, 3.0, true).find("copy CV 3.00%"),
-            std::string::npos);
-  EXPECT_NE(Messages::report_gpu_bandwidth_interpretation_note().find(
-                "DRAM residency is unverified"),
-            std::string::npos);
-  EXPECT_NE(Messages::warning_gpu_high_cv("read", 5.1, 5.0).find(
-                "5.10%"),
-            std::string::npos);
-  EXPECT_FALSE(Messages::warning_gpu_order_not_balanced().empty());
-  EXPECT_FALSE(Messages::warning_gpu_duration_quality(
-                   "write", "payload-cap-below-target").empty());
-  EXPECT_FALSE(Messages::warning_gpu_environment_not_nominal().empty());
-  EXPECT_FALSE(
-      Messages::warning_gpu_recommended_working_set_exceeded().empty());
-}
-
 TEST(MessagesFormattingTest, UsageExample) {
   std::string msg = Messages::usage_example("memory_benchmark");
   EXPECT_NE(msg.find("memory_benchmark"), std::string::npos);
@@ -762,12 +616,6 @@ TEST(MessagesFormattingTest, ConfigHeader) {
   std::string msg = Messages::config_header("1.0.0");
   EXPECT_NE(msg.find("1.0.0"), std::string::npos);
   EXPECT_NE(msg.find("macOS-memory-benchmark"), std::string::npos);
-}
-
-TEST(MessagesFormattingTest, ConfigCopyright) {
-  std::string msg = Messages::config_copyright();
-  EXPECT_TRUE(msg.find("2025") != std::string::npos || msg.find("2026") != std::string::npos);
-  EXPECT_NE(msg.find("Timo Heimonen"), std::string::npos);
 }
 
 TEST(MessagesFormattingTest, ConfigLicense) {
@@ -792,16 +640,21 @@ TEST(MessagesFormattingTest, ConfigTotalAllocation) {
   EXPECT_NE(msg.find("Peak Concurrent Allocation"), std::string::npos);
 }
 
-TEST(MessagesFormattingTest, ConfigIterations) {
-  std::string msg = Messages::config_iterations(1000);
-  EXPECT_NE(msg.find("1000"), std::string::npos);
-  EXPECT_NE(msg.find("Iterations"), std::string::npos);
-}
+TEST(MessagesFormattingTest, ScalarConfigMessagesHaveExactOutput) {
+  const std::vector<MessageCase> cases = {
+      {"iterations", Messages::config_iterations(1000), "Iterations (per R/W/Copy test per loop): 1000"},
+      {"loop count", Messages::config_loop_count(5), "Loop Count (total benchmark repetitions): 5"},
+      {"latency stride", Messages::config_latency_stride(136), "Latency Stride: 136 B"},
+      {"latency chain mode", Messages::config_latency_chain_mode("random-in-box-random-box"),
+       "Latency Chain Mode: random-in-box-random-box"},
+      {"processor name", Messages::config_processor_name("Apple M1"), "\nProcessor Name: Apple M1"},
+      {"performance cores", Messages::config_performance_cores(8), "  Performance Cores: 8"},
+      {"efficiency cores", Messages::config_efficiency_cores(2), "  Efficiency Cores: 2"},
+      {"total cores", Messages::config_total_cores(10), "  Total CPU Cores Detected: 10"},
+      {"benchmark threads", Messages::config_benchmark_threads(4), "  Benchmark Threads Requested: 4"},
+  };
 
-TEST(MessagesFormattingTest, ConfigLoopCount) {
-  std::string msg = Messages::config_loop_count(5);
-  EXPECT_NE(msg.find("5"), std::string::npos);
-  EXPECT_NE(msg.find("Loop Count"), std::string::npos);
+  expect_exact_messages(cases);
 }
 
 TEST(MessagesFormattingTest, ConfigNonCacheable) {
@@ -809,24 +662,11 @@ TEST(MessagesFormattingTest, ConfigNonCacheable) {
   std::string msg = Messages::config_non_cacheable(true);
   EXPECT_NE(msg.find("Non-Cacheable Memory Hints"), std::string::npos);
   EXPECT_NE(msg.find("Enabled"), std::string::npos);
-  
+
   // Test disabled
   msg = Messages::config_non_cacheable(false);
   EXPECT_NE(msg.find("Non-Cacheable Memory Hints"), std::string::npos);
   EXPECT_NE(msg.find("Disabled"), std::string::npos);
-}
-
-TEST(MessagesFormattingTest, ConfigLatencyStride) {
-  std::string msg = Messages::config_latency_stride(136);
-  EXPECT_NE(msg.find("Latency Stride"), std::string::npos);
-  EXPECT_NE(msg.find("136"), std::string::npos);
-  EXPECT_NE(msg.find("B"), std::string::npos);
-}
-
-TEST(MessagesFormattingTest, ConfigLatencyChainMode) {
-  std::string msg = Messages::config_latency_chain_mode("random-in-box-random-box");
-  EXPECT_NE(msg.find("Latency Chain Mode"), std::string::npos);
-  EXPECT_NE(msg.find("random-in-box-random-box"), std::string::npos);
 }
 
 TEST(MessagesFormattingTest, ConfigLatencyTlbLocality) {
@@ -839,61 +679,21 @@ TEST(MessagesFormattingTest, ConfigLatencyTlbLocality) {
   EXPECT_NE(msg.find("KB"), std::string::npos);
 }
 
-TEST(MessagesFormattingTest, ConfigProcessorName) {
-  std::string msg = Messages::config_processor_name("Apple M1");
-  EXPECT_NE(msg.find("Apple M1"), std::string::npos);
-  EXPECT_NE(msg.find("Processor Name"), std::string::npos);
-}
-
-TEST(MessagesFormattingTest, ConfigProcessorNameError) {
-  std::string msg = Messages::config_processor_name_error();
-  EXPECT_NE(msg.find("Could not retrieve"), std::string::npos);
-}
-
-TEST(MessagesFormattingTest, ConfigPerformanceCores) {
-  std::string msg = Messages::config_performance_cores(8);
-  EXPECT_NE(msg.find("8"), std::string::npos);
-  EXPECT_NE(msg.find("Performance Cores"), std::string::npos);
-}
-
-TEST(MessagesFormattingTest, ConfigEfficiencyCores) {
-  std::string msg = Messages::config_efficiency_cores(2);
-  EXPECT_NE(msg.find("2"), std::string::npos);
-  EXPECT_NE(msg.find("Efficiency Cores"), std::string::npos);
-}
-
-TEST(MessagesFormattingTest, ConfigTotalCores) {
-  std::string msg = Messages::config_total_cores(10);
-  EXPECT_NE(msg.find("10"), std::string::npos);
-  EXPECT_NE(msg.find("Total CPU Cores"), std::string::npos);
-}
-
-TEST(MessagesFormattingTest, ConfigBenchmarkThreads) {
-  const std::string msg = Messages::config_benchmark_threads(4);
-  EXPECT_NE(msg.find("Benchmark Threads Requested"), std::string::npos);
-  EXPECT_NE(msg.find("4"), std::string::npos);
-}
-
 // ============================================================================
 // Cache Info Messages Tests (using formatting fixture)
 // ============================================================================
-
-TEST(MessagesFormattingTest, CacheInfoHeader) {
-  std::string msg = Messages::cache_info_header();
-  EXPECT_NE(msg.find("Detected Cache Sizes"), std::string::npos);
-}
 
 TEST(MessagesFormattingTest, CacheSizeCustom) {
   // Test bytes
   std::string msg = Messages::cache_size_custom(512);
   EXPECT_NE(msg.find("512"), std::string::npos);
   EXPECT_NE(msg.find("B"), std::string::npos);
-  
+
   // Test KB
   msg = Messages::cache_size_custom(256 * 1024);
   EXPECT_NE(msg.find("256"), std::string::npos);
   EXPECT_NE(msg.find("KB"), std::string::npos);
-  
+
   // Test MB
   msg = Messages::cache_size_custom(2 * 1024 * 1024);
   EXPECT_NE(msg.find("2"), std::string::npos);
@@ -912,7 +712,7 @@ TEST(MessagesFormattingTest, CacheSizeL1) {
   EXPECT_NE(msg.find("128"), std::string::npos);
   EXPECT_NE(msg.find("KB"), std::string::npos);
   EXPECT_NE(msg.find("per P-core"), std::string::npos);
-  
+
   // Test MB
   msg = Messages::cache_size_l1(1 * 1024 * 1024);
   EXPECT_NE(msg.find("1"), std::string::npos);
@@ -932,12 +732,12 @@ TEST(MessagesFormattingTest, CacheSizeL2) {
 // ============================================================================
 
 TEST(MessagesFormattingTest, ResultsLoopHeader) {
-  std::string msg = Messages::results_loop_header(0);
-  EXPECT_NE(msg.find("1"), std::string::npos);  // Loop 0 displays as "Loop 1"
-  EXPECT_NE(msg.find("Loop"), std::string::npos);
-  
-  msg = Messages::results_loop_header(4);
-  EXPECT_NE(msg.find("5"), std::string::npos);  // Loop 4 displays as "Loop 5"
+  const std::vector<MessageCase> cases = {
+      {"first loop", Messages::results_loop_header(0), "\n--- Results (Loop 1) ---"},
+      {"fifth loop", Messages::results_loop_header(4), "\n--- Results (Loop 5) ---"},
+  };
+
+  expect_exact_messages(cases);
 }
 
 TEST(MessagesFormattingTest, ResultsMainMemoryBandwidth) {
@@ -947,38 +747,22 @@ TEST(MessagesFormattingTest, ResultsMainMemoryBandwidth) {
   EXPECT_NE(msg.find("Main Memory Bandwidth"), std::string::npos);
 }
 
-TEST(MessagesFormattingTest, ResultsReadBandwidth) {
-  std::string msg = Messages::results_read_bandwidth(25.123, 1.456);
-  EXPECT_NE(msg.find("25.123"), std::string::npos);
-  EXPECT_NE(msg.find("GB/s"), std::string::npos);
-  EXPECT_NE(msg.find("1.456"), std::string::npos);
-  EXPECT_NE(msg.find("s)"), std::string::npos);
-}
+TEST(MessagesFormattingTest, BandwidthResultsHaveExactOutput) {
+  const std::vector<MessageCase> cases = {
+      {"main read", Messages::results_read_bandwidth(25.123, 1.456), "  Read : 25.12300 GB/s (Total time: 1.45600 s)"},
+      {"main write", Messages::results_write_bandwidth(30.789, 2.345),
+       "  Write: 30.78900 GB/s (Total time: 2.34500 s)"},
+      {"main copy", Messages::results_copy_bandwidth(20.456, 3.789), "  Copy : 20.45600 GB/s (Total time: 3.78900 s)"},
+      {"cache read", Messages::results_cache_read_bandwidth(150.789), "    Read : 150.78900 GB/s"},
+      {"cache write", Messages::results_cache_write_bandwidth(200.123), "    Write: 200.12300 GB/s"},
+      {"cache copy", Messages::results_cache_copy_bandwidth(175.456), "    Copy : 175.45600 GB/s"},
+  };
 
-TEST(MessagesFormattingTest, ResultsWriteBandwidth) {
-  std::string msg = Messages::results_write_bandwidth(30.789, 2.345);
-  EXPECT_NE(msg.find("30.789"), std::string::npos);
-  EXPECT_NE(msg.find("GB/s"), std::string::npos);
-  EXPECT_NE(msg.find("2.345"), std::string::npos);
-}
-
-TEST(MessagesFormattingTest, ResultsCopyBandwidth) {
-  std::string msg = Messages::results_copy_bandwidth(20.456, 3.789);
-  EXPECT_NE(msg.find("20.456"), std::string::npos);
-  EXPECT_NE(msg.find("GB/s"), std::string::npos);
-  EXPECT_NE(msg.find("3.789"), std::string::npos);
-}
-
-TEST(MessagesFormattingTest, ResultsMainMemoryLatency) {
-  std::string msg = Messages::results_main_memory_latency();
-  EXPECT_NE(msg.find("Main Memory Latency"), std::string::npos);
-  EXPECT_NE(msg.find("single-threaded"), std::string::npos);
+  expect_exact_messages(cases);
 }
 
 TEST(MessagesFormattingTest, ResultsLatencyTotalTime) {
-  std::string msg = Messages::results_latency_total_time(5.678);
-  EXPECT_NE(msg.find("5.678"), std::string::npos);
-  EXPECT_NE(msg.find("s"), std::string::npos);
+  EXPECT_EQ(Messages::results_latency_total_time(5.678), "  Total time: 5.67800 s");
 }
 
 TEST(MessagesFormattingTest, ResultsLatencyAverage) {
@@ -1018,133 +802,49 @@ TEST(MessagesFormattingTest, ResultsCacheBandwidth) {
   EXPECT_NE(msg.find("single-threaded"), std::string::npos);
 }
 
-TEST(MessagesFormattingTest, ResultsCacheLatency) {
-  std::string msg = Messages::results_cache_latency();
-  EXPECT_NE(msg.find("Cache Latency"), std::string::npos);
-  EXPECT_NE(msg.find("pointer chase"), std::string::npos);
+TEST(MessagesFormattingTest, BufferSizesHaveExactOutput) {
+  const std::vector<MessageCase> cases = {
+      {"bytes", Messages::results_buffer_size_bytes(1024), " (Buffer size: 1024 B)"},
+      {"kilobytes", Messages::results_buffer_size_kb(256.5), " (Buffer size: 256.50 KB)"},
+      {"megabytes", Messages::results_buffer_size_mb(1.25), " (Buffer size: 1.25 MB)"},
+  };
+
+  expect_exact_messages(cases);
 }
 
-TEST(MessagesFormattingTest, ResultsCustomCache) {
-  std::string msg = Messages::results_custom_cache();
-  EXPECT_EQ(msg, "  Custom Cache:");
+TEST(MessagesFormattingTest, FiniteCacheLatenciesHaveExactOutput) {
+  const std::vector<MessageCase> cases = {
+      {"custom bytes", Messages::results_cache_latency_custom_ns(2.5, 256 * 1024),
+       "  Custom Cache: 2.50 ns (Buffer size: 262144 B)"},
+      {"custom kilobytes", Messages::results_cache_latency_custom_ns_kb(3.75, 128.5),
+       "  Custom Cache: 3.75 ns (Buffer size: 128.50 KB)"},
+      {"custom megabytes", Messages::results_cache_latency_custom_ns_mb(4.25, 0.5),
+       "  Custom Cache: 4.25 ns (Buffer size: 0.50 MB)"},
+      {"L1 bytes", Messages::results_cache_latency_l1_ns(0.5, 64 * 1024), "  L1 Cache: 0.50 ns (Buffer size: 65536 B)"},
+      {"L1 kilobytes", Messages::results_cache_latency_l1_ns_kb(0.75, 32.25),
+       "  L1 Cache: 0.75 ns (Buffer size: 32.25 KB)"},
+      {"L1 megabytes", Messages::results_cache_latency_l1_ns_mb(1.0, 0.064),
+       "  L1 Cache: 1.00 ns (Buffer size: 0.06 MB)"},
+      {"L2 bytes", Messages::results_cache_latency_l2_ns(2.5, 4 * 1024 * 1024),
+       "  L2 Cache: 2.50 ns (Buffer size: 4194304 B)"},
+      {"L2 kilobytes", Messages::results_cache_latency_l2_ns_kb(3.0, 4096.5),
+       "  L2 Cache: 3.00 ns (Buffer size: 4096.50 KB)"},
+      {"L2 megabytes", Messages::results_cache_latency_l2_ns_mb(4.5, 4.0),
+       "  L2 Cache: 4.50 ns (Buffer size: 4.00 MB)"},
+  };
+
+  expect_exact_messages(cases);
 }
 
-TEST(MessagesFormattingTest, ResultsL1Cache) {
-  std::string msg = Messages::results_l1_cache();
-  EXPECT_EQ(msg, "  L1 Cache:");
-}
+TEST(MessagesFormattingTest, NonFiniteCacheLatenciesRenderUnavailable) {
+  const std::vector<MessageCase> cases = {
+      {"NaN", Messages::results_cache_latency_custom_ns(std::numeric_limits<double>::quiet_NaN(), 1024),
+       "  Custom Cache: N/A ns (Buffer size: 1024 B)"},
+      {"infinity", Messages::results_cache_latency_custom_ns(std::numeric_limits<double>::infinity(), 1024),
+       "  Custom Cache: N/A ns (Buffer size: 1024 B)"},
+  };
 
-TEST(MessagesFormattingTest, ResultsL2Cache) {
-  std::string msg = Messages::results_l2_cache();
-  EXPECT_EQ(msg, "  L2 Cache:");
-}
-
-TEST(MessagesFormattingTest, ResultsCacheReadBandwidth) {
-  std::string msg = Messages::results_cache_read_bandwidth(150.789);
-  EXPECT_NE(msg.find("150.789"), std::string::npos);
-  EXPECT_NE(msg.find("GB/s"), std::string::npos);
-  EXPECT_NE(msg.find("Read"), std::string::npos);
-}
-
-TEST(MessagesFormattingTest, ResultsCacheWriteBandwidth) {
-  std::string msg = Messages::results_cache_write_bandwidth(200.123);
-  EXPECT_NE(msg.find("200.123"), std::string::npos);
-  EXPECT_NE(msg.find("GB/s"), std::string::npos);
-  EXPECT_NE(msg.find("Write"), std::string::npos);
-}
-
-TEST(MessagesFormattingTest, ResultsCacheCopyBandwidth) {
-  std::string msg = Messages::results_cache_copy_bandwidth(175.456);
-  EXPECT_NE(msg.find("175.456"), std::string::npos);
-  EXPECT_NE(msg.find("GB/s"), std::string::npos);
-  EXPECT_NE(msg.find("Copy"), std::string::npos);
-}
-
-TEST(MessagesFormattingTest, ResultsBufferSizeBytes) {
-  std::string msg = Messages::results_buffer_size_bytes(1024);
-  EXPECT_NE(msg.find("1024"), std::string::npos);
-  EXPECT_NE(msg.find("B)"), std::string::npos);
-}
-
-TEST(MessagesFormattingTest, ResultsBufferSizeKb) {
-  std::string msg = Messages::results_buffer_size_kb(256.5);
-  EXPECT_NE(msg.find("256.50"), std::string::npos);
-  EXPECT_NE(msg.find("KB)"), std::string::npos);
-}
-
-TEST(MessagesFormattingTest, ResultsBufferSizeMb) {
-  std::string msg = Messages::results_buffer_size_mb(1.25);
-  EXPECT_NE(msg.find("1.25"), std::string::npos);
-  EXPECT_NE(msg.find("MB)"), std::string::npos);
-}
-
-TEST(MessagesFormattingTest, ResultsSeparator) {
-  std::string msg = Messages::results_separator();
-  EXPECT_EQ(msg, "--------------");
-}
-
-TEST(MessagesFormattingTest, ResultsCacheLatencyCustomNs) {
-  std::string msg = Messages::results_cache_latency_custom_ns(2.5, 256 * 1024);
-  EXPECT_NE(msg.find("2.50"), std::string::npos);
-  EXPECT_NE(msg.find("ns"), std::string::npos);
-  EXPECT_NE(msg.find("262144"), std::string::npos);
-  EXPECT_NE(msg.find("B)"), std::string::npos);
-}
-
-TEST(MessagesFormattingTest, ResultsCacheLatencyCustomNsKb) {
-  std::string msg = Messages::results_cache_latency_custom_ns_kb(3.75, 128.5);
-  EXPECT_NE(msg.find("3.75"), std::string::npos);
-  EXPECT_NE(msg.find("128.50"), std::string::npos);
-  EXPECT_NE(msg.find("KB)"), std::string::npos);
-}
-
-TEST(MessagesFormattingTest, ResultsCacheLatencyCustomNsMb) {
-  std::string msg = Messages::results_cache_latency_custom_ns_mb(4.25, 0.5);
-  EXPECT_NE(msg.find("4.25"), std::string::npos);
-  EXPECT_NE(msg.find("0.50"), std::string::npos);
-  EXPECT_NE(msg.find("MB)"), std::string::npos);
-}
-
-TEST(MessagesFormattingTest, ResultsCacheLatencyL1Ns) {
-  std::string msg = Messages::results_cache_latency_l1_ns(0.5, 64 * 1024);
-  EXPECT_NE(msg.find("0.50"), std::string::npos);
-  EXPECT_NE(msg.find("65536"), std::string::npos);
-  EXPECT_NE(msg.find("L1 Cache"), std::string::npos);
-}
-
-TEST(MessagesFormattingTest, ResultsCacheLatencyL1NsKb) {
-  std::string msg = Messages::results_cache_latency_l1_ns_kb(0.75, 32.25);
-  EXPECT_NE(msg.find("0.75"), std::string::npos);
-  EXPECT_NE(msg.find("32.25"), std::string::npos);
-  EXPECT_NE(msg.find("L1 Cache"), std::string::npos);
-}
-
-TEST(MessagesFormattingTest, ResultsCacheLatencyL1NsMb) {
-  std::string msg = Messages::results_cache_latency_l1_ns_mb(1.0, 0.064);
-  EXPECT_NE(msg.find("1.00"), std::string::npos);
-  EXPECT_NE(msg.find("0.06"), std::string::npos);
-  EXPECT_NE(msg.find("L1 Cache"), std::string::npos);
-}
-
-TEST(MessagesFormattingTest, ResultsCacheLatencyL2Ns) {
-  std::string msg = Messages::results_cache_latency_l2_ns(2.5, 4 * 1024 * 1024);
-  EXPECT_NE(msg.find("2.50"), std::string::npos);
-  EXPECT_NE(msg.find("4194304"), std::string::npos);
-  EXPECT_NE(msg.find("L2 Cache"), std::string::npos);
-}
-
-TEST(MessagesFormattingTest, ResultsCacheLatencyL2NsKb) {
-  std::string msg = Messages::results_cache_latency_l2_ns_kb(3.0, 4096.5);
-  EXPECT_NE(msg.find("3.00"), std::string::npos);
-  EXPECT_NE(msg.find("4096.50"), std::string::npos);
-  EXPECT_NE(msg.find("L2 Cache"), std::string::npos);
-}
-
-TEST(MessagesFormattingTest, ResultsCacheLatencyL2NsMb) {
-  std::string msg = Messages::results_cache_latency_l2_ns_mb(4.5, 4.0);
-  EXPECT_NE(msg.find("4.50"), std::string::npos);
-  EXPECT_NE(msg.find("4.00"), std::string::npos);
-  EXPECT_NE(msg.find("L2 Cache"), std::string::npos);
+  expect_exact_messages(cases);
 }
 
 // ============================================================================
@@ -1162,52 +862,9 @@ TEST(MessagesFormattingTest, StatisticsAverage) {
   std::string msg = Messages::statistics_average(25.123, 3);
   EXPECT_NE(msg.find("25.123"), std::string::npos);
   EXPECT_NE(msg.find("Average"), std::string::npos);
-  
+
   msg = Messages::statistics_average(100.5, 1);
   EXPECT_NE(msg.find("100.5"), std::string::npos);
-}
-
-TEST(MessagesFormattingTest, StatisticsMedianP50) {
-  std::string msg = Messages::statistics_median_p50(24.567, 3);
-  EXPECT_NE(msg.find("24.567"), std::string::npos);
-  EXPECT_NE(msg.find("Median"), std::string::npos);
-  EXPECT_NE(msg.find("P50"), std::string::npos);
-}
-
-TEST(MessagesFormattingTest, StatisticsP90) {
-  std::string msg = Messages::statistics_p90(30.123, 3);
-  EXPECT_NE(msg.find("30.123"), std::string::npos);
-  EXPECT_NE(msg.find("P90"), std::string::npos);
-}
-
-TEST(MessagesFormattingTest, StatisticsP95) {
-  std::string msg = Messages::statistics_p95(32.456, 3);
-  EXPECT_NE(msg.find("32.456"), std::string::npos);
-  EXPECT_NE(msg.find("P95"), std::string::npos);
-}
-
-TEST(MessagesFormattingTest, StatisticsP99) {
-  std::string msg = Messages::statistics_p99(35.789, 3);
-  EXPECT_NE(msg.find("35.789"), std::string::npos);
-  EXPECT_NE(msg.find("P99"), std::string::npos);
-}
-
-TEST(MessagesFormattingTest, StatisticsStddev) {
-  std::string msg = Messages::statistics_stddev(2.345, 3);
-  EXPECT_NE(msg.find("2.345"), std::string::npos);
-  EXPECT_NE(msg.find("Stddev"), std::string::npos);
-}
-
-TEST(MessagesFormattingTest, StatisticsMin) {
-  std::string msg = Messages::statistics_min(20.0, 1);
-  EXPECT_NE(msg.find("20.0"), std::string::npos);
-  EXPECT_NE(msg.find("Min"), std::string::npos);
-}
-
-TEST(MessagesFormattingTest, StatisticsMax) {
-  std::string msg = Messages::statistics_max(40.0, 1);
-  EXPECT_NE(msg.find("40.0"), std::string::npos);
-  EXPECT_NE(msg.find("Max"), std::string::npos);
 }
 
 TEST(MessagesFormattingTest, StatisticsCacheBandwidthHeader) {
@@ -1217,132 +874,78 @@ TEST(MessagesFormattingTest, StatisticsCacheBandwidthHeader) {
   EXPECT_NE(msg.find("GB/s"), std::string::npos);
 }
 
-TEST(MessagesFormattingTest, StatisticsCacheRead) {
-  std::string msg = Messages::statistics_cache_read();
-  EXPECT_EQ(msg, "  Read:");
-}
-
-TEST(MessagesFormattingTest, StatisticsCacheWrite) {
-  std::string msg = Messages::statistics_cache_write();
-  EXPECT_EQ(msg, "  Write:");
-}
-
-TEST(MessagesFormattingTest, StatisticsCacheCopy) {
-  std::string msg = Messages::statistics_cache_copy();
-  EXPECT_EQ(msg, "  Copy:");
-}
-
-TEST(MessagesFormattingTest, StatisticsCacheLatencyHeader) {
-  std::string msg = Messages::statistics_cache_latency_header();
-  EXPECT_NE(msg.find("Cache Latency"), std::string::npos);
-  EXPECT_NE(msg.find("ns"), std::string::npos);
-}
-
 TEST(MessagesFormattingTest, StatisticsCacheLatencyName) {
   std::string msg = Messages::statistics_cache_latency_name("L1");
   EXPECT_EQ(msg, "  L1 Cache:");
-  
+
   msg = Messages::statistics_cache_latency_name("Custom");
   EXPECT_EQ(msg, "  Custom Cache:");
 }
 
-TEST(MessagesFormattingTest, StatisticsMedianP50FromSamples) {
-  std::string msg = Messages::statistics_median_p50_from_samples(1.5, 1000, 2);
-  EXPECT_NE(msg.find("1.50"), std::string::npos);
-  EXPECT_NE(msg.find("1000"), std::string::npos);
-  EXPECT_NE(msg.find("samples"), std::string::npos);
-  EXPECT_NE(msg.find("Median"), std::string::npos);
-  EXPECT_NE(msg.find("P50"), std::string::npos);
-}
-
-TEST(MessagesFormattingTest, StatisticsMainMemoryLatencyHeader) {
-  std::string msg = Messages::statistics_main_memory_latency_header();
-  EXPECT_NE(msg.find("Main Memory Latency"), std::string::npos);
-  EXPECT_NE(msg.find("ns"), std::string::npos);
-}
-
-TEST(MessagesFormattingTest, StatisticsMedianAbsoluteDeviation) {
-  EXPECT_EQ(Messages::statistics_median_absolute_deviation(1.234, 2),
-            "  Median absolute deviation: 1.23");
-}
-
 TEST(MessagesFormattingTest, WarningBenchmarkHighCv) {
-  const std::string msg =
-      Messages::warning_benchmark_high_cv("read bandwidth", 9.25, 7.5);
+  const std::string msg = Messages::warning_benchmark_high_cv("read bandwidth", 9.25, 7.5);
   EXPECT_NE(msg.find("read bandwidth"), std::string::npos);
   EXPECT_NE(msg.find("9.2%"), std::string::npos);
   EXPECT_NE(msg.find("7.5%"), std::string::npos);
 }
 
 TEST(MessagesFormattingTest, WarningQosFailedBenchmarkWorker) {
-  const std::string msg =
-      Messages::warning_qos_failed_benchmark_worker("read", 5);
+  const std::string msg = Messages::warning_qos_failed_benchmark_worker("read", 5);
   EXPECT_NE(msg.find("read benchmark worker"), std::string::npos);
   EXPECT_NE(msg.find("5"), std::string::npos);
 }
 
-TEST(MessagesFormattingTest, BenchmarkStatusReasonsAreCentralized) {
-  const std::vector<std::string> reasons = {
-      Messages::benchmark_reason_interrupted_before_measurement(),
-      Messages::benchmark_reason_interrupted_by_user(),
-      Messages::benchmark_reason_planned_measurements_unavailable(),
-      Messages::benchmark_reason_invalid_locality_work(),
-      Messages::benchmark_reason_locality_comparison_unavailable(),
-      Messages::benchmark_reason_interrupted_calibration_pilot(),
-      Messages::benchmark_reason_invalid_calibration_pilot(),
-      Messages::benchmark_reason_interrupted_measured_operation(),
-      Messages::benchmark_reason_invalid_bandwidth_duration(),
-      Messages::benchmark_reason_invalid_bandwidth_value(),
-      Messages::benchmark_reason_interrupted_latency_pilot(),
-      Messages::benchmark_reason_interrupted_latency_measurement(),
-      Messages::benchmark_reason_invalid_latency_measurement(),
-      Messages::benchmark_reason_invalid_cache_latency_measurement(),
-      Messages::benchmark_reason_invalid_main_latency_measurement(),
-      Messages::benchmark_reason_invalid_bandwidth_measurement(),
-      Messages::benchmark_reason_loops_remain(),
-      Messages::benchmark_reason_checkpoint_failed(),
-      Messages::benchmark_reason_unknown_loop_exception(),
-      Messages::benchmark_reason_coordinator_exception("boom"),
-      Messages::benchmark_reason_unknown_coordinator_exception(),
-      Messages::benchmark_reason_latency_chain_setup_failed("main-latency"),
-      Messages::benchmark_reason_prepare_failed("cache latency"),
-      Messages::benchmark_reason_invalid_bandwidth_plan(),
-      Messages::benchmark_reason_no_worker_partition(),
-      Messages::benchmark_reason_copy_payload_overflow(),
-      Messages::benchmark_reason_total_payload_overflow(),
-      Messages::benchmark_reason_invalid_latency_plan(),
-      Messages::benchmark_reason_latency_chain_too_short(),
-      Messages::benchmark_reason_minimum_cycles_exceed_limit(),
-      Messages::benchmark_reason_rounded_accesses_exceed_limit(),
+TEST(MessagesFormattingTest, BenchmarkStatusReasonsHaveExactOutput) {
+  const std::vector<MessageCase> cases = {
+      {"before measurement", Messages::benchmark_reason_interrupted_before_measurement(),
+       "interrupted before measurement"},
+      {"user interruption", Messages::benchmark_reason_interrupted_by_user(), "interrupted by user"},
+      {"planned measurements", Messages::benchmark_reason_planned_measurements_unavailable(),
+       "one or more planned measurements unavailable"},
+      {"locality work", Messages::benchmark_reason_invalid_locality_work(), "invalid locality-comparison work"},
+      {"locality comparison", Messages::benchmark_reason_locality_comparison_unavailable(),
+       "paired locality comparison unavailable"},
+      {"calibration interruption", Messages::benchmark_reason_interrupted_calibration_pilot(),
+       "interrupted during calibration pilot"},
+      {"calibration duration", Messages::benchmark_reason_invalid_calibration_pilot(),
+       "invalid calibration pilot duration"},
+      {"operation interruption", Messages::benchmark_reason_interrupted_measured_operation(),
+       "interrupted during measured operation"},
+      {"bandwidth duration", Messages::benchmark_reason_invalid_bandwidth_duration(),
+       "invalid measured bandwidth duration"},
+      {"bandwidth value", Messages::benchmark_reason_invalid_bandwidth_value(), "invalid measured bandwidth value"},
+      {"latency pilot", Messages::benchmark_reason_interrupted_latency_pilot(),
+       "interrupted during latency calibration pilot"},
+      {"latency interruption", Messages::benchmark_reason_interrupted_latency_measurement(),
+       "interrupted during latency measurement"},
+      {"latency measurement", Messages::benchmark_reason_invalid_latency_measurement(),
+       "invalid latency duration or access count"},
+      {"loops remain", Messages::benchmark_reason_loops_remain(), "benchmark loops remain"},
+      {"checkpoint", Messages::benchmark_reason_checkpoint_failed(), "failed to checkpoint standard benchmark JSON"},
+      {"unknown loop exception", Messages::benchmark_reason_unknown_loop_exception(),
+       "standard benchmark loop threw an unknown exception"},
+      {"coordinator exception", Messages::benchmark_reason_coordinator_exception("boom"),
+       "standard benchmark coordinator exception: boom"},
+      {"unknown coordinator exception", Messages::benchmark_reason_unknown_coordinator_exception(),
+       "standard benchmark coordinator threw an unknown exception"},
+      {"latency chain", Messages::benchmark_reason_latency_chain_setup_failed("main-latency"),
+       "failed to construct main-latency latency chain"},
+      {"preparation", Messages::benchmark_reason_prepare_failed("cache latency"),
+       "failed to prepare cache latency buffers"},
+      {"bandwidth plan", Messages::benchmark_reason_invalid_bandwidth_plan(), "invalid bandwidth work-plan parameters"},
+      {"worker partition", Messages::benchmark_reason_no_worker_partition(), "no valid aligned worker partition"},
+      {"copy overflow", Messages::benchmark_reason_copy_payload_overflow(), "copy payload overflow"},
+      {"payload overflow", Messages::benchmark_reason_total_payload_overflow(), "total payload overflow or pass limit"},
+      {"latency plan", Messages::benchmark_reason_invalid_latency_plan(), "invalid latency work-plan parameters"},
+      {"short latency chain", Messages::benchmark_reason_latency_chain_too_short(),
+       "latency chain requires at least two nodes"},
+      {"cycle limit", Messages::benchmark_reason_minimum_cycles_exceed_limit(),
+       "minimum complete-cycle access count exceeds limit"},
+      {"rounded access limit", Messages::benchmark_reason_rounded_accesses_exceed_limit(),
+       "rounded complete-cycle access count exceeds limit"},
   };
-  for (const std::string& reason : reasons) {
-    EXPECT_FALSE(reason.empty());
-  }
-  EXPECT_NE(Messages::benchmark_reason_coordinator_exception("boom").find("boom"),
-            std::string::npos);
-}
 
-TEST(MessagesFormattingTest, StatisticsTlbHitLatencyMetricName) {
-  std::string msg = Messages::statistics_tlb_hit_latency_metric_name();
-  EXPECT_NE(msg.find("16 KiB Locality Latency"), std::string::npos);
-  EXPECT_NE(msg.find("ns"), std::string::npos);
-}
-
-TEST(MessagesFormattingTest, StatisticsTlbMissLatencyMetricName) {
-  std::string msg = Messages::statistics_tlb_miss_latency_metric_name();
-  EXPECT_NE(msg.find("Global-Random Latency"), std::string::npos);
-  EXPECT_NE(msg.find("ns"), std::string::npos);
-}
-
-TEST(MessagesFormattingTest, StatisticsPageWalkPenaltyMetricName) {
-  std::string msg = Messages::statistics_page_walk_penalty_metric_name();
-  EXPECT_NE(msg.find("Locality Latency Delta"), std::string::npos);
-  EXPECT_NE(msg.find("ns"), std::string::npos);
-}
-
-TEST(MessagesFormattingTest, StatisticsFooter) {
-  std::string msg = Messages::statistics_footer();
-  EXPECT_EQ(msg, "----------------------------------");
+  expect_exact_messages(cases);
 }
 
 TEST(MessagesFormattingTest, PatternStrideLabels) {
@@ -1352,51 +955,56 @@ TEST(MessagesFormattingTest, PatternStrideLabels) {
   EXPECT_EQ(Messages::pattern_superpage_2mb(), "2 MiB stride");
 }
 
-TEST(MessagesFormattingTest, PatternStatusAndNoiseMessages) {
-  EXPECT_EQ(Messages::pattern_measurement_unavailable("skipped", "buffer too small"),
-            "N/A [skipped: buffer too small]");
-  EXPECT_EQ(Messages::statistics_pattern_bandwidth_header("Random"),
-            "\nRandom Pattern Bandwidth (GB/s):");
-  EXPECT_EQ(Messages::statistics_coefficient_of_variation(12.34, 1),
-            "  CV:      12.3%");
-  const std::string warning =
-      Messages::warning_pattern_measurement_noisy("Random read", 12.3, 10.0);
-  EXPECT_NE(warning.find("Random read"), std::string::npos);
-  EXPECT_NE(warning.find("12.3%"), std::string::npos);
-}
+TEST(MessagesFormattingTest, PatternMessagesHaveExactOutput) {
+  const std::vector<MessageCase> cases = {
+      {"unavailable", Messages::pattern_measurement_unavailable("skipped", "buffer too small"),
+       "N/A [skipped: buffer too small]"},
+      {"statistics header", Messages::statistics_pattern_bandwidth_header("Random"),
+       "\nRandom Pattern Bandwidth (GB/s):"},
+      {"coefficient of variation", Messages::statistics_coefficient_of_variation(12.34, 1), "  CV:      12.3%"},
+      {"noise warning", Messages::warning_pattern_measurement_noisy("Random read", 12.3, 10.0),
+       "Noisy pattern measurement: Random read CV 12.3% exceeds 10.0%"},
+      {"not completed", Messages::pattern_reason_measurement_not_completed(), "measurement not completed"},
+      {"timer", Messages::pattern_reason_timer_creation_failed(), "Failed to create pattern benchmark timer."},
+      {"calibration", Messages::pattern_reason_calibration_or_accounting_failed(),
+       "pattern calibration or byte accounting failed"},
+      {"random workload", Messages::pattern_reason_no_valid_random_workload(), "no valid random access workload"},
+      {"stride transition", Messages::pattern_reason_stride_transition_unavailable(),
+       "buffer cannot provide a valid stride transition"},
+      {"copy overflow", Messages::pattern_reason_copy_accounting_overflow(), "copy payload byte accounting overflow"},
+      {"strided timing", Messages::pattern_reason_invalid_strided_timing(), "invalid strided timing result"},
+      {"work-plan byte overflow", Messages::pattern_reason_work_plan_byte_overflow(),
+       "strided work-plan byte accounting overflow"},
+      {"work-plan parameters", Messages::pattern_reason_invalid_work_plan_parameters(),
+       "invalid strided work-plan parameters"},
+      {"stride sum overflow", Messages::pattern_reason_stride_access_sum_overflow(),
+       "stride and access-size sum overflows"},
+      {"two accesses", Messages::pattern_reason_buffer_lacks_two_strided_accesses(),
+       "buffer cannot provide two strided accesses"},
+      {"worker partition", Messages::pattern_reason_no_valid_strided_worker_partition(),
+       "no valid worker partition contains a stride transition"},
+      {"pass limit", Messages::pattern_reason_work_plan_pass_limit(), "strided work plan exceeds executor pass limit"},
+      {"total overflow", Messages::pattern_reason_work_plan_total_overflow(),
+       "strided work-plan total accounting overflow"},
+      {"allocation", Messages::pattern_reason_buffers_allocation_failed(), "pattern buffer allocation failed"},
+      {"initialization", Messages::pattern_reason_buffers_initialization_failed(),
+       "pattern buffer initialization failed"},
+      {"loop execution", Messages::pattern_reason_loop_execution_failed(), "pattern loop execution failed"},
+      {"loop interrupted", Messages::pattern_reason_loop_interrupted(), "pattern loop interrupted by user"},
+      {"loop incomplete", Messages::pattern_reason_loop_incomplete(), "pattern loop has incomplete measurements"},
+      {"invalid measurement", Messages::pattern_reason_invalid_measurement(),
+       "pattern loop contains an invalid measurement"},
+      {"loops remain", Messages::pattern_reason_loops_remain(), "pattern benchmark loops remain"},
+      {"loop exception", Messages::pattern_reason_loop_exception("boom"), "pattern loop threw an exception: boom"},
+      {"unknown loop exception", Messages::pattern_reason_unknown_loop_exception(),
+       "pattern loop threw an unknown exception"},
+      {"coordinator exception", Messages::pattern_reason_coordinator_exception("boom"),
+       "pattern coordinator threw an exception: boom"},
+      {"unknown coordinator exception", Messages::pattern_reason_unknown_coordinator_exception(),
+       "pattern coordinator threw an unknown exception"},
+  };
 
-TEST(MessagesFormattingTest, PatternMeasurementStatusReasons) {
-  EXPECT_FALSE(Messages::pattern_reason_measurement_not_completed().empty());
-  EXPECT_FALSE(Messages::pattern_reason_timer_creation_failed().empty());
-  EXPECT_FALSE(
-      Messages::pattern_reason_calibration_or_accounting_failed().empty());
-  EXPECT_FALSE(Messages::pattern_reason_no_valid_random_workload().empty());
-  EXPECT_FALSE(Messages::pattern_reason_stride_transition_unavailable().empty());
-  EXPECT_FALSE(Messages::pattern_reason_copy_accounting_overflow().empty());
-  EXPECT_FALSE(Messages::pattern_reason_invalid_strided_timing().empty());
-  EXPECT_FALSE(Messages::pattern_reason_work_plan_byte_overflow().empty());
-  EXPECT_FALSE(Messages::pattern_reason_invalid_work_plan_parameters().empty());
-  EXPECT_FALSE(Messages::pattern_reason_stride_access_sum_overflow().empty());
-  EXPECT_FALSE(
-      Messages::pattern_reason_buffer_lacks_two_strided_accesses().empty());
-  EXPECT_FALSE(
-      Messages::pattern_reason_no_valid_strided_worker_partition().empty());
-  EXPECT_FALSE(Messages::pattern_reason_work_plan_pass_limit().empty());
-  EXPECT_FALSE(Messages::pattern_reason_work_plan_total_overflow().empty());
-  EXPECT_FALSE(Messages::pattern_reason_buffers_allocation_failed().empty());
-  EXPECT_FALSE(Messages::pattern_reason_buffers_initialization_failed().empty());
-  EXPECT_FALSE(Messages::pattern_reason_loop_execution_failed().empty());
-  EXPECT_FALSE(Messages::pattern_reason_loop_interrupted().empty());
-  EXPECT_FALSE(Messages::pattern_reason_loop_incomplete().empty());
-  EXPECT_FALSE(Messages::pattern_reason_invalid_measurement().empty());
-  EXPECT_FALSE(Messages::pattern_reason_loops_remain().empty());
-  EXPECT_NE(Messages::pattern_reason_loop_exception("boom").find("boom"),
-            std::string::npos);
-  EXPECT_FALSE(Messages::pattern_reason_unknown_loop_exception().empty());
-  EXPECT_NE(Messages::pattern_reason_coordinator_exception("boom").find("boom"),
-            std::string::npos);
-  EXPECT_FALSE(
-      Messages::pattern_reason_unknown_coordinator_exception().empty());
+  expect_exact_messages(cases);
 }
 
 TEST(MessagesFormattingTest, ConfigPatternAutomaticIterations) {
@@ -1411,16 +1019,6 @@ TEST(MessagesFormattingTest, ConfigBenchmarkAutomaticIterations) {
 
 TEST(MessagesFormattingTest, ConfigLatencyCalibration) {
   EXPECT_EQ(Messages::config_latency_calibration(0.250, 0.100, 0.300, 16),
-            "Latency Headline: automatic continuous-pass calibration (target 250 ms; intended window 100-300 ms; minimum 16 complete cycles)");
-}
-
-TEST(MessagesFormattingTest, CoreToCoreCalibratedAuditMessages) {
-  EXPECT_EQ(Messages::error_core_to_core_measurement_failed("invalid-headline-elapsed"),
-            "Core-to-core measurement failed: invalid-headline-elapsed");
-  EXPECT_NE(Messages::report_core_to_core_round_trip(70.0).find("Median headline"),
-            std::string::npos);
-  EXPECT_NE(Messages::report_core_to_core_headline_statistics(3).find("3 loops"),
-            std::string::npos);
-  EXPECT_NE(Messages::report_core_to_core_sample_statistics(1000).find("1000 windows"),
-            std::string::npos);
+            "Latency Headline: automatic continuous-pass calibration (target 250 ms; intended window 100-300 ms; "
+            "minimum 16 complete cycles)");
 }
