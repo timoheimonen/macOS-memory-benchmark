@@ -153,10 +153,8 @@ TEST(PatternWorkPlanTest, RejectsInvalidRandomPartitionParameters) {
 }
 
 TEST(PatternWorkPlanTest, RotatesPhaseAndCountsEveryAccessExactly) {
-  PatternWorkPlan plan =
-      build_plan(Constants::PATTERN_STRIDE_CACHE_LINE +
-                     Constants::PATTERN_ACCESS_SIZE_BYTES,
-                 Constants::PATTERN_STRIDE_CACHE_LINE, 1);
+  PatternWorkPlan plan = build_plan(Constants::PATTERN_STRIDE_CACHE_LINE + Constants::PATTERN_ACCESS_SIZE_BYTES,
+                                    Constants::PATTERN_STRIDE_CACHE_LINE, 1);
   ASSERT_TRUE(set_strided_pattern_passes(plan, 3));
 
   EXPECT_EQ(plan.phase_period_passes, 2u);
@@ -171,29 +169,14 @@ TEST(PatternWorkPlanTest, RotatesPhaseAndCountsEveryAccessExactly) {
 
 TEST(PatternWorkPlanTest, FullSparsePhaseCycleCoversAlignedBufferSlots) {
   const size_t buffer_size = 8 * Constants::BYTES_PER_MB;
-  PatternWorkPlan plan =
-      build_plan(buffer_size, Constants::PATTERN_STRIDE_SUPERPAGE_2MB, 10);
-  const size_t phase_period = Constants::PATTERN_STRIDE_SUPERPAGE_2MB /
-                              Constants::PATTERN_ACCESS_SIZE_BYTES;
+  PatternWorkPlan plan = build_plan(buffer_size, Constants::PATTERN_STRIDE_SUPERPAGE_2MB, 10);
+  const size_t phase_period = Constants::PATTERN_STRIDE_SUPERPAGE_2MB / Constants::PATTERN_ACCESS_SIZE_BYTES;
   ASSERT_TRUE(set_strided_pattern_passes(plan, phase_period));
 
   EXPECT_EQ(plan.completed_phase_cycles, 1u);
-  EXPECT_EQ(plan.distinct_address_count,
-            buffer_size / Constants::PATTERN_ACCESS_SIZE_BYTES);
+  EXPECT_EQ(plan.distinct_address_count, buffer_size / Constants::PATTERN_ACCESS_SIZE_BYTES);
   EXPECT_EQ(plan.total_accesses, plan.distinct_address_count);
   EXPECT_EQ(plan.logical_working_set_bytes, buffer_size);
-}
-
-TEST(PatternWorkPlanTest, CalibrationPlannerScalesAndClampsPasses) {
-  EXPECT_EQ(calculate_pattern_pilot_passes(192, 8 * Constants::BYTES_PER_MB,
-                                           100000),
-            43691u);
-  EXPECT_EQ(calculate_pattern_calibrated_passes(0.010, 100, 0.150, 1, 10000),
-            1500u);
-  EXPECT_EQ(calculate_pattern_calibrated_passes(0.001, 100, 0.150, 1, 1000),
-            1000u);
-  EXPECT_EQ(calculate_pattern_calibrated_passes(1.0, 1, 0.150, 4, 1000), 4u);
-  EXPECT_EQ(calculate_pattern_calibrated_passes(0.0, 1, 0.150, 1, 1000), 0u);
 }
 
 TEST(PatternWorkPlanTest, RandomPermutationIsSeededUniqueAlignedAndBounded) {

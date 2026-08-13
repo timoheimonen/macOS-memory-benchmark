@@ -211,7 +211,4 @@ std::string classify_gpu_duration_quality(double elapsed_seconds,
  */
 GpuWorkPlan build_gpu_work_plan(const GpuWorkPlanRequest& request);
 
-/** Return the canonical stable identity of a valid frozen work plan. */
-std::string build_gpu_plan_identity(const GpuWorkPlan& plan);
-
 #endif  // GPU_WORK_PLAN_H

@@ -85,9 +85,6 @@ TlbConvergenceSummary evaluate_tlb_convergence(
 /** Derive the conservative TLB allocation budget from currently available memory. */
 size_t calculate_tlb_memory_budget_mb(size_t available_memory_mb);
 
-/** Estimate retained chain-builder and validator scratch storage. */
-size_t estimate_tlb_scratch_bytes(size_t maximum_node_count);
-
 /** Estimate the buffer plus retained scratch peak. */
 size_t estimate_tlb_peak_memory_bytes(size_t buffer_size_bytes,
                                       size_t maximum_node_count);

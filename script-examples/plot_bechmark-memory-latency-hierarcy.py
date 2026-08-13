@@ -112,15 +112,16 @@ def parse_text_statistics(path: Path, metric: str):
         "stddev": "stddev",
     }
 
+    number = r"([-+]?[0-9]+(?:\.[0-9]+)?)"
     stat_patterns = {
-        "average": re.compile(r"^Average:\s*([0-9]+(?:\.[0-9]+)?)$"),
-        "median": re.compile(r"^Median\s*\(P50\):\s*([0-9]+(?:\.[0-9]+)?)"),
-        "p90": re.compile(r"^P90:\s*([0-9]+(?:\.[0-9]+)?)$"),
-        "p95": re.compile(r"^P95:\s*([0-9]+(?:\.[0-9]+)?)$"),
-        "p99": re.compile(r"^P99:\s*([0-9]+(?:\.[0-9]+)?)$"),
-        "stddev": re.compile(r"^Stddev:\s*([0-9]+(?:\.[0-9]+)?)$"),
-        "min": re.compile(r"^Min:\s*([0-9]+(?:\.[0-9]+)?)$"),
-        "max": re.compile(r"^Max:\s*([0-9]+(?:\.[0-9]+)?)$"),
+        "average": re.compile(rf"^Average:\s*{number}$"),
+        "median": re.compile(rf"^Median\s*\(P50\):\s*{number}$"),
+        "p90": re.compile(rf"^P90:\s*{number}$"),
+        "p95": re.compile(rf"^P95:\s*{number}$"),
+        "p99": re.compile(rf"^P99:\s*{number}$"),
+        "stddev": re.compile(rf"^Stddev:\s*{number}$"),
+        "min": re.compile(rf"^Min:\s*{number}$"),
+        "max": re.compile(rf"^Max:\s*{number}$"),
     }
 
     section_aliases = {

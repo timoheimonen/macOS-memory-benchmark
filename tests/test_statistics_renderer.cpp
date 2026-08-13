@@ -21,10 +21,10 @@
 
 #include <gtest/gtest.h>
 
-#include "output/console/statistics_renderer.h"
-
 #include <sstream>
 #include <string>
+
+#include "output/console/statistics_renderer.h"
 
 namespace {
 
@@ -68,6 +68,24 @@ TEST(StatisticsRendererTest, RendersCanonicalOrderPrecisionAndPrefixes) {
             "@  Median absolute deviation: 0.75\n"
             ">  Min:     -1.00\n"
             ">  Max:     9.00\n");
+
+  DescriptiveStatistics undefined_coefficient = representative_statistics();
+  undefined_coefficient.coefficient_of_variation_pct = 0.0;
+  undefined_coefficient.coefficient_of_variation_defined = false;
+  std::ostringstream undefined_output;
+  render_statistics_summary(undefined_output, undefined_coefficient, options);
+
+  EXPECT_EQ(undefined_output.str(),
+            ">  Average: 1.25\n"
+            ">  Median (P50): 2.50\n"
+            ">  P90: 7.00\n"
+            ">  P95: 8.00\n"
+            ">  P99: 8.80\n"
+            ">  Stddev: 3.25\n"
+            "@  CV:      0.0%\n"
+            "@  Median absolute deviation: 0.75\n"
+            ">  Min:     -1.00\n"
+            ">  Max:     9.00\n");
 }
 
 TEST(StatisticsRendererTest, SampleMedianOwnsIndentationAndReportsCount) {
@@ -83,8 +101,7 @@ TEST(StatisticsRendererTest, SampleMedianOwnsIndentationAndReportsCount) {
 
   const std::string rendered = output.str();
   EXPECT_NE(rendered.find("    Average: 1.25\n"), std::string::npos);
-  EXPECT_NE(rendered.find("    Median (P50): 2.50 (from 7 samples)\n"),
-            std::string::npos);
+  EXPECT_NE(rendered.find("    Median (P50): 2.50 (from 7 samples)\n"), std::string::npos);
   EXPECT_EQ(rendered.find("      Median (P50):"), std::string::npos);
 }
 
@@ -99,23 +116,11 @@ TEST(StatisticsRendererTest, PlacesInlineDiagnosticBetweenVariabilityAndRange) {
 
   const std::string rendered = output.str();
   const size_t mad_position = rendered.find("Median absolute deviation:");
-  const size_t diagnostic_position =
-      rendered.find("  Warning: unstable measurement\n");
+  const size_t diagnostic_position = rendered.find("  Warning: unstable measurement\n");
   const size_t min_position = rendered.find("Min:");
   ASSERT_NE(mad_position, std::string::npos);
   ASSERT_NE(diagnostic_position, std::string::npos);
   ASSERT_NE(min_position, std::string::npos);
   EXPECT_LT(mad_position, diagnostic_position);
   EXPECT_LT(diagnostic_position, min_position);
-}
-
-TEST(StatisticsRendererTest, RendersUndefinedCoefficientAsStoredNumericZero) {
-  DescriptiveStatistics statistics = representative_statistics();
-  statistics.coefficient_of_variation_pct = 0.0;
-  statistics.coefficient_of_variation_defined = false;
-
-  std::ostringstream output;
-  render_statistics_summary(output, statistics, {});
-
-  EXPECT_NE(output.str().find("  CV:      0.0%\n"), std::string::npos);
 }

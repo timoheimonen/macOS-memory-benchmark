@@ -28,7 +28,6 @@
 #include <vector>
 
 #include "benchmark/core_to_core_latency.h"
-#include "utils/descriptive_statistics.h"
 
 struct ScenarioDescriptor {
   std::string name;
@@ -54,16 +53,7 @@ struct CoreToCoreFailureInjection {
   bool fail_initiator_startup = false;
 };
 
-/** Shared summary values used by core-to-core console reporting. */
-using CoreToCoreSummaryStats = DescriptiveStatistics;
-
-CoreToCoreSummaryStats calculate_core_to_core_summary_stats(const std::vector<double>& values);
-
 std::string classify_core_to_core_duration_quality(double elapsed_seconds);
-
-size_t calculate_core_to_core_calibrated_round_trips(double pilot_elapsed_seconds, size_t pilot_round_trips,
-                                                     double target_duration_seconds, size_t minimum_round_trips,
-                                                     size_t maximum_round_trips);
 
 std::vector<size_t> build_core_to_core_scenario_order(size_t scenario_count, size_t loop_index);
 

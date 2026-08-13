@@ -347,12 +347,6 @@ BENCHMARK_REASON_FUNCTION(benchmark_reason_interrupted_latency_measurement,
                           "interrupted during latency measurement")
 BENCHMARK_REASON_FUNCTION(benchmark_reason_invalid_latency_measurement,
                           "invalid latency duration or access count")
-BENCHMARK_REASON_FUNCTION(benchmark_reason_invalid_cache_latency_measurement,
-                          "invalid cache latency duration or access count")
-BENCHMARK_REASON_FUNCTION(benchmark_reason_invalid_main_latency_measurement,
-                          "invalid main-memory latency duration")
-BENCHMARK_REASON_FUNCTION(benchmark_reason_invalid_bandwidth_measurement,
-                          "invalid measured bandwidth or duration")
 BENCHMARK_REASON_FUNCTION(benchmark_reason_loops_remain,
                           "benchmark loops remain")
 BENCHMARK_REASON_FUNCTION(benchmark_reason_checkpoint_failed,

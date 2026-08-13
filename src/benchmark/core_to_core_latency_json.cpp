@@ -26,8 +26,6 @@
 
 #include "benchmark/core_to_core_latency_json.h"
 
-#include <cstdlib>
-#include <filesystem>
 #include <vector>
 
 #include "core/config/version.h"
@@ -216,19 +214,4 @@ nlohmann::ordered_json build_core_to_core_latency_json(const CoreToCoreLatencyJs
   json_output[JsonKeys::VERSION] = SOFTVERSION;
 
   return json_output;
-}
-
-int save_core_to_core_latency_to_json(const CoreToCoreLatencyJsonContext& context) {
-  if (context.config.output_file.empty()) {
-    return EXIT_SUCCESS;
-  }
-
-  nlohmann::ordered_json json_output = build_core_to_core_latency_json(context);
-
-  std::filesystem::path file_path(context.config.output_file);
-  if (file_path.is_relative()) {
-    file_path = std::filesystem::current_path() / file_path;
-  }
-
-  return write_json_to_file(file_path, json_output);
 }

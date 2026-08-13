@@ -27,7 +27,6 @@
 #include <cstdint>
 #include <functional>
 #include <string>
-#include <utility>
 #include <vector>
 
 #include "benchmark/tlb_measurement_scheduler.h"
@@ -229,36 +228,6 @@ TlbBoundaryDetection detect_tlb_boundary_robust(
     size_t segment_start_index,
     size_t min_locality_bytes,
     uint64_t bootstrap_seed);
-
-/**
- * @brief Infer TLB entries from locality boundary and page size.
- * @param locality_bytes Boundary locality window in bytes
- * @param page_size_bytes System page size in bytes
- * @return Inferred TLB entries (0 if page size is invalid)
- */
-size_t infer_tlb_entries(size_t locality_bytes, size_t page_size_bytes);
-
-/**
- * @brief Infer entry range from boundary and previous locality point.
- * @param locality_bytes Sweep localities corresponding to detector input
- * @param boundary_index Index of detected boundary
- * @param page_size_bytes System page size in bytes
- * @return Pair(min_entries, max_entries)
- */
-std::pair<size_t, size_t> infer_tlb_entries_range(const std::vector<size_t>& locality_bytes,
-                                                  size_t boundary_index,
-                                                  size_t page_size_bytes);
-
-/**
- * @brief Infer a midpoint entry estimate from the detected boundary window.
- * @param locality_bytes Sweep localities corresponding to detector input
- * @param boundary_index Index of detected boundary
- * @param page_size_bytes System page size in bytes
- * @return Midpoint estimate between previous locality and detected boundary
- */
-size_t infer_tlb_entries_estimate(const std::vector<size_t>& locality_bytes,
-                                  size_t boundary_index,
-                                  size_t page_size_bytes);
 
 /**
  * @brief Classify confidence for a detected boundary.

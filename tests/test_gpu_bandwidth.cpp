@@ -38,9 +38,7 @@ namespace {
 
 using Json = nlohmann::ordered_json;
 
-size_t operation_index(GpuOperation operation) {
-  return static_cast<size_t>(operation);
-}
+size_t operation_index(GpuOperation operation) { return static_cast<size_t>(operation); }
 
 struct PhaseCall {
   std::string phase;
@@ -56,25 +54,19 @@ class FakeGpuBackend final : public GpuBackend {
     initialization.device.macos_product_version = "15.5";
     initialization.device.macos_build = "24F74";
     initialization.device.hardware_model = "Mac16,10";
-    initialization.device.physical_memory_bytes =
-        16ULL * 1024ULL * Constants::BYTES_PER_MB;
+    initialization.device.physical_memory_bytes = 16ULL * 1024ULL * Constants::BYTES_PER_MB;
     initialization.device.device_name = "Fake Apple GPU";
     initialization.device.registry_id = 18446744073709551615ULL;
     initialization.device.has_unified_memory = true;
     initialization.device.required_apple7_family_supported = true;
     initialization.device.supported_families = {"apple7", "apple9"};
-    initialization.device.max_buffer_length =
-        4ULL * 1024ULL * Constants::BYTES_PER_MB;
-    initialization.device.recommended_max_working_set_size =
-        8ULL * 1024ULL * Constants::BYTES_PER_MB;
-    initialization.device.available_memory_bytes =
-        4ULL * 1024ULL * Constants::BYTES_PER_MB;
+    initialization.device.max_buffer_length = 4ULL * 1024ULL * Constants::BYTES_PER_MB;
+    initialization.device.recommended_max_working_set_size = 8ULL * 1024ULL * Constants::BYTES_PER_MB;
+    initialization.device.available_memory_bytes = 4ULL * 1024ULL * Constants::BYTES_PER_MB;
     initialization.device.available_memory_source = "fake-provider";
     for (GpuPipelineMetadata* pipeline :
-         {&initialization.device.read_pipeline,
-          &initialization.device.write_pipeline,
-          &initialization.device.copy_pipeline,
-          &initialization.device.initialization_pipeline,
+         {&initialization.device.read_pipeline, &initialization.device.write_pipeline,
+          &initialization.device.copy_pipeline, &initialization.device.initialization_pipeline,
           &initialization.device.validation_pipeline}) {
       pipeline->thread_execution_width = 32;
       pipeline->max_total_threads_per_threadgroup = 1024;
@@ -108,25 +100,21 @@ class FakeGpuBackend final : public GpuBackend {
     return initialization;
   }
 
-  GpuAllocationResult allocate_resources(
-      const GpuAllocationRequest& request) noexcept override {
+  GpuAllocationResult allocate_resources(const GpuAllocationRequest& request) noexcept override {
     lifecycle_log.push_back("allocate");
     last_allocation_request = request;
     GpuAllocationResult output = allocation;
     output.requested_buffer_size_bytes = request.buffer_size_bytes;
     output.auxiliary_bytes = request.auxiliary_bytes;
     output.memory_budget_bytes = request.memory_budget_bytes;
-    output.required_total_bytes =
-        request.buffer_size_bytes * 2U + request.auxiliary_bytes;
+    output.required_total_bytes = request.buffer_size_bytes * 2U + request.auxiliary_bytes;
     output.recommended_working_set_available = true;
     output.recommended_working_set_headroom_bytes =
-        static_cast<int64_t>(
-            initialization.device.recommended_max_working_set_size) -
+        static_cast<int64_t>(initialization.device.recommended_max_working_set_size) -
         static_cast<int64_t>(output.required_total_bytes);
     output.recommended_working_set_headroom_fraction =
         static_cast<double>(output.recommended_working_set_headroom_bytes) /
-        static_cast<double>(
-            initialization.device.recommended_max_working_set_size);
+        static_cast<double>(initialization.device.recommended_max_working_set_size);
     output.buffer_a.length_bytes = request.buffer_size_bytes;
     output.buffer_b.length_bytes = request.buffer_size_bytes;
     output.status_buffer.length_bytes = request.auxiliary_bytes;
@@ -140,32 +128,25 @@ class FakeGpuBackend final : public GpuBackend {
 
   GpuEnvironmentSnapshot snapshot_environment() noexcept override {
     const size_t occurrence = ++environment_snapshot_calls;
-    return environment_provider ? environment_provider(occurrence)
-                                : environment;
+    return environment_provider ? environment_provider(occurrence) : environment;
   }
 
-  GpuBackendPhaseResult run_warmup(
-      const GpuBackendAttemptRequest& request) noexcept override {
+  GpuBackendPhaseResult run_warmup(const GpuBackendAttemptRequest& request) noexcept override {
     const size_t occurrence = ++warmup_calls;
     GpuBackendPhaseResult output = successful_phase("warmup-complete");
-    output.data_initialization_dispatch_count =
-        request.operation == GpuOperation::Copy ? 2 : 1;
+    output.data_initialization_dispatch_count = request.operation == GpuOperation::Copy ? 2 : 1;
     output.benchmark_operation_dispatch_count = 1;
     output.status_reset_count = 1;
-    output.dispatch_count =
-        output.data_initialization_dispatch_count + 1;
+    output.dispatch_count = output.data_initialization_dispatch_count + 1;
     record_phase("warmup", occurrence, request);
     invoke_phase_hook("warmup", occurrence, request);
     return output;
   }
 
-  GpuBackendPhaseResult run_precondition(
-      const GpuBackendAttemptRequest& request) noexcept override {
+  GpuBackendPhaseResult run_precondition(const GpuBackendAttemptRequest& request) noexcept override {
     const size_t occurrence = ++precondition_calls;
-    GpuBackendPhaseResult output =
-        successful_phase("precondition-complete");
-    output.data_initialization_dispatch_count =
-        request.operation == GpuOperation::Copy ? 2 : 1;
+    GpuBackendPhaseResult output = successful_phase("precondition-complete");
+    output.data_initialization_dispatch_count = request.operation == GpuOperation::Copy ? 2 : 1;
     output.status_reset_count = 1;
     output.dispatch_count = output.data_initialization_dispatch_count;
     record_phase("precondition", occurrence, request);
@@ -173,20 +154,14 @@ class FakeGpuBackend final : public GpuBackend {
     return output;
   }
 
-  GpuTimedResult run_timed(
-      const GpuBackendAttemptRequest& request) noexcept override {
+  GpuTimedResult run_timed(const GpuBackendAttemptRequest& request) noexcept override {
     const size_t occurrence = ++timed_calls;
-    const size_t operation_occurrence =
-        ++timed_calls_by_operation[operation_index(request.operation)];
+    const size_t operation_occurrence = ++timed_calls_by_operation[operation_index(request.operation)];
     GpuTimedResult output;
-    static_cast<GpuBackendPhaseResult&>(output) =
-        successful_phase("timed-complete");
+    static_cast<GpuBackendPhaseResult&>(output) = successful_phase("timed-complete");
     output.dispatch_count = request.passes;
     output.benchmark_operation_dispatch_count = request.passes;
-    const double elapsed = duration_provider
-                               ? duration_provider(request,
-                                                   operation_occurrence)
-                               : 0.150;
+    const double elapsed = duration_provider ? duration_provider(request, operation_occurrence) : 0.150;
     output.gpu_start_seconds = 1.0 + static_cast<double>(occurrence);
     output.gpu_elapsed_seconds = elapsed;
     output.gpu_end_seconds = output.gpu_start_seconds + elapsed;
@@ -205,9 +180,7 @@ class FakeGpuBackend final : public GpuBackend {
     return output;
   }
 
-  GpuValidationResult run_validation(
-      const GpuBackendAttemptRequest& request,
-      const GpuTimedResult&) noexcept override {
+  GpuValidationResult run_validation(const GpuBackendAttemptRequest& request, const GpuTimedResult&) noexcept override {
     const size_t occurrence = ++validation_calls;
     GpuValidationResult output;
     output.status = GpuBackendStatus::Success;
@@ -234,8 +207,7 @@ class FakeGpuBackend final : public GpuBackend {
     return output;
   }
 
-  GpuBackendPhaseResult readback_last_output(
-      std::vector<uint8_t>& output) noexcept override {
+  GpuBackendPhaseResult readback_last_output(std::vector<uint8_t>& output) noexcept override {
     output.clear();
     return successful_phase("readback-complete");
   }
@@ -256,17 +228,10 @@ class FakeGpuBackend final : public GpuBackend {
   GpuAllocationRequest last_allocation_request;
   std::vector<std::string> lifecycle_log;
   std::vector<PhaseCall> phase_calls;
-  std::function<double(const GpuBackendAttemptRequest&, size_t)>
-      duration_provider;
-  std::function<void(const GpuBackendAttemptRequest&, size_t,
-                     GpuTimedResult&)>
-      timed_mutator;
-  std::function<void(const GpuBackendAttemptRequest&, size_t,
-                     GpuValidationResult&)>
-      validation_mutator;
-  std::function<void(const std::string&, size_t,
-                     const GpuBackendAttemptRequest&)>
-      phase_hook;
+  std::function<double(const GpuBackendAttemptRequest&, size_t)> duration_provider;
+  std::function<void(const GpuBackendAttemptRequest&, size_t, GpuTimedResult&)> timed_mutator;
+  std::function<void(const GpuBackendAttemptRequest&, size_t, GpuValidationResult&)> validation_mutator;
+  std::function<void(const std::string&, size_t, const GpuBackendAttemptRequest&)> phase_hook;
   std::array<size_t, kGpuOperationCount> timed_calls_by_operation{};
   size_t environment_snapshot_calls = 0;
   size_t warmup_calls = 0;
@@ -286,8 +251,7 @@ class FakeGpuBackend final : public GpuBackend {
     return resource;
   }
 
-  static GpuBackendPhaseResult successful_phase(
-      const std::string& reason_code) {
+  static GpuBackendPhaseResult successful_phase(const std::string& reason_code) {
     GpuBackendPhaseResult output;
     output.status = GpuBackendStatus::Success;
     output.reason_code = reason_code;
@@ -297,21 +261,18 @@ class FakeGpuBackend final : public GpuBackend {
     return output;
   }
 
-  void record_phase(const std::string& phase, size_t occurrence,
-                    const GpuBackendAttemptRequest& request) {
+  void record_phase(const std::string& phase, size_t occurrence, const GpuBackendAttemptRequest& request) {
     phase_calls.push_back({phase, occurrence, request});
   }
 
-  void invoke_phase_hook(const std::string& phase, size_t occurrence,
-                         const GpuBackendAttemptRequest& request) {
+  void invoke_phase_hook(const std::string& phase, size_t occurrence, const GpuBackendAttemptRequest& request) {
     if (phase_hook) {
       phase_hook(phase, occurrence, request);
     }
   }
 };
 
-GpuBandwidthConfig explicit_config(size_t loop_count = 3,
-                                   size_t passes = 2) {
+GpuBandwidthConfig explicit_config(size_t loop_count = 3, size_t passes = 2) {
   GpuBandwidthConfig config;
   config.buffer_size_mb = 64;
   config.buffer_size_bytes = 64 * Constants::BYTES_PER_MB;
@@ -320,10 +281,9 @@ GpuBandwidthConfig explicit_config(size_t loop_count = 3,
   config.seed = 18446744073709551615ULL;
   config.user_specified_iterations = true;
   config.user_specified_seed = true;
-  config.argv = {"memory_benchmark", "--gpu-bandwidth", "--buffer-size",
-                 "64", "--iterations", std::to_string(passes), "--count",
-                 std::to_string(loop_count), "--seed",
-                 "18446744073709551615"};
+  config.argv = {"memory_benchmark", "--gpu-bandwidth",      "--buffer-size", "64",
+                 "--iterations",     std::to_string(passes), "--count",       std::to_string(loop_count),
+                 "--seed",           "18446744073709551615"};
   return config;
 }
 
@@ -334,97 +294,77 @@ GpuBandwidthConfig automatic_config(size_t loop_count = 3) {
   return config;
 }
 
-int parse_gpu_arguments(std::vector<std::string> arguments,
-                        GpuBandwidthConfig& config) {
+int parse_gpu_arguments(std::vector<std::string> arguments, GpuBandwidthConfig& config) {
   std::vector<char*> argv;
   argv.reserve(arguments.size());
   for (std::string& argument : arguments) {
     argv.push_back(argument.data());
   }
-  return parse_gpu_bandwidth_arguments(static_cast<int>(argv.size()),
-                                       argv.data(), config);
+  return parse_gpu_bandwidth_arguments(static_cast<int>(argv.size()), argv.data(), config);
 }
 
-int parse_gpu_arguments_silently(std::vector<std::string> arguments,
-                                 GpuBandwidthConfig& config) {
+int parse_gpu_arguments_silently(std::vector<std::string> arguments, GpuBandwidthConfig& config) {
   testing::internal::CaptureStderr();
   const int status = parse_gpu_arguments(std::move(arguments), config);
   static_cast<void>(testing::internal::GetCapturedStderr());
   return status;
 }
 
-void expect_interrupted_tail(const GpuRunResult& result,
-                             size_t measured_prefix) {
+void expect_interrupted_tail(const GpuRunResult& result, size_t measured_prefix) {
   ASSERT_EQ(result.measurements.size(), result.counters.planned_measurements);
   for (size_t index = 0; index < result.measurements.size(); ++index) {
     const GpuMeasurement& measurement = result.measurements[index];
     if (index < measured_prefix) {
-      EXPECT_EQ(measurement.status, GpuMeasurementStatus::Measured)
-          << index;
+      EXPECT_EQ(measurement.status, GpuMeasurementStatus::Measured) << index;
       EXPECT_TRUE(measurement.value_gb_s.has_value()) << index;
     } else {
-      EXPECT_EQ(measurement.status, GpuMeasurementStatus::Interrupted)
-          << index;
-      EXPECT_EQ(measurement.reason_code, "interruption-before-task")
-          << index;
+      EXPECT_EQ(measurement.status, GpuMeasurementStatus::Interrupted) << index;
+      EXPECT_EQ(measurement.reason_code, "interruption-before-task") << index;
       EXPECT_FALSE(measurement.value_gb_s.has_value()) << index;
       EXPECT_FALSE(measurement.attempted) << index;
     }
   }
 }
 
-void expect_unstarted_failed_tail(const GpuRunResult& result,
-                                  size_t first_unstarted) {
+void expect_unstarted_failed_tail(const GpuRunResult& result, size_t first_unstarted) {
   ASSERT_LE(first_unstarted, result.measurements.size());
-  for (size_t index = first_unstarted;
-       index < result.measurements.size(); ++index) {
+  for (size_t index = first_unstarted; index < result.measurements.size(); ++index) {
     const GpuMeasurement& measurement = result.measurements[index];
     EXPECT_EQ(measurement.status, GpuMeasurementStatus::Failed) << index;
-    EXPECT_EQ(measurement.reason_code,
-              "not-run-after-runtime-failure")
-        << index;
+    EXPECT_EQ(measurement.reason_code, "not-run-after-runtime-failure") << index;
     EXPECT_FALSE(measurement.value_gb_s.has_value()) << index;
     EXPECT_FALSE(measurement.attempted) << index;
   }
 }
 
-void expect_unstarted_interrupted_tail(const GpuRunResult& result,
-                                       size_t first_unstarted) {
+void expect_unstarted_interrupted_tail(const GpuRunResult& result, size_t first_unstarted) {
   ASSERT_LE(first_unstarted, result.measurements.size());
-  for (size_t index = first_unstarted;
-       index < result.measurements.size(); ++index) {
+  for (size_t index = first_unstarted; index < result.measurements.size(); ++index) {
     const GpuMeasurement& measurement = result.measurements[index];
-    EXPECT_EQ(measurement.status, GpuMeasurementStatus::Interrupted)
-        << index;
-    EXPECT_EQ(measurement.reason_code, "interruption-before-task")
-        << index;
+    EXPECT_EQ(measurement.status, GpuMeasurementStatus::Interrupted) << index;
+    EXPECT_EQ(measurement.reason_code, "interruption-before-task") << index;
     EXPECT_FALSE(measurement.value_gb_s.has_value()) << index;
     EXPECT_FALSE(measurement.attempted) << index;
   }
 }
 
 void expect_unresolved_json_operation_identity(const Json& output) {
-  const std::array<std::string, kGpuOperationCount> operations = {
-      "read", "write", "copy"};
+  const std::array<std::string, kGpuOperationCount> operations = {"read", "write", "copy"};
   ASSERT_EQ(output["work_plans"].size(), operations.size());
   for (size_t index = 0; index < operations.size(); ++index) {
     EXPECT_FALSE(output["work_plans"][index]["valid"].get<bool>());
-    EXPECT_EQ(output["work_plans"][index]["operation"],
-              operations[index]);
+    EXPECT_EQ(output["work_plans"][index]["operation"], operations[index]);
   }
   for (const Json& measurement : output["measurements"]) {
     EXPECT_EQ(measurement["status"], "not-run");
     EXPECT_EQ(measurement["work_policy"], "not-resolved");
-    EXPECT_EQ(measurement["work_plan"]["operation"],
-              measurement["operation"]);
+    EXPECT_EQ(measurement["work_plan"]["operation"], measurement["operation"]);
   }
 }
 
 class GpuBandwidthParserTest : public ::testing::Test {
  protected:
-  void TearDown() override {
-    set_gpu_bandwidth_parser_test_hooks(nullptr);
-  }
+  void TearDown() override { set_gpu_bandwidth_parser_test_hooks(nullptr); }
 };
 
 TEST_F(GpuBandwidthParserTest, DefaultsUseGeneratedSeedOnce) {
@@ -433,29 +373,22 @@ TEST_F(GpuBandwidthParserTest, DefaultsUseGeneratedSeedOnce) {
   set_gpu_bandwidth_parser_test_hooks(&parser_hooks);
   GpuBandwidthConfig config;
 
-  ASSERT_EQ(parse_gpu_arguments(
-                {"memory_benchmark", "--gpu-bandwidth"}, config),
-            EXIT_SUCCESS);
+  ASSERT_EQ(parse_gpu_arguments({"memory_benchmark", "--gpu-bandwidth"}, config), EXIT_SUCCESS);
   EXPECT_EQ(config.buffer_size_mb, 512U);
-  EXPECT_EQ(config.buffer_size_bytes,
-            512U * Constants::BYTES_PER_MB);
+  EXPECT_EQ(config.buffer_size_bytes, 512U * Constants::BYTES_PER_MB);
   EXPECT_EQ(config.loop_count, 3U);
   EXPECT_EQ(config.iterations, 0U);
   EXPECT_FALSE(config.user_specified_iterations);
   EXPECT_EQ(config.seed, 0x123456789abcdef0ULL);
   EXPECT_FALSE(config.user_specified_seed);
-  EXPECT_EQ(config.argv,
-            (std::vector<std::string>{"memory_benchmark",
-                                      "--gpu-bandwidth"}));
+  EXPECT_EQ(config.argv, (std::vector<std::string>{"memory_benchmark", "--gpu-bandwidth"}));
 }
 
 TEST_F(GpuBandwidthParserTest, UserValuesAndMaximumSeedAreExact) {
   GpuBandwidthConfig config;
-  ASSERT_EQ(parse_gpu_arguments(
-                {"memory_benchmark", "-G", "-b", "64", "-i", "7",
-                 "-r", "4", "-o", "/tmp/gpu.json", "--seed",
-                 "18446744073709551615"},
-                config),
+  ASSERT_EQ(parse_gpu_arguments({"memory_benchmark", "-G", "-b", "64", "-i", "7", "-r", "4", "-o", "/tmp/gpu.json",
+                                 "--seed", "18446744073709551615"},
+                                config),
             EXIT_SUCCESS);
   EXPECT_EQ(config.buffer_size_bytes, 64U * Constants::BYTES_PER_MB);
   EXPECT_EQ(config.iterations, 7U);
@@ -466,8 +399,7 @@ TEST_F(GpuBandwidthParserTest, UserValuesAndMaximumSeedAreExact) {
   EXPECT_TRUE(config.user_specified_seed);
 }
 
-TEST_F(GpuBandwidthParserTest,
-       StrictDuplicateAndIncompatibleOptionsAreRejected) {
+TEST_F(GpuBandwidthParserTest, StrictDuplicateAndIncompatibleOptionsAreRejected) {
   const std::vector<std::vector<std::string>> invalid_arguments = {
       {"memory_benchmark", "-G", "--buffer-size", "64x"},
       {"memory_benchmark", "-G", "--count", "3x"},
@@ -497,14 +429,12 @@ TEST_F(GpuBandwidthParserTest,
   };
   for (const std::vector<std::string>& arguments : invalid_arguments) {
     GpuBandwidthConfig config;
-    EXPECT_EQ(parse_gpu_arguments_silently(arguments, config), EXIT_FAILURE)
-        << ::testing::PrintToString(arguments);
+    EXPECT_EQ(parse_gpu_arguments_silently(arguments, config), EXIT_FAILURE) << ::testing::PrintToString(arguments);
   }
 }
 
 TEST(GpuRunnerTest, PlannedMeasurementCountOverflowFailsBeforeBackend) {
-  GpuBandwidthConfig config = explicit_config(
-      std::numeric_limits<size_t>::max() / kGpuOperationCount + 1U, 1);
+  GpuBandwidthConfig config = explicit_config(std::numeric_limits<size_t>::max() / kGpuOperationCount + 1U, 1);
   FakeGpuBackend backend;
   GpuRunResult result;
 
@@ -521,148 +451,107 @@ TEST(GpuRunnerTest, PlannedMeasurementCountOverflowFailsBeforeBackend) {
   EXPECT_EQ(result.work_plans[2].operation, GpuOperation::Copy);
 }
 
-TEST_F(GpuBandwidthParserTest,
-       MinimumBufferAndExplicitCopyPayloadCapFailBeforeRun) {
+TEST_F(GpuBandwidthParserTest, MinimumBufferAndExplicitCopyPayloadCapFailBeforeRun) {
   GpuBandwidthConfig config;
-  EXPECT_EQ(parse_gpu_arguments_silently(
-                {"memory_benchmark", "-G", "-b", "63"}, config),
-            EXIT_FAILURE);
+  EXPECT_EQ(parse_gpu_arguments_silently({"memory_benchmark", "-G", "-b", "63"}, config), EXIT_FAILURE);
   EXPECT_EQ(config.seed, 0U);
 
-  EXPECT_EQ(parse_gpu_arguments_silently(
-                {"memory_benchmark", "-G", "-b", "64", "-i", "513"},
-                config),
-            EXIT_FAILURE);
-  EXPECT_EQ(parse_gpu_arguments(
-                {"memory_benchmark", "-G", "-b", "64", "-i", "512",
-                 "--seed", "1"},
-                config),
+  EXPECT_EQ(parse_gpu_arguments_silently({"memory_benchmark", "-G", "-b", "64", "-i", "513"}, config), EXIT_FAILURE);
+  EXPECT_EQ(parse_gpu_arguments({"memory_benchmark", "-G", "-b", "64", "-i", "512", "--seed", "1"}, config),
             EXIT_SUCCESS);
   EXPECT_EQ(config.iterations, 512U);
 }
 
 TEST(GpuMemoryBudgetTest, DetectsOverflowAndExceededBudget) {
-  const GpuMemoryBudget multiply_overflow = calculate_gpu_memory_budget(
-      std::numeric_limits<size_t>::max() / 2U + 1U,
-      std::numeric_limits<size_t>::max(), 0);
+  const GpuMemoryBudget multiply_overflow =
+      calculate_gpu_memory_budget(std::numeric_limits<size_t>::max() / 2U + 1U, std::numeric_limits<size_t>::max(), 0);
   EXPECT_FALSE(multiply_overflow.valid);
   EXPECT_EQ(multiply_overflow.reason_code, "memory-requirement-overflow");
 
-  const GpuMemoryBudget add_overflow = calculate_gpu_memory_budget(
-      std::numeric_limits<size_t>::max() / 2U,
-      std::numeric_limits<size_t>::max(), 2);
+  const GpuMemoryBudget add_overflow =
+      calculate_gpu_memory_budget(std::numeric_limits<size_t>::max() / 2U, std::numeric_limits<size_t>::max(), 2);
   EXPECT_FALSE(add_overflow.valid);
   EXPECT_EQ(add_overflow.reason_code, "memory-requirement-overflow");
 
   const GpuMemoryBudget exceeded = calculate_gpu_memory_budget(
-      512U * Constants::BYTES_PER_MB, 1024U * Constants::BYTES_PER_MB,
-      Constants::GPU_AUXILIARY_BUFFER_BYTES);
+      512U * Constants::BYTES_PER_MB, 1024U * Constants::BYTES_PER_MB, Constants::GPU_AUXILIARY_BUFFER_BYTES);
   EXPECT_FALSE(exceeded.valid);
   EXPECT_EQ(exceeded.reason_code, "memory-budget-exceeded");
   EXPECT_EQ(exceeded.memory_budget_bytes,
-            static_cast<size_t>(1024U * Constants::BYTES_PER_MB *
-                                Constants::MEMORY_LIMIT_FACTOR));
+            static_cast<size_t>(1024U * Constants::BYTES_PER_MB * Constants::MEMORY_LIMIT_FACTOR));
 }
 
 TEST(GpuMemoryBudgetTest, ZeroAvailableMemoryUsesReportedFallback) {
-  const GpuMemoryBudget budget = calculate_gpu_memory_budget(
-      64U * Constants::BYTES_PER_MB, 0,
-      Constants::GPU_AUXILIARY_BUFFER_BYTES);
+  const GpuMemoryBudget budget =
+      calculate_gpu_memory_budget(64U * Constants::BYTES_PER_MB, 0, Constants::GPU_AUXILIARY_BUFFER_BYTES);
   ASSERT_TRUE(budget.valid) << budget.reason_code;
   EXPECT_TRUE(budget.used_fallback);
   EXPECT_EQ(budget.available_memory_bytes, 0U);
-  EXPECT_EQ(budget.required_total_bytes,
-            128U * Constants::BYTES_PER_MB +
-                Constants::GPU_AUXILIARY_BUFFER_BYTES);
-  EXPECT_EQ(budget.memory_budget_bytes,
-            Constants::FALLBACK_TOTAL_LIMIT_MB * Constants::BYTES_PER_MB);
+  EXPECT_EQ(budget.required_total_bytes, 128U * Constants::BYTES_PER_MB + Constants::GPU_AUXILIARY_BUFFER_BYTES);
+  EXPECT_EQ(budget.memory_budget_bytes, Constants::FALLBACK_TOTAL_LIMIT_MB * Constants::BYTES_PER_MB);
 }
 
-TEST(GpuRunnerTest, UnsupportedPreRunCheckpointKeepsNotRunOperationIdentity) {
-  FakeGpuBackend backend;
-  backend.initialization.status = GpuBackendStatus::Unsupported;
-  backend.initialization.reason_code =
-      "required-gpu-family-unsupported";
-  const GpuBandwidthConfig config = explicit_config();
-  GpuRunResult result;
-  Json checkpoint;
-  size_t checkpoint_count = 0;
-  GpuRunnerTestHooks hooks;
-  hooks.stop_requested = []() { return false; };
-  hooks.checkpoint = [&](const GpuRunResult& snapshot) {
-    ++checkpoint_count;
-    checkpoint = build_gpu_bandwidth_json(config, snapshot);
-    return EXIT_SUCCESS;
+TEST(GpuRunnerTest, PreRunFailuresCheckpointUnresolvedOperationIdentity) {
+  struct PreRunFailureCase {
+    const char* name;
+    std::function<void(FakeGpuBackend&)> configure;
+    GpuRunStatus expected_status;
+    const char* expected_reason;
+    const char* expected_json_status;
+    std::vector<std::string> expected_lifecycle;
   };
+  const std::array<PreRunFailureCase, 3> cases = {{
+      {"unsupported",
+       [](FakeGpuBackend& backend) {
+         backend.initialization.status = GpuBackendStatus::Unsupported;
+         backend.initialization.reason_code = "required-gpu-family-unsupported";
+       },
+       GpuRunStatus::Unsupported,
+       "required-gpu-family-unsupported",
+       "unsupported",
+       {"initialize"}},
+      {"maximum-buffer",
+       [](FakeGpuBackend& backend) { backend.initialization.device.max_buffer_length = 32U * Constants::BYTES_PER_MB; },
+       GpuRunStatus::Failed,
+       "max-buffer-length-exceeded",
+       "failed",
+       {"initialize"}},
+      {"allocation",
+       [](FakeGpuBackend& backend) {
+         backend.allocation.status = GpuBackendStatus::Failed;
+         backend.allocation.reason_code = "private-buffer-allocation-failed";
+       },
+       GpuRunStatus::Failed,
+       "private-buffer-allocation-failed",
+       "failed",
+       {"initialize", "allocate"}},
+  }};
 
-  EXPECT_EQ(run_gpu_bandwidth_suite(config, backend, result, hooks),
-            EXIT_FAILURE);
-  EXPECT_EQ(result.status, GpuRunStatus::Unsupported);
-  EXPECT_EQ(result.reason_code, "required-gpu-family-unsupported");
-  EXPECT_EQ(result.counters.terminal_measurements, 0U);
-  EXPECT_EQ(checkpoint_count, 1U);
-  EXPECT_EQ(checkpoint["status"], "unsupported");
-  expect_unresolved_json_operation_identity(checkpoint);
-  EXPECT_EQ(backend.lifecycle_log,
-            (std::vector<std::string>{"initialize"}));
-}
+  for (const PreRunFailureCase& test_case : cases) {
+    SCOPED_TRACE(test_case.name);
+    FakeGpuBackend backend;
+    test_case.configure(backend);
+    const GpuBandwidthConfig config = explicit_config();
+    GpuRunResult result;
+    Json checkpoint;
+    size_t checkpoint_count = 0;
+    GpuRunnerTestHooks hooks;
+    hooks.stop_requested = []() { return false; };
+    hooks.checkpoint = [&](const GpuRunResult& snapshot) {
+      ++checkpoint_count;
+      checkpoint = build_gpu_bandwidth_json(config, snapshot);
+      return EXIT_SUCCESS;
+    };
 
-TEST(GpuRunnerTest,
-     MaximumBufferPreRunCheckpointKeepsNotRunOperationIdentity) {
-  FakeGpuBackend backend;
-  backend.initialization.device.max_buffer_length =
-      32U * Constants::BYTES_PER_MB;
-  const GpuBandwidthConfig config = explicit_config();
-  GpuRunResult result;
-  Json checkpoint;
-  size_t checkpoint_count = 0;
-  GpuRunnerTestHooks hooks;
-  hooks.stop_requested = []() { return false; };
-  hooks.checkpoint = [&](const GpuRunResult& snapshot) {
-    ++checkpoint_count;
-    checkpoint = build_gpu_bandwidth_json(config, snapshot);
-    return EXIT_SUCCESS;
-  };
-
-  EXPECT_EQ(run_gpu_bandwidth_suite(config, backend, result, hooks),
-            EXIT_FAILURE);
-  EXPECT_EQ(result.status, GpuRunStatus::Failed);
-  EXPECT_EQ(result.reason_code, "max-buffer-length-exceeded");
-  EXPECT_EQ(result.counters.terminal_measurements, 0U);
-  EXPECT_EQ(checkpoint_count, 1U);
-  EXPECT_EQ(checkpoint["status"], "failed");
-  expect_unresolved_json_operation_identity(checkpoint);
-  EXPECT_EQ(backend.lifecycle_log,
-            (std::vector<std::string>{"initialize"}));
-}
-
-TEST(GpuRunnerTest,
-     AllocationPreRunCheckpointKeepsNotRunOperationIdentity) {
-  FakeGpuBackend backend;
-  backend.allocation.status = GpuBackendStatus::Failed;
-  backend.allocation.reason_code = "private-buffer-allocation-failed";
-  const GpuBandwidthConfig config = explicit_config();
-  GpuRunResult result;
-  Json checkpoint;
-  size_t checkpoint_count = 0;
-  GpuRunnerTestHooks hooks;
-  hooks.stop_requested = []() { return false; };
-  hooks.checkpoint = [&](const GpuRunResult& snapshot) {
-    ++checkpoint_count;
-    checkpoint = build_gpu_bandwidth_json(config, snapshot);
-    return EXIT_SUCCESS;
-  };
-
-  EXPECT_EQ(run_gpu_bandwidth_suite(config, backend, result, hooks),
-            EXIT_FAILURE);
-  EXPECT_EQ(result.status, GpuRunStatus::Failed);
-  EXPECT_EQ(result.reason_code, "private-buffer-allocation-failed");
-  EXPECT_EQ(result.counters.terminal_measurements, 0U);
-  EXPECT_EQ(checkpoint_count, 1U);
-  EXPECT_EQ(checkpoint["status"], "failed");
-  expect_unresolved_json_operation_identity(checkpoint);
-  EXPECT_EQ(backend.lifecycle_log,
-            (std::vector<std::string>{"initialize", "allocate"}));
+    EXPECT_EQ(run_gpu_bandwidth_suite(config, backend, result, hooks), EXIT_FAILURE);
+    EXPECT_EQ(result.status, test_case.expected_status);
+    EXPECT_EQ(result.reason_code, test_case.expected_reason);
+    EXPECT_EQ(result.counters.terminal_measurements, 0U);
+    EXPECT_EQ(checkpoint_count, 1U);
+    EXPECT_EQ(checkpoint["status"], test_case.expected_json_status);
+    expect_unresolved_json_operation_identity(checkpoint);
+    EXPECT_EQ(backend.lifecycle_log, test_case.expected_lifecycle);
+  }
 }
 
 TEST(GpuRunnerTest, ExplicitThreeLoopRunHasExactOrderWorkAndCounters) {
@@ -677,8 +566,7 @@ TEST(GpuRunnerTest, ExplicitThreeLoopRunHasExactOrderWorkAndCounters) {
     return EXIT_SUCCESS;
   };
 
-  ASSERT_EQ(run_gpu_bandwidth_suite(config, backend, result, hooks),
-            EXIT_SUCCESS);
+  ASSERT_EQ(run_gpu_bandwidth_suite(config, backend, result, hooks), EXIT_SUCCESS);
   EXPECT_EQ(result.status, GpuRunStatus::Complete);
   EXPECT_EQ(result.reason_code, "complete");
   EXPECT_TRUE(result.results_complete);
@@ -695,17 +583,11 @@ TEST(GpuRunnerTest, ExplicitThreeLoopRunHasExactOrderWorkAndCounters) {
 
   ASSERT_EQ(result.loops.size(), 3U);
   EXPECT_EQ(result.loops[0].planned_order,
-            (std::vector<GpuOperation>{GpuOperation::Read,
-                                       GpuOperation::Write,
-                                       GpuOperation::Copy}));
+            (std::vector<GpuOperation>{GpuOperation::Read, GpuOperation::Write, GpuOperation::Copy}));
   EXPECT_EQ(result.loops[1].planned_order,
-            (std::vector<GpuOperation>{GpuOperation::Write,
-                                       GpuOperation::Copy,
-                                       GpuOperation::Read}));
+            (std::vector<GpuOperation>{GpuOperation::Write, GpuOperation::Copy, GpuOperation::Read}));
   EXPECT_EQ(result.loops[2].planned_order,
-            (std::vector<GpuOperation>{GpuOperation::Copy,
-                                       GpuOperation::Read,
-                                       GpuOperation::Write}));
+            (std::vector<GpuOperation>{GpuOperation::Copy, GpuOperation::Read, GpuOperation::Write}));
   for (const GpuLoopRecord& loop : result.loops) {
     EXPECT_EQ(loop.realized_order, loop.planned_order);
   }
@@ -721,11 +603,8 @@ TEST(GpuRunnerTest, ExplicitThreeLoopRunHasExactOrderWorkAndCounters) {
     EXPECT_EQ(measurement.timed.command_buffer_count, 1U);
     EXPECT_EQ(measurement.timed.compute_encoder_count, 1U);
     EXPECT_EQ(measurement.timed.dispatch_count, 2U);
-    const size_t multiplier = measurement.operation == GpuOperation::Copy
-                                  ? 2U
-                                  : 1U;
-    EXPECT_EQ(measurement.work_plan.exact_payload_bytes,
-              config.buffer_size_bytes * 2U * multiplier);
+    const size_t multiplier = measurement.operation == GpuOperation::Copy ? 2U : 1U;
+    EXPECT_EQ(measurement.work_plan.exact_payload_bytes, config.buffer_size_bytes * 2U * multiplier);
   }
 
   for (const GpuOperationAggregate& aggregate : result.aggregates) {
@@ -735,16 +614,14 @@ TEST(GpuRunnerTest, ExplicitThreeLoopRunHasExactOrderWorkAndCounters) {
   }
   ASSERT_TRUE(result.aggregates[0].headline_gb_s.has_value());
   ASSERT_TRUE(result.aggregates[2].headline_gb_s.has_value());
-  EXPECT_DOUBLE_EQ(*result.aggregates[2].headline_gb_s,
-                   *result.aggregates[0].headline_gb_s * 2.0);
+  EXPECT_DOUBLE_EQ(*result.aggregates[2].headline_gb_s, *result.aggregates[0].headline_gb_s * 2.0);
 
   EXPECT_EQ(backend.phase_calls.size(), 9U * 4U);
   EXPECT_EQ(checkpoints.size(), 9U);
   EXPECT_EQ(checkpoints.front().status, GpuRunStatus::Partial);
   EXPECT_EQ(checkpoints.back().status, GpuRunStatus::Complete);
   EXPECT_TRUE(checkpoints.back().results_complete);
-  EXPECT_EQ(backend.lifecycle_log,
-            (std::vector<std::string>{"initialize", "allocate", "release"}));
+  EXPECT_EQ(backend.lifecycle_log, (std::vector<std::string>{"initialize", "allocate", "release"}));
 }
 
 TEST(GpuRunnerTest, EnvironmentWarningScansEveryMeasurementSnapshot) {
@@ -752,45 +629,36 @@ TEST(GpuRunnerTest, EnvironmentWarningScansEveryMeasurementSnapshot) {
     size_t snapshot_occurrence;
     bool low_power;
   };
-  for (const WarningCase& warning_case :
-       {WarningCase{18, false}, WarningCase{19, true}}) {
+  for (const WarningCase& warning_case : {WarningCase{18, false}, WarningCase{19, true}}) {
     FakeGpuBackend backend;
     const GpuEnvironmentSnapshot nominal = backend.environment;
-    backend.environment_provider =
-        [nominal, warning_case](size_t occurrence) {
-          GpuEnvironmentSnapshot snapshot = nominal;
-          if (occurrence == warning_case.snapshot_occurrence) {
-            if (warning_case.low_power) {
-              snapshot.low_power_mode_enabled = true;
-            } else {
-              snapshot.thermal_state = "serious";
-            }
-          }
-          return snapshot;
-        };
+    backend.environment_provider = [nominal, warning_case](size_t occurrence) {
+      GpuEnvironmentSnapshot snapshot = nominal;
+      if (occurrence == warning_case.snapshot_occurrence) {
+        if (warning_case.low_power) {
+          snapshot.low_power_mode_enabled = true;
+        } else {
+          snapshot.thermal_state = "serious";
+        }
+      }
+      return snapshot;
+    };
     GpuRunResult result;
     GpuRunnerTestHooks hooks;
     hooks.stop_requested = []() { return false; };
 
-    ASSERT_EQ(run_gpu_bandwidth_suite(explicit_config(), backend, result,
-                                      hooks),
-              EXIT_SUCCESS);
+    ASSERT_EQ(run_gpu_bandwidth_suite(explicit_config(), backend, result, hooks), EXIT_SUCCESS);
     EXPECT_EQ(result.environment_start.thermal_state, "nominal");
     EXPECT_FALSE(result.environment_start.low_power_mode_enabled);
     EXPECT_EQ(result.environment_end.thermal_state, "nominal");
     EXPECT_FALSE(result.environment_end.low_power_mode_enabled);
     ASSERT_EQ(result.measurements.size(), 9U);
     if (warning_case.low_power) {
-      EXPECT_TRUE(
-          result.measurements.back().environment_after.low_power_mode_enabled);
+      EXPECT_TRUE(result.measurements.back().environment_after.low_power_mode_enabled);
     } else {
-      EXPECT_EQ(result.measurements.back().environment_before.thermal_state,
-                "serious");
+      EXPECT_EQ(result.measurements.back().environment_before.thermal_state, "serious");
     }
-    EXPECT_EQ(std::count(result.quality_warnings.begin(),
-                         result.quality_warnings.end(),
-                         "environment-not-nominal"),
-              1);
+    EXPECT_EQ(std::count(result.quality_warnings.begin(), result.quality_warnings.end(), "environment-not-nominal"), 1);
   }
 }
 
@@ -799,50 +667,37 @@ TEST(GpuRunnerTest, StreamingCvThresholdIsInclusiveOnlyAtFivePercent) {
     double symmetric_delta;
     bool noisy;
   };
-  for (const CvCase& cv_case :
-       {CvCase{5.0, false}, CvCase{5.1, true}}) {
+  for (const CvCase& cv_case : {CvCase{5.0, false}, CvCase{5.1, true}}) {
     FakeGpuBackend backend;
-    backend.duration_provider =
-        [cv_case](const GpuBackendAttemptRequest& request,
-                  size_t operation_occurrence) {
-          double desired_gb_s = 100.0;
-          if (operation_occurrence == 1) {
-            desired_gb_s -= cv_case.symmetric_delta;
-          } else if (operation_occurrence == 3) {
-            desired_gb_s += cv_case.symmetric_delta;
-          }
-          const size_t payload_multiplier =
-              request.operation == GpuOperation::Copy ? 2U : 1U;
-          const long double payload_bytes =
-              static_cast<long double>(request.buffer_size_bytes) *
-              static_cast<long double>(request.passes) *
-              static_cast<long double>(payload_multiplier);
-          return static_cast<double>(
-              payload_bytes /
-              (static_cast<long double>(desired_gb_s) * 1.0e9L));
-        };
+    backend.duration_provider = [cv_case](const GpuBackendAttemptRequest& request, size_t operation_occurrence) {
+      double desired_gb_s = 100.0;
+      if (operation_occurrence == 1) {
+        desired_gb_s -= cv_case.symmetric_delta;
+      } else if (operation_occurrence == 3) {
+        desired_gb_s += cv_case.symmetric_delta;
+      }
+      const size_t payload_multiplier = request.operation == GpuOperation::Copy ? 2U : 1U;
+      const long double payload_bytes = static_cast<long double>(request.buffer_size_bytes) *
+                                        static_cast<long double>(request.passes) *
+                                        static_cast<long double>(payload_multiplier);
+      return static_cast<double>(payload_bytes / (static_cast<long double>(desired_gb_s) * 1.0e9L));
+    };
     GpuRunResult result;
     GpuRunnerTestHooks hooks;
     hooks.stop_requested = []() { return false; };
 
-    ASSERT_EQ(run_gpu_bandwidth_suite(explicit_config(), backend, result,
-                                      hooks),
-              EXIT_SUCCESS);
+    ASSERT_EQ(run_gpu_bandwidth_suite(explicit_config(), backend, result, hooks), EXIT_SUCCESS);
     for (const GpuOperationAggregate& aggregate : result.aggregates) {
-      EXPECT_NEAR(aggregate.statistics.coefficient_of_variation_pct,
-                  cv_case.symmetric_delta, 1e-10);
-      EXPECT_EQ(aggregate.stability_quality,
-                cv_case.noisy ? "noisy" : "stable");
+      EXPECT_NEAR(aggregate.statistics.coefficient_of_variation_pct, cv_case.symmetric_delta, 1e-10);
+      EXPECT_EQ(aggregate.stability_quality, cv_case.noisy ? "noisy" : "stable");
     }
-    EXPECT_EQ(result.quality_warnings.size(),
-              cv_case.noisy ? kGpuOperationCount : 0U);
+    EXPECT_EQ(result.quality_warnings.size(), cv_case.noisy ? kGpuOperationCount : 0U);
   }
 }
 
 TEST(GpuRunnerTest, AutomaticPilotAndTrialAreExcludedAndPlanIsFrozen) {
   FakeGpuBackend backend;
-  backend.duration_provider = [](const GpuBackendAttemptRequest&,
-                                 size_t operation_occurrence) {
+  backend.duration_provider = [](const GpuBackendAttemptRequest&, size_t operation_occurrence) {
     return operation_occurrence == 1 ? 0.010 : 0.150;
   };
   const GpuBandwidthConfig config = automatic_config();
@@ -850,15 +705,13 @@ TEST(GpuRunnerTest, AutomaticPilotAndTrialAreExcludedAndPlanIsFrozen) {
   GpuRunnerTestHooks hooks;
   hooks.stop_requested = []() { return false; };
 
-  ASSERT_EQ(run_gpu_bandwidth_suite(config, backend, result, hooks),
-            EXIT_SUCCESS);
+  ASSERT_EQ(run_gpu_bandwidth_suite(config, backend, result, hooks), EXIT_SUCCESS);
   ASSERT_EQ(result.status, GpuRunStatus::Complete);
   for (size_t index = 0; index < kGpuOperationCount; ++index) {
     ASSERT_EQ(result.calibration_attempts[index].size(), 2U);
     EXPECT_EQ(result.calibration_attempts[index][0].purpose, "pilot");
     EXPECT_EQ(result.calibration_attempts[index][0].passes, 1U);
-    EXPECT_EQ(result.calibration_attempts[index][1].purpose,
-              "duration-trial");
+    EXPECT_EQ(result.calibration_attempts[index][1].purpose, "duration-trial");
     EXPECT_EQ(result.calibration_attempts[index][1].passes, 15U);
     ASSERT_TRUE(result.work_plans[index].valid);
     EXPECT_EQ(result.work_plans[index].passes, 15U);
@@ -867,15 +720,13 @@ TEST(GpuRunnerTest, AutomaticPilotAndTrialAreExcludedAndPlanIsFrozen) {
   for (const GpuMeasurement& measurement : result.measurements) {
     EXPECT_EQ(measurement.work_plan.passes, 15U);
     EXPECT_EQ(measurement.work_plan.plan_identity,
-              result.work_plans[operation_index(measurement.operation)]
-                  .plan_identity);
+              result.work_plans[operation_index(measurement.operation)].plan_identity);
   }
 }
 
 TEST(GpuRunnerTest, AutomaticCalibrationUsesBothCorrectionTrialsAtMost) {
   FakeGpuBackend backend;
-  backend.duration_provider = [](const GpuBackendAttemptRequest&,
-                                 size_t operation_occurrence) {
+  backend.duration_provider = [](const GpuBackendAttemptRequest&, size_t operation_occurrence) {
     switch (operation_occurrence) {
       case 1:
         return 0.010;
@@ -893,38 +744,25 @@ TEST(GpuRunnerTest, AutomaticCalibrationUsesBothCorrectionTrialsAtMost) {
   GpuRunnerTestHooks hooks;
   hooks.stop_requested = []() { return false; };
 
-  ASSERT_EQ(run_gpu_bandwidth_suite(config, backend, result, hooks),
-            EXIT_SUCCESS);
+  ASSERT_EQ(run_gpu_bandwidth_suite(config, backend, result, hooks), EXIT_SUCCESS);
   ASSERT_EQ(result.status, GpuRunStatus::Complete);
-  for (GpuOperation operation : {GpuOperation::Read, GpuOperation::Write,
-                                 GpuOperation::Copy}) {
+  for (GpuOperation operation : {GpuOperation::Read, GpuOperation::Write, GpuOperation::Copy}) {
     const size_t index = operation_index(operation);
-    const GpuPassLimits limits =
-        calculate_gpu_pass_limits(config.buffer_size_bytes, operation);
+    const GpuPassLimits limits = calculate_gpu_pass_limits(config.buffer_size_bytes, operation);
     const size_t pilot = calculate_gpu_pilot_passes(limits);
-    const size_t duration_trial =
-        calculate_gpu_calibrated_passes(0.010, pilot, limits);
-    const size_t correction_one =
-        calculate_gpu_calibrated_passes(0.050, duration_trial, limits);
-    const size_t correction_two =
-        calculate_gpu_calibrated_passes(0.300, correction_one, limits);
-    const std::array<size_t, 4> expected_passes = {
-        pilot, duration_trial, correction_one, correction_two};
-    const std::array<std::string, 4> expected_purposes = {
-        "pilot", "duration-trial", "correction-trial-1",
-        "correction-trial-2"};
+    const size_t duration_trial = calculate_gpu_calibrated_passes(0.010, pilot, limits);
+    const size_t correction_one = calculate_gpu_calibrated_passes(0.050, duration_trial, limits);
+    const size_t correction_two = calculate_gpu_calibrated_passes(0.300, correction_one, limits);
+    const std::array<size_t, 4> expected_passes = {pilot, duration_trial, correction_one, correction_two};
+    const std::array<std::string, 4> expected_purposes = {"pilot", "duration-trial", "correction-trial-1",
+                                                          "correction-trial-2"};
 
-    ASSERT_EQ(result.calibration_attempts[index].size(),
-              expected_passes.size());
-    for (size_t attempt_index = 0;
-         attempt_index < expected_passes.size(); ++attempt_index) {
-      EXPECT_EQ(result.calibration_attempts[index][attempt_index].purpose,
-                expected_purposes[attempt_index]);
-      EXPECT_EQ(result.calibration_attempts[index][attempt_index].passes,
-                expected_passes[attempt_index]);
+    ASSERT_EQ(result.calibration_attempts[index].size(), expected_passes.size());
+    for (size_t attempt_index = 0; attempt_index < expected_passes.size(); ++attempt_index) {
+      EXPECT_EQ(result.calibration_attempts[index][attempt_index].purpose, expected_purposes[attempt_index]);
+      EXPECT_EQ(result.calibration_attempts[index][attempt_index].passes, expected_passes[attempt_index]);
     }
-    EXPECT_EQ(result.calibration_attempts[index].back().duration_quality,
-              "above-target-window");
+    EXPECT_EQ(result.calibration_attempts[index].back().duration_quality, "above-target-window");
     EXPECT_EQ(result.work_plans[index].passes, correction_two);
     EXPECT_EQ(backend.timed_calls_by_operation[index], 7U);
   }
@@ -932,8 +770,7 @@ TEST(GpuRunnerTest, AutomaticCalibrationUsesBothCorrectionTrialsAtMost) {
 
 TEST(GpuRunnerTest, PayloadCapDurationQualitySurvivesFrozenMeasurements) {
   FakeGpuBackend backend;
-  backend.duration_provider = [](const GpuBackendAttemptRequest&,
-                                 size_t operation_occurrence) {
+  backend.duration_provider = [](const GpuBackendAttemptRequest&, size_t operation_occurrence) {
     return operation_occurrence == 1 ? 0.0001 : 0.050;
   };
   const GpuBandwidthConfig config = automatic_config();
@@ -941,75 +778,82 @@ TEST(GpuRunnerTest, PayloadCapDurationQualitySurvivesFrozenMeasurements) {
   GpuRunnerTestHooks hooks;
   hooks.stop_requested = []() { return false; };
 
-  ASSERT_EQ(run_gpu_bandwidth_suite(config, backend, result, hooks),
-            EXIT_SUCCESS);
+  ASSERT_EQ(run_gpu_bandwidth_suite(config, backend, result, hooks), EXIT_SUCCESS);
   ASSERT_EQ(result.status, GpuRunStatus::Complete);
-  for (GpuOperation operation : {GpuOperation::Read, GpuOperation::Write,
-                                 GpuOperation::Copy}) {
+  for (GpuOperation operation : {GpuOperation::Read, GpuOperation::Write, GpuOperation::Copy}) {
     const size_t index = operation_index(operation);
-    const GpuPassLimits limits =
-        calculate_gpu_pass_limits(config.buffer_size_bytes, operation);
+    const GpuPassLimits limits = calculate_gpu_pass_limits(config.buffer_size_bytes, operation);
     ASSERT_TRUE(limits.payload_cap_is_limiting);
     ASSERT_EQ(result.calibration_attempts[index].size(), 2U);
-    EXPECT_EQ(result.calibration_attempts[index].back().passes,
-              limits.effective_maximum_passes);
-    EXPECT_EQ(result.calibration_attempts[index].back().duration_quality,
-              "payload-cap-below-target");
-    EXPECT_EQ(result.work_plans[index].passes,
-              limits.effective_maximum_passes);
+    EXPECT_EQ(result.calibration_attempts[index].back().passes, limits.effective_maximum_passes);
+    EXPECT_EQ(result.calibration_attempts[index].back().duration_quality, "payload-cap-below-target");
+    EXPECT_EQ(result.work_plans[index].passes, limits.effective_maximum_passes);
   }
   for (const GpuMeasurement& measurement : result.measurements) {
-    EXPECT_EQ(measurement.duration_quality,
-              "payload-cap-below-target");
+    EXPECT_EQ(measurement.duration_quality, "payload-cap-below-target");
   }
 }
 
-TEST(GpuRunnerTest, CalibrationRuntimeFailureFinalizesUnstartedSlotsFailed) {
-  FakeGpuBackend backend;
-  backend.timed_mutator = [](const GpuBackendAttemptRequest&, size_t,
-                             GpuTimedResult& timed) {
-    timed.status = GpuBackendStatus::Failed;
-    timed.command_status = GpuCommandStatus::Error;
-    timed.reason_code = "calibration-timed-command-failed";
-  };
-  const GpuBandwidthConfig config = automatic_config();
-  GpuRunResult result;
-  Json checkpoint;
-  GpuRunnerTestHooks hooks;
-  hooks.stop_requested = []() { return false; };
-  hooks.checkpoint = [&](const GpuRunResult& snapshot) {
-    checkpoint = build_gpu_bandwidth_json(config, snapshot);
-    return EXIT_SUCCESS;
-  };
+TEST(GpuRunnerTest, CalibrationFailureFinalizesTailByPendingStopState) {
+  for (bool pending_stop : {false, true}) {
+    SCOPED_TRACE(pending_stop ? "pending-stop" : "no-stop");
+    FakeGpuBackend backend;
+    bool stop = false;
+    backend.timed_mutator = [](const GpuBackendAttemptRequest&, size_t, GpuTimedResult& timed) {
+      timed.status = GpuBackendStatus::Failed;
+      timed.command_status = GpuCommandStatus::Error;
+      timed.reason_code = "calibration-timed-command-failed";
+    };
+    backend.phase_hook = [&](const std::string& phase, size_t occurrence, const GpuBackendAttemptRequest&) {
+      if (pending_stop && phase == "timed" && occurrence == 1) {
+        stop = true;
+      }
+    };
+    const GpuBandwidthConfig config = automatic_config(pending_stop ? 2 : 3);
+    GpuRunResult result;
+    Json checkpoint;
+    size_t checkpoint_calls = 0;
+    GpuRunnerTestHooks hooks;
+    hooks.stop_requested = [&]() { return stop; };
+    hooks.checkpoint = [&](const GpuRunResult& snapshot) {
+      ++checkpoint_calls;
+      checkpoint = build_gpu_bandwidth_json(config, snapshot);
+      return EXIT_SUCCESS;
+    };
 
-  EXPECT_EQ(run_gpu_bandwidth_suite(config, backend, result, hooks),
-            EXIT_FAILURE);
-  EXPECT_EQ(result.status, GpuRunStatus::Failed);
-  EXPECT_EQ(result.reason_code, "calibration-timed-command-failed");
-  EXPECT_EQ(result.counters.attempted_measurements, 0U);
-  EXPECT_EQ(result.counters.completed_measurements, 0U);
-  EXPECT_EQ(result.counters.terminal_measurements,
-            result.counters.planned_measurements);
-  expect_unstarted_failed_tail(result, 0);
-  ASSERT_EQ(result.calibration_attempts[0].size(), 1U);
-  EXPECT_FALSE(result.calibration_attempts[0][0].valid);
-  for (const Json& measurement : checkpoint["measurements"]) {
-    EXPECT_EQ(measurement["status"], "failed");
-    EXPECT_TRUE(measurement["value_gb_s"].is_null());
+    EXPECT_EQ(run_gpu_bandwidth_suite(config, backend, result, hooks), EXIT_FAILURE);
+    EXPECT_EQ(result.status, GpuRunStatus::Failed);
+    EXPECT_EQ(result.reason_code, "calibration-timed-command-failed");
+    EXPECT_EQ(result.interruption_requested, pending_stop);
+    EXPECT_EQ(result.counters.attempted_measurements, 0U);
+    EXPECT_EQ(result.counters.completed_measurements, 0U);
+    EXPECT_EQ(result.counters.terminal_measurements, result.counters.planned_measurements);
+    ASSERT_EQ(result.calibration_attempts[0].size(), 1U);
+    EXPECT_FALSE(result.calibration_attempts[0][0].valid);
+    ASSERT_EQ(checkpoint_calls, 1U);
+    ASSERT_TRUE(checkpoint.contains("measurements"));
+    ASSERT_EQ(checkpoint["measurements"].size(), result.counters.planned_measurements);
+    for (const Json& measurement : checkpoint["measurements"]) {
+      EXPECT_EQ(measurement["status"], pending_stop ? "interrupted" : "failed");
+      EXPECT_TRUE(measurement["value_gb_s"].is_null());
+    }
+    if (pending_stop) {
+      expect_unstarted_interrupted_tail(result, 0);
+    } else {
+      expect_unstarted_failed_tail(result, 0);
+    }
   }
 }
 
 TEST(GpuRunnerTest, ProductionFinalSaveFailureWinsCalibrationFailure) {
   FakeGpuBackend backend;
-  backend.timed_mutator = [](const GpuBackendAttemptRequest&, size_t,
-                             GpuTimedResult& timed) {
+  backend.timed_mutator = [](const GpuBackendAttemptRequest&, size_t, GpuTimedResult& timed) {
     timed.status = GpuBackendStatus::Failed;
     timed.command_status = GpuCommandStatus::Error;
     timed.reason_code = "calibration-timed-command-failed";
   };
   GpuBandwidthConfig config = automatic_config();
-  config.output_file =
-      "/tmp/" + std::string(5000, 'x') + "/gpu.json";
+  config.output_file = "/tmp/" + std::string(5000, 'x') + "/gpu.json";
   GpuRunResult result;
 
   testing::internal::CaptureStderr();
@@ -1026,17 +870,13 @@ TEST(GpuRunnerTest, ProductionFinalSaveFailureWinsCalibrationFailure) {
 TEST(GpuRunnerTest, ProductionFinalSaveFailureWinsRunnerException) {
   FakeGpuBackend backend;
   GpuBandwidthConfig config = explicit_config(1);
-  config.output_file =
-      "/tmp/" + std::string(5000, 'x') + "/gpu.json";
+  config.output_file = "/tmp/" + std::string(5000, 'x') + "/gpu.json";
   GpuRunResult result;
   GpuRunnerTestHooks hooks;
-  hooks.stop_requested = []() -> bool {
-    throw std::runtime_error("injected-stop-failure");
-  };
+  hooks.stop_requested = []() -> bool { throw std::runtime_error("injected-stop-failure"); };
 
   testing::internal::CaptureStderr();
-  const int status =
-      run_gpu_bandwidth_suite(config, backend, result, hooks);
+  const int status = run_gpu_bandwidth_suite(config, backend, result, hooks);
   const std::string error = testing::internal::GetCapturedStderr();
   EXPECT_EQ(status, EXIT_FAILURE);
   EXPECT_NE(error.find("Failed to write file"), std::string::npos);
@@ -1046,43 +886,9 @@ TEST(GpuRunnerTest, ProductionFinalSaveFailureWinsRunnerException) {
   EXPECT_FALSE(result.conclusions_valid);
 }
 
-TEST(GpuRunnerTest, CalibrationFailureWithPendingStopKeepsInterruptedTail) {
-  FakeGpuBackend backend;
-  bool stop = false;
-  backend.timed_mutator = [](const GpuBackendAttemptRequest&, size_t,
-                             GpuTimedResult& timed) {
-    timed.status = GpuBackendStatus::Failed;
-    timed.command_status = GpuCommandStatus::Error;
-    timed.reason_code = "calibration-timed-command-failed";
-  };
-  backend.phase_hook = [&](const std::string& phase, size_t occurrence,
-                           const GpuBackendAttemptRequest&) {
-    if (phase == "timed" && occurrence == 1) {
-      stop = true;
-    }
-  };
-  GpuRunResult result;
-  GpuRunnerTestHooks hooks;
-  hooks.stop_requested = [&]() { return stop; };
-  hooks.checkpoint = [](const GpuRunResult&) { return EXIT_SUCCESS; };
-
-  EXPECT_EQ(run_gpu_bandwidth_suite(automatic_config(2), backend, result,
-                                    hooks),
-            EXIT_FAILURE);
-  EXPECT_EQ(result.status, GpuRunStatus::Failed);
-  EXPECT_EQ(result.reason_code, "calibration-timed-command-failed");
-  EXPECT_TRUE(result.interruption_requested);
-  EXPECT_EQ(result.counters.attempted_measurements, 0U);
-  EXPECT_EQ(result.counters.completed_measurements, 0U);
-  EXPECT_EQ(result.counters.terminal_measurements,
-            result.counters.planned_measurements);
-  expect_unstarted_interrupted_tail(result, 0);
-}
-
 TEST(GpuRunnerTest, InvalidTimerStopsBeforeValidationAndProducesNullValue) {
   FakeGpuBackend backend;
-  backend.timed_mutator = [](const GpuBackendAttemptRequest&, size_t,
-                             GpuTimedResult& timed) {
+  backend.timed_mutator = [](const GpuBackendAttemptRequest&, size_t, GpuTimedResult& timed) {
     timed.gpu_elapsed_seconds = 0.0;
     timed.gpu_end_seconds = timed.gpu_start_seconds;
   };
@@ -1090,88 +896,52 @@ TEST(GpuRunnerTest, InvalidTimerStopsBeforeValidationAndProducesNullValue) {
   GpuRunnerTestHooks hooks;
   hooks.stop_requested = []() { return false; };
 
-  EXPECT_EQ(run_gpu_bandwidth_suite(explicit_config(1), backend, result,
-                                    hooks),
-            EXIT_FAILURE);
+  EXPECT_EQ(run_gpu_bandwidth_suite(explicit_config(1), backend, result, hooks), EXIT_FAILURE);
   ASSERT_EQ(result.status, GpuRunStatus::Failed);
   ASSERT_EQ(result.measurements[0].status, GpuMeasurementStatus::Invalid);
   EXPECT_EQ(result.measurements[0].reason_code, "invalid-gpu-timestamp");
   EXPECT_FALSE(result.measurements[0].value_gb_s.has_value());
-  EXPECT_EQ(result.measurements[0].validation.validation_status,
-            GpuValidationStatus::NotRunTimerInvalid);
+  EXPECT_EQ(result.measurements[0].validation.validation_status, GpuValidationStatus::NotRunTimerInvalid);
   EXPECT_EQ(backend.validation_calls, 0U);
   EXPECT_EQ(result.counters.completed_measurements, 1U);
   EXPECT_EQ(result.counters.validated_measurements, 0U);
   EXPECT_EQ(result.counters.attempted_measurements, 1U);
-  EXPECT_EQ(result.counters.terminal_measurements,
-            result.counters.planned_measurements);
+  EXPECT_EQ(result.counters.terminal_measurements, result.counters.planned_measurements);
   expect_unstarted_failed_tail(result, 1);
 }
 
 TEST(GpuRunnerTest, TimedAccumulatorMismatchIsInvalidAfterValidation) {
   FakeGpuBackend backend;
-  backend.timed_mutator = [](const GpuBackendAttemptRequest&, size_t,
-                             GpuTimedResult& timed) {
+  backend.timed_mutator = [](const GpuBackendAttemptRequest&, size_t, GpuTimedResult& timed) {
     ++timed.actual_accumulator.first;
   };
   GpuRunResult result;
   GpuRunnerTestHooks hooks;
   hooks.stop_requested = []() { return false; };
 
-  EXPECT_EQ(run_gpu_bandwidth_suite(explicit_config(1), backend, result,
-                                    hooks),
-            EXIT_FAILURE);
+  EXPECT_EQ(run_gpu_bandwidth_suite(explicit_config(1), backend, result, hooks), EXIT_FAILURE);
   EXPECT_EQ(result.measurements[0].status, GpuMeasurementStatus::Invalid);
-  EXPECT_EQ(result.measurements[0].reason_code,
-            "timed-accumulator-mismatch");
+  EXPECT_EQ(result.measurements[0].reason_code, "timed-accumulator-mismatch");
   EXPECT_EQ(backend.validation_calls, 1U);
   EXPECT_FALSE(result.measurements[0].value_gb_s.has_value());
 }
 
-TEST(GpuRunnerTest, ValidationMismatchAndErrorRemainDistinct) {
-  {
-    FakeGpuBackend backend;
-    backend.validation_mutator =
-        [](const GpuBackendAttemptRequest&, size_t,
-           GpuValidationResult& validation) {
-          validation.validation_status = GpuValidationStatus::Mismatch;
-          validation.reason_code = "final-checksum-mismatch";
-          ++validation.actual_final_checksum.second;
-        };
-    GpuRunResult result;
-    GpuRunnerTestHooks hooks;
-    hooks.stop_requested = []() { return false; };
-    EXPECT_EQ(run_gpu_bandwidth_suite(explicit_config(1), backend, result,
-                                      hooks),
-              EXIT_FAILURE);
-    EXPECT_EQ(result.measurements[0].status, GpuMeasurementStatus::Invalid);
-    EXPECT_EQ(result.measurements[0].reason_code,
-              "final-checksum-mismatch");
-  }
-  {
-    FakeGpuBackend backend;
-    backend.validation_mutator =
-        [](const GpuBackendAttemptRequest&, size_t,
-           GpuValidationResult& validation) {
-          validation.status = GpuBackendStatus::Failed;
-          validation.command_status = GpuCommandStatus::Error;
-          validation.validation_status = GpuValidationStatus::Error;
-          validation.reason_code = "validation-command-failed";
-          validation.error = {"MTLCommandBufferErrorDomain", 4,
-                              "localized GPU fault"};
-        };
-    GpuRunResult result;
-    GpuRunnerTestHooks hooks;
-    hooks.stop_requested = []() { return false; };
-    EXPECT_EQ(run_gpu_bandwidth_suite(explicit_config(1), backend, result,
-                                      hooks),
-              EXIT_FAILURE);
-    EXPECT_EQ(result.measurements[0].status, GpuMeasurementStatus::Failed);
-    EXPECT_EQ(result.measurements[0].reason_code,
-              "validation-command-failed");
-    EXPECT_EQ(result.measurements[0].validation.error.description,
-              "localized GPU fault");
-  }
+TEST(GpuRunnerTest, ValidationCommandErrorPreservesRawDiagnostic) {
+  FakeGpuBackend backend;
+  backend.validation_mutator = [](const GpuBackendAttemptRequest&, size_t, GpuValidationResult& validation) {
+    validation.status = GpuBackendStatus::Failed;
+    validation.command_status = GpuCommandStatus::Error;
+    validation.validation_status = GpuValidationStatus::Error;
+    validation.reason_code = "validation-command-failed";
+    validation.error = {"MTLCommandBufferErrorDomain", 4, "localized GPU fault"};
+  };
+  GpuRunResult result;
+  GpuRunnerTestHooks hooks;
+  hooks.stop_requested = []() { return false; };
+  EXPECT_EQ(run_gpu_bandwidth_suite(explicit_config(1), backend, result, hooks), EXIT_FAILURE);
+  EXPECT_EQ(result.measurements[0].status, GpuMeasurementStatus::Failed);
+  EXPECT_EQ(result.measurements[0].reason_code, "validation-command-failed");
+  EXPECT_EQ(result.measurements[0].validation.error.description, "localized GPU fault");
 }
 
 TEST(GpuRunnerTest, StopBeforeTaskStartsNoBackendPhaseAndInterruptsAllSlots) {
@@ -1185,9 +955,7 @@ TEST(GpuRunnerTest, StopBeforeTaskStartsNoBackendPhaseAndInterruptsAllSlots) {
     return EXIT_SUCCESS;
   };
 
-  EXPECT_EQ(run_gpu_bandwidth_suite(explicit_config(2), backend, result,
-                                    hooks),
-            EXIT_SUCCESS);
+  EXPECT_EQ(run_gpu_bandwidth_suite(explicit_config(2), backend, result, hooks), EXIT_SUCCESS);
   EXPECT_EQ(result.status, GpuRunStatus::Interrupted);
   EXPECT_TRUE(result.interruption_requested);
   EXPECT_TRUE(backend.phase_calls.empty());
@@ -1198,57 +966,47 @@ TEST(GpuRunnerTest, StopBeforeTaskStartsNoBackendPhaseAndInterruptsAllSlots) {
   EXPECT_EQ(checkpoints[0].status, GpuRunStatus::Interrupted);
 }
 
-TEST(GpuRunnerTest, StopInsideStartedPhaseUsesCompletionWins) {
-  for (const std::string& stop_phase : {"warmup", "timed", "validation"}) {
-    FakeGpuBackend backend;
-    bool stop = false;
-    backend.phase_hook = [&](const std::string& phase, size_t occurrence,
-                             const GpuBackendAttemptRequest&) {
-      EXPECT_TRUE(backend.resources_allocated) << phase;
-      if (phase == stop_phase && occurrence == 1) {
-        stop = true;
-      }
-    };
-    GpuRunResult result;
-    std::vector<GpuRunResult> checkpoints;
-    GpuRunnerTestHooks hooks;
-    hooks.stop_requested = [&]() { return stop; };
-    hooks.checkpoint = [&](const GpuRunResult& snapshot) {
-      checkpoints.push_back(snapshot);
-      return EXIT_SUCCESS;
-    };
+TEST(GpuRunnerTest, StopDuringWarmupCompletesStartedTaskBeforeTail) {
+  FakeGpuBackend backend;
+  bool stop = false;
+  backend.phase_hook = [&](const std::string& phase, size_t occurrence, const GpuBackendAttemptRequest&) {
+    EXPECT_TRUE(backend.resources_allocated) << phase;
+    if (phase == "warmup" && occurrence == 1) {
+      stop = true;
+    }
+  };
+  GpuRunResult result;
+  std::vector<GpuRunResult> checkpoints;
+  GpuRunnerTestHooks hooks;
+  hooks.stop_requested = [&]() { return stop; };
+  hooks.checkpoint = [&](const GpuRunResult& snapshot) {
+    checkpoints.push_back(snapshot);
+    return EXIT_SUCCESS;
+  };
 
-    EXPECT_EQ(run_gpu_bandwidth_suite(explicit_config(2), backend, result,
-                                      hooks),
-              EXIT_SUCCESS)
-        << stop_phase;
-    EXPECT_EQ(result.status, GpuRunStatus::Interrupted) << stop_phase;
-    EXPECT_TRUE(result.interruption_requested) << stop_phase;
-    EXPECT_EQ(backend.phase_calls.size(), 4U) << stop_phase;
-    EXPECT_EQ(backend.validation_calls, 1U) << stop_phase;
-    EXPECT_FALSE(backend.resources_allocated) << stop_phase;
-    expect_interrupted_tail(result, 1);
-    EXPECT_EQ(result.counters.attempted_measurements, 1U) << stop_phase;
-    EXPECT_EQ(result.counters.completed_measurements, 1U) << stop_phase;
-    EXPECT_EQ(result.counters.validated_measurements, 1U) << stop_phase;
-    ASSERT_EQ(checkpoints.size(), 1U) << stop_phase;
-    EXPECT_EQ(checkpoints[0].measurements[0].status,
-              GpuMeasurementStatus::Measured)
-        << stop_phase;
-  }
+  EXPECT_EQ(run_gpu_bandwidth_suite(explicit_config(2), backend, result, hooks), EXIT_SUCCESS);
+  EXPECT_EQ(result.status, GpuRunStatus::Interrupted);
+  EXPECT_TRUE(result.interruption_requested);
+  EXPECT_EQ(backend.phase_calls.size(), 4U);
+  EXPECT_EQ(backend.validation_calls, 1U);
+  EXPECT_FALSE(backend.resources_allocated);
+  expect_interrupted_tail(result, 1);
+  EXPECT_EQ(result.counters.attempted_measurements, 1U);
+  EXPECT_EQ(result.counters.completed_measurements, 1U);
+  EXPECT_EQ(result.counters.validated_measurements, 1U);
+  ASSERT_EQ(checkpoints.size(), 1U);
+  EXPECT_EQ(checkpoints[0].measurements[0].status, GpuMeasurementStatus::Measured);
 }
 
 TEST(GpuRunnerTest, FailureWinsOverStopAndPreventsValidationAfterTimedError) {
   FakeGpuBackend backend;
   bool stop = false;
-  backend.timed_mutator = [](const GpuBackendAttemptRequest&, size_t,
-                             GpuTimedResult& timed) {
+  backend.timed_mutator = [](const GpuBackendAttemptRequest&, size_t, GpuTimedResult& timed) {
     timed.status = GpuBackendStatus::Failed;
     timed.command_status = GpuCommandStatus::Error;
     timed.reason_code = "timed-command-failed";
   };
-  backend.phase_hook = [&](const std::string& phase, size_t occurrence,
-                           const GpuBackendAttemptRequest&) {
+  backend.phase_hook = [&](const std::string& phase, size_t occurrence, const GpuBackendAttemptRequest&) {
     if (phase == "timed" && occurrence == 1) {
       stop = true;
     }
@@ -1257,9 +1015,7 @@ TEST(GpuRunnerTest, FailureWinsOverStopAndPreventsValidationAfterTimedError) {
   GpuRunnerTestHooks hooks;
   hooks.stop_requested = [&]() { return stop; };
 
-  EXPECT_EQ(run_gpu_bandwidth_suite(explicit_config(2), backend, result,
-                                    hooks),
-            EXIT_FAILURE);
+  EXPECT_EQ(run_gpu_bandwidth_suite(explicit_config(2), backend, result, hooks), EXIT_FAILURE);
   EXPECT_EQ(result.status, GpuRunStatus::Failed);
   EXPECT_EQ(result.reason_code, "timed-command-failed");
   EXPECT_TRUE(result.interruption_requested);
@@ -1271,15 +1027,12 @@ TEST(GpuRunnerTest, FailureWinsOverStopAndPreventsValidationAfterTimedError) {
 TEST(GpuRunnerTest, ValidationMismatchWinsOverSimultaneousStop) {
   FakeGpuBackend backend;
   bool stop = false;
-  backend.validation_mutator =
-      [](const GpuBackendAttemptRequest&, size_t,
-         GpuValidationResult& validation) {
-        validation.validation_status = GpuValidationStatus::Mismatch;
-        validation.reason_code = "final-checksum-mismatch";
-        ++validation.actual_final_checksum.first;
-      };
-  backend.phase_hook = [&](const std::string& phase, size_t occurrence,
-                           const GpuBackendAttemptRequest&) {
+  backend.validation_mutator = [](const GpuBackendAttemptRequest&, size_t, GpuValidationResult& validation) {
+    validation.validation_status = GpuValidationStatus::Mismatch;
+    validation.reason_code = "final-checksum-mismatch";
+    ++validation.actual_final_checksum.first;
+  };
+  backend.phase_hook = [&](const std::string& phase, size_t occurrence, const GpuBackendAttemptRequest&) {
     if (phase == "validation" && occurrence == 1) {
       stop = true;
     }
@@ -1288,16 +1041,12 @@ TEST(GpuRunnerTest, ValidationMismatchWinsOverSimultaneousStop) {
   GpuRunnerTestHooks hooks;
   hooks.stop_requested = [&]() { return stop; };
 
-  EXPECT_EQ(run_gpu_bandwidth_suite(explicit_config(2), backend, result,
-                                    hooks),
-            EXIT_FAILURE);
+  EXPECT_EQ(run_gpu_bandwidth_suite(explicit_config(2), backend, result, hooks), EXIT_FAILURE);
   EXPECT_EQ(result.status, GpuRunStatus::Failed);
   EXPECT_EQ(result.reason_code, "final-checksum-mismatch");
   EXPECT_TRUE(result.interruption_requested);
-  ASSERT_EQ(result.measurements[0].status,
-            GpuMeasurementStatus::Invalid);
-  EXPECT_EQ(result.measurements[0].reason_code,
-            "final-checksum-mismatch");
+  ASSERT_EQ(result.measurements[0].status, GpuMeasurementStatus::Invalid);
+  EXPECT_EQ(result.measurements[0].reason_code, "final-checksum-mismatch");
   EXPECT_FALSE(result.measurements[0].value_gb_s.has_value());
   EXPECT_EQ(backend.timed_calls, 1U);
   EXPECT_EQ(backend.validation_calls, 1U);
@@ -1309,8 +1058,7 @@ TEST(GpuRunnerTest, ValidationMismatchWinsOverSimultaneousStop) {
 TEST(GpuRunnerTest, StopInLastTaskKeepsAllMeasurementsButInvalidatesRun) {
   FakeGpuBackend backend;
   bool stop = false;
-  backend.phase_hook = [&](const std::string& phase, size_t occurrence,
-                           const GpuBackendAttemptRequest&) {
+  backend.phase_hook = [&](const std::string& phase, size_t occurrence, const GpuBackendAttemptRequest&) {
     if (phase == "validation" && occurrence == 9) {
       stop = true;
     }
@@ -1324,9 +1072,7 @@ TEST(GpuRunnerTest, StopInLastTaskKeepsAllMeasurementsButInvalidatesRun) {
     return EXIT_SUCCESS;
   };
 
-  EXPECT_EQ(run_gpu_bandwidth_suite(explicit_config(), backend, result,
-                                    hooks),
-            EXIT_SUCCESS);
+  EXPECT_EQ(run_gpu_bandwidth_suite(explicit_config(), backend, result, hooks), EXIT_SUCCESS);
   EXPECT_EQ(result.status, GpuRunStatus::Interrupted);
   EXPECT_EQ(result.counters.completed_measurements, 9U);
   EXPECT_EQ(result.counters.validated_measurements, 9U);
@@ -1357,75 +1103,49 @@ TEST(GpuRunnerTest, StopFirstSeenInCheckpointWritesAtMostOneExtraSnapshot) {
     return EXIT_SUCCESS;
   };
 
-  EXPECT_EQ(run_gpu_bandwidth_suite(explicit_config(2), backend, result,
-                                    hooks),
-            EXIT_SUCCESS);
+  EXPECT_EQ(run_gpu_bandwidth_suite(explicit_config(2), backend, result, hooks), EXIT_SUCCESS);
   ASSERT_EQ(checkpoints.size(), 2U);
   EXPECT_EQ(checkpoints[0].status, GpuRunStatus::Partial);
-  EXPECT_EQ(checkpoints[0].measurements[0].status,
-            GpuMeasurementStatus::Measured);
-  EXPECT_EQ(checkpoints[0].measurements[1].status,
-            GpuMeasurementStatus::NotRun);
+  EXPECT_EQ(checkpoints[0].measurements[0].status, GpuMeasurementStatus::Measured);
+  EXPECT_EQ(checkpoints[0].measurements[1].status, GpuMeasurementStatus::NotRun);
   EXPECT_EQ(checkpoints[1].status, GpuRunStatus::Interrupted);
   expect_interrupted_tail(checkpoints[1], 1);
   EXPECT_EQ(backend.timed_calls, 1U);
   EXPECT_EQ(result.status, GpuRunStatus::Interrupted);
 }
 
-TEST(GpuRunnerTest, CheckpointFailureWinsAndNeverStartsNextTask) {
-  FakeGpuBackend backend;
-  bool stop = false;
-  GpuRunResult result;
-  size_t checkpoint_calls = 0;
-  GpuRunnerTestHooks hooks;
-  hooks.stop_requested = [&]() { return stop; };
-  hooks.checkpoint = [&](const GpuRunResult&) {
-    ++checkpoint_calls;
-    stop = true;
-    return EXIT_FAILURE;
-  };
+TEST(GpuRunnerTest, CheckpointFailureFinalizesTailByPendingStopState) {
+  for (bool pending_stop : {false, true}) {
+    SCOPED_TRACE(pending_stop ? "pending-stop" : "no-stop");
+    FakeGpuBackend backend;
+    bool stop = false;
+    GpuRunResult result;
+    size_t checkpoint_calls = 0;
+    GpuRunnerTestHooks hooks;
+    hooks.stop_requested = [&]() { return stop; };
+    hooks.checkpoint = [&](const GpuRunResult&) {
+      ++checkpoint_calls;
+      stop = pending_stop;
+      return EXIT_FAILURE;
+    };
 
-  EXPECT_EQ(run_gpu_bandwidth_suite(explicit_config(2), backend, result,
-                                    hooks),
-            EXIT_FAILURE);
-  EXPECT_EQ(checkpoint_calls, 1U);
-  EXPECT_EQ(backend.timed_calls, 1U);
-  EXPECT_EQ(result.status, GpuRunStatus::Failed);
-  EXPECT_EQ(result.reason_code, "checkpoint-write-failed");
-  EXPECT_TRUE(result.interruption_requested);
-  EXPECT_FALSE(result.results_complete);
-  EXPECT_FALSE(result.conclusions_valid);
-  EXPECT_EQ(result.counters.attempted_measurements, 1U);
-  EXPECT_EQ(result.counters.completed_measurements, 1U);
-  EXPECT_EQ(result.counters.terminal_measurements,
-            result.counters.planned_measurements);
-  expect_unstarted_interrupted_tail(result, 1);
-}
-
-TEST(GpuRunnerTest, CheckpointFailureWithoutStopFinalizesFailedTail) {
-  FakeGpuBackend backend;
-  GpuRunResult result;
-  size_t checkpoint_calls = 0;
-  GpuRunnerTestHooks hooks;
-  hooks.stop_requested = []() { return false; };
-  hooks.checkpoint = [&](const GpuRunResult&) {
-    ++checkpoint_calls;
-    return EXIT_FAILURE;
-  };
-
-  EXPECT_EQ(run_gpu_bandwidth_suite(explicit_config(2), backend, result,
-                                    hooks),
-            EXIT_FAILURE);
-  EXPECT_EQ(checkpoint_calls, 1U);
-  EXPECT_EQ(backend.timed_calls, 1U);
-  EXPECT_EQ(result.status, GpuRunStatus::Failed);
-  EXPECT_EQ(result.reason_code, "checkpoint-write-failed");
-  EXPECT_FALSE(result.interruption_requested);
-  EXPECT_EQ(result.counters.attempted_measurements, 1U);
-  EXPECT_EQ(result.counters.completed_measurements, 1U);
-  EXPECT_EQ(result.counters.terminal_measurements,
-            result.counters.planned_measurements);
-  expect_unstarted_failed_tail(result, 1);
+    EXPECT_EQ(run_gpu_bandwidth_suite(explicit_config(2), backend, result, hooks), EXIT_FAILURE);
+    EXPECT_EQ(checkpoint_calls, 1U);
+    EXPECT_EQ(backend.timed_calls, 1U);
+    EXPECT_EQ(result.status, GpuRunStatus::Failed);
+    EXPECT_EQ(result.reason_code, "checkpoint-write-failed");
+    EXPECT_EQ(result.interruption_requested, pending_stop);
+    EXPECT_FALSE(result.results_complete);
+    EXPECT_FALSE(result.conclusions_valid);
+    EXPECT_EQ(result.counters.attempted_measurements, 1U);
+    EXPECT_EQ(result.counters.completed_measurements, 1U);
+    EXPECT_EQ(result.counters.terminal_measurements, result.counters.planned_measurements);
+    if (pending_stop) {
+      expect_unstarted_interrupted_tail(result, 1);
+    } else {
+      expect_unstarted_failed_tail(result, 1);
+    }
+  }
 }
 
 TEST(GpuJsonTest, SchemaV1UsesExactStringsAndMeasuredOnlyValues) {
@@ -1434,92 +1154,56 @@ TEST(GpuJsonTest, SchemaV1UsesExactStringsAndMeasuredOnlyValues) {
   GpuRunResult result;
   GpuRunnerTestHooks hooks;
   hooks.stop_requested = []() { return false; };
-  ASSERT_EQ(run_gpu_bandwidth_suite(config, backend, result, hooks),
-            EXIT_SUCCESS);
+  ASSERT_EQ(run_gpu_bandwidth_suite(config, backend, result, hooks), EXIT_SUCCESS);
   const Json output = build_gpu_bandwidth_json(config, result);
 
   EXPECT_EQ(output["schema_version"], 1);
   EXPECT_EQ(output["mode"], "gpu_bandwidth");
-  EXPECT_EQ(output["methodology_version"],
-            Constants::GPU_METHODOLOGY_VERSION);
-  EXPECT_EQ(output["methodology"]["timed_observable_reduction"],
-            "dual-mod32-threadgroup-reduction-v2");
+  EXPECT_EQ(output["methodology_version"], Constants::GPU_METHODOLOGY_VERSION);
+  EXPECT_EQ(output["methodology"]["timed_observable_reduction"], "dual-mod32-threadgroup-reduction-v2");
   EXPECT_EQ(output["status"], "complete");
   EXPECT_TRUE(output["results_complete"].get<bool>());
-  EXPECT_EQ(output["configuration"]["base_seed_uint64_decimal"],
-            "18446744073709551615");
-  EXPECT_EQ(output["backend"]["device"]["registry_id_uint64_decimal"],
-            "18446744073709551615");
-  EXPECT_TRUE(output["backend"]["allocation"]
-                    ["recommended_working_set_available"]
-                        .get<bool>());
-  EXPECT_TRUE(output["backend"]["allocation"]
-                    ["recommended_working_set_headroom_bytes"]
-                        .is_string());
-  EXPECT_TRUE(output["backend"]["allocation"]
-                    ["recommended_working_set_headroom_fraction"]
-                        .is_number());
+  EXPECT_EQ(output["configuration"]["base_seed_uint64_decimal"], "18446744073709551615");
+  EXPECT_EQ(output["backend"]["device"]["registry_id_uint64_decimal"], "18446744073709551615");
+  EXPECT_TRUE(output["backend"]["allocation"]["recommended_working_set_available"].get<bool>());
+  EXPECT_TRUE(output["backend"]["allocation"]["recommended_working_set_headroom_bytes"].is_string());
+  EXPECT_TRUE(output["backend"]["allocation"]["recommended_working_set_headroom_fraction"].is_number());
   ASSERT_EQ(output["work_plans"].size(), 3U);
-  const std::array<std::string, kGpuOperationCount> operations = {
-      "read", "write", "copy"};
+  const std::array<std::string, kGpuOperationCount> operations = {"read", "write", "copy"};
   for (size_t index = 0; index < operations.size(); ++index) {
     const Json& plan = output["work_plans"][index];
     EXPECT_EQ(plan["operation"], operations[index]);
     EXPECT_TRUE(plan["exact_payload_bytes"].is_string());
     EXPECT_TRUE(plan["operation_seed_uint64_decimal"].is_string());
-    EXPECT_EQ(plan["resource_options"]["data_uint64_decimal"],
-              "18446744073709551615");
-    EXPECT_EQ(plan["resource_options"]["status_uint64_decimal"],
-              "18446744073709551615");
+    EXPECT_EQ(plan["resource_options"]["data_uint64_decimal"], "18446744073709551615");
+    EXPECT_EQ(plan["resource_options"]["status_uint64_decimal"], "18446744073709551615");
     EXPECT_EQ(plan["resource_options"]["data_storage_mode"], "private");
-    EXPECT_EQ(plan["resource_options"]["data_hazard_tracking_mode"],
-              "tracked");
+    EXPECT_EQ(plan["resource_options"]["data_hazard_tracking_mode"], "tracked");
     EXPECT_EQ(plan["resource_options"]["status_storage_mode"], "shared");
-    EXPECT_EQ(plan["resource_options"]["status_hazard_tracking_mode"],
-              "tracked");
+    EXPECT_EQ(plan["resource_options"]["status_hazard_tracking_mode"], "tracked");
     EXPECT_EQ(plan["kernel_revision"], "fake-kernel-v1");
-    EXPECT_EQ(plan["kernel_source_sha256"],
-              "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef");
+    EXPECT_EQ(plan["kernel_source_sha256"], "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef");
     EXPECT_EQ(plan["msl_language_version"], "2.3");
     EXPECT_FALSE(plan["plan_identity"].get<std::string>().empty());
   }
   for (size_t index = 0; index < output["measurements"].size(); ++index) {
     const Json& measurement = output["measurements"][index];
-    const size_t plan_index =
-        operation_index(result.measurements[index].operation);
-    EXPECT_EQ(measurement["work_plan"]["operation"],
-              measurement["operation"]);
-    EXPECT_EQ(measurement["work_plan"]["plan_identity"],
-              output["work_plans"][plan_index]["plan_identity"]);
+    const size_t plan_index = operation_index(result.measurements[index].operation);
+    EXPECT_EQ(measurement["work_plan"]["operation"], measurement["operation"]);
+    EXPECT_EQ(measurement["work_plan"]["plan_identity"], output["work_plans"][plan_index]["plan_identity"]);
     EXPECT_FALSE(measurement["validation"].contains("algorithm"));
-    EXPECT_EQ(measurement["validation"]
-                         ["timed_accumulator_algorithm"],
-              "gpu-dual-mod32-v2");
-    EXPECT_EQ(measurement["validation"]
-                         ["final_checksum_algorithm"],
-              measurement["operation"] == "read"
-                  ? "not-applicable"
-                  : "gpu-dual-mod32-v1");
-    EXPECT_EQ(measurement["validation"]["status_reset_count"],
-              measurement["operation"] == "read" ? 0U : 1U);
+    EXPECT_EQ(measurement["validation"]["timed_accumulator_algorithm"], "gpu-dual-mod32-v2");
+    EXPECT_EQ(measurement["validation"]["final_checksum_algorithm"],
+              measurement["operation"] == "read" ? "not-applicable" : "gpu-dual-mod32-v1");
+    EXPECT_EQ(measurement["validation"]["status_reset_count"], measurement["operation"] == "read" ? 0U : 1U);
   }
   EXPECT_TRUE(output["measurements"][0]["value_gb_s"].is_number());
-  EXPECT_EQ(output["measurements"][0]["timed"]["command_buffer_count"],
-            1U);
-  EXPECT_EQ(output["measurements"][0]["timed"]["compute_encoder_count"],
-            1U);
-  EXPECT_EQ(output["measurements"][0]["warmup"]
-                  ["data_initialization_dispatch_count"],
-            1U);
-  EXPECT_EQ(output["measurements"][0]["warmup"]
-                  ["benchmark_operation_dispatch_count"],
-            1U);
-  EXPECT_EQ(output["measurements"][0]["precondition"]
-                  ["status_reset_count"],
-            1U);
-  EXPECT_TRUE(output["measurements"][0]["timed"]
-                  ["expected_timed_accumulator"]["first_uint32_decimal"]
-                      .is_string());
+  EXPECT_EQ(output["measurements"][0]["timed"]["command_buffer_count"], 1U);
+  EXPECT_EQ(output["measurements"][0]["timed"]["compute_encoder_count"], 1U);
+  EXPECT_EQ(output["measurements"][0]["warmup"]["data_initialization_dispatch_count"], 1U);
+  EXPECT_EQ(output["measurements"][0]["warmup"]["benchmark_operation_dispatch_count"], 1U);
+  EXPECT_EQ(output["measurements"][0]["precondition"]["status_reset_count"], 1U);
+  EXPECT_TRUE(output["measurements"][0]["timed"]["expected_timed_accumulator"]["first_uint32_decimal"].is_string());
   EXPECT_EQ(output["aggregates"]["copy"]["sample_count"], 3U);
   EXPECT_EQ(output["copy_payload_semantics"], "aggregate-read-plus-write");
   EXPECT_EQ(output["dram_residency"], "unverified");
@@ -1527,32 +1211,23 @@ TEST(GpuJsonTest, SchemaV1UsesExactStringsAndMeasuredOnlyValues) {
 
 TEST(GpuJsonTest, MissingAndNonFiniteValuesAreNull) {
   FakeGpuBackend backend;
-  backend.timed_mutator = [](const GpuBackendAttemptRequest&, size_t,
-                             GpuTimedResult& timed) {
-    timed.gpu_elapsed_seconds =
-        std::numeric_limits<double>::quiet_NaN();
+  backend.timed_mutator = [](const GpuBackendAttemptRequest&, size_t, GpuTimedResult& timed) {
+    timed.gpu_elapsed_seconds = std::numeric_limits<double>::quiet_NaN();
   };
   GpuRunResult result;
   GpuRunnerTestHooks hooks;
   hooks.stop_requested = []() { return false; };
-  EXPECT_EQ(run_gpu_bandwidth_suite(explicit_config(1), backend, result,
-                                    hooks),
-            EXIT_FAILURE);
+  EXPECT_EQ(run_gpu_bandwidth_suite(explicit_config(1), backend, result, hooks), EXIT_FAILURE);
   const Json output = build_gpu_bandwidth_json(explicit_config(1), result);
   EXPECT_EQ(output["measurements"][0]["status"], "invalid");
   EXPECT_TRUE(output["measurements"][0]["value_gb_s"].is_null());
-  EXPECT_TRUE(output["measurements"][0]["timed"]["gpu_elapsed_seconds"]
-                  .is_null());
+  EXPECT_TRUE(output["measurements"][0]["timed"]["gpu_elapsed_seconds"].is_null());
   for (size_t index = 1; index < output["measurements"].size(); ++index) {
     EXPECT_EQ(output["measurements"][index]["status"], "failed");
-    EXPECT_EQ(output["measurements"][index]["reason_code"],
-              "not-run-after-runtime-failure");
+    EXPECT_EQ(output["measurements"][index]["reason_code"], "not-run-after-runtime-failure");
     EXPECT_TRUE(output["measurements"][index]["value_gb_s"].is_null());
-    EXPECT_EQ(output["measurements"][index]["warmup"]["status"],
-              "not-run");
-    EXPECT_EQ(output["measurements"][index]["warmup"]
-                    ["command_buffer_status"],
-              "not-run");
+    EXPECT_EQ(output["measurements"][index]["warmup"]["status"], "not-run");
+    EXPECT_EQ(output["measurements"][index]["warmup"]["command_buffer_status"], "not-run");
   }
   EXPECT_TRUE(output["aggregates"]["read"]["headline_gb_s"].is_null());
   EXPECT_TRUE(output["aggregates"]["read"]["statistics"].is_null());
@@ -1560,33 +1235,25 @@ TEST(GpuJsonTest, MissingAndNonFiniteValuesAreNull) {
 
 TEST(GpuJsonTest, StableReasonCodeAndRawNSErrorStaySeparate) {
   FakeGpuBackend backend;
-  backend.validation_mutator =
-      [](const GpuBackendAttemptRequest&, size_t,
-         GpuValidationResult& validation) {
-        validation.status = GpuBackendStatus::Failed;
-        validation.command_status = GpuCommandStatus::Error;
-        validation.validation_status = GpuValidationStatus::Error;
-        validation.reason_code = "validation-command-failed";
-        validation.error = {"MTLCommandBufferErrorDomain", 9,
-                            "localized and unstable description"};
-      };
+  backend.validation_mutator = [](const GpuBackendAttemptRequest&, size_t, GpuValidationResult& validation) {
+    validation.status = GpuBackendStatus::Failed;
+    validation.command_status = GpuCommandStatus::Error;
+    validation.validation_status = GpuValidationStatus::Error;
+    validation.reason_code = "validation-command-failed";
+    validation.error = {"MTLCommandBufferErrorDomain", 9, "localized and unstable description"};
+  };
   GpuRunResult result;
   GpuRunnerTestHooks hooks;
   hooks.stop_requested = []() { return false; };
-  EXPECT_EQ(run_gpu_bandwidth_suite(explicit_config(1), backend, result,
-                                    hooks),
-            EXIT_FAILURE);
+  EXPECT_EQ(run_gpu_bandwidth_suite(explicit_config(1), backend, result, hooks), EXIT_FAILURE);
   const Json output = build_gpu_bandwidth_json(explicit_config(1), result);
   const Json& measurement = output["measurements"][0];
   EXPECT_EQ(output["reason_code"], "validation-command-failed");
   EXPECT_EQ(measurement["reason_code"], "validation-command-failed");
-  EXPECT_EQ(measurement["validation"]["error"]["domain"],
-            "MTLCommandBufferErrorDomain");
+  EXPECT_EQ(measurement["validation"]["error"]["domain"], "MTLCommandBufferErrorDomain");
   EXPECT_EQ(measurement["validation"]["error"]["code"], 9);
-  EXPECT_EQ(measurement["validation"]["error"]["description"],
-            "localized and unstable description");
-  EXPECT_NE(measurement["reason_code"],
-            measurement["validation"]["error"]["description"]);
+  EXPECT_EQ(measurement["validation"]["error"]["description"], "localized and unstable description");
+  EXPECT_NE(measurement["reason_code"], measurement["validation"]["error"]["description"]);
 }
 
 }  // namespace

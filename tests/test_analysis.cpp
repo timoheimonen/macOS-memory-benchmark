@@ -31,29 +31,21 @@
 
 namespace {
 
-TlbRoundPointMatrix make_round_point_matrix(
-    const std::vector<double>& point_levels,
-    size_t round_count = 12) {
-  TlbRoundPointMatrix matrix(
-      round_count, std::vector<double>(point_levels.size(), 0.0));
+TlbRoundPointMatrix make_round_point_matrix(const std::vector<double>& point_levels, size_t round_count = 12) {
+  TlbRoundPointMatrix matrix(round_count, std::vector<double>(point_levels.size(), 0.0));
   for (size_t round = 0; round < round_count; ++round) {
     const double common_drift = static_cast<double>(round) * 0.02;
     for (size_t point = 0; point < point_levels.size(); ++point) {
-      const double bounded_noise =
-          (static_cast<double>((round + point) % 3) - 1.0) * 0.01;
+      const double bounded_noise = (static_cast<double>((round + point) % 3) - 1.0) * 0.01;
       matrix[round][point] = point_levels[point] + common_drift + bounded_noise;
     }
   }
   return matrix;
 }
 
-TlbMeasurementRecord make_paired_summary_record(
-    TlbMeasurementPass pass,
-    size_t locality_bytes,
-    double spread_latency_ns,
-    double packed_latency_ns,
-    double translation_delta_ns,
-    size_t node_count = 128) {
+TlbMeasurementRecord make_paired_summary_record(TlbMeasurementPass pass, size_t locality_bytes,
+                                                double spread_latency_ns, double packed_latency_ns,
+                                                double translation_delta_ns, size_t node_count = 128) {
   TlbMeasurementRecord record;
   record.pass = pass;
   record.locality_bytes = locality_bytes;
@@ -81,12 +73,9 @@ TlbAnalysisExecutionSeam make_tlb_execution_seam() {
   return seam;
 }
 
-TlbScheduleExecutionResult make_pass_result(
-    TlbMeasurementPass pass,
-    const std::vector<TlbSweepPoint>& points,
-    TlbScheduleExecutionStatus status,
-    size_t completed_point_count,
-    size_t rounds_completed) {
+TlbScheduleExecutionResult make_pass_result(TlbMeasurementPass pass, const std::vector<TlbSweepPoint>& points,
+                                            TlbScheduleExecutionStatus status, size_t completed_point_count,
+                                            size_t rounds_completed) {
   TlbScheduleExecutionResult result;
   result.status = status;
   result.rounds_completed = rounds_completed;
@@ -105,21 +94,15 @@ TlbScheduleExecutionResult make_pass_result(
   return result;
 }
 
-int run_tlb_analysis_silently(
-    const BenchmarkConfig& config,
-    const TlbStopRequested& stop_requested,
-    const TlbAnalysisExecutionSeam& seam) {
+int run_tlb_analysis_silently(const BenchmarkConfig& config, const TlbStopRequested& stop_requested,
+                              const TlbAnalysisExecutionSeam& seam) {
   testing::internal::CaptureStdout();
   testing::internal::CaptureStderr();
   const int result = run_tlb_analysis(config, stop_requested, seam);
   (void)testing::internal::GetCapturedStderr();
   const std::string standard_output = testing::internal::GetCapturedStdout();
-  EXPECT_EQ(standard_output.find(Messages::config_header(SOFTVERSION)),
-            std::string::npos)
-      << standard_output;
-  EXPECT_EQ(standard_output.find(Messages::usage_header(SOFTVERSION)),
-            std::string::npos)
-      << standard_output;
+  EXPECT_EQ(standard_output.find(Messages::config_header(SOFTVERSION)), std::string::npos) << standard_output;
+  EXPECT_EQ(standard_output.find(Messages::usage_header(SOFTVERSION)), std::string::npos) << standard_output;
   return result;
 }
 
@@ -132,8 +115,7 @@ TEST(AnalysisTest, CoordinatorStopsBeforeFirstTaskWithExactCounters) {
   size_t executor_calls = 0;
   bool observed = false;
   TlbAnalysisCoordinatorSummary summary;
-  seam.execute_pass = [&](TlbMeasurementPass,
-                          const std::vector<TlbSweepPoint>&) {
+  seam.execute_pass = [&](TlbMeasurementPass, const std::vector<TlbSweepPoint>&) {
     ++executor_calls;
     return TlbScheduleExecutionResult{};
   };
@@ -142,8 +124,7 @@ TEST(AnalysisTest, CoordinatorStopsBeforeFirstTaskWithExactCounters) {
     summary = value;
   };
 
-  EXPECT_EQ(run_tlb_analysis_silently(config, []() { return true; }, seam),
-            EXIT_SUCCESS);
+  EXPECT_EQ(run_tlb_analysis_silently(config, []() { return true; }, seam), EXIT_SUCCESS);
   EXPECT_EQ(executor_calls, 0u);
   ASSERT_TRUE(observed);
   EXPECT_EQ(summary.status, TlbAnalysisCoordinatorStatus::Interrupted);
@@ -160,8 +141,7 @@ TEST(AnalysisTest, CoordinatorStopsBeforeFirstTaskWithExactCounters) {
   EXPECT_EQ(summary.pass_summaries[0].point_count, 15u);
   EXPECT_EQ(summary.pass_summaries[0].rounds_completed, 0u);
   EXPECT_FALSE(summary.pass_summaries[0].complete);
-  EXPECT_EQ(summary.pass_summaries[0].status,
-            TlbScheduleExecutionStatus::Interrupted);
+  EXPECT_EQ(summary.pass_summaries[0].status, TlbScheduleExecutionStatus::Interrupted);
 }
 
 TEST(AnalysisTest, CoordinatorRejectsMissingPassExecutor) {
@@ -169,77 +149,51 @@ TEST(AnalysisTest, CoordinatorRejectsMissingPassExecutor) {
   config.tlb_sweep_density = TlbSweepDensity::Low;
   TlbAnalysisExecutionSeam seam = make_tlb_execution_seam();
   bool observed = false;
-  seam.observe_summary = [&](const TlbAnalysisCoordinatorSummary&) {
-    observed = true;
-  };
+  seam.observe_summary = [&](const TlbAnalysisCoordinatorSummary&) { observed = true; };
 
-  EXPECT_EQ(run_tlb_analysis_silently(config, []() { return false; }, seam),
-            EXIT_FAILURE);
+  EXPECT_EQ(run_tlb_analysis_silently(config, []() { return false; }, seam), EXIT_FAILURE);
   EXPECT_FALSE(observed);
 }
 
-TEST(AnalysisTest, CoordinatorRetainsMidPassRecordsOnInterruption) {
-  BenchmarkConfig config;
-  config.tlb_sweep_density = TlbSweepDensity::Low;
-  TlbAnalysisExecutionSeam seam = make_tlb_execution_seam();
-  TlbAnalysisCoordinatorSummary summary;
-  seam.execute_pass = [](TlbMeasurementPass pass,
-                         const std::vector<TlbSweepPoint>& points) {
-    return make_pass_result(pass,
-                            points,
-                            TlbScheduleExecutionStatus::Interrupted,
-                            4,
-                            0);
+TEST(AnalysisTest, CoordinatorRetainsPartialEvidenceOnInterruptionAndError) {
+  struct TestCase {
+    TlbScheduleExecutionStatus pass_status;
+    size_t completed_points;
+    size_t rounds_completed;
+    int expected_exit_code;
+    TlbAnalysisCoordinatorStatus expected_status;
+    std::string expected_status_text;
   };
-  seam.observe_summary = [&](const TlbAnalysisCoordinatorSummary& value) {
-    summary = value;
+  const std::vector<TestCase> test_cases = {
+      {TlbScheduleExecutionStatus::Interrupted, 4, 0, EXIT_SUCCESS, TlbAnalysisCoordinatorStatus::Interrupted,
+       "interrupted"},
+      {TlbScheduleExecutionStatus::Error, 5, 1, EXIT_FAILURE, TlbAnalysisCoordinatorStatus::Error, "error"},
   };
 
-  EXPECT_EQ(run_tlb_analysis_silently(config, []() { return false; }, seam),
-            EXIT_SUCCESS);
-  EXPECT_EQ(summary.status, TlbAnalysisCoordinatorStatus::Interrupted);
-  EXPECT_EQ(summary.status_text, "interrupted");
-  EXPECT_EQ(summary.planned_points, 15u);
-  EXPECT_EQ(summary.completed_points, 4u);
-  EXPECT_EQ(summary.planned_passes, 1u);
-  EXPECT_EQ(summary.completed_passes, 0u);
-  EXPECT_EQ(summary.measurement_record_count, 4u);
-  EXPECT_FALSE(summary.conclusions_valid);
-  ASSERT_EQ(summary.pass_summaries.size(), 1u);
-  EXPECT_EQ(summary.pass_summaries[0].status,
-            TlbScheduleExecutionStatus::Interrupted);
-}
+  for (const TestCase& test_case : test_cases) {
+    SCOPED_TRACE(test_case.expected_status_text);
+    BenchmarkConfig config;
+    config.tlb_sweep_density = TlbSweepDensity::Low;
+    TlbAnalysisExecutionSeam seam = make_tlb_execution_seam();
+    TlbAnalysisCoordinatorSummary summary;
+    seam.execute_pass = [test_case](TlbMeasurementPass pass, const std::vector<TlbSweepPoint>& points) {
+      return make_pass_result(pass, points, test_case.pass_status, test_case.completed_points,
+                              test_case.rounds_completed);
+    };
+    seam.observe_summary = [&](const TlbAnalysisCoordinatorSummary& value) { summary = value; };
 
-TEST(AnalysisTest, CoordinatorRetainsValidRecordsAndInvalidatesConclusionsOnError) {
-  BenchmarkConfig config;
-  config.tlb_sweep_density = TlbSweepDensity::Low;
-  TlbAnalysisExecutionSeam seam = make_tlb_execution_seam();
-  TlbAnalysisCoordinatorSummary summary;
-  seam.execute_pass = [](TlbMeasurementPass pass,
-                         const std::vector<TlbSweepPoint>& points) {
-    return make_pass_result(pass,
-                            points,
-                            TlbScheduleExecutionStatus::Error,
-                            5,
-                            1);
-  };
-  seam.observe_summary = [&](const TlbAnalysisCoordinatorSummary& value) {
-    summary = value;
-  };
-
-  EXPECT_EQ(run_tlb_analysis_silently(config, []() { return false; }, seam),
-            EXIT_FAILURE);
-  EXPECT_EQ(summary.status, TlbAnalysisCoordinatorStatus::Error);
-  EXPECT_EQ(summary.status_text, "error");
-  EXPECT_EQ(summary.planned_points, 15u);
-  EXPECT_EQ(summary.completed_points, 5u);
-  EXPECT_EQ(summary.planned_passes, 1u);
-  EXPECT_EQ(summary.completed_passes, 0u);
-  EXPECT_EQ(summary.measurement_record_count, 5u);
-  EXPECT_FALSE(summary.conclusions_valid);
-  ASSERT_EQ(summary.pass_summaries.size(), 1u);
-  EXPECT_EQ(summary.pass_summaries[0].status,
-            TlbScheduleExecutionStatus::Error);
+    EXPECT_EQ(run_tlb_analysis_silently(config, []() { return false; }, seam), test_case.expected_exit_code);
+    EXPECT_EQ(summary.status, test_case.expected_status);
+    EXPECT_EQ(summary.status_text, test_case.expected_status_text);
+    EXPECT_EQ(summary.planned_points, 15u);
+    EXPECT_EQ(summary.completed_points, test_case.completed_points);
+    EXPECT_EQ(summary.planned_passes, 1u);
+    EXPECT_EQ(summary.completed_passes, 0u);
+    EXPECT_EQ(summary.measurement_record_count, test_case.completed_points);
+    EXPECT_FALSE(summary.conclusions_valid);
+    ASSERT_EQ(summary.pass_summaries.size(), 1u);
+    EXPECT_EQ(summary.pass_summaries[0].status, test_case.pass_status);
+  }
 }
 
 TEST(AnalysisTest, CoordinatorCompletesWithoutLargeLocalityWithExactCounters) {
@@ -248,23 +202,14 @@ TEST(AnalysisTest, CoordinatorCompletesWithoutLargeLocalityWithExactCounters) {
   TlbAnalysisExecutionSeam seam = make_tlb_execution_seam();
   TlbAnalysisCoordinatorSummary summary;
   std::vector<TlbMeasurementPass> executed_passes;
-  seam.execute_pass = [&](TlbMeasurementPass pass,
-                          const std::vector<TlbSweepPoint>& points) {
+  seam.execute_pass = [&](TlbMeasurementPass pass, const std::vector<TlbSweepPoint>& points) {
     executed_passes.push_back(pass);
-    return make_pass_result(pass,
-                            points,
-                            TlbScheduleExecutionStatus::Complete,
-                            points.size(),
-                            7);
+    return make_pass_result(pass, points, TlbScheduleExecutionStatus::Complete, points.size(), 7);
   };
-  seam.observe_summary = [&](const TlbAnalysisCoordinatorSummary& value) {
-    summary = value;
-  };
+  seam.observe_summary = [&](const TlbAnalysisCoordinatorSummary& value) { summary = value; };
 
-  EXPECT_EQ(run_tlb_analysis_silently(config, []() { return false; }, seam),
-            EXIT_SUCCESS);
-  EXPECT_EQ(executed_passes,
-            (std::vector<TlbMeasurementPass>{TlbMeasurementPass::Base}));
+  EXPECT_EQ(run_tlb_analysis_silently(config, []() { return false; }, seam), EXIT_SUCCESS);
+  EXPECT_EQ(executed_passes, (std::vector<TlbMeasurementPass>{TlbMeasurementPass::Base}));
   EXPECT_EQ(summary.status, TlbAnalysisCoordinatorStatus::Complete);
   EXPECT_EQ(summary.status_text, "complete");
   EXPECT_EQ(summary.planned_points, 15u);
@@ -282,108 +227,66 @@ TEST(AnalysisTest, CoordinatorCompletesWithoutLargeLocalityWithExactCounters) {
   EXPECT_EQ(summary.pass_summaries[0].rounds_completed, 7u);
   EXPECT_TRUE(summary.pass_summaries[0].converged);
   EXPECT_TRUE(summary.pass_summaries[0].complete);
-  EXPECT_EQ(summary.pass_summaries[0].status,
-            TlbScheduleExecutionStatus::Complete);
+  EXPECT_EQ(summary.pass_summaries[0].status, TlbScheduleExecutionStatus::Complete);
 }
 
 TEST(AnalysisTest, PairedSummaryUsesMedianOfSameRoundDeltasAndFiltersPasses) {
   const size_t locality = 2 * Constants::BYTES_PER_MB;
   std::vector<TlbMeasurementRecord> records = {
-      make_paired_summary_record(TlbMeasurementPass::Base,
-                                 locality,
-                                 10.0,
-                                 9.0,
-                                 1.0),
-      make_paired_summary_record(TlbMeasurementPass::Base,
-                                 locality,
-                                 100.0,
-                                 90.0,
-                                 10.0),
-      make_paired_summary_record(TlbMeasurementPass::Base,
-                                 locality,
-                                 101.0,
-                                 100.0,
-                                 1.0),
-      make_paired_summary_record(TlbMeasurementPass::Validation,
-                                 locality,
-                                 1000.0,
-                                 1.0,
-                                 999.0),
+      make_paired_summary_record(TlbMeasurementPass::Base, locality, 10.0, 9.0, 1.0),
+      make_paired_summary_record(TlbMeasurementPass::Base, locality, 100.0, 90.0, 10.0),
+      make_paired_summary_record(TlbMeasurementPass::Base, locality, 101.0, 100.0, 1.0),
+      make_paired_summary_record(TlbMeasurementPass::Validation, locality, 1000.0, 1.0, 999.0),
   };
 
-  const TlbPairedPointSummary summary = summarize_tlb_paired_point(
-      records, locality, {TlbMeasurementPass::Base});
+  const TlbPairedPointSummary summary = summarize_tlb_paired_point(records, locality, {TlbMeasurementPass::Base});
 
   ASSERT_TRUE(summary.available);
   EXPECT_DOUBLE_EQ(summary.spread_p50_ns, 100.0);
   EXPECT_DOUBLE_EQ(summary.packed_p50_ns, 90.0);
   EXPECT_DOUBLE_EQ(summary.translation_delta_p50_ns, 1.0);
-  EXPECT_NE(summary.translation_delta_p50_ns,
-            summary.spread_p50_ns - summary.packed_p50_ns);
+  EXPECT_NE(summary.translation_delta_p50_ns, summary.spread_p50_ns - summary.packed_p50_ns);
   EXPECT_EQ(summary.spread_actual_pages, 128u);
   EXPECT_EQ(summary.packed_actual_pages, 1u);
   EXPECT_EQ(summary.unique_cache_lines, 128u);
-  EXPECT_EQ(summary.active_cache_line_footprint_bytes,
-            128u * Constants::CACHE_LINE_SIZE_BYTES);
+  EXPECT_EQ(summary.active_cache_line_footprint_bytes, 128u * Constants::CACHE_LINE_SIZE_BYTES);
   EXPECT_EQ(summary.node_count, 128u);
   EXPECT_FALSE(summary.short_cycle_diagnostic);
 }
 
 TEST(AnalysisTest, PairedSummaryRejectsInconsistentDiagnostics) {
   const size_t locality = Constants::BYTES_PER_MB;
-  TlbMeasurementRecord first = make_paired_summary_record(
-      TlbMeasurementPass::Base, locality, 10.0, 8.0, 2.0, 32);
+  TlbMeasurementRecord first = make_paired_summary_record(TlbMeasurementPass::Base, locality, 10.0, 8.0, 2.0, 32);
   TlbMeasurementRecord second = first;
   second.paired.packed.diagnostics.unique_cache_lines = 31;
 
-  EXPECT_FALSE(summarize_tlb_paired_point(
-                   {first, second}, locality, {TlbMeasurementPass::Base})
-                   .available);
+  EXPECT_FALSE(summarize_tlb_paired_point({first, second}, locality, {TlbMeasurementPass::Base}).available);
 
-  const TlbPairedPointSummary short_summary = summarize_tlb_paired_point(
-      {first}, locality, {TlbMeasurementPass::Base});
+  const TlbPairedPointSummary short_summary = summarize_tlb_paired_point({first}, locality, {TlbMeasurementPass::Base});
   ASSERT_TRUE(short_summary.available);
   EXPECT_TRUE(short_summary.short_cycle_diagnostic);
 }
 
 TEST(AnalysisTest, PairedSummaryRequiresAvailableMatchingRecords) {
   const size_t locality = Constants::BYTES_PER_MB;
-  TlbMeasurementRecord unavailable = make_paired_summary_record(
-      TlbMeasurementPass::Base, locality, 10.0, 8.0, 2.0);
+  TlbMeasurementRecord unavailable = make_paired_summary_record(TlbMeasurementPass::Base, locality, 10.0, 8.0, 2.0);
   unavailable.paired.available = false;
 
+  EXPECT_FALSE(summarize_tlb_paired_point({unavailable}, locality, {TlbMeasurementPass::Base}).available);
   EXPECT_FALSE(summarize_tlb_paired_point(
-                   {unavailable}, locality, {TlbMeasurementPass::Base})
+                   {make_paired_summary_record(TlbMeasurementPass::Base, locality, 10.0, 8.0, 2.0), unavailable},
+                   locality, {TlbMeasurementPass::Base})
                    .available);
-  EXPECT_FALSE(summarize_tlb_paired_point(
-                   {make_paired_summary_record(TlbMeasurementPass::Base,
-                                               locality,
-                                               10.0,
-                                               8.0,
-                                               2.0),
-                    unavailable},
-                   locality,
-                   {TlbMeasurementPass::Base})
-                   .available);
-  EXPECT_FALSE(summarize_tlb_paired_point(
-                   {make_paired_summary_record(TlbMeasurementPass::Validation,
-                                               locality,
-                                               10.0,
-                                               8.0,
-                                               2.0)},
-                   locality,
-                   {TlbMeasurementPass::Base})
-                   .available);
+  EXPECT_FALSE(
+      summarize_tlb_paired_point({make_paired_summary_record(TlbMeasurementPass::Validation, locality, 10.0, 8.0, 2.0)},
+                                 locality, {TlbMeasurementPass::Base})
+          .available);
 }
 
 TEST(AnalysisTest, DetectBoundaryFindsL1Transition) {
   const std::vector<size_t> localities = {
-      64 * Constants::BYTES_PER_KB,
-      128 * Constants::BYTES_PER_KB,
-      256 * Constants::BYTES_PER_KB,
-      512 * Constants::BYTES_PER_KB,
-      1 * Constants::BYTES_PER_MB,
-      2 * Constants::BYTES_PER_MB,
+      64 * Constants::BYTES_PER_KB,  128 * Constants::BYTES_PER_KB, 256 * Constants::BYTES_PER_KB,
+      512 * Constants::BYTES_PER_KB, 1 * Constants::BYTES_PER_MB,   2 * Constants::BYTES_PER_MB,
   };
   const std::vector<double> latencies_ns = {10.0, 10.2, 10.1, 10.3, 13.6, 13.8};
 
@@ -399,12 +302,8 @@ TEST(AnalysisTest, DetectBoundaryFindsL1Transition) {
 
 TEST(AnalysisTest, DetectBoundaryReturnsNotDetectedForFlatData) {
   const std::vector<size_t> localities = {
-      64 * Constants::BYTES_PER_KB,
-      128 * Constants::BYTES_PER_KB,
-      256 * Constants::BYTES_PER_KB,
-      512 * Constants::BYTES_PER_KB,
-      1 * Constants::BYTES_PER_MB,
-      2 * Constants::BYTES_PER_MB,
+      64 * Constants::BYTES_PER_KB,  128 * Constants::BYTES_PER_KB, 256 * Constants::BYTES_PER_KB,
+      512 * Constants::BYTES_PER_KB, 1 * Constants::BYTES_PER_MB,   2 * Constants::BYTES_PER_MB,
   };
   const std::vector<double> latencies_ns = {10.0, 10.3, 10.4, 10.6, 10.8, 10.9};
 
@@ -415,16 +314,12 @@ TEST(AnalysisTest, DetectBoundaryReturnsNotDetectedForFlatData) {
 TEST(AnalysisTest, RobustBoundaryAcceptsPersistentStepWithIndependentValidation) {
   const size_t page_size = 16 * Constants::BYTES_PER_KB;
   const std::vector<size_t> localities = {
-      page_size, 2 * page_size, 4 * page_size,
-      8 * page_size, 16 * page_size, 32 * page_size,
+      page_size, 2 * page_size, 4 * page_size, 8 * page_size, 16 * page_size, 32 * page_size,
   };
-  const TlbRoundPointMatrix discovery =
-      make_round_point_matrix({0.10, 0.12, 2.10, 2.20, 2.25, 2.30});
-  const TlbRoundPointMatrix validation =
-      make_round_point_matrix({0.08, 0.10, 2.00, 2.15, 2.20, 2.25});
+  const TlbRoundPointMatrix discovery = make_round_point_matrix({0.10, 0.12, 2.10, 2.20, 2.25, 2.30});
+  const TlbRoundPointMatrix validation = make_round_point_matrix({0.08, 0.10, 2.00, 2.15, 2.20, 2.25});
 
-  const TlbBoundaryDetection boundary = detect_tlb_boundary_robust(
-      localities, discovery, &validation, 0, 0, 123456);
+  const TlbBoundaryDetection boundary = detect_tlb_boundary_robust(localities, discovery, &validation, 0, 0, 123456);
 
   ASSERT_TRUE(boundary.detected);
   EXPECT_EQ(boundary.boundary_index, 2u);
@@ -433,80 +328,61 @@ TEST(AnalysisTest, RobustBoundaryAcceptsPersistentStepWithIndependentValidation)
   EXPECT_TRUE(boundary.discovery.passed);
   EXPECT_TRUE(boundary.validation.passed);
   EXPECT_EQ(boundary.discovery.persistence_points_passed, 2u);
-  EXPECT_GT(boundary.discovery.effect_ci.lower_ns,
-            boundary.discovery.noise_floor_ns);
+  EXPECT_GT(boundary.discovery.effect_ci.lower_ns, boundary.discovery.noise_floor_ns);
 }
 
 TEST(AnalysisTest, RobustBoundaryRejectsSingleSpikeThatReturnsToBaseline) {
   const size_t page_size = 16 * Constants::BYTES_PER_KB;
   const std::vector<size_t> localities = {
-      page_size, 2 * page_size, 4 * page_size,
-      8 * page_size, 16 * page_size, 32 * page_size,
+      page_size, 2 * page_size, 4 * page_size, 8 * page_size, 16 * page_size, 32 * page_size,
   };
-  const TlbRoundPointMatrix discovery =
-      make_round_point_matrix({0.10, 0.12, 5.00, 0.15, 0.14, 0.16});
+  const TlbRoundPointMatrix discovery = make_round_point_matrix({0.10, 0.12, 5.00, 0.15, 0.14, 0.16});
   const TlbRoundPointMatrix validation = discovery;
 
-  const TlbBoundaryDetection boundary = detect_tlb_boundary_robust(
-      localities, discovery, &validation, 0, 0, 77);
+  const TlbBoundaryDetection boundary = detect_tlb_boundary_robust(localities, discovery, &validation, 0, 0, 77);
 
   EXPECT_FALSE(boundary.detected);
   ASSERT_FALSE(boundary.candidates.empty());
   EXPECT_EQ(boundary.candidates.front().boundary_index, 2u);
   EXPECT_FALSE(boundary.candidates.front().discovery.passed);
-  EXPECT_EQ(boundary.candidates.front().discovery.rejection_reason,
-            "persistence-not-confirmed");
+  EXPECT_EQ(boundary.candidates.front().discovery.rejection_reason, "persistence-not-confirmed");
 }
 
 TEST(AnalysisTest, RobustBoundaryRequiresIndependentValidationEvidence) {
   const size_t page_size = 16 * Constants::BYTES_PER_KB;
   const std::vector<size_t> localities = {
-      page_size, 2 * page_size, 4 * page_size,
-      8 * page_size, 16 * page_size, 32 * page_size,
+      page_size, 2 * page_size, 4 * page_size, 8 * page_size, 16 * page_size, 32 * page_size,
   };
-  const TlbRoundPointMatrix discovery =
-      make_round_point_matrix({0.10, 0.12, 2.10, 2.20, 2.25, 2.30});
-  const TlbRoundPointMatrix flat_validation =
-      make_round_point_matrix({0.10, 0.12, 0.13, 0.14, 0.15, 0.16});
+  const TlbRoundPointMatrix discovery = make_round_point_matrix({0.10, 0.12, 2.10, 2.20, 2.25, 2.30});
+  const TlbRoundPointMatrix flat_validation = make_round_point_matrix({0.10, 0.12, 0.13, 0.14, 0.15, 0.16});
 
-  const TlbBoundaryDetection boundary = detect_tlb_boundary_robust(
-      localities, discovery, &flat_validation, 0, 0, 99);
+  const TlbBoundaryDetection boundary = detect_tlb_boundary_robust(localities, discovery, &flat_validation, 0, 0, 99);
 
   EXPECT_FALSE(boundary.detected);
   ASSERT_FALSE(boundary.candidates.empty());
   EXPECT_TRUE(boundary.candidates.front().discovery.passed);
   EXPECT_FALSE(boundary.candidates.front().validation.passed);
-  EXPECT_EQ(boundary.candidates.front().validation.rejection_reason,
-            "effect-below-minimum");
+  EXPECT_EQ(boundary.candidates.front().validation.rejection_reason, "effect-below-minimum");
 }
 
 TEST(AnalysisTest, RobustBoundaryBootstrapIsDeterministicForSameSeed) {
   const size_t page_size = 16 * Constants::BYTES_PER_KB;
   const std::vector<size_t> localities = {
-      page_size, 2 * page_size, 4 * page_size,
-      8 * page_size, 16 * page_size, 32 * page_size,
+      page_size, 2 * page_size, 4 * page_size, 8 * page_size, 16 * page_size, 32 * page_size,
   };
-  const TlbRoundPointMatrix discovery =
-      make_round_point_matrix({0.10, 0.12, 2.10, 2.20, 2.25, 2.30});
-  const TlbRoundPointMatrix validation =
-      make_round_point_matrix({0.08, 0.10, 2.00, 2.15, 2.20, 2.25});
+  const TlbRoundPointMatrix discovery = make_round_point_matrix({0.10, 0.12, 2.10, 2.20, 2.25, 2.30});
+  const TlbRoundPointMatrix validation = make_round_point_matrix({0.08, 0.10, 2.00, 2.15, 2.20, 2.25});
 
-  const TlbBoundaryDetection first = detect_tlb_boundary_robust(
-      localities, discovery, &validation, 0, 0, 4242);
-  const TlbBoundaryDetection second = detect_tlb_boundary_robust(
-      localities, discovery, &validation, 0, 0, 4242);
+  const TlbBoundaryDetection first = detect_tlb_boundary_robust(localities, discovery, &validation, 0, 0, 4242);
+  const TlbBoundaryDetection second = detect_tlb_boundary_robust(localities, discovery, &validation, 0, 0, 4242);
 
   ASSERT_TRUE(first.detected);
   ASSERT_TRUE(second.detected);
   EXPECT_EQ(first.confidence, second.confidence);
-  EXPECT_DOUBLE_EQ(first.discovery.effect_ci.lower_ns,
-                   second.discovery.effect_ci.lower_ns);
-  EXPECT_DOUBLE_EQ(first.discovery.effect_ci.upper_ns,
-                   second.discovery.effect_ci.upper_ns);
-  EXPECT_DOUBLE_EQ(first.validation.effect_ci.lower_ns,
-                   second.validation.effect_ci.lower_ns);
-  EXPECT_DOUBLE_EQ(first.validation.effect_ci.upper_ns,
-                   second.validation.effect_ci.upper_ns);
+  EXPECT_DOUBLE_EQ(first.discovery.effect_ci.lower_ns, second.discovery.effect_ci.lower_ns);
+  EXPECT_DOUBLE_EQ(first.discovery.effect_ci.upper_ns, second.discovery.effect_ci.upper_ns);
+  EXPECT_DOUBLE_EQ(first.validation.effect_ci.lower_ns, second.validation.effect_ci.lower_ns);
+  EXPECT_DOUBLE_EQ(first.validation.effect_ci.upper_ns, second.validation.effect_ci.upper_ns);
 }
 
 TEST(AnalysisTest, TranslationDeltaMatrixPreservesRoundAndPointCoordinates) {
@@ -523,8 +399,8 @@ TEST(AnalysisTest, TranslationDeltaMatrixPreservesRoundAndPointCoordinates) {
   validation.round_index = 0;
   validation.paired.translation_delta_ns = 1.25;
 
-  const TlbRoundPointMatrix matrix = build_tlb_translation_delta_matrix(
-      localities, {base, validation}, {TlbMeasurementPass::Base});
+  const TlbRoundPointMatrix matrix =
+      build_tlb_translation_delta_matrix(localities, {base, validation}, {TlbMeasurementPass::Base});
 
   ASSERT_EQ(matrix.size(), 2u);
   ASSERT_EQ(matrix[0].size(), 2u);
@@ -536,17 +412,10 @@ TEST(AnalysisTest, TranslationDeltaMatrixPreservesRoundAndPointCoordinates) {
 
 TEST(AnalysisTest, DetectBoundaryFindsSecondTransitionFromNewSegment) {
   const std::vector<size_t> localities = {
-      64 * Constants::BYTES_PER_KB,
-      128 * Constants::BYTES_PER_KB,
-      256 * Constants::BYTES_PER_KB,
-      512 * Constants::BYTES_PER_KB,
-      1 * Constants::BYTES_PER_MB,
-      2 * Constants::BYTES_PER_MB,
-      4 * Constants::BYTES_PER_MB,
-      8 * Constants::BYTES_PER_MB,
-      16 * Constants::BYTES_PER_MB,
-      32 * Constants::BYTES_PER_MB,
-      64 * Constants::BYTES_PER_MB,
+      64 * Constants::BYTES_PER_KB,  128 * Constants::BYTES_PER_KB, 256 * Constants::BYTES_PER_KB,
+      512 * Constants::BYTES_PER_KB, 1 * Constants::BYTES_PER_MB,   2 * Constants::BYTES_PER_MB,
+      4 * Constants::BYTES_PER_MB,   8 * Constants::BYTES_PER_MB,   16 * Constants::BYTES_PER_MB,
+      32 * Constants::BYTES_PER_MB,  64 * Constants::BYTES_PER_MB,
   };
   const std::vector<double> latencies_ns = {
       10.0, 10.1, 10.2, 10.1, 13.4, 13.5, 13.6, 13.7, 13.8, 14.0, 25.0,
@@ -556,8 +425,7 @@ TEST(AnalysisTest, DetectBoundaryFindsSecondTransitionFromNewSegment) {
   ASSERT_TRUE(l1_boundary.detected);
   EXPECT_EQ(l1_boundary.boundary_index, 4u);
 
-  const TlbBoundaryDetection l2_boundary =
-      detect_tlb_boundary(localities, latencies_ns, l1_boundary.boundary_index);
+  const TlbBoundaryDetection l2_boundary = detect_tlb_boundary(localities, latencies_ns, l1_boundary.boundary_index);
   EXPECT_TRUE(l2_boundary.detected);
   EXPECT_EQ(l2_boundary.boundary_index, 10u);
   EXPECT_EQ(l2_boundary.boundary_locality_bytes, 64u * Constants::BYTES_PER_MB);
@@ -565,14 +433,9 @@ TEST(AnalysisTest, DetectBoundaryFindsSecondTransitionFromNewSegment) {
 
 TEST(AnalysisTest, DetectBoundaryWithGuardSkipsLikelyCacheTransition) {
   const std::vector<size_t> localities = {
-      16 * Constants::BYTES_PER_KB,
-      64 * Constants::BYTES_PER_KB,
-      128 * Constants::BYTES_PER_KB,
-      256 * Constants::BYTES_PER_KB,
-      512 * Constants::BYTES_PER_KB,
-      1 * Constants::BYTES_PER_MB,
-      2 * Constants::BYTES_PER_MB,
-      4 * Constants::BYTES_PER_MB,
+      16 * Constants::BYTES_PER_KB,  64 * Constants::BYTES_PER_KB,  128 * Constants::BYTES_PER_KB,
+      256 * Constants::BYTES_PER_KB, 512 * Constants::BYTES_PER_KB, 1 * Constants::BYTES_PER_MB,
+      2 * Constants::BYTES_PER_MB,   4 * Constants::BYTES_PER_MB,
   };
   const std::vector<double> latencies_ns = {10.0, 10.1, 12.4, 12.2, 12.3, 12.5, 12.7, 17.5};
 
@@ -580,54 +443,15 @@ TEST(AnalysisTest, DetectBoundaryWithGuardSkipsLikelyCacheTransition) {
   const size_t page_bytes = 16 * Constants::BYTES_PER_KB;
   const size_t tlb_guard_bytes = std::max<size_t>(2 * l1d_bytes, 64 * page_bytes);
 
-  const TlbBoundaryDetection boundary =
-      detect_tlb_boundary(localities, latencies_ns, 0, tlb_guard_bytes);
+  const TlbBoundaryDetection boundary = detect_tlb_boundary(localities, latencies_ns, 0, tlb_guard_bytes);
   EXPECT_TRUE(boundary.detected);
   EXPECT_EQ(boundary.boundary_locality_bytes, 4u * Constants::BYTES_PER_MB);
 }
 
-TEST(AnalysisTest, InferTlbEntriesFromBoundaryAndPageSize) {
-  const size_t entries = infer_tlb_entries(4 * Constants::BYTES_PER_MB, 16 * Constants::BYTES_PER_KB);
-  EXPECT_EQ(entries, 256u);
-}
-
-TEST(AnalysisTest, InferTlbEntriesRangeFromBoundaryWindow) {
+TEST(AnalysisTest, DetectPrivateCacheKneeClassifiesStrongAndEarlyCandidates) {
   const std::vector<size_t> localities = {
-      2 * Constants::BYTES_PER_MB,
-      3 * Constants::BYTES_PER_MB,
-      4 * Constants::BYTES_PER_MB,
-  };
-  const std::pair<size_t, size_t> range = infer_tlb_entries_range(
-      localities,
-      1,
-      16 * Constants::BYTES_PER_KB);
-
-  EXPECT_EQ(range.first, 128u);
-  EXPECT_EQ(range.second, 192u);
-}
-
-TEST(AnalysisTest, InferTlbEntriesEstimateUsesBoundaryWindowMidpoint) {
-  const std::vector<size_t> localities = {
-      2 * Constants::BYTES_PER_MB,
-      3 * Constants::BYTES_PER_MB,
-      4 * Constants::BYTES_PER_MB,
-  };
-  const size_t estimate = infer_tlb_entries_estimate(
-      localities,
-      1,
-      16 * Constants::BYTES_PER_KB);
-
-  EXPECT_EQ(estimate, 160u);
-}
-
-TEST(AnalysisTest, DetectPrivateCacheKneeNearOneMegabyte) {
-  const std::vector<size_t> localities = {
-      256 * Constants::BYTES_PER_KB,
-      512 * Constants::BYTES_PER_KB,
-      768 * Constants::BYTES_PER_KB,
-      1 * Constants::BYTES_PER_MB,
-      2 * Constants::BYTES_PER_MB,
-      4 * Constants::BYTES_PER_MB,
+      256 * Constants::BYTES_PER_KB, 512 * Constants::BYTES_PER_KB, 768 * Constants::BYTES_PER_KB,
+      1 * Constants::BYTES_PER_MB,   2 * Constants::BYTES_PER_MB,   4 * Constants::BYTES_PER_MB,
   };
   const std::vector<double> latencies_ns = {10.0, 10.1, 10.2, 14.5, 14.7, 15.0};
 
@@ -637,24 +461,19 @@ TEST(AnalysisTest, DetectPrivateCacheKneeNearOneMegabyte) {
   EXPECT_TRUE(knee.strong_private_cache_candidate);
   EXPECT_FALSE(knee.early_cache_candidate);
   EXPECT_TRUE(knee.may_interfere_with_tlb);
-}
 
-TEST(AnalysisTest, DetectPrivateCacheKneeClassifiesEarlyCandidate) {
-  const std::vector<size_t> localities = {
-      256 * Constants::BYTES_PER_KB,
-      512 * Constants::BYTES_PER_KB,
-      768 * Constants::BYTES_PER_KB,
-      1 * Constants::BYTES_PER_MB,
-      2 * Constants::BYTES_PER_MB,
+  const std::vector<size_t> early_localities = {
+      256 * Constants::BYTES_PER_KB, 512 * Constants::BYTES_PER_KB, 768 * Constants::BYTES_PER_KB,
+      1 * Constants::BYTES_PER_MB,   2 * Constants::BYTES_PER_MB,
   };
-  const std::vector<double> latencies_ns = {10.0, 12.8, 12.9, 13.0, 13.1};
+  const std::vector<double> early_latencies_ns = {10.0, 12.8, 12.9, 13.0, 13.1};
 
-  const PrivateCacheKneeDetection knee = detect_private_cache_knee(localities, latencies_ns);
-  EXPECT_TRUE(knee.detected);
-  EXPECT_EQ(knee.boundary_locality_bytes, 512u * Constants::BYTES_PER_KB);
-  EXPECT_FALSE(knee.strong_private_cache_candidate);
-  EXPECT_TRUE(knee.early_cache_candidate);
-  EXPECT_FALSE(knee.may_interfere_with_tlb);
+  const PrivateCacheKneeDetection early_knee = detect_private_cache_knee(early_localities, early_latencies_ns);
+  EXPECT_TRUE(early_knee.detected);
+  EXPECT_EQ(early_knee.boundary_locality_bytes, 512u * Constants::BYTES_PER_KB);
+  EXPECT_FALSE(early_knee.strong_private_cache_candidate);
+  EXPECT_TRUE(early_knee.early_cache_candidate);
+  EXPECT_FALSE(early_knee.may_interfere_with_tlb);
 }
 
 TEST(AnalysisTest, ConfidenceClassification) {
@@ -667,9 +486,8 @@ TEST(AnalysisTest, DetectBoundaryMultiPointPersistenceSurvivesNoiseDip) {
   // Step at 4MB, noise dip at 8MB, recovery at 16MB — should still be detected
   // with persistent_jump = true via majority rule (2 of 3 future points pass).
   const std::vector<size_t> localities = {
-      1 * Constants::BYTES_PER_MB,   2 * Constants::BYTES_PER_MB,
-      4 * Constants::BYTES_PER_MB,   8 * Constants::BYTES_PER_MB,
-      16 * Constants::BYTES_PER_MB,  32 * Constants::BYTES_PER_MB,
+      1 * Constants::BYTES_PER_MB,  2 * Constants::BYTES_PER_MB,  4 * Constants::BYTES_PER_MB,
+      8 * Constants::BYTES_PER_MB,  16 * Constants::BYTES_PER_MB, 32 * Constants::BYTES_PER_MB,
       64 * Constants::BYTES_PER_MB,
   };
   const std::vector<double> latencies_ns = {
@@ -685,16 +503,15 @@ TEST(AnalysisTest, DetectBoundaryMultiPointPersistenceSurvivesNoiseDip) {
   EXPECT_EQ(boundary.confidence, "High");
 }
 
-TEST(AnalysisTest, DetectBoundaryRejectsNoisyStepByIQR) {
+TEST(AnalysisTest, DetectBoundaryIqrDistinguishesNoisyAndClearSteps) {
   // P50 shows a step at 4MB, but the raw loop IQRs overlap — should be rejected.
   // Baseline rows use bimodal {5.0, 15.0} distribution: P50=10, Q3=15.
   // Candidate has wide {13..25} distribution: P50=20, Q1=13.
   // baseline avg Q3 (15.0) >= candidate Q1 (13.0) → overlap → reject.
   const std::vector<size_t> localities = {
-      16 * Constants::BYTES_PER_KB,   64 * Constants::BYTES_PER_KB,
-      128 * Constants::BYTES_PER_KB,  256 * Constants::BYTES_PER_KB,
-      512 * Constants::BYTES_PER_KB,  1 * Constants::BYTES_PER_MB,
-      2 * Constants::BYTES_PER_MB,    4 * Constants::BYTES_PER_MB,
+      16 * Constants::BYTES_PER_KB,  64 * Constants::BYTES_PER_KB,  128 * Constants::BYTES_PER_KB,
+      256 * Constants::BYTES_PER_KB, 512 * Constants::BYTES_PER_KB, 1 * Constants::BYTES_PER_MB,
+      2 * Constants::BYTES_PER_MB,   4 * Constants::BYTES_PER_MB,
   };
   const std::vector<double> latencies_ns = {
       10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 20.0,
@@ -712,53 +529,35 @@ TEST(AnalysisTest, DetectBoundaryRejectsNoisyStepByIQR) {
     loop_latencies[7][k] = 13.0 + static_cast<double>(k % 7) * 2.0;
   }
 
-  const TlbBoundaryDetection boundary =
-      detect_tlb_boundary(localities, latencies_ns, 0, 0, &loop_latencies);
+  const TlbBoundaryDetection boundary = detect_tlb_boundary(localities, latencies_ns, 0, 0, &loop_latencies);
   EXPECT_FALSE(boundary.detected);
-}
 
-TEST(AnalysisTest, DetectBoundaryAcceptsClearStepWithIQR) {
   // Same bimodal baseline as the reject test, but candidate has tight variance
   // so IQRs don't overlap → boundary accepted.
-  const std::vector<size_t> localities = {
-      16 * Constants::BYTES_PER_KB,   64 * Constants::BYTES_PER_KB,
-      128 * Constants::BYTES_PER_KB,  256 * Constants::BYTES_PER_KB,
-      512 * Constants::BYTES_PER_KB,  1 * Constants::BYTES_PER_MB,
-      2 * Constants::BYTES_PER_MB,    4 * Constants::BYTES_PER_MB,
-  };
-  const std::vector<double> latencies_ns = {
+  const std::vector<double> clear_latencies_ns = {
       10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 22.0,
   };
 
-  std::vector<std::vector<double>> loop_latencies(8, std::vector<double>(30));
-  // Baseline rows: bimodal {5.0, 15.0} → P50=10, Q1=5, Q3=15.
-  for (size_t row = 0; row < 7; ++row) {
-    for (size_t k = 0; k < 30; ++k) {
-      loop_latencies[row][k] = (k < 15) ? 5.0 : 15.0;
-    }
-  }
+  std::vector<std::vector<double>> clear_loop_latencies = loop_latencies;
   // Candidate row: tight variance centered at 22 → Q1=21, Q3=23.
   // baseline avg Q3 (15.0) < candidate Q1 (21.0) → no overlap → accepted.
   for (size_t k = 0; k < 30; ++k) {
-    loop_latencies[7][k] = 22.0 + (static_cast<double>(k % 3) - 1.0) * 1.0;
+    clear_loop_latencies[7][k] = 22.0 + (static_cast<double>(k % 3) - 1.0) * 1.0;
   }
 
-  const TlbBoundaryDetection boundary =
-      detect_tlb_boundary(localities, latencies_ns, 0, 0, &loop_latencies);
-  ASSERT_TRUE(boundary.detected);
-  EXPECT_EQ(boundary.boundary_index, 7u);
-  EXPECT_TRUE(boundary.persistent_jump);
+  const TlbBoundaryDetection clear_boundary =
+      detect_tlb_boundary(localities, clear_latencies_ns, 0, 0, &clear_loop_latencies);
+  ASSERT_TRUE(clear_boundary.detected);
+  EXPECT_EQ(clear_boundary.boundary_index, 7u);
+  EXPECT_TRUE(clear_boundary.persistent_jump);
 }
 
 TEST(AnalysisTest, DetectBoundaryLastPointStrongStepGetsMediumConfidence) {
   // Last sweep point with a strong step (>8 ns) should get Medium confidence
   // (not Low) even though there are no future points for persistence.
   const std::vector<size_t> localities = {
-      64 * Constants::BYTES_PER_KB,
-      128 * Constants::BYTES_PER_KB,
-      256 * Constants::BYTES_PER_KB,
-      512 * Constants::BYTES_PER_KB,
-      1 * Constants::BYTES_PER_MB,
+      64 * Constants::BYTES_PER_KB,  128 * Constants::BYTES_PER_KB, 256 * Constants::BYTES_PER_KB,
+      512 * Constants::BYTES_PER_KB, 1 * Constants::BYTES_PER_MB,
   };
   const std::vector<double> latencies_ns = {10.0, 10.1, 10.2, 10.3, 20.0};
 

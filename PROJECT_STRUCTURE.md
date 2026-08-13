@@ -1,8 +1,8 @@
 # Project Structure — macOS-memory-benchmark
 
-**Version:** 0.61.1
+**Version:** 0.61.2
 **Platform:** ARM64 / AArch64 (Apple Silicon macOS)
-**License:** GNU General Public License v3.0
+**License:** GNU General Public License v3.0 or later
 
 This document describes the layout of project files, organized by purpose. It is intended as a navigation aid for contributors and reviewers.
 
@@ -63,7 +63,7 @@ This document describes the layout of project files, organized by purpose. It is
 | `CORE_TO_CORE_WHITEPAPER.md` | Whitepaper: calibrated two-thread token-handoff methodology, audit schema, and interpretation limits |
 | `GPU_BANDWIDTH_WHITEPAPER.md` | Whitepaper: Metal compute bandwidth methodology, GPU schema 1, validation, capability limits, and maintenance policy |
 | `PROJECT_STRUCTURE.md` | This file |
-| `LICENSE` | GNU General Public License v3.0 license text |
+| `LICENSE` | GNU General Public License v3.0 license text; source headers grant version 3 or any later version |
 
 ---
 
@@ -123,7 +123,7 @@ The benchmark subsystem owns the standard CPU pipeline, standalone TLB analysis,
 | `benchmark_statistics_collector.h` / `.cpp` | Initializes/preallocates statistics storage and accumulates measured per-loop values and latency samples for later aggregation |
 | `benchmark_work_plan.h` / `.cpp` | Pure standard-benchmark work planning, calibration arithmetic, seed derivation, and cyclic scheduling helpers |
 | `parallel_test_framework.h` | Template-based framework for dispatching multi-threaded benchmark work with synchronized start, cache-line-aligned per-thread state, and macOS QoS thread attributes |
-| `sweep_runner.h` / `.cpp` | Shared deterministic sweep executor, completion classification, and checkpointing; provides the standard/pattern/TLB wrapper and is reused by the core-to-core sweep wrapper |
+| `sweep_runner.h` / `.cpp` | Shared deterministic sweep executor, completion classification, and checkpointing; provides standard/pattern/TLB entry-point orchestration and is called directly by the core-to-core sweep runner |
 
 #### TLB analysis mode
 
@@ -160,7 +160,7 @@ Core infrastructure for configuration, memory management, macOS system introspec
 |---|---|
 | `config.h` | `BenchmarkConfig` structure for standard, pattern, standalone TLB, and their common sweep settings; core-to-core and GPU use separate config types |
 | `constants.h` | Named constants for CPU/GPU memory limits, calibration, grid/dispatch/payload guardrails, buffer sizing, and latency access counts |
-| `version.h` | `SOFTVERSION` macro (semantic version string, currently `"0.61.1"`) |
+| `version.h` | `SOFTVERSION` macro (semantic version string, currently `"0.61.2"`) |
 | `mode_selector.h` / `.cpp` | Pure primary-mode scan and conflict detection before mode-specific parsing; routes standard, pattern, TLB, core-to-core, and GPU deterministically |
 | `argument_parser.cpp` | Parses standard, pattern, and standalone TLB options into `BenchmarkConfig`; core-to-core and GPU are pre-routed to dedicated parsers |
 | `config_validator.cpp` | Validates the parsed configuration; emits errors for out-of-range or conflicting settings |
@@ -332,17 +332,17 @@ GoogleTest-based unit and integration test suite. All `.cpp` files are picked up
 | `test_numeric_utils.cpp` | `NumericUtilsTest` | Overflow-safe arithmetic, duration calibration, pilot counts, and quantization boundaries |
 | `test_buffer_manager.cpp` | `BufferManagerTest` | Pattern mapping policy, atomic allocation cleanup, initialized content, validation, and peak accounting |
 | `test_benchmark_executor.cpp` | `BenchmarkExecutorTest` | Injected phase/chain failures, continuous latency sampling, and hardware executor contracts |
-| `test_benchmark_runner.cpp` | `BenchmarkStatisticsCollectorTest`, `BenchmarkRunnerTest` | Status-bearing collection, reset/reserve contracts, checkpointing, and runner failure seams |
+| `test_benchmark_runner.cpp` | `BenchmarkStatisticsCollectorTest`, `BenchmarkRunnerTest` | Status-bearing aggregation, checkpointing, interruption, and runner exception/failure seams |
 | `test_benchmark_work_plan.cpp` | `BenchmarkWorkPlanTest` | Exact payload/access planning, calibration, cyclic order, seed derivation, and duration classification |
 | `test_gpu_bandwidth.cpp` | `GpuBandwidthParserTest`, `GpuMemoryBudgetTest`, `GpuRunnerTest`, `GpuJsonTest` | Strict standalone parsing, memory budgets, fake-backend calibration/execution/failure/interruption semantics, counters, and schema-1 serialization |
-| `test_gpu_work_plan.cpp` | `GpuWorkPlanTest` | GPU constants, cyclic order, seed domains, pass/payload caps, calibration, vector/tail/grid geometry, and frozen identities |
+| `test_gpu_work_plan.cpp` | `GpuWorkPlanTest`, `GpuTimedAccumulatorOracleTest` | GPU constants, cyclic order, seed domains, pass/payload caps, calibration, vector/tail/grid geometry, frozen identities, and timed-accumulator oracle behavior |
 | `test_gpu_metal_backend.cpp` | `GpuMetalBackendIntegrationTest` | Real-Metal capability/runtime compile, private/shared tracked resources, read/write/copy/tail correctness, timestamps, validation, and byte readback |
 | `test_mode_selector.cpp` | `ModeSelectorTest` | Primary-mode detection, GPU aliases, and deterministic multi-mode conflicts |
 | `test_hash_utils.cpp` | `HashUtilsTest` | CommonCrypto SHA-256 standard vectors and source-provenance helper behavior |
 | `test_analysis.cpp` | `AnalysisTest` | Injected TLB coordination, counters/status, boundary detection, validation, and paired analysis |
 | `test_json_schema.cpp` | `JsonSchemaTest` | JSON output structure and field presence |
 | `test_json_utils.cpp` | `JsonUtilsTest`, `JsonFileWriterTest` | JSON parse/statistics and atomic writer success/failure contracts |
-| `test_output_printer.cpp` | `OutputPrinterTest` | Status-aware partial output, mode/cache composition, and size-unit boundaries |
+| `test_output_printer.cpp` | `OutputPrinterTest`, `OutputPrinterCustomCacheUnitsTest` | Status-aware partial output, mode/cache composition, and custom-cache size-unit boundaries |
 | `test_sweep_runner.cpp` | `SweepRunnerTest` | Complete/partial/interrupted/failed attempt accounting and checkpoint behavior |
 | `test_sweep_utils.cpp` | `SweepUtilsTest` | Shared sweep parsing, empty-dimension behavior, and overflow-safe Cartesian counts |
 | `test_pattern_validation.cpp` | `PatternValidationTest` | Pattern benchmark parameter validation |
@@ -352,17 +352,17 @@ GoogleTest-based unit and integration test suite. All `.cpp` files are picked up
 | `test_core_to_core_cli.cpp` | `CoreToCoreCliTest` | Core-to-core CLI argument parsing |
 | `test_core_to_core_runner.cpp` | `CoreToCoreRunnerTest` | Calibration, work planning, cyclic scenario order, deterministic failure seams, and real ARM64 integration paths |
 | `test_executable_cli.cpp` | `ExecutableCliIntegrationTest` | Executable-level CLI routing, invalid config, JSON output, and pattern orchestration smoke coverage |
-| `test_standard_kernels.cpp` | `StandardKernelIntegrationTest` | Real ARM64 standard-kernel ABI, tails, boundaries, checksums, and multi-worker execution |
+| `test_standard_kernels.cpp` | `StandardKernelIntegrationTest`, `PatternKernelIntegrationTest` | Real ARM64 standard/pattern kernel ABI, tails, boundaries, checksums, and multi-worker execution |
 | `test_statistics.cpp` | `StatisticsTest` | Standard multi-loop summary composition, mode filtering, loop/sample population separation, and rendered values |
 | `test_descriptive_statistics.cpp` | `DescriptiveStatisticsTest` | Canonical shared percentiles, deviation, CV, and MAD contracts |
 | `test_statistics_renderer.cpp` | `StatisticsRendererTest` | Shared console-summary ordering, precision, indentation, and diagnostics |
-| `test_timer.cpp` | `HighResTimerTest`, `HighResTimerIntegrationTest` | Exact conversion/failure seams plus one real monotonic smoke |
-| `test_system_info.cpp` | `SystemInfoTest`, `SystemInfoIntegrationTest` | Deterministic fallbacks/errors plus four coherent hardware contracts |
+| `test_timer.cpp` | `HighResTimerTest` | Deterministic Mach-time conversion, creation failures, seconds/nanoseconds results, and tick wraparound |
+| `test_system_info.cpp` | `BenchmarkQosTest`, `SystemInfoTest`, `SystemInfoIntegrationTest` | Deterministic QoS and system-information success/failure contracts plus one real-provider integration smoke |
 | `test_tlb_chain.cpp` | `TlbChainTest` | Spread/packed planning, every traversal policy, explicit corruption statuses, and one ASM smoke |
 | `test_tlb_measurement_scheduler.cpp` | `TlbMeasurementSchedulerTest` | Seeded balance, stop/error boundaries, callback contracts, convergence, and exact pass accounting |
 | `test_tlb_runtime_policy.cpp` | `TlbRuntimePolicyTest` | Runtime profiles, calibration, convergence, memory budgets, and work estimates |
 | `test_tlb_sweep_planner.cpp` | `TlbSweepPlannerTest` | Page-aligned base/refinement planning, stride bounds, deduplication, and source tracking |
-| `test_utils.cpp` | `ProgressSpinnerTest`, `UtilsTest` | TTY-gated spinner rendering/cleanup and worker-thread joining |
+| `test_utils.cpp` | `SeedUtilsTest`, `ProgressSpinnerTest`, `UtilsTest` | Seed-provider behavior, TTY-gated spinner rendering/cleanup, and worker-thread joining |
 
 Volatile source/test counts and the authoritative generated inventory are maintained in `DRY_CHECK.md`.
 
@@ -370,12 +370,12 @@ Volatile source/test counts and the authoritative generated inventory are mainta
 
 ### Shared test helper headers
 
-Four shared helper headers provide functionality reused across multiple test suites:
+Four shared helper headers support deterministic setup and output capture across the test suite:
 
 | File | Purpose |
 |---|---|
 | `test_config_helpers.h` | Provides `initialize_system_info(BenchmarkConfig&)` and `allocate_and_initialize_pattern_buffers(const BenchmarkConfig&, PatternBuffers&)` for shared system and pattern-buffer setup |
-| `test_statistics_helpers.h` | Provides `capture_bw()`, `capture_lat()`, `capture_auto_tlb_breakdown()` helpers in `namespace test_statistics_helpers` — used by `StatisticsTest` to capture statistics output |
+| `test_statistics_helpers.h` | Provides `empty_values()`, `capture_main_bandwidth()`, and `capture_auto_tlb_breakdown()` in `namespace test_statistics_helpers` for `StatisticsTest` output capture |
 | `test_memory_system_calls.h` | Provides deterministic mmap/madvise/munmap state and a resetting fixture for allocation tests |
 | `test_timer_system_calls.h` | Provides deterministic Mach absolute-time hooks and a scope-bound reset guard for timer-dependent unit tests |
 
@@ -383,7 +383,7 @@ Four shared helper headers provide functionality reused across multiple test sui
 
 ## 4. results/ — Benchmark result data
 
-Historical JSON, CSV, and text output from benchmark runs on specific hardware, organized by software-version subdirectory. The files are retained as examples, plot-script inputs, and legacy-schema reference data; they are not current 0.61.1 methodology baselines unless explicitly identified as such.
+Historical JSON, CSV, and text output from benchmark runs on specific hardware, organized by software-version subdirectory. The files are retained as examples, plot-script inputs, and legacy-schema reference data; they are not current 0.61.2 methodology baselines unless explicitly identified as such.
 
 ```
 results/
@@ -431,8 +431,8 @@ Example shell workflows and Python/Matplotlib plotters for tracked benchmark out
 | File | Purpose |
 |---|---|
 | `final_output.txt` | Small bundled sample of pooled latency statistics for `plot_cache_percentiles.py`; regenerated by `latency_test_script.sh` |
-| `latency_test_script.sh` | Sweeps custom cache size and configured latency-locality windows, writes per-run JSON, and extracts pooled sample statistics into `final_output.txt` |
-| `latency_test_script_stride_tlb.sh` | Sweeps cache size, configured locality, and latency stride; retains per-run JSON and builds a CSV summary |
+| `latency_test_script.sh` | Sweeps custom cache size and configured latency-locality windows, writes per-run JSON, extracts pooled sample statistics into `final_output.txt`, and fails if any run/output is incomplete |
+| `latency_test_script_stride_tlb.sh` | Sweeps cache size, configured locality, and latency stride; retains per-run JSON, builds a CSV summary, and requires one complete row per planned run |
 | `plot_M4vsM5_benchmark_comparison.py` | Compares effective payload bandwidth and latency from two standard benchmark JSON files; defaults to the historical M4/M5 samples |
 | `plot_analyzetlb.py` | Plots standalone TLB locality trends, including the paired spread/packed delta in current schemas and supported legacy data |
 | `plot_bechmark-memory-latency-hierarcy.py` | Plots memory-hierarchy latency from standard benchmark JSON or compatible text statistics output |

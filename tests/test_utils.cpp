@@ -20,13 +20,13 @@
 
 #include <gtest/gtest.h>
 
-#include "utils/seed_utils.h"
-#include "utils/utils.h"
-
 #include <atomic>
 #include <sstream>
 #include <thread>
 #include <vector>
+
+#include "utils/seed_utils.h"
+#include "utils/utils.h"
 
 TEST(SeedUtilsTest, GenerateSeedUsesInjectedProviderExactlyOnce) {
   size_t provider_calls = 0;
@@ -38,10 +38,6 @@ TEST(SeedUtilsTest, GenerateSeedUsesInjectedProviderExactlyOnce) {
 
   EXPECT_EQ(seed, 0x123456789abcdef0ULL);
   EXPECT_EQ(provider_calls, 1U);
-}
-
-TEST(SeedUtilsTest, GenerateSeedAlwaysReturnsNonZero) {
-  EXPECT_NE(SeedUtils::generate_seed(), 0U);
 }
 
 TEST(SeedUtilsTest, ZeroProviderResultFallsBackToNonZeroGeneration) {

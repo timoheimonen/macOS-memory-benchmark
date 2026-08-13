@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.61.2] - 2026-08-13
+
+### Changed
+  - **Internal benchmark paths now use their shared implementations directly**: Removed unused core-to-core statistics, calibration, JSON-save, and sweep adapters; the redundant general sweep-counting adapter; and the standalone Cartesian-count API. Sweep status formatting plus TLB and GPU planning helpers are now private to their implementations. This reduces the callable surface without changing benchmark work, CLI behavior, console output, or JSON schemas.
+  - **Tests follow the remaining production contracts**: Core-to-core schema coverage now tests the JSON builder and shared atomic writer directly, and Cartesian sweep tests exercise the generic production counter. Wrapper-only duplicate cases were removed while the shared writer's success and failure behavior remains covered independently.
+
+### Fixed
+  - **Latency sweep helpers report incomplete work reliably**: Both bundled sweep workflows prefer the repository binary, support an explicit `BENCHMARK_CMD`, and fall back to `PATH`. They now return failure when a planned benchmark, expected JSON document, completeness flag, required statistics object, or CSV row is missing or invalid; the jq and Python extraction paths enforce the same current-schema rules.
+  - **Text hierarchy plots accept signed latency statistics**: The text parser now accepts negative values such as a noise-sensitive global-minus-locality delta instead of rejecting an otherwise valid statistics file.
+  - **Current documentation matches the executable and test registry**: Corrected the long `--buffer-size` example, documented `--seed`, refreshed the suite/helper inventory and coverage descriptions, clarified best-effort QoS and descriptive-statistics fields, fixed the runnable-script and contributor links, and aligned active version and GPL-3.0-or-later references while retaining historical release and validation identifiers.
+
 ## [0.61.1] - 2026-07-11
 
 ### Changed

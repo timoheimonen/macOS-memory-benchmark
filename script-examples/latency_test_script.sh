@@ -11,8 +11,14 @@ TMP_DIR="${SCRIPT_DIR}/tmp"
 # Create tmp directory if it doesn't exist
 mkdir -p "${TMP_DIR}"
 
-# Base command parameters
-BENCHMARK_CMD="memory_benchmark"
+# Prefer the binary built in the repository; allow an explicit override or an
+# installed memory_benchmark from PATH when the local binary is unavailable.
+DEFAULT_BENCHMARK="${SCRIPT_DIR}/../memory_benchmark"
+if [ -x "${DEFAULT_BENCHMARK}" ]; then
+    BENCHMARK_CMD="${BENCHMARK_CMD:-${DEFAULT_BENCHMARK}}"
+else
+    BENCHMARK_CMD="${BENCHMARK_CMD:-memory_benchmark}"
+fi
 BUFFER_SIZE_MB=0
 LATENCY_SAMPLES=5000
 LOOP_COUNT=5
@@ -33,8 +39,11 @@ echo "Starting latency tests for cache sizes: ${cache_sizes[*]} KB"
 echo "TLB locality sizes: ${tlb_locality_sizes_kb[*]} KB"
 echo "=========================================="
 
-if ! command -v "${BENCHMARK_CMD}" > /dev/null 2>&1; then
-    echo "Error: ${BENCHMARK_CMD} not found in PATH"
+if [ -x "${BENCHMARK_CMD}" ]; then
+    :
+elif ! command -v "${BENCHMARK_CMD}" > /dev/null 2>&1; then
+    echo "Error: ${BENCHMARK_CMD} not found"
+    echo "Tip: build the local binary (make) or export BENCHMARK_CMD=/path/to/memory_benchmark"
     exit 1
 fi
 
@@ -51,6 +60,7 @@ else
 fi
 
 fail_count=0
+extraction_fail_count=0
 total_runs=$(( ${#tlb_locality_sizes_kb[@]} * ${#cache_sizes[@]} ))
 current_run=0
 
@@ -101,7 +111,7 @@ done
 
 echo ""
 echo "=========================================="
-echo "All latency tests completed!"
+echo "Latency benchmark phase completed."
 echo "Completed ${current_run}/${total_runs} runs"
 if [ "${fail_count}" -gt 0 ]; then
     echo "Warning: ${fail_count} test(s) failed"
@@ -132,14 +142,35 @@ extract_with_jq() {
     local json_file=$1
     local cache_size=$2
     local tlb_kb=$3
+    local extracted_file="${TMP_DIR}/extracted_tlb_${tlb_kb}_cache_${cache_size}.json"
+    if ! jq 'if .mode == "gpu_bandwidth" and .schema_version == 1 then
+               error("GPU bandwidth schema 1 is not supported by this standard CPU latency extractor")
+             elif .configuration.benchmark_schema_version == 2 then
+               if .results_complete == true then
+                 .cache.custom.latency.headline_ns.pooled_sample_distribution.statistics
+               else
+                 error("incomplete benchmark result")
+               end
+             else
+               .cache.custom.latency.samples_ns.statistics
+             end
+             | if type == "object"
+                  and .average != null and .median != null
+                  and .p90 != null and .p95 != null and .p99 != null
+                  and .min != null and .max != null and .stddev != null
+               then .
+               else error("missing latency statistics")
+               end' \
+        "${json_file}" > "${extracted_file}"
+    then
+        rm -f "${extracted_file}"
+        return 1
+    fi
     echo "TLB Locality: ${tlb_kb} KB, Cache Size: ${cache_size} KB" >> "${final_output}"
     echo "----------------------------------------" >> "${final_output}"
-    jq 'if .mode == "gpu_bandwidth" and .schema_version == 1 then
-          error("GPU bandwidth schema 1 is not supported by this standard CPU latency extractor")
-        elif .configuration.benchmark_schema_version == 2 then
-          .cache.custom.latency.headline_ns.pooled_sample_distribution.statistics
-        else .cache.custom.latency.samples_ns.statistics end' "${json_file}" >> "${final_output}"
+    cat "${extracted_file}" >> "${final_output}"
     echo "" >> "${final_output}"
+    rm -f "${extracted_file}"
 }
 
 # Function to extract schema-2 pooled sample statistics (with historical fallback)
@@ -147,13 +178,12 @@ extract_with_python() {
     local json_file=$1
     local cache_size=$2
     local tlb_kb=$3
-    echo "TLB Locality: ${tlb_kb} KB, Cache Size: ${cache_size} KB" >> "${final_output}"
-    echo "----------------------------------------" >> "${final_output}"
-    python3 <<EOF >> "${final_output}"
+    local extracted_file="${TMP_DIR}/extracted_tlb_${tlb_kb}_cache_${cache_size}.json"
+    if ! python3 - "${json_file}" <<'PY' > "${extracted_file}"
 import json
 import sys
 try:
-    with open('${json_file}', 'r') as f:
+    with open(sys.argv[1], 'r') as f:
         data = json.load(f)
         if data.get('mode') == 'gpu_bandwidth' and data.get('schema_version') == 1:
             raise RuntimeError(
@@ -166,12 +196,24 @@ try:
             stats = latency['headline_ns']['pooled_sample_distribution']['statistics']
         else:
             stats = latency['samples_ns']['statistics']
+        required_statistics = ('average', 'median', 'p90', 'p95', 'p99', 'min', 'max', 'stddev')
+        missing_statistics = [name for name in required_statistics if stats.get(name) is None]
+        if missing_statistics:
+            raise RuntimeError('missing latency statistics: ' + ', '.join(missing_statistics))
         print(json.dumps(stats, indent=2))
 except Exception as e:
     print(f'Error: {e}', file=sys.stderr)
     sys.exit(1)
-EOF
+PY
+    then
+        rm -f "${extracted_file}"
+        return 1
+    fi
+    echo "TLB Locality: ${tlb_kb} KB, Cache Size: ${cache_size} KB" >> "${final_output}"
+    echo "----------------------------------------" >> "${final_output}"
+    cat "${extracted_file}" >> "${final_output}"
     echo "" >> "${final_output}"
+    rm -f "${extracted_file}"
 }
 
 # Check if jq is available, otherwise use Python
@@ -193,18 +235,29 @@ for tlb_kb in "${tlb_locality_sizes_kb[@]}"; do
         if [ -f "${output_file}" ]; then
             echo "Extracting from ${output_file}..."
             if [ "$USE_JQ" = true ]; then
-                extract_with_jq "${output_file}" "${cache_size}" "${tlb_kb}"
+                if ! extract_with_jq "${output_file}" "${cache_size}" "${tlb_kb}"; then
+                    echo "Error: failed to extract ${output_file}"
+                    extraction_fail_count=$((extraction_fail_count + 1))
+                fi
             else
-                extract_with_python "${output_file}" "${cache_size}" "${tlb_kb}"
+                if ! extract_with_python "${output_file}" "${cache_size}" "${tlb_kb}"; then
+                    echo "Error: failed to extract ${output_file}"
+                    extraction_fail_count=$((extraction_fail_count + 1))
+                fi
             fi
         else
             echo "Warning: ${output_file} not found, skipping..."
+            extraction_fail_count=$((extraction_fail_count + 1))
         fi
     done
 done
 
 echo "=========================================="
-echo "All latency sample statistics extracted to ${final_output}"
+if [ "${extraction_fail_count}" -eq 0 ]; then
+    echo "All latency sample statistics extracted to ${final_output}"
+else
+    echo "Warning: ${extraction_fail_count} output file(s) could not be extracted"
+fi
 
 # Clear tmp folder after final_output.txt is created
 echo ""
@@ -215,4 +268,8 @@ if [ -d "${TMP_DIR}" ]; then
     echo "✓ Tmp folder cleared: ${TMP_DIR}"
 else
     echo "Warning: Tmp folder does not exist: ${TMP_DIR}"
+fi
+
+if [ "${fail_count}" -gt 0 ] || [ "${extraction_fail_count}" -gt 0 ]; then
+    exit 1
 fi

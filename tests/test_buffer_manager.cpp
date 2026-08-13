@@ -43,38 +43,30 @@ BenchmarkConfig make_pattern_config() {
 
 }  // namespace
 
-TEST_F(BufferManagerTest, PatternAllocationCreatesExactlyTwoRegularMappings) {
-  const BenchmarkConfig config = make_pattern_config();
+TEST_F(BufferManagerTest, PatternAllocationUsesModeSpecificAdviceForBothOwnedMappings) {
+  for (const bool use_non_cacheable : {false, true}) {
+    SCOPED_TRACE(use_non_cacheable ? "non-cacheable" : "regular");
+    BenchmarkConfig config = make_pattern_config();
+    config.use_non_cacheable = use_non_cacheable;
 
-  {
-    PatternBuffers buffers;
-    ASSERT_EQ(allocate_pattern_buffers(config, buffers), EXIT_SUCCESS);
-
-    EXPECT_NE(buffers.src_buffer(), nullptr);
-    EXPECT_NE(buffers.dst_buffer(), nullptr);
-    EXPECT_EQ(state.map_calls, 2u);
-    EXPECT_EQ(state.advise_calls, 2u);
-    EXPECT_EQ(state.last_map_size, config.buffer_size);
-    EXPECT_EQ(state.last_advise_size, config.buffer_size);
-    EXPECT_EQ(state.last_advice, MADV_WILLNEED);
+    const size_t map_calls_before = state.map_calls;
+    const size_t advise_calls_before = state.advise_calls;
+    const size_t unmap_calls_before = state.unmap_calls;
+    {
+      PatternBuffers buffers;
+      ASSERT_EQ(allocate_pattern_buffers(config, buffers), EXIT_SUCCESS);
+      EXPECT_NE(buffers.src_buffer(), nullptr);
+      EXPECT_NE(buffers.dst_buffer(), nullptr);
+      EXPECT_EQ(state.map_calls - map_calls_before, 2u);
+      EXPECT_EQ(state.advise_calls - advise_calls_before, 2u);
+      EXPECT_EQ(state.last_map_size, config.buffer_size);
+      EXPECT_EQ(state.last_advise_size, config.buffer_size);
+      EXPECT_EQ(state.last_advice, use_non_cacheable ? MADV_RANDOM : MADV_WILLNEED);
+      EXPECT_EQ(state.unmap_calls, unmap_calls_before);
+    }
+    EXPECT_EQ(state.unmap_calls - unmap_calls_before, 2u);
+    EXPECT_EQ(state.last_unmapped_size, config.buffer_size);
   }
-  EXPECT_EQ(state.unmap_calls, 2u);
-}
-
-TEST_F(BufferManagerTest, PatternNonCacheableModeRequestsOnlyTwoRandomHintedBuffers) {
-  BenchmarkConfig config = make_pattern_config();
-  config.use_non_cacheable = true;
-
-  {
-    PatternBuffers buffers;
-    ASSERT_EQ(allocate_pattern_buffers(config, buffers), EXIT_SUCCESS);
-    EXPECT_NE(buffers.src_buffer(), nullptr);
-    EXPECT_NE(buffers.dst_buffer(), nullptr);
-    EXPECT_EQ(state.map_calls, 2u);
-    EXPECT_EQ(state.advise_calls, 2u);
-    EXPECT_EQ(state.last_advice, MADV_RANDOM);
-  }
-  EXPECT_EQ(state.unmap_calls, 2u);
 }
 
 TEST_F(BufferManagerTest, SecondPatternMappingFailureCleansCandidateAtomically) {
@@ -95,8 +87,7 @@ TEST_F(BufferManagerTest, SecondPatternMappingFailureCleansCandidateAtomically) 
     EXPECT_EQ(buffers.dst_buffer(), original_destination);
     EXPECT_EQ(state.map_calls, 4u);
     EXPECT_EQ(state.unmap_calls, 1u);
-    EXPECT_NE(error.find(Messages::error_mmap_failed("dst_buffer")),
-              std::string::npos);
+    EXPECT_NE(error.find(Messages::error_mmap_failed("dst_buffer")), std::string::npos);
   }
   EXPECT_EQ(state.unmap_calls, 3u);
 }
@@ -108,8 +99,7 @@ TEST_F(BufferManagerTest, InitializationWritesExactSourcePatternAndZeroDestinati
     PatternBuffers buffers;
     ASSERT_TRUE(allocate_and_initialize_pattern_buffers(config, buffers));
     const auto* source = static_cast<const unsigned char*>(buffers.src_buffer());
-    const auto* destination =
-        static_cast<const unsigned char*>(buffers.dst_buffer());
+    const auto* destination = static_cast<const unsigned char*>(buffers.dst_buffer());
     ASSERT_NE(source, nullptr);
     ASSERT_NE(destination, nullptr);
     for (size_t index = 0; index < config.buffer_size; ++index) {
@@ -120,80 +110,71 @@ TEST_F(BufferManagerTest, InitializationWritesExactSourcePatternAndZeroDestinati
   EXPECT_EQ(state.unmap_calls, 2u);
 }
 
-TEST_F(BufferManagerTest, ZeroMainBufferFailsBeforeAllocationWithExactReason) {
-  BenchmarkConfig config = make_pattern_config();
-  config.buffer_size = 0;
+TEST_F(BufferManagerTest, InvalidPatternAllocationRequestsFailBeforeSystemCalls) {
+  struct RejectionCase {
+    const char* name;
+    size_t buffer_size;
+    unsigned long max_total_allowed_mb;
+    std::string expected_reason;
+  };
+  const RejectionCase cases[] = {
+      {"zero main buffer", 0, 0, Messages::error_main_buffer_size_zero()},
+      {"pair overflow", std::numeric_limits<size_t>::max() / 2 + 1, 0,
+       Messages::error_buffer_size_overflow_calculation()},
+      {"memory cap", Constants::BYTES_PER_MB, 1, Messages::error_total_memory_exceeds_limit(2, 1)},
+  };
 
-  testing::internal::CaptureStderr();
-  PatternBuffers buffers;
-  const int result = allocate_pattern_buffers(config, buffers);
-  const std::string error = testing::internal::GetCapturedStderr();
+  for (const RejectionCase& test_case : cases) {
+    SCOPED_TRACE(test_case.name);
+    BenchmarkConfig config = make_pattern_config();
+    config.buffer_size = test_case.buffer_size;
+    config.max_total_allowed_mb = test_case.max_total_allowed_mb;
+    const size_t map_calls_before = state.map_calls;
+    const size_t advise_calls_before = state.advise_calls;
+    const size_t unmap_calls_before = state.unmap_calls;
 
-  EXPECT_EQ(result, EXIT_FAILURE);
-  EXPECT_EQ(error, Messages::error_prefix() +
-                       Messages::error_main_buffer_size_zero() + "\n");
-  EXPECT_EQ(state.map_calls, 0u);
-  EXPECT_EQ(buffers.src_buffer(), nullptr);
-  EXPECT_EQ(buffers.dst_buffer(), nullptr);
+    testing::internal::CaptureStderr();
+    PatternBuffers buffers;
+    const int result = allocate_pattern_buffers(config, buffers);
+    const std::string error = testing::internal::GetCapturedStderr();
+
+    EXPECT_EQ(result, EXIT_FAILURE);
+    EXPECT_EQ(error, Messages::error_prefix() + test_case.expected_reason + "\n");
+    EXPECT_EQ(state.map_calls, map_calls_before);
+    EXPECT_EQ(state.advise_calls, advise_calls_before);
+    EXPECT_EQ(state.unmap_calls, unmap_calls_before);
+    EXPECT_EQ(buffers.src_buffer(), nullptr);
+    EXPECT_EQ(buffers.dst_buffer(), nullptr);
+  }
 }
 
-TEST_F(BufferManagerTest, PatternPairOverflowIsRejectedBeforeAllocation) {
-  BenchmarkConfig config = make_pattern_config();
-  config.buffer_size = std::numeric_limits<size_t>::max() / 2 + 1;
+TEST_F(BufferManagerTest, PatternInitializationRejectsInvalidInputs) {
+  struct InvalidInputCase {
+    const char* name;
+    bool allocate_mappings;
+    size_t buffer_size;
+    std::string expected_reason;
+  };
+  const InvalidInputCase cases[] = {
+      {"missing mappings", false, 512, Messages::error_main_buffers_not_allocated()},
+      {"zero size", true, 0, Messages::error_buffer_size_zero_generic()},
+  };
 
-  testing::internal::CaptureStderr();
-  PatternBuffers buffers;
-  const int result = allocate_pattern_buffers(config, buffers);
-  const std::string error = testing::internal::GetCapturedStderr();
+  for (const InvalidInputCase& test_case : cases) {
+    SCOPED_TRACE(test_case.name);
+    PatternBuffers buffers;
+    if (test_case.allocate_mappings) {
+      const BenchmarkConfig config = make_pattern_config();
+      ASSERT_EQ(allocate_pattern_buffers(config, buffers), EXIT_SUCCESS);
+    }
 
-  EXPECT_EQ(result, EXIT_FAILURE);
-  EXPECT_EQ(error, Messages::error_prefix() +
-                       Messages::error_buffer_size_overflow_calculation() +
-                       "\n");
-  EXPECT_EQ(state.map_calls, 0u);
-}
+    testing::internal::CaptureStderr();
+    const int result = initialize_pattern_buffers(buffers, test_case.buffer_size);
+    const std::string error = testing::internal::GetCapturedStderr();
 
-TEST_F(BufferManagerTest, PatternMemoryCapIsRejectedBeforeAllocation) {
-  BenchmarkConfig config = make_pattern_config();
-  config.buffer_size = Constants::BYTES_PER_MB;
-  config.max_total_allowed_mb = 1;
-
-  testing::internal::CaptureStderr();
-  PatternBuffers buffers;
-  const int result = allocate_pattern_buffers(config, buffers);
-  const std::string error = testing::internal::GetCapturedStderr();
-
-  EXPECT_EQ(result, EXIT_FAILURE);
-  EXPECT_EQ(error, Messages::error_prefix() +
-                       Messages::error_total_memory_exceeds_limit(2, 1) +
-                       "\n");
-  EXPECT_EQ(state.map_calls, 0u);
-}
-
-TEST_F(BufferManagerTest, PatternInitializationRejectsMissingMappings) {
-  PatternBuffers buffers;
-
-  testing::internal::CaptureStderr();
-  const int result = initialize_pattern_buffers(buffers, 512);
-  const std::string error = testing::internal::GetCapturedStderr();
-
-  EXPECT_EQ(result, EXIT_FAILURE);
-  EXPECT_EQ(error, Messages::error_prefix() +
-                       Messages::error_main_buffers_not_allocated() + "\n");
-}
-
-TEST_F(BufferManagerTest, PatternInitializationRejectsZeroSize) {
-  const BenchmarkConfig config = make_pattern_config();
-  PatternBuffers buffers;
-  ASSERT_EQ(allocate_pattern_buffers(config, buffers), EXIT_SUCCESS);
-
-  testing::internal::CaptureStderr();
-  const int result = initialize_pattern_buffers(buffers, 0);
-  const std::string error = testing::internal::GetCapturedStderr();
-
-  EXPECT_EQ(result, EXIT_FAILURE);
-  EXPECT_EQ(error, Messages::error_prefix() +
-                       Messages::error_buffer_size_zero_generic() + "\n");
+    EXPECT_EQ(result, EXIT_FAILURE);
+    EXPECT_EQ(error, Messages::error_prefix() + test_case.expected_reason + "\n");
+  }
 }
 
 TEST_F(BufferManagerTest, PeakAccountingUsesLargerCachePhaseInsteadOfMainPhase) {
@@ -204,8 +185,7 @@ TEST_F(BufferManagerTest, PeakAccountingUsesLargerCachePhaseInsteadOfMainPhase) 
   config.max_total_allowed_mb = 0;
 
   size_t total_memory_bytes = 0;
-  ASSERT_EQ(calculate_total_allocation_bytes(config, total_memory_bytes),
-            EXIT_SUCCESS);
+  ASSERT_EQ(calculate_total_allocation_bytes(config, total_memory_bytes), EXIT_SUCCESS);
   EXPECT_EQ(total_memory_bytes, 6 * Constants::BYTES_PER_MB);
 }
 
@@ -218,8 +198,7 @@ TEST_F(BufferManagerTest, PeakAccountingHandlesLatencyOnlyCustomCacheWithMainDis
   config.max_total_allowed_mb = 0;
 
   size_t total_memory_bytes = 0;
-  ASSERT_EQ(calculate_total_allocation_bytes(config, total_memory_bytes),
-            EXIT_SUCCESS);
+  ASSERT_EQ(calculate_total_allocation_bytes(config, total_memory_bytes), EXIT_SUCCESS);
   EXPECT_EQ(total_memory_bytes, 43 * Constants::BYTES_PER_MB);
 }
 
@@ -232,7 +211,6 @@ TEST_F(BufferManagerTest, PeakAccountingPatternsSkipLatencyAndCacheBuffers) {
   config.max_total_allowed_mb = 0;
 
   size_t total_memory_bytes = 0;
-  ASSERT_EQ(calculate_total_allocation_bytes(config, total_memory_bytes),
-            EXIT_SUCCESS);
+  ASSERT_EQ(calculate_total_allocation_bytes(config, total_memory_bytes), EXIT_SUCCESS);
   EXPECT_EQ(total_memory_bytes, 2 * Constants::BYTES_PER_MB);
 }

@@ -29,6 +29,7 @@
 #include <numeric>
 #include <random>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -339,38 +340,6 @@ std::string classify_tlb_confidence(double step_ns, double step_percent, bool pe
     return "Medium";
   }
   return "Low";
-}
-
-size_t infer_tlb_entries(size_t locality_bytes, size_t page_size_bytes) {
-  if (page_size_bytes == 0) {
-    return 0;
-  }
-  return locality_bytes / page_size_bytes;
-}
-
-std::pair<size_t, size_t> infer_tlb_entries_range(const std::vector<size_t>& locality_bytes,
-                                                  size_t boundary_index,
-                                                  size_t page_size_bytes) {
-  if (page_size_bytes == 0 || locality_bytes.empty() || boundary_index >= locality_bytes.size()) {
-    return {0, 0};
-  }
-
-  const size_t lower_locality_bytes = (boundary_index > 0)
-                                           ? locality_bytes[boundary_index - 1]
-                                           : locality_bytes[boundary_index];
-  const size_t upper_locality_bytes = locality_bytes[boundary_index];
-  return {lower_locality_bytes / page_size_bytes, upper_locality_bytes / page_size_bytes};
-}
-
-size_t infer_tlb_entries_estimate(const std::vector<size_t>& locality_bytes,
-                                  size_t boundary_index,
-                                  size_t page_size_bytes) {
-  const std::pair<size_t, size_t> range =
-      infer_tlb_entries_range(locality_bytes, boundary_index, page_size_bytes);
-  if (range.first == 0 && range.second == 0) {
-    return 0;
-  }
-  return range.first + ((range.second - range.first) / 2);
 }
 
 TlbBoundaryDetection detect_tlb_boundary(const std::vector<size_t>& locality_bytes,
