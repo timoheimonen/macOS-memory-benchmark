@@ -1,8 +1,8 @@
 #!/bin/bash
 # Latency sweep helper for memory_benchmark
 # - Sweeps cache size, TLB locality, and latency stride
-# - Writes one JSON per run
-# - Builds a CSV summary for plotting
+# - Requires one complete JSON result per planned run
+# - Builds a validated CSV summary for plotting
 
 set -euo pipefail
 
@@ -115,7 +115,8 @@ done
 
 echo ""
 echo "Building CSV summary: ${SUMMARY_CSV}"
-python3 - <<'PY' "${JSON_DIR}" "${SUMMARY_CSV}"
+summary_status=0
+python3 - "${JSON_DIR}" "${SUMMARY_CSV}" "${total_runs}" <<'PY' || summary_status=$?
 import csv
 import json
 import sys
@@ -123,8 +124,10 @@ from pathlib import Path
 
 json_dir = Path(sys.argv[1])
 summary_csv = Path(sys.argv[2])
+expected_rows = int(sys.argv[3])
 
 rows = []
+errors = []
 for path in sorted(json_dir.glob("*.json")):
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
@@ -161,6 +164,13 @@ for path in sorted(json_dir.glob("*.json")):
             unique_pages_touched = diag.get("unique_pages_touched", "")
             page_size_bytes = diag.get("page_size_bytes", "")
 
+        required_statistics = ("average", "median", "p90", "p95", "p99", "min", "max", "stddev")
+        missing_statistics = [name for name in required_statistics if stats.get(name) is None]
+        if missing_statistics:
+            raise RuntimeError(
+                "missing latency statistics: " + ", ".join(missing_statistics)
+            )
+
         rows.append({
             "file": path.name,
             "cache_kb": cfg.get("custom_cache_size_kb", 0),
@@ -179,7 +189,7 @@ for path in sorted(json_dir.glob("*.json")):
             "page_size_bytes": page_size_bytes,
         })
     except Exception as exc:
-        print(f"Warning: failed to parse {path.name}: {exc}")
+        errors.append(f"{path.name}: {exc}")
 
 summary_csv.parent.mkdir(parents=True, exist_ok=True)
 fieldnames = [
@@ -206,6 +216,12 @@ with summary_csv.open("w", newline="", encoding="utf-8") as f:
     writer.writerows(rows)
 
 print(f"Wrote {len(rows)} rows to {summary_csv}")
+if len(rows) != expected_rows:
+    errors.append(f"expected {expected_rows} complete result rows, found {len(rows)}")
+if errors:
+    for error in errors:
+        print(f"Error: {error}", file=sys.stderr)
+    sys.exit(1)
 PY
 
 echo ""
@@ -213,8 +229,15 @@ echo "Sweep done: ${current_run}/${total_runs} runs"
 if [ "${fail_count}" -gt 0 ]; then
   echo "Failed runs: ${fail_count}"
 fi
+if [ "${summary_status}" -ne 0 ]; then
+  echo "CSV summary validation failed"
+fi
 echo "JSON files: ${JSON_DIR}"
 echo "CSV summary: ${SUMMARY_CSV}"
 echo ""
 echo "Plot example:"
 echo "  python3 ${SCRIPT_DIR}/plot_cache_percentiles_stride_tlb.py ${SUMMARY_CSV} --metric p99 --stride 64"
+
+if [ "${fail_count}" -gt 0 ] || [ "${summary_status}" -ne 0 ]; then
+  exit 1
+fi

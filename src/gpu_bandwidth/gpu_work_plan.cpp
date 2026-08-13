@@ -94,6 +94,8 @@ void append_identity_field(std::string& identity, const char* name,
   append_identity_field(identity, name, std::to_string(value));
 }
 
+std::string build_gpu_plan_identity(const GpuWorkPlan& plan);
+
 }  // namespace
 
 const char* gpu_operation_to_string(GpuOperation operation) {
@@ -347,6 +349,8 @@ GpuWorkPlan build_gpu_work_plan(const GpuWorkPlanRequest& request) {
   return plan;
 }
 
+namespace {
+
 std::string build_gpu_plan_identity(const GpuWorkPlan& plan) {
   if (!plan.valid) {
     return "";
@@ -413,3 +417,5 @@ std::string build_gpu_plan_identity(const GpuWorkPlan& plan) {
                         plan.final_checksum_algorithm);
   return identity;
 }
+
+}  // namespace

@@ -49,8 +49,7 @@ std::string build_utc_timestamp(
   return timestamp.str();
 }
 
-// Calculate statistics (average, min, max, percentiles, stddev) from a vector of values
-// Returns a JSON object containing the calculated statistics
+// Calculate the canonical descriptive-statistics object declared in json_utils.h.
 nlohmann::json calculate_json_statistics(const std::vector<double>& values) {
   if (values.empty()) {
     return nullptr;

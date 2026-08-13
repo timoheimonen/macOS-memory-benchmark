@@ -20,6 +20,7 @@
 
 #include <gtest/gtest.h>
 
+#include <cstddef>
 #include <limits>
 #include <stdexcept>
 #include <string>
@@ -29,8 +30,14 @@
 
 namespace {
 
+struct TestSweepValues {
+  size_t cardinality = 0;
+
+  size_t size() const noexcept { return cardinality; }
+};
+
 struct TestSweepSpec {
-  std::vector<int> values;
+  TestSweepValues values;
 };
 
 void expect_sweep_parse_failure(const std::string& specification, const std::string& expected_reason) {
@@ -81,18 +88,18 @@ TEST(SweepUtilsTest, RejectsEmptyValueTokensWithExactReason) {
 }
 
 TEST(SweepUtilsTest, CalculatesCartesianProductIdentityAndEmptyDimensions) {
-  EXPECT_EQ(calculate_cartesian_run_count({}), 1u);
-  EXPECT_EQ(calculate_cartesian_run_count({2, 3, 4}), 24u);
-  EXPECT_EQ(calculate_cartesian_run_count({2, 0, 4}), 0u);
+  const std::vector<TestSweepSpec> no_specs;
+  EXPECT_EQ(calculate_sweep_run_count_from_specs(no_specs), 1u);
 
-  const std::vector<TestSweepSpec> specs = {{{1, 2}}, {{3, 4, 5}}};
-  EXPECT_EQ(calculate_sweep_run_count_from_specs(specs), 6u);
+  const std::vector<TestSweepSpec> specs = {{{2}}, {{3}}, {{4}}};
+  EXPECT_EQ(calculate_sweep_run_count_from_specs(specs), 24u);
 
-  const std::vector<TestSweepSpec> specs_with_empty_dimension = {{{1, 2}}, {{}}, {{3, 4}}};
+  const std::vector<TestSweepSpec> specs_with_empty_dimension = {{{2}}, {{0}}, {{4}}};
   EXPECT_EQ(calculate_sweep_run_count_from_specs(specs_with_empty_dimension), 0u);
 }
 
 TEST(SweepUtilsTest, CartesianProductSaturatesOnOverflow) {
   const size_t overflowing_factor = std::numeric_limits<size_t>::max() / 2 + 1;
-  EXPECT_EQ(calculate_cartesian_run_count({overflowing_factor, 2}), std::numeric_limits<size_t>::max());
+  const std::vector<TestSweepSpec> specs = {{{overflowing_factor}}, {{2}}};
+  EXPECT_EQ(calculate_sweep_run_count_from_specs(specs), std::numeric_limits<size_t>::max());
 }

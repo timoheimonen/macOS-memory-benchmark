@@ -1,6 +1,6 @@
 # Metal GPU Memory Bandwidth Whitepaper
 
-- **Software version:** 0.61.1
+- **Software version:** 0.61.2
 - **JSON schema:** 1
 - **Methodology:** `gpu-bandwidth-v1-private-runtime-single-cmdbuf-calibrated-balanced`
 - **Platform:** macOS on Apple Silicon

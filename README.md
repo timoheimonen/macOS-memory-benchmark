@@ -1,6 +1,6 @@
 # macOS Apple Silicon Memory Benchmark
 
-![Platform](https://img.shields.io/badge/platform-Apple%20Silicon-000000?logo=apple) ![CLI](https://img.shields.io/badge/CLI-Tool-00A8CC?logo=terminal) ![License](https://img.shields.io/badge/license-GPL--3.0-blue) ![Assembly](https://img.shields.io/badge/Assembly-ARM64-6E4C13) ![C++](https://img.shields.io/badge/C++-00599C?logo=cplusplus&logoColor=white)
+![Platform](https://img.shields.io/badge/platform-Apple%20Silicon-000000?logo=apple) ![CLI](https://img.shields.io/badge/CLI-Tool-00A8CC?logo=terminal) ![License](https://img.shields.io/badge/license-GPL--3.0--or--later-blue) ![Assembly](https://img.shields.io/badge/Assembly-ARM64-6E4C13) ![C++](https://img.shields.io/badge/C++-00599C?logo=cplusplus&logoColor=white)
 
 `memory_benchmark` is a low-level command-line tool for measuring CPU and Metal GPU memory bandwidth, cache and main-memory latency, access-pattern performance, TLB behavior, and two-thread cache-line handoff protocol latency on Apple Silicon Macs.
 
@@ -165,7 +165,10 @@ python3 script-examples/plot_cache_percentiles.py \
   script-examples/final_output.txt --metric median
 ```
 
-The sweep script invokes `memory_benchmark` from `PATH`. If you only built locally, install the binary or update `BENCHMARK_CMD` in the script. See the [User Manual](MANUAL.md#visualization-scripts) for supported inputs and metrics.
+The sweep script prefers the repository's local `./memory_benchmark`, then falls back to `memory_benchmark` from
+`PATH`; set `BENCHMARK_CMD=/path/to/memory_benchmark` to override either choice. The sweep helpers return a non-zero
+status if a planned run fails or does not produce a complete, parseable result. See the
+[User Manual](MANUAL.md#visualization-scripts) for supported inputs and metrics.
 
 ## Documentation
 
@@ -202,7 +205,8 @@ make coverage-unit
 make coverage-all
 ```
 
-See [AGENTS.md](AGENTS.md) for repository conventions and test taxonomy. API documentation can be generated with `make docs`.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for contribution guidance and [Project Structure](PROJECT_STRUCTURE.md) for
+repository navigation and the current test-suite map. API documentation can be generated with `make docs`.
 
 ## Scope and Safety
 
@@ -214,4 +218,4 @@ The benchmark performs sustained, intensive memory operations. Use it at your ow
 
 Copyright 2025-2026 Timo Heimonen \<timo.heimonen@proton.me\>
 
-Licensed under the [GNU General Public License v3.0](LICENSE).
+Licensed under the [GNU General Public License v3.0 or later](LICENSE).

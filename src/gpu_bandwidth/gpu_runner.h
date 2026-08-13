@@ -150,9 +150,6 @@ GpuMemoryBudget calculate_gpu_memory_budget(size_t buffer_size_bytes,
                                             size_t available_memory_bytes,
                                             size_t auxiliary_bytes);
 
-GpuBackendAttemptRequest build_gpu_backend_attempt_request(
-    const GpuWorkPlan& plan);
-
 /**
  * @brief Run calibration and all balanced operation tasks on one backend.
  *

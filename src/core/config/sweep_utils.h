@@ -47,15 +47,6 @@ struct ParsedSweepText {
  */
 ParsedSweepText parse_sweep_text(const std::string& specification);
 
-/**
- * Calculate a Cartesian product size from dimension cardinalities.
- *
- * @param dimension_sizes Number of candidates in each Cartesian dimension.
- * @return One for no dimensions, zero for an empty dimension, or `SIZE_MAX` if
- *         multiplication overflows.
- */
-size_t calculate_cartesian_run_count(const std::vector<size_t>& dimension_sizes) noexcept;
-
 namespace SweepUtilsDetail {
 
 template <typename DimensionRange, typename CardinalityFunction>
