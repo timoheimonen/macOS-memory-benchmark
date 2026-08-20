@@ -106,8 +106,11 @@ def load_data(path: Path, metric: str) -> dict:
     cache = data.get("cache", {})
     schema_version = config.get("benchmark_schema_version")
     if schema_version == 2:
-        if not data.get("results_complete", False):
-            raise RuntimeError(f"Incomplete standard benchmark result: {path}")
+        if data.get("status") != "complete" or data.get("results_complete") is not True:
+            raise RuntimeError(
+                f"Incomplete standard benchmark result "
+                f"(schema 2 requires complete status and results_complete): {path}"
+            )
         locality = mm.get("latency", {}).get("automatic_locality_comparison", {})
         l1_latency_key = "headline_ns"
         locality_16k_key = "locality_16k_latency_ns"

@@ -603,9 +603,9 @@ middle, and trailing items.
 - An omitted output option disables JSON output
 - For every direct mode and the CPU modes' supported sweeps, an exact raw value of `-` selects machine-readable stdout.
   The sentinel is classified before path normalization, so `--output ./-` remains an ordinary file named `-`
-- A supported stdout-target command emits exactly one JSON document followed by one newline after orchestration reaches
-  its terminal state. Intermediate standard, sweep, and GPU checkpoint requests are lazy no-ops and do not emit
-  documents
+- A supported stdout-target command emits exactly one two-space-indented UTF-8 JSON document followed by one newline
+  after orchestration reaches its terminal state. Intermediate standard, sweep, and GPU checkpoint requests are lazy
+  no-ops and do not emit documents
 - Post-parse human output is routed to stderr while the stdout target is active. Parse, preflight, and other pre-result
   failures leave stdout empty; `--help` remains a human-facing stdout command when that mode accepts the combination
 - Every other non-empty value is a file target. Relative paths write under the current working directory, and parent
@@ -621,6 +621,8 @@ middle, and trailing items.
 - GPU syntax/config errors, including a buffer below 64 MB, fail before result JSON is created. A backend-factory failure
   also precedes result initialization. Initialized capability, compilation, allocation, or work-plan failures remain
   auditable in the selected file or stdout target
+- An observable terminal stdout serialization, write, or flush failure returns failure without changing the
+  already-computed measurement state; any bytes from that failed transfer must be rejected
 
 #### `--sweep <key=value1,value2>`
 
@@ -649,10 +651,11 @@ middle, and trailing items.
 - Every generated configuration is validated before the first run
 - General and core-to-core combined output use envelope schema
   `configuration.sweep_schema_version: 1`; each `runs[].result` retains its own mode schema version
-- Standard, pattern, TLB, and core-to-core file output is atomically checkpointed after every attempted run and records
-  `status`, `status_reason`, `planned_runs`, `attempted_runs`, `completed_runs`, and `conclusions_valid`. Stdout runs
-  retain the same logical checkpoint cadence without invoking the persistence payload builder or serializing an
-  intermediate document, and emit only the final envelope
+- Standard, pattern, TLB, and core-to-core file output is atomically checkpointed after every attempted run. An empty
+  run plan or a stop observed before a run also checkpoints a terminal envelope without adding a `runs[]` entry or
+  incrementing `attempted_runs`. Each envelope records `status`, `status_reason`, `planned_runs`, `attempted_runs`,
+  `completed_runs`, and `conclusions_valid`. Stdout runs retain the same logical checkpoint cadence without invoking the
+  persistence payload builder or serializing an intermediate document, and emit only the final envelope
 - For standard, pattern, and TLB sweeps, every attempted run is retained with its own `status` and `status_reason`.
   `attempted_runs` counts stored entries, while `completed_runs` counts only mode-specific nested results that are
   genuinely complete: standard and pattern require nested `status: "complete"` with `results_complete: true`, while
@@ -1424,12 +1427,14 @@ returns only, excludes QoS and pilot outcomes, and does not prove physical place
 ```json
 {
   "status": "complete",
+  "status_reason": null,
   "planned_runs": 6,
   "attempted_runs": 6,
   "completed_runs": 6,
   "conclusions_valid": true,
   "configuration": {
     "mode": "sweep",
+    "sweep_schema_version": 1,
     "base_mode": "benchmark",
     "run_count": 6,
     "sweep_max_runs": 256,
@@ -1748,13 +1753,15 @@ jq '.main_memory.latency.headline_ns.pooled_sample_distribution.statistics.p95' 
 jq '.main_memory.latency.automatic_locality_comparison.locality_latency_delta_ns.statistics.median' results.json
 
 # Reject incomplete standard output
-jq 'select(.results_complete == true)' results.json
+jq -e 'select(.configuration.benchmark_schema_version == 2 and
+              .status == "complete" and .results_complete == true)' results.json
 
 # Pattern random read median and status
 jq '{status: .patterns.random.bandwidth.read_gb_s.status, median: .patterns.random.bandwidth.read_gb_s.statistics.median_p50}' patterns.json
 
 # Reject incomplete pattern output
-jq 'select(.status == "complete" and .results_complete == true)' patterns.json
+jq -e 'select(.configuration.pattern_schema_version == 3 and
+              .status == "complete" and .results_complete == true)' patterns.json
 
 # Pattern phase-count semantics, requested/effective threads, and exact totals
 jq '.patterns.strided_2mb.bandwidth.read_gb_s.measurements[] | {requested_threads, effective_threads, accesses_per_pass, accesses_per_pass_semantics, min_accesses_per_pass, max_accesses_per_pass, phase_period_passes, total_accesses, total_payload_bytes}' patterns.json
@@ -1766,13 +1773,28 @@ jq '.tlb_analysis.l1_tlb_detection.boundary_locality_kb' tlb_analysis.json
 jq '.tlb_analysis.large_locality_paired_comparison.translation_delta_p50_ns' tlb_analysis.json
 
 # Reject incomplete standalone TLB output
-jq 'select(.configuration.schema_version == 4 and .tlb_analysis.status == "complete" and .tlb_analysis.conclusions_valid == true)' tlb_analysis.json
+jq -e 'select(.configuration.schema_version == 4 and
+              .tlb_analysis.status == "complete" and
+              .tlb_analysis.conclusions_valid == true)' tlb_analysis.json
 
 # Reject incomplete core-to-core output
-jq 'select(.configuration.schema_version == 2 and .core_to_core_latency.status == "complete" and .core_to_core_latency.measurements_complete == true)' core2core.json
+jq -e 'select(.configuration.schema_version == 2 and
+              .core_to_core_latency.status == "complete" and
+              .core_to_core_latency.measurements_complete == true)' core2core.json
+
+# Reject incomplete sweep envelope
+jq -e 'select(.configuration.sweep_schema_version == 1 and
+              .status == "complete" and .conclusions_valid == true and
+              .completed_runs == .planned_runs)' sweep.json
 
 # Reject incomplete GPU schema 1 output and inspect validated headlines
-jq 'select(.mode == "gpu_bandwidth" and .schema_version == 1 and .status == "complete" and .results_complete == true and .conclusions_valid == true) | .aggregates | with_entries(.value = {headline_gb_s: .value.headline_gb_s, sample_count: .value.sample_count, stability_quality: .value.stability_quality})' gpu_bandwidth.json
+jq -e 'select(.mode == "gpu_bandwidth" and .schema_version == 1 and
+              .status == "complete" and .results_complete == true and
+              .conclusions_valid == true) |
+       .aggregates |
+       with_entries(.value = {headline_gb_s: .value.headline_gb_s,
+                              sample_count: .value.sample_count,
+                              stability_quality: .value.stability_quality})' gpu_bandwidth.json
 
 # Inspect GPU exact payload, pass count, timing, and validation status
 jq '.measurements[] | {operation, status, value_gb_s, passes: .work_plan.passes, exact_payload_bytes: .work_plan.exact_payload_bytes, gpu_elapsed_seconds: .timed.gpu_elapsed_seconds, validation_status: .validation.validation_status}' gpu_bandwidth.json
@@ -1984,4 +2006,4 @@ memory_benchmark -h
 
 ---
 
-**Last Updated**: 2026-08-12
+**Last Updated**: 2026-08-20

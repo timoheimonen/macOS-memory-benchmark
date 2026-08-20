@@ -178,11 +178,13 @@ Additional sweep rules:
 - `--sweep latency-chain-mode=global-random` is invalid with `--analyze-tlb`.
 - Direct options outside `--sweep` are used as fixed values for every generated run.
 - If the same parameter is provided both directly and through `--sweep`, the sweep value is applied per run.
-- A real-file sweep is atomically checkpointed after every attempted run without an additional terminal rewrite. A
-  stdout sweep still performs every logical checkpoint transition without invoking the persistence payload builder or
-  serializing an intermediate document; one final envelope is emitted after orchestration. `attempted_runs` equals stored `runs`
-  entries; partial, interrupted, and failed attempts remain in that array but stop further execution and do not
-  increment `completed_runs`. A standard or pattern attempt is complete only with nested `status: "complete"` and
+- A real-file sweep is atomically checkpointed after every attempted run without an additional terminal rewrite. An
+  empty run plan or a stop observed before a run also checkpoints a terminal envelope without adding a `runs[]` entry or
+  incrementing `attempted_runs`. A stdout sweep still performs every corresponding logical checkpoint transition without
+  invoking the persistence payload builder or serializing an intermediate document; one final envelope is emitted after
+  orchestration. `attempted_runs` equals stored `runs` entries; partial, interrupted, and failed attempts remain in that
+  array but stop further execution and do not increment `completed_runs`. A standard or pattern attempt is complete only
+  with nested `status: "complete"` and
   `results_complete: true`; TLB requires nested `tlb_analysis.status: "complete"` and
   `tlb_analysis.conclusions_valid: true`; core-to-core requires nested `core_to_core_latency.status: "complete"` and
   `measurements_complete: true`. Top-level `conclusions_valid` is true only when the sweep status is complete and

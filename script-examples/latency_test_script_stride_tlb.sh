@@ -140,8 +140,11 @@ for path in sorted(json_dir.glob("*.json")):
         custom = cache.get("custom", {}) or {}
         latency = custom.get("latency", {}) or {}
         if cfg.get("benchmark_schema_version") == 2:
-            if not data.get("results_complete", False):
-                raise RuntimeError("incomplete benchmark result")
+            if data.get("status") != "complete" or data.get("results_complete") is not True:
+                raise RuntimeError(
+                    "incomplete benchmark result "
+                    "(schema 2 requires complete status and results_complete)"
+                )
             headline = latency.get("headline_ns", {}) or {}
             samples = headline.get("pooled_sample_distribution", {}) or {}
             stats = samples.get("statistics", {}) or {}

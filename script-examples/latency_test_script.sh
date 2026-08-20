@@ -146,10 +146,10 @@ extract_with_jq() {
     if ! jq 'if .mode == "gpu_bandwidth" and .schema_version == 1 then
                error("GPU bandwidth schema 1 is not supported by this standard CPU latency extractor")
              elif .configuration.benchmark_schema_version == 2 then
-               if .results_complete == true then
+               if .status == "complete" and .results_complete == true then
                  .cache.custom.latency.headline_ns.pooled_sample_distribution.statistics
                else
-                 error("incomplete benchmark result")
+                 error("incomplete benchmark result (schema 2 requires complete status and results_complete)")
                end
              else
                .cache.custom.latency.samples_ns.statistics
@@ -191,8 +191,11 @@ try:
             )
         latency = data['cache']['custom']['latency']
         if data.get('configuration', {}).get('benchmark_schema_version') == 2:
-            if not data.get('results_complete', False):
-                raise RuntimeError('incomplete benchmark result')
+            if data.get('status') != 'complete' or data.get('results_complete') is not True:
+                raise RuntimeError(
+                    'incomplete benchmark result '
+                    '(schema 2 requires complete status and results_complete)'
+                )
             stats = latency['headline_ns']['pooled_sample_distribution']['statistics']
         else:
             stats = latency['samples_ns']['statistics']

@@ -54,7 +54,7 @@ The sentinel is classified from the raw option value before path normalization:
 
 After successful parsing and mode selection, a supported machine-output command follows these stream rules:
 
-- stdout contains exactly one complete JSON document followed by one newline;
+- stdout contains exactly one UTF-8 JSON document, serialized with two-space indentation and followed by one newline;
 - banners, configuration, progress, result tables, information, warnings, and runtime errors are written to stderr;
 - no `-` or `-.tmp` transport file is created by the exact sentinel;
 - the JSON payload is the mode's existing file-output payload, not a transport-specific wrapper;
@@ -73,6 +73,10 @@ unsupported payload. Core-to-core measurement failures, TLB measurement errors, 
 allocation, or work-plan failures fall on this post-initialization path. An initialized GPU `unsupported` or failed
 payload is emitted with a non-zero process status.
 
+An observable final serialization, write, or flush failure returns `EXIT_FAILURE` and reports its diagnostic to stderr
+without changing the already-computed measurement state. Any stdout bytes from that failed transfer are not an
+acceptable result document.
+
 Abrupt process termination, a crash, `SIGKILL`, or an unusable stdout pipe cannot guarantee a final document. Version 1
 does not install a process-wide `SIGPIPE` policy.
 
@@ -82,7 +86,8 @@ Real file targets retain their existing persistence behavior:
 
 - standard commands atomically checkpoint after completed loop-state changes and write their normal terminal result;
 - pattern, TLB, and core-to-core commands write one terminal payload through the shared atomic file writer;
-- parameter sweeps atomically checkpoint their combined envelope after each attempted run;
+- parameter sweeps atomically checkpoint their combined envelope after each attempted run and also checkpoint a terminal
+  zero-attempt envelope when the run plan is empty or interruption is observed before a run;
 - GPU mode retains its mode-specific terminal-measurement and failure checkpoints;
 - a temporary `<target>.tmp` file is replaced atomically, and a failed replacement preserves the preceding destination
   when possible.

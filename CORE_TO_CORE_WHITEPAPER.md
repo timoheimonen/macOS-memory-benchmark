@@ -460,9 +460,11 @@ Core-to-core sweep mode requires `--output <target>`. Exact `-` emits one final 
 transcript to stderr; `./-` remains a file.
 
 A real-file core-to-core sweep is written through the atomic temporary-file-and-rename path after every attempted run,
-without an additional outer final write or checkpoint retry. A stdout sweep performs the same logical checkpoint
-transitions without invoking the lazy checkpoint builder, then emits one terminal envelope. The envelope records
-`configuration.sweep_schema_version: 1`, `status`, `status_reason`, `planned_runs`, `attempted_runs`,
+without an additional outer final write or checkpoint retry. An empty run plan or a stop observed before a run also
+checkpoints a terminal envelope without adding a `runs[]` entry or incrementing `attempted_runs`. A stdout sweep
+performs the same logical checkpoint transitions without invoking the lazy checkpoint builder, then emits one terminal
+envelope. The envelope records `configuration.sweep_schema_version: 1`, `status`, `status_reason`, `planned_runs`,
+`attempted_runs`,
 `completed_runs`, and `conclusions_valid`. Every run entry has its own `status` and `status_reason`. Only entries whose
 nested `core_to_core_latency.status` is `complete` and `measurements_complete` is `true` increment `completed_runs`;
 partial, interrupted, and failed entries remain auditable but do not. An interruption or later failure therefore does

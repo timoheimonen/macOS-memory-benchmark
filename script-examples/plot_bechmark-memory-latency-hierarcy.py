@@ -206,8 +206,11 @@ def load_latency_data(path: Path, metric: str):
     schema_version = config.get("benchmark_schema_version")
     try:
         if schema_version == 2:
-            if not data.get("results_complete", False):
-                raise RuntimeError("Standard benchmark JSON is incomplete (results_complete is false).")
+            if data.get("status") != "complete" or data.get("results_complete") is not True:
+                raise RuntimeError(
+                    "Standard benchmark JSON is incomplete "
+                    "(schema 2 requires complete status and results_complete)."
+                )
             l1_block = data["cache"]["l1"]["latency"]["headline_ns"]
             l2_block = data["cache"]["l2"]["latency"]["headline_ns"]
             locality = data["main_memory"]["latency"]["automatic_locality_comparison"]

@@ -156,7 +156,8 @@ Configuration state is represented by `BenchmarkConfig` (`src/core/config/config
 - Two-pass parse:
   - First pass extracts `--cache-size` early.
   - Second pass parses remaining options.
-- Parser may throw internally (`std::stoll`/validation) but converts to return-code failures at function boundary.
+- Strict integer parsing uses `std::from_chars`; parser validation may throw internally, but the function boundary
+  converts those failures to return codes.
 - Help (`-h`, `--help`) prints usage and exits successfully.
 - Standard/pattern/TLB output-target classification occurs only after successful parsing and help/no-mode handling.
   Core-to-core classifies its target after its dedicated combined parse/preflight and help handling; GPU does the same
@@ -164,7 +165,19 @@ Configuration state is represented by `BenchmarkConfig` (`src/core/config/config
   for final stdout JSON, while `./-` remains a relative file target.
 - `--latency-chain-mode` accepts string values and resolves to `LatencyChainMode` enum.
 - `--analyze-tlb` uses an early dedicated parse branch in `argument_parser.cpp`. It only allows optional `--output`, `--latency-stride-bytes`, `--latency-chain-mode`, `--tlb-density`, `--seed`, `--sweep`, and `--sweep-max-runs`. TLB sweep supports `latency-stride-bytes`, `latency-chain-mode`, and `tlb-density`; its default run guard is `16`, and `global-random` chain mode is rejected. One generated or user-provided seed drives the pure sweep planner, seeded cyclic Latin round scheduler, derived task seeds, layout-specific page-native chain permutations, and deterministic convergence bootstrap. Each task measures a verified one-node-per-page spread chain and an equal-cache-line packed control in the same round. A pilot calibrates whole-chain accesses toward the quick/standard/exhaustive target duration; rounds stop at the per-point CI-width target or profile maximum. Candidate buffers are admitted only when their predicted buffer-plus-scratch peak fits the available-memory budget. Full methodology and JSON contract: [TLB_ANALYSIS_WHITEPAPER.md](TLB_ANALYSIS_WHITEPAPER.md).
-- `--analyze-core2core` uses dedicated mode parsing (outside `argument_parser.cpp`) and only allows optional `--output`, `--count`, `--latency-samples`, `--sweep`, `--sweep-max-runs`, and `--help`. Its mode-specific loop default is `3`; the general loop default remains `1`. Core-to-core sweep supports `count` and `latency-samples`, rejects duplicate sweep keys, and atomically checkpoints a real-file combined output after every attempted run; stdout keeps the same state transitions but emits only the terminal envelope. Only a nested `status: "complete"` result with `measurements_complete: true` increments `completed_runs`. Direct and sweep execution use the shared scope-bound signal guard before creating workers and restore the calling thread's exact previous mask on every return path. Each scheduler-hint scenario runs an excluded pilot after a 1,000,000-round-trip warmup intended to reduce pilot startup transients, reuses its duration-calibrated plan across measured loops, and participates in a cyclic Latin-square scenario schedule. The result is effective acquire/release token-protocol round-trip time, not an isolated physical cache-line migration or coherence-fabric latency. Full methodology and JSON schema 2 contract: [CORE_TO_CORE_WHITEPAPER.md](CORE_TO_CORE_WHITEPAPER.md).
+- `--analyze-core2core` uses dedicated mode parsing (outside `argument_parser.cpp`) and only allows optional `--output`,
+  `--count`, `--latency-samples`, `--sweep`, `--sweep-max-runs`, and `--help`. Its mode-specific loop default is `3`;
+  the general loop default remains `1`. Core-to-core sweep supports `count` and `latency-samples`, rejects duplicate
+  sweep keys, and atomically checkpoints a real-file combined output after every attempted run; an empty run plan or a
+  stop observed before a run checkpoints a terminal zero-attempt envelope. Stdout keeps the same state transitions but
+  emits only the terminal envelope. Only a nested `status: "complete"` result with `measurements_complete: true`
+  increments `completed_runs`.
+  Direct and sweep execution use the shared scope-bound signal guard before creating workers and restore the calling
+  thread's exact previous mask on every return path. Each scheduler-hint scenario runs an excluded pilot after a
+  1,000,000-round-trip warmup intended to reduce pilot startup transients, reuses its duration-calibrated plan across
+  measured loops, and participates in a cyclic Latin-square scenario schedule. The result is effective acquire/release
+  token-protocol round-trip time, not an isolated physical cache-line migration or coherence-fabric latency. Full
+  methodology and JSON schema 2 contract: [CORE_TO_CORE_WHITEPAPER.md](CORE_TO_CORE_WHITEPAPER.md).
 - `--gpu-bandwidth` uses a dedicated parser outside `argument_parser.cpp`. It accepts only `-G`/`--gpu-bandwidth`,
   `-b`/`--buffer-size`, `-i`/`--iterations`, `-r`/`--count`, `--seed`, `-o`/`--output`, and
   `-h`/`--help`. Duplicates, unknown/incompatible options, missing values, partial numeric tokens, non-positive
@@ -693,7 +706,19 @@ for exact raw `-`, to one final stdout document. This transport does not wrap or
 - GPU schema 1: top-level mode/schema/methodology/status, exact counters and completeness, effective/copy/DRAM semantics,
   config/argv, environment, backend device/compile/allocation, memory budget, frozen plans, excluded calibration,
   status-bearing measurements/loop records, aggregates, and warnings.
-- Sweep envelope schema 1: general and core-to-core producers record `configuration.mode = "sweep"`, `configuration.sweep_schema_version = 1`, `configuration.base_mode`, `configuration.sweep_parameters`, top-level `status`, `status_reason`, `planned_runs`, `attempted_runs`, `completed_runs`, and `conclusions_valid`, plus per-entry `runs[].status`, `status_reason`, and `result`. Every attempted run is retained and `attempted_runs == runs.size()`; a file target checkpoints each attempt, while stdout defers serialization until the terminal envelope. `completed_runs` requires nested `status: "complete"` and `results_complete: true` for standard/pattern, `tlb_analysis.status: "complete"` and `tlb_analysis.conclusions_valid: true` for TLB, or `core_to_core_latency.status: "complete"` and `measurements_complete: true` for core-to-core. Partial, interrupted, and failed attempts remain as evidence without incrementing the completed count. TLB's native `status: "error"` maps to a failed attempt while its schema-4 payload is retained without a fabricated nested `status_reason`. Top-level `conclusions_valid` is true only when top-level status is complete and `completed_runs == planned_runs`.
+- Sweep envelope schema 1: general and core-to-core producers record `configuration.mode = "sweep"`,
+  `configuration.sweep_schema_version = 1`, `configuration.base_mode`, `configuration.sweep_parameters`, top-level
+  `status`, `status_reason`, `planned_runs`, `attempted_runs`, `completed_runs`, and `conclusions_valid`, plus per-entry
+  `runs[].status`, `status_reason`, and `result`. Every attempted run is retained and
+  `attempted_runs == runs.size()`; a file target checkpoints each attempt and also checkpoints a terminal envelope when
+  the run plan is empty or a stop is observed before a run, without incrementing `attempted_runs`. Stdout preserves that
+  logical cadence but defers serialization until the terminal envelope. `completed_runs` requires nested
+  `status: "complete"` and `results_complete: true` for
+  standard/pattern, `tlb_analysis.status: "complete"` and `tlb_analysis.conclusions_valid: true` for TLB, or
+  `core_to_core_latency.status: "complete"` and `measurements_complete: true` for core-to-core. Partial, interrupted,
+  and failed attempts remain as evidence without incrementing the completed count. TLB's native `status: "error"` maps
+  to a failed attempt while its schema-4 payload is retained without a fabricated nested `status_reason`. Top-level
+  `conclusions_valid` is true only when top-level status is complete and `completed_runs == planned_runs`.
 
 Pattern schema 3 plans 21 measurements per loop and treats numeric measured values plus intentional skips as terminal.
 Only Complete loops feed aggregate vectors, medians, statistics, and console summaries. Partial, interrupted, and failed
@@ -792,8 +817,10 @@ spelling can preserve the raw path. The shared atomic file writer remains sentin
 For a stdout target, the single-owner session retains the original `std::cout` buffer and routes ordinary command output
 to `std::cerr`. Final JSON uses a separate stream backed by the retained buffer, so benchmark formatting state cannot
 affect serialization. Stdout checkpoints are lazy successful no-ops and do not build payloads; file checkpoints still
-use atomic replacement. Final stdout serialization uses two-space indentation and one trailing newline, checks write
-and flush state, contains exceptions, and restores the prior stream buffer through the scope-bound destructor.
+use atomic replacement. Final stdout serialization emits UTF-8 JSON with two-space indentation and one trailing newline,
+checks write and flush state, contains exceptions, and restores the prior stream buffer through the scope-bound
+destructor. An observable terminal serialization, write, or flush failure returns `EXIT_FAILURE` without changing the
+already-computed measurement state.
 
 Standard, pattern, and TLB command boundaries select this infrastructure after successful parse/help handling and before
 direct or sweep validation. Core-to-core selects it after its dedicated combined parse/preflight and help handling, but

@@ -99,11 +99,13 @@ file. `--sweep-max-runs <count>` limits the number of generated combinations. It
 and `256` for other modes; an explicit value overrides the mode default.
 
 Each sweep parameter key may appear only once. A combined real-file JSON result is atomically checkpointed after each
-attempted run. A stdout run keeps the same logical transitions but skips lazy checkpoint serialization and emits the
-final envelope once. Both transports record top-level `status`, `status_reason`, `planned_runs`, `attempted_runs`,
-`completed_runs`, and `conclusions_valid` fields. Every attempted run is retained with its own `status` and
-`status_reason`, so `attempted_runs` equals the length of `runs`. A TLB attempt increments `completed_runs` only when its
-nested `tlb_analysis.status` is `complete` and its nested `tlb_analysis.conclusions_valid` is `true`; partial,
+attempted run. An empty run plan or a stop observed before a run also checkpoints a terminal envelope without adding a
+`runs[]` entry or incrementing `attempted_runs`. A stdout run keeps the same logical transitions but skips lazy
+checkpoint serialization and emits the final envelope once. Both transports record top-level `status`, `status_reason`,
+`planned_runs`, `attempted_runs`, `completed_runs`, and `conclusions_valid` fields. Every attempted run is retained with
+its own `status` and `status_reason`, so `attempted_runs` equals the length of `runs`. A TLB attempt increments
+`completed_runs` only when its nested `tlb_analysis.status` is `complete` and its nested
+`tlb_analysis.conclusions_valid` is `true`; partial,
 interrupted, and failed attempts remain auditable but do not increment the completed count. The first incomplete attempt
 stops further runs.
 
@@ -499,7 +501,8 @@ When `--sweep` is used with `--analyze-tlb`, output uses the common sweep envelo
 
 Each `runs[].result` entry is the same single-run TLB analysis JSON payload described in section 9.1.
 The top-level sweep object also includes `status`, `status_reason`, `planned_runs`, `attempted_runs`, `completed_runs`,
-and `conclusions_valid`. A real file is atomically rewritten after every attempted run, so a later failure or interrupt
+and `conclusions_valid`. A real file is atomically rewritten after every attempted run. An empty run plan or a stop
+observed before a run also writes a terminal envelope without adding a run attempt, so a later failure or interrupt
 leaves a readable checkpoint; no redundant outer final write or checkpoint retry is added. Exact target `-` writes one
 terminal envelope to stdout after orchestration rather than a checkpoint stream. `attempted_runs` equals the length of
 `runs`; `completed_runs` includes only entries whose nested

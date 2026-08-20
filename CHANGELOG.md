@@ -23,6 +23,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - **Machine-readable CLI API release contract established**: Reserved exact `--output -` as the final-only stdout JSON transport for the upcoming process API, fixed its serialization policy at two-space indentation with one trailing newline, and selected additive `configuration.sweep_schema_version: 1` for both sweep envelopes. Existing mode schemas, file-output checkpoint behavior, benchmark methodology, and software version remain unchanged in this governance-only preparation.
   - **Executable CLI tests isolate process streams and working directories**: Subprocess coverage now captures stdout and stderr independently in unique temporary directories, resolves the executable before changing child directories, applies a bounded timeout with cleanup, and verifies JSON-only stdout, human-only stderr, help behavior, and exact sentinel artifact rules without pipe deadlock risk.
 
+### Fixed
+  - **Machine consumers reject incomplete results consistently**: Bundled schema-2 latency extractors now require both `status: "complete"` and `results_complete: true`, while the manual's `jq -e` examples enforce every mode's schema and completeness predicate. The API and mode references now also record observable stdout-transfer failures, zero-attempt sweep checkpoints, and the complete schema-1 sweep example.
+
 ## [0.61.2] - 2026-08-13
 
 ### Changed
