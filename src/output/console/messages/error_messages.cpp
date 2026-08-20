@@ -492,9 +492,4 @@ const std::string& error_sweep_requires_output() {
   return msg;
 }
 
-std::string error_sweep_temp_json_parse_failed(const std::string& file_path,
-                                               const std::string& error_details) {
-  return "Failed to read sweep run JSON from " + file_path + ": " + error_details;
-}
-
 } // namespace Messages

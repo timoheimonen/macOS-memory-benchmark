@@ -154,7 +154,8 @@ the frozen 8192-threadgroup maximum and records both that maximum and the resolv
 
 `--sweep` runs a Cartesian product over one or more parameter lists. It always requires `--output <file>` because sweep
 results are written as one combined JSON document with `configuration.mode: "sweep"` and per-run payloads under
-`runs[].result`.
+`runs[].result`. General and core-to-core envelopes use `configuration.sweep_schema_version: 1`; each nested result keeps
+its own mode schema version.
 
 | Base mode | Supported sweep keys | Not supported |
 |-----------|----------------------|---------------|
@@ -180,7 +181,8 @@ Additional sweep rules:
   `results_complete: true`; TLB requires nested `tlb_analysis.status: "complete"` and
   `tlb_analysis.conclusions_valid: true`; core-to-core requires nested `core_to_core_latency.status: "complete"` and
   `measurements_complete: true`. Top-level `conclusions_valid` is true only when the sweep status is complete and
-  `completed_runs == planned_runs`.
+  `completed_runs == planned_runs`. A nested TLB `status: "error"` is retained in `runs[].result` and maps the attempt to
+  failed without adding a TLB `status_reason` field.
 
 ### Incompatible Modifier Combinations
 

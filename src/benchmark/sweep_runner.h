@@ -81,6 +81,17 @@ SweepNestedCompletion classify_sweep_nested_completion(SweepNestedMode mode, con
  *
  * Every attempted run is appended before its checkpoint. `completed_runs`
  * counts only nested results classified as complete for the selected mode.
+ * Both sweep producers receive `configuration.sweep_schema_version` here
+ * before the first checkpoint; a missing or non-object configuration member
+ * is normalized to an object.
+ *
+ * @param mode Nested result schema used for completion classification.
+ * @param run_parameters Immutable parameter object for every planned run.
+ * @param initial_output Initial envelope metadata, moved into the result.
+ * @param hooks Required executor/checkpoint seams and optional clock/stop seams.
+ * @return Terminal status and the latest complete in-memory envelope.
+ * @note Hooks are called synchronously on the invoking thread. Exceptions from
+ *       hooks are not contained by this coordinator.
  */
 SweepExecutionResult execute_sweep_plan(SweepNestedMode mode, const std::vector<nlohmann::ordered_json>& run_parameters,
                                         nlohmann::ordered_json initial_output, const SweepExecutionHooks& hooks);

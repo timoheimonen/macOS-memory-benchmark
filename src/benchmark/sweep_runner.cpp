@@ -24,7 +24,6 @@
 #include <filesystem>
 #include <iostream>
 #include <string>
-#include <unistd.h>
 #include <utility>
 #include <vector>
 
@@ -206,30 +205,30 @@ int run_standard_sweep_point(BenchmarkConfig& run_config, nlohmann::ordered_json
   }
 
   BenchmarkStatistics stats;
-  if (run_all_benchmarks(run_config, stats) != EXIT_SUCCESS) {
-    return EXIT_FAILURE;
-  }
+  const int run_status = run_all_benchmarks(run_config, stats);
 
   const double elapsed_sec = timer.stop();
-  print_statistics(run_config.loop_count, stats.all_read_bw_gb_s, stats.all_write_bw_gb_s, stats.all_copy_bw_gb_s,
-                   stats.all_l1_latency_ns, stats.all_l2_latency_ns,
-                   stats.all_l1_read_bw_gb_s, stats.all_l1_write_bw_gb_s, stats.all_l1_copy_bw_gb_s,
-                   stats.all_l2_read_bw_gb_s, stats.all_l2_write_bw_gb_s, stats.all_l2_copy_bw_gb_s,
-                   stats.all_average_latency_ns,
-                   stats.all_tlb_hit_latency_ns,
-                   stats.all_tlb_miss_latency_ns,
-                   stats.all_page_walk_penalty_ns,
-                   run_config.use_custom_cache_size,
-                   stats.all_custom_latency_ns, stats.all_custom_read_bw_gb_s,
-                   stats.all_custom_write_bw_gb_s, stats.all_custom_copy_bw_gb_s,
-                   stats.all_main_mem_latency_samples,
-                   stats.all_l1_latency_samples,
-                   stats.all_l2_latency_samples,
-                   stats.all_custom_latency_samples,
-                   run_config.only_bandwidth,
-                   run_config.only_latency);
+  if (run_status == EXIT_SUCCESS) {
+    print_statistics(run_config.loop_count, stats.all_read_bw_gb_s, stats.all_write_bw_gb_s, stats.all_copy_bw_gb_s,
+                     stats.all_l1_latency_ns, stats.all_l2_latency_ns,
+                     stats.all_l1_read_bw_gb_s, stats.all_l1_write_bw_gb_s, stats.all_l1_copy_bw_gb_s,
+                     stats.all_l2_read_bw_gb_s, stats.all_l2_write_bw_gb_s, stats.all_l2_copy_bw_gb_s,
+                     stats.all_average_latency_ns,
+                     stats.all_tlb_hit_latency_ns,
+                     stats.all_tlb_miss_latency_ns,
+                     stats.all_page_walk_penalty_ns,
+                     run_config.use_custom_cache_size,
+                     stats.all_custom_latency_ns, stats.all_custom_read_bw_gb_s,
+                     stats.all_custom_write_bw_gb_s, stats.all_custom_copy_bw_gb_s,
+                     stats.all_main_mem_latency_samples,
+                     stats.all_l1_latency_samples,
+                     stats.all_l2_latency_samples,
+                     stats.all_custom_latency_samples,
+                     run_config.only_bandwidth,
+                     run_config.only_latency);
+  }
   result_json = build_results_json(run_config, stats, elapsed_sec);
-  return EXIT_SUCCESS;
+  return run_status;
 }
 
 int run_pattern_sweep_point(BenchmarkConfig& run_config, nlohmann::ordered_json& result_json) {
@@ -264,42 +263,14 @@ int run_pattern_sweep_point(BenchmarkConfig& run_config, nlohmann::ordered_json&
 }
 
 int run_tlb_sweep_point(BenchmarkConfig& run_config,
-                        size_t run_index,
                         nlohmann::ordered_json& result_json) {
-  const std::filesystem::path temp_path =
-      std::filesystem::temp_directory_path() /
-      ("memory_benchmark_sweep_" + std::to_string(static_cast<long long>(getpid())) +
-       "_" + std::to_string(run_index) + ".json");
-  run_config.output_file = temp_path.string();
-
-  if (run_tlb_analysis(run_config) != EXIT_SUCCESS) {
-    std::error_code ignored;
-    std::filesystem::remove(temp_path, ignored);
-    return EXIT_FAILURE;
-  }
-
-  nlohmann::json parsed_json;
-  std::string error_message;
-  if (!parse_json_from_file(temp_path.string(), parsed_json, error_message)) {
-    std::cerr << Messages::error_prefix()
-              << Messages::error_sweep_temp_json_parse_failed(temp_path.string(), error_message)
-              << std::endl;
-    std::error_code ignored;
-    std::filesystem::remove(temp_path, ignored);
-    return EXIT_FAILURE;
-  }
-
-  std::error_code ignored;
-  std::filesystem::remove(temp_path, ignored);
-  result_json = parsed_json;
-  return EXIT_SUCCESS;
+  return run_tlb_analysis_collect(run_config, result_json);
 }
 
 int run_sweep_point(BenchmarkConfig& run_config,
-                    size_t run_index,
                     nlohmann::ordered_json& result_json) {
   if (run_config.analyze_tlb) {
-    return run_tlb_sweep_point(run_config, run_index, result_json);
+    return run_tlb_sweep_point(run_config, result_json);
   }
   if (run_config.run_patterns) {
     return run_pattern_sweep_point(run_config, result_json);
@@ -372,17 +343,16 @@ SweepNestedCompletion classify_tlb_completion(const nlohmann::ordered_json& resu
   }
   const nlohmann::ordered_json& analysis = result_json["tlb_analysis"];
   const std::string status = optional_string(analysis, "status");
-  const std::string reason = optional_string(analysis, "status_reason");
   if (status == "complete" && optional_bool(analysis, "conclusions_valid")) {
     return {SweepAttemptStatus::Complete, ""};
   }
   if (status == "interrupted") {
-    return {SweepAttemptStatus::Interrupted, reason.empty() ? "nested-tlb-run-interrupted" : reason};
+    return {SweepAttemptStatus::Interrupted, "nested-tlb-run-interrupted"};
   }
-  if (status == "failed") {
-    return {SweepAttemptStatus::Failed, reason.empty() ? "nested-tlb-run-failed" : reason};
+  if (status == "error") {
+    return {SweepAttemptStatus::Failed, "nested-tlb-run-error"};
   }
-  return {SweepAttemptStatus::Partial, reason.empty() ? "nested-tlb-result-incomplete" : reason};
+  return {SweepAttemptStatus::Partial, "nested-tlb-result-incomplete"};
 }
 
 SweepNestedCompletion classify_core_to_core_completion(const nlohmann::ordered_json& result_json) {
@@ -463,6 +433,13 @@ SweepExecutionResult execute_sweep_plan(SweepNestedMode mode, const std::vector<
                                         nlohmann::ordered_json initial_output, const SweepExecutionHooks& hooks) {
   SweepExecutionResult execution;
   execution.output_json = std::move(initial_output);
+  // General and core-to-core producers converge here before the first
+  // checkpoint, so every persisted envelope has the same schema authority.
+  nlohmann::ordered_json& configuration = execution.output_json[JsonKeys::CONFIGURATION];
+  if (!configuration.is_object()) {
+    configuration = nlohmann::ordered_json::object();
+  }
+  configuration["sweep_schema_version"] = Constants::SWEEP_JSON_SCHEMA_VERSION;
   nlohmann::ordered_json runs_json = nlohmann::ordered_json::array();
 
   const auto elapsed_seconds = [&hooks]() { return hooks.elapsed_seconds ? hooks.elapsed_seconds() : 0.0; };
@@ -514,11 +491,17 @@ SweepExecutionResult execute_sweep_plan(SweepNestedMode mode, const std::vector<
 
     const SweepRunOutcome outcome = hooks.execute_run(run_index);
     SweepNestedCompletion completion;
-    if (outcome.exit_code == EXIT_SUCCESS) {
+    if (!outcome.result_json.empty() || outcome.exit_code == EXIT_SUCCESS) {
       completion = classify_sweep_nested_completion(mode, outcome.result_json);
     } else {
       completion.status = SweepAttemptStatus::Failed;
       completion.reason = outcome.failure_reason.empty() ? "nested-run-execution-failed" : outcome.failure_reason;
+    }
+    if (outcome.exit_code != EXIT_SUCCESS) {
+      completion.status = SweepAttemptStatus::Failed;
+      if (!outcome.failure_reason.empty()) {
+        completion.reason = outcome.failure_reason;
+      }
     }
 
     nlohmann::ordered_json run_json;
@@ -639,8 +622,8 @@ int run_sweep_mode(const BenchmarkConfig& base_config) {
     run_config.main_thread_qos_applied = qos_result.applied;
     run_config.main_thread_qos_code = qos_result.code;
     SweepRunOutcome outcome;
-    outcome.exit_code = run_sweep_point(run_config, run_index, outcome.result_json);
-    if (outcome.exit_code != EXIT_SUCCESS) {
+    outcome.exit_code = run_sweep_point(run_config, outcome.result_json);
+    if (outcome.exit_code != EXIT_SUCCESS && outcome.result_json.empty()) {
       outcome.failure_reason = "nested-run-execution-failed";
     }
     return outcome;

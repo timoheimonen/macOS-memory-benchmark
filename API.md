@@ -90,6 +90,13 @@ contract version 1 first appears in software version `0.62.0`.
 | Patterns | `configuration.pattern_schema_version == 3` | `status == "complete" && results_complete == true` |
 | TLB | `configuration.schema_version == 4` | `tlb_analysis.status == "complete" && tlb_analysis.conclusions_valid == true` |
 | Core-to-core | `configuration.schema_version == 2` | `core_to_core_latency.status == "complete" && core_to_core_latency.measurements_complete == true` |
+| General CPU sweep | `configuration.sweep_schema_version == 1` | `status == "complete" && conclusions_valid == true && completed_runs == planned_runs` |
+| Core-to-core sweep | `configuration.sweep_schema_version == 1` | `status == "complete" && conclusions_valid == true && completed_runs == planned_runs` |
+
+Each `runs[].result` in a sweep retains its nested mode's own schema-version field and completeness contract. A non-zero
+nested execution that initialized a result remains in the envelope: its attempt is failed, but the payload is not
+replaced by a generic diagnostic. In particular, nested TLB `tlb_analysis.status == "error"` maps to a failed sweep
+attempt without adding a `tlb_analysis.status_reason` field.
 
 Command completeness does not make every optional metric available. A selected standard measurement must have its
 mode-specific measured/quality state and a non-null value. A pattern measurement may be intentionally `skipped` while
@@ -156,6 +163,8 @@ jq -e '.configuration.schema_version == 2 and
 - `version` identifies the application release; it is not a result schema version.
 - Standard schema 2, pattern schema 3, TLB schema 4, and core-to-core schema 2 remain authoritative at their existing
   locations. The schema field is intentionally not normalized across these established payloads.
+- Both general and core-to-core sweep envelopes use `configuration.sweep_schema_version == 1`; nested results keep their
+  independent mode schema versions.
 - Additive optional fields may remain within a schema version only when old consumers can safely ignore them.
 - Removing or renaming a field, changing its type, or changing its meaning requires a mode schema-version bump.
 - A methodology change that affects comparison requires the mode's methodology-version mechanism even when JSON shape

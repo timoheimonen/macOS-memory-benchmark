@@ -150,7 +150,6 @@ const std::string& error_sweep_requires_parameter();
 std::string error_sweep_too_many_runs(size_t run_count, size_t max_runs);
 std::string error_sweep_parameter_not_allowed(const std::string& parameter_name, const std::string& mode_name);
 const std::string& error_sweep_requires_output();
-std::string error_sweep_temp_json_parse_failed(const std::string& file_path, const std::string& error_details);
 
 // --- Warning Messages ---
 const std::string& warning_prefix();

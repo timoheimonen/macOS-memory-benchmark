@@ -12,6 +12,7 @@
 #include <vector>
 
 #include "benchmark/sweep_runner.h"
+#include "core/config/constants.h"
 
 namespace {
 
@@ -30,8 +31,8 @@ Json make_standard_result(const std::string& status, bool results_complete, cons
   return {{"status", status}, {"status_reason", reason}, {"results_complete", results_complete}};
 }
 
-Json make_tlb_result(const std::string& status, bool conclusions_valid, const std::string& reason = "") {
-  return {{"tlb_analysis", {{"status", status}, {"status_reason", reason}, {"conclusions_valid", conclusions_valid}}}};
+Json make_tlb_result(const std::string& status, bool conclusions_valid) {
+  return {{"tlb_analysis", {{"status", status}, {"conclusions_valid", conclusions_valid}}}};
 }
 
 Json make_pattern_result(const std::string& status, bool results_complete, const std::string& reason = "") {
@@ -97,6 +98,24 @@ TEST(SweepRunnerTest, NestedCompletionIsModeAware) {
   const SweepNestedCompletion unvalidated_tlb =
       classify_sweep_nested_completion(SweepNestedMode::TlbAnalysis, make_tlb_result("complete", false));
   EXPECT_EQ(unvalidated_tlb.status, SweepAttemptStatus::Partial);
+  EXPECT_EQ(unvalidated_tlb.reason, "nested-tlb-result-incomplete");
+
+  const SweepNestedCompletion partial_tlb =
+      classify_sweep_nested_completion(SweepNestedMode::TlbAnalysis, make_tlb_result("partial", false));
+  EXPECT_EQ(partial_tlb.status, SweepAttemptStatus::Partial);
+  EXPECT_EQ(partial_tlb.reason, "nested-tlb-result-incomplete");
+
+  const SweepNestedCompletion interrupted_tlb =
+      classify_sweep_nested_completion(SweepNestedMode::TlbAnalysis, make_tlb_result("interrupted", false));
+  EXPECT_EQ(interrupted_tlb.status, SweepAttemptStatus::Interrupted);
+  EXPECT_EQ(interrupted_tlb.reason, "nested-tlb-run-interrupted");
+
+  const Json error_tlb_result = make_tlb_result("error", false);
+  const SweepNestedCompletion error_tlb =
+      classify_sweep_nested_completion(SweepNestedMode::TlbAnalysis, error_tlb_result);
+  EXPECT_EQ(error_tlb.status, SweepAttemptStatus::Failed);
+  EXPECT_EQ(error_tlb.reason, "nested-tlb-run-error");
+  EXPECT_FALSE(error_tlb_result["tlb_analysis"].contains("status_reason"));
 
   const SweepNestedCompletion incomplete_pattern = classify_sweep_nested_completion(
       SweepNestedMode::Patterns, make_pattern_result("partial", false, "pattern loops remain"));
@@ -153,6 +172,44 @@ TEST(SweepRunnerTest, CompleteSweepCheckpointsEveryRunAndValidatesConclusions) {
   EXPECT_EQ(announce_flags, (std::vector<bool>{false, true}));
 }
 
+TEST(SweepRunnerTest, SharedEnvelopeSchemaIsAppliedForGeneralAndCoreToCoreProducers) {
+  struct ProducerCase {
+    SweepNestedMode mode;
+    const char* base_mode;
+    Json result;
+  };
+  const std::vector<ProducerCase> producer_cases = {
+      {SweepNestedMode::Standard, Constants::BENCHMARK_JSON_MODE_NAME,
+       make_standard_result("complete", true)},
+      {SweepNestedMode::CoreToCore, Constants::CORE_TO_CORE_JSON_MODE_NAME,
+       make_core_to_core_result("complete", true)},
+  };
+
+  for (const ProducerCase& producer_case : producer_cases) {
+    const std::vector<SweepRunOutcome> outcomes = {
+        {EXIT_SUCCESS, producer_case.result, ""},
+    };
+    std::vector<Json> checkpoints;
+    std::vector<bool> announce_flags;
+    size_t executed_runs = 0;
+    Json initial_output = {
+        {"configuration", {{"mode", Constants::SWEEP_JSON_MODE_NAME},
+                           {"base_mode", producer_case.base_mode}}},
+    };
+
+    const SweepExecutionResult execution =
+        execute_sweep_plan(producer_case.mode, make_parameters(1), std::move(initial_output),
+                           make_hooks(outcomes, checkpoints, announce_flags, executed_runs));
+
+    ASSERT_EQ(execution.exit_code, EXIT_SUCCESS);
+    EXPECT_EQ(execution.output_json["configuration"]["sweep_schema_version"],
+              Constants::SWEEP_JSON_SCHEMA_VERSION);
+    ASSERT_EQ(checkpoints.size(), 1u);
+    EXPECT_EQ(checkpoints[0]["configuration"]["sweep_schema_version"],
+              Constants::SWEEP_JSON_SCHEMA_VERSION);
+  }
+}
+
 TEST(SweepRunnerTest, PartialNestedRunStopsAndPreservesPriorCompleteRun) {
   const std::vector<SweepRunOutcome> outcomes = {
       {EXIT_SUCCESS, make_standard_result("complete", true), ""},
@@ -183,7 +240,7 @@ TEST(SweepRunnerTest, PartialNestedRunStopsAndPreservesPriorCompleteRun) {
 TEST(SweepRunnerTest, InterruptedNestedRunIsAttemptedButNotCompleted) {
   const std::vector<SweepRunOutcome> outcomes = {
       {EXIT_SUCCESS, make_tlb_result("complete", true), ""},
-      {EXIT_SUCCESS, make_tlb_result("interrupted", false, "stop requested"), ""},
+      {EXIT_SUCCESS, make_tlb_result("interrupted", false), ""},
   };
   std::vector<Json> checkpoints;
   std::vector<bool> announce_flags;
@@ -198,10 +255,11 @@ TEST(SweepRunnerTest, InterruptedNestedRunIsAttemptedButNotCompleted) {
   EXPECT_EQ(execution.output_json["completed_runs"], 1u);
   EXPECT_FALSE(execution.output_json["conclusions_valid"]);
   EXPECT_EQ(execution.output_json["runs"][1]["status"], "interrupted");
-  EXPECT_EQ(execution.output_json["runs"][1]["status_reason"], "stop requested");
+  EXPECT_EQ(execution.output_json["runs"][1]["status_reason"], "nested-tlb-run-interrupted");
+  EXPECT_FALSE(execution.output_json["runs"][1]["result"]["tlb_analysis"].contains("status_reason"));
 }
 
-TEST(SweepRunnerTest, ExecutionFailureIsRecordedAndPriorResultSurvives) {
+TEST(SweepRunnerTest, ExplicitFailureReasonOverridesClassificationWithoutDiscardingPayload) {
   const std::vector<SweepRunOutcome> outcomes = {
       {EXIT_SUCCESS, make_standard_result("complete", true), ""},
       {EXIT_FAILURE, {{"diagnostic", "runner failed after setup"}}, "simulated-execution-failure"},
@@ -224,6 +282,88 @@ TEST(SweepRunnerTest, ExecutionFailureIsRecordedAndPriorResultSurvives) {
   EXPECT_EQ(execution.output_json["runs"][1]["status_reason"], "simulated-execution-failure");
   EXPECT_EQ(execution.output_json["runs"][1]["result"]["diagnostic"], "runner failed after setup");
   EXPECT_EQ(checkpoints.size(), 2u);
+}
+
+TEST(SweepRunnerTest, NonemptyFailurePayloadRetainsClassifierReasonWhenNoOverrideExists) {
+  const Json incomplete_result = {{"diagnostic", "runner failed after setup"}};
+  const std::vector<SweepRunOutcome> outcomes = {
+      {EXIT_FAILURE, incomplete_result, ""},
+  };
+  std::vector<Json> checkpoints;
+  std::vector<bool> announce_flags;
+  size_t executed_runs = 0;
+
+  const SweepExecutionResult execution =
+      execute_sweep_plan(SweepNestedMode::Standard, make_parameters(1), Json::object(),
+                         make_hooks(outcomes, checkpoints, announce_flags, executed_runs));
+
+  ASSERT_EQ(execution.exit_code, EXIT_FAILURE);
+  ASSERT_EQ(execution.output_json["runs"].size(), 1u);
+  EXPECT_EQ(execution.output_json["runs"][0]["status"], "failed");
+  EXPECT_EQ(execution.output_json["runs"][0]["status_reason"],
+            "nested-standard-result-incomplete");
+  EXPECT_EQ(execution.output_json["runs"][0]["result"], incomplete_result);
+}
+
+TEST(SweepRunnerTest, InitializedStandardFailureRetainsPayloadAndModeReason) {
+  const Json failed_result = make_standard_result("failed", false, "benchmark timer failed");
+  const std::vector<SweepRunOutcome> outcomes = {
+      {EXIT_FAILURE, failed_result, ""},
+  };
+  std::vector<Json> checkpoints;
+  std::vector<bool> announce_flags;
+  size_t executed_runs = 0;
+
+  const SweepExecutionResult execution =
+      execute_sweep_plan(SweepNestedMode::Standard, make_parameters(1), Json::object(),
+                         make_hooks(outcomes, checkpoints, announce_flags, executed_runs));
+
+  ASSERT_EQ(execution.exit_code, EXIT_FAILURE);
+  EXPECT_EQ(execution.output_json["status"], "failed");
+  ASSERT_EQ(execution.output_json["runs"].size(), 1u);
+  EXPECT_EQ(execution.output_json["runs"][0]["status"], "failed");
+  EXPECT_EQ(execution.output_json["runs"][0]["status_reason"], "benchmark timer failed");
+  EXPECT_EQ(execution.output_json["runs"][0]["result"], failed_result);
+}
+
+TEST(SweepRunnerTest, TlbErrorMapsToFailedAndRetainsSchemaPayload) {
+  const Json error_result = make_tlb_result("error", false);
+  const std::vector<SweepRunOutcome> outcomes = {
+      {EXIT_FAILURE, error_result, ""},
+  };
+  std::vector<Json> checkpoints;
+  std::vector<bool> announce_flags;
+  size_t executed_runs = 0;
+
+  const SweepExecutionResult execution =
+      execute_sweep_plan(SweepNestedMode::TlbAnalysis, make_parameters(1), Json::object(),
+                         make_hooks(outcomes, checkpoints, announce_flags, executed_runs));
+
+  ASSERT_EQ(execution.exit_code, EXIT_FAILURE);
+  EXPECT_EQ(execution.output_json["status"], "failed");
+  ASSERT_EQ(execution.output_json["runs"].size(), 1u);
+  EXPECT_EQ(execution.output_json["runs"][0]["status"], "failed");
+  EXPECT_EQ(execution.output_json["runs"][0]["status_reason"], "nested-tlb-run-error");
+  EXPECT_EQ(execution.output_json["runs"][0]["result"], error_result);
+  EXPECT_FALSE(execution.output_json["runs"][0]["result"]["tlb_analysis"].contains("status_reason"));
+}
+
+TEST(SweepRunnerTest, EmptyFailurePayloadUsesExecutorFallbackReason) {
+  const std::vector<SweepRunOutcome> outcomes = {
+      {EXIT_FAILURE, Json::object(), "simulated-execution-failure"},
+  };
+  std::vector<Json> checkpoints;
+  std::vector<bool> announce_flags;
+  size_t executed_runs = 0;
+
+  const SweepExecutionResult execution =
+      execute_sweep_plan(SweepNestedMode::Standard, make_parameters(1), Json::object(),
+                         make_hooks(outcomes, checkpoints, announce_flags, executed_runs));
+
+  ASSERT_EQ(execution.exit_code, EXIT_FAILURE);
+  EXPECT_EQ(execution.output_json["runs"][0]["status"], "failed");
+  EXPECT_EQ(execution.output_json["runs"][0]["status_reason"], "simulated-execution-failure");
+  EXPECT_TRUE(execution.output_json["runs"][0]["result"].is_null());
 }
 
 TEST(SweepRunnerTest, CheckpointWriteFailureStopsFurtherRunsAndInvalidatesSweep) {

@@ -157,7 +157,7 @@ int run_core_to_core_latency_sweep(const CoreToCoreLatencyConfig& base_config) {
     CoreToCoreLatencyConfig run_config = build_run_config(base_config, assignments[run_index]);
     SweepRunOutcome outcome;
     outcome.exit_code = run_core_to_core_latency_collect(run_config, outcome.result_json);
-    if (outcome.exit_code != EXIT_SUCCESS) {
+    if (outcome.exit_code != EXIT_SUCCESS && outcome.result_json.empty()) {
       outcome.failure_reason = "nested-core-to-core-run-failed";
     }
     return outcome;

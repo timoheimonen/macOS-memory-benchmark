@@ -259,8 +259,6 @@ TEST(MessagesErrorTest, ErrorSweepMessages) {
        "Sweep would generate 12 runs, exceeding --sweep-max-runs 10"},
       {"parameter not allowed", Messages::error_sweep_parameter_not_allowed("cache-size", "--patterns"),
        "Sweep parameter 'cache-size' is not allowed with --patterns"},
-      {"temporary JSON parse", Messages::error_sweep_temp_json_parse_failed("/tmp/run.json", "bad json"),
-       "Failed to read sweep run JSON from /tmp/run.json: bad json"},
   };
 
   expect_exact_messages(cases);

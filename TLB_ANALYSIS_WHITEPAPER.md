@@ -481,6 +481,7 @@ stdout with a trailing newline; it does not introduce a wrapper schema or checkp
 When `--sweep` is used with `--analyze-tlb`, output uses the common sweep envelope:
 
 - top-level `configuration.mode = "sweep"`
+- `configuration.sweep_schema_version = 1`
 - `configuration.base_mode = "analyze_tlb"`
 - `configuration.run_count`
 - `configuration.sweep_max_runs`
@@ -497,7 +498,9 @@ The top-level sweep object also includes `status`, `status_reason`, `planned_run
 and `conclusions_valid`. It is atomically rewritten after every attempted run, so a later failure or interrupt leaves a
 readable checkpoint. `attempted_runs` equals the length of `runs`; `completed_runs` includes only entries whose nested
 `tlb_analysis.status` is `complete` and nested `tlb_analysis.conclusions_valid` is `true`. Partial, interrupted, and
-failed attempts stay in `runs` without validating the sweep conclusions.
+failed attempts stay in `runs` without validating the sweep conclusions. The TLB schema's native `status: "error"`
+maps to a failed attempt while the schema-4 result remains available; the envelope does not fabricate a nested
+`tlb_analysis.status_reason`.
 
 ## 10. Current Schema Worked Example (Deterministic Exporter Fixture)
 

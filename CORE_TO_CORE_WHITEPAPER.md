@@ -459,11 +459,11 @@ The exact stdout sentinel applies only to direct execution in this revision. Cor
 real output file.
 
 Core-to-core sweep output is written through the atomic temporary-file-and-rename path after every attempted run. Its
-envelope records `status`, `status_reason`, `planned_runs`, `attempted_runs`, `completed_runs`, and
-`conclusions_valid`. Every run entry has its own `status` and `status_reason`. Only entries whose nested
-`core_to_core_latency.status` is `complete` and `measurements_complete` is `true` increment `completed_runs`; partial,
-interrupted, and failed entries remain auditable but do not. An interruption or later failure therefore does not erase
-previously checkpointed runs. `conclusions_valid` is true only when top-level status is `complete` and
+envelope records `configuration.sweep_schema_version: 1`, `status`, `status_reason`, `planned_runs`, `attempted_runs`,
+`completed_runs`, and `conclusions_valid`. Every run entry has its own `status` and `status_reason`. Only entries whose
+nested `core_to_core_latency.status` is `complete` and `measurements_complete` is `true` increment `completed_runs`;
+partial, interrupted, and failed entries remain auditable but do not. An interruption or later failure therefore does
+not erase previously checkpointed runs. `conclusions_valid` is true only when top-level status is `complete` and
 `completed_runs == planned_runs`.
 
 ---

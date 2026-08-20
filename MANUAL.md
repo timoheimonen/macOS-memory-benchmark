@@ -636,13 +636,16 @@ middle, and trailing items.
 - An explicit `--sweep-max-runs` value overrides the mode-specific default
 - Prevents accidental very large Cartesian sweeps
 - Every generated configuration is validated before the first run
+- General and core-to-core combined output use envelope schema
+  `configuration.sweep_schema_version: 1`; each `runs[].result` retains its own mode schema version
 - Standard, pattern, and TLB combined JSON is atomically checkpointed after every attempted run and records `status`,
   `status_reason`, `planned_runs`, `attempted_runs`, `completed_runs`, and `conclusions_valid`
 - For standard, pattern, and TLB sweeps, every attempted run is retained with its own `status` and `status_reason`.
   `attempted_runs` counts stored entries, while `completed_runs` counts only mode-specific nested results that are
   genuinely complete: standard and pattern require nested `status: "complete"` with `results_complete: true`, while
   TLB requires nested `tlb_analysis.status: "complete"` with `tlb_analysis.conclusions_valid: true`. Partial,
-  interrupted, and failed nested results never increment it
+  interrupted, and failed nested results never increment it. TLB's native `tlb_analysis.status: "error"` is mapped to
+  a failed sweep attempt, and the schema-4 payload is retained without adding a nested `tlb_analysis.status_reason`
 - A parameter key may appear only once in one sweep command
 - Core-to-core sweeps also append and checkpoint the latest attempted run when it is interrupted or fails. Each entry
   records `status` and `status_reason`; `attempted_runs` counts those entries, while `completed_runs` counts only nested
