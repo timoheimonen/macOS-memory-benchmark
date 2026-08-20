@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.62.0] - Unreleased
+
+### Changed
+  - **Machine-readable CLI API release contract established**: Reserved exact `--output -` as the final-only stdout JSON transport for the upcoming process API, fixed its serialization policy at two-space indentation with one trailing newline, and selected additive `configuration.sweep_schema_version: 1` for both sweep envelopes. Existing mode schemas, file-output checkpoint behavior, benchmark methodology, and software version remain unchanged in this governance-only preparation.
+
 ## [0.61.2] - 2026-08-13
 
 ### Changed
