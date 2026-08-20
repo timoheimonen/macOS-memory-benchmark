@@ -94,6 +94,10 @@ std::string error_benchmark_tests(const std::string& error);
 std::string error_benchmark_loop(int loop, const std::string& error);
 std::string error_file_write_failed(const std::string& file_path, const std::string& error_details);
 std::string error_json_stdout_write_failed(const std::string& error_details);
+const std::string& json_stdout_reason_stream_unavailable();
+const std::string& json_stdout_reason_size_limit_exceeded();
+const std::string& json_stdout_reason_write_failed();
+const std::string& json_stdout_reason_flush_failed();
 std::string error_json_output_initialization_failed(const std::string& error_details);
 std::string error_json_payload_construction_failed(const std::string& error_details);
 std::string error_command_execution_exception(const std::string& command_name,
@@ -150,6 +154,7 @@ const std::string& error_sweep_requires_parameter();
 std::string error_sweep_too_many_runs(size_t run_count, size_t max_runs);
 std::string error_sweep_parameter_not_allowed(const std::string& parameter_name, const std::string& mode_name);
 const std::string& error_sweep_requires_output();
+std::string error_sweep_nested_run_exception(const std::string& error_details);
 
 // --- Warning Messages ---
 const std::string& warning_prefix();

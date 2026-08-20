@@ -90,7 +90,8 @@ std::string gpu_usage_options(const std::string& prog_name) {
         << Constants::GPU_DEFAULT_LOOP_COUNT << ").\n"
         << "      --seed <uint64>   Reproducible base seed; generated once when omitted.\n"
         << "  -o, --output <target> JSON output target; exact - writes one final schema 1 document\n"
-        << "                        to stdout; every other target checkpoints atomically.\n"
+        << "                        to stdout and routes human output to stderr; exact ./- and\n"
+        << "                        every other non-empty target are files with atomic checkpoints.\n"
         << "  -h, --help            Show this GPU-mode help and exit\n";
   return usage.str();
 }

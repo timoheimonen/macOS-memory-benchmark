@@ -112,8 +112,19 @@ TEST(MessagesErrorTest, NumericValidationErrorsHaveExactOutput) {
 }
 
 TEST(MessagesErrorTest, JsonStdoutWriteFailureHasExactOutput) {
-  EXPECT_EQ(Messages::error_json_stdout_write_failed("flush operation failed"),
+  EXPECT_EQ(Messages::json_stdout_reason_stream_unavailable(),
+            "stdout stream is unavailable");
+  EXPECT_EQ(Messages::json_stdout_reason_size_limit_exceeded(),
+            "serialized JSON exceeds stream size limits");
+  EXPECT_EQ(Messages::json_stdout_reason_write_failed(),
+            "write operation failed");
+  EXPECT_EQ(Messages::json_stdout_reason_flush_failed(),
+            "flush operation failed");
+  EXPECT_EQ(Messages::error_json_stdout_write_failed(
+                Messages::json_stdout_reason_flush_failed()),
             "Failed to write JSON to stdout: flush operation failed");
+  EXPECT_EQ(Messages::error_json_stdout_write_failed(""),
+            "Failed to write JSON to stdout: unknown exception");
 }
 
 TEST(MessagesErrorTest, JsonCommandBoundaryFailuresHaveExactOutput) {
@@ -134,6 +145,12 @@ TEST(MessagesErrorTest, JsonCommandBoundaryFailuresHaveExactOutput) {
   EXPECT_EQ(
       Messages::error_command_execution_exception("Core-to-core analysis", ""),
       "Core-to-core analysis failed with unexpected exception: unknown exception");
+  EXPECT_EQ(
+      Messages::error_sweep_nested_run_exception("allocator failed"),
+      "Sweep nested run failed with unexpected exception: allocator failed");
+  EXPECT_EQ(
+      Messages::error_sweep_nested_run_exception(""),
+      "Sweep nested run failed with unexpected exception: unknown exception");
 }
 
 TEST(MessagesErrorTest, ErrorLatencyChainModeInvalid) {
@@ -195,7 +212,8 @@ TEST(MessagesErrorTest, GpuMessagesHaveExactMethodologyOutput) {
       ").\n"
       "      --seed <uint64>   Reproducible base seed; generated once when omitted.\n"
       "  -o, --output <target> JSON output target; exact - writes one final schema 1 document\n"
-      "                        to stdout; every other target checkpoints atomically.\n"
+      "                        to stdout and routes human output to stderr; exact ./- and\n"
+      "                        every other non-empty target are files with atomic checkpoints.\n"
       "  -h, --help            Show this GPU-mode help and exit\n";
   const std::vector<MessageCase> cases = {
       {"mode isolation", Messages::error_gpu_bandwidth_must_be_used_alone(),

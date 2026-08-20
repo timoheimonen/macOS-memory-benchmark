@@ -118,7 +118,7 @@ int build_and_write_final_json(JsonOutputSession& session,
  * 2. Configures system settings (QoS, cache parameters)
  * 3. Prepares benchmark buffers using mode-appropriate strategy
  * 4. Executes the requested standard, pattern, TLB, core-to-core, or GPU mode
- * 5. Outputs results to console and optionally to JSON file
+ * 5. Outputs results to the human console and optional JSON file/stdout target
  *
  * The program supports multiple execution modes:
  * - Bandwidth-only measurements (--only-bandwidth)

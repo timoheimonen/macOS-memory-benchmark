@@ -1383,7 +1383,7 @@ TEST(GpuRunnerTest,
   EXPECT_TRUE(result.results_complete);
   EXPECT_TRUE(result.conclusions_valid);
   EXPECT_NE(errors.find(Messages::error_json_stdout_write_failed(
-                "write operation failed")),
+                Messages::json_stdout_reason_write_failed())),
             std::string::npos)
       << errors;
 }

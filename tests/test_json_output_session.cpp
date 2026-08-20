@@ -366,7 +366,7 @@ TEST(JsonOutputSessionTest, FailedStdoutWriteReturnsFailureWithoutThrowing) {
   EXPECT_EQ(stderr_capture.str(),
             Messages::error_prefix() +
                 Messages::error_json_stdout_write_failed(
-                    "write operation failed") +
+                    Messages::json_stdout_reason_write_failed()) +
                 "\n");
 }
 
@@ -385,7 +385,7 @@ TEST(JsonOutputSessionTest, FailedStdoutFlushReturnsFailureWithoutThrowing) {
   EXPECT_EQ(stderr_capture.str(),
             Messages::error_prefix() +
                 Messages::error_json_stdout_write_failed(
-                    "flush operation failed") +
+                    Messages::json_stdout_reason_flush_failed()) +
                 "\n");
 }
 
@@ -404,13 +404,21 @@ TEST(JsonOutputSessionTest, ThrowingStdoutBufferCannotEscapeBoundary) {
   EXPECT_EQ(stderr_capture.str(),
             Messages::error_prefix() +
                 Messages::error_json_stdout_write_failed(
-                    "write operation failed") +
+                    Messages::json_stdout_reason_write_failed()) +
                 "\n");
 }
 
 TEST(JsonOutputSessionTest, SerializationExceptionCannotEscapeBoundary) {
   nlohmann::ordered_json payload;
   payload["invalid_utf8"] = std::string(1, static_cast<char>(0xff));
+  std::string expected_details;
+  try {
+    (void)payload.dump(2);
+  } catch (const std::exception& error) {
+    expected_details = error.what();
+  }
+  ASSERT_FALSE(expected_details.empty());
+
   std::ostringstream stdout_capture;
   std::ostringstream stderr_capture;
   int result = EXIT_SUCCESS;
@@ -423,10 +431,10 @@ TEST(JsonOutputSessionTest, SerializationExceptionCannotEscapeBoundary) {
 
   EXPECT_EQ(result, EXIT_FAILURE);
   EXPECT_TRUE(stdout_capture.str().empty());
-  EXPECT_NE(stderr_capture.str().find(
-                Messages::error_prefix() +
-                Messages::error_json_stdout_write_failed("")),
-            std::string::npos);
+  EXPECT_EQ(stderr_capture.str(),
+            Messages::error_prefix() +
+                Messages::error_json_stdout_write_failed(expected_details) +
+                "\n");
 }
 
 TEST(JsonOutputSessionTest, FileCheckpointBuilderExceptionIsContained) {
@@ -455,6 +463,7 @@ TEST(JsonOutputSessionTest, FileCheckpointBuilderExceptionIsContained) {
       Messages::error_prefix() +
           Messages::error_file_write_failed(
               target_path.string(),
-              "JSON payload construction failed: injected builder exception") +
+              Messages::error_json_payload_construction_failed(
+                  "injected builder exception")) +
           "\n");
 }

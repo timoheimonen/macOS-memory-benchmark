@@ -26,6 +26,10 @@ struct GpuBandwidthConfig {
   size_t buffer_size_bytes = 0;
   size_t iterations = 0;
   size_t loop_count = Constants::GPU_DEFAULT_LOOP_COUNT;
+  /**
+   * Raw JSON output target: empty disables JSON, exact `-` selects stdout, and
+   * every other spelling is preserved as a file path, including `./-`.
+   */
   std::string output_file;
   uint64_t seed = 0;
   bool user_specified_iterations = false;

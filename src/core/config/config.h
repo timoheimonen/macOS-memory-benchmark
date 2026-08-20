@@ -207,8 +207,12 @@ struct BenchmarkConfig {
   bool user_specified_pattern_seed = false;  ///< Whether user explicitly set --seed for --patterns
   bool user_specified_benchmark_seed = false;  ///< Whether user explicitly set --seed for --benchmark
   
-  // Output file
-  std::string output_file;  ///< JSON output file path (empty = no JSON output)
+  /**
+   * Raw JSON output target: empty disables JSON, exact `-` selects stdout, and
+   * every other value is a file path resolved against the current directory,
+   * including explicit `./-`.
+   */
+  std::string output_file;
 
   // Sweep configuration
   std::vector<SweepSpec> sweep_specs;  ///< Parsed `--sweep` parameter/value lists

@@ -21,6 +21,7 @@
 #include "benchmark/sweep_runner.h"
 
 #include <algorithm>
+#include <exception>
 #include <iostream>
 #include <string>
 #include <utility>
@@ -52,6 +53,18 @@ struct SweepAssignment {
   const SweepSpec* spec = nullptr;
   const SweepValue* value = nullptr;
 };
+
+constexpr const char* SWEEP_NESTED_RUN_EXCEPTION_REASON =
+    "nested-run-execution-exception";
+
+void report_sweep_nested_run_exception(const std::string& details) noexcept {
+  try {
+    std::cerr << Messages::error_prefix()
+              << Messages::error_sweep_nested_run_exception(details) << '\n';
+  } catch (...) {
+    // A secondary diagnostic failure must not escape the coordinator.
+  }
+}
 
 std::string base_mode_name(const BenchmarkConfig& config) {
   if (config.analyze_tlb) {
@@ -489,7 +502,16 @@ SweepExecutionResult execute_sweep_plan(SweepNestedMode mode, const std::vector<
       return execution;
     }
 
-    const SweepRunOutcome outcome = hooks.execute_run(run_index);
+    SweepRunOutcome outcome;
+    try {
+      outcome = hooks.execute_run(run_index);
+    } catch (const std::exception& error) {
+      report_sweep_nested_run_exception(error.what());
+      outcome.failure_reason = SWEEP_NESTED_RUN_EXCEPTION_REASON;
+    } catch (...) {
+      report_sweep_nested_run_exception("");
+      outcome.failure_reason = SWEEP_NESTED_RUN_EXCEPTION_REASON;
+    }
     SweepNestedCompletion completion;
     if (!outcome.result_json.empty() || outcome.exit_code == EXIT_SUCCESS) {
       completion = classify_sweep_nested_completion(mode, outcome.result_json);

@@ -92,7 +92,8 @@ SweepNestedCompletion classify_sweep_nested_completion(SweepNestedMode mode, con
  * @param hooks Required executor/checkpoint seams and optional clock/stop seams.
  * @return Terminal status and the latest complete in-memory envelope.
  * @note Hooks are called synchronously on the invoking thread. Exceptions from
- *       hooks are not contained by this coordinator.
+ *       `execute_run` are converted to a failed attempted run with a null
+ *       result, then checkpointed normally. Other hook exceptions propagate.
  */
 SweepExecutionResult execute_sweep_plan(SweepNestedMode mode, const std::vector<nlohmann::ordered_json>& run_parameters,
                                         nlohmann::ordered_json initial_output, const SweepExecutionHooks& hooks);

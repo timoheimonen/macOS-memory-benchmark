@@ -85,7 +85,19 @@ JsonOutputTarget make_json_output_target(
  */
 class JsonOutputSession {
  public:
+  /**
+   * Take ownership of one classified command target and install routing.
+   *
+   * @param target Target value moved into the session. For stdout, the current
+   *        `std::cout` buffer is retained and `std::cout` is routed to the
+   *        current `std::cerr` buffer until destruction.
+   * @throws std::ios_base::failure If caller-configured stream exception state
+   *         prevents stdout routing from being installed.
+   * @post File and disabled targets leave the standard streams unchanged.
+   */
   explicit JsonOutputSession(JsonOutputTarget target);
+
+  /** Restore the exact stdout buffer retained by the constructor. */
   ~JsonOutputSession() noexcept;
 
   JsonOutputSession(const JsonOutputSession&) = delete;
@@ -93,12 +105,45 @@ class JsonOutputSession {
   JsonOutputSession(JsonOutputSession&&) = delete;
   JsonOutputSession& operator=(JsonOutputSession&&) = delete;
 
+  /** @return The immutable transport kind owned by this session. */
   JsonOutputKind kind() const noexcept;
+
+  /** @return `true` only when logical checkpoints must be written to a file. */
   bool persists_checkpoints() const noexcept;
 
+  /**
+   * Offer one logical checkpoint to the selected transport.
+   *
+   * File targets invoke @p build_payload exactly once and atomically replace
+   * the target. Stdout and disabled targets return success without invoking
+   * the callback, while the command still observes the logical boundary.
+   *
+   * @param build_payload Lazy builder valid for this synchronous call.
+   * @param announce_success Whether a successful file write prints the
+   *        centralized save confirmation; ignored by other transports.
+   * @return `EXIT_SUCCESS` for a skipped or persisted checkpoint;
+   *         `EXIT_FAILURE` after a contained builder or file-output failure.
+   * @note The callback and its captures are not retained after return.
+   */
   int checkpoint(
       const std::function<nlohmann::ordered_json()>& build_payload,
       bool announce_success = false);
+
+  /**
+   * Persist one prebuilt terminal document through the selected transport.
+   *
+   * File targets atomically replace the target. Stdout targets write one
+   * two-space-indented JSON value and one trailing newline through the retained
+   * original stdout buffer. Disabled targets are successful no-ops.
+   *
+   * @param payload Immutable terminal payload; no reference is retained.
+   * @param announce_success Whether a successful file write prints the
+   *        centralized save confirmation; ignored by stdout and disabled.
+   * @return `EXIT_SUCCESS` on success or when disabled; `EXIT_FAILURE` after a
+   *         contained serialization, write, flush, or file-output failure.
+   * @warning A machine-output command boundary must call this at most once for
+   *          a stdout target, after its final human-readable message.
+   */
   int write_final(const nlohmann::ordered_json& payload,
                   bool announce_success = true);
 

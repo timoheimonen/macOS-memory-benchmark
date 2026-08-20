@@ -47,7 +47,8 @@ void report_payload_build_failure(const std::filesystem::path& path,
   try {
     std::cerr << Messages::error_prefix()
               << Messages::error_file_write_failed(
-                     path.string(), "JSON payload construction failed: " + details)
+                     path.string(),
+                     Messages::error_json_payload_construction_failed(details))
               << '\n';
   } catch (...) {
     // Error reporting must not let a secondary formatting failure escape.
@@ -121,7 +122,7 @@ int JsonOutputSession::checkpoint(
   } catch (const std::exception& error) {
     report_payload_build_failure(target_.file_path, error.what());
   } catch (...) {
-    report_payload_build_failure(target_.file_path, "unknown exception");
+    report_payload_build_failure(target_.file_path, "");
   }
   return EXIT_FAILURE;
 }
@@ -144,7 +145,7 @@ int JsonOutputSession::write_final(const nlohmann::ordered_json& payload,
 int JsonOutputSession::write_stdout(
     const nlohmann::ordered_json& payload) noexcept {
   if (!stdout_routing_installed_ || original_stdout_buffer_ == nullptr) {
-    report_stdout_write_failure("stdout stream is unavailable");
+    report_stdout_write_failure(Messages::json_stdout_reason_stream_unavailable());
     return EXIT_FAILURE;
   }
 
@@ -152,7 +153,8 @@ int JsonOutputSession::write_stdout(
     const std::string serialized = payload.dump(2);
     if (serialized.size() >
         static_cast<size_t>(std::numeric_limits<std::streamsize>::max())) {
-      report_stdout_write_failure("serialized JSON exceeds stream size limits");
+      report_stdout_write_failure(
+          Messages::json_stdout_reason_size_limit_exceeded());
       return EXIT_FAILURE;
     }
 
@@ -161,20 +163,20 @@ int JsonOutputSession::write_stdout(
                  static_cast<std::streamsize>(serialized.size()));
     output.put('\n');
     if (!output.good()) {
-      report_stdout_write_failure("write operation failed");
+      report_stdout_write_failure(Messages::json_stdout_reason_write_failed());
       return EXIT_FAILURE;
     }
 
     output.flush();
     if (!output.good()) {
-      report_stdout_write_failure("flush operation failed");
+      report_stdout_write_failure(Messages::json_stdout_reason_flush_failed());
       return EXIT_FAILURE;
     }
   } catch (const std::exception& error) {
     report_stdout_write_failure(error.what());
     return EXIT_FAILURE;
   } catch (...) {
-    report_stdout_write_failure("unknown exception");
+    report_stdout_write_failure("");
     return EXIT_FAILURE;
   }
 
