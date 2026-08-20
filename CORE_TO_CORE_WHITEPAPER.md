@@ -430,7 +430,7 @@ memory_benchmark --analyze-core2core [options]
 Options:
   -r, --count <n>             Measured loop count (core-to-core default: 3)
   -n, --latency-samples <n>   Separate sample windows per scenario/loop (default: 1000)
-  -o, --output <target>       Direct JSON file or exact - for final stdout JSON
+  -o, --output <target>       JSON file or exact - for final stdout JSON
   -S, --sweep <key=a,b>       Sweep count or latency-samples
   -X, --sweep-max-runs <n>    Generated-run guard (default: 256)
   -h, --help                  Print help
@@ -453,13 +453,16 @@ memory_benchmark -C --count 5 --output core2core.json
 memory_benchmark --analyze-core2core --count 3 --latency-samples 2000 --output core2core_deep.json
 memory_benchmark -C --count 1 --latency-samples 1 --output - >core2core.json 2>core2core.log
 memory_benchmark -C --count 3 --sweep latency-samples=500,1000,2000 --output core2core_sweep.json
+memory_benchmark -C --sweep latency-samples=500,1000 --output - >core2core_sweep.json 2>core2core_sweep.log
 ```
 
-The exact stdout sentinel applies only to direct execution in this revision. Core-to-core sweep mode still requires a
-real output file.
+Core-to-core sweep mode requires `--output <target>`. Exact `-` emits one final envelope on stdout and routes the human
+transcript to stderr; `./-` remains a file.
 
-Core-to-core sweep output is written through the atomic temporary-file-and-rename path after every attempted run. Its
-envelope records `configuration.sweep_schema_version: 1`, `status`, `status_reason`, `planned_runs`, `attempted_runs`,
+A real-file core-to-core sweep is written through the atomic temporary-file-and-rename path after every attempted run,
+without an additional outer final write or checkpoint retry. A stdout sweep performs the same logical checkpoint
+transitions without invoking the lazy checkpoint builder, then emits one terminal envelope. The envelope records
+`configuration.sweep_schema_version: 1`, `status`, `status_reason`, `planned_runs`, `attempted_runs`,
 `completed_runs`, and `conclusions_valid`. Every run entry has its own `status` and `status_reason`. Only entries whose
 nested `core_to_core_latency.status` is `complete` and `measurements_complete` is `true` increment `completed_runs`;
 partial, interrupted, and failed entries remain auditable but do not. An interruption or later failure therefore does
@@ -561,15 +564,15 @@ For manual validation, prefer several loops and inspect:
 | `src/benchmark/core_to_core_latency.h` | Public configuration, status, work-plan, loop-record, and result types |
 | `src/benchmark/core_to_core_latency_internal.h` | Planner/scheduler/runner testable interface |
 | `src/benchmark/core_to_core_latency_runner.cpp` | Calibration, worker execution, schedule, statistics, and console report |
-| `src/benchmark/core_to_core_latency_cli.cpp` | Standalone parsing, sweep validation, direct output-session ownership, and signal-mask setup |
+| `src/benchmark/core_to_core_latency_cli.cpp` | Standalone parsing, sweep validation, command output-session ownership, and signal-mask setup |
 | `src/benchmark/core_to_core_latency_json.cpp` | Schema 2 serialization and affinity interpretability |
-| `src/benchmark/core_to_core_sweep_runner.cpp` | Cartesian sweep execution and atomic checkpoints |
+| `src/benchmark/core_to_core_sweep_runner.cpp` | Cartesian sweep execution, logical checkpoints, and final-envelope retention |
 | `src/core/config/constants.h` | Shared-state isolation and core-to-core methodology constants |
 | `src/core/config/sweep_utils.cpp` | Shared sweep-value parsing and Cartesian run-count validation |
 | `src/asm/core_to_core_latency.s` | ARM64 initiator/responder hot loops |
 | `src/output/console/messages/core_to_core_messages.cpp` | User-facing core-to-core messages |
 | `src/output/json/json_output/file_writer.cpp` | Shared atomic temporary-file-and-rename writer |
-| `src/output/json/json_output/json_output_session.cpp` | Direct file/stdout target ownership and human-stream routing |
+| `src/output/json/json_output/json_output_session.cpp` | File/stdout target ownership, lazy checkpoint dispatch, and human-stream routing |
 | `tests/test_core_to_core_cli.cpp` | CLI and sweep validation coverage |
 | `tests/test_core_to_core_messages.cpp` | Console message contract coverage |
 | `tests/test_core_to_core_runner.cpp` | Calibration, schedule, and hardware integration coverage |

@@ -377,10 +377,6 @@ int run_core_to_core_latency_mode(int argc, char* argv[]) {
     return EXIT_SUCCESS;
   }
 
-  if (config.run_sweep) {
-    return run_core_to_core_latency_sweep(config);
-  }
-
   std::optional<JsonOutputSession> output_session;
   try {
     output_session.emplace(make_json_output_target(
@@ -397,6 +393,17 @@ int run_core_to_core_latency_mode(int argc, char* argv[]) {
 
   // Execute benchmark only after successful parse and non-help path.
   try {
+    if (config.run_sweep) {
+      const SweepExecutionResult execution =
+          run_core_to_core_latency_sweep(config, *output_session);
+      if (output_session->kind() == JsonOutputKind::Stdout &&
+          !execution.output_json.empty() &&
+          output_session->write_final(execution.output_json) != EXIT_SUCCESS) {
+        return EXIT_FAILURE;
+      }
+      return execution.exit_code;
+    }
+
     BenchmarkSignalMaskGuard signal_guard;
     return run_core_to_core_latency(config, *output_session);
   } catch (const std::exception& error) {

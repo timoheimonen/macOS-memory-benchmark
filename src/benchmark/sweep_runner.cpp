@@ -21,7 +21,6 @@
 #include "benchmark/sweep_runner.h"
 
 #include <algorithm>
-#include <filesystem>
 #include <iostream>
 #include <string>
 #include <utility>
@@ -42,6 +41,7 @@
 #include "output/console/output_printer.h"
 #include "output/console/statistics.h"
 #include "output/json/json_output/json_output_api.h"
+#include "output/json/json_output/json_output_session.h"
 #include "pattern_benchmark/pattern_benchmark.h"
 #include "third_party/nlohmann/json.hpp"
 #include "utils/json_utils.h"
@@ -563,7 +563,8 @@ SweepExecutionResult execute_sweep_plan(SweepNestedMode mode, const std::vector<
   return execution;
 }
 
-int run_sweep_mode(const BenchmarkConfig& base_config) {
+SweepExecutionResult run_sweep_mode(const BenchmarkConfig& base_config,
+                                    JsonOutputSession& output_session) {
   const size_t run_count = calculate_sweep_run_count_from_specs(base_config.sweep_specs);
   const std::vector<std::vector<SweepAssignment>> assignments = build_sweep_assignments(base_config);
 
@@ -571,7 +572,7 @@ int run_sweep_mode(const BenchmarkConfig& base_config) {
   for (const std::vector<SweepAssignment>& assignment : assignments) {
     BenchmarkConfig preflight_config = build_run_config(base_config, assignment);
     if (validate_config(preflight_config) != EXIT_SUCCESS) {
-      return EXIT_FAILURE;
+      return {};
     }
   }
 
@@ -585,7 +586,7 @@ int run_sweep_mode(const BenchmarkConfig& base_config) {
   auto total_timer_opt = HighResTimer::create();
   if (!total_timer_opt) {
     std::cerr << Messages::error_prefix() << Messages::error_timer_creation_failed() << std::endl;
-    return EXIT_FAILURE;
+    return {};
   }
   auto& total_timer = *total_timer_opt;
   total_timer.start();
@@ -602,11 +603,6 @@ int run_sweep_mode(const BenchmarkConfig& base_config) {
                                             {"applied", qos_result.applied},
                                             {"code", qos_result.code},
                                             {"policy", "best-effort; continue on failure"}}}};
-
-  std::filesystem::path file_path(base_config.output_file);
-  if (file_path.is_relative()) {
-    file_path = std::filesystem::current_path() / file_path;
-  }
 
   std::vector<nlohmann::ordered_json> run_parameters;
   run_parameters.reserve(assignments.size());
@@ -631,7 +627,8 @@ int run_sweep_mode(const BenchmarkConfig& base_config) {
   hooks.stop_requested = []() { return signal_received(); };
   hooks.elapsed_seconds = [&]() { return total_timer.stop(); };
   hooks.write_checkpoint = [&](const nlohmann::ordered_json& checkpoint, bool announce_success) {
-    return write_json_to_file(file_path, checkpoint, announce_success);
+    return output_session.checkpoint(
+        [&checkpoint]() { return checkpoint; }, announce_success);
   };
 
   const SweepExecutionResult execution =
@@ -647,5 +644,5 @@ int run_sweep_mode(const BenchmarkConfig& base_config) {
     const double total_elapsed_sec = execution.output_json.value(JsonKeys::EXECUTION_TIME_SEC, 0.0);
     std::cout << Messages::msg_done_total_time(total_elapsed_sec) << std::endl;
   }
-  return execution.exit_code;
+  return execution;
 }

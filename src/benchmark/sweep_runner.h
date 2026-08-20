@@ -30,6 +30,7 @@
 #include "third_party/nlohmann/json.hpp"
 
 struct BenchmarkConfig;
+class JsonOutputSession;
 
 /** Nested result schema used to decide whether one sweep run completed. */
 enum class SweepNestedMode {
@@ -97,10 +98,24 @@ SweepExecutionResult execute_sweep_plan(SweepNestedMode mode, const std::vector<
                                         nlohmann::ordered_json initial_output, const SweepExecutionHooks& hooks);
 
 /**
- * @brief Execute a parameter sweep and write the combined JSON output.
+ * Execute a parameter sweep through one command-owned JSON output session.
+ *
+ * The session must outlive this call and be installed before any benchmark
+ * workers start. Every logical checkpoint is offered to the session; file
+ * targets persist it atomically, while stdout checkpoints remain lazy no-ops.
+ * The returned terminal envelope is not written a second time for file
+ * targets. The command boundary is responsible for the one terminal stdout
+ * write after this function has emitted its final human message.
+ *
  * @param base_config Parsed and validated base configuration.
- * @return EXIT_SUCCESS on success, EXIT_FAILURE on error.
+ * @param output_session Single-owner output session for this command.
+ * @return Terminal process status and the latest in-memory sweep envelope.
+ * @throws May propagate setup or nested-run exceptions. The command boundary
+ *         must convert them to its return-code error path.
+ * @note Called synchronously and not thread-safe. The session must not overlap
+ *       another output session.
  */
-int run_sweep_mode(const BenchmarkConfig& base_config);
+SweepExecutionResult run_sweep_mode(const BenchmarkConfig& base_config,
+                                    JsonOutputSession& output_session);
 
 #endif  // SWEEP_RUNNER_H

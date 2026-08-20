@@ -7,16 +7,39 @@
 
 #include <gtest/gtest.h>
 
+#include <iostream>
+#include <sstream>
 #include <string>
 #include <utility>
 #include <vector>
 
 #include "benchmark/sweep_runner.h"
 #include "core/config/constants.h"
+#include "output/json/json_output/json_output_session.h"
 
 namespace {
 
 using Json = nlohmann::ordered_json;
+
+class ScopedStreamBuffers {
+ public:
+  ScopedStreamBuffers(std::streambuf* stdout_buffer,
+                      std::streambuf* stderr_buffer)
+      : original_stdout_buffer_(std::cout.rdbuf(stdout_buffer)),
+        original_stderr_buffer_(std::cerr.rdbuf(stderr_buffer)) {}
+
+  ~ScopedStreamBuffers() {
+    std::cout.rdbuf(original_stdout_buffer_);
+    std::cerr.rdbuf(original_stderr_buffer_);
+  }
+
+  ScopedStreamBuffers(const ScopedStreamBuffers&) = delete;
+  ScopedStreamBuffers& operator=(const ScopedStreamBuffers&) = delete;
+
+ private:
+  std::streambuf* original_stdout_buffer_;
+  std::streambuf* original_stderr_buffer_;
+};
 
 std::vector<Json> make_parameters(size_t count) {
   std::vector<Json> parameters;
@@ -170,6 +193,124 @@ TEST(SweepRunnerTest, CompleteSweepCheckpointsEveryRunAndValidatesConclusions) {
   EXPECT_EQ(execution.output_json["runs"][0]["status"], "complete");
   EXPECT_EQ(execution.output_json["runs"][1]["status"], "complete");
   EXPECT_EQ(announce_flags, (std::vector<bool>{false, true}));
+}
+
+TEST(SweepRunnerTest,
+     StdoutSessionKeepsCheckpointCadenceLazyAndWritesTerminalEnvelopeOnce) {
+  const std::vector<SweepRunOutcome> outcomes = {
+      {EXIT_SUCCESS, make_standard_result("complete", true), ""},
+      {EXIT_SUCCESS, make_standard_result("complete", true), ""},
+  };
+  std::ostringstream stdout_capture;
+  std::ostringstream stderr_capture;
+  std::vector<bool> announce_flags;
+  size_t executed_runs = 0;
+  size_t checkpoint_calls = 0;
+  size_t checkpoint_builder_calls = 0;
+  bool stdout_empty_before_final = false;
+  int final_write_status = EXIT_FAILURE;
+  SweepExecutionResult execution;
+
+  {
+    ScopedStreamBuffers capture(stdout_capture.rdbuf(),
+                                stderr_capture.rdbuf());
+    JsonOutputSession session(make_json_output_target("-"));
+    SweepExecutionHooks hooks;
+    hooks.execute_run = [&](size_t run_index) {
+      ++executed_runs;
+      return outcomes.at(run_index);
+    };
+    hooks.stop_requested = []() { return false; };
+    hooks.elapsed_seconds = []() { return 1.25; };
+    hooks.utc_timestamp = []() { return "2026-01-01T00:00:00Z"; };
+    hooks.write_checkpoint = [&](const Json& checkpoint,
+                                 bool announce_success) {
+      ++checkpoint_calls;
+      announce_flags.push_back(announce_success);
+      return session.checkpoint(
+          [&]() {
+            ++checkpoint_builder_calls;
+            return checkpoint;
+          },
+          announce_success);
+    };
+
+    execution = execute_sweep_plan(SweepNestedMode::Standard,
+                                   make_parameters(2), Json::object(), hooks);
+    std::cout << "terminal human message\n";
+    stdout_empty_before_final = stdout_capture.str().empty();
+    final_write_status = session.write_final(execution.output_json);
+  }
+
+  ASSERT_EQ(execution.exit_code, EXIT_SUCCESS);
+  EXPECT_EQ(executed_runs, 2u);
+  EXPECT_EQ(checkpoint_calls, 2u);
+  EXPECT_EQ(announce_flags, (std::vector<bool>{false, true}));
+  EXPECT_EQ(checkpoint_builder_calls, 0u);
+  EXPECT_TRUE(stdout_empty_before_final);
+  EXPECT_EQ(final_write_status, EXIT_SUCCESS);
+  EXPECT_EQ(stdout_capture.str(), execution.output_json.dump(2) + "\n");
+  EXPECT_EQ(Json::parse(stdout_capture.str()), execution.output_json);
+  EXPECT_EQ(stderr_capture.str(), "terminal human message\n");
+}
+
+TEST(SweepRunnerTest,
+     PreRunInterruptionRetainsEmptyStdoutEnvelopeWithoutInvokingCheckpointBuilder) {
+  std::ostringstream stdout_capture;
+  std::ostringstream stderr_capture;
+  size_t executed_runs = 0;
+  size_t checkpoint_calls = 0;
+  size_t checkpoint_builder_calls = 0;
+  bool stdout_empty_before_final = false;
+  int final_write_status = EXIT_FAILURE;
+  SweepExecutionResult execution;
+
+  {
+    ScopedStreamBuffers capture(stdout_capture.rdbuf(),
+                                stderr_capture.rdbuf());
+    JsonOutputSession session(make_json_output_target("-"));
+    SweepExecutionHooks hooks;
+    hooks.execute_run = [&](size_t) {
+      ++executed_runs;
+      return SweepRunOutcome{};
+    };
+    hooks.stop_requested = []() { return true; };
+    hooks.elapsed_seconds = []() { return 0.25; };
+    hooks.utc_timestamp = []() { return "2026-01-01T00:00:00Z"; };
+    hooks.write_checkpoint = [&](const Json& checkpoint,
+                                 bool announce_success) {
+      ++checkpoint_calls;
+      EXPECT_TRUE(announce_success);
+      return session.checkpoint(
+          [&]() {
+            ++checkpoint_builder_calls;
+            return checkpoint;
+          },
+          announce_success);
+    };
+
+    execution = execute_sweep_plan(SweepNestedMode::Standard,
+                                   make_parameters(2), Json::object(), hooks);
+    stdout_empty_before_final = stdout_capture.str().empty();
+    final_write_status = session.write_final(execution.output_json);
+  }
+
+  ASSERT_EQ(execution.exit_code, EXIT_SUCCESS);
+  EXPECT_EQ(executed_runs, 0u);
+  EXPECT_EQ(checkpoint_calls, 1u);
+  EXPECT_EQ(checkpoint_builder_calls, 0u);
+  EXPECT_TRUE(stdout_empty_before_final);
+  EXPECT_EQ(execution.output_json["status"], "interrupted");
+  EXPECT_EQ(execution.output_json["status_reason"],
+            "interruption-requested-before-run");
+  EXPECT_EQ(execution.output_json["planned_runs"], 2u);
+  EXPECT_EQ(execution.output_json["attempted_runs"], 0u);
+  EXPECT_EQ(execution.output_json["completed_runs"], 0u);
+  EXPECT_FALSE(execution.output_json["conclusions_valid"].get<bool>());
+  EXPECT_TRUE(execution.output_json["runs"].empty());
+  EXPECT_EQ(final_write_status, EXIT_SUCCESS);
+  EXPECT_EQ(stdout_capture.str(), execution.output_json.dump(2) + "\n");
+  EXPECT_TRUE(stderr_capture.str().empty());
 }
 
 TEST(SweepRunnerTest, SharedEnvelopeSchemaIsAppliedForGeneralAndCoreToCoreProducers) {

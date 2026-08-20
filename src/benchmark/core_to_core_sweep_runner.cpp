@@ -20,7 +20,6 @@
 
 #include "benchmark/core_to_core_sweep_runner.h"
 
-#include <filesystem>
 #include <iostream>
 #include <utility>
 #include <vector>
@@ -34,6 +33,7 @@
 #include "output/console/messages/messages_api.h"
 #include "output/console/output_printer.h"
 #include "output/json/json_output/json_output_api.h"
+#include "output/json/json_output/json_output_session.h"
 #include "third_party/nlohmann/json.hpp"
 
 namespace {
@@ -117,7 +117,9 @@ size_t calculate_core_to_core_sweep_run_count(const CoreToCoreLatencyConfig& con
   return calculate_sweep_run_count_from_specs(config.sweep_specs);
 }
 
-int run_core_to_core_latency_sweep(const CoreToCoreLatencyConfig& base_config) {
+SweepExecutionResult run_core_to_core_latency_sweep(
+    const CoreToCoreLatencyConfig& base_config,
+    JsonOutputSession& output_session) {
   const size_t run_count = calculate_core_to_core_sweep_run_count(base_config);
   print_runtime_banner();
   std::cout << Messages::msg_running_sweep(run_count) << std::endl;
@@ -127,7 +129,7 @@ int run_core_to_core_latency_sweep(const CoreToCoreLatencyConfig& base_config) {
   auto total_timer_opt = HighResTimer::create();
   if (!total_timer_opt) {
     std::cerr << Messages::error_prefix() << Messages::error_timer_creation_failed() << std::endl;
-    return EXIT_FAILURE;
+    return {};
   }
   auto& total_timer = *total_timer_opt;
   total_timer.start();
@@ -140,11 +142,6 @@ int run_core_to_core_latency_sweep(const CoreToCoreLatencyConfig& base_config) {
                                           {"sweep_parameters", build_sweep_parameters_json(base_config)}};
 
   const std::vector<std::vector<CoreToCoreSweepAssignment>> assignments = build_assignments(base_config);
-  std::filesystem::path file_path(base_config.output_file);
-  if (file_path.is_relative()) {
-    file_path = std::filesystem::current_path() / file_path;
-  }
-
   std::vector<nlohmann::ordered_json> run_parameters;
   run_parameters.reserve(assignments.size());
   for (const std::vector<CoreToCoreSweepAssignment>& assignment : assignments) {
@@ -165,7 +162,8 @@ int run_core_to_core_latency_sweep(const CoreToCoreLatencyConfig& base_config) {
   hooks.stop_requested = []() { return signal_received(); };
   hooks.elapsed_seconds = [&]() { return total_timer.stop(); };
   hooks.write_checkpoint = [&](const nlohmann::ordered_json& checkpoint, bool announce_success) {
-    return write_json_to_file(file_path, checkpoint, announce_success);
+    return output_session.checkpoint(
+        [&checkpoint]() { return checkpoint; }, announce_success);
   };
 
   const SweepExecutionResult execution =
@@ -181,5 +179,5 @@ int run_core_to_core_latency_sweep(const CoreToCoreLatencyConfig& base_config) {
     const double total_elapsed_sec = execution.output_json.value(JsonKeys::EXECUTION_TIME_SEC, 0.0);
     std::cout << Messages::msg_done_total_time(total_elapsed_sec) << std::endl;
   }
-  return execution.exit_code;
+  return execution;
 }

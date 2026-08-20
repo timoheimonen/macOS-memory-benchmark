@@ -254,7 +254,7 @@ TEST(MessagesErrorTest, ErrorSweepMessages) {
       {"missing parameter", Messages::error_sweep_requires_parameter(),
        "--sweep requires at least one parameter specification"},
       {"missing output", Messages::error_sweep_requires_output(),
-       "--sweep requires --output <file> for the combined JSON result"},
+       "--sweep requires --output <target> for the combined JSON result"},
       {"run cap", Messages::error_sweep_too_many_runs(12, 10),
        "Sweep would generate 12 runs, exceeding --sweep-max-runs 10"},
       {"parameter not allowed", Messages::error_sweep_parameter_not_allowed("cache-size", "--patterns"),
@@ -614,14 +614,15 @@ TEST(MessagesFormattingTest, UsageOptions) {
   EXPECT_NE(msg.find("single-threaded"), std::string::npos);
   EXPECT_NE(msg.find("--cache-size"), std::string::npos);
   EXPECT_NE(msg.find("--output <target>"), std::string::npos);
-  EXPECT_NE(msg.find("For direct CPU modes, exact - writes"), std::string::npos);
+  EXPECT_NE(msg.find("For CPU modes and sweeps, exact - writes"), std::string::npos);
   EXPECT_NE(msg.find("one final"), std::string::npos);
   EXPECT_NE(msg.find("JSON document to stdout"), std::string::npos);
   EXPECT_NE(msg.find("routes human output to stderr"), std::string::npos);
   EXPECT_NE(msg.find("./- and"), std::string::npos);
   EXPECT_NE(msg.find("all other values are files"), std::string::npos);
-  EXPECT_NE(msg.find("other direct CPU files write atomically once"), std::string::npos);
-  EXPECT_NE(msg.find("GPU and sweeps require files"), std::string::npos);
+  EXPECT_NE(msg.find("sweep files checkpoint after attempts"), std::string::npos);
+  EXPECT_NE(msg.find("GPU requires a file"), std::string::npos);
+  EXPECT_NE(msg.find("Requires --output <target>"), std::string::npos);
   EXPECT_NE(msg.find("-h"), std::string::npos);
   // Check that default values are included
   EXPECT_NE(msg.find(std::to_string(Constants::DEFAULT_ITERATIONS)), std::string::npos);

@@ -203,15 +203,8 @@ int main(int argc, char *argv[]) {
     return EXIT_SUCCESS;
   }
 
-  if (config.run_sweep) {
-    if (validate_config(config) != EXIT_SUCCESS) {
-      return EXIT_FAILURE;
-    }
-    return run_sweep_mode(config);
-  }
-
-  // Direct CPU commands share one target owner. Sweep modes remain on their
-  // existing file-only paths until their checkpoint boundaries are converted.
+  // Every general CPU command shares one target owner. Install stdout routing
+  // before sweep validation and before any benchmark worker can start.
   std::optional<JsonOutputSession> output_session;
   try {
     output_session.emplace(make_json_output_target(
@@ -226,6 +219,32 @@ int main(int argc, char *argv[]) {
     report_json_output_boundary_failure(
         config.output_file,
         Messages::error_json_output_initialization_failed(""));
+    return EXIT_FAILURE;
+  }
+
+  if (config.run_sweep) {
+    if (validate_config(config) != EXIT_SUCCESS) {
+      return EXIT_FAILURE;
+    }
+    try {
+      const SweepExecutionResult execution =
+          run_sweep_mode(config, *output_session);
+      if (output_session->kind() == JsonOutputKind::Stdout &&
+          !execution.output_json.empty() &&
+          output_session->write_final(execution.output_json) != EXIT_SUCCESS) {
+        return EXIT_FAILURE;
+      }
+      return execution.exit_code;
+    } catch (const std::exception& error) {
+      std::cerr << Messages::error_prefix()
+                << Messages::error_command_execution_exception(
+                       "Sweep", error.what())
+                << std::endl;
+    } catch (...) {
+      std::cerr << Messages::error_prefix()
+                << Messages::error_command_execution_exception("Sweep", "")
+                << std::endl;
+    }
     return EXIT_FAILURE;
   }
 

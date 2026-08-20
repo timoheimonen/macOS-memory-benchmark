@@ -8,29 +8,35 @@ Runtime behavior and executable integration tests are authoritative if this docu
 
 ## Transport support in this revision
 
-All direct CPU modes support the stdout JSON transport. Parameter sweeps and GPU mode retain their file-output contract
-in this revision.
+All direct CPU modes and their supported parameter sweeps provide the stdout JSON transport. GPU mode retains its
+file-output contract in this revision.
 
 | Command | Real JSON file | Exact `--output -` stdout transport |
 |---|---:|---:|
 | Direct `--benchmark` | Yes | Yes |
 | Direct `--patterns` | Yes | Yes |
-| Standard or pattern `--sweep` | Yes | Not yet supported |
+| Standard or pattern `--sweep` | Yes | Yes |
 | Direct `--analyze-tlb` | Yes | Yes |
-| `--analyze-tlb --sweep ...` | Yes | Not yet supported |
+| `--analyze-tlb --sweep ...` | Yes | Yes |
 | Direct `--analyze-core2core` | Yes | Yes |
-| `--analyze-core2core --sweep ...` | Yes | Not yet supported |
+| `--analyze-core2core --sweep ...` | Yes | Yes |
 | Direct `--gpu-bandwidth` | Yes | Not yet supported |
 
-Callers must use a real file path for every row whose stdout transport is not yet supported. GPU schema 1 does not
-support sweeps.
+GPU callers must use a real file path. GPU schema 1 does not support sweeps.
 
 ## Invocation and stream contract
 
-For a direct standard, pattern, TLB, or core-to-core command, an output value that is exactly `-` selects stdout JSON:
+For a standard, pattern, TLB, or core-to-core command, including a supported parameter sweep, an output value that is
+exactly `-` selects stdout JSON:
 
 ```bash
 memory_benchmark --benchmark --only-bandwidth --count 5 --buffer-size 512 --output -
+```
+
+For example, a sweep emits one final envelope rather than one document per attempted run:
+
+```bash
+memory_benchmark --benchmark --only-latency --sweep buffer-size=256,512 --output -
 ```
 
 The sentinel is classified from the raw option value before path normalization:
@@ -73,9 +79,14 @@ Real file targets retain their existing persistence behavior:
 - a temporary `<target>.tmp` file is replaced atomically, and a failed replacement preserves the preceding destination
   when possible.
 
-Stdout is final-only. Intermediate standard checkpoint requests are successful no-ops, while all logical state changes,
-stop observations, counters, cleanup, and final result construction still occur. The command serializes one terminal
-snapshot after orchestration finishes. Stdout is not JSON Lines and never contains a sequence of checkpoint documents.
+Stdout is final-only. Intermediate standard and sweep checkpoint requests are successful lazy no-ops: their payload
+builders are not invoked, while all logical state changes, stop observations, counters, cleanup, and final result
+construction still occur. The command serializes one terminal snapshot after orchestration finishes. Stdout is not JSON
+Lines and never contains a sequence of checkpoint documents.
+
+File-output ownership is mode-aware. Standard and sweep file producers retain their existing checkpoints, and command
+boundaries do not add a second terminal file write or retry a failed checkpoint. The stdout command boundary alone emits
+the retained final document.
 
 Use a real file target when crash-resilient standard or sweep checkpoints are required.
 
@@ -111,15 +122,16 @@ complete.
 
 ## Consumer acceptance procedure
 
-A caller accepts a direct CPU conclusion only after all of the following checks succeed:
+A caller accepts a CPU conclusion only after all of the following checks succeed:
 
 1. Launch the executable with an argv array; do not construct an unquoted shell command from external input.
 2. Capture stdout and stderr separately and wait for the process and both streams to finish.
-3. Parse stdout as exactly one JSON document with no trailing non-whitespace data.
-4. Check the process result for transport or runtime failure.
+3. Reject an empty stdout result with the process status and stderr diagnostic.
+4. Parse stdout as exactly one JSON document with no trailing non-whitespace data.
 5. Check the supported mode and schema-version field.
-6. Apply the mode-specific command-completeness predicate above.
-7. Apply the selected metric's status, non-null, and quality predicates.
+6. Require the expected successful process status before accepting conclusions.
+7. Apply the mode-specific command-completeness predicate above.
+8. Apply the selected metric's status, non-null, and quality predicates.
 
 Language-neutral pseudocode:
 
@@ -156,6 +168,10 @@ jq -e '.configuration.schema_version == 4 and
 jq -e '.configuration.schema_version == 2 and
        .core_to_core_latency.status == "complete" and
        .core_to_core_latency.measurements_complete == true' core2core.json
+
+jq -e '.configuration.sweep_schema_version == 1 and
+       .status == "complete" and .conclusions_valid == true and
+       .completed_runs == .planned_runs' sweep.json
 ```
 
 ## Compatibility policy

@@ -49,6 +49,7 @@ memory_benchmark --analyze-tlb --latency-chain-mode random-box --tlb-density med
 memory_benchmark --analyze-tlb --seed 123456789 --output tlb_analysis_seeded.json
 memory_benchmark --analyze-tlb --tlb-density low --output - >tlb_analysis.json 2>tlb_analysis.log
 memory_benchmark --analyze-tlb --sweep tlb-density=low,medium,high --output tlb_density_sweep.json
+memory_benchmark --analyze-tlb --sweep tlb-density=low,medium --output - >tlb_density_sweep.json 2>tlb_density_sweep.log
 memory_benchmark --analyze-tlb --sweep latency-stride-bytes=64,128 --sweep tlb-density=medium,high --sweep-max-runs 4 --output tlb_stride_density_sweep.json
 ```
 
@@ -85,7 +86,7 @@ SplitMix64 again with a layout-specific domain constant. The `seed_derivation` o
 
 ### 3.5 Parameter Sweep (`--sweep`)
 
-Sweep mode applies a Cartesian product over supported TLB-analysis parameters and writes one combined JSON file.
+Sweep mode applies a Cartesian product over supported TLB-analysis parameters and writes one combined JSON envelope.
 
 Allowed `--analyze-tlb` sweep keys:
 
@@ -93,15 +94,18 @@ Allowed `--analyze-tlb` sweep keys:
 - `latency-chain-mode`
 - `tlb-density`
 
-Sweep mode requires `--output <file>`. `--sweep-max-runs <count>` limits the number of generated combinations. Its default is `16` for `--analyze-tlb` and `256` for other modes; an explicit value overrides the mode default.
+Sweep mode requires `--output <target>`. Exact `-` emits one final envelope on stdout; every other value selects a real
+file. `--sweep-max-runs <count>` limits the number of generated combinations. Its default is `16` for `--analyze-tlb`
+and `256` for other modes; an explicit value overrides the mode default.
 
-Each sweep parameter key may appear only once. The combined JSON is atomically checkpointed after each attempted run and
-records top-level `status`, `status_reason`, `planned_runs`, `attempted_runs`, `completed_runs`, and
-`conclusions_valid` fields. Every attempted run is retained with its own `status` and `status_reason`, so
-`attempted_runs` equals the length of `runs`. A TLB attempt increments `completed_runs` only when its nested
-`tlb_analysis.status` is `complete` and its nested `tlb_analysis.conclusions_valid` is `true`; partial, interrupted, and
-failed attempts remain auditable but do not increment the completed count. The first incomplete attempt stops further
-runs.
+Each sweep parameter key may appear only once. A combined real-file JSON result is atomically checkpointed after each
+attempted run. A stdout run keeps the same logical transitions but skips lazy checkpoint serialization and emits the
+final envelope once. Both transports record top-level `status`, `status_reason`, `planned_runs`, `attempted_runs`,
+`completed_runs`, and `conclusions_valid` fields. Every attempted run is retained with its own `status` and
+`status_reason`, so `attempted_runs` equals the length of `runs`. A TLB attempt increments `completed_runs` only when its
+nested `tlb_analysis.status` is `complete` and its nested `tlb_analysis.conclusions_valid` is `true`; partial,
+interrupted, and failed attempts remain auditable but do not increment the completed count. The first incomplete attempt
+stops further runs.
 
 `--sweep latency-chain-mode=...` follows the same chain-mode rule as direct `--latency-chain-mode`: `global-random` is rejected for `--analyze-tlb`.
 
@@ -495,8 +499,10 @@ When `--sweep` is used with `--analyze-tlb`, output uses the common sweep envelo
 
 Each `runs[].result` entry is the same single-run TLB analysis JSON payload described in section 9.1.
 The top-level sweep object also includes `status`, `status_reason`, `planned_runs`, `attempted_runs`, `completed_runs`,
-and `conclusions_valid`. It is atomically rewritten after every attempted run, so a later failure or interrupt leaves a
-readable checkpoint. `attempted_runs` equals the length of `runs`; `completed_runs` includes only entries whose nested
+and `conclusions_valid`. A real file is atomically rewritten after every attempted run, so a later failure or interrupt
+leaves a readable checkpoint; no redundant outer final write or checkpoint retry is added. Exact target `-` writes one
+terminal envelope to stdout after orchestration rather than a checkpoint stream. `attempted_runs` equals the length of
+`runs`; `completed_runs` includes only entries whose nested
 `tlb_analysis.status` is `complete` and nested `tlb_analysis.conclusions_valid` is `true`. Partial, interrupted, and
 failed attempts stay in `runs` without validating the sweep conclusions. The TLB schema's native `status: "error"`
 maps to a failed attempt while the schema-4 result remains available; the envelope does not fabricate a nested

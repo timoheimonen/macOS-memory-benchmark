@@ -35,7 +35,7 @@ This document describes the layout of project files, organized by purpose. It is
 
 | File | Purpose |
 |---|---|
-| `main.cpp` | Program entry point; performs primary-mode conflict scan, dispatches dedicated GPU/core-to-core paths, runs the general standard/pattern/TLB pipeline, and owns the general direct CPU output-session lifetime; the dedicated core-to-core CLI owns its session |
+| `main.cpp` | Program entry point; performs primary-mode conflict scan, dispatches dedicated GPU/core-to-core paths, runs the general standard/pattern/TLB and sweep pipelines, and owns the general CPU output-session lifetime; the dedicated core-to-core CLI owns its session |
 
 ### Build and tooling
 
@@ -124,7 +124,7 @@ The benchmark subsystem owns the standard CPU pipeline, standalone TLB analysis,
 | `benchmark_statistics_collector.h` / `.cpp` | Initializes/preallocates statistics storage and accumulates measured per-loop values and latency samples for later aggregation |
 | `benchmark_work_plan.h` / `.cpp` | Pure standard-benchmark work planning, calibration arithmetic, seed derivation, and cyclic scheduling helpers |
 | `parallel_test_framework.h` | Template-based framework for dispatching multi-threaded benchmark work with synchronized start, cache-line-aligned per-thread state, and macOS QoS thread attributes |
-| `sweep_runner.h` / `.cpp` | Shared deterministic sweep executor, completion classification, and checkpointing; provides standard/pattern/TLB entry-point orchestration and is called directly by the core-to-core sweep runner |
+| `sweep_runner.h` / `.cpp` | Shared deterministic sweep executor, completion classification, retained terminal envelopes, and file/lazy-stdout checkpoint dispatch; provides standard/pattern/TLB entry-point orchestration and is called directly by the core-to-core sweep runner |
 
 #### TLB analysis mode
 
@@ -145,9 +145,9 @@ The benchmark subsystem owns the standard CPU pipeline, standalone TLB analysis,
 | `core_to_core_latency.h` | Public interface for the `--analyze-core2core` mode |
 | `core_to_core_latency_internal.h` | Internal runner interfaces not exposed outside the module |
 | `core_to_core_latency_runner.cpp` | Per-scenario calibration, 128-byte shared-state isolation, balanced loop scheduling, unpinned two-thread ping-pong execution, robust summaries, and in-memory result collection |
-| `core_to_core_latency_cli.cpp` | CLI argument parsing, direct output-session ownership, and entry point for the core-to-core mode |
+| `core_to_core_latency_cli.cpp` | CLI argument parsing, direct/sweep output-session ownership, and entry point for the core-to-core mode |
 | `core_to_core_latency_json.h` / `.cpp` | Serializes schema-2 work plans, loop audit records, completion state, and results |
-| `core_to_core_sweep_runner.h` / `.cpp` | Core-to-core Cartesian sweeps and atomic per-run checkpoints |
+| `core_to_core_sweep_runner.h` / `.cpp` | Core-to-core Cartesian sweeps, retained terminal envelopes, atomic file checkpoints, and lazy stdout checkpoints |
 
 ---
 
@@ -237,7 +237,7 @@ All user-facing text strings are centralized here. Each `.cpp` file implements a
 |---|---|
 | `json_output_api.h` | Public standard/pattern payload builders and the shared atomic-file writer interface; this C++ API is distinct from the process contract in `API.md` |
 | `json_output.cpp` | Builds standard/pattern root payloads, adds timestamp/version metadata, and retains file-save adapters; direct command dispatch can reuse the prebuilt object through `JsonOutputSession` |
-| `json_output_session.h` / `.cpp` | Classifies raw output targets, applies mode-specific file-path policy, lazily dispatches checkpoints, routes command-scoped human stdout, and emits checked final JSON through the retained original stdout buffer; every direct CPU mode selects this transport |
+| `json_output_session.h` / `.cpp` | Classifies raw output targets, applies mode-specific file-path policy, lazily dispatches checkpoints, routes command-scoped human stdout, and emits checked final JSON through the retained original stdout buffer; every CPU mode and sweep selects this transport |
 | `builder.cpp` | Builds common mode configuration metadata, including resolved chain, seed, calibration, scheduling, and worker policies |
 | `standard.cpp` | Active standard schema-2 serializer for completion state, loop measurements, and main/cache aggregates |
 | `patterns.cpp` | Serializes pattern benchmark results |
@@ -346,7 +346,7 @@ GoogleTest-based unit and integration test suite. All `.cpp` files are picked up
 | `test_json_output_session.cpp` | `JsonOutputTargetTest`, `JsonOutputSessionTest` | Exact sentinel/path classification, lazy checkpoint dispatch, atomic-file parity, stdout routing/restoration, and stream failure containment |
 | `test_json_utils.cpp` | `JsonUtilsTest`, `JsonFileWriterTest` | JSON parse/statistics and atomic writer success/failure contracts |
 | `test_output_printer.cpp` | `OutputPrinterTest`, `OutputPrinterCustomCacheUnitsTest` | Status-aware partial output, mode/cache composition, and custom-cache size-unit boundaries |
-| `test_sweep_runner.cpp` | `SweepRunnerTest` | Complete/partial/interrupted/failed attempt accounting and checkpoint behavior |
+| `test_sweep_runner.cpp` | `SweepRunnerTest` | Complete/partial/interrupted/failed attempt accounting, schema-1 envelopes, and file/lazy-stdout checkpoint behavior |
 | `test_sweep_utils.cpp` | `SweepUtilsTest` | Shared sweep parsing, empty-dimension behavior, and overflow-safe Cartesian counts |
 | `test_pattern_validation.cpp` | `PatternValidationTest` | Pattern benchmark parameter validation |
 | `test_pattern_benchmark.cpp` | `PatternBenchmarkTest` | Pattern execution and statistics |

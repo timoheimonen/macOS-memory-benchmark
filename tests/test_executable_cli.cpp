@@ -21,6 +21,7 @@
 #include <chrono>
 #include <csignal>
 #include <cstdio>
+#include <cstdint>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
@@ -651,12 +652,63 @@ TEST(ExecutableCliIntegrationTest, CoreToCoreSweepWritesCompletionMetadataIntegr
   expect_single_runtime_banner(result);
   const nlohmann::json json = nlohmann::json::parse(read_file(output.path()));
   EXPECT_EQ(json["version"], SOFTVERSION);
+  EXPECT_EQ(json["configuration"]["sweep_schema_version"], 1);
   EXPECT_EQ(json["status"], "complete");
   EXPECT_EQ(json["planned_runs"], 3u);
   EXPECT_EQ(json["completed_runs"], 3u);
   EXPECT_TRUE(json["conclusions_valid"]);
   ASSERT_EQ(json["runs"].size(), 3u);
   EXPECT_EQ(json["runs"][0]["result"]["configuration"]["schema_version"], 2);
+}
+
+TEST(ExecutableCliIntegrationTest,
+     CoreToCoreSweepWritesSingleTerminalJsonToStdoutIntegration) {
+  const CliResult result = run_memory_benchmark({
+      "--analyze-core2core", "--count", "1", "--sweep",
+      "latency-samples=1,2", "--sweep-max-runs", "2", "--output",
+      "-"});
+
+  expect_process_completed(result);
+  ASSERT_EQ(result.exit_code, EXIT_SUCCESS) << result.stderr_output;
+  const nlohmann::json json = parse_single_stdout_json(result);
+  EXPECT_EQ(json["configuration"]["mode"],
+            Constants::SWEEP_JSON_MODE_NAME);
+  EXPECT_EQ(json["configuration"]["base_mode"],
+            Constants::CORE_TO_CORE_JSON_MODE_NAME);
+  EXPECT_EQ(json["configuration"]["sweep_schema_version"], 1);
+  EXPECT_EQ(json["status"], "complete");
+  EXPECT_EQ(json["planned_runs"], 2u);
+  EXPECT_EQ(json["attempted_runs"], 2u);
+  EXPECT_EQ(json["completed_runs"], 2u);
+  EXPECT_TRUE(json["conclusions_valid"].get<bool>());
+  ASSERT_EQ(json["runs"].size(), 2u);
+  for (const nlohmann::json& run : json["runs"]) {
+    EXPECT_EQ(run["status"], "complete");
+    EXPECT_EQ(run["result"]["configuration"]["schema_version"], 2);
+    EXPECT_EQ(run["result"]["core_to_core_latency"]["status"],
+              "complete");
+    EXPECT_TRUE(run["result"]["core_to_core_latency"]
+                       ["measurements_complete"]
+                           .get<bool>());
+  }
+
+  EXPECT_EQ(result.stdout_output.find(Messages::config_header(SOFTVERSION)),
+            std::string::npos);
+  EXPECT_EQ(result.stdout_output.find(Messages::msg_running_sweep(2)),
+            std::string::npos);
+  EXPECT_NE(result.stderr_output.find(Messages::config_header(SOFTVERSION)),
+            std::string::npos)
+      << result.stderr_output;
+  EXPECT_NE(result.stderr_output.find(Messages::msg_running_sweep(2)),
+            std::string::npos)
+      << result.stderr_output;
+  EXPECT_NE(result.stderr_output.find(
+                Messages::msg_running_core_to_core_analysis()),
+            std::string::npos)
+      << result.stderr_output;
+  EXPECT_EQ(result.stderr_output.find(Messages::msg_results_saved_to("-")),
+            std::string::npos);
+  expect_no_dash_transport_artifacts(result);
 }
 
 TEST(ExecutableCliIntegrationTest, AnalyzeTlbInvalidStrideSweepFailsBeforeExecutionIntegration) {
@@ -818,11 +870,80 @@ TEST(ExecutableCliIntegrationTest, StandardSweepWritesCompletionMetadataIntegrat
 
   EXPECT_EQ(result.exit_code, EXIT_SUCCESS);
   expect_single_runtime_banner(result);
-  const std::string json = read_file(output.path());
-  EXPECT_NE(json.find("\"status\": \"complete\""), std::string::npos);
-  EXPECT_NE(json.find("\"planned_runs\": 3"), std::string::npos);
-  EXPECT_NE(json.find("\"completed_runs\": 3"), std::string::npos);
-  EXPECT_NE(json.find("\"conclusions_valid\": true"), std::string::npos);
+  const nlohmann::json json = nlohmann::json::parse(read_file(output.path()));
+  EXPECT_EQ(json["configuration"]["sweep_schema_version"], 1);
+  EXPECT_EQ(json["status"], "complete");
+  EXPECT_EQ(json["planned_runs"], 3u);
+  EXPECT_EQ(json["completed_runs"], 3u);
+  EXPECT_TRUE(json["conclusions_valid"].get<bool>());
+}
+
+TEST(ExecutableCliIntegrationTest,
+     StandardSweepWritesSingleTerminalJsonToStdoutIntegration) {
+  const CliResult result = run_memory_benchmark({
+      "--benchmark", "--only-bandwidth", "--iterations", "1", "--count",
+      "1", "--threads", "1", "--sweep", "buffer-size=1,2",
+      "--sweep-max-runs", "2", "--output", "-"});
+
+  expect_process_completed(result);
+  ASSERT_EQ(result.exit_code, EXIT_SUCCESS) << result.stderr_output;
+  const nlohmann::json json = parse_single_stdout_json(result);
+  EXPECT_EQ(json["configuration"]["mode"],
+            Constants::SWEEP_JSON_MODE_NAME);
+  EXPECT_EQ(json["configuration"]["base_mode"],
+            Constants::BENCHMARK_JSON_MODE_NAME);
+  EXPECT_EQ(json["configuration"]["sweep_schema_version"], 1);
+  EXPECT_EQ(json["status"], "complete");
+  EXPECT_EQ(json["planned_runs"], 2u);
+  EXPECT_EQ(json["attempted_runs"], 2u);
+  EXPECT_EQ(json["completed_runs"], 2u);
+  EXPECT_TRUE(json["conclusions_valid"].get<bool>());
+  ASSERT_EQ(json["runs"].size(), 2u);
+  for (const nlohmann::json& run : json["runs"]) {
+    EXPECT_EQ(run["status"], "complete");
+    EXPECT_EQ(run["result"]["configuration"]
+                 ["benchmark_schema_version"],
+              2);
+    EXPECT_EQ(run["result"]["status"], "complete");
+    EXPECT_TRUE(run["result"]["results_complete"].get<bool>());
+  }
+
+  EXPECT_EQ(result.stdout_output.find(Messages::config_header(SOFTVERSION)),
+            std::string::npos);
+  EXPECT_EQ(result.stdout_output.find(Messages::msg_running_sweep(2)),
+            std::string::npos);
+  EXPECT_NE(result.stderr_output.find(Messages::config_header(SOFTVERSION)),
+            std::string::npos)
+      << result.stderr_output;
+  EXPECT_NE(result.stderr_output.find(Messages::msg_running_sweep(2)),
+            std::string::npos)
+      << result.stderr_output;
+  EXPECT_NE(result.stderr_output.find(Messages::msg_sweep_run_progress(1, 2)),
+            std::string::npos)
+      << result.stderr_output;
+  EXPECT_EQ(result.stderr_output.find(Messages::msg_results_saved_to("-")),
+            std::string::npos);
+  expect_no_dash_transport_artifacts(result);
+}
+
+TEST(ExecutableCliIntegrationTest,
+     InvalidTlbSweepWithStdoutTargetLeavesStdoutEmptyIntegration) {
+  const CliResult result = run_memory_benchmark({
+      "--analyze-tlb", "--sweep", "latency-stride-bytes=64,130",
+      "--output", "-"});
+
+  expect_process_completed(result);
+  EXPECT_EQ(result.exit_code, EXIT_FAILURE);
+  expect_no_runtime_banner(result);
+  EXPECT_TRUE(result.stdout_output.empty()) << result.stdout_output;
+  EXPECT_NE(result.stderr_output.find(
+                Messages::error_latency_stride_alignment(
+                    130, sizeof(uintptr_t))),
+            std::string::npos)
+      << result.stderr_output;
+  EXPECT_EQ(result.stderr_output.find(Messages::msg_running_sweep(2)),
+            std::string::npos);
+  expect_no_dash_transport_artifacts(result);
 }
 
 TEST(ExecutableCliIntegrationTest, PatternSweepPrintsOneBannerAcrossNestedLoopsIntegration) {
@@ -836,6 +957,7 @@ TEST(ExecutableCliIntegrationTest, PatternSweepPrintsOneBannerAcrossNestedLoopsI
   EXPECT_EQ(result.exit_code, EXIT_SUCCESS);
   expect_single_runtime_banner(result);
   const nlohmann::json json = nlohmann::json::parse(read_file(output.path()));
+  EXPECT_EQ(json["configuration"]["sweep_schema_version"], 1);
   EXPECT_EQ(json["status"], "complete");
   EXPECT_EQ(json["planned_runs"], 3u);
   EXPECT_EQ(json["completed_runs"], 3u);

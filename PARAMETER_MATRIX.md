@@ -25,7 +25,7 @@ Working version `0.62.0`
 | `-W` | `--only-bandwidth` | — | Run only standard benchmark bandwidth tests; requires `--benchmark` |
 | `-L` | `--only-latency` | — | Run only standard benchmark latency tests; requires `--benchmark` |
 | `-u` | `--non-cacheable` | — | Apply best-effort cache-discouraging allocation hints; does not create truly uncached memory |
-| `-o` | `--output` | `<target>` | Write JSON output. Direct CPU commands reserve exact `-` for one final stdout document; every other supported target is a file |
+| `-o` | `--output` | `<target>` | Write JSON output. CPU commands and sweeps reserve exact `-` for one final stdout document; every other supported target is a file. GPU accepts files only |
 | `-S` | `--sweep` | `<key=a,b>` | Add a Cartesian sweep parameter; repeat once per distinct key and use with `--output` |
 | `-X` | `--sweep-max-runs` | `<count>` | Positive generated-run limit; default `256`, or `16` with `--analyze-tlb`; effective only with `--sweep` |
 | `-h` | `--help` | — | Show help; the standalone `--analyze-tlb` whitelist is the exception and rejects this combination |
@@ -72,7 +72,7 @@ values `low`, `medium`, and `high`; quick/standard/exhaustive are profile descri
 | `--only-bandwidth` | ✅ | ❌ with `--cache-size`, ❌ with `--latency-samples` |
 | `--only-latency` | ✅ | ❌ with `--iterations`. At least one latency target must remain enabled; `--buffer-size 0 --cache-size 0` is invalid |
 | `--non-cacheable` | ✅ | |
-| `--output <target>` | ✅ | Direct mode accepts exact `-` for final JSON stdout; `./-` remains a file. Sweeps still require a real file target in this revision |
+| `--output <target>` | ✅ | Direct mode and sweeps accept exact `-` for final JSON stdout; `./-` remains a file |
 | `--sweep <key=a,b>` | ✅ | Requires `--output`; supported keys depend on benchmark subtype, see [Sweep Compatibility](#sweep-compatibility) |
 | `--sweep-max-runs <n>` | ✅ | Default `256`; accepted without `--sweep` but has no effect then |
 | `--tlb-density <low\|medium\|high>` | ❌ | Parsed only by standalone `--analyze-tlb` |
@@ -97,7 +97,7 @@ values `low`, `medium`, and `high`; quick/standard/exhaustive are profile descri
 | `--only-bandwidth` | ❌ | Separate execution mode |
 | `--only-latency` | ❌ | Separate execution mode |
 | `--non-cacheable` | ✅ | |
-| `--output <target>` | ✅ | Direct mode accepts exact `-` for final JSON stdout; `./-` remains a file. Sweeps still require a real file target in this revision |
+| `--output <target>` | ✅ | Direct mode and sweeps accept exact `-` for final JSON stdout; `./-` remains a file |
 | `--sweep <key=a,b>` | ✅ | Requires `--output`; supported keys: `buffer-size`, `threads` |
 | `--sweep-max-runs <n>` | ✅ | Default `256`; accepted without `--sweep` but has no effect then |
 | `--tlb-density <low\|medium\|high>` | ❌ | Parsed only by standalone `--analyze-tlb` |
@@ -107,7 +107,7 @@ values `low`, `medium`, and `high`; quick/standard/exhaustive are profile descri
 
 | Modifier | Compatible | Notes |
 |----------|------------|-------|
-| `--output <target>` | ✅ | Direct mode accepts exact `-` for final JSON stdout; `./-` remains a file. TLB sweeps still require a real file target in this revision |
+| `--output <target>` | ✅ | Direct mode and TLB sweeps accept exact `-` for final JSON stdout; `./-` remains a file |
 | `--latency-stride-bytes <n>` | ✅ | Must be positive, pointer-aligned (8 bytes on Apple Silicon), and no larger than the system page size; exact page-size divisibility is not required |
 | `--latency-chain-mode <mode>` | ✅ | `global-random` is rejected with `--analyze-tlb` |
 | `--tlb-density <low\|medium\|high>` | ✅ | Default `medium`/standard; low=quick, high=exhaustive |
@@ -121,7 +121,7 @@ values `low`, `medium`, and `high`; quick/standard/exhaustive are profile descri
 
 | Modifier | Compatible | Notes |
 |----------|------------|-------|
-| `--output <target>` | ✅ | Direct mode accepts exact `-` for final JSON stdout; `./-` remains a file. Core-to-core sweeps still require a real file target in this revision |
+| `--output <target>` | ✅ | Direct mode and core-to-core sweeps accept exact `-` for final JSON stdout; `./-` remains a file |
 | `--count <n>` | ✅ | Core-to-core default `3` (general default remains `1`); scenario order rotates and the headline is the loop median P50 |
 | `--latency-samples <n>` | ✅ | Positive integer; default `1000`. Separate calibrated sample windows per scenario/loop do not define the continuous headline |
 | `--sweep <key=a,b>` | ✅ | Requires `--output`; supported keys: `count`, `latency-samples` |
@@ -152,10 +152,10 @@ the frozen 8192-threadgroup maximum and records both that maximum and the resolv
 
 ### Sweep Compatibility
 
-`--sweep` runs a Cartesian product over one or more parameter lists. It always requires `--output <file>` because sweep
-results are written as one combined JSON document with `configuration.mode: "sweep"` and per-run payloads under
-`runs[].result`. General and core-to-core envelopes use `configuration.sweep_schema_version: 1`; each nested result keeps
-its own mode schema version.
+`--sweep` runs a Cartesian product over one or more parameter lists. It always requires `--output <target>`. Exact `-`
+emits one final combined JSON document to stdout; every other target is an atomically checkpointed file. The envelope
+uses `configuration.mode: "sweep"`, with per-run payloads under `runs[].result`. General and core-to-core envelopes use
+`configuration.sweep_schema_version: 1`; each nested result keeps its own mode schema version.
 
 | Base mode | Supported sweep keys | Not supported |
 |-----------|----------------------|---------------|
@@ -175,7 +175,9 @@ Additional sweep rules:
 - `--sweep latency-chain-mode=global-random` is invalid with `--analyze-tlb`.
 - Direct options outside `--sweep` are used as fixed values for every generated run.
 - If the same parameter is provided both directly and through `--sweep`, the sweep value is applied per run.
-- Combined sweep JSON is atomically checkpointed after every attempted run. `attempted_runs` equals stored `runs`
+- A real-file sweep is atomically checkpointed after every attempted run without an additional terminal rewrite. A
+  stdout sweep still performs every logical checkpoint transition without invoking the persistence payload builder or
+  serializing an intermediate document; one final envelope is emitted after orchestration. `attempted_runs` equals stored `runs`
   entries; partial, interrupted, and failed attempts remain in that array but stop further execution and do not
   increment `completed_runs`. A standard or pattern attempt is complete only with nested `status: "complete"` and
   `results_complete: true`; TLB requires nested `tlb_analysis.status: "complete"` and
@@ -200,7 +202,7 @@ Additional sweep rules:
 | `--analyze-tlb` + `--help` | The standalone TLB whitelist does not include help; use `--help` without `--analyze-tlb` |
 | `--gpu-bandwidth` + any other primary mode | GPU is a standalone primary mode |
 | `--gpu-bandwidth` + any option outside `buffer-size`, `iterations`, `count`, `seed`, `output`, `help` | GPU schema 1 exact whitelist |
-| `--sweep` without `--output` | Sweep mode requires a combined JSON output file |
+| `--sweep` without `--output` | Sweep mode requires a combined JSON output target |
 | `--sweep` generated runs > `--sweep-max-runs` | Guardrail against accidental large Cartesian sweeps |
 
 ### No Mode Flag (shows help)

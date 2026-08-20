@@ -596,18 +596,18 @@ middle, and trailing items.
 #### `--output <target>`
 
 - An omitted output option disables JSON output
-- For direct `--benchmark`, `--patterns`, `--analyze-tlb`, and `--analyze-core2core`, an exact raw value of `-` selects machine-readable stdout. The sentinel is
+- For `--benchmark`, `--patterns`, `--analyze-tlb`, and `--analyze-core2core`, including their supported sweeps, an exact raw value of `-` selects machine-readable stdout. The sentinel is
   classified before path normalization, so `--output ./-` remains an ordinary file named `-`
 - A supported stdout-target command emits exactly one JSON document followed by one newline after orchestration reaches
-  its terminal state. Intermediate standard checkpoint requests do not emit documents
+  its terminal state. Intermediate standard and sweep checkpoint requests are lazy no-ops and do not emit documents
 - Post-parse human output is routed to stderr while the stdout target is active. Parse, preflight, and other pre-result
   failures leave stdout empty; `--help` remains a human-facing stdout command when that mode accepts the combination
 - Every other non-empty value is a file target. Relative paths write under the current working directory, and parent
   directories are created automatically
-- Standard file targets retain atomic intermediate checkpoints. Pattern, TLB, and core-to-core direct file targets each
-  receive one final atomic write. Use a real file when crash-resilient standard checkpoints are required
-- In this revision, GPU and all sweep commands still require real file targets; their exact `-` stdout transport is not
-  yet supported
+- Standard and sweep file targets retain atomic intermediate checkpoints. Pattern, TLB, and core-to-core direct file
+  targets each receive one final atomic write. Sweep command boundaries do not add a second terminal file write or retry
+  a failed checkpoint. Use a real file when crash-resilient standard or per-attempt sweep checkpoints are required
+- GPU still requires a real file target; its exact `-` stdout transport is not yet supported
 - GPU schema 1 file output is atomically checkpointed after every terminal measurement. A valid post-parse pre-run backend,
   capability, compilation, allocation, or work-plan failure also writes an auditable checkpoint. Syntax/config errors,
   including a buffer below 64 MB, fail before result JSON is created
@@ -615,7 +615,8 @@ middle, and trailing items.
 #### `--sweep <key=value1,value2>`
 
 - Runs a Cartesian parameter sweep and writes one combined JSON result
-- Requires `--output <file>`
+- Requires `--output <target>`; exact `-` selects one final envelope on stdout, while every other value is a checkpointed
+  file target
 - Can be repeated to sweep multiple parameters
 - Supported keys: `buffer-size`, `cache-size`, `threads`, `latency-tlb-locality-kb`, `latency-stride-bytes`, `latency-chain-mode`, `tlb-density`, `count`, `latency-samples`
 - `tlb-density` applies only with `--analyze-tlb`
@@ -638,8 +639,10 @@ middle, and trailing items.
 - Every generated configuration is validated before the first run
 - General and core-to-core combined output use envelope schema
   `configuration.sweep_schema_version: 1`; each `runs[].result` retains its own mode schema version
-- Standard, pattern, and TLB combined JSON is atomically checkpointed after every attempted run and records `status`,
-  `status_reason`, `planned_runs`, `attempted_runs`, `completed_runs`, and `conclusions_valid`
+- Standard, pattern, TLB, and core-to-core file output is atomically checkpointed after every attempted run and records
+  `status`, `status_reason`, `planned_runs`, `attempted_runs`, `completed_runs`, and `conclusions_valid`. Stdout runs
+  retain the same logical checkpoint cadence without invoking the persistence payload builder or serializing an
+  intermediate document, and emit only the final envelope
 - For standard, pattern, and TLB sweeps, every attempted run is retained with its own `status` and `status_reason`.
   `attempted_runs` counts stored entries, while `completed_runs` counts only mode-specific nested results that are
   genuinely complete: standard and pattern require nested `status: "complete"` with `results_complete: true`, while
@@ -647,10 +650,10 @@ middle, and trailing items.
   interrupted, and failed nested results never increment it. TLB's native `tlb_analysis.status: "error"` is mapped to
   a failed sweep attempt, and the schema-4 payload is retained without adding a nested `tlb_analysis.status_reason`
 - A parameter key may appear only once in one sweep command
-- Core-to-core sweeps also append and checkpoint the latest attempted run when it is interrupted or fails. Each entry
-  records `status` and `status_reason`; `attempted_runs` counts those entries, while `completed_runs` counts only nested
-  core-to-core results with `status: "complete"` and `measurements_complete: true`. Therefore `runs` can contain more
-  entries than `completed_runs`
+- Core-to-core sweeps also append and retain the latest attempted run when it is interrupted or fails; a file target
+  checkpoints that update. Each entry records `status` and `status_reason`; `attempted_runs` counts those entries, while
+  `completed_runs` counts only nested core-to-core results with `status: "complete"` and
+  `measurements_complete: true`. Therefore `runs` can contain more entries than `completed_runs`
 - Any partial, interrupted, or failed attempt stops further attempts; a pre-run interruption or checkpoint failure can
   also stop execution without adding or completing another run. Top-level `conclusions_valid` is true only when
   top-level `status` is `complete` and `completed_runs == planned_runs`
@@ -719,6 +722,9 @@ memory_benchmark --analyze-core2core --count 5 --latency-samples 2000 --output c
 
 # Standalone core-to-core sample-depth sweep
 memory_benchmark --analyze-core2core --count 3 --sweep latency-samples=500,1000,2000 --output core2core_sample_sweep.json
+
+# Sweep automation: one final envelope on stdout and the human transcript on stderr
+memory_benchmark --analyze-core2core --sweep latency-samples=500,1000 --output - >core2core_sweep.json 2>core2core_sweep.log
 
 # Standalone GPU bandwidth, automatic calibrated work
 memory_benchmark --gpu-bandwidth --output gpu_bandwidth.json
@@ -1054,10 +1060,11 @@ report.
 
 ## JSON Output Format
 
-Direct standard, pattern, TLB, and core-to-core commands can serialize the same mode payload either to a real file or,
-with the exact raw target `--output -`, once to stdout. The stdout transport does not wrap the result or change its
-measurement schema. GPU and parameter sweeps remain file-only in this revision. See [API.md](API.md) for stream
-handling, process-status checks, schema compatibility, and the current transport support matrix.
+Standard, pattern, TLB, and core-to-core commands and sweeps can serialize their payload either to a real file or, with
+the exact raw target `--output -`, once to stdout. The stdout transport does not wrap the result or change its measurement
+schema; sweep stdout is one final envelope rather than a checkpoint stream. GPU remains file-only in this revision. See
+[API.md](API.md) for stream handling, process-status checks, schema compatibility, and the current transport support
+matrix.
 
 ### Standard benchmark JSON shape
 
@@ -1695,7 +1702,7 @@ same structure as the standard `main_memory.bandwidth` object.
 
 ### Useful JSON inspection commands
 
-Capture any supported direct CPU machine-output command before applying the schema-specific checks below:
+Capture any supported CPU machine-output command before applying the schema-specific checks below:
 
 ```bash
 memory_benchmark --benchmark --only-bandwidth --buffer-size 512 --count 5 --output - \

@@ -488,7 +488,7 @@ std::string error_sweep_parameter_not_allowed(const std::string& parameter_name,
 }
 
 const std::string& error_sweep_requires_output() {
-  static const std::string msg = "--sweep requires --output <file> for the combined JSON result";
+  static const std::string msg = "--sweep requires --output <target> for the combined JSON result";
   return msg;
 }
 
