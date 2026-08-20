@@ -18,7 +18,8 @@ It is designed for controlled microarchitectural investigation rather than a sin
 - **Dedicated TLB analysis:** paired spread/packed chains, adaptive rounds, confidence intervals, and independent boundary validation.
 - **Core-to-core analysis:** calibrated acquire/release token-exchange measurements under scheduler-hint scenarios.
 - **Metal GPU bandwidth:** standalone read/write/copy compute kernels with GPU timestamps and validation metadata.
-- **Reproducible experiments:** explicit seeds, repeated loops, built-in Cartesian parameter sweeps, and checkpointed JSON output.
+- **Reproducible experiments:** explicit seeds, repeated loops, built-in Cartesian parameter sweeps, recoverable JSON
+  file checkpoints, and final machine-readable stdout for direct standard and pattern commands.
 
 See [Measurement Capabilities](CAPABILITIES.md) for the full measurement scope and interpretation guidance.
 
@@ -74,6 +75,17 @@ For longer runs, prevent system sleep and collect repeated measurements:
 ```bash
 caffeinate -i -d memory_benchmark --benchmark --count 10 --buffer-size 1024 --output baseline.json
 ```
+
+For automation, direct standard and pattern commands accept the exact output target `-`. JSON is written once to stdout
+and the human-readable transcript is written to stderr:
+
+```bash
+memory_benchmark --benchmark --only-bandwidth --count 5 --buffer-size 512 --output - \
+  >benchmark.json 2>benchmark.log
+```
+
+`--output ./-` remains an ordinary file target. Other direct modes and parameter sweeps still require a real output file
+in this revision; see the [Machine-Readable CLI API](API.md) support matrix.
 
 ## Benchmark Modes
 
@@ -152,7 +164,12 @@ Treat benchmark values as measurements of the configured workload under the obse
   physical cache-line migration or isolate coherence-fabric latency, and macOS user space cannot guarantee physical core
   pinning.
 
-JSON output records completion and nullable measurement state instead of using zero for unavailable results. Consumers making conclusions should reject incomplete or interrupted runs according to the mode-specific status fields. Exact schema contracts and checkpoint behavior are documented in the [User Manual](MANUAL.md), [Technical Specification](TECHNICAL_SPECIFICATION.md), and mode whitepapers.
+JSON output records completion and nullable measurement state instead of using zero for unavailable results. Consumers
+making conclusions should reject incomplete or interrupted runs according to the mode-specific status fields. Direct
+standard and pattern `--output -` commands reserve stdout for one final JSON document and route their post-parse human
+transcript to stderr; file output retains its documented persistence behavior. Exact process acceptance rules are in the
+[Machine-Readable CLI API](API.md), with schema and checkpoint details in the [User Manual](MANUAL.md),
+[Technical Specification](TECHNICAL_SPECIFICATION.md), and mode whitepapers.
 
 ## Plotting Results
 
@@ -173,6 +190,7 @@ status if a planned run fails or does not produce a complete, parseable result. 
 ## Documentation
 
 - [Measurement Capabilities](CAPABILITIES.md): what the tool measures and how those measurements should be interpreted.
+- [Machine-Readable CLI API](API.md): supported output targets, stdout/stderr contract, schema compatibility, and result acceptance.
 - [User Manual](MANUAL.md): complete option reference, mode compatibility, workflows, output examples, and troubleshooting.
 - [Technical Specification](TECHNICAL_SPECIFICATION.md): architecture, execution flow, memory model, and output contracts.
 - [Latency Whitepaper](LATENCY_WHITEPAPER.md): dependent pointer-chase and sampling methodology.
@@ -206,7 +224,7 @@ make coverage-all
 ```
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for contribution guidance and [Project Structure](PROJECT_STRUCTURE.md) for
-repository navigation and the current test-suite map. API documentation can be generated with `make docs`.
+repository navigation and the current test-suite map. C++ reference documentation can be generated with `make docs`.
 
 ## Scope and Safety
 

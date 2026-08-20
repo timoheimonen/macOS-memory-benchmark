@@ -17,13 +17,23 @@
 #include <gtest/gtest.h>
 
 #include <atomic>
+#include <cerrno>
+#include <chrono>
+#include <csignal>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
+#include <filesystem>
 #include <fstream>
+#include <fcntl.h>
+#include <memory>
 #include <spawn.h>
 #include <sstream>
+#include <stdexcept>
 #include <string>
+#include <sys/stat.h>
 #include <sys/wait.h>
+#include <thread>
 #include <unistd.h>
 #include <vector>
 
@@ -35,24 +45,135 @@ extern char** environ;
 
 namespace {
 
-struct CliResult {
-  int exit_code = -1;
-  std::string output;
+class TemporaryCliDirectory {
+ public:
+  TemporaryCliDirectory() {
+    static std::atomic<unsigned long> sequence{0};
+    path_ = std::filesystem::path("/tmp") /
+            ("membenchmark_cli_run_" + std::to_string(::getpid()) + "_" +
+             std::to_string(sequence.fetch_add(1)));
+    std::error_code error;
+    std::filesystem::remove_all(path_, error);
+    error.clear();
+    if (!std::filesystem::create_directories(path_, error) || error) {
+      throw std::runtime_error("failed to create CLI test directory: " +
+                               error.message());
+    }
+  }
+
+  ~TemporaryCliDirectory() {
+    std::error_code ignored;
+    std::filesystem::remove_all(path_, ignored);
+  }
+
+  TemporaryCliDirectory(const TemporaryCliDirectory&) = delete;
+  TemporaryCliDirectory& operator=(const TemporaryCliDirectory&) = delete;
+
+  const std::filesystem::path& path() const { return path_; }
+
+ private:
+  std::filesystem::path path_;
 };
 
-CliResult run_memory_benchmark(const std::vector<std::string>& args) {
+struct CliResult {
+  int exit_code = -1;
+  int termination_signal = 0;
+  int spawn_error = 0;
+  int wait_error = 0;
+  bool timed_out = false;
+  std::string stdout_output;
+  std::string stderr_output;
+  // Existing file-output tests use a channel-agnostic transcript. Capture is
+  // still performed independently; only the post-process test view is joined.
+  std::string output;
+  std::string infrastructure_error;
+  std::unique_ptr<TemporaryCliDirectory> directory;
+};
+
+std::string read_file(const std::string& path) {
+  std::ifstream file(path);
+  std::ostringstream contents;
+  contents << file.rdbuf();
+  return contents.str();
+}
+
+void decode_process_status(int status, CliResult& result) {
+  if (WIFEXITED(status)) {
+    result.exit_code = WEXITSTATUS(status);
+  } else if (WIFSIGNALED(status)) {
+    result.termination_signal = WTERMSIG(status);
+  }
+}
+
+bool terminate_and_reap_child(pid_t child, int& status, CliResult& result) {
+  if (kill(child, SIGKILL) == -1 && errno != ESRCH &&
+      result.wait_error == 0) {
+    result.wait_error = errno;
+  }
+
+  pid_t wait_result = -1;
+  do {
+    wait_result = waitpid(child, &status, 0);
+  } while (wait_result == -1 && errno == EINTR);
+
+  if (wait_result == child) {
+    return true;
+  }
+  if (wait_result == -1 && errno != ECHILD && result.wait_error == 0) {
+    result.wait_error = errno;
+  }
+  return false;
+}
+
+CliResult run_memory_benchmark(
+    const std::vector<std::string>& args,
+    std::chrono::milliseconds timeout = std::chrono::minutes(10)) {
   CliResult result;
-  int output_pipe[2] = {-1, -1};
-  if (pipe(output_pipe) != 0) {
+  try {
+    result.directory = std::make_unique<TemporaryCliDirectory>();
+  } catch (const std::exception& error) {
+    result.infrastructure_error = error.what();
     return result;
   }
 
+  std::error_code path_error;
+  const std::filesystem::path executable_path =
+      std::filesystem::absolute("memory_benchmark", path_error);
+  if (path_error) {
+    result.infrastructure_error =
+        "failed to resolve executable path: " + path_error.message();
+    return result;
+  }
+
+  const std::filesystem::path stdout_path =
+      result.directory->path() / ".stdout-capture";
+  const std::filesystem::path stderr_path =
+      result.directory->path() / ".stderr-capture";
+
   posix_spawn_file_actions_t actions;
-  posix_spawn_file_actions_init(&actions);
-  posix_spawn_file_actions_adddup2(&actions, output_pipe[1], STDOUT_FILENO);
-  posix_spawn_file_actions_adddup2(&actions, output_pipe[1], STDERR_FILENO);
-  posix_spawn_file_actions_addclose(&actions, output_pipe[0]);
-  posix_spawn_file_actions_addclose(&actions, output_pipe[1]);
+  int action_result = posix_spawn_file_actions_init(&actions);
+  if (action_result != 0) {
+    result.spawn_error = action_result;
+    return result;
+  }
+
+  action_result = posix_spawn_file_actions_addchdir_np(
+      &actions, result.directory->path().c_str());
+  if (action_result == 0) {
+    action_result = posix_spawn_file_actions_addopen(
+        &actions, STDOUT_FILENO, stdout_path.c_str(),
+        O_WRONLY | O_CREAT | O_TRUNC, S_IRUSR | S_IWUSR);
+  }
+  if (action_result == 0) {
+    action_result = posix_spawn_file_actions_addopen(
+        &actions, STDERR_FILENO, stderr_path.c_str(),
+        O_WRONLY | O_CREAT | O_TRUNC, S_IRUSR | S_IWUSR);
+  }
+  if (action_result != 0) {
+    posix_spawn_file_actions_destroy(&actions);
+    result.spawn_error = action_result;
+    return result;
+  }
 
   std::vector<std::string> argument_storage;
   argument_storage.reserve(args.size() + 1);
@@ -66,29 +187,47 @@ CliResult run_memory_benchmark(const std::vector<std::string>& args) {
   argv.push_back(nullptr);
 
   pid_t child = -1;
-  const int spawn_result = posix_spawn(&child, "./memory_benchmark", &actions,
-                                       nullptr, argv.data(), environ);
+  const int spawn_result =
+      posix_spawn(&child, executable_path.c_str(), &actions, nullptr,
+                  argv.data(), environ);
   posix_spawn_file_actions_destroy(&actions);
-  close(output_pipe[1]);
   if (spawn_result != 0) {
-    close(output_pipe[0]);
+    result.spawn_error = spawn_result;
     return result;
   }
-
-  char buffer[4096];
-  ssize_t bytes_read = 0;
-  while ((bytes_read = read(output_pipe[0], buffer, sizeof(buffer))) > 0) {
-    result.output.append(buffer, static_cast<size_t>(bytes_read));
-  }
-  close(output_pipe[0]);
 
   int status = 0;
-  if (waitpid(child, &status, 0) == -1) {
-    return result;
+  bool child_reaped = false;
+  const std::chrono::steady_clock::time_point deadline =
+      std::chrono::steady_clock::now() + timeout;
+  while (!child_reaped) {
+    const pid_t wait_result = waitpid(child, &status, WNOHANG);
+    if (wait_result == child) {
+      child_reaped = true;
+      break;
+    }
+    if (wait_result == -1) {
+      if (errno == EINTR) {
+        continue;
+      }
+      result.wait_error = errno;
+      child_reaped = terminate_and_reap_child(child, status, result);
+      break;
+    }
+    if (std::chrono::steady_clock::now() >= deadline) {
+      result.timed_out = true;
+      child_reaped = terminate_and_reap_child(child, status, result);
+      break;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
   }
-  if (status != -1 && WIFEXITED(status)) {
-    result.exit_code = WEXITSTATUS(status);
+
+  if (child_reaped) {
+    decode_process_status(status, result);
   }
+  result.stdout_output = read_file(stdout_path.string());
+  result.stderr_output = read_file(stderr_path.string());
+  result.output = result.stdout_output + result.stderr_output;
   return result;
 }
 
@@ -116,13 +255,6 @@ class TemporaryJsonFile {
  private:
   std::string path_;
 };
-
-std::string read_file(const std::string& path) {
-  std::ifstream file(path);
-  std::ostringstream contents;
-  contents << file.rdbuf();
-  return contents.str();
-}
 
 size_t count_occurrences(const std::string& text, const std::string& needle) {
   size_t count = 0;
@@ -153,6 +285,48 @@ void expect_no_runtime_banner(const CliResult& result) {
       << result.output;
 }
 
+void expect_process_completed(const CliResult& result) {
+  EXPECT_TRUE(result.infrastructure_error.empty())
+      << result.infrastructure_error;
+  EXPECT_EQ(result.spawn_error, 0)
+      << std::strerror(result.spawn_error);
+  EXPECT_EQ(result.wait_error, 0)
+      << std::strerror(result.wait_error);
+  EXPECT_FALSE(result.timed_out);
+  EXPECT_EQ(result.termination_signal, 0);
+}
+
+void expect_no_dash_transport_artifacts(const CliResult& result) {
+  ASSERT_NE(result.directory, nullptr);
+  EXPECT_FALSE(std::filesystem::exists(result.directory->path() / "-"));
+  EXPECT_FALSE(std::filesystem::exists(result.directory->path() / "-.tmp"));
+}
+
+nlohmann::json parse_single_stdout_json(const CliResult& result) {
+  const std::string& text = result.stdout_output;
+  if (text.empty()) {
+    ADD_FAILURE() << "stdout was empty; stderr:\n" << result.stderr_output;
+    return nlohmann::json::object();
+  }
+
+  EXPECT_EQ(text.back(), '\n') << text;
+  const size_t last_non_whitespace = text.find_last_not_of(" \t\r\n");
+  if (last_non_whitespace == std::string::npos) {
+    ADD_FAILURE() << "stdout contained only whitespace";
+    return nlohmann::json::object();
+  }
+  EXPECT_EQ(last_non_whitespace + 2, text.size())
+      << "stdout must have exactly one trailing newline";
+  EXPECT_EQ(text.find('\r'), std::string::npos);
+  if (!nlohmann::json::accept(text)) {
+    ADD_FAILURE() << "stdout was not exactly one JSON document:\n" << text
+                  << "stderr:\n"
+                  << result.stderr_output;
+    return nlohmann::json::object();
+  }
+  return nlohmann::json::parse(text);
+}
+
 }  // namespace
 
 TEST(ExecutableCliIntegrationTest, NoArgumentsShowsHelpAndReturnsSuccessIntegration) {
@@ -172,6 +346,28 @@ TEST(ExecutableCliIntegrationTest, HelpFlagShowsHelpAndReturnsSuccessIntegration
   EXPECT_NE(result.output.find("Usage:"), std::string::npos);
   EXPECT_NE(result.output.find("--patterns"), std::string::npos);
   EXPECT_NE(result.output.find("--gpu-bandwidth"), std::string::npos);
+}
+
+TEST(ExecutableCliIntegrationTest,
+     HelpWithStdoutTargetRemainsHumanInEitherOrderIntegration) {
+  for (const std::vector<std::string>& arguments : {
+           std::vector<std::string>{"--benchmark", "--output", "-",
+                                    "--help"},
+           std::vector<std::string>{"--benchmark", "--help", "--output",
+                                    "-"},
+       }) {
+    SCOPED_TRACE(testing::PrintToString(arguments));
+    const CliResult result = run_memory_benchmark(arguments);
+
+    expect_process_completed(result);
+    EXPECT_EQ(result.exit_code, EXIT_SUCCESS);
+    expect_no_runtime_banner(result);
+    EXPECT_NE(result.stdout_output.find("Usage:"), std::string::npos);
+    EXPECT_NE(result.stdout_output.find("--benchmark"), std::string::npos);
+    EXPECT_TRUE(result.stderr_output.empty()) << result.stderr_output;
+    EXPECT_FALSE(nlohmann::json::accept(result.stdout_output));
+    expect_no_dash_transport_artifacts(result);
+  }
 }
 
 TEST(ExecutableCliIntegrationTest, GpuHelpUsesDedicatedStandaloneParserIntegration) {
@@ -310,6 +506,40 @@ TEST(ExecutableCliIntegrationTest, InvalidStandardModeConfigReturnsFailureIntegr
   EXPECT_NE(result.output.find("--only-bandwidth cannot be used with --latency-samples"), std::string::npos);
 }
 
+TEST(ExecutableCliIntegrationTest,
+     InvalidStdoutTargetCommandLeavesStdoutEmptyIntegration) {
+  const CliResult result = run_memory_benchmark(
+      {"--benchmark", "--only-bandwidth", "--latency-samples", "1",
+       "--output", "-"});
+
+  expect_process_completed(result);
+  EXPECT_EQ(result.exit_code, EXIT_FAILURE);
+  expect_no_runtime_banner(result);
+  EXPECT_TRUE(result.stdout_output.empty()) << result.stdout_output;
+  EXPECT_NE(result.stderr_output.find(
+                Messages::error_only_bandwidth_with_latency_samples()),
+            std::string::npos)
+      << result.stderr_output;
+  expect_no_dash_transport_artifacts(result);
+}
+
+TEST(ExecutableCliIntegrationTest,
+     ParseErrorWithStdoutTargetLeavesStdoutEmptyIntegration) {
+  const std::string invalid_option = "--not-a-real-option";
+  const CliResult result = run_memory_benchmark(
+      {"--benchmark", "--output", "-", invalid_option});
+
+  expect_process_completed(result);
+  EXPECT_EQ(result.exit_code, EXIT_FAILURE);
+  expect_no_runtime_banner(result);
+  EXPECT_TRUE(result.stdout_output.empty()) << result.stdout_output;
+  EXPECT_NE(result.stderr_output.find(
+                Messages::error_unknown_option(invalid_option)),
+            std::string::npos)
+      << result.stderr_output;
+  expect_no_dash_transport_artifacts(result);
+}
+
 TEST(ExecutableCliIntegrationTest, CoreToCoreArgumentsAreRoutedBeforeNormalParserIntegration) {
   const CliResult result = run_memory_benchmark(
       {"--analyze-core2core", "--buffer-size", "256"});
@@ -394,6 +624,66 @@ TEST(ExecutableCliIntegrationTest, StandardBenchmarkWritesJsonIntegration) {
   EXPECT_TRUE(json["main_memory"].contains("bandwidth"));
 }
 
+TEST(ExecutableCliIntegrationTest,
+     StandardBenchmarkWritesSingleJsonDocumentToStdoutIntegration) {
+  const CliResult result = run_memory_benchmark({
+      "--benchmark", "--only-bandwidth", "--buffer-size", "1",
+      "--iterations", "1", "--count", "1", "--threads", "1",
+      "--output", "-"});
+
+  expect_process_completed(result);
+  ASSERT_EQ(result.exit_code, EXIT_SUCCESS) << result.stderr_output;
+  const nlohmann::json json = parse_single_stdout_json(result);
+  EXPECT_EQ(json["configuration"]["mode"], "benchmark");
+  EXPECT_EQ(json["configuration"]["benchmark_schema_version"], 2);
+  EXPECT_EQ(json["status"], "complete");
+  EXPECT_TRUE(json["results_complete"].get<bool>());
+  EXPECT_EQ(json["planned_loops"], 1u);
+  EXPECT_EQ(json["completed_loops"], 1u);
+
+  EXPECT_EQ(result.stdout_output.find(Messages::config_header(SOFTVERSION)),
+            std::string::npos);
+  EXPECT_EQ(result.stdout_output.find(Messages::msg_running_benchmarks()),
+            std::string::npos);
+  EXPECT_NE(result.stderr_output.find(Messages::config_header(SOFTVERSION)),
+            std::string::npos)
+      << result.stderr_output;
+  EXPECT_NE(result.stderr_output.find(Messages::msg_running_benchmarks()),
+            std::string::npos)
+      << result.stderr_output;
+  EXPECT_EQ(result.stderr_output.find(Messages::msg_results_saved_to("-")),
+            std::string::npos);
+  expect_no_dash_transport_artifacts(result);
+}
+
+TEST(ExecutableCliIntegrationTest,
+     ExplicitDotDashOutputRemainsOrdinaryFileTargetIntegration) {
+  const CliResult result = run_memory_benchmark({
+      "--benchmark", "--only-bandwidth", "--buffer-size", "1",
+      "--iterations", "1", "--count", "1", "--threads", "1",
+      "--output", "./-"});
+
+  expect_process_completed(result);
+  ASSERT_EQ(result.exit_code, EXIT_SUCCESS) << result.output;
+  ASSERT_NE(result.directory, nullptr);
+  const std::filesystem::path output_path = result.directory->path() / "-";
+  ASSERT_TRUE(std::filesystem::exists(output_path));
+  EXPECT_FALSE(std::filesystem::exists(result.directory->path() / "-.tmp"));
+  const nlohmann::json json =
+      nlohmann::json::parse(read_file(output_path.string()));
+  EXPECT_EQ(json["configuration"]["mode"], "benchmark");
+  EXPECT_EQ(json["configuration"]["benchmark_schema_version"], 2);
+  EXPECT_EQ(json["status"], "complete");
+  EXPECT_TRUE(json["results_complete"].get<bool>());
+  EXPECT_NE(result.stdout_output.find(Messages::msg_running_benchmarks()),
+            std::string::npos)
+      << result.stdout_output;
+  EXPECT_NE(result.stdout_output.find("Results saved to:"),
+            std::string::npos)
+      << result.stdout_output;
+  EXPECT_FALSE(nlohmann::json::accept(result.stdout_output));
+}
+
 TEST(ExecutableCliIntegrationTest, StandardSweepWritesCompletionMetadataIntegration) {
   const TemporaryJsonFile output("standard_sweep_status");
 
@@ -446,6 +736,39 @@ TEST(ExecutableCliIntegrationTest, PatternModeRunsPatternOrchestrationIntegratio
   EXPECT_EQ(result.output.find("Prefetcher effectiveness"), std::string::npos);
   EXPECT_EQ(result.output.find("TLB pressure"), std::string::npos);
   EXPECT_NE(result.output.find("2 MiB stride"), std::string::npos);
+}
+
+TEST(ExecutableCliIntegrationTest,
+     PatternBenchmarkWritesSingleJsonDocumentToStdoutIntegration) {
+  const CliResult result = run_memory_benchmark({
+      "--patterns", "--buffer-size", "1", "--iterations", "1", "--count",
+      "1", "--threads", "1", "--seed", "42", "--output", "-"});
+
+  expect_process_completed(result);
+  ASSERT_EQ(result.exit_code, EXIT_SUCCESS) << result.stderr_output;
+  const nlohmann::json json = parse_single_stdout_json(result);
+  EXPECT_EQ(json["configuration"]["mode"], "patterns");
+  EXPECT_EQ(json["configuration"]["pattern_schema_version"], 3);
+  EXPECT_EQ(json["status"], "complete");
+  EXPECT_TRUE(json["results_complete"].get<bool>());
+  EXPECT_EQ(json["planned_loops"], 1u);
+  EXPECT_EQ(json["completed_loops"], 1u);
+
+  EXPECT_EQ(result.stdout_output.find(Messages::config_header(SOFTVERSION)),
+            std::string::npos);
+  EXPECT_EQ(
+      result.stdout_output.find(Messages::msg_running_pattern_benchmarks()),
+      std::string::npos);
+  EXPECT_NE(result.stderr_output.find(Messages::config_header(SOFTVERSION)),
+            std::string::npos)
+      << result.stderr_output;
+  EXPECT_NE(
+      result.stderr_output.find(Messages::msg_running_pattern_benchmarks()),
+      std::string::npos)
+      << result.stderr_output;
+  EXPECT_EQ(result.stderr_output.find(Messages::msg_results_saved_to("-")),
+            std::string::npos);
+  expect_no_dash_transport_artifacts(result);
 }
 
 TEST(ExecutableCliIntegrationTest, PatternSeedReproducesWorkloadMetadataIntegration) {

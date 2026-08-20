@@ -48,6 +48,7 @@
 #include "utils/benchmark.h"            // All benchmark functions and print functions
 #include "output/console/messages/messages_api.h"             // Centralized messages
 #include "output/json/json_output/json_output_api.h"
+#include "output/json/json_output/json_output_session.h"
 #include "core/signal/signal_handler.h"
 #include "utils/utils.h"
 #include <chrono>
@@ -98,6 +99,9 @@ class ProgressCleanupGuard {
  * @param[in]  config   Benchmark configuration (buffer sizes, threads, loops, flags)
  * @param[out] stats    Statistics structure to populate with all loop results
  * @param[in]  test_hooks Optional deterministic coordinator seams used by tests
+ * @param[in]  output_session Optional direct-command JSON transport. File
+ *             checkpoints use the shared atomic writer, while stdout
+ *             checkpoints remain lazy successful no-ops.
  *
  * @return EXIT_SUCCESS (0) when execution completes or stops through graceful interruption; inspect stats.status
  * @return EXIT_FAILURE (1) if timer creation/checkpointing fails or execution throws an exception
@@ -113,7 +117,8 @@ class ProgressCleanupGuard {
  * @see print_results() for output formatting
  */
 int run_all_benchmarks(BenchmarkConfig& config, BenchmarkStatistics& stats,
-                       const BenchmarkRunnerTestHooks* test_hooks) try {
+                       const BenchmarkRunnerTestHooks* test_hooks,
+                       JsonOutputSession* output_session) try {
   ProgressCleanupGuard progress_cleanup;
 
   // Initialize statistics structure
@@ -124,7 +129,8 @@ int run_all_benchmarks(BenchmarkConfig& config, BenchmarkStatistics& stats,
     run_start = std::chrono::steady_clock::now();
   }
 
-  auto checkpoint = [&config, &stats, &run_start, test_hooks]() {
+  auto checkpoint = [&config, &stats, &run_start, test_hooks,
+                     output_session]() {
     if (config.output_file.empty()) {
       return EXIT_SUCCESS;
     }
@@ -134,6 +140,13 @@ int run_all_benchmarks(BenchmarkConfig& config, BenchmarkStatistics& stats,
                                              .count();
     if (test_hooks != nullptr && test_hooks->checkpoint) {
       return test_hooks->checkpoint(config, stats, elapsed_seconds, false);
+    }
+    if (output_session != nullptr) {
+      return output_session->checkpoint(
+          [&config, &stats, elapsed_seconds]() {
+            return build_results_json(config, stats, elapsed_seconds);
+          },
+          false);
     }
     return save_results_to_json(config, stats, elapsed_seconds, false);
   };

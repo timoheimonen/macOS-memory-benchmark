@@ -14,8 +14,12 @@
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 //
 #include <gtest/gtest.h>
+#include <unistd.h>
 
+#include <atomic>
 #include <cstdlib>
+#include <filesystem>
+#include <fstream>
 #include <stdexcept>
 #include <vector>
 
@@ -25,6 +29,8 @@
 #include "core/config/config.h"
 #include "core/timing/timer.h"
 #include "output/console/messages/messages_api.h"
+#include "output/json/json_output/json_output_api.h"
+#include "output/json/json_output/json_output_session.h"
 #include "test_timer_system_calls.h"
 
 namespace {
@@ -88,6 +94,42 @@ BenchmarkResults make_collector_results() {
   results.custom_latency.samples = {12.1, 12.2};
 
   return results;
+}
+
+class TemporaryBenchmarkJsonFile {
+ public:
+  TemporaryBenchmarkJsonFile() {
+    static std::atomic<unsigned long> sequence{0};
+    path_ = std::filesystem::path("/tmp") /
+            ("membenchmark_runner_session_" + std::to_string(::getpid()) +
+             "_" + std::to_string(sequence.fetch_add(1)) + ".json");
+    std::error_code ignored;
+    std::filesystem::remove(path_, ignored);
+    std::filesystem::remove(path_.string() + ".tmp", ignored);
+  }
+
+  ~TemporaryBenchmarkJsonFile() {
+    std::error_code ignored;
+    std::filesystem::remove(path_, ignored);
+    std::filesystem::remove(path_.string() + ".tmp", ignored);
+  }
+
+  TemporaryBenchmarkJsonFile(const TemporaryBenchmarkJsonFile&) = delete;
+  TemporaryBenchmarkJsonFile& operator=(
+      const TemporaryBenchmarkJsonFile&) = delete;
+
+  const std::filesystem::path& path() const { return path_; }
+
+ private:
+  std::filesystem::path path_;
+};
+
+nlohmann::ordered_json read_ordered_json_file(
+    const std::filesystem::path& path) {
+  std::ifstream input(path);
+  nlohmann::ordered_json output;
+  input >> output;
+  return output;
 }
 
 }  // namespace
@@ -391,4 +433,82 @@ TEST(BenchmarkRunnerTest, InjectedStopBetweenLoopsPreservesCompletedLoop) {
   EXPECT_EQ(stats.completed_loops, 1u);
   EXPECT_EQ(stats.loop_results.size(), 1u);
   EXPECT_EQ(checkpoints, 2u);
+}
+
+TEST(BenchmarkRunnerTest,
+     StdoutSessionSuppressesFailureCheckpointAndEmitsOneTerminalPayload) {
+  BenchmarkConfig config;
+  config.loop_count = 1;
+  config.output_file = "-";
+  config.only_bandwidth = true;
+  BenchmarkStatistics stats;
+  BenchmarkRunnerTestHooks hooks;
+  hooks.force_timer_creation_failure = true;
+  inject_deterministic_elapsed(hooks);
+
+  int run_result = EXIT_SUCCESS;
+  int output_result = EXIT_FAILURE;
+  nlohmann::ordered_json terminal_payload;
+  testing::internal::CaptureStdout();
+  testing::internal::CaptureStderr();
+  {
+    JsonOutputSession session(make_json_output_target(config.output_file));
+    run_result = run_all_benchmarks(config, stats, &hooks, &session);
+    terminal_payload = build_results_json(config, stats, 1.0);
+    output_result = session.write_final(terminal_payload);
+  }
+  const std::string error_output = testing::internal::GetCapturedStderr();
+  const std::string json_output = testing::internal::GetCapturedStdout();
+
+  EXPECT_EQ(run_result, EXIT_FAILURE);
+  EXPECT_EQ(output_result, EXIT_SUCCESS);
+  EXPECT_EQ(stats.status, BenchmarkRunStatus::Failed);
+  EXPECT_EQ(stats.status_reason, Messages::error_timer_creation_failed());
+  EXPECT_EQ(json_output, terminal_payload.dump(2) + "\n");
+  EXPECT_EQ(nlohmann::ordered_json::parse(json_output), terminal_payload);
+  EXPECT_EQ(terminal_payload["status"], "failed");
+  EXPECT_FALSE(terminal_payload["results_complete"].get<bool>());
+  EXPECT_NE(error_output.find(Messages::error_timer_creation_failed()),
+            std::string::npos);
+}
+
+TEST(BenchmarkRunnerTest,
+     FileSessionPersistsTheExistingCompletedLoopCheckpoint) {
+  const ScopedDeterministicTimerSystemCalls timer_system_calls;
+  TemporaryBenchmarkJsonFile output_file;
+  BenchmarkConfig config;
+  config.loop_count = 1;
+  config.output_file = output_file.path().string();
+  config.only_bandwidth = true;
+  BenchmarkStatistics stats;
+  BenchmarkRunnerTestHooks hooks;
+  inject_deterministic_elapsed(hooks);
+  hooks.execute_loop = [](BenchmarkConfig&, int loop, HighResTimer&,
+                          BenchmarkExecutionState*) {
+    BenchmarkResults results;
+    results.status = BenchmarkRunStatus::Complete;
+    results.loop_index = static_cast<size_t>(loop);
+    results.planned_measurements = 1;
+    results.completed_measurements = 1;
+    return results;
+  };
+
+  testing::internal::CaptureStdout();
+  int run_result = EXIT_FAILURE;
+  {
+    JsonOutputSession session(make_json_output_target(config.output_file));
+    run_result = run_all_benchmarks(config, stats, &hooks, &session);
+  }
+  static_cast<void>(testing::internal::GetCapturedStdout());
+
+  ASSERT_EQ(run_result, EXIT_SUCCESS);
+  ASSERT_TRUE(std::filesystem::exists(output_file.path()));
+  const nlohmann::ordered_json checkpoint =
+      read_ordered_json_file(output_file.path());
+  EXPECT_EQ(checkpoint["status"], "complete");
+  EXPECT_TRUE(checkpoint["results_complete"].get<bool>());
+  EXPECT_EQ(checkpoint["completed_loops"], 1);
+  EXPECT_EQ(checkpoint["completed_measurements"], 1);
+  EXPECT_FALSE(
+      std::filesystem::exists(output_file.path().string() + ".tmp"));
 }

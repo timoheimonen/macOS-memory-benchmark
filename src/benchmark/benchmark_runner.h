@@ -39,6 +39,7 @@
 struct BenchmarkConfig;
 struct BenchmarkExecutionState;
 struct HighResTimer;
+class JsonOutputSession;
 
 /**
  * @struct BenchmarkResults
@@ -150,6 +151,8 @@ struct BenchmarkRunnerTestHooks {
  * @param config Reference to benchmark configuration
  * @param[out] stats Reference to BenchmarkStatistics structure to store aggregated results
  * @param test_hooks Optional deterministic dependency seams; null in production
+ * @param output_session Optional command output session used by direct standard runs.
+ *        When null, the legacy file checkpoint path remains active.
  * @return EXIT_SUCCESS on success, EXIT_FAILURE on error
  *
  * Executes multiple benchmark loops as specified by config.loop_count and
@@ -160,6 +163,7 @@ struct BenchmarkRunnerTestHooks {
  * status and do not propagate across this coordinator boundary.
  */
 int run_all_benchmarks(BenchmarkConfig& config, BenchmarkStatistics& stats,
-                       const BenchmarkRunnerTestHooks* test_hooks = nullptr);
+                       const BenchmarkRunnerTestHooks* test_hooks = nullptr,
+                       JsonOutputSession* output_session = nullptr);
 
 #endif // BENCHMARK_RUNNER_H

@@ -253,6 +253,16 @@ std::string error_json_stdout_write_failed(const std::string& error_details) {
   return "Failed to write JSON to stdout: " + error_details;
 }
 
+std::string error_json_output_initialization_failed(const std::string& error_details) {
+  return "JSON output initialization failed: " +
+         (error_details.empty() ? "unknown exception" : error_details);
+}
+
+std::string error_json_payload_construction_failed(const std::string& error_details) {
+  return "JSON payload construction failed: " +
+         (error_details.empty() ? "unknown exception" : error_details);
+}
+
 std::string error_file_permission_denied(const std::string& file_path) {
   return "Permission denied: cannot write to \"" + file_path + "\"";
 }

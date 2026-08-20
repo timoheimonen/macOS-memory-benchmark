@@ -378,6 +378,8 @@ middle, and trailing items.
   16 complete pointer-chain cycles. If the cycle minimum itself exceeds 300 ms, metadata reports
   `minimum-complete-cycles-exceed-window` instead of treating it as an ordinary calibration miss
 - Reuses calibrated work and seeded logical chains so repeated loops vary runtime conditions rather than workload shape
+- A direct command accepts `--output -` as a final machine-readable stdout target. After parsing, the banner,
+  configuration, progress, results, warnings, and errors are routed to stderr; stdout contains one JSON document
 - Running without any primary mode flag shows help and exits
 
 #### `--patterns`
@@ -389,6 +391,8 @@ middle, and trailing items.
 - Uses the historical all-detected-CPU-core default for comparison compatibility; a matching explicit worker-count
   profile can use `--threads <detected P-core count>`, but placement remains unpinned
 - Rotates pattern groups across repeated loops; read/write/copy order within each group stays fixed
+- A direct command accepts `--output -` with the same one-document stdout and human-stderr stream contract as direct
+  standard mode
 
 #### `--gpu-bandwidth`
 
@@ -581,12 +585,22 @@ middle, and trailing items.
 
 ### Output
 
-#### `--output <file>`
+#### `--output <target>`
 
-- Saves JSON output
-- Relative path writes under current working directory
-- Parent directories are created automatically
-- GPU schema 1 is atomically checkpointed after every terminal measurement. A valid post-parse pre-run backend,
+- An omitted output option disables JSON output
+- For direct `--benchmark` and `--patterns`, an exact raw value of `-` selects machine-readable stdout. The sentinel is
+  classified before path normalization, so `--output ./-` remains an ordinary file named `-`
+- A supported stdout-target command emits exactly one JSON document followed by one newline after orchestration reaches
+  its terminal state. Intermediate standard checkpoint requests do not emit documents
+- Post-parse human output is routed to stderr while the stdout target is active. Parse and preflight validation errors
+  leave stdout empty; `--help` remains a human-facing stdout command even when combined with `--output -`
+- Every other non-empty value is a file target. Relative paths write under the current working directory, and parent
+  directories are created automatically
+- Standard file targets retain atomic intermediate checkpoints; pattern file targets retain their normal final atomic
+  write. Use a real file when crash-resilient intermediate state is required
+- In this revision, TLB, core-to-core, GPU, and all sweep commands still require real file targets; their exact `-`
+  stdout transport is not yet supported
+- GPU schema 1 file output is atomically checkpointed after every terminal measurement. A valid post-parse pre-run backend,
   capability, compilation, allocation, or work-plan failure also writes an auditable checkpoint. Syntax/config errors,
   including a buffer below 64 MB, fail before result JSON is created
 
@@ -646,6 +660,12 @@ memory_benchmark --benchmark --count 10 --buffer-size 1024 --output full.json
 
 # Pattern-only
 memory_benchmark --patterns --count 5 --buffer-size 512 --output patterns.json
+
+# Direct standard automation: JSON stdout and human transcript stderr
+memory_benchmark --benchmark --only-bandwidth --count 5 --buffer-size 512 --output - >benchmark.json 2>benchmark.log
+
+# Direct pattern automation
+memory_benchmark --patterns --count 5 --buffer-size 512 --output - >patterns.json 2>patterns.log
 
 # Bandwidth-only
 memory_benchmark --benchmark --only-bandwidth --threads 8 --count 5
@@ -1023,6 +1043,11 @@ report.
 
 ## JSON Output Format
 
+Direct standard and pattern commands can serialize the same mode payload either to a real file or, with the exact raw
+target `--output -`, once to stdout. The stdout transport does not wrap the result or change its measurement schema.
+All other modes and parameter sweeps remain file-only in this revision. See [API.md](API.md) for stream handling,
+process-status checks, schema compatibility, and the current transport support matrix.
+
 ### Standard benchmark JSON shape
 
 ```json
@@ -1045,17 +1070,19 @@ report.
   "main_memory": { ... },
   "cache": { ... },
   "timestamp": "2026-03-09T14:57:56Z",
-  "version": "0.61.2"
+  "version": "0.62.0"
 }
 ```
 
 Schema 2 stores exact uint64 seeds as decimal strings. Every per-loop measurement has status/reason, nullable value,
 exact passes/accesses/payload, requested/effective workers, seed, pilot/final duration, calibration quality, and schedule
 position. Only `measured` values enter aggregates. One measured loop is its own headline; multiple loop headlines use
-median P50. Statistics include average, P90/P95/P99, sample standard deviation, CV, MAD, min, and max. Standard output
-is atomically checkpointed after completed loops; consumers must require `results_complete: true` when completeness is
-mandatory. Bandwidth QoS metadata includes created workers plus per-worker success/failure counts; latency carries the
-main-thread outcome. These fields describe a best-effort scheduler hint, never hard core pinning.
+median P50. Statistics include average, P90/P95/P99, sample standard deviation, CV, MAD, min, and max. A standard file
+target is atomically checkpointed after completed loop-state changes. With `--output -`, those logical checkpoint
+boundaries remain active but persistence is a no-op, and the command emits one final snapshot. Consumers must require
+both `status: "complete"` and `results_complete: true` when completeness is mandatory. Bandwidth QoS metadata includes
+created workers plus per-worker success/failure counts; latency carries the main-thread outcome. These fields describe a
+best-effort scheduler hint, never hard core pinning.
 
 ### Pattern benchmark JSON shape
 
@@ -1167,6 +1194,11 @@ the complete work plan. They can differ from `accesses_per_pass * passes` and mu
 `strided_2mb` names a 2 MiB virtual address stride. It is not evidence that macOS supplied 2 MiB physical pages:
 `large_page_backing_status: "not-verified"` and `large_page_backing_verified: false` must be interpreted literally.
 
+Pattern file and stdout transports serialize this same schema-3 payload. A file target receives the normal terminal
+atomic write; `--output -` receives one terminal document after all representable complete, partial, interrupted, or
+failed evidence has been retained. Command acceptance requires `status: "complete"` and `results_complete: true`, while
+consuming one selected metric additionally requires that measurement's `status: "measured"` and a non-null value.
+
 ### GPU bandwidth JSON shape
 
 GPU output is a separate top-level schema. It must not be sent to a standard-schema parser merely because it contains
@@ -1175,8 +1207,8 @@ complete automatic run; it deliberately omits, rather than empties, the populate
 
 ```json
 {
-  "software_version": "0.61.2",
-  "version": "0.61.2",
+  "software_version": "0.62.0",
+  "version": "0.62.0",
   "timestamp": "...",
   "schema_version": 1,
   "mode": "gpu_bandwidth",
@@ -1379,7 +1411,7 @@ returns only, excludes QoS and pilot outcomes, and does not prove physical place
   ],
   "execution_time_sec": 123.4,
   "timestamp": "2026-04-29T12:00:00Z",
-  "version": "0.61.2"
+  "version": "0.62.0"
 }
 ```
 
@@ -1647,6 +1679,13 @@ nullable aggregate value, measured values, statistics including CV, and detailed
 same structure as the standard `main_memory.bandwidth` object.
 
 ### Useful JSON inspection commands
+
+Capture a direct standard or pattern machine-output command before applying the schema-specific checks below:
+
+```bash
+memory_benchmark --benchmark --only-bandwidth --buffer-size 512 --count 5 --output - \
+  >results.json 2>benchmark.log
+```
 
 ```bash
 # Pretty print

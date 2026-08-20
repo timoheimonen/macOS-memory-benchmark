@@ -2,7 +2,7 @@
 
 **memory_benchmark — Technical Whitepaper**
 
-*Revision 2026-08-13 — Applies to version 0.61.2; archived examples may use older methodologies*
+*Revision 2026-08-20 — Applies to version 0.62.0; archived examples may use older methodologies*
 
 ---
 
@@ -13,7 +13,7 @@ protocol between two POSIX threads. The result includes the complete polling and
 scheduler effects; it is not an isolated measurement of one physical cache-line migration or the coherence fabric.
 Software version 0.58.0 introduced the change from fixed work in a fixed scenario order to the auditable
 v2 calibrated/balanced design. Version 0.61.1 introduced distinct 128-byte token and control blocks and the current
-methodology identity; version 0.61.2 retains that design as
+methodology identity; version 0.62.0 retains that design as
 `core2core-v3-calibrated-balanced-auditable-128b-isolation`:
 
 - every scheduler-hint scenario receives its own excluded pilot after a long calibration warmup;
@@ -386,7 +386,7 @@ and one-way arrays are complete for the illustrated scenario.
   },
   "execution_time_sec": 4.2,
   "timestamp": "2026-07-10T12:00:00Z",
-  "version": "0.61.2"
+  "version": "0.62.0"
 }
 ```
 

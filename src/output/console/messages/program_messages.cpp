@@ -243,9 +243,10 @@ std::string usage_options(const std::string& prog_name) {
       << "                        Uses madvise() hints to discourage caching, but does NOT provide\n"
       << "                        true non-cacheable memory (user-space cannot modify page tables).\n"
       << "                        Best-effort approach that may reduce but not eliminate caching.\n"
-      << "  -o, --output <file>   Save benchmark results to JSON file. If path is relative,\n"
-      << "                        file is saved in current working directory. Standard runs checkpoint\n"
-      << "                        atomically after completed loops and expose incomplete status.\n"
+      << "  -o, --output <target> JSON output target. For direct --benchmark/--patterns, exact - writes\n"
+      << "                        one final JSON document to stdout and routes human output to stderr;\n"
+      << "                        ./- and all other values are files. Standard file targets checkpoint\n"
+      << "                        atomically; TLB/core/GPU and sweeps still require files.\n"
       << "  -S, --sweep <key=a,b> Run a Cartesian sweep over one parameter. Repeat for multiple\n"
       << "                        parameters. Supported keys: buffer-size, cache-size, threads,\n"
       << "                        latency-tlb-locality-kb, latency-stride-bytes,\n"
@@ -262,7 +263,10 @@ std::string usage_options(const std::string& prog_name) {
 
 std::string usage_example(const std::string& prog_name) {
   std::ostringstream oss;
-  oss << "Example: " << prog_name << " --benchmark --iterations 2000 --buffer-size 1024 --output results.json\n";
+  oss << "Example: " << prog_name
+      << " --benchmark --iterations 2000 --buffer-size 1024 --output results.json\n"
+      << "Machine JSON: " << prog_name
+      << " --benchmark --only-bandwidth --buffer-size 512 --output -\n";
   return oss.str();
 }
 

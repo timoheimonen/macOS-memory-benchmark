@@ -116,6 +116,19 @@ TEST(MessagesErrorTest, JsonStdoutWriteFailureHasExactOutput) {
             "Failed to write JSON to stdout: flush operation failed");
 }
 
+TEST(MessagesErrorTest, JsonCommandBoundaryFailuresHaveExactOutput) {
+  EXPECT_EQ(
+      Messages::error_json_output_initialization_failed("cwd unavailable"),
+      "JSON output initialization failed: cwd unavailable");
+  EXPECT_EQ(Messages::error_json_output_initialization_failed(""),
+            "JSON output initialization failed: unknown exception");
+  EXPECT_EQ(
+      Messages::error_json_payload_construction_failed("allocation failed"),
+      "JSON payload construction failed: allocation failed");
+  EXPECT_EQ(Messages::error_json_payload_construction_failed(""),
+            "JSON payload construction failed: unknown exception");
+}
+
 TEST(MessagesErrorTest, ErrorLatencyChainModeInvalid) {
   std::string msg = Messages::error_latency_chain_mode_invalid();
   EXPECT_NE(msg.find("latency-chain-mode invalid"), std::string::npos);
@@ -595,6 +608,12 @@ TEST(MessagesFormattingTest, UsageOptions) {
   EXPECT_NE(msg.find("latency remains"), std::string::npos);
   EXPECT_NE(msg.find("single-threaded"), std::string::npos);
   EXPECT_NE(msg.find("--cache-size"), std::string::npos);
+  EXPECT_NE(msg.find("--output <target>"), std::string::npos);
+  EXPECT_NE(msg.find("exact - writes"), std::string::npos);
+  EXPECT_NE(msg.find("one final JSON document to stdout"), std::string::npos);
+  EXPECT_NE(msg.find("routes human output to stderr"), std::string::npos);
+  EXPECT_NE(msg.find("./- and all other values are files"), std::string::npos);
+  EXPECT_NE(msg.find("TLB/core/GPU and sweeps still require files"), std::string::npos);
   EXPECT_NE(msg.find("-h"), std::string::npos);
   // Check that default values are included
   EXPECT_NE(msg.find(std::to_string(Constants::DEFAULT_ITERATIONS)), std::string::npos);
@@ -611,6 +630,9 @@ TEST(MessagesFormattingTest, UsageExample) {
   EXPECT_NE(msg.find("--iterations"), std::string::npos);
   EXPECT_NE(msg.find("--buffer-size"), std::string::npos);
   EXPECT_NE(msg.find("--output"), std::string::npos);
+  EXPECT_NE(msg.find("Machine JSON:"), std::string::npos);
+  EXPECT_NE(msg.find("--only-bandwidth"), std::string::npos);
+  EXPECT_NE(msg.find("--output -"), std::string::npos);
 }
 
 // ============================================================================

@@ -150,6 +150,32 @@ TEST(ConfigTest, ParseSweepValid) {
   EXPECT_EQ(config.sweep_max_runs, 4u);
 }
 
+TEST(ConfigTest, ParseOutputPreservesStdoutSentinelAndLiteralDashPath) {
+  struct OutputTargetCase {
+    const char* mode;
+    const char* output;
+    bool patterns;
+  };
+
+  const OutputTargetCase cases[] = {
+      {"--benchmark", "-", false},
+      {"--patterns", "./-", true},
+  };
+
+  for (const OutputTargetCase& test_case : cases) {
+    SCOPED_TRACE(test_case.output);
+    BenchmarkConfig config;
+    const char* argv[] = {"program", "--output", test_case.output,
+                          test_case.mode};
+
+    ASSERT_EQ(parse_arguments(4, const_cast<char**>(argv), config),
+              EXIT_SUCCESS);
+    EXPECT_EQ(config.output_file, test_case.output);
+    EXPECT_EQ(config.run_patterns, test_case.patterns);
+    EXPECT_EQ(config.run_benchmark, !test_case.patterns);
+  }
+}
+
 TEST(ConfigTest, RejectsMalformedNumericTokensWithCentralizedErrors) {
   struct InvalidNumericCase {
     std::vector<std::string> arguments;

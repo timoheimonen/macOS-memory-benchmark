@@ -1,6 +1,6 @@
 # Project Structure — macOS-memory-benchmark
 
-**Version:** 0.61.2
+**Version:** 0.62.0
 **Platform:** ARM64 / AArch64 (Apple Silicon macOS)
 **License:** GNU General Public License v3.0 or later
 
@@ -35,7 +35,7 @@ This document describes the layout of project files, organized by purpose. It is
 
 | File | Purpose |
 |---|---|
-| `main.cpp` | Program entry point; performs primary-mode conflict scan, dispatches dedicated GPU/core-to-core paths, and runs the general standard/pattern/TLB pipeline |
+| `main.cpp` | Program entry point; performs primary-mode conflict scan, dispatches dedicated GPU/core-to-core paths, runs the general standard/pattern/TLB pipeline, and owns direct standard/pattern output-session lifetime |
 
 ### Build and tooling
 
@@ -50,6 +50,7 @@ This document describes the layout of project files, organized by purpose. It is
 | File | Purpose |
 |---|---|
 | `README.md` | Project overview, quick-start instructions, and feature summary |
+| `API.md` | Supported process-level machine interface: output targets, stream separation, schema compatibility, and result acceptance |
 | `CAPABILITIES.md` | Measurement capability overview and interpretation notes |
 | `MANUAL.md` | Complete user manual: all CLI flags, modes, output formats, and usage examples |
 | `PARAMETER_MATRIX.md` | Mode/flag compatibility, sweep support, and incompatible-option matrix |
@@ -160,7 +161,7 @@ Core infrastructure for configuration, memory management, macOS system introspec
 |---|---|
 | `config.h` | `BenchmarkConfig` structure for standard, pattern, standalone TLB, and their common sweep settings; core-to-core and GPU use separate config types |
 | `constants.h` | Named constants for CPU/GPU memory limits, calibration, grid/dispatch/payload guardrails, buffer sizing, and latency access counts |
-| `version.h` | `SOFTVERSION` macro (semantic version string, currently `"0.61.2"`) |
+| `version.h` | `SOFTVERSION` macro (semantic version string, currently `"0.62.0"`) |
 | `mode_selector.h` / `.cpp` | Pure primary-mode scan and conflict detection before mode-specific parsing; routes standard, pattern, TLB, core-to-core, and GPU deterministically |
 | `argument_parser.cpp` | Parses standard, pattern, and standalone TLB options into `BenchmarkConfig`; core-to-core and GPU are pre-routed to dedicated parsers |
 | `config_validator.cpp` | Validates the parsed configuration; emits errors for out-of-range or conflicting settings |
@@ -234,9 +235,9 @@ All user-facing text strings are centralized here. Each `.cpp` file implements a
 
 | File | Purpose |
 |---|---|
-| `json_output_api.h` | Public builders and the shared atomic-file writer interface for benchmark JSON payloads |
-| `json_output.cpp` | Builds standard/pattern root payloads, adds timestamp/version metadata, and triggers file output; GPU schema 1 is built in `src/gpu_bandwidth/gpu_json.cpp` and reuses the same atomic writer |
-| `json_output_session.h` / `.cpp` | Classifies raw output targets, applies mode-specific file-path policy, lazily dispatches checkpoints, routes command-scoped human stdout, and emits checked final JSON through the retained original stdout buffer |
+| `json_output_api.h` | Public standard/pattern payload builders and the shared atomic-file writer interface; this C++ API is distinct from the process contract in `API.md` |
+| `json_output.cpp` | Builds standard/pattern root payloads, adds timestamp/version metadata, and retains file-save adapters; direct command dispatch can reuse the prebuilt object through `JsonOutputSession` |
+| `json_output_session.h` / `.cpp` | Classifies raw output targets, applies mode-specific file-path policy, lazily dispatches checkpoints, routes command-scoped human stdout, and emits checked final JSON through the retained original stdout buffer; direct standard/pattern commands currently select this transport |
 | `builder.cpp` | Builds common mode configuration metadata, including resolved chain, seed, calibration, scheduling, and worker policies |
 | `standard.cpp` | Active standard schema-2 serializer for completion state, loop measurements, and main/cache aggregates |
 | `patterns.cpp` | Serializes pattern benchmark results |
@@ -353,7 +354,7 @@ GoogleTest-based unit and integration test suite. All `.cpp` files are picked up
 | `test_core_to_core_messages.cpp` | `CoreToCoreMessagesTest` | Core-to-core console message strings |
 | `test_core_to_core_cli.cpp` | `CoreToCoreCliTest` | Core-to-core CLI argument parsing |
 | `test_core_to_core_runner.cpp` | `CoreToCoreRunnerTest` | Calibration, work planning, cyclic scenario order, deterministic failure seams, and real ARM64 integration paths |
-| `test_executable_cli.cpp` | `ExecutableCliIntegrationTest` | Executable-level CLI routing, invalid config, JSON output, and pattern orchestration smoke coverage |
+| `test_executable_cli.cpp` | `ExecutableCliIntegrationTest` | Executable-level CLI routing, split stdout/stderr capture, bounded child execution, sentinel artifact rules, JSON transport/file compatibility, and pattern orchestration smoke coverage |
 | `test_standard_kernels.cpp` | `StandardKernelIntegrationTest`, `PatternKernelIntegrationTest` | Real ARM64 standard/pattern kernel ABI, tails, boundaries, checksums, and multi-worker execution |
 | `test_statistics.cpp` | `StatisticsTest` | Standard multi-loop summary composition, mode filtering, loop/sample population separation, and rendered values |
 | `test_descriptive_statistics.cpp` | `DescriptiveStatisticsTest` | Canonical shared percentiles, deviation, CV, and MAD contracts |
@@ -385,7 +386,7 @@ Four shared helper headers support deterministic setup and output capture across
 
 ## 4. results/ — Benchmark result data
 
-Historical JSON, CSV, and text output from benchmark runs on specific hardware, organized by software-version subdirectory. The files are retained as examples, plot-script inputs, and legacy-schema reference data; they are not current 0.61.2 methodology baselines unless explicitly identified as such.
+Historical JSON, CSV, and text output from benchmark runs on specific hardware, organized by software-version subdirectory. The files are retained as examples, plot-script inputs, and legacy-schema reference data; they are not current 0.62.0 methodology baselines unless explicitly identified as such.
 
 ```
 results/

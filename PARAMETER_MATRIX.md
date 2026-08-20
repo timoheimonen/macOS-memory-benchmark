@@ -1,6 +1,6 @@
 # Parameter Compatibility Matrix
 
-Working version `0.61.2`
+Working version `0.62.0`
 
 ## All Flags
 
@@ -25,7 +25,7 @@ Working version `0.61.2`
 | `-W` | `--only-bandwidth` | — | Run only standard benchmark bandwidth tests; requires `--benchmark` |
 | `-L` | `--only-latency` | — | Run only standard benchmark latency tests; requires `--benchmark` |
 | `-u` | `--non-cacheable` | — | Apply best-effort cache-discouraging allocation hints; does not create truly uncached memory |
-| `-o` | `--output` | `<file>` | Write JSON output |
+| `-o` | `--output` | `<target>` | Write JSON output. Direct benchmark/pattern commands reserve exact `-` for one final stdout document; every other supported target is a file |
 | `-S` | `--sweep` | `<key=a,b>` | Add a Cartesian sweep parameter; repeat once per distinct key and use with `--output` |
 | `-X` | `--sweep-max-runs` | `<count>` | Positive generated-run limit; default `256`, or `16` with `--analyze-tlb`; effective only with `--sweep` |
 | `-h` | `--help` | — | Show help; the standalone `--analyze-tlb` whitelist is the exception and rejects this combination |
@@ -72,7 +72,7 @@ values `low`, `medium`, and `high`; quick/standard/exhaustive are profile descri
 | `--only-bandwidth` | ✅ | ❌ with `--cache-size`, ❌ with `--latency-samples` |
 | `--only-latency` | ✅ | ❌ with `--iterations`. At least one latency target must remain enabled; `--buffer-size 0 --cache-size 0` is invalid |
 | `--non-cacheable` | ✅ | |
-| `--output <file>` | ✅ | |
+| `--output <target>` | ✅ | Direct mode accepts exact `-` for final JSON stdout; `./-` remains a file. Sweeps still require a real file target in this revision |
 | `--sweep <key=a,b>` | ✅ | Requires `--output`; supported keys depend on benchmark subtype, see [Sweep Compatibility](#sweep-compatibility) |
 | `--sweep-max-runs <n>` | ✅ | Default `256`; accepted without `--sweep` but has no effect then |
 | `--tlb-density <low\|medium\|high>` | ❌ | Parsed only by standalone `--analyze-tlb` |
@@ -97,7 +97,7 @@ values `low`, `medium`, and `high`; quick/standard/exhaustive are profile descri
 | `--only-bandwidth` | ❌ | Separate execution mode |
 | `--only-latency` | ❌ | Separate execution mode |
 | `--non-cacheable` | ✅ | |
-| `--output <file>` | ✅ | |
+| `--output <target>` | ✅ | Direct mode accepts exact `-` for final JSON stdout; `./-` remains a file. Sweeps still require a real file target in this revision |
 | `--sweep <key=a,b>` | ✅ | Requires `--output`; supported keys: `buffer-size`, `threads` |
 | `--sweep-max-runs <n>` | ✅ | Default `256`; accepted without `--sweep` but has no effect then |
 | `--tlb-density <low\|medium\|high>` | ❌ | Parsed only by standalone `--analyze-tlb` |
