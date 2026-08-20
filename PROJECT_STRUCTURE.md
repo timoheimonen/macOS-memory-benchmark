@@ -234,8 +234,9 @@ All user-facing text strings are centralized here. Each `.cpp` file implements a
 
 | File | Purpose |
 |---|---|
-| `json_output_api.h` | Public API for writing benchmark results to JSON files |
+| `json_output_api.h` | Public builders and the shared atomic-file writer interface for benchmark JSON payloads |
 | `json_output.cpp` | Builds standard/pattern root payloads, adds timestamp/version metadata, and triggers file output; GPU schema 1 is built in `src/gpu_bandwidth/gpu_json.cpp` and reuses the same atomic writer |
+| `json_output_session.h` / `.cpp` | Classifies raw output targets, applies mode-specific file-path policy, lazily dispatches checkpoints, routes command-scoped human stdout, and emits checked final JSON through the retained original stdout buffer |
 | `builder.cpp` | Builds common mode configuration metadata, including resolved chain, seed, calibration, scheduling, and worker policies |
 | `standard.cpp` | Active standard schema-2 serializer for completion state, loop measurements, and main/cache aggregates |
 | `patterns.cpp` | Serializes pattern benchmark results |
@@ -341,6 +342,7 @@ GoogleTest-based unit and integration test suite. All `.cpp` files are picked up
 | `test_hash_utils.cpp` | `HashUtilsTest` | CommonCrypto SHA-256 standard vectors and source-provenance helper behavior |
 | `test_analysis.cpp` | `AnalysisTest` | Injected TLB coordination, counters/status, boundary detection, validation, and paired analysis |
 | `test_json_schema.cpp` | `JsonSchemaTest` | JSON output structure and field presence |
+| `test_json_output_session.cpp` | `JsonOutputTargetTest`, `JsonOutputSessionTest` | Exact sentinel/path classification, lazy checkpoint dispatch, atomic-file parity, stdout routing/restoration, and stream failure containment |
 | `test_json_utils.cpp` | `JsonUtilsTest`, `JsonFileWriterTest` | JSON parse/statistics and atomic writer success/failure contracts |
 | `test_output_printer.cpp` | `OutputPrinterTest`, `OutputPrinterCustomCacheUnitsTest` | Status-aware partial output, mode/cache composition, and custom-cache size-unit boundaries |
 | `test_sweep_runner.cpp` | `SweepRunnerTest` | Complete/partial/interrupted/failed attempt accounting and checkpoint behavior |

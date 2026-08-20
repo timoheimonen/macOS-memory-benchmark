@@ -93,6 +93,7 @@ std::string error_mach_timebase_info_failed(const std::string& error_details);
 std::string error_benchmark_tests(const std::string& error);
 std::string error_benchmark_loop(int loop, const std::string& error);
 std::string error_file_write_failed(const std::string& file_path, const std::string& error_details);
+std::string error_json_stdout_write_failed(const std::string& error_details);
 std::string error_file_permission_denied(const std::string& file_path);
 std::string error_file_directory_creation_failed(const std::string& dir_path, const std::string& error_details);
 std::string error_stride_too_small();

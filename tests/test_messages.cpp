@@ -111,6 +111,11 @@ TEST(MessagesErrorTest, NumericValidationErrorsHaveExactOutput) {
   expect_exact_messages(cases);
 }
 
+TEST(MessagesErrorTest, JsonStdoutWriteFailureHasExactOutput) {
+  EXPECT_EQ(Messages::error_json_stdout_write_failed("flush operation failed"),
+            "Failed to write JSON to stdout: flush operation failed");
+}
+
 TEST(MessagesErrorTest, ErrorLatencyChainModeInvalid) {
   std::string msg = Messages::error_latency_chain_mode_invalid();
   EXPECT_NE(msg.find("latency-chain-mode invalid"), std::string::npos);

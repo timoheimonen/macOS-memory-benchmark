@@ -249,6 +249,10 @@ std::string error_file_write_failed(const std::string& file_path, const std::str
   return "Failed to write file \"" + file_path + "\": " + error_details;
 }
 
+std::string error_json_stdout_write_failed(const std::string& error_details) {
+  return "Failed to write JSON to stdout: " + error_details;
+}
+
 std::string error_file_permission_denied(const std::string& file_path) {
   return "Permission denied: cannot write to \"" + file_path + "\"";
 }

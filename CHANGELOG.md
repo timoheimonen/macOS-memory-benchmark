@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.62.0] - Unreleased
 
+### Added
+  - **Shared command-output transport boundary**: Added raw-value JSON target classification, current-directory and preserve-raw file policies, a non-copyable command-scoped output session, lazy checkpoint dispatch, and checked final stdout serialization. The session can route human `std::cout` output to `std::cerr` while retaining the original stdout buffer for a two-space-indented JSON document with one trailing newline; stream, flush, serialization, and checkpoint-builder failures are contained as return codes. No benchmark mode selects the new stdout transport yet.
+
 ### Changed
   - **Machine-readable CLI API release contract established**: Reserved exact `--output -` as the final-only stdout JSON transport for the upcoming process API, fixed its serialization policy at two-space indentation with one trailing newline, and selected additive `configuration.sweep_schema_version: 1` for both sweep envelopes. Existing mode schemas, file-output checkpoint behavior, benchmark methodology, and software version remain unchanged in this governance-only preparation.
 

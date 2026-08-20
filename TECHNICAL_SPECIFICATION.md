@@ -736,9 +736,25 @@ In addition to standard fields (buffer size, iterations, loop count, thread coun
   separate `timed_accumulator_algorithm` and `final_checksum_algorithm` identities plus expected/actual checksums.
 - See [GPU_BANDWIDTH_WHITEPAPER.md](GPU_BANDWIDTH_WHITEPAPER.md) for the complete consumer/maintenance contract.
 
-### 18.6 Path behavior
+### 18.6 Command-output transport boundary
 
-- Relative `--output` paths are resolved against current working directory.
+The cold-path `JsonOutputSession` classifies the raw output value before path handling. An empty value is disabled,
+exactly `-` selects stdout, and every other value is a file target; consequently `./-` remains a file. CPU adapters can
+resolve relative file targets against the current working directory, while modes whose schemas retain the original
+spelling can preserve the raw path. The shared atomic file writer remains sentinel-agnostic.
+
+For a stdout target, the single-owner session retains the original `std::cout` buffer and routes ordinary command output
+to `std::cerr`. Final JSON uses a separate stream backed by the retained buffer, so benchmark formatting state cannot
+affect serialization. Stdout checkpoints are lazy successful no-ops and do not build payloads; file checkpoints still
+use atomic replacement. Final stdout serialization uses two-space indentation and one trailing newline, checks write
+and flush state, contains exceptions, and restores the prior stream buffer through the scope-bound destructor.
+
+This infrastructure is not selected by a benchmark mode in the present internal review unit; public mode enablement and
+its stream contract are introduced by subsequent vertical slices.
+
+### 18.7 Path behavior
+
+- Relative file `--output` paths are resolved against current working directory by CPU-mode adapters.
 
 ## 19. Error-Handling Model
 
