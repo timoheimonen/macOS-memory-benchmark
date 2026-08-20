@@ -8,8 +8,8 @@ Runtime behavior and executable integration tests are authoritative if this docu
 
 ## Transport support in this revision
 
-All direct CPU modes and their supported parameter sweeps provide the stdout JSON transport. GPU mode retains its
-file-output contract in this revision.
+All direct benchmark modes and the CPU modes' supported parameter sweeps provide the stdout JSON transport. GPU schema
+1 remains a direct-only mode and does not support sweeps.
 
 | Command | Real JSON file | Exact `--output -` stdout transport |
 |---|---:|---:|
@@ -20,14 +20,14 @@ file-output contract in this revision.
 | `--analyze-tlb --sweep ...` | Yes | Yes |
 | Direct `--analyze-core2core` | Yes | Yes |
 | `--analyze-core2core --sweep ...` | Yes | Yes |
-| Direct `--gpu-bandwidth` | Yes | Not yet supported |
+| Direct `--gpu-bandwidth` | Yes | Yes |
 
-GPU callers must use a real file path. GPU schema 1 does not support sweeps.
+GPU schema 1 does not support sweeps.
 
 ## Invocation and stream contract
 
-For a standard, pattern, TLB, or core-to-core command, including a supported parameter sweep, an output value that is
-exactly `-` selects stdout JSON:
+For any direct benchmark command, or a supported CPU parameter sweep, an output value that is exactly `-` selects stdout
+JSON:
 
 ```bash
 memory_benchmark --benchmark --only-bandwidth --count 5 --buffer-size 512 --output -
@@ -37,6 +37,12 @@ For example, a sweep emits one final envelope rather than one document per attem
 
 ```bash
 memory_benchmark --benchmark --only-latency --sweep buffer-size=256,512 --output -
+```
+
+A direct GPU command uses the same stream transport with its existing top-level schema 1 payload:
+
+```bash
+memory_benchmark --gpu-bandwidth --buffer-size 512 --count 3 --seed 42 --output -
 ```
 
 The sentinel is classified from the raw option value before path normalization:
@@ -59,11 +65,13 @@ status, write the centralized diagnostic to stderr, and leave stdout empty. Help
 prints normal help to stdout and does not promise JSON when the selected parser accepts that combination. The standalone
 TLB whitelist rejects `--analyze-tlb --help`; use `--help` without that mode flag.
 
-Some runtime setup failures also occur before a schema-valid payload exists. The general command's early timer failure
-and TLB setup, memory-budget, or allocation failures before analysis-state initialization therefore produce stderr plus a
-non-zero status and leave stdout empty. Once a mode has initialized a representable result, graceful interruption or a
-normal runtime failure emits the available partial, interrupted, error, or failed payload. Core-to-core measurement
-failures and TLB measurement errors fall on this post-initialization path.
+Some runtime setup failures also occur before a schema-valid payload exists. The general command's early timer failure,
+TLB setup, memory-budget, or allocation failures before analysis-state initialization, and a GPU backend-factory failure
+therefore produce stderr plus a non-zero status and leave stdout empty. Once a mode has initialized a representable
+result, graceful interruption or a normal runtime failure emits the available partial, interrupted, error, failed, or
+unsupported payload. Core-to-core measurement failures, TLB measurement errors, and GPU capability, compilation,
+allocation, or work-plan failures fall on this post-initialization path. An initialized GPU `unsupported` or failed
+payload is emitted with a non-zero process status.
 
 Abrupt process termination, a crash, `SIGKILL`, or an unusable stdout pipe cannot guarantee a final document. Version 1
 does not install a process-wide `SIGPIPE` policy.
@@ -79,16 +87,17 @@ Real file targets retain their existing persistence behavior:
 - a temporary `<target>.tmp` file is replaced atomically, and a failed replacement preserves the preceding destination
   when possible.
 
-Stdout is final-only. Intermediate standard and sweep checkpoint requests are successful lazy no-ops: their payload
-builders are not invoked, while all logical state changes, stop observations, counters, cleanup, and final result
-construction still occur. The command serializes one terminal snapshot after orchestration finishes. Stdout is not JSON
-Lines and never contains a sequence of checkpoint documents.
+Stdout is final-only. Intermediate standard, sweep, and GPU checkpoint requests are successful lazy no-ops: their
+payload builders are not invoked, while all logical state changes, stop observations, counters, cleanup, and final result
+construction still occur. In particular, GPU performs the same checkpoint-boundary stop read as file output. The command
+serializes one terminal snapshot after orchestration finishes. Stdout is not JSON Lines and never contains a sequence of
+checkpoint documents.
 
-File-output ownership is mode-aware. Standard and sweep file producers retain their existing checkpoints, and command
-boundaries do not add a second terminal file write or retry a failed checkpoint. The stdout command boundary alone emits
-the retained final document.
+File-output ownership is mode-aware. Standard and sweep file producers retain their existing checkpoints, GPU retains
+its terminal-measurement, failure, and post-release replacement cadence, and command boundaries do not add a redundant
+terminal file write or retry. The stdout command boundary alone emits the retained final document.
 
-Use a real file target when crash-resilient standard or sweep checkpoints are required.
+Use a real file target when crash-resilient intermediate checkpoints are required.
 
 ## Result schemas and completion
 
@@ -101,6 +110,7 @@ contract version 1 first appears in software version `0.62.0`.
 | Patterns | `configuration.pattern_schema_version == 3` | `status == "complete" && results_complete == true` |
 | TLB | `configuration.schema_version == 4` | `tlb_analysis.status == "complete" && tlb_analysis.conclusions_valid == true` |
 | Core-to-core | `configuration.schema_version == 2` | `core_to_core_latency.status == "complete" && core_to_core_latency.measurements_complete == true` |
+| GPU | `schema_version == 1` | `status == "complete" && results_complete == true && conclusions_valid == true` |
 | General CPU sweep | `configuration.sweep_schema_version == 1` | `status == "complete" && conclusions_valid == true && completed_runs == planned_runs` |
 | Core-to-core sweep | `configuration.sweep_schema_version == 1` | `status == "complete" && conclusions_valid == true && completed_runs == planned_runs` |
 
@@ -113,7 +123,9 @@ Command completeness does not make every optional metric available. A selected s
 mode-specific measured/quality state and a non-null value. A pattern measurement may be intentionally `skipped` while
 the command remains complete; consumers of a particular pattern metric must require `status == "measured"` and a
 non-null value. TLB consumers must also honor the selected detection/evidence fields. Core-to-core affinity-scenario
-conclusions additionally require `affinity_hint_comparison_interpretable == true`.
+conclusions additionally require `affinity_hint_comparison_interpretable == true`. A position-balanced GPU comparison
+additionally requires `operation_order_balance_complete == true`; consumers of an operation also require a measured,
+non-null value and its applicable validation/quality fields.
 
 Graceful interruption or runtime failure after a representable result state has been initialized emits the available
 partial, interrupted, error, or failed JSON snapshot. The execution status and payload are independent: a non-zero status
@@ -122,7 +134,7 @@ complete.
 
 ## Consumer acceptance procedure
 
-A caller accepts a CPU conclusion only after all of the following checks succeed:
+A caller accepts a benchmark conclusion only after all of the following checks succeed:
 
 1. Launch the executable with an argv array; do not construct an unquoted shell command from external input.
 2. Capture stdout and stderr separately and wait for the process and both streams to finish.
@@ -172,13 +184,17 @@ jq -e '.configuration.schema_version == 2 and
 jq -e '.configuration.sweep_schema_version == 1 and
        .status == "complete" and .conclusions_valid == true and
        .completed_runs == .planned_runs' sweep.json
+
+jq -e '.schema_version == 1 and .mode == "gpu_bandwidth" and
+       .status == "complete" and .results_complete == true and
+       .conclusions_valid == true' gpu.json
 ```
 
 ## Compatibility policy
 
-- `version` identifies the application release; it is not a result schema version.
-- Standard schema 2, pattern schema 3, TLB schema 4, and core-to-core schema 2 remain authoritative at their existing
-  locations. The schema field is intentionally not normalized across these established payloads.
+- `version` and GPU's `software_version` identify the application release; neither is a result schema version.
+- Standard schema 2, pattern schema 3, TLB schema 4, core-to-core schema 2, and GPU schema 1 remain authoritative at
+  their existing locations. The schema field is intentionally not normalized across these established payloads.
 - Both general and core-to-core sweep envelopes use `configuration.sweep_schema_version == 1`; nested results keep their
   independent mode schema versions.
 - Additive optional fields may remain within a schema version only when old consumers can safely ignore them.
@@ -187,6 +203,8 @@ jq -e '.configuration.sweep_schema_version == 1 and
   is unchanged.
 - A transport change alone does not change the measurement schema.
 - Schema-location normalization belongs in client code; this API does not move existing version fields.
+- GPU retains its exact captured `argv` and raw `configuration.output_file`. With stdout transport the latter is the
+  original target token `"-"`, not a filesystem path; `./-` and other non-sentinel values retain their file meaning.
 
 ## Benchmark process policy
 

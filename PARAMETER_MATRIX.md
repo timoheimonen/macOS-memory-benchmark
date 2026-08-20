@@ -25,7 +25,7 @@ Working version `0.62.0`
 | `-W` | `--only-bandwidth` | — | Run only standard benchmark bandwidth tests; requires `--benchmark` |
 | `-L` | `--only-latency` | — | Run only standard benchmark latency tests; requires `--benchmark` |
 | `-u` | `--non-cacheable` | — | Apply best-effort cache-discouraging allocation hints; does not create truly uncached memory |
-| `-o` | `--output` | `<target>` | Write JSON output. CPU commands and sweeps reserve exact `-` for one final stdout document; every other supported target is a file. GPU accepts files only |
+| `-o` | `--output` | `<target>` | Write JSON output. Every direct mode and CPU sweep reserves exact `-` for one final stdout document; `./-` and every other non-sentinel target are files |
 | `-S` | `--sweep` | `<key=a,b>` | Add a Cartesian sweep parameter; repeat once per distinct key and use with `--output` |
 | `-X` | `--sweep-max-runs` | `<count>` | Positive generated-run limit; default `256`, or `16` with `--analyze-tlb`; effective only with `--sweep` |
 | `-h` | `--help` | — | Show help; the standalone `--analyze-tlb` whitelist is the exception and rejects this combination |
@@ -139,16 +139,19 @@ GPU schema 1 has an exact whitelist. Short and long aliases are equivalent, and 
 | `-i, --iterations <n>` | ✅ | Exact full-buffer pass/dispatch count. Omission calibrates each operation toward 150 ms; explicit values must fit 16,384 dispatches and 64 GiB exact payload, with copy 2× defining the strict shared ceiling |
 | `-r, --count <n>` | ✅ | GPU-local default `3`; order rotates read/write/copy and balances only in complete multiples of three |
 | `--seed <uint64>` | ✅ | Exact base seed; generated once when omitted; domain-separated operation seeds are recorded |
-| `-o, --output <file>` | ✅ | Atomically checkpoints GPU schema 1 after each terminal measurement and for valid post-parse pre-run failures |
+| `-o, --output <target>` | ✅ | Exact `-` emits one final schema 1 document on stdout; `./-` and all other values are files with the existing atomic terminal-measurement and failure checkpoints |
 | `-h, --help` | ✅ | Prints GPU-mode help and exits without Metal work |
 | `--sweep`, `--sweep-max-runs` | ❌ | No GPU sweep support in schema 1 |
 | `--threads`, cache/latency/pattern/TLB/core-to-core modifiers | ❌ | Outside the standalone whitelist |
 | Any other primary mode | ❌ | Primary modes are mutually exclusive |
 
 GPU config validation, including the 64 MB minimum and strict number parsing, happens before Metal initialization and
-does not write result JSON. After valid parsing, unsupported device/capability and backend/allocation failures are
-status-bearing GPU schema 1 checkpoints when `--output` is present. Grid geometry is not a CLI parameter: schema 1 uses
-the frozen 8192-threadgroup maximum and records both that maximum and the resolved grid in each work plan.
+does not write result JSON. After valid parsing, initialized backend/capability and compilation/allocation/work-plan
+failures are status-bearing GPU schema 1 results when `--output` is present; a backend-factory failure before
+result initialization leaves stdout empty. For exact `-`, intermediate checkpoints remain logical lazy transitions and
+the terminal payload retains raw `configuration.output_file: "-"`; a real file retains the atomic checkpoint cadence.
+Grid geometry is not a CLI parameter: schema 1 uses the frozen 8192-threadgroup maximum and records both that maximum and
+the resolved grid in each work plan.
 
 ### Sweep Compatibility
 

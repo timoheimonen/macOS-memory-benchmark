@@ -15,8 +15,10 @@
 #include <algorithm>
 #include <cctype>
 #include <cstdlib>
+#include <exception>
 #include <iostream>
 #include <limits>
+#include <optional>
 #include <string>
 
 #include "core/config/config.h"
@@ -24,9 +26,11 @@
 #include "core/signal/signal_handler.h"
 #include "core/system/benchmark_qos.h"
 #include "gpu_bandwidth/gpu_backend.h"
+#include "gpu_bandwidth/gpu_json.h"
 #include "gpu_bandwidth/gpu_runner.h"
 #include "output/console/messages/messages_api.h"
 #include "output/console/output_printer.h"
+#include "output/json/json_output/json_output_session.h"
 #include "utils/numeric_utils.h"
 #include "utils/seed_utils.h"
 
@@ -88,6 +92,51 @@ size_t maximum_explicit_gpu_passes(size_t buffer_size_bytes) {
 void print_gpu_help(const char* program_name) {
   std::cout << Messages::usage_header(SOFTVERSION)
             << Messages::gpu_usage_options(program_name);
+}
+
+void report_json_output_boundary_failure(const std::string& raw_output,
+                                         const std::string& details) noexcept {
+  try {
+    std::cerr << Messages::error_prefix();
+    if (raw_output == "-") {
+      std::cerr << Messages::error_json_stdout_write_failed(details);
+    } else {
+      std::cerr << Messages::error_file_write_failed(raw_output, details);
+    }
+    std::cerr << std::endl;
+  } catch (...) {
+    // A secondary diagnostic failure must not escape the command boundary.
+  }
+}
+
+void report_gpu_command_exception(const std::string& details) noexcept {
+  try {
+    std::cerr << Messages::error_prefix()
+              << Messages::error_command_execution_exception(
+                     "GPU bandwidth", details)
+              << std::endl;
+  } catch (...) {
+    // A secondary diagnostic failure must not escape the command boundary.
+  }
+}
+
+int write_gpu_stdout_final(JsonOutputSession& output_session,
+                           const GpuBandwidthConfig& config,
+                           const GpuRunResult& result) noexcept {
+  try {
+    const nlohmann::ordered_json payload =
+        build_gpu_bandwidth_json(config, result);
+    return output_session.write_final(payload);
+  } catch (const std::exception& error) {
+    report_json_output_boundary_failure(
+        config.output_file,
+        Messages::error_json_payload_construction_failed(error.what()));
+  } catch (...) {
+    report_json_output_boundary_failure(
+        config.output_file,
+        Messages::error_json_payload_construction_failed(""));
+  }
+  return EXIT_FAILURE;
 }
 
 }  // namespace
@@ -282,133 +331,178 @@ int parse_gpu_bandwidth_arguments(int argc, char* argv[],
 
 int run_gpu_bandwidth_mode(int argc, char* argv[]) {
   GpuBandwidthConfig config;
-  if (parse_gpu_bandwidth_arguments(argc, argv, config) != EXIT_SUCCESS) {
+  int parse_status = EXIT_FAILURE;
+  try {
+    parse_status = parse_gpu_bandwidth_arguments(argc, argv, config);
+  } catch (const std::exception& error) {
+    report_gpu_command_exception(error.what());
+    return EXIT_FAILURE;
+  } catch (...) {
+    report_gpu_command_exception("");
+    return EXIT_FAILURE;
+  }
+  if (parse_status != EXIT_SUCCESS) {
     return EXIT_FAILURE;
   }
   if (config.help_printed) {
     return EXIT_SUCCESS;
   }
 
-  print_runtime_banner();
-
-  GpuRunResult result;
-  result.main_thread_qos = prepare_main_thread_benchmark_qos();
-  BenchmarkSignalMaskGuard signal_guard;
-  std::unique_ptr<GpuBackend> backend = create_metal_gpu_backend();
-  if (!backend) {
-    std::cerr << Messages::error_prefix()
-              << Messages::error_gpu_run_failed("backend-factory-failed")
-              << std::endl;
+  std::optional<JsonOutputSession> output_session;
+  try {
+    output_session.emplace(make_json_output_target(
+        config.output_file, JsonFilePathPolicy::PreserveRaw));
+  } catch (const std::exception& error) {
+    report_json_output_boundary_failure(
+        config.output_file,
+        Messages::error_json_output_initialization_failed(error.what()));
+    return EXIT_FAILURE;
+  } catch (...) {
+    report_json_output_boundary_failure(
+        config.output_file,
+        Messages::error_json_output_initialization_failed(""));
     return EXIT_FAILURE;
   }
 
-  std::cout << Messages::msg_running_gpu_bandwidth() << std::endl;
-  const int run_status =
-      run_gpu_bandwidth_suite(config, *backend, result);
+  int run_status = EXIT_FAILURE;
+  GpuRunResult result;
+  try {
+    print_runtime_banner();
 
-  bool any_result = false;
-  for (const GpuOperationAggregate& aggregate : result.aggregates) {
-    any_result = any_result || aggregate.headline_gb_s.has_value();
-  }
-  if (any_result) {
-    const std::string device_name =
-        result.backend_initialization.device.device_name.empty()
-            ? Messages::gpu_unknown_device_name()
-            : result.backend_initialization.device.device_name;
-    std::cout << Messages::report_gpu_bandwidth_header(
-                     device_name, config.loop_count, config.loop_count > 1)
-              << std::endl;
-    for (const GpuOperationAggregate& aggregate : result.aggregates) {
-      if (!aggregate.headline_gb_s.has_value()) {
-        continue;
-      }
-      const bool is_copy = aggregate.operation == GpuOperation::Copy;
-      std::string operation = gpu_operation_to_string(aggregate.operation);
-      operation[0] = static_cast<char>(std::toupper(operation[0]));
-      std::cout << Messages::report_gpu_bandwidth_value(
-                       operation, *aggregate.headline_gb_s, is_copy)
+    result.main_thread_qos = prepare_main_thread_benchmark_qos();
+    BenchmarkSignalMaskGuard signal_guard;
+    std::unique_ptr<GpuBackend> backend = create_metal_gpu_backend();
+    if (!backend) {
+      std::cerr << Messages::error_prefix()
+                << Messages::error_gpu_run_failed("backend-factory-failed")
                 << std::endl;
+      return EXIT_FAILURE;
     }
-    const bool repeatability_available =
-        result.aggregates[0].values_gb_s.size() >= 3 &&
-        result.aggregates[1].values_gb_s.size() >= 3 &&
-        result.aggregates[2].values_gb_s.size() >= 3;
-    std::cout << Messages::report_gpu_bandwidth_repeatability(
-                     result.aggregates[0]
-                         .statistics.coefficient_of_variation_pct,
-                     result.aggregates[1]
-                         .statistics.coefficient_of_variation_pct,
-                     result.aggregates[2]
-                         .statistics.coefficient_of_variation_pct,
-                     repeatability_available)
-              << std::endl;
-    std::cout << Messages::report_gpu_bandwidth_interpretation_note()
-              << std::endl;
-    std::cout.flush();
 
+    std::cout << Messages::msg_running_gpu_bandwidth() << std::endl;
+    run_status = run_gpu_bandwidth_suite(
+        config, *backend, result, *output_session);
+
+    bool any_result = false;
     for (const GpuOperationAggregate& aggregate : result.aggregates) {
-      if (aggregate.stability_quality == "noisy") {
-        std::cerr << Messages::warning_prefix()
-                  << Messages::warning_gpu_high_cv(
-                         gpu_operation_to_string(aggregate.operation),
-                         aggregate.statistics.coefficient_of_variation_pct,
-                         Constants::GPU_STREAMING_CV_WARNING_PCT)
+      any_result = any_result || aggregate.headline_gb_s.has_value();
+    }
+    if (any_result) {
+      const std::string device_name =
+          result.backend_initialization.device.device_name.empty()
+              ? Messages::gpu_unknown_device_name()
+              : result.backend_initialization.device.device_name;
+      std::cout << Messages::report_gpu_bandwidth_header(
+                       device_name, config.loop_count,
+                       config.loop_count > 1)
+                << std::endl;
+      for (const GpuOperationAggregate& aggregate : result.aggregates) {
+        if (!aggregate.headline_gb_s.has_value()) {
+          continue;
+        }
+        const bool is_copy = aggregate.operation == GpuOperation::Copy;
+        std::string operation =
+            gpu_operation_to_string(aggregate.operation);
+        operation[0] = static_cast<char>(std::toupper(operation[0]));
+        std::cout << Messages::report_gpu_bandwidth_value(
+                         operation, *aggregate.headline_gb_s, is_copy)
                   << std::endl;
       }
-      const GpuWorkPlan& plan =
-          result.work_plans[static_cast<size_t>(aggregate.operation)];
-      if (plan.valid) {
-        std::string warning_quality;
-        for (const GpuMeasurement& measurement : result.measurements) {
-          if (measurement.operation != aggregate.operation ||
-              measurement.status != GpuMeasurementStatus::Measured ||
-              measurement.duration_quality == "within-target-window") {
-            continue;
-          }
-          warning_quality = measurement.duration_quality;
-          break;
-        }
-        if (!warning_quality.empty()) {
+      const bool repeatability_available =
+          result.aggregates[0].values_gb_s.size() >= 3 &&
+          result.aggregates[1].values_gb_s.size() >= 3 &&
+          result.aggregates[2].values_gb_s.size() >= 3;
+      std::cout << Messages::report_gpu_bandwidth_repeatability(
+                       result.aggregates[0]
+                           .statistics.coefficient_of_variation_pct,
+                       result.aggregates[1]
+                           .statistics.coefficient_of_variation_pct,
+                       result.aggregates[2]
+                           .statistics.coefficient_of_variation_pct,
+                       repeatability_available)
+                << std::endl;
+      std::cout << Messages::report_gpu_bandwidth_interpretation_note()
+                << std::endl;
+      std::cout.flush();
+
+      for (const GpuOperationAggregate& aggregate : result.aggregates) {
+        if (aggregate.stability_quality == "noisy") {
           std::cerr << Messages::warning_prefix()
-                    << Messages::warning_gpu_duration_quality(
+                    << Messages::warning_gpu_high_cv(
                            gpu_operation_to_string(aggregate.operation),
-                           warning_quality)
+                           aggregate.statistics.coefficient_of_variation_pct,
+                           Constants::GPU_STREAMING_CV_WARNING_PCT)
                     << std::endl;
         }
+        const GpuWorkPlan& plan =
+            result.work_plans[static_cast<size_t>(aggregate.operation)];
+        if (plan.valid) {
+          std::string warning_quality;
+          for (const GpuMeasurement& measurement : result.measurements) {
+            if (measurement.operation != aggregate.operation ||
+                measurement.status != GpuMeasurementStatus::Measured ||
+                measurement.duration_quality == "within-target-window") {
+              continue;
+            }
+            warning_quality = measurement.duration_quality;
+            break;
+          }
+          if (!warning_quality.empty()) {
+            std::cerr << Messages::warning_prefix()
+                      << Messages::warning_gpu_duration_quality(
+                             gpu_operation_to_string(aggregate.operation),
+                             warning_quality)
+                      << std::endl;
+          }
+        }
+      }
+      if (!result.operation_order_balance_complete) {
+        std::cerr << Messages::warning_prefix()
+                  << Messages::warning_gpu_order_not_balanced()
+                  << std::endl;
+      }
+      const bool environment_warning =
+          std::find(result.quality_warnings.begin(),
+                    result.quality_warnings.end(),
+                    "environment-not-nominal") !=
+          result.quality_warnings.end();
+      if (environment_warning) {
+        std::cerr << Messages::warning_prefix()
+                  << Messages::warning_gpu_environment_not_nominal()
+                  << std::endl;
+      }
+      if (result.allocation.exceeds_recommended_working_set) {
+        std::cerr << Messages::warning_prefix()
+                  << Messages::warning_gpu_recommended_working_set_exceeded()
+                  << std::endl;
       }
     }
-    if (!result.operation_order_balance_complete) {
-      std::cerr << Messages::warning_prefix()
-                << Messages::warning_gpu_order_not_balanced() << std::endl;
-    }
-    const bool environment_warning =
-        std::find(result.quality_warnings.begin(),
-                  result.quality_warnings.end(),
-                  "environment-not-nominal") !=
-        result.quality_warnings.end();
-    if (environment_warning) {
-      std::cerr << Messages::warning_prefix()
-                << Messages::warning_gpu_environment_not_nominal()
+
+    if (output_session->kind() == JsonOutputKind::File &&
+        result.reason_code != "checkpoint-write-failed") {
+      std::cout << Messages::msg_results_saved_to(config.output_file)
                 << std::endl;
     }
-    if (result.allocation.exceeds_recommended_working_set) {
-      std::cerr << Messages::warning_prefix()
-                << Messages::warning_gpu_recommended_working_set_exceeded()
+    if (result.status == GpuRunStatus::Interrupted) {
+      std::cout << Messages::msg_interrupted_by_user() << std::endl;
+    } else if (run_status != EXIT_SUCCESS) {
+      std::cerr << Messages::error_prefix()
+                << Messages::error_gpu_run_failed(result.reason_code)
                 << std::endl;
     }
+  } catch (const std::exception& error) {
+    report_gpu_command_exception(error.what());
+    run_status = EXIT_FAILURE;
+  } catch (...) {
+    report_gpu_command_exception("");
+    run_status = EXIT_FAILURE;
   }
 
-  if (!config.output_file.empty() &&
-      result.reason_code != "checkpoint-write-failed") {
-    std::cout << Messages::msg_results_saved_to(config.output_file)
-              << std::endl;
-  }
-  if (result.status == GpuRunStatus::Interrupted) {
-    std::cout << Messages::msg_interrupted_by_user() << std::endl;
-  } else if (run_status != EXIT_SUCCESS) {
-    std::cerr << Messages::error_prefix()
-              << Messages::error_gpu_run_failed(result.reason_code)
-              << std::endl;
+  if (output_session->kind() == JsonOutputKind::Stdout &&
+      !result.timestamp.empty() &&
+      write_gpu_stdout_final(*output_session, config, result) !=
+          EXIT_SUCCESS) {
+    return EXIT_FAILURE;
   }
   return run_status;
 }

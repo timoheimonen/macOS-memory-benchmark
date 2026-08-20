@@ -24,9 +24,11 @@
 #include <filesystem>
 #include <fstream>
 #include <functional>
+#include <iostream>
 #include <limits>
 #include <optional>
 #include <stdexcept>
+#include <streambuf>
 #include <string>
 #include <unistd.h>
 #include <utility>
@@ -70,6 +72,29 @@ class TemporaryGpuJsonFile {
   }
 
   std::filesystem::path path_;
+};
+
+class WriteFailingGpuStreamBuffer : public std::streambuf {
+ protected:
+  std::streamsize xsputn(const char*, std::streamsize) override {
+    return 0;
+  }
+
+  int_type overflow(int_type) override { return traits_type::eof(); }
+};
+
+class ScopedGpuStdoutBuffer {
+ public:
+  explicit ScopedGpuStdoutBuffer(std::streambuf* replacement)
+      : original_(std::cout.rdbuf(replacement)) {}
+
+  ~ScopedGpuStdoutBuffer() { std::cout.rdbuf(original_); }
+
+  ScopedGpuStdoutBuffer(const ScopedGpuStdoutBuffer&) = delete;
+  ScopedGpuStdoutBuffer& operator=(const ScopedGpuStdoutBuffer&) = delete;
+
+ private:
+  std::streambuf* original_;
 };
 
 size_t operation_index(GpuOperation operation) { return static_cast<size_t>(operation); }
@@ -481,6 +506,20 @@ TEST_F(GpuBandwidthParserTest, UserValuesAndMaximumSeedAreExact) {
   EXPECT_EQ(config.seed, std::numeric_limits<uint64_t>::max());
   EXPECT_TRUE(config.user_specified_iterations);
   EXPECT_TRUE(config.user_specified_seed);
+}
+
+TEST_F(GpuBandwidthParserTest, OutputTargetSpellingIsRetainedExactly) {
+  for (const std::string& output_target : {"-", "./-"}) {
+    SCOPED_TRACE(output_target);
+    const std::vector<std::string> arguments = {
+        "memory_benchmark", "--gpu-bandwidth", "--buffer-size", "64",
+        "--seed",          "1",               "--output",      output_target};
+    GpuBandwidthConfig config;
+
+    ASSERT_EQ(parse_gpu_arguments(arguments, config), EXIT_SUCCESS);
+    EXPECT_EQ(config.output_file, output_target);
+    EXPECT_EQ(config.argv, arguments);
+  }
 }
 
 TEST_F(GpuBandwidthParserTest, StrictDuplicateAndIncompatibleOptionsAreRejected) {
@@ -1262,7 +1301,7 @@ TEST(GpuRunnerTest,
 }
 
 TEST(GpuRunnerTest,
-     StdoutSessionRetainsUnsupportedSchemaWithoutIntermediateOutput) {
+     StdoutSessionSerializesUnsupportedResultOnceWithoutIntermediateOutput) {
   FakeGpuBackend backend;
   backend.initialization.status = GpuBackendStatus::Unsupported;
   backend.initialization.reason_code =
@@ -1274,30 +1313,79 @@ TEST(GpuRunnerTest,
   hooks.stop_requested = []() { return false; };
 
   int status = EXIT_SUCCESS;
+  int final_write_status = EXIT_FAILURE;
+  Json payload;
   testing::internal::CaptureStdout();
   {
     JsonOutputSession session(make_json_output_target(
         config.output_file, JsonFilePathPolicy::PreserveRaw));
     status = run_gpu_bandwidth_suite(config, backend, result, session,
                                      hooks);
+    payload = build_gpu_bandwidth_json(config, result);
+    final_write_status = session.write_final(payload);
   }
   const std::string stdout_text = testing::internal::GetCapturedStdout();
-  const Json payload = build_gpu_bandwidth_json(config, result);
 
   EXPECT_EQ(status, EXIT_FAILURE);
-  EXPECT_TRUE(stdout_text.empty());
+  EXPECT_EQ(final_write_status, EXIT_SUCCESS);
+  EXPECT_EQ(stdout_text, payload.dump(2) + "\n");
+  ASSERT_TRUE(Json::accept(stdout_text));
+  const Json parsed = Json::parse(stdout_text);
   EXPECT_EQ(result.status, GpuRunStatus::Unsupported);
   EXPECT_EQ(result.reason_code, "required-gpu-family-unsupported");
   EXPECT_FALSE(result.results_complete);
   EXPECT_FALSE(result.conclusions_valid);
-  EXPECT_EQ(payload["schema_version"],
+  EXPECT_EQ(parsed["schema_version"],
             Constants::GPU_JSON_SCHEMA_VERSION);
-  EXPECT_EQ(payload["status"], "unsupported");
-  EXPECT_FALSE(payload["results_complete"].get<bool>());
-  EXPECT_FALSE(payload["conclusions_valid"].get<bool>());
-  EXPECT_EQ(payload["configuration"]["output_file"], "-");
+  EXPECT_EQ(parsed["status"], "unsupported");
+  EXPECT_FALSE(parsed["results_complete"].get<bool>());
+  EXPECT_FALSE(parsed["conclusions_valid"].get<bool>());
+  EXPECT_EQ(parsed["configuration"]["output_file"], "-");
   EXPECT_EQ(backend.lifecycle_log,
             (std::vector<std::string>{"initialize"}));
+}
+
+TEST(GpuRunnerTest,
+     StdoutFinalWriteFailureWinsWithoutMutatingTerminalResult) {
+  FakeGpuBackend backend;
+  GpuBandwidthConfig config = explicit_config();
+  config.output_file = "-";
+  GpuRunResult result;
+  GpuRunnerTestHooks hooks;
+  hooks.stop_requested = []() { return false; };
+  WriteFailingGpuStreamBuffer failing_stdout;
+  int run_status = EXIT_FAILURE;
+  int final_write_status = EXIT_SUCCESS;
+  Json payload_before;
+  Json payload_after;
+
+  testing::internal::CaptureStderr();
+  {
+    ScopedGpuStdoutBuffer stdout_buffer(&failing_stdout);
+    JsonOutputSession session(make_json_output_target(
+        config.output_file, JsonFilePathPolicy::PreserveRaw));
+    run_status = run_gpu_bandwidth_suite(config, backend, result, session,
+                                         hooks);
+    payload_before = build_gpu_bandwidth_json(config, result);
+    final_write_status = session.write_final(payload_before);
+    payload_after = build_gpu_bandwidth_json(config, result);
+  }
+  const std::string errors = testing::internal::GetCapturedStderr();
+  const int command_status = final_write_status == EXIT_SUCCESS
+                                 ? run_status
+                                 : EXIT_FAILURE;
+
+  EXPECT_EQ(run_status, EXIT_SUCCESS);
+  EXPECT_EQ(final_write_status, EXIT_FAILURE);
+  EXPECT_EQ(command_status, EXIT_FAILURE);
+  EXPECT_EQ(payload_after, payload_before);
+  EXPECT_EQ(result.status, GpuRunStatus::Complete);
+  EXPECT_TRUE(result.results_complete);
+  EXPECT_TRUE(result.conclusions_valid);
+  EXPECT_NE(errors.find(Messages::error_json_stdout_write_failed(
+                "write operation failed")),
+            std::string::npos)
+      << errors;
 }
 
 TEST(GpuRunnerTest,

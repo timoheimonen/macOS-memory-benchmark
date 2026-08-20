@@ -52,7 +52,22 @@ void set_gpu_bandwidth_parser_test_hooks(
 int parse_gpu_bandwidth_arguments(int argc, char* argv[],
                                   GpuBandwidthConfig& config);
 
-/** Run the complete standalone GPU-bandwidth command. */
+/**
+ * @brief Run the complete standalone GPU-bandwidth command.
+ *
+ * Parsing, validation, and help handling precede output-session creation. For
+ * an exact `--output -` target, post-parse human output is routed to stderr and
+ * one initialized terminal schema-v1 result is emitted to stdout. Other output
+ * values retain file checkpoint behavior and raw path spelling.
+ *
+ * @param argc Number of command-line arguments.
+ * @param argv Command-line argument array retained in the GPU JSON payload.
+ * @return `EXIT_SUCCESS` for help, complete execution, or graceful
+ *         interruption; `EXIT_FAILURE` for invalid input, unsupported or
+ *         failed execution, or output failure.
+ * @note Unexpected command-boundary exceptions are converted to diagnostics
+ *       and return codes; they do not propagate to `main()`.
+ */
 int run_gpu_bandwidth_mode(int argc, char* argv[]);
 
 #endif  // GPU_BANDWIDTH_H

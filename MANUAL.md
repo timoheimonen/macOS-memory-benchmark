@@ -419,6 +419,11 @@ middle, and trailing items.
   CV above 5% produces a warning without filtering samples
 - Has warm-memory/cache-inclusive semantics and always reports DRAM residency as unverified. Copy GB/s counts aggregate
   read + write payload and is not CPU↔GPU transfer bandwidth
+- A direct command accepts exact `--output -` for one terminal GPU schema 1 document on stdout and routes its runtime
+  transcript to stderr. Initialized unsupported or failed state remains in that payload with a non-zero process status;
+  a parser/config error or backend-factory failure before result initialization leaves stdout empty
+- `--gpu-bandwidth --output - --help` and the reversed help/output order remain human-facing help commands: they emit
+  help to stdout, perform no Metal work, and create no `-`/`-.tmp` artifact
 - Detailed methodology and GPU schema 1 contract: [GPU_BANDWIDTH_WHITEPAPER.md](GPU_BANDWIDTH_WHITEPAPER.md)
 
 #### `--only-bandwidth`
@@ -596,21 +601,26 @@ middle, and trailing items.
 #### `--output <target>`
 
 - An omitted output option disables JSON output
-- For `--benchmark`, `--patterns`, `--analyze-tlb`, and `--analyze-core2core`, including their supported sweeps, an exact raw value of `-` selects machine-readable stdout. The sentinel is
-  classified before path normalization, so `--output ./-` remains an ordinary file named `-`
+- For every direct mode and the CPU modes' supported sweeps, an exact raw value of `-` selects machine-readable stdout.
+  The sentinel is classified before path normalization, so `--output ./-` remains an ordinary file named `-`
 - A supported stdout-target command emits exactly one JSON document followed by one newline after orchestration reaches
-  its terminal state. Intermediate standard and sweep checkpoint requests are lazy no-ops and do not emit documents
+  its terminal state. Intermediate standard, sweep, and GPU checkpoint requests are lazy no-ops and do not emit
+  documents
 - Post-parse human output is routed to stderr while the stdout target is active. Parse, preflight, and other pre-result
   failures leave stdout empty; `--help` remains a human-facing stdout command when that mode accepts the combination
 - Every other non-empty value is a file target. Relative paths write under the current working directory, and parent
   directories are created automatically
 - Standard and sweep file targets retain atomic intermediate checkpoints. Pattern, TLB, and core-to-core direct file
-  targets each receive one final atomic write. Sweep command boundaries do not add a second terminal file write or retry
-  a failed checkpoint. Use a real file when crash-resilient standard or per-attempt sweep checkpoints are required
-- GPU still requires a real file target; its exact `-` stdout transport is not yet supported
-- GPU schema 1 file output is atomically checkpointed after every terminal measurement. A valid post-parse pre-run backend,
-  capability, compilation, allocation, or work-plan failure also writes an auditable checkpoint. Syntax/config errors,
-  including a buffer below 64 MB, fail before result JSON is created
+  targets each receive one final atomic write. GPU file output retains its terminal-measurement/failure checkpoints and
+  post-release replacement. Sweep and GPU command boundaries do not add a redundant outer file write. Use a real file
+  when crash-resilient intermediate checkpoints are required
+- With GPU `--output -`, every logical checkpoint transition and post-checkpoint stop observation still runs, but its
+  lazy payload builder is not invoked and no intermediate document is serialized. The command boundary writes one
+  terminal schema 1 document. Its `configuration.output_file` remains the raw string `"-"`, and captured `argv` is not
+  rewritten
+- GPU syntax/config errors, including a buffer below 64 MB, fail before result JSON is created. A backend-factory failure
+  also precedes result initialization. Initialized capability, compilation, allocation, or work-plan failures remain
+  auditable in the selected file or stdout target
 
 #### `--sweep <key=value1,value2>`
 
@@ -728,6 +738,9 @@ memory_benchmark --analyze-core2core --sweep latency-samples=500,1000 --output -
 
 # Standalone GPU bandwidth, automatic calibrated work
 memory_benchmark --gpu-bandwidth --output gpu_bandwidth.json
+
+# Standalone GPU automation: one final schema 1 document on stdout
+memory_benchmark --gpu-bandwidth --buffer-size 512 --count 3 --seed 42 --output - >gpu_bandwidth_stdout.json 2>gpu_bandwidth.log
 
 # Standalone GPU bandwidth, reproducible fixed work
 memory_benchmark --gpu-bandwidth --buffer-size 512 --iterations 24 --count 9 --seed 123456789 --output gpu_fixed.json
@@ -1060,11 +1073,10 @@ report.
 
 ## JSON Output Format
 
-Standard, pattern, TLB, and core-to-core commands and sweeps can serialize their payload either to a real file or, with
-the exact raw target `--output -`, once to stdout. The stdout transport does not wrap the result or change its measurement
-schema; sweep stdout is one final envelope rather than a checkpoint stream. GPU remains file-only in this revision. See
-[API.md](API.md) for stream handling, process-status checks, schema compatibility, and the current transport support
-matrix.
+Every direct mode and the CPU modes' supported sweeps can serialize their payload either to a real file or, with the exact
+raw target `--output -`, once to stdout. The stdout transport does not wrap the result or change its measurement schema;
+sweep stdout is one final envelope rather than a checkpoint stream. See [API.md](API.md) for stream handling,
+process-status checks, schema compatibility, and the current transport support matrix.
 
 ### Standard benchmark JSON shape
 
@@ -1219,9 +1231,10 @@ consuming one selected metric additionally requires that measurement's `status: 
 
 ### GPU bandwidth JSON shape
 
-GPU output is a separate top-level schema. It must not be sent to a standard-schema parser merely because it contains
-read/write/copy values. The following valid JSON object is an abbreviated field-selection fragment representing a
-complete automatic run; it deliberately omits, rather than empties, the populated nested evidence arrays:
+GPU file and stdout output use the same separate top-level schema. It must not be sent to a standard-schema parser merely
+because it contains read/write/copy values. The following valid JSON object is an abbreviated field-selection fragment
+representing a complete automatic stdout run; it deliberately omits, rather than empties, the populated nested evidence
+arrays:
 
 ```json
 {
@@ -1248,8 +1261,8 @@ complete automatic run; it deliberately omits, rather than empties, the populate
     "loop_count": 3,
     "base_seed_uint64_decimal": "123456789",
     "seed_source": "user",
-    "output_file": "gpu.json",
-    "argv": ["memory_benchmark", "--gpu-bandwidth", "--seed", "123456789", "--output", "gpu.json"]
+    "output_file": "-",
+    "argv": ["memory_benchmark", "--gpu-bandwidth", "--seed", "123456789", "--output", "-"]
   },
   "counters": {
     "planned_loops": 3,
@@ -1303,13 +1316,22 @@ empty. The authoritative rules are:
   exact source SHA-256, compiler identifier, SDK, deployment target, and any compiler diagnostic. A non-null runtime
   library succeeds even if a warning diagnostic exists; a nil library fails.
 
-GPU checkpoints use the shared atomic file writer after every terminal measurement and once for auditable post-parse
-pre-run failures. On interruption, a started logical task is allowed to finish warmup/precondition/timing/required
-validation; a valid current result remains measured. All not-started slots become `interrupted` with
+GPU file checkpoints use the shared atomic writer after every terminal measurement and once for auditable post-parse
+pre-run failures; resource-held execution paths also retain the existing post-release replacement. Exact `--output -`
+executes those logical checkpoint transitions lazily without building or serializing intermediate payloads, including
+the same immediate post-checkpoint stop read, then emits one terminal schema 1 document at the command boundary. On
+interruption, a started logical task is allowed to finish warmup/precondition/timing/required validation; a valid current
+result remains measured. All not-started slots become `interrupted` with
 `value_gb_s: null` and `reason_code: "interruption-before-task"`. A real command, timer, validation, or checkpoint error
 wins over interruption. Graceful interruption returns success at the process boundary but has top-level
 `status: "interrupted"` and false completeness/conclusions. A stop first observed after a terminal checkpoint may cause
 at most one additional interruption checkpoint. Completion of the current task wins; completeness never does.
+
+GPU retains the raw output token in `configuration.output_file` and captures exact `argv`; therefore a stdout payload
+records `"-"` while `--output ./-` remains an ordinary file. Initialized `unsupported` or failed results are serialized
+and retain their non-zero process status. A parser/config failure or backend-factory failure before result initialization
+leaves stdout empty. An observable terminal stdout write or flush failure returns failure without rewriting the already
+computed measurement status.
 
 ### Core-to-core JSON shape
 
@@ -1702,11 +1724,14 @@ same structure as the standard `main_memory.bandwidth` object.
 
 ### Useful JSON inspection commands
 
-Capture any supported CPU machine-output command before applying the schema-specific checks below:
+Capture any supported machine-output command before applying the schema-specific checks below:
 
 ```bash
 memory_benchmark --benchmark --only-bandwidth --buffer-size 512 --count 5 --output - \
   >results.json 2>benchmark.log
+
+memory_benchmark --gpu-bandwidth --buffer-size 512 --count 3 --seed 42 --output - \
+  >gpu_bandwidth.json 2>gpu_bandwidth.log
 ```
 
 ```bash
@@ -1907,10 +1932,12 @@ reason code.
 
 ### GPU mode reports unsupported
 
-GPU schema 1 requires `MTLCreateSystemDefaultDevice`, `hasUnifiedMemory`, and Apple7-family capability. With `--output`,
-a valid command writes an `unsupported` audit checkpoint even when no measurement starts. This is different from a CLI
-validation error, which does not create result JSON. Passing the capability check means the kernel contract is admitted;
-it does not make an unvalidated device a performance baseline.
+GPU schema 1 requires `MTLCreateSystemDefaultDevice`, `hasUnifiedMemory`, and Apple7-family capability. With a real
+`--output` file, a valid command writes an `unsupported` audit checkpoint even when no measurement starts; with exact
+`--output -`, it emits that initialized payload once at the command boundary. Both return a non-zero process status. This
+is different from a CLI validation or backend-factory error before result initialization, which does not create result
+JSON and leaves stdout empty. Passing the capability check means the kernel contract is admitted; it does not make an
+unvalidated device a performance baseline.
 
 ### GPU result is incomplete or interrupted
 

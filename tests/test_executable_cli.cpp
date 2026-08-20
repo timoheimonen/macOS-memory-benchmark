@@ -385,6 +385,31 @@ TEST(ExecutableCliIntegrationTest, GpuHelpUsesDedicatedStandaloneParserIntegrati
   EXPECT_NE(result.output.find("default: 3"), std::string::npos);
 }
 
+TEST(ExecutableCliIntegrationTest,
+     GpuHelpWithStdoutTargetRemainsHumanInEitherOrderIntegration) {
+  for (const std::vector<std::string>& arguments : {
+           std::vector<std::string>{"--gpu-bandwidth", "--output", "-",
+                                    "--help"},
+           std::vector<std::string>{"--gpu-bandwidth", "--help",
+                                    "--output", "-"},
+       }) {
+    SCOPED_TRACE(testing::PrintToString(arguments));
+    const CliResult result = run_memory_benchmark(arguments);
+
+    expect_process_completed(result);
+    EXPECT_EQ(result.exit_code, EXIT_SUCCESS);
+    expect_no_runtime_banner(result);
+    EXPECT_NE(result.stdout_output.find(
+                  "Usage: ./memory_benchmark --gpu-bandwidth [options]"),
+              std::string::npos);
+    EXPECT_NE(result.stdout_output.find("minimum: 64 MB"),
+              std::string::npos);
+    EXPECT_TRUE(result.stderr_output.empty()) << result.stderr_output;
+    EXPECT_FALSE(nlohmann::json::accept(result.stdout_output));
+    expect_no_dash_transport_artifacts(result);
+  }
+}
+
 TEST(ExecutableCliIntegrationTest, GpuModeConflictIsOrderIndependentIntegration) {
   for (const std::vector<std::string>& arguments : {
            std::vector<std::string>{"--gpu-bandwidth",
@@ -412,6 +437,87 @@ TEST(ExecutableCliIntegrationTest, GpuMinimumFailsBeforeOutputIntegration) {
   EXPECT_EQ(access(output.path().c_str(), F_OK), -1);
 }
 
+TEST(ExecutableCliIntegrationTest,
+     InvalidGpuStdoutTargetLeavesStdoutEmptyIntegration) {
+  const CliResult result = run_memory_benchmark(
+      {"--gpu-bandwidth", "--buffer-size", "63", "--output", "-"});
+
+  expect_process_completed(result);
+  EXPECT_EQ(result.exit_code, EXIT_FAILURE);
+  expect_no_runtime_banner(result);
+  EXPECT_TRUE(result.stdout_output.empty()) << result.stdout_output;
+  EXPECT_EQ(result.stderr_output,
+            Messages::error_prefix() +
+                Messages::error_gpu_buffer_size_below_minimum(
+                    63, Constants::GPU_MIN_BUFFER_SIZE_MB) +
+                "\n");
+  expect_no_dash_transport_artifacts(result);
+}
+
+TEST(ExecutableCliIntegrationTest,
+     GpuStdoutEmitsOneSchemaV1ResultOnSupportedOrUnsupportedMetalIntegration) {
+  const CliResult result = run_memory_benchmark(
+      {"--gpu-bandwidth", "--buffer-size", "64", "--iterations", "1",
+       "--count", "3", "--seed", "42", "--output", "-"});
+
+  expect_process_completed(result);
+  const nlohmann::json json = parse_single_stdout_json(result);
+  ASSERT_TRUE(json.is_object()) << result.stdout_output;
+  ASSERT_TRUE(json.contains("status"));
+  ASSERT_TRUE(json["status"].is_string());
+  EXPECT_EQ(json["software_version"], SOFTVERSION);
+  EXPECT_EQ(json["schema_version"], Constants::GPU_JSON_SCHEMA_VERSION);
+  EXPECT_EQ(json["mode"], "gpu_bandwidth");
+  ASSERT_TRUE(json.contains("configuration"));
+  EXPECT_EQ(json["configuration"]["output_file"], "-");
+  EXPECT_EQ(json["configuration"]["base_seed_uint64_decimal"], "42");
+  EXPECT_EQ(json["configuration"]["loop_count"], 3u);
+  EXPECT_EQ(json["configuration"]["iterations"], 1u);
+  ASSERT_TRUE(json.contains("counters"));
+  EXPECT_EQ(json["counters"]["planned_loops"], 3u);
+  EXPECT_EQ(json["counters"]["planned_measurements"], 9u);
+  ASSERT_TRUE(json.contains("measurements"));
+  EXPECT_EQ(json["measurements"].size(), 9u);
+
+  expect_single_runtime_banner(result);
+  EXPECT_EQ(result.stdout_output.find(Messages::config_header(SOFTVERSION)),
+            std::string::npos);
+  EXPECT_EQ(result.stdout_output.find(Messages::msg_running_gpu_bandwidth()),
+            std::string::npos);
+  EXPECT_EQ(count_occurrences(result.stderr_output,
+                              Messages::config_header(SOFTVERSION)),
+            1u)
+      << result.stderr_output;
+  EXPECT_EQ(count_occurrences(result.stderr_output,
+                              Messages::msg_running_gpu_bandwidth()),
+            1u)
+      << result.stderr_output;
+  EXPECT_EQ(result.output.find(Messages::msg_results_saved_to("-")),
+            std::string::npos)
+      << result.output;
+  expect_no_dash_transport_artifacts(result);
+
+  const std::string status = json["status"].get<std::string>();
+  if (status == "complete") {
+    EXPECT_EQ(result.exit_code, EXIT_SUCCESS) << result.stderr_output;
+    EXPECT_TRUE(json["results_complete"].get<bool>());
+    EXPECT_TRUE(json["conclusions_valid"].get<bool>());
+    EXPECT_EQ(json["counters"]["completed_loops"], 3u);
+    EXPECT_EQ(json["counters"]["validated_measurements"], 9u);
+  } else if (status == "unsupported") {
+    EXPECT_EQ(result.exit_code, EXIT_FAILURE) << result.stderr_output;
+    EXPECT_FALSE(json["results_complete"].get<bool>());
+    EXPECT_FALSE(json["conclusions_valid"].get<bool>());
+    ASSERT_FALSE(json["reason_code"].get<std::string>().empty());
+    EXPECT_EQ(json["backend"]["initialization_status"], "unsupported");
+    EXPECT_EQ(json["backend"]["reason_code"], json["reason_code"]);
+  } else {
+    FAIL() << "GPU stdout integration returned unexpected status: "
+           << status << '\n'
+           << result.stderr_output;
+  }
+}
+
 TEST(ExecutableCliIntegrationTest, GpuWritesValidatedSchemaV1Integration) {
   const TemporaryJsonFile output("gpu_schema_v1");
   const CliResult result = run_memory_benchmark(
@@ -422,6 +528,17 @@ TEST(ExecutableCliIntegrationTest, GpuWritesValidatedSchemaV1Integration) {
   ASSERT_EQ(access(output.path().c_str(), F_OK), 0);
   const nlohmann::json json =
       nlohmann::json::parse(read_file(output.path()));
+  EXPECT_EQ(json["configuration"]["output_file"], output.path());
+  EXPECT_EQ(count_occurrences(
+                result.stdout_output,
+                Messages::msg_results_saved_to(output.path())),
+            1u)
+      << result.output;
+  EXPECT_EQ(result.stderr_output.find(
+                Messages::msg_results_saved_to(output.path())),
+            std::string::npos)
+      << result.output;
+  EXPECT_EQ(access((output.path() + ".tmp").c_str(), F_OK), -1);
   if (json["status"] == "unsupported") {
     GTEST_SKIP() << json["reason_code"].get<std::string>();
   }

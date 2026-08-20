@@ -22,7 +22,7 @@ namespace Messages {
 const std::string& error_gpu_bandwidth_must_be_used_alone() {
   static const std::string message =
       "--gpu-bandwidth allows only optional -b/--buffer-size <MB>, "
-      "-i/--iterations <count>, -r/--count <count>, -o/--output <file>, "
+      "-i/--iterations <count>, -r/--count <count>, -o/--output <target>, "
       "--seed <uint64>, and -h/--help (no other options allowed)";
   return message;
 }
@@ -89,7 +89,8 @@ std::string gpu_usage_options(const std::string& prog_name) {
         << "  -r, --count <count>   Number of balanced read/write/copy loops (default: "
         << Constants::GPU_DEFAULT_LOOP_COUNT << ").\n"
         << "      --seed <uint64>   Reproducible base seed; generated once when omitted.\n"
-        << "  -o, --output <file>   Atomically checkpoint GPU schema 1 JSON after each result.\n"
+        << "  -o, --output <target> JSON output target; exact - writes one final schema 1 document\n"
+        << "                        to stdout; every other target checkpoints atomically.\n"
         << "  -h, --help            Show this GPU-mode help and exit\n";
   return usage.str();
 }

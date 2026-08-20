@@ -35,7 +35,7 @@ This document describes the layout of project files, organized by purpose. It is
 
 | File | Purpose |
 |---|---|
-| `main.cpp` | Program entry point; performs primary-mode conflict scan, dispatches dedicated GPU/core-to-core paths, runs the general standard/pattern/TLB and sweep pipelines, and owns the general CPU output-session lifetime; the dedicated core-to-core CLI owns its session |
+| `main.cpp` | Program entry point; performs primary-mode conflict scan, dispatches dedicated GPU/core-to-core paths, runs the general standard/pattern/TLB and sweep pipelines, and owns the general CPU output-session lifetime; the dedicated GPU and core-to-core CLIs own their sessions |
 
 ### Build and tooling
 
@@ -237,7 +237,7 @@ All user-facing text strings are centralized here. Each `.cpp` file implements a
 |---|---|
 | `json_output_api.h` | Public standard/pattern payload builders and the shared atomic-file writer interface; this C++ API is distinct from the process contract in `API.md` |
 | `json_output.cpp` | Builds standard/pattern root payloads, adds timestamp/version metadata, and retains file-save adapters; direct command dispatch can reuse the prebuilt object through `JsonOutputSession` |
-| `json_output_session.h` / `.cpp` | Classifies raw output targets, applies mode-specific file-path policy, lazily dispatches checkpoints, routes command-scoped human stdout, and emits checked final JSON through the retained original stdout buffer; every CPU mode and sweep selects this transport |
+| `json_output_session.h` / `.cpp` | Classifies raw output targets, applies mode-specific file-path policy, lazily dispatches checkpoints, routes command-scoped human stdout, and emits checked final JSON through the retained original stdout buffer; every direct mode and CPU sweep selects this transport |
 | `builder.cpp` | Builds common mode configuration metadata, including resolved chain, seed, calibration, scheduling, and worker policies |
 | `standard.cpp` | Active standard schema-2 serializer for completion state, loop measurements, and main/cache aggregates |
 | `patterns.cpp` | Serializes pattern benchmark results |
@@ -252,11 +252,11 @@ Objective-C++ Metal backend so deterministic unit tests do not require GPU work.
 
 | File | Purpose |
 |---|---|
-| `gpu_bandwidth.h` / `.cpp` | Dedicated `GpuBandwidthConfig`, exact option-whitelist parser, GPU help, standalone entry point, QoS/signal scope, and console handoff |
+| `gpu_bandwidth.h` / `.cpp` | Dedicated `GpuBandwidthConfig`, exact option-whitelist parser, GPU help, standalone output-session boundary, QoS/signal scope, console handoff, and terminal stdout emission |
 | `gpu_work_plan.h` / `.cpp` | Pure read/write/copy pass limits, exact payload, seed derivation, cyclic order, calibration arithmetic, frozen 8192-threadgroup grid cap/geometry, and `gpu-work-plan-v1` identity |
 | `gpu_backend.h` / `.cpp` | Objective-C-free synchronous/noexcept backend contract, device/resource/phase/validation metadata, factory declaration, and status string mappings |
-| `gpu_runner.h` / `.cpp` | Backend-independent calibration, warmup/precondition/timing/validation orchestration, completion-wins interruption, counters, aggregates, resource lifecycle, and transport-neutral logical checkpoints with file-only post-release replacement |
-| `gpu_json.h` / `.cpp` | GPU schema 1 builder and shared atomic-writer adapter; preserves exact integer strings, nullable state, errors, provenance, and nested audit records |
+| `gpu_runner.h` / `.cpp` | Backend-independent calibration, warmup/precondition/timing/validation orchestration, completion-wins interruption, counters, aggregates, resource lifecycle, and transport-neutral logical checkpoints with a file-scoped post-release replacement |
+| `gpu_json.h` / `.cpp` | GPU schema 1 builder and shared atomic-writer adapter; the prebuilt payload can also use the command's stdout session and preserves exact integer strings, nullable state, errors, provenance, and nested audit records |
 | `gpu_kernels_source.h` | Private canonical embedded MSL 2.3 source, kernel revision, integer pattern/checksum contract, and exact source bytes hashed at runtime |
 | `metal_gpu_backend.mm` | Only Objective-C++/Metal boundary: ARC/autorelease pools, capability checks, runtime compilation, private/tracked buffers, shared/tracked status, serial command buffers, timestamps, validation, and test readback |
 
@@ -336,7 +336,7 @@ GoogleTest-based unit and integration test suite. All `.cpp` files are picked up
 | `test_benchmark_executor.cpp` | `BenchmarkExecutorTest` | Injected phase/chain failures, continuous latency sampling, and hardware executor contracts |
 | `test_benchmark_runner.cpp` | `BenchmarkStatisticsCollectorTest`, `BenchmarkRunnerTest` | Status-bearing aggregation, checkpointing, interruption, and runner exception/failure seams |
 | `test_benchmark_work_plan.cpp` | `BenchmarkWorkPlanTest` | Exact payload/access planning, calibration, cyclic order, seed derivation, and duration classification |
-| `test_gpu_bandwidth.cpp` | `GpuBandwidthParserTest`, `GpuMemoryBudgetTest`, `GpuRunnerTest`, `GpuJsonTest` | Strict standalone parsing, memory budgets, fake-backend calibration/execution/failure/interruption semantics, counters, and schema-1 serialization |
+| `test_gpu_bandwidth.cpp` | `GpuBandwidthParserTest`, `GpuMemoryBudgetTest`, `GpuRunnerTest`, `GpuJsonTest` | Strict standalone parsing and raw output spelling, memory budgets, fake-backend calibration/execution/failure/interruption and file/stdout checkpoint semantics, counters, and schema-1 serialization |
 | `test_gpu_work_plan.cpp` | `GpuWorkPlanTest`, `GpuTimedAccumulatorOracleTest` | GPU constants, cyclic order, seed domains, pass/payload caps, calibration, vector/tail/grid geometry, frozen identities, and timed-accumulator oracle behavior |
 | `test_gpu_metal_backend.cpp` | `GpuMetalBackendIntegrationTest` | Real-Metal capability/runtime compile, private/shared tracked resources, read/write/copy/tail correctness, timestamps, validation, and byte readback |
 | `test_mode_selector.cpp` | `ModeSelectorTest` | Primary-mode detection, GPU aliases, and deterministic multi-mode conflicts |
@@ -354,7 +354,7 @@ GoogleTest-based unit and integration test suite. All `.cpp` files are picked up
 | `test_core_to_core_messages.cpp` | `CoreToCoreMessagesTest` | Core-to-core console message strings |
 | `test_core_to_core_cli.cpp` | `CoreToCoreCliTest` | Core-to-core CLI argument parsing |
 | `test_core_to_core_runner.cpp` | `CoreToCoreRunnerTest` | Calibration, work planning, cyclic scenario order, deterministic failure seams, and real ARM64 integration paths |
-| `test_executable_cli.cpp` | `ExecutableCliIntegrationTest` | Executable-level CLI routing, split stdout/stderr capture, bounded child execution, sentinel artifact rules, JSON transport/file compatibility, and pattern orchestration smoke coverage |
+| `test_executable_cli.cpp` | `ExecutableCliIntegrationTest` | Executable-level CLI routing, split stdout/stderr capture, bounded child execution, sentinel artifact rules, all-direct-mode JSON transport/file compatibility including unsupported GPU evidence, and pattern orchestration smoke coverage |
 | `test_standard_kernels.cpp` | `StandardKernelIntegrationTest`, `PatternKernelIntegrationTest` | Real ARM64 standard/pattern kernel ABI, tails, boundaries, checksums, and multi-worker execution |
 | `test_statistics.cpp` | `StatisticsTest` | Standard multi-loop summary composition, mode filtering, loop/sample population separation, and rendered values |
 | `test_descriptive_statistics.cpp` | `DescriptiveStatisticsTest` | Canonical shared percentiles, deviation, CV, and MAD contracts |

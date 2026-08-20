@@ -19,7 +19,7 @@ It is designed for controlled microarchitectural investigation rather than a sin
 - **Core-to-core analysis:** calibrated acquire/release token-exchange measurements under scheduler-hint scenarios.
 - **Metal GPU bandwidth:** standalone read/write/copy compute kernels with GPU timestamps and validation metadata.
 - **Reproducible experiments:** explicit seeds, repeated loops, built-in Cartesian parameter sweeps, recoverable JSON
-  file checkpoints, and final machine-readable stdout for CPU commands and sweeps.
+  file checkpoints, and final machine-readable stdout for every direct mode and CPU sweep.
 
 See [Measurement Capabilities](CAPABILITIES.md) for the full measurement scope and interpretation guidance.
 
@@ -76,16 +76,16 @@ For longer runs, prevent system sleep and collect repeated measurements:
 caffeinate -i -d memory_benchmark --benchmark --count 10 --buffer-size 1024 --output baseline.json
 ```
 
-For automation, standard, pattern, TLB, and core-to-core commands and sweeps accept the exact output target `-`. JSON is
-written once to stdout and the human-readable transcript is written to stderr:
+For automation, every direct mode and the CPU modes' supported sweeps accept the exact output target `-`. JSON is written
+once to stdout and the human-readable transcript is written to stderr:
 
 ```bash
 memory_benchmark --benchmark --only-bandwidth --count 5 --buffer-size 512 --output - \
   >benchmark.json 2>benchmark.log
 ```
 
-`--output ./-` remains an ordinary file target. GPU mode still requires a real output file; see the
-[Machine-Readable CLI API](API.md) support matrix.
+`--output ./-` remains an ordinary file target. Use a real file when crash-resilient intermediate checkpoints are
+required; see the [Machine-Readable CLI API](API.md) support matrix and acceptance contract.
 
 ## Benchmark Modes
 
@@ -147,6 +147,13 @@ caffeinate -i -d memory_benchmark --gpu-bandwidth --buffer-size 512 \
   --iterations 24 --count 9 --seed 123456789 --output gpu_bandwidth.json
 ```
 
+The same GPU schema 1 payload can be captured as final-only stdout:
+
+```bash
+memory_benchmark --gpu-bandwidth --buffer-size 512 --count 3 --seed 42 --output - \
+  >gpu_bandwidth.json 2>gpu_bandwidth.log
+```
+
 More workflows, including custom cache targets, latency-chain controls, density profiles, and sweep keys, are documented in the [User Manual](MANUAL.md).
 
 ## Interpreting Results
@@ -168,10 +175,10 @@ Treat benchmark values as measurements of the configured workload under the obse
   pinning.
 
 JSON output records completion and nullable measurement state instead of using zero for unavailable results. Consumers
-making conclusions should reject incomplete or interrupted runs according to the mode-specific status fields. Every CPU
-command or sweep using `--output -` reserves stdout for one final JSON document and routes its post-parse human
-transcript to stderr; file output is atomic, while standard commands and sweeps additionally retain intermediate
-checkpoints. Exact process
+making conclusions should reject incomplete or interrupted runs according to the mode-specific status fields. Every
+direct command or CPU sweep using `--output -` reserves stdout for one final JSON document and routes its post-parse
+human transcript to stderr; file output is atomic, while standard commands, sweeps, and GPU retain their mode-specific
+intermediate checkpoints. Exact process
 acceptance rules are in the [Machine-Readable CLI API](API.md), with schema and checkpoint details in the [User Manual](MANUAL.md),
 [Technical Specification](TECHNICAL_SPECIFICATION.md), and mode whitepapers.
 

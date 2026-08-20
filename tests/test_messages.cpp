@@ -194,12 +194,13 @@ TEST(MessagesErrorTest, GpuMessagesHaveExactMethodologyOutput) {
       std::to_string(Constants::GPU_DEFAULT_LOOP_COUNT) +
       ").\n"
       "      --seed <uint64>   Reproducible base seed; generated once when omitted.\n"
-      "  -o, --output <file>   Atomically checkpoint GPU schema 1 JSON after each result.\n"
+      "  -o, --output <target> JSON output target; exact - writes one final schema 1 document\n"
+      "                        to stdout; every other target checkpoints atomically.\n"
       "  -h, --help            Show this GPU-mode help and exit\n";
   const std::vector<MessageCase> cases = {
       {"mode isolation", Messages::error_gpu_bandwidth_must_be_used_alone(),
        "--gpu-bandwidth allows only optional -b/--buffer-size <MB>, "
-       "-i/--iterations <count>, -r/--count <count>, -o/--output <file>, "
+       "-i/--iterations <count>, -r/--count <count>, -o/--output <target>, "
        "--seed <uint64>, and -h/--help (no other options allowed)"},
       {"minimum buffer", Messages::error_gpu_buffer_size_below_minimum(32, 64),
        "GPU buffer-size must be at least 64 MB (got 32 MB)"},
@@ -614,14 +615,13 @@ TEST(MessagesFormattingTest, UsageOptions) {
   EXPECT_NE(msg.find("single-threaded"), std::string::npos);
   EXPECT_NE(msg.find("--cache-size"), std::string::npos);
   EXPECT_NE(msg.find("--output <target>"), std::string::npos);
-  EXPECT_NE(msg.find("For CPU modes and sweeps, exact - writes"), std::string::npos);
+  EXPECT_NE(msg.find("Exact - writes one final JSON document to stdout"), std::string::npos);
   EXPECT_NE(msg.find("one final"), std::string::npos);
-  EXPECT_NE(msg.find("JSON document to stdout"), std::string::npos);
+  EXPECT_NE(msg.find("every direct mode and CPU sweep"), std::string::npos);
   EXPECT_NE(msg.find("routes human output to stderr"), std::string::npos);
-  EXPECT_NE(msg.find("./- and"), std::string::npos);
-  EXPECT_NE(msg.find("all other values are files"), std::string::npos);
-  EXPECT_NE(msg.find("sweep files checkpoint after attempts"), std::string::npos);
-  EXPECT_NE(msg.find("GPU requires a file"), std::string::npos);
+  EXPECT_NE(msg.find("./- and all other values are files"), std::string::npos);
+  EXPECT_NE(msg.find("Standard and GPU files retain"), std::string::npos);
+  EXPECT_NE(msg.find("sweep files checkpoint attempts"), std::string::npos);
   EXPECT_NE(msg.find("Requires --output <target>"), std::string::npos);
   EXPECT_NE(msg.find("-h"), std::string::npos);
   // Check that default values are included
