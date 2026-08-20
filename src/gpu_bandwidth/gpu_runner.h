@@ -25,6 +25,8 @@
 #include "gpu_bandwidth/gpu_bandwidth.h"
 #include "utils/descriptive_statistics.h"
 
+class JsonOutputSession;
+
 enum class GpuMeasurementStatus {
   NotRun = 0,
   Measured,
@@ -161,6 +163,37 @@ GpuMemoryBudget calculate_gpu_memory_budget(size_t buffer_size_bytes,
 int run_gpu_bandwidth_suite(const GpuBandwidthConfig& config,
                             GpuBackend& backend,
                             GpuRunResult& result,
+                            const GpuRunnerTestHooks& hooks = {});
+
+/**
+ * @brief Run the suite with command-owned JSON checkpoint transport.
+ *
+ * Hook checkpoints take precedence over the output session. Otherwise each
+ * logical checkpoint is offered to @p output_session: file sessions persist
+ * the existing atomic checkpoint sequence, while stdout sessions perform lazy
+ * no-op persistence and retain the terminal result in @p result for the
+ * command boundary to serialize exactly once. The session must outlive this
+ * call and must not be shared concurrently. This overload does not emit the
+ * final stdout document.
+ *
+ * @param config Validated GPU command configuration retained in schema v1.
+ * @param backend Backend instance owned by the caller for the call duration.
+ * @param result Receives initialized, partial, terminal, or failed state.
+ * @param output_session Command-owned checkpoint transport.
+ * @param hooks Optional deterministic test seams; hook callbacks override the
+ *        session checkpoint sink and exceptions are contained as failed runs.
+ * @return `EXIT_SUCCESS` for complete or graceful interrupted execution;
+ *         `EXIT_FAILURE` for failed or unsupported execution or persistence
+ *         failure.
+ * @pre `output_session` represents `config.output_file`, classified with
+ *      `JsonFilePathPolicy::PreserveRaw` by the command boundary.
+ * @note Called synchronously and not thread-safe. The backend, result, session,
+ *       and hook state must not be accessed concurrently for the call duration.
+ */
+int run_gpu_bandwidth_suite(const GpuBandwidthConfig& config,
+                            GpuBackend& backend,
+                            GpuRunResult& result,
+                            JsonOutputSession& output_session,
                             const GpuRunnerTestHooks& hooks = {});
 
 const char* gpu_measurement_status_to_string(GpuMeasurementStatus status);

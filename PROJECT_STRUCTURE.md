@@ -255,7 +255,7 @@ Objective-C++ Metal backend so deterministic unit tests do not require GPU work.
 | `gpu_bandwidth.h` / `.cpp` | Dedicated `GpuBandwidthConfig`, exact option-whitelist parser, GPU help, standalone entry point, QoS/signal scope, and console handoff |
 | `gpu_work_plan.h` / `.cpp` | Pure read/write/copy pass limits, exact payload, seed derivation, cyclic order, calibration arithmetic, frozen 8192-threadgroup grid cap/geometry, and `gpu-work-plan-v1` identity |
 | `gpu_backend.h` / `.cpp` | Objective-C-free synchronous/noexcept backend contract, device/resource/phase/validation metadata, factory declaration, and status string mappings |
-| `gpu_runner.h` / `.cpp` | Backend-independent calibration, warmup/precondition/timing/validation orchestration, completion-wins interruption, counters, aggregates, resource lifecycle, and checkpoints |
+| `gpu_runner.h` / `.cpp` | Backend-independent calibration, warmup/precondition/timing/validation orchestration, completion-wins interruption, counters, aggregates, resource lifecycle, and transport-neutral logical checkpoints with file-only post-release replacement |
 | `gpu_json.h` / `.cpp` | GPU schema 1 builder and shared atomic-writer adapter; preserves exact integer strings, nullable state, errors, provenance, and nested audit records |
 | `gpu_kernels_source.h` | Private canonical embedded MSL 2.3 source, kernel revision, integer pattern/checksum contract, and exact source bytes hashed at runtime |
 | `metal_gpu_backend.mm` | Only Objective-C++/Metal boundary: ARC/autorelease pools, capability checks, runtime compilation, private/tracked buffers, shared/tracked status, serial command buffers, timestamps, validation, and test readback |

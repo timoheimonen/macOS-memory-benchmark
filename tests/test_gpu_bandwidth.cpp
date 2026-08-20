@@ -17,14 +17,18 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
+#include <filesystem>
+#include <fstream>
 #include <functional>
 #include <limits>
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <unistd.h>
 #include <utility>
 #include <vector>
 
@@ -33,10 +37,40 @@
 #include "gpu_bandwidth/gpu_bandwidth.h"
 #include "gpu_bandwidth/gpu_json.h"
 #include "gpu_bandwidth/gpu_runner.h"
+#include "output/console/messages/messages_api.h"
+#include "output/json/json_output/json_output_session.h"
 
 namespace {
 
 using Json = nlohmann::ordered_json;
+
+class TemporaryGpuJsonFile {
+ public:
+  explicit TemporaryGpuJsonFile(const std::string& stem) {
+    static std::atomic<unsigned long> sequence{0};
+    path_ = std::filesystem::path("/tmp") /
+            ("membenchmark_gpu_" + stem + "_" +
+             std::to_string(::getpid()) + "_" +
+             std::to_string(sequence.fetch_add(1)) + ".json");
+    cleanup();
+  }
+
+  ~TemporaryGpuJsonFile() { cleanup(); }
+
+  TemporaryGpuJsonFile(const TemporaryGpuJsonFile&) = delete;
+  TemporaryGpuJsonFile& operator=(const TemporaryGpuJsonFile&) = delete;
+
+  const std::filesystem::path& path() const { return path_; }
+
+ private:
+  void cleanup() noexcept {
+    std::error_code ignored;
+    std::filesystem::remove(path_, ignored);
+    std::filesystem::remove(path_.string() + ".tmp", ignored);
+  }
+
+  std::filesystem::path path_;
+};
 
 size_t operation_index(GpuOperation operation) { return static_cast<size_t>(operation); }
 
@@ -345,6 +379,56 @@ void expect_unstarted_interrupted_tail(const GpuRunResult& result, size_t first_
     EXPECT_EQ(measurement.reason_code, "interruption-before-task") << index;
     EXPECT_FALSE(measurement.value_gb_s.has_value()) << index;
     EXPECT_FALSE(measurement.attempted) << index;
+  }
+}
+
+void expect_same_gpu_terminal_state(const GpuRunResult& actual,
+                                    const GpuRunResult& expected) {
+  EXPECT_EQ(actual.status, expected.status);
+  EXPECT_EQ(actual.reason_code, expected.reason_code);
+  EXPECT_EQ(actual.interruption_requested,
+            expected.interruption_requested);
+  EXPECT_EQ(actual.results_complete, expected.results_complete);
+  EXPECT_EQ(actual.conclusions_valid, expected.conclusions_valid);
+  EXPECT_EQ(actual.operation_order_balance_complete,
+            expected.operation_order_balance_complete);
+  EXPECT_EQ(actual.counters.planned_loops, expected.counters.planned_loops);
+  EXPECT_EQ(actual.counters.attempted_loops,
+            expected.counters.attempted_loops);
+  EXPECT_EQ(actual.counters.completed_loops,
+            expected.counters.completed_loops);
+  EXPECT_EQ(actual.counters.planned_measurements,
+            expected.counters.planned_measurements);
+  EXPECT_EQ(actual.counters.attempted_measurements,
+            expected.counters.attempted_measurements);
+  EXPECT_EQ(actual.counters.terminal_measurements,
+            expected.counters.terminal_measurements);
+  EXPECT_EQ(actual.counters.completed_measurements,
+            expected.counters.completed_measurements);
+  EXPECT_EQ(actual.counters.validated_measurements,
+            expected.counters.validated_measurements);
+  ASSERT_EQ(actual.measurements.size(), expected.measurements.size());
+  for (size_t index = 0; index < actual.measurements.size(); ++index) {
+    const GpuMeasurement& actual_measurement = actual.measurements[index];
+    const GpuMeasurement& expected_measurement =
+        expected.measurements[index];
+    EXPECT_EQ(actual_measurement.status, expected_measurement.status)
+        << index;
+    EXPECT_EQ(actual_measurement.reason_code,
+              expected_measurement.reason_code)
+        << index;
+    EXPECT_EQ(actual_measurement.attempted,
+              expected_measurement.attempted)
+        << index;
+    EXPECT_EQ(actual_measurement.timed_command_completed,
+              expected_measurement.timed_command_completed)
+        << index;
+    EXPECT_EQ(actual_measurement.validation_terminal,
+              expected_measurement.validation_terminal)
+        << index;
+    EXPECT_EQ(actual_measurement.value_gb_s.has_value(),
+              expected_measurement.value_gb_s.has_value())
+        << index;
   }
 }
 
@@ -1112,6 +1196,162 @@ TEST(GpuRunnerTest, StopFirstSeenInCheckpointWritesAtMostOneExtraSnapshot) {
   expect_interrupted_tail(checkpoints[1], 1);
   EXPECT_EQ(backend.timed_calls, 1U);
   EXPECT_EQ(result.status, GpuRunStatus::Interrupted);
+}
+
+TEST(GpuRunnerTest,
+     FileAndStdoutSessionsObserveSamePostCheckpointStopRace) {
+  TemporaryGpuJsonFile file_target("checkpoint_stop_race");
+
+  FakeGpuBackend file_backend;
+  GpuBandwidthConfig file_config = explicit_config(2);
+  file_config.output_file = file_target.path().string();
+  GpuRunResult file_result;
+  size_t file_stop_reads = 0;
+  GpuRunnerTestHooks file_hooks;
+  file_hooks.stop_requested = [&]() { return ++file_stop_reads >= 3; };
+  int file_status = EXIT_FAILURE;
+  {
+    JsonOutputSession file_session(make_json_output_target(
+        file_config.output_file, JsonFilePathPolicy::PreserveRaw));
+    file_status = run_gpu_bandwidth_suite(
+        file_config, file_backend, file_result, file_session, file_hooks);
+  }
+
+  FakeGpuBackend stdout_backend;
+  GpuBandwidthConfig stdout_config = explicit_config(2);
+  stdout_config.output_file = "-";
+  GpuRunResult stdout_result;
+  size_t stdout_stop_reads = 0;
+  GpuRunnerTestHooks stdout_hooks;
+  stdout_hooks.stop_requested = [&]() {
+    return ++stdout_stop_reads >= 3;
+  };
+  int stdout_status = EXIT_FAILURE;
+  testing::internal::CaptureStdout();
+  {
+    JsonOutputSession stdout_session(make_json_output_target(
+        stdout_config.output_file, JsonFilePathPolicy::PreserveRaw));
+    stdout_status = run_gpu_bandwidth_suite(
+        stdout_config, stdout_backend, stdout_result, stdout_session,
+        stdout_hooks);
+  }
+  const std::string stdout_text = testing::internal::GetCapturedStdout();
+
+  EXPECT_EQ(file_status, EXIT_SUCCESS);
+  EXPECT_EQ(stdout_status, EXIT_SUCCESS);
+  EXPECT_EQ(file_stop_reads, 3U);
+  EXPECT_EQ(stdout_stop_reads, 3U);
+  EXPECT_TRUE(stdout_text.empty());
+  expect_same_gpu_terminal_state(stdout_result, file_result);
+  EXPECT_EQ(file_result.status, GpuRunStatus::Interrupted);
+  EXPECT_EQ(file_result.counters.attempted_measurements, 1U);
+  expect_interrupted_tail(file_result, 1);
+
+  std::ifstream input(file_target.path());
+  ASSERT_TRUE(input.is_open());
+  Json persisted;
+  input >> persisted;
+  ASSERT_TRUE(input.good() || input.eof());
+  EXPECT_EQ(persisted["schema_version"],
+            Constants::GPU_JSON_SCHEMA_VERSION);
+  EXPECT_EQ(persisted["status"], "interrupted");
+  EXPECT_FALSE(persisted["results_complete"].get<bool>());
+  EXPECT_FALSE(persisted["conclusions_valid"].get<bool>());
+  EXPECT_FALSE(
+      std::filesystem::exists(file_target.path().string() + ".tmp"));
+}
+
+TEST(GpuRunnerTest,
+     StdoutSessionRetainsUnsupportedSchemaWithoutIntermediateOutput) {
+  FakeGpuBackend backend;
+  backend.initialization.status = GpuBackendStatus::Unsupported;
+  backend.initialization.reason_code =
+      "required-gpu-family-unsupported";
+  GpuBandwidthConfig config = explicit_config();
+  config.output_file = "-";
+  GpuRunResult result;
+  GpuRunnerTestHooks hooks;
+  hooks.stop_requested = []() { return false; };
+
+  int status = EXIT_SUCCESS;
+  testing::internal::CaptureStdout();
+  {
+    JsonOutputSession session(make_json_output_target(
+        config.output_file, JsonFilePathPolicy::PreserveRaw));
+    status = run_gpu_bandwidth_suite(config, backend, result, session,
+                                     hooks);
+  }
+  const std::string stdout_text = testing::internal::GetCapturedStdout();
+  const Json payload = build_gpu_bandwidth_json(config, result);
+
+  EXPECT_EQ(status, EXIT_FAILURE);
+  EXPECT_TRUE(stdout_text.empty());
+  EXPECT_EQ(result.status, GpuRunStatus::Unsupported);
+  EXPECT_EQ(result.reason_code, "required-gpu-family-unsupported");
+  EXPECT_FALSE(result.results_complete);
+  EXPECT_FALSE(result.conclusions_valid);
+  EXPECT_EQ(payload["schema_version"],
+            Constants::GPU_JSON_SCHEMA_VERSION);
+  EXPECT_EQ(payload["status"], "unsupported");
+  EXPECT_FALSE(payload["results_complete"].get<bool>());
+  EXPECT_FALSE(payload["conclusions_valid"].get<bool>());
+  EXPECT_EQ(payload["configuration"]["output_file"], "-");
+  EXPECT_EQ(backend.lifecycle_log,
+            (std::vector<std::string>{"initialize"}));
+}
+
+TEST(GpuRunnerTest,
+     FileSessionCheckpointFailureKeepsPrecedenceAndRetryCadence) {
+  TemporaryGpuJsonFile blocking_parent("checkpoint_failure_parent");
+  {
+    std::ofstream blocker(blocking_parent.path());
+    ASSERT_TRUE(blocker.is_open());
+    blocker << "not a directory";
+    ASSERT_TRUE(blocker.good());
+  }
+
+  FakeGpuBackend backend;
+  GpuBandwidthConfig config = explicit_config(2);
+  config.output_file =
+      (blocking_parent.path() / "result.json").string();
+  GpuRunResult result;
+  size_t stop_reads = 0;
+  GpuRunnerTestHooks hooks;
+  hooks.stop_requested = [&]() {
+    ++stop_reads;
+    return false;
+  };
+
+  int status = EXIT_SUCCESS;
+  testing::internal::CaptureStderr();
+  {
+    JsonOutputSession session(make_json_output_target(
+        config.output_file, JsonFilePathPolicy::PreserveRaw));
+    status = run_gpu_bandwidth_suite(config, backend, result, session,
+                                     hooks);
+  }
+  const std::string errors = testing::internal::GetCapturedStderr();
+
+  size_t diagnostic_count = 0;
+  size_t offset = 0;
+  const std::string write_failure_prefix =
+      Messages::error_prefix() + Messages::error_file_write_failed(
+                                     config.output_file + ".tmp", "");
+  while ((offset = errors.find(write_failure_prefix, offset)) !=
+         std::string::npos) {
+    ++diagnostic_count;
+    offset += write_failure_prefix.size();
+  }
+
+  EXPECT_EQ(status, EXIT_FAILURE);
+  EXPECT_EQ(result.status, GpuRunStatus::Failed);
+  EXPECT_EQ(result.reason_code, "checkpoint-write-failed");
+  EXPECT_FALSE(result.results_complete);
+  EXPECT_FALSE(result.conclusions_valid);
+  EXPECT_EQ(result.counters.attempted_measurements, 1U);
+  EXPECT_EQ(backend.timed_calls, 1U);
+  EXPECT_EQ(stop_reads, 3U);
+  EXPECT_EQ(diagnostic_count, 2U);
 }
 
 TEST(GpuRunnerTest, CheckpointFailureFinalizesTailByPendingStopState) {
