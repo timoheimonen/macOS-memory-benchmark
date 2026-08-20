@@ -142,7 +142,8 @@ class JsonOutputSession {
    * @return `EXIT_SUCCESS` on success or when disabled; `EXIT_FAILURE` after a
    *         contained serialization, write, flush, or file-output failure.
    * @warning A machine-output command boundary must call this at most once for
-   *          a stdout target, after its final human-readable message.
+   *          a stdout target. Ordinary `std::cout` remains routed to stderr
+   *          until session destruction, including messages emitted afterward.
    */
   int write_final(const nlohmann::ordered_json& payload,
                   bool announce_success = true);

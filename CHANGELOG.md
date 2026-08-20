@@ -25,6 +25,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
   - **Machine consumers reject incomplete results consistently**: Bundled schema-2 latency extractors now require both `status: "complete"` and `results_complete: true`, while the manual's `jq -e` examples enforce every mode's schema and completeness predicate. The API and mode references now also record observable stdout-transfer failures, zero-attempt sweep checkpoints, and the complete schema-1 sweep example.
+  - **Internal output-lifecycle documentation matches orchestration order**: Sweep wrapper contracts now distinguish contained nested-run exceptions from propagating setup failures, and the output-session contract permits human `std::cout` messages after the single final stdout write because routing remains active until session destruction.
 
 ## [0.61.2] - 2026-08-13
 

@@ -111,8 +111,11 @@ SweepExecutionResult execute_sweep_plan(SweepNestedMode mode, const std::vector<
  * @param base_config Parsed and validated base configuration.
  * @param output_session Single-owner output session for this command.
  * @return Terminal process status and the latest in-memory sweep envelope.
- * @throws May propagate setup or nested-run exceptions. The command boundary
- *         must convert them to its return-code error path.
+ * @throws std::exception If setup or envelope construction fails outside the
+ *         contained nested-run executor boundary. The command boundary must
+ *         convert propagated exceptions to its return-code error path.
+ * @note Nested-run executor exceptions become failed, checkpointed attempts in
+ *       the returned envelope rather than propagating from this function.
  * @note Called synchronously and not thread-safe. The session must not overlap
  *       another output session.
  */

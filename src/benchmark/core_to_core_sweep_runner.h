@@ -41,8 +41,11 @@ size_t calculate_core_to_core_sweep_run_count(const CoreToCoreLatencyConfig& con
  * @param base_config Parsed and validated base configuration.
  * @param output_session Session that must outlive this synchronous call.
  * @return Terminal process status and latest complete in-memory envelope.
- * @throws May propagate setup or nested-run exceptions. The command boundary
- *         must convert them to its return-code error path.
+ * @throws std::exception If setup or envelope construction fails outside the
+ *         contained nested-run executor boundary. The command boundary must
+ *         convert propagated exceptions to its return-code error path.
+ * @note Nested-run executor exceptions become failed, checkpointed attempts in
+ *       the returned envelope rather than propagating from this function.
  * @note Not thread-safe. The session must be installed before worker startup
  *       and must not overlap another output session.
  */
