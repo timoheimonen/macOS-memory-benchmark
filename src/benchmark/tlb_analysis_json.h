@@ -30,6 +30,7 @@
 
 #include "benchmark/tlb_analysis.h"
 #include "benchmark/tlb_runtime_policy.h"
+#include "third_party/nlohmann/json.hpp"
 
 struct BenchmarkConfig;
 
@@ -89,9 +90,29 @@ struct TlbAnalysisJsonContext {
 };
 
 /**
+ * @brief Build the complete standalone TLB analysis JSON payload in memory.
+ * @param context TLB configuration, execution state, measurements, and derived
+ *        conclusions. All referenced objects must remain valid and unmodified
+ *        for the duration of the call.
+ * @return Schema-version-4 TLB analysis payload, including metadata and a UTC
+ *         timestamp. Incomplete analysis states retain their measurements and
+ *         suppress conclusions according to `context.conclusions_valid`.
+ * @throws std::exception If allocation, string handling, or JSON construction
+ *         fails.
+ * @note This function performs no filesystem I/O and does not interpret
+ *       `context.config.output_file`. Concurrent calls are safe when their
+ *       referenced inputs are not mutated concurrently.
+ */
+nlohmann::ordered_json build_tlb_analysis_json(
+    const TlbAnalysisJsonContext& context);
+
+/**
  * @brief Save standalone TLB analysis results to JSON output file.
  * @param context TLB analysis result bundle for serialization.
  * @return EXIT_SUCCESS on success, EXIT_FAILURE on error.
+ * @throws std::exception If payload construction or output-path resolution
+ *         fails before the atomic writer's return-code boundary. Command
+ *         orchestrators must contain these exceptions.
  */
 int save_tlb_analysis_to_json(const TlbAnalysisJsonContext& context);
 

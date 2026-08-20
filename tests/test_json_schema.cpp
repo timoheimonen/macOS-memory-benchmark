@@ -877,7 +877,7 @@ TEST(JsonSchemaTest, TlbAnalysisExporterIncludesModeAndCoreCounts) {
             std::string::npos);
 }
 
-TEST(JsonSchemaTest, TlbAnalysisExporterOmitsRemovedAliasesAndHandlesUnavailableComparison) {
+TEST(JsonSchemaTest, TlbAnalysisBuilderCoversStatusesAndExporterHandlesUnavailableComparison) {
   const TemporaryJsonFile incomplete_output("tlb_page_walk_incomplete");
   const TemporaryJsonFile fallback_output("tlb_256mb_fallback");
   BenchmarkConfig config;
@@ -943,6 +943,37 @@ TEST(JsonSchemaTest, TlbAnalysisExporterOmitsRemovedAliasesAndHandlesUnavailable
       false,
       3.0,
   };
+
+  struct StatusCase {
+    const char* status;
+    bool conclusions_valid;
+  };
+  const std::vector<StatusCase> status_cases = {
+      {"complete", true},
+      {"partial", false},
+      {"interrupted", false},
+      {"error", false},
+  };
+  for (const StatusCase& status_case : status_cases) {
+    SCOPED_TRACE(status_case.status);
+    context.analysis_status = status_case.status;
+    context.conclusions_valid = status_case.conclusions_valid;
+    const nlohmann::ordered_json payload = build_tlb_analysis_json(context);
+    const nlohmann::ordered_json& analysis = payload["tlb_analysis"];
+
+    EXPECT_EQ(analysis["status"], status_case.status);
+    EXPECT_EQ(analysis["conclusions_valid"],
+              status_case.conclusions_valid);
+    EXPECT_FALSE(analysis.contains("status_reason"));
+    if (!status_case.conclusions_valid) {
+      EXPECT_FALSE(analysis["l1_tlb_detection"]["detected"]);
+      EXPECT_FALSE(analysis["l2_tlb_detection"]["detected"]);
+      EXPECT_FALSE(analysis["private_cache_knee"]["detected"]);
+    }
+  }
+
+  context.analysis_status = "interrupted";
+  context.conclusions_valid = false;
 
   ASSERT_EQ(save_tlb_analysis_to_json(context), EXIT_SUCCESS);
   const nlohmann::json output_json = read_json_file(config.output_file);

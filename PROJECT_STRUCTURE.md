@@ -131,7 +131,7 @@ The benchmark subsystem owns the standard CPU pipeline, standalone TLB analysis,
 | File | Purpose |
 |---|---|
 | `tlb_analysis.h` / `.cpp` | Standalone `--analyze-tlb` mode: compares spread/packed chains across locality sweeps, supports stride/chain-mode/density controls, and produces empirical translation-related boundary estimates |
-| `tlb_analysis_json.h` / `.cpp` | Serializes TLB analysis results to JSON |
+| `tlb_analysis_json.h` / `.cpp` | Builds schema-4 TLB payloads in memory and persists them through the shared atomic JSON writer |
 | `tlb_boundary_detector.cpp` | Robust paired-delta boundary detection, bootstrap confidence intervals, persistence gates, and independent validation |
 | `tlb_chain.h` / `.cpp` | Builds and verifies page-native spread/packed pointer-chain controls |
 | `tlb_measurement_scheduler.h` / `.cpp` | Seeded cyclic-Latin round scheduling, task-seed derivation, and pass execution accounting |

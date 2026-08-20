@@ -207,11 +207,8 @@ nlohmann::ordered_json build_tlb_measurement_record_json(
 
 }  // namespace
 
-int save_tlb_analysis_to_json(const TlbAnalysisJsonContext& context) {
-  if (context.config.output_file.empty()) {
-    return EXIT_SUCCESS;
-  }
-
+nlohmann::ordered_json build_tlb_analysis_json(
+    const TlbAnalysisJsonContext& context) {
   const LatencyChainMode effective_chain_mode =
       resolve_latency_chain_mode(context.config.latency_chain_mode,
                                  context.page_walk_baseline_locality_bytes);
@@ -664,6 +661,17 @@ int save_tlb_analysis_to_json(const TlbAnalysisJsonContext& context) {
   json_output["tlb_analysis"] = tlb_json;
   json_output[JsonKeys::TIMESTAMP] = build_utc_timestamp();
   json_output[JsonKeys::VERSION] = SOFTVERSION;
+
+  return json_output;
+}
+
+int save_tlb_analysis_to_json(const TlbAnalysisJsonContext& context) {
+  if (context.config.output_file.empty()) {
+    return EXIT_SUCCESS;
+  }
+
+  const nlohmann::ordered_json json_output =
+      build_tlb_analysis_json(context);
 
   std::filesystem::path file_path(context.config.output_file);
   if (file_path.is_relative()) {
