@@ -210,19 +210,8 @@ int main(int argc, char *argv[]) {
     return run_sweep_mode(config);
   }
 
-  if (config.analyze_tlb) {
-    if (validate_config(config) != EXIT_SUCCESS) {
-      return EXIT_FAILURE;
-    }
-    print_runtime_banner();
-    return run_with_benchmark_preparation(config, [&]() {
-      return run_tlb_analysis(config);
-    });
-  }
-
-  // Direct standard and pattern commands share one target owner. TLB and
-  // sweep modes remain on their existing file-only paths until their result
-  // collection boundaries are converted separately.
+  // Direct CPU commands share one target owner. Sweep modes remain on their
+  // existing file-only paths until their checkpoint boundaries are converted.
   std::optional<JsonOutputSession> output_session;
   try {
     output_session.emplace(make_json_output_target(
@@ -238,6 +227,39 @@ int main(int argc, char *argv[]) {
         config.output_file,
         Messages::error_json_output_initialization_failed(""));
     return EXIT_FAILURE;
+  }
+
+  if (config.analyze_tlb) {
+    if (validate_config(config) != EXIT_SUCCESS) {
+      return EXIT_FAILURE;
+    }
+    print_runtime_banner();
+    return run_with_benchmark_preparation(config, [&]() {
+      try {
+        if (output_session->kind() == JsonOutputKind::Disabled) {
+          return run_tlb_analysis(config);
+        }
+
+        nlohmann::ordered_json result_json;
+        const int run_status = run_tlb_analysis_collect(config, result_json);
+        if (!result_json.empty() &&
+            output_session->write_final(result_json) != EXIT_SUCCESS) {
+          return EXIT_FAILURE;
+        }
+        return run_status;
+      } catch (const std::exception& error) {
+        std::cerr << Messages::error_prefix()
+                  << Messages::error_command_execution_exception(
+                         "TLB analysis", error.what())
+                  << std::endl;
+      } catch (...) {
+        std::cerr << Messages::error_prefix()
+                  << Messages::error_command_execution_exception(
+                         "TLB analysis", "")
+                  << std::endl;
+      }
+      return EXIT_FAILURE;
+    });
   }
 
   if (validate_config(config) != EXIT_SUCCESS) {

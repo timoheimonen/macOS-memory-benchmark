@@ -47,6 +47,7 @@ memory_benchmark --output tlb_analysis.json --analyze-tlb
 memory_benchmark --analyze-tlb --latency-stride-bytes 128 --output tlb_analysis_stride128.json
 memory_benchmark --analyze-tlb --latency-chain-mode random-box --tlb-density medium --output tlb_analysis_medium.json
 memory_benchmark --analyze-tlb --seed 123456789 --output tlb_analysis_seeded.json
+memory_benchmark --analyze-tlb --tlb-density low --output - >tlb_analysis.json 2>tlb_analysis.log
 memory_benchmark --analyze-tlb --sweep tlb-density=low,medium,high --output tlb_density_sweep.json
 memory_benchmark --analyze-tlb --sweep latency-stride-bytes=64,128 --sweep tlb-density=medium,high --sweep-max-runs 4 --output tlb_stride_density_sweep.json
 ```
@@ -423,8 +424,13 @@ Large-locality paired section:
 - Interrupted or partial analyses suppress private-cache and L1/L2 conclusions.
 
 A user interrupt uses the existing graceful-shutdown contract and may return process success after writing partial JSON.
-Machine consumers must require `status == "complete"` and `conclusions_valid == true`; exit status alone is not a
-completeness signal.
+Machine consumers must require `tlb_analysis.status == "complete"` and
+`tlb_analysis.conclusions_valid == true`; exit status alone is not a completeness signal.
+
+For a direct command, exact `--output -` reserves stdout for one final schema-4 payload and routes the runtime report to
+stderr. `--output ./-` remains an ordinary file target. Parse/preflight and early setup, memory-budget, or allocation
+failures can occur before an analysis payload exists and therefore leave stdout empty. After analysis-state
+initialization, interruption retains a partial payload and a measurement error retains an `error` payload.
 
 `validation_required` describes whether candidate-specific validation points were planned, not whether the methodology
 generally requires independent validation. An interruption during the base pass can leave this field `false` with
@@ -434,7 +440,7 @@ generally requires independent validation. An interruption during the base pass 
 
 ### 9.1 Single-Run TLB Analysis JSON
 
-When `--output <file>` is provided with `--analyze-tlb` without `--sweep`, output includes:
+When `--output <target>` is provided with `--analyze-tlb` without `--sweep`, output includes:
 
 - top-level metadata:
   - `configuration`
@@ -467,6 +473,8 @@ When `--output <file>` is provided with `--analyze-tlb` without `--sweep`, outpu
   - sole `large_locality_paired_comparison` block with same-round delta P50, spread/packed P50 values, verified virtual-page counts, buffer-relative cache-line diagnostics, active footprint, raw paired records, and explicit interpretation
 
 This payload is designed for full post-run verification and reproducibility checks.
+An ordinary file target receives it through one atomic terminal write. Exact target `-` writes the same object once to
+stdout with a trailing newline; it does not introduce a wrapper schema or checkpoint stream.
 
 ### 9.2 TLB Sweep JSON
 

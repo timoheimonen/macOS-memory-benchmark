@@ -112,6 +112,20 @@ TEST(CoreToCoreCliTest, ParsesShortModeArguments) {
   EXPECT_EQ(config.output_file, "core2core.json");
 }
 
+TEST(CoreToCoreCliTest, PreservesRawStdoutSentinelAndExplicitDotDashFile) {
+  for (const std::string& raw_output : {std::string("-"), std::string("./-")}) {
+    SCOPED_TRACE(raw_output);
+    CoreToCoreLatencyConfig config;
+    const int parse_result = parse_with_args(
+        {"memory_benchmark", "--analyze-core2core", "--output",
+         raw_output},
+        config);
+
+    EXPECT_EQ(parse_result, EXIT_SUCCESS);
+    EXPECT_EQ(config.output_file, raw_output);
+  }
+}
+
 TEST(CoreToCoreCliTest, ParsesSweepArguments) {
   CoreToCoreLatencyConfig config;
   const int parse_result =

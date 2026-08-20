@@ -440,7 +440,7 @@ middle, and trailing items.
 #### `--analyze-tlb`
 
 - Runs standalone TLB analysis mode only
-- Can be combined only with optional `--output <file>`, `--latency-stride-bytes <bytes>`, `--latency-chain-mode <mode>`, `--tlb-density <low|medium|high>`, `--seed <uint64>`, `--sweep <key=...>`, and `--sweep-max-runs <count>`
+- Can be combined only with optional `--output <target>`, `--latency-stride-bytes <bytes>`, `--latency-chain-mode <mode>`, `--tlb-density <low|medium|high>`, `--seed <uint64>`, `--sweep <key=...>`, and `--sweep-max-runs <count>`
 - Uses latency stride from `--latency-stride-bytes` (same default as standard latency mode). Analyze-TLB stride must be pointer-aligned and must not exceed the system page size; it does not need to divide the page size. The default standard profile performs a base locality sweep of up to 15 canonical points, stride-clamped to `max(16KB, 2*stride)` up to `256MB`, and may insert page-aligned refinement points near detected knees/boundaries
 - Builds a page-native spread chain with exactly one pointer node per requested page and a cache-line-dense packed control with the same node and unique-cache-line counts. Each scheduler task measures both layouts in one round, alternates pair order, and stores the same-round `spread - packed` translation delta
 - Detects likely private-cache knee candidates from spread latency as a separate diagnostic and reports whether the region may interfere with interpretation; accepted L1/L2 claims still require the paired translation-delta and validation gates
@@ -449,6 +449,8 @@ middle, and trailing items.
 - Retains rejected boundary candidates, their confidence intervals, persistence counts, and rejection reasons in JSON
 - Plans one 512 MiB paired comparison when the analysis buffer is at least `512 MiB` and the main sweep plus any required validation completed successfully. Its spread P50, packed P50, median same-round `spread - packed` delta, spread/packed virtual-page counts, and active cache-line footprint are available only after the separate large-locality pass completes successfully with a valid summary; otherwise the object is unavailable. These are cache-hot translation-stress timings, not direct DRAM latency or an isolated page-table-walk cost
 - Emits explicit `complete`, `interrupted`, `partial`, or `error` status. Boundary conclusions are suppressed unless the planned sweep completed
+- A direct command accepts exact `--output -` for one schema-4 JSON document on stdout while routing its runtime report
+  to stderr. A real file target receives the same payload through one atomic terminal write
 - Tries `1024/512/256 MiB` buffers in descending order, selecting the largest candidate whose predicted
   buffer-plus-scratch peak fits the available-memory budget and whose allocation succeeds. If allocation fails, it tries
   the next smaller budget-safe candidate. The compact settings block reports the run identity, buffer-lock/QoS outcome,
@@ -459,6 +461,9 @@ middle, and trailing items.
 - Requests `user-interactive` QoS for the main benchmark thread as a best-effort hint. Console and JSON report whether the request was applied and its return code; failure emits a warning and continues
 - Rebuilds every standalone TLB pair from recorded task and layout seeds; pointer values are written in buffer-offset order and every chain is verified to visit all nodes and return to its head. The recorded page and cache-line diagnostics are virtual-page and buffer-relative quantities; the tool does not translate virtual addresses to physical addresses. Latency-chain behavior outside standalone TLB analysis remains unchanged
 - A user interrupt remains a successful graceful-shutdown return when partial JSON can be written; consumers must use `status` and `conclusions_valid` rather than the process code to accept conclusions
+- Parse, preflight, and early TLB setup/allocation failures can occur before a schema-valid analysis payload exists; with
+  `--output -` these paths leave stdout empty. A measurement error after result initialization emits the available
+  `tlb_analysis.status: "error"` payload and returns failure
 - Detailed methodology and JSON contract: `TLB_ANALYSIS_WHITEPAPER.md`
 
 #### `--tlb-density <level>`
@@ -496,7 +501,7 @@ middle, and trailing items.
 - Places the timed token and startup/control state in distinct 128-byte-aligned storage blocks. This is a conservative
   interference-isolation boundary for current Apple Silicon targets, not evidence of a particular physical handoff path
 - Defaults to three measured loops per scenario, so bare `--analyze-core2core` reports a median headline and CV/MAD instead of only a single-loop value
-- Can be combined only with optional `--output <file>`, `--count <count>`, `--latency-samples <count>`, `--sweep count=...`, `--sweep latency-samples=...`, `--sweep-max-runs <count>`, and `--help`
+- Can be combined only with optional `--output <target>`, `--count <count>`, `--latency-samples <count>`, `--sweep count=...`, `--sweep latency-samples=...`, `--sweep-max-runs <count>`, and `--help`
 - Executes three scheduler-hint scenarios: `no_affinity_hint`, `same_affinity_tag`, and `different_affinity_tags`
 - Calibrates each scenario independently with an excluded 100,000-round-trip pilot after a 1,000,000-round-trip warmup
   intended to reduce pilot startup transients; that scenario's resolved plan is reused across its measured `--count`
@@ -514,6 +519,9 @@ middle, and trailing items.
 - Includes per-loop order, status, elapsed-duration quality, measured pooled-sample boundaries, and per-thread QoS/affinity
   API outcomes in JSON schema 2. Invalid loops contribute no pooled samples and serialize a zero-length sample range
 - Missing, interrupted, invalid, or failed measurements are unavailable/`null`, never numeric zero. Command/scenario completion metadata states whether all planned measurements completed
+- A direct command accepts exact `--output -` for one schema-2 JSON document on stdout while routing its runtime report
+  to stderr. A real file target receives the same payload through one atomic terminal write. Once the result state is
+  initialized, interruption or measurement failure retains and emits the available audit payload
 - Notes explicitly that macOS user-space cannot hard-pin exact core IDs
 - Sets `affinity_hint_comparison_interpretable` only when the command completed and both workers' affinity API calls
   returned success in every measured affinity-tag loop. The field excludes QoS and calibration-pilot outcomes and does
@@ -588,18 +596,18 @@ middle, and trailing items.
 #### `--output <target>`
 
 - An omitted output option disables JSON output
-- For direct `--benchmark` and `--patterns`, an exact raw value of `-` selects machine-readable stdout. The sentinel is
+- For direct `--benchmark`, `--patterns`, `--analyze-tlb`, and `--analyze-core2core`, an exact raw value of `-` selects machine-readable stdout. The sentinel is
   classified before path normalization, so `--output ./-` remains an ordinary file named `-`
 - A supported stdout-target command emits exactly one JSON document followed by one newline after orchestration reaches
   its terminal state. Intermediate standard checkpoint requests do not emit documents
-- Post-parse human output is routed to stderr while the stdout target is active. Parse and preflight validation errors
-  leave stdout empty; `--help` remains a human-facing stdout command even when combined with `--output -`
+- Post-parse human output is routed to stderr while the stdout target is active. Parse, preflight, and other pre-result
+  failures leave stdout empty; `--help` remains a human-facing stdout command when that mode accepts the combination
 - Every other non-empty value is a file target. Relative paths write under the current working directory, and parent
   directories are created automatically
-- Standard file targets retain atomic intermediate checkpoints; pattern file targets retain their normal final atomic
-  write. Use a real file when crash-resilient intermediate state is required
-- In this revision, TLB, core-to-core, GPU, and all sweep commands still require real file targets; their exact `-`
-  stdout transport is not yet supported
+- Standard file targets retain atomic intermediate checkpoints. Pattern, TLB, and core-to-core direct file targets each
+  receive one final atomic write. Use a real file when crash-resilient standard checkpoints are required
+- In this revision, GPU and all sweep commands still require real file targets; their exact `-` stdout transport is not
+  yet supported
 - GPU schema 1 file output is atomically checkpointed after every terminal measurement. A valid post-parse pre-run backend,
   capability, compilation, allocation, or work-plan failure also writes an auditable checkpoint. Syntax/config errors,
   including a buffer below 64 MB, fail before result JSON is created
@@ -1043,10 +1051,10 @@ report.
 
 ## JSON Output Format
 
-Direct standard and pattern commands can serialize the same mode payload either to a real file or, with the exact raw
-target `--output -`, once to stdout. The stdout transport does not wrap the result or change its measurement schema.
-All other modes and parameter sweeps remain file-only in this revision. See [API.md](API.md) for stream handling,
-process-status checks, schema compatibility, and the current transport support matrix.
+Direct standard, pattern, TLB, and core-to-core commands can serialize the same mode payload either to a real file or,
+with the exact raw target `--output -`, once to stdout. The stdout transport does not wrap the result or change its
+measurement schema. GPU and parameter sweeps remain file-only in this revision. See [API.md](API.md) for stream
+handling, process-status checks, schema compatibility, and the current transport support matrix.
 
 ### Standard benchmark JSON shape
 
@@ -1295,7 +1303,7 @@ at most one additional interruption checkpoint. Completion of the current task w
 
 ### Core-to-core JSON shape
 
-Core-to-core output uses schema 2 and methodology
+Core-to-core file and stdout output use the same schema 2 payload and methodology
 `core2core-v3-calibrated-balanced-auditable-128b-isolation`. This abbreviated structural excerpt shows one of three scenarios and only
 its first loop record, while omitting detailed statistics/hint fields. Its counters describe the unabridged payload, and
 the displayed continuous and sample arrays are complete for the illustrated three-loop scenario:
@@ -1374,7 +1382,8 @@ bounded by the documented minimums. `round_trip_ns.values` contains only measure
 `samples_ns` is a separate pooled sample-window-mean population. A measured loop's range covers exactly the values it
 appended to that pool; a non-measured loop has a zero-length range and contributes neither headline nor sample values. A
 loop that does not produce a valid measurement carries status/reason and `null` values instead of numeric zeros.
-Consumers should require `measurements_complete: true` for a complete comparison. Before interpreting affinity-tag
+Consumers should require `core_to_core_latency.status: "complete"` and `measurements_complete: true` for a complete
+comparison. Before interpreting affinity-tag
 differences, additionally require `affinity_hint_comparison_interpretable: true`; that field covers measured affinity API
 returns only, excludes QoS and pilot outcomes, and does not prove physical placement.
 
@@ -1466,7 +1475,8 @@ per-loop `samples_ns` are same-round `global - 16 KiB` differences; they must no
 
 ### TLB analysis JSON (analyze mode)
 
-When run with `--analyze-tlb --output tlb_analysis.json`, the payload includes a dedicated `tlb_analysis` block.
+When run directly with `--analyze-tlb --output <target>`, the payload includes a dedicated `tlb_analysis` block. A file
+target and exact stdout target `-` serialize the same object.
 The following is a structure-focused schema-version-4 illustration. It is not presented as a hardware result; the current
 serializer contract and concrete deterministic values are exercised by
 `JsonSchemaTest.TlbAnalysisExporterIncludesModeAndCoreCounts`. New hardware baselines remain outside this release series by
@@ -1657,6 +1667,8 @@ Schema 4 contains only the current fields. The bundled plotter independently rea
 accept their field names in a schema 4 document. Each measurement
 contains calibrated `paired_control.spread.access_count` and `paired_control.packed.access_count` values. When analysis is
 interrupted, `conclusions_valid` is `false`, boundary objects contain a suppression reason, and no delta is published.
+Machine consumers accept conclusions only when `tlb_analysis.status` is `complete` and
+`tlb_analysis.conclusions_valid` is `true`.
 `validation_status: "not-run"` and `validation_complete: false` distinguish an unexecuted validation pass from
 `validation_status: "not-required"` after a complete run with no validation candidates. `validation_required` is true only
 after candidate-specific validation points have been planned; an interruption during the base pass can therefore report
@@ -1680,7 +1692,7 @@ same structure as the standard `main_memory.bandwidth` object.
 
 ### Useful JSON inspection commands
 
-Capture a direct standard or pattern machine-output command before applying the schema-specific checks below:
+Capture any supported direct CPU machine-output command before applying the schema-specific checks below:
 
 ```bash
 memory_benchmark --benchmark --only-bandwidth --buffer-size 512 --count 5 --output - \
@@ -1717,6 +1729,12 @@ jq '.tlb_analysis.l1_tlb_detection.boundary_locality_kb' tlb_analysis.json
 
 # Standalone TLB large-locality paired translation delta P50 (ns)
 jq '.tlb_analysis.large_locality_paired_comparison.translation_delta_p50_ns' tlb_analysis.json
+
+# Reject incomplete standalone TLB output
+jq 'select(.configuration.schema_version == 4 and .tlb_analysis.status == "complete" and .tlb_analysis.conclusions_valid == true)' tlb_analysis.json
+
+# Reject incomplete core-to-core output
+jq 'select(.configuration.schema_version == 2 and .core_to_core_latency.status == "complete" and .core_to_core_latency.measurements_complete == true)' core2core.json
 
 # Reject incomplete GPU schema 1 output and inspect validated headlines
 jq 'select(.mode == "gpu_bandwidth" and .schema_version == 1 and .status == "complete" and .results_complete == true and .conclusions_valid == true) | .aggregates | with_entries(.value = {headline_gb_s: .value.headline_gb_s, sample_count: .value.sample_count, stability_quality: .value.stability_quality})' gpu_bandwidth.json

@@ -25,7 +25,7 @@ Working version `0.62.0`
 | `-W` | `--only-bandwidth` | — | Run only standard benchmark bandwidth tests; requires `--benchmark` |
 | `-L` | `--only-latency` | — | Run only standard benchmark latency tests; requires `--benchmark` |
 | `-u` | `--non-cacheable` | — | Apply best-effort cache-discouraging allocation hints; does not create truly uncached memory |
-| `-o` | `--output` | `<target>` | Write JSON output. Direct benchmark/pattern commands reserve exact `-` for one final stdout document; every other supported target is a file |
+| `-o` | `--output` | `<target>` | Write JSON output. Direct CPU commands reserve exact `-` for one final stdout document; every other supported target is a file |
 | `-S` | `--sweep` | `<key=a,b>` | Add a Cartesian sweep parameter; repeat once per distinct key and use with `--output` |
 | `-X` | `--sweep-max-runs` | `<count>` | Positive generated-run limit; default `256`, or `16` with `--analyze-tlb`; effective only with `--sweep` |
 | `-h` | `--help` | — | Show help; the standalone `--analyze-tlb` whitelist is the exception and rejects this combination |
@@ -107,7 +107,7 @@ values `low`, `medium`, and `high`; quick/standard/exhaustive are profile descri
 
 | Modifier | Compatible | Notes |
 |----------|------------|-------|
-| `--output <file>` | ✅ | |
+| `--output <target>` | ✅ | Direct mode accepts exact `-` for final JSON stdout; `./-` remains a file. TLB sweeps still require a real file target in this revision |
 | `--latency-stride-bytes <n>` | ✅ | Must be positive, pointer-aligned (8 bytes on Apple Silicon), and no larger than the system page size; exact page-size divisibility is not required |
 | `--latency-chain-mode <mode>` | ✅ | `global-random` is rejected with `--analyze-tlb` |
 | `--tlb-density <low\|medium\|high>` | ✅ | Default `medium`/standard; low=quick, high=exhaustive |
@@ -121,7 +121,7 @@ values `low`, `medium`, and `high`; quick/standard/exhaustive are profile descri
 
 | Modifier | Compatible | Notes |
 |----------|------------|-------|
-| `--output <file>` | ✅ | |
+| `--output <target>` | ✅ | Direct mode accepts exact `-` for final JSON stdout; `./-` remains a file. Core-to-core sweeps still require a real file target in this revision |
 | `--count <n>` | ✅ | Core-to-core default `3` (general default remains `1`); scenario order rotates and the headline is the loop median P50 |
 | `--latency-samples <n>` | ✅ | Positive integer; default `1000`. Separate calibrated sample windows per scenario/loop do not define the continuous headline |
 | `--sweep <key=a,b>` | ✅ | Requires `--output`; supported keys: `count`, `latency-samples` |

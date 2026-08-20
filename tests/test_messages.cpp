@@ -127,6 +127,13 @@ TEST(MessagesErrorTest, JsonCommandBoundaryFailuresHaveExactOutput) {
       "JSON payload construction failed: allocation failed");
   EXPECT_EQ(Messages::error_json_payload_construction_failed(""),
             "JSON payload construction failed: unknown exception");
+  EXPECT_EQ(
+      Messages::error_command_execution_exception("TLB analysis",
+                                                  "allocation failed"),
+      "TLB analysis failed with unexpected exception: allocation failed");
+  EXPECT_EQ(
+      Messages::error_command_execution_exception("Core-to-core analysis", ""),
+      "Core-to-core analysis failed with unexpected exception: unknown exception");
 }
 
 TEST(MessagesErrorTest, ErrorLatencyChainModeInvalid) {
@@ -156,7 +163,7 @@ TEST(MessagesErrorTest, ErrorLatencyTlbLocalityTooSmallForStride) {
 TEST(MessagesErrorTest, ErrorAnalyzeTlbMustBeUsedAlone) {
   const std::string& msg = Messages::error_analyze_tlb_must_be_used_alone();
   EXPECT_NE(msg.find("--analyze-tlb"), std::string::npos);
-  EXPECT_NE(msg.find("--output"), std::string::npos);
+  EXPECT_NE(msg.find("--output <target>"), std::string::npos);
   EXPECT_NE(msg.find("--latency-stride-bytes"), std::string::npos);
   EXPECT_NE(msg.find("--latency-chain-mode"), std::string::npos);
   EXPECT_NE(msg.find("--tlb-density"), std::string::npos);
@@ -609,11 +616,14 @@ TEST(MessagesFormattingTest, UsageOptions) {
   EXPECT_NE(msg.find("single-threaded"), std::string::npos);
   EXPECT_NE(msg.find("--cache-size"), std::string::npos);
   EXPECT_NE(msg.find("--output <target>"), std::string::npos);
-  EXPECT_NE(msg.find("exact - writes"), std::string::npos);
-  EXPECT_NE(msg.find("one final JSON document to stdout"), std::string::npos);
+  EXPECT_NE(msg.find("For direct CPU modes, exact - writes"), std::string::npos);
+  EXPECT_NE(msg.find("one final"), std::string::npos);
+  EXPECT_NE(msg.find("JSON document to stdout"), std::string::npos);
   EXPECT_NE(msg.find("routes human output to stderr"), std::string::npos);
-  EXPECT_NE(msg.find("./- and all other values are files"), std::string::npos);
-  EXPECT_NE(msg.find("TLB/core/GPU and sweeps still require files"), std::string::npos);
+  EXPECT_NE(msg.find("./- and"), std::string::npos);
+  EXPECT_NE(msg.find("all other values are files"), std::string::npos);
+  EXPECT_NE(msg.find("other direct CPU files write atomically once"), std::string::npos);
+  EXPECT_NE(msg.find("GPU and sweeps require files"), std::string::npos);
   EXPECT_NE(msg.find("-h"), std::string::npos);
   // Check that default values are included
   EXPECT_NE(msg.find(std::to_string(Constants::DEFAULT_ITERATIONS)), std::string::npos);

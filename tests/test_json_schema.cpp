@@ -1095,6 +1095,55 @@ TEST(JsonSchemaTest, CoreToCoreJsonBuilderReturnsInMemoryPayload) {
             Constants::CORE_TO_CORE_SCENARIO_NO_AFFINITY);
 }
 
+TEST(JsonSchemaTest,
+     CoreToCoreBuilderRetainsFailedAndInterruptedIncompleteState) {
+  struct StatusCase {
+    const char* command_status;
+    CoreToCoreMeasurementStatus scenario_status;
+  };
+  const StatusCase status_cases[] = {
+      {"failed", CoreToCoreMeasurementStatus::Failed},
+      {"interrupted", CoreToCoreMeasurementStatus::Interrupted},
+  };
+
+  CoreToCoreLatencyConfig config;
+  config.loop_count = 2;
+  config.latency_sample_count = 1;
+  const std::string cpu_name = "test-cpu";
+
+  for (const StatusCase& status_case : status_cases) {
+    SCOPED_TRACE(status_case.command_status);
+    CoreToCoreLatencyScenarioResult scenario;
+    scenario.scenario_name = Constants::CORE_TO_CORE_SCENARIO_NO_AFFINITY;
+    scenario.status = status_case.scenario_status;
+    scenario.status_reason = "command-incomplete";
+    scenario.planned_loops = 2;
+    scenario.completed_loops = 1;
+    const std::vector<CoreToCoreLatencyScenarioResult> scenarios = {scenario};
+    const CoreToCoreLatencyJsonContext context = {
+        config, cpu_name, 4, 6, 20000, 1000000, 2000, scenarios, 1.5,
+        status_case.command_status, 6, 1};
+
+    const nlohmann::ordered_json payload =
+        build_core_to_core_latency_json(context);
+    const nlohmann::ordered_json& result =
+        payload["core_to_core_latency"];
+
+    EXPECT_EQ(payload[JsonKeys::CONFIGURATION]["schema_version"], 2);
+    EXPECT_EQ(result["status"], status_case.command_status);
+    EXPECT_EQ(result["planned_measurements"], 6u);
+    EXPECT_EQ(result["completed_measurements"], 1u);
+    EXPECT_FALSE(result["measurements_complete"]);
+    EXPECT_FALSE(result["affinity_hint_comparison_interpretable"]);
+    ASSERT_EQ(result["scenarios"].size(), 1u);
+    EXPECT_EQ(result["scenarios"][0]["status"],
+              core_to_core_measurement_status_to_string(
+                  status_case.scenario_status));
+    EXPECT_EQ(result["scenarios"][0]["planned_loops"], 2u);
+    EXPECT_EQ(result["scenarios"][0]["completed_loops"], 1u);
+  }
+}
+
 TEST(JsonSchemaTest, CoreToCoreV2SerializesCalibratedBalancedAuditTrail) {
   CoreToCoreLatencyConfig config;
   config.loop_count = 1;

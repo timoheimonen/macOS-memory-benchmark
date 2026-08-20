@@ -94,15 +94,23 @@ TlbScheduleExecutionResult make_pass_result(TlbMeasurementPass pass, const std::
   return result;
 }
 
-int run_tlb_analysis_silently(const BenchmarkConfig& config, const TlbStopRequested& stop_requested,
-                              const TlbAnalysisExecutionSeam& seam) {
+int run_tlb_analysis_collect_silently(
+    const BenchmarkConfig& config,
+    const TlbStopRequested& stop_requested,
+    const TlbAnalysisExecutionSeam& seam,
+    nlohmann::ordered_json& result_json) {
   testing::internal::CaptureStdout();
   testing::internal::CaptureStderr();
-  const int result = run_tlb_analysis(config, stop_requested, seam);
+  const int result = run_tlb_analysis_collect(
+      config, stop_requested, seam, result_json);
   (void)testing::internal::GetCapturedStderr();
   const std::string standard_output = testing::internal::GetCapturedStdout();
-  EXPECT_EQ(standard_output.find(Messages::config_header(SOFTVERSION)), std::string::npos) << standard_output;
-  EXPECT_EQ(standard_output.find(Messages::usage_header(SOFTVERSION)), std::string::npos) << standard_output;
+  EXPECT_EQ(standard_output.find(Messages::config_header(SOFTVERSION)),
+            std::string::npos)
+      << standard_output;
+  EXPECT_EQ(standard_output.find(Messages::usage_header(SOFTVERSION)),
+            std::string::npos)
+      << standard_output;
   return result;
 }
 
@@ -124,7 +132,11 @@ TEST(AnalysisTest, CoordinatorStopsBeforeFirstTaskWithExactCounters) {
     summary = value;
   };
 
-  EXPECT_EQ(run_tlb_analysis_silently(config, []() { return true; }, seam), EXIT_SUCCESS);
+  nlohmann::ordered_json result_json;
+
+  EXPECT_EQ(run_tlb_analysis_collect_silently(
+                config, []() { return true; }, seam, result_json),
+            EXIT_SUCCESS);
   EXPECT_EQ(executor_calls, 0u);
   ASSERT_TRUE(observed);
   EXPECT_EQ(summary.status, TlbAnalysisCoordinatorStatus::Interrupted);
@@ -142,6 +154,10 @@ TEST(AnalysisTest, CoordinatorStopsBeforeFirstTaskWithExactCounters) {
   EXPECT_EQ(summary.pass_summaries[0].rounds_completed, 0u);
   EXPECT_FALSE(summary.pass_summaries[0].complete);
   EXPECT_EQ(summary.pass_summaries[0].status, TlbScheduleExecutionStatus::Interrupted);
+  ASSERT_FALSE(result_json.empty());
+  EXPECT_EQ(result_json["tlb_analysis"]["status"], "interrupted");
+  EXPECT_FALSE(result_json["tlb_analysis"]["conclusions_valid"]);
+  EXPECT_FALSE(result_json["tlb_analysis"].contains("status_reason"));
 }
 
 TEST(AnalysisTest, CoordinatorRejectsMissingPassExecutor) {
@@ -151,11 +167,16 @@ TEST(AnalysisTest, CoordinatorRejectsMissingPassExecutor) {
   bool observed = false;
   seam.observe_summary = [&](const TlbAnalysisCoordinatorSummary&) { observed = true; };
 
-  EXPECT_EQ(run_tlb_analysis_silently(config, []() { return false; }, seam), EXIT_FAILURE);
+  nlohmann::ordered_json result_json = {{"stale", true}};
+
+  EXPECT_EQ(run_tlb_analysis_collect_silently(
+                config, []() { return false; }, seam, result_json),
+            EXIT_FAILURE);
   EXPECT_FALSE(observed);
+  EXPECT_TRUE(result_json.empty());
 }
 
-TEST(AnalysisTest, CoordinatorRetainsPartialEvidenceOnInterruptionAndError) {
+TEST(AnalysisTest, CoordinatorCollectRetainsPartialInterruptedAndErrorEvidence) {
   struct TestCase {
     TlbScheduleExecutionStatus pass_status;
     size_t completed_points;
@@ -165,6 +186,8 @@ TEST(AnalysisTest, CoordinatorRetainsPartialEvidenceOnInterruptionAndError) {
     std::string expected_status_text;
   };
   const std::vector<TestCase> test_cases = {
+      {TlbScheduleExecutionStatus::Complete, 4, 1, EXIT_SUCCESS,
+       TlbAnalysisCoordinatorStatus::Partial, "partial"},
       {TlbScheduleExecutionStatus::Interrupted, 4, 0, EXIT_SUCCESS, TlbAnalysisCoordinatorStatus::Interrupted,
        "interrupted"},
       {TlbScheduleExecutionStatus::Error, 5, 1, EXIT_FAILURE, TlbAnalysisCoordinatorStatus::Error, "error"},
@@ -182,17 +205,29 @@ TEST(AnalysisTest, CoordinatorRetainsPartialEvidenceOnInterruptionAndError) {
     };
     seam.observe_summary = [&](const TlbAnalysisCoordinatorSummary& value) { summary = value; };
 
-    EXPECT_EQ(run_tlb_analysis_silently(config, []() { return false; }, seam), test_case.expected_exit_code);
+    nlohmann::ordered_json result_json;
+
+    EXPECT_EQ(run_tlb_analysis_collect_silently(
+                  config, []() { return false; }, seam, result_json),
+              test_case.expected_exit_code);
     EXPECT_EQ(summary.status, test_case.expected_status);
     EXPECT_EQ(summary.status_text, test_case.expected_status_text);
     EXPECT_EQ(summary.planned_points, 15u);
     EXPECT_EQ(summary.completed_points, test_case.completed_points);
     EXPECT_EQ(summary.planned_passes, 1u);
-    EXPECT_EQ(summary.completed_passes, 0u);
+    EXPECT_EQ(summary.completed_passes,
+              test_case.pass_status == TlbScheduleExecutionStatus::Complete
+                  ? 1u
+                  : 0u);
     EXPECT_EQ(summary.measurement_record_count, test_case.completed_points);
     EXPECT_FALSE(summary.conclusions_valid);
     ASSERT_EQ(summary.pass_summaries.size(), 1u);
     EXPECT_EQ(summary.pass_summaries[0].status, test_case.pass_status);
+    ASSERT_FALSE(result_json.empty());
+    EXPECT_EQ(result_json["tlb_analysis"]["status"],
+              test_case.expected_status_text);
+    EXPECT_FALSE(result_json["tlb_analysis"]["conclusions_valid"]);
+    EXPECT_FALSE(result_json["tlb_analysis"].contains("status_reason"));
   }
 }
 
@@ -208,7 +243,11 @@ TEST(AnalysisTest, CoordinatorCompletesWithoutLargeLocalityWithExactCounters) {
   };
   seam.observe_summary = [&](const TlbAnalysisCoordinatorSummary& value) { summary = value; };
 
-  EXPECT_EQ(run_tlb_analysis_silently(config, []() { return false; }, seam), EXIT_SUCCESS);
+  nlohmann::ordered_json result_json;
+
+  EXPECT_EQ(run_tlb_analysis_collect_silently(
+                config, []() { return false; }, seam, result_json),
+            EXIT_SUCCESS);
   EXPECT_EQ(executed_passes, (std::vector<TlbMeasurementPass>{TlbMeasurementPass::Base}));
   EXPECT_EQ(summary.status, TlbAnalysisCoordinatorStatus::Complete);
   EXPECT_EQ(summary.status_text, "complete");
@@ -228,6 +267,10 @@ TEST(AnalysisTest, CoordinatorCompletesWithoutLargeLocalityWithExactCounters) {
   EXPECT_TRUE(summary.pass_summaries[0].converged);
   EXPECT_TRUE(summary.pass_summaries[0].complete);
   EXPECT_EQ(summary.pass_summaries[0].status, TlbScheduleExecutionStatus::Complete);
+  ASSERT_FALSE(result_json.empty());
+  EXPECT_EQ(result_json["tlb_analysis"]["status"], "complete");
+  EXPECT_TRUE(result_json["tlb_analysis"]["conclusions_valid"]);
+  EXPECT_FALSE(result_json["tlb_analysis"].contains("status_reason"));
 }
 
 TEST(AnalysisTest, PairedSummaryUsesMedianOfSameRoundDeltasAndFiltersPasses) {

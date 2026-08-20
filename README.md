@@ -19,7 +19,7 @@ It is designed for controlled microarchitectural investigation rather than a sin
 - **Core-to-core analysis:** calibrated acquire/release token-exchange measurements under scheduler-hint scenarios.
 - **Metal GPU bandwidth:** standalone read/write/copy compute kernels with GPU timestamps and validation metadata.
 - **Reproducible experiments:** explicit seeds, repeated loops, built-in Cartesian parameter sweeps, recoverable JSON
-  file checkpoints, and final machine-readable stdout for direct standard and pattern commands.
+  file checkpoints, and final machine-readable stdout for every direct CPU mode.
 
 See [Measurement Capabilities](CAPABILITIES.md) for the full measurement scope and interpretation guidance.
 
@@ -76,16 +76,16 @@ For longer runs, prevent system sleep and collect repeated measurements:
 caffeinate -i -d memory_benchmark --benchmark --count 10 --buffer-size 1024 --output baseline.json
 ```
 
-For automation, direct standard and pattern commands accept the exact output target `-`. JSON is written once to stdout
-and the human-readable transcript is written to stderr:
+For automation, direct standard, pattern, TLB, and core-to-core commands accept the exact output target `-`. JSON is
+written once to stdout and the human-readable transcript is written to stderr:
 
 ```bash
 memory_benchmark --benchmark --only-bandwidth --count 5 --buffer-size 512 --output - \
   >benchmark.json 2>benchmark.log
 ```
 
-`--output ./-` remains an ordinary file target. Other direct modes and parameter sweeps still require a real output file
-in this revision; see the [Machine-Readable CLI API](API.md) support matrix.
+`--output ./-` remains an ordinary file target. GPU mode and parameter sweeps still require a real output file in this
+revision; see the [Machine-Readable CLI API](API.md) support matrix.
 
 ## Benchmark Modes
 
@@ -165,10 +165,10 @@ Treat benchmark values as measurements of the configured workload under the obse
   pinning.
 
 JSON output records completion and nullable measurement state instead of using zero for unavailable results. Consumers
-making conclusions should reject incomplete or interrupted runs according to the mode-specific status fields. Direct
-standard and pattern `--output -` commands reserve stdout for one final JSON document and route their post-parse human
-transcript to stderr; file output retains its documented persistence behavior. Exact process acceptance rules are in the
-[Machine-Readable CLI API](API.md), with schema and checkpoint details in the [User Manual](MANUAL.md),
+making conclusions should reject incomplete or interrupted runs according to the mode-specific status fields. Every
+direct CPU `--output -` command reserves stdout for one final JSON document and routes its post-parse human transcript to
+stderr; direct file output is atomic, while standard mode additionally retains intermediate checkpoints. Exact process
+acceptance rules are in the [Machine-Readable CLI API](API.md), with schema and checkpoint details in the [User Manual](MANUAL.md),
 [Technical Specification](TECHNICAL_SPECIFICATION.md), and mode whitepapers.
 
 ## Plotting Results

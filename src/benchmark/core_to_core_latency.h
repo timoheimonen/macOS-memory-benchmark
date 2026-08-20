@@ -32,6 +32,8 @@
 #include "core/config/constants.h"
 #include "third_party/nlohmann/json.hpp"
 
+class JsonOutputSession;
+
 enum class CoreToCoreSweepParameter {
   Count = 0,
   LatencySamples,
@@ -141,17 +143,35 @@ int parse_core_to_core_mode_arguments(int argc, char* argv[], CoreToCoreLatencyC
 /**
  * @brief Run standalone core-to-core cache-line handoff benchmark.
  * @param config Parsed mode configuration.
+ * @param output_session Command-scoped output target. The caller must create
+ *        it before printing the runtime banner or starting worker threads and
+ *        keep it alive, without overlapping another session, until return.
  * @return EXIT_SUCCESS on success, EXIT_FAILURE on runtime/IO error.
+ * @throws std::exception Setup or measurement allocations may propagate to
+ *         the command boundary. JSON-builder failures are converted to
+ *         `EXIT_FAILURE` by the collect path.
+ * @note This command is not thread-safe because it uses process signal state
+ *       and the standard console streams.
  */
-int run_core_to_core_latency(const CoreToCoreLatencyConfig& config);
+int run_core_to_core_latency(const CoreToCoreLatencyConfig& config,
+                             JsonOutputSession& output_session);
 
 /**
  * @brief Run standalone core-to-core benchmark and return its JSON payload in memory.
  * @param config Parsed mode configuration.
- * @param[out] result_json JSON payload with the normal core-to-core schema.
- * @return EXIT_SUCCESS on success, EXIT_FAILURE on runtime error.
+ * @param[out] result_json Cleared on entry and populated with the normal
+ *             core-to-core schema for complete, interrupted, or failed
+ *             initialized execution state.
+ * @return Execution status independently of the payload: EXIT_SUCCESS on
+ *         complete or graceful interruption, EXIT_FAILURE on runtime error.
+ * @throws std::exception Setup or measurement allocations may propagate.
+ *         JSON-builder failures are caught and converted to `EXIT_FAILURE`.
+ * @note The function retains no references after return and is not thread-safe
+ *       because it uses process signal state and standard console streams.
  */
-int run_core_to_core_latency_collect(const CoreToCoreLatencyConfig& config, nlohmann::ordered_json& result_json);
+int run_core_to_core_latency_collect(
+    const CoreToCoreLatencyConfig& config,
+    nlohmann::ordered_json& result_json);
 
 /**
  * @brief Parse and run standalone core-to-core mode from main().

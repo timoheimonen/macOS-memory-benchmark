@@ -35,7 +35,7 @@ This document describes the layout of project files, organized by purpose. It is
 
 | File | Purpose |
 |---|---|
-| `main.cpp` | Program entry point; performs primary-mode conflict scan, dispatches dedicated GPU/core-to-core paths, runs the general standard/pattern/TLB pipeline, and owns direct standard/pattern output-session lifetime |
+| `main.cpp` | Program entry point; performs primary-mode conflict scan, dispatches dedicated GPU/core-to-core paths, runs the general standard/pattern/TLB pipeline, and owns the general direct CPU output-session lifetime; the dedicated core-to-core CLI owns its session |
 
 ### Build and tooling
 
@@ -130,8 +130,8 @@ The benchmark subsystem owns the standard CPU pipeline, standalone TLB analysis,
 
 | File | Purpose |
 |---|---|
-| `tlb_analysis.h` / `.cpp` | Standalone `--analyze-tlb` mode: compares spread/packed chains across locality sweeps, supports stride/chain-mode/density controls, and produces empirical translation-related boundary estimates |
-| `tlb_analysis_json.h` / `.cpp` | Builds schema-4 TLB payloads in memory and persists them through the shared atomic JSON writer |
+| `tlb_analysis.h` / `.cpp` | Standalone `--analyze-tlb` mode: compares spread/packed chains across locality sweeps, supports stride/chain-mode/density controls, and returns execution status separately from its in-memory result payload |
+| `tlb_analysis_json.h` / `.cpp` | Builds schema-4 TLB payloads in memory and retains the shared atomic-file save adapter |
 | `tlb_boundary_detector.cpp` | Robust paired-delta boundary detection, bootstrap confidence intervals, persistence gates, and independent validation |
 | `tlb_chain.h` / `.cpp` | Builds and verifies page-native spread/packed pointer-chain controls |
 | `tlb_measurement_scheduler.h` / `.cpp` | Seeded cyclic-Latin round scheduling, task-seed derivation, and pass execution accounting |
@@ -144,8 +144,8 @@ The benchmark subsystem owns the standard CPU pipeline, standalone TLB analysis,
 |---|---|
 | `core_to_core_latency.h` | Public interface for the `--analyze-core2core` mode |
 | `core_to_core_latency_internal.h` | Internal runner interfaces not exposed outside the module |
-| `core_to_core_latency_runner.cpp` | Per-scenario calibration, 128-byte shared-state isolation, balanced loop scheduling, unpinned two-thread ping-pong execution, and robust summaries |
-| `core_to_core_latency_cli.cpp` | CLI argument parsing and entry point for the core-to-core mode |
+| `core_to_core_latency_runner.cpp` | Per-scenario calibration, 128-byte shared-state isolation, balanced loop scheduling, unpinned two-thread ping-pong execution, robust summaries, and in-memory result collection |
+| `core_to_core_latency_cli.cpp` | CLI argument parsing, direct output-session ownership, and entry point for the core-to-core mode |
 | `core_to_core_latency_json.h` / `.cpp` | Serializes schema-2 work plans, loop audit records, completion state, and results |
 | `core_to_core_sweep_runner.h` / `.cpp` | Core-to-core Cartesian sweeps and atomic per-run checkpoints |
 
@@ -237,7 +237,7 @@ All user-facing text strings are centralized here. Each `.cpp` file implements a
 |---|---|
 | `json_output_api.h` | Public standard/pattern payload builders and the shared atomic-file writer interface; this C++ API is distinct from the process contract in `API.md` |
 | `json_output.cpp` | Builds standard/pattern root payloads, adds timestamp/version metadata, and retains file-save adapters; direct command dispatch can reuse the prebuilt object through `JsonOutputSession` |
-| `json_output_session.h` / `.cpp` | Classifies raw output targets, applies mode-specific file-path policy, lazily dispatches checkpoints, routes command-scoped human stdout, and emits checked final JSON through the retained original stdout buffer; direct standard/pattern commands currently select this transport |
+| `json_output_session.h` / `.cpp` | Classifies raw output targets, applies mode-specific file-path policy, lazily dispatches checkpoints, routes command-scoped human stdout, and emits checked final JSON through the retained original stdout buffer; every direct CPU mode selects this transport |
 | `builder.cpp` | Builds common mode configuration metadata, including resolved chain, seed, calibration, scheduling, and worker policies |
 | `standard.cpp` | Active standard schema-2 serializer for completion state, loop measurements, and main/cache aggregates |
 | `patterns.cpp` | Serializes pattern benchmark results |

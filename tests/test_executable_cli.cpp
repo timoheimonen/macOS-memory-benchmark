@@ -37,6 +37,7 @@
 #include <unistd.h>
 #include <vector>
 
+#include "core/config/constants.h"
 #include "core/config/version.h"
 #include "output/console/messages/messages_api.h"
 #include "third_party/nlohmann/json.hpp"
@@ -549,6 +550,45 @@ TEST(ExecutableCliIntegrationTest, CoreToCoreArgumentsAreRoutedBeforeNormalParse
   EXPECT_NE(result.output.find("--analyze-core2core allows only optional"), std::string::npos);
 }
 
+TEST(ExecutableCliIntegrationTest,
+     InvalidCoreToCoreStdoutTargetLeavesStdoutEmptyIntegration) {
+  const CliResult result = run_memory_benchmark(
+      {"--analyze-core2core", "--output", "-", "--buffer-size", "256"});
+
+  expect_process_completed(result);
+  EXPECT_EQ(result.exit_code, EXIT_FAILURE);
+  expect_no_runtime_banner(result);
+  EXPECT_TRUE(result.stdout_output.empty()) << result.stdout_output;
+  EXPECT_NE(result.stderr_output.find(
+                Messages::error_analyze_core_to_core_must_be_used_alone()),
+            std::string::npos)
+      << result.stderr_output;
+  expect_no_dash_transport_artifacts(result);
+}
+
+TEST(ExecutableCliIntegrationTest,
+     CoreToCoreHelpWithStdoutTargetRemainsHumanInEitherOrderIntegration) {
+  for (const std::vector<std::string>& arguments : {
+           std::vector<std::string>{"--analyze-core2core", "--output", "-",
+                                    "--help"},
+           std::vector<std::string>{"--analyze-core2core", "--help",
+                                    "--output", "-"},
+       }) {
+    SCOPED_TRACE(testing::PrintToString(arguments));
+    const CliResult result = run_memory_benchmark(arguments);
+
+    expect_process_completed(result);
+    EXPECT_EQ(result.exit_code, EXIT_SUCCESS);
+    expect_no_runtime_banner(result);
+    EXPECT_NE(result.stdout_output.find("Usage:"), std::string::npos);
+    EXPECT_NE(result.stdout_output.find("--analyze-core2core"),
+              std::string::npos);
+    EXPECT_TRUE(result.stderr_output.empty()) << result.stderr_output;
+    EXPECT_FALSE(nlohmann::json::accept(result.stdout_output));
+    expect_no_dash_transport_artifacts(result);
+  }
+}
+
 TEST(ExecutableCliIntegrationTest, CoreToCoreWritesCalibratedAuditJsonIntegration) {
   const TemporaryJsonFile output("core2core_v2");
 
@@ -565,6 +605,38 @@ TEST(ExecutableCliIntegrationTest, CoreToCoreWritesCalibratedAuditJsonIntegratio
   EXPECT_TRUE(json["core_to_core_latency"]["measurements_complete"]);
   ASSERT_EQ(json["core_to_core_latency"]["scenarios"].size(), 3u);
   EXPECT_EQ(json["core_to_core_latency"]["scenarios"][0]["loop_records"].size(), 2u);
+}
+
+TEST(ExecutableCliIntegrationTest,
+     CoreToCoreWritesSingleJsonDocumentToStdoutIntegration) {
+  const CliResult result = run_memory_benchmark({
+      "--analyze-core2core", "--count", "1", "--latency-samples", "1",
+      "--output", "-"});
+
+  expect_process_completed(result);
+  ASSERT_EQ(result.exit_code, EXIT_SUCCESS) << result.stderr_output;
+  const nlohmann::json json = parse_single_stdout_json(result);
+  EXPECT_EQ(json["configuration"]["mode"],
+            Constants::CORE_TO_CORE_JSON_MODE_NAME);
+  EXPECT_EQ(json["configuration"]["schema_version"], 2);
+  EXPECT_EQ(json["core_to_core_latency"]["status"], "complete");
+  EXPECT_TRUE(json["core_to_core_latency"]["measurements_complete"]);
+
+  EXPECT_EQ(result.stdout_output.find(Messages::config_header(SOFTVERSION)),
+            std::string::npos);
+  EXPECT_EQ(result.stdout_output.find(
+                Messages::msg_running_core_to_core_analysis()),
+            std::string::npos);
+  EXPECT_NE(result.stderr_output.find(Messages::config_header(SOFTVERSION)),
+            std::string::npos)
+      << result.stderr_output;
+  EXPECT_NE(result.stderr_output.find(
+                Messages::msg_running_core_to_core_analysis()),
+            std::string::npos)
+      << result.stderr_output;
+  EXPECT_EQ(result.stderr_output.find(Messages::msg_results_saved_to("-")),
+            std::string::npos);
+  expect_no_dash_transport_artifacts(result);
 }
 
 TEST(ExecutableCliIntegrationTest, CoreToCoreSweepWritesCompletionMetadataIntegration) {
@@ -599,6 +671,58 @@ TEST(ExecutableCliIntegrationTest, AnalyzeTlbInvalidStrideSweepFailsBeforeExecut
   EXPECT_NE(result.output.find("must be a multiple of 8 bytes"), std::string::npos);
   EXPECT_EQ(result.output.find("Running sweep"), std::string::npos);
   EXPECT_EQ(access(output.path().c_str(), F_OK), -1);
+}
+
+TEST(ExecutableCliIntegrationTest,
+     AnalyzeTlbInvalidPreflightWithStdoutTargetLeavesStdoutEmptyIntegration) {
+  const CliResult result = run_memory_benchmark({
+      "--analyze-tlb", "--latency-stride-bytes", "32768", "--output",
+      "-"});
+
+  expect_process_completed(result);
+  EXPECT_EQ(result.exit_code, EXIT_FAILURE);
+  expect_no_runtime_banner(result);
+  EXPECT_TRUE(result.stdout_output.empty()) << result.stdout_output;
+  const long page_size = ::sysconf(_SC_PAGESIZE);
+  ASSERT_GT(page_size, 0);
+  EXPECT_NE(result.stderr_output.find(
+                Messages::error_analyze_tlb_stride_exceeds_page(
+                    32768, static_cast<size_t>(page_size))),
+            std::string::npos)
+      << result.stderr_output;
+  expect_no_dash_transport_artifacts(result);
+}
+
+TEST(ExecutableCliIntegrationTest,
+     AnalyzeTlbWritesSingleJsonDocumentToStdoutIntegration) {
+  const CliResult result = run_memory_benchmark(
+      {"--analyze-tlb", "--tlb-density", "low", "--seed", "42",
+       "--output", "-"},
+      std::chrono::minutes(15));
+
+  expect_process_completed(result);
+  ASSERT_EQ(result.exit_code, EXIT_SUCCESS) << result.stderr_output;
+  const nlohmann::json json = parse_single_stdout_json(result);
+  EXPECT_EQ(json["configuration"]["mode"],
+            Constants::TLB_ANALYSIS_JSON_MODE_NAME);
+  EXPECT_EQ(json["configuration"]["schema_version"], 4);
+  EXPECT_EQ(json["tlb_analysis"]["status"], "complete");
+  EXPECT_TRUE(json["tlb_analysis"]["conclusions_valid"]);
+  EXPECT_FALSE(json["tlb_analysis"].contains("status_reason"));
+
+  EXPECT_EQ(result.stdout_output.find(Messages::config_header(SOFTVERSION)),
+            std::string::npos);
+  EXPECT_EQ(result.stdout_output.find(Messages::msg_running_tlb_analysis()),
+            std::string::npos);
+  EXPECT_NE(result.stderr_output.find(Messages::config_header(SOFTVERSION)),
+            std::string::npos)
+      << result.stderr_output;
+  EXPECT_NE(result.stderr_output.find(Messages::msg_running_tlb_analysis()),
+            std::string::npos)
+      << result.stderr_output;
+  EXPECT_EQ(result.stderr_output.find(Messages::msg_results_saved_to("-")),
+            std::string::npos);
+  expect_no_dash_transport_artifacts(result);
 }
 
 TEST(ExecutableCliIntegrationTest, StandardBenchmarkWritesJsonIntegration) {

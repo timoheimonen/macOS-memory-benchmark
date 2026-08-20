@@ -70,11 +70,12 @@ primary modes
 fails deterministically instead of being routed by the first token. Core-to-core uses `CoreToCoreLatencyConfig`; GPU uses
 `GpuBandwidthConfig`; TLB uses a dedicated branch that populates `BenchmarkConfig`. GPU is dispatched before the general
 timer/parser pipeline and never calls CPU config validation or buffer/access derivation. The numbered pipeline below
-applies to standard/pattern execution.
+applies to standard/pattern execution; direct TLB shares its parse, output-session, validation, and final-output
+boundaries before using the dedicated analysis collector.
 
 1. Create high-resolution total-execution timer.
 2. Parse CLI arguments into `BenchmarkConfig` (`parse_arguments`) and finish human-facing help/no-mode handling.
-3. Classify the raw output target. Direct standard/pattern `-` creates a command-scoped `JsonOutputSession` that routes
+3. Classify the raw output target. Direct standard/pattern/TLB `-` creates a command-scoped `JsonOutputSession` that routes
    subsequent human `std::cout` output to stderr while retaining the original stdout buffer for final JSON.
 4. Validate configuration (`validate_config`) while the supported machine-output routing is active.
 5. Calculate derived sizes and counts:
@@ -94,6 +95,11 @@ applies to standard/pattern execution.
 11. Print total elapsed runtime, restore the previous stdout buffer at scope exit, and return the combined status.
 
 Memory cleanup is RAII-based through `MmapPtr` custom deleters (`munmap` on scope exit).
+
+Core-to-core keeps its dedicated parser and configuration. After successful combined parsing/preflight and human help
+handling, its command boundary creates the same output session, then either collects one schema-2 direct result or enters
+the still-file-only core-to-core sweep runner. Direct human output is routed before the runtime banner and worker threads
+are created.
 
 GPU mode follows its own synchronous pipeline:
 
@@ -115,8 +121,8 @@ Configuration state is represented by `BenchmarkConfig` (`src/core/config/config
 
 ### 5.1 User-facing control fields
 
-- Main options: buffer size MB, iterations, loop count, raw output target, threads. The existing configuration field is
-  named `output_file`, but direct standard/pattern adapters classify exact `-` before interpreting other values as paths.
+- Main options: buffer size MB, iterations, loop count, raw output target, threads. The existing configuration fields are
+  named `output_file`, but direct CPU adapters classify exact `-` before interpreting other values as paths.
 - General mode/config flags: `run_benchmark`, `run_patterns`, `analyze_tlb`, `only_bandwidth`, and `only_latency`.
 - Standalone TLB state remains in `BenchmarkConfig` (`analyze_tlb`, density, seed, stride/chain settings, and common sweep
   fields) and is populated by the dedicated `--analyze-tlb` branch in `argument_parser.cpp`.
@@ -148,9 +154,10 @@ Configuration state is represented by `BenchmarkConfig` (`src/core/config/config
   - Second pass parses remaining options.
 - Parser may throw internally (`std::stoll`/validation) but converts to return-code failures at function boundary.
 - Help (`-h`, `--help`) prints usage and exits successfully.
-- Direct standard/pattern output-target classification occurs only after successful parsing and help/no-mode handling.
-  Exact `-` is reserved for final stdout JSON, while `./-` remains a relative file target. TLB, core-to-core, GPU, and
-  sweep command boundaries do not select the stdout transport in this revision.
+- Direct standard/pattern/TLB output-target classification occurs only after successful parsing and help/no-mode
+  handling. Core-to-core classifies its target after its dedicated combined parse/preflight and help handling. Exact `-`
+  is reserved for final stdout JSON, while `./-` remains a relative file target. GPU and sweep command boundaries do not
+  select the stdout transport in this revision.
 - `--latency-chain-mode` accepts string values and resolves to `LatencyChainMode` enum.
 - `--analyze-tlb` uses an early dedicated parse branch in `argument_parser.cpp`. It only allows optional `--output`, `--latency-stride-bytes`, `--latency-chain-mode`, `--tlb-density`, `--seed`, `--sweep`, and `--sweep-max-runs`. TLB sweep supports `latency-stride-bytes`, `latency-chain-mode`, and `tlb-density`; its default run guard is `16`, and `global-random` chain mode is rejected. One generated or user-provided seed drives the pure sweep planner, seeded cyclic Latin round scheduler, derived task seeds, layout-specific page-native chain permutations, and deterministic convergence bootstrap. Each task measures a verified one-node-per-page spread chain and an equal-cache-line packed control in the same round. A pilot calibrates whole-chain accesses toward the quick/standard/exhaustive target duration; rounds stop at the per-point CI-width target or profile maximum. Candidate buffers are admitted only when their predicted buffer-plus-scratch peak fits the available-memory budget. Full methodology and JSON contract: [TLB_ANALYSIS_WHITEPAPER.md](TLB_ANALYSIS_WHITEPAPER.md).
 - `--analyze-core2core` uses dedicated mode parsing (outside `argument_parser.cpp`) and only allows optional `--output`, `--count`, `--latency-samples`, `--sweep`, `--sweep-max-runs`, and `--help`. Its mode-specific loop default is `3`; the general loop default remains `1`. Core-to-core sweep supports `count` and `latency-samples`, rejects duplicate sweep keys, and atomically checkpoints the combined output after every attempted run; only a nested `status: "complete"` result with `measurements_complete: true` increments `completed_runs`. Direct and sweep execution use the shared scope-bound signal guard before creating workers and restore the calling thread's exact previous mask on every return path. Each scheduler-hint scenario runs an excluded pilot after a 1,000,000-round-trip warmup intended to reduce pilot startup transients, reuses its duration-calibrated plan across measured loops, and participates in a cyclic Latin-square scenario schedule. The result is effective acquire/release token-protocol round-trip time, not an isolated physical cache-line migration or coherence-fabric latency. Full methodology and JSON schema 2 contract: [CORE_TO_CORE_WHITEPAPER.md](CORE_TO_CORE_WHITEPAPER.md).
@@ -654,24 +661,27 @@ Contract highlights:
 - Aggregate statistics printed when loop count > 1.
 - Errors and warnings use `Messages::error_prefix()` / `Messages::warning_prefix()` conventions.
 - Live progress uses the shared spinner on `stderr` only when it is a TTY; redirected standard and pattern output contains no carriage-return control sequences.
-- For direct standard/pattern `--output -`, the output session is installed before validation and all runtime console
-  rendering. Post-parse human output therefore goes to stderr, while final JSON bypasses the redirected stream through
-  the retained original stdout buffer. Parse/preflight failures leave stdout empty; help remains human stdout.
+- For every direct CPU `--output -`, the output session is installed before runtime console rendering and worker-thread
+  creation. The general standard/pattern/TLB branch installs it before validation; core-to-core installs it after its
+  combined parse/preflight. Post-parse human output therefore goes to stderr, while final JSON bypasses the redirected
+  stream through the retained original stdout buffer. Parse/preflight and other pre-result failures leave stdout empty;
+  human help remains stdout.
 
 ## 18. JSON Output Contract
 
 JSON writer API (`src/output/json/json_output/json_output.cpp`):
 
-Direct standard and pattern commands can send their existing payload either to an atomic file target or, for exact raw
-`-`, to one final stdout document. This transport does not wrap or rebuild the measurement schema. TLB, core-to-core,
-GPU, and every sweep remain file-only in this revision; [API.md](API.md) is the process-integration contract and support
+Direct standard, pattern, TLB, and core-to-core commands can send their existing payload either to an atomic file target
+or, for exact raw `-`, to one final stdout document. This transport does not wrap or rebuild the measurement schema. GPU
+and every sweep remain file-only in this revision; [API.md](API.md) is the process-integration contract and support
 matrix.
 
 - Standard mode schema 2: `configuration`, `execution_time_sec`, completion counters/status, `results_complete`,
   per-loop `loops`, `main_memory`, `cache`, `timestamp`, and `version`.
 - Pattern mode schema 3: `configuration`, `execution_time_sec`, command status/reason, planned/completed loop and
   measurement counters, `results_complete`, optional retained `patterns` evidence, `timestamp`, and `version`.
-- TLB analysis mode: `configuration`, `execution_time_sec`, `tlb_analysis`, `timestamp`, `version`.
+- TLB analysis schema 4: `configuration`, `execution_time_sec`, `tlb_analysis`, `timestamp`, `version`; conclusions
+  require nested `status: "complete"` and `conclusions_valid: true`.
 - Core-to-core schema 2: calibrated methodology configuration, `core_to_core_latency` command completion metadata, scenario work plans, nullable aggregate values, per-loop order/status/duration/hint/sample-boundary records, and affinity-comparison interpretability metadata.
 - GPU schema 1: top-level mode/schema/methodology/status, exact counters and completeness, effective/copy/DRAM semantics,
   config/argv, environment, backend device/compile/allocation, memory budget, frozen plans, excluded calibration,
@@ -685,8 +695,11 @@ failure may omit `patterns`; main and sweep orchestration still build the comple
 classifying the failure.
 
 Command completeness for standard and pattern requires both `status == "complete"` and `results_complete == true`.
-Metric consumers must additionally require the selected measurement's status and non-null value; an intentionally
-skipped pattern measurement can coexist with command completeness without being consumable as a measured value.
+TLB requires `tlb_analysis.status == "complete" && tlb_analysis.conclusions_valid == true`; core-to-core requires
+`core_to_core_latency.status == "complete" && core_to_core_latency.measurements_complete == true`. Metric consumers must
+additionally require the selected measurement's status and non-null value; an intentionally skipped pattern measurement
+can coexist with command completeness without being consumable as a measured value. Affinity-scenario interpretation
+also requires `affinity_hint_comparison_interpretable == true`.
 
 ### 18.1 Configuration keys
 
@@ -773,9 +786,11 @@ affect serialization. Stdout checkpoints are lazy successful no-ops and do not b
 use atomic replacement. Final stdout serialization uses two-space indentation and one trailing newline, checks write
 and flush state, contains exceptions, and restores the prior stream buffer through the scope-bound destructor.
 
-Direct standard and pattern command boundaries select this infrastructure after successful parse/help handling and
-before validation. Other direct modes and both sweep boundaries remain on their real-file output paths in this revision.
-The supported process contract, including the help and pre-result-failure exceptions, is defined in [API.md](API.md).
+Direct standard, pattern, and TLB command boundaries select this infrastructure after successful parse/help handling and
+before validation. Core-to-core selects it after its dedicated combined parse/preflight and help handling. GPU and both
+sweep boundaries remain on their real-file output paths in this revision. Direct pattern, TLB, and core-to-core files
+receive one atomic final write; standard files additionally retain intermediate checkpoints. The supported process
+contract, including help and pre-result-failure exceptions, is defined in [API.md](API.md).
 
 ### 18.7 Path behavior
 
@@ -788,6 +803,11 @@ This codebase uses boundary-aware mixed error handling:
 - Program orchestration and most modules: return codes (`EXIT_SUCCESS`/`EXIT_FAILURE`).
 - Argument parsing internals: exceptions for parsing/validation, converted to return codes at API boundary.
 - Allocation internals: null smart-pointer returns for allocation failure.
+- Parse/preflight failures, the general pipeline's early timer failure, and TLB setup/allocation failures before result
+  initialization have no schema-valid payload. A stdout target remains empty and the diagnostic/process failure are
+  authoritative on those paths.
+- After a direct CPU mode initializes a representable result, execution status and payload persistence are handled
+  separately so interrupted, error, or failed evidence can still reach the selected target.
 - Metal backend calls: synchronous/noexcept status results; nil/NSError/command failures become stable reason codes plus
   separate raw diagnostics. GPU correctness/timer invalidity fails the run, unsupported capability remains distinct, and
   graceful interruption is process success with invalid conclusions.

@@ -167,7 +167,11 @@ std::string error_threads_invalid(long long value, long long min_val, long long 
 
 const std::string& error_analyze_tlb_must_be_used_alone() {
   static const std::string msg =
-      "--analyze-tlb allows only optional -o/--output <file>, -s/--latency-stride-bytes <bytes>, -m/--latency-chain-mode <mode>, -D/--tlb-density <low|medium|high>, --seed <uint64>, -S/--sweep <key=...>, and -X/--sweep-max-runs <count> (no other options allowed)";
+      "--analyze-tlb allows only optional -o/--output <target>, "
+      "-s/--latency-stride-bytes <bytes>, -m/--latency-chain-mode <mode>, "
+      "-D/--tlb-density <low|medium|high>, --seed <uint64>, "
+      "-S/--sweep <key=...>, and -X/--sweep-max-runs <count> "
+      "(no other options allowed)";
   return msg;
 }
 
@@ -260,6 +264,13 @@ std::string error_json_output_initialization_failed(const std::string& error_det
 
 std::string error_json_payload_construction_failed(const std::string& error_details) {
   return "JSON payload construction failed: " +
+         (error_details.empty() ? "unknown exception" : error_details);
+}
+
+std::string error_command_execution_exception(
+    const std::string& command_name,
+    const std::string& error_details) {
+  return command_name + " failed with unexpected exception: " +
          (error_details.empty() ? "unknown exception" : error_details);
 }
 

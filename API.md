@@ -8,16 +8,18 @@ Runtime behavior and executable integration tests are authoritative if this docu
 
 ## Transport support in this revision
 
-The first public slice enables the stdout JSON transport for direct standard and pattern commands. Other modes retain
-their existing file-output contract until their mode-specific transport slices are implemented.
+All direct CPU modes support the stdout JSON transport. Parameter sweeps and GPU mode retain their file-output contract
+in this revision.
 
 | Command | Real JSON file | Exact `--output -` stdout transport |
 |---|---:|---:|
 | Direct `--benchmark` | Yes | Yes |
 | Direct `--patterns` | Yes | Yes |
 | Standard or pattern `--sweep` | Yes | Not yet supported |
-| Direct or sweep `--analyze-tlb` | Yes | Not yet supported |
-| Direct or sweep `--analyze-core2core` | Yes | Not yet supported |
+| Direct `--analyze-tlb` | Yes | Yes |
+| `--analyze-tlb --sweep ...` | Yes | Not yet supported |
+| Direct `--analyze-core2core` | Yes | Yes |
+| `--analyze-core2core --sweep ...` | Yes | Not yet supported |
 | Direct `--gpu-bandwidth` | Yes | Not yet supported |
 
 Callers must use a real file path for every row whose stdout transport is not yet supported. GPU schema 1 does not
@@ -25,7 +27,7 @@ support sweeps.
 
 ## Invocation and stream contract
 
-For a direct standard or pattern command, an output value that is exactly `-` selects stdout JSON:
+For a direct standard, pattern, TLB, or core-to-core command, an output value that is exactly `-` selects stdout JSON:
 
 ```bash
 memory_benchmark --benchmark --only-bandwidth --count 5 --buffer-size 512 --output -
@@ -48,7 +50,14 @@ After successful parsing and mode selection, a supported machine-output command 
 
 Argument parsing and preflight validation can fail before a result state exists. Those failures return a non-zero process
 status, write the centralized diagnostic to stderr, and leave stdout empty. Help is deliberately human-facing: `--help`
-prints normal help to stdout and does not promise JSON even when combined with `--output -`.
+prints normal help to stdout and does not promise JSON when the selected parser accepts that combination. The standalone
+TLB whitelist rejects `--analyze-tlb --help`; use `--help` without that mode flag.
+
+Some runtime setup failures also occur before a schema-valid payload exists. The general command's early timer failure
+and TLB setup, memory-budget, or allocation failures before analysis-state initialization therefore produce stderr plus a
+non-zero status and leave stdout empty. Once a mode has initialized a representable result, graceful interruption or a
+normal runtime failure emits the available partial, interrupted, error, or failed payload. Core-to-core measurement
+failures and TLB measurement errors fall on this post-initialization path.
 
 Abrupt process termination, a crash, `SIGKILL`, or an unusable stdout pipe cannot guarantee a final document. Version 1
 does not install a process-wide `SIGPIPE` policy.
@@ -58,7 +67,9 @@ does not install a process-wide `SIGPIPE` policy.
 Real file targets retain their existing persistence behavior:
 
 - standard commands atomically checkpoint after completed loop-state changes and write their normal terminal result;
-- pattern commands write their terminal payload through the shared atomic file writer;
+- pattern, TLB, and core-to-core commands write one terminal payload through the shared atomic file writer;
+- parameter sweeps atomically checkpoint their combined envelope after each attempted run;
+- GPU mode retains its mode-specific terminal-measurement and failure checkpoints;
 - a temporary `<target>.tmp` file is replaced atomically, and a failed replacement preserves the preceding destination
   when possible.
 
@@ -66,7 +77,7 @@ Stdout is final-only. Intermediate standard checkpoint requests are successful n
 stop observations, counters, cleanup, and final result construction still occur. The command serializes one terminal
 snapshot after orchestration finishes. Stdout is not JSON Lines and never contains a sequence of checkpoint documents.
 
-Use a real file target when crash-resilient intermediate standard state is required.
+Use a real file target when crash-resilient standard or sweep checkpoints are required.
 
 ## Result schemas and completion
 
@@ -77,19 +88,23 @@ contract version 1 first appears in software version `0.62.0`.
 |---|---|---|
 | Standard | `configuration.benchmark_schema_version == 2` | `status == "complete" && results_complete == true` |
 | Patterns | `configuration.pattern_schema_version == 3` | `status == "complete" && results_complete == true` |
+| TLB | `configuration.schema_version == 4` | `tlb_analysis.status == "complete" && tlb_analysis.conclusions_valid == true` |
+| Core-to-core | `configuration.schema_version == 2` | `core_to_core_latency.status == "complete" && core_to_core_latency.measurements_complete == true` |
 
 Command completeness does not make every optional metric available. A selected standard measurement must have its
 mode-specific measured/quality state and a non-null value. A pattern measurement may be intentionally `skipped` while
 the command remains complete; consumers of a particular pattern metric must require `status == "measured"` and a
-non-null value.
+non-null value. TLB consumers must also honor the selected detection/evidence fields. Core-to-core affinity-scenario
+conclusions additionally require `affinity_hint_comparison_interpretable == true`.
 
 Graceful interruption or runtime failure after a representable result state has been initialized emits the available
-partial or failed JSON snapshot. The execution status and payload are independent: a non-zero status must not cause a
-caller to discard evidence without parsing it, and exit status zero does not prove that conclusions are complete.
+partial, interrupted, error, or failed JSON snapshot. The execution status and payload are independent: a non-zero status
+must not cause a caller to discard evidence without parsing it, and exit status zero does not prove that conclusions are
+complete.
 
 ## Consumer acceptance procedure
 
-A caller accepts a standard or pattern conclusion only after all of the following checks succeed:
+A caller accepts a direct CPU conclusion only after all of the following checks succeed:
 
 1. Launch the executable with an argv array; do not construct an unquoted shell command from external input.
 2. Capture stdout and stderr separately and wait for the process and both streams to finish.
@@ -124,10 +139,23 @@ jq -e '.configuration.pattern_schema_version == 3 and
        .status == "complete" and .results_complete == true' patterns.json
 ```
 
+The corresponding TLB and core-to-core command predicates are:
+
+```bash
+jq -e '.configuration.schema_version == 4 and
+       .tlb_analysis.status == "complete" and
+       .tlb_analysis.conclusions_valid == true' tlb.json
+
+jq -e '.configuration.schema_version == 2 and
+       .core_to_core_latency.status == "complete" and
+       .core_to_core_latency.measurements_complete == true' core2core.json
+```
+
 ## Compatibility policy
 
 - `version` identifies the application release; it is not a result schema version.
-- Standard schema 2 and pattern schema 3 remain authoritative at their existing locations.
+- Standard schema 2, pattern schema 3, TLB schema 4, and core-to-core schema 2 remain authoritative at their existing
+  locations. The schema field is intentionally not normalized across these established payloads.
 - Additive optional fields may remain within a schema version only when old consumers can safely ignore them.
 - Removing or renaming a field, changing its type, or changing its meaning requires a mode schema-version bump.
 - A methodology change that affects comparison requires the mode's methodology-version mechanism even when JSON shape

@@ -96,6 +96,8 @@ std::string error_file_write_failed(const std::string& file_path, const std::str
 std::string error_json_stdout_write_failed(const std::string& error_details);
 std::string error_json_output_initialization_failed(const std::string& error_details);
 std::string error_json_payload_construction_failed(const std::string& error_details);
+std::string error_command_execution_exception(const std::string& command_name,
+                                              const std::string& error_details);
 std::string error_file_permission_denied(const std::string& file_path);
 std::string error_file_directory_creation_failed(const std::string& dir_path, const std::string& error_details);
 std::string error_stride_too_small();
