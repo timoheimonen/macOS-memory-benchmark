@@ -123,23 +123,101 @@ void add_standard_benchmark_results(nlohmann::ordered_json& output,
 int write_json_to_file(const std::filesystem::path& file_path,
                        const nlohmann::ordered_json& json_output,
                        bool announce_success = true);
+
+/**
+ * @brief Build the standard benchmark schema-3 payload in memory.
+ *
+ * The document shape is governed by
+ * `configuration.benchmark_schema_version`; this builder performs no output
+ * target classification or I/O.
+ *
+ * @param config Immutable command configuration recorded in the payload.
+ * @param stats Immutable terminal or intermediate statistics snapshot,
+ *        including retained partial evidence and completion counters.
+ * @param total_execution_time_sec Command elapsed time in seconds.
+ * @return A caller-owned ordered JSON value containing the complete schema-3
+ *         snapshot. The returned value retains no references to the inputs.
+ * @throws std::exception If allocation, timestamp creation, string handling,
+ *         or JSON construction fails.
+ * @note Concurrent calls are safe when each caller keeps its referenced inputs
+ *       immutable for the duration of the call.
+ * @note Schema 3 always contains string `configuration.output_file`; it
+ *       preserves the raw direct target and is empty for a nested sweep result
+ *       because the sweep envelope owns persistence. Top-level boolean
+ *       `conclusions_valid` is true exactly when `results_complete` is true.
+ */
 nlohmann::ordered_json build_results_json(const BenchmarkConfig& config,
                                           const BenchmarkStatistics& stats,
                                           double total_execution_time_sec);
+
+/**
+ * @brief Build the pattern benchmark schema-3 payload in memory.
+ *
+ * The document shape is governed by
+ * `configuration.pattern_schema_version`; this builder performs no output
+ * target classification or I/O.
+ *
+ * @param config Immutable command configuration recorded in the payload.
+ * @param stats Immutable pattern statistics and retained per-loop evidence.
+ * @param total_execution_time_sec Command elapsed time in seconds.
+ * @return A caller-owned ordered JSON value containing the complete schema-3
+ *         snapshot. The returned value retains no references to the inputs.
+ * @throws std::exception If allocation, timestamp creation, string handling,
+ *         or JSON construction fails.
+ * @note Concurrent calls are safe when each caller keeps its referenced inputs
+ *       immutable for the duration of the call.
+ */
 nlohmann::ordered_json build_pattern_results_json(const BenchmarkConfig& config,
                                                   const PatternStatistics& stats,
                                                   double total_execution_time_sec);
 
-// Public API functions
-// Save benchmark results to JSON file
-// Returns EXIT_SUCCESS on success, EXIT_FAILURE on error
+/**
+ * @brief Build and atomically replace a file with standard schema-3 JSON.
+ *
+ * This is a legacy file-only adapter. An empty target is a successful no-op.
+ * Command code that accepts stdout must first classify the raw target and use
+ * `JsonOutputSession` for the exact `-` sentinel.
+ *
+ * @param config Immutable configuration whose non-empty `output_file` names a
+ *        real file target.
+ * @param stats Immutable statistics snapshot to serialize.
+ * @param total_execution_time_sec Command elapsed time in seconds.
+ * @param announce_success Whether a successful replacement prints the
+ *        centralized save announcement.
+ * @return `EXIT_SUCCESS` for a disabled target or successful atomic replace;
+ *         `EXIT_FAILURE` for a contained file-output failure.
+ * @throws std::exception If payload construction or output-path resolution
+ *         fails before the atomic writer's return-code boundary.
+ * @pre A non-empty `config.output_file` is not the exact stdout sentinel `-`.
+ * @note The function retains no references and is synchronous. Callers must
+ *       not mutate its inputs or target path concurrently.
+ */
 int save_results_to_json(const BenchmarkConfig& config,
                          const BenchmarkStatistics& stats,
                          double total_execution_time_sec,
                          bool announce_success = true);
 
-// Save pattern benchmark results to JSON file
-// Returns EXIT_SUCCESS on success, EXIT_FAILURE on error
-int save_pattern_results_to_json(const BenchmarkConfig& config, const PatternStatistics& stats, double total_execution_time_sec);
+/**
+ * @brief Build and atomically replace a file with pattern schema-3 JSON.
+ *
+ * This is a legacy file-only adapter. An empty target is a successful no-op.
+ * Command code that accepts stdout must first classify the raw target and use
+ * `JsonOutputSession` for the exact `-` sentinel.
+ *
+ * @param config Immutable configuration whose non-empty `output_file` names a
+ *        real file target.
+ * @param stats Immutable pattern statistics snapshot to serialize.
+ * @param total_execution_time_sec Command elapsed time in seconds.
+ * @return `EXIT_SUCCESS` for a disabled target or successful atomic replace;
+ *         `EXIT_FAILURE` for a contained file-output failure.
+ * @throws std::exception If payload construction or output-path resolution
+ *         fails before the atomic writer's return-code boundary.
+ * @pre A non-empty `config.output_file` is not the exact stdout sentinel `-`.
+ * @note The function retains no references and is synchronous. Callers must
+ *       not mutate its inputs or target path concurrently.
+ */
+int save_pattern_results_to_json(const BenchmarkConfig& config,
+                                 const PatternStatistics& stats,
+                                 double total_execution_time_sec);
 
 #endif // JSON_OUTPUT_JSON_OUTPUT_API_H

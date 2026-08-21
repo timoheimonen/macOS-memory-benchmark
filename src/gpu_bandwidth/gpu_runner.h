@@ -25,6 +25,8 @@
 #include "gpu_bandwidth/gpu_bandwidth.h"
 #include "utils/descriptive_statistics.h"
 
+class JsonOutputSession;
+
 enum class GpuMeasurementStatus {
   NotRun = 0,
   Measured,
@@ -151,16 +153,64 @@ GpuMemoryBudget calculate_gpu_memory_budget(size_t buffer_size_bytes,
                                             size_t auxiliary_bytes);
 
 /**
- * @brief Run calibration and all balanced operation tasks on one backend.
+ * @brief Run calibration and all balanced operation tasks using legacy file
+ *        checkpointing.
  *
- * The runner owns completion-wins orchestration but never polls stop state
- * inside a started warmup/precondition/timed/validation task. Exceptions from
- * hooks are converted to an explicit failed run; production backends are
- * required to honor their noexcept boundary.
+ * This overload is a file-only adapter: empty `config.output_file` disables
+ * persistence, while a non-empty target must be a real file rather than the
+ * exact stdout sentinel. Command code must classify output targets and call
+ * the `JsonOutputSession` overload. The runner owns completion-wins
+ * orchestration but never polls stop state inside a started
+ * warmup/precondition/timed/validation task. Exceptions from hooks are
+ * converted to an explicit failed run; production backends are required to
+ * honor their noexcept boundary.
+ *
+ * @param config Validated GPU configuration. A non-empty `output_file` names
+ *        a real file checkpoint target.
+ * @param backend Backend instance owned by the caller for the call duration.
+ * @param result Receives initialized, partial, terminal, or failed state.
+ * @param hooks Optional deterministic seams for stop and checkpoint behavior.
+ * @return `EXIT_SUCCESS` for complete or graceful interrupted execution;
+ *         `EXIT_FAILURE` for failed or unsupported execution or persistence
+ *         failure.
+ * @pre A non-empty `config.output_file` is not the exact stdout sentinel `-`.
+ * @note Called synchronously and not thread-safe. Inputs and hook state must
+ *       not be accessed concurrently for the call duration.
  */
 int run_gpu_bandwidth_suite(const GpuBandwidthConfig& config,
                             GpuBackend& backend,
                             GpuRunResult& result,
+                            const GpuRunnerTestHooks& hooks = {});
+
+/**
+ * @brief Run the suite with command-owned JSON checkpoint transport.
+ *
+ * Hook checkpoints take precedence over the output session. Otherwise each
+ * logical checkpoint is offered to @p output_session: file sessions persist
+ * the existing atomic checkpoint sequence, while stdout sessions perform lazy
+ * no-op persistence and retain the terminal result in @p result for the
+ * command boundary to serialize exactly once. The session must outlive this
+ * call and must not be shared concurrently. This overload does not emit the
+ * final stdout document.
+ *
+ * @param config Validated GPU command configuration retained in schema v1.
+ * @param backend Backend instance owned by the caller for the call duration.
+ * @param result Receives initialized, partial, terminal, or failed state.
+ * @param output_session Command-owned checkpoint transport.
+ * @param hooks Optional deterministic test seams; hook callbacks override the
+ *        session checkpoint sink and exceptions are contained as failed runs.
+ * @return `EXIT_SUCCESS` for complete or graceful interrupted execution;
+ *         `EXIT_FAILURE` for failed or unsupported execution or persistence
+ *         failure.
+ * @pre `output_session` represents `config.output_file`, classified with
+ *      `JsonFilePathPolicy::PreserveRaw` by the command boundary.
+ * @note Called synchronously and not thread-safe. The backend, result, session,
+ *       and hook state must not be accessed concurrently for the call duration.
+ */
+int run_gpu_bandwidth_suite(const GpuBandwidthConfig& config,
+                            GpuBackend& backend,
+                            GpuRunResult& result,
+                            JsonOutputSession& output_session,
                             const GpuRunnerTestHooks& hooks = {});
 
 const char* gpu_measurement_status_to_string(GpuMeasurementStatus status);

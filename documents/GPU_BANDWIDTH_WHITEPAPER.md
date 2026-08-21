@@ -1,6 +1,6 @@
 # Metal GPU Memory Bandwidth Whitepaper
 
-- **Software version:** 0.61.2
+- **Software version:** 0.62.0
 - **JSON schema:** 1
 - **Methodology:** `gpu-bandwidth-v1-private-runtime-single-cmdbuf-calibrated-balanced`
 - **Platform:** macOS on Apple Silicon
@@ -52,7 +52,7 @@ boundary. It does not prove that every byte reached physical DRAM. GPU caches, c
 reduction used for correctness, other GPU work, thermals, Low Power Mode, power management, the runtime Metal compiler,
 and the driver can affect the value.
 
-Every schema 1 file therefore records:
+Every schema 1 payload therefore records:
 
 ```json
 "dram_residency": "unverified"
@@ -80,7 +80,7 @@ The exact schema 1 whitelist is:
 - `-i, --iterations <count>`
 - `-r, --count <count>`
 - `--seed <uint64>`
-- `-o, --output <file>`
+- `-o, --output <target>`
 - `-h, --help`
 
 All other flags, including every other primary mode, CPU thread/cache/latency modifiers, non-cacheable mode, and sweep
@@ -97,12 +97,18 @@ Defaults and limits:
 | Count | Three loops |
 | Iterations omitted | Automatic per-operation duration calibration |
 | Seed omitted | One generated base seed for the command |
-| Output omitted | Console only; no checkpoint file |
+| Output omitted or empty | Console only; JSON output is disabled for the direct command |
 
 `--buffer-size` uses the project MB convention of 1,048,576 bytes. The requested value is never silently reduced. A
-value below 64 MB fails before Metal initialization and produces no result JSON. After valid parsing, Metal
-`maxBufferLength`, suite memory budget, and actual allocation can still fail with an auditable schema checkpoint when
-`--output` is present.
+value below 64 MB fails before Metal initialization and produces no result JSON. After valid parsing and result
+initialization, Metal capability, compilation, `maxBufferLength`, suite memory budget, and actual allocation can still
+fail with an auditable schema result when a non-empty `--output` target enables JSON.
+
+The raw target is classified after the dedicated parser and human help path. Exact `--output -` reserves stdout for one
+terminal schema 1 document and routes the runtime banner, progress, results, warnings, and errors to stderr. Exact
+`--output ./-` remains an ordinary file named `-`; `-G` and every other non-empty target are also files. An empty value
+disables JSON for this direct-only mode. Help remains human-facing stdout, while parser/config errors and a
+backend-factory failure before result initialization leave stdout empty.
 
 An explicit `--iterations` is the exact number of full-buffer passes and therefore the exact number of timed dispatches.
 It bypasses pilot/correction calibration but not measured-task warmup or preconditioning. It is rejected before GPU work
@@ -427,17 +433,29 @@ failure coincides with a pending signal, the current real failure still wins, `i
 the not-started tail uses the interruption finalization above. This distinction preserves both failure precedence and an
 accurate record of why later work did not start.
 
-With `--output`, the runner uses the shared atomic JSON writer after each terminal measurement. It checks stop once before
-and once immediately after that checkpoint. If the post-checkpoint read first sees the signal, it writes at most one
-additional interruption checkpoint, then stops. Synthetic interruption finalization does not write one file per slot.
+With a non-empty `--output` target, the runner offers a logical checkpoint after each terminal measurement. It checks
+stop once before and once immediately after that boundary. If the post-checkpoint read first sees the signal, it offers
+at most one additional interruption checkpoint, then stops. Synthetic interruption finalization does not offer one
+checkpoint per slot.
 
-Valid post-parse device/capability/runtime-compile/allocation/work-plan failures write one auditable checkpoint. Parser
-and config failures, including a buffer below 64 MB, produce only the error/exit failure. A checkpoint write failure makes
-the run failed; disk may still contain the previous successful atomic snapshot.
+A real file target atomically persists each logical checkpoint and retains the existing post-release replacement. Valid
+post-parse initialized device/capability/runtime-compile/allocation/work-plan failures write one auditable checkpoint. A
+checkpoint write failure makes the run failed; disk may still contain the previous successful atomic snapshot. The
+command boundary does not add a redundant outer file write.
+
+For exact `--output -`, every checkpoint is a lazy successful persistence no-op: its payload builder is not invoked and
+no intermediate JSON is serialized, but state changes and both stop reads remain identical to the file path. After
+resource release and human reporting, the command boundary writes exactly one terminal document with two-space
+indentation and one trailing newline. Initialized `unsupported`, interrupted, partial, or failed state remains in that
+payload; unsupported and failures retain a non-zero process status, while graceful interruption retains its established
+successful process status. Parser/config and backend-factory failures before result initialization produce only the
+stderr diagnostic and process failure. A terminal stdout write/flush failure returns failure without changing the
+already-computed measurement state.
 
 ## 14. GPU JSON Schema 1
 
-The top-level discriminator is independent of standard schema 2:
+The top-level discriminator is independent of current standard schema 3. Released standard schema 2 is historical and
+unsupported by the bundled standard-memory examples, which track the current producer:
 
 ```json
 {
@@ -464,7 +482,9 @@ A standard/TLB plotter must reject this discriminator unless it explicitly imple
 ### 14.2 Configuration and counters
 
 `configuration` records per-buffer MB and exact bytes, explicit iterations or null, automatic/fixed work policy, loop
-count, exact base seed/source, output path or null, and exact argv. `counters` uses the definitions in Section 12.
+count, exact base seed/source, raw output target or null, and exact argv. For stdout, `output_file` remains the original
+string `"-"`; it is a target token in this case rather than a filesystem path. `counters` uses the definitions in
+Section 12.
 
 ### 14.3 Environment, device, compilation, and allocation
 
@@ -600,6 +620,13 @@ sweeps, `.metallib`, or binary archives requires an explicit methodology and sch
 
 ## 17. Consumer Acceptance Checklist
 
+For `--output -`, launch with an argv array and drain stdout and stderr simultaneously while the child runs, or use a
+platform/language `communicate`-equivalent that drains both. Then wait for both streams and the process, and parse stdout
+as exactly one JSON value with no trailing non-whitespace. Waiting for process exit before sequentially reading pipe
+captures can deadlock when either pipe fills. Empty stdout plus stderr/process failure is the expected shape for a
+pre-result failure. A non-zero process can still carry initialized unsupported or failed evidence, but it cannot be
+accepted as a complete measurement.
+
 Before using a GPU schema 1 result as a complete measurement, require:
 
 1. `mode == "gpu_bandwidth"`, `schema_version == 1`, and the exact expected methodology.
@@ -639,6 +666,9 @@ make test-all
 ./memory_benchmark -h
 ./memory_benchmark --gpu-bandwidth --help
 ```
+
+The aggregate `make test-all` gate requires Python 3; it runs the focused script-example entry test after all GTest
+cases pass. `jq` is not required by this gate.
 
 Real Metal tests may skip on an unsupported/no-device execution environment. That skip does not replace deterministic
 unsupported-path tests and does not create a performance-validation claim.

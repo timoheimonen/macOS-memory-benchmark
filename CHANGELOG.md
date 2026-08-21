@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.62.0] - 2026-08-21
+
+### Added
+  - **Machine-readable stdout for all result-producing modes**: Exact `--output -` now emits one terminal JSON document for standard, pattern, TLB, core-to-core, GPU, and CPU sweep commands while routing human output to stderr. Initialized partial, interrupted, unsupported, and failed evidence is retained when available; failures before result initialization leave stdout empty. File targets keep their atomic checkpoint behavior, and `--output ./-` remains an ordinary file target.
+  - **Process-level machine API**: Added `documents/API.md` as the source of truth for output targets, stdout/stderr rules, schema identities, completion predicates, sweep envelopes, and consumer acceptance.
+
+### Changed
+  - **Project documentation is grouped under `documents/`**: Moved tracked reference, policy, contributor, and methodology documents out of the repository root while keeping `README.md`, `LICENSE`, and `CHANGELOG.md` at the top level, and updated affected references.
+  - **Standard results advance to schema 3**: Current payloads require `configuration.mode: "benchmark"`, string `configuration.output_file`, and top-level `conclusions_valid` matching `results_complete`. Direct outputs preserve the raw target, nested sweep results use an empty target, and the benchmark methodology and measured work are unchanged.
+  - **Output-target parsing preserves raw values**: General parser pre-scans treat one `-o`/`--output` value as opaque, including flag-shaped filenames. Exact `-`, empty direct and sweep targets, `./-`, and ordinary file targets retain their documented transport semantics.
+  - **Sweep and checkpoint evidence is retained consistently**: General and core-to-core sweeps use schema-1 envelopes, preserve initialized nested results and stable failure reasons, and keep checkpoint failures authoritative without retrying a terminal file write. TLB and GPU result construction is separated from persistence so command boundaries can choose file or stdout transport without changing benchmark execution.
+
 ## [0.61.2] - 2026-08-13
 
 ### Changed
@@ -462,7 +474,7 @@ Summary: Fixes cache warmup to honor `num_threads` and adds null/size guards.
 ## [0.52.4] - 2026-01-02
 
 ### Added
-- **Technical Specification document**: Added  [TECHNICAL_SPECIFICATION.md](TECHNICAL_SPECIFICATION.md) documenting system architecture, memory management, low-level ARM64 assembly implementation, benchmark execution flow, system integration, and technical specifications with links to relevant source files and directories.
+- **Technical Specification document**: Added  [TECHNICAL_SPECIFICATION.md](documents/TECHNICAL_SPECIFICATION.md) documenting system architecture, memory management, low-level ARM64 assembly implementation, benchmark execution flow, system integration, and technical specifications with links to relevant source files and directories.
 
 ### Changed
 - **Refactored configuration module**: Split `src/core/config/config.cpp`:

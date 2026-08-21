@@ -111,6 +111,48 @@ TEST(MessagesErrorTest, NumericValidationErrorsHaveExactOutput) {
   expect_exact_messages(cases);
 }
 
+TEST(MessagesErrorTest, JsonStdoutWriteFailureHasExactOutput) {
+  EXPECT_EQ(Messages::json_stdout_reason_stream_unavailable(),
+            "stdout stream is unavailable");
+  EXPECT_EQ(Messages::json_stdout_reason_size_limit_exceeded(),
+            "serialized JSON exceeds stream size limits");
+  EXPECT_EQ(Messages::json_stdout_reason_write_failed(),
+            "write operation failed");
+  EXPECT_EQ(Messages::json_stdout_reason_flush_failed(),
+            "flush operation failed");
+  EXPECT_EQ(Messages::error_json_stdout_write_failed(
+                Messages::json_stdout_reason_flush_failed()),
+            "Failed to write JSON to stdout: flush operation failed");
+  EXPECT_EQ(Messages::error_json_stdout_write_failed(""),
+            "Failed to write JSON to stdout: unknown exception");
+}
+
+TEST(MessagesErrorTest, JsonCommandBoundaryFailuresHaveExactOutput) {
+  EXPECT_EQ(
+      Messages::error_json_output_initialization_failed("cwd unavailable"),
+      "JSON output initialization failed: cwd unavailable");
+  EXPECT_EQ(Messages::error_json_output_initialization_failed(""),
+            "JSON output initialization failed: unknown exception");
+  EXPECT_EQ(
+      Messages::error_json_payload_construction_failed("allocation failed"),
+      "JSON payload construction failed: allocation failed");
+  EXPECT_EQ(Messages::error_json_payload_construction_failed(""),
+            "JSON payload construction failed: unknown exception");
+  EXPECT_EQ(
+      Messages::error_command_execution_exception("TLB analysis",
+                                                  "allocation failed"),
+      "TLB analysis failed with unexpected exception: allocation failed");
+  EXPECT_EQ(
+      Messages::error_command_execution_exception("Core-to-core analysis", ""),
+      "Core-to-core analysis failed with unexpected exception: unknown exception");
+  EXPECT_EQ(
+      Messages::error_sweep_nested_run_exception("allocator failed"),
+      "Sweep nested run failed with unexpected exception: allocator failed");
+  EXPECT_EQ(
+      Messages::error_sweep_nested_run_exception(""),
+      "Sweep nested run failed with unexpected exception: unknown exception");
+}
+
 TEST(MessagesErrorTest, ErrorLatencyChainModeInvalid) {
   std::string msg = Messages::error_latency_chain_mode_invalid();
   EXPECT_NE(msg.find("latency-chain-mode invalid"), std::string::npos);
@@ -138,7 +180,7 @@ TEST(MessagesErrorTest, ErrorLatencyTlbLocalityTooSmallForStride) {
 TEST(MessagesErrorTest, ErrorAnalyzeTlbMustBeUsedAlone) {
   const std::string& msg = Messages::error_analyze_tlb_must_be_used_alone();
   EXPECT_NE(msg.find("--analyze-tlb"), std::string::npos);
-  EXPECT_NE(msg.find("--output"), std::string::npos);
+  EXPECT_NE(msg.find("--output <target>"), std::string::npos);
   EXPECT_NE(msg.find("--latency-stride-bytes"), std::string::npos);
   EXPECT_NE(msg.find("--latency-chain-mode"), std::string::npos);
   EXPECT_NE(msg.find("--tlb-density"), std::string::npos);
@@ -169,12 +211,15 @@ TEST(MessagesErrorTest, GpuMessagesHaveExactMethodologyOutput) {
       std::to_string(Constants::GPU_DEFAULT_LOOP_COUNT) +
       ").\n"
       "      --seed <uint64>   Reproducible base seed; generated once when omitted.\n"
-      "  -o, --output <file>   Atomically checkpoint GPU schema 1 JSON after each result.\n"
+      "  -o, --output <target> JSON output target; exact - writes one final schema 1 document\n"
+      "                        to stdout and routes human output to stderr; exact ./- and\n"
+      "                        every other non-empty target are files with atomic checkpoints.\n"
+      "                        An empty value disables JSON for this direct command.\n"
       "  -h, --help            Show this GPU-mode help and exit\n";
   const std::vector<MessageCase> cases = {
       {"mode isolation", Messages::error_gpu_bandwidth_must_be_used_alone(),
        "--gpu-bandwidth allows only optional -b/--buffer-size <MB>, "
-       "-i/--iterations <count>, -r/--count <count>, -o/--output <file>, "
+       "-i/--iterations <count>, -r/--count <count>, -o/--output <target>, "
        "--seed <uint64>, and -h/--help (no other options allowed)"},
       {"minimum buffer", Messages::error_gpu_buffer_size_below_minimum(32, 64),
        "GPU buffer-size must be at least 64 MB (got 32 MB)"},
@@ -229,13 +274,11 @@ TEST(MessagesErrorTest, ErrorSweepMessages) {
       {"missing parameter", Messages::error_sweep_requires_parameter(),
        "--sweep requires at least one parameter specification"},
       {"missing output", Messages::error_sweep_requires_output(),
-       "--sweep requires --output <file> for the combined JSON result"},
+       "--sweep requires --output <target> for the combined JSON result"},
       {"run cap", Messages::error_sweep_too_many_runs(12, 10),
        "Sweep would generate 12 runs, exceeding --sweep-max-runs 10"},
       {"parameter not allowed", Messages::error_sweep_parameter_not_allowed("cache-size", "--patterns"),
        "Sweep parameter 'cache-size' is not allowed with --patterns"},
-      {"temporary JSON parse", Messages::error_sweep_temp_json_parse_failed("/tmp/run.json", "bad json"),
-       "Failed to read sweep run JSON from /tmp/run.json: bad json"},
   };
 
   expect_exact_messages(cases);
@@ -556,8 +599,13 @@ TEST(MessagesFormattingTest, UsageHeader) {
 
 TEST(MessagesFormattingTest, UsageOptions) {
   std::string msg = Messages::usage_options("memory_benchmark");
+  const std::string standard_schema_contract =
+      "                        JSON uses standard schema " +
+      std::to_string(Constants::BENCHMARK_JSON_SCHEMA_VERSION) +
+      " methodology " + Constants::BENCHMARK_METHODOLOGY_VERSION + ".\n";
   EXPECT_NE(msg.find("memory_benchmark"), std::string::npos);
   EXPECT_NE(msg.find("--benchmark"), std::string::npos);
+  EXPECT_NE(msg.find(standard_schema_contract), std::string::npos);
   EXPECT_NE(msg.find("100-300 ms window"), std::string::npos);
   EXPECT_NE(msg.find("--iterations"), std::string::npos);
   EXPECT_NE(msg.find("--buffer-size"), std::string::npos);
@@ -590,6 +638,21 @@ TEST(MessagesFormattingTest, UsageOptions) {
   EXPECT_NE(msg.find("latency remains"), std::string::npos);
   EXPECT_NE(msg.find("single-threaded"), std::string::npos);
   EXPECT_NE(msg.find("--cache-size"), std::string::npos);
+  EXPECT_NE(msg.find("--output <target>"), std::string::npos);
+  EXPECT_NE(msg.find("Exact - writes one final JSON document to stdout"), std::string::npos);
+  EXPECT_NE(msg.find("one final"), std::string::npos);
+  EXPECT_NE(msg.find("every direct mode and CPU sweep"), std::string::npos);
+  EXPECT_NE(msg.find("routes human output to stderr"), std::string::npos);
+  EXPECT_NE(msg.find("an empty value disables JSON for direct commands"),
+            std::string::npos);
+  EXPECT_NE(msg.find("invalid for sweeps"), std::string::npos);
+  EXPECT_NE(msg.find("Every other non-empty value is a file"),
+            std::string::npos);
+  EXPECT_NE(msg.find("including ./- and names such as -G"),
+            std::string::npos);
+  EXPECT_NE(msg.find("Standard and GPU files retain"), std::string::npos);
+  EXPECT_NE(msg.find("sweep files checkpoint attempts"), std::string::npos);
+  EXPECT_NE(msg.find("Requires --output <target>"), std::string::npos);
   EXPECT_NE(msg.find("-h"), std::string::npos);
   // Check that default values are included
   EXPECT_NE(msg.find(std::to_string(Constants::DEFAULT_ITERATIONS)), std::string::npos);
@@ -606,6 +669,9 @@ TEST(MessagesFormattingTest, UsageExample) {
   EXPECT_NE(msg.find("--iterations"), std::string::npos);
   EXPECT_NE(msg.find("--buffer-size"), std::string::npos);
   EXPECT_NE(msg.find("--output"), std::string::npos);
+  EXPECT_NE(msg.find("Machine JSON:"), std::string::npos);
+  EXPECT_NE(msg.find("--only-bandwidth"), std::string::npos);
+  EXPECT_NE(msg.find("--output -"), std::string::npos);
 }
 
 // ============================================================================

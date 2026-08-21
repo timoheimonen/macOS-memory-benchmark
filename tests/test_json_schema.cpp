@@ -148,13 +148,17 @@ TEST(JsonSchemaTest, BenchmarkExporterIncludesBenchmarkModeAndOmitsEmptySections
 
   const nlohmann::json output_json = read_json_file(config.output_file);
   EXPECT_EQ(output_json[JsonKeys::CONFIGURATION][JsonKeys::MODE], Constants::BENCHMARK_JSON_MODE_NAME);
+  EXPECT_EQ(output_json[JsonKeys::CONFIGURATION]
+                       ["benchmark_schema_version"],
+            Constants::BENCHMARK_JSON_SCHEMA_VERSION);
+  EXPECT_EQ(output_json[JsonKeys::CONFIGURATION]["output_file"], config.output_file);
   EXPECT_TRUE(output_json[JsonKeys::CONFIGURATION].contains(JsonKeys::LATENCY_CHAIN_MODE));
   EXPECT_FALSE(output_json.contains(JsonKeys::MAIN_MEMORY));
   EXPECT_FALSE(output_json.contains(JsonKeys::CACHE));
 }
 
-TEST(JsonSchemaTest, BenchmarkSchemaV2IncludesCompletionAndNullableMeasurements) {
-  const TemporaryJsonFile output_file("benchmark_v2");
+TEST(JsonSchemaTest, BenchmarkSchemaV3IncludesCompletionAndNullableMeasurements) {
+  const TemporaryJsonFile output_file("benchmark_v3");
   BenchmarkConfig config;
   config.output_file = output_file.path().string();
   config.run_benchmark = true;
@@ -205,7 +209,8 @@ TEST(JsonSchemaTest, BenchmarkSchemaV2IncludesCompletionAndNullableMeasurements)
 
   ASSERT_EQ(save_results_to_json(config, stats, 1.0), EXIT_SUCCESS);
   const nlohmann::json output = read_json_file(config.output_file);
-  EXPECT_EQ(output["configuration"]["benchmark_schema_version"], 2);
+  EXPECT_EQ(output["configuration"]["benchmark_schema_version"],
+            Constants::BENCHMARK_JSON_SCHEMA_VERSION);
   EXPECT_EQ(output["configuration"]["methodology_version"],
             "benchmark-v2-calibrated-seeded-balanced");
   EXPECT_DOUBLE_EQ(
@@ -213,8 +218,10 @@ TEST(JsonSchemaTest, BenchmarkSchemaV2IncludesCompletionAndNullableMeasurements)
       0.300);
   EXPECT_EQ(output["configuration"]["benchmark_seed"],
             "18446744073709551615");
+  EXPECT_EQ(output["configuration"]["output_file"], config.output_file);
   EXPECT_EQ(output["status"], "partial");
   EXPECT_FALSE(output["results_complete"].get<bool>());
+  EXPECT_FALSE(output["conclusions_valid"].get<bool>());
   EXPECT_EQ(output["planned_loops"], 2u);
   ASSERT_EQ(output["loops"].size(), 1u);
   const nlohmann::json measurements = output["loops"][0]["measurements"];
@@ -232,6 +239,45 @@ TEST(JsonSchemaTest, BenchmarkSchemaV2IncludesCompletionAndNullableMeasurements)
   EXPECT_EQ(output["main_memory"]["bandwidth"]["read_gb_s"]["value"], 12.5);
   EXPECT_TRUE(output["main_memory"]["bandwidth"]["write_gb_s"]["value"].is_null());
   EXPECT_FALSE(output.dump().find("page_walk_penalty_ns") != std::string::npos);
+}
+
+TEST(JsonSchemaTest, BenchmarkSchemaV3SerializesExactCompletionContract) {
+  struct StatusCase {
+    BenchmarkRunStatus status;
+    const char* expected_status;
+    bool expected_complete;
+  };
+  const std::vector<StatusCase> status_cases = {
+      {BenchmarkRunStatus::Complete, "complete", true},
+      {BenchmarkRunStatus::Partial, "partial", false},
+      {BenchmarkRunStatus::Interrupted, "interrupted", false},
+      {BenchmarkRunStatus::Failed, "failed", false},
+  };
+
+  EXPECT_EQ(Constants::BENCHMARK_JSON_SCHEMA_VERSION, 3);
+  for (const StatusCase& status_case : status_cases) {
+    SCOPED_TRACE(status_case.expected_status);
+    BenchmarkConfig config;
+    BenchmarkStatistics stats;
+    stats.status = status_case.status;
+    stats.planned_loops = 1;
+    stats.completed_loops = 1;
+    stats.planned_measurements = 1;
+    stats.completed_measurements = 1;
+
+    const nlohmann::json output = build_results_json(config, stats, 1.0);
+    EXPECT_EQ(output["configuration"]["benchmark_schema_version"],
+              Constants::BENCHMARK_JSON_SCHEMA_VERSION);
+    ASSERT_TRUE(output["configuration"]["output_file"].is_string());
+    EXPECT_EQ(output["configuration"]["output_file"], "");
+    EXPECT_EQ(output["status"], status_case.expected_status);
+    ASSERT_TRUE(output["results_complete"].is_boolean());
+    ASSERT_TRUE(output["conclusions_valid"].is_boolean());
+    EXPECT_EQ(output["results_complete"].get<bool>(),
+              status_case.expected_complete);
+    EXPECT_EQ(output["conclusions_valid"].get<bool>(),
+              output["results_complete"].get<bool>());
+  }
 }
 
 TEST(JsonSchemaTest, BenchmarkAggregateHeadlineUsesMedianAndReportsCvAndMad) {
@@ -283,16 +329,24 @@ TEST(JsonSchemaTest, BenchmarkCheckpointAtomicallyProgressesToComplete) {
 
   ASSERT_EQ(save_results_to_json(config, stats, 0.5, false), EXIT_SUCCESS);
   nlohmann::json output = read_json_file(config.output_file);
+  EXPECT_EQ(output["configuration"]["benchmark_schema_version"],
+            Constants::BENCHMARK_JSON_SCHEMA_VERSION);
+  EXPECT_EQ(output["configuration"]["output_file"], config.output_file);
   EXPECT_EQ(output["status"], "partial");
   EXPECT_FALSE(output["results_complete"].get<bool>());
+  EXPECT_FALSE(output["conclusions_valid"].get<bool>());
 
   stats.status = BenchmarkRunStatus::Complete;
   stats.status_reason.clear();
   stats.completed_loops = 2;
   ASSERT_EQ(save_results_to_json(config, stats, 1.0, false), EXIT_SUCCESS);
   output = read_json_file(config.output_file);
+  EXPECT_EQ(output["configuration"]["benchmark_schema_version"],
+            Constants::BENCHMARK_JSON_SCHEMA_VERSION);
+  EXPECT_EQ(output["configuration"]["output_file"], config.output_file);
   EXPECT_EQ(output["status"], "complete");
   EXPECT_TRUE(output["results_complete"].get<bool>());
+  EXPECT_TRUE(output["conclusions_valid"].get<bool>());
   EXPECT_FALSE(std::filesystem::exists(config.output_file + ".tmp"));
 }
 
@@ -877,7 +931,7 @@ TEST(JsonSchemaTest, TlbAnalysisExporterIncludesModeAndCoreCounts) {
             std::string::npos);
 }
 
-TEST(JsonSchemaTest, TlbAnalysisExporterOmitsRemovedAliasesAndHandlesUnavailableComparison) {
+TEST(JsonSchemaTest, TlbAnalysisBuilderCoversStatusesAndExporterHandlesUnavailableComparison) {
   const TemporaryJsonFile incomplete_output("tlb_page_walk_incomplete");
   const TemporaryJsonFile fallback_output("tlb_256mb_fallback");
   BenchmarkConfig config;
@@ -943,6 +997,37 @@ TEST(JsonSchemaTest, TlbAnalysisExporterOmitsRemovedAliasesAndHandlesUnavailable
       false,
       3.0,
   };
+
+  struct StatusCase {
+    const char* status;
+    bool conclusions_valid;
+  };
+  const std::vector<StatusCase> status_cases = {
+      {"complete", true},
+      {"partial", false},
+      {"interrupted", false},
+      {"error", false},
+  };
+  for (const StatusCase& status_case : status_cases) {
+    SCOPED_TRACE(status_case.status);
+    context.analysis_status = status_case.status;
+    context.conclusions_valid = status_case.conclusions_valid;
+    const nlohmann::ordered_json payload = build_tlb_analysis_json(context);
+    const nlohmann::ordered_json& analysis = payload["tlb_analysis"];
+
+    EXPECT_EQ(analysis["status"], status_case.status);
+    EXPECT_EQ(analysis["conclusions_valid"],
+              status_case.conclusions_valid);
+    EXPECT_FALSE(analysis.contains("status_reason"));
+    if (!status_case.conclusions_valid) {
+      EXPECT_FALSE(analysis["l1_tlb_detection"]["detected"]);
+      EXPECT_FALSE(analysis["l2_tlb_detection"]["detected"]);
+      EXPECT_FALSE(analysis["private_cache_knee"]["detected"]);
+    }
+  }
+
+  context.analysis_status = "interrupted";
+  context.conclusions_valid = false;
 
   ASSERT_EQ(save_tlb_analysis_to_json(context), EXIT_SUCCESS);
   const nlohmann::json output_json = read_json_file(config.output_file);
@@ -1062,6 +1147,55 @@ TEST(JsonSchemaTest, CoreToCoreJsonBuilderReturnsInMemoryPayload) {
   EXPECT_TRUE(output_json.contains("core_to_core_latency"));
   EXPECT_EQ(output_json["core_to_core_latency"]["scenarios"][0]["name"],
             Constants::CORE_TO_CORE_SCENARIO_NO_AFFINITY);
+}
+
+TEST(JsonSchemaTest,
+     CoreToCoreBuilderRetainsFailedAndInterruptedIncompleteState) {
+  struct StatusCase {
+    const char* command_status;
+    CoreToCoreMeasurementStatus scenario_status;
+  };
+  const StatusCase status_cases[] = {
+      {"failed", CoreToCoreMeasurementStatus::Failed},
+      {"interrupted", CoreToCoreMeasurementStatus::Interrupted},
+  };
+
+  CoreToCoreLatencyConfig config;
+  config.loop_count = 2;
+  config.latency_sample_count = 1;
+  const std::string cpu_name = "test-cpu";
+
+  for (const StatusCase& status_case : status_cases) {
+    SCOPED_TRACE(status_case.command_status);
+    CoreToCoreLatencyScenarioResult scenario;
+    scenario.scenario_name = Constants::CORE_TO_CORE_SCENARIO_NO_AFFINITY;
+    scenario.status = status_case.scenario_status;
+    scenario.status_reason = "command-incomplete";
+    scenario.planned_loops = 2;
+    scenario.completed_loops = 1;
+    const std::vector<CoreToCoreLatencyScenarioResult> scenarios = {scenario};
+    const CoreToCoreLatencyJsonContext context = {
+        config, cpu_name, 4, 6, 20000, 1000000, 2000, scenarios, 1.5,
+        status_case.command_status, 6, 1};
+
+    const nlohmann::ordered_json payload =
+        build_core_to_core_latency_json(context);
+    const nlohmann::ordered_json& result =
+        payload["core_to_core_latency"];
+
+    EXPECT_EQ(payload[JsonKeys::CONFIGURATION]["schema_version"], 2);
+    EXPECT_EQ(result["status"], status_case.command_status);
+    EXPECT_EQ(result["planned_measurements"], 6u);
+    EXPECT_EQ(result["completed_measurements"], 1u);
+    EXPECT_FALSE(result["measurements_complete"]);
+    EXPECT_FALSE(result["affinity_hint_comparison_interpretable"]);
+    ASSERT_EQ(result["scenarios"].size(), 1u);
+    EXPECT_EQ(result["scenarios"][0]["status"],
+              core_to_core_measurement_status_to_string(
+                  status_case.scenario_status));
+    EXPECT_EQ(result["scenarios"][0]["planned_loops"], 2u);
+    EXPECT_EQ(result["scenarios"][0]["completed_loops"], 1u);
+  }
 }
 
 TEST(JsonSchemaTest, CoreToCoreV2SerializesCalibratedBalancedAuditTrail) {

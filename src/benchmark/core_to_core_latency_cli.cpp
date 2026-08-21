@@ -29,8 +29,10 @@
 #include "benchmark/core_to_core_sweep_runner.h"
 
 #include <cstdlib>
+#include <exception>
 #include <iostream>
 #include <limits>
+#include <optional>
 #include <stdexcept>
 #include <string>
 
@@ -40,6 +42,7 @@
 #include "core/signal/signal_handler.h"
 #include "output/console/messages/messages_api.h"
 #include "output/console/output_printer.h"
+#include "output/json/json_output/json_output_session.h"
 
 namespace {
 
@@ -60,6 +63,24 @@ constexpr const char* OPT_SWEEP_MAX_RUNS_LONG = "--sweep-max-runs";
 
 bool is_option(const std::string& arg, const char* short_option, const char* long_option) {
   return arg == short_option || arg == long_option;
+}
+
+void report_json_output_initialization_failure(const std::string& raw_output,
+                                               const std::string& details) noexcept {
+  try {
+    std::cerr << Messages::error_prefix();
+    if (raw_output == "-") {
+      std::cerr << Messages::error_json_stdout_write_failed(
+          Messages::error_json_output_initialization_failed(details));
+    } else {
+      std::cerr << Messages::error_file_write_failed(
+          raw_output,
+          Messages::error_json_output_initialization_failed(details));
+    }
+    std::cerr << std::endl;
+  } catch (...) {
+    // A secondary diagnostic failure must not escape the command boundary.
+  }
 }
 
 // Shared validator for positive integer options used by standalone mode flags.
@@ -356,11 +377,45 @@ int run_core_to_core_latency_mode(int argc, char* argv[]) {
     return EXIT_SUCCESS;
   }
 
-  if (config.run_sweep) {
-    return run_core_to_core_latency_sweep(config);
+  std::optional<JsonOutputSession> output_session;
+  try {
+    output_session.emplace(make_json_output_target(
+        config.output_file,
+        JsonFilePathPolicy::ResolveAgainstCurrentDirectory));
+  } catch (const std::exception& error) {
+    report_json_output_initialization_failure(config.output_file,
+                                              error.what());
+    return EXIT_FAILURE;
+  } catch (...) {
+    report_json_output_initialization_failure(config.output_file, "");
+    return EXIT_FAILURE;
   }
 
   // Execute benchmark only after successful parse and non-help path.
-  BenchmarkSignalMaskGuard signal_guard;
-  return run_core_to_core_latency(config);
+  try {
+    if (config.run_sweep) {
+      const SweepExecutionResult execution =
+          run_core_to_core_latency_sweep(config, *output_session);
+      if (output_session->kind() == JsonOutputKind::Stdout &&
+          !execution.output_json.empty() &&
+          output_session->write_final(execution.output_json) != EXIT_SUCCESS) {
+        return EXIT_FAILURE;
+      }
+      return execution.exit_code;
+    }
+
+    BenchmarkSignalMaskGuard signal_guard;
+    return run_core_to_core_latency(config, *output_session);
+  } catch (const std::exception& error) {
+    std::cerr << Messages::error_prefix()
+              << Messages::error_command_execution_exception(
+                     "Core-to-core analysis", error.what())
+              << std::endl;
+  } catch (...) {
+    std::cerr << Messages::error_prefix()
+              << Messages::error_command_execution_exception(
+                     "Core-to-core analysis", "")
+              << std::endl;
+  }
+  return EXIT_FAILURE;
 }

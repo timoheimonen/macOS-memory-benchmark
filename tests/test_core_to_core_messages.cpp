@@ -32,7 +32,7 @@ TEST(CoreToCoreMessagesTest, HelpersHaveExactOutput) {
        "\nRunning standalone core-to-core token-handoff protocol analysis..."},
       {"report header", Messages::report_core_to_core_header(), "--- Core-to-Core Token-Handoff Protocol Report ---"},
       {"standalone options", Messages::error_analyze_core_to_core_must_be_used_alone(),
-       "--analyze-core2core allows only optional -o/--output <file>, -r/--count <count>, and "
+       "--analyze-core2core allows only optional -o/--output <target>, -r/--count <count>, and "
        "-n/--latency-samples <count>; sweep mode additionally allows -S/--sweep count=..., "
        "-S/--sweep latency-samples=..., and -X/--sweep-max-runs <count>; -h/--help prints help"},
       {"successful hints", Messages::report_core_to_core_hint_status("Responder", true, 0, true, true, 0, 2),

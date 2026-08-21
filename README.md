@@ -18,15 +18,18 @@ It is designed for controlled microarchitectural investigation rather than a sin
 - **Dedicated TLB analysis:** paired spread/packed chains, adaptive rounds, confidence intervals, and independent boundary validation.
 - **Core-to-core analysis:** calibrated acquire/release token-exchange measurements under scheduler-hint scenarios.
 - **Metal GPU bandwidth:** standalone read/write/copy compute kernels with GPU timestamps and validation metadata.
-- **Reproducible experiments:** explicit seeds, repeated loops, built-in Cartesian parameter sweeps, and checkpointed JSON output.
+- **Reproducible experiments:** explicit seeds, repeated loops, built-in Cartesian parameter sweeps, recoverable JSON
+  file checkpoints, and final machine-readable stdout for every direct mode and CPU sweep.
 
-See [Measurement Capabilities](CAPABILITIES.md) for the full measurement scope and interpretation guidance.
+See [Measurement Capabilities](documents/CAPABILITIES.md) for the full measurement scope and interpretation guidance.
 
 ## Platform Requirements
 
 - macOS on Apple Silicon (ARM64)
 - Xcode Command Line Tools for source builds
 - GoogleTest from Homebrew for the test suite
+- Python 3 for the script-example entry test included in the aggregate `make test-all` gate; `jq` is optional for JSON
+  inspection and the jq-backed latency-script path
 - GPU mode: a unified-memory Metal device supporting `MTLGPUFamilyApple7` or a compatible later family
 
 The build targets macOS 11.0 and links the system Metal and Foundation frameworks. GPU kernels are embedded MSL 2.3 source compiled at runtime, so the optional offline Metal Toolchain is not required. Passing the GPU capability check indicates compatibility; it does not mean performance has been validated on that device.
@@ -75,6 +78,18 @@ For longer runs, prevent system sleep and collect repeated measurements:
 caffeinate -i -d memory_benchmark --benchmark --count 10 --buffer-size 1024 --output baseline.json
 ```
 
+For automation, every direct mode and the CPU modes' supported sweeps accept the exact output target `-`. JSON is written
+once to stdout and the human-readable transcript is written to stderr:
+
+```bash
+memory_benchmark --benchmark --only-bandwidth --count 5 --buffer-size 512 --output - \
+  >benchmark.json 2>benchmark.log
+```
+
+An empty output value disables JSON for a direct command but is missing/invalid for a sweep. Every other non-empty value
+is a file target, including `./-` and flag-shaped names such as `-G`. Use a real file when crash-resilient intermediate
+checkpoints are required; see the [Machine-Readable CLI API](documents/API.md) support matrix and acceptance contract.
+
 ## Benchmark Modes
 
 | Mode | Purpose |
@@ -86,7 +101,7 @@ caffeinate -i -d memory_benchmark --benchmark --count 10 --buffer-size 1024 --ou
 | `--gpu-bandwidth` | Standalone Metal GPU read/write/copy effective compute-payload bandwidth. |
 | `--sweep <key=a,b>` | Cartesian parameter sweep for supported CPU, pattern, TLB, and core-to-core modes; requires `--output`. GPU schema 1 does not support sweeps. |
 
-Primary modes are intentionally separate and accept different option sets. Use `memory_benchmark -h` or the [User Manual](MANUAL.md) for defaults, valid combinations, and the complete option reference.
+Primary modes are intentionally separate and accept different option sets. Use `memory_benchmark -h` or the [User Manual](documents/MANUAL.md) for defaults, valid combinations, and the complete option reference.
 
 When `--iterations` is omitted, standard bandwidth, pattern, and GPU operations calibrate their work toward a bounded measurement duration. An explicit `--iterations` value selects fixed work. Standard latency headlines always come from a continuous dependent pointer-chase pass. A separate sample pass runs by default with 1,000 windows; `--latency-samples` controls that positive window count, and the sampled distribution does not define or weight the headline.
 
@@ -113,6 +128,9 @@ memory_benchmark --benchmark --only-latency --count 5 \
   --output latency_sweep.json
 ```
 
+The same sweep can be consumed as one final schema-1 envelope on stdout by changing the target to `--output -`. Use a
+real file when recoverable per-attempt checkpoints are required.
+
 Standalone TLB analysis:
 
 ```bash
@@ -132,7 +150,14 @@ caffeinate -i -d memory_benchmark --gpu-bandwidth --buffer-size 512 \
   --iterations 24 --count 9 --seed 123456789 --output gpu_bandwidth.json
 ```
 
-More workflows, including custom cache targets, latency-chain controls, density profiles, and sweep keys, are documented in the [User Manual](MANUAL.md).
+The same GPU schema 1 payload can be captured as final-only stdout:
+
+```bash
+memory_benchmark --gpu-bandwidth --buffer-size 512 --count 3 --seed 42 --output - \
+  >gpu_bandwidth.json 2>gpu_bandwidth.log
+```
+
+More workflows, including custom cache targets, latency-chain controls, density profiles, and sweep keys, are documented in the [User Manual](documents/MANUAL.md).
 
 ## Interpreting Results
 
@@ -152,7 +177,18 @@ Treat benchmark values as measurements of the configured workload under the obse
   physical cache-line migration or isolate coherence-fabric latency, and macOS user space cannot guarantee physical core
   pinning.
 
-JSON output records completion and nullable measurement state instead of using zero for unavailable results. Consumers making conclusions should reject incomplete or interrupted runs according to the mode-specific status fields. Exact schema contracts and checkpoint behavior are documented in the [User Manual](MANUAL.md), [Technical Specification](TECHNICAL_SPECIFICATION.md), and mode whitepapers.
+JSON output records completion and nullable measurement state instead of using zero for unavailable results. Current
+standard schema 3 requires `configuration.mode: "benchmark"`, a string `configuration.output_file` that preserves the
+raw output target, plus boolean `results_complete` and `conclusions_valid` fields. The bundled standard-memory examples
+track the current producer, require its exact top-level `version` (`0.62.0` in this release), sanity-check the current
+result locally, and read current schema-3 paths directly. They do not provide compatibility for released standard
+schema 2, unversioned historical standard JSON layouts, or any other explicit standard version.
+Consumers making conclusions should reject incomplete or interrupted runs according to the mode-specific status fields.
+Every direct command or CPU sweep using `--output -` reserves stdout for one final JSON document and routes its
+post-parse human transcript to stderr; file output is atomic, while standard commands, sweeps, and GPU retain their
+mode-specific intermediate checkpoints. Exact process
+acceptance rules are in the [Machine-Readable CLI API](documents/API.md), with schema and checkpoint details in the [User Manual](documents/MANUAL.md),
+[Technical Specification](documents/TECHNICAL_SPECIFICATION.md), and mode whitepapers.
 
 ## Plotting Results
 
@@ -166,19 +202,34 @@ python3 script-examples/plot_cache_percentiles.py \
 ```
 
 The sweep script prefers the repository's local `./memory_benchmark`, then falls back to `memory_benchmark` from
-`PATH`; set `BENCHMARK_CMD=/path/to/memory_benchmark` to override either choice. The sweep helpers return a non-zero
-status if a planned run fails or does not produce a complete, parseable result. See the
-[User Manual](MANUAL.md#visualization-scripts) for supported inputs and metrics.
+`PATH`; set `BENCHMARK_CMD=/path/to/memory_benchmark` to override either choice. Whichever producer is selected must
+emit complete current standard schema 3. The sweep helpers return a non-zero status if a planned run fails or does not
+produce a complete, parseable result.
+
+The two standard-result plotters require explicit current inputs; archived 0.53.x standard JSON is retained as
+historical evidence and is not a valid current input:
+
+```bash
+python3 script-examples/plot_M4vsM5_benchmark_comparison.py \
+  --m4-file current-m4.json --m5-file current-m5.json
+python3 script-examples/plot_bechmark-memory-latency-hierarcy.py \
+  --file current-standard.json
+```
+
+The hierarchy plotter also accepts an explicit console-text statistics file through `--file`; that separate text parser
+recognizes the current console labels only and is neither JSON-schema nor historical-label compatibility. See the
+[User Manual](documents/MANUAL.md#visualization-scripts) for supported inputs and metrics.
 
 ## Documentation
 
-- [Measurement Capabilities](CAPABILITIES.md): what the tool measures and how those measurements should be interpreted.
-- [User Manual](MANUAL.md): complete option reference, mode compatibility, workflows, output examples, and troubleshooting.
-- [Technical Specification](TECHNICAL_SPECIFICATION.md): architecture, execution flow, memory model, and output contracts.
-- [Latency Whitepaper](LATENCY_WHITEPAPER.md): dependent pointer-chase and sampling methodology.
-- [TLB Analysis Whitepaper](TLB_ANALYSIS_WHITEPAPER.md): paired analysis, boundary rules, confidence model, and JSON verification contract.
-- [Core-to-Core Whitepaper](CORE_TO_CORE_WHITEPAPER.md): LDAR/STLR handoff protocol, scheduler-hint scenarios, and JSON schema.
-- [GPU Bandwidth Whitepaper](GPU_BANDWIDTH_WHITEPAPER.md): Metal methodology, timing, validation, resource model, and interpretation limits.
+- [Measurement Capabilities](documents/CAPABILITIES.md): what the tool measures and how those measurements should be interpreted.
+- [Machine-Readable CLI API](documents/API.md): supported output targets, stdout/stderr contract, current schemas, and result acceptance.
+- [User Manual](documents/MANUAL.md): complete option reference, mode compatibility, workflows, output examples, and troubleshooting.
+- [Technical Specification](documents/TECHNICAL_SPECIFICATION.md): architecture, execution flow, memory model, and output contracts.
+- [Latency Whitepaper](documents/LATENCY_WHITEPAPER.md): dependent pointer-chase and sampling methodology.
+- [TLB Analysis Whitepaper](documents/TLB_ANALYSIS_WHITEPAPER.md): paired analysis, boundary rules, confidence model, and JSON verification contract.
+- [Core-to-Core Whitepaper](documents/CORE_TO_CORE_WHITEPAPER.md): LDAR/STLR handoff protocol, scheduler-hint scenarios, and JSON schema.
+- [GPU Bandwidth Whitepaper](documents/GPU_BANDWIDTH_WHITEPAPER.md): Metal methodology, timing, validation, resource model, and interpretation limits.
 
 Runtime behavior and `memory_benchmark -h` are the authoritative sources when documentation differs.
 
@@ -191,12 +242,16 @@ brew install googletest
 make test
 ```
 
-Run real Apple Silicon integration tests or the complete suite:
+Run the focused script-example entry test, real Apple Silicon integration tests, or the complete suite:
 
 ```bash
+make test-script-examples
 make test-integration
 make test-all
 ```
+
+`make test-all` requires Python 3; it runs all GTest cases followed by the focused script-example entry test. `jq` is
+not required by the test gate.
 
 Generate isolated LLVM production-source coverage reports under `/tmp`:
 
@@ -205,8 +260,8 @@ make coverage-unit
 make coverage-all
 ```
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for contribution guidance and [Project Structure](PROJECT_STRUCTURE.md) for
-repository navigation and the current test-suite map. API documentation can be generated with `make docs`.
+See [CONTRIBUTING.md](documents/CONTRIBUTING.md) for contribution guidance and [Project Structure](documents/PROJECT_STRUCTURE.md) for
+repository navigation and the current test-suite map. C++ reference documentation can be generated with `make docs`.
 
 ## Scope and Safety
 

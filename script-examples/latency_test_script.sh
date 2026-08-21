@@ -13,6 +13,8 @@ mkdir -p "${TMP_DIR}"
 
 # Prefer the binary built in the repository; allow an explicit override or an
 # installed memory_benchmark from PATH when the local binary is unavailable.
+# Whichever producer is selected must emit complete current standard schema 3;
+# extraction below intentionally rejects older standard JSON contracts.
 DEFAULT_BENCHMARK="${SCRIPT_DIR}/../memory_benchmark"
 if [ -x "${DEFAULT_BENCHMARK}" ]; then
     BENCHMARK_CMD="${BENCHMARK_CMD:-${DEFAULT_BENCHMARK}}"
@@ -43,7 +45,7 @@ if [ -x "${BENCHMARK_CMD}" ]; then
     :
 elif ! command -v "${BENCHMARK_CMD}" > /dev/null 2>&1; then
     echo "Error: ${BENCHMARK_CMD} not found"
-    echo "Tip: build the local binary (make) or export BENCHMARK_CMD=/path/to/memory_benchmark"
+    echo "Tip: build the current local binary (make) or export BENCHMARK_CMD=/path/to/current/memory_benchmark"
     exit 1
 fi
 
@@ -137,23 +139,25 @@ final_output="${SCRIPT_DIR}/final_output.txt"
 # Clear/create the final output file
 > "${final_output}"
 
-# Function to extract schema-2 pooled sample statistics (with historical fallback)
+# Function to extract current standard schema-3 pooled sample statistics.
 extract_with_jq() {
     local json_file=$1
     local cache_size=$2
     local tlb_kb=$3
     local extracted_file="${TMP_DIR}/extracted_tlb_${tlb_kb}_cache_${cache_size}.json"
-    if ! jq 'if .mode == "gpu_bandwidth" and .schema_version == 1 then
-               error("GPU bandwidth schema 1 is not supported by this standard CPU latency extractor")
-             elif .configuration.benchmark_schema_version == 2 then
-               if .results_complete == true then
-                 .cache.custom.latency.headline_ns.pooled_sample_distribution.statistics
-               else
-                 error("incomplete benchmark result")
+    if ! jq '
+             if type != "object"
+                  or (.configuration | type) != "object"
+                  or .version != "0.62.0"
+                  or .configuration.mode != "benchmark"
+                  or .configuration.benchmark_schema_version != 3
+                  or .status != "complete"
+                  or .results_complete != true
+                  or .conclusions_valid != true
+                  or (.configuration.output_file | type) != "string"
+               then error("not a complete current standard schema-3 benchmark result")
+               else .cache.custom.latency.headline_ns.pooled_sample_distribution.statistics
                end
-             else
-               .cache.custom.latency.samples_ns.statistics
-             end
              | if type == "object"
                   and .average != null and .median != null
                   and .p90 != null and .p95 != null and .p99 != null
@@ -173,7 +177,7 @@ extract_with_jq() {
     rm -f "${extracted_file}"
 }
 
-# Function to extract schema-2 pooled sample statistics (with historical fallback)
+# Function to extract current standard schema-3 pooled sample statistics.
 extract_with_python() {
     local json_file=$1
     local cache_size=$2
@@ -182,20 +186,30 @@ extract_with_python() {
     if ! python3 - "${json_file}" <<'PY' > "${extracted_file}"
 import json
 import sys
+
+
+def require_current_standard_result(data):
+    configuration = data.get("configuration") if isinstance(data, dict) else None
+    if not (
+        isinstance(configuration, dict)
+        and data.get("version") == "0.62.0"
+        and configuration.get("mode") == "benchmark"
+        and type(configuration.get("benchmark_schema_version")) is int
+        and configuration["benchmark_schema_version"] == 3
+        and data.get("status") == "complete"
+        and data.get("results_complete") is True
+        and data.get("conclusions_valid") is True
+        and isinstance(configuration.get("output_file"), str)
+    ):
+        raise RuntimeError("not a complete current standard schema-3 benchmark result")
+
+
 try:
     with open(sys.argv[1], 'r') as f:
         data = json.load(f)
-        if data.get('mode') == 'gpu_bandwidth' and data.get('schema_version') == 1:
-            raise RuntimeError(
-                'GPU bandwidth schema 1 is not supported by this standard CPU latency extractor'
-            )
+        require_current_standard_result(data)
         latency = data['cache']['custom']['latency']
-        if data.get('configuration', {}).get('benchmark_schema_version') == 2:
-            if not data.get('results_complete', False):
-                raise RuntimeError('incomplete benchmark result')
-            stats = latency['headline_ns']['pooled_sample_distribution']['statistics']
-        else:
-            stats = latency['samples_ns']['statistics']
+        stats = latency['headline_ns']['pooled_sample_distribution']['statistics']
         required_statistics = ('average', 'median', 'p90', 'p95', 'p99', 'min', 'max', 'stddev')
         missing_statistics = [name for name in required_statistics if stats.get(name) is None]
         if missing_statistics:

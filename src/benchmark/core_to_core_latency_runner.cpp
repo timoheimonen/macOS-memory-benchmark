@@ -29,7 +29,6 @@
 #include <cmath>
 #include <cstddef>
 #include <exception>
-#include <filesystem>
 #include <iostream>
 #include <string>
 #include <system_error>
@@ -50,7 +49,7 @@
 #include "output/console/messages/messages_api.h"
 #include "output/console/output_printer.h"
 #include "output/console/statistics_renderer.h"
-#include "output/json/json_output/json_output_api.h"
+#include "output/json/json_output/json_output_session.h"
 #include "utils/descriptive_statistics.h"
 #include "utils/numeric_utils.h"
 
@@ -455,7 +454,10 @@ bool execute_single_scenario(const ScenarioDescriptor& scenario, const CoreToCor
   return true;
 }
 
-int run_core_to_core_latency_collect(const CoreToCoreLatencyConfig& config, nlohmann::ordered_json& result_json) {
+int run_core_to_core_latency_collect(
+    const CoreToCoreLatencyConfig& config,
+    nlohmann::ordered_json& result_json) {
+  result_json.clear();
   const auto analysis_start = std::chrono::steady_clock::now();
 
   std::cout << Messages::msg_running_core_to_core_analysis() << std::endl;
@@ -596,23 +598,36 @@ int run_core_to_core_latency_collect(const CoreToCoreLatencyConfig& config, nloh
       planned_measurements,
       completed_measurements,
   };
-  result_json = build_core_to_core_latency_json(json_context);
+  try {
+    result_json = build_core_to_core_latency_json(json_context);
+  } catch (const std::exception& error) {
+    result_json.clear();
+    std::cerr << Messages::error_prefix()
+              << Messages::error_json_payload_construction_failed(error.what())
+              << std::endl;
+    return EXIT_FAILURE;
+  } catch (...) {
+    result_json.clear();
+    std::cerr << Messages::error_prefix()
+              << Messages::error_json_payload_construction_failed("")
+              << std::endl;
+    return EXIT_FAILURE;
+  }
   return run_failed ? EXIT_FAILURE : EXIT_SUCCESS;
 }
 
-int run_core_to_core_latency(const CoreToCoreLatencyConfig& config) {
+int run_core_to_core_latency(const CoreToCoreLatencyConfig& config,
+                             JsonOutputSession& output_session) {
   print_runtime_banner();
   nlohmann::ordered_json result_json;
   const int run_result = run_core_to_core_latency_collect(config, result_json);
 
-  if (!config.output_file.empty() && !result_json.empty()) {
-    std::filesystem::path file_path(config.output_file);
-    if (file_path.is_relative()) {
-      file_path = std::filesystem::current_path() / file_path;
-    }
-    if (write_json_to_file(file_path, result_json) != EXIT_SUCCESS) {
-      return EXIT_FAILURE;
-    }
+  // A failed or interrupted run can still carry schema-valid evidence. Emit
+  // that payload before propagating the execution status; an output failure
+  // takes precedence because the requested transport did not complete.
+  if (!result_json.empty() &&
+      output_session.write_final(result_json) != EXIT_SUCCESS) {
+    return EXIT_FAILURE;
   }
 
   return run_result;

@@ -31,6 +31,13 @@
 #include "benchmark/core_to_core_latency.h"
 #include "third_party/nlohmann/json.hpp"
 
+/**
+ * Borrowed inputs and terminal counters for one core-to-core schema-v2 build.
+ *
+ * The referenced configuration, CPU name, and scenario vector must outlive the
+ * context and remain immutable while it is passed to the builder. The context
+ * does not own or copy those inputs.
+ */
 struct CoreToCoreLatencyJsonContext {
   const CoreToCoreLatencyConfig& config;
   const std::string& cpu_name;
@@ -46,6 +53,20 @@ struct CoreToCoreLatencyJsonContext {
   size_t completed_measurements = 0;
 };
 
-nlohmann::ordered_json build_core_to_core_latency_json(const CoreToCoreLatencyJsonContext& context);
+/**
+ * Build one core-to-core schema-v2 document without performing I/O.
+ *
+ * @param context Immutable borrowed inputs, terminal status, and counters.
+ * @return An ordered document containing configuration, execution time,
+ *         scenario evidence, completion metadata, timestamp, and version.
+ * @throws std::exception If timestamp, string, vector, or JSON construction
+ *         fails.
+ * @pre Every reference held by @p context is valid and immutable for the call;
+ *      its status and counters describe the supplied scenario results.
+ * @note The builder retains no references. It is safe to call concurrently
+ *       when each caller keeps the referenced inputs immutable.
+ */
+nlohmann::ordered_json build_core_to_core_latency_json(
+    const CoreToCoreLatencyJsonContext& context);
 
 #endif  // CORE_TO_CORE_LATENCY_JSON_H

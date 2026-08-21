@@ -167,7 +167,11 @@ std::string error_threads_invalid(long long value, long long min_val, long long 
 
 const std::string& error_analyze_tlb_must_be_used_alone() {
   static const std::string msg =
-      "--analyze-tlb allows only optional -o/--output <file>, -s/--latency-stride-bytes <bytes>, -m/--latency-chain-mode <mode>, -D/--tlb-density <low|medium|high>, --seed <uint64>, -S/--sweep <key=...>, and -X/--sweep-max-runs <count> (no other options allowed)";
+      "--analyze-tlb allows only optional -o/--output <target>, "
+      "-s/--latency-stride-bytes <bytes>, -m/--latency-chain-mode <mode>, "
+      "-D/--tlb-density <low|medium|high>, --seed <uint64>, "
+      "-S/--sweep <key=...>, and -X/--sweep-max-runs <count> "
+      "(no other options allowed)";
   return msg;
 }
 
@@ -247,6 +251,49 @@ std::string error_benchmark_loop(int loop, const std::string& error) {
 
 std::string error_file_write_failed(const std::string& file_path, const std::string& error_details) {
   return "Failed to write file \"" + file_path + "\": " + error_details;
+}
+
+std::string error_json_stdout_write_failed(const std::string& error_details) {
+  return "Failed to write JSON to stdout: " +
+         (error_details.empty() ? "unknown exception" : error_details);
+}
+
+const std::string& json_stdout_reason_stream_unavailable() {
+  static const std::string reason = "stdout stream is unavailable";
+  return reason;
+}
+
+const std::string& json_stdout_reason_size_limit_exceeded() {
+  static const std::string reason =
+      "serialized JSON exceeds stream size limits";
+  return reason;
+}
+
+const std::string& json_stdout_reason_write_failed() {
+  static const std::string reason = "write operation failed";
+  return reason;
+}
+
+const std::string& json_stdout_reason_flush_failed() {
+  static const std::string reason = "flush operation failed";
+  return reason;
+}
+
+std::string error_json_output_initialization_failed(const std::string& error_details) {
+  return "JSON output initialization failed: " +
+         (error_details.empty() ? "unknown exception" : error_details);
+}
+
+std::string error_json_payload_construction_failed(const std::string& error_details) {
+  return "JSON payload construction failed: " +
+         (error_details.empty() ? "unknown exception" : error_details);
+}
+
+std::string error_command_execution_exception(
+    const std::string& command_name,
+    const std::string& error_details) {
+  return command_name + " failed with unexpected exception: " +
+         (error_details.empty() ? "unknown exception" : error_details);
 }
 
 std::string error_file_permission_denied(const std::string& file_path) {
@@ -463,13 +510,13 @@ std::string error_sweep_parameter_not_allowed(const std::string& parameter_name,
 }
 
 const std::string& error_sweep_requires_output() {
-  static const std::string msg = "--sweep requires --output <file> for the combined JSON result";
+  static const std::string msg = "--sweep requires --output <target> for the combined JSON result";
   return msg;
 }
 
-std::string error_sweep_temp_json_parse_failed(const std::string& file_path,
-                                               const std::string& error_details) {
-  return "Failed to read sweep run JSON from " + file_path + ": " + error_details;
+std::string error_sweep_nested_run_exception(
+    const std::string& error_details) {
+  return error_command_execution_exception("Sweep nested run", error_details);
 }
 
 } // namespace Messages
