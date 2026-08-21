@@ -7,7 +7,7 @@
 
 /**
  * @file standard.cpp
- * @brief Auditable schema-v2 JSON for the standard benchmark
+ * @brief Auditable schema-v3 JSON for the standard benchmark
  */
 
 #include "output/json/json_output/json_output_api.h"

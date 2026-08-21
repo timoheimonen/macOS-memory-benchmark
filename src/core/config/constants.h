@@ -160,7 +160,7 @@ namespace Constants {
   constexpr size_t BENCHMARK_LATENCY_MIN_COMPLETE_CYCLES = 16;
   constexpr size_t BENCHMARK_LATENCY_MAX_ACCESSES = 4000000000ULL;
   constexpr double BENCHMARK_CV_WARNING_PCT = 7.5;
-  constexpr int BENCHMARK_JSON_SCHEMA_VERSION = 2;
+  constexpr int BENCHMARK_JSON_SCHEMA_VERSION = 3;
   constexpr const char* BENCHMARK_METHODOLOGY_VERSION =
       "benchmark-v2-calibrated-seeded-balanced";
   constexpr size_t DEFAULT_SWEEP_MAX_RUNS = 256;  // Default guardrail for generated sweep combinations

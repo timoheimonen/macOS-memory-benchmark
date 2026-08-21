@@ -599,8 +599,13 @@ TEST(MessagesFormattingTest, UsageHeader) {
 
 TEST(MessagesFormattingTest, UsageOptions) {
   std::string msg = Messages::usage_options("memory_benchmark");
+  const std::string standard_schema_contract =
+      "                        JSON uses standard schema " +
+      std::to_string(Constants::BENCHMARK_JSON_SCHEMA_VERSION) +
+      " methodology " + Constants::BENCHMARK_METHODOLOGY_VERSION + ".\n";
   EXPECT_NE(msg.find("memory_benchmark"), std::string::npos);
   EXPECT_NE(msg.find("--benchmark"), std::string::npos);
+  EXPECT_NE(msg.find(standard_schema_contract), std::string::npos);
   EXPECT_NE(msg.find("100-300 ms window"), std::string::npos);
   EXPECT_NE(msg.find("--iterations"), std::string::npos);
   EXPECT_NE(msg.find("--buffer-size"), std::string::npos);

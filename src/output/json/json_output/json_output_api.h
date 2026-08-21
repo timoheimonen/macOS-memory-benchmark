@@ -125,7 +125,7 @@ int write_json_to_file(const std::filesystem::path& file_path,
                        bool announce_success = true);
 
 /**
- * @brief Build the standard benchmark schema-2 payload in memory.
+ * @brief Build the standard benchmark schema-3 payload in memory.
  *
  * The document shape is governed by
  * `configuration.benchmark_schema_version`; this builder performs no output
@@ -135,15 +135,16 @@ int write_json_to_file(const std::filesystem::path& file_path,
  * @param stats Immutable terminal or intermediate statistics snapshot,
  *        including retained partial evidence and completion counters.
  * @param total_execution_time_sec Command elapsed time in seconds.
- * @return A caller-owned ordered JSON value containing the complete schema-2
+ * @return A caller-owned ordered JSON value containing the complete schema-3
  *         snapshot. The returned value retains no references to the inputs.
  * @throws std::exception If allocation, timestamp creation, string handling,
  *         or JSON construction fails.
  * @note Concurrent calls are safe when each caller keeps its referenced inputs
  *       immutable for the duration of the call.
- * @note `configuration.output_file` preserves the raw configured target.
- *       Top-level `conclusions_valid` is true exactly when `results_complete`
- *       is true.
+ * @note Schema 3 always contains string `configuration.output_file`; it
+ *       preserves the raw direct target and is empty for a nested sweep result
+ *       because the sweep envelope owns persistence. Top-level boolean
+ *       `conclusions_valid` is true exactly when `results_complete` is true.
  */
 nlohmann::ordered_json build_results_json(const BenchmarkConfig& config,
                                           const BenchmarkStatistics& stats,
@@ -171,7 +172,7 @@ nlohmann::ordered_json build_pattern_results_json(const BenchmarkConfig& config,
                                                   double total_execution_time_sec);
 
 /**
- * @brief Build and atomically replace a file with standard schema-2 JSON.
+ * @brief Build and atomically replace a file with standard schema-3 JSON.
  *
  * This is a legacy file-only adapter. An empty target is a successful no-op.
  * Command code that accepts stdout must first classify the raw target and use

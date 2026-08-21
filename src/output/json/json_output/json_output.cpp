@@ -61,7 +61,7 @@ nlohmann::ordered_json build_results_json(const BenchmarkConfig& config,
   // Add execution time (second)
   json_output[JsonKeys::EXECUTION_TIME_SEC] = total_execution_time_sec;
   
-  // Add completion, per-loop measurements, and aggregate schema-v2 sections.
+  // Add completion, per-loop measurements, and aggregate schema-v3 sections.
   add_standard_benchmark_results(json_output, config, stats);
   
   // Add timestamp (fifth)

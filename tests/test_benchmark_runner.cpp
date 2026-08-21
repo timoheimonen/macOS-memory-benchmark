@@ -27,6 +27,7 @@
 #include "benchmark/benchmark_runner.h"
 #include "benchmark/benchmark_statistics_collector.h"
 #include "core/config/config.h"
+#include "core/config/constants.h"
 #include "core/timing/timer.h"
 #include "output/console/messages/messages_api.h"
 #include "output/json/json_output/json_output_api.h"
@@ -556,7 +557,7 @@ TEST(BenchmarkRunnerTest, InjectedStopBetweenLoopsPreservesCompletedLoop) {
 }
 
 TEST(BenchmarkRunnerTest,
-     StdoutInterruptionRetainsOneLoopAndEmitsOneSchema2TerminalDocument) {
+     StdoutInterruptionRetainsOneLoopAndEmitsOneSchema3TerminalDocument) {
   const ScopedDeterministicTimerSystemCalls timer_system_calls;
   BenchmarkConfig config;
   config.loop_count = 2;
@@ -622,9 +623,12 @@ TEST(BenchmarkRunnerTest,
                       nlohmann::ordered_json::parse(json_output));
   EXPECT_EQ(parsed_payload, terminal_payload);
   ASSERT_TRUE(parsed_payload.contains("configuration"));
-  EXPECT_EQ(parsed_payload["configuration"]["benchmark_schema_version"], 2);
+  EXPECT_EQ(parsed_payload["configuration"]["benchmark_schema_version"],
+            Constants::BENCHMARK_JSON_SCHEMA_VERSION);
+  EXPECT_EQ(parsed_payload["configuration"]["output_file"], "-");
   EXPECT_EQ(parsed_payload["status"], "interrupted");
   EXPECT_FALSE(parsed_payload["results_complete"].get<bool>());
+  EXPECT_FALSE(parsed_payload["conclusions_valid"].get<bool>());
   EXPECT_EQ(parsed_payload["planned_loops"], 2);
   EXPECT_EQ(parsed_payload["completed_loops"], 1);
   EXPECT_EQ(parsed_payload["planned_measurements"], 1);
@@ -666,8 +670,12 @@ TEST(BenchmarkRunnerTest,
   EXPECT_EQ(stats.status_reason, Messages::error_timer_creation_failed());
   EXPECT_EQ(json_output, terminal_payload.dump(2) + "\n");
   EXPECT_EQ(nlohmann::ordered_json::parse(json_output), terminal_payload);
+  EXPECT_EQ(terminal_payload["configuration"]["benchmark_schema_version"],
+            Constants::BENCHMARK_JSON_SCHEMA_VERSION);
+  EXPECT_EQ(terminal_payload["configuration"]["output_file"], "-");
   EXPECT_EQ(terminal_payload["status"], "failed");
   EXPECT_FALSE(terminal_payload["results_complete"].get<bool>());
+  EXPECT_FALSE(terminal_payload["conclusions_valid"].get<bool>());
   EXPECT_NE(error_output.find(Messages::error_timer_creation_failed()),
             std::string::npos);
 }

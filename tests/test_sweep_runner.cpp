@@ -53,7 +53,11 @@ std::vector<Json> make_parameters(size_t count) {
 }
 
 Json make_standard_result(const std::string& status, bool results_complete, const std::string& reason = "") {
-  return {{"status", status},
+  return {{"configuration",
+           {{"benchmark_schema_version",
+             Constants::BENCHMARK_JSON_SCHEMA_VERSION},
+            {"output_file", ""}}},
+          {"status", status},
           {"status_reason", reason},
           {"results_complete", results_complete},
           {"conclusions_valid", results_complete}};
@@ -91,25 +95,125 @@ SweepExecutionHooks make_hooks(const std::vector<SweepRunOutcome>& outcomes, std
 
 }  // namespace
 
+TEST(SweepRunnerTest, StandardNestedCompletionIsVersionAware) {
+  Json schema_2_released = make_standard_result("complete", true);
+  schema_2_released["configuration"]["benchmark_schema_version"] = 2;
+  schema_2_released["configuration"].erase("output_file");
+  schema_2_released.erase("conclusions_valid");
+
+  Json schema_2_conclusions_true = schema_2_released;
+  schema_2_conclusions_true["conclusions_valid"] = true;
+  Json schema_2_optional_fields_valid = schema_2_conclusions_true;
+  schema_2_optional_fields_valid["configuration"]["output_file"] =
+      "legacy.json";
+  Json schema_2_conclusions_false = schema_2_released;
+  schema_2_conclusions_false["conclusions_valid"] = false;
+  Json schema_2_partial = schema_2_released;
+  schema_2_partial["status"] = "partial";
+  Json schema_2_results_false = schema_2_released;
+  schema_2_results_false["results_complete"] = false;
+  Json schema_2_invalid_conclusions = schema_2_released;
+  schema_2_invalid_conclusions["conclusions_valid"] = "true";
+  Json schema_2_invalid_output = schema_2_released;
+  schema_2_invalid_output["configuration"]["output_file"] = false;
+  Json schema_2_missing_results = schema_2_released;
+  schema_2_missing_results.erase("results_complete");
+
+  Json schema_3_complete = make_standard_result("complete", true);
+  schema_3_complete["configuration"]["benchmark_schema_version"] = 3;
+  Json schema_3_conclusions_false = schema_3_complete;
+  schema_3_conclusions_false["conclusions_valid"] = false;
+  Json schema_3_missing_conclusions = schema_3_complete;
+  schema_3_missing_conclusions.erase("conclusions_valid");
+  Json schema_3_invalid_conclusions = schema_3_complete;
+  schema_3_invalid_conclusions["conclusions_valid"] = 1;
+  Json schema_3_missing_output = schema_3_complete;
+  schema_3_missing_output["configuration"].erase("output_file");
+  Json schema_3_invalid_output = schema_3_complete;
+  schema_3_invalid_output["configuration"]["output_file"] = nullptr;
+  Json schema_3_invalid_results = schema_3_complete;
+  schema_3_invalid_results["results_complete"] = 1;
+  Json schema_3_missing_results = schema_3_complete;
+  schema_3_missing_results.erase("results_complete");
+  Json missing_configuration = schema_3_complete;
+  missing_configuration.erase("configuration");
+  Json missing_schema = schema_3_complete;
+  missing_schema["configuration"].erase("benchmark_schema_version");
+  Json invalid_schema_type = schema_3_complete;
+  invalid_schema_type["configuration"]["benchmark_schema_version"] = "3";
+  Json unsupported_schema_1 = schema_3_complete;
+  unsupported_schema_1["configuration"]["benchmark_schema_version"] = 1;
+  Json unsupported_schema_4 = schema_3_complete;
+  unsupported_schema_4["configuration"]["benchmark_schema_version"] = 4;
+
+  struct CompletionCase {
+    const char* name;
+    Json result;
+    SweepAttemptStatus expected_status;
+    const char* expected_reason;
+  };
+  const std::vector<CompletionCase> cases = {
+      {"released schema 2 without optional fields", schema_2_released,
+       SweepAttemptStatus::Complete, ""},
+      {"schema 2 with conclusions true", schema_2_conclusions_true,
+       SweepAttemptStatus::Complete, ""},
+      {"schema 2 with both optional fields", schema_2_optional_fields_valid,
+       SweepAttemptStatus::Complete, ""},
+      {"schema 2 with conclusions false", schema_2_conclusions_false,
+       SweepAttemptStatus::Partial, "nested-standard-result-incomplete"},
+      {"schema 2 with partial status", schema_2_partial,
+       SweepAttemptStatus::Partial, "nested-standard-result-incomplete"},
+      {"schema 2 with results false", schema_2_results_false,
+       SweepAttemptStatus::Partial, "nested-standard-result-incomplete"},
+      {"schema 2 with invalid conclusions type",
+       schema_2_invalid_conclusions, SweepAttemptStatus::Partial,
+       "invalid-standard-schema-contract"},
+      {"schema 2 with invalid output type", schema_2_invalid_output,
+       SweepAttemptStatus::Partial, "invalid-standard-schema-contract"},
+      {"schema 2 without results", schema_2_missing_results,
+       SweepAttemptStatus::Partial, "invalid-standard-schema-contract"},
+      {"schema 3 complete", schema_3_complete,
+       SweepAttemptStatus::Complete, ""},
+      {"schema 3 with conclusions false", schema_3_conclusions_false,
+       SweepAttemptStatus::Partial, "nested-standard-result-incomplete"},
+      {"schema 3 without conclusions", schema_3_missing_conclusions,
+       SweepAttemptStatus::Partial, "invalid-standard-schema-contract"},
+      {"schema 3 with invalid conclusions type",
+       schema_3_invalid_conclusions, SweepAttemptStatus::Partial,
+       "invalid-standard-schema-contract"},
+      {"schema 3 without output", schema_3_missing_output,
+       SweepAttemptStatus::Partial, "invalid-standard-schema-contract"},
+      {"schema 3 with invalid output type", schema_3_invalid_output,
+       SweepAttemptStatus::Partial, "invalid-standard-schema-contract"},
+      {"schema 3 with invalid results type", schema_3_invalid_results,
+       SweepAttemptStatus::Partial, "invalid-standard-schema-contract"},
+      {"schema 3 without results", schema_3_missing_results,
+       SweepAttemptStatus::Partial, "invalid-standard-schema-contract"},
+      {"missing configuration", missing_configuration,
+       SweepAttemptStatus::Partial, "missing-standard-schema-version"},
+      {"missing schema identity", missing_schema, SweepAttemptStatus::Partial,
+       "missing-standard-schema-version"},
+      {"invalid schema identity type", invalid_schema_type,
+       SweepAttemptStatus::Partial, "unsupported-standard-schema-version"},
+      {"unsupported explicit schema 1", unsupported_schema_1,
+       SweepAttemptStatus::Partial, "unsupported-standard-schema-version"},
+      {"unsupported explicit schema 4", unsupported_schema_4,
+       SweepAttemptStatus::Partial, "unsupported-standard-schema-version"},
+  };
+
+  for (const CompletionCase& test_case : cases) {
+    SCOPED_TRACE(test_case.name);
+    const SweepNestedCompletion completion = classify_sweep_nested_completion(
+        SweepNestedMode::Standard, test_case.result);
+    EXPECT_EQ(completion.status, test_case.expected_status);
+    EXPECT_EQ(completion.reason, test_case.expected_reason);
+  }
+}
+
 TEST(SweepRunnerTest, NestedCompletionIsModeAware) {
   const SweepNestedCompletion standard =
       classify_sweep_nested_completion(SweepNestedMode::Standard, make_standard_result("complete", true));
   EXPECT_EQ(standard.status, SweepAttemptStatus::Complete);
-
-  Json invalid_standard_conclusions = make_standard_result("complete", true);
-  invalid_standard_conclusions["conclusions_valid"] = false;
-  const SweepNestedCompletion invalid_standard = classify_sweep_nested_completion(
-      SweepNestedMode::Standard, invalid_standard_conclusions);
-  EXPECT_EQ(invalid_standard.status, SweepAttemptStatus::Partial);
-  EXPECT_EQ(invalid_standard.reason, "nested-standard-result-incomplete");
-
-  const SweepNestedCompletion missing_standard_conclusions =
-      classify_sweep_nested_completion(
-          SweepNestedMode::Standard,
-          {{"status", "complete"}, {"results_complete", true}});
-  EXPECT_EQ(missing_standard_conclusions.status, SweepAttemptStatus::Partial);
-  EXPECT_EQ(missing_standard_conclusions.reason,
-            "nested-standard-result-incomplete");
 
   const SweepNestedCompletion tlb =
       classify_sweep_nested_completion(SweepNestedMode::TlbAnalysis, make_tlb_result("complete", true));
@@ -612,7 +716,7 @@ TEST(SweepRunnerTest, NonemptyFailurePayloadRetainsClassifierReasonWhenNoOverrid
   ASSERT_EQ(execution.output_json["runs"].size(), 1u);
   EXPECT_EQ(execution.output_json["runs"][0]["status"], "failed");
   EXPECT_EQ(execution.output_json["runs"][0]["status_reason"],
-            "nested-standard-result-incomplete");
+            "missing-standard-schema-version");
   EXPECT_EQ(execution.output_json["runs"][0]["result"], incomplete_result);
 }
 

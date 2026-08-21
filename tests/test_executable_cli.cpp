@@ -920,7 +920,11 @@ TEST(ExecutableCliIntegrationTest, StandardBenchmarkWritesJsonIntegration) {
 
   const nlohmann::json json = nlohmann::json::parse(read_file(output.path()));
   EXPECT_EQ(json["configuration"]["mode"], "benchmark");
+  EXPECT_EQ(json["configuration"]["benchmark_schema_version"],
+            Constants::BENCHMARK_JSON_SCHEMA_VERSION);
   EXPECT_EQ(json["configuration"]["output_file"], output.path());
+  EXPECT_EQ(json["status"], "complete");
+  EXPECT_TRUE(json["results_complete"].get<bool>());
   EXPECT_TRUE(json["conclusions_valid"].get<bool>());
   EXPECT_EQ(json["planned_loops"], 3u);
   EXPECT_EQ(json["completed_loops"], 3u);
@@ -940,7 +944,8 @@ TEST(ExecutableCliIntegrationTest,
   ASSERT_EQ(result.exit_code, EXIT_SUCCESS) << result.stderr_output;
   const nlohmann::json json = parse_single_stdout_json(result);
   EXPECT_EQ(json["configuration"]["mode"], "benchmark");
-  EXPECT_EQ(json["configuration"]["benchmark_schema_version"], 2);
+  EXPECT_EQ(json["configuration"]["benchmark_schema_version"],
+            Constants::BENCHMARK_JSON_SCHEMA_VERSION);
   EXPECT_EQ(json["configuration"]["output_file"], "-");
   EXPECT_EQ(json["status"], "complete");
   EXPECT_TRUE(json["results_complete"].get<bool>());
@@ -981,7 +986,8 @@ TEST(ExecutableCliIntegrationTest,
       nlohmann::json::parse(read_file(output_path.string()));
   EXPECT_EQ(json["configuration"]["output_file"], "./-");
   EXPECT_EQ(json["configuration"]["mode"], "benchmark");
-  EXPECT_EQ(json["configuration"]["benchmark_schema_version"], 2);
+  EXPECT_EQ(json["configuration"]["benchmark_schema_version"],
+            Constants::BENCHMARK_JSON_SCHEMA_VERSION);
   EXPECT_EQ(json["status"], "complete");
   EXPECT_TRUE(json["results_complete"].get<bool>());
   EXPECT_TRUE(json["conclusions_valid"].get<bool>());
@@ -1064,6 +1070,17 @@ TEST(ExecutableCliIntegrationTest, StandardSweepWritesCompletionMetadataIntegrat
   EXPECT_EQ(json["planned_runs"], 3u);
   EXPECT_EQ(json["completed_runs"], 3u);
   EXPECT_TRUE(json["conclusions_valid"].get<bool>());
+  ASSERT_EQ(json["runs"].size(), 3u);
+  for (const nlohmann::json& run : json["runs"]) {
+    EXPECT_EQ(run["status"], "complete");
+    EXPECT_EQ(run["result"]["configuration"]
+                 ["benchmark_schema_version"],
+              Constants::BENCHMARK_JSON_SCHEMA_VERSION);
+    EXPECT_EQ(run["result"]["configuration"]["output_file"], "");
+    EXPECT_EQ(run["result"]["status"], "complete");
+    EXPECT_TRUE(run["result"]["results_complete"].get<bool>());
+    EXPECT_TRUE(run["result"]["conclusions_valid"].get<bool>());
+  }
   EXPECT_EQ(count_occurrences(
                 result.output,
                 Messages::msg_results_saved_to(output.path())),
@@ -1097,7 +1114,7 @@ TEST(ExecutableCliIntegrationTest,
     EXPECT_EQ(run["status"], "complete");
     EXPECT_EQ(run["result"]["configuration"]
                  ["benchmark_schema_version"],
-              2);
+              Constants::BENCHMARK_JSON_SCHEMA_VERSION);
     EXPECT_EQ(run["result"]["configuration"]["output_file"], "");
     EXPECT_EQ(run["result"]["status"], "complete");
     EXPECT_TRUE(run["result"]["results_complete"].get<bool>());
