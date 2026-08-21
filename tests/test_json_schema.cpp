@@ -148,6 +148,7 @@ TEST(JsonSchemaTest, BenchmarkExporterIncludesBenchmarkModeAndOmitsEmptySections
 
   const nlohmann::json output_json = read_json_file(config.output_file);
   EXPECT_EQ(output_json[JsonKeys::CONFIGURATION][JsonKeys::MODE], Constants::BENCHMARK_JSON_MODE_NAME);
+  EXPECT_EQ(output_json[JsonKeys::CONFIGURATION]["output_file"], config.output_file);
   EXPECT_TRUE(output_json[JsonKeys::CONFIGURATION].contains(JsonKeys::LATENCY_CHAIN_MODE));
   EXPECT_FALSE(output_json.contains(JsonKeys::MAIN_MEMORY));
   EXPECT_FALSE(output_json.contains(JsonKeys::CACHE));
@@ -213,8 +214,10 @@ TEST(JsonSchemaTest, BenchmarkSchemaV2IncludesCompletionAndNullableMeasurements)
       0.300);
   EXPECT_EQ(output["configuration"]["benchmark_seed"],
             "18446744073709551615");
+  EXPECT_EQ(output["configuration"]["output_file"], config.output_file);
   EXPECT_EQ(output["status"], "partial");
   EXPECT_FALSE(output["results_complete"].get<bool>());
+  EXPECT_FALSE(output["conclusions_valid"].get<bool>());
   EXPECT_EQ(output["planned_loops"], 2u);
   ASSERT_EQ(output["loops"].size(), 1u);
   const nlohmann::json measurements = output["loops"][0]["measurements"];
@@ -285,6 +288,7 @@ TEST(JsonSchemaTest, BenchmarkCheckpointAtomicallyProgressesToComplete) {
   nlohmann::json output = read_json_file(config.output_file);
   EXPECT_EQ(output["status"], "partial");
   EXPECT_FALSE(output["results_complete"].get<bool>());
+  EXPECT_FALSE(output["conclusions_valid"].get<bool>());
 
   stats.status = BenchmarkRunStatus::Complete;
   stats.status_reason.clear();
@@ -293,6 +297,7 @@ TEST(JsonSchemaTest, BenchmarkCheckpointAtomicallyProgressesToComplete) {
   output = read_json_file(config.output_file);
   EXPECT_EQ(output["status"], "complete");
   EXPECT_TRUE(output["results_complete"].get<bool>());
+  EXPECT_TRUE(output["conclusions_valid"].get<bool>());
   EXPECT_FALSE(std::filesystem::exists(config.output_file + ".tmp"));
 }
 

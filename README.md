@@ -175,7 +175,8 @@ Treat benchmark values as measurements of the configured workload under the obse
   physical cache-line migration or isolate coherence-fabric latency, and macOS user space cannot guarantee physical core
   pinning.
 
-JSON output records completion and nullable measurement state instead of using zero for unavailable results. Consumers
+JSON output records completion and nullable measurement state instead of using zero for unavailable results. Standard
+schema 2 also preserves the raw output target and exposes `conclusions_valid` alongside `results_complete`. Consumers
 making conclusions should reject incomplete or interrupted runs according to the mode-specific status fields. Every
 direct command or CPU sweep using `--output -` reserves stdout for one final JSON document and routes its post-parse
 human transcript to stderr; file output is atomic, while standard commands, sweeps, and GPU retain their mode-specific

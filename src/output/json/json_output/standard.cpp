@@ -258,10 +258,12 @@ void add_standard_benchmark_results(nlohmann::ordered_json& output,
   output["completed_loops"] = stats.completed_loops;
   output["planned_measurements"] = stats.planned_measurements;
   output["completed_measurements"] = stats.completed_measurements;
-  output["results_complete"] =
+  const bool results_complete =
       stats.status == BenchmarkRunStatus::Complete &&
       stats.completed_loops == stats.planned_loops &&
       stats.completed_measurements == stats.planned_measurements;
+  output["results_complete"] = results_complete;
+  output["conclusions_valid"] = results_complete;
 
   output["loops"] = nlohmann::json::array();
   for (const BenchmarkResults& loop : stats.loop_results) {

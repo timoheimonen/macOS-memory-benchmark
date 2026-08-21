@@ -338,7 +338,8 @@ void update_sweep_output(nlohmann::ordered_json& output_json, const nlohmann::or
 SweepNestedCompletion classify_standard_completion(const nlohmann::ordered_json& result_json) {
   const std::string status = optional_string(result_json, "status");
   const std::string reason = optional_string(result_json, "status_reason");
-  if (status == "complete" && optional_bool(result_json, "results_complete")) {
+  if (status == "complete" && optional_bool(result_json, "results_complete") &&
+      optional_bool(result_json, "conclusions_valid")) {
     return {SweepAttemptStatus::Complete, ""};
   }
   if (status == "interrupted") {

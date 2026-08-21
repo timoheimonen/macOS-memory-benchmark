@@ -53,7 +53,10 @@ std::vector<Json> make_parameters(size_t count) {
 }
 
 Json make_standard_result(const std::string& status, bool results_complete, const std::string& reason = "") {
-  return {{"status", status}, {"status_reason", reason}, {"results_complete", results_complete}};
+  return {{"status", status},
+          {"status_reason", reason},
+          {"results_complete", results_complete},
+          {"conclusions_valid", results_complete}};
 }
 
 Json make_tlb_result(const std::string& status, bool conclusions_valid) {
@@ -92,6 +95,21 @@ TEST(SweepRunnerTest, NestedCompletionIsModeAware) {
   const SweepNestedCompletion standard =
       classify_sweep_nested_completion(SweepNestedMode::Standard, make_standard_result("complete", true));
   EXPECT_EQ(standard.status, SweepAttemptStatus::Complete);
+
+  Json invalid_standard_conclusions = make_standard_result("complete", true);
+  invalid_standard_conclusions["conclusions_valid"] = false;
+  const SweepNestedCompletion invalid_standard = classify_sweep_nested_completion(
+      SweepNestedMode::Standard, invalid_standard_conclusions);
+  EXPECT_EQ(invalid_standard.status, SweepAttemptStatus::Partial);
+  EXPECT_EQ(invalid_standard.reason, "nested-standard-result-incomplete");
+
+  const SweepNestedCompletion missing_standard_conclusions =
+      classify_sweep_nested_completion(
+          SweepNestedMode::Standard,
+          {{"status", "complete"}, {"results_complete", true}});
+  EXPECT_EQ(missing_standard_conclusions.status, SweepAttemptStatus::Partial);
+  EXPECT_EQ(missing_standard_conclusions.reason,
+            "nested-standard-result-incomplete");
 
   const SweepNestedCompletion tlb =
       classify_sweep_nested_completion(SweepNestedMode::TlbAnalysis, make_tlb_result("complete", true));

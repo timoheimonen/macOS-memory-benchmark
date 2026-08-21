@@ -141,6 +141,9 @@ int write_json_to_file(const std::filesystem::path& file_path,
  *         or JSON construction fails.
  * @note Concurrent calls are safe when each caller keeps its referenced inputs
  *       immutable for the duration of the call.
+ * @note `configuration.output_file` preserves the raw configured target.
+ *       Top-level `conclusions_valid` is true exactly when `results_complete`
+ *       is true.
  */
 nlohmann::ordered_json build_results_json(const BenchmarkConfig& config,
                                           const BenchmarkStatistics& stats,

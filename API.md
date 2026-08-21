@@ -50,7 +50,8 @@ The sentinel is classified from the raw option value before path normalization:
 - `--output -` selects stdout JSON;
 - an empty value disables JSON for a direct command, as does omitting `--output`;
 - an empty value in a sweep is a missing/invalid required output target;
-- every other non-empty value is a file target, including `./-` and flag-shaped names such as `-G`; therefore
+- every other non-empty value is a file target, including `./-` and flag-shaped names such as `-G`, `-T`,
+  `--analyze-tlb`, `-k`, and `--cache-size`; therefore
   `--output ./-` writes an ordinary file named `-` in the current directory.
 
 After successful parsing and mode selection, a supported machine-output command follows these stream rules:
@@ -112,7 +113,7 @@ contract version 1 first appears in software version `0.62.0`.
 
 | Payload | Schema authority | A command result is complete only when |
 |---|---|---|
-| Standard | `configuration.benchmark_schema_version == 2` | `status == "complete" && results_complete == true` |
+| Standard | `configuration.benchmark_schema_version == 2` | `status == "complete" && results_complete == true && conclusions_valid == true` |
 | Patterns | `configuration.pattern_schema_version == 3` | `status == "complete" && results_complete == true` |
 | TLB | `configuration.schema_version == 4` | `tlb_analysis.status == "complete" && tlb_analysis.conclusions_valid == true` |
 | Core-to-core | `configuration.schema_version == 2` | `core_to_core_latency.status == "complete" && core_to_core_latency.measurements_complete == true` |
@@ -137,6 +138,12 @@ non-null value. TLB consumers must also honor the selected detection/evidence fi
 conclusions additionally require `affinity_hint_comparison_interpretable == true`. A position-balanced GPU comparison
 additionally requires `operation_order_balance_complete == true`; consumers of an operation also require a measured,
 non-null value and its applicable validation/quality fields.
+
+Direct standard schema-2 payloads preserve the raw target token in `configuration.output_file`: stdout therefore records
+`"-"`, while file targets retain spellings such as `./-`, `-T`, or `--cache-size` rather than a normalized path. A
+standard result nested in a sweep records an empty target because the envelope owns persistence and nested file writes
+are disabled. Top-level standard `conclusions_valid` is true exactly when `results_complete` is true; consumers must still
+check the explicit status and both booleans shown in the table.
 
 Graceful interruption or runtime failure after a representable result state has been initialized emits the available
 partial, interrupted, error, or failed JSON snapshot. The execution status and payload are independent: a non-zero status
@@ -180,6 +187,12 @@ accept(document)
 Shell capture example:
 
 ```bash
+memory_benchmark --benchmark --only-bandwidth --buffer-size 512 --count 5 --seed 42 --output - \
+  >benchmark.json 2>benchmark.log
+jq -e '.configuration.benchmark_schema_version == 2 and
+       .status == "complete" and .results_complete == true and
+       .conclusions_valid == true' benchmark.json
+
 memory_benchmark --patterns --buffer-size 512 --count 5 --seed 42 --output - \
   >patterns.json 2>patterns.log
 jq -e '.configuration.pattern_schema_version == 3 and
@@ -221,9 +234,9 @@ jq -e '.schema_version == 1 and .mode == "gpu_bandwidth" and
   is unchanged.
 - A transport change alone does not change the measurement schema.
 - Schema-location normalization belongs in client code; this API does not move existing version fields.
-- GPU retains its exact captured `argv` and raw `configuration.output_file`. With stdout transport the latter is the
-  original target token `"-"`, not a filesystem path; `./-`, `-G`, and every other non-empty non-sentinel value retain
-  their file meaning.
+- Direct standard and GPU payloads retain raw `configuration.output_file`. With stdout transport it is the original
+  target token `"-"`, not a filesystem path; `./-`, flag-shaped names, and every other non-empty non-sentinel value retain
+  their file meaning. GPU additionally retains its exact captured `argv`.
 
 ## Benchmark process policy
 

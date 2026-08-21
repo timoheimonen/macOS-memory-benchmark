@@ -920,6 +920,8 @@ TEST(ExecutableCliIntegrationTest, StandardBenchmarkWritesJsonIntegration) {
 
   const nlohmann::json json = nlohmann::json::parse(read_file(output.path()));
   EXPECT_EQ(json["configuration"]["mode"], "benchmark");
+  EXPECT_EQ(json["configuration"]["output_file"], output.path());
+  EXPECT_TRUE(json["conclusions_valid"].get<bool>());
   EXPECT_EQ(json["planned_loops"], 3u);
   EXPECT_EQ(json["completed_loops"], 3u);
   EXPECT_EQ(json["loops"].size(), 3u);
@@ -939,8 +941,10 @@ TEST(ExecutableCliIntegrationTest,
   const nlohmann::json json = parse_single_stdout_json(result);
   EXPECT_EQ(json["configuration"]["mode"], "benchmark");
   EXPECT_EQ(json["configuration"]["benchmark_schema_version"], 2);
+  EXPECT_EQ(json["configuration"]["output_file"], "-");
   EXPECT_EQ(json["status"], "complete");
   EXPECT_TRUE(json["results_complete"].get<bool>());
+  EXPECT_TRUE(json["conclusions_valid"].get<bool>());
   EXPECT_EQ(json["planned_loops"], 1u);
   EXPECT_EQ(json["completed_loops"], 1u);
 
@@ -975,10 +979,12 @@ TEST(ExecutableCliIntegrationTest,
   EXPECT_FALSE(std::filesystem::exists(result.directory->path() / "-.tmp"));
   const nlohmann::json json =
       nlohmann::json::parse(read_file(output_path.string()));
+  EXPECT_EQ(json["configuration"]["output_file"], "./-");
   EXPECT_EQ(json["configuration"]["mode"], "benchmark");
   EXPECT_EQ(json["configuration"]["benchmark_schema_version"], 2);
   EXPECT_EQ(json["status"], "complete");
   EXPECT_TRUE(json["results_complete"].get<bool>());
+  EXPECT_TRUE(json["conclusions_valid"].get<bool>());
   EXPECT_NE(result.stdout_output.find(Messages::msg_running_benchmarks()),
             std::string::npos)
       << result.stdout_output;
@@ -989,32 +995,57 @@ TEST(ExecutableCliIntegrationTest,
 }
 
 TEST(ExecutableCliIntegrationTest,
-     FlagShapedOutputValueRemainsStandardFileTargetIntegration) {
-  const CliResult result = run_memory_benchmark({
-      "--benchmark", "--only-bandwidth", "--buffer-size", "1",
-      "--iterations", "1", "--count", "1", "--threads", "1",
-      "--output", "-G"});
+     FlagShapedOutputValuesRemainStandardFileTargetsIntegration) {
+  const auto verify_target = [](const std::string& target) {
+    const CliResult result = run_memory_benchmark(
+        {"--benchmark", "--only-bandwidth", "--buffer-size", "1",
+         "--iterations", "1", "--count", "1", "--threads", "1",
+         "--output", target},
+        std::chrono::minutes(2));
 
-  expect_process_completed(result);
-  ASSERT_EQ(result.exit_code, EXIT_SUCCESS) << result.output;
-  ASSERT_NE(result.directory, nullptr);
-  const std::filesystem::path output_path = result.directory->path() / "-G";
-  ASSERT_TRUE(std::filesystem::is_regular_file(output_path));
-  EXPECT_FALSE(
-      std::filesystem::exists(result.directory->path() / "-G.tmp"));
+    expect_process_completed(result);
+    ASSERT_EQ(result.exit_code, EXIT_SUCCESS) << result.output;
+    ASSERT_NE(result.directory, nullptr);
+    const std::filesystem::path output_path =
+        result.directory->path() / target;
+    ASSERT_TRUE(std::filesystem::is_regular_file(output_path));
+    EXPECT_FALSE(std::filesystem::exists(
+        result.directory->path() / (target + ".tmp")));
 
-  const nlohmann::json json =
-      nlohmann::json::parse(read_file(output_path.string()));
-  EXPECT_EQ(json["configuration"]["mode"], "benchmark");
-  EXPECT_EQ(json["configuration"]["benchmark_schema_version"], 2);
-  EXPECT_EQ(json["status"], "complete");
-  EXPECT_TRUE(json["results_complete"].get<bool>());
-  EXPECT_EQ(result.output.find("mutually exclusive"), std::string::npos)
-      << result.output;
-  EXPECT_EQ(count_occurrences(result.output,
-                              Messages::msg_results_saved_to("")),
-            1u)
-      << result.output;
+    const nlohmann::json json =
+        nlohmann::json::parse(read_file(output_path.string()));
+    EXPECT_EQ(json["configuration"]["mode"],
+              Constants::BENCHMARK_JSON_MODE_NAME);
+    EXPECT_EQ(json["configuration"]["benchmark_schema_version"],
+              Constants::BENCHMARK_JSON_SCHEMA_VERSION);
+    EXPECT_EQ(json["configuration"]["output_file"], target);
+    EXPECT_EQ(json["status"], "complete");
+    EXPECT_TRUE(json["results_complete"].get<bool>());
+    EXPECT_TRUE(json["conclusions_valid"].get<bool>());
+    EXPECT_EQ(result.output.find(Messages::error_analyze_tlb_must_be_used_alone()),
+              std::string::npos)
+        << result.output;
+    EXPECT_EQ(result.output.find(Messages::error_missing_value("--cache-size")),
+              std::string::npos)
+        << result.output;
+    EXPECT_EQ(result.output.find(Messages::error_cache_size_invalid(
+                  Constants::MIN_CACHE_SIZE_KB, Constants::MAX_CACHE_SIZE_KB,
+                  Constants::MAX_CACHE_SIZE_KB / 1024)),
+              std::string::npos)
+        << result.output;
+    EXPECT_EQ(result.output.find("mutually exclusive"), std::string::npos)
+        << result.output;
+    EXPECT_EQ(count_occurrences(result.output,
+                                Messages::msg_results_saved_to("")),
+              1u)
+        << result.output;
+  };
+
+  for (const char* target :
+       {"-G", "-T", "--analyze-tlb", "-k", "--cache-size"}) {
+    SCOPED_TRACE(target);
+    verify_target(target);
+  }
 }
 
 TEST(ExecutableCliIntegrationTest, StandardSweepWritesCompletionMetadataIntegration) {
@@ -1067,8 +1098,10 @@ TEST(ExecutableCliIntegrationTest,
     EXPECT_EQ(run["result"]["configuration"]
                  ["benchmark_schema_version"],
               2);
+    EXPECT_EQ(run["result"]["configuration"]["output_file"], "");
     EXPECT_EQ(run["result"]["status"], "complete");
     EXPECT_TRUE(run["result"]["results_complete"].get<bool>());
+    EXPECT_TRUE(run["result"]["conclusions_valid"].get<bool>());
   }
 
   EXPECT_EQ(result.stdout_output.find(Messages::config_header(SOFTVERSION)),

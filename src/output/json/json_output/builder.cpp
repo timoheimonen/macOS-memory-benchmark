@@ -94,6 +94,7 @@ nlohmann::json build_config_json(const BenchmarkConfig& config, const char* mode
   } else if (std::string(mode_name) == Constants::BENCHMARK_JSON_MODE_NAME) {
     config_json["benchmark_schema_version"] =
         Constants::BENCHMARK_JSON_SCHEMA_VERSION;
+    config_json["output_file"] = config.output_file;
     config_json["methodology_version"] =
         Constants::BENCHMARK_METHODOLOGY_VERSION;
     config_json["benchmark_seed"] = std::to_string(config.benchmark_seed);

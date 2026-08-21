@@ -698,8 +698,9 @@ Every direct mode and the CPU modes' supported sweeps can send their existing pa
 for exact raw `-`, to one final stdout document. This transport does not wrap or change the measurement schema;
 [API.md](API.md) is the process-integration contract and support matrix.
 
-- Standard mode schema 2: `configuration`, `execution_time_sec`, completion counters/status, `results_complete`,
-  per-loop `loops`, `main_memory`, `cache`, `timestamp`, and `version`.
+- Standard mode schema 2: `configuration` with the raw `output_file` target, `execution_time_sec`, completion
+  counters/status, `results_complete`, `conclusions_valid`, per-loop `loops`, `main_memory`, `cache`, `timestamp`, and
+  `version`.
 - Pattern mode schema 3: `configuration`, `execution_time_sec`, command status/reason, planned/completed loop and
   measurement counters, `results_complete`, optional retained `patterns` evidence, `timestamp`, and `version`.
 - TLB analysis schema 4: `configuration`, `execution_time_sec`, `tlb_analysis`, `timestamp`, `version`; conclusions
@@ -715,8 +716,9 @@ for exact raw `-`, to one final stdout document. This transport does not wrap or
   `attempted_runs == runs.size()`; a file target checkpoints each attempt and also checkpoints a terminal envelope when
   the run plan is empty or a stop is observed before a run, without incrementing `attempted_runs`. Stdout preserves that
   logical cadence but defers serialization until the terminal envelope. `completed_runs` requires nested
-  `status: "complete"` and `results_complete: true` for
-  standard/pattern, `tlb_analysis.status: "complete"` and `tlb_analysis.conclusions_valid: true` for TLB, or
+  `status: "complete"`, `results_complete: true`, and `conclusions_valid: true` for standard; nested
+  `status: "complete"` and `results_complete: true` for pattern; `tlb_analysis.status: "complete"` and
+  `tlb_analysis.conclusions_valid: true` for TLB; or
   `core_to_core_latency.status: "complete"` and `measurements_complete: true` for core-to-core. Partial, interrupted,
   and failed attempts remain as evidence without incrementing the completed count. TLB's native `status: "error"` maps
   to a failed attempt while its schema-4 payload is retained without a fabricated nested `status_reason`. The
@@ -731,8 +733,10 @@ loop measurements remain in JSON as evidence, while command status/counters keep
 failure may omit `patterns`; main and sweep orchestration still build the completion payload before returning or
 classifying the failure.
 
-Command completeness for standard and pattern requires both `status == "complete"` and `results_complete == true`.
-TLB requires `tlb_analysis.status == "complete" && tlb_analysis.conclusions_valid == true`; core-to-core requires
+Command completeness for standard requires
+`status == "complete" && results_complete == true && conclusions_valid == true`; pattern requires
+`status == "complete" && results_complete == true`. TLB requires
+`tlb_analysis.status == "complete" && tlb_analysis.conclusions_valid == true`; core-to-core requires
 `core_to_core_latency.status == "complete" && core_to_core_latency.measurements_complete == true`. Metric consumers must
 additionally require the selected measurement's status and non-null value; an intentionally skipped pattern measurement
 can coexist with command completeness without being consumable as a measured value. Affinity-scenario interpretation
@@ -750,6 +754,8 @@ In addition to standard fields (buffer size, iterations, loop count, thread coun
 - `latency_tlb_locality_bytes` (number): TLB-locality window size in bytes.
 - `latency_tlb_locality_kb` (number): TLB-locality window size in KB.
 - `benchmark_schema_version` (number): `2`.
+- `output_file` (string, standard schema 2): Raw direct output target; nested standard sweep results use an empty string
+  because the envelope owns persistence.
 - `methodology_version` (string): `benchmark-v2-calibrated-seeded-balanced`.
 - `benchmark_seed` (string): exact uint64 decimal string plus source/encoding fields.
 - Calibration targets/windows and phase/operation schedule policies.

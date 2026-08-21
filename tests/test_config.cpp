@@ -176,6 +176,123 @@ TEST(ConfigTest, ParseOutputPreservesStdoutSentinelAndLiteralDashPath) {
   }
 }
 
+TEST(ConfigTest, ParseFlagShapedOutputTargetsRemainOpaqueAcrossGeneralModes) {
+  struct ModeCase {
+    const char* option;
+    bool patterns;
+  };
+
+  const char* output_options[] = {"-o", "--output"};
+  const char* output_targets[] = {"-T", "--analyze-tlb", "-k", "--cache-size"};
+  const ModeCase modes[] = {{"--benchmark", false}, {"--patterns", true}};
+
+  size_t case_index = 0;
+  for (const char* output_option : output_options) {
+    for (const char* output_target : output_targets) {
+      for (const ModeCase& mode : modes) {
+        std::vector<std::string> arguments = {"program"};
+        const bool output_first = (case_index++ / 2) % 2 == 0;
+        if (output_first) {
+          arguments.insert(arguments.end(), {output_option, output_target, "--non-cacheable", mode.option});
+        } else {
+          arguments.insert(arguments.end(), {mode.option, output_option, output_target, "--non-cacheable"});
+        }
+        SCOPED_TRACE(testing::PrintToString(arguments));
+
+        BenchmarkConfig config;
+        const CapturedParseResult parsed = parse_capturing_stderr(arguments, config);
+
+        EXPECT_EQ(parsed.result, EXIT_SUCCESS) << parsed.stderr_output;
+        if (parsed.result != EXIT_SUCCESS) {
+          continue;
+        }
+        EXPECT_EQ(config.output_file, output_target);
+        EXPECT_EQ(config.run_benchmark, !mode.patterns);
+        EXPECT_EQ(config.run_patterns, mode.patterns);
+        EXPECT_FALSE(config.analyze_tlb);
+        EXPECT_FALSE(config.run_sweep);
+        EXPECT_TRUE(config.use_non_cacheable);
+        EXPECT_EQ(config.custom_cache_size_kb_ll, -1);
+        EXPECT_FALSE(config.use_custom_cache_size);
+        EXPECT_TRUE(parsed.stderr_output.empty()) << parsed.stderr_output;
+      }
+    }
+  }
+}
+
+TEST(ConfigTest, ParseOutputPrescanSkipsExactlyOneFlagShapedValue) {
+  struct BoundaryCase {
+    const char* label;
+    std::vector<std::string> arguments;
+    const char* output_target;
+    bool analyze_tlb;
+    bool benchmark;
+    long long cache_size_kb;
+  };
+
+  const BoundaryCase cases[] = {
+      {"real TLB option after output value", {"program", "--output", "-T", "--analyze-tlb"}, "-T", true, false,
+       -1},
+      {"real TLB option before output value", {"program", "-T", "--output", "--analyze-tlb"}, "--analyze-tlb",
+       true, false, -1},
+      {"real cache option after output value",
+       {"program", "--output", "-k", "--cache-size", "256", "--benchmark"}, "-k", false, true, 256},
+      {"real cache option before output value",
+       {"program", "-k", "256", "--benchmark", "--output", "--cache-size"}, "--cache-size", false, true, 256},
+  };
+
+  for (const BoundaryCase& test_case : cases) {
+    SCOPED_TRACE(test_case.label);
+    BenchmarkConfig config;
+    const CapturedParseResult parsed = parse_capturing_stderr(test_case.arguments, config);
+
+    EXPECT_EQ(parsed.result, EXIT_SUCCESS) << parsed.stderr_output;
+    if (parsed.result != EXIT_SUCCESS) {
+      continue;
+    }
+    EXPECT_EQ(config.output_file, test_case.output_target);
+    EXPECT_EQ(config.analyze_tlb, test_case.analyze_tlb);
+    EXPECT_EQ(config.run_benchmark, test_case.benchmark);
+    EXPECT_FALSE(config.run_patterns);
+    EXPECT_EQ(config.custom_cache_size_kb_ll, test_case.cache_size_kb);
+    EXPECT_EQ(config.use_custom_cache_size, test_case.cache_size_kb >= 0);
+    EXPECT_TRUE(parsed.stderr_output.empty()) << parsed.stderr_output;
+  }
+}
+
+TEST(ConfigTest, ParseFlagShapedOutputTargetDoesNotInventMode) {
+  BenchmarkConfig config;
+  const CapturedParseResult parsed = parse_capturing_stderr({"program", "--output", "-T"}, config);
+
+  ASSERT_EQ(parsed.result, EXIT_SUCCESS) << parsed.stderr_output;
+  EXPECT_EQ(config.output_file, "-T");
+  EXPECT_FALSE(config.run_benchmark);
+  EXPECT_FALSE(config.run_patterns);
+  EXPECT_FALSE(config.analyze_tlb);
+  EXPECT_TRUE(parsed.stderr_output.empty()) << parsed.stderr_output;
+}
+
+TEST(ConfigTest, ParseMissingOutputValueUsesNormalParserDiagnostic) {
+  BenchmarkConfig config;
+  const CapturedParseResult parsed = parse_capturing_stderr({"program", "--benchmark", "--output"}, config);
+  const std::string expected_diagnostic =
+      Messages::error_prefix() + Messages::error_missing_value("--output") + "\n";
+
+  EXPECT_EQ(parsed.result, EXIT_FAILURE);
+  EXPECT_EQ(parsed.stderr_output.find(expected_diagnostic), 0u) << parsed.stderr_output;
+}
+
+TEST(ConfigTest, ParseDuplicateOutputUsesNormalParserDiagnostic) {
+  BenchmarkConfig config;
+  const CapturedParseResult parsed =
+      parse_capturing_stderr({"program", "--benchmark", "--output", "-T", "--output", "second.json"}, config);
+  const std::string expected_diagnostic =
+      Messages::error_prefix() + Messages::error_duplicate_option("--output") + "\n";
+
+  EXPECT_EQ(parsed.result, EXIT_FAILURE);
+  EXPECT_EQ(parsed.stderr_output.find(expected_diagnostic), 0u) << parsed.stderr_output;
+}
+
 TEST(ConfigTest, RejectsMalformedNumericTokensWithCentralizedErrors) {
   struct InvalidNumericCase {
     std::vector<std::string> arguments;
@@ -422,16 +539,18 @@ TEST(ConfigTest, ValidateSweepRejectsDuplicateParameter) {
 // The code parses --cache-size in a first pass, then skips it in the second pass
 // (since it was already parsed). This allows --cache-size to work correctly.
 TEST(ConfigTest, ParseCustomCacheSize) {
-  BenchmarkConfig config;
-  const char* argv[] = {"program", "--cache-size", "256"};
-  int argc = 3;
+  for (const char* option : {"-k", "--cache-size"}) {
+    SCOPED_TRACE(option);
+    BenchmarkConfig config;
+    const CapturedParseResult parsed = parse_capturing_stderr({"program", option, "256"}, config);
 
-  // The code parses --cache-size in the first pass and sets the value,
-  // then in the second pass it skips it (since it was already parsed)
-  int result = parse_arguments(argc, const_cast<char**>(argv), config);
-  EXPECT_EQ(result, EXIT_SUCCESS);
-  EXPECT_EQ(config.custom_cache_size_kb_ll, 256);
-  EXPECT_TRUE(config.use_custom_cache_size);
+    // The code parses the option in the first pass, then skips it in the
+    // second pass because it was already parsed and validated.
+    EXPECT_EQ(parsed.result, EXIT_SUCCESS);
+    EXPECT_EQ(config.custom_cache_size_kb_ll, 256);
+    EXPECT_TRUE(config.use_custom_cache_size);
+    EXPECT_TRUE(parsed.stderr_output.empty()) << parsed.stderr_output;
+  }
 }
 
 TEST(ConfigTest, ParseMissingCacheSizeValueFailsInFirstPass) {
@@ -554,17 +673,19 @@ TEST(ConfigTest, ParseLatencyTlbLocalityInvalidNegative) {
 }
 
 TEST(ConfigTest, ParseAnalyzeTlbStandaloneAppliesSafeDefaultsAndGeneratedSeed) {
-  BenchmarkConfig config;
-  const char* argv[] = {"program", "--analyze-tlb"};
-  int argc = 2;
+  for (const char* option : {"-T", "--analyze-tlb"}) {
+    SCOPED_TRACE(option);
+    BenchmarkConfig config;
+    const CapturedParseResult parsed = parse_capturing_stderr({"program", option}, config);
 
-  int result = parse_arguments(argc, const_cast<char**>(argv), config);
-  EXPECT_EQ(result, EXIT_SUCCESS);
-  EXPECT_TRUE(config.analyze_tlb);
-  EXPECT_EQ(config.tlb_sweep_density, TlbSweepDensity::Medium);
-  EXPECT_EQ(config.sweep_max_runs, Constants::DEFAULT_ANALYZE_TLB_SWEEP_MAX_RUNS);
-  EXPECT_EQ(config.tlb_seed, scoped_config_test_hooks.generated_seed());
-  EXPECT_FALSE(config.user_specified_tlb_seed);
+    EXPECT_EQ(parsed.result, EXIT_SUCCESS);
+    EXPECT_TRUE(config.analyze_tlb);
+    EXPECT_EQ(config.tlb_sweep_density, TlbSweepDensity::Medium);
+    EXPECT_EQ(config.sweep_max_runs, Constants::DEFAULT_ANALYZE_TLB_SWEEP_MAX_RUNS);
+    EXPECT_EQ(config.tlb_seed, scoped_config_test_hooks.generated_seed());
+    EXPECT_FALSE(config.user_specified_tlb_seed);
+    EXPECT_TRUE(parsed.stderr_output.empty()) << parsed.stderr_output;
+  }
 }
 
 TEST(ConfigTest, ParseAnalyzeTlbExplicitSweepLimitOverridesSafeDefault) {

@@ -661,8 +661,9 @@ middle, and trailing items.
   persistence payload builder or serializing an intermediate document, and emit only the final envelope
 - For standard, pattern, and TLB sweeps, every attempted run is retained with its own `status` and `status_reason`.
   `attempted_runs` counts stored entries, while `completed_runs` counts only mode-specific nested results that are
-  genuinely complete: standard and pattern require nested `status: "complete"` with `results_complete: true`, while
-  TLB requires nested `tlb_analysis.status: "complete"` with `tlb_analysis.conclusions_valid: true`. Partial,
+  genuinely complete: standard requires nested `status: "complete"`, `results_complete: true`, and
+  `conclusions_valid: true`; pattern requires nested `status: "complete"` with `results_complete: true`; and TLB requires
+  nested `tlb_analysis.status: "complete"` with `tlb_analysis.conclusions_valid: true`. Partial,
   interrupted, and failed nested results never increment it. TLB's native `tlb_analysis.status: "error"` is mapped to
   a failed sweep attempt, and the schema-4 payload is retained without adding a nested `tlb_analysis.status_reason`
 - A parameter key may appear only once in one sweep command
@@ -1093,6 +1094,7 @@ process-status checks, schema compatibility, and the current transport support m
   "configuration": {
     "mode": "benchmark",
     "benchmark_schema_version": 2,
+    "output_file": "results.json",
     "methodology_version": "benchmark-v2-calibrated-seeded-balanced",
     "benchmark_seed": "123456789",
     "bandwidth_work_policy": "automatic-duration-calibration"
@@ -1104,6 +1106,7 @@ process-status checks, schema compatibility, and the current transport support m
   "planned_measurements": 75,
   "completed_measurements": 75,
   "results_complete": true,
+  "conclusions_valid": true,
   "loops": [ ... ],
   "main_memory": { ... },
   "cache": { ... },
@@ -1116,11 +1119,13 @@ Schema 2 stores exact uint64 seeds as decimal strings. Every per-loop measuremen
 exact passes/accesses/payload, requested/effective workers, seed, pilot/final duration, calibration quality, and schedule
 position. Only `measured` values enter aggregates. One measured loop is its own headline; multiple loop headlines use
 median P50. Statistics include average, P90/P95/P99, sample standard deviation, CV, MAD, min, and max. A standard file
-target is atomically checkpointed after completed loop-state changes. With `--output -`, those logical checkpoint
-boundaries remain active but persistence is a no-op, and the command emits one final snapshot. Consumers must require
-both `status: "complete"` and `results_complete: true` when completeness is mandatory. Bandwidth QoS metadata includes
-created workers plus per-worker success/failure counts; latency carries the main-thread outcome. These fields describe a
-best-effort scheduler hint, never hard core pinning.
+target is atomically checkpointed after completed loop-state changes. Direct payloads preserve the raw output token in
+`configuration.output_file`, including `"-"`, `./-`, and flag-shaped file names. Standard results nested in a sweep use an
+empty target because the envelope owns persistence. With `--output -`, logical checkpoint boundaries remain active but
+persistence is a no-op, and the command emits one final snapshot. Top-level `conclusions_valid` mirrors
+`results_complete`; consumers must require `status: "complete"` and both booleans when completeness is mandatory.
+Bandwidth QoS metadata includes created workers plus per-worker success/failure counts; latency carries the main-thread
+outcome. These fields describe a best-effort scheduler hint, never hard core pinning.
 
 ### Pattern benchmark JSON shape
 
@@ -1759,7 +1764,8 @@ jq '.main_memory.latency.automatic_locality_comparison.locality_latency_delta_ns
 
 # Reject incomplete standard output
 jq -e 'select(.configuration.benchmark_schema_version == 2 and
-              .status == "complete" and .results_complete == true)' results.json
+              .status == "complete" and .results_complete == true and
+              .conclusions_valid == true)' results.json
 
 # Pattern random read median and status
 jq '{status: .patterns.random.bandwidth.read_gb_s.status, median: .patterns.random.bandwidth.read_gb_s.statistics.median_p50}' patterns.json

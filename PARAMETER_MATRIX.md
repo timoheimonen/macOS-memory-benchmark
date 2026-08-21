@@ -185,9 +185,9 @@ Additional sweep rules:
   incrementing `attempted_runs`. A stdout sweep still performs every corresponding logical checkpoint transition without
   invoking the persistence payload builder or serializing an intermediate document; one final envelope is emitted after
   orchestration. `attempted_runs` equals stored `runs` entries; partial, interrupted, and failed attempts remain in that
-  array but stop further execution and do not increment `completed_runs`. A standard or pattern attempt is complete only
-  with nested `status: "complete"` and
-  `results_complete: true`; TLB requires nested `tlb_analysis.status: "complete"` and
+  array but stop further execution and do not increment `completed_runs`. A standard attempt is complete only with
+  nested `status: "complete"`, `results_complete: true`, and `conclusions_valid: true`; a pattern attempt requires nested
+  `status: "complete"` and `results_complete: true`; TLB requires nested `tlb_analysis.status: "complete"` and
   `tlb_analysis.conclusions_valid: true`; core-to-core requires nested `core_to_core_latency.status: "complete"` and
   `measurements_complete: true`. The authoritative schema-1 sweep acceptance predicate is exactly
   `status == "complete" && conclusions_valid == true`. Producers maintain `completed_runs == planned_runs` for an
