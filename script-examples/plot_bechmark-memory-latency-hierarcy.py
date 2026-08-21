@@ -7,6 +7,11 @@ from pathlib import Path
 
 import matplotlib.pyplot as plt # pyright: ignore[reportMissingModuleSource]
 
+from standard_result_contract import (
+    HEADLINE_LOCALITY_LAYOUT,
+    require_standard_result,
+)
+
 # Uses JSON output from, for example:
 # memory_benchmark --benchmark --count 5 --only-latency --output results/<file>.json
 
@@ -192,29 +197,15 @@ def load_latency_data(path: Path, metric: str):
     except json.JSONDecodeError:
         return parse_text_statistics(path, metric)
 
-    if data.get("mode") == "gpu_bandwidth" and data.get("schema_version") == 1:
-        raise RuntimeError(
-            "GPU bandwidth schema 1 is not supported by this standard CPU latency plotter."
-        )
-
+    contract = require_standard_result(data)
     config = data.get("configuration", {})
     cpu_name = str(config.get("cpu_name", "Unknown CPU"))
     version = data.get("version")
     if version is not None:
         version = str(version)
 
-    schema_version = config.get("benchmark_schema_version")
     try:
-        if schema_version == 2:
-            if (
-                data.get("status") != "complete"
-                or data.get("results_complete") is not True
-                or data.get("conclusions_valid") is not True
-            ):
-                raise RuntimeError(
-                    "Standard benchmark JSON is incomplete "
-                    "(schema 2 requires complete status, results_complete, and conclusions_valid)."
-                )
+        if contract.metric_layout == HEADLINE_LOCALITY_LAYOUT:
             l1_block = data["cache"]["l1"]["latency"]["headline_ns"]
             l2_block = data["cache"]["l2"]["latency"]["headline_ns"]
             locality = data["main_memory"]["latency"]["automatic_locality_comparison"]
@@ -231,7 +222,7 @@ def load_latency_data(path: Path, metric: str):
     except (KeyError, TypeError) as exc:
         raise RuntimeError(
             "JSON is missing required fields for memory hierarchy plot. "
-            "Expected schema-2 headline/locality fields or historical benchmark latency fields."
+            "Expected versioned headline/locality fields or historical benchmark latency fields."
         ) from exc
 
     categories = [

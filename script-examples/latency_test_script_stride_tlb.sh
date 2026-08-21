@@ -116,39 +116,30 @@ done
 echo ""
 echo "Building CSV summary: ${SUMMARY_CSV}"
 summary_status=0
-python3 - "${JSON_DIR}" "${SUMMARY_CSV}" "${total_runs}" <<'PY' || summary_status=$?
+python3 - "${SCRIPT_DIR}" "${JSON_DIR}" "${SUMMARY_CSV}" "${total_runs}" <<'PY' || summary_status=$?
 import csv
 import json
 import sys
 from pathlib import Path
 
-json_dir = Path(sys.argv[1])
-summary_csv = Path(sys.argv[2])
-expected_rows = int(sys.argv[3])
+sys.path.insert(0, sys.argv[1])
+from standard_result_contract import HEADLINE_LOCALITY_LAYOUT, require_standard_result
+
+json_dir = Path(sys.argv[2])
+summary_csv = Path(sys.argv[3])
+expected_rows = int(sys.argv[4])
 
 rows = []
 errors = []
 for path in sorted(json_dir.glob("*.json")):
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
-        if data.get("mode") == "gpu_bandwidth" and data.get("schema_version") == 1:
-            raise RuntimeError(
-                "GPU bandwidth schema 1 is not supported by this standard CPU latency extractor"
-            )
+        contract = require_standard_result(data)
         cfg = data.get("configuration", {})
         cache = data.get("cache", {}) or {}
         custom = cache.get("custom", {}) or {}
         latency = custom.get("latency", {}) or {}
-        if cfg.get("benchmark_schema_version") == 2:
-            if (
-                data.get("status") != "complete"
-                or data.get("results_complete") is not True
-                or data.get("conclusions_valid") is not True
-            ):
-                raise RuntimeError(
-                    "incomplete benchmark result "
-                    "(schema 2 requires complete status, results_complete, and conclusions_valid)"
-                )
+        if contract.metric_layout == HEADLINE_LOCALITY_LAYOUT:
             headline = latency.get("headline_ns", {}) or {}
             samples = headline.get("pooled_sample_distribution", {}) or {}
             stats = samples.get("statistics", {}) or {}

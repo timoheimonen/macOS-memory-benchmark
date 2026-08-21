@@ -30,6 +30,11 @@ from pathlib import Path
 
 import matplotlib.pyplot as plt
 
+from standard_result_contract import (
+    HEADLINE_LOCALITY_LAYOUT,
+    require_standard_result,
+)
+
 VALID_METRICS = ("average", "median", "p90", "p95", "p99", "min", "max", "stddev")
 
 
@@ -93,10 +98,7 @@ def load_data(path: Path, metric: str) -> dict:
     with path.open("r", encoding="utf-8") as fh:
         data = json.load(fh)
 
-    if data.get("mode") == "gpu_bandwidth" and data.get("schema_version") == 1:
-        raise RuntimeError(
-            f"GPU bandwidth schema 1 is not supported by this standard CPU benchmark plotter: {path}")
-
+    contract = require_standard_result(data, str(path))
     config = data.get("configuration", {})
     cpu_name = config.get("cpu_name") or data.get("cpu_name") or "Unknown CPU"
     version = data.get("version", "?")
@@ -104,17 +106,7 @@ def load_data(path: Path, metric: str) -> dict:
     mm = data.get("main_memory", {})
     bw = mm.get("bandwidth", {})
     cache = data.get("cache", {})
-    schema_version = config.get("benchmark_schema_version")
-    if schema_version == 2:
-        if (
-            data.get("status") != "complete"
-            or data.get("results_complete") is not True
-            or data.get("conclusions_valid") is not True
-        ):
-            raise RuntimeError(
-                f"Incomplete standard benchmark result "
-                f"(schema 2 requires complete status, results_complete, and conclusions_valid): {path}"
-            )
+    if contract.metric_layout == HEADLINE_LOCALITY_LAYOUT:
         locality = mm.get("latency", {}).get("automatic_locality_comparison", {})
         l1_latency_key = "headline_ns"
         locality_16k_key = "locality_16k_latency_ns"

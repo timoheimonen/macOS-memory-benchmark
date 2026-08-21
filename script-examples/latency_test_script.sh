@@ -137,26 +137,22 @@ final_output="${SCRIPT_DIR}/final_output.txt"
 # Clear/create the final output file
 > "${final_output}"
 
-# Function to extract schema-2 pooled sample statistics (with historical fallback)
+# Function to extract versioned pooled sample statistics (with historical fallback)
 extract_with_jq() {
     local json_file=$1
     local cache_size=$2
     local tlb_kb=$3
     local extracted_file="${TMP_DIR}/extracted_tlb_${tlb_kb}_cache_${cache_size}.json"
-    if ! jq 'if .mode == "gpu_bandwidth" and .schema_version == 1 then
-               error("GPU bandwidth schema 1 is not supported by this standard CPU latency extractor")
-             elif .configuration.benchmark_schema_version == 2 then
-               if .status == "complete"
-                  and .results_complete == true
-                  and .conclusions_valid == true then
+    if ! jq -L "${SCRIPT_DIR}" '
+             include "standard_result_contract";
+             (require_standard_result_contract) as $contract
+             | if $contract.metric_layout == "headline_locality" then
                  .cache.custom.latency.headline_ns.pooled_sample_distribution.statistics
+               elif $contract.metric_layout == "historical_average_tlb" then
+                 .cache.custom.latency.samples_ns.statistics
                else
-                 error("incomplete benchmark result " +
-                       "(schema 2 requires complete status, results_complete, and conclusions_valid)")
+                 error("unsupported standard benchmark metric layout")
                end
-             else
-               .cache.custom.latency.samples_ns.statistics
-             end
              | if type == "object"
                   and .average != null and .median != null
                   and .p90 != null and .p95 != null and .p99 != null
@@ -176,33 +172,25 @@ extract_with_jq() {
     rm -f "${extracted_file}"
 }
 
-# Function to extract schema-2 pooled sample statistics (with historical fallback)
+# Function to extract versioned pooled sample statistics (with historical fallback)
 extract_with_python() {
     local json_file=$1
     local cache_size=$2
     local tlb_kb=$3
     local extracted_file="${TMP_DIR}/extracted_tlb_${tlb_kb}_cache_${cache_size}.json"
-    if ! python3 - "${json_file}" <<'PY' > "${extracted_file}"
+    if ! python3 - "${SCRIPT_DIR}" "${json_file}" <<'PY' > "${extracted_file}"
 import json
 import sys
+
+sys.path.insert(0, sys.argv[1])
+from standard_result_contract import HEADLINE_LOCALITY_LAYOUT, require_standard_result
+
 try:
-    with open(sys.argv[1], 'r') as f:
+    with open(sys.argv[2], 'r') as f:
         data = json.load(f)
-        if data.get('mode') == 'gpu_bandwidth' and data.get('schema_version') == 1:
-            raise RuntimeError(
-                'GPU bandwidth schema 1 is not supported by this standard CPU latency extractor'
-            )
+        contract = require_standard_result(data)
         latency = data['cache']['custom']['latency']
-        if data.get('configuration', {}).get('benchmark_schema_version') == 2:
-            if (
-                data.get('status') != 'complete'
-                or data.get('results_complete') is not True
-                or data.get('conclusions_valid') is not True
-            ):
-                raise RuntimeError(
-                    'incomplete benchmark result '
-                    '(schema 2 requires complete status, results_complete, and conclusions_valid)'
-                )
+        if contract.metric_layout == HEADLINE_LOCALITY_LAYOUT:
             stats = latency['headline_ns']['pooled_sample_distribution']['statistics']
         else:
             stats = latency['samples_ns']['statistics']
