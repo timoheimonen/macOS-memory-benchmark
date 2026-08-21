@@ -28,7 +28,8 @@ See [Measurement Capabilities](CAPABILITIES.md) for the full measurement scope a
 - macOS on Apple Silicon (ARM64)
 - Xcode Command Line Tools for source builds
 - GoogleTest from Homebrew for the test suite
-- Python 3 and `jq` for the aggregate `make test-all` gate
+- Python 3 for the script-example entry test included in the aggregate `make test-all` gate; `jq` is optional for JSON
+  inspection and the jq-backed latency-script path
 - GPU mode: a unified-memory Metal device supporting `MTLGPUFamilyApple7` or a compatible later family
 
 The build targets macOS 11.0 and links the system Metal and Foundation frameworks. GPU kernels are embedded MSL 2.3 source compiled at runtime, so the optional offline Metal Toolchain is not required. Passing the GPU capability check indicates compatibility; it does not mean performance has been validated on that device.
@@ -178,9 +179,10 @@ Treat benchmark values as measurements of the configured workload under the obse
 
 JSON output records completion and nullable measurement state instead of using zero for unavailable results. Current
 standard schema 3 requires `configuration.mode: "benchmark"`, a string `configuration.output_file` that preserves the
-raw output target, plus boolean `results_complete` and `conclusions_valid` fields. Bundled/current standard-result
-readers accept only complete schema-3 documents. Released standard schema 2, unversioned historical standard JSON
-layouts, and every other explicit standard version are intentionally unsupported.
+raw output target, plus boolean `results_complete` and `conclusions_valid` fields. The bundled standard-memory examples
+track the current producer, require its exact top-level `version` (`0.62.0` in this release), sanity-check the current
+result locally, and read current schema-3 paths directly. They do not provide compatibility for released standard
+schema 2, unversioned historical standard JSON layouts, or any other explicit standard version.
 Consumers making conclusions should reject incomplete or interrupted runs according to the mode-specific status fields.
 Every direct command or CPU sweep using `--output -` reserves stdout for one final JSON document and routes its
 post-parse human transcript to stderr; file output is atomic, while standard commands, sweeps, and GPU retain their
@@ -215,7 +217,7 @@ python3 script-examples/plot_bechmark-memory-latency-hierarcy.py \
 ```
 
 The hierarchy plotter also accepts an explicit console-text statistics file through `--file`; that separate text parser
-is not JSON schema compatibility. See the
+recognizes the current console labels only and is neither JSON-schema nor historical-label compatibility. See the
 [User Manual](MANUAL.md#visualization-scripts) for supported inputs and metrics.
 
 ## Documentation
@@ -240,15 +242,16 @@ brew install googletest
 make test
 ```
 
-Run real Apple Silicon integration tests or the complete suite:
+Run the focused script-example entry test, real Apple Silicon integration tests, or the complete suite:
 
 ```bash
+make test-script-examples
 make test-integration
 make test-all
 ```
 
-`make test-all` requires Python 3 and `jq`; it runs all GTest cases followed by the strict Python/jq standard-result
-contract driver.
+`make test-all` requires Python 3; it runs all GTest cases followed by the focused script-example entry test. `jq` is
+not required by the test gate.
 
 Generate isolated LLVM production-source coverage reports under `/tmp`:
 

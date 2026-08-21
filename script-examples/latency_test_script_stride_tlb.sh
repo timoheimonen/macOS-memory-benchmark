@@ -118,32 +118,42 @@ done
 echo ""
 echo "Building CSV summary: ${SUMMARY_CSV}"
 summary_status=0
-python3 - "${SCRIPT_DIR}" "${JSON_DIR}" "${SUMMARY_CSV}" "${total_runs}" <<'PY' || summary_status=$?
+python3 - "${JSON_DIR}" "${SUMMARY_CSV}" "${total_runs}" <<'PY' || summary_status=$?
 import csv
 import json
 import sys
 from pathlib import Path
 
-sys.path.insert(0, sys.argv[1])
-from standard_result_contract import require_standard_result
 
-json_dir = Path(sys.argv[2])
-summary_csv = Path(sys.argv[3])
-expected_rows = int(sys.argv[4])
+def require_current_standard_result(data):
+    configuration = data.get("configuration") if isinstance(data, dict) else None
+    if not (
+        isinstance(configuration, dict)
+        and data.get("version") == "0.62.0"
+        and configuration.get("mode") == "benchmark"
+        and type(configuration.get("benchmark_schema_version")) is int
+        and configuration["benchmark_schema_version"] == 3
+        and data.get("status") == "complete"
+        and data.get("results_complete") is True
+        and data.get("conclusions_valid") is True
+        and isinstance(configuration.get("output_file"), str)
+    ):
+        raise RuntimeError("not a complete current standard schema-3 benchmark result")
+    return configuration
+
+
+json_dir = Path(sys.argv[1])
+summary_csv = Path(sys.argv[2])
+expected_rows = int(sys.argv[3])
 
 rows = []
 errors = []
 for path in sorted(json_dir.glob("*.json")):
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
-        require_standard_result(data)
-        cfg = data.get("configuration", {})
-        cache = data.get("cache", {}) or {}
-        custom = cache.get("custom", {}) or {}
-        latency = custom.get("latency", {}) or {}
-        headline = latency.get("headline_ns", {}) or {}
-        samples = headline.get("pooled_sample_distribution", {}) or {}
-        stats = samples.get("statistics", {}) or {}
+        cfg = require_current_standard_result(data)
+        headline = data["cache"]["custom"]["latency"]["headline_ns"]
+        stats = headline["pooled_sample_distribution"]["statistics"]
         measurements = headline.get("measurements", []) or []
         chain_node_count = next(
             (

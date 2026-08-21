@@ -145,10 +145,19 @@ extract_with_jq() {
     local cache_size=$2
     local tlb_kb=$3
     local extracted_file="${TMP_DIR}/extracted_tlb_${tlb_kb}_cache_${cache_size}.json"
-    if ! jq -L "${SCRIPT_DIR}" '
-             include "standard_result_contract";
-             (require_standard_result_contract) as $_contract
-             | .cache.custom.latency.headline_ns.pooled_sample_distribution.statistics
+    if ! jq '
+             if type != "object"
+                  or (.configuration | type) != "object"
+                  or .version != "0.62.0"
+                  or .configuration.mode != "benchmark"
+                  or .configuration.benchmark_schema_version != 3
+                  or .status != "complete"
+                  or .results_complete != true
+                  or .conclusions_valid != true
+                  or (.configuration.output_file | type) != "string"
+               then error("not a complete current standard schema-3 benchmark result")
+               else .cache.custom.latency.headline_ns.pooled_sample_distribution.statistics
+               end
              | if type == "object"
                   and .average != null and .median != null
                   and .p90 != null and .p95 != null and .p99 != null
@@ -174,17 +183,31 @@ extract_with_python() {
     local cache_size=$2
     local tlb_kb=$3
     local extracted_file="${TMP_DIR}/extracted_tlb_${tlb_kb}_cache_${cache_size}.json"
-    if ! python3 - "${SCRIPT_DIR}" "${json_file}" <<'PY' > "${extracted_file}"
+    if ! python3 - "${json_file}" <<'PY' > "${extracted_file}"
 import json
 import sys
 
-sys.path.insert(0, sys.argv[1])
-from standard_result_contract import require_standard_result
+
+def require_current_standard_result(data):
+    configuration = data.get("configuration") if isinstance(data, dict) else None
+    if not (
+        isinstance(configuration, dict)
+        and data.get("version") == "0.62.0"
+        and configuration.get("mode") == "benchmark"
+        and type(configuration.get("benchmark_schema_version")) is int
+        and configuration["benchmark_schema_version"] == 3
+        and data.get("status") == "complete"
+        and data.get("results_complete") is True
+        and data.get("conclusions_valid") is True
+        and isinstance(configuration.get("output_file"), str)
+    ):
+        raise RuntimeError("not a complete current standard schema-3 benchmark result")
+
 
 try:
-    with open(sys.argv[2], 'r') as f:
+    with open(sys.argv[1], 'r') as f:
         data = json.load(f)
-        require_standard_result(data)
+        require_current_standard_result(data)
         latency = data['cache']['custom']['latency']
         stats = latency['headline_ns']['pooled_sample_distribution']['statistics']
         required_statistics = ('average', 'median', 'p90', 'p95', 'p99', 'min', 'max', 'stddev')

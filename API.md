@@ -150,9 +150,12 @@ persistence and nested file writes are disabled. Schema 3 requires boolean `resu
 the producer makes `conclusions_valid` true exactly when `results_complete` is true, while consumers must still check
 the explicit status and both booleans shown in the table.
 
-Bundled/current standard-result readers accept only this complete schema-3 contract. Released standard schema 2,
-unversioned historical standard JSON layouts, and every other explicit standard version are unsupported. They are
-rejected at the shared contract boundary rather than routed through a metric-shape fallback.
+The bundled standard-memory example scripts are maintained in lockstep with the current producer. Each script performs
+only the local version, completion, and field sanity checks needed before reading its current schema-3 metric paths. In
+this release that includes exact top-level `version == "0.62.0"` in addition to the standard identity and completeness
+fields above. The examples are not a versioned compatibility library. Released standard schema 2, unversioned
+historical standard JSON layouts, and every other explicit standard version are unsupported inputs and are not routed
+through a metric-shape fallback.
 
 Graceful interruption or runtime failure after a representable result state has been initialized emits the available
 partial, interrupted, error, or failed JSON snapshot. The execution status and payload are independent: a non-zero status
@@ -238,9 +241,9 @@ jq -e '.schema_version == 1 and .mode == "gpu_bandwidth" and
 - Current standard schema 3, pattern schema 3, TLB schema 4, core-to-core schema 2, and GPU schema 1 remain
   authoritative at their existing locations. The schema field is intentionally not normalized across these established
   payloads.
-- Bundled/current standard-result readers accept only standard schema 3 with `configuration.mode == "benchmark"` and
-  the complete predicate above. Released standard schema 2, unversioned historical standard JSON layouts, and every
-  other explicit standard version are intentionally unsupported.
+- Bundled standard-memory examples track the current producer and read current standard schema-3 metric paths directly
+  after local sanity checks. They provide no compatibility layer for released standard schema 2, unversioned
+  historical standard JSON layouts, or any other explicit standard version.
 - Both general and core-to-core sweep envelopes use `configuration.sweep_schema_version == 1`; nested results keep their
   independent mode schema versions.
 - Additive optional fields may remain within a schema version only when old consumers can safely ignore them.

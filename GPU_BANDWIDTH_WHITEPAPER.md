@@ -455,7 +455,7 @@ already-computed measurement state.
 ## 14. GPU JSON Schema 1
 
 The top-level discriminator is independent of current standard schema 3. Released standard schema 2 is historical and
-unsupported by current bundled standard-result readers:
+unsupported by the bundled standard-memory examples, which track the current producer:
 
 ```json
 {
@@ -667,8 +667,8 @@ make test-all
 ./memory_benchmark --gpu-bandwidth --help
 ```
 
-The aggregate `make test-all` gate requires Python 3 and `jq`; it runs the strict standard-result contract driver after
-all GTest cases pass.
+The aggregate `make test-all` gate requires Python 3; it runs the focused script-example entry test after all GTest
+cases pass. `jq` is not required by this gate.
 
 Real Metal tests may skip on an unsupported/no-device execution environment. That skip does not replace deterministic
 unsupported-path tests and does not create a performance-validation claim.

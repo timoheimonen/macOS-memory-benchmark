@@ -13,7 +13,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
   - **Standard results advance to schema 3**: Current payloads require `configuration.mode: "benchmark"`, string `configuration.output_file`, and top-level `conclusions_valid` matching `results_complete`. Direct outputs preserve the raw target, nested sweep results use an empty target, and the benchmark methodology and measured work are unchanged.
-  - **Bundled standard-result readers are current-only**: Shared Python and jq validators, the two latency workflows, and both comparison plotters accept only complete standard schema 3. Schema 2, unversioned historical layouts, conflicting identities, and malformed inputs are rejected before metric extraction; archived JSON defaults were removed, and the contract suite now runs from `make test-all`.
   - **Output-target parsing preserves raw values**: General parser pre-scans treat one `-o`/`--output` value as opaque, including flag-shaped filenames. Exact `-`, empty direct and sweep targets, `./-`, and ordinary file targets retain their documented transport semantics.
   - **Sweep and checkpoint evidence is retained consistently**: General and core-to-core sweeps use schema-1 envelopes, preserve initialized nested results and stable failure reasons, and keep checkpoint failures authoritative without retrying a terminal file write. TLB and GPU result construction is separated from persistence so command boundaries can choose file or stdout transport without changing benchmark execution.
 

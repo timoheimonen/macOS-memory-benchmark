@@ -255,7 +255,8 @@ analysis.
 - Current standard schema 3 does not serialize the unversioned historical
   `chain_diagnostics.unique_pages_touched` blocks. Do not use the old `main_memory.latency.chain_diagnostics` or
   `cache.*.latency.chain_diagnostics` paths for version 0.62.0 output. Released standard schema 2 and unversioned
-  historical standard JSON remain archival evidence and are intentionally rejected by current bundled readers.
+  historical standard JSON remain archival evidence and are unsupported by the bundled examples, which track the
+  current producer and read current schema-3 paths directly.
 
 When `--latency-tlb-locality-kb` is not explicitly supplied, standard main-memory latency also runs three paired rounds
 of 16 KiB-locality and global-random chains. The first-measured layout alternates by round, and

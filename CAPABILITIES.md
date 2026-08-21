@@ -91,9 +91,10 @@ checkpoint transitions and stop observations without intermediate serialization.
 process acceptance procedure are in the [Machine-Readable CLI API](API.md).
 
 Current standard results use schema 3, which requires `configuration.mode: "benchmark"`, a string
-`configuration.output_file`, plus boolean `results_complete` and `conclusions_valid`. Bundled/current standard-result
-readers accept only complete schema-3 documents. Released standard schema 2, unversioned historical standard JSON
-layouts, and every other explicit standard version are intentionally unsupported.
+`configuration.output_file`, plus boolean `results_complete` and `conclusions_valid`. Bundled standard-memory examples
+track the current producer, perform local sanity checks, and read its current schema-3 metric paths directly. They do
+not support released standard schema 2, unversioned historical standard JSON layouts, or any other explicit standard
+version.
 
 Sweep output retains completed evidence even when a later run stops. Consumers should check the mode-specific status and completeness indicators before using aggregate conclusions. Exact schemas, checkpoint behavior, and inspection examples are in the [User Manual](MANUAL.md#json-output-format) and [Technical Specification](TECHNICAL_SPECIFICATION.md#18-json-output-contract).
 

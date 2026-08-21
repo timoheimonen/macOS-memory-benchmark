@@ -739,9 +739,10 @@ classifying the failure.
 
 Command completeness for current standard schema 3 requires `configuration.mode == "benchmark"`,
 `status == "complete" && results_complete == true && conclusions_valid == true`, with string
-`configuration.output_file`. Bundled/current standard-result readers accept only this schema-3 contract. Released
-standard schema 2, unversioned historical standard JSON layouts, and every other explicit standard version are
-unsupported. Pattern requires
+`configuration.output_file`. Bundled standard-memory examples track this current schema-3 producer, perform local
+sanity checks (including exact top-level `version == "0.62.0"` in this release), and read the metric paths they need
+directly. They do not support released standard schema 2, unversioned historical standard JSON layouts, or any other
+explicit standard version. Pattern requires
 `status == "complete" && results_complete == true`. TLB requires
 `tlb_analysis.status == "complete" && tlb_analysis.conclusions_valid == true`; core-to-core requires
 `core_to_core_latency.status == "complete" && core_to_core_latency.measurements_complete == true`. Metric consumers must
@@ -768,8 +769,8 @@ In addition to standard fields (buffer size, iterations, loop count, thread coun
 - Calibration targets/windows and phase/operation schedule policies.
 
 Schema 3 makes `configuration.output_file` and top-level `conclusions_valid` mandatory without changing the standard
-methodology version. The shared bundled readers do not infer standard identity from metric layout and reject schema 2
-and unversioned historical standard JSON.
+methodology version. Bundled standard-memory examples identify the current producer explicitly rather than inferring
+standard identity from metric layout; schema 2 and unversioned historical standard JSON are unsupported inputs.
 
 ### 18.2 Main-memory latency keys
 
@@ -915,6 +916,7 @@ Recommended validation commands:
 
 - Build: `make`
 - Unit tests (non-integration): `make test`
+- Script-example JSON entry paths: `make test-script-examples`
 - Integration-only: `make test-integration`
 - Full test set: `make test-all`
 - CLI help smoke check: `./memory_benchmark -h`
@@ -926,8 +928,8 @@ Recommended validation commands:
 
 For narrow changes, prefer targeted `gtest` filters via `./test_runner --gtest_filter=...`.
 
-The aggregate `make test-all` gate requires Python 3 and `jq`; after all GTest cases pass, it runs the strict
-Python/jq standard-result contract driver.
+The aggregate `make test-all` gate requires Python 3; after all GTest cases pass, it runs the focused script-example
+entry test. `jq` is not required by this gate.
 
 ## 23. Source Map (Primary Entry Points)
 

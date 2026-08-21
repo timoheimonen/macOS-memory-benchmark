@@ -49,7 +49,8 @@ This manual focuses on practical usage and interpretation. For implementation de
 
 - Apple Silicon Mac
 - Xcode Command Line Tools
-- GoogleTest for C++ tests; Python 3 and `jq` for the aggregate `make test-all` gate
+- GoogleTest for C++ tests; Python 3 for the script-example entry test in the aggregate `make test-all` gate. `jq` is
+  optional for JSON inspection and the jq-backed latency-script path.
 - For `--gpu-bandwidth`: a unified-memory Metal device supporting `MTLGPUFamilyApple7` or a compatible later family.
   Capability support is distinct from a controlled performance-validation cohort.
 
@@ -78,10 +79,11 @@ make
 Test and coverage targets:
 
 ```bash
-make test              # deterministic unit suite
-make test-integration  # real Apple Silicon/CLI workflows
-make test-all          # all GTest cases, then the strict Python/jq standard-result contract
-make coverage-unit     # isolated LLVM report under /tmp
+make test                 # deterministic unit suite
+make test-script-examples # current script-example JSON entry paths
+make test-integration     # real Apple Silicon/CLI workflows
+make test-all             # all GTest cases, then the focused script-example entry test
+make coverage-unit        # isolated LLVM report under /tmp
 make coverage-all
 ```
 
@@ -90,7 +92,7 @@ production C++ and Objective-C++ only and excludes tests, GoogleTest, the bundle
 assembly. The macOS 11.0 build links the system Metal and Foundation frameworks. GPU kernels are embedded MSL 2.3
 source compiled at runtime; the optional offline Metal Toolchain is not required.
 
-`make test-all` treats Python 3 and `jq` as mandatory prerequisites; a missing `jq` is a hard failure.
+`make test-all` requires Python 3 for its script-example entry test. It does not require `jq`.
 
 ### First run
 
@@ -1135,10 +1137,10 @@ emits one final snapshot. Schema 3 also requires boolean `conclusions_valid`, wh
 Bandwidth QoS metadata includes created workers plus per-worker success/failure counts; latency carries the main-thread
 outcome. These fields describe a best-effort scheduler hint, never hard core pinning.
 
-Bundled/current standard-result readers require `configuration.mode: "benchmark"` and accept only complete standard
-schema 3 with the mandatory completion and output fields above. Released standard schema 2, unversioned historical
-standard JSON layouts, and every other explicit standard version are intentionally unsupported and are rejected before
-metric extraction.
+The bundled standard-memory examples are kept compatible with the current producer. They sanity-check the current
+standard result locally, including exact top-level `version: "0.62.0"` in this release, and read current schema-3 metric
+paths directly; they are not a compatibility library. Released standard schema 2, unversioned historical standard JSON
+layouts, and every other explicit standard version are intentionally unsupported inputs.
 
 ### Pattern benchmark JSON shape
 
@@ -1838,8 +1840,11 @@ Plotting requires Python 3 and `matplotlib`; the M4/M5 comparison script additio
 python3 -m pip install matplotlib numpy
 ```
 
-The bundled standard-memory plotters accept only complete current standard schema-3 JSON and reject standard schema 2,
-unversioned historical standard JSON, other modes, and other standard versions at the shared contract boundary. The
+The bundled standard-memory scripts are kept in lockstep with the current producer. Each performs only the local
+version, completion, and field sanity checks needed by its current schema-3 metric paths. For version 0.62.0, the check
+requires top-level `version: "0.62.0"`, standard mode/schema identity, complete/valid result state, and a string output
+target before the selected metric path is read. These scripts are examples, not a versioned compatibility layer:
+standard schema 2, unversioned historical standard JSON, other modes, and other standard versions are unsupported. The
 separately governed `plot_analyzetlb.py` retains its own TLB-history policy. Standard-memory plotters do not accept GPU
 schema 1.
 
@@ -1852,6 +1857,7 @@ What it does:
 - Writes per-run JSON files under `script-examples/tmp/`
 - Extracts `.cache.custom.latency.headline_ns.pooled_sample_distribution.statistics` from complete current standard
   schema-3 files into `script-examples/final_output.txt`
+- Uses `jq` for that local sanity check and extraction when available, with Python 3 as the fallback
 - Clears `tmp` after extraction
 - Returns a non-zero status after cleanup if any benchmark failed, an expected output is missing, or a current-schema
   result is incomplete or cannot be parsed
@@ -1860,8 +1866,9 @@ The script prefers the executable built at the repository root, falls back to `m
 file is unavailable, and honors an explicit `BENCHMARK_CMD=/path/to/memory_benchmark` override. Every selected producer
 must emit complete current standard schema 3; incompatible output is rejected before metric extraction.
 
-`latency_test_script_stride_tlb.sh` applies the same local-binary/override policy, retains its timestamped JSON files,
-and returns non-zero unless every planned run produces one complete CSV row.
+`latency_test_script_stride_tlb.sh` applies the same local-binary/override policy, uses embedded Python 3 for its local
+current-result sanity check and metric extraction, retains its timestamped JSON files, and returns non-zero unless every
+planned run produces one complete CSV row.
 
 ### Standard-result comparison and hierarchy plotters
 
@@ -1874,8 +1881,12 @@ python3 script-examples/plot_bechmark-memory-latency-hierarcy.py \
   --file current-standard.json
 ```
 
+They read the current headline and automatic-locality `statistics[metric]` paths directly; there is no historical
+`values` or `average` shape fallback.
+
 There are no archived JSON defaults. The hierarchy plotter's explicit `--file` input may instead be a console-text
-statistics file; that separate text parser remains available and does not imply JSON schema compatibility.
+statistics file using the current producer's labels. That separate parser remains available but provides neither JSON
+schema compatibility nor support for historical pre-schema label spellings.
 
 ### `script-examples/plot_cache_percentiles.py`
 

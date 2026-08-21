@@ -144,16 +144,15 @@ test-integration: $(TARGET) $(TEST_TARGET)
 	@echo "Running integration tests..."
 	./$(TEST_TARGET) --gtest_filter=*Integration*
 
-# Strict current standard-result reader contract (requires Python 3 and jq)
-test-standard-result-contract:
-	@command -v jq >/dev/null 2>&1 || { echo "Error: jq is required for test-standard-result-contract." >&2; exit 1; }
-	python3 -m unittest -v tests/test_standard_result_contract.py
+# Current-version bundled script examples (jq coverage is skipped when unavailable)
+test-script-examples:
+	python3 -m unittest -v tests/test_script_examples.py
 
-# All tests (unit tests + integration tests + standard-result contract)
+# All tests (unit tests + integration tests + bundled script examples)
 test-all: $(TARGET) $(TEST_TARGET)
-	@echo "Running all tests (unit + integration + standard-result contract)..."
+	@echo "Running all tests (unit + integration + bundled script examples)..."
 	./$(TEST_TARGET)
-	$(MAKE) test-standard-result-contract
+	$(MAKE) test-script-examples
 
 # Reproducible production C++ source coverage in an isolated /tmp build.
 coverage-unit:
@@ -231,7 +230,7 @@ uninstall:
 	@echo "$(TARGET) uninstalled successfully."
 
 # Define targets that don't correspond to files
-.PHONY: all clean test test-integration test-standard-result-contract test-all \
+.PHONY: all clean test test-integration test-script-examples test-all \
 	coverage-unit coverage-all clean-test docs clean-docs install uninstall
 
 # Missing dependency files are expected on a clean tree. Existing files carry
