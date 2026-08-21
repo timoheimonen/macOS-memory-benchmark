@@ -17,7 +17,6 @@
  * @file constants.h
  * @brief Central configuration constants for benchmark execution
  * @author Timo Heimonen <timo.heimonen@proton.me>
- * @date 2025
  *
  * This header defines all configuration constants used throughout the benchmark
  * suite, organized into logical categories for maintainability and clarity.
@@ -153,6 +152,51 @@ namespace Constants {
       "gpu-bandwidth-v1-private-runtime-single-cmdbuf-calibrated-balanced";
   constexpr const char* GPU_WORK_PLAN_IDENTITY_VERSION =
       "gpu-work-plan-v1";
+
+  // Standalone CPU LLM decode-memory profile. Calibration aliases intentionally
+  // share the established bandwidth duration policy, while the step and exact
+  // payload ceilings remain mode-owned methodology guardrails.
+  constexpr size_t LLM_DEFAULT_KV_ELEMENT_BYTES = 2;
+  constexpr size_t LLM_DEFAULT_BATCH_SIZE = 1;
+  constexpr size_t LLM_DEFAULT_LOOP_COUNT = 3;
+  constexpr size_t LLM_RANGE_ALIGNMENT_BYTES = 32;
+  constexpr double LLM_CALIBRATION_TARGET_SECONDS =
+      BANDWIDTH_CALIBRATION_TARGET_SECONDS;
+  constexpr double LLM_CALIBRATION_MIN_SECONDS =
+      BANDWIDTH_CALIBRATION_MIN_SECONDS;
+  constexpr double LLM_CALIBRATION_MAX_SECONDS =
+      BANDWIDTH_CALIBRATION_MAX_SECONDS;
+  constexpr size_t LLM_CALIBRATION_MAX_CORRECTIONS =
+      BANDWIDTH_CALIBRATION_MAX_CORRECTIONS;
+  constexpr size_t LLM_CALIBRATION_MIN_PILOT_BYTES =
+      BANDWIDTH_CALIBRATION_MIN_PILOT_BYTES;
+  constexpr size_t LLM_MAX_STEPS_PER_MEASUREMENT =
+      BANDWIDTH_CALIBRATION_MAX_PASSES;
+  constexpr size_t LLM_MAX_EXACT_PAYLOAD_BYTES =
+      64ULL * 1024ULL * BYTES_PER_MB;
+  constexpr double LLM_STREAMING_CV_WARNING_PCT = 5.0;
+  constexpr int LLM_JSON_SCHEMA_VERSION = 1;
+  constexpr const char* LLM_JSON_MODE_NAME = "llm_memory";
+  constexpr const char* LLM_BACKEND_NAME = "cpu";
+  constexpr const char* LLM_PHASE_NAME = "decode_steady_fixed_context";
+  constexpr size_t LLM_WEIGHT_PASSES_PER_STEP = 1;
+  constexpr size_t LLM_KV_REPLAY_FACTOR = 1;
+  constexpr const char* LLM_KV_LAYOUT =
+      "contiguous_layer_batch_token_head_dimension";
+  constexpr const char* LLM_WORKER_SCHEDULE =
+      "worker-local-layer-order-no-per-layer-global-barrier";
+  constexpr const char* LLM_METHODOLOGY_VERSION =
+      "llm-memory-v1-cpu-fixed-context-warm-layer-interleaved";
+  constexpr const char* LLM_WORK_PLAN_IDENTITY_VERSION =
+      "llm-memory-work-plan-v1";
+  constexpr const char* LLM_DESCRIPTOR_ABI_VERSION =
+      "llm-memory-descriptor-abi-v1";
+  constexpr const char* LLM_BUFFER_PATTERN_VERSION =
+      "llm-buffer-pattern-v1";
+  constexpr const char* LLM_APPEND_PATTERN_VERSION =
+      "llm-kv-append-affine64-v1";
+  constexpr const char* LLM_READ_CHECKSUM_VERSION =
+      "llm-read-checksum-v1";
 
   constexpr double BENCHMARK_LATENCY_TARGET_SECONDS = 0.250;
   constexpr double BENCHMARK_LATENCY_CALIBRATION_MIN_SECONDS = 0.100;
