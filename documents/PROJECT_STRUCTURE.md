@@ -11,6 +11,7 @@ This document describes the layout of project files, organized by purpose. It is
 ## Table of Contents
 
 1. [Root-level files](#1-root-level-files)
+   - [documents/ — Project documentation](#documents--project-documentation)
 2. [src/ — Source code](#2-src--source-code)
    - [src/asm/](#21-srcasm--arm64-assembly-kernels)
    - [src/benchmark/](#22-srcbenchmark---benchmarking-infrastructure)
@@ -45,26 +46,31 @@ This document describes the layout of project files, organized by purpose. It is
 | `coverage.sh` | Runs isolated LLVM unit/all-test C++/Objective-C++ source coverage builds under `/tmp` without replacing normal workspace binaries |
 | `.clang-format` | Clang-Format style baseline for C++ sources |
 
-### User-facing documentation
+### Root-level documentation
 
 | File | Purpose |
 |---|---|
 | `README.md` | Project overview, quick-start instructions, and feature summary |
-| `API.md` | Supported process-level machine interface: output targets, stream separation, current schema identities, and result acceptance |
-| `CAPABILITIES.md` | Measurement capability overview and interpretation notes |
-| `MANUAL.md` | Complete user manual: all CLI flags, modes, output formats, and usage examples |
-| `PARAMETER_MATRIX.md` | Mode/flag compatibility, sweep support, and incompatible-option matrix |
-| `TECHNICAL_SPECIFICATION.md` | Internal architecture, data structures, and implementation decisions |
 | `CHANGELOG.md` | Version history and release notes |
-| `CONTRIBUTING.md` | Contribution guidelines, coding standards, and pull request process |
-| `CODE_OF_CONDUCT.md` | Community standards |
-| `SECURITY.md` | Vulnerability disclosure policy |
-| `TLB_ANALYSIS_WHITEPAPER.md` | Whitepaper: current TLB analysis methodology, schema, and interpretation limits |
-| `LATENCY_WHITEPAPER.md` | Whitepaper: cache and memory latency measurement methodology |
-| `CORE_TO_CORE_WHITEPAPER.md` | Whitepaper: calibrated two-thread token-handoff methodology, audit schema, and interpretation limits |
-| `GPU_BANDWIDTH_WHITEPAPER.md` | Whitepaper: Metal compute bandwidth methodology, GPU schema 1, validation, capability limits, and maintenance policy |
-| `PROJECT_STRUCTURE.md` | This file |
 | `LICENSE` | GNU General Public License v3.0 license text; source headers grant version 3 or any later version |
+
+### documents/ — Project documentation
+
+| File | Purpose |
+|---|---|
+| `documents/API.md` | Supported process-level machine interface: output targets, stream separation, current schema identities, and result acceptance |
+| `documents/CAPABILITIES.md` | Measurement capability overview and interpretation notes |
+| `documents/MANUAL.md` | Complete user manual: all CLI flags, modes, output formats, and usage examples |
+| `documents/PARAMETER_MATRIX.md` | Mode/flag compatibility, sweep support, and incompatible-option matrix |
+| `documents/TECHNICAL_SPECIFICATION.md` | Internal architecture, data structures, and implementation decisions |
+| `documents/CONTRIBUTING.md` | Contribution guidelines, coding standards, and pull request process |
+| `documents/CODE_OF_CONDUCT.md` | Community standards |
+| `documents/SECURITY.md` | Vulnerability disclosure policy |
+| `documents/TLB_ANALYSIS_WHITEPAPER.md` | Whitepaper: current TLB analysis methodology, schema, and interpretation limits |
+| `documents/LATENCY_WHITEPAPER.md` | Whitepaper: cache and memory latency measurement methodology |
+| `documents/CORE_TO_CORE_WHITEPAPER.md` | Whitepaper: calibrated two-thread token-handoff methodology, audit schema, and interpretation limits |
+| `documents/GPU_BANDWIDTH_WHITEPAPER.md` | Whitepaper: Metal compute bandwidth methodology, GPU schema 1, validation, capability limits, and maintenance policy |
+| `documents/PROJECT_STRUCTURE.md` | This file |
 
 ---
 

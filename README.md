@@ -21,7 +21,7 @@ It is designed for controlled microarchitectural investigation rather than a sin
 - **Reproducible experiments:** explicit seeds, repeated loops, built-in Cartesian parameter sweeps, recoverable JSON
   file checkpoints, and final machine-readable stdout for every direct mode and CPU sweep.
 
-See [Measurement Capabilities](CAPABILITIES.md) for the full measurement scope and interpretation guidance.
+See [Measurement Capabilities](documents/CAPABILITIES.md) for the full measurement scope and interpretation guidance.
 
 ## Platform Requirements
 
@@ -88,7 +88,7 @@ memory_benchmark --benchmark --only-bandwidth --count 5 --buffer-size 512 --outp
 
 An empty output value disables JSON for a direct command but is missing/invalid for a sweep. Every other non-empty value
 is a file target, including `./-` and flag-shaped names such as `-G`. Use a real file when crash-resilient intermediate
-checkpoints are required; see the [Machine-Readable CLI API](API.md) support matrix and acceptance contract.
+checkpoints are required; see the [Machine-Readable CLI API](documents/API.md) support matrix and acceptance contract.
 
 ## Benchmark Modes
 
@@ -101,7 +101,7 @@ checkpoints are required; see the [Machine-Readable CLI API](API.md) support mat
 | `--gpu-bandwidth` | Standalone Metal GPU read/write/copy effective compute-payload bandwidth. |
 | `--sweep <key=a,b>` | Cartesian parameter sweep for supported CPU, pattern, TLB, and core-to-core modes; requires `--output`. GPU schema 1 does not support sweeps. |
 
-Primary modes are intentionally separate and accept different option sets. Use `memory_benchmark -h` or the [User Manual](MANUAL.md) for defaults, valid combinations, and the complete option reference.
+Primary modes are intentionally separate and accept different option sets. Use `memory_benchmark -h` or the [User Manual](documents/MANUAL.md) for defaults, valid combinations, and the complete option reference.
 
 When `--iterations` is omitted, standard bandwidth, pattern, and GPU operations calibrate their work toward a bounded measurement duration. An explicit `--iterations` value selects fixed work. Standard latency headlines always come from a continuous dependent pointer-chase pass. A separate sample pass runs by default with 1,000 windows; `--latency-samples` controls that positive window count, and the sampled distribution does not define or weight the headline.
 
@@ -157,7 +157,7 @@ memory_benchmark --gpu-bandwidth --buffer-size 512 --count 3 --seed 42 --output 
   >gpu_bandwidth.json 2>gpu_bandwidth.log
 ```
 
-More workflows, including custom cache targets, latency-chain controls, density profiles, and sweep keys, are documented in the [User Manual](MANUAL.md).
+More workflows, including custom cache targets, latency-chain controls, density profiles, and sweep keys, are documented in the [User Manual](documents/MANUAL.md).
 
 ## Interpreting Results
 
@@ -187,8 +187,8 @@ Consumers making conclusions should reject incomplete or interrupted runs accord
 Every direct command or CPU sweep using `--output -` reserves stdout for one final JSON document and routes its
 post-parse human transcript to stderr; file output is atomic, while standard commands, sweeps, and GPU retain their
 mode-specific intermediate checkpoints. Exact process
-acceptance rules are in the [Machine-Readable CLI API](API.md), with schema and checkpoint details in the [User Manual](MANUAL.md),
-[Technical Specification](TECHNICAL_SPECIFICATION.md), and mode whitepapers.
+acceptance rules are in the [Machine-Readable CLI API](documents/API.md), with schema and checkpoint details in the [User Manual](documents/MANUAL.md),
+[Technical Specification](documents/TECHNICAL_SPECIFICATION.md), and mode whitepapers.
 
 ## Plotting Results
 
@@ -218,18 +218,18 @@ python3 script-examples/plot_bechmark-memory-latency-hierarcy.py \
 
 The hierarchy plotter also accepts an explicit console-text statistics file through `--file`; that separate text parser
 recognizes the current console labels only and is neither JSON-schema nor historical-label compatibility. See the
-[User Manual](MANUAL.md#visualization-scripts) for supported inputs and metrics.
+[User Manual](documents/MANUAL.md#visualization-scripts) for supported inputs and metrics.
 
 ## Documentation
 
-- [Measurement Capabilities](CAPABILITIES.md): what the tool measures and how those measurements should be interpreted.
-- [Machine-Readable CLI API](API.md): supported output targets, stdout/stderr contract, current schemas, and result acceptance.
-- [User Manual](MANUAL.md): complete option reference, mode compatibility, workflows, output examples, and troubleshooting.
-- [Technical Specification](TECHNICAL_SPECIFICATION.md): architecture, execution flow, memory model, and output contracts.
-- [Latency Whitepaper](LATENCY_WHITEPAPER.md): dependent pointer-chase and sampling methodology.
-- [TLB Analysis Whitepaper](TLB_ANALYSIS_WHITEPAPER.md): paired analysis, boundary rules, confidence model, and JSON verification contract.
-- [Core-to-Core Whitepaper](CORE_TO_CORE_WHITEPAPER.md): LDAR/STLR handoff protocol, scheduler-hint scenarios, and JSON schema.
-- [GPU Bandwidth Whitepaper](GPU_BANDWIDTH_WHITEPAPER.md): Metal methodology, timing, validation, resource model, and interpretation limits.
+- [Measurement Capabilities](documents/CAPABILITIES.md): what the tool measures and how those measurements should be interpreted.
+- [Machine-Readable CLI API](documents/API.md): supported output targets, stdout/stderr contract, current schemas, and result acceptance.
+- [User Manual](documents/MANUAL.md): complete option reference, mode compatibility, workflows, output examples, and troubleshooting.
+- [Technical Specification](documents/TECHNICAL_SPECIFICATION.md): architecture, execution flow, memory model, and output contracts.
+- [Latency Whitepaper](documents/LATENCY_WHITEPAPER.md): dependent pointer-chase and sampling methodology.
+- [TLB Analysis Whitepaper](documents/TLB_ANALYSIS_WHITEPAPER.md): paired analysis, boundary rules, confidence model, and JSON verification contract.
+- [Core-to-Core Whitepaper](documents/CORE_TO_CORE_WHITEPAPER.md): LDAR/STLR handoff protocol, scheduler-hint scenarios, and JSON schema.
+- [GPU Bandwidth Whitepaper](documents/GPU_BANDWIDTH_WHITEPAPER.md): Metal methodology, timing, validation, resource model, and interpretation limits.
 
 Runtime behavior and `memory_benchmark -h` are the authoritative sources when documentation differs.
 
@@ -260,7 +260,7 @@ make coverage-unit
 make coverage-all
 ```
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for contribution guidance and [Project Structure](PROJECT_STRUCTURE.md) for
+See [CONTRIBUTING.md](documents/CONTRIBUTING.md) for contribution guidance and [Project Structure](documents/PROJECT_STRUCTURE.md) for
 repository navigation and the current test-suite map. C++ reference documentation can be generated with `make docs`.
 
 ## Scope and Safety

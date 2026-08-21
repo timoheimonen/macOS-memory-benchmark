@@ -136,7 +136,7 @@ int build_and_write_final_json(JsonOutputSession& session,
  * @return `EXIT_SUCCESS` for help, complete execution, and the established
  *         graceful-interruption paths. Success alone does not prove that a
  *         JSON result is complete; callers must apply the mode-specific
- *         predicate documented in `API.md`.
+ *         predicate documented in `documents/API.md`.
  * @return `EXIT_FAILURE` on configuration, allocation, benchmark, or output
  *         failure. An initialized mode may still emit inspectable terminal
  *         evidence before returning failure.
