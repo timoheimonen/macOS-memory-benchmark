@@ -38,6 +38,15 @@ PrimaryModeSelection select_primary_benchmark_mode(int argc, char* argv[]) {
 
   for (int argument_index = 1; argument_index < argc; ++argument_index) {
     const std::string argument = argv[argument_index];
+    // Output targets are opaque and may exactly match a primary-mode flag.
+    // Skip one raw value when present; the owning parser still validates it.
+    if (argument == "-o" || argument == "--output") {
+      if (argument_index + 1 < argc) {
+        ++argument_index;
+      }
+      continue;
+    }
+
     for (size_t mode_index = 0; mode_index < kModeOptions.size(); ++mode_index) {
       const ModeOption& option = kModeOptions[mode_index];
       if (argument != option.short_option && argument != option.long_option) {

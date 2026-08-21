@@ -144,7 +144,8 @@ std::string usage_options(const std::string& prog_name) {
       << "Long options require --; single dash is only for one-character aliases.\n"
       << "Options:\n"
       << "  -B, --benchmark       Run calibrated, seeded, balanced standard bandwidth/latency benchmark.\n"
-      << "                        JSON uses standard schema 2 methodology "
+      << "                        JSON uses standard schema "
+      << Constants::BENCHMARK_JSON_SCHEMA_VERSION << " methodology "
       << Constants::BENCHMARK_METHODOLOGY_VERSION << ".\n"
       << "                        Continuous latency targets 250 ms in a 100-300 ms window.\n"
       << "  -G, --gpu-bandwidth   Run standalone Metal GPU memory read/write/copy bandwidth.\n"
@@ -168,7 +169,7 @@ std::string usage_options(const std::string& prog_name) {
       << "                        When count > 1, median P50 is the headline; statistics also include\n"
       << "                        P90/P95/P99, stddev, CV, MAD, min, and max.\n"
       << "  -T, --analyze-tlb     Run standalone TLB analysis with paired bootstrap CI and independent\n"
-      << "                        boundary validation (allows optional -o/--output <file>,\n"
+      << "                        boundary validation (allows optional -o/--output <target>,\n"
       << "                        -s/--latency-stride-bytes <bytes>, -m/--latency-chain-mode <mode>,\n"
       << "                        -D/--tlb-density <low|medium|high>, --seed <uint64>,\n"
       << "                        -S/--sweep <key=...>,\n"
@@ -190,7 +191,8 @@ std::string usage_options(const std::string& prog_name) {
       << "                        Continuous headlines target 250 ms; repeated headlines use median P50.\n"
       << "                        Defaults to 3 loops for median/CV repeatability diagnostics.\n"
       << "                        JSON uses core-to-core schema 2 with per-loop audit metadata\n"
-      << "                        (allows optional -o/--output <file>, -r/--count <count>, -n/--latency-samples <count>,\n"
+      << "                        (allows optional -o/--output <target>, "
+         "-r/--count <count>, -n/--latency-samples <count>,\n"
       << "                        sweep over count or latency-samples only, and -h/--help).\n"
       << "  -n, --latency-samples <count>\n"
       << "                        Number of latency samples to collect per test (default: " << Constants::DEFAULT_LATENCY_SAMPLE_COUNT << ")\n"
@@ -243,16 +245,19 @@ std::string usage_options(const std::string& prog_name) {
       << "                        Uses madvise() hints to discourage caching, but does NOT provide\n"
       << "                        true non-cacheable memory (user-space cannot modify page tables).\n"
       << "                        Best-effort approach that may reduce but not eliminate caching.\n"
-      << "  -o, --output <file>   Save benchmark results to JSON file. If path is relative,\n"
-      << "                        file is saved in current working directory. Standard runs checkpoint\n"
-      << "                        atomically after completed loops and expose incomplete status.\n"
+      << "  -o, --output <target> JSON output target. Exact - writes one final JSON document to stdout\n"
+      << "                        for every direct mode and CPU sweep and routes human output to stderr;\n"
+      << "                        an empty value disables JSON for direct commands and is invalid for sweeps.\n"
+      << "                        Every other non-empty value is a file, including ./- and names such as -G.\n"
+      << "                        Standard and GPU files retain mode-specific atomic checkpoints;\n"
+      << "                        sweep files checkpoint attempts.\n"
       << "  -S, --sweep <key=a,b> Run a Cartesian sweep over one parameter. Repeat for multiple\n"
       << "                        parameters. Supported keys: buffer-size, cache-size, threads,\n"
       << "                        latency-tlb-locality-kb, latency-stride-bytes,\n"
       << "                        latency-chain-mode, tlb-density. With --analyze-tlb,\n"
       << "                        supported keys are latency-stride-bytes, latency-chain-mode,\n"
       << "                        and tlb-density. With --analyze-core2core,\n"
-      << "                        supported keys are count and latency-samples. Requires --output <file>.\n"
+      << "                        supported keys are count and latency-samples. Requires --output <target>.\n"
       << "  -X, --sweep-max-runs <n>\n"
       << "                        Maximum generated sweep runs (default: " << Constants::DEFAULT_SWEEP_MAX_RUNS
       << "; --analyze-tlb: " << Constants::DEFAULT_ANALYZE_TLB_SWEEP_MAX_RUNS << ").\n"
@@ -262,7 +267,10 @@ std::string usage_options(const std::string& prog_name) {
 
 std::string usage_example(const std::string& prog_name) {
   std::ostringstream oss;
-  oss << "Example: " << prog_name << " --benchmark --iterations 2000 --buffer-size 1024 --output results.json\n";
+  oss << "Example: " << prog_name
+      << " --benchmark --iterations 2000 --buffer-size 1024 --output results.json\n"
+      << "Machine JSON: " << prog_name
+      << " --benchmark --only-bandwidth --buffer-size 512 --output -\n";
   return oss.str();
 }
 

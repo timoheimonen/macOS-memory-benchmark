@@ -48,6 +48,7 @@
 #include "utils/benchmark.h"            // All benchmark functions and print functions
 #include "output/console/messages/messages_api.h"             // Centralized messages
 #include "output/json/json_output/json_output_api.h"
+#include "output/json/json_output/json_output_session.h"
 #include "core/signal/signal_handler.h"
 #include "utils/utils.h"
 #include <chrono>
@@ -72,48 +73,18 @@ class ProgressCleanupGuard {
 
 }  // namespace
 
-/**
- * @brief Runs all benchmarks for the specified number of loops and collects statistics.
- *
- * Orchestrates the complete benchmark execution:
- * 1. Initializes statistics collection structure
- * 2. Creates high-resolution timer for measurements
- * 3. Executes config.loop_count benchmark loops
- * 4. Collects results from each loop into statistics
- * 5. Prints results for each loop in real-time
- * 6. Handles exceptions and reports errors
- *
- * Loop execution:
- * - Each loop runs all configured tests (bandwidth, latency, cache)
- * - Results are collected for statistical analysis
- * - Progress indicator is shown during execution
- * - Results are printed immediately after each loop
- *
- * Error handling:
- * - Timer creation failure returns EXIT_FAILURE
- * - Typed and unknown loop exceptions are caught and reported
- * - Coordinator and injected-hook exceptions are contained at the API boundary
- * - Loop number and available error details are included in error messages
- *
- * @param[in]  config   Benchmark configuration (buffer sizes, threads, loops, flags)
- * @param[out] stats    Statistics structure to populate with all loop results
- * @param[in]  test_hooks Optional deterministic coordinator seams used by tests
- *
- * @return EXIT_SUCCESS (0) when execution completes or stops through graceful interruption; inspect stats.status
- * @return EXIT_FAILURE (1) if timer creation/checkpointing fails or execution throws an exception
- *
- * @note Statistics structure is used for final aggregate calculations.
- * @note Progress indicators are cleared before printing each loop's results.
- * @note Exception messages include loop number for debugging.
- * @note Per-phase buffers are prepared in run_single_benchmark_loop().
- *
- * @see run_single_benchmark_loop() for individual loop execution
- * @see initialize_statistics() for statistics setup
- * @see collect_loop_results() for result collection
- * @see print_results() for output formatting
- */
+bool should_write_standard_final_json(JsonOutputKind output_kind,
+                                      int runner_status) noexcept {
+  return output_kind == JsonOutputKind::Stdout ||
+         (output_kind == JsonOutputKind::File &&
+          runner_status == EXIT_SUCCESS);
+}
+
+// Coordinate standard loops while retaining state before every optional
+// checkpoint. benchmark_runner.h owns the authoritative public contract.
 int run_all_benchmarks(BenchmarkConfig& config, BenchmarkStatistics& stats,
-                       const BenchmarkRunnerTestHooks* test_hooks) try {
+                       const BenchmarkRunnerTestHooks* test_hooks,
+                       JsonOutputSession* output_session) try {
   ProgressCleanupGuard progress_cleanup;
 
   // Initialize statistics structure
@@ -124,7 +95,8 @@ int run_all_benchmarks(BenchmarkConfig& config, BenchmarkStatistics& stats,
     run_start = std::chrono::steady_clock::now();
   }
 
-  auto checkpoint = [&config, &stats, &run_start, test_hooks]() {
+  auto checkpoint = [&config, &stats, &run_start, test_hooks,
+                     output_session]() {
     if (config.output_file.empty()) {
       return EXIT_SUCCESS;
     }
@@ -134,6 +106,17 @@ int run_all_benchmarks(BenchmarkConfig& config, BenchmarkStatistics& stats,
                                              .count();
     if (test_hooks != nullptr && test_hooks->checkpoint) {
       return test_hooks->checkpoint(config, stats, elapsed_seconds, false);
+    }
+    if (output_session != nullptr) {
+      return output_session->checkpoint(
+          [&config, &stats, elapsed_seconds, test_hooks]() {
+            if (test_hooks != nullptr &&
+                test_hooks->checkpoint_payload_build) {
+              test_hooks->checkpoint_payload_build();
+            }
+            return build_results_json(config, stats, elapsed_seconds);
+          },
+          false);
     }
     return save_results_to_json(config, stats, elapsed_seconds, false);
   };
@@ -165,7 +148,11 @@ int run_all_benchmarks(BenchmarkConfig& config, BenchmarkStatistics& stats,
     if (stop_requested()) {
       stats.status = BenchmarkRunStatus::Interrupted;
       stats.status_reason = Messages::msg_interrupted_by_user();
-      (void)checkpoint();
+      if (checkpoint() != EXIT_SUCCESS) {
+        stats.status = BenchmarkRunStatus::Failed;
+        stats.status_reason = Messages::benchmark_reason_checkpoint_failed();
+        return EXIT_FAILURE;
+      }
       std::cout << std::endl << Messages::msg_interrupted_by_user() << std::endl;
       return EXIT_SUCCESS;
     }

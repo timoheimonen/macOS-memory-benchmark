@@ -34,7 +34,7 @@ Target platform is **macOS on Apple Silicon**.
 
 This manual focuses on practical usage and interpretation. For implementation details and latency methodology internals, see:
 
-- [README.md](README.md)
+- [README.md](../README.md)
 - [CAPABILITIES.md](CAPABILITIES.md)
 - [TECHNICAL_SPECIFICATION.md](TECHNICAL_SPECIFICATION.md)
 - [LATENCY_WHITEPAPER.md](LATENCY_WHITEPAPER.md)
@@ -49,6 +49,8 @@ This manual focuses on practical usage and interpretation. For implementation de
 
 - Apple Silicon Mac
 - Xcode Command Line Tools
+- GoogleTest for C++ tests; Python 3 for the script-example entry test in the aggregate `make test-all` gate. `jq` is
+  optional for JSON inspection and the jq-backed latency-script path.
 - For `--gpu-bandwidth`: a unified-memory Metal device supporting `MTLGPUFamilyApple7` or a compatible later family.
   Capability support is distinct from a controlled performance-validation cohort.
 
@@ -77,10 +79,11 @@ make
 Test and coverage targets:
 
 ```bash
-make test              # deterministic unit suite
-make test-integration  # real Apple Silicon/CLI workflows
-make test-all          # both suites
-make coverage-unit     # isolated LLVM report under /tmp
+make test                 # deterministic unit suite
+make test-script-examples # current script-example JSON entry paths
+make test-integration     # real Apple Silicon/CLI workflows
+make test-all             # all GTest cases, then the focused script-example entry test
+make coverage-unit        # isolated LLVM report under /tmp
 make coverage-all
 ```
 
@@ -88,6 +91,8 @@ Coverage reports are written to `/tmp/membenchmark-coverage-{unit,all}/report.tx
 production C++ and Objective-C++ only and excludes tests, GoogleTest, the bundled JSON header, generated files, and
 assembly. The macOS 11.0 build links the system Metal and Foundation frameworks. GPU kernels are embedded MSL 2.3
 source compiled at runtime; the optional offline Metal Toolchain is not required.
+
+`make test-all` requires Python 3 for its script-example entry test. It does not require `jq`.
 
 ### First run
 
@@ -378,6 +383,8 @@ middle, and trailing items.
   16 complete pointer-chain cycles. If the cycle minimum itself exceeds 300 ms, metadata reports
   `minimum-complete-cycles-exceed-window` instead of treating it as an ordinary calibration miss
 - Reuses calibrated work and seeded logical chains so repeated loops vary runtime conditions rather than workload shape
+- A direct command accepts `--output -` as a final machine-readable stdout target. After parsing, the banner,
+  configuration, progress, results, warnings, and errors are routed to stderr; stdout contains one JSON document
 - Running without any primary mode flag shows help and exits
 
 #### `--patterns`
@@ -389,6 +396,8 @@ middle, and trailing items.
 - Uses the historical all-detected-CPU-core default for comparison compatibility; a matching explicit worker-count
   profile can use `--threads <detected P-core count>`, but placement remains unpinned
 - Rotates pattern groups across repeated loops; read/write/copy order within each group stays fixed
+- A direct command accepts `--output -` with the same one-document stdout and human-stderr stream contract as direct
+  standard mode
 
 #### `--gpu-bandwidth`
 
@@ -415,6 +424,11 @@ middle, and trailing items.
   CV above 5% produces a warning without filtering samples
 - Has warm-memory/cache-inclusive semantics and always reports DRAM residency as unverified. Copy GB/s counts aggregate
   read + write payload and is not CPU↔GPU transfer bandwidth
+- A direct command accepts exact `--output -` for one terminal GPU schema 1 document on stdout and routes its runtime
+  transcript to stderr. Initialized unsupported or failed state remains in that payload with a non-zero process status;
+  a parser/config error or backend-factory failure before result initialization leaves stdout empty
+- `--gpu-bandwidth --output - --help` and the reversed help/output order remain human-facing help commands: they emit
+  help to stdout, perform no Metal work, and create no `-`/`-.tmp` artifact
 - Detailed methodology and GPU schema 1 contract: [GPU_BANDWIDTH_WHITEPAPER.md](GPU_BANDWIDTH_WHITEPAPER.md)
 
 #### `--only-bandwidth`
@@ -436,7 +450,7 @@ middle, and trailing items.
 #### `--analyze-tlb`
 
 - Runs standalone TLB analysis mode only
-- Can be combined only with optional `--output <file>`, `--latency-stride-bytes <bytes>`, `--latency-chain-mode <mode>`, `--tlb-density <low|medium|high>`, `--seed <uint64>`, `--sweep <key=...>`, and `--sweep-max-runs <count>`
+- Can be combined only with optional `--output <target>`, `--latency-stride-bytes <bytes>`, `--latency-chain-mode <mode>`, `--tlb-density <low|medium|high>`, `--seed <uint64>`, `--sweep <key=...>`, and `--sweep-max-runs <count>`
 - Uses latency stride from `--latency-stride-bytes` (same default as standard latency mode). Analyze-TLB stride must be pointer-aligned and must not exceed the system page size; it does not need to divide the page size. The default standard profile performs a base locality sweep of up to 15 canonical points, stride-clamped to `max(16KB, 2*stride)` up to `256MB`, and may insert page-aligned refinement points near detected knees/boundaries
 - Builds a page-native spread chain with exactly one pointer node per requested page and a cache-line-dense packed control with the same node and unique-cache-line counts. Each scheduler task measures both layouts in one round, alternates pair order, and stores the same-round `spread - packed` translation delta
 - Detects likely private-cache knee candidates from spread latency as a separate diagnostic and reports whether the region may interfere with interpretation; accepted L1/L2 claims still require the paired translation-delta and validation gates
@@ -445,6 +459,8 @@ middle, and trailing items.
 - Retains rejected boundary candidates, their confidence intervals, persistence counts, and rejection reasons in JSON
 - Plans one 512 MiB paired comparison when the analysis buffer is at least `512 MiB` and the main sweep plus any required validation completed successfully. Its spread P50, packed P50, median same-round `spread - packed` delta, spread/packed virtual-page counts, and active cache-line footprint are available only after the separate large-locality pass completes successfully with a valid summary; otherwise the object is unavailable. These are cache-hot translation-stress timings, not direct DRAM latency or an isolated page-table-walk cost
 - Emits explicit `complete`, `interrupted`, `partial`, or `error` status. Boundary conclusions are suppressed unless the planned sweep completed
+- A direct command accepts exact `--output -` for one schema-4 JSON document on stdout while routing its runtime report
+  to stderr. A real file target receives the same payload through one atomic terminal write
 - Tries `1024/512/256 MiB` buffers in descending order, selecting the largest candidate whose predicted
   buffer-plus-scratch peak fits the available-memory budget and whose allocation succeeds. If allocation fails, it tries
   the next smaller budget-safe candidate. The compact settings block reports the run identity, buffer-lock/QoS outcome,
@@ -455,6 +471,9 @@ middle, and trailing items.
 - Requests `user-interactive` QoS for the main benchmark thread as a best-effort hint. Console and JSON report whether the request was applied and its return code; failure emits a warning and continues
 - Rebuilds every standalone TLB pair from recorded task and layout seeds; pointer values are written in buffer-offset order and every chain is verified to visit all nodes and return to its head. The recorded page and cache-line diagnostics are virtual-page and buffer-relative quantities; the tool does not translate virtual addresses to physical addresses. Latency-chain behavior outside standalone TLB analysis remains unchanged
 - A user interrupt remains a successful graceful-shutdown return when partial JSON can be written; consumers must use `status` and `conclusions_valid` rather than the process code to accept conclusions
+- Parse, preflight, and early TLB setup/allocation failures can occur before a schema-valid analysis payload exists; with
+  `--output -` these paths leave stdout empty. A measurement error after result initialization emits the available
+  `tlb_analysis.status: "error"` payload and returns failure
 - Detailed methodology and JSON contract: `TLB_ANALYSIS_WHITEPAPER.md`
 
 #### `--tlb-density <level>`
@@ -492,7 +511,7 @@ middle, and trailing items.
 - Places the timed token and startup/control state in distinct 128-byte-aligned storage blocks. This is a conservative
   interference-isolation boundary for current Apple Silicon targets, not evidence of a particular physical handoff path
 - Defaults to three measured loops per scenario, so bare `--analyze-core2core` reports a median headline and CV/MAD instead of only a single-loop value
-- Can be combined only with optional `--output <file>`, `--count <count>`, `--latency-samples <count>`, `--sweep count=...`, `--sweep latency-samples=...`, `--sweep-max-runs <count>`, and `--help`
+- Can be combined only with optional `--output <target>`, `--count <count>`, `--latency-samples <count>`, `--sweep count=...`, `--sweep latency-samples=...`, `--sweep-max-runs <count>`, and `--help`
 - Executes three scheduler-hint scenarios: `no_affinity_hint`, `same_affinity_tag`, and `different_affinity_tags`
 - Calibrates each scenario independently with an excluded 100,000-round-trip pilot after a 1,000,000-round-trip warmup
   intended to reduce pilot startup transients; that scenario's resolved plan is reused across its measured `--count`
@@ -510,6 +529,9 @@ middle, and trailing items.
 - Includes per-loop order, status, elapsed-duration quality, measured pooled-sample boundaries, and per-thread QoS/affinity
   API outcomes in JSON schema 2. Invalid loops contribute no pooled samples and serialize a zero-length sample range
 - Missing, interrupted, invalid, or failed measurements are unavailable/`null`, never numeric zero. Command/scenario completion metadata states whether all planned measurements completed
+- A direct command accepts exact `--output -` for one schema-2 JSON document on stdout while routing its runtime report
+  to stderr. A real file target receives the same payload through one atomic terminal write. Once the result state is
+  initialized, interruption or measurement failure retains and emits the available audit payload
 - Notes explicitly that macOS user-space cannot hard-pin exact core IDs
 - Sets `affinity_hint_comparison_interpretable` only when the command completed and both workers' affinity API calls
   returned success in every measured affinity-tag loop. The field excludes QoS and calibration-pilot outcomes and does
@@ -581,19 +603,40 @@ middle, and trailing items.
 
 ### Output
 
-#### `--output <file>`
+#### `--output <target>`
 
-- Saves JSON output
-- Relative path writes under current working directory
-- Parent directories are created automatically
-- GPU schema 1 is atomically checkpointed after every terminal measurement. A valid post-parse pre-run backend,
-  capability, compilation, allocation, or work-plan failure also writes an auditable checkpoint. Syntax/config errors,
-  including a buffer below 64 MB, fail before result JSON is created
+- An omitted output option or an empty value disables JSON output for a direct command. For a sweep, an empty value is
+  a missing/invalid required output target
+- For every direct mode and the CPU modes' supported sweeps, an exact raw value of `-` selects machine-readable stdout.
+  The sentinel is classified before path normalization
+- A supported stdout-target command emits exactly one two-space-indented UTF-8 JSON document followed by one newline
+  after orchestration reaches its terminal state. Intermediate standard, sweep, and GPU checkpoint requests are lazy
+  no-ops and do not emit documents
+- Post-parse human output is routed to stderr while the stdout target is active. Parse, preflight, and other pre-result
+  failures leave stdout empty; `--help` remains a human-facing stdout command when that mode accepts the combination
+- Every other non-empty value is a file target, including `./-` and flag-shaped names such as `-G`. Thus
+  `--output ./-` writes an ordinary file named `-`. Relative paths write under the current working directory, and
+  parent directories are created automatically
+- Standard and sweep file targets retain atomic intermediate checkpoints. Pattern, TLB, and core-to-core direct file
+  targets each receive one final atomic write. GPU file output retains its terminal-measurement/failure checkpoints and
+  post-release replacement. Sweep and GPU command boundaries do not add a redundant outer file write. Use a real file
+  when crash-resilient intermediate checkpoints are required
+- With GPU `--output -`, every logical checkpoint transition and post-checkpoint stop observation still runs, but its
+  lazy payload builder is not invoked and no intermediate document is serialized. The command boundary writes one
+  terminal schema 1 document. Its `configuration.output_file` remains the raw string `"-"`, and captured `argv` is not
+  rewritten
+- GPU syntax/config errors, including a buffer below 64 MB, fail before result JSON is created. A backend-factory failure
+  also precedes result initialization. Initialized capability, compilation, allocation, or work-plan failures remain
+  auditable in the selected file or stdout target
+- An observable terminal stdout serialization, write, or flush failure returns failure without changing the
+  already-computed measurement state; any bytes from that failed transfer must be rejected
 
 #### `--sweep <key=value1,value2>`
 
 - Runs a Cartesian parameter sweep and writes one combined JSON result
-- Requires `--output <file>`
+- Requires a non-empty `--output <target>`; exact `-` selects one final envelope on stdout, while every other non-empty
+  value is a checkpointed file target, including `./-` and flag-shaped names such as `-G`. An empty value is
+  missing/invalid for a sweep
 - Can be repeated to sweep multiple parameters
 - Supported keys: `buffer-size`, `cache-size`, `threads`, `latency-tlb-locality-kb`, `latency-stride-bytes`, `latency-chain-mode`, `tlb-density`, `count`, `latency-samples`
 - `tlb-density` applies only with `--analyze-tlb`
@@ -614,21 +657,33 @@ middle, and trailing items.
 - An explicit `--sweep-max-runs` value overrides the mode-specific default
 - Prevents accidental very large Cartesian sweeps
 - Every generated configuration is validated before the first run
-- Standard, pattern, and TLB combined JSON is atomically checkpointed after every attempted run and records `status`,
-  `status_reason`, `planned_runs`, `attempted_runs`, `completed_runs`, and `conclusions_valid`
+- General and core-to-core combined output use envelope schema
+  `configuration.sweep_schema_version: 1`; each `runs[].result` retains its own mode schema version
+- Standard, pattern, TLB, and core-to-core file output is atomically checkpointed after every attempted run. An empty
+  run plan or a stop observed before a run also checkpoints a terminal envelope without adding a `runs[]` entry or
+  incrementing `attempted_runs`. Each envelope records `status`, `status_reason`, `planned_runs`, `attempted_runs`,
+  `completed_runs`, and `conclusions_valid`. Stdout runs retain the same logical checkpoint cadence without invoking the
+  persistence payload builder or serializing an intermediate document, and emit only the final envelope
 - For standard, pattern, and TLB sweeps, every attempted run is retained with its own `status` and `status_reason`.
   `attempted_runs` counts stored entries, while `completed_runs` counts only mode-specific nested results that are
-  genuinely complete: standard and pattern require nested `status: "complete"` with `results_complete: true`, while
-  TLB requires nested `tlb_analysis.status: "complete"` with `tlb_analysis.conclusions_valid: true`. Partial,
-  interrupted, and failed nested results never increment it
+  genuinely complete. Current standard schema 3 requires nested `configuration.mode: "benchmark"`,
+  `status: "complete"`, `results_complete: true`, and `conclusions_valid: true`, plus a string
+  `configuration.output_file`. Nested standard schema 2 and every other standard version are unsupported. Pattern
+  requires nested `status: "complete"` with `results_complete: true`; TLB requires nested
+  `tlb_analysis.status: "complete"` with
+  `tlb_analysis.conclusions_valid: true`. Partial, interrupted, and failed nested results never increment it. TLB's
+  native `tlb_analysis.status: "error"` is mapped to
+  a failed sweep attempt, and the schema-4 payload is retained without adding a nested `tlb_analysis.status_reason`
 - A parameter key may appear only once in one sweep command
-- Core-to-core sweeps also append and checkpoint the latest attempted run when it is interrupted or fails. Each entry
-  records `status` and `status_reason`; `attempted_runs` counts those entries, while `completed_runs` counts only nested
-  core-to-core results with `status: "complete"` and `measurements_complete: true`. Therefore `runs` can contain more
-  entries than `completed_runs`
+- Core-to-core sweeps also append and retain the latest attempted run when it is interrupted or fails; a file target
+  checkpoints that update. Each entry records `status` and `status_reason`; `attempted_runs` counts those entries, while
+  `completed_runs` counts only nested core-to-core results with `status: "complete"` and
+  `measurements_complete: true`. Therefore `runs` can contain more entries than `completed_runs`
 - Any partial, interrupted, or failed attempt stops further attempts; a pre-run interruption or checkpoint failure can
-  also stop execution without adding or completing another run. Top-level `conclusions_valid` is true only when
-  top-level `status` is `complete` and `completed_runs == planned_runs`
+  also stop execution without adding or completing another run. The authoritative schema-1 sweep acceptance predicate
+  is exactly top-level `status == "complete" && conclusions_valid == true`. Producers make
+  `completed_runs == planned_runs` an invariant of such an envelope. Consumers may check that equality separately as a
+  defensive consistency check, but it is not an additional completeness predicate
 
 #### `-h`, `--help`
 
@@ -646,6 +701,12 @@ memory_benchmark --benchmark --count 10 --buffer-size 1024 --output full.json
 
 # Pattern-only
 memory_benchmark --patterns --count 5 --buffer-size 512 --output patterns.json
+
+# Direct standard automation: JSON stdout and human transcript stderr
+memory_benchmark --benchmark --only-bandwidth --count 5 --buffer-size 512 --output - >benchmark.json 2>benchmark.log
+
+# Direct pattern automation
+memory_benchmark --patterns --count 5 --buffer-size 512 --output - >patterns.json 2>patterns.log
 
 # Bandwidth-only
 memory_benchmark --benchmark --only-bandwidth --threads 8 --count 5
@@ -689,8 +750,14 @@ memory_benchmark --analyze-core2core --count 5 --latency-samples 2000 --output c
 # Standalone core-to-core sample-depth sweep
 memory_benchmark --analyze-core2core --count 3 --sweep latency-samples=500,1000,2000 --output core2core_sample_sweep.json
 
+# Sweep automation: one final envelope on stdout and the human transcript on stderr
+memory_benchmark --analyze-core2core --sweep latency-samples=500,1000 --output - >core2core_sweep.json 2>core2core_sweep.log
+
 # Standalone GPU bandwidth, automatic calibrated work
 memory_benchmark --gpu-bandwidth --output gpu_bandwidth.json
+
+# Standalone GPU automation: one final schema 1 document on stdout
+memory_benchmark --gpu-bandwidth --buffer-size 512 --count 3 --seed 42 --output - >gpu_bandwidth_stdout.json 2>gpu_bandwidth.log
 
 # Standalone GPU bandwidth, reproducible fixed work
 memory_benchmark --gpu-bandwidth --buffer-size 512 --iterations 24 --count 9 --seed 123456789 --output gpu_fixed.json
@@ -1013,8 +1080,9 @@ CV above 5%, non-nominal thermal/Low Power Mode state, incomplete three-position
 duration outside 100–250 ms are warnings. They do not cause performance-based retry or sample filtering. A missing or
 invalid measurement is not printed as zero and remains status-bearing/null in JSON.
 
-**Note:** Standard schema 2 per-loop latency measurements record `chain_node_count` whether the stride was explicit or
-defaulted. Standalone TLB schema 4 records buffer-relative chain diagnostics such as requested/effective/actual
+**Note:** Current standard schema-3 per-loop latency measurements record `chain_node_count` whether the stride was
+explicit or defaulted. Standalone TLB schema 4 records buffer-relative chain diagnostics such as
+requested/effective/actual
 virtual-page counts, `pointer_nodes`, `unique_cache_lines`, `spread_chain`, and `packed_chain`. These fields do not
 describe physical-page identities or prove physical placement. They are retained in JSON, not the compact console
 report.
@@ -1023,13 +1091,19 @@ report.
 
 ## JSON Output Format
 
-### Standard benchmark JSON shape
+Every direct mode and the CPU modes' supported sweeps can serialize their payload either to a real file or, with the exact
+raw target `--output -`, once to stdout. The stdout transport does not wrap the result or change its measurement schema;
+sweep stdout is one final envelope rather than a checkpoint stream. See [API.md](API.md) for stream handling,
+process-status checks, current schema acceptance, and the transport support matrix.
+
+### Standard benchmark JSON shape (schema 3)
 
 ```json
 {
   "configuration": {
     "mode": "benchmark",
-    "benchmark_schema_version": 2,
+    "benchmark_schema_version": 3,
+    "output_file": "results.json",
     "methodology_version": "benchmark-v2-calibrated-seeded-balanced",
     "benchmark_seed": "123456789",
     "bandwidth_work_policy": "automatic-duration-calibration"
@@ -1041,21 +1115,32 @@ report.
   "planned_measurements": 75,
   "completed_measurements": 75,
   "results_complete": true,
+  "conclusions_valid": true,
   "loops": [ ... ],
   "main_memory": { ... },
   "cache": { ... },
   "timestamp": "2026-03-09T14:57:56Z",
-  "version": "0.61.2"
+  "version": "0.62.0"
 }
 ```
 
-Schema 2 stores exact uint64 seeds as decimal strings. Every per-loop measurement has status/reason, nullable value,
+Schema 3 stores exact uint64 seeds as decimal strings. Every per-loop measurement has status/reason, nullable value,
 exact passes/accesses/payload, requested/effective workers, seed, pilot/final duration, calibration quality, and schedule
 position. Only `measured` values enter aggregates. One measured loop is its own headline; multiple loop headlines use
-median P50. Statistics include average, P90/P95/P99, sample standard deviation, CV, MAD, min, and max. Standard output
-is atomically checkpointed after completed loops; consumers must require `results_complete: true` when completeness is
-mandatory. Bandwidth QoS metadata includes created workers plus per-worker success/failure counts; latency carries the
-main-thread outcome. These fields describe a best-effort scheduler hint, never hard core pinning.
+median P50. Statistics include average, P90/P95/P99, sample standard deviation, CV, MAD, min, and max. A standard file
+target is atomically checkpointed after completed loop-state changes. Schema 3 requires
+`configuration.output_file` to be a string. Direct payloads preserve the raw output token there, including `"-"`, `./-`,
+and flag-shaped file names; standard results nested in a sweep use an empty string because the envelope owns
+persistence. With `--output -`, logical checkpoint boundaries remain active but persistence is a no-op, and the command
+emits one final snapshot. Schema 3 also requires boolean `conclusions_valid`, which mirrors
+`results_complete`; consumers must require `status: "complete"` and both booleans when completeness is mandatory.
+Bandwidth QoS metadata includes created workers plus per-worker success/failure counts; latency carries the main-thread
+outcome. These fields describe a best-effort scheduler hint, never hard core pinning.
+
+The bundled standard-memory examples are kept compatible with the current producer. They sanity-check the current
+standard result locally, including exact top-level `version: "0.62.0"` in this release, and read current schema-3 metric
+paths directly; they are not a compatibility library. Released standard schema 2, unversioned historical standard JSON
+layouts, and every other explicit standard version are intentionally unsupported inputs.
 
 ### Pattern benchmark JSON shape
 
@@ -1167,16 +1252,22 @@ the complete work plan. They can differ from `accesses_per_pass * passes` and mu
 `strided_2mb` names a 2 MiB virtual address stride. It is not evidence that macOS supplied 2 MiB physical pages:
 `large_page_backing_status: "not-verified"` and `large_page_backing_verified: false` must be interpreted literally.
 
+Pattern file and stdout transports serialize this same schema-3 payload. A file target receives the normal terminal
+atomic write; `--output -` receives one terminal document after all representable complete, partial, interrupted, or
+failed evidence has been retained. Command acceptance requires `status: "complete"` and `results_complete: true`, while
+consuming one selected metric additionally requires that measurement's `status: "measured"` and a non-null value.
+
 ### GPU bandwidth JSON shape
 
-GPU output is a separate top-level schema. It must not be sent to a standard-schema parser merely because it contains
-read/write/copy values. The following valid JSON object is an abbreviated field-selection fragment representing a
-complete automatic run; it deliberately omits, rather than empties, the populated nested evidence arrays:
+GPU file and stdout output use the same separate top-level schema. It must not be sent to a standard-schema parser merely
+because it contains read/write/copy values. The following valid JSON object is an abbreviated field-selection fragment
+representing a complete automatic stdout run; it deliberately omits, rather than empties, the populated nested evidence
+arrays:
 
 ```json
 {
-  "software_version": "0.61.2",
-  "version": "0.61.2",
+  "software_version": "0.62.0",
+  "version": "0.62.0",
   "timestamp": "...",
   "schema_version": 1,
   "mode": "gpu_bandwidth",
@@ -1198,8 +1289,8 @@ complete automatic run; it deliberately omits, rather than empties, the populate
     "loop_count": 3,
     "base_seed_uint64_decimal": "123456789",
     "seed_source": "user",
-    "output_file": "gpu.json",
-    "argv": ["memory_benchmark", "--gpu-bandwidth", "--seed", "123456789", "--output", "gpu.json"]
+    "output_file": "-",
+    "argv": ["memory_benchmark", "--gpu-bandwidth", "--seed", "123456789", "--output", "-"]
   },
   "counters": {
     "planned_loops": 3,
@@ -1253,17 +1344,26 @@ empty. The authoritative rules are:
   exact source SHA-256, compiler identifier, SDK, deployment target, and any compiler diagnostic. A non-null runtime
   library succeeds even if a warning diagnostic exists; a nil library fails.
 
-GPU checkpoints use the shared atomic file writer after every terminal measurement and once for auditable post-parse
-pre-run failures. On interruption, a started logical task is allowed to finish warmup/precondition/timing/required
-validation; a valid current result remains measured. All not-started slots become `interrupted` with
+GPU file checkpoints use the shared atomic writer after every terminal measurement and once for auditable post-parse
+pre-run failures; resource-held execution paths also retain the existing post-release replacement. Exact `--output -`
+executes those logical checkpoint transitions lazily without building or serializing intermediate payloads, including
+the same immediate post-checkpoint stop read, then emits one terminal schema 1 document at the command boundary. On
+interruption, a started logical task is allowed to finish warmup/precondition/timing/required validation; a valid current
+result remains measured. All not-started slots become `interrupted` with
 `value_gb_s: null` and `reason_code: "interruption-before-task"`. A real command, timer, validation, or checkpoint error
 wins over interruption. Graceful interruption returns success at the process boundary but has top-level
 `status: "interrupted"` and false completeness/conclusions. A stop first observed after a terminal checkpoint may cause
 at most one additional interruption checkpoint. Completion of the current task wins; completeness never does.
 
+GPU retains the raw output token in `configuration.output_file` and captures exact `argv`; therefore a stdout payload
+records `"-"` while `--output ./-` remains an ordinary file. Initialized `unsupported` or failed results are serialized
+and retain their non-zero process status. A parser/config failure or backend-factory failure before result initialization
+leaves stdout empty. An observable terminal stdout write or flush failure returns failure without rewriting the already
+computed measurement status.
+
 ### Core-to-core JSON shape
 
-Core-to-core output uses schema 2 and methodology
+Core-to-core file and stdout output use the same schema 2 payload and methodology
 `core2core-v3-calibrated-balanced-auditable-128b-isolation`. This abbreviated structural excerpt shows one of three scenarios and only
 its first loop record, while omitting detailed statistics/hint fields. Its counters describe the unabridged payload, and
 the displayed continuous and sample arrays are complete for the illustrated three-loop scenario:
@@ -1342,7 +1442,8 @@ bounded by the documented minimums. `round_trip_ns.values` contains only measure
 `samples_ns` is a separate pooled sample-window-mean population. A measured loop's range covers exactly the values it
 appended to that pool; a non-measured loop has a zero-length range and contributes neither headline nor sample values. A
 loop that does not produce a valid measurement carries status/reason and `null` values instead of numeric zeros.
-Consumers should require `measurements_complete: true` for a complete comparison. Before interpreting affinity-tag
+Consumers should require `core_to_core_latency.status: "complete"` and `measurements_complete: true` for a complete
+comparison. Before interpreting affinity-tag
 differences, additionally require `affinity_hint_comparison_interpretable: true`; that field covers measured affinity API
 returns only, excludes QoS and pilot outcomes, and does not prove physical placement.
 
@@ -1351,12 +1452,14 @@ returns only, excludes QoS and pilot outcomes, and does not prove physical place
 ```json
 {
   "status": "complete",
+  "status_reason": null,
   "planned_runs": 6,
   "attempted_runs": 6,
   "completed_runs": 6,
   "conclusions_valid": true,
   "configuration": {
     "mode": "sweep",
+    "sweep_schema_version": 1,
     "base_mode": "benchmark",
     "run_count": 6,
     "sweep_max_runs": 256,
@@ -1379,14 +1482,14 @@ returns only, excludes QoS and pilot outcomes, and does not prove physical place
   ],
   "execution_time_sec": 123.4,
   "timestamp": "2026-04-29T12:00:00Z",
-  "version": "0.61.2"
+  "version": "0.62.0"
 }
 ```
 
 ### Latency payload structure (current)
 
-Standard schema 2 separates per-loop continuous headlines, pooled sample-window distributions, and paired locality
-comparisons. The values below illustrate structure only.
+Current standard schema 3 separates per-loop continuous headlines, pooled sample-window distributions, and paired
+locality comparisons. The values below illustrate structure only.
 
 ```json
 "latency": {
@@ -1434,7 +1537,8 @@ per-loop `samples_ns` are same-round `global - 16 KiB` differences; they must no
 
 ### TLB analysis JSON (analyze mode)
 
-When run with `--analyze-tlb --output tlb_analysis.json`, the payload includes a dedicated `tlb_analysis` block.
+When run directly with `--analyze-tlb --output <target>`, the payload includes a dedicated `tlb_analysis` block. A file
+target and exact stdout target `-` serialize the same object.
 The following is a structure-focused schema-version-4 illustration. It is not presented as a hardware result; the current
 serializer contract and concrete deterministic values are exercised by
 `JsonSchemaTest.TlbAnalysisExporterIncludesModeAndCoreCounts`. New hardware baselines remain outside this release series by
@@ -1625,6 +1729,8 @@ Schema 4 contains only the current fields. The bundled plotter independently rea
 accept their field names in a schema 4 document. Each measurement
 contains calibrated `paired_control.spread.access_count` and `paired_control.packed.access_count` values. When analysis is
 interrupted, `conclusions_valid` is `false`, boundary objects contain a suppression reason, and no delta is published.
+Machine consumers accept conclusions only when `tlb_analysis.status` is `complete` and
+`tlb_analysis.conclusions_valid` is `true`.
 `validation_status: "not-run"` and `validation_complete: false` distinguish an unexecuted validation pass from
 `validation_status: "not-required"` after a complete run with no validation candidates. `validation_required` is true only
 after candidate-specific validation points have been planned; an interruption during the base pass can therefore report
@@ -1648,6 +1754,16 @@ same structure as the standard `main_memory.bandwidth` object.
 
 ### Useful JSON inspection commands
 
+Capture any supported machine-output command before applying the schema-specific checks below:
+
+```bash
+memory_benchmark --benchmark --only-bandwidth --buffer-size 512 --count 5 --output - \
+  >results.json 2>benchmark.log
+
+memory_benchmark --gpu-bandwidth --buffer-size 512 --count 3 --seed 42 --output - \
+  >gpu_bandwidth.json 2>gpu_bandwidth.log
+```
+
 ```bash
 # Pretty print
 python3 -m json.tool results.json
@@ -1661,14 +1777,19 @@ jq '.main_memory.latency.headline_ns.pooled_sample_distribution.statistics.p95' 
 # Paired automatic locality delta median
 jq '.main_memory.latency.automatic_locality_comparison.locality_latency_delta_ns.statistics.median' results.json
 
-# Reject incomplete standard output
-jq 'select(.results_complete == true)' results.json
+# Reject incomplete current standard output
+jq -e 'select(.configuration.mode == "benchmark" and
+              .configuration.benchmark_schema_version == 3 and
+              (.configuration.output_file | type) == "string" and
+              .status == "complete" and .results_complete == true and
+              .conclusions_valid == true)' results.json
 
 # Pattern random read median and status
 jq '{status: .patterns.random.bandwidth.read_gb_s.status, median: .patterns.random.bandwidth.read_gb_s.statistics.median_p50}' patterns.json
 
 # Reject incomplete pattern output
-jq 'select(.status == "complete" and .results_complete == true)' patterns.json
+jq -e 'select(.configuration.pattern_schema_version == 3 and
+              .status == "complete" and .results_complete == true)' patterns.json
 
 # Pattern phase-count semantics, requested/effective threads, and exact totals
 jq '.patterns.strided_2mb.bandwidth.read_gb_s.measurements[] | {requested_threads, effective_threads, accesses_per_pass, accesses_per_pass_semantics, min_accesses_per_pass, max_accesses_per_pass, phase_period_passes, total_accesses, total_payload_bytes}' patterns.json
@@ -1679,8 +1800,31 @@ jq '.tlb_analysis.l1_tlb_detection.boundary_locality_kb' tlb_analysis.json
 # Standalone TLB large-locality paired translation delta P50 (ns)
 jq '.tlb_analysis.large_locality_paired_comparison.translation_delta_p50_ns' tlb_analysis.json
 
+# Reject incomplete standalone TLB output
+jq -e 'select(.configuration.schema_version == 4 and
+              .tlb_analysis.status == "complete" and
+              .tlb_analysis.conclusions_valid == true)' tlb_analysis.json
+
+# Reject incomplete core-to-core output
+jq -e 'select(.configuration.schema_version == 2 and
+              .core_to_core_latency.status == "complete" and
+              .core_to_core_latency.measurements_complete == true)' core2core.json
+
+# Reject incomplete sweep envelope
+jq -e 'select(.configuration.sweep_schema_version == 1 and
+              .status == "complete" and .conclusions_valid == true)' sweep.json
+
+# Optional producer-consistency check; not part of the sweep acceptance predicate
+jq -e 'select(.completed_runs == .planned_runs)' sweep.json
+
 # Reject incomplete GPU schema 1 output and inspect validated headlines
-jq 'select(.mode == "gpu_bandwidth" and .schema_version == 1 and .status == "complete" and .results_complete == true and .conclusions_valid == true) | .aggregates | with_entries(.value = {headline_gb_s: .value.headline_gb_s, sample_count: .value.sample_count, stability_quality: .value.stability_quality})' gpu_bandwidth.json
+jq -e 'select(.mode == "gpu_bandwidth" and .schema_version == 1 and
+              .status == "complete" and .results_complete == true and
+              .conclusions_valid == true) |
+       .aggregates |
+       with_entries(.value = {headline_gb_s: .value.headline_gb_s,
+                              sample_count: .value.sample_count,
+                              stability_quality: .value.stability_quality})' gpu_bandwidth.json
 
 # Inspect GPU exact payload, pass count, timing, and validation status
 jq '.measurements[] | {operation, status, value_gb_s, passes: .work_plan.passes, exact_payload_bytes: .work_plan.exact_payload_bytes, gpu_elapsed_seconds: .timed.gpu_elapsed_seconds, validation_status: .validation.validation_status}' gpu_bandwidth.json
@@ -1696,9 +1840,13 @@ Plotting requires Python 3 and `matplotlib`; the M4/M5 comparison script additio
 python3 -m pip install matplotlib numpy
 ```
 
-The bundled standard-memory and TLB plotters do not plot GPU schema 1. They explicitly reject a top-level
-`mode: "gpu_bandwidth"`, `schema_version: 1` document instead of sending it through a historical standard-schema
-fallback.
+The bundled standard-memory scripts are kept in lockstep with the current producer. Each performs only the local
+version, completion, and field sanity checks needed by its current schema-3 metric paths. For version 0.62.0, the check
+requires top-level `version: "0.62.0"`, standard mode/schema identity, complete/valid result state, and a string output
+target before the selected metric path is read. These scripts are examples, not a versioned compatibility layer:
+standard schema 2, unversioned historical standard JSON, other modes, and other standard versions are unsupported. The
+separately governed `plot_analyzetlb.py` retains its own TLB-history policy. Standard-memory plotters do not accept GPU
+schema 1.
 
 ### `script-examples/latency_test_script.sh`
 
@@ -1707,17 +1855,38 @@ What it does:
 - Sweeps multiple custom cache sizes
 - Sweeps multiple `--latency-tlb-locality-kb` values
 - Writes per-run JSON files under `script-examples/tmp/`
-- Extracts `.cache.custom.latency.headline_ns.pooled_sample_distribution.statistics` from current schema 2 files into
-  `script-examples/final_output.txt`; `.cache.custom.latency.samples_ns.statistics` is a historical-schema fallback
+- Extracts `.cache.custom.latency.headline_ns.pooled_sample_distribution.statistics` from complete current standard
+  schema-3 files into `script-examples/final_output.txt`
+- Uses `jq` for that local sanity check and extraction when available, with Python 3 as the fallback
 - Clears `tmp` after extraction
 - Returns a non-zero status after cleanup if any benchmark failed, an expected output is missing, or a current-schema
   result is incomplete or cannot be parsed
 
 The script prefers the executable built at the repository root, falls back to `memory_benchmark` from `PATH` when that
-file is unavailable, and honors an explicit `BENCHMARK_CMD=/path/to/memory_benchmark` override.
+file is unavailable, and honors an explicit `BENCHMARK_CMD=/path/to/memory_benchmark` override. Every selected producer
+must emit complete current standard schema 3; incompatible output is rejected before metric extraction.
 
-`latency_test_script_stride_tlb.sh` applies the same local-binary/override policy, retains its timestamped JSON files,
-and returns non-zero unless every planned run produces one complete CSV row.
+`latency_test_script_stride_tlb.sh` applies the same local-binary/override policy, uses embedded Python 3 for its local
+current-result sanity check and metric extraction, retains its timestamped JSON files, and returns non-zero unless every
+planned run produces one complete CSV row.
+
+### Standard-result comparison and hierarchy plotters
+
+Both JSON entry paths require explicit current standard schema-3 inputs:
+
+```bash
+python3 script-examples/plot_M4vsM5_benchmark_comparison.py \
+  --m4-file current-m4.json --m5-file current-m5.json
+python3 script-examples/plot_bechmark-memory-latency-hierarcy.py \
+  --file current-standard.json
+```
+
+They read the current headline and automatic-locality `statistics[metric]` paths directly; there is no historical
+`values` or `average` shape fallback.
+
+There are no archived JSON defaults. The hierarchy plotter's explicit `--file` input may instead be a console-text
+statistics file using the current producer's labels. That separate parser remains available but provides neither JSON
+schema compatibility nor support for historical pre-schema label spellings.
 
 ### `script-examples/plot_cache_percentiles.py`
 
@@ -1840,10 +2009,12 @@ reason code.
 
 ### GPU mode reports unsupported
 
-GPU schema 1 requires `MTLCreateSystemDefaultDevice`, `hasUnifiedMemory`, and Apple7-family capability. With `--output`,
-a valid command writes an `unsupported` audit checkpoint even when no measurement starts. This is different from a CLI
-validation error, which does not create result JSON. Passing the capability check means the kernel contract is admitted;
-it does not make an unvalidated device a performance baseline.
+GPU schema 1 requires `MTLCreateSystemDefaultDevice`, `hasUnifiedMemory`, and Apple7-family capability. With a real
+`--output` file, a valid command writes an `unsupported` audit checkpoint even when no measurement starts; with exact
+`--output -`, it emits that initialized payload once at the command boundary. Both return a non-zero process status. This
+is different from a CLI validation or backend-factory error before result initialization, which does not create result
+JSON and leaves stdout empty. Passing the capability check means the kernel contract is admitted; it does not make an
+unvalidated device a performance baseline.
 
 ### GPU result is incomplete or interrupted
 
@@ -1855,7 +2026,8 @@ because the process exit code was zero.
 ### Script cannot find benchmark binary
 
 The script first uses the repository-root `memory_benchmark` when it is executable, then tries `memory_benchmark` from
-`PATH`. If neither is suitable, set `BENCHMARK_CMD` to an executable path.
+`PATH`. If neither is suitable, set `BENCHMARK_CMD` to an executable path. The selected binary must produce complete
+current standard schema 3.
 
 ### Plot script says no blocks found
 
@@ -1865,7 +2037,7 @@ Make sure you are passing `script-examples/final_output.txt` generated by the la
 
 ## Additional Resources
 
-- [README.md](README.md) - project overview, install, examples
+- [README.md](../README.md) - project overview, install, examples
 - [CAPABILITIES.md](CAPABILITIES.md) - measurement capability overview and interpretation notes
 - [LATENCY_WHITEPAPER.md](LATENCY_WHITEPAPER.md) - pointer-chase latency methodology deep dive
 - [TLB_ANALYSIS_WHITEPAPER.md](TLB_ANALYSIS_WHITEPAPER.md) - TLB analysis methodology and JSON schema
@@ -1873,9 +2045,12 @@ Make sure you are passing `script-examples/final_output.txt` generated by the la
 - [GPU_BANDWIDTH_WHITEPAPER.md](GPU_BANDWIDTH_WHITEPAPER.md) - Metal GPU memory-bandwidth methodology, validation,
   schema 1, capability boundaries, and maintenance policy
 - [TECHNICAL_SPECIFICATION.md](TECHNICAL_SPECIFICATION.md) - architecture and implementation details
-- [CHANGELOG.md](CHANGELOG.md) - release history
+- [CHANGELOG.md](../CHANGELOG.md) - release history
 
 Repository sample result files:
+
+These are retained historical records. Archived standard JSON among them is not accepted by the current bundled
+standard-result consumers.
 
 - `results/0.53.7/MacMiniM4_benchmark.json`
 - `results/0.53.7/MacMiniM4_patterns.json`
@@ -1890,4 +2065,4 @@ memory_benchmark -h
 
 ---
 
-**Last Updated**: 2026-08-12
+**Last Updated**: 2026-08-21

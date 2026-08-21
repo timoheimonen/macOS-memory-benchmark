@@ -38,12 +38,12 @@ def parse_args():
         description="Compare Apple M4 vs M5 memory bandwidth and latency.")
     parser.add_argument(
         "-4", "--m4-file",
-        default="results/0.53.7/MacMiniM4_benchmark.json",
-        help="Path to M4 benchmark JSON (default: results/0.53.7/MacMiniM4_benchmark.json)")
+        required=True,
+        help="Path to a current standard schema-3 M4 benchmark JSON")
     parser.add_argument(
         "-5", "--m5-file",
-        default="results/0.53.8/MacbookAirM5_benchmark.json",
-        help="Path to M5 benchmark JSON (default: results/0.53.8/MacbookAirM5_benchmark.json)")
+        required=True,
+        help="Path to a current standard schema-3 M5 benchmark JSON")
     parser.add_argument(
         "--metric",
         default="average",
@@ -76,6 +76,25 @@ def resolve_input_path(raw_path: str) -> Path:
     raise RuntimeError(f"Input JSON file not found: {raw_path}")
 
 
+def require_current_standard_result(data: object, source: str) -> dict:
+    """Require the complete standard schema emitted by the current producer."""
+    configuration = data.get("configuration") if isinstance(data, dict) else None
+    if not (
+        isinstance(configuration, dict)
+        and data.get("version") == "0.62.0"
+        and configuration.get("mode") == "benchmark"
+        and type(configuration.get("benchmark_schema_version")) is int
+        and configuration["benchmark_schema_version"] == 3
+        and data.get("status") == "complete"
+        and data.get("results_complete") is True
+        and data.get("conclusions_valid") is True
+        and isinstance(configuration.get("output_file"), str)
+    ):
+        raise RuntimeError(
+            f"{source} is not a complete current standard schema-3 benchmark result")
+    return configuration
+
+
 def _stat(obj: dict, *keys: str, metric: str) -> float:
     """Navigate nested dicts and return the requested statistic value."""
     node = obj
@@ -93,30 +112,14 @@ def load_data(path: Path, metric: str) -> dict:
     with path.open("r", encoding="utf-8") as fh:
         data = json.load(fh)
 
-    if data.get("mode") == "gpu_bandwidth" and data.get("schema_version") == 1:
-        raise RuntimeError(
-            f"GPU bandwidth schema 1 is not supported by this standard CPU benchmark plotter: {path}")
-
-    config = data.get("configuration", {})
-    cpu_name = config.get("cpu_name") or data.get("cpu_name") or "Unknown CPU"
-    version = data.get("version", "?")
+    config = require_current_standard_result(data, str(path))
+    cpu_name = str(config.get("cpu_name", "Unknown CPU"))
+    version = data["version"]
 
     mm = data.get("main_memory", {})
     bw = mm.get("bandwidth", {})
     cache = data.get("cache", {})
-    schema_version = config.get("benchmark_schema_version")
-    if schema_version == 2:
-        if not data.get("results_complete", False):
-            raise RuntimeError(f"Incomplete standard benchmark result: {path}")
-        locality = mm.get("latency", {}).get("automatic_locality_comparison", {})
-        l1_latency_key = "headline_ns"
-        locality_16k_key = "locality_16k_latency_ns"
-        global_random_key = "global_random_latency_ns"
-    else:
-        locality = mm.get("latency", {}).get("auto_tlb_breakdown", {})
-        l1_latency_key = "average_ns"
-        locality_16k_key = "tlb_hit_ns"
-        global_random_key = "tlb_miss_ns"
+    locality = mm.get("latency", {}).get("automatic_locality_comparison", {})
 
     return {
         "cpu_name": cpu_name,
@@ -124,10 +127,10 @@ def load_data(path: Path, metric: str) -> dict:
         "bw_copy":   _stat(bw,    "copy_gb_s",  metric=metric),
         "bw_read":   _stat(bw,    "read_gb_s",  metric=metric),
         "bw_write":  _stat(bw,    "write_gb_s", metric=metric),
-        "l1_lat":    _stat(cache, "l1", "latency", l1_latency_key, metric=metric),
-        "l2_lat":    _stat(cache, "l2", "latency", l1_latency_key, metric=metric),
-        "locality_16k": _stat(locality, locality_16k_key, metric=metric),
-        "global_random": _stat(locality, global_random_key, metric=metric),
+        "l1_lat":    _stat(cache, "l1", "latency", "headline_ns", metric=metric),
+        "l2_lat":    _stat(cache, "l2", "latency", "headline_ns", metric=metric),
+        "locality_16k": _stat(locality, "locality_16k_latency_ns", metric=metric),
+        "global_random": _stat(locality, "global_random_latency_ns", metric=metric),
     }
 
 

@@ -29,6 +29,8 @@
 #include <cstddef>
 #include <cstdlib>
 #include <cstring>
+#include <exception>
+#include <filesystem>
 #include <iostream>
 #include <limits>
 #include <optional>
@@ -53,6 +55,7 @@
 #include "core/system/system_info.h"
 #include "core/timing/timer.h"
 #include "output/console/messages/messages_api.h"
+#include "output/json/json_output/json_output_api.h"
 #include "utils/utils.h"
 #include "warmup/warmup.h"
 
@@ -600,19 +603,64 @@ namespace {
 int run_tlb_analysis_impl(
     const BenchmarkConfig& config,
     const TlbStopRequested& stop_requested,
-    const TlbAnalysisExecutionSeam* execution_seam);
+    const TlbAnalysisExecutionSeam* execution_seam,
+    nlohmann::ordered_json* result_json);
+
+int persist_tlb_analysis_payload(
+    const BenchmarkConfig& config,
+    const nlohmann::ordered_json& result_json) {
+  if (config.output_file.empty() || result_json.empty()) {
+    return EXIT_SUCCESS;
+  }
+
+  std::filesystem::path file_path(config.output_file);
+  if (file_path.is_relative()) {
+    file_path = std::filesystem::current_path() / file_path;
+  }
+  return write_json_to_file(file_path, result_json);
+}
 
 }  // namespace
 
 int run_tlb_analysis(const BenchmarkConfig& config) {
+  nlohmann::ordered_json result_json;
+  nlohmann::ordered_json* result_json_out =
+      config.output_file.empty() ? nullptr : &result_json;
+  const int run_status = run_tlb_analysis_impl(
+      config, []() { return signal_received(); }, nullptr, result_json_out);
+  if (persist_tlb_analysis_payload(config, result_json) != EXIT_SUCCESS) {
+    return EXIT_FAILURE;
+  }
+  return run_status;
+}
+
+int run_tlb_analysis_collect(const BenchmarkConfig& config,
+                             nlohmann::ordered_json& result_json) {
   return run_tlb_analysis_impl(
-      config, []() { return signal_received(); }, nullptr);
+      config, []() { return signal_received(); }, nullptr, &result_json);
 }
 
 int run_tlb_analysis(const BenchmarkConfig& config,
                      const TlbStopRequested& stop_requested,
                      const TlbAnalysisExecutionSeam& execution_seam) {
-  return run_tlb_analysis_impl(config, stop_requested, &execution_seam);
+  nlohmann::ordered_json result_json;
+  nlohmann::ordered_json* result_json_out =
+      config.output_file.empty() ? nullptr : &result_json;
+  const int run_status = run_tlb_analysis_impl(
+      config, stop_requested, &execution_seam, result_json_out);
+  if (persist_tlb_analysis_payload(config, result_json) != EXIT_SUCCESS) {
+    return EXIT_FAILURE;
+  }
+  return run_status;
+}
+
+int run_tlb_analysis_collect(
+    const BenchmarkConfig& config,
+    const TlbStopRequested& stop_requested,
+    const TlbAnalysisExecutionSeam& execution_seam,
+    nlohmann::ordered_json& result_json) {
+  return run_tlb_analysis_impl(
+      config, stop_requested, &execution_seam, &result_json);
 }
 
 namespace {
@@ -620,7 +668,11 @@ namespace {
 int run_tlb_analysis_impl(
     const BenchmarkConfig& config,
     const TlbStopRequested& stop_requested,
-    const TlbAnalysisExecutionSeam* execution_seam) {
+    const TlbAnalysisExecutionSeam* execution_seam,
+    nlohmann::ordered_json* result_json) {
+  if (result_json != nullptr) {
+    result_json->clear();
+  }
   std::optional<std::chrono::steady_clock::time_point> analysis_start;
   if (execution_seam == nullptr || !execution_seam->elapsed_seconds) {
     analysis_start = std::chrono::steady_clock::now();
@@ -1475,8 +1527,23 @@ int run_tlb_analysis_impl(
       pass_summaries,
   };
 
-  if (save_tlb_analysis_to_json(json_context) != EXIT_SUCCESS) {
-    return EXIT_FAILURE;
+  if (result_json != nullptr) {
+    try {
+      *result_json = build_tlb_analysis_json(json_context);
+    } catch (const std::exception& error) {
+      result_json->clear();
+      std::cerr << Messages::error_prefix()
+                << Messages::error_json_payload_construction_failed(
+                       error.what())
+                << std::endl;
+      return EXIT_FAILURE;
+    } catch (...) {
+      result_json->clear();
+      std::cerr << Messages::error_prefix()
+                << Messages::error_json_payload_construction_failed("")
+                << std::endl;
+      return EXIT_FAILURE;
+    }
   }
 
   return measurement_error ? EXIT_FAILURE : EXIT_SUCCESS;

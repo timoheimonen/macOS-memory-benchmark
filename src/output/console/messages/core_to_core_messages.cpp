@@ -34,7 +34,7 @@ namespace Messages {
 
 const std::string& error_analyze_core_to_core_must_be_used_alone() {
   static const std::string msg =
-      "--analyze-core2core allows only optional -o/--output <file>, -r/--count <count>, and "
+      "--analyze-core2core allows only optional -o/--output <target>, -r/--count <count>, and "
       "-n/--latency-samples <count>; sweep mode additionally allows -S/--sweep count=..., "
       "-S/--sweep latency-samples=..., and -X/--sweep-max-runs <count>; -h/--help prints help";
   return msg;

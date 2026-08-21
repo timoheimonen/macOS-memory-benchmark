@@ -14,6 +14,8 @@ JSON_DIR="${RUN_DIR}/json"
 SUMMARY_CSV="${RUN_DIR}/latency_summary.csv"
 
 DEFAULT_BENCHMARK="${SCRIPT_DIR}/../memory_benchmark"
+# Whichever BENCHMARK_CMD/PATH producer is selected must emit complete current
+# standard schema 3; summary extraction intentionally rejects older contracts.
 if [ -x "${DEFAULT_BENCHMARK}" ]; then
   BENCHMARK_CMD="${BENCHMARK_CMD:-${DEFAULT_BENCHMARK}}"
 else
@@ -41,7 +43,7 @@ if [ -x "${BENCHMARK_CMD}" ]; then
   :
 elif ! command -v "${BENCHMARK_CMD}" >/dev/null 2>&1; then
   echo "Error: ${BENCHMARK_CMD} not found"
-  echo "Tip: build the local binary (make) or export BENCHMARK_CMD=/path/to/memory_benchmark"
+  echo "Tip: build the current local binary (make) or export BENCHMARK_CMD=/path/to/current/memory_benchmark"
   exit 1
 fi
 
@@ -49,7 +51,7 @@ help_text="$("${BENCHMARK_CMD}" -h 2>&1 || true)"
 if [[ "${help_text}" != *"--latency-stride-bytes"* ]]; then
   echo "Error: selected benchmark does not support --latency-stride-bytes"
   echo "Selected command: ${BENCHMARK_CMD}"
-  echo "Tip: use the newer local binary, e.g. BENCHMARK_CMD=${SCRIPT_DIR}/../memory_benchmark"
+  echo "Tip: use the current local binary, e.g. BENCHMARK_CMD=${SCRIPT_DIR}/../memory_benchmark"
   exit 1
 fi
 
@@ -122,6 +124,24 @@ import json
 import sys
 from pathlib import Path
 
+
+def require_current_standard_result(data):
+    configuration = data.get("configuration") if isinstance(data, dict) else None
+    if not (
+        isinstance(configuration, dict)
+        and data.get("version") == "0.62.0"
+        and configuration.get("mode") == "benchmark"
+        and type(configuration.get("benchmark_schema_version")) is int
+        and configuration["benchmark_schema_version"] == 3
+        and data.get("status") == "complete"
+        and data.get("results_complete") is True
+        and data.get("conclusions_valid") is True
+        and isinstance(configuration.get("output_file"), str)
+    ):
+        raise RuntimeError("not a complete current standard schema-3 benchmark result")
+    return configuration
+
+
 json_dir = Path(sys.argv[1])
 summary_csv = Path(sys.argv[2])
 expected_rows = int(sys.argv[3])
@@ -131,38 +151,20 @@ errors = []
 for path in sorted(json_dir.glob("*.json")):
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
-        if data.get("mode") == "gpu_bandwidth" and data.get("schema_version") == 1:
-            raise RuntimeError(
-                "GPU bandwidth schema 1 is not supported by this standard CPU latency extractor"
-            )
-        cfg = data.get("configuration", {})
-        cache = data.get("cache", {}) or {}
-        custom = cache.get("custom", {}) or {}
-        latency = custom.get("latency", {}) or {}
-        if cfg.get("benchmark_schema_version") == 2:
-            if not data.get("results_complete", False):
-                raise RuntimeError("incomplete benchmark result")
-            headline = latency.get("headline_ns", {}) or {}
-            samples = headline.get("pooled_sample_distribution", {}) or {}
-            stats = samples.get("statistics", {}) or {}
-            measurements = headline.get("measurements", []) or []
-            chain_node_count = next(
-                (
-                    measurement.get("chain_node_count")
-                    for measurement in measurements
-                    if measurement.get("chain_node_count") is not None
-                ),
-                "",
-            )
-            unique_pages_touched = ""
-            page_size_bytes = cfg.get("native_page_size_bytes", "")
-        else:
-            samples = latency.get("samples_ns", {}) or {}
-            stats = samples.get("statistics", {}) or {}
-            diag = latency.get("chain_diagnostics", {}) or {}
-            chain_node_count = diag.get("pointer_count", "")
-            unique_pages_touched = diag.get("unique_pages_touched", "")
-            page_size_bytes = diag.get("page_size_bytes", "")
+        cfg = require_current_standard_result(data)
+        headline = data["cache"]["custom"]["latency"]["headline_ns"]
+        stats = headline["pooled_sample_distribution"]["statistics"]
+        measurements = headline.get("measurements", []) or []
+        chain_node_count = next(
+            (
+                measurement.get("chain_node_count")
+                for measurement in measurements
+                if measurement.get("chain_node_count") is not None
+            ),
+            "",
+        )
+        unique_pages_touched = ""
+        page_size_bytes = cfg.get("native_page_size_bytes", "")
 
         required_statistics = ("average", "median", "p90", "p95", "p99", "min", "max", "stddev")
         missing_statistics = [name for name in required_statistics if stats.get(name) is None]

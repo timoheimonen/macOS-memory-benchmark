@@ -30,6 +30,7 @@
 #include "third_party/nlohmann/json.hpp"
 
 struct BenchmarkConfig;
+class JsonOutputSession;
 
 /** Nested result schema used to decide whether one sweep run completed. */
 enum class SweepNestedMode {
@@ -81,15 +82,44 @@ SweepNestedCompletion classify_sweep_nested_completion(SweepNestedMode mode, con
  *
  * Every attempted run is appended before its checkpoint. `completed_runs`
  * counts only nested results classified as complete for the selected mode.
+ * Both sweep producers receive `configuration.sweep_schema_version` here
+ * before the first checkpoint; a missing or non-object configuration member
+ * is normalized to an object.
+ *
+ * @param mode Nested result schema used for completion classification.
+ * @param run_parameters Immutable parameter object for every planned run.
+ * @param initial_output Initial envelope metadata, moved into the result.
+ * @param hooks Required executor/checkpoint seams and optional clock/stop seams.
+ * @return Terminal status and the latest complete in-memory envelope.
+ * @note Hooks are called synchronously on the invoking thread. Exceptions from
+ *       `execute_run` are converted to a failed attempted run with a null
+ *       result, then checkpointed normally. Other hook exceptions propagate.
  */
 SweepExecutionResult execute_sweep_plan(SweepNestedMode mode, const std::vector<nlohmann::ordered_json>& run_parameters,
                                         nlohmann::ordered_json initial_output, const SweepExecutionHooks& hooks);
 
 /**
- * @brief Execute a parameter sweep and write the combined JSON output.
+ * Execute a parameter sweep through one command-owned JSON output session.
+ *
+ * The session must outlive this call and be installed before any benchmark
+ * workers start. Every logical checkpoint is offered to the session; file
+ * targets persist it atomically, while stdout checkpoints remain lazy no-ops.
+ * The returned terminal envelope is not written a second time for file
+ * targets. The command boundary is responsible for the one terminal stdout
+ * write after this function has emitted its final human message.
+ *
  * @param base_config Parsed and validated base configuration.
- * @return EXIT_SUCCESS on success, EXIT_FAILURE on error.
+ * @param output_session Single-owner output session for this command.
+ * @return Terminal process status and the latest in-memory sweep envelope.
+ * @throws std::exception If setup or envelope construction fails outside the
+ *         contained nested-run executor boundary. The command boundary must
+ *         convert propagated exceptions to its return-code error path.
+ * @note Nested-run executor exceptions become failed, checkpointed attempts in
+ *       the returned envelope rather than propagating from this function.
+ * @note Called synchronously and not thread-safe. The session must not overlap
+ *       another output session.
  */
-int run_sweep_mode(const BenchmarkConfig& base_config);
+SweepExecutionResult run_sweep_mode(const BenchmarkConfig& base_config,
+                                    JsonOutputSession& output_session);
 
 #endif  // SWEEP_RUNNER_H

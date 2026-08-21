@@ -22,6 +22,7 @@
 #include "core/config/constants.h"
 #include "core/signal/signal_handler.h"
 #include "gpu_bandwidth/gpu_json.h"
+#include "output/json/json_output/json_output_session.h"
 #include "utils/json_utils.h"
 #include "utils/numeric_utils.h"
 
@@ -382,9 +383,17 @@ bool stop_requested(const GpuRunnerTestHooks& hooks) {
 
 int write_checkpoint(const GpuBandwidthConfig& config,
                      const GpuRunResult& result,
-                     const GpuRunnerTestHooks& hooks) {
+                     const GpuRunnerTestHooks& hooks,
+                     JsonOutputSession* output_session) {
   if (hooks.checkpoint) {
     return hooks.checkpoint(result);
+  }
+  if (output_session != nullptr) {
+    return output_session->checkpoint(
+        [&config, &result]() {
+          return build_gpu_bandwidth_json(config, result);
+        },
+        false);
   }
   if (config.output_file.empty()) {
     return EXIT_SUCCESS;
@@ -393,20 +402,53 @@ int write_checkpoint(const GpuBandwidthConfig& config,
 }
 
 bool checkpoint_enabled(const GpuBandwidthConfig& config,
-                        const GpuRunnerTestHooks& hooks) {
-  return hooks.checkpoint || !config.output_file.empty();
+                        const GpuRunnerTestHooks& hooks,
+                        const JsonOutputSession* output_session) {
+  if (hooks.checkpoint) {
+    return true;
+  }
+  if (output_session != nullptr) {
+    return output_session->kind() != JsonOutputKind::Disabled;
+  }
+  return !config.output_file.empty();
+}
+
+/** Persist the existing production-only post-release file replacement. */
+int write_post_release_file_checkpoint(
+    const GpuBandwidthConfig& config, const GpuRunResult& result,
+    const GpuRunnerTestHooks& hooks,
+    JsonOutputSession* output_session) {
+  if (hooks.checkpoint) {
+    return EXIT_SUCCESS;
+  }
+  if (output_session != nullptr) {
+    if (output_session->kind() != JsonOutputKind::File) {
+      return EXIT_SUCCESS;
+    }
+    return output_session->checkpoint(
+        [&config, &result]() {
+          return build_gpu_bandwidth_json(config, result);
+        },
+        false);
+  }
+  if (config.output_file.empty()) {
+    return EXIT_SUCCESS;
+  }
+  return save_gpu_bandwidth_json(config, result, false);
 }
 
 /** Apply the terminal-task checkpoint and its one post-checkpoint stop read. */
 int checkpoint_terminal_state(const GpuBandwidthConfig& config,
                               GpuRunResult& result,
                               const GpuRunnerTestHooks& hooks,
+                              JsonOutputSession* output_session,
                               bool stop_seen_before_checkpoint,
                               bool& should_stop) {
   should_stop = stop_seen_before_checkpoint ||
                 result.status == GpuRunStatus::Failed;
-  if (checkpoint_enabled(config, hooks) &&
-      write_checkpoint(config, result, hooks) != EXIT_SUCCESS) {
+  if (checkpoint_enabled(config, hooks, output_session) &&
+      write_checkpoint(config, result, hooks, output_session) !=
+          EXIT_SUCCESS) {
     if (stop_requested(hooks)) {
       result.interruption_requested = true;
       finalize_remaining_interrupted(result);
@@ -432,8 +474,9 @@ int checkpoint_terminal_state(const GpuBandwidthConfig& config,
     result.results_complete = false;
     result.conclusions_valid = false;
     should_stop = true;
-    if (checkpoint_enabled(config, hooks) &&
-        write_checkpoint(config, result, hooks) != EXIT_SUCCESS) {
+    if (checkpoint_enabled(config, hooks, output_session) &&
+        write_checkpoint(config, result, hooks, output_session) !=
+            EXIT_SUCCESS) {
       result.status = GpuRunStatus::Failed;
       result.reason_code = "checkpoint-write-failed";
       return EXIT_FAILURE;
@@ -486,15 +529,17 @@ void assign_frozen_plans_to_slots(GpuRunResult& result) {
 
 int interrupt_before_measurements(const GpuBandwidthConfig& config,
                                   GpuRunResult& result,
-                                  const GpuRunnerTestHooks& hooks) {
+                                  const GpuRunnerTestHooks& hooks,
+                                  JsonOutputSession* output_session) {
   result.interruption_requested = true;
   finalize_remaining_interrupted(result);
   result.status = GpuRunStatus::Interrupted;
   result.reason_code = "interruption-requested";
   result.results_complete = false;
   result.conclusions_valid = false;
-  if (checkpoint_enabled(config, hooks) &&
-      write_checkpoint(config, result, hooks) != EXIT_SUCCESS) {
+  if (checkpoint_enabled(config, hooks, output_session) &&
+      write_checkpoint(config, result, hooks, output_session) !=
+          EXIT_SUCCESS) {
     result.status = GpuRunStatus::Failed;
     result.reason_code = "checkpoint-write-failed";
     return EXIT_FAILURE;
@@ -505,6 +550,7 @@ int interrupt_before_measurements(const GpuBandwidthConfig& config,
 int calibrate_operation(const GpuBandwidthConfig& config,
                         GpuBackend& backend, GpuRunResult& result,
                         const GpuRunnerTestHooks& hooks,
+                        JsonOutputSession* output_session,
                         GpuOperation operation,
                         const std::function<void()>& update_elapsed) {
   const size_t index = operation_index(operation);
@@ -535,7 +581,8 @@ int calibrate_operation(const GpuBandwidthConfig& config,
   while (true) {
     if (stop_requested(hooks)) {
       update_elapsed();
-      return interrupt_before_measurements(config, result, hooks);
+      return interrupt_before_measurements(config, result, hooks,
+                                           output_session);
     }
 
     latest_plan = make_plan(config, result, operation, passes, false);
@@ -574,7 +621,8 @@ int calibrate_operation(const GpuBandwidthConfig& config,
     }
     if (stop_requested(hooks)) {
       update_elapsed();
-      return interrupt_before_measurements(config, result, hooks);
+      return interrupt_before_measurements(config, result, hooks,
+                                           output_session);
     }
 
     const double elapsed = executed.timed.gpu_elapsed_seconds;
@@ -704,10 +752,12 @@ GpuMemoryBudget calculate_gpu_memory_budget(size_t buffer_size_bytes,
   return budget;
 }
 
-int run_gpu_bandwidth_suite(const GpuBandwidthConfig& config,
-                            GpuBackend& backend,
-                            GpuRunResult& result,
-                            const GpuRunnerTestHooks& hooks) {
+namespace {
+
+int run_gpu_bandwidth_suite_impl(
+    const GpuBandwidthConfig& config, GpuBackend& backend,
+    GpuRunResult& result, JsonOutputSession* output_session,
+    const GpuRunnerTestHooks& hooks) {
   const auto start_time = std::chrono::steady_clock::now();
   bool resources_allocated = false;
   const auto update_elapsed = [&]() {
@@ -716,8 +766,9 @@ int run_gpu_bandwidth_suite(const GpuBandwidthConfig& config,
   };
   const auto finish_pre_run_failure = [&]() {
     update_elapsed();
-    if (checkpoint_enabled(config, hooks) &&
-        write_checkpoint(config, result, hooks) != EXIT_SUCCESS) {
+    if (checkpoint_enabled(config, hooks, output_session) &&
+        write_checkpoint(config, result, hooks, output_session) !=
+            EXIT_SUCCESS) {
       result.status = GpuRunStatus::Failed;
       result.reason_code = "checkpoint-write-failed";
     }
@@ -776,7 +827,8 @@ int run_gpu_bandwidth_suite(const GpuBandwidthConfig& config,
 
     for (GpuOperation operation : kGpuOperations) {
       const int calibration_status = calibrate_operation(
-          config, backend, result, hooks, operation, update_elapsed);
+          config, backend, result, hooks, output_session, operation,
+          update_elapsed);
       if (calibration_status != EXIT_SUCCESS ||
           result.status == GpuRunStatus::Interrupted) {
         assign_frozen_plans_to_slots(result);
@@ -792,7 +844,8 @@ int run_gpu_bandwidth_suite(const GpuBandwidthConfig& config,
         if (result.status != GpuRunStatus::Interrupted &&
             result.reason_code != "checkpoint-write-failed" &&
             hooks.checkpoint &&
-            write_checkpoint(config, result, hooks) != EXIT_SUCCESS) {
+            write_checkpoint(config, result, hooks, output_session) !=
+                EXIT_SUCCESS) {
           if (stop_requested(hooks)) {
             result.interruption_requested = true;
             finalize_remaining_interrupted(result);
@@ -804,8 +857,8 @@ int run_gpu_bandwidth_suite(const GpuBandwidthConfig& config,
         }
         release_backend(backend, result);
         update_elapsed();
-        if (!hooks.checkpoint && !config.output_file.empty() &&
-            save_gpu_bandwidth_json(config, result, false) != EXIT_SUCCESS) {
+        if (write_post_release_file_checkpoint(
+                config, result, hooks, output_session) != EXIT_SUCCESS) {
           result.status = GpuRunStatus::Failed;
           result.reason_code = "checkpoint-write-failed";
           result.results_complete = false;
@@ -826,7 +879,8 @@ int run_gpu_bandwidth_suite(const GpuBandwidthConfig& config,
         if (stop_requested(hooks)) {
           update_elapsed();
           const int interrupted =
-              interrupt_before_measurements(config, result, hooks);
+              interrupt_before_measurements(config, result, hooks,
+                                            output_session);
           stop_all = true;
           if (interrupted != EXIT_SUCCESS) {
             break;
@@ -871,7 +925,7 @@ int run_gpu_bandwidth_suite(const GpuBandwidthConfig& config,
 
         update_elapsed();
         bool terminal_stop = false;
-        if (checkpoint_terminal_state(config, result, hooks,
+        if (checkpoint_terminal_state(config, result, hooks, output_session,
                                       stop_after_task,
                                       terminal_stop) != EXIT_SUCCESS) {
           stop_all = true;
@@ -895,8 +949,8 @@ int run_gpu_bandwidth_suite(const GpuBandwidthConfig& config,
     // The terminal measurement checkpoint intentionally retains resources.
     // A final production-only replacement records the post-release allocation
     // snapshot; injected checkpoint tests keep the exact task-boundary count.
-    if (!hooks.checkpoint && !config.output_file.empty() &&
-        save_gpu_bandwidth_json(config, result, false) != EXIT_SUCCESS) {
+    if (write_post_release_file_checkpoint(
+            config, result, hooks, output_session) != EXIT_SUCCESS) {
       finalize_unstarted_failed(result);
       result.status = GpuRunStatus::Failed;
       result.reason_code = "checkpoint-write-failed";
@@ -924,12 +978,31 @@ int run_gpu_bandwidth_suite(const GpuBandwidthConfig& config,
   result.results_complete = false;
   result.conclusions_valid = false;
   update_elapsed();
-  if (!hooks.checkpoint && !config.output_file.empty() &&
-      save_gpu_bandwidth_json(config, result, false) != EXIT_SUCCESS) {
+  if (write_post_release_file_checkpoint(
+          config, result, hooks, output_session) != EXIT_SUCCESS) {
     result.status = GpuRunStatus::Failed;
     result.reason_code = "checkpoint-write-failed";
   }
   return EXIT_FAILURE;
+}
+
+}  // namespace
+
+int run_gpu_bandwidth_suite(const GpuBandwidthConfig& config,
+                            GpuBackend& backend,
+                            GpuRunResult& result,
+                            const GpuRunnerTestHooks& hooks) {
+  return run_gpu_bandwidth_suite_impl(config, backend, result, nullptr,
+                                      hooks);
+}
+
+int run_gpu_bandwidth_suite(const GpuBandwidthConfig& config,
+                            GpuBackend& backend,
+                            GpuRunResult& result,
+                            JsonOutputSession& output_session,
+                            const GpuRunnerTestHooks& hooks) {
+  return run_gpu_bandwidth_suite_impl(config, backend, result,
+                                      &output_session, hooks);
 }
 
 const char* gpu_measurement_status_to_string(GpuMeasurementStatus status) {

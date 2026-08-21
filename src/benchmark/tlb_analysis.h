@@ -30,6 +30,7 @@
 #include <vector>
 
 #include "benchmark/tlb_measurement_scheduler.h"
+#include "third_party/nlohmann/json.hpp"
 
 // Forward declaration
 struct BenchmarkConfig;
@@ -254,17 +255,68 @@ PrivateCacheKneeDetection detect_private_cache_knee(
  * @brief Run standalone TLB analysis benchmark mode.
  * @param config Benchmark configuration (supports optional output_file)
  * @return EXIT_SUCCESS on success, EXIT_FAILURE on error
+ * @throws std::exception Setup or measurement allocations, callbacks, and
+ *         output-path resolution may propagate exceptions. JSON-builder
+ *         exceptions are caught, diagnosed, and converted to `EXIT_FAILURE`.
  */
 int run_tlb_analysis(const BenchmarkConfig& config);
 
 /**
+ * @brief Run standalone TLB analysis and collect its terminal JSON payload.
+ * @param config Benchmark configuration. `output_file` is retained in the
+ *        configuration but is not interpreted or written by this function.
+ * @param[out] result_json Cleared on entry. Receives the initialized terminal
+ *             result, including partial, interrupted, or error evidence. It
+ *             remains empty when setup fails before result initialization or
+ *             JSON construction fails.
+ * @return The execution status independently of `result_json`: `EXIT_SUCCESS`
+ *         for complete, partial, and graceful interruption; `EXIT_FAILURE`
+ *         for setup, measurement, or JSON-construction errors.
+ * @throws std::exception Setup or measurement allocations may propagate.
+ *         JSON-builder exceptions are caught, diagnosed, and converted to
+ *         `EXIT_FAILURE`.
+ * @note The function synchronously consumes `config`; it retains no references
+ *       after return. It is not thread-safe because it uses process signal
+ *       state and the standard console streams.
+ */
+int run_tlb_analysis_collect(const BenchmarkConfig& config,
+                             nlohmann::ordered_json& result_json);
+
+/**
  * @brief Run the production coordinator with injected setup and pass execution.
  *
- * This overload performs no allocation, timer creation, or assembly work.
- * Invalid seam metadata or a missing pass callback returns `EXIT_FAILURE`.
+ * This overload performs no hardware buffer allocation, timer creation, or
+ * assembly work. Invalid seam metadata or a missing pass callback returns
+ * `EXIT_FAILURE`.
+ *
+ * @throws Any exception raised by seam callbacks, coordinator allocations, or
+ *         output-path resolution. JSON-builder exceptions are caught,
+ *         diagnosed, and converted to `EXIT_FAILURE`.
  */
 int run_tlb_analysis(const BenchmarkConfig& config,
                      const TlbStopRequested& stop_requested,
                      const TlbAnalysisExecutionSeam& execution_seam);
+
+/**
+ * @brief Run the deterministic TLB coordinator seam and collect JSON in memory.
+ * @param config Benchmark configuration. No output file is written.
+ * @param stop_requested Synchronous interruption predicate, valid for the
+ *        duration of the call.
+ * @param execution_seam Setup values and callbacks, all of which must remain
+ *        valid for the duration of the call and must not re-enter this API.
+ * @param[out] result_json Cleared on entry and populated under the same terminal
+ *             state contract as the production collect overload.
+ * @return Execution status independently of the collected payload.
+ * @throws Any exception raised by seam callbacks. JSON-builder exceptions are
+ *         caught, diagnosed, and converted to `EXIT_FAILURE`.
+ * @note The seam overload performs no hardware allocation or assembly work. It
+ *       is not thread-safe because coordinator reporting uses the standard
+ *       console streams.
+ */
+int run_tlb_analysis_collect(
+    const BenchmarkConfig& config,
+    const TlbStopRequested& stop_requested,
+    const TlbAnalysisExecutionSeam& execution_seam,
+    nlohmann::ordered_json& result_json);
 
 #endif  // TLB_ANALYSIS_H

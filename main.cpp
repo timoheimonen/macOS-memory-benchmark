@@ -37,8 +37,10 @@
  */
 
 #include <cstdlib>  // Exit codes
+#include <exception>
 #include <iomanip>  // Output formatting
 #include <iostream>
+#include <optional>
 #include <string>
 
 #include "utils/benchmark.h"
@@ -52,6 +54,7 @@
 #include "output/console/messages/messages_api.h"
 #include "core/config/constants.h"
 #include "output/json/json_output/json_output_api.h"
+#include "output/json/json_output/json_output_session.h"
 #include "pattern_benchmark/pattern_benchmark.h"
 #include "core/signal/signal_handler.h"
 #include "core/system/benchmark_qos.h"
@@ -73,6 +76,38 @@ int run_with_benchmark_preparation(BenchmarkConfig& config, Fn&& fn) {
   return fn();
 }
 
+void report_json_output_boundary_failure(const std::string& raw_output,
+                                         const std::string& details) noexcept {
+  try {
+    std::cerr << Messages::error_prefix();
+    if (raw_output == "-") {
+      std::cerr << Messages::error_json_stdout_write_failed(details);
+    } else {
+      std::cerr << Messages::error_file_write_failed(raw_output, details);
+    }
+    std::cerr << std::endl;
+  } catch (...) {
+    // A secondary diagnostic failure must not escape the command boundary.
+  }
+}
+
+template <typename Builder>
+int build_and_write_final_json(JsonOutputSession& session,
+                               const std::string& raw_output,
+                               Builder&& builder) noexcept {
+  try {
+    return session.write_final(builder());
+  } catch (const std::exception& error) {
+    report_json_output_boundary_failure(
+        raw_output,
+        Messages::error_json_payload_construction_failed(error.what()));
+  } catch (...) {
+    report_json_output_boundary_failure(
+        raw_output, Messages::error_json_payload_construction_failed(""));
+  }
+  return EXIT_FAILURE;
+}
+
 }  // namespace
 
 /**
@@ -83,7 +118,7 @@ int run_with_benchmark_preparation(BenchmarkConfig& config, Fn&& fn) {
  * 2. Configures system settings (QoS, cache parameters)
  * 3. Prepares benchmark buffers using mode-appropriate strategy
  * 4. Executes the requested standard, pattern, TLB, core-to-core, or GPU mode
- * 5. Outputs results to console and optionally to JSON file
+ * 5. Outputs results to the human console and optional JSON file/stdout target
  *
  * The program supports multiple execution modes:
  * - Bandwidth-only measurements (--only-bandwidth)
@@ -98,8 +133,13 @@ int run_with_benchmark_preparation(BenchmarkConfig& config, Fn&& fn) {
  * @param argc Number of command-line arguments
  * @param argv Array of command-line argument strings
  *
- * @return EXIT_SUCCESS (0) on successful completion
- * @return EXIT_FAILURE (1) on error (configuration, allocation, or benchmark failure)
+ * @return `EXIT_SUCCESS` for help, complete execution, and the established
+ *         graceful-interruption paths. Success alone does not prove that a
+ *         JSON result is complete; callers must apply the mode-specific
+ *         predicate documented in `documents/API.md`.
+ * @return `EXIT_FAILURE` on configuration, allocation, benchmark, or output
+ *         failure. An initialized mode may still emit inspectable terminal
+ *         evidence before returning failure.
  *
  * @note Standard, pattern, TLB, sweep, and GPU entry paths make a best-effort
  *       QOS_CLASS_USER_INTERACTIVE request for the command thread. Core-to-core
@@ -168,11 +208,49 @@ int main(int argc, char *argv[]) {
     return EXIT_SUCCESS;
   }
 
+  // Every general CPU command shares one target owner. Install stdout routing
+  // before sweep validation and before any benchmark worker can start.
+  std::optional<JsonOutputSession> output_session;
+  try {
+    output_session.emplace(make_json_output_target(
+        config.output_file,
+        JsonFilePathPolicy::ResolveAgainstCurrentDirectory));
+  } catch (const std::exception& error) {
+    report_json_output_boundary_failure(
+        config.output_file,
+        Messages::error_json_output_initialization_failed(error.what()));
+    return EXIT_FAILURE;
+  } catch (...) {
+    report_json_output_boundary_failure(
+        config.output_file,
+        Messages::error_json_output_initialization_failed(""));
+    return EXIT_FAILURE;
+  }
+
   if (config.run_sweep) {
     if (validate_config(config) != EXIT_SUCCESS) {
       return EXIT_FAILURE;
     }
-    return run_sweep_mode(config);
+    try {
+      const SweepExecutionResult execution =
+          run_sweep_mode(config, *output_session);
+      if (output_session->kind() == JsonOutputKind::Stdout &&
+          !execution.output_json.empty() &&
+          output_session->write_final(execution.output_json) != EXIT_SUCCESS) {
+        return EXIT_FAILURE;
+      }
+      return execution.exit_code;
+    } catch (const std::exception& error) {
+      std::cerr << Messages::error_prefix()
+                << Messages::error_command_execution_exception(
+                       "Sweep", error.what())
+                << std::endl;
+    } catch (...) {
+      std::cerr << Messages::error_prefix()
+                << Messages::error_command_execution_exception("Sweep", "")
+                << std::endl;
+    }
+    return EXIT_FAILURE;
   }
 
   if (config.analyze_tlb) {
@@ -181,7 +259,30 @@ int main(int argc, char *argv[]) {
     }
     print_runtime_banner();
     return run_with_benchmark_preparation(config, [&]() {
-      return run_tlb_analysis(config);
+      try {
+        if (output_session->kind() == JsonOutputKind::Disabled) {
+          return run_tlb_analysis(config);
+        }
+
+        nlohmann::ordered_json result_json;
+        const int run_status = run_tlb_analysis_collect(config, result_json);
+        if (!result_json.empty() &&
+            output_session->write_final(result_json) != EXIT_SUCCESS) {
+          return EXIT_FAILURE;
+        }
+        return run_status;
+      } catch (const std::exception& error) {
+        std::cerr << Messages::error_prefix()
+                  << Messages::error_command_execution_exception(
+                         "TLB analysis", error.what())
+                  << std::endl;
+      } catch (...) {
+        std::cerr << Messages::error_prefix()
+                  << Messages::error_command_execution_exception(
+                         "TLB analysis", "")
+                  << std::endl;
+      }
+      return EXIT_FAILURE;
     });
   }
 
@@ -230,9 +331,14 @@ int main(int argc, char *argv[]) {
       }
 
       // --- Save JSON Output if requested ---
-      if (!config.output_file.empty()) {
+      if (output_session->kind() != JsonOutputKind::Disabled) {
         double total_elapsed_time_sec = total_execution_timer.stop();
-        if (save_pattern_results_to_json(config, pattern_stats, total_elapsed_time_sec) != EXIT_SUCCESS) {
+        if (build_and_write_final_json(
+                *output_session, config.output_file,
+                [&]() {
+                  return build_pattern_results_json(
+                      config, pattern_stats, total_elapsed_time_sec);
+                }) != EXIT_SUCCESS) {
           return EXIT_FAILURE;
         }
       }
@@ -245,36 +351,51 @@ int main(int argc, char *argv[]) {
       std::cout << Messages::msg_running_benchmarks() << std::endl;
 
       BenchmarkStatistics stats;
-      if (run_all_benchmarks(config, stats) != EXIT_SUCCESS) {
-        return EXIT_FAILURE;
-      }
+      const int standard_run_status =
+          run_all_benchmarks(config, stats, nullptr, &*output_session);
 
       // --- Print Stats ---
       // Print summary statistics if more than one loop was run
-      print_statistics(config.loop_count, stats.all_read_bw_gb_s, stats.all_write_bw_gb_s, stats.all_copy_bw_gb_s,
-                       stats.all_l1_latency_ns, stats.all_l2_latency_ns,
-                       stats.all_l1_read_bw_gb_s, stats.all_l1_write_bw_gb_s, stats.all_l1_copy_bw_gb_s,
-                       stats.all_l2_read_bw_gb_s, stats.all_l2_write_bw_gb_s, stats.all_l2_copy_bw_gb_s,
-                       stats.all_average_latency_ns,
-                       stats.all_tlb_hit_latency_ns,
-                       stats.all_tlb_miss_latency_ns,
-                       stats.all_page_walk_penalty_ns,
-                       config.use_custom_cache_size,
-                       stats.all_custom_latency_ns, stats.all_custom_read_bw_gb_s,
-                       stats.all_custom_write_bw_gb_s, stats.all_custom_copy_bw_gb_s,
-                       stats.all_main_mem_latency_samples,
-                       stats.all_l1_latency_samples,
-                       stats.all_l2_latency_samples,
-                       stats.all_custom_latency_samples,
-                       config.only_bandwidth,
-                       config.only_latency);
+      if (standard_run_status == EXIT_SUCCESS) {
+        print_statistics(config.loop_count, stats.all_read_bw_gb_s, stats.all_write_bw_gb_s, stats.all_copy_bw_gb_s,
+                         stats.all_l1_latency_ns, stats.all_l2_latency_ns,
+                         stats.all_l1_read_bw_gb_s, stats.all_l1_write_bw_gb_s, stats.all_l1_copy_bw_gb_s,
+                         stats.all_l2_read_bw_gb_s, stats.all_l2_write_bw_gb_s, stats.all_l2_copy_bw_gb_s,
+                         stats.all_average_latency_ns,
+                         stats.all_tlb_hit_latency_ns,
+                         stats.all_tlb_miss_latency_ns,
+                         stats.all_page_walk_penalty_ns,
+                         config.use_custom_cache_size,
+                         stats.all_custom_latency_ns, stats.all_custom_read_bw_gb_s,
+                         stats.all_custom_write_bw_gb_s, stats.all_custom_copy_bw_gb_s,
+                         stats.all_main_mem_latency_samples,
+                         stats.all_l1_latency_samples,
+                         stats.all_l2_latency_samples,
+                         stats.all_custom_latency_samples,
+                         config.only_bandwidth,
+                         config.only_latency);
+      }
 
       // --- Save JSON Output if requested ---
-      if (!config.output_file.empty()) {
+      // A failed file checkpoint is terminal and must not be retried here.
+      // Stdout checkpoints are successful no-ops, so a failed run can still
+      // emit its representable terminal evidence exactly once.
+      const bool write_standard_final = should_write_standard_final_json(
+          output_session->kind(), standard_run_status);
+      if (write_standard_final) {
         double total_elapsed_time_sec = total_execution_timer.stop();
-        if (save_results_to_json(config, stats, total_elapsed_time_sec) != EXIT_SUCCESS) {
+        if (build_and_write_final_json(
+                *output_session, config.output_file,
+                [&]() {
+                  return build_results_json(
+                      config, stats, total_elapsed_time_sec);
+                }) != EXIT_SUCCESS) {
           return EXIT_FAILURE;
         }
+      }
+
+      if (standard_run_status != EXIT_SUCCESS) {
+        return standard_run_status;
       }
     }
 

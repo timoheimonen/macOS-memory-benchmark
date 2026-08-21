@@ -30,6 +30,7 @@
 
 #include "benchmark/tlb_analysis.h"
 #include "benchmark/tlb_runtime_policy.h"
+#include "third_party/nlohmann/json.hpp"
 
 struct BenchmarkConfig;
 
@@ -89,9 +90,40 @@ struct TlbAnalysisJsonContext {
 };
 
 /**
- * @brief Save standalone TLB analysis results to JSON output file.
- * @param context TLB analysis result bundle for serialization.
- * @return EXIT_SUCCESS on success, EXIT_FAILURE on error.
+ * @brief Build the complete standalone TLB analysis JSON payload in memory.
+ * @param context TLB configuration, execution state, measurements, and derived
+ *        conclusions. All referenced objects must remain valid and unmodified
+ *        for the duration of the call.
+ * @return Schema-version-4 TLB analysis payload, including metadata and a UTC
+ *         timestamp. Incomplete analysis states retain their measurements and
+ *         suppress conclusions according to `context.conclusions_valid`.
+ * @throws std::exception If allocation, string handling, or JSON construction
+ *         fails.
+ * @note This function performs no filesystem I/O and does not interpret
+ *       `context.config.output_file`. Concurrent calls are safe when their
+ *       referenced inputs are not mutated concurrently.
+ */
+nlohmann::ordered_json build_tlb_analysis_json(
+    const TlbAnalysisJsonContext& context);
+
+/**
+ * @brief Build and atomically replace a file with standalone TLB schema-4 JSON.
+ *
+ * This is a legacy file-only adapter. An empty output target is a successful
+ * no-op. Command code that accepts stdout must classify the raw target and pass
+ * the in-memory payload through `JsonOutputSession` instead.
+ *
+ * @param context Immutable TLB configuration and result bundle. Its
+ *        non-empty `config.output_file` must name a real file target.
+ * @return `EXIT_SUCCESS` for a disabled target or successful atomic replace;
+ *         `EXIT_FAILURE` for a contained file-output failure.
+ * @throws std::exception If payload construction or output-path resolution
+ *         fails before the atomic writer's return-code boundary. Command
+ *         orchestrators must contain these exceptions.
+ * @pre A non-empty `context.config.output_file` is not the exact stdout
+ *      sentinel `-`.
+ * @note The function retains no references and is synchronous. Callers must
+ *       not mutate the context or target path concurrently.
  */
 int save_tlb_analysis_to_json(const TlbAnalysisJsonContext& context);
 

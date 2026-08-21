@@ -184,6 +184,28 @@ bool is_option(const std::string& arg, const char* short_option, const char* lon
   return arg == short_option || arg == long_option;
 }
 
+/**
+ * @brief Skip one opaque output target while traversing a parser pre-scan.
+ *
+ * The owning parsing pass remains responsible for validating the option and
+ * consuming, diagnosing, and storing its value.
+ *
+ * @param argc Number of command-line arguments.
+ * @param argv Command-line argument array.
+ * @param argument_index Index of the token being inspected; advanced once
+ *        when an output value exists.
+ * @return `true` when the current token is `-o` or `--output`.
+ */
+bool skip_opaque_output_value_for_prescan(int argc, char* argv[], int& argument_index) {
+  if (!is_option(std::string(argv[argument_index]), OPT_OUTPUT_SHORT, OPT_OUTPUT_LONG)) {
+    return false;
+  }
+  if (argument_index + 1 < argc) {
+    ++argument_index;
+  }
+  return true;
+}
+
 long long parse_signed_decimal_or_throw(const std::string& value) {
   long long parsed = 0;
   const StrictIntegerParseStatus status = parse_strict_signed_decimal(value, parsed);
@@ -362,6 +384,9 @@ int parse_arguments(int argc, char* argv[], BenchmarkConfig& config) {
 
   bool analyze_tlb_present = false;
   for (int i = 1; i < argc; ++i) {
+    if (skip_opaque_output_value_for_prescan(argc, argv, i)) {
+      continue;
+    }
     if (is_option(std::string(argv[i]), OPT_ANALYZE_TLB_SHORT, OPT_ANALYZE_TLB_LONG)) {
       analyze_tlb_present = true;
       break;
@@ -642,6 +667,9 @@ int parse_arguments(int argc, char* argv[], BenchmarkConfig& config) {
   // First pass: parse --cache-size early (needed for cache size detection)
   bool cache_size_seen = false;
   for (int i = 1; i < argc; ++i) {
+    if (skip_opaque_output_value_for_prescan(argc, argv, i)) {
+      continue;
+    }
     std::string arg = argv[i];
     try {
       if (is_option(arg, OPT_CACHE_SIZE_SHORT, OPT_CACHE_SIZE_LONG)) {

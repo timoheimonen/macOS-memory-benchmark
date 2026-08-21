@@ -29,8 +29,8 @@ def parse_args():
     parser.add_argument(
         "-f",
         "--file",
-        default="results/old/macminim4_count5_latency.json",
-        help="Path to benchmark JSON/text file (default: results/old/macminim4_count5_latency.json)",
+        required=True,
+        help="Path to a current standard schema-3 benchmark JSON or console-text statistics file",
     )
     parser.add_argument(
         "--metric",
@@ -75,19 +75,30 @@ def resolve_input_path(raw_path: str) -> Path:
     raise RuntimeError(f"Input file not found: {raw_path}")
 
 
-def pick_stat_or_values(metric_block: dict, metric: str, label: str) -> float:
-    statistics = metric_block.get("statistics")
-    if isinstance(statistics, dict):
-        if metric in statistics:
-            return float(statistics[metric])
-        if "average" in statistics:
-            return float(statistics["average"])
+def require_current_standard_result(data: object, source: str) -> dict:
+    """Require the complete standard schema emitted by the current producer."""
+    configuration = data.get("configuration") if isinstance(data, dict) else None
+    if not (
+        isinstance(configuration, dict)
+        and data.get("version") == "0.62.0"
+        and configuration.get("mode") == "benchmark"
+        and type(configuration.get("benchmark_schema_version")) is int
+        and configuration["benchmark_schema_version"] == 3
+        and data.get("status") == "complete"
+        and data.get("results_complete") is True
+        and data.get("conclusions_valid") is True
+        and isinstance(configuration.get("output_file"), str)
+    ):
+        raise RuntimeError(
+            f"{source} is not a complete current standard schema-3 benchmark result")
+    return configuration
 
-    values = metric_block.get("values")
-    if isinstance(values, list) and values:
-        return float(sum(values) / len(values))
 
-    raise RuntimeError(f"Missing usable metric data for '{label}'.")
+def pick_stat(metric_block: dict, metric: str, label: str) -> float:
+    try:
+        return float(metric_block["statistics"][metric])
+    except (KeyError, TypeError, ValueError) as exc:
+        raise RuntimeError(f"Missing current '{metric}' statistic for '{label}'.") from exc
 
 
 def infer_cpu_name_from_path(path: Path) -> str:
@@ -130,10 +141,6 @@ def parse_text_statistics(path: Path, metric: str):
         "16 KiB Locality Latency (ns)": "locality_16k",
         "Global-Random Latency (ns)": "global_random",
         "Locality Latency Delta, Global - 16 KiB (ns)": "locality_delta",
-        # Historical pre-schema-2 console labels remain readable.
-        "TLB Hit Latency (ns)": "locality_16k",
-        "TLB Miss Latency (ns)": "global_random",
-        "Estimated Page-Walk Penalty (ns)": "locality_delta",
     }
 
     results = {"l1": {}, "l2": {}, "locality_16k": {}, "global_random": {}, "locality_delta": {}}
@@ -192,39 +199,21 @@ def load_latency_data(path: Path, metric: str):
     except json.JSONDecodeError:
         return parse_text_statistics(path, metric)
 
-    if data.get("mode") == "gpu_bandwidth" and data.get("schema_version") == 1:
-        raise RuntimeError(
-            "GPU bandwidth schema 1 is not supported by this standard CPU latency plotter."
-        )
-
-    config = data.get("configuration", {})
+    config = require_current_standard_result(data, str(path))
     cpu_name = str(config.get("cpu_name", "Unknown CPU"))
-    version = data.get("version")
-    if version is not None:
-        version = str(version)
+    version = data["version"]
 
-    schema_version = config.get("benchmark_schema_version")
     try:
-        if schema_version == 2:
-            if not data.get("results_complete", False):
-                raise RuntimeError("Standard benchmark JSON is incomplete (results_complete is false).")
-            l1_block = data["cache"]["l1"]["latency"]["headline_ns"]
-            l2_block = data["cache"]["l2"]["latency"]["headline_ns"]
-            locality = data["main_memory"]["latency"]["automatic_locality_comparison"]
-            hit_block = locality["locality_16k_latency_ns"]
-            miss_block = locality["global_random_latency_ns"]
-            penalty_block = locality["locality_latency_delta_ns"]
-        else:
-            l1_block = data["cache"]["l1"]["latency"]["average_ns"]
-            l2_block = data["cache"]["l2"]["latency"]["average_ns"]
-            tlb = data["main_memory"]["latency"]["auto_tlb_breakdown"]
-            hit_block = tlb["tlb_hit_ns"]
-            miss_block = tlb["tlb_miss_ns"]
-            penalty_block = tlb["page_walk_penalty_ns"]
+        l1_block = data["cache"]["l1"]["latency"]["headline_ns"]
+        l2_block = data["cache"]["l2"]["latency"]["headline_ns"]
+        locality = data["main_memory"]["latency"]["automatic_locality_comparison"]
+        hit_block = locality["locality_16k_latency_ns"]
+        miss_block = locality["global_random_latency_ns"]
+        penalty_block = locality["locality_latency_delta_ns"]
     except (KeyError, TypeError) as exc:
         raise RuntimeError(
             "JSON is missing required fields for memory hierarchy plot. "
-            "Expected schema-2 headline/locality fields or historical benchmark latency fields."
+            "Expected current standard schema-3 headline/locality fields."
         ) from exc
 
     categories = [
@@ -234,12 +223,12 @@ def load_latency_data(path: Path, metric: str):
         "Main Memory\n(Global random)",
     ]
     latencies = [
-        pick_stat_or_values(l1_block, metric, "L1 latency"),
-        pick_stat_or_values(l2_block, metric, "L2 latency"),
-        pick_stat_or_values(hit_block, metric, "16 KiB locality latency"),
-        pick_stat_or_values(miss_block, metric, "Global-random latency"),
+        pick_stat(l1_block, metric, "L1 latency"),
+        pick_stat(l2_block, metric, "L2 latency"),
+        pick_stat(hit_block, metric, "16 KiB locality latency"),
+        pick_stat(miss_block, metric, "Global-random latency"),
     ]
-    delta = pick_stat_or_values(penalty_block, metric, "Locality latency delta")
+    delta = pick_stat(penalty_block, metric, "Locality latency delta")
     return cpu_name, categories, latencies, delta, version
 
 

@@ -144,10 +144,15 @@ test-integration: $(TARGET) $(TEST_TARGET)
 	@echo "Running integration tests..."
 	./$(TEST_TARGET) --gtest_filter=*Integration*
 
-# All tests (unit tests + integration tests)
+# Current-version bundled script examples (jq coverage is skipped when unavailable)
+test-script-examples:
+	python3 -m unittest -v tests/test_script_examples.py
+
+# All tests (unit tests + integration tests + bundled script examples)
 test-all: $(TARGET) $(TEST_TARGET)
-	@echo "Running all tests (unit + integration)..."
+	@echo "Running all tests (unit + integration + bundled script examples)..."
 	./$(TEST_TARGET)
+	$(MAKE) test-script-examples
 
 # Reproducible production C++ source coverage in an isolated /tmp build.
 coverage-unit:
@@ -225,7 +230,8 @@ uninstall:
 	@echo "$(TARGET) uninstalled successfully."
 
 # Define targets that don't correspond to files
-.PHONY: all clean test test-integration test-all coverage-unit coverage-all clean-test docs clean-docs install uninstall
+.PHONY: all clean test test-integration test-script-examples test-all \
+	coverage-unit coverage-all clean-test docs clean-docs install uninstall
 
 # Missing dependency files are expected on a clean tree. Existing files carry
 # the exact source and project/test-header prerequisites emitted by clang++.
