@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.62.0] - Unreleased
+## [0.62.0] - 2026-08-21
 
 ### Added
   - **Machine-readable stdout for all result-producing modes**: Exact `--output -` now emits one terminal JSON document for standard, pattern, TLB, core-to-core, GPU, and CPU sweep commands while routing human output to stderr. Initialized partial, interrupted, unsupported, and failed evidence is retained when available; failures before result initialization leave stdout empty. File targets keep their atomic checkpoint behavior, and `--output ./-` remains an ordinary file target.
