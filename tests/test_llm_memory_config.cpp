@@ -24,6 +24,7 @@
 
 #include "core/config/version.h"
 #include "llm_memory/llm_memory.h"
+#include "llm_memory/llm_runner.h"
 #include "output/console/messages/messages_api.h"
 
 namespace {

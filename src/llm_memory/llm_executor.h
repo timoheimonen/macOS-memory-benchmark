@@ -25,6 +25,7 @@
 #include <cstdint>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <type_traits>
 #include <vector>
 
@@ -117,10 +118,13 @@ static_assert(offsetof(LlmWorkerChecksum, v) == 64);
 static_assert(sizeof(LlmRunChecksum) == 16);
 static_assert(sizeof(LlmStaticSpanReference) == 24);
 
-/** Exact executor-owned backing-byte estimate used for budget re-admission. */
+/**
+ * Exact executor-owned backing-byte estimate used for budget re-admission.
+ * `reason_code` references static storage, so copies remain self-contained.
+ */
 struct LlmExecutorAuxiliaryEstimate {
   bool valid = false;
-  std::string reason_code = LlmExecutorReason::AUXILIARY_BYTES_OVERFLOW;
+  std::string_view reason_code = LlmExecutorReason::AUXILIARY_BYTES_OVERFLOW;
   size_t static_reference_bytes = 0;
   size_t expected_checksum_bytes = 0;
   size_t actual_checksum_bytes = 0;

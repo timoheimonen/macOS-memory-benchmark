@@ -25,6 +25,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <string>
+#include <string_view>
 #include <type_traits>
 #include <vector>
 
@@ -481,10 +482,10 @@ size_t calculate_llm_calibrated_steps(double attempt_duration_seconds,
 /** Return true for a finite duration in the inclusive 100-250 ms window. */
 bool llm_duration_in_target_window(double elapsed_seconds);
 
-/** Classify duration quality without mutating a frozen task plan. */
-std::string classify_llm_duration_quality(double elapsed_seconds,
-                                          size_t steps,
-                                          const LlmScenarioLimits& limits);
+/** Return a static duration-quality token without mutating a frozen task plan. */
+std::string_view classify_llm_duration_quality(
+    double elapsed_seconds, size_t steps,
+    const LlmScenarioLimits& limits) noexcept;
 
 /** Build one weights/KV/mixed cyclic rotation for a count-loop index. */
 std::array<LlmScenario, kLlmScenarioCount> build_llm_scenario_order(

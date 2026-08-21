@@ -24,7 +24,6 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
-#include <optional>
 #include <string>
 #include <vector>
 
@@ -162,8 +161,9 @@ int parse_llm_memory_arguments(int argc, char* argv[],
  *
  * The boundary parses first, returns immediately for help, then installs the
  * command-scoped JSON transport before runtime output, QoS preparation, and
- * signal masking. The executor and result transport are added by later
- * implementation phases; until then a valid non-help command fails explicitly
+ * signal masking. The command remains deliberately unavailable until the
+ * production executor callback, runner result, and JSON/console transport are
+ * bound together; a valid non-help command therefore still fails explicitly
  * without fabricating measurement evidence.
  *
  * @param argc Number of entries in @p argv.
@@ -181,51 +181,6 @@ struct LlmMemoryConfigValidation {
   bool valid = false;
   std::string reason_code = LlmMemoryConfigReason::WEIGHT_SIZE_REQUIRED;
   size_t active_weight_bytes = 0;
-};
-
-/** Foundational status-bearing record for one future runner measurement. */
-struct LlmMeasurementState {
-  LlmScenario scenario = LlmScenario::WeightsOnly;
-  LlmMeasurementStatus status = LlmMeasurementStatus::NotRun;
-  std::string reason_code = "not-run";
-  std::string diagnostic;
-  size_t loop_index = 0;
-  size_t order_position = 0;
-  size_t planned_steps = 0;
-  size_t completed_steps = 0;
-  size_t planned_exact_payload_bytes = 0;
-  size_t completed_exact_payload_bytes = 0;
-  std::optional<double> elapsed_seconds;
-  std::optional<double> effective_payload_gb_s;
-  bool checksum_valid = false;
-};
-
-/** Exact lifecycle counters retained by partial and terminal run results. */
-struct LlmRunCounters {
-  size_t planned_loops = 0;
-  size_t attempted_loops = 0;
-  size_t completed_loops = 0;
-  size_t planned_measurements = 0;
-  size_t attempted_measurements = 0;
-  size_t terminal_measurements = 0;
-  size_t measured_measurements = 0;
-  size_t planned_synthetic_steps = 0;
-  size_t completed_synthetic_steps = 0;
-  size_t planned_exact_payload_bytes = 0;
-  size_t completed_exact_payload_bytes = 0;
-};
-
-/** Cold-path command result foundation; orchestration fields are added later. */
-struct LlmMemoryResult {
-  LlmRunStatus status = LlmRunStatus::NotStarted;
-  std::string reason_code = "not-started";
-  std::string diagnostic;
-  bool interruption_requested = false;
-  bool results_complete = false;
-  bool conclusions_valid = false;
-  bool scenario_order_balance_complete = false;
-  LlmRunCounters counters;
-  std::vector<LlmMeasurementState> measurements;
 };
 
 /** Validate resolved config fields and checked MiB-to-byte conversion. */

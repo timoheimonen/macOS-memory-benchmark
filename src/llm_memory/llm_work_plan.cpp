@@ -27,7 +27,6 @@
 #include <stdexcept>
 #include <utility>
 
-#include "utils/cyclic_order.h"
 #include "utils/numeric_utils.h"
 #include "utils/seed_utils.h"
 
@@ -1178,9 +1177,9 @@ bool llm_duration_in_target_window(double elapsed_seconds) {
          elapsed_seconds <= Constants::LLM_CALIBRATION_MAX_SECONDS;
 }
 
-std::string classify_llm_duration_quality(double elapsed_seconds,
-                                          size_t steps,
-                                          const LlmScenarioLimits& limits) {
+std::string_view classify_llm_duration_quality(
+    double elapsed_seconds, size_t steps,
+    const LlmScenarioLimits& limits) noexcept {
   if (!limits.valid || !std::isfinite(elapsed_seconds) ||
       elapsed_seconds <= 0.0 || steps == 0 ||
       steps > limits.effective_maximum_steps) {
@@ -1207,10 +1206,10 @@ std::array<LlmScenario, kLlmScenarioCount> build_llm_scenario_order(
   constexpr std::array<LlmScenario, kLlmScenarioCount> kBaseOrder = {
       LlmScenario::WeightsOnly, LlmScenario::KvOnly, LlmScenario::Mixed};
   std::array<LlmScenario, kLlmScenarioCount> order{};
-  const std::vector<size_t> indexes =
-      build_cyclic_order(kLlmScenarioCount, loop_index);
-  for (size_t position = 0; position < indexes.size(); ++position) {
-    order[position] = kBaseOrder[indexes[position]];
+  const size_t rotation = loop_index % kLlmScenarioCount;
+  for (size_t position = 0; position < kLlmScenarioCount; ++position) {
+    order[position] =
+        kBaseOrder[(rotation + position) % kLlmScenarioCount];
   }
   return order;
 }
