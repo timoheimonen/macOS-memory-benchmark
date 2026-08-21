@@ -30,10 +30,7 @@ from pathlib import Path
 
 import matplotlib.pyplot as plt
 
-from standard_result_contract import (
-    HEADLINE_LOCALITY_LAYOUT,
-    require_standard_result,
-)
+from standard_result_contract import require_standard_result
 
 VALID_METRICS = ("average", "median", "p90", "p95", "p99", "min", "max", "stddev")
 
@@ -43,12 +40,12 @@ def parse_args():
         description="Compare Apple M4 vs M5 memory bandwidth and latency.")
     parser.add_argument(
         "-4", "--m4-file",
-        default="results/0.53.7/MacMiniM4_benchmark.json",
-        help="Path to M4 benchmark JSON (default: results/0.53.7/MacMiniM4_benchmark.json)")
+        required=True,
+        help="Path to a current standard schema-3 M4 benchmark JSON")
     parser.add_argument(
         "-5", "--m5-file",
-        default="results/0.53.8/MacbookAirM5_benchmark.json",
-        help="Path to M5 benchmark JSON (default: results/0.53.8/MacbookAirM5_benchmark.json)")
+        required=True,
+        help="Path to a current standard schema-3 M5 benchmark JSON")
     parser.add_argument(
         "--metric",
         default="average",
@@ -98,7 +95,7 @@ def load_data(path: Path, metric: str) -> dict:
     with path.open("r", encoding="utf-8") as fh:
         data = json.load(fh)
 
-    contract = require_standard_result(data, str(path))
+    require_standard_result(data, str(path))
     config = data.get("configuration", {})
     cpu_name = config.get("cpu_name") or data.get("cpu_name") or "Unknown CPU"
     version = data.get("version", "?")
@@ -106,16 +103,7 @@ def load_data(path: Path, metric: str) -> dict:
     mm = data.get("main_memory", {})
     bw = mm.get("bandwidth", {})
     cache = data.get("cache", {})
-    if contract.metric_layout == HEADLINE_LOCALITY_LAYOUT:
-        locality = mm.get("latency", {}).get("automatic_locality_comparison", {})
-        l1_latency_key = "headline_ns"
-        locality_16k_key = "locality_16k_latency_ns"
-        global_random_key = "global_random_latency_ns"
-    else:
-        locality = mm.get("latency", {}).get("auto_tlb_breakdown", {})
-        l1_latency_key = "average_ns"
-        locality_16k_key = "tlb_hit_ns"
-        global_random_key = "tlb_miss_ns"
+    locality = mm.get("latency", {}).get("automatic_locality_comparison", {})
 
     return {
         "cpu_name": cpu_name,
@@ -123,10 +111,10 @@ def load_data(path: Path, metric: str) -> dict:
         "bw_copy":   _stat(bw,    "copy_gb_s",  metric=metric),
         "bw_read":   _stat(bw,    "read_gb_s",  metric=metric),
         "bw_write":  _stat(bw,    "write_gb_s", metric=metric),
-        "l1_lat":    _stat(cache, "l1", "latency", l1_latency_key, metric=metric),
-        "l2_lat":    _stat(cache, "l2", "latency", l1_latency_key, metric=metric),
-        "locality_16k": _stat(locality, locality_16k_key, metric=metric),
-        "global_random": _stat(locality, global_random_key, metric=metric),
+        "l1_lat":    _stat(cache, "l1", "latency", "headline_ns", metric=metric),
+        "l2_lat":    _stat(cache, "l2", "latency", "headline_ns", metric=metric),
+        "locality_16k": _stat(locality, "locality_16k_latency_ns", metric=metric),
+        "global_random": _stat(locality, "global_random_latency_ns", metric=metric),
     }
 
 

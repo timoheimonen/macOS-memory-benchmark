@@ -49,6 +49,7 @@ This manual focuses on practical usage and interpretation. For implementation de
 
 - Apple Silicon Mac
 - Xcode Command Line Tools
+- GoogleTest for C++ tests; Python 3 and `jq` for the aggregate `make test-all` gate
 - For `--gpu-bandwidth`: a unified-memory Metal device supporting `MTLGPUFamilyApple7` or a compatible later family.
   Capability support is distinct from a controlled performance-validation cohort.
 
@@ -79,7 +80,7 @@ Test and coverage targets:
 ```bash
 make test              # deterministic unit suite
 make test-integration  # real Apple Silicon/CLI workflows
-make test-all          # both suites
+make test-all          # all GTest cases, then the strict Python/jq standard-result contract
 make coverage-unit     # isolated LLVM report under /tmp
 make coverage-all
 ```
@@ -88,6 +89,8 @@ Coverage reports are written to `/tmp/membenchmark-coverage-{unit,all}/report.tx
 production C++ and Objective-C++ only and excludes tests, GoogleTest, the bundled JSON header, generated files, and
 assembly. The macOS 11.0 build links the system Metal and Foundation frameworks. GPU kernels are embedded MSL 2.3
 source compiled at runtime; the optional offline Metal Toolchain is not required.
+
+`make test-all` treats Python 3 and `jq` as mandatory prerequisites; a missing `jq` is a hard failure.
 
 ### First run
 
@@ -661,11 +664,11 @@ middle, and trailing items.
   persistence payload builder or serializing an intermediate document, and emit only the final envelope
 - For standard, pattern, and TLB sweeps, every attempted run is retained with its own `status` and `status_reason`.
   `attempted_runs` counts stored entries, while `completed_runs` counts only mode-specific nested results that are
-  genuinely complete. Current standard schema 3 requires nested `status: "complete"`, `results_complete: true`, and
-  `conclusions_valid: true`, plus a string `configuration.output_file`. A released legacy schema-2 standard result
-  requires complete status and `results_complete: true`; `conclusions_valid` and `configuration.output_file` may be
-  absent. When present, `conclusions_valid` must be boolean true and the output target must be a string. Pattern requires
-  nested `status: "complete"` with `results_complete: true`; TLB requires nested `tlb_analysis.status: "complete"` with
+  genuinely complete. Current standard schema 3 requires nested `configuration.mode: "benchmark"`,
+  `status: "complete"`, `results_complete: true`, and `conclusions_valid: true`, plus a string
+  `configuration.output_file`. Nested standard schema 2 and every other standard version are unsupported. Pattern
+  requires nested `status: "complete"` with `results_complete: true`; TLB requires nested
+  `tlb_analysis.status: "complete"` with
   `tlb_analysis.conclusions_valid: true`. Partial, interrupted, and failed nested results never increment it. TLB's
   native `tlb_analysis.status: "error"` is mapped to
   a failed sweep attempt, and the schema-4 payload is retained without adding a nested `tlb_analysis.status_reason`
@@ -1075,9 +1078,9 @@ CV above 5%, non-nominal thermal/Low Power Mode state, incomplete three-position
 duration outside 100–250 ms are warnings. They do not cause performance-based retry or sample filtering. A missing or
 invalid measurement is not printed as zero and remains status-bearing/null in JSON.
 
-**Note:** Current standard schema 3 and released legacy standard schema 2 per-loop latency measurements record
-`chain_node_count` whether the stride was explicit or defaulted. Standalone TLB schema 4 records buffer-relative chain
-diagnostics such as requested/effective/actual
+**Note:** Current standard schema-3 per-loop latency measurements record `chain_node_count` whether the stride was
+explicit or defaulted. Standalone TLB schema 4 records buffer-relative chain diagnostics such as
+requested/effective/actual
 virtual-page counts, `pointer_nodes`, `unique_cache_lines`, `spread_chain`, and `packed_chain`. These fields do not
 describe physical-page identities or prove physical placement. They are retained in JSON, not the compact console
 report.
@@ -1089,7 +1092,7 @@ report.
 Every direct mode and the CPU modes' supported sweeps can serialize their payload either to a real file or, with the exact
 raw target `--output -`, once to stdout. The stdout transport does not wrap the result or change its measurement schema;
 sweep stdout is one final envelope rather than a checkpoint stream. See [API.md](API.md) for stream handling,
-process-status checks, schema compatibility, and the current transport support matrix.
+process-status checks, current schema acceptance, and the transport support matrix.
 
 ### Standard benchmark JSON shape (schema 3)
 
@@ -1132,12 +1135,10 @@ emits one final snapshot. Schema 3 also requires boolean `conclusions_valid`, wh
 Bandwidth QoS metadata includes created workers plus per-worker success/failure counts; latency carries the main-thread
 outcome. These fields describe a best-effort scheduler hint, never hard core pinning.
 
-Released legacy standard schema 2 remains a supported input contract. It uses the same `headline_ns` and
-`automatic_locality_comparison` metric layout, but may omit `conclusions_valid` and `configuration.output_file`. For
-schema-2 acceptance, require `status: "complete"` and boolean `results_complete: true`; if `conclusions_valid` is
-present, it must be boolean `true`, and if `configuration.output_file` is present, it must be a string. Reject any other
-explicit standard schema version rather than treating it as the separately supported unversioned historical metric
-layout.
+Bundled/current standard-result readers require `configuration.mode: "benchmark"` and accept only complete standard
+schema 3 with the mandatory completion and output fields above. Released standard schema 2, unversioned historical
+standard JSON layouts, and every other explicit standard version are intentionally unsupported and are rejected before
+metric extraction.
 
 ### Pattern benchmark JSON shape
 
@@ -1485,8 +1486,8 @@ returns only, excludes QoS and pilot outcomes, and does not prove physical place
 
 ### Latency payload structure (current)
 
-Current standard schema 3, like released legacy schema 2, separates per-loop continuous headlines, pooled sample-window
-distributions, and paired locality comparisons. The values below illustrate structure only.
+Current standard schema 3 separates per-loop continuous headlines, pooled sample-window distributions, and paired
+locality comparisons. The values below illustrate structure only.
 
 ```json
 "latency": {
@@ -1775,17 +1776,11 @@ jq '.main_memory.latency.headline_ns.pooled_sample_distribution.statistics.p95' 
 jq '.main_memory.latency.automatic_locality_comparison.locality_latency_delta_ns.statistics.median' results.json
 
 # Reject incomplete current standard output
-jq -e 'select(.configuration.benchmark_schema_version == 3 and
+jq -e 'select(.configuration.mode == "benchmark" and
+              .configuration.benchmark_schema_version == 3 and
               (.configuration.output_file | type) == "string" and
               .status == "complete" and .results_complete == true and
               .conclusions_valid == true)' results.json
-
-# Migration check for released legacy standard schema 2
-jq -e 'select(.configuration.benchmark_schema_version == 2 and
-              .status == "complete" and .results_complete == true and
-              ((has("conclusions_valid") | not) or .conclusions_valid == true) and
-              ((.configuration | has("output_file") | not) or
-               (.configuration.output_file | type) == "string"))' released-schema-2.json
 
 # Pattern random read median and status
 jq '{status: .patterns.random.bandwidth.read_gb_s.status, median: .patterns.random.bandwidth.read_gb_s.statistics.median_p50}' patterns.json
@@ -1843,9 +1838,10 @@ Plotting requires Python 3 and `matplotlib`; the M4/M5 comparison script additio
 python3 -m pip install matplotlib numpy
 ```
 
-The bundled standard-memory and TLB plotters do not plot GPU schema 1. They explicitly reject a top-level
-`mode: "gpu_bandwidth"`, `schema_version: 1` document instead of sending it through a historical standard-schema
-fallback.
+The bundled standard-memory plotters accept only complete current standard schema-3 JSON and reject standard schema 2,
+unversioned historical standard JSON, other modes, and other standard versions at the shared contract boundary. The
+separately governed `plot_analyzetlb.py` retains its own TLB-history policy. Standard-memory plotters do not accept GPU
+schema 1.
 
 ### `script-examples/latency_test_script.sh`
 
@@ -1854,18 +1850,32 @@ What it does:
 - Sweeps multiple custom cache sizes
 - Sweeps multiple `--latency-tlb-locality-kb` values
 - Writes per-run JSON files under `script-examples/tmp/`
-- Extracts `.cache.custom.latency.headline_ns.pooled_sample_distribution.statistics` from current schema 3 and released
-  legacy schema 2 files into `script-examples/final_output.txt`; `.cache.custom.latency.samples_ns.statistics` is an
-  unversioned historical-schema fallback
+- Extracts `.cache.custom.latency.headline_ns.pooled_sample_distribution.statistics` from complete current standard
+  schema-3 files into `script-examples/final_output.txt`
 - Clears `tmp` after extraction
 - Returns a non-zero status after cleanup if any benchmark failed, an expected output is missing, or a current-schema
   result is incomplete or cannot be parsed
 
 The script prefers the executable built at the repository root, falls back to `memory_benchmark` from `PATH` when that
-file is unavailable, and honors an explicit `BENCHMARK_CMD=/path/to/memory_benchmark` override.
+file is unavailable, and honors an explicit `BENCHMARK_CMD=/path/to/memory_benchmark` override. Every selected producer
+must emit complete current standard schema 3; incompatible output is rejected before metric extraction.
 
 `latency_test_script_stride_tlb.sh` applies the same local-binary/override policy, retains its timestamped JSON files,
 and returns non-zero unless every planned run produces one complete CSV row.
+
+### Standard-result comparison and hierarchy plotters
+
+Both JSON entry paths require explicit current standard schema-3 inputs:
+
+```bash
+python3 script-examples/plot_M4vsM5_benchmark_comparison.py \
+  --m4-file current-m4.json --m5-file current-m5.json
+python3 script-examples/plot_bechmark-memory-latency-hierarcy.py \
+  --file current-standard.json
+```
+
+There are no archived JSON defaults. The hierarchy plotter's explicit `--file` input may instead be a console-text
+statistics file; that separate text parser remains available and does not imply JSON schema compatibility.
 
 ### `script-examples/plot_cache_percentiles.py`
 
@@ -2005,7 +2015,8 @@ because the process exit code was zero.
 ### Script cannot find benchmark binary
 
 The script first uses the repository-root `memory_benchmark` when it is executable, then tries `memory_benchmark` from
-`PATH`. If neither is suitable, set `BENCHMARK_CMD` to an executable path.
+`PATH`. If neither is suitable, set `BENCHMARK_CMD` to an executable path. The selected binary must produce complete
+current standard schema 3.
 
 ### Plot script says no blocks found
 
@@ -2026,6 +2037,9 @@ Make sure you are passing `script-examples/final_output.txt` generated by the la
 - [CHANGELOG.md](CHANGELOG.md) - release history
 
 Repository sample result files:
+
+These are retained historical records. Archived standard JSON among them is not accepted by the current bundled
+standard-result consumers.
 
 - `results/0.53.7/MacMiniM4_benchmark.json`
 - `results/0.53.7/MacMiniM4_patterns.json`

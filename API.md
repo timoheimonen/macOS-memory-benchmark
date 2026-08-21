@@ -113,8 +113,7 @@ contract version 1 first appears in software version `0.62.0`.
 
 | Payload | Schema authority | A command result is complete only when |
 |---|---|---|
-| Legacy standard (released) | `configuration.benchmark_schema_version == 2` | `status == "complete" && results_complete == true && (conclusions_valid is absent \|\| conclusions_valid == true)` |
-| Current standard | `configuration.benchmark_schema_version == 3` | `status == "complete" && results_complete == true && conclusions_valid == true` |
+| Current standard | `configuration.mode == "benchmark" && configuration.benchmark_schema_version == 3` | `status == "complete" && results_complete == true && conclusions_valid == true && configuration.output_file is a string` |
 | Patterns | `configuration.pattern_schema_version == 3` | `status == "complete" && results_complete == true` |
 | TLB | `configuration.schema_version == 4` | `tlb_analysis.status == "complete" && tlb_analysis.conclusions_valid == true` |
 | Core-to-core | `configuration.schema_version == 2` | `core_to_core_latency.status == "complete" && core_to_core_latency.measurements_complete == true` |
@@ -127,10 +126,14 @@ For either schema-1 sweep envelope, the table contains the authoritative complet
 that equality separately as a defensive producer-consistency check, but it is not an additional schema-1 acceptance
 predicate.
 
-Each `runs[].result` in a sweep retains its nested mode's own schema-version field and completeness contract. A non-zero
-nested execution that initialized a result remains in the envelope: its attempt is failed, but the payload is not
-replaced by a generic diagnostic. In particular, nested TLB `tlb_analysis.status == "error"` maps to a failed sweep
-attempt without adding a `tlb_analysis.status_reason` field.
+Each `runs[].result` in a sweep retains its nested mode's own schema-version field and completeness contract. Nested
+standard classification recognizes only current schema 3 with `configuration.mode == "benchmark"` plus typed
+`results_complete`, `conclusions_valid`, and `configuration.output_file` fields; standard schema 2 and every other
+standard version are unsupported. Complete, partial, interrupted, and failed current schema-3 evidence remains
+classifiable and retained rather than being discarded by the complete-result consumer boundary. A non-zero nested
+execution that initialized a result remains in the envelope: its attempt is failed, but the payload is not replaced by
+a generic diagnostic. In particular, nested TLB `tlb_analysis.status == "error"` maps to a failed sweep attempt without
+adding a `tlb_analysis.status_reason` field.
 
 Command completeness does not make every optional metric available. A selected standard measurement must have its
 mode-specific measured/quality state and a non-null value. A pattern measurement may be intentionally `skipped` while
@@ -147,12 +150,9 @@ persistence and nested file writes are disabled. Schema 3 requires boolean `resu
 the producer makes `conclusions_valid` true exactly when `results_complete` is true, while consumers must still check
 the explicit status and both booleans shown in the table.
 
-Legacy standard schema 2 was published before these two fields became mandatory. A released schema-2 result may
-therefore omit top-level `conclusions_valid` and `configuration.output_file`. If present, `conclusions_valid` must be a
-boolean and true for acceptance, and `configuration.output_file` must be a string. `results_complete` must be a boolean
-in both schemas.
-An explicit standard schema version other than 2 or 3 is unsupported and must not be routed through an unversioned
-historical fallback.
+Bundled/current standard-result readers accept only this complete schema-3 contract. Released standard schema 2,
+unversioned historical standard JSON layouts, and every other explicit standard version are unsupported. They are
+rejected at the shared contract boundary rather than routed through a metric-shape fallback.
 
 Graceful interruption or runtime failure after a representable result state has been initialized emits the available
 partial, interrupted, error, or failed JSON snapshot. The execution status and payload are independent: a non-zero status
@@ -198,7 +198,8 @@ Shell capture example:
 ```bash
 memory_benchmark --benchmark --only-bandwidth --buffer-size 512 --count 5 --seed 42 --output - \
   >benchmark.json 2>benchmark.log
-jq -e '.configuration.benchmark_schema_version == 3 and
+jq -e '.configuration.mode == "benchmark" and
+       .configuration.benchmark_schema_version == 3 and
        (.configuration.output_file | type) == "string" and
        .status == "complete" and .results_complete == true and
        .conclusions_valid == true' benchmark.json
@@ -207,16 +208,6 @@ memory_benchmark --patterns --buffer-size 512 --count 5 --seed 42 --output - \
   >patterns.json 2>patterns.log
 jq -e '.configuration.pattern_schema_version == 3 and
        .status == "complete" and .results_complete == true' patterns.json
-```
-
-A migration reader that deliberately accepts released legacy standard schema 2 can apply its older optional-field rule:
-
-```bash
-jq -e '.configuration.benchmark_schema_version == 2 and
-       .status == "complete" and .results_complete == true and
-       ((has("conclusions_valid") | not) or .conclusions_valid == true) and
-       ((.configuration | has("output_file") | not) or
-        (.configuration.output_file | type) == "string")' released-schema-2.json
 ```
 
 The corresponding TLB and core-to-core command predicates are:
@@ -247,11 +238,9 @@ jq -e '.schema_version == 1 and .mode == "gpu_bandwidth" and
 - Current standard schema 3, pattern schema 3, TLB schema 4, core-to-core schema 2, and GPU schema 1 remain
   authoritative at their existing locations. The schema field is intentionally not normalized across these established
   payloads.
-- Legacy standard schema 2 was introduced in `0.58.0` and remains a supported released input contract. Its completion
-  predicate and optional `conclusions_valid` / `configuration.output_file` rules are distinct from current schema 3.
-  Both standard schemas use the `headline_ns` and `automatic_locality_comparison` metric layout.
-- Any other explicit standard schema version is unsupported; only the separately recognized unversioned historical
-  metric layout may use the historical fallback.
+- Bundled/current standard-result readers accept only standard schema 3 with `configuration.mode == "benchmark"` and
+  the complete predicate above. Released standard schema 2, unversioned historical standard JSON layouts, and every
+  other explicit standard version are intentionally unsupported.
 - Both general and core-to-core sweep envelopes use `configuration.sweep_schema_version == 1`; nested results keep their
   independent mode schema versions.
 - Additive optional fields may remain within a schema version only when old consumers can safely ignore them.

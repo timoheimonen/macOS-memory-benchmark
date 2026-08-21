@@ -7,10 +7,7 @@ from pathlib import Path
 
 import matplotlib.pyplot as plt # pyright: ignore[reportMissingModuleSource]
 
-from standard_result_contract import (
-    HEADLINE_LOCALITY_LAYOUT,
-    require_standard_result,
-)
+from standard_result_contract import require_standard_result
 
 # Uses JSON output from, for example:
 # memory_benchmark --benchmark --count 5 --only-latency --output results/<file>.json
@@ -34,8 +31,8 @@ def parse_args():
     parser.add_argument(
         "-f",
         "--file",
-        default="results/old/macminim4_count5_latency.json",
-        help="Path to benchmark JSON/text file (default: results/old/macminim4_count5_latency.json)",
+        required=True,
+        help="Path to a current standard schema-3 benchmark JSON or console-text statistics file",
     )
     parser.add_argument(
         "--metric",
@@ -197,7 +194,7 @@ def load_latency_data(path: Path, metric: str):
     except json.JSONDecodeError:
         return parse_text_statistics(path, metric)
 
-    contract = require_standard_result(data)
+    require_standard_result(data, str(path))
     config = data.get("configuration", {})
     cpu_name = str(config.get("cpu_name", "Unknown CPU"))
     version = data.get("version")
@@ -205,24 +202,16 @@ def load_latency_data(path: Path, metric: str):
         version = str(version)
 
     try:
-        if contract.metric_layout == HEADLINE_LOCALITY_LAYOUT:
-            l1_block = data["cache"]["l1"]["latency"]["headline_ns"]
-            l2_block = data["cache"]["l2"]["latency"]["headline_ns"]
-            locality = data["main_memory"]["latency"]["automatic_locality_comparison"]
-            hit_block = locality["locality_16k_latency_ns"]
-            miss_block = locality["global_random_latency_ns"]
-            penalty_block = locality["locality_latency_delta_ns"]
-        else:
-            l1_block = data["cache"]["l1"]["latency"]["average_ns"]
-            l2_block = data["cache"]["l2"]["latency"]["average_ns"]
-            tlb = data["main_memory"]["latency"]["auto_tlb_breakdown"]
-            hit_block = tlb["tlb_hit_ns"]
-            miss_block = tlb["tlb_miss_ns"]
-            penalty_block = tlb["page_walk_penalty_ns"]
+        l1_block = data["cache"]["l1"]["latency"]["headline_ns"]
+        l2_block = data["cache"]["l2"]["latency"]["headline_ns"]
+        locality = data["main_memory"]["latency"]["automatic_locality_comparison"]
+        hit_block = locality["locality_16k_latency_ns"]
+        miss_block = locality["global_random_latency_ns"]
+        penalty_block = locality["locality_latency_delta_ns"]
     except (KeyError, TypeError) as exc:
         raise RuntimeError(
             "JSON is missing required fields for memory hierarchy plot. "
-            "Expected versioned headline/locality fields or historical benchmark latency fields."
+            "Expected current standard schema-3 headline/locality fields."
         ) from exc
 
     categories = [

@@ -50,7 +50,7 @@ This document describes the layout of project files, organized by purpose. It is
 | File | Purpose |
 |---|---|
 | `README.md` | Project overview, quick-start instructions, and feature summary |
-| `API.md` | Supported process-level machine interface: output targets, stream separation, schema compatibility, and result acceptance |
+| `API.md` | Supported process-level machine interface: output targets, stream separation, current schema identities, and result acceptance |
 | `CAPABILITIES.md` | Measurement capability overview and interpretation notes |
 | `MANUAL.md` | Complete user manual: all CLI flags, modes, output formats, and usage examples |
 | `PARAMETER_MATRIX.md` | Mode/flag compatibility, sweep support, and incompatible-option matrix |
@@ -322,9 +322,11 @@ bandwidth warm-up covers the full target buffer, and latency warm-up page-touche
 
 ## 3. tests/ — Test suite
 
-GoogleTest-based unit and integration tests are supplemented by a dependency-free Python/jq consumer-contract driver.
-All `.cpp` files are picked up automatically by the Makefile. Tests named `*Integration*` are excluded from `make test`
-(unit-only) and run through the integration or all-test targets.
+GoogleTest-based unit and integration tests are supplemented by a dependency-free Python/jq standard-result contract
+driver. `make test-standard-result-contract` runs that strict schema-3 driver directly. `make test-all` runs it only
+after all GTest cases pass; Python 3 and `jq` are mandatory prerequisites. All `.cpp` files are picked up automatically
+by the Makefile. Tests named `*Integration*` are excluded from `make test` (unit-only) and run through the integration or
+all-test targets.
 
 | File | Suite name | Coverage focus |
 |---|---|---|
@@ -345,11 +347,11 @@ All `.cpp` files are picked up automatically by the Makefile. Tests named `*Inte
 | `test_hash_utils.cpp` | `HashUtilsTest` | CommonCrypto SHA-256 standard vectors and source-provenance helper behavior |
 | `test_analysis.cpp` | `AnalysisTest` | Injected TLB coordination, counters/status, boundary detection, validation, and paired analysis |
 | `test_json_schema.cpp` | `JsonSchemaTest` | Current standard schema-3 output structure, completion fields, and other mode schema contracts |
-| `test_standard_result_contract.py` | Python/jq contract driver | Released legacy schema-2, current schema-3, unsupported-version, and unversioned-layout dispatch across the shared validators and all four public standard-result consumers |
+| `test_standard_result_contract.py` | Python/jq contract driver | Strict current schema-3 acceptance plus schema-2, unversioned, alternative-mode, malformed, and unsupported-version rejection across the shared validators and all four public standard-result consumers |
 | `test_json_output_session.cpp` | `JsonOutputTargetTest`, `JsonOutputSessionTest` | Exact sentinel/path classification, lazy checkpoint dispatch, atomic-file parity, stdout routing/restoration, and stream failure containment |
 | `test_json_utils.cpp` | `JsonUtilsTest`, `JsonFileWriterTest` | JSON parse/statistics and atomic writer success/failure contracts |
 | `test_output_printer.cpp` | `OutputPrinterTest`, `OutputPrinterCustomCacheUnitsTest` | Status-aware partial output, mode/cache composition, and custom-cache size-unit boundaries |
-| `test_sweep_runner.cpp` | `SweepRunnerTest` | Schema-aware standard schema-2/schema-3 completion classification, complete/partial/interrupted/failed attempt accounting, schema-1 envelopes, and file/lazy-stdout checkpoint behavior |
+| `test_sweep_runner.cpp` | `SweepRunnerTest` | Current-only nested standard schema-3 completion classification, complete/partial/interrupted/failed attempt accounting, schema-1 envelopes, and file/lazy-stdout checkpoint behavior |
 | `test_sweep_utils.cpp` | `SweepUtilsTest` | Shared sweep parsing, empty-dimension behavior, and overflow-safe Cartesian counts |
 | `test_pattern_validation.cpp` | `PatternValidationTest` | Pattern benchmark parameter validation |
 | `test_pattern_benchmark.cpp` | `PatternBenchmarkTest` | Pattern execution and statistics |
@@ -370,12 +372,14 @@ All `.cpp` files are picked up automatically by the Makefile. Tests named `*Inte
 | `test_tlb_sweep_planner.cpp` | `TlbSweepPlannerTest` | Page-aligned base/refinement planning, stride bounds, deduplication, and source tracking |
 | `test_utils.cpp` | `SeedUtilsTest`, `ProgressSpinnerTest`, `UtilsTest` | Seed-provider behavior, TTY-gated spinner rendering/cleanup, and worker-thread joining |
 
-### tests/fixtures/ — Consumer compatibility fixtures
+### tests/fixtures/ — Standard-result contract fixtures
 
 | File | Purpose |
 |---|---|
-| `standard-schema-v2-complete-released.json` | Minimized fixture composed from released legacy standard schema-2 results to verify backward-compatible consumers without adding schema-3-only mandatory fields |
-| `README.md` | Records the fixture's source-result provenance and reduction/composition policy |
+| `standard-schema-v3-complete-current.json` | Minimized structurally faithful current full standard result for the two plotter JSON entry paths |
+| `standard-schema-v3-custom-complete-current.json` | Minimized structurally faithful current custom-cache standard result for shell jq/Python extraction and stride/TLB summaries |
+| `standard-schema-v2-complete-released.json` | Released standard schema-2 negative fixture; current bundled readers intentionally reject it |
+| `README.md` | Records source HEAD, capture commands, reduction policy, consumer ownership, and the schema-2 rejection policy |
 
 Volatile source/test counts and the authoritative generated inventory are maintained in `DRY_CHECK.md`.
 
@@ -396,7 +400,10 @@ Four shared helper headers support deterministic setup and output capture across
 
 ## 4. results/ — Benchmark result data
 
-Historical JSON, CSV, and text output from benchmark runs on specific hardware, organized by software-version subdirectory. The files are retained as examples, plot-script inputs, and legacy-schema reference data; they are not current 0.62.0 methodology baselines unless explicitly identified as such.
+Historical JSON, CSV, and text output from benchmark runs on specific hardware, organized by software-version
+subdirectory. The files are retained as examples and historical schema evidence; they are not current 0.62.0
+methodology baselines unless explicitly identified as such. Historical standard JSON is not an input to current
+bundled standard-result consumers; separately governed TLB tooling retains its documented legacy-input policy.
 
 ```
 results/
@@ -440,19 +447,19 @@ Tracked PNG chart archive generated from benchmark result data. Several files ar
 ## 6. script-examples/ — Run and plotting helpers
 
 Example shell workflows and Python/Matplotlib plotters for tracked benchmark outputs. The standard-result helpers share
-version-aware dispatch for released legacy schema 2, current schema 3, and the explicitly supported unversioned historical
-layout. They reject other explicit standard versions and do not accept the separate GPU schema.
+a strict current-only contract: complete standard schema 3 is accepted, while schema 2, unversioned historical layouts,
+alternative modes, and other explicit standard versions are rejected. The separate GPU schema is not a standard result.
 
 | File | Purpose |
 |---|---|
-| `standard_result_contract.py` | Dependency-free Python validator and metric-layout dispatcher shared by the standard-result plotters and embedded-Python shell paths |
-| `standard_result_contract.jq` | jq module implementing the same schema-2/schema-3 completion and metric-layout contract for shell extraction |
+| `standard_result_contract.py` | Dependency-free strict schema-3 classifier/validator shared by the standard-result plotters and embedded-Python shell paths |
+| `standard_result_contract.jq` | jq module implementing the same strict current standard-result contract for shell extraction |
 | `final_output.txt` | Small bundled sample of pooled latency statistics for `plot_cache_percentiles.py`; regenerated by `latency_test_script.sh` |
 | `latency_test_script.sh` | Sweeps custom cache size and configured latency-locality windows, writes per-run JSON, extracts pooled sample statistics into `final_output.txt`, and fails if any run/output is incomplete |
 | `latency_test_script_stride_tlb.sh` | Sweeps cache size, configured locality, and latency stride; retains per-run JSON, builds a CSV summary, and requires one complete row per planned run |
-| `plot_M4vsM5_benchmark_comparison.py` | Compares effective payload bandwidth and latency from two standard benchmark JSON files; defaults to the historical M4/M5 samples |
+| `plot_M4vsM5_benchmark_comparison.py` | Compares effective payload bandwidth and latency from two explicitly supplied current standard schema-3 JSON files |
 | `plot_analyzetlb.py` | Plots standalone TLB locality trends, including the paired spread/packed delta in current schemas and supported legacy data |
-| `plot_bechmark-memory-latency-hierarcy.py` | Plots memory-hierarchy latency from standard benchmark JSON or compatible text statistics output |
+| `plot_bechmark-memory-latency-hierarcy.py` | Plots memory-hierarchy latency from an explicit current standard schema-3 JSON or console-text statistics input |
 | `plot_cache_percentiles.py` | Plots a selected pooled latency statistic by cache size and configured locality from `final_output.txt` |
 | `plot_cache_percentiles_stride_tlb.py` | Plots a selected pooled latency statistic from the stride/locality sweep CSV, with optional stride and locality filters |
 

@@ -1073,6 +1073,8 @@ TEST(ExecutableCliIntegrationTest, StandardSweepWritesCompletionMetadataIntegrat
   ASSERT_EQ(json["runs"].size(), 3u);
   for (const nlohmann::json& run : json["runs"]) {
     EXPECT_EQ(run["status"], "complete");
+    EXPECT_EQ(run["result"]["configuration"]["mode"],
+              Constants::BENCHMARK_JSON_MODE_NAME);
     EXPECT_EQ(run["result"]["configuration"]
                  ["benchmark_schema_version"],
               Constants::BENCHMARK_JSON_SCHEMA_VERSION);
@@ -1112,6 +1114,8 @@ TEST(ExecutableCliIntegrationTest,
   ASSERT_EQ(json["runs"].size(), 2u);
   for (const nlohmann::json& run : json["runs"]) {
     EXPECT_EQ(run["status"], "complete");
+    EXPECT_EQ(run["result"]["configuration"]["mode"],
+              Constants::BENCHMARK_JSON_MODE_NAME);
     EXPECT_EQ(run["result"]["configuration"]
                  ["benchmark_schema_version"],
               Constants::BENCHMARK_JSON_SCHEMA_VERSION);

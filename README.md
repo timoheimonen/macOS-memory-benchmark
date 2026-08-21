@@ -28,6 +28,7 @@ See [Measurement Capabilities](CAPABILITIES.md) for the full measurement scope a
 - macOS on Apple Silicon (ARM64)
 - Xcode Command Line Tools for source builds
 - GoogleTest from Homebrew for the test suite
+- Python 3 and `jq` for the aggregate `make test-all` gate
 - GPU mode: a unified-memory Metal device supporting `MTLGPUFamilyApple7` or a compatible later family
 
 The build targets macOS 11.0 and links the system Metal and Foundation frameworks. GPU kernels are embedded MSL 2.3 source compiled at runtime, so the optional offline Metal Toolchain is not required. Passing the GPU capability check indicates compatibility; it does not mean performance has been validated on that device.
@@ -176,10 +177,10 @@ Treat benchmark values as measurements of the configured workload under the obse
   pinning.
 
 JSON output records completion and nullable measurement state instead of using zero for unavailable results. Current
-standard schema 3 requires a string `configuration.output_file` that preserves the raw output target plus boolean
-`results_complete` and `conclusions_valid` fields. Bundled readers retain compatibility with released legacy standard
-schema 2, where `configuration.output_file` and `conclusions_valid` may be absent; `results_complete` remains mandatory,
-and an explicitly false `conclusions_valid` still rejects the result.
+standard schema 3 requires `configuration.mode: "benchmark"`, a string `configuration.output_file` that preserves the
+raw output target, plus boolean `results_complete` and `conclusions_valid` fields. Bundled/current standard-result
+readers accept only complete schema-3 documents. Released standard schema 2, unversioned historical standard JSON
+layouts, and every other explicit standard version are intentionally unsupported.
 Consumers making conclusions should reject incomplete or interrupted runs according to the mode-specific status fields.
 Every direct command or CPU sweep using `--output -` reserves stdout for one final JSON document and routes its
 post-parse human transcript to stderr; file output is atomic, while standard commands, sweeps, and GPU retain their
@@ -199,14 +200,28 @@ python3 script-examples/plot_cache_percentiles.py \
 ```
 
 The sweep script prefers the repository's local `./memory_benchmark`, then falls back to `memory_benchmark` from
-`PATH`; set `BENCHMARK_CMD=/path/to/memory_benchmark` to override either choice. The sweep helpers return a non-zero
-status if a planned run fails or does not produce a complete, parseable result. See the
+`PATH`; set `BENCHMARK_CMD=/path/to/memory_benchmark` to override either choice. Whichever producer is selected must
+emit complete current standard schema 3. The sweep helpers return a non-zero status if a planned run fails or does not
+produce a complete, parseable result.
+
+The two standard-result plotters require explicit current inputs; archived 0.53.x standard JSON is retained as
+historical evidence and is not a valid current input:
+
+```bash
+python3 script-examples/plot_M4vsM5_benchmark_comparison.py \
+  --m4-file current-m4.json --m5-file current-m5.json
+python3 script-examples/plot_bechmark-memory-latency-hierarcy.py \
+  --file current-standard.json
+```
+
+The hierarchy plotter also accepts an explicit console-text statistics file through `--file`; that separate text parser
+is not JSON schema compatibility. See the
 [User Manual](MANUAL.md#visualization-scripts) for supported inputs and metrics.
 
 ## Documentation
 
 - [Measurement Capabilities](CAPABILITIES.md): what the tool measures and how those measurements should be interpreted.
-- [Machine-Readable CLI API](API.md): supported output targets, stdout/stderr contract, schema compatibility, and result acceptance.
+- [Machine-Readable CLI API](API.md): supported output targets, stdout/stderr contract, current schemas, and result acceptance.
 - [User Manual](MANUAL.md): complete option reference, mode compatibility, workflows, output examples, and troubleshooting.
 - [Technical Specification](TECHNICAL_SPECIFICATION.md): architecture, execution flow, memory model, and output contracts.
 - [Latency Whitepaper](LATENCY_WHITEPAPER.md): dependent pointer-chase and sampling methodology.
@@ -231,6 +246,9 @@ Run real Apple Silicon integration tests or the complete suite:
 make test-integration
 make test-all
 ```
+
+`make test-all` requires Python 3 and `jq`; it runs all GTest cases followed by the strict Python/jq standard-result
+contract driver.
 
 Generate isolated LLVM production-source coverage reports under `/tmp`:
 

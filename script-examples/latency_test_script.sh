@@ -13,6 +13,8 @@ mkdir -p "${TMP_DIR}"
 
 # Prefer the binary built in the repository; allow an explicit override or an
 # installed memory_benchmark from PATH when the local binary is unavailable.
+# Whichever producer is selected must emit complete current standard schema 3;
+# extraction below intentionally rejects older standard JSON contracts.
 DEFAULT_BENCHMARK="${SCRIPT_DIR}/../memory_benchmark"
 if [ -x "${DEFAULT_BENCHMARK}" ]; then
     BENCHMARK_CMD="${BENCHMARK_CMD:-${DEFAULT_BENCHMARK}}"
@@ -43,7 +45,7 @@ if [ -x "${BENCHMARK_CMD}" ]; then
     :
 elif ! command -v "${BENCHMARK_CMD}" > /dev/null 2>&1; then
     echo "Error: ${BENCHMARK_CMD} not found"
-    echo "Tip: build the local binary (make) or export BENCHMARK_CMD=/path/to/memory_benchmark"
+    echo "Tip: build the current local binary (make) or export BENCHMARK_CMD=/path/to/current/memory_benchmark"
     exit 1
 fi
 
@@ -137,7 +139,7 @@ final_output="${SCRIPT_DIR}/final_output.txt"
 # Clear/create the final output file
 > "${final_output}"
 
-# Function to extract versioned pooled sample statistics (with historical fallback)
+# Function to extract current standard schema-3 pooled sample statistics.
 extract_with_jq() {
     local json_file=$1
     local cache_size=$2
@@ -145,14 +147,8 @@ extract_with_jq() {
     local extracted_file="${TMP_DIR}/extracted_tlb_${tlb_kb}_cache_${cache_size}.json"
     if ! jq -L "${SCRIPT_DIR}" '
              include "standard_result_contract";
-             (require_standard_result_contract) as $contract
-             | if $contract.metric_layout == "headline_locality" then
-                 .cache.custom.latency.headline_ns.pooled_sample_distribution.statistics
-               elif $contract.metric_layout == "historical_average_tlb" then
-                 .cache.custom.latency.samples_ns.statistics
-               else
-                 error("unsupported standard benchmark metric layout")
-               end
+             (require_standard_result_contract) as $_contract
+             | .cache.custom.latency.headline_ns.pooled_sample_distribution.statistics
              | if type == "object"
                   and .average != null and .median != null
                   and .p90 != null and .p95 != null and .p99 != null
@@ -172,7 +168,7 @@ extract_with_jq() {
     rm -f "${extracted_file}"
 }
 
-# Function to extract versioned pooled sample statistics (with historical fallback)
+# Function to extract current standard schema-3 pooled sample statistics.
 extract_with_python() {
     local json_file=$1
     local cache_size=$2
@@ -183,17 +179,14 @@ import json
 import sys
 
 sys.path.insert(0, sys.argv[1])
-from standard_result_contract import HEADLINE_LOCALITY_LAYOUT, require_standard_result
+from standard_result_contract import require_standard_result
 
 try:
     with open(sys.argv[2], 'r') as f:
         data = json.load(f)
-        contract = require_standard_result(data)
+        require_standard_result(data)
         latency = data['cache']['custom']['latency']
-        if contract.metric_layout == HEADLINE_LOCALITY_LAYOUT:
-            stats = latency['headline_ns']['pooled_sample_distribution']['statistics']
-        else:
-            stats = latency['samples_ns']['statistics']
+        stats = latency['headline_ns']['pooled_sample_distribution']['statistics']
         required_statistics = ('average', 'median', 'p90', 'p95', 'p99', 'min', 'max', 'stddev')
         missing_statistics = [name for name in required_statistics if stats.get(name) is None]
         if missing_statistics:

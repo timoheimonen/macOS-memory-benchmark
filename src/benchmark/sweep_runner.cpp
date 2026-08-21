@@ -335,47 +335,57 @@ void update_sweep_output(nlohmann::ordered_json& output_json, const nlohmann::or
   output_json[JsonKeys::VERSION] = SOFTVERSION;
 }
 
-/** Classify released schema-2 and current schema-3 nested standard results. */
+/** Classify only current schema-3 nested standard results. */
 SweepNestedCompletion classify_standard_completion(const nlohmann::ordered_json& result_json) {
-  if (!result_json.is_object() || !result_json.contains("configuration") ||
-      !result_json["configuration"].is_object() ||
-      !result_json["configuration"].contains("benchmark_schema_version")) {
+  if (!result_json.is_object()) {
+    return {SweepAttemptStatus::Partial, "missing-standard-schema-version"};
+  }
+  if (result_json.contains("mode") || result_json.contains("schema_version")) {
+    return {SweepAttemptStatus::Partial, "invalid-standard-schema-contract"};
+  }
+  if (!result_json.contains("configuration") ||
+      !result_json["configuration"].is_object()) {
     return {SweepAttemptStatus::Partial, "missing-standard-schema-version"};
   }
 
   const nlohmann::ordered_json& configuration = result_json["configuration"];
+  if (configuration.contains("pattern_schema_version") ||
+      configuration.contains("schema_version") ||
+      configuration.contains("sweep_schema_version")) {
+    return {SweepAttemptStatus::Partial, "invalid-standard-schema-contract"};
+  }
+  if (!configuration.contains("benchmark_schema_version")) {
+    return {SweepAttemptStatus::Partial, "missing-standard-schema-version"};
+  }
+
   const nlohmann::ordered_json& schema_version =
       configuration["benchmark_schema_version"];
-  if (!schema_version.is_number_integer() ||
-      (schema_version != 2 && schema_version != 3)) {
+  if (!schema_version.is_number_integer() || schema_version != 3) {
     return {SweepAttemptStatus::Partial,
             "unsupported-standard-schema-version"};
   }
 
-  const bool is_schema_2 = schema_version == 2;
+  const bool has_current_mode =
+      configuration.contains("mode") && configuration["mode"].is_string() &&
+      configuration["mode"] == Constants::BENCHMARK_JSON_MODE_NAME;
   const bool has_results_complete =
       result_json.contains("results_complete") &&
       result_json["results_complete"].is_boolean();
   const bool has_conclusions_valid =
-      result_json.contains("conclusions_valid");
-  const bool conclusions_type_valid =
-      !has_conclusions_valid || result_json["conclusions_valid"].is_boolean();
-  const bool has_output_file = configuration.contains("output_file");
-  const bool output_file_type_valid =
-      !has_output_file || configuration["output_file"].is_string();
-  if (!has_results_complete || !conclusions_type_valid ||
-      !output_file_type_valid ||
-      (!is_schema_2 && (!has_conclusions_valid || !has_output_file))) {
+      result_json.contains("conclusions_valid") &&
+      result_json["conclusions_valid"].is_boolean();
+  const bool has_output_file = configuration.contains("output_file") &&
+                               configuration["output_file"].is_string();
+  if (!has_current_mode || !has_results_complete ||
+      !has_conclusions_valid || !has_output_file) {
     return {SweepAttemptStatus::Partial, "invalid-standard-schema-contract"};
   }
 
   const std::string status = optional_string(result_json, "status");
   const std::string reason = optional_string(result_json, "status_reason");
-  const bool conclusions_valid =
-      !has_conclusions_valid ||
-      result_json["conclusions_valid"].get<bool>();
   if (status == "complete" &&
-      result_json["results_complete"].get<bool>() && conclusions_valid) {
+      result_json["results_complete"].get<bool>() &&
+      result_json["conclusions_valid"].get<bool>()) {
     return {SweepAttemptStatus::Complete, ""};
   }
   if (status == "interrupted") {

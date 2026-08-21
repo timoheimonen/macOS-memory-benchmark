@@ -144,10 +144,16 @@ test-integration: $(TARGET) $(TEST_TARGET)
 	@echo "Running integration tests..."
 	./$(TEST_TARGET) --gtest_filter=*Integration*
 
-# All tests (unit tests + integration tests)
+# Strict current standard-result reader contract (requires Python 3 and jq)
+test-standard-result-contract:
+	@command -v jq >/dev/null 2>&1 || { echo "Error: jq is required for test-standard-result-contract." >&2; exit 1; }
+	python3 -m unittest -v tests/test_standard_result_contract.py
+
+# All tests (unit tests + integration tests + standard-result contract)
 test-all: $(TARGET) $(TEST_TARGET)
-	@echo "Running all tests (unit + integration)..."
+	@echo "Running all tests (unit + integration + standard-result contract)..."
 	./$(TEST_TARGET)
+	$(MAKE) test-standard-result-contract
 
 # Reproducible production C++ source coverage in an isolated /tmp build.
 coverage-unit:
@@ -225,7 +231,8 @@ uninstall:
 	@echo "$(TARGET) uninstalled successfully."
 
 # Define targets that don't correspond to files
-.PHONY: all clean test test-integration test-all coverage-unit coverage-all clean-test docs clean-docs install uninstall
+.PHONY: all clean test test-integration test-standard-result-contract test-all \
+	coverage-unit coverage-all clean-test docs clean-docs install uninstall
 
 # Missing dependency files are expected on a clean tree. Existing files carry
 # the exact source and project/test-header prerequisites emitted by clang++.

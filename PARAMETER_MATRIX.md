@@ -186,10 +186,9 @@ Additional sweep rules:
   invoking the persistence payload builder or serializing an intermediate document; one final envelope is emitted after
   orchestration. `attempted_runs` equals stored `runs` entries; partial, interrupted, and failed attempts remain in that
   array but stop further execution and do not increment `completed_runs`. A current standard schema-3 attempt is
-  complete only with nested `status: "complete"`, `results_complete: true`, `conclusions_valid: true`, and a string
-  `configuration.output_file`. A released legacy standard schema-2 result requires complete status and
-  `results_complete: true`; `conclusions_valid` and `configuration.output_file` may be absent, but when present they
-  must be boolean true and a string, respectively. A pattern attempt requires nested
+  complete only with nested `configuration.mode: "benchmark"`, `status: "complete"`, `results_complete: true`,
+  `conclusions_valid: true`, and a string `configuration.output_file`. Nested standard schema 2 and every other
+  standard version are unsupported. A pattern attempt requires nested
   `status: "complete"` and `results_complete: true`; TLB requires nested `tlb_analysis.status: "complete"` and
   `tlb_analysis.conclusions_valid: true`; core-to-core requires nested `core_to_core_latency.status: "complete"` and
   `measurements_complete: true`. The authoritative schema-1 sweep acceptance predicate is exactly
