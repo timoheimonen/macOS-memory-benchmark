@@ -81,6 +81,8 @@ inline constexpr const char* CONTEXT_TOKENS_REQUIRED =
     "context-tokens-required";
 inline constexpr const char* BATCH_SIZE_REQUIRED = "batch-size-required";
 inline constexpr const char* WORKER_COUNT_REQUIRED = "worker-count-required";
+inline constexpr const char* AVAILABLE_WORKER_COUNT_REQUIRED =
+    "available-worker-count-required";
 inline constexpr const char* LOOP_COUNT_REQUIRED = "loop-count-required";
 inline constexpr const char* QUERY_HEADS_BELOW_KV_HEADS =
     "query-heads-below-kv-heads";
@@ -105,15 +107,74 @@ struct LlmMemoryConfig {
   size_t visible_context_tokens = 0;
   size_t batch_size = Constants::LLM_DEFAULT_BATCH_SIZE;
   size_t requested_workers = 0;
+  size_t available_workers = 0;
   size_t iterations = 0;
   size_t loop_count = Constants::LLM_DEFAULT_LOOP_COUNT;
   uint64_t seed = 0;
   bool user_specified_iterations = false;
   bool user_specified_seed = false;
+  bool user_specified_workers = false;
   bool help_printed = false;
   std::string output_file;
   std::vector<std::string> argv;
 };
+
+/** Deterministic platform and entropy inputs copied for parser unit tests. */
+struct LlmMemoryParserTestHooks {
+  size_t detected_workers = 1;
+  uint64_t generated_seed = 1;
+};
+
+/**
+ * Install or clear deterministic LLM parser inputs.
+ *
+ * @param hooks Values copied immediately, or `nullptr` to restore production
+ *        providers. The caller retains no lifetime obligation.
+ * @warning This process-global test seam is not thread-safe and must not be
+ *          changed concurrently with parsing.
+ */
+void set_llm_memory_parser_test_hooks(
+    const LlmMemoryParserTestHooks* hooks);
+
+/**
+ * Parse and preflight the standalone `--llm-memory` option whitelist.
+ *
+ * Syntax, required inputs, checked geometry, worker availability, seed
+ * resolution, and explicit per-scenario work limits are resolved before any
+ * output session, mapping, or worker can be created. Human help returns before
+ * platform detection and seed generation.
+ *
+ * @param argc Number of entries in @p argv.
+ * @param argv Command arguments; entries are copied without retaining pointers.
+ * @param config Destination reset before parsing and populated with the exact
+ *        argv plus all successfully resolved fields, including on failure.
+ * @return `EXIT_SUCCESS` for valid configuration or isolated help;
+ *         `EXIT_FAILURE` after a centralized diagnostic otherwise.
+ * @throws std::exception Allocation or caller-configured stream failures may
+ *         propagate to the production command boundary, which contains them.
+ * @note Parsing is single-threaded; installed test hooks are process-global.
+ */
+int parse_llm_memory_arguments(int argc, char* argv[],
+                               LlmMemoryConfig& config);
+
+/**
+ * Own the standalone LLM command boundary.
+ *
+ * The boundary parses first, returns immediately for help, then installs the
+ * command-scoped JSON transport before runtime output, QoS preparation, and
+ * signal masking. The executor and result transport are added by later
+ * implementation phases; until then a valid non-help command fails explicitly
+ * without fabricating measurement evidence.
+ *
+ * @param argc Number of entries in @p argv.
+ * @param argv Command arguments, valid for the duration of this call.
+ * @return `EXIT_SUCCESS` only for isolated help in the current phase;
+ *         `EXIT_FAILURE` for parse/preflight errors or the explicit
+ *         `execution-unavailable` terminal.
+ * @post No exception escapes this boundary, and any installed output routing
+ *       and signal mask are restored before return.
+ */
+int run_llm_memory_mode(int argc, char* argv[]);
 
 /** Pure validation outcome used before any mapping or worker creation. */
 struct LlmMemoryConfigValidation {

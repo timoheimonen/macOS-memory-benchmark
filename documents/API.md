@@ -8,8 +8,8 @@ Runtime behavior and executable integration tests are authoritative if this docu
 
 ## Transport support in this revision
 
-All direct benchmark modes and the CPU modes' supported parameter sweeps provide the stdout JSON transport. GPU schema
-1 remains a direct-only mode and does not support sweeps.
+All result-producing direct benchmark modes and the CPU modes' supported parameter sweeps provide the stdout JSON
+transport. GPU schema 1 remains a direct-only mode and does not support sweeps.
 
 | Command | Real JSON file | Exact `--output -` stdout transport |
 |---|---:|---:|
@@ -22,12 +22,19 @@ All direct benchmark modes and the CPU modes' supported parameter sweeps provide
 | `--analyze-core2core --sweep ...` | Yes | Yes |
 | Direct `--gpu-bandwidth` | Yes | Yes |
 
-GPU schema 1 does not support sweeps.
+GPU schema 1 and the current LLM command boundary do not support sweeps.
+
+The current `--llm-memory` command is a parser and checked-preflight boundary only. It deliberately fails valid
+non-help runs with `execution-unavailable`, so it is not a supported machine-readable transport in this revision and
+does not appear in the table above. With exact `--output -`, its command-scoped session routes the runtime banner and
+diagnostic to stderr, leaves stdout empty, and returns failure. A real file target creates neither the target nor a
+temporary checkpoint because no result is built or persisted. Without the stdout sentinel, the shared banner remains
+on stdout and the `execution-unavailable` diagnostic is written to stderr.
 
 ## Invocation and stream contract
 
-For any direct benchmark command, or a supported CPU parameter sweep, an output value that is exactly `-` selects stdout
-JSON:
+For any result-producing direct benchmark command, or a supported CPU parameter sweep, an output value that is exactly
+`-` selects stdout JSON:
 
 ```bash
 memory_benchmark --benchmark --only-bandwidth --count 5 --buffer-size 512 --output -

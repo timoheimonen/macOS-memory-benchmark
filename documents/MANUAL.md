@@ -114,6 +114,12 @@ To run the standalone GPU bandwidth suite:
 memory_benchmark --gpu-bandwidth
 ```
 
+To inspect the strict synthetic LLM decode-memory configuration boundary:
+
+```bash
+memory_benchmark --llm-memory --help
+```
+
 If built from source, use `./memory_benchmark` instead.
 
 All command examples in this manual use the installed/`PATH` form (`memory_benchmark ...`).
@@ -307,6 +313,7 @@ middle, and trailing items.
 | `-T` | `--analyze-tlb` |
 | `-C` | `--analyze-core2core` |
 | `-G` | `--gpu-bandwidth` |
+| `-M` | `--llm-memory` |
 | `-b` | `--buffer-size` |
 | `-i` | `--iterations` |
 | `-r` | `--count` |
@@ -340,8 +347,9 @@ middle, and trailing items.
 - Exact measured bandwidth pass count when explicitly supplied
 - Positive integer
 - Not allowed with `--only-latency`
-- In `--benchmark`, `--patterns`, and `--gpu-bandwidth`, omission enables excluded operation-specific work and automatic calibration toward
-  150 ms (100–250 ms intended window, at most two corrections)
+- In `--benchmark`, `--patterns`, `--gpu-bandwidth`, and the future LLM executor, omission enables excluded
+  operation- or scenario-specific work and automatic calibration toward 150 ms (100–250 ms intended window, at most
+  two corrections)
 - Standard calibration is target- and operation-specific and its resolved pass count is reused across `--count` loops
 - An explicit value bypasses pilot/corrections but not the operation-specific warmup
 - In GPU mode, the value is an exact full-buffer dispatch count. It must fit both the 16,384-dispatch limit and the
@@ -354,6 +362,7 @@ middle, and trailing items.
 - Core-to-core default: `3`; this mode-specific default does not change standard or pattern execution
 - GPU-bandwidth default: `3`; its operation order rotates so one complete three-loop block gives read/write/copy one
   first, middle, and last position each
+- LLM-memory default: `3`; its planned weights-only/KV-only/mixed order rotates across one complete three-loop block
 - Positive integer
 - Use `5` to `10` for stable statistics
 
@@ -369,6 +378,9 @@ middle, and trailing items.
 - In pattern mode this is a requested count; sparse strided work may use fewer effective workers so each worker performs
   at least one genuine stride transition
 - Pattern workers request best-effort macOS QoS but are not pinned to specific cores
+- LLM-memory defaults its requested count to detected CPU workers. An explicit request remains distinct from detected
+  availability so the later work plan can report requested, available, and effective counts without silently changing
+  the request
 - Latency tests remain single-threaded
 
 ### Mode selection
@@ -431,6 +443,38 @@ middle, and trailing items.
   help to stdout, perform no Metal work, and create no `-`/`-.tmp` artifact
 - Detailed methodology and GPU schema 1 contract: [GPU_BANDWIDTH_WHITEPAPER.md](GPU_BANDWIDTH_WHITEPAPER.md)
 
+#### `--llm-memory`
+
+- Selects a standalone CPU command boundary for a fixed-visible-context synthetic LLM decode-memory profile. It never
+  enters the general `BenchmarkConfig` parser or CPU sweep runner
+- Requires each of `--weight-size-mb <MiB>`, `--layers <count>`, `--query-heads <count>`,
+  `--kv-heads <count>`, `--head-dim <count>`, and `--context-tokens <count>` exactly once
+- Allows only optional `--kv-element-bytes <1|2|4>`, `--batch-size <count>`, `-t`/`--threads <count>`,
+  `-i`/`--iterations <count>`, `-r`/`--count <count>`, `--seed <uint64>`, `-o`/`--output <target>`, and
+  `-h`/`--help`. Every other option, including all other primary modes, cache/latency modifiers, `--non-cacheable`,
+  `--sweep`, and `--sweep-max-runs`, is rejected
+- Defaults to two-byte KV elements, batch size one, three planned cyclic loops, detected CPU workers, automatic
+  scenario work, and one generated non-zero base seed. An explicit seed may be any unsigned 64-bit value, including
+  zero
+- Parses every integer as one complete decimal token. Model counts, sizes, worker count, iterations, and loop count
+  must be positive. Query heads must be at least the KV-head count and evenly divisible by it
+- Treats `--context-tokens` as the fixed visible context including the current synthetic token. Checked preflight
+  resolves weight/KV byte geometry and ensures all three scenarios can fit the one-billion-step and 64 GiB logical
+  payload limits; explicit iterations must fit the strictest scenario limit
+- Preserves an explicit worker request even when it exceeds detected availability. Effective-worker reduction belongs
+  to the executable work plan and remains separately reportable
+- `--llm-memory --help` succeeds without required model inputs and returns before core detection, seed generation,
+  output-session creation, QoS preparation, or signal masking. Unknown, duplicate, and missing-value errors are still
+  diagnosed because help does not bypass the strict whitelist pass
+- Output values retain the shared raw-target syntax: empty disables JSON, exact `-` reserves final stdout, and every
+  other non-empty value is a file target, including `./-` and flag-shaped names. The current boundary creates the
+  command-scoped transport before runtime output, QoS, and signal masking
+- In the current build, a valid non-help command terminates with `execution-unavailable` after that boundary setup. It
+  creates no mappings or workers, performs no measurement, writes no JSON/file result, and leaves exact stdout output
+  empty. Measurement execution and schema transport are introduced by later implementation work
+- This profile is memory-only scaffolding: it performs no Transformer mathematics and does not report inference
+  tokens/s. Future effective-payload values must not be interpreted as physical DRAM-counter traffic
+
 #### `--only-bandwidth`
 
 - Runs bandwidth paths only
@@ -487,7 +531,7 @@ middle, and trailing items.
 
 #### `--seed <uint64>`
 
-- Applies to `--benchmark`, `--patterns`, `--analyze-tlb`, or `--gpu-bandwidth`
+- Applies to `--benchmark`, `--patterns`, `--analyze-tlb`, `--gpu-bandwidth`, or `--llm-memory`
 - In `--benchmark`, derives domain-separated seeds for main, L1, L2, custom, sampling, and both automatic-locality
   layouts; repeated loops rebuild equivalent logical chains and schedules
 - A standard seed reproduces workload/schedule metadata, not performance values or macOS thread placement
@@ -502,6 +546,8 @@ middle, and trailing items.
 - Standalone TLB JSON stores the resolved seed, source (`user` or `generated`), schedule policy, and each task seed
 - In GPU mode, the base seed is generated once when omitted, recorded as an exact decimal string, and used to derive
   stable domain-separated read/write/copy operation seeds. It reproduces data/work identity, not performance
+- In LLM-memory mode, the parser generates one base seed when omitted. The pure work planner derives separate
+  weight/K/V buffer seeds and weights-only/KV-only/mixed scenario seeds; the current boundary does not execute them
 
 #### `--analyze-core2core`
 
@@ -607,16 +653,18 @@ middle, and trailing items.
 
 - An omitted output option or an empty value disables JSON output for a direct command. For a sweep, an empty value is
   a missing/invalid required output target
-- For every direct mode and the CPU modes' supported sweeps, an exact raw value of `-` selects machine-readable stdout.
-  The sentinel is classified before path normalization
+- For every result-producing direct mode and the CPU modes' supported sweeps, an exact raw value of `-` selects
+  machine-readable stdout. The sentinel is classified before path normalization. LLM-memory reserves the same syntax,
+  but its current execution-unavailable boundary emits no result
 - A supported stdout-target command emits exactly one two-space-indented UTF-8 JSON document followed by one newline
   after orchestration reaches its terminal state. Intermediate standard, sweep, and GPU checkpoint requests are lazy
   no-ops and do not emit documents
 - Post-parse human output is routed to stderr while the stdout target is active. Parse, preflight, and other pre-result
   failures leave stdout empty; `--help` remains a human-facing stdout command when that mode accepts the combination
-- Every other non-empty value is a file target, including `./-` and flag-shaped names such as `-G`. Thus
-  `--output ./-` writes an ordinary file named `-`. Relative paths write under the current working directory, and
-  parent directories are created automatically
+- For result-producing modes, every other non-empty value is a file target, including `./-` and flag-shaped names such
+  as `-G`. Thus `--output ./-` writes an ordinary file named `-`. Relative paths write under the current working
+  directory, and parent directories are created automatically. LLM-memory accepts and retains the same raw target
+  syntax, but its current execution-unavailable boundary creates neither the target nor a temporary file
 - Standard and sweep file targets retain atomic intermediate checkpoints. Pattern, TLB, and core-to-core direct file
   targets each receive one final atomic write. GPU file output retains its terminal-measurement/failure checkpoints and
   post-release replacement. Sweep and GPU command boundaries do not add a redundant outer file write. Use a real file
@@ -973,6 +1021,9 @@ Every successfully started direct mode and parameter sweep begins with one share
 banner before mode-specific configuration or status output. Nested runs within a sweep do not repeat it. Help and
 usage diagnostics retain the separate usage preamble; preflight failures do not emit the runtime banner.
 
+The numbered result sections below describe result-producing modes. The current LLM-memory boundary prints the shared
+banner and an execution-unavailable diagnostic, but no configuration or result sections.
+
 ### 1) Configuration section
 
 Shows active settings and detected hardware.
@@ -1091,10 +1142,11 @@ report.
 
 ## JSON Output Format
 
-Every direct mode and the CPU modes' supported sweeps can serialize their payload either to a real file or, with the exact
-raw target `--output -`, once to stdout. The stdout transport does not wrap the result or change its measurement schema;
-sweep stdout is one final envelope rather than a checkpoint stream. See [API.md](API.md) for stream handling,
-process-status checks, current schema acceptance, and the transport support matrix.
+Every result-producing direct mode and the CPU modes' supported sweeps can serialize their payload either to a real file
+or, with the exact raw target `--output -`, once to stdout. The stdout transport does not wrap the result or change its
+measurement schema; sweep stdout is one final envelope rather than a checkpoint stream. The current LLM-memory boundary
+does not yet produce a payload. See [API.md](API.md) for stream handling, process-status checks, current schema
+acceptance, and the transport support matrix.
 
 ### Standard benchmark JSON shape (schema 3)
 

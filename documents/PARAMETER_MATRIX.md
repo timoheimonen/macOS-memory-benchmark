@@ -11,27 +11,36 @@ Working version `0.63.0`
 | `-T` | `--analyze-tlb` | — | Run standalone TLB analysis |
 | `-C` | `--analyze-core2core` | — | Run standalone two-thread acquire/release token-protocol handoff analysis |
 | `-G` | `--gpu-bandwidth` | — | Run standalone Metal GPU memory bandwidth |
-| `-i` | `--iterations` | `<count>` | Positive exact R/W/Copy pass count; CPU maximum is `INT_MAX`, while GPU mode applies a smaller work-dependent ceiling. Omission enables automatic calibration in benchmark, pattern, and GPU modes |
+| `-M` | `--llm-memory` | — | Select the standalone fixed-context synthetic CPU LLM decode-memory boundary; execution is currently unavailable |
+| — | `--weight-size-mb` | `<MiB>` | Required positive active weight size for LLM-memory mode |
+| — | `--layers` | `<count>` | Required positive LLM layer count |
+| — | `--query-heads` | `<count>` | Required positive query-head count; at least the KV-head count and divisible by it |
+| — | `--kv-heads` | `<count>` | Required positive physical KV-head count |
+| — | `--head-dim` | `<count>` | Required positive K/V head-vector element count |
+| — | `--kv-element-bytes` | `1\|2\|4` | LLM KV element width; default `2` |
+| — | `--context-tokens` | `<count>` | Required positive fixed visible context including the current synthetic token |
+| — | `--batch-size` | `<count>` | Positive LLM batch-sequence count; default `1` |
+| `-i` | `--iterations` | `<count>` | Positive exact R/W/Copy pass count or LLM scenario-step count; CPU standard maximum is `INT_MAX`, while GPU and LLM apply work-dependent ceilings. Omission enables automatic calibration where execution is available |
 | `-b` | `--buffer-size` | `<MB>` | Default `512` MB. Standard mode permits `0` only with `--only-latency`; pattern mode requires a positive value; GPU minimum is `64` MB |
-| `-r` | `--count` | `<count>` | Positive loop count up to `INT_MAX`; default `1` for benchmark/pattern modes and `3` for core-to-core/GPU modes |
-| — | `--seed` | `<uint64>` | Unsigned 64-bit reproducibility seed for benchmark, pattern, TLB, or GPU mode; generated once when omitted |
+| `-r` | `--count` | `<count>` | Positive loop count; default `1` for benchmark/pattern modes and `3` for core-to-core/GPU/LLM modes |
+| — | `--seed` | `<uint64>` | Unsigned 64-bit reproducibility seed for benchmark, pattern, TLB, GPU, or LLM mode; generated once when omitted |
 | `-n` | `--latency-samples` | `<count>` | Positive sample-window count up to `INT_MAX`; default `1000` in benchmark and core-to-core modes |
 | `-s` | `--latency-stride-bytes` | `<bytes>` | Positive, pointer-aligned latency-chain stride; default `256` bytes |
 | `-m` | `--latency-chain-mode` | `<mode>` | Chain policy: `auto` (default), `global-random`, `random-box`, `same-random-in-box`, or `diff-random-in-box` |
 | `-l` | `--latency-tlb-locality-kb` | `<KB>` | Latency-chain locality window; default `1024` KB. With `auto`, `0` selects global random |
 | `-D` | `--tlb-density` | `low\|medium\|high` | Standalone TLB runtime profile; default `medium` |
-| `-t` | `--threads` | `<count>` | Positive requested bandwidth worker count up to `INT_MAX`; omitted main-memory/pattern work uses detected cores, omitted cache bandwidth uses one worker, and requests above available cores are capped |
+| `-t` | `--threads` | `<count>` | Positive requested bandwidth worker count. General main-memory/pattern execution caps above detected cores; LLM preserves requested and detected counts separately for later effective reduction |
 | `-k` | `--cache-size` | `<KB>` | Custom cache target: `16..1048576` KB, or `0` only with `--benchmark --only-latency` |
 | `-W` | `--only-bandwidth` | — | Run only standard benchmark bandwidth tests; requires `--benchmark` |
 | `-L` | `--only-latency` | — | Run only standard benchmark latency tests; requires `--benchmark` |
 | `-u` | `--non-cacheable` | — | Apply best-effort cache-discouraging allocation hints; does not create truly uncached memory |
-| `-o` | `--output` | `<target>` | Write JSON output. Exact `-` selects one final stdout document. An empty direct value disables JSON; an empty sweep value is missing/invalid. Every other non-empty value is a file, including `./-` and flag-shaped names such as `-G` |
+| `-o` | `--output` | `<target>` | Result target syntax. Exact `-` selects one final stdout document for result-producing modes. An empty direct value disables JSON; every other non-empty value is a file. Current LLM execution is unavailable and produces no JSON or file result |
 | `-S` | `--sweep` | `<key=a,b>` | Add a Cartesian sweep parameter; repeat once per distinct key and use with `--output` |
 | `-X` | `--sweep-max-runs` | `<count>` | Positive generated-run limit; default `256`, or `16` with `--analyze-tlb`; effective only with `--sweep` |
 | `-h` | `--help` | — | Show help; the standalone `--analyze-tlb` whitelist is the exception and rejects this combination |
 
-Short and long forms are equivalent. The compatibility tables below use long forms as canonical names; the GPU table
-also repeats its exact whitelist aliases. `--seed` is the only option without a short alias. Long options require two
+Short and long forms are equivalent. The compatibility tables below use long forms as canonical names; the GPU and LLM
+tables also repeat their exact whitelist aliases. LLM model-geometry options and `--seed` have no short aliases. Long options require two
 dashes, short options are exactly one character, and short options cannot be bundled. The parser does not support
 `--option=value` syntax. Options that take one value may appear at most once, except that `--sweep` may be repeated for
 distinct parameter keys. Numeric values must be complete decimal tokens without whitespace, a leading `+`, or trailing
@@ -47,13 +56,14 @@ values `low`, `medium`, and `high`; quick/standard/exhaustive are profile descri
 
 ### Mode Flags (exactly one distinct primary mode required for benchmark execution)
 
-| | `--benchmark` | `--patterns` | `--analyze-tlb` | `--analyze-core2core` | `--gpu-bandwidth` |
-|---|---|---|---|---|---|
-| `--benchmark` | ✅ | ❌ mutually exclusive | ❌ | ❌ | ❌ |
-| `--patterns` | ❌ mutually exclusive | ✅ | ❌ | ❌ | ❌ |
-| `--analyze-tlb` | ❌ | ❌ | ✅ | ❌ | ❌ |
-| `--analyze-core2core` | ❌ | ❌ | ❌ | ✅ | ❌ |
-| `--gpu-bandwidth` | ❌ | ❌ | ❌ | ❌ | ✅ |
+| | `--benchmark` | `--patterns` | `--analyze-tlb` | `--analyze-core2core` | `--gpu-bandwidth` | `--llm-memory` |
+|---|---|---|---|---|---|---|
+| `--benchmark` | ✅ | ❌ mutually exclusive | ❌ | ❌ | ❌ | ❌ |
+| `--patterns` | ❌ mutually exclusive | ✅ | ❌ | ❌ | ❌ | ❌ |
+| `--analyze-tlb` | ❌ | ❌ | ✅ | ❌ | ❌ | ❌ |
+| `--analyze-core2core` | ❌ | ❌ | ❌ | ✅ | ❌ | ❌ |
+| `--gpu-bandwidth` | ❌ | ❌ | ❌ | ❌ | ✅ | ❌ |
+| `--llm-memory` | ❌ | ❌ | ❌ | ❌ | ❌ | ✅ |
 
 ### Modifiers with `--benchmark`
 
@@ -154,6 +164,35 @@ checkpoint cadence.
 Grid geometry is not a CLI parameter: schema 1 uses the frozen 8192-threadgroup maximum and records both that maximum and
 the resolved grid in each work plan.
 
+### Modifiers with `--llm-memory` (standalone command boundary)
+
+The LLM parser has an exact whitelist. All six required model options must occur once; every optional value and the mode
+or help selector may also occur at most once. The current build performs checked configuration preflight and then returns
+`execution-unavailable` without mappings, workers, measurements, JSON, or files.
+
+| Modifier | Compatible | Notes |
+|----------|------------|-------|
+| `--weight-size-mb <MiB>` | ✅ required | Positive active weight size; checked MiB-to-byte conversion |
+| `--layers <n>` | ✅ required | Positive layer count |
+| `--query-heads <n>` | ✅ required | Positive; must be at least and evenly divisible by KV heads |
+| `--kv-heads <n>` | ✅ required | Positive physical KV-head count |
+| `--head-dim <n>` | ✅ required | Positive K/V head-vector element count |
+| `--context-tokens <n>` | ✅ required | Positive fixed visible context including the current synthetic token |
+| `--kv-element-bytes <1\|2\|4>` | ✅ | Default `2`; every other width is rejected |
+| `--batch-size <n>` | ✅ | Positive; default `1` |
+| `-t, --threads <n>` | ✅ | Positive requested workers; omission uses detected workers. Explicit requests are not silently capped in the parsed config |
+| `-i, --iterations <n>` | ✅ | Positive exact steps per scenario; omission selects future per-scenario calibration. Explicit values must fit the strictest one-billion-step/64 GiB exact-payload limit |
+| `-r, --count <n>` | ✅ | Positive cyclic loop count; default `3` |
+| `--seed <uint64>` | ✅ | Exact base seed including zero; a non-zero seed is generated once when omitted |
+| `-o, --output <target>` | ✅ syntax only | Empty, exact `-`, `./-`, and flag-shaped values are retained exactly. The current unavailable path writes no result |
+| `-h, --help` | ✅ | Prints dedicated help before enforcing required inputs or resolving worker/seed/session/QoS state; malformed or duplicate tokens still fail |
+| `--sweep`, `--sweep-max-runs`, `--non-cacheable` | ❌ | Outside the frozen v1 whitelist |
+| Buffer/cache/latency/TLB/pattern/core-to-core/GPU modifiers | ❌ | Outside the standalone whitelist |
+| Any other primary mode | ❌ | Primary modes are mutually exclusive |
+
+The parser also rejects checked weight/KV geometry that overflows or makes even one scenario step exceed the 64 GiB
+logical-payload ceiling. This boundary does not yet claim that the later three-mapping memory budget is admissible.
+
 ### Sweep Compatibility
 
 `--sweep` runs a Cartesian product over one or more parameter lists. It always requires a non-empty
@@ -171,11 +210,13 @@ envelopes use `configuration.sweep_schema_version: 1`; each nested result keeps 
 | `--analyze-tlb` | `latency-stride-bytes`, `latency-chain-mode`, `tlb-density` | `buffer-size`, `cache-size`, `threads`, `latency-tlb-locality-kb` |
 | `--analyze-core2core` | `count`, `latency-samples` | `buffer-size`, `cache-size`, `threads`, latency chain/locality/stride keys, `tlb-density` |
 | `--gpu-bandwidth` | none | GPU schema 1 rejects all sweep keys and `--sweep-max-runs` |
+| `--llm-memory` | none | The standalone LLM whitelist rejects all sweep keys |
 
 Additional sweep rules:
 
 - `--sweep-max-runs <n>` limits the generated Cartesian product; default is `16` with `--analyze-tlb` and `256` otherwise.
-- Outside GPU mode, `--sweep-max-runs` is accepted without `--sweep` but has no effect in that case.
+- In general CPU and core-to-core modes, `--sweep-max-runs` is accepted without `--sweep` but has no effect in that
+  case. GPU and LLM standalone parsers reject it.
 - A sweep parameter key may appear only once; duplicate keys are rejected before execution.
 - `--sweep latency-chain-mode=global-random` is invalid with `--analyze-tlb`.
 - Direct options outside `--sweep` are used as fixed values for every generated run.
@@ -213,12 +254,14 @@ Additional sweep rules:
 | `--analyze-tlb` + `--help` | The standalone TLB whitelist does not include help; use `--help` without `--analyze-tlb` |
 | `--gpu-bandwidth` + any other primary mode | GPU is a standalone primary mode |
 | `--gpu-bandwidth` + any option outside `buffer-size`, `iterations`, `count`, `seed`, `output`, `help` | GPU schema 1 exact whitelist |
+| `--llm-memory` + any other primary mode | LLM-memory is a standalone primary mode |
+| `--llm-memory` + any option outside its six required model inputs, `kv-element-bytes`, `batch-size`, `threads`, `iterations`, `count`, `seed`, `output`, `help` | LLM exact whitelist |
 | `--sweep` without `--output`, or with an empty output value | Sweep mode requires a non-empty combined JSON output target |
 | `--sweep` generated runs > `--sweep-max-runs` | Guardrail against accidental large Cartesian sweeps |
 
 ### No Mode Flag (shows help)
 
 Running with syntactically valid general modifiers but no primary mode flag (`--benchmark`, `--patterns`,
-`--analyze-tlb`, `--analyze-core2core`, or `--gpu-bandwidth`) shows help and exits without semantic validation. Parser
+`--analyze-tlb`, `--analyze-core2core`, `--gpu-bandwidth`, or `--llm-memory`) shows help and exits without semantic validation. Parser
 errors still fail before this fallback: for example, missing/malformed values and unknown options are errors, and
 `--tlb-density` is unknown unless `--analyze-tlb` selects the standalone TLB parser.

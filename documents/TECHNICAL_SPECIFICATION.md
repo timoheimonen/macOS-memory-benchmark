@@ -68,8 +68,9 @@ Main orchestration (`main.cpp`) follows this pipeline:
 `select_primary_benchmark_mode` scans all mode flags before mode-specific parsing, so a command containing multiple
 primary modes
 fails deterministically instead of being routed by the first token. Core-to-core uses `CoreToCoreLatencyConfig`; GPU uses
-`GpuBandwidthConfig`; TLB uses a dedicated branch that populates `BenchmarkConfig`. GPU is dispatched before the general
-timer/parser pipeline and never calls CPU config validation or buffer/access derivation. The numbered pipeline below
+`GpuBandwidthConfig`; LLM-memory uses `LlmMemoryConfig`; TLB uses a dedicated branch that populates `BenchmarkConfig`.
+GPU and LLM-memory are dispatched before the general timer/parser pipeline and never call general CPU config validation
+or buffer/access derivation. The numbered pipeline below
 applies to standard/pattern execution; TLB and general sweeps share its parse, output-session, validation, and
 final-output boundaries before entering their dedicated collectors/coordinators.
 
@@ -119,6 +120,20 @@ GPU mode follows its own synchronous pipeline:
    post-release replacement; stdout sessions serialize one terminal schema-1 payload at the command boundary after
    console rendering, then return success/failure according to explicit run and output status.
 
+The current LLM-memory command boundary is deliberately narrower:
+
+1. Scan the complete standalone whitelist, parsing supplied values and rejecting unknown, duplicate, or missing-value
+   input even when help is present.
+2. Return human help after that scan but before enforcing required-option presence, platform detection, entropy, output
+   routing, QoS, or signal masking.
+3. For a non-help command, require the six model-geometry inputs, resolve detected/requested workers and one
+   user/generated seed, and run pure checked geometry plus scenario work-limit preflight.
+4. Classify the raw target and install one command-scoped `JsonOutputSession`.
+5. Print the runtime banner, request shared best-effort main-thread QoS, and enter `BenchmarkSignalMaskGuard` in that
+   order so future workers inherit the blocked interruption signals while stdout routing remains command-scoped.
+6. Return `EXIT_FAILURE` with `execution-unavailable`. No mappings, workers, measurement result, JSON document, or file
+   are created in this implementation. Exact stdout remains empty. Executor/result lifecycles are added separately.
+
 ## 5. Configuration Model
 
 Configuration state is represented by `BenchmarkConfig` (`src/core/config/config.h`).
@@ -134,6 +149,9 @@ Configuration state is represented by `BenchmarkConfig` (`src/core/config/config
 - `--analyze-core2core` is pre-routed in `main.cpp` and uses the separate `CoreToCoreLatencyConfig` parser/runner path.
 - `--gpu-bandwidth` is pre-routed in `main.cpp` and uses separate `GpuBandwidthConfig`: per-buffer MB/bytes, optional
   explicit passes, loop count, raw output target, base seed/source, help state, and exact argv.
+- `--llm-memory` is pre-routed in `main.cpp` and uses separate `LlmMemoryConfig`: required model geometry,
+  KV width/batch defaults, requested and detected worker counts, optional exact scenario steps, loop count, raw output
+  target, base seed/source, help state, and exact argv.
 - Cache behavior: auto L1/L2 or user-provided `--cache-size`.
 - Latency sampling: `latency_sample_count`.
 - Latency-chain construction mode: `latency_chain_mode` (type `LatencyChainMode`,
@@ -161,9 +179,10 @@ Configuration state is represented by `BenchmarkConfig` (`src/core/config/config
   converts those failures to return codes.
 - Help (`-h`, `--help`) prints usage and exits successfully.
 - Standard/pattern/TLB output-target classification occurs only after successful parsing and help/no-mode handling.
-  Core-to-core classifies its target after its dedicated combined parse/preflight and help handling; GPU does the same
-  after its dedicated parser and help handling. For every direct command and supported CPU sweep, exact `-` is reserved
-  for final stdout JSON. An empty value disables JSON for a direct command and is missing/invalid for a sweep. Every
+  Core-to-core classifies its target after its dedicated combined parse/preflight and help handling; GPU and LLM do the
+  same after their dedicated parser and help handling. For every result-producing direct command and supported CPU
+  sweep, exact `-` is reserved for final stdout JSON. LLM reserves the syntax but currently produces no result. An empty
+  value disables JSON for a direct command and is missing/invalid for a sweep. Every
   other non-empty value is a file target, including `./-` and flag-shaped names such as `-G`.
 - `--latency-chain-mode` accepts string values and resolves to `LatencyChainMode` enum.
 - `--analyze-tlb` uses an early dedicated parse branch in `argument_parser.cpp`. It only allows optional `--output`, `--latency-stride-bytes`, `--latency-chain-mode`, `--tlb-density`, `--seed`, `--sweep`, and `--sweep-max-runs`. TLB sweep supports `latency-stride-bytes`, `latency-chain-mode`, and `tlb-density`; its default run guard is `16`, and `global-random` chain mode is rejected. One generated or user-provided seed drives the pure sweep planner, seeded cyclic Latin round scheduler, derived task seeds, layout-specific page-native chain permutations, and deterministic convergence bootstrap. Each task measures a verified one-node-per-page spread chain and an equal-cache-line packed control in the same round. A pilot calibrates whole-chain accesses toward the quick/standard/exhaustive target duration; rounds stop at the per-point CI-width target or profile maximum. Candidate buffers are admitted only when their predicted buffer-plus-scratch peak fits the available-memory budget. Full methodology and JSON contract: [TLB_ANALYSIS_WHITEPAPER.md](TLB_ANALYSIS_WHITEPAPER.md).
@@ -187,6 +206,13 @@ Configuration state is represented by `BenchmarkConfig` (`src/core/config/config
   seed, and automatic passes. Buffer size must be at least 64 MB; checked MB→bytes overflow and explicit work guardrails
   are resolved before backend creation. Copy's 2× payload makes its pass limit the strict CLI ceiling shared by all three
   operations. GPU schema 1 rejects sweep options.
+- `--llm-memory` uses a dedicated parser outside `argument_parser.cpp`. It accepts only `-M`/`--llm-memory`, the six
+  required weight/layer/head/context inputs, optional KV width, batch, threads, iterations, count, seed, output, and help.
+  Duplicate/unknown/incompatible options, missing values, non-complete decimal tokens, zero size/count values, invalid
+  KV widths, invalid query/KV sharing, checked geometry overflow, impossible one-step payloads, and explicit scenario
+  work above the strictest limit fail before output-session creation. Output consumes exactly one opaque raw token.
+  Help still completes the whitelist pass but returns before required/default/preparation work. LLM rejects sweeps and
+  all cache, latency, TLB, pattern, GPU, and non-cacheable modifiers.
 
 ### 6.2 Validation behavior (`config_validator.cpp`)
 
@@ -676,7 +702,8 @@ Contract highlights:
 - Every successfully started direct mode and parameter sweep emits one shared version, copyright, and GPL banner
   before mode-specific configuration or status output. Nested sweep runs do not repeat it. Help output and usage
   diagnostics retain the separate usage preamble; preflight failures do not emit the runtime banner.
-- Configuration and cache info printed before execution.
+- Result-producing CPU benchmark paths print applicable configuration and cache information before execution; the
+  current LLM boundary prints only the shared banner and its terminal diagnostic after preflight.
 - Per-loop results are printed in standard mode.
 - Pattern mode prints pattern table-style sections and derived efficiency indicators.
 - GPU mode prints a separate device/private-tracked header, read/write/copy effective-payload headlines, repeatability,
@@ -684,10 +711,12 @@ Contract highlights:
 - Aggregate statistics printed when loop count > 1.
 - Errors and warnings use `Messages::error_prefix()` / `Messages::warning_prefix()` conventions.
 - Live progress uses the shared spinner on `stderr` only when it is a TTY; redirected standard and pattern output contains no carriage-return control sequences.
-- For every direct command or CPU sweep using `--output -`, the output session is installed before runtime console
+- For every result-producing direct command or CPU sweep using `--output -`, the output session is installed before
+  runtime console
   rendering and worker-thread creation. The general standard/pattern/TLB branch installs it before sweep/direct
   validation; core-to-core installs it after its combined parse/preflight; GPU installs it after its dedicated parser
-  and help handling but before the runtime banner, QoS, signal scope, and backend factory. Post-parse human output
+  and help handling but before the runtime banner, QoS, signal scope, and backend factory. The current LLM boundary
+  installs the same session before banner/QoS/signal preparation but terminates without a result. Post-parse human output
   therefore goes to stderr, while final JSON bypasses the redirected stream through the retained original stdout
   buffer. Parse/preflight and other pre-result failures leave stdout empty; human help remains stdout.
 
@@ -695,9 +724,10 @@ Contract highlights:
 
 JSON writer API (`src/output/json/json_output/json_output.cpp`):
 
-Every direct mode and the CPU modes' supported sweeps can send their existing payload either to an atomic file target or,
-for exact raw `-`, to one final stdout document. This transport does not wrap or change the measurement schema;
-[API.md](API.md) is the process-integration contract and support matrix.
+Every result-producing direct mode and the CPU modes' supported sweeps can send their existing payload either to an
+atomic file target or, for exact raw `-`, to one final stdout document. This transport does not wrap or change the
+measurement schema. The current LLM command boundary has no result builder or schema transport and therefore emits
+nothing. [API.md](API.md) is the process-integration contract and support matrix.
 
 - Standard mode schema 3: `configuration` with `mode = "benchmark"` and the raw `output_file` target as a required
   string,
@@ -921,6 +951,9 @@ Recommended validation commands:
 - Full test set: `make test-all`
 - CLI help smoke check: `./memory_benchmark -h`
 - GPU help smoke check: `./memory_benchmark --gpu-bandwidth --help`
+- LLM boundary help smoke check: `./memory_benchmark --llm-memory --help`
+- Deterministic LLM boundary tests:
+  `./test_runner '--gtest_filter=ModeSelectorTest.*:LlmMemoryConfigTest.*:MessagesTest.*'`
 - Deterministic GPU-focused tests:
   `./test_runner --gtest_filter='GpuBandwidthParserTest.*:GpuMemoryBudgetTest.*:GpuRunnerTest.*:GpuJsonTest.*:GpuWorkPlanTest.*:GpuTimedAccumulatorOracleTest.*:ModeSelectorTest.*:HashUtilsTest.*'`
 - Real Metal contract: `./test_runner '--gtest_filter=GpuMetalBackendIntegrationTest.*'`; unsupported hardware may skip
@@ -934,6 +967,9 @@ entry test. `jq` is not required by this gate.
 ## 23. Source Map (Primary Entry Points)
 
 - Program entry: `main.cpp`
+- LLM command/config planning:
+  - `src/llm_memory/llm_memory.cpp`
+  - `src/llm_memory/llm_work_plan.cpp`
 - Config parse/validate/derive:
   - `src/core/config/mode_selector.cpp`
   - `src/core/config/argument_parser.cpp`

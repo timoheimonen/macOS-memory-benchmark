@@ -191,7 +191,97 @@ TEST(MessagesErrorTest, ErrorAnalyzeTlbMustBeUsedAlone) {
 
 TEST(MessagesErrorTest, ErrorSeedRequiresEverySupportedMode) {
   EXPECT_EQ(Messages::error_seed_requires_supported_mode(),
-            "--seed requires --benchmark, --patterns, --analyze-tlb, or --gpu-bandwidth");
+            "--seed requires --benchmark, --patterns, --analyze-tlb, "
+            "--gpu-bandwidth, or --llm-memory");
+}
+
+TEST(MessagesTest, LlmMemoryCliMessagesHaveExactOutput) {
+  const std::string expected_usage =
+      "Usage: memory_benchmark --llm-memory [options]\n"
+      "Options for standalone CPU synthetic LLM decode-memory mode:\n"
+      "  -M, --llm-memory       Select the fixed-context memory-only decode profile.\n"
+      "      --weight-size-mb <MiB>\n"
+      "                          Required active weight bytes per synthetic step, in MiB.\n"
+      "      --layers <count>    Required transformer layer count.\n"
+      "      --query-heads <count>\n"
+      "                          Required query-head count; must be at least as large as KV heads\n"
+      "                          and divisible by them.\n"
+      "      --kv-heads <count> Required physical KV-head count.\n"
+      "      --head-dim <count> Required elements per K or V head vector.\n"
+      "      --kv-element-bytes <1|2|4>\n"
+      "                          KV element width (default: " +
+      std::to_string(Constants::LLM_DEFAULT_KV_ELEMENT_BYTES) +
+      " bytes).\n"
+      "      --context-tokens <count>\n"
+      "                          Required fixed visible context, including the current token.\n"
+      "      --batch-size <count>\n"
+      "                          Batch sequences per synthetic step (default: " +
+      std::to_string(Constants::LLM_DEFAULT_BATCH_SIZE) +
+      ").\n"
+      "  -t, --threads <count>  Requested CPU workers; detected workers are used when omitted.\n"
+      "  -i, --iterations <count>\n"
+      "                          Exact steps per future scenario measurement. When omitted,\n"
+      "                          the future executor will calibrate toward 150 ms in a\n"
+      "                          100-250 ms window.\n"
+      "  -r, --count <count>    Planned cyclic weights/KV/mixed loops (default: " +
+      std::to_string(Constants::LLM_DEFAULT_LOOP_COUNT) +
+      ").\n"
+      "      --seed <uint64>    Reproducible base seed; generated once when omitted.\n"
+      "  -o, --output <target>  Future result target; exact - is final stdout, an empty value\n"
+      "                          disables JSON, and every other non-empty value is a file.\n"
+      "  -h, --help             Show this LLM-mode help and exit.\n"
+      "This profile models CPU memory traffic only: it performs no Transformer math and\n"
+      "does not report inference tokens/s. Effective payload is not physical DRAM traffic.\n"
+      "This build validates the command boundary only: measurement execution and JSON\n"
+      "result creation are unavailable, so valid non-help runs fail without a JSON or file result.\n";
+
+  const std::vector<MessageCase> cases = {
+      {"mode isolation", Messages::error_llm_memory_must_be_used_alone(),
+       "--llm-memory requires --weight-size-mb <MiB>, --layers <count>, "
+       "--query-heads <count>, --kv-heads <count>, --head-dim <count>, and "
+       "--context-tokens <count>; it allows only optional "
+       "--kv-element-bytes <1|2|4>, --batch-size <count>, "
+       "-t/--threads <count>, -i/--iterations <count>, "
+       "-r/--count <count>, --seed <uint64>, -o/--output <target>, and "
+       "-h/--help (no other options allowed)"},
+      {"required option",
+       Messages::error_llm_memory_missing_required_option("--layers"),
+       "Missing required --llm-memory option: --layers"},
+      {"config reason",
+       Messages::error_llm_memory_config_invalid(
+           "query-heads-not-divisible-by-kv-heads"),
+       "Invalid --llm-memory configuration "
+       "(reason_code=query-heads-not-divisible-by-kv-heads)"},
+      {"iteration limit",
+       Messages::error_llm_memory_iterations_exceed_limit(5, 4),
+       "LLM memory iterations exceed the exact-work guardrail "
+       "(requested 5, maximum 4)"},
+      {"unavailable",
+       Messages::error_llm_memory_run_failed("execution-unavailable"),
+       "Synthetic LLM decode memory profile failed "
+       "(reason_code=execution-unavailable)"},
+      {"positive integer", Messages::llm_memory_reason_positive_integer(),
+       "must be a positive integer"},
+      {"KV width", Messages::llm_memory_reason_kv_element_bytes(),
+       "must be exactly 1, 2, or 4"},
+      {"platform size", Messages::llm_memory_reason_platform_size_range(),
+       "out of range for a platform size"},
+      {"usage", Messages::llm_memory_usage_options("memory_benchmark"),
+       expected_usage},
+  };
+  expect_exact_messages(cases);
+}
+
+TEST(MessagesTest, GeneralHelpAdvertisesTheLlmBoundaryExactlyOnce) {
+  const std::string usage = Messages::usage_options("memory_benchmark");
+  EXPECT_NE(usage.find("-M, --llm-memory"), std::string::npos);
+  EXPECT_EQ(usage.find("-M, --llm-memory"),
+            usage.rfind("-M, --llm-memory"));
+  EXPECT_NE(usage.find("--weight-size-mb"), std::string::npos);
+  EXPECT_NE(usage.find("--query-heads"), std::string::npos);
+  EXPECT_NE(usage.find("--context-tokens"), std::string::npos);
+  EXPECT_NE(usage.find("memory-only interpretation"), std::string::npos);
+  EXPECT_NE(usage.find("execution is unavailable"), std::string::npos);
 }
 
 TEST(MessagesErrorTest, GpuMessagesHaveExactMethodologyOutput) {
@@ -635,13 +725,16 @@ TEST(MessagesFormattingTest, UsageOptions) {
   EXPECT_NE(msg.find("Locality-using modes require"), std::string::npos);
   EXPECT_NE(msg.find("explicit global-random ignores"), std::string::npos);
   EXPECT_NE(msg.find("cache bandwidth uses one"), std::string::npos);
+  EXPECT_NE(msg.find("keeps an explicit request uncapped"),
+            std::string::npos);
   EXPECT_NE(msg.find("latency remains"), std::string::npos);
   EXPECT_NE(msg.find("single-threaded"), std::string::npos);
   EXPECT_NE(msg.find("--cache-size"), std::string::npos);
   EXPECT_NE(msg.find("--output <target>"), std::string::npos);
   EXPECT_NE(msg.find("Exact - writes one final JSON document to stdout"), std::string::npos);
   EXPECT_NE(msg.find("one final"), std::string::npos);
-  EXPECT_NE(msg.find("every direct mode and CPU sweep"), std::string::npos);
+  EXPECT_NE(msg.find("every result-producing direct mode and CPU sweep"),
+            std::string::npos);
   EXPECT_NE(msg.find("routes human output to stderr"), std::string::npos);
   EXPECT_NE(msg.find("an empty value disables JSON for direct commands"),
             std::string::npos);
@@ -649,6 +742,8 @@ TEST(MessagesFormattingTest, UsageOptions) {
   EXPECT_NE(msg.find("Every other non-empty value is a file"),
             std::string::npos);
   EXPECT_NE(msg.find("including ./- and names such as -G"),
+            std::string::npos);
+  EXPECT_NE(msg.find("current LLM boundary accepts this syntax but creates no result"),
             std::string::npos);
   EXPECT_NE(msg.find("Standard and GPU files retain"), std::string::npos);
   EXPECT_NE(msg.find("sweep files checkpoint attempts"), std::string::npos);

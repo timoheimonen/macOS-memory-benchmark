@@ -149,6 +149,17 @@ std::string error_gpu_run_failed(const std::string& reason_code);
 const std::string& gpu_reason_positive_integer();
 const std::string& gpu_reason_nonnegative_unsigned_long();
 const std::string& gpu_reason_loop_count_out_of_range();
+const std::string& error_llm_memory_must_be_used_alone();
+std::string error_llm_memory_missing_required_option(
+    const std::string& option);
+std::string error_llm_memory_config_invalid(
+    const std::string& reason_code);
+std::string error_llm_memory_iterations_exceed_limit(size_t requested,
+                                                     size_t maximum);
+std::string error_llm_memory_run_failed(const std::string& reason_code);
+const std::string& llm_memory_reason_positive_integer();
+const std::string& llm_memory_reason_kv_element_bytes();
+const std::string& llm_memory_reason_platform_size_range();
 const std::string& error_only_flags_require_benchmark();
 const std::string& error_sweep_requires_parameter();
 std::string error_sweep_too_many_runs(size_t run_count, size_t max_runs);
@@ -206,6 +217,7 @@ std::string msg_tlb_analysis_validation_start(size_t point_count);
 
 // --- GPU memory-bandwidth usage and report messages ---
 std::string gpu_usage_options(const std::string& prog_name);
+std::string llm_memory_usage_options(const std::string& prog_name);
 std::string report_gpu_bandwidth_header(const std::string& device_name,
                                         size_t loop_count,
                                         bool median_headline);

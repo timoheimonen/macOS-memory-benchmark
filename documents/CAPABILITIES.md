@@ -12,7 +12,8 @@ Bandwidth is reported as **effective workload payload divided by measured time**
 | Access patterns (`--patterns`) | Payload-rate sensitivity to access order, regularity, and virtual stride | Which single cache, prefetch, translation, or scheduling mechanism caused a difference |
 | TLB analysis (`--analyze-tlb`) | Paired spread/packed latency deltas and empirical boundary estimates | Guaranteed architectural TLB sizes or direct DRAM latency |
 | Core-to-core (`--analyze-core2core`) | Effective round-trip time of a repeated two-thread acquire/release token exchange under scheduler hints | Isolated physical cache-line migration or coherence-path latency, exact physical-core placement, or a definitive topology map |
-| JSON output (`--output`) and sweeps (`--sweep`) | Auditable measurement evidence through recoverable files or one final stdout document for every direct mode and CPU sweep | Comparability when commands, software, hardware, or run conditions differ |
+| LLM memory command boundary (`--llm-memory`) | Strict parsing and checked preflight for a fixed-context synthetic CPU decode-memory profile | Any measurement, Transformer computation, inference throughput, physical DRAM traffic, or result payload in the current build |
+| JSON output (`--output`) and sweeps (`--sweep`) | Auditable measurement evidence through recoverable files or one final stdout document for every result-producing direct mode and supported CPU sweep | Comparability when commands, software, hardware, or run conditions differ |
 
 ## CPU Memory and Cache Bandwidth
 
@@ -33,6 +34,13 @@ The buffers use private Metal storage on Apple Silicon unified memory. “Privat
 Automatic mode calibrates work per operation, while explicit iterations provide fixed work. Measurements include warmup, preconditioning, GPU timing, and validation, so they describe steady-state warm-memory kernel execution rather than cold-cache behavior. GPU caches, dispatch overhead, other GPU activity, thermals, power state, the driver, and runtime compilation can all affect results.
 
 CPU and GPU GB/s should not be compared as if they were the same workload: their kernels, parallelism, resource models, and clocks differ. See the [GPU Bandwidth Whitepaper](GPU_BANDWIDTH_WHITEPAPER.md) for the full timing, resource, validation, and provenance contracts.
+
+## LLM Decode-Memory Command Boundary
+
+Standalone `--llm-memory` currently validates a dedicated option whitelist, required model geometry, checked memory
+arithmetic, worker availability, and exact-work guardrails. It then reports `execution-unavailable`. This boundary does
+not allocate benchmark mappings, start workers, perform synthetic decode-memory measurement, create JSON or file output,
+or report tokens/s. Those capabilities are reserved for later implementation phases.
 
 ## Memory and Cache Latency
 
@@ -78,17 +86,22 @@ See the [Core-to-Core Whitepaper](CORE_TO_CORE_WHITEPAPER.md) for the assembly p
 
 ## Parameter Sweeps and JSON Evidence
 
-Built-in sweeps execute supported parameter lists without shell orchestration. Standard and pattern modes can sweep buffer size and thread count. Standard latency also supports cache size, stride, locality, and chain-mode sweeps; TLB mode supports its stride, chain-mode, and density controls; core-to-core mode supports loop count and sample depth. Multiple sweep options form a Cartesian product, and combined output requires `--output`. GPU schema 1 does not support sweeps.
+Built-in sweeps execute supported parameter lists without shell orchestration. Standard and pattern modes can sweep
+buffer size and thread count. Standard latency also supports cache size, stride, locality, and chain-mode sweeps; TLB
+mode supports its stride, chain-mode, and density controls; core-to-core mode supports loop count and sample depth.
+Multiple sweep options form a Cartesian product, and combined output requires `--output`. GPU schema 1 and the current
+LLM command boundary do not support sweeps.
 
 JSON is designed as auditable evidence, not merely a list of numbers. It preserves the resolved configuration, work and seed identity, measurements, statistics, status, and enough completion information to distinguish complete, partial, interrupted, and unavailable results. Missing measurements are nullable rather than represented by numeric zero.
 
-Every direct mode and the CPU modes' supported sweeps reserve the exact target `--output -` for machine-readable output:
-stdout contains one final JSON document and the post-parse human transcript is routed to stderr. An empty output value
-disables JSON for a direct command but is missing/invalid for a sweep. Every other non-empty value is a file target,
-including `./-` and flag-shaped names such as `-G`. File output is atomic; standard commands, sweeps, and GPU retain
-their mode-specific intermediate checkpoints, while stdout remains final-only. GPU stdout executes its logical
-checkpoint transitions and stop observations without intermediate serialization. The current support matrix and
-process acceptance procedure are in the [Machine-Readable CLI API](API.md).
+Every result-producing direct mode and the CPU modes' supported sweeps reserve the exact target `--output -` for
+machine-readable output: stdout contains one final JSON document and the post-parse human transcript is routed to
+stderr. An empty output value disables JSON for a direct command but is missing/invalid for a sweep. Every other
+non-empty value is a file target, including `./-` and flag-shaped names such as `-G`. File output is atomic; standard
+commands, sweeps, and GPU retain their mode-specific intermediate checkpoints, while stdout remains final-only. GPU
+stdout executes its logical checkpoint transitions and stop observations without intermediate serialization. The
+current `--llm-memory` command is excluded because it creates no result transport. The current support matrix and process
+acceptance procedure are in the [Machine-Readable CLI API](API.md).
 
 Current standard results use schema 3, which requires `configuration.mode: "benchmark"`, a string
 `configuration.output_file`, plus boolean `results_complete` and `conclusions_valid`. Bundled standard-memory examples

@@ -18,10 +18,11 @@ This document describes the layout of project files, organized by purpose. It is
    - [src/core/](#23-srccore--core-utilities)
    - [src/output/](#24-srcoutput---output-layer)
    - [src/gpu_bandwidth/](#25-srcgpu_bandwidth--metal-gpu-bandwidth)
-   - [src/pattern_benchmark/](#26-srcpattern_benchmark--pattern-access-benchmarks)
-   - [src/warmup/](#27-srcwarmup--pre-benchmark-warm-up)
-   - [src/utils/](#28-srcutils--shared-utilities)
-   - [src/third_party/](#29-srcthird_party--vendored-dependencies)
+   - [src/llm_memory/](#26-srcllm_memory--synthetic-llm-decode-memory-profile)
+   - [src/pattern_benchmark/](#27-srcpattern_benchmark--pattern-access-benchmarks)
+   - [src/warmup/](#28-srcwarmup--pre-benchmark-warm-up)
+   - [src/utils/](#29-srcutils--shared-utilities)
+   - [src/third_party/](#210-srcthird_party--vendored-dependencies)
 3. [tests/ — Test suite](#3-tests--test-suite)
 4. [results/ — Benchmark result data](#4-results---benchmark-result-data)
 5. [pictures/ — Documentation images](#5-pictures--documentation-images)
@@ -36,7 +37,7 @@ This document describes the layout of project files, organized by purpose. It is
 
 | File | Purpose |
 |---|---|
-| `main.cpp` | Program entry point; performs primary-mode conflict scan, dispatches dedicated GPU/core-to-core paths, runs the general standard/pattern/TLB and sweep pipelines, and owns the general CPU output-session lifetime; the dedicated GPU and core-to-core CLIs own their sessions |
+| `main.cpp` | Program entry point; performs primary-mode conflict scan, dispatches dedicated LLM/GPU/core-to-core paths before the general parser, and runs the general standard/pattern/TLB and sweep pipelines; each standalone command boundary owns its output-session lifetime |
 
 ### Build and tooling
 
@@ -165,11 +166,11 @@ Core infrastructure for configuration, memory management, macOS system introspec
 
 | File | Purpose |
 |---|---|
-| `config.h` | `BenchmarkConfig` structure for standard, pattern, standalone TLB, and their common sweep settings; core-to-core and GPU use separate config types |
-| `constants.h` | Named constants for CPU/GPU memory limits, calibration, grid/dispatch/payload guardrails, buffer sizing, and latency access counts |
+| `config.h` | `BenchmarkConfig` structure for standard, pattern, standalone TLB, and their common sweep settings; core-to-core, GPU, and LLM use separate config types |
+| `constants.h` | Named constants for CPU/GPU/LLM memory limits, calibration, grid/dispatch/payload guardrails, buffer sizing, and latency access counts |
 | `version.h` | `SOFTVERSION` macro (semantic version string, currently `"0.63.0"`) |
-| `mode_selector.h` / `.cpp` | Pure primary-mode scan and conflict detection before mode-specific parsing; routes standard, pattern, TLB, core-to-core, and GPU deterministically |
-| `argument_parser.cpp` | Parses standard, pattern, and standalone TLB options into `BenchmarkConfig`; core-to-core and GPU are pre-routed to dedicated parsers |
+| `mode_selector.h` / `.cpp` | Pure primary-mode scan and conflict detection before mode-specific parsing; routes standard, pattern, TLB, core-to-core, GPU, and LLM deterministically while skipping one opaque output value |
+| `argument_parser.cpp` | Parses standard, pattern, and standalone TLB options into `BenchmarkConfig`; core-to-core, GPU, and LLM are pre-routed to dedicated parsers |
 | `config_validator.cpp` | Validates the parsed configuration; emits errors for out-of-range or conflicting settings |
 | `buffer_calculator.cpp` | Derives buffer sizes for each cache/memory level from the validated configuration and detected system parameters |
 | `sweep_utils.h` / `.cpp` | Shared structural sweep parsing and overflow-safe Cartesian run counting used by standard and core-to-core sweep parsers |
@@ -229,6 +230,7 @@ All user-facing text strings are centralized here. Each `.cpp` file implements a
 | `config_messages.cpp` | Configuration echo and validation error text |
 | `core_to_core_messages.cpp` | Core-to-core mode status and result messages |
 | `gpu_bandwidth_messages.cpp` | GPU help, status, result, interpretation, warning, and validation messages |
+| `llm_memory_messages.cpp` | LLM strict-whitelist help, validation, work-limit, and execution-unavailable messages |
 | `error_messages.cpp` | Fatal error messages |
 | `info_messages.cpp` | General informational messages |
 | `pattern_messages.cpp` | Pattern benchmark descriptive labels |
@@ -243,7 +245,7 @@ All user-facing text strings are centralized here. Each `.cpp` file implements a
 |---|---|
 | `json_output_api.h` | Public standard/pattern payload builders and the shared atomic-file writer interface; this C++ API is distinct from the process contract in `API.md` |
 | `json_output.cpp` | Builds standard/pattern root payloads, adds timestamp/version metadata, and retains file-save adapters; direct command dispatch can reuse the prebuilt object through `JsonOutputSession` |
-| `json_output_session.h` / `.cpp` | Classifies raw output targets, applies mode-specific file-path policy, lazily dispatches checkpoints, routes command-scoped human stdout, and emits checked final JSON through the retained original stdout buffer; every direct mode and CPU sweep selects this transport |
+| `json_output_session.h` / `.cpp` | Classifies raw output targets, applies mode-specific file-path policy, lazily dispatches checkpoints, routes command-scoped human stdout, and emits checked final JSON through the retained original stdout buffer; result-producing direct modes and CPU sweeps use it, while the LLM boundary currently installs it without producing a result |
 | `builder.cpp` | Builds common mode configuration metadata, including resolved chain, seed, calibration, scheduling, and worker policies |
 | `standard.cpp` | Active standard schema-3 serializer for completion state, loop measurements, and main/cache aggregates |
 | `patterns.cpp` | Serializes pattern benchmark results |
@@ -268,7 +270,20 @@ Objective-C++ Metal backend so deterministic unit tests do not require GPU work.
 
 ---
 
-### 2.6 src/pattern_benchmark/ — Pattern access benchmarks
+### 2.6 src/llm_memory/ — Synthetic LLM decode-memory profile
+
+Cold-path configuration and pointer-free planning for the standalone CPU LLM memory profile. The command boundary and
+strict parser are active; mappings, execution, measurement orchestration, and result serialization are intentionally not
+present in the current implementation.
+
+| File | Purpose |
+|---|---|
+| `llm_memory.h` / `.cpp` | Separate config/status foundation, strict exact-whitelist parser, required/default worker/seed resolution, geometry/work-limit preflight, dedicated help, output-session/QoS/signal command boundary, and explicit execution-unavailable terminal |
+| `llm_work_plan.h` / `.cpp` | Pure checked weight/KV geometry, payload/crossover math, memory-budget request, layer/sequence descriptor templates and ABI, worker ranges/reduction, seed domains, scenario limits/calibration/order, and frozen plan identities |
+
+---
+
+### 2.7 src/pattern_benchmark/ — Pattern access benchmarks
 
 Benchmarks characterizing memory access patterns: sequential forward, sequential reverse, strided, and random. Results expose how access regularity and stride distance affect effective payload bandwidth.
 
@@ -287,7 +302,7 @@ Benchmarks characterizing memory access patterns: sequential forward, sequential
 
 ---
 
-### 2.7 src/warmup/ — Pre-benchmark warm-up
+### 2.8 src/warmup/ — Pre-benchmark warm-up
 
 Warm-up passes reduce selected cold-start effects before timing. Main-memory bandwidth warm-up is bounded, cache
 bandwidth warm-up covers the full target buffer, and latency warm-up page-touches without pre-traversing the chain.
@@ -303,7 +318,7 @@ bandwidth warm-up covers the full target buffer, and latency warm-up page-touche
 
 ---
 
-### 2.8 src/utils/ — Shared utilities
+### 2.9 src/utils/ — Shared utilities
 
 | File | Purpose |
 |---|---|
@@ -318,7 +333,7 @@ bandwidth warm-up covers the full target buffer, and latency warm-up page-touche
 
 ---
 
-### 2.9 src/third_party/ — Vendored dependencies
+### 2.10 src/third_party/ — Vendored dependencies
 
 | File | Purpose |
 |---|---|
@@ -343,6 +358,8 @@ installed. All `.cpp` files are picked up automatically by the Makefile. Tests n
 | `test_memory_manager.cpp` | `MemoryManagerTest` | Injected mmap/madvise policy, failures, and exact RAII unmapping |
 | `test_numeric_utils.cpp` | `NumericUtilsTest` | Overflow-safe arithmetic, duration calibration, pilot counts, and quantization boundaries |
 | `test_llm_memory_contract.cpp` | `LlmMemoryContractTest` | Test-side Phase 0 executable specification for exact LLM payload formulas, affine append bytes, read/run checksums, descriptor ABI layout, and schema acceptance identity; it does not exercise production LLM code |
+| `test_llm_memory_config.cpp` | `LlmMemoryConfigTest` | Config/status defaults, exact standalone whitelist parsing, required/default fields, strict decimal errors, raw output values, help isolation, worker/seed resolution, geometry/work-limit preflight, and incompatible options |
+| `test_llm_memory_work_plan.cpp` | `LlmMemoryWorkPlanTest` | Production checked geometry/payload/crossover, memory budget, descriptor/range/layout invariants, worker reduction, move-only semantics, seed identities, scenario caps/calibration, and cyclic order |
 | `test_buffer_manager.cpp` | `BufferManagerTest` | Pattern mapping policy, atomic allocation cleanup, initialized content, validation, and peak accounting |
 | `test_benchmark_executor.cpp` | `BenchmarkExecutorTest` | Injected phase/chain failures, continuous latency sampling, and hardware executor contracts |
 | `test_benchmark_runner.cpp` | `BenchmarkStatisticsCollectorTest`, `BenchmarkRunnerTest` | Status-bearing aggregation, schema-3 retained snapshots, checkpointing, interruption, and runner exception/failure seams |
@@ -350,7 +367,7 @@ installed. All `.cpp` files are picked up automatically by the Makefile. Tests n
 | `test_gpu_bandwidth.cpp` | `GpuBandwidthParserTest`, `GpuMemoryBudgetTest`, `GpuRunnerTest`, `GpuJsonTest` | Strict standalone parsing and raw output spelling, memory budgets, fake-backend calibration/execution/failure/interruption and file/stdout checkpoint semantics, counters, and schema-1 serialization |
 | `test_gpu_work_plan.cpp` | `GpuWorkPlanTest`, `GpuTimedAccumulatorOracleTest` | GPU constants, cyclic order, seed domains, pass/payload caps, calibration, vector/tail/grid geometry, frozen identities, and timed-accumulator oracle behavior |
 | `test_gpu_metal_backend.cpp` | `GpuMetalBackendIntegrationTest` | Real-Metal capability/runtime compile, private/shared tracked resources, read/write/copy/tail correctness, timestamps, validation, and byte readback |
-| `test_mode_selector.cpp` | `ModeSelectorTest` | Primary-mode detection, GPU aliases, and deterministic multi-mode conflicts |
+| `test_mode_selector.cpp` | `ModeSelectorTest` | All six primary modes and aliases, complete pairwise conflict order, duplicate ownership, and opaque flag-shaped output targets |
 | `test_hash_utils.cpp` | `HashUtilsTest` | CommonCrypto SHA-256 standard vectors and source-provenance helper behavior |
 | `test_analysis.cpp` | `AnalysisTest` | Injected TLB coordination, counters/status, boundary detection, validation, and paired analysis |
 | `test_json_schema.cpp` | `JsonSchemaTest` | Current standard schema-3 output structure, completion fields, and other mode schema contracts |

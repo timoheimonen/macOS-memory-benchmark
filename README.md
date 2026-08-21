@@ -18,8 +18,10 @@ It is designed for controlled microarchitectural investigation rather than a sin
 - **Dedicated TLB analysis:** paired spread/packed chains, adaptive rounds, confidence intervals, and independent boundary validation.
 - **Core-to-core analysis:** calibrated acquire/release token-exchange measurements under scheduler-hint scenarios.
 - **Metal GPU bandwidth:** standalone read/write/copy compute kernels with GPU timestamps and validation metadata.
+- **LLM memory-profile boundary:** strict checked configuration for a fixed-context synthetic CPU decode-memory workload;
+  measurement execution is not yet available in this build.
 - **Reproducible experiments:** explicit seeds, repeated loops, built-in Cartesian parameter sweeps, recoverable JSON
-  file checkpoints, and final machine-readable stdout for every direct mode and CPU sweep.
+  file checkpoints, and final machine-readable stdout for every result-producing direct mode and CPU sweep.
 
 See [Measurement Capabilities](documents/CAPABILITIES.md) for the full measurement scope and interpretation guidance.
 
@@ -72,14 +74,20 @@ Run the standalone Metal GPU bandwidth suite:
 memory_benchmark --gpu-bandwidth
 ```
 
+Show the standalone synthetic LLM decode-memory configuration contract:
+
+```bash
+memory_benchmark --llm-memory --help
+```
+
 For longer runs, prevent system sleep and collect repeated measurements:
 
 ```bash
 caffeinate -i -d memory_benchmark --benchmark --count 10 --buffer-size 1024 --output baseline.json
 ```
 
-For automation, every direct mode and the CPU modes' supported sweeps accept the exact output target `-`. JSON is written
-once to stdout and the human-readable transcript is written to stderr:
+For automation, every result-producing direct mode and the CPU modes' supported sweeps accept the exact output target
+`-`. JSON is written once to stdout and the human-readable transcript is written to stderr:
 
 ```bash
 memory_benchmark --benchmark --only-bandwidth --count 5 --buffer-size 512 --output - \
@@ -99,9 +107,15 @@ checkpoints are required; see the [Machine-Readable CLI API](documents/API.md) s
 | `--analyze-tlb` | Standalone paired spread/packed TLB analysis with adaptive measurement rounds, confidence intervals, and boundary validation. |
 | `--analyze-core2core` | Calibrated two-thread acquire/release token-protocol round-trip latency under best-effort macOS scheduler hints. |
 | `--gpu-bandwidth` | Standalone Metal GPU read/write/copy effective compute-payload bandwidth. |
-| `--sweep <key=a,b>` | Cartesian parameter sweep for supported CPU, pattern, TLB, and core-to-core modes; requires `--output`. GPU schema 1 does not support sweeps. |
+| `--llm-memory` | Standalone CPU configuration boundary for a fixed-context synthetic LLM decode-memory profile. The current build validates its strict model geometry and work inputs but does not yet execute or emit results. |
+| `--sweep <key=a,b>` | Cartesian parameter sweep for supported CPU, pattern, TLB, and core-to-core modes; requires `--output`. GPU schema 1 and the current LLM command boundary do not support sweeps. |
 
 Primary modes are intentionally separate and accept different option sets. Use `memory_benchmark -h` or the [User Manual](documents/MANUAL.md) for defaults, valid combinations, and the complete option reference.
+
+The current `--llm-memory` boundary requires explicit weight size, layer count, query/KV head geometry, head dimension,
+and visible context. It performs checked parser/preflight work and then exits with `execution-unavailable`; it does not
+allocate benchmark mappings, run workers, create JSON, or report inference tokens/s. Those execution and result surfaces
+remain outside this implementation stage.
 
 When `--iterations` is omitted, standard bandwidth, pattern, and GPU operations calibrate their work toward a bounded measurement duration. An explicit `--iterations` value selects fixed work. Standard latency headlines always come from a continuous dependent pointer-chase pass. A separate sample pass runs by default with 1,000 windows; `--latency-samples` controls that positive window count, and the sampled distribution does not define or weight the headline.
 
@@ -184,9 +198,10 @@ track the current producer, require its exact top-level `version` (currently `0.
 result locally, and read current schema-3 paths directly. They do not provide compatibility for released standard
 schema 2, unversioned historical standard JSON layouts, or any other explicit standard version.
 Consumers making conclusions should reject incomplete or interrupted runs according to the mode-specific status fields.
-Every direct command or CPU sweep using `--output -` reserves stdout for one final JSON document and routes its
-post-parse human transcript to stderr; file output is atomic, while standard commands, sweeps, and GPU retain their
-mode-specific intermediate checkpoints. Exact process
+Every result-producing direct command or CPU sweep using `--output -` reserves stdout for one final JSON document and
+routes its post-parse human transcript to stderr; file output is atomic, while standard commands, sweeps, and GPU retain
+their mode-specific intermediate checkpoints. The current LLM-memory boundary reserves the option syntax but emits no
+result. Exact process
 acceptance rules are in the [Machine-Readable CLI API](documents/API.md), with schema and checkpoint details in the [User Manual](documents/MANUAL.md),
 [Technical Specification](documents/TECHNICAL_SPECIFICATION.md), and mode whitepapers.
 
