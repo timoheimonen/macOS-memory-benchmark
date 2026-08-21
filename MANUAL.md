@@ -600,16 +600,18 @@ middle, and trailing items.
 
 #### `--output <target>`
 
-- An omitted output option disables JSON output
+- An omitted output option or an empty value disables JSON output for a direct command. For a sweep, an empty value is
+  a missing/invalid required output target
 - For every direct mode and the CPU modes' supported sweeps, an exact raw value of `-` selects machine-readable stdout.
-  The sentinel is classified before path normalization, so `--output ./-` remains an ordinary file named `-`
+  The sentinel is classified before path normalization
 - A supported stdout-target command emits exactly one two-space-indented UTF-8 JSON document followed by one newline
   after orchestration reaches its terminal state. Intermediate standard, sweep, and GPU checkpoint requests are lazy
   no-ops and do not emit documents
 - Post-parse human output is routed to stderr while the stdout target is active. Parse, preflight, and other pre-result
   failures leave stdout empty; `--help` remains a human-facing stdout command when that mode accepts the combination
-- Every other non-empty value is a file target. Relative paths write under the current working directory, and parent
-  directories are created automatically
+- Every other non-empty value is a file target, including `./-` and flag-shaped names such as `-G`. Thus
+  `--output ./-` writes an ordinary file named `-`. Relative paths write under the current working directory, and
+  parent directories are created automatically
 - Standard and sweep file targets retain atomic intermediate checkpoints. Pattern, TLB, and core-to-core direct file
   targets each receive one final atomic write. GPU file output retains its terminal-measurement/failure checkpoints and
   post-release replacement. Sweep and GPU command boundaries do not add a redundant outer file write. Use a real file
@@ -627,8 +629,9 @@ middle, and trailing items.
 #### `--sweep <key=value1,value2>`
 
 - Runs a Cartesian parameter sweep and writes one combined JSON result
-- Requires `--output <target>`; exact `-` selects one final envelope on stdout, while every other value is a checkpointed
-  file target
+- Requires a non-empty `--output <target>`; exact `-` selects one final envelope on stdout, while every other non-empty
+  value is a checkpointed file target, including `./-` and flag-shaped names such as `-G`. An empty value is
+  missing/invalid for a sweep
 - Can be repeated to sweep multiple parameters
 - Supported keys: `buffer-size`, `cache-size`, `threads`, `latency-tlb-locality-kb`, `latency-stride-bytes`, `latency-chain-mode`, `tlb-density`, `count`, `latency-samples`
 - `tlb-density` applies only with `--analyze-tlb`
@@ -668,8 +671,10 @@ middle, and trailing items.
   `completed_runs` counts only nested core-to-core results with `status: "complete"` and
   `measurements_complete: true`. Therefore `runs` can contain more entries than `completed_runs`
 - Any partial, interrupted, or failed attempt stops further attempts; a pre-run interruption or checkpoint failure can
-  also stop execution without adding or completing another run. Top-level `conclusions_valid` is true only when
-  top-level `status` is `complete` and `completed_runs == planned_runs`
+  also stop execution without adding or completing another run. The authoritative schema-1 sweep acceptance predicate
+  is exactly top-level `status == "complete" && conclusions_valid == true`. Producers make
+  `completed_runs == planned_runs` an invariant of such an envelope. Consumers may check that equality separately as a
+  defensive consistency check, but it is not an additional completeness predicate
 
 #### `-h`, `--help`
 
@@ -1784,8 +1789,10 @@ jq -e 'select(.configuration.schema_version == 2 and
 
 # Reject incomplete sweep envelope
 jq -e 'select(.configuration.sweep_schema_version == 1 and
-              .status == "complete" and .conclusions_valid == true and
-              .completed_runs == .planned_runs)' sweep.json
+              .status == "complete" and .conclusions_valid == true)' sweep.json
+
+# Optional producer-consistency check; not part of the sweep acceptance predicate
+jq -e 'select(.completed_runs == .planned_runs)' sweep.json
 
 # Reject incomplete GPU schema 1 output and inspect validated headlines
 jq -e 'select(.mode == "gpu_bandwidth" and .schema_version == 1 and

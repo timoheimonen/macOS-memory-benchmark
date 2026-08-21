@@ -126,7 +126,8 @@ Configuration state is represented by `BenchmarkConfig` (`src/core/config/config
 ### 5.1 User-facing control fields
 
 - Main options: buffer size MB, iterations, loop count, raw output target, threads. The existing configuration fields are
-  named `output_file`, but CPU command and sweep adapters classify exact `-` before interpreting other values as paths.
+  named `output_file`, but command adapters classify exact `-` before interpreting every other non-empty value as a
+  path. An empty raw value disables JSON for direct commands and is missing/invalid for sweeps.
 - General mode/config flags: `run_benchmark`, `run_patterns`, `analyze_tlb`, `only_bandwidth`, and `only_latency`.
 - Standalone TLB state remains in `BenchmarkConfig` (`analyze_tlb`, density, seed, stride/chain settings, and common sweep
   fields) and is populated by the dedicated `--analyze-tlb` branch in `argument_parser.cpp`.
@@ -162,7 +163,8 @@ Configuration state is represented by `BenchmarkConfig` (`src/core/config/config
 - Standard/pattern/TLB output-target classification occurs only after successful parsing and help/no-mode handling.
   Core-to-core classifies its target after its dedicated combined parse/preflight and help handling; GPU does the same
   after its dedicated parser and help handling. For every direct command and supported CPU sweep, exact `-` is reserved
-  for final stdout JSON, while `./-` remains a relative file target.
+  for final stdout JSON. An empty value disables JSON for a direct command and is missing/invalid for a sweep. Every
+  other non-empty value is a file target, including `./-` and flag-shaped names such as `-G`.
 - `--latency-chain-mode` accepts string values and resolves to `LatencyChainMode` enum.
 - `--analyze-tlb` uses an early dedicated parse branch in `argument_parser.cpp`. It only allows optional `--output`, `--latency-stride-bytes`, `--latency-chain-mode`, `--tlb-density`, `--seed`, `--sweep`, and `--sweep-max-runs`. TLB sweep supports `latency-stride-bytes`, `latency-chain-mode`, and `tlb-density`; its default run guard is `16`, and `global-random` chain mode is rejected. One generated or user-provided seed drives the pure sweep planner, seeded cyclic Latin round scheduler, derived task seeds, layout-specific page-native chain permutations, and deterministic convergence bootstrap. Each task measures a verified one-node-per-page spread chain and an equal-cache-line packed control in the same round. A pilot calibrates whole-chain accesses toward the quick/standard/exhaustive target duration; rounds stop at the per-point CI-width target or profile maximum. Candidate buffers are admitted only when their predicted buffer-plus-scratch peak fits the available-memory budget. Full methodology and JSON contract: [TLB_ANALYSIS_WHITEPAPER.md](TLB_ANALYSIS_WHITEPAPER.md).
 - `--analyze-core2core` uses dedicated mode parsing (outside `argument_parser.cpp`) and only allows optional `--output`,
@@ -717,8 +719,11 @@ for exact raw `-`, to one final stdout document. This transport does not wrap or
   standard/pattern, `tlb_analysis.status: "complete"` and `tlb_analysis.conclusions_valid: true` for TLB, or
   `core_to_core_latency.status: "complete"` and `measurements_complete: true` for core-to-core. Partial, interrupted,
   and failed attempts remain as evidence without incrementing the completed count. TLB's native `status: "error"` maps
-  to a failed attempt while its schema-4 payload is retained without a fabricated nested `status_reason`. Top-level
-  `conclusions_valid` is true only when top-level status is complete and `completed_runs == planned_runs`.
+  to a failed attempt while its schema-4 payload is retained without a fabricated nested `status_reason`. The
+  authoritative schema-1 sweep acceptance predicate is exactly
+  `status == "complete" && conclusions_valid == true`. Producers maintain `completed_runs == planned_runs` for an
+  envelope satisfying that predicate; consumers may check the equality separately as a defensive consistency check,
+  but it is not an additional completeness condition.
 
 Pattern schema 3 plans 21 measurements per loop and treats numeric measured values plus intentional skips as terminal.
 Only Complete loops feed aggregate vectors, medians, statistics, and console summaries. Partial, interrupted, and failed
@@ -809,10 +814,11 @@ In addition to standard fields (buffer size, iterations, loop count, thread coun
 
 ### 18.6 Command-output transport boundary
 
-The cold-path `JsonOutputSession` classifies the raw output value before path handling. An empty value is disabled,
-exactly `-` selects stdout, and every other value is a file target; consequently `./-` remains a file. CPU adapters can
-resolve relative file targets against the current working directory, while modes whose schemas retain the original
-spelling can preserve the raw path. The shared atomic file writer remains sentinel-agnostic.
+The cold-path `JsonOutputSession` classifies the raw output value before path handling. Exact `-` selects final stdout
+JSON. An empty value disables JSON for a direct command and is missing/invalid for a sweep. Every other non-empty value
+is a file target, including `./-` and flag-shaped names such as `-G`. CPU adapters can resolve relative file targets
+against the current working directory, while modes whose schemas retain the original spelling can preserve the raw
+path. The shared atomic file writer remains sentinel-agnostic.
 
 For a stdout target, the single-owner session retains the original `std::cout` buffer and routes ordinary command output
 to `std::cerr`. Final JSON uses a separate stream backed by the retained buffer, so benchmark formatting state cannot
@@ -836,7 +842,7 @@ including help and pre-result-failure exceptions, is defined in [API.md](API.md)
 
 - Relative file `--output` paths are resolved against current working directory by CPU-mode adapters.
 - GPU preserves the raw output spelling in `configuration.output_file` and captured `argv`. Exact `-` therefore remains
-  `"-"` in a stdout payload, while `./-` is a real file target.
+  `"-"` in a stdout payload, while `./-`, `-G`, and every other non-empty non-sentinel value are real file targets.
 
 ## 19. Error-Handling Model
 

@@ -492,8 +492,9 @@ TEST(ExecutableCliIntegrationTest,
                               Messages::msg_running_gpu_bandwidth()),
             1u)
       << result.stderr_output;
-  EXPECT_EQ(result.output.find(Messages::msg_results_saved_to("-")),
-            std::string::npos)
+  EXPECT_EQ(count_occurrences(result.output,
+                              Messages::msg_results_saved_to("")),
+            0u)
       << result.output;
   expect_no_dash_transport_artifacts(result);
 
@@ -752,8 +753,9 @@ TEST(ExecutableCliIntegrationTest,
                 Messages::msg_running_core_to_core_analysis()),
             std::string::npos)
       << result.stderr_output;
-  EXPECT_EQ(result.stderr_output.find(Messages::msg_results_saved_to("-")),
-            std::string::npos);
+  EXPECT_EQ(count_occurrences(result.output,
+                              Messages::msg_results_saved_to("")),
+            0u);
   expect_no_dash_transport_artifacts(result);
 }
 
@@ -776,6 +778,12 @@ TEST(ExecutableCliIntegrationTest, CoreToCoreSweepWritesCompletionMetadataIntegr
   EXPECT_TRUE(json["conclusions_valid"]);
   ASSERT_EQ(json["runs"].size(), 3u);
   EXPECT_EQ(json["runs"][0]["result"]["configuration"]["schema_version"], 2);
+  EXPECT_EQ(count_occurrences(
+                result.output,
+                Messages::msg_results_saved_to(output.path())),
+            1u)
+      << result.output;
+  EXPECT_EQ(access((output.path() + ".tmp").c_str(), F_OK), -1);
 }
 
 TEST(ExecutableCliIntegrationTest,
@@ -823,8 +831,9 @@ TEST(ExecutableCliIntegrationTest,
                 Messages::msg_running_core_to_core_analysis()),
             std::string::npos)
       << result.stderr_output;
-  EXPECT_EQ(result.stderr_output.find(Messages::msg_results_saved_to("-")),
-            std::string::npos);
+  EXPECT_EQ(count_occurrences(result.output,
+                              Messages::msg_results_saved_to("")),
+            0u);
   expect_no_dash_transport_artifacts(result);
 }
 
@@ -889,8 +898,9 @@ TEST(ExecutableCliIntegrationTest,
   EXPECT_NE(result.stderr_output.find(Messages::msg_running_tlb_analysis()),
             std::string::npos)
       << result.stderr_output;
-  EXPECT_EQ(result.stderr_output.find(Messages::msg_results_saved_to("-")),
-            std::string::npos);
+  EXPECT_EQ(count_occurrences(result.output,
+                              Messages::msg_results_saved_to("")),
+            0u);
   expect_no_dash_transport_artifacts(result);
 }
 
@@ -944,8 +954,9 @@ TEST(ExecutableCliIntegrationTest,
   EXPECT_NE(result.stderr_output.find(Messages::msg_running_benchmarks()),
             std::string::npos)
       << result.stderr_output;
-  EXPECT_EQ(result.stderr_output.find(Messages::msg_results_saved_to("-")),
-            std::string::npos);
+  EXPECT_EQ(count_occurrences(result.output,
+                              Messages::msg_results_saved_to("")),
+            0u);
   expect_no_dash_transport_artifacts(result);
 }
 
@@ -977,6 +988,35 @@ TEST(ExecutableCliIntegrationTest,
   EXPECT_FALSE(nlohmann::json::accept(result.stdout_output));
 }
 
+TEST(ExecutableCliIntegrationTest,
+     FlagShapedOutputValueRemainsStandardFileTargetIntegration) {
+  const CliResult result = run_memory_benchmark({
+      "--benchmark", "--only-bandwidth", "--buffer-size", "1",
+      "--iterations", "1", "--count", "1", "--threads", "1",
+      "--output", "-G"});
+
+  expect_process_completed(result);
+  ASSERT_EQ(result.exit_code, EXIT_SUCCESS) << result.output;
+  ASSERT_NE(result.directory, nullptr);
+  const std::filesystem::path output_path = result.directory->path() / "-G";
+  ASSERT_TRUE(std::filesystem::is_regular_file(output_path));
+  EXPECT_FALSE(
+      std::filesystem::exists(result.directory->path() / "-G.tmp"));
+
+  const nlohmann::json json =
+      nlohmann::json::parse(read_file(output_path.string()));
+  EXPECT_EQ(json["configuration"]["mode"], "benchmark");
+  EXPECT_EQ(json["configuration"]["benchmark_schema_version"], 2);
+  EXPECT_EQ(json["status"], "complete");
+  EXPECT_TRUE(json["results_complete"].get<bool>());
+  EXPECT_EQ(result.output.find("mutually exclusive"), std::string::npos)
+      << result.output;
+  EXPECT_EQ(count_occurrences(result.output,
+                              Messages::msg_results_saved_to("")),
+            1u)
+      << result.output;
+}
+
 TEST(ExecutableCliIntegrationTest, StandardSweepWritesCompletionMetadataIntegration) {
   const TemporaryJsonFile output("standard_sweep_status");
 
@@ -993,6 +1033,12 @@ TEST(ExecutableCliIntegrationTest, StandardSweepWritesCompletionMetadataIntegrat
   EXPECT_EQ(json["planned_runs"], 3u);
   EXPECT_EQ(json["completed_runs"], 3u);
   EXPECT_TRUE(json["conclusions_valid"].get<bool>());
+  EXPECT_EQ(count_occurrences(
+                result.output,
+                Messages::msg_results_saved_to(output.path())),
+            1u)
+      << result.output;
+  EXPECT_EQ(access((output.path() + ".tmp").c_str(), F_OK), -1);
 }
 
 TEST(ExecutableCliIntegrationTest,
@@ -1038,8 +1084,9 @@ TEST(ExecutableCliIntegrationTest,
   EXPECT_NE(result.stderr_output.find(Messages::msg_sweep_run_progress(1, 2)),
             std::string::npos)
       << result.stderr_output;
-  EXPECT_EQ(result.stderr_output.find(Messages::msg_results_saved_to("-")),
-            std::string::npos);
+  EXPECT_EQ(count_occurrences(result.output,
+                              Messages::msg_results_saved_to("")),
+            0u);
   expect_no_dash_transport_artifacts(result);
 }
 
@@ -1084,6 +1131,47 @@ TEST(ExecutableCliIntegrationTest, PatternSweepPrintsOneBannerAcrossNestedLoopsI
     EXPECT_EQ(run["result"]["planned_loops"], 2u);
     EXPECT_EQ(run["result"]["completed_loops"], 2u);
   }
+  EXPECT_EQ(count_occurrences(
+                result.output,
+                Messages::msg_results_saved_to(output.path())),
+            1u)
+      << result.output;
+  EXPECT_EQ(access((output.path() + ".tmp").c_str(), F_OK), -1);
+}
+
+TEST(ExecutableCliIntegrationTest,
+     PatternSweepWritesSingleTerminalJsonToStdoutIntegration) {
+  const CliResult result = run_memory_benchmark({
+      "--patterns", "--iterations", "1", "--count", "1", "--threads",
+      "1", "--seed", "42", "--sweep", "buffer-size=1,2",
+      "--sweep-max-runs", "2", "--output", "-"});
+
+  expect_process_completed(result);
+  ASSERT_EQ(result.exit_code, EXIT_SUCCESS) << result.stderr_output;
+  const nlohmann::json json = parse_single_stdout_json(result);
+  EXPECT_EQ(json["configuration"]["mode"],
+            Constants::SWEEP_JSON_MODE_NAME);
+  EXPECT_EQ(json["configuration"]["base_mode"],
+            Constants::PATTERNS_JSON_MODE_NAME);
+  EXPECT_EQ(json["configuration"]["sweep_schema_version"], 1);
+  EXPECT_EQ(json["status"], "complete");
+  EXPECT_EQ(json["planned_runs"], 2u);
+  EXPECT_EQ(json["attempted_runs"], 2u);
+  EXPECT_EQ(json["completed_runs"], 2u);
+  EXPECT_TRUE(json["conclusions_valid"].get<bool>());
+  ASSERT_EQ(json["runs"].size(), 2u);
+  for (const nlohmann::json& run : json["runs"]) {
+    EXPECT_EQ(run["status"], "complete");
+    EXPECT_EQ(run["result"]["configuration"]["pattern_schema_version"],
+              3);
+    EXPECT_EQ(run["result"]["status"], "complete");
+    EXPECT_TRUE(run["result"]["results_complete"].get<bool>());
+  }
+
+  EXPECT_EQ(count_occurrences(result.output,
+                              Messages::msg_results_saved_to("")),
+            0u);
+  expect_no_dash_transport_artifacts(result);
 }
 
 TEST(ExecutableCliIntegrationTest, PatternModeRunsPatternOrchestrationIntegration) {
@@ -1129,8 +1217,9 @@ TEST(ExecutableCliIntegrationTest,
       result.stderr_output.find(Messages::msg_running_pattern_benchmarks()),
       std::string::npos)
       << result.stderr_output;
-  EXPECT_EQ(result.stderr_output.find(Messages::msg_results_saved_to("-")),
-            std::string::npos);
+  EXPECT_EQ(count_occurrences(result.output,
+                              Messages::msg_results_saved_to("")),
+            0u);
   expect_no_dash_transport_artifacts(result);
 }
 

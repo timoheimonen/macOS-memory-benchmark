@@ -214,6 +214,7 @@ TEST(MessagesErrorTest, GpuMessagesHaveExactMethodologyOutput) {
       "  -o, --output <target> JSON output target; exact - writes one final schema 1 document\n"
       "                        to stdout and routes human output to stderr; exact ./- and\n"
       "                        every other non-empty target are files with atomic checkpoints.\n"
+      "                        An empty value disables JSON for this direct command.\n"
       "  -h, --help            Show this GPU-mode help and exit\n";
   const std::vector<MessageCase> cases = {
       {"mode isolation", Messages::error_gpu_bandwidth_must_be_used_alone(),
@@ -637,7 +638,13 @@ TEST(MessagesFormattingTest, UsageOptions) {
   EXPECT_NE(msg.find("one final"), std::string::npos);
   EXPECT_NE(msg.find("every direct mode and CPU sweep"), std::string::npos);
   EXPECT_NE(msg.find("routes human output to stderr"), std::string::npos);
-  EXPECT_NE(msg.find("./- and all other values are files"), std::string::npos);
+  EXPECT_NE(msg.find("an empty value disables JSON for direct commands"),
+            std::string::npos);
+  EXPECT_NE(msg.find("invalid for sweeps"), std::string::npos);
+  EXPECT_NE(msg.find("Every other non-empty value is a file"),
+            std::string::npos);
+  EXPECT_NE(msg.find("including ./- and names such as -G"),
+            std::string::npos);
   EXPECT_NE(msg.find("Standard and GPU files retain"), std::string::npos);
   EXPECT_NE(msg.find("sweep files checkpoint attempts"), std::string::npos);
   EXPECT_NE(msg.find("Requires --output <target>"), std::string::npos);

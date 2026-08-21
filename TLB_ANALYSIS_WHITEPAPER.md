@@ -94,9 +94,10 @@ Allowed `--analyze-tlb` sweep keys:
 - `latency-chain-mode`
 - `tlb-density`
 
-Sweep mode requires `--output <target>`. Exact `-` emits one final envelope on stdout; every other value selects a real
-file. `--sweep-max-runs <count>` limits the number of generated combinations. Its default is `16` for `--analyze-tlb`
-and `256` for other modes; an explicit value overrides the mode default.
+Sweep mode requires a non-empty `--output <target>`; an empty value is missing/invalid. Exact `-` emits one final
+envelope on stdout. Every other non-empty value selects a real file, including `./-` and flag-shaped names such as
+`-G`. `--sweep-max-runs <count>` limits the number of generated combinations. Its default is `16` for
+`--analyze-tlb` and `256` for other modes; an explicit value overrides the mode default.
 
 Each sweep parameter key may appear only once. A combined real-file JSON result is atomically checkpointed after each
 attempted run. An empty run plan or a stop observed before a run also checkpoints a terminal envelope without adding a
@@ -434,9 +435,10 @@ Machine consumers must require `tlb_analysis.status == "complete"` and
 `tlb_analysis.conclusions_valid == true`; exit status alone is not a completeness signal.
 
 For a direct command, exact `--output -` reserves stdout for one final schema-4 payload and routes the runtime report to
-stderr. `--output ./-` remains an ordinary file target. Parse/preflight and early setup, memory-budget, or allocation
-failures can occur before an analysis payload exists and therefore leave stdout empty. After analysis-state
-initialization, interruption retains a partial payload and a measurement error retains an `error` payload.
+stderr. An empty value disables JSON. Every other non-empty value is a file target, including `./-` and flag-shaped
+names such as `-G`. Parse/preflight and early setup, memory-budget, or allocation failures can occur before an analysis
+payload exists and therefore leave stdout empty. After analysis-state initialization, interruption retains a partial
+payload and a measurement error retains an `error` payload.
 
 `validation_required` describes whether candidate-specific validation points were planned, not whether the methodology
 generally requires independent validation. An interruption during the base pass can leave this field `false` with
@@ -509,7 +511,10 @@ terminal envelope to stdout after orchestration rather than a checkpoint stream.
 `tlb_analysis.status` is `complete` and nested `tlb_analysis.conclusions_valid` is `true`. Partial, interrupted, and
 failed attempts stay in `runs` without validating the sweep conclusions. The TLB schema's native `status: "error"`
 maps to a failed attempt while the schema-4 result remains available; the envelope does not fabricate a nested
-`tlb_analysis.status_reason`.
+`tlb_analysis.status_reason`. The authoritative schema-1 sweep acceptance predicate is exactly
+`status == "complete" && conclusions_valid == true`. Producers maintain `completed_runs == planned_runs` for an
+envelope satisfying that predicate; consumers may check the equality separately as a defensive consistency check, but
+it is not an additional completeness condition.
 
 ## 10. Current Schema Worked Example (Deterministic Exporter Fixture)
 

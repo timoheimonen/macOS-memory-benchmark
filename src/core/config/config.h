@@ -208,9 +208,12 @@ struct BenchmarkConfig {
   bool user_specified_benchmark_seed = false;  ///< Whether user explicitly set --seed for --benchmark
   
   /**
-   * Raw JSON output target: empty disables JSON, exact `-` selects stdout, and
-   * every other value is a file path resolved against the current directory,
-   * including explicit `./-`.
+   * Raw command-level JSON output target. Empty disables JSON for a direct
+   * command, exact `-` selects one final stdout document, and every other
+   * non-empty value is a file target, including `./-` and flag-shaped names.
+   * Sweep validation separately rejects an empty target. Command code must
+   * classify this raw value before passing only real file targets to legacy
+   * file-only adapters.
    */
   std::string output_file;
 

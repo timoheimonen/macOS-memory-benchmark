@@ -107,12 +107,23 @@ nlohmann::ordered_json build_tlb_analysis_json(
     const TlbAnalysisJsonContext& context);
 
 /**
- * @brief Save standalone TLB analysis results to JSON output file.
- * @param context TLB analysis result bundle for serialization.
- * @return EXIT_SUCCESS on success, EXIT_FAILURE on error.
+ * @brief Build and atomically replace a file with standalone TLB schema-4 JSON.
+ *
+ * This is a legacy file-only adapter. An empty output target is a successful
+ * no-op. Command code that accepts stdout must classify the raw target and pass
+ * the in-memory payload through `JsonOutputSession` instead.
+ *
+ * @param context Immutable TLB configuration and result bundle. Its
+ *        non-empty `config.output_file` must name a real file target.
+ * @return `EXIT_SUCCESS` for a disabled target or successful atomic replace;
+ *         `EXIT_FAILURE` for a contained file-output failure.
  * @throws std::exception If payload construction or output-path resolution
  *         fails before the atomic writer's return-code boundary. Command
  *         orchestrators must contain these exceptions.
+ * @pre A non-empty `context.config.output_file` is not the exact stdout
+ *      sentinel `-`.
+ * @note The function retains no references and is synchronous. Callers must
+ *       not mutate the context or target path concurrently.
  */
 int save_tlb_analysis_to_json(const TlbAnalysisJsonContext& context);
 

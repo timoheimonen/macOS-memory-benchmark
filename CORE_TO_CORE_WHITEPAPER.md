@@ -285,14 +285,15 @@ The aggregate contribution is all-or-nothing per scenario/loop record: an invali
 makes the record non-measured, leaves its sample range count at zero, and contributes neither headline nor sample
 values.
 
-When `--output` is set, direct execution writes the in-memory audit payload even after a measurement failure or graceful
-interruption, provided a payload was built. Consumers should use completion fields rather than treating output presence
-or process success alone as proof of a complete comparison. Parse/preflight or output-target initialization failures
-occur before the result state exists and leave a requested stdout target empty.
+When a non-empty `--output` target is set, direct execution writes the in-memory audit payload even after a measurement
+failure or graceful interruption, provided a payload was built. An empty direct value disables JSON. Consumers should
+use completion fields rather than treating output presence or process success alone as proof of a complete comparison.
+Parse/preflight or output-target initialization failures occur before the result state exists and leave a requested
+stdout target empty.
 
 An ordinary direct file target receives one atomic terminal write. Exact target `--output -` emits the same schema-2
-object once to stdout and routes the runtime banner, progress, report, and diagnostics to stderr; `--output ./-` remains
-an ordinary file target.
+object once to stdout and routes the runtime banner, progress, report, and diagnostics to stderr. Every other non-empty
+value is a file target, including `./-` and flag-shaped names such as `-G`.
 
 ---
 
@@ -430,7 +431,7 @@ memory_benchmark --analyze-core2core [options]
 Options:
   -r, --count <n>             Measured loop count (core-to-core default: 3)
   -n, --latency-samples <n>   Separate sample windows per scenario/loop (default: 1000)
-  -o, --output <target>       JSON file or exact - for final stdout JSON
+  -o, --output <target>       Exact - for final stdout JSON; empty disables direct JSON
   -S, --sweep <key=a,b>       Sweep count or latency-samples
   -X, --sweep-max-runs <n>    Generated-run guard (default: 256)
   -h, --help                  Print help
@@ -456,8 +457,9 @@ memory_benchmark -C --count 3 --sweep latency-samples=500,1000,2000 --output cor
 memory_benchmark -C --sweep latency-samples=500,1000 --output - >core2core_sweep.json 2>core2core_sweep.log
 ```
 
-Core-to-core sweep mode requires `--output <target>`. Exact `-` emits one final envelope on stdout and routes the human
-transcript to stderr; `./-` remains a file.
+Core-to-core sweep mode requires a non-empty `--output <target>`; an empty value is missing/invalid. Exact `-` emits one
+final envelope on stdout and routes the human transcript to stderr. Every other non-empty value is a file target,
+including `./-` and flag-shaped names such as `-G`.
 
 A real-file core-to-core sweep is written through the atomic temporary-file-and-rename path after every attempted run,
 without an additional outer final write or checkpoint retry. An empty run plan or a stop observed before a run also
@@ -468,8 +470,10 @@ envelope. The envelope records `configuration.sweep_schema_version: 1`, `status`
 `completed_runs`, and `conclusions_valid`. Every run entry has its own `status` and `status_reason`. Only entries whose
 nested `core_to_core_latency.status` is `complete` and `measurements_complete` is `true` increment `completed_runs`;
 partial, interrupted, and failed entries remain auditable but do not. An interruption or later failure therefore does
-not erase previously checkpointed runs. `conclusions_valid` is true only when top-level status is `complete` and
-`completed_runs == planned_runs`.
+not erase previously checkpointed runs. The authoritative schema-1 sweep acceptance predicate is exactly
+`status == "complete" && conclusions_valid == true`. Producers maintain `completed_runs == planned_runs` for an
+envelope satisfying that predicate; consumers may check the equality separately as a defensive consistency check, but
+it is not an additional completeness condition.
 
 ---
 

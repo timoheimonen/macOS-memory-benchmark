@@ -92,6 +92,7 @@ std::string gpu_usage_options(const std::string& prog_name) {
         << "  -o, --output <target> JSON output target; exact - writes one final schema 1 document\n"
         << "                        to stdout and routes human output to stderr; exact ./- and\n"
         << "                        every other non-empty target are files with atomic checkpoints.\n"
+        << "                        An empty value disables JSON for this direct command.\n"
         << "  -h, --help            Show this GPU-mode help and exit\n";
   return usage.str();
 }

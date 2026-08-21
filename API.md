@@ -48,9 +48,10 @@ memory_benchmark --gpu-bandwidth --buffer-size 512 --count 3 --seed 42 --output 
 The sentinel is classified from the raw option value before path normalization:
 
 - `--output -` selects stdout JSON;
-- `--output ./-` writes an ordinary file named `-` in the current directory;
-- every other non-empty value is a file target;
-- an omitted output option disables JSON output.
+- an empty value disables JSON for a direct command, as does omitting `--output`;
+- an empty value in a sweep is a missing/invalid required output target;
+- every other non-empty value is a file target, including `./-` and flag-shaped names such as `-G`; therefore
+  `--output ./-` writes an ordinary file named `-` in the current directory.
 
 After successful parsing and mode selection, a supported machine-output command follows these stream rules:
 
@@ -116,8 +117,13 @@ contract version 1 first appears in software version `0.62.0`.
 | TLB | `configuration.schema_version == 4` | `tlb_analysis.status == "complete" && tlb_analysis.conclusions_valid == true` |
 | Core-to-core | `configuration.schema_version == 2` | `core_to_core_latency.status == "complete" && core_to_core_latency.measurements_complete == true` |
 | GPU | `schema_version == 1` | `status == "complete" && results_complete == true && conclusions_valid == true` |
-| General CPU sweep | `configuration.sweep_schema_version == 1` | `status == "complete" && conclusions_valid == true && completed_runs == planned_runs` |
-| Core-to-core sweep | `configuration.sweep_schema_version == 1` | `status == "complete" && conclusions_valid == true && completed_runs == planned_runs` |
+| General CPU sweep | `configuration.sweep_schema_version == 1` | `status == "complete" && conclusions_valid == true` |
+| Core-to-core sweep | `configuration.sweep_schema_version == 1` | `status == "complete" && conclusions_valid == true` |
+
+For either schema-1 sweep envelope, the table contains the authoritative completeness predicate. Producers maintain
+`completed_runs == planned_runs` whenever they emit a complete envelope with valid conclusions. A consumer may check
+that equality separately as a defensive producer-consistency check, but it is not an additional schema-1 acceptance
+predicate.
 
 Each `runs[].result` in a sweep retains its nested mode's own schema-version field and completeness contract. A non-zero
 nested execution that initialized a result remains in the envelope: its attempt is failed, but the payload is not
@@ -134,21 +140,26 @@ non-null value and its applicable validation/quality fields.
 
 Graceful interruption or runtime failure after a representable result state has been initialized emits the available
 partial, interrupted, error, or failed JSON snapshot. The execution status and payload are independent: a non-zero status
-must not cause a caller to discard evidence without parsing it, and exit status zero does not prove that conclusions are
-complete.
+must not cause a caller to discard evidence without parsing it. Exit status zero is used for human help, complete
+execution, and established graceful-interruption paths; it alone does not prove that JSON conclusions are complete.
 
 ## Consumer acceptance procedure
 
 A caller accepts a benchmark conclusion only after all of the following checks succeed:
 
 1. Launch the executable with an argv array; do not construct an unquoted shell command from external input.
-2. Capture stdout and stderr separately and wait for the process and both streams to finish.
+2. Capture stdout and stderr separately by draining both simultaneously while the child runs, or use a
+   platform/language `communicate`-equivalent that drains both pipes while the child runs; then wait for the process and
+   both streams to finish.
 3. Reject an empty stdout result with the process status and stderr diagnostic.
 4. Parse stdout as exactly one JSON document with no trailing non-whitespace data.
 5. Check the supported mode and schema-version field.
 6. Require the expected successful process status before accepting conclusions.
 7. Apply the mode-specific command-completeness predicate above.
 8. Apply the selected metric's status, non-null, and quality predicates.
+
+Do not wait for process exit before reading sequential pipe captures. If either stdout or stderr fills its pipe buffer,
+the child can block before exit and the parent's wait can deadlock.
 
 Language-neutral pseudocode:
 
@@ -187,8 +198,10 @@ jq -e '.configuration.schema_version == 2 and
        .core_to_core_latency.measurements_complete == true' core2core.json
 
 jq -e '.configuration.sweep_schema_version == 1 and
-       .status == "complete" and .conclusions_valid == true and
-       .completed_runs == .planned_runs' sweep.json
+       .status == "complete" and .conclusions_valid == true' sweep.json
+
+# Optional defensive producer-consistency check; not part of sweep acceptance.
+jq -e '.completed_runs == .planned_runs' sweep.json
 
 jq -e '.schema_version == 1 and .mode == "gpu_bandwidth" and
        .status == "complete" and .results_complete == true and
@@ -209,7 +222,8 @@ jq -e '.schema_version == 1 and .mode == "gpu_bandwidth" and
 - A transport change alone does not change the measurement schema.
 - Schema-location normalization belongs in client code; this API does not move existing version fields.
 - GPU retains its exact captured `argv` and raw `configuration.output_file`. With stdout transport the latter is the
-  original target token `"-"`, not a filesystem path; `./-` and other non-sentinel values retain their file meaning.
+  original target token `"-"`, not a filesystem path; `./-`, `-G`, and every other non-empty non-sentinel value retain
+  their file meaning.
 
 ## Benchmark process policy
 

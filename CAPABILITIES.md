@@ -83,11 +83,12 @@ Built-in sweeps execute supported parameter lists without shell orchestration. S
 JSON is designed as auditable evidence, not merely a list of numbers. It preserves the resolved configuration, work and seed identity, measurements, statistics, status, and enough completion information to distinguish complete, partial, interrupted, and unavailable results. Missing measurements are nullable rather than represented by numeric zero.
 
 Every direct mode and the CPU modes' supported sweeps reserve the exact target `--output -` for machine-readable output:
-stdout contains one final JSON document and the post-parse human transcript is routed to stderr. `--output ./-` remains
-an ordinary file target. File output is atomic; standard commands, sweeps, and GPU retain their mode-specific
-intermediate checkpoints, while stdout remains final-only. GPU stdout executes its logical checkpoint transitions and
-stop observations without intermediate serialization. The current support matrix and process acceptance procedure are
-in the [Machine-Readable CLI API](API.md).
+stdout contains one final JSON document and the post-parse human transcript is routed to stderr. An empty output value
+disables JSON for a direct command but is missing/invalid for a sweep. Every other non-empty value is a file target,
+including `./-` and flag-shaped names such as `-G`. File output is atomic; standard commands, sweeps, and GPU retain
+their mode-specific intermediate checkpoints, while stdout remains final-only. GPU stdout executes its logical
+checkpoint transitions and stop observations without intermediate serialization. The current support matrix and
+process acceptance procedure are in the [Machine-Readable CLI API](API.md).
 
 Sweep output retains completed evidence even when a later run stops. Consumers should check the mode-specific status and completeness indicators before using aggregate conclusions. Exact schemas, checkpoint behavior, and inspection examples are in the [User Manual](MANUAL.md#json-output-format) and [Technical Specification](TECHNICAL_SPECIFICATION.md#18-json-output-contract).
 

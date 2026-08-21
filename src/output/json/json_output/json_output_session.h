@@ -53,12 +53,13 @@ struct JsonOutputTarget {
  * Classify a raw output option before performing any path resolution.
  *
  * An empty value disables JSON output and exactly `-` selects stdout. Every
- * other value is a file target, including `./-` and names containing dashes.
+ * other non-empty value is a file target, including `./-` and names containing
+ * dashes.
  * ResolveAgainstCurrentDirectory makes relative file targets absolute without
  * otherwise normalizing their spelling; PreserveRaw retains the path spelling.
  *
  * @param raw_value Raw value supplied to `--output`.
- * @param path_policy File-path treatment for non-sentinel values.
+ * @param path_policy File-path treatment for classified file targets.
  * @return Classified target containing both the raw value and effective path.
  * @throws std::filesystem::filesystem_error if current-directory resolution
  *         fails. Command boundaries must convert this pre-execution failure to

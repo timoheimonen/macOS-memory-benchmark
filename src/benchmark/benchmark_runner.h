@@ -40,6 +40,7 @@ struct BenchmarkConfig;
 struct BenchmarkExecutionState;
 struct HighResTimer;
 class JsonOutputSession;
+enum class JsonOutputKind;
 
 /**
  * @struct BenchmarkResults
@@ -132,12 +133,15 @@ struct BenchmarkStatistics {
  *
  * Production callers leave this null. Tests can fail timer/checkpoint creation,
  * inject a kernel-free loop result, request a stop between loops, or throw from
- * a dependency callback to verify the coordinator exception boundary.
+ * a dependency callback to verify the coordinator exception boundary. They can
+ * also observe whether a session-backed checkpoint actually requests lazy JSON
+ * payload construction.
  */
 struct BenchmarkRunnerTestHooks {
   bool force_timer_creation_failure = false;
   std::function<bool()> stop_requested;
   std::function<double()> elapsed_seconds;
+  std::function<void()> checkpoint_payload_build;
   std::function<BenchmarkResults(BenchmarkConfig&, int, HighResTimer&,
                                  BenchmarkExecutionState*)>
       execute_loop;
@@ -147,20 +151,48 @@ struct BenchmarkRunnerTestHooks {
 };
 
 /**
- * @brief Run all benchmark loops and collect statistics
- * @param config Reference to benchmark configuration
- * @param[out] stats Reference to BenchmarkStatistics structure to store aggregated results
- * @param test_hooks Optional deterministic dependency seams; null in production
- * @param output_session Optional command output session used by direct standard runs.
- *        When null, the legacy file checkpoint path remains active.
- * @return EXIT_SUCCESS on success, EXIT_FAILURE on error
+ * @brief Decide whether the command boundary may write standard final JSON.
  *
- * Executes multiple benchmark loops as specified by config.loop_count and
- * aggregates all results into the BenchmarkStatistics structure for statistical analysis.
- * In phased execution mode, per-test buffers are allocated inside loop execution
- * rather than passed through this API.
- * Exceptions from execution and injected dependencies are converted to failed
- * status and do not propagate across this coordinator boundary.
+ * Stdout owns one terminal snapshot even when the runner returns failure and
+ * retained evidence is available. A file runner failure may represent a failed
+ * checkpoint and therefore forbids an outer retry. Disabled output never
+ * writes.
+ *
+ * @param output_kind Classified command output transport.
+ * @param runner_status Return code from `run_all_benchmarks`.
+ * @return `true` only when the command boundary owns a final write.
+ */
+bool should_write_standard_final_json(JsonOutputKind output_kind,
+                                      int runner_status) noexcept;
+
+/**
+ * @brief Run configured standard benchmark loops and retain their evidence.
+ *
+ * Reinitializes @p stats, executes up to `config.loop_count` loops, aggregates
+ * completed measurements, and offers each result transition to the configured
+ * checkpoint transport. A stop observed between loops is a graceful
+ * interruption only when its logical checkpoint succeeds. Checkpoint failure
+ * takes precedence, returns failure, and leaves all earlier loop evidence and
+ * counters available in @p stats.
+ *
+ * @param[in,out] config Benchmark configuration used by loop execution and JSON
+ *        construction. Per-phase buffers are owned below this API.
+ * @param[out] stats Reinitialized statistics and retained per-loop evidence.
+ * @param[in] test_hooks Optional synchronous deterministic dependency seams;
+ *        null in production and never retained beyond the call.
+ * @param[in] output_session Optional command-owned JSON transport. File targets
+ *        persist checkpoints through the shared atomic writer; stdout targets
+ *        perform lazy successful checkpoint no-ops. The session is not retained.
+ * @return `EXIT_SUCCESS` after complete execution or graceful interruption whose
+ *         checkpoint succeeded. Inspect `stats.status` for completeness.
+ * @return `EXIT_FAILURE` after timer, loop, coordinator, or checkpoint failure;
+ *         representable evidence remains in @p stats.
+ * @note Exceptions from execution and injected dependencies are converted to a
+ *       failed status and do not propagate across this coordinator boundary.
+ * @warning When @p output_session is null, a non-empty `config.output_file` is
+ *          handled by the legacy file-only checkpoint adapter and must not be
+ *          the exact stdout sentinel `-`. Command code must classify targets and
+ *          pass a session.
  */
 int run_all_benchmarks(BenchmarkConfig& config, BenchmarkStatistics& stats,
                        const BenchmarkRunnerTestHooks* test_hooks = nullptr,

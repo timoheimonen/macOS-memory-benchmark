@@ -54,9 +54,10 @@ struct CoreToCoreLatencyConfig {
   int loop_count = Constants::CORE_TO_CORE_DEFAULT_LOOP_COUNT;
   int latency_sample_count = Constants::CORE_TO_CORE_DEFAULT_LATENCY_SAMPLE_COUNT;
   /**
-   * Raw JSON output target: empty disables JSON, exact `-` selects stdout, and
-   * every other value is a file path resolved against the current directory.
-   * Explicit `./-` therefore remains a file target.
+   * Raw command-level JSON output target. Empty disables JSON for a direct
+   * command, exact `-` selects stdout, and every other non-empty value is a
+   * file target resolved against the current directory. Sweep validation
+   * rejects an empty target; explicit `./-` and flag-shaped names remain files.
    */
   std::string output_file;
   bool help_requested = false;

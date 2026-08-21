@@ -133,8 +133,13 @@ int build_and_write_final_json(JsonOutputSession& session,
  * @param argc Number of command-line arguments
  * @param argv Array of command-line argument strings
  *
- * @return EXIT_SUCCESS (0) on successful completion
- * @return EXIT_FAILURE (1) on error (configuration, allocation, or benchmark failure)
+ * @return `EXIT_SUCCESS` for help, complete execution, and the established
+ *         graceful-interruption paths. Success alone does not prove that a
+ *         JSON result is complete; callers must apply the mode-specific
+ *         predicate documented in `API.md`.
+ * @return `EXIT_FAILURE` on configuration, allocation, benchmark, or output
+ *         failure. An initialized mode may still emit inspectable terminal
+ *         evidence before returning failure.
  *
  * @note Standard, pattern, TLB, sweep, and GPU entry paths make a best-effort
  *       QOS_CLASS_USER_INTERACTIVE request for the command thread. Core-to-core
@@ -375,10 +380,8 @@ int main(int argc, char *argv[]) {
       // A failed file checkpoint is terminal and must not be retried here.
       // Stdout checkpoints are successful no-ops, so a failed run can still
       // emit its representable terminal evidence exactly once.
-      const bool write_standard_final =
-          output_session->kind() == JsonOutputKind::Stdout ||
-          (output_session->kind() == JsonOutputKind::File &&
-           standard_run_status == EXIT_SUCCESS);
+      const bool write_standard_final = should_write_standard_final_json(
+          output_session->kind(), standard_run_status);
       if (write_standard_final) {
         double total_elapsed_time_sec = total_execution_timer.stop();
         if (build_and_write_final_json(

@@ -84,8 +84,9 @@ memory_benchmark --benchmark --only-bandwidth --count 5 --buffer-size 512 --outp
   >benchmark.json 2>benchmark.log
 ```
 
-`--output ./-` remains an ordinary file target. Use a real file when crash-resilient intermediate checkpoints are
-required; see the [Machine-Readable CLI API](API.md) support matrix and acceptance contract.
+An empty output value disables JSON for a direct command but is missing/invalid for a sweep. Every other non-empty value
+is a file target, including `./-` and flag-shaped names such as `-G`. Use a real file when crash-resilient intermediate
+checkpoints are required; see the [Machine-Readable CLI API](API.md) support matrix and acceptance contract.
 
 ## Benchmark Modes
 

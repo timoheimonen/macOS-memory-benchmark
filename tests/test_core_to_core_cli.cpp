@@ -64,6 +64,10 @@ std::string expected_invalid_value(const std::string& option,
          Messages::error_invalid_value(option, value, reason);
 }
 
+std::string first_output_line(const std::string& output) {
+  return output.substr(0, output.find('\n'));
+}
+
 }  // namespace
 
 TEST(CoreToCoreCliTest, ParsesDefaultStandaloneModeValues) {
@@ -123,6 +127,39 @@ TEST(CoreToCoreCliTest, PreservesRawStdoutSentinelAndExplicitDotDashFile) {
 
     EXPECT_EQ(parse_result, EXIT_SUCCESS);
     EXPECT_EQ(config.output_file, raw_output);
+  }
+}
+
+TEST(CoreToCoreCliTest,
+     RejectsMissingAndDuplicateOutputOptionsWithCentralizedDiagnostics) {
+  struct OutputErrorCase {
+    std::vector<std::string> arguments;
+    std::string diagnostic;
+  };
+
+  const std::vector<OutputErrorCase> cases = {
+      {{"memory_benchmark", "--analyze-core2core", "--output"},
+       Messages::error_missing_value("--output")},
+      {{"memory_benchmark", "--analyze-core2core", "--output", "first",
+        "--output", "second"},
+       Messages::error_duplicate_option("--output")},
+      {{"memory_benchmark", "--analyze-core2core", "-o", "first",
+        "--output", "second"},
+       Messages::error_duplicate_option("--output")},
+      {{"memory_benchmark", "--analyze-core2core", "--output", "first",
+        "-o", "second"},
+       Messages::error_duplicate_option("--output")},
+  };
+
+  for (const OutputErrorCase& test_case : cases) {
+    SCOPED_TRACE(::testing::PrintToString(test_case.arguments));
+    CoreToCoreLatencyConfig config;
+    const CapturedCoreCliParse parsed =
+        parse_capturing_stderr(test_case.arguments, config);
+
+    EXPECT_EQ(parsed.result, EXIT_FAILURE);
+    EXPECT_EQ(first_output_line(parsed.stderr_output),
+              Messages::error_prefix() + test_case.diagnostic);
   }
 }
 

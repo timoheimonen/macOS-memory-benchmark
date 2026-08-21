@@ -153,12 +153,29 @@ GpuMemoryBudget calculate_gpu_memory_budget(size_t buffer_size_bytes,
                                             size_t auxiliary_bytes);
 
 /**
- * @brief Run calibration and all balanced operation tasks on one backend.
+ * @brief Run calibration and all balanced operation tasks using legacy file
+ *        checkpointing.
  *
- * The runner owns completion-wins orchestration but never polls stop state
- * inside a started warmup/precondition/timed/validation task. Exceptions from
- * hooks are converted to an explicit failed run; production backends are
- * required to honor their noexcept boundary.
+ * This overload is a file-only adapter: empty `config.output_file` disables
+ * persistence, while a non-empty target must be a real file rather than the
+ * exact stdout sentinel. Command code must classify output targets and call
+ * the `JsonOutputSession` overload. The runner owns completion-wins
+ * orchestration but never polls stop state inside a started
+ * warmup/precondition/timed/validation task. Exceptions from hooks are
+ * converted to an explicit failed run; production backends are required to
+ * honor their noexcept boundary.
+ *
+ * @param config Validated GPU configuration. A non-empty `output_file` names
+ *        a real file checkpoint target.
+ * @param backend Backend instance owned by the caller for the call duration.
+ * @param result Receives initialized, partial, terminal, or failed state.
+ * @param hooks Optional deterministic seams for stop and checkpoint behavior.
+ * @return `EXIT_SUCCESS` for complete or graceful interrupted execution;
+ *         `EXIT_FAILURE` for failed or unsupported execution or persistence
+ *         failure.
+ * @pre A non-empty `config.output_file` is not the exact stdout sentinel `-`.
+ * @note Called synchronously and not thread-safe. Inputs and hook state must
+ *       not be accessed concurrently for the call duration.
  */
 int run_gpu_bandwidth_suite(const GpuBandwidthConfig& config,
                             GpuBackend& backend,
