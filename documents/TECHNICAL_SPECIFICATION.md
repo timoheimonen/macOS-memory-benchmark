@@ -2,7 +2,7 @@
 
 ## 1. Scope and Status
 
-This document specifies the current implementation in this repository (version `0.62.0`) for `memory_benchmark` on macOS Apple Silicon.
+This document specifies the current implementation in this repository (version `0.63.0`) for `memory_benchmark` on macOS Apple Silicon.
 
 It is intentionally implementation-driven and reflects real behavior in code paths under `main.cpp`, `src/core`,
 `src/benchmark`, `src/pattern_benchmark`, `src/gpu_bandwidth`, `src/output`, and `src/asm`.
@@ -577,7 +577,7 @@ reference cohort: the completed 0.61.0 automatic and fixed-work populations esta
 for their exact hardware, OS, compiler, kernel, and methodology identity. The frozen pre-remediation validation identity uses
 `gpu-linear-word-mod32-tg-reduce-v2`, the frozen 8192-threadgroup cap, canonical MSL SHA-256
 `b9a242d2b959c9c11f6f130a52afd66f111d6761be2193beec1f051baa094296`, and the exact executable identity retained
-with the local validation record. The current canonical source SHA-256 retained unchanged in 0.62.0 (introduced in
+with the local validation record. The current canonical source SHA-256 retained unchanged in 0.63.0 (introduced in
 0.61.2) is
 `21def2d75d3545dba31aa4897ea57ec2fd0e4481cd86ce21725338ab0f322ac5` after removing three unread shared-parameter
 fields; runtime Metal integration revalidates compilation and correctness, while the performance population remains
@@ -740,9 +740,9 @@ classifying the failure.
 Command completeness for current standard schema 3 requires `configuration.mode == "benchmark"`,
 `status == "complete" && results_complete == true && conclusions_valid == true`, with string
 `configuration.output_file`. Bundled standard-memory examples track this current schema-3 producer, perform local
-sanity checks (including exact top-level `version == "0.62.0"` in this release), and read the metric paths they need
-directly. They do not support released standard schema 2, unversioned historical standard JSON layouts, or any other
-explicit standard version. Pattern requires
+sanity checks (including exact top-level `version == "0.63.0"` for the current producer), and read the metric paths they
+need directly. They do not support released standard schema 2, unversioned historical standard JSON layouts, or any
+other explicit standard version. Pattern requires
 `status == "complete" && results_complete == true`. TLB requires
 `tlb_analysis.status == "complete" && tlb_analysis.conclusions_valid == true`; core-to-core requires
 `core_to_core_latency.status == "complete" && core_to_core_latency.measurements_complete == true`. Metric consumers must

@@ -1,6 +1,6 @@
 # Project Structure — macOS-memory-benchmark
 
-**Version:** 0.62.0
+**Version:** 0.63.0
 **Platform:** ARM64 / AArch64 (Apple Silicon macOS)
 **License:** GNU General Public License v3.0 or later
 
@@ -167,7 +167,7 @@ Core infrastructure for configuration, memory management, macOS system introspec
 |---|---|
 | `config.h` | `BenchmarkConfig` structure for standard, pattern, standalone TLB, and their common sweep settings; core-to-core and GPU use separate config types |
 | `constants.h` | Named constants for CPU/GPU memory limits, calibration, grid/dispatch/payload guardrails, buffer sizing, and latency access counts |
-| `version.h` | `SOFTVERSION` macro (semantic version string, currently `"0.62.0"`) |
+| `version.h` | `SOFTVERSION` macro (semantic version string, currently `"0.63.0"`) |
 | `mode_selector.h` / `.cpp` | Pure primary-mode scan and conflict detection before mode-specific parsing; routes standard, pattern, TLB, core-to-core, and GPU deterministically |
 | `argument_parser.cpp` | Parses standard, pattern, and standalone TLB options into `BenchmarkConfig`; core-to-core and GPU are pre-routed to dedicated parsers |
 | `config_validator.cpp` | Validates the parsed configuration; emits errors for out-of-range or conflicting settings |
@@ -342,6 +342,7 @@ installed. All `.cpp` files are picked up automatically by the Makefile. Tests n
 | `test_memory_utils.cpp` | `MemoryUtilsTest` | Memory helpers: pointer-chase chain construction and verification |
 | `test_memory_manager.cpp` | `MemoryManagerTest` | Injected mmap/madvise policy, failures, and exact RAII unmapping |
 | `test_numeric_utils.cpp` | `NumericUtilsTest` | Overflow-safe arithmetic, duration calibration, pilot counts, and quantization boundaries |
+| `test_llm_memory_contract.cpp` | `LlmMemoryContractTest` | Test-side Phase 0 executable specification for exact LLM payload formulas, affine append bytes, read/run checksums, descriptor ABI layout, and schema acceptance identity; it does not exercise production LLM code |
 | `test_buffer_manager.cpp` | `BufferManagerTest` | Pattern mapping policy, atomic allocation cleanup, initialized content, validation, and peak accounting |
 | `test_benchmark_executor.cpp` | `BenchmarkExecutorTest` | Injected phase/chain failures, continuous latency sampling, and hardware executor contracts |
 | `test_benchmark_runner.cpp` | `BenchmarkStatisticsCollectorTest`, `BenchmarkRunnerTest` | Status-bearing aggregation, schema-3 retained snapshots, checkpointing, interruption, and runner exception/failure seams |
@@ -406,7 +407,7 @@ Four shared helper headers support deterministic setup and output capture across
 ## 4. results/ — Benchmark result data
 
 Historical JSON, CSV, and text output from benchmark runs on specific hardware, organized by software-version
-subdirectory. The files are retained as examples and historical schema evidence; they are not current 0.62.0
+subdirectory. The files are retained as examples and historical schema evidence; they are not current 0.63.0
 methodology baselines unless explicitly identified as such. Historical standard JSON is not an input to current
 bundled standard-result consumers; separately governed TLB tooling retains its documented legacy-input policy.
 
@@ -454,7 +455,7 @@ Tracked PNG chart archive generated from benchmark result data. Several files ar
 Example shell workflows and Python/Matplotlib plotters for tracked benchmark outputs. The four standard-memory examples
 are maintained in lockstep with the current producer rather than as a compatibility library. Each of those JSON-reading
 entry points performs a small local release-version/schema-3/completion/field sanity check and then reads the current
-metric paths it needs. Version 0.62.0 therefore requires exact top-level `version: "0.62.0"`. Standard schema 2,
+metric paths it needs. Version 0.63.0 therefore requires exact top-level `version: "0.63.0"`. Standard schema 2,
 unversioned historical layouts, alternative modes, and other explicit standard versions are unsupported by those four
 examples. Separately governed mode-specific tools retain only the history policy documented in their own row below.
 

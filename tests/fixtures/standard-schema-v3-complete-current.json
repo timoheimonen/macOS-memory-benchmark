@@ -5,7 +5,7 @@
     "bandwidth_calibration_window_min_seconds": 0.1,
     "bandwidth_work_policy": "explicit-iterations",
     "benchmark_schema_version": 3,
-    "benchmark_seed": "14071352097176414032",
+    "benchmark_seed": "1212312983308305135",
     "benchmark_seed_encoding": "uint64-decimal-string",
     "benchmark_seed_source": "generated",
     "buffer_size_bytes": 1048576,
@@ -52,7 +52,7 @@
     "use_non_cacheable": false,
     "warmup_semantics": "steady-state-warm-memory"
   },
-  "execution_time_sec": 3.1613849166666665,
+  "execution_time_sec": 3.0583243333333336,
   "status": "complete",
   "status_reason": "",
   "planned_loops": 1,
@@ -68,7 +68,7 @@
       "completed_phases": 4,
       "measurements": {
         "global_random_latency": {
-          "access_count": 50991104,
+          "access_count": 50778112,
           "automatic_calibration": false,
           "benchmark_loop_index": 0,
           "buffer_size_bytes": 1048576,
@@ -79,7 +79,7 @@
           "duration_quality": "",
           "duration_within_target": false,
           "effective_threads": 1,
-          "elapsed_seconds": 0.7759679375,
+          "elapsed_seconds": 0.8154755833333334,
           "exact_payload_bytes": 0,
           "operation": "locality-comparison",
           "operation_order_position": 0,
@@ -92,20 +92,20 @@
           "reason": "",
           "requested_threads": 1,
           "sample_seeds": [
-            "15531855181169613762",
-            "9647402897991862178",
-            "1769408356191248376"
+            "7815478260737035509",
+            "17580395559297521763",
+            "6681018847831829569"
           ],
           "samples_ns": [
-            5.446678012698058,
-            5.243555980536004,
-            5.333158211283286
+            5.843224668665639,
+            5.622018794239533,
+            5.586005081612067
           ],
-          "seed": "11833851365695391541",
+          "seed": "16199771919126575464",
           "seed_encoding": "uint64-decimal-string",
           "status": "measured",
           "target": "main-memory",
-          "value": 5.333158211283286,
+          "value": 5.622018794239533,
           "work_policy": "paired-alternating-rounds",
           "worker_startup_failed": false
         },
@@ -121,7 +121,7 @@
           "duration_quality": "explicit-work-policy",
           "duration_within_target": true,
           "effective_threads": 1,
-          "elapsed_seconds": 4.583333333333333e-06,
+          "elapsed_seconds": 7.458333333333333e-06,
           "exact_payload_bytes": 262144,
           "operation": "copy",
           "operation_order_position": 2,
@@ -137,42 +137,42 @@
           "seed_encoding": "uint64-decimal-string",
           "status": "measured",
           "target": "l1",
-          "value": 57.195054545454546,
+          "value": 35.14779888268156,
           "work_policy": "explicit-iterations",
           "worker_startup_failed": false
         },
         "l1_latency": {
-          "access_count": 323015168,
+          "access_count": 154640896,
           "automatic_calibration": true,
           "benchmark_loop_index": 0,
           "buffer_size_bytes": 131072,
           "calibration_corrections": 1,
           "chain_node_count": 512,
-          "complete_chain_cycles": 630889,
+          "complete_chain_cycles": 302033,
           "created_workers": 1,
           "duration_quality": "within-target-window",
           "duration_within_target": true,
           "effective_threads": 1,
-          "elapsed_seconds": 0.25391795833333336,
+          "elapsed_seconds": 0.178804375,
           "exact_payload_bytes": 0,
           "operation": "latency",
           "operation_order_position": 0,
           "passes": 0,
           "phase_order_position": 2,
-          "pilot_elapsed_seconds": 2.5e-05,
+          "pilot_elapsed_seconds": 5.7125e-05,
           "qos_failed_workers": 0,
           "qos_outcome": "main-thread-qos-applied",
           "qos_successful_workers": 1,
           "reason": "",
           "requested_threads": 1,
           "samples_ns": [
-            0.7798550190683305
+            0.7461641970827692
           ],
-          "seed": "15831069828388974632",
+          "seed": "13289008537856093572",
           "seed_encoding": "uint64-decimal-string",
           "status": "measured",
           "target": "l1",
-          "value": 0.7860867955690964,
+          "value": 1.1562554254729616,
           "work_policy": "automatic-duration-calibration",
           "worker_startup_failed": false
         },
@@ -188,7 +188,7 @@
           "duration_quality": "explicit-work-policy",
           "duration_within_target": true,
           "effective_threads": 1,
-          "elapsed_seconds": 4.458333333333333e-06,
+          "elapsed_seconds": 6.541666666666667e-06,
           "exact_payload_bytes": 131072,
           "operation": "read",
           "operation_order_position": 0,
@@ -204,7 +204,7 @@
           "seed_encoding": "uint64-decimal-string",
           "status": "measured",
           "target": "l1",
-          "value": 29.399327102803742,
+          "value": 20.03648407643312,
           "work_policy": "explicit-iterations",
           "worker_startup_failed": false
         },
@@ -220,7 +220,7 @@
           "duration_quality": "explicit-work-policy",
           "duration_within_target": true,
           "effective_threads": 1,
-          "elapsed_seconds": 5.083333333333333e-06,
+          "elapsed_seconds": 7.083333333333333e-06,
           "exact_payload_bytes": 131072,
           "operation": "write",
           "operation_order_position": 1,
@@ -236,7 +236,7 @@
           "seed_encoding": "uint64-decimal-string",
           "status": "measured",
           "target": "l1",
-          "value": 25.78465573770492,
+          "value": 18.50428235294118,
           "work_policy": "explicit-iterations",
           "worker_startup_failed": false
         },
@@ -252,7 +252,7 @@
           "duration_quality": "explicit-work-policy",
           "duration_within_target": true,
           "effective_threads": 1,
-          "elapsed_seconds": 0.0004275,
+          "elapsed_seconds": 0.0008528333333333334,
           "exact_payload_bytes": 33554432,
           "operation": "copy",
           "operation_order_position": 2,
@@ -268,42 +268,42 @@
           "seed_encoding": "uint64-decimal-string",
           "status": "measured",
           "target": "l2",
-          "value": 78.48989941520468,
+          "value": 39.34465350791479,
           "work_policy": "explicit-iterations",
           "worker_startup_failed": false
         },
         "l2_latency": {
-          "access_count": 8323072,
+          "access_count": 7864320,
           "automatic_calibration": true,
           "benchmark_loop_index": 0,
           "buffer_size_bytes": 16777216,
           "calibration_corrections": 1,
           "chain_node_count": 65536,
-          "complete_chain_cycles": 127,
+          "complete_chain_cycles": 120,
           "created_workers": 1,
           "duration_quality": "within-target-window",
           "duration_within_target": true,
           "effective_threads": 1,
-          "elapsed_seconds": 0.217436125,
+          "elapsed_seconds": 0.26646295833333333,
           "exact_payload_bytes": 0,
           "operation": "latency",
           "operation_order_position": 0,
           "passes": 0,
           "phase_order_position": 2,
-          "pilot_elapsed_seconds": 0.006127583333333333,
+          "pilot_elapsed_seconds": 0.006137791666666667,
           "qos_failed_workers": 0,
           "qos_outcome": "main-thread-qos-applied",
           "qos_successful_workers": 1,
           "reason": "",
           "requested_threads": 1,
           "samples_ns": [
-            29.34659121856289
+            27.419381671481663
           ],
-          "seed": "9954792392046060173",
+          "seed": "10641231460942127795",
           "seed_encoding": "uint64-decimal-string",
           "status": "measured",
           "target": "l2",
-          "value": 26.12450366883766,
+          "value": 33.88251728481717,
           "work_policy": "automatic-duration-calibration",
           "worker_startup_failed": false
         },
@@ -319,7 +319,7 @@
           "duration_quality": "explicit-work-policy",
           "duration_within_target": true,
           "effective_threads": 1,
-          "elapsed_seconds": 0.0003685,
+          "elapsed_seconds": 0.0005187916666666666,
           "exact_payload_bytes": 16777216,
           "operation": "read",
           "operation_order_position": 0,
@@ -335,7 +335,7 @@
           "seed_encoding": "uint64-decimal-string",
           "status": "measured",
           "target": "l2",
-          "value": 45.52840162822252,
+          "value": 32.339023692876076,
           "work_policy": "explicit-iterations",
           "worker_startup_failed": false
         },
@@ -351,7 +351,7 @@
           "duration_quality": "explicit-work-policy",
           "duration_within_target": true,
           "effective_threads": 1,
-          "elapsed_seconds": 0.0004151666666666667,
+          "elapsed_seconds": 0.0009372916666666667,
           "exact_payload_bytes": 16777216,
           "operation": "write",
           "operation_order_position": 1,
@@ -367,12 +367,12 @@
           "seed_encoding": "uint64-decimal-string",
           "status": "measured",
           "target": "l2",
-          "value": 40.410797270172615,
+          "value": 17.899674772171593,
           "work_policy": "explicit-iterations",
           "worker_startup_failed": false
         },
         "locality_16k_latency": {
-          "access_count": 50991104,
+          "access_count": 50778112,
           "automatic_calibration": false,
           "benchmark_loop_index": 0,
           "buffer_size_bytes": 1048576,
@@ -383,7 +383,7 @@
           "duration_quality": "",
           "duration_within_target": false,
           "effective_threads": 1,
-          "elapsed_seconds": 0.7759679375,
+          "elapsed_seconds": 0.8154755833333334,
           "exact_payload_bytes": 0,
           "operation": "locality-comparison",
           "operation_order_position": 0,
@@ -396,25 +396,25 @@
           "reason": "",
           "requested_threads": 1,
           "sample_seeds": [
-            "9647402897991862178",
-            "15531855181169613762",
-            "11833851365695391541"
+            "17580395559297521763",
+            "7815478260737035509",
+            "16199771919126575464"
           ],
           "samples_ns": [
-            4.968440998388006,
-            4.716251583805677,
-            4.727339302165334
+            4.9234607554268,
+            5.006858729472521,
+            5.137608962958948
           ],
-          "seed": "1769408356191248376",
+          "seed": "6681018847831829569",
           "seed_encoding": "uint64-decimal-string",
           "status": "measured",
           "target": "main-memory",
-          "value": 4.727339302165334,
+          "value": 5.006858729472521,
           "work_policy": "paired-alternating-rounds",
           "worker_startup_failed": false
         },
         "locality_latency_delta": {
-          "access_count": 50991104,
+          "access_count": 50778112,
           "automatic_calibration": false,
           "benchmark_loop_index": 0,
           "buffer_size_bytes": 1048576,
@@ -425,7 +425,7 @@
           "duration_quality": "",
           "duration_within_target": false,
           "effective_threads": 1,
-          "elapsed_seconds": 1.551935875,
+          "elapsed_seconds": 1.6309511666666667,
           "exact_payload_bytes": 0,
           "operation": "locality-comparison",
           "operation_order_position": 0,
@@ -438,15 +438,15 @@
           "reason": "",
           "requested_threads": 1,
           "samples_ns": [
-            0.47823701431005183,
-            0.5273043967303268,
-            0.6058189091179518
+            0.9197639132388389,
+            0.6151600647670126,
+            0.4483961186531191
           ],
           "seed": "0",
           "seed_encoding": "uint64-decimal-string",
           "status": "measured",
           "target": "main-memory",
-          "value": 0.5273043967303268,
+          "value": 0.6151600647670126,
           "work_policy": "paired-alternating-rounds",
           "worker_startup_failed": false
         },
@@ -462,7 +462,7 @@
           "duration_quality": "explicit-work-policy",
           "duration_within_target": true,
           "effective_threads": 10,
-          "elapsed_seconds": 3.825e-05,
+          "elapsed_seconds": 7.104166666666667e-05,
           "exact_payload_bytes": 2097152,
           "operation": "copy",
           "operation_order_position": 2,
@@ -478,42 +478,42 @@
           "seed_encoding": "uint64-decimal-string",
           "status": "measured",
           "target": "main-memory",
-          "value": 54.82750326797385,
+          "value": 29.520028152492667,
           "work_policy": "explicit-iterations",
           "worker_startup_failed": false
         },
         "main_latency": {
-          "access_count": 50991104,
+          "access_count": 50778112,
           "automatic_calibration": true,
           "benchmark_loop_index": 0,
           "buffer_size_bytes": 1048576,
           "calibration_corrections": 0,
           "chain_node_count": 4096,
-          "complete_chain_cycles": 12449,
+          "complete_chain_cycles": 12397,
           "created_workers": 1,
           "duration_quality": "within-target-window",
           "duration_within_target": true,
           "effective_threads": 1,
-          "elapsed_seconds": 0.268211625,
+          "elapsed_seconds": 0.26052575,
           "exact_payload_bytes": 0,
           "operation": "latency",
           "operation_order_position": 0,
           "passes": 0,
           "phase_order_position": 3,
-          "pilot_elapsed_seconds": 2.008333333333333e-05,
+          "pilot_elapsed_seconds": 2.0166666666666668e-05,
           "qos_failed_workers": 0,
           "qos_outcome": "main-thread-qos-applied",
           "qos_successful_workers": 1,
           "reason": "",
           "requested_threads": 1,
           "samples_ns": [
-            5.282580761538326
+            5.4098284512823165
           ],
-          "seed": "6508878107967401165",
+          "seed": "12367976382667583622",
           "seed_encoding": "uint64-decimal-string",
           "status": "measured",
           "target": "main-memory",
-          "value": 5.25996897419597,
+          "value": 5.130670277776377,
           "work_policy": "automatic-duration-calibration",
           "worker_startup_failed": false
         },
@@ -529,7 +529,7 @@
           "duration_quality": "explicit-work-policy",
           "duration_within_target": true,
           "effective_threads": 10,
-          "elapsed_seconds": 3.8333333333333334e-05,
+          "elapsed_seconds": 5.175e-05,
           "exact_payload_bytes": 1048576,
           "operation": "read",
           "operation_order_position": 0,
@@ -545,7 +545,7 @@
           "seed_encoding": "uint64-decimal-string",
           "status": "measured",
           "target": "main-memory",
-          "value": 27.354156521739128,
+          "value": 20.262338164251208,
           "work_policy": "explicit-iterations",
           "worker_startup_failed": false
         },
@@ -561,7 +561,7 @@
           "duration_quality": "explicit-work-policy",
           "duration_within_target": true,
           "effective_threads": 10,
-          "elapsed_seconds": 2.7833333333333333e-05,
+          "elapsed_seconds": 0.000119625,
           "exact_payload_bytes": 1048576,
           "operation": "write",
           "operation_order_position": 1,
@@ -577,7 +577,7 @@
           "seed_encoding": "uint64-decimal-string",
           "status": "measured",
           "target": "main-memory",
-          "value": 37.67338922155688,
+          "value": 8.765525600835947,
           "work_policy": "explicit-iterations",
           "worker_startup_failed": false
         }
@@ -620,7 +620,7 @@
             "duration_quality": "explicit-work-policy",
             "duration_within_target": true,
             "effective_threads": 10,
-            "elapsed_seconds": 3.825e-05,
+            "elapsed_seconds": 7.104166666666667e-05,
             "exact_payload_bytes": 2097152,
             "operation": "copy",
             "operation_order_position": 2,
@@ -636,7 +636,7 @@
             "seed_encoding": "uint64-decimal-string",
             "status": "measured",
             "target": "main-memory",
-            "value": 54.82750326797385,
+            "value": 29.520028152492667,
             "work_policy": "explicit-iterations",
             "worker_startup_failed": false
           }
@@ -650,22 +650,22 @@
         },
         "requested_loop_count": 1,
         "statistics": {
-          "average": 54.82750326797385,
+          "average": 29.520028152492667,
           "coefficient_of_variation_pct": 0.0,
-          "max": 54.82750326797385,
-          "median": 54.82750326797385,
+          "max": 29.520028152492667,
+          "median": 29.520028152492667,
           "median_absolute_deviation": 0.0,
-          "min": 54.82750326797385,
-          "p90": 54.82750326797385,
-          "p95": 54.82750326797385,
-          "p99": 54.82750326797385,
+          "min": 29.520028152492667,
+          "p90": 29.520028152492667,
+          "p95": 29.520028152492667,
+          "p99": 29.520028152492667,
           "stddev": 0.0
         },
         "status": "measured",
         "unit": "GB/s",
-        "value": 54.82750326797385,
+        "value": 29.520028152492667,
         "values": [
-          54.82750326797385
+          29.520028152492667
         ]
       },
       "read_gb_s": {
@@ -684,7 +684,7 @@
             "duration_quality": "explicit-work-policy",
             "duration_within_target": true,
             "effective_threads": 10,
-            "elapsed_seconds": 3.8333333333333334e-05,
+            "elapsed_seconds": 5.175e-05,
             "exact_payload_bytes": 1048576,
             "operation": "read",
             "operation_order_position": 0,
@@ -700,7 +700,7 @@
             "seed_encoding": "uint64-decimal-string",
             "status": "measured",
             "target": "main-memory",
-            "value": 27.354156521739128,
+            "value": 20.262338164251208,
             "work_policy": "explicit-iterations",
             "worker_startup_failed": false
           }
@@ -714,22 +714,22 @@
         },
         "requested_loop_count": 1,
         "statistics": {
-          "average": 27.354156521739128,
+          "average": 20.262338164251208,
           "coefficient_of_variation_pct": 0.0,
-          "max": 27.354156521739128,
-          "median": 27.354156521739128,
+          "max": 20.262338164251208,
+          "median": 20.262338164251208,
           "median_absolute_deviation": 0.0,
-          "min": 27.354156521739128,
-          "p90": 27.354156521739128,
-          "p95": 27.354156521739128,
-          "p99": 27.354156521739128,
+          "min": 20.262338164251208,
+          "p90": 20.262338164251208,
+          "p95": 20.262338164251208,
+          "p99": 20.262338164251208,
           "stddev": 0.0
         },
         "status": "measured",
         "unit": "GB/s",
-        "value": 27.354156521739128,
+        "value": 20.262338164251208,
         "values": [
-          27.354156521739128
+          20.262338164251208
         ]
       },
       "write_gb_s": {
@@ -748,7 +748,7 @@
             "duration_quality": "explicit-work-policy",
             "duration_within_target": true,
             "effective_threads": 10,
-            "elapsed_seconds": 2.7833333333333333e-05,
+            "elapsed_seconds": 0.000119625,
             "exact_payload_bytes": 1048576,
             "operation": "write",
             "operation_order_position": 1,
@@ -764,7 +764,7 @@
             "seed_encoding": "uint64-decimal-string",
             "status": "measured",
             "target": "main-memory",
-            "value": 37.67338922155688,
+            "value": 8.765525600835947,
             "work_policy": "explicit-iterations",
             "worker_startup_failed": false
           }
@@ -778,22 +778,22 @@
         },
         "requested_loop_count": 1,
         "statistics": {
-          "average": 37.67338922155688,
+          "average": 8.765525600835947,
           "coefficient_of_variation_pct": 0.0,
-          "max": 37.67338922155688,
-          "median": 37.67338922155688,
+          "max": 8.765525600835947,
+          "median": 8.765525600835947,
           "median_absolute_deviation": 0.0,
-          "min": 37.67338922155688,
-          "p90": 37.67338922155688,
-          "p95": 37.67338922155688,
-          "p99": 37.67338922155688,
+          "min": 8.765525600835947,
+          "p90": 8.765525600835947,
+          "p95": 8.765525600835947,
+          "p99": 8.765525600835947,
           "stddev": 0.0
         },
         "status": "measured",
         "unit": "GB/s",
-        "value": 37.67338922155688,
+        "value": 8.765525600835947,
         "values": [
-          37.67338922155688
+          8.765525600835947
         ]
       }
     },
@@ -804,7 +804,7 @@
           "measured_loop_count": 1,
           "measurements": [
             {
-              "access_count": 50991104,
+              "access_count": 50778112,
               "automatic_calibration": false,
               "benchmark_loop_index": 0,
               "buffer_size_bytes": 1048576,
@@ -815,7 +815,7 @@
               "duration_quality": "",
               "duration_within_target": false,
               "effective_threads": 1,
-              "elapsed_seconds": 0.7759679375,
+              "elapsed_seconds": 0.8154755833333334,
               "exact_payload_bytes": 0,
               "operation": "locality-comparison",
               "operation_order_position": 0,
@@ -828,20 +828,20 @@
               "reason": "",
               "requested_threads": 1,
               "sample_seeds": [
-                "15531855181169613762",
-                "9647402897991862178",
-                "1769408356191248376"
+                "7815478260737035509",
+                "17580395559297521763",
+                "6681018847831829569"
               ],
               "samples_ns": [
-                5.446678012698058,
-                5.243555980536004,
-                5.333158211283286
+                5.843224668665639,
+                5.622018794239533,
+                5.586005081612067
               ],
-              "seed": "11833851365695391541",
+              "seed": "16199771919126575464",
               "seed_encoding": "uint64-decimal-string",
               "status": "measured",
               "target": "main-memory",
-              "value": 5.333158211283286,
+              "value": 5.622018794239533,
               "work_policy": "paired-alternating-rounds",
               "worker_startup_failed": false
             }
@@ -855,22 +855,22 @@
           },
           "requested_loop_count": 1,
           "statistics": {
-            "average": 5.333158211283286,
+            "average": 5.622018794239533,
             "coefficient_of_variation_pct": 0.0,
-            "max": 5.333158211283286,
-            "median": 5.333158211283286,
+            "max": 5.622018794239533,
+            "median": 5.622018794239533,
             "median_absolute_deviation": 0.0,
-            "min": 5.333158211283286,
-            "p90": 5.333158211283286,
-            "p95": 5.333158211283286,
-            "p99": 5.333158211283286,
+            "min": 5.622018794239533,
+            "p90": 5.622018794239533,
+            "p95": 5.622018794239533,
+            "p99": 5.622018794239533,
             "stddev": 0.0
           },
           "status": "measured",
           "unit": "ns",
-          "value": 5.333158211283286,
+          "value": 5.622018794239533,
           "values": [
-            5.333158211283286
+            5.622018794239533
           ]
         },
         "locality_16k_latency_ns": {
@@ -878,7 +878,7 @@
           "measured_loop_count": 1,
           "measurements": [
             {
-              "access_count": 50991104,
+              "access_count": 50778112,
               "automatic_calibration": false,
               "benchmark_loop_index": 0,
               "buffer_size_bytes": 1048576,
@@ -889,7 +889,7 @@
               "duration_quality": "",
               "duration_within_target": false,
               "effective_threads": 1,
-              "elapsed_seconds": 0.7759679375,
+              "elapsed_seconds": 0.8154755833333334,
               "exact_payload_bytes": 0,
               "operation": "locality-comparison",
               "operation_order_position": 0,
@@ -902,20 +902,20 @@
               "reason": "",
               "requested_threads": 1,
               "sample_seeds": [
-                "9647402897991862178",
-                "15531855181169613762",
-                "11833851365695391541"
+                "17580395559297521763",
+                "7815478260737035509",
+                "16199771919126575464"
               ],
               "samples_ns": [
-                4.968440998388006,
-                4.716251583805677,
-                4.727339302165334
+                4.9234607554268,
+                5.006858729472521,
+                5.137608962958948
               ],
-              "seed": "1769408356191248376",
+              "seed": "6681018847831829569",
               "seed_encoding": "uint64-decimal-string",
               "status": "measured",
               "target": "main-memory",
-              "value": 4.727339302165334,
+              "value": 5.006858729472521,
               "work_policy": "paired-alternating-rounds",
               "worker_startup_failed": false
             }
@@ -929,22 +929,22 @@
           },
           "requested_loop_count": 1,
           "statistics": {
-            "average": 4.727339302165334,
+            "average": 5.006858729472521,
             "coefficient_of_variation_pct": 0.0,
-            "max": 4.727339302165334,
-            "median": 4.727339302165334,
+            "max": 5.006858729472521,
+            "median": 5.006858729472521,
             "median_absolute_deviation": 0.0,
-            "min": 4.727339302165334,
-            "p90": 4.727339302165334,
-            "p95": 4.727339302165334,
-            "p99": 4.727339302165334,
+            "min": 5.006858729472521,
+            "p90": 5.006858729472521,
+            "p95": 5.006858729472521,
+            "p99": 5.006858729472521,
             "stddev": 0.0
           },
           "status": "measured",
           "unit": "ns",
-          "value": 4.727339302165334,
+          "value": 5.006858729472521,
           "values": [
-            4.727339302165334
+            5.006858729472521
           ]
         },
         "locality_latency_delta_ns": {
@@ -952,7 +952,7 @@
           "measured_loop_count": 1,
           "measurements": [
             {
-              "access_count": 50991104,
+              "access_count": 50778112,
               "automatic_calibration": false,
               "benchmark_loop_index": 0,
               "buffer_size_bytes": 1048576,
@@ -963,7 +963,7 @@
               "duration_quality": "",
               "duration_within_target": false,
               "effective_threads": 1,
-              "elapsed_seconds": 1.551935875,
+              "elapsed_seconds": 1.6309511666666667,
               "exact_payload_bytes": 0,
               "operation": "locality-comparison",
               "operation_order_position": 0,
@@ -976,15 +976,15 @@
               "reason": "",
               "requested_threads": 1,
               "samples_ns": [
-                0.47823701431005183,
-                0.5273043967303268,
-                0.6058189091179518
+                0.9197639132388389,
+                0.6151600647670126,
+                0.4483961186531191
               ],
               "seed": "0",
               "seed_encoding": "uint64-decimal-string",
               "status": "measured",
               "target": "main-memory",
-              "value": 0.5273043967303268,
+              "value": 0.6151600647670126,
               "work_policy": "paired-alternating-rounds",
               "worker_startup_failed": false
             }
@@ -998,22 +998,22 @@
           },
           "requested_loop_count": 1,
           "statistics": {
-            "average": 0.5273043967303268,
+            "average": 0.6151600647670126,
             "coefficient_of_variation_pct": 0.0,
-            "max": 0.5273043967303268,
-            "median": 0.5273043967303268,
+            "max": 0.6151600647670126,
+            "median": 0.6151600647670126,
             "median_absolute_deviation": 0.0,
-            "min": 0.5273043967303268,
-            "p90": 0.5273043967303268,
-            "p95": 0.5273043967303268,
-            "p99": 0.5273043967303268,
+            "min": 0.6151600647670126,
+            "p90": 0.6151600647670126,
+            "p95": 0.6151600647670126,
+            "p99": 0.6151600647670126,
             "stddev": 0.0
           },
           "status": "measured",
           "unit": "ns",
-          "value": 0.5273043967303268,
+          "value": 0.6151600647670126,
           "values": [
-            0.5273043967303268
+            0.6151600647670126
           ]
         }
       },
@@ -1022,37 +1022,37 @@
         "measured_loop_count": 1,
         "measurements": [
           {
-            "access_count": 50991104,
+            "access_count": 50778112,
             "automatic_calibration": true,
             "benchmark_loop_index": 0,
             "buffer_size_bytes": 1048576,
             "calibration_corrections": 0,
             "chain_node_count": 4096,
-            "complete_chain_cycles": 12449,
+            "complete_chain_cycles": 12397,
             "created_workers": 1,
             "duration_quality": "within-target-window",
             "duration_within_target": true,
             "effective_threads": 1,
-            "elapsed_seconds": 0.268211625,
+            "elapsed_seconds": 0.26052575,
             "exact_payload_bytes": 0,
             "operation": "latency",
             "operation_order_position": 0,
             "passes": 0,
             "phase_order_position": 3,
-            "pilot_elapsed_seconds": 2.008333333333333e-05,
+            "pilot_elapsed_seconds": 2.0166666666666668e-05,
             "qos_failed_workers": 0,
             "qos_outcome": "main-thread-qos-applied",
             "qos_successful_workers": 1,
             "reason": "",
             "requested_threads": 1,
             "samples_ns": [
-              5.282580761538326
+              5.4098284512823165
             ],
-            "seed": "6508878107967401165",
+            "seed": "12367976382667583622",
             "seed_encoding": "uint64-decimal-string",
             "status": "measured",
             "target": "main-memory",
-            "value": 5.25996897419597,
+            "value": 5.130670277776377,
             "work_policy": "automatic-duration-calibration",
             "worker_startup_failed": false
           }
@@ -1067,19 +1067,19 @@
           ],
           "semantics": "pooled-separate-sample-window-distribution",
           "statistics": {
-            "average": 5.282580761538326,
+            "average": 5.4098284512823165,
             "coefficient_of_variation_pct": 0.0,
-            "max": 5.282580761538326,
-            "median": 5.282580761538326,
+            "max": 5.4098284512823165,
+            "median": 5.4098284512823165,
             "median_absolute_deviation": 0.0,
-            "min": 5.282580761538326,
-            "p90": 5.282580761538326,
-            "p95": 5.282580761538326,
-            "p99": 5.282580761538326,
+            "min": 5.4098284512823165,
+            "p90": 5.4098284512823165,
+            "p95": 5.4098284512823165,
+            "p99": 5.4098284512823165,
             "stddev": 0.0
           },
           "values_ns": [
-            5.282580761538326
+            5.4098284512823165
           ]
         },
         "quality": {
@@ -1091,22 +1091,22 @@
         },
         "requested_loop_count": 1,
         "statistics": {
-          "average": 5.25996897419597,
+          "average": 5.130670277776377,
           "coefficient_of_variation_pct": 0.0,
-          "max": 5.25996897419597,
-          "median": 5.25996897419597,
+          "max": 5.130670277776377,
+          "median": 5.130670277776377,
           "median_absolute_deviation": 0.0,
-          "min": 5.25996897419597,
-          "p90": 5.25996897419597,
-          "p95": 5.25996897419597,
-          "p99": 5.25996897419597,
+          "min": 5.130670277776377,
+          "p90": 5.130670277776377,
+          "p95": 5.130670277776377,
+          "p99": 5.130670277776377,
           "stddev": 0.0
         },
         "status": "measured",
         "unit": "ns",
-        "value": 5.25996897419597,
+        "value": 5.130670277776377,
         "values": [
-          5.25996897419597
+          5.130670277776377
         ]
       }
     }
@@ -1130,7 +1130,7 @@
               "duration_quality": "explicit-work-policy",
               "duration_within_target": true,
               "effective_threads": 1,
-              "elapsed_seconds": 4.583333333333333e-06,
+              "elapsed_seconds": 7.458333333333333e-06,
               "exact_payload_bytes": 262144,
               "operation": "copy",
               "operation_order_position": 2,
@@ -1146,7 +1146,7 @@
               "seed_encoding": "uint64-decimal-string",
               "status": "measured",
               "target": "l1",
-              "value": 57.195054545454546,
+              "value": 35.14779888268156,
               "work_policy": "explicit-iterations",
               "worker_startup_failed": false
             }
@@ -1160,22 +1160,22 @@
           },
           "requested_loop_count": 1,
           "statistics": {
-            "average": 57.195054545454546,
+            "average": 35.14779888268156,
             "coefficient_of_variation_pct": 0.0,
-            "max": 57.195054545454546,
-            "median": 57.195054545454546,
+            "max": 35.14779888268156,
+            "median": 35.14779888268156,
             "median_absolute_deviation": 0.0,
-            "min": 57.195054545454546,
-            "p90": 57.195054545454546,
-            "p95": 57.195054545454546,
-            "p99": 57.195054545454546,
+            "min": 35.14779888268156,
+            "p90": 35.14779888268156,
+            "p95": 35.14779888268156,
+            "p99": 35.14779888268156,
             "stddev": 0.0
           },
           "status": "measured",
           "unit": "GB/s",
-          "value": 57.195054545454546,
+          "value": 35.14779888268156,
           "values": [
-            57.195054545454546
+            35.14779888268156
           ]
         },
         "read_gb_s": {
@@ -1194,7 +1194,7 @@
               "duration_quality": "explicit-work-policy",
               "duration_within_target": true,
               "effective_threads": 1,
-              "elapsed_seconds": 4.458333333333333e-06,
+              "elapsed_seconds": 6.541666666666667e-06,
               "exact_payload_bytes": 131072,
               "operation": "read",
               "operation_order_position": 0,
@@ -1210,7 +1210,7 @@
               "seed_encoding": "uint64-decimal-string",
               "status": "measured",
               "target": "l1",
-              "value": 29.399327102803742,
+              "value": 20.03648407643312,
               "work_policy": "explicit-iterations",
               "worker_startup_failed": false
             }
@@ -1224,22 +1224,22 @@
           },
           "requested_loop_count": 1,
           "statistics": {
-            "average": 29.399327102803742,
+            "average": 20.03648407643312,
             "coefficient_of_variation_pct": 0.0,
-            "max": 29.399327102803742,
-            "median": 29.399327102803742,
+            "max": 20.03648407643312,
+            "median": 20.03648407643312,
             "median_absolute_deviation": 0.0,
-            "min": 29.399327102803742,
-            "p90": 29.399327102803742,
-            "p95": 29.399327102803742,
-            "p99": 29.399327102803742,
+            "min": 20.03648407643312,
+            "p90": 20.03648407643312,
+            "p95": 20.03648407643312,
+            "p99": 20.03648407643312,
             "stddev": 0.0
           },
           "status": "measured",
           "unit": "GB/s",
-          "value": 29.399327102803742,
+          "value": 20.03648407643312,
           "values": [
-            29.399327102803742
+            20.03648407643312
           ]
         },
         "write_gb_s": {
@@ -1258,7 +1258,7 @@
               "duration_quality": "explicit-work-policy",
               "duration_within_target": true,
               "effective_threads": 1,
-              "elapsed_seconds": 5.083333333333333e-06,
+              "elapsed_seconds": 7.083333333333333e-06,
               "exact_payload_bytes": 131072,
               "operation": "write",
               "operation_order_position": 1,
@@ -1274,7 +1274,7 @@
               "seed_encoding": "uint64-decimal-string",
               "status": "measured",
               "target": "l1",
-              "value": 25.78465573770492,
+              "value": 18.50428235294118,
               "work_policy": "explicit-iterations",
               "worker_startup_failed": false
             }
@@ -1288,22 +1288,22 @@
           },
           "requested_loop_count": 1,
           "statistics": {
-            "average": 25.78465573770492,
+            "average": 18.50428235294118,
             "coefficient_of_variation_pct": 0.0,
-            "max": 25.78465573770492,
-            "median": 25.78465573770492,
+            "max": 18.50428235294118,
+            "median": 18.50428235294118,
             "median_absolute_deviation": 0.0,
-            "min": 25.78465573770492,
-            "p90": 25.78465573770492,
-            "p95": 25.78465573770492,
-            "p99": 25.78465573770492,
+            "min": 18.50428235294118,
+            "p90": 18.50428235294118,
+            "p95": 18.50428235294118,
+            "p99": 18.50428235294118,
             "stddev": 0.0
           },
           "status": "measured",
           "unit": "GB/s",
-          "value": 25.78465573770492,
+          "value": 18.50428235294118,
           "values": [
-            25.78465573770492
+            18.50428235294118
           ]
         }
       },
@@ -1313,37 +1313,37 @@
           "measured_loop_count": 1,
           "measurements": [
             {
-              "access_count": 323015168,
+              "access_count": 154640896,
               "automatic_calibration": true,
               "benchmark_loop_index": 0,
               "buffer_size_bytes": 131072,
               "calibration_corrections": 1,
               "chain_node_count": 512,
-              "complete_chain_cycles": 630889,
+              "complete_chain_cycles": 302033,
               "created_workers": 1,
               "duration_quality": "within-target-window",
               "duration_within_target": true,
               "effective_threads": 1,
-              "elapsed_seconds": 0.25391795833333336,
+              "elapsed_seconds": 0.178804375,
               "exact_payload_bytes": 0,
               "operation": "latency",
               "operation_order_position": 0,
               "passes": 0,
               "phase_order_position": 2,
-              "pilot_elapsed_seconds": 2.5e-05,
+              "pilot_elapsed_seconds": 5.7125e-05,
               "qos_failed_workers": 0,
               "qos_outcome": "main-thread-qos-applied",
               "qos_successful_workers": 1,
               "reason": "",
               "requested_threads": 1,
               "samples_ns": [
-                0.7798550190683305
+                0.7461641970827692
               ],
-              "seed": "15831069828388974632",
+              "seed": "13289008537856093572",
               "seed_encoding": "uint64-decimal-string",
               "status": "measured",
               "target": "l1",
-              "value": 0.7860867955690964,
+              "value": 1.1562554254729616,
               "work_policy": "automatic-duration-calibration",
               "worker_startup_failed": false
             }
@@ -1358,19 +1358,19 @@
             ],
             "semantics": "pooled-separate-sample-window-distribution",
             "statistics": {
-              "average": 0.7798550190683305,
+              "average": 0.7461641970827692,
               "coefficient_of_variation_pct": 0.0,
-              "max": 0.7798550190683305,
-              "median": 0.7798550190683305,
+              "max": 0.7461641970827692,
+              "median": 0.7461641970827692,
               "median_absolute_deviation": 0.0,
-              "min": 0.7798550190683305,
-              "p90": 0.7798550190683305,
-              "p95": 0.7798550190683305,
-              "p99": 0.7798550190683305,
+              "min": 0.7461641970827692,
+              "p90": 0.7461641970827692,
+              "p95": 0.7461641970827692,
+              "p99": 0.7461641970827692,
               "stddev": 0.0
             },
             "values_ns": [
-              0.7798550190683305
+              0.7461641970827692
             ]
           },
           "quality": {
@@ -1382,22 +1382,22 @@
           },
           "requested_loop_count": 1,
           "statistics": {
-            "average": 0.7860867955690964,
+            "average": 1.1562554254729616,
             "coefficient_of_variation_pct": 0.0,
-            "max": 0.7860867955690964,
-            "median": 0.7860867955690964,
+            "max": 1.1562554254729616,
+            "median": 1.1562554254729616,
             "median_absolute_deviation": 0.0,
-            "min": 0.7860867955690964,
-            "p90": 0.7860867955690964,
-            "p95": 0.7860867955690964,
-            "p99": 0.7860867955690964,
+            "min": 1.1562554254729616,
+            "p90": 1.1562554254729616,
+            "p95": 1.1562554254729616,
+            "p99": 1.1562554254729616,
             "stddev": 0.0
           },
           "status": "measured",
           "unit": "ns",
-          "value": 0.7860867955690964,
+          "value": 1.1562554254729616,
           "values": [
-            0.7860867955690964
+            1.1562554254729616
           ]
         }
       }
@@ -1420,7 +1420,7 @@
               "duration_quality": "explicit-work-policy",
               "duration_within_target": true,
               "effective_threads": 1,
-              "elapsed_seconds": 0.0004275,
+              "elapsed_seconds": 0.0008528333333333334,
               "exact_payload_bytes": 33554432,
               "operation": "copy",
               "operation_order_position": 2,
@@ -1436,7 +1436,7 @@
               "seed_encoding": "uint64-decimal-string",
               "status": "measured",
               "target": "l2",
-              "value": 78.48989941520468,
+              "value": 39.34465350791479,
               "work_policy": "explicit-iterations",
               "worker_startup_failed": false
             }
@@ -1450,22 +1450,22 @@
           },
           "requested_loop_count": 1,
           "statistics": {
-            "average": 78.48989941520468,
+            "average": 39.34465350791479,
             "coefficient_of_variation_pct": 0.0,
-            "max": 78.48989941520468,
-            "median": 78.48989941520468,
+            "max": 39.34465350791479,
+            "median": 39.34465350791479,
             "median_absolute_deviation": 0.0,
-            "min": 78.48989941520468,
-            "p90": 78.48989941520468,
-            "p95": 78.48989941520468,
-            "p99": 78.48989941520468,
+            "min": 39.34465350791479,
+            "p90": 39.34465350791479,
+            "p95": 39.34465350791479,
+            "p99": 39.34465350791479,
             "stddev": 0.0
           },
           "status": "measured",
           "unit": "GB/s",
-          "value": 78.48989941520468,
+          "value": 39.34465350791479,
           "values": [
-            78.48989941520468
+            39.34465350791479
           ]
         },
         "read_gb_s": {
@@ -1484,7 +1484,7 @@
               "duration_quality": "explicit-work-policy",
               "duration_within_target": true,
               "effective_threads": 1,
-              "elapsed_seconds": 0.0003685,
+              "elapsed_seconds": 0.0005187916666666666,
               "exact_payload_bytes": 16777216,
               "operation": "read",
               "operation_order_position": 0,
@@ -1500,7 +1500,7 @@
               "seed_encoding": "uint64-decimal-string",
               "status": "measured",
               "target": "l2",
-              "value": 45.52840162822252,
+              "value": 32.339023692876076,
               "work_policy": "explicit-iterations",
               "worker_startup_failed": false
             }
@@ -1514,22 +1514,22 @@
           },
           "requested_loop_count": 1,
           "statistics": {
-            "average": 45.52840162822252,
+            "average": 32.339023692876076,
             "coefficient_of_variation_pct": 0.0,
-            "max": 45.52840162822252,
-            "median": 45.52840162822252,
+            "max": 32.339023692876076,
+            "median": 32.339023692876076,
             "median_absolute_deviation": 0.0,
-            "min": 45.52840162822252,
-            "p90": 45.52840162822252,
-            "p95": 45.52840162822252,
-            "p99": 45.52840162822252,
+            "min": 32.339023692876076,
+            "p90": 32.339023692876076,
+            "p95": 32.339023692876076,
+            "p99": 32.339023692876076,
             "stddev": 0.0
           },
           "status": "measured",
           "unit": "GB/s",
-          "value": 45.52840162822252,
+          "value": 32.339023692876076,
           "values": [
-            45.52840162822252
+            32.339023692876076
           ]
         },
         "write_gb_s": {
@@ -1548,7 +1548,7 @@
               "duration_quality": "explicit-work-policy",
               "duration_within_target": true,
               "effective_threads": 1,
-              "elapsed_seconds": 0.0004151666666666667,
+              "elapsed_seconds": 0.0009372916666666667,
               "exact_payload_bytes": 16777216,
               "operation": "write",
               "operation_order_position": 1,
@@ -1564,7 +1564,7 @@
               "seed_encoding": "uint64-decimal-string",
               "status": "measured",
               "target": "l2",
-              "value": 40.410797270172615,
+              "value": 17.899674772171593,
               "work_policy": "explicit-iterations",
               "worker_startup_failed": false
             }
@@ -1578,22 +1578,22 @@
           },
           "requested_loop_count": 1,
           "statistics": {
-            "average": 40.410797270172615,
+            "average": 17.899674772171593,
             "coefficient_of_variation_pct": 0.0,
-            "max": 40.410797270172615,
-            "median": 40.410797270172615,
+            "max": 17.899674772171593,
+            "median": 17.899674772171593,
             "median_absolute_deviation": 0.0,
-            "min": 40.410797270172615,
-            "p90": 40.410797270172615,
-            "p95": 40.410797270172615,
-            "p99": 40.410797270172615,
+            "min": 17.899674772171593,
+            "p90": 17.899674772171593,
+            "p95": 17.899674772171593,
+            "p99": 17.899674772171593,
             "stddev": 0.0
           },
           "status": "measured",
           "unit": "GB/s",
-          "value": 40.410797270172615,
+          "value": 17.899674772171593,
           "values": [
-            40.410797270172615
+            17.899674772171593
           ]
         }
       },
@@ -1603,37 +1603,37 @@
           "measured_loop_count": 1,
           "measurements": [
             {
-              "access_count": 8323072,
+              "access_count": 7864320,
               "automatic_calibration": true,
               "benchmark_loop_index": 0,
               "buffer_size_bytes": 16777216,
               "calibration_corrections": 1,
               "chain_node_count": 65536,
-              "complete_chain_cycles": 127,
+              "complete_chain_cycles": 120,
               "created_workers": 1,
               "duration_quality": "within-target-window",
               "duration_within_target": true,
               "effective_threads": 1,
-              "elapsed_seconds": 0.217436125,
+              "elapsed_seconds": 0.26646295833333333,
               "exact_payload_bytes": 0,
               "operation": "latency",
               "operation_order_position": 0,
               "passes": 0,
               "phase_order_position": 2,
-              "pilot_elapsed_seconds": 0.006127583333333333,
+              "pilot_elapsed_seconds": 0.006137791666666667,
               "qos_failed_workers": 0,
               "qos_outcome": "main-thread-qos-applied",
               "qos_successful_workers": 1,
               "reason": "",
               "requested_threads": 1,
               "samples_ns": [
-                29.34659121856289
+                27.419381671481663
               ],
-              "seed": "9954792392046060173",
+              "seed": "10641231460942127795",
               "seed_encoding": "uint64-decimal-string",
               "status": "measured",
               "target": "l2",
-              "value": 26.12450366883766,
+              "value": 33.88251728481717,
               "work_policy": "automatic-duration-calibration",
               "worker_startup_failed": false
             }
@@ -1648,19 +1648,19 @@
             ],
             "semantics": "pooled-separate-sample-window-distribution",
             "statistics": {
-              "average": 29.34659121856289,
+              "average": 27.419381671481663,
               "coefficient_of_variation_pct": 0.0,
-              "max": 29.34659121856289,
-              "median": 29.34659121856289,
+              "max": 27.419381671481663,
+              "median": 27.419381671481663,
               "median_absolute_deviation": 0.0,
-              "min": 29.34659121856289,
-              "p90": 29.34659121856289,
-              "p95": 29.34659121856289,
-              "p99": 29.34659121856289,
+              "min": 27.419381671481663,
+              "p90": 27.419381671481663,
+              "p95": 27.419381671481663,
+              "p99": 27.419381671481663,
               "stddev": 0.0
             },
             "values_ns": [
-              29.34659121856289
+              27.419381671481663
             ]
           },
           "quality": {
@@ -1672,27 +1672,27 @@
           },
           "requested_loop_count": 1,
           "statistics": {
-            "average": 26.12450366883766,
+            "average": 33.88251728481717,
             "coefficient_of_variation_pct": 0.0,
-            "max": 26.12450366883766,
-            "median": 26.12450366883766,
+            "max": 33.88251728481717,
+            "median": 33.88251728481717,
             "median_absolute_deviation": 0.0,
-            "min": 26.12450366883766,
-            "p90": 26.12450366883766,
-            "p95": 26.12450366883766,
-            "p99": 26.12450366883766,
+            "min": 33.88251728481717,
+            "p90": 33.88251728481717,
+            "p95": 33.88251728481717,
+            "p99": 33.88251728481717,
             "stddev": 0.0
           },
           "status": "measured",
           "unit": "ns",
-          "value": 26.12450366883766,
+          "value": 33.88251728481717,
           "values": [
-            26.12450366883766
+            33.88251728481717
           ]
         }
       }
     }
   },
-  "timestamp": "2026-08-21T08:14:24Z",
-  "version": "0.62.0"
+  "timestamp": "2026-08-21T16:30:22Z",
+  "version": "0.63.0"
 }

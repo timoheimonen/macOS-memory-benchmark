@@ -1,6 +1,6 @@
 # Machine-Readable Command-Line API
 
-This document defines the supported process-level integration contract for `memory_benchmark` 0.62.0. It describes how
+This document defines the supported process-level integration contract for `memory_benchmark` 0.63.0. It describes how
 software launches a benchmark, separates machine-readable output from the human transcript, and decides whether a JSON
 result is safe to consume. The generated Doxygen pages document C++ internals; they are not this process API.
 
@@ -151,11 +151,11 @@ the producer makes `conclusions_valid` true exactly when `results_complete` is t
 the explicit status and both booleans shown in the table.
 
 The bundled standard-memory example scripts are maintained in lockstep with the current producer. Each script performs
-only the local version, completion, and field sanity checks needed before reading its current schema-3 metric paths. In
-this release that includes exact top-level `version == "0.62.0"` in addition to the standard identity and completeness
-fields above. The examples are not a versioned compatibility library. Released standard schema 2, unversioned
-historical standard JSON layouts, and every other explicit standard version are unsupported inputs and are not routed
-through a metric-shape fallback.
+only the local version, completion, and field sanity checks needed before reading its current schema-3 metric paths. For
+the current producer that includes exact top-level `version == "0.63.0"` in addition to the standard identity and
+completeness fields above. The examples are not a versioned compatibility library. Released standard schema 2,
+unversioned historical standard JSON layouts, and every other explicit standard version are unsupported inputs and are
+not routed through a metric-shape fallback.
 
 Graceful interruption or runtime failure after a representable result state has been initialized emits the available
 partial, interrupted, error, or failed JSON snapshot. The execution status and payload are independent: a non-zero status

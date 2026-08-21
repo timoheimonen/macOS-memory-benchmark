@@ -180,7 +180,7 @@ Treat benchmark values as measurements of the configured workload under the obse
 JSON output records completion and nullable measurement state instead of using zero for unavailable results. Current
 standard schema 3 requires `configuration.mode: "benchmark"`, a string `configuration.output_file` that preserves the
 raw output target, plus boolean `results_complete` and `conclusions_valid` fields. The bundled standard-memory examples
-track the current producer, require its exact top-level `version` (`0.62.0` in this release), sanity-check the current
+track the current producer, require its exact top-level `version` (currently `0.63.0`), sanity-check the current
 result locally, and read current schema-3 paths directly. They do not provide compatibility for released standard
 schema 2, unversioned historical standard JSON layouts, or any other explicit standard version.
 Consumers making conclusions should reject incomplete or interrupted runs according to the mode-specific status fields.

@@ -1119,8 +1119,8 @@ process-status checks, current schema acceptance, and the transport support matr
   "loops": [ ... ],
   "main_memory": { ... },
   "cache": { ... },
-  "timestamp": "2026-03-09T14:57:56Z",
-  "version": "0.62.0"
+  "timestamp": "YYYY-MM-DDTHH:MM:SSZ",
+  "version": "0.63.0"
 }
 ```
 
@@ -1138,9 +1138,9 @@ Bandwidth QoS metadata includes created workers plus per-worker success/failure 
 outcome. These fields describe a best-effort scheduler hint, never hard core pinning.
 
 The bundled standard-memory examples are kept compatible with the current producer. They sanity-check the current
-standard result locally, including exact top-level `version: "0.62.0"` in this release, and read current schema-3 metric
-paths directly; they are not a compatibility library. Released standard schema 2, unversioned historical standard JSON
-layouts, and every other explicit standard version are intentionally unsupported inputs.
+standard result locally, including exact top-level `version: "0.63.0"` for the current producer, and read current
+schema-3 metric paths directly; they are not a compatibility library. Released standard schema 2, unversioned
+historical standard JSON layouts, and every other explicit standard version are intentionally unsupported inputs.
 
 ### Pattern benchmark JSON shape
 
@@ -1266,8 +1266,8 @@ arrays:
 
 ```json
 {
-  "software_version": "0.62.0",
-  "version": "0.62.0",
+  "software_version": "0.63.0",
+  "version": "0.63.0",
   "timestamp": "...",
   "schema_version": 1,
   "mode": "gpu_bandwidth",
@@ -1481,8 +1481,8 @@ returns only, excludes QoS and pilot outcomes, and does not prove physical place
     }
   ],
   "execution_time_sec": 123.4,
-  "timestamp": "2026-04-29T12:00:00Z",
-  "version": "0.62.0"
+  "timestamp": "YYYY-MM-DDTHH:MM:SSZ",
+  "version": "0.63.0"
 }
 ```
 
@@ -1841,8 +1841,8 @@ python3 -m pip install matplotlib numpy
 ```
 
 The bundled standard-memory scripts are kept in lockstep with the current producer. Each performs only the local
-version, completion, and field sanity checks needed by its current schema-3 metric paths. For version 0.62.0, the check
-requires top-level `version: "0.62.0"`, standard mode/schema identity, complete/valid result state, and a string output
+version, completion, and field sanity checks needed by its current schema-3 metric paths. For version 0.63.0, the check
+requires top-level `version: "0.63.0"`, standard mode/schema identity, complete/valid result state, and a string output
 target before the selected metric path is read. These scripts are examples, not a versioned compatibility layer:
 standard schema 2, unversioned historical standard JSON, other modes, and other standard versions are unsupported. The
 separately governed `plot_analyzetlb.py` retains its own TLB-history policy. Standard-memory plotters do not accept GPU
@@ -2062,7 +2062,3 @@ Command help:
 ```bash
 memory_benchmark -h
 ```
-
----
-
-**Last Updated**: 2026-08-21
