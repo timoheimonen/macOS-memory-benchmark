@@ -175,12 +175,15 @@ Treat benchmark values as measurements of the configured workload under the obse
   physical cache-line migration or isolate coherence-fabric latency, and macOS user space cannot guarantee physical core
   pinning.
 
-JSON output records completion and nullable measurement state instead of using zero for unavailable results. Standard
-schema 2 also preserves the raw output target and exposes `conclusions_valid` alongside `results_complete`. Consumers
-making conclusions should reject incomplete or interrupted runs according to the mode-specific status fields. Every
-direct command or CPU sweep using `--output -` reserves stdout for one final JSON document and routes its post-parse
-human transcript to stderr; file output is atomic, while standard commands, sweeps, and GPU retain their mode-specific
-intermediate checkpoints. Exact process
+JSON output records completion and nullable measurement state instead of using zero for unavailable results. Current
+standard schema 3 requires a string `configuration.output_file` that preserves the raw output target plus boolean
+`results_complete` and `conclusions_valid` fields. Bundled readers retain compatibility with released legacy standard
+schema 2, where `configuration.output_file` and `conclusions_valid` may be absent; `results_complete` remains mandatory,
+and an explicitly false `conclusions_valid` still rejects the result.
+Consumers making conclusions should reject incomplete or interrupted runs according to the mode-specific status fields.
+Every direct command or CPU sweep using `--output -` reserves stdout for one final JSON document and routes its
+post-parse human transcript to stderr; file output is atomic, while standard commands, sweeps, and GPU retain their
+mode-specific intermediate checkpoints. Exact process
 acceptance rules are in the [Machine-Readable CLI API](API.md), with schema and checkpoint details in the [User Manual](MANUAL.md),
 [Technical Specification](TECHNICAL_SPECIFICATION.md), and mode whitepapers.
 

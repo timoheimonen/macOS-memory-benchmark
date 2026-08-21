@@ -380,9 +380,10 @@ stride, the comparison records unavailable measurements while the configured tar
 the three comparison measurements remain part of the loop's plan, that loop is `partial` and top-level
 `results_complete` remains `false`.
 
-Schema 2 serializes these as `locality_16k_latency_ns`, `global_random_latency_ns`, and
-`locality_latency_delta_ns` under `main_memory.latency.automatic_locality_comparison`. The comparison does not isolate
-page-table walks and must not be used as a substitute for `--analyze-tlb`.
+Released legacy standard schema 2 and current standard schema 3 serialize these as `locality_16k_latency_ns`,
+`global_random_latency_ns`, and `locality_latency_delta_ns` under
+`main_memory.latency.automatic_locality_comparison`. The comparison does not isolate page-table walks and must not be
+used as a substitute for `--analyze-tlb`.
 
 ## 11. Standard Benchmark Execution
 
@@ -407,7 +408,7 @@ Important execution semantics:
 - One command-level seed derives target/layout seeds; repeated loops rebuild equivalent logical chains.
 - Each operation has explicit measurement status and optional value. Interrupted/incomplete work is excluded from
   aggregate vectors. A standard file target is atomically checkpointed after completed loop-state changes. Stdout
-  checkpoint calls are lazy no-ops, and direct `--output -` receives one final schema-2 payload, including representable
+  checkpoint calls are lazy no-ops, and direct `--output -` receives one final schema-3 payload, including representable
   interrupted or failed evidence, before the execution status is returned.
 
 ## 12. Pattern Benchmark Execution
@@ -698,9 +699,9 @@ Every direct mode and the CPU modes' supported sweeps can send their existing pa
 for exact raw `-`, to one final stdout document. This transport does not wrap or change the measurement schema;
 [API.md](API.md) is the process-integration contract and support matrix.
 
-- Standard mode schema 2: `configuration` with the raw `output_file` target, `execution_time_sec`, completion
-  counters/status, `results_complete`, `conclusions_valid`, per-loop `loops`, `main_memory`, `cache`, `timestamp`, and
-  `version`.
+- Standard mode schema 3: `configuration` with the raw `output_file` target as a required string,
+  `execution_time_sec`, completion counters/status, `results_complete`, `conclusions_valid`, per-loop `loops`,
+  `main_memory`, `cache`, `timestamp`, and `version`.
 - Pattern mode schema 3: `configuration`, `execution_time_sec`, command status/reason, planned/completed loop and
   measurement counters, `results_complete`, optional retained `patterns` evidence, `timestamp`, and `version`.
 - TLB analysis schema 4: `configuration`, `execution_time_sec`, `tlb_analysis`, `timestamp`, `version`; conclusions
@@ -715,8 +716,11 @@ for exact raw `-`, to one final stdout document. This transport does not wrap or
   `runs[].status`, `status_reason`, and `result`. Every attempted run is retained and
   `attempted_runs == runs.size()`; a file target checkpoints each attempt and also checkpoints a terminal envelope when
   the run plan is empty or a stop is observed before a run, without incrementing `attempted_runs`. Stdout preserves that
-  logical cadence but defers serialization until the terminal envelope. `completed_runs` requires nested
-  `status: "complete"`, `results_complete: true`, and `conclusions_valid: true` for standard; nested
+  logical cadence but defers serialization until the terminal envelope. `completed_runs` requires current standard
+  schema 3 to have nested `status: "complete"`, `results_complete: true`, `conclusions_valid: true`, and a string
+  `configuration.output_file`. A released legacy standard schema-2 result instead requires complete status and
+  `results_complete: true`; `conclusions_valid` and `configuration.output_file` may be absent, but when present they must
+  be boolean true and a string, respectively. Pattern requires nested
   `status: "complete"` and `results_complete: true` for pattern; `tlb_analysis.status: "complete"` and
   `tlb_analysis.conclusions_valid: true` for TLB; or
   `core_to_core_latency.status: "complete"` and `measurements_complete: true` for core-to-core. Partial, interrupted,
@@ -733,8 +737,12 @@ loop measurements remain in JSON as evidence, while command status/counters keep
 failure may omit `patterns`; main and sweep orchestration still build the completion payload before returning or
 classifying the failure.
 
-Command completeness for standard requires
-`status == "complete" && results_complete == true && conclusions_valid == true`; pattern requires
+Command completeness for current standard schema 3 requires
+`status == "complete" && results_complete == true && conclusions_valid == true`, with string
+`configuration.output_file`. Released legacy standard schema 2 requires complete status and boolean
+`results_complete: true`; `conclusions_valid` and `configuration.output_file` are optional, but a present
+`conclusions_valid` must be boolean true and a present output target must be a string. Other explicit standard schema
+versions are unsupported. Pattern requires
 `status == "complete" && results_complete == true`. TLB requires
 `tlb_analysis.status == "complete" && tlb_analysis.conclusions_valid == true`; core-to-core requires
 `core_to_core_latency.status == "complete" && core_to_core_latency.measurements_complete == true`. Metric consumers must
@@ -753,12 +761,16 @@ In addition to standard fields (buffer size, iterations, loop count, thread coun
   `global-random` mode can still ignore that value.
 - `latency_tlb_locality_bytes` (number): TLB-locality window size in bytes.
 - `latency_tlb_locality_kb` (number): TLB-locality window size in KB.
-- `benchmark_schema_version` (number): `2`.
-- `output_file` (string, standard schema 2): Raw direct output target; nested standard sweep results use an empty string
-  because the envelope owns persistence.
+- `benchmark_schema_version` (number): `3` for current output.
+- `output_file` (required string, standard schema 3): Raw direct output target; nested standard sweep results use an
+  empty string because the envelope owns persistence.
 - `methodology_version` (string): `benchmark-v2-calibrated-seeded-balanced`.
 - `benchmark_seed` (string): exact uint64 decimal string plus source/encoding fields.
 - Calibration targets/windows and phase/operation schedule policies.
+
+Released legacy standard schema 2 uses the same `headline_ns` and `automatic_locality_comparison` metric layout but may
+omit `configuration.output_file` and top-level `conclusions_valid`. Bundled readers preserve that released input
+contract; schema 3 makes both fields mandatory without changing the standard methodology version.
 
 ### 18.2 Main-memory latency keys
 

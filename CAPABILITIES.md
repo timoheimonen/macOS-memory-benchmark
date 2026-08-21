@@ -90,6 +90,11 @@ their mode-specific intermediate checkpoints, while stdout remains final-only. G
 checkpoint transitions and stop observations without intermediate serialization. The current support matrix and
 process acceptance procedure are in the [Machine-Readable CLI API](API.md).
 
+Current standard results use schema 3, which requires a string `configuration.output_file` plus boolean
+`results_complete` and `conclusions_valid`. Bundled readers also accept the released legacy schema-2 contract when
+status is complete and `results_complete` is true; `configuration.output_file` and `conclusions_valid` may be absent,
+while an explicitly false `conclusions_valid` still rejects the result.
+
 Sweep output retains completed evidence even when a later run stops. Consumers should check the mode-specific status and completeness indicators before using aggregate conclusions. Exact schemas, checkpoint behavior, and inspection examples are in the [User Manual](MANUAL.md#json-output-format) and [Technical Specification](TECHNICAL_SPECIFICATION.md#18-json-output-contract).
 
 ## Interpretation and Further Documentation

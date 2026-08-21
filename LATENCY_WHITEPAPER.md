@@ -252,9 +252,9 @@ analysis.
   calibration quality, and status.
 - For completed standard CLI latency measurements, segmented windows are under each headline aggregate's
   `pooled_sample_distribution`, with values and loop-boundary metadata kept separate from continuous loop headlines.
-- The current standard schema 2 does not serialize the legacy `chain_diagnostics.unique_pages_touched` blocks. Do not
-  use the old `main_memory.latency.chain_diagnostics` or `cache.*.latency.chain_diagnostics` paths for version 0.62.0
-  output.
+- Current standard schema 3, like released legacy standard schema 2, does not serialize the unversioned historical
+  `chain_diagnostics.unique_pages_touched` blocks. Do not use the old `main_memory.latency.chain_diagnostics` or
+  `cache.*.latency.chain_diagnostics` paths for version 0.62.0 output.
 
 When `--latency-tlb-locality-kb` is not explicitly supplied, standard main-memory latency also runs three paired rounds
 of 16 KiB-locality and global-random chains. The first-measured layout alternates by round, and

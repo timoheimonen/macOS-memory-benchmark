@@ -113,7 +113,8 @@ contract version 1 first appears in software version `0.62.0`.
 
 | Payload | Schema authority | A command result is complete only when |
 |---|---|---|
-| Standard | `configuration.benchmark_schema_version == 2` | `status == "complete" && results_complete == true && conclusions_valid == true` |
+| Legacy standard (released) | `configuration.benchmark_schema_version == 2` | `status == "complete" && results_complete == true && (conclusions_valid is absent \|\| conclusions_valid == true)` |
+| Current standard | `configuration.benchmark_schema_version == 3` | `status == "complete" && results_complete == true && conclusions_valid == true` |
 | Patterns | `configuration.pattern_schema_version == 3` | `status == "complete" && results_complete == true` |
 | TLB | `configuration.schema_version == 4` | `tlb_analysis.status == "complete" && tlb_analysis.conclusions_valid == true` |
 | Core-to-core | `configuration.schema_version == 2` | `core_to_core_latency.status == "complete" && core_to_core_latency.measurements_complete == true` |
@@ -139,11 +140,19 @@ conclusions additionally require `affinity_hint_comparison_interpretable == true
 additionally requires `operation_order_balance_complete == true`; consumers of an operation also require a measured,
 non-null value and its applicable validation/quality fields.
 
-Direct standard schema-2 payloads preserve the raw target token in `configuration.output_file`: stdout therefore records
-`"-"`, while file targets retain spellings such as `./-`, `-T`, or `--cache-size` rather than a normalized path. A
-standard result nested in a sweep records an empty target because the envelope owns persistence and nested file writes
-are disabled. Top-level standard `conclusions_valid` is true exactly when `results_complete` is true; consumers must still
-check the explicit status and both booleans shown in the table.
+Current standard schema-3 payloads require `configuration.output_file` to be a string and preserve the raw target token:
+stdout therefore records `"-"`, while file targets retain spellings such as `./-`, `-T`, or `--cache-size` rather than a
+normalized path. A current standard result nested in a sweep records an empty string because the envelope owns
+persistence and nested file writes are disabled. Schema 3 requires boolean `results_complete` and `conclusions_valid`;
+the producer makes `conclusions_valid` true exactly when `results_complete` is true, while consumers must still check
+the explicit status and both booleans shown in the table.
+
+Legacy standard schema 2 was published before these two fields became mandatory. A released schema-2 result may
+therefore omit top-level `conclusions_valid` and `configuration.output_file`. If present, `conclusions_valid` must be a
+boolean and true for acceptance, and `configuration.output_file` must be a string. `results_complete` must be a boolean
+in both schemas.
+An explicit standard schema version other than 2 or 3 is unsupported and must not be routed through an unversioned
+historical fallback.
 
 Graceful interruption or runtime failure after a representable result state has been initialized emits the available
 partial, interrupted, error, or failed JSON snapshot. The execution status and payload are independent: a non-zero status
@@ -189,7 +198,8 @@ Shell capture example:
 ```bash
 memory_benchmark --benchmark --only-bandwidth --buffer-size 512 --count 5 --seed 42 --output - \
   >benchmark.json 2>benchmark.log
-jq -e '.configuration.benchmark_schema_version == 2 and
+jq -e '.configuration.benchmark_schema_version == 3 and
+       (.configuration.output_file | type) == "string" and
        .status == "complete" and .results_complete == true and
        .conclusions_valid == true' benchmark.json
 
@@ -197,6 +207,16 @@ memory_benchmark --patterns --buffer-size 512 --count 5 --seed 42 --output - \
   >patterns.json 2>patterns.log
 jq -e '.configuration.pattern_schema_version == 3 and
        .status == "complete" and .results_complete == true' patterns.json
+```
+
+A migration reader that deliberately accepts released legacy standard schema 2 can apply its older optional-field rule:
+
+```bash
+jq -e '.configuration.benchmark_schema_version == 2 and
+       .status == "complete" and .results_complete == true and
+       ((has("conclusions_valid") | not) or .conclusions_valid == true) and
+       ((.configuration | has("output_file") | not) or
+        (.configuration.output_file | type) == "string")' released-schema-2.json
 ```
 
 The corresponding TLB and core-to-core command predicates are:
@@ -224,8 +244,14 @@ jq -e '.schema_version == 1 and .mode == "gpu_bandwidth" and
 ## Compatibility policy
 
 - `version` and GPU's `software_version` identify the application release; neither is a result schema version.
-- Standard schema 2, pattern schema 3, TLB schema 4, core-to-core schema 2, and GPU schema 1 remain authoritative at
-  their existing locations. The schema field is intentionally not normalized across these established payloads.
+- Current standard schema 3, pattern schema 3, TLB schema 4, core-to-core schema 2, and GPU schema 1 remain
+  authoritative at their existing locations. The schema field is intentionally not normalized across these established
+  payloads.
+- Legacy standard schema 2 was introduced in `0.58.0` and remains a supported released input contract. Its completion
+  predicate and optional `conclusions_valid` / `configuration.output_file` rules are distinct from current schema 3.
+  Both standard schemas use the `headline_ns` and `automatic_locality_comparison` metric layout.
+- Any other explicit standard schema version is unsupported; only the separately recognized unversioned historical
+  metric layout may use the historical fallback.
 - Both general and core-to-core sweep envelopes use `configuration.sweep_schema_version == 1`; nested results keep their
   independent mode schema versions.
 - Additive optional fields may remain within a schema version only when old consumers can safely ignore them.

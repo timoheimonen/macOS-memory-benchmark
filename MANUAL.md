@@ -661,10 +661,13 @@ middle, and trailing items.
   persistence payload builder or serializing an intermediate document, and emit only the final envelope
 - For standard, pattern, and TLB sweeps, every attempted run is retained with its own `status` and `status_reason`.
   `attempted_runs` counts stored entries, while `completed_runs` counts only mode-specific nested results that are
-  genuinely complete: standard requires nested `status: "complete"`, `results_complete: true`, and
-  `conclusions_valid: true`; pattern requires nested `status: "complete"` with `results_complete: true`; and TLB requires
-  nested `tlb_analysis.status: "complete"` with `tlb_analysis.conclusions_valid: true`. Partial,
-  interrupted, and failed nested results never increment it. TLB's native `tlb_analysis.status: "error"` is mapped to
+  genuinely complete. Current standard schema 3 requires nested `status: "complete"`, `results_complete: true`, and
+  `conclusions_valid: true`, plus a string `configuration.output_file`. A released legacy schema-2 standard result
+  requires complete status and `results_complete: true`; `conclusions_valid` and `configuration.output_file` may be
+  absent. When present, `conclusions_valid` must be boolean true and the output target must be a string. Pattern requires
+  nested `status: "complete"` with `results_complete: true`; TLB requires nested `tlb_analysis.status: "complete"` with
+  `tlb_analysis.conclusions_valid: true`. Partial, interrupted, and failed nested results never increment it. TLB's
+  native `tlb_analysis.status: "error"` is mapped to
   a failed sweep attempt, and the schema-4 payload is retained without adding a nested `tlb_analysis.status_reason`
 - A parameter key may appear only once in one sweep command
 - Core-to-core sweeps also append and retain the latest attempted run when it is interrupted or fails; a file target
@@ -1072,8 +1075,9 @@ CV above 5%, non-nominal thermal/Low Power Mode state, incomplete three-position
 duration outside 100–250 ms are warnings. They do not cause performance-based retry or sample filtering. A missing or
 invalid measurement is not printed as zero and remains status-bearing/null in JSON.
 
-**Note:** Standard schema 2 per-loop latency measurements record `chain_node_count` whether the stride was explicit or
-defaulted. Standalone TLB schema 4 records buffer-relative chain diagnostics such as requested/effective/actual
+**Note:** Current standard schema 3 and released legacy standard schema 2 per-loop latency measurements record
+`chain_node_count` whether the stride was explicit or defaulted. Standalone TLB schema 4 records buffer-relative chain
+diagnostics such as requested/effective/actual
 virtual-page counts, `pointer_nodes`, `unique_cache_lines`, `spread_chain`, and `packed_chain`. These fields do not
 describe physical-page identities or prove physical placement. They are retained in JSON, not the compact console
 report.
@@ -1087,13 +1091,13 @@ raw target `--output -`, once to stdout. The stdout transport does not wrap the 
 sweep stdout is one final envelope rather than a checkpoint stream. See [API.md](API.md) for stream handling,
 process-status checks, schema compatibility, and the current transport support matrix.
 
-### Standard benchmark JSON shape
+### Standard benchmark JSON shape (schema 3)
 
 ```json
 {
   "configuration": {
     "mode": "benchmark",
-    "benchmark_schema_version": 2,
+    "benchmark_schema_version": 3,
     "output_file": "results.json",
     "methodology_version": "benchmark-v2-calibrated-seeded-balanced",
     "benchmark_seed": "123456789",
@@ -1115,17 +1119,25 @@ process-status checks, schema compatibility, and the current transport support m
 }
 ```
 
-Schema 2 stores exact uint64 seeds as decimal strings. Every per-loop measurement has status/reason, nullable value,
+Schema 3 stores exact uint64 seeds as decimal strings. Every per-loop measurement has status/reason, nullable value,
 exact passes/accesses/payload, requested/effective workers, seed, pilot/final duration, calibration quality, and schedule
 position. Only `measured` values enter aggregates. One measured loop is its own headline; multiple loop headlines use
 median P50. Statistics include average, P90/P95/P99, sample standard deviation, CV, MAD, min, and max. A standard file
-target is atomically checkpointed after completed loop-state changes. Direct payloads preserve the raw output token in
-`configuration.output_file`, including `"-"`, `./-`, and flag-shaped file names. Standard results nested in a sweep use an
-empty target because the envelope owns persistence. With `--output -`, logical checkpoint boundaries remain active but
-persistence is a no-op, and the command emits one final snapshot. Top-level `conclusions_valid` mirrors
+target is atomically checkpointed after completed loop-state changes. Schema 3 requires
+`configuration.output_file` to be a string. Direct payloads preserve the raw output token there, including `"-"`, `./-`,
+and flag-shaped file names; standard results nested in a sweep use an empty string because the envelope owns
+persistence. With `--output -`, logical checkpoint boundaries remain active but persistence is a no-op, and the command
+emits one final snapshot. Schema 3 also requires boolean `conclusions_valid`, which mirrors
 `results_complete`; consumers must require `status: "complete"` and both booleans when completeness is mandatory.
 Bandwidth QoS metadata includes created workers plus per-worker success/failure counts; latency carries the main-thread
 outcome. These fields describe a best-effort scheduler hint, never hard core pinning.
+
+Released legacy standard schema 2 remains a supported input contract. It uses the same `headline_ns` and
+`automatic_locality_comparison` metric layout, but may omit `conclusions_valid` and `configuration.output_file`. For
+schema-2 acceptance, require `status: "complete"` and boolean `results_complete: true`; if `conclusions_valid` is
+present, it must be boolean `true`, and if `configuration.output_file` is present, it must be a string. Reject any other
+explicit standard schema version rather than treating it as the separately supported unversioned historical metric
+layout.
 
 ### Pattern benchmark JSON shape
 
@@ -1473,8 +1485,8 @@ returns only, excludes QoS and pilot outcomes, and does not prove physical place
 
 ### Latency payload structure (current)
 
-Standard schema 2 separates per-loop continuous headlines, pooled sample-window distributions, and paired locality
-comparisons. The values below illustrate structure only.
+Current standard schema 3, like released legacy schema 2, separates per-loop continuous headlines, pooled sample-window
+distributions, and paired locality comparisons. The values below illustrate structure only.
 
 ```json
 "latency": {
@@ -1762,10 +1774,18 @@ jq '.main_memory.latency.headline_ns.pooled_sample_distribution.statistics.p95' 
 # Paired automatic locality delta median
 jq '.main_memory.latency.automatic_locality_comparison.locality_latency_delta_ns.statistics.median' results.json
 
-# Reject incomplete standard output
-jq -e 'select(.configuration.benchmark_schema_version == 2 and
+# Reject incomplete current standard output
+jq -e 'select(.configuration.benchmark_schema_version == 3 and
+              (.configuration.output_file | type) == "string" and
               .status == "complete" and .results_complete == true and
               .conclusions_valid == true)' results.json
+
+# Migration check for released legacy standard schema 2
+jq -e 'select(.configuration.benchmark_schema_version == 2 and
+              .status == "complete" and .results_complete == true and
+              ((has("conclusions_valid") | not) or .conclusions_valid == true) and
+              ((.configuration | has("output_file") | not) or
+               (.configuration.output_file | type) == "string"))' released-schema-2.json
 
 # Pattern random read median and status
 jq '{status: .patterns.random.bandwidth.read_gb_s.status, median: .patterns.random.bandwidth.read_gb_s.statistics.median_p50}' patterns.json
@@ -1834,8 +1854,9 @@ What it does:
 - Sweeps multiple custom cache sizes
 - Sweeps multiple `--latency-tlb-locality-kb` values
 - Writes per-run JSON files under `script-examples/tmp/`
-- Extracts `.cache.custom.latency.headline_ns.pooled_sample_distribution.statistics` from current schema 2 files into
-  `script-examples/final_output.txt`; `.cache.custom.latency.samples_ns.statistics` is a historical-schema fallback
+- Extracts `.cache.custom.latency.headline_ns.pooled_sample_distribution.statistics` from current schema 3 and released
+  legacy schema 2 files into `script-examples/final_output.txt`; `.cache.custom.latency.samples_ns.statistics` is an
+  unversioned historical-schema fallback
 - Clears `tmp` after extraction
 - Returns a non-zero status after cleanup if any benchmark failed, an expected output is missing, or a current-schema
   result is incomplete or cannot be parsed
@@ -2019,4 +2040,4 @@ memory_benchmark -h
 
 ---
 
-**Last Updated**: 2026-08-20
+**Last Updated**: 2026-08-21

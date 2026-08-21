@@ -454,7 +454,7 @@ already-computed measurement state.
 
 ## 14. GPU JSON Schema 1
 
-The top-level discriminator is independent of standard schema 2:
+The top-level discriminator is independent of the current standard schema 3 and released legacy standard schema 2:
 
 ```json
 {
