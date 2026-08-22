@@ -534,6 +534,22 @@ std::string serialize_llm_kv_layout_identity(
     const LlmKvPermutationIdentity& permutation);
 
 /**
+ * Validate a retained paged-layout identity without allocating.
+ *
+ * The complete canonical serialization is matched in field order, including
+ * the self-consistent permutation identity and its layout entry domain.
+ *
+ * @param layout Valid paged geometry bound by the retained identity.
+ * @param permutation Frozen materialized table identity matching `layout`.
+ * @param identity Candidate canonical layout identity.
+ * @return True only when every canonical field matches exactly.
+ */
+bool validate_llm_kv_layout_identity(
+    const LlmKvLayoutPlan& layout,
+    const LlmKvPermutationIdentity& permutation,
+    std::string_view identity) noexcept;
+
+/**
  * Canonically bind a frozen workload to CPU ownership semantics.
  *
  * Both typed inputs must be valid, carry canonical component identities, and

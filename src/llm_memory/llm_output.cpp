@@ -75,12 +75,25 @@ void print_paged_layout_evidence(const LlmMemoryWorkPlan& plan,
   values.permutation_seed = paged->permutation.resolved_seed;
   values.permutation_sha256 = paged->permutation.sha256;
   values.permutation_identity = paged->permutation.identity;
-  values.metadata_lookups_per_work_unit =
-      paged->ownership.total_layout_metadata_lookup_count_per_work_unit;
-  values.metadata_bytes_per_work_unit =
-      paged->ownership.total_layout_metadata_read_bytes_per_work_unit;
-  values.accounted_bytes_per_work_unit =
-      paged->ownership.total_accounted_bytes_per_work_unit;
+  if (plan.phase == LlmPhase::Prefill) {
+    const LlmScenarioLimits kv_only_limits =
+        calculate_llm_scenario_limits(plan.geometry, LlmScenario::KvOnly);
+    if (kv_only_limits.valid) {
+      values.metadata_lookups_per_work_unit =
+          kv_only_limits.layout_metadata_lookup_count_per_work_unit;
+      values.metadata_bytes_per_work_unit =
+          kv_only_limits.layout_metadata_read_bytes_per_work_unit;
+      values.accounted_bytes_per_work_unit =
+          kv_only_limits.accounted_bytes_per_work_unit;
+    }
+  } else {
+    values.metadata_lookups_per_work_unit =
+        paged->ownership.total_layout_metadata_lookup_count_per_work_unit;
+    values.metadata_bytes_per_work_unit =
+        paged->ownership.total_layout_metadata_read_bytes_per_work_unit;
+    values.accounted_bytes_per_work_unit =
+        paged->ownership.total_accounted_bytes_per_work_unit;
+  }
   values.work_unit_name = work_unit_name;
   std::cout << Messages::report_llm_memory_paged_layout(values) << '\n';
 }

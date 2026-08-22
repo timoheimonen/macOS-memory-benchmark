@@ -50,6 +50,7 @@ constexpr std::string_view kLlmExecutorReasons[] = {
     LlmExecutorReason::K_MAPPING_FAILED,
     LlmExecutorReason::V_MAPPING_FAILED,
     LlmExecutorReason::PAGED_POST_VALIDATION_FAILED,
+    LlmExecutorReason::PREFILL_POST_VALIDATION_FAILED,
     LlmExecutorReason::DESCRIPTOR_ALLOCATION_FAILED,
     LlmExecutorReason::INITIALIZATION_FAILED,
     LlmExecutorReason::INVALID_RESOURCES,

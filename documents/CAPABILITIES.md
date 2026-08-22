@@ -12,7 +12,7 @@ Bandwidth is reported as **effective workload payload divided by measured time**
 | Access patterns (`--patterns`) | Payload-rate sensitivity to access order, regularity, and virtual stride | Which single cache, prefetch, translation, or scheduling mechanism caused a difference |
 | TLB analysis (`--analyze-tlb`) | Paired spread/packed latency deltas and empirical boundary estimates | Guaranteed architectural TLB sizes or direct DRAM latency |
 | Core-to-core (`--analyze-core2core`) | Effective round-trip time of a repeated two-thread acquire/release token exchange under scheduler hints | Isolated physical cache-line migration or coherence-path latency, exact physical-core placement, or a definitive topology map |
-| LLM memory profile (`--llm-memory`) | Effective logical model-payload rate and synthetic work-unit latency for CPU decode and contiguous prefill | Transformer computation, inference tokens/s, TTFT, physical DRAM traffic, Metal execution, runtime page allocation, GPU/ANE execution, or framework performance |
+| LLM memory profile (`--llm-memory`) | Effective logical model-payload rate and synthetic work-unit latency for CPU decode and prefill with contiguous or paged KV | Transformer computation, inference tokens/s, TTFT, physical DRAM traffic, Metal execution, runtime page allocation, GPU/ANE execution, or framework performance |
 | JSON output (`--output`) and sweeps (`--sweep`) | Auditable measurement evidence through recoverable files or one final stdout document for every result-producing direct mode and supported CPU sweep | Comparability when commands, software, hardware, or run conditions differ |
 
 ## CPU Memory and Cache Bandwidth
@@ -38,10 +38,10 @@ CPU and GPU GB/s should not be compared as if they were the same workload: their
 ## Synthetic LLM Memory Profile
 
 Standalone `--llm-memory` uses generic backend/phase/layout/work-unit vocabulary. Active profiles are CPU/decode with
-contiguous or paged KV and CPU/prefill with contiguous KV. Exact methodologies are
-`llm-memory-v1-cpu-decode-contiguous`, `llm-memory-v1-cpu-decode-paged`, and
-`llm-memory-v1-cpu-prefill-contiguous`. CPU/prefill/paged is rejected with
-`cpu-prefill-paged-not-yet-supported`; Metal is unavailable. Neither case silently falls back.
+contiguous or paged KV and CPU/prefill with contiguous or paged KV. Exact methodologies are
+`llm-memory-v1-cpu-decode-contiguous`, `llm-memory-v1-cpu-decode-paged`,
+`llm-memory-v1-cpu-prefill-contiguous`, and `llm-memory-v1-cpu-prefill-paged`. Metal is unavailable and never receives
+an implicit CPU fallback.
 
 Each active phase executes three scenarios:
 
@@ -68,11 +68,11 @@ The command allocates active weights and K/V resources at their full derived siz
 memory; initialization and pre-touch occur before measurement. Contiguous layout is layer, batch sequence, token, head,
 then head dimension. `--kv-layout` defaults to contiguous, which rejects `--kv-block-tokens`. Paged layout uses complete
 `G`-token physical blocks plus one uint32 block table and requires exactly one explicit positive power-of-two
-`--kv-block-tokens G` no greater than `UINT32_MAX`; in the active paged-decode profile, `G` may exceed the context. For
-`R = h_kv*d_h*s_kv`, `N = ceil(A/G)`, K physical bytes are `L*B*N*G*R`, K logical bytes remain `L*B*A*R`, and their
-difference is reported padding; V is identical. The table has `B*N` entries and is a seeded, versioned bijection over
-the same physical-ID domain. MHA, GQA, and MQA are represented by query-head/KV-head geometry, but physical KV payload
-is determined by the KV-head count.
+`--kv-block-tokens G` no greater than `UINT32_MAX`; `G` may exceed the active phase length. For phase length `A`
+(decode context or prefill prompt), `R = h_kv*d_h*s_kv`, and `N = ceil(A/G)`, K physical bytes are `L*B*N*G*R`, K
+logical bytes remain `L*B*A*R`, and their difference is reported padding; V is identical. The table has `B*N` entries
+and is a seeded, versioned bijection over the same physical-ID domain. MHA, GQA, and MQA are represented by
+query-head/KV-head geometry, but physical KV payload is determined by the KV-head count.
 
 Paged KV-bearing scenarios perform `L*B*(2*N+1)` explicit timed table loads per decode step: one paired append lookup,
 `N` K-block lookups, and `N` V-block lookups per layer/batch pair. The four bytes per lookup are separately reported
@@ -80,9 +80,15 @@ layout metadata and count toward task admission, but never enter effective-model
 touch the table. Terminal suffix padding is initialized and canary-validated but is neither timed payload nor accessed
 by the kernel.
 
+For paged prefill, let `m_j = ceil(e_j/G)` and `M = sum(m_j)`. A KV-bearing operation performs
+`L*B*(N+2*M)` timed loads: `N` paired-write lookups plus separate `M` K-prefix and `M` V-prefix lookups per layer/batch
+pair. Partial prefixes stop at the exact tile end instead of widening to a full terminal block, and the lookup total is
+independent of worker count.
+
 The frozen SplitMix64/Fisher-Yates permutation is validated and hashed before execution. Paged data patterns depend on
 pool, physical ID, and physical offset, while the timed checksum binds logical table index, loaded physical ID,
-semantic visit kind, and work-unit ordinal. Current-token writes and padding canaries are validated after each task.
+semantic visit kind, and work-unit ordinal. Decode current-token writes or prefill final-ordinal prompt samples, plus
+padding canaries, are validated after each task.
 Permutation generation, initialization, expected-checksum construction, and post-validation remain outside the
 synchronized CPU timing interval.
 

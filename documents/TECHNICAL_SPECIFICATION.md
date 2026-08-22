@@ -122,8 +122,8 @@ GPU mode follows its own synchronous pipeline:
    post-release replacement; stdout sessions serialize one terminal schema-1 payload at the command boundary after
    console rendering, then return success/failure according to explicit run and output status.
 
-LLM-memory follows its own synchronous pipeline. CPU decode is active with contiguous or deterministic paged KV, and
-CPU prefill is active with contiguous KV:
+LLM-memory follows its own synchronous pipeline. CPU decode and prefill are active with contiguous or deterministic
+paged KV:
 
 1. Scan the complete standalone whitelist, parsing supplied values and rejecting unknown, duplicate, or missing-value
    input even when help is present. Human help returns after that scan but before required/default/platform work.
@@ -252,9 +252,8 @@ Configuration state is represented by `BenchmarkConfig` (`src/core/config/config
   `--prompt-tokens P` and `--attention-query-tile-tokens Q`, requires `Q <= P`, and rejects decode context.
   `--kv-layout` accepts `contiguous|paged`. Paged requires exactly one `--kv-block-tokens <G>`; contiguous rejects that
   option. `G` must be a positive power of two no greater than `UINT32_MAX`, and it may exceed the phase length. The
-  cross-option rules are order-independent. CPU prefill is public only with contiguous KV; otherwise-valid paged
-  prefill is rejected with `cpu-prefill-paged-not-yet-supported`. Metal remains unavailable, and no request receives
-  fallback execution. Explicit work must fit both the
+  cross-option rules are order-independent. All four CPU phase/layout combinations are public. Metal remains
+  unavailable, and no request receives fallback execution. Explicit work must fit both the
   one-billion-work-unit and 64 GiB task-accounted-byte ceilings for all three scenarios.
 
 ### 6.2 Validation behavior (`config_validator.cpp`)
@@ -697,9 +696,10 @@ LLM mode is implemented under `src/llm_memory/` with a pure checked work planner
 module, an Objective-C-free synchronous `LlmBackend` boundary, a status-bearing backend-independent runner, a dedicated
 CPU adapter, phase/layout-specific ARM64 kernels, an ordered schema builder, and a Foundation-backed environment
 snapshot. Generic enums cover backend `cpu|metal`, phase `decode|prefill`, and KV layout `contiguous|paged`.
-CPU/decode/contiguous, CPU/decode/paged, and CPU/prefill/contiguous are active with exact methodology identities
-`llm-memory-v1-cpu-decode-contiguous`, `llm-memory-v1-cpu-decode-paged`, and
-`llm-memory-v1-cpu-prefill-contiguous`. Paged prefill and Metal remain unavailable and never receive fallback execution.
+All four CPU phase/layout combinations are active with exact methodology identities
+`llm-memory-v1-cpu-decode-contiguous`, `llm-memory-v1-cpu-decode-paged`,
+`llm-memory-v1-cpu-prefill-contiguous`, and `llm-memory-v1-cpu-prefill-paged`. Metal remains unavailable and never
+receives fallback execution.
 
 `LlmMemoryWorkPlan` keeps logical geometry, resources, accounting, seeds, and identities common while
 `LlmBackendExecutionPlan` carries exactly one `LlmCpuExecutionPlan` or `LlmMetalExecutionPlan` tag. The CPU alternative
@@ -722,10 +722,11 @@ weight shards, assignment boundaries, per-worker costs, and min/max/imbalance ev
 allocation failure publishes no partial assignments, worker vectors, totals, or identity.
 
 Contiguous prefill materializes scenario-specific cost-balanced token ownership, a dedicated descriptor ABI, full-size
-K/V resources, and the `llm_prefill_memory_asm` executor. Its exact worker-cost partition identity and per-scenario
-minimum, maximum, and imbalance bytes are retained as execution evidence. Paged prefill remains logical only: no block
-table, permutation, descriptor, or executable resource is materialized, and the public parser rejects it before output
-session creation.
+K/V resources, and the `llm_prefill_memory_asm` executor. Paged prefill materializes block-exclusive weighted
+ownership, full physical K/V pools, a read-only uint32 block table and seeded permutation, a distinct descriptor ABI,
+with 48-byte layer and 112-byte block-assignment records, and the `llm_prefill_memory_paged_asm` executor. Both retain
+exact per-scenario worker-cost minimum, maximum, imbalance,
+scope, and execution identities.
 
 For active weights `W`, layers `L`, KV heads `h_kv`, head dimension `d_h`, element bytes `s_kv`, batch `B`, and visible
 context `A` including the current token, define one K or V token record as `R = h_kv*d_h*s_kv`, one layer's paired
@@ -808,6 +809,13 @@ covers every tile-read visit. Excluded post-validation checks each owner's deter
 canonical-word samples and clipped boundary bytes against final ordinal `T-1`. No cross-worker barrier is required
 because an owner reads only records it owns.
 
+Paged prefill preserves that semantic order through whole logical-block ownership. For prompt length `P`, tile ends
+`e_j`, and block size `G`, it performs `N = ceil(P/G)` paired-write lookups and
+`M = sum(ceil(e_j/G))` lookups for each of the separate K and V tile scans per layer/batch pair. Partial prefixes use
+their exact valid byte count rather than rounding the visit to a full terminal block. Each semantic lookup executes an
+`ldr w` before address formation, and checksum evidence non-separably binds logical index, physical ID, visit kind, and
+operation ordinal. Total KV-active metadata is `L*B*(N+2*M)` lookups and four bytes per lookup; weights-only uses zero.
+
 The common runner accepts a task only when status/reason, backend, phase, layout, methodology/component identity,
 work-unit and KV-write kinds, scenario, frozen plan, authoritative finite positive timing, planned/completed work,
 model-payload/metadata/accounted counters, and validation all match. Comparative acceptance additionally requires the
@@ -872,6 +880,13 @@ work-unit count, scenario, and seed. For every operation ordinal it reads the ap
 owner-local prompt token in ascending order with K before V, then scans each increasing query tile's complete owned K
 prefix before its complete owned V prefix. Exact vector/scalar tails do not cross an owned range. Write and checksum
 patterns bind the operation ordinal; layout/phase dispatch occurs before the assembly call.
+
+The separate `llm_prefill_memory_paged_asm` entrypoint receives a paged-prefill descriptor containing the read-only
+table row, physical K/V pools, owned first/count block range, prompt/block tail geometry, and prefill tile geometry.
+Whole-block owners first populate their prompt span through paired K/V lookups, then perform a separate K lookup and V
+lookup for every exact block fragment in each tile prefix. Address formation follows each `ldr w`; 32-byte bodies and
+exact scalar tails never touch suffix padding. The kernel preserves AAPCS64 state and returns non-separable
+logical-index/physical-ID/visit/operation checksum evidence without calls, prefetches, or layout branches.
 
 ## 15. Timing Model
 
@@ -1120,8 +1135,8 @@ standard identity from metric layout; schema 2 and unversioned historical standa
   `software`, `configuration`, `resolved_plan`, `backend_evidence`, `memory_budget`, `calibration`, `measurements`,
   `aggregates`, `status`, `reason_code`, `results_complete`, `conclusions_valid`, and `interpretation`.
 - Methodology is exactly `llm-memory-v1-<backend>-<phase>-<layout>`. Active identities are
-  `llm-memory-v1-cpu-decode-contiguous`, `llm-memory-v1-cpu-decode-paged`, and
-  `llm-memory-v1-cpu-prefill-contiguous`. Metal and paged prefill remain unavailable.
+  `llm-memory-v1-cpu-decode-contiguous`, `llm-memory-v1-cpu-decode-paged`,
+  `llm-memory-v1-cpu-prefill-contiguous`, and `llm-memory-v1-cpu-prefill-paged`. Metal remains unavailable.
 - `configuration` retains exact `argv` and `resolved_sources`. `resolved_plan` owns phase-applicable `geometry`,
   layout-applicable `layout`, immutable logical/physical `resources`, and exact `component_identities`.
   Exactly one of `geometry.decode` and `.prefill` is populated. Prefill records integer P/Q and decimal-string
@@ -1130,9 +1145,10 @@ standard identity from metric layout; schema 2 and unversioned historical standa
   values. Component identities include logical profile, KV layout, optional permutation, backend executor, resource ABI,
   schedule, timer, buffer, write, checksum, and nullable MSL identities under the canonical
   `llm-memory-components-v1` fixed-order serialization.
-- CPU contiguous-prefill `backend_evidence.cpu.prefill` records `cost_unit: "worker-cost"`, execution/scope identities,
+- CPU prefill `backend_evidence.cpu.prefill` records `cost_unit: "worker-cost"`, execution/scope identities,
   descriptors per scenario/worker, and scenario-specific decimal-string worker cost, minimum, maximum, and imbalance
-  evidence. The object is null for decode; `backend_evidence.cpu.paged` is null for contiguous prefill.
+  evidence. The object is null for decode; `backend_evidence.cpu.paged` is populated for either paged phase, so paged
+  prefill has both objects.
 - `backend_evidence` always has `cpu` and `metal` object-or-null branches; only CPU is populated now.
   `memory_budget` requires decimal-string `resource_rounding_bytes`, `transient_peak_bytes`, `known_owned_peak_bytes`,
   and `admitted_budget_bytes`.
@@ -1367,6 +1383,8 @@ entry test. `jq` is not required by this gate.
     checksums; see [LLM_MEMORY_PROFILE_WHITEPAPER.md](LLM_MEMORY_PROFILE_WHITEPAPER.md))
   - `src/asm/llm_prefill_memory.s` (full-prompt writes, tiled causal-prefix reads, and operation-ordinal checksums; see
     [LLM_MEMORY_PROFILE_WHITEPAPER.md](LLM_MEMORY_PROFILE_WHITEPAPER.md))
+  - `src/asm/llm_prefill_memory_paged.s` (block-exclusive physical prompt writes, timed table lookups, exact partial
+    prefix scans, and permutation-bound checksums; see [LLM_MEMORY_PROFILE_WHITEPAPER.md](LLM_MEMORY_PROFILE_WHITEPAPER.md))
 
 ## 24. GPU Metal Maintenance Policy
 

@@ -46,8 +46,8 @@ A direct GPU command uses the same stream transport with its existing top-level 
 memory_benchmark --gpu-bandwidth --buffer-size 512 --count 3 --seed 42 --output -
 ```
 
-A direct LLM command likewise emits its top-level schema 1 payload. CPU decode supports contiguous or paged KV, while
-CPU prefill currently supports contiguous KV:
+A direct LLM command likewise emits its top-level schema 1 payload. CPU decode and prefill each support contiguous or
+paged KV:
 
 ```bash
 memory_benchmark --llm-memory --weight-size-mb 64 --layers 4 \
@@ -55,7 +55,7 @@ memory_benchmark --llm-memory --weight-size-mb 64 --layers 4 \
   --iterations 1 --count 3 --seed 42 --output -
 ```
 
-A contiguous prefill request supplies full-prompt and query-tile geometry instead of decode context:
+A prefill request supplies full-prompt and query-tile geometry instead of decode context:
 
 ```bash
 memory_benchmark --llm-memory --weight-size-mb 64 --layers 4 \
@@ -64,7 +64,8 @@ memory_benchmark --llm-memory --weight-size-mb 64 --layers 4 \
   --iterations 1 --count 3 --seed 42 --output -
 ```
 
-A paged request selects the layout and supplies its required block size in tokens:
+A paged request selects the layout and supplies its required block size in tokens. The layout options may be added to
+either a decode or prefill request:
 
 ```bash
 memory_benchmark --llm-memory --weight-size-mb 64 --layers 4 \
@@ -77,8 +78,8 @@ memory_benchmark --llm-memory --weight-size-mb 64 --layers 4 \
 `--kv-block-tokens <G>`; `G` must be positive, a power of two, and at most `UINT32_MAX`. A value larger than the active
 phase length is valid. Contiguous requests reject `--kv-block-tokens`. Phase defaults to decode. Decode requires
 `--context-tokens`; prefill requires `--prompt-tokens P` and `--attention-query-tile-tokens Q` with
-`1 <= Q <= P`, and the phase-specific inputs are mutually exclusive. CPU/prefill/paged reaches stable reason
-`cpu-prefill-paged-not-yet-supported`. Metal remains unavailable. No unsupported request receives a fallback.
+`1 <= Q <= P`, and the phase-specific inputs are mutually exclusive. All four CPU phase/layout combinations are
+active. Metal remains unavailable. No unsupported request receives a fallback.
 
 The sentinel is classified from the raw option value before path normalization:
 
@@ -187,13 +188,10 @@ non-null value and its applicable validation/quality fields.
 LLM schema 1 is an unpublished generic contract. It has top-level `mode: "llm_memory"`, `schema_version: 1`, and exact
 `backend`, `phase`, `kv_layout`, and `methodology_version` selectors. Methodology is derived as
 `llm-memory-v1-<backend>-<phase>-<layout>`. This revision activates `cpu`/`decode`/`contiguous`,
-`cpu`/`decode`/`paged`, and `cpu`/`prefill`/`contiguous`, with exact methodologies
-`llm-memory-v1-cpu-decode-contiguous`, `llm-memory-v1-cpu-decode-paged`, and
-`llm-memory-v1-cpu-prefill-contiguous`. Metal and paged prefill are unavailable and must never be silently replaced by
-another backend, phase, or layout.
-
-Paged prefill remains a source-level logical planning seam only. It does not materialize a block table, permutation,
-descriptor ABI, mapping, or production task and cannot produce an acceptable process result in this revision.
+`cpu`/`decode`/`paged`, `cpu`/`prefill`/`contiguous`, and `cpu`/`prefill`/`paged`, with exact methodologies
+`llm-memory-v1-cpu-decode-contiguous`, `llm-memory-v1-cpu-decode-paged`,
+`llm-memory-v1-cpu-prefill-contiguous`, and `llm-memory-v1-cpu-prefill-paged`. Metal is unavailable and must never be
+silently replaced by another backend, phase, or layout.
 
 Run statuses are `not_started`, `complete`, `partial`, `interrupted`, `unsupported`, and `failed`; measurement statuses
 are `not_run`, `measured`, `interrupted`, `invalid`, and `failed`. `unsupported` is a terminal, non-acceptable result,
@@ -247,8 +245,9 @@ explicit because no block-size default exists.
   `llm-memory-components-v1`; CPU MSL fields and contiguous permutation fields are null. Paged CPU results bind the
   physical layout and permutation identity to their paged descriptor, schedule, pattern, and checksum identities.
 
-For paged decode, let `A` be `visible_context_tokens`, `G` be `kv_block_tokens`, `B` be batch size, `L` be layer count,
-and `R = kv_head_count * head_dimension * kv_element_bytes`. The schema evidence is derived exactly as follows:
+For a paged profile, let `A` be `visible_context_tokens` for decode or `prompt_tokens` for prefill, `G` be
+`kv_block_tokens`, `B` be batch size, `L` be layer count, and
+`R = kv_head_count * head_dimension * kv_element_bytes`. The schema evidence is derived exactly as follows:
 
 ```text
 N = A / G + (A % G != 0)
@@ -256,7 +255,7 @@ physical_blocks_per_layer = B * N
 block_bytes = G * R
 last_block_tokens = A - (N - 1) * G
 last_block_valid_bytes = last_block_tokens * R
-decode_append_offset_in_last_block = ((A - 1) % G) * R
+decode_append_offset_in_last_block = ((A - 1) % G) * R  # decode only; null for prefill
 k_logical_bytes = L * B * A * R
 k_physical_length_bytes = L * B * N * block_bytes
 k_layout_padding_bytes = k_physical_length_bytes - k_logical_bytes
@@ -274,7 +273,7 @@ is `splitmix64(base_seed xor domain)`. Each draw uses `threshold = uint64_wrap(0
 made read-only for CPU execution, and held constant across warmup, calibration, scenarios, and measured loops. Its exact
 algorithm version, domain, resolved seed, entry count, and lowercase 64-hex SHA-256 are part of the result identity.
 
-For contiguous prefill, let `P` be prompt length, `Q` query-tile length, and `K = L*2*R`. With
+For prefill, let `P` be prompt length, `Q` query-tile length, and `K = L*2*R`. With
 `C = ceil(P/Q)`, tile ends `e_j = min((j+1)*Q, P)`, and `S(P,Q) = sum(e_j)`, one `prefill_operation` has:
 
 ```text
@@ -295,10 +294,23 @@ record. CPU scenario partitions report a stable identity plus minimum, maximum, 
 Audit-only causal pairs are
 `triangular(P)` per sequence; logical attention pairs/FMA terms are reported but never executed.
 
-`backend_evidence.cpu.prefill` is null for decode and an object for contiguous prefill. It records `cost_unit:
+For paged prefill, additionally let `N = ceil(P/G)`, `m_j = ceil(e_j/G)`, and `M = sum(m_j)`. Each layer/batch pair
+performs `N` paired K/V write lookups, `M` K-prefix lookups, and `M` V-prefix lookups. A lookup that reaches a partial
+tile prefix visits only the exact valid token bytes required by `e_j`; it never expands the logical visit to a whole
+terminal block. Thus a KV-active prefill work unit reports:
+
+```text
+layout_metadata_lookup_count_per_work_unit = L * B * (N + 2 * M)
+layout_metadata_read_bytes_per_work_unit = 4 * layout_metadata_lookup_count_per_work_unit
+accounted_bytes_per_work_unit =
+  effective_model_payload_bytes_per_work_unit + layout_metadata_read_bytes_per_work_unit
+```
+
+`backend_evidence.cpu.prefill` is null for decode and an object for either prefill layout. It records `cost_unit:
 "worker-cost"`, the execution identity, descriptors per scenario/worker, and a three-entry scenario array. Each scenario
 records its identity, scope count/identities, decimal-string per-worker accounted costs, and decimal-string minimum,
-maximum, and max-minus-min imbalance per work unit. `backend_evidence.cpu.paged` is null for contiguous prefill.
+maximum, and max-minus-min imbalance per work unit. `backend_evidence.cpu.paged` is populated for either paged phase,
+so paged prefill has both CPU evidence objects populated.
 
 `backend_evidence` always contains both tagged branches. `cpu` is populated and `metal` is null for all active
 profiles.
@@ -352,8 +364,9 @@ included in `accounted_bytes_per_work_unit`, not in `effective_model_payload_gb_
 Measurement checksum evidence uses the phase-neutral keys `write_pattern_version` and `checksum_pattern_version`;
 schema 1 does not publish decode-specific `append_pattern_version` or `read_checksum_version` aliases.
 
-Paged `weights_only` performs no block-table access and reports zero layout-metadata work. For `kv_only` and `mixed`,
-each layer/batch pair performs one paired K/V append lookup, `N` K-scan lookups, and `N` V-scan lookups per decode step:
+Paged `weights_only` performs no block-table access and reports zero layout-metadata work. For decode `kv_only` and
+`mixed`, each layer/batch pair performs one paired K/V append lookup, `N` K-scan lookups, and `N` V-scan lookups per
+decode step:
 
 ```text
 layout_metadata_lookup_count_per_work_unit = L * B * (2 * N + 1)
@@ -370,10 +383,12 @@ numerator never includes table bytes.
 Every paged semantic visit loads its uint32 physical ID inside the timed ARM64 kernel and calculates the block address
 after that load; the host does not replace the table with a pre-resolved pointer list. The traversal is append, complete
 logical K-block scan, then complete logical V-block scan for each layer/batch pair, with mixed reading the layer weight
-span first. The paged checksum binds logical table index, loaded physical ID, semantic visit kind, and work-unit ordinal
-non-separably. Physical data patterns depend on pool, physical ID, and physical offset. Post-task validation checks
-current-token writes and terminal padding canaries. Generation, validation, initialization, pre-touch, expected-checksum
-construction, and post-validation are outside the authoritative synchronized CPU task time.
+span first. Paged prefill instead writes all owned prompt blocks first, then for each query tile scans the exact K prefix
+followed by the exact V prefix. The paged checksum binds logical table index, loaded physical ID, semantic visit kind,
+and work-unit ordinal non-separably. Physical data patterns depend on pool, physical ID, and physical offset. Post-task
+validation checks decode current-token writes or prefill final-ordinal prompt samples plus terminal padding canaries.
+Generation, validation, initialization, pre-touch, expected-checksum construction, and post-validation are outside the
+authoritative synchronized CPU task time.
 
 The traffic classification version is `llm-exact-weight-vs-kv-read-payload-v1`: it compares exact active-weight bytes
 with exact KV-read bytes only. `near_crossover` means equality, not a tolerance band and not an observed hardware

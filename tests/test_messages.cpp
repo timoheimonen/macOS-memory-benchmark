@@ -201,8 +201,8 @@ TEST(MessagesTest, LlmMemoryCliMessagesHaveExactOutput) {
       "Options for standalone CPU synthetic LLM memory mode:\n"
       "  -M, --llm-memory       Select the memory-only LLM profile.\n"
       "      --phase <decode|prefill>\n"
-      "                          Workload phase (default: decode). CPU prefill currently\n"
-      "                          supports contiguous KV only.\n"
+      "                          Workload phase (default: decode). Both phases support\n"
+      "                          contiguous or paged KV on CPU.\n"
       "      --weight-size-mb <MiB>\n"
       "                          Required active weight bytes per work unit, in MiB.\n"
       "      --layers <count>    Required transformer layer count.\n"
@@ -229,8 +229,7 @@ TEST(MessagesTest, LlmMemoryCliMessagesHaveExactOutput) {
       "      --kv-block-tokens <count>\n"
       "                          Required only for paged KV; must be a positive power of two\n"
       "                          no greater than UINT32_MAX; it may exceed the phase sequence length.\n"
-      "                          Rejected for contiguous KV. CPU prefill+paged is not yet\n"
-      "                          supported (reason_code=cpu-prefill-paged-not-yet-supported).\n"
+      "                          Rejected for contiguous KV.\n"
       "      --batch-size <count>\n"
       "                          Batch sequences per work unit (default: " +
       std::to_string(Constants::LLM_DEFAULT_BATCH_SIZE) +
@@ -877,8 +876,9 @@ TEST(MessagesFormattingTest, UsageOptions) {
   EXPECT_NE(msg.find("synthetic LLM decode/prefill memory profile"), std::string::npos);
   EXPECT_NE(msg.find("prefill requires --phase prefill, --prompt-tokens"), std::string::npos);
   EXPECT_NE(msg.find("--attention-query-tile-tokens"), std::string::npos);
-  EXPECT_NE(msg.find("prefill currently supports contiguous KV only"), std::string::npos);
+  EXPECT_NE(msg.find("Both phases support contiguous"), std::string::npos);
   EXPECT_NE(msg.find("llm-memory-v1-cpu-prefill-contiguous"), std::string::npos);
+  EXPECT_NE(msg.find(Constants::LLM_CPU_PREFILL_PAGED_METHODOLOGY_VERSION), std::string::npos);
   EXPECT_NE(msg.find("--analyze-core2core"), std::string::npos);
   EXPECT_NE(msg.find("acquire/release token-handoff"), std::string::npos);
   EXPECT_NE(msg.find("protocol, coherence, and scheduler effects"), std::string::npos);

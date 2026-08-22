@@ -193,7 +193,7 @@ and memory-budget preflight, the command allocates the layout-specific resources
 | `--attention-query-tile-tokens <Q>` | ✅ prefill only | Required with prefill; `1 <= Q <= P`, with no default |
 | `--kv-element-bytes <1\|2\|4>` | ✅ | Default `2`; every other width is rejected |
 | `--batch-size <n>` | ✅ | Positive; default `1` |
-| `--kv-layout <contiguous\|paged>` | ✅ | Default `contiguous`; paged is currently executable only for decode |
+| `--kv-layout <contiguous\|paged>` | ✅ | Default `contiguous`; both layouts are executable for decode and prefill on CPU |
 | `--kv-block-tokens <G>` | ✅ paged only | Required exactly once with paged; rejected with contiguous. Positive power of two, at most `UINT32_MAX`; may exceed the active phase length |
 | `-t, --threads <n>` | ✅ | Positive requested workers; omission uses detected workers. The work plan records requested, available, and effective counts separately and reduces effective workers only when availability or executable span size requires it |
 | `-i, --iterations <n>` | ✅ | Positive exact work units per scenario; omission selects excluded per-scenario calibration toward 150 ms. Explicit values must fit the strictest one-billion-work-unit/64 GiB task-accounted-byte limit |
@@ -210,8 +210,8 @@ task-accounted-byte ceiling. For paged KV, task-accounted bytes include logical 
 traffic, while throughput remains model bytes divided by timed seconds. Before allocation, the planner separately admits
 page-rounded full-size weight and physical K/V mappings, the block table, descriptors, retained planner/transient storage,
 checksum storage, and orchestration storage against the current memory budget. CPU/prefill/contiguous is active;
-CPU/prefill/paged is rejected with `cpu-prefill-paged-not-yet-supported`. Metal remains unavailable. The command does
-not fall back to another backend, phase, or layout.
+CPU/prefill/paged is also active with full physical K/V blocks, a read-only table, timed lookup accounting, and
+padding validation. Metal remains unavailable. The command does not fall back to another backend, phase, or layout.
 
 ### Sweep Compatibility
 
@@ -279,7 +279,7 @@ Additional sweep rules:
 | `--llm-memory --kv-layout paged` without exactly one valid `--kv-block-tokens` | Paged KV requires an explicit positive power-of-two block size no greater than `UINT32_MAX` |
 | `--llm-memory --kv-layout contiguous --kv-block-tokens <G>` | Block size has no meaning for contiguous KV and is rejected |
 | `--llm-memory --phase decode` with prefill geometry, or prefill with `--context-tokens` | Phase-specific geometry is not interchangeable |
-| `--llm-memory --phase prefill --kv-layout paged --kv-block-tokens <G>` | Valid inputs reach stable `cpu-prefill-paged-not-yet-supported`; no fallback occurs |
+| `--llm-memory --phase prefill --kv-layout paged --kv-block-tokens <G>` | Valid CPU paged-prefill profile; requires the normal prefill `P`/`Q` geometry and explicit valid `G` |
 | `--sweep` without `--output`, or with an empty output value | Sweep mode requires a non-empty combined JSON output target |
 | `--sweep` generated runs > `--sweep-max-runs` | Guardrail against accidental large Cartesian sweeps |
 

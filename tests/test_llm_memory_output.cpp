@@ -124,6 +124,56 @@ LlmMemoryWorkPlan make_prefill_console_plan() {
   return plan;
 }
 
+LlmMemoryWorkPlan make_paged_prefill_console_plan() {
+  LlmMemoryWorkPlan plan = make_prefill_console_plan();
+  plan.kv_layout = LlmKvLayout::Paged;
+  plan.geometry.kv_layout = LlmKvLayout::Paged;
+  plan.geometry.layer_count = 2;
+  plan.geometry.batch_size = 1;
+  plan.geometry.kv_block_tokens = 2;
+  plan.geometry.kv_blocks_per_sequence = 3;
+  plan.geometry.physical_blocks_per_layer = 3;
+  plan.geometry.total_physical_blocks = 6;
+  plan.geometry.kv_block_bytes = 128;
+  plan.geometry.last_block_tokens = 1;
+  plan.geometry.last_block_valid_bytes = 64;
+  plan.geometry.k_logical_bytes = 640;
+  plan.geometry.v_logical_bytes = 640;
+  plan.geometry.k_mapping_bytes = 768;
+  plan.geometry.v_mapping_bytes = 768;
+  plan.geometry.k_layout_padding_bytes = 128;
+  plan.geometry.v_layout_padding_bytes = 128;
+  plan.geometry.block_table_entries = 3;
+  plan.geometry.block_table_bytes = 12;
+  plan.geometry.layout_metadata_lookups_per_layer_sequence_per_work_unit = 15;
+  plan.geometry.kv_read_bytes_per_work_unit = 2816;
+  plan.geometry.kv_write_bytes_per_work_unit = 1280;
+  plan.geometry.kv_only_effective_model_payload_bytes_per_work_unit = 4096;
+  plan.geometry.mixed_effective_model_payload_bytes_per_work_unit = 5120;
+
+  LlmCpuExecutionPlan* const cpu = get_llm_cpu_execution_plan(plan);
+  if (cpu == nullptr) {
+    throw std::logic_error("expected mutable CPU execution plan");
+  }
+  cpu->paged.emplace();
+  cpu->paged->layout.valid = true;
+  cpu->paged->layout.kv_block_tokens = 2;
+  cpu->paged->layout.blocks_per_sequence = 3;
+  cpu->paged->layout.physical_blocks_per_layer = 3;
+  cpu->paged->layout.total_physical_blocks = 6;
+  cpu->paged->layout.block_bytes = 128;
+  cpu->paged->layout.last_block_tokens = 1;
+  cpu->paged->layout.last_block_valid_bytes = 64;
+  cpu->paged->layout.block_table_entries = 3;
+  cpu->paged->block_table_logical_bytes = 12;
+  cpu->paged->block_table_mapping_bytes = 4096;
+  cpu->paged->permutation.algorithm_version = "permutation-v1";
+  cpu->paged->permutation.resolved_seed = 101;
+  cpu->paged->permutation.sha256 = "fedcba9876543210";
+  cpu->paged->permutation.identity = "paged-prefill-permutation-identity";
+  return plan;
+}
+
 LlmMemoryConfig fake_runner_config() {
   LlmMemoryConfig config;
   config.weight_size_mb = 1;
@@ -428,6 +478,36 @@ TEST(LlmMemoryOutputTest, PrefillReportIdentifiesFullPromptWorkAndTiledCausalGeo
             std::string::npos);
   EXPECT_EQ(output.find("Crossover:"), std::string::npos);
   EXPECT_EQ(output.find("tokens/s"), std::string::npos);
+}
+
+TEST(LlmMemoryOutputTest, PagedPrefillReportUsesKvActivePrefillAccountingWithoutDecodeOwnership) {
+  const LlmMemoryWorkPlan plan = make_paged_prefill_console_plan();
+  LlmResultMetadata metadata;
+  metadata.main_thread_qos = {true, true, 0};
+  metadata.environment_start.thermal_state = "nominal";
+  metadata.environment_end = metadata.environment_start;
+  LlmMemoryResult result;
+
+  testing::internal::CaptureStdout();
+  testing::internal::CaptureStderr();
+  print_llm_memory_console_report(plan, metadata, result);
+  const std::string errors = testing::internal::GetCapturedStderr();
+  const std::string output = testing::internal::GetCapturedStdout();
+
+  EXPECT_TRUE(errors.empty());
+  EXPECT_NE(output.find("Synthetic LLM memory profile (backend=cpu, phase=prefill, "
+                        "work_unit=prefill_operation, kv_layout=paged"),
+            std::string::npos);
+  EXPECT_EQ(count_substrings(output, "  Paged KV block tokens (G): 2\n"), 1u);
+  EXPECT_EQ(count_substrings(output, "  Blocks per sequence (N):   3\n"), 1u);
+  EXPECT_EQ(count_substrings(output,
+                             "  Timed block-table metadata / KV-active prefill operation: "
+                             "30 lookups, 120 bytes\n"),
+            1u);
+  EXPECT_EQ(count_substrings(output, "  Accounted bytes / KV-active prefill operation: 4216\n"), 1u);
+  EXPECT_EQ(count_substrings(output,
+                             "  Effective model payload excludes timed block-table metadata bytes.\n"),
+            1u);
 }
 
 TEST(LlmMemoryOutputTest, EmitsDeduplicatedWarningsInContractOrder) {

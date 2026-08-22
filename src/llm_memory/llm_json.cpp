@@ -72,8 +72,7 @@ const LlmPagedCpuExecutionPlan* paged_cpu_execution_plan(
 
 const LlmPrefillCpuExecutionPlan* prefill_cpu_execution_plan(const LlmMemoryWorkPlan& plan) noexcept {
   const LlmCpuExecutionPlan* const cpu = get_llm_cpu_execution_plan(plan);
-  if (plan.phase != LlmPhase::Prefill || plan.kv_layout != LlmKvLayout::Contiguous || cpu == nullptr ||
-      !cpu->prefill.has_value()) {
+  if (plan.phase != LlmPhase::Prefill || cpu == nullptr || !cpu->prefill.has_value()) {
     return nullptr;
   }
   return &*cpu->prefill;
@@ -292,8 +291,9 @@ bool final_identity_size_view(const LlmMemoryWorkPlan& model_plan, LlmJsonIdenti
        !add_string(paged->execution_identity) || !add_string(paged->table_validation.reason_code) ||
        !add_string(paged->permutation.algorithm_version) || !add_string(paged->permutation.domain_uint64_hex) ||
        !add_string(paged->permutation.sha256) || !add_string(paged->permutation.identity) ||
-       !add_string(paged->ownership.reason_code) || !add_string(paged->ownership.layout_geometry_identity) ||
-       !add_string(paged->ownership.identity))) {
+       (model_plan.phase == LlmPhase::Decode &&
+        (!add_string(paged->ownership.reason_code) ||
+         !add_string(paged->ownership.layout_geometry_identity) || !add_string(paged->ownership.identity))))) {
     return false;
   }
   const LlmPrefillCpuExecutionPlan* const prefill = prefill_cpu_execution_plan(model_plan);
@@ -561,7 +561,7 @@ OrderedJson layout_json(const LlmMemoryWorkPlan& plan) {
       available ? paged->layout.last_block_valid_bytes : 0, available);
   output["decode_append_offset_in_last_block"] = decimal_or_null(
       available ? paged->layout.decode_append_offset_in_last_block : 0,
-      available);
+      available && plan.phase == LlmPhase::Decode);
   output["block_table_entries"] = decimal_or_null(
       available ? paged->layout.block_table_entries : 0, available);
   output["block_table_bytes"] = decimal_or_null(
@@ -706,7 +706,9 @@ OrderedJson paged_cpu_evidence_json(const LlmMemoryWorkPlan& plan) {
   output["table_validation"] =
       block_table_validation_json(paged->table_validation);
   output["permutation"] = permutation_evidence_json(paged->permutation);
-  output["ownership"] = ownership_evidence_json(paged->ownership);
+  output["ownership"] = plan.phase == LlmPhase::Decode
+                            ? ownership_evidence_json(paged->ownership)
+                            : OrderedJson(nullptr);
   return output;
 }
 

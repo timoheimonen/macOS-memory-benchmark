@@ -600,12 +600,6 @@ int parse_llm_memory_arguments(int argc, char* argv[],
     report_llm_config_failure(validation.reason_code);
     return EXIT_FAILURE;
   }
-  if (config.backend == LlmMemoryBackend::Cpu && config.phase == LlmPhase::Prefill &&
-      config.kv_layout == LlmKvLayout::Paged) {
-    report_llm_config_failure(LlmMemoryConfigReason::CPU_PREFILL_PAGED_NOT_YET_SUPPORTED);
-    return EXIT_FAILURE;
-  }
-
   LlmGeometryRequest geometry_request{
       validation.active_weight_bytes,
       config.layer_count,

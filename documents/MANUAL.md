@@ -191,9 +191,9 @@ boundaries, parallelism, cache behavior, resource modes, and validation overhead
 
 ### Synthetic LLM memory payload
 
-LLM-memory schema 1 uses generic backend/phase/layout/work-unit vocabulary. This revision activates CPU/decode with
-contiguous or paged KV and CPU/prefill with contiguous KV. Prefill uses `work_unit_kind: "prefill_operation"`;
-decode uses `"decode_step"`. Metal and paged prefill remain unavailable and never fall back to another profile.
+LLM-memory schema 1 uses generic backend/phase/layout/work-unit vocabulary. This revision activates CPU/decode and
+CPU/prefill with contiguous or paged KV. Prefill uses `work_unit_kind: "prefill_operation"`; decode uses
+`"decode_step"`. Metal remains unavailable and never falls back to another profile.
 
 `--kv-layout` defaults to `contiguous`. Paged layout requires exactly one `--kv-block-tokens <G>` option. `G` must be
 positive, a power of two, and no greater than `UINT32_MAX`; it may be larger than the active phase's sequence length.
@@ -245,8 +245,8 @@ the command seed. Entries are four-byte uint32 values, `UINT32_MAX` is reserved 
 not exceed `UINT32_MAX`. The table's domain, resolved seed, algorithm, entry count, and little-endian SHA-256 are frozen
 for the whole command. Warmup, calibration, and every scenario/loop use the same table.
 
-Paged `weights_only` does not touch the table. `kv_only` and `mixed` perform one paired append lookup, `N` K-scan
-lookups, and `N` V-scan lookups for every layer/batch pair:
+Paged `weights_only` does not touch the table. For paged decode, `kv_only` and `mixed` perform one paired append lookup,
+`N` K-scan lookups, and `N` V-scan lookups for every layer/batch pair:
 
 ```text
 lookups / decode work unit = L * B * (2 * N + 1)
@@ -275,6 +275,21 @@ scans one full prefix; `Q=1` gives `S=triangular(P)`. Reported causal-pair and l
 metadata, not executed compute. The timed checksum covers every tile-read visit. Excluded post-validation checks each
 owner's deterministic first/middle/last canonical-word samples, including bytes clipped to owner boundaries, against
 the final operation ordinal `T-1`; it does not reread every prompt record.
+
+For paged prefill, define `N = ceil(P/G)`, `m_j = ceil(e_j/G)`, and `M = sum(m_j)`. Each layer/batch pair performs `N`
+paired K/V block lookups while populating the prompt, followed by `M` K-prefix and `M` V-prefix lookups across the
+tiles:
+
+```text
+lookups / prefill work unit = L * B * (N + 2 * M)
+metadata bytes / prefill work unit = 4 * lookups
+accounted bytes = effective model payload bytes + metadata bytes
+```
+
+Partial tile prefixes visit only the exact valid bytes through `e_j`, including a partial terminal block. The timed
+checksum binds logical table index, loaded physical ID, visit kind, and operation ordinal non-separably. Paged prefill
+therefore preserves the same logical payload as contiguous prefill while reporting table-read metadata separately.
+Post-validation checks final-ordinal prompt samples and the physical pools' terminal padding canaries.
 
 The command uses full-size ordinary cacheable resources. Initialization/pre-touch, permutation preparation, worker
 creation, same-shape warmup, calibration, JSON, expected-checksum construction, and post-validation are outside elapsed
@@ -578,8 +593,8 @@ middle, and trailing items.
 #### `--llm-memory`
 
 - Selects the standalone CPU decode/prefill memory mode. Active methodologies are
-  `llm-memory-v1-cpu-decode-contiguous`, `llm-memory-v1-cpu-decode-paged`, and
-  `llm-memory-v1-cpu-prefill-contiguous`. It never enters the general
+  `llm-memory-v1-cpu-decode-contiguous`, `llm-memory-v1-cpu-decode-paged`,
+  `llm-memory-v1-cpu-prefill-contiguous`, and `llm-memory-v1-cpu-prefill-paged`. It never enters the general
   `BenchmarkConfig` parser or CPU sweep runner
 - Requires each common model option `--weight-size-mb <MiB>`, `--layers <count>`, `--query-heads <count>`,
   `--kv-heads <count>`, and `--head-dim <count>` exactly once. Decode requires `--context-tokens <count>`; prefill
@@ -603,7 +618,8 @@ middle, and trailing items.
   resolves weight/KV byte geometry and ensures all three scenarios can fit the one-billion-work-unit and 64 GiB
   accounted-byte task limits; explicit iterations must fit the strictest scenario limit
 - Treats one prefill work unit as one complete prompt rewrite plus tiled causal-prefix scans for every batch sequence;
-  weights are read once per full-prompt operation, not once per token or tile
+  weights are read once per full-prompt operation, not once per token or tile. With paged KV, full-prompt writes and
+  exact partial-prefix scans perform timed uint32 table lookups
 - Preserves an explicit worker request even when it exceeds detected availability. Effective-worker reduction belongs
   to the executable work plan and remains separately reportable
 - `--llm-memory --help` succeeds without required model inputs and returns before core detection, seed generation,
@@ -614,8 +630,8 @@ middle, and trailing items.
   permutation-validation transient before materializing the table. All CPU mappings are regular cacheable anonymous
   memory; `--non-cacheable` is outside the whitelist. Deterministic initialization and pre-touch cover every requested
   physical byte before any measured task, and the validated table is read-only during execution. Before each paged
-  task, an untimed allocation-free reset restores only the mutable current-token append slots; history blocks and
-  suffix-padding canaries are not rewritten
+  decode task, an untimed allocation-free reset restores only the mutable current-token append slots; history blocks
+  and suffix-padding canaries are not rewritten. Paged prefill instead rewrites every owned prompt byte in timed work
 - Runs `weights_only`, `kv_only`, and layer-interleaved `mixed` scenarios. Omitted iterations trigger excluded,
   scenario-specific calibration in that canonical order with an 8 MiB minimum pilot accounted-work floor when
   guardrails permit, a 150 ms target, a 100–250 ms intended window, and at most two corrections. The initial pilot has
@@ -629,10 +645,10 @@ middle, and trailing items.
   and every other non-empty value is a file target, including `./-` and flag-shaped names. File output atomically
   checkpoints each terminal scenario measurement and command terminal; stdout performs the same logical transitions
   without intermediate serialization
-- CPU prefill with contiguous KV uses a dedicated ARM64 executor and reports scenario-specific cost-balanced owner
-  identities plus minimum/maximum/imbalance worker-cost evidence. Valid paged prefill is rejected before execution with
-  `cpu-prefill-paged-not-yet-supported`; its pure planner does not materialize resources. Metal remains unavailable,
-  with no CPU fallback
+- CPU prefill uses layout-specific ARM64 executors and reports scenario-specific cost-balanced owner identities plus
+  minimum/maximum/imbalance worker-cost evidence. Paged prefill additionally reports deterministic block-exclusive
+  ownership, table/permutation identity, exact lookup metadata, and padding validation. Metal remains unavailable, with
+  no CPU fallback
 - This profile is memory-only: it performs no Transformer mathematics and does not report inference tokens/s. Its
   `synthetic_memory_work_units_per_second` and `effective_model_payload_gb_s` must not be interpreted as model
   throughput or physical DRAM-counter traffic. Paged block-table reads are timed and separately accounted but are not
@@ -998,6 +1014,12 @@ memory_benchmark --llm-memory --weight-size-mb 64 --layers 4 --query-heads 8 --k
   --head-dim 64 --phase prefill --prompt-tokens 512 --attention-query-tile-tokens 64 \
   --iterations 1 --count 3 --seed 42 --output llm_memory_prefill.json
 
+# Standalone CPU prefill with deterministic paged KV
+memory_benchmark --llm-memory --weight-size-mb 64 --layers 4 --query-heads 8 --kv-heads 2 \
+  --head-dim 64 --phase prefill --prompt-tokens 512 --attention-query-tile-tokens 64 \
+  --kv-layout paged --kv-block-tokens 16 \
+  --iterations 1 --count 3 --seed 42 --output llm_memory_prefill_paged.json
+
 # Benchmark latency sweep over 3 buffer sizes and 3 locality windows (9 runs)
 memory_benchmark --benchmark --only-latency --count 5 --sweep buffer-size=256,512,1024 --sweep latency-tlb-locality-kb=16,1024,0 --output latency_sweep.json
 
@@ -1064,11 +1086,6 @@ memory_benchmark --llm-memory --weight-size-mb 64 --layers 4 --query-heads 8 --k
 # invalid: prefill rejects decode context and requires explicit P/Q
 memory_benchmark --llm-memory --weight-size-mb 64 --layers 4 --query-heads 8 --kv-heads 2 \
   --head-dim 64 --phase prefill --context-tokens 512
-
-# not yet supported: CPU prefill with paged KV never falls back to contiguous
-memory_benchmark --llm-memory --weight-size-mb 64 --layers 4 --query-heads 8 --kv-heads 2 \
-  --head-dim 64 --phase prefill --prompt-tokens 512 --attention-query-tile-tokens 64 \
-  --kv-layout paged --kv-block-tokens 16
 
 # invalid: multiple primary modes
 memory_benchmark --gpu-bandwidth --benchmark
@@ -1399,7 +1416,7 @@ invalid measurement is not printed as zero and remains status-bearing/null in JS
 
 ### 9) Synthetic LLM memory profile
 
-`--llm-memory` prints a separate report for CPU decode (contiguous/paged) or CPU prefill (contiguous) containing:
+`--llm-memory` prints a separate report for CPU decode or prefill with contiguous or paged KV containing:
 
 - backend, phase/work unit, KV layout, cacheable semantics, and exact active-weight/KV-read/KV-write bytes;
 - decode visible context and its two-decimal traffic crossover, or prefill P/Q/C, prefix visits, causal pairs, and
@@ -1712,10 +1729,9 @@ must be classified by `mode` and `schema_version`, then by the exact backend/pha
 unpublished CPU/step-specific schema-v1 shape has no compatibility aliases or fallback reader; schema 1 is intentionally
 re-frozen in this generic form without a version bump.
 
-This abbreviated structural selection shows CPU/decode/contiguous. CPU/decode/paged populates the paged-only fields;
-CPU/prefill/contiguous instead populates `geometry.prefill`, uses null decode/crossover/weight-to-KV-read ratio fields,
-and identifies
-`llm-memory-v1-cpu-prefill-contiguous`. A real document contains complete
+This abbreviated structural selection shows CPU/decode/contiguous. Either paged phase populates the paged-only fields;
+either prefill layout instead populates `geometry.prefill` and uses null decode/crossover/weight-to-KV-read ratio
+fields. The paged-prefill methodology is `llm-memory-v1-cpu-prefill-paged`. A real document contains complete
 calibration, measurement, checksum, loop, checkpoint, environment, warning, and interpretation evidence in addition to
 the required generic sections.
 
@@ -1810,14 +1826,15 @@ Schema 1 rules:
 
 - Canonical selectors are `backend: cpu|metal`, `phase: decode|prefill`, `kv_layout: contiguous|paged`,
   `work_unit_kind: decode_step|prefill_operation`, and
-  `kv_write_kind: none|current_token_append|full_prompt_population`. CPU/decode/contiguous, CPU/decode/paged, and
-  CPU/prefill/contiguous are active; Metal and paged prefill remain unavailable.
+  `kv_write_kind: none|current_token_append|full_prompt_population`. All four CPU phase/layout profiles are active;
+  Metal remains unavailable.
 - Methodology is always `llm-memory-v1-<backend>-<phase>-<layout>`. Active exact identities are
-  `llm-memory-v1-cpu-decode-contiguous`, `llm-memory-v1-cpu-decode-paged`, and
-  `llm-memory-v1-cpu-prefill-contiguous`.
-- `backend_evidence.cpu.prefill` is null for decode. Contiguous prefill populates it with `cost_unit:
+  `llm-memory-v1-cpu-decode-contiguous`, `llm-memory-v1-cpu-decode-paged`,
+  `llm-memory-v1-cpu-prefill-contiguous`, and `llm-memory-v1-cpu-prefill-paged`.
+- `backend_evidence.cpu.prefill` is null for decode. Either prefill layout populates it with `cost_unit:
   "worker-cost"`, one execution identity, descriptors per scenario/worker, and scenario-specific partition/scope
-  identities, decimal-string worker costs, minimum, maximum, and max-minus-min imbalance per work unit.
+  identities, decimal-string worker costs, minimum, maximum, and max-minus-min imbalance per work unit. Paged prefill
+  also populates `backend_evidence.cpu.paged`.
 - Run statuses are `not_started`, `complete`, `partial`, `interrupted`, `unsupported`, and `failed`. Measurement statuses are
   `not_run`, `measured`, `interrupted`, `invalid`, and `failed`. Multiword status tokens use underscores; multiword
   reason-code and duration-quality tokens use hyphens. `unsupported` is terminal, invalid for performance acceptance,
@@ -1862,8 +1879,8 @@ Schema 1 rules:
 
   Contiguous records and paged `weights_only` report metadata lookup/read additions as decimal-string zero; non-weights
   decode scenarios use `kv_write_kind: "current_token_append"`; prefill KV-bearing scenarios use
-  `"full_prompt_population"`. Paged KV-bearing scenarios report
-  `L * B * (2 * N + 1)` table lookups and four bytes per lookup per work unit. These bytes contribute to
+  `"full_prompt_population"`. Paged KV-bearing decode reports `L * B * (2 * N + 1)` table lookups. Paged prefill
+  reports `L * B * (N + 2 * M)`, where `M = sum(ceil(e_j/G))`; both use four bytes per lookup. These bytes contribute to
   `accounted_bytes_per_work_unit`, not to effective-model-payload GB/s. Derived rates are non-null only for a successful
   measured record.
 - `aggregates` contains measured-only work-unit latency, work-unit rate, and effective model-payload GB/s values,

@@ -4,7 +4,8 @@
 
 `memory_benchmark --llm-memory` is a versioned Apple Silicon synthetic memory benchmark with a generic
 backend/phase/KV-layout schema. CPU decode is active with contiguous or deterministic paged KV, and CPU prefill is
-active with contiguous KV. It executes three scenarios derived from the same explicit model geometry:
+active with contiguous or deterministic paged KV. It executes three scenarios derived from the same explicit model
+geometry:
 
 - `weights_only`: read the active weights once;
 - `kv_only`: perform the phase-specific K/V write and reads;
@@ -25,14 +26,14 @@ The current contract is identified by:
 | JSON schema | `1` |
 | Phase selector | `decode` or `prefill` |
 | Work unit | `decode_step` or `prefill_operation` |
-| Methodology | `llm-memory-v1-cpu-decode-<layout>` or `llm-memory-v1-cpu-prefill-contiguous` |
+| Methodology | `llm-memory-v1-cpu-<phase>-<layout>` |
 | Model/scenario plan identity prefix | `llm-memory-work-plan-v1` |
 | Component identity prefix | `llm-memory-components-v1` |
 | Logical profile version | phase-specific decode or prefill profile identity |
 | KV layout selector/version | `contiguous` / `contiguous_layer_batch_token_head_dimension`, or `paged` / `paged-uint32-block-table-full-blocks-v1` |
 | Permutation version | null for contiguous; `splitmix64-fisher-yates-rejection-v1` for paged |
-| Backend executor version | `llm-cpu-executor-v1-arm64-decode-<layout>` or `llm-cpu-executor-v1-arm64-prefill-contiguous` |
-| Resource ABI | decode contiguous/paged ABI or `llm-memory-prefill-contiguous-descriptor-abi-v1` |
+| Backend executor version | phase/layout-specific `llm-cpu-executor-v1-arm64-<phase>-<layout>` identity |
+| Resource ABI | phase/layout-specific descriptor identity, including `llm-memory-prefill-paged-descriptor-abi-v1` |
 | Schedule version | phase/layout-specific owner-local schedule identity |
 | Timer policy | `synchronized-start-to-last-worker-completion-per-scenario-task` |
 | Buffer pattern | `llm-buffer-pattern-v1` or `llm-paged-physical-buffer-pattern-v1` |
@@ -55,14 +56,12 @@ block-granular ownership, and full-block suffix padding.
 
 Schema-v1 vocabulary includes `cpu|metal`, `decode|prefill`, `contiguous|paged`,
 `decode_step|prefill_operation`, and `none|current_token_append|full_prompt_population`. Contiguous and paged are public
-for CPU decode; contiguous is public for CPU prefill. Metal and paged prefill remain unavailable and never receive
-hidden fallback.
+for both CPU phases. Metal remains unavailable and never receives hidden fallback.
 
 The prefill implementation resolves checked tile/prefix/payload formulas, versioned atomic CPU ownership evidence,
-owner-local semantic traces, and operation-ordinal checksum oracles. Contiguous prefill binds those contracts to an
-ARM64 executor. A valid internal paged prefill plan retains
-mathematical layout costs only: no block table, permutation hash, descriptor ABI, mapping, or production task exists,
-and the CPU backend returns unsupported. None of this seam is process-level performance evidence in this revision.
+owner-local semantic traces, and operation-ordinal checksum oracles. Contiguous prefill uses token-range ownership;
+paged prefill uses block-exclusive weighted ownership plus a read-only uint32 table, deterministic permutation,
+full physical K/V pools, a dedicated descriptor ABI, and a separate ARM64 executor.
 
 It intentionally excludes:
 
@@ -117,8 +116,7 @@ All other primary modes and all buffer/cache/latency/TLB/pattern/GPU,
 
 Backend remains fixed to `cpu`; phase defaults to `decode`. Layout defaults to `contiguous`; explicit phase/layout and
 block-size sources are retained in `configuration.resolved_sources`. Decode and prefill inputs are mutually exclusive.
-CPU/prefill/paged is rejected with `cpu-prefill-paged-not-yet-supported`. Metal is unavailable, and no request falls
-back to another profile.
+All four CPU phase/layout combinations are active. Metal is unavailable, and no request falls back to another profile.
 
 Output targets follow the shared process contract:
 
@@ -243,8 +241,8 @@ The weight pass occurs once per full prompt, not once per token or tile. Audit m
 
 ### Paged physical geometry, table, and lookup traffic
 
-For paged layout, let `R = h_kv*d_h*s_kv` be one K or V token record per layer and let `G` be the explicit block size
-in tokens. Checked geometry derives:
+For paged layout, let `A` be visible context for decode or `P` for prefill, let `R = h_kv*d_h*s_kv` be one K or V
+token record per layer, and let `G` be the explicit block size in tokens. Checked geometry derives:
 
 ```text
 N = A / G + (A % G != 0)
@@ -252,7 +250,7 @@ P_b = B * N
 block_bytes = G * R
 last_block_tokens = A - (N - 1) * G
 last_block_valid_bytes = last_block_tokens * R
-decode_append_offset_in_last_block = ((A - 1) % G) * R
+decode_append_offset_in_last_block = ((A - 1) % G) * R  # decode only; null for prefill
 
 k_logical_bytes = L * B * A * R
 k_physical_bytes = L * P_b * block_bytes
@@ -322,9 +320,27 @@ the data address. The host does not pre-resolve physical IDs. The paired append 
 load the table independently. Lookup metadata is included in task guardrails but excluded from the primary GB/s
 numerator.
 
+Paged prefill also defines `m_j = ceil(e_j/G)` and `M = sum(m_j)`. Per layer/batch pair it performs `N` paired K/V
+write lookups to populate the prompt, followed by `M` K-prefix lookups and `M` V-prefix lookups. KV-only and mixed use:
+
+```text
+layout_metadata_lookup_count_per_work_unit = L * B * (N + 2 * M)
+layout_metadata_read_bytes_per_work_unit = 4 * L * B * (N + 2 * M)
+accounted_bytes_per_work_unit =
+  effective_model_payload_bytes_per_work_unit + layout_metadata_read_bytes_per_work_unit
+```
+
+Each prefix visit is physically exact: when `e_j` ends inside a block, the kernel scans only the valid bytes through
+that tile end. It does not round a partial logical visit up to a complete block. The total lookup count therefore
+depends only on P/Q/G/L/B and is invariant under worker-count changes.
+
 An independent geometry golden with `A=35`, `G=16`, `L=2`, `B=2`, and `R=32` has `N=3`, `P_b=6`,
 `block_bytes=512`, `last_block_tokens=3`, `last_block_valid_bytes=96`, K logical/physical/padding bytes
 `4480/6144/1664`, six table entries/24 table bytes, and 28 lookups/112 metadata bytes per KV-bearing work unit.
+
+Independent paged-prefill lookup goldens are `P=5,Q=2,G=2`: `N=3,M=6,N+2M=15`; and
+`P=7,Q=3,G=2`: `N=4,M=9,N+2M=22`. For `P=6,Q=2,G=4`, successive tile prefixes visit 2, 4, and 6 valid tokens, so
+the final tile alone reaches logical block 1 and its partial terminal bytes.
 
 ## Formula golden vectors and decode crossover
 
@@ -392,9 +408,9 @@ rejected rather than silently scaled, and `G`, context, workers, or work-unit ge
 A non-empty file or stdout JSON target also reserves a conservative peak for one live schema DOM and its serialized
 transport text before final memory admission. The estimate covers fixed schema storage, captured input strings, every
 planned measurement record, and both expected and actual worker-checksum trees. The input-string term also includes
-the frozen model-plan, methodology, component/layout identities, and contiguous-prefill aggregate, scenario, and scope
-identities. Frozen identities are charged once. Scenario-plan identities scale with the maximum retained calibration
-attempts and planned measurement loops. Each variable-length addition is checked, and preliminary and finalized-plan
+the frozen model-plan, methodology, component/layout identities, and applicable prefill aggregate, scenario, execution,
+and scope identities. Frozen identities are charged once. Scenario-plan identities scale with the maximum retained
+calibration attempts and planned measurement loops. Each variable-length addition is checked, and preliminary and finalized-plan
 estimates use the same canonical identity-size formula. Omitted or empty output adds no serialization reserve; normal
 console-only execution does not serialize a schema document.
 
@@ -429,12 +445,19 @@ Contiguous prefill has separate 48-byte layer and 80-byte owner descriptors. Eac
 first token/count, P, Q, record bytes, and layer/batch identity. Its scenario-specific exact-cost partition records a
 canonical identity plus minimum, maximum, and imbalance bytes in `worker-cost` units.
 
+Paged prefill has separate 48-byte layer and 112-byte block-assignment descriptors rather than overloading paged decode
+fields. Each block-assignment descriptor carries the read-only table-row pointer, physical K/V layer-pool bases, first
+logical block/count, P/N/G,
+block and terminal valid-byte geometry, Q/tile geometry, and layer/batch identity. Whole logical blocks are owned by
+exact scenario-weighted prefix cost; no block is split, and the union of assignments covers every logical block exactly
+once. Independent `sizeof`/`offsetof` goldens freeze this ABI.
+
 ## Scenario traversal
 
 `weights_only` sets the kernel's weight bit and, for every work unit and layer, reads that worker's layer weight shard
 once.
 
-`kv_only` sets the KV bit. For every work unit, layer, and batch sequence, the worker:
+Decode `kv_only` sets the KV bit. For every work unit, layer, and batch sequence, the worker:
 
 1. writes its current-token K append subrange;
 2. writes its current-token V append subrange;
@@ -454,7 +477,7 @@ The final partial block contributes only `last_block_valid_bytes` to each scan. 
 timed access. The physical data order may be scattered, but logical traversal order and semantic lookup multiplicity are
 frozen. Full blocks remain whole ownership units.
 
-`mixed` sets both bits. For every work unit, each worker processes layers in increasing order. Inside a layer it reads its
+Decode `mixed` sets both bits. For every work unit, each worker processes layers in increasing order. Inside a layer it reads its
 weight shard, then processes every batch sequence's K/V append and visible-history reads before moving to the next
 layer. Workers share one synchronized task start, but there is no synthetic global barrier at every layer. Thus mixed is
 one layer-interleaved workload, not a post-hoc sum of separately timed weight and KV passes.
@@ -465,6 +488,12 @@ causal prefix for K, then repeats those ranges for V. Only after all tiles does 
 Write happens before every read by the same owner, and owners never read one another's records, so no global
 worker-per-layer barrier is required. Mixed reads its applicable layer weight shard before that layer's prefill work.
 
+Paged prefill uses the same logical order with whole-block assignments. For each operation/layer/batch owner it first
+loads each owned logical block's physical ID and populates all valid prompt K/V bytes in that block. It then visits tiles
+in increasing order, independently loading and scanning each owned K block fragment intersecting the exact causal
+prefix, followed by the corresponding V fragments. A terminal fragment stops at the tile end or prompt end and never
+touches suffix padding. Mixed reads the applicable layer weight shard before the paged-prefill block work.
+
 ## Initialization, append pattern, and checksums
 
 Preparation writes every weight byte and every requested K/V physical byte exactly once, pre-touching the full mapped
@@ -474,9 +503,9 @@ wrong table entry or address observable even when it visits the same multiset of
 with a canary. Preparation accumulates static references while writing, avoiding a second full-pool read.
 Initialization,
 table construction/protection, mapping page faults, reference construction, and canary setup occur before timed work.
-Before every paged task, the executor restores only the mutable current-token K/V append slots to their physical
+Before every paged decode task, the executor restores only the mutable current-token K/V append slots to their physical
 initialization pattern. This allocation-free reset is outside the timed interval; it does not rewrite history blocks or
-suffix-padding canaries.
+suffix-padding canaries. Paged prefill instead rewrites every owned prompt byte during each timed operation.
 The planner uses shared SplitMix64 derivation with frozen domains to derive separate weight/K/V buffer seeds,
 permutation seed, and scenario seeds from one base seed; schema 1 stores exact seeds as decimal strings.
 
@@ -571,19 +600,20 @@ vectors are:
 This checksum is workload-liveness and bounds evidence, not a cryptographic integrity primitive.
 
 Paged execution uses the separate `llm-paged-read-checksum-v1` contract. Its timed accumulator binds each semantic visit
-to the logical table index, loaded physical ID, visit kind (append, K scan, or V scan), and work-unit ordinal in one
+to the logical table index, loaded physical ID, visit kind (paired write/append, K scan, or V scan), and work-unit ordinal in one
 non-separable mix. Summing physical IDs alone is prohibited because every permutation has the same ID sum. A test that
 swaps two non-tail blocks with equal read multiplicity must therefore produce a mismatch. An independent bounded scalar
 oracle computes the cold-path expected value without calling the assembly helper or rereading a multi-GiB pool.
-Post-validation checks the logical current-token K/V append at its resolved physical location and every last-block
-padding canary.
+Post-validation checks the logical decode current-token K/V append or prefill final-ordinal samples at their resolved
+physical locations and every last-block padding canary.
 
-Contiguous prefill uses its versioned full-prompt affine64 write pattern. Every K/V word binds scenario seed, operation
+Prefill uses its versioned full-prompt affine64 write pattern. Every K/V word binds scenario seed, operation
 ordinal, layer, batch, logical token, record-word index, and K/V domain. Timed checksum agreement proves the expected
 contents and visit multiplicity across all T operations, including every tile-read visit; it does not by itself prove
-event order. Source/disassembly audit establishes the locked owner-local order: ascending tokens with K then V for each
-token, followed for every increasing tile by the complete owned K prefix and then the complete owned V prefix. The
-independent oracle does not call the assembly helper. Excluded post-validation checks each owner's deterministic
+event order. Source/disassembly audit establishes the locked owner-local order: ascending prompt population followed
+for every increasing tile by the complete K prefix and then the complete V prefix. In paged prefill, population and
+prefix fragments additionally bind the table index and loaded physical ID and stop at exact partial-block boundaries.
+The independent oracle does not call the assembly helper. Excluded post-validation checks each owner's deterministic
 first/middle/last canonical-word samples, including bytes clipped to owner boundaries, against final operation ordinal
 `T-1`; it does not reread every prompt record.
 
@@ -777,9 +807,10 @@ or `|key=null`.
 
 `backend_evidence` contains both `cpu` and `metal` object-or-null branches. Exactly the selected backend is populated;
 all active profiles have a CPU object and `metal: null`. Within the CPU object, `prefill` is null for decode and
-populated for contiguous prefill. The prefill evidence fixes `cost_unit: "worker-cost"`, execution and scope identities,
+populated for either prefill layout. The prefill evidence fixes `cost_unit: "worker-cost"`, execution and scope identities,
 descriptors per scenario/worker, decimal-string worker cost vectors, and scenario-specific decimal-string minimum,
-maximum, and max-minus-min imbalance per work unit. Its `paged` sibling is null for contiguous prefill.
+maximum, and max-minus-min imbalance per work unit. Its `paged` sibling is populated for either paged phase, so paged
+prefill has both objects.
 `memory_budget` separates allocation-time evidence into required
 canonical decimal-string `resource_rounding_bytes`, `transient_peak_bytes`, `known_owned_peak_bytes`, and
 `admitted_budget_bytes`. `calibration` owns excluded work-resolution attempts. `aggregates` contains measured-only
@@ -858,7 +889,7 @@ conclusions_valid == true
 every planned measurement has status == "measured"
 ```
 
-For active commands the requested values are CPU decode with contiguous/paged or CPU prefill with contiguous. Paged
+For active commands the requested values are CPU decode or prefill with contiguous or paged KV. Paged
 acceptance and comparison must additionally match `G`, `N`, tail geometry, logical/physical/padding/table resources,
 permutation
 version/domain/resolved seed/hash, lookup/accounted bytes, worker schedule, descriptor/executor, timer, and checksum
@@ -888,7 +919,8 @@ reason, and null observations remain in JSON.
 Paged console output additionally identifies `G`, `N`, final-block tokens/valid bytes, logical versus physical K/V,
 layout padding, table entries/bytes, permutation version/seed/hash, and per-work-unit lookup/metadata/accounted values.
 It explicitly states that table loads are timed while their four-byte metadata traffic is excluded from the effective
-model-payload numerator. Checksum, append, and padding-canary failure produces invalid evidence without retry.
+model-payload numerator. Checksum, phase-specific write, and padding-canary failure produces invalid evidence without
+retry.
 
 Report-level warnings include non-nominal environment, requested-but-unapplied main-thread QoS, worker QoS failure,
 weight or KV working sets that may be cache-dominant, scenario durations outside their intended quality class, high CV,
@@ -944,7 +976,7 @@ interruption/checkpoint lifecycle, or meaning of a reported field requires metho
 Removing or renaming a field, changing its type, or changing its meaning requires a schema-version bump. Additive
 evidence may remain schema 1 only when existing consumers can safely ignore it.
 
-Runtime paged allocation/free lists, prefix sharing, sliding windows, growing context, paged/chunked prefill,
+Runtime paged allocation/free lists, prefix sharing, sliding windows, growing context, chunked prefill,
 Metal/ANE execution,
 model presets, quantization metadata, multiple weight passes, or KV replay factors other than one are separate
 methodology features. The generic schema vocabulary does not activate them: each requires its own end-to-end

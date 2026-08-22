@@ -530,19 +530,37 @@ TEST(ExecutableCliIntegrationTest,
   expect_no_dash_transport_artifacts(result);
 }
 
-TEST(ExecutableCliIntegrationTest, LlmPrefillPagedFailsWithStablePreflightReasonIntegration) {
-  std::vector<std::string> arguments = bounded_llm_prefill_arguments("-", 1);
+TEST(ExecutableCliIntegrationTest, LlmPrefillPagedWritesCompleteSchemaV1Integration) {
+  std::vector<std::string> arguments = bounded_llm_prefill_arguments("-");
   arguments.insert(arguments.end() - 2, {"--kv-layout", "paged", "--kv-block-tokens", "4"});
 
   const CliResult result = run_memory_benchmark(arguments);
 
   expect_process_completed(result);
-  EXPECT_EQ(result.exit_code, EXIT_FAILURE);
-  expect_no_runtime_banner(result);
-  EXPECT_TRUE(result.stdout_output.empty()) << result.stdout_output;
-  EXPECT_EQ(result.stderr_output, Messages::error_prefix() +
-                                      Messages::error_llm_memory_config_invalid("cpu-prefill-paged-not-yet-supported") +
-                                      "\n");
+  ASSERT_EQ(result.exit_code, EXIT_SUCCESS) << result.stderr_output;
+  const nlohmann::json json = parse_single_stdout_json(result);
+  ASSERT_TRUE(json.is_object()) << result.stdout_output;
+  EXPECT_EQ(json["schema_version"], Constants::LLM_JSON_SCHEMA_VERSION);
+  EXPECT_EQ(json["mode"], Constants::LLM_JSON_MODE_NAME);
+  EXPECT_EQ(json["backend"], "cpu");
+  EXPECT_EQ(json["phase"], "prefill");
+  EXPECT_EQ(json["kv_layout"], "paged");
+  EXPECT_EQ(json["methodology_version"], Constants::LLM_CPU_PREFILL_PAGED_METHODOLOGY_VERSION);
+  EXPECT_EQ(json["status"], "complete");
+  EXPECT_TRUE(json["results_complete"].get<bool>());
+  EXPECT_TRUE(json["conclusions_valid"].get<bool>());
+  EXPECT_EQ(json["configuration"]["kv_block_tokens"], 4u);
+  EXPECT_EQ(json["configuration"]["resolved_sources"]["phase"], "explicit");
+  EXPECT_EQ(json["configuration"]["resolved_sources"]["kv_layout"], "explicit");
+  EXPECT_EQ(json["configuration"]["resolved_sources"]["kv_block_tokens"], "explicit");
+  EXPECT_EQ(json["resolved_plan"]["work_unit_kind"], "prefill_operation");
+  EXPECT_TRUE(json["resolved_plan"]["geometry"]["prefill"].is_object());
+  EXPECT_EQ(json["resolved_plan"]["layout"]["kv_layout"], "paged");
+  EXPECT_EQ(json["resolved_plan"]["layout"]["kv_block_tokens"], 4u);
+  EXPECT_TRUE(json["backend_evidence"]["cpu"]["prefill"].is_object());
+  EXPECT_TRUE(json["backend_evidence"]["cpu"]["paged"].is_object());
+  expect_complete_llm_checkpoint_lifecycle(json);
+  expect_single_runtime_banner(result);
   expect_no_dash_transport_artifacts(result);
 }
 

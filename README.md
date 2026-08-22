@@ -21,7 +21,7 @@ It is designed for controlled microarchitectural investigation rather than a sin
 - **Core-to-core analysis:** calibrated acquire/release token-exchange measurements under scheduler-hint scenarios.
 - **Metal GPU bandwidth:** standalone read/write/copy compute kernels with GPU timestamps and validation metadata.
 - **Synthetic LLM memory profile:** standalone CPU measurements of active-weight and KV traffic for fixed-context decode
-  with contiguous or deterministic paged KV, and full-prompt prefill with contiguous KV.
+  and full-prompt prefill, each with contiguous or deterministic paged KV.
 - **Reproducible experiments:** explicit seeds, repeated loops, built-in Cartesian parameter sweeps, recoverable JSON
   file checkpoints, and final machine-readable stdout for every result-producing direct mode and CPU sweep.
 
@@ -128,7 +128,7 @@ checkpoints are required; see the [Machine-Readable CLI API](documents/API.md) s
 | `--analyze-tlb` | Standalone paired spread/packed TLB analysis with adaptive measurement rounds, confidence intervals, and boundary validation. |
 | `--analyze-core2core` | Calibrated two-thread acquire/release token-protocol round-trip latency under best-effort macOS scheduler hints. |
 | `--gpu-bandwidth` | Standalone Metal GPU read/write/copy effective compute-payload bandwidth. |
-| `--llm-memory` | Standalone synthetic CPU decode/prefill memory profile: decode supports contiguous or deterministic paged KV, while prefill currently supports contiguous KV. |
+| `--llm-memory` | Standalone synthetic CPU decode/prefill memory profile with contiguous or deterministic paged KV in either phase. |
 | `--sweep <key=a,b>` | Cartesian parameter sweep for supported CPU, pattern, TLB, and core-to-core modes; requires `--output`. GPU schema 1 and LLM schema 1 do not support sweeps. |
 
 Primary modes are intentionally separate and accept different option sets. Use `memory_benchmark -h` or the [User Manual](documents/MANUAL.md) for defaults, valid combinations, and the complete option reference.
@@ -142,8 +142,8 @@ defaults to `contiguous`. Selecting `paged` requires exactly one
 allocates and
 initializes the requested weight and logical KV contents in full. Paged runs additionally allocate full physical K/V
 blocks, their suffix padding, and one seeded uint32 block table. Initialization, pre-touch, permutation generation,
-and validation remain outside the timed region. CPU prefill with paged KV is rejected with
-`cpu-prefill-paged-not-yet-supported`; it never falls back to contiguous KV.
+and validation remain outside the timed region. Paged prefill performs timed table lookups for full-prompt population
+and tiled causal-prefix scans; it never falls back to contiguous KV.
 
 The generic schema records `backend: "cpu"`, the selected phase/layout, `work_unit_kind: "decode_step"` or
 `"prefill_operation"`, and methodology `llm-memory-v1-cpu-<phase>-<layout>`. Metal remains unavailable and never
@@ -222,11 +222,13 @@ To measure the same logical decode geometry through a seeded paged layout, add:
 --kv-layout paged --kv-block-tokens 16
 ```
 
-For contiguous prefill, replace the decode context with explicit prompt/tile geometry:
+For prefill, replace the decode context with explicit prompt/tile geometry:
 
 ```text
 --phase prefill --prompt-tokens 8192 --attention-query-tile-tokens 128
 ```
+
+Add `--kv-layout paged --kv-block-tokens 16` to combine that prefill geometry with deterministic paged KV.
 
 The same schema 1 payload can be captured once from final-only stdout:
 
@@ -328,7 +330,7 @@ recognizes the current console labels only and is neither JSON-schema nor histor
 - [Core-to-Core Whitepaper](documents/CORE_TO_CORE_WHITEPAPER.md): LDAR/STLR handoff protocol, scheduler-hint scenarios, and JSON schema.
 - [GPU Bandwidth Whitepaper](documents/GPU_BANDWIDTH_WHITEPAPER.md): Metal methodology, timing, validation, resource model, and interpretation limits.
 - [LLM Memory Profile Whitepaper](documents/LLM_MEMORY_PROFILE_WHITEPAPER.md): generic schema-v1 vocabulary plus the
-  active CPU decode and contiguous-prefill traffic, timing, checksum, and interpretation contracts.
+  active CPU decode/prefill contiguous/paged traffic, timing, checksum, and interpretation contracts.
 
 Runtime behavior and `memory_benchmark -h` are the authoritative sources when documentation differs.
 

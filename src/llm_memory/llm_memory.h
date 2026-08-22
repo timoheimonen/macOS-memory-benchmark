@@ -137,7 +137,6 @@ inline constexpr const char* KV_BLOCK_TOKENS_NOT_POWER_OF_TWO =
     "kv-block-tokens-not-power-of-two";
 inline constexpr const char* KV_BLOCK_TOKENS_EXCEEDS_UINT32 =
     "kv-block-tokens-exceeds-uint32";
-inline constexpr const char* CPU_PREFILL_PAGED_NOT_YET_SUPPORTED = "cpu-prefill-paged-not-yet-supported";
 inline constexpr const char* BATCH_SIZE_REQUIRED = "batch-size-required";
 inline constexpr const char* WORKER_COUNT_REQUIRED = "worker-count-required";
 inline constexpr const char* AVAILABLE_WORKER_COUNT_REQUIRED =

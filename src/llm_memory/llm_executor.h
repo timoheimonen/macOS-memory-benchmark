@@ -175,13 +175,18 @@ struct LlmInitializationEvidence {
 };
 
 /**
- * Move-only ownership for mappings, materialized ABI arrays, and static sums.
+ * Move-only ownership for data mappings, materialized ABI arrays, and static
+ * sums, plus a borrowed paged block-table view when applicable.
  *
- * Descriptor and reference arrays are flat worker-major arrays. Worker `w`
- * starts at `w * layer_descriptors_per_worker` and
- * `w * sequence_descriptors_per_worker`, respectively. Their addresses remain
- * stable for the lifetime of this object. No method is thread-safe against a
- * concurrent move or destruction; immutable access from worker threads is safe.
+ * Descriptor arrays and non-paged references are flat worker-major arrays.
+ * Worker `w` starts at `w * layer_descriptors_per_worker` or
+ * `w * sequence_descriptors_per_worker`, respectively. Paged K/V block
+ * references instead use `[layer][physical_id]`. Owned array addresses remain
+ * stable for the lifetime of this object. The paged `block_table` pointer
+ * borrows its read-only mapping from the source `LlmMemoryWorkPlan`, which must
+ * outlive this object and every execution that uses it. No method is
+ * thread-safe against a concurrent move or destruction; immutable access from
+ * worker threads is safe.
  */
 struct LlmExecutionResources {
   LlmExecutionResources() = default;
@@ -201,6 +206,10 @@ struct LlmExecutionResources {
   std::unique_ptr<LlmPrefillLayerDescriptor[]> prefill_layer_descriptors;
   std::unique_ptr<LlmPrefillKvSequenceDescriptor[]>
       prefill_sequence_descriptors;
+  std::unique_ptr<LlmPagedPrefillLayerDescriptor[]>
+      paged_prefill_layer_descriptors;
+  std::unique_ptr<LlmPagedPrefillKvAssignmentDescriptor[]>
+      paged_prefill_assignment_descriptors;
   std::unique_ptr<LlmStaticSpanReference[]> weight_references;
   std::unique_ptr<LlmStaticSpanReference[]> k_references;
   std::unique_ptr<LlmStaticSpanReference[]> v_references;
@@ -231,6 +240,11 @@ struct LlmExecutionResources {
       size_t worker_index) const noexcept;
   const LlmPrefillKvSequenceDescriptor* worker_prefill_sequences(
       size_t worker_index, LlmScenario scenario) const noexcept;
+  const LlmPagedPrefillLayerDescriptor* worker_paged_prefill_layers(
+      size_t worker_index) const noexcept;
+  const LlmPagedPrefillKvAssignmentDescriptor*
+  worker_paged_prefill_assignments(
+      size_t worker_index, LlmScenario scenario) const noexcept;
 };
 
 /** Result of atomic allocation, ABI materialization, and deterministic init. */
@@ -258,6 +272,9 @@ struct LlmKernelInvocation {
   const LlmPagedKvAssignmentDescriptor* paged_assignments = nullptr;
   const LlmPrefillLayerDescriptor* prefill_layers = nullptr;
   const LlmPrefillKvSequenceDescriptor* prefill_sequences = nullptr;
+  const LlmPagedPrefillLayerDescriptor* paged_prefill_layers = nullptr;
+  const LlmPagedPrefillKvAssignmentDescriptor*
+      paged_prefill_assignments = nullptr;
 };
 
 /**
@@ -347,6 +364,14 @@ extern "C" void llm_prefill_memory_asm(
     uint64_t scenario_flags, uint64_t scenario_seed,
     LlmWorkerChecksum* output) noexcept;
 
+/** Dedicated paged-prefill implementation with its own descriptor ABI. */
+extern "C" void llm_prefill_memory_paged_asm(
+    const LlmPagedPrefillLayerDescriptor* layers,
+    const LlmPagedPrefillKvAssignmentDescriptor* assignments,
+    uint64_t layer_count, uint64_t operation_count,
+    uint64_t scenario_flags, uint64_t scenario_seed,
+    LlmWorkerChecksum* output) noexcept;
+
 /** Return the frozen assembly flag for a valid scenario, or zero. */
 uint64_t llm_scenario_flags(LlmScenario scenario) noexcept;
 
@@ -403,6 +428,8 @@ LlmBufferAllocationResult allocate_llm_buffers(const LlmMemoryWorkPlan& plan, Ll
  * The model plan must expose a matching CPU execution-plan alternative.
  * A populated or partial output is rejected before allocation. This keeps the
  * admitted memory peak exact and avoids an unbudgeted replacement contract.
+ * For paged plans, the output borrows the plan-owned read-only block table, so
+ * @p plan must outlive the output and all executions that consume it.
  *
  * Each physical mapping byte is written exactly once using
  * `llm-buffer-pattern-v1`; finalized span sums are accumulated during those

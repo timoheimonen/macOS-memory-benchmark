@@ -330,7 +330,7 @@ TEST(LlmMemoryConfigTest, ParserActivatesContiguousCpuPrefillWithExactPhaseGeome
   EXPECT_EQ(config.argv, arguments);
 }
 
-TEST(LlmMemoryConfigTest, ParserUsesStableOrderIndependentPrefillAndTemporarySupportReasons) {
+TEST(LlmMemoryConfigTest, ParserUsesStableOrderIndependentPrefillAndPagedLayoutRules) {
   LlmParserHooksScope hooks;
   struct InvalidCase {
     std::vector<std::string> arguments;
@@ -370,15 +370,6 @@ TEST(LlmMemoryConfigTest, ParserUsesStableOrderIndependentPrefillAndTemporarySup
   replace_option_value(query_too_large, "--attention-query-tile-tokens", "6");
   add_phase_error_cases(query_too_large, LlmMemoryConfigReason::ATTENTION_QUERY_TILE_TOKENS_EXCEEDS_PROMPT);
 
-  for (const std::vector<std::string>& paged_suffix :
-       {std::vector<std::string>{"--kv-layout", "paged", "--kv-block-tokens", "4"},
-        std::vector<std::string>{"--kv-block-tokens", "4", "--kv-layout", "paged"}}) {
-    std::vector<std::string> paged = common;
-    paged.insert(paged.end(), paged_suffix.begin(), paged_suffix.end());
-    cases.push_back({paged, LlmMemoryConfigReason::CPU_PREFILL_PAGED_NOT_YET_SUPPORTED});
-  }
-  cases.push_back({with_valid_paged_layout(common), LlmMemoryConfigReason::CPU_PREFILL_PAGED_NOT_YET_SUPPORTED});
-
   for (const InvalidCase& test_case : cases) {
     SCOPED_TRACE(::testing::PrintToString(test_case.arguments));
     LlmMemoryConfig config;
@@ -396,6 +387,28 @@ TEST(LlmMemoryConfigTest, ParserUsesStableOrderIndependentPrefillAndTemporarySup
   EXPECT_EQ(first_output_line(invalid_paged_result.stderr_output),
             Messages::error_prefix() +
                 Messages::error_llm_memory_config_invalid(LlmMemoryConfigReason::KV_BLOCK_TOKENS_NOT_POWER_OF_TWO));
+
+  for (const std::vector<std::string>& paged_suffix :
+       {std::vector<std::string>{"--kv-layout", "paged", "--kv-block-tokens", "4"},
+        std::vector<std::string>{"--kv-block-tokens", "4", "--kv-layout", "paged"}}) {
+    std::vector<std::string> paged = common;
+    paged.insert(paged.end(), paged_suffix.begin(), paged_suffix.end());
+    LlmMemoryConfig paged_config;
+    const CapturedLlmParse parsed = parse_llm_arguments_capturing(paged, paged_config);
+    SCOPED_TRACE(::testing::PrintToString(paged));
+    EXPECT_EQ(parsed.result, EXIT_SUCCESS);
+    EXPECT_TRUE(parsed.stdout_output.empty());
+    EXPECT_TRUE(parsed.stderr_output.empty());
+    EXPECT_EQ(paged_config.phase, LlmPhase::Prefill);
+    EXPECT_EQ(paged_config.kv_layout, LlmKvLayout::Paged);
+    EXPECT_EQ(paged_config.prompt_tokens, 5u);
+    EXPECT_EQ(paged_config.attention_query_tile_tokens, 2u);
+    EXPECT_EQ(paged_config.kv_block_tokens, 4u);
+    EXPECT_TRUE(paged_config.user_specified_phase);
+    EXPECT_TRUE(paged_config.user_specified_kv_layout);
+    EXPECT_TRUE(paged_config.user_specified_kv_block_tokens);
+    EXPECT_EQ(paged_config.argv, paged);
+  }
 }
 
 TEST(LlmMemoryConfigTest, ParserRejectsCrossPhaseTokenOptionsAndUnknownPhase) {

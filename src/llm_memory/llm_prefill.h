@@ -126,6 +126,8 @@ inline constexpr const char* WRITE_PATTERN =
     "llm-prefill-kv-affine64-v1";
 inline constexpr const char* CHECKSUM_ORACLE =
     "llm-prefill-affine64-parity-sum-v1";
+inline constexpr const char* PAGED_CHECKSUM_ORACLE =
+    "llm-prefill-paged-affine64-lookup-v1";
 }  // namespace LlmPrefillVersion
 
 /** Logical unit whose exact prefix cost is partitioned among CPU workers. */

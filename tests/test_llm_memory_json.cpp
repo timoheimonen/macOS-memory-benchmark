@@ -102,6 +102,29 @@ LlmMemoryConfig prefill_config(size_t loop_count = 3) {
   return config;
 }
 
+LlmMemoryConfig paged_prefill_config(size_t loop_count = 3) {
+  LlmMemoryConfig config = prefill_config(loop_count);
+  config.kv_layout = LlmKvLayout::Paged;
+  config.kv_block_tokens = 2;
+  config.user_specified_kv_layout = true;
+  config.user_specified_kv_block_tokens = true;
+  config.argv = {"memory_benchmark",
+                 "--llm-memory",
+                 "--phase",
+                 "prefill",
+                 "--prompt-tokens",
+                 "5",
+                 "--attention-query-tile-tokens",
+                 "2",
+                 "--kv-layout",
+                 "paged",
+                 "--kv-block-tokens",
+                 "2",
+                 "--output",
+                 "--literal-output-name.json"};
+  return config;
+}
+
 LlmMemoryWorkPlanRequest plan_request(const LlmMemoryConfig& config) {
   LlmMemoryWorkPlanRequest request;
   request.geometry.active_weight_bytes = config.weight_size_mb * Constants::BYTES_PER_MB;
@@ -869,6 +892,80 @@ TEST(LlmMemoryJsonTest, CompleteContiguousPrefillDocumentHasExactGeometryAndPart
   EXPECT_FALSE(document["interpretation"]["prefill_transformer_compute_or_ttft_prediction_included"]);
 }
 
+TEST(LlmMemoryJsonTest, CompletePagedPrefillPublishesLayoutAndPrefillEvidenceWithoutDecodeOwnership) {
+  const LlmMemoryConfig config = paged_prefill_config();
+  const LlmMemoryWorkPlan plan = admitted_plan(config);
+  ASSERT_TRUE(plan.valid) << plan.reason_code;
+  const LlmCpuExecutionPlan& cpu = cpu_execution_plan(plan);
+  ASSERT_TRUE(cpu.paged.has_value());
+  ASSERT_TRUE(cpu.prefill.has_value());
+  const LlmPagedCpuExecutionPlan& paged = *cpu.paged;
+  const LlmPrefillCpuExecutionPlan& prefill_plan = *cpu.prefill;
+  EXPECT_EQ(paged.execution_identity, prefill_plan.identity);
+  for (size_t scenario_index = 1; scenario_index < kLlmScenarioCount; ++scenario_index) {
+    for (const LlmPrefillCpuOwnershipPlan& scope : prefill_plan.scenarios[scenario_index].ownership_scopes) {
+      EXPECT_EQ(scope.unit_kind, LlmPrefillPartitionUnitKind::PagedBlock);
+    }
+  }
+
+  const LlmMemoryResult result = complete_result(config, plan);
+  ASSERT_TRUE(result.results_complete) << result.reason_code;
+  const OrderedJson document = build_llm_memory_json(
+      config, plan, preparation_for(plan), fixed_metadata(config, plan), result);
+
+  EXPECT_EQ(document["schema_version"], 1);
+  EXPECT_EQ(document["status"], "complete");
+  EXPECT_EQ(document["phase"], "prefill");
+  EXPECT_EQ(document["kv_layout"], "paged");
+  EXPECT_EQ(document["methodology_version"], Constants::LLM_CPU_PREFILL_PAGED_METHODOLOGY_VERSION);
+  EXPECT_EQ(document["resolved_plan"]["component_identities"]["backend_executor_version"],
+            Constants::LLM_PREFILL_PAGED_CPU_EXECUTOR_VERSION);
+  EXPECT_EQ(document["resolved_plan"]["component_identities"]["resource_abi_version"],
+            Constants::LLM_PREFILL_PAGED_DESCRIPTOR_ABI_VERSION);
+  EXPECT_EQ(document["resolved_plan"]["component_identities"]["checksum_pattern_version"],
+            LlmPrefillVersion::PAGED_CHECKSUM_ORACLE);
+
+  const OrderedJson& layout = document["resolved_plan"]["layout"];
+  EXPECT_EQ(layout["kv_layout"], "paged");
+  EXPECT_EQ(layout["kv_block_tokens"], 2u);
+  EXPECT_TRUE(layout["decode_append_offset_in_last_block"].is_null());
+  EXPECT_EQ(layout["layout_identity"], paged.layout_identity);
+  EXPECT_EQ(layout["permutation_identity"], paged.permutation.identity);
+
+  const OrderedJson& paged_evidence = document["backend_evidence"]["cpu"]["paged"];
+  expect_exact_keys(
+      paged_evidence,
+      {"layout_identity", "execution_identity", "block_table_logical_bytes",
+       "block_table_page_rounded_bytes", "block_table_read_only", "table_validation", "permutation", "ownership"});
+  EXPECT_EQ(paged_evidence["layout_identity"], paged.layout_identity);
+  EXPECT_EQ(paged_evidence["execution_identity"], prefill_plan.identity);
+  EXPECT_TRUE(paged_evidence["ownership"].is_null());
+
+  const OrderedJson& prefill_evidence = document["backend_evidence"]["cpu"]["prefill"];
+  expect_exact_keys(prefill_evidence,
+                    {"cost_unit", "sequence_descriptors_per_scenario_per_worker", "scenarios", "identity"});
+  EXPECT_EQ(prefill_evidence["identity"], prefill_plan.identity);
+  ASSERT_EQ(prefill_evidence["scenarios"].size(), kLlmScenarioCount);
+  EXPECT_EQ(prefill_evidence["scenarios"][1]["scenario"], "kv_only");
+  EXPECT_EQ(prefill_evidence["scenarios"][2]["scenario"], "mixed");
+
+  const LlmScenarioLimits kv_only_limits = calculate_llm_scenario_limits(plan.geometry, LlmScenario::KvOnly);
+  ASSERT_TRUE(kv_only_limits.valid) << kv_only_limits.reason_code;
+  ASSERT_GE(document["measurements"].size(), 2u);
+  const OrderedJson& kv_only = document["measurements"][1];
+  EXPECT_EQ(kv_only["work_unit_kind"], "prefill_operation");
+  EXPECT_EQ(kv_only["kv_write_kind"], "full_prompt_population");
+  EXPECT_EQ(kv_only["layout_metadata_lookup_count_per_work_unit"],
+            std::to_string(kv_only_limits.layout_metadata_lookup_count_per_work_unit));
+  EXPECT_EQ(kv_only["layout_metadata_read_bytes_per_work_unit"],
+            std::to_string(kv_only_limits.layout_metadata_read_bytes_per_work_unit));
+  EXPECT_EQ(kv_only["accounted_bytes_per_work_unit"],
+            std::to_string(kv_only_limits.accounted_bytes_per_work_unit));
+  EXPECT_EQ(kv_only["checksum"]["initialization_pattern_version"], Constants::LLM_PAGED_BUFFER_PATTERN_VERSION);
+  EXPECT_EQ(kv_only["checksum"]["write_pattern_version"], LlmPrefillVersion::WRITE_PATTERN);
+  EXPECT_EQ(kv_only["checksum"]["checksum_pattern_version"], LlmPrefillVersion::PAGED_CHECKSUM_ORACLE);
+}
+
 TEST(LlmMemoryJsonTest,
      PagedDocumentPublishesExactLayoutResourceAndOwnershipProvenance) {
   const LlmMemoryConfig config = paged_config();
@@ -1108,8 +1205,8 @@ TEST(LlmMemoryJsonTest, JsonPeakEstimateIsZeroWhenOutputIsDisabled) {
 
 TEST(LlmMemoryJsonTest,
      PreflightAuxiliaryEstimatesExactlyMatchFinalizedPlanForAllActiveCpuProfiles) {
-  const std::array<LlmMemoryConfig, 3> configs = {
-      explicit_config(3), paged_config(3), prefill_config(3)};
+  const std::array<LlmMemoryConfig, 4> configs = {
+      explicit_config(3), paged_config(3), prefill_config(3), paged_prefill_config(3)};
   for (const LlmMemoryConfig& config : configs) {
     SCOPED_TRACE(llm_kv_layout_to_string(config.kv_layout));
     LlmMemoryWorkPlanDraft draft =

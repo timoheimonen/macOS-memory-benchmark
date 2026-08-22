@@ -66,15 +66,6 @@ class LlmCpuBackend final : public LlmBackend {
   LlmBackendAuxiliaryEstimate calculate_auxiliary_estimate(
       const LlmMemoryWorkPlan& model_plan) const noexcept override {
     LlmBackendAuxiliaryEstimate estimate;
-    if (model_plan.phase == LlmPhase::Prefill &&
-        model_plan.kv_layout == LlmKvLayout::Paged) {
-      estimate.valid = model_plan.valid;
-      estimate.reason_code = model_plan.valid
-                                 ? std::string_view(LlmBackendReason::VALID)
-                                 : std::string_view(
-                                       LlmBackendReason::EXECUTION_PLAN_MISMATCH);
-      return estimate;
-    }
     const LlmExecutorAuxiliaryEstimate cpu = calculate_llm_executor_auxiliary_estimate(model_plan);
     estimate.valid = cpu.valid;
     estimate.reason_code = cpu.reason_code;
@@ -106,12 +97,6 @@ class LlmCpuBackend final : public LlmBackend {
   LlmBackendLifecycleResult resolve_execution_plan(const LlmMemoryWorkPlan& model_plan) override {
     if (!initialized_) {
       evidence_.plan_resolution = {LlmBackendStatus::Failed, LlmBackendReason::NOT_INITIALIZED};
-      return evidence_.plan_resolution;
-    }
-    if (model_plan.phase == LlmPhase::Prefill &&
-        model_plan.kv_layout == LlmKvLayout::Paged) {
-      evidence_.plan_resolution = {
-          LlmBackendStatus::Unsupported, LlmBackendReason::TASK_UNSUPPORTED};
       return evidence_.plan_resolution;
     }
     const LlmCpuExecutionPlan* cpu_plan = get_llm_cpu_execution_plan(model_plan);

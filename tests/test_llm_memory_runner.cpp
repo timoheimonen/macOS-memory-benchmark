@@ -1049,7 +1049,7 @@ TEST(LlmMemoryRunnerTest,
 }
 
 TEST(LlmMemoryRunnerTest,
-     ProductionCpuBackendExecutesContiguousPrefillAndRejectsPagedPrefillIntegration) {
+     ProductionCpuBackendExecutesContiguousAndPagedPrefillIntegration) {
   const LlmMemoryConfig config = explicit_prefill_config(1, 1);
   const LlmMemoryWorkPlan plan = build_runner_admitted_plan(config);
   ASSERT_TRUE(plan.valid) << plan.reason_code;
@@ -1110,15 +1110,48 @@ TEST(LlmMemoryRunnerTest,
   paged_config.user_specified_kv_layout = true;
   paged_config.user_specified_kv_block_tokens = true;
   const LlmMemoryWorkPlan paged_plan =
-      build_llm_memory_work_plan(plan_request(paged_config));
+      build_runner_admitted_plan(paged_config);
   ASSERT_TRUE(paged_plan.valid) << paged_plan.reason_code;
+  const LlmBackendAuxiliaryEstimate paged_auxiliary =
+      backend->calculate_auxiliary_estimate(paged_plan);
+  ASSERT_TRUE(paged_auxiliary.valid) << paged_auxiliary.reason_code;
+  EXPECT_GT(paged_auxiliary.checksum_auxiliary_bytes, 0u);
+  EXPECT_GT(paged_auxiliary.orchestration_auxiliary_bytes, 0u);
   ASSERT_EQ(backend->initialize(paged_config).status,
             LlmBackendStatus::Ready);
   const LlmBackendLifecycleResult paged_resolution =
       backend->resolve_execution_plan(paged_plan);
-  EXPECT_EQ(paged_resolution.status, LlmBackendStatus::Unsupported);
-  EXPECT_EQ(paged_resolution.reason_code,
-            LlmBackendReason::TASK_UNSUPPORTED);
+  ASSERT_EQ(paged_resolution.status, LlmBackendStatus::Ready);
+  EXPECT_EQ(paged_resolution.reason_code, LlmBackendReason::VALID);
+  const LlmBackendLifecycleResult paged_preparation =
+      backend->prepare_resources(paged_plan);
+  ASSERT_EQ(paged_preparation.status, LlmBackendStatus::Ready);
+  EXPECT_EQ(paged_preparation.reason_code, LlmBackendReason::VALID);
+
+  const LlmScenarioWorkPlan paged_scenario =
+      build_llm_scenario_work_plan(paged_plan, LlmScenario::Mixed, 1, true);
+  ASSERT_TRUE(paged_scenario.valid) << paged_scenario.reason_code;
+  EXPECT_GT(paged_scenario.layout_metadata_lookup_count, 0u);
+  LlmRunnerTaskContext paged_context;
+  paged_context.kind = LlmRunnerTaskKind::Warmup;
+  paged_context.purpose = "paged_prefill_production_boundary";
+  paged_context.scenario = LlmScenario::Mixed;
+  const LlmTaskExecutionResult paged_execution =
+      backend->execute_task(paged_plan, paged_scenario, paged_context);
+  EXPECT_EQ(paged_execution.status, LlmTaskExecutionStatus::Complete);
+  EXPECT_EQ(paged_execution.reason_code, LlmExecutorReason::VALID);
+  EXPECT_TRUE(paged_execution.timing.evaluated);
+  EXPECT_TRUE(paged_execution.timing.valid);
+  EXPECT_TRUE(paged_execution.validation.evaluated);
+  EXPECT_TRUE(paged_execution.validation.valid);
+  EXPECT_EQ(paged_execution.completion.completed_work_units, 1u);
+  EXPECT_EQ(paged_execution.completion.completed_layout_metadata_lookup_count,
+            paged_scenario.layout_metadata_lookup_count);
+  const LlmExecutorResult* const paged_cpu_evidence =
+      get_llm_cpu_task_evidence(paged_execution);
+  ASSERT_NE(paged_cpu_evidence, nullptr);
+  EXPECT_TRUE(paged_cpu_evidence->checksum_valid);
+  EXPECT_TRUE(paged_cpu_evidence->post_validation_valid);
   EXPECT_EQ(backend->release_resources().status,
             LlmBackendStatus::Ready);
 }
@@ -1490,6 +1523,23 @@ TEST(LlmMemoryRunnerTest,
             LlmExecutorReason::PAGED_POST_VALIDATION_FAILED);
   EXPECT_TRUE(retained->executor.post_validation_evaluated);
   EXPECT_FALSE(retained->executor.post_validation_valid);
+}
+
+TEST(LlmMemoryRunnerTest,
+     PrefillPostValidationFailureCanonicalizesExactly) {
+  std::string owned_reason =
+      LlmExecutorReason::PREFILL_POST_VALIDATION_FAILED;
+  const std::string_view canonical =
+      canonicalize_llm_result_reason_code(owned_reason);
+  std::fill(owned_reason.begin(), owned_reason.end(), 'x');
+
+  EXPECT_EQ(canonical, LlmExecutorReason::PREFILL_POST_VALIDATION_FAILED);
+  EXPECT_NE(canonical, LlmRunnerReason::RUNNER_UNKNOWN_EXCEPTION);
+  EXPECT_EQ(
+      canonical.data(),
+      canonicalize_llm_result_reason_code(
+          LlmExecutorReason::PREFILL_POST_VALIDATION_FAILED)
+          .data());
 }
 
 TEST(LlmMemoryRunnerTest,

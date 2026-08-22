@@ -24,6 +24,7 @@
 
 #include <algorithm>
 #include <array>
+#include <charconv>
 #include <limits>
 #include <memory>
 #include <new>
@@ -107,6 +108,74 @@ void append_identity_field(std::string& identity, const char* name,
   identity += name;
   identity += '=';
   identity += std::to_string(value);
+}
+
+/** Match one canonical length-prefixed identity without constructing text. */
+class IdentityMatcher {
+ public:
+  explicit IdentityMatcher(std::string_view retained) noexcept
+      : retained_(retained) {}
+
+  bool literal(std::string_view expected) noexcept {
+    if (!valid_ || expected.size() > retained_.size() - cursor_ ||
+        retained_.compare(cursor_, expected.size(), expected) != 0) {
+      valid_ = false;
+      return false;
+    }
+    cursor_ += expected.size();
+    return true;
+  }
+
+  bool string_field(std::string_view name, std::string_view value) noexcept {
+    return literal("|") && literal(name) && literal("=") &&
+           integer(value.size()) && literal(":") && literal(value);
+  }
+
+  template <typename Integer>
+  bool integer(Integer value) noexcept {
+    std::array<char, std::numeric_limits<Integer>::digits10 + 3> encoded{};
+    const auto result =
+        std::to_chars(encoded.data(), encoded.data() + encoded.size(), value);
+    return result.ec == std::errc{} &&
+           literal(std::string_view(
+               encoded.data(),
+               static_cast<size_t>(result.ptr - encoded.data())));
+  }
+
+  template <typename Integer>
+  bool integer_field(std::string_view name, Integer value) noexcept {
+    return literal("|") && literal(name) && literal("=") && integer(value);
+  }
+
+  bool complete() const noexcept {
+    return valid_ && cursor_ == retained_.size();
+  }
+
+ private:
+  std::string_view retained_;
+  size_t cursor_ = 0;
+  bool valid_ = true;
+};
+
+bool match_permutation_identity_noalloc(
+    const LlmKvPermutationIdentity& permutation) noexcept {
+  if (permutation.algorithm_version !=
+          Constants::LLM_KV_BLOCK_PERMUTATION_VERSION ||
+      permutation.domain != kKvBlockPermutationDomain ||
+      permutation.domain_uint64_hex != "0x4c4c4d4b56504731" ||
+      !is_lowercase_sha256(permutation.sha256) ||
+      permutation.entry_count == 0) {
+    return false;
+  }
+  IdentityMatcher identity(permutation.identity);
+  return identity.literal(Constants::LLM_KV_BLOCK_PERMUTATION_VERSION) &&
+         identity.integer_field("domain", permutation.domain) &&
+         identity.string_field("domain_uint64_hex",
+                               permutation.domain_uint64_hex) &&
+         identity.integer_field("resolved_seed", permutation.resolved_seed) &&
+         identity.integer_field("entry_count", permutation.entry_count) &&
+         identity.string_field("sha256", permutation.sha256) &&
+         identity.complete();
 }
 
 uint64_t splitmix64_next(uint64_t& state) noexcept {
@@ -1484,7 +1553,7 @@ std::string serialize_llm_kv_layout_identity(
       permutation.domain_uint64_hex != "0x4c4c4d4b56504731" ||
       !is_lowercase_sha256(permutation.sha256) ||
       permutation.entry_count != layout.block_table_entries ||
-      permutation.identity != build_permutation_identity(permutation)) {
+      !match_permutation_identity_noalloc(permutation)) {
     return {};
   }
   std::string identity = Constants::LLM_KV_LAYOUT_PLAN_IDENTITY_VERSION;
@@ -1502,6 +1571,35 @@ std::string serialize_llm_kv_layout_identity(
   append_identity_field(identity, "permutation_sha256",
                         permutation.sha256);
   return identity;
+}
+
+bool validate_llm_kv_layout_identity(
+    const LlmKvLayoutPlan& layout,
+    const LlmKvPermutationIdentity& permutation,
+    std::string_view identity) noexcept {
+  if (!layout.valid ||
+      !has_identity_version(
+          layout.geometry_identity,
+          Constants::LLM_KV_LAYOUT_GEOMETRY_IDENTITY_VERSION) ||
+      permutation.entry_count != layout.block_table_entries ||
+      !match_permutation_identity_noalloc(permutation)) {
+    return false;
+  }
+  IdentityMatcher matcher(identity);
+  return matcher.literal(Constants::LLM_KV_LAYOUT_PLAN_IDENTITY_VERSION) &&
+         matcher.string_field("geometry_identity",
+                              layout.geometry_identity) &&
+         matcher.string_field("permutation_algorithm_version",
+                              permutation.algorithm_version) &&
+         matcher.integer_field("permutation_domain", permutation.domain) &&
+         matcher.string_field("permutation_domain_uint64_hex",
+                              permutation.domain_uint64_hex) &&
+         matcher.integer_field("permutation_seed",
+                               permutation.resolved_seed) &&
+         matcher.integer_field("permutation_entry_count",
+                               permutation.entry_count) &&
+         matcher.string_field("permutation_sha256", permutation.sha256) &&
+         matcher.complete();
 }
 
 std::string serialize_llm_kv_cpu_execution_identity(
