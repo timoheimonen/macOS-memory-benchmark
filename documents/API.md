@@ -84,7 +84,7 @@ initialization therefore produce stderr plus a non-zero status and leave stdout 
 representable result, graceful
 interruption or a normal runtime failure emits the available partial, interrupted, error, failed, or unsupported
 payload. Core-to-core measurement failures, TLB measurement errors, GPU post-initialization failures, and LLM runner,
-executor, checksum, or checkpoint failures fall on this status-bearing path. Initialized failed payloads retain their
+backend-task, checksum, or checkpoint failures fall on this status-bearing path. Initialized failed payloads retain their
 non-zero process status; established graceful-interruption paths may return zero but are not complete conclusions.
 
 An observable final serialization, write, or flush failure returns `EXIT_FAILURE` and reports its diagnostic to stderr
@@ -173,9 +173,9 @@ codes and duration-quality tokens use hyphens. Only a `measured` record with acc
 elapsed/rate values and contributes to the matching aggregate. Unavailable metrics and unavailable checksum validity
 are JSON null, never numeric zero.
 
-If a measurement or excluded runner task never receives executor evidence because the executor throws, its nested
-`execution.status` is `unavailable`, its reason remains the applicable runner-exception token, and unavailable worker
-lifecycle, QoS, elapsed-time, and checksum fields are null. For a `not_run` measurement, top-level
+If a measurement or excluded runner task never receives backend task evidence because the backend call throws, its
+nested `execution.status` is `unavailable`, its reason remains the applicable runner-exception token, and unavailable
+worker lifecycle, QoS, elapsed-time, and checksum fields are null. For a `not_run` measurement, top-level
 `qos_successful_workers` and `qos_failed_workers` are also null. These are absence-of-evidence states, not zero-worker or
 successful-checksum observations.
 

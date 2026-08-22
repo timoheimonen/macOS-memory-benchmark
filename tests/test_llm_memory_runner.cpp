@@ -12,10 +12,12 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <limits>
 #include <stdexcept>
 #include <string>
 #include <utility>
+#include <variant>
 #include <vector>
 
 #include "core/config/constants.h"
@@ -115,47 +117,144 @@ LlmMemoryWorkPlan build_runner_admitted_plan(const LlmMemoryConfig& config) {
   return build_llm_memory_work_plan(request);
 }
 
-LlmExecutorResult successful_execution(const LlmMemoryWorkPlan& model_plan, double elapsed_seconds) {
-  LlmExecutorResult result;
-  result.valid = true;
-  result.reason_code = LlmExecutorReason::VALID;
-  result.elapsed_seconds = elapsed_seconds;
-  result.requested_workers = model_plan.effective_workers;
-  result.created_workers = model_plan.effective_workers;
-  result.completed_workers = model_plan.effective_workers;
-  result.qos_successful_workers = model_plan.effective_workers;
-  result.kernel_succeeded = true;
-  result.timer_started = true;
-  result.timer_stopped = true;
-  result.checksum_evaluated = true;
-  result.checksum_valid = true;
-  result.expected_checksums.resize(model_plan.effective_workers);
-  result.actual_checksums = result.expected_checksums;
-  result.expected_run_checksum = {11, 22};
-  result.actual_run_checksum = result.expected_run_checksum;
+LlmTaskExecutionResult successful_execution(const LlmMemoryWorkPlan& model_plan,
+                                             const LlmScenarioWorkPlan& task_plan,
+                                             const LlmRunnerTaskContext& context,
+                                             double elapsed_seconds) {
+  LlmTaskExecutionResult result;
+  result.status = LlmTaskExecutionStatus::Complete;
+  result.reason_code = LlmBackendReason::VALID;
+  result.identity.backend = model_plan.backend;
+  result.identity.phase = model_plan.phase;
+  result.identity.kv_layout = model_plan.kv_layout;
+  result.identity.work_unit_kind = task_plan.work_unit_kind;
+  result.identity.kv_write_kind = task_plan.kv_write_kind;
+  result.identity.task_kind = context.kind;
+  result.identity.scenario = context.scenario;
+  result.identity.attempt_index = context.attempt_index;
+  result.identity.loop_index = context.loop_index;
+  result.identity.order_position = context.order_position;
+  result.identity.purpose = context.purpose;
+  result.identity.model_plan_identity = model_plan.plan_identity;
+  result.identity.scenario_plan_identity = task_plan.plan_identity;
+  result.timing.evaluated = true;
+  result.timing.valid = true;
+  result.timing.elapsed_seconds = elapsed_seconds;
+  result.completion.planned_work_units = task_plan.work_units;
+  result.completion.completed_work_units = task_plan.work_units;
+  result.completion.completed_effective_model_payload_bytes =
+      task_plan.effective_model_payload_bytes;
+  result.completion.completed_layout_metadata_lookup_count =
+      task_plan.layout_metadata_lookup_count;
+  result.completion.completed_layout_metadata_read_bytes =
+      task_plan.layout_metadata_read_bytes;
+  result.completion.completed_task_accounted_bytes =
+      task_plan.task_accounted_bytes;
+  result.validation.evaluated = true;
+  result.validation.valid = true;
   return result;
 }
 
-class FakeRunnerExecutor {
+void fail_execution(LlmTaskExecutionResult& execution) {
+  execution.status = LlmTaskExecutionStatus::Failed;
+  execution.reason_code = LlmBackendReason::RESOURCES_NOT_PREPARED;
+}
+
+void invalidate_execution(LlmTaskExecutionResult& execution) {
+  execution.validation.valid = false;
+}
+
+class FakeLlmBackend final : public LlmBackend {
  public:
   std::vector<TaskRecord> calls;
   std::function<void(const LlmMemoryWorkPlan&, const LlmScenarioWorkPlan&, const LlmRunnerTaskContext&, size_t,
-                     LlmExecutorResult&)>
+                     LlmTaskExecutionResult&)>
       mutate;
+  LlmBackendLifecycleResult initialization = {LlmBackendStatus::Ready,
+                                               LlmBackendReason::VALID};
+  LlmBackendLifecycleResult plan_resolution = {LlmBackendStatus::Ready,
+                                               LlmBackendReason::VALID};
+  LlmBackendLifecycleResult preparation = {LlmBackendStatus::Ready,
+                                           LlmBackendReason::VALID};
+  LlmBackendLifecycleResult release = {LlmBackendStatus::Ready,
+                                       LlmBackendReason::VALID};
+  size_t initialize_calls = 0;
+  size_t plan_resolution_calls = 0;
+  size_t preparation_calls = 0;
+  size_t release_calls = 0;
+  bool clear_initialization_reason_on_release = false;
+  std::string initialization_reason_storage;
 
-  LlmTaskExecutor callback() {
-    return [this](const LlmMemoryWorkPlan& model_plan, const LlmScenarioWorkPlan& task_plan,
-                  const LlmRunnerTaskContext& context) {
-      calls.push_back({context, task_plan.work_units,
-                       task_plan.effective_model_payload_bytes,
-                       task_plan.plan_identity});
-      LlmExecutorResult result = successful_execution(model_plan, 0.150);
-      if (mutate) {
-        mutate(model_plan, task_plan, context, calls.size(), result);
-      }
-      return result;
-    };
+  FakeLlmBackend() { evidence_.backend = LlmMemoryBackend::Cpu; }
+
+  LlmMemoryBackend kind() const noexcept override {
+    return LlmMemoryBackend::Cpu;
   }
+
+  LlmBackendAuxiliaryEstimate calculate_auxiliary_estimate(
+      const LlmMemoryWorkPlan& model_plan) const noexcept override {
+    const LlmExecutorAuxiliaryEstimate cpu =
+        calculate_llm_executor_auxiliary_estimate(model_plan);
+    LlmBackendAuxiliaryEstimate estimate;
+    estimate.valid = cpu.valid;
+    estimate.reason_code = cpu.reason_code;
+    estimate.checksum_auxiliary_bytes = cpu.checksum_auxiliary_bytes;
+    estimate.orchestration_auxiliary_bytes = cpu.orchestration_auxiliary_bytes;
+    estimate.total_auxiliary_bytes = cpu.total_auxiliary_bytes;
+    return estimate;
+  }
+
+  LlmBackendLifecycleResult initialize(
+      const LlmMemoryConfig&) noexcept override {
+    ++initialize_calls;
+    evidence_.initialization = initialization;
+    return initialization;
+  }
+
+  LlmBackendLifecycleResult resolve_execution_plan(
+      const LlmMemoryWorkPlan&) noexcept override {
+    ++plan_resolution_calls;
+    evidence_.plan_resolution = plan_resolution;
+    return plan_resolution;
+  }
+
+  LlmBackendLifecycleResult prepare_resources(
+      const LlmMemoryWorkPlan&) noexcept override {
+    ++preparation_calls;
+    evidence_.preparation = preparation;
+    return preparation;
+  }
+
+  LlmTaskExecutionResult execute_task(
+      const LlmMemoryWorkPlan& model_plan,
+      const LlmScenarioWorkPlan& task_plan,
+      const LlmRunnerTaskContext& context) override {
+    calls.push_back({context, task_plan.work_units,
+                     task_plan.effective_model_payload_bytes,
+                     task_plan.plan_identity});
+    LlmTaskExecutionResult result =
+        successful_execution(model_plan, task_plan, context, 0.150);
+    if (mutate) {
+      mutate(model_plan, task_plan, context, calls.size(), result);
+    }
+    return result;
+  }
+
+  const LlmBackendEvidence& evidence() const noexcept override {
+    return evidence_;
+  }
+
+  LlmBackendLifecycleResult release_resources() noexcept override {
+    ++release_calls;
+    if (clear_initialization_reason_on_release) {
+      initialization_reason_storage.clear();
+    }
+    evidence_.release = release;
+    return release;
+  }
+
+ private:
+  LlmBackendEvidence evidence_;
 };
 
 CheckpointRecord capture_checkpoint(const LlmMemoryResult& result, LlmCheckpointKind kind) {
@@ -219,11 +318,21 @@ TEST(LlmMemoryRunnerTest, ExplicitWarmupsUseExactMeasurementShapeAndCompleteBala
   const LlmMemoryConfig config = explicit_config();
   const LlmMemoryWorkPlan plan = build_runner_admitted_plan(config);
   ASSERT_TRUE(plan.valid) << plan.reason_code;
-  FakeRunnerExecutor executor;
+  FakeLlmBackend executor;
   std::vector<CheckpointRecord> checkpoints;
+  std::vector<bool> release_completed_at_checkpoint;
+  LlmRunnerHooks hooks;
+  hooks.stop_requested = []() { return false; };
+  hooks.checkpoint = [&](const LlmMemoryResult& snapshot,
+                         LlmCheckpointKind kind) {
+    checkpoints.push_back(capture_checkpoint(snapshot, kind));
+    release_completed_at_checkpoint.push_back(
+        executor.evidence().release.status == LlmBackendStatus::Ready);
+    return EXIT_SUCCESS;
+  };
   LlmMemoryResult result;
 
-  ASSERT_EQ(run_llm_memory_suite(config, plan, executor.callback(), result, recording_checkpoints(checkpoints)),
+  ASSERT_EQ(run_llm_memory_suite(config, plan, executor, result, hooks),
             EXIT_SUCCESS);
   ASSERT_TRUE(result.initialized);
   EXPECT_EQ(result.status, LlmRunStatus::Complete);
@@ -317,8 +426,12 @@ TEST(LlmMemoryRunnerTest, ExplicitWarmupsUseExactMeasurementShapeAndCompleteBala
               frozen.effective_model_payload_bytes);
     EXPECT_EQ(measurement.completed_task_accounted_bytes,
               frozen.effective_model_payload_bytes);
-    EXPECT_EQ(measurement.execution.expected_checksums.size(), plan.effective_workers);
-    EXPECT_EQ(measurement.execution.actual_checksums.size(), plan.effective_workers);
+    EXPECT_EQ(measurement.execution.status, LlmTaskExecutionStatus::Complete);
+    EXPECT_EQ(measurement.execution.reason_code, LlmBackendReason::VALID);
+    EXPECT_TRUE(measurement.execution.timing.valid);
+    EXPECT_TRUE(measurement.execution.validation.valid);
+    EXPECT_TRUE(std::holds_alternative<std::monostate>(
+        measurement.execution.backend_evidence));
   }
 
   ASSERT_EQ(checkpoints.size(), 10u);
@@ -350,6 +463,13 @@ TEST(LlmMemoryRunnerTest, ExplicitWarmupsUseExactMeasurementShapeAndCompleteBala
   EXPECT_EQ(result.logical_checkpoint_attempts, 10u);
   EXPECT_EQ(result.successful_logical_checkpoints, 10u);
   EXPECT_TRUE(result.terminal_checkpoint_completed);
+  EXPECT_EQ(executor.release_calls, 1u);
+  ASSERT_EQ(release_completed_at_checkpoint.size(), checkpoints.size());
+  for (size_t index = 0; index + 1 < release_completed_at_checkpoint.size();
+       ++index) {
+    EXPECT_FALSE(release_completed_at_checkpoint[index]);
+  }
+  EXPECT_TRUE(release_completed_at_checkpoint.back());
 
   for (const LlmScenarioAggregate& aggregate : result.aggregates) {
     EXPECT_EQ(aggregate.status, "complete");
@@ -363,10 +483,10 @@ TEST(LlmMemoryRunnerTest, CompleteSingleLoopIsInspectableButComparativeConclusio
   const LlmMemoryConfig config = explicit_config(1);
   const LlmMemoryWorkPlan plan = build_runner_admitted_plan(config);
   ASSERT_TRUE(plan.valid) << plan.reason_code;
-  FakeRunnerExecutor executor;
+  FakeLlmBackend executor;
   LlmMemoryResult result;
 
-  ASSERT_EQ(run_llm_memory_suite(config, plan, executor.callback(), result), EXIT_SUCCESS);
+  ASSERT_EQ(run_llm_memory_suite(config, plan, executor, result), EXIT_SUCCESS);
   EXPECT_EQ(result.status, LlmRunStatus::Complete);
   EXPECT_TRUE(result.results_complete);
   EXPECT_FALSE(result.scenario_order_balance_complete);
@@ -380,36 +500,154 @@ TEST(LlmMemoryRunnerTest, CompleteSingleLoopIsInspectableButComparativeConclusio
   }
 }
 
-TEST(LlmMemoryRunnerTest, OversizedExecutorBackingIsCanonicalizedIntoFrozenRunnerCapacities) {
+TEST(LlmMemoryRunnerTest, InitializationUnsupportedAndFailedDoNotExecuteOrFallback) {
+  struct Case {
+    LlmBackendStatus backend_status;
+    LlmRunStatus run_status;
+    const char* reason_code;
+  };
+  constexpr std::array<Case, 2> cases = {{
+      {LlmBackendStatus::Unsupported, LlmRunStatus::Unsupported,
+       LlmBackendReason::TASK_UNSUPPORTED},
+      {LlmBackendStatus::Failed, LlmRunStatus::NotStarted,
+       LlmBackendReason::BACKEND_INITIALIZATION_FAILED},
+  }};
+
+  const LlmMemoryConfig config = explicit_config(1);
+  const LlmMemoryWorkPlan plan = build_runner_admitted_plan(config);
+  ASSERT_TRUE(plan.valid) << plan.reason_code;
+  for (const Case& test_case : cases) {
+    SCOPED_TRACE(test_case.reason_code);
+    FakeLlmBackend backend;
+    backend.initialization = {test_case.backend_status,
+                              test_case.reason_code};
+    LlmMemoryResult result;
+
+    EXPECT_EQ(run_llm_memory_suite(config, plan, backend, result),
+              EXIT_FAILURE);
+    EXPECT_EQ(result.initialized,
+              test_case.backend_status == LlmBackendStatus::Unsupported);
+    EXPECT_EQ(result.status, test_case.run_status);
+    EXPECT_EQ(result.reason_code, test_case.reason_code);
+    EXPECT_EQ(backend.kind(), LlmMemoryBackend::Cpu);
+    EXPECT_EQ(backend.initialize_calls, 1u);
+    EXPECT_EQ(backend.plan_resolution_calls, 0u);
+    EXPECT_EQ(backend.preparation_calls, 0u);
+    EXPECT_TRUE(backend.calls.empty());
+    EXPECT_EQ(backend.release_calls, 1u);
+  }
+}
+
+TEST(LlmMemoryRunnerTest,
+     UnsupportedLifecycleIsTerminalAtEveryPhaseAndCanonicalBeforeRelease) {
+  enum class UnsupportedPhase { Initialization, PlanResolution, Preparation };
+  constexpr std::array<UnsupportedPhase, 3> phases = {
+      UnsupportedPhase::Initialization, UnsupportedPhase::PlanResolution,
+      UnsupportedPhase::Preparation};
+  const LlmMemoryConfig config = explicit_config(1);
+  const LlmMemoryWorkPlan plan = build_runner_admitted_plan(config);
+  ASSERT_TRUE(plan.valid) << plan.reason_code;
+
+  for (UnsupportedPhase phase : phases) {
+    FakeLlmBackend backend;
+    backend.initialization_reason_storage = "backend-private-unsupported";
+    const LlmBackendLifecycleResult unsupported = {
+        LlmBackendStatus::Unsupported,
+        backend.initialization_reason_storage};
+    if (phase == UnsupportedPhase::Initialization) {
+      backend.initialization = unsupported;
+      backend.clear_initialization_reason_on_release = true;
+    } else if (phase == UnsupportedPhase::PlanResolution) {
+      backend.plan_resolution = unsupported;
+    } else {
+      backend.preparation = unsupported;
+    }
+    LlmMemoryResult result;
+
+    EXPECT_EQ(run_llm_memory_suite(config, plan, backend, result),
+              EXIT_FAILURE);
+    EXPECT_EQ(result.status, LlmRunStatus::Unsupported);
+    EXPECT_EQ(result.reason_code, LlmBackendReason::TASK_UNSUPPORTED);
+    EXPECT_TRUE(backend.calls.empty());
+    EXPECT_EQ(backend.initialize_calls, 1u);
+    EXPECT_EQ(backend.plan_resolution_calls,
+              phase == UnsupportedPhase::Initialization ? 0u : 1u);
+    EXPECT_EQ(backend.preparation_calls,
+              phase == UnsupportedPhase::Preparation ? 1u : 0u);
+    EXPECT_EQ(backend.release_calls, 1u);
+  }
+}
+
+TEST(LlmMemoryRunnerTest,
+     LifecycleFailuresBeforeTasksRemainUninitializedAndDoNotCheckpoint) {
+  enum class FailedPhase { Initialization, PlanResolution, Preparation };
+  constexpr std::array<FailedPhase, 3> phases = {
+      FailedPhase::Initialization, FailedPhase::PlanResolution,
+      FailedPhase::Preparation};
+  const LlmMemoryConfig config = explicit_config(1);
+  const LlmMemoryWorkPlan plan = build_runner_admitted_plan(config);
+  ASSERT_TRUE(plan.valid) << plan.reason_code;
+
+  for (FailedPhase phase : phases) {
+    FakeLlmBackend backend;
+    const LlmBackendLifecycleResult failure = {
+        LlmBackendStatus::Failed,
+        LlmBackendReason::BACKEND_INITIALIZATION_FAILED};
+    if (phase == FailedPhase::Initialization) {
+      backend.initialization = failure;
+    } else if (phase == FailedPhase::PlanResolution) {
+      backend.plan_resolution = failure;
+    } else {
+      backend.preparation = failure;
+    }
+    size_t checkpoint_calls = 0;
+    LlmRunnerHooks hooks;
+    hooks.checkpoint = [&](const LlmMemoryResult&, LlmCheckpointKind) {
+      ++checkpoint_calls;
+      return EXIT_SUCCESS;
+    };
+    LlmMemoryResult result;
+
+    EXPECT_EQ(run_llm_memory_suite(config, plan, backend, result, hooks),
+              EXIT_FAILURE);
+    EXPECT_FALSE(result.initialized);
+    EXPECT_EQ(result.status, LlmRunStatus::NotStarted);
+    EXPECT_EQ(result.reason_code,
+              LlmBackendReason::BACKEND_INITIALIZATION_FAILED);
+    EXPECT_TRUE(backend.calls.empty());
+    EXPECT_EQ(checkpoint_calls, 0u);
+    EXPECT_EQ(backend.initialize_calls, 1u);
+    EXPECT_EQ(backend.plan_resolution_calls,
+              phase == FailedPhase::Initialization ? 0u : 1u);
+    EXPECT_EQ(backend.preparation_calls,
+              phase == FailedPhase::Preparation ? 1u : 0u);
+    EXPECT_EQ(backend.release_calls, 1u);
+  }
+}
+
+TEST(LlmMemoryRunnerTest, OversizedGenericReasonIsCanonicalizedIntoFrozenRunnerCapacities) {
   const LlmMemoryConfig config = explicit_config();
   const LlmMemoryWorkPlan plan = build_runner_admitted_plan(config);
   ASSERT_TRUE(plan.valid) << plan.reason_code;
   constexpr size_t oversized_capacity = 4096;
-  FakeRunnerExecutor executor;
+  FakeLlmBackend executor;
   executor.mutate = [](const LlmMemoryWorkPlan&, const LlmScenarioWorkPlan&, const LlmRunnerTaskContext& context,
-                       size_t, LlmExecutorResult& execution) {
+                       size_t, LlmTaskExecutionResult& execution) {
     if (context.kind != LlmRunnerTaskKind::Measurement) {
       return;
     }
     execution.reason_code.reserve(oversized_capacity);
-    execution.expected_checksums.reserve(oversized_capacity);
-    execution.actual_checksums.reserve(oversized_capacity);
   };
   LlmMemoryResult result;
 
-  ASSERT_EQ(run_llm_memory_suite(config, plan, executor.callback(), result), EXIT_SUCCESS);
+  ASSERT_EQ(run_llm_memory_suite(config, plan, executor, result), EXIT_SUCCESS);
   EXPECT_TRUE(result.results_complete);
-  size_t retained_checksum_bytes = 0;
   for (const LlmMeasurementState& measurement : result.measurements) {
-    EXPECT_EQ(measurement.execution.reason_code, LlmExecutorReason::VALID);
+    EXPECT_EQ(measurement.execution.reason_code, LlmBackendReason::VALID);
     EXPECT_LT(measurement.execution.reason_code.capacity(), oversized_capacity);
-    EXPECT_LT(measurement.execution.expected_checksums.capacity(), oversized_capacity);
-    EXPECT_LT(measurement.execution.actual_checksums.capacity(), oversized_capacity);
-    retained_checksum_bytes +=
-        (measurement.execution.expected_checksums.capacity() + measurement.execution.actual_checksums.capacity()) *
-        sizeof(LlmWorkerChecksum);
+    EXPECT_TRUE(std::holds_alternative<std::monostate>(
+        measurement.execution.backend_evidence));
   }
-  EXPECT_LE(retained_checksum_bytes, result.runner_auxiliary.retained_checksum_bytes);
   EXPECT_EQ(result.measurements.capacity(), result.counters.planned_measurements);
   EXPECT_EQ(result.loops.capacity(), config.loop_count);
   EXPECT_EQ(result.statistics_workspace.sorted_values.capacity(), config.loop_count);
@@ -425,21 +663,21 @@ TEST(LlmMemoryRunnerTest, AutomaticCalibrationIsScenarioSpecificAndFrozenBeforeL
   const LlmMemoryConfig config = automatic_config(2);
   const LlmMemoryWorkPlan plan = build_runner_admitted_plan(config);
   ASSERT_TRUE(plan.valid) << plan.reason_code;
-  FakeRunnerExecutor executor;
+  FakeLlmBackend executor;
   executor.mutate = [](const LlmMemoryWorkPlan&, const LlmScenarioWorkPlan&, const LlmRunnerTaskContext& context,
-                       size_t, LlmExecutorResult& result) {
+                       size_t, LlmTaskExecutionResult& result) {
     const size_t index = static_cast<size_t>(context.scenario);
     if (context.purpose == "pilot") {
-      result.elapsed_seconds = 0.010 * (index + 1);
+      result.timing.elapsed_seconds = 0.010 * (index + 1);
     } else if (context.purpose == "duration-trial") {
-      result.elapsed_seconds = 0.150;
+      result.timing.elapsed_seconds = 0.150;
     } else if (context.kind == LlmRunnerTaskKind::Measurement) {
-      result.elapsed_seconds = 0.400;
+      result.timing.elapsed_seconds = 0.400;
     }
   };
   LlmMemoryResult result;
 
-  ASSERT_EQ(run_llm_memory_suite(config, plan, executor.callback(), result), EXIT_SUCCESS);
+  ASSERT_EQ(run_llm_memory_suite(config, plan, executor, result), EXIT_SUCCESS);
   ASSERT_TRUE(result.frozen_scenario_plans.valid);
   for (LlmScenario scenario : {LlmScenario::WeightsOnly, LlmScenario::KvOnly, LlmScenario::Mixed}) {
     const size_t index = static_cast<size_t>(scenario);
@@ -478,22 +716,22 @@ TEST(LlmMemoryRunnerTest, AutomaticCalibrationUsesAtMostTwoCorrectionsWithoutExt
   const LlmMemoryConfig config = automatic_config();
   const LlmMemoryWorkPlan plan = build_runner_admitted_plan(config);
   ASSERT_TRUE(plan.valid) << plan.reason_code;
-  FakeRunnerExecutor executor;
+  FakeLlmBackend executor;
   executor.mutate = [](const LlmMemoryWorkPlan&, const LlmScenarioWorkPlan&, const LlmRunnerTaskContext& context,
-                       size_t, LlmExecutorResult& result) {
+                       size_t, LlmTaskExecutionResult& result) {
     if (context.purpose == "pilot") {
-      result.elapsed_seconds = 0.010;
+      result.timing.elapsed_seconds = 0.010;
     } else if (context.purpose == "duration-trial") {
-      result.elapsed_seconds = 0.050;
+      result.timing.elapsed_seconds = 0.050;
     } else if (context.purpose == "correction-trial-1") {
-      result.elapsed_seconds = 0.300;
+      result.timing.elapsed_seconds = 0.300;
     } else if (context.purpose == "correction-trial-2") {
-      result.elapsed_seconds = 0.050;
+      result.timing.elapsed_seconds = 0.050;
     }
   };
   LlmMemoryResult result;
 
-  ASSERT_EQ(run_llm_memory_suite(config, plan, executor.callback(), result), EXIT_SUCCESS);
+  ASSERT_EQ(run_llm_memory_suite(config, plan, executor, result), EXIT_SUCCESS);
   for (LlmScenario scenario : {LlmScenario::WeightsOnly, LlmScenario::KvOnly, LlmScenario::Mixed}) {
     const size_t index = static_cast<size_t>(scenario);
     const std::vector<TaskRecord> excluded = records_for_scenario(executor.calls, scenario, false);
@@ -511,13 +749,13 @@ TEST(LlmMemoryRunnerTest, StopBeforeFirstTaskInterruptsAllSlotsWithoutExecutorWo
   const LlmMemoryConfig config = explicit_config(2);
   const LlmMemoryWorkPlan plan = build_runner_admitted_plan(config);
   ASSERT_TRUE(plan.valid) << plan.reason_code;
-  FakeRunnerExecutor executor;
+  FakeLlmBackend executor;
   std::vector<CheckpointRecord> checkpoints;
   LlmRunnerHooks hooks = recording_checkpoints(checkpoints);
   hooks.stop_requested = []() { return true; };
   LlmMemoryResult result;
 
-  EXPECT_EQ(run_llm_memory_suite(config, plan, executor.callback(), result, hooks), EXIT_SUCCESS);
+  EXPECT_EQ(run_llm_memory_suite(config, plan, executor, result, hooks), EXIT_SUCCESS);
   EXPECT_TRUE(executor.calls.empty());
   EXPECT_EQ(result.status, LlmRunStatus::Interrupted);
   EXPECT_TRUE(result.interruption_requested);
@@ -542,9 +780,9 @@ TEST(LlmMemoryRunnerTest, StopDuringStartedMeasurementKeepsCurrentTaskAndInterru
   const LlmMemoryWorkPlan plan = build_runner_admitted_plan(config);
   ASSERT_TRUE(plan.valid) << plan.reason_code;
   bool stop = false;
-  FakeRunnerExecutor executor;
+  FakeLlmBackend executor;
   executor.mutate = [&](const LlmMemoryWorkPlan&, const LlmScenarioWorkPlan&, const LlmRunnerTaskContext& context,
-                        size_t, LlmExecutorResult&) {
+                        size_t, LlmTaskExecutionResult&) {
     if (context.kind == LlmRunnerTaskKind::Measurement) {
       stop = true;
     }
@@ -554,7 +792,7 @@ TEST(LlmMemoryRunnerTest, StopDuringStartedMeasurementKeepsCurrentTaskAndInterru
   hooks.stop_requested = [&]() { return stop; };
   LlmMemoryResult result;
 
-  EXPECT_EQ(run_llm_memory_suite(config, plan, executor.callback(), result, hooks), EXIT_SUCCESS);
+  EXPECT_EQ(run_llm_memory_suite(config, plan, executor, result, hooks), EXIT_SUCCESS);
   EXPECT_EQ(executor.calls.size(), 4u);
   EXPECT_EQ(result.status, LlmRunStatus::Interrupted);
   EXPECT_TRUE(result.interruption_requested);
@@ -579,7 +817,7 @@ TEST(LlmMemoryRunnerTest, StopRaisedByMeasurementCheckpointAddsOnlyCommandTermin
   const LlmMemoryWorkPlan plan = build_runner_admitted_plan(config);
   ASSERT_TRUE(plan.valid) << plan.reason_code;
   bool stop = false;
-  FakeRunnerExecutor executor;
+  FakeLlmBackend executor;
   std::vector<CheckpointRecord> checkpoints;
   LlmRunnerHooks hooks;
   hooks.stop_requested = [&]() { return stop; };
@@ -592,7 +830,7 @@ TEST(LlmMemoryRunnerTest, StopRaisedByMeasurementCheckpointAddsOnlyCommandTermin
   };
   LlmMemoryResult result;
 
-  EXPECT_EQ(run_llm_memory_suite(config, plan, executor.callback(), result, hooks), EXIT_SUCCESS);
+  EXPECT_EQ(run_llm_memory_suite(config, plan, executor, result, hooks), EXIT_SUCCESS);
   ASSERT_EQ(checkpoints.size(), 2u);
   EXPECT_EQ(checkpoints[0].kind, LlmCheckpointKind::MeasurementTerminal);
   EXPECT_EQ(checkpoints[0].status, LlmRunStatus::Partial);
@@ -607,7 +845,7 @@ TEST(LlmMemoryRunnerTest, StopAfterLastSuccessfulTaskRetainsCompleteAcceptedEvid
   const LlmMemoryWorkPlan plan = build_runner_admitted_plan(config);
   ASSERT_TRUE(plan.valid) << plan.reason_code;
   bool stop = false;
-  FakeRunnerExecutor executor;
+  FakeLlmBackend executor;
   std::vector<CheckpointRecord> checkpoints;
   LlmRunnerHooks hooks;
   hooks.stop_requested = [&]() { return stop; };
@@ -620,7 +858,7 @@ TEST(LlmMemoryRunnerTest, StopAfterLastSuccessfulTaskRetainsCompleteAcceptedEvid
   };
   LlmMemoryResult result;
 
-  EXPECT_EQ(run_llm_memory_suite(config, plan, executor.callback(), result, hooks), EXIT_SUCCESS);
+  EXPECT_EQ(run_llm_memory_suite(config, plan, executor, result, hooks), EXIT_SUCCESS);
   EXPECT_TRUE(result.interruption_requested);
   EXPECT_EQ(result.status, LlmRunStatus::Complete);
   EXPECT_TRUE(result.results_complete);
@@ -638,7 +876,7 @@ TEST(LlmMemoryRunnerTest, StopHookExceptionAfterLastMeasurementInvalidatesOtherw
   const LlmMemoryWorkPlan plan = build_runner_admitted_plan(config);
   ASSERT_TRUE(plan.valid) << plan.reason_code;
   bool throw_from_stop = false;
-  FakeRunnerExecutor executor;
+  FakeLlmBackend executor;
   std::vector<CheckpointRecord> checkpoints;
   LlmRunnerHooks hooks;
   hooks.stop_requested = [&]() {
@@ -656,7 +894,7 @@ TEST(LlmMemoryRunnerTest, StopHookExceptionAfterLastMeasurementInvalidatesOtherw
   };
   LlmMemoryResult result;
 
-  EXPECT_EQ(run_llm_memory_suite(config, plan, executor.callback(), result, hooks), EXIT_FAILURE);
+  EXPECT_EQ(run_llm_memory_suite(config, plan, executor, result, hooks), EXIT_FAILURE);
   EXPECT_EQ(result.status, LlmRunStatus::Failed);
   EXPECT_EQ(result.reason_code, LlmRunnerReason::RUNNER_EXCEPTION);
   EXPECT_EQ(result.diagnostic, "injected stop failure");
@@ -670,59 +908,55 @@ TEST(LlmMemoryRunnerTest, StopHookExceptionAfterLastMeasurementInvalidatesOtherw
   EXPECT_EQ(checkpoints.back().status, LlmRunStatus::Failed);
 }
 
-TEST(LlmMemoryRunnerTest, ExecutorFailureWinsSimultaneousStopAndPreservesInterruptedTail) {
+TEST(LlmMemoryRunnerTest, BackendFailureWinsSimultaneousStopAndPreservesInterruptedTail) {
   const LlmMemoryConfig config = explicit_config(2);
   const LlmMemoryWorkPlan plan = build_runner_admitted_plan(config);
   ASSERT_TRUE(plan.valid) << plan.reason_code;
   bool stop = false;
-  FakeRunnerExecutor executor;
+  FakeLlmBackend executor;
   executor.mutate = [&](const LlmMemoryWorkPlan&, const LlmScenarioWorkPlan&, const LlmRunnerTaskContext& context,
-                        size_t, LlmExecutorResult& execution) {
+                        size_t, LlmTaskExecutionResult& execution) {
     if (context.kind == LlmRunnerTaskKind::Measurement) {
       stop = true;
-      execution.valid = false;
-      execution.reason_code = LlmExecutorReason::KERNEL_FAILED;
-      execution.kernel_succeeded = false;
-      execution.checksum_valid = false;
+      fail_execution(execution);
     }
   };
   LlmRunnerHooks hooks;
   hooks.stop_requested = [&]() { return stop; };
   LlmMemoryResult result;
 
-  EXPECT_EQ(run_llm_memory_suite(config, plan, executor.callback(), result, hooks), EXIT_FAILURE);
+  EXPECT_EQ(run_llm_memory_suite(config, plan, executor, result, hooks), EXIT_FAILURE);
   EXPECT_EQ(result.status, LlmRunStatus::Failed);
-  EXPECT_EQ(result.reason_code, LlmExecutorReason::KERNEL_FAILED);
+  EXPECT_EQ(result.reason_code, LlmBackendReason::RESOURCES_NOT_PREPARED);
   EXPECT_TRUE(result.interruption_requested);
   ASSERT_EQ(result.measurements[0].status, LlmMeasurementStatus::Failed);
-  EXPECT_EQ(result.measurements[0].reason_code, LlmExecutorReason::KERNEL_FAILED);
+  EXPECT_EQ(result.measurements[0].reason_code,
+            LlmBackendReason::RESOURCES_NOT_PREPARED);
   for (size_t index = 1; index < result.measurements.size(); ++index) {
     EXPECT_EQ(result.measurements[index].status, LlmMeasurementStatus::Interrupted);
   }
 }
 
-TEST(LlmMemoryRunnerTest, ChecksumMismatchWinsSimultaneousStopAndIsExcludedFromAggregates) {
+TEST(LlmMemoryRunnerTest, ValidationFailureWinsSimultaneousStopAndIsExcludedFromAggregates) {
   const LlmMemoryConfig config = explicit_config(2);
   const LlmMemoryWorkPlan plan = build_runner_admitted_plan(config);
   ASSERT_TRUE(plan.valid) << plan.reason_code;
   bool stop = false;
-  FakeRunnerExecutor executor;
+  FakeLlmBackend executor;
   executor.mutate = [&](const LlmMemoryWorkPlan&, const LlmScenarioWorkPlan&, const LlmRunnerTaskContext& context,
-                        size_t, LlmExecutorResult& execution) {
+                        size_t, LlmTaskExecutionResult& execution) {
     if (context.kind == LlmRunnerTaskKind::Measurement) {
       stop = true;
-      execution.valid = false;
-      execution.reason_code = LlmExecutorReason::CHECKSUM_MISMATCH;
-      execution.checksum_valid = false;
+      invalidate_execution(execution);
     }
   };
   LlmRunnerHooks hooks;
   hooks.stop_requested = [&]() { return stop; };
   LlmMemoryResult result;
 
-  EXPECT_EQ(run_llm_memory_suite(config, plan, executor.callback(), result, hooks), EXIT_FAILURE);
+  EXPECT_EQ(run_llm_memory_suite(config, plan, executor, result, hooks), EXIT_FAILURE);
   EXPECT_EQ(result.status, LlmRunStatus::Failed);
-  EXPECT_EQ(result.reason_code, LlmExecutorReason::CHECKSUM_MISMATCH);
+  EXPECT_EQ(result.reason_code, LlmBackendReason::VALIDATION_FAILED);
   EXPECT_TRUE(result.interruption_requested);
   EXPECT_EQ(result.measurements[0].status, LlmMeasurementStatus::Invalid);
   EXPECT_FALSE(result.measurements[0].elapsed_seconds.has_value());
@@ -733,7 +967,7 @@ TEST(LlmMemoryRunnerTest, MeasurementCheckpointFailureIsTerminalAndNeverRetried)
   const LlmMemoryConfig config = explicit_config(2);
   const LlmMemoryWorkPlan plan = build_runner_admitted_plan(config);
   ASSERT_TRUE(plan.valid) << plan.reason_code;
-  FakeRunnerExecutor executor;
+  FakeLlmBackend executor;
   std::vector<LlmCheckpointKind> kinds;
   LlmRunnerHooks hooks;
   hooks.stop_requested = []() { return false; };
@@ -743,7 +977,7 @@ TEST(LlmMemoryRunnerTest, MeasurementCheckpointFailureIsTerminalAndNeverRetried)
   };
   LlmMemoryResult result;
 
-  EXPECT_EQ(run_llm_memory_suite(config, plan, executor.callback(), result, hooks), EXIT_FAILURE);
+  EXPECT_EQ(run_llm_memory_suite(config, plan, executor, result, hooks), EXIT_FAILURE);
   EXPECT_EQ(kinds, (std::vector<LlmCheckpointKind>{LlmCheckpointKind::MeasurementTerminal}));
   EXPECT_EQ(result.status, LlmRunStatus::Failed);
   EXPECT_EQ(result.reason_code, LlmRunnerReason::CHECKPOINT_WRITE_FAILED);
@@ -756,10 +990,12 @@ TEST(LlmMemoryRunnerTest, MeasurementCheckpointFailureIsTerminalAndNeverRetried)
   EXPECT_TRUE(result.measurements[0].synthetic_memory_work_units_per_second.has_value());
   EXPECT_TRUE(result.measurements[0].effective_model_payload_gb_s.has_value());
   EXPECT_TRUE(result.measurements[0].checksum_valid);
-  EXPECT_TRUE(result.measurements[0].execution.valid);
-  EXPECT_TRUE(result.measurements[0].execution.checksum_valid);
-  EXPECT_EQ(result.measurements[0].execution.expected_checksums.size(), plan.effective_workers);
-  EXPECT_EQ(result.measurements[0].execution.actual_checksums.size(), plan.effective_workers);
+  EXPECT_EQ(result.measurements[0].execution.status,
+            LlmTaskExecutionStatus::Complete);
+  EXPECT_TRUE(result.measurements[0].execution.timing.valid);
+  EXPECT_TRUE(result.measurements[0].execution.validation.valid);
+  EXPECT_TRUE(std::holds_alternative<std::monostate>(
+      result.measurements[0].execution.backend_evidence));
   EXPECT_EQ(result.aggregates[0].effective_model_payload_gb_s.values.size(), 1u);
   EXPECT_EQ(result.counters.planned_loops, 2u);
   EXPECT_EQ(result.counters.attempted_loops, 1u);
@@ -804,31 +1040,37 @@ TEST(LlmMemoryRunnerTest, ResultCopiesAndMovesRetainStaticRunnerFailureAfterSour
   const LlmMemoryConfig config = explicit_config(2);
   const LlmMemoryWorkPlan plan = build_runner_admitted_plan(config);
   ASSERT_TRUE(plan.valid) << plan.reason_code;
-  FakeRunnerExecutor executor;
-  executor.mutate = [](const LlmMemoryWorkPlan&, const LlmScenarioWorkPlan&, const LlmRunnerTaskContext& context,
-                       size_t, LlmExecutorResult&) {
+  FakeLlmBackend executor;
+  executor.mutate = [](const LlmMemoryWorkPlan&, const LlmScenarioWorkPlan&,
+                       const LlmRunnerTaskContext& context, size_t,
+                       LlmTaskExecutionResult&) {
     if (context.kind == LlmRunnerTaskKind::Measurement) {
       throw std::runtime_error("injected runner failure");
     }
   };
   LlmMemoryResult result;
 
-  EXPECT_EQ(run_llm_memory_suite(config, plan, executor.callback(), result), EXIT_FAILURE);
+  EXPECT_EQ(run_llm_memory_suite(config, plan, executor, result), EXIT_FAILURE);
   ASSERT_EQ(result.measurements.size(), config.loop_count * kLlmScenarioCount);
-  EXPECT_EQ(result.measurements[0].reason_code, LlmRunnerReason::RUNNER_EXCEPTION);
+  EXPECT_EQ(result.measurements[0].reason_code,
+            LlmRunnerReason::RUNNER_EXCEPTION);
 
   LlmMemoryResult copied = result;
   LlmMemoryResult moved = std::move(copied);
   const std::string_view canonical_runner_exception =
-      canonicalize_llm_result_reason_code(LlmRunnerReason::RUNNER_EXCEPTION);
+      canonicalize_llm_result_reason_code(
+          LlmRunnerReason::RUNNER_EXCEPTION);
   const std::string_view canonical_not_run =
       canonicalize_llm_result_reason_code(LlmRunnerReason::NOT_RUN_AFTER_RUNTIME_FAILURE);
-  EXPECT_EQ(moved.measurements[0].reason_code.data(), canonical_runner_exception.data());
+  EXPECT_EQ(moved.measurements[0].reason_code.data(),
+            canonical_runner_exception.data());
   result = LlmMemoryResult{};
   copied = LlmMemoryResult{};
 
-  EXPECT_EQ(moved.measurements[0].reason_code, LlmRunnerReason::RUNNER_EXCEPTION);
-  EXPECT_EQ(moved.measurements[0].reason_code.data(), canonical_runner_exception.data());
+  EXPECT_EQ(moved.measurements[0].reason_code,
+            LlmRunnerReason::RUNNER_EXCEPTION);
+  EXPECT_EQ(moved.measurements[0].reason_code.data(),
+            canonical_runner_exception.data());
   for (size_t index = 1; index < moved.measurements.size(); ++index) {
     EXPECT_EQ(moved.measurements[index].reason_code, LlmRunnerReason::NOT_RUN_AFTER_RUNTIME_FAILURE);
     EXPECT_EQ(moved.measurements[index].reason_code.data(), canonical_not_run.data());
@@ -840,7 +1082,7 @@ TEST(LlmMemoryRunnerTest, CheckpointFailureWinsPendingStopAndInterruptsOnlyUnsta
   const LlmMemoryWorkPlan plan = build_runner_admitted_plan(config);
   ASSERT_TRUE(plan.valid) << plan.reason_code;
   bool stop = false;
-  FakeRunnerExecutor executor;
+  FakeLlmBackend executor;
   std::vector<LlmCheckpointKind> kinds;
   LlmRunnerHooks hooks;
   hooks.stop_requested = [&]() { return stop; };
@@ -851,7 +1093,7 @@ TEST(LlmMemoryRunnerTest, CheckpointFailureWinsPendingStopAndInterruptsOnlyUnsta
   };
   LlmMemoryResult result;
 
-  EXPECT_EQ(run_llm_memory_suite(config, plan, executor.callback(), result, hooks), EXIT_FAILURE);
+  EXPECT_EQ(run_llm_memory_suite(config, plan, executor, result, hooks), EXIT_FAILURE);
   EXPECT_EQ(kinds, (std::vector<LlmCheckpointKind>{LlmCheckpointKind::MeasurementTerminal}));
   EXPECT_EQ(result.status, LlmRunStatus::Failed);
   EXPECT_EQ(result.reason_code, LlmRunnerReason::CHECKPOINT_WRITE_FAILED);
@@ -877,7 +1119,7 @@ TEST(LlmMemoryRunnerTest, TypedAndUnknownCheckpointExceptionsAreTerminalAndNever
     const LlmMemoryConfig config = explicit_config(2);
     const LlmMemoryWorkPlan plan = build_runner_admitted_plan(config);
     ASSERT_TRUE(plan.valid) << plan.reason_code;
-    FakeRunnerExecutor executor;
+    FakeLlmBackend executor;
     std::vector<LlmCheckpointKind> kinds;
     LlmRunnerHooks hooks;
     hooks.stop_requested = []() { return false; };
@@ -890,7 +1132,7 @@ TEST(LlmMemoryRunnerTest, TypedAndUnknownCheckpointExceptionsAreTerminalAndNever
     };
     LlmMemoryResult result;
 
-    EXPECT_EQ(run_llm_memory_suite(config, plan, executor.callback(), result, hooks), EXIT_FAILURE);
+    EXPECT_EQ(run_llm_memory_suite(config, plan, executor, result, hooks), EXIT_FAILURE);
     EXPECT_EQ(kinds, (std::vector<LlmCheckpointKind>{LlmCheckpointKind::MeasurementTerminal}));
     EXPECT_EQ(result.status, LlmRunStatus::Failed);
     EXPECT_EQ(result.reason_code,
@@ -913,9 +1155,10 @@ TEST(LlmMemoryRunnerTest, CheckpointReturnFailureOverridesEarlierExecutorExcepti
   const LlmMemoryConfig config = explicit_config(1);
   const LlmMemoryWorkPlan plan = build_runner_admitted_plan(config);
   ASSERT_TRUE(plan.valid) << plan.reason_code;
-  FakeRunnerExecutor executor;
-  executor.mutate = [](const LlmMemoryWorkPlan&, const LlmScenarioWorkPlan&, const LlmRunnerTaskContext& context,
-                       size_t, LlmExecutorResult&) {
+  FakeLlmBackend executor;
+  executor.mutate = [](const LlmMemoryWorkPlan&, const LlmScenarioWorkPlan&,
+                       const LlmRunnerTaskContext& context, size_t,
+                       LlmTaskExecutionResult&) {
     if (context.kind == LlmRunnerTaskKind::Measurement) {
       throw std::runtime_error("earlier executor diagnostic");
     }
@@ -929,7 +1172,7 @@ TEST(LlmMemoryRunnerTest, CheckpointReturnFailureOverridesEarlierExecutorExcepti
   };
   LlmMemoryResult result;
 
-  EXPECT_EQ(run_llm_memory_suite(config, plan, executor.callback(), result, hooks), EXIT_FAILURE);
+  EXPECT_EQ(run_llm_memory_suite(config, plan, executor, result, hooks), EXIT_FAILURE);
   EXPECT_EQ(kinds, (std::vector<LlmCheckpointKind>{LlmCheckpointKind::MeasurementTerminal}));
   EXPECT_EQ(result.status, LlmRunStatus::Failed);
   EXPECT_EQ(result.reason_code, LlmRunnerReason::CHECKPOINT_WRITE_FAILED);
@@ -944,7 +1187,7 @@ TEST(LlmMemoryRunnerTest, CommandTerminalCheckpointFailureIsNotRetried) {
   const LlmMemoryConfig config = explicit_config(1);
   const LlmMemoryWorkPlan plan = build_runner_admitted_plan(config);
   ASSERT_TRUE(plan.valid) << plan.reason_code;
-  FakeRunnerExecutor executor;
+  FakeLlmBackend executor;
   std::vector<LlmCheckpointKind> kinds;
   LlmRunnerHooks hooks;
   hooks.stop_requested = []() { return false; };
@@ -954,7 +1197,7 @@ TEST(LlmMemoryRunnerTest, CommandTerminalCheckpointFailureIsNotRetried) {
   };
   LlmMemoryResult result;
 
-  EXPECT_EQ(run_llm_memory_suite(config, plan, executor.callback(), result, hooks), EXIT_FAILURE);
+  EXPECT_EQ(run_llm_memory_suite(config, plan, executor, result, hooks), EXIT_FAILURE);
   ASSERT_EQ(kinds.size(), 4u);
   EXPECT_EQ(kinds.back(), LlmCheckpointKind::CommandTerminal);
   EXPECT_EQ(result.logical_checkpoint_attempts, 4u);
@@ -974,19 +1217,19 @@ TEST(LlmMemoryRunnerTest, MeasuredOnlyStatisticsKeepRawValuesAndClassifyCvThresh
   ASSERT_TRUE(plan.valid) << plan.reason_code;
   constexpr std::array<double, 3> stable_values = {95.0, 100.0, 105.0};
   constexpr std::array<double, 3> noisy_values = {90.0, 100.0, 110.0};
-  FakeRunnerExecutor executor;
+  FakeLlmBackend executor;
   executor.mutate = [&](const LlmMemoryWorkPlan&, const LlmScenarioWorkPlan& task_plan,
-                        const LlmRunnerTaskContext& context, size_t, LlmExecutorResult& execution) {
+                        const LlmRunnerTaskContext& context, size_t, LlmTaskExecutionResult& execution) {
     if (context.kind != LlmRunnerTaskKind::Measurement) {
       return;
     }
     const double gb_s = context.scenario == LlmScenario::WeightsOnly ? stable_values[context.loop_index]
                                                                      : noisy_values[context.loop_index];
-    execution.elapsed_seconds = static_cast<double>(task_plan.effective_model_payload_bytes) / gb_s / 1.0e9;
+    execution.timing.elapsed_seconds = static_cast<double>(task_plan.effective_model_payload_bytes) / gb_s / 1.0e9;
   };
   LlmMemoryResult result;
 
-  ASSERT_EQ(run_llm_memory_suite(config, plan, executor.callback(), result), EXIT_SUCCESS);
+  ASSERT_EQ(run_llm_memory_suite(config, plan, executor, result), EXIT_SUCCESS);
   const LlmScenarioAggregate& weights = result.aggregates[0];
   EXPECT_EQ(weights.effective_model_payload_gb_s.values.size(), 3u);
   EXPECT_NEAR(weights.effective_model_payload_gb_s.statistics.coefficient_of_variation_pct, 5.0, 1e-10);
@@ -1010,25 +1253,23 @@ TEST(LlmMemoryRunnerTest, PartialAggregatesRetainEarlierMeasuredValueAndExcludeL
   const LlmMemoryWorkPlan plan = build_runner_admitted_plan(config);
   ASSERT_TRUE(plan.valid) << plan.reason_code;
   size_t weights_measurements = 0;
-  FakeRunnerExecutor executor;
+  FakeLlmBackend executor;
   executor.mutate = [&](const LlmMemoryWorkPlan&, const LlmScenarioWorkPlan& task_plan,
-                        const LlmRunnerTaskContext& context, size_t, LlmExecutorResult& execution) {
+                        const LlmRunnerTaskContext& context, size_t, LlmTaskExecutionResult& execution) {
     if (context.kind != LlmRunnerTaskKind::Measurement || context.scenario != LlmScenario::WeightsOnly) {
       return;
     }
     ++weights_measurements;
-    execution.elapsed_seconds = static_cast<double>(task_plan.effective_model_payload_bytes) / 100.0 / 1.0e9;
+    execution.timing.elapsed_seconds = static_cast<double>(task_plan.effective_model_payload_bytes) / 100.0 / 1.0e9;
     if (weights_measurements == 2) {
-      execution.valid = false;
-      execution.reason_code = LlmExecutorReason::CHECKSUM_MISMATCH;
-      execution.checksum_valid = false;
+      invalidate_execution(execution);
     }
   };
   LlmMemoryResult result;
 
-  EXPECT_EQ(run_llm_memory_suite(config, plan, executor.callback(), result), EXIT_FAILURE);
+  EXPECT_EQ(run_llm_memory_suite(config, plan, executor, result), EXIT_FAILURE);
   EXPECT_EQ(result.status, LlmRunStatus::Failed);
-  EXPECT_EQ(result.reason_code, LlmExecutorReason::CHECKSUM_MISMATCH);
+  EXPECT_EQ(result.reason_code, LlmBackendReason::VALIDATION_FAILED);
   ASSERT_EQ(result.aggregates[0].effective_model_payload_gb_s.values.size(), 1u);
   EXPECT_NEAR(result.aggregates[0].effective_model_payload_gb_s.values.front(), 100.0, 1e-10);
   EXPECT_EQ(result.aggregates[0].status, "partial");
@@ -1039,84 +1280,104 @@ TEST(LlmMemoryRunnerTest, PartialAggregatesRetainEarlierMeasuredValueAndExcludeL
   EXPECT_FALSE(result.measurements[5].effective_model_payload_gb_s.has_value());
 }
 
-TEST(LlmMemoryRunnerTest, MalformedMeasurementChecksumCardinalityIsRejectedWithoutRetainedVectorsOrAggregate) {
-  for (int worker_delta : {-1, 1}) {
-    SCOPED_TRACE(worker_delta < 0 ? "too-few" : "too-many");
-    const LlmMemoryConfig config = explicit_config(1);
-    const LlmMemoryWorkPlan plan = build_runner_admitted_plan(config);
-    ASSERT_TRUE(plan.valid) << plan.reason_code;
-    ASSERT_GE(plan.effective_workers, 2u);
-    FakeRunnerExecutor executor;
-    executor.mutate = [worker_delta](const LlmMemoryWorkPlan& model_plan, const LlmScenarioWorkPlan&,
-                                     const LlmRunnerTaskContext& context, size_t, LlmExecutorResult& execution) {
-      if (context.kind != LlmRunnerTaskKind::Measurement) {
-        return;
-      }
-      const size_t malformed_count = static_cast<size_t>(static_cast<int>(model_plan.effective_workers) + worker_delta);
-      execution.expected_checksums.resize(malformed_count);
-      execution.actual_checksums.resize(malformed_count);
-    };
-    LlmMemoryResult result;
-
-    EXPECT_EQ(run_llm_memory_suite(config, plan, executor.callback(), result), EXIT_FAILURE);
-    EXPECT_EQ(result.status, LlmRunStatus::Failed);
-    EXPECT_EQ(result.reason_code, LlmExecutorReason::INVALID_RESOURCES);
-    ASSERT_FALSE(result.measurements.empty());
-    EXPECT_EQ(result.measurements[0].status, LlmMeasurementStatus::Failed);
-    EXPECT_EQ(result.measurements[0].reason_code, LlmExecutorReason::INVALID_RESOURCES);
-    EXPECT_TRUE(result.measurements[0].execution.expected_checksums.empty());
-    EXPECT_TRUE(result.measurements[0].execution.actual_checksums.empty());
-    EXPECT_TRUE(result.aggregates[0].effective_model_payload_gb_s.values.empty());
-    EXPECT_EQ(result.counters.measured_measurements, 0u);
-  }
-}
-
-TEST(LlmMemoryRunnerTest, MalformedExcludedChecksumCardinalityUsesInvalidResourcesReason) {
+TEST(LlmMemoryRunnerTest, InvalidAuthoritativeElapsedIsRejectedByCommonAcceptance) {
   const LlmMemoryConfig config = explicit_config(1);
   const LlmMemoryWorkPlan plan = build_runner_admitted_plan(config);
   ASSERT_TRUE(plan.valid) << plan.reason_code;
-  ASSERT_GE(plan.effective_workers, 2u);
-  FakeRunnerExecutor executor;
-  executor.mutate = [](const LlmMemoryWorkPlan&, const LlmScenarioWorkPlan&, const LlmRunnerTaskContext& context,
-                       size_t, LlmExecutorResult& execution) {
-    if (context.kind == LlmRunnerTaskKind::Warmup) {
-      execution.expected_checksums.resize(1);
-      execution.actual_checksums.resize(1);
+  FakeLlmBackend executor;
+  executor.mutate = [](const LlmMemoryWorkPlan&,
+                       const LlmScenarioWorkPlan&,
+                       const LlmRunnerTaskContext& context, size_t,
+                       LlmTaskExecutionResult& execution) {
+    if (context.kind == LlmRunnerTaskKind::Measurement) {
+      execution.timing.valid = false;
+      execution.timing.elapsed_seconds = 0.0;
     }
   };
   LlmMemoryResult result;
 
-  EXPECT_EQ(run_llm_memory_suite(config, plan, executor.callback(), result), EXIT_FAILURE);
+  EXPECT_EQ(run_llm_memory_suite(config, plan, executor, result), EXIT_FAILURE);
   EXPECT_EQ(result.status, LlmRunStatus::Failed);
-  EXPECT_EQ(result.reason_code, LlmExecutorReason::INVALID_RESOURCES);
+  EXPECT_EQ(result.reason_code,
+            LlmBackendReason::INVALID_AUTHORITATIVE_ELAPSED);
+  ASSERT_FALSE(result.measurements.empty());
+  EXPECT_EQ(result.measurements[0].status, LlmMeasurementStatus::Invalid);
+  EXPECT_EQ(result.measurements[0].reason_code,
+            LlmBackendReason::INVALID_AUTHORITATIVE_ELAPSED);
+  EXPECT_FALSE(result.measurements[0].elapsed_seconds.has_value());
+  EXPECT_TRUE(result.aggregates[0].effective_model_payload_gb_s.values.empty());
+}
+
+TEST(LlmMemoryRunnerTest, MeasurementCompletionMismatchIsRejectedWithoutAggregate) {
+  const LlmMemoryConfig config = explicit_config(1);
+  const LlmMemoryWorkPlan plan = build_runner_admitted_plan(config);
+  ASSERT_TRUE(plan.valid) << plan.reason_code;
+  FakeLlmBackend executor;
+  executor.mutate = [](const LlmMemoryWorkPlan&, const LlmScenarioWorkPlan&, const LlmRunnerTaskContext& context,
+                       size_t, LlmTaskExecutionResult& execution) {
+    if (context.kind == LlmRunnerTaskKind::Measurement) {
+      --execution.completion.completed_work_units;
+    }
+  };
+  LlmMemoryResult result;
+
+  EXPECT_EQ(run_llm_memory_suite(config, plan, executor, result), EXIT_FAILURE);
+  EXPECT_EQ(result.status, LlmRunStatus::Failed);
+  EXPECT_EQ(result.reason_code, LlmBackendReason::TASK_COMPLETION_MISMATCH);
+  ASSERT_FALSE(result.measurements.empty());
+  EXPECT_EQ(result.measurements[0].status, LlmMeasurementStatus::Failed);
+  EXPECT_EQ(result.measurements[0].reason_code,
+            LlmBackendReason::TASK_COMPLETION_MISMATCH);
+  EXPECT_TRUE(std::holds_alternative<std::monostate>(
+      result.measurements[0].execution.backend_evidence));
+  EXPECT_TRUE(result.aggregates[0].effective_model_payload_gb_s.values.empty());
+  EXPECT_EQ(result.counters.measured_measurements, 0u);
+}
+
+TEST(LlmMemoryRunnerTest, ExcludedCompletionMismatchRetainsGenericReason) {
+  const LlmMemoryConfig config = explicit_config(1);
+  const LlmMemoryWorkPlan plan = build_runner_admitted_plan(config);
+  ASSERT_TRUE(plan.valid) << plan.reason_code;
+  FakeLlmBackend executor;
+  executor.mutate = [](const LlmMemoryWorkPlan&, const LlmScenarioWorkPlan&,
+                       const LlmRunnerTaskContext& context, size_t,
+                       LlmTaskExecutionResult& execution) {
+    if (context.kind == LlmRunnerTaskKind::Warmup) {
+      --execution.completion.completed_task_accounted_bytes;
+    }
+  };
+  LlmMemoryResult result;
+
+  EXPECT_EQ(run_llm_memory_suite(config, plan, executor, result), EXIT_FAILURE);
+  EXPECT_EQ(result.status, LlmRunStatus::Failed);
+  EXPECT_EQ(result.reason_code, LlmBackendReason::TASK_COMPLETION_MISMATCH);
   ASSERT_EQ(result.calibration_attempts[0].size(), 1u);
   EXPECT_FALSE(result.calibration_attempts[0][0].valid);
-  EXPECT_EQ(result.calibration_attempts[0][0].reason_code, LlmExecutorReason::INVALID_RESOURCES);
+  EXPECT_EQ(result.calibration_attempts[0][0].reason_code,
+            LlmBackendReason::TASK_COMPLETION_MISMATCH);
 }
 
 TEST(LlmMemoryRunnerTest, CalibrationFailureRetainsAttemptAndFinalizesMeasurementSlots) {
   const LlmMemoryConfig config = automatic_config(2);
   const LlmMemoryWorkPlan plan = build_runner_admitted_plan(config);
   ASSERT_TRUE(plan.valid) << plan.reason_code;
-  FakeRunnerExecutor executor;
+  FakeLlmBackend executor;
   executor.mutate = [](const LlmMemoryWorkPlan&, const LlmScenarioWorkPlan&, const LlmRunnerTaskContext& context,
-                       size_t, LlmExecutorResult& execution) {
+                       size_t, LlmTaskExecutionResult& execution) {
     if (context.purpose == "pilot") {
-      execution.valid = false;
-      execution.reason_code = LlmExecutorReason::KERNEL_FAILED;
-      execution.kernel_succeeded = false;
-      execution.checksum_valid = false;
+      fail_execution(execution);
     }
   };
   std::vector<CheckpointRecord> checkpoints;
   LlmMemoryResult result;
 
-  EXPECT_EQ(run_llm_memory_suite(config, plan, executor.callback(), result, recording_checkpoints(checkpoints)),
+  EXPECT_EQ(run_llm_memory_suite(config, plan, executor, result, recording_checkpoints(checkpoints)),
             EXIT_FAILURE);
   ASSERT_EQ(result.calibration_attempts[0].size(), 2u);
   EXPECT_EQ(result.calibration_attempts[0][1].purpose, "pilot");
   EXPECT_FALSE(result.calibration_attempts[0][1].valid);
-  EXPECT_EQ(result.calibration_attempts[0][1].reason_code, LlmExecutorReason::KERNEL_FAILED);
+  EXPECT_EQ(result.calibration_attempts[0][1].reason_code,
+            LlmBackendReason::RESOURCES_NOT_PREPARED);
   EXPECT_EQ(result.counters.attempted_measurements, 0u);
   EXPECT_EQ(result.counters.terminal_measurements, 6u);
   for (const LlmMeasurementState& measurement : result.measurements) {
@@ -1131,9 +1392,9 @@ TEST(LlmMemoryRunnerTest, SuccessfulExcludedTaskWinsStopAndInterruptsBeforeMeasu
   const LlmMemoryWorkPlan plan = build_runner_admitted_plan(config);
   ASSERT_TRUE(plan.valid) << plan.reason_code;
   bool stop = false;
-  FakeRunnerExecutor executor;
+  FakeLlmBackend executor;
   executor.mutate = [&](const LlmMemoryWorkPlan&, const LlmScenarioWorkPlan&, const LlmRunnerTaskContext& context,
-                        size_t, LlmExecutorResult&) {
+                        size_t, LlmTaskExecutionResult&) {
     if (context.kind == LlmRunnerTaskKind::Warmup) {
       stop = true;
     }
@@ -1143,7 +1404,7 @@ TEST(LlmMemoryRunnerTest, SuccessfulExcludedTaskWinsStopAndInterruptsBeforeMeasu
   hooks.stop_requested = [&]() { return stop; };
   LlmMemoryResult result;
 
-  EXPECT_EQ(run_llm_memory_suite(config, plan, executor.callback(), result, hooks), EXIT_SUCCESS);
+  EXPECT_EQ(run_llm_memory_suite(config, plan, executor, result, hooks), EXIT_SUCCESS);
   EXPECT_EQ(result.status, LlmRunStatus::Interrupted);
   EXPECT_TRUE(result.interruption_requested);
   ASSERT_EQ(result.calibration_attempts[0].size(), 1u);
@@ -1162,29 +1423,27 @@ TEST(LlmMemoryRunnerTest, ExcludedTaskFailureWinsSimultaneousStopAndRetainsAttem
   const LlmMemoryWorkPlan plan = build_runner_admitted_plan(config);
   ASSERT_TRUE(plan.valid) << plan.reason_code;
   bool stop = false;
-  FakeRunnerExecutor executor;
+  FakeLlmBackend executor;
   executor.mutate = [&](const LlmMemoryWorkPlan&, const LlmScenarioWorkPlan&, const LlmRunnerTaskContext& context,
-                        size_t, LlmExecutorResult& execution) {
+                        size_t, LlmTaskExecutionResult& execution) {
     if (context.kind == LlmRunnerTaskKind::Warmup) {
       stop = true;
-      execution.valid = false;
-      execution.reason_code = LlmExecutorReason::KERNEL_FAILED;
-      execution.kernel_succeeded = false;
-      execution.checksum_valid = false;
+      fail_execution(execution);
     }
   };
   LlmRunnerHooks hooks;
   hooks.stop_requested = [&]() { return stop; };
   LlmMemoryResult result;
 
-  EXPECT_EQ(run_llm_memory_suite(config, plan, executor.callback(), result, hooks), EXIT_FAILURE);
+  EXPECT_EQ(run_llm_memory_suite(config, plan, executor, result, hooks), EXIT_FAILURE);
   EXPECT_EQ(result.status, LlmRunStatus::Failed);
-  EXPECT_EQ(result.reason_code, LlmExecutorReason::KERNEL_FAILED);
+  EXPECT_EQ(result.reason_code, LlmBackendReason::RESOURCES_NOT_PREPARED);
   EXPECT_TRUE(result.interruption_requested);
   ASSERT_EQ(result.calibration_attempts[0].size(), 1u);
   EXPECT_TRUE(result.calibration_attempts[0][0].terminal);
   EXPECT_FALSE(result.calibration_attempts[0][0].valid);
-  EXPECT_EQ(result.calibration_attempts[0][0].reason_code, LlmExecutorReason::KERNEL_FAILED);
+  EXPECT_EQ(result.calibration_attempts[0][0].reason_code,
+            LlmBackendReason::RESOURCES_NOT_PREPARED);
   EXPECT_EQ(result.calibration_attempts[0][0].work_units, config.iterations);
   EXPECT_TRUE(result.frozen_scenario_plans.valid);
   EXPECT_GT(result.counters.planned_work_units, 0u);
@@ -1201,9 +1460,10 @@ TEST(LlmMemoryRunnerTest, ExcludedExecutorExceptionRetainsTerminalAttemptBeforeC
   const LlmMemoryConfig config = explicit_config(1);
   const LlmMemoryWorkPlan plan = build_runner_admitted_plan(config);
   ASSERT_TRUE(plan.valid) << plan.reason_code;
-  FakeRunnerExecutor executor;
-  executor.mutate = [](const LlmMemoryWorkPlan&, const LlmScenarioWorkPlan&, const LlmRunnerTaskContext& context,
-                       size_t, LlmExecutorResult&) {
+  FakeLlmBackend executor;
+  executor.mutate = [](const LlmMemoryWorkPlan&, const LlmScenarioWorkPlan&,
+                       const LlmRunnerTaskContext& context, size_t,
+                       LlmTaskExecutionResult&) {
     if (context.kind == LlmRunnerTaskKind::Warmup) {
       throw std::runtime_error("excluded executor failure");
     }
@@ -1211,7 +1471,7 @@ TEST(LlmMemoryRunnerTest, ExcludedExecutorExceptionRetainsTerminalAttemptBeforeC
   std::vector<CheckpointRecord> checkpoints;
   LlmMemoryResult result;
 
-  EXPECT_EQ(run_llm_memory_suite(config, plan, executor.callback(), result, recording_checkpoints(checkpoints)),
+  EXPECT_EQ(run_llm_memory_suite(config, plan, executor, result, recording_checkpoints(checkpoints)),
             EXIT_FAILURE);
   EXPECT_EQ(result.status, LlmRunStatus::Failed);
   EXPECT_EQ(result.reason_code, LlmRunnerReason::RUNNER_EXCEPTION);
@@ -1219,7 +1479,8 @@ TEST(LlmMemoryRunnerTest, ExcludedExecutorExceptionRetainsTerminalAttemptBeforeC
   ASSERT_EQ(result.calibration_attempts[0].size(), 1u);
   EXPECT_TRUE(result.calibration_attempts[0][0].terminal);
   EXPECT_FALSE(result.calibration_attempts[0][0].valid);
-  EXPECT_EQ(result.calibration_attempts[0][0].reason_code, LlmRunnerReason::RUNNER_EXCEPTION);
+  EXPECT_EQ(result.calibration_attempts[0][0].reason_code,
+            LlmRunnerReason::RUNNER_EXCEPTION);
   EXPECT_EQ(result.calibration_attempts[0][0].work_plan_identity,
             build_llm_scenario_work_plan(plan, LlmScenario::WeightsOnly, config.iterations, true).plan_identity);
   ASSERT_EQ(checkpoints.size(), 1u);
@@ -1232,9 +1493,11 @@ TEST(LlmMemoryRunnerTest, TypedAndUnknownExecutorExceptionsRemainInsideRunnerBou
     const LlmMemoryConfig config = explicit_config(1);
     const LlmMemoryWorkPlan plan = build_runner_admitted_plan(config);
     ASSERT_TRUE(plan.valid) << plan.reason_code;
-    FakeRunnerExecutor executor;
-    executor.mutate = [typed](const LlmMemoryWorkPlan&, const LlmScenarioWorkPlan&, const LlmRunnerTaskContext& context,
-                              size_t, LlmExecutorResult&) {
+    FakeLlmBackend executor;
+    executor.mutate = [typed](const LlmMemoryWorkPlan&,
+                              const LlmScenarioWorkPlan&,
+                              const LlmRunnerTaskContext& context, size_t,
+                              LlmTaskExecutionResult&) {
       if (context.kind == LlmRunnerTaskKind::Measurement) {
         if (typed) {
           throw std::runtime_error("injected executor failure");
@@ -1244,11 +1507,12 @@ TEST(LlmMemoryRunnerTest, TypedAndUnknownExecutorExceptionsRemainInsideRunnerBou
     };
     std::vector<CheckpointRecord> checkpoints;
     LlmMemoryResult result;
-    EXPECT_EQ(run_llm_memory_suite(config, plan, executor.callback(), result, recording_checkpoints(checkpoints)),
+    EXPECT_EQ(run_llm_memory_suite(config, plan, executor, result, recording_checkpoints(checkpoints)),
               EXIT_FAILURE);
     EXPECT_EQ(result.status, LlmRunStatus::Failed);
     EXPECT_EQ(result.reason_code,
-              typed ? LlmRunnerReason::RUNNER_EXCEPTION : LlmRunnerReason::RUNNER_UNKNOWN_EXCEPTION);
+              typed ? LlmRunnerReason::RUNNER_EXCEPTION
+                    : LlmRunnerReason::RUNNER_UNKNOWN_EXCEPTION);
     if (typed) {
       EXPECT_EQ(result.diagnostic, "injected executor failure");
     }
@@ -1274,9 +1538,10 @@ TEST(LlmMemoryRunnerTest, ExecutorExceptionStillObservesStopRaisedByItsMeasureme
   const LlmMemoryWorkPlan plan = build_runner_admitted_plan(config);
   ASSERT_TRUE(plan.valid) << plan.reason_code;
   bool stop = false;
-  FakeRunnerExecutor executor;
-  executor.mutate = [](const LlmMemoryWorkPlan&, const LlmScenarioWorkPlan&, const LlmRunnerTaskContext& context,
-                       size_t, LlmExecutorResult&) {
+  FakeLlmBackend executor;
+  executor.mutate = [](const LlmMemoryWorkPlan&, const LlmScenarioWorkPlan&,
+                       const LlmRunnerTaskContext& context, size_t,
+                       LlmTaskExecutionResult&) {
     if (context.kind == LlmRunnerTaskKind::Measurement) {
       throw std::runtime_error("injected executor failure");
     }
@@ -1293,7 +1558,7 @@ TEST(LlmMemoryRunnerTest, ExecutorExceptionStillObservesStopRaisedByItsMeasureme
   };
   LlmMemoryResult result;
 
-  EXPECT_EQ(run_llm_memory_suite(config, plan, executor.callback(), result, hooks), EXIT_FAILURE);
+  EXPECT_EQ(run_llm_memory_suite(config, plan, executor, result, hooks), EXIT_FAILURE);
   EXPECT_EQ(kinds, (std::vector<LlmCheckpointKind>{LlmCheckpointKind::MeasurementTerminal,
                                                    LlmCheckpointKind::CommandTerminal}));
   EXPECT_EQ(result.status, LlmRunStatus::Failed);
@@ -1329,7 +1594,7 @@ TEST(LlmMemoryRunnerTest, ExplicitLaterScenarioCapFailsPreflightBeforeAnyExecuto
       build_llm_scenario_work_plan(plan, LlmScenario::KvOnly, config.iterations, true);
   ASSERT_FALSE(invalid_kv.valid);
   EXPECT_EQ(invalid_kv.reason_code, LlmWorkPlanReason::TASK_ACCOUNTED_BYTES_CAP_EXCEEDED);
-  FakeRunnerExecutor executor;
+  FakeLlmBackend executor;
   size_t checkpoint_calls = 0;
   LlmRunnerHooks hooks;
   hooks.stop_requested = []() { return false; };
@@ -1339,7 +1604,7 @@ TEST(LlmMemoryRunnerTest, ExplicitLaterScenarioCapFailsPreflightBeforeAnyExecuto
   };
   LlmMemoryResult result;
 
-  EXPECT_EQ(run_llm_memory_suite(config, plan, executor.callback(), result, hooks), EXIT_FAILURE);
+  EXPECT_EQ(run_llm_memory_suite(config, plan, executor, result, hooks), EXIT_FAILURE);
   EXPECT_FALSE(result.initialized);
   EXPECT_EQ(result.reason_code, LlmWorkPlanReason::TASK_ACCOUNTED_BYTES_CAP_EXCEEDED);
   EXPECT_TRUE(executor.calls.empty());
@@ -1351,29 +1616,37 @@ TEST(LlmMemoryRunnerTest,
   const LlmMemoryConfig baseline_config = explicit_config();
   const LlmMemoryWorkPlan plan = build_runner_admitted_plan(baseline_config);
   ASSERT_TRUE(plan.valid) << plan.reason_code;
-  for (const auto& mutate_selector : {
-           +[](LlmMemoryConfig& candidate) {
-             candidate.backend = LlmMemoryBackend::Metal;
-           },
-           +[](LlmMemoryConfig& candidate) {
-             candidate.phase = LlmPhase::Prefill;
-           },
-           +[](LlmMemoryConfig& candidate) {
-             candidate.kv_layout = LlmKvLayout::Paged;
-           },
-       }) {
+  struct MismatchCase {
+    void (*mutate)(LlmMemoryConfig&);
+    const char* reason_code;
+  };
+  const std::array<MismatchCase, 3> mismatch_cases = {{
+      {+[](LlmMemoryConfig& candidate) {
+         candidate.backend = LlmMemoryBackend::Metal;
+       },
+       LlmRunnerReason::BACKEND_UNAVAILABLE},
+      {+[](LlmMemoryConfig& candidate) {
+         candidate.phase = LlmPhase::Prefill;
+       },
+       LlmRunnerReason::CONFIG_WORK_PLAN_MISMATCH},
+      {+[](LlmMemoryConfig& candidate) {
+         candidate.kv_layout = LlmKvLayout::Paged;
+       },
+       LlmRunnerReason::CONFIG_WORK_PLAN_MISMATCH},
+  }};
+  for (const MismatchCase& mismatch_case : mismatch_cases) {
     LlmMemoryConfig mismatched = baseline_config;
-    mutate_selector(mismatched);
-    FakeRunnerExecutor mismatch_executor;
+    mismatch_case.mutate(mismatched);
+    FakeLlmBackend mismatch_executor;
     LlmMemoryResult mismatch_result;
     EXPECT_EQ(run_llm_memory_suite(mismatched, plan,
-                                   mismatch_executor.callback(),
+                                   mismatch_executor,
                                    mismatch_result),
               EXIT_FAILURE);
     EXPECT_FALSE(mismatch_result.initialized);
-    EXPECT_EQ(mismatch_result.reason_code,
-              LlmRunnerReason::CONFIG_WORK_PLAN_MISMATCH);
+    EXPECT_EQ(mismatch_result.reason_code, mismatch_case.reason_code);
     EXPECT_TRUE(mismatch_executor.calls.empty());
+    EXPECT_EQ(mismatch_executor.initialize_calls, 0u);
     EXPECT_EQ(mismatch_result.logical_checkpoint_attempts, 0u);
   }
 
@@ -1382,13 +1655,14 @@ TEST(LlmMemoryRunnerTest,
   const LlmRunnerAuxiliaryEstimate estimate = calculate_llm_runner_auxiliary_estimate(config, plan);
   EXPECT_FALSE(estimate.valid);
   EXPECT_EQ(estimate.reason_code, LlmRunnerReason::AUXILIARY_BYTES_OVERFLOW);
-  FakeRunnerExecutor executor;
+  FakeLlmBackend executor;
   LlmMemoryResult result;
 
-  EXPECT_EQ(run_llm_memory_suite(config, plan, executor.callback(), result), EXIT_FAILURE);
+  EXPECT_EQ(run_llm_memory_suite(config, plan, executor, result), EXIT_FAILURE);
   EXPECT_FALSE(result.initialized);
   EXPECT_EQ(result.reason_code, LlmRunnerReason::INVALID_CONFIG);
   EXPECT_TRUE(executor.calls.empty());
+  EXPECT_EQ(executor.initialize_calls, 0u);
   EXPECT_EQ(result.logical_checkpoint_attempts, 0u);
 }
 
@@ -1400,6 +1674,9 @@ TEST(LlmMemoryRunnerTest, RunnerAuxiliaryEstimateHasExactCategoryBreakdownForExp
     ASSERT_TRUE(plan.valid) << plan.reason_code;
     estimates[mode] = calculate_llm_runner_auxiliary_estimate(config, plan);
     const LlmRunnerAuxiliaryEstimate& estimate = estimates[mode];
+    const LlmCpuExecutionPlan* cpu_plan =
+        get_llm_cpu_execution_plan(plan);
+    ASSERT_NE(cpu_plan, nullptr);
     ASSERT_TRUE(estimate.valid) << estimate.reason_code;
     const size_t planned_measurements = config.loop_count * kLlmScenarioCount;
     const size_t attempts_per_scenario =
@@ -1414,7 +1691,8 @@ TEST(LlmMemoryRunnerTest, RunnerAuxiliaryEstimateHasExactCategoryBreakdownForExp
     EXPECT_EQ(estimate.warning_record_bytes, (kLlmScenarioCount + 1) * sizeof(std::string_view));
     EXPECT_GT(estimate.fixed_metadata_bytes, 0u);
     EXPECT_EQ(estimate.retained_checksum_bytes,
-              planned_measurements * plan.effective_workers * 2 * sizeof(LlmWorkerChecksum));
+              planned_measurements * cpu_plan->effective_workers * 2 *
+                  sizeof(LlmWorkerChecksum));
     EXPECT_EQ(estimate.checksum_auxiliary_bytes, estimate.retained_checksum_bytes);
     EXPECT_EQ(estimate.orchestration_auxiliary_bytes,
               estimate.measurement_record_bytes + estimate.loop_record_bytes + estimate.calibration_record_bytes +
@@ -1445,9 +1723,9 @@ TEST(LlmMemoryRunnerTest, RunnerAuxiliaryBudgetAcceptsExactBoundaryAndRejectsOne
                                         request.orchestration_auxiliary_bytes));
   const LlmMemoryWorkPlan exact = build_llm_memory_work_plan(request);
   ASSERT_TRUE(exact.valid) << exact.reason_code;
-  FakeRunnerExecutor exact_executor;
+  FakeLlmBackend exact_executor;
   LlmMemoryResult exact_result;
-  EXPECT_EQ(run_llm_memory_suite(config, exact, exact_executor.callback(), exact_result), EXIT_SUCCESS);
+  EXPECT_EQ(run_llm_memory_suite(config, exact, exact_executor, exact_result), EXIT_SUCCESS);
   EXPECT_TRUE(exact_result.results_complete);
 
   ASSERT_GT(request.orchestration_auxiliary_bytes, 0u);
@@ -1462,9 +1740,9 @@ TEST(LlmMemoryRunnerTest, RunnerAuxiliaryBudgetAcceptsExactBoundaryAndRejectsOne
     }
     const LlmMemoryWorkPlan one_byte_short = build_llm_memory_work_plan(short_request);
     ASSERT_TRUE(one_byte_short.valid) << one_byte_short.reason_code;
-    FakeRunnerExecutor rejected_executor;
+    FakeLlmBackend rejected_executor;
     LlmMemoryResult rejected_result;
-    EXPECT_EQ(run_llm_memory_suite(config, one_byte_short, rejected_executor.callback(), rejected_result),
+    EXPECT_EQ(run_llm_memory_suite(config, one_byte_short, rejected_executor, rejected_result),
               EXIT_FAILURE);
     EXPECT_EQ(rejected_result.reason_code, LlmRunnerReason::AUXILIARY_BUDGET_INSUFFICIENT);
     EXPECT_FALSE(rejected_result.initialized);

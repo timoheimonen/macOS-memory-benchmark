@@ -313,7 +313,10 @@ LlmReadChecksumComponent initial_llm_read_checksum(LlmChecksumComponent componen
 /** Fold every worker's weight/K/V tuples in canonical order. */
 LlmRunChecksum fold_llm_worker_checksums(const LlmWorkerChecksum* workers, size_t worker_count) noexcept;
 
-/** Calculate exact executor-owned backing bytes with checked arithmetic. */
+/**
+ * Calculate exact CPU executor-owned backing bytes with checked arithmetic.
+ * A non-CPU or backend/variant-mismatched model plan is rejected.
+ */
 LlmExecutorAuxiliaryEstimate calculate_llm_executor_auxiliary_estimate(const LlmMemoryWorkPlan& plan) noexcept;
 
 /**
@@ -330,6 +333,7 @@ LlmBufferAllocationResult allocate_llm_buffers(const LlmMemoryWorkPlan& plan, Ll
 /**
  * Build all execution resources into an output that owns no prior resources.
  *
+ * The model plan must expose a matching CPU execution-plan alternative.
  * A populated or partial output is rejected before allocation. This keeps the
  * admitted memory peak exact and avoids an unbudgeted replacement contract.
  *
@@ -340,7 +344,10 @@ LlmBufferAllocationResult allocate_llm_buffers(const LlmMemoryWorkPlan& plan, Ll
 LlmResourcePreparationResult prepare_llm_execution_resources(const LlmMemoryWorkPlan& plan,
                                                              LlmExecutionResources& output) noexcept;
 
-/** Derive exact worker/component checksums without invoking or rereading ASM. */
+/**
+ * Derive exact worker/component checksums without invoking or rereading ASM.
+ * A non-CPU or backend/variant-mismatched model plan is rejected.
+ */
 LlmExpectedChecksumResult calculate_llm_expected_checksums(const LlmMemoryWorkPlan& model_plan,
                                                            const LlmScenarioWorkPlan& scenario_plan,
                                                            const LlmExecutionResources& resources) noexcept;
@@ -351,6 +358,7 @@ LlmKernelAdapter production_llm_kernel_adapter() noexcept;
 /**
  * Execute one frozen scenario with an all-or-cancel synchronized start gate.
  *
+ * The model plan must expose a matching CPU execution-plan alternative.
  * Descriptor validation, expected generation, worker/QoS preparation, and
  * thread creation finish before `timer.start()`. The last completing worker
  * stops the timer; joins, exact per-component validation, and run folds happen

@@ -20,9 +20,11 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <stdexcept>
 #include <string>
 #include <type_traits>
 #include <utility>
+#include <variant>
 #include <vector>
 
 #include "core/config/constants.h"
@@ -31,6 +33,24 @@
 namespace {
 
 constexpr size_t kGiB = 1024ULL * 1024ULL * 1024ULL;
+
+const LlmCpuExecutionPlan& cpu_execution_plan(
+    const LlmMemoryWorkPlan& plan) {
+  const LlmCpuExecutionPlan* const cpu_plan =
+      get_llm_cpu_execution_plan(plan);
+  if (cpu_plan == nullptr) {
+    throw std::logic_error("expected CPU execution plan");
+  }
+  return *cpu_plan;
+}
+
+LlmCpuExecutionPlan& cpu_execution_plan(LlmMemoryWorkPlan& plan) {
+  LlmCpuExecutionPlan* const cpu_plan = get_llm_cpu_execution_plan(plan);
+  if (cpu_plan == nullptr) {
+    throw std::logic_error("expected CPU execution plan");
+  }
+  return *cpu_plan;
+}
 
 LlmGeometryRequest large_geometry_request() {
   return {4 * kGiB, 32, 32, 8, 128, 2, 8192, 1};
@@ -59,7 +79,13 @@ void expect_invalid_plan(const LlmMemoryWorkPlan& plan,
   EXPECT_FALSE(plan.valid);
   EXPECT_EQ(plan.reason_code, reason);
   EXPECT_TRUE(plan.weight_layers.empty());
-  EXPECT_TRUE(plan.workers.empty());
+  if (const LlmCpuExecutionPlan* const cpu_plan =
+          get_llm_cpu_execution_plan(plan)) {
+    EXPECT_TRUE(cpu_plan->workers.empty());
+  } else {
+    EXPECT_TRUE(std::holds_alternative<LlmMetalExecutionPlan>(
+        plan.backend_execution_plan));
+  }
   EXPECT_TRUE(plan.plan_identity.empty());
 }
 
@@ -70,7 +96,8 @@ LlmByteRange union_for_sequence(
   size_t cursor = 0;
   size_t total = 0;
   bool found_range = false;
-  for (const LlmWorkerWorkPlan& worker : plan.workers) {
+  for (const LlmWorkerWorkPlan& worker :
+       cpu_execution_plan(plan).workers) {
     const LlmByteRange& range = worker.sequences[sequence_index].*member;
     if (range.span_bytes == 0) {
       continue;
@@ -93,7 +120,8 @@ LlmByteRange union_for_weight_layer(const LlmMemoryWorkPlan& plan,
   const LlmByteRange& layer = plan.weight_layers[layer_index];
   size_t cursor = layer.offset_bytes;
   size_t total = 0;
-  for (const LlmWorkerWorkPlan& worker : plan.workers) {
+  for (const LlmWorkerWorkPlan& worker :
+       cpu_execution_plan(plan).workers) {
     const LlmByteRange& range = worker.layers[layer_index].weight;
     if (range.span_bytes == 0) {
       continue;
@@ -228,22 +256,25 @@ void expect_memory_budgets_equal(const LlmMemoryBudget& actual,
 
 void expect_equivalent_executable_plans(const LlmMemoryWorkPlan& actual,
                                         const LlmMemoryWorkPlan& expected) {
+  const LlmCpuExecutionPlan& actual_cpu = cpu_execution_plan(actual);
+  const LlmCpuExecutionPlan& expected_cpu = cpu_execution_plan(expected);
   EXPECT_EQ(actual.valid, expected.valid);
   EXPECT_EQ(actual.reason_code, expected.reason_code);
   expect_geometries_equal(actual.geometry, expected.geometry);
-  EXPECT_EQ(actual.requested_workers, expected.requested_workers);
-  EXPECT_EQ(actual.available_workers, expected.available_workers);
-  EXPECT_EQ(actual.effective_workers, expected.effective_workers);
-  EXPECT_EQ(actual.layer_descriptors_per_worker,
-            expected.layer_descriptors_per_worker);
-  EXPECT_EQ(actual.sequence_descriptors_per_worker,
-            expected.sequence_descriptors_per_worker);
-  EXPECT_EQ(actual.total_layer_descriptors,
-            expected.total_layer_descriptors);
-  EXPECT_EQ(actual.total_sequence_descriptors,
-            expected.total_sequence_descriptors);
-  EXPECT_EQ(actual.descriptor_bytes, expected.descriptor_bytes);
-  EXPECT_EQ(actual.planner_storage_bytes, expected.planner_storage_bytes);
+  EXPECT_EQ(actual_cpu.requested_workers, expected_cpu.requested_workers);
+  EXPECT_EQ(actual_cpu.available_workers, expected_cpu.available_workers);
+  EXPECT_EQ(actual_cpu.effective_workers, expected_cpu.effective_workers);
+  EXPECT_EQ(actual_cpu.layer_descriptors_per_worker,
+            expected_cpu.layer_descriptors_per_worker);
+  EXPECT_EQ(actual_cpu.sequence_descriptors_per_worker,
+            expected_cpu.sequence_descriptors_per_worker);
+  EXPECT_EQ(actual_cpu.total_layer_descriptors,
+            expected_cpu.total_layer_descriptors);
+  EXPECT_EQ(actual_cpu.total_sequence_descriptors,
+            expected_cpu.total_sequence_descriptors);
+  EXPECT_EQ(actual_cpu.descriptor_bytes, expected_cpu.descriptor_bytes);
+  EXPECT_EQ(actual_cpu.planner_storage_bytes,
+            expected_cpu.planner_storage_bytes);
   EXPECT_EQ(actual.base_seed, expected.base_seed);
   EXPECT_EQ(actual.weight_buffer_seed, expected.weight_buffer_seed);
   EXPECT_EQ(actual.k_buffer_seed, expected.k_buffer_seed);
@@ -294,13 +325,16 @@ void expect_equivalent_executable_plans(const LlmMemoryWorkPlan& actual,
                              expected.weight_layers[layer]);
   }
 
-  ASSERT_EQ(actual.workers.size(), expected.workers.size());
-  EXPECT_EQ(actual.workers.capacity(), expected.workers.capacity());
-  for (size_t worker_index = 0; worker_index < actual.workers.size();
+  ASSERT_EQ(actual_cpu.workers.size(), expected_cpu.workers.size());
+  EXPECT_EQ(actual_cpu.workers.capacity(), expected_cpu.workers.capacity());
+  for (size_t worker_index = 0;
+       worker_index < actual_cpu.workers.size();
        ++worker_index) {
     SCOPED_TRACE(::testing::Message() << "worker " << worker_index);
-    const LlmWorkerWorkPlan& actual_worker = actual.workers[worker_index];
-    const LlmWorkerWorkPlan& expected_worker = expected.workers[worker_index];
+    const LlmWorkerWorkPlan& actual_worker =
+        actual_cpu.workers[worker_index];
+    const LlmWorkerWorkPlan& expected_worker =
+        expected_cpu.workers[worker_index];
     EXPECT_EQ(actual_worker.worker_index, expected_worker.worker_index);
     ASSERT_EQ(actual_worker.layers.size(), expected_worker.layers.size());
     EXPECT_EQ(actual_worker.layers.capacity(), expected_worker.layers.capacity());
@@ -695,7 +729,7 @@ TEST(LlmMemoryWorkPlanTest, LayerBatchTokenLayoutOffsetsAreExact) {
   const LlmMemoryWorkPlan plan =
       build_llm_memory_work_plan(work_plan_request(geometry, 2, 2));
   ASSERT_TRUE(plan.valid) << plan.reason_code;
-  ASSERT_EQ(plan.sequence_descriptors_per_worker, 4u);
+  ASSERT_EQ(cpu_execution_plan(plan).sequence_descriptors_per_worker, 4u);
   const std::array<size_t, 4> expected_visible = {0, 96, 192, 288};
   const std::array<size_t, 4> expected_append = {64, 160, 256, 352};
   for (size_t sequence = 0; sequence < expected_visible.size(); ++sequence) {
@@ -729,11 +763,13 @@ TEST(LlmMemoryWorkPlanTest,
     const LlmMemoryWorkPlan plan = build_llm_memory_work_plan(
         work_plan_request(geometry, workers, workers));
     ASSERT_TRUE(plan.valid) << "span=" << span << " " << plan.reason_code;
-    ASSERT_EQ(plan.effective_workers, workers);
+    const LlmCpuExecutionPlan& cpu_plan = cpu_execution_plan(plan);
+    ASSERT_EQ(cpu_plan.effective_workers, workers);
 
     size_t next_offset = 0;
     for (size_t worker = 0; worker < workers; ++worker) {
-      const LlmByteRange& range = plan.workers[worker].sequences[0].k_visible;
+      const LlmByteRange& range =
+          cpu_plan.workers[worker].sequences[0].k_visible;
       EXPECT_EQ(range.offset_bytes, next_offset) << "span=" << span;
       EXPECT_GT(range.span_bytes, 0u) << "span=" << span;
       next_offset += range.span_bytes;
@@ -742,7 +778,7 @@ TEST(LlmMemoryWorkPlanTest,
       }
       const size_t remaining_workers = workers - worker - 1;
       const size_t minimum_boundary =
-          plan.workers[worker].sequences[0].k_visible.offset_bytes + 1;
+          cpu_plan.workers[worker].sequences[0].k_visible.offset_bytes + 1;
       const size_t maximum_boundary = span - remaining_workers;
       const size_t first_aligned =
           ((minimum_boundary + 31) / 32) * 32;
@@ -760,18 +796,19 @@ TEST(LlmMemoryWorkPlanTest,
   const LlmMemoryWorkPlan plan =
       build_llm_memory_work_plan(work_plan_request(geometry, 3, 3));
   ASSERT_TRUE(plan.valid) << plan.reason_code;
-  ASSERT_EQ(plan.effective_workers, 3u);
+  const LlmCpuExecutionPlan& cpu_plan = cpu_execution_plan(plan);
+  ASSERT_EQ(cpu_plan.effective_workers, 3u);
   ASSERT_EQ(plan.weight_layers.size(), 2u);
   EXPECT_EQ(plan.weight_layers[1].offset_bytes, 100u);
   EXPECT_EQ(plan.weight_layers[1].span_bytes, 99u);
 
   size_t cursor = plan.weight_layers[1].offset_bytes;
-  for (size_t worker = 0; worker < plan.effective_workers; ++worker) {
-    const LlmByteRange& range = plan.workers[worker].layers[1].weight;
+  for (size_t worker = 0; worker < cpu_plan.effective_workers; ++worker) {
+    const LlmByteRange& range = cpu_plan.workers[worker].layers[1].weight;
     EXPECT_EQ(range.offset_bytes, cursor);
     EXPECT_GT(range.span_bytes, 0u);
     cursor += range.span_bytes;
-    if (worker + 1 < plan.effective_workers) {
+    if (worker + 1 < cpu_plan.effective_workers) {
       EXPECT_EQ(cursor % Constants::LLM_RANGE_ALIGNMENT_BYTES, 0u);
     }
   }
@@ -784,9 +821,12 @@ TEST(LlmMemoryWorkPlanTest,
   const LlmMemoryWorkPlan plan =
       build_llm_memory_work_plan(work_plan_request(geometry, 2, 2));
   ASSERT_TRUE(plan.valid) << plan.reason_code;
-  ASSERT_EQ(plan.workers.size(), 2u);
-  const LlmKvSequenceRangeTemplate& first = plan.workers[0].sequences[0];
-  const LlmKvSequenceRangeTemplate& second = plan.workers[1].sequences[0];
+  const LlmCpuExecutionPlan& cpu_plan = cpu_execution_plan(plan);
+  ASSERT_EQ(cpu_plan.workers.size(), 2u);
+  const LlmKvSequenceRangeTemplate& first =
+      cpu_plan.workers[0].sequences[0];
+  const LlmKvSequenceRangeTemplate& second =
+      cpu_plan.workers[1].sequences[0];
   EXPECT_EQ(first.k_visible.offset_bytes, 0u);
   EXPECT_EQ(first.k_visible.span_bytes, 32u);
   EXPECT_EQ(second.k_visible.offset_bytes, 32u);
@@ -808,11 +848,12 @@ TEST(LlmMemoryWorkPlanTest,
   const LlmMemoryWorkPlan plan =
       build_llm_memory_work_plan(work_plan_request(geometry, 2, 2));
   ASSERT_TRUE(plan.valid) << plan.reason_code;
-  EXPECT_EQ(plan.layer_descriptors_per_worker, 2u);
-  EXPECT_EQ(plan.sequence_descriptors_per_worker, 4u);
-  EXPECT_EQ(plan.total_layer_descriptors, 4u);
-  EXPECT_EQ(plan.total_sequence_descriptors, 8u);
-  for (const LlmWorkerWorkPlan& worker : plan.workers) {
+  const LlmCpuExecutionPlan& cpu_plan = cpu_execution_plan(plan);
+  EXPECT_EQ(cpu_plan.layer_descriptors_per_worker, 2u);
+  EXPECT_EQ(cpu_plan.sequence_descriptors_per_worker, 4u);
+  EXPECT_EQ(cpu_plan.total_layer_descriptors, 4u);
+  EXPECT_EQ(cpu_plan.total_sequence_descriptors, 8u);
+  for (const LlmWorkerWorkPlan& worker : cpu_plan.workers) {
     ASSERT_EQ(worker.layers.size(), 2u);
     ASSERT_EQ(worker.sequences.size(), 4u);
     for (size_t layer = 0; layer < 2; ++layer) {
@@ -841,11 +882,12 @@ TEST(LlmMemoryWorkPlanTest,
   request.orchestration_auxiliary_bytes = 9;
   const LlmMemoryWorkPlan plan = build_llm_memory_work_plan(request);
   ASSERT_TRUE(plan.valid) << plan.reason_code;
+  const LlmCpuExecutionPlan& cpu_plan = cpu_execution_plan(plan);
 
   size_t actual_capacity_bytes =
       plan.weight_layers.capacity() * sizeof(LlmByteRange) +
-      plan.workers.capacity() * sizeof(LlmWorkerWorkPlan);
-  for (const LlmWorkerWorkPlan& worker : plan.workers) {
+      cpu_plan.workers.capacity() * sizeof(LlmWorkerWorkPlan);
+  for (const LlmWorkerWorkPlan& worker : cpu_plan.workers) {
     actual_capacity_bytes +=
         worker.layers.capacity() * sizeof(LlmLayerRangeTemplate);
     actual_capacity_bytes +=
@@ -853,17 +895,17 @@ TEST(LlmMemoryWorkPlanTest,
   }
   const size_t requested_element_bytes =
       plan.geometry.layer_count * sizeof(LlmByteRange) +
-      plan.effective_workers * sizeof(LlmWorkerWorkPlan) +
-      plan.effective_workers * plan.geometry.layer_count *
+      cpu_plan.effective_workers * sizeof(LlmWorkerWorkPlan) +
+      cpu_plan.effective_workers * plan.geometry.layer_count *
           sizeof(LlmLayerRangeTemplate) +
-      plan.effective_workers * plan.geometry.layer_count *
+      cpu_plan.effective_workers * plan.geometry.layer_count *
           plan.geometry.batch_size * sizeof(LlmKvSequenceRangeTemplate);
   EXPECT_GE(actual_capacity_bytes, requested_element_bytes);
-  EXPECT_EQ(plan.planner_storage_bytes, actual_capacity_bytes);
+  EXPECT_EQ(cpu_plan.planner_storage_bytes, actual_capacity_bytes);
   EXPECT_EQ(plan.memory_budget.request.planner_storage_bytes,
             actual_capacity_bytes);
   EXPECT_EQ(plan.memory_budget.request.auxiliary_bytes,
-            plan.descriptor_bytes + actual_capacity_bytes + 7 + 9);
+            cpu_plan.descriptor_bytes + actual_capacity_bytes + 7 + 9);
   EXPECT_EQ(plan.memory_budget.request.required_total_bytes,
             plan.memory_budget.request.committed_data_bytes +
                 plan.memory_budget.request.auxiliary_bytes);
@@ -901,9 +943,9 @@ TEST(LlmMemoryWorkPlanTest,
   EXPECT_EQ(plan.phase, LlmPhase::Decode);
   EXPECT_EQ(plan.kv_layout, LlmKvLayout::Contiguous);
   EXPECT_EQ(plan.work_unit_kind, LlmWorkUnitKind::DecodeStep);
-  EXPECT_EQ(plan.requested_workers, 3u);
-  EXPECT_EQ(plan.available_workers, 5u);
-  EXPECT_EQ(plan.effective_workers, 3u);
+  EXPECT_EQ(cpu_execution_plan(plan).requested_workers, 3u);
+  EXPECT_EQ(cpu_execution_plan(plan).available_workers, 5u);
+  EXPECT_EQ(cpu_execution_plan(plan).effective_workers, 3u);
   EXPECT_EQ(plan.base_seed, 99u);
   EXPECT_EQ(plan.memory_budget.available_memory_bytes, 16 * kGiB);
   EXPECT_FALSE(plan.memory_budget.used_fallback);
@@ -923,14 +965,15 @@ TEST(LlmMemoryWorkPlanTest,
   const LlmMemoryWorkPlan plan =
       build_llm_memory_work_plan(work_plan_request(geometry, 100, 100));
   ASSERT_TRUE(plan.valid) << plan.reason_code;
-  EXPECT_EQ(plan.requested_workers, 100u);
-  EXPECT_EQ(plan.available_workers, 100u);
-  EXPECT_EQ(plan.effective_workers, 1u);
+  const LlmCpuExecutionPlan& cpu_plan = cpu_execution_plan(plan);
+  EXPECT_EQ(cpu_plan.requested_workers, 100u);
+  EXPECT_EQ(cpu_plan.available_workers, 100u);
+  EXPECT_EQ(cpu_plan.effective_workers, 1u);
   EXPECT_EQ(plan.geometry.active_weight_bytes_per_work_unit, 2u);
   EXPECT_EQ(plan.geometry.kv_capacity_bytes, 4u);
-  ASSERT_EQ(plan.workers.size(), 1u);
-  EXPECT_FALSE(plan.workers[0].layers.empty());
-  EXPECT_FALSE(plan.workers[0].sequences.empty());
+  ASSERT_EQ(cpu_plan.workers.size(), 1u);
+  EXPECT_FALSE(cpu_plan.workers[0].layers.empty());
+  EXPECT_FALSE(cpu_plan.workers[0].sequences.empty());
 }
 
 TEST(LlmMemoryWorkPlanTest,
@@ -939,11 +982,12 @@ TEST(LlmMemoryWorkPlanTest,
   const LlmMemoryWorkPlan plan =
       build_llm_memory_work_plan(work_plan_request(geometry, 5, 2));
   ASSERT_TRUE(plan.valid) << plan.reason_code;
-  EXPECT_EQ(plan.requested_workers, 5u);
-  EXPECT_EQ(plan.available_workers, 2u);
-  EXPECT_EQ(plan.effective_workers, 2u);
-  ASSERT_EQ(plan.workers.size(), 2u);
-  for (const LlmWorkerWorkPlan& worker : plan.workers) {
+  const LlmCpuExecutionPlan& cpu_plan = cpu_execution_plan(plan);
+  EXPECT_EQ(cpu_plan.requested_workers, 5u);
+  EXPECT_EQ(cpu_plan.available_workers, 2u);
+  EXPECT_EQ(cpu_plan.effective_workers, 2u);
+  ASSERT_EQ(cpu_plan.workers.size(), 2u);
+  for (const LlmWorkerWorkPlan& worker : cpu_plan.workers) {
     EXPECT_GT(worker.layers[0].weight.span_bytes, 0u);
     EXPECT_GT(worker.sequences[0].k_visible.span_bytes, 0u);
   }
@@ -958,13 +1002,14 @@ TEST(LlmMemoryWorkPlanTest,
   const LlmMemoryWorkPlan plan =
       build_llm_memory_work_plan(work_plan_request(geometry, 4, 4));
   ASSERT_TRUE(plan.valid) << plan.reason_code;
-  ASSERT_EQ(plan.effective_workers, 3u);
+  const LlmCpuExecutionPlan& cpu_plan = cpu_execution_plan(plan);
+  ASSERT_EQ(cpu_plan.effective_workers, 3u);
 
   size_t second_layer_bytes = 0;
   size_t empty_second_layer_ranges = 0;
   size_t first_sequence_bytes = 0;
   size_t empty_first_sequence_ranges = 0;
-  for (const LlmWorkerWorkPlan& worker : plan.workers) {
+  for (const LlmWorkerWorkPlan& worker : cpu_plan.workers) {
     second_layer_bytes += worker.layers[1].weight.span_bytes;
     empty_second_layer_ranges +=
         worker.layers[1].weight.span_bytes == 0 ? 1 : 0;
@@ -983,7 +1028,7 @@ TEST(LlmMemoryWorkPlanTest,
   EXPECT_EQ(first_sequence_bytes, 4u);
   EXPECT_EQ(empty_first_sequence_ranges, 0u);
 
-  for (const LlmWorkerWorkPlan& worker : plan.workers) {
+  for (const LlmWorkerWorkPlan& worker : cpu_plan.workers) {
     size_t worker_weight_bytes = 0;
     size_t worker_kv_bytes = 0;
     for (const LlmLayerRangeTemplate& layer : worker.layers) {
@@ -1028,6 +1073,25 @@ TEST(LlmMemoryWorkPlanTest, DescriptorAbiMatchesPhaseZeroGoldenOffsets) {
 }
 
 TEST(LlmMemoryWorkPlanTest,
+     CpuExecutionPlanAccessorsRequireMatchingBackendAndVariant) {
+  LlmMemoryWorkPlan plan;
+  EXPECT_EQ(get_llm_cpu_execution_plan(plan),
+            &cpu_execution_plan(plan));
+  const LlmMemoryWorkPlan& const_plan = plan;
+  EXPECT_EQ(get_llm_cpu_execution_plan(const_plan),
+            &cpu_execution_plan(const_plan));
+
+  plan.backend_execution_plan = LlmMetalExecutionPlan{};
+  EXPECT_EQ(get_llm_cpu_execution_plan(plan), nullptr);
+  EXPECT_EQ(get_llm_cpu_execution_plan(const_plan), nullptr);
+
+  plan.backend_execution_plan = LlmCpuExecutionPlan{};
+  plan.backend = LlmMemoryBackend::Metal;
+  EXPECT_EQ(get_llm_cpu_execution_plan(plan), nullptr);
+  EXPECT_EQ(get_llm_cpu_execution_plan(const_plan), nullptr);
+}
+
+TEST(LlmMemoryWorkPlanTest,
      MoveOperationsPreserveDestinationAndInvalidateSource) {
   const LlmMemoryWorkPlan constructor_expected = build_llm_memory_work_plan(
       work_plan_request(small_geometry_request(), 2, 2));
@@ -1050,9 +1114,9 @@ TEST(LlmMemoryWorkPlanTest,
   EXPECT_FALSE(constructor_source.valid);
   EXPECT_FALSE(constructor_source.geometry.valid);
   EXPECT_FALSE(constructor_source.memory_budget.valid);
-  EXPECT_EQ(constructor_source.effective_workers, 0u);
+  EXPECT_EQ(cpu_execution_plan(constructor_source).effective_workers, 0u);
   EXPECT_TRUE(constructor_source.weight_layers.empty());
-  EXPECT_TRUE(constructor_source.workers.empty());
+  EXPECT_TRUE(cpu_execution_plan(constructor_source).workers.empty());
   EXPECT_TRUE(constructor_source.plan_identity.empty());
   EXPECT_EQ(build_llm_scenario_work_plan(
                 constructor_source, LlmScenario::Mixed, 1, true)
@@ -1084,9 +1148,9 @@ TEST(LlmMemoryWorkPlanTest,
   EXPECT_FALSE(assignment_source.valid);
   EXPECT_FALSE(assignment_source.geometry.valid);
   EXPECT_FALSE(assignment_source.memory_budget.valid);
-  EXPECT_EQ(assignment_source.effective_workers, 0u);
+  EXPECT_EQ(cpu_execution_plan(assignment_source).effective_workers, 0u);
   EXPECT_TRUE(assignment_source.weight_layers.empty());
-  EXPECT_TRUE(assignment_source.workers.empty());
+  EXPECT_TRUE(cpu_execution_plan(assignment_source).workers.empty());
   EXPECT_TRUE(assignment_source.plan_identity.empty());
 
 }
@@ -1569,9 +1633,10 @@ TEST(LlmMemoryWorkPlanTest,
   const LlmMemoryWorkPlan smaller_team =
       build_llm_memory_work_plan(smaller_team_request);
   ASSERT_TRUE(smaller_team.valid) << smaller_team.reason_code;
-  EXPECT_EQ(first.requested_workers, smaller_team.requested_workers);
-  EXPECT_EQ(first.effective_workers, 2u);
-  EXPECT_EQ(smaller_team.effective_workers, 1u);
+  EXPECT_EQ(cpu_execution_plan(first).requested_workers,
+            cpu_execution_plan(smaller_team).requested_workers);
+  EXPECT_EQ(cpu_execution_plan(first).effective_workers, 2u);
+  EXPECT_EQ(cpu_execution_plan(smaller_team).effective_workers, 1u);
   EXPECT_NE(first.plan_identity, smaller_team.plan_identity);
 
   ++request.base_seed;

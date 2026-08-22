@@ -198,10 +198,11 @@ int parse_llm_memory_arguments(int argc, char* argv[],
  *
  * The boundary parses first, returns immediately for help, then installs the
  * command-scoped JSON transport before runtime output, QoS preparation, and
- * signal masking. It admits the exact three-mapping memory plan, prepares and
- * pre-touches the full working set, binds the production executor to the
- * backend-independent runner, and emits console plus schema-v1 checkpoint or
- * final-output evidence according to the selected transport.
+ * signal masking. It selects a command-owned backend, admits the exact
+ * three-mapping memory plan, prepares and pre-touches the working set through
+ * that backend, executes whole tasks through the backend-independent runner,
+ * and emits console plus schema-v1 checkpoint or final-output evidence
+ * according to the selected transport.
  *
  * @param argc Number of entries in @p argv.
  * @param argv Command arguments, valid for the duration of this call.

@@ -274,16 +274,19 @@ Objective-C++ Metal backend so deterministic unit tests do not require GPU work.
 
 ### 2.6 src/llm_memory/ — Synthetic LLM decode-memory profile
 
-Standalone generic schema-1 vocabulary with an active CPU/decode/contiguous implementation. Pure plan vocabulary and
-CPU orchestration are separated from mapping, ARM64 execution, environment capture, console composition, and
-serialization so deterministic unit tests can inject platform and executor seams without running hot kernels.
+Standalone generic schema-1 vocabulary with an active CPU/decode/contiguous implementation. Pure logical planning,
+the Objective-C-free backend contract, backend-specific execution planning/evidence, CPU mapping and ARM64 execution,
+environment capture, console composition, and serialization are separated so deterministic unit tests can inject a
+fake backend without running hot kernels.
 
 | File | Purpose |
 |---|---|
-| `llm_memory.h` / `.cpp` | Separate config/status foundation, strict exact-whitelist parser, required/default worker/seed resolution, complete command boundary, memory admission/preparation, QoS/signal scope, console output, and file/stdout transport orchestration |
-| `llm_work_plan.h` / `.cpp` | Pure checked phase-applicable weight/KV geometry, model-payload/metadata/accounted math, memory-budget request, layer/sequence descriptor templates and ABI, worker ranges/reduction, seed domains, scenario limits/calibration/order, and frozen methodology/component/plan identities |
-| `llm_executor.h` / `.cpp` | Atomic full-size weight/K/V mappings, deterministic initialization/pre-touch, descriptor materialization, expected-checksum oracle, synchronized worker team, timer boundary, and ARM64 kernel adapter |
-| `llm_runner.h` / `.cpp` | Per-scenario automatic calibration or exact-work planning, frozen plans, cyclic loop order, status/counters, task-boundary interruption, aggregates, warnings, and logical checkpoints |
+| `llm_memory.h` / `.cpp` | Separate config/status foundation, strict exact-whitelist parser, required/default worker/seed resolution, complete command boundary, backend factory ownership, peak-memory admission, QoS/signal scope, console output, and file/stdout transport orchestration |
+| `llm_work_plan.h` / `.cpp` | Pure checked phase-applicable weight/KV geometry, model-payload/metadata/accounted math, memory-budget request, seed domains, scenario limits/calibration/order, frozen methodology/component/plan identities, and exactly one tagged CPU/Metal execution-plan variant; the active CPU tag owns worker ranges plus layer/sequence descriptor templates and ABI accounting |
+| `llm_backend.h` / `.cpp` | Objective-C-free synchronous backend lifecycle and task boundary, generic task identity/timing/completion/validation, tagged CPU/Metal task and command evidence, auxiliary-memory contract, stable statuses/reasons, checked evidence accessors, and backend factory |
+| `llm_cpu_backend.h` / `.cpp` | Active CPU adapter that owns the timer and prepared resources, delegates allocation/execution to the existing executor, validates CPU worker/QoS/timer/checksum invariants, and converts legacy executor evidence into the generic task result |
+| `llm_executor.h` / `.cpp` | CPU-specific atomic full-size weight/K/V mappings, deterministic initialization/pre-touch, descriptor materialization, expected-checksum oracle, synchronized worker team, timer boundary, and ARM64 kernel adapter retained behind `LlmCpuBackend` |
+| `llm_runner.h` / `.cpp` | Backend-independent lifecycle, per-scenario automatic calibration or exact-work planning, generic task acceptance, frozen plans, cyclic loop order, status/counters, task-boundary interruption, aggregates, warnings, and logical checkpoints; resources are released before the command-terminal checkpoint |
 | `llm_json.h` / `.cpp` | Ordered generic LLM schema-1 builder plus conservative output-peak estimator, with backend/phase/layout identity, resolved plan, tagged backend evidence, decimal-string exact integers, nullable non-applicability, traffic diagnostics, environment evidence, and interpretation contract |
 | `llm_output.h` / `.cpp` | Human-readable work-unit/model-payload/accounted geometry, scenario headlines, interpretation limits, and evidence-backed quality warnings through centralized message helpers |
 | `llm_environment.h` / `.mm` | Objective-C-free snapshot type plus macOS thermal-state and Low Power Mode capture through Foundation |
@@ -367,8 +370,8 @@ installed. All `.cpp` files are picked up automatically by the Makefile. Tests n
 | `test_llm_memory_contract.cpp` | `LlmMemoryContractTest` | Test-side Phase 0 executable specification for exact LLM payload formulas, affine append bytes, read/run checksums, descriptor ABI layout, and schema acceptance identity; it does not exercise production LLM code |
 | `test_llm_memory_config.cpp` | `LlmMemoryConfigTest` | Config/status defaults, exact standalone whitelist parsing, required/default fields, strict decimal errors, raw output values, help isolation, worker/seed resolution, geometry/work-limit preflight, and incompatible options |
 | `test_llm_memory_work_plan.cpp` | `LlmMemoryWorkPlanTest` | Production checked geometry/payload/crossover, memory budget, descriptor/range/layout invariants, worker reduction, move-only semantics, seed identities, scenario caps/calibration, and cyclic order |
-| `test_llm_memory_executor.cpp` | `LlmMemoryExecutorTest` | Atomic mapping/preparation failure seams, full-byte initialization, descriptor materialization, expected checksums, synchronized start/timing, QoS outcomes, cancellation, and fake-kernel result validation |
-| `test_llm_memory_runner.cpp` | `LlmMemoryRunnerTest` | Explicit/automatic frozen plans, cyclic order, status/counter/aggregate semantics, interruption, checkpoint precedence, auxiliary budgeting, and runner exception boundaries |
+| `test_llm_memory_executor.cpp` | `LlmMemoryExecutorTest` | CPU-tagged execution-plan checks, atomic mapping/preparation failure seams, full-byte initialization, descriptor materialization, expected checksums, synchronized start/timing, QoS outcomes, cancellation, and fake-kernel result validation |
+| `test_llm_memory_runner.cpp` | `LlmMemoryRunnerTest` | Fake-backend lifecycle and generic task seams, lifecycle unsupported/failure handling, common identity/timing/completion/validation acceptance, explicit/automatic frozen plans, cyclic order, status/counter/aggregate semantics, interruption, release/checkpoint precedence, auxiliary budgeting, and runner exception boundaries |
 | `test_llm_memory_json.cpp` | `LlmMemoryJsonTest` | Schema-1 identity and structure, conservative output-peak estimation, exact decimal strings, status/null behavior, traffic classification, interpretation, environment evidence, and checkpoint snapshot serialization |
 | `test_llm_memory_output.cpp` | `LlmMemoryOutputTest` | Exact console headline formatting, interpretation text, and deduplicated evidence-backed warning selection |
 | `test_llm_memory_kernels.cpp` | `LlmMemoryKernelIntegrationTest` | Real ARM64 descriptor/kernel scenarios, tails, append bytes, checksum contract, bounds, zero/null safety, and AAPCS64 callee-saved preservation |

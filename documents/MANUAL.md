@@ -737,7 +737,7 @@ middle, and trailing items.
   auditable in the selected file or stdout target
 - LLM parser/preflight, plan, JSON-output peak-estimation, timer-creation, memory-budget, mapping, initialization, or
   descriptor-preparation failures occur before runner-result initialization and therefore leave stdout empty. Once
-  initialized, runner/executor, checksum, interruption, and checkpoint states remain auditable through the selected
+  initialized, runner, backend-task, checksum, interruption, and checkpoint states remain auditable through the selected
   non-empty output target
 - An observable terminal stdout serialization, write, or flush failure returns failure without changing the
   already-computed measurement state; any bytes from that failed transfer must be rejected
@@ -1648,7 +1648,7 @@ Schema 1 rules:
   Potentially large byte, capacity, block/table/lookup, token-visit, causal-pair, and FMA-term quantities are canonical
   decimal strings even when their value is zero. UInt64 seeds are canonical decimal strings. Unavailable elapsed,
   rate, ratio, and statistics values are null.
-- When an executor throws before returning evidence for a measurement or excluded task, `execution.status` is
+- When a backend call throws before returning evidence for a measurement or excluded task, `execution.status` is
   `unavailable`, the reason remains the runner-exception token, and missing lifecycle/QoS/checksum fields are null. A
   `not_run` measurement's top-level successful/failed QoS-worker counts are likewise null rather than zero.
 - `memory_budget` reports canonical decimal-string `resource_rounding_bytes`, `transient_peak_bytes`,
@@ -1690,7 +1690,7 @@ Schema 1 rules:
 
 LLM file output checkpoints after every terminal scenario measurement and at command terminal. Exact `--output -`
 retains those logical transitions without building intermediate payloads and emits one final document. A started task
-uses completion-wins interruption; remaining slots become interrupted/null. A real executor, timer, checksum, or
+uses completion-wins interruption; remaining slots become interrupted/null. A real backend-task, timer, checksum, or
 checkpoint failure wins over interruption, and a failed file checkpoint is not retried.
 
 ### Core-to-core JSON shape

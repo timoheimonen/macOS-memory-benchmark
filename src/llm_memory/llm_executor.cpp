@@ -119,17 +119,21 @@ LlmByteRange intersect_ranges(const LlmByteRange& lhs, const LlmByteRange& rhs) 
  * the finalized work plan.
  */
 bool validate_work_plan_layout(const LlmMemoryWorkPlan& plan) noexcept {
+  const LlmCpuExecutionPlan* const cpu_plan =
+      get_llm_cpu_execution_plan(plan);
   size_t weight_and_k_bytes = 0;
   size_t expected_total_data_bytes = 0;
-  if (!plan.valid || !plan.geometry.valid || !plan.memory_budget.valid || plan.effective_workers == 0 ||
+  if (cpu_plan == nullptr || !plan.valid || !plan.geometry.valid ||
+      !plan.memory_budget.valid || cpu_plan->effective_workers == 0 ||
       plan.geometry.layer_count == 0 || plan.geometry.batch_size == 0 || plan.geometry.k_mapping_bytes == 0 ||
       plan.geometry.v_mapping_bytes == 0 || plan.geometry.k_mapping_bytes != plan.geometry.v_mapping_bytes ||
       !NumericUtils::checked_add(plan.geometry.active_weight_bytes_per_work_unit, plan.geometry.k_mapping_bytes,
                                  weight_and_k_bytes) ||
       !NumericUtils::checked_add(weight_and_k_bytes, plan.geometry.v_mapping_bytes, expected_total_data_bytes) ||
       expected_total_data_bytes != plan.geometry.total_data_mapping_bytes ||
-      plan.workers.size() != plan.effective_workers || plan.weight_layers.size() != plan.geometry.layer_count ||
-      plan.layer_descriptors_per_worker != plan.geometry.layer_count) {
+      cpu_plan->workers.size() != cpu_plan->effective_workers ||
+      plan.weight_layers.size() != plan.geometry.layer_count ||
+      cpu_plan->layer_descriptors_per_worker != plan.geometry.layer_count) {
     return false;
   }
 
@@ -141,18 +145,20 @@ bool validate_work_plan_layout(const LlmMemoryWorkPlan& plan) noexcept {
   size_t expected_descriptor_bytes = 0;
   if (!NumericUtils::checked_multiply(plan.geometry.layer_count, plan.geometry.batch_size,
                                       expected_sequences_per_worker) ||
-      expected_sequences_per_worker != plan.sequence_descriptors_per_worker ||
-      !NumericUtils::checked_multiply(plan.effective_workers, plan.layer_descriptors_per_worker,
+      expected_sequences_per_worker != cpu_plan->sequence_descriptors_per_worker ||
+      !NumericUtils::checked_multiply(cpu_plan->effective_workers,
+                                      cpu_plan->layer_descriptors_per_worker,
                                       expected_total_layers) ||
-      !NumericUtils::checked_multiply(plan.effective_workers, plan.sequence_descriptors_per_worker,
+      !NumericUtils::checked_multiply(cpu_plan->effective_workers,
+                                      cpu_plan->sequence_descriptors_per_worker,
                                       expected_total_sequences) ||
-      expected_total_layers != plan.total_layer_descriptors ||
-      expected_total_sequences != plan.total_sequence_descriptors ||
+      expected_total_layers != cpu_plan->total_layer_descriptors ||
+      expected_total_sequences != cpu_plan->total_sequence_descriptors ||
       !NumericUtils::checked_multiply(expected_total_layers, sizeof(LlmLayerDescriptor), layer_descriptor_bytes) ||
       !NumericUtils::checked_multiply(expected_total_sequences, sizeof(LlmKvSequenceDescriptor),
                                       sequence_descriptor_bytes) ||
       !NumericUtils::checked_add(layer_descriptor_bytes, sequence_descriptor_bytes, expected_descriptor_bytes) ||
-      expected_descriptor_bytes != plan.descriptor_bytes) {
+      expected_descriptor_bytes != cpu_plan->descriptor_bytes) {
     return false;
   }
 
@@ -167,10 +173,13 @@ bool validate_work_plan_layout(const LlmMemoryWorkPlan& plan) noexcept {
 
     size_t worker_cursor = layer_range.offset_bytes;
     const size_t expected_first_sequence = layer * plan.geometry.batch_size;
-    for (size_t worker_index = 0; worker_index < plan.effective_workers; ++worker_index) {
-      const LlmWorkerWorkPlan& worker = plan.workers[worker_index];
-      if (worker.worker_index != worker_index || worker.layers.size() != plan.layer_descriptors_per_worker ||
-          worker.sequences.size() != plan.sequence_descriptors_per_worker) {
+    for (size_t worker_index = 0;
+         worker_index < cpu_plan->effective_workers; ++worker_index) {
+      const LlmWorkerWorkPlan& worker = cpu_plan->workers[worker_index];
+      if (worker.worker_index != worker_index ||
+          worker.layers.size() != cpu_plan->layer_descriptors_per_worker ||
+          worker.sequences.size() !=
+              cpu_plan->sequence_descriptors_per_worker) {
         return false;
       }
       const LlmLayerRangeTemplate& worker_layer = worker.layers[layer];
@@ -219,8 +228,10 @@ bool validate_work_plan_layout(const LlmMemoryWorkPlan& plan) noexcept {
       const LlmByteRange append_record{append_offset, plan.geometry.k_or_v_record_bytes_per_layer};
 
       size_t worker_cursor = visible_offset;
-      for (size_t worker_index = 0; worker_index < plan.effective_workers; ++worker_index) {
-        const LlmKvSequenceRangeTemplate& sequence = plan.workers[worker_index].sequences[sequence_index];
+      for (size_t worker_index = 0;
+           worker_index < cpu_plan->effective_workers; ++worker_index) {
+        const LlmKvSequenceRangeTemplate& sequence =
+            cpu_plan->workers[worker_index].sequences[sequence_index];
         if (sequence.layer_index != layer || sequence.batch_sequence_index != batch ||
             !equal_ranges(sequence.k_visible, sequence.v_visible) ||
             !equal_ranges(sequence.k_append, sequence.v_append)) {
@@ -286,7 +297,9 @@ bool resource_output_is_empty(const LlmExecutionResources& output) noexcept {
 bool calculate_budget_with_executor_auxiliary(const LlmMemoryWorkPlan& plan,
                                               const LlmExecutorAuxiliaryEstimate& auxiliary,
                                               LlmMemoryBudget& budget) noexcept {
-  if (!auxiliary.valid) {
+  const LlmCpuExecutionPlan* const cpu_plan =
+      get_llm_cpu_execution_plan(plan);
+  if (cpu_plan == nullptr || !auxiliary.valid) {
     return false;
   }
   // Admission is evidence, not a permission to silently expand the plan after
@@ -302,8 +315,11 @@ bool calculate_budget_with_executor_auxiliary(const LlmMemoryWorkPlan& plan,
   const size_t checksum_bytes = plan.memory_budget.request.checksum_auxiliary_bytes;
   const size_t orchestration_bytes = plan.memory_budget.request.orchestration_auxiliary_bytes;
   const LlmMemoryBudgetRequest request =
-      build_llm_memory_budget_request(plan.geometry, plan.descriptor_bytes, plan.planner_storage_bytes, checksum_bytes,
-                                      orchestration_bytes, plan.memory_budget.request.mapping_granularity_bytes);
+      build_llm_memory_budget_request(
+          plan.geometry, cpu_plan->descriptor_bytes,
+          cpu_plan->planner_storage_bytes, checksum_bytes,
+          orchestration_bytes,
+          plan.memory_budget.request.mapping_granularity_bytes);
   budget = evaluate_llm_memory_budget(request, plan.memory_budget.available_memory_bytes);
   return budget.valid;
 }
@@ -375,18 +391,25 @@ bool add_initialized_span(const LlmStaticSpanReference& reference, size_t& initi
 }
 
 bool materialize_descriptors(const LlmMemoryWorkPlan& plan, LlmExecutionResources& resources) noexcept {
+  const LlmCpuExecutionPlan* const cpu_plan =
+      get_llm_cpu_execution_plan(plan);
   uint8_t* const weight = static_cast<uint8_t*>(resources.buffers.weight.get());
   uint8_t* const k = static_cast<uint8_t*>(resources.buffers.k.get());
   uint8_t* const v = static_cast<uint8_t*>(resources.buffers.v.get());
-  if (weight == nullptr || k == nullptr || v == nullptr) {
+  if (cpu_plan == nullptr || weight == nullptr || k == nullptr ||
+      v == nullptr) {
     return false;
   }
 
-  for (size_t worker_index = 0; worker_index < plan.effective_workers; ++worker_index) {
-    const LlmWorkerWorkPlan& worker = plan.workers[worker_index];
-    const size_t layer_base = worker_index * plan.layer_descriptors_per_worker;
-    const size_t sequence_base = worker_index * plan.sequence_descriptors_per_worker;
-    for (size_t layer = 0; layer < plan.layer_descriptors_per_worker; ++layer) {
+  for (size_t worker_index = 0;
+       worker_index < cpu_plan->effective_workers; ++worker_index) {
+    const LlmWorkerWorkPlan& worker = cpu_plan->workers[worker_index];
+    const size_t layer_base =
+        worker_index * cpu_plan->layer_descriptors_per_worker;
+    const size_t sequence_base =
+        worker_index * cpu_plan->sequence_descriptors_per_worker;
+    for (size_t layer = 0;
+         layer < cpu_plan->layer_descriptors_per_worker; ++layer) {
       const LlmLayerRangeTemplate& source = worker.layers[layer];
       LlmLayerDescriptor& destination = resources.layer_descriptors[layer_base + layer];
       destination.weight_ptr = source.weight.span_bytes == 0 ? nullptr : weight + source.weight.offset_bytes;
@@ -396,7 +419,9 @@ bool materialize_descriptors(const LlmMemoryWorkPlan& plan, LlmExecutionResource
       destination.layer_index = source.layer_index;
       destination.reserved_zero = 0;
     }
-    for (size_t sequence_index = 0; sequence_index < plan.sequence_descriptors_per_worker; ++sequence_index) {
+    for (size_t sequence_index = 0;
+         sequence_index < cpu_plan->sequence_descriptors_per_worker;
+         ++sequence_index) {
       const LlmKvSequenceRangeTemplate& source = worker.sequences[sequence_index];
       LlmKvSequenceDescriptor& destination = resources.sequence_descriptors[sequence_base + sequence_index];
       destination.k_visible_ptr = source.k_visible.span_bytes == 0 ? nullptr : k + source.k_visible.offset_bytes;
@@ -416,15 +441,24 @@ bool materialize_descriptors(const LlmMemoryWorkPlan& plan, LlmExecutionResource
 
 bool initialize_resources(const LlmMemoryWorkPlan& plan, LlmExecutionResources& resources,
                           LlmInitializationEvidence& evidence) noexcept {
+  const LlmCpuExecutionPlan* const cpu_plan =
+      get_llm_cpu_execution_plan(plan);
   uint8_t* const weight = static_cast<uint8_t*>(resources.buffers.weight.get());
   uint8_t* const k = static_cast<uint8_t*>(resources.buffers.k.get());
   uint8_t* const v = static_cast<uint8_t*>(resources.buffers.v.get());
+  if (cpu_plan == nullptr) {
+    return false;
+  }
 
-  for (size_t worker_index = 0; worker_index < plan.effective_workers; ++worker_index) {
-    const LlmWorkerWorkPlan& worker = plan.workers[worker_index];
-    const size_t layer_base = worker_index * plan.layer_descriptors_per_worker;
-    const size_t sequence_base = worker_index * plan.sequence_descriptors_per_worker;
-    for (size_t layer = 0; layer < plan.layer_descriptors_per_worker; ++layer) {
+  for (size_t worker_index = 0;
+       worker_index < cpu_plan->effective_workers; ++worker_index) {
+    const LlmWorkerWorkPlan& worker = cpu_plan->workers[worker_index];
+    const size_t layer_base =
+        worker_index * cpu_plan->layer_descriptors_per_worker;
+    const size_t sequence_base =
+        worker_index * cpu_plan->sequence_descriptors_per_worker;
+    for (size_t layer = 0;
+         layer < cpu_plan->layer_descriptors_per_worker; ++layer) {
       LlmStaticSpanReference& reference = resources.weight_references[layer_base + layer];
       const LlmByteRange& range = worker.layers[layer].weight;
       if (!initialize_span(weight, plan.geometry.active_weight_bytes_per_work_unit, plan.weight_buffer_seed,
@@ -433,7 +467,9 @@ bool initialize_resources(const LlmMemoryWorkPlan& plan, LlmExecutionResources& 
         return false;
       }
     }
-    for (size_t sequence_index = 0; sequence_index < plan.sequence_descriptors_per_worker; ++sequence_index) {
+    for (size_t sequence_index = 0;
+         sequence_index < cpu_plan->sequence_descriptors_per_worker;
+         ++sequence_index) {
       const LlmKvSequenceRangeTemplate& sequence = worker.sequences[sequence_index];
       LlmStaticSpanReference& k_reference = resources.k_references[sequence_base + sequence_index];
       LlmStaticSpanReference& v_reference = resources.v_references[sequence_base + sequence_index];
@@ -460,15 +496,23 @@ bool initialize_resources(const LlmMemoryWorkPlan& plan, LlmExecutionResources& 
 }
 
 bool materialized_resources_match_plan(const LlmMemoryWorkPlan& plan, const LlmExecutionResources& resources) noexcept {
-  if (!validate_work_plan_layout(plan) || !resources.valid || resources.model_plan_identity != plan.plan_identity ||
+  const LlmCpuExecutionPlan* const cpu_plan =
+      get_llm_cpu_execution_plan(plan);
+  if (cpu_plan == nullptr || !validate_work_plan_layout(plan) ||
+      !resources.valid || resources.model_plan_identity != plan.plan_identity ||
       !resources.buffers.complete() || resources.layer_descriptors == nullptr ||
       resources.sequence_descriptors == nullptr || resources.weight_references == nullptr ||
       resources.k_references == nullptr || resources.v_references == nullptr ||
-      resources.worker_count != plan.effective_workers ||
-      resources.layer_descriptors_per_worker != plan.layer_descriptors_per_worker ||
-      resources.sequence_descriptors_per_worker != plan.sequence_descriptors_per_worker ||
-      resources.total_layer_descriptors != plan.total_layer_descriptors ||
-      resources.total_sequence_descriptors != plan.total_sequence_descriptors || !resources.initialization.complete ||
+      resources.worker_count != cpu_plan->effective_workers ||
+      resources.layer_descriptors_per_worker !=
+          cpu_plan->layer_descriptors_per_worker ||
+      resources.sequence_descriptors_per_worker !=
+          cpu_plan->sequence_descriptors_per_worker ||
+      resources.total_layer_descriptors !=
+          cpu_plan->total_layer_descriptors ||
+      resources.total_sequence_descriptors !=
+          cpu_plan->total_sequence_descriptors ||
+      !resources.initialization.complete ||
       resources.initialization.weight_bytes != plan.geometry.active_weight_bytes_per_work_unit ||
       resources.initialization.k_bytes != plan.geometry.k_mapping_bytes ||
       resources.initialization.v_bytes != plan.geometry.v_mapping_bytes) {
@@ -478,11 +522,15 @@ bool materialized_resources_match_plan(const LlmMemoryWorkPlan& plan, const LlmE
   const uint8_t* const weight = static_cast<const uint8_t*>(resources.buffers.weight.get());
   const uint8_t* const k = static_cast<const uint8_t*>(resources.buffers.k.get());
   const uint8_t* const v = static_cast<const uint8_t*>(resources.buffers.v.get());
-  for (size_t worker_index = 0; worker_index < plan.effective_workers; ++worker_index) {
-    const LlmWorkerWorkPlan& worker = plan.workers[worker_index];
-    const size_t layer_base = worker_index * plan.layer_descriptors_per_worker;
-    const size_t sequence_base = worker_index * plan.sequence_descriptors_per_worker;
-    for (size_t layer = 0; layer < plan.layer_descriptors_per_worker; ++layer) {
+  for (size_t worker_index = 0;
+       worker_index < cpu_plan->effective_workers; ++worker_index) {
+    const LlmWorkerWorkPlan& worker = cpu_plan->workers[worker_index];
+    const size_t layer_base =
+        worker_index * cpu_plan->layer_descriptors_per_worker;
+    const size_t sequence_base =
+        worker_index * cpu_plan->sequence_descriptors_per_worker;
+    for (size_t layer = 0;
+         layer < cpu_plan->layer_descriptors_per_worker; ++layer) {
       const LlmLayerRangeTemplate& source = worker.layers[layer];
       const LlmLayerDescriptor& descriptor = resources.layer_descriptors[layer_base + layer];
       const LlmStaticSpanReference& reference = resources.weight_references[layer_base + layer];
@@ -494,7 +542,9 @@ bool materialized_resources_match_plan(const LlmMemoryWorkPlan& plan, const LlmE
         return false;
       }
     }
-    for (size_t sequence_index = 0; sequence_index < plan.sequence_descriptors_per_worker; ++sequence_index) {
+    for (size_t sequence_index = 0;
+         sequence_index < cpu_plan->sequence_descriptors_per_worker;
+         ++sequence_index) {
       const LlmKvSequenceRangeTemplate& source = worker.sequences[sequence_index];
       const LlmKvSequenceDescriptor& descriptor = resources.sequence_descriptors[sequence_base + sequence_index];
       const uint8_t* expected_k_visible =
@@ -764,6 +814,8 @@ LlmRunChecksum fold_llm_worker_checksums(const LlmWorkerChecksum* workers, size_
 
 LlmExecutorAuxiliaryEstimate calculate_llm_executor_auxiliary_estimate(const LlmMemoryWorkPlan& plan) noexcept {
   LlmExecutorAuxiliaryEstimate estimate;
+  const LlmCpuExecutionPlan* const cpu_plan =
+      get_llm_cpu_execution_plan(plan);
   if (!validate_work_plan_layout(plan)) {
     estimate.reason_code = LlmExecutorReason::INVALID_WORK_PLAN;
     return estimate;
@@ -771,18 +823,27 @@ LlmExecutorAuxiliaryEstimate calculate_llm_executor_auxiliary_estimate(const Llm
 
   size_t sequence_reference_count = 0;
   size_t reference_count = 0;
-  if (!NumericUtils::checked_multiply(plan.total_sequence_descriptors, 2, sequence_reference_count) ||
-      !NumericUtils::checked_add(plan.total_layer_descriptors, sequence_reference_count, reference_count) ||
+  if (cpu_plan == nullptr ||
+      !NumericUtils::checked_multiply(cpu_plan->total_sequence_descriptors,
+                                      2, sequence_reference_count) ||
+      !NumericUtils::checked_add(cpu_plan->total_layer_descriptors,
+                                 sequence_reference_count,
+                                 reference_count) ||
       !NumericUtils::checked_multiply(reference_count, sizeof(LlmStaticSpanReference),
                                       estimate.static_reference_bytes) ||
-      !NumericUtils::checked_multiply(plan.effective_workers, sizeof(LlmWorkerChecksum),
+      !NumericUtils::checked_multiply(cpu_plan->effective_workers,
+                                      sizeof(LlmWorkerChecksum),
                                       estimate.expected_checksum_bytes)) {
     return estimate;
   }
   estimate.actual_checksum_bytes = estimate.expected_checksum_bytes;
   if (!NumericUtils::checked_multiply(2, sizeof(LlmRunChecksum), estimate.run_checksum_bytes) ||
-      !NumericUtils::checked_multiply(plan.effective_workers, sizeof(uint8_t), estimate.worker_status_bytes) ||
-      !NumericUtils::checked_multiply(plan.effective_workers, sizeof(std::thread), estimate.thread_handle_bytes)) {
+      !NumericUtils::checked_multiply(cpu_plan->effective_workers,
+                                      sizeof(uint8_t),
+                                      estimate.worker_status_bytes) ||
+      !NumericUtils::checked_multiply(cpu_plan->effective_workers,
+                                      sizeof(std::thread),
+                                      estimate.thread_handle_bytes)) {
     return estimate;
   }
 
@@ -859,11 +920,13 @@ LlmResourcePreparationResult prepare_llm_execution_resources(const LlmMemoryWork
                                                              LlmExecutionResources& output) noexcept {
   LlmResourcePreparationResult result;
   try {
+    const LlmCpuExecutionPlan* const cpu_plan =
+        get_llm_cpu_execution_plan(plan);
     if (!resource_output_is_empty(output)) {
       result.reason_code = LlmExecutorReason::OUTPUT_NOT_EMPTY;
       return result;
     }
-    if (!validate_work_plan_layout(plan)) {
+    if (cpu_plan == nullptr || !validate_work_plan_layout(plan)) {
       result.reason_code = LlmExecutorReason::INVALID_WORK_PLAN;
       return result;
     }
@@ -877,11 +940,21 @@ LlmResourcePreparationResult prepare_llm_execution_resources(const LlmMemoryWork
       return result;
     }
 
-    candidate.layer_descriptors.reset(new (std::nothrow) LlmLayerDescriptor[plan.total_layer_descriptors]);
-    candidate.sequence_descriptors.reset(new (std::nothrow) LlmKvSequenceDescriptor[plan.total_sequence_descriptors]);
-    candidate.weight_references.reset(new (std::nothrow) LlmStaticSpanReference[plan.total_layer_descriptors]);
-    candidate.k_references.reset(new (std::nothrow) LlmStaticSpanReference[plan.total_sequence_descriptors]);
-    candidate.v_references.reset(new (std::nothrow) LlmStaticSpanReference[plan.total_sequence_descriptors]);
+    candidate.layer_descriptors.reset(
+        new (std::nothrow)
+            LlmLayerDescriptor[cpu_plan->total_layer_descriptors]);
+    candidate.sequence_descriptors.reset(
+        new (std::nothrow)
+            LlmKvSequenceDescriptor[cpu_plan->total_sequence_descriptors]);
+    candidate.weight_references.reset(
+        new (std::nothrow)
+            LlmStaticSpanReference[cpu_plan->total_layer_descriptors]);
+    candidate.k_references.reset(
+        new (std::nothrow)
+            LlmStaticSpanReference[cpu_plan->total_sequence_descriptors]);
+    candidate.v_references.reset(
+        new (std::nothrow)
+            LlmStaticSpanReference[cpu_plan->total_sequence_descriptors]);
     if (candidate.layer_descriptors == nullptr || candidate.sequence_descriptors == nullptr ||
         candidate.weight_references == nullptr || candidate.k_references == nullptr ||
         candidate.v_references == nullptr) {
@@ -890,11 +963,14 @@ LlmResourcePreparationResult prepare_llm_execution_resources(const LlmMemoryWork
     }
 
     candidate.model_plan_identity = plan.plan_identity;
-    candidate.worker_count = plan.effective_workers;
-    candidate.layer_descriptors_per_worker = plan.layer_descriptors_per_worker;
-    candidate.sequence_descriptors_per_worker = plan.sequence_descriptors_per_worker;
-    candidate.total_layer_descriptors = plan.total_layer_descriptors;
-    candidate.total_sequence_descriptors = plan.total_sequence_descriptors;
+    candidate.worker_count = cpu_plan->effective_workers;
+    candidate.layer_descriptors_per_worker =
+        cpu_plan->layer_descriptors_per_worker;
+    candidate.sequence_descriptors_per_worker =
+        cpu_plan->sequence_descriptors_per_worker;
+    candidate.total_layer_descriptors = cpu_plan->total_layer_descriptors;
+    candidate.total_sequence_descriptors =
+        cpu_plan->total_sequence_descriptors;
     candidate.auxiliary = allocation.auxiliary;
     candidate.memory_budget = allocation.memory_budget;
     if (!materialize_descriptors(plan, candidate)) {
@@ -932,7 +1008,10 @@ LlmExpectedChecksumResult calculate_llm_expected_checksums(const LlmMemoryWorkPl
                                                            const LlmExecutionResources& resources) noexcept {
   LlmExpectedChecksumResult result;
   try {
-    if (!materialized_resources_match_plan(model_plan, resources)) {
+    const LlmCpuExecutionPlan* const cpu_plan =
+        get_llm_cpu_execution_plan(model_plan);
+    if (cpu_plan == nullptr ||
+        !materialized_resources_match_plan(model_plan, resources)) {
       result.reason_code = LlmExecutorReason::INVALID_RESOURCES;
       return result;
     }
@@ -941,19 +1020,20 @@ LlmExpectedChecksumResult calculate_llm_expected_checksums(const LlmMemoryWorkPl
       return result;
     }
 
-    result.workers.resize(model_plan.effective_workers);
+    result.workers.resize(cpu_plan->effective_workers);
     const bool reads_weight = (llm_scenario_flags(scenario_plan.scenario) & kLlmScenarioFlagWeight) != 0;
     const bool reads_kv = (llm_scenario_flags(scenario_plan.scenario) & kLlmScenarioFlagKv) != 0;
     uint64_t total_weight_bytes = 0;
     uint64_t total_k_bytes = 0;
     uint64_t total_v_bytes = 0;
 
-    for (size_t worker_index = 0; worker_index < model_plan.effective_workers; ++worker_index) {
+    for (size_t worker_index = 0;
+         worker_index < cpu_plan->effective_workers; ++worker_index) {
       LlmWorkerChecksum& checksum = result.workers[worker_index];
       checksum.weight = initial_llm_read_checksum(LlmChecksumComponent::Weight);
       checksum.k = initial_llm_read_checksum(LlmChecksumComponent::K);
       checksum.v = initial_llm_read_checksum(LlmChecksumComponent::V);
-      const LlmWorkerWorkPlan& worker = model_plan.workers[worker_index];
+      const LlmWorkerWorkPlan& worker = cpu_plan->workers[worker_index];
       const LlmStaticSpanReference* const weight_references = resources.worker_weight_references(worker_index);
       const LlmStaticSpanReference* const k_references = resources.worker_k_references(worker_index);
       const LlmStaticSpanReference* const v_references = resources.worker_v_references(worker_index);
@@ -1038,9 +1118,13 @@ LlmExecutorResult execute_llm_scenario(const LlmMemoryWorkPlan& model_plan, cons
                                        const LlmExecutionResources& resources, HighResTimer& timer,
                                        LlmKernelAdapter kernel, const LlmExecutorTestControl* test_control) noexcept {
   LlmExecutorResult result;
-  result.requested_workers = model_plan.effective_workers;
+  const LlmCpuExecutionPlan* const cpu_plan =
+      get_llm_cpu_execution_plan(model_plan);
+  result.requested_workers =
+      cpu_plan == nullptr ? 0 : cpu_plan->effective_workers;
   try {
-    if (!materialized_resources_match_plan(model_plan, resources)) {
+    if (cpu_plan == nullptr ||
+        !materialized_resources_match_plan(model_plan, resources)) {
       result.reason_code = LlmExecutorReason::INVALID_RESOURCES;
       return result;
     }
@@ -1060,7 +1144,7 @@ LlmExecutorResult execute_llm_scenario(const LlmMemoryWorkPlan& model_plan, cons
     }
     result.expected_checksums = std::move(expected.workers);
     result.expected_run_checksum = expected.run_checksum;
-    result.actual_checksums.resize(model_plan.effective_workers);
+    result.actual_checksums.resize(cpu_plan->effective_workers);
 
     std::vector<uint8_t> worker_succeeded;
     std::vector<std::thread> threads;
@@ -1072,15 +1156,16 @@ LlmExecutorResult execute_llm_scenario(const LlmMemoryWorkPlan& model_plan, cons
     bool measurement_complete = false;
     bool timer_stop_succeeded = false;
     double measured_duration = 0.0;
-    std::atomic<size_t> remaining_workers{model_plan.effective_workers};
+    std::atomic<size_t> remaining_workers{cpu_plan->effective_workers};
     std::atomic<size_t> completed_workers{0};
     std::atomic<size_t> qos_successful_workers{0};
     std::atomic<size_t> qos_failed_workers{0};
 
     try {
-      worker_succeeded.resize(model_plan.effective_workers, 0);
-      threads.reserve(model_plan.effective_workers);
-      for (size_t worker_index = 0; worker_index < model_plan.effective_workers; ++worker_index) {
+      worker_succeeded.resize(cpu_plan->effective_workers, 0);
+      threads.reserve(cpu_plan->effective_workers);
+      for (size_t worker_index = 0;
+           worker_index < cpu_plan->effective_workers; ++worker_index) {
         if (test_control != nullptr && test_control->fail_before_worker_index >= 0 &&
             worker_index == static_cast<size_t>(test_control->fail_before_worker_index)) {
           throw std::system_error(std::make_error_code(std::errc::resource_unavailable_try_again));
@@ -1108,7 +1193,8 @@ LlmExecutorResult execute_llm_scenario(const LlmMemoryWorkPlan& model_plan, cons
 
           const LlmKernelInvocation invocation{resources.worker_layers(worker_index),
                                                resources.worker_sequences(worker_index),
-                                               static_cast<uint64_t>(model_plan.layer_descriptors_per_worker),
+                                               static_cast<uint64_t>(
+                                                   cpu_plan->layer_descriptors_per_worker),
                                                static_cast<uint64_t>(scenario_plan.work_units),
                                                llm_scenario_flags(scenario_plan.scenario),
                                                scenario_plan.scenario_seed,
@@ -1166,10 +1252,13 @@ LlmExecutorResult execute_llm_scenario(const LlmMemoryWorkPlan& model_plan, cons
     try {
       {
         std::unique_lock<std::mutex> lock(state_mutex);
-        state_cv.wait(lock, [&] { return ready_workers == model_plan.effective_workers; });
+        state_cv.wait(
+            lock,
+            [&] { return ready_workers == cpu_plan->effective_workers; });
         timer.start();
         result.timer_started = true;
-        observe_event(test_control, LlmExecutorEvent::TimerStarted, model_plan.effective_workers);
+        observe_event(test_control, LlmExecutorEvent::TimerStarted,
+                      cpu_plan->effective_workers);
         start_workers = true;
       }
       state_cv.notify_all();
@@ -1214,7 +1303,8 @@ LlmExecutorResult execute_llm_scenario(const LlmMemoryWorkPlan& model_plan, cons
       return result;
     }
 
-    observe_event(test_control, LlmExecutorEvent::ChecksumValidationStarted, model_plan.effective_workers);
+    observe_event(test_control, LlmExecutorEvent::ChecksumValidationStarted,
+                  cpu_plan->effective_workers);
     result.actual_run_checksum =
         fold_llm_worker_checksums(result.actual_checksums.data(), result.actual_checksums.size());
     result.checksum_valid = result.expected_checksums.size() == result.actual_checksums.size();

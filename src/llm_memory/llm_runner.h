@@ -25,13 +25,12 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
-#include <limits>
 #include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
 
-#include "llm_memory/llm_executor.h"
+#include "llm_memory/llm_backend.h"
 #include "utils/descriptive_statistics.h"
 
 /** Stable machine-readable reasons owned by the LLM runner. */
@@ -45,7 +44,7 @@ inline constexpr const char* NOT_RUN_AFTER_RUNTIME_FAILURE = "not-run-after-runt
 inline constexpr const char* INVALID_CONFIG = "invalid-config";
 inline constexpr const char* INVALID_MODEL_WORK_PLAN = "invalid-model-work-plan";
 inline constexpr const char* CONFIG_WORK_PLAN_MISMATCH = "config-work-plan-mismatch";
-inline constexpr const char* EXECUTOR_UNAVAILABLE = "executor-unavailable";
+inline constexpr const char* BACKEND_UNAVAILABLE = "backend-unavailable";
 inline constexpr const char* AUXILIARY_BYTES_OVERFLOW = "runner-auxiliary-bytes-overflow";
 inline constexpr const char* AUXILIARY_BUDGET_INSUFFICIENT = "runner-auxiliary-budget-insufficient";
 inline constexpr const char* PLANNED_COUNTER_OVERFLOW = "planned-counter-overflow";
@@ -57,37 +56,25 @@ inline constexpr const char* RUNNER_EXCEPTION = "runner-exception";
 inline constexpr const char* RUNNER_UNKNOWN_EXCEPTION = "runner-unknown-exception";
 }  // namespace LlmRunnerReason
 
-/** Excluded or measured task category exposed to deterministic executors. */
-enum class LlmRunnerTaskKind : uint8_t {
-  Warmup = 0,
-  Calibration,
-  Measurement,
-};
-
 /** Logical persistence point bound to the command-scoped output transport. */
 enum class LlmCheckpointKind : uint8_t {
   MeasurementTerminal = 0,
   CommandTerminal,
 };
 
-inline constexpr size_t kLlmNoTaskIndex = std::numeric_limits<size_t>::max();
-
-/** Cold-path identity for one executor callback invocation. */
-struct LlmRunnerTaskContext {
-  LlmRunnerTaskKind kind = LlmRunnerTaskKind::Warmup;
-  std::string_view purpose;
-  LlmScenario scenario = LlmScenario::WeightsOnly;
-  size_t attempt_index = kLlmNoTaskIndex;
-  size_t loop_index = kLlmNoTaskIndex;
-  size_t order_position = kLlmNoTaskIndex;
-};
-
 /** Compact excluded-task evidence without retained per-worker vectors. */
 struct LlmTaskExecutionEvidence {
-  bool available = false;  ///< Complete executor evidence was retained.
+  bool available = false;  ///< Complete generic task evidence was retained.
   bool valid = false;
   std::string_view reason_code = LlmRunnerReason::NOT_STARTED;
+  LlmTaskExecutionStatus status = LlmTaskExecutionStatus::NotStarted;
   double elapsed_seconds = 0.0;
+  bool timing_evaluated = false;
+  bool timing_valid = false;
+  LlmTaskCompletion completion;
+  bool validation_evaluated = false;
+  bool validation_valid = false;
+  bool cpu_evidence_available = false;
   size_t requested_workers = 0;
   size_t created_workers = 0;
   size_t completed_workers = 0;
@@ -97,7 +84,7 @@ struct LlmTaskExecutionEvidence {
   bool kernel_succeeded = false;
   bool timer_started = false;
   bool timer_stopped = false;
-  bool checksum_evaluated = false;  ///< True only when checksum validity was evaluated.
+  bool checksum_evaluated = false;  ///< CPU checksum detail, when applicable.
   bool checksum_valid = false;
   LlmRunChecksum expected_run_checksum{0, 0};
   LlmRunChecksum actual_run_checksum{0, 0};
@@ -143,7 +130,7 @@ struct LlmMeasurementState {
   size_t loop_index = 0;
   size_t order_position = 0;
   bool attempted = false;
-  bool execution_evidence_available = false;  ///< Complete executor evidence was retained.
+  bool execution_evidence_available = false;  ///< Complete generic task evidence was retained.
   size_t requested_workers = 0;
   size_t effective_workers = 0;
   size_t qos_successful_workers = 0;
@@ -181,7 +168,7 @@ struct LlmMeasurementState {
   std::optional<double> kv_write_payload_fraction;
   size_t working_set_bytes = 0;
   bool checksum_valid = false;
-  LlmExecutorResult execution;
+  LlmTaskExecutionResult execution;
 };
 
 /** Planned and realized scenario order for one count-loop. */
@@ -231,7 +218,7 @@ struct LlmRunCounters {
 };
 
 /**
- * Conservative checked runner peak that must coexist with executor resources.
+ * Conservative checked runner peak that must coexist with backend resources.
  *
  * `reason_code` always references static storage and remains valid when the
  * estimate is copied or moved.
@@ -254,7 +241,8 @@ struct LlmRunnerAuxiliaryEstimate {
 };
 
 /**
- * Full initialized, partial, interrupted, failed, or complete runner result.
+ * Full runner result in complete, partial, interrupted, unsupported, or failed
+ * state after initialization.
  *
  * Every `string_view` member in this result graph references static token
  * storage, so copying or moving the result does not invalidate those views.
@@ -285,10 +273,6 @@ struct LlmMemoryResult {
   std::vector<std::string_view> quality_warnings;
 };
 
-/** Backend-independent task callback; exceptions are contained by the runner. */
-using LlmTaskExecutor =
-    std::function<LlmExecutorResult(const LlmMemoryWorkPlan&, const LlmScenarioWorkPlan&, const LlmRunnerTaskContext&)>;
-
 /** Deterministic stop and logical-checkpoint seams. */
 struct LlmRunnerHooks {
   std::function<bool()> stop_requested;
@@ -310,17 +294,20 @@ LlmRunnerAuxiliaryEstimate calculate_llm_runner_auxiliary_estimate(const LlmMemo
 /**
  * Resolve excluded work, freeze all scenarios, and execute balanced loops.
  *
- * The runner checks stop only between whole executor tasks. A successfully
- * completed current task remains measured, while an executor, checksum, timer,
- * or checkpoint failure remains authoritative over a simultaneous stop. Every
+ * The runner checks stop only between whole backend tasks. A successfully
+ * completed current task remains measured, while a backend-task, validation,
+ * timing, or checkpoint failure remains authoritative over a simultaneous
+ * stop. Every
  * attempted measurement's terminal transition and the distinct
  * command-terminal state is offered to the logical checkpoint hook. A failed
  * checkpoint is never retried.
  *
  * @param config Validated command configuration paired with @p model_plan.
  * @param model_plan Immutable pointer-free geometry and descriptor plan.
- * @param executor Required backend callback. Production binds prepared
- *        resources and `execute_llm_scenario`; unit tests inject a fake.
+ * @param backend Required command-owned backend. The runner initializes,
+ *        validates its tagged execution plan, prepares resources, executes
+ *        whole tasks, and releases resources before its command-terminal
+ *        checkpoint. Unit tests inject an Objective-C-free fake backend.
  * @param result Reset on entry. Preflight failures leave an uninitialized
  *        reason-bearing result; admitted runs retain initialized terminal or
  *        partial evidence.
@@ -331,8 +318,10 @@ LlmRunnerAuxiliaryEstimate calculate_llm_runner_auxiliary_estimate(const LlmMemo
  * @note Synchronous and not thread-safe. Callbacks and inputs must outlive the
  *       call and must not mutate the model plan.
  */
-int run_llm_memory_suite(const LlmMemoryConfig& config, const LlmMemoryWorkPlan& model_plan,
-                         const LlmTaskExecutor& executor, LlmMemoryResult& result, const LlmRunnerHooks& hooks = {});
+int run_llm_memory_suite(const LlmMemoryConfig& config,
+                         const LlmMemoryWorkPlan& model_plan,
+                         LlmBackend& backend, LlmMemoryResult& result,
+                         const LlmRunnerHooks& hooks = {});
 
 /**
  * Canonicalize a known result reason into copy- and move-safe static storage.

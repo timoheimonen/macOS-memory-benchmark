@@ -15,7 +15,7 @@
 
 /**
  * @file llm_work_plan.h
- * @brief Overflow-safe geometry and immutable CPU LLM memory work planning
+ * @brief Overflow-safe logical and backend-specific LLM memory work planning
  */
 
 #ifndef LLM_WORK_PLAN_H
@@ -28,6 +28,7 @@
 #include <string>
 #include <string_view>
 #include <type_traits>
+#include <variant>
 #include <vector>
 
 #include "llm_memory/llm_memory.h"
@@ -318,10 +319,31 @@ struct LlmWorkerWorkPlan {
   std::vector<LlmKvSequenceRangeTemplate> sequences;
 };
 
+/** CPU-only worker partition and descriptor planning evidence. */
+struct LlmCpuExecutionPlan {
+  size_t requested_workers = 0;
+  size_t available_workers = 0;
+  size_t effective_workers = 0;
+  size_t layer_descriptors_per_worker = 0;
+  size_t sequence_descriptors_per_worker = 0;
+  size_t total_layer_descriptors = 0;
+  size_t total_sequence_descriptors = 0;
+  size_t descriptor_bytes = 0;
+  size_t planner_storage_bytes = 0;
+  std::vector<LlmWorkerWorkPlan> workers;
+};
+
+/** Placeholder for Metal-only execution planning introduced in later phases. */
+struct LlmMetalExecutionPlan {};
+
+/** Exactly one backend-specific execution plan for a logical model plan. */
+using LlmBackendExecutionPlan =
+    std::variant<LlmCpuExecutionPlan, LlmMetalExecutionPlan>;
+
 /**
  * Inputs for checked layout, descriptor, and memory-budget planning.
  * The caller supplies the page granularity, current available-memory sample,
- * and all executor-owned checksum/orchestration bytes that will coexist with
+ * and all caller-supplied checksum/orchestration bytes that will coexist with
  * the three mappings, ABI arrays, and returned pointer-free plan.
  */
 struct LlmMemoryWorkPlanRequest {
@@ -354,8 +376,8 @@ struct LlmComponentIdentities {
 };
 
 /**
- * Valid pointer-free work plan used as the sole later descriptor source.
- * It is move-only because copying retained vectors would invalidate the
+ * Logical model plan with exactly one tagged backend execution plan.
+ * It is move-only because copying retained CPU vectors would invalidate the
  * recorded capacity-based peak budget. Consumers must keep a finalized plan
  * const: changing execution-bound workload evidence or templates requires a
  * rebuilt identity. Admission and allocator-capacity evidence remains
@@ -371,15 +393,12 @@ struct LlmMemoryWorkPlan {
   bool valid = false;
   std::string reason_code = LlmWorkPlanReason::ACTIVE_WEIGHT_BYTES_ZERO;
   LlmGeometry geometry;
-  size_t requested_workers = 0;
-  size_t available_workers = 0;
-  size_t effective_workers = 0;
-  size_t layer_descriptors_per_worker = 0;
-  size_t sequence_descriptors_per_worker = 0;
-  size_t total_layer_descriptors = 0;
-  size_t total_sequence_descriptors = 0;
-  size_t descriptor_bytes = 0;
-  size_t planner_storage_bytes = 0;
+  LlmMemoryBackend backend = LlmMemoryBackend::Cpu;
+  LlmPhase phase = LlmPhase::Decode;
+  LlmKvLayout kv_layout = LlmKvLayout::Contiguous;
+  LlmWorkUnitKind work_unit_kind = LlmWorkUnitKind::DecodeStep;
+  size_t weight_passes_per_work_unit = Constants::LLM_WEIGHT_PASSES_PER_WORK_UNIT;
+  size_t kv_replay_factor = Constants::LLM_KV_REPLAY_FACTOR;
   uint64_t base_seed = 0;
   uint64_t weight_buffer_seed = 0;
   uint64_t k_buffer_seed = 0;
@@ -387,17 +406,22 @@ struct LlmMemoryWorkPlan {
   std::array<uint64_t, kLlmScenarioCount> scenario_seeds{};
   LlmMemoryBudget memory_budget;
   std::vector<LlmByteRange> weight_layers;
-  std::vector<LlmWorkerWorkPlan> workers;
-  LlmMemoryBackend backend = LlmMemoryBackend::Cpu;
-  LlmPhase phase = LlmPhase::Decode;
-  LlmKvLayout kv_layout = LlmKvLayout::Contiguous;
-  LlmWorkUnitKind work_unit_kind = LlmWorkUnitKind::DecodeStep;
-  size_t weight_passes_per_work_unit = Constants::LLM_WEIGHT_PASSES_PER_WORK_UNIT;
-  size_t kv_replay_factor = Constants::LLM_KV_REPLAY_FACTOR;
   std::string methodology_version;
   LlmComponentIdentities component_identities;
   std::string plan_identity;
+  LlmBackendExecutionPlan backend_execution_plan;
 };
+
+/**
+ * Return the CPU execution plan only when the declared backend and variant
+ * alternative both identify CPU. A backend/variant mismatch returns null.
+ */
+const LlmCpuExecutionPlan* get_llm_cpu_execution_plan(
+    const LlmMemoryWorkPlan& plan) noexcept;
+
+/** Non-const overload of the checked CPU execution-plan accessor. */
+LlmCpuExecutionPlan* get_llm_cpu_execution_plan(
+    LlmMemoryWorkPlan& plan) noexcept;
 
 /** Per-scenario payload, layout metadata, and effective work-unit ceiling. */
 struct LlmScenarioLimits {
@@ -481,12 +505,13 @@ LlmMemoryBudget evaluate_llm_memory_budget(
     const LlmMemoryBudgetRequest& request, size_t available_memory_bytes);
 
 /**
- * Build the sole pointer-free source for ABI descriptor materialization.
+ * Build the logical plan and its tagged backend execution plan.
  *
- * Effective workers are reduced until every standalone scenario has work.
- * Retained vector capacities are measured after allocation and the budget is
- * re-evaluated before the plan becomes valid. Invalid plans expose no
- * executable templates.
+ * The active CPU planner reduces effective workers until every standalone
+ * scenario has work. Its retained vector capacities are measured after
+ * allocation and the budget is re-evaluated before the plan becomes valid.
+ * Invalid plans expose no executable templates. Metal remains an explicit
+ * placeholder until its planner is activated.
  */
 LlmMemoryWorkPlan build_llm_memory_work_plan(
     const LlmMemoryWorkPlanRequest& request);

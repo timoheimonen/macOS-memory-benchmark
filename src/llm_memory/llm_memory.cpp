@@ -26,6 +26,7 @@
 #include <exception>
 #include <iostream>
 #include <limits>
+#include <memory>
 #include <optional>
 #include <string>
 #include <utility>
@@ -36,9 +37,8 @@
 #include "core/system/benchmark_qos.h"
 #include "core/system/page_size.h"
 #include "core/system/system_info.h"
-#include "core/timing/timer.h"
+#include "llm_memory/llm_backend.h"
 #include "llm_memory/llm_environment.h"
-#include "llm_memory/llm_executor.h"
 #include "llm_memory/llm_json.h"
 #include "llm_memory/llm_output.h"
 #include "llm_memory/llm_runner.h"
@@ -147,11 +147,13 @@ void report_llm_command_exception(const std::string& details) noexcept {
 int write_llm_stdout_final(
     JsonOutputSession& output_session, const LlmMemoryConfig& config,
     const LlmMemoryWorkPlan& model_plan,
-    const LlmResourcePreparationResult& preparation,
+    const LlmBackendEvidence& backend_evidence,
     const LlmResultMetadata& metadata,
     const LlmMemoryResult& result) noexcept {
   try {
-    return output_session.write_final(build_llm_memory_json(config, model_plan, preparation, metadata, result));
+    return output_session.write_final(
+        build_llm_memory_json(config, model_plan, backend_evidence, metadata,
+                              result));
   } catch (const std::exception& error) {
     report_json_output_boundary_failure(
         config.output_file,
@@ -532,8 +534,7 @@ int run_llm_memory_mode(int argc, char* argv[]) {
 
   int run_status = EXIT_FAILURE;
   LlmMemoryWorkPlan model_plan;
-  LlmExecutionResources resources;
-  LlmResourcePreparationResult preparation;
+  std::unique_ptr<LlmBackend> backend;
   LlmResultMetadata metadata;
   LlmMemoryResult result;
   try {
@@ -552,6 +553,15 @@ int run_llm_memory_mode(int argc, char* argv[]) {
     metadata.page_size_bytes = get_system_page_size_bytes();
     metadata.l1_data_cache_bytes = get_l1_cache_size();
     metadata.l2_data_cache_bytes = get_l2_cache_size();
+
+    backend = create_llm_backend(config.backend);
+    if (!backend) {
+      std::cerr << Messages::error_prefix()
+                << Messages::error_llm_memory_run_failed(
+                       LlmBackendReason::BACKEND_NOT_ACTIVATED)
+                << std::endl;
+      return EXIT_FAILURE;
+    }
 
     const unsigned long available_memory_mb = get_available_memory_mb();
     if (available_memory_mb == 0) {
@@ -575,7 +585,8 @@ int run_llm_memory_mode(int argc, char* argv[]) {
                   << std::endl;
         return EXIT_FAILURE;
       }
-      const LlmExecutorAuxiliaryEstimate executor_auxiliary = calculate_llm_executor_auxiliary_estimate(preliminary);
+      const LlmBackendAuxiliaryEstimate backend_auxiliary =
+          backend->calculate_auxiliary_estimate(preliminary);
       const LlmRunnerAuxiliaryEstimate runner_auxiliary = calculate_llm_runner_auxiliary_estimate(config, preliminary);
       metadata.json_peak_estimate = calculate_llm_json_peak_estimate(config, preliminary);
       if (!metadata.json_peak_estimate.valid) {
@@ -584,22 +595,23 @@ int run_llm_memory_mode(int argc, char* argv[]) {
                   << std::endl;
         return EXIT_FAILURE;
       }
-      size_t runner_and_executor_orchestration_bytes = 0;
-      if (!executor_auxiliary.valid || !runner_auxiliary.valid ||
-          !NumericUtils::checked_add(executor_auxiliary.checksum_auxiliary_bytes,
+      size_t runner_and_backend_orchestration_bytes = 0;
+      if (!backend_auxiliary.valid || !runner_auxiliary.valid ||
+          !NumericUtils::checked_add(backend_auxiliary.checksum_auxiliary_bytes,
                                      runner_auxiliary.checksum_auxiliary_bytes, checksum_auxiliary_bytes) ||
-          !NumericUtils::checked_add(executor_auxiliary.orchestration_auxiliary_bytes,
+          !NumericUtils::checked_add(backend_auxiliary.orchestration_auxiliary_bytes,
                                      runner_auxiliary.orchestration_auxiliary_bytes,
-                                     runner_and_executor_orchestration_bytes)) {
+                                     runner_and_backend_orchestration_bytes)) {
         const std::string reason_code =
-            !executor_auxiliary.valid
-                ? std::string(executor_auxiliary.reason_code)
+            !backend_auxiliary.valid
+                ? std::string(backend_auxiliary.reason_code)
                 : (!runner_auxiliary.valid ? std::string(runner_auxiliary.reason_code)
                                            : std::string(LlmRunnerReason::AUXILIARY_BYTES_OVERFLOW));
         std::cerr << Messages::error_prefix() << Messages::error_llm_memory_run_failed(reason_code) << std::endl;
         return EXIT_FAILURE;
       }
-      if (!NumericUtils::checked_add(runner_and_executor_orchestration_bytes, metadata.json_peak_estimate.total_bytes,
+      if (!NumericUtils::checked_add(runner_and_backend_orchestration_bytes,
+                                     metadata.json_peak_estimate.total_bytes,
                                      orchestration_auxiliary_bytes)) {
         std::cerr << Messages::error_prefix()
                   << Messages::error_llm_memory_run_failed(LlmJsonReason::PEAK_BYTES_OVERFLOW) << std::endl;
@@ -616,38 +628,30 @@ int run_llm_memory_mode(int argc, char* argv[]) {
       return EXIT_FAILURE;
     }
 
-    std::optional<HighResTimer> timer = HighResTimer::create();
-    if (!timer.has_value()) {
-      return EXIT_FAILURE;
-    }
-    preparation = prepare_llm_execution_resources(model_plan, resources);
-    if (!preparation.valid) {
-      std::cerr << Messages::error_prefix() << Messages::error_llm_memory_run_failed(preparation.reason_code)
-                << std::endl;
-      return EXIT_FAILURE;
-    }
-
     LlmRunnerHooks hooks;
     hooks.checkpoint = [&](const LlmMemoryResult& snapshot, LlmCheckpointKind kind) {
       static_cast<void>(kind);
       return output_session->checkpoint([&]() {
         metadata.environment_end = capture_llm_host_environment();
-        return build_llm_memory_json(config, model_plan, preparation, metadata, snapshot);
+        return build_llm_memory_json(config, model_plan,
+                                     backend->evidence(), metadata,
+                                     snapshot);
       });
     };
-    const LlmTaskExecutor executor = [&](const LlmMemoryWorkPlan& plan, const LlmScenarioWorkPlan& scenario_plan,
-                                         const LlmRunnerTaskContext& context) {
-      static_cast<void>(context);
-      return execute_llm_scenario(plan, scenario_plan, resources, *timer);
-    };
 
-    run_status = run_llm_memory_suite(config, model_plan, executor, result, hooks);
+    run_status =
+        run_llm_memory_suite(config, model_plan, *backend, result, hooks);
+    if (!result.initialized) {
+      if (result.reason_code != LlmBackendReason::TIMER_UNAVAILABLE) {
+        std::cerr << Messages::error_prefix()
+                  << Messages::error_llm_memory_run_failed(result.reason_code)
+                  << std::endl;
+      }
+      return EXIT_FAILURE;
+    }
     if (output_session->kind() != JsonOutputKind::File || !result.terminal_checkpoint_completed) {
       metadata.environment_end = capture_llm_host_environment();
     }
-    // File checkpoints need the live mappings, but final stdout serialization
-    // does not. Release them once all benchmark evidence has been captured.
-    resources = LlmExecutionResources{};
     print_llm_memory_console_report(model_plan, metadata, result);
 
     if (output_session->kind() == JsonOutputKind::File && result.terminal_checkpoint_completed &&
@@ -668,7 +672,10 @@ int run_llm_memory_mode(int argc, char* argv[]) {
   }
 
   if (output_session->kind() == JsonOutputKind::Stdout && result.initialized &&
-      write_llm_stdout_final(*output_session, config, model_plan, preparation, metadata, result) != EXIT_SUCCESS) {
+      backend &&
+      write_llm_stdout_final(*output_session, config, model_plan,
+                             backend->evidence(), metadata,
+                             result) != EXIT_SUCCESS) {
     return EXIT_FAILURE;
   }
   return run_status;

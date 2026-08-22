@@ -131,20 +131,25 @@ LLM-memory follows its own synchronous pipeline. The only active profile in this
 3. Classify the raw output target and install one command-scoped `JsonOutputSession` before the runtime banner.
 4. Request best-effort main-thread QoS, enter `BenchmarkSignalMaskGuard`, and capture CPU/OS/page/cache/available-memory
    plus initial thermal/Low Power Mode evidence.
-5. Build a preliminary pointer-free work plan to calculate exact executor/runner auxiliary backing plus the conservative
-   JSON DOM/serialization peak for a non-empty output target. Rebuild and admit the final plan with the full page-rounded
-   weight/K/V mappings, descriptor/planner storage, checksum storage, and orchestration storage included in one peak
-   budget.
-6. Create `HighResTimer`, atomically allocate and initialize/pre-touch all three mappings, materialize the worker-major
-   descriptor ABI, and bind the production ARM64 executor.
+5. Create the selected pure-C++ `LlmBackend` factory product. Build a preliminary pointer-free logical work plan and ask
+   the backend and runner for their exact auxiliary backing, then add the conservative JSON DOM/serialization peak for a
+   non-empty output target. Rebuild and admit the final plan with the full page-rounded weight/K/V mappings,
+   descriptor/planner storage, checksum storage, and orchestration storage included in one peak budget.
+6. Initialize the backend, resolve the plan's exactly one tagged backend execution-plan variant, and prepare resources.
+   The active CPU adapter creates `HighResTimer`, atomically allocates and initializes/pre-touches all three mappings,
+   materializes the worker-major descriptor ABI, and binds the production ARM64 executor. An initialized lifecycle
+   `Unsupported` result remains distinct from a runtime failure and never falls back to another backend.
 7. Resolve excluded scenario-specific calibration or exact explicit work, freeze all three plans before loop zero, and
-   execute cyclic weights-only/KV-only/mixed tasks. Each terminal measurement and command terminal is offered to the
-   logical checkpoint hook.
-8. Capture final environment state, render the centralized console report, and either retain the runner-owned atomic
-   file cadence or emit one final schema-1 stdout document. Execution status and output status remain separate.
+   execute cyclic weights-only/KV-only/mixed tasks through whole synchronous backend calls. Each call owns reset, timed
+   work, correctness validation, and generic task evidence. Each terminal measurement is offered to the logical
+   checkpoint hook while resources remain live.
+8. Release backend resources exactly once before offering the command-terminal checkpoint, then capture final
+   environment state, render the centralized console report, and either retain the runner-owned atomic file cadence or
+   emit one final schema-1 stdout document. Execution status and output status remain separate.
 
-Pre-run failures before runner-result initialization leave stdout empty. Once initialized, partial/interrupted/failed
-evidence is representable; a file checkpoint failure is terminal and is not retried at an outer final-write boundary.
+Pre-run failures before runner-result initialization leave stdout empty. Once initialized,
+partial/interrupted/unsupported/failed evidence is representable; a file checkpoint failure is terminal and is not
+retried at an outer final-write boundary.
 
 ## 5. Configuration Model
 
@@ -164,9 +169,10 @@ Configuration state is represented by `BenchmarkConfig` (`src/core/config/config
 - `--llm-memory` is pre-routed in `main.cpp` and uses separate `LlmMemoryConfig`: resolved backend/phase/layout enums,
   required model geometry, KV width/batch defaults, requested and detected worker counts, optional exact scenario work
   units, loop count, raw output target, base seed/source, help state, and exact argv. The immutable
-  `LlmMemoryWorkPlan` separately records available and effective workers, phase-applicable geometry, exact model
-  payload/accounted work, memory admission, layout/descriptor metadata, domain seeds, methodology, and exact component
-  identities.
+  `LlmMemoryWorkPlan` separately records common phase-applicable geometry, exact model payload/accounted work, memory
+  admission, layout metadata, domain seeds, methodology, exact component identities, and exactly one tagged
+  backend-execution-plan variant. The active CPU alternative owns requested/available/effective workers plus its
+  descriptor templates and storage accounting; the Metal alternative is reserved for later activation.
 - Cache behavior: auto L1/L2 or user-provided `--cache-size`.
 - Latency sampling: `latency_sample_count`.
 - Latency-chain construction mode: `latency_chain_mode` (type `LatencyChainMode`,
@@ -660,13 +666,27 @@ assert.
 
 ### 13.7 LLM generic plan and active CPU decode execution
 
-LLM mode is implemented under `src/llm_memory/` with a pure checked work planner, move-only prepared resources,
-status-bearing runner with generic work/accounting vocabulary, dedicated CPU ARM64 kernel, ordered schema builder, and
-Foundation-backed environment snapshot.
+LLM mode is implemented under `src/llm_memory/` with a pure checked work planner, an Objective-C-free synchronous
+`LlmBackend` boundary, a status-bearing backend-independent runner, dedicated CPU adapter and ARM64 kernel, ordered
+schema builder, and Foundation-backed environment snapshot.
 Generic enums and stable tokens cover backend `cpu|metal`, phase `decode|prefill`, KV layout `contiguous|paged`, work
 unit `decode_step|prefill_operation`, KV write `none|current_token_append|full_prompt_population`, and run status
 `unsupported`. Only CPU/decode/contiguous is active. Its exact methodology identity is
 `llm-memory-v1-cpu-decode-contiguous`; non-active selector combinations are rejected and never fall back.
+
+`LlmMemoryWorkPlan` keeps logical geometry, resources, accounting, seeds, and identities common while
+`LlmBackendExecutionPlan` carries exactly one `LlmCpuExecutionPlan` or `LlmMetalExecutionPlan` tag. The active CPU
+alternative owns worker reduction, worker-major ranges, descriptor counts, and retained planner storage; the Metal
+alternative is an empty reserved tag in this phase. Checked accessors require the declared backend and variant tag to
+agree, so a mismatched plan cannot be interpreted as CPU work.
+
+One command owns one `LlmBackend`. Its lifecycle is auxiliary estimation, initialization, execution-plan resolution,
+resource preparation, zero or more atomic task calls, evidence readout, and resource release. Lifecycle status is
+`NotStarted`, `Ready`, `Unsupported`, or `Failed`; `Unsupported` is a representable terminal run state after result
+initialization, not a failed capability probe disguised as another backend. Generic command evidence and task evidence
+use tagged CPU/Metal variants. A generic task reports stable status/reason, exact transient identity,
+backend-authoritative elapsed time, planned/completed work and byte counters, validation state, and its tagged diagnostic
+evidence. The active `LlmCpuBackend` retains the unchanged `LlmExecutorResult` inside the CPU task-evidence tag.
 
 For active weights `W`, layers `L`, KV heads `h_kv`, head dimension `d_h`, KV element bytes `s_kv`, batch `B`, and
 visible context `A` including the current token, the planner derives:
@@ -698,11 +718,20 @@ visible K then V ranges. `mixed` reads the layer weight shard and then performs 
 before advancing. Workers preserve local increasing layer order and use no global per-layer barrier. Appends use
 `llm-kv-append-affine64-v1` and normal temporal stores.
 
-`execute_llm_scenario` validates immutable resources, derives expected `llm-read-checksum-v1` values, creates the full
-worker team, prepares best-effort worker QoS, and waits for all workers at a start gate. The caller executes `dsb ish;
-isb`, starts `HighResTimer`, and releases the team; last-worker completion stops the timer. Joins and exact per-worker
-weight/K/V checksum comparisons plus stable run folding occur afterwards. Only a finite positive elapsed time, complete
-worker lifecycle, successful kernel, and exact checksum agreement produce `measured` status.
+The CPU backend owns `HighResTimer` and the move-only prepared resources, and delegates one complete task to
+`execute_llm_scenario`. That executor validates immutable resources, derives expected `llm-read-checksum-v1` values,
+creates the full worker team, prepares best-effort worker QoS, and waits for all workers at a start gate. The caller
+executes `dsb ish; isb`, starts the timer, and releases the team; last-worker completion stops the timer. Joins and exact
+per-worker weight/K/V checksum comparisons plus stable run folding occur afterwards. The CPU adapter checks requested,
+created, completed, and QoS-accounted worker cardinality, kernel and CPU timer lifecycle, checksum-vector cardinality,
+finite positive elapsed time, and exact checksum agreement before producing generic task evidence.
+
+The common runner accepts a task only when its generic status/reason are complete/valid; backend, phase, layout, work
+unit, KV-write kind, scenario, runner-task context, and model/scenario plan identities match exactly; authoritative timing
+is evaluated, valid, finite, and positive; all planned/completed work, payload, layout-metadata, and accounted-byte
+counters match the frozen task; and validation is evaluated and valid. CPU worker, QoS, timer-flag, and checksum-vector
+invariants remain adapter-owned and are not hard-coded into common runner acceptance. This keeps current CPU correctness
+and output evidence unchanged while allowing a future backend to provide different diagnostic evidence.
 
 Omitted iterations calibrate weights-only, KV-only, and mixed independently with an 8 MiB minimum pilot payload when
 guardrails permit, toward 150 ms in the 100–250 ms intended window, with same-shape excluded warmups and at most two
@@ -716,10 +745,13 @@ measurements, measured-only aggregates, and quality warnings. Only measured/chec
 descriptive statistics. Multiple
 values use median P50; fewer than three are insufficient samples and CV above 5% is warning-only.
 
-Stop is checked between complete executor tasks, not inside the hot kernel. A current completed valid task remains
-measured; no next task begins after stop. Real executor/timer/checksum/checkpoint failure wins over interruption. File
-output atomically checkpoints each terminal scenario and command terminal. Stdout preserves the logical cadence without
-intermediate builders, then emits one final schema 1 object. See
+Stop is checked between complete backend tasks, not inside the backend's atomic timed work. A current completed valid
+task remains measured; no next task begins after stop. Real backend-task/timer/checksum/checkpoint failure wins over
+interruption. File output atomically checkpoints each terminal scenario while backend resources are live. Every normal,
+interrupted, unsupported, or failed terminal path attempts resource release exactly once before the command-terminal
+checkpoint, and that checkpoint is offered only after the release attempt. A measurement-checkpoint failure releases
+resources and is not retried as a command-terminal write. Stdout preserves the logical cadence without intermediate
+builders, then emits one final schema 1 object. See
 [LLM_MEMORY_PROFILE_WHITEPAPER.md](LLM_MEMORY_PROFILE_WHITEPAPER.md) for the full formula, ABI, schema, and
 interpretation contract.
 
@@ -1018,7 +1050,7 @@ standard identity from metric layout; schema 2 and unversioned historical standa
   reason distinguish them from numeric zero. Multiword status tokens use underscores; multiword reason-code and
   duration-quality tokens use hyphens. Unsupported is terminal, non-acceptable performance evidence and never falls
   back to another backend.
-- A measurement or excluded task whose executor throws before returning evidence serializes nested
+- A measurement or excluded task whose backend call throws before returning evidence serializes nested
   `execution.status: "unavailable"`, retains the runner-exception reason, and uses null for absent lifecycle/QoS/checksum
   observations. A `not_run` measurement also uses null for its top-level successful/failed QoS-worker counts.
 - Every potentially large byte, capacity, block/table/lookup, token-visit, causal-pair, FMA-term, seed, and checksum
@@ -1062,10 +1094,11 @@ before sweep execution, the runtime banner, and worker creation. GPU selects it 
 before its banner, QoS, signal scope, and backend factory. LLM selects it before banner, QoS, signal scope, work-plan
 admission, mappings, and workers. Direct pattern, TLB, and core-to-core files receive one atomic final write; standard
 and sweep files retain their existing intermediate checkpoints. GPU files retain terminal-measurement/failure
-checkpoints and their post-release replacement. LLM files checkpoint every terminal scenario measurement and command
-terminal; failure is terminal and is not retried. Stdout boundaries perform lazy no-op persistence at every logical
-checkpoint and emit one terminal payload after orchestration; GPU and LLM still perform their checkpoint-boundary stop
-reads. The supported process contract, including help and pre-result-failure exceptions, is defined in [API.md](API.md).
+checkpoints and their post-release replacement. LLM files checkpoint every terminal scenario measurement and, unless a
+measurement checkpoint itself fails, one post-release command terminal; failure is terminal and is not retried. Stdout
+boundaries perform lazy no-op persistence at every logical checkpoint and emit one terminal payload after orchestration;
+GPU and LLM still perform their checkpoint-boundary stop reads. The supported process contract, including help and
+pre-result-failure exceptions, is defined in [API.md](API.md).
 
 ### 18.8 Path behavior
 
@@ -1089,10 +1122,14 @@ This codebase uses boundary-aware mixed error handling:
   separate raw diagnostics. GPU correctness/timer invalidity fails the run, initialized unsupported capability remains
   distinct and is serializable, graceful interruption is process success with invalid conclusions, and a backend-factory
   failure before result initialization leaves stdout empty.
-- LLM checked plan/JSON-output-peak/timer/resource preparation precedes runner-result initialization and has no schema
-  payload on failure. The runner contains executor/kernel/checksum/timer/callback exceptions as stable status/reason evidence,
-  finalizes untouched slots deterministically, gives real failures precedence over interruption, and keeps graceful
-  task-boundary interruption separate from conclusion validity. File checkpoint failure is terminal and not retried.
+- LLM config/factory checks, checked final planning, JSON-output peak estimation, runner/backend auxiliary admission,
+  backend initialization, tagged-plan resolution, and resource preparation precede runner-result initialization and
+  have no schema payload on `Failed`. An `Unsupported` lifecycle result initializes a representable terminal result and
+  is serialized distinctly from `Failed`; neither path falls back to another backend. The runner contains backend-task and checkpoint exceptions
+  as stable status/reason evidence, finalizes untouched slots deterministically, gives real failures precedence over
+  interruption, and keeps graceful task-boundary interruption separate from conclusion validity. Backend release is
+  attempted once before the command-terminal checkpoint; release failure becomes terminal failure evidence. A file
+  measurement-checkpoint failure is terminal, releases resources, and is not retried.
 
 Principle: no uncaught exceptions should escape to `main()` control flow.
 
@@ -1106,10 +1143,11 @@ Principle: no uncaught exceptions should escape to `main()` control flow.
 - GPU mode uses one Metal command queue and serial compute encoders. GPU grid threads are selected from pipeline
   execution width and do not map to CPU `--threads`; the CLI rejects that option. The host runner does not submit the next
   operation until the synchronous current task and required validation reach terminal state.
-- LLM mode creates one CPU worker team per excluded or measured scenario task. Workers read immutable worker-major
-  descriptors after an all-or-cancel ready gate; partial startup cancels before any kernel call. One synchronized timer
-  spans gate release through last-worker completion. Worker-local layers are ordered without a per-layer global barrier,
-  and task-level stop checks never poll signal state inside the ARM64 hot loop.
+- The common LLM runner treats each synchronous backend invocation as one atomic task and checks stop only before and
+  after it. The active CPU adapter creates one worker team per excluded or measured scenario task. Workers read immutable
+  worker-major descriptors after an all-or-cancel ready gate; partial startup cancels before any kernel call. One
+  synchronized timer spans gate release through last-worker completion. Worker-local layers are ordered without a
+  per-layer global barrier, and neither the runner nor CPU adapter polls signal state inside the ARM64 hot loop.
 
 ## 21. Measurement Caveats and Interpretation Under Load
 
@@ -1164,9 +1202,11 @@ entry test. `jq` is not required by this gate.
 ## 23. Source Map (Primary Entry Points)
 
 - Program entry: `main.cpp`
-- LLM CPU memory profile:
+- LLM memory profile and active CPU backend:
   - `src/llm_memory/llm_memory.cpp`
   - `src/llm_memory/llm_work_plan.cpp`
+  - `src/llm_memory/llm_backend.cpp`
+  - `src/llm_memory/llm_cpu_backend.cpp`
   - `src/llm_memory/llm_executor.cpp`
   - `src/llm_memory/llm_runner.cpp`
   - `src/llm_memory/llm_json.cpp`

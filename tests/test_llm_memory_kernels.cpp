@@ -604,15 +604,19 @@ TEST(LlmMemoryKernelIntegrationTest, PreservesIntegerAndFullVectorCalleeSavedReg
 TEST(LlmMemoryKernelIntegrationTest, OneWorkerProductionExecutorRealAsmSmokeMatchesIndependentOracle) {
   const LlmMemoryWorkPlan plan = build_real_executor_plan({257, 2, 4, 2, 7, 1, 3, 2}, 1);
   ASSERT_TRUE(plan.valid) << plan.reason_code;
-  ASSERT_EQ(plan.effective_workers, 1u);
+  const LlmCpuExecutionPlan* cpu_plan = get_llm_cpu_execution_plan(plan);
+  ASSERT_NE(cpu_plan, nullptr);
+  ASSERT_EQ(cpu_plan->effective_workers, 1u);
   LlmExecutionResources resources;
   const LlmResourcePreparationResult prepared = prepare_llm_execution_resources(plan, resources);
   ASSERT_TRUE(prepared.valid) << prepared.reason_code;
   const LlmScenarioWorkPlan scenario = build_llm_scenario_work_plan(plan, LlmScenario::Mixed, 2, true);
   ASSERT_TRUE(scenario.valid) << scenario.reason_code;
   const OracleWorkerRun independent =
-      oracle_worker_run(resources.worker_layers(0), plan.layer_descriptors_per_worker, resources.worker_sequences(0),
-                        scenario.work_units, kLlmScenarioFlagMixed, scenario.scenario_seed);
+      oracle_worker_run(resources.worker_layers(0),
+                        cpu_plan->layer_descriptors_per_worker,
+                        resources.worker_sequences(0), scenario.work_units,
+                        kLlmScenarioFlagMixed, scenario.scenario_seed);
   auto timer = HighResTimer::create();
   ASSERT_TRUE(timer.has_value());
   const LlmExecutorResult result =
@@ -635,7 +639,9 @@ TEST(LlmMemoryKernelIntegrationTest, OneWorkerProductionExecutorRealAsmSmokeMatc
 TEST(LlmMemoryKernelIntegrationTest, MultiWorkerProductionExecutorRealAsmCoversExactPlannerRanges) {
   const LlmMemoryWorkPlan plan = build_real_executor_plan({513, 2, 4, 2, 7, 1, 3, 2}, 3);
   ASSERT_TRUE(plan.valid) << plan.reason_code;
-  ASSERT_EQ(plan.effective_workers, 3u);
+  const LlmCpuExecutionPlan* cpu_plan = get_llm_cpu_execution_plan(plan);
+  ASSERT_NE(cpu_plan, nullptr);
+  ASSERT_EQ(cpu_plan->effective_workers, 3u);
   LlmExecutionResources resources;
   const LlmResourcePreparationResult prepared = prepare_llm_execution_resources(plan, resources);
   ASSERT_TRUE(prepared.valid) << prepared.reason_code;
@@ -643,10 +649,11 @@ TEST(LlmMemoryKernelIntegrationTest, MultiWorkerProductionExecutorRealAsmCoversE
   ASSERT_TRUE(scenario.valid) << scenario.reason_code;
 
   std::vector<OracleWorkerRun> independent;
-  independent.reserve(plan.effective_workers);
-  for (size_t worker = 0; worker < plan.effective_workers; ++worker) {
+  independent.reserve(cpu_plan->effective_workers);
+  for (size_t worker = 0; worker < cpu_plan->effective_workers; ++worker) {
     independent.push_back(oracle_worker_run(
-        resources.worker_layers(worker), plan.layer_descriptors_per_worker,
+        resources.worker_layers(worker),
+        cpu_plan->layer_descriptors_per_worker,
         resources.worker_sequences(worker), scenario.work_units,
         kLlmScenarioFlagMixed, scenario.scenario_seed));
   }
@@ -657,8 +664,8 @@ TEST(LlmMemoryKernelIntegrationTest, MultiWorkerProductionExecutorRealAsmCoversE
   ASSERT_TRUE(result.valid) << result.reason_code;
   EXPECT_TRUE(result.kernel_succeeded);
   EXPECT_TRUE(result.checksum_valid);
-  EXPECT_EQ(result.created_workers, plan.effective_workers);
-  EXPECT_EQ(result.completed_workers, plan.effective_workers);
+  EXPECT_EQ(result.created_workers, cpu_plan->effective_workers);
+  EXPECT_EQ(result.completed_workers, cpu_plan->effective_workers);
   ASSERT_EQ(result.actual_checksums.size(), independent.size());
 
   uint64_t weight_bytes = 0;

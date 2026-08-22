@@ -15,7 +15,7 @@
 
 /**
  * @file llm_work_plan.cpp
- * @brief Pure checked geometry, range, budget, and calibration planning
+ * @brief Pure checked logical and backend-specific LLM work planning
  */
 
 #include "llm_memory/llm_work_plan.h"
@@ -199,6 +199,11 @@ void append_component_identity(
 }
 
 std::string build_model_plan_identity(const LlmMemoryWorkPlan& plan) {
+  const LlmCpuExecutionPlan* const cpu_plan =
+      get_llm_cpu_execution_plan(plan);
+  if (cpu_plan == nullptr) {
+    return {};
+  }
   const LlmGeometry& geometry = plan.geometry;
   std::string identity = Constants::LLM_WORK_PLAN_IDENTITY_VERSION;
   append_identity_field(identity, "backend",
@@ -267,18 +272,19 @@ std::string build_model_plan_identity(const LlmMemoryWorkPlan& plan) {
   append_identity_field(identity, "traffic_crossover_denominator",
                         geometry.traffic_crossover_denominator);
   append_identity_field(identity, "requested_workers",
-                        plan.requested_workers);
+                        cpu_plan->requested_workers);
   append_identity_field(identity, "effective_workers",
-                        plan.effective_workers);
+                        cpu_plan->effective_workers);
   append_identity_field(identity, "layer_descriptors_per_worker",
-                        plan.layer_descriptors_per_worker);
+                        cpu_plan->layer_descriptors_per_worker);
   append_identity_field(identity, "sequence_descriptors_per_worker",
-                        plan.sequence_descriptors_per_worker);
+                        cpu_plan->sequence_descriptors_per_worker);
   append_identity_field(identity, "total_layer_descriptors",
-                        plan.total_layer_descriptors);
+                        cpu_plan->total_layer_descriptors);
   append_identity_field(identity, "total_sequence_descriptors",
-                        plan.total_sequence_descriptors);
-  append_identity_field(identity, "descriptor_bytes", plan.descriptor_bytes);
+                        cpu_plan->total_sequence_descriptors);
+  append_identity_field(identity, "descriptor_bytes",
+                        cpu_plan->descriptor_bytes);
   append_identity_field(identity, "base_seed", plan.base_seed);
   append_identity_field(identity, "weight_buffer_seed",
                         plan.weight_buffer_seed);
@@ -399,16 +405,21 @@ bool add_allocation_capacity(size_t capacity, size_t element_bytes,
 
 bool calculate_actual_planner_storage_bytes(
     const LlmMemoryWorkPlan& plan, size_t& planner_storage_bytes) {
+  const LlmCpuExecutionPlan* const cpu_plan =
+      get_llm_cpu_execution_plan(plan);
+  if (cpu_plan == nullptr) {
+    return false;
+  }
   planner_storage_bytes = 0;
   if (!add_allocation_capacity(plan.weight_layers.capacity(),
                                sizeof(LlmByteRange),
                                planner_storage_bytes) ||
-      !add_allocation_capacity(plan.workers.capacity(),
+      !add_allocation_capacity(cpu_plan->workers.capacity(),
                                sizeof(LlmWorkerWorkPlan),
                                planner_storage_bytes)) {
     return false;
   }
-  for (const LlmWorkerWorkPlan& worker : plan.workers) {
+  for (const LlmWorkerWorkPlan& worker : cpu_plan->workers) {
     if (!add_allocation_capacity(worker.layers.capacity(),
                                  sizeof(LlmLayerRangeTemplate),
                                  planner_storage_bytes) ||
@@ -423,8 +434,11 @@ bool calculate_actual_planner_storage_bytes(
 
 void discard_executable_templates(LlmMemoryWorkPlan& plan) {
   std::vector<LlmByteRange>().swap(plan.weight_layers);
-  std::vector<LlmWorkerWorkPlan>().swap(plan.workers);
-  plan.effective_workers = 0;
+  LlmCpuExecutionPlan* const cpu_plan = get_llm_cpu_execution_plan(plan);
+  if (cpu_plan != nullptr) {
+    std::vector<LlmWorkerWorkPlan>().swap(cpu_plan->workers);
+    cpu_plan->effective_workers = 0;
+  }
 }
 
 LlmMemoryWorkPlan invalid_config_plan(const std::string& reason_code) {
@@ -434,6 +448,22 @@ LlmMemoryWorkPlan invalid_config_plan(const std::string& reason_code) {
 }
 
 }  // namespace
+
+const LlmCpuExecutionPlan* get_llm_cpu_execution_plan(
+    const LlmMemoryWorkPlan& plan) noexcept {
+  if (plan.backend != LlmMemoryBackend::Cpu) {
+    return nullptr;
+  }
+  return std::get_if<LlmCpuExecutionPlan>(&plan.backend_execution_plan);
+}
+
+LlmCpuExecutionPlan* get_llm_cpu_execution_plan(
+    LlmMemoryWorkPlan& plan) noexcept {
+  if (plan.backend != LlmMemoryBackend::Cpu) {
+    return nullptr;
+  }
+  return std::get_if<LlmCpuExecutionPlan>(&plan.backend_execution_plan);
+}
 
 std::string build_llm_methodology_version(LlmMemoryBackend backend,
                                           LlmPhase phase,
@@ -490,15 +520,12 @@ LlmMemoryWorkPlan& LlmMemoryWorkPlan::operator=(
   valid = other.valid;
   reason_code = std::move(other.reason_code);
   geometry = std::move(other.geometry);
-  requested_workers = other.requested_workers;
-  available_workers = other.available_workers;
-  effective_workers = other.effective_workers;
-  layer_descriptors_per_worker = other.layer_descriptors_per_worker;
-  sequence_descriptors_per_worker = other.sequence_descriptors_per_worker;
-  total_layer_descriptors = other.total_layer_descriptors;
-  total_sequence_descriptors = other.total_sequence_descriptors;
-  descriptor_bytes = other.descriptor_bytes;
-  planner_storage_bytes = other.planner_storage_bytes;
+  backend = other.backend;
+  phase = other.phase;
+  kv_layout = other.kv_layout;
+  work_unit_kind = other.work_unit_kind;
+  weight_passes_per_work_unit = other.weight_passes_per_work_unit;
+  kv_replay_factor = other.kv_replay_factor;
   base_seed = other.base_seed;
   weight_buffer_seed = other.weight_buffer_seed;
   k_buffer_seed = other.k_buffer_seed;
@@ -506,29 +533,14 @@ LlmMemoryWorkPlan& LlmMemoryWorkPlan::operator=(
   scenario_seeds = other.scenario_seeds;
   memory_budget = std::move(other.memory_budget);
   weight_layers = std::move(other.weight_layers);
-  workers = std::move(other.workers);
-  backend = other.backend;
-  phase = other.phase;
-  kv_layout = other.kv_layout;
-  work_unit_kind = other.work_unit_kind;
-  weight_passes_per_work_unit = other.weight_passes_per_work_unit;
-  kv_replay_factor = other.kv_replay_factor;
   methodology_version = std::move(other.methodology_version);
   component_identities = std::move(other.component_identities);
   plan_identity = std::move(other.plan_identity);
+  backend_execution_plan = std::move(other.backend_execution_plan);
 
   other.valid = false;
   other.reason_code.clear();
   other.geometry.valid = false;
-  other.requested_workers = 0;
-  other.available_workers = 0;
-  other.effective_workers = 0;
-  other.layer_descriptors_per_worker = 0;
-  other.sequence_descriptors_per_worker = 0;
-  other.total_layer_descriptors = 0;
-  other.total_sequence_descriptors = 0;
-  other.descriptor_bytes = 0;
-  other.planner_storage_bytes = 0;
   other.base_seed = 0;
   other.weight_buffer_seed = 0;
   other.k_buffer_seed = 0;
@@ -537,7 +549,6 @@ LlmMemoryWorkPlan& LlmMemoryWorkPlan::operator=(
   other.memory_budget.valid = false;
   other.memory_budget.request.valid = false;
   other.weight_layers.clear();
-  other.workers.clear();
   other.backend = LlmMemoryBackend::Cpu;
   other.phase = LlmPhase::Decode;
   other.kv_layout = LlmKvLayout::Contiguous;
@@ -545,6 +556,7 @@ LlmMemoryWorkPlan& LlmMemoryWorkPlan::operator=(
   other.methodology_version.clear();
   other.component_identities = {};
   other.plan_identity.clear();
+  other.backend_execution_plan = LlmCpuExecutionPlan{};
   return *this;
 }
 
@@ -852,11 +864,12 @@ LlmMemoryWorkPlan build_llm_memory_work_plan(
     const LlmMemoryWorkPlanRequest& request) {
   LlmMemoryWorkPlan plan;
   plan.backend = request.backend;
+  if (request.backend == LlmMemoryBackend::Metal) {
+    plan.backend_execution_plan = LlmMetalExecutionPlan{};
+  }
   plan.phase = request.geometry.phase;
   plan.kv_layout = request.geometry.kv_layout;
   plan.work_unit_kind = llm_work_unit_kind_for_phase(plan.phase);
-  plan.requested_workers = request.requested_workers;
-  plan.available_workers = request.available_workers;
   plan.base_seed = request.base_seed;
   plan.weight_buffer_seed =
       derive_llm_domain_seed(request.base_seed, LlmSeedDomain::WeightBuffer);
@@ -875,6 +888,13 @@ LlmMemoryWorkPlan build_llm_memory_work_plan(
     plan.reason_code = LlmWorkPlanReason::BACKEND_NOT_ACTIVATED;
     return plan;
   }
+  LlmCpuExecutionPlan* const cpu_plan = get_llm_cpu_execution_plan(plan);
+  if (cpu_plan == nullptr) {
+    plan.reason_code = LlmWorkPlanReason::BACKEND_NOT_ACTIVATED;
+    return plan;
+  }
+  cpu_plan->requested_workers = request.requested_workers;
+  cpu_plan->available_workers = request.available_workers;
   plan.geometry = resolve_llm_geometry(request.geometry);
   if (!plan.geometry.valid) {
     plan.reason_code = plan.geometry.reason_code;
@@ -903,48 +923,51 @@ LlmMemoryWorkPlan build_llm_memory_work_plan(
   const size_t maximum_shared_worker_count =
       std::min(maximum_weight_layer_bytes,
                plan.geometry.k_or_v_sequence_visible_bytes);
-  plan.effective_workers =
+  cpu_plan->effective_workers =
       std::min({request.requested_workers, request.available_workers,
                 maximum_shared_worker_count});
-  if (plan.effective_workers == 0) {
+  if (cpu_plan->effective_workers == 0) {
     plan.reason_code = LlmWorkPlanReason::NO_EXECUTABLE_WORKER;
     return plan;
   }
 
-  plan.layer_descriptors_per_worker = plan.geometry.layer_count;
+  cpu_plan->layer_descriptors_per_worker = plan.geometry.layer_count;
   if (!NumericUtils::checked_multiply(
           plan.geometry.layer_count, plan.geometry.batch_size,
-          plan.sequence_descriptors_per_worker)) {
+          cpu_plan->sequence_descriptors_per_worker)) {
     plan.reason_code = LlmWorkPlanReason::LAYER_SEQUENCE_COUNT_OVERFLOW;
     return plan;
   }
   if (!NumericUtils::checked_multiply(
-          plan.layer_descriptors_per_worker, plan.effective_workers,
-          plan.total_layer_descriptors) ||
+          cpu_plan->layer_descriptors_per_worker,
+          cpu_plan->effective_workers, cpu_plan->total_layer_descriptors) ||
       !NumericUtils::checked_multiply(
-          plan.sequence_descriptors_per_worker, plan.effective_workers,
-          plan.total_sequence_descriptors)) {
+          cpu_plan->sequence_descriptors_per_worker,
+          cpu_plan->effective_workers,
+          cpu_plan->total_sequence_descriptors)) {
     plan.reason_code = LlmWorkPlanReason::DESCRIPTOR_COUNT_OVERFLOW;
     return plan;
   }
   size_t layer_descriptor_bytes = 0;
   size_t sequence_descriptor_bytes = 0;
   if (!NumericUtils::checked_multiply(
-          plan.total_layer_descriptors, sizeof(LlmLayerDescriptor),
+          cpu_plan->total_layer_descriptors, sizeof(LlmLayerDescriptor),
           layer_descriptor_bytes) ||
       !NumericUtils::checked_multiply(
-          plan.total_sequence_descriptors, sizeof(LlmKvSequenceDescriptor),
+          cpu_plan->total_sequence_descriptors,
+          sizeof(LlmKvSequenceDescriptor),
           sequence_descriptor_bytes) ||
       !NumericUtils::checked_add(layer_descriptor_bytes,
                                  sequence_descriptor_bytes,
-                                 plan.descriptor_bytes)) {
+                                 cpu_plan->descriptor_bytes)) {
     plan.reason_code = LlmWorkPlanReason::DESCRIPTOR_BYTES_OVERFLOW;
     return plan;
   }
 
   if (!calculate_planner_storage_bytes(
-          plan.geometry.layer_count, plan.sequence_descriptors_per_worker,
-          plan.effective_workers, plan.planner_storage_bytes)) {
+          plan.geometry.layer_count,
+          cpu_plan->sequence_descriptors_per_worker,
+          cpu_plan->effective_workers, cpu_plan->planner_storage_bytes)) {
     plan.reason_code = LlmWorkPlanReason::PLANNER_STORAGE_BYTES_OVERFLOW;
     return plan;
   }
@@ -954,17 +977,17 @@ LlmMemoryWorkPlan build_llm_memory_work_plan(
       !json_integer_is_safe(request.geometry.head_dimension) ||
       !json_integer_is_safe(request.geometry.visible_context_tokens) ||
       !json_integer_is_safe(request.geometry.batch_size) ||
-      !json_integer_is_safe(plan.layer_descriptors_per_worker) ||
-      !json_integer_is_safe(plan.sequence_descriptors_per_worker) ||
-      !json_integer_is_safe(plan.total_layer_descriptors) ||
-      !json_integer_is_safe(plan.total_sequence_descriptors)) {
+      !json_integer_is_safe(cpu_plan->layer_descriptors_per_worker) ||
+      !json_integer_is_safe(cpu_plan->sequence_descriptors_per_worker) ||
+      !json_integer_is_safe(cpu_plan->total_layer_descriptors) ||
+      !json_integer_is_safe(cpu_plan->total_sequence_descriptors)) {
     plan.reason_code = LlmWorkPlanReason::JSON_INTEGER_OUT_OF_RANGE;
     return plan;
   }
 
   plan.memory_budget.request = build_llm_memory_budget_request(
-      plan.geometry, plan.descriptor_bytes, plan.planner_storage_bytes,
-      request.checksum_auxiliary_bytes,
+      plan.geometry, cpu_plan->descriptor_bytes,
+      cpu_plan->planner_storage_bytes, request.checksum_auxiliary_bytes,
       request.orchestration_auxiliary_bytes,
       request.mapping_granularity_bytes);
   plan.memory_budget = evaluate_llm_memory_budget(
@@ -984,24 +1007,24 @@ LlmMemoryWorkPlan build_llm_memory_work_plan(
       weight_offset += layer_bytes;
     }
 
-    plan.workers.resize(plan.effective_workers);
-    for (size_t worker = 0; worker < plan.effective_workers; ++worker) {
-      plan.workers[worker].worker_index = worker;
-      plan.workers[worker].layers.reserve(plan.geometry.layer_count);
-      plan.workers[worker].sequences.reserve(
-          plan.sequence_descriptors_per_worker);
+    cpu_plan->workers.resize(cpu_plan->effective_workers);
+    for (size_t worker = 0; worker < cpu_plan->effective_workers; ++worker) {
+      cpu_plan->workers[worker].worker_index = worker;
+      cpu_plan->workers[worker].layers.reserve(plan.geometry.layer_count);
+      cpu_plan->workers[worker].sequences.reserve(
+          cpu_plan->sequence_descriptors_per_worker);
     }
 
     for (size_t layer = 0; layer < plan.geometry.layer_count; ++layer) {
       const std::vector<LlmByteRange> weight_ranges = partition_range(
           plan.weight_layers[layer].offset_bytes,
-          plan.weight_layers[layer].span_bytes, plan.effective_workers);
+          plan.weight_layers[layer].span_bytes, cpu_plan->effective_workers);
       const size_t first_sequence_index = layer * plan.geometry.batch_size;
-      for (size_t worker = 0; worker < plan.effective_workers; ++worker) {
+      for (size_t worker = 0; worker < cpu_plan->effective_workers; ++worker) {
         const LlmByteRange weight =
             worker < weight_ranges.size() ? weight_ranges[worker]
                                           : LlmByteRange{};
-        plan.workers[worker].layers.push_back(
+        cpu_plan->workers[worker].layers.push_back(
             {weight, first_sequence_index, plan.geometry.batch_size, layer});
       }
 
@@ -1019,15 +1042,16 @@ LlmMemoryWorkPlan build_llm_memory_work_plan(
             append_offset, plan.geometry.k_or_v_record_bytes_per_layer};
         const std::vector<LlmByteRange> visible_ranges = partition_range(
             visible_record.offset_bytes, visible_record.span_bytes,
-            plan.effective_workers);
-        for (size_t worker = 0; worker < plan.effective_workers; ++worker) {
+            cpu_plan->effective_workers);
+        for (size_t worker = 0; worker < cpu_plan->effective_workers;
+             ++worker) {
           const LlmByteRange visible =
               worker < visible_ranges.size() ? visible_ranges[worker]
                                              : LlmByteRange{};
           const LlmByteRange append = intersect_ranges(visible, append_record);
           const size_t append_record_byte_offset =
               append.span_bytes == 0 ? 0 : append.offset_bytes - append_offset;
-          plan.workers[worker].sequences.push_back(
+          cpu_plan->workers[worker].sequences.push_back(
               {visible, visible, append, append, layer, batch,
                append_record_byte_offset});
         }
@@ -1050,10 +1074,10 @@ LlmMemoryWorkPlan build_llm_memory_work_plan(
     plan.reason_code = LlmWorkPlanReason::PLANNER_STORAGE_BYTES_OVERFLOW;
     return plan;
   }
-  plan.planner_storage_bytes = actual_planner_storage_bytes;
+  cpu_plan->planner_storage_bytes = actual_planner_storage_bytes;
   plan.memory_budget.request = build_llm_memory_budget_request(
-      plan.geometry, plan.descriptor_bytes, plan.planner_storage_bytes,
-      request.checksum_auxiliary_bytes,
+      plan.geometry, cpu_plan->descriptor_bytes,
+      cpu_plan->planner_storage_bytes, request.checksum_auxiliary_bytes,
       request.orchestration_auxiliary_bytes,
       request.mapping_granularity_bytes);
   plan.memory_budget = evaluate_llm_memory_budget(

@@ -23,6 +23,7 @@
 
 #include "core/config/constants.h"
 #include "core/timing/timer.h"
+#include "llm_memory/llm_cpu_backend.h"
 #include "llm_memory/llm_executor.h"
 #include "llm_memory/llm_work_plan.h"
 #include "test_memory_system_calls.h"
@@ -36,6 +37,16 @@ constexpr uint64_t kAppendBatch = 0x94D049BB133111EBULL;
 constexpr uint64_t kAppendWord = 0xD6E8FEB86659FD93ULL;
 constexpr uint64_t kAppendKDomain = 0x4B4B4B4B4B4B4B4BULL;
 constexpr uint64_t kAppendVDomain = 0x5656565656565656ULL;
+
+const LlmCpuExecutionPlan& cpu_execution_plan(
+    const LlmMemoryWorkPlan& plan) {
+  const LlmCpuExecutionPlan* const cpu_plan =
+      get_llm_cpu_execution_plan(plan);
+  if (cpu_plan == nullptr) {
+    throw std::logic_error("expected CPU execution plan");
+  }
+  return *cpu_plan;
+}
 
 LlmMemoryWorkPlanRequest plan_request(const LlmGeometryRequest& geometry, size_t workers = 2) {
   LlmMemoryWorkPlanRequest request;
@@ -130,8 +141,9 @@ void apply_append(std::vector<uint8_t>& visible, const uint8_t* visible_pointer,
 
 std::vector<LlmWorkerChecksum> scalar_expected(const LlmMemoryWorkPlan& model, const LlmScenarioWorkPlan& scenario,
                                                const LlmExecutionResources& resources) {
-  std::vector<LlmWorkerChecksum> expected(model.effective_workers);
-  for (size_t worker = 0; worker < model.effective_workers; ++worker) {
+  const LlmCpuExecutionPlan& cpu_plan = cpu_execution_plan(model);
+  std::vector<LlmWorkerChecksum> expected(cpu_plan.effective_workers);
+  for (size_t worker = 0; worker < cpu_plan.effective_workers; ++worker) {
     expected[worker].weight = initial_llm_read_checksum(LlmChecksumComponent::Weight);
     expected[worker].k = initial_llm_read_checksum(LlmChecksumComponent::K);
     expected[worker].v = initial_llm_read_checksum(LlmChecksumComponent::V);
@@ -371,10 +383,11 @@ TEST_F(LlmMemoryExecutorTest, PreparationMaterializesExactDescriptorsPatternsAnd
     EXPECT_EQ(v[byte], expected_buffer_byte(plan.v_buffer_seed, byte));
   }
 
-  for (size_t worker = 0; worker < plan.effective_workers; ++worker) {
+  const LlmCpuExecutionPlan& cpu_plan = cpu_execution_plan(plan);
+  for (size_t worker = 0; worker < cpu_plan.effective_workers; ++worker) {
     const LlmLayerDescriptor& layer = resources.worker_layers(worker)[0];
     const LlmKvSequenceDescriptor& sequence = resources.worker_sequences(worker)[0];
-    const LlmWorkerWorkPlan& planned = plan.workers[worker];
+    const LlmWorkerWorkPlan& planned = cpu_plan.workers[worker];
     EXPECT_EQ(layer.weight_ptr,
               planned.layers[0].weight.span_bytes == 0 ? nullptr : weight + planned.layers[0].weight.offset_bytes);
     EXPECT_EQ(layer.weight_bytes, planned.layers[0].weight.span_bytes);
@@ -407,8 +420,9 @@ TEST_F(LlmMemoryExecutorTest, PreparationMaterializesExactDescriptorsPatternsAnd
     EXPECT_EQ(actual_v.span_bytes, v_reference.span_bytes);
   }
 
-  EXPECT_EQ(plan.workers[0].sequences[0].append_record_byte_offset, 0u);
-  EXPECT_EQ(plan.workers[1].sequences[0].append_record_byte_offset, 13u);
+  EXPECT_EQ(cpu_plan.workers[0].sequences[0].append_record_byte_offset, 0u);
+  EXPECT_EQ(cpu_plan.workers[1].sequences[0].append_record_byte_offset,
+            13u);
   EXPECT_EQ(resources.worker_sequences(1)[0].k_append_bytes, 6u);
 
   const size_t weight_slot = FakeMemorySystemCallState::kSlotSize;
@@ -436,6 +450,27 @@ TEST_F(LlmMemoryExecutorTest, StructuralValidationRejectsDivergentVMappingBefore
   EXPECT_EQ(result.reason_code, LlmExecutorReason::INVALID_WORK_PLAN);
   EXPECT_EQ(state.map_calls, 0u);
   EXPECT_FALSE(buffers.complete());
+}
+
+TEST_F(LlmMemoryExecutorTest,
+       BackendVariantMismatchIsRejectedBeforeResourceAllocation) {
+  LlmMemoryWorkPlan plan =
+      build_executor_ready_plan({64, 1, 1, 1, 19, 1, 2, 1}, 2);
+  ASSERT_TRUE(plan.valid) << plan.reason_code;
+  plan.backend_execution_plan = LlmMetalExecutionPlan{};
+
+  const LlmExecutorAuxiliaryEstimate auxiliary =
+      calculate_llm_executor_auxiliary_estimate(plan);
+  EXPECT_FALSE(auxiliary.valid);
+  EXPECT_EQ(auxiliary.reason_code, LlmExecutorReason::INVALID_WORK_PLAN);
+
+  LlmBufferSet buffers;
+  const LlmBufferAllocationResult allocation =
+      allocate_llm_buffers(plan, buffers);
+  EXPECT_FALSE(allocation.valid);
+  EXPECT_EQ(allocation.reason_code, LlmExecutorReason::INVALID_WORK_PLAN);
+  EXPECT_FALSE(buffers.complete());
+  EXPECT_EQ(state.map_calls, 0u);
 }
 
 TEST_F(LlmMemoryExecutorTest, ExpectedChecksumsMatchIndependentAllScenarioMultiStepOracle) {
@@ -500,21 +535,24 @@ TEST_F(LlmMemoryExecutorTest, FakeKernelExecutorHonorsInvocationTimingQosAndChec
       execute_llm_scenario(plan, scenario, resources, *timer, {fake_kernel, &context}, &control);
 
   ASSERT_TRUE(result.valid) << result.reason_code;
+  const size_t effective_workers =
+      cpu_execution_plan(plan).effective_workers;
   EXPECT_EQ(result.reason_code, LlmExecutorReason::VALID);
   EXPECT_DOUBLE_EQ(result.elapsed_seconds, 100.0 / 1e9);
-  EXPECT_EQ(result.requested_workers, plan.effective_workers);
-  EXPECT_EQ(result.created_workers, plan.effective_workers);
-  EXPECT_EQ(result.completed_workers, plan.effective_workers);
+  EXPECT_EQ(result.requested_workers, effective_workers);
+  EXPECT_EQ(result.created_workers, effective_workers);
+  EXPECT_EQ(result.completed_workers, effective_workers);
   EXPECT_EQ(result.qos_successful_workers, 1u);
-  EXPECT_EQ(result.qos_failed_workers, plan.effective_workers - 1);
+  EXPECT_EQ(result.qos_failed_workers, effective_workers - 1);
   EXPECT_TRUE(result.timer_started);
   EXPECT_TRUE(result.timer_stopped);
   EXPECT_TRUE(result.kernel_succeeded);
   EXPECT_TRUE(result.checksum_evaluated);
   EXPECT_TRUE(result.checksum_valid);
-  EXPECT_EQ(context.calls.load(std::memory_order_relaxed), plan.effective_workers);
+  EXPECT_EQ(context.calls.load(std::memory_order_relaxed),
+            effective_workers);
 
-  ASSERT_EQ(context.invocations.size(), plan.effective_workers);
+  ASSERT_EQ(context.invocations.size(), effective_workers);
   for (const LlmKernelInvocation& invocation : context.invocations) {
     EXPECT_EQ(invocation.layers, resources.worker_layers(invocation.worker_index));
     EXPECT_EQ(invocation.sequences, resources.worker_sequences(invocation.worker_index));
@@ -630,6 +668,8 @@ TEST_F(LlmMemoryExecutorTest, ExecutorCancelsOrFinalizesWorkersWhenTimerHooksThr
   ASSERT_TRUE(scenario.valid) << scenario.reason_code;
   const LlmExpectedChecksumResult expected = calculate_llm_expected_checksums(plan, scenario, resources);
   ASSERT_TRUE(expected.valid) << expected.reason_code;
+  const size_t effective_workers =
+      cpu_execution_plan(plan).effective_workers;
 
   {
     ScopedThrowingStartTimer timer_calls;
@@ -644,7 +684,7 @@ TEST_F(LlmMemoryExecutorTest, ExecutorCancelsOrFinalizesWorkersWhenTimerHooksThr
         execute_llm_scenario(plan, scenario, resources, *timer, {fake_kernel, &context}, &control);
     EXPECT_FALSE(result.valid);
     EXPECT_EQ(result.reason_code, LlmExecutorReason::INVALID_ELAPSED_TIME);
-    EXPECT_EQ(result.created_workers, plan.effective_workers);
+    EXPECT_EQ(result.created_workers, effective_workers);
     EXPECT_EQ(result.completed_workers, 0u);
     EXPECT_FALSE(result.worker_startup_failed);
     EXPECT_FALSE(result.timer_started);
@@ -662,11 +702,108 @@ TEST_F(LlmMemoryExecutorTest, ExecutorCancelsOrFinalizesWorkersWhenTimerHooksThr
     const LlmExecutorResult result = execute_llm_scenario(plan, scenario, resources, *timer, {fake_kernel, &context});
     EXPECT_FALSE(result.valid);
     EXPECT_EQ(result.reason_code, LlmExecutorReason::INVALID_ELAPSED_TIME);
-    EXPECT_EQ(result.created_workers, plan.effective_workers);
-    EXPECT_EQ(result.completed_workers, plan.effective_workers);
+    EXPECT_EQ(result.created_workers, effective_workers);
+    EXPECT_EQ(result.completed_workers, effective_workers);
     EXPECT_TRUE(result.kernel_succeeded);
     EXPECT_TRUE(result.timer_started);
     EXPECT_FALSE(result.timer_stopped);
-    EXPECT_EQ(context.calls.load(std::memory_order_relaxed), plan.effective_workers);
+    EXPECT_EQ(context.calls.load(std::memory_order_relaxed),
+              effective_workers);
   }
+}
+
+TEST_F(LlmMemoryExecutorTest, CpuAdapterOwnsCpuLifecycleAcceptanceAndPreservesTaggedEvidence) {
+  const LlmMemoryWorkPlan plan =
+      build_executor_ready_plan({128, 1, 1, 1, 16, 1, 2, 1}, 2);
+  ASSERT_TRUE(plan.valid) << plan.reason_code;
+  const LlmCpuExecutionPlan& cpu_plan = cpu_execution_plan(plan);
+  const LlmScenarioWorkPlan scenario =
+      build_llm_scenario_work_plan(plan, LlmScenario::Mixed, 3, true);
+  ASSERT_TRUE(scenario.valid) << scenario.reason_code;
+  LlmRunnerTaskContext context;
+  context.kind = LlmRunnerTaskKind::Measurement;
+  context.purpose = "measurement";
+  context.scenario = scenario.scenario;
+  context.loop_index = 4;
+  context.order_position = 2;
+
+  const auto successful_cpu_evidence = [&]() {
+    LlmExecutorResult execution;
+    execution.valid = true;
+    execution.reason_code = LlmExecutorReason::VALID;
+    execution.elapsed_seconds = 0.25;
+    execution.requested_workers = cpu_plan.effective_workers;
+    execution.created_workers = cpu_plan.effective_workers;
+    execution.completed_workers = cpu_plan.effective_workers;
+    execution.qos_successful_workers = cpu_plan.effective_workers;
+    execution.kernel_succeeded = true;
+    execution.timer_started = true;
+    execution.timer_stopped = true;
+    execution.checksum_evaluated = true;
+    execution.checksum_valid = true;
+    execution.expected_checksums.resize(cpu_plan.effective_workers);
+    execution.actual_checksums = execution.expected_checksums;
+    execution.expected_run_checksum = {11, 22};
+    execution.actual_run_checksum = execution.expected_run_checksum;
+    return execution;
+  };
+
+  LlmTaskExecutionResult result = adapt_llm_cpu_executor_result(
+      plan, scenario, context, successful_cpu_evidence());
+  EXPECT_EQ(result.status, LlmTaskExecutionStatus::Complete);
+  EXPECT_EQ(result.reason_code, LlmBackendReason::VALID);
+  EXPECT_EQ(result.identity.backend, LlmMemoryBackend::Cpu);
+  EXPECT_EQ(result.identity.scenario, LlmScenario::Mixed);
+  EXPECT_EQ(result.identity.loop_index, 4u);
+  EXPECT_EQ(result.identity.order_position, 2u);
+  EXPECT_EQ(result.identity.model_plan_identity, plan.plan_identity);
+  EXPECT_EQ(result.identity.scenario_plan_identity, scenario.plan_identity);
+  EXPECT_TRUE(result.timing.evaluated);
+  EXPECT_TRUE(result.timing.valid);
+  EXPECT_DOUBLE_EQ(result.timing.elapsed_seconds, 0.25);
+  EXPECT_EQ(result.completion.completed_work_units, scenario.work_units);
+  EXPECT_EQ(result.completion.completed_effective_model_payload_bytes,
+            scenario.effective_model_payload_bytes);
+  EXPECT_EQ(result.completion.completed_layout_metadata_lookup_count,
+            scenario.layout_metadata_lookup_count);
+  EXPECT_EQ(result.completion.completed_layout_metadata_read_bytes,
+            scenario.layout_metadata_read_bytes);
+  EXPECT_EQ(result.completion.completed_task_accounted_bytes,
+            scenario.task_accounted_bytes);
+  EXPECT_TRUE(result.validation.evaluated);
+  EXPECT_TRUE(result.validation.valid);
+  const LlmExecutorResult* retained = get_llm_cpu_task_evidence(result);
+  ASSERT_NE(retained, nullptr);
+  EXPECT_EQ(retained->expected_checksums.size(), cpu_plan.effective_workers);
+  EXPECT_EQ(retained->actual_checksums.size(), cpu_plan.effective_workers);
+
+  LlmExecutorResult malformed = successful_cpu_evidence();
+  malformed.actual_checksums.pop_back();
+  result = adapt_llm_cpu_executor_result(plan, scenario, context,
+                                         std::move(malformed));
+  EXPECT_EQ(result.status, LlmTaskExecutionStatus::Failed);
+  EXPECT_EQ(result.reason_code, LlmExecutorReason::INVALID_RESOURCES);
+  EXPECT_FALSE(result.validation.evaluated);
+
+  LlmExecutorResult checksum_mismatch = successful_cpu_evidence();
+  checksum_mismatch.valid = false;
+  checksum_mismatch.reason_code = LlmExecutorReason::CHECKSUM_MISMATCH;
+  checksum_mismatch.checksum_valid = false;
+  result = adapt_llm_cpu_executor_result(
+      plan, scenario, context, std::move(checksum_mismatch));
+  EXPECT_EQ(result.status, LlmTaskExecutionStatus::Invalid);
+  EXPECT_EQ(result.reason_code, LlmExecutorReason::CHECKSUM_MISMATCH);
+  EXPECT_TRUE(result.validation.evaluated);
+  EXPECT_FALSE(result.validation.valid);
+
+  LlmExecutorResult invalid_timer = successful_cpu_evidence();
+  invalid_timer.valid = false;
+  invalid_timer.reason_code = LlmExecutorReason::INVALID_ELAPSED_TIME;
+  invalid_timer.elapsed_seconds = 0.0;
+  result = adapt_llm_cpu_executor_result(plan, scenario, context,
+                                         std::move(invalid_timer));
+  EXPECT_EQ(result.status, LlmTaskExecutionStatus::Invalid);
+  EXPECT_EQ(result.reason_code, LlmExecutorReason::INVALID_ELAPSED_TIME);
+  EXPECT_TRUE(result.timing.evaluated);
+  EXPECT_FALSE(result.timing.valid);
 }

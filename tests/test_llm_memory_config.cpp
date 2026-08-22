@@ -14,6 +14,7 @@
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 #include <gtest/gtest.h>
+#include <mach/mach_error.h>
 
 #include <algorithm>
 #include <cstdlib>
@@ -23,11 +24,33 @@
 #include <vector>
 
 #include "core/config/version.h"
+#include "core/timing/timer.h"
 #include "llm_memory/llm_memory.h"
 #include "llm_memory/llm_runner.h"
 #include "output/console/messages/messages_api.h"
 
 namespace {
+
+uint64_t unused_timer_ticks() { return 0; }
+
+kern_return_t failing_timebase_info(mach_timebase_info_t) {
+  return KERN_FAILURE;
+}
+
+class ScopedFailingTimerSystemCalls {
+ public:
+  ScopedFailingTimerSystemCalls() {
+    set_timer_system_calls_for_testing(
+        {unused_timer_ticks, failing_timebase_info});
+  }
+
+  ScopedFailingTimerSystemCalls(const ScopedFailingTimerSystemCalls&) =
+      delete;
+  ScopedFailingTimerSystemCalls& operator=(
+      const ScopedFailingTimerSystemCalls&) = delete;
+
+  ~ScopedFailingTimerSystemCalls() { reset_timer_system_calls_for_testing(); }
+};
 
 LlmMemoryConfig valid_config() {
   LlmMemoryConfig config;
@@ -779,6 +802,35 @@ TEST(LlmMemoryConfigTest, ConvertsWeightMiBWithCheckedArithmetic) {
 
   config.weight_size_mb = maximum_mb + 1;
   expect_invalid(config, LlmMemoryConfigReason::WEIGHT_SIZE_BYTES_OVERFLOW);
+}
+
+TEST(LlmMemoryConfigTest,
+     TimerSetupFailureKeepsStdoutEmptyAndPreservesLegacyDiagnosticBoundary) {
+  std::vector<std::string> arguments = valid_llm_arguments();
+  arguments.insert(arguments.end(), {"--iterations", "1", "--count", "1",
+                                     "--output", "-"});
+  std::vector<char*> argv;
+  argv.reserve(arguments.size());
+  for (std::string& argument : arguments) {
+    argv.push_back(argument.data());
+  }
+  const ScopedFailingTimerSystemCalls timer_system_calls;
+
+  testing::internal::CaptureStdout();
+  testing::internal::CaptureStderr();
+  const int status =
+      run_llm_memory_mode(static_cast<int>(argv.size()), argv.data());
+  const std::string stderr_output = testing::internal::GetCapturedStderr();
+  const std::string stdout_output = testing::internal::GetCapturedStdout();
+
+  EXPECT_EQ(status, EXIT_FAILURE);
+  EXPECT_TRUE(stdout_output.empty());
+  EXPECT_NE(stderr_output.find(Messages::error_mach_timebase_info_failed(
+                mach_error_string(KERN_FAILURE))),
+            std::string::npos);
+  EXPECT_EQ(stderr_output.find(Messages::error_llm_memory_run_failed(
+                LlmBackendReason::TIMER_UNAVAILABLE)),
+            std::string::npos);
 }
 
 TEST(LlmMemoryConfigTest,

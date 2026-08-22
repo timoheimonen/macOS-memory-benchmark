@@ -71,7 +71,7 @@ constexpr std::string_view kLlmRunnerReasons[] = {
     LlmRunnerReason::INVALID_CONFIG,
     LlmRunnerReason::INVALID_MODEL_WORK_PLAN,
     LlmRunnerReason::CONFIG_WORK_PLAN_MISMATCH,
-    LlmRunnerReason::EXECUTOR_UNAVAILABLE,
+    LlmRunnerReason::BACKEND_UNAVAILABLE,
     LlmRunnerReason::AUXILIARY_BYTES_OVERFLOW,
     LlmRunnerReason::AUXILIARY_BUDGET_INSUFFICIENT,
     LlmRunnerReason::PLANNED_COUNTER_OVERFLOW,
@@ -81,6 +81,23 @@ constexpr std::string_view kLlmRunnerReasons[] = {
     LlmRunnerReason::CHECKPOINT_WRITE_FAILED,
     LlmRunnerReason::RUNNER_EXCEPTION,
     LlmRunnerReason::RUNNER_UNKNOWN_EXCEPTION,
+};
+constexpr std::string_view kLlmBackendReasons[] = {
+    LlmBackendReason::VALID,
+    LlmBackendReason::NOT_INITIALIZED,
+    LlmBackendReason::BACKEND_MISMATCH,
+    LlmBackendReason::BACKEND_NOT_ACTIVATED,
+    LlmBackendReason::BACKEND_INITIALIZATION_FAILED,
+    LlmBackendReason::TIMER_UNAVAILABLE,
+    LlmBackendReason::EXECUTION_PLAN_MISMATCH,
+    LlmBackendReason::RESOURCES_NOT_PREPARED,
+    LlmBackendReason::RESOURCE_RELEASE_FAILED,
+    LlmBackendReason::TASK_IDENTITY_MISMATCH,
+    LlmBackendReason::TASK_COMPLETION_MISMATCH,
+    LlmBackendReason::VALIDATION_NOT_EVALUATED,
+    LlmBackendReason::VALIDATION_FAILED,
+    LlmBackendReason::INVALID_AUTHORITATIVE_ELAPSED,
+    LlmBackendReason::TASK_UNSUPPORTED,
 };
 constexpr std::string_view kLlmWorkPlanReasons[] = {
     LlmWorkPlanReason::VALID,
@@ -161,15 +178,6 @@ bool checked_add_to(size_t value, size_t& total) noexcept {
   return true;
 }
 
-std::string_view canonical_executor_reason(std::string_view reason_code) noexcept {
-  for (std::string_view candidate : kLlmExecutorReasons) {
-    if (reason_code == candidate) {
-      return candidate;
-    }
-  }
-  return LlmExecutorReason::INVALID_RESOURCES;
-}
-
 std::string_view canonical_calibration_purpose(std::string_view purpose) noexcept {
   constexpr std::array<std::string_view, 7> kPurposes = {
       "explicit-warmup",    "pilot-warmup",       "pilot", "duration-trial-warmup", "duration-trial",
@@ -199,6 +207,7 @@ void reset_uninitialized_failure(LlmMemoryResult& result, const char* reason_cod
 
 bool inputs_match(const LlmMemoryConfig& config, const LlmMemoryWorkPlan& plan) {
   const LlmMemoryConfigValidation validation = validate_llm_memory_config(config);
+  const LlmCpuExecutionPlan* cpu_plan = get_llm_cpu_execution_plan(plan);
   if (!validation.valid || !plan.valid || !plan.geometry.valid || plan.plan_identity.empty()) {
     return false;
   }
@@ -213,24 +222,27 @@ bool inputs_match(const LlmMemoryConfig& config, const LlmMemoryWorkPlan& plan) 
          config.kv_element_bytes == geometry.kv_element_bytes &&
          config.visible_context_tokens == geometry.decode->visible_context_tokens &&
          config.batch_size == geometry.batch_size &&
-         config.requested_workers == plan.requested_workers && config.available_workers == plan.available_workers &&
+         cpu_plan != nullptr &&
+         config.requested_workers == cpu_plan->requested_workers &&
+         config.available_workers == cpu_plan->available_workers &&
          config.seed == plan.base_seed;
 }
 
 std::string_view runner_budget_admission_reason(
-    const LlmMemoryWorkPlan& plan, const LlmRunnerAuxiliaryEstimate& runner_auxiliary) noexcept {
-  const LlmExecutorAuxiliaryEstimate executor_auxiliary = calculate_llm_executor_auxiliary_estimate(plan);
-  if (!executor_auxiliary.valid) {
-    return executor_auxiliary.reason_code;
+    const LlmMemoryWorkPlan& plan, const LlmRunnerAuxiliaryEstimate& runner_auxiliary,
+    const LlmBackend& backend) noexcept {
+  const LlmBackendAuxiliaryEstimate backend_auxiliary = backend.calculate_auxiliary_estimate(plan);
+  if (!backend_auxiliary.valid) {
+    return backend_auxiliary.reason_code;
   }
   if (!runner_auxiliary.valid) {
     return runner_auxiliary.reason_code;
   }
   size_t required_checksum = 0;
   size_t required_orchestration = 0;
-  if (!NumericUtils::checked_add(executor_auxiliary.checksum_auxiliary_bytes, runner_auxiliary.checksum_auxiliary_bytes,
+  if (!NumericUtils::checked_add(backend_auxiliary.checksum_auxiliary_bytes, runner_auxiliary.checksum_auxiliary_bytes,
                                  required_checksum) ||
-      !NumericUtils::checked_add(executor_auxiliary.orchestration_auxiliary_bytes,
+      !NumericUtils::checked_add(backend_auxiliary.orchestration_auxiliary_bytes,
                                  runner_auxiliary.orchestration_auxiliary_bytes, required_orchestration)) {
     return LlmRunnerReason::AUXILIARY_BYTES_OVERFLOW;
   }
@@ -256,67 +268,149 @@ bool pending_stop_after_failure(const LlmMemoryResult& result, const LlmRunnerHo
   }
 }
 
-LlmTaskExecutionEvidence compact_execution(const LlmExecutorResult& execution) {
+const LlmExecutorResult* cpu_executor_evidence(
+    const LlmTaskExecutionResult& execution) noexcept {
+  const auto* cpu = std::get_if<LlmCpuTaskEvidence>(&execution.backend_evidence);
+  return cpu == nullptr ? nullptr : &cpu->executor;
+}
+
+LlmTaskExecutionEvidence compact_execution(
+    const LlmTaskExecutionResult& execution) {
   LlmTaskExecutionEvidence evidence;
-  const bool checksum_evidence_complete = execution.checksum_evaluated && execution.requested_workers != 0 &&
-                                          execution.expected_checksums.size() == execution.requested_workers &&
-                                          execution.actual_checksums.size() == execution.requested_workers;
-  evidence.valid = execution.valid;
-  evidence.reason_code = canonical_executor_reason(execution.reason_code);
-  evidence.elapsed_seconds = execution.elapsed_seconds;
-  evidence.requested_workers = execution.requested_workers;
-  evidence.created_workers = execution.created_workers;
-  evidence.completed_workers = execution.completed_workers;
-  evidence.qos_successful_workers = execution.qos_successful_workers;
-  evidence.qos_failed_workers = execution.qos_failed_workers;
-  evidence.worker_startup_failed = execution.worker_startup_failed;
-  evidence.kernel_succeeded = execution.kernel_succeeded;
-  evidence.timer_started = execution.timer_started;
-  evidence.timer_stopped = execution.timer_stopped;
-  evidence.checksum_evaluated = checksum_evidence_complete;
-  evidence.checksum_valid = checksum_evidence_complete && execution.checksum_valid;
-  if (checksum_evidence_complete) {
-    evidence.expected_run_checksum = execution.expected_run_checksum;
-    evidence.actual_run_checksum = execution.actual_run_checksum;
+  evidence.status = execution.status;
+  evidence.valid = execution.status == LlmTaskExecutionStatus::Complete;
+  evidence.reason_code = canonicalize_llm_result_reason_code(execution.reason_code);
+  evidence.elapsed_seconds = execution.timing.elapsed_seconds;
+  evidence.timing_evaluated = execution.timing.evaluated;
+  evidence.timing_valid = execution.timing.valid;
+  evidence.completion = execution.completion;
+  evidence.validation_evaluated = execution.validation.evaluated;
+  evidence.validation_valid = execution.validation.valid;
+  const LlmExecutorResult* cpu = cpu_executor_evidence(execution);
+  if (cpu != nullptr) {
+    const bool checksum_evidence_complete =
+        cpu->checksum_evaluated && cpu->requested_workers != 0 &&
+        cpu->expected_checksums.size() == cpu->requested_workers &&
+        cpu->actual_checksums.size() == cpu->requested_workers;
+    evidence.cpu_evidence_available = true;
+    evidence.requested_workers = cpu->requested_workers;
+    evidence.created_workers = cpu->created_workers;
+    evidence.completed_workers = cpu->completed_workers;
+    evidence.qos_successful_workers = cpu->qos_successful_workers;
+    evidence.qos_failed_workers = cpu->qos_failed_workers;
+    evidence.worker_startup_failed = cpu->worker_startup_failed;
+    evidence.kernel_succeeded = cpu->kernel_succeeded;
+    evidence.timer_started = cpu->timer_started;
+    evidence.timer_stopped = cpu->timer_stopped;
+    evidence.checksum_evaluated = checksum_evidence_complete;
+    evidence.checksum_valid = checksum_evidence_complete && cpu->checksum_valid;
+    if (checksum_evidence_complete) {
+      evidence.expected_run_checksum = cpu->expected_run_checksum;
+      evidence.actual_run_checksum = cpu->actual_run_checksum;
+    }
   }
   evidence.available = true;
   return evidence;
 }
 
-bool execution_lifecycle_is_complete(const LlmExecutorResult& execution, size_t effective_workers) noexcept {
-  return execution.requested_workers == effective_workers && execution.created_workers == effective_workers &&
-         execution.completed_workers == effective_workers &&
-         execution.qos_successful_workers <= effective_workers &&
-         execution.qos_failed_workers == effective_workers - execution.qos_successful_workers &&
-         !execution.worker_startup_failed && execution.kernel_succeeded && execution.timer_started &&
-         execution.timer_stopped && execution.expected_checksums.size() == effective_workers &&
-         execution.actual_checksums.size() == effective_workers;
+bool task_identity_matches(const LlmTaskIdentity& identity,
+                           const LlmMemoryWorkPlan& model_plan,
+                           const LlmScenarioWorkPlan& task_plan,
+                           const LlmRunnerTaskContext& context) noexcept {
+  return identity.backend == model_plan.backend &&
+         identity.phase == model_plan.phase &&
+         identity.kv_layout == model_plan.kv_layout &&
+         identity.work_unit_kind == task_plan.work_unit_kind &&
+         identity.kv_write_kind == task_plan.kv_write_kind &&
+         identity.task_kind == context.kind &&
+         identity.scenario == task_plan.scenario &&
+         identity.scenario == context.scenario &&
+         identity.attempt_index == context.attempt_index &&
+         identity.loop_index == context.loop_index &&
+         identity.order_position == context.order_position &&
+         identity.purpose == context.purpose &&
+         identity.model_plan_identity == model_plan.plan_identity &&
+         identity.scenario_plan_identity == task_plan.plan_identity;
 }
 
-bool execution_is_accepted(const LlmExecutorResult& execution, size_t effective_workers) noexcept {
-  return execution.valid && canonical_executor_reason(execution.reason_code) == LlmExecutorReason::VALID &&
-         execution_lifecycle_is_complete(execution, effective_workers) && execution.checksum_evaluated &&
-         execution.checksum_valid && std::isfinite(execution.elapsed_seconds) && execution.elapsed_seconds > 0.0;
+bool task_completion_matches(const LlmTaskCompletion& completion,
+                             const LlmScenarioWorkPlan& task_plan) noexcept {
+  return completion.planned_work_units == task_plan.work_units &&
+         completion.completed_work_units == task_plan.work_units &&
+         completion.completed_effective_model_payload_bytes ==
+             task_plan.effective_model_payload_bytes &&
+         completion.completed_layout_metadata_lookup_count ==
+             task_plan.layout_metadata_lookup_count &&
+         completion.completed_layout_metadata_read_bytes ==
+             task_plan.layout_metadata_read_bytes &&
+         completion.completed_task_accounted_bytes ==
+             task_plan.task_accounted_bytes;
 }
 
-std::string_view execution_failure_reason(const LlmExecutorResult& execution, size_t effective_workers) noexcept {
-  const std::string_view reason_code = canonical_executor_reason(execution.reason_code);
-  if (!execution.valid || reason_code != LlmExecutorReason::VALID ||
-      !execution_lifecycle_is_complete(execution, effective_workers)) {
-    return reason_code == LlmExecutorReason::VALID ? std::string_view(LlmExecutorReason::INVALID_RESOURCES)
-                                                   : reason_code;
-  }
-  if (!execution.checksum_evaluated) {
-    return LlmExecutorReason::INVALID_RESOURCES;
-  }
-  if (!execution.checksum_valid) {
-    return LlmExecutorReason::CHECKSUM_MISMATCH;
-  }
-  return LlmExecutorReason::INVALID_ELAPSED_TIME;
+bool execution_is_accepted(const LlmTaskExecutionResult& execution,
+                           const LlmMemoryWorkPlan& model_plan,
+                           const LlmScenarioWorkPlan& task_plan,
+                           const LlmRunnerTaskContext& context) noexcept {
+  return execution.status == LlmTaskExecutionStatus::Complete &&
+         execution.reason_code == LlmBackendReason::VALID &&
+         task_identity_matches(execution.identity, model_plan, task_plan,
+                               context) &&
+         execution.timing.evaluated && execution.timing.valid &&
+         std::isfinite(execution.timing.elapsed_seconds) &&
+         execution.timing.elapsed_seconds > 0.0 &&
+         task_completion_matches(execution.completion, task_plan) &&
+         execution.validation.evaluated && execution.validation.valid;
 }
 
-LlmMeasurementStatus execution_failure_status(std::string_view reason_code) noexcept {
-  return reason_code == LlmExecutorReason::CHECKSUM_MISMATCH || reason_code == LlmExecutorReason::INVALID_ELAPSED_TIME
+std::string_view execution_failure_reason(
+    const LlmTaskExecutionResult& execution,
+    const LlmMemoryWorkPlan& model_plan,
+    const LlmScenarioWorkPlan& task_plan,
+    const LlmRunnerTaskContext& context) noexcept {
+  const std::string_view reason_code =
+      canonicalize_llm_result_reason_code(execution.reason_code);
+  if (execution.status == LlmTaskExecutionStatus::Unsupported) {
+    return reason_code == LlmRunnerReason::RUNNER_UNKNOWN_EXCEPTION
+               ? std::string_view(LlmBackendReason::TASK_UNSUPPORTED)
+               : reason_code;
+  }
+  if (execution.status == LlmTaskExecutionStatus::Failed ||
+      execution.status == LlmTaskExecutionStatus::Invalid) {
+    return reason_code == LlmBackendReason::VALID
+               ? std::string_view(LlmExecutorReason::INVALID_RESOURCES)
+               : reason_code;
+  }
+  if (!task_identity_matches(execution.identity, model_plan, task_plan,
+                             context)) {
+    return LlmBackendReason::TASK_IDENTITY_MISMATCH;
+  }
+  if (!task_completion_matches(execution.completion, task_plan)) {
+    return LlmBackendReason::TASK_COMPLETION_MISMATCH;
+  }
+  if (!execution.timing.evaluated || !execution.timing.valid ||
+      !std::isfinite(execution.timing.elapsed_seconds) ||
+      execution.timing.elapsed_seconds <= 0.0) {
+    return LlmBackendReason::INVALID_AUTHORITATIVE_ELAPSED;
+  }
+  if (!execution.validation.evaluated) {
+    return LlmBackendReason::VALIDATION_NOT_EVALUATED;
+  }
+  if (!execution.validation.valid) {
+    return LlmBackendReason::VALIDATION_FAILED;
+  }
+  return reason_code == LlmBackendReason::VALID
+             ? std::string_view(LlmExecutorReason::INVALID_RESOURCES)
+             : reason_code;
+}
+
+LlmMeasurementStatus execution_failure_status(
+    const LlmTaskExecutionResult& execution,
+    std::string_view reason_code) noexcept {
+  return execution.status == LlmTaskExecutionStatus::Invalid ||
+                 reason_code == LlmExecutorReason::CHECKSUM_MISMATCH ||
+                 reason_code == LlmExecutorReason::INVALID_ELAPSED_TIME ||
+                 reason_code == LlmBackendReason::INVALID_AUTHORITATIVE_ELAPSED ||
+                 reason_code == LlmBackendReason::VALIDATION_FAILED
              ? LlmMeasurementStatus::Invalid
              : LlmMeasurementStatus::Failed;
 }
@@ -550,11 +644,34 @@ void refresh_calibration_references(LlmMemoryResult& result) noexcept {
   }
 }
 
-int finish_terminal(LlmMemoryResult& result, const LlmRunnerHooks& hooks) {
+bool release_backend_once(LlmBackend& backend, bool& release_attempted,
+                          LlmMemoryResult& result) {
+  if (release_attempted) {
+    return backend.evidence().release.status == LlmBackendStatus::Ready;
+  }
+  release_attempted = true;
+  const LlmBackendLifecycleResult release = backend.release_resources();
+  if (release.status == LlmBackendStatus::Ready) {
+    return true;
+  }
+  const std::string_view reason = canonicalize_llm_result_reason_code(
+      release.reason_code.empty() ? LlmBackendReason::RESOURCE_RELEASE_FAILED
+                                  : release.reason_code);
+  finalize_failure(result, reason, result.interruption_requested);
+  return false;
+}
+
+int finish_terminal(LlmMemoryResult& result, const LlmRunnerHooks& hooks,
+                    LlmBackend& backend, bool& release_attempted) {
   refresh_calibration_references(result);
   update_completion_state(result);
+  const bool release_succeeded =
+      release_backend_once(backend, release_attempted, result);
   if (result.checkpoint_failed || !invoke_checkpoint(result, LlmCheckpointKind::CommandTerminal, hooks)) {
     update_completion_state(result);
+    return EXIT_FAILURE;
+  }
+  if (!release_succeeded) {
     return EXIT_FAILURE;
   }
   return result.status == LlmRunStatus::Failed ||
@@ -650,11 +767,20 @@ LlmRunnerAuxiliaryEstimate calculate_actual_runner_backing(const LlmMemoryResult
     }
   }
   for (const LlmMeasurementState& measurement : result.measurements) {
-    if (!add_string_backing(measurement.execution.reason_code, actual.fixed_metadata_bytes) ||
-        !add_capacity_bytes(measurement.execution.expected_checksums.capacity(), sizeof(LlmWorkerChecksum),
-                            actual.retained_checksum_bytes) ||
-        !add_capacity_bytes(measurement.execution.actual_checksums.capacity(), sizeof(LlmWorkerChecksum),
-                            actual.retained_checksum_bytes)) {
+    if (!add_string_backing(measurement.execution.reason_code,
+                            actual.fixed_metadata_bytes)) {
+      return actual;
+    }
+    const LlmExecutorResult* cpu =
+        cpu_executor_evidence(measurement.execution);
+    if (cpu != nullptr &&
+        (!add_string_backing(cpu->reason_code, actual.fixed_metadata_bytes) ||
+         !add_capacity_bytes(cpu->expected_checksums.capacity(),
+                             sizeof(LlmWorkerChecksum),
+                             actual.retained_checksum_bytes) ||
+         !add_capacity_bytes(cpu->actual_checksums.capacity(),
+                             sizeof(LlmWorkerChecksum),
+                             actual.retained_checksum_bytes))) {
       return actual;
     }
   }
@@ -722,6 +848,8 @@ bool initialize_result(const LlmMemoryConfig& config, const LlmMemoryWorkPlan& m
   }
   result.loops.reserve(config.loop_count);
   result.measurements.reserve(result.counters.planned_measurements);
+  const LlmCpuExecutionPlan* cpu_plan =
+      get_llm_cpu_execution_plan(model_plan);
   for (size_t loop_index = 0; loop_index < config.loop_count; ++loop_index) {
     LlmLoopRecord loop;
     loop.loop_index = loop_index;
@@ -734,12 +862,20 @@ bool initialize_result(const LlmMemoryConfig& config, const LlmMemoryWorkPlan& m
           llm_kv_write_kind_for(model_plan.phase, measurement.scenario);
       measurement.loop_index = loop_index;
       measurement.order_position = position;
-      measurement.requested_workers = model_plan.requested_workers;
-      measurement.effective_workers = model_plan.effective_workers;
+      measurement.requested_workers =
+          cpu_plan == nullptr ? 0 : cpu_plan->requested_workers;
+      measurement.effective_workers =
+          cpu_plan == nullptr ? 0 : cpu_plan->effective_workers;
       measurement.working_set_bytes = model_plan.geometry.total_data_mapping_bytes;
       measurement.execution.reason_code.reserve(kLlmRunnerReasonCapacity);
-      measurement.execution.expected_checksums.reserve(model_plan.effective_workers);
-      measurement.execution.actual_checksums.reserve(model_plan.effective_workers);
+      if (cpu_plan != nullptr) {
+        measurement.execution.backend_evidence = LlmCpuTaskEvidence{};
+        auto& cpu = std::get<LlmCpuTaskEvidence>(
+            measurement.execution.backend_evidence).executor;
+        cpu.reason_code.reserve(kLlmRunnerReasonCapacity);
+        cpu.expected_checksums.reserve(cpu_plan->effective_workers);
+        cpu.actual_checksums.reserve(cpu_plan->effective_workers);
+      }
       loop.measurement_indexes[position] = result.measurements.size();
       result.measurements.push_back(std::move(measurement));
     }
@@ -754,6 +890,41 @@ bool initialize_result(const LlmMemoryConfig& config, const LlmMemoryWorkPlan& m
   return true;
 }
 
+int finish_unsupported_run(
+    const LlmMemoryConfig& config, const LlmMemoryWorkPlan& model_plan,
+    const LlmRunnerAuxiliaryEstimate& auxiliary, LlmMemoryResult& result,
+    const LlmRunnerHooks& hooks, std::string_view reason_code,
+    LlmBackend& backend, bool& release_attempted) {
+  if (!initialize_result(config, model_plan, auxiliary, result)) {
+    if (result.reason_code != LlmRunnerReason::AUXILIARY_BUDGET_INSUFFICIENT) {
+      result.reason_code = LlmRunnerReason::PLANNED_COUNTER_OVERFLOW;
+    }
+    release_backend_once(backend, release_attempted, result);
+    return EXIT_FAILURE;
+  }
+  const std::string_view canonical_reason =
+      canonicalize_llm_result_reason_code(reason_code);
+  result.status = LlmRunStatus::Unsupported;
+  result.reason_code =
+      canonical_reason == LlmRunnerReason::RUNNER_UNKNOWN_EXCEPTION
+          ? std::string_view(LlmBackendReason::TASK_UNSUPPORTED)
+          : canonical_reason;
+  return finish_terminal(result, hooks, backend, release_attempted);
+}
+
+int fail_uninitialized_backend_transition(
+    LlmMemoryResult& result, std::string_view reason_code,
+    std::string_view fallback_reason, LlmBackend& backend,
+    bool& release_attempted) {
+  const std::string_view canonical_reason =
+      canonicalize_llm_result_reason_code(reason_code.empty()
+                                              ? fallback_reason
+                                              : reason_code);
+  reset_uninitialized_failure(result, canonical_reason.data());
+  release_backend_once(backend, release_attempted, result);
+  return EXIT_FAILURE;
+}
+
 struct ExcludedTaskOutcome {
   bool accepted = false;
   std::string_view reason_code = LlmRunnerReason::NOT_STARTED;
@@ -762,7 +933,7 @@ struct ExcludedTaskOutcome {
 
 ExcludedTaskOutcome execute_excluded_task(const LlmMemoryWorkPlan& model_plan, const LlmScenarioWorkPlan& task_plan,
                                           LlmRunnerTaskKind kind, std::string_view purpose,
-                                          const LlmTaskExecutor& executor, LlmMemoryResult& result) {
+                                          LlmBackend& backend, LlmMemoryResult& result) {
   const size_t index = scenario_index(task_plan.scenario);
   if (index >= kLlmScenarioCount) {
     throw std::runtime_error("runner calibration scenario invalid");
@@ -795,22 +966,27 @@ ExcludedTaskOutcome execute_excluded_task(const LlmMemoryWorkPlan& model_plan, c
   attempt.task_accounted_bytes = task_plan.task_accounted_bytes;
   attempt.work_plan_identity.assign(task_plan.plan_identity);
   try {
-    LlmExecutorResult execution = executor(model_plan, task_plan, context);
+    LlmTaskExecutionResult execution =
+        backend.execute_task(model_plan, task_plan, context);
     attempt.execution = compact_execution(execution);
     attempt.duration_quality =
-        classify_llm_duration_quality(execution.elapsed_seconds, task_plan.work_units,
+        classify_llm_duration_quality(execution.timing.elapsed_seconds, task_plan.work_units,
                                       calculate_llm_scenario_limits(model_plan.geometry, task_plan.scenario));
     attempt.terminal = true;
-    attempt.valid = execution_is_accepted(execution, model_plan.effective_workers);
-    attempt.reason_code = attempt.valid ? std::string_view(LlmExecutorReason::VALID)
-                                        : execution_failure_reason(execution, model_plan.effective_workers);
+    attempt.valid = execution_is_accepted(execution, model_plan, task_plan,
+                                          context);
+    attempt.reason_code =
+        attempt.valid
+            ? std::string_view(LlmBackendReason::VALID)
+            : execution_failure_reason(execution, model_plan, task_plan,
+                                       context);
     attempt.execution.valid = attempt.valid;
     attempt.execution.reason_code = attempt.reason_code;
 
     ExcludedTaskOutcome outcome;
     outcome.accepted = attempt.valid;
     outcome.reason_code = attempt.reason_code;
-    outcome.elapsed_seconds = execution.elapsed_seconds;
+    outcome.elapsed_seconds = execution.timing.elapsed_seconds;
     return outcome;
   } catch (const std::exception&) {
     attempt.terminal = true;
@@ -844,14 +1020,16 @@ CalibrationOutcome stop_or_failure_after_excluded(const ExcludedTaskOutcome& out
 }
 
 CalibrationOutcome run_excluded(const LlmMemoryWorkPlan& model_plan, const LlmScenarioWorkPlan& task_plan,
-                                LlmRunnerTaskKind kind, std::string_view purpose, const LlmTaskExecutor& executor,
+                                LlmRunnerTaskKind kind, std::string_view purpose, LlmBackend& backend,
                                 LlmMemoryResult& result, const LlmRunnerHooks& hooks,
                                 double* elapsed_seconds = nullptr) {
   if (stop_requested(hooks)) {
     result.interruption_requested = true;
     return CalibrationOutcome::Interrupted;
   }
-  const ExcludedTaskOutcome outcome = execute_excluded_task(model_plan, task_plan, kind, purpose, executor, result);
+  const ExcludedTaskOutcome outcome =
+      execute_excluded_task(model_plan, task_plan, kind, purpose, backend,
+                            result);
   if (elapsed_seconds != nullptr) {
     *elapsed_seconds = outcome.elapsed_seconds;
   }
@@ -859,7 +1037,7 @@ CalibrationOutcome run_excluded(const LlmMemoryWorkPlan& model_plan, const LlmSc
 }
 
 CalibrationOutcome calibrate_scenario(const LlmMemoryConfig& config, const LlmMemoryWorkPlan& model_plan,
-                                      LlmScenario scenario, const LlmTaskExecutor& executor, LlmMemoryResult& result,
+                                      LlmScenario scenario, LlmBackend& backend, LlmMemoryResult& result,
                                       const LlmRunnerHooks& hooks, size_t& frozen_work_units) {
   const LlmScenarioLimits limits = calculate_llm_scenario_limits(model_plan.geometry, scenario);
   if (!limits.valid) {
@@ -883,7 +1061,8 @@ CalibrationOutcome calibrate_scenario(const LlmMemoryConfig& config, const LlmMe
       return CalibrationOutcome::Failed;
     }
     const CalibrationOutcome warmup =
-        run_excluded(model_plan, explicit_plan, LlmRunnerTaskKind::Warmup, "explicit-warmup", executor, result, hooks);
+        run_excluded(model_plan, explicit_plan, LlmRunnerTaskKind::Warmup,
+                     "explicit-warmup", backend, result, hooks);
     if (warmup != CalibrationOutcome::Success) {
       return warmup;
     }
@@ -900,7 +1079,8 @@ CalibrationOutcome calibrate_scenario(const LlmMemoryConfig& config, const LlmMe
       return CalibrationOutcome::Failed;
     }
     outcome =
-        run_excluded(model_plan, pilot_warmup, LlmRunnerTaskKind::Warmup, "pilot-warmup", executor, result, hooks);
+        run_excluded(model_plan, pilot_warmup, LlmRunnerTaskKind::Warmup,
+                     "pilot-warmup", backend, result, hooks);
   }
   if (outcome != CalibrationOutcome::Success) {
     return outcome;
@@ -919,7 +1099,9 @@ CalibrationOutcome calibrate_scenario(const LlmMemoryConfig& config, const LlmMe
     return CalibrationOutcome::Failed;
   }
   double elapsed_seconds = 0.0;
-  outcome = run_excluded(model_plan, latest_plan, LlmRunnerTaskKind::Calibration, "pilot", executor, result, hooks,
+  outcome = run_excluded(model_plan, latest_plan,
+                         LlmRunnerTaskKind::Calibration, "pilot", backend,
+                         result, hooks,
                          &elapsed_seconds);
   if (outcome != CalibrationOutcome::Success) {
     return outcome;
@@ -937,12 +1119,15 @@ CalibrationOutcome calibrate_scenario(const LlmMemoryConfig& config, const LlmMe
     result.reason_code = latest_plan.reason_code;
     return CalibrationOutcome::Failed;
   }
-  outcome = run_excluded(model_plan, latest_plan, LlmRunnerTaskKind::Warmup, "duration-trial-warmup", executor, result,
+  outcome = run_excluded(model_plan, latest_plan, LlmRunnerTaskKind::Warmup,
+                         "duration-trial-warmup", backend, result,
                          hooks);
   if (outcome != CalibrationOutcome::Success) {
     return outcome;
   }
-  outcome = run_excluded(model_plan, latest_plan, LlmRunnerTaskKind::Calibration, "duration-trial", executor, result,
+  outcome = run_excluded(model_plan, latest_plan,
+                         LlmRunnerTaskKind::Calibration, "duration-trial",
+                         backend, result,
                          hooks, &elapsed_seconds);
   if (outcome != CalibrationOutcome::Success) {
     return outcome;
@@ -968,7 +1153,9 @@ CalibrationOutcome calibrate_scenario(const LlmMemoryConfig& config, const LlmMe
       return CalibrationOutcome::Failed;
     }
     const std::string_view purpose = correction == 1 ? "correction-trial-1" : "correction-trial-2";
-    outcome = run_excluded(model_plan, latest_plan, LlmRunnerTaskKind::Calibration, purpose, executor, result, hooks,
+    outcome = run_excluded(model_plan, latest_plan,
+                           LlmRunnerTaskKind::Calibration, purpose, backend,
+                           result, hooks,
                            &elapsed_seconds);
     if (outcome != CalibrationOutcome::Success) {
       return outcome;
@@ -1049,53 +1236,97 @@ bool assign_frozen_plans(LlmMemoryResult& result, const LlmMemoryWorkPlan& model
   return model_plan.valid;
 }
 
-void populate_measurement(LlmMeasurementState& measurement, LlmExecutorResult execution,
-                          const LlmMemoryWorkPlan& model_plan, const LlmScenarioWorkPlan& task_plan) {
-  LlmExecutorResult& retained = measurement.execution;
-  retained.valid = execution.valid;
-  retained.reason_code.assign(canonical_executor_reason(execution.reason_code));
-  retained.elapsed_seconds = execution.elapsed_seconds;
-  retained.requested_workers = execution.requested_workers;
-  retained.created_workers = execution.created_workers;
-  retained.completed_workers = execution.completed_workers;
-  retained.qos_successful_workers = execution.qos_successful_workers;
-  retained.qos_failed_workers = execution.qos_failed_workers;
-  retained.worker_startup_failed = execution.worker_startup_failed;
-  retained.kernel_succeeded = execution.kernel_succeeded;
-  retained.timer_started = execution.timer_started;
-  retained.timer_stopped = execution.timer_stopped;
-  retained.checksum_evaluated = execution.checksum_evaluated;
-  retained.checksum_valid = execution.checksum_valid;
-  retained.expected_run_checksum = execution.expected_run_checksum;
-  retained.actual_run_checksum = execution.actual_run_checksum;
-  if (execution.expected_checksums.size() == model_plan.effective_workers &&
-      execution.actual_checksums.size() == model_plan.effective_workers) {
-    retained.expected_checksums.assign(execution.expected_checksums.begin(), execution.expected_checksums.end());
-    retained.actual_checksums.assign(execution.actual_checksums.begin(), execution.actual_checksums.end());
-  } else {
-    retained.valid = false;
-    retained.reason_code.assign(LlmExecutorReason::INVALID_RESOURCES);
-    retained.checksum_evaluated = false;
-    retained.checksum_valid = false;
-    retained.expected_checksums.clear();
-    retained.actual_checksums.clear();
+void retain_cpu_task_evidence(LlmTaskExecutionResult& retained,
+                              LlmTaskExecutionResult& execution,
+                              const LlmMemoryWorkPlan& model_plan) {
+  auto* source = std::get_if<LlmCpuTaskEvidence>(&execution.backend_evidence);
+  if (source == nullptr) {
+    retained.backend_evidence = std::monostate{};
+    return;
   }
-  measurement.qos_successful_workers = measurement.execution.qos_successful_workers;
-  measurement.qos_failed_workers = measurement.execution.qos_failed_workers;
+  auto* target = std::get_if<LlmCpuTaskEvidence>(&retained.backend_evidence);
+  if (target == nullptr) {
+    retained.backend_evidence = LlmCpuTaskEvidence{};
+    target = std::get_if<LlmCpuTaskEvidence>(&retained.backend_evidence);
+  }
+  LlmExecutorResult& destination = target->executor;
+  LlmExecutorResult& input = source->executor;
+  destination.valid = input.valid;
+  destination.reason_code.assign(
+      canonicalize_llm_result_reason_code(input.reason_code));
+  destination.elapsed_seconds = input.elapsed_seconds;
+  destination.requested_workers = input.requested_workers;
+  destination.created_workers = input.created_workers;
+  destination.completed_workers = input.completed_workers;
+  destination.qos_successful_workers = input.qos_successful_workers;
+  destination.qos_failed_workers = input.qos_failed_workers;
+  destination.worker_startup_failed = input.worker_startup_failed;
+  destination.kernel_succeeded = input.kernel_succeeded;
+  destination.timer_started = input.timer_started;
+  destination.timer_stopped = input.timer_stopped;
+  destination.checksum_evaluated = input.checksum_evaluated;
+  destination.checksum_valid = input.checksum_valid;
+  destination.expected_run_checksum = input.expected_run_checksum;
+  destination.actual_run_checksum = input.actual_run_checksum;
+  const LlmCpuExecutionPlan* cpu_plan =
+      get_llm_cpu_execution_plan(model_plan);
+  const size_t effective_workers =
+      cpu_plan == nullptr ? 0 : cpu_plan->effective_workers;
+  if (input.expected_checksums.size() == effective_workers &&
+      input.actual_checksums.size() == effective_workers) {
+    destination.expected_checksums.assign(input.expected_checksums.begin(),
+                                          input.expected_checksums.end());
+    destination.actual_checksums.assign(input.actual_checksums.begin(),
+                                        input.actual_checksums.end());
+  } else {
+    destination.expected_checksums.clear();
+    destination.actual_checksums.clear();
+  }
+}
+
+void populate_measurement(LlmMeasurementState& measurement,
+                          LlmTaskExecutionResult execution,
+                          const LlmMemoryWorkPlan& model_plan,
+                          const LlmScenarioWorkPlan& task_plan,
+                          const LlmRunnerTaskContext& context) {
+  const bool accepted =
+      execution_is_accepted(execution, model_plan, task_plan, context);
+  const std::string_view failure_reason =
+      accepted
+          ? std::string_view(LlmBackendReason::VALID)
+          : execution_failure_reason(execution, model_plan, task_plan,
+                                     context);
+  LlmTaskExecutionResult& retained = measurement.execution;
+  retained.status = execution.status;
+  retained.reason_code.assign(accepted ? LlmBackendReason::VALID
+                                       : failure_reason);
+  retained.identity = {};
+  retained.timing = execution.timing;
+  retained.completion = execution.completion;
+  retained.validation = execution.validation;
+  retain_cpu_task_evidence(retained, execution, model_plan);
+
+  const LlmExecutorResult* cpu = cpu_executor_evidence(retained);
+  if (cpu != nullptr) {
+    measurement.qos_successful_workers = cpu->qos_successful_workers;
+    measurement.qos_failed_workers = cpu->qos_failed_workers;
+  }
   measurement.duration_quality =
-      classify_llm_duration_quality(measurement.execution.elapsed_seconds, task_plan.work_units,
+      classify_llm_duration_quality(measurement.execution.timing.elapsed_seconds,
+                                    task_plan.work_units,
                                     calculate_llm_scenario_limits(model_plan.geometry, task_plan.scenario));
-  if (!execution_is_accepted(measurement.execution, model_plan.effective_workers)) {
-    measurement.reason_code = execution_failure_reason(measurement.execution, model_plan.effective_workers);
-    measurement.execution.valid = false;
-    measurement.execution.reason_code.assign(measurement.reason_code);
-    measurement.status = execution_failure_status(measurement.reason_code);
+  if (!accepted) {
+    measurement.reason_code = failure_reason;
+    measurement.execution.status = execution.status;
+    measurement.status =
+        execution_failure_status(execution, measurement.reason_code);
     clear_measurement_values(measurement);
     measurement.execution_evidence_available = true;
     return;
   }
 
-  const long double elapsed = static_cast<long double>(measurement.execution.elapsed_seconds);
+  const long double elapsed =
+      static_cast<long double>(measurement.execution.timing.elapsed_seconds);
   const long double work_units = static_cast<long double>(task_plan.work_units);
   const long double latency = elapsed / work_units;
   const long double work_units_per_second = work_units / elapsed;
@@ -1121,7 +1352,7 @@ void populate_measurement(LlmMeasurementState& measurement, LlmExecutorResult ex
   measurement.completed_layout_metadata_read_bytes =
       task_plan.layout_metadata_read_bytes;
   measurement.completed_task_accounted_bytes = task_plan.task_accounted_bytes;
-  measurement.elapsed_seconds = measurement.execution.elapsed_seconds;
+  measurement.elapsed_seconds = measurement.execution.timing.elapsed_seconds;
   measurement.synthetic_work_unit_latency_seconds = latency_value;
   measurement.synthetic_memory_work_units_per_second = work_units_per_second_value;
   measurement.effective_model_payload_gb_s = bandwidth_value;
@@ -1150,16 +1381,20 @@ void record_terminal_measurement(LlmMemoryResult& result, const LlmLoopRecord& l
   update_scenario_aggregate(result, measurement);
 }
 
-int fail_initialized_run(LlmMemoryResult& result, const LlmRunnerHooks& hooks, std::string_view reason_code);
+int fail_initialized_run(LlmMemoryResult& result, const LlmRunnerHooks& hooks,
+                         std::string_view reason_code, LlmBackend& backend,
+                         bool& release_attempted);
 
-int run_measurements(const LlmMemoryWorkPlan& model_plan, const LlmTaskExecutor& executor, LlmMemoryResult& result,
-                     const LlmRunnerHooks& hooks) {
+int run_measurements(const LlmMemoryWorkPlan& model_plan, LlmBackend& backend,
+                     LlmMemoryResult& result,
+                     const LlmRunnerHooks& hooks,
+                     bool& release_attempted) {
   for (LlmLoopRecord& loop : result.loops) {
     for (size_t position = 0; position < kLlmScenarioCount; ++position) {
       if (stop_requested(hooks)) {
         result.interruption_requested = true;
         finalize_remaining_interrupted(result);
-        return finish_terminal(result, hooks);
+        return finish_terminal(result, hooks, backend, release_attempted);
       }
       LlmMeasurementState& measurement = result.measurements[loop.measurement_indexes[position]];
       const size_t index = scenario_index(measurement.scenario);
@@ -1178,8 +1413,10 @@ int run_measurements(const LlmMemoryWorkPlan& model_plan, const LlmTaskExecutor&
         context.scenario = measurement.scenario;
         context.loop_index = loop.loop_index;
         context.order_position = position;
-        LlmExecutorResult execution = executor(model_plan, task_plan, context);
-        populate_measurement(measurement, std::move(execution), model_plan, task_plan);
+        LlmTaskExecutionResult execution =
+            backend.execute_task(model_plan, task_plan, context);
+        populate_measurement(measurement, std::move(execution), model_plan,
+                             task_plan, context);
         record_terminal_measurement(result, loop, measurement);
 
         const bool stop_after_task = stop_requested(hooks);
@@ -1201,6 +1438,7 @@ int run_measurements(const LlmMemoryWorkPlan& model_plan, const LlmTaskExecutor&
         if (!invoke_checkpoint(result, LlmCheckpointKind::MeasurementTerminal, hooks)) {
           const bool pending_stop = stop_after_task || pending_stop_after_failure(result, hooks);
           finalize_failure(result, result.reason_code, pending_stop);
+          release_backend_once(backend, release_attempted, result);
           return EXIT_FAILURE;
         }
 
@@ -1214,7 +1452,8 @@ int run_measurements(const LlmMemoryWorkPlan& model_plan, const LlmTaskExecutor&
           update_completion_state(result);
         }
         if (task_failed || post_checkpoint_stop) {
-          return finish_terminal(result, hooks);
+          return finish_terminal(result, hooks, backend,
+                                 release_attempted);
         }
       } catch (const std::exception& error) {
         assign_diagnostic(result, error.what());
@@ -1225,10 +1464,11 @@ int run_measurements(const LlmMemoryWorkPlan& model_plan, const LlmTaskExecutor&
           pending_stop = pending_stop || pending_stop_after_failure(result, hooks);
           finalize_failure(result, result.reason_code, pending_stop);
           if (!checkpoint_succeeded) {
+            release_backend_once(backend, release_attempted, result);
             return EXIT_FAILURE;
           }
         }
-        return finish_terminal(result, hooks);
+        return finish_terminal(result, hooks, backend, release_attempted);
       } catch (...) {
         result.diagnostic.clear();
         bool pending_stop = pending_stop_after_failure(result, hooks);
@@ -1238,14 +1478,15 @@ int run_measurements(const LlmMemoryWorkPlan& model_plan, const LlmTaskExecutor&
           pending_stop = pending_stop || pending_stop_after_failure(result, hooks);
           finalize_failure(result, result.reason_code, pending_stop);
           if (!checkpoint_succeeded) {
+            release_backend_once(backend, release_attempted, result);
             return EXIT_FAILURE;
           }
         }
-        return finish_terminal(result, hooks);
+        return finish_terminal(result, hooks, backend, release_attempted);
       }
     }
   }
-  return finish_terminal(result, hooks);
+  return finish_terminal(result, hooks, backend, release_attempted);
 }
 
 void trim_calibration_attempts(LlmMemoryResult& result) {
@@ -1256,10 +1497,12 @@ void trim_calibration_attempts(LlmMemoryResult& result) {
   }
 }
 
-int fail_initialized_run(LlmMemoryResult& result, const LlmRunnerHooks& hooks, std::string_view reason_code) {
+int fail_initialized_run(LlmMemoryResult& result, const LlmRunnerHooks& hooks,
+                         std::string_view reason_code, LlmBackend& backend,
+                         bool& release_attempted) {
   trim_calibration_attempts(result);
   finalize_failure(result, reason_code, result.interruption_requested);
-  return finish_terminal(result, hooks);
+  return finish_terminal(result, hooks, backend, release_attempted);
 }
 
 }  // namespace
@@ -1280,6 +1523,11 @@ std::string_view canonicalize_llm_result_reason_code(std::string_view reason_cod
       return candidate;
     }
   }
+  for (std::string_view candidate : kLlmBackendReasons) {
+    if (reason_code == candidate) {
+      return candidate;
+    }
+  }
   return LlmRunnerReason::RUNNER_UNKNOWN_EXCEPTION;
 }
 
@@ -1287,7 +1535,11 @@ LlmRunnerAuxiliaryEstimate calculate_llm_runner_auxiliary_estimate(const LlmMemo
                                                                    const LlmMemoryWorkPlan& model_plan) noexcept {
   LlmRunnerAuxiliaryEstimate estimate;
   try {
-    if (!model_plan.valid || model_plan.effective_workers == 0 || config.loop_count == 0) {
+    const LlmCpuExecutionPlan* cpu_plan =
+        get_llm_cpu_execution_plan(model_plan);
+    if (!model_plan.valid || config.loop_count == 0 ||
+        (model_plan.backend == LlmMemoryBackend::Cpu &&
+         (cpu_plan == nullptr || cpu_plan->effective_workers == 0))) {
       estimate.reason_code = LlmRunnerReason::INVALID_MODEL_WORK_PLAN;
       return estimate;
     }
@@ -1302,7 +1554,10 @@ LlmRunnerAuxiliaryEstimate calculate_llm_runner_auxiliary_estimate(const LlmMemo
         !NumericUtils::checked_multiply(planned_measurements, static_cast<size_t>(3), aggregate_value_count)) {
       return estimate;
     }
-    if (!NumericUtils::checked_multiply(planned_measurements, model_plan.effective_workers,
+    const size_t retained_records_per_measurement =
+        cpu_plan == nullptr ? 0 : cpu_plan->effective_workers;
+    if (!NumericUtils::checked_multiply(planned_measurements,
+                                        retained_records_per_measurement,
                                         retained_worker_checksums) ||
         !NumericUtils::checked_multiply(retained_worker_checksums, static_cast<size_t>(2), retained_worker_checksums) ||
         !NumericUtils::checked_multiply(planned_measurements, sizeof(LlmMeasurementState),
@@ -1412,12 +1667,16 @@ LlmRunnerAuxiliaryEstimate calculate_llm_runner_auxiliary_estimate(const LlmMemo
   }
 }
 
-int run_llm_memory_suite(const LlmMemoryConfig& config, const LlmMemoryWorkPlan& model_plan,
-                         const LlmTaskExecutor& executor, LlmMemoryResult& result, const LlmRunnerHooks& hooks) {
+int run_llm_memory_suite(const LlmMemoryConfig& config,
+                         const LlmMemoryWorkPlan& model_plan,
+                         LlmBackend& backend, LlmMemoryResult& result,
+                         const LlmRunnerHooks& hooks) {
+  bool release_attempted = false;
   try {
     result = LlmMemoryResult{};
-    if (!executor) {
-      result.reason_code = LlmRunnerReason::EXECUTOR_UNAVAILABLE;
+    if (backend.kind() != config.backend ||
+        backend.kind() != model_plan.backend) {
+      result.reason_code = LlmRunnerReason::BACKEND_UNAVAILABLE;
       return EXIT_FAILURE;
     }
     const LlmMemoryConfigValidation config_validation = validate_llm_memory_config(config);
@@ -1448,16 +1707,63 @@ int run_llm_memory_suite(const LlmMemoryConfig& config, const LlmMemoryWorkPlan&
       result.reason_code = auxiliary.reason_code;
       return EXIT_FAILURE;
     }
-    const std::string_view budget_reason = runner_budget_admission_reason(model_plan, auxiliary);
+    const std::string_view budget_reason =
+        runner_budget_admission_reason(model_plan, auxiliary, backend);
     if (budget_reason != LlmExecutorReason::VALID) {
       result.reason_code = budget_reason;
       return EXIT_FAILURE;
+    }
+
+    const LlmBackendLifecycleResult initialization =
+        backend.initialize(config);
+    if (initialization.status == LlmBackendStatus::Unsupported) {
+      return finish_unsupported_run(config, model_plan, auxiliary, result,
+                                    hooks, initialization.reason_code, backend,
+                                    release_attempted);
+    }
+    if (initialization.status != LlmBackendStatus::Ready) {
+      return fail_uninitialized_backend_transition(
+          result,
+          initialization.reason_code.empty()
+              ? std::string_view(LlmBackendReason::BACKEND_INITIALIZATION_FAILED)
+              : std::string_view(initialization.reason_code),
+          LlmBackendReason::BACKEND_INITIALIZATION_FAILED, backend,
+          release_attempted);
+    }
+
+    const LlmBackendLifecycleResult plan_resolution =
+        backend.resolve_execution_plan(model_plan);
+    if (plan_resolution.status == LlmBackendStatus::Unsupported) {
+      return finish_unsupported_run(config, model_plan, auxiliary, result,
+                                    hooks, plan_resolution.reason_code, backend,
+                                    release_attempted);
+    }
+    if (plan_resolution.status != LlmBackendStatus::Ready) {
+      return fail_uninitialized_backend_transition(
+          result, plan_resolution.reason_code,
+          LlmBackendReason::EXECUTION_PLAN_MISMATCH, backend,
+          release_attempted);
+    }
+
+    const LlmBackendLifecycleResult preparation =
+        backend.prepare_resources(model_plan);
+    if (preparation.status == LlmBackendStatus::Unsupported) {
+      return finish_unsupported_run(config, model_plan, auxiliary, result,
+                                    hooks, preparation.reason_code, backend,
+                                    release_attempted);
+    }
+    if (preparation.status != LlmBackendStatus::Ready) {
+      return fail_uninitialized_backend_transition(
+          result, preparation.reason_code,
+          LlmBackendReason::RESOURCES_NOT_PREPARED, backend,
+          release_attempted);
     }
 
     if (!initialize_result(config, model_plan, auxiliary, result)) {
       if (result.reason_code != LlmRunnerReason::AUXILIARY_BUDGET_INSUFFICIENT) {
         result.reason_code = LlmRunnerReason::PLANNED_COUNTER_OVERFLOW;
       }
+      release_backend_once(backend, release_attempted, result);
       return EXIT_FAILURE;
     }
 
@@ -1466,27 +1772,34 @@ int run_llm_memory_suite(const LlmMemoryConfig& config, const LlmMemoryWorkPlan&
       frozen_work_units.fill(config.iterations);
       result.frozen_scenario_plans = freeze_llm_scenario_work_plans(model_plan, frozen_work_units, true);
       if (!result.frozen_scenario_plans.valid) {
-        return fail_initialized_run(result, hooks, result.frozen_scenario_plans.reason_code);
+        return fail_initialized_run(result, hooks,
+                                    result.frozen_scenario_plans.reason_code,
+                                    backend, release_attempted);
       }
       if (!assign_frozen_plans(result, model_plan)) {
-        return fail_initialized_run(result, hooks, LlmRunnerReason::PLANNED_COUNTER_OVERFLOW);
+        return fail_initialized_run(
+            result, hooks, LlmRunnerReason::PLANNED_COUNTER_OVERFLOW,
+            backend, release_attempted);
       }
       if (!actual_runner_backing_is_covered(result)) {
-        return fail_initialized_run(result, hooks, LlmRunnerReason::AUXILIARY_BUDGET_INSUFFICIENT);
+        return fail_initialized_run(
+            result, hooks, LlmRunnerReason::AUXILIARY_BUDGET_INSUFFICIENT,
+            backend, release_attempted);
       }
     }
     for (size_t index = 0; index < kLlmScenarioCount; ++index) {
       const CalibrationOutcome outcome =
           calibrate_scenario(config, model_plan, kLlmScenarios[index],
-                             executor, result, hooks,
+                             backend, result, hooks,
                              frozen_work_units[index]);
       if (outcome == CalibrationOutcome::Interrupted) {
         trim_calibration_attempts(result);
         finalize_remaining_interrupted(result);
-        return finish_terminal(result, hooks);
+        return finish_terminal(result, hooks, backend, release_attempted);
       }
       if (outcome == CalibrationOutcome::Failed) {
-        return fail_initialized_run(result, hooks, result.reason_code);
+        return fail_initialized_run(result, hooks, result.reason_code,
+                                    backend, release_attempted);
       }
     }
     trim_calibration_attempts(result);
@@ -1494,7 +1807,9 @@ int run_llm_memory_suite(const LlmMemoryConfig& config, const LlmMemoryWorkPlan&
     if (!config.user_specified_iterations) {
       result.frozen_scenario_plans = freeze_llm_scenario_work_plans(model_plan, frozen_work_units, false);
       if (!result.frozen_scenario_plans.valid) {
-        return fail_initialized_run(result, hooks, result.frozen_scenario_plans.reason_code);
+        return fail_initialized_run(result, hooks,
+                                    result.frozen_scenario_plans.reason_code,
+                                    backend, release_attempted);
       }
     }
     for (size_t index = 0; index < kLlmScenarioCount; ++index) {
@@ -1502,20 +1817,28 @@ int run_llm_memory_suite(const LlmMemoryConfig& config, const LlmMemoryWorkPlan&
           result.calibration_attempts[index][result.calibration_attempt_counts[index] - 1];
       if (result.frozen_scenario_plans.scenarios[index].work_units != frozen_work_units[index] ||
           result.frozen_scenario_plans.scenarios[index].plan_identity != latest.work_plan_identity) {
-        return fail_initialized_run(result, hooks, LlmRunnerReason::FROZEN_PLAN_MISMATCH);
+        return fail_initialized_run(
+            result, hooks, LlmRunnerReason::FROZEN_PLAN_MISMATCH, backend,
+            release_attempted);
       }
     }
     if (!assign_frozen_plans(result, model_plan)) {
-      return fail_initialized_run(result, hooks, LlmRunnerReason::PLANNED_COUNTER_OVERFLOW);
+      return fail_initialized_run(
+          result, hooks, LlmRunnerReason::PLANNED_COUNTER_OVERFLOW,
+          backend, release_attempted);
     }
     if (!actual_runner_backing_is_covered(result)) {
-      return fail_initialized_run(result, hooks, LlmRunnerReason::AUXILIARY_BUDGET_INSUFFICIENT);
+      return fail_initialized_run(
+          result, hooks, LlmRunnerReason::AUXILIARY_BUDGET_INSUFFICIENT,
+          backend, release_attempted);
     }
     update_completion_state(result);
-    return run_measurements(model_plan, executor, result, hooks);
+    return run_measurements(model_plan, backend, result, hooks,
+                            release_attempted);
   } catch (const std::exception& error) {
     if (!result.initialized) {
       reset_uninitialized_failure(result, LlmRunnerReason::RUNNER_EXCEPTION);
+      release_backend_once(backend, release_attempted, result);
       return EXIT_FAILURE;
     }
     try {
@@ -1530,17 +1853,21 @@ int run_llm_memory_suite(const LlmMemoryConfig& config, const LlmMemoryWorkPlan&
       }
     }
     try {
-      return fail_initialized_run(result, hooks, LlmRunnerReason::RUNNER_EXCEPTION);
+      return fail_initialized_run(result, hooks,
+                                  LlmRunnerReason::RUNNER_EXCEPTION,
+                                  backend, release_attempted);
     } catch (...) {
       result.status = LlmRunStatus::Failed;
       result.reason_code = LlmRunnerReason::RUNNER_EXCEPTION;
       result.results_complete = false;
       result.conclusions_valid = false;
+      release_backend_once(backend, release_attempted, result);
       return EXIT_FAILURE;
     }
   } catch (...) {
     if (!result.initialized) {
       reset_uninitialized_failure(result, LlmRunnerReason::RUNNER_UNKNOWN_EXCEPTION);
+      release_backend_once(backend, release_attempted, result);
       return EXIT_FAILURE;
     }
     result.diagnostic.clear();
@@ -1551,12 +1878,15 @@ int run_llm_memory_suite(const LlmMemoryConfig& config, const LlmMemoryWorkPlan&
       }
     }
     try {
-      return fail_initialized_run(result, hooks, LlmRunnerReason::RUNNER_UNKNOWN_EXCEPTION);
+      return fail_initialized_run(result, hooks,
+                                  LlmRunnerReason::RUNNER_UNKNOWN_EXCEPTION,
+                                  backend, release_attempted);
     } catch (...) {
       result.status = LlmRunStatus::Failed;
       result.reason_code = LlmRunnerReason::RUNNER_UNKNOWN_EXCEPTION;
       result.results_complete = false;
       result.conclusions_valid = false;
+      release_backend_once(backend, release_attempted, result);
       return EXIT_FAILURE;
     }
   }

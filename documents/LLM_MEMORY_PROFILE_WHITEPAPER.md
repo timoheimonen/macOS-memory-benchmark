@@ -480,16 +480,16 @@ Multiword status tokens use underscores. Multiword stable reason codes and durat
 unavailable record carries a reason code; unavailable observed metrics and checksum validity serialize as JSON null,
 never numeric zero.
 
-If the executor throws before returning evidence for a measurement or excluded task, nested `execution.status` is
+If the backend call throws before returning evidence for a measurement or excluded task, nested `execution.status` is
 `unavailable`, its reason is the runner-exception token, and absent worker-lifecycle, QoS, elapsed-time, and checksum
 values are null. For a `not_run` measurement, the top-level successful/failed QoS-worker counts are also null. Neither
 case may be interpreted as zero workers, a zero duration, or a successful checksum.
 
-Interruption uses task-level completion-wins semantics. Stop is checked between complete executor tasks, not inside the
+Interruption uses task-level completion-wins semantics. Stop is checked between complete backend tasks, not inside the
 ARM64 hot loop or between layer descriptors. A started task runs to normal completion or genuine failure; a valid current
 measurement remains measured even if the signal arrived during it. Once stop is observed, no next task starts and all
-remaining slots become interrupted/null. A real timer, executor, checksum, or checkpoint failure remains authoritative
-over a simultaneous interruption.
+remaining slots become interrupted/null. A real backend-task, timer, checksum, or checkpoint failure remains
+authoritative over a simultaneous interruption.
 
 The runner offers one logical checkpoint after every terminal scenario measurement and a distinct command-terminal
 checkpoint. File targets serialize each with atomic replacement. Stdout targets preserve the same state transitions and

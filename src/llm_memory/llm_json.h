@@ -79,7 +79,8 @@ struct LlmResultMetadata {
  *
  * @param config Parsed command configuration, including exact argv/output.
  * @param model_plan Immutable full-size model geometry and layout plan.
- * @param preparation Allocation, initialization, and descriptor evidence.
+ * @param backend_evidence Backend snapshot supplying the selected tagged
+ *        preparation evidence; lifecycle status does not add schema-v1 fields.
  * @param metadata Command-scoped system and environment snapshots.
  * @param result Runner snapshot at a logical checkpoint or command terminal.
  * @return An independently owned ordered JSON document.
@@ -88,8 +89,14 @@ struct LlmResultMetadata {
  * @note The inputs must not be mutated concurrently during this call.
  */
 nlohmann::ordered_json build_llm_memory_json(const LlmMemoryConfig& config, const LlmMemoryWorkPlan& model_plan,
-                                             const LlmResourcePreparationResult& preparation,
+                                             const LlmBackendEvidence& backend_evidence,
                                              const LlmResultMetadata& metadata, const LlmMemoryResult& result);
+
+/** CPU-only compatibility adapter retained for focused serializer tests. */
+nlohmann::ordered_json build_llm_memory_json(
+    const LlmMemoryConfig& config, const LlmMemoryWorkPlan& model_plan,
+    const LlmResourcePreparationResult& preparation,
+    const LlmResultMetadata& metadata, const LlmMemoryResult& result);
 
 /** Return the versioned exact-byte traffic classification token. */
 const char* classify_llm_traffic_payload(const LlmGeometry& geometry) noexcept;

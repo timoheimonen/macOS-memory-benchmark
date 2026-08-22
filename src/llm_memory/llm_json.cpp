@@ -458,6 +458,10 @@ OrderedJson json_peak_estimate_json(const LlmJsonPeakEstimate& estimate, bool en
 
 OrderedJson resources_json(const LlmMemoryWorkPlan& plan, const LlmResourcePreparationResult& preparation,
                            const LlmJsonPeakEstimate& json_peak_estimate, bool json_output_enabled) {
+  const LlmCpuExecutionPlan* cpu_execution_plan = get_llm_cpu_execution_plan(plan);
+  const LlmCpuExecutionPlan unavailable_cpu_execution_plan;
+  const LlmCpuExecutionPlan& cpu =
+      cpu_execution_plan == nullptr ? unavailable_cpu_execution_plan : *cpu_execution_plan;
   const LlmMemoryBudgetRequest& request = preparation.memory_budget.request;
   OrderedJson mappings;
   mappings["policy"] = "private_anonymous_regular_cacheable";
@@ -488,11 +492,11 @@ OrderedJson resources_json(const LlmMemoryWorkPlan& plan, const LlmResourcePrepa
 
   OrderedJson descriptors;
   descriptors["abi_version"] = plan.component_identities.resource_abi_version;
-  descriptors["layer_descriptors_per_worker"] = plan.layer_descriptors_per_worker;
-  descriptors["sequence_descriptors_per_worker"] = plan.sequence_descriptors_per_worker;
-  descriptors["total_layer_descriptors"] = plan.total_layer_descriptors;
-  descriptors["total_sequence_descriptors"] = plan.total_sequence_descriptors;
-  descriptors["descriptor_bytes"] = decimal_string(plan.descriptor_bytes);
+  descriptors["layer_descriptors_per_worker"] = cpu.layer_descriptors_per_worker;
+  descriptors["sequence_descriptors_per_worker"] = cpu.sequence_descriptors_per_worker;
+  descriptors["total_layer_descriptors"] = cpu.total_layer_descriptors;
+  descriptors["total_sequence_descriptors"] = cpu.total_sequence_descriptors;
+  descriptors["descriptor_bytes"] = decimal_string(cpu.descriptor_bytes);
 
   OrderedJson output;
   output["valid"] = preparation.valid;
@@ -527,6 +531,10 @@ OrderedJson seeds_json(const LlmMemoryConfig& config, const LlmMemoryWorkPlan& p
 }
 
 OrderedJson model_work_plan_json(const LlmMemoryWorkPlan& plan) {
+  const LlmCpuExecutionPlan* cpu_execution_plan = get_llm_cpu_execution_plan(plan);
+  const LlmCpuExecutionPlan unavailable_cpu_execution_plan;
+  const LlmCpuExecutionPlan& cpu =
+      cpu_execution_plan == nullptr ? unavailable_cpu_execution_plan : *cpu_execution_plan;
   OrderedJson output;
   output["valid"] = plan.valid;
   output["reason_code"] = plan.reason_code;
@@ -539,17 +547,17 @@ OrderedJson model_work_plan_json(const LlmMemoryWorkPlan& plan) {
   output["component_identity"] = non_empty_or_null(plan.component_identities.identity);
   output["weight_passes_per_work_unit"] = plan.weight_passes_per_work_unit;
   output["kv_replay_factor"] = plan.kv_replay_factor;
-  output["requested_workers"] = plan.requested_workers;
-  output["available_workers"] = plan.available_workers;
-  output["effective_workers"] = plan.effective_workers;
-  output["worker_plan_count"] = plan.workers.size();
+  output["requested_workers"] = cpu.requested_workers;
+  output["available_workers"] = cpu.available_workers;
+  output["effective_workers"] = cpu.effective_workers;
+  output["worker_plan_count"] = cpu.workers.size();
   output["weight_layer_count"] = plan.weight_layers.size();
-  output["layer_descriptors_per_worker"] = plan.layer_descriptors_per_worker;
-  output["sequence_descriptors_per_worker"] = plan.sequence_descriptors_per_worker;
-  output["total_layer_descriptors"] = plan.total_layer_descriptors;
-  output["total_sequence_descriptors"] = plan.total_sequence_descriptors;
-  output["descriptor_bytes"] = decimal_string(plan.descriptor_bytes);
-  output["planner_storage_bytes"] = decimal_string(plan.planner_storage_bytes);
+  output["layer_descriptors_per_worker"] = cpu.layer_descriptors_per_worker;
+  output["sequence_descriptors_per_worker"] = cpu.sequence_descriptors_per_worker;
+  output["total_layer_descriptors"] = cpu.total_layer_descriptors;
+  output["total_sequence_descriptors"] = cpu.total_sequence_descriptors;
+  output["descriptor_bytes"] = decimal_string(cpu.descriptor_bytes);
+  output["planner_storage_bytes"] = decimal_string(cpu.planner_storage_bytes);
   return output;
 }
 
@@ -637,10 +645,12 @@ bool compact_checksum_evaluated(const LlmTaskExecutionEvidence& execution) noexc
 }
 
 bool measurement_checksum_evaluated(const LlmMeasurementState& measurement) noexcept {
-  const LlmExecutorResult& execution = measurement.execution;
-  return measurement.execution_evidence_available && execution.checksum_evaluated &&
-         execution.expected_checksums.size() == execution.requested_workers &&
-         execution.actual_checksums.size() == execution.requested_workers;
+  const LlmExecutorResult* cpu =
+      get_llm_cpu_task_evidence(measurement.execution);
+  return measurement.execution_evidence_available && cpu != nullptr &&
+         cpu->checksum_evaluated &&
+         cpu->expected_checksums.size() == cpu->requested_workers &&
+         cpu->actual_checksums.size() == cpu->requested_workers;
 }
 
 const char* checksum_status(bool evaluated, bool valid) noexcept {
@@ -668,16 +678,33 @@ OrderedJson compact_execution_json(const LlmTaskExecutionEvidence& execution, st
   output["status"] = !available ? "unavailable" : (execution.valid ? "valid" : "invalid");
   output["reason_code"] = reason_code;
   output["valid"] = available ? OrderedJson(execution.valid) : OrderedJson(nullptr);
-  output["elapsed_seconds"] = positive_finite_or_null(execution.elapsed_seconds, available && execution.timer_stopped);
-  output["requested_workers"] = number_or_null(execution.requested_workers, available);
-  output["created_workers"] = number_or_null(execution.created_workers, available);
-  output["completed_workers"] = number_or_null(execution.completed_workers, available);
-  output["qos_successful_workers"] = number_or_null(execution.qos_successful_workers, available);
-  output["qos_failed_workers"] = number_or_null(execution.qos_failed_workers, available);
-  output["worker_startup_failed"] = available ? OrderedJson(execution.worker_startup_failed) : OrderedJson(nullptr);
-  output["kernel_succeeded"] = available ? OrderedJson(execution.kernel_succeeded) : OrderedJson(nullptr);
-  output["timer_started"] = available ? OrderedJson(execution.timer_started) : OrderedJson(nullptr);
-  output["timer_stopped"] = available ? OrderedJson(execution.timer_stopped) : OrderedJson(nullptr);
+  output["elapsed_seconds"] =
+      positive_finite_or_null(execution.elapsed_seconds,
+                              available && execution.timing_evaluated &&
+                                  execution.timing_valid);
+  const bool cpu_available = available && execution.cpu_evidence_available;
+  output["requested_workers"] =
+      number_or_null(execution.requested_workers, cpu_available);
+  output["created_workers"] =
+      number_or_null(execution.created_workers, cpu_available);
+  output["completed_workers"] =
+      number_or_null(execution.completed_workers, cpu_available);
+  output["qos_successful_workers"] =
+      number_or_null(execution.qos_successful_workers, cpu_available);
+  output["qos_failed_workers"] =
+      number_or_null(execution.qos_failed_workers, cpu_available);
+  output["worker_startup_failed"] =
+      cpu_available ? OrderedJson(execution.worker_startup_failed)
+                    : OrderedJson(nullptr);
+  output["kernel_succeeded"] =
+      cpu_available ? OrderedJson(execution.kernel_succeeded)
+                    : OrderedJson(nullptr);
+  output["timer_started"] =
+      cpu_available ? OrderedJson(execution.timer_started)
+                    : OrderedJson(nullptr);
+  output["timer_stopped"] =
+      cpu_available ? OrderedJson(execution.timer_stopped)
+                    : OrderedJson(nullptr);
   output["checksum"] = std::move(checksum);
   return output;
 }
@@ -806,42 +833,80 @@ OrderedJson loop_records_json(const LlmMemoryResult& result) {
 OrderedJson measurement_execution_json(const LlmMeasurementState& measurement) {
   const bool attempted = measurement.attempted;
   const bool available = measurement.execution_evidence_available;
-  const LlmExecutorResult& execution = measurement.execution;
+  const LlmTaskExecutionResult& execution = measurement.execution;
+  const LlmExecutorResult* cpu = get_llm_cpu_task_evidence(execution);
+  const bool valid =
+      available && execution.status == LlmTaskExecutionStatus::Complete &&
+      execution.reason_code == LlmBackendReason::VALID &&
+      execution.validation.evaluated && execution.validation.valid &&
+      execution.timing.evaluated && execution.timing.valid;
   OrderedJson output;
-  output["status"] = !attempted ? "not_run" : (!available ? "unavailable" : (execution.valid ? "valid" : "invalid"));
+  output["status"] =
+      !attempted ? "not_run"
+                 : (!available ? "unavailable" : (valid ? "valid" : "invalid"));
   output["reason_code"] = available ? execution.reason_code : std::string(measurement.reason_code);
-  output["valid"] = available ? OrderedJson(execution.valid) : OrderedJson(nullptr);
-  output["elapsed_seconds"] = positive_finite_or_null(execution.elapsed_seconds, available && execution.timer_stopped);
-  output["requested_workers"] = number_or_null(execution.requested_workers, available);
-  output["created_workers"] = number_or_null(execution.created_workers, available);
-  output["completed_workers"] = number_or_null(execution.completed_workers, available);
-  output["qos_successful_workers"] = number_or_null(execution.qos_successful_workers, available);
-  output["qos_failed_workers"] = number_or_null(execution.qos_failed_workers, available);
-  output["worker_startup_failed"] = available ? OrderedJson(execution.worker_startup_failed) : OrderedJson(nullptr);
-  output["kernel_succeeded"] = available ? OrderedJson(execution.kernel_succeeded) : OrderedJson(nullptr);
-  output["timer_started"] = available ? OrderedJson(execution.timer_started) : OrderedJson(nullptr);
-  output["timer_stopped"] = available ? OrderedJson(execution.timer_stopped) : OrderedJson(nullptr);
+  output["valid"] = available ? OrderedJson(valid) : OrderedJson(nullptr);
+  output["elapsed_seconds"] = positive_finite_or_null(
+      execution.timing.elapsed_seconds,
+      available && execution.timing.evaluated && execution.timing.valid);
+  const bool cpu_available = available && cpu != nullptr;
+  output["requested_workers"] =
+      number_or_null(cpu_available ? cpu->requested_workers : 0,
+                     cpu_available);
+  output["created_workers"] =
+      number_or_null(cpu_available ? cpu->created_workers : 0,
+                     cpu_available);
+  output["completed_workers"] =
+      number_or_null(cpu_available ? cpu->completed_workers : 0,
+                     cpu_available);
+  output["qos_successful_workers"] =
+      number_or_null(cpu_available ? cpu->qos_successful_workers : 0,
+                     cpu_available);
+  output["qos_failed_workers"] =
+      number_or_null(cpu_available ? cpu->qos_failed_workers : 0,
+                     cpu_available);
+  output["worker_startup_failed"] =
+      cpu_available ? OrderedJson(cpu->worker_startup_failed)
+                    : OrderedJson(nullptr);
+  output["kernel_succeeded"] =
+      cpu_available ? OrderedJson(cpu->kernel_succeeded)
+                    : OrderedJson(nullptr);
+  output["timer_started"] =
+      cpu_available ? OrderedJson(cpu->timer_started)
+                    : OrderedJson(nullptr);
+  output["timer_stopped"] =
+      cpu_available ? OrderedJson(cpu->timer_stopped)
+                    : OrderedJson(nullptr);
   return output;
 }
 
 OrderedJson measurement_checksum_json(const LlmMeasurementState& measurement) {
   const bool evaluated = measurement_checksum_evaluated(measurement);
-  const LlmExecutorResult& execution = measurement.execution;
+  const LlmTaskExecutionResult& execution = measurement.execution;
+  const LlmExecutorResult* cpu = get_llm_cpu_task_evidence(execution);
+  const bool checksum_valid = evaluated && cpu != nullptr &&
+                              cpu->checksum_valid;
   OrderedJson output;
-  output["status"] = checksum_status(evaluated, execution.checksum_valid);
+  output["status"] = checksum_status(evaluated, checksum_valid);
   output["reason_code"] =
       measurement.execution_evidence_available ? execution.reason_code : std::string(measurement.reason_code);
   output["initialization_pattern_version"] = Constants::LLM_BUFFER_PATTERN_VERSION;
   output["append_pattern_version"] = Constants::LLM_APPEND_PATTERN_VERSION;
   output["read_checksum_version"] = Constants::LLM_READ_CHECKSUM_VERSION;
-  output["checksum_valid"] = evaluated ? OrderedJson(execution.checksum_valid) : OrderedJson(nullptr);
+  output["checksum_valid"] =
+      evaluated ? OrderedJson(checksum_valid) : OrderedJson(nullptr);
   output["expected_worker_checksums"] =
-      evaluated ? worker_checksums_json(execution.expected_checksums) : OrderedJson(nullptr);
+      evaluated ? worker_checksums_json(cpu->expected_checksums)
+                : OrderedJson(nullptr);
   output["actual_worker_checksums"] =
-      evaluated ? worker_checksums_json(execution.actual_checksums) : OrderedJson(nullptr);
+      evaluated ? worker_checksums_json(cpu->actual_checksums)
+                : OrderedJson(nullptr);
   output["expected_run_checksum"] =
-      evaluated ? run_checksum_json(execution.expected_run_checksum) : OrderedJson(nullptr);
-  output["actual_run_checksum"] = evaluated ? run_checksum_json(execution.actual_run_checksum) : OrderedJson(nullptr);
+      evaluated ? run_checksum_json(cpu->expected_run_checksum)
+                : OrderedJson(nullptr);
+  output["actual_run_checksum"] =
+      evaluated ? run_checksum_json(cpu->actual_run_checksum)
+                : OrderedJson(nullptr);
   return output;
 }
 
@@ -989,17 +1054,28 @@ OrderedJson resolved_plan_json(const LlmMemoryWorkPlan& plan, const LlmFrozenSce
   return output;
 }
 
-OrderedJson backend_evidence_json(const LlmMemoryWorkPlan& plan, const LlmResourcePreparationResult& preparation,
+OrderedJson backend_evidence_json(const LlmMemoryWorkPlan& plan, const LlmBackendEvidence& backend_evidence,
                                   const LlmJsonPeakEstimate& json_peak_estimate, bool json_output_enabled) {
   OrderedJson cpu = nullptr;
   if (plan.backend == LlmMemoryBackend::Cpu) {
-    cpu = OrderedJson{{"requested_workers", plan.requested_workers},
-                      {"available_workers", plan.available_workers},
-                      {"effective_workers", plan.effective_workers},
+    const LlmCpuExecutionPlan* cpu_execution_plan =
+        get_llm_cpu_execution_plan(plan);
+    const LlmCpuExecutionPlan unavailable_cpu_execution_plan;
+    const LlmCpuExecutionPlan& cpu_plan =
+        cpu_execution_plan == nullptr ? unavailable_cpu_execution_plan
+                                      : *cpu_execution_plan;
+    const LlmResourcePreparationResult* preparation =
+        get_llm_cpu_preparation(backend_evidence);
+    const LlmResourcePreparationResult unavailable;
+    const LlmResourcePreparationResult& cpu_preparation =
+        preparation == nullptr ? unavailable : *preparation;
+    cpu = OrderedJson{{"requested_workers", cpu_plan.requested_workers},
+                      {"available_workers", cpu_plan.available_workers},
+                      {"effective_workers", cpu_plan.effective_workers},
                       {"resource_abi_version", plan.component_identities.resource_abi_version},
                       {"schedule_version", plan.component_identities.schedule_version},
                       {"timer_policy_version", plan.component_identities.timer_policy_version},
-                      {"resources", resources_json(plan, preparation, json_peak_estimate, json_output_enabled)}};
+                      {"resources", resources_json(plan, cpu_preparation, json_peak_estimate, json_output_enabled)}};
   }
 
   OrderedJson output;
@@ -1190,8 +1266,15 @@ LlmJsonPeakEstimate calculate_llm_json_peak_estimate(const LlmMemoryConfig& conf
 
   size_t planned_measurements = 0;
   size_t worker_checksum_records = 0;
+  const LlmCpuExecutionPlan* cpu_execution_plan =
+      get_llm_cpu_execution_plan(model_plan);
+  if (cpu_execution_plan == nullptr) {
+    estimate.reason_code = LlmJsonReason::INVALID_MODEL_WORK_PLAN;
+    return estimate;
+  }
   if (!NumericUtils::checked_multiply(config.loop_count, kLlmScenarioCount, planned_measurements) ||
-      !NumericUtils::checked_multiply(planned_measurements, model_plan.effective_workers, worker_checksum_records) ||
+      !NumericUtils::checked_multiply(planned_measurements, cpu_execution_plan->effective_workers,
+                                      worker_checksum_records) ||
       !NumericUtils::checked_multiply(raw_input_bytes, kJsonInputStringExpansionFactor, estimate.input_string_bytes) ||
       !NumericUtils::checked_multiply(planned_measurements, kJsonMeasurementPeakBytes,
                                       estimate.measurement_record_bytes) ||
@@ -1231,8 +1314,13 @@ std::vector<std::string> collect_llm_quality_warning_tokens(const LlmMemoryWorkP
 }
 
 nlohmann::ordered_json build_llm_memory_json(const LlmMemoryConfig& config, const LlmMemoryWorkPlan& model_plan,
-                                             const LlmResourcePreparationResult& preparation,
+                                             const LlmBackendEvidence& backend_evidence,
                                              const LlmResultMetadata& metadata, const LlmMemoryResult& result) {
+  const LlmResourcePreparationResult* preparation =
+      get_llm_cpu_preparation(backend_evidence);
+  const LlmMemoryBudget& admitted_memory_budget =
+      preparation == nullptr ? model_plan.memory_budget
+                             : preparation->memory_budget;
   OrderedJson output;
   output["schema_version"] = Constants::LLM_JSON_SCHEMA_VERSION;
   output["mode"] = Constants::LLM_JSON_MODE_NAME;
@@ -1243,9 +1331,9 @@ nlohmann::ordered_json build_llm_memory_json(const LlmMemoryConfig& config, cons
   output["software"] = software_json(metadata);
   output["configuration"] = configuration_json(config);
   output["resolved_plan"] = resolved_plan_json(model_plan, result.frozen_scenario_plans);
-  output["backend_evidence"] = backend_evidence_json(model_plan, preparation, metadata.json_peak_estimate,
+  output["backend_evidence"] = backend_evidence_json(model_plan, backend_evidence, metadata.json_peak_estimate,
                                                      !config.output_file.empty());
-  output["memory_budget"] = memory_budget_json(preparation.memory_budget);
+  output["memory_budget"] = memory_budget_json(admitted_memory_budget);
   output["calibration"] = calibration_json(result);
   output["measurements"] = measurements_json(result, model_plan);
   output["aggregates"] = aggregates_json(model_plan, result);
@@ -1267,4 +1355,14 @@ nlohmann::ordered_json build_llm_memory_json(const LlmMemoryConfig& config, cons
   output["environment"] = environment_json(metadata);
   output["quality_warnings"] = quality_warnings_json(model_plan, metadata, result);
   return output;
+}
+
+nlohmann::ordered_json build_llm_memory_json(
+    const LlmMemoryConfig& config, const LlmMemoryWorkPlan& model_plan,
+    const LlmResourcePreparationResult& preparation,
+    const LlmResultMetadata& metadata, const LlmMemoryResult& result) {
+  LlmBackendEvidence evidence;
+  evidence.backend = LlmMemoryBackend::Cpu;
+  evidence.backend_evidence = LlmCpuBackendEvidence{preparation};
+  return build_llm_memory_json(config, model_plan, evidence, metadata, result);
 }

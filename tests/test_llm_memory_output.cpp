@@ -17,15 +17,25 @@
 
 #include <array>
 #include <cstdlib>
+#include <stdexcept>
 #include <string>
 
 #include "core/config/constants.h"
+#include "llm_memory/llm_cpu_backend.h"
 #include "llm_memory/llm_json.h"
 #include "llm_memory/llm_output.h"
 #include "output/console/messages/messages_api.h"
 #include "utils/numeric_utils.h"
 
 namespace {
+
+const LlmCpuExecutionPlan& cpu_execution_plan(const LlmMemoryWorkPlan& plan) {
+  const LlmCpuExecutionPlan* const cpu_plan = get_llm_cpu_execution_plan(plan);
+  if (cpu_plan == nullptr) {
+    throw std::logic_error("expected CPU execution plan");
+  }
+  return *cpu_plan;
+}
 
 void set_headline(LlmMemoryResult& result, LlmScenario scenario, double latency_seconds, double work_units_per_second,
                   double bandwidth_gb_s) {
@@ -115,25 +125,81 @@ LlmMemoryWorkPlan make_fake_runner_plan(const LlmMemoryConfig& config) {
 }
 
 LlmExecutorResult successful_fake_execution(const LlmMemoryWorkPlan& plan) {
+  const LlmCpuExecutionPlan& cpu_plan = cpu_execution_plan(plan);
   LlmExecutorResult execution;
   execution.valid = true;
   execution.reason_code = LlmExecutorReason::VALID;
   execution.elapsed_seconds = 0.150;
-  execution.requested_workers = plan.effective_workers;
-  execution.created_workers = plan.effective_workers;
-  execution.completed_workers = plan.effective_workers;
-  execution.qos_successful_workers = plan.effective_workers;
+  execution.requested_workers = cpu_plan.effective_workers;
+  execution.created_workers = cpu_plan.effective_workers;
+  execution.completed_workers = cpu_plan.effective_workers;
+  execution.qos_successful_workers = cpu_plan.effective_workers;
   execution.kernel_succeeded = true;
   execution.timer_started = true;
   execution.timer_stopped = true;
   execution.checksum_evaluated = true;
   execution.checksum_valid = true;
-  execution.expected_checksums.resize(plan.effective_workers);
+  execution.expected_checksums.resize(cpu_plan.effective_workers);
   execution.actual_checksums = execution.expected_checksums;
   execution.expected_run_checksum = {11, 22};
   execution.actual_run_checksum = execution.expected_run_checksum;
   return execution;
 }
+
+class FakeLlmBackend final : public LlmBackend {
+ public:
+  FakeLlmBackend() { evidence_.backend = LlmMemoryBackend::Cpu; }
+
+  LlmMemoryBackend kind() const noexcept override { return LlmMemoryBackend::Cpu; }
+
+  LlmBackendAuxiliaryEstimate calculate_auxiliary_estimate(
+      const LlmMemoryWorkPlan& model_plan) const noexcept override {
+    const LlmExecutorAuxiliaryEstimate cpu = calculate_llm_executor_auxiliary_estimate(model_plan);
+    LlmBackendAuxiliaryEstimate estimate;
+    estimate.valid = cpu.valid;
+    estimate.reason_code = cpu.reason_code;
+    estimate.checksum_auxiliary_bytes = cpu.checksum_auxiliary_bytes;
+    estimate.orchestration_auxiliary_bytes = cpu.orchestration_auxiliary_bytes;
+    estimate.total_auxiliary_bytes = cpu.total_auxiliary_bytes;
+    estimate.backend_evidence = cpu;
+    return estimate;
+  }
+
+  LlmBackendLifecycleResult initialize(const LlmMemoryConfig&) noexcept override {
+    evidence_ = LlmBackendEvidence{};
+    evidence_.backend = LlmMemoryBackend::Cpu;
+    evidence_.initialization = {LlmBackendStatus::Ready, LlmBackendReason::VALID};
+    return evidence_.initialization;
+  }
+
+  LlmBackendLifecycleResult resolve_execution_plan(const LlmMemoryWorkPlan&) noexcept override {
+    evidence_.plan_resolution = {LlmBackendStatus::Ready, LlmBackendReason::VALID};
+    return evidence_.plan_resolution;
+  }
+
+  LlmBackendLifecycleResult prepare_resources(const LlmMemoryWorkPlan&) noexcept override {
+    evidence_.backend_evidence = LlmCpuBackendEvidence{};
+    evidence_.preparation = {LlmBackendStatus::Ready, LlmBackendReason::VALID};
+    return evidence_.preparation;
+  }
+
+  LlmTaskExecutionResult execute_task(const LlmMemoryWorkPlan& model_plan,
+                                      const LlmScenarioWorkPlan& scenario_plan,
+                                      const LlmRunnerTaskContext& context) override {
+    return adapt_llm_cpu_executor_result(model_plan, scenario_plan, context,
+                                         successful_fake_execution(model_plan));
+  }
+
+  const LlmBackendEvidence& evidence() const noexcept override { return evidence_; }
+
+  LlmBackendLifecycleResult release_resources() noexcept override {
+    evidence_.release = {LlmBackendStatus::Ready, LlmBackendReason::VALID};
+    return evidence_.release;
+  }
+
+ private:
+  LlmBackendEvidence evidence_;
+};
 
 size_t count_substrings(const std::string& text, const std::string& needle) {
   size_t count = 0;
@@ -247,10 +313,9 @@ TEST(LlmMemoryOutputTest, ConsoleHeadlinesAgreeExactlyWithJsonFromSameFakeRunner
   const LlmMemoryWorkPlan plan = make_fake_runner_plan(config);
   ASSERT_TRUE(plan.valid) << plan.reason_code;
 
+  FakeLlmBackend backend;
   LlmMemoryResult result;
-  const LlmTaskExecutor executor = [](const LlmMemoryWorkPlan& model_plan, const LlmScenarioWorkPlan&,
-                                      const LlmRunnerTaskContext&) { return successful_fake_execution(model_plan); };
-  ASSERT_EQ(run_llm_memory_suite(config, plan, executor, result), EXIT_SUCCESS);
+  ASSERT_EQ(run_llm_memory_suite(config, plan, backend, result), EXIT_SUCCESS);
   ASSERT_TRUE(result.results_complete);
 
   LlmResultMetadata metadata;
