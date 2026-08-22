@@ -49,6 +49,7 @@ constexpr std::string_view kLlmExecutorReasons[] = {
     LlmExecutorReason::WEIGHT_MAPPING_FAILED,
     LlmExecutorReason::K_MAPPING_FAILED,
     LlmExecutorReason::V_MAPPING_FAILED,
+    LlmExecutorReason::PAGED_POST_VALIDATION_FAILED,
     LlmExecutorReason::DESCRIPTOR_ALLOCATION_FAILED,
     LlmExecutorReason::INITIALIZATION_FAILED,
     LlmExecutorReason::INVALID_RESOURCES,
@@ -108,6 +109,7 @@ constexpr std::string_view kLlmWorkPlanReasons[] = {
     LlmWorkPlanReason::HEAD_DIMENSION_ZERO,
     LlmWorkPlanReason::INVALID_KV_ELEMENT_BYTES,
     LlmWorkPlanReason::CONTEXT_TOKENS_ZERO,
+    LlmWorkPlanReason::KV_BLOCK_TOKENS_NOT_APPLICABLE,
     LlmWorkPlanReason::BATCH_SIZE_ZERO,
     LlmWorkPlanReason::QUERY_HEADS_BELOW_KV_HEADS,
     LlmWorkPlanReason::QUERY_HEADS_NOT_DIVISIBLE_BY_KV_HEADS,
@@ -133,11 +135,15 @@ constexpr std::string_view kLlmWorkPlanReasons[] = {
     LlmWorkPlanReason::MAPPING_GRANULARITY_ZERO,
     LlmWorkPlanReason::MAPPING_ROUND_UP_OVERFLOW,
     LlmWorkPlanReason::AUXILIARY_BYTES_OVERFLOW,
+    LlmWorkPlanReason::AUXILIARY_PREFLIGHT_MISMATCH,
     LlmWorkPlanReason::MEMORY_REQUIREMENT_OVERFLOW,
     LlmWorkPlanReason::MEMORY_BUDGET_OVERFLOW,
     LlmWorkPlanReason::MEMORY_BUDGET_EXCEEDED,
     LlmWorkPlanReason::WITHIN_MEMORY_BUDGET,
     LlmWorkPlanReason::PLANNER_ALLOCATION_FAILED,
+    LlmWorkPlanReason::BLOCK_TABLE_MAPPING_FAILED,
+    LlmWorkPlanReason::BLOCK_TABLE_MATERIALIZATION_FAILED,
+    LlmWorkPlanReason::BLOCK_TABLE_PROTECTION_FAILED,
     LlmWorkPlanReason::INVALID_SCENARIO,
     LlmWorkPlanReason::INVALID_MODEL_WORK_PLAN,
     LlmWorkPlanReason::BACKEND_NOT_ACTIVATED,
@@ -221,6 +227,7 @@ bool inputs_match(const LlmMemoryConfig& config, const LlmMemoryWorkPlan& plan) 
          config.kv_head_count == geometry.kv_head_count && config.head_dimension == geometry.head_dimension &&
          config.kv_element_bytes == geometry.kv_element_bytes &&
          config.visible_context_tokens == geometry.decode->visible_context_tokens &&
+         config.kv_block_tokens == geometry.kv_block_tokens &&
          config.batch_size == geometry.batch_size &&
          cpu_plan != nullptr &&
          config.requested_workers == cpu_plan->requested_workers &&
@@ -1266,6 +1273,9 @@ void retain_cpu_task_evidence(LlmTaskExecutionResult& retained,
   destination.timer_stopped = input.timer_stopped;
   destination.checksum_evaluated = input.checksum_evaluated;
   destination.checksum_valid = input.checksum_valid;
+  destination.post_validation_evaluated =
+      input.post_validation_evaluated;
+  destination.post_validation_valid = input.post_validation_valid;
   destination.expected_run_checksum = input.expected_run_checksum;
   destination.actual_run_checksum = input.actual_run_checksum;
   const LlmCpuExecutionPlan* cpu_plan =
@@ -1529,6 +1539,183 @@ std::string_view canonicalize_llm_result_reason_code(std::string_view reason_cod
     }
   }
   return LlmRunnerReason::RUNNER_UNKNOWN_EXCEPTION;
+}
+
+LlmRunnerAuxiliaryEstimate calculate_llm_runner_auxiliary_estimate(
+    const LlmMemoryConfig& config,
+    const LlmAuxiliaryPreflightView& preflight) noexcept {
+  LlmRunnerAuxiliaryEstimate estimate;
+  try {
+    if (!preflight.valid || config.loop_count == 0 ||
+        preflight.backend != LlmMemoryBackend::Cpu ||
+        preflight.effective_workers == 0) {
+      estimate.reason_code = LlmRunnerReason::INVALID_MODEL_WORK_PLAN;
+      return estimate;
+    }
+
+    size_t planned_measurements = 0;
+    const size_t attempts_per_scenario = calibration_capacity(config);
+    size_t total_calibration_attempts = 0;
+    size_t aggregate_value_count = 0;
+    size_t retained_worker_checksums = 0;
+    if (!NumericUtils::checked_multiply(
+            config.loop_count, kLlmScenarioCount, planned_measurements) ||
+        !NumericUtils::checked_multiply(
+            attempts_per_scenario, kLlmScenarioCount,
+            total_calibration_attempts) ||
+        !NumericUtils::checked_multiply(
+            planned_measurements, static_cast<size_t>(3),
+            aggregate_value_count) ||
+        !NumericUtils::checked_multiply(
+            planned_measurements, preflight.effective_workers,
+            retained_worker_checksums) ||
+        !NumericUtils::checked_multiply(
+            retained_worker_checksums, static_cast<size_t>(2),
+            retained_worker_checksums) ||
+        !NumericUtils::checked_multiply(
+            planned_measurements, sizeof(LlmMeasurementState),
+            estimate.measurement_record_bytes) ||
+        !NumericUtils::checked_multiply(
+            config.loop_count, sizeof(LlmLoopRecord),
+            estimate.loop_record_bytes) ||
+        !NumericUtils::checked_multiply(
+            total_calibration_attempts, sizeof(LlmCalibrationAttempt),
+            estimate.calibration_record_bytes) ||
+        !NumericUtils::checked_multiply(
+            aggregate_value_count, sizeof(double),
+            estimate.aggregate_value_bytes) ||
+        !NumericUtils::checked_multiply(
+            config.loop_count, static_cast<size_t>(2 * sizeof(double)),
+            estimate.statistics_workspace_bytes) ||
+        !NumericUtils::checked_multiply(
+            kLlmRunnerMaximumWarnings, sizeof(std::string_view),
+            estimate.warning_record_bytes) ||
+        !NumericUtils::checked_multiply(
+            retained_worker_checksums, sizeof(LlmWorkerChecksum),
+            estimate.retained_checksum_bytes)) {
+      return estimate;
+    }
+
+    size_t maximum_active_identity = 0;
+    for (size_t index = 0; index < kLlmScenarioCount; ++index) {
+      const size_t identity_capacity =
+          preflight.maximum_scenario_plan_identity_bytes[index];
+      maximum_active_identity =
+          std::max(maximum_active_identity, identity_capacity);
+      size_t identity_with_null = 0;
+      size_t conservative_identity = 0;
+      size_t scenario_identity_total = 0;
+      if (!NumericUtils::checked_add(
+              identity_capacity, static_cast<size_t>(1),
+              identity_with_null) ||
+          !NumericUtils::checked_multiply(
+              identity_with_null, static_cast<size_t>(2),
+              conservative_identity) ||
+          !NumericUtils::checked_multiply(
+              conservative_identity, attempts_per_scenario,
+              scenario_identity_total) ||
+          !checked_add_to(scenario_identity_total,
+                          estimate.calibration_identity_bytes)) {
+        return estimate;
+      }
+    }
+
+    const auto add_conservative_length =
+        [&](size_t length, size_t& total) {
+          size_t with_null = 0;
+          size_t doubled = 0;
+          return NumericUtils::checked_add(
+                     length, static_cast<size_t>(1), with_null) &&
+                 NumericUtils::checked_multiply(
+                     with_null, static_cast<size_t>(2), doubled) &&
+                 checked_add_to(doubled, total);
+        };
+    if (!add_conservative_length(
+            preflight.frozen_reason_code_bytes,
+            estimate.fixed_metadata_bytes) ||
+        !add_conservative_length(
+            preflight.frozen_model_plan_identity_bytes,
+            estimate.fixed_metadata_bytes) ||
+        !add_conservative_length(
+            preflight.frozen_plan_identity_bytes,
+            estimate.fixed_metadata_bytes)) {
+      return estimate;
+    }
+    for (size_t index = 0; index < kLlmScenarioCount; ++index) {
+      if (!add_conservative_length(
+              preflight.frozen_scenario_reason_code_bytes[index],
+              estimate.fixed_metadata_bytes) ||
+          !add_conservative_length(
+              preflight.frozen_scenario_model_plan_identity_bytes[index],
+              estimate.fixed_metadata_bytes) ||
+          !add_conservative_length(
+              preflight.frozen_scenario_plan_identity_bytes[index],
+              estimate.fixed_metadata_bytes)) {
+        return estimate;
+      }
+    }
+
+    size_t active_plan_string_bytes = 0;
+    size_t active_plan_identity_bytes = 0;
+    size_t active_model_identity_bytes = 0;
+    size_t measurement_reason_bytes = 0;
+    if (!NumericUtils::checked_add(
+            maximum_active_identity, static_cast<size_t>(1),
+            active_plan_identity_bytes) ||
+        !NumericUtils::checked_add(
+            preflight.model_plan_identity_bytes, static_cast<size_t>(1),
+            active_model_identity_bytes) ||
+        !NumericUtils::checked_add(
+            active_plan_identity_bytes, active_model_identity_bytes,
+            active_plan_string_bytes) ||
+        !NumericUtils::checked_multiply(
+            active_plan_string_bytes, static_cast<size_t>(4),
+            active_plan_string_bytes) ||
+        !checked_add_to(active_plan_string_bytes,
+                        estimate.fixed_metadata_bytes) ||
+        !NumericUtils::checked_multiply(
+            planned_measurements,
+            2 * (kLlmRunnerReasonCapacity + 1),
+            measurement_reason_bytes) ||
+        !checked_add_to(measurement_reason_bytes,
+                        estimate.fixed_metadata_bytes) ||
+        !checked_add_to(2 * (kLlmRunnerReasonCapacity + 1),
+                        estimate.fixed_metadata_bytes) ||
+        !checked_add_to(2 * (kLlmRunnerDiagnosticCapacity + 1),
+                        estimate.fixed_metadata_bytes)) {
+      return estimate;
+    }
+
+    estimate.checksum_auxiliary_bytes =
+        estimate.retained_checksum_bytes;
+    size_t orchestration = 0;
+    if (!checked_add_to(estimate.measurement_record_bytes, orchestration) ||
+        !checked_add_to(estimate.loop_record_bytes, orchestration) ||
+        !checked_add_to(estimate.calibration_record_bytes, orchestration) ||
+        !checked_add_to(estimate.calibration_identity_bytes,
+                        orchestration) ||
+        !checked_add_to(estimate.aggregate_value_bytes, orchestration) ||
+        !checked_add_to(estimate.statistics_workspace_bytes,
+                        orchestration) ||
+        !checked_add_to(estimate.warning_record_bytes, orchestration) ||
+        !checked_add_to(estimate.fixed_metadata_bytes, orchestration)) {
+      return estimate;
+    }
+    estimate.orchestration_auxiliary_bytes = orchestration;
+    if (!NumericUtils::checked_add(
+            estimate.checksum_auxiliary_bytes,
+            estimate.orchestration_auxiliary_bytes,
+            estimate.total_auxiliary_bytes)) {
+      return estimate;
+    }
+    estimate.valid = true;
+    estimate.reason_code = LlmExecutorReason::VALID;
+    return estimate;
+  } catch (...) {
+    estimate = LlmRunnerAuxiliaryEstimate{};
+    estimate.reason_code = LlmRunnerReason::RUNNER_EXCEPTION;
+    return estimate;
+  }
 }
 
 LlmRunnerAuxiliaryEstimate calculate_llm_runner_auxiliary_estimate(const LlmMemoryConfig& config,

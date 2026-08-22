@@ -112,6 +112,8 @@ inline constexpr const char* SEGMENT_ARITHMETIC_OVERFLOW =
     "segment-arithmetic-overflow";
 inline constexpr const char* TABLE_ENTRY_COUNT_MISMATCH =
     "block-table-entry-count-mismatch";
+inline constexpr const char* TABLE_OUTPUT_NULL =
+    "block-table-output-null";
 inline constexpr const char* TABLE_INVALID_SENTINEL =
     "block-table-invalid-sentinel";
 inline constexpr const char* TABLE_ID_OUT_OF_RANGE =
@@ -238,12 +240,45 @@ struct LlmKvBlockTable {
 };
 
 /**
+ * Completion evidence for materialization into caller-owned uint32 storage.
+ *
+ * The result deliberately owns no table entries. The caller may publish or
+ * protect the supplied storage only after `valid == true`; failed or
+ * interrupted preparation may leave a partial permutation in that storage.
+ */
+struct LlmKvInPlaceBlockTableMaterialization {
+  bool valid = false;
+  bool interrupted = false;
+  std::string reason_code = LlmKvLayoutReason::PLANNER_ALLOCATION_FAILED;
+  LlmKvBlockTableValidation validation;
+  LlmKvPermutationIdentity permutation;
+};
+
+/**
  * Return SplitMix64(base_seed XOR KvBlockPermutation-domain).
  *
  * @param base_seed Command-level seed before domain separation.
  * @return Initial state for the frozen stateful permutation stream.
  */
 uint64_t derive_llm_kv_permutation_seed(uint64_t base_seed) noexcept;
+
+/**
+ * Build canonical permutation identity evidence from an already-known hash.
+ *
+ * This function does not validate or materialize table storage. It is also
+ * used with a fixed 64-character lowercase placeholder while calculating
+ * exact identity capacities before the admitted table mapping is created.
+ * Consumers must still require separate successful table validation.
+ *
+ * @param layout Valid paged geometry that fixes the entry count.
+ * @param resolved_seed Domain-separated permutation stream seed.
+ * @param sha256 Lowercase 64-character SHA-256 hex digest.
+ * @return Canonical evidence, or an object with an empty identity on invalid
+ *         geometry or digest shape.
+ */
+LlmKvPermutationIdentity build_llm_kv_permutation_identity(
+    const LlmKvLayoutPlan& layout, uint64_t resolved_seed,
+    std::string sha256);
 
 /**
  * Validate range, sentinel exclusion, uniqueness, and completeness.
@@ -284,6 +319,35 @@ LlmKvBlockTableValidation validate_llm_kv_block_table(
  */
 LlmKvBlockTable materialize_llm_kv_block_table(
     const LlmKvLayoutPlan& layout, uint64_t resolved_seed,
+    size_t hash_chunk_entries = 1024,
+    const LlmKvStopRequested& stop_requested = {});
+
+/**
+ * Materialize the frozen permutation directly into caller-owned storage.
+ *
+ * Generation, validation, and incremental little-endian hashing operate on
+ * @p entries in place. The implementation allocates only the checked
+ * validation bitset and bounded hashing state; it never allocates or copies a
+ * second full block table. Stop is polled before mutation, at bounded entry
+ * intervals, and at stage boundaries.
+ *
+ * @param layout Valid allocation-free paged geometry.
+ * @param resolved_seed Initial mutable SplitMix64 stream state.
+ * @param entries Writable uint32 storage containing exactly @p entry_count
+ *        entries. It may be null only when rejected before materialization.
+ * @param entry_count Must equal `layout.block_table_entries` exactly.
+ * @param hash_chunk_entries Requested little-endian hash chunk boundary.
+ * @param stop_requested Optional synchronous preparation predicate.
+ * @return Non-owning completion, validation, and permutation evidence.
+ * @note Invalid or interrupted calls may leave caller storage partially
+ *       initialized; consumers must require `valid == true` before use.
+ * @note An exception thrown by `stop_requested` propagates to the caller.
+ * @throws std::bad_alloc If fixed identity fields cannot be allocated.
+ */
+LlmKvInPlaceBlockTableMaterialization
+materialize_llm_kv_block_table_in_place(
+    const LlmKvLayoutPlan& layout, uint64_t resolved_seed,
+    uint32_t* entries, size_t entry_count,
     size_t hash_chunk_entries = 1024,
     const LlmKvStopRequested& stop_requested = {});
 
@@ -379,18 +443,22 @@ struct LlmKvCpuOwnershipPlan {
  *
  * Every logical block has exactly one owner. Boundaries minimize distance
  * from equal exact-cost prefixes, with the smaller logical boundary winning
- * ties, and worker assignment rotates by row-major layer/batch ordinal.
+ * ties, and worker assignment rotates by layer/batch ordinal. The active CPU
+ * planner caps the admitted team so every effective worker owns KV work.
  * The returned vectors own their storage and publish no partial assignments on
  * allocation or arithmetic failure.
  *
  * @param layout Valid paged geometry.
  * @param worker_count Positive requested worker count. Workers beyond the
  *        number of blocks can be idle for an individual layer/sequence.
+ * @param stop_requested Optional synchronous preparation predicate polled at
+ *        bounded assignment intervals and stage boundaries.
  * @return Exact KV-only ownership, aggregate cost, and imbalance evidence.
  * @throws std::bad_alloc If canonical identity storage cannot be allocated.
  */
 LlmKvCpuOwnershipPlan build_llm_paged_decode_kv_cpu_ownership_plan(
-    const LlmKvLayoutPlan& layout, size_t worker_count);
+    const LlmKvLayoutPlan& layout, size_t worker_count,
+    const LlmKvStopRequested& stop_requested = {});
 
 /** Injected pure limits for whole-element Metal resource segmentation. */
 struct LlmKvMetalSegmentLimits {

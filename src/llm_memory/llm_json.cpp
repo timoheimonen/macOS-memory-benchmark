@@ -60,6 +60,16 @@ size_t scenario_index(LlmScenario scenario) noexcept {
   return kLlmScenarioCount;
 }
 
+const LlmPagedCpuExecutionPlan* paged_cpu_execution_plan(
+    const LlmMemoryWorkPlan& plan) noexcept {
+  const LlmCpuExecutionPlan* const cpu = get_llm_cpu_execution_plan(plan);
+  if (plan.kv_layout != LlmKvLayout::Paged || cpu == nullptr ||
+      !cpu->paged.has_value()) {
+    return nullptr;
+  }
+  return &*cpu->paged;
+}
+
 template <typename Integer>
 OrderedJson decimal_string(Integer value) {
   return OrderedJson(std::to_string(value));
@@ -105,7 +115,13 @@ OrderedJson configuration_json(const LlmMemoryConfig& config) {
   OrderedJson resolved_sources;
   resolved_sources["backend"] = "default";
   resolved_sources["phase"] = "default";
-  resolved_sources["kv_layout"] = "default";
+  resolved_sources["kv_layout"] =
+      config.user_specified_kv_layout ? "explicit" : "default";
+  resolved_sources["kv_block_tokens"] =
+      config.kv_layout != LlmKvLayout::Paged
+          ? OrderedJson(nullptr)
+          : OrderedJson(config.user_specified_kv_block_tokens ? "explicit"
+                                                               : "default");
   resolved_sources["workers"] = config.user_specified_workers ? "explicit" : "detected";
   resolved_sources["iterations"] = config.user_specified_iterations ? "explicit" : "automatic";
   resolved_sources["seed"] = config.user_specified_seed ? "explicit" : "generated";
@@ -114,6 +130,10 @@ OrderedJson configuration_json(const LlmMemoryConfig& config) {
   output["backend"] = llm_memory_backend_to_string(config.backend);
   output["phase"] = llm_phase_to_string(config.phase);
   output["kv_layout"] = llm_kv_layout_to_string(config.kv_layout);
+  output["kv_block_tokens"] =
+      config.kv_layout == LlmKvLayout::Paged
+          ? OrderedJson(config.kv_block_tokens)
+          : OrderedJson(nullptr);
   output["weight_size_mb"] = config.weight_size_mb;
   output["layer_count"] = config.layer_count;
   output["query_head_count"] = config.query_head_count;
@@ -242,33 +262,71 @@ OrderedJson geometry_json(const LlmGeometry& geometry) {
 }
 
 OrderedJson layout_json(const LlmMemoryWorkPlan& plan) {
+  const LlmPagedCpuExecutionPlan* const paged =
+      paged_cpu_execution_plan(plan);
+  const bool available = paged != nullptr;
   OrderedJson output;
   output["kv_layout"] = llm_kv_layout_to_string(plan.kv_layout);
-  output["kv_block_tokens"] = nullptr;
-  output["blocks_per_sequence"] = nullptr;
-  output["physical_blocks_per_layer"] = nullptr;
-  output["last_block_tokens"] = nullptr;
-  output["last_block_valid_bytes"] = nullptr;
-  output["block_table_entries"] = nullptr;
-  output["block_table_bytes"] = nullptr;
-  output["permutation_domain_uint64_hex"] = nullptr;
-  output["permutation_seed_uint64_decimal"] = nullptr;
-  output["permutation_algorithm_version"] = nullptr;
-  output["permutation_sha256"] = nullptr;
+  output["kv_block_tokens"] =
+      number_or_null(available ? paged->layout.kv_block_tokens : 0,
+                     available);
+  output["blocks_per_sequence"] = decimal_or_null(
+      available ? paged->layout.blocks_per_sequence : 0, available);
+  output["physical_blocks_per_layer"] = decimal_or_null(
+      available ? paged->layout.physical_blocks_per_layer : 0, available);
+  output["total_physical_blocks"] = decimal_or_null(
+      available ? paged->layout.total_physical_blocks : 0, available);
+  output["block_bytes"] = decimal_or_null(
+      available ? paged->layout.block_bytes : 0, available);
+  output["last_block_tokens"] = decimal_or_null(
+      available ? paged->layout.last_block_tokens : 0, available);
+  output["last_block_valid_bytes"] = decimal_or_null(
+      available ? paged->layout.last_block_valid_bytes : 0, available);
+  output["decode_append_offset_in_last_block"] = decimal_or_null(
+      available ? paged->layout.decode_append_offset_in_last_block : 0,
+      available);
+  output["block_table_entries"] = decimal_or_null(
+      available ? paged->layout.block_table_entries : 0, available);
+  output["block_table_bytes"] = decimal_or_null(
+      available ? paged->layout.memory.block_table_bytes : 0, available);
+  output["layout_geometry_identity"] =
+      available ? non_empty_or_null(paged->layout.geometry_identity)
+                : OrderedJson(nullptr);
+  output["layout_identity"] =
+      available ? non_empty_or_null(paged->layout_identity)
+                : OrderedJson(nullptr);
+  output["permutation_domain_uint64_hex"] =
+      available ? non_empty_or_null(paged->permutation.domain_uint64_hex)
+                : OrderedJson(nullptr);
+  output["permutation_seed_uint64_decimal"] = decimal_or_null(
+      available ? paged->permutation.resolved_seed : 0, available);
+  output["permutation_algorithm_version"] =
+      available ? non_empty_or_null(paged->permutation.algorithm_version)
+                : OrderedJson(nullptr);
+  output["permutation_entry_count"] = decimal_or_null(
+      available ? paged->permutation.entry_count : 0, available);
+  output["permutation_sha256"] =
+      available ? non_empty_or_null(paged->permutation.sha256)
+                : OrderedJson(nullptr);
+  output["permutation_identity"] =
+      available ? non_empty_or_null(paged->permutation.identity)
+                : OrderedJson(nullptr);
   return output;
 }
 
 OrderedJson resolved_resources_json(const LlmMemoryWorkPlan& plan) {
   const LlmGeometry& geometry = plan.geometry;
+  const bool paged = plan.kv_layout == LlmKvLayout::Paged;
   OrderedJson output;
   output["weight_logical_bytes"] = decimal_string(geometry.active_weight_bytes_per_work_unit);
-  output["k_logical_bytes"] = decimal_string(geometry.k_mapping_bytes);
-  output["v_logical_bytes"] = decimal_string(geometry.v_mapping_bytes);
+  output["k_logical_bytes"] = decimal_string(geometry.k_logical_bytes);
+  output["v_logical_bytes"] = decimal_string(geometry.v_logical_bytes);
   output["k_physical_length_bytes"] = decimal_string(geometry.k_mapping_bytes);
   output["v_physical_length_bytes"] = decimal_string(geometry.v_mapping_bytes);
-  output["k_layout_padding_bytes"] = decimal_string(0);
-  output["v_layout_padding_bytes"] = decimal_string(0);
-  output["block_table_bytes"] = nullptr;
+  output["k_layout_padding_bytes"] = decimal_string(geometry.k_layout_padding_bytes);
+  output["v_layout_padding_bytes"] = decimal_string(geometry.v_layout_padding_bytes);
+  output["block_table_bytes"] =
+      decimal_or_null(geometry.block_table_bytes, paged);
   return output;
 }
 
@@ -287,6 +345,91 @@ OrderedJson component_identities_json(const LlmComponentIdentities& components) 
   output["msl_revision"] = optional_string_or_null(components.msl_revision);
   output["msl_source_sha256"] = optional_string_or_null(components.msl_source_sha256);
   output["identity"] = components.identity;
+  return output;
+}
+
+OrderedJson block_table_validation_json(
+    const LlmKvBlockTableValidation& validation) {
+  OrderedJson output;
+  output["valid"] = validation.valid;
+  output["interrupted"] = validation.interrupted;
+  output["reason_code"] = validation.reason_code;
+  output["expected_entries"] =
+      decimal_string(validation.expected_entries);
+  output["examined_entries"] =
+      decimal_string(validation.examined_entries);
+  output["validation_bitset_bytes"] =
+      decimal_string(validation.validation_bitset_bytes);
+  return output;
+}
+
+OrderedJson permutation_evidence_json(
+    const LlmKvPermutationIdentity& permutation) {
+  OrderedJson output;
+  output["algorithm_version"] = permutation.algorithm_version;
+  output["domain_uint64_hex"] = permutation.domain_uint64_hex;
+  output["resolved_seed_uint64_decimal"] =
+      decimal_string(permutation.resolved_seed);
+  output["entry_count"] = decimal_string(permutation.entry_count);
+  output["sha256"] = permutation.sha256;
+  output["identity"] = permutation.identity;
+  return output;
+}
+
+OrderedJson ownership_evidence_json(
+    const LlmKvCpuOwnershipPlan& ownership) {
+  OrderedJson output;
+  output["valid"] = ownership.valid;
+  output["reason_code"] = ownership.reason_code;
+  output["worker_count"] = ownership.worker_count;
+  output["layout_geometry_identity"] = ownership.layout_geometry_identity;
+  output["layer_sequence_count"] =
+      decimal_string(ownership.layer_sequence_count);
+  output["total_owned_blocks"] =
+      decimal_string(ownership.total_owned_blocks);
+  output["total_model_payload_bytes_per_work_unit"] =
+      decimal_string(ownership.total_model_payload_bytes_per_work_unit);
+  output["total_layout_metadata_lookup_count_per_work_unit"] =
+      decimal_string(
+          ownership.total_layout_metadata_lookup_count_per_work_unit);
+  output["total_layout_metadata_read_bytes_per_work_unit"] =
+      decimal_string(
+          ownership.total_layout_metadata_read_bytes_per_work_unit);
+  output["total_accounted_bytes_per_work_unit"] =
+      decimal_string(ownership.total_accounted_bytes_per_work_unit);
+  output["minimum_worker_accounted_bytes_per_work_unit"] =
+      decimal_string(
+          ownership.minimum_worker_accounted_bytes_per_work_unit);
+  output["maximum_worker_accounted_bytes_per_work_unit"] =
+      decimal_string(
+          ownership.maximum_worker_accounted_bytes_per_work_unit);
+  output["worker_accounted_imbalance_bytes_per_work_unit"] =
+      decimal_string(
+          ownership.worker_accounted_imbalance_bytes_per_work_unit);
+  output["assignment_count"] = decimal_string(ownership.assignments.size());
+  output["identity"] = ownership.identity;
+  return output;
+}
+
+OrderedJson paged_cpu_evidence_json(const LlmMemoryWorkPlan& plan) {
+  const LlmPagedCpuExecutionPlan* const paged =
+      paged_cpu_execution_plan(plan);
+  if (paged == nullptr) {
+    return nullptr;
+  }
+
+  OrderedJson output;
+  output["layout_identity"] = paged->layout_identity;
+  output["execution_identity"] = paged->execution_identity;
+  output["block_table_logical_bytes"] =
+      decimal_string(paged->block_table_logical_bytes);
+  output["block_table_page_rounded_bytes"] =
+      decimal_string(paged->block_table_mapping_bytes);
+  output["block_table_read_only"] = paged->block_table_read_only;
+  output["table_validation"] =
+      block_table_validation_json(paged->table_validation);
+  output["permutation"] = permutation_evidence_json(paged->permutation);
+  output["ownership"] = ownership_evidence_json(paged->ownership);
   return output;
 }
 
@@ -384,7 +527,8 @@ OrderedJson traffic_diagnostics_json(const LlmGeometry& geometry,
   return output;
 }
 
-OrderedJson budget_request_json(const LlmMemoryBudgetRequest& request) {
+OrderedJson budget_request_json(const LlmMemoryBudgetRequest& request,
+                                bool paged_layout) {
   OrderedJson output;
   output["valid"] = request.valid;
   output["reason_code"] = request.reason_code;
@@ -395,8 +539,16 @@ OrderedJson budget_request_json(const LlmMemoryBudgetRequest& request) {
   output["committed_weight_mapping_bytes"] = decimal_string(request.committed_weight_mapping_bytes);
   output["committed_k_mapping_bytes"] = decimal_string(request.committed_k_mapping_bytes);
   output["committed_v_mapping_bytes"] = decimal_string(request.committed_v_mapping_bytes);
+  output["requested_block_table_mapping_bytes"] = decimal_or_null(
+      request.requested_block_table_mapping_bytes, paged_layout);
+  output["committed_block_table_mapping_bytes"] = decimal_or_null(
+      request.committed_block_table_mapping_bytes, paged_layout);
   output["requested_data_bytes"] = decimal_string(request.requested_data_bytes);
   output["committed_data_bytes"] = decimal_string(request.committed_data_bytes);
+  output["layout_transient_bytes"] =
+      decimal_or_null(request.layout_transient_bytes, paged_layout);
+  output["setup_peak_bytes"] = decimal_string(request.setup_peak_bytes);
+  output["runtime_peak_bytes"] = decimal_string(request.runtime_peak_bytes);
   output["descriptor_bytes"] = decimal_string(request.descriptor_bytes);
   output["planner_storage_bytes"] = decimal_string(request.planner_storage_bytes);
   output["checksum_auxiliary_bytes"] = decimal_string(request.checksum_auxiliary_bytes);
@@ -406,20 +558,31 @@ OrderedJson budget_request_json(const LlmMemoryBudgetRequest& request) {
   return output;
 }
 
-OrderedJson memory_budget_json(const LlmMemoryBudget& budget) {
+OrderedJson memory_budget_json(const LlmMemoryBudget& budget,
+                               bool paged_layout) {
   const LlmMemoryBudgetRequest& request = budget.request;
-  const size_t resource_rounding_bytes =
+  size_t resource_rounding_bytes =
       request.committed_data_bytes >= request.requested_data_bytes
           ? request.committed_data_bytes - request.requested_data_bytes
           : 0;
+  if (paged_layout && request.committed_block_table_mapping_bytes >=
+                          request.requested_block_table_mapping_bytes) {
+    resource_rounding_bytes +=
+        request.committed_block_table_mapping_bytes -
+        request.requested_block_table_mapping_bytes;
+  }
   OrderedJson output;
   output["resource_rounding_bytes"] = decimal_string(resource_rounding_bytes);
   output["transient_peak_bytes"] = decimal_string(request.auxiliary_bytes);
+  output["layout_transient_bytes"] =
+      decimal_or_null(request.layout_transient_bytes, paged_layout);
+  output["setup_peak_bytes"] = decimal_string(request.setup_peak_bytes);
+  output["runtime_peak_bytes"] = decimal_string(request.runtime_peak_bytes);
   output["known_owned_peak_bytes"] = decimal_string(request.required_total_bytes);
   output["admitted_budget_bytes"] = decimal_string(budget.allowed_memory_bytes);
   output["valid"] = budget.valid;
   output["reason_code"] = budget.reason_code;
-  output["request"] = budget_request_json(budget.request);
+  output["request"] = budget_request_json(budget.request, paged_layout);
   output["available_memory_bytes"] = decimal_string(budget.available_memory_bytes);
   output["allowed_memory_bytes"] = decimal_string(budget.allowed_memory_bytes);
   output["used_fallback"] = budget.used_fallback;
@@ -463,6 +626,7 @@ OrderedJson resources_json(const LlmMemoryWorkPlan& plan, const LlmResourcePrepa
   const LlmCpuExecutionPlan& cpu =
       cpu_execution_plan == nullptr ? unavailable_cpu_execution_plan : *cpu_execution_plan;
   const LlmMemoryBudgetRequest& request = preparation.memory_budget.request;
+  const bool paged_layout = plan.kv_layout == LlmKvLayout::Paged;
   OrderedJson mappings;
   mappings["policy"] = "private_anonymous_regular_cacheable";
   mappings["full_size_physical_mappings"] = true;
@@ -472,6 +636,15 @@ OrderedJson resources_json(const LlmMemoryWorkPlan& plan, const LlmResourcePrepa
                               {"committed_bytes", decimal_string(request.committed_k_mapping_bytes)}};
   mappings["v"] = OrderedJson{{"requested_bytes", decimal_string(request.requested_v_mapping_bytes)},
                               {"committed_bytes", decimal_string(request.committed_v_mapping_bytes)}};
+  mappings["block_table"] =
+      paged_layout
+          ? OrderedJson{{"requested_bytes",
+                         decimal_string(
+                             request.requested_block_table_mapping_bytes)},
+                        {"committed_bytes",
+                         decimal_string(
+                             request.committed_block_table_mapping_bytes)}}
+          : OrderedJson(nullptr);
   mappings["requested_data_bytes"] = decimal_string(request.requested_data_bytes);
   mappings["committed_data_bytes"] = decimal_string(request.committed_data_bytes);
 
@@ -489,6 +662,17 @@ OrderedJson resources_json(const LlmMemoryWorkPlan& plan, const LlmResourcePrepa
   initialization_json["non_empty_weight_spans"] = initialization.non_empty_weight_spans;
   initialization_json["non_empty_k_spans"] = initialization.non_empty_k_spans;
   initialization_json["non_empty_v_spans"] = initialization.non_empty_v_spans;
+  initialization_json["block_table_logical_bytes"] = decimal_or_null(
+      initialization.block_table_logical_bytes, paged_layout);
+  initialization_json["block_table_page_rounded_bytes"] = decimal_or_null(
+      initialization.block_table_mapping_bytes, paged_layout);
+  initialization_json["block_table_read_only"] =
+      paged_layout ? OrderedJson(initialization.block_table_read_only)
+                   : OrderedJson(nullptr);
+  initialization_json["k_layout_padding_bytes"] = decimal_or_null(
+      initialization.k_layout_padding_bytes, paged_layout);
+  initialization_json["v_layout_padding_bytes"] = decimal_or_null(
+      initialization.v_layout_padding_bytes, paged_layout);
 
   OrderedJson descriptors;
   descriptors["abi_version"] = plan.component_identities.resource_abi_version;
@@ -506,7 +690,8 @@ OrderedJson resources_json(const LlmMemoryWorkPlan& plan, const LlmResourcePrepa
   output["descriptors"] = std::move(descriptors);
   output["executor_auxiliary"] = executor_auxiliary_json(preparation.auxiliary);
   output["json_output_peak_estimate"] = json_peak_estimate_json(json_peak_estimate, json_output_enabled);
-  output["allocation_memory_budget"] = memory_budget_json(preparation.memory_budget);
+  output["allocation_memory_budget"] =
+      memory_budget_json(preparation.memory_budget, paged_layout);
   output["initialization"] = std::move(initialization_json);
   return output;
 }
@@ -660,14 +845,17 @@ const char* checksum_status(bool evaluated, bool valid) noexcept {
   return valid ? "valid" : "invalid";
 }
 
-OrderedJson compact_execution_json(const LlmTaskExecutionEvidence& execution, std::string_view fallback_reason_code) {
+OrderedJson compact_execution_json(
+    const LlmTaskExecutionEvidence& execution,
+    std::string_view fallback_reason_code,
+    std::string_view checksum_algorithm_version) {
   const bool available = execution.available;
   const bool checksum_evaluated = compact_checksum_evaluated(execution);
   const std::string reason_code(available ? execution.reason_code : fallback_reason_code);
   OrderedJson checksum;
   checksum["status"] = checksum_status(checksum_evaluated, execution.checksum_valid);
   checksum["reason_code"] = reason_code;
-  checksum["algorithm_version"] = Constants::LLM_READ_CHECKSUM_VERSION;
+  checksum["algorithm_version"] = checksum_algorithm_version;
   checksum["checksum_valid"] = checksum_evaluated ? OrderedJson(execution.checksum_valid) : OrderedJson(nullptr);
   checksum["expected_run_checksum"] =
       checksum_evaluated ? run_checksum_json(execution.expected_run_checksum) : OrderedJson(nullptr);
@@ -709,7 +897,9 @@ OrderedJson compact_execution_json(const LlmTaskExecutionEvidence& execution, st
   return output;
 }
 
-OrderedJson calibration_attempt_json(const LlmCalibrationAttempt& attempt, size_t attempt_index) {
+OrderedJson calibration_attempt_json(
+    const LlmCalibrationAttempt& attempt, size_t attempt_index,
+    std::string_view checksum_algorithm_version) {
   const bool plan_available = !attempt.work_plan_identity.empty();
   OrderedJson output;
   output["attempt_index"] = attempt_index;
@@ -731,17 +921,22 @@ OrderedJson calibration_attempt_json(const LlmCalibrationAttempt& attempt, size_
   output["terminal"] = attempt.terminal;
   output["valid"] = attempt.valid;
   output["reason_code"] = std::string(attempt.reason_code);
-  output["execution"] = compact_execution_json(attempt.execution, attempt.reason_code);
+  output["execution"] = compact_execution_json(
+      attempt.execution, attempt.reason_code, checksum_algorithm_version);
   return output;
 }
 
-OrderedJson excluded_calibration_json(const LlmMemoryResult& result) {
+OrderedJson excluded_calibration_json(
+    const LlmMemoryResult& result,
+    std::string_view checksum_algorithm_version) {
   OrderedJson output = OrderedJson::object();
   for (LlmScenario scenario : kScenarios) {
     const size_t index = scenario_index(scenario);
     OrderedJson attempts = OrderedJson::array();
     for (size_t attempt_index = 0; attempt_index < result.calibration_attempts[index].size(); ++attempt_index) {
-      attempts.push_back(calibration_attempt_json(result.calibration_attempts[index][attempt_index], attempt_index));
+      attempts.push_back(calibration_attempt_json(
+          result.calibration_attempts[index][attempt_index], attempt_index,
+          checksum_algorithm_version));
     }
     output[llm_scenario_to_string(scenario)] = std::move(attempts);
   }
@@ -877,10 +1072,19 @@ OrderedJson measurement_execution_json(const LlmMeasurementState& measurement) {
   output["timer_stopped"] =
       cpu_available ? OrderedJson(cpu->timer_stopped)
                     : OrderedJson(nullptr);
+  output["post_validation_evaluated"] =
+      cpu_available ? OrderedJson(cpu->post_validation_evaluated)
+                    : OrderedJson(nullptr);
+  output["post_validation_valid"] =
+      cpu_available && cpu->post_validation_evaluated
+          ? OrderedJson(cpu->post_validation_valid)
+          : OrderedJson(nullptr);
   return output;
 }
 
-OrderedJson measurement_checksum_json(const LlmMeasurementState& measurement) {
+OrderedJson measurement_checksum_json(
+    const LlmMeasurementState& measurement,
+    const LlmMemoryWorkPlan& model_plan) {
   const bool evaluated = measurement_checksum_evaluated(measurement);
   const LlmTaskExecutionResult& execution = measurement.execution;
   const LlmExecutorResult* cpu = get_llm_cpu_task_evidence(execution);
@@ -890,9 +1094,12 @@ OrderedJson measurement_checksum_json(const LlmMeasurementState& measurement) {
   output["status"] = checksum_status(evaluated, checksum_valid);
   output["reason_code"] =
       measurement.execution_evidence_available ? execution.reason_code : std::string(measurement.reason_code);
-  output["initialization_pattern_version"] = Constants::LLM_BUFFER_PATTERN_VERSION;
-  output["append_pattern_version"] = Constants::LLM_APPEND_PATTERN_VERSION;
-  output["read_checksum_version"] = Constants::LLM_READ_CHECKSUM_VERSION;
+  output["initialization_pattern_version"] =
+      model_plan.component_identities.buffer_pattern_version;
+  output["append_pattern_version"] =
+      model_plan.component_identities.write_pattern_version;
+  output["read_checksum_version"] =
+      model_plan.component_identities.checksum_pattern_version;
   output["checksum_valid"] =
       evaluated ? OrderedJson(checksum_valid) : OrderedJson(nullptr);
   output["expected_worker_checksums"] =
@@ -1006,7 +1213,7 @@ OrderedJson measurement_json(const LlmMeasurementState& measurement, const LlmMe
   output["kv_write_payload_fraction"] = optional_finite_or_null(measurement.kv_write_payload_fraction);
   output["working_set"] = std::move(working_set);
   output["execution"] = measurement_execution_json(measurement);
-  output["checksum"] = measurement_checksum_json(measurement);
+  output["checksum"] = measurement_checksum_json(measurement, model_plan);
   return output;
 }
 
@@ -1075,6 +1282,7 @@ OrderedJson backend_evidence_json(const LlmMemoryWorkPlan& plan, const LlmBacken
                       {"resource_abi_version", plan.component_identities.resource_abi_version},
                       {"schedule_version", plan.component_identities.schedule_version},
                       {"timer_policy_version", plan.component_identities.timer_policy_version},
+                      {"paged", paged_cpu_evidence_json(plan)},
                       {"resources", resources_json(plan, cpu_preparation, json_peak_estimate, json_output_enabled)}};
   }
 
@@ -1084,10 +1292,12 @@ OrderedJson backend_evidence_json(const LlmMemoryWorkPlan& plan, const LlmBacken
   return output;
 }
 
-OrderedJson calibration_json(const LlmMemoryResult& result) {
+OrderedJson calibration_json(const LlmMemoryResult& result,
+                             const LlmMemoryWorkPlan& model_plan) {
   OrderedJson output;
   output["excluded_from_results"] = true;
-  output["attempts"] = excluded_calibration_json(result);
+  output["attempts"] = excluded_calibration_json(
+      result, model_plan.component_identities.checksum_pattern_version);
   return output;
 }
 
@@ -1227,6 +1437,69 @@ OrderedJson interpretation_json(const LlmMemoryWorkPlan& plan) {
 
 }  // namespace
 
+LlmJsonPeakEstimate calculate_llm_json_peak_estimate(
+    const LlmMemoryConfig& config,
+    const LlmAuxiliaryPreflightView& preflight) noexcept {
+  LlmJsonPeakEstimate estimate;
+  if (config.output_file.empty()) {
+    estimate.valid = true;
+    estimate.reason_code = LlmJsonReason::VALID;
+    return estimate;
+  }
+  if (!preflight.valid || preflight.backend != LlmMemoryBackend::Cpu ||
+      preflight.effective_workers == 0) {
+    estimate.reason_code = LlmJsonReason::INVALID_MODEL_WORK_PLAN;
+    return estimate;
+  }
+
+  size_t raw_input_bytes = config.output_file.size();
+  for (const std::string& argument : config.argv) {
+    if (!NumericUtils::checked_add(
+            raw_input_bytes, argument.size(), raw_input_bytes)) {
+      return estimate;
+    }
+  }
+  if (!NumericUtils::checked_add(
+          raw_input_bytes, preflight.json_identity_string_bytes,
+          raw_input_bytes)) {
+    return estimate;
+  }
+
+  size_t planned_measurements = 0;
+  size_t worker_checksum_records = 0;
+  if (!NumericUtils::checked_multiply(
+          config.loop_count, kLlmScenarioCount, planned_measurements) ||
+      !NumericUtils::checked_multiply(
+          planned_measurements, preflight.effective_workers,
+          worker_checksum_records) ||
+      !NumericUtils::checked_multiply(
+          raw_input_bytes, kJsonInputStringExpansionFactor,
+          estimate.input_string_bytes) ||
+      !NumericUtils::checked_multiply(
+          planned_measurements, kJsonMeasurementPeakBytes,
+          estimate.measurement_record_bytes) ||
+      !NumericUtils::checked_multiply(
+          worker_checksum_records, kJsonWorkerChecksumPeakBytes,
+          estimate.worker_checksum_bytes)) {
+    return estimate;
+  }
+
+  estimate.fixed_schema_bytes = kJsonFixedSchemaPeakBytes;
+  size_t total = estimate.fixed_schema_bytes;
+  if (!NumericUtils::checked_add(
+          total, estimate.input_string_bytes, total) ||
+      !NumericUtils::checked_add(
+          total, estimate.measurement_record_bytes, total) ||
+      !NumericUtils::checked_add(
+          total, estimate.worker_checksum_bytes, total)) {
+    return estimate;
+  }
+  estimate.total_bytes = total;
+  estimate.valid = true;
+  estimate.reason_code = LlmJsonReason::VALID;
+  return estimate;
+}
+
 LlmJsonPeakEstimate calculate_llm_json_peak_estimate(const LlmMemoryConfig& config,
                                                      const LlmMemoryWorkPlan& model_plan) noexcept {
   LlmJsonPeakEstimate estimate;
@@ -1261,6 +1534,22 @@ LlmJsonPeakEstimate calculate_llm_json_peak_estimate(const LlmMemoryConfig& conf
       !add_string_bytes(components.buffer_pattern_version) || !add_string_bytes(components.write_pattern_version) ||
       !add_string_bytes(components.checksum_pattern_version) || !add_optional_string_bytes(components.msl_revision) ||
       !add_optional_string_bytes(components.msl_source_sha256) || !add_string_bytes(components.identity)) {
+    return estimate;
+  }
+  const LlmPagedCpuExecutionPlan* const paged =
+      paged_cpu_execution_plan(model_plan);
+  if (paged != nullptr &&
+      (!add_string_bytes(paged->layout.geometry_identity) ||
+       !add_string_bytes(paged->layout_identity) ||
+       !add_string_bytes(paged->execution_identity) ||
+       !add_string_bytes(paged->table_validation.reason_code) ||
+       !add_string_bytes(paged->permutation.algorithm_version) ||
+       !add_string_bytes(paged->permutation.domain_uint64_hex) ||
+       !add_string_bytes(paged->permutation.sha256) ||
+       !add_string_bytes(paged->permutation.identity) ||
+       !add_string_bytes(paged->ownership.reason_code) ||
+       !add_string_bytes(paged->ownership.layout_geometry_identity) ||
+       !add_string_bytes(paged->ownership.identity))) {
     return estimate;
   }
 
@@ -1333,8 +1622,10 @@ nlohmann::ordered_json build_llm_memory_json(const LlmMemoryConfig& config, cons
   output["resolved_plan"] = resolved_plan_json(model_plan, result.frozen_scenario_plans);
   output["backend_evidence"] = backend_evidence_json(model_plan, backend_evidence, metadata.json_peak_estimate,
                                                      !config.output_file.empty());
-  output["memory_budget"] = memory_budget_json(admitted_memory_budget);
-  output["calibration"] = calibration_json(result);
+  output["memory_budget"] = memory_budget_json(
+      admitted_memory_budget,
+      model_plan.kv_layout == LlmKvLayout::Paged);
+  output["calibration"] = calibration_json(result, model_plan);
   output["measurements"] = measurements_json(result, model_plan);
   output["aggregates"] = aggregates_json(model_plan, result);
   output["status"] = llm_run_status_to_string(result.status);

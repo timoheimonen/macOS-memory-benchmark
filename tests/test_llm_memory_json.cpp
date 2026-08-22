@@ -67,6 +67,18 @@ LlmMemoryConfig explicit_config(size_t loop_count = 3) {
   return config;
 }
 
+LlmMemoryConfig paged_config(size_t loop_count = 1) {
+  LlmMemoryConfig config = explicit_config(loop_count);
+  config.kv_layout = LlmKvLayout::Paged;
+  config.kv_block_tokens = 2;
+  config.user_specified_kv_layout = true;
+  config.user_specified_kv_block_tokens = true;
+  config.argv = {"memory_benchmark", "--llm-memory", "--kv-layout",
+                 "paged", "--kv-block-tokens", "2", "--output",
+                 "--literal-output-name.json"};
+  return config;
+}
+
 LlmMemoryWorkPlanRequest plan_request(const LlmMemoryConfig& config) {
   LlmMemoryWorkPlanRequest request;
   request.geometry.active_weight_bytes = config.weight_size_mb * Constants::BYTES_PER_MB;
@@ -77,6 +89,9 @@ LlmMemoryWorkPlanRequest plan_request(const LlmMemoryConfig& config) {
   request.geometry.kv_element_bytes = config.kv_element_bytes;
   request.geometry.visible_context_tokens = config.visible_context_tokens;
   request.geometry.batch_size = config.batch_size;
+  request.geometry.kv_block_tokens = config.kv_block_tokens;
+  request.geometry.phase = config.phase;
+  request.geometry.kv_layout = config.kv_layout;
   request.requested_workers = config.requested_workers;
   request.available_workers = config.available_workers;
   request.available_memory_bytes = 8ULL * 1024ULL * Constants::BYTES_PER_MB;
@@ -87,14 +102,19 @@ LlmMemoryWorkPlanRequest plan_request(const LlmMemoryConfig& config) {
 
 LlmMemoryWorkPlan admitted_plan(const LlmMemoryConfig& config) {
   LlmMemoryWorkPlanRequest request = plan_request(config);
-  const LlmMemoryWorkPlan preliminary = build_llm_memory_work_plan(request);
-  if (!preliminary.valid) {
-    return build_llm_memory_work_plan(request);
+  LlmMemoryWorkPlanDraft draft = prepare_llm_memory_work_plan(request);
+  if (!draft.valid) {
+    return finalize_llm_memory_work_plan(std::move(draft), 0, 0);
   }
 
-  const LlmExecutorAuxiliaryEstimate executor = calculate_llm_executor_auxiliary_estimate(preliminary);
-  const LlmRunnerAuxiliaryEstimate runner = calculate_llm_runner_auxiliary_estimate(config, preliminary);
-  const LlmJsonPeakEstimate json_peak = calculate_llm_json_peak_estimate(config, preliminary);
+  const LlmExecutorAuxiliaryEstimate executor =
+      calculate_llm_executor_auxiliary_estimate(
+          draft.auxiliary_preflight);
+  const LlmRunnerAuxiliaryEstimate runner =
+      calculate_llm_runner_auxiliary_estimate(
+          config, draft.auxiliary_preflight);
+  const LlmJsonPeakEstimate json_peak = calculate_llm_json_peak_estimate(
+      config, draft.auxiliary_preflight);
   size_t runner_and_executor_orchestration_bytes = 0;
   if (!executor.valid || !runner.valid || !json_peak.valid ||
       !NumericUtils::checked_add(executor.checksum_auxiliary_bytes, runner.checksum_auxiliary_bytes,
@@ -103,9 +123,11 @@ LlmMemoryWorkPlan admitted_plan(const LlmMemoryConfig& config) {
                                  runner_and_executor_orchestration_bytes) ||
       !NumericUtils::checked_add(runner_and_executor_orchestration_bytes, json_peak.total_bytes,
                                  request.orchestration_auxiliary_bytes)) {
-    return build_llm_memory_work_plan(request);
+    return finalize_llm_memory_work_plan(std::move(draft), 0, 0);
   }
-  return build_llm_memory_work_plan(request);
+  return finalize_llm_memory_work_plan(
+      std::move(draft), request.checksum_auxiliary_bytes,
+      request.orchestration_auxiliary_bytes);
 }
 
 LlmReadChecksumComponent checksum_component(uint64_t offset) {
@@ -128,6 +150,8 @@ LlmExecutorResult successful_execution(const LlmMemoryWorkPlan& plan, double ela
   execution.timer_stopped = true;
   execution.checksum_evaluated = true;
   execution.checksum_valid = true;
+  execution.post_validation_evaluated = true;
+  execution.post_validation_valid = true;
   execution.expected_checksums.resize(cpu_plan.effective_workers);
   for (size_t worker_index = 0; worker_index < cpu_plan.effective_workers; ++worker_index) {
     execution.expected_checksums[worker_index] = {checksum_component(worker_index * 3),
@@ -155,6 +179,18 @@ LlmResourcePreparationResult preparation_for(const LlmMemoryWorkPlan& plan) {
   preparation.initialization.non_empty_weight_spans = cpu_plan.total_layer_descriptors;
   preparation.initialization.non_empty_k_spans = cpu_plan.total_sequence_descriptors;
   preparation.initialization.non_empty_v_spans = cpu_plan.total_sequence_descriptors;
+  preparation.initialization.k_layout_padding_bytes =
+      plan.geometry.k_layout_padding_bytes;
+  preparation.initialization.v_layout_padding_bytes =
+      plan.geometry.v_layout_padding_bytes;
+  if (cpu_plan.paged.has_value()) {
+    preparation.initialization.block_table_logical_bytes =
+        cpu_plan.paged->block_table_logical_bytes;
+    preparation.initialization.block_table_mapping_bytes =
+        cpu_plan.paged->block_table_mapping_bytes;
+    preparation.initialization.block_table_read_only =
+        cpu_plan.paged->block_table_read_only;
+  }
   return preparation;
 }
 
@@ -295,12 +331,15 @@ TEST(LlmMemoryJsonTest, CompleteDocumentHasExactTopLevelIdentityAndAuditableNest
 
   expect_exact_keys(
       document["configuration"],
-      {"backend", "phase", "kv_layout", "weight_size_mb", "layer_count", "query_head_count", "kv_head_count",
-       "head_dimension", "kv_element_bytes", "visible_context_tokens", "batch_size", "requested_workers",
-       "available_workers", "worker_source", "iterations", "work_policy", "loop_count",
-       "base_seed_uint64_decimal", "seed_source", "output_file", "argv", "resolved_sources"});
+      {"backend", "phase", "kv_layout", "kv_block_tokens", "weight_size_mb",
+       "layer_count", "query_head_count", "kv_head_count", "head_dimension",
+       "kv_element_bytes", "visible_context_tokens", "batch_size",
+       "requested_workers", "available_workers", "worker_source",
+       "iterations", "work_policy", "loop_count", "base_seed_uint64_decimal",
+       "seed_source", "output_file", "argv", "resolved_sources"});
   expect_exact_keys(document["configuration"]["resolved_sources"],
-                    {"backend", "phase", "kv_layout", "workers", "iterations", "seed"});
+                    {"backend", "phase", "kv_layout", "kv_block_tokens",
+                     "workers", "iterations", "seed"});
   expect_exact_keys(document["resolved_plan"]["methodology"], {"methodology_version",
                                               "backend",
                                               "phase",
@@ -372,24 +411,41 @@ TEST(LlmMemoryJsonTest, CompleteDocumentHasExactTopLevelIdentityAndAuditableNest
                      "synthetic_memory_work_units_per_second",
                      "effective_model_payload_gb_s"});
   expect_exact_keys(document["memory_budget"],
-                    {"resource_rounding_bytes", "transient_peak_bytes", "known_owned_peak_bytes",
-                     "admitted_budget_bytes", "valid", "reason_code", "request", "available_memory_bytes",
-                     "allowed_memory_bytes", "used_fallback"});
+                    {"resource_rounding_bytes", "transient_peak_bytes",
+                     "layout_transient_bytes", "setup_peak_bytes",
+                     "runtime_peak_bytes", "known_owned_peak_bytes",
+                     "admitted_budget_bytes", "valid", "reason_code", "request",
+                     "available_memory_bytes", "allowed_memory_bytes",
+                     "used_fallback"});
   expect_exact_keys(document["memory_budget"]["request"],
                     {"valid", "reason_code", "mapping_granularity_bytes", "requested_weight_mapping_bytes",
                      "requested_k_mapping_bytes", "requested_v_mapping_bytes", "committed_weight_mapping_bytes",
-                     "committed_k_mapping_bytes", "committed_v_mapping_bytes", "requested_data_bytes",
-                     "committed_data_bytes", "descriptor_bytes", "planner_storage_bytes", "checksum_auxiliary_bytes",
-                     "orchestration_auxiliary_bytes", "auxiliary_bytes", "required_total_bytes"});
+                     "committed_k_mapping_bytes", "committed_v_mapping_bytes",
+                     "requested_block_table_mapping_bytes",
+                     "committed_block_table_mapping_bytes", "requested_data_bytes",
+                     "committed_data_bytes", "layout_transient_bytes",
+                     "setup_peak_bytes", "runtime_peak_bytes", "descriptor_bytes",
+                     "planner_storage_bytes", "checksum_auxiliary_bytes",
+                     "orchestration_auxiliary_bytes", "auxiliary_bytes",
+                     "required_total_bytes"});
   expect_exact_keys(document["backend_evidence"], {"cpu", "metal"});
   ASSERT_TRUE(document["backend_evidence"]["cpu"].is_object());
   EXPECT_TRUE(document["backend_evidence"]["metal"].is_null());
+  expect_exact_keys(document["backend_evidence"]["cpu"],
+                    {"requested_workers", "available_workers",
+                     "effective_workers", "resource_abi_version",
+                     "schedule_version", "timer_policy_version", "paged",
+                     "resources"});
+  EXPECT_TRUE(document["backend_evidence"]["cpu"]["paged"].is_null());
   const OrderedJson& cpu_resources = document["backend_evidence"]["cpu"]["resources"];
   expect_exact_keys(cpu_resources,
                     {"valid", "reason_code", "model_plan_identity", "mappings", "descriptors", "executor_auxiliary",
                      "json_output_peak_estimate", "allocation_memory_budget", "initialization"});
-  expect_exact_keys(cpu_resources["mappings"], {"policy", "full_size_physical_mappings", "weight", "k", "v",
-                                                 "requested_data_bytes", "committed_data_bytes"});
+  expect_exact_keys(cpu_resources["mappings"],
+                    {"policy", "full_size_physical_mappings", "weight", "k",
+                     "v", "block_table", "requested_data_bytes",
+                     "committed_data_bytes"});
+  EXPECT_TRUE(cpu_resources["mappings"]["block_table"].is_null());
   expect_exact_keys(cpu_resources["mappings"]["weight"], {"requested_bytes", "committed_bytes"});
   expect_exact_keys(cpu_resources["descriptors"],
                     {"abi_version", "layer_descriptors_per_worker", "sequence_descriptors_per_worker",
@@ -404,7 +460,13 @@ TEST(LlmMemoryJsonTest, CompleteDocumentHasExactTopLevelIdentityAndAuditableNest
   expect_exact_keys(cpu_resources["initialization"],
                     {"complete", "pattern_version", "pre_touch_policy", "separate_reference_read_pass",
                      "static_references_accumulated_during_initialization", "weight_bytes", "k_bytes", "v_bytes",
-                     "total_bytes", "non_empty_weight_spans", "non_empty_k_spans", "non_empty_v_spans"});
+                     "total_bytes", "non_empty_weight_spans", "non_empty_k_spans",
+                     "non_empty_v_spans", "block_table_logical_bytes",
+                     "block_table_page_rounded_bytes", "block_table_read_only",
+                     "k_layout_padding_bytes", "v_layout_padding_bytes"});
+  EXPECT_TRUE(cpu_resources["initialization"]["block_table_logical_bytes"].is_null());
+  EXPECT_TRUE(cpu_resources["initialization"]["block_table_page_rounded_bytes"].is_null());
+  EXPECT_TRUE(cpu_resources["initialization"]["block_table_read_only"].is_null());
   expect_exact_keys(document["seeds"],
                     {"base_seed_uint64_decimal", "source", "buffer_domain_seeds", "scenario_domain_seeds"});
   expect_exact_keys(document["seeds"]["buffer_domain_seeds"],
@@ -418,9 +480,14 @@ TEST(LlmMemoryJsonTest, CompleteDocumentHasExactTopLevelIdentityAndAuditableNest
   EXPECT_TRUE(document["resolved_plan"]["geometry"]["prefill"].is_null());
   expect_exact_keys(document["resolved_plan"]["layout"],
                     {"kv_layout", "kv_block_tokens", "blocks_per_sequence", "physical_blocks_per_layer",
-                     "last_block_tokens", "last_block_valid_bytes", "block_table_entries", "block_table_bytes",
-                     "permutation_domain_uint64_hex", "permutation_seed_uint64_decimal",
-                     "permutation_algorithm_version", "permutation_sha256"});
+                     "total_physical_blocks", "block_bytes", "last_block_tokens",
+                     "last_block_valid_bytes", "decode_append_offset_in_last_block",
+                     "block_table_entries", "block_table_bytes",
+                     "layout_geometry_identity", "layout_identity",
+                     "permutation_domain_uint64_hex",
+                     "permutation_seed_uint64_decimal",
+                     "permutation_algorithm_version", "permutation_entry_count",
+                     "permutation_sha256", "permutation_identity"});
   expect_exact_keys(document["resolved_plan"]["resources"],
                     {"weight_logical_bytes", "k_logical_bytes", "v_logical_bytes", "k_physical_length_bytes",
                      "v_physical_length_bytes", "k_layout_padding_bytes", "v_layout_padding_bytes",
@@ -559,7 +626,8 @@ TEST(LlmMemoryJsonTest, CompleteDocumentHasExactTopLevelIdentityAndAuditableNest
   expect_exact_keys(document["measurements"][0]["execution"],
                     {"status", "reason_code", "valid", "elapsed_seconds", "requested_workers", "created_workers",
                      "completed_workers", "qos_successful_workers", "qos_failed_workers", "worker_startup_failed",
-                     "kernel_succeeded", "timer_started", "timer_stopped"});
+                     "kernel_succeeded", "timer_started", "timer_stopped",
+                     "post_validation_evaluated", "post_validation_valid"});
   expect_exact_keys(document["measurements"][0]["checksum"],
                     {"status", "reason_code", "initialization_pattern_version", "append_pattern_version",
                      "read_checksum_version", "checksum_valid", "expected_worker_checksums", "actual_worker_checksums",
@@ -646,6 +714,179 @@ TEST(LlmMemoryJsonTest, CompleteDocumentHasExactTopLevelIdentityAndAuditableNest
 }
 
 TEST(LlmMemoryJsonTest,
+     PagedDocumentPublishesExactLayoutResourceAndOwnershipProvenance) {
+  const LlmMemoryConfig config = paged_config();
+  const LlmMemoryWorkPlan plan = admitted_plan(config);
+  ASSERT_TRUE(plan.valid) << plan.reason_code;
+  const LlmCpuExecutionPlan& cpu = cpu_execution_plan(plan);
+  ASSERT_TRUE(cpu.paged.has_value());
+  const LlmPagedCpuExecutionPlan& paged = *cpu.paged;
+  const LlmMemoryResult result = complete_result(config, plan);
+  ASSERT_TRUE(result.results_complete) << result.reason_code;
+  const LlmResourcePreparationResult preparation = preparation_for(plan);
+  const OrderedJson document = build_llm_memory_json(
+      config, plan, preparation, fixed_metadata(config, plan), result);
+
+  EXPECT_EQ(document["schema_version"], 1);
+  EXPECT_EQ(document["kv_layout"], "paged");
+  EXPECT_EQ(document["configuration"]["kv_layout"], "paged");
+  EXPECT_EQ(document["configuration"]["kv_block_tokens"], 2u);
+  EXPECT_EQ(document["configuration"]["resolved_sources"]["kv_layout"],
+            "explicit");
+  EXPECT_EQ(
+      document["configuration"]["resolved_sources"]["kv_block_tokens"],
+      "explicit");
+
+  const OrderedJson& layout = document["resolved_plan"]["layout"];
+  expect_exact_keys(
+      layout,
+      {"kv_layout", "kv_block_tokens", "blocks_per_sequence",
+       "physical_blocks_per_layer", "total_physical_blocks", "block_bytes",
+       "last_block_tokens", "last_block_valid_bytes",
+       "decode_append_offset_in_last_block", "block_table_entries",
+       "block_table_bytes", "layout_geometry_identity", "layout_identity",
+       "permutation_domain_uint64_hex", "permutation_seed_uint64_decimal",
+       "permutation_algorithm_version", "permutation_entry_count",
+       "permutation_sha256", "permutation_identity"});
+  EXPECT_EQ(layout["kv_layout"], "paged");
+  EXPECT_EQ(layout["kv_block_tokens"], 2u);
+  EXPECT_EQ(layout["blocks_per_sequence"], "2");
+  EXPECT_EQ(layout["physical_blocks_per_layer"], "2");
+  EXPECT_EQ(layout["total_physical_blocks"], "4");
+  EXPECT_EQ(layout["block_bytes"], "64");
+  EXPECT_EQ(layout["last_block_tokens"], "1");
+  EXPECT_EQ(layout["last_block_valid_bytes"], "32");
+  EXPECT_EQ(layout["decode_append_offset_in_last_block"], "0");
+  EXPECT_EQ(layout["block_table_entries"], "2");
+  EXPECT_EQ(layout["block_table_bytes"], "8");
+  EXPECT_EQ(layout["layout_geometry_identity"],
+            paged.layout.geometry_identity);
+  EXPECT_EQ(layout["layout_identity"], paged.layout_identity);
+  EXPECT_EQ(layout["permutation_domain_uint64_hex"],
+            "0x4c4c4d4b56504731");
+  EXPECT_EQ(layout["permutation_seed_uint64_decimal"],
+            std::to_string(paged.permutation.resolved_seed));
+  EXPECT_EQ(layout["permutation_algorithm_version"],
+            Constants::LLM_KV_BLOCK_PERMUTATION_VERSION);
+  EXPECT_EQ(layout["permutation_entry_count"], "2");
+  EXPECT_EQ(layout["permutation_sha256"], paged.permutation.sha256);
+  EXPECT_EQ(layout["permutation_identity"], paged.permutation.identity);
+
+  const OrderedJson& resources = document["resolved_plan"]["resources"];
+  EXPECT_EQ(resources["k_logical_bytes"], "192");
+  EXPECT_EQ(resources["v_logical_bytes"], "192");
+  EXPECT_EQ(resources["k_physical_length_bytes"], "256");
+  EXPECT_EQ(resources["v_physical_length_bytes"], "256");
+  EXPECT_EQ(resources["k_layout_padding_bytes"], "64");
+  EXPECT_EQ(resources["v_layout_padding_bytes"], "64");
+  EXPECT_EQ(resources["block_table_bytes"], "8");
+
+  const OrderedJson& paged_evidence =
+      document["backend_evidence"]["cpu"]["paged"];
+  expect_exact_keys(
+      paged_evidence,
+      {"layout_identity", "execution_identity", "block_table_logical_bytes",
+       "block_table_page_rounded_bytes", "block_table_read_only",
+       "table_validation", "permutation", "ownership"});
+  EXPECT_EQ(paged_evidence["layout_identity"], paged.layout_identity);
+  EXPECT_EQ(paged_evidence["execution_identity"], paged.execution_identity);
+  EXPECT_EQ(paged_evidence["block_table_logical_bytes"], "8");
+  EXPECT_EQ(paged_evidence["block_table_page_rounded_bytes"], "4096");
+  EXPECT_TRUE(paged_evidence["block_table_read_only"]);
+  expect_exact_keys(
+      paged_evidence["table_validation"],
+      {"valid", "interrupted", "reason_code", "expected_entries",
+       "examined_entries", "validation_bitset_bytes"});
+  EXPECT_TRUE(paged_evidence["table_validation"]["valid"]);
+  EXPECT_EQ(paged_evidence["table_validation"]["expected_entries"], "2");
+  EXPECT_EQ(paged_evidence["table_validation"]["examined_entries"], "2");
+  EXPECT_EQ(paged_evidence["table_validation"]["validation_bitset_bytes"],
+            "1");
+  expect_exact_keys(
+      paged_evidence["permutation"],
+      {"algorithm_version", "domain_uint64_hex",
+       "resolved_seed_uint64_decimal", "entry_count", "sha256",
+       "identity"});
+  EXPECT_EQ(paged_evidence["permutation"]["sha256"],
+            paged.permutation.sha256);
+  EXPECT_EQ(paged_evidence["permutation"]["identity"],
+            paged.permutation.identity);
+  expect_exact_keys(
+      paged_evidence["ownership"],
+      {"valid", "reason_code", "worker_count", "layout_geometry_identity",
+       "layer_sequence_count", "total_owned_blocks",
+       "total_model_payload_bytes_per_work_unit",
+       "total_layout_metadata_lookup_count_per_work_unit",
+       "total_layout_metadata_read_bytes_per_work_unit",
+       "total_accounted_bytes_per_work_unit",
+       "minimum_worker_accounted_bytes_per_work_unit",
+       "maximum_worker_accounted_bytes_per_work_unit",
+       "worker_accounted_imbalance_bytes_per_work_unit", "assignment_count",
+       "identity"});
+  EXPECT_TRUE(paged_evidence["ownership"]["valid"]);
+  EXPECT_EQ(paged_evidence["ownership"]["total_owned_blocks"], "4");
+  EXPECT_EQ(
+      paged_evidence["ownership"]
+                    ["total_layout_metadata_lookup_count_per_work_unit"],
+      "10");
+  EXPECT_EQ(
+      paged_evidence["ownership"]
+                    ["total_layout_metadata_read_bytes_per_work_unit"],
+      "40");
+  EXPECT_EQ(paged_evidence["ownership"]["identity"],
+            paged.ownership.identity);
+
+  const OrderedJson& cpu_resources =
+      document["backend_evidence"]["cpu"]["resources"];
+  expect_exact_keys(cpu_resources["mappings"]["block_table"],
+                    {"requested_bytes", "committed_bytes"});
+  EXPECT_EQ(cpu_resources["mappings"]["block_table"]["requested_bytes"],
+            "8");
+  EXPECT_EQ(cpu_resources["mappings"]["block_table"]["committed_bytes"],
+            "4096");
+  EXPECT_EQ(cpu_resources["initialization"]["block_table_logical_bytes"],
+            "8");
+  EXPECT_EQ(
+      cpu_resources["initialization"]["block_table_page_rounded_bytes"],
+      "4096");
+  EXPECT_TRUE(cpu_resources["initialization"]["block_table_read_only"]);
+  EXPECT_EQ(cpu_resources["initialization"]["k_layout_padding_bytes"],
+            "64");
+  EXPECT_EQ(cpu_resources["initialization"]["v_layout_padding_bytes"],
+            "64");
+
+  const OrderedJson& budget = document["memory_budget"];
+  EXPECT_EQ(budget["layout_transient_bytes"], "1");
+  EXPECT_EQ(budget["setup_peak_bytes"],
+            std::to_string(plan.memory_budget.request.setup_peak_bytes));
+  EXPECT_EQ(budget["runtime_peak_bytes"],
+            std::to_string(plan.memory_budget.request.runtime_peak_bytes));
+  EXPECT_EQ(budget["request"]["requested_block_table_mapping_bytes"], "8");
+  EXPECT_EQ(budget["request"]["committed_block_table_mapping_bytes"],
+            "4096");
+  EXPECT_EQ(budget["request"]["layout_transient_bytes"], "1");
+
+  ASSERT_GE(document["measurements"].size(), 2u);
+  const OrderedJson& kv_only = document["measurements"][1];
+  ASSERT_EQ(kv_only["scenario"], "kv_only");
+  EXPECT_EQ(kv_only["layout_metadata_lookup_count_per_work_unit"], "10");
+  EXPECT_EQ(kv_only["layout_metadata_read_bytes_per_work_unit"], "40");
+  EXPECT_EQ(kv_only["effective_model_payload_bytes_per_work_unit"], "512");
+  EXPECT_EQ(kv_only["accounted_bytes_per_work_unit"], "552");
+  EXPECT_TRUE(kv_only["execution"]["post_validation_evaluated"]);
+  EXPECT_TRUE(kv_only["execution"]["post_validation_valid"]);
+  EXPECT_EQ(kv_only["checksum"]["initialization_pattern_version"],
+            Constants::LLM_PAGED_BUFFER_PATTERN_VERSION);
+  EXPECT_EQ(kv_only["checksum"]["read_checksum_version"],
+            Constants::LLM_PAGED_READ_CHECKSUM_VERSION);
+  ASSERT_FALSE(
+      document["calibration"]["attempts"]["weights_only"].empty());
+  EXPECT_EQ(document["calibration"]["attempts"]["weights_only"][0]
+                    ["execution"]["checksum"]["algorithm_version"],
+            Constants::LLM_PAGED_READ_CHECKSUM_VERSION);
+}
+
+TEST(LlmMemoryJsonTest,
      UnsupportedBeforePreparationRetainsAdmittedTopLevelMemoryBudget) {
   const LlmMemoryConfig config = explicit_config();
   const LlmMemoryWorkPlan plan = admitted_plan(config);
@@ -707,6 +948,120 @@ TEST(LlmMemoryJsonTest, JsonPeakEstimateIsZeroWhenOutputIsDisabled) {
   EXPECT_EQ(estimate.measurement_record_bytes, 0u);
   EXPECT_EQ(estimate.worker_checksum_bytes, 0u);
   EXPECT_EQ(estimate.total_bytes, 0u);
+}
+
+TEST(LlmMemoryJsonTest,
+     PreflightAuxiliaryEstimatesExactlyMatchFinalizedPlanForBothLayouts) {
+  const std::array<LlmMemoryConfig, 2> configs = {
+      explicit_config(3), paged_config(3)};
+  for (const LlmMemoryConfig& config : configs) {
+    SCOPED_TRACE(llm_kv_layout_to_string(config.kv_layout));
+    LlmMemoryWorkPlanDraft draft =
+        prepare_llm_memory_work_plan(plan_request(config));
+    ASSERT_TRUE(draft.valid) << draft.reason_code;
+    const LlmExecutorAuxiliaryEstimate preflight_executor =
+        calculate_llm_executor_auxiliary_estimate(
+            draft.auxiliary_preflight);
+    const LlmRunnerAuxiliaryEstimate preflight_runner =
+        calculate_llm_runner_auxiliary_estimate(
+            config, draft.auxiliary_preflight);
+    const LlmJsonPeakEstimate preflight_json =
+        calculate_llm_json_peak_estimate(
+            config, draft.auxiliary_preflight);
+    ASSERT_TRUE(preflight_executor.valid);
+    ASSERT_TRUE(preflight_runner.valid);
+    ASSERT_TRUE(preflight_json.valid);
+
+    size_t checksum_auxiliary_bytes = 0;
+    size_t orchestration_auxiliary_bytes = 0;
+    ASSERT_TRUE(NumericUtils::checked_add(
+        preflight_executor.checksum_auxiliary_bytes,
+        preflight_runner.checksum_auxiliary_bytes,
+        checksum_auxiliary_bytes));
+    ASSERT_TRUE(NumericUtils::checked_add(
+        preflight_executor.orchestration_auxiliary_bytes,
+        preflight_runner.orchestration_auxiliary_bytes,
+        orchestration_auxiliary_bytes));
+    ASSERT_TRUE(NumericUtils::checked_add(
+        orchestration_auxiliary_bytes, preflight_json.total_bytes,
+        orchestration_auxiliary_bytes));
+    const LlmMemoryWorkPlan plan = finalize_llm_memory_work_plan(
+        std::move(draft), checksum_auxiliary_bytes,
+        orchestration_auxiliary_bytes);
+    ASSERT_TRUE(plan.valid) << plan.reason_code;
+
+    const LlmExecutorAuxiliaryEstimate final_executor =
+        calculate_llm_executor_auxiliary_estimate(plan);
+    const LlmRunnerAuxiliaryEstimate final_runner =
+        calculate_llm_runner_auxiliary_estimate(config, plan);
+    const LlmJsonPeakEstimate final_json =
+        calculate_llm_json_peak_estimate(config, plan);
+
+    EXPECT_EQ(preflight_executor.valid, final_executor.valid);
+    EXPECT_EQ(preflight_executor.reason_code, final_executor.reason_code);
+    EXPECT_EQ(preflight_executor.static_reference_bytes,
+              final_executor.static_reference_bytes);
+    EXPECT_EQ(preflight_executor.expected_checksum_bytes,
+              final_executor.expected_checksum_bytes);
+    EXPECT_EQ(preflight_executor.actual_checksum_bytes,
+              final_executor.actual_checksum_bytes);
+    EXPECT_EQ(preflight_executor.run_checksum_bytes,
+              final_executor.run_checksum_bytes);
+    EXPECT_EQ(preflight_executor.worker_status_bytes,
+              final_executor.worker_status_bytes);
+    EXPECT_EQ(preflight_executor.thread_handle_bytes,
+              final_executor.thread_handle_bytes);
+    EXPECT_EQ(preflight_executor.checksum_auxiliary_bytes,
+              final_executor.checksum_auxiliary_bytes);
+    EXPECT_EQ(preflight_executor.orchestration_auxiliary_bytes,
+              final_executor.orchestration_auxiliary_bytes);
+    EXPECT_EQ(preflight_executor.total_auxiliary_bytes,
+              final_executor.total_auxiliary_bytes);
+
+    EXPECT_EQ(preflight_runner.valid, final_runner.valid);
+    EXPECT_EQ(preflight_runner.reason_code, final_runner.reason_code);
+    EXPECT_EQ(preflight_runner.measurement_record_bytes,
+              final_runner.measurement_record_bytes);
+    EXPECT_EQ(preflight_runner.loop_record_bytes,
+              final_runner.loop_record_bytes);
+    EXPECT_EQ(preflight_runner.calibration_record_bytes,
+              final_runner.calibration_record_bytes);
+    EXPECT_EQ(preflight_runner.calibration_identity_bytes,
+              final_runner.calibration_identity_bytes);
+    EXPECT_EQ(preflight_runner.aggregate_value_bytes,
+              final_runner.aggregate_value_bytes);
+    EXPECT_EQ(preflight_runner.statistics_workspace_bytes,
+              final_runner.statistics_workspace_bytes);
+    EXPECT_EQ(preflight_runner.warning_record_bytes,
+              final_runner.warning_record_bytes);
+    EXPECT_EQ(preflight_runner.fixed_metadata_bytes,
+              final_runner.fixed_metadata_bytes);
+    EXPECT_EQ(preflight_runner.retained_checksum_bytes,
+              final_runner.retained_checksum_bytes);
+    EXPECT_EQ(preflight_runner.checksum_auxiliary_bytes,
+              final_runner.checksum_auxiliary_bytes);
+    EXPECT_EQ(preflight_runner.orchestration_auxiliary_bytes,
+              final_runner.orchestration_auxiliary_bytes);
+    EXPECT_EQ(preflight_runner.total_auxiliary_bytes,
+              final_runner.total_auxiliary_bytes);
+
+    EXPECT_EQ(preflight_json.valid, final_json.valid);
+    EXPECT_EQ(preflight_json.reason_code, final_json.reason_code);
+    EXPECT_EQ(preflight_json.fixed_schema_bytes,
+              final_json.fixed_schema_bytes);
+    EXPECT_EQ(preflight_json.input_string_bytes,
+              final_json.input_string_bytes);
+    EXPECT_EQ(preflight_json.measurement_record_bytes,
+              final_json.measurement_record_bytes);
+    EXPECT_EQ(preflight_json.worker_checksum_bytes,
+              final_json.worker_checksum_bytes);
+    EXPECT_EQ(preflight_json.total_bytes, final_json.total_bytes);
+
+    EXPECT_EQ(plan.memory_budget.request.checksum_auxiliary_bytes,
+              checksum_auxiliary_bytes);
+    EXPECT_EQ(plan.memory_budget.request.orchestration_auxiliary_bytes,
+              orchestration_auxiliary_bytes);
+  }
 }
 
 TEST(LlmMemoryJsonTest, JsonPeakEstimateScalesWithMeasurementsAndWorkersAndIsAdmitted) {
@@ -788,16 +1143,47 @@ TEST(LlmMemoryJsonTest, ExactByteSeedAndChecksumIntegersAreCanonicalDecimalStrin
 
   EXPECT_TRUE(document["resolved_plan"]["geometry"]["decode"].is_object());
   EXPECT_TRUE(document["resolved_plan"]["geometry"]["prefill"].is_null());
-  EXPECT_TRUE(document["resolved_plan"]["layout"]["kv_block_tokens"].is_null());
-  EXPECT_TRUE(document["resolved_plan"]["layout"]["block_table_bytes"].is_null());
+  EXPECT_TRUE(document["configuration"]["kv_block_tokens"].is_null());
+  EXPECT_EQ(document["configuration"]["resolved_sources"]["kv_layout"],
+            "default");
+  EXPECT_TRUE(document["configuration"]["resolved_sources"]
+                          ["kv_block_tokens"]
+                              .is_null());
+  for (const char* field : {
+           "kv_block_tokens", "blocks_per_sequence",
+           "physical_blocks_per_layer", "total_physical_blocks",
+           "block_bytes", "last_block_tokens", "last_block_valid_bytes",
+           "decode_append_offset_in_last_block", "block_table_entries",
+           "block_table_bytes", "layout_geometry_identity", "layout_identity",
+           "permutation_domain_uint64_hex",
+           "permutation_seed_uint64_decimal",
+           "permutation_algorithm_version", "permutation_entry_count",
+           "permutation_sha256", "permutation_identity"}) {
+    EXPECT_TRUE(document["resolved_plan"]["layout"][field].is_null())
+        << field;
+  }
   EXPECT_TRUE(document["resolved_plan"]["resources"]["weight_logical_bytes"].is_string());
   EXPECT_TRUE(document["resolved_plan"]["resources"]["block_table_bytes"].is_null());
   EXPECT_TRUE(document["resolved_plan"]["component_identities"]["permutation_version"].is_null());
   EXPECT_TRUE(document["resolved_plan"]["component_identities"]["msl_revision"].is_null());
   EXPECT_TRUE(document["resolved_plan"]["component_identities"]["msl_source_sha256"].is_null());
   EXPECT_TRUE(document["backend_evidence"]["cpu"].is_object());
+  EXPECT_TRUE(document["backend_evidence"]["cpu"]["paged"].is_null());
   EXPECT_TRUE(document["backend_evidence"]["metal"].is_null());
+  EXPECT_TRUE(document["memory_budget"]["layout_transient_bytes"].is_null());
+  EXPECT_TRUE(
+      document["memory_budget"]["request"]
+              ["requested_block_table_mapping_bytes"]
+                  .is_null());
+  EXPECT_TRUE(
+      document["memory_budget"]["request"]
+              ["committed_block_table_mapping_bytes"]
+                  .is_null());
+  EXPECT_TRUE(document["memory_budget"]["request"]
+                          ["layout_transient_bytes"]
+                              .is_null());
   for (const char* field : {"resource_rounding_bytes", "transient_peak_bytes", "known_owned_peak_bytes",
+                            "setup_peak_bytes", "runtime_peak_bytes",
                             "admitted_budget_bytes"}) {
     EXPECT_TRUE(document["memory_budget"][field].is_string()) << field;
   }
@@ -806,6 +1192,10 @@ TEST(LlmMemoryJsonTest, ExactByteSeedAndChecksumIntegersAreCanonicalDecimalStrin
   const OrderedJson& checksum = document["measurements"][0]["checksum"];
   ASSERT_EQ(checksum["status"], "valid");
   ASSERT_TRUE(checksum["checksum_valid"]);
+  EXPECT_TRUE(document["measurements"][0]["execution"]
+                  ["post_validation_evaluated"]);
+  EXPECT_TRUE(
+      document["measurements"][0]["execution"]["post_validation_valid"]);
   EXPECT_EQ(checksum["expected_worker_checksums"][0]["weight"]["state_a_uint64_decimal"], "18446744073709551615");
   EXPECT_EQ(checksum["expected_worker_checksums"][0]["weight"]["state_b_uint64_decimal"], "9007199254740993");
   EXPECT_EQ(checksum["expected_worker_checksums"][0]["weight"]["exact_bytes_read"], "9007199254741093");
@@ -848,6 +1238,8 @@ TEST(LlmMemoryJsonTest, InterruptedRunnerSerializesUnavailableMetricsExecutionQo
   EXPECT_TRUE(serialized["effective_model_payload_gb_s"].is_null());
   EXPECT_EQ(serialized["execution"]["status"], "not_run");
   EXPECT_TRUE(serialized["execution"]["valid"].is_null());
+  EXPECT_TRUE(serialized["execution"]["post_validation_evaluated"].is_null());
+  EXPECT_TRUE(serialized["execution"]["post_validation_valid"].is_null());
   EXPECT_EQ(serialized["checksum"]["status"], "not_evaluated");
   EXPECT_EQ(serialized["checksum"]["reason_code"], LlmRunnerReason::INTERRUPTION_BEFORE_TASK);
   EXPECT_TRUE(serialized["checksum"]["checksum_valid"].is_null());
@@ -888,6 +1280,8 @@ TEST(LlmMemoryJsonTest, ExecutorExceptionUsesRunnerReasonAndNullUnavailableExecu
   EXPECT_TRUE(measurement["execution"]["valid"].is_null());
   EXPECT_TRUE(measurement["execution"]["requested_workers"].is_null());
   EXPECT_TRUE(measurement["execution"]["kernel_succeeded"].is_null());
+  EXPECT_TRUE(measurement["execution"]["post_validation_evaluated"].is_null());
+  EXPECT_TRUE(measurement["execution"]["post_validation_valid"].is_null());
   EXPECT_EQ(measurement["checksum"]["status"], "not_evaluated");
   EXPECT_EQ(measurement["checksum"]["reason_code"], LlmRunnerReason::RUNNER_EXCEPTION);
   EXPECT_TRUE(measurement["checksum"]["checksum_valid"].is_null());
@@ -1046,6 +1440,37 @@ TEST(LlmMemoryJsonTest, ChecksumMismatchSerializesEvaluatedFalseInsteadOfMissing
   EXPECT_FALSE(measurement["checksum"]["checksum_valid"]);
   EXPECT_TRUE(measurement["checksum"]["expected_worker_checksums"].is_array());
   EXPECT_TRUE(measurement["checksum"]["actual_worker_checksums"].is_array());
+}
+
+TEST(LlmMemoryJsonTest,
+     PagedPostValidationFailureSerializesEvaluatedInvalidEvidence) {
+  const LlmMemoryConfig config = paged_config();
+  const LlmMemoryWorkPlan plan = admitted_plan(config);
+  ASSERT_TRUE(plan.valid) << plan.reason_code;
+  FakeLlmBackend backend(
+      [](const LlmMemoryWorkPlan& model_plan,
+         const LlmScenarioWorkPlan&, const LlmRunnerTaskContext& context) {
+        LlmExecutorResult execution = successful_execution(model_plan);
+        if (context.kind == LlmRunnerTaskKind::Measurement) {
+          execution.valid = false;
+          execution.reason_code =
+              LlmExecutorReason::PAGED_POST_VALIDATION_FAILED;
+          execution.post_validation_valid = false;
+        }
+        return execution;
+      });
+  LlmMemoryResult result;
+  ASSERT_EQ(run_llm_memory_suite(config, plan, backend, result), EXIT_FAILURE);
+
+  const OrderedJson document = build_llm_memory_json(
+      config, plan, preparation_for(plan), fixed_metadata(config, plan),
+      result);
+  const OrderedJson& measurement = document["measurements"][0];
+  EXPECT_EQ(measurement["status"], "invalid");
+  EXPECT_EQ(measurement["reason_code"],
+            LlmExecutorReason::PAGED_POST_VALIDATION_FAILED);
+  EXPECT_TRUE(measurement["execution"]["post_validation_evaluated"]);
+  EXPECT_FALSE(measurement["execution"]["post_validation_valid"]);
 }
 
 TEST(LlmMemoryJsonTest, CommonAcceptanceFailureCannotSerializeCompleteBackendEvidenceAsValid) {

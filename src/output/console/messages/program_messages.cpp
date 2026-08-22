@@ -161,8 +161,10 @@ std::string usage_options(const std::string& prog_name) {
       << "                        --head-dim, and --context-tokens. Use --llm-memory --help for\n"
       << "                        its exact whitelist, defaults, and memory-only interpretation.\n"
       << "                        JSON uses schema " << Constants::LLM_JSON_SCHEMA_VERSION
-      << " methodology "
-      << Constants::LLM_CPU_DECODE_CONTIGUOUS_METHODOLOGY_VERSION << ".\n"
+      << " methodologies "
+      << Constants::LLM_CPU_DECODE_CONTIGUOUS_METHODOLOGY_VERSION << " and\n"
+      << "                        "
+      << Constants::LLM_CPU_DECODE_PAGED_METHODOLOGY_VERSION << ".\n"
       << "  -i, --iterations <count>\n"
       << "                        Exact measured R/W/Copy pass count when explicitly supplied.\n"
       << "                        When omitted, --benchmark, --patterns, --gpu-bandwidth, and\n"

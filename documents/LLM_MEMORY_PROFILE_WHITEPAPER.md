@@ -3,9 +3,9 @@
 ## Abstract
 
 `memory_benchmark --llm-memory` is a versioned Apple Silicon synthetic memory benchmark with a generic
-backend/phase/KV-layout schema. The only active profile in this revision is CPU/decode/contiguous: the memory side of
-one autoregressive decode step at a fixed visible context. It executes three scenarios derived from the same explicit
-model geometry:
+backend/phase/KV-layout schema. CPU decode is active with contiguous or deterministic paged KV: the memory side of one
+autoregressive decode step at a fixed visible context. It executes three scenarios derived from the same explicit model
+geometry:
 
 - `weights_only`: read the active weights once;
 - `kv_only`: append the current token's K/V records and read the complete visible K/V history;
@@ -26,19 +26,19 @@ The current contract is identified by:
 | JSON schema | `1` |
 | Phase selector | `decode` |
 | Work unit | `decode_step` |
-| Methodology | `llm-memory-v1-cpu-decode-contiguous` |
+| Methodology | `llm-memory-v1-cpu-decode-contiguous` or `llm-memory-v1-cpu-decode-paged` |
 | Model/scenario plan identity prefix | `llm-memory-work-plan-v1` |
 | Component identity prefix | `llm-memory-components-v1` |
 | Logical profile version | `decode_steady_fixed_context` |
-| KV layout selector/version | `contiguous` / `contiguous_layer_batch_token_head_dimension` |
-| Permutation version | null |
-| Backend executor version | `llm-cpu-executor-v1-arm64-decode-contiguous` |
-| Resource ABI | `llm-memory-descriptor-abi-v1` |
-| Schedule version | `worker-local-layer-order-no-per-layer-global-barrier` |
+| KV layout selector/version | `contiguous` / `contiguous_layer_batch_token_head_dimension`, or `paged` / `paged-uint32-block-table-full-blocks-v1` |
+| Permutation version | null for contiguous; `splitmix64-fisher-yates-rejection-v1` for paged |
+| Backend executor version | `llm-cpu-executor-v1-arm64-decode-<layout>` |
+| Resource ABI | `llm-memory-descriptor-abi-v1` or `llm-memory-paged-descriptor-abi-v1` |
+| Schedule version | contiguous worker-local schedule or `decode-kv-accounted-prefix-balanced-rotating-v1` |
 | Timer policy | `synchronized-start-to-last-worker-completion-per-scenario-task` |
-| Buffer pattern | `llm-buffer-pattern-v1` |
+| Buffer pattern | `llm-buffer-pattern-v1` or `llm-paged-physical-buffer-pattern-v1` |
 | Write pattern | `llm-kv-append-affine64-v1` |
-| Checksum pattern | `llm-read-checksum-v1` |
+| Checksum pattern | `llm-read-checksum-v1` or `llm-paged-read-checksum-v1` |
 | MSL revision/source SHA-256 | null / null |
 | Traffic classification | `llm-exact-weight-vs-kv-read-payload-v1` |
 
@@ -49,14 +49,14 @@ work-plan, and environment evidence, not merely the same nominal model name.
 
 ## Scope and non-goals
 
-The active profile models decode-only, warm-memory, fixed-context traffic with one active weight pass and one KV replay
-per work unit. It supports MHA, GQA, and MQA geometry through explicit query- and KV-head counts, a positive batch count,
-and 1-, 2-, or 4-byte KV elements.
+The active profiles model decode-only, warm-memory, fixed-context traffic with one active weight pass and one KV replay
+per work unit. They support MHA, GQA, and MQA geometry through explicit query- and KV-head counts, a positive batch
+count, and 1-, 2-, or 4-byte KV elements. Paged KV adds timed table indirection, deterministic physical scatter,
+block-granular ownership, and full-block suffix padding.
 
-Schema-v1 vocabulary reserves the tokens `cpu|metal`, `decode|prefill`, `contiguous|paged`,
-`decode_step|prefill_operation`, and `none|current_token_append|full_prompt_population`. Metal, prefill, and paged KV
-are not selectable or supported in this revision, and no hidden fallback activates them. Their future objects and
-scalars remain null in an active CPU/decode/contiguous result.
+Schema-v1 vocabulary includes `cpu|metal`, `decode|prefill`, `contiguous|paged`,
+`decode_step|prefill_operation`, and `none|current_token_append|full_prompt_population`. Contiguous and paged are public
+for CPU decode. Metal and prefill have no public selectors, remain unavailable, and never receive hidden fallback.
 
 It intentionally excludes:
 
@@ -64,7 +64,8 @@ It intentionally excludes:
 - tokenizer, model loader, framework scheduler/dispatch, kernel fusion, and compute-memory overlap;
 - MLX, llama.cpp, Core ML, active Metal/GPU execution, and ANE execution;
 - prefill or a context that grows during one measurement;
-- paged/block-table, sliding-window, head-strided, compressed, or shared-prefix KV policies;
+- runtime KV allocation/free lists, prefix sharing, copy-on-write, eviction, sliding windows, ragged batches, block
+  swapping, fragmentation simulation, or KV compression;
 - speculative decoding and model-specific control flow;
 - built-in model presets, model-file introspection, and LLM parameter sweeps;
 - recycling a small physical buffer to represent a larger logical model;
@@ -86,6 +87,9 @@ The standalone primary mode is `-M` / `--llm-memory`. Its exact whitelist is:
 --context-tokens <count>    required
 --kv-element-bytes <1|2|4>  default 2
 --batch-size <count>        default 1
+--kv-layout <contiguous|paged>
+                            default contiguous
+--kv-block-tokens <G>       required exactly once for paged; rejected for contiguous
 -t, --threads <count>       default detected CPU worker count
 -i, --iterations <count>    default automatic per-scenario calibration
 -r, --count <count>         default 3
@@ -96,12 +100,14 @@ The standalone primary mode is `-M` / `--llm-memory`. Its exact whitelist is:
 
 Every required model option must occur exactly once. Optional values and the mode/help selector may occur at most once.
 Numeric input is a complete decimal token; counts are positive, while an explicit seed may be zero. Query heads must be
-at least the KV-head count and divisible by it. All other primary modes and all buffer/cache/latency/TLB/pattern/GPU,
+at least the KV-head count and divisible by it. `G` must be a positive power of two no greater than `UINT32_MAX`; it may
+exceed the context, in which case each sequence has one physical block. Layout/block validation is order-independent.
+All other primary modes and all buffer/cache/latency/TLB/pattern/GPU,
 `--non-cacheable`, `--sweep`, and `--sweep-max-runs` options are rejected.
 
-Backend, phase, and layout have no public selector flags in this phase. The resolved defaults are always `cpu`,
-`decode`, and `contiguous`, and `configuration.resolved_sources` records each as `default`. Reserved future selectors
-must not be supplied or inferred from the schema vocabulary.
+Backend and phase remain fixed to `cpu` and `decode`. Layout defaults to `contiguous`; explicit layout and block-size
+sources are retained in `configuration.resolved_sources`. Metal and prefill must not be supplied or inferred from the
+schema vocabulary.
 
 Output targets follow the shared process contract:
 
@@ -189,6 +195,91 @@ effective_model_payload_gb_s = completed_effective_model_payload_bytes / elapsed
 The numerator excludes cache-line fills, write allocate/RFO, writeback, hardware prefetch, translation, page-table, and
 checksum/control traffic. Those effects can influence elapsed time without being added to logical payload.
 
+### Paged physical geometry, table, and lookup traffic
+
+For paged layout, let `R = h_kv*d_h*s_kv` be one K or V token record per layer and let `G` be the explicit block size
+in tokens. Checked geometry derives:
+
+```text
+N = A / G + (A % G != 0)
+P_b = B * N
+block_bytes = G * R
+last_block_tokens = A - (N - 1) * G
+last_block_valid_bytes = last_block_tokens * R
+decode_append_offset_in_last_block = ((A - 1) % G) * R
+
+k_logical_bytes = L * B * A * R
+k_physical_bytes = L * P_b * block_bytes
+k_layout_padding_bytes = k_physical_bytes - k_logical_bytes
+v_logical_bytes = k_logical_bytes
+v_physical_bytes = k_physical_bytes
+v_layout_padding_bytes = k_layout_padding_bytes
+block_table_entries = B * N
+block_table_bytes = block_table_entries * 4
+```
+
+Every physical block has exactly `G` records; there is no extra inter-block alignment padding. Each batch sequence's
+last block has initialized suffix padding. Timed work never reads or writes that padding, and post-validation checks its
+canary. Layout padding, CPU page rounding, table bytes, preparation transient, and admitted peak are reported
+separately.
+
+One row-major `uint32_t block_table[B][N]` contains a bijection over `0..P_b-1`. `UINT32_MAX` is reserved as an invalid
+sentinel, so `P_b <= UINT32_MAX`. The same physical ID selects the corresponding block inside every layer's K pool and
+V pool:
+
+```text
+logical_block = token / G
+token_in_block = token % G
+p = block_table[batch][logical_block]
+offset = (layer * P_b + p) * block_bytes + token_in_block * R
+```
+
+The table is generated once per command and remains frozen across warmup, calibration, loops, and scenarios. Starting
+from identity order, it uses the stateful SplitMix64 stream and descending Fisher–Yates with rejection sampling:
+
+```text
+state += 0x9E3779B97F4A7C15
+z = state
+z = (z xor (z >> 30)) * 0xBF58476D1CE4E5B9
+z = (z xor (z >> 27)) * 0x94D049BB133111EB
+value = z xor (z >> 31)
+
+bound = i + 1
+threshold = uint64_wrap(0 - bound) % bound
+draw until value >= threshold
+j = value % bound
+swap(table[i], table[j])
+```
+
+All stream arithmetic is modulo `2^64`. The permutation domain is `0x4c4c4d4b56504731`, and the resolved state is
+`splitmix64(base_seed xor domain)`. Identity records the algorithm version, domain, resolved seed, entry count, and the
+SHA-256 of explicit row-major little-endian `uint32_t` entries. Generation and hashing do not depend on the C++ standard
+library's random algorithms or host endianness. Range/bijection/sentinel validation completes before descriptors are
+published, and the CPU table becomes read-only before warmup.
+
+For base seed `42` and eight entries, the resolved seed is `8109369757063363730`, the permutation is
+`[0, 6, 2, 3, 7, 1, 5, 4]`, and its little-endian SHA-256 is
+`4032b29a855010d82199c15c3f3e2b94582b86e67b3add8cb86bebc425f9c2b4`.
+
+Per layer and batch sequence, paged decode performs exactly one paired current-token K/V append lookup, `N` K-scan
+lookups, and `N` V-scan lookups. KV-only and mixed therefore use:
+
+```text
+layout_metadata_lookup_count_per_work_unit = L * B * (2 * N + 1)
+layout_metadata_read_bytes_per_work_unit = 4 * L * B * (2 * N + 1)
+accounted_bytes_per_work_unit =
+  effective_model_payload_bytes_per_work_unit + layout_metadata_read_bytes_per_work_unit
+```
+
+Weights-only uses zero lookups. Each semantic lookup is an explicit timed 32-bit table load; the loaded ID determines
+the data address. The host does not pre-resolve physical IDs. The paired append shares one lookup, while K and V scans
+load the table independently. Lookup metadata is included in task guardrails but excluded from the primary GB/s
+numerator.
+
+An independent geometry golden with `A=35`, `G=16`, `L=2`, `B=2`, and `R=32` has `N=3`, `P_b=6`,
+`block_bytes=512`, `last_block_tokens=3`, `last_block_valid_bytes=96`, K logical/physical/padding bytes
+`4480/6144/1664`, six table entries/24 table bytes, and 28 lookups/112 metadata bytes per KV-bearing work unit.
+
 ## Formula golden vector and crossover
 
 For:
@@ -235,17 +326,17 @@ resource limits measured performance.
 
 ## Mappings, budget, and layout
 
-The command owns three regular private anonymous cacheable mappings for the suite lifetime:
-
-1. active weights, exactly `W` requested bytes;
-2. K cache, exactly `L * B * A * h_kv * d_h * s_kv` requested bytes;
-3. V cache, the same size as K.
-
-Each mapping is rounded separately to the native page granularity for committed-byte accounting. Admission includes the
-three page-rounded mappings, descriptor arrays, retained pointer-free planner storage, expected/actual checksum storage,
-worker/thread state, calibration/result records, statistics workspace, warnings, and orchestration storage. The normal
-policy admits no more than 80% of the current available-memory estimate; the existing fallback applies when that sample
-is unavailable and caps the admitted total at 2 GiB. The requested workload is rejected rather than silently reduced.
+The command owns regular private anonymous cacheable mappings for the suite lifetime: active weights and either exact
+logical contiguous K/V or full physical paged K/V pools. Paged execution additionally owns one cacheable, page-rounded
+`uint32_t` table mapping. Each mapping is rounded separately to native page granularity for committed-byte accounting.
+Admission includes every page-rounded mapping, table bytes, descriptor arrays, retained pointer-free planner storage,
+expected/actual checksum storage, worker/thread state, calibration/result records, statistics workspace, warnings, and
+orchestration storage. It also includes paged permutation construction, the checked `ceil(P_b/8)` range/bijection
+bitset,
+and hashing as a transient peak. Table materialization occurs only after full known-owned admission; the transient is
+released before timed work. The normal policy admits no more than 80% of the current available-memory estimate; the
+existing fallback applies when that sample is unavailable and caps the admitted total at 2 GiB. The workload is
+rejected rather than silently scaled, and `G`, context, workers, or work-unit geometry are never changed to fit.
 
 A non-empty file or stdout JSON target also reserves a conservative peak for one live schema DOM and its serialized
 transport text before final memory admission. The estimate covers fixed schema storage, captured input strings, every
@@ -260,20 +351,25 @@ block-table bytes. Top-level `memory_budget` contains canonical decimal-string `
 evidence. The active contiguous profile has identical K/V logical and physical lengths, zero layout padding, and a null
 block-table resource.
 
-The K and V mappings each use contiguous `[layer][batch_sequence][token][kv_head][head_dimension]` order. The visible
-context includes the current token, so its append record is the final token record in each layer/sequence region.
-Separate K and V mappings make the two streams explicit and prevent accidental aliasing.
+Contiguous K and V use `[layer][batch_sequence][token][kv_head][head_dimension]`. Paged K and V use
+`[layer][physical_block][token_in_block][kv_head][head_dimension]`; their block table contains no pointers. The visible
+context includes the current token, so its append record is the final logical token and lies at the recorded offset in
+the final logical block. Separate K and V pools make the two streams explicit and prevent aliasing.
 
 Active weights are divided across layers by quotient and remainder so every byte belongs to exactly one layer. Every
-layer's weight span and each layer/sequence K/V visible span are partitioned across the effective workers into disjoint
-contiguous ranges. Internal boundaries prefer 32-byte alignment without dropping the exact tail. Effective workers are
-the minimum of requested workers, detected availability, and the smallest executable span capacity; requested and
-available counts remain separately recorded.
+layer's weight span is partitioned into disjoint ranges. Contiguous K/V visible spans are similarly byte-partitioned.
+Paged K/V partitions use exact accounted-cost prefix sums and assign complete logical blocks; no block is split between
+workers. If `N` is smaller than the worker count, ownership rotates deterministically by layer/batch ordinal. The
+active CPU planner caps the admitted team so every effective worker owns KV work. Effective
+workers are the minimum of requested workers, detected availability, and executable span capacity; requested and
+available counts remain separately recorded. Lookup count is invariant under worker-count changes.
 
-Each worker owns exactly `L` layer descriptors and `L*B` sequence descriptors. The frozen 64-bit ARM64 ABI uses 16-byte
-aligned, 48-byte `LlmLayerDescriptor` values and 80-byte `LlmKvSequenceDescriptor` values. Pointer/length pairs identify
-the worker's weight, visible K/V, and current-token append intersections. Empty worker spans are null/zero and skipped;
-the planner never creates a worker whose entire scenario is empty.
+The contiguous 64-bit ARM64 ABI uses 16-byte-aligned 48-byte layer descriptors and 80-byte sequence descriptors.
+The separate paged ABI uses 48-byte layer descriptors and 96-byte block-assignment descriptors carrying the table-row
+pointer, K/V layer-pool bases, first logical block/count, block geometry, last valid bytes, append offset/size, and
+layer/batch identity. Every layout has independent `sizeof`/`offsetof` assertions and a version identity; neither hot
+kernel branches on layout. Empty worker spans are null/zero and skipped, and no admitted worker has an entirely empty
+scenario plan.
 
 ## Scenario traversal
 
@@ -289,6 +385,17 @@ once.
 
 The read includes the current token that was just written.
 
+For contiguous KV those operations traverse the assigned byte ranges. For paged KV the owner processes complete
+logical blocks in increasing order and the semantic order is exact:
+
+1. load the final logical block's physical ID once and perform the paired current-token K/V append;
+2. traverse logical blocks `0..N-1`, explicitly load each ID, and scan only the valid K bytes;
+3. traverse logical blocks `0..N-1` again, explicitly load each ID, and scan only the valid V bytes.
+
+The final partial block contributes only `last_block_valid_bytes` to each scan. Its suffix is neither model payload nor
+timed access. The physical data order may be scattered, but logical traversal order and semantic lookup multiplicity are
+frozen. Full blocks remain whole ownership units.
+
 `mixed` sets both bits. For every work unit, each worker processes layers in increasing order. Inside a layer it reads its
 weight shard, then processes every batch sequence's K/V append and visible-history reads before moving to the next
 layer. Workers share one synchronized task start, but there is no synthetic global barrier at every layer. Thus mixed is
@@ -296,12 +403,18 @@ one layer-interleaved workload, not a post-hoc sum of separately timed weight an
 
 ## Initialization, append pattern, and checksums
 
-Preparation writes every requested byte of all three mappings exactly once with `llm-buffer-pattern-v1`, pre-touching
-the full requested mapped working set. It accumulates static per-span checksum references during those writes, avoiding
-another reference-reading pass. Initialization, mapping page faults, and reference construction occur before timed work.
-The planner uses the shared SplitMix64 derivation primitive with frozen domains to derive separate weight/K/V buffer
-seeds and weights-only/KV-only/mixed scenario seeds from the one base seed; schema 1 stores each as an exact decimal
-string.
+Preparation writes every weight byte and every requested K/V physical byte exactly once, pre-touching the full mapped
+working set. Contiguous resources use `llm-buffer-pattern-v1`; paged K/V use
+`llm-paged-physical-buffer-pattern-v1`, whose bytes depend on pool, physical block ID, and physical offset. This makes a
+wrong table entry or address observable even when it visits the same multiset of blocks. Paged suffix padding is filled
+with a canary. Preparation accumulates static references while writing, avoiding a second full-pool read.
+Initialization,
+table construction/protection, mapping page faults, reference construction, and canary setup occur before timed work.
+Before every paged task, the executor restores only the mutable current-token K/V append slots to their physical
+initialization pattern. This allocation-free reset is outside the timed interval; it does not rewrite history blocks or
+suffix-padding canaries.
+The planner uses shared SplitMix64 derivation with frozen domains to derive separate weight/K/V buffer seeds,
+permutation seed, and scenario seeds from one base seed; schema 1 stores exact seeds as decimal strings.
 
 The initialization pattern treats each mapping as a zero-based stream of little-endian 64-bit words. For mapping word
 index `i` and that mapping's domain-separated buffer seed:
@@ -392,8 +505,17 @@ vectors are:
 
 This checksum is workload-liveness and bounds evidence, not a cryptographic integrity primitive.
 
-Only exact checksum agreement, complete worker lifecycle, successful kernel status, and a finite positive elapsed time
-permit `measured` status. Checksum and fold traffic is validation evidence, not part of the logical payload numerator.
+Paged execution uses the separate `llm-paged-read-checksum-v1` contract. Its timed accumulator binds each semantic visit
+to the logical table index, loaded physical ID, visit kind (append, K scan, or V scan), and work-unit ordinal in one
+non-separable mix. Summing physical IDs alone is prohibited because every permutation has the same ID sum. A test that
+swaps two non-tail blocks with equal read multiplicity must therefore produce a mismatch. An independent bounded scalar
+oracle computes the cold-path expected value without calling the assembly helper or rereading a multi-GiB pool.
+Post-validation checks the logical current-token K/V append at its resolved physical location and every last-block
+padding canary.
+
+Only exact checksum agreement, successful append/canary post-validation, complete worker lifecycle, successful kernel
+status, and a finite positive elapsed time permit `measured` status. A mismatch is terminal invalid evidence and is not
+retried. Checksum and fold traffic is validation evidence, not part of the logical payload numerator.
 
 ## Timing boundary and worker lifecycle
 
@@ -403,14 +525,16 @@ One scenario task follows this boundary:
 2. create the complete worker team and prepare best-effort worker QoS;
 3. wait until every worker reaches the start gate;
 4. execute `dsb ish; isb`, start `HighResTimer`, and release the gate;
-5. let each worker call the dedicated ARM64 kernel once for all frozen work units;
+5. let each worker call the layout-specific ARM64 kernel once for all frozen work units;
 6. stop the timer at last-worker completion;
 7. join workers and validate/fold checksums outside the elapsed interval.
 
-Thread creation, QoS calls, allocation, initialization, pre-touch, page faults caused by preparation, descriptor
-validation, expected-checksum generation, warmup, calibration, aggregation, console, JSON, and checkpoint writes are
-outside primary elapsed time. Normal cache state is not flushed between tasks or loops, so the methodology is explicitly
-warm/cacheable and cache-inclusive.
+Paged table loads, ID-dependent address formation, model reads/writes, and timed checksum accumulation are inside the
+primary elapsed interval. Thread creation, QoS calls, allocation, initialization/pre-touch, permutation generation,
+table validation/hash/protection, preparation page faults, descriptor validation, expected-oracle generation,
+task-local paged append-slot restoration, warmup/calibration, joins, checksum/append/canary post-validation,
+aggregation, console, JSON, and checkpoint writes are outside. Normal cache state is not flushed between tasks or
+loops, so the methodology is explicitly warm/cacheable and cache-inclusive.
 
 ## Calibration, frozen work, order, and statistics
 
@@ -435,8 +559,9 @@ planned_task_accounted_bytes = planned_work_units * accounted_bytes_per_work_uni
 completed_task_accounted_bytes = completed_work_units * accounted_bytes_per_work_unit
 ```
 
-The active contiguous profile has zero layout-metadata bytes, so its admitted workload and exact payload remain
-numerically unchanged. One exact work unit may legitimately exceed the duration window and is retained with an
+The contiguous profile has zero layout-metadata bytes. Paged KV-only and mixed use the exact lookup metadata calculated
+above, while weights-only remains zero; metadata constrains calibration and explicit-work admission without entering the
+GB/s numerator. One exact work unit may legitimately exceed the duration window and is retained with an
 `above-target-single-work-unit` quality token. The last valid plans for all
 three scenarios are frozen before loop zero and reused without recalibration. A later slow or fast measurement remains
 evidence rather than triggering performance-based retry.
@@ -529,16 +654,17 @@ resolved_plan.resources
 resolved_plan.component_identities
 ```
 
-`geometry.decode` and `geometry.prefill` are object-or-null. The active profile has
+`geometry.decode` and `geometry.prefill` are object-or-null. Both active profiles have
 `decode.visible_context_tokens` as an integer and `prefill: null`; the context field is never reused for prefill.
-When the prefill profile is eventually activated, its object has integer `prompt_tokens` and
+If a prefill profile is activated in a later methodology, its object has integer `prompt_tokens` and
 `attention_query_tile_tokens` plus decimal-string `tile_count`,
 `attention_prefix_token_visits_per_sequence`, `causal_token_pairs_per_sequence`, `logical_attention_pairs`, and
 `logical_attention_fma_terms`.
-`layout.kv_layout` is a string. Paged-only integer-or-null `kv_block_tokens`; decimal-string-or-null
+`layout.kv_layout` is a string. Paged populates integer `kv_block_tokens`; decimal-string
 `blocks_per_sequence`, `physical_blocks_per_layer`, `last_block_tokens`, `last_block_valid_bytes`,
-`block_table_entries`, and `block_table_bytes`; and nullable `permutation_domain_uint64_hex`,
-`permutation_seed_uint64_decimal`, `permutation_algorithm_version`, and `permutation_sha256` are null for contiguous.
+`block_table_entries`, and `block_table_bytes`; plus `permutation_domain_uint64_hex`,
+`permutation_seed_uint64_decimal`, `permutation_algorithm_version`, and `permutation_sha256`. These paged-only fields
+are null for contiguous.
 `resources` stores canonical decimal-string `weight_logical_bytes`, `k_logical_bytes`, `v_logical_bytes`,
 `k_physical_length_bytes`, `v_physical_length_bytes`, `k_layout_padding_bytes`, and `v_layout_padding_bytes`;
 `block_table_bytes` is decimal-string-or-null.
@@ -565,7 +691,8 @@ serialized identity begins `llm-memory-components-v1` and appends every field in
 or `|key=null`.
 
 `backend_evidence` contains both `cpu` and `metal` object-or-null branches. Exactly the selected backend is populated;
-the active profile has a CPU object and `metal: null`. `memory_budget` separates allocation-time evidence into required
+both active profiles have a CPU object and `metal: null`. `memory_budget` separates allocation-time evidence into
+required
 canonical decimal-string `resource_rounding_bytes`, `transient_peak_bytes`, `known_owned_peak_bytes`, and
 `admitted_budget_bytes`. `calibration` owns excluded work-resolution attempts. `aggregates` contains measured-only
 scenario values.
@@ -597,7 +724,7 @@ synthetic_memory_work_units_per_second
 effective_model_payload_gb_s
 ```
 
-The active profile uses `decode_step`; `weights_only` uses `kv_write_kind: "none"`, and KV-bearing scenarios use
+Both active profiles use `decode_step`; `weights_only` uses `kv_write_kind: "none"`, and KV-bearing scenarios use
 `current_token_append`. Planned/completed work units are integer numbers. All listed byte, lookup, metadata, and
 accounted fields are canonical decimal strings even when the applicable value is zero. Derived elapsed/rate/statistic
 values are finite JSON numbers only for successful measured evidence and otherwise null.
@@ -639,10 +766,13 @@ conclusions_valid == true
 every planned measurement has status == "measured"
 ```
 
-For this revision the requested values are `cpu`, `decode`, and `contiguous`. `unsupported`, `partial`, `interrupted`,
-`invalid`, and `failed` evidence is never accepted as performance. After the predicate, a consumer must still require
-the selected scenario metric's non-null value plus checksum and quality conditions relevant to its conclusion. Process
-exit success alone is insufficient because graceful interruption is an established success-return path.
+For active commands the requested values are `cpu`, `decode`, and either `contiguous` or `paged`. Paged acceptance and
+comparison must additionally match `G`, `N`, tail geometry, logical/physical/padding/table resources, permutation
+version/domain/resolved seed/hash, lookup/accounted bytes, worker schedule, descriptor/executor, timer, and checksum
+identities. `unsupported`, `partial`, `interrupted`, `invalid`, and `failed` evidence is never accepted as performance.
+After the predicate, a consumer must still require the selected scenario metric's non-null value plus checksum and
+quality conditions relevant to its conclusion. Process exit success alone is insufficient because graceful
+interruption is an established success-return path.
 
 The `interpretation` object always preserves the generic boundary: the workload is synthetic and memory-only;
 effective GB/s is exact logical W/K/V payload divided by authoritative elapsed time, not measured physical DRAM
@@ -660,6 +790,11 @@ use decode-specific labels such as `ms/decode step` and `synthetic decode steps/
 `effective_model_payload_gb_s`. The report never uses bare `tokens/s` and states that effective model payload is not a
 physical DRAM counter. A scenario without a headline does not receive a fabricated numeric console value; its status,
 reason, and null observations remain in JSON.
+
+Paged console output additionally identifies `G`, `N`, final-block tokens/valid bytes, logical versus physical K/V,
+layout padding, table entries/bytes, permutation version/seed/hash, and per-work-unit lookup/metadata/accounted values.
+It explicitly states that table loads are timed while their four-byte metadata traffic is excluded from the effective
+model-payload numerator. Checksum, append, and padding-canary failure produces invalid evidence without retry.
 
 Report-level warnings include non-nominal environment, requested-but-unapplied main-thread QoS, worker QoS failure,
 weight or KV working sets that may be cache-dominant, scenario durations outside their intended quality class, high CV,
@@ -689,19 +824,21 @@ retained from the runner. A main-thread QoS warning appears only when QoS was re
 Correctness gates cover:
 
 - independent formula golden vectors and overflow boundaries;
-- exact CLI whitelist/defaults/incompatibilities and help isolation;
-- pointer-free layout, disjoint coverage, memory admission, and descriptor ABI offsets;
-- atomic three-mapping allocation, full-byte initialization/pre-touch, and cleanup;
-- K/V append word, expected/read/run checksum, tail, bounds, and multi-step behavior;
+- exact CLI whitelist, layout/block rules, defaults/incompatibilities, and help isolation;
+- pointer-free contiguous/paged layouts, block ownership, memory admission, and both descriptor ABI offset sets;
+- atomic layout-specific allocation, table protection, full physical initialization/pre-touch, and cleanup;
+- paged geometry/lookup goldens, deterministic permutation/hash, K/V append, independent checksum oracle,
+  equal-multiplicity wrong-table mismatch, padding canaries, tails, bounds, and multi-step behavior;
 - synchronized worker timing, startup cancellation, QoS evidence, timer/error containment, and AAPCS64 preservation;
 - scenario-specific calibration, frozen plans, cyclic balance, aggregate population, interruption, and checkpoint
   precedence;
 - schema identity, decimal exact integers, status/null rules, classification, interpretation, file/stdout transport, and
   executable CLI behavior.
 
-For a performance comparison, keep the exact command/model geometry, explicit-versus-automatic policy, frozen plan,
-seed, worker counts, software/methodology, hardware, macOS, power/thermal state, and background load matched. Prefer a
-count divisible by three, inspect CV and warnings, and retain both stdout/file payload and stderr transcript. A separate
+For a performance comparison, keep the exact command/model geometry, layout, paged `G`/physical geometry/table and
+permutation identity when applicable, explicit-versus-automatic policy, frozen plan, seed, worker counts,
+software/methodology, hardware, macOS, power/thermal state, and background load matched. Prefer a count divisible by
+three, inspect CV and warnings, and retain both stdout/file payload and stderr transcript. A separate
 real inference-engine run can be useful correlation evidence, but it is not part of this benchmark's correctness or
 acceptance predicate.
 
@@ -713,7 +850,8 @@ interruption/checkpoint lifecycle, or meaning of a reported field requires metho
 Removing or renaming a field, changing its type, or changing its meaning requires a schema-version bump. Additive
 evidence may remain schema 1 only when existing consumers can safely ignore it.
 
-Paged KV, growing context, prefill, Metal/ANE execution, model presets, quantization metadata, multiple weight passes,
-or KV replay factors other than one are separate methodology features. The generic schema vocabulary does not activate
-them: each requires its own end-to-end implementation gate, exact selector-derived methodology and component identity,
-public CLI/documentation update, and compatibility review before it becomes a supported profile.
+Runtime paged allocation/free lists, prefix sharing, sliding windows, growing context, prefill, Metal/ANE execution,
+model presets, quantization metadata, multiple weight passes, or KV replay factors other than one are separate
+methodology features. The generic schema vocabulary does not activate them: each requires its own end-to-end
+implementation gate, exact selector-derived methodology and component identity, public CLI/documentation update, and
+compatibility review before it becomes a supported profile.

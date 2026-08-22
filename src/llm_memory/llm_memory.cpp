@@ -107,6 +107,26 @@ bool parse_positive_size(const std::string& option,
   return true;
 }
 
+bool parse_nonnegative_size(const std::string& option,
+                            const std::string& token, size_t& value) {
+  uint64_t parsed = 0;
+  const StrictIntegerParseStatus status =
+      parse_strict_unsigned_decimal(token, parsed);
+  if (status != StrictIntegerParseStatus::Success ||
+      parsed > std::numeric_limits<size_t>::max()) {
+    const std::string reason =
+        status != StrictIntegerParseStatus::Success
+            ? strict_unsigned_decimal_error_reason(status)
+            : Messages::llm_memory_reason_platform_size_range();
+    std::cerr << Messages::error_prefix()
+              << Messages::error_invalid_value(option, token, reason)
+              << std::endl;
+    return false;
+  }
+  value = static_cast<size_t>(parsed);
+  return true;
+}
+
 void print_llm_memory_help(const char* program_name) {
   std::cout << Messages::usage_header(SOFTVERSION)
             << Messages::llm_memory_usage_options(program_name);
@@ -183,6 +203,34 @@ uint64_t generate_llm_seed() {
   return SeedUtils::generate_seed();
 }
 
+const char* validate_llm_kv_layout_options(
+    const LlmMemoryConfig& config) noexcept {
+  if (config.kv_layout == LlmKvLayout::Contiguous) {
+    if (config.user_specified_kv_block_tokens ||
+        config.kv_block_tokens != 0) {
+      return LlmMemoryConfigReason::KV_BLOCK_TOKENS_NOT_APPLICABLE;
+    }
+    return nullptr;
+  }
+  if (config.kv_layout != LlmKvLayout::Paged) {
+    return LlmMemoryConfigReason::KV_BLOCK_TOKENS_NOT_APPLICABLE;
+  }
+  if (!config.user_specified_kv_block_tokens) {
+    return LlmMemoryConfigReason::KV_BLOCK_TOKENS_REQUIRED;
+  }
+  if (config.kv_block_tokens == 0) {
+    return LlmMemoryConfigReason::KV_BLOCK_TOKENS_ZERO;
+  }
+  if (config.kv_block_tokens >
+      static_cast<size_t>(std::numeric_limits<uint32_t>::max())) {
+    return LlmMemoryConfigReason::KV_BLOCK_TOKENS_EXCEEDS_UINT32;
+  }
+  if ((config.kv_block_tokens & (config.kv_block_tokens - 1)) != 0) {
+    return LlmMemoryConfigReason::KV_BLOCK_TOKENS_NOT_POWER_OF_TWO;
+  }
+  return nullptr;
+}
+
 }  // namespace
 
 void set_llm_memory_parser_test_hooks(
@@ -212,6 +260,8 @@ int parse_llm_memory_arguments(int argc, char* argv[],
   bool head_dimension_seen = false;
   bool kv_element_bytes_seen = false;
   bool context_tokens_seen = false;
+  bool kv_layout_seen = false;
+  bool kv_block_tokens_seen = false;
   bool batch_size_seen = false;
   bool threads_seen = false;
   bool iterations_seen = false;
@@ -233,6 +283,42 @@ int parse_llm_memory_arguments(int argc, char* argv[],
         return EXIT_FAILURE;
       }
       config.help_printed = true;
+      continue;
+    }
+    if (argument == "--kv-layout") {
+      if (report_duplicate(kv_layout_seen, "--kv-layout")) {
+        return EXIT_FAILURE;
+      }
+      std::string token;
+      if (!take_value(argc, argv, index, "--kv-layout", token)) {
+        return EXIT_FAILURE;
+      }
+      if (token == "contiguous") {
+        config.kv_layout = LlmKvLayout::Contiguous;
+      } else if (token == "paged") {
+        config.kv_layout = LlmKvLayout::Paged;
+      } else {
+        std::cerr << Messages::error_prefix()
+                  << Messages::error_invalid_value(
+                         argument, token,
+                         Messages::llm_memory_reason_kv_layout())
+                  << std::endl;
+        return EXIT_FAILURE;
+      }
+      config.user_specified_kv_layout = true;
+      continue;
+    }
+    if (argument == "--kv-block-tokens") {
+      if (report_duplicate(kv_block_tokens_seen, "--kv-block-tokens")) {
+        return EXIT_FAILURE;
+      }
+      std::string token;
+      if (!take_value(argc, argv, index, "--kv-block-tokens", token) ||
+          !parse_nonnegative_size(argument, token,
+                                  config.kv_block_tokens)) {
+        return EXIT_FAILURE;
+      }
+      config.user_specified_kv_block_tokens = true;
       continue;
     }
     if (argument == "--weight-size-mb") {
@@ -434,6 +520,18 @@ int parse_llm_memory_arguments(int argc, char* argv[],
       return EXIT_FAILURE;
     }
   }
+  if (config.kv_layout == LlmKvLayout::Paged &&
+      !kv_block_tokens_seen) {
+    std::cerr << Messages::error_prefix()
+              << Messages::error_llm_memory_missing_required_option(
+                     "--kv-block-tokens")
+              << std::endl;
+    return EXIT_FAILURE;
+  }
+  if (const char* layout_reason = validate_llm_kv_layout_options(config)) {
+    report_llm_config_failure(layout_reason);
+    return EXIT_FAILURE;
+  }
 
   config.available_workers = detect_available_llm_workers();
   if (config.available_workers == 0) {
@@ -460,7 +558,10 @@ int parse_llm_memory_arguments(int argc, char* argv[],
        config.head_dimension,
        config.kv_element_bytes,
        config.visible_context_tokens,
-       config.batch_size});
+       config.batch_size,
+       config.kv_block_tokens,
+       config.phase,
+       config.kv_layout});
   if (!geometry.valid) {
     report_llm_config_failure(geometry.reason_code);
     return EXIT_FAILURE;
@@ -575,20 +676,30 @@ int run_llm_memory_mode(int argc, char* argv[]) {
       }
     }
 
+    LlmMemoryWorkPlanDraft model_draft = prepare_llm_memory_work_plan(
+        config, config.available_workers, metadata.available_memory_bytes,
+        metadata.page_size_bytes,
+        []() { return signal_received(); });
+    if (!model_draft.valid) {
+      std::cerr << Messages::error_prefix()
+                << Messages::error_llm_memory_run_failed(
+                       model_draft.reason_code)
+                << std::endl;
+      return EXIT_FAILURE;
+    }
+
     size_t checksum_auxiliary_bytes = 0;
     size_t orchestration_auxiliary_bytes = 0;
     {
-      const LlmMemoryWorkPlan preliminary = build_llm_memory_work_plan(
-          config, config.available_workers, metadata.available_memory_bytes, metadata.page_size_bytes, 0, 0);
-      if (!preliminary.valid) {
-        std::cerr << Messages::error_prefix() << Messages::error_llm_memory_run_failed(preliminary.reason_code)
-                  << std::endl;
-        return EXIT_FAILURE;
-      }
       const LlmBackendAuxiliaryEstimate backend_auxiliary =
-          backend->calculate_auxiliary_estimate(preliminary);
-      const LlmRunnerAuxiliaryEstimate runner_auxiliary = calculate_llm_runner_auxiliary_estimate(config, preliminary);
-      metadata.json_peak_estimate = calculate_llm_json_peak_estimate(config, preliminary);
+          backend->calculate_auxiliary_estimate(
+              model_draft.auxiliary_preflight);
+      const LlmRunnerAuxiliaryEstimate runner_auxiliary =
+          calculate_llm_runner_auxiliary_estimate(
+              config, model_draft.auxiliary_preflight);
+      metadata.json_peak_estimate =
+          calculate_llm_json_peak_estimate(
+              config, model_draft.auxiliary_preflight);
       if (!metadata.json_peak_estimate.valid) {
         std::cerr << Messages::error_prefix()
                   << Messages::error_llm_memory_run_failed(std::string(metadata.json_peak_estimate.reason_code))
@@ -618,13 +729,22 @@ int run_llm_memory_mode(int argc, char* argv[]) {
         return EXIT_FAILURE;
       }
     }
-
-    model_plan =
-        build_llm_memory_work_plan(config, config.available_workers, metadata.available_memory_bytes,
-                                   metadata.page_size_bytes, checksum_auxiliary_bytes, orchestration_auxiliary_bytes);
+    model_plan = finalize_llm_memory_work_plan(
+        std::move(model_draft), checksum_auxiliary_bytes,
+        orchestration_auxiliary_bytes,
+        []() { return signal_received(); });
     if (!model_plan.valid) {
-      std::cerr << Messages::error_prefix() << Messages::error_llm_memory_run_failed(model_plan.reason_code)
-                << std::endl;
+      if (model_plan.reason_code ==
+          LlmWorkPlanReason::BLOCK_TABLE_PROTECTION_FAILED) {
+        std::cerr << Messages::error_prefix()
+                  << Messages::error_llm_paged_table_protection_failed()
+                  << std::endl;
+      } else {
+        std::cerr << Messages::error_prefix()
+                  << Messages::error_llm_memory_run_failed(
+                         model_plan.reason_code)
+                  << std::endl;
+      }
       return EXIT_FAILURE;
     }
 
@@ -716,6 +836,10 @@ LlmMemoryConfigValidation validate_llm_memory_config(
         LlmMemoryConfigReason::CONTEXT_TOKENS_REQUIRED;
     return validation;
   }
+  if (const char* layout_reason = validate_llm_kv_layout_options(config)) {
+    validation.reason_code = layout_reason;
+    return validation;
+  }
   if (config.batch_size == 0) {
     validation.reason_code = LlmMemoryConfigReason::BATCH_SIZE_REQUIRED;
     return validation;
@@ -728,13 +852,14 @@ LlmMemoryConfigValidation validate_llm_memory_config(
     validation.reason_code = LlmMemoryConfigReason::LOOP_COUNT_REQUIRED;
     return validation;
   }
-  const std::array<size_t, 11> json_integer_fields = {
+  const std::array<size_t, 12> json_integer_fields = {
       config.weight_size_mb,
       config.layer_count,
       config.query_head_count,
       config.kv_head_count,
       config.head_dimension,
       config.visible_context_tokens,
+      config.kv_block_tokens,
       config.batch_size,
       config.requested_workers,
       config.available_workers,

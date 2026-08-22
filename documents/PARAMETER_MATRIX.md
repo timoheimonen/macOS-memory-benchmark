@@ -11,7 +11,7 @@ Working version `0.63.0`
 | `-T` | `--analyze-tlb` | — | Run standalone TLB analysis |
 | `-C` | `--analyze-core2core` | — | Run standalone two-thread acquire/release token-protocol handoff analysis |
 | `-G` | `--gpu-bandwidth` | — | Run standalone Metal GPU memory bandwidth |
-| `-M` | `--llm-memory` | — | Run the standalone LLM memory profile; the active profile is CPU/decode/contiguous |
+| `-M` | `--llm-memory` | — | Run the standalone CPU decode LLM memory profile with contiguous or paged KV |
 | — | `--weight-size-mb` | `<MiB>` | Required positive active weight size for LLM-memory mode |
 | — | `--layers` | `<count>` | Required positive LLM layer count |
 | — | `--query-heads` | `<count>` | Required positive query-head count; at least the KV-head count and divisible by it |
@@ -20,6 +20,8 @@ Working version `0.63.0`
 | — | `--kv-element-bytes` | `1\|2\|4` | LLM KV element width; default `2` |
 | — | `--context-tokens` | `<count>` | Required positive fixed visible context including the current synthetic token |
 | — | `--batch-size` | `<count>` | Positive LLM batch-sequence count; default `1` |
+| — | `--kv-layout` | `contiguous\|paged` | LLM KV layout; default `contiguous` |
+| — | `--kv-block-tokens` | `<G>` | Required only for paged KV: a positive power of two no greater than `UINT32_MAX`; may exceed the context length |
 | `-i` | `--iterations` | `<count>` | Positive exact R/W/Copy pass count or LLM scenario work-unit count; CPU standard maximum is `INT_MAX`, while GPU and LLM apply work-dependent ceilings. Omission enables automatic calibration in the applicable mode |
 | `-b` | `--buffer-size` | `<MB>` | Default `512` MB. Standard mode permits `0` only with `--only-latency`; pattern mode requires a positive value; GPU minimum is `64` MB |
 | `-r` | `--count` | `<count>` | Positive loop count; default `1` for benchmark/pattern modes and `3` for core-to-core/GPU/LLM modes |
@@ -167,8 +169,10 @@ the resolved grid in each work plan.
 ### Modifiers with `--llm-memory` (standalone mode)
 
 The LLM parser has an exact whitelist. All six required model options must occur once; every optional value and the mode
-or help selector may also occur at most once. After checked configuration and memory-budget preflight, the command
-allocates full-size cacheable weight, K, and V mappings and runs the three schema-1 scenarios.
+or help selector may also occur at most once. `--kv-layout` defaults to `contiguous`. Paged layout requires exactly one
+`--kv-block-tokens <G>`; contiguous layout rejects that option. `G` must be a positive power of two no greater than
+`UINT32_MAX`, and `G > context-tokens` is valid. These rules are order-independent. After checked configuration and
+memory-budget preflight, the command allocates the layout-specific resources and runs the three schema-1 scenarios.
 
 | Modifier | Compatible | Notes |
 |----------|------------|-------|
@@ -180,6 +184,8 @@ allocates full-size cacheable weight, K, and V mappings and runs the three schem
 | `--context-tokens <n>` | ✅ required | Positive fixed visible context including the current synthetic token |
 | `--kv-element-bytes <1\|2\|4>` | ✅ | Default `2`; every other width is rejected |
 | `--batch-size <n>` | ✅ | Positive; default `1` |
+| `--kv-layout <contiguous\|paged>` | ✅ | Default `contiguous`; selects the versioned CPU decode methodology and resource layout |
+| `--kv-block-tokens <G>` | ✅ paged only | Required exactly once with `--kv-layout paged`; rejected with contiguous. Positive power of two, at most `UINT32_MAX`; values larger than context are valid |
 | `-t, --threads <n>` | ✅ | Positive requested workers; omission uses detected workers. The work plan records requested, available, and effective counts separately and reduces effective workers only when availability or executable span size requires it |
 | `-i, --iterations <n>` | ✅ | Positive exact work units per scenario; omission selects excluded per-scenario calibration toward 150 ms. Explicit values must fit the strictest one-billion-work-unit/64 GiB task-accounted-byte limit |
 | `-r, --count <n>` | ✅ | Positive cyclic loop count; default `3` |
@@ -191,8 +197,11 @@ allocates full-size cacheable weight, K, and V mappings and runs the three schem
 | Any other primary mode | ❌ | Primary modes are mutually exclusive |
 
 The parser rejects checked weight/KV geometry that overflows or makes even one scenario work unit exceed the 64 GiB
-task-accounted-byte ceiling. Before allocation, the planner separately admits page-rounded full-size weight/K/V mappings,
-descriptors, retained planner storage, checksum storage, and orchestration storage against the current memory budget.
+task-accounted-byte ceiling. For paged KV, task-accounted bytes include logical model bytes plus timed block-table lookup
+traffic, while throughput remains model bytes divided by timed seconds. Before allocation, the planner separately admits
+page-rounded full-size weight and physical K/V mappings, the block table, descriptors, retained planner/transient storage,
+checksum storage, and orchestration storage against the current memory budget. Metal and prefill LLM profiles have no
+public selectors and remain unavailable; the command does not fall back to another backend, phase, or layout.
 
 ### Sweep Compatibility
 
@@ -256,7 +265,9 @@ Additional sweep rules:
 | `--gpu-bandwidth` + any other primary mode | GPU is a standalone primary mode |
 | `--gpu-bandwidth` + any option outside `buffer-size`, `iterations`, `count`, `seed`, `output`, `help` | GPU schema 1 exact whitelist |
 | `--llm-memory` + any other primary mode | LLM-memory is a standalone primary mode |
-| `--llm-memory` + any option outside its six required model inputs, `kv-element-bytes`, `batch-size`, `threads`, `iterations`, `count`, `seed`, `output`, `help` | LLM exact whitelist |
+| `--llm-memory` + any option outside its six required model inputs, `kv-element-bytes`, `batch-size`, `kv-layout`, `kv-block-tokens`, `threads`, `iterations`, `count`, `seed`, `output`, `help` | LLM exact whitelist |
+| `--llm-memory --kv-layout paged` without exactly one valid `--kv-block-tokens` | Paged KV requires an explicit positive power-of-two block size no greater than `UINT32_MAX` |
+| `--llm-memory --kv-layout contiguous --kv-block-tokens <G>` | Block size has no meaning for contiguous KV and is rejected |
 | `--sweep` without `--output`, or with an empty output value | Sweep mode requires a non-empty combined JSON output target |
 | `--sweep` generated runs > `--sweep-max-runs` | Guardrail against accidental large Cartesian sweeps |
 

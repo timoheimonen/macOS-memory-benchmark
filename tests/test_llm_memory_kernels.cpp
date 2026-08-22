@@ -189,6 +189,8 @@ constexpr uint64_t kInitialB = 0x13198A2E03707344ULL;
 constexpr uint64_t kWeightDomain = 0x5745494748545F31ULL;
 constexpr uint64_t kReadKDomain = 0x4B5F524541445F31ULL;
 constexpr uint64_t kReadVDomain = 0x565F524541445F31ULL;
+constexpr uint64_t kPagedLookupVisitMultiplier = 0x94D049BB133111EBULL;
+constexpr uint64_t kPagedLookupWorkUnitMultiplier = 0xBF58476D1CE4E5B9ULL;
 constexpr std::array<size_t, 8> kExactTailSizes = {0, 1, 31, 32, 33, 511, 512, 513};
 
 class GuardedMapping {
@@ -366,6 +368,113 @@ OracleWorkerRun oracle_worker_run(const LlmLayerDescriptor* layers, size_t layer
   return run;
 }
 
+void oracle_mix_paged_lookup(LlmReadChecksumComponent& state, uint64_t global_logical_index,
+                             uint32_t physical_block_id, uint64_t visit_kind, uint64_t work_unit) {
+  const uint64_t term =
+      (global_logical_index + 1) * (static_cast<uint64_t>(physical_block_id) + 1) +
+      (visit_kind + 1) * kPagedLookupVisitMultiplier +
+      (work_unit + 1) * kPagedLookupWorkUnitMultiplier;
+  state.state_a = rotate_left(state.state_a + term + kStepMultiplier, 13);
+  state.state_b = rotate_left(state.state_b ^ (term + kWordMultiplier), 31);
+}
+
+void oracle_apply_paged_append(uint8_t* destination, size_t append_bytes, uint64_t seed,
+                               uint64_t work_unit, uint64_t layer, uint64_t batch,
+                               LlmChecksumComponent component) {
+  for (size_t byte = 0; byte < append_bytes; ++byte) {
+    const uint64_t word = oracle_append_word(seed, work_unit, layer, batch, byte / 8, component);
+    destination[byte] = static_cast<uint8_t>(word >> (8 * (byte % 8)));
+  }
+}
+
+LlmWorkerChecksum oracle_paged_worker_run(const LlmPagedLayerDescriptor* layers, size_t layer_count,
+                                          const LlmPagedKvAssignmentDescriptor* assignments,
+                                          size_t work_units, uint64_t scenario_flags,
+                                          uint64_t scenario_seed) {
+  LlmWorkerChecksum checksum = oracle_initial_worker();
+  for (size_t work_unit = 0; work_unit < work_units; ++work_unit) {
+    for (size_t layer = 0; layer < layer_count; ++layer) {
+      const LlmPagedLayerDescriptor& layer_descriptor = layers[layer];
+      if ((scenario_flags & kLlmScenarioFlagWeight) != 0) {
+        oracle_absorb(checksum.weight, layer_descriptor.weight_ptr,
+                      layer_descriptor.weight_bytes);
+      }
+      if ((scenario_flags & kLlmScenarioFlagKv) == 0) {
+        continue;
+      }
+      for (size_t local = 0; local < layer_descriptor.assignment_count; ++local) {
+        const LlmPagedKvAssignmentDescriptor& assignment =
+            assignments[layer_descriptor.first_assignment_index + local];
+        if (assignment.owned_block_count == 0) {
+          continue;
+        }
+        const uint64_t terminal_logical_block = assignment.blocks_per_sequence - 1;
+        const uint64_t assignment_end =
+            assignment.first_logical_block + assignment.owned_block_count;
+        const bool owns_terminal =
+            assignment.first_logical_block <= terminal_logical_block &&
+            terminal_logical_block < assignment_end;
+        if (owns_terminal) {
+          const uint32_t physical_id =
+              assignment.block_table_row[terminal_logical_block];
+          const uint64_t global_logical_index =
+              assignment.batch_sequence_index * assignment.blocks_per_sequence +
+              terminal_logical_block;
+          oracle_mix_paged_lookup(checksum.k, global_logical_index, physical_id, 0,
+                                  work_unit);
+          const size_t physical_offset =
+              static_cast<size_t>(physical_id) * assignment.block_bytes +
+              assignment.decode_append_offset;
+          oracle_apply_paged_append(assignment.k_layer_pool + physical_offset,
+                                    assignment.append_record_bytes, scenario_seed,
+                                    work_unit, assignment.layer_index,
+                                    assignment.batch_sequence_index,
+                                    LlmChecksumComponent::K);
+          oracle_apply_paged_append(assignment.v_layer_pool + physical_offset,
+                                    assignment.append_record_bytes, scenario_seed,
+                                    work_unit, assignment.layer_index,
+                                    assignment.batch_sequence_index,
+                                    LlmChecksumComponent::V);
+        }
+
+        for (uint64_t logical_block = assignment.first_logical_block;
+             logical_block < assignment_end; ++logical_block) {
+          const uint32_t physical_id = assignment.block_table_row[logical_block];
+          const uint64_t global_logical_index =
+              assignment.batch_sequence_index * assignment.blocks_per_sequence +
+              logical_block;
+          oracle_mix_paged_lookup(checksum.k, global_logical_index, physical_id, 1,
+                                  work_unit);
+          const size_t visit_bytes = logical_block == terminal_logical_block
+                                         ? assignment.last_block_valid_bytes
+                                         : assignment.block_bytes;
+          oracle_absorb(checksum.k,
+                        assignment.k_layer_pool +
+                            static_cast<size_t>(physical_id) * assignment.block_bytes,
+                        visit_bytes);
+        }
+        for (uint64_t logical_block = assignment.first_logical_block;
+             logical_block < assignment_end; ++logical_block) {
+          const uint32_t physical_id = assignment.block_table_row[logical_block];
+          const uint64_t global_logical_index =
+              assignment.batch_sequence_index * assignment.blocks_per_sequence +
+              logical_block;
+          oracle_mix_paged_lookup(checksum.v, global_logical_index, physical_id, 2,
+                                  work_unit);
+          const size_t visit_bytes = logical_block == terminal_logical_block
+                                         ? assignment.last_block_valid_bytes
+                                         : assignment.block_bytes;
+          oracle_absorb(checksum.v,
+                        assignment.v_layer_pool +
+                            static_cast<size_t>(physical_id) * assignment.block_bytes,
+                        visit_bytes);
+        }
+      }
+    }
+  }
+  return checksum;
+}
+
 void expect_component_equal(const LlmReadChecksumComponent& actual, const LlmReadChecksumComponent& expected) {
   EXPECT_EQ(actual.state_a, expected.state_a);
   EXPECT_EQ(actual.state_b, expected.state_b);
@@ -439,6 +548,81 @@ struct ManualDescriptorFixture {
           index % 2,
           kRecordOffsets[index],
       };
+    }
+  }
+};
+
+struct ManualPagedDescriptorFixture {
+  static constexpr size_t kLayerCount = 2;
+  static constexpr size_t kBatchCount = 2;
+  static constexpr size_t kBlocksPerSequence = 3;
+  static constexpr size_t kPhysicalBlocksPerLayer = 6;
+  static constexpr size_t kBlockBytes = 35;
+  static constexpr size_t kLastBlockValidBytes = 33;
+  static constexpr size_t kAppendOffset = 26;
+  static constexpr size_t kAppendBytes = 7;
+
+  std::array<std::array<uint8_t, 64>, kLayerCount> weights{};
+  std::array<std::array<uint8_t, kPhysicalBlocksPerLayer * kBlockBytes>,
+             kLayerCount>
+      k_pools{};
+  std::array<std::array<uint8_t, kPhysicalBlocksPerLayer * kBlockBytes>,
+             kLayerCount>
+      v_pools{};
+  std::array<std::array<std::array<uint32_t, kBlocksPerSequence>, kBatchCount>,
+             kLayerCount>
+      tables{};
+  std::array<LlmPagedLayerDescriptor, kLayerCount> layers{};
+  std::array<LlmPagedKvAssignmentDescriptor, kLayerCount * kBatchCount>
+      assignments{};
+
+  ManualPagedDescriptorFixture() {
+    tables[0][0] = {2, 5, 1};
+    tables[0][1] = {4, 0, 3};
+    tables[1][0] = {3, 1, 4};
+    tables[1][1] = {5, 2, 0};
+    initialize_storage();
+
+    constexpr std::array<uint64_t, kLayerCount> kLayerIndices = {4, 9};
+    for (size_t layer = 0; layer < kLayerCount; ++layer) {
+      layers[layer] = {weights[layer].data() + 1 + layer,
+                       33 + 7 * layer,
+                       layer * kBatchCount,
+                       kBatchCount,
+                       kLayerIndices[layer],
+                       0};
+      for (size_t batch = 0; batch < kBatchCount; ++batch) {
+        const size_t index = layer * kBatchCount + batch;
+        assignments[index] = {
+            tables[layer][batch].data(),
+            k_pools[layer].data(),
+            v_pools[layer].data(),
+            0,
+            kBlocksPerSequence,
+            kBlocksPerSequence,
+            kBlockBytes,
+            kLastBlockValidBytes,
+            kAppendOffset,
+            kAppendBytes,
+            kLayerIndices[layer],
+            batch,
+        };
+      }
+    }
+  }
+
+  void initialize_storage() {
+    for (size_t layer = 0; layer < kLayerCount; ++layer) {
+      for (size_t byte = 0; byte < weights[layer].size(); ++byte) {
+        weights[layer][byte] =
+            static_cast<uint8_t>((byte * 17 + layer * 31 + 3) & 0xFF);
+      }
+      for (size_t byte = 0; byte < k_pools[layer].size(); ++byte) {
+        k_pools[layer][byte] =
+            static_cast<uint8_t>((byte * 19 + layer * 23 + 5) & 0xFF);
+        v_pools[layer][byte] =
+            static_cast<uint8_t>((byte * 29 + layer * 11 + 7) & 0xFF);
+      }
     }
   }
 };
@@ -679,4 +863,255 @@ TEST(LlmMemoryKernelIntegrationTest, MultiWorkerProductionExecutorRealAsmCoversE
   }
   EXPECT_EQ(weight_bytes, scenario.weight_read_bytes);
   EXPECT_EQ(kv_read_bytes, scenario.kv_read_bytes);
+}
+
+TEST(LlmMemoryKernelIntegrationTest,
+     PagedSafeZeroNullAndWeightsOnlyBoundariesDoNotTouchKvResources) {
+  // A null output must return before constructing a frame or touching inputs.
+  llm_decode_memory_paged_asm(nullptr, nullptr, 0, 0, 0, 0, nullptr);
+
+  alignas(16) std::array<uint8_t, 33> weight{};
+  for (size_t byte = 0; byte < weight.size(); ++byte) {
+    weight[byte] = static_cast<uint8_t>((byte * 17 + 3) & 0xFF);
+  }
+  LlmPagedLayerDescriptor layer{weight.data(), weight.size(), 0, 1, 0, 0};
+  LlmPagedKvAssignmentDescriptor zero_assignment{
+      reinterpret_cast<const uint32_t*>(static_cast<uintptr_t>(1)),
+      reinterpret_cast<uint8_t*>(static_cast<uintptr_t>(1)),
+      reinterpret_cast<uint8_t*>(static_cast<uintptr_t>(1)),
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+  };
+  const LlmWorkerChecksum initial = oracle_initial_worker();
+  const auto expect_initial = [&](const LlmPagedLayerDescriptor* layers,
+                                  const LlmPagedKvAssignmentDescriptor* assignments,
+                                  uint64_t layer_count, uint64_t work_units,
+                                  uint64_t flags) {
+    LlmWorkerChecksum actual;
+    std::memset(&actual, 0xA5, sizeof(actual));
+    llm_decode_memory_paged_asm(layers, assignments, layer_count, work_units,
+                                flags, 123, &actual);
+    expect_worker_equal(actual, initial);
+  };
+
+  expect_initial(nullptr, &zero_assignment, 1, 1, kLlmScenarioFlagWeight);
+  expect_initial(&layer, nullptr, 0, 1, kLlmScenarioFlagWeight);
+  expect_initial(&layer, nullptr, 1, 0, kLlmScenarioFlagWeight);
+  expect_initial(&layer, nullptr, 1, 1, kLlmScenarioFlagKv);
+  expect_initial(&layer, &zero_assignment, 1, 1, 0);
+  expect_initial(&layer, &zero_assignment, 1, 1, 4);
+
+  // owned_block_count==0 must be checked before any nested table or pool load.
+  LlmWorkerChecksum zero_owned{};
+  llm_decode_memory_paged_asm(&layer, &zero_assignment, 1, 1,
+                              kLlmScenarioFlagKv, 0, &zero_owned);
+  expect_worker_equal(zero_owned, initial);
+
+  // An invalid assignment base makes any accidental weights-only KV access
+  // fault, while the weight component must still absorb both work units.
+  const auto weight_before = weight;
+  LlmWorkerChecksum expected_weights_only = initial;
+  oracle_absorb(expected_weights_only.weight, weight.data(), weight.size());
+  oracle_absorb(expected_weights_only.weight, weight.data(), weight.size());
+  LlmWorkerChecksum weights_only{};
+  llm_decode_memory_paged_asm(
+      &layer,
+      reinterpret_cast<const LlmPagedKvAssignmentDescriptor*>(
+          static_cast<uintptr_t>(1)),
+      1, 2, kLlmScenarioFlagWeight, 0x0123456789ABCDEFULL, &weights_only);
+  expect_worker_equal(weights_only, expected_weights_only);
+  EXPECT_EQ(weight, weight_before);
+}
+
+TEST(LlmMemoryKernelIntegrationTest,
+     PagedTokenBoundaries31_32_33MatchOracleAndPreserveLastBlockPadding) {
+  constexpr size_t kBlockTokens = 32;
+  constexpr size_t kTokenBytes = 3;
+  constexpr size_t kBlockBytes = kBlockTokens * kTokenBytes;
+  constexpr size_t kPhysicalBlocks = 3;
+  constexpr size_t kCanaryBytes = 19;
+  constexpr uint64_t kSeed = 0xFEDCBA9876543210ULL;
+
+  for (size_t context_tokens : {31U, 32U, 33U}) {
+    SCOPED_TRACE(::testing::Message() << "context_tokens=" << context_tokens);
+    const size_t blocks = (context_tokens + kBlockTokens - 1) / kBlockTokens;
+    const size_t last_block_tokens =
+        context_tokens - (blocks - 1) * kBlockTokens;
+    const size_t last_block_valid_bytes = last_block_tokens * kTokenBytes;
+    const size_t append_offset = (last_block_tokens - 1) * kTokenBytes;
+    std::array<uint32_t, 2> table = {2, 2};
+    if (blocks == 2) {
+      table[0] = 0;
+    }
+    const auto table_before = table;
+
+    std::vector<uint8_t> k_pool(kPhysicalBlocks * kBlockBytes + kCanaryBytes);
+    std::vector<uint8_t> v_pool(kPhysicalBlocks * kBlockBytes + kCanaryBytes);
+    for (size_t byte = 0; byte < k_pool.size(); ++byte) {
+      k_pool[byte] = static_cast<uint8_t>((byte * 19 + 5) & 0xFF);
+      v_pool[byte] = static_cast<uint8_t>((byte * 29 + 7) & 0xFF);
+    }
+    const std::vector<uint8_t> initial_k = k_pool;
+    const std::vector<uint8_t> initial_v = v_pool;
+
+    LlmPagedLayerDescriptor layer{nullptr, 0, 0, 1, 7, 0};
+    LlmPagedKvAssignmentDescriptor assignment{
+        table.data(),
+        k_pool.data(),
+        v_pool.data(),
+        0,
+        blocks,
+        blocks,
+        kBlockBytes,
+        last_block_valid_bytes,
+        append_offset,
+        kTokenBytes,
+        7,
+        0,
+    };
+    const LlmWorkerChecksum expected = oracle_paged_worker_run(
+        &layer, 1, &assignment, 1, kLlmScenarioFlagKv, kSeed);
+    const std::vector<uint8_t> expected_k = k_pool;
+    const std::vector<uint8_t> expected_v = v_pool;
+    k_pool = initial_k;
+    v_pool = initial_v;
+
+    LlmWorkerChecksum actual{};
+    llm_decode_memory_paged_asm(&layer, &assignment, 1, 1,
+                                kLlmScenarioFlagKv, kSeed, &actual);
+    expect_worker_equal(actual, expected);
+    EXPECT_EQ(actual.k.exact_bytes_read, context_tokens * kTokenBytes);
+    EXPECT_EQ(actual.v.exact_bytes_read, context_tokens * kTokenBytes);
+    EXPECT_EQ(actual.k.span_count, blocks);
+    EXPECT_EQ(actual.v.span_count, blocks);
+    EXPECT_EQ(k_pool, expected_k);
+    EXPECT_EQ(v_pool, expected_v);
+    EXPECT_EQ(table, table_before);
+
+    const size_t terminal_base =
+        static_cast<size_t>(table[blocks - 1]) * kBlockBytes;
+    for (size_t byte = last_block_valid_bytes; byte < kBlockBytes; ++byte) {
+      EXPECT_EQ(k_pool[terminal_base + byte], initial_k[terminal_base + byte]);
+      EXPECT_EQ(v_pool[terminal_base + byte], initial_v[terminal_base + byte]);
+    }
+  }
+}
+
+TEST(LlmMemoryKernelIntegrationTest,
+     PagedMultiLayerBatchWorkUnitTraversalMatchesIndependentOracle) {
+  constexpr uint64_t kSeed = 0x0123456789ABCDEFULL;
+  constexpr size_t kWorkUnits = 3;
+  ManualPagedDescriptorFixture fixture;
+  const auto weights_before = fixture.weights;
+  const LlmWorkerChecksum expected = oracle_paged_worker_run(
+      fixture.layers.data(), fixture.layers.size(), fixture.assignments.data(),
+      kWorkUnits, kLlmScenarioFlagMixed, kSeed);
+  const auto expected_k = fixture.k_pools;
+  const auto expected_v = fixture.v_pools;
+  fixture.initialize_storage();
+
+  LlmWorkerChecksum actual{};
+  llm_decode_memory_paged_asm(
+      fixture.layers.data(), fixture.assignments.data(), fixture.layers.size(),
+      kWorkUnits, kLlmScenarioFlagMixed, kSeed, &actual);
+  expect_worker_equal(actual, expected);
+  EXPECT_EQ(fixture.weights, weights_before);
+  EXPECT_EQ(fixture.k_pools, expected_k);
+  EXPECT_EQ(fixture.v_pools, expected_v);
+
+  constexpr size_t kAssignmentCount =
+      ManualPagedDescriptorFixture::kLayerCount *
+      ManualPagedDescriptorFixture::kBatchCount;
+  constexpr size_t kBytesPerAssignment =
+      2 * ManualPagedDescriptorFixture::kBlockBytes +
+      ManualPagedDescriptorFixture::kLastBlockValidBytes;
+  EXPECT_EQ(actual.weight.exact_bytes_read, (33U + 40U) * kWorkUnits);
+  EXPECT_EQ(actual.weight.span_count,
+            ManualPagedDescriptorFixture::kLayerCount * kWorkUnits);
+  EXPECT_EQ(actual.k.exact_bytes_read,
+            kAssignmentCount * kBytesPerAssignment * kWorkUnits);
+  EXPECT_EQ(actual.v.exact_bytes_read,
+            kAssignmentCount * kBytesPerAssignment * kWorkUnits);
+  EXPECT_EQ(actual.k.span_count,
+            kAssignmentCount *
+                ManualPagedDescriptorFixture::kBlocksPerSequence * kWorkUnits);
+  EXPECT_EQ(actual.v.span_count, actual.k.span_count);
+}
+
+TEST(LlmMemoryKernelIntegrationTest,
+     PagedWrongSameMultiplicityBlockTableDoesNotMatchOracle) {
+  constexpr size_t kBlocks = 3;
+  constexpr size_t kBlockBytes = 17;
+  const std::array<uint32_t, kBlocks> correct_table = {2, 0, 1};
+  const std::array<uint32_t, kBlocks> wrong_table = {0, 2, 1};
+  EXPECT_TRUE(std::is_permutation(correct_table.begin(), correct_table.end(),
+                                  wrong_table.begin(), wrong_table.end()));
+
+  std::array<uint8_t, kBlocks * kBlockBytes> k_pool{};
+  std::array<uint8_t, kBlocks * kBlockBytes> v_pool{};
+  for (size_t block = 0; block < kBlocks; ++block) {
+    for (size_t byte = 0; byte < kBlockBytes; ++byte) {
+      // Identical physical blocks isolate lookup identity from read contents.
+      k_pool[block * kBlockBytes + byte] =
+          static_cast<uint8_t>((byte * 19 + 5) & 0xFF);
+      v_pool[block * kBlockBytes + byte] =
+          static_cast<uint8_t>((byte * 29 + 7) & 0xFF);
+    }
+  }
+  LlmPagedLayerDescriptor layer{nullptr, 0, 0, 1, 0, 0};
+  LlmPagedKvAssignmentDescriptor assignment{
+      correct_table.data(), k_pool.data(), v_pool.data(), 0, kBlocks, kBlocks,
+      kBlockBytes, kBlockBytes, 0, 0, 0, 0};
+  const LlmWorkerChecksum expected = oracle_paged_worker_run(
+      &layer, 1, &assignment, 2, kLlmScenarioFlagKv, 99);
+
+  assignment.block_table_row = wrong_table.data();
+  LlmWorkerChecksum actual{};
+  llm_decode_memory_paged_asm(&layer, &assignment, 1, 2,
+                              kLlmScenarioFlagKv, 99, &actual);
+  EXPECT_EQ(actual.k.exact_bytes_read, expected.k.exact_bytes_read);
+  EXPECT_EQ(actual.k.span_count, expected.k.span_count);
+  EXPECT_EQ(actual.v.exact_bytes_read, expected.v.exact_bytes_read);
+  EXPECT_EQ(actual.v.span_count, expected.v.span_count);
+  EXPECT_TRUE(actual.k.state_a != expected.k.state_a ||
+              actual.k.state_b != expected.k.state_b);
+  EXPECT_TRUE(actual.v.state_a != expected.v.state_a ||
+              actual.v.state_b != expected.v.state_b);
+}
+
+TEST(LlmMemoryKernelIntegrationTest,
+     PagedPreservesIntegerAndFullVectorCalleeSavedRegisters) {
+  constexpr uint64_t kSeed = 0xA5A55A5AF0F00F0FULL;
+  ManualPagedDescriptorFixture fixture;
+  const LlmWorkerChecksum expected = oracle_paged_worker_run(
+      fixture.layers.data(), fixture.layers.size(), fixture.assignments.data(),
+      1, kLlmScenarioFlagMixed, kSeed);
+  const auto expected_k = fixture.k_pools;
+  const auto expected_v = fixture.v_pools;
+  fixture.initialize_storage();
+
+  LlmWorkerChecksum output{};
+  const std::array<uintptr_t, 7> arguments = {
+      reinterpret_cast<uintptr_t>(fixture.layers.data()),
+      reinterpret_cast<uintptr_t>(fixture.assignments.data()),
+      fixture.layers.size(),
+      1,
+      kLlmScenarioFlagMixed,
+      kSeed,
+      reinterpret_cast<uintptr_t>(&output),
+  };
+  EXPECT_EQ(verify_llm_kernel_callee_saved_registers_asm(
+                reinterpret_cast<uintptr_t>(&llm_decode_memory_paged_asm),
+                arguments.data()),
+            1u);
+  expect_worker_equal(output, expected);
+  EXPECT_EQ(fixture.k_pools, expected_k);
+  EXPECT_EQ(fixture.v_pools, expected_v);
 }

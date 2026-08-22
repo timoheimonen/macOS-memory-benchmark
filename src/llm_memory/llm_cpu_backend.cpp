@@ -183,13 +183,17 @@ LlmTaskExecutionResult adapt_llm_cpu_executor_result(const LlmMemoryWorkPlan& mo
   const LlmCpuExecutionPlan* cpu_plan = get_llm_cpu_execution_plan(model_plan);
   const size_t effective_workers = cpu_plan == nullptr ? 0 : cpu_plan->effective_workers;
   const bool lifecycle_complete = cpu_lifecycle_complete(executor_result, effective_workers);
-  const bool checksum_evidence_complete = lifecycle_complete && executor_result.checksum_evaluated;
+  const bool checksum_evidence_complete =
+      lifecycle_complete && executor_result.checksum_evaluated &&
+      executor_result.post_validation_evaluated;
   result.timing.evaluated = executor_result.timer_started && executor_result.timer_stopped;
   result.timing.elapsed_seconds = executor_result.elapsed_seconds;
   result.timing.valid = result.timing.evaluated && std::isfinite(executor_result.elapsed_seconds) &&
                         executor_result.elapsed_seconds > 0.0;
   result.validation.evaluated = checksum_evidence_complete;
-  result.validation.valid = checksum_evidence_complete && executor_result.checksum_valid;
+  result.validation.valid =
+      checksum_evidence_complete && executor_result.checksum_valid &&
+      executor_result.post_validation_valid;
 
   const std::string_view original_reason = executor_result.reason_code;
   const bool accepted = executor_result.valid && original_reason == LlmExecutorReason::VALID && lifecycle_complete &&
@@ -203,9 +207,14 @@ LlmTaskExecutionResult adapt_llm_cpu_executor_result(const LlmMemoryWorkPlan& mo
     result.completion.completed_layout_metadata_read_bytes = scenario_plan.layout_metadata_read_bytes;
     result.completion.completed_task_accounted_bytes = scenario_plan.task_accounted_bytes;
   } else if (original_reason == LlmExecutorReason::CHECKSUM_MISMATCH ||
+             original_reason ==
+                 LlmExecutorReason::PAGED_POST_VALIDATION_FAILED ||
              (lifecycle_complete && result.validation.evaluated && !result.validation.valid)) {
     result.status = LlmTaskExecutionStatus::Invalid;
-    result.reason_code = LlmExecutorReason::CHECKSUM_MISMATCH;
+    result.reason_code = original_reason ==
+                                 LlmExecutorReason::PAGED_POST_VALIDATION_FAILED
+                             ? original_reason
+                             : LlmExecutorReason::CHECKSUM_MISMATCH;
   } else if (original_reason == LlmExecutorReason::INVALID_ELAPSED_TIME ||
              (lifecycle_complete && !result.timing.valid)) {
     result.status = LlmTaskExecutionStatus::Invalid;

@@ -22,6 +22,26 @@
 
 #include "llm_memory/llm_cpu_backend.h"
 
+LlmBackendAuxiliaryEstimate LlmBackend::calculate_auxiliary_estimate(
+    const LlmAuxiliaryPreflightView& preflight) const noexcept {
+  LlmBackendAuxiliaryEstimate estimate;
+  if (kind() != LlmMemoryBackend::Cpu ||
+      preflight.backend != LlmMemoryBackend::Cpu) {
+    estimate.reason_code = LlmBackendReason::BACKEND_NOT_ACTIVATED;
+    return estimate;
+  }
+  const LlmExecutorAuxiliaryEstimate cpu =
+      calculate_llm_executor_auxiliary_estimate(preflight);
+  estimate.valid = cpu.valid;
+  estimate.reason_code = cpu.reason_code;
+  estimate.checksum_auxiliary_bytes = cpu.checksum_auxiliary_bytes;
+  estimate.orchestration_auxiliary_bytes =
+      cpu.orchestration_auxiliary_bytes;
+  estimate.total_auxiliary_bytes = cpu.total_auxiliary_bytes;
+  estimate.backend_evidence = cpu;
+  return estimate;
+}
+
 std::unique_ptr<LlmBackend> create_llm_backend(LlmMemoryBackend backend) {
   switch (backend) {
     case LlmMemoryBackend::Cpu:

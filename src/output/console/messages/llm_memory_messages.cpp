@@ -29,7 +29,8 @@ const std::string& error_llm_memory_must_be_used_alone() {
       "--llm-memory requires --weight-size-mb <MiB>, --layers <count>, "
       "--query-heads <count>, --kv-heads <count>, --head-dim <count>, and "
       "--context-tokens <count>; it allows only optional "
-      "--kv-element-bytes <1|2|4>, --batch-size <count>, "
+      "--kv-element-bytes <1|2|4>, --kv-layout <contiguous|paged>, "
+      "--kv-block-tokens <count>, --batch-size <count>, "
       "-t/--threads <count>, -i/--iterations <count>, "
       "-r/--count <count>, --seed <uint64>, -o/--output <target>, and "
       "-h/--help (no other options allowed)";
@@ -60,6 +61,12 @@ std::string error_llm_memory_run_failed(const std::string& reason_code) {
          ")";
 }
 
+const std::string& error_llm_paged_table_protection_failed() {
+  static const std::string message =
+      "Failed to make the paged KV block table read-only";
+  return message;
+}
+
 const std::string& llm_memory_reason_positive_integer() {
   static const std::string reason = "must be a positive integer";
   return reason;
@@ -67,6 +74,12 @@ const std::string& llm_memory_reason_positive_integer() {
 
 const std::string& llm_memory_reason_kv_element_bytes() {
   static const std::string reason = "must be exactly 1, 2, or 4";
+  return reason;
+}
+
+const std::string& llm_memory_reason_kv_layout() {
+  static const std::string reason =
+      "must be exactly contiguous or paged";
   return reason;
 }
 
@@ -95,6 +108,12 @@ std::string llm_memory_usage_options(const std::string& prog_name) {
       << Constants::LLM_DEFAULT_KV_ELEMENT_BYTES << " bytes).\n"
       << "      --context-tokens <count>\n"
       << "                          Required fixed visible context, including the current token.\n"
+      << "      --kv-layout <contiguous|paged>\n"
+      << "                          KV storage layout (default: contiguous).\n"
+      << "      --kv-block-tokens <count>\n"
+      << "                          Required only for paged KV; must be a positive power of two\n"
+      << "                          no greater than UINT32_MAX; it may exceed the visible context.\n"
+      << "                          Rejected for contiguous KV.\n"
       << "      --batch-size <count>\n"
       << "                          Batch sequences per decode step (default: "
       << Constants::LLM_DEFAULT_BATCH_SIZE << ").\n"
@@ -158,6 +177,43 @@ std::string report_llm_memory_decode_geometry(
          << "  Traffic crossover:          " << std::fixed
          << std::setprecision(2) << traffic_crossover_context_tokens
          << " visible context tokens";
+  return report.str();
+}
+
+std::string report_llm_memory_paged_layout(
+    const LlmPagedLayoutReportValues& values) {
+  std::ostringstream report;
+  report << "  Paged KV block tokens (G): " << values.block_tokens << "\n"
+         << "  Blocks per sequence (N):   " << values.blocks_per_sequence
+         << "\n"
+         << "  Physical blocks/layer (P_b): "
+         << values.physical_blocks_per_layer << "\n"
+         << "  Physical block geometry: total_blocks="
+         << values.total_physical_blocks << ", block_bytes="
+         << values.block_bytes << "\n"
+         << "  Terminal block: tokens=" << values.terminal_block_tokens
+         << ", valid_bytes=" << values.terminal_valid_bytes << "\n"
+         << "  K bytes (logical/physical/padding): "
+         << values.k_logical_bytes << "/" << values.k_physical_bytes << "/"
+         << values.k_padding_bytes << "\n"
+         << "  V bytes (logical/physical/padding): "
+         << values.v_logical_bytes << "/" << values.v_physical_bytes << "/"
+         << values.v_padding_bytes << "\n"
+         << "  Block table: " << values.block_table_entries
+         << " uint32 entries, " << values.block_table_bytes << " bytes, "
+         << values.block_table_page_rounded_bytes << " page-rounded bytes\n"
+         << "  Permutation: version=" << values.permutation_version
+         << ", seed=" << values.permutation_seed
+         << ", sha256=" << values.permutation_sha256 << "\n"
+         << "  Permutation identity: " << values.permutation_identity << "\n"
+         << "  Timed block-table metadata / KV-active "
+         << values.work_unit_name << ": "
+         << values.metadata_lookups_per_work_unit << " lookups, "
+         << values.metadata_bytes_per_work_unit << " bytes\n"
+         << "  Accounted bytes / KV-active " << values.work_unit_name << ": "
+         << values.accounted_bytes_per_work_unit << "\n"
+         << "  Effective model payload excludes timed block-table metadata "
+            "bytes.";
   return report.str();
 }
 

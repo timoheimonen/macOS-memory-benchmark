@@ -832,6 +832,29 @@ TEST(ExecutableCliIntegrationTest,
 }
 
 TEST(ExecutableCliIntegrationTest,
+     LlmPagedTasksResetAppendSlotsBetweenScenariosIntegration) {
+  std::vector<std::string> arguments = bounded_llm_arguments("-", 3);
+  arguments.insert(arguments.end() - 2,
+                   {"--kv-layout", "paged", "--kv-block-tokens", "2"});
+
+  const CliResult result = run_memory_benchmark(arguments);
+
+  expect_process_completed(result);
+  ASSERT_EQ(result.exit_code, EXIT_SUCCESS) << result.stderr_output;
+  const nlohmann::json document = parse_single_stdout_json(result);
+  ASSERT_TRUE(document.is_object());
+  EXPECT_EQ(document["status"], "complete");
+  EXPECT_TRUE(document["results_complete"].get<bool>());
+  ASSERT_EQ(document["measurements"].size(), 9u);
+  for (const nlohmann::json& measurement : document["measurements"]) {
+    EXPECT_TRUE(
+        measurement["execution"]["post_validation_evaluated"].get<bool>());
+    EXPECT_TRUE(
+        measurement["execution"]["post_validation_valid"].get<bool>());
+  }
+}
+
+TEST(ExecutableCliIntegrationTest,
      LlmDotDashAndFlagShapedOutputsRemainOrdinaryFilesIntegration) {
   for (const std::string& target : {"./-", "-G"}) {
     SCOPED_TRACE(target);

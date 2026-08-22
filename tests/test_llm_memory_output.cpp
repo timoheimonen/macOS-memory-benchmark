@@ -66,6 +66,52 @@ LlmMemoryWorkPlan make_console_plan() {
   return plan;
 }
 
+LlmMemoryWorkPlan make_paged_console_plan() {
+  LlmMemoryWorkPlan plan = make_console_plan();
+  plan.kv_layout = LlmKvLayout::Paged;
+  plan.geometry.kv_layout = LlmKvLayout::Paged;
+  plan.geometry.kv_block_tokens = 4;
+  plan.geometry.kv_blocks_per_sequence = 2;
+  plan.geometry.physical_blocks_per_layer = 2;
+  plan.geometry.total_physical_blocks = 4;
+  plan.geometry.kv_block_bytes = 128;
+  plan.geometry.last_block_tokens = 4;
+  plan.geometry.last_block_valid_bytes = 128;
+  plan.geometry.k_logical_bytes = 384;
+  plan.geometry.v_logical_bytes = 384;
+  plan.geometry.k_mapping_bytes = 512;
+  plan.geometry.v_mapping_bytes = 512;
+  plan.geometry.k_layout_padding_bytes = 128;
+  plan.geometry.v_layout_padding_bytes = 128;
+  LlmCpuExecutionPlan* const cpu = get_llm_cpu_execution_plan(plan);
+  if (cpu == nullptr) {
+    throw std::logic_error("expected mutable CPU execution plan");
+  }
+  cpu->paged.emplace();
+  cpu->paged->layout.valid = true;
+  cpu->paged->layout.kv_block_tokens = 4;
+  cpu->paged->layout.blocks_per_sequence = 2;
+  cpu->paged->layout.physical_blocks_per_layer = 2;
+  cpu->paged->layout.total_physical_blocks = 4;
+  cpu->paged->layout.block_bytes = 128;
+  cpu->paged->layout.last_block_tokens = 4;
+  cpu->paged->layout.last_block_valid_bytes = 128;
+  cpu->paged->layout.block_table_entries = 2;
+  cpu->paged->block_table_logical_bytes = 8;
+  cpu->paged->block_table_mapping_bytes = 4096;
+  cpu->paged->permutation.algorithm_version = "permutation-v1";
+  cpu->paged->permutation.resolved_seed = 99;
+  cpu->paged->permutation.sha256 = "0123456789abcdef";
+  cpu->paged->permutation.identity = "paged-permutation-identity";
+  cpu->paged->ownership.valid = true;
+  cpu->paged->ownership
+      .total_layout_metadata_lookup_count_per_work_unit = 20;
+  cpu->paged->ownership
+      .total_layout_metadata_read_bytes_per_work_unit = 80;
+  cpu->paged->ownership.total_accounted_bytes_per_work_unit = 1104;
+  return plan;
+}
+
 LlmMemoryConfig fake_runner_config() {
   LlmMemoryConfig config;
   config.weight_size_mb = 1;
@@ -139,6 +185,8 @@ LlmExecutorResult successful_fake_execution(const LlmMemoryWorkPlan& plan) {
   execution.timer_stopped = true;
   execution.checksum_evaluated = true;
   execution.checksum_valid = true;
+  execution.post_validation_evaluated = true;
+  execution.post_validation_valid = true;
   execution.expected_checksums.resize(cpu_plan.effective_workers);
   execution.actual_checksums = execution.expected_checksums;
   execution.expected_run_checksum = {11, 22};
@@ -256,6 +304,82 @@ TEST(LlmMemoryOutputTest, PrintsExactPayloadHeadlinesAndInterpretation) {
             "bottleneck transition.\n"
             "  Comparability: small weight or KV working sets can be cache-dominant; order imbalance, "
             "high CV, non-nominal environment, QoS failures, or off-target duration reduce confidence.\n");
+}
+
+TEST(LlmMemoryOutputTest,
+     PagedReportIdentifiesBlockGeometryAndTimedMetadataOutsidePayload) {
+  LlmMemoryWorkPlan plan = make_paged_console_plan();
+  LlmResultMetadata metadata;
+  metadata.main_thread_qos = {true, true, 0};
+  metadata.environment_start.thermal_state = "nominal";
+  metadata.environment_end = metadata.environment_start;
+  LlmMemoryResult result;
+
+  testing::internal::CaptureStdout();
+  testing::internal::CaptureStderr();
+  print_llm_memory_console_report(plan, metadata, result);
+  const std::string errors = testing::internal::GetCapturedStderr();
+  const std::string output = testing::internal::GetCapturedStdout();
+
+  EXPECT_TRUE(errors.empty());
+  EXPECT_EQ(count_substrings(output, "kv_layout=paged"), 2u);
+  EXPECT_EQ(count_substrings(output, "  Paged KV block tokens (G): 4\n"),
+            1u);
+  EXPECT_EQ(count_substrings(output, "  Blocks per sequence (N):   2\n"),
+            1u);
+  EXPECT_EQ(
+      count_substrings(output, "  Physical blocks/layer (P_b): 2\n"),
+      1u);
+  EXPECT_EQ(count_substrings(
+                output,
+                "  Physical block geometry: total_blocks=4, "
+                "block_bytes=128\n"),
+            1u);
+  EXPECT_EQ(count_substrings(
+                output, "  Terminal block: tokens=4, valid_bytes=128\n"),
+            1u);
+  EXPECT_EQ(count_substrings(
+                output,
+                "  K bytes (logical/physical/padding): 384/512/128\n"),
+            1u);
+  EXPECT_EQ(count_substrings(
+                output,
+                "  V bytes (logical/physical/padding): 384/512/128\n"),
+            1u);
+  EXPECT_EQ(count_substrings(
+                output,
+                "  Block table: 2 uint32 entries, 8 bytes, 4096 "
+                "page-rounded bytes\n"),
+            1u);
+  EXPECT_EQ(count_substrings(
+                output,
+                "  Permutation: version=permutation-v1, seed=99, "
+                "sha256=0123456789abcdef\n"),
+            1u);
+  EXPECT_EQ(count_substrings(
+                output,
+                "  Permutation identity: paged-permutation-identity\n"),
+            1u);
+  EXPECT_EQ(count_substrings(
+                output,
+                "  Timed block-table metadata / KV-active decode step: "
+                "20 lookups, 80 bytes\n"),
+            1u);
+  EXPECT_EQ(count_substrings(
+                output,
+                "  Accounted bytes / KV-active decode step: 1104\n"),
+            1u);
+  EXPECT_EQ(count_substrings(
+                output,
+                "  Effective model payload excludes timed block-table "
+                "metadata bytes.\n"),
+            1u);
+  EXPECT_EQ(count_substrings(
+                output, "  KV read bytes / decode step:       768\n"),
+            1u);
+  EXPECT_EQ(count_substrings(
+                output, "  KV write bytes / decode step:      256\n"),
+            1u);
 }
 
 TEST(LlmMemoryOutputTest, EmitsDeduplicatedWarningsInContractOrder) {

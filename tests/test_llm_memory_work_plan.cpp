@@ -31,6 +31,7 @@
 #include "core/config/constants.h"
 #include "llm_memory/llm_kv_layout.h"
 #include "llm_memory/llm_work_plan.h"
+#include "test_memory_system_calls.h"
 
 namespace {
 
@@ -54,6 +55,15 @@ LlmCpuExecutionPlan& cpu_execution_plan(LlmMemoryWorkPlan& plan) {
   return *cpu_plan;
 }
 
+const LlmPagedCpuExecutionPlan& paged_cpu_execution_plan(
+    const LlmMemoryWorkPlan& plan) {
+  const LlmCpuExecutionPlan& cpu_plan = cpu_execution_plan(plan);
+  if (!cpu_plan.paged.has_value()) {
+    throw std::logic_error("expected paged CPU execution plan");
+  }
+  return *cpu_plan.paged;
+}
+
 LlmGeometryRequest large_geometry_request() {
   return {4 * kGiB, 32, 32, 8, 128, 2, 8192, 1};
 }
@@ -61,6 +71,14 @@ LlmGeometryRequest large_geometry_request() {
 LlmGeometryRequest small_geometry_request(size_t batch_size = 1) {
   // K+V across both layers is exactly 128 bytes per visible token.
   return {1024, 2, 4, 2, 8, 2, 3, batch_size};
+}
+
+LlmGeometryRequest paged_geometry_request(
+    size_t context_tokens = 35, size_t block_tokens = 16,
+    size_t batch_size = 2) {
+  // One K or V token record is 32 bytes in each of the two layers.
+  return {1024, 2, 4, 2, 8, 2, context_tokens, batch_size,
+          block_tokens, LlmPhase::Decode, LlmKvLayout::Paged};
 }
 
 LlmMemoryWorkPlanRequest work_plan_request(
@@ -193,6 +211,27 @@ void expect_geometries_equal(const LlmGeometry& actual,
             expected.kv_bytes_per_visible_token);
   EXPECT_EQ(actual.k_or_v_sequence_visible_bytes,
             expected.k_or_v_sequence_visible_bytes);
+  EXPECT_EQ(actual.kv_block_tokens, expected.kv_block_tokens);
+  EXPECT_EQ(actual.kv_blocks_per_sequence,
+            expected.kv_blocks_per_sequence);
+  EXPECT_EQ(actual.physical_blocks_per_layer,
+            expected.physical_blocks_per_layer);
+  EXPECT_EQ(actual.total_physical_blocks,
+            expected.total_physical_blocks);
+  EXPECT_EQ(actual.kv_block_bytes, expected.kv_block_bytes);
+  EXPECT_EQ(actual.last_block_tokens, expected.last_block_tokens);
+  EXPECT_EQ(actual.last_block_valid_bytes,
+            expected.last_block_valid_bytes);
+  EXPECT_EQ(actual.decode_append_offset_in_last_block,
+            expected.decode_append_offset_in_last_block);
+  EXPECT_EQ(actual.k_logical_bytes, expected.k_logical_bytes);
+  EXPECT_EQ(actual.v_logical_bytes, expected.v_logical_bytes);
+  EXPECT_EQ(actual.k_layout_padding_bytes,
+            expected.k_layout_padding_bytes);
+  EXPECT_EQ(actual.v_layout_padding_bytes,
+            expected.v_layout_padding_bytes);
+  EXPECT_EQ(actual.block_table_entries, expected.block_table_entries);
+  EXPECT_EQ(actual.block_table_bytes, expected.block_table_bytes);
   EXPECT_EQ(actual.k_mapping_bytes, expected.k_mapping_bytes);
   EXPECT_EQ(actual.v_mapping_bytes, expected.v_mapping_bytes);
   EXPECT_EQ(actual.kv_capacity_bytes, expected.kv_capacity_bytes);
@@ -234,8 +273,16 @@ void expect_budget_requests_equal(const LlmMemoryBudgetRequest& actual,
             expected.committed_k_mapping_bytes);
   EXPECT_EQ(actual.committed_v_mapping_bytes,
             expected.committed_v_mapping_bytes);
+  EXPECT_EQ(actual.requested_block_table_mapping_bytes,
+            expected.requested_block_table_mapping_bytes);
+  EXPECT_EQ(actual.committed_block_table_mapping_bytes,
+            expected.committed_block_table_mapping_bytes);
   EXPECT_EQ(actual.requested_data_bytes, expected.requested_data_bytes);
   EXPECT_EQ(actual.committed_data_bytes, expected.committed_data_bytes);
+  EXPECT_EQ(actual.layout_transient_bytes,
+            expected.layout_transient_bytes);
+  EXPECT_EQ(actual.setup_peak_bytes, expected.setup_peak_bytes);
+  EXPECT_EQ(actual.runtime_peak_bytes, expected.runtime_peak_bytes);
   EXPECT_EQ(actual.descriptor_bytes, expected.descriptor_bytes);
   EXPECT_EQ(actual.planner_storage_bytes, expected.planner_storage_bytes);
   EXPECT_EQ(actual.checksum_auxiliary_bytes,
@@ -254,6 +301,16 @@ void expect_memory_budgets_equal(const LlmMemoryBudget& actual,
   EXPECT_EQ(actual.available_memory_bytes, expected.available_memory_bytes);
   EXPECT_EQ(actual.allowed_memory_bytes, expected.allowed_memory_bytes);
   EXPECT_EQ(actual.used_fallback, expected.used_fallback);
+}
+
+std::vector<uint32_t> paged_table_entries(
+    const LlmMemoryWorkPlan& plan) {
+  const LlmPagedCpuExecutionPlan& paged = paged_cpu_execution_plan(plan);
+  if (paged.block_table() == nullptr) {
+    throw std::logic_error("expected materialized paged block table");
+  }
+  return {paged.block_table(),
+          paged.block_table() + paged.layout.block_table_entries};
 }
 
 void expect_equivalent_executable_plans(const LlmMemoryWorkPlan& actual,
@@ -402,6 +459,9 @@ void expect_length_prefixed_identity_field(std::string_view identity,
       << "missing canonical field " << name;
 }
 
+class LlmMemoryWorkPlanSystemCallsTest
+    : public FakeMemorySystemCallsTest {};
+
 }  // namespace
 
 TEST(LlmMemoryWorkPlanTest, ConstantsAndIdentitiesMatchFrozenContract) {
@@ -445,10 +505,31 @@ TEST(LlmMemoryWorkPlanTest, ConstantsAndIdentitiesMatchFrozenContract) {
                "llm-kv-append-affine64-v1");
   EXPECT_STREQ(Constants::LLM_READ_CHECKSUM_VERSION,
                "llm-read-checksum-v1");
+  EXPECT_EQ(Constants::LLM_KV_BLOCK_TABLE_ENTRY_BYTES, sizeof(uint32_t));
+  EXPECT_STREQ(Constants::LLM_PAGED_KV_LAYOUT_VERSION,
+               "paged-uint32-block-table-full-blocks-v1");
+  EXPECT_STREQ(Constants::LLM_KV_BLOCK_PERMUTATION_VERSION,
+               "splitmix64-fisher-yates-rejection-v1");
+  EXPECT_STREQ(Constants::LLM_PAGED_CPU_EXECUTION_IDENTITY_VERSION,
+               "llm-paged-cpu-execution-v1");
+  EXPECT_STREQ(Constants::LLM_PAGED_CPU_SCHEDULE_VERSION,
+               "decode-kv-accounted-prefix-balanced-rotating-v1");
+  EXPECT_STREQ(Constants::LLM_PAGED_CPU_EXECUTOR_VERSION,
+               "llm-cpu-executor-v1-arm64-decode-paged");
+  EXPECT_STREQ(Constants::LLM_PAGED_DESCRIPTOR_ABI_VERSION,
+               "llm-memory-paged-descriptor-abi-v1");
+  EXPECT_STREQ(Constants::LLM_PAGED_BUFFER_PATTERN_VERSION,
+               "llm-paged-physical-buffer-pattern-v1");
+  EXPECT_STREQ(Constants::LLM_PAGED_READ_CHECKSUM_VERSION,
+               "llm-paged-read-checksum-v1");
   EXPECT_EQ(build_llm_methodology_version(
                 LlmMemoryBackend::Cpu, LlmPhase::Decode,
                 LlmKvLayout::Contiguous),
             Constants::LLM_CPU_DECODE_CONTIGUOUS_METHODOLOGY_VERSION);
+  EXPECT_EQ(build_llm_methodology_version(
+                LlmMemoryBackend::Cpu, LlmPhase::Decode,
+                LlmKvLayout::Paged),
+            "llm-memory-v1-cpu-decode-paged");
   EXPECT_EQ(build_llm_methodology_version(
                 LlmMemoryBackend::Metal, LlmPhase::Prefill,
                 LlmKvLayout::Paged),
@@ -672,7 +753,7 @@ TEST(LlmMemoryWorkPlanTest,
   inactive_geometry.phase = LlmPhase::Decode;
   inactive_geometry.kv_layout = LlmKvLayout::Paged;
   EXPECT_EQ(resolve_llm_geometry(inactive_geometry).reason_code,
-            LlmWorkPlanReason::KV_LAYOUT_NOT_ACTIVATED);
+            LlmKvLayoutReason::BLOCK_TOKENS_ZERO);
 
   LlmMemoryWorkPlanRequest inactive_backend =
       work_plan_request(small_geometry_request(), 2, 2);
@@ -1073,6 +1154,9 @@ TEST(LlmMemoryWorkPlanTest, DescriptorAbiMatchesPhaseZeroGoldenOffsets) {
   static_assert(std::is_nothrow_move_assignable_v<LlmMemoryWorkPlan>);
   static_assert(std::is_standard_layout_v<LlmLayerDescriptor>);
   static_assert(std::is_standard_layout_v<LlmKvSequenceDescriptor>);
+  static_assert(std::is_standard_layout_v<LlmPagedLayerDescriptor>);
+  static_assert(
+      std::is_standard_layout_v<LlmPagedKvAssignmentDescriptor>);
   EXPECT_EQ(alignof(LlmLayerDescriptor), 16u);
   EXPECT_EQ(sizeof(LlmLayerDescriptor), 48u);
   EXPECT_EQ(offsetof(LlmLayerDescriptor, weight_ptr), 0u);
@@ -1094,6 +1178,41 @@ TEST(LlmMemoryWorkPlanTest, DescriptorAbiMatchesPhaseZeroGoldenOffsets) {
   EXPECT_EQ(offsetof(LlmKvSequenceDescriptor, batch_sequence_index), 64u);
   EXPECT_EQ(offsetof(LlmKvSequenceDescriptor, append_record_byte_offset),
             72u);
+  EXPECT_EQ(alignof(LlmPagedLayerDescriptor), 16u);
+  EXPECT_EQ(sizeof(LlmPagedLayerDescriptor), 48u);
+  EXPECT_EQ(offsetof(LlmPagedLayerDescriptor, weight_ptr), 0u);
+  EXPECT_EQ(offsetof(LlmPagedLayerDescriptor, weight_bytes), 8u);
+  EXPECT_EQ(offsetof(LlmPagedLayerDescriptor, first_assignment_index),
+            16u);
+  EXPECT_EQ(offsetof(LlmPagedLayerDescriptor, assignment_count), 24u);
+  EXPECT_EQ(offsetof(LlmPagedLayerDescriptor, layer_index), 32u);
+  EXPECT_EQ(offsetof(LlmPagedLayerDescriptor, reserved_zero), 40u);
+  EXPECT_EQ(alignof(LlmPagedKvAssignmentDescriptor), 16u);
+  EXPECT_EQ(sizeof(LlmPagedKvAssignmentDescriptor), 96u);
+  EXPECT_EQ(offsetof(LlmPagedKvAssignmentDescriptor, block_table_row),
+            0u);
+  EXPECT_EQ(offsetof(LlmPagedKvAssignmentDescriptor, k_layer_pool), 8u);
+  EXPECT_EQ(offsetof(LlmPagedKvAssignmentDescriptor, v_layer_pool), 16u);
+  EXPECT_EQ(offsetof(LlmPagedKvAssignmentDescriptor,
+                     first_logical_block),
+            24u);
+  EXPECT_EQ(offsetof(LlmPagedKvAssignmentDescriptor, owned_block_count),
+            32u);
+  EXPECT_EQ(offsetof(LlmPagedKvAssignmentDescriptor, blocks_per_sequence),
+            40u);
+  EXPECT_EQ(offsetof(LlmPagedKvAssignmentDescriptor, block_bytes), 48u);
+  EXPECT_EQ(offsetof(LlmPagedKvAssignmentDescriptor,
+                     last_block_valid_bytes),
+            56u);
+  EXPECT_EQ(offsetof(LlmPagedKvAssignmentDescriptor,
+                     decode_append_offset),
+            64u);
+  EXPECT_EQ(offsetof(LlmPagedKvAssignmentDescriptor, append_record_bytes),
+            72u);
+  EXPECT_EQ(offsetof(LlmPagedKvAssignmentDescriptor, layer_index), 80u);
+  EXPECT_EQ(offsetof(LlmPagedKvAssignmentDescriptor,
+                     batch_sequence_index),
+            88u);
 }
 
 TEST(LlmMemoryWorkPlanTest,
@@ -1756,6 +1875,627 @@ TEST(LlmMemoryWorkPlanTest,
 }
 
 TEST(LlmMemoryWorkPlanTest,
+     PagedActiveModelPlanMaterializesOneReadOnlyTableAndExactBudget) {
+  const LlmMemoryWorkPlan plan = build_llm_memory_work_plan(
+      work_plan_request(paged_geometry_request(), 5, 5));
+  ASSERT_TRUE(plan.valid) << plan.reason_code;
+  EXPECT_EQ(plan.reason_code, LlmWorkPlanReason::VALID);
+  EXPECT_EQ(plan.backend, LlmMemoryBackend::Cpu);
+  EXPECT_EQ(plan.phase, LlmPhase::Decode);
+  EXPECT_EQ(plan.kv_layout, LlmKvLayout::Paged);
+  EXPECT_EQ(plan.methodology_version, "llm-memory-v1-cpu-decode-paged");
+
+  const LlmGeometry& geometry = plan.geometry;
+  ASSERT_TRUE(geometry.valid) << geometry.reason_code;
+  ASSERT_TRUE(geometry.decode.has_value());
+  EXPECT_EQ(geometry.decode->visible_context_tokens, 35u);
+  EXPECT_EQ(geometry.kv_block_tokens, 16u);
+  EXPECT_EQ(geometry.kv_blocks_per_sequence, 3u);
+  EXPECT_EQ(geometry.physical_blocks_per_layer, 6u);
+  EXPECT_EQ(geometry.total_physical_blocks, 12u);
+  EXPECT_EQ(geometry.kv_block_bytes, 512u);
+  EXPECT_EQ(geometry.last_block_tokens, 3u);
+  EXPECT_EQ(geometry.last_block_valid_bytes, 96u);
+  EXPECT_EQ(geometry.decode_append_offset_in_last_block, 64u);
+  EXPECT_EQ(geometry.k_logical_bytes, 4480u);
+  EXPECT_EQ(geometry.v_logical_bytes, 4480u);
+  EXPECT_EQ(geometry.k_mapping_bytes, 6144u);
+  EXPECT_EQ(geometry.v_mapping_bytes, 6144u);
+  EXPECT_EQ(geometry.k_layout_padding_bytes, 1664u);
+  EXPECT_EQ(geometry.v_layout_padding_bytes, 1664u);
+  EXPECT_EQ(geometry.block_table_entries, 6u);
+  EXPECT_EQ(geometry.block_table_bytes, 24u);
+  EXPECT_EQ(geometry.kv_capacity_bytes, 12288u);
+  EXPECT_EQ(geometry.total_data_mapping_bytes, 13312u);
+
+  const LlmCpuExecutionPlan& cpu_plan = cpu_execution_plan(plan);
+  EXPECT_EQ(cpu_plan.requested_workers, 5u);
+  EXPECT_EQ(cpu_plan.available_workers, 5u);
+  EXPECT_EQ(cpu_plan.effective_workers, 5u);
+  EXPECT_EQ(cpu_plan.layer_descriptors_per_worker, 2u);
+  EXPECT_EQ(cpu_plan.sequence_descriptors_per_worker, 4u);
+  EXPECT_EQ(cpu_plan.total_layer_descriptors, 10u);
+  EXPECT_EQ(cpu_plan.total_sequence_descriptors, 20u);
+  EXPECT_EQ(cpu_plan.descriptor_bytes, 2400u);
+  ASSERT_EQ(cpu_plan.workers.size(), 5u);
+  for (const LlmWorkerWorkPlan& worker : cpu_plan.workers) {
+    EXPECT_EQ(worker.layers.size(), 2u);
+    EXPECT_TRUE(worker.sequences.empty());
+    EXPECT_EQ(worker.paged_assignments.size(), 4u);
+  }
+
+  ASSERT_TRUE(cpu_plan.paged.has_value());
+  const LlmPagedCpuExecutionPlan& paged = *cpu_plan.paged;
+  EXPECT_EQ(paged.layout.blocks_per_sequence, 3u);
+  EXPECT_EQ(paged.layout.physical_blocks_per_layer, 6u);
+  EXPECT_EQ(paged.layout.block_table_entries, 6u);
+  EXPECT_NE(paged.block_table_mapping.get(), nullptr);
+  EXPECT_EQ(paged.block_table(), paged.block_table_mapping.get());
+  EXPECT_EQ(paged.block_table_logical_bytes, 24u);
+  EXPECT_EQ(paged.block_table_mapping_bytes, 24u);
+  EXPECT_TRUE(paged.block_table_read_only);
+  EXPECT_TRUE(paged.table_validation.valid);
+  EXPECT_FALSE(paged.table_validation.interrupted);
+  EXPECT_EQ(paged.table_validation.reason_code, LlmKvLayoutReason::VALID);
+  EXPECT_EQ(paged.table_validation.expected_entries, 6u);
+  EXPECT_EQ(paged.table_validation.examined_entries, 6u);
+  EXPECT_EQ(paged.table_validation.validation_bitset_bytes, 1u);
+  EXPECT_EQ(paged.permutation.algorithm_version,
+            Constants::LLM_KV_BLOCK_PERMUTATION_VERSION);
+  EXPECT_EQ(paged.permutation.resolved_seed,
+            derive_llm_kv_permutation_seed(42));
+  EXPECT_EQ(paged.permutation.entry_count, 6u);
+  EXPECT_EQ(paged.permutation.sha256.size(), 64u);
+  EXPECT_EQ(paged_table_entries(plan),
+            (std::vector<uint32_t>{2, 3, 5, 1, 4, 0}));
+  EXPECT_EQ(paged.layout_identity,
+            serialize_llm_kv_layout_identity(paged.layout,
+                                             paged.permutation));
+  EXPECT_EQ(paged.layout_identity.rfind(
+                Constants::LLM_KV_LAYOUT_PLAN_IDENTITY_VERSION, 0),
+            0u);
+  EXPECT_EQ(paged.execution_identity, paged.ownership.identity);
+  EXPECT_EQ(paged.execution_identity.rfind(
+                Constants::LLM_PAGED_CPU_EXECUTION_IDENTITY_VERSION, 0),
+            0u);
+  EXPECT_NE(plan.plan_identity.find(
+                "|paged_layout_identity_size=" +
+                std::to_string(paged.layout_identity.size())),
+            std::string::npos);
+  EXPECT_NE(plan.plan_identity.find(
+                "|paged_layout_identity=" + paged.layout_identity),
+            std::string::npos);
+  EXPECT_NE(plan.plan_identity.find(
+                "|paged_execution_identity_size=" +
+                std::to_string(paged.execution_identity.size())),
+            std::string::npos);
+  EXPECT_NE(plan.plan_identity.find(
+                "|paged_execution_identity=" + paged.execution_identity),
+            std::string::npos);
+
+  EXPECT_EQ(plan.component_identities.logical_profile_version,
+            Constants::LLM_LOGICAL_PROFILE_VERSION);
+  EXPECT_EQ(plan.component_identities.kv_layout_version,
+            Constants::LLM_PAGED_KV_LAYOUT_VERSION);
+  ASSERT_TRUE(plan.component_identities.permutation_version.has_value());
+  EXPECT_EQ(*plan.component_identities.permutation_version,
+            Constants::LLM_KV_BLOCK_PERMUTATION_VERSION);
+  EXPECT_EQ(plan.component_identities.backend_executor_version,
+            Constants::LLM_PAGED_CPU_EXECUTOR_VERSION);
+  EXPECT_EQ(plan.component_identities.resource_abi_version,
+            Constants::LLM_PAGED_DESCRIPTOR_ABI_VERSION);
+  EXPECT_EQ(plan.component_identities.schedule_version,
+            Constants::LLM_PAGED_CPU_SCHEDULE_VERSION);
+  EXPECT_EQ(plan.component_identities.buffer_pattern_version,
+            Constants::LLM_PAGED_BUFFER_PATTERN_VERSION);
+  EXPECT_EQ(plan.component_identities.write_pattern_version,
+            Constants::LLM_APPEND_PATTERN_VERSION);
+  EXPECT_EQ(plan.component_identities.checksum_pattern_version,
+            Constants::LLM_PAGED_READ_CHECKSUM_VERSION);
+
+  const LlmMemoryBudgetRequest& budget = plan.memory_budget.request;
+  ASSERT_TRUE(budget.valid) << budget.reason_code;
+  EXPECT_EQ(budget.mapping_granularity_bytes, 1u);
+  EXPECT_EQ(budget.requested_weight_mapping_bytes, 1024u);
+  EXPECT_EQ(budget.requested_k_mapping_bytes, 6144u);
+  EXPECT_EQ(budget.requested_v_mapping_bytes, 6144u);
+  EXPECT_EQ(budget.committed_weight_mapping_bytes, 1024u);
+  EXPECT_EQ(budget.committed_k_mapping_bytes, 6144u);
+  EXPECT_EQ(budget.committed_v_mapping_bytes, 6144u);
+  EXPECT_EQ(budget.requested_block_table_mapping_bytes, 24u);
+  EXPECT_EQ(budget.committed_block_table_mapping_bytes, 24u);
+  EXPECT_EQ(budget.requested_data_bytes, 13312u);
+  EXPECT_EQ(budget.committed_data_bytes, 13312u);
+  EXPECT_EQ(budget.layout_transient_bytes, 1u);
+  EXPECT_EQ(budget.descriptor_bytes, 2400u);
+  EXPECT_EQ(budget.planner_storage_bytes, cpu_plan.planner_storage_bytes);
+  EXPECT_EQ(budget.auxiliary_bytes,
+            budget.descriptor_bytes + budget.planner_storage_bytes);
+  EXPECT_EQ(budget.setup_peak_bytes,
+            24u + 1u + budget.planner_storage_bytes);
+  EXPECT_EQ(budget.runtime_peak_bytes,
+            13312u + 24u + budget.auxiliary_bytes);
+  EXPECT_EQ(budget.required_total_bytes, budget.runtime_peak_bytes);
+}
+
+TEST(LlmMemoryWorkPlanTest,
+     PagedActivePermutationAndIdentityAreSeedDeterministic) {
+  LlmMemoryWorkPlanRequest request =
+      work_plan_request(paged_geometry_request(), 5, 5);
+  const LlmMemoryWorkPlan first = build_llm_memory_work_plan(request);
+  const LlmMemoryWorkPlan second = build_llm_memory_work_plan(request);
+  ++request.base_seed;
+  const LlmMemoryWorkPlan different_seed =
+      build_llm_memory_work_plan(request);
+  ASSERT_TRUE(first.valid) << first.reason_code;
+  ASSERT_TRUE(second.valid) << second.reason_code;
+  ASSERT_TRUE(different_seed.valid) << different_seed.reason_code;
+
+  const LlmPagedCpuExecutionPlan& first_paged =
+      paged_cpu_execution_plan(first);
+  const LlmPagedCpuExecutionPlan& second_paged =
+      paged_cpu_execution_plan(second);
+  const LlmPagedCpuExecutionPlan& different_paged =
+      paged_cpu_execution_plan(different_seed);
+  EXPECT_EQ(paged_table_entries(first), paged_table_entries(second));
+  EXPECT_EQ(first_paged.permutation.resolved_seed,
+            second_paged.permutation.resolved_seed);
+  EXPECT_EQ(first_paged.permutation.sha256,
+            second_paged.permutation.sha256);
+  EXPECT_EQ(first_paged.permutation.identity,
+            second_paged.permutation.identity);
+  EXPECT_EQ(first_paged.layout_identity, second_paged.layout_identity);
+  EXPECT_EQ(first_paged.execution_identity,
+            second_paged.execution_identity);
+  EXPECT_EQ(first.plan_identity, second.plan_identity);
+
+  EXPECT_EQ(paged_table_entries(different_seed),
+            (std::vector<uint32_t>{0, 1, 2, 3, 4, 5}));
+  EXPECT_NE(paged_table_entries(first), paged_table_entries(different_seed));
+  EXPECT_NE(first_paged.permutation.resolved_seed,
+            different_paged.permutation.resolved_seed);
+  EXPECT_NE(first_paged.permutation.sha256,
+            different_paged.permutation.sha256);
+  EXPECT_NE(first_paged.permutation.identity,
+            different_paged.permutation.identity);
+  EXPECT_NE(first_paged.layout_identity, different_paged.layout_identity);
+  EXPECT_EQ(first_paged.execution_identity,
+            different_paged.execution_identity);
+  EXPECT_NE(first.plan_identity, different_seed.plan_identity);
+  EXPECT_TRUE(first_paged.block_table_read_only);
+  EXPECT_TRUE(second_paged.block_table_read_only);
+  EXPECT_TRUE(different_paged.block_table_read_only);
+  EXPECT_NE(first_paged.block_table(), second_paged.block_table());
+}
+
+TEST(LlmMemoryWorkPlanTest,
+     PagedActivePlanPropagatesPreparationStopPredicate) {
+  size_t stop_checks = 0;
+  const LlmMemoryWorkPlan plan = build_llm_memory_work_plan(
+      work_plan_request(paged_geometry_request(), 5, 5),
+      [&stop_checks]() {
+        ++stop_checks;
+        return stop_checks == 2;
+      });
+
+  expect_invalid_plan(plan, LlmKvLayoutReason::PREPARATION_INTERRUPTED);
+  EXPECT_EQ(stop_checks, 2u);
+  EXPECT_FALSE(cpu_execution_plan(plan).paged.has_value());
+}
+
+TEST(LlmMemoryWorkPlanTest,
+     PagedActivePlanAdmitsEstimatedPlannerStorageBeforeOwnershipAllocation) {
+  LlmMemoryWorkPlanRequest request =
+      work_plan_request(paged_geometry_request(), 5, 5);
+  request.available_memory_bytes = 1;
+
+  const LlmMemoryWorkPlan plan = build_llm_memory_work_plan(request);
+  expect_invalid_plan(plan, LlmWorkPlanReason::MEMORY_BUDGET_EXCEEDED);
+  EXPECT_FALSE(cpu_execution_plan(plan).paged.has_value());
+  EXPECT_GT(plan.memory_budget.request.planner_storage_bytes, 0u);
+}
+
+TEST(LlmMemoryWorkPlanTest,
+     PagedActiveWorkerTemplatesMirrorRotatedBlockOwnership) {
+  const LlmMemoryWorkPlan plan = build_llm_memory_work_plan(
+      work_plan_request(paged_geometry_request(), 5, 5));
+  ASSERT_TRUE(plan.valid) << plan.reason_code;
+  const LlmCpuExecutionPlan& cpu_plan = cpu_execution_plan(plan);
+  const LlmPagedCpuExecutionPlan& paged = paged_cpu_execution_plan(plan);
+  const LlmKvCpuOwnershipPlan& ownership = paged.ownership;
+  ASSERT_EQ(cpu_plan.effective_workers, 5u);
+  ASSERT_EQ(paged.layout.blocks_per_sequence, 3u);
+  EXPECT_TRUE(ownership.valid);
+  EXPECT_EQ(ownership.worker_count, 5u);
+  EXPECT_EQ(ownership.layer_sequence_count, 4u);
+  EXPECT_EQ(ownership.total_owned_blocks, 12u);
+  EXPECT_EQ(ownership.assignments.size(), 12u);
+  EXPECT_EQ(ownership.total_model_payload_bytes_per_work_unit, 9216u);
+  EXPECT_EQ(ownership.total_layout_metadata_lookup_count_per_work_unit,
+            28u);
+  EXPECT_EQ(ownership.total_layout_metadata_read_bytes_per_work_unit,
+            112u);
+  EXPECT_EQ(ownership.total_accounted_bytes_per_work_unit, 9328u);
+  EXPECT_EQ(ownership.worker_accounted_bytes_per_work_unit,
+            (std::vector<size_t>{1300, 2064, 2332, 2332, 1300}));
+  EXPECT_EQ(ownership.minimum_worker_accounted_bytes_per_work_unit, 1300u);
+  EXPECT_EQ(ownership.maximum_worker_accounted_bytes_per_work_unit, 2332u);
+  EXPECT_EQ(ownership.worker_accounted_imbalance_bytes_per_work_unit,
+            1032u);
+
+  size_t source_index = 0;
+  for (size_t ordinal = 0; ordinal < 4; ++ordinal) {
+    const size_t layer = ordinal / 2;
+    const size_t batch = ordinal % 2;
+    for (size_t rank = 0; rank < 3; ++rank) {
+      ASSERT_LT(source_index, ownership.assignments.size());
+      const LlmKvCpuBlockAssignment& source =
+          ownership.assignments[source_index++];
+      const size_t expected_worker = (ordinal + rank) % 5;
+      EXPECT_EQ(source.layer_index, layer);
+      EXPECT_EQ(source.batch_sequence_index, batch);
+      EXPECT_EQ(source.worker_index, expected_worker);
+      EXPECT_EQ(source.first_logical_block, rank);
+      EXPECT_EQ(source.block_count, 1u);
+
+      const LlmPagedKvAssignmentTemplate& destination =
+          cpu_plan.workers[expected_worker].paged_assignments[ordinal];
+      EXPECT_EQ(destination.layer_index, layer);
+      EXPECT_EQ(destination.batch_sequence_index, batch);
+      EXPECT_EQ(destination.first_logical_block, rank);
+      EXPECT_EQ(destination.block_count, 1u);
+    }
+    size_t row_blocks = 0;
+    size_t row_nonempty_workers = 0;
+    for (const LlmWorkerWorkPlan& worker : cpu_plan.workers) {
+      const LlmPagedKvAssignmentTemplate& destination =
+          worker.paged_assignments[ordinal];
+      EXPECT_EQ(destination.layer_index, layer);
+      EXPECT_EQ(destination.batch_sequence_index, batch);
+      row_blocks += destination.block_count;
+      row_nonempty_workers += destination.block_count != 0 ? 1 : 0;
+    }
+    EXPECT_EQ(row_blocks, 3u);
+    EXPECT_EQ(row_nonempty_workers, 3u);
+  }
+  EXPECT_EQ(source_index, ownership.assignments.size());
+}
+
+TEST(LlmMemoryWorkPlanTest,
+     PagedActivePlanGivesEveryEffectiveWorkerKvOwnership) {
+  const LlmMemoryWorkPlan plan = build_llm_memory_work_plan(
+      work_plan_request(paged_geometry_request(), 8, 8));
+  ASSERT_TRUE(plan.valid) << plan.reason_code;
+  const LlmCpuExecutionPlan& cpu_plan = cpu_execution_plan(plan);
+  ASSERT_EQ(cpu_plan.effective_workers, 6u);
+
+  for (const LlmWorkerWorkPlan& worker : cpu_plan.workers) {
+    size_t owned_blocks = 0;
+    for (const LlmPagedKvAssignmentTemplate& assignment :
+         worker.paged_assignments) {
+      owned_blocks += assignment.block_count;
+    }
+    EXPECT_GT(owned_blocks, 0u) << "worker " << worker.worker_index;
+  }
+}
+
+TEST(LlmMemoryWorkPlanTest,
+     PagedActiveScenariosUseExactLookupAccountingAndGuardrails) {
+  const LlmMemoryWorkPlan model_plan = build_llm_memory_work_plan(
+      work_plan_request(paged_geometry_request(), 5, 5));
+  ASSERT_TRUE(model_plan.valid) << model_plan.reason_code;
+  constexpr size_t kExpectedLookups = 2u * 2u * (2u * 3u + 1u);
+  static_assert(kExpectedLookups == 28u);
+
+  struct ScenarioGolden {
+    LlmScenario scenario;
+    size_t weight_bytes;
+    size_t kv_read_bytes;
+    size_t kv_write_bytes;
+    size_t payload_bytes;
+    size_t lookup_count;
+    size_t metadata_bytes;
+    size_t accounted_bytes;
+  };
+  const std::array<ScenarioGolden, 3> goldens = {{
+      {LlmScenario::WeightsOnly, 1024, 0, 0, 1024, 0, 0, 1024},
+      {LlmScenario::KvOnly, 0, 8960, 256, 9216, kExpectedLookups,
+       112, 9328},
+      {LlmScenario::Mixed, 1024, 8960, 256, 10240,
+       kExpectedLookups, 112, 10352},
+  }};
+
+  for (const ScenarioGolden& golden : goldens) {
+    SCOPED_TRACE(static_cast<int>(golden.scenario));
+    const LlmScenarioLimits limits =
+        calculate_llm_scenario_limits(model_plan.geometry, golden.scenario);
+    ASSERT_TRUE(limits.valid) << limits.reason_code;
+    EXPECT_EQ(limits.weight_read_bytes_per_work_unit,
+              golden.weight_bytes);
+    EXPECT_EQ(limits.kv_read_bytes_per_work_unit, golden.kv_read_bytes);
+    EXPECT_EQ(limits.kv_write_bytes_per_work_unit,
+              golden.kv_write_bytes);
+    EXPECT_EQ(limits.effective_model_payload_bytes_per_work_unit,
+              golden.payload_bytes);
+    EXPECT_EQ(limits.layout_metadata_lookup_count_per_work_unit,
+              golden.lookup_count);
+    EXPECT_EQ(limits.layout_metadata_read_bytes_per_work_unit,
+              golden.metadata_bytes);
+    EXPECT_EQ(limits.accounted_bytes_per_work_unit,
+              golden.accounted_bytes);
+    const size_t expected_guardrail =
+        Constants::LLM_MAX_ACCOUNTED_BYTES_PER_TASK /
+        golden.accounted_bytes;
+    EXPECT_EQ(limits.maximum_work_units_by_guardrail,
+              expected_guardrail);
+    EXPECT_EQ(limits.effective_maximum_work_units, expected_guardrail);
+
+    const LlmScenarioWorkPlan task = build_llm_scenario_work_plan(
+        model_plan, golden.scenario, 3, true);
+    ASSERT_TRUE(task.valid) << task.reason_code;
+    EXPECT_EQ(task.work_units, 3u);
+    EXPECT_EQ(task.weight_read_bytes, 3u * golden.weight_bytes);
+    EXPECT_EQ(task.kv_read_bytes, 3u * golden.kv_read_bytes);
+    EXPECT_EQ(task.kv_write_bytes, 3u * golden.kv_write_bytes);
+    EXPECT_EQ(task.effective_model_payload_bytes,
+              3u * golden.payload_bytes);
+    EXPECT_EQ(task.layout_metadata_lookup_count,
+              3u * golden.lookup_count);
+    EXPECT_EQ(task.layout_metadata_read_bytes,
+              3u * golden.metadata_bytes);
+    EXPECT_EQ(task.task_accounted_bytes, 3u * golden.accounted_bytes);
+
+    const LlmScenarioWorkPlan boundary = build_llm_scenario_work_plan(
+        model_plan, golden.scenario, expected_guardrail, true);
+    ASSERT_TRUE(boundary.valid) << boundary.reason_code;
+    EXPECT_LE(boundary.task_accounted_bytes,
+              Constants::LLM_MAX_ACCOUNTED_BYTES_PER_TASK);
+    const LlmScenarioWorkPlan excess = build_llm_scenario_work_plan(
+        model_plan, golden.scenario, expected_guardrail + 1, true);
+    EXPECT_FALSE(excess.valid);
+    EXPECT_EQ(excess.reason_code,
+              LlmWorkPlanReason::TASK_ACCOUNTED_BYTES_CAP_EXCEEDED);
+  }
+
+  const LlmFrozenScenarioPlans frozen =
+      freeze_llm_scenario_work_plans(model_plan, {3, 3, 3}, true);
+  ASSERT_TRUE(frozen.valid) << frozen.reason_code;
+  EXPECT_EQ(frozen.model_plan_identity, model_plan.plan_identity);
+  for (size_t index = 0; index < goldens.size(); ++index) {
+    EXPECT_EQ(frozen.scenarios[index].scenario, goldens[index].scenario);
+    EXPECT_EQ(frozen.scenarios[index].layout_metadata_lookup_count,
+              3u * goldens[index].lookup_count);
+    EXPECT_EQ(frozen.scenarios[index].layout_metadata_read_bytes,
+              3u * goldens[index].metadata_bytes);
+    EXPECT_EQ(frozen.scenarios[index].task_accounted_bytes,
+              3u * goldens[index].accounted_bytes);
+  }
+}
+
+TEST(LlmMemoryWorkPlanTest,
+     PagedActiveGeometryDistinguishesFullAndPartialLastBlocks) {
+  struct GeometryGolden {
+    size_t context_tokens;
+    size_t blocks_per_sequence;
+    size_t physical_blocks_per_layer;
+    size_t total_physical_blocks;
+    size_t last_block_tokens;
+    size_t last_block_valid_bytes;
+    size_t append_offset;
+    size_t logical_bytes;
+    size_t physical_bytes;
+    size_t padding_bytes;
+    size_t table_entries;
+    size_t table_bytes;
+  };
+  const std::array<GeometryGolden, 3> goldens = {{
+      {32, 2, 4, 8, 16, 512, 480, 4096, 4096, 0, 4, 16},
+      {33, 3, 6, 12, 1, 32, 0, 4224, 6144, 1920, 6, 24},
+      {3, 1, 2, 4, 3, 96, 64, 384, 2048, 1664, 2, 8},
+  }};
+  for (const GeometryGolden& golden : goldens) {
+    SCOPED_TRACE(golden.context_tokens);
+    const LlmMemoryWorkPlan plan = build_llm_memory_work_plan(
+        work_plan_request(
+            paged_geometry_request(golden.context_tokens, 16, 2), 5, 5));
+    ASSERT_TRUE(plan.valid) << plan.reason_code;
+    const LlmGeometry& geometry = plan.geometry;
+    EXPECT_EQ(geometry.kv_blocks_per_sequence,
+              golden.blocks_per_sequence);
+    EXPECT_EQ(geometry.physical_blocks_per_layer,
+              golden.physical_blocks_per_layer);
+    EXPECT_EQ(geometry.total_physical_blocks,
+              golden.total_physical_blocks);
+    EXPECT_EQ(geometry.kv_block_bytes, 512u);
+    EXPECT_EQ(geometry.last_block_tokens, golden.last_block_tokens);
+    EXPECT_EQ(geometry.last_block_valid_bytes,
+              golden.last_block_valid_bytes);
+    EXPECT_EQ(geometry.decode_append_offset_in_last_block,
+              golden.append_offset);
+    EXPECT_EQ(geometry.k_logical_bytes, golden.logical_bytes);
+    EXPECT_EQ(geometry.v_logical_bytes, golden.logical_bytes);
+    EXPECT_EQ(geometry.k_mapping_bytes, golden.physical_bytes);
+    EXPECT_EQ(geometry.v_mapping_bytes, golden.physical_bytes);
+    EXPECT_EQ(geometry.k_layout_padding_bytes, golden.padding_bytes);
+    EXPECT_EQ(geometry.v_layout_padding_bytes, golden.padding_bytes);
+    EXPECT_EQ(geometry.block_table_entries, golden.table_entries);
+    EXPECT_EQ(geometry.block_table_bytes, golden.table_bytes);
+    const LlmPagedCpuExecutionPlan& paged =
+        paged_cpu_execution_plan(plan);
+    EXPECT_EQ(paged.block_table_logical_bytes, golden.table_bytes);
+    EXPECT_TRUE(paged.block_table_read_only);
+  }
+}
+
+TEST(LlmMemoryWorkPlanTest,
+     ContiguousGeometryRejectsNonzeroPagedBlockSize) {
+  LlmGeometryRequest request = small_geometry_request();
+  request.kv_block_tokens = 16;
+
+  const LlmGeometry geometry = resolve_llm_geometry(request);
+  EXPECT_FALSE(geometry.valid);
+  EXPECT_EQ(geometry.reason_code,
+            LlmWorkPlanReason::KV_BLOCK_TOKENS_NOT_APPLICABLE);
+  expect_invalid_plan(
+      build_llm_memory_work_plan(work_plan_request(request)),
+      LlmWorkPlanReason::KV_BLOCK_TOKENS_NOT_APPLICABLE);
+}
+
+TEST(LlmMemoryWorkPlanTest,
+     PagedActivePlanRejectsRawInvalidBlockSizesWithStableReasons) {
+  struct InvalidCase {
+    size_t block_tokens;
+    const char* reason_code;
+  };
+  const size_t uint32_maximum =
+      static_cast<size_t>(std::numeric_limits<uint32_t>::max());
+  const std::array<InvalidCase, 4> invalid_cases = {{
+      {0, LlmKvLayoutReason::BLOCK_TOKENS_ZERO},
+      {3, LlmKvLayoutReason::BLOCK_TOKENS_NOT_POWER_OF_TWO},
+      {uint32_maximum,
+       LlmKvLayoutReason::BLOCK_TOKENS_NOT_POWER_OF_TWO},
+      {uint32_maximum + 1,
+       LlmKvLayoutReason::BLOCK_TOKENS_EXCEEDS_UINT32},
+  }};
+  for (const InvalidCase& test_case : invalid_cases) {
+    SCOPED_TRACE(test_case.reason_code);
+    const LlmGeometryRequest geometry_request =
+        paged_geometry_request(35, test_case.block_tokens, 2);
+    const LlmGeometry geometry = resolve_llm_geometry(geometry_request);
+    EXPECT_FALSE(geometry.valid);
+    EXPECT_EQ(geometry.reason_code, test_case.reason_code);
+
+    const LlmMemoryWorkPlan plan = build_llm_memory_work_plan(
+        work_plan_request(geometry_request, 5, 5));
+    expect_invalid_plan(plan, test_case.reason_code);
+    EXPECT_FALSE(plan.geometry.valid);
+    EXPECT_EQ(plan.geometry.reason_code, test_case.reason_code);
+    EXPECT_FALSE(cpu_execution_plan(plan).paged.has_value());
+  }
+}
+
+TEST_F(LlmMemoryWorkPlanSystemCallsTest,
+       PagedPreflightPublishesNoTableBeforeFullAuxiliaryAdmission) {
+  LlmMemoryWorkPlanDraft draft = prepare_llm_memory_work_plan(
+      work_plan_request(paged_geometry_request(), 5, 5));
+
+  ASSERT_TRUE(draft.valid) << draft.reason_code;
+  ASSERT_TRUE(draft.auxiliary_preflight.valid);
+  EXPECT_FALSE(draft.candidate.valid);
+  const LlmPagedCpuExecutionPlan& candidate_paged =
+      paged_cpu_execution_plan(draft.candidate);
+  EXPECT_EQ(candidate_paged.block_table(), nullptr);
+  EXPECT_FALSE(candidate_paged.block_table_read_only);
+  EXPECT_EQ(state.map_calls, 0u);
+  EXPECT_EQ(state.protect_calls, 0u);
+
+  const LlmMemoryWorkPlan plan = finalize_llm_memory_work_plan(
+      std::move(draft), 123, 456);
+  ASSERT_TRUE(plan.valid) << plan.reason_code;
+  EXPECT_EQ(plan.memory_budget.request.checksum_auxiliary_bytes, 123u);
+  EXPECT_EQ(plan.memory_budget.request.orchestration_auxiliary_bytes, 456u);
+  EXPECT_EQ(state.map_calls, 1u);
+  EXPECT_EQ(state.protect_calls, 1u);
+  EXPECT_TRUE(paged_cpu_execution_plan(plan).block_table_read_only);
+}
+
+TEST_F(LlmMemoryWorkPlanSystemCallsTest,
+       PagedFinalAdmissionRejectsBeforeTableMapping) {
+  LlmMemoryWorkPlanDraft draft = prepare_llm_memory_work_plan(
+      work_plan_request(paged_geometry_request(), 5, 5));
+  ASSERT_TRUE(draft.valid) << draft.reason_code;
+  ASSERT_EQ(state.map_calls, 0u);
+
+  const LlmMemoryWorkPlan plan = finalize_llm_memory_work_plan(
+      std::move(draft), 0, 15 * kGiB);
+
+  expect_invalid_plan(plan, LlmWorkPlanReason::MEMORY_BUDGET_EXCEEDED);
+  EXPECT_EQ(state.map_calls, 0u);
+  EXPECT_EQ(state.protect_calls, 0u);
+}
+
+TEST_F(LlmMemoryWorkPlanSystemCallsTest,
+       PagedBlockTableMappingFailureDiscardsExecutableCandidate) {
+  state.fail_map_on_call = 1;
+  testing::internal::CaptureStderr();
+  const LlmMemoryWorkPlan plan = build_llm_memory_work_plan(
+      work_plan_request(paged_geometry_request(), 5, 5));
+  testing::internal::GetCapturedStderr();
+
+  expect_invalid_plan(plan, LlmWorkPlanReason::BLOCK_TABLE_MAPPING_FAILED);
+  const LlmCpuExecutionPlan& cpu_plan = cpu_execution_plan(plan);
+  EXPECT_EQ(cpu_plan.effective_workers, 0u);
+  EXPECT_FALSE(cpu_plan.paged.has_value());
+  EXPECT_EQ(state.map_calls, 1u);
+  EXPECT_EQ(state.advise_calls, 0u);
+  EXPECT_EQ(state.protect_calls, 0u);
+  EXPECT_EQ(state.unmap_calls, 0u);
+  EXPECT_EQ(state.last_map_size, 24u);
+}
+
+TEST_F(LlmMemoryWorkPlanSystemCallsTest,
+       PagedBlockTableProtectionFailureUnmapsAndDiscardsCandidate) {
+  state.protect_result = -1;
+  const LlmMemoryWorkPlan plan = build_llm_memory_work_plan(
+      work_plan_request(paged_geometry_request(), 5, 5));
+
+  expect_invalid_plan(plan,
+                      LlmWorkPlanReason::BLOCK_TABLE_PROTECTION_FAILED);
+  const LlmCpuExecutionPlan& cpu_plan = cpu_execution_plan(plan);
+  EXPECT_EQ(cpu_plan.effective_workers, 0u);
+  EXPECT_FALSE(cpu_plan.paged.has_value());
+  EXPECT_EQ(state.map_calls, 1u);
+  EXPECT_EQ(state.advise_calls, 1u);
+  EXPECT_EQ(state.protect_calls, 1u);
+  EXPECT_EQ(state.last_protect_size, 24u);
+  EXPECT_EQ(state.last_protect_flags, PROT_READ);
+  EXPECT_EQ(state.unmap_calls, 1u);
+  EXPECT_EQ(state.last_unmapped_pointer, state.storage.data());
+  EXPECT_EQ(state.last_unmapped_size, 24u);
+}
+
+TEST(LlmMemoryWorkPlanTest,
+     PagedReadmissionPreservesTablePointerHashAndWorkloadIdentity) {
+  LlmMemoryWorkPlanRequest request =
+      work_plan_request(paged_geometry_request(), 5, 5);
+  request.checksum_auxiliary_bytes = 7;
+  request.orchestration_auxiliary_bytes = 9;
+  LlmMemoryWorkPlan plan = build_llm_memory_work_plan(request);
+  ASSERT_TRUE(plan.valid) << plan.reason_code;
+  const LlmPagedCpuExecutionPlan& before =
+      paged_cpu_execution_plan(plan);
+  const uint32_t* const table_pointer = before.block_table();
+  const std::vector<uint32_t> table = paged_table_entries(plan);
+  const std::string table_hash = before.permutation.sha256;
+  const std::string permutation_identity = before.permutation.identity;
+  const std::string layout_identity = before.layout_identity;
+  const std::string execution_identity = before.execution_identity;
+  const std::string component_identity =
+      plan.component_identities.identity;
+  const std::string model_plan_identity = plan.plan_identity;
+  const size_t required_before =
+      plan.memory_budget.request.required_total_bytes;
+
+  ASSERT_TRUE(readmit_llm_memory_work_plan(plan, 111, 222));
+  ASSERT_TRUE(plan.valid) << plan.reason_code;
+  EXPECT_EQ(plan.reason_code, LlmWorkPlanReason::VALID);
+  EXPECT_EQ(plan.memory_budget.request.checksum_auxiliary_bytes, 111u);
+  EXPECT_EQ(plan.memory_budget.request.orchestration_auxiliary_bytes, 222u);
+  EXPECT_NE(plan.memory_budget.request.required_total_bytes,
+            required_before);
+  const LlmPagedCpuExecutionPlan& after = paged_cpu_execution_plan(plan);
+  EXPECT_EQ(after.block_table(), table_pointer);
+  EXPECT_EQ(paged_table_entries(plan), table);
+  EXPECT_TRUE(after.block_table_read_only);
+  EXPECT_EQ(after.permutation.sha256, table_hash);
+  EXPECT_EQ(after.permutation.identity, permutation_identity);
+  EXPECT_EQ(after.layout_identity, layout_identity);
+  EXPECT_EQ(after.execution_identity, execution_identity);
+  EXPECT_EQ(plan.component_identities.identity, component_identity);
+  EXPECT_EQ(plan.plan_identity, model_plan_identity);
+}
+
+TEST(LlmMemoryWorkPlanTest,
      PagedLayoutGeometryBudgetAndSetupMatchFrozenGolden) {
   const LlmKvLayoutPlan plan =
       build_llm_kv_layout_plan(paged_golden_request());
@@ -1998,6 +2738,105 @@ TEST(LlmMemoryWorkPlanTest,
 }
 
 TEST(LlmMemoryWorkPlanTest,
+     PagedInPlacePermutationMatchesOwnedOutputAndRejectsInvalidStorage) {
+  const LlmKvLayoutPlan layout =
+      build_llm_kv_layout_plan({8, 1, 1, 1, 1});
+  ASSERT_TRUE(layout.valid) << layout.reason_code;
+  const LlmKvBlockTable owned =
+      materialize_llm_kv_block_table(layout, 0, 3);
+  ASSERT_TRUE(owned.valid) << owned.reason_code;
+
+  const std::array<size_t, 4> chunk_sizes = {
+      1, 3, 8, std::numeric_limits<size_t>::max()};
+  for (size_t chunk_size : chunk_sizes) {
+    SCOPED_TRACE(chunk_size);
+    std::array<uint32_t, 8> entries{};
+    const LlmKvInPlaceBlockTableMaterialization materialized =
+        materialize_llm_kv_block_table_in_place(
+            layout, 0, entries.data(), entries.size(), chunk_size);
+    ASSERT_TRUE(materialized.valid) << materialized.reason_code;
+    EXPECT_FALSE(materialized.interrupted);
+    EXPECT_EQ(std::vector<uint32_t>(entries.begin(), entries.end()),
+              owned.entries);
+    EXPECT_TRUE(materialized.validation.valid);
+    EXPECT_EQ(materialized.validation.reason_code,
+              LlmKvLayoutReason::VALID);
+    EXPECT_EQ(materialized.validation.expected_entries,
+              owned.validation.expected_entries);
+    EXPECT_EQ(materialized.validation.examined_entries,
+              owned.validation.examined_entries);
+    EXPECT_EQ(materialized.validation.validation_bitset_bytes,
+              owned.validation.validation_bitset_bytes);
+    EXPECT_EQ(materialized.permutation.algorithm_version,
+              owned.permutation.algorithm_version);
+    EXPECT_EQ(materialized.permutation.domain,
+              owned.permutation.domain);
+    EXPECT_EQ(materialized.permutation.domain_uint64_hex,
+              owned.permutation.domain_uint64_hex);
+    EXPECT_EQ(materialized.permutation.resolved_seed,
+              owned.permutation.resolved_seed);
+    EXPECT_EQ(materialized.permutation.entry_count,
+              owned.permutation.entry_count);
+    EXPECT_EQ(materialized.permutation.sha256,
+              owned.permutation.sha256);
+    EXPECT_EQ(materialized.permutation.identity,
+              owned.permutation.identity);
+  }
+
+  const LlmKvInPlaceBlockTableMaterialization null_output =
+      materialize_llm_kv_block_table_in_place(
+          layout, 0, nullptr, layout.block_table_entries, 3);
+  EXPECT_FALSE(null_output.valid);
+  EXPECT_FALSE(null_output.interrupted);
+  EXPECT_EQ(null_output.reason_code,
+            LlmKvLayoutReason::TABLE_OUTPUT_NULL);
+  EXPECT_TRUE(null_output.permutation.sha256.empty());
+  EXPECT_TRUE(null_output.permutation.identity.empty());
+
+  std::array<uint32_t, 8> mismatched_entries;
+  mismatched_entries.fill(std::numeric_limits<uint32_t>::max());
+  const std::array<uint32_t, 8> untouched_entries = mismatched_entries;
+  const LlmKvInPlaceBlockTableMaterialization count_mismatch =
+      materialize_llm_kv_block_table_in_place(
+          layout, 0, mismatched_entries.data(),
+          mismatched_entries.size() - 1, 3);
+  EXPECT_FALSE(count_mismatch.valid);
+  EXPECT_FALSE(count_mismatch.interrupted);
+  EXPECT_EQ(count_mismatch.reason_code,
+            LlmKvLayoutReason::TABLE_ENTRY_COUNT_MISMATCH);
+  EXPECT_EQ(mismatched_entries, untouched_entries);
+}
+
+TEST(LlmMemoryWorkPlanTest,
+     PagedInPlacePermutationPollsStopDuringCallerStorageInitialization) {
+  const size_t entry_count =
+      Constants::LLM_KV_PREPARATION_POLL_INTERVAL_ENTRIES + 1;
+  const LlmKvLayoutPlan layout =
+      build_llm_kv_layout_plan({entry_count, 1, 1, 1, 1});
+  ASSERT_TRUE(layout.valid) << layout.reason_code;
+  std::vector<uint32_t> entries(
+      entry_count, std::numeric_limits<uint32_t>::max());
+  size_t stop_checks = 0;
+  const LlmKvInPlaceBlockTableMaterialization interrupted =
+      materialize_llm_kv_block_table_in_place(
+          layout, 0, entries.data(), entries.size(), 1024,
+          [&stop_checks]() {
+            ++stop_checks;
+            return stop_checks == 2;
+          });
+  EXPECT_FALSE(interrupted.valid);
+  EXPECT_TRUE(interrupted.interrupted);
+  EXPECT_EQ(interrupted.reason_code,
+            LlmKvLayoutReason::PREPARATION_INTERRUPTED);
+  EXPECT_FALSE(interrupted.validation.valid);
+  EXPECT_TRUE(interrupted.permutation.sha256.empty());
+  EXPECT_TRUE(interrupted.permutation.identity.empty());
+  EXPECT_EQ(stop_checks, 2u);
+  EXPECT_EQ(entries.front(), 0u);
+  EXPECT_EQ(entries.back(), std::numeric_limits<uint32_t>::max());
+}
+
+TEST(LlmMemoryWorkPlanTest,
      PagedDecodeScenariosAccountModelMetadataAndCheckedTaskTotals) {
   const LlmKvLayoutPlan layout =
       build_llm_kv_layout_plan(paged_golden_request());
@@ -2195,6 +3034,15 @@ TEST(LlmMemoryWorkPlanTest,
     EXPECT_EQ(plan.total_accounted_bytes_per_work_unit, 9328u);
     EXPECT_EQ(plan.worker_accounted_bytes_per_work_unit.size(),
               worker_count);
+    for (size_t worker = 0;
+         worker < plan.worker_accounted_bytes_per_work_unit.size();
+         ++worker) {
+      if (worker_count == 8 && worker >= 6) {
+        EXPECT_EQ(plan.worker_accounted_bytes_per_work_unit[worker], 0u);
+      } else {
+        EXPECT_GT(plan.worker_accounted_bytes_per_work_unit[worker], 0u);
+      }
+    }
   }
   EXPECT_EQ(build_llm_paged_decode_kv_cpu_ownership_plan(layout, 0)
                 .reason_code,
@@ -2229,6 +3077,31 @@ TEST(LlmMemoryWorkPlanTest,
   EXPECT_EQ(tie.assignments[1].block_count, 2u);
   EXPECT_EQ(tie.worker_accounted_bytes_per_work_unit,
             (std::vector<size_t>{24, 48}));
+}
+
+TEST(LlmMemoryWorkPlanTest,
+     PagedCpuOwnershipPollsStopAndPublishesNoPartialAssignments) {
+  const size_t layer_count =
+      Constants::LLM_KV_PREPARATION_POLL_INTERVAL_ENTRIES + 1;
+  const LlmKvLayoutPlan layout =
+      build_llm_kv_layout_plan({1, 1, layer_count, 1, 1});
+  ASSERT_TRUE(layout.valid) << layout.reason_code;
+  size_t stop_checks = 0;
+
+  const LlmKvCpuOwnershipPlan ownership =
+      build_llm_paged_decode_kv_cpu_ownership_plan(
+          layout, 1, [&stop_checks]() {
+            ++stop_checks;
+            return stop_checks == 4;
+          });
+
+  EXPECT_FALSE(ownership.valid);
+  EXPECT_EQ(ownership.reason_code,
+            LlmKvLayoutReason::PREPARATION_INTERRUPTED);
+  EXPECT_TRUE(ownership.assignments.empty());
+  EXPECT_TRUE(ownership.worker_accounted_bytes_per_work_unit.empty());
+  EXPECT_TRUE(ownership.identity.empty());
+  EXPECT_EQ(stop_checks, 4u);
 }
 
 TEST(LlmMemoryWorkPlanTest,

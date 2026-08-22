@@ -115,6 +115,11 @@ const char* classify_llm_traffic_payload(const LlmGeometry& geometry) noexcept;
 LlmJsonPeakEstimate calculate_llm_json_peak_estimate(const LlmMemoryConfig& config,
                                                      const LlmMemoryWorkPlan& model_plan) noexcept;
 
+/** Calculate the same conservative JSON peak from a pre-table view. */
+LlmJsonPeakEstimate calculate_llm_json_peak_estimate(
+    const LlmMemoryConfig& config,
+    const LlmAuxiliaryPreflightView& preflight) noexcept;
+
 /**
  * Collect the canonical console/JSON quality-warning tokens.
  *

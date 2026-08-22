@@ -55,6 +55,14 @@ constexpr uint64_t kChecksumWeightDomain = 0x5745494748545F31ULL;
 constexpr uint64_t kChecksumKDomain = 0x4B5F524541445F31ULL;
 constexpr uint64_t kChecksumVDomain = 0x565F524541445F31ULL;
 
+constexpr uint64_t kPagedPatternLayerMultiplier = 0xA24BAED4963EE407ULL;
+constexpr uint64_t kPagedPatternPhysicalMultiplier = 0x9FB21C651E98DF25ULL;
+constexpr uint64_t kPagedPatternWordMultiplier = 0xC13FA9A902A6328FULL;
+constexpr uint64_t kPagedLookupLogicalMultiplier = 0x9E3779B97F4A7C15ULL;
+constexpr uint64_t kPagedLookupWorkUnitMultiplier = 0xBF58476D1CE4E5B9ULL;
+constexpr uint64_t kPagedLookupVisitMultiplier = 0x94D049BB133111EBULL;
+constexpr uint64_t kPagedLookupStateBStep = 0xD6E8FEB86659FD93ULL;
+
 constexpr uint64_t kRunInitialA = 0x6A09E667F3BCC909ULL;
 constexpr uint64_t kRunInitialB = 0xBB67AE8584CAA73BULL;
 
@@ -97,6 +105,337 @@ bool equal_ranges(const LlmByteRange& lhs, const LlmByteRange& rhs) noexcept {
   return lhs.offset_bytes == rhs.offset_bytes && lhs.span_bytes == rhs.span_bytes;
 }
 
+bool paged_layout_matches_model(
+    const LlmMemoryWorkPlan& plan,
+    const LlmPagedCpuExecutionPlan& paged) noexcept {
+  const LlmGeometry& geometry = plan.geometry;
+  const LlmKvLayoutPlan& layout = paged.layout;
+  if (!geometry.decode.has_value() || geometry.layer_count == 0 ||
+      geometry.batch_size == 0 || geometry.kv_block_tokens == 0 ||
+      geometry.k_or_v_record_bytes_per_layer == 0) {
+    return false;
+  }
+
+  const size_t visible_tokens = geometry.decode->visible_context_tokens;
+  const size_t expected_blocks_per_sequence =
+      visible_tokens / geometry.kv_block_tokens +
+      (visible_tokens % geometry.kv_block_tokens != 0 ? 1 : 0);
+  size_t expected_physical_blocks_per_layer = 0;
+  size_t expected_total_physical_blocks = 0;
+  size_t expected_block_bytes = 0;
+  size_t expected_last_block_start = 0;
+  size_t expected_last_block_valid_bytes = 0;
+  size_t expected_append_offset = 0;
+  size_t expected_layer_sequences = 0;
+  size_t expected_logical_records = 0;
+  size_t expected_k_logical_bytes = 0;
+  size_t expected_k_physical_bytes = 0;
+  size_t expected_block_table_bytes = 0;
+  size_t expected_transient_peak_bytes = 0;
+  size_t expected_resident_layout_bytes = 0;
+  size_t expected_known_owned_peak_bytes = 0;
+  size_t expected_kv_capacity_bytes = 0;
+  size_t expected_total_data_bytes = 0;
+  if (visible_tokens == 0 || expected_blocks_per_sequence == 0 ||
+      !NumericUtils::checked_multiply(
+          geometry.batch_size, expected_blocks_per_sequence,
+          expected_physical_blocks_per_layer) ||
+      !NumericUtils::checked_multiply(
+          geometry.layer_count, expected_physical_blocks_per_layer,
+          expected_total_physical_blocks) ||
+      !NumericUtils::checked_multiply(
+          geometry.kv_block_tokens,
+          geometry.k_or_v_record_bytes_per_layer,
+          expected_block_bytes) ||
+      !NumericUtils::checked_multiply(
+          expected_blocks_per_sequence - 1, geometry.kv_block_tokens,
+          expected_last_block_start) ||
+      expected_last_block_start >= visible_tokens ||
+      !NumericUtils::checked_multiply(
+          visible_tokens - expected_last_block_start,
+          geometry.k_or_v_record_bytes_per_layer,
+          expected_last_block_valid_bytes) ||
+      !NumericUtils::checked_multiply(
+          visible_tokens - expected_last_block_start - 1,
+          geometry.k_or_v_record_bytes_per_layer,
+          expected_append_offset) ||
+      !NumericUtils::checked_multiply(
+          geometry.layer_count, geometry.batch_size,
+          expected_layer_sequences) ||
+      !NumericUtils::checked_multiply(
+          expected_layer_sequences, visible_tokens,
+          expected_logical_records) ||
+      !NumericUtils::checked_multiply(
+          expected_logical_records,
+          geometry.k_or_v_record_bytes_per_layer,
+          expected_k_logical_bytes) ||
+      !NumericUtils::checked_multiply(
+          expected_total_physical_blocks, expected_block_bytes,
+          expected_k_physical_bytes) ||
+      !NumericUtils::checked_multiply(
+          expected_physical_blocks_per_layer,
+          Constants::LLM_KV_BLOCK_TABLE_ENTRY_BYTES,
+          expected_block_table_bytes)) {
+    return false;
+  }
+
+  const size_t expected_validation_bitset_bytes =
+      expected_physical_blocks_per_layer / 8 +
+      (expected_physical_blocks_per_layer % 8 != 0 ? 1 : 0);
+  if (expected_k_physical_bytes < expected_k_logical_bytes ||
+      !NumericUtils::checked_add(
+          expected_block_table_bytes, expected_validation_bitset_bytes,
+          expected_transient_peak_bytes) ||
+      !NumericUtils::checked_add(
+          expected_k_physical_bytes, expected_k_physical_bytes,
+          expected_resident_layout_bytes) ||
+      !NumericUtils::checked_add(
+          expected_resident_layout_bytes, expected_block_table_bytes,
+          expected_resident_layout_bytes) ||
+      !NumericUtils::checked_add(
+          expected_resident_layout_bytes, expected_validation_bitset_bytes,
+          expected_known_owned_peak_bytes) ||
+      !NumericUtils::checked_add(
+          expected_k_physical_bytes, expected_k_physical_bytes,
+          expected_kv_capacity_bytes) ||
+      !NumericUtils::checked_add(
+          geometry.active_weight_bytes_per_work_unit,
+          expected_kv_capacity_bytes, expected_total_data_bytes)) {
+    return false;
+  }
+  const size_t expected_padding_bytes =
+      expected_k_physical_bytes - expected_k_logical_bytes;
+
+  return layout.reason_code == LlmKvLayoutReason::VALID &&
+         layout.sequence_tokens == visible_tokens &&
+         layout.kv_block_tokens == geometry.kv_block_tokens &&
+         layout.layer_count == geometry.layer_count &&
+         layout.batch_size == geometry.batch_size &&
+         layout.k_or_v_record_bytes_per_layer ==
+             geometry.k_or_v_record_bytes_per_layer &&
+         layout.blocks_per_sequence == expected_blocks_per_sequence &&
+         layout.physical_blocks_per_layer ==
+             expected_physical_blocks_per_layer &&
+         layout.total_physical_blocks == expected_total_physical_blocks &&
+         layout.block_bytes == expected_block_bytes &&
+         layout.last_block_tokens ==
+             visible_tokens - expected_last_block_start &&
+         layout.last_block_valid_bytes == expected_last_block_valid_bytes &&
+         layout.decode_append_offset_in_last_block == expected_append_offset &&
+         layout.block_table_entries == expected_physical_blocks_per_layer &&
+         layout.permutation_iterations ==
+             expected_physical_blocks_per_layer - 1 &&
+         layout.validation_entries == expected_physical_blocks_per_layer &&
+         layout.hash_entries == expected_physical_blocks_per_layer &&
+         layout.upload_bytes == expected_block_table_bytes &&
+         layout.memory.k_logical_bytes == expected_k_logical_bytes &&
+         layout.memory.v_logical_bytes == expected_k_logical_bytes &&
+         layout.memory.k_physical_bytes == expected_k_physical_bytes &&
+         layout.memory.v_physical_bytes == expected_k_physical_bytes &&
+         layout.memory.k_layout_padding_bytes == expected_padding_bytes &&
+         layout.memory.v_layout_padding_bytes == expected_padding_bytes &&
+         layout.memory.block_table_bytes == expected_block_table_bytes &&
+         layout.memory.validation_bitset_bytes ==
+             expected_validation_bitset_bytes &&
+         layout.memory.transient_peak_bytes == expected_transient_peak_bytes &&
+         layout.memory.resident_layout_bytes == expected_resident_layout_bytes &&
+         layout.memory.known_owned_peak_bytes == expected_known_owned_peak_bytes &&
+         !layout.geometry_identity.empty() &&
+         geometry.kv_blocks_per_sequence == expected_blocks_per_sequence &&
+         geometry.physical_blocks_per_layer ==
+             expected_physical_blocks_per_layer &&
+         geometry.total_physical_blocks == expected_total_physical_blocks &&
+         geometry.kv_block_bytes == expected_block_bytes &&
+         geometry.last_block_tokens ==
+             visible_tokens - expected_last_block_start &&
+         geometry.last_block_valid_bytes == expected_last_block_valid_bytes &&
+         geometry.decode_append_offset_in_last_block == expected_append_offset &&
+         geometry.k_logical_bytes == expected_k_logical_bytes &&
+         geometry.v_logical_bytes == expected_k_logical_bytes &&
+         geometry.k_mapping_bytes == expected_k_physical_bytes &&
+         geometry.v_mapping_bytes == expected_k_physical_bytes &&
+         geometry.k_layout_padding_bytes == expected_padding_bytes &&
+         geometry.v_layout_padding_bytes == expected_padding_bytes &&
+         geometry.block_table_entries == expected_physical_blocks_per_layer &&
+         geometry.block_table_bytes == expected_block_table_bytes &&
+         geometry.kv_capacity_bytes == expected_kv_capacity_bytes &&
+         geometry.total_data_mapping_bytes == expected_total_data_bytes &&
+         plan.memory_budget.request.requested_k_mapping_bytes ==
+             expected_k_physical_bytes &&
+         plan.memory_budget.request.requested_v_mapping_bytes ==
+             expected_k_physical_bytes &&
+         plan.memory_budget.request.requested_data_bytes ==
+             expected_total_data_bytes &&
+         plan.memory_budget.request.requested_block_table_mapping_bytes ==
+             expected_block_table_bytes &&
+         plan.memory_budget.request.layout_transient_bytes ==
+             expected_validation_bitset_bytes &&
+         paged.table_validation.valid &&
+         !paged.table_validation.interrupted &&
+         paged.table_validation.expected_entries ==
+             expected_physical_blocks_per_layer &&
+         paged.table_validation.examined_entries ==
+             expected_physical_blocks_per_layer &&
+         paged.table_validation.validation_bitset_bytes ==
+             expected_validation_bitset_bytes &&
+         paged.permutation.algorithm_version ==
+             Constants::LLM_KV_BLOCK_PERMUTATION_VERSION &&
+         paged.permutation.entry_count == expected_physical_blocks_per_layer &&
+         !paged.permutation.sha256.empty() &&
+         !paged.permutation.identity.empty() &&
+         paged.ownership.layout_geometry_identity == layout.geometry_identity &&
+         paged.execution_identity == paged.ownership.identity;
+}
+
+bool validate_paged_work_plan_layout(const LlmMemoryWorkPlan& plan,
+                                     const LlmCpuExecutionPlan& cpu_plan) noexcept {
+  if (!cpu_plan.paged.has_value()) {
+    return false;
+  }
+  const LlmPagedCpuExecutionPlan& paged = *cpu_plan.paged;
+  const LlmKvLayoutPlan& layout = paged.layout;
+  size_t expected_sequences = 0;
+  size_t expected_total_layers = 0;
+  size_t expected_total_assignments = 0;
+  size_t layer_bytes = 0;
+  size_t assignment_bytes = 0;
+  size_t expected_descriptor_bytes = 0;
+  if (!plan.valid || !plan.geometry.valid || !plan.memory_budget.valid ||
+      plan.kv_layout != LlmKvLayout::Paged || !layout.valid ||
+      !paged_layout_matches_model(plan, paged) ||
+      !paged.table_validation.valid || paged.permutation.entry_count !=
+                                            layout.block_table_entries ||
+      paged.block_table() == nullptr || !paged.block_table_read_only ||
+      paged.block_table_logical_bytes != layout.memory.block_table_bytes ||
+      paged.block_table_mapping_bytes !=
+          plan.memory_budget.request.committed_block_table_mapping_bytes ||
+      paged.layout_identity.empty() || paged.execution_identity.empty() ||
+      cpu_plan.effective_workers == 0 ||
+      cpu_plan.workers.size() != cpu_plan.effective_workers ||
+      plan.weight_layers.size() != plan.geometry.layer_count ||
+      cpu_plan.layer_descriptors_per_worker != plan.geometry.layer_count ||
+      !NumericUtils::checked_multiply(plan.geometry.layer_count,
+                                      plan.geometry.batch_size,
+                                      expected_sequences) ||
+      expected_sequences != cpu_plan.sequence_descriptors_per_worker ||
+      !NumericUtils::checked_multiply(cpu_plan.effective_workers,
+                                      cpu_plan.layer_descriptors_per_worker,
+                                      expected_total_layers) ||
+      !NumericUtils::checked_multiply(cpu_plan.effective_workers,
+                                      expected_sequences,
+                                      expected_total_assignments) ||
+      expected_total_layers != cpu_plan.total_layer_descriptors ||
+      expected_total_assignments != cpu_plan.total_sequence_descriptors ||
+      !NumericUtils::checked_multiply(expected_total_layers,
+                                      sizeof(LlmPagedLayerDescriptor),
+                                      layer_bytes) ||
+      !NumericUtils::checked_multiply(
+          expected_total_assignments,
+          sizeof(LlmPagedKvAssignmentDescriptor), assignment_bytes) ||
+      !NumericUtils::checked_add(layer_bytes, assignment_bytes,
+                                 expected_descriptor_bytes) ||
+      expected_descriptor_bytes != cpu_plan.descriptor_bytes ||
+      plan.geometry.k_mapping_bytes != layout.memory.k_physical_bytes ||
+      plan.geometry.v_mapping_bytes != layout.memory.v_physical_bytes ||
+      plan.geometry.kv_blocks_per_sequence != layout.blocks_per_sequence ||
+      plan.geometry.kv_block_bytes != layout.block_bytes) {
+    return false;
+  }
+
+  size_t weight_cursor = 0;
+  for (size_t layer = 0; layer < plan.geometry.layer_count; ++layer) {
+    const LlmByteRange& layer_range = plan.weight_layers[layer];
+    size_t layer_end = 0;
+    if (layer_range.span_bytes == 0 ||
+        layer_range.offset_bytes != weight_cursor ||
+        !checked_range_end(layer_range,
+                           plan.geometry.active_weight_bytes_per_work_unit,
+                           layer_end)) {
+      return false;
+    }
+    size_t worker_cursor = layer_range.offset_bytes;
+    for (size_t worker_index = 0;
+         worker_index < cpu_plan.effective_workers; ++worker_index) {
+      const LlmWorkerWorkPlan& worker = cpu_plan.workers[worker_index];
+      if (worker.worker_index != worker_index ||
+          worker.layers.size() != cpu_plan.layer_descriptors_per_worker ||
+          !worker.sequences.empty() ||
+          worker.paged_assignments.size() != expected_sequences) {
+        return false;
+      }
+      const LlmLayerRangeTemplate& worker_layer = worker.layers[layer];
+      size_t worker_end = 0;
+      if (worker_layer.layer_index != layer ||
+          worker_layer.first_sequence_index !=
+              layer * plan.geometry.batch_size ||
+          worker_layer.sequence_count != plan.geometry.batch_size ||
+          !checked_range_end(worker_layer.weight,
+                             plan.geometry.active_weight_bytes_per_work_unit,
+                             worker_end)) {
+        return false;
+      }
+      if (worker_layer.weight.span_bytes != 0) {
+        if (worker_layer.weight.offset_bytes != worker_cursor ||
+            worker_end > layer_end) {
+          return false;
+        }
+        worker_cursor = worker_end;
+      }
+    }
+    if (worker_cursor != layer_end) {
+      return false;
+    }
+    weight_cursor = layer_end;
+
+    for (size_t batch = 0; batch < plan.geometry.batch_size; ++batch) {
+      const size_t assignment_index =
+          layer * plan.geometry.batch_size + batch;
+      size_t owned_blocks = 0;
+      for (size_t worker_index = 0;
+           worker_index < cpu_plan.effective_workers; ++worker_index) {
+        const LlmPagedKvAssignmentTemplate& assignment =
+            cpu_plan.workers[worker_index]
+                .paged_assignments[assignment_index];
+        size_t range_end = 0;
+        if (assignment.layer_index != layer ||
+            assignment.batch_sequence_index != batch ||
+            (assignment.block_count == 0 &&
+             assignment.first_logical_block != 0) ||
+            (assignment.block_count != 0 &&
+             (!NumericUtils::checked_add(assignment.first_logical_block,
+                                         assignment.block_count, range_end) ||
+              range_end > layout.blocks_per_sequence)) ||
+            !NumericUtils::checked_add(owned_blocks,
+                                       assignment.block_count,
+                                       owned_blocks)) {
+          return false;
+        }
+        if (assignment.block_count == 0) {
+          continue;
+        }
+        for (size_t other = 0; other < worker_index; ++other) {
+          const LlmPagedKvAssignmentTemplate& previous =
+              cpu_plan.workers[other]
+                  .paged_assignments[assignment_index];
+          if (previous.block_count == 0) {
+            continue;
+          }
+          const size_t previous_end =
+              previous.first_logical_block + previous.block_count;
+          if (assignment.first_logical_block < previous_end &&
+              previous.first_logical_block < range_end) {
+            return false;
+          }
+        }
+      }
+      if (owned_blocks != layout.blocks_per_sequence) {
+        return false;
+      }
+    }
+  }
+  return weight_cursor == plan.geometry.active_weight_bytes_per_work_unit;
+}
+
 LlmByteRange intersect_ranges(const LlmByteRange& lhs, const LlmByteRange& rhs) noexcept {
   size_t lhs_end = 0;
   size_t rhs_end = 0;
@@ -121,6 +460,9 @@ LlmByteRange intersect_ranges(const LlmByteRange& lhs, const LlmByteRange& rhs) 
 bool validate_work_plan_layout(const LlmMemoryWorkPlan& plan) noexcept {
   const LlmCpuExecutionPlan* const cpu_plan =
       get_llm_cpu_execution_plan(plan);
+  if (cpu_plan != nullptr && plan.kv_layout == LlmKvLayout::Paged) {
+    return validate_paged_work_plan_layout(plan, *cpu_plan);
+  }
   size_t weight_and_k_bytes = 0;
   size_t expected_total_data_bytes = 0;
   if (cpu_plan == nullptr || !plan.valid || !plan.geometry.valid ||
@@ -288,7 +630,13 @@ bool buffer_output_is_empty(const LlmBufferSet& output) noexcept {
 bool resource_output_is_empty(const LlmExecutionResources& output) noexcept {
   return !output.valid && output.model_plan_identity.empty() && buffer_output_is_empty(output.buffers) &&
          output.layer_descriptors == nullptr && output.sequence_descriptors == nullptr &&
+         output.paged_layer_descriptors == nullptr &&
+         output.paged_assignment_descriptors == nullptr &&
          output.weight_references == nullptr && output.k_references == nullptr && output.v_references == nullptr &&
+         output.paged_k_block_references == nullptr &&
+         output.paged_v_block_references == nullptr &&
+         output.block_table == nullptr && output.block_table_entries == 0 &&
+         output.paged_block_reference_count == 0 &&
          output.worker_count == 0 && output.layer_descriptors_per_worker == 0 &&
          output.sequence_descriptors_per_worker == 0 && output.total_layer_descriptors == 0 &&
          output.total_sequence_descriptors == 0;
@@ -319,7 +667,13 @@ bool calculate_budget_with_executor_auxiliary(const LlmMemoryWorkPlan& plan,
           plan.geometry, cpu_plan->descriptor_bytes,
           cpu_plan->planner_storage_bytes, checksum_bytes,
           orchestration_bytes,
-          plan.memory_budget.request.mapping_granularity_bytes);
+          plan.memory_budget.request.mapping_granularity_bytes,
+          cpu_plan->paged.has_value()
+              ? cpu_plan->paged->layout.memory.block_table_bytes
+              : 0,
+          cpu_plan->paged.has_value()
+              ? cpu_plan->paged->layout.memory.validation_bitset_bytes
+              : 0);
   budget = evaluate_llm_memory_budget(request, plan.memory_budget.available_memory_bytes);
   return budget.valid;
 }
@@ -376,6 +730,72 @@ bool initialize_span(uint8_t* mapping, size_t mapping_bytes, uint64_t seed, size
   return true;
 }
 
+uint64_t paged_pattern_byte_word(uint64_t seed, size_t layer_index,
+                                 uint32_t physical_block_id,
+                                 size_t block_byte_offset,
+                                 size_t byte_count) noexcept {
+  const uint64_t word_index = block_byte_offset / sizeof(uint64_t);
+  const size_t byte_in_word = block_byte_offset % sizeof(uint64_t);
+  uint64_t value = llm_paged_buffer_pattern_word(
+                       seed, layer_index, physical_block_id, word_index) >>
+                   (byte_in_word * 8U);
+  const size_t first_word_bytes = sizeof(uint64_t) - byte_in_word;
+  if (byte_count > first_word_bytes) {
+    value |= llm_paged_buffer_pattern_word(
+                 seed, layer_index, physical_block_id, word_index + 1) <<
+             (first_word_bytes * 8U);
+  }
+  return value & low_byte_mask(byte_count);
+}
+
+bool initialize_paged_block(
+    uint8_t* mapping, size_t mapping_bytes, uint64_t seed,
+    size_t layer_index, size_t physical_blocks_per_layer,
+    uint32_t physical_block_id, size_t block_bytes, size_t valid_bytes,
+    LlmStaticSpanReference& reference) noexcept {
+  reference = {};
+  size_t global_block_index = 0;
+  size_t block_offset = 0;
+  size_t block_end = 0;
+  if (mapping == nullptr || block_bytes == 0 || valid_bytes == 0 ||
+      valid_bytes > block_bytes || physical_blocks_per_layer == 0 ||
+      physical_block_id >= physical_blocks_per_layer ||
+      !NumericUtils::checked_multiply(
+          layer_index, physical_blocks_per_layer, global_block_index) ||
+      !NumericUtils::checked_add(global_block_index,
+                                 static_cast<size_t>(physical_block_id),
+                                 global_block_index) ||
+      !NumericUtils::checked_multiply(global_block_index, block_bytes,
+                                      block_offset) ||
+      !NumericUtils::checked_add(block_offset, block_bytes, block_end) ||
+      block_end > mapping_bytes) {
+    return false;
+  }
+  reference.span_bytes = valid_bytes;
+  size_t local_offset = 0;
+  size_t reference_word_index = 0;
+  while (local_offset < block_bytes) {
+    const size_t write_bytes =
+        std::min(sizeof(uint64_t), block_bytes - local_offset);
+    const uint64_t word = paged_pattern_byte_word(
+        seed, layer_index, physical_block_id, local_offset, write_bytes);
+    std::memcpy(mapping + block_offset + local_offset, &word, write_bytes);
+    if (local_offset < valid_bytes) {
+      const size_t reference_bytes =
+          std::min(write_bytes, valid_bytes - local_offset);
+      const uint64_t reference_word = word & low_byte_mask(reference_bytes);
+      if ((reference_word_index & 1U) == 0) {
+        reference.span_even += reference_word;
+      } else {
+        reference.span_odd += reference_word;
+      }
+      ++reference_word_index;
+    }
+    local_offset += write_bytes;
+  }
+  return true;
+}
+
 bool add_initialized_span(const LlmStaticSpanReference& reference, size_t& initialized_bytes,
                           size_t& non_empty_spans) noexcept {
   if (reference.span_bytes == 0) {
@@ -399,6 +819,69 @@ bool materialize_descriptors(const LlmMemoryWorkPlan& plan, LlmExecutionResource
   if (cpu_plan == nullptr || weight == nullptr || k == nullptr ||
       v == nullptr) {
     return false;
+  }
+
+  if (plan.kv_layout == LlmKvLayout::Paged) {
+    if (!cpu_plan->paged.has_value() || resources.block_table == nullptr ||
+        resources.paged_layer_descriptors == nullptr ||
+        resources.paged_assignment_descriptors == nullptr) {
+      return false;
+    }
+    const LlmKvLayoutPlan& layout = cpu_plan->paged->layout;
+    const size_t layer_pool_bytes =
+        layout.physical_blocks_per_layer * layout.block_bytes;
+    for (size_t worker_index = 0;
+         worker_index < cpu_plan->effective_workers; ++worker_index) {
+      const LlmWorkerWorkPlan& worker = cpu_plan->workers[worker_index];
+      const size_t layer_base =
+          worker_index * cpu_plan->layer_descriptors_per_worker;
+      const size_t assignment_base =
+          worker_index * cpu_plan->sequence_descriptors_per_worker;
+      for (size_t layer = 0;
+           layer < cpu_plan->layer_descriptors_per_worker; ++layer) {
+        const LlmLayerRangeTemplate& source = worker.layers[layer];
+        LlmPagedLayerDescriptor& destination =
+            resources.paged_layer_descriptors[layer_base + layer];
+        destination.weight_ptr =
+            source.weight.span_bytes == 0
+                ? nullptr
+                : weight + source.weight.offset_bytes;
+        destination.weight_bytes = source.weight.span_bytes;
+        destination.first_assignment_index = source.first_sequence_index;
+        destination.assignment_count = source.sequence_count;
+        destination.layer_index = source.layer_index;
+        destination.reserved_zero = 0;
+      }
+      for (size_t assignment_index = 0;
+           assignment_index < cpu_plan->sequence_descriptors_per_worker;
+           ++assignment_index) {
+        const LlmPagedKvAssignmentTemplate& source =
+            worker.paged_assignments[assignment_index];
+        LlmPagedKvAssignmentDescriptor& destination =
+            resources.paged_assignment_descriptors[assignment_base +
+                                                   assignment_index];
+        destination.block_table_row =
+            resources.block_table +
+            source.batch_sequence_index * layout.blocks_per_sequence;
+        destination.k_layer_pool =
+            k + source.layer_index * layer_pool_bytes;
+        destination.v_layer_pool =
+            v + source.layer_index * layer_pool_bytes;
+        destination.first_logical_block = source.first_logical_block;
+        destination.owned_block_count = source.block_count;
+        destination.blocks_per_sequence = layout.blocks_per_sequence;
+        destination.block_bytes = layout.block_bytes;
+        destination.last_block_valid_bytes = layout.last_block_valid_bytes;
+        destination.decode_append_offset =
+            layout.decode_append_offset_in_last_block;
+        destination.append_record_bytes =
+            layout.k_or_v_record_bytes_per_layer;
+        destination.layer_index = source.layer_index;
+        destination.batch_sequence_index =
+            source.batch_sequence_index;
+      }
+    }
+    return true;
   }
 
   for (size_t worker_index = 0;
@@ -467,6 +950,9 @@ bool initialize_resources(const LlmMemoryWorkPlan& plan, LlmExecutionResources& 
         return false;
       }
     }
+    if (plan.kv_layout == LlmKvLayout::Paged) {
+      continue;
+    }
     for (size_t sequence_index = 0;
          sequence_index < cpu_plan->sequence_descriptors_per_worker;
          ++sequence_index) {
@@ -484,6 +970,69 @@ bool initialize_resources(const LlmMemoryWorkPlan& plan, LlmExecutionResources& 
     }
   }
 
+  if (plan.kv_layout == LlmKvLayout::Paged) {
+    if (!cpu_plan->paged.has_value() || resources.block_table == nullptr ||
+        resources.paged_k_block_references == nullptr ||
+        resources.paged_v_block_references == nullptr) {
+      return false;
+    }
+    const LlmKvLayoutPlan& layout = cpu_plan->paged->layout;
+    for (size_t layer = 0; layer < layout.layer_count; ++layer) {
+      for (size_t batch = 0; batch < layout.batch_size; ++batch) {
+        const size_t table_row = batch * layout.blocks_per_sequence;
+        for (size_t logical_block = 0;
+             logical_block < layout.blocks_per_sequence; ++logical_block) {
+          const uint32_t physical_id =
+              resources.block_table[table_row + logical_block];
+          if (physical_id >= layout.physical_blocks_per_layer) {
+            return false;
+          }
+          size_t reference_index = 0;
+          if (!NumericUtils::checked_multiply(
+                  layer, layout.physical_blocks_per_layer,
+                  reference_index) ||
+              !NumericUtils::checked_add(
+                  reference_index, static_cast<size_t>(physical_id),
+                  reference_index) ||
+              reference_index >= resources.paged_block_reference_count) {
+            return false;
+          }
+          const size_t valid_bytes =
+              logical_block + 1 == layout.blocks_per_sequence
+                  ? layout.last_block_valid_bytes
+                  : layout.block_bytes;
+          LlmStaticSpanReference& k_reference =
+              resources.paged_k_block_references[reference_index];
+          LlmStaticSpanReference& v_reference =
+              resources.paged_v_block_references[reference_index];
+          if (!initialize_paged_block(
+                  k, plan.geometry.k_mapping_bytes, plan.k_buffer_seed,
+                  layer, layout.physical_blocks_per_layer, physical_id,
+                  layout.block_bytes, valid_bytes, k_reference) ||
+              !initialize_paged_block(
+                  v, plan.geometry.v_mapping_bytes, plan.v_buffer_seed,
+                  layer, layout.physical_blocks_per_layer, physical_id,
+                  layout.block_bytes, valid_bytes, v_reference) ||
+              !checked_add_to(layout.block_bytes, evidence.k_bytes) ||
+              !checked_add_to(layout.block_bytes, evidence.v_bytes)) {
+            return false;
+          }
+          ++evidence.non_empty_k_spans;
+          ++evidence.non_empty_v_spans;
+        }
+      }
+    }
+    evidence.block_table_logical_bytes =
+        cpu_plan->paged->block_table_logical_bytes;
+    evidence.block_table_mapping_bytes =
+        cpu_plan->paged->block_table_mapping_bytes;
+    evidence.block_table_read_only = cpu_plan->paged->block_table_read_only;
+    evidence.k_layout_padding_bytes =
+        layout.memory.k_layout_padding_bytes;
+    evidence.v_layout_padding_bytes =
+        layout.memory.v_layout_padding_bytes;
+  }
+
   if (evidence.weight_bytes != plan.geometry.active_weight_bytes_per_work_unit ||
       evidence.k_bytes != plan.geometry.k_mapping_bytes || evidence.v_bytes != plan.geometry.v_mapping_bytes ||
       !NumericUtils::checked_add(evidence.weight_bytes, evidence.k_bytes, evidence.total_bytes) ||
@@ -498,6 +1047,116 @@ bool initialize_resources(const LlmMemoryWorkPlan& plan, LlmExecutionResources& 
 bool materialized_resources_match_plan(const LlmMemoryWorkPlan& plan, const LlmExecutionResources& resources) noexcept {
   const LlmCpuExecutionPlan* const cpu_plan =
       get_llm_cpu_execution_plan(plan);
+  if (cpu_plan != nullptr && plan.kv_layout == LlmKvLayout::Paged) {
+    if (!cpu_plan->paged.has_value() ||
+        !validate_work_plan_layout(plan) || !resources.valid ||
+        resources.model_plan_identity != plan.plan_identity ||
+        !resources.buffers.complete() ||
+        resources.layer_descriptors != nullptr ||
+        resources.sequence_descriptors != nullptr ||
+        resources.paged_layer_descriptors == nullptr ||
+        resources.paged_assignment_descriptors == nullptr ||
+        resources.weight_references == nullptr ||
+        resources.k_references != nullptr || resources.v_references != nullptr ||
+        resources.paged_k_block_references == nullptr ||
+        resources.paged_v_block_references == nullptr ||
+        resources.block_table != cpu_plan->paged->block_table() ||
+        resources.block_table_entries !=
+            cpu_plan->paged->layout.block_table_entries ||
+        resources.paged_block_reference_count !=
+            cpu_plan->paged->layout.total_physical_blocks ||
+        resources.worker_count != cpu_plan->effective_workers ||
+        resources.layer_descriptors_per_worker !=
+            cpu_plan->layer_descriptors_per_worker ||
+        resources.sequence_descriptors_per_worker !=
+            cpu_plan->sequence_descriptors_per_worker ||
+        resources.total_layer_descriptors !=
+            cpu_plan->total_layer_descriptors ||
+        resources.total_sequence_descriptors !=
+            cpu_plan->total_sequence_descriptors ||
+        !resources.initialization.complete ||
+        resources.initialization.weight_bytes !=
+            plan.geometry.active_weight_bytes_per_work_unit ||
+        resources.initialization.k_bytes != plan.geometry.k_mapping_bytes ||
+        resources.initialization.v_bytes != plan.geometry.v_mapping_bytes ||
+        !resources.initialization.block_table_read_only) {
+      return false;
+    }
+    const uint8_t* const weight =
+        static_cast<const uint8_t*>(resources.buffers.weight.get());
+    const uint8_t* const k =
+        static_cast<const uint8_t*>(resources.buffers.k.get());
+    const uint8_t* const v =
+        static_cast<const uint8_t*>(resources.buffers.v.get());
+    const LlmKvLayoutPlan& layout = cpu_plan->paged->layout;
+    const size_t layer_pool_bytes =
+        layout.physical_blocks_per_layer * layout.block_bytes;
+    for (size_t worker_index = 0;
+         worker_index < cpu_plan->effective_workers; ++worker_index) {
+      const LlmWorkerWorkPlan& worker = cpu_plan->workers[worker_index];
+      const size_t layer_base =
+          worker_index * cpu_plan->layer_descriptors_per_worker;
+      const size_t assignment_base =
+          worker_index * cpu_plan->sequence_descriptors_per_worker;
+      for (size_t layer = 0;
+           layer < cpu_plan->layer_descriptors_per_worker; ++layer) {
+        const LlmLayerRangeTemplate& source = worker.layers[layer];
+        const LlmPagedLayerDescriptor& descriptor =
+            resources.paged_layer_descriptors[layer_base + layer];
+        const uint8_t* expected_weight =
+            source.weight.span_bytes == 0
+                ? nullptr
+                : weight + source.weight.offset_bytes;
+        if (descriptor.weight_ptr != expected_weight ||
+            descriptor.weight_bytes != source.weight.span_bytes ||
+            descriptor.first_assignment_index !=
+                source.first_sequence_index ||
+            descriptor.assignment_count != source.sequence_count ||
+            descriptor.layer_index != source.layer_index ||
+            descriptor.reserved_zero != 0 ||
+            resources.weight_references[layer_base + layer].span_bytes !=
+                source.weight.span_bytes) {
+          return false;
+        }
+      }
+      for (size_t assignment_index = 0;
+           assignment_index < cpu_plan->sequence_descriptors_per_worker;
+           ++assignment_index) {
+        const LlmPagedKvAssignmentTemplate& source =
+            worker.paged_assignments[assignment_index];
+        const LlmPagedKvAssignmentDescriptor& descriptor =
+            resources.paged_assignment_descriptors[assignment_base +
+                                                   assignment_index];
+        if (descriptor.block_table_row !=
+                resources.block_table +
+                    source.batch_sequence_index *
+                        layout.blocks_per_sequence ||
+            descriptor.k_layer_pool !=
+                const_cast<uint8_t*>(k) +
+                    source.layer_index * layer_pool_bytes ||
+            descriptor.v_layer_pool !=
+                const_cast<uint8_t*>(v) +
+                    source.layer_index * layer_pool_bytes ||
+            descriptor.first_logical_block !=
+                source.first_logical_block ||
+            descriptor.owned_block_count != source.block_count ||
+            descriptor.blocks_per_sequence != layout.blocks_per_sequence ||
+            descriptor.block_bytes != layout.block_bytes ||
+            descriptor.last_block_valid_bytes !=
+                layout.last_block_valid_bytes ||
+            descriptor.decode_append_offset !=
+                layout.decode_append_offset_in_last_block ||
+            descriptor.append_record_bytes !=
+                layout.k_or_v_record_bytes_per_layer ||
+            descriptor.layer_index != source.layer_index ||
+            descriptor.batch_sequence_index !=
+                source.batch_sequence_index) {
+          return false;
+        }
+      }
+    }
+    return true;
+  }
   if (cpu_plan == nullptr || !validate_work_plan_layout(plan) ||
       !resources.valid || resources.model_plan_identity != plan.plan_identity ||
       !resources.buffers.complete() || resources.layer_descriptors == nullptr ||
@@ -582,11 +1241,35 @@ bool scenario_plan_matches_model(const LlmMemoryWorkPlan& model_plan, const LlmS
   }
   const LlmScenarioWorkPlan rebuilt = build_llm_scenario_work_plan(
       model_plan, scenario_plan.scenario, scenario_plan.work_units, scenario_plan.explicit_iterations);
-  return rebuilt.valid && rebuilt.plan_identity == scenario_plan.plan_identity &&
+  return rebuilt.valid && rebuilt.reason_code == scenario_plan.reason_code &&
+         rebuilt.work_unit_kind == scenario_plan.work_unit_kind &&
+         rebuilt.kv_write_kind == scenario_plan.kv_write_kind &&
+         rebuilt.explicit_iterations == scenario_plan.explicit_iterations &&
+         rebuilt.model_plan_identity == scenario_plan.model_plan_identity &&
+         rebuilt.scenario_seed == scenario_plan.scenario_seed &&
+         rebuilt.work_units == scenario_plan.work_units &&
+         rebuilt.weight_read_bytes_per_work_unit == scenario_plan.weight_read_bytes_per_work_unit &&
+         rebuilt.kv_read_bytes_per_work_unit == scenario_plan.kv_read_bytes_per_work_unit &&
+         rebuilt.kv_write_bytes_per_work_unit == scenario_plan.kv_write_bytes_per_work_unit &&
+         rebuilt.effective_model_payload_bytes_per_work_unit ==
+             scenario_plan.effective_model_payload_bytes_per_work_unit &&
+         rebuilt.layout_metadata_lookup_count_per_work_unit ==
+             scenario_plan.layout_metadata_lookup_count_per_work_unit &&
+         rebuilt.layout_metadata_read_bytes_per_work_unit ==
+             scenario_plan.layout_metadata_read_bytes_per_work_unit &&
+         rebuilt.accounted_bytes_per_work_unit == scenario_plan.accounted_bytes_per_work_unit &&
          rebuilt.weight_read_bytes == scenario_plan.weight_read_bytes &&
          rebuilt.kv_read_bytes == scenario_plan.kv_read_bytes &&
          rebuilt.kv_write_bytes == scenario_plan.kv_write_bytes &&
-         rebuilt.effective_model_payload_bytes == scenario_plan.effective_model_payload_bytes;
+         rebuilt.effective_model_payload_bytes == scenario_plan.effective_model_payload_bytes &&
+         rebuilt.layout_metadata_lookup_count == scenario_plan.layout_metadata_lookup_count &&
+         rebuilt.layout_metadata_read_bytes == scenario_plan.layout_metadata_read_bytes &&
+         rebuilt.task_accounted_bytes == scenario_plan.task_accounted_bytes &&
+         rebuilt.maximum_work_units_by_work_unit_cap ==
+             scenario_plan.maximum_work_units_by_work_unit_cap &&
+         rebuilt.maximum_work_units_by_guardrail == scenario_plan.maximum_work_units_by_guardrail &&
+         rebuilt.effective_maximum_work_units == scenario_plan.effective_maximum_work_units &&
+         rebuilt.plan_identity == scenario_plan.plan_identity;
 }
 
 uint8_t append_byte(uint64_t scenario_seed, uint64_t task_local_work_unit, uint64_t layer_index,
@@ -655,6 +1338,61 @@ bool append_adjusted_reference(const LlmStaticSpanReference& static_reference,
   return true;
 }
 
+bool paged_append_adjusted_reference(
+    const LlmStaticSpanReference& static_reference,
+    const LlmKvLayoutPlan& layout, uint32_t physical_block_id,
+    uint64_t buffer_seed, uint64_t scenario_seed,
+    uint64_t task_local_work_unit, size_t layer_index,
+    size_t batch_sequence_index, LlmChecksumComponent component,
+    LlmStaticSpanReference& adjusted) noexcept {
+  adjusted = static_reference;
+  if (static_reference.span_bytes != layout.last_block_valid_bytes ||
+      layout.decode_append_offset_in_last_block >
+          layout.last_block_valid_bytes ||
+      layout.k_or_v_record_bytes_per_layer >
+          layout.last_block_valid_bytes -
+              layout.decode_append_offset_in_last_block) {
+    return false;
+  }
+  const size_t append_start =
+      layout.decode_append_offset_in_last_block;
+  const size_t total_words =
+      (layout.last_block_valid_bytes + sizeof(uint64_t) - 1) /
+      sizeof(uint64_t);
+  const size_t first_affected_word = append_start / sizeof(uint64_t);
+  for (size_t word_index = first_affected_word; word_index < total_words;
+       ++word_index) {
+    const size_t local_word_start = word_index * sizeof(uint64_t);
+    const size_t word_bytes =
+        std::min(sizeof(uint64_t),
+                 layout.last_block_valid_bytes - local_word_start);
+    const uint64_t initialized_word = paged_pattern_byte_word(
+        buffer_seed, layer_index, physical_block_id, local_word_start,
+        word_bytes);
+    uint64_t appended_word = 0;
+    for (size_t byte_index = 0; byte_index < word_bytes; ++byte_index) {
+      const size_t local_byte = local_word_start + byte_index;
+      const uint8_t value =
+          local_byte < append_start
+              ? static_cast<uint8_t>(initialized_word >>
+                                     (byte_index * 8U))
+              : append_byte(scenario_seed, task_local_work_unit,
+                            layer_index, batch_sequence_index,
+                            local_byte - append_start, component);
+      appended_word |=
+          static_cast<uint64_t>(value) << (byte_index * 8U);
+    }
+    if ((word_index & 1U) == 0) {
+      adjusted.span_even =
+          adjusted.span_even - initialized_word + appended_word;
+    } else {
+      adjusted.span_odd =
+          adjusted.span_odd - initialized_word + appended_word;
+    }
+  }
+  return true;
+}
+
 bool absorb_reference(LlmReadChecksumComponent& checksum, const LlmStaticSpanReference& reference) noexcept {
   if (reference.span_bytes == 0) {
     return true;
@@ -680,6 +1418,336 @@ bool add_checksum_bytes(uint64_t bytes, uint64_t& total) noexcept {
   return true;
 }
 
+LlmExpectedChecksumResult calculate_paged_expected_checksums(
+    const LlmMemoryWorkPlan& model_plan,
+    const LlmScenarioWorkPlan& scenario_plan,
+    const LlmExecutionResources& resources) {
+  LlmExpectedChecksumResult result;
+  const LlmCpuExecutionPlan* const cpu_plan =
+      get_llm_cpu_execution_plan(model_plan);
+  if (cpu_plan == nullptr || !cpu_plan->paged.has_value() ||
+      !materialized_resources_match_plan(model_plan, resources) ||
+      !scenario_plan_matches_model(model_plan, scenario_plan)) {
+    result.reason_code = LlmExecutorReason::INVALID_RESOURCES;
+    return result;
+  }
+  const LlmKvLayoutPlan& layout = cpu_plan->paged->layout;
+  result.workers.resize(cpu_plan->effective_workers);
+  const uint64_t flags = llm_scenario_flags(scenario_plan.scenario);
+  const bool reads_weight = (flags & kLlmScenarioFlagWeight) != 0;
+  const bool reads_kv = (flags & kLlmScenarioFlagKv) != 0;
+  uint64_t total_weight_bytes = 0;
+  uint64_t total_k_bytes = 0;
+  uint64_t total_v_bytes = 0;
+
+  for (size_t worker_index = 0;
+       worker_index < cpu_plan->effective_workers; ++worker_index) {
+    LlmWorkerChecksum& checksum = result.workers[worker_index];
+    checksum.weight = initial_llm_read_checksum(LlmChecksumComponent::Weight);
+    checksum.k = initial_llm_read_checksum(LlmChecksumComponent::K);
+    checksum.v = initial_llm_read_checksum(LlmChecksumComponent::V);
+    const LlmWorkerWorkPlan& worker = cpu_plan->workers[worker_index];
+    const LlmStaticSpanReference* const weight_references =
+        resources.worker_weight_references(worker_index);
+    if (weight_references == nullptr) {
+      result.reason_code = LlmExecutorReason::INVALID_RESOURCES;
+      result.workers.clear();
+      return result;
+    }
+
+    for (size_t step = 0; step < scenario_plan.work_units; ++step) {
+      for (size_t layer = 0; layer < layout.layer_count; ++layer) {
+        if (reads_weight &&
+            !absorb_reference(checksum.weight,
+                              weight_references[layer])) {
+          result.reason_code =
+              LlmExecutorReason::EXPECTED_CHECKSUM_OVERFLOW;
+          result.workers.clear();
+          return result;
+        }
+        if (!reads_kv) {
+          continue;
+        }
+        for (size_t batch = 0; batch < layout.batch_size; ++batch) {
+          const LlmPagedKvAssignmentTemplate& assignment =
+              worker.paged_assignments[layer * layout.batch_size + batch];
+          if (assignment.block_count == 0) {
+            continue;
+          }
+          const size_t assignment_end =
+              assignment.first_logical_block + assignment.block_count;
+          const bool owns_last =
+              assignment_end == layout.blocks_per_sequence;
+          const size_t table_row = batch * layout.blocks_per_sequence;
+          if (owns_last) {
+            const size_t logical_block = layout.blocks_per_sequence - 1;
+            const uint32_t physical_id =
+                resources.block_table[table_row + logical_block];
+            mix_llm_paged_lookup(
+                checksum.k, table_row + logical_block, physical_id, 0,
+                step);
+          }
+
+          for (size_t block_offset = 0;
+               block_offset < assignment.block_count; ++block_offset) {
+            const size_t logical_block =
+                assignment.first_logical_block + block_offset;
+            const uint32_t physical_id =
+                resources.block_table[table_row + logical_block];
+            const size_t reference_index =
+                layer * layout.physical_blocks_per_layer + physical_id;
+            mix_llm_paged_lookup(
+                checksum.k, table_row + logical_block, physical_id, 1,
+                step);
+            LlmStaticSpanReference adjusted;
+            const LlmStaticSpanReference* reference =
+                &resources.paged_k_block_references[reference_index];
+            if (logical_block + 1 == layout.blocks_per_sequence) {
+              if (!paged_append_adjusted_reference(
+                      *reference, layout, physical_id,
+                      model_plan.k_buffer_seed, scenario_plan.scenario_seed,
+                      step, layer, batch, LlmChecksumComponent::K,
+                      adjusted)) {
+                result.reason_code =
+                    LlmExecutorReason::EXPECTED_CHECKSUM_OVERFLOW;
+                result.workers.clear();
+                return result;
+              }
+              reference = &adjusted;
+            }
+            if (!absorb_reference(checksum.k, *reference)) {
+              result.reason_code =
+                  LlmExecutorReason::EXPECTED_CHECKSUM_OVERFLOW;
+              result.workers.clear();
+              return result;
+            }
+          }
+
+          for (size_t block_offset = 0;
+               block_offset < assignment.block_count; ++block_offset) {
+            const size_t logical_block =
+                assignment.first_logical_block + block_offset;
+            const uint32_t physical_id =
+                resources.block_table[table_row + logical_block];
+            const size_t reference_index =
+                layer * layout.physical_blocks_per_layer + physical_id;
+            mix_llm_paged_lookup(
+                checksum.v, table_row + logical_block, physical_id, 2,
+                step);
+            LlmStaticSpanReference adjusted;
+            const LlmStaticSpanReference* reference =
+                &resources.paged_v_block_references[reference_index];
+            if (logical_block + 1 == layout.blocks_per_sequence) {
+              if (!paged_append_adjusted_reference(
+                      *reference, layout, physical_id,
+                      model_plan.v_buffer_seed, scenario_plan.scenario_seed,
+                      step, layer, batch, LlmChecksumComponent::V,
+                      adjusted)) {
+                result.reason_code =
+                    LlmExecutorReason::EXPECTED_CHECKSUM_OVERFLOW;
+                result.workers.clear();
+                return result;
+              }
+              reference = &adjusted;
+            }
+            if (!absorb_reference(checksum.v, *reference)) {
+              result.reason_code =
+                  LlmExecutorReason::EXPECTED_CHECKSUM_OVERFLOW;
+              result.workers.clear();
+              return result;
+            }
+          }
+        }
+      }
+    }
+    if (!add_checksum_bytes(checksum.weight.exact_bytes_read,
+                            total_weight_bytes) ||
+        !add_checksum_bytes(checksum.k.exact_bytes_read, total_k_bytes) ||
+        !add_checksum_bytes(checksum.v.exact_bytes_read, total_v_bytes)) {
+      result.reason_code = LlmExecutorReason::EXPECTED_CHECKSUM_OVERFLOW;
+      result.workers.clear();
+      return result;
+    }
+  }
+  uint64_t total_kv_bytes = 0;
+  if (!add_checksum_bytes(total_k_bytes, total_kv_bytes) ||
+      !add_checksum_bytes(total_v_bytes, total_kv_bytes) ||
+      total_weight_bytes != scenario_plan.weight_read_bytes ||
+      total_kv_bytes != scenario_plan.kv_read_bytes) {
+    result.reason_code = LlmExecutorReason::INVALID_DESCRIPTOR_LAYOUT;
+    result.workers.clear();
+    return result;
+  }
+  result.run_checksum =
+      fold_llm_worker_checksums(result.workers.data(), result.workers.size());
+  result.valid = true;
+  result.reason_code = LlmExecutorReason::VALID;
+  return result;
+}
+
+bool validate_paged_post_execution(
+    const LlmMemoryWorkPlan& model_plan,
+    const LlmScenarioWorkPlan& scenario_plan,
+    const LlmExecutionResources& resources) noexcept {
+  const LlmCpuExecutionPlan* const cpu_plan =
+      get_llm_cpu_execution_plan(model_plan);
+  if (cpu_plan == nullptr || !cpu_plan->paged.has_value() ||
+      resources.block_table == nullptr || !resources.buffers.complete()) {
+    return false;
+  }
+  const LlmKvLayoutPlan& layout = cpu_plan->paged->layout;
+  const uint8_t* const k =
+      static_cast<const uint8_t*>(resources.buffers.k.get());
+  const uint8_t* const v =
+      static_cast<const uint8_t*>(resources.buffers.v.get());
+  const bool wrote_kv =
+      (llm_scenario_flags(scenario_plan.scenario) & kLlmScenarioFlagKv) != 0;
+  const uint64_t final_work_unit = scenario_plan.work_units - 1;
+  for (size_t layer = 0; layer < layout.layer_count; ++layer) {
+    for (size_t batch = 0; batch < layout.batch_size; ++batch) {
+      const size_t table_index =
+          batch * layout.blocks_per_sequence +
+          (layout.blocks_per_sequence - 1);
+      const uint32_t physical_id = resources.block_table[table_index];
+      if (physical_id >= layout.physical_blocks_per_layer) {
+        return false;
+      }
+      const size_t global_block =
+          layer * layout.physical_blocks_per_layer + physical_id;
+      const size_t block_offset = global_block * layout.block_bytes;
+      for (size_t record_byte = 0;
+           record_byte < layout.k_or_v_record_bytes_per_layer;
+           ++record_byte) {
+        const size_t block_byte_offset =
+            layout.decode_append_offset_in_last_block + record_byte;
+        const size_t byte_offset = block_offset + block_byte_offset;
+        const uint8_t expected_k =
+            wrote_kv
+                ? append_byte(scenario_plan.scenario_seed,
+                              final_work_unit, layer, batch, record_byte,
+                              LlmChecksumComponent::K)
+                : static_cast<uint8_t>(paged_pattern_byte_word(
+                      model_plan.k_buffer_seed, layer, physical_id,
+                      block_byte_offset, 1));
+        const uint8_t expected_v =
+            wrote_kv
+                ? append_byte(scenario_plan.scenario_seed,
+                              final_work_unit, layer, batch, record_byte,
+                              LlmChecksumComponent::V)
+                : static_cast<uint8_t>(paged_pattern_byte_word(
+                      model_plan.v_buffer_seed, layer, physical_id,
+                      block_byte_offset, 1));
+        if (k[byte_offset] != expected_k || v[byte_offset] != expected_v) {
+          return false;
+        }
+      }
+      for (size_t padding_byte = layout.last_block_valid_bytes;
+           padding_byte < layout.block_bytes; ++padding_byte) {
+        const uint8_t expected_k = static_cast<uint8_t>(
+            paged_pattern_byte_word(model_plan.k_buffer_seed, layer,
+                                    physical_id, padding_byte, 1));
+        const uint8_t expected_v = static_cast<uint8_t>(
+            paged_pattern_byte_word(model_plan.v_buffer_seed, layer,
+                                    physical_id, padding_byte, 1));
+        if (k[block_offset + padding_byte] != expected_k ||
+            v[block_offset + padding_byte] != expected_v) {
+          return false;
+        }
+      }
+    }
+  }
+  return true;
+}
+
+/** Restore only the mutable decode append slots before an untimed task. */
+bool reset_paged_append_slots(
+    const LlmMemoryWorkPlan& model_plan,
+    const LlmExecutionResources& resources) noexcept {
+  if (model_plan.kv_layout != LlmKvLayout::Paged) {
+    return true;
+  }
+  const LlmCpuExecutionPlan* const cpu_plan =
+      get_llm_cpu_execution_plan(model_plan);
+  if (cpu_plan == nullptr || !cpu_plan->paged.has_value() ||
+      resources.block_table == nullptr || !resources.buffers.complete()) {
+    return false;
+  }
+  const LlmKvLayoutPlan& layout = cpu_plan->paged->layout;
+  size_t append_end_in_block = 0;
+  if (layout.blocks_per_sequence == 0 ||
+      layout.physical_blocks_per_layer == 0 || layout.block_bytes == 0 ||
+      layout.k_or_v_record_bytes_per_layer == 0 ||
+      !NumericUtils::checked_add(
+          layout.decode_append_offset_in_last_block,
+          layout.k_or_v_record_bytes_per_layer, append_end_in_block) ||
+      append_end_in_block > layout.last_block_valid_bytes ||
+      append_end_in_block > layout.block_bytes) {
+    return false;
+  }
+
+  uint8_t* const k =
+      static_cast<uint8_t*>(resources.buffers.k.get());
+  uint8_t* const v =
+      static_cast<uint8_t*>(resources.buffers.v.get());
+  for (size_t layer = 0; layer < layout.layer_count; ++layer) {
+    for (size_t batch = 0; batch < layout.batch_size; ++batch) {
+      size_t table_index = 0;
+      if (!NumericUtils::checked_multiply(
+              batch, layout.blocks_per_sequence, table_index) ||
+          !NumericUtils::checked_add(
+              table_index, layout.blocks_per_sequence - 1,
+              table_index) ||
+          table_index >= resources.block_table_entries) {
+        return false;
+      }
+      const uint32_t physical_id = resources.block_table[table_index];
+      size_t global_block = 0;
+      size_t block_offset = 0;
+      size_t append_offset = 0;
+      size_t append_end = 0;
+      if (physical_id >= layout.physical_blocks_per_layer ||
+          !NumericUtils::checked_multiply(
+              layer, layout.physical_blocks_per_layer, global_block) ||
+          !NumericUtils::checked_add(
+              global_block, static_cast<size_t>(physical_id),
+              global_block) ||
+          !NumericUtils::checked_multiply(
+              global_block, layout.block_bytes, block_offset) ||
+          !NumericUtils::checked_add(
+              block_offset, layout.decode_append_offset_in_last_block,
+              append_offset) ||
+          !NumericUtils::checked_add(
+              append_offset, layout.k_or_v_record_bytes_per_layer,
+              append_end) ||
+          append_end > model_plan.geometry.k_mapping_bytes ||
+          append_end > model_plan.geometry.v_mapping_bytes) {
+        return false;
+      }
+
+      size_t record_offset = 0;
+      while (record_offset < layout.k_or_v_record_bytes_per_layer) {
+        const size_t write_bytes =
+            std::min(sizeof(uint64_t),
+                     layout.k_or_v_record_bytes_per_layer - record_offset);
+        const size_t block_byte_offset =
+            layout.decode_append_offset_in_last_block + record_offset;
+        const uint64_t k_word = paged_pattern_byte_word(
+            model_plan.k_buffer_seed, layer, physical_id,
+            block_byte_offset, write_bytes);
+        const uint64_t v_word = paged_pattern_byte_word(
+            model_plan.v_buffer_seed, layer, physical_id,
+            block_byte_offset, write_bytes);
+        std::memcpy(k + append_offset + record_offset, &k_word,
+                    write_bytes);
+        std::memcpy(v + append_offset + record_offset, &v_word,
+                    write_bytes);
+        record_offset += write_bytes;
+      }
+    }
+  }
+  return true;
+}
+
 bool equal_component(const LlmReadChecksumComponent& lhs, const LlmReadChecksumComponent& rhs) noexcept {
   return lhs.state_a == rhs.state_a && lhs.state_b == rhs.state_b && lhs.exact_bytes_read == rhs.exact_bytes_read &&
          lhs.span_count == rhs.span_count;
@@ -692,6 +1760,14 @@ bool equal_worker_checksum(const LlmWorkerChecksum& lhs, const LlmWorkerChecksum
 bool production_kernel_invoke(void*, const LlmKernelInvocation& invocation) noexcept {
   if (invocation.output == nullptr) {
     return false;
+  }
+  if (invocation.kv_layout == LlmKvLayout::Paged) {
+    llm_decode_memory_paged_asm(
+        invocation.paged_layers, invocation.paged_assignments,
+        invocation.layer_count, invocation.work_unit_count,
+        invocation.scenario_flags, invocation.scenario_seed,
+        invocation.output);
+    return true;
   }
   llm_decode_memory_asm(invocation.layers, invocation.sequences, invocation.layer_count, invocation.work_unit_count,
                         invocation.scenario_flags, invocation.scenario_seed, invocation.output);
@@ -758,6 +1834,26 @@ const LlmStaticSpanReference* LlmExecutionResources::worker_v_references(size_t 
   return v_references.get() + worker_index * sequence_descriptors_per_worker;
 }
 
+const LlmPagedLayerDescriptor* LlmExecutionResources::worker_paged_layers(
+    size_t worker_index) const noexcept {
+  if (worker_index >= worker_count || paged_layer_descriptors == nullptr) {
+    return nullptr;
+  }
+  return paged_layer_descriptors.get() +
+         worker_index * layer_descriptors_per_worker;
+}
+
+const LlmPagedKvAssignmentDescriptor*
+LlmExecutionResources::worker_paged_assignments(
+    size_t worker_index) const noexcept {
+  if (worker_index >= worker_count ||
+      paged_assignment_descriptors == nullptr) {
+    return nullptr;
+  }
+  return paged_assignment_descriptors.get() +
+         worker_index * sequence_descriptors_per_worker;
+}
+
 uint64_t llm_scenario_flags(LlmScenario scenario) noexcept {
   switch (scenario) {
     case LlmScenario::WeightsOnly:
@@ -774,6 +1870,15 @@ uint64_t llm_buffer_pattern_word(uint64_t buffer_domain_seed, uint64_t absolute_
   return buffer_domain_seed + kBufferPatternMultiplier * (absolute_mapping_word_index + 1);
 }
 
+uint64_t llm_paged_buffer_pattern_word(
+    uint64_t buffer_domain_seed, uint64_t layer_index,
+    uint64_t physical_block_id, uint64_t block_word_index) noexcept {
+  return buffer_domain_seed +
+         kPagedPatternLayerMultiplier * (layer_index + 1) +
+         kPagedPatternPhysicalMultiplier * (physical_block_id + 1) +
+         kPagedPatternWordMultiplier * (block_word_index + 1);
+}
+
 uint64_t llm_append_word(uint64_t scenario_seed, uint64_t task_local_work_unit, uint64_t layer_index,
                          uint64_t batch_sequence_index, uint64_t record_word_index,
                          LlmChecksumComponent component) noexcept {
@@ -788,6 +1893,22 @@ uint64_t llm_append_word(uint64_t scenario_seed, uint64_t task_local_work_unit, 
 LlmReadChecksumComponent initial_llm_read_checksum(LlmChecksumComponent component) noexcept {
   const uint64_t domain = checksum_domain(component);
   return {kChecksumInitialA ^ domain, kChecksumInitialB + domain, 0, 0};
+}
+
+void mix_llm_paged_lookup(LlmReadChecksumComponent& checksum,
+                          uint64_t global_logical_index,
+                          uint32_t physical_block_id,
+                          uint64_t semantic_visit_kind,
+                          uint64_t work_unit_ordinal) noexcept {
+  const uint64_t term =
+      (global_logical_index + 1) *
+          (static_cast<uint64_t>(physical_block_id) + 1) +
+      (semantic_visit_kind + 1) * kPagedLookupVisitMultiplier +
+      (work_unit_ordinal + 1) * kPagedLookupWorkUnitMultiplier;
+  checksum.state_a = rotate_left(
+      checksum.state_a + term + kPagedLookupLogicalMultiplier, 13);
+  checksum.state_b = rotate_left(
+      checksum.state_b ^ (term + kPagedLookupStateBStep), 31);
 }
 
 LlmRunChecksum fold_llm_worker_checksums(const LlmWorkerChecksum* workers, size_t worker_count) noexcept {
@@ -812,36 +1933,36 @@ LlmRunChecksum fold_llm_worker_checksums(const LlmWorkerChecksum* workers, size_
   return result;
 }
 
-LlmExecutorAuxiliaryEstimate calculate_llm_executor_auxiliary_estimate(const LlmMemoryWorkPlan& plan) noexcept {
+LlmExecutorAuxiliaryEstimate calculate_llm_executor_auxiliary_estimate(
+    const LlmAuxiliaryPreflightView& preflight) noexcept {
   LlmExecutorAuxiliaryEstimate estimate;
-  const LlmCpuExecutionPlan* const cpu_plan =
-      get_llm_cpu_execution_plan(plan);
-  if (!validate_work_plan_layout(plan)) {
+  if (!preflight.valid || preflight.backend != LlmMemoryBackend::Cpu ||
+      preflight.effective_workers == 0) {
     estimate.reason_code = LlmExecutorReason::INVALID_WORK_PLAN;
     return estimate;
   }
 
   size_t sequence_reference_count = 0;
   size_t reference_count = 0;
-  if (cpu_plan == nullptr ||
-      !NumericUtils::checked_multiply(cpu_plan->total_sequence_descriptors,
-                                      2, sequence_reference_count) ||
-      !NumericUtils::checked_add(cpu_plan->total_layer_descriptors,
+  if (!NumericUtils::checked_multiply(
+          preflight.k_or_v_static_reference_count, 2,
+                                      sequence_reference_count) ||
+      !NumericUtils::checked_add(preflight.total_layer_descriptors,
                                  sequence_reference_count,
                                  reference_count) ||
       !NumericUtils::checked_multiply(reference_count, sizeof(LlmStaticSpanReference),
                                       estimate.static_reference_bytes) ||
-      !NumericUtils::checked_multiply(cpu_plan->effective_workers,
+      !NumericUtils::checked_multiply(preflight.effective_workers,
                                       sizeof(LlmWorkerChecksum),
                                       estimate.expected_checksum_bytes)) {
     return estimate;
   }
   estimate.actual_checksum_bytes = estimate.expected_checksum_bytes;
   if (!NumericUtils::checked_multiply(2, sizeof(LlmRunChecksum), estimate.run_checksum_bytes) ||
-      !NumericUtils::checked_multiply(cpu_plan->effective_workers,
+      !NumericUtils::checked_multiply(preflight.effective_workers,
                                       sizeof(uint8_t),
                                       estimate.worker_status_bytes) ||
-      !NumericUtils::checked_multiply(cpu_plan->effective_workers,
+      !NumericUtils::checked_multiply(preflight.effective_workers,
                                       sizeof(std::thread),
                                       estimate.thread_handle_bytes)) {
     return estimate;
@@ -862,6 +1983,31 @@ LlmExecutorAuxiliaryEstimate calculate_llm_executor_auxiliary_estimate(const Llm
   estimate.valid = true;
   estimate.reason_code = LlmExecutorReason::VALID;
   return estimate;
+}
+
+LlmExecutorAuxiliaryEstimate calculate_llm_executor_auxiliary_estimate(
+    const LlmMemoryWorkPlan& plan) noexcept {
+  const LlmCpuExecutionPlan* const cpu_plan =
+      get_llm_cpu_execution_plan(plan);
+  if (cpu_plan == nullptr || !validate_work_plan_layout(plan)) {
+    LlmExecutorAuxiliaryEstimate estimate;
+    estimate.reason_code = LlmExecutorReason::INVALID_WORK_PLAN;
+    return estimate;
+  }
+  LlmAuxiliaryPreflightView preflight;
+  preflight.valid = true;
+  preflight.backend = plan.backend;
+  preflight.kv_layout = plan.kv_layout;
+  preflight.effective_workers = cpu_plan->effective_workers;
+  preflight.total_layer_descriptors =
+      cpu_plan->total_layer_descriptors;
+  preflight.total_sequence_descriptors =
+      cpu_plan->total_sequence_descriptors;
+  preflight.k_or_v_static_reference_count =
+      cpu_plan->paged.has_value()
+          ? cpu_plan->paged->layout.total_physical_blocks
+          : cpu_plan->total_sequence_descriptors;
+  return calculate_llm_executor_auxiliary_estimate(preflight);
 }
 
 LlmBufferAllocationResult allocate_llm_buffers(const LlmMemoryWorkPlan& plan, LlmBufferSet& output) noexcept {
@@ -940,24 +2086,55 @@ LlmResourcePreparationResult prepare_llm_execution_resources(const LlmMemoryWork
       return result;
     }
 
-    candidate.layer_descriptors.reset(
-        new (std::nothrow)
-            LlmLayerDescriptor[cpu_plan->total_layer_descriptors]);
-    candidate.sequence_descriptors.reset(
-        new (std::nothrow)
-            LlmKvSequenceDescriptor[cpu_plan->total_sequence_descriptors]);
     candidate.weight_references.reset(
         new (std::nothrow)
             LlmStaticSpanReference[cpu_plan->total_layer_descriptors]);
-    candidate.k_references.reset(
-        new (std::nothrow)
-            LlmStaticSpanReference[cpu_plan->total_sequence_descriptors]);
-    candidate.v_references.reset(
-        new (std::nothrow)
-            LlmStaticSpanReference[cpu_plan->total_sequence_descriptors]);
-    if (candidate.layer_descriptors == nullptr || candidate.sequence_descriptors == nullptr ||
-        candidate.weight_references == nullptr || candidate.k_references == nullptr ||
-        candidate.v_references == nullptr) {
+    if (plan.kv_layout == LlmKvLayout::Paged &&
+        cpu_plan->paged.has_value()) {
+      candidate.paged_layer_descriptors.reset(
+          new (std::nothrow)
+              LlmPagedLayerDescriptor[cpu_plan->total_layer_descriptors]);
+      candidate.paged_assignment_descriptors.reset(
+          new (std::nothrow) LlmPagedKvAssignmentDescriptor[
+              cpu_plan->total_sequence_descriptors]);
+      candidate.paged_k_block_references.reset(
+          new (std::nothrow) LlmStaticSpanReference[
+              cpu_plan->paged->layout.total_physical_blocks]);
+      candidate.paged_v_block_references.reset(
+          new (std::nothrow) LlmStaticSpanReference[
+              cpu_plan->paged->layout.total_physical_blocks]);
+      candidate.block_table = cpu_plan->paged->block_table();
+      candidate.block_table_entries =
+          cpu_plan->paged->layout.block_table_entries;
+      candidate.paged_block_reference_count =
+          cpu_plan->paged->layout.total_physical_blocks;
+    } else {
+      candidate.layer_descriptors.reset(
+          new (std::nothrow)
+              LlmLayerDescriptor[cpu_plan->total_layer_descriptors]);
+      candidate.sequence_descriptors.reset(
+          new (std::nothrow) LlmKvSequenceDescriptor[
+              cpu_plan->total_sequence_descriptors]);
+      candidate.k_references.reset(
+          new (std::nothrow) LlmStaticSpanReference[
+              cpu_plan->total_sequence_descriptors]);
+      candidate.v_references.reset(
+          new (std::nothrow) LlmStaticSpanReference[
+              cpu_plan->total_sequence_descriptors]);
+    }
+    const bool descriptor_allocation_failed =
+        candidate.weight_references == nullptr ||
+        (plan.kv_layout == LlmKvLayout::Paged
+             ? candidate.paged_layer_descriptors == nullptr ||
+                   candidate.paged_assignment_descriptors == nullptr ||
+                   candidate.paged_k_block_references == nullptr ||
+                   candidate.paged_v_block_references == nullptr ||
+                   candidate.block_table == nullptr
+             : candidate.layer_descriptors == nullptr ||
+                   candidate.sequence_descriptors == nullptr ||
+                   candidate.k_references == nullptr ||
+                   candidate.v_references == nullptr);
+    if (descriptor_allocation_failed) {
       result.reason_code = LlmExecutorReason::DESCRIPTOR_ALLOCATION_FAILED;
       return result;
     }
@@ -1018,6 +2195,10 @@ LlmExpectedChecksumResult calculate_llm_expected_checksums(const LlmMemoryWorkPl
     if (!scenario_plan_matches_model(model_plan, scenario_plan)) {
       result.reason_code = LlmExecutorReason::SCENARIO_PLAN_MISMATCH;
       return result;
+    }
+    if (model_plan.kv_layout == LlmKvLayout::Paged) {
+      return calculate_paged_expected_checksums(model_plan, scenario_plan,
+                                                resources);
     }
 
     result.workers.resize(cpu_plan->effective_workers);
@@ -1144,6 +2325,10 @@ LlmExecutorResult execute_llm_scenario(const LlmMemoryWorkPlan& model_plan, cons
     }
     result.expected_checksums = std::move(expected.workers);
     result.expected_run_checksum = expected.run_checksum;
+    if (!reset_paged_append_slots(model_plan, resources)) {
+      result.reason_code = LlmExecutorReason::INVALID_RESOURCES;
+      return result;
+    }
     result.actual_checksums.resize(cpu_plan->effective_workers);
 
     std::vector<uint8_t> worker_succeeded;
@@ -1191,15 +2376,23 @@ LlmExecutorResult execute_llm_scenario(const LlmMemoryWorkPlan& model_plan, cons
             }
           }
 
-          const LlmKernelInvocation invocation{resources.worker_layers(worker_index),
-                                               resources.worker_sequences(worker_index),
-                                               static_cast<uint64_t>(
-                                                   cpu_plan->layer_descriptors_per_worker),
-                                               static_cast<uint64_t>(scenario_plan.work_units),
-                                               llm_scenario_flags(scenario_plan.scenario),
-                                               scenario_plan.scenario_seed,
-                                               &result.actual_checksums[worker_index],
-                                               worker_index};
+          LlmKernelInvocation invocation;
+          invocation.layers = resources.worker_layers(worker_index);
+          invocation.sequences = resources.worker_sequences(worker_index);
+          invocation.layer_count = static_cast<uint64_t>(
+              cpu_plan->layer_descriptors_per_worker);
+          invocation.work_unit_count =
+              static_cast<uint64_t>(scenario_plan.work_units);
+          invocation.scenario_flags =
+              llm_scenario_flags(scenario_plan.scenario);
+          invocation.scenario_seed = scenario_plan.scenario_seed;
+          invocation.output = &result.actual_checksums[worker_index];
+          invocation.worker_index = worker_index;
+          invocation.kv_layout = model_plan.kv_layout;
+          invocation.paged_layers =
+              resources.worker_paged_layers(worker_index);
+          invocation.paged_assignments =
+              resources.worker_paged_assignments(worker_index);
           observe_event(test_control, LlmExecutorEvent::KernelStarted, worker_index);
           bool succeeded = false;
           try {
@@ -1314,8 +2507,17 @@ LlmExecutorResult execute_llm_scenario(const LlmMemoryWorkPlan& model_plan, cons
           equal_worker_checksum(result.expected_checksums[worker_index], result.actual_checksums[worker_index]);
     }
     result.checksum_evaluated = true;
+
+    result.post_validation_evaluated = true;
+    result.post_validation_valid =
+        model_plan.kv_layout != LlmKvLayout::Paged ||
+        validate_paged_post_execution(model_plan, scenario_plan, resources);
     if (!result.checksum_valid) {
       result.reason_code = LlmExecutorReason::CHECKSUM_MISMATCH;
+      return result;
+    }
+    if (!result.post_validation_valid) {
+      result.reason_code = LlmExecutorReason::PAGED_POST_VALIDATION_FAILED;
       return result;
     }
 

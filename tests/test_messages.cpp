@@ -214,6 +214,12 @@ TEST(MessagesTest, LlmMemoryCliMessagesHaveExactOutput) {
       " bytes).\n"
       "      --context-tokens <count>\n"
       "                          Required fixed visible context, including the current token.\n"
+      "      --kv-layout <contiguous|paged>\n"
+      "                          KV storage layout (default: contiguous).\n"
+      "      --kv-block-tokens <count>\n"
+      "                          Required only for paged KV; must be a positive power of two\n"
+      "                          no greater than UINT32_MAX; it may exceed the visible context.\n"
+      "                          Rejected for contiguous KV.\n"
       "      --batch-size <count>\n"
       "                          Batch sequences per decode step (default: " +
       std::to_string(Constants::LLM_DEFAULT_BATCH_SIZE) +
@@ -240,7 +246,8 @@ TEST(MessagesTest, LlmMemoryCliMessagesHaveExactOutput) {
        "--llm-memory requires --weight-size-mb <MiB>, --layers <count>, "
        "--query-heads <count>, --kv-heads <count>, --head-dim <count>, and "
        "--context-tokens <count>; it allows only optional "
-       "--kv-element-bytes <1|2|4>, --batch-size <count>, "
+       "--kv-element-bytes <1|2|4>, --kv-layout <contiguous|paged>, "
+       "--kv-block-tokens <count>, --batch-size <count>, "
        "-t/--threads <count>, -i/--iterations <count>, "
        "-r/--count <count>, --seed <uint64>, -o/--output <target>, and "
        "-h/--help (no other options allowed)"},
@@ -260,10 +267,15 @@ TEST(MessagesTest, LlmMemoryCliMessagesHaveExactOutput) {
        Messages::error_llm_memory_run_failed("checksum-mismatch"),
        "Synthetic LLM memory profile failed "
        "(reason_code=checksum-mismatch)"},
+      {"paged table protection",
+       Messages::error_llm_paged_table_protection_failed(),
+       "Failed to make the paged KV block table read-only"},
       {"positive integer", Messages::llm_memory_reason_positive_integer(),
        "must be a positive integer"},
       {"KV width", Messages::llm_memory_reason_kv_element_bytes(),
        "must be exactly 1, 2, or 4"},
+      {"KV layout", Messages::llm_memory_reason_kv_layout(),
+       "must be exactly contiguous or paged"},
       {"platform size", Messages::llm_memory_reason_platform_size_range(),
        "out of range for a platform size"},
       {"usage", Messages::llm_memory_usage_options("memory_benchmark"),
@@ -301,6 +313,25 @@ TEST(MessagesTest, LlmMemoryCliMessagesHaveExactOutput) {
       {"decode geometry", Messages::report_llm_memory_decode_geometry(8, 4.0),
        "  Visible context tokens:     8\n"
        "  Traffic crossover:          4.00 visible context tokens"},
+      {"paged layout",
+       Messages::report_llm_memory_paged_layout(
+           {4, 2, 2, 4, 128, 4, 128, 384, 512, 128, 384, 512, 128,
+            2, 8, 4096, "permutation-v1", 99, "0123456789abcdef",
+            "paged-permutation-identity", 20, 80, 1104, "decode step"}),
+       "  Paged KV block tokens (G): 4\n"
+       "  Blocks per sequence (N):   2\n"
+       "  Physical blocks/layer (P_b): 2\n"
+       "  Physical block geometry: total_blocks=4, block_bytes=128\n"
+       "  Terminal block: tokens=4, valid_bytes=128\n"
+       "  K bytes (logical/physical/padding): 384/512/128\n"
+       "  V bytes (logical/physical/padding): 384/512/128\n"
+       "  Block table: 2 uint32 entries, 8 bytes, 4096 page-rounded bytes\n"
+       "  Permutation: version=permutation-v1, seed=99, "
+       "sha256=0123456789abcdef\n"
+       "  Permutation identity: paged-permutation-identity\n"
+       "  Timed block-table metadata / KV-active decode step: 20 lookups, 80 bytes\n"
+       "  Accounted bytes / KV-active decode step: 1104\n"
+       "  Effective model payload excludes timed block-table metadata bytes."},
       {"weights headline",
        Messages::report_llm_memory_scenario_headline(
            "Weights only", "decode step", "decode steps", 1.25, 800.0,
@@ -368,9 +399,12 @@ TEST(MessagesTest, GeneralHelpAdvertisesTheLlmBoundaryExactlyOnce) {
   EXPECT_NE(usage.find("--query-heads"), std::string::npos);
   EXPECT_NE(usage.find("--context-tokens"), std::string::npos);
   EXPECT_NE(usage.find("memory-only interpretation"), std::string::npos);
-  EXPECT_NE(usage.find("JSON uses schema 1 methodology "), std::string::npos);
+  EXPECT_NE(usage.find("JSON uses schema 1 methodologies "),
+            std::string::npos);
   EXPECT_NE(usage.find(
                 Constants::LLM_CPU_DECODE_CONTIGUOUS_METHODOLOGY_VERSION),
+            std::string::npos);
+  EXPECT_NE(usage.find(Constants::LLM_CPU_DECODE_PAGED_METHODOLOGY_VERSION),
             std::string::npos);
   EXPECT_NE(usage.find("checkpoints each terminal scenario"),
             std::string::npos);

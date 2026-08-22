@@ -182,6 +182,8 @@ namespace Constants {
   constexpr size_t LLM_KV_REPLAY_FACTOR = 1;
   constexpr const char* LLM_CPU_DECODE_CONTIGUOUS_METHODOLOGY_VERSION =
       "llm-memory-v1-cpu-decode-contiguous";
+  constexpr const char* LLM_CPU_DECODE_PAGED_METHODOLOGY_VERSION =
+      "llm-memory-v1-cpu-decode-paged";
   constexpr const char* LLM_WORK_PLAN_IDENTITY_VERSION =
       "llm-memory-work-plan-v1";
   constexpr const char* LLM_COMPONENT_IDENTITY_VERSION =
@@ -228,6 +230,15 @@ namespace Constants {
       "llm-paged-metal-execution-v1";
   constexpr const char* LLM_PAGED_CPU_SCHEDULE_VERSION =
       "decode-kv-accounted-prefix-balanced-rotating-v1";
+  constexpr const char* LLM_PAGED_CPU_EXECUTOR_VERSION =
+      "llm-cpu-executor-v1-arm64-decode-paged";
+  constexpr const char* LLM_PAGED_DESCRIPTOR_ABI_VERSION =
+      "llm-memory-paged-descriptor-abi-v1";
+  constexpr const char* LLM_PAGED_BUFFER_PATTERN_VERSION =
+      "llm-paged-physical-buffer-pattern-v1";
+  constexpr const char* LLM_PAGED_READ_CHECKSUM_VERSION =
+      "llm-paged-read-checksum-v1";
+  constexpr size_t LLM_KV_BLOCK_TABLE_HASH_CHUNK_ENTRIES = 1024;
   constexpr const char* LLM_METAL_SEGMENT_LAYOUT_VERSION =
       "whole-element-segments-v1";
 

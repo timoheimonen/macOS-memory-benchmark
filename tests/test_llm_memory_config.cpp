@@ -158,6 +158,7 @@ TEST(LlmMemoryConfigTest, DefaultsMatchFrozenStandaloneContract) {
   EXPECT_EQ(config.head_dimension, 0u);
   EXPECT_EQ(config.kv_element_bytes, 2u);
   EXPECT_EQ(config.visible_context_tokens, 0u);
+  EXPECT_EQ(config.kv_block_tokens, 0u);
   EXPECT_EQ(config.batch_size, 1u);
   EXPECT_EQ(config.requested_workers, 0u);
   EXPECT_EQ(config.available_workers, 0u);
@@ -167,6 +168,8 @@ TEST(LlmMemoryConfigTest, DefaultsMatchFrozenStandaloneContract) {
   EXPECT_FALSE(config.user_specified_iterations);
   EXPECT_FALSE(config.user_specified_seed);
   EXPECT_FALSE(config.user_specified_workers);
+  EXPECT_FALSE(config.user_specified_kv_layout);
+  EXPECT_FALSE(config.user_specified_kv_block_tokens);
   EXPECT_FALSE(config.help_printed);
   EXPECT_TRUE(config.output_file.empty());
   EXPECT_TRUE(config.argv.empty());
@@ -192,6 +195,8 @@ TEST(LlmMemoryConfigTest,
   EXPECT_EQ(config.head_dimension, 8u);
   EXPECT_EQ(config.kv_element_bytes, 2u);
   EXPECT_EQ(config.visible_context_tokens, 3u);
+  EXPECT_EQ(config.kv_layout, LlmKvLayout::Contiguous);
+  EXPECT_EQ(config.kv_block_tokens, 0u);
   EXPECT_EQ(config.batch_size, 1u);
   EXPECT_EQ(config.requested_workers, 8u);
   EXPECT_EQ(config.available_workers, 8u);
@@ -201,6 +206,8 @@ TEST(LlmMemoryConfigTest,
   EXPECT_FALSE(config.user_specified_iterations);
   EXPECT_FALSE(config.user_specified_seed);
   EXPECT_FALSE(config.user_specified_workers);
+  EXPECT_FALSE(config.user_specified_kv_layout);
+  EXPECT_FALSE(config.user_specified_kv_block_tokens);
   EXPECT_FALSE(config.help_printed);
   EXPECT_TRUE(config.output_file.empty());
   EXPECT_EQ(config.argv, arguments);
@@ -217,6 +224,8 @@ TEST(LlmMemoryConfigTest, ParserPreservesEveryExplicitFieldAndAlias) {
       "--head-dim",            "128",
       "--kv-element-bytes",    "4",
       "--context-tokens",      "8192",
+      "--kv-layout",           "paged",
+      "--kv-block-tokens",     "16",
       "--batch-size",          "2",
       "-t",                    "3",
       "-i",                    "4",
@@ -234,6 +243,8 @@ TEST(LlmMemoryConfigTest, ParserPreservesEveryExplicitFieldAndAlias) {
   EXPECT_EQ(config.head_dimension, 128u);
   EXPECT_EQ(config.kv_element_bytes, 4u);
   EXPECT_EQ(config.visible_context_tokens, 8192u);
+  EXPECT_EQ(config.kv_layout, LlmKvLayout::Paged);
+  EXPECT_EQ(config.kv_block_tokens, 16u);
   EXPECT_EQ(config.batch_size, 2u);
   EXPECT_EQ(config.requested_workers, 3u);
   EXPECT_EQ(config.available_workers, 8u);
@@ -243,8 +254,104 @@ TEST(LlmMemoryConfigTest, ParserPreservesEveryExplicitFieldAndAlias) {
   EXPECT_TRUE(config.user_specified_iterations);
   EXPECT_TRUE(config.user_specified_seed);
   EXPECT_TRUE(config.user_specified_workers);
+  EXPECT_TRUE(config.user_specified_kv_layout);
+  EXPECT_TRUE(config.user_specified_kv_block_tokens);
   EXPECT_EQ(config.output_file, "./-");
   EXPECT_EQ(config.argv, arguments);
+}
+
+TEST(LlmMemoryConfigTest,
+     ParserResolvesContiguousAndPagedLayoutSourcesExactly) {
+  LlmParserHooksScope hooks;
+
+  std::vector<std::string> arguments = valid_llm_arguments();
+  arguments.insert(arguments.end(), {"--kv-layout", "contiguous"});
+  LlmMemoryConfig config;
+  ASSERT_EQ(parse_llm_arguments(arguments, config), EXIT_SUCCESS);
+  EXPECT_EQ(config.kv_layout, LlmKvLayout::Contiguous);
+  EXPECT_EQ(config.kv_block_tokens, 0u);
+  EXPECT_TRUE(config.user_specified_kv_layout);
+  EXPECT_FALSE(config.user_specified_kv_block_tokens);
+
+  arguments = valid_llm_arguments();
+  arguments.insert(arguments.end(), {"--kv-block-tokens", "16",
+                                     "--kv-layout", "paged"});
+  ASSERT_EQ(parse_llm_arguments(arguments, config), EXIT_SUCCESS);
+  EXPECT_EQ(config.kv_layout, LlmKvLayout::Paged);
+  EXPECT_EQ(config.kv_block_tokens, 16u);
+  EXPECT_TRUE(config.user_specified_kv_layout);
+  EXPECT_TRUE(config.user_specified_kv_block_tokens);
+}
+
+TEST(LlmMemoryConfigTest,
+     ParserUsesStableOrderIndependentPagedLayoutReasons) {
+  LlmParserHooksScope hooks;
+  struct InvalidCase {
+    std::vector<std::string> suffix;
+    std::string reason_code;
+  };
+  const std::vector<InvalidCase> cases = {
+      {{"--kv-layout", "contiguous", "--kv-block-tokens", "16"},
+       LlmMemoryConfigReason::KV_BLOCK_TOKENS_NOT_APPLICABLE},
+      {{"--kv-block-tokens", "16", "--kv-layout", "contiguous"},
+       LlmMemoryConfigReason::KV_BLOCK_TOKENS_NOT_APPLICABLE},
+      {{"--kv-layout", "paged", "--kv-block-tokens", "0"},
+       LlmMemoryConfigReason::KV_BLOCK_TOKENS_ZERO},
+      {{"--kv-block-tokens", "0", "--kv-layout", "paged"},
+       LlmMemoryConfigReason::KV_BLOCK_TOKENS_ZERO},
+      {{"--kv-layout", "paged", "--kv-block-tokens", "3"},
+       LlmMemoryConfigReason::KV_BLOCK_TOKENS_NOT_POWER_OF_TWO},
+      {{"--kv-block-tokens", "3", "--kv-layout", "paged"},
+       LlmMemoryConfigReason::KV_BLOCK_TOKENS_NOT_POWER_OF_TWO},
+      {{"--kv-layout", "paged", "--kv-block-tokens", "4294967296"},
+       LlmMemoryConfigReason::KV_BLOCK_TOKENS_EXCEEDS_UINT32},
+      {{"--kv-block-tokens", "4294967296", "--kv-layout", "paged"},
+       LlmMemoryConfigReason::KV_BLOCK_TOKENS_EXCEEDS_UINT32},
+  };
+
+  for (const InvalidCase& test_case : cases) {
+    SCOPED_TRACE(::testing::PrintToString(test_case.suffix));
+    std::vector<std::string> arguments = valid_llm_arguments();
+    arguments.insert(arguments.end(), test_case.suffix.begin(),
+                     test_case.suffix.end());
+    LlmMemoryConfig config;
+    const CapturedLlmParse parsed =
+        parse_llm_arguments_capturing(arguments, config);
+    EXPECT_EQ(parsed.result, EXIT_FAILURE);
+    EXPECT_TRUE(parsed.stdout_output.empty());
+    EXPECT_EQ(first_output_line(parsed.stderr_output),
+              Messages::error_prefix() +
+                  Messages::error_llm_memory_config_invalid(
+                      test_case.reason_code));
+  }
+}
+
+TEST(LlmMemoryConfigTest,
+     ParserRequiresPagedBlockTokensAndRejectsUnknownLayout) {
+  LlmParserHooksScope hooks;
+  LlmMemoryConfig config;
+
+  std::vector<std::string> arguments = valid_llm_arguments();
+  arguments.insert(arguments.end(), {"--kv-layout", "paged"});
+  CapturedLlmParse parsed =
+      parse_llm_arguments_capturing(arguments, config);
+  EXPECT_EQ(parsed.result, EXIT_FAILURE);
+  EXPECT_TRUE(parsed.stdout_output.empty());
+  EXPECT_EQ(first_output_line(parsed.stderr_output),
+            Messages::error_prefix() +
+                Messages::error_llm_memory_missing_required_option(
+                    "--kv-block-tokens"));
+
+  arguments = valid_llm_arguments();
+  arguments.insert(arguments.end(), {"--kv-layout", "sparse"});
+  parsed = parse_llm_arguments_capturing(arguments, config);
+  EXPECT_EQ(parsed.result, EXIT_FAILURE);
+  EXPECT_TRUE(parsed.stdout_output.empty());
+  EXPECT_EQ(first_output_line(parsed.stderr_output),
+            Messages::error_prefix() +
+                Messages::error_invalid_value(
+                    "--kv-layout", "sparse",
+                    Messages::llm_memory_reason_kv_layout()));
 }
 
 TEST(LlmMemoryConfigTest,
@@ -324,8 +431,9 @@ TEST(LlmMemoryConfigTest,
   for (const std::string& option : {
            "--weight-size-mb", "--layers", "--query-heads", "--kv-heads",
            "--head-dim", "--kv-element-bytes", "--context-tokens",
-           "--batch-size", "--threads", "--iterations", "--count",
-           "--seed", "--output"}) {
+           "--kv-layout", "--kv-block-tokens", "--batch-size",
+           "--threads", "--iterations", "--count", "--seed",
+           "--output"}) {
     SCOPED_TRACE(option);
     LlmMemoryConfig config;
     const CapturedLlmParse parsed = parse_llm_arguments_capturing(
@@ -355,6 +463,10 @@ TEST(LlmMemoryConfigTest,
       {{"--kv-element-bytes", "2", "--kv-element-bytes", "2"},
        "--kv-element-bytes"},
       {{"--context-tokens", "3"}, "--context-tokens"},
+      {{"--kv-layout", "contiguous", "--kv-layout", "paged"},
+       "--kv-layout"},
+      {{"--kv-block-tokens", "16", "--kv-block-tokens", "32"},
+       "--kv-block-tokens"},
       {{"--batch-size", "1", "--batch-size", "1"}, "--batch-size"},
       {{"-t", "2", "--threads", "2"}, "--threads"},
       {{"-i", "1", "--iterations", "1"}, "--iterations"},
@@ -390,8 +502,8 @@ TEST(LlmMemoryConfigTest,
   const std::vector<std::string> options = {
       "--weight-size-mb", "--layers", "--query-heads", "--kv-heads",
       "--head-dim",       "--kv-element-bytes", "--context-tokens",
-      "--batch-size",     "--threads",          "--iterations",
-      "--count"};
+      "--kv-block-tokens", "--batch-size",      "--threads",
+      "--iterations",     "--count"};
 
   for (const std::string& option : options) {
     for (const std::string& token : invalid_tokens) {
@@ -745,6 +857,31 @@ TEST(LlmMemoryConfigTest, ValidatesPositiveGeometryAndHeadSharing) {
   config.visible_context_tokens = 0;
   expect_invalid(config, LlmMemoryConfigReason::CONTEXT_TOKENS_REQUIRED);
   config = valid_config();
+  config.kv_layout = LlmKvLayout::Paged;
+  expect_invalid(config, LlmMemoryConfigReason::KV_BLOCK_TOKENS_REQUIRED);
+  config = valid_config();
+  config.kv_layout = LlmKvLayout::Paged;
+  config.user_specified_kv_block_tokens = true;
+  expect_invalid(config, LlmMemoryConfigReason::KV_BLOCK_TOKENS_ZERO);
+  config = valid_config();
+  config.kv_layout = LlmKvLayout::Paged;
+  config.kv_block_tokens = 3;
+  config.user_specified_kv_block_tokens = true;
+  expect_invalid(
+      config, LlmMemoryConfigReason::KV_BLOCK_TOKENS_NOT_POWER_OF_TWO);
+  config = valid_config();
+  config.kv_layout = LlmKvLayout::Paged;
+  config.kv_block_tokens =
+      static_cast<size_t>(std::numeric_limits<uint32_t>::max()) + 1;
+  config.user_specified_kv_block_tokens = true;
+  expect_invalid(config,
+                 LlmMemoryConfigReason::KV_BLOCK_TOKENS_EXCEEDS_UINT32);
+  config = valid_config();
+  config.kv_block_tokens = 16;
+  config.user_specified_kv_block_tokens = true;
+  expect_invalid(config,
+                 LlmMemoryConfigReason::KV_BLOCK_TOKENS_NOT_APPLICABLE);
+  config = valid_config();
   config.batch_size = 0;
   expect_invalid(config, LlmMemoryConfigReason::BATCH_SIZE_REQUIRED);
   config = valid_config();
@@ -782,6 +919,14 @@ TEST(LlmMemoryConfigTest, ValidatesPositiveGeometryAndHeadSharing) {
   config = valid_config();
   config.query_head_count = 8;
   config.kv_head_count = 1;
+  EXPECT_TRUE(validate_llm_memory_config(config).valid);
+  config = valid_config();
+  config.kv_layout = LlmKvLayout::Paged;
+  config.kv_block_tokens = 16;
+  config.user_specified_kv_layout = true;
+  config.user_specified_kv_block_tokens = true;
+  EXPECT_TRUE(validate_llm_memory_config(config).valid);
+  config.kv_block_tokens = static_cast<size_t>(1) << 31;
   EXPECT_TRUE(validate_llm_memory_config(config).valid);
 }
 

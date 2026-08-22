@@ -37,6 +37,7 @@
 #ifndef MESSAGES_MESSAGES_API_H
 #define MESSAGES_MESSAGES_API_H
 
+#include <cstddef>
 #include <cstdint>
 #include <string>
 
@@ -157,8 +158,10 @@ std::string error_llm_memory_config_invalid(
 std::string error_llm_memory_iterations_exceed_limit(size_t requested,
                                                      size_t maximum);
 std::string error_llm_memory_run_failed(const std::string& reason_code);
+const std::string& error_llm_paged_table_protection_failed();
 const std::string& llm_memory_reason_positive_integer();
 const std::string& llm_memory_reason_kv_element_bytes();
+const std::string& llm_memory_reason_kv_layout();
 const std::string& llm_memory_reason_platform_size_range();
 const std::string& error_only_flags_require_benchmark();
 const std::string& error_sweep_requires_parameter();
@@ -251,6 +254,34 @@ std::string report_llm_memory_payload(
     size_t kv_write_bytes_per_work_unit);
 std::string report_llm_memory_decode_geometry(
     size_t visible_context_tokens, double traffic_crossover_context_tokens);
+struct LlmPagedLayoutReportValues {
+  size_t block_tokens = 0;
+  size_t blocks_per_sequence = 0;
+  size_t physical_blocks_per_layer = 0;
+  size_t total_physical_blocks = 0;
+  size_t block_bytes = 0;
+  size_t terminal_block_tokens = 0;
+  size_t terminal_valid_bytes = 0;
+  size_t k_logical_bytes = 0;
+  size_t k_physical_bytes = 0;
+  size_t k_padding_bytes = 0;
+  size_t v_logical_bytes = 0;
+  size_t v_physical_bytes = 0;
+  size_t v_padding_bytes = 0;
+  size_t block_table_entries = 0;
+  size_t block_table_bytes = 0;
+  size_t block_table_page_rounded_bytes = 0;
+  std::string permutation_version;
+  uint64_t permutation_seed = 0;
+  std::string permutation_sha256;
+  std::string permutation_identity;
+  size_t metadata_lookups_per_work_unit = 0;
+  size_t metadata_bytes_per_work_unit = 0;
+  size_t accounted_bytes_per_work_unit = 0;
+  std::string work_unit_name;
+};
+std::string report_llm_memory_paged_layout(
+    const LlmPagedLayoutReportValues& values);
 std::string report_llm_memory_scenario_headline(
     const std::string& scenario_name, const std::string& work_unit_name,
     const std::string& plural_work_unit_name, double work_unit_latency_ms,

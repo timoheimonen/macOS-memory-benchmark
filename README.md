@@ -21,7 +21,8 @@ It is designed for controlled microarchitectural investigation rather than a sin
 - **Core-to-core analysis:** calibrated acquire/release token-exchange measurements under scheduler-hint scenarios.
 - **Metal GPU bandwidth:** standalone read/write/copy compute kernels with GPU timestamps and validation metadata.
 - **Synthetic LLM decode-memory profile:** standalone CPU measurements of active-weight reads, KV-history reads, and
-  current-token KV appends for an explicitly supplied fixed-context model geometry.
+  current-token KV appends for an explicitly supplied fixed-context model geometry, using either contiguous or
+  deterministic paged KV storage.
 - **Reproducible experiments:** explicit seeds, repeated loops, built-in Cartesian parameter sweeps, recoverable JSON
   file checkpoints, and final machine-readable stdout for every result-producing direct mode and CPU sweep.
 
@@ -84,6 +85,14 @@ memory_benchmark --llm-memory --weight-size-mb 64 --layers 4 \
   --iterations 1 --count 3
 ```
 
+Select the paged KV layout with an explicit power-of-two block size in tokens:
+
+```bash
+memory_benchmark --llm-memory --weight-size-mb 64 --layers 4 \
+  --query-heads 8 --kv-heads 2 --head-dim 64 --context-tokens 512 \
+  --kv-layout paged --kv-block-tokens 16 --iterations 1 --count 3 --seed 42
+```
+
 For longer runs, prevent system sleep and collect repeated measurements:
 
 ```bash
@@ -111,17 +120,22 @@ checkpoints are required; see the [Machine-Readable CLI API](documents/API.md) s
 | `--analyze-tlb` | Standalone paired spread/packed TLB analysis with adaptive measurement rounds, confidence intervals, and boundary validation. |
 | `--analyze-core2core` | Calibrated two-thread acquire/release token-protocol round-trip latency under best-effort macOS scheduler hints. |
 | `--gpu-bandwidth` | Standalone Metal GPU read/write/copy effective compute-payload bandwidth. |
-| `--llm-memory` | Standalone synthetic LLM memory profile. The active schema-v1 profile is CPU/decode/contiguous, with weights-only, KV-only, and layer-interleaved mixed scenarios over full-size cacheable weight/K/V mappings. |
+| `--llm-memory` | Standalone synthetic CPU decode-memory profile with contiguous or deterministic paged KV storage, plus weights-only, KV-only, and layer-interleaved mixed scenarios over full-size cacheable resources. |
 | `--sweep <key=a,b>` | Cartesian parameter sweep for supported CPU, pattern, TLB, and core-to-core modes; requires `--output`. GPU schema 1 and LLM schema 1 do not support sweeps. |
 
 Primary modes are intentionally separate and accept different option sets. Use `memory_benchmark -h` or the [User Manual](documents/MANUAL.md) for defaults, valid combinations, and the complete option reference.
 
 `--llm-memory` requires explicit active weight size, layer count, query/KV head geometry, head dimension, and visible
-context. It allocates the requested weight, K, and V working sets in full, initializes and pre-touches them outside the
-timed region, and measures three versioned memory-only scenarios. The generic schema records `backend: "cpu"`,
-`phase: "decode"`, `kv_layout: "contiguous"`, `work_unit_kind: "decode_step"`, and methodology
-`llm-memory-v1-cpu-decode-contiguous`. Metal, prefill, and paged-KV profiles are reserved vocabulary but are not yet
-selectable or supported. The profile does not run Transformer mathematics or report inference tokens/s. Its
+context. `--kv-layout` defaults to `contiguous`. Selecting `paged` requires exactly one
+`--kv-block-tokens <G>` value; `G` must be positive, a power of two, and no greater than `UINT32_MAX`.
+`--kv-block-tokens` is rejected with `contiguous`, while `G` may exceed the visible context. The command allocates and
+initializes the requested weight and logical KV contents in full. Paged runs additionally allocate full physical K/V
+blocks, their suffix padding, and one seeded uint32 block table. Initialization, pre-touch, permutation generation,
+and validation remain outside the timed region.
+
+The generic schema records `backend: "cpu"`, `phase: "decode"`, `work_unit_kind: "decode_step"`, the selected
+`kv_layout`, and methodology `llm-memory-v1-cpu-decode-<layout>`. Metal and prefill remain unavailable and never receive
+an implicit fallback. The profile does not run Transformer mathematics or report inference tokens/s. Its
 machine-readable synthetic work-unit rate is named `synthetic_memory_work_units_per_second`.
 
 When `--iterations` is omitted, standard bandwidth, pattern, GPU operations, and the three LLM scenarios calibrate their
@@ -190,6 +204,12 @@ caffeinate -i -d memory_benchmark --llm-memory --weight-size-mb 4096 --layers 32
   --iterations 1 --count 3 --seed 42 --output llm_memory.json
 ```
 
+To measure the same logical decode geometry through a seeded paged layout, add:
+
+```text
+--kv-layout paged --kv-block-tokens 16
+```
+
 The same schema 1 payload can be captured once from final-only stdout:
 
 ```bash
@@ -215,12 +235,15 @@ Treat benchmark values as measurements of the configured workload under the obse
 - GPU GB/s is exact **effective compute-payload bandwidth** divided by Metal GPU time. Private storage is unified memory rather than separate VRAM, copy counts aggregate read plus write payload, and physical DRAM residency remains unverified.
 - CPU and GPU GB/s values are not directly comparable: the kernels, timing boundaries, parallelism, resource modes, and validation work differ.
 - LLM GB/s is exact **logical effective model payload** divided by the synchronized CPU scenario time. The context is fixed,
-  includes the current token, and uses full-size cacheable mappings; none of those properties proves physical DRAM
-  service. Weights-only and KV-only are component baselines, while mixed is one layer-interleaved workload and must not
-  be split into independent weight- and KV-bandwidth claims.
+  includes the current token, and uses full-size cacheable resources; none of those properties proves physical DRAM
+  service. In paged mode, uint32 block-table loads occur inside the timed assembly path, but their bytes are reported as
+  layout metadata and excluded from the effective-model-payload GB/s numerator. Weights-only and KV-only are component
+  baselines, while mixed is one layer-interleaved workload and must not be split into independent weight- and
+  KV-bandwidth claims.
 - An LLM synthetic memory work unit (a decode step in the active profile) is not an inference token. The profile excludes
   Transformer compute, framework dispatch,
-  compute-memory overlap, GPU/ANE paths, paged attention, growing context, and model loading.
+  compute-memory overlap, GPU/ANE paths, runtime page allocation, prefix sharing, sliding-window KV, growing context,
+  and model loading.
 - The LLM traffic classification version `llm-exact-weight-vs-kv-read-payload-v1` compares exact weight and KV-read
   bytes only. `near_crossover` means exact equality and is not a measured hardware-bottleneck claim.
 - TLB-locality controls pointer-chain construction, not hardware TLB residency. Standard locality comparisons combine cache, locality, and translation effects; use `--analyze-tlb` for controlled translation-boundary conclusions.
@@ -284,7 +307,7 @@ recognizes the current console labels only and is neither JSON-schema nor histor
 - [Core-to-Core Whitepaper](documents/CORE_TO_CORE_WHITEPAPER.md): LDAR/STLR handoff protocol, scheduler-hint scenarios, and JSON schema.
 - [GPU Bandwidth Whitepaper](documents/GPU_BANDWIDTH_WHITEPAPER.md): Metal methodology, timing, validation, resource model, and interpretation limits.
 - [LLM Memory Profile Whitepaper](documents/LLM_MEMORY_PROFILE_WHITEPAPER.md): generic schema-v1 vocabulary plus the
-  active CPU/decode/contiguous traffic, timing, checksum, and interpretation contract.
+  active CPU/decode contiguous and paged traffic, timing, checksum, and interpretation contracts.
 
 Runtime behavior and `memory_benchmark -h` are the authoritative sources when documentation differs.
 

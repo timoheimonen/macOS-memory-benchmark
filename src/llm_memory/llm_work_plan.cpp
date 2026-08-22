@@ -249,6 +249,31 @@ std::string build_model_plan_identity(const LlmMemoryWorkPlan& plan) {
                         geometry.kv_bytes_per_visible_token);
   append_identity_field(identity, "k_or_v_sequence_visible_bytes",
                         geometry.k_or_v_sequence_visible_bytes);
+  append_identity_field(identity, "kv_block_tokens",
+                        geometry.kv_block_tokens);
+  append_identity_field(identity, "kv_blocks_per_sequence",
+                        geometry.kv_blocks_per_sequence);
+  append_identity_field(identity, "physical_blocks_per_layer",
+                        geometry.physical_blocks_per_layer);
+  append_identity_field(identity, "total_physical_blocks",
+                        geometry.total_physical_blocks);
+  append_identity_field(identity, "kv_block_bytes", geometry.kv_block_bytes);
+  append_identity_field(identity, "last_block_tokens",
+                        geometry.last_block_tokens);
+  append_identity_field(identity, "last_block_valid_bytes",
+                        geometry.last_block_valid_bytes);
+  append_identity_field(identity, "decode_append_offset_in_last_block",
+                        geometry.decode_append_offset_in_last_block);
+  append_identity_field(identity, "k_logical_bytes", geometry.k_logical_bytes);
+  append_identity_field(identity, "v_logical_bytes", geometry.v_logical_bytes);
+  append_identity_field(identity, "k_layout_padding_bytes",
+                        geometry.k_layout_padding_bytes);
+  append_identity_field(identity, "v_layout_padding_bytes",
+                        geometry.v_layout_padding_bytes);
+  append_identity_field(identity, "block_table_entries",
+                        geometry.block_table_entries);
+  append_identity_field(identity, "block_table_bytes",
+                        geometry.block_table_bytes);
   append_identity_field(identity, "k_mapping_bytes",
                         geometry.k_mapping_bytes);
   append_identity_field(identity, "v_mapping_bytes",
@@ -285,6 +310,16 @@ std::string build_model_plan_identity(const LlmMemoryWorkPlan& plan) {
                         cpu_plan->total_sequence_descriptors);
   append_identity_field(identity, "descriptor_bytes",
                         cpu_plan->descriptor_bytes);
+  if (cpu_plan->paged.has_value()) {
+    append_identity_field(identity, "paged_layout_identity_size",
+                          cpu_plan->paged->layout_identity.size());
+    append_identity_field(identity, "paged_layout_identity",
+                          cpu_plan->paged->layout_identity);
+    append_identity_field(identity, "paged_execution_identity_size",
+                          cpu_plan->paged->execution_identity.size());
+    append_identity_field(identity, "paged_execution_identity",
+                          cpu_plan->paged->execution_identity);
+  }
   append_identity_field(identity, "base_seed", plan.base_seed);
   append_identity_field(identity, "weight_buffer_seed",
                         plan.weight_buffer_seed);
@@ -356,6 +391,8 @@ std::string build_scenario_plan_identity(const LlmScenarioWorkPlan& plan) {
 bool calculate_planner_storage_bytes(size_t layer_count,
                                      size_t sequence_count_per_worker,
                                      size_t worker_count,
+                                     bool paged_layout,
+                                     size_t ownership_assignment_count,
                                      size_t& planner_storage_bytes) {
   size_t weight_layer_bytes = 0;
   size_t worker_object_bytes = 0;
@@ -363,6 +400,8 @@ bool calculate_planner_storage_bytes(size_t layer_count,
   size_t layer_template_bytes = 0;
   size_t sequence_template_count = 0;
   size_t sequence_template_bytes = 0;
+  size_t ownership_assignment_bytes = 0;
+  size_t ownership_worker_bytes = 0;
   if (!NumericUtils::checked_multiply(layer_count, sizeof(LlmByteRange),
                                       weight_layer_bytes) ||
       !NumericUtils::checked_multiply(worker_count,
@@ -377,20 +416,35 @@ bool calculate_planner_storage_bytes(size_t layer_count,
                                       sequence_count_per_worker,
                                       sequence_template_count) ||
       !NumericUtils::checked_multiply(
-          sequence_template_count, sizeof(LlmKvSequenceRangeTemplate),
-          sequence_template_bytes)) {
+          sequence_template_count,
+          paged_layout ? sizeof(LlmPagedKvAssignmentTemplate)
+                       : sizeof(LlmKvSequenceRangeTemplate),
+          sequence_template_bytes) ||
+      !NumericUtils::checked_multiply(
+          ownership_assignment_count, sizeof(LlmKvCpuBlockAssignment),
+          ownership_assignment_bytes) ||
+      !NumericUtils::checked_multiply(
+          paged_layout ? worker_count : 0, sizeof(size_t),
+          ownership_worker_bytes)) {
     return false;
   }
 
   size_t outer_storage_bytes = 0;
   size_t template_storage_bytes = 0;
+  size_t ownership_storage_bytes = 0;
   return NumericUtils::checked_add(weight_layer_bytes, worker_object_bytes,
                                    outer_storage_bytes) &&
          NumericUtils::checked_add(layer_template_bytes,
                                    sequence_template_bytes,
                                    template_storage_bytes) &&
+         NumericUtils::checked_add(ownership_assignment_bytes,
+                                   ownership_worker_bytes,
+                                   ownership_storage_bytes) &&
          NumericUtils::checked_add(outer_storage_bytes,
                                    template_storage_bytes,
+                                   planner_storage_bytes) &&
+         NumericUtils::checked_add(planner_storage_bytes,
+                                   ownership_storage_bytes,
                                    planner_storage_bytes);
 }
 
@@ -425,18 +479,250 @@ bool calculate_actual_planner_storage_bytes(
                                  planner_storage_bytes) ||
         !add_allocation_capacity(worker.sequences.capacity(),
                                  sizeof(LlmKvSequenceRangeTemplate),
+                                 planner_storage_bytes) ||
+        !add_allocation_capacity(
+            worker.paged_assignments.capacity(),
+            sizeof(LlmPagedKvAssignmentTemplate),
                                  planner_storage_bytes)) {
       return false;
     }
   }
+  if (cpu_plan->paged.has_value() &&
+      (!add_allocation_capacity(
+           cpu_plan->paged->ownership.assignments.capacity(),
+           sizeof(LlmKvCpuBlockAssignment), planner_storage_bytes) ||
+       !add_allocation_capacity(
+           cpu_plan->paged->ownership.worker_accounted_bytes_per_work_unit.capacity(),
+           sizeof(size_t), planner_storage_bytes))) {
+    return false;
+  }
   return true;
+}
+
+bool finalize_plan_identities(LlmMemoryWorkPlan& plan) {
+  const bool paged_layout = plan.kv_layout == LlmKvLayout::Paged;
+  plan.methodology_version =
+      build_llm_methodology_version(plan.backend, plan.phase,
+                                   plan.kv_layout);
+  plan.component_identities.logical_profile_version =
+      Constants::LLM_LOGICAL_PROFILE_VERSION;
+  plan.component_identities.kv_layout_version =
+      paged_layout ? Constants::LLM_PAGED_KV_LAYOUT_VERSION
+                   : Constants::LLM_CONTIGUOUS_KV_LAYOUT_VERSION;
+  if (paged_layout) {
+    plan.component_identities.permutation_version =
+        Constants::LLM_KV_BLOCK_PERMUTATION_VERSION;
+  } else {
+    plan.component_identities.permutation_version.reset();
+  }
+  plan.component_identities.backend_executor_version =
+      paged_layout ? Constants::LLM_PAGED_CPU_EXECUTOR_VERSION
+                   : Constants::LLM_CPU_EXECUTOR_VERSION;
+  plan.component_identities.resource_abi_version =
+      paged_layout ? Constants::LLM_PAGED_DESCRIPTOR_ABI_VERSION
+                   : Constants::LLM_DESCRIPTOR_ABI_VERSION;
+  plan.component_identities.schedule_version =
+      paged_layout ? Constants::LLM_PAGED_CPU_SCHEDULE_VERSION
+                   : Constants::LLM_CPU_SCHEDULE_VERSION;
+  plan.component_identities.timer_policy_version =
+      Constants::LLM_CPU_TIMER_POLICY_VERSION;
+  plan.component_identities.buffer_pattern_version =
+      paged_layout ? Constants::LLM_PAGED_BUFFER_PATTERN_VERSION
+                   : Constants::LLM_BUFFER_PATTERN_VERSION;
+  plan.component_identities.write_pattern_version =
+      Constants::LLM_APPEND_PATTERN_VERSION;
+  plan.component_identities.checksum_pattern_version =
+      paged_layout ? Constants::LLM_PAGED_READ_CHECKSUM_VERSION
+                   : Constants::LLM_READ_CHECKSUM_VERSION;
+  plan.component_identities.msl_revision.reset();
+  plan.component_identities.msl_source_sha256.reset();
+  plan.component_identities.identity =
+      serialize_llm_component_identities(plan.component_identities);
+  plan.plan_identity = build_model_plan_identity(plan);
+  return !plan.methodology_version.empty() &&
+         !plan.component_identities.identity.empty() &&
+         !plan.plan_identity.empty();
+}
+
+bool prepare_paged_identity_shape(LlmMemoryWorkPlan& plan) {
+  LlmCpuExecutionPlan* const cpu_plan = get_llm_cpu_execution_plan(plan);
+  if (cpu_plan == nullptr || !cpu_plan->paged.has_value()) {
+    return false;
+  }
+  LlmPagedCpuExecutionPlan& paged = *cpu_plan->paged;
+  paged.block_table_logical_bytes = paged.layout.memory.block_table_bytes;
+  paged.block_table_mapping_bytes =
+      plan.memory_budget.request.committed_block_table_mapping_bytes;
+  paged.block_table_read_only = false;
+  paged.table_validation.valid = true;
+  paged.table_validation.interrupted = false;
+  paged.table_validation.reason_code = LlmKvLayoutReason::VALID;
+  paged.table_validation.expected_entries =
+      paged.layout.block_table_entries;
+  paged.table_validation.examined_entries =
+      paged.layout.block_table_entries;
+  paged.table_validation.validation_bitset_bytes =
+      paged.layout.memory.validation_bitset_bytes;
+  paged.permutation = build_llm_kv_permutation_identity(
+      paged.layout, derive_llm_kv_permutation_seed(plan.base_seed),
+      std::string(64, '0'));
+  paged.layout_identity =
+      serialize_llm_kv_layout_identity(paged.layout, paged.permutation);
+  paged.execution_identity = paged.ownership.identity;
+  return !paged.permutation.identity.empty() &&
+         !paged.layout_identity.empty() &&
+         !paged.execution_identity.empty();
+}
+
+bool add_identity_bytes(size_t bytes, size_t& total) {
+  return NumericUtils::checked_add(total, bytes, total);
+}
+
+bool build_auxiliary_preflight_view(
+    LlmMemoryWorkPlan& plan, LlmAuxiliaryPreflightView& view) {
+  view = {};
+  LlmCpuExecutionPlan* const cpu_plan = get_llm_cpu_execution_plan(plan);
+  if (cpu_plan == nullptr || !plan.memory_budget.valid ||
+      plan.plan_identity.empty() || cpu_plan->effective_workers == 0) {
+    return false;
+  }
+
+  const bool original_valid = plan.valid;
+  plan.valid = true;
+  view.backend = plan.backend;
+  view.kv_layout = plan.kv_layout;
+  view.effective_workers = cpu_plan->effective_workers;
+  view.total_layer_descriptors = cpu_plan->total_layer_descriptors;
+  view.total_sequence_descriptors = cpu_plan->total_sequence_descriptors;
+  view.k_or_v_static_reference_count =
+      cpu_plan->paged.has_value()
+          ? cpu_plan->paged->layout.total_physical_blocks
+          : cpu_plan->total_sequence_descriptors;
+  view.model_plan_identity_bytes = plan.plan_identity.size();
+
+  constexpr std::array<LlmScenario, kLlmScenarioCount> kScenarios = {
+      LlmScenario::WeightsOnly, LlmScenario::KvOnly,
+      LlmScenario::Mixed};
+  std::array<size_t, kLlmScenarioCount> maximum_work_units{};
+  for (size_t index = 0; index < kLlmScenarioCount; ++index) {
+    const LlmScenarioLimits limits =
+        calculate_llm_scenario_limits(plan.geometry, kScenarios[index]);
+    if (!limits.valid) {
+      plan.valid = original_valid;
+      return false;
+    }
+    maximum_work_units[index] = limits.effective_maximum_work_units;
+    const LlmScenarioWorkPlan scenario = build_llm_scenario_work_plan(
+        plan, kScenarios[index], maximum_work_units[index], false);
+    if (!scenario.valid) {
+      plan.valid = original_valid;
+      return false;
+    }
+    view.maximum_scenario_plan_identity_bytes[index] =
+        scenario.plan_identity.size();
+  }
+  const LlmFrozenScenarioPlans frozen =
+      freeze_llm_scenario_work_plans(plan, maximum_work_units, false);
+  if (!frozen.valid) {
+    plan.valid = original_valid;
+    return false;
+  }
+  view.frozen_reason_code_bytes = frozen.reason_code.size();
+  view.frozen_model_plan_identity_bytes =
+      frozen.model_plan_identity.size();
+  view.frozen_plan_identity_bytes = frozen.plan_identity.size();
+  for (size_t index = 0; index < kLlmScenarioCount; ++index) {
+    view.frozen_scenario_reason_code_bytes[index] =
+        frozen.scenarios[index].reason_code.size();
+    view.frozen_scenario_model_plan_identity_bytes[index] =
+        frozen.scenarios[index].model_plan_identity.size();
+    view.frozen_scenario_plan_identity_bytes[index] =
+        frozen.scenarios[index].plan_identity.size();
+  }
+
+  size_t json_identity_bytes = 0;
+  const LlmComponentIdentities& components = plan.component_identities;
+  const auto add_string = [&](const std::string& value) {
+    return add_identity_bytes(value.size(), json_identity_bytes);
+  };
+  const auto add_optional = [&](const std::optional<std::string>& value) {
+    return !value.has_value() || add_string(*value);
+  };
+  bool json_valid =
+      add_string(plan.plan_identity) &&
+      add_string(plan.methodology_version) &&
+      add_string(components.logical_profile_version) &&
+      add_string(components.kv_layout_version) &&
+      add_optional(components.permutation_version) &&
+      add_string(components.backend_executor_version) &&
+      add_string(components.resource_abi_version) &&
+      add_string(components.schedule_version) &&
+      add_string(components.timer_policy_version) &&
+      add_string(components.buffer_pattern_version) &&
+      add_string(components.write_pattern_version) &&
+      add_string(components.checksum_pattern_version) &&
+      add_optional(components.msl_revision) &&
+      add_optional(components.msl_source_sha256) &&
+      add_string(components.identity);
+  if (json_valid && cpu_plan->paged.has_value()) {
+    const LlmPagedCpuExecutionPlan& paged = *cpu_plan->paged;
+    json_valid =
+        add_string(paged.layout.geometry_identity) &&
+        add_string(paged.layout_identity) &&
+        add_string(paged.execution_identity) &&
+        add_string(paged.table_validation.reason_code) &&
+        add_string(paged.permutation.algorithm_version) &&
+        add_string(paged.permutation.domain_uint64_hex) &&
+        add_string(paged.permutation.sha256) &&
+        add_string(paged.permutation.identity) &&
+        add_string(paged.ownership.reason_code) &&
+        add_string(paged.ownership.layout_geometry_identity) &&
+        add_string(paged.ownership.identity);
+  }
+  plan.valid = original_valid;
+  if (!json_valid) {
+    return false;
+  }
+  view.json_identity_string_bytes = json_identity_bytes;
+  view.valid = true;
+  return true;
+}
+
+bool auxiliary_preflight_views_match(
+    const LlmAuxiliaryPreflightView& lhs,
+    const LlmAuxiliaryPreflightView& rhs) {
+  return lhs.valid && rhs.valid && lhs.backend == rhs.backend &&
+         lhs.kv_layout == rhs.kv_layout &&
+         lhs.effective_workers == rhs.effective_workers &&
+         lhs.total_layer_descriptors == rhs.total_layer_descriptors &&
+         lhs.total_sequence_descriptors == rhs.total_sequence_descriptors &&
+         lhs.k_or_v_static_reference_count ==
+             rhs.k_or_v_static_reference_count &&
+         lhs.model_plan_identity_bytes == rhs.model_plan_identity_bytes &&
+         lhs.maximum_scenario_plan_identity_bytes ==
+             rhs.maximum_scenario_plan_identity_bytes &&
+         lhs.frozen_reason_code_bytes == rhs.frozen_reason_code_bytes &&
+         lhs.frozen_model_plan_identity_bytes ==
+             rhs.frozen_model_plan_identity_bytes &&
+         lhs.frozen_plan_identity_bytes == rhs.frozen_plan_identity_bytes &&
+         lhs.frozen_scenario_reason_code_bytes ==
+             rhs.frozen_scenario_reason_code_bytes &&
+         lhs.frozen_scenario_model_plan_identity_bytes ==
+             rhs.frozen_scenario_model_plan_identity_bytes &&
+         lhs.frozen_scenario_plan_identity_bytes ==
+             rhs.frozen_scenario_plan_identity_bytes &&
+         lhs.json_identity_string_bytes == rhs.json_identity_string_bytes;
 }
 
 void discard_executable_templates(LlmMemoryWorkPlan& plan) {
   std::vector<LlmByteRange>().swap(plan.weight_layers);
+  plan.methodology_version.clear();
+  plan.component_identities = {};
+  plan.plan_identity.clear();
   LlmCpuExecutionPlan* const cpu_plan = get_llm_cpu_execution_plan(plan);
   if (cpu_plan != nullptr) {
     std::vector<LlmWorkerWorkPlan>().swap(cpu_plan->workers);
+    cpu_plan->paged.reset();
     cpu_plan->effective_workers = 0;
   }
 }
@@ -596,13 +882,10 @@ LlmGeometry resolve_llm_geometry(const LlmGeometryRequest& request) {
   geometry.head_dimension = request.head_dimension;
   geometry.kv_element_bytes = request.kv_element_bytes;
   geometry.batch_size = request.batch_size;
+  geometry.kv_block_tokens = request.kv_block_tokens;
 
   if (request.phase != LlmPhase::Decode) {
     geometry.reason_code = LlmWorkPlanReason::PHASE_NOT_ACTIVATED;
-    return geometry;
-  }
-  if (request.kv_layout != LlmKvLayout::Contiguous) {
-    geometry.reason_code = LlmWorkPlanReason::KV_LAYOUT_NOT_ACTIVATED;
     return geometry;
   }
   if (request.active_weight_bytes == 0) {
@@ -631,6 +914,12 @@ LlmGeometry resolve_llm_geometry(const LlmGeometryRequest& request) {
   }
   if (request.visible_context_tokens == 0) {
     geometry.reason_code = LlmWorkPlanReason::CONTEXT_TOKENS_ZERO;
+    return geometry;
+  }
+  if (request.kv_layout == LlmKvLayout::Contiguous &&
+      request.kv_block_tokens != 0) {
+    geometry.reason_code =
+        LlmWorkPlanReason::KV_BLOCK_TOKENS_NOT_APPLICABLE;
     return geometry;
   }
   if (request.batch_size == 0) {
@@ -689,11 +978,44 @@ LlmGeometry resolve_llm_geometry(const LlmGeometryRequest& request) {
                                       layer_batch_count) ||
       !NumericUtils::checked_multiply(
           layer_batch_count, geometry.k_or_v_sequence_visible_bytes,
-          geometry.k_mapping_bytes)) {
+          geometry.k_logical_bytes)) {
     geometry.reason_code = LlmWorkPlanReason::KV_MAPPING_BYTES_OVERFLOW;
     return geometry;
   }
-  geometry.v_mapping_bytes = geometry.k_mapping_bytes;
+  geometry.v_logical_bytes = geometry.k_logical_bytes;
+  if (request.kv_layout == LlmKvLayout::Paged) {
+    const LlmKvLayoutPlan paged_layout = build_llm_kv_layout_plan(
+        {request.visible_context_tokens, request.kv_block_tokens,
+         request.layer_count, request.batch_size,
+         geometry.k_or_v_record_bytes_per_layer});
+    if (!paged_layout.valid) {
+      geometry.reason_code = paged_layout.reason_code;
+      return geometry;
+    }
+    geometry.kv_blocks_per_sequence = paged_layout.blocks_per_sequence;
+    geometry.physical_blocks_per_layer =
+        paged_layout.physical_blocks_per_layer;
+    geometry.total_physical_blocks = paged_layout.total_physical_blocks;
+    geometry.kv_block_bytes = paged_layout.block_bytes;
+    geometry.last_block_tokens = paged_layout.last_block_tokens;
+    geometry.last_block_valid_bytes = paged_layout.last_block_valid_bytes;
+    geometry.decode_append_offset_in_last_block =
+        paged_layout.decode_append_offset_in_last_block;
+    geometry.k_layout_padding_bytes =
+        paged_layout.memory.k_layout_padding_bytes;
+    geometry.v_layout_padding_bytes =
+        paged_layout.memory.v_layout_padding_bytes;
+    geometry.block_table_entries = paged_layout.block_table_entries;
+    geometry.block_table_bytes = paged_layout.memory.block_table_bytes;
+    geometry.k_mapping_bytes = paged_layout.memory.k_physical_bytes;
+    geometry.v_mapping_bytes = paged_layout.memory.v_physical_bytes;
+  } else if (request.kv_layout == LlmKvLayout::Contiguous) {
+    geometry.k_mapping_bytes = geometry.k_logical_bytes;
+    geometry.v_mapping_bytes = geometry.v_logical_bytes;
+  } else {
+    geometry.reason_code = LlmWorkPlanReason::KV_LAYOUT_NOT_ACTIVATED;
+    return geometry;
+  }
   if (!NumericUtils::checked_add(geometry.k_mapping_bytes,
                                  geometry.v_mapping_bytes,
                                  geometry.kv_capacity_bytes)) {
@@ -752,13 +1074,16 @@ LlmMemoryBudgetRequest build_llm_memory_budget_request(
     const LlmGeometry& geometry, size_t descriptor_bytes,
     size_t planner_storage_bytes,
     size_t checksum_auxiliary_bytes, size_t orchestration_auxiliary_bytes,
-    size_t mapping_granularity_bytes) {
+    size_t mapping_granularity_bytes, size_t block_table_mapping_bytes,
+    size_t layout_transient_bytes) {
   LlmMemoryBudgetRequest request;
   request.mapping_granularity_bytes = mapping_granularity_bytes;
   request.descriptor_bytes = descriptor_bytes;
   request.planner_storage_bytes = planner_storage_bytes;
   request.checksum_auxiliary_bytes = checksum_auxiliary_bytes;
   request.orchestration_auxiliary_bytes = orchestration_auxiliary_bytes;
+  request.requested_block_table_mapping_bytes = block_table_mapping_bytes;
+  request.layout_transient_bytes = layout_transient_bytes;
   if (!geometry.valid) {
     request.reason_code = geometry.reason_code;
     return request;
@@ -781,7 +1106,11 @@ LlmMemoryBudgetRequest build_llm_memory_budget_request(
           request.committed_k_mapping_bytes) ||
       !NumericUtils::checked_round_up(
           request.requested_v_mapping_bytes, mapping_granularity_bytes,
-          request.committed_v_mapping_bytes)) {
+          request.committed_v_mapping_bytes) ||
+      (block_table_mapping_bytes != 0 &&
+       !NumericUtils::checked_round_up(
+           block_table_mapping_bytes, mapping_granularity_bytes,
+           request.committed_block_table_mapping_bytes))) {
     request.reason_code = LlmWorkPlanReason::MAPPING_ROUND_UP_OVERFLOW;
     return request;
   }
@@ -809,12 +1138,25 @@ LlmMemoryBudgetRequest build_llm_memory_budget_request(
     request.reason_code = LlmWorkPlanReason::AUXILIARY_BYTES_OVERFLOW;
     return request;
   }
-  if (!NumericUtils::checked_add(request.committed_data_bytes,
+  size_t resident_runtime_bytes = 0;
+  if (!NumericUtils::checked_add(
+          request.committed_data_bytes,
+          request.committed_block_table_mapping_bytes,
+          resident_runtime_bytes) ||
+      !NumericUtils::checked_add(resident_runtime_bytes,
                                  request.auxiliary_bytes,
-                                 request.required_total_bytes)) {
+                                 request.runtime_peak_bytes) ||
+      !NumericUtils::checked_add(
+          request.committed_block_table_mapping_bytes,
+          request.layout_transient_bytes, request.setup_peak_bytes) ||
+      !NumericUtils::checked_add(request.setup_peak_bytes,
+                                 request.planner_storage_bytes,
+                                 request.setup_peak_bytes)) {
     request.reason_code = LlmWorkPlanReason::MEMORY_REQUIREMENT_OVERFLOW;
     return request;
   }
+  request.required_total_bytes =
+      std::max(request.setup_peak_bytes, request.runtime_peak_bytes);
 
   request.valid = true;
   request.reason_code = LlmWorkPlanReason::VALID;
@@ -860,8 +1202,9 @@ LlmMemoryBudget evaluate_llm_memory_budget(
   return budget;
 }
 
-LlmMemoryWorkPlan build_llm_memory_work_plan(
-    const LlmMemoryWorkPlanRequest& request) {
+LlmMemoryWorkPlan build_llm_memory_work_plan_candidate(
+    const LlmMemoryWorkPlanRequest& request,
+    const LlmKvStopRequested& stop_requested) {
   LlmMemoryWorkPlan plan;
   plan.backend = request.backend;
   if (request.backend == LlmMemoryBackend::Metal) {
@@ -914,21 +1257,63 @@ LlmMemoryWorkPlan build_llm_memory_work_plan(
     return plan;
   }
 
+  const bool paged_layout = plan.kv_layout == LlmKvLayout::Paged;
+  LlmKvLayoutPlan paged_geometry;
+  size_t paged_layer_sequence_count = 0;
+  size_t paged_worker_coverage_limit = 0;
+  if (paged_layout) {
+    paged_geometry = build_llm_kv_layout_plan(
+        {request.geometry.visible_context_tokens,
+         request.geometry.kv_block_tokens, request.geometry.layer_count,
+         request.geometry.batch_size,
+         plan.geometry.k_or_v_record_bytes_per_layer});
+    if (!paged_geometry.valid) {
+      plan.reason_code = paged_geometry.reason_code;
+      return plan;
+    }
+    if (!NumericUtils::checked_multiply(
+            paged_geometry.layer_count, paged_geometry.batch_size,
+            paged_layer_sequence_count) ||
+        !NumericUtils::checked_add(
+            paged_layer_sequence_count,
+            paged_geometry.blocks_per_sequence - 1,
+            paged_worker_coverage_limit)) {
+      plan.reason_code = LlmWorkPlanReason::LAYER_SEQUENCE_COUNT_OVERFLOW;
+      return plan;
+    }
+  }
+
   const size_t weight_layer_base =
       request.geometry.active_weight_bytes / request.geometry.layer_count;
   const size_t weight_layer_remainder =
       request.geometry.active_weight_bytes % request.geometry.layer_count;
   const size_t maximum_weight_layer_bytes =
       weight_layer_base + (weight_layer_remainder != 0 ? 1 : 0);
+  const size_t maximum_kv_workers =
+      paged_layout
+          ? std::min(paged_geometry.total_physical_blocks,
+                     paged_worker_coverage_limit)
+                   : plan.geometry.k_or_v_sequence_visible_bytes;
   const size_t maximum_shared_worker_count =
-      std::min(maximum_weight_layer_bytes,
-               plan.geometry.k_or_v_sequence_visible_bytes);
+      std::min(maximum_weight_layer_bytes, maximum_kv_workers);
   cpu_plan->effective_workers =
       std::min({request.requested_workers, request.available_workers,
                 maximum_shared_worker_count});
   if (cpu_plan->effective_workers == 0) {
     plan.reason_code = LlmWorkPlanReason::NO_EXECUTABLE_WORKER;
     return plan;
+  }
+
+  size_t ownership_assignment_count = 0;
+  if (paged_layout) {
+    const size_t active_workers = std::min(
+        cpu_plan->effective_workers, paged_geometry.blocks_per_sequence);
+    if (!NumericUtils::checked_multiply(
+            paged_layer_sequence_count, active_workers,
+            ownership_assignment_count)) {
+      plan.reason_code = LlmWorkPlanReason::PLANNER_STORAGE_BYTES_OVERFLOW;
+      return plan;
+    }
   }
 
   cpu_plan->layer_descriptors_per_worker = plan.geometry.layer_count;
@@ -951,11 +1336,14 @@ LlmMemoryWorkPlan build_llm_memory_work_plan(
   size_t layer_descriptor_bytes = 0;
   size_t sequence_descriptor_bytes = 0;
   if (!NumericUtils::checked_multiply(
-          cpu_plan->total_layer_descriptors, sizeof(LlmLayerDescriptor),
+          cpu_plan->total_layer_descriptors,
+          paged_layout ? sizeof(LlmPagedLayerDescriptor)
+                       : sizeof(LlmLayerDescriptor),
           layer_descriptor_bytes) ||
       !NumericUtils::checked_multiply(
           cpu_plan->total_sequence_descriptors,
-          sizeof(LlmKvSequenceDescriptor),
+          paged_layout ? sizeof(LlmPagedKvAssignmentDescriptor)
+                       : sizeof(LlmKvSequenceDescriptor),
           sequence_descriptor_bytes) ||
       !NumericUtils::checked_add(layer_descriptor_bytes,
                                  sequence_descriptor_bytes,
@@ -967,7 +1355,8 @@ LlmMemoryWorkPlan build_llm_memory_work_plan(
   if (!calculate_planner_storage_bytes(
           plan.geometry.layer_count,
           cpu_plan->sequence_descriptors_per_worker,
-          cpu_plan->effective_workers, cpu_plan->planner_storage_bytes)) {
+          cpu_plan->effective_workers, paged_layout,
+          ownership_assignment_count, cpu_plan->planner_storage_bytes)) {
     plan.reason_code = LlmWorkPlanReason::PLANNER_STORAGE_BYTES_OVERFLOW;
     return plan;
   }
@@ -976,6 +1365,7 @@ LlmMemoryWorkPlan build_llm_memory_work_plan(
       !json_integer_is_safe(request.geometry.kv_head_count) ||
       !json_integer_is_safe(request.geometry.head_dimension) ||
       !json_integer_is_safe(request.geometry.visible_context_tokens) ||
+      !json_integer_is_safe(request.geometry.kv_block_tokens) ||
       !json_integer_is_safe(request.geometry.batch_size) ||
       !json_integer_is_safe(cpu_plan->layer_descriptors_per_worker) ||
       !json_integer_is_safe(cpu_plan->sequence_descriptors_per_worker) ||
@@ -989,12 +1379,29 @@ LlmMemoryWorkPlan build_llm_memory_work_plan(
       plan.geometry, cpu_plan->descriptor_bytes,
       cpu_plan->planner_storage_bytes, request.checksum_auxiliary_bytes,
       request.orchestration_auxiliary_bytes,
-      request.mapping_granularity_bytes);
+      request.mapping_granularity_bytes,
+      paged_layout ? paged_geometry.memory.block_table_bytes : 0,
+      paged_layout
+          ? paged_geometry.memory.validation_bitset_bytes
+          : 0);
   plan.memory_budget = evaluate_llm_memory_budget(
       plan.memory_budget.request, request.available_memory_bytes);
   if (!plan.memory_budget.valid) {
     plan.reason_code = plan.memory_budget.reason_code;
     return plan;
+  }
+
+  if (paged_layout) {
+    LlmKvCpuOwnershipPlan ownership =
+        build_llm_paged_decode_kv_cpu_ownership_plan(
+            paged_geometry, cpu_plan->effective_workers, stop_requested);
+    if (!ownership.valid) {
+      plan.reason_code = ownership.reason_code;
+      return plan;
+    }
+    cpu_plan->paged.emplace();
+    cpu_plan->paged->layout = std::move(paged_geometry);
+    cpu_plan->paged->ownership = std::move(ownership);
   }
 
   try {
@@ -1011,8 +1418,23 @@ LlmMemoryWorkPlan build_llm_memory_work_plan(
     for (size_t worker = 0; worker < cpu_plan->effective_workers; ++worker) {
       cpu_plan->workers[worker].worker_index = worker;
       cpu_plan->workers[worker].layers.reserve(plan.geometry.layer_count);
-      cpu_plan->workers[worker].sequences.reserve(
-          cpu_plan->sequence_descriptors_per_worker);
+      if (paged_layout) {
+        cpu_plan->workers[worker].paged_assignments.resize(
+            cpu_plan->sequence_descriptors_per_worker);
+        for (size_t layer = 0; layer < plan.geometry.layer_count; ++layer) {
+          for (size_t batch = 0; batch < plan.geometry.batch_size; ++batch) {
+            LlmPagedKvAssignmentTemplate& assignment =
+                cpu_plan->workers[worker]
+                    .paged_assignments[layer * plan.geometry.batch_size +
+                                       batch];
+            assignment.layer_index = layer;
+            assignment.batch_sequence_index = batch;
+          }
+        }
+      } else {
+        cpu_plan->workers[worker].sequences.reserve(
+            cpu_plan->sequence_descriptors_per_worker);
+      }
     }
 
     for (size_t layer = 0; layer < plan.geometry.layer_count; ++layer) {
@@ -1028,6 +1450,9 @@ LlmMemoryWorkPlan build_llm_memory_work_plan(
             {weight, first_sequence_index, plan.geometry.batch_size, layer});
       }
 
+      if (paged_layout) {
+        continue;
+      }
       for (size_t batch = 0; batch < plan.geometry.batch_size; ++batch) {
         const size_t sequence_index = first_sequence_index + batch;
         const size_t visible_offset =
@@ -1057,6 +1482,27 @@ LlmMemoryWorkPlan build_llm_memory_work_plan(
         }
       }
     }
+    if (paged_layout) {
+      for (const LlmKvCpuBlockAssignment& source :
+           cpu_plan->paged->ownership.assignments) {
+        if (source.worker_index >= cpu_plan->effective_workers ||
+            source.layer_index >= plan.geometry.layer_count ||
+            source.batch_sequence_index >= plan.geometry.batch_size) {
+          throw std::length_error("invalid paged ownership");
+        }
+        const size_t assignment_index =
+            source.layer_index * plan.geometry.batch_size +
+            source.batch_sequence_index;
+        LlmPagedKvAssignmentTemplate& destination =
+            cpu_plan->workers[source.worker_index]
+                .paged_assignments[assignment_index];
+        if (destination.block_count != 0 || source.block_count == 0) {
+          throw std::length_error("duplicate paged ownership");
+        }
+        destination.first_logical_block = source.first_logical_block;
+        destination.block_count = source.block_count;
+      }
+    }
   } catch (const std::bad_alloc&) {
     discard_executable_templates(plan);
     plan.reason_code = LlmWorkPlanReason::PLANNER_ALLOCATION_FAILED;
@@ -1079,7 +1525,11 @@ LlmMemoryWorkPlan build_llm_memory_work_plan(
       plan.geometry, cpu_plan->descriptor_bytes,
       cpu_plan->planner_storage_bytes, request.checksum_auxiliary_bytes,
       request.orchestration_auxiliary_bytes,
-      request.mapping_granularity_bytes);
+      request.mapping_granularity_bytes,
+      paged_layout ? cpu_plan->paged->layout.memory.block_table_bytes : 0,
+      paged_layout
+          ? cpu_plan->paged->layout.memory.validation_bitset_bytes
+          : 0);
   plan.memory_budget = evaluate_llm_memory_budget(
       plan.memory_budget.request, request.available_memory_bytes);
   if (!plan.memory_budget.valid) {
@@ -1088,42 +1538,248 @@ LlmMemoryWorkPlan build_llm_memory_work_plan(
     return plan;
   }
 
-  plan.methodology_version =
-      build_llm_methodology_version(plan.backend, plan.phase, plan.kv_layout);
-  plan.component_identities.logical_profile_version =
-      Constants::LLM_LOGICAL_PROFILE_VERSION;
-  plan.component_identities.kv_layout_version =
-      Constants::LLM_CONTIGUOUS_KV_LAYOUT_VERSION;
-  plan.component_identities.permutation_version.reset();
-  plan.component_identities.backend_executor_version =
-      Constants::LLM_CPU_EXECUTOR_VERSION;
-  plan.component_identities.resource_abi_version =
-      Constants::LLM_DESCRIPTOR_ABI_VERSION;
-  plan.component_identities.schedule_version =
-      Constants::LLM_CPU_SCHEDULE_VERSION;
-  plan.component_identities.timer_policy_version =
-      Constants::LLM_CPU_TIMER_POLICY_VERSION;
-  plan.component_identities.buffer_pattern_version =
-      Constants::LLM_BUFFER_PATTERN_VERSION;
-  plan.component_identities.write_pattern_version =
-      Constants::LLM_APPEND_PATTERN_VERSION;
-  plan.component_identities.checksum_pattern_version =
-      Constants::LLM_READ_CHECKSUM_VERSION;
-  plan.component_identities.msl_revision.reset();
-  plan.component_identities.msl_source_sha256.reset();
-  plan.component_identities.identity =
-      serialize_llm_component_identities(plan.component_identities);
-  plan.plan_identity = build_model_plan_identity(plan);
-  plan.valid = true;
+  try {
+    if ((paged_layout && !prepare_paged_identity_shape(plan)) ||
+        !finalize_plan_identities(plan)) {
+      discard_executable_templates(plan);
+      plan.reason_code =
+          LlmWorkPlanReason::AUXILIARY_PREFLIGHT_MISMATCH;
+      return plan;
+    }
+  } catch (const std::bad_alloc&) {
+    discard_executable_templates(plan);
+    plan.reason_code = LlmWorkPlanReason::PLANNER_ALLOCATION_FAILED;
+    return plan;
+  } catch (const std::length_error&) {
+    discard_executable_templates(plan);
+    plan.reason_code = LlmWorkPlanReason::PLANNER_ALLOCATION_FAILED;
+    return plan;
+  }
+
+  plan.valid = false;
   plan.reason_code = LlmWorkPlanReason::VALID;
   return plan;
+}
+
+LlmMemoryWorkPlanDraft prepare_llm_memory_work_plan(
+    const LlmMemoryWorkPlanRequest& request,
+    const LlmKvStopRequested& stop_requested) {
+  LlmMemoryWorkPlanDraft draft;
+  draft.candidate =
+      build_llm_memory_work_plan_candidate(request, stop_requested);
+  draft.reason_code = draft.candidate.reason_code;
+  if (draft.candidate.reason_code != LlmWorkPlanReason::VALID) {
+    return draft;
+  }
+  try {
+    if (!build_auxiliary_preflight_view(
+            draft.candidate, draft.auxiliary_preflight)) {
+      discard_executable_templates(draft.candidate);
+      draft.candidate.reason_code =
+          LlmWorkPlanReason::AUXILIARY_PREFLIGHT_MISMATCH;
+      draft.reason_code = draft.candidate.reason_code;
+      return draft;
+    }
+  } catch (const std::bad_alloc&) {
+    discard_executable_templates(draft.candidate);
+    draft.candidate.reason_code =
+        LlmWorkPlanReason::PLANNER_ALLOCATION_FAILED;
+    draft.reason_code = draft.candidate.reason_code;
+    return draft;
+  } catch (const std::length_error&) {
+    discard_executable_templates(draft.candidate);
+    draft.candidate.reason_code =
+        LlmWorkPlanReason::PLANNER_ALLOCATION_FAILED;
+    draft.reason_code = draft.candidate.reason_code;
+    return draft;
+  }
+  draft.valid = true;
+  draft.reason_code = LlmWorkPlanReason::VALID;
+  return draft;
+}
+
+LlmMemoryWorkPlan finalize_llm_memory_work_plan(
+    LlmMemoryWorkPlanDraft&& draft, size_t checksum_auxiliary_bytes,
+    size_t orchestration_auxiliary_bytes,
+    const LlmKvStopRequested& stop_requested) {
+  LlmMemoryWorkPlan plan = std::move(draft.candidate);
+  if (!draft.valid || plan.reason_code != LlmWorkPlanReason::VALID ||
+      plan.valid) {
+    if (plan.reason_code == LlmWorkPlanReason::VALID) {
+      plan.reason_code = draft.reason_code;
+    }
+    return plan;
+  }
+  LlmCpuExecutionPlan* const cpu_plan = get_llm_cpu_execution_plan(plan);
+  if (cpu_plan == nullptr || cpu_plan->effective_workers == 0) {
+    plan.reason_code = LlmWorkPlanReason::INVALID_MODEL_WORK_PLAN;
+    return plan;
+  }
+  const bool paged_layout = plan.kv_layout == LlmKvLayout::Paged;
+  const size_t block_table_bytes =
+      paged_layout && cpu_plan->paged.has_value()
+          ? cpu_plan->paged->layout.memory.block_table_bytes
+          : 0;
+  const size_t validation_bitset_bytes =
+      paged_layout && cpu_plan->paged.has_value()
+          ? cpu_plan->paged->layout.memory.validation_bitset_bytes
+          : 0;
+  plan.memory_budget.request = build_llm_memory_budget_request(
+      plan.geometry, cpu_plan->descriptor_bytes,
+      cpu_plan->planner_storage_bytes, checksum_auxiliary_bytes,
+      orchestration_auxiliary_bytes,
+      plan.memory_budget.request.mapping_granularity_bytes,
+      block_table_bytes, validation_bitset_bytes);
+  plan.memory_budget = evaluate_llm_memory_budget(
+      plan.memory_budget.request, plan.memory_budget.available_memory_bytes);
+  if (!plan.memory_budget.valid) {
+    discard_executable_templates(plan);
+    plan.reason_code = plan.memory_budget.reason_code;
+    return plan;
+  }
+
+  try {
+    if (paged_layout) {
+      if (!cpu_plan->paged.has_value()) {
+        plan.reason_code = LlmWorkPlanReason::INVALID_MODEL_WORK_PLAN;
+        discard_executable_templates(plan);
+        return plan;
+      }
+      LlmPagedCpuExecutionPlan& paged = *cpu_plan->paged;
+      paged.block_table_logical_bytes =
+          paged.layout.memory.block_table_bytes;
+      paged.block_table_mapping_bytes =
+          plan.memory_budget.request.committed_block_table_mapping_bytes;
+      paged.block_table_mapping = allocate_buffer(
+          paged.block_table_mapping_bytes, "LLM paged KV block table");
+      if (paged.block_table_mapping == nullptr) {
+        plan.reason_code = LlmWorkPlanReason::BLOCK_TABLE_MAPPING_FAILED;
+        discard_executable_templates(plan);
+        return plan;
+      }
+      const LlmKvInPlaceBlockTableMaterialization materialization =
+          materialize_llm_kv_block_table_in_place(
+              paged.layout, derive_llm_kv_permutation_seed(plan.base_seed),
+              static_cast<uint32_t*>(paged.block_table_mapping.get()),
+              paged.layout.block_table_entries,
+              Constants::LLM_KV_BLOCK_TABLE_HASH_CHUNK_ENTRIES,
+              stop_requested);
+      if (!materialization.valid) {
+        plan.reason_code = materialization.reason_code;
+        discard_executable_templates(plan);
+        return plan;
+      }
+      paged.table_validation = materialization.validation;
+      paged.permutation = materialization.permutation;
+      paged.layout_identity =
+          serialize_llm_kv_layout_identity(paged.layout,
+                                           paged.permutation);
+      paged.execution_identity = paged.ownership.identity;
+      if (paged.layout_identity.empty()) {
+        plan.reason_code =
+            LlmWorkPlanReason::BLOCK_TABLE_MATERIALIZATION_FAILED;
+        discard_executable_templates(plan);
+        return plan;
+      }
+      if (!protect_buffer_read_only(paged.block_table_mapping.get(),
+                                    paged.block_table_mapping_bytes)) {
+        plan.reason_code =
+            LlmWorkPlanReason::BLOCK_TABLE_PROTECTION_FAILED;
+        discard_executable_templates(plan);
+        return plan;
+      }
+      paged.block_table_read_only = true;
+    }
+
+    if (!finalize_plan_identities(plan)) {
+      plan.reason_code =
+          LlmWorkPlanReason::AUXILIARY_PREFLIGHT_MISMATCH;
+      discard_executable_templates(plan);
+      return plan;
+    }
+    plan.valid = true;
+    if (draft.auxiliary_preflight.valid) {
+      LlmAuxiliaryPreflightView finalized_view;
+      if (!build_auxiliary_preflight_view(plan, finalized_view) ||
+          !auxiliary_preflight_views_match(
+              draft.auxiliary_preflight, finalized_view)) {
+        plan.valid = false;
+        plan.reason_code =
+            LlmWorkPlanReason::AUXILIARY_PREFLIGHT_MISMATCH;
+        discard_executable_templates(plan);
+        return plan;
+      }
+    }
+  } catch (const std::bad_alloc&) {
+    plan.valid = false;
+    plan.reason_code = LlmWorkPlanReason::PLANNER_ALLOCATION_FAILED;
+    discard_executable_templates(plan);
+    return plan;
+  } catch (const std::length_error&) {
+    plan.valid = false;
+    plan.reason_code = LlmWorkPlanReason::PLANNER_ALLOCATION_FAILED;
+    discard_executable_templates(plan);
+    return plan;
+  }
+
+  plan.reason_code = LlmWorkPlanReason::VALID;
+  return plan;
+}
+
+LlmMemoryWorkPlan build_llm_memory_work_plan(
+    const LlmMemoryWorkPlanRequest& request,
+    const LlmKvStopRequested& stop_requested) {
+  LlmMemoryWorkPlanDraft draft;
+  draft.candidate =
+      build_llm_memory_work_plan_candidate(request, stop_requested);
+  draft.valid =
+      draft.candidate.reason_code == LlmWorkPlanReason::VALID;
+  draft.reason_code = draft.candidate.reason_code;
+  return finalize_llm_memory_work_plan(
+      std::move(draft), request.checksum_auxiliary_bytes,
+      request.orchestration_auxiliary_bytes, stop_requested);
+}
+
+LlmMemoryWorkPlanDraft prepare_llm_memory_work_plan(
+    const LlmMemoryConfig& config, size_t available_workers,
+    size_t available_memory_bytes, size_t mapping_granularity_bytes,
+    const LlmKvStopRequested& stop_requested) {
+  const LlmMemoryConfigValidation validation =
+      validate_llm_memory_config(config);
+  if (!validation.valid) {
+    LlmMemoryWorkPlanDraft draft;
+    draft.reason_code = validation.reason_code;
+    draft.candidate = invalid_config_plan(validation.reason_code);
+    return draft;
+  }
+
+  LlmMemoryWorkPlanRequest request;
+  request.geometry = {validation.active_weight_bytes,
+                      config.layer_count,
+                      config.query_head_count,
+                      config.kv_head_count,
+                      config.head_dimension,
+                      config.kv_element_bytes,
+                      config.visible_context_tokens,
+                      config.batch_size,
+                      config.kv_block_tokens,
+                      config.phase,
+                      config.kv_layout};
+  request.backend = config.backend;
+  request.requested_workers = config.requested_workers;
+  request.available_workers = available_workers;
+  request.available_memory_bytes = available_memory_bytes;
+  request.mapping_granularity_bytes = mapping_granularity_bytes;
+  request.base_seed = config.seed;
+  return prepare_llm_memory_work_plan(request, stop_requested);
 }
 
 LlmMemoryWorkPlan build_llm_memory_work_plan(
     const LlmMemoryConfig& config, size_t available_workers,
     size_t available_memory_bytes, size_t mapping_granularity_bytes,
     size_t checksum_auxiliary_bytes,
-    size_t orchestration_auxiliary_bytes) {
+    size_t orchestration_auxiliary_bytes,
+    const LlmKvStopRequested& stop_requested) {
   const LlmMemoryConfigValidation validation =
       validate_llm_memory_config(config);
   if (!validation.valid) {
@@ -1139,6 +1795,7 @@ LlmMemoryWorkPlan build_llm_memory_work_plan(
                       config.kv_element_bytes,
                       config.visible_context_tokens,
                       config.batch_size,
+                      config.kv_block_tokens,
                       config.phase,
                       config.kv_layout};
   request.backend = config.backend;
@@ -1149,7 +1806,45 @@ LlmMemoryWorkPlan build_llm_memory_work_plan(
   request.checksum_auxiliary_bytes = checksum_auxiliary_bytes;
   request.orchestration_auxiliary_bytes = orchestration_auxiliary_bytes;
   request.base_seed = config.seed;
-  return build_llm_memory_work_plan(request);
+  return build_llm_memory_work_plan(request, stop_requested);
+}
+
+bool readmit_llm_memory_work_plan(
+    LlmMemoryWorkPlan& plan, size_t checksum_auxiliary_bytes,
+    size_t orchestration_auxiliary_bytes) noexcept {
+  try {
+    LlmCpuExecutionPlan* const cpu_plan = get_llm_cpu_execution_plan(plan);
+    if (!plan.valid || cpu_plan == nullptr) {
+      return false;
+    }
+    const size_t block_table_bytes =
+        cpu_plan->paged.has_value()
+            ? cpu_plan->paged->layout.memory.block_table_bytes
+            : 0;
+    const size_t transient_bytes =
+        cpu_plan->paged.has_value()
+            ? cpu_plan->paged->layout.memory.validation_bitset_bytes
+            : 0;
+    const LlmMemoryBudgetRequest request = build_llm_memory_budget_request(
+        plan.geometry, cpu_plan->descriptor_bytes,
+        cpu_plan->planner_storage_bytes, checksum_auxiliary_bytes,
+        orchestration_auxiliary_bytes,
+        plan.memory_budget.request.mapping_granularity_bytes,
+        block_table_bytes, transient_bytes);
+    plan.memory_budget = evaluate_llm_memory_budget(
+        request, plan.memory_budget.available_memory_bytes);
+    if (!plan.memory_budget.valid) {
+      plan.valid = false;
+      plan.reason_code = plan.memory_budget.reason_code;
+      return false;
+    }
+    plan.reason_code = LlmWorkPlanReason::VALID;
+    return true;
+  } catch (...) {
+    plan.valid = false;
+    plan.reason_code = LlmWorkPlanReason::MEMORY_REQUIREMENT_OVERFLOW;
+    return false;
+  }
 }
 
 LlmScenarioLimits calculate_llm_scenario_limits(
@@ -1192,10 +1887,31 @@ LlmScenarioLimits calculate_llm_scenario_limits(
       break;
   }
 
-  // Contiguous layout performs no timed layout-metadata lookups. Keeping the
-  // zero terms explicit makes the guardrail formula layout-neutral.
   limits.layout_metadata_lookup_count_per_work_unit = 0;
   limits.layout_metadata_read_bytes_per_work_unit = 0;
+  if (geometry.kv_layout == LlmKvLayout::Paged &&
+      scenario != LlmScenario::WeightsOnly) {
+    size_t lookups_per_layer_sequence = 0;
+    size_t layer_sequence_count = 0;
+    if (!NumericUtils::checked_multiply(
+            geometry.kv_blocks_per_sequence, 2,
+            lookups_per_layer_sequence) ||
+        !NumericUtils::checked_add(lookups_per_layer_sequence, 1,
+                                   lookups_per_layer_sequence) ||
+        !NumericUtils::checked_multiply(
+            geometry.layer_count, geometry.batch_size,
+            layer_sequence_count) ||
+        !NumericUtils::checked_multiply(
+            layer_sequence_count, lookups_per_layer_sequence,
+            limits.layout_metadata_lookup_count_per_work_unit) ||
+        !NumericUtils::checked_multiply(
+            limits.layout_metadata_lookup_count_per_work_unit,
+            Constants::LLM_KV_BLOCK_TABLE_ENTRY_BYTES,
+            limits.layout_metadata_read_bytes_per_work_unit)) {
+      limits.reason_code = LlmWorkPlanReason::TASK_ACCOUNTED_BYTES_OVERFLOW;
+      return limits;
+    }
+  }
   if (!NumericUtils::checked_add(
           limits.effective_model_payload_bytes_per_work_unit,
           limits.layout_metadata_read_bytes_per_work_unit,

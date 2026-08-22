@@ -45,6 +45,8 @@ inline constexpr const char* OUTPUT_NOT_EMPTY = "output-not-empty";
 inline constexpr const char* WEIGHT_MAPPING_FAILED = "weight-mapping-failed";
 inline constexpr const char* K_MAPPING_FAILED = "k-mapping-failed";
 inline constexpr const char* V_MAPPING_FAILED = "v-mapping-failed";
+inline constexpr const char* PAGED_POST_VALIDATION_FAILED =
+    "paged-post-validation-failed";
 inline constexpr const char* DESCRIPTOR_ALLOCATION_FAILED = "descriptor-allocation-failed";
 inline constexpr const char* INITIALIZATION_FAILED = "initialization-failed";
 inline constexpr const char* INVALID_RESOURCES = "invalid-resources";
@@ -163,6 +165,11 @@ struct LlmInitializationEvidence {
   size_t non_empty_weight_spans = 0;
   size_t non_empty_k_spans = 0;
   size_t non_empty_v_spans = 0;
+  size_t block_table_logical_bytes = 0;
+  size_t block_table_mapping_bytes = 0;
+  bool block_table_read_only = false;
+  size_t k_layout_padding_bytes = 0;
+  size_t v_layout_padding_bytes = 0;
 };
 
 /**
@@ -186,9 +193,17 @@ struct LlmExecutionResources {
   LlmBufferSet buffers;
   std::unique_ptr<LlmLayerDescriptor[]> layer_descriptors;
   std::unique_ptr<LlmKvSequenceDescriptor[]> sequence_descriptors;
+  std::unique_ptr<LlmPagedLayerDescriptor[]> paged_layer_descriptors;
+  std::unique_ptr<LlmPagedKvAssignmentDescriptor[]>
+      paged_assignment_descriptors;
   std::unique_ptr<LlmStaticSpanReference[]> weight_references;
   std::unique_ptr<LlmStaticSpanReference[]> k_references;
   std::unique_ptr<LlmStaticSpanReference[]> v_references;
+  std::unique_ptr<LlmStaticSpanReference[]> paged_k_block_references;
+  std::unique_ptr<LlmStaticSpanReference[]> paged_v_block_references;
+  const uint32_t* block_table = nullptr;
+  size_t block_table_entries = 0;
+  size_t paged_block_reference_count = 0;
   size_t worker_count = 0;
   size_t layer_descriptors_per_worker = 0;
   size_t sequence_descriptors_per_worker = 0;
@@ -203,6 +218,10 @@ struct LlmExecutionResources {
   const LlmStaticSpanReference* worker_weight_references(size_t worker_index) const noexcept;
   const LlmStaticSpanReference* worker_k_references(size_t worker_index) const noexcept;
   const LlmStaticSpanReference* worker_v_references(size_t worker_index) const noexcept;
+  const LlmPagedLayerDescriptor* worker_paged_layers(
+      size_t worker_index) const noexcept;
+  const LlmPagedKvAssignmentDescriptor* worker_paged_assignments(
+      size_t worker_index) const noexcept;
 };
 
 /** Result of atomic allocation, ABI materialization, and deterministic init. */
@@ -224,6 +243,9 @@ struct LlmKernelInvocation {
   uint64_t scenario_seed = 0;
   LlmWorkerChecksum* output = nullptr;
   size_t worker_index = 0;
+  LlmKvLayout kv_layout = LlmKvLayout::Contiguous;
+  const LlmPagedLayerDescriptor* paged_layers = nullptr;
+  const LlmPagedKvAssignmentDescriptor* paged_assignments = nullptr;
 };
 
 /**
@@ -285,6 +307,8 @@ struct LlmExecutorResult {
   bool timer_stopped = false;
   bool checksum_evaluated = false;  ///< True only after expected and actual checksums were compared.
   bool checksum_valid = false;
+  bool post_validation_evaluated = false;
+  bool post_validation_valid = false;
   std::vector<LlmWorkerChecksum> expected_checksums;
   std::vector<LlmWorkerChecksum> actual_checksums;
   LlmRunChecksum expected_run_checksum{0, 0};
@@ -296,11 +320,23 @@ extern "C" void llm_decode_memory_asm(const LlmLayerDescriptor* layers, const Ll
                                       uint64_t layer_count, uint64_t work_unit_count, uint64_t scenario_flags,
                                       uint64_t scenario_seed, LlmWorkerChecksum* output) noexcept;
 
+/** Dedicated paged decode implementation with a distinct descriptor ABI. */
+extern "C" void llm_decode_memory_paged_asm(
+    const LlmPagedLayerDescriptor* layers,
+    const LlmPagedKvAssignmentDescriptor* assignments,
+    uint64_t layer_count, uint64_t work_unit_count, uint64_t scenario_flags,
+    uint64_t scenario_seed, LlmWorkerChecksum* output) noexcept;
+
 /** Return the frozen assembly flag for a valid scenario, or zero. */
 uint64_t llm_scenario_flags(LlmScenario scenario) noexcept;
 
 /** Return one deterministic `llm-buffer-pattern-v1` word. */
 uint64_t llm_buffer_pattern_word(uint64_t buffer_domain_seed, uint64_t absolute_mapping_word_index) noexcept;
+
+/** Return one deterministic paged physical-pool pattern word. */
+uint64_t llm_paged_buffer_pattern_word(
+    uint64_t buffer_domain_seed, uint64_t layer_index,
+    uint64_t physical_block_id, uint64_t block_word_index) noexcept;
 
 /** Return one frozen affine K/V append word. */
 uint64_t llm_append_word(uint64_t scenario_seed, uint64_t task_local_work_unit, uint64_t layer_index,
@@ -310,6 +346,13 @@ uint64_t llm_append_word(uint64_t scenario_seed, uint64_t task_local_work_unit, 
 /** Return the canonical initial state for one checksum component. */
 LlmReadChecksumComponent initial_llm_read_checksum(LlmChecksumComponent component) noexcept;
 
+/** Mix one timed paged-table visit into its checksum component. */
+void mix_llm_paged_lookup(LlmReadChecksumComponent& checksum,
+                          uint64_t global_logical_index,
+                          uint32_t physical_block_id,
+                          uint64_t semantic_visit_kind,
+                          uint64_t work_unit_ordinal) noexcept;
+
 /** Fold every worker's weight/K/V tuples in canonical order. */
 LlmRunChecksum fold_llm_worker_checksums(const LlmWorkerChecksum* workers, size_t worker_count) noexcept;
 
@@ -318,6 +361,10 @@ LlmRunChecksum fold_llm_worker_checksums(const LlmWorkerChecksum* workers, size_
  * A non-CPU or backend/variant-mismatched model plan is rejected.
  */
 LlmExecutorAuxiliaryEstimate calculate_llm_executor_auxiliary_estimate(const LlmMemoryWorkPlan& plan) noexcept;
+
+/** Calculate the same exact backing from a non-executable preflight view. */
+LlmExecutorAuxiliaryEstimate calculate_llm_executor_auxiliary_estimate(
+    const LlmAuxiliaryPreflightView& preflight) noexcept;
 
 /**
  * Allocate all three regular cacheable mappings atomically.

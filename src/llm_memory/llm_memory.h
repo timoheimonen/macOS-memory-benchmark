@@ -110,6 +110,16 @@ inline constexpr const char* INVALID_KV_ELEMENT_BYTES =
     "invalid-kv-element-bytes";
 inline constexpr const char* CONTEXT_TOKENS_REQUIRED =
     "context-tokens-required";
+inline constexpr const char* KV_BLOCK_TOKENS_REQUIRED =
+    "kv-block-tokens-required";
+inline constexpr const char* KV_BLOCK_TOKENS_NOT_APPLICABLE =
+    "kv-block-tokens-not-applicable";
+inline constexpr const char* KV_BLOCK_TOKENS_ZERO =
+    "kv-block-tokens-zero";
+inline constexpr const char* KV_BLOCK_TOKENS_NOT_POWER_OF_TWO =
+    "kv-block-tokens-not-power-of-two";
+inline constexpr const char* KV_BLOCK_TOKENS_EXCEEDS_UINT32 =
+    "kv-block-tokens-exceeds-uint32";
 inline constexpr const char* BATCH_SIZE_REQUIRED = "batch-size-required";
 inline constexpr const char* WORKER_COUNT_REQUIRED = "worker-count-required";
 inline constexpr const char* AVAILABLE_WORKER_COUNT_REQUIRED =
@@ -141,6 +151,7 @@ struct LlmMemoryConfig {
   size_t head_dimension = 0;
   size_t kv_element_bytes = Constants::LLM_DEFAULT_KV_ELEMENT_BYTES;
   size_t visible_context_tokens = 0;
+  size_t kv_block_tokens = 0;
   size_t batch_size = Constants::LLM_DEFAULT_BATCH_SIZE;
   size_t requested_workers = 0;
   size_t available_workers = 0;
@@ -150,6 +161,8 @@ struct LlmMemoryConfig {
   bool user_specified_iterations = false;
   bool user_specified_seed = false;
   bool user_specified_workers = false;
+  bool user_specified_kv_layout = false;
+  bool user_specified_kv_block_tokens = false;
   bool help_printed = false;
   std::string output_file;
   std::vector<std::string> argv;

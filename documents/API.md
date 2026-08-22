@@ -46,14 +46,28 @@ A direct GPU command uses the same stream transport with its existing top-level 
 memory_benchmark --gpu-bandwidth --buffer-size 512 --count 3 --seed 42 --output -
 ```
 
-A direct LLM command likewise emits its top-level schema 1 payload. In this revision the only active profile is
-CPU/decode/contiguous:
+A direct LLM command likewise emits its top-level schema 1 payload. The active profiles are CPU/decode with either
+contiguous or paged KV storage:
 
 ```bash
 memory_benchmark --llm-memory --weight-size-mb 64 --layers 4 \
   --query-heads 8 --kv-heads 2 --head-dim 64 --context-tokens 512 \
   --iterations 1 --count 3 --seed 42 --output -
 ```
+
+A paged request selects the layout and supplies its required block size in tokens:
+
+```bash
+memory_benchmark --llm-memory --weight-size-mb 64 --layers 4 \
+  --query-heads 8 --kv-heads 2 --head-dim 64 --context-tokens 512 \
+  --kv-layout paged --kv-block-tokens 16 \
+  --iterations 1 --count 3 --seed 42 --output -
+```
+
+`--kv-layout` accepts `contiguous` or `paged` and defaults to `contiguous`. Paged requests require exactly one
+`--kv-block-tokens <G>`; `G` must be positive, a power of two, and at most `UINT32_MAX`. A value larger than the visible
+context is valid. Contiguous requests reject `--kv-block-tokens`. Backend and phase remain fixed to CPU and decode;
+Metal and prefill are not public execution choices and receive no fallback.
 
 The sentinel is classified from the raw option value before path normalization:
 
@@ -79,7 +93,7 @@ TLB whitelist rejects `--analyze-tlb --help`; use `--help` without that mode fla
 
 Some runtime setup failures also occur before a schema-valid payload exists. The general command's early timer failure,
 TLB setup, memory-budget, or allocation failures before analysis-state initialization, a GPU backend-factory failure,
-and LLM work-plan, JSON-output peak-estimation, timer, or three-mapping preparation failure before runner-result
+and LLM work-plan, JSON-output peak-estimation, timer, or resource-preparation failure before runner-result
 initialization therefore produce stderr plus a non-zero status and leave stdout empty. Once a mode has initialized a
 representable result, graceful
 interruption or a normal runtime failure emits the available partial, interrupted, error, failed, or unsupported
@@ -161,10 +175,11 @@ non-null value and its applicable validation/quality fields.
 
 LLM schema 1 is an unpublished generic contract. It has top-level `mode: "llm_memory"`, `schema_version: 1`, and exact
 `backend`, `phase`, `kv_layout`, and `methodology_version` selectors. Methodology is derived as
-`llm-memory-v1-<backend>-<phase>-<layout>`; the only selectable profile in this revision is
-`cpu`/`decode`/`contiguous`, whose exact methodology is `llm-memory-v1-cpu-decode-contiguous`. The schema vocabulary
-also reserves `metal`, `prefill`, and `paged`, but those profiles have no public CLI selectors or runtime activation
-yet. They must not be inferred from the presence of reserved fields.
+`llm-memory-v1-<backend>-<phase>-<layout>`. This revision activates `cpu`/`decode`/`contiguous` and
+`cpu`/`decode`/`paged`, with exact methodologies `llm-memory-v1-cpu-decode-contiguous` and
+`llm-memory-v1-cpu-decode-paged`. The schema vocabulary also reserves `metal` and `prefill`, but those profiles have no
+public runtime activation. They must not be inferred from the presence of reserved fields, and an unavailable selector
+must never be silently replaced by CPU/decode.
 
 Run statuses are `not_started`, `complete`, `partial`, `interrupted`, `unsupported`, and `failed`; measurement statuses
 are `not_run`, `measured`, `interrupted`, `invalid`, and `failed`. `unsupported` is a terminal, non-acceptable result,
@@ -189,8 +204,10 @@ results_complete, conclusions_valid, interpretation
 ```
 
 `configuration` preserves exact `argv`, the raw output target, requested/resolved inputs, and a `resolved_sources`
-object. Defaults remain evidence as `default`; they are not fabricated as explicit argv. The active profile resolves
-CPU/decode/contiguous from defaults because no backend, phase, or layout selector is public yet.
+object. Defaults remain evidence as `default`; they are not fabricated as explicit argv. Backend and phase resolve to
+CPU/decode defaults. Layout resolves to `contiguous` by default or to the explicit `--kv-layout` value. The
+`kv_block_tokens` input is an integer for paged requests and null for contiguous requests; paged requests record it as
+explicit because no block-size default exists.
 
 `resolved_plan` owns immutable logical plan evidence:
 
@@ -198,21 +215,55 @@ CPU/decode/contiguous from defaults because no backend, phase, or layout selecto
   decode profile. Phase-specific fields are never overloaded across phases. The reserved prefill object has integer
   `prompt_tokens`/`attention_query_tile_tokens` and decimal-string tile, prefix-visit, causal-pair, attention-pair, and
   FMA-term counts.
-- `layout.kv_layout` is `contiguous`. Paged-only integer `kv_block_tokens`; decimal-string block, tail, table-entry, and
-  table-byte counts; permutation domain/algorithm/hash strings; and decimal-string permutation seed are null for the
-  active layout. Scenario-applicable contiguous lookup/read counts are decimal-string zero.
+- `layout.kv_layout` is the selected `contiguous` or `paged` token. Contiguous results use null for paged-only fields
+  and report applicable lookup/read counts as decimal-string zero. Paged results populate integer `kv_block_tokens`;
+  decimal-string block, tail, table-entry, and table-byte counts; permutation domain/algorithm/hash strings; and the
+  decimal-string resolved permutation seed.
 - `resources` separates decimal-string `weight_logical_bytes`, `k_logical_bytes`, `v_logical_bytes`, physical K/V
-  lengths, K/V layout padding, and nullable block-table bytes.
+  lengths, K/V layout padding, and nullable block-table bytes. For contiguous, physical lengths equal logical lengths,
+  padding is zero, and block-table bytes are null. For paged, physical lengths cover complete blocks and may exceed
+  logical lengths; suffix padding and the resident uint32 table are reported separately.
 - `component_identities` records logical profile, KV layout, optional permutation, backend executor, resource ABI,
   schedule, timer policy, buffer pattern, write pattern, checksum pattern, and nullable MSL revision/source SHA-256.
   Their canonical aggregate identity uses fixed field order and length-prefixed values under
-  `llm-memory-components-v1`; CPU MSL fields and contiguous permutation fields are null.
+  `llm-memory-components-v1`; CPU MSL fields and contiguous permutation fields are null. Paged CPU results bind the
+  physical layout and permutation identity to their paged descriptor, schedule, pattern, and checksum identities.
 
-`backend_evidence` always contains both tagged branches. `cpu` is populated and `metal` is null for the active profile.
+For paged decode, let `A` be `visible_context_tokens`, `G` be `kv_block_tokens`, `B` be batch size, `L` be layer count,
+and `R = kv_head_count * head_dimension * kv_element_bytes`. The schema evidence is derived exactly as follows:
+
+```text
+N = A / G + (A % G != 0)
+physical_blocks_per_layer = B * N
+block_bytes = G * R
+last_block_tokens = A - (N - 1) * G
+last_block_valid_bytes = last_block_tokens * R
+decode_append_offset_in_last_block = ((A - 1) % G) * R
+k_logical_bytes = L * B * A * R
+k_physical_length_bytes = L * B * N * block_bytes
+k_layout_padding_bytes = k_physical_length_bytes - k_logical_bytes
+block_table_entries = B * N
+block_table_bytes = block_table_entries * 4
+```
+
+V uses the same logical, physical, and padding counts. All blocks are physically complete; terminal suffix padding is
+initialized and validated but is neither touched by timed work nor included in effective model payload. The single
+row-major `block_table[B][N]` is a bijection over `0 .. B*N-1`, stored as uint32 entries. `UINT32_MAX` is the invalid
+sentinel and the physical-block count cannot exceed it. The table is generated once with the versioned descending
+Fisher–Yates rejection algorithm driven by stateful SplitMix64. Its domain is `0x4c4c4d4b56504731`, its resolved state
+is `splitmix64(base_seed xor domain)`. Each draw uses `threshold = uint64_wrap(0-bound) % bound`; after rejection,
+`j = value % bound`. The table is validated before execution, hashed from explicit row-major little-endian entries,
+made read-only for CPU execution, and held constant across warmup, calibration, scenarios, and measured loops. Its exact
+algorithm version, domain, resolved seed, entry count, and lowercase 64-hex SHA-256 are part of the result identity.
+
+`backend_evidence` always contains both tagged branches. `cpu` is populated and `metal` is null for both active
+profiles.
 `memory_budget` separates immutable resource geometry from allocation-time evidence and includes canonical
 decimal-string `resource_rounding_bytes`, `transient_peak_bytes`, `known_owned_peak_bytes`, and
-`admitted_budget_bytes`. `calibration` contains excluded work-resolution evidence; `aggregates` contains only accepted
-measured values. Additional diagnostic, interruption, checkpoint, loop-order, checksum, environment, warning, and
+`admitted_budget_bytes`. A paged candidate admits full physical K/V resources, the resident block table, page rounding,
+descriptor/planner/checksum/orchestration storage, and the permutation-validation transient before table
+materialization. `calibration` contains excluded work-resolution evidence; `aggregates` contains only accepted measured
+values. Additional diagnostic, interruption, checkpoint, loop-order, checksum, environment, warning, and
 resource-preparation evidence may be present without changing those ownership boundaries.
 
 Every measurement has stable generic work accounting:
@@ -240,6 +291,29 @@ The three derived metrics are finite numbers only for a successfully measured re
 model numerator contains versioned logical W/K/V reads and writes; timed layout metadata is reported separately and
 included in `accounted_bytes_per_work_unit`, not in `effective_model_payload_gb_s`.
 
+Paged `weights_only` performs no block-table access and reports zero layout-metadata work. For `kv_only` and `mixed`,
+each layer/batch pair performs one paired K/V append lookup, `N` K-scan lookups, and `N` V-scan lookups per decode step:
+
+```text
+layout_metadata_lookup_count_per_work_unit = L * B * (2 * N + 1)
+layout_metadata_read_bytes_per_work_unit = 4 * layout_metadata_lookup_count_per_work_unit
+accounted_bytes_per_work_unit =
+  effective_model_payload_bytes_per_work_unit + layout_metadata_read_bytes_per_work_unit
+```
+
+Task totals multiply these quantities by the exact work-unit count with checked arithmetic. The shared one-billion
+work-unit ceiling and 64 GiB task-accounted-byte guardrail apply to model plus metadata work. The
+effective-model-payload
+numerator never includes table bytes.
+
+Every paged semantic visit loads its uint32 physical ID inside the timed ARM64 kernel and calculates the block address
+after that load; the host does not replace the table with a pre-resolved pointer list. The traversal is append, complete
+logical K-block scan, then complete logical V-block scan for each layer/batch pair, with mixed reading the layer weight
+span first. The paged checksum binds logical table index, loaded physical ID, semantic visit kind, and work-unit ordinal
+non-separably. Physical data patterns depend on pool, physical ID, and physical offset. Post-task validation checks
+current-token writes and terminal padding canaries. Generation, validation, initialization, pre-touch, expected-checksum
+construction, and post-validation are outside the authoritative synchronized CPU task time.
+
 The traffic classification version is `llm-exact-weight-vs-kv-read-payload-v1`: it compares exact active-weight bytes
 with exact KV-read bytes only. `near_crossover` means equality, not a tolerance band and not an observed hardware
 bottleneck.
@@ -249,7 +323,9 @@ requires valid geometry/checksums, no checkpoint failure, and a complete cyclic 
 run is therefore inspectable with `results_complete: true` but has `conclusions_valid: false`. Consumers of comparative
 LLM conclusions must apply the exact selector/methodology predicate, require every planned measurement to be
 `measured`, and then check the selected scenario metric's non-null value plus relevant checksum, quality, and environment
-evidence.
+evidence. Comparisons also require identical phase geometry and, for paged results, identical `kv_block_tokens`,
+permutation identity, physical-resource geometry, and component identities. Contiguous and paged measurements are not
+members of the same comparison cohort merely because their logical model geometry matches.
 
 `quality_warnings` merges and deduplicates runner tokens `weights_only-high-cv`, `kv_only-high-cv`,
 `mixed-high-cv`, and `scenario-order-not-balanced` with final-report tokens `environment-not-nominal`,
@@ -350,8 +426,11 @@ jq -e '.schema_version == 1 and .mode == "gpu_bandwidth" and
 
 jq -e '.mode == "llm_memory" and .schema_version == 1 and
        .backend == "cpu" and .phase == "decode" and
-       .kv_layout == "contiguous" and
-       .methodology_version == "llm-memory-v1-cpu-decode-contiguous" and
+       .kv_layout == "paged" and
+       .methodology_version == "llm-memory-v1-cpu-decode-paged" and
+       .resolved_plan.layout.kv_block_tokens == 16 and
+       (.resolved_plan.layout.permutation_sha256 |
+        type == "string" and test("^[0-9a-f]{64}$")) and
        .status == "complete" and .results_complete == true and
        .conclusions_valid == true and
        ([.measurements[] | select(.status != "measured")] | length) == 0' llm_memory.json

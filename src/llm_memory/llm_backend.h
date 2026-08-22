@@ -208,6 +208,8 @@ class LlmBackend {
 
   virtual LlmMemoryBackend kind() const noexcept = 0;
   virtual LlmBackendAuxiliaryEstimate calculate_auxiliary_estimate(
+      const LlmAuxiliaryPreflightView& preflight) const noexcept;
+  virtual LlmBackendAuxiliaryEstimate calculate_auxiliary_estimate(
       const LlmMemoryWorkPlan& model_plan) const noexcept = 0;
   virtual LlmBackendLifecycleResult initialize(const LlmMemoryConfig& config) = 0;
   virtual LlmBackendLifecycleResult resolve_execution_plan(const LlmMemoryWorkPlan& model_plan) = 0;

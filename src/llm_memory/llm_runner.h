@@ -291,6 +291,11 @@ struct LlmRunnerHooks {
 LlmRunnerAuxiliaryEstimate calculate_llm_runner_auxiliary_estimate(const LlmMemoryConfig& config,
                                                                    const LlmMemoryWorkPlan& model_plan) noexcept;
 
+/** Calculate exact runner backing before paged table materialization. */
+LlmRunnerAuxiliaryEstimate calculate_llm_runner_auxiliary_estimate(
+    const LlmMemoryConfig& config,
+    const LlmAuxiliaryPreflightView& preflight) noexcept;
+
 /**
  * Resolve excluded work, freeze all scenarios, and execute balanced loops.
  *

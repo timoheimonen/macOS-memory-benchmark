@@ -36,6 +36,55 @@ const LlmScenarioAggregate& aggregate_for(const LlmMemoryResult& result, LlmScen
   return result.aggregates[scenario_index(scenario)];
 }
 
+const LlmPagedCpuExecutionPlan* paged_cpu_execution_plan(
+    const LlmMemoryWorkPlan& plan) noexcept {
+  const LlmCpuExecutionPlan* const cpu = get_llm_cpu_execution_plan(plan);
+  if (plan.kv_layout != LlmKvLayout::Paged || cpu == nullptr ||
+      !cpu->paged.has_value()) {
+    return nullptr;
+  }
+  return &*cpu->paged;
+}
+
+void print_paged_layout_evidence(const LlmMemoryWorkPlan& plan,
+                                 std::string_view work_unit_name) {
+  const LlmPagedCpuExecutionPlan* const paged =
+      paged_cpu_execution_plan(plan);
+  if (paged == nullptr) {
+    return;
+  }
+  Messages::LlmPagedLayoutReportValues values;
+  values.block_tokens = paged->layout.kv_block_tokens;
+  values.blocks_per_sequence = paged->layout.blocks_per_sequence;
+  values.physical_blocks_per_layer =
+      paged->layout.physical_blocks_per_layer;
+  values.total_physical_blocks = paged->layout.total_physical_blocks;
+  values.block_bytes = paged->layout.block_bytes;
+  values.terminal_block_tokens = paged->layout.last_block_tokens;
+  values.terminal_valid_bytes = paged->layout.last_block_valid_bytes;
+  values.k_logical_bytes = plan.geometry.k_logical_bytes;
+  values.k_physical_bytes = plan.geometry.k_mapping_bytes;
+  values.k_padding_bytes = plan.geometry.k_layout_padding_bytes;
+  values.v_logical_bytes = plan.geometry.v_logical_bytes;
+  values.v_physical_bytes = plan.geometry.v_mapping_bytes;
+  values.v_padding_bytes = plan.geometry.v_layout_padding_bytes;
+  values.block_table_entries = paged->layout.block_table_entries;
+  values.block_table_bytes = paged->block_table_logical_bytes;
+  values.block_table_page_rounded_bytes = paged->block_table_mapping_bytes;
+  values.permutation_version = paged->permutation.algorithm_version;
+  values.permutation_seed = paged->permutation.resolved_seed;
+  values.permutation_sha256 = paged->permutation.sha256;
+  values.permutation_identity = paged->permutation.identity;
+  values.metadata_lookups_per_work_unit =
+      paged->ownership.total_layout_metadata_lookup_count_per_work_unit;
+  values.metadata_bytes_per_work_unit =
+      paged->ownership.total_layout_metadata_read_bytes_per_work_unit;
+  values.accounted_bytes_per_work_unit =
+      paged->ownership.total_accounted_bytes_per_work_unit;
+  values.work_unit_name = work_unit_name;
+  std::cout << Messages::report_llm_memory_paged_layout(values) << '\n';
+}
+
 void emit_quality_warning(std::string_view token, const LlmMemoryWorkPlan& model_plan,
                           const LlmResultMetadata& metadata, const LlmMemoryResult& result) {
   if (token == "weights_only-high-cv") {
@@ -163,6 +212,7 @@ void print_llm_memory_console_report(const LlmMemoryWorkPlan& model_plan,
                      model_plan.geometry.traffic_crossover_context_tokens)
               << std::endl;
   }
+  print_paged_layout_evidence(model_plan, work_unit_name);
   std::cout << Messages::report_llm_memory_payload(
                    work_unit_name,
                    model_plan.geometry.active_weight_bytes_per_work_unit,

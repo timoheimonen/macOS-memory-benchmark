@@ -132,6 +132,155 @@ void discard_table(LlmKvBlockTable& table) {
   table.valid = false;
 }
 
+void initialize_permutation_identity(
+    LlmKvPermutationIdentity& permutation,
+    const LlmKvLayoutPlan& layout, uint64_t resolved_seed) {
+  permutation.algorithm_version =
+      Constants::LLM_KV_BLOCK_PERMUTATION_VERSION;
+  permutation.domain = kKvBlockPermutationDomain;
+  permutation.domain_uint64_hex = "0x4c4c4d4b56504731";
+  permutation.resolved_seed = resolved_seed;
+  permutation.entry_count = layout.block_table_entries;
+}
+
+/** Fill the identity permutation while retaining bounded stop latency. */
+template <typename StoreEntry>
+bool initialize_block_table_entries(
+    size_t entry_count, StoreEntry&& store_entry,
+    const LlmKvStopRequested& stop_requested) {
+  for (size_t entry = 0; entry < entry_count; ++entry) {
+    store_entry(entry, static_cast<uint32_t>(entry));
+    if (should_poll(entry + 1) &&
+        preparation_interrupted(stop_requested)) {
+      return false;
+    }
+  }
+  return !preparation_interrupted(stop_requested);
+}
+
+/** Apply the frozen rejection-sampled Fisher-Yates permutation in place. */
+bool shuffle_block_table_entries(
+    uint32_t* entries, size_t entry_count, uint64_t resolved_seed,
+    const LlmKvStopRequested& stop_requested) {
+  uint64_t stream_state = resolved_seed;
+  size_t permutation_iterations = 0;
+  for (size_t index = entry_count; index > 1; --index) {
+    const uint64_t bound = static_cast<uint64_t>(index);
+    const uint64_t threshold = (uint64_t{0} - bound) % bound;
+    uint64_t draw = 0;
+    do {
+      draw = splitmix64_next(stream_state);
+    } while (draw < threshold);
+    const size_t swap_index = static_cast<size_t>(draw % bound);
+    std::swap(entries[index - 1], entries[swap_index]);
+    ++permutation_iterations;
+    if (should_poll(permutation_iterations) &&
+        preparation_interrupted(stop_requested)) {
+      return false;
+    }
+  }
+  return !preparation_interrupted(stop_requested);
+}
+
+LlmKvBlockTableValidation validate_llm_kv_block_table_storage(
+    size_t expected_entries, const uint32_t* entries, size_t entry_count,
+    const LlmKvStopRequested& stop_requested) {
+  LlmKvBlockTableValidation result;
+  result.expected_entries = expected_entries;
+  if (expected_entries == 0 ||
+      expected_entries >
+          static_cast<size_t>(std::numeric_limits<uint32_t>::max()) ||
+      entry_count != expected_entries) {
+    result.reason_code = LlmKvLayoutReason::TABLE_ENTRY_COUNT_MISMATCH;
+    return result;
+  }
+  if (entries == nullptr) {
+    result.reason_code = LlmKvLayoutReason::TABLE_OUTPUT_NULL;
+    return result;
+  }
+  if (!checked_ceil_divide(expected_entries, 8,
+                           result.validation_bitset_bytes)) {
+    result.reason_code = LlmKvLayoutReason::TRANSIENT_BYTES_OVERFLOW;
+    return result;
+  }
+  if (preparation_interrupted(stop_requested)) {
+    result.interrupted = true;
+    result.reason_code = LlmKvLayoutReason::PREPARATION_INTERRUPTED;
+    return result;
+  }
+
+  std::vector<uint8_t> seen;
+  try {
+    seen.reserve(result.validation_bitset_bytes);
+  } catch (const std::bad_alloc&) {
+    result.reason_code = LlmKvLayoutReason::PLANNER_ALLOCATION_FAILED;
+    return result;
+  } catch (const std::length_error&) {
+    result.reason_code = LlmKvLayoutReason::PLANNER_ALLOCATION_FAILED;
+    return result;
+  }
+  const size_t bitset_poll_bytes =
+      std::max<size_t>(
+          1,
+          Constants::LLM_KV_PREPARATION_POLL_INTERVAL_ENTRIES / 8);
+  while (seen.size() < result.validation_bitset_bytes) {
+    const size_t chunk_bytes =
+        std::min(bitset_poll_bytes,
+                 result.validation_bitset_bytes - seen.size());
+    try {
+      seen.insert(seen.end(), chunk_bytes, uint8_t{0});
+    } catch (const std::bad_alloc&) {
+      result.reason_code = LlmKvLayoutReason::PLANNER_ALLOCATION_FAILED;
+      return result;
+    } catch (const std::length_error&) {
+      result.reason_code = LlmKvLayoutReason::PLANNER_ALLOCATION_FAILED;
+      return result;
+    }
+    if (preparation_interrupted(stop_requested)) {
+      result.interrupted = true;
+      result.reason_code = LlmKvLayoutReason::PREPARATION_INTERRUPTED;
+      return result;
+    }
+  }
+
+  for (size_t index = 0; index < expected_entries; ++index) {
+    const uint32_t value = entries[index];
+    result.examined_entries = index + 1;
+    if (value == std::numeric_limits<uint32_t>::max()) {
+      result.reason_code = LlmKvLayoutReason::TABLE_INVALID_SENTINEL;
+      return result;
+    }
+    if (static_cast<size_t>(value) >= expected_entries) {
+      result.reason_code = LlmKvLayoutReason::TABLE_ID_OUT_OF_RANGE;
+      return result;
+    }
+    const size_t byte_index = static_cast<size_t>(value) / 8;
+    const uint8_t bit =
+        static_cast<uint8_t>(1U << (static_cast<size_t>(value) % 8));
+    if ((seen[byte_index] & bit) != 0) {
+      result.reason_code = LlmKvLayoutReason::TABLE_DUPLICATE_ID;
+      return result;
+    }
+    seen[byte_index] = static_cast<uint8_t>(seen[byte_index] | bit);
+    if (should_poll(result.examined_entries) &&
+        preparation_interrupted(stop_requested)) {
+      result.interrupted = true;
+      result.reason_code = LlmKvLayoutReason::PREPARATION_INTERRUPTED;
+      return result;
+    }
+  }
+
+  if (preparation_interrupted(stop_requested)) {
+    result.interrupted = true;
+    result.reason_code = LlmKvLayoutReason::PREPARATION_INTERRUPTED;
+    return result;
+  }
+
+  result.valid = true;
+  result.reason_code = LlmKvLayoutReason::VALID;
+  return result;
+}
+
 struct LlmKvTableHashResult {
   bool valid = false;
   bool interrupted = false;
@@ -140,7 +289,8 @@ struct LlmKvTableHashResult {
 };
 
 LlmKvTableHashResult hash_block_table_little_endian(
-    const std::vector<uint32_t>& entries, size_t requested_chunk_entries,
+    const uint32_t* entries, size_t total_entries,
+    size_t requested_chunk_entries,
     const LlmKvStopRequested& stop_requested) {
   LlmKvTableHashResult result;
   if (requested_chunk_entries == 0) {
@@ -169,14 +319,14 @@ LlmKvTableHashResult hash_block_table_little_endian(
       bytes{};
   size_t offset = 0;
   size_t entries_since_poll = 0;
-  while (offset < entries.size()) {
+  while (offset < total_entries) {
     const size_t entries_until_poll =
         Constants::LLM_KV_PREPARATION_POLL_INTERVAL_ENTRIES -
         entries_since_poll;
-    const size_t entry_count =
-        std::min({requested_chunk_entries, entries.size() - offset,
+    const size_t chunk_entries =
+        std::min({requested_chunk_entries, total_entries - offset,
                   kHashSerializationBufferEntries, entries_until_poll});
-    for (size_t index = 0; index < entry_count; ++index) {
+    for (size_t index = 0; index < chunk_entries; ++index) {
       const uint32_t value = entries[offset + index];
       for (size_t byte = 0; byte < sizeof(uint32_t); ++byte) {
         bytes[index * sizeof(uint32_t) + byte] =
@@ -184,7 +334,7 @@ LlmKvTableHashResult hash_block_table_little_endian(
       }
     }
     try {
-      hasher->update(bytes.data(), entry_count * sizeof(uint32_t));
+      hasher->update(bytes.data(), chunk_entries * sizeof(uint32_t));
     } catch (const std::bad_alloc&) {
       result.reason_code = LlmKvLayoutReason::PLANNER_ALLOCATION_FAILED;
       return result;
@@ -192,8 +342,8 @@ LlmKvTableHashResult hash_block_table_little_endian(
       result.reason_code = LlmKvLayoutReason::HASH_FAILED;
       return result;
     }
-    offset += entry_count;
-    entries_since_poll += entry_count;
+    offset += chunk_entries;
+    entries_since_poll += chunk_entries;
     if (entries_since_poll ==
         Constants::LLM_KV_PREPARATION_POLL_INTERVAL_ENTRIES) {
       if (preparation_interrupted(stop_requested)) {
@@ -237,8 +387,44 @@ std::string build_permutation_identity(
   return identity;
 }
 
-size_t rotated_worker(size_t ordinal, size_t rank,
-                      size_t worker_count) {
+/** Validate and identify a completed table without taking storage ownership. */
+template <typename MaterializationResult>
+void complete_block_table_materialization(
+    MaterializationResult& result, const uint32_t* entries,
+    size_t entry_count, size_t hash_chunk_entries,
+    const LlmKvStopRequested& stop_requested) {
+  result.validation = validate_llm_kv_block_table_storage(
+      entry_count, entries, entry_count, stop_requested);
+  if (!result.validation.valid) {
+    result.interrupted = result.validation.interrupted;
+    result.reason_code = result.validation.reason_code;
+    return;
+  }
+
+  const LlmKvTableHashResult hash = hash_block_table_little_endian(
+      entries, entry_count, hash_chunk_entries, stop_requested);
+  if (!hash.valid) {
+    result.interrupted = hash.interrupted;
+    result.reason_code = hash.reason_code;
+    return;
+  }
+  try {
+    result.permutation.sha256 = hash.sha256;
+    result.permutation.identity =
+        build_permutation_identity(result.permutation);
+  } catch (const std::bad_alloc&) {
+    result.reason_code = LlmKvLayoutReason::PLANNER_ALLOCATION_FAILED;
+    return;
+  } catch (const std::length_error&) {
+    result.reason_code = LlmKvLayoutReason::PLANNER_ALLOCATION_FAILED;
+    return;
+  }
+
+  result.valid = true;
+  result.reason_code = LlmKvLayoutReason::VALID;
+}
+
+size_t rotated_worker(size_t ordinal, size_t rank, size_t worker_count) {
   const size_t start = ordinal % worker_count;
   const size_t distance_to_wrap = worker_count - start;
   return rank >= distance_to_wrap ? rank - distance_to_wrap : start + rank;
@@ -524,102 +710,26 @@ uint64_t derive_llm_kv_permutation_seed(uint64_t base_seed) noexcept {
   return SeedUtils::splitmix64(base_seed ^ kKvBlockPermutationDomain);
 }
 
+LlmKvPermutationIdentity build_llm_kv_permutation_identity(
+    const LlmKvLayoutPlan& layout, uint64_t resolved_seed,
+    std::string sha256) {
+  LlmKvPermutationIdentity permutation;
+  if (!layout.valid ||
+      layout.block_table_entries == 0 ||
+      !is_lowercase_sha256(sha256)) {
+    return permutation;
+  }
+  initialize_permutation_identity(permutation, layout, resolved_seed);
+  permutation.sha256 = std::move(sha256);
+  permutation.identity = build_permutation_identity(permutation);
+  return permutation;
+}
+
 LlmKvBlockTableValidation validate_llm_kv_block_table(
     size_t expected_entries, const std::vector<uint32_t>& entries,
     const LlmKvStopRequested& stop_requested) {
-  LlmKvBlockTableValidation result;
-  result.expected_entries = expected_entries;
-  if (expected_entries == 0 ||
-      expected_entries >
-          static_cast<size_t>(std::numeric_limits<uint32_t>::max())) {
-    result.reason_code = LlmKvLayoutReason::TABLE_ENTRY_COUNT_MISMATCH;
-    return result;
-  }
-  if (entries.size() != expected_entries) {
-    result.reason_code = LlmKvLayoutReason::TABLE_ENTRY_COUNT_MISMATCH;
-    return result;
-  }
-  if (!checked_ceil_divide(expected_entries, 8,
-                           result.validation_bitset_bytes)) {
-    result.reason_code = LlmKvLayoutReason::TRANSIENT_BYTES_OVERFLOW;
-    return result;
-  }
-  if (preparation_interrupted(stop_requested)) {
-    result.interrupted = true;
-    result.reason_code = LlmKvLayoutReason::PREPARATION_INTERRUPTED;
-    return result;
-  }
-
-  std::vector<uint8_t> seen;
-  try {
-    seen.reserve(result.validation_bitset_bytes);
-  } catch (const std::bad_alloc&) {
-    result.reason_code = LlmKvLayoutReason::PLANNER_ALLOCATION_FAILED;
-    return result;
-  } catch (const std::length_error&) {
-    result.reason_code = LlmKvLayoutReason::PLANNER_ALLOCATION_FAILED;
-    return result;
-  }
-  const size_t bitset_poll_bytes =
-      std::max<size_t>(
-          1,
-          Constants::LLM_KV_PREPARATION_POLL_INTERVAL_ENTRIES / 8);
-  while (seen.size() < result.validation_bitset_bytes) {
-    const size_t chunk_bytes =
-        std::min(bitset_poll_bytes,
-                 result.validation_bitset_bytes - seen.size());
-    try {
-      seen.insert(seen.end(), chunk_bytes, uint8_t{0});
-    } catch (const std::bad_alloc&) {
-      result.reason_code = LlmKvLayoutReason::PLANNER_ALLOCATION_FAILED;
-      return result;
-    } catch (const std::length_error&) {
-      result.reason_code = LlmKvLayoutReason::PLANNER_ALLOCATION_FAILED;
-      return result;
-    }
-    if (preparation_interrupted(stop_requested)) {
-      result.interrupted = true;
-      result.reason_code = LlmKvLayoutReason::PREPARATION_INTERRUPTED;
-      return result;
-    }
-  }
-
-  for (size_t index = 0; index < expected_entries; ++index) {
-    const uint32_t value = entries[index];
-    result.examined_entries = index + 1;
-    if (value == std::numeric_limits<uint32_t>::max()) {
-      result.reason_code = LlmKvLayoutReason::TABLE_INVALID_SENTINEL;
-      return result;
-    }
-    if (static_cast<size_t>(value) >= expected_entries) {
-      result.reason_code = LlmKvLayoutReason::TABLE_ID_OUT_OF_RANGE;
-      return result;
-    }
-    const size_t byte_index = static_cast<size_t>(value) / 8;
-    const uint8_t bit =
-        static_cast<uint8_t>(1U << (static_cast<size_t>(value) % 8));
-    if ((seen[byte_index] & bit) != 0) {
-      result.reason_code = LlmKvLayoutReason::TABLE_DUPLICATE_ID;
-      return result;
-    }
-    seen[byte_index] = static_cast<uint8_t>(seen[byte_index] | bit);
-    if (should_poll(result.examined_entries) &&
-        preparation_interrupted(stop_requested)) {
-      result.interrupted = true;
-      result.reason_code = LlmKvLayoutReason::PREPARATION_INTERRUPTED;
-      return result;
-    }
-  }
-
-  if (preparation_interrupted(stop_requested)) {
-    result.interrupted = true;
-    result.reason_code = LlmKvLayoutReason::PREPARATION_INTERRUPTED;
-    return result;
-  }
-
-  result.valid = true;
-  result.reason_code = LlmKvLayoutReason::VALID;
-  return result;
+  return validate_llm_kv_block_table_storage(
+      expected_entries, entries.data(), entries.size(), stop_requested);
 }
 
 LlmKvBlockTable materialize_llm_kv_block_table(
@@ -627,12 +737,8 @@ LlmKvBlockTable materialize_llm_kv_block_table(
     size_t hash_chunk_entries,
     const LlmKvStopRequested& stop_requested) {
   LlmKvBlockTable result;
-  result.permutation.algorithm_version =
-      Constants::LLM_KV_BLOCK_PERMUTATION_VERSION;
-  result.permutation.domain = kKvBlockPermutationDomain;
-  result.permutation.domain_uint64_hex = "0x4c4c4d4b56504731";
-  result.permutation.resolved_seed = resolved_seed;
-  result.permutation.entry_count = layout.block_table_entries;
+  initialize_permutation_identity(result.permutation, layout,
+                                  resolved_seed);
   if (!layout.valid || layout.block_table_entries == 0) {
     result.reason_code = layout.reason_code;
     return result;
@@ -658,83 +764,81 @@ LlmKvBlockTable materialize_llm_kv_block_table(
     discard_table(result);
     return result;
   }
-  for (size_t entry = 0; entry < layout.block_table_entries; ++entry) {
-    result.entries.push_back(static_cast<uint32_t>(entry));
-    if (should_poll(entry + 1) &&
-        preparation_interrupted(stop_requested)) {
-      result.interrupted = true;
-      result.reason_code = LlmKvLayoutReason::PREPARATION_INTERRUPTED;
-      discard_table(result);
-      return result;
-    }
-  }
-  if (preparation_interrupted(stop_requested)) {
+  if (!initialize_block_table_entries(
+          layout.block_table_entries,
+          [&result](size_t, uint32_t value) {
+            result.entries.push_back(value);
+          },
+          stop_requested)) {
     result.interrupted = true;
     result.reason_code = LlmKvLayoutReason::PREPARATION_INTERRUPTED;
     discard_table(result);
     return result;
   }
 
-  uint64_t stream_state = resolved_seed;
-  size_t permutation_iterations = 0;
-  for (size_t index = layout.block_table_entries; index > 1; --index) {
-    const uint64_t bound = static_cast<uint64_t>(index);
-    const uint64_t threshold = (uint64_t{0} - bound) % bound;
-    uint64_t draw = 0;
-    do {
-      draw = splitmix64_next(stream_state);
-    } while (draw < threshold);
-    const size_t swap_index = static_cast<size_t>(draw % bound);
-    std::swap(result.entries[index - 1], result.entries[swap_index]);
-    ++permutation_iterations;
-    if (should_poll(permutation_iterations) &&
-        preparation_interrupted(stop_requested)) {
-      result.interrupted = true;
-      result.reason_code = LlmKvLayoutReason::PREPARATION_INTERRUPTED;
-      discard_table(result);
-      return result;
-    }
-  }
-  if (preparation_interrupted(stop_requested)) {
+  if (!shuffle_block_table_entries(
+          result.entries.data(), layout.block_table_entries,
+          resolved_seed, stop_requested)) {
     result.interrupted = true;
     result.reason_code = LlmKvLayoutReason::PREPARATION_INTERRUPTED;
     discard_table(result);
     return result;
   }
 
-  result.validation = validate_llm_kv_block_table(
-      layout.block_table_entries, result.entries, stop_requested);
-  if (!result.validation.valid) {
-    result.interrupted = result.validation.interrupted;
-    result.reason_code = result.validation.reason_code;
+  complete_block_table_materialization(
+      result, result.entries.data(), layout.block_table_entries,
+      hash_chunk_entries, stop_requested);
+  if (!result.valid) {
     discard_table(result);
+  }
+  return result;
+}
+
+LlmKvInPlaceBlockTableMaterialization
+materialize_llm_kv_block_table_in_place(
+    const LlmKvLayoutPlan& layout, uint64_t resolved_seed,
+    uint32_t* entries, size_t entry_count, size_t hash_chunk_entries,
+    const LlmKvStopRequested& stop_requested) {
+  LlmKvInPlaceBlockTableMaterialization result;
+  initialize_permutation_identity(result.permutation, layout,
+                                  resolved_seed);
+  if (!layout.valid || layout.block_table_entries == 0) {
+    result.reason_code = layout.reason_code;
+    return result;
+  }
+  if (hash_chunk_entries == 0) {
+    result.reason_code = LlmKvLayoutReason::HASH_CHUNK_ENTRIES_ZERO;
+    return result;
+  }
+  if (entry_count != layout.block_table_entries) {
+    result.reason_code = LlmKvLayoutReason::TABLE_ENTRY_COUNT_MISMATCH;
+    return result;
+  }
+  if (entries == nullptr) {
+    result.reason_code = LlmKvLayoutReason::TABLE_OUTPUT_NULL;
+    return result;
+  }
+  if (preparation_interrupted(stop_requested)) {
+    result.interrupted = true;
+    result.reason_code = LlmKvLayoutReason::PREPARATION_INTERRUPTED;
     return result;
   }
 
-  const LlmKvTableHashResult hash = hash_block_table_little_endian(
-      result.entries, hash_chunk_entries, stop_requested);
-  if (!hash.valid) {
-    result.interrupted = hash.interrupted;
-    result.reason_code = hash.reason_code;
-    discard_table(result);
-    return result;
-  }
-  try {
-    result.permutation.sha256 = hash.sha256;
-    result.permutation.identity = build_permutation_identity(
-        result.permutation);
-  } catch (const std::bad_alloc&) {
-    result.reason_code = LlmKvLayoutReason::PLANNER_ALLOCATION_FAILED;
-    discard_table(result);
-    return result;
-  } catch (const std::length_error&) {
-    result.reason_code = LlmKvLayoutReason::PLANNER_ALLOCATION_FAILED;
-    discard_table(result);
+  if (!initialize_block_table_entries(
+          entry_count,
+          [entries](size_t entry, uint32_t value) {
+            entries[entry] = value;
+          },
+          stop_requested) ||
+      !shuffle_block_table_entries(entries, entry_count, resolved_seed,
+                                   stop_requested)) {
+    result.interrupted = true;
+    result.reason_code = LlmKvLayoutReason::PREPARATION_INTERRUPTED;
     return result;
   }
 
-  result.valid = true;
-  result.reason_code = LlmKvLayoutReason::VALID;
+  complete_block_table_materialization(
+      result, entries, entry_count, hash_chunk_entries, stop_requested);
   return result;
 }
 
@@ -890,7 +994,8 @@ LlmPagedDecodeWorkloadPlan build_llm_paged_decode_workload_plan(
 }
 
 LlmKvCpuOwnershipPlan build_llm_paged_decode_kv_cpu_ownership_plan(
-    const LlmKvLayoutPlan& layout, size_t worker_count) {
+    const LlmKvLayoutPlan& layout, size_t worker_count,
+    const LlmKvStopRequested& stop_requested) {
   LlmKvCpuOwnershipPlan plan;
   plan.worker_count = worker_count;
   if (!layout.valid) {
@@ -900,6 +1005,10 @@ LlmKvCpuOwnershipPlan build_llm_paged_decode_kv_cpu_ownership_plan(
   plan.layout_geometry_identity = layout.geometry_identity;
   if (worker_count == 0) {
     plan.reason_code = LlmKvLayoutReason::WORKER_COUNT_ZERO;
+    return plan;
+  }
+  if (preparation_interrupted(stop_requested)) {
+    plan.reason_code = LlmKvLayoutReason::PREPARATION_INTERRUPTED;
     return plan;
   }
 
@@ -961,16 +1070,39 @@ LlmKvCpuOwnershipPlan build_llm_paged_decode_kv_cpu_ownership_plan(
   size_t total_accounted_bytes = 0;
   try {
     assignments.reserve(assignment_count);
-    worker_costs.assign(worker_count, 0);
-    std::vector<size_t> boundaries(active_workers + 1, 0);
-    boundaries.back() = layout.blocks_per_sequence;
+    worker_costs.reserve(worker_count);
+    for (size_t worker = 0; worker < worker_count; ++worker) {
+      worker_costs.push_back(0);
+      if (should_poll(worker + 1) &&
+          preparation_interrupted(stop_requested)) {
+        plan.reason_code = LlmKvLayoutReason::PREPARATION_INTERRUPTED;
+        return plan;
+      }
+    }
+    if (preparation_interrupted(stop_requested)) {
+      plan.reason_code = LlmKvLayoutReason::PREPARATION_INTERRUPTED;
+      return plan;
+    }
+    std::vector<size_t> boundaries;
+    boundaries.reserve(active_workers + 1);
+    boundaries.push_back(0);
     for (size_t rank = 1; rank < active_workers; ++rank) {
-      boundaries[rank] = closest_decode_cost_boundary(
+      boundaries.push_back(closest_decode_cost_boundary(
           layer_sequence_cost, regular_block_cost, rank, active_workers,
           boundaries[rank - 1] + 1,
-          layout.blocks_per_sequence - (active_workers - rank));
+          layout.blocks_per_sequence - (active_workers - rank)));
+      if (should_poll(rank) && preparation_interrupted(stop_requested)) {
+        plan.reason_code = LlmKvLayoutReason::PREPARATION_INTERRUPTED;
+        return plan;
+      }
+    }
+    boundaries.push_back(layout.blocks_per_sequence);
+    if (preparation_interrupted(stop_requested)) {
+      plan.reason_code = LlmKvLayoutReason::PREPARATION_INTERRUPTED;
+      return plan;
     }
 
+    size_t processed_assignments = 0;
     for (size_t ordinal = 0; ordinal < plan.layer_sequence_count;
          ++ordinal) {
       const size_t layer = ordinal / layout.batch_size;
@@ -1055,12 +1187,22 @@ LlmKvCpuOwnershipPlan build_llm_paged_decode_kv_cpu_ownership_plan(
           return plan;
         }
         assignments.push_back(assignment);
+        ++processed_assignments;
+        if (should_poll(processed_assignments) &&
+            preparation_interrupted(stop_requested)) {
+          plan.reason_code = LlmKvLayoutReason::PREPARATION_INTERRUPTED;
+          return plan;
+        }
       }
       if (sequence_accounted_bytes != layer_sequence_cost) {
         plan.reason_code =
             LlmKvLayoutReason::OWNERSHIP_ACCOUNTING_MISMATCH;
         return plan;
       }
+    }
+    if (preparation_interrupted(stop_requested)) {
+      plan.reason_code = LlmKvLayoutReason::PREPARATION_INTERRUPTED;
+      return plan;
     }
   } catch (const std::bad_alloc&) {
     plan.reason_code = LlmKvLayoutReason::PLANNER_ALLOCATION_FAILED;

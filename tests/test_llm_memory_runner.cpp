@@ -83,6 +83,7 @@ LlmMemoryWorkPlanRequest plan_request(const LlmMemoryConfig& config) {
   request.backend = config.backend;
   request.geometry.phase = config.phase;
   request.geometry.kv_layout = config.kv_layout;
+  request.geometry.kv_block_tokens = config.kv_block_tokens;
   request.geometry.active_weight_bytes = config.weight_size_mb * Constants::BYTES_PER_MB;
   request.geometry.layer_count = config.layer_count;
   request.geometry.query_head_count = config.query_head_count;
@@ -101,20 +102,26 @@ LlmMemoryWorkPlanRequest plan_request(const LlmMemoryConfig& config) {
 
 LlmMemoryWorkPlan build_runner_admitted_plan(const LlmMemoryConfig& config) {
   LlmMemoryWorkPlanRequest request = plan_request(config);
-  const LlmMemoryWorkPlan preliminary = build_llm_memory_work_plan(request);
-  if (!preliminary.valid) {
-    return build_llm_memory_work_plan(request);
+  LlmMemoryWorkPlanDraft draft = prepare_llm_memory_work_plan(request);
+  if (!draft.valid) {
+    return finalize_llm_memory_work_plan(std::move(draft), 0, 0);
   }
-  const LlmExecutorAuxiliaryEstimate executor = calculate_llm_executor_auxiliary_estimate(preliminary);
-  const LlmRunnerAuxiliaryEstimate runner = calculate_llm_runner_auxiliary_estimate(config, preliminary);
+  const LlmExecutorAuxiliaryEstimate executor =
+      calculate_llm_executor_auxiliary_estimate(
+          draft.auxiliary_preflight);
+  const LlmRunnerAuxiliaryEstimate runner =
+      calculate_llm_runner_auxiliary_estimate(
+          config, draft.auxiliary_preflight);
   if (!executor.valid || !runner.valid ||
       !NumericUtils::checked_add(executor.checksum_auxiliary_bytes, runner.checksum_auxiliary_bytes,
                                  request.checksum_auxiliary_bytes) ||
       !NumericUtils::checked_add(executor.orchestration_auxiliary_bytes, runner.orchestration_auxiliary_bytes,
                                  request.orchestration_auxiliary_bytes)) {
-    return build_llm_memory_work_plan(request);
+    return finalize_llm_memory_work_plan(std::move(draft), 0, 0);
   }
-  return build_llm_memory_work_plan(request);
+  return finalize_llm_memory_work_plan(
+      std::move(draft), request.checksum_auxiliary_bytes,
+      request.orchestration_auxiliary_bytes);
 }
 
 LlmTaskExecutionResult successful_execution(const LlmMemoryWorkPlan& model_plan,
@@ -1016,13 +1023,18 @@ TEST(LlmMemoryRunnerTest, CanonicalResultReasonsDetachFromEveryOwningDomain) {
   std::string runner_reason = LlmRunnerReason::CHECKPOINT_WRITE_FAILED;
   std::string work_plan_reason = LlmWorkPlanReason::TASK_ACCOUNTED_BYTES_CAP_EXCEEDED;
   std::string executor_reason = LlmExecutorReason::KERNEL_FAILED;
+  std::string paged_option_reason =
+      LlmWorkPlanReason::KV_BLOCK_TOKENS_NOT_APPLICABLE;
 
   const std::string_view canonical_runner = canonicalize_llm_result_reason_code(runner_reason);
   const std::string_view canonical_work_plan = canonicalize_llm_result_reason_code(work_plan_reason);
   const std::string_view canonical_executor = canonicalize_llm_result_reason_code(executor_reason);
+  const std::string_view canonical_paged_option =
+      canonicalize_llm_result_reason_code(paged_option_reason);
   std::fill(runner_reason.begin(), runner_reason.end(), 'x');
   std::fill(work_plan_reason.begin(), work_plan_reason.end(), 'x');
   std::fill(executor_reason.begin(), executor_reason.end(), 'x');
+  std::fill(paged_option_reason.begin(), paged_option_reason.end(), 'x');
 
   EXPECT_EQ(canonical_runner, LlmRunnerReason::CHECKPOINT_WRITE_FAILED);
   EXPECT_EQ(canonical_runner.data(),
@@ -1033,7 +1045,139 @@ TEST(LlmMemoryRunnerTest, CanonicalResultReasonsDetachFromEveryOwningDomain) {
   EXPECT_EQ(canonical_executor, LlmExecutorReason::KERNEL_FAILED);
   EXPECT_EQ(canonical_executor.data(),
             canonicalize_llm_result_reason_code(LlmExecutorReason::KERNEL_FAILED).data());
+  EXPECT_EQ(canonical_paged_option,
+            LlmWorkPlanReason::KV_BLOCK_TOKENS_NOT_APPLICABLE);
+  EXPECT_EQ(canonical_paged_option.data(),
+            canonicalize_llm_result_reason_code(
+                LlmWorkPlanReason::KV_BLOCK_TOKENS_NOT_APPLICABLE)
+                .data());
   EXPECT_EQ(canonicalize_llm_result_reason_code("not-a-reason"), LlmRunnerReason::RUNNER_UNKNOWN_EXCEPTION);
+}
+
+TEST(LlmMemoryRunnerTest,
+     PagedPostValidationFailureCanonicalizesExactlyThroughRunnerFailure) {
+  std::string owned_reason =
+      LlmExecutorReason::PAGED_POST_VALIDATION_FAILED;
+  const std::string_view canonical =
+      canonicalize_llm_result_reason_code(owned_reason);
+  std::fill(owned_reason.begin(), owned_reason.end(), 'x');
+  EXPECT_EQ(canonical, LlmExecutorReason::PAGED_POST_VALIDATION_FAILED);
+  EXPECT_NE(canonical, LlmRunnerReason::RUNNER_UNKNOWN_EXCEPTION);
+  EXPECT_EQ(
+      canonical.data(),
+      canonicalize_llm_result_reason_code(
+          LlmExecutorReason::PAGED_POST_VALIDATION_FAILED)
+          .data());
+
+  LlmMemoryConfig config = explicit_config(1);
+  config.kv_layout = LlmKvLayout::Paged;
+  config.kv_block_tokens = 2;
+  config.user_specified_kv_layout = true;
+  config.user_specified_kv_block_tokens = true;
+  const LlmMemoryWorkPlan plan = build_runner_admitted_plan(config);
+  ASSERT_TRUE(plan.valid) << plan.reason_code;
+  FakeLlmBackend executor;
+  executor.mutate = [](const LlmMemoryWorkPlan&,
+                       const LlmScenarioWorkPlan&,
+                       const LlmRunnerTaskContext& context, size_t,
+                       LlmTaskExecutionResult& execution) {
+    if (context.kind != LlmRunnerTaskKind::Measurement) {
+      return;
+    }
+    execution.status = LlmTaskExecutionStatus::Invalid;
+    execution.reason_code =
+        std::string(LlmExecutorReason::PAGED_POST_VALIDATION_FAILED);
+    execution.validation.evaluated = true;
+    execution.validation.valid = false;
+    LlmCpuTaskEvidence evidence;
+    evidence.executor.valid = false;
+    evidence.executor.reason_code =
+        std::string(LlmExecutorReason::PAGED_POST_VALIDATION_FAILED);
+    evidence.executor.post_validation_evaluated = true;
+    evidence.executor.post_validation_valid = false;
+    execution.backend_evidence = std::move(evidence);
+  };
+  LlmMemoryResult result;
+
+  EXPECT_EQ(run_llm_memory_suite(config, plan, executor, result),
+            EXIT_FAILURE);
+  EXPECT_EQ(result.status, LlmRunStatus::Failed);
+  EXPECT_EQ(result.reason_code,
+            LlmExecutorReason::PAGED_POST_VALIDATION_FAILED);
+  EXPECT_NE(result.reason_code, LlmRunnerReason::RUNNER_UNKNOWN_EXCEPTION);
+  ASSERT_FALSE(result.measurements.empty());
+  const LlmMeasurementState& measurement = result.measurements.front();
+  EXPECT_EQ(measurement.status, LlmMeasurementStatus::Invalid);
+  EXPECT_EQ(measurement.reason_code,
+            LlmExecutorReason::PAGED_POST_VALIDATION_FAILED);
+  EXPECT_EQ(measurement.execution.reason_code,
+            LlmExecutorReason::PAGED_POST_VALIDATION_FAILED);
+  const auto* retained =
+      std::get_if<LlmCpuTaskEvidence>(&measurement.execution.backend_evidence);
+  ASSERT_NE(retained, nullptr);
+  EXPECT_EQ(retained->executor.reason_code,
+            LlmExecutorReason::PAGED_POST_VALIDATION_FAILED);
+  EXPECT_TRUE(retained->executor.post_validation_evaluated);
+  EXPECT_FALSE(retained->executor.post_validation_valid);
+}
+
+TEST(LlmMemoryRunnerTest,
+     AcceptedCpuMeasurementRetainsPagedPostValidationEvidence) {
+  LlmMemoryConfig config = explicit_config(1);
+  config.kv_layout = LlmKvLayout::Paged;
+  config.kv_block_tokens = 2;
+  config.user_specified_kv_layout = true;
+  config.user_specified_kv_block_tokens = true;
+  const LlmMemoryWorkPlan plan = build_runner_admitted_plan(config);
+  ASSERT_TRUE(plan.valid) << plan.reason_code;
+  ASSERT_EQ(plan.kv_layout, LlmKvLayout::Paged);
+  const LlmCpuExecutionPlan* cpu_plan = get_llm_cpu_execution_plan(plan);
+  ASSERT_NE(cpu_plan, nullptr);
+  const size_t effective_workers = cpu_plan->effective_workers;
+
+  FakeLlmBackend executor;
+  executor.mutate = [effective_workers](
+                        const LlmMemoryWorkPlan&,
+                        const LlmScenarioWorkPlan&,
+                        const LlmRunnerTaskContext& context, size_t,
+                        LlmTaskExecutionResult& execution) {
+    if (context.kind != LlmRunnerTaskKind::Measurement) {
+      return;
+    }
+    LlmCpuTaskEvidence evidence;
+    evidence.executor.valid = true;
+    evidence.executor.reason_code = LlmExecutorReason::VALID;
+    evidence.executor.elapsed_seconds = execution.timing.elapsed_seconds;
+    evidence.executor.requested_workers = effective_workers;
+    evidence.executor.created_workers = effective_workers;
+    evidence.executor.completed_workers = effective_workers;
+    evidence.executor.qos_successful_workers = effective_workers;
+    evidence.executor.kernel_succeeded = true;
+    evidence.executor.timer_started = true;
+    evidence.executor.timer_stopped = true;
+    evidence.executor.checksum_evaluated = true;
+    evidence.executor.checksum_valid = true;
+    evidence.executor.post_validation_evaluated = true;
+    evidence.executor.post_validation_valid = true;
+    execution.backend_evidence = std::move(evidence);
+  };
+  LlmMemoryResult result;
+
+  ASSERT_EQ(run_llm_memory_suite(config, plan, executor, result), EXIT_SUCCESS);
+  ASSERT_TRUE(result.results_complete);
+  ASSERT_EQ(result.measurements.size(), kLlmScenarioCount);
+  for (const LlmMeasurementState& measurement : result.measurements) {
+    SCOPED_TRACE(::testing::Message()
+                 << "scenario=" << static_cast<size_t>(measurement.scenario));
+    ASSERT_EQ(measurement.status, LlmMeasurementStatus::Measured);
+    ASSERT_TRUE(measurement.execution_evidence_available);
+    const auto* retained = std::get_if<LlmCpuTaskEvidence>(
+        &measurement.execution.backend_evidence);
+    ASSERT_NE(retained, nullptr);
+    EXPECT_EQ(retained->executor.reason_code, LlmExecutorReason::VALID);
+    EXPECT_TRUE(retained->executor.post_validation_evaluated);
+    EXPECT_TRUE(retained->executor.post_validation_valid);
+  }
 }
 
 TEST(LlmMemoryRunnerTest, ResultCopiesAndMovesRetainStaticRunnerFailureAfterSourcesReset) {
@@ -1631,6 +1775,9 @@ TEST(LlmMemoryRunnerTest,
        LlmRunnerReason::CONFIG_WORK_PLAN_MISMATCH},
       {+[](LlmMemoryConfig& candidate) {
          candidate.kv_layout = LlmKvLayout::Paged;
+         candidate.kv_block_tokens = 2;
+         candidate.user_specified_kv_layout = true;
+         candidate.user_specified_kv_block_tokens = true;
        },
        LlmRunnerReason::CONFIG_WORK_PLAN_MISMATCH},
   }};

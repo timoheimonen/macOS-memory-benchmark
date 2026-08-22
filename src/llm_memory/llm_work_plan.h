@@ -31,6 +31,8 @@
 #include <variant>
 #include <vector>
 
+#include "core/memory/memory_manager.h"
+#include "llm_memory/llm_kv_layout.h"
 #include "llm_memory/llm_memory.h"
 
 /** Stable machine-readable reasons emitted by LLM geometry and planning. */
@@ -45,6 +47,8 @@ inline constexpr const char* HEAD_DIMENSION_ZERO = "head-dimension-zero";
 inline constexpr const char* INVALID_KV_ELEMENT_BYTES =
     "invalid-kv-element-bytes";
 inline constexpr const char* CONTEXT_TOKENS_ZERO = "context-tokens-zero";
+inline constexpr const char* KV_BLOCK_TOKENS_NOT_APPLICABLE =
+    "kv-block-tokens-not-applicable";
 inline constexpr const char* BATCH_SIZE_ZERO = "batch-size-zero";
 inline constexpr const char* QUERY_HEADS_BELOW_KV_HEADS =
     "query-heads-below-kv-heads";
@@ -94,6 +98,8 @@ inline constexpr const char* MAPPING_ROUND_UP_OVERFLOW =
     "mapping-round-up-overflow";
 inline constexpr const char* AUXILIARY_BYTES_OVERFLOW =
     "auxiliary-bytes-overflow";
+inline constexpr const char* AUXILIARY_PREFLIGHT_MISMATCH =
+    "auxiliary-preflight-mismatch";
 inline constexpr const char* MEMORY_REQUIREMENT_OVERFLOW =
     "memory-requirement-overflow";
 inline constexpr const char* MEMORY_BUDGET_OVERFLOW =
@@ -104,6 +110,12 @@ inline constexpr const char* WITHIN_MEMORY_BUDGET =
     "within-memory-budget";
 inline constexpr const char* PLANNER_ALLOCATION_FAILED =
     "planner-allocation-failed";
+inline constexpr const char* BLOCK_TABLE_MAPPING_FAILED =
+    "block-table-mapping-failed";
+inline constexpr const char* BLOCK_TABLE_MATERIALIZATION_FAILED =
+    "block-table-materialization-failed";
+inline constexpr const char* BLOCK_TABLE_PROTECTION_FAILED =
+    "block-table-protection-failed";
 inline constexpr const char* INVALID_SCENARIO = "invalid-scenario";
 inline constexpr const char* INVALID_MODEL_WORK_PLAN =
     "invalid-model-work-plan";
@@ -159,6 +171,32 @@ struct alignas(16) LlmKvSequenceDescriptor {
   uint64_t append_record_byte_offset;
 };
 
+/** Frozen assembly-facing paged layer descriptor ABI v1. */
+struct alignas(16) LlmPagedLayerDescriptor {
+  const uint8_t* weight_ptr;
+  uint64_t weight_bytes;
+  uint64_t first_assignment_index;
+  uint64_t assignment_count;
+  uint64_t layer_index;
+  uint64_t reserved_zero;
+};
+
+/** Frozen assembly-facing paged logical-block assignment descriptor ABI v1. */
+struct alignas(16) LlmPagedKvAssignmentDescriptor {
+  const uint32_t* block_table_row;
+  uint8_t* k_layer_pool;
+  uint8_t* v_layer_pool;
+  uint64_t first_logical_block;
+  uint64_t owned_block_count;
+  uint64_t blocks_per_sequence;
+  uint64_t block_bytes;
+  uint64_t last_block_valid_bytes;
+  uint64_t decode_append_offset;
+  uint64_t append_record_bytes;
+  uint64_t layer_index;
+  uint64_t batch_sequence_index;
+};
+
 static_assert(sizeof(void*) == 8,
               "LLM descriptor ABI requires 64-bit ARM64 pointers");
 static_assert(std::is_standard_layout_v<LlmLayerDescriptor>);
@@ -184,6 +222,30 @@ static_assert(offsetof(LlmKvSequenceDescriptor, v_append_bytes) == 56);
 static_assert(offsetof(LlmKvSequenceDescriptor, batch_sequence_index) == 64);
 static_assert(
     offsetof(LlmKvSequenceDescriptor, append_record_byte_offset) == 72);
+static_assert(std::is_standard_layout_v<LlmPagedLayerDescriptor>);
+static_assert(alignof(LlmPagedLayerDescriptor) == 16);
+static_assert(sizeof(LlmPagedLayerDescriptor) == 48);
+static_assert(offsetof(LlmPagedLayerDescriptor, weight_ptr) == 0);
+static_assert(offsetof(LlmPagedLayerDescriptor, weight_bytes) == 8);
+static_assert(offsetof(LlmPagedLayerDescriptor, first_assignment_index) == 16);
+static_assert(offsetof(LlmPagedLayerDescriptor, assignment_count) == 24);
+static_assert(offsetof(LlmPagedLayerDescriptor, layer_index) == 32);
+static_assert(offsetof(LlmPagedLayerDescriptor, reserved_zero) == 40);
+static_assert(std::is_standard_layout_v<LlmPagedKvAssignmentDescriptor>);
+static_assert(alignof(LlmPagedKvAssignmentDescriptor) == 16);
+static_assert(sizeof(LlmPagedKvAssignmentDescriptor) == 96);
+static_assert(offsetof(LlmPagedKvAssignmentDescriptor, block_table_row) == 0);
+static_assert(offsetof(LlmPagedKvAssignmentDescriptor, k_layer_pool) == 8);
+static_assert(offsetof(LlmPagedKvAssignmentDescriptor, v_layer_pool) == 16);
+static_assert(offsetof(LlmPagedKvAssignmentDescriptor, first_logical_block) == 24);
+static_assert(offsetof(LlmPagedKvAssignmentDescriptor, owned_block_count) == 32);
+static_assert(offsetof(LlmPagedKvAssignmentDescriptor, blocks_per_sequence) == 40);
+static_assert(offsetof(LlmPagedKvAssignmentDescriptor, block_bytes) == 48);
+static_assert(offsetof(LlmPagedKvAssignmentDescriptor, last_block_valid_bytes) == 56);
+static_assert(offsetof(LlmPagedKvAssignmentDescriptor, decode_append_offset) == 64);
+static_assert(offsetof(LlmPagedKvAssignmentDescriptor, append_record_bytes) == 72);
+static_assert(offsetof(LlmPagedKvAssignmentDescriptor, layer_index) == 80);
+static_assert(offsetof(LlmPagedKvAssignmentDescriptor, batch_sequence_index) == 88);
 
 /** Raw exact-byte model inputs, independent of CLI unit conversion. */
 struct LlmGeometryRequest {
@@ -195,6 +257,7 @@ struct LlmGeometryRequest {
   size_t kv_element_bytes = Constants::LLM_DEFAULT_KV_ELEMENT_BYTES;
   size_t visible_context_tokens = 0;
   size_t batch_size = Constants::LLM_DEFAULT_BATCH_SIZE;
+  size_t kv_block_tokens = 0;
   LlmPhase phase = LlmPhase::Decode;
   LlmKvLayout kv_layout = LlmKvLayout::Contiguous;
 };
@@ -238,6 +301,20 @@ struct LlmGeometry {
   size_t kv_record_bytes_per_layer = 0;
   size_t kv_bytes_per_visible_token = 0;
   size_t k_or_v_sequence_visible_bytes = 0;
+  size_t kv_block_tokens = 0;
+  size_t kv_blocks_per_sequence = 0;
+  size_t physical_blocks_per_layer = 0;
+  size_t total_physical_blocks = 0;
+  size_t kv_block_bytes = 0;
+  size_t last_block_tokens = 0;
+  size_t last_block_valid_bytes = 0;
+  size_t decode_append_offset_in_last_block = 0;
+  size_t k_logical_bytes = 0;
+  size_t v_logical_bytes = 0;
+  size_t k_layout_padding_bytes = 0;
+  size_t v_layout_padding_bytes = 0;
+  size_t block_table_entries = 0;
+  size_t block_table_bytes = 0;
   size_t k_mapping_bytes = 0;
   size_t v_mapping_bytes = 0;
   size_t kv_capacity_bytes = 0;
@@ -267,8 +344,13 @@ struct LlmMemoryBudgetRequest {
   size_t committed_weight_mapping_bytes = 0;
   size_t committed_k_mapping_bytes = 0;
   size_t committed_v_mapping_bytes = 0;
+  size_t requested_block_table_mapping_bytes = 0;
+  size_t committed_block_table_mapping_bytes = 0;
   size_t requested_data_bytes = 0;
   size_t committed_data_bytes = 0;
+  size_t layout_transient_bytes = 0;
+  size_t setup_peak_bytes = 0;
+  size_t runtime_peak_bytes = 0;
   size_t descriptor_bytes = 0;
   size_t planner_storage_bytes = 0;
   size_t checksum_auxiliary_bytes = 0;
@@ -312,11 +394,38 @@ struct LlmKvSequenceRangeTemplate {
   size_t append_record_byte_offset = 0;
 };
 
+/** Pointer-free paged logical-block assignment for one layer and batch row. */
+struct LlmPagedKvAssignmentTemplate {
+  size_t layer_index = 0;
+  size_t batch_sequence_index = 0;
+  size_t first_logical_block = 0;
+  size_t block_count = 0;
+};
+
 /** Complete immutable pointer-free descriptor set for one worker. */
 struct LlmWorkerWorkPlan {
   size_t worker_index = 0;
   std::vector<LlmLayerRangeTemplate> layers;
   std::vector<LlmKvSequenceRangeTemplate> sequences;
+  std::vector<LlmPagedKvAssignmentTemplate> paged_assignments;
+};
+
+/** Command-owned immutable paged layout, table, and ownership evidence. */
+struct LlmPagedCpuExecutionPlan {
+  LlmKvLayoutPlan layout;
+  LlmKvBlockTableValidation table_validation;
+  LlmKvPermutationIdentity permutation;
+  LlmKvCpuOwnershipPlan ownership;
+  MmapPtr block_table_mapping{nullptr, MmapDeleter{0}};
+  size_t block_table_logical_bytes = 0;
+  size_t block_table_mapping_bytes = 0;
+  bool block_table_read_only = false;
+  std::string layout_identity;
+  std::string execution_identity;
+
+  const uint32_t* block_table() const noexcept {
+    return static_cast<const uint32_t*>(block_table_mapping.get());
+  }
 };
 
 /** CPU-only worker partition and descriptor planning evidence. */
@@ -331,6 +440,7 @@ struct LlmCpuExecutionPlan {
   size_t descriptor_bytes = 0;
   size_t planner_storage_bytes = 0;
   std::vector<LlmWorkerWorkPlan> workers;
+  std::optional<LlmPagedCpuExecutionPlan> paged;
 };
 
 /** Placeholder for Metal-only execution planning introduced in later phases. */
@@ -410,6 +520,52 @@ struct LlmMemoryWorkPlan {
   LlmComponentIdentities component_identities;
   std::string plan_identity;
   LlmBackendExecutionPlan backend_execution_plan;
+};
+
+/** Exact allocation and identity-size inputs available before a paged table. */
+struct LlmAuxiliaryPreflightView {
+  bool valid = false;
+  LlmMemoryBackend backend = LlmMemoryBackend::Cpu;
+  LlmKvLayout kv_layout = LlmKvLayout::Contiguous;
+  size_t effective_workers = 0;
+  size_t total_layer_descriptors = 0;
+  size_t total_sequence_descriptors = 0;
+  size_t k_or_v_static_reference_count = 0;
+  size_t model_plan_identity_bytes = 0;
+  std::array<size_t, kLlmScenarioCount>
+      maximum_scenario_plan_identity_bytes{};
+  size_t frozen_reason_code_bytes = 0;
+  size_t frozen_model_plan_identity_bytes = 0;
+  size_t frozen_plan_identity_bytes = 0;
+  std::array<size_t, kLlmScenarioCount>
+      frozen_scenario_reason_code_bytes{};
+  std::array<size_t, kLlmScenarioCount>
+      frozen_scenario_model_plan_identity_bytes{};
+  std::array<size_t, kLlmScenarioCount>
+      frozen_scenario_plan_identity_bytes{};
+  size_t json_identity_string_bytes = 0;
+};
+
+/**
+ * Move-only non-executable plan prepared for exact auxiliary admission.
+ *
+ * `candidate.valid` is always false. The retained pointer-free templates and
+ * fixed-size placeholder identities may only be consumed by
+ * `finalize_llm_memory_work_plan`; the preflight view is the sole estimator
+ * input. No paged table mapping exists while this draft is published.
+ */
+struct LlmMemoryWorkPlanDraft {
+  LlmMemoryWorkPlanDraft() = default;
+  LlmMemoryWorkPlanDraft(const LlmMemoryWorkPlanDraft&) = delete;
+  LlmMemoryWorkPlanDraft& operator=(const LlmMemoryWorkPlanDraft&) = delete;
+  LlmMemoryWorkPlanDraft(LlmMemoryWorkPlanDraft&&) noexcept = default;
+  LlmMemoryWorkPlanDraft& operator=(LlmMemoryWorkPlanDraft&&) noexcept =
+      default;
+
+  bool valid = false;
+  std::string reason_code = LlmWorkPlanReason::INVALID_MODEL_WORK_PLAN;
+  LlmAuxiliaryPreflightView auxiliary_preflight;
+  LlmMemoryWorkPlan candidate;
 };
 
 /**
@@ -498,11 +654,35 @@ LlmMemoryBudgetRequest build_llm_memory_budget_request(
     const LlmGeometry& geometry, size_t descriptor_bytes,
     size_t planner_storage_bytes, size_t checksum_auxiliary_bytes,
     size_t orchestration_auxiliary_bytes,
-    size_t mapping_granularity_bytes);
+    size_t mapping_granularity_bytes,
+    size_t block_table_mapping_bytes = 0,
+    size_t layout_transient_bytes = 0);
 
 /** Apply the injected 80%-or-fallback project memory policy. */
 LlmMemoryBudget evaluate_llm_memory_budget(
     const LlmMemoryBudgetRequest& request, size_t available_memory_bytes);
+
+/** Build retained pointer-free templates without a paged table mapping. */
+LlmMemoryWorkPlanDraft prepare_llm_memory_work_plan(
+    const LlmMemoryWorkPlanRequest& request,
+    const LlmKvStopRequested& stop_requested = {});
+
+/** Validate a config and prepare its non-executable auxiliary-sizing draft. */
+LlmMemoryWorkPlanDraft prepare_llm_memory_work_plan(
+    const LlmMemoryConfig& config, size_t available_workers,
+    size_t available_memory_bytes, size_t mapping_granularity_bytes,
+    const LlmKvStopRequested& stop_requested = {});
+
+/**
+ * Perform full auxiliary admission, then materialize/protect a paged table.
+ *
+ * The draft is consumed on every outcome. No table allocation occurs unless
+ * the exact final peak, including both supplied auxiliary categories, fits.
+ */
+LlmMemoryWorkPlan finalize_llm_memory_work_plan(
+    LlmMemoryWorkPlanDraft&& draft, size_t checksum_auxiliary_bytes,
+    size_t orchestration_auxiliary_bytes,
+    const LlmKvStopRequested& stop_requested = {});
 
 /**
  * Build the logical plan and its tagged backend execution plan.
@@ -512,15 +692,31 @@ LlmMemoryBudget evaluate_llm_memory_budget(
  * allocation and the budget is re-evaluated before the plan becomes valid.
  * Invalid plans expose no executable templates. Metal remains an explicit
  * placeholder until its planner is activated.
+ *
+ * @param request Fully resolved geometry, environment, and budget inputs.
+ * @param stop_requested Optional synchronous predicate polled during paged
+ *        block-table preparation.
  */
 LlmMemoryWorkPlan build_llm_memory_work_plan(
-    const LlmMemoryWorkPlanRequest& request);
+    const LlmMemoryWorkPlanRequest& request,
+    const LlmKvStopRequested& stop_requested = {});
 
-/** Validate a resolved config and build its pointer-free work plan. */
+/**
+ * Validate a resolved config and build its pointer-free work plan.
+ *
+ * @param stop_requested Optional synchronous predicate polled while a paged
+ *        block table is initialized, validated, and hashed.
+ */
 LlmMemoryWorkPlan build_llm_memory_work_plan(
     const LlmMemoryConfig& config, size_t available_workers,
     size_t available_memory_bytes, size_t mapping_granularity_bytes,
-    size_t checksum_auxiliary_bytes, size_t orchestration_auxiliary_bytes);
+    size_t checksum_auxiliary_bytes, size_t orchestration_auxiliary_bytes,
+    const LlmKvStopRequested& stop_requested = {});
+
+/** Re-evaluate one already-materialized plan with finalized auxiliary bytes. */
+bool readmit_llm_memory_work_plan(
+    LlmMemoryWorkPlan& plan, size_t checksum_auxiliary_bytes,
+    size_t orchestration_auxiliary_bytes) noexcept;
 
 /** Build `llm-memory-v1-<backend>-<phase>-<layout>`. */
 std::string build_llm_methodology_version(LlmMemoryBackend backend,
