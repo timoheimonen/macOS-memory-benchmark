@@ -161,16 +161,16 @@ int parse_llm_memory_arguments(int argc, char* argv[],
  *
  * The boundary parses first, returns immediately for help, then installs the
  * command-scoped JSON transport before runtime output, QoS preparation, and
- * signal masking. The command remains deliberately unavailable until the
- * production executor callback, runner result, and JSON/console transport are
- * bound together; a valid non-help command therefore still fails explicitly
- * without fabricating measurement evidence.
+ * signal masking. It admits the exact three-mapping memory plan, prepares and
+ * pre-touches the full working set, binds the production executor to the
+ * backend-independent runner, and emits console plus schema-v1 checkpoint or
+ * final-output evidence according to the selected transport.
  *
  * @param argc Number of entries in @p argv.
  * @param argv Command arguments, valid for the duration of this call.
- * @return `EXIT_SUCCESS` only for isolated help in the current phase;
- *         `EXIT_FAILURE` for parse/preflight errors or the explicit
- *         `execution-unavailable` terminal.
+ * @return `EXIT_SUCCESS` for isolated help, complete execution, or graceful
+ *         task-boundary interruption; `EXIT_FAILURE` for parse, planning,
+ *         allocation, execution, validation, or output failure.
  * @post No exception escapes this boundary, and any installed output routing
  *       and signal mask are restored before return.
  */

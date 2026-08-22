@@ -220,20 +220,20 @@ TEST(MessagesTest, LlmMemoryCliMessagesHaveExactOutput) {
       ").\n"
       "  -t, --threads <count>  Requested CPU workers; detected workers are used when omitted.\n"
       "  -i, --iterations <count>\n"
-      "                          Exact steps per future scenario measurement. When omitted,\n"
-      "                          the future executor will calibrate toward 150 ms in a\n"
+      "                          Exact steps per scenario measurement. When omitted, each\n"
+      "                          scenario calibrates toward 150 ms in a\n"
       "                          100-250 ms window.\n"
-      "  -r, --count <count>    Planned cyclic weights/KV/mixed loops (default: " +
+      "  -r, --count <count>    Cyclic weights/KV/mixed loops (default: " +
       std::to_string(Constants::LLM_DEFAULT_LOOP_COUNT) +
       ").\n"
       "      --seed <uint64>    Reproducible base seed; generated once when omitted.\n"
-      "  -o, --output <target>  Future result target; exact - is final stdout, an empty value\n"
-      "                          disables JSON, and every other non-empty value is a file.\n"
+      "  -o, --output <target>  JSON schema 1 target; exact - writes one final document to\n"
+      "                          stdout and routes human output to stderr. Every other non-empty\n"
+      "                          target is a file with atomic scenario and terminal checkpoints.\n"
+      "                          An empty value disables JSON for this direct command.\n"
       "  -h, --help             Show this LLM-mode help and exit.\n"
       "This profile models CPU memory traffic only: it performs no Transformer math and\n"
-      "does not report inference tokens/s. Effective payload is not physical DRAM traffic.\n"
-      "This build validates the command boundary only: measurement execution and JSON\n"
-      "result creation are unavailable, so valid non-help runs fail without a JSON or file result.\n";
+      "does not report inference tokens/s. Effective payload is not physical DRAM traffic.\n";
 
   const std::vector<MessageCase> cases = {
       {"mode isolation", Messages::error_llm_memory_must_be_used_alone(),
@@ -256,10 +256,10 @@ TEST(MessagesTest, LlmMemoryCliMessagesHaveExactOutput) {
        Messages::error_llm_memory_iterations_exceed_limit(5, 4),
        "LLM memory iterations exceed the exact-work guardrail "
        "(requested 5, maximum 4)"},
-      {"unavailable",
-       Messages::error_llm_memory_run_failed("execution-unavailable"),
+      {"runtime failure",
+       Messages::error_llm_memory_run_failed("checksum-mismatch"),
        "Synthetic LLM decode memory profile failed "
-       "(reason_code=execution-unavailable)"},
+       "(reason_code=checksum-mismatch)"},
       {"positive integer", Messages::llm_memory_reason_positive_integer(),
        "must be a positive integer"},
       {"KV width", Messages::llm_memory_reason_kv_element_bytes(),
@@ -268,6 +268,65 @@ TEST(MessagesTest, LlmMemoryCliMessagesHaveExactOutput) {
        "out of range for a platform size"},
       {"usage", Messages::llm_memory_usage_options("memory_benchmark"),
        expected_usage},
+      {"command name", Messages::llm_memory_command_name(),
+       "LLM memory profile"},
+      {"report header", Messages::report_llm_memory_header(),
+       "Synthetic LLM decode memory profile (CPU, fixed context, warm/cacheable)"},
+      {"payload", Messages::report_llm_memory_payload(1024, 768, 256),
+       "  Active weight bytes / step: 1024\n"
+       "  KV read bytes / step:       768\n"
+       "  KV append bytes / step:     256"},
+      {"crossover", Messages::report_llm_memory_crossover(4.0),
+       "  Traffic crossover:          4.00 visible context tokens"},
+      {"weights headline",
+       Messages::report_llm_memory_scenario_headline(
+           "Weights only", 1.25, 800.0, 100.5, false),
+       "  Weights only: 1.250 ms/step, 100.50 GB/s effective payload"},
+      {"mixed headline",
+       Messages::report_llm_memory_scenario_headline(
+           "Mixed", 3.75, 266.666, 80.25, true),
+       "  Mixed:        3.750 ms/step, 266.67 synthetic memory steps/s, "
+       "80.25 GB/s effective payload"},
+      {"weights label",
+       Messages::report_llm_memory_scenario_name("weights_only"),
+       "Weights only"},
+      {"KV label", Messages::report_llm_memory_scenario_name("kv_only"),
+       "KV only"},
+      {"mixed label", Messages::report_llm_memory_scenario_name("mixed"),
+       "Mixed"},
+      {"unknown label", Messages::report_llm_memory_scenario_name("future"),
+       "Unknown"},
+      {"interpretation", Messages::report_llm_memory_interpretation_note(),
+       "  Interpretation: each step is synthetic memory-only work, not an inference token; "
+       "effective payload is logical, not physical DRAM-counter traffic.\n"
+       "  Context/layout: the fixed visible context includes the current-token slot; KV uses "
+       "contiguous layer/batch/token/head/dimension layout.\n"
+       "  Crossover: logical weight/KV-read payload equality is not a proven hardware "
+       "bottleneck transition.\n"
+       "  Comparability: small weight or KV working sets can be cache-dominant; order imbalance, "
+       "high CV, non-nominal environment, QoS failures, or off-target duration reduce confidence."},
+      {"high CV", Messages::warning_llm_memory_high_cv("kv_only", 6.25, 5.0),
+       "LLM KV only repeatability CV 6.25% exceeds 5.00%"},
+      {"unbalanced order", Messages::warning_llm_memory_order_not_balanced(),
+       "LLM scenario order is not fully balanced across completed loops"},
+      {"duration",
+       Messages::warning_llm_memory_duration_quality(
+           "mixed", "single-step-over-target"),
+       "LLM Mixed duration quality is single-step-over-target"},
+      {"environment", Messages::warning_llm_memory_environment_not_nominal(),
+       "LLM result environment is not reference-eligible (thermal state or Low Power Mode)"},
+      {"main QoS",
+       Messages::warning_llm_memory_main_thread_qos_not_applied(7),
+       "LLM main-thread QoS request was not applied (code: 7)"},
+      {"worker QoS", Messages::warning_llm_memory_worker_qos_not_applied(),
+       "One or more LLM worker QoS requests were not applied"},
+      {"cache",
+       Messages::warning_llm_memory_weight_cache_dominant(1024, 4096),
+       "LLM weight working set (1024 bytes) does not exceed reported L2 cache "
+       "(4096 bytes); the result may be cache-dominant"},
+      {"KV cache", Messages::warning_llm_memory_kv_cache_dominant(2048, 4096),
+       "LLM KV working set (2048 bytes) does not exceed reported L2 cache "
+       "(4096 bytes); the result may be cache-dominant"},
   };
   expect_exact_messages(cases);
 }
@@ -281,7 +340,13 @@ TEST(MessagesTest, GeneralHelpAdvertisesTheLlmBoundaryExactlyOnce) {
   EXPECT_NE(usage.find("--query-heads"), std::string::npos);
   EXPECT_NE(usage.find("--context-tokens"), std::string::npos);
   EXPECT_NE(usage.find("memory-only interpretation"), std::string::npos);
-  EXPECT_NE(usage.find("execution is unavailable"), std::string::npos);
+  EXPECT_NE(usage.find("JSON uses schema 1 methodology "), std::string::npos);
+  EXPECT_NE(usage.find(Constants::LLM_METHODOLOGY_VERSION),
+            std::string::npos);
+  EXPECT_NE(usage.find("checkpoints each terminal scenario"),
+            std::string::npos);
+  EXPECT_EQ(usage.find("execution is unavailable"), std::string::npos);
+  EXPECT_EQ(usage.find("future LLM"), std::string::npos);
 }
 
 TEST(MessagesErrorTest, GpuMessagesHaveExactMethodologyOutput) {
@@ -743,9 +808,10 @@ TEST(MessagesFormattingTest, UsageOptions) {
             std::string::npos);
   EXPECT_NE(msg.find("including ./- and names such as -G"),
             std::string::npos);
-  EXPECT_NE(msg.find("current LLM boundary accepts this syntax but creates no result"),
+  EXPECT_NE(msg.find("Standard, GPU, and LLM-memory files retain"),
             std::string::npos);
-  EXPECT_NE(msg.find("Standard and GPU files retain"), std::string::npos);
+  EXPECT_NE(msg.find("LLM-memory checkpoints each terminal scenario"),
+            std::string::npos);
   EXPECT_NE(msg.find("sweep files checkpoint attempts"), std::string::npos);
   EXPECT_NE(msg.find("Requires --output <target>"), std::string::npos);
   EXPECT_NE(msg.find("-h"), std::string::npos);

@@ -124,6 +124,7 @@ LlmExecutorResult successful_execution(const LlmMemoryWorkPlan& model_plan, doub
   result.kernel_succeeded = true;
   result.timer_started = true;
   result.timer_stopped = true;
+  result.checksum_evaluated = true;
   result.checksum_valid = true;
   result.expected_checksums.resize(model_plan.effective_workers);
   result.actual_checksums = result.expected_checksums;

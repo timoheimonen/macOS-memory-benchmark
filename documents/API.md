@@ -21,15 +21,9 @@ transport. GPU schema 1 remains a direct-only mode and does not support sweeps.
 | Direct `--analyze-core2core` | Yes | Yes |
 | `--analyze-core2core --sweep ...` | Yes | Yes |
 | Direct `--gpu-bandwidth` | Yes | Yes |
+| Direct `--llm-memory` | Yes | Yes |
 
-GPU schema 1 and the current LLM command boundary do not support sweeps.
-
-The current `--llm-memory` command is a parser and checked-preflight boundary only. It deliberately fails valid
-non-help runs with `execution-unavailable`, so it is not a supported machine-readable transport in this revision and
-does not appear in the table above. With exact `--output -`, its command-scoped session routes the runtime banner and
-diagnostic to stderr, leaves stdout empty, and returns failure. A real file target creates neither the target nor a
-temporary checkpoint because no result is built or persisted. Without the stdout sentinel, the shared banner remains
-on stdout and the `execution-unavailable` diagnostic is written to stderr.
+GPU schema 1 and LLM schema 1 are direct-only modes and do not support sweeps.
 
 ## Invocation and stream contract
 
@@ -50,6 +44,14 @@ A direct GPU command uses the same stream transport with its existing top-level 
 
 ```bash
 memory_benchmark --gpu-bandwidth --buffer-size 512 --count 3 --seed 42 --output -
+```
+
+A direct LLM command likewise emits its top-level CPU schema 1 payload:
+
+```bash
+memory_benchmark --llm-memory --weight-size-mb 64 --layers 4 \
+  --query-heads 8 --kv-heads 2 --head-dim 64 --context-tokens 512 \
+  --iterations 1 --count 3 --seed 42 --output -
 ```
 
 The sentinel is classified from the raw option value before path normalization:
@@ -75,12 +77,14 @@ prints normal help to stdout and does not promise JSON when the selected parser 
 TLB whitelist rejects `--analyze-tlb --help`; use `--help` without that mode flag.
 
 Some runtime setup failures also occur before a schema-valid payload exists. The general command's early timer failure,
-TLB setup, memory-budget, or allocation failures before analysis-state initialization, and a GPU backend-factory failure
-therefore produce stderr plus a non-zero status and leave stdout empty. Once a mode has initialized a representable
-result, graceful interruption or a normal runtime failure emits the available partial, interrupted, error, failed, or
-unsupported payload. Core-to-core measurement failures, TLB measurement errors, and GPU capability, compilation,
-allocation, or work-plan failures fall on this post-initialization path. An initialized GPU `unsupported` or failed
-payload is emitted with a non-zero process status.
+TLB setup, memory-budget, or allocation failures before analysis-state initialization, a GPU backend-factory failure,
+and LLM work-plan, JSON-output peak-estimation, timer, or three-mapping preparation failure before runner-result
+initialization therefore produce stderr plus a non-zero status and leave stdout empty. Once a mode has initialized a
+representable result, graceful
+interruption or a normal runtime failure emits the available partial, interrupted, error, failed, or unsupported
+payload. Core-to-core measurement failures, TLB measurement errors, GPU post-initialization failures, and LLM runner,
+executor, checksum, or checkpoint failures fall on this status-bearing path. Initialized failed payloads retain their
+non-zero process status; established graceful-interruption paths may return zero but are not complete conclusions.
 
 An observable final serialization, write, or flush failure returns `EXIT_FAILURE` and reports its diagnostic to stderr
 without changing the already-computed measurement state. Any stdout bytes from that failed transfer are not an
@@ -98,18 +102,21 @@ Real file targets retain their existing persistence behavior:
 - parameter sweeps atomically checkpoint their combined envelope after each attempted run and also checkpoint a terminal
   zero-attempt envelope when the run plan is empty or interruption is observed before a run;
 - GPU mode retains its mode-specific terminal-measurement and failure checkpoints;
+- LLM mode atomically checkpoints after every terminal scenario measurement and once at command terminal;
 - a temporary `<target>.tmp` file is replaced atomically, and a failed replacement preserves the preceding destination
   when possible.
 
-Stdout is final-only. Intermediate standard, sweep, and GPU checkpoint requests are successful lazy no-ops: their
+Stdout is final-only. Intermediate standard, sweep, GPU, and LLM checkpoint requests are successful lazy no-ops: their
 payload builders are not invoked, while all logical state changes, stop observations, counters, cleanup, and final result
-construction still occur. In particular, GPU performs the same checkpoint-boundary stop read as file output. The command
-serializes one terminal snapshot after orchestration finishes. Stdout is not JSON Lines and never contains a sequence of
-checkpoint documents.
+construction still occur. In particular, GPU and LLM perform the same checkpoint-boundary stop reads as file output.
+The command serializes one terminal snapshot after orchestration finishes. Stdout is not JSON Lines and never contains
+a sequence of checkpoint documents.
 
 File-output ownership is mode-aware. Standard and sweep file producers retain their existing checkpoints, GPU retains
-its terminal-measurement, failure, and post-release replacement cadence, and command boundaries do not add a redundant
-terminal file write or retry. The stdout command boundary alone emits the retained final document.
+its terminal-measurement, failure, and post-release replacement cadence, and LLM owns its scenario-terminal plus
+command-terminal cadence. A failed LLM checkpoint is terminal and is not retried at a final file-write boundary; the
+last successfully replaced destination remains the recoverable evidence when possible. The stdout command boundary
+alone emits the retained final document.
 
 Use a real file target when crash-resilient intermediate checkpoints are required.
 
@@ -125,6 +132,7 @@ contract version 1 first appears in software version `0.62.0`.
 | TLB | `configuration.schema_version == 4` | `tlb_analysis.status == "complete" && tlb_analysis.conclusions_valid == true` |
 | Core-to-core | `configuration.schema_version == 2` | `core_to_core_latency.status == "complete" && core_to_core_latency.measurements_complete == true` |
 | GPU | `schema_version == 1` | `status == "complete" && results_complete == true && conclusions_valid == true` |
+| LLM CPU profile | `mode == "llm_memory" && schema_version == 1` | `status == "complete" && results_complete == true && conclusions_valid == true` |
 | General CPU sweep | `configuration.sweep_schema_version == 1` | `status == "complete" && conclusions_valid == true` |
 | Core-to-core sweep | `configuration.sweep_schema_version == 1` | `status == "complete" && conclusions_valid == true` |
 
@@ -149,6 +157,60 @@ non-null value. TLB consumers must also honor the selected detection/evidence fi
 conclusions additionally require `affinity_hint_comparison_interpretable == true`. A position-balanced GPU comparison
 additionally requires `operation_order_balance_complete == true`; consumers of an operation also require a measured,
 non-null value and its applicable validation/quality fields.
+
+LLM schema 1 has top-level `mode: "llm_memory"`, `schema_version: 1`, `backend: "cpu"`, and methodology
+`llm-memory-v1-cpu-fixed-context-warm-layer-interleaved`. Its run statuses are `not_started`, `complete`, `partial`,
+`interrupted`, and `failed`; measurement statuses are `not_run`, `measured`, `interrupted`, `invalid`, and `failed`.
+Multiword status tokens use underscores, while multiword stable reason codes and duration-quality tokens use hyphens.
+Only a `measured` record with accepted checksum evidence has non-null elapsed/rate values and contributes to the
+matching `scenario_aggregates` entry. Unavailable metrics and unavailable checksum validity are JSON null, never
+numeric zero. Byte counts, seeds, and checksum integers are canonical decimal strings; ordinary small counts remain
+JSON numbers.
+
+If a measurement or excluded runner task never receives executor evidence because the executor throws, its nested
+`execution.status` is `unavailable`, its reason remains the applicable runner-exception token, and unavailable worker
+lifecycle, QoS, elapsed-time, and checksum fields are null. For a `not_run` measurement, top-level
+`qos_successful_workers` and `qos_failed_workers` are also null. These are absence-of-evidence states, not zero-worker or
+successful-checksum observations.
+
+Its top-level field set is:
+
+```text
+software_version, timestamp, schema_version, mode, backend, methodology_version,
+status, reason_code, diagnostic, interruption_requested, results_complete,
+conclusions_valid, scenario_order_balance_complete, configuration, methodology,
+geometry, traffic_diagnostics, memory_budget, resources, seeds, model_work_plan,
+frozen_scenario_work_plans, excluded_calibration_attempts, counters,
+checkpoint_lifecycle, loop_records, measurements, scenario_aggregates,
+environment, quality_warnings, interpretation
+```
+
+The schema preserves exact argv and raw `configuration.output_file`, resolved configuration, methodology and geometry,
+traffic diagnostics, memory-budget and resource evidence, domain-separated seeds, model and frozen scenario work-plan
+identities, excluded calibration attempts, lifecycle counters/checkpoints, planned and realized loop order,
+status-bearing measurements, per-scenario aggregates, environment snapshots, warnings, and an interpretation block.
+Within `resources`, `json_output_peak_estimate` records `enabled`, `valid`, `reason_code`, policy
+`conservative-live-dom-plus-serialized-transport`, and canonical decimal-string `fixed_schema_bytes`,
+`input_string_bytes`, `measurement_record_bytes`, `worker_checksum_bytes`, and `total_bytes`. A non-empty file/stdout
+target reserves that conservative DOM-plus-serialization peak in the admitted orchestration auxiliary bytes;
+the estimator for an omitted/empty target is a valid disabled zero (`enabled: false` if serialized), while normal
+console-only execution emits no JSON.
+
+The traffic classification version is `llm-exact-weight-vs-kv-read-payload-v1`: it compares exact active-weight bytes
+with exact KV-read bytes only. `near_crossover` means equality, not a tolerance band and not an observed hardware
+bottleneck.
+
+`results_complete` requires all planned scenario measurements to be terminal and measured. `conclusions_valid` also
+requires valid geometry/checksums, no checkpoint failure, and a complete cyclic position balance. A complete one-loop
+run is therefore inspectable with `results_complete: true` but has `conclusions_valid: false`. Consumers of comparative
+LLM conclusions must use the full table predicate and then check the selected scenario measurement or aggregate status,
+non-null value, and relevant quality/environment warnings.
+
+`quality_warnings` merges and deduplicates runner tokens `weights_only-high-cv`, `kv_only-high-cv`,
+`mixed-high-cv`, and `scenario-order-not-balanced` with final-report tokens `environment-not-nominal`,
+`main-thread-qos-not-applied`, `worker-qos-not-applied`, `weight-working-set-cache-dominant`,
+`kv-working-set-cache-dominant`, and `<scenario>-duration-<quality>`. The main-thread token requires QoS to have been
+requested and not applied; absence of a warning is not proof of DRAM residency or scheduler placement.
 
 Current standard schema-3 payloads require `configuration.output_file` to be a string and preserve the raw target token:
 stdout therefore records `"-"`, while file targets retain spellings such as `./-`, `-T`, or `--cache-size` rather than a
@@ -240,14 +302,21 @@ jq -e '.completed_runs == .planned_runs' sweep.json
 jq -e '.schema_version == 1 and .mode == "gpu_bandwidth" and
        .status == "complete" and .results_complete == true and
        .conclusions_valid == true' gpu.json
+
+jq -e '.mode == "llm_memory" and .schema_version == 1 and
+       .status == "complete" and .results_complete == true and
+       .conclusions_valid == true' llm_memory.json
 ```
 
 ## Compatibility policy
 
-- `version` and GPU's `software_version` identify the application release; neither is a result schema version.
-- Current standard schema 3, pattern schema 3, TLB schema 4, core-to-core schema 2, and GPU schema 1 remain
+- `version` and the GPU/LLM `software_version` fields identify the application release; none is a result schema version.
+- Current standard schema 3, pattern schema 3, TLB schema 4, core-to-core schema 2, GPU schema 1, and LLM schema 1 remain
   authoritative at their existing locations. The schema field is intentionally not normalized across these established
   payloads.
+- LLM schema-1 consumers must tolerate unknown additive evidence fields while continuing to validate every known field
+  they use. Removing or renaming a field, changing its type, or changing its established meaning requires a schema
+  version review/bump; `software_version` alone is not a compatibility substitute.
 - Bundled standard-memory examples track the current producer and read current standard schema-3 metric paths directly
   after local sanity checks. They provide no compatibility layer for released standard schema 2, unversioned
   historical standard JSON layouts, or any other explicit standard version.
@@ -259,9 +328,9 @@ jq -e '.schema_version == 1 and .mode == "gpu_bandwidth" and
   is unchanged.
 - A transport change alone does not change the measurement schema.
 - Schema-location normalization belongs in client code; this API does not move existing version fields.
-- Direct standard and GPU payloads retain raw `configuration.output_file`. With stdout transport it is the original
+- Direct standard, GPU, and LLM payloads retain raw `configuration.output_file`. With stdout transport it is the original
   target token `"-"`, not a filesystem path; `./-`, flag-shaped names, and every other non-empty non-sentinel value retain
-  their file meaning. GPU additionally retains its exact captured `argv`.
+  their file meaning. GPU and LLM additionally retain their exact captured `argv`.
 
 ## Benchmark process policy
 

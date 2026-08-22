@@ -21,8 +21,8 @@
  * This file contains the main program logic that selects and dispatches memory
  * benchmark modes. Result-producing modes handle configuration parsing,
  * mode-specific buffer preparation, benchmark execution, and console/JSON
- * output here. The current LLM-memory path stops at its dedicated validated
- * configuration boundary and reports that execution is unavailable.
+ * output here. The LLM-memory path owns its dedicated production runner and
+ * schema-v1 transport behind the standalone command boundary.
  *
  * The program supports six benchmark modes:
  * - Standard benchmarks: Memory bandwidth and latency tests for different cache levels
@@ -30,8 +30,7 @@
  * - TLB analysis: Page-native paired locality measurements and boundary analysis
  * - Core-to-core analysis: Best-effort inter-core round-trip latency measurements
  * - GPU bandwidth: Standalone Metal GPU memory read/write/copy measurements
- * - LLM memory profile: Standalone decode-memory configuration boundary;
- *   execution is reserved for a later implementation phase
+ * - LLM memory profile: Standalone fixed-context CPU decode-memory workload
  *
  * Standard, pattern, TLB, and core-to-core modes also support validated parameter sweeps.
  * GPU bandwidth and the LLM memory profile are intentionally standalone and do
@@ -121,10 +120,9 @@ int build_and_write_final_json(JsonOutputSession& session,
  * This function selects a mode and parses and validates its command-line
  * arguments. For result-producing modes, it then configures system settings,
  * prepares any required buffers, executes the requested benchmark, and emits
- * human and optional JSON results. The current LLM-memory path performs its
- * dedicated preflight and boundary setup, then returns an explicit
- * execution-unavailable failure without allocating benchmark buffers or
- * producing a result.
+ * human and optional JSON results. The LLM-memory path performs its own
+ * preflight, full-size resource preparation, execution, console rendering,
+ * and JSON transport.
  *
  * The program supports multiple execution modes:
  * - Bandwidth-only measurements (--only-bandwidth)
@@ -133,7 +131,7 @@ int build_and_write_final_json(JsonOutputSession& session,
  * - Standalone TLB analysis (--analyze-tlb)
  * - Standalone core-to-core analysis (--analyze-core2core)
  * - Standalone GPU memory bandwidth (--gpu-bandwidth)
- * - Standalone LLM decode-memory configuration boundary (--llm-memory)
+ * - Standalone LLM decode-memory profile (--llm-memory)
  * - Validated multi-configuration runs (--sweep)
  * - Multiple loop iterations for statistical analysis (--count)
  *

@@ -2,7 +2,9 @@
 
 ![Platform](https://img.shields.io/badge/platform-Apple%20Silicon-000000?logo=apple) ![CLI](https://img.shields.io/badge/CLI-Tool-00A8CC?logo=terminal) ![License](https://img.shields.io/badge/license-GPL--3.0--or--later-blue) ![Assembly](https://img.shields.io/badge/Assembly-ARM64-6E4C13) ![C++](https://img.shields.io/badge/C++-00599C?logo=cplusplus&logoColor=white)
 
-`memory_benchmark` is a low-level command-line tool for measuring CPU and Metal GPU memory bandwidth, cache and main-memory latency, access-pattern performance, TLB behavior, and two-thread cache-line handoff protocol latency on Apple Silicon Macs.
+`memory_benchmark` is a low-level command-line tool for measuring CPU and Metal GPU memory bandwidth, synthetic LLM
+decode-memory traffic, cache and main-memory latency, access-pattern performance, TLB behavior, and two-thread
+cache-line handoff protocol latency on Apple Silicon Macs.
 
 It is designed for controlled microarchitectural investigation rather than a single synthetic score. CPU measurement paths use native ARM64 kernels; the standalone GPU mode uses runtime-compiled Metal compute kernels. Runs expose calibration, workload, completion, and repeatability metadata so results can be audited and compared.
 
@@ -18,8 +20,8 @@ It is designed for controlled microarchitectural investigation rather than a sin
 - **Dedicated TLB analysis:** paired spread/packed chains, adaptive rounds, confidence intervals, and independent boundary validation.
 - **Core-to-core analysis:** calibrated acquire/release token-exchange measurements under scheduler-hint scenarios.
 - **Metal GPU bandwidth:** standalone read/write/copy compute kernels with GPU timestamps and validation metadata.
-- **LLM memory-profile boundary:** strict checked configuration for a fixed-context synthetic CPU decode-memory workload;
-  measurement execution is not yet available in this build.
+- **Synthetic LLM decode-memory profile:** standalone CPU measurements of active-weight reads, KV-history reads, and
+  current-token KV appends for an explicitly supplied fixed-context model geometry.
 - **Reproducible experiments:** explicit seeds, repeated loops, built-in Cartesian parameter sweeps, recoverable JSON
   file checkpoints, and final machine-readable stdout for every result-producing direct mode and CPU sweep.
 
@@ -74,10 +76,12 @@ Run the standalone Metal GPU bandwidth suite:
 memory_benchmark --gpu-bandwidth
 ```
 
-Show the standalone synthetic LLM decode-memory configuration contract:
+Run a bounded fixed-work synthetic LLM decode-memory profile:
 
 ```bash
-memory_benchmark --llm-memory --help
+memory_benchmark --llm-memory --weight-size-mb 64 --layers 4 \
+  --query-heads 8 --kv-heads 2 --head-dim 64 --context-tokens 512 \
+  --iterations 1 --count 3
 ```
 
 For longer runs, prevent system sleep and collect repeated measurements:
@@ -107,17 +111,21 @@ checkpoints are required; see the [Machine-Readable CLI API](documents/API.md) s
 | `--analyze-tlb` | Standalone paired spread/packed TLB analysis with adaptive measurement rounds, confidence intervals, and boundary validation. |
 | `--analyze-core2core` | Calibrated two-thread acquire/release token-protocol round-trip latency under best-effort macOS scheduler hints. |
 | `--gpu-bandwidth` | Standalone Metal GPU read/write/copy effective compute-payload bandwidth. |
-| `--llm-memory` | Standalone CPU configuration boundary for a fixed-context synthetic LLM decode-memory profile. The current build validates its strict model geometry and work inputs but does not yet execute or emit results. |
-| `--sweep <key=a,b>` | Cartesian parameter sweep for supported CPU, pattern, TLB, and core-to-core modes; requires `--output`. GPU schema 1 and the current LLM command boundary do not support sweeps. |
+| `--llm-memory` | Standalone CPU synthetic decode-memory profile with weights-only, KV-only, and layer-interleaved mixed scenarios over full-size cacheable weight/K/V mappings. |
+| `--sweep <key=a,b>` | Cartesian parameter sweep for supported CPU, pattern, TLB, and core-to-core modes; requires `--output`. GPU schema 1 and LLM schema 1 do not support sweeps. |
 
 Primary modes are intentionally separate and accept different option sets. Use `memory_benchmark -h` or the [User Manual](documents/MANUAL.md) for defaults, valid combinations, and the complete option reference.
 
-The current `--llm-memory` boundary requires explicit weight size, layer count, query/KV head geometry, head dimension,
-and visible context. It performs checked parser/preflight work and then exits with `execution-unavailable`; it does not
-allocate benchmark mappings, run workers, create JSON, or report inference tokens/s. Those execution and result surfaces
-remain outside this implementation stage.
+`--llm-memory` requires explicit active weight size, layer count, query/KV head geometry, head dimension, and visible
+context. It allocates the requested weight, K, and V working sets in full, initializes and pre-touches them outside the
+timed region, and measures three versioned memory-only scenarios. It does not run Transformer mathematics or report
+inference tokens/s. Its machine-readable synthetic-step rate is named `synthetic_memory_steps_per_second`.
 
-When `--iterations` is omitted, standard bandwidth, pattern, and GPU operations calibrate their work toward a bounded measurement duration. An explicit `--iterations` value selects fixed work. Standard latency headlines always come from a continuous dependent pointer-chase pass. A separate sample pass runs by default with 1,000 windows; `--latency-samples` controls that positive window count, and the sampled distribution does not define or weight the headline.
+When `--iterations` is omitted, standard bandwidth, pattern, GPU operations, and the three LLM scenarios calibrate their
+work toward a bounded measurement duration. An explicit `--iterations` value selects fixed work. Standard latency
+headlines always come from a continuous dependent pointer-chase pass. A separate sample pass runs by default with 1,000
+windows; `--latency-samples` controls that positive window count, and the sampled distribution does not define or weight
+the headline.
 
 ## Representative Workflows
 
@@ -171,6 +179,23 @@ memory_benchmark --gpu-bandwidth --buffer-size 512 --count 3 --seed 42 --output 
   >gpu_bandwidth.json 2>gpu_bandwidth.log
 ```
 
+Reproducible fixed-work LLM memory profile with atomic scenario and command-terminal file checkpoints:
+
+```bash
+caffeinate -i -d memory_benchmark --llm-memory --weight-size-mb 4096 --layers 32 \
+  --query-heads 32 --kv-heads 8 --head-dim 128 --context-tokens 8192 \
+  --iterations 1 --count 3 --seed 42 --output llm_memory.json
+```
+
+The same schema 1 payload can be captured once from final-only stdout:
+
+```bash
+memory_benchmark --llm-memory --weight-size-mb 64 --layers 4 \
+  --query-heads 8 --kv-heads 2 --head-dim 64 --context-tokens 512 \
+  --iterations 1 --count 3 --seed 42 --output - \
+  >llm_memory.json 2>llm_memory.log
+```
+
 More workflows, including custom cache targets, latency-chain controls, density profiles, and sweep keys, are documented in the [User Manual](documents/MANUAL.md).
 
 ## Interpreting Results
@@ -186,6 +211,14 @@ Treat benchmark values as measurements of the configured workload under the obse
 - Pattern GB/s is exact **effective kernel payload bandwidth**, not observed physical cache-bus or DRAM traffic. `strided_2mb` describes a 2 MiB virtual-address stride and does not prove superpage backing.
 - GPU GB/s is exact **effective compute-payload bandwidth** divided by Metal GPU time. Private storage is unified memory rather than separate VRAM, copy counts aggregate read plus write payload, and physical DRAM residency remains unverified.
 - CPU and GPU GB/s values are not directly comparable: the kernels, timing boundaries, parallelism, resource modes, and validation work differ.
+- LLM GB/s is exact **logical synthetic payload** divided by the synchronized CPU scenario time. The context is fixed,
+  includes the current token, and uses full-size cacheable mappings; none of those properties proves physical DRAM
+  service. Weights-only and KV-only are component baselines, while mixed is one layer-interleaved workload and must not
+  be split into independent weight- and KV-bandwidth claims.
+- An LLM synthetic memory step is not an inference token. The profile excludes Transformer compute, framework dispatch,
+  compute-memory overlap, GPU/ANE paths, paged attention, growing context, and model loading.
+- The LLM traffic classification version `llm-exact-weight-vs-kv-read-payload-v1` compares exact weight and KV-read
+  bytes only. `near_crossover` means exact equality and is not a measured hardware-bottleneck claim.
 - TLB-locality controls pointer-chain construction, not hardware TLB residency. Standard locality comparisons combine cache, locality, and translation effects; use `--analyze-tlb` for controlled translation-boundary conclusions.
 - Core-to-core results are scheduler-influenced acquire/release token-protocol measurements. They do not directly observe
   physical cache-line migration or isolate coherence-fabric latency, and macOS user space cannot guarantee physical core
@@ -199,11 +232,12 @@ result locally, and read current schema-3 paths directly. They do not provide co
 schema 2, unversioned historical standard JSON layouts, or any other explicit standard version.
 Consumers making conclusions should reject incomplete or interrupted runs according to the mode-specific status fields.
 Every result-producing direct command or CPU sweep using `--output -` reserves stdout for one final JSON document and
-routes its post-parse human transcript to stderr; file output is atomic, while standard commands, sweeps, and GPU retain
-their mode-specific intermediate checkpoints. The current LLM-memory boundary reserves the option syntax but emits no
-result. Exact process
-acceptance rules are in the [Machine-Readable CLI API](documents/API.md), with schema and checkpoint details in the [User Manual](documents/MANUAL.md),
-[Technical Specification](documents/TECHNICAL_SPECIFICATION.md), and mode whitepapers.
+routes its post-parse human transcript to stderr; file output is atomic. LLM file output checkpoints after each terminal
+scenario measurement and at command terminal, while its stdout checkpoints remain logical lazy transitions followed by
+one final document. Exact process acceptance rules are in the
+[Machine-Readable CLI API](documents/API.md), with schema and checkpoint details in the
+[User Manual](documents/MANUAL.md), [Technical Specification](documents/TECHNICAL_SPECIFICATION.md), and mode
+whitepapers.
 
 ## Plotting Results
 
@@ -245,6 +279,8 @@ recognizes the current console labels only and is neither JSON-schema nor histor
 - [TLB Analysis Whitepaper](documents/TLB_ANALYSIS_WHITEPAPER.md): paired analysis, boundary rules, confidence model, and JSON verification contract.
 - [Core-to-Core Whitepaper](documents/CORE_TO_CORE_WHITEPAPER.md): LDAR/STLR handoff protocol, scheduler-hint scenarios, and JSON schema.
 - [GPU Bandwidth Whitepaper](documents/GPU_BANDWIDTH_WHITEPAPER.md): Metal methodology, timing, validation, resource model, and interpretation limits.
+- [LLM Memory Profile Whitepaper](documents/LLM_MEMORY_PROFILE_WHITEPAPER.md): fixed-context traffic formulas, layout,
+  timing, checksum validation, schema, and interpretation limits.
 
 Runtime behavior and `memory_benchmark -h` are the authoritative sources when documentation differs.
 

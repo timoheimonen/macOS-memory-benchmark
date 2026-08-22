@@ -283,6 +283,7 @@ struct LlmExecutorResult {
   bool kernel_succeeded = false;
   bool timer_started = false;
   bool timer_stopped = false;
+  bool checksum_evaluated = false;  ///< True only after expected and actual checksums were compared.
   bool checksum_valid = false;
   std::vector<LlmWorkerChecksum> expected_checksums;
   std::vector<LlmWorkerChecksum> actual_checksums;

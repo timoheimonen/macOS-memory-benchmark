@@ -255,7 +255,7 @@ struct LlmMemoryBudget {
   bool used_fallback = false;
 };
 
-/** Offset and exact span within one future mapping. */
+/** Offset and exact span within one command-owned mapping. */
 struct LlmByteRange {
   size_t offset_bytes = 0;
   size_t span_bytes = 0;
@@ -420,7 +420,7 @@ LlmMemoryBudget evaluate_llm_memory_budget(
     const LlmMemoryBudgetRequest& request, size_t available_memory_bytes);
 
 /**
- * Build the sole pointer-free source for later ABI descriptor materialization.
+ * Build the sole pointer-free source for ABI descriptor materialization.
  *
  * Effective workers are reduced until every standalone scenario has work.
  * Retained vector capacities are measured after allocation and the budget is

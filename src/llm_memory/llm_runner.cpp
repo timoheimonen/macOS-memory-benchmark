@@ -249,6 +249,9 @@ bool pending_stop_after_failure(const LlmMemoryResult& result, const LlmRunnerHo
 
 LlmTaskExecutionEvidence compact_execution(const LlmExecutorResult& execution) {
   LlmTaskExecutionEvidence evidence;
+  const bool checksum_evidence_complete = execution.checksum_evaluated && execution.requested_workers != 0 &&
+                                          execution.expected_checksums.size() == execution.requested_workers &&
+                                          execution.actual_checksums.size() == execution.requested_workers;
   evidence.valid = execution.valid;
   evidence.reason_code = canonical_executor_reason(execution.reason_code);
   evidence.elapsed_seconds = execution.elapsed_seconds;
@@ -261,9 +264,13 @@ LlmTaskExecutionEvidence compact_execution(const LlmExecutorResult& execution) {
   evidence.kernel_succeeded = execution.kernel_succeeded;
   evidence.timer_started = execution.timer_started;
   evidence.timer_stopped = execution.timer_stopped;
-  evidence.checksum_valid = execution.checksum_valid;
-  evidence.expected_run_checksum = execution.expected_run_checksum;
-  evidence.actual_run_checksum = execution.actual_run_checksum;
+  evidence.checksum_evaluated = checksum_evidence_complete;
+  evidence.checksum_valid = checksum_evidence_complete && execution.checksum_valid;
+  if (checksum_evidence_complete) {
+    evidence.expected_run_checksum = execution.expected_run_checksum;
+    evidence.actual_run_checksum = execution.actual_run_checksum;
+  }
+  evidence.available = true;
   return evidence;
 }
 
@@ -279,8 +286,8 @@ bool execution_lifecycle_is_complete(const LlmExecutorResult& execution, size_t 
 
 bool execution_is_accepted(const LlmExecutorResult& execution, size_t effective_workers) noexcept {
   return execution.valid && canonical_executor_reason(execution.reason_code) == LlmExecutorReason::VALID &&
-         execution_lifecycle_is_complete(execution, effective_workers) && execution.checksum_valid &&
-         std::isfinite(execution.elapsed_seconds) && execution.elapsed_seconds > 0.0;
+         execution_lifecycle_is_complete(execution, effective_workers) && execution.checksum_evaluated &&
+         execution.checksum_valid && std::isfinite(execution.elapsed_seconds) && execution.elapsed_seconds > 0.0;
 }
 
 std::string_view execution_failure_reason(const LlmExecutorResult& execution, size_t effective_workers) noexcept {
@@ -289,6 +296,9 @@ std::string_view execution_failure_reason(const LlmExecutorResult& execution, si
       !execution_lifecycle_is_complete(execution, effective_workers)) {
     return reason_code == LlmExecutorReason::VALID ? std::string_view(LlmExecutorReason::INVALID_RESOURCES)
                                                    : reason_code;
+  }
+  if (!execution.checksum_evaluated) {
+    return LlmExecutorReason::INVALID_RESOURCES;
   }
   if (!execution.checksum_valid) {
     return LlmExecutorReason::CHECKSUM_MISMATCH;
@@ -994,6 +1004,7 @@ void populate_measurement(LlmMeasurementState& measurement, LlmExecutorResult ex
   retained.kernel_succeeded = execution.kernel_succeeded;
   retained.timer_started = execution.timer_started;
   retained.timer_stopped = execution.timer_stopped;
+  retained.checksum_evaluated = execution.checksum_evaluated;
   retained.checksum_valid = execution.checksum_valid;
   retained.expected_run_checksum = execution.expected_run_checksum;
   retained.actual_run_checksum = execution.actual_run_checksum;
@@ -1004,6 +1015,7 @@ void populate_measurement(LlmMeasurementState& measurement, LlmExecutorResult ex
   } else {
     retained.valid = false;
     retained.reason_code.assign(LlmExecutorReason::INVALID_RESOURCES);
+    retained.checksum_evaluated = false;
     retained.checksum_valid = false;
     retained.expected_checksums.clear();
     retained.actual_checksums.clear();
@@ -1019,6 +1031,7 @@ void populate_measurement(LlmMeasurementState& measurement, LlmExecutorResult ex
     measurement.execution.reason_code.assign(measurement.reason_code);
     measurement.status = execution_failure_status(measurement.reason_code);
     clear_measurement_values(measurement);
+    measurement.execution_evidence_available = true;
     return;
   }
 
@@ -1035,6 +1048,7 @@ void populate_measurement(LlmMeasurementState& measurement, LlmExecutorResult ex
     measurement.status = LlmMeasurementStatus::Invalid;
     measurement.reason_code = LlmRunnerReason::INVALID_DERIVED_METRIC;
     clear_measurement_values(measurement);
+    measurement.execution_evidence_available = true;
     return;
   }
 
@@ -1047,6 +1061,7 @@ void populate_measurement(LlmMeasurementState& measurement, LlmExecutorResult ex
   measurement.synthetic_memory_steps_per_second = steps_per_second_value;
   measurement.effective_payload_gb_s = bandwidth_value;
   measurement.checksum_valid = true;
+  measurement.execution_evidence_available = true;
 }
 
 void record_terminal_measurement(LlmMemoryResult& result, const LlmLoopRecord& loop,

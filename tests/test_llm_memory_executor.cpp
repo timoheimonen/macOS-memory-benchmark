@@ -510,6 +510,7 @@ TEST_F(LlmMemoryExecutorTest, FakeKernelExecutorHonorsInvocationTimingQosAndChec
   EXPECT_TRUE(result.timer_started);
   EXPECT_TRUE(result.timer_stopped);
   EXPECT_TRUE(result.kernel_succeeded);
+  EXPECT_TRUE(result.checksum_evaluated);
   EXPECT_TRUE(result.checksum_valid);
   EXPECT_EQ(context.calls.load(std::memory_order_relaxed), plan.effective_workers);
 
@@ -552,6 +553,7 @@ TEST_F(LlmMemoryExecutorTest, ExecutorRejectsComponentMismatchKernelFailureAndPa
   LlmExecutorResult result = execute_llm_scenario(plan, scenario, resources, *timer, {fake_kernel, &mismatch});
   EXPECT_FALSE(result.valid);
   EXPECT_EQ(result.reason_code, LlmExecutorReason::CHECKSUM_MISMATCH);
+  EXPECT_TRUE(result.checksum_evaluated);
   EXPECT_FALSE(result.checksum_valid);
   EXPECT_TRUE(result.timer_stopped);
 
@@ -603,6 +605,7 @@ TEST_F(LlmMemoryExecutorTest, ExecutorRejectsZeroElapsedTimeAndContainsKernelExc
     EXPECT_TRUE(result.timer_started);
     EXPECT_TRUE(result.timer_stopped);
     EXPECT_DOUBLE_EQ(result.elapsed_seconds, 0.0);
+    EXPECT_FALSE(result.checksum_evaluated);
   }
 
   {

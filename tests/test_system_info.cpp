@@ -136,6 +136,18 @@ TEST(BenchmarkQosTest, FailedRequestPreservesCodeAndPrintsCentralizedWarning) {
   EXPECT_EQ(stderr_output, Messages::warning_prefix() + Messages::warning_qos_failed(kFailureCode) + "\n");
 }
 
+TEST(BenchmarkQosTest, FailedRequestCanDeferWarningToModeSpecificReport) {
+  constexpr int kFailureCode = 23;
+  testing::internal::CaptureStderr();
+  const MainThreadQosResult result = prepare_main_thread_benchmark_qos([]() { return kFailureCode; }, false);
+  const std::string stderr_output = testing::internal::GetCapturedStderr();
+
+  EXPECT_TRUE(result.requested);
+  EXPECT_FALSE(result.applied);
+  EXPECT_EQ(result.code, kFailureCode);
+  EXPECT_TRUE(stderr_output.empty());
+}
+
 TEST(SystemInfoTest, CoreQueriesUseValidTopologyValuesAndRejectInvalidOnes) {
   FakeSystemInfoProvider provider;
   provider.set_sysctl_value<int>("hw.perflevel0.logicalcpu_max", 6);

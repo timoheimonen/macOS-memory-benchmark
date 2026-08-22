@@ -71,6 +71,7 @@ This document describes the layout of project files, organized by purpose. It is
 | `documents/LATENCY_WHITEPAPER.md` | Whitepaper: cache and memory latency measurement methodology |
 | `documents/CORE_TO_CORE_WHITEPAPER.md` | Whitepaper: calibrated two-thread token-handoff methodology, audit schema, and interpretation limits |
 | `documents/GPU_BANDWIDTH_WHITEPAPER.md` | Whitepaper: Metal compute bandwidth methodology, GPU schema 1, validation, capability limits, and maintenance policy |
+| `documents/LLM_MEMORY_PROFILE_WHITEPAPER.md` | Whitepaper: fixed-context CPU decode-memory methodology, exact traffic formulas, mappings/layout, validation, schema 1, and interpretation limits |
 | `documents/PROJECT_STRUCTURE.md` | This file |
 
 ---
@@ -106,6 +107,7 @@ Hand-written AArch64 assembly implementing the hot inner loops that must not be 
 | `memory_write_strided.s` | Phase-rotating strided memory write (generic stride parameter) |
 | `memory_latency.s` | Pointer-chase latency measurement loop |
 | `core_to_core_latency.s` | Acquire/release token-exchange ping-pong loop for core-to-core protocol latency |
+| `llm_decode_memory.s` | Descriptor-driven weight/KV read and temporal current-token K/V append kernel for the synthetic LLM profile |
 
 ---
 
@@ -230,7 +232,7 @@ All user-facing text strings are centralized here. Each `.cpp` file implements a
 | `config_messages.cpp` | Configuration echo and validation error text |
 | `core_to_core_messages.cpp` | Core-to-core mode status and result messages |
 | `gpu_bandwidth_messages.cpp` | GPU help, status, result, interpretation, warning, and validation messages |
-| `llm_memory_messages.cpp` | LLM strict-whitelist help, validation, work-limit, and execution-unavailable messages |
+| `llm_memory_messages.cpp` | LLM help, validation, lifecycle, headline, interpretation, and quality-warning messages |
 | `error_messages.cpp` | Fatal error messages |
 | `info_messages.cpp` | General informational messages |
 | `pattern_messages.cpp` | Pattern benchmark descriptive labels |
@@ -245,7 +247,7 @@ All user-facing text strings are centralized here. Each `.cpp` file implements a
 |---|---|
 | `json_output_api.h` | Public standard/pattern payload builders and the shared atomic-file writer interface; this C++ API is distinct from the process contract in `API.md` |
 | `json_output.cpp` | Builds standard/pattern root payloads, adds timestamp/version metadata, and retains file-save adapters; direct command dispatch can reuse the prebuilt object through `JsonOutputSession` |
-| `json_output_session.h` / `.cpp` | Classifies raw output targets, applies mode-specific file-path policy, lazily dispatches checkpoints, routes command-scoped human stdout, and emits checked final JSON through the retained original stdout buffer; result-producing direct modes and CPU sweeps use it, while the LLM boundary currently installs it without producing a result |
+| `json_output_session.h` / `.cpp` | Classifies raw output targets, applies mode-specific file-path policy, lazily dispatches checkpoints, routes command-scoped human stdout, and emits checked final JSON through the retained original stdout buffer; result-producing direct modes and CPU sweeps use it, including the LLM file-checkpoint/final-stdout lifecycle |
 | `builder.cpp` | Builds common mode configuration metadata, including resolved chain, seed, calibration, scheduling, and worker policies |
 | `standard.cpp` | Active standard schema-3 serializer for completion state, loop measurements, and main/cache aggregates |
 | `patterns.cpp` | Serializes pattern benchmark results |
@@ -272,14 +274,19 @@ Objective-C++ Metal backend so deterministic unit tests do not require GPU work.
 
 ### 2.6 src/llm_memory/ — Synthetic LLM decode-memory profile
 
-Cold-path configuration and pointer-free planning for the standalone CPU LLM memory profile. The command boundary and
-strict parser are active; mappings, execution, measurement orchestration, and result serialization are intentionally not
-present in the current implementation.
+Standalone CPU schema-1 implementation. Pure planning and backend-independent orchestration are separated from mapping,
+ARM64 execution, environment capture, console composition, and serialization so deterministic unit tests can inject
+platform and executor seams without running hot kernels.
 
 | File | Purpose |
 |---|---|
-| `llm_memory.h` / `.cpp` | Separate config/status foundation, strict exact-whitelist parser, required/default worker/seed resolution, geometry/work-limit preflight, dedicated help, output-session/QoS/signal command boundary, and explicit execution-unavailable terminal |
+| `llm_memory.h` / `.cpp` | Separate config/status foundation, strict exact-whitelist parser, required/default worker/seed resolution, complete command boundary, memory admission/preparation, QoS/signal scope, console output, and file/stdout transport orchestration |
 | `llm_work_plan.h` / `.cpp` | Pure checked weight/KV geometry, payload/crossover math, memory-budget request, layer/sequence descriptor templates and ABI, worker ranges/reduction, seed domains, scenario limits/calibration/order, and frozen plan identities |
+| `llm_executor.h` / `.cpp` | Atomic full-size weight/K/V mappings, deterministic initialization/pre-touch, descriptor materialization, expected-checksum oracle, synchronized worker team, timer boundary, and ARM64 kernel adapter |
+| `llm_runner.h` / `.cpp` | Per-scenario automatic calibration or exact-work planning, frozen plans, cyclic loop order, status/counters, task-boundary interruption, aggregates, warnings, and logical checkpoints |
+| `llm_json.h` / `.cpp` | Ordered LLM schema-1 builder plus conservative output-peak estimator, with decimal-string exact integers, nullable unavailable observations, traffic diagnostics, environment evidence, and interpretation contract |
+| `llm_output.h` / `.cpp` | Human-readable exact-payload geometry, scenario headlines, interpretation limits, and evidence-backed quality warnings through centralized message helpers |
+| `llm_environment.h` / `.mm` | Objective-C-free snapshot type plus macOS thermal-state and Low Power Mode capture through Foundation |
 
 ---
 
@@ -360,6 +367,11 @@ installed. All `.cpp` files are picked up automatically by the Makefile. Tests n
 | `test_llm_memory_contract.cpp` | `LlmMemoryContractTest` | Test-side Phase 0 executable specification for exact LLM payload formulas, affine append bytes, read/run checksums, descriptor ABI layout, and schema acceptance identity; it does not exercise production LLM code |
 | `test_llm_memory_config.cpp` | `LlmMemoryConfigTest` | Config/status defaults, exact standalone whitelist parsing, required/default fields, strict decimal errors, raw output values, help isolation, worker/seed resolution, geometry/work-limit preflight, and incompatible options |
 | `test_llm_memory_work_plan.cpp` | `LlmMemoryWorkPlanTest` | Production checked geometry/payload/crossover, memory budget, descriptor/range/layout invariants, worker reduction, move-only semantics, seed identities, scenario caps/calibration, and cyclic order |
+| `test_llm_memory_executor.cpp` | `LlmMemoryExecutorTest` | Atomic mapping/preparation failure seams, full-byte initialization, descriptor materialization, expected checksums, synchronized start/timing, QoS outcomes, cancellation, and fake-kernel result validation |
+| `test_llm_memory_runner.cpp` | `LlmMemoryRunnerTest` | Explicit/automatic frozen plans, cyclic order, status/counter/aggregate semantics, interruption, checkpoint precedence, auxiliary budgeting, and runner exception boundaries |
+| `test_llm_memory_json.cpp` | `LlmMemoryJsonTest` | Schema-1 identity and structure, conservative output-peak estimation, exact decimal strings, status/null behavior, traffic classification, interpretation, environment evidence, and checkpoint snapshot serialization |
+| `test_llm_memory_output.cpp` | `LlmMemoryOutputTest` | Exact console headline formatting, interpretation text, and deduplicated evidence-backed warning selection |
+| `test_llm_memory_kernels.cpp` | `LlmMemoryKernelIntegrationTest` | Real ARM64 descriptor/kernel scenarios, tails, append bytes, checksum contract, bounds, zero/null safety, and AAPCS64 callee-saved preservation |
 | `test_buffer_manager.cpp` | `BufferManagerTest` | Pattern mapping policy, atomic allocation cleanup, initialized content, validation, and peak accounting |
 | `test_benchmark_executor.cpp` | `BenchmarkExecutorTest` | Injected phase/chain failures, continuous latency sampling, and hardware executor contracts |
 | `test_benchmark_runner.cpp` | `BenchmarkStatisticsCollectorTest`, `BenchmarkRunnerTest` | Status-bearing aggregation, schema-3 retained snapshots, checkpointing, interruption, and runner exception/failure seams |
@@ -383,7 +395,7 @@ installed. All `.cpp` files are picked up automatically by the Makefile. Tests n
 | `test_core_to_core_messages.cpp` | `CoreToCoreMessagesTest` | Core-to-core console message strings |
 | `test_core_to_core_cli.cpp` | `CoreToCoreCliTest` | Core-to-core CLI argument parsing |
 | `test_core_to_core_runner.cpp` | `CoreToCoreRunnerTest` | Calibration, work planning, cyclic scenario order, deterministic failure seams, and real ARM64 integration paths |
-| `test_executable_cli.cpp` | `ExecutableCliIntegrationTest` | Executable-level CLI routing, current standard schema-3 direct/sweep payloads, split stdout/stderr capture, bounded child execution, sentinel artifact rules, other direct-mode JSON transport/file compatibility including unsupported GPU evidence, and pattern orchestration smoke coverage |
+| `test_executable_cli.cpp` | `ExecutableCliIntegrationTest` | Executable-level CLI routing, current standard schema-3 direct/sweep payloads, split stdout/stderr capture, bounded child execution, sentinel artifact rules, unsupported GPU evidence, bounded LLM file/stdout/checkpoint contracts, and pattern orchestration smoke coverage |
 | `test_standard_kernels.cpp` | `StandardKernelIntegrationTest`, `PatternKernelIntegrationTest` | Real ARM64 standard/pattern kernel ABI, tails, boundaries, checksums, and multi-worker execution |
 | `test_statistics.cpp` | `StatisticsTest` | Standard multi-loop summary composition, mode filtering, loop/sample population separation, and rendered values |
 | `test_descriptive_statistics.cpp` | `DescriptiveStatisticsTest` | Canonical shared percentiles, deviation, CV, and MAD contracts |

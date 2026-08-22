@@ -1218,6 +1218,7 @@ LlmExecutorResult execute_llm_scenario(const LlmMemoryWorkPlan& model_plan, cons
       result.checksum_valid =
           equal_worker_checksum(result.expected_checksums[worker_index], result.actual_checksums[worker_index]);
     }
+    result.checksum_evaluated = true;
     if (!result.checksum_valid) {
       result.reason_code = LlmExecutorReason::CHECKSUM_MISMATCH;
       return result;

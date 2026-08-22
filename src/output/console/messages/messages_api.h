@@ -215,8 +215,9 @@ std::string msg_core_to_core_scenario_progress(size_t current_loop,
 std::string msg_tlb_analysis_refinement_start(size_t point_count);
 std::string msg_tlb_analysis_validation_start(size_t point_count);
 
-// --- GPU memory-bandwidth usage and report messages ---
+// --- GPU and LLM memory-profile usage and report messages ---
 std::string gpu_usage_options(const std::string& prog_name);
+const std::string& llm_memory_command_name();
 std::string llm_memory_usage_options(const std::string& prog_name);
 std::string report_gpu_bandwidth_header(const std::string& device_name,
                                         size_t loop_count,
@@ -237,6 +238,32 @@ std::string warning_gpu_duration_quality(const std::string& operation,
                                          const std::string& quality);
 const std::string& warning_gpu_environment_not_nominal();
 const std::string& warning_gpu_recommended_working_set_exceeded();
+const std::string& report_llm_memory_header();
+std::string report_llm_memory_payload(size_t active_weight_bytes_per_step,
+                                      size_t kv_read_bytes_per_step,
+                                      size_t kv_append_bytes_per_step);
+std::string report_llm_memory_crossover(
+    double traffic_crossover_context_tokens);
+std::string report_llm_memory_scenario_headline(
+    const std::string& scenario_name, double step_latency_ms,
+    double synthetic_memory_steps_per_second, double effective_payload_gb_s,
+    bool include_steps_per_second);
+std::string report_llm_memory_scenario_name(
+    const std::string& scenario_token);
+const std::string& report_llm_memory_interpretation_note();
+std::string warning_llm_memory_high_cv(const std::string& scenario_token,
+                                       double cv_pct,
+                                       double threshold_pct);
+const std::string& warning_llm_memory_order_not_balanced();
+std::string warning_llm_memory_duration_quality(
+    const std::string& scenario_token, const std::string& quality);
+const std::string& warning_llm_memory_environment_not_nominal();
+std::string warning_llm_memory_main_thread_qos_not_applied(int code);
+const std::string& warning_llm_memory_worker_qos_not_applied();
+std::string warning_llm_memory_weight_cache_dominant(
+    size_t working_set_bytes, size_t l2_cache_bytes);
+std::string warning_llm_memory_kv_cache_dominant(
+    size_t working_set_bytes, size_t l2_cache_bytes);
 
 // --- Core-to-Core Report Messages ---
 const std::string& report_core_to_core_header();

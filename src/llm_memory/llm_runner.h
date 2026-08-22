@@ -64,7 +64,7 @@ enum class LlmRunnerTaskKind : uint8_t {
   Measurement,
 };
 
-/** Logical persistence point; transport binding is supplied by Phase 5. */
+/** Logical persistence point bound to the command-scoped output transport. */
 enum class LlmCheckpointKind : uint8_t {
   MeasurementTerminal = 0,
   CommandTerminal,
@@ -84,6 +84,7 @@ struct LlmRunnerTaskContext {
 
 /** Compact excluded-task evidence without retained per-worker vectors. */
 struct LlmTaskExecutionEvidence {
+  bool available = false;  ///< Complete executor evidence was retained.
   bool valid = false;
   std::string_view reason_code = LlmRunnerReason::NOT_STARTED;
   double elapsed_seconds = 0.0;
@@ -96,6 +97,7 @@ struct LlmTaskExecutionEvidence {
   bool kernel_succeeded = false;
   bool timer_started = false;
   bool timer_stopped = false;
+  bool checksum_evaluated = false;  ///< True only when checksum validity was evaluated.
   bool checksum_valid = false;
   LlmRunChecksum expected_run_checksum{0, 0};
   LlmRunChecksum actual_run_checksum{0, 0};
@@ -134,6 +136,7 @@ struct LlmMeasurementState {
   size_t loop_index = 0;
   size_t order_position = 0;
   bool attempted = false;
+  bool execution_evidence_available = false;  ///< Complete executor evidence was retained.
   size_t requested_workers = 0;
   size_t effective_workers = 0;
   size_t qos_successful_workers = 0;
@@ -294,7 +297,7 @@ LlmRunnerAuxiliaryEstimate calculate_llm_runner_auxiliary_estimate(const LlmMemo
  *
  * @param config Validated command configuration paired with @p model_plan.
  * @param model_plan Immutable pointer-free geometry and descriptor plan.
- * @param executor Required backend callback. Phase 5 binds production
+ * @param executor Required backend callback. Production binds prepared
  *        resources and `execute_llm_scenario`; unit tests inject a fake.
  * @param result Reset on entry. Preflight failures leave an uninitialized
  *        reason-bearing result; admitted runs retain initialized terminal or

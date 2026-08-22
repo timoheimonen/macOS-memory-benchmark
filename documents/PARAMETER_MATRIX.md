@@ -11,7 +11,7 @@ Working version `0.63.0`
 | `-T` | `--analyze-tlb` | — | Run standalone TLB analysis |
 | `-C` | `--analyze-core2core` | — | Run standalone two-thread acquire/release token-protocol handoff analysis |
 | `-G` | `--gpu-bandwidth` | — | Run standalone Metal GPU memory bandwidth |
-| `-M` | `--llm-memory` | — | Select the standalone fixed-context synthetic CPU LLM decode-memory boundary; execution is currently unavailable |
+| `-M` | `--llm-memory` | — | Run the standalone fixed-context synthetic CPU LLM decode-memory profile |
 | — | `--weight-size-mb` | `<MiB>` | Required positive active weight size for LLM-memory mode |
 | — | `--layers` | `<count>` | Required positive LLM layer count |
 | — | `--query-heads` | `<count>` | Required positive query-head count; at least the KV-head count and divisible by it |
@@ -20,7 +20,7 @@ Working version `0.63.0`
 | — | `--kv-element-bytes` | `1\|2\|4` | LLM KV element width; default `2` |
 | — | `--context-tokens` | `<count>` | Required positive fixed visible context including the current synthetic token |
 | — | `--batch-size` | `<count>` | Positive LLM batch-sequence count; default `1` |
-| `-i` | `--iterations` | `<count>` | Positive exact R/W/Copy pass count or LLM scenario-step count; CPU standard maximum is `INT_MAX`, while GPU and LLM apply work-dependent ceilings. Omission enables automatic calibration where execution is available |
+| `-i` | `--iterations` | `<count>` | Positive exact R/W/Copy pass count or LLM scenario-step count; CPU standard maximum is `INT_MAX`, while GPU and LLM apply work-dependent ceilings. Omission enables automatic calibration in the applicable mode |
 | `-b` | `--buffer-size` | `<MB>` | Default `512` MB. Standard mode permits `0` only with `--only-latency`; pattern mode requires a positive value; GPU minimum is `64` MB |
 | `-r` | `--count` | `<count>` | Positive loop count; default `1` for benchmark/pattern modes and `3` for core-to-core/GPU/LLM modes |
 | — | `--seed` | `<uint64>` | Unsigned 64-bit reproducibility seed for benchmark, pattern, TLB, GPU, or LLM mode; generated once when omitted |
@@ -29,12 +29,12 @@ Working version `0.63.0`
 | `-m` | `--latency-chain-mode` | `<mode>` | Chain policy: `auto` (default), `global-random`, `random-box`, `same-random-in-box`, or `diff-random-in-box` |
 | `-l` | `--latency-tlb-locality-kb` | `<KB>` | Latency-chain locality window; default `1024` KB. With `auto`, `0` selects global random |
 | `-D` | `--tlb-density` | `low\|medium\|high` | Standalone TLB runtime profile; default `medium` |
-| `-t` | `--threads` | `<count>` | Positive requested bandwidth worker count. General main-memory/pattern execution caps above detected cores; LLM preserves requested and detected counts separately for later effective reduction |
+| `-t` | `--threads` | `<count>` | Positive requested bandwidth worker count. General main-memory/pattern execution caps above detected cores; LLM preserves requested, detected, and executable effective counts separately |
 | `-k` | `--cache-size` | `<KB>` | Custom cache target: `16..1048576` KB, or `0` only with `--benchmark --only-latency` |
 | `-W` | `--only-bandwidth` | — | Run only standard benchmark bandwidth tests; requires `--benchmark` |
 | `-L` | `--only-latency` | — | Run only standard benchmark latency tests; requires `--benchmark` |
 | `-u` | `--non-cacheable` | — | Apply best-effort cache-discouraging allocation hints; does not create truly uncached memory |
-| `-o` | `--output` | `<target>` | Result target syntax. Exact `-` selects one final stdout document for result-producing modes. An empty direct value disables JSON; every other non-empty value is a file. Current LLM execution is unavailable and produces no JSON or file result |
+| `-o` | `--output` | `<target>` | Result target syntax. Exact `-` selects one final stdout document for result-producing modes. An empty direct value disables JSON; every other non-empty value is a file. LLM file output checkpoints each terminal scenario measurement and command terminal |
 | `-S` | `--sweep` | `<key=a,b>` | Add a Cartesian sweep parameter; repeat once per distinct key and use with `--output` |
 | `-X` | `--sweep-max-runs` | `<count>` | Positive generated-run limit; default `256`, or `16` with `--analyze-tlb`; effective only with `--sweep` |
 | `-h` | `--help` | — | Show help; the standalone `--analyze-tlb` whitelist is the exception and rejects this combination |
@@ -164,11 +164,11 @@ checkpoint cadence.
 Grid geometry is not a CLI parameter: schema 1 uses the frozen 8192-threadgroup maximum and records both that maximum and
 the resolved grid in each work plan.
 
-### Modifiers with `--llm-memory` (standalone command boundary)
+### Modifiers with `--llm-memory` (standalone mode)
 
 The LLM parser has an exact whitelist. All six required model options must occur once; every optional value and the mode
-or help selector may also occur at most once. The current build performs checked configuration preflight and then returns
-`execution-unavailable` without mappings, workers, measurements, JSON, or files.
+or help selector may also occur at most once. After checked configuration and memory-budget preflight, the command
+allocates full-size cacheable weight, K, and V mappings and runs the three schema-1 scenarios.
 
 | Modifier | Compatible | Notes |
 |----------|------------|-------|
@@ -180,18 +180,19 @@ or help selector may also occur at most once. The current build performs checked
 | `--context-tokens <n>` | ✅ required | Positive fixed visible context including the current synthetic token |
 | `--kv-element-bytes <1\|2\|4>` | ✅ | Default `2`; every other width is rejected |
 | `--batch-size <n>` | ✅ | Positive; default `1` |
-| `-t, --threads <n>` | ✅ | Positive requested workers; omission uses detected workers. Explicit requests are not silently capped in the parsed config |
-| `-i, --iterations <n>` | ✅ | Positive exact steps per scenario; omission selects future per-scenario calibration. Explicit values must fit the strictest one-billion-step/64 GiB exact-payload limit |
+| `-t, --threads <n>` | ✅ | Positive requested workers; omission uses detected workers. The work plan records requested, available, and effective counts separately and reduces effective workers only when availability or executable span size requires it |
+| `-i, --iterations <n>` | ✅ | Positive exact steps per scenario; omission selects excluded per-scenario calibration toward 150 ms. Explicit values must fit the strictest one-billion-step/64 GiB exact-payload limit |
 | `-r, --count <n>` | ✅ | Positive cyclic loop count; default `3` |
 | `--seed <uint64>` | ✅ | Exact base seed including zero; a non-zero seed is generated once when omitted |
-| `-o, --output <target>` | ✅ syntax only | Empty, exact `-`, `./-`, and flag-shaped values are retained exactly. The current unavailable path writes no result |
+| `-o, --output <target>` | ✅ | Empty disables JSON; exact `-` emits one final schema 1 document; `./-`, flag-shaped values, and every other non-empty non-sentinel value are atomic file targets. A non-empty target adds the conservative JSON output peak to memory admission |
 | `-h, --help` | ✅ | Prints dedicated help before enforcing required inputs or resolving worker/seed/session/QoS state; malformed or duplicate tokens still fail |
 | `--sweep`, `--sweep-max-runs`, `--non-cacheable` | ❌ | Outside the frozen v1 whitelist |
 | Buffer/cache/latency/TLB/pattern/core-to-core/GPU modifiers | ❌ | Outside the standalone whitelist |
 | Any other primary mode | ❌ | Primary modes are mutually exclusive |
 
-The parser also rejects checked weight/KV geometry that overflows or makes even one scenario step exceed the 64 GiB
-logical-payload ceiling. This boundary does not yet claim that the later three-mapping memory budget is admissible.
+The parser rejects checked weight/KV geometry that overflows or makes even one scenario step exceed the 64 GiB
+logical-payload ceiling. Before allocation, the planner separately admits page-rounded full-size weight/K/V mappings,
+descriptors, retained planner storage, checksum storage, and orchestration storage against the current memory budget.
 
 ### Sweep Compatibility
 

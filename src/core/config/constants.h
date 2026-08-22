@@ -197,6 +197,8 @@ namespace Constants {
       "llm-kv-append-affine64-v1";
   constexpr const char* LLM_READ_CHECKSUM_VERSION =
       "llm-read-checksum-v1";
+  constexpr const char* LLM_TRAFFIC_CLASSIFICATION_VERSION =
+      "llm-exact-weight-vs-kv-read-payload-v1";
 
   constexpr double BENCHMARK_LATENCY_TARGET_SECONDS = 0.250;
   constexpr double BENCHMARK_LATENCY_CALIBRATION_MIN_SECONDS = 0.100;
