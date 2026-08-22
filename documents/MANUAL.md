@@ -345,6 +345,14 @@ middle, and trailing items.
 | `-C` | `--analyze-core2core` |
 | `-G` | `--gpu-bandwidth` |
 | `-M` | `--llm-memory` |
+| — | `--weight-size-mb` |
+| — | `--layers` |
+| — | `--query-heads` |
+| — | `--kv-heads` |
+| — | `--head-dim` |
+| — | `--kv-element-bytes` |
+| — | `--context-tokens` |
+| — | `--batch-size` |
 | `-b` | `--buffer-size` |
 | `-i` | `--iterations` |
 | `-r` | `--count` |
@@ -741,7 +749,7 @@ middle, and trailing items.
 - `--benchmark --only-latency` supports `buffer-size`, `cache-size`, and latency chain/locality/stride keys
 - `--analyze-tlb` supports `latency-stride-bytes`, `latency-chain-mode`, and `tlb-density`
 - `--analyze-core2core` supports `count` and `latency-samples`
-- `--gpu-bandwidth` does not support `--sweep` or `--sweep-max-runs` in schema 1
+- `--gpu-bandwidth` and `--llm-memory` do not support `--sweep` or `--sweep-max-runs` in their schema-1 modes
 
 #### `--sweep-max-runs <count>`
 
