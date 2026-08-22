@@ -28,7 +28,9 @@ const std::string& error_llm_memory_must_be_used_alone() {
   static const std::string message =
       "--llm-memory requires --weight-size-mb <MiB>, --layers <count>, "
       "--query-heads <count>, --kv-heads <count>, --head-dim <count>, and "
-      "--context-tokens <count>; it allows only optional "
+      "phase-specific token geometry; it allows only optional "
+      "--phase <decode|prefill>, --context-tokens <count>, "
+      "--prompt-tokens <count>, --attention-query-tile-tokens <count>, "
       "--kv-element-bytes <1|2|4>, --kv-layout <contiguous|paged>, "
       "--kv-block-tokens <count>, --batch-size <count>, "
       "-t/--threads <count>, -i/--iterations <count>, "
@@ -77,6 +79,11 @@ const std::string& llm_memory_reason_kv_element_bytes() {
   return reason;
 }
 
+const std::string& llm_memory_reason_phase() {
+  static const std::string reason = "must be exactly decode or prefill";
+  return reason;
+}
+
 const std::string& llm_memory_reason_kv_layout() {
   static const std::string reason =
       "must be exactly contiguous or paged";
@@ -91,47 +98,58 @@ const std::string& llm_memory_reason_platform_size_range() {
 
 std::string llm_memory_usage_options(const std::string& prog_name) {
   std::ostringstream usage;
-  usage
-      << "Usage: " << prog_name << " --llm-memory [options]\n"
-      << "Options for standalone CPU synthetic LLM decode-memory mode:\n"
-      << "  -M, --llm-memory       Select the fixed-context memory-only decode profile.\n"
-      << "      --weight-size-mb <MiB>\n"
-      << "                          Required active weight bytes per decode step, in MiB.\n"
-      << "      --layers <count>    Required transformer layer count.\n"
-      << "      --query-heads <count>\n"
-      << "                          Required query-head count; must be at least as large as KV heads\n"
-      << "                          and divisible by them.\n"
-      << "      --kv-heads <count> Required physical KV-head count.\n"
-      << "      --head-dim <count> Required elements per K or V head vector.\n"
-      << "      --kv-element-bytes <1|2|4>\n"
-      << "                          KV element width (default: "
-      << Constants::LLM_DEFAULT_KV_ELEMENT_BYTES << " bytes).\n"
-      << "      --context-tokens <count>\n"
-      << "                          Required fixed visible context, including the current token.\n"
-      << "      --kv-layout <contiguous|paged>\n"
-      << "                          KV storage layout (default: contiguous).\n"
-      << "      --kv-block-tokens <count>\n"
-      << "                          Required only for paged KV; must be a positive power of two\n"
-      << "                          no greater than UINT32_MAX; it may exceed the visible context.\n"
-      << "                          Rejected for contiguous KV.\n"
-      << "      --batch-size <count>\n"
-      << "                          Batch sequences per decode step (default: "
-      << Constants::LLM_DEFAULT_BATCH_SIZE << ").\n"
-      << "  -t, --threads <count>  Requested CPU workers; detected workers are used when omitted.\n"
-      << "  -i, --iterations <count>\n"
-      << "                          Exact decode steps per scenario measurement. When omitted, each\n"
-      << "                          scenario calibrates toward 150 ms in a\n"
-      << "                          100-250 ms window.\n"
-      << "  -r, --count <count>    Cyclic weights/KV/mixed loops (default: "
-      << Constants::LLM_DEFAULT_LOOP_COUNT << ").\n"
-      << "      --seed <uint64>    Reproducible base seed; generated once when omitted.\n"
-      << "  -o, --output <target>  JSON schema 1 target; exact - writes one final document to\n"
-      << "                          stdout and routes human output to stderr. Every other non-empty\n"
-      << "                          target is a file with atomic scenario and terminal checkpoints.\n"
-      << "                          An empty value disables JSON for this direct command.\n"
-      << "  -h, --help             Show this LLM-mode help and exit.\n"
-      << "This profile models CPU memory traffic only: it performs no Transformer math and\n"
-      << "does not report inference tokens/s. Effective model payload is not physical DRAM traffic.\n";
+  usage << "Usage: " << prog_name << " --llm-memory [options]\n"
+        << "Options for standalone CPU synthetic LLM memory mode:\n"
+        << "  -M, --llm-memory       Select the memory-only LLM profile.\n"
+        << "      --phase <decode|prefill>\n"
+        << "                          Workload phase (default: decode). CPU prefill currently\n"
+        << "                          supports contiguous KV only.\n"
+        << "      --weight-size-mb <MiB>\n"
+        << "                          Required active weight bytes per work unit, in MiB.\n"
+        << "      --layers <count>    Required transformer layer count.\n"
+        << "      --query-heads <count>\n"
+        << "                          Required query-head count; must be at least as large as KV heads\n"
+        << "                          and divisible by them.\n"
+        << "      --kv-heads <count> Required physical KV-head count.\n"
+        << "      --head-dim <count> Required elements per K or V head vector.\n"
+        << "      --kv-element-bytes <1|2|4>\n"
+        << "                          KV element width (default: " << Constants::LLM_DEFAULT_KV_ELEMENT_BYTES
+        << " bytes).\n"
+        << "      --context-tokens <count>\n"
+        << "                          Required only for decode; fixed visible context including\n"
+        << "                          the current token. Rejected for prefill.\n"
+        << "      --prompt-tokens <count>\n"
+        << "                          Required only for prefill; full prompt length P, P >= 1.\n"
+        << "                          Rejected for decode.\n"
+        << "      --attention-query-tile-tokens <count>\n"
+        << "                          Required only for prefill; query tile Q, 1 <= Q <= P.\n"
+        << "                          Rejected for decode.\n"
+        << "      --kv-layout <contiguous|paged>\n"
+        << "                          KV storage layout (default: contiguous).\n"
+        << "      --kv-block-tokens <count>\n"
+        << "                          Required only for paged KV; must be a positive power of two\n"
+        << "                          no greater than UINT32_MAX; it may exceed the phase sequence length.\n"
+        << "                          Rejected for contiguous KV. CPU prefill+paged is not yet\n"
+        << "                          supported (reason_code=cpu-prefill-paged-not-yet-supported).\n"
+        << "      --batch-size <count>\n"
+        << "                          Batch sequences per work unit (default: " << Constants::LLM_DEFAULT_BATCH_SIZE
+        << ").\n"
+        << "  -t, --threads <count>  Requested CPU workers; detected workers are used when omitted.\n"
+        << "  -i, --iterations <count>\n"
+        << "                          Exact work units per scenario measurement. A work unit is one\n"
+        << "                          decode step or full-prompt prefill operation. When omitted, each\n"
+        << "                          scenario calibrates toward 150 ms in a\n"
+        << "                          100-250 ms window.\n"
+        << "  -r, --count <count>    Cyclic weights/KV/mixed loops (default: " << Constants::LLM_DEFAULT_LOOP_COUNT
+        << ").\n"
+        << "      --seed <uint64>    Reproducible base seed; generated once when omitted.\n"
+        << "  -o, --output <target>  JSON schema 1 target; exact - writes one final document to\n"
+        << "                          stdout and routes human output to stderr. Every other non-empty\n"
+        << "                          target is a file with atomic scenario and terminal checkpoints.\n"
+        << "                          An empty value disables JSON for this direct command.\n"
+        << "  -h, --help             Show this LLM-mode help and exit.\n"
+        << "This profile models CPU memory traffic only: it performs no Transformer math and\n"
+        << "does not report inference tokens/s. Effective model payload is not physical DRAM traffic.\n";
   return usage.str();
 }
 
@@ -177,6 +195,21 @@ std::string report_llm_memory_decode_geometry(
          << "  Traffic crossover:          " << std::fixed
          << std::setprecision(2) << traffic_crossover_context_tokens
          << " visible context tokens";
+  return report.str();
+}
+
+std::string report_llm_memory_prefill_geometry(size_t prompt_tokens, size_t attention_query_tile_tokens,
+                                               size_t tile_count, size_t attention_prefix_token_visits_per_sequence,
+                                               size_t causal_token_pairs_per_sequence, size_t logical_attention_pairs,
+                                               size_t logical_attention_fma_terms) {
+  std::ostringstream report;
+  report << "  Prompt tokens (P):                 " << prompt_tokens << "\n"
+         << "  Attention query tile tokens (Q):  " << attention_query_tile_tokens << "\n"
+         << "  Attention query tiles (C):        " << tile_count << "\n"
+         << "  Prefix token visits / sequence:   " << attention_prefix_token_visits_per_sequence << "\n"
+         << "  Causal token pairs / sequence:    " << causal_token_pairs_per_sequence << "\n"
+         << "  Logical attention pairs:          " << logical_attention_pairs << "\n"
+         << "  Logical attention FMA terms:      " << logical_attention_fma_terms;
   return report.str();
 }
 
@@ -260,14 +293,19 @@ std::string report_llm_memory_interpretation_note(
           << "  Phase/layout: phase=" << phase << ", kv_layout=" << kv_layout;
   if (phase == "decode") {
     message << "; the visible context includes the current-token slot";
+  } else if (phase == "prefill") {
+    message << "; prefill performs no Transformer compute and does not "
+               "predict TTFT";
   }
   if (kv_layout == "contiguous") {
     message << "; KV uses layer/batch/token/head/dimension order";
   }
-  message << ".\n"
-          << "  Crossover: logical weight/KV-read payload equality is not a proven hardware "
-             "bottleneck transition.\n"
-          << "  Comparability: small weight or KV working sets can be cache-dominant; order imbalance, "
+  message << ".\n";
+  if (phase == "decode") {
+    message << "  Crossover: logical weight/KV-read payload equality is not a proven hardware "
+               "bottleneck transition.\n";
+  }
+  message << "  Comparability: small weight or KV working sets can be cache-dominant; order imbalance, "
              "high CV, non-nominal environment, QoS failures, or off-target duration reduce confidence.";
   return message.str();
 }

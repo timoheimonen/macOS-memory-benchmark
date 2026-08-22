@@ -12,7 +12,7 @@ Bandwidth is reported as **effective workload payload divided by measured time**
 | Access patterns (`--patterns`) | Payload-rate sensitivity to access order, regularity, and virtual stride | Which single cache, prefetch, translation, or scheduling mechanism caused a difference |
 | TLB analysis (`--analyze-tlb`) | Paired spread/packed latency deltas and empirical boundary estimates | Guaranteed architectural TLB sizes or direct DRAM latency |
 | Core-to-core (`--analyze-core2core`) | Effective round-trip time of a repeated two-thread acquire/release token exchange under scheduler hints | Isolated physical cache-line migration or coherence-path latency, exact physical-core placement, or a definitive topology map |
-| LLM memory profile (`--llm-memory`) | Effective logical model-payload rate and synthetic decode-step latency for CPU with contiguous or deterministic paged KV storage | Transformer computation, inference tokens/s, physical DRAM traffic, Metal/prefill execution, runtime page allocation, GPU/ANE execution, or framework performance |
+| LLM memory profile (`--llm-memory`) | Effective logical model-payload rate and synthetic work-unit latency for CPU decode and contiguous prefill | Transformer computation, inference tokens/s, TTFT, physical DRAM traffic, Metal execution, runtime page allocation, GPU/ANE execution, or framework performance |
 | JSON output (`--output`) and sweeps (`--sweep`) | Auditable measurement evidence through recoverable files or one final stdout document for every result-producing direct mode and supported CPU sweep | Comparability when commands, software, hardware, or run conditions differ |
 
 ## CPU Memory and Cache Bandwidth
@@ -37,13 +37,16 @@ CPU and GPU GB/s should not be compared as if they were the same workload: their
 
 ## Synthetic LLM Memory Profile
 
-Standalone `--llm-memory` uses generic backend/phase/layout/work-unit vocabulary. The active profiles are CPU/decode
-with contiguous or paged KV storage. Exact methodologies are
-`llm-memory-v1-cpu-decode-contiguous` and `llm-memory-v1-cpu-decode-paged`. It executes three scenarios over one
-explicit, fixed-visible-context model geometry:
+Standalone `--llm-memory` uses generic backend/phase/layout/work-unit vocabulary. Active profiles are CPU/decode with
+contiguous or paged KV and CPU/prefill with contiguous KV. Exact methodologies are
+`llm-memory-v1-cpu-decode-contiguous`, `llm-memory-v1-cpu-decode-paged`, and
+`llm-memory-v1-cpu-prefill-contiguous`. CPU/prefill/paged is rejected with
+`cpu-prefill-paged-not-yet-supported`; Metal is unavailable. Neither case silently falls back.
+
+Each active phase executes three scenarios:
 
 - `weights_only` reads the active-weight mapping once per work unit;
-- `kv_only` writes the current token's K and V records and reads the complete visible K/V history;
+- `kv_only` performs the phase-specific K/V write and reads;
 - `mixed` performs the same weight and KV work in worker-local layer order inside one synchronized timing interval.
 
 With active-weight bytes `W`, layer count `L`, KV heads `h_kv`, head dimension `d_h`, KV element bytes `s_kv`, batch
@@ -52,11 +55,20 @@ weights-only, `B*A*K + B*K` for KV-only, and `W + B*A*K + B*K` for mixed. The ve
 compares `W` with KV-read payload `B*A*K`; exact equality alone is `near_crossover`, and no class identifies a measured
 hardware bottleneck.
 
+For prefill, `--prompt-tokens P` and `--attention-query-tile-tokens Q` are required with `P >= 1` and `1 <= Q <= P`;
+`--context-tokens` is rejected. One `prefill_operation` rewrites all `P` K/V records for every batch sequence, then
+reads each causal prefix at tile ends `e_j = min((j+1)*Q, P)`. With `C = ceil(P/Q)` and
+`S(P,Q) = sum(e_j)`, weight read is `W`, KV write is `B*P*K`, and KV read is `B*S(P,Q)*K`. Thus prefill payload is
+`W`, `B*(P+S(P,Q))*K`, or `W+B*(P+S(P,Q))*K` for weights-only, KV-only, or mixed. `Q=P` reads one full prefix and
+`Q=1` yields `S=triangular(P)`. Causal-pair and logical-FMA counts are audit metadata only; no FMA is executed.
+CPU prefill also reports scenario-specific cost-balanced partition identities and exact per-worker minimum, maximum,
+and imbalance evidence with `worker-cost` units.
+
 The command allocates active weights and K/V resources at their full derived sizes in ordinary cacheable anonymous
 memory; initialization and pre-touch occur before measurement. Contiguous layout is layer, batch sequence, token, head,
 then head dimension. `--kv-layout` defaults to contiguous, which rejects `--kv-block-tokens`. Paged layout uses complete
 `G`-token physical blocks plus one uint32 block table and requires exactly one explicit positive power-of-two
-`--kv-block-tokens G` no greater than `UINT32_MAX`; `G` may exceed the context. For
+`--kv-block-tokens G` no greater than `UINT32_MAX`; in the active paged-decode profile, `G` may exceed the context. For
 `R = h_kv*d_h*s_kv`, `N = ceil(A/G)`, K physical bytes are `L*B*N*G*R`, K logical bytes remain `L*B*A*R`, and their
 difference is reported padding; V is identical. The table has `B*N` entries and is a seeded, versioned bijection over
 the same physical-ID domain. MHA, GQA, and MQA are represented by query-head/KV-head geometry, but physical KV payload
@@ -75,14 +87,16 @@ Permutation generation, initialization, expected-checksum construction, and post
 synchronized CPU timing interval.
 
 The reported decimal GB/s is exact logical effective model payload divided by synchronized CPU elapsed time. A
-synthetic memory work unit (`decode_step` here) is not an inference token: the mode does not run GEMM/GEMV,
+synthetic work unit is one `decode_step` or one full-prompt `prefill_operation`, not an inference token. The mode does
+not run GEMM/GEMV,
 dequantization, RoPE, attention math, softmax, layer normalization, framework dispatch, model loading, GPU work, or ANE
-work. It also does not model prefill, growing context, runtime page allocation, sliding-window KV, prefix sharing,
+work. Prefill results do not predict TTFT. The mode also does not model growing context, runtime page allocation,
+sliding-window KV, prefix sharing,
 speculative decoding, or compute-memory overlap. The active paged layout measures frozen table indirection and physical
 scatter; it is not a runtime allocator and does not provide prefix sharing, eviction, copy-on-write, or sliding-window
 behavior. Full-size
 resources reduce the risk of accidentally benchmarking a recycled proxy buffer, but they do not prove physical DRAM
-service. Metal and prefill schema tokens remain unavailable and do not imply fallback or partial execution.
+service.
 
 The three scenarios are independently calibrated when `--iterations` is omitted and then frozen before loop zero.
 Their order rotates across count loops; the default count of three gives each scenario one first, middle, and last

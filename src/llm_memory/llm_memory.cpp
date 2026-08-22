@@ -259,7 +259,10 @@ int parse_llm_memory_arguments(int argc, char* argv[],
   bool kv_heads_seen = false;
   bool head_dimension_seen = false;
   bool kv_element_bytes_seen = false;
+  bool phase_seen = false;
   bool context_tokens_seen = false;
+  bool prompt_tokens_seen = false;
+  bool attention_query_tile_tokens_seen = false;
   bool kv_layout_seen = false;
   bool kv_block_tokens_seen = false;
   bool batch_size_seen = false;
@@ -306,6 +309,26 @@ int parse_llm_memory_arguments(int argc, char* argv[],
         return EXIT_FAILURE;
       }
       config.user_specified_kv_layout = true;
+      continue;
+    }
+    if (argument == "--phase") {
+      if (report_duplicate(phase_seen, "--phase")) {
+        return EXIT_FAILURE;
+      }
+      std::string token;
+      if (!take_value(argc, argv, index, "--phase", token)) {
+        return EXIT_FAILURE;
+      }
+      if (token == "decode") {
+        config.phase = LlmPhase::Decode;
+      } else if (token == "prefill") {
+        config.phase = LlmPhase::Prefill;
+      } else {
+        std::cerr << Messages::error_prefix()
+                  << Messages::error_invalid_value(argument, token, Messages::llm_memory_reason_phase()) << std::endl;
+        return EXIT_FAILURE;
+      }
+      config.user_specified_phase = true;
       continue;
     }
     if (argument == "--kv-block-tokens") {
@@ -410,6 +433,30 @@ int parse_llm_memory_arguments(int argc, char* argv[],
       config.user_specified_context_tokens = true;
       continue;
     }
+    if (argument == "--prompt-tokens") {
+      if (report_duplicate(prompt_tokens_seen, "--prompt-tokens")) {
+        return EXIT_FAILURE;
+      }
+      std::string token;
+      if (!take_value(argc, argv, index, "--prompt-tokens", token) ||
+          !parse_nonnegative_size(argument, token, config.prompt_tokens)) {
+        return EXIT_FAILURE;
+      }
+      config.user_specified_prompt_tokens = true;
+      continue;
+    }
+    if (argument == "--attention-query-tile-tokens") {
+      if (report_duplicate(attention_query_tile_tokens_seen, "--attention-query-tile-tokens")) {
+        return EXIT_FAILURE;
+      }
+      std::string token;
+      if (!take_value(argc, argv, index, "--attention-query-tile-tokens", token) ||
+          !parse_nonnegative_size(argument, token, config.attention_query_tile_tokens)) {
+        return EXIT_FAILURE;
+      }
+      config.user_specified_attention_query_tile_tokens = true;
+      continue;
+    }
     if (argument == "--batch-size") {
       if (report_duplicate(batch_size_seen, "--batch-size")) {
         return EXIT_FAILURE;
@@ -505,13 +552,12 @@ int parse_llm_memory_arguments(int argc, char* argv[],
     return EXIT_SUCCESS;
   }
 
-  const std::array<std::pair<bool, const char*>, 6> required_options = {{
+  const std::array<std::pair<bool, const char*>, 5> required_options = {{
       {weight_seen, "--weight-size-mb"},
       {layers_seen, "--layers"},
       {query_heads_seen, "--query-heads"},
       {kv_heads_seen, "--kv-heads"},
       {head_dimension_seen, "--head-dim"},
-      {context_tokens_seen, "--context-tokens"},
   }};
   for (const auto& [seen, option] : required_options) {
     if (!seen) {
@@ -520,6 +566,11 @@ int parse_llm_memory_arguments(int argc, char* argv[],
                 << std::endl;
       return EXIT_FAILURE;
     }
+  }
+  if (config.phase == LlmPhase::Decode && !context_tokens_seen) {
+    std::cerr << Messages::error_prefix() << Messages::error_llm_memory_missing_required_option("--context-tokens")
+              << std::endl;
+    return EXIT_FAILURE;
   }
   if (config.kv_layout == LlmKvLayout::Paged &&
       !kv_block_tokens_seen) {
@@ -533,7 +584,6 @@ int parse_llm_memory_arguments(int argc, char* argv[],
     report_llm_config_failure(layout_reason);
     return EXIT_FAILURE;
   }
-
   config.available_workers = detect_available_llm_workers();
   if (config.available_workers == 0) {
     report_llm_config_failure(
@@ -548,6 +598,11 @@ int parse_llm_memory_arguments(int argc, char* argv[],
       validate_llm_memory_config(config);
   if (!validation.valid) {
     report_llm_config_failure(validation.reason_code);
+    return EXIT_FAILURE;
+  }
+  if (config.backend == LlmMemoryBackend::Cpu && config.phase == LlmPhase::Prefill &&
+      config.kv_layout == LlmKvLayout::Paged) {
+    report_llm_config_failure(LlmMemoryConfigReason::CPU_PREFILL_PAGED_NOT_YET_SUPPORTED);
     return EXIT_FAILURE;
   }
 

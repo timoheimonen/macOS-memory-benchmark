@@ -1049,7 +1049,7 @@ TEST(LlmMemoryRunnerTest,
 }
 
 TEST(LlmMemoryRunnerTest,
-     ProductionCpuBackendKeepsPurePrefillAtUnsupportedBoundary) {
+     ProductionCpuBackendExecutesContiguousPrefillAndRejectsPagedPrefillIntegration) {
   const LlmMemoryConfig config = explicit_prefill_config(1, 1);
   const LlmMemoryWorkPlan plan = build_runner_admitted_plan(config);
   ASSERT_TRUE(plan.valid) << plan.reason_code;
@@ -1060,9 +1060,11 @@ TEST(LlmMemoryRunnerTest,
       backend->calculate_auxiliary_estimate(plan);
   ASSERT_TRUE(auxiliary.valid) << auxiliary.reason_code;
   EXPECT_EQ(auxiliary.reason_code, LlmBackendReason::VALID);
-  EXPECT_EQ(auxiliary.checksum_auxiliary_bytes, 0u);
-  EXPECT_EQ(auxiliary.orchestration_auxiliary_bytes, 0u);
-  EXPECT_EQ(auxiliary.total_auxiliary_bytes, 0u);
+  EXPECT_GT(auxiliary.checksum_auxiliary_bytes, 0u);
+  EXPECT_GT(auxiliary.orchestration_auxiliary_bytes, 0u);
+  EXPECT_EQ(auxiliary.total_auxiliary_bytes,
+            auxiliary.checksum_auxiliary_bytes +
+                auxiliary.orchestration_auxiliary_bytes);
 
   const LlmBackendLifecycleResult initialization =
       backend->initialize(config);
@@ -1070,11 +1072,55 @@ TEST(LlmMemoryRunnerTest,
   EXPECT_EQ(initialization.reason_code, LlmBackendReason::VALID);
   const LlmBackendLifecycleResult resolution =
       backend->resolve_execution_plan(plan);
-  EXPECT_EQ(resolution.status, LlmBackendStatus::Unsupported);
-  EXPECT_EQ(resolution.reason_code, LlmBackendReason::TASK_UNSUPPORTED);
+  EXPECT_EQ(resolution.status, LlmBackendStatus::Ready);
+  EXPECT_EQ(resolution.reason_code, LlmBackendReason::VALID);
+  const LlmBackendLifecycleResult preparation =
+      backend->prepare_resources(plan);
+  ASSERT_EQ(preparation.status, LlmBackendStatus::Ready);
+  EXPECT_EQ(preparation.reason_code, LlmBackendReason::VALID);
+
+  const LlmScenarioWorkPlan scenario = build_llm_scenario_work_plan(
+      plan, LlmScenario::Mixed, 1, true);
+  ASSERT_TRUE(scenario.valid) << scenario.reason_code;
+  LlmRunnerTaskContext context;
+  context.kind = LlmRunnerTaskKind::Warmup;
+  context.purpose = "contiguous_prefill_production_boundary";
+  context.scenario = LlmScenario::Mixed;
+  const LlmTaskExecutionResult execution =
+      backend->execute_task(plan, scenario, context);
+  EXPECT_EQ(execution.status, LlmTaskExecutionStatus::Complete);
+  EXPECT_EQ(execution.reason_code, LlmExecutorReason::VALID);
+  EXPECT_TRUE(execution.timing.evaluated);
+  EXPECT_TRUE(execution.timing.valid);
+  EXPECT_TRUE(execution.validation.evaluated);
+  EXPECT_TRUE(execution.validation.valid);
+  EXPECT_EQ(execution.completion.completed_work_units, 1u);
+  const LlmExecutorResult* const cpu_evidence =
+      get_llm_cpu_task_evidence(execution);
+  ASSERT_NE(cpu_evidence, nullptr);
+  EXPECT_TRUE(cpu_evidence->checksum_valid);
+  EXPECT_TRUE(cpu_evidence->post_validation_valid);
   const LlmBackendLifecycleResult release = backend->release_resources();
   EXPECT_EQ(release.status, LlmBackendStatus::Ready);
   EXPECT_EQ(release.reason_code, LlmBackendReason::VALID);
+
+  LlmMemoryConfig paged_config = explicit_prefill_config(1, 1);
+  paged_config.kv_layout = LlmKvLayout::Paged;
+  paged_config.kv_block_tokens = 2;
+  paged_config.user_specified_kv_layout = true;
+  paged_config.user_specified_kv_block_tokens = true;
+  const LlmMemoryWorkPlan paged_plan =
+      build_llm_memory_work_plan(plan_request(paged_config));
+  ASSERT_TRUE(paged_plan.valid) << paged_plan.reason_code;
+  ASSERT_EQ(backend->initialize(paged_config).status,
+            LlmBackendStatus::Ready);
+  const LlmBackendLifecycleResult paged_resolution =
+      backend->resolve_execution_plan(paged_plan);
+  EXPECT_EQ(paged_resolution.status, LlmBackendStatus::Unsupported);
+  EXPECT_EQ(paged_resolution.reason_code,
+            LlmBackendReason::TASK_UNSUPPORTED);
+  EXPECT_EQ(backend->release_resources().status,
+            LlmBackendStatus::Ready);
 }
 
 TEST(LlmMemoryRunnerTest, StopBeforeFirstTaskInterruptsAllSlotsWithoutExecutorWork) {

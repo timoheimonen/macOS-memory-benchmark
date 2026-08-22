@@ -79,6 +79,29 @@ LlmMemoryConfig paged_config(size_t loop_count = 1) {
   return config;
 }
 
+LlmMemoryConfig prefill_config(size_t loop_count = 3) {
+  LlmMemoryConfig config = explicit_config(loop_count);
+  config.phase = LlmPhase::Prefill;
+  config.visible_context_tokens = 0;
+  config.prompt_tokens = 5;
+  config.attention_query_tile_tokens = 2;
+  config.user_specified_phase = true;
+  config.user_specified_context_tokens = false;
+  config.user_specified_prompt_tokens = true;
+  config.user_specified_attention_query_tile_tokens = true;
+  config.argv = {"memory_benchmark",
+                 "--llm-memory",
+                 "--phase",
+                 "prefill",
+                 "--prompt-tokens",
+                 "5",
+                 "--attention-query-tile-tokens",
+                 "2",
+                 "--output",
+                 "--literal-output-name.json"};
+  return config;
+}
+
 LlmMemoryWorkPlanRequest plan_request(const LlmMemoryConfig& config) {
   LlmMemoryWorkPlanRequest request;
   request.geometry.active_weight_bytes = config.weight_size_mb * Constants::BYTES_PER_MB;
@@ -88,6 +111,8 @@ LlmMemoryWorkPlanRequest plan_request(const LlmMemoryConfig& config) {
   request.geometry.head_dimension = config.head_dimension;
   request.geometry.kv_element_bytes = config.kv_element_bytes;
   request.geometry.visible_context_tokens = config.visible_context_tokens;
+  request.geometry.prompt_tokens = config.prompt_tokens;
+  request.geometry.attention_query_tile_tokens = config.attention_query_tile_tokens;
   request.geometry.batch_size = config.batch_size;
   request.geometry.kv_block_tokens = config.kv_block_tokens;
   request.geometry.phase = config.phase;
@@ -333,13 +358,16 @@ TEST(LlmMemoryJsonTest, CompleteDocumentHasExactTopLevelIdentityAndAuditableNest
       document["configuration"],
       {"backend", "phase", "kv_layout", "kv_block_tokens", "weight_size_mb",
        "layer_count", "query_head_count", "kv_head_count", "head_dimension",
-       "kv_element_bytes", "visible_context_tokens", "batch_size",
-       "requested_workers", "available_workers", "worker_source",
-       "iterations", "work_policy", "loop_count", "base_seed_uint64_decimal",
-       "seed_source", "output_file", "argv", "resolved_sources"});
+       "kv_element_bytes", "visible_context_tokens", "prompt_tokens",
+       "attention_query_tile_tokens", "batch_size", "requested_workers",
+       "available_workers", "worker_source", "iterations", "work_policy",
+       "loop_count", "base_seed_uint64_decimal", "seed_source", "output_file",
+       "argv", "resolved_sources"});
   expect_exact_keys(document["configuration"]["resolved_sources"],
                     {"backend", "phase", "kv_layout", "kv_block_tokens",
-                     "workers", "iterations", "seed"});
+                     "visible_context_tokens", "prompt_tokens",
+                     "attention_query_tile_tokens", "workers", "iterations",
+                     "seed"});
   expect_exact_keys(document["resolved_plan"]["methodology"], {"methodology_version",
                                               "backend",
                                               "phase",
@@ -434,8 +462,9 @@ TEST(LlmMemoryJsonTest, CompleteDocumentHasExactTopLevelIdentityAndAuditableNest
   expect_exact_keys(document["backend_evidence"]["cpu"],
                     {"requested_workers", "available_workers",
                      "effective_workers", "resource_abi_version",
-                     "schedule_version", "timer_policy_version", "paged",
-                     "resources"});
+                     "schedule_version", "timer_policy_version", "prefill",
+                     "paged", "resources"});
+  EXPECT_TRUE(document["backend_evidence"]["cpu"]["prefill"].is_null());
   EXPECT_TRUE(document["backend_evidence"]["cpu"]["paged"].is_null());
   const OrderedJson& cpu_resources = document["backend_evidence"]["cpu"]["resources"];
   expect_exact_keys(cpu_resources,
@@ -629,9 +658,9 @@ TEST(LlmMemoryJsonTest, CompleteDocumentHasExactTopLevelIdentityAndAuditableNest
                      "kernel_succeeded", "timer_started", "timer_stopped",
                      "post_validation_evaluated", "post_validation_valid"});
   expect_exact_keys(document["measurements"][0]["checksum"],
-                    {"status", "reason_code", "initialization_pattern_version", "append_pattern_version",
-                     "read_checksum_version", "checksum_valid", "expected_worker_checksums", "actual_worker_checksums",
-                     "expected_run_checksum", "actual_run_checksum"});
+                    {"status", "reason_code", "initialization_pattern_version", "write_pattern_version",
+                     "checksum_pattern_version", "checksum_valid", "expected_worker_checksums",
+                     "actual_worker_checksums", "expected_run_checksum", "actual_run_checksum"});
   expect_exact_keys(document["measurements"][0]["checksum"]["expected_worker_checksums"][0],
                     {"worker_index", "weight", "k", "v"});
   expect_exact_keys(
@@ -686,6 +715,12 @@ TEST(LlmMemoryJsonTest, CompleteDocumentHasExactTopLevelIdentityAndAuditableNest
   EXPECT_EQ(document["configuration"]["argv"], config.argv);
   EXPECT_EQ(document["configuration"]["work_policy"], "explicit_fixed_work");
   EXPECT_EQ(document["configuration"]["kv_element_bytes"], "2");
+  EXPECT_EQ(document["configuration"]["visible_context_tokens"], 3);
+  EXPECT_TRUE(document["configuration"]["prompt_tokens"].is_null());
+  EXPECT_TRUE(document["configuration"]["attention_query_tile_tokens"].is_null());
+  EXPECT_EQ(document["configuration"]["resolved_sources"]["phase"], "default");
+  EXPECT_TRUE(document["configuration"]["resolved_sources"]["prompt_tokens"].is_null());
+  EXPECT_TRUE(document["configuration"]["resolved_sources"]["attention_query_tile_tokens"].is_null());
   EXPECT_EQ(document["configuration"]["base_seed_uint64_decimal"], "18446744073709551615");
   EXPECT_EQ(document["resolved_plan"]["geometry"]["active_weight_bytes_per_work_unit"],
             std::to_string(plan.geometry.active_weight_bytes_per_work_unit));
@@ -711,6 +746,127 @@ TEST(LlmMemoryJsonTest, CompleteDocumentHasExactTopLevelIdentityAndAuditableNest
   EXPECT_EQ(document["interpretation"]["reported_rate"], "synthetic_memory_work_units_per_second");
   EXPECT_FALSE(document["interpretation"]["transformer_math_included"]);
   EXPECT_FALSE(document["interpretation"]["physical_dram_traffic_measured"]);
+}
+
+TEST(LlmMemoryJsonTest, CompleteContiguousPrefillDocumentHasExactGeometryAndPartitionEvidence) {
+  const LlmMemoryConfig config = prefill_config();
+  const LlmMemoryWorkPlan plan = admitted_plan(config);
+  ASSERT_TRUE(plan.valid) << plan.reason_code;
+  const LlmCpuExecutionPlan& cpu = cpu_execution_plan(plan);
+  ASSERT_TRUE(cpu.prefill.has_value());
+  const LlmMemoryResult result = complete_result(config, plan);
+  ASSERT_TRUE(result.results_complete);
+  const OrderedJson document =
+      build_llm_memory_json(config, plan, preparation_for(plan), fixed_metadata(config, plan), result);
+
+  EXPECT_EQ(document["status"], "complete");
+  EXPECT_TRUE(document["results_complete"]);
+  EXPECT_TRUE(document["conclusions_valid"]);
+  EXPECT_EQ(document["phase"], "prefill");
+  EXPECT_EQ(document["kv_layout"], "contiguous");
+  EXPECT_EQ(document["methodology_version"], "llm-memory-v1-cpu-prefill-contiguous");
+
+  const OrderedJson& configuration = document["configuration"];
+  EXPECT_EQ(configuration["phase"], "prefill");
+  EXPECT_TRUE(configuration["visible_context_tokens"].is_null());
+  EXPECT_EQ(configuration["prompt_tokens"], 5u);
+  EXPECT_EQ(configuration["attention_query_tile_tokens"], 2u);
+  EXPECT_EQ(configuration["resolved_sources"]["phase"], "explicit");
+  EXPECT_TRUE(configuration["resolved_sources"]["visible_context_tokens"].is_null());
+  EXPECT_EQ(configuration["resolved_sources"]["prompt_tokens"], "explicit");
+  EXPECT_EQ(configuration["resolved_sources"]["attention_query_tile_tokens"], "explicit");
+
+  const OrderedJson& geometry = document["resolved_plan"]["geometry"];
+  EXPECT_TRUE(geometry["decode"].is_null());
+  expect_exact_keys(
+      geometry["prefill"],
+      {"prompt_tokens", "attention_query_tile_tokens", "tile_count", "attention_prefix_token_visits_per_sequence",
+       "causal_token_pairs_per_sequence", "logical_attention_pairs", "logical_attention_fma_terms"});
+  EXPECT_EQ(geometry["prefill"]["prompt_tokens"], 5u);
+  EXPECT_EQ(geometry["prefill"]["attention_query_tile_tokens"], 2u);
+  EXPECT_EQ(geometry["prefill"]["tile_count"], "3");
+  EXPECT_EQ(geometry["prefill"]["attention_prefix_token_visits_per_sequence"], "11");
+  EXPECT_EQ(geometry["prefill"]["causal_token_pairs_per_sequence"], "15");
+  EXPECT_EQ(geometry["prefill"]["logical_attention_pairs"], "120");
+  EXPECT_EQ(geometry["prefill"]["logical_attention_fma_terms"], "960");
+  EXPECT_EQ(geometry["k_mapping_bytes"], "320");
+  EXPECT_EQ(geometry["v_mapping_bytes"], "320");
+  EXPECT_EQ(geometry["kv_capacity_bytes"], "640");
+  EXPECT_EQ(geometry["weight_read_bytes_per_work_unit"], "1048576");
+  EXPECT_EQ(geometry["kv_read_bytes_per_work_unit"], "1408");
+  EXPECT_EQ(geometry["kv_write_bytes_per_work_unit"], "640");
+  EXPECT_EQ(geometry["kv_only_effective_model_payload_bytes_per_work_unit"], "2048");
+  EXPECT_EQ(geometry["mixed_effective_model_payload_bytes_per_work_unit"], "1050624");
+  EXPECT_TRUE(geometry["traffic_crossover_numerator"].is_null());
+  EXPECT_TRUE(geometry["traffic_crossover_denominator"].is_null());
+  EXPECT_TRUE(geometry["traffic_crossover_context_tokens"].is_null());
+
+  const OrderedJson& traffic = document["aggregates"]["traffic_diagnostics"];
+  EXPECT_TRUE(traffic["traffic_crossover_numerator"].is_null());
+  EXPECT_TRUE(traffic["traffic_crossover_denominator"].is_null());
+  EXPECT_TRUE(traffic["traffic_crossover_context_tokens"].is_null());
+  EXPECT_TRUE(traffic["current_visible_context_tokens"].is_null());
+  EXPECT_TRUE(traffic["current_weight_to_kv_read_payload_ratio"].is_null());
+  EXPECT_TRUE(traffic["current_context_classification"].is_null());
+
+  const OrderedJson& components = document["resolved_plan"]["component_identities"];
+  EXPECT_EQ(components["logical_profile_version"], Constants::LLM_PREFILL_LOGICAL_PROFILE_VERSION);
+  EXPECT_EQ(components["backend_executor_version"], Constants::LLM_PREFILL_CPU_EXECUTOR_VERSION);
+  EXPECT_EQ(components["resource_abi_version"], Constants::LLM_PREFILL_DESCRIPTOR_ABI_VERSION);
+  EXPECT_EQ(components["write_pattern_version"], "llm-prefill-kv-affine64-v1");
+  EXPECT_EQ(components["checksum_pattern_version"], "llm-prefill-affine64-parity-sum-v1");
+
+  const OrderedJson& prefill = document["backend_evidence"]["cpu"]["prefill"];
+  expect_exact_keys(prefill, {"cost_unit", "sequence_descriptors_per_scenario_per_worker", "scenarios", "identity"});
+  EXPECT_EQ(prefill["cost_unit"], "worker-cost");
+  EXPECT_EQ(prefill["sequence_descriptors_per_scenario_per_worker"], 2u);
+  EXPECT_FALSE(prefill["identity"].get<std::string>().empty());
+  ASSERT_EQ(prefill["scenarios"].size(), 3u);
+  const std::array<const char*, 3> scenario_names = {"weights_only", "kv_only", "mixed"};
+  const std::array<const char*, 3> worker_costs = {"524288", "1024", "525312"};
+  for (size_t index = 0; index < scenario_names.size(); ++index) {
+    const OrderedJson& scenario = prefill["scenarios"][index];
+    expect_exact_keys(
+        scenario, {"scenario", "cost_unit", "scope_count", "scope_identities", "worker_accounted_bytes_per_work_unit",
+                   "minimum_worker_accounted_bytes_per_work_unit", "maximum_worker_accounted_bytes_per_work_unit",
+                   "worker_accounted_imbalance_bytes_per_work_unit", "identity"});
+    EXPECT_EQ(scenario["scenario"], scenario_names[index]);
+    EXPECT_EQ(scenario["cost_unit"], "worker-cost");
+    EXPECT_EQ(scenario["scope_count"], "2");
+    ASSERT_EQ(scenario["scope_identities"].size(), 2u);
+    EXPECT_FALSE(scenario["scope_identities"][0].get<std::string>().empty());
+    ASSERT_EQ(scenario["worker_accounted_bytes_per_work_unit"].size(), 2u);
+    EXPECT_EQ(scenario["worker_accounted_bytes_per_work_unit"][0], worker_costs[index]);
+    EXPECT_EQ(scenario["worker_accounted_bytes_per_work_unit"][1], worker_costs[index]);
+    EXPECT_EQ(scenario["minimum_worker_accounted_bytes_per_work_unit"], worker_costs[index]);
+    EXPECT_EQ(scenario["maximum_worker_accounted_bytes_per_work_unit"], worker_costs[index]);
+    EXPECT_EQ(scenario["worker_accounted_imbalance_bytes_per_work_unit"], "0");
+    EXPECT_FALSE(scenario["identity"].get<std::string>().empty());
+  }
+  EXPECT_TRUE(document["backend_evidence"]["cpu"]["paged"].is_null());
+
+  const OrderedJson& scenarios = document["resolved_plan"]["frozen_scenario_work_plans"]["scenarios"];
+  ASSERT_EQ(scenarios.size(), 3u);
+  EXPECT_EQ(scenarios[0]["work_unit_kind"], "prefill_operation");
+  EXPECT_EQ(scenarios[0]["kv_write_kind"], "none");
+  EXPECT_EQ(scenarios[1]["kv_write_kind"], "full_prompt_population");
+  EXPECT_EQ(scenarios[1]["effective_model_payload_bytes_per_work_unit"], "2048");
+  EXPECT_EQ(scenarios[2]["kv_write_kind"], "full_prompt_population");
+  EXPECT_EQ(scenarios[2]["effective_model_payload_bytes_per_work_unit"], "1050624");
+
+  ASSERT_EQ(document["measurements"].size(), 9u);
+  for (const OrderedJson& measurement : document["measurements"]) {
+    EXPECT_EQ(measurement["status"], "measured");
+    EXPECT_EQ(measurement["work_unit_kind"], "prefill_operation");
+    EXPECT_TRUE(measurement["working_set"]["fixed_visible_context_tokens"].is_null());
+    EXPECT_TRUE(measurement["working_set"]["current_token_slot_included"].is_null());
+    EXPECT_EQ(measurement["checksum"]["status"], "valid");
+    EXPECT_TRUE(measurement["checksum"]["checksum_valid"]);
+    EXPECT_FALSE(measurement["checksum"].contains("append_pattern_version"));
+    EXPECT_FALSE(measurement["checksum"].contains("read_checksum_version"));
+  }
+  EXPECT_TRUE(document["interpretation"]["fixed_context_includes_current_token_slot"].is_null());
+  EXPECT_FALSE(document["interpretation"]["prefill_transformer_compute_or_ttft_prediction_included"]);
 }
 
 TEST(LlmMemoryJsonTest,
@@ -877,7 +1033,7 @@ TEST(LlmMemoryJsonTest,
   EXPECT_TRUE(kv_only["execution"]["post_validation_valid"]);
   EXPECT_EQ(kv_only["checksum"]["initialization_pattern_version"],
             Constants::LLM_PAGED_BUFFER_PATTERN_VERSION);
-  EXPECT_EQ(kv_only["checksum"]["read_checksum_version"],
+  EXPECT_EQ(kv_only["checksum"]["checksum_pattern_version"],
             Constants::LLM_PAGED_READ_CHECKSUM_VERSION);
   ASSERT_FALSE(
       document["calibration"]["attempts"]["weights_only"].empty());
@@ -951,9 +1107,9 @@ TEST(LlmMemoryJsonTest, JsonPeakEstimateIsZeroWhenOutputIsDisabled) {
 }
 
 TEST(LlmMemoryJsonTest,
-     PreflightAuxiliaryEstimatesExactlyMatchFinalizedPlanForBothLayouts) {
-  const std::array<LlmMemoryConfig, 2> configs = {
-      explicit_config(3), paged_config(3)};
+     PreflightAuxiliaryEstimatesExactlyMatchFinalizedPlanForAllActiveCpuProfiles) {
+  const std::array<LlmMemoryConfig, 3> configs = {
+      explicit_config(3), paged_config(3), prefill_config(3)};
   for (const LlmMemoryConfig& config : configs) {
     SCOPED_TRACE(llm_kv_layout_to_string(config.kv_layout));
     LlmMemoryWorkPlanDraft draft =
@@ -1062,6 +1218,148 @@ TEST(LlmMemoryJsonTest,
     EXPECT_EQ(plan.memory_budget.request.orchestration_auxiliary_bytes,
               orchestration_auxiliary_bytes);
   }
+}
+
+TEST(LlmMemoryJsonTest, SyntheticPreflightIdentityCopiesScaleByLoopAndCalibrationCapacity) {
+  LlmAuxiliaryPreflightView preflight;
+  preflight.valid = true;
+  preflight.backend = LlmMemoryBackend::Cpu;
+  preflight.effective_workers = 1;
+  preflight.json_identity_string_bytes = 53;
+  preflight.maximum_scenario_plan_identity_bytes = {2, 3, 5};
+  preflight.frozen_reason_code_bytes = 7;
+  preflight.frozen_model_plan_identity_bytes = 11;
+  preflight.frozen_plan_identity_bytes = 13;
+  preflight.frozen_scenario_reason_code_bytes = {17, 19, 23};
+  preflight.frozen_scenario_model_plan_identity_bytes = {29, 31, 37};
+  preflight.frozen_scenario_plan_identity_bytes = {41, 43, 47};
+
+  constexpr size_t kDomTransportExpansionFactor = 16;
+  const auto expected_input_string_bytes = [&](const LlmMemoryConfig& config) {
+    size_t argv_bytes = 0;
+    for (const std::string& argument : config.argv) {
+      argv_bytes += argument.size();
+    }
+    size_t scenario_identity_bytes = 0;
+    size_t frozen_identity_bytes = preflight.frozen_reason_code_bytes + preflight.frozen_model_plan_identity_bytes +
+                                   preflight.frozen_plan_identity_bytes;
+    for (size_t index = 0; index < kLlmScenarioCount; ++index) {
+      scenario_identity_bytes += preflight.maximum_scenario_plan_identity_bytes[index];
+      frozen_identity_bytes += preflight.frozen_scenario_reason_code_bytes[index] +
+                               preflight.frozen_scenario_model_plan_identity_bytes[index] +
+                               preflight.frozen_scenario_plan_identity_bytes[index];
+    }
+    const size_t calibration_attempts =
+        config.user_specified_iterations ? 1 : 4 + Constants::LLM_CALIBRATION_MAX_CORRECTIONS;
+    const size_t raw_identity_and_input_bytes =
+        config.output_file.size() + argv_bytes + preflight.json_identity_string_bytes + frozen_identity_bytes +
+        config.loop_count * scenario_identity_bytes + calibration_attempts * scenario_identity_bytes;
+    return raw_identity_and_input_bytes * kDomTransportExpansionFactor;
+  };
+
+  const LlmMemoryConfig one_loop = explicit_config(1);
+  const LlmJsonPeakEstimate one_loop_estimate = calculate_llm_json_peak_estimate(one_loop, preflight);
+  ASSERT_TRUE(one_loop_estimate.valid) << one_loop_estimate.reason_code;
+  EXPECT_EQ(one_loop_estimate.input_string_bytes, expected_input_string_bytes(one_loop));
+
+  LlmMemoryConfig four_loops = one_loop;
+  four_loops.loop_count = 4;
+  const LlmJsonPeakEstimate four_loop_estimate = calculate_llm_json_peak_estimate(four_loops, preflight);
+  ASSERT_TRUE(four_loop_estimate.valid) << four_loop_estimate.reason_code;
+  EXPECT_EQ(four_loop_estimate.input_string_bytes, expected_input_string_bytes(four_loops));
+  constexpr size_t kScenarioIdentityBytes = 2 + 3 + 5;
+  EXPECT_EQ(four_loop_estimate.input_string_bytes - one_loop_estimate.input_string_bytes,
+            3 * kScenarioIdentityBytes * kDomTransportExpansionFactor);
+
+  LlmMemoryConfig automatic = four_loops;
+  automatic.user_specified_iterations = false;
+  const LlmJsonPeakEstimate automatic_estimate = calculate_llm_json_peak_estimate(automatic, preflight);
+  ASSERT_TRUE(automatic_estimate.valid) << automatic_estimate.reason_code;
+  EXPECT_EQ(automatic_estimate.input_string_bytes, expected_input_string_bytes(automatic));
+  EXPECT_EQ(automatic_estimate.input_string_bytes - four_loop_estimate.input_string_bytes,
+            (3 + Constants::LLM_CALIBRATION_MAX_CORRECTIONS) * kScenarioIdentityBytes *
+                kDomTransportExpansionFactor);
+}
+
+TEST(LlmMemoryJsonTest, JsonPeakEstimateRejectsSyntheticIdentityReplicationOverflowBeforeDom) {
+  LlmMemoryConfig config = explicit_config(2);
+  LlmAuxiliaryPreflightView preflight;
+  preflight.valid = true;
+  preflight.backend = LlmMemoryBackend::Cpu;
+  preflight.effective_workers = 1;
+
+  preflight.maximum_scenario_plan_identity_bytes[0] = std::numeric_limits<size_t>::max() / 2 + 1;
+  LlmJsonPeakEstimate estimate = calculate_llm_json_peak_estimate(config, preflight);
+  EXPECT_FALSE(estimate.valid);
+  EXPECT_EQ(estimate.reason_code, LlmJsonReason::PEAK_BYTES_OVERFLOW);
+  EXPECT_EQ(estimate.total_bytes, 0u);
+
+  config.loop_count = 1;
+  config.user_specified_iterations = false;
+  preflight.maximum_scenario_plan_identity_bytes = {};
+  const size_t calibration_attempts = 4 + Constants::LLM_CALIBRATION_MAX_CORRECTIONS;
+  preflight.maximum_scenario_plan_identity_bytes[1] =
+      std::numeric_limits<size_t>::max() / calibration_attempts + 1;
+  estimate = calculate_llm_json_peak_estimate(config, preflight);
+  EXPECT_FALSE(estimate.valid);
+  EXPECT_EQ(estimate.reason_code, LlmJsonReason::PEAK_BYTES_OVERFLOW);
+  EXPECT_EQ(estimate.total_bytes, 0u);
+
+  config.user_specified_iterations = true;
+  preflight.maximum_scenario_plan_identity_bytes = {};
+  preflight.frozen_reason_code_bytes = std::numeric_limits<size_t>::max();
+  preflight.frozen_model_plan_identity_bytes = 1;
+  estimate = calculate_llm_json_peak_estimate(config, preflight);
+  EXPECT_FALSE(estimate.valid);
+  EXPECT_EQ(estimate.reason_code, LlmJsonReason::PEAK_BYTES_OVERFLOW);
+  EXPECT_EQ(estimate.total_bytes, 0u);
+}
+
+TEST(LlmMemoryJsonTest, JsonPeakEstimateAccountsForEveryPrefillPartitionIdentity) {
+  const LlmMemoryConfig config = prefill_config(1);
+  LlmMemoryWorkPlan plan = admitted_plan(config);
+  ASSERT_TRUE(plan.valid) << plan.reason_code;
+  LlmCpuExecutionPlan* const cpu = get_llm_cpu_execution_plan(plan);
+  ASSERT_NE(cpu, nullptr);
+  ASSERT_TRUE(cpu->prefill.has_value());
+
+  const LlmJsonPeakEstimate baseline = calculate_llm_json_peak_estimate(config, plan);
+  ASSERT_TRUE(baseline.valid) << baseline.reason_code;
+
+  constexpr size_t kAggregateSuffixBytes = 1;
+  constexpr size_t kScenarioSuffixBytes = 2;
+  constexpr size_t kScopeSuffixBytes = 3;
+  size_t scope_count = 0;
+  cpu->prefill->identity.append(kAggregateSuffixBytes, 'a');
+  for (LlmPrefillCpuScenarioExecutionPlan& scenario : cpu->prefill->scenarios) {
+    scenario.identity.append(kScenarioSuffixBytes, 'b');
+    for (LlmPrefillCpuOwnershipPlan& scope : scenario.ownership_scopes) {
+      scope.identity.append(kScopeSuffixBytes, 'c');
+      ++scope_count;
+    }
+  }
+  ASSERT_GT(scope_count, 0u);
+
+  const LlmJsonPeakEstimate expanded = calculate_llm_json_peak_estimate(config, plan);
+  ASSERT_TRUE(expanded.valid) << expanded.reason_code;
+  const size_t added_identity_bytes =
+      kAggregateSuffixBytes + kLlmScenarioCount * kScenarioSuffixBytes + scope_count * kScopeSuffixBytes;
+  constexpr size_t kLiveDomAndSerializedTransportFactor = 16;
+  EXPECT_EQ(expanded.input_string_bytes - baseline.input_string_bytes,
+            added_identity_bytes * kLiveDomAndSerializedTransportFactor);
+  EXPECT_EQ(expanded.total_bytes - baseline.total_bytes, added_identity_bytes * kLiveDomAndSerializedTransportFactor);
+}
+
+TEST(LlmMemoryJsonTest, JsonPeakEstimateRejectsPrefillIdentityByteOverflowBeforeFinalization) {
+  const LlmMemoryConfig config = prefill_config(1);
+  LlmMemoryWorkPlanDraft draft = prepare_llm_memory_work_plan(plan_request(config));
+  ASSERT_TRUE(draft.valid) << draft.reason_code;
+  draft.auxiliary_preflight.json_identity_string_bytes = std::numeric_limits<size_t>::max();
+
+  const LlmJsonPeakEstimate estimate = calculate_llm_json_peak_estimate(config, draft.auxiliary_preflight);
+  EXPECT_FALSE(estimate.valid);
+  EXPECT_EQ(estimate.reason_code, LlmJsonReason::PEAK_BYTES_OVERFLOW);
+  EXPECT_EQ(estimate.total_bytes, 0u);
 }
 
 TEST(LlmMemoryJsonTest, JsonPeakEstimateScalesWithMeasurementsAndWorkersAndIsAdmitted) {

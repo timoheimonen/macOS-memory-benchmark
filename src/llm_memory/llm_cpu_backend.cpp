@@ -66,7 +66,8 @@ class LlmCpuBackend final : public LlmBackend {
   LlmBackendAuxiliaryEstimate calculate_auxiliary_estimate(
       const LlmMemoryWorkPlan& model_plan) const noexcept override {
     LlmBackendAuxiliaryEstimate estimate;
-    if (model_plan.phase != LlmPhase::Decode) {
+    if (model_plan.phase == LlmPhase::Prefill &&
+        model_plan.kv_layout == LlmKvLayout::Paged) {
       estimate.valid = model_plan.valid;
       estimate.reason_code = model_plan.valid
                                  ? std::string_view(LlmBackendReason::VALID)
@@ -107,7 +108,8 @@ class LlmCpuBackend final : public LlmBackend {
       evidence_.plan_resolution = {LlmBackendStatus::Failed, LlmBackendReason::NOT_INITIALIZED};
       return evidence_.plan_resolution;
     }
-    if (model_plan.phase != LlmPhase::Decode) {
+    if (model_plan.phase == LlmPhase::Prefill &&
+        model_plan.kv_layout == LlmKvLayout::Paged) {
       evidence_.plan_resolution = {
           LlmBackendStatus::Unsupported, LlmBackendReason::TASK_UNSUPPORTED};
       return evidence_.plan_resolution;
@@ -222,10 +224,14 @@ LlmTaskExecutionResult adapt_llm_cpu_executor_result(const LlmMemoryWorkPlan& mo
   } else if (original_reason == LlmExecutorReason::CHECKSUM_MISMATCH ||
              original_reason ==
                  LlmExecutorReason::PAGED_POST_VALIDATION_FAILED ||
+             original_reason ==
+                 LlmExecutorReason::PREFILL_POST_VALIDATION_FAILED ||
              (lifecycle_complete && result.validation.evaluated && !result.validation.valid)) {
     result.status = LlmTaskExecutionStatus::Invalid;
     result.reason_code = original_reason ==
-                                 LlmExecutorReason::PAGED_POST_VALIDATION_FAILED
+                                 LlmExecutorReason::PAGED_POST_VALIDATION_FAILED ||
+                             original_reason ==
+                                 LlmExecutorReason::PREFILL_POST_VALIDATION_FAILED
                              ? original_reason
                              : LlmExecutorReason::CHECKSUM_MISMATCH;
   } else if (original_reason == LlmExecutorReason::INVALID_ELAPSED_TIME ||

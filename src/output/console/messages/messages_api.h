@@ -161,6 +161,7 @@ std::string error_llm_memory_run_failed(const std::string& reason_code);
 const std::string& error_llm_paged_table_protection_failed();
 const std::string& llm_memory_reason_positive_integer();
 const std::string& llm_memory_reason_kv_element_bytes();
+const std::string& llm_memory_reason_phase();
 const std::string& llm_memory_reason_kv_layout();
 const std::string& llm_memory_reason_platform_size_range();
 const std::string& error_only_flags_require_benchmark();
@@ -254,6 +255,10 @@ std::string report_llm_memory_payload(
     size_t kv_write_bytes_per_work_unit);
 std::string report_llm_memory_decode_geometry(
     size_t visible_context_tokens, double traffic_crossover_context_tokens);
+std::string report_llm_memory_prefill_geometry(size_t prompt_tokens, size_t attention_query_tile_tokens,
+                                               size_t tile_count, size_t attention_prefix_token_visits_per_sequence,
+                                               size_t causal_token_pairs_per_sequence, size_t logical_attention_pairs,
+                                               size_t logical_attention_fma_terms);
 struct LlmPagedLayoutReportValues {
   size_t block_tokens = 0;
   size_t blocks_per_sequence = 0;

@@ -198,10 +198,13 @@ TEST(MessagesErrorTest, ErrorSeedRequiresEverySupportedMode) {
 TEST(MessagesTest, LlmMemoryCliMessagesHaveExactOutput) {
   const std::string expected_usage =
       "Usage: memory_benchmark --llm-memory [options]\n"
-      "Options for standalone CPU synthetic LLM decode-memory mode:\n"
-      "  -M, --llm-memory       Select the fixed-context memory-only decode profile.\n"
+      "Options for standalone CPU synthetic LLM memory mode:\n"
+      "  -M, --llm-memory       Select the memory-only LLM profile.\n"
+      "      --phase <decode|prefill>\n"
+      "                          Workload phase (default: decode). CPU prefill currently\n"
+      "                          supports contiguous KV only.\n"
       "      --weight-size-mb <MiB>\n"
-      "                          Required active weight bytes per decode step, in MiB.\n"
+      "                          Required active weight bytes per work unit, in MiB.\n"
       "      --layers <count>    Required transformer layer count.\n"
       "      --query-heads <count>\n"
       "                          Required query-head count; must be at least as large as KV heads\n"
@@ -213,20 +216,29 @@ TEST(MessagesTest, LlmMemoryCliMessagesHaveExactOutput) {
       std::to_string(Constants::LLM_DEFAULT_KV_ELEMENT_BYTES) +
       " bytes).\n"
       "      --context-tokens <count>\n"
-      "                          Required fixed visible context, including the current token.\n"
+      "                          Required only for decode; fixed visible context including\n"
+      "                          the current token. Rejected for prefill.\n"
+      "      --prompt-tokens <count>\n"
+      "                          Required only for prefill; full prompt length P, P >= 1.\n"
+      "                          Rejected for decode.\n"
+      "      --attention-query-tile-tokens <count>\n"
+      "                          Required only for prefill; query tile Q, 1 <= Q <= P.\n"
+      "                          Rejected for decode.\n"
       "      --kv-layout <contiguous|paged>\n"
       "                          KV storage layout (default: contiguous).\n"
       "      --kv-block-tokens <count>\n"
       "                          Required only for paged KV; must be a positive power of two\n"
-      "                          no greater than UINT32_MAX; it may exceed the visible context.\n"
-      "                          Rejected for contiguous KV.\n"
+      "                          no greater than UINT32_MAX; it may exceed the phase sequence length.\n"
+      "                          Rejected for contiguous KV. CPU prefill+paged is not yet\n"
+      "                          supported (reason_code=cpu-prefill-paged-not-yet-supported).\n"
       "      --batch-size <count>\n"
-      "                          Batch sequences per decode step (default: " +
+      "                          Batch sequences per work unit (default: " +
       std::to_string(Constants::LLM_DEFAULT_BATCH_SIZE) +
       ").\n"
       "  -t, --threads <count>  Requested CPU workers; detected workers are used when omitted.\n"
       "  -i, --iterations <count>\n"
-      "                          Exact decode steps per scenario measurement. When omitted, each\n"
+      "                          Exact work units per scenario measurement. A work unit is one\n"
+      "                          decode step or full-prompt prefill operation. When omitted, each\n"
       "                          scenario calibrates toward 150 ms in a\n"
       "                          100-250 ms window.\n"
       "  -r, --count <count>    Cyclic weights/KV/mixed loops (default: " +
@@ -245,7 +257,9 @@ TEST(MessagesTest, LlmMemoryCliMessagesHaveExactOutput) {
       {"mode isolation", Messages::error_llm_memory_must_be_used_alone(),
        "--llm-memory requires --weight-size-mb <MiB>, --layers <count>, "
        "--query-heads <count>, --kv-heads <count>, --head-dim <count>, and "
-       "--context-tokens <count>; it allows only optional "
+       "phase-specific token geometry; it allows only optional "
+       "--phase <decode|prefill>, --context-tokens <count>, "
+       "--prompt-tokens <count>, --attention-query-tile-tokens <count>, "
        "--kv-element-bytes <1|2|4>, --kv-layout <contiguous|paged>, "
        "--kv-block-tokens <count>, --batch-size <count>, "
        "-t/--threads <count>, -i/--iterations <count>, "
@@ -274,6 +288,8 @@ TEST(MessagesTest, LlmMemoryCliMessagesHaveExactOutput) {
        "must be a positive integer"},
       {"KV width", Messages::llm_memory_reason_kv_element_bytes(),
        "must be exactly 1, 2, or 4"},
+      {"phase", Messages::llm_memory_reason_phase(),
+       "must be exactly decode or prefill"},
       {"KV layout", Messages::llm_memory_reason_kv_layout(),
        "must be exactly contiguous or paged"},
       {"platform size", Messages::llm_memory_reason_platform_size_range(),
@@ -313,6 +329,16 @@ TEST(MessagesTest, LlmMemoryCliMessagesHaveExactOutput) {
       {"decode geometry", Messages::report_llm_memory_decode_geometry(8, 4.0),
        "  Visible context tokens:     8\n"
        "  Traffic crossover:          4.00 visible context tokens"},
+      {"prefill geometry",
+       Messages::report_llm_memory_prefill_geometry(
+           5, 2, 3, 11, 15, 60, 480),
+       "  Prompt tokens (P):                 5\n"
+       "  Attention query tile tokens (Q):  2\n"
+       "  Attention query tiles (C):        3\n"
+       "  Prefix token visits / sequence:   11\n"
+       "  Causal token pairs / sequence:    15\n"
+       "  Logical attention pairs:          60\n"
+       "  Logical attention FMA terms:      480"},
       {"paged layout",
        Messages::report_llm_memory_paged_layout(
            {4, 2, 2, 4, 128, 4, 128, 384, 512, 128, 384, 512, 128,
@@ -362,6 +388,14 @@ TEST(MessagesTest, LlmMemoryCliMessagesHaveExactOutput) {
        "current-token slot; KV uses layer/batch/token/head/dimension order.\n"
        "  Crossover: logical weight/KV-read payload equality is not a proven hardware "
        "bottleneck transition.\n"
+       "  Comparability: small weight or KV working sets can be cache-dominant; order imbalance, "
+       "high CV, non-nominal environment, QoS failures, or off-target duration reduce confidence."},
+      {"prefill interpretation",
+       Messages::report_llm_memory_interpretation_note("prefill", "contiguous", "prefill operation"),
+       "  Interpretation: each prefill operation is synthetic memory-only work, not an inference "
+       "token; effective model payload is logical, not physical DRAM-counter traffic.\n"
+       "  Phase/layout: phase=prefill, kv_layout=contiguous; prefill performs no Transformer "
+       "compute and does not predict TTFT; KV uses layer/batch/token/head/dimension order.\n"
        "  Comparability: small weight or KV working sets can be cache-dominant; order imbalance, "
        "high CV, non-nominal environment, QoS failures, or off-target duration reduce confidence."},
       {"high CV", Messages::warning_llm_memory_high_cv("kv_only", 6.25, 5.0),
@@ -840,6 +874,11 @@ TEST(MessagesFormattingTest, UsageOptions) {
   EXPECT_NE(msg.find("--gpu-bandwidth"), std::string::npos);
   EXPECT_NE(msg.find(Constants::GPU_METHODOLOGY_VERSION), std::string::npos);
   EXPECT_NE(msg.find("minimum buffer size is 64 MB"), std::string::npos);
+  EXPECT_NE(msg.find("synthetic LLM decode/prefill memory profile"), std::string::npos);
+  EXPECT_NE(msg.find("prefill requires --phase prefill, --prompt-tokens"), std::string::npos);
+  EXPECT_NE(msg.find("--attention-query-tile-tokens"), std::string::npos);
+  EXPECT_NE(msg.find("prefill currently supports contiguous KV only"), std::string::npos);
+  EXPECT_NE(msg.find("llm-memory-v1-cpu-prefill-contiguous"), std::string::npos);
   EXPECT_NE(msg.find("--analyze-core2core"), std::string::npos);
   EXPECT_NE(msg.find("acquire/release token-handoff"), std::string::npos);
   EXPECT_NE(msg.find("protocol, coherence, and scheduler effects"), std::string::npos);

@@ -3,8 +3,8 @@
 ![Platform](https://img.shields.io/badge/platform-Apple%20Silicon-000000?logo=apple) ![CLI](https://img.shields.io/badge/CLI-Tool-00A8CC?logo=terminal) ![License](https://img.shields.io/badge/license-GPL--3.0--or--later-blue) ![Assembly](https://img.shields.io/badge/Assembly-ARM64-6E4C13) ![C++](https://img.shields.io/badge/C++-00599C?logo=cplusplus&logoColor=white)
 
 `memory_benchmark` is a low-level command-line tool for measuring CPU and Metal GPU memory bandwidth, synthetic LLM
-decode-memory traffic, cache and main-memory latency, access-pattern performance, TLB behavior, and two-thread
-cache-line handoff protocol latency on Apple Silicon Macs.
+decode and prefill memory traffic, cache and main-memory latency, access-pattern performance, TLB behavior, and
+two-thread cache-line handoff protocol latency on Apple Silicon Macs.
 
 It is designed for controlled microarchitectural investigation rather than a single synthetic score. CPU measurement paths use native ARM64 kernels; the standalone GPU mode uses runtime-compiled Metal compute kernels. Runs expose calibration, workload, completion, and repeatability metadata so results can be audited and compared.
 
@@ -20,9 +20,8 @@ It is designed for controlled microarchitectural investigation rather than a sin
 - **Dedicated TLB analysis:** paired spread/packed chains, adaptive rounds, confidence intervals, and independent boundary validation.
 - **Core-to-core analysis:** calibrated acquire/release token-exchange measurements under scheduler-hint scenarios.
 - **Metal GPU bandwidth:** standalone read/write/copy compute kernels with GPU timestamps and validation metadata.
-- **Synthetic LLM decode-memory profile:** standalone CPU measurements of active-weight reads, KV-history reads, and
-  current-token KV appends for an explicitly supplied fixed-context model geometry, using either contiguous or
-  deterministic paged KV storage.
+- **Synthetic LLM memory profile:** standalone CPU measurements of active-weight and KV traffic for fixed-context decode
+  with contiguous or deterministic paged KV, and full-prompt prefill with contiguous KV.
 - **Reproducible experiments:** explicit seeds, repeated loops, built-in Cartesian parameter sweeps, recoverable JSON
   file checkpoints, and final machine-readable stdout for every result-producing direct mode and CPU sweep.
 
@@ -93,6 +92,15 @@ memory_benchmark --llm-memory --weight-size-mb 64 --layers 4 \
   --kv-layout paged --kv-block-tokens 16 --iterations 1 --count 3 --seed 42
 ```
 
+Run one full-prompt prefill operation per scenario with two-token attention query tiles:
+
+```bash
+memory_benchmark --llm-memory --weight-size-mb 64 --layers 4 \
+  --query-heads 8 --kv-heads 2 --head-dim 64 --phase prefill \
+  --prompt-tokens 512 --attention-query-tile-tokens 2 \
+  --iterations 1 --count 3
+```
+
 For longer runs, prevent system sleep and collect repeated measurements:
 
 ```bash
@@ -120,22 +128,26 @@ checkpoints are required; see the [Machine-Readable CLI API](documents/API.md) s
 | `--analyze-tlb` | Standalone paired spread/packed TLB analysis with adaptive measurement rounds, confidence intervals, and boundary validation. |
 | `--analyze-core2core` | Calibrated two-thread acquire/release token-protocol round-trip latency under best-effort macOS scheduler hints. |
 | `--gpu-bandwidth` | Standalone Metal GPU read/write/copy effective compute-payload bandwidth. |
-| `--llm-memory` | Standalone synthetic CPU decode-memory profile with contiguous or deterministic paged KV storage, plus weights-only, KV-only, and layer-interleaved mixed scenarios over full-size cacheable resources. |
+| `--llm-memory` | Standalone synthetic CPU decode/prefill memory profile: decode supports contiguous or deterministic paged KV, while prefill currently supports contiguous KV. |
 | `--sweep <key=a,b>` | Cartesian parameter sweep for supported CPU, pattern, TLB, and core-to-core modes; requires `--output`. GPU schema 1 and LLM schema 1 do not support sweeps. |
 
 Primary modes are intentionally separate and accept different option sets. Use `memory_benchmark -h` or the [User Manual](documents/MANUAL.md) for defaults, valid combinations, and the complete option reference.
 
-`--llm-memory` requires explicit active weight size, layer count, query/KV head geometry, head dimension, and visible
-context. `--kv-layout` defaults to `contiguous`. Selecting `paged` requires exactly one
+`--llm-memory` requires explicit active weight size, layer count, query/KV head geometry, and head dimension. Phase
+defaults to `decode`, which requires `--context-tokens`. `--phase prefill` instead requires `--prompt-tokens P` and
+`--attention-query-tile-tokens Q`, with `P >= 1` and `1 <= Q <= P`, and rejects `--context-tokens`. `--kv-layout`
+defaults to `contiguous`. Selecting `paged` requires exactly one
 `--kv-block-tokens <G>` value; `G` must be positive, a power of two, and no greater than `UINT32_MAX`.
-`--kv-block-tokens` is rejected with `contiguous`, while `G` may exceed the visible context. The command allocates and
+`--kv-block-tokens` is rejected with `contiguous`, while `G` may exceed the active phase's sequence length. The command
+allocates and
 initializes the requested weight and logical KV contents in full. Paged runs additionally allocate full physical K/V
 blocks, their suffix padding, and one seeded uint32 block table. Initialization, pre-touch, permutation generation,
-and validation remain outside the timed region.
+and validation remain outside the timed region. CPU prefill with paged KV is rejected with
+`cpu-prefill-paged-not-yet-supported`; it never falls back to contiguous KV.
 
-The generic schema records `backend: "cpu"`, `phase: "decode"`, `work_unit_kind: "decode_step"`, the selected
-`kv_layout`, and methodology `llm-memory-v1-cpu-decode-<layout>`. Metal and prefill remain unavailable and never receive
-an implicit fallback. The profile does not run Transformer mathematics or report inference tokens/s. Its
+The generic schema records `backend: "cpu"`, the selected phase/layout, `work_unit_kind: "decode_step"` or
+`"prefill_operation"`, and methodology `llm-memory-v1-cpu-<phase>-<layout>`. Metal remains unavailable and never
+receives an implicit fallback. The profile does not run Transformer mathematics or report inference tokens/s. Its
 machine-readable synthetic work-unit rate is named `synthetic_memory_work_units_per_second`.
 
 When `--iterations` is omitted, standard bandwidth, pattern, GPU operations, and the three LLM scenarios calibrate their
@@ -210,6 +222,12 @@ To measure the same logical decode geometry through a seeded paged layout, add:
 --kv-layout paged --kv-block-tokens 16
 ```
 
+For contiguous prefill, replace the decode context with explicit prompt/tile geometry:
+
+```text
+--phase prefill --prompt-tokens 8192 --attention-query-tile-tokens 128
+```
+
 The same schema 1 payload can be captured once from final-only stdout:
 
 ```bash
@@ -234,14 +252,17 @@ Treat benchmark values as measurements of the configured workload under the obse
 - Pattern GB/s is exact **effective kernel payload bandwidth**, not observed physical cache-bus or DRAM traffic. `strided_2mb` describes a 2 MiB virtual-address stride and does not prove superpage backing.
 - GPU GB/s is exact **effective compute-payload bandwidth** divided by Metal GPU time. Private storage is unified memory rather than separate VRAM, copy counts aggregate read plus write payload, and physical DRAM residency remains unverified.
 - CPU and GPU GB/s values are not directly comparable: the kernels, timing boundaries, parallelism, resource modes, and validation work differ.
-- LLM GB/s is exact **logical effective model payload** divided by the synchronized CPU scenario time. The context is fixed,
-  includes the current token, and uses full-size cacheable resources; none of those properties proves physical DRAM
+- LLM GB/s is exact **logical effective model payload** divided by the synchronized CPU scenario time. Decode uses a
+  fixed context that includes the current token; prefill rewrites a complete prompt then scans tiled causal prefixes.
+  Each prefill owner writes tokens in ascending order, K then V for each token, and reads each tile's complete owned K
+  prefix before its complete owned V prefix.
+  Both use full-size cacheable resources, and none of those properties proves physical DRAM
   service. In paged mode, uint32 block-table loads occur inside the timed assembly path, but their bytes are reported as
   layout metadata and excluded from the effective-model-payload GB/s numerator. Weights-only and KV-only are component
   baselines, while mixed is one layer-interleaved workload and must not be split into independent weight- and
   KV-bandwidth claims.
-- An LLM synthetic memory work unit (a decode step in the active profile) is not an inference token. The profile excludes
-  Transformer compute, framework dispatch,
+- An LLM synthetic memory work unit is one decode step or one full-prompt prefill operation, not an inference token.
+  Prefill does not predict TTFT. The profile excludes Transformer compute, framework dispatch,
   compute-memory overlap, GPU/ANE paths, runtime page allocation, prefix sharing, sliding-window KV, growing context,
   and model loading.
 - The LLM traffic classification version `llm-exact-weight-vs-kv-read-payload-v1` compares exact weight and KV-read
@@ -307,7 +328,7 @@ recognizes the current console labels only and is neither JSON-schema nor histor
 - [Core-to-Core Whitepaper](documents/CORE_TO_CORE_WHITEPAPER.md): LDAR/STLR handoff protocol, scheduler-hint scenarios, and JSON schema.
 - [GPU Bandwidth Whitepaper](documents/GPU_BANDWIDTH_WHITEPAPER.md): Metal methodology, timing, validation, resource model, and interpretation limits.
 - [LLM Memory Profile Whitepaper](documents/LLM_MEMORY_PROFILE_WHITEPAPER.md): generic schema-v1 vocabulary plus the
-  active CPU/decode contiguous and paged traffic, timing, checksum, and interpretation contracts.
+  active CPU decode and contiguous-prefill traffic, timing, checksum, and interpretation contracts.
 
 Runtime behavior and `memory_benchmark -h` are the authoritative sources when documentation differs.
 

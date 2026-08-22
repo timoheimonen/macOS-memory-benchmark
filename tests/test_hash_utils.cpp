@@ -61,6 +61,30 @@ TEST(HashUtilsTest, AbcMatchesStandardSha256Vector) {
             "b00361a396177a9cb410ff61f20015ad");
 }
 
+TEST(HashUtilsTest, NoallocEmptyInputMatchesStandardSha256Vector) {
+  std::array<char, 64> digest{};
+  ASSERT_TRUE(HashUtils::sha256_hex_noalloc("", digest));
+  EXPECT_EQ(std::string_view(digest.data(), digest.size()),
+            "e3b0c44298fc1c149afbf4c8996fb924"
+            "27ae41e4649b934ca495991b7852b855");
+}
+
+TEST(HashUtilsTest, NoallocKnownTextMatchesStandardSha256Vector) {
+  std::array<char, 64> digest{};
+  ASSERT_TRUE(HashUtils::sha256_hex_noalloc("abc", digest));
+  EXPECT_EQ(std::string_view(digest.data(), digest.size()),
+            "ba7816bf8f01cfea414140de5dae2223"
+            "b00361a396177a9cb410ff61f20015ad");
+}
+
+TEST(HashUtilsTest, NoallocEmbeddedNullsMatchAllocatingHelper) {
+  const std::string payload{"prefix\0middle\xffsuffix", 20};
+  std::array<char, 64> digest{};
+  ASSERT_TRUE(HashUtils::sha256_hex_noalloc(payload, digest));
+  EXPECT_EQ(std::string_view(digest.data(), digest.size()),
+            HashUtils::sha256_hex(payload));
+}
+
 TEST(HashUtilsTest, IncrementalUpdatesMatchPermutationGoldenAcrossChunkBoundaries) {
   const std::string_view bytes = permutation_bytes();
   EXPECT_EQ(HashUtils::sha256_hex(bytes), kPermutationSha256);

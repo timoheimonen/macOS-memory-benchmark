@@ -184,6 +184,8 @@ namespace Constants {
       "llm-memory-v1-cpu-decode-contiguous";
   constexpr const char* LLM_CPU_DECODE_PAGED_METHODOLOGY_VERSION =
       "llm-memory-v1-cpu-decode-paged";
+  constexpr const char* LLM_CPU_PREFILL_CONTIGUOUS_METHODOLOGY_VERSION =
+      "llm-memory-v1-cpu-prefill-contiguous";
   constexpr const char* LLM_WORK_PLAN_IDENTITY_VERSION =
       "llm-memory-work-plan-v1";
   constexpr const char* LLM_COMPONENT_IDENTITY_VERSION =
@@ -212,6 +214,10 @@ namespace Constants {
       "llm-prefill-generic-work-unit-runner-v1";
   constexpr const char* LLM_PREFILL_RESOURCE_PLAN_VERSION =
       "llm-prefill-pure-resource-plan-v1";
+  constexpr const char* LLM_PREFILL_CPU_EXECUTOR_VERSION =
+      "llm-cpu-executor-v1-arm64-prefill-contiguous";
+  constexpr const char* LLM_PREFILL_DESCRIPTOR_ABI_VERSION =
+      "llm-memory-prefill-contiguous-descriptor-abi-v1";
   constexpr const char* LLM_TRAFFIC_CLASSIFICATION_VERSION =
       "llm-exact-weight-vs-kv-read-payload-v1";
   constexpr size_t LLM_KV_BLOCK_TABLE_ENTRY_BYTES = sizeof(uint32_t);

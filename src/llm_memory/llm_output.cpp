@@ -212,6 +212,14 @@ void print_llm_memory_console_report(const LlmMemoryWorkPlan& model_plan,
                      model_plan.geometry.traffic_crossover_context_tokens)
               << std::endl;
   }
+  if (model_plan.geometry.prefill.has_value()) {
+    const LlmPrefillGeometry& prefill = *model_plan.geometry.prefill;
+    std::cout << Messages::report_llm_memory_prefill_geometry(
+                     prefill.prompt_tokens, prefill.attention_query_tile_tokens, prefill.tile_count,
+                     prefill.attention_prefix_token_visits_per_sequence, prefill.causal_token_pairs_per_sequence,
+                     prefill.logical_attention_pairs, prefill.logical_attention_fma_terms)
+              << std::endl;
+  }
   print_paged_layout_evidence(model_plan, work_unit_name);
   std::cout << Messages::report_llm_memory_payload(
                    work_unit_name,

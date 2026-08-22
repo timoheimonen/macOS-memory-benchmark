@@ -115,4 +115,36 @@ std::string sha256_hex(std::string_view input) {
   return hasher.finalize_hex();
 }
 
+bool sha256_hex_noalloc(std::string_view input,
+                        std::array<char, 64>& output) noexcept {
+  CC_SHA256_CTX context{};
+  if (CC_SHA256_Init(&context) != 1) {
+    return false;
+  }
+  const auto* cursor = reinterpret_cast<const unsigned char*>(input.data());
+  size_t remaining = input.size();
+  constexpr size_t kMaximumUpdateBytes =
+      static_cast<size_t>(std::numeric_limits<CC_LONG>::max());
+  while (remaining > 0) {
+    const size_t chunk_size = std::min(remaining, kMaximumUpdateBytes);
+    if (CC_SHA256_Update(&context, cursor,
+                         static_cast<CC_LONG>(chunk_size)) != 1) {
+      return false;
+    }
+    cursor += chunk_size;
+    remaining -= chunk_size;
+  }
+
+  std::array<unsigned char, CC_SHA256_DIGEST_LENGTH> digest{};
+  if (CC_SHA256_Final(digest.data(), &context) != 1) {
+    return false;
+  }
+  constexpr char kLowercaseHex[] = "0123456789abcdef";
+  for (size_t index = 0; index < digest.size(); ++index) {
+    output[index * 2] = kLowercaseHex[digest[index] >> 4U];
+    output[index * 2 + 1] = kLowercaseHex[digest[index] & 0x0fU];
+  }
+  return true;
+}
+
 }  // namespace HashUtils

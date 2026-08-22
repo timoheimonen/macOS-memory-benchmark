@@ -204,6 +204,30 @@ struct alignas(16) LlmPagedKvAssignmentDescriptor {
   uint64_t batch_sequence_index;
 };
 
+/** Frozen assembly-facing contiguous-prefill layer descriptor ABI v1. */
+struct alignas(16) LlmPrefillLayerDescriptor {
+  const uint8_t* weight_ptr;
+  uint64_t weight_bytes;
+  uint64_t first_sequence_index;
+  uint64_t sequence_count;
+  uint64_t layer_index;
+  uint64_t reserved_zero;
+};
+
+/** Frozen assembly-facing contiguous-prefill owner descriptor ABI v1. */
+struct alignas(16) LlmPrefillKvSequenceDescriptor {
+  uint8_t* k_owned_ptr;
+  uint8_t* v_owned_ptr;
+  uint64_t first_token;
+  uint64_t owned_token_count;
+  uint64_t prompt_tokens;
+  uint64_t attention_query_tile_tokens;
+  uint64_t record_bytes;
+  uint64_t layer_index;
+  uint64_t batch_sequence_index;
+  uint64_t reserved_zero;
+};
+
 static_assert(sizeof(void*) == 8,
               "LLM descriptor ABI requires 64-bit ARM64 pointers");
 static_assert(std::is_standard_layout_v<LlmLayerDescriptor>);
@@ -253,6 +277,28 @@ static_assert(offsetof(LlmPagedKvAssignmentDescriptor, decode_append_offset) == 
 static_assert(offsetof(LlmPagedKvAssignmentDescriptor, append_record_bytes) == 72);
 static_assert(offsetof(LlmPagedKvAssignmentDescriptor, layer_index) == 80);
 static_assert(offsetof(LlmPagedKvAssignmentDescriptor, batch_sequence_index) == 88);
+static_assert(std::is_standard_layout_v<LlmPrefillLayerDescriptor>);
+static_assert(alignof(LlmPrefillLayerDescriptor) == 16);
+static_assert(sizeof(LlmPrefillLayerDescriptor) == 48);
+static_assert(offsetof(LlmPrefillLayerDescriptor, weight_ptr) == 0);
+static_assert(offsetof(LlmPrefillLayerDescriptor, weight_bytes) == 8);
+static_assert(offsetof(LlmPrefillLayerDescriptor, first_sequence_index) == 16);
+static_assert(offsetof(LlmPrefillLayerDescriptor, sequence_count) == 24);
+static_assert(offsetof(LlmPrefillLayerDescriptor, layer_index) == 32);
+static_assert(offsetof(LlmPrefillLayerDescriptor, reserved_zero) == 40);
+static_assert(std::is_standard_layout_v<LlmPrefillKvSequenceDescriptor>);
+static_assert(alignof(LlmPrefillKvSequenceDescriptor) == 16);
+static_assert(sizeof(LlmPrefillKvSequenceDescriptor) == 80);
+static_assert(offsetof(LlmPrefillKvSequenceDescriptor, k_owned_ptr) == 0);
+static_assert(offsetof(LlmPrefillKvSequenceDescriptor, v_owned_ptr) == 8);
+static_assert(offsetof(LlmPrefillKvSequenceDescriptor, first_token) == 16);
+static_assert(offsetof(LlmPrefillKvSequenceDescriptor, owned_token_count) == 24);
+static_assert(offsetof(LlmPrefillKvSequenceDescriptor, prompt_tokens) == 32);
+static_assert(offsetof(LlmPrefillKvSequenceDescriptor, attention_query_tile_tokens) == 40);
+static_assert(offsetof(LlmPrefillKvSequenceDescriptor, record_bytes) == 48);
+static_assert(offsetof(LlmPrefillKvSequenceDescriptor, layer_index) == 56);
+static_assert(offsetof(LlmPrefillKvSequenceDescriptor, batch_sequence_index) == 64);
+static_assert(offsetof(LlmPrefillKvSequenceDescriptor, reserved_zero) == 72);
 
 /** Raw exact-byte model inputs, independent of CLI unit conversion. */
 struct LlmGeometryRequest {
@@ -413,12 +459,42 @@ struct LlmPagedKvAssignmentTemplate {
   size_t block_count = 0;
 };
 
+/** Pointer-free contiguous-prefill token ownership for one layer/batch row. */
+struct LlmPrefillKvSequenceRangeTemplate {
+  LlmByteRange k_owned;
+  LlmByteRange v_owned;
+  size_t first_token = 0;
+  size_t owned_token_count = 0;
+  size_t layer_index = 0;
+  size_t batch_sequence_index = 0;
+};
+
 /** Complete immutable pointer-free descriptor set for one worker. */
 struct LlmWorkerWorkPlan {
   size_t worker_index = 0;
   std::vector<LlmLayerRangeTemplate> layers;
   std::vector<LlmKvSequenceRangeTemplate> sequences;
   std::vector<LlmPagedKvAssignmentTemplate> paged_assignments;
+  /** Three scenario-major sets, each containing layer_count * batch_size rows. */
+  std::vector<LlmPrefillKvSequenceRangeTemplate> prefill_sequences;
+};
+
+/** Aggregate evidence for one scenario's owner-local contiguous-prefill map. */
+struct LlmPrefillCpuScenarioExecutionPlan {
+  LlmScenario scenario = LlmScenario::WeightsOnly;
+  std::vector<LlmPrefillCpuOwnershipPlan> ownership_scopes;
+  std::vector<size_t> worker_accounted_bytes_per_work_unit;
+  size_t minimum_worker_accounted_bytes_per_work_unit = 0;
+  size_t maximum_worker_accounted_bytes_per_work_unit = 0;
+  size_t worker_accounted_imbalance_bytes_per_work_unit = 0;
+  std::string identity;
+};
+
+/** Executable contiguous-prefill scenario partitions and descriptor geometry. */
+struct LlmPrefillCpuExecutionPlan {
+  size_t sequence_descriptors_per_scenario_per_worker = 0;
+  std::array<LlmPrefillCpuScenarioExecutionPlan, kLlmScenarioCount> scenarios;
+  std::string identity;
 };
 
 /**
@@ -464,6 +540,7 @@ struct LlmCpuExecutionPlan {
   size_t planner_storage_bytes = 0;
   std::vector<LlmWorkerWorkPlan> workers;
   std::optional<LlmPagedCpuExecutionPlan> paged;
+  std::optional<LlmPrefillCpuExecutionPlan> prefill;
 };
 
 /** Placeholder for Metal-only execution planning introduced in later phases. */
@@ -604,6 +681,16 @@ const LlmCpuExecutionPlan* get_llm_cpu_execution_plan(
 LlmCpuExecutionPlan* get_llm_cpu_execution_plan(
     LlmMemoryWorkPlan& plan) noexcept;
 
+/**
+ * Stream-validate canonical contiguous-prefill ownership and identities.
+ *
+ * This cold-path validation performs no dynamic allocation and rejects any
+ * divergence between scenario scopes, worker descriptors, exact worker costs,
+ * aggregate identities, and the model identity before resources are mapped.
+ */
+bool validate_llm_prefill_cpu_execution_evidence(
+    const LlmMemoryWorkPlan& plan) noexcept;
+
 /** Per-scenario payload, layout metadata, and effective work-unit ceiling. */
 struct LlmScenarioLimits {
   bool valid = false;
@@ -703,9 +790,9 @@ LlmMemoryWorkPlanDraft prepare_llm_memory_work_plan(
  *
  * The draft is consumed on every outcome. No table allocation occurs unless
  * the exact final peak, including both supplied auxiliary categories, fits.
- * Pure prefill drafts remain logical/fake-runner plans: even for paged layout,
- * finalization neither creates `LlmPagedCpuExecutionPlan` nor materializes a
- * block table, permutation, descriptor ABI, or backend resource.
+ * Contiguous CPU prefill drafts retain their executable descriptor templates;
+ * paged prefill remains a logical planning result and finalization does not
+ * create a paged block table, permutation, descriptor ABI, or backend resource.
  */
 LlmMemoryWorkPlan finalize_llm_memory_work_plan(
     LlmMemoryWorkPlanDraft&& draft, size_t checksum_auxiliary_bytes,
@@ -719,9 +806,9 @@ LlmMemoryWorkPlan finalize_llm_memory_work_plan(
  * scenario has work. Its retained vector capacities are measured after
  * allocation and the budget is re-evaluated before the plan becomes valid.
  * Invalid plans expose no executable templates. Metal remains an explicit
- * placeholder until its planner is activated. A valid prefill result is a
- * logical/fake-runner seam only; the production CPU backend must report it as
- * unsupported until a later phase supplies its descriptor and kernel path.
+ * placeholder until its planner is activated. Contiguous CPU prefill produces
+ * an executable descriptor and ownership plan; paged prefill remains a logical
+ * plan that the production CPU backend reports as unsupported.
  *
  * @param request Fully resolved geometry, environment, and budget inputs.
  * @param stop_requested Optional synchronous predicate polled during paged

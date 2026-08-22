@@ -3988,7 +3988,13 @@ TEST(LlmMemoryWorkPlanTest,
   EXPECT_EQ(*paged.component_identities.permutation_version,
             Constants::LLM_KV_BLOCK_PERMUTATION_VERSION);
   EXPECT_FALSE(cpu_execution_plan(contiguous).paged.has_value());
+  ASSERT_TRUE(cpu_execution_plan(contiguous).prefill.has_value());
   EXPECT_FALSE(cpu_execution_plan(paged).paged.has_value());
+  EXPECT_FALSE(cpu_execution_plan(paged).prefill.has_value());
+  EXPECT_EQ(contiguous.component_identities.backend_executor_version,
+            Constants::LLM_PREFILL_CPU_EXECUTOR_VERSION);
+  EXPECT_EQ(contiguous.component_identities.resource_abi_version,
+            Constants::LLM_PREFILL_DESCRIPTOR_ABI_VERSION);
   EXPECT_GT(paged.memory_budget.request.requested_block_table_mapping_bytes,
             0u);
   EXPECT_EQ(contiguous.geometry.prefill->prompt_tokens, 5u);
@@ -4070,6 +4076,200 @@ TEST(LlmMemoryWorkPlanTest,
   EXPECT_FALSE(guardrail_exceeded.valid);
   EXPECT_EQ(guardrail_exceeded.reason_code,
             LlmWorkPlanReason::TASK_ACCOUNTED_BYTES_CAP_EXCEEDED);
+}
+
+TEST(LlmMemoryWorkPlanTest,
+     PrefillDescriptorAbiAndScenarioOwnershipSetsAreExact) {
+  EXPECT_EQ(sizeof(LlmPrefillLayerDescriptor), 48u);
+  EXPECT_EQ(alignof(LlmPrefillLayerDescriptor), 16u);
+  EXPECT_EQ(offsetof(LlmPrefillLayerDescriptor, weight_ptr), 0u);
+  EXPECT_EQ(offsetof(LlmPrefillLayerDescriptor, weight_bytes), 8u);
+  EXPECT_EQ(offsetof(LlmPrefillLayerDescriptor, first_sequence_index), 16u);
+  EXPECT_EQ(offsetof(LlmPrefillLayerDescriptor, sequence_count), 24u);
+  EXPECT_EQ(offsetof(LlmPrefillLayerDescriptor, layer_index), 32u);
+  EXPECT_EQ(offsetof(LlmPrefillLayerDescriptor, reserved_zero), 40u);
+  EXPECT_EQ(sizeof(LlmPrefillKvSequenceDescriptor), 80u);
+  EXPECT_EQ(alignof(LlmPrefillKvSequenceDescriptor), 16u);
+  EXPECT_EQ(offsetof(LlmPrefillKvSequenceDescriptor, k_owned_ptr), 0u);
+  EXPECT_EQ(offsetof(LlmPrefillKvSequenceDescriptor, v_owned_ptr), 8u);
+  EXPECT_EQ(offsetof(LlmPrefillKvSequenceDescriptor, first_token), 16u);
+  EXPECT_EQ(offsetof(LlmPrefillKvSequenceDescriptor, owned_token_count), 24u);
+  EXPECT_EQ(offsetof(LlmPrefillKvSequenceDescriptor, prompt_tokens), 32u);
+  EXPECT_EQ(
+      offsetof(LlmPrefillKvSequenceDescriptor,
+               attention_query_tile_tokens),
+      40u);
+  EXPECT_EQ(offsetof(LlmPrefillKvSequenceDescriptor, record_bytes), 48u);
+  EXPECT_EQ(offsetof(LlmPrefillKvSequenceDescriptor, layer_index), 56u);
+  EXPECT_EQ(
+      offsetof(LlmPrefillKvSequenceDescriptor, batch_sequence_index), 64u);
+  EXPECT_EQ(offsetof(LlmPrefillKvSequenceDescriptor, reserved_zero), 72u);
+
+  const LlmMemoryWorkPlan plan = build_llm_memory_work_plan(
+      work_plan_request(integrated_prefill_geometry_request(
+                            LlmKvLayout::Contiguous, 7, 3),
+                        3, 3));
+  ASSERT_TRUE(plan.valid) << plan.reason_code;
+  const LlmCpuExecutionPlan& cpu = cpu_execution_plan(plan);
+  ASSERT_TRUE(cpu.prefill.has_value());
+  const LlmPrefillCpuExecutionPlan& prefill = *cpu.prefill;
+  const size_t rows = plan.geometry.layer_count * plan.geometry.batch_size;
+  EXPECT_EQ(prefill.sequence_descriptors_per_scenario_per_worker, rows);
+  EXPECT_EQ(cpu.sequence_descriptors_per_worker,
+            rows * kLlmScenarioCount);
+  EXPECT_FALSE(prefill.identity.empty());
+
+  const std::array<size_t, kLlmScenarioCount> expected_scope_counts = {
+      plan.geometry.layer_count, rows, rows};
+  const std::array<size_t, kLlmScenarioCount> expected_totals = {
+      plan.geometry.weight_read_bytes_per_work_unit,
+      plan.geometry.kv_only_effective_model_payload_bytes_per_work_unit,
+      plan.geometry.mixed_effective_model_payload_bytes_per_work_unit};
+  std::array<std::string, kLlmScenarioCount> scenario_identities;
+  for (size_t scenario_index = 0; scenario_index < kLlmScenarioCount;
+       ++scenario_index) {
+    const LlmPrefillCpuScenarioExecutionPlan& scenario =
+        prefill.scenarios[scenario_index];
+    EXPECT_EQ(static_cast<size_t>(scenario.scenario), scenario_index);
+    EXPECT_EQ(scenario.ownership_scopes.size(),
+              expected_scope_counts[scenario_index]);
+    ASSERT_EQ(scenario.worker_accounted_bytes_per_work_unit.size(),
+              cpu.effective_workers);
+    EXPECT_EQ(std::accumulate(
+                  scenario.worker_accounted_bytes_per_work_unit.begin(),
+                  scenario.worker_accounted_bytes_per_work_unit.end(),
+                  size_t{0}),
+              expected_totals[scenario_index]);
+    EXPECT_EQ(scenario.worker_accounted_imbalance_bytes_per_work_unit,
+              scenario.maximum_worker_accounted_bytes_per_work_unit -
+                  scenario.minimum_worker_accounted_bytes_per_work_unit);
+    scenario_identities[scenario_index] = scenario.identity;
+    EXPECT_FALSE(scenario.identity.empty());
+
+    size_t scope_weight_bytes = 0;
+    for (const LlmPrefillCpuOwnershipPlan& scope :
+         scenario.ownership_scopes) {
+      EXPECT_EQ(scope.scenario, scenario.scenario);
+      scope_weight_bytes += scope.total_weight_shard_bytes;
+    }
+    const size_t expected_weight_bytes =
+        scenario.scenario == LlmScenario::KvOnly
+            ? 0
+            : plan.geometry.active_weight_bytes_per_work_unit;
+    EXPECT_EQ(scope_weight_bytes, expected_weight_bytes);
+  }
+  EXPECT_NE(scenario_identities[0], scenario_identities[1]);
+  EXPECT_NE(scenario_identities[0], scenario_identities[2]);
+  EXPECT_NE(scenario_identities[1], scenario_identities[2]);
+
+  for (size_t worker = 0; worker < cpu.effective_workers; ++worker) {
+    ASSERT_EQ(cpu.workers[worker].prefill_sequences.size(),
+              rows * kLlmScenarioCount);
+    for (size_t row = 0; row < rows; ++row) {
+      const LlmPrefillKvSequenceRangeTemplate& weights =
+          cpu.workers[worker].prefill_sequences[row];
+      EXPECT_EQ(weights.owned_token_count, 0u);
+      EXPECT_EQ(weights.k_owned.span_bytes, 0u);
+      EXPECT_EQ(weights.v_owned.span_bytes, 0u);
+    }
+  }
+  for (size_t scenario_index : {static_cast<size_t>(LlmScenario::KvOnly),
+                                static_cast<size_t>(LlmScenario::Mixed)}) {
+    for (size_t row = 0; row < rows; ++row) {
+      size_t owned_tokens = 0;
+      for (const LlmWorkerWorkPlan& worker : cpu.workers) {
+        owned_tokens +=
+            worker.prefill_sequences[scenario_index * rows + row]
+                .owned_token_count;
+      }
+      EXPECT_EQ(owned_tokens, plan.geometry.prefill->prompt_tokens);
+    }
+  }
+}
+
+TEST(LlmMemoryWorkPlanTest,
+     PrefillPlannerStorageAccountsExactRetainedIdentityCapacities) {
+  const LlmMemoryWorkPlan plan = build_llm_memory_work_plan(
+      work_plan_request(integrated_prefill_geometry_request(
+                            LlmKvLayout::Contiguous, 7, 3),
+                        3, 3));
+  ASSERT_TRUE(plan.valid) << plan.reason_code;
+  const LlmCpuExecutionPlan& cpu = cpu_execution_plan(plan);
+  ASSERT_TRUE(cpu.prefill.has_value());
+
+  size_t expected =
+      plan.weight_layers.capacity() * sizeof(LlmByteRange) +
+      cpu.workers.capacity() * sizeof(LlmWorkerWorkPlan);
+  for (const LlmWorkerWorkPlan& worker : cpu.workers) {
+    expected +=
+        worker.layers.capacity() * sizeof(LlmLayerRangeTemplate);
+    expected +=
+        worker.sequences.capacity() * sizeof(LlmKvSequenceRangeTemplate);
+    expected += worker.paged_assignments.capacity() *
+                sizeof(LlmPagedKvAssignmentTemplate);
+    expected += worker.prefill_sequences.capacity() *
+                sizeof(LlmPrefillKvSequenceRangeTemplate);
+  }
+  const auto add_external_string_capacity = [&](const std::string& value) {
+    const uintptr_t data = reinterpret_cast<uintptr_t>(value.data());
+    const uintptr_t object = reinterpret_cast<uintptr_t>(&value);
+    if (data < object || data >= object + sizeof(value)) {
+      expected += value.capacity() + 1;
+    }
+  };
+  add_external_string_capacity(cpu.prefill->identity);
+  for (const LlmPrefillCpuScenarioExecutionPlan& scenario :
+       cpu.prefill->scenarios) {
+    expected += scenario.ownership_scopes.capacity() *
+                sizeof(LlmPrefillCpuOwnershipPlan);
+    expected += scenario.worker_accounted_bytes_per_work_unit.capacity() *
+                sizeof(size_t);
+    add_external_string_capacity(scenario.identity);
+    for (const LlmPrefillCpuOwnershipPlan& scope :
+         scenario.ownership_scopes) {
+      expected += scope.assignments.capacity() *
+                  sizeof(LlmPrefillCpuAssignment);
+      expected += scope.worker_weight_shard_bytes.capacity() *
+                  sizeof(size_t);
+      expected += scope.worker_kv_model_payload_bytes.capacity() *
+                  sizeof(size_t);
+      expected += scope.worker_layout_metadata_lookup_count.capacity() *
+                  sizeof(size_t);
+      expected += scope.worker_layout_metadata_read_bytes.capacity() *
+                  sizeof(size_t);
+      expected += scope.worker_scenario_accounted_bytes.capacity() *
+                  sizeof(size_t);
+      add_external_string_capacity(scope.reason_code);
+      add_external_string_capacity(scope.identity);
+      EXPECT_EQ(scenario.identity.find(scope.identity),
+                std::string::npos);
+    }
+  }
+  EXPECT_EQ(cpu.planner_storage_bytes, expected);
+  EXPECT_EQ(plan.memory_budget.request.planner_storage_bytes, expected);
+}
+
+TEST(LlmMemoryWorkPlanTest,
+     PrefillIdentityPreflightOverflowFailsBeforeProportionalAllocation) {
+  LlmGeometryRequest geometry;
+  geometry.active_weight_bytes = 100000000;
+  geometry.layer_count = 100000000;
+  geometry.query_head_count = 1;
+  geometry.kv_head_count = 1;
+  geometry.head_dimension = 1;
+  geometry.kv_element_bytes = 1;
+  geometry.batch_size = 100000000;
+  geometry.phase = LlmPhase::Prefill;
+  geometry.kv_layout = LlmKvLayout::Contiguous;
+  geometry.prompt_tokens = 1;
+  geometry.attention_query_tile_tokens = 1;
+  LlmMemoryWorkPlanRequest request = work_plan_request(geometry, 1, 1);
+  request.available_memory_bytes = std::numeric_limits<size_t>::max();
+
+  const LlmMemoryWorkPlan plan = build_llm_memory_work_plan(request);
+  EXPECT_FALSE(plan.valid);
+  EXPECT_EQ(plan.reason_code,
+            LlmWorkPlanReason::PLANNER_STORAGE_BYTES_OVERFLOW);
 }
 
 TEST(LlmMemoryWorkPlanTest,

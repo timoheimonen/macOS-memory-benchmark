@@ -70,6 +70,266 @@ const LlmPagedCpuExecutionPlan* paged_cpu_execution_plan(
   return &*cpu->paged;
 }
 
+const LlmPrefillCpuExecutionPlan* prefill_cpu_execution_plan(const LlmMemoryWorkPlan& plan) noexcept {
+  const LlmCpuExecutionPlan* const cpu = get_llm_cpu_execution_plan(plan);
+  if (plan.phase != LlmPhase::Prefill || plan.kv_layout != LlmKvLayout::Contiguous || cpu == nullptr ||
+      !cpu->prefill.has_value()) {
+    return nullptr;
+  }
+  return &*cpu->prefill;
+}
+
+/** Identity lengths that can be copied into one live JSON DOM and transport. */
+struct LlmJsonIdentitySizeView {
+  size_t base_identity_string_bytes = 0;
+  std::array<size_t, kLlmScenarioCount> maximum_scenario_plan_identity_bytes{};
+  size_t frozen_reason_code_bytes = 0;
+  size_t frozen_model_plan_identity_bytes = 0;
+  size_t frozen_plan_identity_bytes = 0;
+  std::array<size_t, kLlmScenarioCount> frozen_scenario_reason_code_bytes{};
+  std::array<size_t, kLlmScenarioCount> frozen_scenario_model_plan_identity_bytes{};
+  std::array<size_t, kLlmScenarioCount> frozen_scenario_plan_identity_bytes{};
+};
+
+size_t decimal_digit_count(uint64_t value) noexcept {
+  size_t digits = 1;
+  while (value >= 10) {
+    value /= 10;
+    ++digits;
+  }
+  return digits;
+}
+
+bool add_identity_field_size(std::string_view name, size_t value_bytes, size_t& total) noexcept {
+  size_t field_bytes = 0;
+  return NumericUtils::checked_add(name.size(), static_cast<size_t>(2), field_bytes) &&
+         NumericUtils::checked_add(field_bytes, value_bytes, field_bytes) &&
+         NumericUtils::checked_add(total, field_bytes, total);
+}
+
+bool add_identity_integer_field_size(std::string_view name, uint64_t value, size_t& total) noexcept {
+  return add_identity_field_size(name, decimal_digit_count(value), total);
+}
+
+/**
+ * Calculate one maximum-work scenario identity length without constructing the
+ * identity string. The fields intentionally mirror build_scenario_plan_identity.
+ */
+bool calculate_maximum_scenario_identity_bytes(const LlmMemoryWorkPlan& model_plan, LlmScenario scenario,
+                                               size_t& identity_bytes) noexcept {
+  const LlmGeometry& geometry = model_plan.geometry;
+  if (!geometry.valid || model_plan.plan_identity.empty()) {
+    return false;
+  }
+
+  size_t weight_read_bytes_per_work_unit = 0;
+  size_t kv_read_bytes_per_work_unit = 0;
+  size_t kv_write_bytes_per_work_unit = 0;
+  size_t effective_model_payload_bytes_per_work_unit = 0;
+  switch (scenario) {
+    case LlmScenario::WeightsOnly:
+      weight_read_bytes_per_work_unit = geometry.weight_read_bytes_per_work_unit;
+      effective_model_payload_bytes_per_work_unit = geometry.weight_read_bytes_per_work_unit;
+      break;
+    case LlmScenario::KvOnly:
+      kv_read_bytes_per_work_unit = geometry.kv_read_bytes_per_work_unit;
+      kv_write_bytes_per_work_unit = geometry.kv_write_bytes_per_work_unit;
+      effective_model_payload_bytes_per_work_unit = geometry.kv_only_effective_model_payload_bytes_per_work_unit;
+      break;
+    case LlmScenario::Mixed:
+      weight_read_bytes_per_work_unit = geometry.weight_read_bytes_per_work_unit;
+      kv_read_bytes_per_work_unit = geometry.kv_read_bytes_per_work_unit;
+      kv_write_bytes_per_work_unit = geometry.kv_write_bytes_per_work_unit;
+      effective_model_payload_bytes_per_work_unit = geometry.mixed_effective_model_payload_bytes_per_work_unit;
+      break;
+  }
+
+  size_t layout_metadata_lookup_count_per_work_unit = 0;
+  size_t layout_metadata_read_bytes_per_work_unit = 0;
+  if (geometry.kv_layout == LlmKvLayout::Paged && scenario != LlmScenario::WeightsOnly) {
+    size_t layer_sequence_count = 0;
+    if (!NumericUtils::checked_multiply(geometry.layer_count, geometry.batch_size, layer_sequence_count) ||
+        !NumericUtils::checked_multiply(layer_sequence_count,
+                                        geometry.layout_metadata_lookups_per_layer_sequence_per_work_unit,
+                                        layout_metadata_lookup_count_per_work_unit) ||
+        !NumericUtils::checked_multiply(layout_metadata_lookup_count_per_work_unit,
+                                        Constants::LLM_KV_BLOCK_TABLE_ENTRY_BYTES,
+                                        layout_metadata_read_bytes_per_work_unit)) {
+      return false;
+    }
+  }
+
+  size_t accounted_bytes_per_work_unit = 0;
+  if (!NumericUtils::checked_add(effective_model_payload_bytes_per_work_unit,
+                                 layout_metadata_read_bytes_per_work_unit, accounted_bytes_per_work_unit) ||
+      accounted_bytes_per_work_unit == 0) {
+    return false;
+  }
+  const size_t maximum_work_units_by_work_unit_cap = Constants::LLM_MAX_WORK_UNITS_PER_MEASUREMENT;
+  const size_t maximum_work_units_by_guardrail =
+      Constants::LLM_MAX_ACCOUNTED_BYTES_PER_TASK / accounted_bytes_per_work_unit;
+  const size_t work_units = std::min(maximum_work_units_by_work_unit_cap, maximum_work_units_by_guardrail);
+  if (work_units == 0) {
+    return false;
+  }
+
+  size_t weight_read_bytes = 0;
+  size_t kv_read_bytes = 0;
+  size_t kv_write_bytes = 0;
+  size_t effective_model_payload_bytes = 0;
+  size_t layout_metadata_lookup_count = 0;
+  size_t layout_metadata_read_bytes = 0;
+  size_t task_accounted_bytes = 0;
+  if (!NumericUtils::checked_multiply(weight_read_bytes_per_work_unit, work_units, weight_read_bytes) ||
+      !NumericUtils::checked_multiply(kv_read_bytes_per_work_unit, work_units, kv_read_bytes) ||
+      !NumericUtils::checked_multiply(kv_write_bytes_per_work_unit, work_units, kv_write_bytes) ||
+      !NumericUtils::checked_multiply(effective_model_payload_bytes_per_work_unit, work_units,
+                                      effective_model_payload_bytes) ||
+      !NumericUtils::checked_multiply(layout_metadata_lookup_count_per_work_unit, work_units,
+                                      layout_metadata_lookup_count) ||
+      !NumericUtils::checked_multiply(layout_metadata_read_bytes_per_work_unit, work_units,
+                                      layout_metadata_read_bytes) ||
+      !NumericUtils::checked_multiply(accounted_bytes_per_work_unit, work_units, task_accounted_bytes)) {
+    return false;
+  }
+
+  size_t total = std::string_view(Constants::LLM_WORK_PLAN_IDENTITY_VERSION).size();
+  const auto add_string = [&](std::string_view name, std::string_view value) {
+    return add_identity_field_size(name, value.size(), total);
+  };
+  const auto add_integer = [&](std::string_view name, uint64_t value) {
+    return add_identity_integer_field_size(name, value, total);
+  };
+  if (!add_integer("model_plan_identity_size", model_plan.plan_identity.size()) ||
+      !add_identity_field_size("model_plan_identity", model_plan.plan_identity.size(), total) ||
+      !add_string("scenario", llm_scenario_to_string(scenario)) ||
+      !add_string("work_unit_kind", llm_work_unit_kind_to_string(geometry.work_unit_kind)) ||
+      !add_string("kv_write_kind", llm_kv_write_kind_to_string(llm_kv_write_kind_for(geometry.phase, scenario))) ||
+      !add_integer("scenario_seed", model_plan.scenario_seeds[scenario_index(scenario)]) ||
+      !add_integer("explicit", 0) || !add_integer("work_units", work_units) ||
+      !add_integer("weight_read_bytes_per_work_unit", weight_read_bytes_per_work_unit) ||
+      !add_integer("kv_read_bytes_per_work_unit", kv_read_bytes_per_work_unit) ||
+      !add_integer("kv_write_bytes_per_work_unit", kv_write_bytes_per_work_unit) ||
+      !add_integer("effective_model_payload_bytes_per_work_unit", effective_model_payload_bytes_per_work_unit) ||
+      !add_integer("layout_metadata_lookup_count_per_work_unit", layout_metadata_lookup_count_per_work_unit) ||
+      !add_integer("layout_metadata_read_bytes_per_work_unit", layout_metadata_read_bytes_per_work_unit) ||
+      !add_integer("accounted_bytes_per_work_unit", accounted_bytes_per_work_unit) ||
+      !add_integer("weight_read_bytes", weight_read_bytes) || !add_integer("kv_read_bytes", kv_read_bytes) ||
+      !add_integer("kv_write_bytes", kv_write_bytes) ||
+      !add_integer("effective_model_payload_bytes", effective_model_payload_bytes) ||
+      !add_integer("layout_metadata_lookup_count", layout_metadata_lookup_count) ||
+      !add_integer("layout_metadata_read_bytes", layout_metadata_read_bytes) ||
+      !add_integer("task_accounted_bytes", task_accounted_bytes) ||
+      !add_integer("maximum_work_units_by_work_unit_cap", maximum_work_units_by_work_unit_cap) ||
+      !add_integer("maximum_work_units_by_guardrail", maximum_work_units_by_guardrail) ||
+      !add_integer("effective_maximum_work_units", work_units)) {
+    return false;
+  }
+  identity_bytes = total;
+  return true;
+}
+
+bool calculate_frozen_identity_bytes(const LlmMemoryWorkPlan& model_plan,
+                                     const std::array<size_t, kLlmScenarioCount>& scenario_identity_bytes,
+                                     size_t& identity_bytes) noexcept {
+  constexpr std::array<std::string_view, kLlmScenarioCount> kIdentitySizeNames = {
+      "weights_only_identity_size", "kv_only_identity_size", "mixed_identity_size"};
+  constexpr std::array<std::string_view, kLlmScenarioCount> kIdentityNames = {
+      "weights_only_identity", "kv_only_identity", "mixed_identity"};
+  size_t total = std::string_view(Constants::LLM_WORK_PLAN_IDENTITY_VERSION).size();
+  if (!add_identity_field_size("kind", std::string_view("frozen_scenarios").size(), total) ||
+      !add_identity_integer_field_size("explicit", 0, total) ||
+      !add_identity_integer_field_size("model_plan_identity_size", model_plan.plan_identity.size(), total) ||
+      !add_identity_field_size("model_plan_identity", model_plan.plan_identity.size(), total)) {
+    return false;
+  }
+  for (size_t index = 0; index < kLlmScenarioCount; ++index) {
+    if (!add_identity_integer_field_size(kIdentitySizeNames[index], scenario_identity_bytes[index], total) ||
+        !add_identity_field_size(kIdentityNames[index], scenario_identity_bytes[index], total)) {
+      return false;
+    }
+  }
+  identity_bytes = total;
+  return true;
+}
+
+LlmJsonIdentitySizeView preflight_identity_size_view(const LlmAuxiliaryPreflightView& preflight) noexcept {
+  LlmJsonIdentitySizeView view;
+  view.base_identity_string_bytes = preflight.json_identity_string_bytes;
+  view.maximum_scenario_plan_identity_bytes = preflight.maximum_scenario_plan_identity_bytes;
+  view.frozen_reason_code_bytes = preflight.frozen_reason_code_bytes;
+  view.frozen_model_plan_identity_bytes = preflight.frozen_model_plan_identity_bytes;
+  view.frozen_plan_identity_bytes = preflight.frozen_plan_identity_bytes;
+  view.frozen_scenario_reason_code_bytes = preflight.frozen_scenario_reason_code_bytes;
+  view.frozen_scenario_model_plan_identity_bytes = preflight.frozen_scenario_model_plan_identity_bytes;
+  view.frozen_scenario_plan_identity_bytes = preflight.frozen_scenario_plan_identity_bytes;
+  return view;
+}
+
+/** Build the final-plan equivalent of the preflight size view without allocation. */
+bool final_identity_size_view(const LlmMemoryWorkPlan& model_plan, LlmJsonIdentitySizeView& view) noexcept {
+  size_t base_identity_bytes = 0;
+  const auto add_string = [&](const std::string& value) {
+    return NumericUtils::checked_add(base_identity_bytes, value.size(), base_identity_bytes);
+  };
+  const auto add_optional = [&](const std::optional<std::string>& value) {
+    return !value.has_value() || add_string(*value);
+  };
+  const LlmComponentIdentities& components = model_plan.component_identities;
+  if (!add_string(model_plan.plan_identity) || !add_string(model_plan.methodology_version) ||
+      !add_string(components.logical_profile_version) || !add_string(components.kv_layout_version) ||
+      !add_optional(components.permutation_version) || !add_string(components.backend_executor_version) ||
+      !add_string(components.resource_abi_version) || !add_string(components.schedule_version) ||
+      !add_string(components.timer_policy_version) || !add_string(components.buffer_pattern_version) ||
+      !add_string(components.write_pattern_version) || !add_string(components.checksum_pattern_version) ||
+      !add_optional(components.msl_revision) || !add_optional(components.msl_source_sha256) ||
+      !add_string(components.identity)) {
+    return false;
+  }
+  const LlmPagedCpuExecutionPlan* const paged = paged_cpu_execution_plan(model_plan);
+  if (paged != nullptr &&
+      (!add_string(paged->layout.geometry_identity) || !add_string(paged->layout_identity) ||
+       !add_string(paged->execution_identity) || !add_string(paged->table_validation.reason_code) ||
+       !add_string(paged->permutation.algorithm_version) || !add_string(paged->permutation.domain_uint64_hex) ||
+       !add_string(paged->permutation.sha256) || !add_string(paged->permutation.identity) ||
+       !add_string(paged->ownership.reason_code) || !add_string(paged->ownership.layout_geometry_identity) ||
+       !add_string(paged->ownership.identity))) {
+    return false;
+  }
+  const LlmPrefillCpuExecutionPlan* const prefill = prefill_cpu_execution_plan(model_plan);
+  if (prefill != nullptr) {
+    if (!add_string(prefill->identity)) {
+      return false;
+    }
+    for (const LlmPrefillCpuScenarioExecutionPlan& scenario : prefill->scenarios) {
+      if (!add_string(scenario.identity)) {
+        return false;
+      }
+      for (const LlmPrefillCpuOwnershipPlan& scope : scenario.ownership_scopes) {
+        if (!add_string(scope.reason_code) || !add_string(scope.identity)) {
+          return false;
+        }
+      }
+    }
+  }
+
+  view.base_identity_string_bytes = base_identity_bytes;
+  constexpr size_t kValidReasonBytes = std::string_view(LlmWorkPlanReason::VALID).size();
+  view.frozen_reason_code_bytes = kValidReasonBytes;
+  view.frozen_model_plan_identity_bytes = model_plan.plan_identity.size();
+  for (size_t index = 0; index < kLlmScenarioCount; ++index) {
+    if (!calculate_maximum_scenario_identity_bytes(model_plan, kScenarios[index],
+                                                   view.maximum_scenario_plan_identity_bytes[index])) {
+      return false;
+    }
+    view.frozen_scenario_reason_code_bytes[index] = kValidReasonBytes;
+    view.frozen_scenario_model_plan_identity_bytes[index] = model_plan.plan_identity.size();
+    view.frozen_scenario_plan_identity_bytes[index] = view.maximum_scenario_plan_identity_bytes[index];
+  }
+  return calculate_frozen_identity_bytes(model_plan, view.maximum_scenario_plan_identity_bytes,
+                                         view.frozen_plan_identity_bytes);
+}
+
 template <typename Integer>
 OrderedJson decimal_string(Integer value) {
   return OrderedJson(std::to_string(value));
@@ -114,7 +374,7 @@ OrderedJson argv_json(const std::vector<std::string>& argv) {
 OrderedJson configuration_json(const LlmMemoryConfig& config) {
   OrderedJson resolved_sources;
   resolved_sources["backend"] = "default";
-  resolved_sources["phase"] = "default";
+  resolved_sources["phase"] = config.user_specified_phase ? "explicit" : "default";
   resolved_sources["kv_layout"] =
       config.user_specified_kv_layout ? "explicit" : "default";
   resolved_sources["kv_block_tokens"] =
@@ -122,6 +382,16 @@ OrderedJson configuration_json(const LlmMemoryConfig& config) {
           ? OrderedJson(nullptr)
           : OrderedJson(config.user_specified_kv_block_tokens ? "explicit"
                                                                : "default");
+  resolved_sources["visible_context_tokens"] =
+      config.phase == LlmPhase::Decode ? OrderedJson(config.user_specified_context_tokens ? "explicit" : "default")
+                                       : OrderedJson(nullptr);
+  resolved_sources["prompt_tokens"] = config.phase == LlmPhase::Prefill
+                                          ? OrderedJson(config.user_specified_prompt_tokens ? "explicit" : "default")
+                                          : OrderedJson(nullptr);
+  resolved_sources["attention_query_tile_tokens"] =
+      config.phase == LlmPhase::Prefill
+          ? OrderedJson(config.user_specified_attention_query_tile_tokens ? "explicit" : "default")
+          : OrderedJson(nullptr);
   resolved_sources["workers"] = config.user_specified_workers ? "explicit" : "detected";
   resolved_sources["iterations"] = config.user_specified_iterations ? "explicit" : "automatic";
   resolved_sources["seed"] = config.user_specified_seed ? "explicit" : "generated";
@@ -140,7 +410,12 @@ OrderedJson configuration_json(const LlmMemoryConfig& config) {
   output["kv_head_count"] = config.kv_head_count;
   output["head_dimension"] = config.head_dimension;
   output["kv_element_bytes"] = decimal_string(config.kv_element_bytes);
-  output["visible_context_tokens"] = config.visible_context_tokens;
+  output["visible_context_tokens"] =
+      config.phase == LlmPhase::Decode ? OrderedJson(config.visible_context_tokens) : OrderedJson(nullptr);
+  output["prompt_tokens"] =
+      config.phase == LlmPhase::Prefill ? OrderedJson(config.prompt_tokens) : OrderedJson(nullptr);
+  output["attention_query_tile_tokens"] =
+      config.phase == LlmPhase::Prefill ? OrderedJson(config.attention_query_tile_tokens) : OrderedJson(nullptr);
   output["batch_size"] = config.batch_size;
   output["requested_workers"] = config.requested_workers;
   output["available_workers"] = config.available_workers;
@@ -178,7 +453,8 @@ OrderedJson methodology_json(const LlmMemoryWorkPlan& plan) {
   output["kv_replay_factor"] = plan.kv_replay_factor;
   output["schedule_version"] = plan.component_identities.schedule_version;
   output["warmup_policy"] = "same-shape-excluded-steady-state-warm-memory";
-  output["context_policy"] = "fixed-visible-context-including-current-token-slot";
+  output["context_policy"] = plan.phase == LlmPhase::Decode ? "fixed-visible-context-including-current-token-slot"
+                                                            : "full-prompt-population-with-tiled-causal-prefix-scans";
   output["scenario_order_policy"] = "cyclic-rotation-across-count-loops";
   output["timing_policy"] = "synchronized-start-to-last-worker-completion-per-scenario-task";
   output["cache_policy"] = "regular-cacheable-no-explicit-flush-between-scenarios";
@@ -202,6 +478,7 @@ OrderedJson methodology_json(const LlmMemoryWorkPlan& plan) {
 
 OrderedJson geometry_json(const LlmGeometry& geometry) {
   const bool available = geometry.valid;
+  const bool decode_available = available && geometry.decode.has_value();
   OrderedJson decode = nullptr;
   if (geometry.decode.has_value()) {
     decode = OrderedJson{{"visible_context_tokens", geometry.decode->visible_context_tokens}};
@@ -254,10 +531,10 @@ OrderedJson geometry_json(const LlmGeometry& geometry) {
   output["mixed_effective_model_payload_bytes_per_work_unit"] =
       decimal_or_null(geometry.mixed_effective_model_payload_bytes_per_work_unit, available);
   output["total_data_mapping_bytes"] = decimal_or_null(geometry.total_data_mapping_bytes, available);
-  output["traffic_crossover_numerator"] = decimal_or_null(geometry.traffic_crossover_numerator, available);
-  output["traffic_crossover_denominator"] = decimal_or_null(geometry.traffic_crossover_denominator, available);
+  output["traffic_crossover_numerator"] = decimal_or_null(geometry.traffic_crossover_numerator, decode_available);
+  output["traffic_crossover_denominator"] = decimal_or_null(geometry.traffic_crossover_denominator, decode_available);
   output["traffic_crossover_context_tokens"] =
-      available ? finite_or_null(geometry.traffic_crossover_context_tokens) : OrderedJson(nullptr);
+      decode_available ? finite_or_null(geometry.traffic_crossover_context_tokens) : OrderedJson(nullptr);
   return output;
 }
 
@@ -433,6 +710,52 @@ OrderedJson paged_cpu_evidence_json(const LlmMemoryWorkPlan& plan) {
   return output;
 }
 
+OrderedJson prefill_cpu_scenario_evidence_json(const LlmPrefillCpuScenarioExecutionPlan& scenario) {
+  OrderedJson scope_identities = OrderedJson::array();
+  for (const LlmPrefillCpuOwnershipPlan& scope : scenario.ownership_scopes) {
+    scope_identities.push_back(scope.identity);
+  }
+
+  OrderedJson worker_costs = OrderedJson::array();
+  for (size_t cost : scenario.worker_accounted_bytes_per_work_unit) {
+    worker_costs.push_back(decimal_string(cost));
+  }
+
+  OrderedJson output;
+  output["scenario"] = llm_scenario_to_string(scenario.scenario);
+  output["cost_unit"] = "worker-cost";
+  output["scope_count"] = decimal_string(scenario.ownership_scopes.size());
+  output["scope_identities"] = std::move(scope_identities);
+  output["worker_accounted_bytes_per_work_unit"] = std::move(worker_costs);
+  output["minimum_worker_accounted_bytes_per_work_unit"] =
+      decimal_string(scenario.minimum_worker_accounted_bytes_per_work_unit);
+  output["maximum_worker_accounted_bytes_per_work_unit"] =
+      decimal_string(scenario.maximum_worker_accounted_bytes_per_work_unit);
+  output["worker_accounted_imbalance_bytes_per_work_unit"] =
+      decimal_string(scenario.worker_accounted_imbalance_bytes_per_work_unit);
+  output["identity"] = scenario.identity;
+  return output;
+}
+
+OrderedJson prefill_cpu_evidence_json(const LlmMemoryWorkPlan& plan) {
+  const LlmPrefillCpuExecutionPlan* const prefill = prefill_cpu_execution_plan(plan);
+  if (prefill == nullptr) {
+    return nullptr;
+  }
+
+  OrderedJson scenarios = OrderedJson::array();
+  for (const LlmPrefillCpuScenarioExecutionPlan& scenario : prefill->scenarios) {
+    scenarios.push_back(prefill_cpu_scenario_evidence_json(scenario));
+  }
+
+  OrderedJson output;
+  output["cost_unit"] = "worker-cost";
+  output["sequence_descriptors_per_scenario_per_worker"] = prefill->sequence_descriptors_per_scenario_per_worker;
+  output["scenarios"] = std::move(scenarios);
+  output["identity"] = prefill->identity;
+  return output;
+}
+
 OrderedJson statistics_json(const DescriptiveStatistics& statistics, bool available) {
   if (!available) {
     return nullptr;
@@ -500,7 +823,7 @@ OrderedJson traffic_diagnostics_json(const LlmGeometry& geometry,
   }
 
   OrderedJson ratio = nullptr;
-  if (available && geometry.kv_read_bytes_per_work_unit != 0) {
+  if (decode_available && geometry.kv_read_bytes_per_work_unit != 0) {
     const long double exact_ratio = static_cast<long double>(geometry.weight_read_bytes_per_work_unit) /
                                     static_cast<long double>(geometry.kv_read_bytes_per_work_unit);
     const double ratio_value = static_cast<double>(exact_ratio);
@@ -509,10 +832,10 @@ OrderedJson traffic_diagnostics_json(const LlmGeometry& geometry,
 
   OrderedJson output;
   output["classification_version"] = Constants::LLM_TRAFFIC_CLASSIFICATION_VERSION;
-  output["traffic_crossover_numerator"] = decimal_or_null(geometry.traffic_crossover_numerator, available);
-  output["traffic_crossover_denominator"] = decimal_or_null(geometry.traffic_crossover_denominator, available);
+  output["traffic_crossover_numerator"] = decimal_or_null(geometry.traffic_crossover_numerator, decode_available);
+  output["traffic_crossover_denominator"] = decimal_or_null(geometry.traffic_crossover_denominator, decode_available);
   output["traffic_crossover_context_tokens"] =
-      available ? finite_or_null(geometry.traffic_crossover_context_tokens) : OrderedJson(nullptr);
+      decode_available ? finite_or_null(geometry.traffic_crossover_context_tokens) : OrderedJson(nullptr);
   output["current_visible_context_tokens"] =
       decode_available ? OrderedJson(geometry.decode->visible_context_tokens) : OrderedJson(nullptr);
   output["current_weight_read_payload_bytes_per_work_unit"] =
@@ -521,7 +844,7 @@ OrderedJson traffic_diagnostics_json(const LlmGeometry& geometry,
       decimal_or_null(geometry.kv_read_bytes_per_work_unit, available);
   output["current_weight_to_kv_read_payload_ratio"] = std::move(ratio);
   output["current_context_classification"] =
-      available ? OrderedJson(classify_llm_traffic_payload(geometry)) : OrderedJson(nullptr);
+      decode_available ? OrderedJson(classify_llm_traffic_payload(geometry)) : OrderedJson(nullptr);
   output["classification_is_payload_only"] = true;
   output["scenario_headlines"] = std::move(headlines);
   return output;
@@ -1096,10 +1419,8 @@ OrderedJson measurement_checksum_json(
       measurement.execution_evidence_available ? execution.reason_code : std::string(measurement.reason_code);
   output["initialization_pattern_version"] =
       model_plan.component_identities.buffer_pattern_version;
-  output["append_pattern_version"] =
-      model_plan.component_identities.write_pattern_version;
-  output["read_checksum_version"] =
-      model_plan.component_identities.checksum_pattern_version;
+  output["write_pattern_version"] = model_plan.component_identities.write_pattern_version;
+  output["checksum_pattern_version"] = model_plan.component_identities.checksum_pattern_version;
   output["checksum_valid"] =
       evaluated ? OrderedJson(checksum_valid) : OrderedJson(nullptr);
   output["expected_worker_checksums"] =
@@ -1282,6 +1603,7 @@ OrderedJson backend_evidence_json(const LlmMemoryWorkPlan& plan, const LlmBacken
                       {"resource_abi_version", plan.component_identities.resource_abi_version},
                       {"schedule_version", plan.component_identities.schedule_version},
                       {"timer_policy_version", plan.component_identities.timer_policy_version},
+                      {"prefill", prefill_cpu_evidence_json(plan)},
                       {"paged", paged_cpu_evidence_json(plan)},
                       {"resources", resources_json(plan, cpu_preparation, json_peak_estimate, json_output_enabled)}};
   }
@@ -1435,136 +1757,85 @@ OrderedJson interpretation_json(const LlmMemoryWorkPlan& plan) {
   return output;
 }
 
-}  // namespace
-
-LlmJsonPeakEstimate calculate_llm_json_peak_estimate(
-    const LlmMemoryConfig& config,
-    const LlmAuxiliaryPreflightView& preflight) noexcept {
+/**
+ * Apply the common preflight/final JSON peak formula to exact identity sizes.
+ * Identity text is charged once for frozen-plan evidence, once per retained
+ * measurement reference, and once per possible calibration attempt. The
+ * expansion factor covers both the live DOM copies and serialized/allocator
+ * overhead, independent of decode/prefill phase or contiguous/paged layout.
+ */
+LlmJsonPeakEstimate calculate_json_peak_from_identity_sizes(const LlmMemoryConfig& config, size_t effective_workers,
+                                                            const LlmJsonIdentitySizeView& identities) noexcept {
   LlmJsonPeakEstimate estimate;
-  if (config.output_file.empty()) {
-    estimate.valid = true;
-    estimate.reason_code = LlmJsonReason::VALID;
-    return estimate;
-  }
-  if (!preflight.valid || preflight.backend != LlmMemoryBackend::Cpu ||
-      preflight.effective_workers == 0) {
-    estimate.reason_code = LlmJsonReason::INVALID_MODEL_WORK_PLAN;
-    return estimate;
-  }
-
   size_t raw_input_bytes = config.output_file.size();
   for (const std::string& argument : config.argv) {
-    if (!NumericUtils::checked_add(
-            raw_input_bytes, argument.size(), raw_input_bytes)) {
+    if (!NumericUtils::checked_add(raw_input_bytes, argument.size(), raw_input_bytes)) {
       return estimate;
     }
   }
-  if (!NumericUtils::checked_add(
-          raw_input_bytes, preflight.json_identity_string_bytes,
-          raw_input_bytes)) {
+  if (!NumericUtils::checked_add(raw_input_bytes, identities.base_identity_string_bytes, raw_input_bytes)) {
+    return estimate;
+  }
+
+  size_t frozen_identity_bytes = 0;
+  if (!NumericUtils::checked_add(frozen_identity_bytes, identities.frozen_reason_code_bytes,
+                                 frozen_identity_bytes) ||
+      !NumericUtils::checked_add(frozen_identity_bytes, identities.frozen_model_plan_identity_bytes,
+                                 frozen_identity_bytes) ||
+      !NumericUtils::checked_add(frozen_identity_bytes, identities.frozen_plan_identity_bytes,
+                                 frozen_identity_bytes)) {
+    return estimate;
+  }
+  size_t scenario_identity_bytes_per_loop = 0;
+  for (size_t index = 0; index < kLlmScenarioCount; ++index) {
+    if (!NumericUtils::checked_add(frozen_identity_bytes, identities.frozen_scenario_reason_code_bytes[index],
+                                   frozen_identity_bytes) ||
+        !NumericUtils::checked_add(frozen_identity_bytes,
+                                   identities.frozen_scenario_model_plan_identity_bytes[index],
+                                   frozen_identity_bytes) ||
+        !NumericUtils::checked_add(frozen_identity_bytes, identities.frozen_scenario_plan_identity_bytes[index],
+                                   frozen_identity_bytes) ||
+        !NumericUtils::checked_add(scenario_identity_bytes_per_loop,
+                                   identities.maximum_scenario_plan_identity_bytes[index],
+                                   scenario_identity_bytes_per_loop)) {
+      return estimate;
+    }
+  }
+
+  size_t measurement_identity_bytes = 0;
+  if (!NumericUtils::checked_multiply(config.loop_count, scenario_identity_bytes_per_loop,
+                                      measurement_identity_bytes)) {
+    return estimate;
+  }
+  size_t calibration_attempts_per_scenario = 1;
+  if (!config.user_specified_iterations &&
+      !NumericUtils::checked_add(static_cast<size_t>(4), Constants::LLM_CALIBRATION_MAX_CORRECTIONS,
+                                 calibration_attempts_per_scenario)) {
+    return estimate;
+  }
+  size_t calibration_identity_bytes = 0;
+  for (size_t index = 0; index < kLlmScenarioCount; ++index) {
+    size_t scenario_calibration_identity_bytes = 0;
+    if (!NumericUtils::checked_multiply(calibration_attempts_per_scenario,
+                                        identities.maximum_scenario_plan_identity_bytes[index],
+                                        scenario_calibration_identity_bytes) ||
+        !NumericUtils::checked_add(calibration_identity_bytes, scenario_calibration_identity_bytes,
+                                   calibration_identity_bytes)) {
+      return estimate;
+    }
+  }
+  if (!NumericUtils::checked_add(raw_input_bytes, frozen_identity_bytes, raw_input_bytes) ||
+      !NumericUtils::checked_add(raw_input_bytes, measurement_identity_bytes, raw_input_bytes) ||
+      !NumericUtils::checked_add(raw_input_bytes, calibration_identity_bytes, raw_input_bytes)) {
     return estimate;
   }
 
   size_t planned_measurements = 0;
   size_t worker_checksum_records = 0;
-  if (!NumericUtils::checked_multiply(
-          config.loop_count, kLlmScenarioCount, planned_measurements) ||
-      !NumericUtils::checked_multiply(
-          planned_measurements, preflight.effective_workers,
-          worker_checksum_records) ||
-      !NumericUtils::checked_multiply(
-          raw_input_bytes, kJsonInputStringExpansionFactor,
-          estimate.input_string_bytes) ||
-      !NumericUtils::checked_multiply(
-          planned_measurements, kJsonMeasurementPeakBytes,
-          estimate.measurement_record_bytes) ||
-      !NumericUtils::checked_multiply(
-          worker_checksum_records, kJsonWorkerChecksumPeakBytes,
-          estimate.worker_checksum_bytes)) {
-    return estimate;
-  }
-
-  estimate.fixed_schema_bytes = kJsonFixedSchemaPeakBytes;
-  size_t total = estimate.fixed_schema_bytes;
-  if (!NumericUtils::checked_add(
-          total, estimate.input_string_bytes, total) ||
-      !NumericUtils::checked_add(
-          total, estimate.measurement_record_bytes, total) ||
-      !NumericUtils::checked_add(
-          total, estimate.worker_checksum_bytes, total)) {
-    return estimate;
-  }
-  estimate.total_bytes = total;
-  estimate.valid = true;
-  estimate.reason_code = LlmJsonReason::VALID;
-  return estimate;
-}
-
-LlmJsonPeakEstimate calculate_llm_json_peak_estimate(const LlmMemoryConfig& config,
-                                                     const LlmMemoryWorkPlan& model_plan) noexcept {
-  LlmJsonPeakEstimate estimate;
-  if (config.output_file.empty()) {
-    estimate.valid = true;
-    estimate.reason_code = LlmJsonReason::VALID;
-    return estimate;
-  }
-  if (!model_plan.valid) {
-    estimate.reason_code = LlmJsonReason::INVALID_MODEL_WORK_PLAN;
-    return estimate;
-  }
-
-  size_t raw_input_bytes = config.output_file.size();
-  const auto add_string_bytes = [&](const std::string& value) {
-    return NumericUtils::checked_add(raw_input_bytes, value.size(), raw_input_bytes);
-  };
-  const auto add_optional_string_bytes = [&](const std::optional<std::string>& value) {
-    return !value.has_value() || add_string_bytes(*value);
-  };
-  for (const std::string& argument : config.argv) {
-    if (!add_string_bytes(argument)) {
-      return estimate;
-    }
-  }
-  const LlmComponentIdentities& components = model_plan.component_identities;
-  if (!add_string_bytes(model_plan.plan_identity) || !add_string_bytes(model_plan.methodology_version) ||
-      !add_string_bytes(components.logical_profile_version) || !add_string_bytes(components.kv_layout_version) ||
-      !add_optional_string_bytes(components.permutation_version) ||
-      !add_string_bytes(components.backend_executor_version) || !add_string_bytes(components.resource_abi_version) ||
-      !add_string_bytes(components.schedule_version) || !add_string_bytes(components.timer_policy_version) ||
-      !add_string_bytes(components.buffer_pattern_version) || !add_string_bytes(components.write_pattern_version) ||
-      !add_string_bytes(components.checksum_pattern_version) || !add_optional_string_bytes(components.msl_revision) ||
-      !add_optional_string_bytes(components.msl_source_sha256) || !add_string_bytes(components.identity)) {
-    return estimate;
-  }
-  const LlmPagedCpuExecutionPlan* const paged =
-      paged_cpu_execution_plan(model_plan);
-  if (paged != nullptr &&
-      (!add_string_bytes(paged->layout.geometry_identity) ||
-       !add_string_bytes(paged->layout_identity) ||
-       !add_string_bytes(paged->execution_identity) ||
-       !add_string_bytes(paged->table_validation.reason_code) ||
-       !add_string_bytes(paged->permutation.algorithm_version) ||
-       !add_string_bytes(paged->permutation.domain_uint64_hex) ||
-       !add_string_bytes(paged->permutation.sha256) ||
-       !add_string_bytes(paged->permutation.identity) ||
-       !add_string_bytes(paged->ownership.reason_code) ||
-       !add_string_bytes(paged->ownership.layout_geometry_identity) ||
-       !add_string_bytes(paged->ownership.identity))) {
-    return estimate;
-  }
-
-  size_t planned_measurements = 0;
-  size_t worker_checksum_records = 0;
-  const LlmCpuExecutionPlan* cpu_execution_plan =
-      get_llm_cpu_execution_plan(model_plan);
-  if (cpu_execution_plan == nullptr) {
-    estimate.reason_code = LlmJsonReason::INVALID_MODEL_WORK_PLAN;
-    return estimate;
-  }
   if (!NumericUtils::checked_multiply(config.loop_count, kLlmScenarioCount, planned_measurements) ||
-      !NumericUtils::checked_multiply(planned_measurements, cpu_execution_plan->effective_workers,
-                                      worker_checksum_records) ||
-      !NumericUtils::checked_multiply(raw_input_bytes, kJsonInputStringExpansionFactor, estimate.input_string_bytes) ||
+      !NumericUtils::checked_multiply(planned_measurements, effective_workers, worker_checksum_records) ||
+      !NumericUtils::checked_multiply(raw_input_bytes, kJsonInputStringExpansionFactor,
+                                      estimate.input_string_bytes) ||
       !NumericUtils::checked_multiply(planned_measurements, kJsonMeasurementPeakBytes,
                                       estimate.measurement_record_bytes) ||
       !NumericUtils::checked_multiply(worker_checksum_records, kJsonWorkerChecksumPeakBytes,
@@ -1583,6 +1854,51 @@ LlmJsonPeakEstimate calculate_llm_json_peak_estimate(const LlmMemoryConfig& conf
   estimate.valid = true;
   estimate.reason_code = LlmJsonReason::VALID;
   return estimate;
+}
+
+}  // namespace
+
+LlmJsonPeakEstimate calculate_llm_json_peak_estimate(
+    const LlmMemoryConfig& config,
+    const LlmAuxiliaryPreflightView& preflight) noexcept {
+  LlmJsonPeakEstimate estimate;
+  if (config.output_file.empty()) {
+    estimate.valid = true;
+    estimate.reason_code = LlmJsonReason::VALID;
+    return estimate;
+  }
+  if (!preflight.valid || preflight.backend != LlmMemoryBackend::Cpu ||
+      preflight.effective_workers == 0) {
+    estimate.reason_code = LlmJsonReason::INVALID_MODEL_WORK_PLAN;
+    return estimate;
+  }
+  return calculate_json_peak_from_identity_sizes(config, preflight.effective_workers,
+                                                 preflight_identity_size_view(preflight));
+}
+
+LlmJsonPeakEstimate calculate_llm_json_peak_estimate(const LlmMemoryConfig& config,
+                                                     const LlmMemoryWorkPlan& model_plan) noexcept {
+  LlmJsonPeakEstimate estimate;
+  if (config.output_file.empty()) {
+    estimate.valid = true;
+    estimate.reason_code = LlmJsonReason::VALID;
+    return estimate;
+  }
+  if (!model_plan.valid) {
+    estimate.reason_code = LlmJsonReason::INVALID_MODEL_WORK_PLAN;
+    return estimate;
+  }
+  const LlmCpuExecutionPlan* cpu_execution_plan =
+      get_llm_cpu_execution_plan(model_plan);
+  if (cpu_execution_plan == nullptr) {
+    estimate.reason_code = LlmJsonReason::INVALID_MODEL_WORK_PLAN;
+    return estimate;
+  }
+  LlmJsonIdentitySizeView identities;
+  if (!final_identity_size_view(model_plan, identities)) {
+    return estimate;
+  }
+  return calculate_json_peak_from_identity_sizes(config, cpu_execution_plan->effective_workers, identities);
 }
 
 const char* classify_llm_traffic_payload(const LlmGeometry& geometry) noexcept {

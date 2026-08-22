@@ -24,6 +24,7 @@
 #include <pthread/qos.h>
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <cmath>
 #include <condition_variable>
@@ -104,6 +105,8 @@ bool checked_range_end(const LlmByteRange& range, size_t limit, size_t& end) noe
 bool equal_ranges(const LlmByteRange& lhs, const LlmByteRange& rhs) noexcept {
   return lhs.offset_bytes == rhs.offset_bytes && lhs.span_bytes == rhs.span_bytes;
 }
+
+bool checked_add_to(size_t value, size_t& total) noexcept;
 
 bool paged_layout_matches_model(
     const LlmMemoryWorkPlan& plan,
@@ -436,6 +439,233 @@ bool validate_paged_work_plan_layout(const LlmMemoryWorkPlan& plan,
   return weight_cursor == plan.geometry.active_weight_bytes_per_work_unit;
 }
 
+bool validate_prefill_work_plan_layout(
+    const LlmMemoryWorkPlan& plan,
+    const LlmCpuExecutionPlan& cpu_plan) noexcept {
+  if (!plan.valid || !plan.geometry.valid || !plan.memory_budget.valid ||
+      plan.phase != LlmPhase::Prefill ||
+      plan.kv_layout != LlmKvLayout::Contiguous ||
+      !plan.geometry.prefill.has_value() || !plan.prefill_plan.has_value() ||
+      !plan.prefill_plan->valid || !cpu_plan.prefill.has_value() ||
+      !validate_llm_prefill_cpu_execution_evidence(plan) ||
+      cpu_plan.effective_workers == 0 ||
+      cpu_plan.workers.size() != cpu_plan.effective_workers ||
+      plan.weight_layers.size() != plan.geometry.layer_count ||
+      cpu_plan.layer_descriptors_per_worker != plan.geometry.layer_count) {
+    return false;
+  }
+  const LlmPrefillCpuExecutionPlan& prefill = *cpu_plan.prefill;
+  size_t sequences_per_scenario = 0;
+  size_t sequences_per_worker = 0;
+  size_t expected_total_layers = 0;
+  size_t expected_total_sequences = 0;
+  size_t layer_bytes = 0;
+  size_t sequence_bytes = 0;
+  size_t descriptor_bytes = 0;
+  if (!NumericUtils::checked_multiply(
+          plan.geometry.layer_count, plan.geometry.batch_size,
+          sequences_per_scenario) ||
+      sequences_per_scenario !=
+          prefill.sequence_descriptors_per_scenario_per_worker ||
+      !NumericUtils::checked_multiply(sequences_per_scenario,
+                                      kLlmScenarioCount,
+                                      sequences_per_worker) ||
+      sequences_per_worker != cpu_plan.sequence_descriptors_per_worker ||
+      !NumericUtils::checked_multiply(cpu_plan.effective_workers,
+                                      plan.geometry.layer_count,
+                                      expected_total_layers) ||
+      !NumericUtils::checked_multiply(cpu_plan.effective_workers,
+                                      sequences_per_worker,
+                                      expected_total_sequences) ||
+      expected_total_layers != cpu_plan.total_layer_descriptors ||
+      expected_total_sequences != cpu_plan.total_sequence_descriptors ||
+      !NumericUtils::checked_multiply(expected_total_layers,
+                                      sizeof(LlmPrefillLayerDescriptor),
+                                      layer_bytes) ||
+      !NumericUtils::checked_multiply(
+          expected_total_sequences,
+          sizeof(LlmPrefillKvSequenceDescriptor), sequence_bytes) ||
+      !NumericUtils::checked_add(layer_bytes, sequence_bytes,
+                                 descriptor_bytes) ||
+      descriptor_bytes != cpu_plan.descriptor_bytes ||
+      prefill.identity.empty()) {
+    return false;
+  }
+
+  size_t weight_cursor = 0;
+  for (size_t layer = 0; layer < plan.geometry.layer_count; ++layer) {
+    const LlmByteRange& layer_range = plan.weight_layers[layer];
+    size_t layer_end = 0;
+    if (layer_range.span_bytes == 0 ||
+        layer_range.offset_bytes != weight_cursor ||
+        !checked_range_end(layer_range,
+                           plan.geometry.active_weight_bytes_per_work_unit,
+                           layer_end)) {
+      return false;
+    }
+    size_t worker_cursor = layer_range.offset_bytes;
+    for (size_t worker_index = 0;
+         worker_index < cpu_plan.effective_workers; ++worker_index) {
+      const LlmWorkerWorkPlan& worker = cpu_plan.workers[worker_index];
+      if (worker.worker_index != worker_index ||
+          worker.layers.size() != plan.geometry.layer_count ||
+          !worker.sequences.empty() || !worker.paged_assignments.empty() ||
+          worker.prefill_sequences.size() != sequences_per_worker) {
+        return false;
+      }
+      const LlmLayerRangeTemplate& worker_layer = worker.layers[layer];
+      size_t worker_end = 0;
+      if (worker_layer.layer_index != layer ||
+          worker_layer.first_sequence_index !=
+              layer * plan.geometry.batch_size ||
+          worker_layer.sequence_count != plan.geometry.batch_size ||
+          !checked_range_end(worker_layer.weight,
+                             plan.geometry.active_weight_bytes_per_work_unit,
+                             worker_end)) {
+        return false;
+      }
+      if (worker_layer.weight.span_bytes != 0) {
+        if (worker_layer.weight.offset_bytes != worker_cursor ||
+            worker_end > layer_end) {
+          return false;
+        }
+        worker_cursor = worker_end;
+      }
+    }
+    if (worker_cursor != layer_end) {
+      return false;
+    }
+    weight_cursor = layer_end;
+  }
+  if (weight_cursor != plan.geometry.active_weight_bytes_per_work_unit) {
+    return false;
+  }
+
+  constexpr std::array<LlmScenario, kLlmScenarioCount> kScenarios = {
+      LlmScenario::WeightsOnly, LlmScenario::KvOnly,
+      LlmScenario::Mixed};
+  const std::array<size_t, kLlmScenarioCount> expected_totals = {
+      plan.geometry.weight_read_bytes_per_work_unit,
+      plan.geometry.kv_only_effective_model_payload_bytes_per_work_unit,
+      plan.geometry.mixed_effective_model_payload_bytes_per_work_unit};
+  for (size_t scenario_index = 0; scenario_index < kScenarios.size();
+       ++scenario_index) {
+    const LlmPrefillCpuScenarioExecutionPlan& scenario =
+        prefill.scenarios[scenario_index];
+    if (scenario.scenario != kScenarios[scenario_index] ||
+        scenario.identity.empty() ||
+        scenario.worker_accounted_bytes_per_work_unit.size() !=
+            cpu_plan.effective_workers) {
+      return false;
+    }
+    size_t total_accounted = 0;
+    size_t minimum = std::numeric_limits<size_t>::max();
+    size_t maximum = 0;
+    for (size_t bytes : scenario.worker_accounted_bytes_per_work_unit) {
+      if (!checked_add_to(bytes, total_accounted)) {
+        return false;
+      }
+      minimum = std::min(minimum, bytes);
+      maximum = std::max(maximum, bytes);
+    }
+    if (total_accounted != expected_totals[scenario_index] ||
+        scenario.minimum_worker_accounted_bytes_per_work_unit != minimum ||
+        scenario.maximum_worker_accounted_bytes_per_work_unit != maximum ||
+        scenario.worker_accounted_imbalance_bytes_per_work_unit !=
+            maximum - minimum) {
+      return false;
+    }
+
+    for (size_t layer = 0; layer < plan.geometry.layer_count; ++layer) {
+      for (size_t batch = 0; batch < plan.geometry.batch_size; ++batch) {
+        const size_t row = layer * plan.geometry.batch_size + batch;
+        const size_t scenario_base = scenario_index * sequences_per_scenario;
+        size_t owned_tokens = 0;
+        for (size_t worker_index = 0;
+             worker_index < cpu_plan.effective_workers; ++worker_index) {
+          const LlmPrefillKvSequenceRangeTemplate& sequence =
+              cpu_plan.workers[worker_index]
+                  .prefill_sequences[scenario_base + row];
+          if (sequence.layer_index != layer ||
+              sequence.batch_sequence_index != batch ||
+              !equal_ranges(sequence.k_owned, sequence.v_owned)) {
+            return false;
+          }
+          if (scenario_index ==
+              static_cast<size_t>(LlmScenario::WeightsOnly)) {
+            if (sequence.first_token != 0 ||
+                sequence.owned_token_count != 0 ||
+                sequence.k_owned.offset_bytes != 0 ||
+                sequence.k_owned.span_bytes != 0) {
+              return false;
+            }
+            continue;
+          }
+          size_t token_end = 0;
+          size_t expected_row_offset = 0;
+          size_t expected_owned_offset = 0;
+          size_t expected_owned_bytes = 0;
+          size_t range_end = 0;
+          if (sequence.owned_token_count == 0) {
+            if (sequence.first_token != 0 ||
+                sequence.k_owned.offset_bytes != 0 ||
+                sequence.k_owned.span_bytes != 0) {
+              return false;
+            }
+            continue;
+          }
+          if (!NumericUtils::checked_add(sequence.first_token,
+                                         sequence.owned_token_count,
+                                         token_end) ||
+              token_end > plan.geometry.prefill->prompt_tokens ||
+              !NumericUtils::checked_multiply(
+                  row, plan.geometry.k_or_v_sequence_visible_bytes,
+                  expected_row_offset) ||
+              !NumericUtils::checked_multiply(
+                  sequence.first_token,
+                  plan.geometry.k_or_v_record_bytes_per_layer,
+                  expected_owned_offset) ||
+              !NumericUtils::checked_add(expected_row_offset,
+                                         expected_owned_offset,
+                                         expected_owned_offset) ||
+              !NumericUtils::checked_multiply(
+                  sequence.owned_token_count,
+                  plan.geometry.k_or_v_record_bytes_per_layer,
+                  expected_owned_bytes) ||
+              sequence.k_owned.offset_bytes != expected_owned_offset ||
+              sequence.k_owned.span_bytes != expected_owned_bytes ||
+              !checked_range_end(sequence.k_owned,
+                                 plan.geometry.k_mapping_bytes, range_end) ||
+              !checked_add_to(sequence.owned_token_count, owned_tokens)) {
+            return false;
+          }
+          for (size_t previous_worker = 0;
+               previous_worker < worker_index; ++previous_worker) {
+            const LlmPrefillKvSequenceRangeTemplate& previous =
+                cpu_plan.workers[previous_worker]
+                    .prefill_sequences[scenario_base + row];
+            if (previous.owned_token_count == 0) {
+              continue;
+            }
+            const size_t previous_end =
+                previous.first_token + previous.owned_token_count;
+            if (sequence.first_token < previous_end &&
+                previous.first_token < token_end) {
+              return false;
+            }
+          }
+        }
+        if (scenario_index !=
+                static_cast<size_t>(LlmScenario::WeightsOnly) &&
+            owned_tokens != plan.geometry.prefill->prompt_tokens) {
+          return false;
+        }
+      }
+    }
+  }
+  return true;
+}
+
 LlmByteRange intersect_ranges(const LlmByteRange& lhs, const LlmByteRange& rhs) noexcept {
   size_t lhs_end = 0;
   size_t rhs_end = 0;
@@ -462,6 +692,9 @@ bool validate_work_plan_layout(const LlmMemoryWorkPlan& plan) noexcept {
       get_llm_cpu_execution_plan(plan);
   if (cpu_plan != nullptr && plan.kv_layout == LlmKvLayout::Paged) {
     return validate_paged_work_plan_layout(plan, *cpu_plan);
+  }
+  if (cpu_plan != nullptr && plan.phase == LlmPhase::Prefill) {
+    return validate_prefill_work_plan_layout(plan, *cpu_plan);
   }
   size_t weight_and_k_bytes = 0;
   size_t expected_total_data_bytes = 0;
@@ -632,6 +865,8 @@ bool resource_output_is_empty(const LlmExecutionResources& output) noexcept {
          output.layer_descriptors == nullptr && output.sequence_descriptors == nullptr &&
          output.paged_layer_descriptors == nullptr &&
          output.paged_assignment_descriptors == nullptr &&
+         output.prefill_layer_descriptors == nullptr &&
+         output.prefill_sequence_descriptors == nullptr &&
          output.weight_references == nullptr && output.k_references == nullptr && output.v_references == nullptr &&
          output.paged_k_block_references == nullptr &&
          output.paged_v_block_references == nullptr &&
@@ -821,6 +1056,67 @@ bool materialize_descriptors(const LlmMemoryWorkPlan& plan, LlmExecutionResource
     return false;
   }
 
+  if (plan.phase == LlmPhase::Prefill) {
+    if (!cpu_plan->prefill.has_value() ||
+        !plan.geometry.prefill.has_value() ||
+        resources.prefill_layer_descriptors == nullptr ||
+        resources.prefill_sequence_descriptors == nullptr) {
+      return false;
+    }
+    for (size_t worker_index = 0;
+         worker_index < cpu_plan->effective_workers; ++worker_index) {
+      const LlmWorkerWorkPlan& worker = cpu_plan->workers[worker_index];
+      const size_t layer_base =
+          worker_index * cpu_plan->layer_descriptors_per_worker;
+      const size_t sequence_base =
+          worker_index * cpu_plan->sequence_descriptors_per_worker;
+      for (size_t layer = 0;
+           layer < cpu_plan->layer_descriptors_per_worker; ++layer) {
+        const LlmLayerRangeTemplate& source = worker.layers[layer];
+        LlmPrefillLayerDescriptor& destination =
+            resources.prefill_layer_descriptors[layer_base + layer];
+        destination.weight_ptr =
+            source.weight.span_bytes == 0
+                ? nullptr
+                : weight + source.weight.offset_bytes;
+        destination.weight_bytes = source.weight.span_bytes;
+        destination.first_sequence_index = source.first_sequence_index;
+        destination.sequence_count = source.sequence_count;
+        destination.layer_index = source.layer_index;
+        destination.reserved_zero = 0;
+      }
+      for (size_t sequence_index = 0;
+           sequence_index < cpu_plan->sequence_descriptors_per_worker;
+           ++sequence_index) {
+        const LlmPrefillKvSequenceRangeTemplate& source =
+            worker.prefill_sequences[sequence_index];
+        LlmPrefillKvSequenceDescriptor& destination =
+            resources.prefill_sequence_descriptors[sequence_base +
+                                                   sequence_index];
+        destination.k_owned_ptr =
+            source.k_owned.span_bytes == 0
+                ? nullptr
+                : k + source.k_owned.offset_bytes;
+        destination.v_owned_ptr =
+            source.v_owned.span_bytes == 0
+                ? nullptr
+                : v + source.v_owned.offset_bytes;
+        destination.first_token = source.first_token;
+        destination.owned_token_count = source.owned_token_count;
+        destination.prompt_tokens =
+            plan.geometry.prefill->prompt_tokens;
+        destination.attention_query_tile_tokens =
+            plan.geometry.prefill->attention_query_tile_tokens;
+        destination.record_bytes =
+            plan.geometry.k_or_v_record_bytes_per_layer;
+        destination.layer_index = source.layer_index;
+        destination.batch_sequence_index = source.batch_sequence_index;
+        destination.reserved_zero = 0;
+      }
+    }
+    return true;
+  }
+
   if (plan.kv_layout == LlmKvLayout::Paged) {
     if (!cpu_plan->paged.has_value() || resources.block_table == nullptr ||
         resources.paged_layer_descriptors == nullptr ||
@@ -950,7 +1246,8 @@ bool initialize_resources(const LlmMemoryWorkPlan& plan, LlmExecutionResources& 
         return false;
       }
     }
-    if (plan.kv_layout == LlmKvLayout::Paged) {
+    if (plan.kv_layout == LlmKvLayout::Paged ||
+        plan.phase == LlmPhase::Prefill) {
       continue;
     }
     for (size_t sequence_index = 0;
@@ -967,6 +1264,23 @@ bool initialize_resources(const LlmMemoryWorkPlan& plan, LlmExecutionResources& 
           !add_initialized_span(v_reference, evidence.v_bytes, evidence.non_empty_v_spans)) {
         return false;
       }
+    }
+  }
+
+  if (plan.phase == LlmPhase::Prefill) {
+    LlmStaticSpanReference k_reference;
+    LlmStaticSpanReference v_reference;
+    if (!initialize_span(k, plan.geometry.k_mapping_bytes,
+                         plan.k_buffer_seed, 0,
+                         plan.geometry.k_mapping_bytes, k_reference) ||
+        !add_initialized_span(k_reference, evidence.k_bytes,
+                              evidence.non_empty_k_spans) ||
+        !initialize_span(v, plan.geometry.v_mapping_bytes,
+                         plan.v_buffer_seed, 0,
+                         plan.geometry.v_mapping_bytes, v_reference) ||
+        !add_initialized_span(v_reference, evidence.v_bytes,
+                              evidence.non_empty_v_spans)) {
+      return false;
     }
   }
 
@@ -1047,6 +1361,110 @@ bool initialize_resources(const LlmMemoryWorkPlan& plan, LlmExecutionResources& 
 bool materialized_resources_match_plan(const LlmMemoryWorkPlan& plan, const LlmExecutionResources& resources) noexcept {
   const LlmCpuExecutionPlan* const cpu_plan =
       get_llm_cpu_execution_plan(plan);
+  if (cpu_plan != nullptr && plan.phase == LlmPhase::Prefill) {
+    if (!cpu_plan->prefill.has_value() ||
+        !plan.geometry.prefill.has_value() ||
+        !validate_work_plan_layout(plan) || !resources.valid ||
+        resources.model_plan_identity != plan.plan_identity ||
+        !resources.buffers.complete() ||
+        resources.layer_descriptors != nullptr ||
+        resources.sequence_descriptors != nullptr ||
+        resources.paged_layer_descriptors != nullptr ||
+        resources.paged_assignment_descriptors != nullptr ||
+        resources.prefill_layer_descriptors == nullptr ||
+        resources.prefill_sequence_descriptors == nullptr ||
+        resources.weight_references == nullptr ||
+        resources.k_references != nullptr ||
+        resources.v_references != nullptr ||
+        resources.paged_k_block_references != nullptr ||
+        resources.paged_v_block_references != nullptr ||
+        resources.block_table != nullptr ||
+        resources.block_table_entries != 0 ||
+        resources.paged_block_reference_count != 0 ||
+        resources.worker_count != cpu_plan->effective_workers ||
+        resources.layer_descriptors_per_worker !=
+            cpu_plan->layer_descriptors_per_worker ||
+        resources.sequence_descriptors_per_worker !=
+            cpu_plan->sequence_descriptors_per_worker ||
+        resources.total_layer_descriptors !=
+            cpu_plan->total_layer_descriptors ||
+        resources.total_sequence_descriptors !=
+            cpu_plan->total_sequence_descriptors ||
+        !resources.initialization.complete ||
+        resources.initialization.weight_bytes !=
+            plan.geometry.active_weight_bytes_per_work_unit ||
+        resources.initialization.k_bytes != plan.geometry.k_mapping_bytes ||
+        resources.initialization.v_bytes != plan.geometry.v_mapping_bytes) {
+      return false;
+    }
+    const uint8_t* const weight =
+        static_cast<const uint8_t*>(resources.buffers.weight.get());
+    const uint8_t* const k =
+        static_cast<const uint8_t*>(resources.buffers.k.get());
+    const uint8_t* const v =
+        static_cast<const uint8_t*>(resources.buffers.v.get());
+    for (size_t worker_index = 0;
+         worker_index < cpu_plan->effective_workers; ++worker_index) {
+      const LlmWorkerWorkPlan& worker = cpu_plan->workers[worker_index];
+      const size_t layer_base =
+          worker_index * cpu_plan->layer_descriptors_per_worker;
+      const size_t sequence_base =
+          worker_index * cpu_plan->sequence_descriptors_per_worker;
+      for (size_t layer = 0; layer < plan.geometry.layer_count; ++layer) {
+        const LlmLayerRangeTemplate& source = worker.layers[layer];
+        const LlmPrefillLayerDescriptor& descriptor =
+            resources.prefill_layer_descriptors[layer_base + layer];
+        const uint8_t* const expected_weight =
+            source.weight.span_bytes == 0
+                ? nullptr
+                : weight + source.weight.offset_bytes;
+        if (descriptor.weight_ptr != expected_weight ||
+            descriptor.weight_bytes != source.weight.span_bytes ||
+            descriptor.first_sequence_index != source.first_sequence_index ||
+            descriptor.sequence_count != source.sequence_count ||
+            descriptor.layer_index != source.layer_index ||
+            descriptor.reserved_zero != 0 ||
+            resources.weight_references[layer_base + layer].span_bytes !=
+                source.weight.span_bytes) {
+          return false;
+        }
+      }
+      for (size_t sequence_index = 0;
+           sequence_index < cpu_plan->sequence_descriptors_per_worker;
+           ++sequence_index) {
+        const LlmPrefillKvSequenceRangeTemplate& source =
+            worker.prefill_sequences[sequence_index];
+        const LlmPrefillKvSequenceDescriptor& descriptor =
+            resources.prefill_sequence_descriptors[sequence_base +
+                                                   sequence_index];
+        uint8_t* const expected_k =
+            source.k_owned.span_bytes == 0
+                ? nullptr
+                : const_cast<uint8_t*>(k) + source.k_owned.offset_bytes;
+        uint8_t* const expected_v =
+            source.v_owned.span_bytes == 0
+                ? nullptr
+                : const_cast<uint8_t*>(v) + source.v_owned.offset_bytes;
+        if (descriptor.k_owned_ptr != expected_k ||
+            descriptor.v_owned_ptr != expected_v ||
+            descriptor.first_token != source.first_token ||
+            descriptor.owned_token_count != source.owned_token_count ||
+            descriptor.prompt_tokens !=
+                plan.geometry.prefill->prompt_tokens ||
+            descriptor.attention_query_tile_tokens !=
+                plan.geometry.prefill->attention_query_tile_tokens ||
+            descriptor.record_bytes !=
+                plan.geometry.k_or_v_record_bytes_per_layer ||
+            descriptor.layer_index != source.layer_index ||
+            descriptor.batch_sequence_index !=
+                source.batch_sequence_index ||
+            descriptor.reserved_zero != 0) {
+          return false;
+        }
+      }
+    }
+    return true;
+  }
   if (cpu_plan != nullptr && plan.kv_layout == LlmKvLayout::Paged) {
     if (!cpu_plan->paged.has_value() ||
         !validate_work_plan_layout(plan) || !resources.valid ||
@@ -1418,6 +1836,308 @@ bool add_checksum_bytes(uint64_t bytes, uint64_t& total) noexcept {
   return true;
 }
 
+using LlmWide = unsigned __int128;
+
+LlmWide prefill_wide_floor_sum(LlmWide count, LlmWide denominator,
+                               LlmWide slope, LlmWide intercept) noexcept {
+  LlmWide answer = 0;
+  while (true) {
+    if (slope >= denominator) {
+      answer += (count * (count - 1) / 2) * (slope / denominator);
+      slope %= denominator;
+    }
+    if (intercept >= denominator) {
+      answer += count * (intercept / denominator);
+      intercept %= denominator;
+    }
+    const LlmWide maximum = slope * count + intercept;
+    if (maximum < denominator) {
+      return answer;
+    }
+    count = maximum / denominator;
+    intercept = maximum % denominator;
+    std::swap(denominator, slope);
+  }
+}
+
+uint64_t prefill_affine_extracted_task_sum(
+    uint64_t first_value, size_t operation_count, unsigned int shift,
+    unsigned int bit_count) noexcept {
+  constexpr uint64_t kOperationDelta = 0x9E3779B97F4A7C15ULL;
+  const LlmWide count = operation_count;
+  const LlmWide modulus = LlmWide{1} << 64;
+  const LlmWide wraps = prefill_wide_floor_sum(
+      count, modulus, kOperationDelta, first_value);
+  const auto quotient_sum = [&](unsigned int quotient_shift) {
+    if (quotient_shift == 64) {
+      return LlmWide{0};
+    }
+    const LlmWide denominator = LlmWide{1} << quotient_shift;
+    return prefill_wide_floor_sum(count, denominator, kOperationDelta,
+                                  first_value) -
+           (modulus / denominator) * wraps;
+  };
+  const LlmWide low = quotient_sum(shift);
+  const LlmWide high = quotient_sum(shift + bit_count);
+  return static_cast<uint64_t>(low - (LlmWide{1} << bit_count) * high);
+}
+
+bool calculate_prefill_byte_range_task_checksum(
+    uint64_t scenario_seed, size_t operation_count, size_t layer_index,
+    size_t batch_index, LlmPrefillKvDomain domain, size_t first_byte,
+    size_t byte_count, uint64_t& even_sum, uint64_t& odd_sum) noexcept {
+  if (operation_count == 0) {
+    return false;
+  }
+  size_t end_byte = 0;
+  if (!NumericUtils::checked_add(first_byte, byte_count, end_byte)) {
+    return false;
+  }
+  if (byte_count == 0) {
+    return true;
+  }
+  size_t first_word = first_byte / sizeof(uint64_t);
+  const size_t last_word = (end_byte - 1) / sizeof(uint64_t);
+  const auto add_partial = [&](size_t word_index, unsigned int byte_shift,
+                               unsigned int bytes) {
+    const uint64_t first_value = llm_prefill_affine64_word(
+        scenario_seed, 0, layer_index, batch_index, domain, word_index);
+    const uint64_t extracted = prefill_affine_extracted_task_sum(
+        first_value, operation_count, byte_shift * 8U, bytes * 8U);
+    const uint64_t contribution = extracted << (byte_shift * 8U);
+    if ((word_index & 1U) == 0) {
+      even_sum += contribution;
+    } else {
+      odd_sum += contribution;
+    }
+  };
+
+  const unsigned int first_shift =
+      static_cast<unsigned int>(first_byte % sizeof(uint64_t));
+  if (first_word == last_word) {
+    add_partial(first_word, first_shift,
+                static_cast<unsigned int>(byte_count));
+    return true;
+  }
+  if (first_shift != 0) {
+    add_partial(first_word, first_shift,
+                static_cast<unsigned int>(sizeof(uint64_t) - first_shift));
+    ++first_word;
+  }
+  const size_t complete_word_end = end_byte / sizeof(uint64_t);
+  if (complete_word_end > first_word) {
+    const LlmPrefillAffine64Checksum complete =
+        calculate_llm_prefill_affine64_task_checksum(
+            scenario_seed, operation_count, layer_index, batch_index, domain,
+            first_word, complete_word_end - first_word);
+    if (!complete.valid) {
+      return false;
+    }
+    even_sum += complete.even_logical_word_sum;
+    odd_sum += complete.odd_logical_word_sum;
+  }
+  const unsigned int final_bytes =
+      static_cast<unsigned int>(end_byte % sizeof(uint64_t));
+  if (final_bytes != 0) {
+    add_partial(last_word, 0, final_bytes);
+  }
+  return true;
+}
+
+LlmExpectedChecksumResult calculate_prefill_expected_checksums(
+    const LlmMemoryWorkPlan& model_plan,
+    const LlmScenarioWorkPlan& scenario_plan,
+    const LlmExecutionResources& resources) {
+  LlmExpectedChecksumResult result;
+  const LlmCpuExecutionPlan* const cpu_plan =
+      get_llm_cpu_execution_plan(model_plan);
+  if (cpu_plan == nullptr || !cpu_plan->prefill.has_value() ||
+      !model_plan.geometry.prefill.has_value() ||
+      !materialized_resources_match_plan(model_plan, resources) ||
+      !scenario_plan_matches_model(model_plan, scenario_plan)) {
+    result.reason_code = LlmExecutorReason::INVALID_RESOURCES;
+    return result;
+  }
+  const bool reads_weight =
+      (llm_scenario_flags(scenario_plan.scenario) &
+       kLlmScenarioFlagWeight) != 0;
+  const bool reads_kv =
+      (llm_scenario_flags(scenario_plan.scenario) &
+       kLlmScenarioFlagKv) != 0;
+  const size_t per_scenario =
+      cpu_plan->prefill->sequence_descriptors_per_scenario_per_worker;
+  const size_t scenario_base =
+      static_cast<size_t>(scenario_plan.scenario) * per_scenario;
+  result.workers.resize(cpu_plan->effective_workers);
+  uint64_t total_weight_bytes = 0;
+  uint64_t total_k_bytes = 0;
+  uint64_t total_v_bytes = 0;
+  for (size_t worker_index = 0;
+       worker_index < cpu_plan->effective_workers; ++worker_index) {
+    LlmWorkerChecksum& checksum = result.workers[worker_index];
+    checksum.weight = initial_llm_read_checksum(LlmChecksumComponent::Weight);
+    checksum.k = {};
+    checksum.v = {};
+    const LlmStaticSpanReference* const weight_references =
+        resources.worker_weight_references(worker_index);
+    if (weight_references == nullptr) {
+      result.reason_code = LlmExecutorReason::INVALID_RESOURCES;
+      result.workers.clear();
+      return result;
+    }
+    if (reads_weight) {
+      for (size_t operation = 0; operation < scenario_plan.work_units;
+           ++operation) {
+        for (size_t layer = 0; layer < model_plan.geometry.layer_count;
+             ++layer) {
+          if (!absorb_reference(checksum.weight,
+                                weight_references[layer])) {
+            result.reason_code =
+                LlmExecutorReason::EXPECTED_CHECKSUM_OVERFLOW;
+            result.workers.clear();
+            return result;
+          }
+        }
+      }
+    }
+    if (reads_kv) {
+      const LlmWorkerWorkPlan& worker = cpu_plan->workers[worker_index];
+      for (size_t row = 0; row < per_scenario; ++row) {
+        const LlmPrefillKvSequenceRangeTemplate& sequence =
+            worker.prefill_sequences[scenario_base + row];
+        if (sequence.owned_token_count == 0) {
+          continue;
+        }
+        size_t first_byte = 0;
+        if (!NumericUtils::checked_multiply(
+                sequence.first_token,
+                model_plan.geometry.k_or_v_record_bytes_per_layer,
+                first_byte)) {
+          result.reason_code =
+              LlmExecutorReason::EXPECTED_CHECKSUM_OVERFLOW;
+          result.workers.clear();
+          return result;
+        }
+        size_t owned_end = 0;
+        if (!NumericUtils::checked_add(sequence.first_token,
+                                       sequence.owned_token_count,
+                                       owned_end)) {
+          result.reason_code =
+              LlmExecutorReason::EXPECTED_CHECKSUM_OVERFLOW;
+          result.workers.clear();
+          return result;
+        }
+        const size_t query_tile_tokens =
+            model_plan.geometry.prefill->attention_query_tile_tokens;
+        size_t tile_index = sequence.first_token / query_tile_tokens;
+        size_t tile_end = tile_index * query_tile_tokens;
+        while (tile_end < owned_end) {
+          tile_end += std::min(query_tile_tokens,
+                               model_plan.geometry.prefill->prompt_tokens -
+                                   tile_end);
+          const size_t visible_owned_tokens =
+              std::min(tile_end, owned_end) - sequence.first_token;
+          size_t span_bytes = 0;
+          if (!NumericUtils::checked_multiply(
+                  visible_owned_tokens,
+                  model_plan.geometry.k_or_v_record_bytes_per_layer,
+                  span_bytes)) {
+            result.reason_code =
+                LlmExecutorReason::EXPECTED_CHECKSUM_OVERFLOW;
+            result.workers.clear();
+            return result;
+          }
+          const size_t visit_multiplicity =
+              tile_end >= owned_end
+                  ? model_plan.geometry.prefill->tile_count - tile_index
+                  : size_t{1};
+          uint64_t k_even = 0;
+          uint64_t k_odd = 0;
+          uint64_t v_even = 0;
+          uint64_t v_odd = 0;
+          size_t span_bytes_per_task = 0;
+          size_t repeated_span_bytes = 0;
+          size_t repeated_span_count = 0;
+          if (!calculate_prefill_byte_range_task_checksum(
+                  scenario_plan.scenario_seed, scenario_plan.work_units,
+                  sequence.layer_index, sequence.batch_sequence_index,
+                  LlmPrefillKvDomain::K, first_byte, span_bytes, k_even,
+                  k_odd) ||
+              !calculate_prefill_byte_range_task_checksum(
+                  scenario_plan.scenario_seed, scenario_plan.work_units,
+                  sequence.layer_index, sequence.batch_sequence_index,
+                  LlmPrefillKvDomain::V, first_byte, span_bytes, v_even,
+                  v_odd) ||
+              !NumericUtils::checked_multiply(
+                  span_bytes, scenario_plan.work_units,
+                  span_bytes_per_task) ||
+              !NumericUtils::checked_multiply(
+                  span_bytes_per_task, visit_multiplicity,
+                  repeated_span_bytes) ||
+              !NumericUtils::checked_multiply(
+                  scenario_plan.work_units, visit_multiplicity,
+                  repeated_span_count) ||
+              repeated_span_bytes > std::numeric_limits<uint64_t>::max() ||
+              repeated_span_count > std::numeric_limits<uint64_t>::max() ||
+              checksum.k.exact_bytes_read >
+                  std::numeric_limits<uint64_t>::max() -
+                      repeated_span_bytes ||
+              checksum.v.exact_bytes_read >
+                  std::numeric_limits<uint64_t>::max() -
+                      repeated_span_bytes ||
+              checksum.k.span_count >
+                  std::numeric_limits<uint64_t>::max() -
+                      repeated_span_count ||
+              checksum.v.span_count >
+                  std::numeric_limits<uint64_t>::max() -
+                      repeated_span_count) {
+            result.reason_code =
+                LlmExecutorReason::EXPECTED_CHECKSUM_OVERFLOW;
+            result.workers.clear();
+            return result;
+          }
+          const uint64_t multiplicity =
+              static_cast<uint64_t>(visit_multiplicity);
+          checksum.k.state_a += k_even * multiplicity;
+          checksum.k.state_b += k_odd * multiplicity;
+          checksum.v.state_a += v_even * multiplicity;
+          checksum.v.state_b += v_odd * multiplicity;
+          checksum.k.exact_bytes_read += repeated_span_bytes;
+          checksum.v.exact_bytes_read += repeated_span_bytes;
+          checksum.k.span_count += repeated_span_count;
+          checksum.v.span_count += repeated_span_count;
+          if (tile_end >= owned_end) {
+            break;
+          }
+          ++tile_index;
+        }
+      }
+    }
+    if (!add_checksum_bytes(checksum.weight.exact_bytes_read,
+                            total_weight_bytes) ||
+        !add_checksum_bytes(checksum.k.exact_bytes_read, total_k_bytes) ||
+        !add_checksum_bytes(checksum.v.exact_bytes_read, total_v_bytes)) {
+      result.reason_code = LlmExecutorReason::EXPECTED_CHECKSUM_OVERFLOW;
+      result.workers.clear();
+      return result;
+    }
+  }
+  uint64_t total_kv_bytes = 0;
+  if (!add_checksum_bytes(total_k_bytes, total_kv_bytes) ||
+      !add_checksum_bytes(total_v_bytes, total_kv_bytes) ||
+      total_weight_bytes != scenario_plan.weight_read_bytes ||
+      total_kv_bytes != scenario_plan.kv_read_bytes) {
+    result.reason_code = LlmExecutorReason::INVALID_DESCRIPTOR_LAYOUT;
+    result.workers.clear();
+    return result;
+  }
+  result.run_checksum =
+      fold_llm_worker_checksums(result.workers.data(), result.workers.size());
+  result.valid = true;
+  result.reason_code = LlmExecutorReason::VALID;
+  return result;
+}
+
 LlmExpectedChecksumResult calculate_paged_expected_checksums(
     const LlmMemoryWorkPlan& model_plan,
     const LlmScenarioWorkPlan& scenario_plan,
@@ -1659,6 +2379,106 @@ bool validate_paged_post_execution(
   return true;
 }
 
+bool validate_prefill_post_execution(
+    const LlmMemoryWorkPlan& model_plan,
+    const LlmScenarioWorkPlan& scenario_plan,
+    const LlmExecutionResources& resources) noexcept {
+  const LlmCpuExecutionPlan* const cpu_plan =
+      get_llm_cpu_execution_plan(model_plan);
+  if (model_plan.phase != LlmPhase::Prefill ||
+      model_plan.kv_layout != LlmKvLayout::Contiguous ||
+      !model_plan.geometry.prefill.has_value() ||
+      cpu_plan == nullptr || !cpu_plan->prefill.has_value() ||
+      !resources.buffers.complete() || scenario_plan.work_units == 0) {
+    return false;
+  }
+  if ((llm_scenario_flags(scenario_plan.scenario) &
+       kLlmScenarioFlagKv) == 0) {
+    return true;
+  }
+  const uint8_t* const k =
+      static_cast<const uint8_t*>(resources.buffers.k.get());
+  const uint8_t* const v =
+      static_cast<const uint8_t*>(resources.buffers.v.get());
+  const size_t final_operation = scenario_plan.work_units - 1;
+  const size_t scenario_index = static_cast<size_t>(scenario_plan.scenario);
+  if (scenario_index >= kLlmScenarioCount) {
+    return false;
+  }
+  const size_t per_scenario =
+      cpu_plan->prefill->sequence_descriptors_per_scenario_per_worker;
+  const size_t scenario_base = scenario_index * per_scenario;
+  for (size_t layer = 0; layer < model_plan.geometry.layer_count; ++layer) {
+    for (size_t batch = 0; batch < model_plan.geometry.batch_size; ++batch) {
+      size_t row = 0;
+      size_t row_offset = 0;
+      if (!NumericUtils::checked_multiply(layer,
+                                          model_plan.geometry.batch_size,
+                                          row) ||
+          !NumericUtils::checked_add(row, batch, row) ||
+          !NumericUtils::checked_multiply(
+              row, model_plan.geometry.k_or_v_sequence_visible_bytes,
+              row_offset)) {
+        return false;
+      }
+      for (size_t worker = 0; worker < cpu_plan->effective_workers;
+           ++worker) {
+        const LlmPrefillKvSequenceRangeTemplate& sequence =
+            cpu_plan->workers[worker]
+                .prefill_sequences[scenario_base + row];
+        if (sequence.owned_token_count == 0) {
+          continue;
+        }
+        size_t first_byte = 0;
+        size_t owned_bytes = 0;
+        size_t end_byte = 0;
+        if (sequence.layer_index != layer ||
+            sequence.batch_sequence_index != batch ||
+            !NumericUtils::checked_multiply(
+                sequence.first_token,
+                model_plan.geometry.k_or_v_record_bytes_per_layer,
+                first_byte) ||
+            !NumericUtils::checked_multiply(
+                sequence.owned_token_count,
+                model_plan.geometry.k_or_v_record_bytes_per_layer,
+                owned_bytes) ||
+            !NumericUtils::checked_add(first_byte, owned_bytes, end_byte) ||
+            owned_bytes == 0 ||
+            end_byte >
+                model_plan.geometry.k_or_v_sequence_visible_bytes) {
+          return false;
+        }
+        const size_t midpoint = first_byte + owned_bytes / 2;
+        const std::array<size_t, 3> representative_words = {
+            first_byte / sizeof(uint64_t),
+            midpoint / sizeof(uint64_t),
+            (end_byte - 1) / sizeof(uint64_t)};
+        for (size_t logical_word : representative_words) {
+          const size_t word_start = logical_word * sizeof(uint64_t);
+          const size_t sample_start = std::max(first_byte, word_start);
+          const size_t sample_end =
+              std::min(end_byte, word_start + sizeof(uint64_t));
+          for (size_t logical_byte = sample_start;
+               logical_byte < sample_end; ++logical_byte) {
+            const size_t offset = row_offset + logical_byte;
+            if (k[offset] != llm_prefill_affine64_byte(
+                                 scenario_plan.scenario_seed,
+                                 final_operation, layer, batch,
+                                 LlmPrefillKvDomain::K, logical_byte) ||
+                v[offset] != llm_prefill_affine64_byte(
+                                 scenario_plan.scenario_seed,
+                                 final_operation, layer, batch,
+                                 LlmPrefillKvDomain::V, logical_byte)) {
+              return false;
+            }
+          }
+        }
+      }
+    }
+  }
+  return true;
+}
+
 /** Restore only the mutable decode append slots before an untimed task. */
 bool reset_paged_append_slots(
     const LlmMemoryWorkPlan& model_plan,
@@ -1761,6 +2581,14 @@ bool production_kernel_invoke(void*, const LlmKernelInvocation& invocation) noex
   if (invocation.output == nullptr) {
     return false;
   }
+  if (invocation.phase == LlmPhase::Prefill) {
+    llm_prefill_memory_asm(
+        invocation.prefill_layers, invocation.prefill_sequences,
+        invocation.layer_count, invocation.work_unit_count,
+        invocation.scenario_flags, invocation.scenario_seed,
+        invocation.output);
+    return true;
+  }
   if (invocation.kv_layout == LlmKvLayout::Paged) {
     llm_decode_memory_paged_asm(
         invocation.paged_layers, invocation.paged_assignments,
@@ -1852,6 +2680,32 @@ LlmExecutionResources::worker_paged_assignments(
   }
   return paged_assignment_descriptors.get() +
          worker_index * sequence_descriptors_per_worker;
+}
+
+const LlmPrefillLayerDescriptor*
+LlmExecutionResources::worker_prefill_layers(size_t worker_index) const noexcept {
+  if (worker_index >= worker_count || prefill_layer_descriptors == nullptr) {
+    return nullptr;
+  }
+  return prefill_layer_descriptors.get() +
+         worker_index * layer_descriptors_per_worker;
+}
+
+const LlmPrefillKvSequenceDescriptor*
+LlmExecutionResources::worker_prefill_sequences(
+    size_t worker_index, LlmScenario scenario) const noexcept {
+  const size_t scenario_index = static_cast<size_t>(scenario);
+  if (worker_index >= worker_count ||
+      scenario_index >= kLlmScenarioCount ||
+      prefill_sequence_descriptors == nullptr ||
+      sequence_descriptors_per_worker % kLlmScenarioCount != 0) {
+    return nullptr;
+  }
+  const size_t per_scenario =
+      sequence_descriptors_per_worker / kLlmScenarioCount;
+  return prefill_sequence_descriptors.get() +
+         worker_index * sequence_descriptors_per_worker +
+         scenario_index * per_scenario;
 }
 
 uint64_t llm_scenario_flags(LlmScenario scenario) noexcept {
@@ -2004,7 +2858,9 @@ LlmExecutorAuxiliaryEstimate calculate_llm_executor_auxiliary_estimate(
   preflight.total_sequence_descriptors =
       cpu_plan->total_sequence_descriptors;
   preflight.k_or_v_static_reference_count =
-      cpu_plan->paged.has_value()
+      plan.phase == LlmPhase::Prefill
+          ? 0
+      : cpu_plan->paged.has_value()
           ? cpu_plan->paged->layout.total_physical_blocks
           : cpu_plan->total_sequence_descriptors;
   return calculate_llm_executor_auxiliary_estimate(preflight);
@@ -2089,7 +2945,14 @@ LlmResourcePreparationResult prepare_llm_execution_resources(const LlmMemoryWork
     candidate.weight_references.reset(
         new (std::nothrow)
             LlmStaticSpanReference[cpu_plan->total_layer_descriptors]);
-    if (plan.kv_layout == LlmKvLayout::Paged &&
+    if (plan.phase == LlmPhase::Prefill && cpu_plan->prefill.has_value()) {
+      candidate.prefill_layer_descriptors.reset(
+          new (std::nothrow)
+              LlmPrefillLayerDescriptor[cpu_plan->total_layer_descriptors]);
+      candidate.prefill_sequence_descriptors.reset(
+          new (std::nothrow) LlmPrefillKvSequenceDescriptor[
+              cpu_plan->total_sequence_descriptors]);
+    } else if (plan.kv_layout == LlmKvLayout::Paged &&
         cpu_plan->paged.has_value()) {
       candidate.paged_layer_descriptors.reset(
           new (std::nothrow)
@@ -2124,7 +2987,10 @@ LlmResourcePreparationResult prepare_llm_execution_resources(const LlmMemoryWork
     }
     const bool descriptor_allocation_failed =
         candidate.weight_references == nullptr ||
-        (plan.kv_layout == LlmKvLayout::Paged
+        (plan.phase == LlmPhase::Prefill
+             ? candidate.prefill_layer_descriptors == nullptr ||
+                   candidate.prefill_sequence_descriptors == nullptr
+         : plan.kv_layout == LlmKvLayout::Paged
              ? candidate.paged_layer_descriptors == nullptr ||
                    candidate.paged_assignment_descriptors == nullptr ||
                    candidate.paged_k_block_references == nullptr ||
@@ -2195,6 +3061,10 @@ LlmExpectedChecksumResult calculate_llm_expected_checksums(const LlmMemoryWorkPl
     if (!scenario_plan_matches_model(model_plan, scenario_plan)) {
       result.reason_code = LlmExecutorReason::SCENARIO_PLAN_MISMATCH;
       return result;
+    }
+    if (model_plan.phase == LlmPhase::Prefill) {
+      return calculate_prefill_expected_checksums(
+          model_plan, scenario_plan, resources);
     }
     if (model_plan.kv_layout == LlmKvLayout::Paged) {
       return calculate_paged_expected_checksums(model_plan, scenario_plan,
@@ -2389,10 +3259,18 @@ LlmExecutorResult execute_llm_scenario(const LlmMemoryWorkPlan& model_plan, cons
           invocation.output = &result.actual_checksums[worker_index];
           invocation.worker_index = worker_index;
           invocation.kv_layout = model_plan.kv_layout;
+          invocation.phase = model_plan.phase;
           invocation.paged_layers =
               resources.worker_paged_layers(worker_index);
           invocation.paged_assignments =
               resources.worker_paged_assignments(worker_index);
+          invocation.prefill_layers =
+              resources.worker_prefill_layers(worker_index);
+          invocation.prefill_sequences =
+              (invocation.scenario_flags & kLlmScenarioFlagKv) == 0
+                  ? nullptr
+                  : resources.worker_prefill_sequences(
+                        worker_index, scenario_plan.scenario);
           observe_event(test_control, LlmExecutorEvent::KernelStarted, worker_index);
           bool succeeded = false;
           try {
@@ -2510,14 +3388,21 @@ LlmExecutorResult execute_llm_scenario(const LlmMemoryWorkPlan& model_plan, cons
 
     result.post_validation_evaluated = true;
     result.post_validation_valid =
-        model_plan.kv_layout != LlmKvLayout::Paged ||
-        validate_paged_post_execution(model_plan, scenario_plan, resources);
+        model_plan.phase == LlmPhase::Prefill
+            ? validate_prefill_post_execution(model_plan, scenario_plan,
+                                               resources)
+        : model_plan.kv_layout != LlmKvLayout::Paged ||
+              validate_paged_post_execution(model_plan, scenario_plan,
+                                             resources);
     if (!result.checksum_valid) {
       result.reason_code = LlmExecutorReason::CHECKSUM_MISMATCH;
       return result;
     }
     if (!result.post_validation_valid) {
-      result.reason_code = LlmExecutorReason::PAGED_POST_VALIDATION_FAILED;
+      result.reason_code =
+          model_plan.phase == LlmPhase::Prefill
+              ? LlmExecutorReason::PREFILL_POST_VALIDATION_FAILED
+              : LlmExecutorReason::PAGED_POST_VALIDATION_FAILED;
       return result;
     }
 

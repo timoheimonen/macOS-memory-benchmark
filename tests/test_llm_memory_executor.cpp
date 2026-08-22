@@ -90,6 +90,19 @@ LlmGeometryRequest paged_geometry(size_t visible_tokens,
   return geometry;
 }
 
+LlmGeometryRequest prefill_geometry(size_t prompt_tokens = 7,
+                                    size_t query_tile_tokens = 3,
+                                    size_t record_bytes = 33,
+                                    size_t layers = 2,
+                                    size_t batch = 2) {
+  LlmGeometryRequest geometry{257, layers, 1, 1, record_bytes, 1, 0,
+                              batch};
+  geometry.phase = LlmPhase::Prefill;
+  geometry.prompt_tokens = prompt_tokens;
+  geometry.attention_query_tile_tokens = query_tile_tokens;
+  return geometry;
+}
+
 uint8_t expected_buffer_byte(uint64_t seed, size_t absolute_byte) {
   const uint64_t word = seed + kGolden * (static_cast<uint64_t>(absolute_byte / 8) + 1);
   return static_cast<uint8_t>(word >> (8 * (absolute_byte % 8)));
@@ -289,6 +302,45 @@ struct PagedCorruptionContext {
   PagedCorruption kind = PagedCorruption::Append;
   bool corrupted = false;
 };
+
+struct PrefillCorruptionContext {
+  std::atomic<bool> corrupted{false};
+};
+
+bool prefill_corrupting_kernel(void* opaque,
+                               const LlmKernelInvocation& invocation) {
+  auto& context = *static_cast<PrefillCorruptionContext*>(opaque);
+  if (invocation.phase != LlmPhase::Prefill ||
+      invocation.prefill_layers == nullptr ||
+      invocation.prefill_sequences == nullptr || invocation.output == nullptr) {
+    return false;
+  }
+  llm_prefill_memory_asm(
+      invocation.prefill_layers, invocation.prefill_sequences,
+      invocation.layer_count, invocation.work_unit_count,
+      invocation.scenario_flags, invocation.scenario_seed,
+      invocation.output);
+  bool expected = false;
+  if (context.corrupted.compare_exchange_strong(
+          expected, true, std::memory_order_acq_rel)) {
+    for (size_t layer = 0; layer < invocation.layer_count; ++layer) {
+      const LlmPrefillLayerDescriptor& layer_descriptor =
+          invocation.prefill_layers[layer];
+      for (size_t local = 0; local < layer_descriptor.sequence_count;
+           ++local) {
+        const LlmPrefillKvSequenceDescriptor& sequence =
+            invocation.prefill_sequences[
+                layer_descriptor.first_sequence_index + local];
+        if (sequence.owned_token_count != 0) {
+          sequence.k_owned_ptr[0] ^= 0x80;
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+  return true;
+}
 
 bool paged_corrupting_kernel(void* opaque,
                              const LlmKernelInvocation& invocation) {
@@ -519,6 +571,304 @@ TEST_F(LlmMemoryExecutorTest, PreparationMaterializesExactDescriptorsPatternsAnd
   EXPECT_EQ(state.map_calls, maps_before_reprepare);
   EXPECT_EQ(resources.buffers.weight.get(), weight);
   EXPECT_TRUE(resources.valid);
+}
+
+TEST_F(LlmMemoryExecutorTest,
+       PrefillPreparationMaterializesScenarioSetsAndWeightsOnlyUsesNullKv) {
+  const LlmMemoryWorkPlan plan =
+      build_executor_ready_plan(prefill_geometry(), 3);
+  ASSERT_TRUE(plan.valid) << plan.reason_code;
+  const LlmCpuExecutionPlan& cpu_plan = cpu_execution_plan(plan);
+  ASSERT_TRUE(cpu_plan.prefill.has_value());
+  const size_t rows =
+      plan.geometry.layer_count * plan.geometry.batch_size;
+  ASSERT_EQ(cpu_plan.sequence_descriptors_per_worker,
+            rows * kLlmScenarioCount);
+
+  LlmExecutionResources resources;
+  const LlmResourcePreparationResult prepared =
+      prepare_llm_execution_resources(plan, resources);
+  ASSERT_TRUE(prepared.valid) << prepared.reason_code;
+  EXPECT_EQ(resources.layer_descriptors, nullptr);
+  EXPECT_EQ(resources.sequence_descriptors, nullptr);
+  EXPECT_EQ(resources.paged_layer_descriptors, nullptr);
+  EXPECT_EQ(resources.paged_assignment_descriptors, nullptr);
+  ASSERT_NE(resources.prefill_layer_descriptors, nullptr);
+  ASSERT_NE(resources.prefill_sequence_descriptors, nullptr);
+  EXPECT_NE(resources.weight_references, nullptr);
+  EXPECT_EQ(resources.k_references, nullptr);
+  EXPECT_EQ(resources.v_references, nullptr);
+  EXPECT_EQ(resources.initialization.k_bytes,
+            plan.geometry.k_mapping_bytes);
+  EXPECT_EQ(resources.initialization.v_bytes,
+            plan.geometry.v_mapping_bytes);
+
+  const auto* const k =
+      static_cast<const uint8_t*>(resources.buffers.k.get());
+  const auto* const v =
+      static_cast<const uint8_t*>(resources.buffers.v.get());
+  for (size_t worker = 0; worker < cpu_plan.effective_workers; ++worker) {
+    const LlmPrefillLayerDescriptor* const layers =
+        resources.worker_prefill_layers(worker);
+    ASSERT_NE(layers, nullptr);
+    for (size_t layer = 0; layer < plan.geometry.layer_count; ++layer) {
+      EXPECT_EQ(layers[layer].first_sequence_index,
+                layer * plan.geometry.batch_size);
+      EXPECT_EQ(layers[layer].sequence_count,
+                plan.geometry.batch_size);
+      EXPECT_EQ(layers[layer].layer_index, layer);
+      EXPECT_EQ(layers[layer].reserved_zero, 0u);
+    }
+    const LlmPrefillKvSequenceDescriptor* const weights =
+        resources.worker_prefill_sequences(worker,
+                                           LlmScenario::WeightsOnly);
+    const LlmPrefillKvSequenceDescriptor* const kv =
+        resources.worker_prefill_sequences(worker, LlmScenario::KvOnly);
+    const LlmPrefillKvSequenceDescriptor* const mixed =
+        resources.worker_prefill_sequences(worker, LlmScenario::Mixed);
+    ASSERT_NE(weights, nullptr);
+    ASSERT_NE(kv, nullptr);
+    ASSERT_NE(mixed, nullptr);
+    EXPECT_EQ(kv - weights, static_cast<ptrdiff_t>(rows));
+    EXPECT_EQ(mixed - kv, static_cast<ptrdiff_t>(rows));
+    for (size_t row = 0; row < rows; ++row) {
+      EXPECT_EQ(weights[row].k_owned_ptr, nullptr);
+      EXPECT_EQ(weights[row].v_owned_ptr, nullptr);
+      EXPECT_EQ(weights[row].owned_token_count, 0u);
+      for (const LlmPrefillKvSequenceDescriptor* descriptor :
+           {kv + row, mixed + row}) {
+        const size_t descriptor_end =
+            descriptor->first_token + descriptor->owned_token_count;
+        EXPECT_LE(descriptor_end,
+                  plan.geometry.prefill->prompt_tokens);
+        EXPECT_EQ(descriptor->prompt_tokens,
+                  plan.geometry.prefill->prompt_tokens);
+        EXPECT_EQ(descriptor->attention_query_tile_tokens,
+                  plan.geometry.prefill->attention_query_tile_tokens);
+        EXPECT_EQ(descriptor->record_bytes,
+                  plan.geometry.k_or_v_record_bytes_per_layer);
+        EXPECT_EQ(descriptor->reserved_zero, 0u);
+        if (descriptor->owned_token_count != 0) {
+          EXPECT_GE(descriptor->k_owned_ptr, k);
+          EXPECT_LT(descriptor->k_owned_ptr,
+                    k + plan.geometry.k_mapping_bytes);
+          EXPECT_GE(descriptor->v_owned_ptr, v);
+          EXPECT_LT(descriptor->v_owned_ptr,
+                    v + plan.geometry.v_mapping_bytes);
+        }
+      }
+    }
+  }
+
+  const LlmScenarioWorkPlan scenario = build_llm_scenario_work_plan(
+      plan, LlmScenario::WeightsOnly, 2, true);
+  ASSERT_TRUE(scenario.valid) << scenario.reason_code;
+  const LlmExpectedChecksumResult expected =
+      calculate_llm_expected_checksums(plan, scenario, resources);
+  ASSERT_TRUE(expected.valid) << expected.reason_code;
+  ScopedExecutorTimer timer_scope;
+  auto timer = HighResTimer::create();
+  ASSERT_TRUE(timer.has_value());
+  FakeKernelContext context;
+  context.expected = &expected.workers;
+  const LlmExecutorResult result = execute_llm_scenario(
+      plan, scenario, resources, *timer, {fake_kernel, &context});
+  ASSERT_TRUE(result.valid) << result.reason_code;
+  ASSERT_EQ(context.invocations.size(), cpu_plan.effective_workers);
+  for (const LlmKernelInvocation& invocation : context.invocations) {
+    EXPECT_EQ(invocation.phase, LlmPhase::Prefill);
+    EXPECT_EQ(invocation.layers, nullptr);
+    EXPECT_EQ(invocation.sequences, nullptr);
+    EXPECT_EQ(invocation.paged_layers, nullptr);
+    EXPECT_EQ(invocation.paged_assignments, nullptr);
+    EXPECT_EQ(invocation.prefill_layers,
+              resources.worker_prefill_layers(invocation.worker_index));
+    EXPECT_EQ(invocation.prefill_sequences, nullptr);
+    EXPECT_EQ(invocation.work_unit_count, 2u);
+    EXPECT_EQ(invocation.scenario_flags, kLlmScenarioFlagWeight);
+  }
+}
+
+TEST_F(LlmMemoryExecutorTest,
+       PrefillNoallocCanonicalValidatorAcceptsExactTileBoundaries) {
+  struct Case {
+    size_t prompt_tokens;
+    size_t query_tile_tokens;
+    size_t record_bytes;
+    size_t workers;
+  };
+  constexpr std::array<Case, 3> kCases = {
+      {{4, 1, 31, 1}, {3, 3, 32, 3}, {5, 2, 33, 3}}};
+  for (const Case& test_case : kCases) {
+    SCOPED_TRACE(::testing::Message()
+                 << "P=" << test_case.prompt_tokens
+                 << " Q=" << test_case.query_tile_tokens
+                 << " R=" << test_case.record_bytes
+                 << " workers=" << test_case.workers);
+    const LlmMemoryWorkPlan plan = build_executor_ready_plan(
+        prefill_geometry(test_case.prompt_tokens,
+                         test_case.query_tile_tokens,
+                         test_case.record_bytes),
+        test_case.workers);
+    ASSERT_TRUE(plan.valid) << plan.reason_code;
+    EXPECT_TRUE(validate_llm_prefill_cpu_execution_evidence(plan));
+
+    LlmExecutionResources resources;
+    const LlmResourcePreparationResult result =
+        prepare_llm_execution_resources(plan, resources);
+    EXPECT_TRUE(result.valid) << result.reason_code;
+  }
+}
+
+TEST_F(LlmMemoryExecutorTest,
+       PrefillStructuralValidationRejectsShortScenarioDescriptorSet) {
+  LlmMemoryWorkPlan plan =
+      build_executor_ready_plan(prefill_geometry(), 2);
+  ASSERT_TRUE(plan.valid) << plan.reason_code;
+  LlmCpuExecutionPlan* const cpu_plan = get_llm_cpu_execution_plan(plan);
+  ASSERT_NE(cpu_plan, nullptr);
+  ASSERT_TRUE(cpu_plan->prefill.has_value());
+  ASSERT_FALSE(cpu_plan->workers[0].prefill_sequences.empty());
+  cpu_plan->workers[0].prefill_sequences.pop_back();
+  const size_t map_calls_before = state.map_calls;
+
+  LlmExecutionResources resources;
+  const LlmResourcePreparationResult result =
+      prepare_llm_execution_resources(plan, resources);
+  EXPECT_FALSE(result.valid);
+  EXPECT_EQ(result.reason_code, LlmExecutorReason::INVALID_WORK_PLAN);
+  EXPECT_EQ(state.map_calls, map_calls_before);
+  EXPECT_FALSE(resources.valid);
+  EXPECT_EQ(resources.prefill_layer_descriptors, nullptr);
+  EXPECT_EQ(resources.prefill_sequence_descriptors, nullptr);
+}
+
+TEST_F(LlmMemoryExecutorTest,
+       PrefillCanonicalOwnershipAndIdentityTamperingIsRejectedBeforeMmap) {
+  for (size_t tamper = 0; tamper < 8; ++tamper) {
+    SCOPED_TRACE(::testing::Message() << "tamper=" << tamper);
+    LlmMemoryWorkPlan plan =
+        build_executor_ready_plan(prefill_geometry(), 2);
+    ASSERT_TRUE(plan.valid) << plan.reason_code;
+    LlmCpuExecutionPlan* const cpu_plan =
+        get_llm_cpu_execution_plan(plan);
+    ASSERT_NE(cpu_plan, nullptr);
+    ASSERT_TRUE(cpu_plan->prefill.has_value());
+    const size_t rows =
+        plan.geometry.layer_count * plan.geometry.batch_size;
+    LlmPrefillCpuScenarioExecutionPlan& kv_scenario =
+        cpu_plan->prefill->scenarios[
+            static_cast<size_t>(LlmScenario::KvOnly)];
+
+    if (tamper == 0) {
+      const size_t scenario_base =
+          static_cast<size_t>(LlmScenario::KvOnly) * rows;
+      std::array<size_t, 2> ordered_workers = {0, 1};
+      std::sort(ordered_workers.begin(), ordered_workers.end(),
+                [&](size_t lhs, size_t rhs) {
+                  return cpu_plan->workers[lhs]
+                             .prefill_sequences[scenario_base]
+                             .first_token <
+                         cpu_plan->workers[rhs]
+                             .prefill_sequences[scenario_base]
+                             .first_token;
+                });
+      LlmPrefillKvSequenceRangeTemplate& left =
+          cpu_plan->workers[ordered_workers[0]]
+              .prefill_sequences[scenario_base];
+      LlmPrefillKvSequenceRangeTemplate& right =
+          cpu_plan->workers[ordered_workers[1]]
+              .prefill_sequences[scenario_base];
+      ASSERT_GT(left.owned_token_count, 0u);
+      ASSERT_GT(right.owned_token_count, 0u);
+      const size_t record_bytes =
+          plan.geometry.k_or_v_record_bytes_per_layer;
+      if (left.owned_token_count > 1) {
+        --left.owned_token_count;
+        left.k_owned.span_bytes -= record_bytes;
+        left.v_owned = left.k_owned;
+        --right.first_token;
+        ++right.owned_token_count;
+        right.k_owned.offset_bytes -= record_bytes;
+        right.k_owned.span_bytes += record_bytes;
+        right.v_owned = right.k_owned;
+      } else {
+        ASSERT_GT(right.owned_token_count, 1u);
+        ++left.owned_token_count;
+        left.k_owned.span_bytes += record_bytes;
+        left.v_owned = left.k_owned;
+        ++right.first_token;
+        --right.owned_token_count;
+        right.k_owned.offset_bytes += record_bytes;
+        right.k_owned.span_bytes -= record_bytes;
+        right.v_owned = right.k_owned;
+      }
+    } else if (tamper == 1) {
+      ASSERT_GT(kv_scenario.ownership_scopes.size(), 1u);
+      std::swap(kv_scenario.ownership_scopes[0],
+                kv_scenario.ownership_scopes[1]);
+    } else if (tamper == 2) {
+      ASSERT_FALSE(kv_scenario.ownership_scopes.empty());
+      kv_scenario.ownership_scopes[0].identity += "|tampered=1";
+    } else if (tamper == 3) {
+      kv_scenario.identity += "|tampered=1";
+    } else if (tamper == 4) {
+      cpu_plan->prefill->identity += "|tampered=1";
+    } else if (tamper == 5) {
+      plan.plan_identity += "|tampered=1";
+    } else {
+      const size_t scenario_base =
+          static_cast<size_t>(LlmScenario::KvOnly) * rows;
+      LlmPrefillKvSequenceRangeTemplate& descriptor =
+          cpu_plan->workers[0].prefill_sequences[scenario_base];
+      ASSERT_GT(descriptor.owned_token_count, 0u);
+      if (tamper == 6) {
+        ++descriptor.v_owned.offset_bytes;
+      } else {
+        ++descriptor.layer_index;
+      }
+    }
+
+    const size_t map_calls_before = state.map_calls;
+    LlmExecutionResources resources;
+    const LlmResourcePreparationResult result =
+        prepare_llm_execution_resources(plan, resources);
+    EXPECT_FALSE(result.valid);
+    EXPECT_EQ(result.reason_code, LlmExecutorReason::INVALID_WORK_PLAN);
+    EXPECT_EQ(state.map_calls, map_calls_before);
+    EXPECT_FALSE(resources.valid);
+  }
+}
+
+TEST_F(LlmMemoryExecutorTest,
+       PrefillBoundaryCorruptionFailsExcludedPostValidationIntegration) {
+  const LlmMemoryWorkPlan plan =
+      build_executor_ready_plan(prefill_geometry(), 2);
+  ASSERT_TRUE(plan.valid) << plan.reason_code;
+  LlmExecutionResources resources;
+  const LlmResourcePreparationResult prepared =
+      prepare_llm_execution_resources(plan, resources);
+  ASSERT_TRUE(prepared.valid) << prepared.reason_code;
+  const LlmScenarioWorkPlan scenario = build_llm_scenario_work_plan(
+      plan, LlmScenario::Mixed, 2, true);
+  ASSERT_TRUE(scenario.valid) << scenario.reason_code;
+  PrefillCorruptionContext context;
+  ScopedExecutorTimer timer_scope;
+  auto timer = HighResTimer::create();
+  ASSERT_TRUE(timer.has_value());
+
+  const LlmExecutorResult result = execute_llm_scenario(
+      plan, scenario, resources, *timer,
+      {prefill_corrupting_kernel, &context});
+  EXPECT_TRUE(context.corrupted.load(std::memory_order_acquire));
+  EXPECT_FALSE(result.valid);
+  EXPECT_EQ(result.reason_code,
+            LlmExecutorReason::PREFILL_POST_VALIDATION_FAILED);
+  EXPECT_TRUE(result.kernel_succeeded);
+  EXPECT_TRUE(result.checksum_evaluated);
+  EXPECT_TRUE(result.checksum_valid);
+  EXPECT_TRUE(result.post_validation_evaluated);
+  EXPECT_FALSE(result.post_validation_valid);
 }
 
 TEST_F(LlmMemoryExecutorTest,

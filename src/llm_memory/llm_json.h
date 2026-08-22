@@ -105,9 +105,11 @@ const char* classify_llm_traffic_payload(const LlmGeometry& geometry) noexcept;
  * Estimate a conservative schema-v1 DOM plus transport serialization peak.
  *
  * A disabled output target returns a valid zero estimate. File and stdout
- * targets reserve fixed schema/input storage, every planned measurement, and
- * both expected/actual worker checksum trees before the final work-plan memory
- * admission. The estimate allocates no memory and retains no references.
+ * targets reserve fixed schema/input storage, all variable-length component,
+ * layout, scenario, and ownership identity evidence, every planned
+ * measurement, and both expected/actual worker checksum trees before the final
+ * work-plan memory admission. The estimate allocates no memory and retains no
+ * references.
  *
  * @return A valid byte estimate, or a stable reason-bearing invalid estimate
  *         after invalid-plan or checked-arithmetic failure.

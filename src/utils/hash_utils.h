@@ -23,6 +23,7 @@
 #ifndef HASH_UTILS_H
 #define HASH_UTILS_H
 
+#include <array>
 #include <cstddef>
 #include <memory>
 #include <string>
@@ -97,6 +98,19 @@ class Sha256Hasher {
  * @throws std::runtime_error If CommonCrypto unexpectedly fails to produce a digest.
  */
 std::string sha256_hex(std::string_view input);
+
+/**
+ * Hash exact bytes into a caller-owned lowercase hexadecimal buffer.
+ *
+ * This variant has no dynamic-allocation path and is suitable for validators
+ * that run after an exact memory-admission decision.
+ *
+ * @param input Exact bytes to hash.
+ * @param output Caller-owned 64-character lowercase hexadecimal digest.
+ * @return true exactly when CommonCrypto completed the digest.
+ */
+bool sha256_hex_noalloc(std::string_view input,
+                        std::array<char, 64>& output) noexcept;
 
 }  // namespace HashUtils
 

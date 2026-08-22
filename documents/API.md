@@ -46,12 +46,21 @@ A direct GPU command uses the same stream transport with its existing top-level 
 memory_benchmark --gpu-bandwidth --buffer-size 512 --count 3 --seed 42 --output -
 ```
 
-A direct LLM command likewise emits its top-level schema 1 payload. The active profiles are CPU/decode with either
-contiguous or paged KV storage:
+A direct LLM command likewise emits its top-level schema 1 payload. CPU decode supports contiguous or paged KV, while
+CPU prefill currently supports contiguous KV:
 
 ```bash
 memory_benchmark --llm-memory --weight-size-mb 64 --layers 4 \
   --query-heads 8 --kv-heads 2 --head-dim 64 --context-tokens 512 \
+  --iterations 1 --count 3 --seed 42 --output -
+```
+
+A contiguous prefill request supplies full-prompt and query-tile geometry instead of decode context:
+
+```bash
+memory_benchmark --llm-memory --weight-size-mb 64 --layers 4 \
+  --query-heads 8 --kv-heads 2 --head-dim 64 --phase prefill \
+  --prompt-tokens 512 --attention-query-tile-tokens 64 \
   --iterations 1 --count 3 --seed 42 --output -
 ```
 
@@ -65,9 +74,11 @@ memory_benchmark --llm-memory --weight-size-mb 64 --layers 4 \
 ```
 
 `--kv-layout` accepts `contiguous` or `paged` and defaults to `contiguous`. Paged requests require exactly one
-`--kv-block-tokens <G>`; `G` must be positive, a power of two, and at most `UINT32_MAX`. A value larger than the visible
-context is valid. Contiguous requests reject `--kv-block-tokens`. Backend and phase remain fixed to CPU and decode;
-Metal and prefill are not public execution choices and receive no fallback.
+`--kv-block-tokens <G>`; `G` must be positive, a power of two, and at most `UINT32_MAX`. A value larger than the active
+phase length is valid. Contiguous requests reject `--kv-block-tokens`. Phase defaults to decode. Decode requires
+`--context-tokens`; prefill requires `--prompt-tokens P` and `--attention-query-tile-tokens Q` with
+`1 <= Q <= P`, and the phase-specific inputs are mutually exclusive. CPU/prefill/paged reaches stable reason
+`cpu-prefill-paged-not-yet-supported`. Metal remains unavailable. No unsupported request receives a fallback.
 
 The sentinel is classified from the raw option value before path normalization:
 
@@ -175,17 +186,14 @@ non-null value and its applicable validation/quality fields.
 
 LLM schema 1 is an unpublished generic contract. It has top-level `mode: "llm_memory"`, `schema_version: 1`, and exact
 `backend`, `phase`, `kv_layout`, and `methodology_version` selectors. Methodology is derived as
-`llm-memory-v1-<backend>-<phase>-<layout>`. This revision activates `cpu`/`decode`/`contiguous` and
-`cpu`/`decode`/`paged`, with exact methodologies `llm-memory-v1-cpu-decode-contiguous` and
-`llm-memory-v1-cpu-decode-paged`. The schema vocabulary also reserves `metal` and `prefill`, but those profiles have no
-public runtime activation. They must not be inferred from the presence of reserved fields, and an unavailable selector
-must never be silently replaced by CPU/decode.
+`llm-memory-v1-<backend>-<phase>-<layout>`. This revision activates `cpu`/`decode`/`contiguous`,
+`cpu`/`decode`/`paged`, and `cpu`/`prefill`/`contiguous`, with exact methodologies
+`llm-memory-v1-cpu-decode-contiguous`, `llm-memory-v1-cpu-decode-paged`, and
+`llm-memory-v1-cpu-prefill-contiguous`. Metal and paged prefill are unavailable and must never be silently replaced by
+another backend, phase, or layout.
 
-The source-level pure prefill planner and fake-runner seam do not broaden this process contract. A valid internal
-prefill work plan is logical evidence only. Paged prefill does not materialize a block table, permutation hash,
-descriptor ABI, mapping, or production CPU task; the CPU backend terminates it as unsupported. Such an internal plan is
-not an acceptable or serializable performance result until a later public profile activates the complete resource and
-executor contract.
+Paged prefill remains a source-level logical planning seam only. It does not materialize a block table, permutation,
+descriptor ABI, mapping, or production task and cannot produce an acceptable process result in this revision.
 
 Run statuses are `not_started`, `complete`, `partial`, `interrupted`, `unsupported`, and `failed`; measurement statuses
 are `not_run`, `measured`, `interrupted`, `invalid`, and `failed`. `unsupported` is a terminal, non-acceptable result,
@@ -210,17 +218,21 @@ results_complete, conclusions_valid, interpretation
 ```
 
 `configuration` preserves exact `argv`, the raw output target, requested/resolved inputs, and a `resolved_sources`
-object. Defaults remain evidence as `default`; they are not fabricated as explicit argv. Backend and phase resolve to
-CPU/decode defaults. Layout resolves to `contiguous` by default or to the explicit `--kv-layout` value. The
+object. Defaults remain evidence as `default`; they are not fabricated as explicit argv. Backend defaults to CPU and
+phase defaults to decode; an explicit prefill selection records `phase: "explicit"`. Decode configuration publishes
+integer `visible_context_tokens` and null prompt/tile values. Prefill publishes integer prompt/tile values and null
+`visible_context_tokens`. Layout resolves to `contiguous` by default or to the explicit `--kv-layout` value. The
 `kv_block_tokens` input is an integer for paged requests and null for contiguous requests; paged requests record it as
 explicit because no block-size default exists.
 
 `resolved_plan` owns immutable logical plan evidence:
 
-- `geometry.decode` is an object with integer `visible_context_tokens`; `geometry.prefill` is JSON null in the active
-  decode profile. Phase-specific fields are never overloaded across phases. The reserved prefill object has integer
+- Exactly one of `geometry.decode` and `geometry.prefill` is an object. Phase-specific fields are never overloaded.
+  Decode has integer `visible_context_tokens`. Prefill has integer
   `prompt_tokens`/`attention_query_tile_tokens` and decimal-string tile, prefix-visit, causal-pair, attention-pair, and
-  FMA-term counts.
+  FMA-term counts. Decode-only crossover numerator, denominator, and context, current visible context, weight/KV-read
+  ratio, and `current_context_classification` are null for prefill. `classification_version` and
+  `classification_is_payload_only` remain populated because they describe the schema field's semantics.
 - `layout.kv_layout` is the selected `contiguous` or `paged` token. Contiguous results use null for paged-only fields
   and report applicable lookup/read counts as decimal-string zero. Paged results populate integer `kv_block_tokens`;
   decimal-string block, tail, table-entry, and table-byte counts; permutation domain/algorithm/hash strings; and the
@@ -262,13 +274,42 @@ is `splitmix64(base_seed xor domain)`. Each draw uses `threshold = uint64_wrap(0
 made read-only for CPU execution, and held constant across warmup, calibration, scenarios, and measured loops. Its exact
 algorithm version, domain, resolved seed, entry count, and lowercase 64-hex SHA-256 are part of the result identity.
 
-`backend_evidence` always contains both tagged branches. `cpu` is populated and `metal` is null for both active
+For contiguous prefill, let `P` be prompt length, `Q` query-tile length, and `K = L*2*R`. With
+`C = ceil(P/Q)`, tile ends `e_j = min((j+1)*Q, P)`, and `S(P,Q) = sum(e_j)`, one `prefill_operation` has:
+
+```text
+weight_read_bytes = W
+kv_write_bytes = B * P * K
+kv_read_bytes = B * S(P,Q) * K
+weights_only_payload = W
+kv_only_payload = B * (P + S(P,Q)) * K
+mixed_payload = W + B * (P + S(P,Q)) * K
+```
+
+Each operation writes owner-local prompt tokens in ascending order, K then V for each token. Those writes precede that
+owner's reads; no global worker barrier is implied. Each tile reads its complete owned K prefix before its complete
+owned V prefix. The operation ordinal is bound into write/checksum evidence, and the timed checksum covers every
+tile-read visit. Excluded post-validation checks each owner's deterministic first/middle/last canonical-word samples,
+including bytes clipped to owner boundaries, against the final operation ordinal `T-1`; it does not scan every prompt
+record. CPU scenario partitions report a stable identity plus minimum, maximum, and imbalance `worker-cost` evidence.
+Audit-only causal pairs are
+`triangular(P)` per sequence; logical attention pairs/FMA terms are reported but never executed.
+
+`backend_evidence.cpu.prefill` is null for decode and an object for contiguous prefill. It records `cost_unit:
+"worker-cost"`, the execution identity, descriptors per scenario/worker, and a three-entry scenario array. Each scenario
+records its identity, scope count/identities, decimal-string per-worker accounted costs, and decimal-string minimum,
+maximum, and max-minus-min imbalance per work unit. `backend_evidence.cpu.paged` is null for contiguous prefill.
+
+`backend_evidence` always contains both tagged branches. `cpu` is populated and `metal` is null for all active
 profiles.
 `memory_budget` separates immutable resource geometry from allocation-time evidence and includes canonical
 decimal-string `resource_rounding_bytes`, `transient_peak_bytes`, `known_owned_peak_bytes`, and
 `admitted_budget_bytes`. A paged candidate admits full physical K/V resources, the resident block table, page rounding,
 descriptor/planner/checksum/orchestration storage, and the permutation-validation transient before table
-materialization. `calibration` contains excluded work-resolution and post-freeze same-shape warmup evidence;
+materialization. A non-empty JSON target's orchestration reserve uses checked arithmetic for every variable-length
+component/layout identity and, for prefill, the aggregate execution identity plus all scenario and scope identities.
+The preflight and finalized-plan estimates cover the same identity set. `calibration` contains excluded work-resolution
+and post-freeze same-shape warmup evidence;
 `aggregates` contains only accepted measured values. No measured loop begins until all three scenario plans have been
 atomically frozen and their canonical-order frozen warmups have succeeded. Additional diagnostic, interruption,
 checkpoint, loop-order, checksum, environment, warning, and resource-preparation evidence may be present without
@@ -300,12 +341,16 @@ synthetic_memory_work_units_per_second,
 effective_model_payload_gb_s
 ```
 
-For the active decode profile, `work_unit_kind` is `decode_step`; `weights_only` uses `kv_write_kind: "none"`, while
-KV-bearing scenarios use `current_token_append`. `planned_work_units` and `completed_work_units` are integer numbers.
+Decode uses `work_unit_kind: "decode_step"` and `kv_write_kind: "current_token_append"` for KV-bearing scenarios.
+Prefill uses `work_unit_kind: "prefill_operation"` and `kv_write_kind: "full_prompt_population"`.
+`weights_only` uses `kv_write_kind: "none"` in both phases. `planned_work_units` and `completed_work_units` are
+integers.
 All listed byte, lookup, metadata, and accounted quantities are canonical decimal strings, including applicable zero.
 The three derived metrics are finite numbers only for a successfully measured record and otherwise null. The effective
 model numerator contains versioned logical W/K/V reads and writes; timed layout metadata is reported separately and
 included in `accounted_bytes_per_work_unit`, not in `effective_model_payload_gb_s`.
+Measurement checksum evidence uses the phase-neutral keys `write_pattern_version` and `checksum_pattern_version`;
+schema 1 does not publish decode-specific `append_pattern_version` or `read_checksum_version` aliases.
 
 Paged `weights_only` performs no block-table access and reports zero layout-metadata work. For `kv_only` and `mixed`,
 each layer/batch pair performs one paired K/V append lookup, `N` K-scan lookups, and `N` V-scan lookups per decode step:
@@ -450,6 +495,17 @@ jq -e '.mode == "llm_memory" and .schema_version == 1 and
        .status == "complete" and .results_complete == true and
        .conclusions_valid == true and
        ([.measurements[] | select(.status != "measured")] | length) == 0' llm_memory.json
+
+jq -e '.mode == "llm_memory" and .schema_version == 1 and
+       .backend == "cpu" and .phase == "prefill" and
+       .kv_layout == "contiguous" and
+       .methodology_version == "llm-memory-v1-cpu-prefill-contiguous" and
+       .resolved_plan.geometry.decode == null and
+       .resolved_plan.geometry.prefill.prompt_tokens == 512 and
+       .resolved_plan.geometry.prefill.attention_query_tile_tokens == 64 and
+       .status == "complete" and .results_complete == true and
+       .conclusions_valid == true and
+       ([.measurements[] | select(.status != "measured")] | length) == 0' llm_prefill.json
 ```
 
 ## Compatibility policy

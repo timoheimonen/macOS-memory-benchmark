@@ -18,7 +18,7 @@ This document describes the layout of project files, organized by purpose. It is
    - [src/core/](#23-srccore--core-utilities)
    - [src/output/](#24-srcoutput---output-layer)
    - [src/gpu_bandwidth/](#25-srcgpu_bandwidth--metal-gpu-bandwidth)
-   - [src/llm_memory/](#26-srcllm_memory--synthetic-llm-decode-memory-profile)
+   - [src/llm_memory/](#26-srcllm_memory--synthetic-llm-memory-profile)
    - [src/pattern_benchmark/](#27-srcpattern_benchmark--pattern-access-benchmarks)
    - [src/warmup/](#28-srcwarmup--pre-benchmark-warm-up)
    - [src/utils/](#29-srcutils--shared-utilities)
@@ -71,7 +71,7 @@ This document describes the layout of project files, organized by purpose. It is
 | `documents/LATENCY_WHITEPAPER.md` | Whitepaper: cache and memory latency measurement methodology |
 | `documents/CORE_TO_CORE_WHITEPAPER.md` | Whitepaper: calibrated two-thread token-handoff methodology, audit schema, and interpretation limits |
 | `documents/GPU_BANDWIDTH_WHITEPAPER.md` | Whitepaper: Metal compute bandwidth methodology, GPU schema 1, validation, capability limits, and maintenance policy |
-| `documents/LLM_MEMORY_PROFILE_WHITEPAPER.md` | Whitepaper: fixed-context CPU decode-memory methodology for contiguous and paged KV, exact traffic and lookup formulas, resources, validation, schema 1, and interpretation limits |
+| `documents/LLM_MEMORY_PROFILE_WHITEPAPER.md` | Whitepaper: CPU decode and contiguous-prefill memory methodology, exact payload formulas, resources, validation, schema 1, and interpretation limits |
 | `documents/PROJECT_STRUCTURE.md` | This file |
 
 ---
@@ -109,6 +109,7 @@ Hand-written AArch64 assembly implementing the hot inner loops that must not be 
 | `core_to_core_latency.s` | Acquire/release token-exchange ping-pong loop for core-to-core protocol latency |
 | `llm_decode_memory.s` | Descriptor-driven weight/KV read and temporal current-token K/V append kernel for the synthetic LLM profile |
 | `llm_decode_memory_paged.s` | Paged-KV decode kernel with explicit timed block-table loads, paired append lookup, separate K/V scan lookups, exact tails, and versioned checksum evidence |
+| `llm_prefill_memory.s` | Contiguous-KV prefill kernel with full-prompt writes, tiled causal-prefix K/V scans, and operation-ordinal checksum evidence |
 
 ---
 
@@ -275,22 +276,23 @@ Objective-C++ Metal backend so deterministic unit tests do not require GPU work.
 
 ### 2.6 src/llm_memory/ — Synthetic LLM memory profile
 
-Standalone generic schema-1 vocabulary with active CPU/decode/contiguous and CPU/decode/paged implementations. Pure
-logical decode and prefill planning, deterministic paged geometry/permutation, the Objective-C-free backend contract,
+Standalone generic schema-1 vocabulary with active CPU/decode/contiguous, CPU/decode/paged, and
+CPU/prefill/contiguous implementations. Pure logical phase planning, deterministic paged geometry/permutation, the
+Objective-C-free backend contract,
 backend-specific execution planning/evidence, CPU mapping and ARM64 execution, environment capture, console composition,
 and serialization are separated so deterministic unit tests can inject a fake backend without running hot kernels.
-The pure prefill contract is available to planning and fake-runner tests only; public prefill and all Metal LLM profiles
-remain unavailable and never fall back to an active CPU decode layout.
+Paged prefill remains a pure planning contract and is rejected at the public CLI with a stable not-yet-supported reason.
+All Metal LLM profiles remain unavailable; neither case falls back to an active CPU phase/layout.
 
 | File | Purpose |
 |---|---|
 | `llm_memory.h` / `.cpp` | Separate config/status foundation, strict exact-whitelist parser, required/default worker/seed resolution, complete command boundary, backend factory ownership, peak-memory admission, QoS/signal scope, console output, and file/stdout transport orchestration |
 | `llm_kv_layout.h` / `.cpp` | Pure checked paged-KV geometry, block ownership, SplitMix64/Fisher–Yates permutation and little-endian table hash, exact physical/logical/padding/table/lookup/accounting math, and transient preparation estimates |
-| `llm_prefill.h` / `.cpp` | Pure checked prefill tile, causal-pair, payload, paged floor-sum lookup, token/block cost partition, versioned atomic ownership evidence, write/checksum oracle, and semantic event-trace planning used without activating a public prefill executor |
-| `llm_work_plan.h` / `.cpp` | Pure checked phase-applicable weight/KV geometry, model-payload/metadata/accounted math, memory-budget request, seed domains, scenario limits/calibration/order, frozen methodology/component/plan identities, and exactly one tagged CPU/Metal planning variant; logical prefill plans intentionally omit executable descriptors and paged table/permutation resources |
+| `llm_prefill.h` / `.cpp` | Checked prefill tile, causal-pair, payload, paged floor-sum lookup, token/block cost partition, versioned ownership evidence, write/checksum oracle, and semantic event-trace planning |
+| `llm_work_plan.h` / `.cpp` | Checked phase-applicable weight/KV geometry, payload/metadata/accounted math, memory budget, scenario limits, exact CPU ownership evidence, and frozen methodology/component/plan identities; contiguous prefill has executable descriptors while paged prefill remains logical |
 | `llm_backend.h` / `.cpp` | Objective-C-free synchronous backend lifecycle and task boundary, generic task identity/timing/completion/validation, tagged CPU/Metal task and command evidence, auxiliary-memory contract, stable statuses/reasons, checked evidence accessors, and backend factory |
 | `llm_cpu_backend.h` / `.cpp` | Active CPU adapter that owns the timer and prepared contiguous or paged resources, delegates allocation/execution to the executor, validates CPU worker/QoS/timer/checksum invariants, and converts executor evidence into the generic task result |
-| `llm_executor.h` / `.cpp` | CPU-specific atomic full-size weight and physical K/V mappings, paged table preparation, deterministic physical initialization/pre-touch, untimed task-local append-slot restoration, layout-specific descriptor materialization, independent expected-checksum oracle, padding canaries, synchronized worker team, timer boundary, and separate contiguous/paged ARM64 adapters retained behind `LlmCpuBackend` |
+| `llm_executor.h` / `.cpp` | CPU-specific full-size mappings, paged-table preparation, deterministic initialization/pre-touch, phase/layout descriptor materialization, independent checksum oracles, padding canaries, synchronized worker team, timer boundary, and ARM64 adapters retained behind `LlmCpuBackend` |
 | `llm_runner.h` / `.cpp` | Backend-independent lifecycle, per-scenario automatic calibration or exact-work planning, generic task acceptance, frozen plans, cyclic loop order, status/counters, task-boundary interruption, aggregates, warnings, and logical checkpoints; resources are released before the command-terminal checkpoint |
 | `llm_json.h` / `.cpp` | Ordered generic LLM schema-1 builder plus conservative output-peak estimator, with backend/phase/layout identity, resolved plan, tagged backend evidence, decimal-string exact integers, nullable non-applicability, traffic diagnostics, environment evidence, and interpretation contract |
 | `llm_output.h` / `.cpp` | Human-readable work-unit/model-payload/accounted geometry, scenario headlines, interpretation limits, and evidence-backed quality warnings through centralized message helpers |
@@ -373,13 +375,13 @@ installed. All `.cpp` files are picked up automatically by the Makefile. Tests n
 | `test_memory_manager.cpp` | `MemoryManagerTest` | Injected mmap/madvise policy, failures, and exact RAII unmapping |
 | `test_numeric_utils.cpp` | `NumericUtilsTest` | Overflow-safe arithmetic, duration calibration, pilot counts, and quantization boundaries |
 | `test_llm_memory_contract.cpp` | `LlmMemoryContractTest` | Independent executable specification for decode and prefill payloads, paged geometry/lookup goldens, append and full-prompt writes, checksum/event-trace identities, descriptor ABI layouts, and schema acceptance; it does not exercise production LLM code |
-| `test_llm_memory_config.cpp` | `LlmMemoryConfigTest` | Config/status defaults, exact standalone whitelist parsing, public decode and pure-seam prefill validation, layout and block-size rules, required/default fields, strict decimal errors, raw output values, help isolation, worker/seed resolution, geometry/work-limit preflight, and incompatible options |
+| `test_llm_memory_config.cpp` | `LlmMemoryConfigTest` | Config/status defaults, exact standalone decode/prefill parsing, phase/layout rules and stable reasons, strict decimal errors, raw output values, help isolation, worker/seed resolution, geometry/work-limit preflight, and incompatible options |
 | `test_llm_memory_work_plan.cpp` | `LlmMemoryWorkPlanTest` | Production checked decode/prefill geometry and payloads, physical/padding/table/lookup/accounted math, deterministic permutation/hash, token/block ownership, memory budget, descriptor/range/layout invariants, worker reduction, seed identities, scenario caps/calibration, and cyclic order |
-| `test_llm_memory_executor.cpp` | `LlmMemoryExecutorTest` | CPU layout dispatch, atomic mapping/table-preparation failure seams, physical initialization, paged descriptor materialization, independent checksums, padding canaries, synchronized start/timing, QoS outcomes, cancellation, and fake-kernel validation including wrong-table mismatch |
+| `test_llm_memory_executor.cpp` | `LlmMemoryExecutorTest` | CPU phase/layout dispatch, atomic mapping/table-preparation failure seams, decode/prefill descriptor materialization, independent checksums, padding canaries, synchronized timing, QoS, cancellation, and fake-kernel validation |
 | `test_llm_memory_runner.cpp` | `LlmMemoryRunnerTest` | Fake-backend lifecycle and generic decode/prefill task seams, lifecycle unsupported/failure handling, common identity/timing/completion/validation acceptance, exact calibration/single-unit/freeze/frozen-warmup order, cyclic measurements, status/counter/aggregate semantics, interruption, release/checkpoint precedence, auxiliary budgeting, and runner exception boundaries |
-| `test_llm_memory_json.cpp` | `LlmMemoryJsonTest` | Schema-1 contiguous/paged identity and structure, physical/padding/table/permutation/lookup fields, conservative output-peak estimation, exact decimal strings, status/null behavior, interpretation, environment evidence, and checkpoint snapshots |
-| `test_llm_memory_output.cpp` | `LlmMemoryOutputTest` | Exact contiguous/paged geometry and headline formatting, metadata interpretation text, and deduplicated evidence-backed warning selection |
-| `test_llm_memory_kernels.cpp` | `LlmMemoryKernelIntegrationTest` | Real contiguous/paged ARM64 descriptor/kernel scenarios, full and partial blocks, 31/32/33-byte tails, explicit lookup order, append bytes, checksum and wrong-table detection, padding canaries, bounds, one/multiple workers, and AAPCS64 preservation |
+| `test_llm_memory_json.cpp` | `LlmMemoryJsonTest` | Schema-1 decode/prefill and contiguous/paged identity, exact nullable geometry, ownership, output-peak, status, interpretation, environment, and checkpoint evidence |
+| `test_llm_memory_output.cpp` | `LlmMemoryOutputTest` | Exact decode/prefill and contiguous/paged geometry/headline formatting, interpretation text, and deduplicated warnings |
+| `test_llm_memory_kernels.cpp` | `LlmMemoryKernelIntegrationTest` | Real decode/prefill ARM64 descriptor/kernel scenarios, paged tails/lookups, full-prompt writes, tiled scans, checksum, padding, worker-count, and AAPCS64 coverage |
 | `test_buffer_manager.cpp` | `BufferManagerTest` | Pattern mapping policy, atomic allocation cleanup, initialized content, validation, and peak accounting |
 | `test_benchmark_executor.cpp` | `BenchmarkExecutorTest` | Injected phase/chain failures, continuous latency sampling, and hardware executor contracts |
 | `test_benchmark_runner.cpp` | `BenchmarkStatisticsCollectorTest`, `BenchmarkRunnerTest` | Status-bearing aggregation, schema-3 retained snapshots, checkpointing, interruption, and runner exception/failure seams |

@@ -137,6 +137,7 @@ inline constexpr const char* KV_BLOCK_TOKENS_NOT_POWER_OF_TWO =
     "kv-block-tokens-not-power-of-two";
 inline constexpr const char* KV_BLOCK_TOKENS_EXCEEDS_UINT32 =
     "kv-block-tokens-exceeds-uint32";
+inline constexpr const char* CPU_PREFILL_PAGED_NOT_YET_SUPPORTED = "cpu-prefill-paged-not-yet-supported";
 inline constexpr const char* BATCH_SIZE_REQUIRED = "batch-size-required";
 inline constexpr const char* WORKER_COUNT_REQUIRED = "worker-count-required";
 inline constexpr const char* AVAILABLE_WORKER_COUNT_REQUIRED =
@@ -156,7 +157,14 @@ inline constexpr const char* JSON_INTEGER_OUT_OF_RANGE =
     "json-integer-out-of-range";
 }  // namespace LlmMemoryConfigReason
 
-/** Parsed and resolved standalone `--llm-memory` command configuration. */
+/**
+ * Parsed and resolved standalone `--llm-memory` command configuration.
+ *
+ * `visible_context_tokens` is applicable only to decode. `prompt_tokens` and
+ * `attention_query_tile_tokens` are applicable only to prefill. The adjacent
+ * `user_specified_*` flags preserve whether each resolved value came from the
+ * command line so JSON provenance never infers a source from the value alone.
+ */
 struct LlmMemoryConfig {
   LlmMemoryBackend backend = LlmMemoryBackend::Cpu;
   LlmPhase phase = LlmPhase::Decode;
@@ -180,6 +188,7 @@ struct LlmMemoryConfig {
   bool user_specified_iterations = false;
   bool user_specified_seed = false;
   bool user_specified_workers = false;
+  bool user_specified_phase = false;
   bool user_specified_context_tokens = false;
   bool user_specified_prompt_tokens = false;
   bool user_specified_attention_query_tile_tokens = false;
@@ -213,7 +222,10 @@ void set_llm_memory_parser_test_hooks(
  * Syntax, required inputs, checked geometry, worker availability, seed
  * resolution, and explicit per-scenario work limits are resolved before any
  * output session, mapping, or worker can be created. Human help returns before
- * platform detection and seed generation.
+ * platform detection and seed generation. Decode requires context geometry;
+ * prefill requires positive P/Q with Q <= P. Cross-phase geometry is rejected,
+ * and the temporary CPU prefill+paged capability gap is reported only after
+ * otherwise-valid phase and layout preflights.
  *
  * @param argc Number of entries in @p argv.
  * @param argv Command arguments; entries are copied without retaining pointers.
@@ -234,10 +246,10 @@ int parse_llm_memory_arguments(int argc, char* argv[],
  * The boundary parses first, returns immediately for help, then installs the
  * command-scoped JSON transport before runtime output, QoS preparation, and
  * signal masking. It selects a command-owned backend, admits the exact
- * three-mapping memory plan, prepares and pre-touches the working set through
- * that backend, executes whole tasks through the backend-independent runner,
- * and emits console plus schema-v1 checkpoint or final-output evidence
- * according to the selected transport.
+ * layout-specific resource and auxiliary plan, prepares and pre-touches the
+ * working set through that backend, executes whole tasks through the
+ * backend-independent runner, and emits console plus schema-v1 checkpoint or
+ * final-output evidence according to the selected transport.
  *
  * @param argc Number of entries in @p argv.
  * @param argv Command arguments, valid for the duration of this call.
@@ -256,7 +268,12 @@ struct LlmMemoryConfigValidation {
   size_t active_weight_bytes = 0;
 };
 
-/** Validate resolved config fields and checked MiB-to-byte conversion. */
+/**
+ * Validate resolved config fields and checked MiB-to-byte conversion.
+ *
+ * This pure validator enforces phase applicability and P/Q relations but does
+ * not apply the command's temporary backend/phase/layout capability matrix.
+ */
 LlmMemoryConfigValidation validate_llm_memory_config(
     const LlmMemoryConfig& config);
 

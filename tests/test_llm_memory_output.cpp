@@ -112,6 +112,18 @@ LlmMemoryWorkPlan make_paged_console_plan() {
   return plan;
 }
 
+LlmMemoryWorkPlan make_prefill_console_plan() {
+  LlmMemoryWorkPlan plan = make_console_plan();
+  plan.phase = LlmPhase::Prefill;
+  plan.work_unit_kind = LlmWorkUnitKind::PrefillOperation;
+  plan.geometry.phase = LlmPhase::Prefill;
+  plan.geometry.work_unit_kind = LlmWorkUnitKind::PrefillOperation;
+  plan.geometry.decode.reset();
+  plan.geometry.prefill = LlmPrefillGeometry{5, 2, 3, 11, 15, 60, 480, 0};
+  plan.geometry.traffic_crossover_context_tokens = 3.5;
+  return plan;
+}
+
 LlmMemoryConfig fake_runner_config() {
   LlmMemoryConfig config;
   config.weight_size_mb = 1;
@@ -380,6 +392,42 @@ TEST(LlmMemoryOutputTest,
   EXPECT_EQ(count_substrings(
                 output, "  KV write bytes / decode step:      256\n"),
             1u);
+}
+
+TEST(LlmMemoryOutputTest, PrefillReportIdentifiesFullPromptWorkAndTiledCausalGeometry) {
+  LlmMemoryWorkPlan plan = make_prefill_console_plan();
+  LlmResultMetadata metadata;
+  metadata.main_thread_qos = {true, true, 0};
+  metadata.environment_start.thermal_state = "nominal";
+  metadata.environment_end = metadata.environment_start;
+  LlmMemoryResult result;
+  set_headline(result, LlmScenario::Mixed, 0.004, 250.0, 75.0);
+
+  testing::internal::CaptureStdout();
+  testing::internal::CaptureStderr();
+  print_llm_memory_console_report(plan, metadata, result);
+  const std::string errors = testing::internal::GetCapturedStderr();
+  const std::string output = testing::internal::GetCapturedStdout();
+
+  EXPECT_TRUE(errors.empty());
+  EXPECT_NE(output.find("Synthetic LLM memory profile (backend=cpu, phase=prefill, "
+                        "work_unit=prefill_operation, kv_layout=contiguous"),
+            std::string::npos);
+  EXPECT_NE(output.find("  Prompt tokens (P):                 5\n"), std::string::npos);
+  EXPECT_NE(output.find("  Attention query tile tokens (Q):  2\n"), std::string::npos);
+  EXPECT_NE(output.find("  Attention query tiles (C):        3\n"), std::string::npos);
+  EXPECT_NE(output.find("  Prefix token visits / sequence:   11\n"), std::string::npos);
+  EXPECT_NE(output.find("  Causal token pairs / sequence:    15\n"), std::string::npos);
+  EXPECT_NE(output.find("  Logical attention pairs:          60\n"), std::string::npos);
+  EXPECT_NE(output.find("  Logical attention FMA terms:      480\n"), std::string::npos);
+  EXPECT_NE(output.find("  Mixed:        4.000 ms/prefill operation, 250.00 synthetic "
+                        "prefill operations/s, 75.00 GB/s effective model payload\n"),
+            std::string::npos);
+  EXPECT_NE(output.find("prefill performs no Transformer compute and does "
+                        "not predict TTFT"),
+            std::string::npos);
+  EXPECT_EQ(output.find("Crossover:"), std::string::npos);
+  EXPECT_EQ(output.find("tokens/s"), std::string::npos);
 }
 
 TEST(LlmMemoryOutputTest, EmitsDeduplicatedWarningsInContractOrder) {

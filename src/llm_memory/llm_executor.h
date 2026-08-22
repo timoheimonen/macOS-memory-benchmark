@@ -47,6 +47,8 @@ inline constexpr const char* K_MAPPING_FAILED = "k-mapping-failed";
 inline constexpr const char* V_MAPPING_FAILED = "v-mapping-failed";
 inline constexpr const char* PAGED_POST_VALIDATION_FAILED =
     "paged-post-validation-failed";
+inline constexpr const char* PREFILL_POST_VALIDATION_FAILED =
+    "prefill-post-validation-failed";
 inline constexpr const char* DESCRIPTOR_ALLOCATION_FAILED = "descriptor-allocation-failed";
 inline constexpr const char* INITIALIZATION_FAILED = "initialization-failed";
 inline constexpr const char* INVALID_RESOURCES = "invalid-resources";
@@ -196,6 +198,9 @@ struct LlmExecutionResources {
   std::unique_ptr<LlmPagedLayerDescriptor[]> paged_layer_descriptors;
   std::unique_ptr<LlmPagedKvAssignmentDescriptor[]>
       paged_assignment_descriptors;
+  std::unique_ptr<LlmPrefillLayerDescriptor[]> prefill_layer_descriptors;
+  std::unique_ptr<LlmPrefillKvSequenceDescriptor[]>
+      prefill_sequence_descriptors;
   std::unique_ptr<LlmStaticSpanReference[]> weight_references;
   std::unique_ptr<LlmStaticSpanReference[]> k_references;
   std::unique_ptr<LlmStaticSpanReference[]> v_references;
@@ -222,6 +227,10 @@ struct LlmExecutionResources {
       size_t worker_index) const noexcept;
   const LlmPagedKvAssignmentDescriptor* worker_paged_assignments(
       size_t worker_index) const noexcept;
+  const LlmPrefillLayerDescriptor* worker_prefill_layers(
+      size_t worker_index) const noexcept;
+  const LlmPrefillKvSequenceDescriptor* worker_prefill_sequences(
+      size_t worker_index, LlmScenario scenario) const noexcept;
 };
 
 /** Result of atomic allocation, ABI materialization, and deterministic init. */
@@ -244,8 +253,11 @@ struct LlmKernelInvocation {
   LlmWorkerChecksum* output = nullptr;
   size_t worker_index = 0;
   LlmKvLayout kv_layout = LlmKvLayout::Contiguous;
+  LlmPhase phase = LlmPhase::Decode;
   const LlmPagedLayerDescriptor* paged_layers = nullptr;
   const LlmPagedKvAssignmentDescriptor* paged_assignments = nullptr;
+  const LlmPrefillLayerDescriptor* prefill_layers = nullptr;
+  const LlmPrefillKvSequenceDescriptor* prefill_sequences = nullptr;
 };
 
 /**
@@ -326,6 +338,14 @@ extern "C" void llm_decode_memory_paged_asm(
     const LlmPagedKvAssignmentDescriptor* assignments,
     uint64_t layer_count, uint64_t work_unit_count, uint64_t scenario_flags,
     uint64_t scenario_seed, LlmWorkerChecksum* output) noexcept;
+
+/** Dedicated contiguous-prefill implementation with its own descriptor ABI. */
+extern "C" void llm_prefill_memory_asm(
+    const LlmPrefillLayerDescriptor* layers,
+    const LlmPrefillKvSequenceDescriptor* sequences,
+    uint64_t layer_count, uint64_t operation_count,
+    uint64_t scenario_flags, uint64_t scenario_seed,
+    LlmWorkerChecksum* output) noexcept;
 
 /** Return the frozen assembly flag for a valid scenario, or zero. */
 uint64_t llm_scenario_flags(LlmScenario scenario) noexcept;

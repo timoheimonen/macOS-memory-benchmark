@@ -94,6 +94,27 @@ std::vector<std::string> valid_llm_arguments() {
           "--context-tokens", "3"};
 }
 
+std::vector<std::string> valid_prefill_arguments() {
+  return {"memory_benchmark",
+          "--llm-memory",
+          "--weight-size-mb",
+          "1",
+          "--layers",
+          "2",
+          "--query-heads",
+          "4",
+          "--kv-heads",
+          "2",
+          "--head-dim",
+          "8",
+          "--phase",
+          "prefill",
+          "--prompt-tokens",
+          "5",
+          "--attention-query-tile-tokens",
+          "2"};
+}
+
 int parse_llm_arguments(std::vector<std::string> arguments,
                         LlmMemoryConfig& config) {
   std::vector<char*> argv;
@@ -183,6 +204,7 @@ TEST(LlmMemoryConfigTest, DefaultsMatchFrozenStandaloneContract) {
   EXPECT_FALSE(config.user_specified_iterations);
   EXPECT_FALSE(config.user_specified_seed);
   EXPECT_FALSE(config.user_specified_workers);
+  EXPECT_FALSE(config.user_specified_phase);
   EXPECT_FALSE(config.user_specified_context_tokens);
   EXPECT_FALSE(config.user_specified_prompt_tokens);
   EXPECT_FALSE(config.user_specified_attention_query_tile_tokens);
@@ -226,6 +248,7 @@ TEST(LlmMemoryConfigTest,
   EXPECT_FALSE(config.user_specified_iterations);
   EXPECT_FALSE(config.user_specified_seed);
   EXPECT_FALSE(config.user_specified_workers);
+  EXPECT_FALSE(config.user_specified_phase);
   EXPECT_TRUE(config.user_specified_context_tokens);
   EXPECT_FALSE(config.user_specified_prompt_tokens);
   EXPECT_FALSE(config.user_specified_attention_query_tile_tokens);
@@ -246,6 +269,7 @@ TEST(LlmMemoryConfigTest, ParserPreservesEveryExplicitFieldAndAlias) {
       "--kv-heads",            "8",
       "--head-dim",            "128",
       "--kv-element-bytes",    "4",
+      "--phase",               "decode",
       "--context-tokens",      "8192",
       "--kv-layout",           "paged",
       "--kv-block-tokens",     "16",
@@ -277,6 +301,7 @@ TEST(LlmMemoryConfigTest, ParserPreservesEveryExplicitFieldAndAlias) {
   EXPECT_TRUE(config.user_specified_iterations);
   EXPECT_TRUE(config.user_specified_seed);
   EXPECT_TRUE(config.user_specified_workers);
+  EXPECT_TRUE(config.user_specified_phase);
   EXPECT_TRUE(config.user_specified_context_tokens);
   EXPECT_FALSE(config.user_specified_prompt_tokens);
   EXPECT_FALSE(config.user_specified_attention_query_tile_tokens);
@@ -284,6 +309,126 @@ TEST(LlmMemoryConfigTest, ParserPreservesEveryExplicitFieldAndAlias) {
   EXPECT_TRUE(config.user_specified_kv_block_tokens);
   EXPECT_EQ(config.output_file, "./-");
   EXPECT_EQ(config.argv, arguments);
+}
+
+TEST(LlmMemoryConfigTest, ParserActivatesContiguousCpuPrefillWithExactPhaseGeometry) {
+  LlmParserHooksScope hooks;
+  const std::vector<std::string> arguments = valid_prefill_arguments();
+  LlmMemoryConfig config;
+
+  ASSERT_EQ(parse_llm_arguments(arguments, config), EXIT_SUCCESS);
+  EXPECT_EQ(config.backend, LlmMemoryBackend::Cpu);
+  EXPECT_EQ(config.phase, LlmPhase::Prefill);
+  EXPECT_EQ(config.kv_layout, LlmKvLayout::Contiguous);
+  EXPECT_EQ(config.visible_context_tokens, 0u);
+  EXPECT_EQ(config.prompt_tokens, 5u);
+  EXPECT_EQ(config.attention_query_tile_tokens, 2u);
+  EXPECT_TRUE(config.user_specified_phase);
+  EXPECT_FALSE(config.user_specified_context_tokens);
+  EXPECT_TRUE(config.user_specified_prompt_tokens);
+  EXPECT_TRUE(config.user_specified_attention_query_tile_tokens);
+  EXPECT_EQ(config.argv, arguments);
+}
+
+TEST(LlmMemoryConfigTest, ParserUsesStableOrderIndependentPrefillAndTemporarySupportReasons) {
+  LlmParserHooksScope hooks;
+  struct InvalidCase {
+    std::vector<std::string> arguments;
+    std::string reason_code;
+  };
+  std::vector<std::string> common = valid_prefill_arguments();
+  const auto erase_option = [](std::vector<std::string> arguments, const std::string& option) {
+    const auto position = std::find(arguments.begin(), arguments.end(), option);
+    EXPECT_NE(position, arguments.end());
+    if (position != arguments.end()) {
+      arguments.erase(position, position + 2);
+    }
+    return arguments;
+  };
+
+  std::vector<InvalidCase> cases;
+  const auto with_valid_paged_layout = [](std::vector<std::string> arguments) {
+    arguments.insert(arguments.begin() + 2, {"--kv-layout", "paged", "--kv-block-tokens", "4"});
+    return arguments;
+  };
+  const auto add_phase_error_cases = [&cases, &with_valid_paged_layout](const std::vector<std::string>& arguments,
+                                                                        const std::string& reason_code) {
+    cases.push_back({arguments, reason_code});
+    cases.push_back({with_valid_paged_layout(arguments), reason_code});
+  };
+  add_phase_error_cases(erase_option(common, "--prompt-tokens"), LlmMemoryConfigReason::PROMPT_TOKENS_REQUIRED);
+  add_phase_error_cases(erase_option(common, "--attention-query-tile-tokens"),
+                        LlmMemoryConfigReason::ATTENTION_QUERY_TILE_TOKENS_REQUIRED);
+
+  std::vector<std::string> prompt_zero = common;
+  replace_option_value(prompt_zero, "--prompt-tokens", "0");
+  add_phase_error_cases(prompt_zero, LlmMemoryConfigReason::PROMPT_TOKENS_MUST_BE_POSITIVE);
+  std::vector<std::string> query_zero = common;
+  replace_option_value(query_zero, "--attention-query-tile-tokens", "0");
+  add_phase_error_cases(query_zero, LlmMemoryConfigReason::ATTENTION_QUERY_TILE_TOKENS_MUST_BE_POSITIVE);
+  std::vector<std::string> query_too_large = common;
+  replace_option_value(query_too_large, "--attention-query-tile-tokens", "6");
+  add_phase_error_cases(query_too_large, LlmMemoryConfigReason::ATTENTION_QUERY_TILE_TOKENS_EXCEEDS_PROMPT);
+
+  for (const std::vector<std::string>& paged_suffix :
+       {std::vector<std::string>{"--kv-layout", "paged", "--kv-block-tokens", "4"},
+        std::vector<std::string>{"--kv-block-tokens", "4", "--kv-layout", "paged"}}) {
+    std::vector<std::string> paged = common;
+    paged.insert(paged.end(), paged_suffix.begin(), paged_suffix.end());
+    cases.push_back({paged, LlmMemoryConfigReason::CPU_PREFILL_PAGED_NOT_YET_SUPPORTED});
+  }
+  cases.push_back({with_valid_paged_layout(common), LlmMemoryConfigReason::CPU_PREFILL_PAGED_NOT_YET_SUPPORTED});
+
+  for (const InvalidCase& test_case : cases) {
+    SCOPED_TRACE(::testing::PrintToString(test_case.arguments));
+    LlmMemoryConfig config;
+    const CapturedLlmParse parsed = parse_llm_arguments_capturing(test_case.arguments, config);
+    EXPECT_EQ(parsed.result, EXIT_FAILURE);
+    EXPECT_TRUE(parsed.stdout_output.empty());
+    EXPECT_EQ(first_output_line(parsed.stderr_output),
+              Messages::error_prefix() + Messages::error_llm_memory_config_invalid(test_case.reason_code));
+  }
+
+  std::vector<std::string> invalid_paged = common;
+  invalid_paged.insert(invalid_paged.end(), {"--kv-layout", "paged", "--kv-block-tokens", "3"});
+  LlmMemoryConfig config;
+  const CapturedLlmParse invalid_paged_result = parse_llm_arguments_capturing(invalid_paged, config);
+  EXPECT_EQ(first_output_line(invalid_paged_result.stderr_output),
+            Messages::error_prefix() +
+                Messages::error_llm_memory_config_invalid(LlmMemoryConfigReason::KV_BLOCK_TOKENS_NOT_POWER_OF_TWO));
+}
+
+TEST(LlmMemoryConfigTest, ParserRejectsCrossPhaseTokenOptionsAndUnknownPhase) {
+  LlmParserHooksScope hooks;
+  struct InvalidCase {
+    std::vector<std::string> arguments;
+    std::string reason_code;
+  };
+  std::vector<std::string> decode_prompt = valid_llm_arguments();
+  decode_prompt.insert(decode_prompt.end(), {"--prompt-tokens", "5"});
+  std::vector<std::string> decode_query = valid_llm_arguments();
+  decode_query.insert(decode_query.end(), {"--attention-query-tile-tokens", "2"});
+  std::vector<std::string> prefill_context = valid_prefill_arguments();
+  prefill_context.insert(prefill_context.end(), {"--context-tokens", "5"});
+  const std::vector<InvalidCase> cases = {
+      {decode_prompt, LlmMemoryConfigReason::PROMPT_TOKENS_NOT_APPLICABLE},
+      {decode_query, LlmMemoryConfigReason::ATTENTION_QUERY_TILE_TOKENS_NOT_APPLICABLE},
+      {prefill_context, LlmMemoryConfigReason::CONTEXT_TOKENS_NOT_APPLICABLE},
+  };
+  for (const InvalidCase& test_case : cases) {
+    LlmMemoryConfig config;
+    const CapturedLlmParse parsed = parse_llm_arguments_capturing(test_case.arguments, config);
+    EXPECT_EQ(first_output_line(parsed.stderr_output),
+              Messages::error_prefix() + Messages::error_llm_memory_config_invalid(test_case.reason_code));
+  }
+
+  std::vector<std::string> invalid_phase = valid_llm_arguments();
+  invalid_phase.insert(invalid_phase.end(), {"--phase", "training"});
+  LlmMemoryConfig config;
+  const CapturedLlmParse parsed = parse_llm_arguments_capturing(invalid_phase, config);
+  EXPECT_EQ(first_output_line(parsed.stderr_output),
+            Messages::error_prefix() +
+                Messages::error_invalid_value("--phase", "training", Messages::llm_memory_reason_phase()));
 }
 
 TEST(LlmMemoryConfigTest,
@@ -456,10 +601,11 @@ TEST(LlmMemoryConfigTest,
   LlmParserHooksScope hooks;
   for (const std::string& option : {
            "--weight-size-mb", "--layers", "--query-heads", "--kv-heads",
-           "--head-dim", "--kv-element-bytes", "--context-tokens",
-           "--kv-layout", "--kv-block-tokens", "--batch-size",
-           "--threads", "--iterations", "--count", "--seed",
-           "--output"}) {
+           "--head-dim", "--kv-element-bytes", "--phase",
+           "--context-tokens", "--prompt-tokens",
+           "--attention-query-tile-tokens", "--kv-layout",
+           "--kv-block-tokens", "--batch-size", "--threads",
+           "--iterations", "--count", "--seed", "--output"}) {
     SCOPED_TRACE(option);
     LlmMemoryConfig config;
     const CapturedLlmParse parsed = parse_llm_arguments_capturing(
@@ -488,7 +634,12 @@ TEST(LlmMemoryConfigTest,
       {{"--head-dim", "8"}, "--head-dim"},
       {{"--kv-element-bytes", "2", "--kv-element-bytes", "2"},
        "--kv-element-bytes"},
+      {{"--phase", "decode", "--phase", "prefill"}, "--phase"},
       {{"--context-tokens", "3"}, "--context-tokens"},
+      {{"--prompt-tokens", "3", "--prompt-tokens", "4"}, "--prompt-tokens"},
+      {{"--attention-query-tile-tokens", "2",
+        "--attention-query-tile-tokens", "3"},
+       "--attention-query-tile-tokens"},
       {{"--kv-layout", "contiguous", "--kv-layout", "paged"},
        "--kv-layout"},
       {{"--kv-block-tokens", "16", "--kv-block-tokens", "32"},
@@ -689,9 +840,6 @@ TEST(LlmMemoryConfigTest, ParserRejectsEveryIncompatibleOption) {
       {"-S", "threads=1"},
       {"--sweep-max-runs", "1"},
       {"-X", "1"},
-      {"--phase", "prefill"},
-      {"--prompt-tokens", "3"},
-      {"--attention-query-tile-tokens", "2"},
       {"--unknown"},
   };
   for (const std::vector<std::string>& suffix : suffixes) {
@@ -718,11 +866,13 @@ TEST(LlmMemoryConfigTest,
             std::string::npos);
   EXPECT_NE(parsed.stdout_output.find("memory traffic only"),
             std::string::npos);
-  EXPECT_EQ(parsed.stdout_output.find("--phase"), std::string::npos);
-  EXPECT_EQ(parsed.stdout_output.find("--prompt-tokens"),
+  EXPECT_NE(parsed.stdout_output.find("--phase <decode|prefill>"),
             std::string::npos);
-  EXPECT_EQ(parsed.stdout_output.find("--attention-query-tile-tokens"),
+  EXPECT_NE(parsed.stdout_output.find("--prompt-tokens <count>"),
             std::string::npos);
+  EXPECT_NE(
+      parsed.stdout_output.find("--attention-query-tile-tokens <count>"),
+      std::string::npos);
   EXPECT_EQ(parsed.stdout_output.find(Messages::config_header(SOFTVERSION)),
             std::string::npos);
   EXPECT_TRUE(config.help_printed);
