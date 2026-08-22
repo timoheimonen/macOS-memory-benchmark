@@ -79,7 +79,7 @@ This document describes the layout of project files, organized by purpose. It is
 ## 2. src/ — Source code
 
 All production C++, Objective-C++, and ARM64 assembly lives under `src/`. Headers use include paths relative to `src/`
-(e.g., `#include "core/config/config.h"`). Metal/Objective-C types are confined to one private `.mm` backend.
+(e.g., `#include "core/config/config.h"`). Metal/Objective-C types are confined to private `.mm` platform boundaries.
 
 ---
 
@@ -277,21 +277,24 @@ Objective-C++ Metal backend so deterministic unit tests do not require GPU work.
 
 ### 2.6 src/llm_memory/ — Synthetic LLM memory profile
 
-Standalone generic schema-1 vocabulary with all four CPU decode/prefill and contiguous/paged implementations. Pure
-logical phase planning, deterministic paged geometry/permutation, the
-Objective-C-free backend contract,
-backend-specific execution planning/evidence, CPU mapping and ARM64 execution, environment capture, console composition,
-and serialization are separated so deterministic unit tests can inject a fake backend without running hot kernels.
-All Metal LLM profiles remain unavailable and never fall back to an active CPU phase/layout.
+Standalone generic schema-1 vocabulary with all four CPU decode/prefill and contiguous/paged implementations plus an
+inactive Metal capability/resource foundation. Pure logical phase planning, deterministic paged geometry/permutation,
+backend-specific execution planning/evidence, the Objective-C-free backend contract, CPU mapping and ARM64 execution,
+the Objective-C++ Metal boundary, environment capture, console composition, and serialization are separated so
+deterministic unit tests can inject platform and allocation behavior without running hot kernels. All timed Metal LLM
+profiles remain unavailable and never fall back to an active CPU phase/layout.
 
 | File | Purpose |
 |---|---|
 | `llm_memory.h` / `.cpp` | Separate config/status foundation, strict exact-whitelist parser, required/default worker/seed resolution, complete command boundary, backend factory ownership, peak-memory admission, QoS/signal scope, console output, and file/stdout transport orchestration |
 | `llm_kv_layout.h` / `.cpp` | Pure checked paged-KV geometry, block ownership, SplitMix64/Fisher–Yates permutation and little-endian table hash, exact physical/logical/padding/table/lookup/accounting math, and transient preparation estimates |
 | `llm_prefill.h` / `.cpp` | Checked prefill tile, causal-pair, payload, paged floor-sum lookup, token/block cost partition, versioned ownership evidence, write/checksum oracle, and semantic event-trace planning |
-| `llm_work_plan.h` / `.cpp` | Checked phase-applicable weight/KV geometry, payload/metadata/accounted math, memory budget, scenario limits, exact CPU ownership evidence, and frozen methodology/component/plan identities for all active CPU phase/layout combinations |
+| `llm_work_plan.h` / `.cpp` | Checked phase-applicable weight/KV geometry, payload/metadata/accounted math, memory budget, scenario limits, exact CPU ownership evidence, inactive Metal segment/argument-buffer/resource/grid plans, and frozen methodology/component/plan identities |
 | `llm_backend.h` / `.cpp` | Objective-C-free synchronous backend lifecycle and task boundary, generic task identity/timing/completion/validation, tagged CPU/Metal task and command evidence, auxiliary-memory contract, stable statuses/reasons, checked evidence accessors, and backend factory |
 | `llm_cpu_backend.h` / `.cpp` | Active CPU adapter that owns the timer and prepared contiguous or paged resources, delegates allocation/execution to the executor, validates CPU worker/QoS/timer/checksum invariants, and converts executor evidence into the generic task result |
+| `llm_metal_backend.h` | Objective-C-free planning, capability, resource, memory-admission, diagnostics, and test-seam contract for the inactive Metal foundation; timed task execution and public CLI selection remain unsupported |
+| `llm_metal_backend.mm` | Objective-C++ Metal boundary for capability probing, runtime foundation-pipeline compilation, argument encoding, candidate-atomic private/shared allocation, untimed initialization and table upload, layout/post-validation probes, diagnostics, and idempotent cleanup |
+| `llm_metal_kernels_source.h` | Canonical embedded MSL 2.3 foundation source with versioned source, parameter, and resource-table ABIs plus initialization, staged-copy, layout-probe, and byte/table-validation entrypoints; exact source bytes are hashed at runtime and no timed workload is present |
 | `llm_executor.h` / `.cpp` | CPU-specific full-size mappings, paged-table preparation, deterministic initialization/pre-touch, phase/layout descriptor materialization, independent checksum oracles, padding canaries, synchronized worker team, timer boundary, and ARM64 adapters retained behind `LlmCpuBackend` |
 | `llm_runner.h` / `.cpp` | Backend-independent lifecycle, per-scenario automatic calibration or exact-work planning, generic task acceptance, frozen plans, cyclic loop order, status/counters, task-boundary interruption, aggregates, warnings, and logical checkpoints; resources are released before the command-terminal checkpoint |
 | `llm_json.h` / `.cpp` | Ordered generic LLM schema-1 builder plus conservative output-peak estimator, with backend/phase/layout identity, resolved plan, tagged backend evidence, decimal-string exact integers, nullable non-applicability, traffic diagnostics, environment evidence, and interpretation contract |
@@ -382,6 +385,7 @@ installed. All `.cpp` files are picked up automatically by the Makefile. Tests n
 | `test_llm_memory_json.cpp` | `LlmMemoryJsonTest` | Schema-1 decode/prefill and contiguous/paged identity, exact nullable geometry, ownership, output-peak, status, interpretation, environment, and checkpoint evidence |
 | `test_llm_memory_output.cpp` | `LlmMemoryOutputTest` | Exact decode/prefill and contiguous/paged geometry/headline formatting, interpretation text, and deduplicated warnings |
 | `test_llm_memory_kernels.cpp` | `LlmMemoryKernelIntegrationTest` | Real contiguous/paged decode/prefill ARM64 descriptor/kernel scenarios, paged tails/lookups, full-prompt writes, exact partial tiled scans, checksum, padding, worker-count, and AAPCS64 coverage |
+| `test_llm_metal_backend.cpp` | `LlmMetalBackendTest`, `LlmMetalBackendIntegrationTest`, `LlmMetalBackendFailureInjectionIntegrationTest` | Pure capability, segmentation, argument-buffer, grid, ABI, source-hash, and two-stage admission coverage plus real-device foundation compilation, first/last active Tier-2 slot probing, private initialization, paged table upload, boundary segmentation, interruption/allocation cleanup, idempotent release, and explicit unsupported timed-task evidence |
 | `test_buffer_manager.cpp` | `BufferManagerTest` | Pattern mapping policy, atomic allocation cleanup, initialized content, validation, and peak accounting |
 | `test_benchmark_executor.cpp` | `BenchmarkExecutorTest` | Injected phase/chain failures, continuous latency sampling, and hardware executor contracts |
 | `test_benchmark_runner.cpp` | `BenchmarkStatisticsCollectorTest`, `BenchmarkRunnerTest` | Status-bearing aggregation, schema-3 retained snapshots, checkpointing, interruption, and runner exception/failure seams |

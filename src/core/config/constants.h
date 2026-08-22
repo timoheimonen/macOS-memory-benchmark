@@ -232,6 +232,23 @@ namespace Constants {
   constexpr size_t LLM_METAL_SEGMENT_CAPACITY_BYTES =
       256ULL * BYTES_PER_MB;
   constexpr size_t LLM_METAL_SEGMENT_SLOTS_PER_POOL = 256;
+  constexpr size_t LLM_METAL_STATUS_BUFFER_BYTES = 4096;
+  constexpr size_t LLM_METAL_THREADS_PER_THREADGROUP_CAP = 256;
+  constexpr size_t LLM_METAL_MAX_THREADGROUPS_PER_GRID = 8192;
+  constexpr size_t LLM_METAL_MAX_OWNER_ORDINALS_PER_THREADGROUP = 65536;
+  constexpr size_t LLM_METAL_MAX_VECTOR_ITERATIONS_PER_LANE_PER_VISIT =
+      1048576;
+  constexpr size_t LLM_METAL_MAX_PAGED_SEMANTIC_LOOKUPS_PER_TASK =
+      268435456;
+  constexpr size_t LLM_METAL_MAX_WORK_UNITS_PER_DISPATCH = 65536;
+  constexpr size_t LLM_METAL_VECTOR_WIDTH_BYTES = 16;
+  constexpr size_t LLM_METAL_DIAGNOSTIC_MAX_BYTES = 4096;
+  constexpr const char* LLM_METAL_ARGUMENT_BUFFER_ABI_VERSION =
+      "llm-metal-argument-buffer-tier2-v1";
+  constexpr const char* LLM_METAL_GRID_PLAN_VERSION =
+      "llm-metal-capped-grid-stride-v1";
+  constexpr const char* LLM_METAL_RESOURCE_PLAN_VERSION =
+      "llm-metal-resource-foundation-v1";
   constexpr const char* LLM_PAGED_KV_LAYOUT_VERSION =
       "paged-uint32-block-table-full-blocks-v1";
   constexpr const char* LLM_KV_BLOCK_PERMUTATION_VERSION =

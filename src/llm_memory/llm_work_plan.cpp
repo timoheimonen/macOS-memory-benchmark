@@ -2237,6 +2237,22 @@ LlmCpuExecutionPlan* get_llm_cpu_execution_plan(
   return std::get_if<LlmCpuExecutionPlan>(&plan.backend_execution_plan);
 }
 
+const LlmMetalExecutionPlan* get_llm_metal_execution_plan(
+    const LlmMemoryWorkPlan& plan) noexcept {
+  if (plan.backend != LlmMemoryBackend::Metal) {
+    return nullptr;
+  }
+  return std::get_if<LlmMetalExecutionPlan>(&plan.backend_execution_plan);
+}
+
+LlmMetalExecutionPlan* get_llm_metal_execution_plan(
+    LlmMemoryWorkPlan& plan) noexcept {
+  if (plan.backend != LlmMemoryBackend::Metal) {
+    return nullptr;
+  }
+  return std::get_if<LlmMetalExecutionPlan>(&plan.backend_execution_plan);
+}
+
 bool validate_llm_prefill_cpu_execution_evidence(
     const LlmMemoryWorkPlan& plan) noexcept {
   const LlmCpuExecutionPlan* const cpu_plan =

@@ -21,6 +21,7 @@
 #include "llm_memory/llm_backend.h"
 
 #include "llm_memory/llm_cpu_backend.h"
+#include "llm_memory/llm_metal_backend.h"
 
 LlmBackendAuxiliaryEstimate LlmBackend::calculate_auxiliary_estimate(
     const LlmAuxiliaryPreflightView& preflight) const noexcept {
@@ -47,7 +48,7 @@ std::unique_ptr<LlmBackend> create_llm_backend(LlmMemoryBackend backend) {
     case LlmMemoryBackend::Cpu:
       return create_llm_cpu_backend();
     case LlmMemoryBackend::Metal:
-      return nullptr;
+      return create_llm_metal_backend();
   }
   return nullptr;
 }
@@ -65,6 +66,16 @@ const LlmExecutorResult* get_llm_cpu_task_evidence(const LlmTaskExecutionResult&
 LlmExecutorResult* get_llm_cpu_task_evidence(LlmTaskExecutionResult& result) noexcept {
   auto* cpu = std::get_if<LlmCpuTaskEvidence>(&result.backend_evidence);
   return cpu == nullptr ? nullptr : &cpu->executor;
+}
+
+const LlmMetalBackendEvidence* get_llm_metal_backend_evidence(
+    const LlmBackendEvidence& evidence) noexcept {
+  return std::get_if<LlmMetalBackendEvidence>(&evidence.backend_evidence);
+}
+
+const LlmMetalTaskEvidence* get_llm_metal_task_evidence(
+    const LlmTaskExecutionResult& result) noexcept {
+  return std::get_if<LlmMetalTaskEvidence>(&result.backend_evidence);
 }
 
 const char* llm_backend_status_to_string(LlmBackendStatus status) noexcept {

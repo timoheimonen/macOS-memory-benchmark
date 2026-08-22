@@ -25,9 +25,11 @@
 #include <cstdint>
 #include <limits>
 #include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <variant>
+#include <vector>
 
 #include "llm_memory/llm_executor.h"
 
@@ -48,6 +50,44 @@ inline constexpr const char* VALIDATION_NOT_EVALUATED = "validation-not-evaluate
 inline constexpr const char* VALIDATION_FAILED = "validation-failed";
 inline constexpr const char* INVALID_AUTHORITATIVE_ELAPSED = "invalid-authoritative-elapsed";
 inline constexpr const char* TASK_UNSUPPORTED = "task-unsupported";
+inline constexpr const char* METAL_DEVICE_UNAVAILABLE =
+    "metal-device-unavailable";
+inline constexpr const char* UNIFIED_MEMORY_REQUIRED =
+    "unified-memory-required";
+inline constexpr const char* APPLE7_FAMILY_REQUIRED =
+    "apple7-family-required";
+inline constexpr const char* ARGUMENT_BUFFER_TIER2_REQUIRED =
+    "argument-buffer-tier2-required";
+inline constexpr const char* METAL_MAX_BUFFER_LENGTH_BELOW_SEGMENT_CAPACITY =
+    "metal-max-buffer-length-below-segment-capacity";
+inline constexpr const char* METAL_COMMAND_QUEUE_CREATION_FAILED =
+    "metal-command-queue-creation-failed";
+inline constexpr const char* METAL_KERNEL_COMPILATION_FAILED =
+    "metal-kernel-compilation-failed";
+inline constexpr const char* METAL_PIPELINE_CREATION_FAILED =
+    "metal-pipeline-creation-failed";
+inline constexpr const char* METAL_ARGUMENT_ENCODER_CREATION_FAILED =
+    "metal-argument-encoder-creation-failed";
+inline constexpr const char* METAL_ARGUMENT_BUFFER_LAYOUT_INVALID =
+    "metal-argument-buffer-layout-invalid";
+inline constexpr const char* SEGMENT_COUNT_CAP_EXCEEDED =
+    "segment-count-cap-exceeded";
+inline constexpr const char* PAGED_BLOCK_EXCEEDS_SEGMENT_CAPACITY =
+    "paged-block-exceeds-segment-capacity";
+inline constexpr const char* MEMORY_BUDGET_EXCEEDED =
+    "memory-budget-exceeded";
+inline constexpr const char* METAL_RESOURCE_ALLOCATION_FAILED =
+    "metal-resource-allocation-failed";
+inline constexpr const char* METAL_RESOURCE_INITIALIZATION_FAILED =
+    "metal-resource-initialization-failed";
+inline constexpr const char* PREPARATION_INTERRUPTED =
+    "preparation-interrupted";
+inline constexpr const char* PLAN_RESOURCE_IDENTITY_MISMATCH =
+    "plan-resource-identity-mismatch";
+inline constexpr const char* POST_VALIDATION_COMMAND_FAILED =
+    "post-validation-command-failed";
+inline constexpr const char* PADDING_CANARY_MISMATCH =
+    "padding-canary-mismatch";
 }  // namespace LlmBackendReason
 
 /** Backend lifecycle outcome; unsupported is distinct from runtime failure. */
@@ -152,8 +192,11 @@ struct LlmCpuTaskEvidence {
   LlmExecutorResult executor;
 };
 
-/** Reserved Phase-2 tag for later Metal task evidence. */
-struct LlmMetalTaskEvidence {};
+/** Phase-8 Metal tasks are deliberately unsupported until timed kernels land. */
+struct LlmMetalTaskEvidence {
+  bool timed_pipeline_available = false;
+  bool timing_evaluated = false;
+};
 
 using LlmTaggedTaskEvidence = std::variant<std::monostate, LlmCpuTaskEvidence, LlmMetalTaskEvidence>;
 
@@ -173,8 +216,100 @@ struct LlmCpuBackendEvidence {
   LlmResourcePreparationResult preparation;
 };
 
-/** Reserved Phase-2 tag for later Metal capability and resource evidence. */
-struct LlmMetalBackendEvidence {};
+/** Bounded Objective-C/Metal error diagnostics behind the pure C++ boundary. */
+struct LlmMetalErrorDiagnostic {
+  std::string domain;
+  long long code = 0;
+  std::string description;
+};
+
+/** Runtime properties for one compiled Phase-8 foundation pipeline. */
+struct LlmMetalPipelineEvidence {
+  std::string label;
+  size_t thread_execution_width = 0;
+  size_t max_total_threads_per_threadgroup = 0;
+};
+
+/** Capability, compiler, source, and argument-encoder evidence. */
+struct LlmMetalCapabilityEvidence {
+  std::string device_name;
+  uint64_t registry_id = 0;
+  bool has_unified_memory = false;
+  bool required_apple7_family_supported = false;
+  bool argument_buffers_tier2_supported = false;
+  std::vector<std::string> supported_families;
+  size_t max_buffer_length = 0;
+  uint64_t recommended_max_working_set_size = 0;
+  std::string compilation_mode = "runtime-source";
+  std::string msl_language_version = "2.3";
+  std::string kernel_revision;
+  std::string kernel_source_sha256;
+  std::string compiler_diagnostics;
+  std::string compiler_identifier;
+  std::string build_sdk;
+  std::string deployment_target;
+  size_t argument_buffer_encoded_length = 0;
+  size_t argument_buffer_alignment = 0;
+  bool layout_probe_evaluated = false;
+  bool layout_probe_valid = false;
+  size_t layout_probe_resource_count = 0;
+  std::vector<LlmMetalPipelineEvidence> foundation_pipelines;
+  LlmMetalErrorDiagnostic error;
+};
+
+/** Actual Metal allocation metadata for one owned candidate resource. */
+struct LlmMetalResourceMetadata {
+  std::string label;
+  std::string pool;
+  size_t pool_index = 0;
+  std::string storage_mode;
+  std::string cpu_cache_mode;
+  std::string hazard_tracking_mode;
+  uint64_t resource_options = 0;
+  size_t length_bytes = 0;
+  bool allocated_size_available = false;
+  size_t allocated_size_bytes = 0;
+  size_t committed_bytes = 0;
+  size_t allocation_rounding_bytes = 0;
+};
+
+/** Atomic candidate-allocation, initialization, and cleanup evidence. */
+struct LlmMetalResourceEvidence {
+  bool allocation_attempted = false;
+  bool allocation_completed = false;
+  bool initialization_completed = false;
+  bool table_upload_completed = false;
+  bool table_validation_completed = false;
+  std::optional<LlmKvPermutationIdentity> table_permutation;
+  bool post_validation_completed = false;
+  bool cpu_sample_readback_validation_completed = false;
+  bool candidate_cleanup_completed = false;
+  bool resources_published = false;
+  size_t persistent_resource_length_bytes = 0;
+  size_t committed_resource_bytes = 0;
+  size_t resource_rounding_bytes = 0;
+  size_t layout_padding_bytes = 0;
+  size_t transient_peak_bytes = 0;
+  size_t additional_owned_bytes = 0;
+  size_t known_owned_peak_bytes = 0;
+  size_t admitted_budget_bytes = 0;
+  uint64_t current_allocated_size_before = 0;
+  uint64_t current_allocated_size_peak = 0;
+  uint64_t current_allocated_size_after_release = 0;
+  bool recommended_working_set_available = false;
+  int64_t recommended_working_set_headroom_bytes = 0;
+  double recommended_working_set_headroom_fraction = 0.0;
+  bool exceeds_recommended_working_set = false;
+  std::vector<LlmMetalResourceMetadata> resources;
+  LlmMetalErrorDiagnostic error;
+};
+
+/** Inactive Metal foundation snapshot; it contains no timed result. */
+struct LlmMetalBackendEvidence {
+  LlmMetalCapabilityEvidence capability;
+  LlmMetalResourceEvidence resources;
+  bool timed_results_available = false;
+};
 
 using LlmTaggedBackendEvidence = std::variant<std::monostate, LlmCpuBackendEvidence, LlmMetalBackendEvidence>;
 
@@ -230,6 +365,14 @@ const LlmResourcePreparationResult* get_llm_cpu_preparation(const LlmBackendEvid
 /** Return legacy CPU evidence when a generic task carries the CPU tag. */
 const LlmExecutorResult* get_llm_cpu_task_evidence(const LlmTaskExecutionResult& result) noexcept;
 LlmExecutorResult* get_llm_cpu_task_evidence(LlmTaskExecutionResult& result) noexcept;
+
+/** Return Metal evidence only when the snapshot carries the Metal tag. */
+const LlmMetalBackendEvidence* get_llm_metal_backend_evidence(
+    const LlmBackendEvidence& evidence) noexcept;
+
+/** Return Metal task evidence only when the result carries the Metal tag. */
+const LlmMetalTaskEvidence* get_llm_metal_task_evidence(
+    const LlmTaskExecutionResult& result) noexcept;
 
 /** Return stable diagnostic tokens for backend and task statuses. */
 const char* llm_backend_status_to_string(LlmBackendStatus status) noexcept;

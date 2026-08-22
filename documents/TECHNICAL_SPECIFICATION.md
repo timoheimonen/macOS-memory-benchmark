@@ -184,7 +184,8 @@ Configuration state is represented by `BenchmarkConfig` (`src/core/config/config
   `LlmMemoryWorkPlan` separately records common phase-applicable geometry, exact model payload/accounted work, memory
   admission, layout metadata, domain seeds, methodology, exact component identities, and exactly one tagged
   backend-execution-plan variant. The active CPU alternative owns requested/available/effective workers plus its
-  descriptor templates and storage accounting; the Metal alternative is reserved for later activation.
+  descriptor templates and storage accounting. The inactive Metal foundation exposes pure segment, argument-buffer,
+  dispatch-grid, resource, and admission planners, but it has no public or timed workload path.
 - Cache behavior: auto L1/L2 or user-provided `--cache-size`.
 - Latency sampling: `latency_sample_count`.
 - Latency-chain construction mode: `latency_chain_mode` (type `LatencyChainMode`,
@@ -690,12 +691,13 @@ capability-supported and performance-unvalidated until runtime compilation, exac
 the appropriate controlled performance campaign are recorded. Integration tests deliberately have no minimum-GB/s
 assert.
 
-### 13.7 LLM generic plan and active CPU decode/prefill execution
+### 13.7 LLM generic plan, active CPU execution, and inactive Metal foundation
 
 LLM mode is implemented under `src/llm_memory/` with a pure checked work planner, a pure paged-layout/permutation
 module, an Objective-C-free synchronous `LlmBackend` boundary, a status-bearing backend-independent runner, a dedicated
-CPU adapter, phase/layout-specific ARM64 kernels, an ordered schema builder, and a Foundation-backed environment
-snapshot. Generic enums cover backend `cpu|metal`, phase `decode|prefill`, and KV layout `contiguous|paged`.
+CPU adapter, an inactive Objective-C++ Metal capability/resource boundary, phase/layout-specific ARM64 kernels, an
+ordered schema builder, and a Foundation-backed environment snapshot. Generic enums cover backend `cpu|metal`, phase
+`decode|prefill`, and KV layout `contiguous|paged`.
 All four CPU phase/layout combinations are active with exact methodology identities
 `llm-memory-v1-cpu-decode-contiguous`, `llm-memory-v1-cpu-decode-paged`,
 `llm-memory-v1-cpu-prefill-contiguous`, and `llm-memory-v1-cpu-prefill-paged`. Metal remains unavailable and never
@@ -705,6 +707,38 @@ receives fallback execution.
 `LlmBackendExecutionPlan` carries exactly one `LlmCpuExecutionPlan` or `LlmMetalExecutionPlan` tag. The CPU alternative
 owns layout-specific worker reduction, worker-major pointer-free ranges, descriptor counts, and retained planner storage.
 Checked accessors require the declared backend and variant tag to agree.
+
+The inactive Metal foundation resolves canonical 256 MiB W/K/V and uint32 block-table segments, four bounded 256-slot
+argument-buffer arrays plus one status/checksum slot, and checked resource lengths and transient memory. A separate pure
+planner derives dispatch grids from runtime pipeline limits, while capability evidence records foundation pipeline
+properties. The 1,025 resource IDs, exact segment lengths, MSL revision, and source hash are versioned execution
+contracts; the plan does not treat `MTLArgumentEncoder.encodedLength` or resource-allocation rounding as a portable ABI
+formula. Paged K/V blocks remain whole within a segment.
+
+The Objective-C++ boundary requires a default Apple7-or-newer unified-memory device, Tier-2 argument buffers, and
+`maxBufferLength` of at least one canonical segment. It runtime-compiles the embedded MSL 2.3 foundation source and
+creates only its five initialization, staged-copy, layout-probe, and byte/table-validation pipelines. W/K/V and
+block-table resources use private tracked storage; argument/status resources and bounded reusable staging use shared
+tracked storage. Initialization and table upload are excluded from timing.
+
+Resource preparation is candidate-atomic. A checked pre-allocation admission uses requested lengths, runtime argument-
+encoder metadata, host auxiliaries, and transient staging; paged host mappings are rounded with the queried native page
+size, and plan resolution rejects a submitted host granularity that differs from that runtime value. A second admission
+uses each owned resource's reported allocated size when available and otherwise its length. Layout padding and allocation
+rounding remain separate evidence and are not double-counted. Any nil resource, Objective-C exception, failed command,
+or post-allocation budget rejection releases the entire candidate, and explicit release is idempotent.
+
+Paged-table generation and the staged upload/readback loop poll preparation interruption no less often than every
+1,048,576 entries; upload commands are therefore capped at 4 MiB of uint32 entries. Interruption retains the stable
+`preparation-interrupted` reason and publishes no resources. The runtime ABI probe reads the first and last active
+Tier-2 argument-buffer slot in every segmented pool, plus the shared status slot, so the 256 MiB boundary exercises a
+nonzero indirect slot. The pure resource planner accepts explicitly supplied `additional_owned_bytes`, but the inactive
+backend's generic auxiliary estimator returns `backend-not-activated`: exact command-wide Metal helper backing is wired
+before public activation rather than being represented as zero.
+
+This foundation does not contain timed phase/layout/scenario pipelines and does not emit a Metal LLM performance result.
+Timed task execution and public Metal CLI selection remain unsupported until their later implementation phases;
+there is no CPU fallback.
 
 The prefill planner resolves prompt length `P` and query-tile length `Q`. It computes `C = ceil(P/Q)`, prefix visits
 `S = Q*triangular(P/Q) + (P%Q != 0 ? P : 0)`, causal pairs, logical
@@ -1303,6 +1337,9 @@ Recommended validation commands:
   `./test_runner '--gtest_filter=ModeSelectorTest.*:LlmMemoryContractTest.*:LlmMemoryConfigTest.*:LlmMemoryWorkPlanTest.*:LlmMemoryExecutorTest.*:LlmMemoryRunnerTest.*:LlmMemoryJsonTest.*:LlmMemoryOutputTest.*:MessagesTest.*'`
 - Real LLM ARM64 and bounded executable transport contracts:
   `./test_runner '--gtest_filter=*LlmMemory*Integration*:*ExecutableCliIntegration*'`
+- Inactive LLM Metal capability/resource foundation:
+  `./test_runner '--gtest_filter=*LlmMetalBackend*:*LlmMemoryWorkPlan*'`; the real-device cases compile and exercise
+  only foundation pipelines and resources, never a timed LLM workload.
 - Deterministic GPU-focused tests:
   `./test_runner --gtest_filter='GpuBandwidthParserTest.*:GpuMemoryBudgetTest.*:GpuRunnerTest.*:GpuJsonTest.*:GpuWorkPlanTest.*:GpuTimedAccumulatorOracleTest.*:ModeSelectorTest.*:HashUtilsTest.*'`
 - Real Metal contract: `./test_runner '--gtest_filter=GpuMetalBackendIntegrationTest.*'`; unsupported hardware may skip
@@ -1316,12 +1353,15 @@ entry test. `jq` is not required by this gate.
 ## 23. Source Map (Primary Entry Points)
 
 - Program entry: `main.cpp`
-- LLM memory profile and active CPU backend:
+- LLM memory profile, active CPU backend, and inactive Metal capability/resource foundation:
   - `src/llm_memory/llm_memory.cpp`
   - `src/llm_memory/llm_work_plan.cpp`
   - `src/llm_memory/llm_kv_layout.cpp`
   - `src/llm_memory/llm_backend.cpp`
   - `src/llm_memory/llm_cpu_backend.cpp`
+  - `src/llm_memory/llm_metal_backend.h`
+  - `src/llm_memory/llm_metal_backend.mm`
+  - `src/llm_memory/llm_metal_kernels_source.h`
   - `src/llm_memory/llm_executor.cpp`
   - `src/llm_memory/llm_runner.cpp`
   - `src/llm_memory/llm_json.cpp`

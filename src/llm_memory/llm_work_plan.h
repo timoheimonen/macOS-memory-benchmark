@@ -144,6 +144,48 @@ inline constexpr const char* TASK_ACCOUNTED_BYTES_CAP_EXCEEDED =
     "task-accounted-bytes-cap-exceeded";
 }  // namespace LlmWorkPlanReason
 
+/** Stable reasons emitted by the inactive pure Metal foundation planner. */
+namespace LlmMetalPlanReason {
+inline constexpr const char* VALID = "valid";
+inline constexpr const char* INVALID_GEOMETRY = "invalid-metal-geometry";
+inline constexpr const char* PAGED_LAYOUT_REQUIRED =
+    "paged-layout-plan-required";
+inline constexpr const char* PAGED_LAYOUT_MISMATCH =
+    "paged-layout-plan-mismatch";
+inline constexpr const char* ARGUMENT_ENCODER_LENGTH_ZERO =
+    "metal-argument-encoder-length-zero";
+inline constexpr const char* ARGUMENT_ENCODER_ALIGNMENT_INVALID =
+    "metal-argument-encoder-alignment-invalid";
+inline constexpr const char* ARGUMENT_BUFFER_LAYOUT_INVALID =
+    "metal-argument-buffer-layout-invalid";
+inline constexpr const char* RESOURCE_LENGTH_OVERFLOW =
+    "metal-resource-length-overflow";
+inline constexpr const char* RESOURCE_LENGTH_EXCEEDS_MAX_BUFFER =
+    "metal-resource-length-exceeds-max-buffer";
+inline constexpr const char* MEMORY_BUDGET_OVERFLOW =
+    "memory-budget-overflow";
+inline constexpr const char* MEMORY_BUDGET_EXCEEDED =
+    "memory-budget-exceeded";
+inline constexpr const char* PIPELINE_WIDTH_ZERO =
+    "metal-pipeline-width-zero";
+inline constexpr const char* PIPELINE_THREAD_LIMIT_INVALID =
+    "metal-pipeline-thread-limit-invalid";
+inline constexpr const char* OWNER_COST_COUNT_MISMATCH =
+    "metal-owner-cost-count-mismatch";
+inline constexpr const char* OWNER_COUNT_OVERFLOW =
+    "metal-owner-count-overflow";
+inline constexpr const char* OWNER_STRIDE_CAP_EXCEEDED =
+    "owner-stride-cap-exceeded";
+inline constexpr const char* VECTOR_ITERATION_CAP_EXCEEDED =
+    "vector-iteration-cap-exceeded";
+inline constexpr const char* SEMANTIC_VISIT_CAP_EXCEEDED =
+    "semantic-visit-cap-exceeded";
+inline constexpr const char* WORK_UNITS_PER_DISPATCH_CAP_EXCEEDED =
+    "work-units-per-dispatch-cap-exceeded";
+inline constexpr const char* PLANNER_ALLOCATION_FAILED =
+    "planner-allocation-failed";
+}  // namespace LlmMetalPlanReason
+
 /** Stable domains used to derive independent buffer and scenario seeds. */
 enum class LlmSeedDomain : uint8_t {
   WeightBuffer = 0,
@@ -608,8 +650,138 @@ struct LlmCpuExecutionPlan {
   std::optional<LlmPrefillCpuExecutionPlan> prefill;
 };
 
-/** Placeholder for Metal-only execution planning introduced in later phases. */
-struct LlmMetalExecutionPlan {};
+/** Injected caps for deterministic Metal segmentation and dispatch planning. */
+struct LlmMetalPlanningLimits {
+  size_t segment_capacity_bytes =
+      Constants::LLM_METAL_SEGMENT_CAPACITY_BYTES;
+  size_t segment_slots_per_pool =
+      Constants::LLM_METAL_SEGMENT_SLOTS_PER_POOL;
+  size_t threads_per_threadgroup_cap =
+      Constants::LLM_METAL_THREADS_PER_THREADGROUP_CAP;
+  size_t maximum_threadgroups_per_grid =
+      Constants::LLM_METAL_MAX_THREADGROUPS_PER_GRID;
+  size_t maximum_owner_ordinals_per_threadgroup =
+      Constants::LLM_METAL_MAX_OWNER_ORDINALS_PER_THREADGROUP;
+  size_t maximum_vector_iterations_per_lane_per_visit =
+      Constants::LLM_METAL_MAX_VECTOR_ITERATIONS_PER_LANE_PER_VISIT;
+  size_t maximum_paged_semantic_lookups_per_task =
+      Constants::LLM_METAL_MAX_PAGED_SEMANTIC_LOOKUPS_PER_TASK;
+  size_t maximum_work_units_per_dispatch =
+      Constants::LLM_METAL_MAX_WORK_UNITS_PER_DISPATCH;
+};
+
+/** Canonical Tier-2 resource-table slots and exact active resource counts. */
+struct LlmMetalArgumentBufferPlan {
+  bool valid = false;
+  std::string reason_code =
+      LlmMetalPlanReason::ARGUMENT_BUFFER_LAYOUT_INVALID;
+  size_t weight_slot_base = 0;
+  size_t k_slot_base = Constants::LLM_METAL_SEGMENT_SLOTS_PER_POOL;
+  size_t v_slot_base = 2 * Constants::LLM_METAL_SEGMENT_SLOTS_PER_POOL;
+  size_t table_slot_base = 3 * Constants::LLM_METAL_SEGMENT_SLOTS_PER_POOL;
+  size_t status_slot = 4 * Constants::LLM_METAL_SEGMENT_SLOTS_PER_POOL;
+  size_t encoded_resource_slot_count =
+      4 * Constants::LLM_METAL_SEGMENT_SLOTS_PER_POOL + 1;
+  size_t weight_segment_count = 0;
+  size_t k_segment_count = 0;
+  size_t v_segment_count = 0;
+  size_t table_segment_count = 0;
+  size_t active_resource_count = 0;
+  std::string identity;
+};
+
+/** Runtime pipeline limits injected into the pure grid resolver. */
+struct LlmMetalPipelineCapabilities {
+  size_t thread_execution_width = 0;
+  size_t max_total_threads_per_threadgroup = 0;
+};
+
+/** Exact bounded inputs for one future Metal workload dispatch. */
+struct LlmMetalGridRequest {
+  size_t owner_count = 0;
+  size_t visit_bytes = 0;
+  size_t work_units = 0;
+  size_t paged_semantic_lookups = 0;
+  std::vector<size_t> owner_accounted_bytes;
+  LlmMetalPipelineCapabilities pipeline;
+  LlmMetalPlanningLimits limits;
+};
+
+/** Capped grid-stride geometry and optional cyclic owner-cost evidence. */
+struct LlmMetalGridPlan {
+  bool valid = false;
+  std::string reason_code = LlmMetalPlanReason::PIPELINE_WIDTH_ZERO;
+  size_t owner_count = 0;
+  size_t threads_per_threadgroup = 0;
+  size_t actual_threadgroups = 0;
+  size_t owner_ordinals_per_threadgroup = 0;
+  size_t vector_iterations_per_lane_per_visit = 0;
+  size_t work_units = 0;
+  size_t paged_semantic_lookups = 0;
+  size_t minimum_threadgroup_accounted_bytes = 0;
+  size_t maximum_threadgroup_accounted_bytes = 0;
+  size_t threadgroup_accounted_imbalance_bytes = 0;
+  std::vector<size_t> threadgroup_accounted_bytes;
+  std::string identity;
+};
+
+/** One exact resource requested by the inactive Metal candidate allocator. */
+enum class LlmMetalResourcePool : uint8_t {
+  Weight = 0,
+  K,
+  V,
+  BlockTable,
+  ArgumentBuffer,
+  Status,
+  Staging,
+};
+
+/** Pure allocation descriptor; storage semantics are fixed by the pool. */
+struct LlmMetalPlannedResource {
+  LlmMetalResourcePool pool = LlmMetalResourcePool::Weight;
+  size_t pool_index = 0;
+  size_t length_bytes = 0;
+  bool persistent = true;
+};
+
+/** Exact pre-allocation resource lengths and host/transient peak evidence. */
+struct LlmMetalResourcePlan {
+  bool valid = false;
+  std::string reason_code = LlmMetalPlanReason::INVALID_GEOMETRY;
+  LlmMetalPlanningLimits limits;
+  LlmKvSegmentPlan weight_segments;
+  LlmKvSegmentPlan k_segments;
+  LlmKvSegmentPlan v_segments;
+  std::optional<LlmKvSegmentPlan> table_segments;
+  std::optional<LlmKvLayoutPlan> paged_layout;
+  LlmMetalArgumentBufferPlan argument_buffer;
+  size_t argument_buffer_encoded_length = 0;
+  size_t argument_buffer_alignment = 0;
+  size_t max_buffer_length = 0;
+  size_t host_mapping_granularity_bytes = 1;
+  size_t status_buffer_length = Constants::LLM_METAL_STATUS_BUFFER_BYTES;
+  size_t staging_buffer_length = 0;
+  size_t host_permutation_mapping_bytes = 0;
+  size_t permutation_validation_bitset_bytes = 0;
+  size_t additional_owned_bytes = 0;
+  size_t persistent_resource_length_bytes = 0;
+  size_t transient_peak_bytes = 0;
+  size_t known_owned_peak_bytes = 0;
+  size_t available_memory_bytes = 0;
+  size_t admitted_budget_bytes = 0;
+  std::vector<LlmMetalPlannedResource> planned_resources;
+  std::string identity;
+};
+
+/** Inactive Metal plan used by Phase-8 resource/capability tests. */
+struct LlmMetalExecutionPlan {
+  bool valid = false;
+  std::string reason_code = LlmMetalPlanReason::INVALID_GEOMETRY;
+  LlmMetalResourcePlan resources;
+  std::string msl_revision;
+  std::string msl_source_sha256;
+  std::string identity;
+};
 
 /** Exactly one backend-specific execution plan for a logical model plan. */
 using LlmBackendExecutionPlan =
@@ -747,6 +919,17 @@ LlmCpuExecutionPlan* get_llm_cpu_execution_plan(
     LlmMemoryWorkPlan& plan) noexcept;
 
 /**
+ * Return the Metal execution plan only when the declared backend and variant
+ * alternative both identify Metal. A mismatch returns null.
+ */
+const LlmMetalExecutionPlan* get_llm_metal_execution_plan(
+    const LlmMemoryWorkPlan& plan) noexcept;
+
+/** Non-const overload of the checked Metal execution-plan accessor. */
+LlmMetalExecutionPlan* get_llm_metal_execution_plan(
+    LlmMemoryWorkPlan& plan) noexcept;
+
+/**
  * Stream-validate canonical contiguous or paged prefill ownership and
  * identities.
  *
@@ -871,10 +1054,12 @@ LlmMemoryWorkPlan finalize_llm_memory_work_plan(
  * The active CPU planner reduces effective workers until every standalone
  * scenario has work. Its retained vector capacities are measured after
  * allocation and the budget is re-evaluated before the plan becomes valid.
- * Invalid plans expose no executable templates. Metal remains an explicit
- * placeholder until its planner is activated. Both contiguous and paged CPU
- * prefill produce executable descriptor and ownership plans; paged execution
- * retains the immutable block-table identity in the work plan.
+ * Invalid plans expose no executable templates. The public builder continues
+ * to reject Metal until a timed profile is activated; the separate Phase-8
+ * Metal foundation planner resolves capability-dependent resource plans for
+ * internal and real-device tests. Both contiguous and paged CPU prefill
+ * produce executable descriptor and ownership plans; paged execution retains
+ * the immutable block-table identity in the work plan.
  *
  * @param request Fully resolved geometry, environment, and budget inputs.
  * @param stop_requested Optional synchronous predicate polled during paged
