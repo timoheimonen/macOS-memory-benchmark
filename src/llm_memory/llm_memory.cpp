@@ -407,6 +407,7 @@ int parse_llm_memory_arguments(int argc, char* argv[],
                                config.visible_context_tokens)) {
         return EXIT_FAILURE;
       }
+      config.user_specified_context_tokens = true;
       continue;
     }
     if (argument == "--batch-size") {
@@ -550,18 +551,22 @@ int parse_llm_memory_arguments(int argc, char* argv[],
     return EXIT_FAILURE;
   }
 
-  const LlmGeometry geometry = resolve_llm_geometry(
-      {validation.active_weight_bytes,
-       config.layer_count,
-       config.query_head_count,
-       config.kv_head_count,
-       config.head_dimension,
-       config.kv_element_bytes,
-       config.visible_context_tokens,
-       config.batch_size,
-       config.kv_block_tokens,
-       config.phase,
-       config.kv_layout});
+  LlmGeometryRequest geometry_request{
+      validation.active_weight_bytes,
+      config.layer_count,
+      config.query_head_count,
+      config.kv_head_count,
+      config.head_dimension,
+      config.kv_element_bytes,
+      config.visible_context_tokens,
+      config.batch_size,
+      config.kv_block_tokens,
+      config.phase,
+      config.kv_layout};
+  geometry_request.prompt_tokens = config.prompt_tokens;
+  geometry_request.attention_query_tile_tokens =
+      config.attention_query_tile_tokens;
+  const LlmGeometry geometry = resolve_llm_geometry(geometry_request);
   if (!geometry.valid) {
     report_llm_config_failure(geometry.reason_code);
     return EXIT_FAILURE;
@@ -831,10 +836,57 @@ LlmMemoryConfigValidation validate_llm_memory_config(
         LlmMemoryConfigReason::INVALID_KV_ELEMENT_BYTES;
     return validation;
   }
-  if (config.visible_context_tokens == 0) {
-    validation.reason_code =
-        LlmMemoryConfigReason::CONTEXT_TOKENS_REQUIRED;
-    return validation;
+  switch (config.phase) {
+    case LlmPhase::Decode:
+      if (config.visible_context_tokens == 0) {
+        validation.reason_code =
+            LlmMemoryConfigReason::CONTEXT_TOKENS_REQUIRED;
+        return validation;
+      }
+      if (config.user_specified_prompt_tokens || config.prompt_tokens != 0) {
+        validation.reason_code =
+            LlmMemoryConfigReason::PROMPT_TOKENS_NOT_APPLICABLE;
+        return validation;
+      }
+      if (config.user_specified_attention_query_tile_tokens ||
+          config.attention_query_tile_tokens != 0) {
+        validation.reason_code = LlmMemoryConfigReason::
+            ATTENTION_QUERY_TILE_TOKENS_NOT_APPLICABLE;
+        return validation;
+      }
+      break;
+    case LlmPhase::Prefill:
+      if (config.user_specified_context_tokens ||
+          config.visible_context_tokens != 0) {
+        validation.reason_code =
+            LlmMemoryConfigReason::CONTEXT_TOKENS_NOT_APPLICABLE;
+        return validation;
+      }
+      if (config.prompt_tokens == 0) {
+        validation.reason_code =
+            config.user_specified_prompt_tokens
+                ? LlmMemoryConfigReason::PROMPT_TOKENS_MUST_BE_POSITIVE
+                : LlmMemoryConfigReason::PROMPT_TOKENS_REQUIRED;
+        return validation;
+      }
+      if (config.attention_query_tile_tokens == 0) {
+        validation.reason_code =
+            config.user_specified_attention_query_tile_tokens
+                ? LlmMemoryConfigReason::
+                      ATTENTION_QUERY_TILE_TOKENS_MUST_BE_POSITIVE
+                : LlmMemoryConfigReason::
+                      ATTENTION_QUERY_TILE_TOKENS_REQUIRED;
+        return validation;
+      }
+      if (config.attention_query_tile_tokens > config.prompt_tokens) {
+        validation.reason_code = LlmMemoryConfigReason::
+            ATTENTION_QUERY_TILE_TOKENS_EXCEEDS_PROMPT;
+        return validation;
+      }
+      break;
+    default:
+      validation.reason_code = LlmMemoryConfigReason::INVALID_PHASE;
+      return validation;
   }
   if (const char* layout_reason = validate_llm_kv_layout_options(config)) {
     validation.reason_code = layout_reason;
@@ -852,13 +904,15 @@ LlmMemoryConfigValidation validate_llm_memory_config(
     validation.reason_code = LlmMemoryConfigReason::LOOP_COUNT_REQUIRED;
     return validation;
   }
-  const std::array<size_t, 12> json_integer_fields = {
+  const std::array<size_t, 14> json_integer_fields = {
       config.weight_size_mb,
       config.layer_count,
       config.query_head_count,
       config.kv_head_count,
       config.head_dimension,
       config.visible_context_tokens,
+      config.prompt_tokens,
+      config.attention_query_tile_tokens,
       config.kv_block_tokens,
       config.batch_size,
       config.requested_workers,

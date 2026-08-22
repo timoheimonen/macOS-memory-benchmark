@@ -205,6 +205,14 @@ std::string build_model_plan_identity(const LlmMemoryWorkPlan& plan) {
     return {};
   }
   const LlmGeometry& geometry = plan.geometry;
+  if ((plan.phase == LlmPhase::Decode &&
+       (!geometry.decode.has_value() || geometry.prefill.has_value() ||
+        plan.prefill_plan.has_value())) ||
+      (plan.phase == LlmPhase::Prefill &&
+       (geometry.decode.has_value() || !geometry.prefill.has_value() ||
+        !plan.prefill_plan.has_value() || !plan.prefill_plan->valid))) {
+    return {};
+  }
   std::string identity = Constants::LLM_WORK_PLAN_IDENTITY_VERSION;
   append_identity_field(identity, "backend",
                         llm_memory_backend_to_string(plan.backend));
@@ -236,8 +244,34 @@ std::string build_model_plan_identity(const LlmMemoryWorkPlan& plan) {
   append_identity_field(identity, "head_dim", geometry.head_dimension);
   append_identity_field(identity, "kv_element_bytes",
                         geometry.kv_element_bytes);
-  append_identity_field(identity, "decode_context",
-                        geometry.decode->visible_context_tokens);
+  if (geometry.decode.has_value()) {
+    append_identity_field(identity, "decode_context",
+                          geometry.decode->visible_context_tokens);
+  }
+  if (geometry.prefill.has_value()) {
+    append_identity_field(identity, "prefill_planner_version",
+                          LlmPrefillVersion::PLANNER);
+    append_identity_field(identity, "prefill_cpu_partition_version",
+                          LlmPrefillVersion::CPU_PARTITION);
+    append_identity_field(identity, "prefill_prompt_tokens",
+                          geometry.prefill->prompt_tokens);
+    append_identity_field(identity, "prefill_query_tile_tokens",
+                          geometry.prefill->attention_query_tile_tokens);
+    append_identity_field(identity, "prefill_tile_count",
+                          geometry.prefill->tile_count);
+    append_identity_field(
+        identity, "prefill_prefix_token_visits_per_sequence",
+        geometry.prefill->attention_prefix_token_visits_per_sequence);
+    append_identity_field(identity, "prefill_causal_token_pairs",
+                          geometry.prefill->causal_token_pairs_per_sequence);
+    append_identity_field(identity, "prefill_logical_attention_pairs",
+                          geometry.prefill->logical_attention_pairs);
+    append_identity_field(identity, "prefill_logical_attention_fma_terms",
+                          geometry.prefill->logical_attention_fma_terms);
+    append_identity_field(
+        identity, "prefill_prefix_block_visits_per_sequence",
+        geometry.prefill->paged_prefix_block_visits_per_sequence);
+  }
   append_identity_field(identity, "batch", geometry.batch_size);
   append_identity_field(identity, "kv_vector_bytes",
                         geometry.kv_vector_bytes);
@@ -274,6 +308,9 @@ std::string build_model_plan_identity(const LlmMemoryWorkPlan& plan) {
                         geometry.block_table_entries);
   append_identity_field(identity, "block_table_bytes",
                         geometry.block_table_bytes);
+  append_identity_field(
+      identity, "layout_metadata_lookups_per_layer_sequence_per_work_unit",
+      geometry.layout_metadata_lookups_per_layer_sequence_per_work_unit);
   append_identity_field(identity, "k_mapping_bytes",
                         geometry.k_mapping_bytes);
   append_identity_field(identity, "v_mapping_bytes",
@@ -501,11 +538,13 @@ bool calculate_actual_planner_storage_bytes(
 
 bool finalize_plan_identities(LlmMemoryWorkPlan& plan) {
   const bool paged_layout = plan.kv_layout == LlmKvLayout::Paged;
+  const bool prefill = plan.phase == LlmPhase::Prefill;
   plan.methodology_version =
       build_llm_methodology_version(plan.backend, plan.phase,
                                    plan.kv_layout);
   plan.component_identities.logical_profile_version =
-      Constants::LLM_LOGICAL_PROFILE_VERSION;
+      prefill ? Constants::LLM_PREFILL_LOGICAL_PROFILE_VERSION
+              : Constants::LLM_LOGICAL_PROFILE_VERSION;
   plan.component_identities.kv_layout_version =
       paged_layout ? Constants::LLM_PAGED_KV_LAYOUT_VERSION
                    : Constants::LLM_CONTIGUOUS_KV_LAYOUT_VERSION;
@@ -516,24 +555,29 @@ bool finalize_plan_identities(LlmMemoryWorkPlan& plan) {
     plan.component_identities.permutation_version.reset();
   }
   plan.component_identities.backend_executor_version =
-      paged_layout ? Constants::LLM_PAGED_CPU_EXECUTOR_VERSION
-                   : Constants::LLM_CPU_EXECUTOR_VERSION;
+      prefill ? Constants::LLM_PREFILL_PLANNED_EXECUTOR_VERSION
+              : paged_layout ? Constants::LLM_PAGED_CPU_EXECUTOR_VERSION
+                             : Constants::LLM_CPU_EXECUTOR_VERSION;
   plan.component_identities.resource_abi_version =
-      paged_layout ? Constants::LLM_PAGED_DESCRIPTOR_ABI_VERSION
-                   : Constants::LLM_DESCRIPTOR_ABI_VERSION;
+      prefill ? Constants::LLM_PREFILL_RESOURCE_PLAN_VERSION
+              : paged_layout ? Constants::LLM_PAGED_DESCRIPTOR_ABI_VERSION
+                             : Constants::LLM_DESCRIPTOR_ABI_VERSION;
   plan.component_identities.schedule_version =
-      paged_layout ? Constants::LLM_PAGED_CPU_SCHEDULE_VERSION
-                   : Constants::LLM_CPU_SCHEDULE_VERSION;
+      prefill ? LlmPrefillVersion::OWNER_LOCAL_SCHEDULE
+              : paged_layout ? Constants::LLM_PAGED_CPU_SCHEDULE_VERSION
+                             : Constants::LLM_CPU_SCHEDULE_VERSION;
   plan.component_identities.timer_policy_version =
       Constants::LLM_CPU_TIMER_POLICY_VERSION;
   plan.component_identities.buffer_pattern_version =
       paged_layout ? Constants::LLM_PAGED_BUFFER_PATTERN_VERSION
                    : Constants::LLM_BUFFER_PATTERN_VERSION;
   plan.component_identities.write_pattern_version =
-      Constants::LLM_APPEND_PATTERN_VERSION;
+      prefill ? LlmPrefillVersion::WRITE_PATTERN
+              : Constants::LLM_APPEND_PATTERN_VERSION;
   plan.component_identities.checksum_pattern_version =
-      paged_layout ? Constants::LLM_PAGED_READ_CHECKSUM_VERSION
-                   : Constants::LLM_READ_CHECKSUM_VERSION;
+      prefill ? LlmPrefillVersion::CHECKSUM_ORACLE
+              : paged_layout ? Constants::LLM_PAGED_READ_CHECKSUM_VERSION
+                             : Constants::LLM_READ_CHECKSUM_VERSION;
   plan.component_identities.msl_revision.reset();
   plan.component_identities.msl_source_sha256.reset();
   plan.component_identities.identity =
@@ -595,8 +639,10 @@ bool build_auxiliary_preflight_view(
   view.total_layer_descriptors = cpu_plan->total_layer_descriptors;
   view.total_sequence_descriptors = cpu_plan->total_sequence_descriptors;
   view.k_or_v_static_reference_count =
-      cpu_plan->paged.has_value()
-          ? cpu_plan->paged->layout.total_physical_blocks
+      plan.kv_layout == LlmKvLayout::Paged
+          ? cpu_plan->paged.has_value()
+                ? cpu_plan->paged->layout.total_physical_blocks
+                : plan.geometry.total_physical_blocks
           : cpu_plan->total_sequence_descriptors;
   view.model_plan_identity_bytes = plan.plan_identity.size();
 
@@ -716,6 +762,7 @@ bool auxiliary_preflight_views_match(
 
 void discard_executable_templates(LlmMemoryWorkPlan& plan) {
   std::vector<LlmByteRange>().swap(plan.weight_layers);
+  plan.prefill_plan.reset();
   plan.methodology_version.clear();
   plan.component_identities = {};
   plan.plan_identity.clear();
@@ -806,6 +853,7 @@ LlmMemoryWorkPlan& LlmMemoryWorkPlan::operator=(
   valid = other.valid;
   reason_code = std::move(other.reason_code);
   geometry = std::move(other.geometry);
+  prefill_plan = std::move(other.prefill_plan);
   backend = other.backend;
   phase = other.phase;
   kv_layout = other.kv_layout;
@@ -827,6 +875,7 @@ LlmMemoryWorkPlan& LlmMemoryWorkPlan::operator=(
   other.valid = false;
   other.reason_code.clear();
   other.geometry.valid = false;
+  other.prefill_plan.reset();
   other.base_seed = 0;
   other.weight_buffer_seed = 0;
   other.k_buffer_seed = 0;
@@ -884,9 +933,36 @@ LlmGeometry resolve_llm_geometry(const LlmGeometryRequest& request) {
   geometry.batch_size = request.batch_size;
   geometry.kv_block_tokens = request.kv_block_tokens;
 
-  if (request.phase != LlmPhase::Decode) {
-    geometry.reason_code = LlmWorkPlanReason::PHASE_NOT_ACTIVATED;
-    return geometry;
+  size_t sequence_tokens = 0;
+  switch (request.phase) {
+    case LlmPhase::Decode:
+      if (request.visible_context_tokens == 0) {
+        geometry.reason_code = LlmWorkPlanReason::CONTEXT_TOKENS_ZERO;
+        return geometry;
+      }
+      if (request.prompt_tokens != 0) {
+        geometry.reason_code =
+            LlmWorkPlanReason::PROMPT_TOKENS_NOT_APPLICABLE;
+        return geometry;
+      }
+      if (request.attention_query_tile_tokens != 0) {
+        geometry.reason_code =
+            LlmWorkPlanReason::QUERY_TILE_TOKENS_NOT_APPLICABLE;
+        return geometry;
+      }
+      sequence_tokens = request.visible_context_tokens;
+      break;
+    case LlmPhase::Prefill:
+      if (request.visible_context_tokens != 0) {
+        geometry.reason_code =
+            LlmWorkPlanReason::CONTEXT_TOKENS_NOT_APPLICABLE;
+        return geometry;
+      }
+      sequence_tokens = request.prompt_tokens;
+      break;
+    default:
+      geometry.reason_code = LlmWorkPlanReason::PHASE_NOT_ACTIVATED;
+      return geometry;
   }
   if (request.active_weight_bytes == 0) {
     geometry.reason_code = LlmWorkPlanReason::ACTIVE_WEIGHT_BYTES_ZERO;
@@ -912,9 +988,20 @@ LlmGeometry resolve_llm_geometry(const LlmGeometryRequest& request) {
     geometry.reason_code = LlmWorkPlanReason::INVALID_KV_ELEMENT_BYTES;
     return geometry;
   }
-  if (request.visible_context_tokens == 0) {
-    geometry.reason_code = LlmWorkPlanReason::CONTEXT_TOKENS_ZERO;
-    return geometry;
+  if (request.phase == LlmPhase::Prefill) {
+    if (request.prompt_tokens == 0) {
+      geometry.reason_code = LlmPrefillReason::PROMPT_TOKENS_ZERO;
+      return geometry;
+    }
+    if (request.attention_query_tile_tokens == 0) {
+      geometry.reason_code = LlmPrefillReason::QUERY_TILE_TOKENS_ZERO;
+      return geometry;
+    }
+    if (request.attention_query_tile_tokens > request.prompt_tokens) {
+      geometry.reason_code =
+          LlmPrefillReason::QUERY_TILE_TOKENS_EXCEEDS_PROMPT;
+      return geometry;
+    }
   }
   if (request.kv_layout == LlmKvLayout::Contiguous &&
       request.kv_block_tokens != 0) {
@@ -966,7 +1053,7 @@ LlmGeometry resolve_llm_geometry(const LlmGeometryRequest& request) {
     return geometry;
   }
   if (!NumericUtils::checked_multiply(
-          request.visible_context_tokens,
+          sequence_tokens,
           geometry.k_or_v_record_bytes_per_layer,
           geometry.k_or_v_sequence_visible_bytes)) {
     geometry.reason_code = LlmWorkPlanReason::KV_SEQUENCE_BYTES_OVERFLOW;
@@ -985,7 +1072,7 @@ LlmGeometry resolve_llm_geometry(const LlmGeometryRequest& request) {
   geometry.v_logical_bytes = geometry.k_logical_bytes;
   if (request.kv_layout == LlmKvLayout::Paged) {
     const LlmKvLayoutPlan paged_layout = build_llm_kv_layout_plan(
-        {request.visible_context_tokens, request.kv_block_tokens,
+        {sequence_tokens, request.kv_block_tokens,
          request.layer_count, request.batch_size,
          geometry.k_or_v_record_bytes_per_layer});
     if (!paged_layout.valid) {
@@ -1024,24 +1111,90 @@ LlmGeometry resolve_llm_geometry(const LlmGeometryRequest& request) {
   }
 
   geometry.weight_read_bytes_per_work_unit = request.active_weight_bytes;
-  if (!NumericUtils::checked_multiply(
-          request.batch_size, geometry.kv_bytes_per_visible_token,
-          geometry.kv_write_bytes_per_work_unit)) {
-    geometry.reason_code = LlmWorkPlanReason::KV_WRITE_BYTES_OVERFLOW;
-    return geometry;
-  }
-  if (!NumericUtils::checked_multiply(
-          request.visible_context_tokens,
-          geometry.kv_write_bytes_per_work_unit,
-          geometry.kv_read_bytes_per_work_unit)) {
-    geometry.reason_code = LlmWorkPlanReason::KV_READ_BYTES_OVERFLOW;
-    return geometry;
-  }
   if (!NumericUtils::checked_add(request.active_weight_bytes,
                                  geometry.kv_capacity_bytes,
                                  geometry.total_data_mapping_bytes)) {
     geometry.reason_code = LlmWorkPlanReason::TOTAL_DATA_BYTES_OVERFLOW;
     return geometry;
+  }
+  if (request.phase == LlmPhase::Decode) {
+    if (!NumericUtils::checked_multiply(
+            request.batch_size, geometry.kv_bytes_per_visible_token,
+            geometry.kv_write_bytes_per_work_unit)) {
+      geometry.reason_code = LlmWorkPlanReason::KV_WRITE_BYTES_OVERFLOW;
+      return geometry;
+    }
+    if (!NumericUtils::checked_multiply(
+            request.visible_context_tokens,
+            geometry.kv_write_bytes_per_work_unit,
+            geometry.kv_read_bytes_per_work_unit)) {
+      geometry.reason_code = LlmWorkPlanReason::KV_READ_BYTES_OVERFLOW;
+      return geometry;
+    }
+    if (request.kv_layout == LlmKvLayout::Paged &&
+        (!NumericUtils::checked_multiply(
+             geometry.kv_blocks_per_sequence, static_cast<size_t>(2),
+             geometry
+                 .layout_metadata_lookups_per_layer_sequence_per_work_unit) ||
+         !NumericUtils::checked_add(
+             geometry.layout_metadata_lookups_per_layer_sequence_per_work_unit,
+             static_cast<size_t>(1),
+             geometry
+                 .layout_metadata_lookups_per_layer_sequence_per_work_unit))) {
+      geometry.reason_code = LlmWorkPlanReason::TASK_ACCOUNTED_BYTES_OVERFLOW;
+      return geometry;
+    }
+    geometry.traffic_crossover_numerator = request.active_weight_bytes;
+    geometry.traffic_crossover_denominator =
+        geometry.kv_write_bytes_per_work_unit;
+    geometry.traffic_crossover_context_tokens = static_cast<double>(
+        static_cast<long double>(geometry.traffic_crossover_numerator) /
+        static_cast<long double>(geometry.traffic_crossover_denominator));
+    geometry.decode = LlmDecodeGeometry{request.visible_context_tokens};
+    geometry.prefill.reset();
+  } else {
+    const LlmPrefillPlan prefill = resolve_llm_prefill_plan(
+        {request.active_weight_bytes,
+         request.prompt_tokens,
+         request.attention_query_tile_tokens,
+         request.layer_count,
+         request.batch_size,
+         request.query_head_count,
+         request.head_dimension,
+         geometry.k_or_v_record_bytes_per_layer,
+         request.kv_layout == LlmKvLayout::Paged ? request.kv_block_tokens
+                                                 : size_t{0}});
+    if (!prefill.valid) {
+      geometry.reason_code = prefill.reason_code;
+      return geometry;
+    }
+    if (prefill.k_logical_bytes != geometry.k_logical_bytes ||
+        prefill.v_logical_bytes != geometry.v_logical_bytes ||
+        prefill.kv_bytes_per_token != geometry.kv_bytes_per_visible_token) {
+      geometry.reason_code = LlmPrefillReason::KV_LOGICAL_BYTES_OVERFLOW;
+      return geometry;
+    }
+    geometry.kv_write_bytes_per_work_unit =
+        prefill.kv_write_bytes_per_work_unit;
+    geometry.kv_read_bytes_per_work_unit =
+        prefill.kv_read_bytes_per_work_unit;
+    geometry.kv_only_effective_model_payload_bytes_per_work_unit =
+        prefill.kv_only_payload_bytes_per_work_unit;
+    geometry.mixed_effective_model_payload_bytes_per_work_unit =
+        prefill.mixed_payload_bytes_per_work_unit;
+    geometry.layout_metadata_lookups_per_layer_sequence_per_work_unit =
+        prefill.layout_metadata_lookups_per_layer_sequence;
+    geometry.decode_append_offset_in_last_block = 0;
+    geometry.decode.reset();
+    geometry.prefill = LlmPrefillGeometry{
+        prefill.prompt_tokens,
+        prefill.attention_query_tile_tokens,
+        prefill.tile_count,
+        prefill.attention_prefix_token_visits_per_sequence,
+        prefill.causal_token_pairs_per_sequence,
+        prefill.logical_attention_pairs,
+        prefill.logical_attention_fma_terms,
+        prefill.prefix_block_visits_per_sequence};
   }
   if (!NumericUtils::checked_add(
           geometry.kv_read_bytes_per_work_unit,
@@ -1057,14 +1210,6 @@ LlmGeometry resolve_llm_geometry(const LlmGeometryRequest& request) {
     geometry.reason_code = LlmWorkPlanReason::MIXED_PAYLOAD_OVERFLOW;
     return geometry;
   }
-  geometry.traffic_crossover_numerator = request.active_weight_bytes;
-  geometry.traffic_crossover_denominator =
-      geometry.kv_write_bytes_per_work_unit;
-  geometry.traffic_crossover_context_tokens = static_cast<double>(
-      static_cast<long double>(geometry.traffic_crossover_numerator) /
-      static_cast<long double>(geometry.traffic_crossover_denominator));
-  geometry.decode = LlmDecodeGeometry{request.visible_context_tokens};
-  geometry.prefill.reset();
   geometry.valid = true;
   geometry.reason_code = LlmWorkPlanReason::VALID;
   return geometry;
@@ -1243,6 +1388,25 @@ LlmMemoryWorkPlan build_llm_memory_work_plan_candidate(
     plan.reason_code = plan.geometry.reason_code;
     return plan;
   }
+  const bool prefill_phase = plan.phase == LlmPhase::Prefill;
+  if (prefill_phase) {
+    plan.prefill_plan = resolve_llm_prefill_plan(
+        {request.geometry.active_weight_bytes,
+         request.geometry.prompt_tokens,
+         request.geometry.attention_query_tile_tokens,
+         request.geometry.layer_count,
+         request.geometry.batch_size,
+         request.geometry.query_head_count,
+         request.geometry.head_dimension,
+         plan.geometry.k_or_v_record_bytes_per_layer,
+         plan.kv_layout == LlmKvLayout::Paged
+             ? request.geometry.kv_block_tokens
+             : size_t{0}});
+    if (!plan.prefill_plan->valid) {
+      plan.reason_code = plan.prefill_plan->reason_code;
+      return plan;
+    }
+  }
   if (!json_integer_is_safe(request.requested_workers) ||
       !json_integer_is_safe(request.available_workers)) {
     plan.reason_code = LlmWorkPlanReason::JSON_INTEGER_OUT_OF_RANGE;
@@ -1258,12 +1422,15 @@ LlmMemoryWorkPlan build_llm_memory_work_plan_candidate(
   }
 
   const bool paged_layout = plan.kv_layout == LlmKvLayout::Paged;
+  const size_t sequence_tokens =
+      prefill_phase ? request.geometry.prompt_tokens
+                    : request.geometry.visible_context_tokens;
   LlmKvLayoutPlan paged_geometry;
   size_t paged_layer_sequence_count = 0;
   size_t paged_worker_coverage_limit = 0;
   if (paged_layout) {
     paged_geometry = build_llm_kv_layout_plan(
-        {request.geometry.visible_context_tokens,
+        {sequence_tokens,
          request.geometry.kv_block_tokens, request.geometry.layer_count,
          request.geometry.batch_size,
          plan.geometry.k_or_v_record_bytes_per_layer});
@@ -1293,7 +1460,8 @@ LlmMemoryWorkPlan build_llm_memory_work_plan_candidate(
       paged_layout
           ? std::min(paged_geometry.total_physical_blocks,
                      paged_worker_coverage_limit)
-                   : plan.geometry.k_or_v_sequence_visible_bytes;
+          : prefill_phase ? sequence_tokens
+                          : plan.geometry.k_or_v_sequence_visible_bytes;
   const size_t maximum_shared_worker_count =
       std::min(maximum_weight_layer_bytes, maximum_kv_workers);
   cpu_plan->effective_workers =
@@ -1305,7 +1473,7 @@ LlmMemoryWorkPlan build_llm_memory_work_plan_candidate(
   }
 
   size_t ownership_assignment_count = 0;
-  if (paged_layout) {
+  if (paged_layout && !prefill_phase) {
     const size_t active_workers = std::min(
         cpu_plan->effective_workers, paged_geometry.blocks_per_sequence);
     if (!NumericUtils::checked_multiply(
@@ -1317,11 +1485,13 @@ LlmMemoryWorkPlan build_llm_memory_work_plan_candidate(
   }
 
   cpu_plan->layer_descriptors_per_worker = plan.geometry.layer_count;
-  if (!NumericUtils::checked_multiply(
-          plan.geometry.layer_count, plan.geometry.batch_size,
-          cpu_plan->sequence_descriptors_per_worker)) {
-    plan.reason_code = LlmWorkPlanReason::LAYER_SEQUENCE_COUNT_OVERFLOW;
-    return plan;
+  if (!prefill_phase) {
+    if (!NumericUtils::checked_multiply(
+            plan.geometry.layer_count, plan.geometry.batch_size,
+            cpu_plan->sequence_descriptors_per_worker)) {
+      plan.reason_code = LlmWorkPlanReason::LAYER_SEQUENCE_COUNT_OVERFLOW;
+      return plan;
+    }
   }
   if (!NumericUtils::checked_multiply(
           cpu_plan->layer_descriptors_per_worker,
@@ -1365,6 +1535,9 @@ LlmMemoryWorkPlan build_llm_memory_work_plan_candidate(
       !json_integer_is_safe(request.geometry.kv_head_count) ||
       !json_integer_is_safe(request.geometry.head_dimension) ||
       !json_integer_is_safe(request.geometry.visible_context_tokens) ||
+      !json_integer_is_safe(request.geometry.prompt_tokens) ||
+      !json_integer_is_safe(
+          request.geometry.attention_query_tile_tokens) ||
       !json_integer_is_safe(request.geometry.kv_block_tokens) ||
       !json_integer_is_safe(request.geometry.batch_size) ||
       !json_integer_is_safe(cpu_plan->layer_descriptors_per_worker) ||
@@ -1391,7 +1564,7 @@ LlmMemoryWorkPlan build_llm_memory_work_plan_candidate(
     return plan;
   }
 
-  if (paged_layout) {
+  if (paged_layout && !prefill_phase) {
     LlmKvCpuOwnershipPlan ownership =
         build_llm_paged_decode_kv_cpu_ownership_plan(
             paged_geometry, cpu_plan->effective_workers, stop_requested);
@@ -1418,7 +1591,7 @@ LlmMemoryWorkPlan build_llm_memory_work_plan_candidate(
     for (size_t worker = 0; worker < cpu_plan->effective_workers; ++worker) {
       cpu_plan->workers[worker].worker_index = worker;
       cpu_plan->workers[worker].layers.reserve(plan.geometry.layer_count);
-      if (paged_layout) {
+      if (paged_layout && !prefill_phase) {
         cpu_plan->workers[worker].paged_assignments.resize(
             cpu_plan->sequence_descriptors_per_worker);
         for (size_t layer = 0; layer < plan.geometry.layer_count; ++layer) {
@@ -1431,7 +1604,7 @@ LlmMemoryWorkPlan build_llm_memory_work_plan_candidate(
             assignment.batch_sequence_index = batch;
           }
         }
-      } else {
+      } else if (!prefill_phase) {
         cpu_plan->workers[worker].sequences.reserve(
             cpu_plan->sequence_descriptors_per_worker);
       }
@@ -1450,7 +1623,7 @@ LlmMemoryWorkPlan build_llm_memory_work_plan_candidate(
             {weight, first_sequence_index, plan.geometry.batch_size, layer});
       }
 
-      if (paged_layout) {
+      if (paged_layout || prefill_phase) {
         continue;
       }
       for (size_t batch = 0; batch < plan.geometry.batch_size; ++batch) {
@@ -1482,7 +1655,7 @@ LlmMemoryWorkPlan build_llm_memory_work_plan_candidate(
         }
       }
     }
-    if (paged_layout) {
+    if (paged_layout && !prefill_phase) {
       for (const LlmKvCpuBlockAssignment& source :
            cpu_plan->paged->ownership.assignments) {
         if (source.worker_index >= cpu_plan->effective_workers ||
@@ -1521,15 +1694,22 @@ LlmMemoryWorkPlan build_llm_memory_work_plan_candidate(
     return plan;
   }
   cpu_plan->planner_storage_bytes = actual_planner_storage_bytes;
+  const size_t block_table_bytes =
+      paged_layout
+          ? prefill_phase ? paged_geometry.memory.block_table_bytes
+                          : cpu_plan->paged->layout.memory.block_table_bytes
+          : 0;
+  const size_t layout_transient_bytes =
+      paged_layout
+          ? prefill_phase ? paged_geometry.memory.validation_bitset_bytes
+                          : cpu_plan->paged->layout.memory.validation_bitset_bytes
+          : 0;
   plan.memory_budget.request = build_llm_memory_budget_request(
       plan.geometry, cpu_plan->descriptor_bytes,
       cpu_plan->planner_storage_bytes, request.checksum_auxiliary_bytes,
       request.orchestration_auxiliary_bytes,
-      request.mapping_granularity_bytes,
-      paged_layout ? cpu_plan->paged->layout.memory.block_table_bytes : 0,
-      paged_layout
-          ? cpu_plan->paged->layout.memory.validation_bitset_bytes
-          : 0);
+      request.mapping_granularity_bytes, block_table_bytes,
+      layout_transient_bytes);
   plan.memory_budget = evaluate_llm_memory_budget(
       plan.memory_budget.request, request.available_memory_bytes);
   if (!plan.memory_budget.valid) {
@@ -1539,7 +1719,8 @@ LlmMemoryWorkPlan build_llm_memory_work_plan_candidate(
   }
 
   try {
-    if ((paged_layout && !prepare_paged_identity_shape(plan)) ||
+    if ((paged_layout && !prefill_phase &&
+         !prepare_paged_identity_shape(plan)) ||
         !finalize_plan_identities(plan)) {
       discard_executable_templates(plan);
       plan.reason_code =
@@ -1616,19 +1797,21 @@ LlmMemoryWorkPlan finalize_llm_memory_work_plan(
     return plan;
   }
   const bool paged_layout = plan.kv_layout == LlmKvLayout::Paged;
+  const bool pure_prefill = plan.phase == LlmPhase::Prefill;
   const size_t block_table_bytes =
-      paged_layout && cpu_plan->paged.has_value()
-          ? cpu_plan->paged->layout.memory.block_table_bytes
-          : 0;
+      paged_layout ? plan.geometry.block_table_bytes : 0;
   const size_t validation_bitset_bytes =
-      paged_layout && cpu_plan->paged.has_value()
-          ? cpu_plan->paged->layout.memory.validation_bitset_bytes
+      paged_layout
+          ? pure_prefill
+                ? plan.memory_budget.request.layout_transient_bytes
+                : cpu_plan->paged->layout.memory.validation_bitset_bytes
           : 0;
+  const size_t mapping_granularity_bytes =
+      plan.memory_budget.request.mapping_granularity_bytes;
   plan.memory_budget.request = build_llm_memory_budget_request(
       plan.geometry, cpu_plan->descriptor_bytes,
       cpu_plan->planner_storage_bytes, checksum_auxiliary_bytes,
-      orchestration_auxiliary_bytes,
-      plan.memory_budget.request.mapping_granularity_bytes,
+      orchestration_auxiliary_bytes, mapping_granularity_bytes,
       block_table_bytes, validation_bitset_bytes);
   plan.memory_budget = evaluate_llm_memory_budget(
       plan.memory_budget.request, plan.memory_budget.available_memory_bytes);
@@ -1639,7 +1822,7 @@ LlmMemoryWorkPlan finalize_llm_memory_work_plan(
   }
 
   try {
-    if (paged_layout) {
+    if (paged_layout && !pure_prefill) {
       if (!cpu_plan->paged.has_value()) {
         plan.reason_code = LlmWorkPlanReason::INVALID_MODEL_WORK_PLAN;
         discard_executable_templates(plan);
@@ -1765,6 +1948,9 @@ LlmMemoryWorkPlanDraft prepare_llm_memory_work_plan(
                       config.kv_block_tokens,
                       config.phase,
                       config.kv_layout};
+  request.geometry.prompt_tokens = config.prompt_tokens;
+  request.geometry.attention_query_tile_tokens =
+      config.attention_query_tile_tokens;
   request.backend = config.backend;
   request.requested_workers = config.requested_workers;
   request.available_workers = available_workers;
@@ -1798,6 +1984,9 @@ LlmMemoryWorkPlan build_llm_memory_work_plan(
                       config.kv_block_tokens,
                       config.phase,
                       config.kv_layout};
+  request.geometry.prompt_tokens = config.prompt_tokens;
+  request.geometry.attention_query_tile_tokens =
+      config.attention_query_tile_tokens;
   request.backend = config.backend;
   request.requested_workers = config.requested_workers;
   request.available_workers = available_workers;
@@ -1818,13 +2007,13 @@ bool readmit_llm_memory_work_plan(
       return false;
     }
     const size_t block_table_bytes =
-        cpu_plan->paged.has_value()
-            ? cpu_plan->paged->layout.memory.block_table_bytes
+        plan.kv_layout == LlmKvLayout::Paged
+            ? plan.geometry.block_table_bytes
             : 0;
     const size_t transient_bytes =
         cpu_plan->paged.has_value()
             ? cpu_plan->paged->layout.memory.validation_bitset_bytes
-            : 0;
+            : plan.memory_budget.request.layout_transient_bytes;
     const LlmMemoryBudgetRequest request = build_llm_memory_budget_request(
         plan.geometry, cpu_plan->descriptor_bytes,
         cpu_plan->planner_storage_bytes, checksum_auxiliary_bytes,
@@ -1891,18 +2080,14 @@ LlmScenarioLimits calculate_llm_scenario_limits(
   limits.layout_metadata_read_bytes_per_work_unit = 0;
   if (geometry.kv_layout == LlmKvLayout::Paged &&
       scenario != LlmScenario::WeightsOnly) {
-    size_t lookups_per_layer_sequence = 0;
     size_t layer_sequence_count = 0;
     if (!NumericUtils::checked_multiply(
-            geometry.kv_blocks_per_sequence, 2,
-            lookups_per_layer_sequence) ||
-        !NumericUtils::checked_add(lookups_per_layer_sequence, 1,
-                                   lookups_per_layer_sequence) ||
-        !NumericUtils::checked_multiply(
             geometry.layer_count, geometry.batch_size,
             layer_sequence_count) ||
         !NumericUtils::checked_multiply(
-            layer_sequence_count, lookups_per_layer_sequence,
+            layer_sequence_count,
+            geometry
+                .layout_metadata_lookups_per_layer_sequence_per_work_unit,
             limits.layout_metadata_lookup_count_per_work_unit) ||
         !NumericUtils::checked_multiply(
             limits.layout_metadata_lookup_count_per_work_unit,

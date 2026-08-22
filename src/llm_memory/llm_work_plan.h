@@ -34,6 +34,7 @@
 #include "core/memory/memory_manager.h"
 #include "llm_memory/llm_kv_layout.h"
 #include "llm_memory/llm_memory.h"
+#include "llm_memory/llm_prefill.h"
 
 /** Stable machine-readable reasons emitted by LLM geometry and planning. */
 namespace LlmWorkPlanReason {
@@ -47,6 +48,12 @@ inline constexpr const char* HEAD_DIMENSION_ZERO = "head-dimension-zero";
 inline constexpr const char* INVALID_KV_ELEMENT_BYTES =
     "invalid-kv-element-bytes";
 inline constexpr const char* CONTEXT_TOKENS_ZERO = "context-tokens-zero";
+inline constexpr const char* CONTEXT_TOKENS_NOT_APPLICABLE =
+    "context-tokens-not-applicable";
+inline constexpr const char* PROMPT_TOKENS_NOT_APPLICABLE =
+    "prompt-tokens-not-applicable";
+inline constexpr const char* QUERY_TILE_TOKENS_NOT_APPLICABLE =
+    "attention-query-tile-tokens-not-applicable";
 inline constexpr const char* KV_BLOCK_TOKENS_NOT_APPLICABLE =
     "kv-block-tokens-not-applicable";
 inline constexpr const char* BATCH_SIZE_ZERO = "batch-size-zero";
@@ -260,6 +267,8 @@ struct LlmGeometryRequest {
   size_t kv_block_tokens = 0;
   LlmPhase phase = LlmPhase::Decode;
   LlmKvLayout kv_layout = LlmKvLayout::Contiguous;
+  size_t prompt_tokens = 0;
+  size_t attention_query_tile_tokens = 0;
 };
 
 /** Decode-only geometry; present exactly when `phase == decode`. */
@@ -267,7 +276,7 @@ struct LlmDecodeGeometry {
   size_t visible_context_tokens = 0;
 };
 
-/** Prefill-only geometry; inactive until the prefill planner is implemented. */
+/** Prefill-only checked geometry for one full-prompt operation. */
 struct LlmPrefillGeometry {
   size_t prompt_tokens = 0;
   size_t attention_query_tile_tokens = 0;
@@ -276,6 +285,7 @@ struct LlmPrefillGeometry {
   size_t causal_token_pairs_per_sequence = 0;
   size_t logical_attention_pairs = 0;
   size_t logical_attention_fma_terms = 0;
+  size_t paged_prefix_block_visits_per_sequence = 0;
 };
 
 /** Checked common and phase-specific geometry for one synthetic work unit. */
@@ -315,6 +325,7 @@ struct LlmGeometry {
   size_t v_layout_padding_bytes = 0;
   size_t block_table_entries = 0;
   size_t block_table_bytes = 0;
+  size_t layout_metadata_lookups_per_layer_sequence_per_work_unit = 0;
   size_t k_mapping_bytes = 0;
   size_t v_mapping_bytes = 0;
   size_t kv_capacity_bytes = 0;
@@ -410,7 +421,13 @@ struct LlmWorkerWorkPlan {
   std::vector<LlmPagedKvAssignmentTemplate> paged_assignments;
 };
 
-/** Command-owned immutable paged layout, table, and ownership evidence. */
+/**
+ * Command-owned immutable paged decode layout, table, and ownership evidence.
+ *
+ * Pure prefill planning deliberately does not construct this executor-bound
+ * object: Phase-5 paged prefill retains only mathematical geometry and cost
+ * evidence until block-table/permutation resources are implemented.
+ */
 struct LlmPagedCpuExecutionPlan {
   LlmKvLayoutPlan layout;
   LlmKvBlockTableValidation table_validation;
@@ -428,7 +445,13 @@ struct LlmPagedCpuExecutionPlan {
   }
 };
 
-/** CPU-only worker partition and descriptor planning evidence. */
+/**
+ * CPU-only worker partition and descriptor planning evidence.
+ *
+ * A valid logical prefill plan may retain weight-layer templates while
+ * `paged` remains null. Such a plan is a fake-runner/planning seam, not a
+ * claim that the production CPU backend can execute prefill.
+ */
 struct LlmCpuExecutionPlan {
   size_t requested_workers = 0;
   size_t available_workers = 0;
@@ -503,6 +526,8 @@ struct LlmMemoryWorkPlan {
   bool valid = false;
   std::string reason_code = LlmWorkPlanReason::ACTIVE_WEIGHT_BYTES_ZERO;
   LlmGeometry geometry;
+  /** Pure logical formula/cost evidence; never an executable prefill plan. */
+  std::optional<LlmPrefillPlan> prefill_plan;
   LlmMemoryBackend backend = LlmMemoryBackend::Cpu;
   LlmPhase phase = LlmPhase::Decode;
   LlmKvLayout kv_layout = LlmKvLayout::Contiguous;
@@ -674,10 +699,13 @@ LlmMemoryWorkPlanDraft prepare_llm_memory_work_plan(
     const LlmKvStopRequested& stop_requested = {});
 
 /**
- * Perform full auxiliary admission, then materialize/protect a paged table.
+ * Perform full auxiliary admission, then materialize/protect a decode table.
  *
  * The draft is consumed on every outcome. No table allocation occurs unless
  * the exact final peak, including both supplied auxiliary categories, fits.
+ * Pure prefill drafts remain logical/fake-runner plans: even for paged layout,
+ * finalization neither creates `LlmPagedCpuExecutionPlan` nor materializes a
+ * block table, permutation, descriptor ABI, or backend resource.
  */
 LlmMemoryWorkPlan finalize_llm_memory_work_plan(
     LlmMemoryWorkPlanDraft&& draft, size_t checksum_auxiliary_bytes,
@@ -685,13 +713,15 @@ LlmMemoryWorkPlan finalize_llm_memory_work_plan(
     const LlmKvStopRequested& stop_requested = {});
 
 /**
- * Build the logical plan and its tagged backend execution plan.
+ * Build the logical plan and its tagged backend planning alternative.
  *
  * The active CPU planner reduces effective workers until every standalone
  * scenario has work. Its retained vector capacities are measured after
  * allocation and the budget is re-evaluated before the plan becomes valid.
  * Invalid plans expose no executable templates. Metal remains an explicit
- * placeholder until its planner is activated.
+ * placeholder until its planner is activated. A valid prefill result is a
+ * logical/fake-runner seam only; the production CPU backend must report it as
+ * unsupported until a later phase supplies its descriptor and kernel path.
  *
  * @param request Fully resolved geometry, environment, and budget inputs.
  * @param stop_requested Optional synchronous predicate polled during paged

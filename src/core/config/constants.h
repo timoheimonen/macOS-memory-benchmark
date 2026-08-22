@@ -206,6 +206,12 @@ namespace Constants {
       "llm-kv-append-affine64-v1";
   constexpr const char* LLM_READ_CHECKSUM_VERSION =
       "llm-read-checksum-v1";
+  constexpr const char* LLM_PREFILL_LOGICAL_PROFILE_VERSION =
+      "full_prompt_causal_prefix_tiled";
+  constexpr const char* LLM_PREFILL_PLANNED_EXECUTOR_VERSION =
+      "llm-prefill-generic-work-unit-runner-v1";
+  constexpr const char* LLM_PREFILL_RESOURCE_PLAN_VERSION =
+      "llm-prefill-pure-resource-plan-v1";
   constexpr const char* LLM_TRAFFIC_CLASSIFICATION_VERSION =
       "llm-exact-weight-vs-kv-read-payload-v1";
   constexpr size_t LLM_KV_BLOCK_TABLE_ENTRY_BYTES = sizeof(uint32_t);

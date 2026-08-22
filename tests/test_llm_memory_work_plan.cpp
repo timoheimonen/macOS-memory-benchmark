@@ -20,6 +20,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <numeric>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -746,13 +747,13 @@ TEST(LlmMemoryWorkPlanTest,
           work_plan_request(invalid_cases[5].request, 2, 2)),
       LlmWorkPlanReason::INVALID_KV_ELEMENT_BYTES);
 
-  LlmGeometryRequest inactive_geometry = small_geometry_request();
-  inactive_geometry.phase = LlmPhase::Prefill;
-  EXPECT_EQ(resolve_llm_geometry(inactive_geometry).reason_code,
-            LlmWorkPlanReason::PHASE_NOT_ACTIVATED);
-  inactive_geometry.phase = LlmPhase::Decode;
-  inactive_geometry.kv_layout = LlmKvLayout::Paged;
-  EXPECT_EQ(resolve_llm_geometry(inactive_geometry).reason_code,
+  LlmGeometryRequest incompatible_geometry = small_geometry_request();
+  incompatible_geometry.phase = LlmPhase::Prefill;
+  EXPECT_EQ(resolve_llm_geometry(incompatible_geometry).reason_code,
+            LlmWorkPlanReason::CONTEXT_TOKENS_NOT_APPLICABLE);
+  incompatible_geometry.phase = LlmPhase::Decode;
+  incompatible_geometry.kv_layout = LlmKvLayout::Paged;
+  EXPECT_EQ(resolve_llm_geometry(incompatible_geometry).reason_code,
             LlmKvLayoutReason::BLOCK_TOKENS_ZERO);
 
   LlmMemoryWorkPlanRequest inactive_backend =
@@ -3328,4 +3329,884 @@ TEST(LlmMemoryWorkPlanTest,
   EXPECT_TRUE(serialize_llm_kv_metal_execution_identity(
                   missing_workload_identity, segments_a)
                   .empty());
+}
+
+namespace {
+
+LlmPrefillPlanRequest exact_prefill_request(
+    size_t prompt_tokens = 5, size_t query_tile_tokens = 2,
+    size_t block_tokens = 0) {
+  // Paired K/V bytes across both layers are 128 bytes per prompt token.
+  return {1024, prompt_tokens, query_tile_tokens, 2, 2, 4, 8, 32,
+          block_tokens};
+}
+
+LlmGeometryRequest integrated_prefill_geometry_request(
+    LlmKvLayout layout, size_t prompt_tokens = 5,
+    size_t query_tile_tokens = 2, size_t block_tokens = 0) {
+  LlmGeometryRequest request;
+  request.active_weight_bytes = 1024;
+  request.layer_count = 2;
+  request.query_head_count = 4;
+  request.kv_head_count = 2;
+  request.head_dimension = 8;
+  request.kv_element_bytes = 2;
+  request.batch_size = 2;
+  request.kv_block_tokens = block_tokens;
+  request.phase = LlmPhase::Prefill;
+  request.kv_layout = layout;
+  request.prompt_tokens = prompt_tokens;
+  request.attention_query_tile_tokens = query_tile_tokens;
+  return request;
+}
+
+struct IndependentPrefillCounts {
+  size_t tile_count = 0;
+  size_t prefix_token_visits = 0;
+  size_t causal_pairs = 0;
+  size_t block_count = 0;
+  size_t prefix_block_visits = 0;
+  size_t semantic_lookups = 0;
+  std::vector<size_t> token_data_visits;
+  std::vector<size_t> block_data_visits;
+  std::vector<size_t> block_lookups;
+};
+
+IndependentPrefillCounts enumerate_prefill_counts(
+    size_t prompt_tokens, size_t query_tile_tokens,
+    size_t block_tokens) {
+  IndependentPrefillCounts result;
+  result.token_data_visits.assign(prompt_tokens, 1);
+  if (block_tokens != 0) {
+    result.block_count =
+        prompt_tokens / block_tokens +
+        (prompt_tokens % block_tokens == 0 ? 0 : 1);
+    result.block_data_visits.assign(result.block_count, 0);
+    result.block_lookups.assign(result.block_count, 1);
+  }
+
+  size_t tile_end = 0;
+  while (tile_end < prompt_tokens) {
+    tile_end += std::min(query_tile_tokens, prompt_tokens - tile_end);
+    ++result.tile_count;
+    result.prefix_token_visits += tile_end;
+    if (block_tokens != 0) {
+      result.prefix_block_visits +=
+          tile_end / block_tokens + (tile_end % block_tokens == 0 ? 0 : 1);
+    }
+    for (size_t token = 0; token < tile_end; ++token) {
+      ++result.token_data_visits[token];
+    }
+    if (block_tokens != 0) {
+      for (size_t block = 0; block < result.block_count; ++block) {
+        if (block * block_tokens >= tile_end) {
+          break;
+        }
+        result.block_lookups[block] += 2;
+      }
+    }
+  }
+  for (size_t token = 0; token < prompt_tokens; ++token) {
+    result.causal_pairs += token + 1;
+    if (block_tokens != 0) {
+      result.block_data_visits[token / block_tokens] +=
+          result.token_data_visits[token];
+    }
+  }
+  if (block_tokens != 0) {
+    result.semantic_lookups = std::accumulate(
+        result.block_lookups.begin(), result.block_lookups.end(),
+        size_t{0});
+  }
+  return result;
+}
+
+void expect_ownership_plans_equal(
+    const LlmPrefillCpuOwnershipPlan& actual,
+    const LlmPrefillCpuOwnershipPlan& expected) {
+  EXPECT_EQ(actual.valid, expected.valid);
+  EXPECT_EQ(actual.reason_code, expected.reason_code);
+  EXPECT_EQ(actual.identity, expected.identity);
+  EXPECT_EQ(actual.unit_kind, expected.unit_kind);
+  EXPECT_EQ(actual.scenario, expected.scenario);
+  EXPECT_EQ(actual.worker_count, expected.worker_count);
+  EXPECT_EQ(actual.worker_rotation, expected.worker_rotation);
+  EXPECT_EQ(actual.logical_unit_count, expected.logical_unit_count);
+  EXPECT_EQ(actual.active_worker_count, expected.active_worker_count);
+  EXPECT_EQ(actual.weight_shards_included,
+            expected.weight_shards_included);
+  EXPECT_EQ(actual.total_weight_shard_bytes,
+            expected.total_weight_shard_bytes);
+  EXPECT_EQ(actual.total_kv_model_payload_bytes,
+            expected.total_kv_model_payload_bytes);
+  EXPECT_EQ(actual.total_layout_metadata_lookup_count,
+            expected.total_layout_metadata_lookup_count);
+  EXPECT_EQ(actual.total_layout_metadata_read_bytes,
+            expected.total_layout_metadata_read_bytes);
+  EXPECT_EQ(actual.total_kv_accounted_bytes,
+            expected.total_kv_accounted_bytes);
+  EXPECT_EQ(actual.total_scenario_accounted_bytes,
+            expected.total_scenario_accounted_bytes);
+  EXPECT_EQ(actual.worker_weight_shard_bytes,
+            expected.worker_weight_shard_bytes);
+  EXPECT_EQ(actual.worker_kv_model_payload_bytes,
+            expected.worker_kv_model_payload_bytes);
+  EXPECT_EQ(actual.worker_layout_metadata_lookup_count,
+            expected.worker_layout_metadata_lookup_count);
+  EXPECT_EQ(actual.worker_layout_metadata_read_bytes,
+            expected.worker_layout_metadata_read_bytes);
+  EXPECT_EQ(actual.worker_scenario_accounted_bytes,
+            expected.worker_scenario_accounted_bytes);
+  ASSERT_EQ(actual.assignments.size(), expected.assignments.size());
+  for (size_t index = 0; index < actual.assignments.size(); ++index) {
+    const LlmPrefillCpuAssignment& lhs = actual.assignments[index];
+    const LlmPrefillCpuAssignment& rhs = expected.assignments[index];
+    EXPECT_EQ(lhs.range_rank, rhs.range_rank);
+    EXPECT_EQ(lhs.worker_index, rhs.worker_index);
+    EXPECT_EQ(lhs.first_unit, rhs.first_unit);
+    EXPECT_EQ(lhs.unit_count, rhs.unit_count);
+    EXPECT_EQ(lhs.kv_cost.model_payload_bytes,
+              rhs.kv_cost.model_payload_bytes);
+    EXPECT_EQ(lhs.kv_cost.layout_metadata_lookup_count,
+              rhs.kv_cost.layout_metadata_lookup_count);
+    EXPECT_EQ(lhs.kv_cost.accounted_bytes,
+              rhs.kv_cost.accounted_bytes);
+  }
+}
+
+void expect_kv_ownership_exact_union(
+    const LlmPrefillPlan& prefill,
+    LlmPrefillPartitionUnitKind unit_kind, size_t worker_count,
+    size_t expected_model_payload_bytes,
+    size_t expected_layout_metadata_lookups) {
+  const LlmPrefillCpuOwnershipPlan ownership =
+      build_llm_prefill_cpu_ownership_plan(
+          prefill, {unit_kind, LlmScenario::KvOnly, worker_count, 0, {}});
+  ASSERT_TRUE(ownership.valid) << ownership.reason_code;
+  ASSERT_EQ(ownership.assignments.size(), worker_count);
+
+  size_t cursor = 0;
+  for (const LlmPrefillCpuAssignment& assignment : ownership.assignments) {
+    EXPECT_EQ(assignment.first_unit, cursor);
+    EXPECT_GT(assignment.unit_count, 0u);
+    cursor += assignment.unit_count;
+  }
+  const size_t expected_unit_count =
+      unit_kind == LlmPrefillPartitionUnitKind::ContiguousToken
+          ? prefill.prompt_tokens
+          : prefill.blocks_per_sequence;
+  EXPECT_EQ(cursor, expected_unit_count);
+  EXPECT_EQ(ownership.total_kv_model_payload_bytes,
+            expected_model_payload_bytes);
+  EXPECT_EQ(ownership.total_layout_metadata_lookup_count,
+            expected_layout_metadata_lookups);
+  EXPECT_EQ(ownership.total_kv_model_payload_bytes,
+            std::accumulate(
+                ownership.worker_kv_model_payload_bytes.begin(),
+                ownership.worker_kv_model_payload_bytes.end(), size_t{0}));
+  EXPECT_EQ(ownership.total_layout_metadata_lookup_count,
+            std::accumulate(
+                ownership.worker_layout_metadata_lookup_count.begin(),
+                ownership.worker_layout_metadata_lookup_count.end(),
+                size_t{0}));
+  EXPECT_EQ(ownership.total_scenario_accounted_bytes,
+            std::accumulate(
+                ownership.worker_scenario_accounted_bytes.begin(),
+                ownership.worker_scenario_accounted_bytes.end(), size_t{0}));
+}
+
+constexpr uint64_t kIndependentPrefillPhaseDomain =
+    0x50524546494C4C31ULL;
+constexpr uint64_t kIndependentPrefillOperationMultiplier =
+    0x9E3779B97F4A7C15ULL;
+constexpr uint64_t kIndependentPrefillLayerMultiplier =
+    0xBF58476D1CE4E5B9ULL;
+constexpr uint64_t kIndependentPrefillBatchMultiplier =
+    0x94D049BB133111EBULL;
+constexpr uint64_t kIndependentPrefillWordMultiplier =
+    0xD6E8FEB86659FD93ULL;
+constexpr uint64_t kIndependentPrefillKDomain =
+    0x4B4B4B4B4B4B4B4BULL;
+constexpr uint64_t kIndependentPrefillVDomain =
+    0x5656565656565656ULL;
+
+uint64_t independent_prefill_affine_word(
+    uint64_t scenario_seed, uint64_t operation_ordinal,
+    uint64_t layer_index, uint64_t batch_sequence_index,
+    LlmPrefillKvDomain domain, uint64_t logical_word_index) {
+  const uint64_t domain_term =
+      domain == LlmPrefillKvDomain::K ? kIndependentPrefillKDomain
+                                     : kIndependentPrefillVDomain;
+  return scenario_seed + kIndependentPrefillPhaseDomain +
+         kIndependentPrefillOperationMultiplier *
+             (operation_ordinal + 1) +
+         kIndependentPrefillLayerMultiplier * (layer_index + 1) +
+         kIndependentPrefillBatchMultiplier *
+             (batch_sequence_index + 1) +
+         domain_term +
+         kIndependentPrefillWordMultiplier * (logical_word_index + 1);
+}
+
+LlmPrefillAffine64Checksum enumerate_prefill_task_checksum(
+    uint64_t scenario_seed, size_t operation_count,
+    uint64_t layer_index, uint64_t batch_sequence_index,
+    LlmPrefillKvDomain domain, size_t first_logical_word,
+    size_t logical_word_count) {
+  LlmPrefillAffine64Checksum checksum;
+  for (size_t operation = 0; operation < operation_count; ++operation) {
+    for (size_t offset = 0; offset < logical_word_count; ++offset) {
+      const size_t logical_word = first_logical_word + offset;
+      const uint64_t value = independent_prefill_affine_word(
+          scenario_seed, operation, layer_index, batch_sequence_index,
+          domain, logical_word);
+      ++checksum.exact_word_count;
+      if ((logical_word & 1U) == 0) {
+        ++checksum.even_logical_word_count;
+        checksum.even_logical_word_sum += value;
+      } else {
+        ++checksum.odd_logical_word_count;
+        checksum.odd_logical_word_sum += value;
+      }
+    }
+  }
+  checksum.valid = true;
+  checksum.reason_code = LlmPrefillReason::VALID;
+  return checksum;
+}
+
+}  // namespace
+
+TEST(LlmMemoryWorkPlanTest,
+     PrefillProductionGoldenPayloadAndAttentionMathAreExact) {
+  const LlmPrefillPlan plan =
+      resolve_llm_prefill_plan(exact_prefill_request());
+  ASSERT_TRUE(plan.valid) << plan.reason_code;
+  EXPECT_EQ(plan.full_query_tile_count, 2u);
+  EXPECT_EQ(plan.final_query_tile_tokens, 1u);
+  EXPECT_EQ(plan.tile_count, 3u);
+  EXPECT_EQ(plan.attention_prefix_token_visits_per_sequence, 11u);
+  EXPECT_EQ(plan.causal_token_pairs_per_sequence, 15u);
+  EXPECT_EQ(plan.logical_attention_pairs, 240u);
+  EXPECT_EQ(plan.logical_attention_fma_terms, 1920u);
+  EXPECT_EQ(plan.kv_bytes_per_token, 128u);
+  EXPECT_EQ(plan.weight_read_bytes_per_work_unit, 1024u);
+  EXPECT_EQ(plan.kv_read_bytes_per_work_unit, 2816u);
+  EXPECT_EQ(plan.kv_write_bytes_per_work_unit, 1280u);
+  EXPECT_EQ(plan.kv_only_payload_bytes_per_work_unit, 4096u);
+  EXPECT_EQ(plan.mixed_payload_bytes_per_work_unit, 5120u);
+}
+
+TEST(LlmMemoryWorkPlanTest,
+     PrefillBoundaryTilesAndRemaindersUseExactClosedForms) {
+  const LlmPrefillPlan token_tiles =
+      resolve_llm_prefill_plan(exact_prefill_request(5, 1));
+  const LlmPrefillPlan whole_prompt_tile =
+      resolve_llm_prefill_plan(exact_prefill_request(5, 5));
+  const LlmPrefillPlan remainder_tiles =
+      resolve_llm_prefill_plan(exact_prefill_request(7, 3));
+  ASSERT_TRUE(token_tiles.valid) << token_tiles.reason_code;
+  ASSERT_TRUE(whole_prompt_tile.valid) << whole_prompt_tile.reason_code;
+  ASSERT_TRUE(remainder_tiles.valid) << remainder_tiles.reason_code;
+
+  EXPECT_EQ(token_tiles.tile_count, 5u);
+  EXPECT_EQ(token_tiles.attention_prefix_token_visits_per_sequence, 15u);
+  EXPECT_EQ(token_tiles.weight_read_bytes_per_work_unit, 1024u);
+  EXPECT_EQ(whole_prompt_tile.tile_count, 1u);
+  EXPECT_EQ(whole_prompt_tile.attention_prefix_token_visits_per_sequence, 5u);
+  EXPECT_EQ(whole_prompt_tile.weight_read_bytes_per_work_unit, 1024u);
+  EXPECT_EQ(remainder_tiles.full_query_tile_count, 2u);
+  EXPECT_EQ(remainder_tiles.final_query_tile_tokens, 1u);
+  EXPECT_EQ(remainder_tiles.tile_count, 3u);
+  EXPECT_EQ(remainder_tiles.attention_prefix_token_visits_per_sequence, 16u);
+  EXPECT_EQ(remainder_tiles.causal_token_pairs_per_sequence, 28u);
+
+  EXPECT_EQ(resolve_llm_prefill_plan(exact_prefill_request(0, 1)).reason_code,
+            LlmPrefillReason::PROMPT_TOKENS_ZERO);
+  EXPECT_EQ(resolve_llm_prefill_plan(exact_prefill_request(5, 0)).reason_code,
+            LlmPrefillReason::QUERY_TILE_TOKENS_ZERO);
+  EXPECT_EQ(resolve_llm_prefill_plan(exact_prefill_request(5, 6)).reason_code,
+            LlmPrefillReason::QUERY_TILE_TOKENS_EXCEEDS_PROMPT);
+}
+
+TEST(LlmMemoryWorkPlanTest,
+     PrefillPagedClosedFormsAndTerminalBlockBytesAreExact) {
+  const LlmPrefillPlan first =
+      resolve_llm_prefill_plan(exact_prefill_request(5, 2, 2));
+  const LlmPrefillPlan second =
+      resolve_llm_prefill_plan(exact_prefill_request(7, 3, 2));
+  const LlmPrefillPlan terminal =
+      resolve_llm_prefill_plan(exact_prefill_request(6, 2, 4));
+  ASSERT_TRUE(first.valid) << first.reason_code;
+  ASSERT_TRUE(second.valid) << second.reason_code;
+  ASSERT_TRUE(terminal.valid) << terminal.reason_code;
+
+  EXPECT_EQ(first.blocks_per_sequence, 3u);
+  EXPECT_EQ(first.prefix_block_visits_per_sequence, 6u);
+  EXPECT_EQ(first.layout_metadata_lookups_per_layer_sequence, 15u);
+  EXPECT_EQ(second.blocks_per_sequence, 4u);
+  EXPECT_EQ(second.prefix_block_visits_per_sequence, 9u);
+  EXPECT_EQ(second.layout_metadata_lookups_per_layer_sequence, 22u);
+
+  const LlmPrefillUnitRangeCost terminal_block =
+      calculate_llm_prefill_paged_block_cost(terminal, 1);
+  ASSERT_TRUE(terminal_block.valid) << terminal_block.reason_code;
+  EXPECT_EQ(terminal_block.valid_token_count, 2u);
+  EXPECT_EQ(terminal_block.data_visit_count, 4u);
+  EXPECT_EQ(terminal_block.model_payload_bytes, 256u);
+  EXPECT_EQ(terminal_block.layout_metadata_lookup_count, 3u);
+  EXPECT_EQ(terminal_block.layout_metadata_read_bytes, 12u);
+  EXPECT_EQ(terminal_block.accounted_bytes, 268u);
+}
+
+TEST(LlmMemoryWorkPlanTest,
+     PrefillSmallDomainMatchesIndependentEnumeration) {
+  for (size_t prompt_tokens = 1; prompt_tokens <= 12; ++prompt_tokens) {
+    for (size_t query_tile_tokens = 1;
+         query_tile_tokens <= prompt_tokens; ++query_tile_tokens) {
+      for (size_t block_tokens = 1; block_tokens <= 8; ++block_tokens) {
+        SCOPED_TRACE(::testing::Message()
+                     << "P=" << prompt_tokens << " Q="
+                     << query_tile_tokens << " G=" << block_tokens);
+        const IndependentPrefillCounts expected =
+            enumerate_prefill_counts(prompt_tokens, query_tile_tokens,
+                                     block_tokens);
+        const LlmPrefillPlan plan = resolve_llm_prefill_plan(
+            exact_prefill_request(prompt_tokens, query_tile_tokens,
+                                  block_tokens));
+        ASSERT_TRUE(plan.valid) << plan.reason_code;
+        EXPECT_EQ(plan.tile_count, expected.tile_count);
+        EXPECT_EQ(plan.attention_prefix_token_visits_per_sequence,
+                  expected.prefix_token_visits);
+        EXPECT_EQ(plan.causal_token_pairs_per_sequence,
+                  expected.causal_pairs);
+        EXPECT_EQ(plan.blocks_per_sequence, expected.block_count);
+        EXPECT_EQ(plan.prefix_block_visits_per_sequence,
+                  expected.prefix_block_visits);
+        EXPECT_EQ(plan.layout_metadata_lookups_per_layer_sequence,
+                  expected.semantic_lookups);
+
+        for (size_t token = 0; token < prompt_tokens; ++token) {
+          const LlmPrefillUnitRangeCost cost =
+              calculate_llm_prefill_contiguous_token_cost(plan, token);
+          ASSERT_TRUE(cost.valid) << cost.reason_code;
+          EXPECT_EQ(cost.data_visit_count,
+                    expected.token_data_visits[token]);
+          EXPECT_EQ(cost.model_payload_bytes,
+                    expected.token_data_visits[token] *
+                        plan.kv_record_bytes_per_layer);
+        }
+        for (size_t block = 0; block < expected.block_count; ++block) {
+          const LlmPrefillUnitRangeCost cost =
+              calculate_llm_prefill_paged_block_cost(plan, block);
+          ASSERT_TRUE(cost.valid) << cost.reason_code;
+          EXPECT_EQ(cost.data_visit_count,
+                    expected.block_data_visits[block]);
+          EXPECT_EQ(cost.layout_metadata_lookup_count,
+                    expected.block_lookups[block]);
+        }
+
+        const size_t expected_model_payload_bytes =
+            std::accumulate(expected.token_data_visits.begin(),
+                            expected.token_data_visits.end(), size_t{0}) *
+            plan.kv_record_bytes_per_layer;
+        if (block_tokens == 1) {
+          for (size_t workers = 1;
+               workers <= std::min(prompt_tokens, size_t{4}); ++workers) {
+            expect_kv_ownership_exact_union(
+                plan, LlmPrefillPartitionUnitKind::ContiguousToken,
+                workers, expected_model_payload_bytes, 0);
+          }
+        }
+        for (size_t workers = 1;
+             workers <= std::min(expected.block_count, size_t{4});
+             ++workers) {
+          expect_kv_ownership_exact_union(
+              plan, LlmPrefillPartitionUnitKind::PagedBlock, workers,
+              expected_model_payload_bytes, expected.semantic_lookups);
+        }
+      }
+    }
+  }
+}
+
+TEST(LlmMemoryWorkPlanTest,
+     PrefillCheckedHelpersPreserveOutputOnFailureAndRejectOverflow) {
+  size_t output = 99;
+  EXPECT_FALSE(checked_llm_prefill_ceil_divide(1, 0, output));
+  EXPECT_EQ(output, 99u);
+  EXPECT_TRUE(checked_llm_prefill_ceil_divide(
+      std::numeric_limits<size_t>::max(), 2, output));
+  EXPECT_EQ(output, std::numeric_limits<size_t>::max() / 2 + 1);
+
+  output = 99;
+  EXPECT_TRUE(checked_llm_prefill_triangular(3, output));
+  EXPECT_EQ(output, 6u);
+  output = 99;
+  EXPECT_FALSE(checked_llm_prefill_triangular(
+      std::numeric_limits<size_t>::max(), output));
+  EXPECT_EQ(output, 99u);
+
+  output = 99;
+  EXPECT_TRUE(checked_llm_prefill_floor_sum(4, 5, 3, 2, output));
+  EXPECT_EQ(output, 4u);
+  output = 99;
+  EXPECT_FALSE(checked_llm_prefill_floor_sum(4, 0, 3, 2, output));
+  EXPECT_EQ(output, 99u);
+  output = 99;
+  EXPECT_FALSE(checked_llm_prefill_floor_sum(
+      std::numeric_limits<size_t>::max(), 1,
+      std::numeric_limits<size_t>::max(),
+      std::numeric_limits<size_t>::max(), output));
+  EXPECT_EQ(output, 99u);
+}
+
+TEST(LlmMemoryWorkPlanTest,
+     PrefillContiguousTokenAndPagedBlockRangeCostsAreExact) {
+  const LlmPrefillPlan plan =
+      resolve_llm_prefill_plan(exact_prefill_request(5, 2, 2));
+  ASSERT_TRUE(plan.valid) << plan.reason_code;
+
+  const std::array<size_t, 5> expected_token_visits = {4, 4, 3, 3, 2};
+  for (size_t token = 0; token < expected_token_visits.size(); ++token) {
+    const LlmPrefillUnitRangeCost cost =
+        calculate_llm_prefill_contiguous_token_cost(plan, token);
+    ASSERT_TRUE(cost.valid) << cost.reason_code;
+    EXPECT_EQ(cost.valid_token_count, 1u);
+    EXPECT_EQ(cost.data_visit_count, expected_token_visits[token]);
+    EXPECT_EQ(cost.model_payload_bytes,
+              expected_token_visits[token] * 64);
+    EXPECT_EQ(cost.layout_metadata_read_bytes, 0u);
+    EXPECT_EQ(cost.accounted_bytes, cost.model_payload_bytes);
+  }
+  const LlmPrefillUnitRangeCost token_range =
+      calculate_llm_prefill_contiguous_token_range_cost(plan, 1, 3);
+  ASSERT_TRUE(token_range.valid) << token_range.reason_code;
+  EXPECT_EQ(token_range.data_visit_count, 10u);
+  EXPECT_EQ(token_range.model_payload_bytes, 640u);
+
+  constexpr std::array<size_t, 3> kBlockDataVisits = {8, 6, 2};
+  constexpr std::array<size_t, 3> kBlockLookups = {7, 5, 3};
+  constexpr std::array<size_t, 3> kBlockAccountedBytes = {540, 404, 140};
+  for (size_t block = 0; block < kBlockDataVisits.size(); ++block) {
+    const LlmPrefillUnitRangeCost cost =
+        calculate_llm_prefill_paged_block_cost(plan, block);
+    ASSERT_TRUE(cost.valid) << cost.reason_code;
+    EXPECT_EQ(cost.data_visit_count, kBlockDataVisits[block]);
+    EXPECT_EQ(cost.layout_metadata_lookup_count, kBlockLookups[block]);
+    EXPECT_EQ(cost.accounted_bytes, kBlockAccountedBytes[block]);
+  }
+  const LlmPrefillUnitRangeCost all_blocks =
+      calculate_llm_prefill_paged_block_range_cost(plan, 0, 3);
+  ASSERT_TRUE(all_blocks.valid) << all_blocks.reason_code;
+  EXPECT_EQ(all_blocks.valid_token_count, 5u);
+  EXPECT_EQ(all_blocks.data_visit_count, 16u);
+  EXPECT_EQ(all_blocks.model_payload_bytes, 1024u);
+  EXPECT_EQ(all_blocks.layout_metadata_lookup_count, 15u);
+  EXPECT_EQ(all_blocks.layout_metadata_read_bytes, 60u);
+  EXPECT_EQ(all_blocks.accounted_bytes, 1084u);
+
+  EXPECT_EQ(calculate_llm_prefill_contiguous_token_cost(plan, 5).reason_code,
+            LlmPrefillReason::INVALID_LOGICAL_RANGE);
+  EXPECT_EQ(calculate_llm_prefill_paged_block_cost(plan, 3).reason_code,
+            LlmPrefillReason::INVALID_LOGICAL_RANGE);
+}
+
+TEST(LlmMemoryWorkPlanTest,
+     PrefillCpuOwnershipIsDeterministicUsesLowerTieAndCoversExactUnion) {
+  const LlmPrefillPlan equal_tokens =
+      resolve_llm_prefill_plan(exact_prefill_request(3, 3));
+  ASSERT_TRUE(equal_tokens.valid) << equal_tokens.reason_code;
+  const LlmPrefillCpuOwnershipPlan tie =
+      build_llm_prefill_cpu_ownership_plan(
+          equal_tokens,
+          {LlmPrefillPartitionUnitKind::ContiguousToken,
+           LlmScenario::KvOnly, 2, 1, {}});
+  ASSERT_TRUE(tie.valid) << tie.reason_code;
+  ASSERT_EQ(tie.assignments.size(), 2u);
+  EXPECT_EQ(tie.assignments[0].worker_index, 1u);
+  EXPECT_EQ(tie.assignments[0].first_unit, 0u);
+  EXPECT_EQ(tie.assignments[0].unit_count, 1u);
+  EXPECT_EQ(tie.assignments[1].worker_index, 0u);
+  EXPECT_EQ(tie.assignments[1].first_unit, 1u);
+  EXPECT_EQ(tie.assignments[1].unit_count, 2u);
+
+  const LlmPrefillPlan paged =
+      resolve_llm_prefill_plan(exact_prefill_request(7, 3, 2));
+  ASSERT_TRUE(paged.valid) << paged.reason_code;
+  const LlmPrefillCpuOwnershipRequest request{
+      LlmPrefillPartitionUnitKind::PagedBlock, LlmScenario::Mixed,
+      3, 1, {341, 341, 342}};
+  const LlmPrefillCpuOwnershipPlan first =
+      build_llm_prefill_cpu_ownership_plan(paged, request);
+  const LlmPrefillCpuOwnershipPlan second =
+      build_llm_prefill_cpu_ownership_plan(paged, request);
+  ASSERT_TRUE(first.valid) << first.reason_code;
+  ASSERT_TRUE(second.valid) << second.reason_code;
+  expect_ownership_plans_equal(first, second);
+  EXPECT_EQ(first.identity.rfind(LlmPrefillVersion::CPU_PARTITION, 0), 0u);
+  EXPECT_NE(first.identity.find("|unit_kind=paged_block"),
+            std::string::npos);
+  EXPECT_NE(first.identity.find("|scenario=mixed"), std::string::npos);
+  EXPECT_NE(first.identity.find("|worker_rotation=1"), std::string::npos);
+  EXPECT_NE(first.identity.find("|assignment_count=3"), std::string::npos);
+
+  size_t cursor = 0;
+  for (size_t rank = 0; rank < first.assignments.size(); ++rank) {
+    const LlmPrefillCpuAssignment& assignment = first.assignments[rank];
+    EXPECT_EQ(assignment.range_rank, rank);
+    EXPECT_EQ(assignment.first_unit, cursor);
+    EXPECT_GT(assignment.unit_count, 0u);
+    cursor += assignment.unit_count;
+  }
+  EXPECT_EQ(cursor, paged.blocks_per_sequence);
+  EXPECT_EQ(first.active_worker_count, 3u);
+  EXPECT_EQ(first.total_weight_shard_bytes, 1024u);
+  EXPECT_EQ(first.total_kv_model_payload_bytes,
+            std::accumulate(first.worker_kv_model_payload_bytes.begin(),
+                            first.worker_kv_model_payload_bytes.end(),
+                            size_t{0}));
+  EXPECT_EQ(first.total_layout_metadata_lookup_count,
+            std::accumulate(
+                first.worker_layout_metadata_lookup_count.begin(),
+                first.worker_layout_metadata_lookup_count.end(), size_t{0}));
+  EXPECT_EQ(first.total_scenario_accounted_bytes,
+            std::accumulate(first.worker_scenario_accounted_bytes.begin(),
+                            first.worker_scenario_accounted_bytes.end(),
+                            size_t{0}));
+  const auto worker_range = std::minmax_element(
+      first.worker_scenario_accounted_bytes.begin(),
+      first.worker_scenario_accounted_bytes.end());
+  EXPECT_EQ(first.minimum_worker_accounted_bytes, *worker_range.first);
+  EXPECT_EQ(first.maximum_worker_accounted_bytes, *worker_range.second);
+  EXPECT_EQ(first.worker_accounted_imbalance_bytes,
+            *worker_range.second - *worker_range.first);
+
+  LlmPrefillCpuOwnershipRequest changed_rotation = request;
+  changed_rotation.worker_rotation = 2;
+  const LlmPrefillCpuOwnershipPlan rotated =
+      build_llm_prefill_cpu_ownership_plan(paged, changed_rotation);
+  ASSERT_TRUE(rotated.valid) << rotated.reason_code;
+  EXPECT_NE(first.identity, rotated.identity);
+
+  LlmPrefillCpuOwnershipRequest changed_weights = request;
+  changed_weights.worker_weight_shard_bytes = {340, 342, 342};
+  const LlmPrefillCpuOwnershipPlan reweighted =
+      build_llm_prefill_cpu_ownership_plan(paged, changed_weights);
+  ASSERT_TRUE(reweighted.valid) << reweighted.reason_code;
+  EXPECT_NE(first.identity, reweighted.identity);
+
+  const LlmPrefillCpuOwnershipPlan kv_only =
+      build_llm_prefill_cpu_ownership_plan(
+          paged, {LlmPrefillPartitionUnitKind::PagedBlock,
+                  LlmScenario::KvOnly, 3, 1, {}});
+  ASSERT_TRUE(kv_only.valid) << kv_only.reason_code;
+  EXPECT_NE(first.identity, kv_only.identity);
+
+  const LlmPrefillPlan changed_geometry =
+      resolve_llm_prefill_plan(exact_prefill_request(7, 2, 2));
+  const LlmPrefillCpuOwnershipPlan changed_geometry_ownership =
+      build_llm_prefill_cpu_ownership_plan(changed_geometry, request);
+  ASSERT_TRUE(changed_geometry_ownership.valid)
+      << changed_geometry_ownership.reason_code;
+  EXPECT_NE(first.identity, changed_geometry_ownership.identity);
+}
+
+TEST(LlmMemoryWorkPlanTest,
+     PrefillCpuOwnershipFailurePublishesNoPartialEvidence) {
+  const LlmPrefillPlan prefill =
+      resolve_llm_prefill_plan(exact_prefill_request(1, 1));
+  ASSERT_TRUE(prefill.valid) << prefill.reason_code;
+  const LlmPrefillCpuOwnershipPlan overflow =
+      build_llm_prefill_cpu_ownership_plan(
+          prefill,
+          {LlmPrefillPartitionUnitKind::ContiguousToken,
+           LlmScenario::Mixed, 2, 0,
+           {0, std::numeric_limits<size_t>::max()}});
+
+  EXPECT_FALSE(overflow.valid);
+  EXPECT_EQ(overflow.reason_code,
+            LlmPrefillReason::OWNERSHIP_COUNT_OVERFLOW);
+  EXPECT_TRUE(overflow.identity.empty());
+  EXPECT_TRUE(overflow.assignments.empty());
+  EXPECT_TRUE(overflow.worker_weight_shard_bytes.empty());
+  EXPECT_TRUE(overflow.worker_kv_model_payload_bytes.empty());
+  EXPECT_TRUE(overflow.worker_layout_metadata_lookup_count.empty());
+  EXPECT_TRUE(overflow.worker_layout_metadata_read_bytes.empty());
+  EXPECT_TRUE(overflow.worker_scenario_accounted_bytes.empty());
+  EXPECT_EQ(overflow.logical_unit_count, 0u);
+  EXPECT_EQ(overflow.active_worker_count, 0u);
+  EXPECT_EQ(overflow.total_weight_shard_bytes, 0u);
+  EXPECT_EQ(overflow.total_kv_accounted_bytes, 0u);
+  EXPECT_EQ(overflow.total_scenario_accounted_bytes, 0u);
+  EXPECT_EQ(overflow.minimum_worker_accounted_bytes, 0u);
+  EXPECT_EQ(overflow.maximum_worker_accounted_bytes, 0u);
+  EXPECT_EQ(overflow.worker_accounted_imbalance_bytes, 0u);
+}
+
+TEST(LlmMemoryWorkPlanTest,
+     PrefillModelPlansFreezeGenericWorkUnitsAndBindAllInputs) {
+  LlmMemoryWorkPlan contiguous = build_llm_memory_work_plan(
+      work_plan_request(integrated_prefill_geometry_request(
+          LlmKvLayout::Contiguous)));
+  LlmMemoryWorkPlan paged = build_llm_memory_work_plan(
+      work_plan_request(integrated_prefill_geometry_request(
+          LlmKvLayout::Paged, 5, 2, 2)));
+  LlmMemoryWorkPlan changed_query_tile = build_llm_memory_work_plan(
+      work_plan_request(integrated_prefill_geometry_request(
+          LlmKvLayout::Contiguous, 5, 5)));
+  LlmMemoryWorkPlan changed_prompt = build_llm_memory_work_plan(
+      work_plan_request(integrated_prefill_geometry_request(
+          LlmKvLayout::Contiguous, 6, 2)));
+  ASSERT_TRUE(contiguous.valid) << contiguous.reason_code;
+  ASSERT_TRUE(paged.valid) << paged.reason_code;
+  ASSERT_TRUE(changed_query_tile.valid) << changed_query_tile.reason_code;
+  ASSERT_TRUE(changed_prompt.valid) << changed_prompt.reason_code;
+
+  for (const LlmMemoryWorkPlan* plan :
+       {&contiguous, &paged, &changed_query_tile, &changed_prompt}) {
+    EXPECT_EQ(plan->phase, LlmPhase::Prefill);
+    EXPECT_EQ(plan->work_unit_kind, LlmWorkUnitKind::PrefillOperation);
+    EXPECT_FALSE(plan->geometry.decode.has_value());
+    ASSERT_TRUE(plan->geometry.prefill.has_value());
+    ASSERT_TRUE(plan->prefill_plan.has_value());
+    EXPECT_TRUE(plan->prefill_plan->valid);
+    EXPECT_EQ(plan->component_identities.logical_profile_version,
+              Constants::LLM_PREFILL_LOGICAL_PROFILE_VERSION);
+    EXPECT_EQ(plan->component_identities.schedule_version,
+              LlmPrefillVersion::OWNER_LOCAL_SCHEDULE);
+    EXPECT_EQ(plan->component_identities.write_pattern_version,
+              LlmPrefillVersion::WRITE_PATTERN);
+    EXPECT_EQ(plan->component_identities.checksum_pattern_version,
+              LlmPrefillVersion::CHECKSUM_ORACLE);
+  }
+  EXPECT_EQ(contiguous.methodology_version,
+            "llm-memory-v1-cpu-prefill-contiguous");
+  EXPECT_EQ(paged.methodology_version,
+            "llm-memory-v1-cpu-prefill-paged");
+  EXPECT_FALSE(contiguous.component_identities.permutation_version.has_value());
+  ASSERT_TRUE(paged.component_identities.permutation_version.has_value());
+  EXPECT_EQ(*paged.component_identities.permutation_version,
+            Constants::LLM_KV_BLOCK_PERMUTATION_VERSION);
+  EXPECT_FALSE(cpu_execution_plan(contiguous).paged.has_value());
+  EXPECT_FALSE(cpu_execution_plan(paged).paged.has_value());
+  EXPECT_GT(paged.memory_budget.request.requested_block_table_mapping_bytes,
+            0u);
+  EXPECT_EQ(contiguous.geometry.prefill->prompt_tokens, 5u);
+  EXPECT_EQ(contiguous.geometry.prefill->attention_query_tile_tokens, 2u);
+  EXPECT_EQ(contiguous.geometry.prefill->tile_count, 3u);
+  EXPECT_EQ(
+      contiguous.geometry.prefill->attention_prefix_token_visits_per_sequence,
+      11u);
+  EXPECT_EQ(
+      paged.geometry.prefill->paged_prefix_block_visits_per_sequence, 6u);
+  EXPECT_NE(contiguous.plan_identity, paged.plan_identity);
+  EXPECT_NE(contiguous.plan_identity, changed_query_tile.plan_identity);
+  EXPECT_NE(contiguous.plan_identity, changed_prompt.plan_identity);
+
+  const LlmScenarioLimits weights = calculate_llm_scenario_limits(
+      paged.geometry, LlmScenario::WeightsOnly);
+  const LlmScenarioLimits kv = calculate_llm_scenario_limits(
+      paged.geometry, LlmScenario::KvOnly);
+  const LlmScenarioLimits mixed = calculate_llm_scenario_limits(
+      paged.geometry, LlmScenario::Mixed);
+  ASSERT_TRUE(weights.valid) << weights.reason_code;
+  ASSERT_TRUE(kv.valid) << kv.reason_code;
+  ASSERT_TRUE(mixed.valid) << mixed.reason_code;
+  EXPECT_EQ(weights.work_unit_kind, LlmWorkUnitKind::PrefillOperation);
+  EXPECT_EQ(kv.work_unit_kind, LlmWorkUnitKind::PrefillOperation);
+  EXPECT_EQ(mixed.work_unit_kind, LlmWorkUnitKind::PrefillOperation);
+  EXPECT_EQ(weights.kv_write_kind, LlmKvWriteKind::None);
+  EXPECT_EQ(kv.kv_write_kind, LlmKvWriteKind::FullPromptPopulation);
+  EXPECT_EQ(mixed.kv_write_kind, LlmKvWriteKind::FullPromptPopulation);
+  EXPECT_EQ(weights.accounted_bytes_per_work_unit, 1024u);
+  EXPECT_EQ(kv.effective_model_payload_bytes_per_work_unit, 4096u);
+  EXPECT_EQ(kv.layout_metadata_lookup_count_per_work_unit, 60u);
+  EXPECT_EQ(kv.layout_metadata_read_bytes_per_work_unit, 240u);
+  EXPECT_EQ(kv.accounted_bytes_per_work_unit, 4336u);
+  EXPECT_EQ(mixed.effective_model_payload_bytes_per_work_unit, 5120u);
+  EXPECT_EQ(mixed.accounted_bytes_per_work_unit, 5360u);
+
+  const std::array<size_t, kLlmScenarioCount> work_units = {2, 3, 4};
+  const LlmFrozenScenarioPlans frozen =
+      freeze_llm_scenario_work_plans(paged, work_units, true);
+  ASSERT_TRUE(frozen.valid) << frozen.reason_code;
+  EXPECT_TRUE(frozen.explicit_iterations);
+  EXPECT_EQ(frozen.model_plan_identity, paged.plan_identity);
+  EXPECT_FALSE(frozen.plan_identity.empty());
+  for (size_t index = 0; index < frozen.scenarios.size(); ++index) {
+    const LlmScenarioWorkPlan& scenario = frozen.scenarios[index];
+    EXPECT_TRUE(scenario.valid) << scenario.reason_code;
+    EXPECT_EQ(scenario.work_unit_kind, LlmWorkUnitKind::PrefillOperation);
+    EXPECT_EQ(scenario.work_units, work_units[index]);
+    EXPECT_EQ(scenario.model_plan_identity, paged.plan_identity);
+  }
+  EXPECT_EQ(frozen.scenarios[0].kv_write_kind, LlmKvWriteKind::None);
+  EXPECT_EQ(frozen.scenarios[1].kv_write_kind,
+            LlmKvWriteKind::FullPromptPopulation);
+  EXPECT_EQ(frozen.scenarios[2].kv_write_kind,
+            LlmKvWriteKind::FullPromptPopulation);
+
+  const LlmFrozenScenarioPlans changed_frozen =
+      freeze_llm_scenario_work_plans(paged, {2, 3, 5}, true);
+  ASSERT_TRUE(changed_frozen.valid) << changed_frozen.reason_code;
+  EXPECT_NE(frozen.plan_identity, changed_frozen.plan_identity);
+
+  EXPECT_EQ(kv.maximum_work_units_by_guardrail,
+            Constants::LLM_MAX_ACCOUNTED_BYTES_PER_TASK /
+                kv.accounted_bytes_per_work_unit);
+  EXPECT_EQ(kv.effective_maximum_work_units,
+            kv.maximum_work_units_by_guardrail);
+  const LlmScenarioWorkPlan guardrail_boundary =
+      build_llm_scenario_work_plan(
+          paged, LlmScenario::KvOnly,
+          kv.maximum_work_units_by_guardrail, true);
+  ASSERT_TRUE(guardrail_boundary.valid) << guardrail_boundary.reason_code;
+  EXPECT_LE(guardrail_boundary.task_accounted_bytes,
+            Constants::LLM_MAX_ACCOUNTED_BYTES_PER_TASK);
+  const LlmScenarioWorkPlan guardrail_exceeded =
+      build_llm_scenario_work_plan(
+          paged, LlmScenario::KvOnly,
+          kv.maximum_work_units_by_guardrail + 1, true);
+  EXPECT_FALSE(guardrail_exceeded.valid);
+  EXPECT_EQ(guardrail_exceeded.reason_code,
+            LlmWorkPlanReason::TASK_ACCOUNTED_BYTES_CAP_EXCEEDED);
+}
+
+TEST(LlmMemoryWorkPlanTest,
+     PrefillAffineTaskChecksumMatchesIndependentEnumerationAndFinalOrdinal) {
+  constexpr uint64_t kScenarioSeed = 0x0123456789ABCDEFULL;
+  constexpr size_t kOperationCount = 2;
+  constexpr uint64_t kLayerIndex = 2;
+  constexpr uint64_t kBatchIndex = 3;
+  constexpr size_t kFirstWord = 1;
+  constexpr size_t kWordCount = 5;
+
+  for (const LlmPrefillKvDomain domain :
+       {LlmPrefillKvDomain::K, LlmPrefillKvDomain::V}) {
+    for (size_t operation = 0; operation < kOperationCount; ++operation) {
+      for (size_t offset = 0; offset < kWordCount; ++offset) {
+        const size_t logical_word = kFirstWord + offset;
+        EXPECT_EQ(llm_prefill_affine64_word(
+                      kScenarioSeed, operation, kLayerIndex, kBatchIndex,
+                      domain, logical_word),
+                  independent_prefill_affine_word(
+                      kScenarioSeed, operation, kLayerIndex, kBatchIndex,
+                      domain, logical_word));
+      }
+    }
+    const LlmPrefillAffine64Checksum expected =
+        enumerate_prefill_task_checksum(
+            kScenarioSeed, kOperationCount, kLayerIndex, kBatchIndex,
+            domain, kFirstWord, kWordCount);
+    const LlmPrefillAffine64Checksum actual =
+        calculate_llm_prefill_affine64_task_checksum(
+            kScenarioSeed, kOperationCount, kLayerIndex, kBatchIndex,
+            domain, kFirstWord, kWordCount);
+    ASSERT_TRUE(actual.valid) << actual.reason_code;
+    EXPECT_EQ(actual.exact_word_count, expected.exact_word_count);
+    EXPECT_EQ(actual.even_logical_word_count,
+              expected.even_logical_word_count);
+    EXPECT_EQ(actual.odd_logical_word_count,
+              expected.odd_logical_word_count);
+    EXPECT_EQ(actual.even_logical_word_sum,
+              expected.even_logical_word_sum);
+    EXPECT_EQ(actual.odd_logical_word_sum,
+              expected.odd_logical_word_sum);
+  }
+
+  const LlmPrefillAffine64Checksum k_checksum =
+      calculate_llm_prefill_affine64_task_checksum(
+          kScenarioSeed, kOperationCount, kLayerIndex, kBatchIndex,
+          LlmPrefillKvDomain::K, kFirstWord, kWordCount);
+  EXPECT_EQ(k_checksum.exact_word_count, 10u);
+  EXPECT_EQ(k_checksum.even_logical_word_count, 4u);
+  EXPECT_EQ(k_checksum.odd_logical_word_count, 6u);
+  EXPECT_EQ(k_checksum.even_logical_word_sum,
+            0xDC08129268383AB6ULL);
+  EXPECT_EQ(k_checksum.odd_logical_word_sum,
+            0xCA0C1BDB9C545811ULL);
+
+  const uint64_t final_word = llm_prefill_affine64_word(
+      kScenarioSeed, kOperationCount - 1, kLayerIndex, kBatchIndex,
+      LlmPrefillKvDomain::K, kFirstWord);
+  EXPECT_EQ(final_word, 0x184BC4108CFF5192ULL);
+  EXPECT_NE(final_word,
+            llm_prefill_affine64_word(
+                kScenarioSeed, 0, kLayerIndex, kBatchIndex,
+                LlmPrefillKvDomain::K, kFirstWord));
+  for (size_t byte = 0; byte < sizeof(uint64_t); ++byte) {
+    EXPECT_EQ(llm_prefill_affine64_byte(
+                  kScenarioSeed, kOperationCount - 1, kLayerIndex,
+                  kBatchIndex, LlmPrefillKvDomain::K,
+                  kFirstWord * sizeof(uint64_t) + byte),
+              static_cast<uint8_t>(final_word >> (byte * 8)));
+  }
+
+  const LlmPrefillAffine64Checksum zero_operations =
+      calculate_llm_prefill_affine64_task_checksum(
+          kScenarioSeed, 0, kLayerIndex, kBatchIndex,
+          LlmPrefillKvDomain::K, kFirstWord, kWordCount);
+  EXPECT_FALSE(zero_operations.valid);
+  EXPECT_EQ(zero_operations.reason_code,
+            LlmPrefillReason::OPERATION_COUNT_ZERO);
+  const LlmPrefillAffine64Checksum overflow =
+      calculate_llm_prefill_affine64_task_checksum(
+          kScenarioSeed, std::numeric_limits<size_t>::max(),
+          kLayerIndex, kBatchIndex, LlmPrefillKvDomain::K, 0, 2);
+  EXPECT_FALSE(overflow.valid);
+  EXPECT_EQ(overflow.reason_code,
+            LlmPrefillReason::AFFINE_WORD_RANGE_OVERFLOW);
+  const LlmPrefillAffine64Checksum invalid_domain =
+      calculate_llm_prefill_affine64_task_checksum(
+          kScenarioSeed, 1, kLayerIndex, kBatchIndex,
+          static_cast<LlmPrefillKvDomain>(99), 0, 1);
+  EXPECT_FALSE(invalid_domain.valid);
+  EXPECT_EQ(invalid_domain.reason_code,
+            LlmPrefillReason::AFFINE_DOMAIN_INVALID);
+}
+
+TEST(LlmMemoryWorkPlanTest,
+     PrefillSemanticTraceWritesBothBlocksBeforePerTileKThenVReads) {
+  const LlmPrefillPlan plan =
+      resolve_llm_prefill_plan(exact_prefill_request(4, 2, 2));
+  ASSERT_TRUE(plan.valid) << plan.reason_code;
+  const LlmPrefillSemanticTrace trace =
+      build_llm_prefill_semantic_trace(
+          plan, {LlmPrefillPartitionUnitKind::PagedBlock, 0, 2, 10});
+  ASSERT_TRUE(trace.valid) << trace.reason_code;
+
+  struct ExpectedEvent {
+    LlmPrefillSemanticAccess access;
+    LlmPrefillKvDomain domain;
+    size_t tile_index;
+    size_t tile_end;
+    size_t block;
+    size_t visit_tokens;
+  };
+  constexpr std::array<ExpectedEvent, 10> kExpected = {{
+      {LlmPrefillSemanticAccess::Write, LlmPrefillKvDomain::K, 0, 4, 0, 2},
+      {LlmPrefillSemanticAccess::Write, LlmPrefillKvDomain::V, 0, 4, 0, 2},
+      {LlmPrefillSemanticAccess::Write, LlmPrefillKvDomain::K, 0, 4, 1, 2},
+      {LlmPrefillSemanticAccess::Write, LlmPrefillKvDomain::V, 0, 4, 1, 2},
+      {LlmPrefillSemanticAccess::Read, LlmPrefillKvDomain::K, 0, 2, 0, 2},
+      {LlmPrefillSemanticAccess::Read, LlmPrefillKvDomain::V, 0, 2, 0, 2},
+      {LlmPrefillSemanticAccess::Read, LlmPrefillKvDomain::K, 1, 4, 0, 2},
+      {LlmPrefillSemanticAccess::Read, LlmPrefillKvDomain::K, 1, 4, 1, 2},
+      {LlmPrefillSemanticAccess::Read, LlmPrefillKvDomain::V, 1, 4, 0, 2},
+      {LlmPrefillSemanticAccess::Read, LlmPrefillKvDomain::V, 1, 4, 1, 2},
+  }};
+  ASSERT_EQ(trace.events.size(), kExpected.size());
+  for (size_t index = 0; index < kExpected.size(); ++index) {
+    SCOPED_TRACE(index);
+    EXPECT_EQ(trace.events[index].access, kExpected[index].access);
+    EXPECT_EQ(trace.events[index].domain, kExpected[index].domain);
+    EXPECT_EQ(trace.events[index].tile_index,
+              kExpected[index].tile_index);
+    EXPECT_EQ(trace.events[index].tile_end_token,
+              kExpected[index].tile_end);
+    EXPECT_EQ(trace.events[index].logical_unit_index,
+              kExpected[index].block);
+    EXPECT_EQ(trace.events[index].visit_token_count,
+              kExpected[index].visit_tokens);
+  }
 }

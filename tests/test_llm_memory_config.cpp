@@ -60,7 +60,20 @@ LlmMemoryConfig valid_config() {
   config.kv_head_count = 8;
   config.head_dimension = 128;
   config.visible_context_tokens = 8192;
+  config.user_specified_context_tokens = true;
   config.requested_workers = 8;
+  return config;
+}
+
+LlmMemoryConfig valid_prefill_config() {
+  LlmMemoryConfig config = valid_config();
+  config.phase = LlmPhase::Prefill;
+  config.visible_context_tokens = 0;
+  config.prompt_tokens = 33;
+  config.attention_query_tile_tokens = 16;
+  config.user_specified_context_tokens = false;
+  config.user_specified_prompt_tokens = true;
+  config.user_specified_attention_query_tile_tokens = true;
   return config;
 }
 
@@ -158,6 +171,8 @@ TEST(LlmMemoryConfigTest, DefaultsMatchFrozenStandaloneContract) {
   EXPECT_EQ(config.head_dimension, 0u);
   EXPECT_EQ(config.kv_element_bytes, 2u);
   EXPECT_EQ(config.visible_context_tokens, 0u);
+  EXPECT_EQ(config.prompt_tokens, 0u);
+  EXPECT_EQ(config.attention_query_tile_tokens, 0u);
   EXPECT_EQ(config.kv_block_tokens, 0u);
   EXPECT_EQ(config.batch_size, 1u);
   EXPECT_EQ(config.requested_workers, 0u);
@@ -168,6 +183,9 @@ TEST(LlmMemoryConfigTest, DefaultsMatchFrozenStandaloneContract) {
   EXPECT_FALSE(config.user_specified_iterations);
   EXPECT_FALSE(config.user_specified_seed);
   EXPECT_FALSE(config.user_specified_workers);
+  EXPECT_FALSE(config.user_specified_context_tokens);
+  EXPECT_FALSE(config.user_specified_prompt_tokens);
+  EXPECT_FALSE(config.user_specified_attention_query_tile_tokens);
   EXPECT_FALSE(config.user_specified_kv_layout);
   EXPECT_FALSE(config.user_specified_kv_block_tokens);
   EXPECT_FALSE(config.help_printed);
@@ -195,6 +213,8 @@ TEST(LlmMemoryConfigTest,
   EXPECT_EQ(config.head_dimension, 8u);
   EXPECT_EQ(config.kv_element_bytes, 2u);
   EXPECT_EQ(config.visible_context_tokens, 3u);
+  EXPECT_EQ(config.prompt_tokens, 0u);
+  EXPECT_EQ(config.attention_query_tile_tokens, 0u);
   EXPECT_EQ(config.kv_layout, LlmKvLayout::Contiguous);
   EXPECT_EQ(config.kv_block_tokens, 0u);
   EXPECT_EQ(config.batch_size, 1u);
@@ -206,6 +226,9 @@ TEST(LlmMemoryConfigTest,
   EXPECT_FALSE(config.user_specified_iterations);
   EXPECT_FALSE(config.user_specified_seed);
   EXPECT_FALSE(config.user_specified_workers);
+  EXPECT_TRUE(config.user_specified_context_tokens);
+  EXPECT_FALSE(config.user_specified_prompt_tokens);
+  EXPECT_FALSE(config.user_specified_attention_query_tile_tokens);
   EXPECT_FALSE(config.user_specified_kv_layout);
   EXPECT_FALSE(config.user_specified_kv_block_tokens);
   EXPECT_FALSE(config.help_printed);
@@ -254,6 +277,9 @@ TEST(LlmMemoryConfigTest, ParserPreservesEveryExplicitFieldAndAlias) {
   EXPECT_TRUE(config.user_specified_iterations);
   EXPECT_TRUE(config.user_specified_seed);
   EXPECT_TRUE(config.user_specified_workers);
+  EXPECT_TRUE(config.user_specified_context_tokens);
+  EXPECT_FALSE(config.user_specified_prompt_tokens);
+  EXPECT_FALSE(config.user_specified_attention_query_tile_tokens);
   EXPECT_TRUE(config.user_specified_kv_layout);
   EXPECT_TRUE(config.user_specified_kv_block_tokens);
   EXPECT_EQ(config.output_file, "./-");
@@ -663,6 +689,9 @@ TEST(LlmMemoryConfigTest, ParserRejectsEveryIncompatibleOption) {
       {"-S", "threads=1"},
       {"--sweep-max-runs", "1"},
       {"-X", "1"},
+      {"--phase", "prefill"},
+      {"--prompt-tokens", "3"},
+      {"--attention-query-tile-tokens", "2"},
       {"--unknown"},
   };
   for (const std::vector<std::string>& suffix : suffixes) {
@@ -688,6 +717,11 @@ TEST(LlmMemoryConfigTest,
                 "Usage: memory_benchmark --llm-memory [options]"),
             std::string::npos);
   EXPECT_NE(parsed.stdout_output.find("memory traffic only"),
+            std::string::npos);
+  EXPECT_EQ(parsed.stdout_output.find("--phase"), std::string::npos);
+  EXPECT_EQ(parsed.stdout_output.find("--prompt-tokens"),
+            std::string::npos);
+  EXPECT_EQ(parsed.stdout_output.find("--attention-query-tile-tokens"),
             std::string::npos);
   EXPECT_EQ(parsed.stdout_output.find(Messages::config_header(SOFTVERSION)),
             std::string::npos);
@@ -928,6 +962,91 @@ TEST(LlmMemoryConfigTest, ValidatesPositiveGeometryAndHeadSharing) {
   EXPECT_TRUE(validate_llm_memory_config(config).valid);
   config.kv_block_tokens = static_cast<size_t>(1) << 31;
   EXPECT_TRUE(validate_llm_memory_config(config).valid);
+}
+
+TEST(LlmMemoryConfigTest,
+     ValidatesPhaseSpecificTokenInputsThroughPureConfigSeam) {
+  LlmMemoryConfig config = valid_config();
+  ASSERT_TRUE(validate_llm_memory_config(config).valid);
+
+  config.phase = static_cast<LlmPhase>(99);
+  expect_invalid(config, LlmMemoryConfigReason::INVALID_PHASE);
+
+  config = valid_prefill_config();
+  LlmMemoryConfigValidation validation = validate_llm_memory_config(config);
+  ASSERT_TRUE(validation.valid) << validation.reason_code;
+  EXPECT_EQ(validation.reason_code, LlmMemoryConfigReason::VALID);
+  EXPECT_EQ(validation.active_weight_bytes,
+            4ULL * 1024ULL * 1024ULL * 1024ULL);
+
+  config.prompt_tokens = 1;
+  config.attention_query_tile_tokens = 1;
+  EXPECT_TRUE(validate_llm_memory_config(config).valid);
+
+  config = valid_prefill_config();
+  config.attention_query_tile_tokens = config.prompt_tokens;
+  EXPECT_TRUE(validate_llm_memory_config(config).valid);
+
+  config = valid_prefill_config();
+  config.user_specified_prompt_tokens = false;
+  config.user_specified_attention_query_tile_tokens = false;
+  EXPECT_TRUE(validate_llm_memory_config(config).valid);
+
+  config = valid_config();
+  config.visible_context_tokens = 0;
+  expect_invalid(config, LlmMemoryConfigReason::CONTEXT_TOKENS_REQUIRED);
+
+  config = valid_config();
+  config.user_specified_prompt_tokens = true;
+  expect_invalid(config, LlmMemoryConfigReason::PROMPT_TOKENS_NOT_APPLICABLE);
+  config = valid_config();
+  config.prompt_tokens = 1;
+  expect_invalid(config, LlmMemoryConfigReason::PROMPT_TOKENS_NOT_APPLICABLE);
+  config = valid_config();
+  config.user_specified_attention_query_tile_tokens = true;
+  expect_invalid(
+      config,
+      LlmMemoryConfigReason::ATTENTION_QUERY_TILE_TOKENS_NOT_APPLICABLE);
+  config = valid_config();
+  config.attention_query_tile_tokens = 1;
+  expect_invalid(
+      config,
+      LlmMemoryConfigReason::ATTENTION_QUERY_TILE_TOKENS_NOT_APPLICABLE);
+
+  config = valid_prefill_config();
+  config.user_specified_context_tokens = true;
+  expect_invalid(config,
+                 LlmMemoryConfigReason::CONTEXT_TOKENS_NOT_APPLICABLE);
+  config = valid_prefill_config();
+  config.visible_context_tokens = 1;
+  expect_invalid(config,
+                 LlmMemoryConfigReason::CONTEXT_TOKENS_NOT_APPLICABLE);
+
+  config = valid_prefill_config();
+  config.prompt_tokens = 0;
+  config.user_specified_prompt_tokens = false;
+  expect_invalid(config, LlmMemoryConfigReason::PROMPT_TOKENS_REQUIRED);
+  config = valid_prefill_config();
+  config.prompt_tokens = 0;
+  expect_invalid(config,
+                 LlmMemoryConfigReason::PROMPT_TOKENS_MUST_BE_POSITIVE);
+
+  config = valid_prefill_config();
+  config.attention_query_tile_tokens = 0;
+  config.user_specified_attention_query_tile_tokens = false;
+  expect_invalid(
+      config,
+      LlmMemoryConfigReason::ATTENTION_QUERY_TILE_TOKENS_REQUIRED);
+  config = valid_prefill_config();
+  config.attention_query_tile_tokens = 0;
+  expect_invalid(
+      config,
+      LlmMemoryConfigReason::ATTENTION_QUERY_TILE_TOKENS_MUST_BE_POSITIVE);
+  config = valid_prefill_config();
+  config.attention_query_tile_tokens = config.prompt_tokens + 1;
+  expect_invalid(
+      config,
+      LlmMemoryConfigReason::ATTENTION_QUERY_TILE_TOKENS_EXCEEDS_PROMPT);
 }
 
 TEST(LlmMemoryConfigTest, ConvertsWeightMiBWithCheckedArithmetic) {

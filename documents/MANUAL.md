@@ -579,10 +579,12 @@ middle, and trailing items.
   task, an untimed allocation-free reset restores only the mutable current-token append slots; history blocks and
   suffix-padding canaries are not rewritten
 - Runs `weights_only`, `kv_only`, and layer-interleaved `mixed` scenarios. Omitted iterations trigger excluded,
-  scenario-specific calibration with an 8 MiB minimum pilot payload when guardrails permit, a 150 ms target,
-  100–250 ms intended window, and at most two corrections; all three plans are frozen before loop zero. Explicit
-  iterations are exact for every measured scenario. Cyclic order gives all scenarios each position once when count is
-  three
+  scenario-specific calibration in that canonical order with an 8 MiB minimum pilot accounted-work floor when
+  guardrails permit, a 150 ms target, a 100–250 ms intended window, and at most two corrections. The initial pilot has
+  one same-shape warmup; later candidates add a warmup only for the first irreducible one-work-unit confirmation. After
+  all three candidates resolve, their plans freeze atomically and each frozen plan receives one canonical-order warmup
+  before loop zero. Explicit iterations freeze all three exact plans first and use the same frozen-plan warmup boundary.
+  Cyclic measured order gives all scenarios each position once when count is three
 - Uses task-boundary completion-wins interruption. A started scenario is not polled in its hot kernel; a completed and
   checksum-valid current task stays measured, while no next task starts after the stop is observed
 - Output values retain the shared raw-target syntax: empty disables JSON, exact `-` emits one final schema 1 document,
@@ -591,7 +593,9 @@ middle, and trailing items.
   without intermediate serialization
 - Schema-v1 tokens also define `metal` and `prefill`, but this revision exposes neither as an execution choice and
   rejects any non-active internal plan as unsupported/not activated. There is no CPU fallback for a future Metal
-  request
+  request. The internal prefill seam is logical and fake-runner-only: even a valid paged prefill work plan has no
+  materialized block table, permutation hash, descriptor ABI, mapping, or production CPU executor. Its pure ownership
+  result has a versioned identity and publishes no partial evidence after an overflow or allocation failure
 - This profile is memory-only: it performs no Transformer mathematics and does not report inference tokens/s. Its
   `synthetic_memory_work_units_per_second` and `effective_model_payload_gb_s` must not be interpreted as model
   throughput or physical DRAM-counter traffic. Paged block-table reads are timed and separately accounted but are not

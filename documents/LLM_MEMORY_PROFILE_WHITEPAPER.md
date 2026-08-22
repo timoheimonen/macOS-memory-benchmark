@@ -58,6 +58,12 @@ Schema-v1 vocabulary includes `cpu|metal`, `decode|prefill`, `contiguous|paged`,
 `decode_step|prefill_operation`, and `none|current_token_append|full_prompt_population`. Contiguous and paged are public
 for CPU decode. Metal and prefill have no public selectors, remain unavailable, and never receive hidden fallback.
 
+The implementation contains a source-level pure prefill planning and fake-runner seam for future profiles. It resolves
+checked tile/prefix/payload/lookup formulas, versioned atomic CPU ownership evidence, owner-local semantic traces, and
+operation-ordinal checksum oracles without claiming an executable backend. A valid internal paged prefill plan retains
+mathematical layout costs only: no block table, permutation hash, descriptor ABI, mapping, or production task exists,
+and the CPU backend returns unsupported. None of this seam is process-level performance evidence in this revision.
+
 It intentionally excludes:
 
 - GEMV/GEMM/FMA, dequantization, RoPE, softmax, layer normalization, activation, and scratch traffic;
@@ -538,16 +544,25 @@ loops, so the methodology is explicitly warm/cacheable and cache-inclusive.
 
 ## Calibration, frozen work, order, and statistics
 
-When `--iterations T` is present, each scenario uses exactly `T` work units. It still runs one excluded same-shape
-warmup.
+When `--iterations T` is present, the runner first validates and atomically freezes all three scenario plans with
+exactly `T` work units. It then runs one excluded same-shape warmup for each frozen plan in canonical `weights_only`,
+`kv_only`, `mixed` order. No measured loop begins until all three frozen warmups have succeeded.
 
-When iterations are omitted, each scenario is calibrated independently:
+When iterations are omitted, the runner resolves each scenario independently in canonical order. The initial pilot
+count covers at least 8 MiB of accounted work when scenario guardrails permit. A same-shape warmup at that exact count
+precedes the timed pilot. Each subsequent correction candidate is timed without a general extra warmup. If a candidate
+first reaches the irreducible one-work-unit shape and no one-work-unit warmup has already run, the runner performs
+exactly one same-shape confirmation warmup before the timed one-work-unit confirmation. It retains the last accepted
+candidate without starting measurements and performs at most the configured two corrections outside the inclusive
+100–250 ms intended window.
 
-1. excluded one-work-unit same-shape warmup;
-2. excluded pilot covering at least 8 MiB of effective payload when scenario guardrails permit;
-3. scale toward 150 ms;
-4. excluded same-shape warmup and duration trial;
-5. at most two excluded correction attempts when outside the inclusive 100–250 ms intended window.
+Only after all three scenarios have resolved does the runner atomically freeze their plans. It then runs one excluded
+same-shape warmup for each frozen plan in canonical scenario order. Measured loops start only after all three warmups
+succeed, and reuse those plans without recalibration.
+
+The corresponding excluded-attempt purpose tokens are `calibration_shape_warmup`, `pilot`, `correction`,
+`single_unit_confirmation_warmup`, `single_unit_confirmation`, and `frozen_measurement_warmup`. An explicit-work run
+records only `frozen_measurement_warmup` for each scenario.
 
 The one-billion-work-unit and 64 GiB accounted-byte ceilings apply per scenario task. For every scenario:
 
@@ -562,9 +577,8 @@ completed_task_accounted_bytes = completed_work_units * accounted_bytes_per_work
 The contiguous profile has zero layout-metadata bytes. Paged KV-only and mixed use the exact lookup metadata calculated
 above, while weights-only remains zero; metadata constrains calibration and explicit-work admission without entering the
 GB/s numerator. One exact work unit may legitimately exceed the duration window and is retained with an
-`above-target-single-work-unit` quality token. The last valid plans for all
-three scenarios are frozen before loop zero and reused without recalibration. A later slow or fast measurement remains
-evidence rather than triggering performance-based retry.
+`above-target-single-work-unit` quality token only after a real timed one-work-unit attempt. A later slow or fast
+measurement remains evidence rather than triggering performance-based retry.
 
 Measured duration-quality values are `within-target-window`, `above-target-single-work-unit`,
 `guardrail-limited-below-target`, `below-target-window`, or `above-target-window`; an untouched slot begins as

@@ -181,6 +181,12 @@ LLM schema 1 is an unpublished generic contract. It has top-level `mode: "llm_me
 public runtime activation. They must not be inferred from the presence of reserved fields, and an unavailable selector
 must never be silently replaced by CPU/decode.
 
+The source-level pure prefill planner and fake-runner seam do not broaden this process contract. A valid internal
+prefill work plan is logical evidence only. Paged prefill does not materialize a block table, permutation hash,
+descriptor ABI, mapping, or production CPU task; the CPU backend terminates it as unsupported. Such an internal plan is
+not an acceptable or serializable performance result until a later public profile activates the complete resource and
+executor contract.
+
 Run statuses are `not_started`, `complete`, `partial`, `interrupted`, `unsupported`, and `failed`; measurement statuses
 are `not_run`, `measured`, `interrupted`, `invalid`, and `failed`. `unsupported` is a terminal, non-acceptable result,
 not permission to substitute CPU execution. Multiword status tokens use underscores, while multiword stable reason
@@ -262,9 +268,19 @@ profiles.
 decimal-string `resource_rounding_bytes`, `transient_peak_bytes`, `known_owned_peak_bytes`, and
 `admitted_budget_bytes`. A paged candidate admits full physical K/V resources, the resident block table, page rounding,
 descriptor/planner/checksum/orchestration storage, and the permutation-validation transient before table
-materialization. `calibration` contains excluded work-resolution evidence; `aggregates` contains only accepted measured
-values. Additional diagnostic, interruption, checkpoint, loop-order, checksum, environment, warning, and
-resource-preparation evidence may be present without changing those ownership boundaries.
+materialization. `calibration` contains excluded work-resolution and post-freeze same-shape warmup evidence;
+`aggregates` contains only accepted measured values. No measured loop begins until all three scenario plans have been
+atomically frozen and their canonical-order frozen warmups have succeeded. Additional diagnostic, interruption,
+checkpoint, loop-order, checksum, environment, warning, and resource-preparation evidence may be present without
+changing those ownership boundaries.
+
+Each `calibration.attempts.<scenario>` array preserves its execution order. Its exact `purpose` vocabulary is
+`calibration_shape_warmup`, `pilot`, `correction`, `single_unit_confirmation_warmup`,
+`single_unit_confirmation`, and `frozen_measurement_warmup`. Successful automatic preparation starts with the shape
+warmup and pilot, may contain correction attempts and at most one conditional single-unit confirmation warmup/attempt
+pair, and ends with the frozen-plan warmup. Successful explicit preparation has no pilot or correction attempts and
+records only its frozen-plan warmup. A failed or interrupted preparation retains only the attempts reached before its
+terminal boundary.
 
 Every measurement has stable generic work accounting:
 

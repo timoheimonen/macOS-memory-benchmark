@@ -14,6 +14,7 @@
 #include <cstdint>
 #include <functional>
 #include <limits>
+#include <memory>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -21,6 +22,7 @@
 #include <vector>
 
 #include "core/config/constants.h"
+#include "llm_memory/llm_cpu_backend.h"
 #include "llm_memory/llm_runner.h"
 #include "utils/numeric_utils.h"
 
@@ -31,6 +33,8 @@ struct TaskRecord {
   size_t work_units = 0;
   size_t payload_bytes = 0;
   std::string plan_identity;
+  LlmWorkUnitKind work_unit_kind = LlmWorkUnitKind::DecodeStep;
+  LlmKvWriteKind kv_write_kind = LlmKvWriteKind::None;
 };
 
 struct CheckpointRecord {
@@ -68,11 +72,32 @@ LlmMemoryConfig explicit_config(size_t loop_count = 3, size_t iterations = 4) {
   config.user_specified_iterations = true;
   config.user_specified_seed = true;
   config.user_specified_workers = true;
+  config.user_specified_context_tokens = true;
   return config;
 }
 
 LlmMemoryConfig automatic_config(size_t loop_count = 1) {
   LlmMemoryConfig config = explicit_config(loop_count);
+  config.iterations = 0;
+  config.user_specified_iterations = false;
+  return config;
+}
+
+LlmMemoryConfig explicit_prefill_config(size_t loop_count = 2,
+                                        size_t iterations = 3) {
+  LlmMemoryConfig config = explicit_config(loop_count, iterations);
+  config.phase = LlmPhase::Prefill;
+  config.visible_context_tokens = 0;
+  config.prompt_tokens = 5;
+  config.attention_query_tile_tokens = 2;
+  config.user_specified_context_tokens = false;
+  config.user_specified_prompt_tokens = true;
+  config.user_specified_attention_query_tile_tokens = true;
+  return config;
+}
+
+LlmMemoryConfig automatic_prefill_config(size_t loop_count = 1) {
+  LlmMemoryConfig config = explicit_prefill_config(loop_count);
   config.iterations = 0;
   config.user_specified_iterations = false;
   return config;
@@ -91,6 +116,9 @@ LlmMemoryWorkPlanRequest plan_request(const LlmMemoryConfig& config) {
   request.geometry.head_dimension = config.head_dimension;
   request.geometry.kv_element_bytes = config.kv_element_bytes;
   request.geometry.visible_context_tokens = config.visible_context_tokens;
+  request.geometry.prompt_tokens = config.prompt_tokens;
+  request.geometry.attention_query_tile_tokens =
+      config.attention_query_tile_tokens;
   request.geometry.batch_size = config.batch_size;
   request.requested_workers = config.requested_workers;
   request.available_workers = config.available_workers;
@@ -200,6 +228,12 @@ class FakeLlmBackend final : public LlmBackend {
 
   LlmBackendAuxiliaryEstimate calculate_auxiliary_estimate(
       const LlmMemoryWorkPlan& model_plan) const noexcept override {
+    if (model_plan.phase == LlmPhase::Prefill) {
+      LlmBackendAuxiliaryEstimate estimate;
+      estimate.valid = true;
+      estimate.reason_code = LlmBackendReason::VALID;
+      return estimate;
+    }
     const LlmExecutorAuxiliaryEstimate cpu =
         calculate_llm_executor_auxiliary_estimate(model_plan);
     LlmBackendAuxiliaryEstimate estimate;
@@ -238,7 +272,8 @@ class FakeLlmBackend final : public LlmBackend {
       const LlmRunnerTaskContext& context) override {
     calls.push_back({context, task_plan.work_units,
                      task_plan.effective_model_payload_bytes,
-                     task_plan.plan_identity});
+                     task_plan.plan_identity, task_plan.work_unit_kind,
+                     task_plan.kv_write_kind});
     LlmTaskExecutionResult result =
         successful_execution(model_plan, task_plan, context, 0.150);
     if (mutate) {
@@ -321,7 +356,8 @@ void expect_interrupted_tail(const LlmMemoryResult& result, size_t measured_pref
   }
 }
 
-TEST(LlmMemoryRunnerTest, ExplicitWarmupsUseExactMeasurementShapeAndCompleteBalancedRun) {
+TEST(LlmMemoryRunnerTest,
+     ExplicitFreezeWarmsCanonicalScenariosThenCompletesCyclicRun) {
   const LlmMemoryConfig config = explicit_config();
   const LlmMemoryWorkPlan plan = build_runner_admitted_plan(config);
   ASSERT_TRUE(plan.valid) << plan.reason_code;
@@ -352,7 +388,7 @@ TEST(LlmMemoryRunnerTest, ExplicitWarmupsUseExactMeasurementShapeAndCompleteBala
     const TaskRecord& warmup = executor.calls[index];
     const LlmScenarioWorkPlan& frozen = result.frozen_scenario_plans.scenarios[index];
     EXPECT_EQ(warmup.context.kind, LlmRunnerTaskKind::Warmup);
-    EXPECT_EQ(warmup.context.purpose, "explicit-warmup");
+    EXPECT_EQ(warmup.context.purpose, "frozen_measurement_warmup");
     EXPECT_EQ(warmup.context.scenario, static_cast<LlmScenario>(index));
     EXPECT_EQ(warmup.work_units, config.iterations);
     EXPECT_EQ(warmup.work_units, frozen.work_units);
@@ -366,6 +402,30 @@ TEST(LlmMemoryRunnerTest, ExplicitWarmupsUseExactMeasurementShapeAndCompleteBala
       EXPECT_EQ(record.plan_identity, frozen.plan_identity);
     }
   }
+
+  size_t call_index = kLlmScenarioCount;
+  for (size_t loop_index = 0; loop_index < config.loop_count; ++loop_index) {
+    const std::array<LlmScenario, kLlmScenarioCount> expected_order =
+        build_llm_scenario_order(loop_index);
+    for (size_t position = 0; position < kLlmScenarioCount; ++position) {
+      ASSERT_LT(call_index, executor.calls.size());
+      const TaskRecord& measurement = executor.calls[call_index++];
+      EXPECT_EQ(measurement.context.kind,
+                LlmRunnerTaskKind::Measurement);
+      EXPECT_EQ(measurement.context.purpose, "measurement");
+      EXPECT_EQ(measurement.context.scenario, expected_order[position]);
+      EXPECT_EQ(measurement.context.loop_index, loop_index);
+      EXPECT_EQ(measurement.context.order_position, position);
+      const LlmScenarioWorkPlan& frozen =
+          result.frozen_scenario_plans
+              .scenarios[static_cast<size_t>(expected_order[position])];
+      EXPECT_EQ(measurement.work_units, frozen.work_units);
+      EXPECT_EQ(measurement.payload_bytes,
+                frozen.effective_model_payload_bytes);
+      EXPECT_EQ(measurement.plan_identity, frozen.plan_identity);
+    }
+  }
+  EXPECT_EQ(call_index, executor.calls.size());
 
   ASSERT_EQ(result.loops.size(), 3u);
   EXPECT_EQ(result.loops[0].planned_order,
@@ -666,7 +726,8 @@ TEST(LlmMemoryRunnerTest, OversizedGenericReasonIsCanonicalizedIntoFrozenRunnerC
   }
 }
 
-TEST(LlmMemoryRunnerTest, AutomaticCalibrationIsScenarioSpecificAndFrozenBeforeLoopZero) {
+TEST(LlmMemoryRunnerTest,
+     AutomaticCalibrationFreezesAtomicallyThenWarmsBeforeCyclicMeasurements) {
   const LlmMemoryConfig config = automatic_config(2);
   const LlmMemoryWorkPlan plan = build_runner_admitted_plan(config);
   ASSERT_TRUE(plan.valid) << plan.reason_code;
@@ -676,8 +737,6 @@ TEST(LlmMemoryRunnerTest, AutomaticCalibrationIsScenarioSpecificAndFrozenBeforeL
     const size_t index = static_cast<size_t>(context.scenario);
     if (context.purpose == "pilot") {
       result.timing.elapsed_seconds = 0.010 * (index + 1);
-    } else if (context.purpose == "duration-trial") {
-      result.timing.elapsed_seconds = 0.150;
     } else if (context.kind == LlmRunnerTaskKind::Measurement) {
       result.timing.elapsed_seconds = 0.400;
     }
@@ -686,40 +745,91 @@ TEST(LlmMemoryRunnerTest, AutomaticCalibrationIsScenarioSpecificAndFrozenBeforeL
 
   ASSERT_EQ(run_llm_memory_suite(config, plan, executor, result), EXIT_SUCCESS);
   ASSERT_TRUE(result.frozen_scenario_plans.valid);
-  for (LlmScenario scenario : {LlmScenario::WeightsOnly, LlmScenario::KvOnly, LlmScenario::Mixed}) {
+  ASSERT_EQ(executor.calls.size(), 18u);
+  constexpr std::array<LlmScenario, kLlmScenarioCount> kScenarios = {
+      LlmScenario::WeightsOnly, LlmScenario::KvOnly, LlmScenario::Mixed};
+  size_t call_index = 0;
+  for (LlmScenario scenario : kScenarios) {
     const size_t index = static_cast<size_t>(scenario);
-    const std::vector<TaskRecord> excluded = records_for_scenario(executor.calls, scenario, false);
-    ASSERT_EQ(excluded.size(), 4u);
-    EXPECT_EQ(excluded[0].context.purpose, "pilot-warmup");
-    EXPECT_EQ(excluded[0].work_units, 1u);
-    EXPECT_EQ(excluded[1].context.purpose, "pilot");
-    EXPECT_EQ(excluded[2].context.purpose, "duration-trial-warmup");
-    EXPECT_EQ(excluded[3].context.purpose, "duration-trial");
-    EXPECT_EQ(excluded[2].work_units, excluded[3].work_units);
-    EXPECT_EQ(excluded[2].payload_bytes, excluded[3].payload_bytes);
-    EXPECT_EQ(excluded[2].plan_identity, excluded[3].plan_identity);
-    const LlmScenarioLimits limits = calculate_llm_scenario_limits(plan.geometry, scenario);
+    const LlmScenarioLimits limits =
+        calculate_llm_scenario_limits(plan.geometry, scenario);
+    ASSERT_TRUE(limits.valid);
+    const TaskRecord& shape_warmup = executor.calls[call_index++];
+    const TaskRecord& pilot = executor.calls[call_index++];
+    const TaskRecord& correction = executor.calls[call_index++];
+    EXPECT_EQ(shape_warmup.context.kind, LlmRunnerTaskKind::Warmup);
+    EXPECT_EQ(shape_warmup.context.purpose,
+              "calibration_shape_warmup");
+    EXPECT_EQ(shape_warmup.context.scenario, scenario);
+    EXPECT_EQ(pilot.context.kind, LlmRunnerTaskKind::Calibration);
+    EXPECT_EQ(pilot.context.purpose, "pilot");
+    EXPECT_EQ(pilot.context.scenario, scenario);
+    EXPECT_EQ(shape_warmup.work_units, pilot.work_units);
+    EXPECT_EQ(shape_warmup.payload_bytes, pilot.payload_bytes);
+    EXPECT_EQ(shape_warmup.plan_identity, pilot.plan_identity);
+    EXPECT_EQ(pilot.work_units, calculate_llm_pilot_work_units(limits));
+    EXPECT_EQ(correction.context.kind, LlmRunnerTaskKind::Calibration);
+    EXPECT_EQ(correction.context.purpose, "correction");
+    EXPECT_EQ(correction.context.scenario, scenario);
     const size_t expected_work_units =
         calculate_llm_calibrated_work_units(
-            0.010 * (index + 1), excluded[1].work_units, limits);
-    EXPECT_EQ(excluded[2].work_units, expected_work_units);
+            0.010 * (index + 1), pilot.work_units, limits);
+    EXPECT_EQ(correction.work_units, expected_work_units);
     EXPECT_EQ(result.frozen_scenario_plans.scenarios[index].work_units,
               expected_work_units);
-    EXPECT_EQ(excluded[3].payload_bytes, result.frozen_scenario_plans.scenarios[index].effective_model_payload_bytes);
-    EXPECT_EQ(excluded[3].plan_identity, result.frozen_scenario_plans.scenarios[index].plan_identity);
-
-    const std::vector<TaskRecord> measured = records_for_scenario(executor.calls, scenario, true);
-    ASSERT_EQ(measured.size(), 2u);
-    EXPECT_EQ(measured[0].work_units, expected_work_units);
-    EXPECT_EQ(measured[1].work_units, expected_work_units);
-    EXPECT_EQ(measured[0].plan_identity, measured[1].plan_identity);
+    EXPECT_EQ(correction.payload_bytes,
+              result.frozen_scenario_plans.scenarios[index]
+                  .effective_model_payload_bytes);
+    EXPECT_EQ(correction.plan_identity,
+              result.frozen_scenario_plans.scenarios[index].plan_identity);
   }
+
+  EXPECT_EQ(call_index, 3u * kLlmScenarioCount);
+  for (LlmScenario scenario : kScenarios) {
+    const size_t index = static_cast<size_t>(scenario);
+    const TaskRecord& frozen_warmup = executor.calls[call_index++];
+    const LlmScenarioWorkPlan& frozen =
+        result.frozen_scenario_plans.scenarios[index];
+    EXPECT_EQ(frozen_warmup.context.kind, LlmRunnerTaskKind::Warmup);
+    EXPECT_EQ(frozen_warmup.context.purpose,
+              "frozen_measurement_warmup");
+    EXPECT_EQ(frozen_warmup.context.scenario, scenario);
+    EXPECT_EQ(frozen_warmup.work_units, frozen.work_units);
+    EXPECT_EQ(frozen_warmup.payload_bytes,
+              frozen.effective_model_payload_bytes);
+    EXPECT_EQ(frozen_warmup.plan_identity, frozen.plan_identity);
+  }
+
+  EXPECT_EQ(call_index, 4u * kLlmScenarioCount);
+  for (size_t loop_index = 0; loop_index < config.loop_count; ++loop_index) {
+    const std::array<LlmScenario, kLlmScenarioCount> expected_order =
+        build_llm_scenario_order(loop_index);
+    for (size_t position = 0; position < kLlmScenarioCount; ++position) {
+      const LlmScenario scenario = expected_order[position];
+      const LlmScenarioWorkPlan& frozen =
+          result.frozen_scenario_plans
+              .scenarios[static_cast<size_t>(scenario)];
+      const TaskRecord& measurement = executor.calls[call_index++];
+      EXPECT_EQ(measurement.context.kind,
+                LlmRunnerTaskKind::Measurement);
+      EXPECT_EQ(measurement.context.purpose, "measurement");
+      EXPECT_EQ(measurement.context.scenario, scenario);
+      EXPECT_EQ(measurement.context.loop_index, loop_index);
+      EXPECT_EQ(measurement.context.order_position, position);
+      EXPECT_EQ(measurement.work_units, frozen.work_units);
+      EXPECT_EQ(measurement.payload_bytes,
+                frozen.effective_model_payload_bytes);
+      EXPECT_EQ(measurement.plan_identity, frozen.plan_identity);
+    }
+  }
+  EXPECT_EQ(call_index, executor.calls.size());
   EXPECT_EQ(result.calibration_attempts[0].size(), 4u);
   EXPECT_EQ(result.calibration_attempts[1].size(), 4u);
   EXPECT_EQ(result.calibration_attempts[2].size(), 4u);
 }
 
-TEST(LlmMemoryRunnerTest, AutomaticCalibrationUsesAtMostTwoCorrectionsWithoutExtraWarmups) {
+TEST(LlmMemoryRunnerTest,
+     AutomaticCorrectionTrialsHaveNoGeneralWarmup) {
   const LlmMemoryConfig config = automatic_config();
   const LlmMemoryWorkPlan plan = build_runner_admitted_plan(config);
   ASSERT_TRUE(plan.valid) << plan.reason_code;
@@ -728,12 +838,9 @@ TEST(LlmMemoryRunnerTest, AutomaticCalibrationUsesAtMostTwoCorrectionsWithoutExt
                        size_t, LlmTaskExecutionResult& result) {
     if (context.purpose == "pilot") {
       result.timing.elapsed_seconds = 0.010;
-    } else if (context.purpose == "duration-trial") {
-      result.timing.elapsed_seconds = 0.050;
-    } else if (context.purpose == "correction-trial-1") {
-      result.timing.elapsed_seconds = 0.300;
-    } else if (context.purpose == "correction-trial-2") {
-      result.timing.elapsed_seconds = 0.050;
+    } else if (context.purpose == "correction") {
+      result.timing.elapsed_seconds =
+          context.attempt_index == 2 ? 0.050 : 0.150;
     }
   };
   LlmMemoryResult result;
@@ -742,14 +849,232 @@ TEST(LlmMemoryRunnerTest, AutomaticCalibrationUsesAtMostTwoCorrectionsWithoutExt
   for (LlmScenario scenario : {LlmScenario::WeightsOnly, LlmScenario::KvOnly, LlmScenario::Mixed}) {
     const size_t index = static_cast<size_t>(scenario);
     const std::vector<TaskRecord> excluded = records_for_scenario(executor.calls, scenario, false);
-    ASSERT_EQ(excluded.size(), 6u);
-    EXPECT_EQ(excluded[4].context.purpose, "correction-trial-1");
-    EXPECT_EQ(excluded[5].context.purpose, "correction-trial-2");
-    EXPECT_EQ(result.frozen_scenario_plans.scenarios[index].work_units, excluded[5].work_units);
+    ASSERT_EQ(excluded.size(), 5u);
+    EXPECT_EQ(excluded[0].context.purpose,
+              "calibration_shape_warmup");
+    EXPECT_EQ(excluded[0].context.kind, LlmRunnerTaskKind::Warmup);
+    EXPECT_EQ(excluded[1].context.purpose, "pilot");
+    EXPECT_EQ(excluded[1].context.kind, LlmRunnerTaskKind::Calibration);
+    EXPECT_EQ(excluded[2].context.purpose, "correction");
+    EXPECT_EQ(excluded[2].context.kind, LlmRunnerTaskKind::Calibration);
+    EXPECT_EQ(excluded[3].context.purpose, "correction");
+    EXPECT_EQ(excluded[3].context.kind, LlmRunnerTaskKind::Calibration);
+    EXPECT_EQ(excluded[4].context.purpose,
+              "frozen_measurement_warmup");
+    EXPECT_EQ(excluded[4].context.kind, LlmRunnerTaskKind::Warmup);
+    EXPECT_EQ(result.frozen_scenario_plans.scenarios[index].work_units,
+              excluded[3].work_units);
+    EXPECT_EQ(excluded[4].plan_identity,
+              result.frozen_scenario_plans.scenarios[index].plan_identity);
     EXPECT_EQ(std::count_if(excluded.begin(), excluded.end(),
                             [](const TaskRecord& record) { return record.context.kind == LlmRunnerTaskKind::Warmup; }),
               2);
+    EXPECT_EQ(std::count_if(
+                  excluded.begin(), excluded.end(),
+                  [](const TaskRecord& record) {
+                    return record.context.purpose ==
+                           "single_unit_confirmation_warmup";
+                  }),
+              0);
   }
+}
+
+TEST(LlmMemoryRunnerTest,
+     SingleUnitConfirmationWarmsOnlyNewShapeAndFreezesAboveTargetEvidence) {
+  LlmMemoryConfig config = automatic_prefill_config();
+  config.weight_size_mb = 8;
+  const LlmMemoryWorkPlan plan = build_runner_admitted_plan(config);
+  ASSERT_TRUE(plan.valid) << plan.reason_code;
+  ASSERT_EQ(plan.phase, LlmPhase::Prefill);
+  ASSERT_EQ(plan.work_unit_kind, LlmWorkUnitKind::PrefillOperation);
+  const LlmScenarioLimits weights_limits = calculate_llm_scenario_limits(
+      plan.geometry, LlmScenario::WeightsOnly);
+  const LlmScenarioLimits kv_limits =
+      calculate_llm_scenario_limits(plan.geometry, LlmScenario::KvOnly);
+  const LlmScenarioLimits mixed_limits =
+      calculate_llm_scenario_limits(plan.geometry, LlmScenario::Mixed);
+  ASSERT_TRUE(weights_limits.valid);
+  ASSERT_TRUE(kv_limits.valid);
+  ASSERT_TRUE(mixed_limits.valid);
+  EXPECT_EQ(calculate_llm_pilot_work_units(weights_limits), 1u);
+  EXPECT_GT(calculate_llm_pilot_work_units(kv_limits), 1u);
+  EXPECT_EQ(calculate_llm_pilot_work_units(mixed_limits), 1u);
+
+  FakeLlmBackend executor;
+  executor.mutate = [](const LlmMemoryWorkPlan&,
+                       const LlmScenarioWorkPlan& task_plan,
+                       const LlmRunnerTaskContext& context, size_t,
+                       LlmTaskExecutionResult& result) {
+    if (context.purpose == "pilot") {
+      result.timing.elapsed_seconds =
+          static_cast<double>(task_plan.work_units) * 0.300;
+    } else if (context.purpose == "single_unit_confirmation") {
+      result.timing.elapsed_seconds = 0.300;
+    }
+  };
+  LlmMemoryResult result;
+
+  ASSERT_EQ(run_llm_memory_suite(config, plan, executor, result),
+            EXIT_SUCCESS);
+  ASSERT_TRUE(result.frozen_scenario_plans.valid);
+  for (const LlmScenarioWorkPlan& frozen :
+       result.frozen_scenario_plans.scenarios) {
+    EXPECT_EQ(frozen.work_units, 1u);
+    EXPECT_EQ(frozen.work_unit_kind, LlmWorkUnitKind::PrefillOperation);
+    const LlmKvWriteKind expected_write =
+        frozen.scenario == LlmScenario::WeightsOnly
+            ? LlmKvWriteKind::None
+            : LlmKvWriteKind::FullPromptPopulation;
+    EXPECT_EQ(frozen.kv_write_kind, expected_write);
+  }
+
+  const std::vector<TaskRecord> weights = records_for_scenario(
+      executor.calls, LlmScenario::WeightsOnly, false);
+  const std::vector<TaskRecord> kv =
+      records_for_scenario(executor.calls, LlmScenario::KvOnly, false);
+  const std::vector<TaskRecord> mixed =
+      records_for_scenario(executor.calls, LlmScenario::Mixed, false);
+  ASSERT_EQ(weights.size(), 3u);
+  ASSERT_EQ(kv.size(), 5u);
+  ASSERT_EQ(mixed.size(), 3u);
+  EXPECT_EQ(weights[0].context.purpose, "calibration_shape_warmup");
+  EXPECT_EQ(weights[1].context.purpose, "pilot");
+  EXPECT_EQ(weights[2].context.purpose, "frozen_measurement_warmup");
+  EXPECT_EQ(mixed[0].context.purpose, "calibration_shape_warmup");
+  EXPECT_EQ(mixed[1].context.purpose, "pilot");
+  EXPECT_EQ(mixed[2].context.purpose, "frozen_measurement_warmup");
+  EXPECT_EQ(kv[0].context.purpose, "calibration_shape_warmup");
+  EXPECT_EQ(kv[1].context.purpose, "pilot");
+  EXPECT_EQ(kv[2].context.purpose,
+            "single_unit_confirmation_warmup");
+  EXPECT_EQ(kv[2].context.kind, LlmRunnerTaskKind::Warmup);
+  EXPECT_EQ(kv[2].work_units, 1u);
+  EXPECT_EQ(kv[3].context.purpose, "single_unit_confirmation");
+  EXPECT_EQ(kv[3].context.kind, LlmRunnerTaskKind::Calibration);
+  EXPECT_EQ(kv[3].work_units, 1u);
+  EXPECT_EQ(kv[4].context.purpose, "frozen_measurement_warmup");
+
+  ASSERT_EQ(result.calibration_attempts[0].size(), 3u);
+  ASSERT_EQ(result.calibration_attempts[1].size(), 5u);
+  ASSERT_EQ(result.calibration_attempts[2].size(), 3u);
+  EXPECT_EQ(result.calibration_attempts[0][1].duration_quality,
+            "above-target-single-work-unit");
+  EXPECT_EQ(result.calibration_attempts[1][3].duration_quality,
+            "above-target-single-work-unit");
+  EXPECT_EQ(result.calibration_attempts[2][1].duration_quality,
+            "above-target-single-work-unit");
+  for (const TaskRecord& call : executor.calls) {
+    EXPECT_EQ(call.work_unit_kind, LlmWorkUnitKind::PrefillOperation);
+    const LlmKvWriteKind expected_write =
+        call.context.scenario == LlmScenario::WeightsOnly
+            ? LlmKvWriteKind::None
+            : LlmKvWriteKind::FullPromptPopulation;
+    EXPECT_EQ(call.kv_write_kind, expected_write);
+  }
+}
+
+TEST(LlmMemoryRunnerTest,
+     FakeBackendRunsGenericPrefillWorkUnitsAndAccountsFullPromptWrites) {
+  const LlmMemoryConfig config = explicit_prefill_config();
+  const LlmMemoryWorkPlan plan = build_runner_admitted_plan(config);
+  ASSERT_TRUE(plan.valid) << plan.reason_code;
+  ASSERT_EQ(plan.phase, LlmPhase::Prefill);
+  ASSERT_EQ(plan.work_unit_kind, LlmWorkUnitKind::PrefillOperation);
+  ASSERT_TRUE(plan.geometry.prefill.has_value());
+  EXPECT_FALSE(plan.geometry.decode.has_value());
+  EXPECT_EQ(plan.geometry.prefill->prompt_tokens, config.prompt_tokens);
+  EXPECT_EQ(plan.geometry.prefill->attention_query_tile_tokens,
+            config.attention_query_tile_tokens);
+
+  FakeLlmBackend backend;
+  LlmMemoryResult result;
+  ASSERT_EQ(run_llm_memory_suite(config, plan, backend, result),
+            EXIT_SUCCESS)
+      << result.reason_code << ": " << result.diagnostic;
+  ASSERT_TRUE(result.frozen_scenario_plans.valid);
+  ASSERT_EQ(result.measurements.size(),
+            config.loop_count * kLlmScenarioCount);
+  ASSERT_EQ(backend.calls.size(),
+            kLlmScenarioCount + result.measurements.size());
+
+  size_t payload_bytes_per_loop = 0;
+  for (size_t index = 0; index < kLlmScenarioCount; ++index) {
+    const LlmScenarioWorkPlan& frozen =
+        result.frozen_scenario_plans.scenarios[index];
+    const LlmKvWriteKind expected_write =
+        frozen.scenario == LlmScenario::WeightsOnly
+            ? LlmKvWriteKind::None
+            : LlmKvWriteKind::FullPromptPopulation;
+    EXPECT_EQ(frozen.work_unit_kind, LlmWorkUnitKind::PrefillOperation);
+    EXPECT_EQ(frozen.kv_write_kind, expected_write);
+    EXPECT_EQ(frozen.work_units, config.iterations);
+    if (frozen.scenario == LlmScenario::WeightsOnly) {
+      EXPECT_EQ(frozen.kv_write_bytes, 0u);
+    } else {
+      EXPECT_GT(frozen.kv_write_bytes, 0u);
+    }
+    payload_bytes_per_loop += frozen.effective_model_payload_bytes;
+  }
+
+  const size_t expected_work_units =
+      config.loop_count * kLlmScenarioCount * config.iterations;
+  EXPECT_EQ(result.counters.planned_work_units, expected_work_units);
+  EXPECT_EQ(result.counters.completed_work_units, expected_work_units);
+  EXPECT_EQ(result.counters.planned_effective_model_payload_bytes,
+            payload_bytes_per_loop * config.loop_count);
+  EXPECT_EQ(result.counters.completed_effective_model_payload_bytes,
+            payload_bytes_per_loop * config.loop_count);
+  EXPECT_EQ(result.counters.planned_layout_metadata_lookup_count, 0u);
+  EXPECT_EQ(result.counters.completed_layout_metadata_lookup_count, 0u);
+
+  for (const TaskRecord& call : backend.calls) {
+    const LlmKvWriteKind expected_write =
+        call.context.scenario == LlmScenario::WeightsOnly
+            ? LlmKvWriteKind::None
+            : LlmKvWriteKind::FullPromptPopulation;
+    EXPECT_EQ(call.work_unit_kind, LlmWorkUnitKind::PrefillOperation);
+    EXPECT_EQ(call.kv_write_kind, expected_write);
+  }
+  for (const LlmMeasurementState& measurement : result.measurements) {
+    const LlmKvWriteKind expected_write =
+        measurement.scenario == LlmScenario::WeightsOnly
+            ? LlmKvWriteKind::None
+            : LlmKvWriteKind::FullPromptPopulation;
+    EXPECT_EQ(measurement.work_unit_kind,
+              LlmWorkUnitKind::PrefillOperation);
+    EXPECT_EQ(measurement.kv_write_kind, expected_write);
+    EXPECT_EQ(measurement.planned_work_units, config.iterations);
+    EXPECT_EQ(measurement.completed_work_units, config.iterations);
+  }
+}
+
+TEST(LlmMemoryRunnerTest,
+     ProductionCpuBackendKeepsPurePrefillAtUnsupportedBoundary) {
+  const LlmMemoryConfig config = explicit_prefill_config(1, 1);
+  const LlmMemoryWorkPlan plan = build_runner_admitted_plan(config);
+  ASSERT_TRUE(plan.valid) << plan.reason_code;
+
+  std::unique_ptr<LlmBackend> backend = create_llm_cpu_backend();
+  ASSERT_NE(backend, nullptr);
+  const LlmBackendAuxiliaryEstimate auxiliary =
+      backend->calculate_auxiliary_estimate(plan);
+  ASSERT_TRUE(auxiliary.valid) << auxiliary.reason_code;
+  EXPECT_EQ(auxiliary.reason_code, LlmBackendReason::VALID);
+  EXPECT_EQ(auxiliary.checksum_auxiliary_bytes, 0u);
+  EXPECT_EQ(auxiliary.orchestration_auxiliary_bytes, 0u);
+  EXPECT_EQ(auxiliary.total_auxiliary_bytes, 0u);
+
+  const LlmBackendLifecycleResult initialization =
+      backend->initialize(config);
+  ASSERT_EQ(initialization.status, LlmBackendStatus::Ready);
+  EXPECT_EQ(initialization.reason_code, LlmBackendReason::VALID);
+  const LlmBackendLifecycleResult resolution =
+      backend->resolve_execution_plan(plan);
+  EXPECT_EQ(resolution.status, LlmBackendStatus::Unsupported);
+  EXPECT_EQ(resolution.reason_code, LlmBackendReason::TASK_UNSUPPORTED);
+  const LlmBackendLifecycleResult release = backend->release_resources();
+  EXPECT_EQ(release.status, LlmBackendStatus::Ready);
+  EXPECT_EQ(release.reason_code, LlmBackendReason::VALID);
 }
 
 TEST(LlmMemoryRunnerTest, StopBeforeFirstTaskInterruptsAllSlotsWithoutExecutorWork) {
@@ -1554,7 +1879,8 @@ TEST(LlmMemoryRunnerTest, SuccessfulExcludedTaskWinsStopAndInterruptsBeforeMeasu
   ASSERT_EQ(result.calibration_attempts[0].size(), 1u);
   EXPECT_TRUE(result.calibration_attempts[0][0].terminal);
   EXPECT_TRUE(result.calibration_attempts[0][0].valid);
-  EXPECT_EQ(result.calibration_attempts[0][0].purpose, "explicit-warmup");
+  EXPECT_EQ(result.calibration_attempts[0][0].purpose,
+            "frozen_measurement_warmup");
   EXPECT_EQ(result.counters.attempted_measurements, 0u);
   EXPECT_EQ(result.counters.terminal_measurements, 3u);
   expect_interrupted_tail(result, 0);
@@ -1771,6 +2097,12 @@ TEST(LlmMemoryRunnerTest,
        LlmRunnerReason::BACKEND_UNAVAILABLE},
       {+[](LlmMemoryConfig& candidate) {
          candidate.phase = LlmPhase::Prefill;
+         candidate.visible_context_tokens = 0;
+         candidate.prompt_tokens = 2;
+         candidate.attention_query_tile_tokens = 1;
+         candidate.user_specified_context_tokens = false;
+         candidate.user_specified_prompt_tokens = true;
+         candidate.user_specified_attention_query_tile_tokens = true;
        },
        LlmRunnerReason::CONFIG_WORK_PLAN_MISMATCH},
       {+[](LlmMemoryConfig& candidate) {

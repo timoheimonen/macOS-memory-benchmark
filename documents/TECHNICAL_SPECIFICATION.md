@@ -142,10 +142,12 @@ LLM-memory follows its own synchronous pipeline. CPU decode is active with conti
    materializes and validates the paged table when applicable, materializes the worker-major layout-specific descriptor
    ABI, and binds the matching production ARM64 executor. An initialized lifecycle
    `Unsupported` result remains distinct from a runtime failure and never falls back to another backend.
-7. Resolve excluded scenario-specific calibration or exact explicit work, freeze all three plans before loop zero, and
-   execute cyclic weights-only/KV-only/mixed tasks through whole synchronous backend calls. Each call owns reset, timed
-   work, correctness validation, and generic task evidence. Each terminal measurement is offered to the logical
-   checkpoint hook while resources remain live.
+7. Resolve excluded scenario-specific calibration in canonical weights-only/KV-only/mixed order, or validate exact
+   explicit work. Automatic calibration warms the initial pilot shape and adds only the conditional one-work-unit
+   confirmation warmup; explicit work does not run a pilot. Atomically freeze all three resolved plans, run their
+   same-shape frozen warmups in canonical order, and only then execute cyclic measured tasks through whole synchronous
+   backend calls. Each call owns reset, timed work, correctness validation, and generic task evidence. Each terminal
+   measurement is offered to the logical checkpoint hook while resources remain live.
 8. Release backend resources exactly once before offering the command-terminal checkpoint, then capture final
    environment state, render the centralized console report, and either retain the runner-owned atomic file cadence or
    emit one final schema-1 stdout document. Execution status and output status remain separate.
@@ -694,6 +696,25 @@ never receive fallback execution.
 owns layout-specific worker reduction, worker-major pointer-free ranges, descriptor counts, and retained planner storage.
 Checked accessors require the declared backend and variant tag to agree.
 
+The internal pure prefill seam resolves prompt length `P` and query-tile length `Q` without adding public CLI selectors.
+It computes `C = ceil(P/Q)`, prefix visits `S = Q*triangular(P/Q) + (P%Q != 0 ? P : 0)`, causal pairs, logical
+attention audit counts, one weight pass, full-prompt K/V writes, tiled prefix reads, and checked per-scenario payloads.
+For paged geometry it computes prefix block visits and the exact `N + 2*M` semantic lookup count with a logarithmic
+floor-sum. Its bounded semantic oracle freezes owner-local write-all, then per-tile K-all and V-all ordering; its
+affine64 checksum oracle covers every operation ordinal and validates final contents at `T - 1`.
+
+The pure CPU ownership API partitions contiguous tokens or whole logical blocks by exact scenario-accounted prefix cost.
+Valid results publish a versioned canonical identity binding the prefill geometry, scenario, worker rotation, optional
+weight shards, assignment boundaries, per-worker costs, and min/max/imbalance evidence. Any validation, overflow, or
+allocation failure publishes no partial assignments, worker vectors, totals, or identity.
+
+A finalized internal prefill `LlmMemoryWorkPlan` is deliberately logical/fake-runner-only. In particular, paged prefill
+retains mathematical layout and lookup budget evidence while `LlmCpuExecutionPlan::paged` remains empty: no block table,
+permutation hash, descriptor ABI, mapping, or executable resource is materialized. The paged component identity names
+the applicable permutation algorithm version, but concrete permutation/table evidence remains absent. The production
+CPU backend returns `Unsupported` with `task-unsupported`; later implementation phases must replace this boundary before
+any public prefill selector is activated.
+
 For active weights `W`, layers `L`, KV heads `h_kv`, head dimension `d_h`, element bytes `s_kv`, batch `B`, and visible
 context `A` including the current token, define one K or V token record as `R = h_kv*d_h*s_kv`, one layer's paired
 record as `D = 2*R`, and the full model's paired record as `K = L*D`. One decode step has weight read `W`, KV read
@@ -774,12 +795,15 @@ model-payload/metadata/accounted counters, and validation all match. Comparative
 same `G`, paged geometry, physical/logical/padding/table resource identity, permutation identity/hash, schedule, checksum,
 and timer identities. CPU worker/QoS/timer/checksum-vector invariants remain adapter-owned.
 
-Omitted iterations calibrate the three scenarios independently outside measurement; explicit iterations are exact.
-All three plans freeze before loop zero, and loop order cyclically rotates weights-only, KV-only, and mixed. Only
-measured and checksum-valid results enter aggregates. Stop is checked between atomic backend tasks. File output
-checkpoints each terminal scenario; resources are released before the command-terminal checkpoint. Stdout emits one
-final schema-1 object. See [LLM_MEMORY_PROFILE_WHITEPAPER.md](LLM_MEMORY_PROFILE_WHITEPAPER.md) for the complete
-formulas, ABI, schema, and interpretation contract.
+Omitted iterations calibrate the three scenarios independently outside measurement. The exact initial pilot shape is
+warmed once; correction candidates do not receive general warmups, while the first irreducible one-work-unit candidate
+receives one confirmation warmup when that shape has not already been warmed. Explicit iterations are exact. All three
+plans freeze atomically before canonical same-shape frozen warmups, and loop order then cyclically rotates weights-only,
+KV-only, and mixed. No measured task begins until every frozen warmup succeeds. Only measured and checksum-valid results
+enter aggregates. Stop is checked between atomic backend tasks. File output checkpoints each terminal scenario;
+resources are released before the command-terminal checkpoint. Stdout emits one final schema-1 object. See
+[LLM_MEMORY_PROFILE_WHITEPAPER.md](LLM_MEMORY_PROFILE_WHITEPAPER.md) for the complete formulas, ABI, schema, and
+interpretation contract.
 
 ## 14. Assembly Kernel Layer
 

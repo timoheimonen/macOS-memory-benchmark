@@ -2455,3 +2455,182 @@ TEST(LlmMemoryContractTest,
         }));
   }
 }
+
+namespace {
+
+constexpr uint64_t kPrefillContractPhaseDomain =
+    0x50524546494C4C31ULL;
+constexpr uint64_t kPrefillContractOperationMultiplier =
+    0x9E3779B97F4A7C15ULL;
+constexpr uint64_t kPrefillContractLayerMultiplier =
+    0xBF58476D1CE4E5B9ULL;
+constexpr uint64_t kPrefillContractBatchMultiplier =
+    0x94D049BB133111EBULL;
+constexpr uint64_t kPrefillContractWordMultiplier =
+    0xD6E8FEB86659FD93ULL;
+constexpr uint64_t kPrefillContractKDomain =
+    0x4B4B4B4B4B4B4B4BULL;
+constexpr uint64_t kPrefillContractVDomain =
+    0x5656565656565656ULL;
+
+enum class PrefillContractDomain {
+  K,
+  V,
+};
+
+enum class PrefillContractAccess {
+  Write,
+  Read,
+};
+
+struct PrefillContractTaskChecksum {
+  size_t exact_word_count = 0;
+  size_t even_word_count = 0;
+  size_t odd_word_count = 0;
+  uint64_t even_word_sum = 0;
+  uint64_t odd_word_sum = 0;
+};
+
+struct PrefillContractEvent {
+  PrefillContractAccess access;
+  PrefillContractDomain domain;
+  size_t tile_index;
+  size_t tile_end;
+  size_t block_index;
+  size_t visit_tokens;
+};
+
+uint64_t contract_prefill_affine_word(
+    uint64_t scenario_seed, uint64_t operation_ordinal,
+    uint64_t layer_index, uint64_t batch_sequence_index,
+    PrefillContractDomain domain, uint64_t logical_word_index) {
+  const uint64_t domain_term =
+      domain == PrefillContractDomain::K ? kPrefillContractKDomain
+                                        : kPrefillContractVDomain;
+  return scenario_seed + kPrefillContractPhaseDomain +
+         kPrefillContractOperationMultiplier * (operation_ordinal + 1) +
+         kPrefillContractLayerMultiplier * (layer_index + 1) +
+         kPrefillContractBatchMultiplier *
+             (batch_sequence_index + 1) +
+         domain_term +
+         kPrefillContractWordMultiplier * (logical_word_index + 1);
+}
+
+PrefillContractTaskChecksum enumerate_contract_prefill_task_checksum(
+    uint64_t scenario_seed, size_t operation_count,
+    uint64_t layer_index, uint64_t batch_sequence_index,
+    PrefillContractDomain domain, size_t first_word, size_t word_count) {
+  PrefillContractTaskChecksum checksum;
+  for (size_t operation = 0; operation < operation_count; ++operation) {
+    for (size_t offset = 0; offset < word_count; ++offset) {
+      const size_t logical_word = first_word + offset;
+      const uint64_t value = contract_prefill_affine_word(
+          scenario_seed, operation, layer_index, batch_sequence_index,
+          domain, logical_word);
+      ++checksum.exact_word_count;
+      if ((logical_word & 1U) == 0) {
+        ++checksum.even_word_count;
+        checksum.even_word_sum += value;
+      } else {
+        ++checksum.odd_word_count;
+        checksum.odd_word_sum += value;
+      }
+    }
+  }
+  return checksum;
+}
+
+std::vector<PrefillContractEvent> enumerate_contract_prefill_block_trace(
+    size_t prompt_tokens, size_t query_tile_tokens,
+    size_t block_tokens, size_t block_count) {
+  std::vector<PrefillContractEvent> events;
+  for (size_t block = 0; block < block_count; ++block) {
+    const size_t block_start = block * block_tokens;
+    const size_t valid_tokens =
+        std::min(block_tokens, prompt_tokens - block_start);
+    events.push_back({PrefillContractAccess::Write,
+                      PrefillContractDomain::K, 0, prompt_tokens,
+                      block, valid_tokens});
+    events.push_back({PrefillContractAccess::Write,
+                      PrefillContractDomain::V, 0, prompt_tokens,
+                      block, valid_tokens});
+  }
+
+  size_t tile_index = 0;
+  size_t tile_end = 0;
+  while (tile_end < prompt_tokens) {
+    tile_end += std::min(query_tile_tokens, prompt_tokens - tile_end);
+    for (const PrefillContractDomain domain :
+         {PrefillContractDomain::K, PrefillContractDomain::V}) {
+      for (size_t block = 0; block < block_count; ++block) {
+        const size_t block_start = block * block_tokens;
+        if (block_start >= tile_end) {
+          break;
+        }
+        events.push_back({PrefillContractAccess::Read, domain,
+                          tile_index, tile_end, block,
+                          std::min(block_tokens,
+                                   tile_end - block_start)});
+      }
+    }
+    ++tile_index;
+  }
+  return events;
+}
+
+}  // namespace
+
+TEST(LlmMemoryContractTest,
+     PrefillAffine64TwoOperationChecksumAndFinalOrdinalAreFrozen) {
+  constexpr uint64_t kScenarioSeed = 0x0123456789ABCDEFULL;
+  const PrefillContractTaskChecksum checksum =
+      enumerate_contract_prefill_task_checksum(
+          kScenarioSeed, 2, 2, 3, PrefillContractDomain::K, 1, 5);
+  EXPECT_EQ(checksum.exact_word_count, 10u);
+  EXPECT_EQ(checksum.even_word_count, 4u);
+  EXPECT_EQ(checksum.odd_word_count, 6u);
+  EXPECT_EQ(checksum.even_word_sum, 0xDC08129268383AB6ULL);
+  EXPECT_EQ(checksum.odd_word_sum, 0xCA0C1BDB9C545811ULL);
+
+  EXPECT_EQ(contract_prefill_affine_word(
+                kScenarioSeed, 0, 2, 3, PrefillContractDomain::K, 1),
+            0x7A144A570DB4D57DULL);
+  const uint64_t final_word = contract_prefill_affine_word(
+      kScenarioSeed, 1, 2, 3, PrefillContractDomain::K, 1);
+  EXPECT_EQ(final_word, 0x184BC4108CFF5192ULL);
+  constexpr std::array<uint8_t, 8> kFinalLittleEndianBytes = {
+      0x92, 0x51, 0xFF, 0x8C, 0x10, 0xC4, 0x4B, 0x18};
+  for (size_t byte = 0; byte < kFinalLittleEndianBytes.size(); ++byte) {
+    EXPECT_EQ(static_cast<uint8_t>(final_word >> (byte * 8)),
+              kFinalLittleEndianBytes[byte]);
+  }
+}
+
+TEST(LlmMemoryContractTest,
+     PrefillTwoBlockTwoTileOwnerLocalSemanticTraceIsFrozen) {
+  const std::vector<PrefillContractEvent> trace =
+      enumerate_contract_prefill_block_trace(4, 2, 2, 2);
+  const std::array<PrefillContractEvent, 10> expected = {{
+      {PrefillContractAccess::Write, PrefillContractDomain::K, 0, 4, 0, 2},
+      {PrefillContractAccess::Write, PrefillContractDomain::V, 0, 4, 0, 2},
+      {PrefillContractAccess::Write, PrefillContractDomain::K, 0, 4, 1, 2},
+      {PrefillContractAccess::Write, PrefillContractDomain::V, 0, 4, 1, 2},
+      {PrefillContractAccess::Read, PrefillContractDomain::K, 0, 2, 0, 2},
+      {PrefillContractAccess::Read, PrefillContractDomain::V, 0, 2, 0, 2},
+      {PrefillContractAccess::Read, PrefillContractDomain::K, 1, 4, 0, 2},
+      {PrefillContractAccess::Read, PrefillContractDomain::K, 1, 4, 1, 2},
+      {PrefillContractAccess::Read, PrefillContractDomain::V, 1, 4, 0, 2},
+      {PrefillContractAccess::Read, PrefillContractDomain::V, 1, 4, 1, 2},
+  }};
+  ASSERT_EQ(trace.size(), expected.size());
+  for (size_t index = 0; index < expected.size(); ++index) {
+    SCOPED_TRACE(index);
+    EXPECT_EQ(trace[index].access, expected[index].access);
+    EXPECT_EQ(trace[index].domain, expected[index].domain);
+    EXPECT_EQ(trace[index].tile_index, expected[index].tile_index);
+    EXPECT_EQ(trace[index].tile_end, expected[index].tile_end);
+    EXPECT_EQ(trace[index].block_index, expected[index].block_index);
+    EXPECT_EQ(trace[index].visit_tokens,
+              expected[index].visit_tokens);
+  }
+}

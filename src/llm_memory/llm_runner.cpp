@@ -109,6 +109,9 @@ constexpr std::string_view kLlmWorkPlanReasons[] = {
     LlmWorkPlanReason::HEAD_DIMENSION_ZERO,
     LlmWorkPlanReason::INVALID_KV_ELEMENT_BYTES,
     LlmWorkPlanReason::CONTEXT_TOKENS_ZERO,
+    LlmWorkPlanReason::CONTEXT_TOKENS_NOT_APPLICABLE,
+    LlmWorkPlanReason::PROMPT_TOKENS_NOT_APPLICABLE,
+    LlmWorkPlanReason::QUERY_TILE_TOKENS_NOT_APPLICABLE,
     LlmWorkPlanReason::KV_BLOCK_TOKENS_NOT_APPLICABLE,
     LlmWorkPlanReason::BATCH_SIZE_ZERO,
     LlmWorkPlanReason::QUERY_HEADS_BELOW_KV_HEADS,
@@ -185,9 +188,10 @@ bool checked_add_to(size_t value, size_t& total) noexcept {
 }
 
 std::string_view canonical_calibration_purpose(std::string_view purpose) noexcept {
-  constexpr std::array<std::string_view, 7> kPurposes = {
-      "explicit-warmup",    "pilot-warmup",       "pilot", "duration-trial-warmup", "duration-trial",
-      "correction-trial-1", "correction-trial-2",
+  constexpr std::array<std::string_view, 6> kPurposes = {
+      "calibration_shape_warmup", "pilot", "correction",
+      "single_unit_confirmation_warmup", "single_unit_confirmation",
+      "frozen_measurement_warmup",
   };
   for (std::string_view candidate : kPurposes) {
     if (purpose == candidate) {
@@ -218,15 +222,22 @@ bool inputs_match(const LlmMemoryConfig& config, const LlmMemoryWorkPlan& plan) 
     return false;
   }
   const LlmGeometry& geometry = plan.geometry;
+  const bool phase_geometry_matches =
+      config.phase == LlmPhase::Decode
+          ? geometry.decode.has_value() && !geometry.prefill.has_value() &&
+                config.visible_context_tokens ==
+                    geometry.decode->visible_context_tokens
+          : geometry.prefill.has_value() && !geometry.decode.has_value() &&
+                config.prompt_tokens == geometry.prefill->prompt_tokens &&
+                config.attention_query_tile_tokens ==
+                    geometry.prefill->attention_query_tile_tokens;
   return config.backend == plan.backend && config.phase == plan.phase &&
          config.kv_layout == plan.kv_layout && geometry.phase == plan.phase &&
-         geometry.kv_layout == plan.kv_layout && geometry.decode.has_value() &&
-         !geometry.prefill.has_value() &&
+         geometry.kv_layout == plan.kv_layout && phase_geometry_matches &&
          validation.active_weight_bytes == geometry.active_weight_bytes_per_work_unit &&
          config.layer_count == geometry.layer_count && config.query_head_count == geometry.query_head_count &&
          config.kv_head_count == geometry.kv_head_count && config.head_dimension == geometry.head_dimension &&
          config.kv_element_bytes == geometry.kv_element_bytes &&
-         config.visible_context_tokens == geometry.decode->visible_context_tokens &&
          config.kv_block_tokens == geometry.kv_block_tokens &&
          config.batch_size == geometry.batch_size &&
          cpu_plan != nullptr &&
@@ -1043,54 +1054,17 @@ CalibrationOutcome run_excluded(const LlmMemoryWorkPlan& model_plan, const LlmSc
   return stop_or_failure_after_excluded(outcome, result, hooks);
 }
 
-CalibrationOutcome calibrate_scenario(const LlmMemoryConfig& config, const LlmMemoryWorkPlan& model_plan,
-                                      LlmScenario scenario, LlmBackend& backend, LlmMemoryResult& result,
-                                      const LlmRunnerHooks& hooks, size_t& frozen_work_units) {
+CalibrationOutcome calibrate_scenario(const LlmMemoryWorkPlan& model_plan,
+                                      LlmScenario scenario,
+                                      LlmBackend& backend,
+                                      LlmMemoryResult& result,
+                                      const LlmRunnerHooks& hooks,
+                                      size_t& frozen_work_units) {
   const LlmScenarioLimits limits = calculate_llm_scenario_limits(model_plan.geometry, scenario);
   if (!limits.valid) {
     result.status = LlmRunStatus::Failed;
     result.reason_code = limits.reason_code;
     return CalibrationOutcome::Failed;
-  }
-
-  if (config.user_specified_iterations) {
-    const size_t index = scenario_index(scenario);
-    if (!result.frozen_scenario_plans.valid || index >= kLlmScenarioCount) {
-      result.status = LlmRunStatus::Failed;
-      result.reason_code = LlmRunnerReason::FROZEN_PLAN_MISMATCH;
-      return CalibrationOutcome::Failed;
-    }
-    const LlmScenarioWorkPlan& explicit_plan = result.frozen_scenario_plans.scenarios[index];
-    if (!explicit_plan.valid || explicit_plan.scenario != scenario || explicit_plan.work_units != config.iterations ||
-        !explicit_plan.explicit_iterations) {
-      result.status = LlmRunStatus::Failed;
-      result.reason_code = LlmRunnerReason::FROZEN_PLAN_MISMATCH;
-      return CalibrationOutcome::Failed;
-    }
-    const CalibrationOutcome warmup =
-        run_excluded(model_plan, explicit_plan, LlmRunnerTaskKind::Warmup,
-                     "explicit-warmup", backend, result, hooks);
-    if (warmup != CalibrationOutcome::Success) {
-      return warmup;
-    }
-    frozen_work_units = config.iterations;
-    return CalibrationOutcome::Success;
-  }
-
-  CalibrationOutcome outcome = CalibrationOutcome::Failed;
-  {
-    const LlmScenarioWorkPlan pilot_warmup = build_llm_scenario_work_plan(model_plan, scenario, 1, false);
-    if (!pilot_warmup.valid) {
-      result.status = LlmRunStatus::Failed;
-      result.reason_code = pilot_warmup.reason_code;
-      return CalibrationOutcome::Failed;
-    }
-    outcome =
-        run_excluded(model_plan, pilot_warmup, LlmRunnerTaskKind::Warmup,
-                     "pilot-warmup", backend, result, hooks);
-  }
-  if (outcome != CalibrationOutcome::Success) {
-    return outcome;
   }
 
   size_t work_units = calculate_llm_pilot_work_units(limits);
@@ -1105,6 +1079,13 @@ CalibrationOutcome calibrate_scenario(const LlmMemoryConfig& config, const LlmMe
     result.reason_code = latest_plan.reason_code;
     return CalibrationOutcome::Failed;
   }
+  CalibrationOutcome outcome = run_excluded(
+      model_plan, latest_plan, LlmRunnerTaskKind::Warmup,
+      "calibration_shape_warmup", backend, result, hooks);
+  if (outcome != CalibrationOutcome::Success) {
+    return outcome;
+  }
+  bool single_unit_warmed = latest_plan.work_units == 1;
   double elapsed_seconds = 0.0;
   outcome = run_excluded(model_plan, latest_plan,
                          LlmRunnerTaskKind::Calibration, "pilot", backend,
@@ -1114,35 +1095,14 @@ CalibrationOutcome calibrate_scenario(const LlmMemoryConfig& config, const LlmMe
     return outcome;
   }
 
-  work_units = calculate_llm_calibrated_work_units(elapsed_seconds, latest_plan.work_units, limits);
-  if (work_units == 0) {
-    result.status = LlmRunStatus::Failed;
-    result.reason_code = LlmRunnerReason::CALIBRATION_SCALING_FAILED;
-    return CalibrationOutcome::Failed;
-  }
-  latest_plan = build_llm_scenario_work_plan(model_plan, scenario, work_units, false);
-  if (!latest_plan.valid) {
-    result.status = LlmRunStatus::Failed;
-    result.reason_code = latest_plan.reason_code;
-    return CalibrationOutcome::Failed;
-  }
-  outcome = run_excluded(model_plan, latest_plan, LlmRunnerTaskKind::Warmup,
-                         "duration-trial-warmup", backend, result,
-                         hooks);
-  if (outcome != CalibrationOutcome::Success) {
-    return outcome;
-  }
-  outcome = run_excluded(model_plan, latest_plan,
-                         LlmRunnerTaskKind::Calibration, "duration-trial",
-                         backend, result,
-                         hooks, &elapsed_seconds);
-  if (outcome != CalibrationOutcome::Success) {
-    return outcome;
-  }
-
-  for (size_t correction = 1;
-       !llm_duration_in_target_window(elapsed_seconds) && correction <= Constants::LLM_CALIBRATION_MAX_CORRECTIONS;
+  for (size_t correction = 0;
+       !llm_duration_in_target_window(elapsed_seconds) &&
+       correction < Constants::LLM_CALIBRATION_MAX_CORRECTIONS;
        ++correction) {
+    if (latest_plan.work_units == 1 &&
+        elapsed_seconds > Constants::LLM_CALIBRATION_MAX_SECONDS) {
+      break;
+    }
     const size_t corrected_work_units = calculate_llm_calibrated_work_units(
         elapsed_seconds, latest_plan.work_units, limits);
     if (corrected_work_units == 0) {
@@ -1159,7 +1119,18 @@ CalibrationOutcome calibrate_scenario(const LlmMemoryConfig& config, const LlmMe
       result.reason_code = latest_plan.reason_code;
       return CalibrationOutcome::Failed;
     }
-    const std::string_view purpose = correction == 1 ? "correction-trial-1" : "correction-trial-2";
+    const bool confirms_single_unit = latest_plan.work_units == 1;
+    if (confirms_single_unit && !single_unit_warmed) {
+      outcome = run_excluded(
+          model_plan, latest_plan, LlmRunnerTaskKind::Warmup,
+          "single_unit_confirmation_warmup", backend, result, hooks);
+      if (outcome != CalibrationOutcome::Success) {
+        return outcome;
+      }
+      single_unit_warmed = true;
+    }
+    const std::string_view purpose =
+        confirms_single_unit ? "single_unit_confirmation" : "correction";
     outcome = run_excluded(model_plan, latest_plan,
                            LlmRunnerTaskKind::Calibration, purpose, backend,
                            result, hooks,
@@ -1170,6 +1141,32 @@ CalibrationOutcome calibrate_scenario(const LlmMemoryConfig& config, const LlmMe
   }
 
   frozen_work_units = latest_plan.work_units;
+  return CalibrationOutcome::Success;
+}
+
+CalibrationOutcome warm_frozen_scenarios(
+    const LlmMemoryWorkPlan& model_plan, LlmBackend& backend,
+    LlmMemoryResult& result, const LlmRunnerHooks& hooks) {
+  if (!result.frozen_scenario_plans.valid) {
+    result.status = LlmRunStatus::Failed;
+    result.reason_code = LlmRunnerReason::FROZEN_PLAN_MISMATCH;
+    return CalibrationOutcome::Failed;
+  }
+  for (size_t index = 0; index < kLlmScenarioCount; ++index) {
+    const LlmScenarioWorkPlan& frozen =
+        result.frozen_scenario_plans.scenarios[index];
+    if (!frozen.valid || frozen.scenario != kLlmScenarios[index]) {
+      result.status = LlmRunStatus::Failed;
+      result.reason_code = LlmRunnerReason::FROZEN_PLAN_MISMATCH;
+      return CalibrationOutcome::Failed;
+    }
+    const CalibrationOutcome outcome = run_excluded(
+        model_plan, frozen, LlmRunnerTaskKind::Warmup,
+        "frozen_measurement_warmup", backend, result, hooks);
+    if (outcome != CalibrationOutcome::Success) {
+      return outcome;
+    }
+  }
   return CalibrationOutcome::Success;
 }
 
@@ -1957,51 +1954,40 @@ int run_llm_memory_suite(const LlmMemoryConfig& config,
     std::array<size_t, kLlmScenarioCount> frozen_work_units{};
     if (config.user_specified_iterations) {
       frozen_work_units.fill(config.iterations);
-      result.frozen_scenario_plans = freeze_llm_scenario_work_plans(model_plan, frozen_work_units, true);
-      if (!result.frozen_scenario_plans.valid) {
-        return fail_initialized_run(result, hooks,
-                                    result.frozen_scenario_plans.reason_code,
-                                    backend, release_attempted);
-      }
-      if (!assign_frozen_plans(result, model_plan)) {
-        return fail_initialized_run(
-            result, hooks, LlmRunnerReason::PLANNED_COUNTER_OVERFLOW,
-            backend, release_attempted);
-      }
-      if (!actual_runner_backing_is_covered(result)) {
-        return fail_initialized_run(
-            result, hooks, LlmRunnerReason::AUXILIARY_BUDGET_INSUFFICIENT,
-            backend, release_attempted);
-      }
-    }
-    for (size_t index = 0; index < kLlmScenarioCount; ++index) {
-      const CalibrationOutcome outcome =
-          calibrate_scenario(config, model_plan, kLlmScenarios[index],
-                             backend, result, hooks,
-                             frozen_work_units[index]);
-      if (outcome == CalibrationOutcome::Interrupted) {
-        trim_calibration_attempts(result);
-        finalize_remaining_interrupted(result);
-        return finish_terminal(result, hooks, backend, release_attempted);
-      }
-      if (outcome == CalibrationOutcome::Failed) {
-        return fail_initialized_run(result, hooks, result.reason_code,
-                                    backend, release_attempted);
+    } else {
+      for (size_t index = 0; index < kLlmScenarioCount; ++index) {
+        const CalibrationOutcome outcome = calibrate_scenario(
+            model_plan, kLlmScenarios[index], backend, result, hooks,
+            frozen_work_units[index]);
+        if (outcome == CalibrationOutcome::Interrupted) {
+          trim_calibration_attempts(result);
+          finalize_remaining_interrupted(result);
+          return finish_terminal(result, hooks, backend, release_attempted);
+        }
+        if (outcome == CalibrationOutcome::Failed) {
+          return fail_initialized_run(result, hooks, result.reason_code,
+                                      backend, release_attempted);
+        }
       }
     }
-    trim_calibration_attempts(result);
 
-    if (!config.user_specified_iterations) {
-      result.frozen_scenario_plans = freeze_llm_scenario_work_plans(model_plan, frozen_work_units, false);
-      if (!result.frozen_scenario_plans.valid) {
-        return fail_initialized_run(result, hooks,
-                                    result.frozen_scenario_plans.reason_code,
-                                    backend, release_attempted);
-      }
+    result.frozen_scenario_plans = freeze_llm_scenario_work_plans(
+        model_plan, frozen_work_units, config.user_specified_iterations);
+    if (!result.frozen_scenario_plans.valid) {
+      return fail_initialized_run(result, hooks,
+                                  result.frozen_scenario_plans.reason_code,
+                                  backend, release_attempted);
     }
-    for (size_t index = 0; index < kLlmScenarioCount; ++index) {
-      const LlmCalibrationAttempt& latest =
-          result.calibration_attempts[index][result.calibration_attempt_counts[index] - 1];
+    for (size_t index = 0;
+         !config.user_specified_iterations && index < kLlmScenarioCount;
+         ++index) {
+      if (result.calibration_attempt_counts[index] == 0) {
+        return fail_initialized_run(
+            result, hooks, LlmRunnerReason::FROZEN_PLAN_MISMATCH, backend,
+            release_attempted);
+      }
+      const LlmCalibrationAttempt& latest = result.calibration_attempts[index]
+          [result.calibration_attempt_counts[index] - 1];
       if (result.frozen_scenario_plans.scenarios[index].work_units != frozen_work_units[index] ||
           result.frozen_scenario_plans.scenarios[index].plan_identity != latest.work_plan_identity) {
         return fail_initialized_run(
@@ -2014,6 +2000,24 @@ int run_llm_memory_suite(const LlmMemoryConfig& config,
           result, hooks, LlmRunnerReason::PLANNED_COUNTER_OVERFLOW,
           backend, release_attempted);
     }
+    if (!actual_runner_backing_is_covered(result)) {
+      return fail_initialized_run(
+          result, hooks, LlmRunnerReason::AUXILIARY_BUDGET_INSUFFICIENT,
+          backend, release_attempted);
+    }
+    const CalibrationOutcome frozen_warmup =
+        warm_frozen_scenarios(model_plan, backend, result, hooks);
+    if (frozen_warmup == CalibrationOutcome::Interrupted) {
+      trim_calibration_attempts(result);
+      finalize_remaining_interrupted(result);
+      return finish_terminal(result, hooks, backend, release_attempted);
+    }
+    if (frozen_warmup == CalibrationOutcome::Failed) {
+      return fail_initialized_run(result, hooks, result.reason_code, backend,
+                                  release_attempted);
+    }
+    trim_calibration_attempts(result);
+    refresh_calibration_references(result);
     if (!actual_runner_backing_is_covered(result)) {
       return fail_initialized_run(
           result, hooks, LlmRunnerReason::AUXILIARY_BUDGET_INSUFFICIENT,

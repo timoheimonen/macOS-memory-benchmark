@@ -108,8 +108,25 @@ inline constexpr const char* HEAD_DIMENSION_REQUIRED =
     "head-dimension-required";
 inline constexpr const char* INVALID_KV_ELEMENT_BYTES =
     "invalid-kv-element-bytes";
+inline constexpr const char* INVALID_PHASE = "invalid-phase";
 inline constexpr const char* CONTEXT_TOKENS_REQUIRED =
     "context-tokens-required";
+inline constexpr const char* CONTEXT_TOKENS_NOT_APPLICABLE =
+    "context-tokens-not-applicable";
+inline constexpr const char* PROMPT_TOKENS_REQUIRED =
+    "prompt-tokens-required";
+inline constexpr const char* PROMPT_TOKENS_MUST_BE_POSITIVE =
+    "prompt-tokens-must-be-positive";
+inline constexpr const char* PROMPT_TOKENS_NOT_APPLICABLE =
+    "prompt-tokens-not-applicable";
+inline constexpr const char* ATTENTION_QUERY_TILE_TOKENS_REQUIRED =
+    "attention-query-tile-tokens-required";
+inline constexpr const char* ATTENTION_QUERY_TILE_TOKENS_MUST_BE_POSITIVE =
+    "attention-query-tile-tokens-must-be-positive";
+inline constexpr const char* ATTENTION_QUERY_TILE_TOKENS_EXCEEDS_PROMPT =
+    "attention-query-tile-tokens-exceeds-prompt";
+inline constexpr const char* ATTENTION_QUERY_TILE_TOKENS_NOT_APPLICABLE =
+    "attention-query-tile-tokens-not-applicable";
 inline constexpr const char* KV_BLOCK_TOKENS_REQUIRED =
     "kv-block-tokens-required";
 inline constexpr const char* KV_BLOCK_TOKENS_NOT_APPLICABLE =
@@ -151,6 +168,8 @@ struct LlmMemoryConfig {
   size_t head_dimension = 0;
   size_t kv_element_bytes = Constants::LLM_DEFAULT_KV_ELEMENT_BYTES;
   size_t visible_context_tokens = 0;
+  size_t prompt_tokens = 0;
+  size_t attention_query_tile_tokens = 0;
   size_t kv_block_tokens = 0;
   size_t batch_size = Constants::LLM_DEFAULT_BATCH_SIZE;
   size_t requested_workers = 0;
@@ -161,6 +180,9 @@ struct LlmMemoryConfig {
   bool user_specified_iterations = false;
   bool user_specified_seed = false;
   bool user_specified_workers = false;
+  bool user_specified_context_tokens = false;
+  bool user_specified_prompt_tokens = false;
+  bool user_specified_attention_query_tile_tokens = false;
   bool user_specified_kv_layout = false;
   bool user_specified_kv_block_tokens = false;
   bool help_printed = false;
