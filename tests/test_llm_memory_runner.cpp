@@ -23,6 +23,7 @@
 
 #include "core/config/constants.h"
 #include "llm_memory/llm_cpu_backend.h"
+#include "llm_memory/llm_metal_backend.h"
 #include "llm_memory/llm_runner.h"
 #include "utils/numeric_utils.h"
 
@@ -80,6 +81,17 @@ LlmMemoryConfig automatic_config(size_t loop_count = 1) {
   LlmMemoryConfig config = explicit_config(loop_count);
   config.iterations = 0;
   config.user_specified_iterations = false;
+  return config;
+}
+
+LlmMemoryConfig explicit_metal_config(size_t loop_count = 1,
+                                      size_t iterations = 2) {
+  LlmMemoryConfig config = explicit_config(loop_count, iterations);
+  config.backend = LlmMemoryBackend::Metal;
+  config.requested_workers = 0;
+  config.available_workers = 0;
+  config.user_specified_workers = false;
+  config.user_specified_backend = true;
   return config;
 }
 
@@ -152,6 +164,64 @@ LlmMemoryWorkPlan build_runner_admitted_plan(const LlmMemoryConfig& config) {
       request.orchestration_auxiliary_bytes);
 }
 
+LlmMetalResourcePlanRequest metal_resource_request(
+    const LlmMemoryWorkPlan& logical_plan,
+    size_t command_auxiliary_bytes) {
+  LlmMetalResourcePlanRequest request;
+  request.geometry = logical_plan.geometry;
+  request.argument_buffer_encoded_length = 256;
+  request.argument_buffer_alignment = 16;
+  request.max_buffer_length =
+      Constants::LLM_METAL_SEGMENT_CAPACITY_BYTES;
+  request.available_memory_bytes = 8ULL * 1024ULL * Constants::BYTES_PER_MB;
+  request.host_mapping_granularity_bytes = 1;
+  EXPECT_TRUE(NumericUtils::checked_add(
+      logical_plan.memory_budget.request.planner_storage_bytes,
+      command_auxiliary_bytes, request.additional_owned_bytes));
+  return request;
+}
+
+LlmMemoryWorkPlan build_metal_runner_plan(
+    const LlmMemoryConfig& config, bool resolve_runtime_plan) {
+  LlmMemoryWorkPlanDraft draft =
+      prepare_llm_memory_work_plan(plan_request(config));
+  if (!draft.valid) {
+    return finalize_llm_memory_work_plan(std::move(draft), 0, 0);
+  }
+  if (resolve_runtime_plan) {
+    LlmMetalExecutionPlan provisional = build_llm_metal_execution_plan(
+        metal_resource_request(draft.candidate, 0));
+    if (!attach_llm_metal_execution_plan(
+            draft, std::move(provisional))) {
+      return finalize_llm_memory_work_plan(std::move(draft), 0, 0);
+    }
+  }
+  const LlmRunnerAuxiliaryEstimate runner =
+      calculate_llm_runner_auxiliary_estimate(
+          config, draft.auxiliary_preflight);
+  if (!runner.valid) {
+    return finalize_llm_memory_work_plan(std::move(draft), 0, 0);
+  }
+  if (!resolve_runtime_plan) {
+    return finalize_llm_memory_work_plan(
+        std::move(draft), runner.checksum_auxiliary_bytes,
+        runner.orchestration_auxiliary_bytes);
+  }
+  size_t command_auxiliary_bytes = 0;
+  if (!NumericUtils::checked_add(
+          runner.checksum_auxiliary_bytes,
+          runner.orchestration_auxiliary_bytes,
+          command_auxiliary_bytes)) {
+    return finalize_llm_memory_work_plan(std::move(draft), 0, 0);
+  }
+  LlmMetalExecutionPlan exact = build_llm_metal_execution_plan(
+      metal_resource_request(draft.candidate, command_auxiliary_bytes));
+  return finalize_llm_memory_work_plan(
+      std::move(draft), std::move(exact),
+      runner.checksum_auxiliary_bytes,
+      runner.orchestration_auxiliary_bytes);
+}
+
 LlmTaskExecutionResult successful_execution(const LlmMemoryWorkPlan& model_plan,
                                              const LlmScenarioWorkPlan& task_plan,
                                              const LlmRunnerTaskContext& context,
@@ -219,15 +289,43 @@ class FakeLlmBackend final : public LlmBackend {
   size_t release_calls = 0;
   bool clear_initialization_reason_on_release = false;
   std::string initialization_reason_storage;
+  size_t auxiliary_growth_after_initialize = 0;
 
-  FakeLlmBackend() { evidence_.backend = LlmMemoryBackend::Cpu; }
+  explicit FakeLlmBackend(
+      LlmMemoryBackend backend = LlmMemoryBackend::Cpu)
+      : backend_(backend) {
+    evidence_.backend = backend_;
+    if (backend_ == LlmMemoryBackend::Metal) {
+      evidence_.backend_evidence = LlmMetalBackendEvidence{};
+    }
+  }
 
   LlmMemoryBackend kind() const noexcept override {
-    return LlmMemoryBackend::Cpu;
+    return backend_;
   }
 
   LlmBackendAuxiliaryEstimate calculate_auxiliary_estimate(
       const LlmMemoryWorkPlan& model_plan) const noexcept override {
+    if (backend_ == LlmMemoryBackend::Metal) {
+      LlmBackendAuxiliaryEstimate estimate;
+      estimate.valid = model_plan.backend == LlmMemoryBackend::Metal &&
+                       get_llm_metal_execution_plan(model_plan) != nullptr;
+      estimate.reason_code =
+          estimate.valid ? std::string_view(LlmBackendReason::VALID)
+                         : std::string_view(LlmBackendReason::BACKEND_MISMATCH);
+      if (estimate.valid && initialize_calls != 0 &&
+          !NumericUtils::checked_add(
+              estimate.orchestration_auxiliary_bytes,
+              auxiliary_growth_after_initialize,
+              estimate.orchestration_auxiliary_bytes)) {
+        estimate.valid = false;
+        estimate.reason_code = LlmRunnerReason::AUXILIARY_BYTES_OVERFLOW;
+        return estimate;
+      }
+      estimate.total_auxiliary_bytes =
+          estimate.orchestration_auxiliary_bytes;
+      return estimate;
+    }
     if (model_plan.phase == LlmPhase::Prefill) {
       LlmBackendAuxiliaryEstimate estimate;
       estimate.valid = true;
@@ -241,7 +339,21 @@ class FakeLlmBackend final : public LlmBackend {
     estimate.reason_code = cpu.reason_code;
     estimate.checksum_auxiliary_bytes = cpu.checksum_auxiliary_bytes;
     estimate.orchestration_auxiliary_bytes = cpu.orchestration_auxiliary_bytes;
-    estimate.total_auxiliary_bytes = cpu.total_auxiliary_bytes;
+    if (estimate.valid && initialize_calls != 0 &&
+        !NumericUtils::checked_add(
+            estimate.orchestration_auxiliary_bytes,
+            auxiliary_growth_after_initialize,
+            estimate.orchestration_auxiliary_bytes)) {
+      estimate.valid = false;
+      estimate.reason_code = LlmRunnerReason::AUXILIARY_BYTES_OVERFLOW;
+      return estimate;
+    }
+    if (!NumericUtils::checked_add(estimate.checksum_auxiliary_bytes,
+                                   estimate.orchestration_auxiliary_bytes,
+                                   estimate.total_auxiliary_bytes)) {
+      estimate.valid = false;
+      estimate.reason_code = LlmRunnerReason::AUXILIARY_BYTES_OVERFLOW;
+    }
     return estimate;
   }
 
@@ -276,6 +388,43 @@ class FakeLlmBackend final : public LlmBackend {
                      task_plan.kv_write_kind});
     LlmTaskExecutionResult result =
         successful_execution(model_plan, task_plan, context, 0.150);
+    if (backend_ == LlmMemoryBackend::Metal) {
+      LlmMetalTaskEvidence metal;
+      metal.timed_pipeline_available = true;
+      metal.pipeline_label =
+          "membenchmark.llm-metal.pipeline.decode-contiguous.fake";
+      metal.pipeline_thread_execution_width = 32;
+      metal.pipeline_max_total_threads_per_threadgroup = 256;
+      metal.grid_plan_available = true;
+      metal.grid_plan.valid = true;
+      metal.grid_plan.reason_code = LlmMetalPlanReason::VALID;
+      metal.grid_plan.threads_per_threadgroup = 256;
+      metal.grid_plan.actual_threadgroups = 1;
+      metal.grid_plan.identity = "fake-metal-grid-v1";
+      metal.timing_evaluated = true;
+      metal.timing_valid = true;
+      metal.gpu_start_seconds = 1.0;
+      metal.gpu_end_seconds = 1.150;
+      metal.gpu_elapsed_seconds = 0.150;
+      metal.host_timing_evaluated = true;
+      metal.host_submit_to_completion_seconds = 0.151;
+      metal.host_wait_seconds = 0.150;
+      metal.reset_command_buffer_count = 1;
+      metal.timed_command_buffer_count = 1;
+      metal.post_validation_command_buffer_count = 1;
+      metal.timed_compute_encoder_count = 1;
+      metal.timed_workload_dispatch_count = 1;
+      metal.reset_command_status = "complete";
+      metal.timed_command_status = "complete";
+      metal.post_validation_command_status = "complete";
+      metal.checksum_evaluated = true;
+      metal.checksum_valid = true;
+      metal.append_validation_evaluated = true;
+      metal.append_validation_valid = true;
+      metal.post_validation_evaluated = true;
+      metal.post_validation_valid = true;
+      result.backend_evidence = std::move(metal);
+    }
     if (mutate) {
       mutate(model_plan, task_plan, context, calls.size(), result);
     }
@@ -296,6 +445,7 @@ class FakeLlmBackend final : public LlmBackend {
   }
 
  private:
+  LlmMemoryBackend backend_ = LlmMemoryBackend::Cpu;
   LlmBackendEvidence evidence_;
 };
 
@@ -567,6 +717,291 @@ TEST(LlmMemoryRunnerTest, CompleteSingleLoopIsInspectableButComparativeConclusio
   }
 }
 
+TEST(LlmMemoryRunnerTest,
+     PreinitializedMetalReadyPlanIsReusedAndRetainsTaggedTaskEvidence) {
+  const LlmMemoryConfig config = explicit_metal_config();
+  const LlmMemoryWorkPlan plan = build_metal_runner_plan(config, true);
+  ASSERT_TRUE(plan.valid) << plan.reason_code;
+  const LlmMetalExecutionPlan* const execution_plan =
+      get_llm_metal_execution_plan(plan);
+  ASSERT_NE(execution_plan, nullptr);
+  ASSERT_TRUE(execution_plan->valid) << execution_plan->reason_code;
+  const LlmRunnerAuxiliaryEstimate auxiliary =
+      calculate_llm_runner_auxiliary_estimate(config, plan);
+  ASSERT_TRUE(auxiliary.valid) << auxiliary.reason_code;
+  EXPECT_EQ(auxiliary.checksum_auxiliary_bytes, 0u);
+  EXPECT_GT(auxiliary.orchestration_auxiliary_bytes, 0u);
+
+  FakeLlmBackend backend(LlmMemoryBackend::Metal);
+  ASSERT_EQ(backend.initialize(config).status, LlmBackendStatus::Ready);
+  LlmMemoryResult result;
+  ASSERT_EQ(run_llm_memory_suite(config, plan, backend, result),
+            EXIT_SUCCESS);
+  EXPECT_EQ(backend.initialize_calls, 1u);
+  EXPECT_EQ(backend.plan_resolution_calls, 1u);
+  EXPECT_EQ(backend.preparation_calls, 1u);
+  EXPECT_EQ(backend.release_calls, 1u);
+  EXPECT_EQ(result.status, LlmRunStatus::Complete);
+  EXPECT_TRUE(result.results_complete);
+  ASSERT_EQ(result.measurements.size(), kLlmScenarioCount);
+  for (const LlmMeasurementState& measurement : result.measurements) {
+    const auto* const metal = std::get_if<LlmMetalTaskEvidence>(
+        &measurement.execution.backend_evidence);
+    ASSERT_NE(metal, nullptr);
+    EXPECT_TRUE(metal->timed_pipeline_available);
+    EXPECT_TRUE(metal->grid_plan_available);
+    EXPECT_TRUE(metal->grid_plan.valid);
+    EXPECT_TRUE(metal->grid_plan.threadgroup_accounted_bytes.empty());
+    EXPECT_TRUE(metal->checksum_evaluated);
+    EXPECT_TRUE(metal->checksum_valid);
+    EXPECT_TRUE(metal->append_validation_valid);
+    EXPECT_TRUE(metal->post_validation_valid);
+    EXPECT_EQ(measurement.requested_workers, 0u);
+    EXPECT_EQ(measurement.effective_workers, 0u);
+  }
+  for (size_t index = 0; index < kLlmScenarioCount; ++index) {
+    ASSERT_EQ(result.calibration_attempt_counts[index], 1u);
+    const LlmTaskExecutionEvidence& compact =
+        result.calibration_attempts[index][0].execution;
+    EXPECT_FALSE(compact.cpu_evidence_available);
+    EXPECT_TRUE(compact.metal_evidence_available);
+    ASSERT_TRUE(compact.metal.has_value());
+    EXPECT_EQ(compact.metal->pipeline_label,
+              "membenchmark.llm-metal.pipeline.decode-contiguous.fake");
+    EXPECT_TRUE(compact.metal->checksum_valid);
+  }
+}
+
+TEST(LlmMemoryRunnerTest,
+     BackendAuxiliaryGrowthAfterInitializationIsReadmittedBeforeResolution) {
+  const LlmMemoryConfig config = explicit_config(1, 1);
+  const LlmMemoryWorkPlan plan = build_runner_admitted_plan(config);
+  ASSERT_TRUE(plan.valid) << plan.reason_code;
+  FakeLlmBackend backend;
+  backend.auxiliary_growth_after_initialize = 1;
+  std::vector<CheckpointRecord> checkpoints;
+  LlmMemoryResult result;
+
+  EXPECT_EQ(run_llm_memory_suite(config, plan, backend, result,
+                                 recording_checkpoints(checkpoints)),
+            EXIT_FAILURE);
+  ASSERT_TRUE(result.initialized);
+  EXPECT_EQ(result.status, LlmRunStatus::Failed);
+  EXPECT_EQ(result.reason_code,
+            LlmRunnerReason::AUXILIARY_BUDGET_INSUFFICIENT);
+  EXPECT_EQ(backend.initialize_calls, 1u);
+  EXPECT_EQ(backend.plan_resolution_calls, 0u);
+  EXPECT_EQ(backend.preparation_calls, 0u);
+  EXPECT_TRUE(backend.calls.empty());
+  EXPECT_EQ(backend.release_calls, 1u);
+  ASSERT_EQ(checkpoints.size(), 1u);
+  EXPECT_EQ(checkpoints.front().kind,
+            LlmCheckpointKind::CommandTerminal);
+  EXPECT_TRUE(checkpoints.front().terminal_checkpoint_completed);
+}
+
+TEST(LlmMemoryRunnerTest,
+     MetalRunnerAuxiliaryCoversMaximumRetainedDynamicEvidence) {
+  const LlmMemoryConfig config = explicit_metal_config();
+  const LlmMemoryWorkPlan plan = build_metal_runner_plan(config, true);
+  ASSERT_TRUE(plan.valid) << plan.reason_code;
+  FakeLlmBackend backend(LlmMemoryBackend::Metal);
+  backend.mutate = [](
+                       const LlmMemoryWorkPlan&,
+                       const LlmScenarioWorkPlan&,
+                       const LlmRunnerTaskContext&, size_t,
+                       LlmTaskExecutionResult& execution) {
+    auto* const metal = std::get_if<LlmMetalTaskEvidence>(
+        &execution.backend_evidence);
+    ASSERT_NE(metal, nullptr);
+    metal->pipeline_label.assign(128, 'p');
+    metal->grid_plan.reason_code.assign(64, 'r');
+    metal->grid_plan.identity.assign(
+        4096 + Constants::LLM_METAL_MAX_THREADGROUPS_PER_GRID * 64,
+        'g');
+    metal->grid_plan.threadgroup_accounted_bytes.assign(
+        Constants::LLM_METAL_MAX_THREADGROUPS_PER_GRID, 1);
+    metal->reset_command_status.assign(32, 's');
+    metal->timed_command_status.assign(32, 't');
+    metal->post_validation_command_status.assign(32, 'v');
+    metal->checksum_algorithm_version.assign(64, 'c');
+    metal->error.domain.assign(
+        Constants::LLM_METAL_DIAGNOSTIC_MAX_BYTES, 'd');
+    metal->error.description.assign(
+        Constants::LLM_METAL_DIAGNOSTIC_MAX_BYTES, 'e');
+  };
+  ASSERT_EQ(backend.initialize(config).status, LlmBackendStatus::Ready);
+  LlmMemoryResult result;
+
+  EXPECT_EQ(run_llm_memory_suite(config, plan, backend, result),
+            EXIT_SUCCESS);
+  EXPECT_EQ(result.status, LlmRunStatus::Complete);
+  EXPECT_TRUE(result.results_complete);
+  EXPECT_NE(result.reason_code,
+            LlmRunnerReason::AUXILIARY_BUDGET_INSUFFICIENT);
+  ASSERT_EQ(result.measurements.size(), kLlmScenarioCount);
+  for (const LlmMeasurementState& measurement : result.measurements) {
+    const auto* const metal = std::get_if<LlmMetalTaskEvidence>(
+        &measurement.execution.backend_evidence);
+    ASSERT_NE(metal, nullptr);
+    EXPECT_EQ(metal->grid_plan.identity.size(),
+              4096 +
+                  Constants::LLM_METAL_MAX_THREADGROUPS_PER_GRID * 64);
+    EXPECT_EQ(metal->reset_command_status.size(), 32u);
+    EXPECT_EQ(metal->timed_command_status.size(), 32u);
+    EXPECT_EQ(metal->post_validation_command_status.size(), 32u);
+  }
+}
+
+TEST(LlmMemoryRunnerTest,
+     PreinitializedMetalUnsupportedTerminatesUnresolvedPlanBeforeBudgetChecks) {
+  const LlmMemoryConfig config = explicit_metal_config();
+  LlmMemoryWorkPlan unresolved = build_metal_runner_plan(config, false);
+  ASSERT_TRUE(unresolved.valid) << unresolved.reason_code;
+  const LlmMetalExecutionPlan* const unresolved_execution =
+      get_llm_metal_execution_plan(unresolved);
+  ASSERT_NE(unresolved_execution, nullptr);
+  ASSERT_FALSE(unresolved_execution->valid);
+  unresolved.memory_budget.request.checksum_auxiliary_bytes = 0;
+  unresolved.memory_budget.request.orchestration_auxiliary_bytes = 0;
+
+  FakeLlmBackend backend(LlmMemoryBackend::Metal);
+  backend.initialization = {LlmBackendStatus::Unsupported,
+                            LlmBackendReason::METAL_DEVICE_UNAVAILABLE};
+  ASSERT_EQ(backend.initialize(config).status,
+            LlmBackendStatus::Unsupported);
+  std::vector<CheckpointRecord> checkpoints;
+  LlmMemoryResult result;
+  EXPECT_EQ(run_llm_memory_suite(
+                config, unresolved, backend, result,
+                recording_checkpoints(checkpoints)),
+            EXIT_FAILURE);
+  ASSERT_TRUE(result.initialized);
+  EXPECT_EQ(result.status, LlmRunStatus::Unsupported);
+  EXPECT_EQ(result.reason_code,
+            LlmBackendReason::METAL_DEVICE_UNAVAILABLE);
+  EXPECT_EQ(backend.initialize_calls, 1u);
+  EXPECT_EQ(backend.plan_resolution_calls, 0u);
+  EXPECT_EQ(backend.preparation_calls, 0u);
+  EXPECT_TRUE(backend.calls.empty());
+  EXPECT_EQ(backend.release_calls, 1u);
+  ASSERT_EQ(checkpoints.size(), 1u);
+  EXPECT_EQ(checkpoints.front().kind, LlmCheckpointKind::CommandTerminal);
+  EXPECT_EQ(checkpoints.front().status, LlmRunStatus::Unsupported);
+
+  const LlmMemoryWorkPlan not_preinitialized =
+      build_metal_runner_plan(config, false);
+  ASSERT_TRUE(not_preinitialized.valid) << not_preinitialized.reason_code;
+  FakeLlmBackend fresh_backend(LlmMemoryBackend::Metal);
+  LlmMemoryResult rejected;
+  EXPECT_EQ(run_llm_memory_suite(
+                config, not_preinitialized, fresh_backend, rejected),
+            EXIT_FAILURE);
+  EXPECT_FALSE(rejected.initialized);
+  EXPECT_EQ(rejected.reason_code,
+            LlmRunnerReason::INVALID_MODEL_WORK_PLAN);
+  EXPECT_EQ(fresh_backend.initialize_calls, 0u);
+  EXPECT_EQ(fresh_backend.release_calls, 0u);
+}
+
+TEST(LlmMemoryRunnerTest,
+     PreinitializedMetalFailureProducesOneTerminalCheckpoint) {
+  const LlmMemoryConfig config = explicit_metal_config();
+  const LlmMemoryWorkPlan logical_plan =
+      build_metal_runner_plan(config, false);
+  ASSERT_TRUE(logical_plan.valid) << logical_plan.reason_code;
+
+  FakeLlmBackend backend(LlmMemoryBackend::Metal);
+  backend.initialization = {
+      LlmBackendStatus::Failed,
+      LlmBackendReason::METAL_KERNEL_COMPILATION_FAILED};
+  ASSERT_EQ(backend.initialize(config).status,
+            LlmBackendStatus::Failed);
+  std::vector<CheckpointRecord> checkpoints;
+  LlmMemoryResult result;
+
+  EXPECT_EQ(run_llm_memory_suite(
+                config, logical_plan, backend, result,
+                recording_checkpoints(checkpoints)),
+            EXIT_FAILURE);
+  ASSERT_TRUE(result.initialized);
+  EXPECT_EQ(result.status, LlmRunStatus::Failed);
+  EXPECT_EQ(result.reason_code,
+            LlmBackendReason::METAL_KERNEL_COMPILATION_FAILED);
+  EXPECT_EQ(backend.initialize_calls, 1u);
+  EXPECT_EQ(backend.plan_resolution_calls, 0u);
+  EXPECT_EQ(backend.preparation_calls, 0u);
+  EXPECT_TRUE(backend.calls.empty());
+  EXPECT_EQ(backend.release_calls, 1u);
+  ASSERT_EQ(checkpoints.size(), 1u);
+  EXPECT_EQ(checkpoints.front().kind,
+            LlmCheckpointKind::CommandTerminal);
+  EXPECT_EQ(checkpoints.front().status, LlmRunStatus::Failed);
+  EXPECT_TRUE(checkpoints.front().terminal_checkpoint_completed);
+}
+
+TEST(LlmMemoryRunnerTest,
+     ReadyMetalRuntimePlanFailureRetainsSpecificTerminalReason) {
+  const LlmMemoryConfig config = explicit_metal_config();
+  LlmMemoryWorkPlanDraft draft =
+      prepare_llm_memory_work_plan(plan_request(config));
+  ASSERT_TRUE(draft.valid) << draft.reason_code;
+  LlmMetalResourcePlanRequest invalid_request =
+      metal_resource_request(draft.candidate, 0);
+  invalid_request.argument_buffer_encoded_length = 0;
+  ASSERT_TRUE(attach_llm_metal_execution_plan(
+      draft, build_llm_metal_execution_plan(invalid_request)));
+  const LlmRunnerAuxiliaryEstimate auxiliary =
+      calculate_llm_runner_auxiliary_estimate(
+          config, draft.auxiliary_preflight);
+  ASSERT_TRUE(auxiliary.valid) << auxiliary.reason_code;
+  size_t command_auxiliary_bytes = 0;
+  ASSERT_TRUE(NumericUtils::checked_add(
+      auxiliary.checksum_auxiliary_bytes,
+      auxiliary.orchestration_auxiliary_bytes,
+      command_auxiliary_bytes));
+  ASSERT_TRUE(NumericUtils::checked_add(
+      draft.candidate.memory_budget.request.planner_storage_bytes,
+      command_auxiliary_bytes,
+      invalid_request.additional_owned_bytes));
+  const LlmMemoryWorkPlan terminal_plan =
+      finalize_llm_memory_work_plan(
+          std::move(draft),
+          build_llm_metal_execution_plan(invalid_request),
+          auxiliary.checksum_auxiliary_bytes,
+          auxiliary.orchestration_auxiliary_bytes);
+  ASSERT_TRUE(terminal_plan.valid) << terminal_plan.reason_code;
+  const LlmMetalExecutionPlan* const runtime_plan =
+      get_llm_metal_execution_plan(terminal_plan);
+  ASSERT_NE(runtime_plan, nullptr);
+  ASSERT_FALSE(runtime_plan->valid);
+  ASSERT_EQ(runtime_plan->reason_code,
+            LlmMetalPlanReason::ARGUMENT_ENCODER_LENGTH_ZERO);
+
+  FakeLlmBackend backend(LlmMemoryBackend::Metal);
+  ASSERT_EQ(backend.initialize(config).status, LlmBackendStatus::Ready);
+  std::vector<CheckpointRecord> checkpoints;
+  LlmMemoryResult result;
+  EXPECT_EQ(run_llm_memory_suite(
+                config, terminal_plan, backend, result,
+                recording_checkpoints(checkpoints)),
+            EXIT_FAILURE);
+  ASSERT_TRUE(result.initialized);
+  EXPECT_EQ(result.status, LlmRunStatus::Failed);
+  EXPECT_EQ(result.reason_code,
+            LlmMetalPlanReason::ARGUMENT_ENCODER_LENGTH_ZERO);
+  EXPECT_EQ(backend.initialize_calls, 1u);
+  EXPECT_EQ(backend.plan_resolution_calls, 0u);
+  EXPECT_EQ(backend.preparation_calls, 0u);
+  EXPECT_TRUE(backend.calls.empty());
+  EXPECT_EQ(backend.release_calls, 1u);
+  ASSERT_EQ(checkpoints.size(), 1u);
+  EXPECT_EQ(checkpoints.front().kind,
+            LlmCheckpointKind::CommandTerminal);
+  EXPECT_EQ(checkpoints.front().status, LlmRunStatus::Failed);
+  EXPECT_TRUE(checkpoints.front().terminal_checkpoint_completed);
+}
+
 TEST(LlmMemoryRunnerTest, InitializationUnsupportedAndFailedDoNotExecuteOrFallback) {
   struct Case {
     LlmBackendStatus backend_status;
@@ -576,7 +1011,7 @@ TEST(LlmMemoryRunnerTest, InitializationUnsupportedAndFailedDoNotExecuteOrFallba
   constexpr std::array<Case, 2> cases = {{
       {LlmBackendStatus::Unsupported, LlmRunStatus::Unsupported,
        LlmBackendReason::TASK_UNSUPPORTED},
-      {LlmBackendStatus::Failed, LlmRunStatus::NotStarted,
+      {LlmBackendStatus::Failed, LlmRunStatus::Failed,
        LlmBackendReason::BACKEND_INITIALIZATION_FAILED},
   }};
 
@@ -592,8 +1027,7 @@ TEST(LlmMemoryRunnerTest, InitializationUnsupportedAndFailedDoNotExecuteOrFallba
 
     EXPECT_EQ(run_llm_memory_suite(config, plan, backend, result),
               EXIT_FAILURE);
-    EXPECT_EQ(result.initialized,
-              test_case.backend_status == LlmBackendStatus::Unsupported);
+    EXPECT_TRUE(result.initialized);
     EXPECT_EQ(result.status, test_case.run_status);
     EXPECT_EQ(result.reason_code, test_case.reason_code);
     EXPECT_EQ(backend.kind(), LlmMemoryBackend::Cpu);
@@ -646,7 +1080,7 @@ TEST(LlmMemoryRunnerTest,
 }
 
 TEST(LlmMemoryRunnerTest,
-     LifecycleFailuresBeforeTasksRemainUninitializedAndDoNotCheckpoint) {
+     LifecycleFailuresBeforeTasksProduceOneTerminalCheckpoint) {
   enum class FailedPhase { Initialization, PlanResolution, Preparation };
   constexpr std::array<FailedPhase, 3> phases = {
       FailedPhase::Initialization, FailedPhase::PlanResolution,
@@ -667,22 +1101,27 @@ TEST(LlmMemoryRunnerTest,
     } else {
       backend.preparation = failure;
     }
-    size_t checkpoint_calls = 0;
-    LlmRunnerHooks hooks;
-    hooks.checkpoint = [&](const LlmMemoryResult&, LlmCheckpointKind) {
-      ++checkpoint_calls;
-      return EXIT_SUCCESS;
-    };
+    std::vector<CheckpointRecord> checkpoints;
     LlmMemoryResult result;
 
-    EXPECT_EQ(run_llm_memory_suite(config, plan, backend, result, hooks),
+    EXPECT_EQ(run_llm_memory_suite(
+                  config, plan, backend, result,
+                  recording_checkpoints(checkpoints)),
               EXIT_FAILURE);
-    EXPECT_FALSE(result.initialized);
-    EXPECT_EQ(result.status, LlmRunStatus::NotStarted);
+    EXPECT_TRUE(result.initialized);
+    EXPECT_EQ(result.status, LlmRunStatus::Failed);
     EXPECT_EQ(result.reason_code,
               LlmBackendReason::BACKEND_INITIALIZATION_FAILED);
     EXPECT_TRUE(backend.calls.empty());
-    EXPECT_EQ(checkpoint_calls, 0u);
+    ASSERT_EQ(checkpoints.size(), 1u);
+    EXPECT_EQ(checkpoints.front().kind,
+              LlmCheckpointKind::CommandTerminal);
+    EXPECT_EQ(checkpoints.front().status, LlmRunStatus::Failed);
+    EXPECT_TRUE(checkpoints.front().terminal_checkpoint_attempted);
+    EXPECT_TRUE(checkpoints.front().terminal_checkpoint_completed);
+    EXPECT_EQ(result.logical_checkpoint_attempts, 1u);
+    EXPECT_EQ(result.successful_logical_checkpoints, 1u);
+    EXPECT_TRUE(result.terminal_checkpoint_completed);
     EXPECT_EQ(backend.initialize_calls, 1u);
     EXPECT_EQ(backend.plan_resolution_calls,
               phase == FailedPhase::Initialization ? 0u : 1u);

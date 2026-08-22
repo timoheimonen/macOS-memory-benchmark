@@ -32,8 +32,10 @@
 
 #include "core/config/constants.h"
 #include "llm_memory/llm_kv_layout.h"
+#include "llm_memory/llm_metal_backend.h"
 #include "llm_memory/llm_work_plan.h"
 #include "test_memory_system_calls.h"
+#include "utils/numeric_utils.h"
 
 namespace {
 
@@ -94,6 +96,78 @@ LlmMemoryWorkPlanRequest work_plan_request(
   request.mapping_granularity_bytes = 1;
   request.base_seed = 42;
   return request;
+}
+
+LlmMemoryWorkPlanRequest metal_work_plan_request() {
+  LlmMemoryWorkPlanRequest request =
+      work_plan_request(small_geometry_request(), 0, 0);
+  request.backend = LlmMemoryBackend::Metal;
+  return request;
+}
+
+LlmMetalResourcePlanRequest metal_resource_request(
+    const LlmMemoryWorkPlan& logical_plan,
+    size_t command_auxiliary_bytes = 0) {
+  LlmMetalResourcePlanRequest request;
+  request.geometry = logical_plan.geometry;
+  request.argument_buffer_encoded_length = 256;
+  request.argument_buffer_alignment = 16;
+  request.max_buffer_length =
+      Constants::LLM_METAL_SEGMENT_CAPACITY_BYTES;
+  request.available_memory_bytes = 16 * kGiB;
+  request.host_mapping_granularity_bytes = 1;
+  EXPECT_TRUE(NumericUtils::checked_add(
+      logical_plan.memory_budget.request.planner_storage_bytes,
+      command_auxiliary_bytes, request.additional_owned_bytes));
+  return request;
+}
+
+size_t external_string_backing_bytes(const std::string& value) {
+  const std::uintptr_t data =
+      reinterpret_cast<std::uintptr_t>(value.data());
+  const std::uintptr_t object =
+      reinterpret_cast<std::uintptr_t>(&value);
+  return data >= object && data < object + sizeof(value)
+             ? 0
+             : value.capacity() + 1;
+}
+
+size_t segment_plan_backing_bytes(
+    const LlmKvSegmentPlan& segment_plan) {
+  return segment_plan.segment_lengths.capacity() * sizeof(size_t) +
+         external_string_backing_bytes(segment_plan.reason_code) +
+         external_string_backing_bytes(segment_plan.identity);
+}
+
+size_t metal_execution_plan_backing_bytes(
+    const LlmMetalExecutionPlan& execution) {
+  const LlmMetalResourcePlan& resources = execution.resources;
+  size_t bytes =
+      external_string_backing_bytes(execution.reason_code) +
+      external_string_backing_bytes(execution.msl_revision) +
+      external_string_backing_bytes(execution.msl_source_sha256) +
+      external_string_backing_bytes(execution.identity) +
+      external_string_backing_bytes(resources.reason_code) +
+      external_string_backing_bytes(resources.identity) +
+      segment_plan_backing_bytes(resources.weight_segments) +
+      segment_plan_backing_bytes(resources.k_segments) +
+      segment_plan_backing_bytes(resources.v_segments) +
+      external_string_backing_bytes(
+          resources.argument_buffer.reason_code) +
+      external_string_backing_bytes(
+          resources.argument_buffer.identity) +
+      resources.planned_resources.capacity() *
+          sizeof(LlmMetalPlannedResource);
+  if (resources.table_segments.has_value()) {
+    bytes += segment_plan_backing_bytes(*resources.table_segments);
+  }
+  if (resources.paged_layout.has_value()) {
+    bytes += external_string_backing_bytes(
+                 resources.paged_layout->reason_code) +
+             external_string_backing_bytes(
+                 resources.paged_layout->geometry_identity);
+  }
+  return bytes;
 }
 
 void expect_invalid_plan(const LlmMemoryWorkPlan& plan,
@@ -774,7 +848,7 @@ TEST(LlmMemoryWorkPlanTest,
       work_plan_request(small_geometry_request(), 2, 2);
   inactive_backend.backend = LlmMemoryBackend::Metal;
   expect_invalid_plan(build_llm_memory_work_plan(inactive_backend),
-                      LlmWorkPlanReason::BACKEND_NOT_ACTIVATED);
+                      LlmWorkPlanReason::METAL_WORKERS_NOT_APPLICABLE);
 }
 
 TEST(LlmMemoryWorkPlanTest,
@@ -1247,6 +1321,276 @@ TEST(LlmMemoryWorkPlanTest,
   plan.backend = LlmMemoryBackend::Metal;
   EXPECT_EQ(get_llm_cpu_execution_plan(plan), nullptr);
   EXPECT_EQ(get_llm_cpu_execution_plan(const_plan), nullptr);
+}
+
+TEST(LlmMemoryWorkPlanTest,
+     MetalDecodeContiguousDraftAndFinalPlanStayWorkerFree) {
+  LlmMemoryWorkPlanDraft draft =
+      prepare_llm_memory_work_plan(metal_work_plan_request());
+  ASSERT_TRUE(draft.valid) << draft.reason_code;
+  EXPECT_FALSE(draft.candidate.valid);
+  EXPECT_EQ(draft.candidate.reason_code, LlmWorkPlanReason::VALID);
+  ASSERT_TRUE(draft.candidate.geometry.valid);
+  ASSERT_EQ(draft.candidate.weight_layers.size(),
+            draft.candidate.geometry.layer_count);
+  ASSERT_TRUE(draft.auxiliary_preflight.valid);
+  EXPECT_EQ(draft.auxiliary_preflight.backend,
+            LlmMemoryBackend::Metal);
+  EXPECT_EQ(draft.auxiliary_preflight.effective_workers, 0u);
+  EXPECT_EQ(draft.candidate.methodology_version,
+            "llm-memory-v1-metal-decode-contiguous");
+  EXPECT_EQ(draft.candidate.component_identities.backend_executor_version,
+            LlmMetalDecodeContiguousVersion::EXECUTOR);
+  EXPECT_EQ(draft.candidate.component_identities.schedule_version,
+            LlmMetalDecodeContiguousVersion::SCHEDULE);
+  EXPECT_EQ(draft.candidate.component_identities.buffer_pattern_version,
+            LlmMetalDecodeContiguousVersion::BUFFER_PATTERN);
+  EXPECT_EQ(draft.candidate.component_identities.write_pattern_version,
+            LlmMetalDecodeContiguousVersion::WRITE_PATTERN);
+  EXPECT_EQ(draft.candidate.component_identities.checksum_pattern_version,
+            LlmMetalDecodeContiguousVersion::CHECKSUM);
+  EXPECT_FALSE(draft.candidate.component_identities.msl_revision.has_value());
+  const LlmMetalExecutionPlan* unresolved =
+      get_llm_metal_execution_plan(draft.candidate);
+  ASSERT_NE(unresolved, nullptr);
+  EXPECT_FALSE(unresolved->valid);
+
+  LlmMemoryWorkPlan plan = finalize_llm_memory_work_plan(
+      std::move(draft), 19, 23);
+  ASSERT_TRUE(plan.valid) << plan.reason_code;
+  unresolved = get_llm_metal_execution_plan(plan);
+  ASSERT_NE(unresolved, nullptr);
+  EXPECT_FALSE(unresolved->valid);
+  EXPECT_EQ(plan.memory_budget.request.checksum_auxiliary_bytes, 19u);
+  EXPECT_EQ(plan.memory_budget.request.orchestration_auxiliary_bytes, 23u);
+  const LlmScenarioWorkPlan scenario = build_llm_scenario_work_plan(
+      plan, LlmScenario::Mixed, 2, true);
+  ASSERT_TRUE(scenario.valid) << scenario.reason_code;
+  EXPECT_EQ(scenario.work_unit_kind, LlmWorkUnitKind::DecodeStep);
+}
+
+TEST(LlmMemoryWorkPlanTest,
+     MetalScenarioPlansEnforceDispatchWorkUnitCapBeforeExecution) {
+  LlmMemoryWorkPlanDraft draft =
+      prepare_llm_memory_work_plan(metal_work_plan_request());
+  ASSERT_TRUE(draft.valid) << draft.reason_code;
+  LlmMemoryWorkPlan plan =
+      finalize_llm_memory_work_plan(std::move(draft), 0, 0);
+  ASSERT_TRUE(plan.valid) << plan.reason_code;
+
+  const LlmScenarioWorkPlan exact = build_llm_scenario_work_plan(
+      plan, LlmScenario::WeightsOnly,
+      Constants::LLM_METAL_MAX_WORK_UNITS_PER_DISPATCH, true);
+  ASSERT_TRUE(exact.valid) << exact.reason_code;
+  EXPECT_EQ(exact.maximum_work_units_by_work_unit_cap,
+            Constants::LLM_METAL_MAX_WORK_UNITS_PER_DISPATCH);
+  EXPECT_EQ(exact.effective_maximum_work_units,
+            Constants::LLM_METAL_MAX_WORK_UNITS_PER_DISPATCH);
+
+  const LlmScenarioWorkPlan above = build_llm_scenario_work_plan(
+      plan, LlmScenario::WeightsOnly,
+      Constants::LLM_METAL_MAX_WORK_UNITS_PER_DISPATCH + 1, true);
+  EXPECT_FALSE(above.valid);
+  EXPECT_EQ(above.reason_code, LlmWorkPlanReason::WORK_UNIT_CAP_EXCEEDED);
+}
+
+TEST(LlmMemoryWorkPlanTest,
+     MetalRuntimePlanFinalizationBindsExactResourcesAndAuxiliaryBytes) {
+  LlmMemoryWorkPlanDraft draft =
+      prepare_llm_memory_work_plan(metal_work_plan_request());
+  ASSERT_TRUE(draft.valid) << draft.reason_code;
+  const std::string unresolved_identity = draft.candidate.plan_identity;
+
+  LlmMetalExecutionPlan provisional = build_llm_metal_execution_plan(
+      metal_resource_request(draft.candidate));
+  ASSERT_TRUE(provisional.valid) << provisional.reason_code;
+  const size_t weight_layer_backing_bytes =
+      draft.candidate.weight_layers.capacity() * sizeof(LlmByteRange);
+  const size_t provisional_execution_backing_bytes =
+      metal_execution_plan_backing_bytes(provisional);
+  const size_t admitted_execution_backing_bytes =
+      provisional_execution_backing_bytes +
+      LlmMetalPlannerAccounting::
+          RUNTIME_IDENTITY_GROWTH_RESERVE_BYTES;
+  const size_t expected_two_pass_planner_peak_bytes =
+      weight_layer_backing_bytes +
+      2 * admitted_execution_backing_bytes;
+  const size_t expected_planned_resource_count =
+      provisional.resources.planned_resources.size();
+  const size_t expected_persistent_resource_count =
+      static_cast<size_t>(std::count_if(
+          provisional.resources.planned_resources.begin(),
+          provisional.resources.planned_resources.end(),
+          [](const LlmMetalPlannedResource& resource) {
+            return resource.persistent;
+          }));
+  ASSERT_TRUE(attach_llm_metal_execution_plan(
+      draft, std::move(provisional)));
+  EXPECT_NE(draft.candidate.plan_identity, unresolved_identity);
+  ASSERT_TRUE(draft.auxiliary_preflight.valid);
+  EXPECT_EQ(draft.candidate.memory_budget.request.planner_storage_bytes,
+            expected_two_pass_planner_peak_bytes);
+  EXPECT_EQ(draft.auxiliary_preflight.metal_planned_resource_count,
+            expected_planned_resource_count);
+  EXPECT_EQ(draft.auxiliary_preflight.metal_persistent_resource_count,
+            expected_persistent_resource_count);
+  EXPECT_EQ(
+      draft.auxiliary_preflight
+          .metal_resolved_execution_plan_backing_bytes,
+      admitted_execution_backing_bytes);
+  const size_t admitted_resolved_plan_identity_backing_bytes =
+      2 * (draft.auxiliary_preflight.model_plan_identity_bytes + 1);
+  EXPECT_EQ(
+      draft.auxiliary_preflight
+          .metal_resolved_plan_identity_backing_bytes,
+      admitted_resolved_plan_identity_backing_bytes);
+
+  constexpr size_t kChecksumAuxiliaryBytes = 111;
+  constexpr size_t kOrchestrationAuxiliaryBytes = 222;
+  constexpr size_t kCommandAuxiliaryBytes =
+      kChecksumAuxiliaryBytes + kOrchestrationAuxiliaryBytes;
+  LlmMetalExecutionPlan exact = build_llm_metal_execution_plan(
+      metal_resource_request(draft.candidate, kCommandAuxiliaryBytes));
+  ASSERT_TRUE(exact.valid) << exact.reason_code;
+  EXPECT_LE(metal_execution_plan_backing_bytes(exact),
+            admitted_execution_backing_bytes);
+  const std::string execution_identity = exact.identity;
+  LlmMemoryWorkPlan plan = finalize_llm_memory_work_plan(
+      std::move(draft), std::move(exact), kChecksumAuxiliaryBytes,
+      kOrchestrationAuxiliaryBytes);
+  ASSERT_TRUE(plan.valid) << plan.reason_code;
+  const LlmMetalExecutionPlan* const metal =
+      get_llm_metal_execution_plan(plan);
+  ASSERT_NE(metal, nullptr);
+  ASSERT_TRUE(metal->valid) << metal->reason_code;
+  EXPECT_EQ(metal->identity, execution_identity);
+  EXPECT_EQ(metal->resources.additional_owned_bytes,
+            plan.memory_budget.request.planner_storage_bytes +
+                kCommandAuxiliaryBytes);
+  EXPECT_EQ(plan.memory_budget.request.checksum_auxiliary_bytes,
+            kChecksumAuxiliaryBytes);
+  EXPECT_EQ(plan.memory_budget.request.orchestration_auxiliary_bytes,
+            kOrchestrationAuxiliaryBytes);
+  EXPECT_EQ(plan.memory_budget.request.auxiliary_bytes,
+            plan.memory_budget.request.planner_storage_bytes +
+                kCommandAuxiliaryBytes);
+  EXPECT_EQ(plan.memory_budget.request.required_total_bytes,
+            metal->resources.known_owned_peak_bytes);
+  size_t resolved_execution_plan_backing_bytes = 0;
+  size_t resolved_plan_identity_backing_bytes = 0;
+  ASSERT_TRUE(calculate_llm_metal_resolved_plan_backing_bytes(
+      plan, plan.plan_identity.size(),
+      resolved_execution_plan_backing_bytes,
+      resolved_plan_identity_backing_bytes));
+  EXPECT_EQ(resolved_execution_plan_backing_bytes,
+            metal_execution_plan_backing_bytes(*metal));
+  EXPECT_LE(resolved_execution_plan_backing_bytes,
+            admitted_execution_backing_bytes);
+  EXPECT_EQ(resolved_plan_identity_backing_bytes,
+            2 * (plan.plan_identity.size() + 1));
+  EXPECT_LE(resolved_plan_identity_backing_bytes,
+            admitted_resolved_plan_identity_backing_bytes);
+  ASSERT_TRUE(plan.component_identities.msl_revision.has_value());
+  ASSERT_TRUE(plan.component_identities.msl_source_sha256.has_value());
+  EXPECT_EQ(*plan.component_identities.msl_revision,
+            metal->msl_revision);
+  EXPECT_EQ(*plan.component_identities.msl_source_sha256,
+            metal->msl_source_sha256);
+
+  const std::string plan_identity = plan.plan_identity;
+  EXPECT_TRUE(readmit_llm_memory_work_plan(
+      plan, kChecksumAuxiliaryBytes, kOrchestrationAuxiliaryBytes));
+  EXPECT_EQ(plan.plan_identity, plan_identity);
+  EXPECT_FALSE(readmit_llm_memory_work_plan(
+      plan, kChecksumAuxiliaryBytes + 1,
+      kOrchestrationAuxiliaryBytes));
+  EXPECT_TRUE(plan.valid);
+}
+
+TEST(LlmMemoryWorkPlanTest,
+     MetalPlanningRejectsInactiveProfilesAndMismatchedExactAuxiliary) {
+  LlmMemoryWorkPlanRequest workers = metal_work_plan_request();
+  workers.requested_workers = 1;
+  expect_invalid_plan(build_llm_memory_work_plan(workers),
+                      LlmWorkPlanReason::METAL_WORKERS_NOT_APPLICABLE);
+
+  LlmMemoryWorkPlanRequest prefill = metal_work_plan_request();
+  prefill.geometry.phase = LlmPhase::Prefill;
+  prefill.geometry.visible_context_tokens = 0;
+  prefill.geometry.prompt_tokens = 3;
+  prefill.geometry.attention_query_tile_tokens = 2;
+  expect_invalid_plan(build_llm_memory_work_plan(prefill),
+                      LlmWorkPlanReason::PHASE_NOT_ACTIVATED);
+
+  LlmMemoryWorkPlanRequest paged = metal_work_plan_request();
+  paged.geometry = paged_geometry_request();
+  expect_invalid_plan(build_llm_memory_work_plan(paged),
+                      LlmWorkPlanReason::KV_LAYOUT_NOT_ACTIVATED);
+
+  LlmMemoryWorkPlanDraft draft =
+      prepare_llm_memory_work_plan(metal_work_plan_request());
+  ASSERT_TRUE(draft.valid) << draft.reason_code;
+  ASSERT_TRUE(attach_llm_metal_execution_plan(
+      draft, build_llm_metal_execution_plan(
+                 metal_resource_request(draft.candidate))));
+  LlmMetalExecutionPlan mismatched = build_llm_metal_execution_plan(
+      metal_resource_request(draft.candidate, 44));
+  ASSERT_TRUE(mismatched.valid) << mismatched.reason_code;
+  LlmMemoryWorkPlan invalid = finalize_llm_memory_work_plan(
+      std::move(draft), std::move(mismatched), 21, 22);
+  ASSERT_TRUE(invalid.valid) << invalid.reason_code;
+  const LlmMetalExecutionPlan* const rejected_runtime =
+      get_llm_metal_execution_plan(invalid);
+  ASSERT_NE(rejected_runtime, nullptr);
+  EXPECT_FALSE(rejected_runtime->valid);
+  EXPECT_EQ(rejected_runtime->reason_code,
+            LlmWorkPlanReason::INVALID_MODEL_WORK_PLAN);
+  EXPECT_EQ(invalid.reason_code, LlmWorkPlanReason::VALID);
+}
+
+TEST(LlmMemoryWorkPlanTest,
+     MetalRuntimePlanningFailureRetainsLogicalTerminalPlan) {
+  LlmMemoryWorkPlanDraft draft =
+      prepare_llm_memory_work_plan(metal_work_plan_request());
+  ASSERT_TRUE(draft.valid) << draft.reason_code;
+  LlmMetalResourcePlanRequest invalid_request =
+      metal_resource_request(draft.candidate);
+  invalid_request.argument_buffer_encoded_length = 0;
+  LlmMetalExecutionPlan provisional =
+      build_llm_metal_execution_plan(invalid_request);
+  ASSERT_FALSE(provisional.valid);
+  ASSERT_EQ(provisional.reason_code,
+            LlmMetalPlanReason::ARGUMENT_ENCODER_LENGTH_ZERO);
+  ASSERT_TRUE(attach_llm_metal_execution_plan(
+      draft, std::move(provisional)));
+  ASSERT_TRUE(draft.valid);
+  const LlmMetalExecutionPlan* retained =
+      get_llm_metal_execution_plan(draft.candidate);
+  ASSERT_NE(retained, nullptr);
+  EXPECT_FALSE(retained->valid);
+  EXPECT_EQ(retained->reason_code,
+            LlmMetalPlanReason::ARGUMENT_ENCODER_LENGTH_ZERO);
+
+  constexpr size_t kChecksumAuxiliaryBytes = 17;
+  constexpr size_t kOrchestrationAuxiliaryBytes = 29;
+  invalid_request.additional_owned_bytes =
+      draft.candidate.memory_budget.request.planner_storage_bytes +
+      kChecksumAuxiliaryBytes + kOrchestrationAuxiliaryBytes;
+  LlmMemoryWorkPlan plan = finalize_llm_memory_work_plan(
+      std::move(draft),
+      build_llm_metal_execution_plan(invalid_request),
+      kChecksumAuxiliaryBytes, kOrchestrationAuxiliaryBytes);
+  ASSERT_TRUE(plan.valid) << plan.reason_code;
+  retained = get_llm_metal_execution_plan(plan);
+  ASSERT_NE(retained, nullptr);
+  EXPECT_FALSE(retained->valid);
+  EXPECT_EQ(retained->reason_code,
+            LlmMetalPlanReason::ARGUMENT_ENCODER_LENGTH_ZERO);
+  EXPECT_EQ(plan.reason_code, LlmWorkPlanReason::VALID);
+  EXPECT_EQ(plan.memory_budget.request.checksum_auxiliary_bytes,
+            kChecksumAuxiliaryBytes);
+  EXPECT_EQ(plan.memory_budget.request.orchestration_auxiliary_bytes,
+            kOrchestrationAuxiliaryBytes);
 }
 
 TEST(LlmMemoryWorkPlanTest,

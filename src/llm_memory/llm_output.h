@@ -15,7 +15,7 @@
 
 /**
  * @file llm_output.h
- * @brief Human-readable output for the CPU LLM memory profile
+ * @brief Human-readable output for CPU and Metal LLM memory profiles
  */
 
 #ifndef LLM_OUTPUT_H
@@ -36,10 +36,12 @@ struct LlmResultMetadata;
  * its inputs.
  *
  * @param model_plan Immutable geometry and exact-byte work plan.
+ * @param backend_evidence Command-scoped CPU or Metal lifecycle, capability,
+ *        allocation, and execution evidence.
  * @param metadata Command environment, cache, and main-thread QoS evidence.
  * @param result Complete or partial runner evidence and measured aggregates.
  */
-void print_llm_memory_console_report(const LlmMemoryWorkPlan& model_plan, const LlmResultMetadata& metadata,
-                                     const LlmMemoryResult& result);
+void print_llm_memory_console_report(const LlmMemoryWorkPlan& model_plan, const LlmBackendEvidence& backend_evidence,
+                                     const LlmResultMetadata& metadata, const LlmMemoryResult& result);
 
 #endif  // LLM_OUTPUT_H

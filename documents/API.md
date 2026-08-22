@@ -55,6 +55,18 @@ memory_benchmark --llm-memory --weight-size-mb 64 --layers 4 \
   --iterations 1 --count 3 --seed 42 --output -
 ```
 
+The experimental Metal preview is selected explicitly and currently accepts decode with contiguous KV only:
+
+```bash
+memory_benchmark --llm-memory --llm-memory-backend metal \
+  --weight-size-mb 64 --layers 4 --query-heads 8 --kv-heads 2 \
+  --head-dim 64 --context-tokens 512 --iterations 1 --count 3 \
+  --seed 42 --output -
+```
+
+The preview has passed its M4 validation gate; the required Apple7/M1 baseline validation remains pending. Runtime
+capability admission is therefore not a cross-family production-readiness claim.
+
 A prefill request supplies full-prompt and query-tile geometry instead of decode context:
 
 ```bash
@@ -78,8 +90,9 @@ memory_benchmark --llm-memory --weight-size-mb 64 --layers 4 \
 `--kv-block-tokens <G>`; `G` must be positive, a power of two, and at most `UINT32_MAX`. A value larger than the active
 phase length is valid. Contiguous requests reject `--kv-block-tokens`. Phase defaults to decode. Decode requires
 `--context-tokens`; prefill requires `--prompt-tokens P` and `--attention-query-tile-tokens Q` with
-`1 <= Q <= P`, and the phase-specific inputs are mutually exclusive. All four CPU phase/layout combinations are
-active. Metal remains unavailable. No unsupported request receives a fallback.
+`1 <= Q <= P`, and the phase-specific inputs are mutually exclusive. `--llm-memory-backend` defaults to `cpu`. All
+four CPU phase/layout combinations are active. The experimental `metal` preview accepts only decode plus contiguous KV;
+it rejects prefill, paged KV, and explicit `--threads`. No unsupported request receives a fallback.
 
 The sentinel is classified from the raw option value before path normalization:
 
@@ -105,13 +118,16 @@ TLB whitelist rejects `--analyze-tlb --help`; use `--help` without that mode fla
 
 Some runtime setup failures also occur before a schema-valid payload exists. The general command's early timer failure,
 TLB setup, memory-budget, or allocation failures before analysis-state initialization, a GPU backend-factory failure,
-and LLM work-plan, JSON-output peak-estimation, timer, or resource-preparation failure before runner-result
-initialization therefore produce stderr plus a non-zero status and leave stdout empty. Once a mode has initialized a
-representable result, graceful
-interruption or a normal runtime failure emits the available partial, interrupted, error, failed, or unsupported
-payload. Core-to-core measurement failures, TLB measurement errors, GPU post-initialization failures, and LLM runner,
-backend-task, checksum, or checkpoint failures fall on this status-bearing path. Initialized failed payloads retain their
-non-zero process status; established graceful-interruption paths may return zero but are not complete conclusions.
+and LLM logical preflight or JSON-output peak-estimation failure before runner-result initialization therefore produce
+stderr plus a non-zero status and leave stdout empty. After the LLM runner has initialized a representable result, a
+selected Metal backend that fails its runtime capability check emits one terminal schema-1 `unsupported` document;
+runtime compiler, pipeline, resource, or task failures emit a terminal schema-1 `failed` run with failed or invalid
+measurement evidence as applicable. All return non-zero, and none is retried on CPU. Once a mode has initialized a
+representable result, graceful interruption or a normal runtime failure emits the available partial, interrupted,
+error, failed, or unsupported payload. Core-to-core measurement failures, TLB measurement errors, GPU
+post-initialization failures, and LLM runner, backend-task, checksum, or checkpoint failures fall on this status-bearing
+path. Initialized failed payloads retain their non-zero process status; established graceful-interruption paths may
+return zero but are not complete conclusions.
 
 An observable final serialization, write, or flush failure returns `EXIT_FAILURE` and reports its diagnostic to stderr
 without changing the already-computed measurement state. Any stdout bytes from that failed transfer are not an
@@ -190,8 +206,9 @@ LLM schema 1 is an unpublished generic contract. It has top-level `mode: "llm_me
 `llm-memory-v1-<backend>-<phase>-<layout>`. This revision activates `cpu`/`decode`/`contiguous`,
 `cpu`/`decode`/`paged`, `cpu`/`prefill`/`contiguous`, and `cpu`/`prefill`/`paged`, with exact methodologies
 `llm-memory-v1-cpu-decode-contiguous`, `llm-memory-v1-cpu-decode-paged`,
-`llm-memory-v1-cpu-prefill-contiguous`, and `llm-memory-v1-cpu-prefill-paged`. Metal is unavailable and must never be
-silently replaced by another backend, phase, or layout.
+`llm-memory-v1-cpu-prefill-contiguous`, and `llm-memory-v1-cpu-prefill-paged`. It also activates
+`metal`/`decode`/`contiguous` with methodology `llm-memory-v1-metal-decode-contiguous`. No selection is silently
+replaced by another backend, phase, or layout.
 
 Run statuses are `not_started`, `complete`, `partial`, `interrupted`, `unsupported`, and `failed`; measurement statuses
 are `not_run`, `measured`, `interrupted`, `invalid`, and `failed`. `unsupported` is a terminal, non-acceptable result,
@@ -222,6 +239,10 @@ integer `visible_context_tokens` and null prompt/tile values. Prefill publishes 
 `visible_context_tokens`. Layout resolves to `contiguous` by default or to the explicit `--kv-layout` value. The
 `kv_block_tokens` input is an integer for paged requests and null for contiguous requests; paged requests record it as
 explicit because no block-size default exists.
+Metal configuration records null `requested_workers`, `available_workers`, `worker_source`, and resolved worker source.
+Its backend evidence records `workers_applicable: false` and `worker_qos_applicable: false`; the command does not run
+CPU worker detection. Metal measurement and nested execution worker/QoS fields are likewise null. CPU retains its
+requested/available/effective worker contract.
 
 `resolved_plan` owns immutable logical plan evidence:
 
@@ -239,6 +260,9 @@ explicit because no block-size default exists.
   lengths, K/V layout padding, and nullable block-table bytes. For contiguous, physical lengths equal logical lengths,
   padding is zero, and block-table bytes are null. For paged, physical lengths cover complete blocks and may exceed
   logical lengths; suffix padding and the resident uint32 table are reported separately.
+  Metal additionally publishes its 256 MiB segment capacity, exact per-segment lengths and counts, maximum addressable
+  bytes, unused nominal capacity, Tier 2 argument-buffer slots/encoded length/alignment, status/staging lengths, and
+  admitted resource-plan totals. A final segment has its exact logical remainder; it is not padded to 256 MiB.
 - `component_identities` records logical profile, KV layout, optional permutation, backend executor, resource ABI,
   schedule, timer policy, buffer pattern, write pattern, checksum pattern, and nullable MSL revision/source SHA-256.
   Their canonical aggregate identity uses fixed field order and length-prefixed values under
@@ -312,16 +336,29 @@ records its identity, scope count/identities, decimal-string per-worker accounte
 maximum, and max-minus-min imbalance per work unit. `backend_evidence.cpu.paged` is populated for either paged phase,
 so paged prefill has both CPU evidence objects populated.
 
-`backend_evidence` always contains both tagged branches. `cpu` is populated and `metal` is null for all active
-profiles.
+`backend_evidence` always contains both tagged branches. Exactly the selected branch is populated. Metal evidence
+contains backend lifecycle status/reasons; device name and registry ID; Apple-family, unified-memory, Tier 2, and
+maximum-buffer capability evidence; MSL version/revision/source hash; foundation and workload pipeline limits;
+argument-buffer layout-probe evidence; actual `MTLBuffer.length`, optional `allocatedSize`, resource options, storage
+and hazard modes; committed/peak/budget totals; and bounded Metal error diagnostics. Worker and worker-QoS
+applicability are false. Capability absence is `unsupported`; compile, pipeline, allocation, command-buffer,
+timestamp, checksum, or validation errors are failed/invalid states with stable reason codes.
+
+The activated embedded source revision is `llm-metal-decode-contiguous-msl23-v1`. The three reported workload labels
+are `membenchmark.llm-metal.pipeline.decode-contiguous.weights-only`,
+`membenchmark.llm-metal.pipeline.decode-contiguous.kv-only`, and
+`membenchmark.llm-metal.pipeline.decode-contiguous.mixed`. These are output identities, not a promise that future
+schema revisions retain the same kernel implementation.
+
 `memory_budget` separates immutable resource geometry from allocation-time evidence and includes canonical
 decimal-string `resource_rounding_bytes`, `transient_peak_bytes`, `known_owned_peak_bytes`, and
 `admitted_budget_bytes`. A paged candidate admits full physical K/V resources, the resident block table, page rounding,
 descriptor/planner/checksum/orchestration storage, and the permutation-validation transient before table
 materialization. A non-empty JSON target's orchestration reserve uses checked arithmetic for every variable-length
 component/layout identity and, for prefill, the aggregate execution identity plus all scenario and scope identities.
-The preflight and finalized-plan estimates cover the same identity set. `calibration` contains excluded work-resolution
-and post-freeze same-shape warmup evidence;
+For Metal it also reserves a maximum-sized grid/task evidence tree for every retained measurement and excluded
+calibration attempt. The preflight and finalized-plan estimates cover the same identity set. `calibration` contains
+excluded work-resolution and post-freeze same-shape warmup evidence;
 `aggregates` contains only accepted measured values. No measured loop begins until all three scenario plans have been
 atomically frozen and their canonical-order frozen warmups have succeeded. Additional diagnostic, interruption,
 checkpoint, loop-order, checksum, environment, warning, and resource-preparation evidence may be present without
@@ -362,7 +399,19 @@ The three derived metrics are finite numbers only for a successfully measured re
 model numerator contains versioned logical W/K/V reads and writes; timed layout metadata is reported separately and
 included in `accounted_bytes_per_work_unit`, not in `effective_model_payload_gb_s`.
 Measurement checksum evidence uses the phase-neutral keys `write_pattern_version` and `checksum_pattern_version`;
-schema 1 does not publish decode-specific `append_pattern_version` or `read_checksum_version` aliases.
+schema 1 does not publish decode-specific `append_pattern_version` or `read_checksum_version` aliases. Metal uses
+`llm-metal-dual-mod32-v1` with separate W/K/V lanes. Its measurement execution evidence records the selected pipeline,
+threadgroup/grid geometry, raw `GPUStartTime` and `GPUEndTime`, authoritative GPU elapsed time, the host submit/wait
+envelope, command/encoder/dispatch counts and statuses, timed checksum comparison, and excluded validation of every byte
+in every final K/V append record for a KV-bearing scenario.
+Queue delay is null unless it is measured in the same clock domain. CPU and Metal checksum values are backend-specific
+and are never compared numerically.
+
+Each Metal task uses one reset command buffer, one timed command buffer with one explicitly serial compute encoder and
+one workload dispatch, and one excluded post-validation command buffer. The task's `T` work units loop inside the
+kernel. Initialization, pre-touch, expected-checksum construction, reset, and post-validation are outside the timed
+window. `GPUStartTime`/`GPUEndTime` are read only after completion; zero, non-finite, negative, or non-increasing values
+invalidate the task. Exact vector/scalar tails and segment-boundary splits preserve the planned logical byte count.
 
 Paged `weights_only` performs no block-table access and reports zero layout-metadata work. For decode `kv_only` and
 `mixed`, each layer/batch pair performs one paired K/V append lookup, `N` K-scan lookups, and `N` V-scan lookups per

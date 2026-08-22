@@ -88,6 +88,8 @@ struct LlmTaskExecutionEvidence {
   bool checksum_valid = false;
   LlmRunChecksum expected_run_checksum{0, 0};
   LlmRunChecksum actual_run_checksum{0, 0};
+  bool metal_evidence_available = false;
+  std::optional<LlmMetalTaskEvidence> metal;
 };
 
 /** One excluded warmup, pilot, duration trial, or correction record. */

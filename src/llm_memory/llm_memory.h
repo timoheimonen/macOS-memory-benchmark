@@ -24,6 +24,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -98,6 +99,7 @@ enum class LlmRunStatus : uint8_t {
 /** Stable machine-readable config validation reasons. */
 namespace LlmMemoryConfigReason {
 inline constexpr const char* VALID = "valid";
+inline constexpr const char* INVALID_BACKEND = "invalid-backend";
 inline constexpr const char* WEIGHT_SIZE_REQUIRED = "weight-size-required";
 inline constexpr const char* LAYER_COUNT_REQUIRED = "layer-count-required";
 inline constexpr const char* QUERY_HEAD_COUNT_REQUIRED =
@@ -137,7 +139,12 @@ inline constexpr const char* KV_BLOCK_TOKENS_NOT_POWER_OF_TWO =
     "kv-block-tokens-not-power-of-two";
 inline constexpr const char* KV_BLOCK_TOKENS_EXCEEDS_UINT32 =
     "kv-block-tokens-exceeds-uint32";
+inline constexpr const char* PHASE_NOT_ACTIVATED = "phase-not-activated";
+inline constexpr const char* KV_LAYOUT_NOT_ACTIVATED =
+    "kv-layout-not-activated";
 inline constexpr const char* BATCH_SIZE_REQUIRED = "batch-size-required";
+inline constexpr const char* THREADS_NOT_APPLICABLE =
+    "threads-not-applicable";
 inline constexpr const char* WORKER_COUNT_REQUIRED = "worker-count-required";
 inline constexpr const char* AVAILABLE_WORKER_COUNT_REQUIRED =
     "available-worker-count-required";
@@ -184,6 +191,7 @@ struct LlmMemoryConfig {
   size_t iterations = 0;
   size_t loop_count = Constants::LLM_DEFAULT_LOOP_COUNT;
   uint64_t seed = 0;
+  bool user_specified_backend = false;
   bool user_specified_iterations = false;
   bool user_specified_seed = false;
   bool user_specified_workers = false;
@@ -215,6 +223,22 @@ struct LlmMemoryParserTestHooks {
 void set_llm_memory_parser_test_hooks(
     const LlmMemoryParserTestHooks* hooks);
 
+/** Deterministic exception seam at the post-run command boundary. */
+struct LlmMemoryCommandTestHooks {
+  std::function<void()> after_initialized_runner;
+};
+
+/**
+ * Install or clear deterministic LLM command-boundary test behavior.
+ *
+ * @param hooks Callbacks copied immediately, or `nullptr` to restore
+ *        production behavior. The caller retains no lifetime obligation.
+ * @warning This process-global test seam is not thread-safe and must not be
+ *          changed while an LLM command is running.
+ */
+void set_llm_memory_command_test_hooks(
+    const LlmMemoryCommandTestHooks* hooks);
+
 /**
  * Parse and preflight the standalone `--llm-memory` option whitelist.
  *
@@ -223,8 +247,9 @@ void set_llm_memory_parser_test_hooks(
  * output session, mapping, or worker can be created. Human help returns before
  * platform detection and seed generation. Decode requires context geometry;
  * prefill requires positive P/Q with Q <= P. Cross-phase geometry is rejected,
- * and the temporary CPU prefill+paged capability gap is reported only after
- * otherwise-valid phase and layout preflights.
+ * and only the currently activated backend/phase/layout combinations are
+ * accepted after otherwise-valid phase and layout preflights. CPU worker
+ * detection is skipped for Metal, where explicit `--threads` is rejected.
  *
  * @param argc Number of entries in @p argv.
  * @param argv Command arguments; entries are copied without retaining pointers.

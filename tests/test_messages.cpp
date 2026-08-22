@@ -198,11 +198,15 @@ TEST(MessagesErrorTest, ErrorSeedRequiresEverySupportedMode) {
 TEST(MessagesTest, LlmMemoryCliMessagesHaveExactOutput) {
   const std::string expected_usage =
       "Usage: memory_benchmark --llm-memory [options]\n"
-      "Options for standalone CPU synthetic LLM memory mode:\n"
+      "Options for standalone CPU/Metal synthetic LLM memory mode:\n"
       "  -M, --llm-memory       Select the memory-only LLM profile.\n"
+      "      --llm-memory-backend <cpu|metal>\n"
+      "                          Execution backend (default: cpu). The experimental Metal preview\n"
+      "                          accepts decode with contiguous KV only; no fallback is performed.\n"
+      "                          Its M4 validation gate passed; Apple7/M1 baseline validation is pending.\n"
       "      --phase <decode|prefill>\n"
-      "                          Workload phase (default: decode). Both phases support\n"
-      "                          contiguous or paged KV on CPU.\n"
+      "                          Workload phase (default: decode). CPU supports both phases;\n"
+      "                          the Metal preview accepts decode only.\n"
       "      --weight-size-mb <MiB>\n"
       "                          Required active weight bytes per work unit, in MiB.\n"
       "      --layers <count>    Required transformer layer count.\n"
@@ -225,7 +229,8 @@ TEST(MessagesTest, LlmMemoryCliMessagesHaveExactOutput) {
       "                          Required only for prefill; query tile Q, 1 <= Q <= P.\n"
       "                          Rejected for decode.\n"
       "      --kv-layout <contiguous|paged>\n"
-      "                          KV storage layout (default: contiguous).\n"
+      "                          KV storage layout (default: contiguous). CPU supports both\n"
+      "                          layouts; the Metal preview accepts contiguous only.\n"
       "      --kv-block-tokens <count>\n"
       "                          Required only for paged KV; must be a positive power of two\n"
       "                          no greater than UINT32_MAX; it may exceed the phase sequence length.\n"
@@ -235,6 +240,7 @@ TEST(MessagesTest, LlmMemoryCliMessagesHaveExactOutput) {
       std::to_string(Constants::LLM_DEFAULT_BATCH_SIZE) +
       ").\n"
       "  -t, --threads <count>  Requested CPU workers; detected workers are used when omitted.\n"
+      "                          Rejected for Metal.\n"
       "  -i, --iterations <count>\n"
       "                          Exact work units per scenario measurement. A work unit is one\n"
       "                          decode step or full-prompt prefill operation. When omitted, each\n"
@@ -249,7 +255,7 @@ TEST(MessagesTest, LlmMemoryCliMessagesHaveExactOutput) {
       "                          target is a file with atomic scenario and terminal checkpoints.\n"
       "                          An empty value disables JSON for this direct command.\n"
       "  -h, --help             Show this LLM-mode help and exit.\n"
-      "This profile models CPU memory traffic only: it performs no Transformer math and\n"
+      "This profile models CPU or Metal memory traffic only: it performs no Transformer math and\n"
       "does not report inference tokens/s. Effective model payload is not physical DRAM traffic.\n";
 
   const std::vector<MessageCase> cases = {
@@ -257,7 +263,8 @@ TEST(MessagesTest, LlmMemoryCliMessagesHaveExactOutput) {
        "--llm-memory requires --weight-size-mb <MiB>, --layers <count>, "
        "--query-heads <count>, --kv-heads <count>, --head-dim <count>, and "
        "phase-specific token geometry; it allows only optional "
-       "--phase <decode|prefill>, --context-tokens <count>, "
+       "--llm-memory-backend <cpu|metal>, --phase <decode|prefill>, "
+       "--context-tokens <count>, "
        "--prompt-tokens <count>, --attention-query-tile-tokens <count>, "
        "--kv-element-bytes <1|2|4>, --kv-layout <contiguous|paged>, "
        "--kv-block-tokens <count>, --batch-size <count>, "
@@ -285,6 +292,8 @@ TEST(MessagesTest, LlmMemoryCliMessagesHaveExactOutput) {
        "Failed to make the paged KV block table read-only"},
       {"positive integer", Messages::llm_memory_reason_positive_integer(),
        "must be a positive integer"},
+      {"backend", Messages::llm_memory_reason_backend(),
+       "must be exactly cpu or metal"},
       {"KV width", Messages::llm_memory_reason_kv_element_bytes(),
        "must be exactly 1, 2, or 4"},
       {"phase", Messages::llm_memory_reason_phase(),
@@ -302,6 +311,59 @@ TEST(MessagesTest, LlmMemoryCliMessagesHaveExactOutput) {
            "cpu", "decode", "decode_step", "contiguous"),
        "Synthetic LLM memory profile (backend=cpu, phase=decode, "
        "work_unit=decode_step, kv_layout=contiguous, warm/cacheable)"},
+      {"Metal backend",
+       Messages::report_llm_memory_metal_backend(
+           "Fake Apple GPU", std::numeric_limits<uint64_t>::max(), true,
+           false, true, 4294967296ULL, 3221225472ULL),
+       "  Metal device: name=Fake Apple GPU, "
+       "registry_id=18446744073709551615\n"
+       "  Metal capabilities: apple7=true, unified=false, tier2=true\n"
+       "  Metal limits: max_buffer_length=4294967296 bytes, "
+       "recommended_working_set=3221225472 bytes"},
+      {"Metal resources",
+       Messages::report_llm_memory_metal_resources(
+           2, 3, 4, 268435456, 8192, 805306368, 1073741824,
+           2147483648ULL),
+       "  Metal segments: weights=2, K=3, V=4, capacity=268435456 bytes\n"
+       "  Metal argument buffer: encoded_length=8192 bytes\n"
+       "  Metal memory: committed=805306368 bytes, "
+       "known_peak=1073741824 bytes, admitted_budget=2147483648 bytes"},
+      {"Metal valid task",
+       Messages::report_llm_memory_metal_task(
+           "mixed", "llm_decode_contiguous_v1", 8, 64, true, true,
+           0.00125, true, true, true, true, true, true, true, true),
+       "  Metal task: scenario=mixed, pipeline=llm_decode_contiguous_v1, "
+       "threadgroups=8, threads_per_threadgroup=64\n"
+       "  Metal timing: gpu_elapsed_seconds=0.001250000\n"
+       "  Metal validation: checksum=valid, append=valid, canary=valid"},
+      {"Metal invalid task without canary",
+       Messages::report_llm_memory_metal_task(
+           "kv_only", "llm_decode_contiguous_v1", 1, 32, true, true, 0.5,
+           true, false, true, true, false, false, false, true),
+       "  Metal task: scenario=kv_only, pipeline=llm_decode_contiguous_v1, "
+       "threadgroups=1, threads_per_threadgroup=32\n"
+       "  Metal timing: gpu_elapsed_seconds=0.500000000\n"
+       "  Metal validation: checksum=invalid, append=invalid, "
+       "canary=not-applicable"},
+      {"Metal weights task without append",
+       Messages::report_llm_memory_metal_task(
+           "weights_only", "llm_decode_contiguous_v1", 1, 32, true, true,
+           0.25, false, false, false, false, true, false, false, false),
+       "  Metal task: scenario=weights_only, "
+       "pipeline=llm_decode_contiguous_v1, threadgroups=1, "
+       "threads_per_threadgroup=32\n"
+       "  Metal timing: gpu_elapsed_seconds=0.250000000\n"
+       "  Metal validation: checksum=not-evaluated, "
+       "append=not-applicable, canary=not-applicable"},
+      {"Metal invalid timing has no numeric observation",
+       Messages::report_llm_memory_metal_task(
+           "mixed", "llm_decode_contiguous_v1", 1, 32, true, false, 0.0,
+           false, false, true, false, false, false, false, false),
+       "  Metal task: scenario=mixed, pipeline=llm_decode_contiguous_v1, "
+       "threadgroups=1, threads_per_threadgroup=32\n"
+       "  Metal timing: gpu_elapsed_seconds=invalid\n"
+       "  Metal validation: checksum=not-evaluated, append=not-evaluated, "
+       "canary=not-applicable"},
       {"decode unit",
        Messages::report_llm_memory_work_unit_name("decode_step", false),
        "decode step"},
@@ -428,6 +490,18 @@ TEST(MessagesTest, GeneralHelpAdvertisesTheLlmBoundaryExactlyOnce) {
   EXPECT_NE(usage.find("-M, --llm-memory"), std::string::npos);
   EXPECT_EQ(usage.find("-M, --llm-memory"),
             usage.rfind("-M, --llm-memory"));
+  EXPECT_NE(
+      usage.find("standalone CPU/Metal synthetic LLM memory profile"),
+      std::string::npos);
+  EXPECT_NE(usage.find("experimental Metal preview accepts only"),
+            std::string::npos);
+  EXPECT_NE(
+      usage.find("decode with contiguous KV and never falls back to CPU"),
+      std::string::npos);
+  EXPECT_NE(
+      usage.find(
+          "validation gate passed; Apple7/M1 baseline validation is pending"),
+      std::string::npos);
   EXPECT_NE(usage.find("--weight-size-mb"), std::string::npos);
   EXPECT_NE(usage.find("--query-heads"), std::string::npos);
   EXPECT_NE(usage.find("--context-tokens"), std::string::npos);
@@ -438,6 +512,10 @@ TEST(MessagesTest, GeneralHelpAdvertisesTheLlmBoundaryExactlyOnce) {
                 Constants::LLM_CPU_DECODE_CONTIGUOUS_METHODOLOGY_VERSION),
             std::string::npos);
   EXPECT_NE(usage.find(Constants::LLM_CPU_DECODE_PAGED_METHODOLOGY_VERSION),
+            std::string::npos);
+  EXPECT_NE(usage.find("llm-memory-v1-metal-decode-contiguous"),
+            std::string::npos);
+  EXPECT_NE(usage.find("Metal LLM-memory rejects --threads"),
             std::string::npos);
   EXPECT_NE(usage.find("checkpoints each terminal scenario"),
             std::string::npos);
@@ -873,7 +951,8 @@ TEST(MessagesFormattingTest, UsageOptions) {
   EXPECT_NE(msg.find("--gpu-bandwidth"), std::string::npos);
   EXPECT_NE(msg.find(Constants::GPU_METHODOLOGY_VERSION), std::string::npos);
   EXPECT_NE(msg.find("minimum buffer size is 64 MB"), std::string::npos);
-  EXPECT_NE(msg.find("synthetic LLM decode/prefill memory profile"), std::string::npos);
+  EXPECT_NE(msg.find("standalone CPU/Metal synthetic LLM memory profile"),
+            std::string::npos);
   EXPECT_NE(msg.find("prefill requires --phase prefill, --prompt-tokens"), std::string::npos);
   EXPECT_NE(msg.find("--attention-query-tile-tokens"), std::string::npos);
   EXPECT_NE(msg.find("Both phases support contiguous"), std::string::npos);

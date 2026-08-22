@@ -42,6 +42,10 @@ constexpr uint64_t kVBufferSeedDomain = 0x4C4C4D5642554631ULL;
 constexpr uint64_t kWeightsOnlyScenarioSeedDomain = 0x4C4C4D5357454947ULL;
 constexpr uint64_t kKvOnlyScenarioSeedDomain = 0x4C4C4D534B564F4EULL;
 constexpr uint64_t kMixedScenarioSeedDomain = 0x4C4C4D534D495845ULL;
+constexpr size_t kMetalRuntimeIdentityReserveBytes =
+    LlmMetalPlannerAccounting::RUNTIME_IDENTITY_GROWTH_RESERVE_BYTES;
+constexpr size_t kMetalRuntimeJsonIdentityReserveBytes =
+    2ULL * 1024ULL * 1024ULL;
 
 bool valid_kv_element_bytes(size_t bytes) {
   return bytes == 1 || bytes == 2 || bytes == 4;
@@ -271,7 +275,10 @@ class IdentityMatcher {
 std::string build_model_plan_identity(const LlmMemoryWorkPlan& plan) {
   const LlmCpuExecutionPlan* const cpu_plan =
       get_llm_cpu_execution_plan(plan);
-  if (cpu_plan == nullptr) {
+  const LlmMetalExecutionPlan* const metal_plan =
+      get_llm_metal_execution_plan(plan);
+  if ((plan.backend == LlmMemoryBackend::Cpu && cpu_plan == nullptr) ||
+      (plan.backend == LlmMemoryBackend::Metal && metal_plan == nullptr)) {
     return {};
   }
   const LlmGeometry& geometry = plan.geometry;
@@ -403,35 +410,48 @@ std::string build_model_plan_identity(const LlmMemoryWorkPlan& plan) {
                         geometry.traffic_crossover_numerator);
   append_identity_field(identity, "traffic_crossover_denominator",
                         geometry.traffic_crossover_denominator);
-  append_identity_field(identity, "requested_workers",
-                        cpu_plan->requested_workers);
-  append_identity_field(identity, "effective_workers",
-                        cpu_plan->effective_workers);
-  append_identity_field(identity, "layer_descriptors_per_worker",
-                        cpu_plan->layer_descriptors_per_worker);
-  append_identity_field(identity, "sequence_descriptors_per_worker",
-                        cpu_plan->sequence_descriptors_per_worker);
-  append_identity_field(identity, "total_layer_descriptors",
-                        cpu_plan->total_layer_descriptors);
-  append_identity_field(identity, "total_sequence_descriptors",
-                        cpu_plan->total_sequence_descriptors);
-  append_identity_field(identity, "descriptor_bytes",
-                        cpu_plan->descriptor_bytes);
-  if (cpu_plan->prefill.has_value()) {
-    append_identity_field(identity, "prefill_execution_identity_size",
-                          cpu_plan->prefill->identity.size());
-    append_identity_field(identity, "prefill_execution_identity",
-                          cpu_plan->prefill->identity);
-  }
-  if (cpu_plan->paged.has_value()) {
-    append_identity_field(identity, "paged_layout_identity_size",
-                          cpu_plan->paged->layout_identity.size());
-    append_identity_field(identity, "paged_layout_identity",
-                          cpu_plan->paged->layout_identity);
-    append_identity_field(identity, "paged_execution_identity_size",
-                          cpu_plan->paged->execution_identity.size());
-    append_identity_field(identity, "paged_execution_identity",
-                          cpu_plan->paged->execution_identity);
+  if (cpu_plan != nullptr) {
+    append_identity_field(identity, "requested_workers",
+                          cpu_plan->requested_workers);
+    append_identity_field(identity, "effective_workers",
+                          cpu_plan->effective_workers);
+    append_identity_field(identity, "layer_descriptors_per_worker",
+                          cpu_plan->layer_descriptors_per_worker);
+    append_identity_field(identity, "sequence_descriptors_per_worker",
+                          cpu_plan->sequence_descriptors_per_worker);
+    append_identity_field(identity, "total_layer_descriptors",
+                          cpu_plan->total_layer_descriptors);
+    append_identity_field(identity, "total_sequence_descriptors",
+                          cpu_plan->total_sequence_descriptors);
+    append_identity_field(identity, "descriptor_bytes",
+                          cpu_plan->descriptor_bytes);
+    if (cpu_plan->prefill.has_value()) {
+      append_identity_field(identity, "prefill_execution_identity_size",
+                            cpu_plan->prefill->identity.size());
+      append_identity_field(identity, "prefill_execution_identity",
+                            cpu_plan->prefill->identity);
+    }
+    if (cpu_plan->paged.has_value()) {
+      append_identity_field(identity, "paged_layout_identity_size",
+                            cpu_plan->paged->layout_identity.size());
+      append_identity_field(identity, "paged_layout_identity",
+                            cpu_plan->paged->layout_identity);
+      append_identity_field(identity, "paged_execution_identity_size",
+                            cpu_plan->paged->execution_identity.size());
+      append_identity_field(identity, "paged_execution_identity",
+                            cpu_plan->paged->execution_identity);
+    }
+  } else {
+    const bool resolved = metal_plan->valid && metal_plan->resources.valid &&
+                          !metal_plan->identity.empty();
+    append_identity_field(identity, "metal_execution_resolved",
+                          resolved ? 1 : 0);
+    append_identity_field(identity, "metal_execution_identity_size",
+                          resolved ? metal_plan->identity.size() : 0);
+    append_identity_field(
+        identity, "metal_execution_identity_sha256",
+        resolved ? HashUtils::sha256_hex(metal_plan->identity)
+                 : std::string(64, '0'));
   }
   append_identity_field(identity, "base_seed", plan.base_seed);
   append_identity_field(identity, "weight_buffer_seed",
@@ -1849,17 +1869,87 @@ bool add_external_string_capacity(const std::string& value,
                                    total_bytes);
 }
 
+bool add_metal_segment_plan_backing(
+    const LlmKvSegmentPlan& segment_plan,
+    size_t& planner_storage_bytes) {
+  return add_allocation_capacity(
+             segment_plan.segment_lengths.capacity(), sizeof(size_t),
+             planner_storage_bytes) &&
+         add_external_string_capacity(
+             segment_plan.reason_code, planner_storage_bytes) &&
+         add_external_string_capacity(
+             segment_plan.identity, planner_storage_bytes);
+}
+
+bool calculate_metal_execution_plan_backing_bytes(
+    const LlmMetalExecutionPlan& execution,
+    size_t& execution_backing_bytes) {
+  execution_backing_bytes = 0;
+  const LlmMetalResourcePlan& resources = execution.resources;
+  if (!add_external_string_capacity(
+          execution.reason_code, execution_backing_bytes) ||
+      !add_external_string_capacity(
+          execution.msl_revision, execution_backing_bytes) ||
+      !add_external_string_capacity(
+          execution.msl_source_sha256, execution_backing_bytes) ||
+      !add_external_string_capacity(
+          execution.identity, execution_backing_bytes) ||
+      !add_external_string_capacity(
+          resources.reason_code, execution_backing_bytes) ||
+      !add_external_string_capacity(
+          resources.identity, execution_backing_bytes) ||
+      !add_metal_segment_plan_backing(
+          resources.weight_segments, execution_backing_bytes) ||
+      !add_metal_segment_plan_backing(
+          resources.k_segments, execution_backing_bytes) ||
+      !add_metal_segment_plan_backing(
+          resources.v_segments, execution_backing_bytes) ||
+      !add_external_string_capacity(
+          resources.argument_buffer.reason_code,
+          execution_backing_bytes) ||
+      !add_external_string_capacity(
+          resources.argument_buffer.identity,
+          execution_backing_bytes) ||
+      !add_allocation_capacity(
+          resources.planned_resources.capacity(),
+          sizeof(LlmMetalPlannedResource), execution_backing_bytes)) {
+    return false;
+  }
+  if (resources.table_segments.has_value() &&
+      !add_metal_segment_plan_backing(
+          *resources.table_segments, execution_backing_bytes)) {
+    return false;
+  }
+  return !resources.paged_layout.has_value() ||
+         (add_external_string_capacity(
+              resources.paged_layout->reason_code,
+              execution_backing_bytes) &&
+          add_external_string_capacity(
+              resources.paged_layout->geometry_identity,
+              execution_backing_bytes));
+}
+
 bool calculate_actual_planner_storage_bytes(
     const LlmMemoryWorkPlan& plan, size_t& planner_storage_bytes) {
   const LlmCpuExecutionPlan* const cpu_plan =
       get_llm_cpu_execution_plan(plan);
-  if (cpu_plan == nullptr) {
-    return false;
-  }
+  const LlmMetalExecutionPlan* const metal_plan =
+      get_llm_metal_execution_plan(plan);
   planner_storage_bytes = 0;
   if (!add_allocation_capacity(plan.weight_layers.capacity(),
                                sizeof(LlmByteRange),
-                               planner_storage_bytes) ||
+                               planner_storage_bytes)) {
+    return false;
+  }
+  if (metal_plan != nullptr) {
+    size_t execution_backing_bytes = 0;
+    return calculate_metal_execution_plan_backing_bytes(
+               *metal_plan, execution_backing_bytes) &&
+           NumericUtils::checked_add(
+               planner_storage_bytes, execution_backing_bytes,
+               planner_storage_bytes);
+  }
+  if (cpu_plan == nullptr ||
       !add_allocation_capacity(cpu_plan->workers.capacity(),
                                sizeof(LlmWorkerWorkPlan),
                                planner_storage_bytes)) {
@@ -1942,6 +2032,108 @@ bool calculate_actual_planner_storage_bytes(
   return true;
 }
 
+bool calculate_metal_two_pass_planner_storage_bytes(
+    const LlmMemoryWorkPlan& plan, size_t& planner_storage_bytes,
+    size_t& admitted_execution_backing_bytes) {
+  const LlmMetalExecutionPlan* const metal_plan =
+      get_llm_metal_execution_plan(plan);
+  size_t weight_layer_bytes = 0;
+  size_t actual_execution_backing_bytes = 0;
+  size_t simultaneous_execution_backing_bytes = 0;
+  if (metal_plan == nullptr ||
+      !add_allocation_capacity(
+          plan.weight_layers.capacity(), sizeof(LlmByteRange),
+          weight_layer_bytes) ||
+      !calculate_metal_execution_plan_backing_bytes(
+          *metal_plan, actual_execution_backing_bytes) ||
+      !NumericUtils::checked_add(
+          actual_execution_backing_bytes,
+          LlmMetalPlannerAccounting::
+              RUNTIME_IDENTITY_GROWTH_RESERVE_BYTES,
+          admitted_execution_backing_bytes) ||
+      !NumericUtils::checked_multiply(
+          admitted_execution_backing_bytes, static_cast<size_t>(2),
+          simultaneous_execution_backing_bytes) ||
+      !NumericUtils::checked_add(
+          weight_layer_bytes, simultaneous_execution_backing_bytes,
+          planner_storage_bytes)) {
+    return false;
+  }
+  return true;
+}
+
+/** Recover the per-copy bound from the admitted draft/final planner peak. */
+bool calculate_metal_admitted_execution_backing_bytes(
+    const LlmMemoryWorkPlan& plan,
+    size_t& admitted_execution_backing_bytes) {
+  size_t weight_layer_bytes = 0;
+  if (get_llm_metal_execution_plan(plan) == nullptr ||
+      !add_allocation_capacity(
+          plan.weight_layers.capacity(), sizeof(LlmByteRange),
+          weight_layer_bytes) ||
+      plan.memory_budget.request.planner_storage_bytes <
+          weight_layer_bytes) {
+    return false;
+  }
+  const size_t simultaneous_execution_backing_bytes =
+      plan.memory_budget.request.planner_storage_bytes -
+      weight_layer_bytes;
+  if (simultaneous_execution_backing_bytes % 2 != 0) {
+    return false;
+  }
+  admitted_execution_backing_bytes =
+      simultaneous_execution_backing_bytes / 2;
+  return true;
+}
+
+bool calculate_conservative_string_backing_bytes(
+    size_t string_bytes, size_t& backing_bytes) {
+  size_t bytes_with_null = 0;
+  return NumericUtils::checked_add(
+             string_bytes, static_cast<size_t>(1), bytes_with_null) &&
+         NumericUtils::checked_multiply(
+             bytes_with_null, static_cast<size_t>(2), backing_bytes);
+}
+
+bool admit_metal_two_pass_planner_storage(
+    LlmMemoryWorkPlan& plan) {
+  size_t planner_storage_bytes = 0;
+  size_t admitted_execution_backing_bytes = 0;
+  if (!calculate_metal_two_pass_planner_storage_bytes(
+          plan, planner_storage_bytes,
+          admitted_execution_backing_bytes)) {
+    return false;
+  }
+  static_cast<void>(admitted_execution_backing_bytes);
+  const size_t mapping_granularity_bytes =
+      plan.memory_budget.request.mapping_granularity_bytes;
+  const size_t available_memory_bytes =
+      plan.memory_budget.available_memory_bytes;
+  plan.memory_budget.request = build_llm_memory_budget_request(
+      plan.geometry, 0, planner_storage_bytes, 0, 0,
+      mapping_granularity_bytes);
+  plan.memory_budget = evaluate_llm_memory_budget(
+      plan.memory_budget.request, available_memory_bytes);
+  return plan.memory_budget.valid;
+}
+
+bool final_metal_execution_backing_is_admitted(
+    const LlmMemoryWorkPlan& plan) {
+  const LlmMetalExecutionPlan* const metal_plan =
+      get_llm_metal_execution_plan(plan);
+  size_t admitted_execution_backing_bytes = 0;
+  size_t actual_execution_backing_bytes = 0;
+  if (metal_plan == nullptr ||
+      !calculate_metal_admitted_execution_backing_bytes(
+          plan, admitted_execution_backing_bytes) ||
+      !calculate_metal_execution_plan_backing_bytes(
+          *metal_plan, actual_execution_backing_bytes)) {
+    return false;
+  }
+  return actual_execution_backing_bytes <=
+         admitted_execution_backing_bytes;
+}
+
 bool finalize_plan_identities(LlmMemoryWorkPlan& plan) {
   const bool paged_layout = plan.kv_layout == LlmKvLayout::Paged;
   const bool prefill = plan.phase == LlmPhase::Prefill;
@@ -1961,43 +2153,73 @@ bool finalize_plan_identities(LlmMemoryWorkPlan& plan) {
     plan.component_identities.permutation_version.reset();
   }
   const LlmCpuExecutionPlan* const cpu_plan = get_llm_cpu_execution_plan(plan);
+  const LlmMetalExecutionPlan* const metal_plan =
+      get_llm_metal_execution_plan(plan);
   const bool executable_prefill =
       prefill && cpu_plan != nullptr && cpu_plan->prefill.has_value();
-  plan.component_identities.backend_executor_version =
-      executable_prefill
-          ? paged_layout
-                ? Constants::LLM_PREFILL_PAGED_CPU_EXECUTOR_VERSION
-                : Constants::LLM_PREFILL_CPU_EXECUTOR_VERSION
-          : prefill ? Constants::LLM_PREFILL_PLANNED_EXECUTOR_VERSION
-              : paged_layout ? Constants::LLM_PAGED_CPU_EXECUTOR_VERSION
-                             : Constants::LLM_CPU_EXECUTOR_VERSION;
-  plan.component_identities.resource_abi_version =
-      executable_prefill
-          ? paged_layout
-                ? Constants::LLM_PREFILL_PAGED_DESCRIPTOR_ABI_VERSION
-                : Constants::LLM_PREFILL_DESCRIPTOR_ABI_VERSION
-          : prefill ? Constants::LLM_PREFILL_RESOURCE_PLAN_VERSION
-              : paged_layout ? Constants::LLM_PAGED_DESCRIPTOR_ABI_VERSION
-                             : Constants::LLM_DESCRIPTOR_ABI_VERSION;
-  plan.component_identities.schedule_version =
-      prefill ? LlmPrefillVersion::OWNER_LOCAL_SCHEDULE
-              : paged_layout ? Constants::LLM_PAGED_CPU_SCHEDULE_VERSION
-                             : Constants::LLM_CPU_SCHEDULE_VERSION;
-  plan.component_identities.timer_policy_version =
-      Constants::LLM_CPU_TIMER_POLICY_VERSION;
+  if (plan.backend == LlmMemoryBackend::Metal) {
+    if (prefill || paged_layout || metal_plan == nullptr) {
+      return false;
+    }
+    plan.component_identities.backend_executor_version =
+        LlmMetalDecodeContiguousVersion::EXECUTOR;
+    plan.component_identities.resource_abi_version =
+        Constants::LLM_METAL_ARGUMENT_BUFFER_ABI_VERSION;
+    plan.component_identities.schedule_version =
+        LlmMetalDecodeContiguousVersion::SCHEDULE;
+    plan.component_identities.timer_policy_version =
+        LlmMetalDecodeContiguousVersion::TIMER;
+  } else {
+    plan.component_identities.backend_executor_version =
+        executable_prefill
+            ? paged_layout
+                  ? Constants::LLM_PREFILL_PAGED_CPU_EXECUTOR_VERSION
+                  : Constants::LLM_PREFILL_CPU_EXECUTOR_VERSION
+            : prefill ? Constants::LLM_PREFILL_PLANNED_EXECUTOR_VERSION
+                : paged_layout ? Constants::LLM_PAGED_CPU_EXECUTOR_VERSION
+                               : Constants::LLM_CPU_EXECUTOR_VERSION;
+    plan.component_identities.resource_abi_version =
+        executable_prefill
+            ? paged_layout
+                  ? Constants::LLM_PREFILL_PAGED_DESCRIPTOR_ABI_VERSION
+                  : Constants::LLM_PREFILL_DESCRIPTOR_ABI_VERSION
+            : prefill ? Constants::LLM_PREFILL_RESOURCE_PLAN_VERSION
+                : paged_layout ? Constants::LLM_PAGED_DESCRIPTOR_ABI_VERSION
+                               : Constants::LLM_DESCRIPTOR_ABI_VERSION;
+    plan.component_identities.schedule_version =
+        prefill ? LlmPrefillVersion::OWNER_LOCAL_SCHEDULE
+                : paged_layout ? Constants::LLM_PAGED_CPU_SCHEDULE_VERSION
+                               : Constants::LLM_CPU_SCHEDULE_VERSION;
+    plan.component_identities.timer_policy_version =
+        Constants::LLM_CPU_TIMER_POLICY_VERSION;
+  }
   plan.component_identities.buffer_pattern_version =
-      paged_layout ? Constants::LLM_PAGED_BUFFER_PATTERN_VERSION
-                   : Constants::LLM_BUFFER_PATTERN_VERSION;
+      plan.backend == LlmMemoryBackend::Metal
+          ? LlmMetalDecodeContiguousVersion::BUFFER_PATTERN
+          : paged_layout ? Constants::LLM_PAGED_BUFFER_PATTERN_VERSION
+                         : Constants::LLM_BUFFER_PATTERN_VERSION;
   plan.component_identities.write_pattern_version =
-      prefill ? LlmPrefillVersion::WRITE_PATTERN
-              : Constants::LLM_APPEND_PATTERN_VERSION;
+      plan.backend == LlmMemoryBackend::Metal
+          ? LlmMetalDecodeContiguousVersion::WRITE_PATTERN
+          : prefill ? LlmPrefillVersion::WRITE_PATTERN
+                    : Constants::LLM_APPEND_PATTERN_VERSION;
   plan.component_identities.checksum_pattern_version =
-      prefill ? paged_layout ? LlmPrefillVersion::PAGED_CHECKSUM_ORACLE
-                               : LlmPrefillVersion::CHECKSUM_ORACLE
-              : paged_layout ? Constants::LLM_PAGED_READ_CHECKSUM_VERSION
-                             : Constants::LLM_READ_CHECKSUM_VERSION;
-  plan.component_identities.msl_revision.reset();
-  plan.component_identities.msl_source_sha256.reset();
+      plan.backend == LlmMemoryBackend::Metal
+          ? LlmMetalDecodeContiguousVersion::CHECKSUM
+          : prefill ? paged_layout ? LlmPrefillVersion::PAGED_CHECKSUM_ORACLE
+                                   : LlmPrefillVersion::CHECKSUM_ORACLE
+                    : paged_layout ? Constants::LLM_PAGED_READ_CHECKSUM_VERSION
+                                   : Constants::LLM_READ_CHECKSUM_VERSION;
+  if (metal_plan != nullptr && metal_plan->valid &&
+      metal_plan->resources.valid && !metal_plan->msl_revision.empty() &&
+      !metal_plan->msl_source_sha256.empty()) {
+    plan.component_identities.msl_revision = metal_plan->msl_revision;
+    plan.component_identities.msl_source_sha256 =
+        metal_plan->msl_source_sha256;
+  } else {
+    plan.component_identities.msl_revision.reset();
+    plan.component_identities.msl_source_sha256.reset();
+  }
   plan.component_identities.identity =
       serialize_llm_component_identities(plan.component_identities);
   plan.plan_identity = build_model_plan_identity(plan);
@@ -2045,11 +2267,21 @@ bool add_identity_bytes(size_t bytes, size_t& total) {
 }
 
 bool build_auxiliary_preflight_view(
-    LlmMemoryWorkPlan& plan, LlmAuxiliaryPreflightView& view) {
+    LlmMemoryWorkPlan& plan, LlmAuxiliaryPreflightView& view,
+    bool reserve_metal_runtime_growth) {
   view = {};
   LlmCpuExecutionPlan* const cpu_plan = get_llm_cpu_execution_plan(plan);
-  if (cpu_plan == nullptr || !plan.memory_budget.valid ||
-      plan.plan_identity.empty() || cpu_plan->effective_workers == 0) {
+  const LlmMetalExecutionPlan* const metal_plan =
+      get_llm_metal_execution_plan(plan);
+  const bool cpu_valid = plan.backend == LlmMemoryBackend::Cpu &&
+                         cpu_plan != nullptr &&
+                         cpu_plan->effective_workers != 0;
+  const bool metal_valid = plan.backend == LlmMemoryBackend::Metal &&
+                           metal_plan != nullptr &&
+                           plan.phase == LlmPhase::Decode &&
+                           plan.kv_layout == LlmKvLayout::Contiguous;
+  if ((!cpu_valid && !metal_valid) || !plan.memory_budget.valid ||
+      plan.plan_identity.empty()) {
     return false;
   }
 
@@ -2057,17 +2289,28 @@ bool build_auxiliary_preflight_view(
   plan.valid = true;
   view.backend = plan.backend;
   view.kv_layout = plan.kv_layout;
-  view.effective_workers = cpu_plan->effective_workers;
-  view.total_layer_descriptors = cpu_plan->total_layer_descriptors;
-  view.total_sequence_descriptors = cpu_plan->total_sequence_descriptors;
-  view.k_or_v_static_reference_count =
-      plan.kv_layout == LlmKvLayout::Paged
-          ? cpu_plan->paged.has_value()
-                ? cpu_plan->paged->layout.total_physical_blocks
-                : plan.geometry.total_physical_blocks
-          : plan.phase == LlmPhase::Prefill
-                ? 0
-                : cpu_plan->total_sequence_descriptors;
+  if (cpu_plan != nullptr) {
+    view.effective_workers = cpu_plan->effective_workers;
+    view.total_layer_descriptors = cpu_plan->total_layer_descriptors;
+    view.total_sequence_descriptors = cpu_plan->total_sequence_descriptors;
+    view.k_or_v_static_reference_count =
+        plan.kv_layout == LlmKvLayout::Paged
+            ? cpu_plan->paged.has_value()
+                  ? cpu_plan->paged->layout.total_physical_blocks
+                  : plan.geometry.total_physical_blocks
+            : plan.phase == LlmPhase::Prefill
+                  ? 0
+                  : cpu_plan->total_sequence_descriptors;
+  } else if (metal_plan->valid && metal_plan->resources.valid) {
+    view.metal_planned_resource_count =
+        metal_plan->resources.planned_resources.size();
+    for (const LlmMetalPlannedResource& resource :
+         metal_plan->resources.planned_resources) {
+      if (resource.persistent) {
+        ++view.metal_persistent_resource_count;
+      }
+    }
+  }
   view.model_plan_identity_bytes = plan.plan_identity.size();
 
   constexpr std::array<LlmScenario, kLlmScenarioCount> kScenarios = {
@@ -2076,7 +2319,11 @@ bool build_auxiliary_preflight_view(
   std::array<size_t, kLlmScenarioCount> maximum_work_units{};
   for (size_t index = 0; index < kLlmScenarioCount; ++index) {
     const LlmScenarioLimits limits =
-        calculate_llm_scenario_limits(plan.geometry, kScenarios[index]);
+        calculate_llm_scenario_limits(
+            plan.geometry, kScenarios[index],
+            plan.backend == LlmMemoryBackend::Metal
+                ? Constants::LLM_METAL_MAX_WORK_UNITS_PER_DISPATCH
+                : Constants::LLM_MAX_WORK_UNITS_PER_MEASUREMENT);
     if (!limits.valid) {
       plan.valid = original_valid;
       return false;
@@ -2134,7 +2381,7 @@ bool build_auxiliary_preflight_view(
       add_optional(components.msl_revision) &&
       add_optional(components.msl_source_sha256) &&
       add_string(components.identity);
-  if (json_valid && cpu_plan->paged.has_value()) {
+  if (json_valid && cpu_plan != nullptr && cpu_plan->paged.has_value()) {
     const LlmPagedCpuExecutionPlan& paged = *cpu_plan->paged;
     json_valid =
         add_string(paged.layout.geometry_identity) &&
@@ -2151,7 +2398,7 @@ bool build_auxiliary_preflight_view(
                    add_string(paged.ownership.identity);
     }
   }
-  if (json_valid && cpu_plan->prefill.has_value()) {
+  if (json_valid && cpu_plan != nullptr && cpu_plan->prefill.has_value()) {
     json_valid = add_string(cpu_plan->prefill->identity);
     for (const LlmPrefillCpuScenarioExecutionPlan& scenario :
          cpu_plan->prefill->scenarios) {
@@ -2162,6 +2409,57 @@ bool build_auxiliary_preflight_view(
                      add_string(scope.identity);
       }
     }
+  }
+  if (json_valid && metal_plan != nullptr && metal_plan->valid &&
+      metal_plan->resources.valid) {
+    const LlmMetalResourcePlan& resources = metal_plan->resources;
+    json_valid = add_string(metal_plan->reason_code) &&
+                 add_string(metal_plan->msl_revision) &&
+                 add_string(metal_plan->msl_source_sha256) &&
+                 add_string(metal_plan->identity) &&
+                 add_string(resources.reason_code) &&
+                 add_string(resources.identity) &&
+                 add_string(resources.weight_segments.reason_code) &&
+                 add_string(resources.weight_segments.identity) &&
+                 add_string(resources.k_segments.reason_code) &&
+                 add_string(resources.k_segments.identity) &&
+                 add_string(resources.v_segments.reason_code) &&
+                 add_string(resources.v_segments.identity) &&
+                 add_string(resources.argument_buffer.reason_code) &&
+                 add_string(resources.argument_buffer.identity);
+    if (json_valid && resources.table_segments.has_value()) {
+      json_valid = add_string(resources.table_segments->reason_code) &&
+                   add_string(resources.table_segments->identity);
+    }
+  }
+  if (json_valid && reserve_metal_runtime_growth && metal_plan != nullptr) {
+    const auto reserve = [](size_t& value) {
+      return NumericUtils::checked_add(
+          value, kMetalRuntimeIdentityReserveBytes, value);
+    };
+    json_valid = reserve(view.model_plan_identity_bytes) &&
+                 reserve(view.frozen_model_plan_identity_bytes) &&
+                 reserve(view.frozen_plan_identity_bytes) &&
+                 NumericUtils::checked_add(
+                     json_identity_bytes,
+                     kMetalRuntimeJsonIdentityReserveBytes,
+                     json_identity_bytes);
+    for (size_t index = 0; json_valid && index < kLlmScenarioCount;
+         ++index) {
+      json_valid =
+          reserve(view.maximum_scenario_plan_identity_bytes[index]) &&
+          reserve(view.frozen_scenario_model_plan_identity_bytes[index]) &&
+          reserve(view.frozen_scenario_plan_identity_bytes[index]);
+    }
+  }
+  if (json_valid && metal_plan != nullptr && metal_plan->valid &&
+      metal_plan->resources.valid) {
+    json_valid = calculate_metal_admitted_execution_backing_bytes(
+                     plan,
+                     view.metal_resolved_execution_plan_backing_bytes) &&
+                 calculate_conservative_string_backing_bytes(
+                     view.model_plan_identity_bytes,
+                     view.metal_resolved_plan_identity_backing_bytes);
   }
   plan.valid = original_valid;
   if (!json_valid) {
@@ -2175,27 +2473,67 @@ bool build_auxiliary_preflight_view(
 bool auxiliary_preflight_views_match(
     const LlmAuxiliaryPreflightView& lhs,
     const LlmAuxiliaryPreflightView& rhs) {
-  return lhs.valid && rhs.valid && lhs.backend == rhs.backend &&
-         lhs.kv_layout == rhs.kv_layout &&
-         lhs.effective_workers == rhs.effective_workers &&
-         lhs.total_layer_descriptors == rhs.total_layer_descriptors &&
-         lhs.total_sequence_descriptors == rhs.total_sequence_descriptors &&
-         lhs.k_or_v_static_reference_count ==
-             rhs.k_or_v_static_reference_count &&
-         lhs.model_plan_identity_bytes == rhs.model_plan_identity_bytes &&
-         lhs.maximum_scenario_plan_identity_bytes ==
-             rhs.maximum_scenario_plan_identity_bytes &&
-         lhs.frozen_reason_code_bytes == rhs.frozen_reason_code_bytes &&
-         lhs.frozen_model_plan_identity_bytes ==
-             rhs.frozen_model_plan_identity_bytes &&
-         lhs.frozen_plan_identity_bytes == rhs.frozen_plan_identity_bytes &&
-         lhs.frozen_scenario_reason_code_bytes ==
-             rhs.frozen_scenario_reason_code_bytes &&
-         lhs.frozen_scenario_model_plan_identity_bytes ==
-             rhs.frozen_scenario_model_plan_identity_bytes &&
-         lhs.frozen_scenario_plan_identity_bytes ==
-             rhs.frozen_scenario_plan_identity_bytes &&
-         lhs.json_identity_string_bytes == rhs.json_identity_string_bytes;
+  const bool fixed_match =
+      lhs.valid && rhs.valid && lhs.backend == rhs.backend &&
+      lhs.kv_layout == rhs.kv_layout &&
+      lhs.effective_workers == rhs.effective_workers &&
+      lhs.total_layer_descriptors == rhs.total_layer_descriptors &&
+      lhs.total_sequence_descriptors == rhs.total_sequence_descriptors &&
+      lhs.k_or_v_static_reference_count ==
+          rhs.k_or_v_static_reference_count &&
+      lhs.frozen_reason_code_bytes == rhs.frozen_reason_code_bytes &&
+      lhs.frozen_scenario_reason_code_bytes ==
+          rhs.frozen_scenario_reason_code_bytes;
+  if (!fixed_match) {
+    return false;
+  }
+  if (lhs.backend == LlmMemoryBackend::Cpu) {
+    return lhs.metal_planned_resource_count ==
+               rhs.metal_planned_resource_count &&
+           lhs.metal_persistent_resource_count ==
+               rhs.metal_persistent_resource_count &&
+           lhs.metal_resolved_execution_plan_backing_bytes ==
+               rhs.metal_resolved_execution_plan_backing_bytes &&
+           lhs.metal_resolved_plan_identity_backing_bytes ==
+               rhs.metal_resolved_plan_identity_backing_bytes &&
+           lhs.model_plan_identity_bytes == rhs.model_plan_identity_bytes &&
+           lhs.maximum_scenario_plan_identity_bytes ==
+               rhs.maximum_scenario_plan_identity_bytes &&
+           lhs.frozen_model_plan_identity_bytes ==
+               rhs.frozen_model_plan_identity_bytes &&
+           lhs.frozen_plan_identity_bytes == rhs.frozen_plan_identity_bytes &&
+           lhs.frozen_scenario_model_plan_identity_bytes ==
+               rhs.frozen_scenario_model_plan_identity_bytes &&
+           lhs.frozen_scenario_plan_identity_bytes ==
+               rhs.frozen_scenario_plan_identity_bytes &&
+           lhs.json_identity_string_bytes == rhs.json_identity_string_bytes;
+  }
+  if (lhs.metal_planned_resource_count <
+          rhs.metal_planned_resource_count ||
+      lhs.metal_persistent_resource_count <
+          rhs.metal_persistent_resource_count ||
+      lhs.metal_resolved_execution_plan_backing_bytes <
+          rhs.metal_resolved_execution_plan_backing_bytes ||
+      lhs.metal_resolved_plan_identity_backing_bytes <
+          rhs.metal_resolved_plan_identity_backing_bytes ||
+      lhs.model_plan_identity_bytes < rhs.model_plan_identity_bytes ||
+      lhs.frozen_model_plan_identity_bytes <
+          rhs.frozen_model_plan_identity_bytes ||
+      lhs.frozen_plan_identity_bytes < rhs.frozen_plan_identity_bytes ||
+      lhs.json_identity_string_bytes < rhs.json_identity_string_bytes) {
+    return false;
+  }
+  for (size_t index = 0; index < kLlmScenarioCount; ++index) {
+    if (lhs.maximum_scenario_plan_identity_bytes[index] <
+            rhs.maximum_scenario_plan_identity_bytes[index] ||
+        lhs.frozen_scenario_model_plan_identity_bytes[index] <
+            rhs.frozen_scenario_model_plan_identity_bytes[index] ||
+        lhs.frozen_scenario_plan_identity_bytes[index] <
+            rhs.frozen_scenario_plan_identity_bytes[index]) {
+      return false;
+    }
+  }
+  return true;
 }
 
 void discard_executable_templates(LlmMemoryWorkPlan& plan) {
@@ -2210,6 +2548,11 @@ void discard_executable_templates(LlmMemoryWorkPlan& plan) {
     cpu_plan->paged.reset();
     cpu_plan->prefill.reset();
     cpu_plan->effective_workers = 0;
+  }
+  LlmMetalExecutionPlan* const metal_plan =
+      get_llm_metal_execution_plan(plan);
+  if (metal_plan != nullptr) {
+    *metal_plan = LlmMetalExecutionPlan{};
   }
 }
 
@@ -3116,6 +3459,204 @@ LlmMemoryBudget evaluate_llm_memory_budget(
   return budget;
 }
 
+namespace {
+
+bool metal_segment_total_matches(const LlmKvSegmentPlan& segments,
+                                 size_t expected_bytes) noexcept {
+  if (!segments.valid || segments.segment_count == 0 ||
+      segments.segment_count != segments.segment_lengths.size()) {
+    return false;
+  }
+  size_t total = 0;
+  for (size_t length : segments.segment_lengths) {
+    if (length == 0 ||
+        !NumericUtils::checked_add(total, length, total)) {
+      return false;
+    }
+  }
+  return total == expected_bytes;
+}
+
+bool metal_execution_plan_matches(
+    const LlmMemoryWorkPlan& plan,
+    const LlmMetalExecutionPlan& execution,
+    size_t expected_additional_owned_bytes) noexcept {
+  if (plan.backend != LlmMemoryBackend::Metal ||
+      plan.phase != LlmPhase::Decode ||
+      plan.kv_layout != LlmKvLayout::Contiguous ||
+      !plan.geometry.valid || !plan.geometry.decode.has_value() ||
+      plan.geometry.prefill.has_value() || !execution.valid ||
+      execution.reason_code != LlmMetalPlanReason::VALID ||
+      execution.identity.empty() || execution.msl_revision.empty() ||
+      execution.msl_source_sha256.size() != 64) {
+    return false;
+  }
+  const LlmMetalResourcePlan& resources = execution.resources;
+  return resources.valid &&
+         resources.reason_code == LlmMetalPlanReason::VALID &&
+         resources.identity.size() <= execution.identity.size() &&
+         !resources.paged_layout.has_value() &&
+         !resources.table_segments.has_value() &&
+         resources.additional_owned_bytes ==
+             expected_additional_owned_bytes &&
+         resources.host_mapping_granularity_bytes ==
+             plan.memory_budget.request.mapping_granularity_bytes &&
+         resources.available_memory_bytes ==
+             plan.memory_budget.available_memory_bytes &&
+         metal_segment_total_matches(
+             resources.weight_segments,
+             plan.geometry.active_weight_bytes_per_work_unit) &&
+         metal_segment_total_matches(resources.k_segments,
+                                     plan.geometry.k_mapping_bytes) &&
+         metal_segment_total_matches(resources.v_segments,
+                                     plan.geometry.v_mapping_bytes) &&
+         resources.known_owned_peak_bytes <=
+             resources.admitted_budget_bytes;
+}
+
+bool apply_metal_memory_budget(
+    LlmMemoryWorkPlan& plan,
+    const LlmMetalExecutionPlan& execution,
+    size_t checksum_auxiliary_bytes,
+    size_t orchestration_auxiliary_bytes) noexcept {
+  size_t command_auxiliary_bytes = 0;
+  size_t additional_owned_bytes = 0;
+  if (!NumericUtils::checked_add(checksum_auxiliary_bytes,
+                                 orchestration_auxiliary_bytes,
+                                 command_auxiliary_bytes) ||
+      !NumericUtils::checked_add(
+          plan.memory_budget.request.planner_storage_bytes,
+          command_auxiliary_bytes, additional_owned_bytes) ||
+      additional_owned_bytes !=
+          execution.resources.additional_owned_bytes) {
+    return false;
+  }
+  LlmMemoryBudgetRequest request = plan.memory_budget.request;
+  request.valid = true;
+  request.reason_code = LlmWorkPlanReason::VALID;
+  request.requested_weight_mapping_bytes =
+      plan.geometry.active_weight_bytes_per_work_unit;
+  request.requested_k_mapping_bytes = plan.geometry.k_mapping_bytes;
+  request.requested_v_mapping_bytes = plan.geometry.v_mapping_bytes;
+  request.committed_weight_mapping_bytes =
+      request.requested_weight_mapping_bytes;
+  request.committed_k_mapping_bytes = request.requested_k_mapping_bytes;
+  request.committed_v_mapping_bytes = request.requested_v_mapping_bytes;
+  request.requested_block_table_mapping_bytes = 0;
+  request.committed_block_table_mapping_bytes = 0;
+  request.requested_data_bytes = plan.geometry.total_data_mapping_bytes;
+  request.committed_data_bytes = plan.geometry.total_data_mapping_bytes;
+  request.layout_transient_bytes =
+      execution.resources.transient_peak_bytes;
+  request.descriptor_bytes = 0;
+  request.checksum_auxiliary_bytes = checksum_auxiliary_bytes;
+  request.orchestration_auxiliary_bytes = orchestration_auxiliary_bytes;
+  request.auxiliary_bytes = additional_owned_bytes;
+  request.setup_peak_bytes = execution.resources.known_owned_peak_bytes;
+  request.runtime_peak_bytes = execution.resources.known_owned_peak_bytes;
+  request.required_total_bytes = execution.resources.known_owned_peak_bytes;
+
+  plan.memory_budget.request = std::move(request);
+  plan.memory_budget.available_memory_bytes =
+      execution.resources.available_memory_bytes;
+  plan.memory_budget.allowed_memory_bytes =
+      execution.resources.admitted_budget_bytes;
+  plan.memory_budget.used_fallback =
+      execution.resources.available_memory_bytes == 0;
+  plan.memory_budget.valid = true;
+  plan.memory_budget.reason_code = LlmWorkPlanReason::WITHIN_MEMORY_BUDGET;
+  return true;
+}
+
+bool install_metal_execution_plan(
+    LlmMemoryWorkPlan& plan,
+    LlmMetalExecutionPlan&& execution,
+    size_t checksum_auxiliary_bytes,
+    size_t orchestration_auxiliary_bytes) {
+  size_t command_auxiliary_bytes = 0;
+  size_t additional_owned_bytes = 0;
+  if (!NumericUtils::checked_add(checksum_auxiliary_bytes,
+                                 orchestration_auxiliary_bytes,
+                                 command_auxiliary_bytes) ||
+      !NumericUtils::checked_add(
+          plan.memory_budget.request.planner_storage_bytes,
+          command_auxiliary_bytes, additional_owned_bytes) ||
+      !metal_execution_plan_matches(plan, execution,
+                                    additional_owned_bytes) ||
+      !apply_metal_memory_budget(plan, execution,
+                                 checksum_auxiliary_bytes,
+                                 orchestration_auxiliary_bytes)) {
+    return false;
+  }
+  plan.backend_execution_plan = std::move(execution);
+  return finalize_plan_identities(plan);
+}
+
+bool finalize_nonexecutable_metal_plan(
+    LlmMemoryWorkPlan& plan,
+    const LlmAuxiliaryPreflightView& admitted_preflight,
+    size_t checksum_auxiliary_bytes,
+    size_t orchestration_auxiliary_bytes) {
+  const LlmMetalExecutionPlan* const metal_plan =
+      get_llm_metal_execution_plan(plan);
+  if (metal_plan == nullptr || metal_plan->valid) {
+    plan.reason_code = LlmWorkPlanReason::INVALID_MODEL_WORK_PLAN;
+    return false;
+  }
+
+  const size_t mapping_granularity_bytes =
+      plan.memory_budget.request.mapping_granularity_bytes;
+  const size_t planner_storage_bytes =
+      plan.memory_budget.request.planner_storage_bytes;
+  plan.memory_budget.request = build_llm_memory_budget_request(
+      plan.geometry, 0, planner_storage_bytes,
+      checksum_auxiliary_bytes, orchestration_auxiliary_bytes,
+      mapping_granularity_bytes);
+  plan.memory_budget = evaluate_llm_memory_budget(
+      plan.memory_budget.request, plan.memory_budget.available_memory_bytes);
+  if (!plan.memory_budget.valid) {
+    plan.reason_code = plan.memory_budget.reason_code;
+    return false;
+  }
+  if (!finalize_plan_identities(plan)) {
+    plan.reason_code = LlmWorkPlanReason::AUXILIARY_PREFLIGHT_MISMATCH;
+    return false;
+  }
+
+  plan.valid = true;
+  if (admitted_preflight.valid) {
+    LlmAuxiliaryPreflightView finalized_view;
+    if (!build_auxiliary_preflight_view(plan, finalized_view, false) ||
+        !auxiliary_preflight_views_match(admitted_preflight,
+                                         finalized_view)) {
+      plan.valid = false;
+      plan.reason_code =
+          LlmWorkPlanReason::AUXILIARY_PREFLIGHT_MISMATCH;
+      return false;
+    }
+  }
+  plan.reason_code = LlmWorkPlanReason::VALID;
+  return true;
+}
+
+}  // namespace
+
+bool calculate_llm_metal_resolved_plan_backing_bytes(
+    const LlmMemoryWorkPlan& plan, size_t model_plan_identity_bytes,
+    size_t& execution_plan_backing_bytes,
+    size_t& plan_identity_backing_bytes) noexcept {
+  execution_plan_backing_bytes = 0;
+  plan_identity_backing_bytes = 0;
+  const LlmMetalExecutionPlan* const execution =
+      get_llm_metal_execution_plan(plan);
+  return execution != nullptr && execution->valid &&
+         execution->resources.valid && model_plan_identity_bytes != 0 &&
+         calculate_metal_execution_plan_backing_bytes(
+             *execution, execution_plan_backing_bytes) &&
+         calculate_conservative_string_backing_bytes(
+             model_plan_identity_bytes, plan_identity_backing_bytes);
+}
+
 LlmMemoryWorkPlan build_llm_memory_work_plan_candidate(
     const LlmMemoryWorkPlanRequest& request,
     const LlmKvStopRequested& stop_requested) {
@@ -3141,6 +3682,98 @@ LlmMemoryWorkPlan build_llm_memory_work_plan_candidate(
                              LlmSeedDomain::KvOnlyScenario),
       derive_llm_domain_seed(request.base_seed,
                              LlmSeedDomain::MixedScenario)};
+  plan.geometry = resolve_llm_geometry(request.geometry);
+  if (!plan.geometry.valid) {
+    plan.reason_code = plan.geometry.reason_code;
+    return plan;
+  }
+  if (request.backend == LlmMemoryBackend::Metal) {
+    if (plan.phase != LlmPhase::Decode) {
+      plan.reason_code = LlmWorkPlanReason::PHASE_NOT_ACTIVATED;
+      return plan;
+    }
+    if (plan.kv_layout != LlmKvLayout::Contiguous) {
+      plan.reason_code = LlmWorkPlanReason::KV_LAYOUT_NOT_ACTIVATED;
+      return plan;
+    }
+    if (request.requested_workers != 0 || request.available_workers != 0) {
+      plan.reason_code = LlmWorkPlanReason::METAL_WORKERS_NOT_APPLICABLE;
+      return plan;
+    }
+    if (!json_integer_is_safe(request.geometry.layer_count) ||
+        !json_integer_is_safe(request.geometry.query_head_count) ||
+        !json_integer_is_safe(request.geometry.kv_head_count) ||
+        !json_integer_is_safe(request.geometry.head_dimension) ||
+        !json_integer_is_safe(request.geometry.visible_context_tokens) ||
+        !json_integer_is_safe(request.geometry.batch_size)) {
+      plan.reason_code = LlmWorkPlanReason::JSON_INTEGER_OUT_OF_RANGE;
+      return plan;
+    }
+
+    try {
+      plan.weight_layers.reserve(plan.geometry.layer_count);
+      const size_t layer_base =
+          plan.geometry.active_weight_bytes_per_work_unit /
+          plan.geometry.layer_count;
+      const size_t layer_remainder =
+          plan.geometry.active_weight_bytes_per_work_unit %
+          plan.geometry.layer_count;
+      size_t offset = 0;
+      for (size_t layer = 0; layer < plan.geometry.layer_count; ++layer) {
+        const size_t span =
+            layer_base + (layer < layer_remainder ? 1 : 0);
+        plan.weight_layers.push_back({offset, span});
+        if (!NumericUtils::checked_add(offset, span, offset)) {
+          throw std::length_error("Metal weight layer overflow");
+        }
+      }
+      if (offset != plan.geometry.active_weight_bytes_per_work_unit) {
+        throw std::length_error("Metal weight layer coverage mismatch");
+      }
+    } catch (const std::bad_alloc&) {
+      plan.reason_code = LlmWorkPlanReason::PLANNER_ALLOCATION_FAILED;
+      return plan;
+    } catch (const std::length_error&) {
+      plan.reason_code = LlmWorkPlanReason::PLANNER_ALLOCATION_FAILED;
+      return plan;
+    }
+
+    size_t planner_storage_bytes = 0;
+    if (!calculate_actual_planner_storage_bytes(
+            plan, planner_storage_bytes)) {
+      plan.reason_code = LlmWorkPlanReason::PLANNER_STORAGE_BYTES_OVERFLOW;
+      return plan;
+    }
+    plan.memory_budget.request = build_llm_memory_budget_request(
+        plan.geometry, 0, planner_storage_bytes,
+        request.checksum_auxiliary_bytes,
+        request.orchestration_auxiliary_bytes,
+        request.mapping_granularity_bytes);
+    plan.memory_budget = evaluate_llm_memory_budget(
+        plan.memory_budget.request, request.available_memory_bytes);
+    if (!plan.memory_budget.valid) {
+      plan.reason_code = plan.memory_budget.reason_code;
+      return plan;
+    }
+    try {
+      if (!finalize_plan_identities(plan)) {
+        discard_executable_templates(plan);
+        plan.reason_code = LlmWorkPlanReason::AUXILIARY_PREFLIGHT_MISMATCH;
+        return plan;
+      }
+    } catch (const std::bad_alloc&) {
+      discard_executable_templates(plan);
+      plan.reason_code = LlmWorkPlanReason::PLANNER_ALLOCATION_FAILED;
+      return plan;
+    } catch (const std::length_error&) {
+      discard_executable_templates(plan);
+      plan.reason_code = LlmWorkPlanReason::PLANNER_ALLOCATION_FAILED;
+      return plan;
+    }
+    plan.valid = false;
+    plan.reason_code = LlmWorkPlanReason::VALID;
+    return plan;
+  }
   if (request.backend != LlmMemoryBackend::Cpu) {
     plan.reason_code = LlmWorkPlanReason::BACKEND_NOT_ACTIVATED;
     return plan;
@@ -3152,11 +3785,6 @@ LlmMemoryWorkPlan build_llm_memory_work_plan_candidate(
   }
   cpu_plan->requested_workers = request.requested_workers;
   cpu_plan->available_workers = request.available_workers;
-  plan.geometry = resolve_llm_geometry(request.geometry);
-  if (!plan.geometry.valid) {
-    plan.reason_code = plan.geometry.reason_code;
-    return plan;
-  }
   const bool prefill_phase = plan.phase == LlmPhase::Prefill;
   if (prefill_phase) {
     plan.prefill_plan = resolve_llm_prefill_plan(
@@ -3772,7 +4400,7 @@ LlmMemoryWorkPlanDraft prepare_llm_memory_work_plan(
   }
   try {
     if (!build_auxiliary_preflight_view(
-            draft.candidate, draft.auxiliary_preflight)) {
+            draft.candidate, draft.auxiliary_preflight, true)) {
       discard_executable_templates(draft.candidate);
       draft.candidate.reason_code =
           LlmWorkPlanReason::AUXILIARY_PREFLIGHT_MISMATCH;
@@ -3797,6 +4425,75 @@ LlmMemoryWorkPlanDraft prepare_llm_memory_work_plan(
   return draft;
 }
 
+bool attach_llm_metal_execution_plan(
+    LlmMemoryWorkPlanDraft& draft,
+    LlmMetalExecutionPlan&& metal_execution_plan) noexcept {
+  if (!draft.valid ||
+      draft.candidate.reason_code != LlmWorkPlanReason::VALID ||
+      draft.candidate.valid ||
+      draft.candidate.backend != LlmMemoryBackend::Metal) {
+    return false;
+  }
+  try {
+    const std::string runtime_reason = metal_execution_plan.reason_code;
+    const bool installed =
+        metal_execution_plan.valid &&
+        install_metal_execution_plan(
+            draft.candidate, std::move(metal_execution_plan), 0, 0);
+    if (!installed) {
+      LlmMetalExecutionPlan* retained =
+          get_llm_metal_execution_plan(draft.candidate);
+      if (retained == nullptr || !retained->valid) {
+        draft.candidate.backend_execution_plan =
+            std::move(metal_execution_plan);
+        retained = get_llm_metal_execution_plan(draft.candidate);
+      }
+      if (retained == nullptr) {
+        draft.valid = false;
+        draft.reason_code = LlmWorkPlanReason::INVALID_MODEL_WORK_PLAN;
+        return false;
+      }
+      retained->valid = false;
+      retained->reason_code =
+          runtime_reason.empty() ||
+                  runtime_reason == LlmMetalPlanReason::VALID
+              ? LlmWorkPlanReason::INVALID_MODEL_WORK_PLAN
+              : runtime_reason;
+      if (!finalize_plan_identities(draft.candidate)) {
+        draft.valid = false;
+        draft.reason_code =
+            LlmWorkPlanReason::AUXILIARY_PREFLIGHT_MISMATCH;
+        return false;
+      }
+    }
+    if (!admit_metal_two_pass_planner_storage(
+            draft.candidate) ||
+        !build_auxiliary_preflight_view(
+            draft.candidate, draft.auxiliary_preflight, true)) {
+      draft.valid = false;
+      draft.reason_code =
+          draft.candidate.memory_budget.valid
+              ? LlmWorkPlanReason::AUXILIARY_PREFLIGHT_MISMATCH
+              : draft.candidate.memory_budget.reason_code;
+      return false;
+    }
+    draft.reason_code = LlmWorkPlanReason::VALID;
+    return true;
+  } catch (const std::bad_alloc&) {
+    draft.valid = false;
+    draft.reason_code = LlmWorkPlanReason::PLANNER_ALLOCATION_FAILED;
+  } catch (const std::length_error&) {
+    draft.valid = false;
+    draft.reason_code = LlmWorkPlanReason::PLANNER_ALLOCATION_FAILED;
+  } catch (...) {
+    draft.valid = false;
+    draft.reason_code = LlmWorkPlanReason::INVALID_MODEL_WORK_PLAN;
+  }
+  discard_executable_templates(draft.candidate);
+  draft.candidate.reason_code = draft.reason_code;
+  return false;
+}
+
 LlmMemoryWorkPlan finalize_llm_memory_work_plan(
     LlmMemoryWorkPlanDraft&& draft, size_t checksum_auxiliary_bytes,
     size_t orchestration_auxiliary_bytes,
@@ -3806,6 +4503,27 @@ LlmMemoryWorkPlan finalize_llm_memory_work_plan(
       plan.valid) {
     if (plan.reason_code == LlmWorkPlanReason::VALID) {
       plan.reason_code = draft.reason_code;
+    }
+    return plan;
+  }
+  if (plan.backend == LlmMemoryBackend::Metal) {
+    try {
+      if (!finalize_nonexecutable_metal_plan(
+              plan, draft.auxiliary_preflight,
+              checksum_auxiliary_bytes,
+              orchestration_auxiliary_bytes)) {
+        return plan;
+      }
+    } catch (const std::bad_alloc&) {
+      plan.valid = false;
+      plan.reason_code = LlmWorkPlanReason::PLANNER_ALLOCATION_FAILED;
+      discard_executable_templates(plan);
+      return plan;
+    } catch (const std::length_error&) {
+      plan.valid = false;
+      plan.reason_code = LlmWorkPlanReason::PLANNER_ALLOCATION_FAILED;
+      discard_executable_templates(plan);
+      return plan;
     }
     return plan;
   }
@@ -3903,7 +4621,7 @@ LlmMemoryWorkPlan finalize_llm_memory_work_plan(
     plan.valid = true;
     if (draft.auxiliary_preflight.valid) {
       LlmAuxiliaryPreflightView finalized_view;
-      if (!build_auxiliary_preflight_view(plan, finalized_view) ||
+      if (!build_auxiliary_preflight_view(plan, finalized_view, false) ||
           !auxiliary_preflight_views_match(
               draft.auxiliary_preflight, finalized_view)) {
         plan.valid = false;
@@ -3925,6 +4643,119 @@ LlmMemoryWorkPlan finalize_llm_memory_work_plan(
     return plan;
   }
 
+  plan.reason_code = LlmWorkPlanReason::VALID;
+  return plan;
+}
+
+LlmMemoryWorkPlan finalize_llm_memory_work_plan(
+    LlmMemoryWorkPlanDraft&& draft,
+    LlmMetalExecutionPlan&& metal_execution_plan,
+    size_t checksum_auxiliary_bytes,
+    size_t orchestration_auxiliary_bytes,
+    const LlmKvStopRequested& stop_requested) {
+  static_cast<void>(stop_requested);
+  LlmMemoryWorkPlan plan = std::move(draft.candidate);
+  if (!draft.valid || plan.reason_code != LlmWorkPlanReason::VALID ||
+      plan.valid || plan.backend != LlmMemoryBackend::Metal) {
+    if (plan.reason_code == LlmWorkPlanReason::VALID) {
+      plan.reason_code = draft.reason_code;
+    }
+    return plan;
+  }
+  const std::string runtime_reason = metal_execution_plan.reason_code;
+  try {
+    const bool installed =
+        metal_execution_plan.valid &&
+        install_metal_execution_plan(
+            plan, std::move(metal_execution_plan),
+            checksum_auxiliary_bytes, orchestration_auxiliary_bytes);
+    if (!installed) {
+      LlmMetalExecutionPlan* retained =
+          get_llm_metal_execution_plan(plan);
+      if (retained == nullptr || !retained->valid) {
+        plan.backend_execution_plan = std::move(metal_execution_plan);
+        retained = get_llm_metal_execution_plan(plan);
+      }
+      if (retained == nullptr) {
+        plan.reason_code = LlmWorkPlanReason::INVALID_MODEL_WORK_PLAN;
+        return plan;
+      }
+      retained->valid = false;
+      retained->reason_code =
+          runtime_reason.empty() ||
+                  runtime_reason == LlmMetalPlanReason::VALID
+              ? LlmWorkPlanReason::INVALID_MODEL_WORK_PLAN
+              : runtime_reason;
+      if (!final_metal_execution_backing_is_admitted(plan)) {
+        plan.reason_code =
+            LlmWorkPlanReason::AUXILIARY_PREFLIGHT_MISMATCH;
+        return plan;
+      }
+      if (!finalize_nonexecutable_metal_plan(
+              plan, draft.auxiliary_preflight,
+              checksum_auxiliary_bytes,
+              orchestration_auxiliary_bytes)) {
+        return plan;
+      }
+      return plan;
+    }
+    if (!final_metal_execution_backing_is_admitted(plan)) {
+      LlmMetalExecutionPlan* const retained =
+          get_llm_metal_execution_plan(plan);
+      if (retained == nullptr) {
+        plan.reason_code =
+            LlmWorkPlanReason::AUXILIARY_PREFLIGHT_MISMATCH;
+        return plan;
+      }
+      retained->valid = false;
+      retained->reason_code =
+          LlmWorkPlanReason::AUXILIARY_PREFLIGHT_MISMATCH;
+      if (!finalize_nonexecutable_metal_plan(
+              plan, draft.auxiliary_preflight,
+              checksum_auxiliary_bytes,
+              orchestration_auxiliary_bytes)) {
+        return plan;
+      }
+      return plan;
+    }
+    plan.valid = true;
+    if (draft.auxiliary_preflight.valid) {
+      LlmAuxiliaryPreflightView finalized_view;
+      if (!build_auxiliary_preflight_view(plan, finalized_view, false) ||
+          !auxiliary_preflight_views_match(
+              draft.auxiliary_preflight, finalized_view)) {
+        LlmMetalExecutionPlan* const retained =
+            get_llm_metal_execution_plan(plan);
+        if (retained == nullptr) {
+          plan.valid = false;
+          plan.reason_code =
+              LlmWorkPlanReason::AUXILIARY_PREFLIGHT_MISMATCH;
+          return plan;
+        }
+        retained->valid = false;
+        retained->reason_code =
+            LlmWorkPlanReason::AUXILIARY_PREFLIGHT_MISMATCH;
+        plan.valid = false;
+        if (!finalize_nonexecutable_metal_plan(
+                plan, draft.auxiliary_preflight,
+                checksum_auxiliary_bytes,
+                orchestration_auxiliary_bytes)) {
+          return plan;
+        }
+        return plan;
+      }
+    }
+  } catch (const std::bad_alloc&) {
+    plan.valid = false;
+    plan.reason_code = LlmWorkPlanReason::PLANNER_ALLOCATION_FAILED;
+    discard_executable_templates(plan);
+    return plan;
+  } catch (const std::length_error&) {
+    plan.valid = false;
+    plan.reason_code = LlmWorkPlanReason::PLANNER_ALLOCATION_FAILED;
+    discard_executable_templates(plan);
+    return plan;
+  }
   plan.reason_code = LlmWorkPlanReason::VALID;
   return plan;
 }
@@ -4023,8 +4854,46 @@ bool readmit_llm_memory_work_plan(
     size_t orchestration_auxiliary_bytes) noexcept {
   try {
     LlmCpuExecutionPlan* const cpu_plan = get_llm_cpu_execution_plan(plan);
-    if (!plan.valid || cpu_plan == nullptr) {
+    LlmMetalExecutionPlan* const metal_plan =
+        get_llm_metal_execution_plan(plan);
+    if (!plan.valid || (cpu_plan == nullptr && metal_plan == nullptr)) {
       return false;
+    }
+    if (metal_plan != nullptr) {
+      if (metal_plan->valid) {
+        size_t command_auxiliary_bytes = 0;
+        size_t additional_owned_bytes = 0;
+        if (!NumericUtils::checked_add(checksum_auxiliary_bytes,
+                                       orchestration_auxiliary_bytes,
+                                       command_auxiliary_bytes) ||
+            !NumericUtils::checked_add(
+                plan.memory_budget.request.planner_storage_bytes,
+                command_auxiliary_bytes, additional_owned_bytes) ||
+            additional_owned_bytes !=
+                metal_plan->resources.additional_owned_bytes ||
+            !apply_metal_memory_budget(plan, *metal_plan,
+                                       checksum_auxiliary_bytes,
+                                       orchestration_auxiliary_bytes) ||
+            !finalize_plan_identities(plan)) {
+          return false;
+        }
+      } else {
+        const LlmMemoryBudgetRequest request =
+            build_llm_memory_budget_request(
+                plan.geometry, 0,
+                plan.memory_budget.request.planner_storage_bytes,
+                checksum_auxiliary_bytes, orchestration_auxiliary_bytes,
+                plan.memory_budget.request.mapping_granularity_bytes);
+        plan.memory_budget = evaluate_llm_memory_budget(
+            request, plan.memory_budget.available_memory_bytes);
+        if (!plan.memory_budget.valid || !finalize_plan_identities(plan)) {
+          plan.valid = false;
+          plan.reason_code = plan.memory_budget.reason_code;
+          return false;
+        }
+      }
+      plan.reason_code = LlmWorkPlanReason::VALID;
+      return true;
     }
     const size_t block_table_bytes =
         plan.kv_layout == LlmKvLayout::Paged
@@ -4057,9 +4926,13 @@ bool readmit_llm_memory_work_plan(
 }
 
 LlmScenarioLimits calculate_llm_scenario_limits(
-    const LlmGeometry& geometry, LlmScenario scenario) {
+    const LlmGeometry& geometry, LlmScenario scenario,
+    size_t work_unit_cap) {
   LlmScenarioLimits limits;
   limits.scenario = scenario;
+  limits.maximum_work_units_by_work_unit_cap =
+      std::min(work_unit_cap,
+               Constants::LLM_MAX_WORK_UNITS_PER_MEASUREMENT);
   if (!geometry.valid) {
     limits.reason_code = geometry.reason_code;
     return limits;
@@ -4154,7 +5027,11 @@ LlmScenarioWorkPlan build_llm_scenario_work_plan(
     plan.scenario_seed = model_plan.scenario_seeds[scenario_index(scenario)];
   }
   const LlmScenarioLimits limits =
-      calculate_llm_scenario_limits(model_plan.geometry, scenario);
+      calculate_llm_scenario_limits(
+          model_plan.geometry, scenario,
+          model_plan.backend == LlmMemoryBackend::Metal
+              ? Constants::LLM_METAL_MAX_WORK_UNITS_PER_DISPATCH
+              : Constants::LLM_MAX_WORK_UNITS_PER_MEASUREMENT);
   if (!limits.valid) {
     plan.reason_code = limits.reason_code;
     return plan;

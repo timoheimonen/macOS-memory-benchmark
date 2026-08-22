@@ -28,7 +28,7 @@
 - Standalone paired TLB analysis
 - Standalone core-to-core cache-line handoff latency analysis
 - Standalone Metal GPU memory read/write/copy bandwidth
-- Standalone synthetic CPU LLM decode and full-prompt prefill memory profiling
+- Standalone synthetic CPU LLM decode/prefill profiling and an experimental Metal contiguous-decode preview
 - Cartesian parameter sweeps for supported benchmark modes
 
 Target platform is **macOS on Apple Silicon**.
@@ -55,6 +55,8 @@ This manual focuses on practical usage and interpretation. For implementation de
   optional for JSON inspection and the jq-backed latency-script path.
 - For `--gpu-bandwidth`: a unified-memory Metal device supporting `MTLGPUFamilyApple7` or a compatible later family.
   Capability support is distinct from a controlled performance-validation cohort.
+- For the experimental LLM Metal preview: Apple7-or-later capability, unified memory, Tier 2 argument buffers, and
+  `maxBufferLength >= 256 MiB`. Its M4 validation gate has passed; Apple7/M1 baseline validation remains pending.
 
 Install tools:
 
@@ -192,18 +194,23 @@ boundaries, parallelism, cache behavior, resource modes, and validation overhead
 ### Synthetic LLM memory payload
 
 LLM-memory schema 1 uses generic backend/phase/layout/work-unit vocabulary. This revision activates CPU/decode and
-CPU/prefill with contiguous or paged KV. Prefill uses `work_unit_kind: "prefill_operation"`; decode uses
-`"decode_step"`. Metal remains unavailable and never falls back to another profile.
+CPU/prefill with contiguous or paged KV, and Metal/decode with contiguous KV. Prefill uses
+`work_unit_kind: "prefill_operation"`; decode uses `"decode_step"`. Metal never falls back to CPU.
+
+Metal contiguous decode is an experimental preview. Its M4 validation gate has passed, but the required Apple7/M1
+baseline validation remains pending. Runtime capability admission must not be interpreted as cross-family
+production-ready validation.
 
 `--kv-layout` defaults to `contiguous`. Paged layout requires exactly one `--kv-block-tokens <G>` option. `G` must be
 positive, a power of two, and no greater than `UINT32_MAX`; it may be larger than the active phase's sequence length.
 Contiguous layout
 rejects `--kv-block-tokens`, so a block size is never silently ignored or defaulted.
 
-The active profile measures three memory-only scenarios for one explicitly supplied phase geometry. `weights_only`
+Each selected profile measures three memory-only scenarios for one explicitly supplied phase geometry. `weights_only`
 reads all active weights once per work unit. `kv_only` performs the phase-specific K/V writes and reads. `mixed`
-performs both kinds of work in worker-local layer order inside one synchronized timing interval. In decode, the K/V
-schedule appends the current token's K and V records and reads the complete fixed visible history; prefill's
+performs both kinds of work in one timed scenario. CPU uses worker-local layer order inside one synchronized worker
+interval; Metal uses its scenario-specialized grid-stride kernel inside one GPU timestamp interval. In decode, the K/V
+schedule appends the current token's K and V records and reads the complete fixed visible history; CPU prefill's
 full-prompt population and tiled-prefix schedule is defined separately below.
 
 For decode, let `W` be active-weight bytes per decode step, `L` the layer count, `h_kv` the KV-head count, `d_h` the
@@ -217,7 +224,8 @@ KV append / decode work unit = B * K
 ```
 
 The effective model payloads per work unit are `W`, `B*A*K + B*K`, and `W + B*A*K + B*K` for weights-only, KV-only,
-and mixed. Reported GB/s divides those exact logical W/K/V bytes by synchronized CPU time. The traffic crossover
+and mixed. Reported GB/s divides those exact logical W/K/V bytes by backend-authoritative time: synchronized worker time
+for CPU or `GPUStartTime`/`GPUEndTime` for Metal. The traffic crossover
 `W / (B*K)` and the
 versioned current-context classification compare weight bytes with KV-read bytes only; exact equality is
 `near_crossover`. They do not locate a measured hardware bottleneck.
@@ -291,13 +299,13 @@ checksum binds logical table index, loaded physical ID, visit kind, and operatio
 therefore preserves the same logical payload as contiguous prefill while reporting table-read metadata separately.
 Post-validation checks final-ordinal prompt samples and the physical pools' terminal padding canaries.
 
-The command uses full-size ordinary cacheable resources. Initialization/pre-touch, permutation preparation, worker
-creation, same-shape warmup, calibration, JSON, expected-checksum construction, and post-validation are outside elapsed
-time. Full-size resources prevent a small proxy buffer from masquerading as a larger model, but they do not prove
-physical DRAM service. A synthetic decode step or full-prompt prefill operation is not an inference token. Prefill does
-not predict TTFT. The profile excludes Transformer math, model/framework dispatch, GPU/ANE work, growing context,
-runtime page allocation, prefix sharing,
-sliding-window KV, and compute-memory overlap.
+CPU uses full-size ordinary cacheable mappings; Metal uses exact-tail private/tracked segments on unified memory.
+Initialization/pre-touch, same-shape warmup, calibration, JSON, expected-checksum construction, and post-validation are
+outside elapsed time; permutation preparation and worker creation are additional CPU exclusions. Full-size resources
+prevent a small proxy buffer from masquerading as a larger model, but they do not prove physical DRAM service. A
+synthetic decode step or full-prompt prefill operation is not an inference token. Prefill does not predict TTFT. The
+profile excludes Transformer math, model/framework dispatch, ANE work, GPU execution outside the defined Metal preview
+kernels, growing context, runtime page allocation, prefix sharing, sliding-window KV, and compute-memory overlap.
 
 ### Memory hierarchy behavior
 
@@ -445,6 +453,7 @@ middle, and trailing items.
 | `-C` | `--analyze-core2core` |
 | `-G` | `--gpu-bandwidth` |
 | `-M` | `--llm-memory` |
+| — | `--llm-memory-backend` |
 | — | `--weight-size-mb` |
 | — | `--layers` |
 | — | `--query-heads` |
@@ -528,6 +537,8 @@ middle, and trailing items.
 - LLM-memory defaults its requested count to detected CPU workers. An explicit request remains distinct from detected
   availability; its immutable work plan records requested, available, and effective counts, reducing effective workers
   only when detected availability or executable span size requires it
+- Metal LLM-memory does not detect CPU workers and rejects explicit `--threads`; its worker and worker-QoS JSON fields
+  are null with applicability false
 - Latency tests remain single-threaded
 
 ### Mode selection
@@ -592,36 +603,45 @@ middle, and trailing items.
 
 #### `--llm-memory`
 
-- Selects the standalone CPU decode/prefill memory mode. Active methodologies are
+- Selects the standalone CPU/Metal synthetic memory mode. Active methodologies are
   `llm-memory-v1-cpu-decode-contiguous`, `llm-memory-v1-cpu-decode-paged`,
-  `llm-memory-v1-cpu-prefill-contiguous`, and `llm-memory-v1-cpu-prefill-paged`. It never enters the general
+  `llm-memory-v1-cpu-prefill-contiguous`, `llm-memory-v1-cpu-prefill-paged`, and
+  `llm-memory-v1-metal-decode-contiguous`. It never enters the general
   `BenchmarkConfig` parser or CPU sweep runner
+- The Metal methodology is an experimental preview. Its M4 validation gate has passed; the required Apple7/M1 baseline
+  validation remains pending, so runtime capability admission is not a cross-family production-readiness claim
 - Requires each common model option `--weight-size-mb <MiB>`, `--layers <count>`, `--query-heads <count>`,
   `--kv-heads <count>`, and `--head-dim <count>` exactly once. Decode requires `--context-tokens <count>`; prefill
   requires `--prompt-tokens <P>` and `--attention-query-tile-tokens <Q>`. Cross-phase geometry is rejected
-- Allows optional `--kv-element-bytes <1|2|4>`, `--batch-size <count>`,
-  `--phase <decode|prefill>`, `--kv-layout <contiguous|paged>`, `-t`/`--threads <count>`,
+- Allows optional `--llm-memory-backend <cpu|metal>`, `--kv-element-bytes <1|2|4>`, `--batch-size <count>`,
+  `--phase <decode|prefill>`, `--kv-layout <contiguous|paged>`, and CPU-only `-t`/`--threads <count>`,
   `-i`/`--iterations <count>`,
   `-r`/`--count <count>`, `--seed <uint64>`, `-o`/`--output <target>`, and `-h`/`--help`.
   `--kv-block-tokens <G>` is required exactly once with paged layout and rejected with contiguous layout. Every other
   option, including all other primary modes, cache/latency modifiers, `--non-cacheable`, `--sweep`, and
   `--sweep-max-runs`, is rejected
-- Defaults to decode, contiguous layout, two-byte KV elements, batch size one, three planned cyclic loops, detected CPU
-  workers, automatic scenario work, and one generated non-zero base seed. There is no default paged block size. An
-  explicit seed may be any unsigned 64-bit value, including zero
+- Defaults to CPU, decode, contiguous layout, two-byte KV elements, batch size one, three planned cyclic loops,
+  automatic scenario work, and one generated non-zero base seed. CPU defaults to detected workers. Metal performs no
+  worker detection and rejects explicit `--threads`. There is no default paged block size. An explicit seed may be any
+  unsigned 64-bit value, including zero
 - Parses every integer as one complete decimal token. Model counts, sizes, worker count, iterations, and loop count
   must be positive. Query heads must be at least the KV-head count and evenly divisible by it
 - Requires `P >= 1` and `1 <= Q <= P` for prefill. Requires paged block size `G` to be positive, a power of two, and at
   most `UINT32_MAX`. `G > A` is valid for decode and produces one partially used physical block per batch sequence;
   unused capacity is reported rather than silently removed
+- Activates the Metal preview only for decode plus contiguous KV. Metal prefill and paged selections fail configuration
+  validation; capability failure after output-session creation produces a terminal `unsupported` JSON result and
+  non-zero exit.
+  Runtime compiler, pipeline, resource, or task failure produces terminal `failed`/`invalid` schema evidence and a
+  non-zero exit. The command never substitutes CPU
 - Treats `--context-tokens` as the fixed visible context including the current synthetic token. Checked preflight
   resolves weight/KV byte geometry and ensures all three scenarios can fit the one-billion-work-unit and 64 GiB
   accounted-byte task limits; explicit iterations must fit the strictest scenario limit
 - Treats one prefill work unit as one complete prompt rewrite plus tiled causal-prefix scans for every batch sequence;
   weights are read once per full-prompt operation, not once per token or tile. With paged KV, full-prompt writes and
   exact partial-prefix scans perform timed uint32 table lookups
-- Preserves an explicit worker request even when it exceeds detected availability. Effective-worker reduction belongs
-  to the executable work plan and remains separately reportable
+- On CPU, preserves an explicit worker request even when it exceeds detected availability. Effective-worker reduction
+  belongs to the executable work plan and remains separately reportable
 - `--llm-memory --help` succeeds without required model inputs and returns before core detection, seed generation,
   output-session creation, QoS preparation, or signal masking. Unknown, duplicate, and missing-value errors are still
   diagnosed because help does not bypass the strict whitelist pass
@@ -647,8 +667,17 @@ middle, and trailing items.
   without intermediate serialization
 - CPU prefill uses layout-specific ARM64 executors and reports scenario-specific cost-balanced owner identities plus
   minimum/maximum/imbalance worker-cost evidence. Paged prefill additionally reports deterministic block-exclusive
-  ownership, table/permutation identity, exact lookup metadata, and padding validation. Metal remains unavailable, with
-  no CPU fallback
+  ownership, table/permutation identity, exact lookup metadata, and padding validation
+- Metal decode uses private/tracked W/K/V segments no larger than 256 MiB, with exact final tails and a Tier 2 argument
+  buffer. Each task has one reset command buffer, one timed command buffer with one serial compute encoder and one
+  scenario-specialized workload dispatch, and one excluded post-validation command buffer. The `T` work-unit loop is
+  inside the kernel. `GPUStartTime`/`GPUEndTime` are authoritative; the host wait envelope is diagnostic only. A
+  versioned dual-mod32 W/K/V checksum and excluded validation of every byte in every final K/V append record must pass,
+  with no performance retry
+- The current embedded Metal source revision is `llm-metal-decode-contiguous-msl23-v1`. Runtime evidence records its
+  exact SHA-256 plus the `membenchmark.llm-metal.pipeline.decode-contiguous.weights-only`, `.kv-only`, and `.mixed`
+  workload-pipeline labels and limits. Runtime initialization also requires the selected-profile
+  `membenchmark.llm-metal.pipeline.validate-decode-contiguous-appends` pipeline
 - This profile is memory-only: it performs no Transformer mathematics and does not report inference tokens/s. Its
   `synthetic_memory_work_units_per_second` and `effective_model_payload_gb_s` must not be interpreted as model
   throughput or physical DRAM-counter traffic. Paged block-table reads are timed and separately accounted but are not
@@ -1004,6 +1033,11 @@ memory_benchmark --llm-memory --weight-size-mb 64 --layers 4 --query-heads 8 --k
   --head-dim 64 --context-tokens 512 --iterations 1 --count 3 --seed 42 --output - \
   >llm_memory_stdout.json 2>llm_memory.log
 
+# Standalone Metal contiguous decode with the same three synthetic scenarios
+memory_benchmark --llm-memory --llm-memory-backend metal --weight-size-mb 64 --layers 4 \
+  --query-heads 8 --kv-heads 2 --head-dim 64 --context-tokens 512 \
+  --iterations 1 --count 3 --seed 42 --output llm_memory_metal.json
+
 # Standalone CPU decode with deterministic paged KV storage
 memory_benchmark --llm-memory --weight-size-mb 64 --layers 4 --query-heads 8 --kv-heads 2 \
   --head-dim 64 --context-tokens 512 --kv-layout paged --kv-block-tokens 16 \
@@ -1152,6 +1186,19 @@ caffeinate -i -d memory_benchmark --llm-memory --weight-size-mb 4096 --layers 32
   --context-tokens 8192 --batch-size 1 --threads 4 --iterations 1 --count 6 \
   --seed 123456789 --output llm_fixed.json
 ```
+
+For a Metal cohort, select the backend explicitly, omit `--threads`, and keep the Metal device/capability, MSL revision
+and source hash, pipeline/grid, resource segmentation, work count, and seed evidence matched:
+
+```bash
+caffeinate -i -d memory_benchmark --llm-memory --llm-memory-backend metal \
+  --weight-size-mb 4096 --layers 32 --query-heads 32 --kv-heads 8 \
+  --head-dim 128 --kv-element-bytes 2 --context-tokens 8192 --batch-size 1 \
+  --iterations 1 --count 6 --seed 123456789 --output llm_metal_fixed.json
+```
+
+Metal and CPU results are separate methodology cohorts. Do not combine their samples or compare their checksum values.
+Metal private storage is unified-memory API policy, not evidence of separate VRAM or DRAM residency.
 
 To characterize paged indirection, make the layout and block size explicit and retain the same seed:
 
@@ -1416,9 +1463,12 @@ invalid measurement is not printed as zero and remains status-bearing/null in JS
 
 ### 9) Synthetic LLM memory profile
 
-`--llm-memory` prints a separate report for CPU decode or prefill with contiguous or paged KV containing:
+`--llm-memory` prints a separate report for CPU decode/prefill or Metal contiguous decode containing:
 
 - backend, phase/work unit, KV layout, cacheable semantics, and exact active-weight/KV-read/KV-write bytes;
+- for Metal, device/capability evidence, W/K/V segment counts, exact segment capacity, Tier 2 argument-buffer length,
+  actual committed/known-peak/admitted memory, pipeline/grid geometry, authoritative GPU elapsed time, checksum,
+  append validation, and applicable canary status;
 - decode visible context and its two-decimal traffic crossover, or prefill P/Q/C, prefix visits, causal pairs, and
   logical attention/FMA audit counts; decode-only crossover fields are not repurposed for prefill;
 - for paged layout, `G`, blocks per sequence, terminal valid bytes, physical K/V lengths, padding, table size,
@@ -1827,10 +1877,11 @@ Schema 1 rules:
 - Canonical selectors are `backend: cpu|metal`, `phase: decode|prefill`, `kv_layout: contiguous|paged`,
   `work_unit_kind: decode_step|prefill_operation`, and
   `kv_write_kind: none|current_token_append|full_prompt_population`. All four CPU phase/layout profiles are active;
-  Metal remains unavailable.
+  the experimental Metal preview activates decode/contiguous only.
 - Methodology is always `llm-memory-v1-<backend>-<phase>-<layout>`. Active exact identities are
   `llm-memory-v1-cpu-decode-contiguous`, `llm-memory-v1-cpu-decode-paged`,
-  `llm-memory-v1-cpu-prefill-contiguous`, and `llm-memory-v1-cpu-prefill-paged`.
+  `llm-memory-v1-cpu-prefill-contiguous`, `llm-memory-v1-cpu-prefill-paged`, and
+  `llm-memory-v1-metal-decode-contiguous`.
 - `backend_evidence.cpu.prefill` is null for decode. Either prefill layout populates it with `cost_unit:
   "worker-cost"`, one execution identity, descriptors per scenario/worker, and scenario-specific partition/scope
   identities, decimal-string worker costs, minimum, maximum, and max-minus-min imbalance per work unit. Paged prefill
@@ -1842,6 +1893,8 @@ Schema 1 rules:
 - `resolved_plan.geometry.decode` and `.prefill`, the layout-specific scalars, and `backend_evidence.cpu`/`.metal` use
   JSON null when not applicable. Applicable but absent scenario traffic is numeric zero or decimal-string `"0"`
   according to the field's fixed type; it is never the string `"not_applicable"`.
+- Metal worker and worker-QoS fields are null and the corresponding applicability booleans are false. CPU retains
+  numeric requested/available/effective worker evidence.
 - Schema/control indexes, validated small configuration values, and planned/completed work units are integer numbers.
   Potentially large byte, capacity, block/table/lookup, token-visit, causal-pair, and FMA-term quantities are canonical
   decimal strings even when their value is zero. UInt64 seeds are canonical decimal strings. Unavailable elapsed,
@@ -2563,7 +2616,8 @@ not a stability baseline for current pattern schema 3 and should not be compared
   resource mode, dispatch, or validation semantics.
 - **Calling an LLM synthetic work unit a token or model throughput**: the work unit is a decode step or full-prompt
   prefill operation, while the
-  profile omits Transformer compute, model/framework execution, GPU/ANE work, and compute-memory overlap.
+  profile omits Transformer compute, model/framework execution, ANE work, GPU work outside the defined Metal preview
+  kernels, and compute-memory overlap.
 - **Treating LLM crossover/classification as a hardware bottleneck**: it compares exact weight and KV-read logical
   payload only; equality is the complete `near_crossover` rule.
 - **Adding paged table bytes to effective-model-payload GB/s**: table loads are timed and reported as metadata, but the
@@ -2666,8 +2720,8 @@ Make sure you are passing `script-examples/final_output.txt` generated by the la
 - [CORE_TO_CORE_WHITEPAPER.md](CORE_TO_CORE_WHITEPAPER.md) - Core-to-Core Cache-Line Handoff Latency Benchmark: methodology, assembly protocol, scheduler-hint scenarios, and JSON contract
 - [GPU_BANDWIDTH_WHITEPAPER.md](GPU_BANDWIDTH_WHITEPAPER.md) - Metal GPU memory-bandwidth methodology, validation,
   schema 1, capability boundaries, and maintenance policy
-- [LLM_MEMORY_PROFILE_WHITEPAPER.md](LLM_MEMORY_PROFILE_WHITEPAPER.md) - synthetic CPU decode/prefill memory formulas,
-  layout, execution, schema 1, validation, and interpretation limits
+- [LLM_MEMORY_PROFILE_WHITEPAPER.md](LLM_MEMORY_PROFILE_WHITEPAPER.md) - synthetic CPU decode/prefill and experimental
+  Metal contiguous-decode methodology, layout, execution, schema 1, validation, and interpretation limits
 - [TECHNICAL_SPECIFICATION.md](TECHNICAL_SPECIFICATION.md) - architecture and implementation details
 - [CHANGELOG.md](../CHANGELOG.md) - release history
 

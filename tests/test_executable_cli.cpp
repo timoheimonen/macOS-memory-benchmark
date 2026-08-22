@@ -44,6 +44,7 @@
 
 #include "core/config/constants.h"
 #include "core/config/version.h"
+#include "llm_memory/llm_memory.h"
 #include "output/console/messages/messages_api.h"
 #include "third_party/nlohmann/json.hpp"
 
@@ -343,6 +344,79 @@ void expect_complete_llm_checkpoint_lifecycle(const nlohmann::json& json) {
   EXPECT_TRUE(lifecycle["terminal_checkpoint_completed"].get<bool>());
 }
 
+void expect_complete_or_unsupported_metal_result(
+    const CliResult& result, const nlohmann::json& json) {
+  ASSERT_TRUE(json.is_object());
+  EXPECT_EQ(json["schema_version"], Constants::LLM_JSON_SCHEMA_VERSION);
+  EXPECT_EQ(json["mode"], Constants::LLM_JSON_MODE_NAME);
+  EXPECT_EQ(json["backend"], "metal");
+  EXPECT_EQ(json["phase"], "decode");
+  EXPECT_EQ(json["kv_layout"], "contiguous");
+  EXPECT_EQ(json["methodology_version"],
+            "llm-memory-v1-metal-decode-contiguous");
+  EXPECT_TRUE(json["backend_evidence"]["cpu"].is_null());
+  ASSERT_TRUE(json["backend_evidence"]["metal"].is_object());
+  EXPECT_FALSE(json["backend_evidence"]["metal"]["workers_applicable"]
+                   .get<bool>());
+  EXPECT_FALSE(json["backend_evidence"]["metal"]["worker_qos_applicable"]
+                   .get<bool>());
+
+  const std::string status = json["status"].get<std::string>();
+  if (status == "unsupported") {
+    EXPECT_EQ(result.exit_code, EXIT_FAILURE) << result.output;
+    EXPECT_FALSE(json["results_complete"].get<bool>());
+    EXPECT_FALSE(json["conclusions_valid"].get<bool>());
+    EXPECT_FALSE(json["reason_code"].get<std::string>().empty());
+    EXPECT_EQ(json["backend_evidence"]["metal"]["lifecycle"]
+                  ["initialization"]["status"],
+              "unsupported");
+    EXPECT_EQ(json["backend_evidence"]["metal"]["lifecycle"]
+                  ["initialization"]["reason_code"],
+              json["reason_code"]);
+    EXPECT_EQ(json["checkpoint_lifecycle"]["logical_checkpoint_attempts"],
+              1u);
+    EXPECT_EQ(json["checkpoint_lifecycle"]
+                  ["successful_logical_checkpoints"],
+              1u);
+    EXPECT_TRUE(json["checkpoint_lifecycle"]["terminal_checkpoint_attempted"]
+                    .get<bool>());
+    EXPECT_TRUE(json["checkpoint_lifecycle"]["terminal_checkpoint_completed"]
+                    .get<bool>());
+    return;
+  }
+
+  ASSERT_EQ(status, "complete") << json.dump(2);
+  EXPECT_EQ(result.exit_code, EXIT_SUCCESS) << result.output;
+  EXPECT_TRUE(json["results_complete"].get<bool>());
+  EXPECT_TRUE(json["conclusions_valid"].get<bool>());
+  EXPECT_EQ(json["reason_code"], "complete");
+  EXPECT_EQ(json["backend_evidence"]["metal"]["lifecycle"]
+                ["initialization"]["status"],
+            "ready");
+  EXPECT_TRUE(json["backend_evidence"]["metal"]["timed_results_available"]
+                  .get<bool>());
+  ASSERT_EQ(json["measurements"].size(), 9u);
+  for (const nlohmann::json& measurement : json["measurements"]) {
+    EXPECT_EQ(measurement["status"], "measured");
+    EXPECT_TRUE(measurement["requested_workers"].is_null());
+    EXPECT_TRUE(measurement["effective_workers"].is_null());
+    ASSERT_TRUE(measurement["execution"]["metal"].is_object());
+    const nlohmann::json& task = measurement["execution"]["metal"];
+    EXPECT_EQ(task["commands"]["reset_command_buffers"], 1u);
+    EXPECT_EQ(task["commands"]["timed_command_buffers"], 1u);
+    EXPECT_EQ(task["commands"]["post_validation_command_buffers"], 1u);
+    EXPECT_EQ(task["commands"]["timed_compute_encoders"], 1u);
+    EXPECT_EQ(task["commands"]["timed_workload_dispatches"], 1u);
+    EXPECT_TRUE(task["timing"]["gpu_start_seconds"].is_number());
+    EXPECT_TRUE(task["timing"]["gpu_end_seconds"].is_number());
+    EXPECT_TRUE(task["timing"]["gpu_elapsed_seconds"].is_number());
+    EXPECT_TRUE(task["timing"]["queue_delay_seconds"].is_null());
+    EXPECT_TRUE(task["checksum"]["valid"].get<bool>());
+    EXPECT_TRUE(task["validation"]["post_validation_valid"].get<bool>());
+  }
+  expect_complete_llm_checkpoint_lifecycle(json);
+}
+
 std::vector<std::string> bounded_llm_arguments(
     const std::string& output_target, size_t loop_count = 3) {
   return {"--llm-memory",
@@ -363,6 +437,37 @@ std::vector<std::string> bounded_llm_arguments(
           "--batch-size",
           "1",
           "--threads",
+          "1",
+          "--iterations",
+          "1",
+          "--count",
+          std::to_string(loop_count),
+          "--seed",
+          "42",
+          "--output",
+          output_target};
+}
+
+std::vector<std::string> bounded_llm_metal_arguments(
+    const std::string& output_target, size_t loop_count = 3) {
+  return {"--llm-memory",
+          "--llm-memory-backend",
+          "metal",
+          "--weight-size-mb",
+          "1",
+          "--layers",
+          "1",
+          "--query-heads",
+          "1",
+          "--kv-heads",
+          "1",
+          "--head-dim",
+          "8",
+          "--kv-element-bytes",
+          "1",
+          "--context-tokens",
+          "2",
+          "--batch-size",
           "1",
           "--iterations",
           "1",
@@ -496,6 +601,12 @@ TEST(ExecutableCliIntegrationTest,
                                     "--help"},
            std::vector<std::string>{"--llm-memory", "--help", "--output",
                                     "-"},
+           std::vector<std::string>{"--llm-memory",
+                                    "--llm-memory-backend", "metal",
+                                    "--output", "-", "--help"},
+           std::vector<std::string>{"--llm-memory", "--help",
+                                    "--llm-memory-backend", "metal",
+                                    "--output", "-"},
        }) {
     SCOPED_TRACE(testing::PrintToString(arguments));
     const CliResult result = run_memory_benchmark(arguments);
@@ -528,6 +639,96 @@ TEST(ExecutableCliIntegrationTest,
             std::string::npos)
       << result.stderr_output;
   expect_no_dash_transport_artifacts(result);
+}
+
+TEST(ExecutableCliIntegrationTest,
+     LlmMetalPreflightRejectsInactiveProfilesAndThreadsBeforeOutputSessionIntegration) {
+  struct InvalidCase {
+    std::string name;
+    std::vector<std::string> arguments;
+    const char* reason_code;
+  };
+
+  std::vector<std::string> prefill = bounded_llm_metal_arguments("-");
+  const auto context =
+      std::find(prefill.begin(), prefill.end(), "--context-tokens");
+  ASSERT_NE(context, prefill.end());
+  prefill.erase(context, std::next(context, 2));
+  prefill.insert(prefill.end() - 2,
+                 {"--phase", "prefill", "--prompt-tokens", "5",
+                  "--attention-query-tile-tokens", "2"});
+
+  std::vector<std::string> paged = bounded_llm_metal_arguments("-");
+  paged.insert(paged.end() - 2,
+               {"--kv-layout", "paged", "--kv-block-tokens", "2"});
+
+  std::vector<std::string> backend_before_threads =
+      bounded_llm_metal_arguments("-");
+  backend_before_threads.insert(backend_before_threads.end() - 2,
+                                {"--threads", "1"});
+
+  std::vector<std::string> threads_before_backend = bounded_llm_arguments("-");
+  threads_before_backend.insert(threads_before_backend.end() - 2,
+                                {"--llm-memory-backend", "metal"});
+
+  const std::vector<InvalidCase> cases = {
+      {"prefill", std::move(prefill),
+       LlmMemoryConfigReason::PHASE_NOT_ACTIVATED},
+      {"paged", std::move(paged),
+       LlmMemoryConfigReason::KV_LAYOUT_NOT_ACTIVATED},
+      {"backend-before-threads", std::move(backend_before_threads),
+       LlmMemoryConfigReason::THREADS_NOT_APPLICABLE},
+      {"threads-before-backend", std::move(threads_before_backend),
+       LlmMemoryConfigReason::THREADS_NOT_APPLICABLE},
+  };
+
+  for (const InvalidCase& test_case : cases) {
+    SCOPED_TRACE(test_case.name);
+    const CliResult result = run_memory_benchmark(test_case.arguments);
+    expect_process_completed(result);
+    EXPECT_EQ(result.exit_code, EXIT_FAILURE) << result.output;
+    expect_no_runtime_banner(result);
+    EXPECT_TRUE(result.stdout_output.empty()) << result.stdout_output;
+    EXPECT_NE(result.stderr_output.find(
+                  Messages::error_llm_memory_config_invalid(
+                      test_case.reason_code)),
+              std::string::npos)
+        << result.stderr_output;
+    expect_no_dash_transport_artifacts(result);
+  }
+}
+
+TEST(ExecutableCliIntegrationTest,
+     LlmMetalStdoutIsCompleteOrOneTerminalUnsupportedDocumentIntegration) {
+  const CliResult result =
+      run_memory_benchmark(bounded_llm_metal_arguments("-"));
+
+  expect_process_completed(result);
+  const nlohmann::json json = parse_single_stdout_json(result);
+  expect_complete_or_unsupported_metal_result(result, json);
+  expect_single_runtime_banner(result);
+  expect_no_dash_transport_artifacts(result);
+}
+
+TEST(ExecutableCliIntegrationTest,
+     LlmMetalFileIsAtomicCompleteOrTerminalUnsupportedDocumentIntegration) {
+  const TemporaryJsonFile output("llm_metal_schema_v1");
+  const CliResult result =
+      run_memory_benchmark(bounded_llm_metal_arguments(output.path()));
+
+  expect_process_completed(result);
+  ASSERT_EQ(access(output.path().c_str(), F_OK), 0) << result.output;
+  EXPECT_EQ(access((output.path() + ".tmp").c_str(), F_OK), -1);
+  const nlohmann::json json =
+      nlohmann::json::parse(read_file(output.path()));
+  expect_complete_or_unsupported_metal_result(result, json);
+  EXPECT_EQ(json["configuration"]["output_file"], output.path());
+  expect_single_runtime_banner(result);
+  EXPECT_EQ(count_occurrences(
+                result.stdout_output,
+                Messages::msg_results_saved_to(output.path())),
+            1u)
+      << result.output;
 }
 
 TEST(ExecutableCliIntegrationTest, LlmPrefillPagedWritesCompleteSchemaV1Integration) {

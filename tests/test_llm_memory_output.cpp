@@ -19,6 +19,7 @@
 #include <cstdlib>
 #include <stdexcept>
 #include <string>
+#include <utility>
 
 #include "core/config/constants.h"
 #include "llm_memory/llm_cpu_backend.h"
@@ -104,10 +105,8 @@ LlmMemoryWorkPlan make_paged_console_plan() {
   cpu->paged->permutation.sha256 = "0123456789abcdef";
   cpu->paged->permutation.identity = "paged-permutation-identity";
   cpu->paged->ownership.valid = true;
-  cpu->paged->ownership
-      .total_layout_metadata_lookup_count_per_work_unit = 20;
-  cpu->paged->ownership
-      .total_layout_metadata_read_bytes_per_work_unit = 80;
+  cpu->paged->ownership.total_layout_metadata_lookup_count_per_work_unit = 20;
+  cpu->paged->ownership.total_layout_metadata_read_bytes_per_work_unit = 80;
   cpu->paged->ownership.total_accounted_bytes_per_work_unit = 1104;
   return plan;
 }
@@ -121,6 +120,22 @@ LlmMemoryWorkPlan make_prefill_console_plan() {
   plan.geometry.decode.reset();
   plan.geometry.prefill = LlmPrefillGeometry{5, 2, 3, 11, 15, 60, 480, 0};
   plan.geometry.traffic_crossover_context_tokens = 3.5;
+  return plan;
+}
+
+LlmMemoryWorkPlan make_metal_console_plan() {
+  LlmMemoryWorkPlan plan = make_console_plan();
+  plan.backend = LlmMemoryBackend::Metal;
+  LlmMetalExecutionPlan execution;
+  execution.valid = true;
+  execution.reason_code = LlmMetalPlanReason::VALID;
+  execution.resources.valid = true;
+  execution.resources.reason_code = LlmMetalPlanReason::VALID;
+  execution.resources.weight_segments.segment_count = 2;
+  execution.resources.k_segments.segment_count = 3;
+  execution.resources.v_segments.segment_count = 4;
+  execution.resources.argument_buffer_encoded_length = 8192;
+  plan.backend_execution_plan = std::move(execution);
   return plan;
 }
 
@@ -293,11 +308,9 @@ class FakeLlmBackend final : public LlmBackend {
     return evidence_.preparation;
   }
 
-  LlmTaskExecutionResult execute_task(const LlmMemoryWorkPlan& model_plan,
-                                      const LlmScenarioWorkPlan& scenario_plan,
+  LlmTaskExecutionResult execute_task(const LlmMemoryWorkPlan& model_plan, const LlmScenarioWorkPlan& scenario_plan,
                                       const LlmRunnerTaskContext& context) override {
-    return adapt_llm_cpu_executor_result(model_plan, scenario_plan, context,
-                                         successful_fake_execution(model_plan));
+    return adapt_llm_cpu_executor_result(model_plan, scenario_plan, context, successful_fake_execution(model_plan));
   }
 
   const LlmBackendEvidence& evidence() const noexcept override { return evidence_; }
@@ -321,6 +334,13 @@ size_t count_substrings(const std::string& text, const std::string& needle) {
   return count;
 }
 
+LlmBackendEvidence cpu_backend_evidence() {
+  LlmBackendEvidence evidence;
+  evidence.backend = LlmMemoryBackend::Cpu;
+  evidence.backend_evidence = LlmCpuBackendEvidence{};
+  return evidence;
+}
+
 }  // namespace
 
 TEST(LlmMemoryOutputTest, PrintsExactPayloadHeadlinesAndInterpretation) {
@@ -339,7 +359,7 @@ TEST(LlmMemoryOutputTest, PrintsExactPayloadHeadlinesAndInterpretation) {
 
   testing::internal::CaptureStdout();
   testing::internal::CaptureStderr();
-  print_llm_memory_console_report(plan, metadata, result);
+  print_llm_memory_console_report(plan, cpu_backend_evidence(), metadata, result);
   const std::string errors = testing::internal::GetCapturedStderr();
   const std::string output = testing::internal::GetCapturedStdout();
 
@@ -368,8 +388,118 @@ TEST(LlmMemoryOutputTest, PrintsExactPayloadHeadlinesAndInterpretation) {
             "high CV, non-nominal environment, QoS failures, or off-target duration reduce confidence.\n");
 }
 
-TEST(LlmMemoryOutputTest,
-     PagedReportIdentifiesBlockGeometryAndTimedMetadataOutsidePayload) {
+TEST(LlmMemoryOutputTest, MetalReportPrintsCapabilitySegmentsAndTaskValidationEvidence) {
+  const LlmMemoryWorkPlan plan = make_metal_console_plan();
+  LlmBackendEvidence backend;
+  backend.backend = LlmMemoryBackend::Metal;
+  LlmMetalBackendEvidence metal_backend;
+  metal_backend.capability.device_name = "Test Metal Device";
+  metal_backend.capability.registry_id = 42;
+  metal_backend.capability.required_apple7_family_supported = true;
+  metal_backend.capability.has_unified_memory = true;
+  metal_backend.capability.argument_buffers_tier2_supported = true;
+  metal_backend.capability.max_buffer_length = 512 * Constants::BYTES_PER_MB;
+  metal_backend.capability.recommended_max_working_set_size = 8ULL * 1024ULL * Constants::BYTES_PER_MB;
+  metal_backend.capability.argument_buffer_encoded_length = 8192;
+  metal_backend.resources.committed_resource_bytes = 1000;
+  metal_backend.resources.known_owned_peak_bytes = 1200;
+  metal_backend.resources.admitted_budget_bytes = 2000;
+  backend.backend_evidence = std::move(metal_backend);
+
+  LlmMemoryResult result;
+  LlmMeasurementState weights_measurement;
+  weights_measurement.scenario = LlmScenario::WeightsOnly;
+  LlmMetalTaskEvidence weights_task;
+  weights_task.pipeline_label = "membenchmark.llm-metal.pipeline.decode-contiguous.weights-only";
+  weights_task.grid_plan_available = true;
+  weights_task.grid_plan.actual_threadgroups = 1;
+  weights_task.grid_plan.threads_per_threadgroup = 32;
+  weights_task.timing_evaluated = true;
+  weights_task.timing_valid = true;
+  weights_task.gpu_elapsed_seconds = 0.001;
+  weights_task.checksum_evaluated = true;
+  weights_task.checksum_valid = true;
+  weights_task.append_validation_evaluated = false;
+  weights_task.append_validation_valid = true;
+  weights_measurement.execution.backend_evidence = std::move(weights_task);
+  result.measurements.push_back(std::move(weights_measurement));
+
+  LlmMeasurementState measurement;
+  measurement.scenario = LlmScenario::Mixed;
+  LlmMetalTaskEvidence task;
+  task.pipeline_label = "membenchmark.llm-metal.pipeline.decode-contiguous.mixed";
+  task.grid_plan_available = true;
+  task.grid_plan.actual_threadgroups = 7;
+  task.grid_plan.threads_per_threadgroup = 128;
+  task.timing_evaluated = true;
+  task.timing_valid = true;
+  task.gpu_elapsed_seconds = 0.0025;
+  task.checksum_evaluated = true;
+  task.checksum_valid = true;
+  task.append_validation_evaluated = true;
+  task.append_validation_valid = true;
+  measurement.execution.backend_evidence = std::move(task);
+  result.measurements.push_back(std::move(measurement));
+
+  LlmResultMetadata metadata;
+  metadata.main_thread_qos = {true, true, 0};
+  metadata.environment_start.thermal_state = "nominal";
+  metadata.environment_end = metadata.environment_start;
+
+  testing::internal::CaptureStdout();
+  testing::internal::CaptureStderr();
+  print_llm_memory_console_report(plan, backend, metadata, result);
+  const std::string errors = testing::internal::GetCapturedStderr();
+  const std::string output = testing::internal::GetCapturedStdout();
+
+  EXPECT_TRUE(errors.empty()) << errors;
+  EXPECT_NE(output.find("Metal device: name=Test Metal Device, registry_id=42"), std::string::npos);
+  EXPECT_NE(output.find("Metal segments: weights=2, K=3, V=4, capacity=268435456 bytes"), std::string::npos);
+  EXPECT_NE(output.find("Metal task: scenario=weights_only, "
+                        "pipeline=membenchmark.llm-metal.pipeline.decode-contiguous.weights-only, "
+                        "threadgroups=1, threads_per_threadgroup=32"),
+            std::string::npos);
+  EXPECT_NE(output.find("Metal validation: checksum=valid, "
+                        "append=not-applicable, canary=not-applicable"),
+            std::string::npos);
+  EXPECT_NE(output.find("Metal task: scenario=mixed, "
+                        "pipeline=membenchmark.llm-metal.pipeline.decode-contiguous.mixed, "
+                        "threadgroups=7, threads_per_threadgroup=128"),
+            std::string::npos);
+  EXPECT_NE(output.find("Metal timing: gpu_elapsed_seconds=0.002500000"), std::string::npos);
+  EXPECT_NE(output.find("Metal validation: checksum=valid, append=valid, canary=not-applicable"), std::string::npos);
+}
+
+TEST(LlmMemoryOutputTest, UnsupportedMetalReportDoesNotInventResourceOrTaskEvidence) {
+  LlmMemoryWorkPlan plan = make_metal_console_plan();
+  LlmMetalExecutionPlan* const execution = get_llm_metal_execution_plan(plan);
+  ASSERT_NE(execution, nullptr);
+  execution->valid = false;
+  execution->resources.valid = false;
+
+  LlmBackendEvidence backend;
+  backend.backend = LlmMemoryBackend::Metal;
+  LlmMetalBackendEvidence metal_backend;
+  metal_backend.capability.device_name = "Unsupported Metal Device";
+  backend.backend_evidence = std::move(metal_backend);
+
+  LlmResultMetadata metadata;
+  LlmMemoryResult result;
+  testing::internal::CaptureStdout();
+  testing::internal::CaptureStderr();
+  print_llm_memory_console_report(plan, backend, metadata, result);
+  const std::string errors = testing::internal::GetCapturedStderr();
+  const std::string output = testing::internal::GetCapturedStdout();
+
+  EXPECT_TRUE(errors.empty()) << errors;
+  EXPECT_NE(output.find("Metal device: name=Unsupported Metal Device"), std::string::npos);
+  EXPECT_EQ(output.find("Metal segments:"), std::string::npos);
+  EXPECT_EQ(output.find("Metal argument buffer:"), std::string::npos);
+  EXPECT_EQ(output.find("Metal memory:"), std::string::npos);
+  EXPECT_EQ(output.find("Metal task:"), std::string::npos);
+}
+
+TEST(LlmMemoryOutputTest, PagedReportIdentifiesBlockGeometryAndTimedMetadataOutsidePayload) {
   LlmMemoryWorkPlan plan = make_paged_console_plan();
   LlmResultMetadata metadata;
   metadata.main_thread_qos = {true, true, 0};
@@ -379,69 +509,42 @@ TEST(LlmMemoryOutputTest,
 
   testing::internal::CaptureStdout();
   testing::internal::CaptureStderr();
-  print_llm_memory_console_report(plan, metadata, result);
+  print_llm_memory_console_report(plan, cpu_backend_evidence(), metadata, result);
   const std::string errors = testing::internal::GetCapturedStderr();
   const std::string output = testing::internal::GetCapturedStdout();
 
   EXPECT_TRUE(errors.empty());
   EXPECT_EQ(count_substrings(output, "kv_layout=paged"), 2u);
-  EXPECT_EQ(count_substrings(output, "  Paged KV block tokens (G): 4\n"),
+  EXPECT_EQ(count_substrings(output, "  Paged KV block tokens (G): 4\n"), 1u);
+  EXPECT_EQ(count_substrings(output, "  Blocks per sequence (N):   2\n"), 1u);
+  EXPECT_EQ(count_substrings(output, "  Physical blocks/layer (P_b): 2\n"), 1u);
+  EXPECT_EQ(count_substrings(output,
+                             "  Physical block geometry: total_blocks=4, "
+                             "block_bytes=128\n"),
             1u);
-  EXPECT_EQ(count_substrings(output, "  Blocks per sequence (N):   2\n"),
+  EXPECT_EQ(count_substrings(output, "  Terminal block: tokens=4, valid_bytes=128\n"), 1u);
+  EXPECT_EQ(count_substrings(output, "  K bytes (logical/physical/padding): 384/512/128\n"), 1u);
+  EXPECT_EQ(count_substrings(output, "  V bytes (logical/physical/padding): 384/512/128\n"), 1u);
+  EXPECT_EQ(count_substrings(output,
+                             "  Block table: 2 uint32 entries, 8 bytes, 4096 "
+                             "page-rounded bytes\n"),
             1u);
-  EXPECT_EQ(
-      count_substrings(output, "  Physical blocks/layer (P_b): 2\n"),
-      1u);
-  EXPECT_EQ(count_substrings(
-                output,
-                "  Physical block geometry: total_blocks=4, "
-                "block_bytes=128\n"),
+  EXPECT_EQ(count_substrings(output,
+                             "  Permutation: version=permutation-v1, seed=99, "
+                             "sha256=0123456789abcdef\n"),
             1u);
-  EXPECT_EQ(count_substrings(
-                output, "  Terminal block: tokens=4, valid_bytes=128\n"),
+  EXPECT_EQ(count_substrings(output, "  Permutation identity: paged-permutation-identity\n"), 1u);
+  EXPECT_EQ(count_substrings(output,
+                             "  Timed block-table metadata / KV-active decode step: "
+                             "20 lookups, 80 bytes\n"),
             1u);
-  EXPECT_EQ(count_substrings(
-                output,
-                "  K bytes (logical/physical/padding): 384/512/128\n"),
+  EXPECT_EQ(count_substrings(output, "  Accounted bytes / KV-active decode step: 1104\n"), 1u);
+  EXPECT_EQ(count_substrings(output,
+                             "  Effective model payload excludes timed block-table "
+                             "metadata bytes.\n"),
             1u);
-  EXPECT_EQ(count_substrings(
-                output,
-                "  V bytes (logical/physical/padding): 384/512/128\n"),
-            1u);
-  EXPECT_EQ(count_substrings(
-                output,
-                "  Block table: 2 uint32 entries, 8 bytes, 4096 "
-                "page-rounded bytes\n"),
-            1u);
-  EXPECT_EQ(count_substrings(
-                output,
-                "  Permutation: version=permutation-v1, seed=99, "
-                "sha256=0123456789abcdef\n"),
-            1u);
-  EXPECT_EQ(count_substrings(
-                output,
-                "  Permutation identity: paged-permutation-identity\n"),
-            1u);
-  EXPECT_EQ(count_substrings(
-                output,
-                "  Timed block-table metadata / KV-active decode step: "
-                "20 lookups, 80 bytes\n"),
-            1u);
-  EXPECT_EQ(count_substrings(
-                output,
-                "  Accounted bytes / KV-active decode step: 1104\n"),
-            1u);
-  EXPECT_EQ(count_substrings(
-                output,
-                "  Effective model payload excludes timed block-table "
-                "metadata bytes.\n"),
-            1u);
-  EXPECT_EQ(count_substrings(
-                output, "  KV read bytes / decode step:       768\n"),
-            1u);
-  EXPECT_EQ(count_substrings(
-                output, "  KV write bytes / decode step:      256\n"),
-            1u);
+  EXPECT_EQ(count_substrings(output, "  KV read bytes / decode step:       768\n"), 1u);
+  EXPECT_EQ(count_substrings(output, "  KV write bytes / decode step:      256\n"), 1u);
 }
 
 TEST(LlmMemoryOutputTest, PrefillReportIdentifiesFullPromptWorkAndTiledCausalGeometry) {
@@ -455,7 +558,7 @@ TEST(LlmMemoryOutputTest, PrefillReportIdentifiesFullPromptWorkAndTiledCausalGeo
 
   testing::internal::CaptureStdout();
   testing::internal::CaptureStderr();
-  print_llm_memory_console_report(plan, metadata, result);
+  print_llm_memory_console_report(plan, cpu_backend_evidence(), metadata, result);
   const std::string errors = testing::internal::GetCapturedStderr();
   const std::string output = testing::internal::GetCapturedStdout();
 
@@ -490,7 +593,7 @@ TEST(LlmMemoryOutputTest, PagedPrefillReportUsesKvActivePrefillAccountingWithout
 
   testing::internal::CaptureStdout();
   testing::internal::CaptureStderr();
-  print_llm_memory_console_report(plan, metadata, result);
+  print_llm_memory_console_report(plan, cpu_backend_evidence(), metadata, result);
   const std::string errors = testing::internal::GetCapturedStderr();
   const std::string output = testing::internal::GetCapturedStdout();
 
@@ -505,9 +608,7 @@ TEST(LlmMemoryOutputTest, PagedPrefillReportUsesKvActivePrefillAccountingWithout
                              "30 lookups, 120 bytes\n"),
             1u);
   EXPECT_EQ(count_substrings(output, "  Accounted bytes / KV-active prefill operation: 4216\n"), 1u);
-  EXPECT_EQ(count_substrings(output,
-                             "  Effective model payload excludes timed block-table metadata bytes.\n"),
-            1u);
+  EXPECT_EQ(count_substrings(output, "  Effective model payload excludes timed block-table metadata bytes.\n"), 1u);
 }
 
 TEST(LlmMemoryOutputTest, EmitsDeduplicatedWarningsInContractOrder) {
@@ -541,7 +642,7 @@ TEST(LlmMemoryOutputTest, EmitsDeduplicatedWarningsInContractOrder) {
 
   testing::internal::CaptureStdout();
   testing::internal::CaptureStderr();
-  print_llm_memory_console_report(plan, metadata, result);
+  print_llm_memory_console_report(plan, cpu_backend_evidence(), metadata, result);
   const std::string errors = testing::internal::GetCapturedStderr();
   static_cast<void>(testing::internal::GetCapturedStdout());
 
@@ -579,7 +680,7 @@ TEST(LlmMemoryOutputTest, ConsoleHeadlinesAgreeExactlyWithJsonFromSameFakeRunner
 
   testing::internal::CaptureStdout();
   testing::internal::CaptureStderr();
-  print_llm_memory_console_report(plan, metadata, result);
+  print_llm_memory_console_report(plan, backend.evidence(), metadata, result);
   const std::string errors = testing::internal::GetCapturedStderr();
   const std::string output = testing::internal::GetCapturedStdout();
   EXPECT_TRUE(errors.empty()) << errors;
@@ -592,21 +693,18 @@ TEST(LlmMemoryOutputTest, ConsoleHeadlinesAgreeExactlyWithJsonFromSameFakeRunner
     ASSERT_TRUE(aggregate.effective_model_payload_gb_s.headline.has_value());
 
     const std::string scenario_token = llm_scenario_to_string(scenario);
-    const nlohmann::ordered_json& json_aggregate =
-        document["aggregates"]["scenarios"][scenario_token];
+    const nlohmann::ordered_json& json_aggregate = document["aggregates"]["scenarios"][scenario_token];
     const double json_latency = json_aggregate["synthetic_work_unit_latency_seconds"]["headline"].get<double>();
     const double json_work_units_per_second =
-        json_aggregate["synthetic_memory_work_units_per_second"]["headline"]
-            .get<double>();
+        json_aggregate["synthetic_memory_work_units_per_second"]["headline"].get<double>();
     const double json_bandwidth = json_aggregate["effective_model_payload_gb_s"]["headline"].get<double>();
     EXPECT_DOUBLE_EQ(json_latency, *aggregate.work_unit_latency_seconds.headline);
     EXPECT_DOUBLE_EQ(json_work_units_per_second, *aggregate.synthetic_memory_work_units_per_second.headline);
     EXPECT_DOUBLE_EQ(json_bandwidth, *aggregate.effective_model_payload_gb_s.headline);
 
     const std::string expected_line = Messages::report_llm_memory_scenario_headline(
-        Messages::report_llm_memory_scenario_name(scenario_token), "decode step",
-        "decode steps", json_latency * 1000.0, json_work_units_per_second,
-        json_bandwidth, scenario == LlmScenario::Mixed);
+        Messages::report_llm_memory_scenario_name(scenario_token), "decode step", "decode steps", json_latency * 1000.0,
+        json_work_units_per_second, json_bandwidth, scenario == LlmScenario::Mixed);
     EXPECT_EQ(count_substrings(output, expected_line), 1u) << expected_line << "\n" << output;
   }
 }

@@ -29,6 +29,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <utility>
 
 #include "core/config/config.h"
@@ -40,6 +41,7 @@
 #include "llm_memory/llm_backend.h"
 #include "llm_memory/llm_environment.h"
 #include "llm_memory/llm_json.h"
+#include "llm_memory/llm_metal_backend.h"
 #include "llm_memory/llm_output.h"
 #include "llm_memory/llm_runner.h"
 #include "llm_memory/llm_work_plan.h"
@@ -54,6 +56,8 @@ namespace {
 
 LlmMemoryParserTestHooks active_llm_parser_hooks;
 bool llm_parser_hooks_active = false;
+LlmMemoryCommandTestHooks active_llm_command_hooks;
+bool llm_command_hooks_active = false;
 
 bool is_option(const std::string& argument, const char* short_option,
                const char* long_option) {
@@ -186,6 +190,82 @@ int write_llm_stdout_final(
   return EXIT_FAILURE;
 }
 
+void initialize_llm_setup_failure_result(
+    const LlmMemoryConfig& config, std::string_view reason_code,
+    LlmMemoryResult& result) {
+  result = LlmMemoryResult{};
+  result.initialized = true;
+  result.status = LlmRunStatus::Failed;
+  result.reason_code = canonicalize_llm_result_reason_code(reason_code);
+  result.counters.planned_loops = config.loop_count;
+  NumericUtils::checked_multiply(
+      config.loop_count, kLlmScenarioCount,
+      result.counters.planned_measurements);
+  constexpr std::array<LlmScenario, kLlmScenarioCount> kScenarios = {
+      LlmScenario::WeightsOnly, LlmScenario::KvOnly,
+      LlmScenario::Mixed};
+  for (size_t index = 0; index < kScenarios.size(); ++index) {
+    result.aggregates[index].scenario = kScenarios[index];
+  }
+  result.logical_checkpoint_attempts = 1;
+  result.successful_logical_checkpoints = 1;
+  result.terminal_checkpoint_attempted = true;
+  result.terminal_checkpoint_completed = true;
+}
+
+int write_llm_setup_failure_final(
+    JsonOutputSession& output_session, const LlmMemoryConfig& config,
+    const LlmMemoryWorkPlan& model_plan,
+    const LlmBackendEvidence& backend_evidence,
+    LlmResultMetadata& metadata, std::string_view reason_code,
+    LlmMemoryResult& result) noexcept {
+  try {
+    initialize_llm_setup_failure_result(config, reason_code, result);
+    metadata.environment_end = capture_llm_host_environment();
+    return output_session.write_final(
+        build_llm_memory_json(config, model_plan, backend_evidence, metadata,
+                              result),
+        false);
+  } catch (const std::exception& error) {
+    report_json_output_boundary_failure(
+        config.output_file,
+        Messages::error_json_payload_construction_failed(error.what()));
+  } catch (...) {
+    report_json_output_boundary_failure(
+        config.output_file,
+        Messages::error_json_payload_construction_failed(""));
+  }
+  return EXIT_FAILURE;
+}
+
+int write_llm_post_run_exception_final(
+    JsonOutputSession& output_session, const LlmMemoryConfig& config,
+    const LlmMemoryWorkPlan& model_plan,
+    const LlmBackendEvidence& backend_evidence,
+    LlmResultMetadata& metadata, LlmMemoryResult& result) noexcept {
+  try {
+    result.status = LlmRunStatus::Failed;
+    result.reason_code = LlmRunnerReason::RUNNER_EXCEPTION;
+    result.results_complete = false;
+    result.conclusions_valid = false;
+    result.diagnostic.clear();
+    metadata.environment_end = capture_llm_host_environment();
+    return output_session.write_final(
+        build_llm_memory_json(config, model_plan, backend_evidence, metadata,
+                              result),
+        false);
+  } catch (const std::exception& error) {
+    report_json_output_boundary_failure(
+        config.output_file,
+        Messages::error_json_payload_construction_failed(error.what()));
+  } catch (...) {
+    report_json_output_boundary_failure(
+        config.output_file,
+        Messages::error_json_payload_construction_failed(""));
+  }
+  return EXIT_FAILURE;
+}
+
 size_t detect_available_llm_workers() {
   if (llm_parser_hooks_active) {
     return active_llm_parser_hooks.detected_workers;
@@ -231,6 +311,52 @@ const char* validate_llm_kv_layout_options(
   return nullptr;
 }
 
+const char* validate_llm_activated_profile(
+    const LlmMemoryConfig& config) noexcept {
+  switch (config.backend) {
+    case LlmMemoryBackend::Cpu:
+      return nullptr;
+    case LlmMemoryBackend::Metal:
+      if (config.phase != LlmPhase::Decode) {
+        return LlmMemoryConfigReason::PHASE_NOT_ACTIVATED;
+      }
+      if (config.kv_layout != LlmKvLayout::Contiguous) {
+        return LlmMemoryConfigReason::KV_LAYOUT_NOT_ACTIVATED;
+      }
+      return nullptr;
+  }
+  return LlmMemoryConfigReason::INVALID_BACKEND;
+}
+
+std::optional<LlmMetalResourcePlanRequest>
+build_runtime_metal_resource_request(
+    const LlmMemoryWorkPlan& logical_plan,
+    const LlmBackendEvidence& backend_evidence,
+    size_t available_memory_bytes, size_t mapping_granularity_bytes,
+    size_t additional_owned_bytes) {
+  const LlmMetalBackendEvidence* const metal =
+      get_llm_metal_backend_evidence(backend_evidence);
+  if (backend_evidence.backend != LlmMemoryBackend::Metal ||
+      backend_evidence.initialization.status != LlmBackendStatus::Ready ||
+      metal == nullptr || !logical_plan.geometry.valid ||
+      logical_plan.backend != LlmMemoryBackend::Metal ||
+      logical_plan.phase != LlmPhase::Decode ||
+      logical_plan.kv_layout != LlmKvLayout::Contiguous) {
+    return std::nullopt;
+  }
+  LlmMetalResourcePlanRequest request;
+  request.geometry = logical_plan.geometry;
+  request.argument_buffer_encoded_length =
+      metal->capability.argument_buffer_encoded_length;
+  request.argument_buffer_alignment =
+      metal->capability.argument_buffer_alignment;
+  request.max_buffer_length = metal->capability.max_buffer_length;
+  request.available_memory_bytes = available_memory_bytes;
+  request.host_mapping_granularity_bytes = mapping_granularity_bytes;
+  request.additional_owned_bytes = additional_owned_bytes;
+  return request;
+}
+
 }  // namespace
 
 void set_llm_memory_parser_test_hooks(
@@ -244,6 +370,17 @@ void set_llm_memory_parser_test_hooks(
   llm_parser_hooks_active = true;
 }
 
+void set_llm_memory_command_test_hooks(
+    const LlmMemoryCommandTestHooks* hooks) {
+  if (hooks == nullptr) {
+    active_llm_command_hooks = LlmMemoryCommandTestHooks{};
+    llm_command_hooks_active = false;
+    return;
+  }
+  active_llm_command_hooks = *hooks;
+  llm_command_hooks_active = true;
+}
+
 int parse_llm_memory_arguments(int argc, char* argv[],
                                LlmMemoryConfig& config) {
   config = LlmMemoryConfig{};
@@ -253,6 +390,7 @@ int parse_llm_memory_arguments(int argc, char* argv[],
   }
 
   bool mode_seen = false;
+  bool backend_seen = false;
   bool weight_seen = false;
   bool layers_seen = false;
   bool query_heads_seen = false;
@@ -286,6 +424,29 @@ int parse_llm_memory_arguments(int argc, char* argv[],
         return EXIT_FAILURE;
       }
       config.help_printed = true;
+      continue;
+    }
+    if (argument == "--llm-memory-backend") {
+      if (report_duplicate(backend_seen, "--llm-memory-backend")) {
+        return EXIT_FAILURE;
+      }
+      std::string token;
+      if (!take_value(argc, argv, index, "--llm-memory-backend", token)) {
+        return EXIT_FAILURE;
+      }
+      if (token == "cpu") {
+        config.backend = LlmMemoryBackend::Cpu;
+      } else if (token == "metal") {
+        config.backend = LlmMemoryBackend::Metal;
+      } else {
+        std::cerr << Messages::error_prefix()
+                  << Messages::error_invalid_value(
+                         argument, token,
+                         Messages::llm_memory_reason_backend())
+                  << std::endl;
+        return EXIT_FAILURE;
+      }
+      config.user_specified_backend = true;
       continue;
     }
     if (argument == "--kv-layout") {
@@ -584,20 +745,33 @@ int parse_llm_memory_arguments(int argc, char* argv[],
     report_llm_config_failure(layout_reason);
     return EXIT_FAILURE;
   }
-  config.available_workers = detect_available_llm_workers();
-  if (config.available_workers == 0) {
+  if (config.backend == LlmMemoryBackend::Metal &&
+      config.user_specified_workers) {
     report_llm_config_failure(
-        LlmMemoryConfigReason::AVAILABLE_WORKER_COUNT_REQUIRED);
+        LlmMemoryConfigReason::THREADS_NOT_APPLICABLE);
     return EXIT_FAILURE;
   }
-  if (!config.user_specified_workers) {
-    config.requested_workers = config.available_workers;
+  if (config.backend == LlmMemoryBackend::Cpu) {
+    config.available_workers = detect_available_llm_workers();
+    if (config.available_workers == 0) {
+      report_llm_config_failure(
+          LlmMemoryConfigReason::AVAILABLE_WORKER_COUNT_REQUIRED);
+      return EXIT_FAILURE;
+    }
+    if (!config.user_specified_workers) {
+      config.requested_workers = config.available_workers;
+    }
   }
 
   const LlmMemoryConfigValidation validation =
       validate_llm_memory_config(config);
   if (!validation.valid) {
     report_llm_config_failure(validation.reason_code);
+    return EXIT_FAILURE;
+  }
+  if (const char* profile_reason =
+          validate_llm_activated_profile(config)) {
+    report_llm_config_failure(profile_reason);
     return EXIT_FAILURE;
   }
   LlmGeometryRequest geometry_request{
@@ -627,7 +801,11 @@ int parse_llm_memory_arguments(int argc, char* argv[],
       std::numeric_limits<size_t>::max();
   for (LlmScenario scenario : kScenarios) {
     const LlmScenarioLimits limits =
-        calculate_llm_scenario_limits(geometry, scenario);
+        calculate_llm_scenario_limits(
+            geometry, scenario,
+            config.backend == LlmMemoryBackend::Metal
+                ? Constants::LLM_METAL_MAX_WORK_UNITS_PER_DISPATCH
+                : Constants::LLM_MAX_WORK_UNITS_PER_MEASUREMENT);
     if (!limits.valid) {
       report_llm_config_failure(limits.reason_code);
       return EXIT_FAILURE;
@@ -670,11 +848,11 @@ int run_llm_memory_mode(int argc, char* argv[]) {
     return EXIT_SUCCESS;
   }
 
-  std::optional<JsonOutputSession> output_session;
+  JsonOutputTarget output_target;
   try {
-    output_session.emplace(make_json_output_target(
+    output_target = make_json_output_target(
         config.output_file,
-        JsonFilePathPolicy::ResolveAgainstCurrentDirectory));
+        JsonFilePathPolicy::ResolveAgainstCurrentDirectory);
   } catch (const std::exception& error) {
     report_json_output_boundary_failure(
         config.output_file,
@@ -688,10 +866,25 @@ int run_llm_memory_mode(int argc, char* argv[]) {
   }
 
   int run_status = EXIT_FAILURE;
+  std::optional<JsonOutputSession> output_session;
+  try {
+    output_session.emplace(std::move(output_target));
+  } catch (const std::exception& error) {
+    report_json_output_boundary_failure(
+        config.output_file,
+        Messages::error_json_output_initialization_failed(error.what()));
+    return EXIT_FAILURE;
+  } catch (...) {
+    report_json_output_boundary_failure(
+        config.output_file,
+        Messages::error_json_output_initialization_failed(""));
+    return EXIT_FAILURE;
+  }
   LlmMemoryWorkPlan model_plan;
   std::unique_ptr<LlmBackend> backend;
   LlmResultMetadata metadata;
   LlmMemoryResult result;
+  bool post_run_exception = false;
   try {
     print_runtime_banner();
     metadata.timestamp = build_utc_timestamp();
@@ -742,6 +935,40 @@ int run_llm_memory_mode(int argc, char* argv[]) {
       return EXIT_FAILURE;
     }
 
+    if (config.backend == LlmMemoryBackend::Metal) {
+      const LlmBackendLifecycleResult initialization =
+          backend->initialize(config);
+      if (initialization.status == LlmBackendStatus::Ready) {
+        const std::optional<LlmMetalResourcePlanRequest> request =
+            build_runtime_metal_resource_request(
+                model_draft.candidate, backend->evidence(),
+                metadata.available_memory_bytes, metadata.page_size_bytes,
+                model_draft.candidate.memory_budget.request
+                    .planner_storage_bytes);
+        LlmMetalExecutionPlan preflight_execution;
+        if (request.has_value()) {
+          preflight_execution =
+              build_llm_metal_execution_plan(*request);
+        } else {
+          preflight_execution.reason_code =
+              LlmBackendReason::EXECUTION_PLAN_MISMATCH;
+        }
+        const std::string preflight_reason =
+            preflight_execution.reason_code;
+        if (!attach_llm_metal_execution_plan(
+                model_draft, std::move(preflight_execution))) {
+          std::cerr << Messages::error_prefix()
+                    << Messages::error_llm_memory_run_failed(
+                           preflight_reason.empty()
+                               ? std::string(
+                                     LlmBackendReason::EXECUTION_PLAN_MISMATCH)
+                               : preflight_reason)
+                    << std::endl;
+          return EXIT_FAILURE;
+        }
+      }
+    }
+
     size_t checksum_auxiliary_bytes = 0;
     size_t orchestration_auxiliary_bytes = 0;
     {
@@ -783,10 +1010,48 @@ int run_llm_memory_mode(int argc, char* argv[]) {
         return EXIT_FAILURE;
       }
     }
-    model_plan = finalize_llm_memory_work_plan(
-        std::move(model_draft), checksum_auxiliary_bytes,
-        orchestration_auxiliary_bytes,
-        []() { return signal_received(); });
+    if (config.backend == LlmMemoryBackend::Metal &&
+        backend->evidence().initialization.status ==
+            LlmBackendStatus::Ready) {
+      size_t additional_owned_bytes = 0;
+      size_t command_auxiliary_bytes = 0;
+      if (!NumericUtils::checked_add(
+              checksum_auxiliary_bytes, orchestration_auxiliary_bytes,
+              command_auxiliary_bytes) ||
+          !NumericUtils::checked_add(
+              model_draft.candidate.memory_budget.request
+                  .planner_storage_bytes,
+              command_auxiliary_bytes,
+              additional_owned_bytes)) {
+        std::cerr << Messages::error_prefix()
+                  << Messages::error_llm_memory_run_failed(
+                         LlmRunnerReason::AUXILIARY_BYTES_OVERFLOW)
+                  << std::endl;
+        return EXIT_FAILURE;
+      }
+      const std::optional<LlmMetalResourcePlanRequest> request =
+          build_runtime_metal_resource_request(
+              model_draft.candidate, backend->evidence(),
+              metadata.available_memory_bytes, metadata.page_size_bytes,
+              additional_owned_bytes);
+      LlmMetalExecutionPlan runtime_execution;
+      if (request.has_value()) {
+        runtime_execution = build_llm_metal_execution_plan(*request);
+      } else {
+        runtime_execution.reason_code =
+            LlmBackendReason::EXECUTION_PLAN_MISMATCH;
+      }
+      model_plan = finalize_llm_memory_work_plan(
+          std::move(model_draft),
+          std::move(runtime_execution),
+          checksum_auxiliary_bytes, orchestration_auxiliary_bytes,
+          []() { return signal_received(); });
+    } else {
+      model_plan = finalize_llm_memory_work_plan(
+          std::move(model_draft), checksum_auxiliary_bytes,
+          orchestration_auxiliary_bytes,
+          []() { return signal_received(); });
+    }
     if (!model_plan.valid) {
       if (model_plan.reason_code ==
           LlmWorkPlanReason::BLOCK_TABLE_PROTECTION_FAILED) {
@@ -816,17 +1081,28 @@ int run_llm_memory_mode(int argc, char* argv[]) {
     run_status =
         run_llm_memory_suite(config, model_plan, *backend, result, hooks);
     if (!result.initialized) {
-      if (result.reason_code != LlmBackendReason::TIMER_UNAVAILABLE) {
-        std::cerr << Messages::error_prefix()
-                  << Messages::error_llm_memory_run_failed(result.reason_code)
-                  << std::endl;
+      if (result.reason_code == LlmBackendReason::TIMER_UNAVAILABLE) {
+        return EXIT_FAILURE;
+      }
+      std::cerr << Messages::error_prefix()
+                << Messages::error_llm_memory_run_failed(result.reason_code)
+                << std::endl;
+      const std::string reason_code = result.reason_code;
+      if (write_llm_setup_failure_final(
+              *output_session, config, model_plan, backend->evidence(),
+              metadata, reason_code, result) != EXIT_SUCCESS) {
+        return EXIT_FAILURE;
       }
       return EXIT_FAILURE;
+    }
+    if (llm_command_hooks_active &&
+        active_llm_command_hooks.after_initialized_runner) {
+      active_llm_command_hooks.after_initialized_runner();
     }
     if (output_session->kind() != JsonOutputKind::File || !result.terminal_checkpoint_completed) {
       metadata.environment_end = capture_llm_host_environment();
     }
-    print_llm_memory_console_report(model_plan, metadata, result);
+    print_llm_memory_console_report(model_plan, backend->evidence(), metadata, result);
 
     if (output_session->kind() == JsonOutputKind::File && result.terminal_checkpoint_completed &&
         !result.checkpoint_failed) {
@@ -840,12 +1116,35 @@ int run_llm_memory_mode(int argc, char* argv[]) {
   } catch (const std::exception& error) {
     report_llm_command_exception(error.what());
     run_status = EXIT_FAILURE;
+    post_run_exception = result.initialized;
   } catch (...) {
     report_llm_command_exception("");
     run_status = EXIT_FAILURE;
+    post_run_exception = result.initialized;
   }
 
-  if (output_session->kind() == JsonOutputKind::Stdout && result.initialized &&
+  if (output_session && model_plan.valid && backend &&
+      !result.initialized) {
+    if (write_llm_setup_failure_final(
+            *output_session, config, model_plan, backend->evidence(),
+            metadata, LlmRunnerReason::RUNNER_EXCEPTION,
+            result) != EXIT_SUCCESS) {
+      return EXIT_FAILURE;
+    }
+    return EXIT_FAILURE;
+  }
+
+  if (post_run_exception && output_session && model_plan.valid && backend) {
+    if (write_llm_post_run_exception_final(
+            *output_session, config, model_plan, backend->evidence(),
+            metadata, result) != EXIT_SUCCESS) {
+      return EXIT_FAILURE;
+    }
+    return EXIT_FAILURE;
+  }
+
+  if (output_session && output_session->kind() == JsonOutputKind::Stdout &&
+      result.initialized &&
       backend &&
       write_llm_stdout_final(*output_session, config, model_plan,
                              backend->evidence(), metadata,
@@ -945,9 +1244,25 @@ LlmMemoryConfigValidation validate_llm_memory_config(
     validation.reason_code = LlmMemoryConfigReason::BATCH_SIZE_REQUIRED;
     return validation;
   }
-  if (config.requested_workers == 0) {
-    validation.reason_code = LlmMemoryConfigReason::WORKER_COUNT_REQUIRED;
-    return validation;
+  switch (config.backend) {
+    case LlmMemoryBackend::Cpu:
+      if (config.requested_workers == 0) {
+        validation.reason_code =
+            LlmMemoryConfigReason::WORKER_COUNT_REQUIRED;
+        return validation;
+      }
+      break;
+    case LlmMemoryBackend::Metal:
+      if (config.user_specified_workers || config.requested_workers != 0 ||
+          config.available_workers != 0) {
+        validation.reason_code =
+            LlmMemoryConfigReason::THREADS_NOT_APPLICABLE;
+        return validation;
+      }
+      break;
+    default:
+      validation.reason_code = LlmMemoryConfigReason::INVALID_BACKEND;
+      return validation;
   }
   if (config.loop_count == 0) {
     validation.reason_code = LlmMemoryConfigReason::LOOP_COUNT_REQUIRED;

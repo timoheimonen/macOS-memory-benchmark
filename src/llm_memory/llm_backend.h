@@ -84,8 +84,18 @@ inline constexpr const char* PREPARATION_INTERRUPTED =
     "preparation-interrupted";
 inline constexpr const char* PLAN_RESOURCE_IDENTITY_MISMATCH =
     "plan-resource-identity-mismatch";
+inline constexpr const char* STATUS_RESET_COMMAND_FAILED =
+    "status-reset-command-failed";
+inline constexpr const char* TIMED_COMMAND_BUFFER_ERROR =
+    "timed-command-buffer-error";
+inline constexpr const char* INVALID_GPU_TIMESTAMPS =
+    "invalid-gpu-timestamps";
+inline constexpr const char* TIMED_CHECKSUM_MISMATCH =
+    "timed-checksum-mismatch";
 inline constexpr const char* POST_VALIDATION_COMMAND_FAILED =
     "post-validation-command-failed";
+inline constexpr const char* APPEND_VALIDATION_MISMATCH =
+    "append-validation-mismatch";
 inline constexpr const char* PADDING_CANARY_MISMATCH =
     "padding-canary-mismatch";
 }  // namespace LlmBackendReason
@@ -192,10 +202,65 @@ struct LlmCpuTaskEvidence {
   LlmExecutorResult executor;
 };
 
-/** Phase-8 Metal tasks are deliberately unsupported until timed kernels land. */
+/** Bounded Objective-C/Metal error diagnostics behind the pure C++ boundary. */
+struct LlmMetalErrorDiagnostic {
+  std::string domain;
+  long long code = 0;
+  std::string description;
+};
+
+/** One 32-bit modular checksum pair. Arithmetic wraps modulo 2^32. */
+struct LlmMetalMod32Lane {
+  uint32_t a = 0;
+  uint32_t b = 0;
+};
+
+/** Separate weight, key, and value lanes for `llm-metal-dual-mod32-v1`. */
+struct LlmMetalDualMod32Checksum {
+  LlmMetalMod32Lane weight;
+  LlmMetalMod32Lane k;
+  LlmMetalMod32Lane v;
+};
+
+/** Complete per-task Metal timing, dispatch, checksum, and validation evidence. */
 struct LlmMetalTaskEvidence {
   bool timed_pipeline_available = false;
+  std::string pipeline_label;
+  size_t pipeline_thread_execution_width = 0;
+  size_t pipeline_max_total_threads_per_threadgroup = 0;
+  bool grid_plan_available = false;
+  LlmMetalGridPlan grid_plan;
   bool timing_evaluated = false;
+  bool timing_valid = false;
+  double gpu_start_seconds = 0.0;
+  double gpu_end_seconds = 0.0;
+  double gpu_elapsed_seconds = 0.0;
+  bool host_timing_evaluated = false;
+  double host_submit_to_completion_seconds = 0.0;
+  double host_wait_seconds = 0.0;
+  bool queue_delay_available = false;
+  double queue_delay_seconds = 0.0;
+  size_t reset_command_buffer_count = 0;
+  size_t timed_command_buffer_count = 0;
+  size_t post_validation_command_buffer_count = 0;
+  size_t timed_compute_encoder_count = 0;
+  size_t timed_workload_dispatch_count = 0;
+  std::string reset_command_status = "not-run";
+  std::string timed_command_status = "not-run";
+  std::string post_validation_command_status = "not-run";
+  std::string checksum_algorithm_version = "llm-metal-dual-mod32-v1";
+  bool checksum_evaluated = false;
+  bool checksum_valid = false;
+  LlmMetalDualMod32Checksum expected_checksum;
+  LlmMetalDualMod32Checksum actual_checksum;
+  bool append_validation_evaluated = false;
+  bool append_validation_valid = false;
+  bool padding_canary_applicable = false;
+  bool padding_canary_evaluated = false;
+  bool padding_canary_valid = false;
+  bool post_validation_evaluated = false;
+  bool post_validation_valid = false;
+  LlmMetalErrorDiagnostic error;
 };
 
 using LlmTaggedTaskEvidence = std::variant<std::monostate, LlmCpuTaskEvidence, LlmMetalTaskEvidence>;
@@ -216,14 +281,7 @@ struct LlmCpuBackendEvidence {
   LlmResourcePreparationResult preparation;
 };
 
-/** Bounded Objective-C/Metal error diagnostics behind the pure C++ boundary. */
-struct LlmMetalErrorDiagnostic {
-  std::string domain;
-  long long code = 0;
-  std::string description;
-};
-
-/** Runtime properties for one compiled Phase-8 foundation pipeline. */
+/** Runtime properties for one compiled Metal foundation or workload pipeline. */
 struct LlmMetalPipelineEvidence {
   std::string label;
   size_t thread_execution_width = 0;
@@ -304,10 +362,11 @@ struct LlmMetalResourceEvidence {
   LlmMetalErrorDiagnostic error;
 };
 
-/** Inactive Metal foundation snapshot; it contains no timed result. */
+/** Metal capability, resource, and public workload pipeline evidence. */
 struct LlmMetalBackendEvidence {
   LlmMetalCapabilityEvidence capability;
   LlmMetalResourceEvidence resources;
+  std::vector<LlmMetalPipelineEvidence> workload_pipelines;
   bool timed_results_available = false;
 };
 

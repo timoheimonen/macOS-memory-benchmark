@@ -80,7 +80,7 @@ struct LlmResultMetadata {
  * @param config Parsed command configuration, including exact argv/output.
  * @param model_plan Immutable full-size model geometry and layout plan.
  * @param backend_evidence Backend snapshot supplying the selected tagged
- *        preparation evidence; lifecycle status does not add schema-v1 fields.
+ *        lifecycle, preparation, allocation, and task evidence.
  * @param metadata Command-scoped system and environment snapshots.
  * @param result Runner snapshot at a logical checkpoint or command terminal.
  * @return An independently owned ordered JSON document.
@@ -93,10 +93,9 @@ nlohmann::ordered_json build_llm_memory_json(const LlmMemoryConfig& config, cons
                                              const LlmResultMetadata& metadata, const LlmMemoryResult& result);
 
 /** CPU-only compatibility adapter retained for focused serializer tests. */
-nlohmann::ordered_json build_llm_memory_json(
-    const LlmMemoryConfig& config, const LlmMemoryWorkPlan& model_plan,
-    const LlmResourcePreparationResult& preparation,
-    const LlmResultMetadata& metadata, const LlmMemoryResult& result);
+nlohmann::ordered_json build_llm_memory_json(const LlmMemoryConfig& config, const LlmMemoryWorkPlan& model_plan,
+                                             const LlmResourcePreparationResult& preparation,
+                                             const LlmResultMetadata& metadata, const LlmMemoryResult& result);
 
 /** Return the versioned exact-byte traffic classification token. */
 const char* classify_llm_traffic_payload(const LlmGeometry& geometry) noexcept;
@@ -107,7 +106,8 @@ const char* classify_llm_traffic_payload(const LlmGeometry& geometry) noexcept;
  * A disabled output target returns a valid zero estimate. File and stdout
  * targets reserve fixed schema/input storage, all variable-length component,
  * layout, scenario, and ownership identity evidence, every planned
- * measurement, and both expected/actual worker checksum trees before the final
+ * measurement, both expected/actual CPU worker checksum trees, and each
+ * bounded Metal measurement/calibration task-evidence tree before the final
  * work-plan memory admission. The estimate allocates no memory and retains no
  * references.
  *
@@ -118,9 +118,8 @@ LlmJsonPeakEstimate calculate_llm_json_peak_estimate(const LlmMemoryConfig& conf
                                                      const LlmMemoryWorkPlan& model_plan) noexcept;
 
 /** Calculate the same conservative JSON peak from a pre-table view. */
-LlmJsonPeakEstimate calculate_llm_json_peak_estimate(
-    const LlmMemoryConfig& config,
-    const LlmAuxiliaryPreflightView& preflight) noexcept;
+LlmJsonPeakEstimate calculate_llm_json_peak_estimate(const LlmMemoryConfig& config,
+                                                     const LlmAuxiliaryPreflightView& preflight) noexcept;
 
 /**
  * Collect the canonical console/JSON quality-warning tokens.

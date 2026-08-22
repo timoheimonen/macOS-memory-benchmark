@@ -128,6 +128,8 @@ inline constexpr const char* INVALID_MODEL_WORK_PLAN =
     "invalid-model-work-plan";
 inline constexpr const char* BACKEND_NOT_ACTIVATED =
     "backend-not-activated";
+inline constexpr const char* METAL_WORKERS_NOT_APPLICABLE =
+    "metal-workers-not-applicable";
 inline constexpr const char* PHASE_NOT_ACTIVATED = "phase-not-activated";
 inline constexpr const char* KV_LAYOUT_NOT_ACTIVATED =
     "kv-layout-not-activated";
@@ -144,7 +146,27 @@ inline constexpr const char* TASK_ACCOUNTED_BYTES_CAP_EXCEEDED =
     "task-accounted-bytes-cap-exceeded";
 }  // namespace LlmWorkPlanReason
 
-/** Stable reasons emitted by the inactive pure Metal foundation planner. */
+/** Versioned Phase-9 Metal decode/contiguous planning identities. */
+namespace LlmMetalDecodeContiguousVersion {
+inline constexpr const char* EXECUTOR =
+    "llm-metal-executor-v1-decode-contiguous";
+inline constexpr const char* SCHEDULE =
+    "llm-metal-decode-contiguous-grid-stride-v1";
+inline constexpr const char* TIMER =
+    "metal-command-buffer-gpu-start-end-v1";
+inline constexpr const char* BUFFER_PATTERN =
+    "llm-metal-contiguous-affine32-v1";
+inline constexpr const char* WRITE_PATTERN =
+    "llm-metal-decode-append-affine32-v1";
+inline constexpr const char* CHECKSUM = "llm-metal-dual-mod32-v1";
+}  // namespace LlmMetalDecodeContiguousVersion
+
+namespace LlmMetalPlannerAccounting {
+inline constexpr size_t RUNTIME_IDENTITY_GROWTH_RESERVE_BYTES =
+    64ULL * 1024ULL;
+}  // namespace LlmMetalPlannerAccounting
+
+/** Stable reasons emitted by the pure Metal resource and dispatch planner. */
 namespace LlmMetalPlanReason {
 inline constexpr const char* VALID = "valid";
 inline constexpr const char* INVALID_GEOMETRY = "invalid-metal-geometry";
@@ -696,7 +718,7 @@ struct LlmMetalPipelineCapabilities {
   size_t max_total_threads_per_threadgroup = 0;
 };
 
-/** Exact bounded inputs for one future Metal workload dispatch. */
+/** Exact bounded inputs for one Metal workload dispatch. */
 struct LlmMetalGridRequest {
   size_t owner_count = 0;
   size_t visit_bytes = 0;
@@ -725,7 +747,7 @@ struct LlmMetalGridPlan {
   std::string identity;
 };
 
-/** One exact resource requested by the inactive Metal candidate allocator. */
+/** One exact resource requested by the Metal candidate allocator. */
 enum class LlmMetalResourcePool : uint8_t {
   Weight = 0,
   K,
@@ -773,7 +795,7 @@ struct LlmMetalResourcePlan {
   std::string identity;
 };
 
-/** Inactive Metal plan used by Phase-8 resource/capability tests. */
+/** Metal resource and execution plan retained by the selected backend. */
 struct LlmMetalExecutionPlan {
   bool valid = false;
   std::string reason_code = LlmMetalPlanReason::INVALID_GEOMETRY;
@@ -870,6 +892,10 @@ struct LlmAuxiliaryPreflightView {
   size_t total_layer_descriptors = 0;
   size_t total_sequence_descriptors = 0;
   size_t k_or_v_static_reference_count = 0;
+  size_t metal_planned_resource_count = 0;
+  size_t metal_persistent_resource_count = 0;
+  size_t metal_resolved_execution_plan_backing_bytes = 0;
+  size_t metal_resolved_plan_identity_backing_bytes = 0;
   size_t model_plan_identity_bytes = 0;
   std::array<size_t, kLlmScenarioCount>
       maximum_scenario_plan_identity_bytes{};
@@ -1035,6 +1061,33 @@ LlmMemoryWorkPlanDraft prepare_llm_memory_work_plan(
     const LlmKvStopRequested& stop_requested = {});
 
 /**
+ * Attach one runtime-dependent Metal planning outcome to a logical draft.
+ *
+ * This operation is used after capability initialization. A valid supplied
+ * plan rebinds the component/model identities and refreshes the conservative
+ * auxiliary preflight without publishing an executable plan. An invalid
+ * supplied plan is retained as terminal runtime-failure evidence while the
+ * logical draft remains finalizable for output. Callers must inspect the
+ * retained alternative before attempting exact execution-plan finalization.
+ * A valid supplied plan must describe the draft's decode/contiguous geometry
+ * and its `additional_owned_bytes` must contain the draft's planner storage
+ * but no command auxiliary bytes yet.
+ */
+bool attach_llm_metal_execution_plan(
+    LlmMemoryWorkPlanDraft& draft,
+    LlmMetalExecutionPlan&& metal_execution_plan) noexcept;
+
+/**
+ * Measure the execution-plan capacities retained by the Metal backend's
+ * resolved copy and bound its identity string with the conservative 2x
+ * policy. `model_plan_identity_bytes` may include a preflight growth reserve.
+ */
+bool calculate_llm_metal_resolved_plan_backing_bytes(
+    const LlmMemoryWorkPlan& plan, size_t model_plan_identity_bytes,
+    size_t& execution_plan_backing_bytes,
+    size_t& plan_identity_backing_bytes) noexcept;
+
+/**
  * Perform full auxiliary admission, then materialize/protect a paged table.
  *
  * The draft is consumed on every outcome. No table allocation occurs unless
@@ -1049,17 +1102,33 @@ LlmMemoryWorkPlan finalize_llm_memory_work_plan(
     const LlmKvStopRequested& stop_requested = {});
 
 /**
+ * Finalize a Metal draft with the exact runtime planning outcome rebuilt after
+ * auxiliary sizing. A valid plan's `additional_owned_bytes` must equal the
+ * checked sum of planner storage and the two supplied auxiliary categories.
+ * The common memory-budget categories remain separate and are not added a
+ * second time to the resulting required peak. An invalid outcome is retained
+ * in a valid non-executable logical plan so an already initialized backend can
+ * produce one terminal runtime-failure result.
+ */
+LlmMemoryWorkPlan finalize_llm_memory_work_plan(
+    LlmMemoryWorkPlanDraft&& draft,
+    LlmMetalExecutionPlan&& metal_execution_plan,
+    size_t checksum_auxiliary_bytes,
+    size_t orchestration_auxiliary_bytes,
+    const LlmKvStopRequested& stop_requested = {});
+
+/**
  * Build the logical plan and its tagged backend planning alternative.
  *
  * The active CPU planner reduces effective workers until every standalone
  * scenario has work. Its retained vector capacities are measured after
  * allocation and the budget is re-evaluated before the plan becomes valid.
- * Invalid plans expose no executable templates. The public builder continues
- * to reject Metal until a timed profile is activated; the separate Phase-8
- * Metal foundation planner resolves capability-dependent resource plans for
- * internal and real-device tests. Both contiguous and paged CPU prefill
- * produce executable descriptor and ownership plans; paged execution retains
- * the immutable block-table identity in the work plan.
+ * Invalid plans expose no executable templates. Metal decode/contiguous
+ * produces a valid logical plan with an unresolved tagged execution
+ * alternative; command orchestration must attach the capability-dependent
+ * runtime plan before a ready backend can execute it. Both contiguous and
+ * paged CPU prefill produce executable descriptor and ownership plans; paged
+ * execution retains the immutable block-table identity in the work plan.
  *
  * @param request Fully resolved geometry, environment, and budget inputs.
  * @param stop_requested Optional synchronous predicate polled during paged
@@ -1106,9 +1175,13 @@ uint64_t llm_seed_domain_value(LlmSeedDomain domain);
  */
 uint64_t derive_llm_domain_seed(uint64_t base_seed, LlmSeedDomain domain);
 
-/** Calculate exact model payload, accounted bytes, and hard ceilings for one scenario. */
+/**
+ * Calculate exact model payload, accounted bytes, and hard ceilings for one
+ * scenario. `work_unit_cap` narrows the common profile cap for a backend ABI.
+ */
 LlmScenarioLimits calculate_llm_scenario_limits(
-    const LlmGeometry& geometry, LlmScenario scenario);
+    const LlmGeometry& geometry, LlmScenario scenario,
+    size_t work_unit_cap = Constants::LLM_MAX_WORK_UNITS_PER_MEASUREMENT);
 
 /**
  * Resolve exact component totals for one scenario task.

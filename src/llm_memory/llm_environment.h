@@ -15,7 +15,7 @@
 
 /**
  * @file llm_environment.h
- * @brief Process environment snapshot for the CPU LLM memory profile
+ * @brief Process environment snapshot for the LLM memory profile
  */
 
 #ifndef LLM_ENVIRONMENT_H

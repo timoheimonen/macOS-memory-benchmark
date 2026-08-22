@@ -18,16 +18,22 @@
 
 #include <algorithm>
 #include <cstdlib>
+#include <filesystem>
+#include <fstream>
 #include <limits>
+#include <sstream>
+#include <stdexcept>
 #include <string>
 #include <utility>
 #include <vector>
+#include <unistd.h>
 
 #include "core/config/version.h"
 #include "core/timing/timer.h"
 #include "llm_memory/llm_memory.h"
 #include "llm_memory/llm_runner.h"
 #include "output/console/messages/messages_api.h"
+#include "third_party/nlohmann/json.hpp"
 
 namespace {
 
@@ -115,6 +121,13 @@ std::vector<std::string> valid_prefill_arguments() {
           "2"};
 }
 
+std::vector<std::string> valid_metal_arguments() {
+  std::vector<std::string> arguments = valid_llm_arguments();
+  arguments.insert(arguments.begin() + 2,
+                   {"--llm-memory-backend", "metal"});
+  return arguments;
+}
+
 int parse_llm_arguments(std::vector<std::string> arguments,
                         LlmMemoryConfig& config) {
   std::vector<char*> argv;
@@ -169,6 +182,67 @@ class LlmParserHooksScope {
   LlmMemoryParserTestHooks hooks_;
 };
 
+class LlmCommandHooksScope {
+ public:
+  explicit LlmCommandHooksScope(std::function<void()> after_runner) {
+    hooks_.after_initialized_runner = std::move(after_runner);
+    set_llm_memory_command_test_hooks(&hooks_);
+  }
+
+  ~LlmCommandHooksScope() { set_llm_memory_command_test_hooks(nullptr); }
+
+  LlmCommandHooksScope(const LlmCommandHooksScope&) = delete;
+  LlmCommandHooksScope& operator=(const LlmCommandHooksScope&) = delete;
+
+ private:
+  LlmMemoryCommandTestHooks hooks_;
+};
+
+class LlmCommandOutputFileScope {
+ public:
+  LlmCommandOutputFileScope()
+      : path_(std::filesystem::path("/tmp") /
+              ("membenchmark_llm_post_run_exception_" +
+               std::to_string(::getpid()) + ".json")) {
+    cleanup();
+  }
+
+  ~LlmCommandOutputFileScope() { cleanup(); }
+
+  LlmCommandOutputFileScope(const LlmCommandOutputFileScope&) = delete;
+  LlmCommandOutputFileScope& operator=(
+      const LlmCommandOutputFileScope&) = delete;
+
+  const std::filesystem::path& path() const { return path_; }
+
+ private:
+  void cleanup() noexcept {
+    std::error_code ignored;
+    std::filesystem::remove(path_, ignored);
+    ignored.clear();
+    std::filesystem::remove(path_.string() + ".tmp", ignored);
+  }
+
+  std::filesystem::path path_;
+};
+
+int run_llm_command(std::vector<std::string> arguments) {
+  std::vector<char*> argv;
+  argv.reserve(arguments.size());
+  for (std::string& argument : arguments) {
+    argv.push_back(argument.data());
+  }
+  return run_llm_memory_mode(static_cast<int>(argv.size()), argv.data());
+}
+
+std::string read_llm_command_output_file(
+    const std::filesystem::path& path) {
+  std::ifstream file(path);
+  std::ostringstream contents;
+  contents << file.rdbuf();
+  return contents.str();
+}
+
 void replace_option_value(std::vector<std::string>& arguments,
                           const std::string& option,
                           const std::string& value) {
@@ -201,6 +275,7 @@ TEST(LlmMemoryConfigTest, DefaultsMatchFrozenStandaloneContract) {
   EXPECT_EQ(config.iterations, 0u);
   EXPECT_EQ(config.loop_count, 3u);
   EXPECT_EQ(config.seed, 0u);
+  EXPECT_FALSE(config.user_specified_backend);
   EXPECT_FALSE(config.user_specified_iterations);
   EXPECT_FALSE(config.user_specified_seed);
   EXPECT_FALSE(config.user_specified_workers);
@@ -228,6 +303,7 @@ TEST(LlmMemoryConfigTest,
   LlmMemoryConfig config;
 
   ASSERT_EQ(parse_llm_arguments(arguments, config), EXIT_SUCCESS);
+  EXPECT_EQ(config.backend, LlmMemoryBackend::Cpu);
   EXPECT_EQ(config.weight_size_mb, 1u);
   EXPECT_EQ(config.layer_count, 2u);
   EXPECT_EQ(config.query_head_count, 4u);
@@ -245,6 +321,7 @@ TEST(LlmMemoryConfigTest,
   EXPECT_EQ(config.iterations, 0u);
   EXPECT_EQ(config.loop_count, 3u);
   EXPECT_EQ(config.seed, 0x123456789abcdef0ULL);
+  EXPECT_FALSE(config.user_specified_backend);
   EXPECT_FALSE(config.user_specified_iterations);
   EXPECT_FALSE(config.user_specified_seed);
   EXPECT_FALSE(config.user_specified_workers);
@@ -259,10 +336,139 @@ TEST(LlmMemoryConfigTest,
   EXPECT_EQ(config.argv, arguments);
 }
 
+TEST(LlmMemoryConfigTest,
+     ParserActivatesMetalDecodeContiguousWithoutCpuWorkerDetection) {
+  LlmParserHooksScope hooks(0, 9);
+  const std::vector<std::string> arguments = valid_metal_arguments();
+  LlmMemoryConfig config;
+
+  const CapturedLlmParse parsed =
+      parse_llm_arguments_capturing(arguments, config);
+
+  ASSERT_EQ(parsed.result, EXIT_SUCCESS) << parsed.stderr_output;
+  EXPECT_TRUE(parsed.stdout_output.empty());
+  EXPECT_TRUE(parsed.stderr_output.empty());
+  EXPECT_EQ(config.backend, LlmMemoryBackend::Metal);
+  EXPECT_EQ(config.phase, LlmPhase::Decode);
+  EXPECT_EQ(config.kv_layout, LlmKvLayout::Contiguous);
+  EXPECT_TRUE(config.user_specified_backend);
+  EXPECT_FALSE(config.user_specified_workers);
+  EXPECT_EQ(config.requested_workers, 0u);
+  EXPECT_EQ(config.available_workers, 0u);
+  EXPECT_EQ(config.seed, 9u);
+  EXPECT_EQ(config.argv, arguments);
+}
+
+TEST(LlmMemoryConfigTest,
+     ParserRejectsUnknownBackendWithCentralizedReason) {
+  LlmParserHooksScope hooks;
+  std::vector<std::string> arguments = valid_llm_arguments();
+  arguments.insert(arguments.begin() + 2,
+                   {"--llm-memory-backend", "gpu"});
+  LlmMemoryConfig config;
+
+  const CapturedLlmParse parsed =
+      parse_llm_arguments_capturing(arguments, config);
+
+  EXPECT_EQ(parsed.result, EXIT_FAILURE);
+  EXPECT_TRUE(parsed.stdout_output.empty());
+  EXPECT_EQ(first_output_line(parsed.stderr_output),
+            Messages::error_prefix() +
+                Messages::error_invalid_value(
+                    "--llm-memory-backend", "gpu",
+                    Messages::llm_memory_reason_backend()));
+}
+
+TEST(LlmMemoryConfigTest,
+     ParserRejectsUnactivatedMetalProfilesWithStableOrderIndependentReasons) {
+  LlmParserHooksScope hooks(0, 9);
+  struct InvalidCase {
+    std::vector<std::string> arguments;
+    std::string reason_code;
+  };
+
+  std::vector<std::string> prefill_backend_first =
+      valid_prefill_arguments();
+  prefill_backend_first.insert(prefill_backend_first.begin() + 2,
+                               {"--llm-memory-backend", "metal"});
+  std::vector<std::string> prefill_backend_last =
+      valid_prefill_arguments();
+  prefill_backend_last.insert(prefill_backend_last.end(),
+                              {"--llm-memory-backend", "metal"});
+  std::vector<std::string> paged_backend_first = valid_metal_arguments();
+  paged_backend_first.insert(paged_backend_first.end(),
+                             {"--kv-layout", "paged",
+                              "--kv-block-tokens", "4"});
+  std::vector<std::string> paged_backend_last = valid_llm_arguments();
+  paged_backend_last.insert(paged_backend_last.end(),
+                            {"--kv-layout", "paged",
+                             "--kv-block-tokens", "4",
+                             "--llm-memory-backend", "metal"});
+  std::vector<std::string> prefill_paged = prefill_backend_first;
+  prefill_paged.insert(prefill_paged.end(),
+                       {"--kv-layout", "paged", "--kv-block-tokens", "4"});
+
+  const std::vector<InvalidCase> cases = {
+      {prefill_backend_first,
+       LlmMemoryConfigReason::PHASE_NOT_ACTIVATED},
+      {prefill_backend_last,
+       LlmMemoryConfigReason::PHASE_NOT_ACTIVATED},
+      {paged_backend_first,
+       LlmMemoryConfigReason::KV_LAYOUT_NOT_ACTIVATED},
+      {paged_backend_last,
+       LlmMemoryConfigReason::KV_LAYOUT_NOT_ACTIVATED},
+      {prefill_paged, LlmMemoryConfigReason::PHASE_NOT_ACTIVATED},
+  };
+
+  for (const InvalidCase& test_case : cases) {
+    SCOPED_TRACE(::testing::PrintToString(test_case.arguments));
+    LlmMemoryConfig config;
+    const CapturedLlmParse parsed =
+        parse_llm_arguments_capturing(test_case.arguments, config);
+    EXPECT_EQ(parsed.result, EXIT_FAILURE);
+    EXPECT_TRUE(parsed.stdout_output.empty());
+    EXPECT_EQ(first_output_line(parsed.stderr_output),
+              Messages::error_prefix() +
+                  Messages::error_llm_memory_config_invalid(
+                      test_case.reason_code));
+    EXPECT_EQ(config.requested_workers, 0u);
+    EXPECT_EQ(config.available_workers, 0u);
+  }
+}
+
+TEST(LlmMemoryConfigTest,
+     ParserRejectsMetalThreadsInEitherArgumentOrder) {
+  LlmParserHooksScope hooks(0, 9);
+  std::vector<std::string> backend_first = valid_metal_arguments();
+  backend_first.insert(backend_first.end(), {"--threads", "1"});
+  std::vector<std::string> threads_first = valid_llm_arguments();
+  threads_first.insert(threads_first.begin() + 2,
+                       {"--threads", "1"});
+  threads_first.insert(threads_first.end(),
+                       {"--llm-memory-backend", "metal"});
+
+  for (const std::vector<std::string>& arguments :
+       {backend_first, threads_first}) {
+    SCOPED_TRACE(::testing::PrintToString(arguments));
+    LlmMemoryConfig config;
+    const CapturedLlmParse parsed =
+        parse_llm_arguments_capturing(arguments, config);
+    EXPECT_EQ(parsed.result, EXIT_FAILURE);
+    EXPECT_TRUE(parsed.stdout_output.empty());
+    EXPECT_EQ(first_output_line(parsed.stderr_output),
+              Messages::error_prefix() +
+                  Messages::error_llm_memory_config_invalid(
+                      LlmMemoryConfigReason::THREADS_NOT_APPLICABLE));
+    EXPECT_TRUE(config.user_specified_workers);
+    EXPECT_EQ(config.available_workers, 0u);
+  }
+}
+
 TEST(LlmMemoryConfigTest, ParserPreservesEveryExplicitFieldAndAlias) {
   LlmParserHooksScope hooks;
   const std::vector<std::string> arguments = {
       "memory_benchmark",      "-M",
+      "--llm-memory-backend",  "cpu",
       "--weight-size-mb",      "4096",
       "--layers",              "32",
       "--query-heads",         "32",
@@ -283,6 +489,7 @@ TEST(LlmMemoryConfigTest, ParserPreservesEveryExplicitFieldAndAlias) {
   LlmMemoryConfig config;
 
   ASSERT_EQ(parse_llm_arguments(arguments, config), EXIT_SUCCESS);
+  EXPECT_EQ(config.backend, LlmMemoryBackend::Cpu);
   EXPECT_EQ(config.weight_size_mb, 4096u);
   EXPECT_EQ(config.layer_count, 32u);
   EXPECT_EQ(config.query_head_count, 32u);
@@ -298,6 +505,7 @@ TEST(LlmMemoryConfigTest, ParserPreservesEveryExplicitFieldAndAlias) {
   EXPECT_EQ(config.iterations, 4u);
   EXPECT_EQ(config.loop_count, 5u);
   EXPECT_EQ(config.seed, std::numeric_limits<uint64_t>::max());
+  EXPECT_TRUE(config.user_specified_backend);
   EXPECT_TRUE(config.user_specified_iterations);
   EXPECT_TRUE(config.user_specified_seed);
   EXPECT_TRUE(config.user_specified_workers);
@@ -613,8 +821,9 @@ TEST(LlmMemoryConfigTest,
      ParserRejectsMissingValuesForEveryValueTakingOption) {
   LlmParserHooksScope hooks;
   for (const std::string& option : {
-           "--weight-size-mb", "--layers", "--query-heads", "--kv-heads",
-           "--head-dim", "--kv-element-bytes", "--phase",
+           "--llm-memory-backend", "--weight-size-mb", "--layers",
+           "--query-heads", "--kv-heads", "--head-dim",
+           "--kv-element-bytes", "--phase",
            "--context-tokens", "--prompt-tokens",
            "--attention-query-tile-tokens", "--kv-layout",
            "--kv-block-tokens", "--batch-size", "--threads",
@@ -640,6 +849,8 @@ TEST(LlmMemoryConfigTest,
   };
   const std::vector<DuplicateCase> cases = {
       {{"--llm-memory"}, "--llm-memory"},
+      {{"--llm-memory-backend", "cpu", "--llm-memory-backend", "metal"},
+       "--llm-memory-backend"},
       {{"--weight-size-mb", "1"}, "--weight-size-mb"},
       {{"--layers", "2"}, "--layers"},
       {{"--query-heads", "4"}, "--query-heads"},
@@ -870,7 +1081,9 @@ TEST(LlmMemoryConfigTest,
   LlmParserHooksScope hooks(0, 0);
   LlmMemoryConfig config;
   const CapturedLlmParse parsed = parse_llm_arguments_capturing(
-      {"memory_benchmark", "-M", "--help"}, config);
+      {"memory_benchmark", "-M", "--llm-memory-backend", "metal",
+       "--help"},
+      config);
 
   EXPECT_EQ(parsed.result, EXIT_SUCCESS);
   EXPECT_TRUE(parsed.stderr_output.empty()) << parsed.stderr_output;
@@ -878,6 +1091,9 @@ TEST(LlmMemoryConfigTest,
                 "Usage: memory_benchmark --llm-memory [options]"),
             std::string::npos);
   EXPECT_NE(parsed.stdout_output.find("memory traffic only"),
+            std::string::npos);
+  EXPECT_NE(parsed.stdout_output.find(
+                "--llm-memory-backend <cpu|metal>"),
             std::string::npos);
   EXPECT_NE(parsed.stdout_output.find("--phase <decode|prefill>"),
             std::string::npos);
@@ -889,6 +1105,8 @@ TEST(LlmMemoryConfigTest,
   EXPECT_EQ(parsed.stdout_output.find(Messages::config_header(SOFTVERSION)),
             std::string::npos);
   EXPECT_TRUE(config.help_printed);
+  EXPECT_EQ(config.backend, LlmMemoryBackend::Metal);
+  EXPECT_TRUE(config.user_specified_backend);
   EXPECT_EQ(config.available_workers, 0u);
   EXPECT_EQ(config.requested_workers, 0u);
   EXPECT_EQ(config.seed, 0u);
@@ -1212,6 +1430,38 @@ TEST(LlmMemoryConfigTest,
       LlmMemoryConfigReason::ATTENTION_QUERY_TILE_TOKENS_EXCEEDS_PROMPT);
 }
 
+TEST(LlmMemoryConfigTest,
+     PureValidationKeepsMetalWorkersNonApplicableWithoutApplyingActivationMatrix) {
+  LlmMemoryConfig config = valid_config();
+  config.backend = LlmMemoryBackend::Metal;
+  config.requested_workers = 0;
+  config.available_workers = 0;
+  LlmMemoryConfigValidation validation =
+      validate_llm_memory_config(config);
+  ASSERT_TRUE(validation.valid) << validation.reason_code;
+
+  config.user_specified_workers = true;
+  config.requested_workers = 1;
+  expect_invalid(config, LlmMemoryConfigReason::THREADS_NOT_APPLICABLE);
+
+  config = valid_config();
+  config.backend = LlmMemoryBackend::Metal;
+  config.requested_workers = 0;
+  config.available_workers = 1;
+  expect_invalid(config, LlmMemoryConfigReason::THREADS_NOT_APPLICABLE);
+
+  config = valid_prefill_config();
+  config.backend = LlmMemoryBackend::Metal;
+  config.requested_workers = 0;
+  config.available_workers = 0;
+  validation = validate_llm_memory_config(config);
+  EXPECT_TRUE(validation.valid) << validation.reason_code;
+
+  config = valid_config();
+  config.backend = static_cast<LlmMemoryBackend>(99);
+  expect_invalid(config, LlmMemoryConfigReason::INVALID_BACKEND);
+}
+
 TEST(LlmMemoryConfigTest, ConvertsWeightMiBWithCheckedArithmetic) {
   LlmMemoryConfig config = valid_config();
   config.weight_size_mb = 4096;
@@ -1257,6 +1507,82 @@ TEST(LlmMemoryConfigTest,
             std::string::npos);
   EXPECT_EQ(stderr_output.find(Messages::error_llm_memory_run_failed(
                 LlmBackendReason::TIMER_UNAVAILABLE)),
+            std::string::npos);
+}
+
+TEST(LlmMemoryConfigIntegrationTest,
+     PostRunExceptionWritesExactlyOneFailedStdoutDocumentIntegration) {
+  std::vector<std::string> arguments = valid_llm_arguments();
+  arguments.insert(arguments.end(),
+                   {"--threads", "1", "--iterations", "1", "--count", "1",
+                    "--seed", "1", "--output", "-"});
+  const LlmParserHooksScope parser_hooks(1, 1);
+  size_t hook_calls = 0;
+  const LlmCommandHooksScope command_hooks([&]() {
+    ++hook_calls;
+    throw std::runtime_error("injected post-run command exception");
+  });
+
+  testing::internal::CaptureStdout();
+  testing::internal::CaptureStderr();
+  const int status = run_llm_command(std::move(arguments));
+  const std::string stderr_output = testing::internal::GetCapturedStderr();
+  const std::string stdout_output = testing::internal::GetCapturedStdout();
+
+  EXPECT_EQ(status, EXIT_FAILURE);
+  EXPECT_EQ(hook_calls, 1u);
+  ASSERT_FALSE(stdout_output.empty());
+  EXPECT_EQ(stdout_output.back(), '\n');
+  nlohmann::ordered_json document;
+  ASSERT_NO_THROW(document = nlohmann::ordered_json::parse(stdout_output));
+  EXPECT_EQ(document.at("status"), "failed");
+  EXPECT_EQ(document.at("reason_code"), LlmRunnerReason::RUNNER_EXCEPTION);
+  EXPECT_FALSE(document.at("results_complete").get<bool>());
+  EXPECT_FALSE(document.at("conclusions_valid").get<bool>());
+  EXPECT_NE(stderr_output.find("injected post-run command exception"),
+            std::string::npos);
+}
+
+TEST(LlmMemoryConfigIntegrationTest,
+     PostRunExceptionAtomicallyReplacesTerminalFileDocumentIntegration) {
+  const LlmCommandOutputFileScope output;
+  std::vector<std::string> arguments = valid_llm_arguments();
+  arguments.insert(
+      arguments.end(),
+      {"--threads", "1", "--iterations", "1", "--count", "1", "--seed",
+       "1", "--output", output.path().string()});
+  const LlmParserHooksScope parser_hooks(1, 1);
+  size_t hook_calls = 0;
+  bool observed_complete_terminal_file = false;
+  const LlmCommandHooksScope command_hooks([&]() {
+    ++hook_calls;
+    const nlohmann::ordered_json before_exception =
+        nlohmann::ordered_json::parse(
+            read_llm_command_output_file(output.path()));
+    observed_complete_terminal_file =
+        before_exception.at("status") == "complete";
+    throw std::runtime_error("injected post-run command exception");
+  });
+
+  testing::internal::CaptureStdout();
+  testing::internal::CaptureStderr();
+  const int status = run_llm_command(std::move(arguments));
+  const std::string stderr_output = testing::internal::GetCapturedStderr();
+  const std::string stdout_output = testing::internal::GetCapturedStdout();
+
+  EXPECT_EQ(status, EXIT_FAILURE);
+  EXPECT_EQ(hook_calls, 1u);
+  EXPECT_TRUE(observed_complete_terminal_file);
+  ASSERT_TRUE(std::filesystem::exists(output.path()));
+  EXPECT_FALSE(std::filesystem::exists(output.path().string() + ".tmp"));
+  const nlohmann::ordered_json document = nlohmann::ordered_json::parse(
+      read_llm_command_output_file(output.path()));
+  EXPECT_EQ(document.at("status"), "failed");
+  EXPECT_EQ(document.at("reason_code"), LlmRunnerReason::RUNNER_EXCEPTION);
+  EXPECT_FALSE(document.at("results_complete").get<bool>());
+  EXPECT_FALSE(document.at("conclusions_valid").get<bool>());
+  EXPECT_EQ(stdout_output.find("Results saved"), std::string::npos);
+  EXPECT_NE(stderr_output.find("injected post-run command exception"),
             std::string::npos);
 }
 

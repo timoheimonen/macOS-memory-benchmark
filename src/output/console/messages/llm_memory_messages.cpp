@@ -29,7 +29,8 @@ const std::string& error_llm_memory_must_be_used_alone() {
       "--llm-memory requires --weight-size-mb <MiB>, --layers <count>, "
       "--query-heads <count>, --kv-heads <count>, --head-dim <count>, and "
       "phase-specific token geometry; it allows only optional "
-      "--phase <decode|prefill>, --context-tokens <count>, "
+      "--llm-memory-backend <cpu|metal>, --phase <decode|prefill>, "
+      "--context-tokens <count>, "
       "--prompt-tokens <count>, --attention-query-tile-tokens <count>, "
       "--kv-element-bytes <1|2|4>, --kv-layout <contiguous|paged>, "
       "--kv-block-tokens <count>, --batch-size <count>, "
@@ -74,6 +75,11 @@ const std::string& llm_memory_reason_positive_integer() {
   return reason;
 }
 
+const std::string& llm_memory_reason_backend() {
+  static const std::string reason = "must be exactly cpu or metal";
+  return reason;
+}
+
 const std::string& llm_memory_reason_kv_element_bytes() {
   static const std::string reason = "must be exactly 1, 2, or 4";
   return reason;
@@ -99,11 +105,15 @@ const std::string& llm_memory_reason_platform_size_range() {
 std::string llm_memory_usage_options(const std::string& prog_name) {
   std::ostringstream usage;
   usage << "Usage: " << prog_name << " --llm-memory [options]\n"
-        << "Options for standalone CPU synthetic LLM memory mode:\n"
+        << "Options for standalone CPU/Metal synthetic LLM memory mode:\n"
         << "  -M, --llm-memory       Select the memory-only LLM profile.\n"
+        << "      --llm-memory-backend <cpu|metal>\n"
+        << "                          Execution backend (default: cpu). The experimental Metal preview\n"
+        << "                          accepts decode with contiguous KV only; no fallback is performed.\n"
+        << "                          Its M4 validation gate passed; Apple7/M1 baseline validation is pending.\n"
         << "      --phase <decode|prefill>\n"
-        << "                          Workload phase (default: decode). Both phases support\n"
-        << "                          contiguous or paged KV on CPU.\n"
+        << "                          Workload phase (default: decode). CPU supports both phases;\n"
+        << "                          the Metal preview accepts decode only.\n"
         << "      --weight-size-mb <MiB>\n"
         << "                          Required active weight bytes per work unit, in MiB.\n"
         << "      --layers <count>    Required transformer layer count.\n"
@@ -125,7 +135,8 @@ std::string llm_memory_usage_options(const std::string& prog_name) {
         << "                          Required only for prefill; query tile Q, 1 <= Q <= P.\n"
         << "                          Rejected for decode.\n"
         << "      --kv-layout <contiguous|paged>\n"
-        << "                          KV storage layout (default: contiguous).\n"
+        << "                          KV storage layout (default: contiguous). CPU supports both\n"
+        << "                          layouts; the Metal preview accepts contiguous only.\n"
         << "      --kv-block-tokens <count>\n"
         << "                          Required only for paged KV; must be a positive power of two\n"
         << "                          no greater than UINT32_MAX; it may exceed the phase sequence length.\n"
@@ -134,6 +145,7 @@ std::string llm_memory_usage_options(const std::string& prog_name) {
         << "                          Batch sequences per work unit (default: " << Constants::LLM_DEFAULT_BATCH_SIZE
         << ").\n"
         << "  -t, --threads <count>  Requested CPU workers; detected workers are used when omitted.\n"
+        << "                          Rejected for Metal.\n"
         << "  -i, --iterations <count>\n"
         << "                          Exact work units per scenario measurement. A work unit is one\n"
         << "                          decode step or full-prompt prefill operation. When omitted, each\n"
@@ -147,7 +159,7 @@ std::string llm_memory_usage_options(const std::string& prog_name) {
         << "                          target is a file with atomic scenario and terminal checkpoints.\n"
         << "                          An empty value disables JSON for this direct command.\n"
         << "  -h, --help             Show this LLM-mode help and exit.\n"
-        << "This profile models CPU memory traffic only: it performs no Transformer math and\n"
+        << "This profile models CPU or Metal memory traffic only: it performs no Transformer math and\n"
         << "does not report inference tokens/s. Effective model payload is not physical DRAM traffic.\n";
   return usage.str();
 }
@@ -159,6 +171,78 @@ std::string report_llm_memory_header(const std::string& backend,
   return "Synthetic LLM memory profile (backend=" + backend +
          ", phase=" + phase + ", work_unit=" + work_unit_kind +
          ", kv_layout=" + kv_layout + ", warm/cacheable)";
+}
+
+std::string report_llm_memory_metal_backend(
+    const std::string& device_name, uint64_t registry_id, bool apple7,
+    bool unified, bool tier2, size_t max_buffer_length,
+    uint64_t recommended_working_set) {
+  std::ostringstream report;
+  report << "  Metal device: name=" << device_name
+         << ", registry_id=" << registry_id << "\n"
+         << "  Metal capabilities: apple7=" << (apple7 ? "true" : "false")
+         << ", unified=" << (unified ? "true" : "false")
+         << ", tier2=" << (tier2 ? "true" : "false") << "\n"
+         << "  Metal limits: max_buffer_length=" << max_buffer_length
+         << " bytes, recommended_working_set=" << recommended_working_set
+         << " bytes";
+  return report.str();
+}
+
+std::string report_llm_memory_metal_resources(
+    size_t weight_segments, size_t k_segments, size_t v_segments,
+    size_t segment_capacity, size_t argument_encoded_length,
+    size_t committed_bytes, size_t known_peak, size_t admitted_budget) {
+  std::ostringstream report;
+  report << "  Metal segments: weights=" << weight_segments
+         << ", K=" << k_segments << ", V=" << v_segments
+         << ", capacity=" << segment_capacity << " bytes\n"
+         << "  Metal argument buffer: encoded_length="
+         << argument_encoded_length << " bytes\n"
+         << "  Metal memory: committed=" << committed_bytes
+         << " bytes, known_peak=" << known_peak
+         << " bytes, admitted_budget=" << admitted_budget << " bytes";
+  return report.str();
+}
+
+std::string report_llm_memory_metal_task(
+    const std::string& scenario, const std::string& pipeline,
+    size_t threadgroups, size_t threads_per_threadgroup,
+    bool timing_evaluated, bool timing_valid, double gpu_elapsed_seconds,
+    bool checksum_evaluated, bool checksum_valid, bool append_applicable,
+    bool append_evaluated, bool append_valid, bool canary_applicable,
+    bool canary_evaluated, bool canary_valid) {
+  const auto validation_status = [](bool applicable, bool evaluated,
+                                    bool valid) {
+    if (!applicable) {
+      return "not-applicable";
+    }
+    if (!evaluated) {
+      return "not-evaluated";
+    }
+    return valid ? "valid" : "invalid";
+  };
+  std::ostringstream report;
+  report << "  Metal task: scenario=" << scenario
+         << ", pipeline=" << pipeline << ", threadgroups=" << threadgroups
+         << ", threads_per_threadgroup=" << threads_per_threadgroup << "\n"
+         << "  Metal timing: gpu_elapsed_seconds=";
+  if (!timing_evaluated) {
+    report << "not-evaluated";
+  } else if (!timing_valid) {
+    report << "invalid";
+  } else {
+    report << std::fixed << std::setprecision(9) << gpu_elapsed_seconds;
+  }
+  report << "\n  Metal validation: checksum="
+         << validation_status(true, checksum_evaluated, checksum_valid)
+         << ", append="
+         << validation_status(append_applicable, append_evaluated,
+                              append_valid)
+         << ", canary="
+         << validation_status(canary_applicable, canary_evaluated,
+                              canary_valid);
+  return report.str();
 }
 
 std::string report_llm_memory_work_unit_name(

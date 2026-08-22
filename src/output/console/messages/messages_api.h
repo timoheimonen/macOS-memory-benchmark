@@ -160,6 +160,7 @@ std::string error_llm_memory_iterations_exceed_limit(size_t requested,
 std::string error_llm_memory_run_failed(const std::string& reason_code);
 const std::string& error_llm_paged_table_protection_failed();
 const std::string& llm_memory_reason_positive_integer();
+const std::string& llm_memory_reason_backend();
 const std::string& llm_memory_reason_kv_element_bytes();
 const std::string& llm_memory_reason_phase();
 const std::string& llm_memory_reason_kv_layout();
@@ -246,6 +247,21 @@ std::string report_llm_memory_header(const std::string& backend,
                                      const std::string& phase,
                                      const std::string& work_unit_kind,
                                      const std::string& kv_layout);
+std::string report_llm_memory_metal_backend(
+    const std::string& device_name, uint64_t registry_id, bool apple7,
+    bool unified, bool tier2, size_t max_buffer_length,
+    uint64_t recommended_working_set);
+std::string report_llm_memory_metal_resources(
+    size_t weight_segments, size_t k_segments, size_t v_segments,
+    size_t segment_capacity, size_t argument_encoded_length,
+    size_t committed_bytes, size_t known_peak, size_t admitted_budget);
+std::string report_llm_memory_metal_task(
+    const std::string& scenario, const std::string& pipeline,
+    size_t threadgroups, size_t threads_per_threadgroup,
+    bool timing_evaluated, bool timing_valid, double gpu_elapsed_seconds,
+    bool checksum_evaluated, bool checksum_valid, bool append_applicable,
+    bool append_evaluated, bool append_valid, bool canary_applicable,
+    bool canary_evaluated, bool canary_valid);
 std::string report_llm_memory_work_unit_name(
     const std::string& work_unit_kind, bool plural);
 std::string report_llm_memory_payload(

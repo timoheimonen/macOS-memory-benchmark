@@ -15,14 +15,14 @@
 
 /**
  * @file llm_metal_backend.h
- * @brief Pure planning contract and inactive Metal resource foundation
+ * @brief Pure planning, checksum, and Metal decode-contiguous contracts
  * @author Timo Heimonen <timo.heimonen@proton.me>
  * @date 2026
  *
  * The declarations in this file contain no Objective-C types. Pure planners
  * are reentrant and safe for concurrent calls with independent objects. A
  * created backend is command-owned, synchronous, and not safe for concurrent
- * calls. Phase 8 intentionally exposes no timed Metal task implementation.
+ * calls. The public Metal workload is decode with contiguous KV storage.
  */
 
 #ifndef LLM_METAL_BACKEND_H
@@ -70,6 +70,56 @@ static_assert(offsetof(LlmMetalFoundationParams, probe_resource_slot) == 60);
 
 inline constexpr size_t kLlmMetalLayoutProbeWordCount = 28;
 using LlmMetalLayoutProbeWords = std::array<uint64_t, kLlmMetalLayoutProbeWordCount>;
+inline constexpr size_t kLlmMetalDecodeLayoutProbeWordCount = 38;
+using LlmMetalDecodeLayoutProbeWords = std::array<uint64_t, kLlmMetalDecodeLayoutProbeWordCount>;
+
+/** Canonical CPU mirror of the MSL decode-contiguous parameter block. */
+struct alignas(8) LlmMetalDecodeContiguousParams {
+  uint64_t weight_bytes = 0;
+  uint64_t k_bytes = 0;
+  uint64_t v_bytes = 0;
+  uint64_t segment_capacity_bytes = 0;
+  uint64_t context_tokens = 0;
+  uint64_t layer_count = 0;
+  uint64_t batch_size = 0;
+  uint64_t record_bytes = 0;
+  uint64_t work_units = 0;
+  uint64_t weight_seed = 0;
+  uint64_t k_seed = 0;
+  uint64_t v_seed = 0;
+  uint64_t scenario_seed = 0;
+  uint32_t weight_segment_count = 0;
+  uint32_t k_segment_count = 0;
+  uint32_t v_segment_count = 0;
+  uint32_t reserved_zero = 0;
+};
+
+static_assert(alignof(LlmMetalDecodeContiguousParams) == 8);
+static_assert(sizeof(LlmMetalDecodeContiguousParams) == 120);
+static_assert(offsetof(LlmMetalDecodeContiguousParams, weight_bytes) == 0);
+static_assert(offsetof(LlmMetalDecodeContiguousParams, k_bytes) == 8);
+static_assert(offsetof(LlmMetalDecodeContiguousParams, v_bytes) == 16);
+static_assert(offsetof(LlmMetalDecodeContiguousParams, segment_capacity_bytes) == 24);
+static_assert(offsetof(LlmMetalDecodeContiguousParams, context_tokens) == 32);
+static_assert(offsetof(LlmMetalDecodeContiguousParams, layer_count) == 40);
+static_assert(offsetof(LlmMetalDecodeContiguousParams, batch_size) == 48);
+static_assert(offsetof(LlmMetalDecodeContiguousParams, record_bytes) == 56);
+static_assert(offsetof(LlmMetalDecodeContiguousParams, work_units) == 64);
+static_assert(offsetof(LlmMetalDecodeContiguousParams, weight_seed) == 72);
+static_assert(offsetof(LlmMetalDecodeContiguousParams, k_seed) == 80);
+static_assert(offsetof(LlmMetalDecodeContiguousParams, v_seed) == 88);
+static_assert(offsetof(LlmMetalDecodeContiguousParams, scenario_seed) == 96);
+static_assert(offsetof(LlmMetalDecodeContiguousParams, weight_segment_count) == 104);
+static_assert(offsetof(LlmMetalDecodeContiguousParams, k_segment_count) == 108);
+static_assert(offsetof(LlmMetalDecodeContiguousParams, v_segment_count) == 112);
+static_assert(offsetof(LlmMetalDecodeContiguousParams, reserved_zero) == 116);
+
+/** Result from the bounded independent Metal checksum oracle. */
+struct LlmMetalChecksumOracle {
+  bool valid = false;
+  std::string_view reason_code = LlmMetalPlanReason::INVALID_GEOMETRY;
+  LlmMetalDualMod32Checksum checksum;
+};
 
 /** Injectable capability state used by deterministic unit tests. */
 struct LlmMetalCapabilityProbe {
@@ -81,6 +131,7 @@ struct LlmMetalCapabilityProbe {
   bool command_queue_created = false;
   bool source_compiled = false;
   size_t foundation_pipeline_count = 0;
+  size_t workload_pipeline_count = 0;
   bool argument_encoder_created = false;
   size_t argument_buffer_encoded_length = 0;
   size_t argument_buffer_alignment = 0;
@@ -124,6 +175,11 @@ struct LlmMetalBackendTestHooks {
   size_t fail_allocation_after = std::numeric_limits<size_t>::max();
   bool force_layout_probe_mismatch = false;
   bool force_initialization_mismatch = false;
+  bool force_timed_command_failure = false;
+  bool force_invalid_gpu_timestamps = false;
+  bool force_timed_checksum_mismatch = false;
+  bool force_post_validation_command_failure = false;
+  bool force_append_validation_mismatch = false;
   std::function<bool()> stop_requested;
 };
 
@@ -158,10 +214,30 @@ std::string canonical_llm_metal_kernel_source_sha256();
 bool validate_llm_metal_layout_probe(const LlmMetalFoundationParams& parameters, const LlmMetalLayoutProbeWords& words,
                                      uint64_t expected_observed_resource_value) noexcept;
 
+/** Validate every CPU/MSL field of the decode-contiguous parameter ABI. */
+bool validate_llm_metal_decode_layout_probe(const LlmMetalDecodeContiguousParams& parameters,
+                                            const LlmMetalDecodeLayoutProbeWords& words) noexcept;
+
+/** Return one deterministic Metal contiguous-buffer initialization word. */
+uint32_t llm_metal_contiguous_pattern_word(uint64_t seed, uint64_t absolute_word_index) noexcept;
+
+/** Return one deterministic decode append word in the pool-address domain. */
+uint32_t llm_metal_decode_append_word(uint64_t scenario_seed, uint64_t work_unit, uint64_t layer_index,
+                                      uint64_t batch_index, uint64_t absolute_word_index,
+                                      LlmMetalResourcePool pool) noexcept;
+
+/** Calculate expected timed W/K/V accumulators without reading resource bytes. */
+LlmMetalChecksumOracle calculate_llm_metal_decode_contiguous_checksum(
+    const LlmMemoryWorkPlan& model_plan, const LlmScenarioWorkPlan& scenario_plan) noexcept;
+
+/** Compare every lane of two Metal dual-mod32 checksums. */
+bool equal_llm_metal_checksum(const LlmMetalDualMod32Checksum& left,
+                              const LlmMetalDualMod32Checksum& right) noexcept;
+
 /** Stable label for a planned Metal resource pool. */
 const char* llm_metal_resource_pool_to_string(LlmMetalResourcePool pool) noexcept;
 
-/** Create the inactive production Metal capability/resource backend. */
+/** Create the Metal backend for the experimental contiguous-decode preview. */
 std::unique_ptr<LlmBackend> create_llm_metal_backend();
 
 /** Create the same backend with deterministic failure injection for tests. */

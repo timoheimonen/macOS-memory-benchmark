@@ -20,8 +20,8 @@ It is designed for controlled microarchitectural investigation rather than a sin
 - **Dedicated TLB analysis:** paired spread/packed chains, adaptive rounds, confidence intervals, and independent boundary validation.
 - **Core-to-core analysis:** calibrated acquire/release token-exchange measurements under scheduler-hint scenarios.
 - **Metal GPU bandwidth:** standalone read/write/copy compute kernels with GPU timestamps and validation metadata.
-- **Synthetic LLM memory profile:** standalone CPU measurements of active-weight and KV traffic for fixed-context decode
-  and full-prompt prefill, each with contiguous or deterministic paged KV.
+- **Synthetic LLM memory profile:** CPU measurements of fixed-context decode and full-prompt prefill with contiguous or
+  deterministic paged KV, plus an experimental Metal fixed-context decode preview with contiguous KV.
 - **Reproducible experiments:** explicit seeds, repeated loops, built-in Cartesian parameter sweeps, recoverable JSON
   file checkpoints, and final machine-readable stdout for every result-producing direct mode and CPU sweep.
 
@@ -34,9 +34,13 @@ See [Measurement Capabilities](documents/CAPABILITIES.md) for the full measureme
 - GoogleTest from Homebrew for the test suite
 - Python 3 for the script-example entry test included in the aggregate `make test-all` gate; `jq` is optional for JSON
   inspection and the jq-backed latency-script path
-- GPU mode: a unified-memory Metal device supporting `MTLGPUFamilyApple7` or a compatible later family
+- Metal modes: a unified-memory device with `MTLGPUFamilyApple7` or compatible later-family capability; the experimental
+  LLM Metal preview also requires Tier 2 argument buffers and `maxBufferLength >= 256 MiB`
 
-The build targets macOS 11.0 and links the system Metal and Foundation frameworks. GPU kernels are embedded MSL 2.3 source compiled at runtime, so the optional offline Metal Toolchain is not required. Passing the GPU capability check indicates compatibility; it does not mean performance has been validated on that device.
+The build targets macOS 11.0 and links the system Metal and Foundation frameworks. GPU kernels are embedded MSL 2.3
+source compiled at runtime, so the optional offline Metal Toolchain is not required. Passing a Metal capability check
+admits the runtime contract; it does not by itself establish a validated hardware baseline. The LLM Metal preview has
+passed its M4 validation gate, while the required Apple7/M1 baseline validation remains pending.
 
 ## Install
 
@@ -84,6 +88,17 @@ memory_benchmark --llm-memory --weight-size-mb 64 --layers 4 \
   --iterations 1 --count 3
 ```
 
+Run the same three synthetic decode scenarios on Metal with contiguous KV:
+
+```bash
+memory_benchmark --llm-memory --llm-memory-backend metal \
+  --weight-size-mb 64 --layers 4 --query-heads 8 --kv-heads 2 \
+  --head-dim 64 --context-tokens 512 --iterations 1 --count 3
+```
+
+Metal LLM-memory is an experimental preview. It uses GPU command-buffer timestamps, accepts no `--threads` option, and
+never falls back to CPU. Its M4 validation gate has passed; Apple7/M1 baseline validation remains pending.
+
 Select the paged KV layout with an explicit power-of-two block size in tokens:
 
 ```bash
@@ -128,7 +143,7 @@ checkpoints are required; see the [Machine-Readable CLI API](documents/API.md) s
 | `--analyze-tlb` | Standalone paired spread/packed TLB analysis with adaptive measurement rounds, confidence intervals, and boundary validation. |
 | `--analyze-core2core` | Calibrated two-thread acquire/release token-protocol round-trip latency under best-effort macOS scheduler hints. |
 | `--gpu-bandwidth` | Standalone Metal GPU read/write/copy effective compute-payload bandwidth. |
-| `--llm-memory` | Standalone synthetic CPU decode/prefill memory profile with contiguous or deterministic paged KV in either phase. |
+| `--llm-memory` | Standalone synthetic LLM memory profile: CPU decode/prefill with contiguous or paged KV, or experimental Metal decode with contiguous KV. |
 | `--sweep <key=a,b>` | Cartesian parameter sweep for supported CPU, pattern, TLB, and core-to-core modes; requires `--output`. GPU schema 1 and LLM schema 1 do not support sweeps. |
 
 Primary modes are intentionally separate and accept different option sets. Use `memory_benchmark -h` or the [User Manual](documents/MANUAL.md) for defaults, valid combinations, and the complete option reference.
@@ -145,10 +160,27 @@ blocks, their suffix padding, and one seeded uint32 block table. Initialization,
 and validation remain outside the timed region. Paged prefill performs timed table lookups for full-prompt population
 and tiled causal-prefix scans; it never falls back to contiguous KV.
 
-The generic schema records `backend: "cpu"`, the selected phase/layout, `work_unit_kind: "decode_step"` or
-`"prefill_operation"`, and methodology `llm-memory-v1-cpu-<phase>-<layout>`. Metal remains unavailable and never
-receives an implicit fallback. The profile does not run Transformer mathematics or report inference tokens/s. Its
-machine-readable synthetic work-unit rate is named `synthetic_memory_work_units_per_second`.
+`--llm-memory-backend` accepts `cpu` or `metal` and defaults to `cpu`. CPU supports all four phase/layout combinations.
+The experimental Metal preview currently accepts only `--phase decode --kv-layout contiguous`; prefill, paged KV, and
+explicit `--threads` are rejected before execution. Runtime admission requires Apple7-or-later family capability,
+unified memory, Tier 2 argument buffers, a maximum buffer length of at least 256 MiB, and runtime MSL 2.3 compilation.
+The M4 validation gate has passed, but the Apple7/M1 baseline validation is pending, so capability admission must not be
+read as cross-family production-ready validation. Capability failure produces an unsupported result and a non-zero
+exit. Runtime compiler, pipeline, resource, or task failure remains a terminal failed/invalid schema result with a
+non-zero exit; execution is never redirected to CPU.
+
+The generic schema records the selected backend, phase/layout, `work_unit_kind: "decode_step"` or
+`"prefill_operation"`, and methodology `llm-memory-v1-<backend>-<phase>-<layout>`. Metal decode uses one workload
+dispatch per task with the work-unit loop inside the kernel. `GPUStartTime`/`GPUEndTime` provide authoritative elapsed
+time; a versioned dual-mod32 checksum and excluded append validation guard correctness. W/K/V buffers are split into
+exact-tail segments of at most 256 MiB, so segment padding is not counted as payload. The profile does not run
+Transformer mathematics or report inference tokens/s. Its machine-readable synthetic work-unit rate is named
+`synthetic_memory_work_units_per_second`.
+
+The current embedded source revision is `llm-metal-decode-contiguous-msl23-v1`. Result evidence preserves the exact
+runtime source SHA-256 and the three workload pipeline labels ending in
+`pipeline.decode-contiguous.weights-only`, `.kv-only`, and `.mixed`; compare Metal runs only when these identities and
+the resolved grid/resource plan match.
 
 When `--iterations` is omitted, standard bandwidth, pattern, GPU operations, and the three LLM scenarios calibrate their
 work toward a bounded measurement duration. An explicit `--iterations` value selects fixed work. Standard latency
@@ -254,19 +286,20 @@ Treat benchmark values as measurements of the configured workload under the obse
 - Pattern GB/s is exact **effective kernel payload bandwidth**, not observed physical cache-bus or DRAM traffic. `strided_2mb` describes a 2 MiB virtual-address stride and does not prove superpage backing.
 - GPU GB/s is exact **effective compute-payload bandwidth** divided by Metal GPU time. Private storage is unified memory rather than separate VRAM, copy counts aggregate read plus write payload, and physical DRAM residency remains unverified.
 - CPU and GPU GB/s values are not directly comparable: the kernels, timing boundaries, parallelism, resource modes, and validation work differ.
-- LLM GB/s is exact **logical effective model payload** divided by the synchronized CPU scenario time. Decode uses a
-  fixed context that includes the current token; prefill rewrites a complete prompt then scans tiled causal prefixes.
+- LLM GB/s is exact **logical effective model payload** divided by backend-authoritative scenario time: synchronized
+  worker time for CPU or `GPUStartTime`/`GPUEndTime` for the experimental Metal preview. Decode uses a fixed context that
+  includes the current token; CPU prefill rewrites a complete prompt then scans tiled causal prefixes.
   Each prefill owner writes tokens in ascending order, K then V for each token, and reads each tile's complete owned K
   prefix before its complete owned V prefix.
-  Both use full-size cacheable resources, and none of those properties proves physical DRAM
-  service. In paged mode, uint32 block-table loads occur inside the timed assembly path, but their bytes are reported as
-  layout metadata and excluded from the effective-model-payload GB/s numerator. Weights-only and KV-only are component
-  baselines, while mixed is one layer-interleaved workload and must not be split into independent weight- and
-  KV-bandwidth claims.
+  CPU profiles use full-size ordinary cacheable mappings; Metal uses exact-tail private/tracked segments on unified
+  memory. None of those properties proves physical DRAM service. In CPU paged mode, uint32 block-table loads occur
+  inside the timed assembly path, but their bytes are reported as layout metadata and excluded from the
+  effective-model-payload GB/s numerator. Weights-only and KV-only are component baselines, while mixed is one timed
+  workload and must not be split into independent weight- and KV-bandwidth claims.
 - An LLM synthetic memory work unit is one decode step or one full-prompt prefill operation, not an inference token.
   Prefill does not predict TTFT. The profile excludes Transformer compute, framework dispatch,
-  compute-memory overlap, GPU/ANE paths, runtime page allocation, prefix sharing, sliding-window KV, growing context,
-  and model loading.
+  compute-memory overlap, ANE paths, GPU execution outside the defined Metal preview kernels, runtime page allocation,
+  prefix sharing, sliding-window KV, growing context, and model loading.
 - The LLM traffic classification version `llm-exact-weight-vs-kv-read-payload-v1` compares exact weight and KV-read
   bytes only. `near_crossover` means exact equality and is not a measured hardware-bottleneck claim.
 - TLB-locality controls pointer-chain construction, not hardware TLB residency. Standard locality comparisons combine cache, locality, and translation effects; use `--analyze-tlb` for controlled translation-boundary conclusions.
