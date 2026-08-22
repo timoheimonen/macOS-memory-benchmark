@@ -24,23 +24,16 @@
 
 #include <CommonCrypto/CommonDigest.h>
 
+#include <algorithm>
 #include <array>
 #include <limits>
 #include <stdexcept>
 
 namespace HashUtils {
+namespace {
 
-std::string sha256_hex(std::string_view input) {
-  if (input.size() > static_cast<size_t>(std::numeric_limits<CC_LONG>::max())) {
-    throw std::length_error("SHA-256 input exceeds CommonCrypto's one-shot length limit");
-  }
-
-  std::array<unsigned char, CC_SHA256_DIGEST_LENGTH> digest{};
-  const char* bytes = input.empty() ? "" : input.data();
-  if (CC_SHA256(bytes, static_cast<CC_LONG>(input.size()), digest.data()) == nullptr) {
-    throw std::runtime_error("CommonCrypto failed to produce a SHA-256 digest");
-  }
-
+std::string encode_digest(
+    const std::array<unsigned char, CC_SHA256_DIGEST_LENGTH>& digest) {
   constexpr char kLowercaseHex[] = "0123456789abcdef";
   std::string encoded(digest.size() * 2, '0');
   for (size_t index = 0; index < digest.size(); ++index) {
@@ -49,6 +42,77 @@ std::string sha256_hex(std::string_view input) {
     encoded[index * 2 + 1] = kLowercaseHex[value & 0x0fU];
   }
   return encoded;
+}
+
+}  // namespace
+
+struct Sha256Hasher::State {
+  CC_SHA256_CTX context{};
+  bool active = false;
+
+  State() {
+    if (CC_SHA256_Init(&context) != 1) {
+      throw std::runtime_error("CommonCrypto failed to initialize SHA-256");
+    }
+    active = true;
+  }
+};
+
+Sha256Hasher::Sha256Hasher() : state_(std::make_unique<State>()) {}
+
+Sha256Hasher::~Sha256Hasher() = default;
+
+Sha256Hasher::Sha256Hasher(Sha256Hasher&&) noexcept = default;
+
+Sha256Hasher& Sha256Hasher::operator=(Sha256Hasher&&) noexcept = default;
+
+void Sha256Hasher::update(const void* data, size_t size) {
+  if (!state_ || !state_->active) {
+    throw std::logic_error("SHA-256 hasher is not active");
+  }
+  if (size == 0) {
+    return;
+  }
+  if (data == nullptr) {
+    throw std::invalid_argument("SHA-256 input is null with a nonzero size");
+  }
+
+  const auto* cursor = static_cast<const unsigned char*>(data);
+  constexpr size_t kMaximumUpdateBytes =
+      static_cast<size_t>(std::numeric_limits<CC_LONG>::max());
+  while (size > 0) {
+    const size_t chunk_size = std::min(size, kMaximumUpdateBytes);
+    if (CC_SHA256_Update(&state_->context, cursor,
+                         static_cast<CC_LONG>(chunk_size)) != 1) {
+      state_->active = false;
+      throw std::runtime_error("CommonCrypto failed to update SHA-256");
+    }
+    cursor += chunk_size;
+    size -= chunk_size;
+  }
+}
+
+void Sha256Hasher::update(std::string_view input) {
+  update(input.data(), input.size());
+}
+
+std::string Sha256Hasher::finalize_hex() {
+  if (!state_ || !state_->active) {
+    throw std::logic_error("SHA-256 hasher is not active");
+  }
+
+  std::array<unsigned char, CC_SHA256_DIGEST_LENGTH> digest{};
+  state_->active = false;
+  if (CC_SHA256_Final(digest.data(), &state_->context) != 1) {
+    throw std::runtime_error("CommonCrypto failed to finalize SHA-256");
+  }
+  return encode_digest(digest);
+}
+
+std::string sha256_hex(std::string_view input) {
+  Sha256Hasher hasher;
+  hasher.update(input);
+  return hasher.finalize_hex();
 }
 
 }  // namespace HashUtils

@@ -22,12 +22,14 @@
 #include <limits>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <type_traits>
 #include <utility>
 #include <variant>
 #include <vector>
 
 #include "core/config/constants.h"
+#include "llm_memory/llm_kv_layout.h"
 #include "llm_memory/llm_work_plan.h"
 
 namespace {
@@ -376,6 +378,28 @@ void expect_equivalent_executable_plans(const LlmMemoryWorkPlan& actual,
                 expected_sequence.append_record_byte_offset);
     }
   }
+}
+
+LlmKvLayoutRequest paged_golden_request() {
+  return {35, 16, 2, 2, 32};
+}
+
+size_t segment_length_sum(const LlmKvSegmentPlan& plan) {
+  size_t total = 0;
+  for (size_t length : plan.segment_lengths) {
+    total += length;
+  }
+  return total;
+}
+
+void expect_length_prefixed_identity_field(std::string_view identity,
+                                           std::string_view name,
+                                           std::string_view value) {
+  const std::string expected = "|" + std::string(name) + "=" +
+                               std::to_string(value.size()) + ":" +
+                               std::string(value);
+  EXPECT_NE(identity.find(expected), std::string_view::npos)
+      << "missing canonical field " << name;
 }
 
 }  // namespace
@@ -1729,4 +1753,706 @@ TEST(LlmMemoryWorkPlanTest,
   ASSERT_TRUE(frozen_a.valid);
   ASSERT_TRUE(frozen_b.valid);
   EXPECT_NE(frozen_a.plan_identity, frozen_b.plan_identity);
+}
+
+TEST(LlmMemoryWorkPlanTest,
+     PagedLayoutGeometryBudgetAndSetupMatchFrozenGolden) {
+  const LlmKvLayoutPlan plan =
+      build_llm_kv_layout_plan(paged_golden_request());
+  ASSERT_TRUE(plan.valid) << plan.reason_code;
+  EXPECT_EQ(plan.reason_code, LlmKvLayoutReason::VALID);
+  EXPECT_EQ(plan.blocks_per_sequence, 3u);
+  EXPECT_EQ(plan.physical_blocks_per_layer, 6u);
+  EXPECT_EQ(plan.total_physical_blocks, 12u);
+  EXPECT_EQ(plan.block_bytes, 512u);
+  EXPECT_EQ(plan.last_block_tokens, 3u);
+  EXPECT_EQ(plan.last_block_valid_bytes, 96u);
+  EXPECT_EQ(plan.decode_append_offset_in_last_block, 64u);
+  EXPECT_EQ(plan.block_table_entries, 6u);
+
+  EXPECT_EQ(plan.memory.k_logical_bytes, 4480u);
+  EXPECT_EQ(plan.memory.v_logical_bytes, 4480u);
+  EXPECT_EQ(plan.memory.k_physical_bytes, 6144u);
+  EXPECT_EQ(plan.memory.v_physical_bytes, 6144u);
+  EXPECT_EQ(plan.memory.k_layout_padding_bytes, 1664u);
+  EXPECT_EQ(plan.memory.v_layout_padding_bytes, 1664u);
+  EXPECT_EQ(plan.memory.block_table_bytes, 24u);
+  EXPECT_EQ(plan.memory.validation_bitset_bytes, 1u);
+  EXPECT_EQ(plan.memory.transient_peak_bytes, 25u);
+  EXPECT_EQ(plan.memory.resident_layout_bytes, 12312u);
+  EXPECT_EQ(plan.memory.known_owned_peak_bytes, 12313u);
+
+  EXPECT_EQ(plan.permutation_iterations, 5u);
+  EXPECT_EQ(plan.validation_entries, 6u);
+  EXPECT_EQ(plan.hash_entries, 6u);
+  EXPECT_EQ(plan.upload_bytes, 24u);
+  EXPECT_EQ(plan.geometry_identity.rfind(
+                Constants::LLM_KV_LAYOUT_GEOMETRY_IDENTITY_VERSION, 0),
+            0u);
+}
+
+TEST(LlmMemoryWorkPlanTest,
+     PagedLayoutRejectsZeroAndOverflowButAcceptsUint32BoundaryPurely) {
+  struct InvalidCase {
+    LlmKvLayoutRequest request;
+    const char* reason_code;
+  };
+  const std::array<InvalidCase, 5> zero_cases = {{
+      {{0, 16, 2, 2, 32}, LlmKvLayoutReason::SEQUENCE_TOKENS_ZERO},
+      {{35, 0, 2, 2, 32}, LlmKvLayoutReason::BLOCK_TOKENS_ZERO},
+      {{35, 16, 0, 2, 32}, LlmKvLayoutReason::LAYER_COUNT_ZERO},
+      {{35, 16, 2, 0, 32}, LlmKvLayoutReason::BATCH_SIZE_ZERO},
+      {{35, 16, 2, 2, 0}, LlmKvLayoutReason::RECORD_BYTES_ZERO},
+  }};
+  for (const InvalidCase& test_case : zero_cases) {
+    SCOPED_TRACE(test_case.reason_code);
+    const LlmKvLayoutPlan plan =
+        build_llm_kv_layout_plan(test_case.request);
+    EXPECT_FALSE(plan.valid);
+    EXPECT_EQ(plan.reason_code, test_case.reason_code);
+    EXPECT_TRUE(plan.geometry_identity.empty());
+  }
+
+  const size_t uint32_boundary =
+      static_cast<size_t>(std::numeric_limits<uint32_t>::max());
+  const std::array<InvalidCase, 3> block_token_cases = {{
+      {{35, 3, 2, 2, 32},
+       LlmKvLayoutReason::BLOCK_TOKENS_NOT_POWER_OF_TWO},
+      {{35, uint32_boundary, 2, 2, 32},
+       LlmKvLayoutReason::BLOCK_TOKENS_NOT_POWER_OF_TWO},
+      {{35, uint32_boundary + 1, 2, 2, 32},
+       LlmKvLayoutReason::BLOCK_TOKENS_EXCEEDS_UINT32},
+  }};
+  for (const InvalidCase& test_case : block_token_cases) {
+    SCOPED_TRACE(test_case.reason_code);
+    const LlmKvLayoutPlan plan =
+        build_llm_kv_layout_plan(test_case.request);
+    EXPECT_FALSE(plan.valid);
+    EXPECT_EQ(plan.reason_code, test_case.reason_code);
+    EXPECT_TRUE(plan.geometry_identity.empty());
+  }
+
+  const size_t maximum = std::numeric_limits<size_t>::max();
+  const size_t maximum_block_tokens = size_t{1} << 31;
+  const std::array<InvalidCase, 4> overflow_cases = {{
+      {{2, 1, 1, maximum, 1},
+       LlmKvLayoutReason::PHYSICAL_BLOCK_COUNT_OVERFLOW},
+      {{1, 2, 1, 1, maximum}, LlmKvLayoutReason::BLOCK_BYTES_OVERFLOW},
+      {{2, 1, maximum, 1, 1},
+       LlmKvLayoutReason::LOGICAL_BYTES_OVERFLOW},
+      {{1, maximum_block_tokens, 2, 1,
+        maximum / maximum_block_tokens},
+       LlmKvLayoutReason::PHYSICAL_BYTES_OVERFLOW},
+  }};
+  for (const InvalidCase& test_case : overflow_cases) {
+    SCOPED_TRACE(test_case.reason_code);
+    const LlmKvLayoutPlan plan =
+        build_llm_kv_layout_plan(test_case.request);
+    EXPECT_FALSE(plan.valid);
+    EXPECT_EQ(plan.reason_code, test_case.reason_code);
+    EXPECT_TRUE(plan.geometry_identity.empty());
+  }
+
+  const LlmKvLayoutPlan exact = build_llm_kv_layout_plan(
+      {uint32_boundary, 1, 1, 1, 1});
+  ASSERT_TRUE(exact.valid) << exact.reason_code;
+  EXPECT_EQ(exact.blocks_per_sequence, uint32_boundary);
+  EXPECT_EQ(exact.physical_blocks_per_layer, uint32_boundary);
+  EXPECT_EQ(exact.block_table_entries, uint32_boundary);
+  EXPECT_EQ(exact.permutation_iterations, uint32_boundary - 1);
+  EXPECT_EQ(exact.memory.block_table_bytes,
+            uint32_boundary * sizeof(uint32_t));
+  EXPECT_EQ(exact.memory.validation_bitset_bytes,
+            uint32_boundary / 8 + 1);
+
+  const LlmKvLayoutPlan excess = build_llm_kv_layout_plan(
+      {uint32_boundary + 1, 1, 1, 1, 1});
+  EXPECT_FALSE(excess.valid);
+  EXPECT_EQ(excess.reason_code,
+            LlmKvLayoutReason::BLOCK_ID_RANGE_EXCEEDED);
+  EXPECT_TRUE(excess.geometry_identity.empty());
+}
+
+TEST(LlmMemoryWorkPlanTest,
+     PagedPermutationMatchesGoldensAcrossChunksAndPublishesNoPartialTable) {
+  const LlmKvLayoutPlan layout =
+      build_llm_kv_layout_plan({8, 1, 1, 1, 1});
+  ASSERT_TRUE(layout.valid) << layout.reason_code;
+
+  const std::vector<uint32_t> direct_entries = {2, 5, 0, 3, 4, 6, 1, 7};
+  constexpr std::string_view kDirectHash =
+      "9d1cfab79005723a285fec9a5716b53baa7a6c0501e3d17434bfb31ea88935d1";
+  const std::array<size_t, 4> chunk_sizes = {
+      1, 3, 8, std::numeric_limits<size_t>::max()};
+  for (size_t chunk_size : chunk_sizes) {
+    SCOPED_TRACE(chunk_size);
+    const LlmKvBlockTable table =
+        materialize_llm_kv_block_table(layout, 0, chunk_size);
+    ASSERT_TRUE(table.valid) << table.reason_code;
+    EXPECT_FALSE(table.interrupted);
+    EXPECT_EQ(table.entries, direct_entries);
+    EXPECT_TRUE(table.validation.valid);
+    EXPECT_EQ(table.validation.examined_entries, 8u);
+    EXPECT_EQ(table.validation.validation_bitset_bytes, 1u);
+    EXPECT_EQ(table.permutation.resolved_seed, 0u);
+    EXPECT_EQ(table.permutation.domain, 0x4C4C4D4B56504731ULL);
+    EXPECT_EQ(table.permutation.domain_uint64_hex, "0x4c4c4d4b56504731");
+    EXPECT_EQ(table.permutation.entry_count, 8u);
+    EXPECT_EQ(table.permutation.sha256, kDirectHash);
+    EXPECT_FALSE(table.permutation.identity.empty());
+  }
+
+  EXPECT_EQ(derive_llm_kv_permutation_seed(42),
+            8109369757063363730ULL);
+  const LlmKvBlockTable derived = materialize_llm_kv_block_table(
+      layout, derive_llm_kv_permutation_seed(42), 3);
+  ASSERT_TRUE(derived.valid) << derived.reason_code;
+  EXPECT_EQ(derived.entries,
+            (std::vector<uint32_t>{0, 6, 2, 3, 7, 1, 5, 4}));
+  EXPECT_EQ(derived.permutation.sha256,
+            "4032b29a855010d82199c15c3f3e2b94582b86e67b3add8cb86bebc425f9c2b4");
+
+  struct ValidationCase {
+    std::vector<uint32_t> entries;
+    const char* reason_code;
+  };
+  const std::array<ValidationCase, 5> invalid_tables = {{
+      {{0, 1, std::numeric_limits<uint32_t>::max(), 3},
+       LlmKvLayoutReason::TABLE_INVALID_SENTINEL},
+      {{0, 1, 4, 3}, LlmKvLayoutReason::TABLE_ID_OUT_OF_RANGE},
+      {{0, 1, 1, 3}, LlmKvLayoutReason::TABLE_DUPLICATE_ID},
+      {{0, 1, 2}, LlmKvLayoutReason::TABLE_ENTRY_COUNT_MISMATCH},
+      {{0, 1, 2, 3, 4}, LlmKvLayoutReason::TABLE_ENTRY_COUNT_MISMATCH},
+  }};
+  for (const ValidationCase& test_case : invalid_tables) {
+    SCOPED_TRACE(test_case.reason_code);
+    const LlmKvBlockTableValidation validation =
+        validate_llm_kv_block_table(4, test_case.entries);
+    EXPECT_FALSE(validation.valid);
+    EXPECT_FALSE(validation.interrupted);
+    EXPECT_EQ(validation.reason_code, test_case.reason_code);
+  }
+  EXPECT_EQ(validate_llm_kv_block_table(0, {}).reason_code,
+            LlmKvLayoutReason::TABLE_ENTRY_COUNT_MISMATCH);
+
+  const size_t validation_interrupt_entries =
+      Constants::LLM_KV_PREPARATION_POLL_INTERVAL_ENTRIES + 8;
+  std::vector<uint32_t> validation_interrupt_table;
+  validation_interrupt_table.reserve(validation_interrupt_entries);
+  for (size_t entry = 0; entry < validation_interrupt_entries; ++entry) {
+    validation_interrupt_table.push_back(static_cast<uint32_t>(entry));
+  }
+  size_t validation_stop_checks = 0;
+  const LlmKvBlockTableValidation validation_interrupted =
+      validate_llm_kv_block_table(
+          validation_interrupt_entries, validation_interrupt_table,
+          [&validation_stop_checks]() {
+            ++validation_stop_checks;
+            return validation_stop_checks == 2;
+          });
+  EXPECT_FALSE(validation_interrupted.valid);
+  EXPECT_TRUE(validation_interrupted.interrupted);
+  EXPECT_EQ(validation_interrupted.reason_code,
+            LlmKvLayoutReason::PREPARATION_INTERRUPTED);
+  EXPECT_EQ(validation_interrupted.examined_entries, 0u);
+  EXPECT_EQ(validation_stop_checks, 2u);
+
+  const LlmKvBlockTable zero_chunk =
+      materialize_llm_kv_block_table(layout, 0, 0);
+  EXPECT_FALSE(zero_chunk.valid);
+  EXPECT_EQ(zero_chunk.reason_code,
+            LlmKvLayoutReason::HASH_CHUNK_ENTRIES_ZERO);
+  EXPECT_TRUE(zero_chunk.entries.empty());
+
+  const size_t interrupt_entries =
+      Constants::LLM_KV_PREPARATION_POLL_INTERVAL_ENTRIES + 1;
+  const LlmKvLayoutPlan interrupt_layout =
+      build_llm_kv_layout_plan({interrupt_entries, 1, 1, 1, 1});
+  ASSERT_TRUE(interrupt_layout.valid) << interrupt_layout.reason_code;
+  size_t stop_checks = 0;
+  const LlmKvBlockTable interrupted = materialize_llm_kv_block_table(
+      interrupt_layout, 0, 1024, [&stop_checks]() {
+        ++stop_checks;
+        return stop_checks == 2;
+      });
+  EXPECT_FALSE(interrupted.valid);
+  EXPECT_TRUE(interrupted.interrupted);
+  EXPECT_EQ(interrupted.reason_code,
+            LlmKvLayoutReason::PREPARATION_INTERRUPTED);
+  EXPECT_TRUE(interrupted.entries.empty());
+  EXPECT_TRUE(interrupted.permutation.sha256.empty());
+  EXPECT_EQ(stop_checks, 2u);
+
+  size_t throwing_stop_checks = 0;
+  EXPECT_THROW(
+      static_cast<void>(materialize_llm_kv_block_table(
+          layout, 0, 3, [&throwing_stop_checks]() {
+            ++throwing_stop_checks;
+            if (throwing_stop_checks == 8) {
+              throw std::runtime_error("hash-stage stop failure");
+            }
+            return false;
+          })),
+      std::runtime_error);
+  EXPECT_EQ(throwing_stop_checks, 8u);
+}
+
+TEST(LlmMemoryWorkPlanTest,
+     PagedDecodeScenariosAccountModelMetadataAndCheckedTaskTotals) {
+  const LlmKvLayoutPlan layout =
+      build_llm_kv_layout_plan(paged_golden_request());
+  ASSERT_TRUE(layout.valid) << layout.reason_code;
+  const LlmKvBlockTable table = materialize_llm_kv_block_table(
+      layout, derive_llm_kv_permutation_seed(42));
+  ASSERT_TRUE(table.valid) << table.reason_code;
+  const std::string layout_identity =
+      serialize_llm_kv_layout_identity(layout, table.permutation);
+  ASSERT_FALSE(layout_identity.empty());
+
+  struct ScenarioCase {
+    LlmScenario scenario;
+    size_t payload_per_work_unit;
+    size_t lookups_per_work_unit;
+    size_t metadata_bytes_per_work_unit;
+    size_t accounted_bytes_per_work_unit;
+  };
+  const std::array<ScenarioCase, 3> cases = {{
+      {LlmScenario::WeightsOnly, 1024, 0, 0, 1024},
+      {LlmScenario::KvOnly, 9216, 28, 112, 9328},
+      {LlmScenario::Mixed, 10240, 28, 112, 10352},
+  }};
+  constexpr size_t kWorkUnits = 3;
+  for (const ScenarioCase& test_case : cases) {
+    SCOPED_TRACE(llm_scenario_to_string(test_case.scenario));
+    const LlmPagedDecodeWorkloadPlan plan =
+        build_llm_paged_decode_workload_plan(
+            layout, test_case.scenario, kWorkUnits,
+            test_case.payload_per_work_unit, table.permutation);
+    ASSERT_TRUE(plan.valid) << plan.reason_code;
+    EXPECT_EQ(plan.layout_identity, layout_identity);
+    EXPECT_EQ(plan.layout_metadata_lookup_count_per_layer_sequence,
+              test_case.lookups_per_work_unit == 0 ? 0u : 7u);
+    EXPECT_EQ(plan.layout_metadata_lookup_count_per_work_unit,
+              test_case.lookups_per_work_unit);
+    EXPECT_EQ(plan.layout_metadata_read_bytes_per_work_unit,
+              test_case.metadata_bytes_per_work_unit);
+    EXPECT_EQ(plan.accounted_bytes_per_work_unit,
+              test_case.accounted_bytes_per_work_unit);
+    EXPECT_EQ(plan.maximum_work_units_by_guardrail,
+              Constants::LLM_MAX_ACCOUNTED_BYTES_PER_TASK /
+                  test_case.accounted_bytes_per_work_unit);
+    EXPECT_EQ(plan.maximum_work_units_by_work_unit_cap,
+              Constants::LLM_MAX_WORK_UNITS_PER_MEASUREMENT);
+    EXPECT_EQ(plan.effective_maximum_work_units,
+              std::min(Constants::LLM_MAX_WORK_UNITS_PER_MEASUREMENT,
+                       plan.maximum_work_units_by_guardrail));
+    EXPECT_EQ(plan.effective_model_payload_bytes,
+              kWorkUnits * test_case.payload_per_work_unit);
+    EXPECT_EQ(plan.layout_metadata_lookup_count,
+              kWorkUnits * test_case.lookups_per_work_unit);
+    EXPECT_EQ(plan.layout_metadata_read_bytes,
+              kWorkUnits * test_case.metadata_bytes_per_work_unit);
+    EXPECT_EQ(plan.task_accounted_bytes,
+              kWorkUnits * test_case.accounted_bytes_per_work_unit);
+    EXPECT_FALSE(plan.identity.empty());
+  }
+
+  const size_t maximum = std::numeric_limits<size_t>::max();
+  const LlmPagedDecodeWorkloadPlan add_overflow =
+      build_llm_paged_decode_workload_plan(
+          layout, LlmScenario::KvOnly, 1, maximum, table.permutation);
+  EXPECT_FALSE(add_overflow.valid);
+  EXPECT_EQ(add_overflow.reason_code,
+            LlmKvLayoutReason::TASK_TOTAL_OVERFLOW);
+  EXPECT_TRUE(add_overflow.identity.empty());
+
+  const LlmPagedDecodeWorkloadPlan work_unit_cap_excess =
+      build_llm_paged_decode_workload_plan(
+          layout, LlmScenario::WeightsOnly,
+          Constants::LLM_MAX_WORK_UNITS_PER_MEASUREMENT + 1, 1,
+          table.permutation);
+  EXPECT_FALSE(work_unit_cap_excess.valid);
+  EXPECT_EQ(work_unit_cap_excess.reason_code,
+            LlmKvLayoutReason::WORK_UNIT_CAP_EXCEEDED);
+  EXPECT_TRUE(work_unit_cap_excess.identity.empty());
+
+  const LlmPagedDecodeWorkloadPlan exact_work_unit_cap =
+      build_llm_paged_decode_workload_plan(
+          layout, LlmScenario::WeightsOnly,
+          Constants::LLM_MAX_WORK_UNITS_PER_MEASUREMENT, 1,
+          table.permutation);
+  ASSERT_TRUE(exact_work_unit_cap.valid)
+      << exact_work_unit_cap.reason_code;
+  EXPECT_EQ(exact_work_unit_cap.effective_maximum_work_units,
+            Constants::LLM_MAX_WORK_UNITS_PER_MEASUREMENT);
+  EXPECT_EQ(exact_work_unit_cap.task_accounted_bytes,
+            Constants::LLM_MAX_WORK_UNITS_PER_MEASUREMENT);
+
+  const size_t exact_work_units =
+      Constants::LLM_MAX_ACCOUNTED_BYTES_PER_TASK / 1024;
+  const LlmPagedDecodeWorkloadPlan exact_guardrail =
+      build_llm_paged_decode_workload_plan(
+          layout, LlmScenario::WeightsOnly, exact_work_units, 1024,
+          table.permutation);
+  ASSERT_TRUE(exact_guardrail.valid) << exact_guardrail.reason_code;
+  EXPECT_EQ(exact_guardrail.maximum_work_units_by_guardrail,
+            exact_work_units);
+  EXPECT_EQ(exact_guardrail.task_accounted_bytes,
+            Constants::LLM_MAX_ACCOUNTED_BYTES_PER_TASK);
+  const LlmPagedDecodeWorkloadPlan excess_guardrail =
+      build_llm_paged_decode_workload_plan(
+          layout, LlmScenario::WeightsOnly, exact_work_units + 1, 1024,
+          table.permutation);
+  EXPECT_FALSE(excess_guardrail.valid);
+  EXPECT_EQ(excess_guardrail.reason_code,
+            LlmKvLayoutReason::TASK_ACCOUNTED_BYTES_CAP_EXCEEDED);
+
+  const LlmPagedDecodeWorkloadPlan irreducible =
+      build_llm_paged_decode_workload_plan(
+          layout, LlmScenario::WeightsOnly, 1,
+          Constants::LLM_MAX_ACCOUNTED_BYTES_PER_TASK + 1,
+          table.permutation);
+  EXPECT_FALSE(irreducible.valid);
+  EXPECT_EQ(irreducible.reason_code,
+            LlmKvLayoutReason::GUARDRAIL_BELOW_ONE_WORK_UNIT);
+
+  const LlmPagedDecodeWorkloadPlan invalid_identity =
+      build_llm_paged_decode_workload_plan(
+          layout, LlmScenario::KvOnly, 1, 9216,
+          LlmKvPermutationIdentity{});
+  EXPECT_FALSE(invalid_identity.valid);
+  EXPECT_EQ(invalid_identity.reason_code,
+            LlmKvLayoutReason::INVALID_LAYOUT_IDENTITY);
+}
+
+TEST(LlmMemoryWorkPlanTest,
+     PagedCpuOwnershipIsBlockExclusiveRotatingAndLookupInvariant) {
+  const LlmKvLayoutPlan layout =
+      build_llm_kv_layout_plan(paged_golden_request());
+  ASSERT_TRUE(layout.valid) << layout.reason_code;
+
+  constexpr size_t kWorkerCount = 5;
+  const LlmKvCpuOwnershipPlan rotating =
+      build_llm_paged_decode_kv_cpu_ownership_plan(layout, kWorkerCount);
+  ASSERT_TRUE(rotating.valid) << rotating.reason_code;
+  EXPECT_EQ(rotating.layer_sequence_count, 4u);
+  EXPECT_EQ(rotating.total_owned_blocks, 12u);
+  ASSERT_EQ(rotating.assignments.size(), 12u);
+  const std::array<size_t, 3> expected_valid_tokens = {16, 16, 3};
+  const std::array<size_t, 3> expected_model_payload = {1024, 1024, 256};
+  const std::array<size_t, 3> expected_lookups = {2, 2, 3};
+
+  for (size_t ordinal = 0; ordinal < rotating.layer_sequence_count;
+       ++ordinal) {
+    const size_t expected_layer = ordinal / layout.batch_size;
+    const size_t expected_batch = ordinal % layout.batch_size;
+    size_t next_block = 0;
+    std::array<bool, 3> seen = {false, false, false};
+    for (size_t rank = 0; rank < layout.blocks_per_sequence; ++rank) {
+      const LlmKvCpuBlockAssignment& assignment =
+          rotating.assignments[ordinal * layout.blocks_per_sequence + rank];
+      EXPECT_EQ(assignment.layer_index, expected_layer);
+      EXPECT_EQ(assignment.batch_sequence_index, expected_batch);
+      EXPECT_EQ(assignment.worker_index,
+                (ordinal + rank) % kWorkerCount);
+      EXPECT_EQ(assignment.first_logical_block, next_block);
+      EXPECT_EQ(assignment.block_count, 1u);
+      ASSERT_LT(assignment.first_logical_block, seen.size());
+      EXPECT_FALSE(seen[assignment.first_logical_block]);
+      seen[assignment.first_logical_block] = true;
+      EXPECT_EQ(assignment.valid_token_count, expected_valid_tokens[rank]);
+      EXPECT_EQ(assignment.model_payload_bytes_per_work_unit,
+                expected_model_payload[rank]);
+      EXPECT_EQ(assignment.layout_metadata_lookup_count_per_work_unit,
+                expected_lookups[rank]);
+      EXPECT_EQ(assignment.layout_metadata_read_bytes_per_work_unit,
+                expected_lookups[rank] * sizeof(uint32_t));
+      next_block += assignment.block_count;
+    }
+    EXPECT_EQ(next_block, layout.blocks_per_sequence);
+    EXPECT_EQ(seen, (std::array<bool, 3>{true, true, true}));
+  }
+  EXPECT_EQ(rotating.total_model_payload_bytes_per_work_unit, 9216u);
+  EXPECT_EQ(rotating.total_layout_metadata_lookup_count_per_work_unit, 28u);
+  EXPECT_EQ(rotating.total_layout_metadata_read_bytes_per_work_unit, 112u);
+  EXPECT_EQ(rotating.total_accounted_bytes_per_work_unit, 9328u);
+  EXPECT_EQ(rotating.worker_accounted_bytes_per_work_unit,
+            (std::vector<size_t>{1300, 2064, 2332, 2332, 1300}));
+  EXPECT_EQ(rotating.minimum_worker_accounted_bytes_per_work_unit, 1300u);
+  EXPECT_EQ(rotating.maximum_worker_accounted_bytes_per_work_unit, 2332u);
+  EXPECT_EQ(rotating.worker_accounted_imbalance_bytes_per_work_unit, 1032u);
+
+  const std::array<size_t, 5> worker_counts = {1, 2, 3, 5, 8};
+  for (size_t worker_count : worker_counts) {
+    SCOPED_TRACE(worker_count);
+    const LlmKvCpuOwnershipPlan plan =
+        build_llm_paged_decode_kv_cpu_ownership_plan(layout, worker_count);
+    ASSERT_TRUE(plan.valid) << plan.reason_code;
+    EXPECT_EQ(plan.total_owned_blocks, 12u);
+    EXPECT_EQ(plan.total_model_payload_bytes_per_work_unit, 9216u);
+    EXPECT_EQ(plan.total_layout_metadata_lookup_count_per_work_unit, 28u);
+    EXPECT_EQ(plan.total_layout_metadata_read_bytes_per_work_unit, 112u);
+    EXPECT_EQ(plan.total_accounted_bytes_per_work_unit, 9328u);
+    EXPECT_EQ(plan.worker_accounted_bytes_per_work_unit.size(),
+              worker_count);
+  }
+  EXPECT_EQ(build_llm_paged_decode_kv_cpu_ownership_plan(layout, 0)
+                .reason_code,
+            LlmKvLayoutReason::WORKER_COUNT_ZERO);
+
+  const LlmKvCpuOwnershipPlan two_workers =
+      build_llm_paged_decode_kv_cpu_ownership_plan(layout, 2);
+  ASSERT_TRUE(two_workers.valid) << two_workers.reason_code;
+  ASSERT_EQ(two_workers.assignments.size(), 8u);
+  for (size_t ordinal = 0; ordinal < two_workers.layer_sequence_count;
+       ++ordinal) {
+    const size_t offset = ordinal * 2;
+    EXPECT_EQ(two_workers.assignments[offset].first_logical_block, 0u);
+    EXPECT_EQ(two_workers.assignments[offset].block_count, 1u);
+    EXPECT_EQ(two_workers.assignments[offset + 1].first_logical_block, 1u);
+    EXPECT_EQ(two_workers.assignments[offset + 1].block_count, 2u);
+  }
+  EXPECT_EQ(two_workers.worker_accounted_bytes_per_work_unit,
+            (std::vector<size_t>{4664, 4664}));
+  EXPECT_EQ(two_workers.worker_accounted_imbalance_bytes_per_work_unit, 0u);
+
+  const LlmKvLayoutPlan tie_layout =
+      build_llm_kv_layout_plan({10, 4, 1, 1, 2});
+  ASSERT_TRUE(tie_layout.valid) << tie_layout.reason_code;
+  const LlmKvCpuOwnershipPlan tie =
+      build_llm_paged_decode_kv_cpu_ownership_plan(tie_layout, 2);
+  ASSERT_TRUE(tie.valid) << tie.reason_code;
+  ASSERT_EQ(tie.assignments.size(), 2u);
+  EXPECT_EQ(tie.assignments[0].first_logical_block, 0u);
+  EXPECT_EQ(tie.assignments[0].block_count, 1u);
+  EXPECT_EQ(tie.assignments[1].first_logical_block, 1u);
+  EXPECT_EQ(tie.assignments[1].block_count, 2u);
+  EXPECT_EQ(tie.worker_accounted_bytes_per_work_unit,
+            (std::vector<size_t>{24, 48}));
+}
+
+TEST(LlmMemoryWorkPlanTest,
+     PagedMetalSegmentsHonorInjectedWholeElementBoundariesAndExactSums) {
+  struct BoundaryCase {
+    size_t element_count;
+    std::vector<size_t> expected_lengths;
+  };
+  const std::array<BoundaryCase, 3> boundary_cases = {{
+      {15, {15}},
+      {16, {16}},
+      {17, {16, 1}},
+  }};
+  const LlmKvMetalSegmentLimits byte_limits = {16, 4};
+  for (const BoundaryCase& test_case : boundary_cases) {
+    SCOPED_TRACE(test_case.element_count);
+    const LlmKvSegmentPlan plan = build_llm_kv_segment_plan(
+        test_case.element_count, 1, byte_limits);
+    ASSERT_TRUE(plan.valid) << plan.reason_code;
+    EXPECT_EQ(plan.segment_lengths, test_case.expected_lengths);
+    EXPECT_EQ(segment_length_sum(plan), test_case.element_count);
+    EXPECT_EQ(plan.total_length_bytes, test_case.element_count);
+  }
+
+  const LlmKvSegmentPlan non_dividing =
+      build_llm_kv_segment_plan(5, 6, {16, 3});
+  ASSERT_TRUE(non_dividing.valid) << non_dividing.reason_code;
+  EXPECT_EQ(non_dividing.elements_per_segment, 2u);
+  EXPECT_EQ(non_dividing.segment_count, 3u);
+  EXPECT_EQ(non_dividing.segment_lengths,
+            (std::vector<size_t>{12, 12, 6}));
+  EXPECT_EQ(non_dividing.maximum_addressable_elements, 6u);
+  EXPECT_EQ(non_dividing.maximum_addressable_bytes, 36u);
+  EXPECT_EQ(non_dividing.unused_nominal_segment_capacity_bytes, 12u);
+  EXPECT_EQ(non_dividing.total_length_bytes, 30u);
+  EXPECT_EQ(segment_length_sum(non_dividing), 30u);
+
+  const LlmKvSegmentPlan exact_256 =
+      build_llm_kv_segment_plan(512, 4, {8, 256});
+  ASSERT_TRUE(exact_256.valid) << exact_256.reason_code;
+  EXPECT_EQ(exact_256.elements_per_segment, 2u);
+  ASSERT_EQ(exact_256.segment_lengths.size(), 256u);
+  for (size_t length : exact_256.segment_lengths) {
+    EXPECT_EQ(length, 8u);
+  }
+  EXPECT_EQ(segment_length_sum(exact_256), 2048u);
+  const LlmKvSegmentPlan excess_257 =
+      build_llm_kv_segment_plan(513, 4, {8, 256});
+  EXPECT_FALSE(excess_257.valid);
+  EXPECT_EQ(excess_257.reason_code,
+            LlmKvLayoutReason::SEGMENT_COUNT_EXCEEDS_CAP);
+  EXPECT_TRUE(excess_257.segment_lengths.empty());
+
+  const LlmKvSegmentPlan oversized_element =
+      build_llm_kv_segment_plan(1, 17, {16, 4});
+  EXPECT_FALSE(oversized_element.valid);
+  EXPECT_EQ(oversized_element.reason_code,
+            LlmKvLayoutReason::SEGMENT_ELEMENT_EXCEEDS_CAPACITY);
+
+  const LlmKvLayoutPlan layout =
+      build_llm_kv_layout_plan(paged_golden_request());
+  ASSERT_TRUE(layout.valid) << layout.reason_code;
+  const LlmKvMetalSegmentPlan composite =
+      build_llm_kv_metal_segment_plan(layout, {1024, 16});
+  ASSERT_TRUE(composite.valid) << composite.reason_code;
+  EXPECT_EQ(composite.k_or_v_pool.elements_per_segment, 2u);
+  EXPECT_EQ(composite.k_or_v_pool.segment_count, 6u);
+  EXPECT_EQ(segment_length_sum(composite.k_or_v_pool),
+            layout.memory.k_physical_bytes);
+  EXPECT_EQ(composite.block_table.segment_count, 1u);
+  EXPECT_EQ(composite.block_table.segment_lengths,
+            (std::vector<size_t>{24}));
+  EXPECT_EQ(segment_length_sum(composite.block_table),
+            layout.memory.block_table_bytes);
+}
+
+TEST(LlmMemoryWorkPlanTest,
+     PagedCanonicalIdentitiesAreDeterministicAndSensitiveByLayer) {
+  const LlmKvLayoutPlan layout_a =
+      build_llm_kv_layout_plan(paged_golden_request());
+  const LlmKvLayoutPlan layout_b =
+      build_llm_kv_layout_plan(paged_golden_request());
+  const LlmKvLayoutPlan layout_changed =
+      build_llm_kv_layout_plan({36, 16, 2, 2, 32});
+  ASSERT_TRUE(layout_a.valid) << layout_a.reason_code;
+  ASSERT_TRUE(layout_b.valid) << layout_b.reason_code;
+  ASSERT_TRUE(layout_changed.valid) << layout_changed.reason_code;
+  EXPECT_EQ(layout_a.geometry_identity, layout_b.geometry_identity);
+  EXPECT_NE(layout_a.geometry_identity, layout_changed.geometry_identity);
+
+  const LlmKvBlockTable permutation_a =
+      materialize_llm_kv_block_table(layout_a, 0, 1);
+  const LlmKvBlockTable permutation_b =
+      materialize_llm_kv_block_table(layout_b, 0, 3);
+  const LlmKvBlockTable permutation_changed = materialize_llm_kv_block_table(
+      layout_a, derive_llm_kv_permutation_seed(42), 3);
+  ASSERT_TRUE(permutation_a.valid) << permutation_a.reason_code;
+  ASSERT_TRUE(permutation_b.valid) << permutation_b.reason_code;
+  ASSERT_TRUE(permutation_changed.valid) << permutation_changed.reason_code;
+
+  const std::string serialized_layout_a =
+      serialize_llm_kv_layout_identity(layout_a, permutation_a.permutation);
+  const std::string serialized_layout_b =
+      serialize_llm_kv_layout_identity(layout_b, permutation_b.permutation);
+  const std::string serialized_layout_changed = serialize_llm_kv_layout_identity(
+      layout_a, permutation_changed.permutation);
+  EXPECT_EQ(serialized_layout_a, serialized_layout_b);
+  EXPECT_NE(serialized_layout_a, serialized_layout_changed);
+  EXPECT_EQ(serialized_layout_a.rfind(
+                Constants::LLM_KV_LAYOUT_PLAN_IDENTITY_VERSION, 0),
+            0u);
+  expect_length_prefixed_identity_field(
+      serialized_layout_a, "geometry_identity", layout_a.geometry_identity);
+  expect_length_prefixed_identity_field(
+      serialized_layout_a, "permutation_algorithm_version",
+      permutation_a.permutation.algorithm_version);
+  expect_length_prefixed_identity_field(
+      serialized_layout_a, "permutation_domain_uint64_hex",
+      permutation_a.permutation.domain_uint64_hex);
+  expect_length_prefixed_identity_field(
+      serialized_layout_a, "permutation_sha256",
+      permutation_a.permutation.sha256);
+
+  const LlmPagedDecodeWorkloadPlan workload_a =
+      build_llm_paged_decode_workload_plan(
+          layout_a, LlmScenario::KvOnly, 3, 9216,
+          permutation_a.permutation);
+  const LlmPagedDecodeWorkloadPlan workload_b =
+      build_llm_paged_decode_workload_plan(
+          layout_b, LlmScenario::KvOnly, 3, 9216,
+          permutation_b.permutation);
+  const LlmPagedDecodeWorkloadPlan workload_changed =
+      build_llm_paged_decode_workload_plan(
+          layout_a, LlmScenario::KvOnly, 4, 9216,
+          permutation_a.permutation);
+  const LlmPagedDecodeWorkloadPlan workload_seed_changed =
+      build_llm_paged_decode_workload_plan(
+          layout_a, LlmScenario::KvOnly, 3, 9216,
+          permutation_changed.permutation);
+  ASSERT_TRUE(workload_a.valid) << workload_a.reason_code;
+  ASSERT_TRUE(workload_b.valid) << workload_b.reason_code;
+  ASSERT_TRUE(workload_changed.valid) << workload_changed.reason_code;
+  ASSERT_TRUE(workload_seed_changed.valid)
+      << workload_seed_changed.reason_code;
+  EXPECT_EQ(workload_a.identity, workload_b.identity);
+  EXPECT_NE(workload_a.identity, workload_changed.identity);
+  EXPECT_NE(workload_a.identity, workload_seed_changed.identity);
+  EXPECT_EQ(workload_a.identity.rfind(
+                Constants::LLM_PAGED_DECODE_WORKLOAD_IDENTITY_VERSION, 0),
+            0u);
+  expect_length_prefixed_identity_field(
+      workload_a.identity, "layout_identity", serialized_layout_a);
+
+  const LlmKvCpuOwnershipPlan ownership_a =
+      build_llm_paged_decode_kv_cpu_ownership_plan(layout_a, 5);
+  const LlmKvCpuOwnershipPlan ownership_b =
+      build_llm_paged_decode_kv_cpu_ownership_plan(layout_b, 5);
+  const LlmKvCpuOwnershipPlan ownership_changed =
+      build_llm_paged_decode_kv_cpu_ownership_plan(layout_a, 4);
+  ASSERT_TRUE(ownership_a.valid) << ownership_a.reason_code;
+  ASSERT_TRUE(ownership_b.valid) << ownership_b.reason_code;
+  ASSERT_TRUE(ownership_changed.valid) << ownership_changed.reason_code;
+  const std::string cpu_a = serialize_llm_kv_cpu_execution_identity(
+      workload_a, ownership_a);
+  const std::string cpu_b = serialize_llm_kv_cpu_execution_identity(
+      workload_b, ownership_b);
+  const std::string cpu_changed = serialize_llm_kv_cpu_execution_identity(
+      workload_a, ownership_changed);
+  EXPECT_EQ(cpu_a, cpu_b);
+  EXPECT_NE(cpu_a, cpu_changed);
+  EXPECT_EQ(cpu_a.rfind(
+                Constants::LLM_PAGED_CPU_EXECUTION_IDENTITY_VERSION, 0),
+            0u);
+  expect_length_prefixed_identity_field(
+      cpu_a, "workload_identity", workload_a.identity);
+  expect_length_prefixed_identity_field(
+      cpu_a, "ownership_identity", ownership_a.identity);
+  const LlmKvCpuOwnershipPlan cross_layout_ownership =
+      build_llm_paged_decode_kv_cpu_ownership_plan(layout_changed, 5);
+  ASSERT_TRUE(cross_layout_ownership.valid)
+      << cross_layout_ownership.reason_code;
+  EXPECT_TRUE(serialize_llm_kv_cpu_execution_identity(
+                  workload_a, cross_layout_ownership)
+                  .empty());
+  LlmKvCpuOwnershipPlan missing_ownership_identity = ownership_a;
+  missing_ownership_identity.identity.clear();
+  EXPECT_TRUE(serialize_llm_kv_cpu_execution_identity(
+                  workload_a, missing_ownership_identity)
+                  .empty());
+
+  const LlmKvMetalSegmentPlan segments_a =
+      build_llm_kv_metal_segment_plan(layout_a, {1024, 16});
+  const LlmKvMetalSegmentPlan segments_b =
+      build_llm_kv_metal_segment_plan(layout_b, {1024, 16});
+  const LlmKvMetalSegmentPlan segments_changed =
+      build_llm_kv_metal_segment_plan(layout_a, {1536, 16});
+  ASSERT_TRUE(segments_a.valid) << segments_a.reason_code;
+  ASSERT_TRUE(segments_b.valid) << segments_b.reason_code;
+  ASSERT_TRUE(segments_changed.valid) << segments_changed.reason_code;
+  const std::string metal_a = serialize_llm_kv_metal_execution_identity(
+      workload_a, segments_a);
+  const std::string metal_b = serialize_llm_kv_metal_execution_identity(
+      workload_b, segments_b);
+  const std::string metal_changed = serialize_llm_kv_metal_execution_identity(
+      workload_a, segments_changed);
+  EXPECT_EQ(metal_a, metal_b);
+  EXPECT_NE(metal_a, metal_changed);
+  EXPECT_EQ(metal_a.rfind(
+                Constants::LLM_PAGED_METAL_EXECUTION_IDENTITY_VERSION, 0),
+            0u);
+  expect_length_prefixed_identity_field(
+      metal_a, "workload_identity", workload_a.identity);
+  expect_length_prefixed_identity_field(
+      metal_a, "segment_identity", segments_a.identity);
+  const LlmKvMetalSegmentPlan cross_layout_segments =
+      build_llm_kv_metal_segment_plan(layout_changed, {1024, 16});
+  ASSERT_TRUE(cross_layout_segments.valid)
+      << cross_layout_segments.reason_code;
+  EXPECT_TRUE(serialize_llm_kv_metal_execution_identity(
+                  workload_a, cross_layout_segments)
+                  .empty());
+  LlmPagedDecodeWorkloadPlan missing_workload_identity = workload_a;
+  missing_workload_identity.identity.clear();
+  EXPECT_TRUE(serialize_llm_kv_metal_execution_identity(
+                  missing_workload_identity, segments_a)
+                  .empty());
 }

@@ -23,10 +23,67 @@
 #ifndef HASH_UTILS_H
 #define HASH_UTILS_H
 
+#include <cstddef>
+#include <memory>
 #include <string>
 #include <string_view>
 
 namespace HashUtils {
+
+/**
+ * @brief Single-owner incremental SHA-256 calculation.
+ *
+ * Updates consume exact bytes without retaining or copying the complete input. One update may exceed CommonCrypto's
+ * per-call `CC_LONG` limit; the implementation submits it as bounded internal chunks. Instances are move-only and are
+ * not safe for concurrent use. Finalization consumes the active state, after which further updates or finalization
+ * throw `std::logic_error`. A moved-from instance has the same inactive behavior.
+ */
+class Sha256Hasher {
+ public:
+  Sha256Hasher();
+  ~Sha256Hasher();
+
+  Sha256Hasher(const Sha256Hasher&) = delete;
+  Sha256Hasher& operator=(const Sha256Hasher&) = delete;
+  Sha256Hasher(Sha256Hasher&&) noexcept;
+  Sha256Hasher& operator=(Sha256Hasher&&) noexcept;
+
+  /**
+   * @brief Add an exact byte range to the digest.
+   *
+   * A null pointer is accepted only when `size` is zero. Empty updates are valid and leave the active digest state
+   * unchanged.
+   *
+   * @param data First byte, or null for an empty update.
+   * @param size Number of bytes to consume.
+   * @throws std::invalid_argument If `data` is null and `size` is nonzero.
+   * @throws std::logic_error If the hasher is finalized or moved from.
+   * @throws std::runtime_error If CommonCrypto rejects an update.
+   */
+  void update(const void* data, size_t size);
+
+  /**
+   * @brief Add all exact bytes represented by a string view.
+   *
+   * @param input Exact bytes to consume, including embedded NUL bytes.
+   * @throws std::logic_error If the hasher is finalized or moved from.
+   * @throws std::runtime_error If CommonCrypto rejects an update.
+   */
+  void update(std::string_view input);
+
+  /**
+   * @brief Finalize the digest and encode it as lowercase hexadecimal.
+   *
+   * @return A canonical 64-character lowercase hexadecimal SHA-256 digest.
+   * @throws std::logic_error If the hasher is already finalized or moved from.
+   * @throws std::runtime_error If CommonCrypto rejects finalization.
+   */
+  [[nodiscard]] std::string finalize_hex();
+
+ private:
+  struct State;
+  std::unique_ptr<State> state_;
+};
 
 /**
  * @brief Hash an exact byte sequence and encode its SHA-256 digest as lowercase hexadecimal.
@@ -37,7 +94,6 @@ namespace HashUtils {
  *
  * @param input Exact bytes to hash.
  * @return A canonical 64-character lowercase hexadecimal SHA-256 digest.
- * @throws std::length_error If the input length cannot be represented by CommonCrypto's one-shot API.
  * @throws std::runtime_error If CommonCrypto unexpectedly fails to produce a digest.
  */
 std::string sha256_hex(std::string_view input);

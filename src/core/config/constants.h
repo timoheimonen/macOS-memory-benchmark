@@ -206,6 +206,30 @@ namespace Constants {
       "llm-read-checksum-v1";
   constexpr const char* LLM_TRAFFIC_CLASSIFICATION_VERSION =
       "llm-exact-weight-vs-kv-read-payload-v1";
+  constexpr size_t LLM_KV_BLOCK_TABLE_ENTRY_BYTES = sizeof(uint32_t);
+  constexpr size_t LLM_KV_PREPARATION_POLL_INTERVAL_ENTRIES =
+      1024ULL * 1024ULL;
+  constexpr size_t LLM_METAL_SEGMENT_CAPACITY_BYTES =
+      256ULL * BYTES_PER_MB;
+  constexpr size_t LLM_METAL_SEGMENT_SLOTS_PER_POOL = 256;
+  constexpr const char* LLM_PAGED_KV_LAYOUT_VERSION =
+      "paged-uint32-block-table-full-blocks-v1";
+  constexpr const char* LLM_KV_BLOCK_PERMUTATION_VERSION =
+      "splitmix64-fisher-yates-rejection-v1";
+  constexpr const char* LLM_KV_LAYOUT_GEOMETRY_IDENTITY_VERSION =
+      "llm-kv-layout-geometry-v1";
+  constexpr const char* LLM_KV_LAYOUT_PLAN_IDENTITY_VERSION =
+      "llm-kv-layout-plan-v1";
+  constexpr const char* LLM_PAGED_DECODE_WORKLOAD_IDENTITY_VERSION =
+      "llm-paged-decode-workload-v1";
+  constexpr const char* LLM_PAGED_CPU_EXECUTION_IDENTITY_VERSION =
+      "llm-paged-cpu-execution-v1";
+  constexpr const char* LLM_PAGED_METAL_EXECUTION_IDENTITY_VERSION =
+      "llm-paged-metal-execution-v1";
+  constexpr const char* LLM_PAGED_CPU_SCHEDULE_VERSION =
+      "decode-kv-accounted-prefix-balanced-rotating-v1";
+  constexpr const char* LLM_METAL_SEGMENT_LAYOUT_VERSION =
+      "whole-element-segments-v1";
 
   constexpr double BENCHMARK_LATENCY_TARGET_SECONDS = 0.250;
   constexpr double BENCHMARK_LATENCY_CALIBRATION_MIN_SECONDS = 0.100;
