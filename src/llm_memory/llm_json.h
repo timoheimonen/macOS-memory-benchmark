@@ -15,7 +15,7 @@
 
 /**
  * @file llm_json.h
- * @brief Auditable JSON schema v1 for the CPU LLM memory profile
+ * @brief Auditable backend-neutral JSON schema v1 for LLM memory profiles
  */
 
 #ifndef LLM_JSON_H
@@ -71,10 +71,11 @@ struct LlmResultMetadata {
 /**
  * Build one complete or partial top-level LLM schema-v1 document.
  *
- * Exact payload, byte, seed, and checksum integers are emitted as canonical
- * decimal strings. A metric or checksum state that was not validly observed is
- * emitted as JSON null and remains distinguishable through its status and
- * reason fields. The builder is synchronous and retains no references.
+ * Potentially large exact counts, payload bytes, seeds, and checksum integers
+ * are emitted as canonical decimal strings. Work-unit counts and validated
+ * control geometry use JSON integers. Phase-, layout-, and backend-specific
+ * evidence uses object-or-null applicability, while an unobserved derived
+ * metric is JSON null. The builder is synchronous and retains no references.
  *
  * @param config Parsed command configuration, including exact argv/output.
  * @param model_plan Immutable full-size model geometry and layout plan.

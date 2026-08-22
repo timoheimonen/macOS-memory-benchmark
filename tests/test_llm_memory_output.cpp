@@ -27,22 +27,30 @@
 
 namespace {
 
-void set_headline(LlmMemoryResult& result, LlmScenario scenario, double latency_seconds, double steps_per_second,
+void set_headline(LlmMemoryResult& result, LlmScenario scenario, double latency_seconds, double work_units_per_second,
                   double bandwidth_gb_s) {
   LlmScenarioAggregate& aggregate = result.aggregates[static_cast<size_t>(scenario)];
   aggregate.scenario = scenario;
-  aggregate.step_latency_seconds.headline = latency_seconds;
-  aggregate.synthetic_memory_steps_per_second.headline = steps_per_second;
-  aggregate.effective_payload_gb_s.headline = bandwidth_gb_s;
+  aggregate.work_unit_latency_seconds.headline = latency_seconds;
+  aggregate.synthetic_memory_work_units_per_second.headline = work_units_per_second;
+  aggregate.effective_model_payload_gb_s.headline = bandwidth_gb_s;
 }
 
 LlmMemoryWorkPlan make_console_plan() {
   LlmMemoryWorkPlan plan;
   plan.valid = true;
+  plan.backend = LlmMemoryBackend::Cpu;
+  plan.phase = LlmPhase::Decode;
+  plan.kv_layout = LlmKvLayout::Contiguous;
+  plan.work_unit_kind = LlmWorkUnitKind::DecodeStep;
   plan.geometry.valid = true;
-  plan.geometry.active_weight_bytes_per_step = 1024;
-  plan.geometry.kv_read_bytes_per_step = 768;
-  plan.geometry.kv_append_write_bytes_per_step = 256;
+  plan.geometry.phase = LlmPhase::Decode;
+  plan.geometry.kv_layout = LlmKvLayout::Contiguous;
+  plan.geometry.work_unit_kind = LlmWorkUnitKind::DecodeStep;
+  plan.geometry.decode = LlmDecodeGeometry{8};
+  plan.geometry.active_weight_bytes_per_work_unit = 1024;
+  plan.geometry.kv_read_bytes_per_work_unit = 768;
+  plan.geometry.kv_write_bytes_per_work_unit = 256;
   plan.geometry.kv_capacity_bytes = 2048;
   plan.geometry.traffic_crossover_context_tokens = 4.0;
   return plan;
@@ -161,19 +169,23 @@ TEST(LlmMemoryOutputTest, PrintsExactPayloadHeadlinesAndInterpretation) {
 
   EXPECT_TRUE(errors.empty());
   EXPECT_EQ(output,
-            "Synthetic LLM decode memory profile (CPU, fixed context, warm/cacheable)\n"
-            "  Active weight bytes / step: 1024\n"
-            "  KV read bytes / step:       768\n"
-            "  KV append bytes / step:     256\n"
-            "  Traffic crossover:          4.00 visible context tokens\n\n"
-            "  Weights only: 1.250 ms/step, 100.50 GB/s effective payload\n"
-            "  KV only:      2.500 ms/step, 50.25 GB/s effective payload\n"
-            "  Mixed:        3.750 ms/step, 266.67 synthetic memory steps/s, "
-            "80.25 GB/s effective payload\n"
-            "  Interpretation: each step is synthetic memory-only work, not an inference token; "
-            "effective payload is logical, not physical DRAM-counter traffic.\n"
-            "  Context/layout: the fixed visible context includes the current-token slot; KV uses "
-            "contiguous layer/batch/token/head/dimension layout.\n"
+            "Synthetic LLM memory profile (backend=cpu, phase=decode, "
+            "work_unit=decode_step, kv_layout=contiguous, warm/cacheable)\n"
+            "  Visible context tokens:     8\n"
+            "  Traffic crossover:          4.00 visible context tokens\n"
+            "  Active weight bytes / decode step: 1024\n"
+            "  KV read bytes / decode step:       768\n"
+            "  KV write bytes / decode step:      256\n\n"
+            "  Weights only: 1.250 ms/decode step, "
+            "100.50 GB/s effective model payload\n"
+            "  KV only:      2.500 ms/decode step, "
+            "50.25 GB/s effective model payload\n"
+            "  Mixed:        3.750 ms/decode step, 266.67 synthetic decode steps/s, "
+            "80.25 GB/s effective model payload\n"
+            "  Interpretation: each decode step is synthetic memory-only work, not an inference "
+            "token; effective model payload is logical, not physical DRAM-counter traffic.\n"
+            "  Phase/layout: phase=decode, kv_layout=contiguous; the visible context includes the "
+            "current-token slot; KV uses layer/batch/token/head/dimension order.\n"
             "  Crossover: logical weight/KV-read payload equality is not a proven hardware "
             "bottleneck transition.\n"
             "  Comparability: small weight or KV working sets can be cache-dominant; order imbalance, "
@@ -192,14 +204,14 @@ TEST(LlmMemoryOutputTest, EmitsDeduplicatedWarningsInContractOrder) {
 
   LlmMemoryResult result;
   result.aggregates[static_cast<size_t>(LlmScenario::KvOnly)]
-      .effective_payload_gb_s.statistics.coefficient_of_variation_pct = 6.25;
+      .effective_model_payload_gb_s.statistics.coefficient_of_variation_pct = 6.25;
   result.quality_warnings = {"kv_only-high-cv", "kv_only-high-cv", "scenario-order-not-balanced"};
 
   LlmMeasurementState mixed;
   mixed.scenario = LlmScenario::Mixed;
   mixed.status = LlmMeasurementStatus::Measured;
   mixed.qos_failed_workers = 1;
-  mixed.duration_quality = "single-step-over-target";
+  mixed.duration_quality = "above-target-single-work-unit";
   result.measurements.push_back(mixed);
   result.measurements.push_back(mixed);
 
@@ -226,7 +238,7 @@ TEST(LlmMemoryOutputTest, EmitsDeduplicatedWarningsInContractOrder) {
             "(4096 bytes); the result may be cache-dominant\n"
             "Warning: LLM KV working set (2048 bytes) does not exceed reported L2 cache "
             "(4096 bytes); the result may be cache-dominant\n"
-            "Warning: LLM Mixed duration quality is single-step-over-target\n"
+            "Warning: LLM Mixed duration quality is above-target-single-work-unit\n"
             "Warning: LLM KV only duration quality is above-target-window\n");
 }
 
@@ -258,21 +270,25 @@ TEST(LlmMemoryOutputTest, ConsoleHeadlinesAgreeExactlyWithJsonFromSameFakeRunner
   for (LlmScenario scenario : {LlmScenario::WeightsOnly, LlmScenario::KvOnly, LlmScenario::Mixed}) {
     const size_t index = static_cast<size_t>(scenario);
     const LlmScenarioAggregate& aggregate = result.aggregates[index];
-    ASSERT_TRUE(aggregate.step_latency_seconds.headline.has_value());
-    ASSERT_TRUE(aggregate.synthetic_memory_steps_per_second.headline.has_value());
-    ASSERT_TRUE(aggregate.effective_payload_gb_s.headline.has_value());
+    ASSERT_TRUE(aggregate.work_unit_latency_seconds.headline.has_value());
+    ASSERT_TRUE(aggregate.synthetic_memory_work_units_per_second.headline.has_value());
+    ASSERT_TRUE(aggregate.effective_model_payload_gb_s.headline.has_value());
 
     const std::string scenario_token = llm_scenario_to_string(scenario);
-    const nlohmann::ordered_json& json_aggregate = document["scenario_aggregates"][scenario_token];
-    const double json_latency = json_aggregate["synthetic_step_latency_seconds"]["headline"].get<double>();
-    const double json_steps_per_second = json_aggregate["synthetic_memory_steps_per_second"]["headline"].get<double>();
-    const double json_bandwidth = json_aggregate["effective_payload_gb_s"]["headline"].get<double>();
-    EXPECT_DOUBLE_EQ(json_latency, *aggregate.step_latency_seconds.headline);
-    EXPECT_DOUBLE_EQ(json_steps_per_second, *aggregate.synthetic_memory_steps_per_second.headline);
-    EXPECT_DOUBLE_EQ(json_bandwidth, *aggregate.effective_payload_gb_s.headline);
+    const nlohmann::ordered_json& json_aggregate =
+        document["aggregates"]["scenarios"][scenario_token];
+    const double json_latency = json_aggregate["synthetic_work_unit_latency_seconds"]["headline"].get<double>();
+    const double json_work_units_per_second =
+        json_aggregate["synthetic_memory_work_units_per_second"]["headline"]
+            .get<double>();
+    const double json_bandwidth = json_aggregate["effective_model_payload_gb_s"]["headline"].get<double>();
+    EXPECT_DOUBLE_EQ(json_latency, *aggregate.work_unit_latency_seconds.headline);
+    EXPECT_DOUBLE_EQ(json_work_units_per_second, *aggregate.synthetic_memory_work_units_per_second.headline);
+    EXPECT_DOUBLE_EQ(json_bandwidth, *aggregate.effective_model_payload_gb_s.headline);
 
     const std::string expected_line = Messages::report_llm_memory_scenario_headline(
-        Messages::report_llm_memory_scenario_name(scenario_token), json_latency * 1000.0, json_steps_per_second,
+        Messages::report_llm_memory_scenario_name(scenario_token), "decode step",
+        "decode steps", json_latency * 1000.0, json_work_units_per_second,
         json_bandwidth, scenario == LlmScenario::Mixed);
     EXPECT_EQ(count_substrings(output, expected_line), 1u) << expected_line << "\n" << output;
   }

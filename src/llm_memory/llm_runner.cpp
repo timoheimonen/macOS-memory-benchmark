@@ -101,7 +101,7 @@ constexpr std::string_view kLlmWorkPlanReasons[] = {
     LlmWorkPlanReason::KV_SEQUENCE_BYTES_OVERFLOW,
     LlmWorkPlanReason::KV_MAPPING_BYTES_OVERFLOW,
     LlmWorkPlanReason::KV_CAPACITY_BYTES_OVERFLOW,
-    LlmWorkPlanReason::KV_APPEND_BYTES_OVERFLOW,
+    LlmWorkPlanReason::KV_WRITE_BYTES_OVERFLOW,
     LlmWorkPlanReason::KV_READ_BYTES_OVERFLOW,
     LlmWorkPlanReason::KV_ONLY_PAYLOAD_OVERFLOW,
     LlmWorkPlanReason::MIXED_PAYLOAD_OVERFLOW,
@@ -123,11 +123,15 @@ constexpr std::string_view kLlmWorkPlanReasons[] = {
     LlmWorkPlanReason::PLANNER_ALLOCATION_FAILED,
     LlmWorkPlanReason::INVALID_SCENARIO,
     LlmWorkPlanReason::INVALID_MODEL_WORK_PLAN,
-    LlmWorkPlanReason::PAYLOAD_CAP_BELOW_ONE_STEP,
-    LlmWorkPlanReason::STEP_COUNT_ZERO,
-    LlmWorkPlanReason::STEP_CAP_EXCEEDED,
-    LlmWorkPlanReason::EXACT_PAYLOAD_OVERFLOW,
-    LlmWorkPlanReason::EXACT_PAYLOAD_CAP_EXCEEDED,
+    LlmWorkPlanReason::BACKEND_NOT_ACTIVATED,
+    LlmWorkPlanReason::PHASE_NOT_ACTIVATED,
+    LlmWorkPlanReason::KV_LAYOUT_NOT_ACTIVATED,
+    LlmWorkPlanReason::JSON_INTEGER_OUT_OF_RANGE,
+    LlmWorkPlanReason::GUARDRAIL_BELOW_ONE_WORK_UNIT,
+    LlmWorkPlanReason::WORK_UNIT_COUNT_ZERO,
+    LlmWorkPlanReason::WORK_UNIT_CAP_EXCEEDED,
+    LlmWorkPlanReason::TASK_ACCOUNTED_BYTES_OVERFLOW,
+    LlmWorkPlanReason::TASK_ACCOUNTED_BYTES_CAP_EXCEEDED,
 };
 
 enum class CalibrationOutcome {
@@ -199,11 +203,16 @@ bool inputs_match(const LlmMemoryConfig& config, const LlmMemoryWorkPlan& plan) 
     return false;
   }
   const LlmGeometry& geometry = plan.geometry;
-  return validation.active_weight_bytes == geometry.active_weight_bytes_per_step &&
+  return config.backend == plan.backend && config.phase == plan.phase &&
+         config.kv_layout == plan.kv_layout && geometry.phase == plan.phase &&
+         geometry.kv_layout == plan.kv_layout && geometry.decode.has_value() &&
+         !geometry.prefill.has_value() &&
+         validation.active_weight_bytes == geometry.active_weight_bytes_per_work_unit &&
          config.layer_count == geometry.layer_count && config.query_head_count == geometry.query_head_count &&
          config.kv_head_count == geometry.kv_head_count && config.head_dimension == geometry.head_dimension &&
          config.kv_element_bytes == geometry.kv_element_bytes &&
-         config.visible_context_tokens == geometry.visible_context_tokens && config.batch_size == geometry.batch_size &&
+         config.visible_context_tokens == geometry.decode->visible_context_tokens &&
+         config.batch_size == geometry.batch_size &&
          config.requested_workers == plan.requested_workers && config.available_workers == plan.available_workers &&
          config.seed == plan.base_seed;
 }
@@ -313,12 +322,15 @@ LlmMeasurementStatus execution_failure_status(std::string_view reason_code) noex
 }
 
 void clear_measurement_values(LlmMeasurementState& measurement) {
-  measurement.completed_steps = 0;
-  measurement.completed_exact_payload_bytes = 0;
+  measurement.completed_work_units = 0;
+  measurement.completed_effective_model_payload_bytes = 0;
+  measurement.completed_layout_metadata_lookup_count = 0;
+  measurement.completed_layout_metadata_read_bytes = 0;
+  measurement.completed_task_accounted_bytes = 0;
   measurement.elapsed_seconds.reset();
-  measurement.synthetic_step_latency_seconds.reset();
-  measurement.synthetic_memory_steps_per_second.reset();
-  measurement.effective_payload_gb_s.reset();
+  measurement.synthetic_work_unit_latency_seconds.reset();
+  measurement.synthetic_memory_work_units_per_second.reset();
+  measurement.effective_model_payload_gb_s.reset();
   measurement.checksum_valid = false;
 }
 
@@ -336,25 +348,27 @@ void update_metric_aggregate(LlmMetricAggregate& aggregate, LlmStatisticsWorkspa
 void update_scenario_aggregate(LlmMemoryResult& result, const LlmMeasurementState& measurement) {
   const size_t index = scenario_index(measurement.scenario);
   if (index >= result.aggregates.size() || measurement.status != LlmMeasurementStatus::Measured ||
-      !measurement.checksum_valid || !measurement.synthetic_step_latency_seconds.has_value() ||
-      !measurement.synthetic_memory_steps_per_second.has_value() || !measurement.effective_payload_gb_s.has_value()) {
+      !measurement.checksum_valid || !measurement.synthetic_work_unit_latency_seconds.has_value() ||
+      !measurement.synthetic_memory_work_units_per_second.has_value() ||
+      !measurement.effective_model_payload_gb_s.has_value()) {
     return;
   }
 
   LlmScenarioAggregate& aggregate = result.aggregates[index];
-  aggregate.step_latency_seconds.values.push_back(*measurement.synthetic_step_latency_seconds);
-  aggregate.synthetic_memory_steps_per_second.values.push_back(*measurement.synthetic_memory_steps_per_second);
-  aggregate.effective_payload_gb_s.values.push_back(*measurement.effective_payload_gb_s);
-  update_metric_aggregate(aggregate.step_latency_seconds, result.statistics_workspace);
-  update_metric_aggregate(aggregate.synthetic_memory_steps_per_second, result.statistics_workspace);
-  update_metric_aggregate(aggregate.effective_payload_gb_s, result.statistics_workspace);
+  aggregate.work_unit_latency_seconds.values.push_back(*measurement.synthetic_work_unit_latency_seconds);
+  aggregate.synthetic_memory_work_units_per_second.values.push_back(
+      *measurement.synthetic_memory_work_units_per_second);
+  aggregate.effective_model_payload_gb_s.values.push_back(*measurement.effective_model_payload_gb_s);
+  update_metric_aggregate(aggregate.work_unit_latency_seconds, result.statistics_workspace);
+  update_metric_aggregate(aggregate.synthetic_memory_work_units_per_second, result.statistics_workspace);
+  update_metric_aggregate(aggregate.effective_model_payload_gb_s, result.statistics_workspace);
 
-  const size_t sample_count = aggregate.effective_payload_gb_s.values.size();
+  const size_t sample_count = aggregate.effective_model_payload_gb_s.values.size();
   aggregate.status = sample_count == result.counters.planned_loops ? "complete" : "partial";
   if (sample_count < 3) {
     aggregate.stability_quality = "insufficient-samples";
-  } else if (aggregate.effective_payload_gb_s.statistics.coefficient_of_variation_defined &&
-             aggregate.effective_payload_gb_s.statistics.coefficient_of_variation_pct >
+  } else if (aggregate.effective_model_payload_gb_s.statistics.coefficient_of_variation_defined &&
+             aggregate.effective_model_payload_gb_s.statistics.coefficient_of_variation_pct >
                  Constants::LLM_STREAMING_CV_WARNING_PCT) {
     aggregate.stability_quality = "noisy";
   } else {
@@ -416,7 +430,8 @@ void update_completion_state(LlmMemoryResult& result) {
                             result.counters.measured_measurements == result.counters.planned_measurements;
   result.scenario_order_balance_complete = order_is_balanced(result);
 
-  if (result.status != LlmRunStatus::Failed) {
+  if (result.status != LlmRunStatus::Failed &&
+      result.status != LlmRunStatus::Unsupported) {
     if (result.results_complete) {
       result.status = LlmRunStatus::Complete;
       result.reason_code = LlmRunnerReason::COMPLETE;
@@ -542,7 +557,10 @@ int finish_terminal(LlmMemoryResult& result, const LlmRunnerHooks& hooks) {
     update_completion_state(result);
     return EXIT_FAILURE;
   }
-  return result.status == LlmRunStatus::Failed ? EXIT_FAILURE : EXIT_SUCCESS;
+  return result.status == LlmRunStatus::Failed ||
+                 result.status == LlmRunStatus::Unsupported
+             ? EXIT_FAILURE
+             : EXIT_SUCCESS;
 }
 
 size_t calibration_capacity(const LlmMemoryConfig& config) noexcept {
@@ -557,7 +575,7 @@ bool calculate_calibration_identity_capacities(const LlmMemoryConfig& config, co
       return false;
     }
     const LlmScenarioWorkPlan maximum_plan = build_llm_scenario_work_plan(
-        model_plan, kLlmScenarios[index], limits.effective_maximum_steps, config.user_specified_iterations);
+        model_plan, kLlmScenarios[index], limits.effective_maximum_work_units, config.user_specified_iterations);
     if (!maximum_plan.valid) {
       return false;
     }
@@ -600,11 +618,11 @@ LlmRunnerAuxiliaryEstimate calculate_actual_runner_backing(const LlmMemoryResult
   }
 
   for (const LlmScenarioAggregate& aggregate : result.aggregates) {
-    if (!add_capacity_bytes(aggregate.step_latency_seconds.values.capacity(), sizeof(double),
+    if (!add_capacity_bytes(aggregate.work_unit_latency_seconds.values.capacity(), sizeof(double),
                             actual.aggregate_value_bytes) ||
-        !add_capacity_bytes(aggregate.synthetic_memory_steps_per_second.values.capacity(), sizeof(double),
+        !add_capacity_bytes(aggregate.synthetic_memory_work_units_per_second.values.capacity(), sizeof(double),
                             actual.aggregate_value_bytes) ||
-        !add_capacity_bytes(aggregate.effective_payload_gb_s.values.capacity(), sizeof(double),
+        !add_capacity_bytes(aggregate.effective_model_payload_gb_s.values.capacity(), sizeof(double),
                             actual.aggregate_value_bytes)) {
       return actual;
     }
@@ -690,12 +708,15 @@ bool initialize_result(const LlmMemoryConfig& config, const LlmMemoryWorkPlan& m
   const size_t attempts_per_scenario = calibration_capacity(config);
   for (size_t index = 0; index < kLlmScenarioCount; ++index) {
     result.aggregates[index].scenario = kLlmScenarios[index];
-    result.aggregates[index].step_latency_seconds.values.reserve(config.loop_count);
-    result.aggregates[index].synthetic_memory_steps_per_second.values.reserve(config.loop_count);
-    result.aggregates[index].effective_payload_gb_s.values.reserve(config.loop_count);
+    result.aggregates[index].work_unit_latency_seconds.values.reserve(config.loop_count);
+    result.aggregates[index].synthetic_memory_work_units_per_second.values.reserve(config.loop_count);
+    result.aggregates[index].effective_model_payload_gb_s.values.reserve(config.loop_count);
     result.calibration_attempts[index].resize(attempts_per_scenario);
     for (LlmCalibrationAttempt& attempt : result.calibration_attempts[index]) {
       attempt.scenario = kLlmScenarios[index];
+      attempt.work_unit_kind = model_plan.work_unit_kind;
+      attempt.kv_write_kind =
+          llm_kv_write_kind_for(model_plan.phase, attempt.scenario);
       attempt.work_plan_identity.reserve(identity_capacities[index]);
     }
   }
@@ -708,6 +729,9 @@ bool initialize_result(const LlmMemoryConfig& config, const LlmMemoryWorkPlan& m
     for (size_t position = 0; position < kLlmScenarioCount; ++position) {
       LlmMeasurementState measurement;
       measurement.scenario = loop.planned_order[position];
+      measurement.work_unit_kind = model_plan.work_unit_kind;
+      measurement.kv_write_kind =
+          llm_kv_write_kind_for(model_plan.phase, measurement.scenario);
       measurement.loop_index = loop_index;
       measurement.order_position = position;
       measurement.requested_workers = model_plan.requested_workers;
@@ -756,19 +780,25 @@ ExcludedTaskOutcome execute_excluded_task(const LlmMemoryWorkPlan& model_plan, c
   LlmCalibrationAttempt& attempt = result.calibration_attempts[index][attempt_index];
   ++result.calibration_attempt_counts[index];
   attempt.scenario = task_plan.scenario;
+  attempt.work_unit_kind = task_plan.work_unit_kind;
+  attempt.kv_write_kind = task_plan.kv_write_kind;
   attempt.purpose = canonical_calibration_purpose(purpose);
   attempt.explicit_iterations = task_plan.explicit_iterations;
-  attempt.steps = task_plan.steps;
+  attempt.work_units = task_plan.work_units;
   attempt.weight_read_bytes = task_plan.weight_read_bytes;
   attempt.kv_read_bytes = task_plan.kv_read_bytes;
-  attempt.kv_append_write_bytes = task_plan.kv_append_write_bytes;
-  attempt.effective_payload_bytes = task_plan.effective_payload_bytes;
+  attempt.kv_write_bytes = task_plan.kv_write_bytes;
+  attempt.effective_model_payload_bytes = task_plan.effective_model_payload_bytes;
+  attempt.layout_metadata_lookup_count =
+      task_plan.layout_metadata_lookup_count;
+  attempt.layout_metadata_read_bytes = task_plan.layout_metadata_read_bytes;
+  attempt.task_accounted_bytes = task_plan.task_accounted_bytes;
   attempt.work_plan_identity.assign(task_plan.plan_identity);
   try {
     LlmExecutorResult execution = executor(model_plan, task_plan, context);
     attempt.execution = compact_execution(execution);
     attempt.duration_quality =
-        classify_llm_duration_quality(execution.elapsed_seconds, task_plan.steps,
+        classify_llm_duration_quality(execution.elapsed_seconds, task_plan.work_units,
                                       calculate_llm_scenario_limits(model_plan.geometry, task_plan.scenario));
     attempt.terminal = true;
     attempt.valid = execution_is_accepted(execution, model_plan.effective_workers);
@@ -830,7 +860,7 @@ CalibrationOutcome run_excluded(const LlmMemoryWorkPlan& model_plan, const LlmSc
 
 CalibrationOutcome calibrate_scenario(const LlmMemoryConfig& config, const LlmMemoryWorkPlan& model_plan,
                                       LlmScenario scenario, const LlmTaskExecutor& executor, LlmMemoryResult& result,
-                                      const LlmRunnerHooks& hooks, size_t& frozen_steps) {
+                                      const LlmRunnerHooks& hooks, size_t& frozen_work_units) {
   const LlmScenarioLimits limits = calculate_llm_scenario_limits(model_plan.geometry, scenario);
   if (!limits.valid) {
     result.status = LlmRunStatus::Failed;
@@ -846,7 +876,7 @@ CalibrationOutcome calibrate_scenario(const LlmMemoryConfig& config, const LlmMe
       return CalibrationOutcome::Failed;
     }
     const LlmScenarioWorkPlan& explicit_plan = result.frozen_scenario_plans.scenarios[index];
-    if (!explicit_plan.valid || explicit_plan.scenario != scenario || explicit_plan.steps != config.iterations ||
+    if (!explicit_plan.valid || explicit_plan.scenario != scenario || explicit_plan.work_units != config.iterations ||
         !explicit_plan.explicit_iterations) {
       result.status = LlmRunStatus::Failed;
       result.reason_code = LlmRunnerReason::FROZEN_PLAN_MISMATCH;
@@ -857,7 +887,7 @@ CalibrationOutcome calibrate_scenario(const LlmMemoryConfig& config, const LlmMe
     if (warmup != CalibrationOutcome::Success) {
       return warmup;
     }
-    frozen_steps = config.iterations;
+    frozen_work_units = config.iterations;
     return CalibrationOutcome::Success;
   }
 
@@ -876,13 +906,13 @@ CalibrationOutcome calibrate_scenario(const LlmMemoryConfig& config, const LlmMe
     return outcome;
   }
 
-  size_t steps = calculate_llm_pilot_steps(limits);
-  if (steps == 0) {
+  size_t work_units = calculate_llm_pilot_work_units(limits);
+  if (work_units == 0) {
     result.status = LlmRunStatus::Failed;
     result.reason_code = LlmRunnerReason::CALIBRATION_SCALING_FAILED;
     return CalibrationOutcome::Failed;
   }
-  LlmScenarioWorkPlan latest_plan = build_llm_scenario_work_plan(model_plan, scenario, steps, false);
+  LlmScenarioWorkPlan latest_plan = build_llm_scenario_work_plan(model_plan, scenario, work_units, false);
   if (!latest_plan.valid) {
     result.status = LlmRunStatus::Failed;
     result.reason_code = latest_plan.reason_code;
@@ -895,13 +925,13 @@ CalibrationOutcome calibrate_scenario(const LlmMemoryConfig& config, const LlmMe
     return outcome;
   }
 
-  steps = calculate_llm_calibrated_steps(elapsed_seconds, latest_plan.steps, limits);
-  if (steps == 0) {
+  work_units = calculate_llm_calibrated_work_units(elapsed_seconds, latest_plan.work_units, limits);
+  if (work_units == 0) {
     result.status = LlmRunStatus::Failed;
     result.reason_code = LlmRunnerReason::CALIBRATION_SCALING_FAILED;
     return CalibrationOutcome::Failed;
   }
-  latest_plan = build_llm_scenario_work_plan(model_plan, scenario, steps, false);
+  latest_plan = build_llm_scenario_work_plan(model_plan, scenario, work_units, false);
   if (!latest_plan.valid) {
     result.status = LlmRunStatus::Failed;
     result.reason_code = latest_plan.reason_code;
@@ -921,16 +951,17 @@ CalibrationOutcome calibrate_scenario(const LlmMemoryConfig& config, const LlmMe
   for (size_t correction = 1;
        !llm_duration_in_target_window(elapsed_seconds) && correction <= Constants::LLM_CALIBRATION_MAX_CORRECTIONS;
        ++correction) {
-    const size_t corrected_steps = calculate_llm_calibrated_steps(elapsed_seconds, latest_plan.steps, limits);
-    if (corrected_steps == 0) {
+    const size_t corrected_work_units = calculate_llm_calibrated_work_units(
+        elapsed_seconds, latest_plan.work_units, limits);
+    if (corrected_work_units == 0) {
       result.status = LlmRunStatus::Failed;
       result.reason_code = LlmRunnerReason::CALIBRATION_SCALING_FAILED;
       return CalibrationOutcome::Failed;
     }
-    if (corrected_steps == latest_plan.steps) {
+    if (corrected_work_units == latest_plan.work_units) {
       break;
     }
-    latest_plan = build_llm_scenario_work_plan(model_plan, scenario, corrected_steps, false);
+    latest_plan = build_llm_scenario_work_plan(model_plan, scenario, corrected_work_units, false);
     if (!latest_plan.valid) {
       result.status = LlmRunStatus::Failed;
       result.reason_code = latest_plan.reason_code;
@@ -944,13 +975,16 @@ CalibrationOutcome calibrate_scenario(const LlmMemoryConfig& config, const LlmMe
     }
   }
 
-  frozen_steps = latest_plan.steps;
+  frozen_work_units = latest_plan.work_units;
   return CalibrationOutcome::Success;
 }
 
 bool assign_frozen_plans(LlmMemoryResult& result, const LlmMemoryWorkPlan& model_plan) {
-  size_t total_steps = 0;
-  size_t total_payload = 0;
+  size_t total_work_units = 0;
+  size_t total_model_payload = 0;
+  size_t total_layout_metadata_lookups = 0;
+  size_t total_layout_metadata_bytes = 0;
+  size_t total_task_accounted_bytes = 0;
   for (LlmMeasurementState& measurement : result.measurements) {
     const size_t index = scenario_index(measurement.scenario);
     if (index >= kLlmScenarioCount) {
@@ -958,34 +992,60 @@ bool assign_frozen_plans(LlmMemoryResult& result, const LlmMemoryWorkPlan& model
     }
     const LlmScenarioWorkPlan& plan = result.frozen_scenario_plans.scenarios[index];
     measurement.frozen_plan_index = index;
+    measurement.work_unit_kind = plan.work_unit_kind;
+    measurement.kv_write_kind = plan.kv_write_kind;
     measurement.explicit_iterations = plan.explicit_iterations;
-    measurement.planned_steps = plan.steps;
-    measurement.weight_read_bytes_per_step = plan.weight_read_bytes_per_step;
-    measurement.kv_read_bytes_per_step = plan.kv_read_bytes_per_step;
-    measurement.kv_append_write_bytes_per_step = plan.kv_append_write_bytes_per_step;
-    measurement.effective_payload_bytes_per_step = plan.effective_payload_bytes_per_step;
+    measurement.planned_work_units = plan.work_units;
+    measurement.weight_read_bytes_per_work_unit = plan.weight_read_bytes_per_work_unit;
+    measurement.kv_read_bytes_per_work_unit = plan.kv_read_bytes_per_work_unit;
+    measurement.kv_write_bytes_per_work_unit = plan.kv_write_bytes_per_work_unit;
+    measurement.effective_model_payload_bytes_per_work_unit = plan.effective_model_payload_bytes_per_work_unit;
+    measurement.layout_metadata_lookup_count_per_work_unit =
+        plan.layout_metadata_lookup_count_per_work_unit;
+    measurement.layout_metadata_read_bytes_per_work_unit =
+        plan.layout_metadata_read_bytes_per_work_unit;
+    measurement.accounted_bytes_per_work_unit =
+        plan.accounted_bytes_per_work_unit;
     measurement.planned_weight_read_bytes = plan.weight_read_bytes;
     measurement.planned_kv_read_bytes = plan.kv_read_bytes;
-    measurement.planned_kv_append_write_bytes = plan.kv_append_write_bytes;
-    measurement.planned_exact_payload_bytes = plan.effective_payload_bytes;
+    measurement.planned_kv_write_bytes = plan.kv_write_bytes;
+    measurement.planned_effective_model_payload_bytes = plan.effective_model_payload_bytes;
+    measurement.planned_layout_metadata_lookup_count =
+        plan.layout_metadata_lookup_count;
+    measurement.planned_layout_metadata_read_bytes =
+        plan.layout_metadata_read_bytes;
+    measurement.planned_task_accounted_bytes = plan.task_accounted_bytes;
     measurement.calibration_attempt_count = result.calibration_attempt_counts[index];
 
-    if (measurement.scenario == LlmScenario::Mixed && plan.effective_payload_bytes_per_step != 0) {
-      const long double total = static_cast<long double>(plan.effective_payload_bytes_per_step);
+    if (measurement.scenario == LlmScenario::Mixed && plan.effective_model_payload_bytes_per_work_unit != 0) {
+      const long double total = static_cast<long double>(plan.effective_model_payload_bytes_per_work_unit);
       measurement.weight_payload_fraction =
-          static_cast<double>(static_cast<long double>(plan.weight_read_bytes_per_step) / total);
+          static_cast<double>(static_cast<long double>(plan.weight_read_bytes_per_work_unit) / total);
       measurement.kv_read_payload_fraction =
-          static_cast<double>(static_cast<long double>(plan.kv_read_bytes_per_step) / total);
+          static_cast<double>(static_cast<long double>(plan.kv_read_bytes_per_work_unit) / total);
       measurement.kv_write_payload_fraction =
-          static_cast<double>(static_cast<long double>(plan.kv_append_write_bytes_per_step) / total);
+          static_cast<double>(static_cast<long double>(plan.kv_write_bytes_per_work_unit) / total);
     }
 
-    if (!checked_add_to(plan.steps, total_steps) || !checked_add_to(plan.effective_payload_bytes, total_payload)) {
+    if (!checked_add_to(plan.work_units, total_work_units) ||
+        !checked_add_to(plan.effective_model_payload_bytes,
+                        total_model_payload) ||
+        !checked_add_to(plan.layout_metadata_lookup_count,
+                        total_layout_metadata_lookups) ||
+        !checked_add_to(plan.layout_metadata_read_bytes,
+                        total_layout_metadata_bytes) ||
+        !checked_add_to(plan.task_accounted_bytes,
+                        total_task_accounted_bytes)) {
       return false;
     }
   }
-  result.counters.planned_synthetic_steps = total_steps;
-  result.counters.planned_exact_payload_bytes = total_payload;
+  result.counters.planned_work_units = total_work_units;
+  result.counters.planned_effective_model_payload_bytes = total_model_payload;
+  result.counters.planned_layout_metadata_lookup_count =
+      total_layout_metadata_lookups;
+  result.counters.planned_layout_metadata_read_bytes =
+      total_layout_metadata_bytes;
+  result.counters.planned_task_accounted_bytes = total_task_accounted_bytes;
   return model_plan.valid;
 }
 
@@ -1023,7 +1083,7 @@ void populate_measurement(LlmMeasurementState& measurement, LlmExecutorResult ex
   measurement.qos_successful_workers = measurement.execution.qos_successful_workers;
   measurement.qos_failed_workers = measurement.execution.qos_failed_workers;
   measurement.duration_quality =
-      classify_llm_duration_quality(measurement.execution.elapsed_seconds, task_plan.steps,
+      classify_llm_duration_quality(measurement.execution.elapsed_seconds, task_plan.work_units,
                                     calculate_llm_scenario_limits(model_plan.geometry, task_plan.scenario));
   if (!execution_is_accepted(measurement.execution, model_plan.effective_workers)) {
     measurement.reason_code = execution_failure_reason(measurement.execution, model_plan.effective_workers);
@@ -1036,15 +1096,15 @@ void populate_measurement(LlmMeasurementState& measurement, LlmExecutorResult ex
   }
 
   const long double elapsed = static_cast<long double>(measurement.execution.elapsed_seconds);
-  const long double steps = static_cast<long double>(task_plan.steps);
-  const long double latency = elapsed / steps;
-  const long double steps_per_second = steps / elapsed;
-  const long double bandwidth = static_cast<long double>(task_plan.effective_payload_bytes) / elapsed / 1.0e9L;
+  const long double work_units = static_cast<long double>(task_plan.work_units);
+  const long double latency = elapsed / work_units;
+  const long double work_units_per_second = work_units / elapsed;
+  const long double bandwidth = static_cast<long double>(task_plan.effective_model_payload_bytes) / elapsed / 1.0e9L;
   const double latency_value = static_cast<double>(latency);
-  const double steps_per_second_value = static_cast<double>(steps_per_second);
+  const double work_units_per_second_value = static_cast<double>(work_units_per_second);
   const double bandwidth_value = static_cast<double>(bandwidth);
-  if (!std::isfinite(latency_value) || latency_value <= 0.0 || !std::isfinite(steps_per_second_value) ||
-      steps_per_second_value <= 0.0 || !std::isfinite(bandwidth_value) || bandwidth_value <= 0.0) {
+  if (!std::isfinite(latency_value) || latency_value <= 0.0 || !std::isfinite(work_units_per_second_value) ||
+      work_units_per_second_value <= 0.0 || !std::isfinite(bandwidth_value) || bandwidth_value <= 0.0) {
     measurement.status = LlmMeasurementStatus::Invalid;
     measurement.reason_code = LlmRunnerReason::INVALID_DERIVED_METRIC;
     clear_measurement_values(measurement);
@@ -1054,12 +1114,17 @@ void populate_measurement(LlmMeasurementState& measurement, LlmExecutorResult ex
 
   measurement.status = LlmMeasurementStatus::Measured;
   measurement.reason_code = "measured";
-  measurement.completed_steps = task_plan.steps;
-  measurement.completed_exact_payload_bytes = task_plan.effective_payload_bytes;
+  measurement.completed_work_units = task_plan.work_units;
+  measurement.completed_effective_model_payload_bytes = task_plan.effective_model_payload_bytes;
+  measurement.completed_layout_metadata_lookup_count =
+      task_plan.layout_metadata_lookup_count;
+  measurement.completed_layout_metadata_read_bytes =
+      task_plan.layout_metadata_read_bytes;
+  measurement.completed_task_accounted_bytes = task_plan.task_accounted_bytes;
   measurement.elapsed_seconds = measurement.execution.elapsed_seconds;
-  measurement.synthetic_step_latency_seconds = latency_value;
-  measurement.synthetic_memory_steps_per_second = steps_per_second_value;
-  measurement.effective_payload_gb_s = bandwidth_value;
+  measurement.synthetic_work_unit_latency_seconds = latency_value;
+  measurement.synthetic_memory_work_units_per_second = work_units_per_second_value;
+  measurement.effective_model_payload_gb_s = bandwidth_value;
   measurement.checksum_valid = true;
   measurement.execution_evidence_available = true;
 }
@@ -1071,8 +1136,14 @@ void record_terminal_measurement(LlmMemoryResult& result, const LlmLoopRecord& l
     return;
   }
   ++result.counters.measured_measurements;
-  result.counters.completed_synthetic_steps += measurement.completed_steps;
-  result.counters.completed_exact_payload_bytes += measurement.completed_exact_payload_bytes;
+  result.counters.completed_work_units += measurement.completed_work_units;
+  result.counters.completed_effective_model_payload_bytes += measurement.completed_effective_model_payload_bytes;
+  result.counters.completed_layout_metadata_lookup_count +=
+      measurement.completed_layout_metadata_lookup_count;
+  result.counters.completed_layout_metadata_read_bytes +=
+      measurement.completed_layout_metadata_read_bytes;
+  result.counters.completed_task_accounted_bytes +=
+      measurement.completed_task_accounted_bytes;
   if (loop.realized_order_count == kLlmScenarioCount) {
     ++result.counters.completed_loops;
   }
@@ -1254,11 +1325,11 @@ LlmRunnerAuxiliaryEstimate calculate_llm_runner_auxiliary_estimate(const LlmMemo
       estimate.reason_code = LlmRunnerReason::INVALID_MODEL_WORK_PLAN;
       return estimate;
     }
-    std::array<size_t, kLlmScenarioCount> maximum_steps{};
+    std::array<size_t, kLlmScenarioCount> maximum_work_units{};
     size_t maximum_active_identity = 0;
     for (size_t index = 0; index < kLlmScenarioCount; ++index) {
       const LlmScenarioLimits limits = calculate_llm_scenario_limits(model_plan.geometry, kLlmScenarios[index]);
-      maximum_steps[index] = limits.effective_maximum_steps;
+      maximum_work_units[index] = limits.effective_maximum_work_units;
       maximum_active_identity = std::max(maximum_active_identity, identity_capacities[index]);
       size_t identity_with_null = 0;
       size_t conservative_identity = 0;
@@ -1272,7 +1343,7 @@ LlmRunnerAuxiliaryEstimate calculate_llm_runner_auxiliary_estimate(const LlmMemo
     }
 
     const LlmFrozenScenarioPlans maximum_frozen =
-        freeze_llm_scenario_work_plans(model_plan, maximum_steps, config.user_specified_iterations);
+        freeze_llm_scenario_work_plans(model_plan, maximum_work_units, config.user_specified_iterations);
     if (!maximum_frozen.valid) {
       estimate.reason_code = LlmRunnerReason::INVALID_MODEL_WORK_PLAN;
       return estimate;
@@ -1390,10 +1461,10 @@ int run_llm_memory_suite(const LlmMemoryConfig& config, const LlmMemoryWorkPlan&
       return EXIT_FAILURE;
     }
 
-    std::array<size_t, kLlmScenarioCount> frozen_steps{};
+    std::array<size_t, kLlmScenarioCount> frozen_work_units{};
     if (config.user_specified_iterations) {
-      frozen_steps.fill(config.iterations);
-      result.frozen_scenario_plans = freeze_llm_scenario_work_plans(model_plan, frozen_steps, true);
+      frozen_work_units.fill(config.iterations);
+      result.frozen_scenario_plans = freeze_llm_scenario_work_plans(model_plan, frozen_work_units, true);
       if (!result.frozen_scenario_plans.valid) {
         return fail_initialized_run(result, hooks, result.frozen_scenario_plans.reason_code);
       }
@@ -1406,7 +1477,9 @@ int run_llm_memory_suite(const LlmMemoryConfig& config, const LlmMemoryWorkPlan&
     }
     for (size_t index = 0; index < kLlmScenarioCount; ++index) {
       const CalibrationOutcome outcome =
-          calibrate_scenario(config, model_plan, kLlmScenarios[index], executor, result, hooks, frozen_steps[index]);
+          calibrate_scenario(config, model_plan, kLlmScenarios[index],
+                             executor, result, hooks,
+                             frozen_work_units[index]);
       if (outcome == CalibrationOutcome::Interrupted) {
         trim_calibration_attempts(result);
         finalize_remaining_interrupted(result);
@@ -1419,7 +1492,7 @@ int run_llm_memory_suite(const LlmMemoryConfig& config, const LlmMemoryWorkPlan&
     trim_calibration_attempts(result);
 
     if (!config.user_specified_iterations) {
-      result.frozen_scenario_plans = freeze_llm_scenario_work_plans(model_plan, frozen_steps, false);
+      result.frozen_scenario_plans = freeze_llm_scenario_work_plans(model_plan, frozen_work_units, false);
       if (!result.frozen_scenario_plans.valid) {
         return fail_initialized_run(result, hooks, result.frozen_scenario_plans.reason_code);
       }
@@ -1427,7 +1500,7 @@ int run_llm_memory_suite(const LlmMemoryConfig& config, const LlmMemoryWorkPlan&
     for (size_t index = 0; index < kLlmScenarioCount; ++index) {
       const LlmCalibrationAttempt& latest =
           result.calibration_attempts[index][result.calibration_attempt_counts[index] - 1];
-      if (result.frozen_scenario_plans.scenarios[index].steps != frozen_steps[index] ||
+      if (result.frozen_scenario_plans.scenarios[index].work_units != frozen_work_units[index] ||
           result.frozen_scenario_plans.scenarios[index].plan_identity != latest.work_plan_identity) {
         return fail_initialized_run(result, hooks, LlmRunnerReason::FROZEN_PLAN_MISMATCH);
       }

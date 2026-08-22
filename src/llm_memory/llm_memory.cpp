@@ -477,7 +477,7 @@ int parse_llm_memory_arguments(int argc, char* argv[],
     }
     maximum_explicit_iterations =
         std::min(maximum_explicit_iterations,
-                 limits.effective_maximum_steps);
+                 limits.effective_maximum_work_units);
   }
   if (config.user_specified_iterations &&
       config.iterations > maximum_explicit_iterations) {
@@ -721,6 +721,29 @@ LlmMemoryConfigValidation validate_llm_memory_config(
     validation.reason_code = LlmMemoryConfigReason::LOOP_COUNT_REQUIRED;
     return validation;
   }
+  const std::array<size_t, 11> json_integer_fields = {
+      config.weight_size_mb,
+      config.layer_count,
+      config.query_head_count,
+      config.kv_head_count,
+      config.head_dimension,
+      config.visible_context_tokens,
+      config.batch_size,
+      config.requested_workers,
+      config.available_workers,
+      config.iterations,
+      config.loop_count,
+  };
+  if (std::any_of(json_integer_fields.begin(), json_integer_fields.end(),
+                  [](size_t value) {
+                    return value > Constants::LLM_JSON_MAX_SAFE_INTEGER;
+                  }) ||
+      config.loop_count >
+          Constants::LLM_JSON_MAX_SAFE_INTEGER / kLlmScenarioCount) {
+    validation.reason_code =
+        LlmMemoryConfigReason::JSON_INTEGER_OUT_OF_RANGE;
+    return validation;
+  }
   if (config.query_head_count < config.kv_head_count) {
     validation.reason_code =
         LlmMemoryConfigReason::QUERY_HEADS_BELOW_KV_HEADS;
@@ -766,6 +789,85 @@ const char* llm_scenario_to_string(LlmScenario scenario) {
   return "unknown";
 }
 
+const char* llm_memory_backend_to_string(LlmMemoryBackend backend) {
+  switch (backend) {
+    case LlmMemoryBackend::Cpu:
+      return "cpu";
+    case LlmMemoryBackend::Metal:
+      return "metal";
+  }
+  return "unknown";
+}
+
+const char* llm_phase_to_string(LlmPhase phase) {
+  switch (phase) {
+    case LlmPhase::Decode:
+      return "decode";
+    case LlmPhase::Prefill:
+      return "prefill";
+  }
+  return "unknown";
+}
+
+const char* llm_kv_layout_to_string(LlmKvLayout layout) {
+  switch (layout) {
+    case LlmKvLayout::Contiguous:
+      return "contiguous";
+    case LlmKvLayout::Paged:
+      return "paged";
+  }
+  return "unknown";
+}
+
+LlmWorkUnitKind llm_work_unit_kind_for_phase(LlmPhase phase) {
+  switch (phase) {
+    case LlmPhase::Decode:
+      return LlmWorkUnitKind::DecodeStep;
+    case LlmPhase::Prefill:
+      return LlmWorkUnitKind::PrefillOperation;
+  }
+  return static_cast<LlmWorkUnitKind>(UINT8_MAX);
+}
+
+const char* llm_work_unit_kind_to_string(LlmWorkUnitKind kind) {
+  switch (kind) {
+    case LlmWorkUnitKind::DecodeStep:
+      return "decode_step";
+    case LlmWorkUnitKind::PrefillOperation:
+      return "prefill_operation";
+  }
+  return "unknown";
+}
+
+LlmKvWriteKind llm_kv_write_kind_for(LlmPhase phase,
+                                     LlmScenario scenario) {
+  if (scenario == LlmScenario::WeightsOnly) {
+    return LlmKvWriteKind::None;
+  }
+  if (scenario != LlmScenario::KvOnly && scenario != LlmScenario::Mixed) {
+    return static_cast<LlmKvWriteKind>(UINT8_MAX);
+  }
+  switch (phase) {
+    case LlmPhase::Decode:
+      return LlmKvWriteKind::CurrentTokenAppend;
+    case LlmPhase::Prefill:
+      return LlmKvWriteKind::FullPromptPopulation;
+  }
+  return static_cast<LlmKvWriteKind>(UINT8_MAX);
+}
+
+const char* llm_kv_write_kind_to_string(LlmKvWriteKind kind) {
+  switch (kind) {
+    case LlmKvWriteKind::None:
+      return "none";
+    case LlmKvWriteKind::CurrentTokenAppend:
+      return "current_token_append";
+    case LlmKvWriteKind::FullPromptPopulation:
+      return "full_prompt_population";
+  }
+  return "unknown";
+}
+
 const char* llm_attention_kind_to_string(LlmAttentionKind kind) {
   switch (kind) {
     case LlmAttentionKind::Mha:
@@ -804,6 +906,8 @@ const char* llm_run_status_to_string(LlmRunStatus status) {
       return "partial";
     case LlmRunStatus::Interrupted:
       return "interrupted";
+    case LlmRunStatus::Unsupported:
+      return "unsupported";
     case LlmRunStatus::Failed:
       return "failed";
   }

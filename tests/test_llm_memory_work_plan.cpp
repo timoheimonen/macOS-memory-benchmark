@@ -120,9 +120,32 @@ void expect_geometries_equal(const LlmGeometry& actual,
                              const LlmGeometry& expected) {
   EXPECT_EQ(actual.valid, expected.valid);
   EXPECT_EQ(actual.reason_code, expected.reason_code);
+  EXPECT_EQ(actual.phase, expected.phase);
+  EXPECT_EQ(actual.kv_layout, expected.kv_layout);
+  EXPECT_EQ(actual.work_unit_kind, expected.work_unit_kind);
+  EXPECT_EQ(actual.decode.has_value(), expected.decode.has_value());
+  if (actual.decode.has_value() && expected.decode.has_value()) {
+    EXPECT_EQ(actual.decode->visible_context_tokens,
+              expected.decode->visible_context_tokens);
+  }
+  EXPECT_EQ(actual.prefill.has_value(), expected.prefill.has_value());
+  if (actual.prefill.has_value() && expected.prefill.has_value()) {
+    EXPECT_EQ(actual.prefill->prompt_tokens, expected.prefill->prompt_tokens);
+    EXPECT_EQ(actual.prefill->attention_query_tile_tokens,
+              expected.prefill->attention_query_tile_tokens);
+    EXPECT_EQ(actual.prefill->tile_count, expected.prefill->tile_count);
+    EXPECT_EQ(actual.prefill->attention_prefix_token_visits_per_sequence,
+              expected.prefill->attention_prefix_token_visits_per_sequence);
+    EXPECT_EQ(actual.prefill->causal_token_pairs_per_sequence,
+              expected.prefill->causal_token_pairs_per_sequence);
+    EXPECT_EQ(actual.prefill->logical_attention_pairs,
+              expected.prefill->logical_attention_pairs);
+    EXPECT_EQ(actual.prefill->logical_attention_fma_terms,
+              expected.prefill->logical_attention_fma_terms);
+  }
   EXPECT_EQ(actual.attention_kind, expected.attention_kind);
-  EXPECT_EQ(actual.active_weight_bytes_per_step,
-            expected.active_weight_bytes_per_step);
+  EXPECT_EQ(actual.active_weight_bytes_per_work_unit,
+            expected.active_weight_bytes_per_work_unit);
   EXPECT_EQ(actual.layer_count, expected.layer_count);
   EXPECT_EQ(actual.query_head_count, expected.query_head_count);
   EXPECT_EQ(actual.kv_head_count, expected.kv_head_count);
@@ -130,7 +153,6 @@ void expect_geometries_equal(const LlmGeometry& actual,
             expected.query_heads_per_kv_head);
   EXPECT_EQ(actual.head_dimension, expected.head_dimension);
   EXPECT_EQ(actual.kv_element_bytes, expected.kv_element_bytes);
-  EXPECT_EQ(actual.visible_context_tokens, expected.visible_context_tokens);
   EXPECT_EQ(actual.batch_size, expected.batch_size);
   EXPECT_EQ(actual.kv_vector_bytes, expected.kv_vector_bytes);
   EXPECT_EQ(actual.k_or_v_record_bytes_per_layer,
@@ -144,16 +166,16 @@ void expect_geometries_equal(const LlmGeometry& actual,
   EXPECT_EQ(actual.k_mapping_bytes, expected.k_mapping_bytes);
   EXPECT_EQ(actual.v_mapping_bytes, expected.v_mapping_bytes);
   EXPECT_EQ(actual.kv_capacity_bytes, expected.kv_capacity_bytes);
-  EXPECT_EQ(actual.weight_read_bytes_per_step,
-            expected.weight_read_bytes_per_step);
-  EXPECT_EQ(actual.kv_read_bytes_per_step,
-            expected.kv_read_bytes_per_step);
-  EXPECT_EQ(actual.kv_append_write_bytes_per_step,
-            expected.kv_append_write_bytes_per_step);
-  EXPECT_EQ(actual.kv_only_effective_payload_bytes_per_step,
-            expected.kv_only_effective_payload_bytes_per_step);
-  EXPECT_EQ(actual.mixed_effective_payload_bytes_per_step,
-            expected.mixed_effective_payload_bytes_per_step);
+  EXPECT_EQ(actual.weight_read_bytes_per_work_unit,
+            expected.weight_read_bytes_per_work_unit);
+  EXPECT_EQ(actual.kv_read_bytes_per_work_unit,
+            expected.kv_read_bytes_per_work_unit);
+  EXPECT_EQ(actual.kv_write_bytes_per_work_unit,
+            expected.kv_write_bytes_per_work_unit);
+  EXPECT_EQ(actual.kv_only_effective_model_payload_bytes_per_work_unit,
+            expected.kv_only_effective_model_payload_bytes_per_work_unit);
+  EXPECT_EQ(actual.mixed_effective_model_payload_bytes_per_work_unit,
+            expected.mixed_effective_model_payload_bytes_per_work_unit);
   EXPECT_EQ(actual.total_data_mapping_bytes,
             expected.total_data_mapping_bytes);
   EXPECT_EQ(actual.traffic_crossover_numerator,
@@ -228,15 +250,40 @@ void expect_equivalent_executable_plans(const LlmMemoryWorkPlan& actual,
   EXPECT_EQ(actual.v_buffer_seed, expected.v_buffer_seed);
   EXPECT_EQ(actual.scenario_seeds, expected.scenario_seeds);
   expect_memory_budgets_equal(actual.memory_budget, expected.memory_budget);
-  EXPECT_EQ(actual.descriptor_abi_version, expected.descriptor_abi_version);
   EXPECT_EQ(actual.backend, expected.backend);
   EXPECT_EQ(actual.phase, expected.phase);
-  EXPECT_EQ(actual.weight_passes_per_step, expected.weight_passes_per_step);
-  EXPECT_EQ(actual.kv_replay_factor, expected.kv_replay_factor);
-  EXPECT_EQ(actual.buffer_pattern_version, expected.buffer_pattern_version);
-  EXPECT_EQ(actual.methodology_version, expected.methodology_version);
-  EXPECT_EQ(actual.worker_schedule, expected.worker_schedule);
   EXPECT_EQ(actual.kv_layout, expected.kv_layout);
+  EXPECT_EQ(actual.work_unit_kind, expected.work_unit_kind);
+  EXPECT_EQ(actual.weight_passes_per_work_unit,
+            expected.weight_passes_per_work_unit);
+  EXPECT_EQ(actual.kv_replay_factor, expected.kv_replay_factor);
+  EXPECT_EQ(actual.methodology_version, expected.methodology_version);
+  EXPECT_EQ(actual.component_identities.logical_profile_version,
+            expected.component_identities.logical_profile_version);
+  EXPECT_EQ(actual.component_identities.kv_layout_version,
+            expected.component_identities.kv_layout_version);
+  EXPECT_EQ(actual.component_identities.permutation_version,
+            expected.component_identities.permutation_version);
+  EXPECT_EQ(actual.component_identities.backend_executor_version,
+            expected.component_identities.backend_executor_version);
+  EXPECT_EQ(actual.component_identities.resource_abi_version,
+            expected.component_identities.resource_abi_version);
+  EXPECT_EQ(actual.component_identities.schedule_version,
+            expected.component_identities.schedule_version);
+  EXPECT_EQ(actual.component_identities.timer_policy_version,
+            expected.component_identities.timer_policy_version);
+  EXPECT_EQ(actual.component_identities.buffer_pattern_version,
+            expected.component_identities.buffer_pattern_version);
+  EXPECT_EQ(actual.component_identities.write_pattern_version,
+            expected.component_identities.write_pattern_version);
+  EXPECT_EQ(actual.component_identities.checksum_pattern_version,
+            expected.component_identities.checksum_pattern_version);
+  EXPECT_EQ(actual.component_identities.msl_revision,
+            expected.component_identities.msl_revision);
+  EXPECT_EQ(actual.component_identities.msl_source_sha256,
+            expected.component_identities.msl_source_sha256);
+  EXPECT_EQ(actual.component_identities.identity,
+            expected.component_identities.identity);
   EXPECT_EQ(actual.plan_identity, expected.plan_identity);
 
   ASSERT_EQ(actual.weight_layers.size(), expected.weight_layers.size());
@@ -310,31 +357,44 @@ TEST(LlmMemoryWorkPlanTest, ConstantsAndIdentitiesMatchFrozenContract) {
   EXPECT_EQ(Constants::LLM_CALIBRATION_MAX_CORRECTIONS, 2u);
   EXPECT_EQ(Constants::LLM_CALIBRATION_MIN_PILOT_BYTES,
             8 * Constants::BYTES_PER_MB);
-  EXPECT_EQ(Constants::LLM_MAX_STEPS_PER_MEASUREMENT, 1000000000u);
-  EXPECT_EQ(Constants::LLM_MAX_EXACT_PAYLOAD_BYTES,
+  EXPECT_EQ(Constants::LLM_MAX_WORK_UNITS_PER_MEASUREMENT, 1000000000u);
+  EXPECT_EQ(Constants::LLM_MAX_ACCOUNTED_BYTES_PER_TASK,
             64ULL * 1024ULL * Constants::BYTES_PER_MB);
   EXPECT_DOUBLE_EQ(Constants::LLM_STREAMING_CV_WARNING_PCT, 5.0);
   EXPECT_EQ(Constants::LLM_JSON_SCHEMA_VERSION, 1);
   EXPECT_STREQ(Constants::LLM_JSON_MODE_NAME, "llm_memory");
-  EXPECT_STREQ(Constants::LLM_BACKEND_NAME, "cpu");
-  EXPECT_STREQ(Constants::LLM_PHASE_NAME, "decode_steady_fixed_context");
-  EXPECT_EQ(Constants::LLM_WEIGHT_PASSES_PER_STEP, 1u);
+  EXPECT_EQ(Constants::LLM_WEIGHT_PASSES_PER_WORK_UNIT, 1u);
   EXPECT_EQ(Constants::LLM_KV_REPLAY_FACTOR, 1u);
-  EXPECT_STREQ(Constants::LLM_KV_LAYOUT,
+  EXPECT_STREQ(Constants::LLM_CPU_DECODE_CONTIGUOUS_METHODOLOGY_VERSION,
+               "llm-memory-v1-cpu-decode-contiguous");
+  EXPECT_STREQ(Constants::LLM_COMPONENT_IDENTITY_VERSION,
+               "llm-memory-components-v1");
+  EXPECT_STREQ(Constants::LLM_LOGICAL_PROFILE_VERSION,
+               "decode_steady_fixed_context");
+  EXPECT_STREQ(Constants::LLM_CONTIGUOUS_KV_LAYOUT_VERSION,
                "contiguous_layer_batch_token_head_dimension");
-  EXPECT_STREQ(Constants::LLM_WORKER_SCHEDULE,
-               "worker-local-layer-order-no-per-layer-global-barrier");
-  EXPECT_STREQ(
-      Constants::LLM_METHODOLOGY_VERSION,
-      "llm-memory-v1-cpu-fixed-context-warm-layer-interleaved");
+  EXPECT_STREQ(Constants::LLM_CPU_EXECUTOR_VERSION,
+               "llm-cpu-executor-v1-arm64-decode-contiguous");
   EXPECT_STREQ(Constants::LLM_DESCRIPTOR_ABI_VERSION,
                "llm-memory-descriptor-abi-v1");
+  EXPECT_STREQ(Constants::LLM_CPU_SCHEDULE_VERSION,
+               "worker-local-layer-order-no-per-layer-global-barrier");
+  EXPECT_STREQ(Constants::LLM_CPU_TIMER_POLICY_VERSION,
+               "synchronized-start-to-last-worker-completion-per-scenario-task");
   EXPECT_STREQ(Constants::LLM_BUFFER_PATTERN_VERSION,
                "llm-buffer-pattern-v1");
   EXPECT_STREQ(Constants::LLM_APPEND_PATTERN_VERSION,
                "llm-kv-append-affine64-v1");
   EXPECT_STREQ(Constants::LLM_READ_CHECKSUM_VERSION,
                "llm-read-checksum-v1");
+  EXPECT_EQ(build_llm_methodology_version(
+                LlmMemoryBackend::Cpu, LlmPhase::Decode,
+                LlmKvLayout::Contiguous),
+            Constants::LLM_CPU_DECODE_CONTIGUOUS_METHODOLOGY_VERSION);
+  EXPECT_EQ(build_llm_methodology_version(
+                LlmMemoryBackend::Metal, LlmPhase::Prefill,
+                LlmKvLayout::Paged),
+            "llm-memory-v1-metal-prefill-paged");
 
   EXPECT_EQ(llm_seed_domain_value(LlmSeedDomain::WeightBuffer),
             0x4C4C4D5745494748ULL);
@@ -371,6 +431,12 @@ TEST(LlmMemoryWorkPlanTest,
   const LlmGeometry geometry =
       resolve_llm_geometry(large_geometry_request());
   ASSERT_TRUE(geometry.valid) << geometry.reason_code;
+  EXPECT_EQ(geometry.phase, LlmPhase::Decode);
+  EXPECT_EQ(geometry.kv_layout, LlmKvLayout::Contiguous);
+  EXPECT_EQ(geometry.work_unit_kind, LlmWorkUnitKind::DecodeStep);
+  ASSERT_TRUE(geometry.decode.has_value());
+  EXPECT_EQ(geometry.decode->visible_context_tokens, 8192u);
+  EXPECT_FALSE(geometry.prefill.has_value());
   EXPECT_EQ(geometry.attention_kind, LlmAttentionKind::Gqa);
   EXPECT_EQ(geometry.query_heads_per_kv_head, 4u);
   EXPECT_EQ(geometry.kv_vector_bytes, 256u);
@@ -381,12 +447,12 @@ TEST(LlmMemoryWorkPlanTest,
   EXPECT_EQ(geometry.k_mapping_bytes, 512 * Constants::BYTES_PER_MB);
   EXPECT_EQ(geometry.v_mapping_bytes, 512 * Constants::BYTES_PER_MB);
   EXPECT_EQ(geometry.kv_capacity_bytes, kGiB);
-  EXPECT_EQ(geometry.weight_read_bytes_per_step, 4 * kGiB);
-  EXPECT_EQ(geometry.kv_read_bytes_per_step, kGiB);
-  EXPECT_EQ(geometry.kv_append_write_bytes_per_step, 131072u);
-  EXPECT_EQ(geometry.kv_only_effective_payload_bytes_per_step,
+  EXPECT_EQ(geometry.weight_read_bytes_per_work_unit, 4 * kGiB);
+  EXPECT_EQ(geometry.kv_read_bytes_per_work_unit, kGiB);
+  EXPECT_EQ(geometry.kv_write_bytes_per_work_unit, 131072u);
+  EXPECT_EQ(geometry.kv_only_effective_model_payload_bytes_per_work_unit,
             1073872896u);
-  EXPECT_EQ(geometry.mixed_effective_payload_bytes_per_step,
+  EXPECT_EQ(geometry.mixed_effective_model_payload_bytes_per_work_unit,
             5368840192u);
   EXPECT_EQ(geometry.total_data_mapping_bytes, 5 * kGiB);
   EXPECT_EQ(geometry.traffic_crossover_numerator, 4294967296u);
@@ -400,11 +466,11 @@ TEST(LlmMemoryWorkPlanTest,
       resolve_llm_geometry(small_geometry_request(1));
   ASSERT_TRUE(single.valid);
   EXPECT_EQ(single.kv_bytes_per_visible_token, 128u);
-  EXPECT_EQ(single.weight_read_bytes_per_step, 1024u);
-  EXPECT_EQ(single.kv_read_bytes_per_step, 384u);
-  EXPECT_EQ(single.kv_append_write_bytes_per_step, 128u);
-  EXPECT_EQ(single.kv_only_effective_payload_bytes_per_step, 512u);
-  EXPECT_EQ(single.mixed_effective_payload_bytes_per_step, 1536u);
+  EXPECT_EQ(single.weight_read_bytes_per_work_unit, 1024u);
+  EXPECT_EQ(single.kv_read_bytes_per_work_unit, 384u);
+  EXPECT_EQ(single.kv_write_bytes_per_work_unit, 128u);
+  EXPECT_EQ(single.kv_only_effective_model_payload_bytes_per_work_unit, 512u);
+  EXPECT_EQ(single.mixed_effective_model_payload_bytes_per_work_unit, 1536u);
 
   const LlmMemoryWorkPlan single_model = build_llm_memory_work_plan(
       work_plan_request(small_geometry_request(1), 2, 2));
@@ -420,25 +486,41 @@ TEST(LlmMemoryWorkPlanTest,
   ASSERT_TRUE(weights.valid);
   ASSERT_TRUE(kv.valid);
   ASSERT_TRUE(mixed.valid);
+  EXPECT_EQ(weights.work_unit_kind, LlmWorkUnitKind::DecodeStep);
+  EXPECT_EQ(weights.kv_write_kind, LlmKvWriteKind::None);
+  EXPECT_EQ(kv.work_unit_kind, LlmWorkUnitKind::DecodeStep);
+  EXPECT_EQ(kv.kv_write_kind, LlmKvWriteKind::CurrentTokenAppend);
+  EXPECT_EQ(mixed.work_unit_kind, LlmWorkUnitKind::DecodeStep);
+  EXPECT_EQ(mixed.kv_write_kind, LlmKvWriteKind::CurrentTokenAppend);
   EXPECT_EQ(weights.weight_read_bytes, 4096u);
   EXPECT_EQ(weights.kv_read_bytes, 0u);
-  EXPECT_EQ(weights.kv_append_write_bytes, 0u);
-  EXPECT_EQ(weights.effective_payload_bytes, 4096u);
+  EXPECT_EQ(weights.kv_write_bytes, 0u);
+  EXPECT_EQ(weights.effective_model_payload_bytes, 4096u);
   EXPECT_EQ(kv.weight_read_bytes, 0u);
   EXPECT_EQ(kv.kv_read_bytes, 1536u);
-  EXPECT_EQ(kv.kv_append_write_bytes, 512u);
-  EXPECT_EQ(kv.effective_payload_bytes, 2048u);
+  EXPECT_EQ(kv.kv_write_bytes, 512u);
+  EXPECT_EQ(kv.effective_model_payload_bytes, 2048u);
   EXPECT_EQ(mixed.weight_read_bytes, 4096u);
   EXPECT_EQ(mixed.kv_read_bytes, 1536u);
-  EXPECT_EQ(mixed.kv_append_write_bytes, 512u);
-  EXPECT_EQ(mixed.effective_payload_bytes, 6144u);
+  EXPECT_EQ(mixed.kv_write_bytes, 512u);
+  EXPECT_EQ(mixed.effective_model_payload_bytes, 6144u);
+  for (const LlmScenarioWorkPlan* scenario : {&weights, &kv, &mixed}) {
+    EXPECT_EQ(scenario->layout_metadata_lookup_count_per_work_unit, 0u);
+    EXPECT_EQ(scenario->layout_metadata_read_bytes_per_work_unit, 0u);
+    EXPECT_EQ(scenario->accounted_bytes_per_work_unit,
+              scenario->effective_model_payload_bytes_per_work_unit);
+    EXPECT_EQ(scenario->layout_metadata_lookup_count, 0u);
+    EXPECT_EQ(scenario->layout_metadata_read_bytes, 0u);
+    EXPECT_EQ(scenario->task_accounted_bytes,
+              scenario->effective_model_payload_bytes);
+  }
 
   const LlmGeometry batched =
       resolve_llm_geometry(small_geometry_request(2));
   ASSERT_TRUE(batched.valid);
-  EXPECT_EQ(batched.weight_read_bytes_per_step, 1024u);
-  EXPECT_EQ(batched.kv_read_bytes_per_step, 768u);
-  EXPECT_EQ(batched.kv_append_write_bytes_per_step, 256u);
+  EXPECT_EQ(batched.weight_read_bytes_per_work_unit, 1024u);
+  EXPECT_EQ(batched.kv_read_bytes_per_work_unit, 768u);
+  EXPECT_EQ(batched.kv_write_bytes_per_work_unit, 256u);
   const LlmMemoryWorkPlan batched_model = build_llm_memory_work_plan(
       work_plan_request(small_geometry_request(2), 2, 2));
   ASSERT_TRUE(batched_model.valid) << batched_model.reason_code;
@@ -447,8 +529,8 @@ TEST(LlmMemoryWorkPlanTest,
   ASSERT_TRUE(batched_mixed.valid);
   EXPECT_EQ(batched_mixed.weight_read_bytes, 4096u);
   EXPECT_EQ(batched_mixed.kv_read_bytes, 3072u);
-  EXPECT_EQ(batched_mixed.kv_append_write_bytes, 1024u);
-  EXPECT_EQ(batched_mixed.effective_payload_bytes, 8192u);
+  EXPECT_EQ(batched_mixed.kv_write_bytes, 1024u);
+  EXPECT_EQ(batched_mixed.effective_model_payload_bytes, 8192u);
 }
 
 TEST(LlmMemoryWorkPlanTest, ClassifiesMhaGqaAndMqaFromHeadSharing) {
@@ -524,6 +606,51 @@ TEST(LlmMemoryWorkPlanTest,
       build_llm_memory_work_plan(
           work_plan_request(invalid_cases[5].request, 2, 2)),
       LlmWorkPlanReason::INVALID_KV_ELEMENT_BYTES);
+
+  LlmGeometryRequest inactive_geometry = small_geometry_request();
+  inactive_geometry.phase = LlmPhase::Prefill;
+  EXPECT_EQ(resolve_llm_geometry(inactive_geometry).reason_code,
+            LlmWorkPlanReason::PHASE_NOT_ACTIVATED);
+  inactive_geometry.phase = LlmPhase::Decode;
+  inactive_geometry.kv_layout = LlmKvLayout::Paged;
+  EXPECT_EQ(resolve_llm_geometry(inactive_geometry).reason_code,
+            LlmWorkPlanReason::KV_LAYOUT_NOT_ACTIVATED);
+
+  LlmMemoryWorkPlanRequest inactive_backend =
+      work_plan_request(small_geometry_request(), 2, 2);
+  inactive_backend.backend = LlmMemoryBackend::Metal;
+  expect_invalid_plan(build_llm_memory_work_plan(inactive_backend),
+                      LlmWorkPlanReason::BACKEND_NOT_ACTIVATED);
+}
+
+TEST(LlmMemoryWorkPlanTest,
+     RejectsUnsafeJsonIntegersBeforePlanningOrAllocation) {
+  constexpr size_t kUnsafeInteger =
+      Constants::LLM_JSON_MAX_SAFE_INTEGER + 1;
+
+  LlmGeometryRequest geometry = small_geometry_request();
+  geometry.query_head_count = kUnsafeInteger;
+  geometry.kv_head_count = 1;
+  expect_invalid_plan(build_llm_memory_work_plan(
+                          work_plan_request(geometry, 1, 1)),
+                      LlmWorkPlanReason::JSON_INTEGER_OUT_OF_RANGE);
+
+  LlmMemoryWorkPlanRequest request =
+      work_plan_request(small_geometry_request());
+  request.requested_workers = kUnsafeInteger;
+  expect_invalid_plan(build_llm_memory_work_plan(request),
+                      LlmWorkPlanReason::JSON_INTEGER_OUT_OF_RANGE);
+
+  request = work_plan_request(small_geometry_request());
+  request.available_workers = kUnsafeInteger;
+  expect_invalid_plan(build_llm_memory_work_plan(request),
+                      LlmWorkPlanReason::JSON_INTEGER_OUT_OF_RANGE);
+
+  geometry = {100000000, 100000000, 1, 1, 1, 1, 1, 100000000};
+  request = work_plan_request(geometry, 1, 1);
+  request.available_memory_bytes = std::numeric_limits<size_t>::max();
+  expect_invalid_plan(build_llm_memory_work_plan(request),
+                      LlmWorkPlanReason::JSON_INTEGER_OUT_OF_RANGE);
 }
 
 TEST(LlmMemoryWorkPlanTest, CrossoverKeepsExactRationalAndDoubleEstimate) {
@@ -759,15 +886,21 @@ TEST(LlmMemoryWorkPlanTest,
   const LlmMemoryWorkPlan plan = build_llm_memory_work_plan(
       config, 5, 16 * kGiB, 4096, 7, 9);
   ASSERT_TRUE(plan.valid) << plan.reason_code;
-  EXPECT_EQ(plan.geometry.active_weight_bytes_per_step,
+  EXPECT_EQ(plan.geometry.active_weight_bytes_per_work_unit,
             Constants::BYTES_PER_MB);
   EXPECT_EQ(plan.geometry.layer_count, 2u);
   EXPECT_EQ(plan.geometry.query_head_count, 4u);
   EXPECT_EQ(plan.geometry.kv_head_count, 2u);
   EXPECT_EQ(plan.geometry.head_dimension, 8u);
   EXPECT_EQ(plan.geometry.kv_element_bytes, 4u);
-  EXPECT_EQ(plan.geometry.visible_context_tokens, 3u);
+  ASSERT_TRUE(plan.geometry.decode.has_value());
+  EXPECT_EQ(plan.geometry.decode->visible_context_tokens, 3u);
+  EXPECT_FALSE(plan.geometry.prefill.has_value());
   EXPECT_EQ(plan.geometry.batch_size, 2u);
+  EXPECT_EQ(plan.backend, LlmMemoryBackend::Cpu);
+  EXPECT_EQ(plan.phase, LlmPhase::Decode);
+  EXPECT_EQ(plan.kv_layout, LlmKvLayout::Contiguous);
+  EXPECT_EQ(plan.work_unit_kind, LlmWorkUnitKind::DecodeStep);
   EXPECT_EQ(plan.requested_workers, 3u);
   EXPECT_EQ(plan.available_workers, 5u);
   EXPECT_EQ(plan.effective_workers, 3u);
@@ -793,7 +926,7 @@ TEST(LlmMemoryWorkPlanTest,
   EXPECT_EQ(plan.requested_workers, 100u);
   EXPECT_EQ(plan.available_workers, 100u);
   EXPECT_EQ(plan.effective_workers, 1u);
-  EXPECT_EQ(plan.geometry.active_weight_bytes_per_step, 2u);
+  EXPECT_EQ(plan.geometry.active_weight_bytes_per_work_unit, 2u);
   EXPECT_EQ(plan.geometry.kv_capacity_bytes, 4u);
   ASSERT_EQ(plan.workers.size(), 1u);
   EXPECT_FALSE(plan.workers[0].layers.empty());
@@ -991,24 +1124,24 @@ TEST(LlmMemoryWorkPlanTest,
   ASSERT_TRUE(weights.valid);
   ASSERT_TRUE(kv.valid);
   ASSERT_TRUE(mixed.valid);
-  EXPECT_EQ(calculate_llm_pilot_steps(weights), 8192u);
-  EXPECT_EQ(calculate_llm_pilot_steps(kv), 16384u);
-  EXPECT_EQ(calculate_llm_pilot_steps(mixed), 5462u);
-  EXPECT_EQ(calculate_llm_calibrated_steps(0.010, 100, weights), 1500u);
-  EXPECT_EQ(calculate_llm_calibrated_steps(0.010, 100, kv), 1500u);
-  EXPECT_EQ(calculate_llm_calibrated_steps(0.010, 100, mixed), 1500u);
-  EXPECT_EQ(calculate_llm_calibrated_steps(0.0, 100, weights), 0u);
-  EXPECT_EQ(calculate_llm_calibrated_steps(
+  EXPECT_EQ(calculate_llm_pilot_work_units(weights), 8192u);
+  EXPECT_EQ(calculate_llm_pilot_work_units(kv), 16384u);
+  EXPECT_EQ(calculate_llm_pilot_work_units(mixed), 5462u);
+  EXPECT_EQ(calculate_llm_calibrated_work_units(0.010, 100, weights), 1500u);
+  EXPECT_EQ(calculate_llm_calibrated_work_units(0.010, 100, kv), 1500u);
+  EXPECT_EQ(calculate_llm_calibrated_work_units(0.010, 100, mixed), 1500u);
+  EXPECT_EQ(calculate_llm_calibrated_work_units(0.0, 100, weights), 0u);
+  EXPECT_EQ(calculate_llm_calibrated_work_units(
                 std::numeric_limits<double>::quiet_NaN(), 100, weights),
             0u);
-  EXPECT_EQ(calculate_llm_calibrated_steps(
+  EXPECT_EQ(calculate_llm_calibrated_work_units(
                 std::numeric_limits<double>::infinity(), 100, weights),
             0u);
   const LlmScenarioLimits invalid = calculate_llm_scenario_limits(
       geometry, static_cast<LlmScenario>(99));
   EXPECT_FALSE(invalid.valid);
   EXPECT_EQ(invalid.reason_code, LlmWorkPlanReason::INVALID_SCENARIO);
-  EXPECT_EQ(calculate_llm_pilot_steps(invalid), 0u);
+  EXPECT_EQ(calculate_llm_pilot_work_units(invalid), 0u);
   const LlmMemoryWorkPlan model_plan = build_llm_memory_work_plan(
       work_plan_request(small_geometry_request(), 2, 2));
   ASSERT_TRUE(model_plan.valid) << model_plan.reason_code;
@@ -1033,24 +1166,24 @@ TEST(LlmMemoryWorkPlanTest,
   ASSERT_TRUE(limited_weights.valid);
   ASSERT_TRUE(limited_kv.valid);
   ASSERT_TRUE(limited_mixed.valid);
-  EXPECT_EQ(limited_weights.effective_maximum_steps, 64u);
-  EXPECT_EQ(limited_kv.effective_maximum_steps,
-            Constants::LLM_MAX_STEPS_PER_MEASUREMENT);
-  EXPECT_EQ(limited_mixed.effective_maximum_steps, 63u);
-  EXPECT_EQ(calculate_llm_calibrated_steps(0.001, 100, limited_weights),
+  EXPECT_EQ(limited_weights.effective_maximum_work_units, 64u);
+  EXPECT_EQ(limited_kv.effective_maximum_work_units,
+            Constants::LLM_MAX_WORK_UNITS_PER_MEASUREMENT);
+  EXPECT_EQ(limited_mixed.effective_maximum_work_units, 63u);
+  EXPECT_EQ(calculate_llm_calibrated_work_units(0.001, 100, limited_weights),
             64u);
-  EXPECT_EQ(calculate_llm_calibrated_steps(0.001, 100, limited_kv),
+  EXPECT_EQ(calculate_llm_calibrated_work_units(0.001, 100, limited_kv),
             15000u);
-  EXPECT_EQ(calculate_llm_calibrated_steps(0.001, 100, limited_mixed),
+  EXPECT_EQ(calculate_llm_calibrated_work_units(0.001, 100, limited_mixed),
             63u);
   EXPECT_EQ(classify_llm_duration_quality(
-                0.050, limited_weights.effective_maximum_steps,
+                0.050, limited_weights.effective_maximum_work_units,
                 limited_weights),
             "guardrail-limited-below-target");
 }
 
 TEST(LlmMemoryWorkPlanTest,
-     DurationQualityUsesInclusiveWindowAndSingleStepException) {
+     DurationQualityUsesInclusiveWindowAndSingleWorkUnitException) {
   const LlmGeometry geometry =
       resolve_llm_geometry(small_geometry_request());
   const LlmScenarioLimits limits =
@@ -1065,7 +1198,7 @@ TEST(LlmMemoryWorkPlanTest,
   EXPECT_EQ(classify_llm_duration_quality(0.150, 1, limits),
             "within-target-window");
   EXPECT_EQ(classify_llm_duration_quality(0.300, 1, limits),
-            "single-step-over-target");
+            "above-target-single-work-unit");
   EXPECT_EQ(classify_llm_duration_quality(0.050, 2, limits),
             "below-target-window");
   EXPECT_EQ(classify_llm_duration_quality(0.300, 2, limits),
@@ -1074,7 +1207,7 @@ TEST(LlmMemoryWorkPlanTest,
             "invalid-duration");
 }
 
-TEST(LlmMemoryWorkPlanTest, ExplicitStepsStayExactAndRespectBothCaps) {
+TEST(LlmMemoryWorkPlanTest, ExplicitWorkUnitsStayExactAndRespectBothCaps) {
   LlmGeometryRequest request = {1, 1, 1, 1, 1, 1, 1, 1};
   LlmGeometry geometry = resolve_llm_geometry(request);
   ASSERT_TRUE(geometry.valid);
@@ -1084,17 +1217,17 @@ TEST(LlmMemoryWorkPlanTest, ExplicitStepsStayExactAndRespectBothCaps) {
   LlmMemoryWorkPlan model_plan = build_llm_memory_work_plan(
       work_plan_request(request, 1, 1));
   ASSERT_TRUE(model_plan.valid) << model_plan.reason_code;
-  EXPECT_EQ(tiny.effective_maximum_steps,
-            Constants::LLM_MAX_STEPS_PER_MEASUREMENT);
+  EXPECT_EQ(tiny.effective_maximum_work_units,
+            Constants::LLM_MAX_WORK_UNITS_PER_MEASUREMENT);
   EXPECT_TRUE(build_llm_scenario_work_plan(
                   model_plan, LlmScenario::WeightsOnly,
-                  tiny.effective_maximum_steps, true)
+                  tiny.effective_maximum_work_units, true)
                   .valid);
   EXPECT_EQ(build_llm_scenario_work_plan(
                 model_plan, LlmScenario::WeightsOnly,
-                tiny.effective_maximum_steps + 1, true)
+                tiny.effective_maximum_work_units + 1, true)
                 .reason_code,
-            LlmWorkPlanReason::STEP_CAP_EXCEEDED);
+            LlmWorkPlanReason::WORK_UNIT_CAP_EXCEEDED);
 
   request.active_weight_bytes = kGiB;
   geometry = resolve_llm_geometry(request);
@@ -1104,17 +1237,17 @@ TEST(LlmMemoryWorkPlanTest, ExplicitStepsStayExactAndRespectBothCaps) {
   const LlmScenarioLimits payload_limited =
       calculate_llm_scenario_limits(geometry, LlmScenario::WeightsOnly);
   ASSERT_TRUE(payload_limited.valid);
-  EXPECT_EQ(payload_limited.effective_maximum_steps, 64u);
+  EXPECT_EQ(payload_limited.effective_maximum_work_units, 64u);
   const LlmScenarioWorkPlan boundary = build_llm_scenario_work_plan(
       model_plan, LlmScenario::WeightsOnly, 64, true);
   ASSERT_TRUE(boundary.valid);
-  EXPECT_EQ(boundary.steps, 64u);
-  EXPECT_EQ(boundary.effective_payload_bytes,
-            Constants::LLM_MAX_EXACT_PAYLOAD_BYTES);
+  EXPECT_EQ(boundary.work_units, 64u);
+  EXPECT_EQ(boundary.effective_model_payload_bytes,
+            Constants::LLM_MAX_ACCOUNTED_BYTES_PER_TASK);
   EXPECT_EQ(build_llm_scenario_work_plan(
                 model_plan, LlmScenario::WeightsOnly, 65, true)
                 .reason_code,
-            LlmWorkPlanReason::EXACT_PAYLOAD_CAP_EXCEEDED);
+            LlmWorkPlanReason::TASK_ACCOUNTED_BYTES_CAP_EXCEEDED);
 
   const LlmMemoryWorkPlan frozen_model_plan = build_llm_memory_work_plan(
       work_plan_request(small_geometry_request(), 2, 2));
@@ -1124,7 +1257,7 @@ TEST(LlmMemoryWorkPlanTest, ExplicitStepsStayExactAndRespectBothCaps) {
   ASSERT_TRUE(frozen.valid) << frozen.reason_code;
   EXPECT_TRUE(frozen.explicit_iterations);
   for (const LlmScenarioWorkPlan& scenario : frozen.scenarios) {
-    EXPECT_EQ(scenario.steps, 4u);
+    EXPECT_EQ(scenario.work_units, 4u);
     EXPECT_TRUE(scenario.explicit_iterations);
   }
 }
@@ -1209,7 +1342,7 @@ TEST(LlmMemoryWorkPlanTest,
 
 TEST(LlmMemoryWorkPlanTest,
      ScenarioTotalsDetectOverflowBeforePayloadCapComparison) {
-  LlmGeometryRequest request = {Constants::LLM_MAX_EXACT_PAYLOAD_BYTES,
+  LlmGeometryRequest request = {Constants::LLM_MAX_ACCOUNTED_BYTES_PER_TASK,
                                 1, 1, 1, 1, 1, 1, 1};
   const LlmGeometry geometry = resolve_llm_geometry(request);
   ASSERT_TRUE(geometry.valid);
@@ -1221,22 +1354,22 @@ TEST(LlmMemoryWorkPlanTest,
   ASSERT_TRUE(overflow_model.valid) << overflow_model.reason_code;
   const LlmScenarioWorkPlan overflow = build_llm_scenario_work_plan(
       overflow_model, LlmScenario::WeightsOnly,
-      Constants::LLM_MAX_STEPS_PER_MEASUREMENT, true);
+      Constants::LLM_MAX_WORK_UNITS_PER_MEASUREMENT, true);
   EXPECT_FALSE(overflow.valid);
   EXPECT_EQ(overflow.reason_code,
-            LlmWorkPlanReason::EXACT_PAYLOAD_OVERFLOW);
+            LlmWorkPlanReason::TASK_ACCOUNTED_BYTES_OVERFLOW);
   EXPECT_TRUE(overflow.plan_identity.empty());
 
   const LlmGeometry above_payload_cap = resolve_llm_geometry(
-      {Constants::LLM_MAX_EXACT_PAYLOAD_BYTES + 1,
+      {Constants::LLM_MAX_ACCOUNTED_BYTES_PER_TASK + 1,
        1, 1, 1, 1, 1, 1, 1});
   ASSERT_TRUE(above_payload_cap.valid) << above_payload_cap.reason_code;
-  const LlmScenarioLimits impossible_single_step =
+  const LlmScenarioLimits impossible_single_work_unit =
       calculate_llm_scenario_limits(above_payload_cap,
                                     LlmScenario::WeightsOnly);
-  EXPECT_FALSE(impossible_single_step.valid);
-  EXPECT_EQ(impossible_single_step.reason_code,
-            LlmWorkPlanReason::PAYLOAD_CAP_BELOW_ONE_STEP);
+  EXPECT_FALSE(impossible_single_work_unit.valid);
+  EXPECT_EQ(impossible_single_work_unit.reason_code,
+            LlmWorkPlanReason::GUARDRAIL_BELOW_ONE_WORK_UNIT);
 
   const LlmMemoryWorkPlan model_plan = build_llm_memory_work_plan(
       work_plan_request(small_geometry_request(), 2, 2));
@@ -1244,7 +1377,7 @@ TEST(LlmMemoryWorkPlanTest,
   const LlmFrozenScenarioPlans invalid = freeze_llm_scenario_work_plans(
       model_plan, {1, 0, 1}, false);
   EXPECT_FALSE(invalid.valid);
-  EXPECT_EQ(invalid.reason_code, LlmWorkPlanReason::STEP_COUNT_ZERO);
+  EXPECT_EQ(invalid.reason_code, LlmWorkPlanReason::WORK_UNIT_COUNT_ZERO);
   EXPECT_TRUE(invalid.plan_identity.empty());
   for (const LlmScenarioWorkPlan& scenario : invalid.scenarios) {
     EXPECT_FALSE(scenario.valid);
@@ -1351,17 +1484,56 @@ TEST(LlmMemoryWorkPlanTest,
   ASSERT_TRUE(second.valid);
   EXPECT_EQ(first.plan_identity, second.plan_identity);
   EXPECT_FALSE(first.plan_identity.empty());
-  EXPECT_EQ(first.descriptor_abi_version,
-            Constants::LLM_DESCRIPTOR_ABI_VERSION);
-  EXPECT_EQ(first.backend, Constants::LLM_BACKEND_NAME);
-  EXPECT_EQ(first.phase, Constants::LLM_PHASE_NAME);
-  EXPECT_EQ(first.weight_passes_per_step, 1u);
+  EXPECT_EQ(first.backend, LlmMemoryBackend::Cpu);
+  EXPECT_EQ(first.phase, LlmPhase::Decode);
+  EXPECT_EQ(first.kv_layout, LlmKvLayout::Contiguous);
+  EXPECT_EQ(first.work_unit_kind, LlmWorkUnitKind::DecodeStep);
+  EXPECT_EQ(first.weight_passes_per_work_unit, 1u);
   EXPECT_EQ(first.kv_replay_factor, 1u);
-  EXPECT_EQ(first.buffer_pattern_version,
+  EXPECT_EQ(first.methodology_version,
+            Constants::LLM_CPU_DECODE_CONTIGUOUS_METHODOLOGY_VERSION);
+  EXPECT_EQ(first.component_identities.logical_profile_version,
+            Constants::LLM_LOGICAL_PROFILE_VERSION);
+  EXPECT_EQ(first.component_identities.kv_layout_version,
+            Constants::LLM_CONTIGUOUS_KV_LAYOUT_VERSION);
+  EXPECT_FALSE(first.component_identities.permutation_version.has_value());
+  EXPECT_EQ(first.component_identities.backend_executor_version,
+            Constants::LLM_CPU_EXECUTOR_VERSION);
+  EXPECT_EQ(first.component_identities.resource_abi_version,
+            Constants::LLM_DESCRIPTOR_ABI_VERSION);
+  EXPECT_EQ(first.component_identities.schedule_version,
+            Constants::LLM_CPU_SCHEDULE_VERSION);
+  EXPECT_EQ(first.component_identities.timer_policy_version,
+            Constants::LLM_CPU_TIMER_POLICY_VERSION);
+  EXPECT_EQ(first.component_identities.buffer_pattern_version,
             Constants::LLM_BUFFER_PATTERN_VERSION);
-  EXPECT_EQ(first.methodology_version, Constants::LLM_METHODOLOGY_VERSION);
-  EXPECT_EQ(first.kv_layout, Constants::LLM_KV_LAYOUT);
-  EXPECT_EQ(first.worker_schedule, Constants::LLM_WORKER_SCHEDULE);
+  EXPECT_EQ(first.component_identities.write_pattern_version,
+            Constants::LLM_APPEND_PATTERN_VERSION);
+  EXPECT_EQ(first.component_identities.checksum_pattern_version,
+            Constants::LLM_READ_CHECKSUM_VERSION);
+  EXPECT_FALSE(first.component_identities.msl_revision.has_value());
+  EXPECT_FALSE(first.component_identities.msl_source_sha256.has_value());
+  const std::string expected_component_identity =
+      "llm-memory-components-v1"
+      "|logical_profile_version=27:decode_steady_fixed_context"
+      "|kv_layout_version=43:contiguous_layer_batch_token_head_dimension"
+      "|permutation_version=null"
+      "|backend_executor_version=43:llm-cpu-executor-v1-arm64-decode-contiguous"
+      "|resource_abi_version=28:llm-memory-descriptor-abi-v1"
+      "|schedule_version=52:worker-local-layer-order-no-per-layer-global-barrier"
+      "|timer_policy_version=62:synchronized-start-to-last-worker-completion-per-scenario-task"
+      "|buffer_pattern_version=21:llm-buffer-pattern-v1"
+      "|write_pattern_version=25:llm-kv-append-affine64-v1"
+      "|checksum_pattern_version=20:llm-read-checksum-v1"
+      "|msl_revision=null"
+      "|msl_source_sha256=null";
+  EXPECT_EQ(serialize_llm_component_identities(first.component_identities),
+            expected_component_identity);
+  EXPECT_EQ(first.component_identities.identity,
+            expected_component_identity);
+  EXPECT_EQ(first.component_identities.identity.rfind(
+                Constants::LLM_COMPONENT_IDENTITY_VERSION, 0),
+            0u);
   EXPECT_EQ(first.weight_buffer_seed,
             derive_llm_domain_seed(42, LlmSeedDomain::WeightBuffer));
   EXPECT_EQ(first.k_buffer_seed,
@@ -1477,11 +1649,11 @@ TEST(LlmMemoryWorkPlanTest,
       model_b, LlmScenario::KvOnly, 5, false);
   ASSERT_TRUE(scenario_a.valid);
   ASSERT_TRUE(scenario_b.valid);
-  EXPECT_EQ(scenario_a.effective_payload_bytes,
-            scenario_b.effective_payload_bytes);
+  EXPECT_EQ(scenario_a.effective_model_payload_bytes,
+            scenario_b.effective_model_payload_bytes);
   EXPECT_NE(scenario_a.kv_read_bytes, scenario_b.kv_read_bytes);
-  EXPECT_NE(scenario_a.kv_append_write_bytes,
-            scenario_b.kv_append_write_bytes);
+  EXPECT_NE(scenario_a.kv_write_bytes,
+            scenario_b.kv_write_bytes);
   EXPECT_NE(scenario_a.plan_identity, scenario_b.plan_identity);
   EXPECT_EQ(scenario_a.model_plan_identity, model_a.plan_identity);
 

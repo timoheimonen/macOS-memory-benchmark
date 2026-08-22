@@ -172,31 +172,37 @@ cannot prove physical traffic: JSON always records `dram_residency: "unverified"
 still be cache- or dispatch-dominated. CPU and GPU GB/s values are not directly comparable because their kernels, timing
 boundaries, parallelism, cache behavior, resource modes, and validation overhead differ.
 
-### Synthetic LLM decode-memory payload
+### Synthetic LLM memory payload
 
-LLM-memory mode measures three CPU memory-only scenarios for one explicitly supplied model geometry and fixed visible
-context. `weights_only` reads all active weights once per synthetic step. `kv_only` writes the current token's K and V
+LLM-memory schema 1 uses generic backend/phase/layout/work-unit vocabulary. The only active profile in this revision is
+CPU/decode/contiguous: `backend: "cpu"`, `phase: "decode"`, `kv_layout: "contiguous"`, and
+`work_unit_kind: "decode_step"`. Metal, prefill, and paged-KV vocabulary is reserved but has no public selector or
+supported runtime path yet.
+
+The active profile measures three memory-only scenarios for one explicitly supplied model geometry and fixed visible
+context. `weights_only` reads all active weights once per work unit. `kv_only` writes the current token's K and V
 records and reads the complete visible K/V history. `mixed` performs both kinds of work in worker-local layer order
 inside one synchronized timing interval.
 
-Let `W` be active-weight bytes per step, `L` the layer count, `h_kv` the KV-head count, `d_h` the head dimension,
+Let `W` be active-weight bytes per work unit, `L` the layer count, `h_kv` the KV-head count, `d_h` the head dimension,
 `s_kv` the KV element width, `B` the batch size, and `A` the visible context including the current token. Define:
 
 ```text
 K = L * 2 * h_kv * d_h * s_kv
-KV read / step   = B * A * K
-KV append / step = B * K
+KV read / decode work unit   = B * A * K
+KV append / decode work unit = B * K
 ```
 
-The effective payloads per step are `W`, `B*A*K + B*K`, and `W + B*A*K + B*K` for weights-only, KV-only, and mixed.
-Reported GB/s divides those exact logical bytes by synchronized CPU time. The traffic crossover `W / (B*K)` and the
+The effective model payloads per work unit are `W`, `B*A*K + B*K`, and `W + B*A*K + B*K` for weights-only, KV-only,
+and mixed. Reported GB/s divides those exact logical W/K/V bytes by synchronized CPU time. The traffic crossover
+`W / (B*K)` and the
 versioned current-context classification compare weight bytes with KV-read bytes only; exact equality is
 `near_crossover`. They do not locate a measured hardware bottleneck.
 
 The command allocates full-size ordinary cacheable weight, K, and V mappings. Initialization/pre-touch, worker creation,
 same-shape warmup, calibration, JSON, and checksum validation are outside elapsed time. Full-size mappings prevent a
 small proxy buffer from masquerading as a larger model, but they do not prove physical DRAM service. A synthetic memory
-step is not an inference token: the profile excludes Transformer math, model/framework dispatch, GPU/ANE work, prefill,
+decode work unit is not an inference token: the profile excludes Transformer math, model/framework dispatch, GPU/ANE work, prefill,
 growing context, paged/sliding-window KV, and compute-memory overlap.
 
 ### Memory hierarchy behavior
@@ -383,7 +389,7 @@ middle, and trailing items.
 
 #### `--iterations <count>`
 
-- Exact measured bandwidth pass/dispatch count, or exact LLM scenario-step count, when explicitly supplied
+- Exact measured bandwidth pass/dispatch count, or exact LLM scenario work-unit count, when explicitly supplied
 - Positive integer
 - Not allowed with `--only-latency`
 - In `--benchmark`, `--patterns`, `--gpu-bandwidth`, and `--llm-memory`, omission enables excluded
@@ -484,7 +490,8 @@ middle, and trailing items.
 
 #### `--llm-memory`
 
-- Selects a standalone CPU mode for a fixed-visible-context synthetic LLM decode-memory profile. It never
+- Selects the standalone LLM memory mode. Its active profile is CPU/decode/contiguous and its exact methodology is
+  `llm-memory-v1-cpu-decode-contiguous`. It never
   enters the general `BenchmarkConfig` parser or CPU sweep runner
 - Requires each of `--weight-size-mb <MiB>`, `--layers <count>`, `--query-heads <count>`,
   `--kv-heads <count>`, `--head-dim <count>`, and `--context-tokens <count>` exactly once
@@ -498,8 +505,8 @@ middle, and trailing items.
 - Parses every integer as one complete decimal token. Model counts, sizes, worker count, iterations, and loop count
   must be positive. Query heads must be at least the KV-head count and evenly divisible by it
 - Treats `--context-tokens` as the fixed visible context including the current synthetic token. Checked preflight
-  resolves weight/KV byte geometry and ensures all three scenarios can fit the one-billion-step and 64 GiB logical
-  payload limits; explicit iterations must fit the strictest scenario limit
+  resolves weight/KV byte geometry and ensures all three scenarios can fit the one-billion-work-unit and 64 GiB
+  accounted-byte task limits; explicit iterations must fit the strictest scenario limit
 - Preserves an explicit worker request even when it exceeds detected availability. Effective-worker reduction belongs
   to the executable work plan and remains separately reportable
 - `--llm-memory --help` succeeds without required model inputs and returns before core detection, seed generation,
@@ -519,9 +526,12 @@ middle, and trailing items.
   and every other non-empty value is a file target, including `./-` and flag-shaped names. File output atomically
   checkpoints each terminal scenario measurement and command terminal; stdout performs the same logical transitions
   without intermediate serialization
+- Schema-v1 tokens also define `metal`, `prefill`, and `paged`, but this revision exposes no corresponding CLI options and
+  rejects any non-active internal plan as unsupported/not activated. There is no CPU fallback for a future Metal request
 - This profile is memory-only: it performs no Transformer mathematics and does not report inference tokens/s. Its
-  `synthetic_memory_steps_per_second` and effective-payload GB/s must not be interpreted as model throughput or physical
-  DRAM-counter traffic. See [LLM_MEMORY_PROFILE_WHITEPAPER.md](LLM_MEMORY_PROFILE_WHITEPAPER.md)
+  `synthetic_memory_work_units_per_second` and `effective_model_payload_gb_s` must not be interpreted as model
+  throughput or physical DRAM-counter traffic. See
+  [LLM_MEMORY_PROFILE_WHITEPAPER.md](LLM_MEMORY_PROFILE_WHITEPAPER.md)
 
 #### `--only-bandwidth`
 
@@ -979,8 +989,8 @@ caffeinate -i -d memory_benchmark --llm-memory --weight-size-mb 4096 --layers 32
   --context-tokens 8192 --batch-size 1 --count 3 --seed 123456789 --output llm_auto.json
 ```
 
-For a strict same-work cohort, select an explicit step count that fits all three scenario limits and keep every model,
-worker, seed, software, hardware, and environment field matched:
+For a strict same-work cohort, select an explicit decode work-unit count that fits all three scenario limits and keep
+every model, worker, seed, software, hardware, and environment field matched:
 
 ```bash
 caffeinate -i -d memory_benchmark --llm-memory --weight-size-mb 4096 --layers 32 \
@@ -990,9 +1000,9 @@ caffeinate -i -d memory_benchmark --llm-memory --weight-size-mb 4096 --layers 32
 ```
 
 The 4 GiB/32-layer/8-KV-head example derives 128 KiB of combined K+V per visible token. At context 8192, KV read is
-1 GiB per step; the weight/KV-read payload crossover is 32768 visible tokens. Those are formula checks, not expected
-performance values. Inspect the three scenario headlines separately, scenario order balance, exact work-plan identity,
-checksums, CV, environment warnings, and the schema acceptance predicate before comparison.
+1 GiB per decode work unit; the weight/KV-read payload crossover is 32768 visible tokens. Those are formula checks, not
+expected performance values. Inspect the three scenario headlines separately, scenario order balance, exact work-plan
+identity, checksums, CV, environment warnings, and the schema acceptance predicate before comparison.
 
 ### Pattern analysis
 
@@ -1226,17 +1236,18 @@ CV above 5%, non-nominal thermal/Low Power Mode state, incomplete three-position
 duration outside 100–250 ms are warnings. They do not cause performance-based retry or sample filtering. A missing or
 invalid measurement is not printed as zero and remains status-bearing/null in JSON.
 
-### 9) Synthetic LLM decode-memory profile
+### 9) Synthetic LLM memory profile
 
-`--llm-memory` prints a separate CPU fixed-context report containing:
+`--llm-memory` prints a separate report for the active CPU/decode/contiguous profile containing:
 
-- backend, fixed-context/cacheable semantics, active-weight bytes, KV-read bytes, current-token KV-append bytes, and
+- backend, phase/decode-step work unit, KV layout, fixed-context/cacheable semantics, active-weight bytes, KV-read
+  bytes, current-token KV-append bytes, and
   the two-decimal traffic-crossover estimate; JSON retains the exact numerator and denominator;
-- up to one measured headline per weights-only, KV-only, and mixed scenario, with synthetic-step latency and
-  effective-payload GB/s; a measured mixed headline also uses the console label `synthetic memory steps/s`,
-  corresponding to JSON `synthetic_memory_steps_per_second`, without calling it tokens/s;
+- up to one measured headline per weights-only, KV-only, and mixed scenario, with decode-step latency and effective
+  model-payload GB/s; JSON uses the backend-neutral fields `synthetic_work_unit_latency_seconds`,
+  `synthetic_memory_work_units_per_second`, and `effective_model_payload_gb_s`, without calling any value tokens/s;
 - warnings for incomplete position balance, non-nominal environment, QoS failure, cache-dominant working sets, high
-  effective-payload CV, or duration outside the intended window. JSON retains the complete repeatability statistics;
+  effective-model-payload CV, or duration outside the intended window. JSON retains the complete repeatability statistics;
   the console prints the CV value only in a high-CV warning;
 - an interpretation reminder that the payload is logical and memory-only, not physical DRAM traffic or model inference.
 
@@ -1529,110 +1540,153 @@ computed measurement status.
 
 ### LLM memory-profile JSON shape
 
-LLM file and stdout output use the same separate top-level CPU schema 1. It is not a standard benchmark payload and
-must be classified by `mode` and `schema_version`. This abbreviated field-selection fragment illustrates a complete,
-balanced fixed-work run; a real document also contains the populated plan, resource, calibration, measurement,
-checksum, environment, and interpretation evidence named below.
+LLM file and stdout output use the same separate top-level generic schema 1. It is not a standard benchmark payload and
+must be classified by `mode` and `schema_version`, then by the exact backend/phase/layout/methodology identity. The old
+unpublished CPU/step-specific schema-v1 shape has no compatibility aliases or fallback reader; schema 1 is intentionally
+re-frozen in this generic form without a version bump.
+
+This abbreviated structural selection shows the active CPU/decode/contiguous profile. A real document contains complete
+calibration, measurement, checksum, loop, checkpoint, environment, warning, and interpretation evidence in addition to
+the required generic sections.
 
 ```json
 {
-  "software_version": "0.63.0",
-  "timestamp": "...",
   "schema_version": 1,
   "mode": "llm_memory",
   "backend": "cpu",
-  "methodology_version": "llm-memory-v1-cpu-fixed-context-warm-layer-interleaved",
+  "phase": "decode",
+  "kv_layout": "contiguous",
+  "methodology_version": "llm-memory-v1-cpu-decode-contiguous",
+  "software": {
+    "version": "0.63.0",
+    "timestamp": "..."
+  },
   "status": "complete",
   "reason_code": "complete",
-  "diagnostic": null,
-  "interruption_requested": false,
   "results_complete": true,
   "conclusions_valid": true,
-  "scenario_order_balance_complete": true,
   "configuration": {
-    "weight_size_mb": 64,
-    "layer_count": 4,
-    "query_head_count": 8,
-    "kv_head_count": 2,
-    "head_dimension": 64,
-    "kv_element_bytes": "2",
-    "visible_context_tokens": 512,
-    "batch_size": 1,
-    "requested_workers": 4,
-    "iterations": 1,
-    "work_policy": "explicit_fixed_work",
-    "loop_count": 3,
-    "base_seed_uint64_decimal": "42",
-    "seed_source": "user",
-    "output_file": "-",
-    "argv": ["memory_benchmark", "--llm-memory", "...", "--output", "-"]
+    "argv": ["memory_benchmark", "--llm-memory", "...", "--output", "-"],
+    "resolved_sources": {
+      "backend": "default",
+      "phase": "default",
+      "kv_layout": "default"
+    }
   },
-  "geometry": {
-    "valid": true,
-    "attention_kind": "gqa",
-    "active_weight_bytes_per_step": "67108864",
-    "kv_bytes_per_visible_token": "2048",
-    "k_mapping_bytes": "524288",
-    "v_mapping_bytes": "524288",
-    "kv_read_bytes_per_step": "1048576",
-    "kv_append_write_bytes_per_step": "2048",
-    "kv_only_effective_payload_bytes_per_step": "1050624",
-    "mixed_effective_payload_bytes_per_step": "68159488"
+  "resolved_plan": {
+    "geometry": {
+      "decode": {"visible_context_tokens": 512},
+      "prefill": null
+    },
+    "layout": {
+      "kv_layout": "contiguous",
+      "kv_block_tokens": null,
+      "blocks_per_sequence": null,
+      "physical_blocks_per_layer": null,
+      "last_block_tokens": null,
+      "last_block_valid_bytes": null,
+      "block_table_entries": null,
+      "block_table_bytes": null,
+      "permutation_domain_uint64_hex": null,
+      "permutation_seed_uint64_decimal": null,
+      "permutation_algorithm_version": null,
+      "permutation_sha256": null
+    },
+    "resources": {
+      "weight_logical_bytes": "67108864",
+      "k_logical_bytes": "524288",
+      "v_logical_bytes": "524288",
+      "k_physical_length_bytes": "524288",
+      "v_physical_length_bytes": "524288",
+      "k_layout_padding_bytes": "0",
+      "v_layout_padding_bytes": "0",
+      "block_table_bytes": null
+    },
+    "component_identities": {
+      "logical_profile_version": "decode_steady_fixed_context",
+      "kv_layout_version": "contiguous_layer_batch_token_head_dimension",
+      "permutation_version": null,
+      "backend_executor_version": "llm-cpu-executor-v1-arm64-decode-contiguous",
+      "resource_abi_version": "llm-memory-descriptor-abi-v1",
+      "schedule_version": "worker-local-layer-order-no-per-layer-global-barrier",
+      "timer_policy_version": "synchronized-start-to-last-worker-completion-per-scenario-task",
+      "buffer_pattern_version": "llm-buffer-pattern-v1",
+      "write_pattern_version": "llm-kv-append-affine64-v1",
+      "checksum_pattern_version": "llm-read-checksum-v1",
+      "msl_revision": null,
+      "msl_source_sha256": null
+    }
   },
-  "traffic_diagnostics": {
-    "classification_version": "llm-exact-weight-vs-kv-read-payload-v1",
-    "traffic_crossover_numerator": "67108864",
-    "traffic_crossover_denominator": "2048",
-    "traffic_crossover_context_tokens": 32768.0,
-    "current_visible_context_tokens": 512,
-    "current_weight_read_payload_bytes_per_step": "67108864",
-    "current_kv_read_payload_bytes_per_step": "1048576",
-    "current_context_classification": "weight_payload_dominant",
-    "classification_is_payload_only": true
+  "backend_evidence": {
+    "cpu": {},
+    "metal": null
   },
-  "counters": {
-    "planned_loops": 3,
-    "attempted_loops": 3,
-    "completed_loops": 3,
-    "planned_measurements": 9,
-    "attempted_measurements": 9,
-    "terminal_measurements": 9,
-    "measured_measurements": 9,
-    "planned_synthetic_steps": "9",
-    "completed_synthetic_steps": "9"
-  }
+  "memory_budget": {},
+  "calibration": {},
+  "measurements": [],
+  "aggregates": {},
+  "interpretation": {}
 }
 ```
 
 Schema 1 rules:
 
-- Run statuses are `not_started`, `complete`, `partial`, `interrupted`, and `failed`. Measurement statuses are
+- Canonical selectors are `backend: cpu|metal`, `phase: decode|prefill`, `kv_layout: contiguous|paged`,
+  `work_unit_kind: decode_step|prefill_operation`, and
+  `kv_write_kind: none|current_token_append|full_prompt_population`. Only CPU/decode/contiguous is activated now;
+  Metal/prefill/paged profiles are not public CLI choices or supported execution paths.
+- Methodology is always `llm-memory-v1-<backend>-<phase>-<layout>`. The active exact identity is
+  `llm-memory-v1-cpu-decode-contiguous`.
+- Run statuses are `not_started`, `complete`, `partial`, `interrupted`, `unsupported`, and `failed`. Measurement statuses are
   `not_run`, `measured`, `interrupted`, `invalid`, and `failed`. Multiword status tokens use underscores; multiword
-  reason-code and duration-quality tokens use hyphens.
-- Exact bytes and every uint64 seed/checksum are canonical decimal strings. Small counts remain JSON numbers.
-  Unavailable observed metrics and unavailable checksum validity are null, never numeric zero.
+  reason-code and duration-quality tokens use hyphens. `unsupported` is terminal, invalid for performance acceptance,
+  and never authorizes a backend fallback.
+- `resolved_plan.geometry.decode` and `.prefill`, the layout-specific scalars, and `backend_evidence.cpu`/`.metal` use
+  JSON null when not applicable. Applicable but absent scenario traffic is numeric zero or decimal-string `"0"`
+  according to the field's fixed type; it is never the string `"not_applicable"`.
+- Schema/control indexes, validated small configuration values, and planned/completed work units are integer numbers.
+  Potentially large byte, capacity, block/table/lookup, token-visit, causal-pair, and FMA-term quantities are canonical
+  decimal strings even when their value is zero. UInt64 seeds are canonical decimal strings. Unavailable elapsed,
+  rate, ratio, and statistics values are null.
 - When an executor throws before returning evidence for a measurement or excluded task, `execution.status` is
   `unavailable`, the reason remains the runner-exception token, and missing lifecycle/QoS/checksum fields are null. A
   `not_run` measurement's top-level successful/failed QoS-worker counts are likewise null rather than zero.
-- The remaining top-level sections are `methodology`, complete `geometry`, `traffic_diagnostics`, `memory_budget`,
-  `resources`, `seeds`, `model_work_plan`, `frozen_scenario_work_plans`, `excluded_calibration_attempts`,
-  `checkpoint_lifecycle`, `loop_records`, `measurements`, `scenario_aggregates`, `environment`, `quality_warnings`, and
-  `interpretation`.
-- `resources` proves full-size cacheable weight/K/V mappings, page-rounded accounting, descriptor counts, executor
-  auxiliary storage, and full-byte initialization/pre-touch. Its `json_output_peak_estimate` records whether output is
-  enabled plus the valid/reason, policy `conservative-live-dom-plus-serialized-transport`, and conservative fixed-schema,
-  input-string, measurement-record, worker-checksum, and total byte reserve. It does not prove DRAM residency.
-- `measurements[]` preserves scenario/order/status/reason, frozen-plan identity, exact planned/completed steps and bytes,
-  nullable elapsed/rates/fractions, working set, executor lifecycle, and expected/actual worker plus folded run checksums.
-- `scenario_aggregates.weights_only`, `.kv_only`, and `.mixed` contain measured-only step-latency, synthetic-step-rate,
-  and effective-payload-GB/s values, headlines, statistics, and stability quality.
+- `memory_budget` reports canonical decimal-string `resource_rounding_bytes`, `transient_peak_bytes`,
+  `known_owned_peak_bytes`, and `admitted_budget_bytes` separately. Immutable logical/physical resource geometry stays
+  under `resolved_plan.resources`.
+- `measurements[]` preserves scenario/order/status/reason, frozen-plan identity, executor/checksum evidence, and these
+  fixed generic work-accounting fields:
+
+  ```text
+  work_unit_kind, planned_work_units, completed_work_units,
+  weight_read_bytes_per_work_unit, kv_read_bytes_per_work_unit,
+  kv_write_bytes_per_work_unit, kv_write_kind,
+  effective_model_payload_bytes_per_work_unit,
+  layout_metadata_lookup_count_per_work_unit,
+  layout_metadata_read_bytes_per_work_unit, accounted_bytes_per_work_unit,
+  planned_effective_model_payload_bytes, completed_effective_model_payload_bytes,
+  planned_layout_metadata_lookup_count, completed_layout_metadata_lookup_count,
+  planned_layout_metadata_read_bytes, completed_layout_metadata_read_bytes,
+  planned_task_accounted_bytes, completed_task_accounted_bytes,
+  synthetic_work_unit_latency_seconds,
+  synthetic_memory_work_units_per_second,
+  effective_model_payload_gb_s
+  ```
+
+  The active contiguous `weights_only` record reports metadata lookup/read/accounted additions as decimal-string zero;
+  non-weights decode scenarios use `kv_write_kind: "current_token_append"`. Derived rates are non-null only for a
+  successful measured record.
+- `aggregates` contains measured-only work-unit latency, work-unit rate, and effective model-payload GB/s values,
+  headlines, statistics, and stability quality.
 - `quality_warnings` combines runner high-CV/order tokens with evidence-backed environment, QoS, cache-dominance, and
   per-scenario duration-quality tokens; warning presence never causes measurement filtering or retry.
 - Traffic classification tokens are `weight_payload_dominant`, `near_crossover`, and
   `kv_read_payload_dominant`. `near_crossover` means exact equality of weight and KV-read payload, not a tolerance band.
-- The authoritative acceptance predicate is `mode == "llm_memory" && schema_version == 1 && status == "complete" &&
-  results_complete == true && conclusions_valid == true`. Count one can be complete but has invalid comparative
-  conclusions because its cyclic scenario positions are not balanced.
+- The authoritative acceptance predicate requires `mode == "llm_memory"`, `schema_version == 1`, backend/phase/layout
+  equal to the requested profile, `methodology_version` equal to the exact derived identity,
+  `status == "complete"`, `results_complete == true`, `conclusions_valid == true`, and every planned measurement to be
+  `measured`. For the current command those selectors are CPU/decode/contiguous. Count one can be complete but has
+  invalid comparative conclusions because its cyclic scenario positions are not balanced.
 
 LLM file output checkpoints after every terminal scenario measurement and at command terminal. Exact `--output -`
 retains those logical transitions without building intermediate payloads and emits one final document. A started task
@@ -2112,16 +2166,22 @@ jq -e 'select(.mode == "gpu_bandwidth" and .schema_version == 1 and
 # Inspect GPU exact payload, pass count, timing, and validation status
 jq '.measurements[] | {operation, status, value_gb_s, passes: .work_plan.passes, exact_payload_bytes: .work_plan.exact_payload_bytes, gpu_elapsed_seconds: .timed.gpu_elapsed_seconds, validation_status: .validation.validation_status}' gpu_bandwidth.json
 
-# Reject incomplete or position-unbalanced LLM schema 1 output
+# Reject incomplete, identity-mismatched, or position-unbalanced active-profile LLM schema 1 output
 jq -e 'select(.mode == "llm_memory" and .schema_version == 1 and
+              .backend == "cpu" and .phase == "decode" and
+              .kv_layout == "contiguous" and
+              .methodology_version == "llm-memory-v1-cpu-decode-contiguous" and
               .status == "complete" and .results_complete == true and
-              .conclusions_valid == true)' llm_memory.json
+              .conclusions_valid == true and
+              ([.measurements[] | select(.status != "measured")] | length) == 0)' llm_memory.json
 
-# Inspect scenario status, exact payload, synthetic-step latency, and effective GB/s
+# Inspect scenario status, generic work accounting, work-unit latency, and effective model-payload GB/s
 jq '.measurements[] | {scenario, status, reason_code,
-                      planned_exact_payload_bytes,
-                      synthetic_step_latency_seconds,
-                      effective_payload_gb_s,
+                      work_unit_kind,
+                      planned_work_units,
+                      planned_task_accounted_bytes,
+                      synthetic_work_unit_latency_seconds,
+                      effective_model_payload_gb_s,
                       checksum_valid: .checksum.checksum_valid}' llm_memory.json
 ```
 
@@ -2259,9 +2319,10 @@ not a stability baseline for current pattern schema 3 and should not be compared
   SHA-256, resource modes, and fixed work-plan identity. Treat automatic-policy and fixed-work cohorts separately.
 - Keep GPU reference runs at nominal thermal state with Low Power Mode off and minimal competing GPU work. A separate
   counter capture is useful audit evidence, but its instrumented timing is not the production headline.
-- For LLM comparisons, require identical schema/methodology, model geometry, context, batch, requested/effective
-  workers, fixed or automatic policy, frozen work-plan identity, seed, hardware, software, and environment. Prefer a
-  count divisible by three and require `conclusions_valid: true` for comparative conclusions.
+- For LLM comparisons, require identical schema plus exact backend/phase/layout/methodology and component identities,
+  model and phase geometry, batch, requested/effective CPU workers, fixed or automatic policy, frozen work-plan
+  identity, seed, hardware, software, and environment. Prefer a count divisible by three and require every planned
+  measurement to be measured plus `conclusions_valid: true` for comparative conclusions.
 - Size LLM experiments from `W + K_mapping + V_mapping` plus the recorded auxiliary/page-rounded budget before launch.
   A non-empty JSON target also reserves the recorded DOM/serialization peak in orchestration auxiliary bytes. Start
   with a bounded small command to verify the pipeline, then use the intended full model geometry; do not substitute a
@@ -2284,8 +2345,8 @@ not a stability baseline for current pattern schema 3 and should not be compared
 - **Treating GPU copy as one-way or CPU↔GPU bandwidth**: its exact numerator counts both the buffer read and write.
 - **Comparing CPU and GPU GB/s directly**: the shared unit and 2× copy convention do not align timing, kernels, cache,
   resource mode, dispatch, or validation semantics.
-- **Calling an LLM synthetic step a token or model throughput**: the profile omits Transformer compute, model/framework
-  execution, GPU/ANE work, and compute-memory overlap.
+- **Calling an LLM synthetic work unit a token or model throughput**: the active work unit is a decode step, while the
+  profile omits Transformer compute, model/framework execution, GPU/ANE work, and compute-memory overlap.
 - **Treating LLM crossover/classification as a hardware bottleneck**: it compares exact weight and KV-read logical
   payload only; equality is the complete `near_crossover` rule.
 - **Splitting mixed time into independent weight and KV bandwidths**: mixed is one layer-interleaved timed workload;
@@ -2339,11 +2400,13 @@ Parser/configuration errors, one-step payload-limit failures, work-plan/JSON-out
 creation, and weight/K/V mapping, initialization, or descriptor-preparation failures occur before runner-result
 initialization. A stdout target is intentionally empty on these paths; use the process status and stderr reason. Check
 that all six required model options are present, query heads are divisible by KV heads, each scenario fits the 64 GiB
-exact-payload limit, and the page-rounded three-mapping plus auxiliary peak fits the reported available-memory policy.
+task-accounted-byte limit, and the page-rounded three-mapping plus auxiliary peak fits the reported available-memory
+policy.
 
 ### LLM result is incomplete, invalid, or not comparable
 
-Check top-level status/reason, `results_complete`, `conclusions_valid`, scenario-order balance, counters, every
+Check top-level backend/phase/layout/methodology, status/reason, `results_complete`, `conclusions_valid`, scenario-order
+balance, counters, every
 measurement's status/reason, checksum evidence, duration quality, QoS, and environment warnings. A started task may
 finish after an interrupt, but remaining slots are interrupted/null. Count one may complete all three scenarios yet
 remain unsuitable for balanced comparative conclusions. High CV, cache-dominant working sets, or non-nominal thermal/

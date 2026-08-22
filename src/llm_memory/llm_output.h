@@ -27,7 +27,7 @@
 struct LlmResultMetadata;
 
 /**
- * Print exact-payload geometry, available aggregate headlines, interpretation
+ * Print exact model-payload geometry, available aggregate headlines, interpretation
  * limits, and evidence-backed quality warnings for one initialized LLM run.
  *
  * Human report lines use `std::cout` and warnings use `std::cerr`, allowing the

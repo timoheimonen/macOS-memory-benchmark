@@ -24,6 +24,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <type_traits>
@@ -62,8 +63,8 @@ inline constexpr const char* KV_MAPPING_BYTES_OVERFLOW =
     "kv-mapping-bytes-overflow";
 inline constexpr const char* KV_CAPACITY_BYTES_OVERFLOW =
     "kv-capacity-bytes-overflow";
-inline constexpr const char* KV_APPEND_BYTES_OVERFLOW =
-    "kv-append-bytes-overflow";
+inline constexpr const char* KV_WRITE_BYTES_OVERFLOW =
+    "kv-write-bytes-overflow";
 inline constexpr const char* KV_READ_BYTES_OVERFLOW =
     "kv-read-bytes-overflow";
 inline constexpr const char* KV_ONLY_PAYLOAD_OVERFLOW =
@@ -105,14 +106,22 @@ inline constexpr const char* PLANNER_ALLOCATION_FAILED =
 inline constexpr const char* INVALID_SCENARIO = "invalid-scenario";
 inline constexpr const char* INVALID_MODEL_WORK_PLAN =
     "invalid-model-work-plan";
-inline constexpr const char* PAYLOAD_CAP_BELOW_ONE_STEP =
-    "payload-cap-below-one-step";
-inline constexpr const char* STEP_COUNT_ZERO = "step-count-zero";
-inline constexpr const char* STEP_CAP_EXCEEDED = "step-cap-exceeded";
-inline constexpr const char* EXACT_PAYLOAD_OVERFLOW =
-    "exact-payload-overflow";
-inline constexpr const char* EXACT_PAYLOAD_CAP_EXCEEDED =
-    "exact-payload-cap-exceeded";
+inline constexpr const char* BACKEND_NOT_ACTIVATED =
+    "backend-not-activated";
+inline constexpr const char* PHASE_NOT_ACTIVATED = "phase-not-activated";
+inline constexpr const char* KV_LAYOUT_NOT_ACTIVATED =
+    "kv-layout-not-activated";
+inline constexpr const char* JSON_INTEGER_OUT_OF_RANGE =
+    "json-integer-out-of-range";
+inline constexpr const char* GUARDRAIL_BELOW_ONE_WORK_UNIT =
+    "guardrail-below-one-work-unit";
+inline constexpr const char* WORK_UNIT_COUNT_ZERO = "work-unit-count-zero";
+inline constexpr const char* WORK_UNIT_CAP_EXCEEDED =
+    "work-unit-cap-exceeded";
+inline constexpr const char* TASK_ACCOUNTED_BYTES_OVERFLOW =
+    "task-accounted-bytes-overflow";
+inline constexpr const char* TASK_ACCOUNTED_BYTES_CAP_EXCEEDED =
+    "task-accounted-bytes-cap-exceeded";
 }  // namespace LlmWorkPlanReason
 
 /** Stable domains used to derive independent buffer and scenario seeds. */
@@ -185,21 +194,43 @@ struct LlmGeometryRequest {
   size_t kv_element_bytes = Constants::LLM_DEFAULT_KV_ELEMENT_BYTES;
   size_t visible_context_tokens = 0;
   size_t batch_size = Constants::LLM_DEFAULT_BATCH_SIZE;
+  LlmPhase phase = LlmPhase::Decode;
+  LlmKvLayout kv_layout = LlmKvLayout::Contiguous;
 };
 
-/** Checked geometry and exact logical bytes for one batched synthetic step. */
+/** Decode-only geometry; present exactly when `phase == decode`. */
+struct LlmDecodeGeometry {
+  size_t visible_context_tokens = 0;
+};
+
+/** Prefill-only geometry; inactive until the prefill planner is implemented. */
+struct LlmPrefillGeometry {
+  size_t prompt_tokens = 0;
+  size_t attention_query_tile_tokens = 0;
+  size_t tile_count = 0;
+  size_t attention_prefix_token_visits_per_sequence = 0;
+  size_t causal_token_pairs_per_sequence = 0;
+  size_t logical_attention_pairs = 0;
+  size_t logical_attention_fma_terms = 0;
+};
+
+/** Checked common and phase-specific geometry for one synthetic work unit. */
 struct LlmGeometry {
   bool valid = false;
   std::string reason_code = LlmWorkPlanReason::ACTIVE_WEIGHT_BYTES_ZERO;
+  LlmPhase phase = LlmPhase::Decode;
+  LlmKvLayout kv_layout = LlmKvLayout::Contiguous;
+  LlmWorkUnitKind work_unit_kind = LlmWorkUnitKind::DecodeStep;
+  std::optional<LlmDecodeGeometry> decode;
+  std::optional<LlmPrefillGeometry> prefill;
   LlmAttentionKind attention_kind = LlmAttentionKind::Mha;
-  size_t active_weight_bytes_per_step = 0;
+  size_t active_weight_bytes_per_work_unit = 0;
   size_t layer_count = 0;
   size_t query_head_count = 0;
   size_t kv_head_count = 0;
   size_t query_heads_per_kv_head = 0;
   size_t head_dimension = 0;
   size_t kv_element_bytes = 0;
-  size_t visible_context_tokens = 0;
   size_t batch_size = 0;
   size_t kv_vector_bytes = 0;
   size_t k_or_v_record_bytes_per_layer = 0;
@@ -209,11 +240,11 @@ struct LlmGeometry {
   size_t k_mapping_bytes = 0;
   size_t v_mapping_bytes = 0;
   size_t kv_capacity_bytes = 0;
-  size_t weight_read_bytes_per_step = 0;
-  size_t kv_read_bytes_per_step = 0;
-  size_t kv_append_write_bytes_per_step = 0;
-  size_t kv_only_effective_payload_bytes_per_step = 0;
-  size_t mixed_effective_payload_bytes_per_step = 0;
+  size_t weight_read_bytes_per_work_unit = 0;
+  size_t kv_read_bytes_per_work_unit = 0;
+  size_t kv_write_bytes_per_work_unit = 0;
+  size_t kv_only_effective_model_payload_bytes_per_work_unit = 0;
+  size_t mixed_effective_model_payload_bytes_per_work_unit = 0;
   size_t total_data_mapping_bytes = 0;
   size_t traffic_crossover_numerator = 0;
   size_t traffic_crossover_denominator = 0;
@@ -295,6 +326,7 @@ struct LlmWorkerWorkPlan {
  */
 struct LlmMemoryWorkPlanRequest {
   LlmGeometryRequest geometry;
+  LlmMemoryBackend backend = LlmMemoryBackend::Cpu;
   size_t requested_workers = 0;
   size_t available_workers = 0;
   size_t available_memory_bytes = 0;
@@ -302,6 +334,23 @@ struct LlmMemoryWorkPlanRequest {
   size_t checksum_auxiliary_bytes = 0;
   size_t orchestration_auxiliary_bytes = 0;
   uint64_t base_seed = 0;
+};
+
+/** Versioned methodology components with explicit applicability. */
+struct LlmComponentIdentities {
+  std::string logical_profile_version;
+  std::string kv_layout_version;
+  std::optional<std::string> permutation_version;
+  std::string backend_executor_version;
+  std::string resource_abi_version;
+  std::string schedule_version;
+  std::string timer_policy_version;
+  std::string buffer_pattern_version;
+  std::string write_pattern_version;
+  std::string checksum_pattern_version;
+  std::optional<std::string> msl_revision;
+  std::optional<std::string> msl_source_sha256;
+  std::string identity;
 };
 
 /**
@@ -339,31 +388,35 @@ struct LlmMemoryWorkPlan {
   LlmMemoryBudget memory_budget;
   std::vector<LlmByteRange> weight_layers;
   std::vector<LlmWorkerWorkPlan> workers;
-  std::string descriptor_abi_version;
-  std::string backend;
-  std::string phase;
-  size_t weight_passes_per_step = Constants::LLM_WEIGHT_PASSES_PER_STEP;
+  LlmMemoryBackend backend = LlmMemoryBackend::Cpu;
+  LlmPhase phase = LlmPhase::Decode;
+  LlmKvLayout kv_layout = LlmKvLayout::Contiguous;
+  LlmWorkUnitKind work_unit_kind = LlmWorkUnitKind::DecodeStep;
+  size_t weight_passes_per_work_unit = Constants::LLM_WEIGHT_PASSES_PER_WORK_UNIT;
   size_t kv_replay_factor = Constants::LLM_KV_REPLAY_FACTOR;
-  std::string buffer_pattern_version;
   std::string methodology_version;
-  std::string worker_schedule;
-  std::string kv_layout;
+  LlmComponentIdentities component_identities;
   std::string plan_identity;
 };
 
-/** Per-scenario payload and effective step ceiling. */
+/** Per-scenario payload, layout metadata, and effective work-unit ceiling. */
 struct LlmScenarioLimits {
   bool valid = false;
   std::string reason_code = LlmWorkPlanReason::INVALID_SCENARIO;
   LlmScenario scenario = LlmScenario::WeightsOnly;
-  size_t weight_read_bytes_per_step = 0;
-  size_t kv_read_bytes_per_step = 0;
-  size_t kv_append_write_bytes_per_step = 0;
-  size_t effective_payload_bytes_per_step = 0;
-  size_t maximum_steps_by_step_cap =
-      Constants::LLM_MAX_STEPS_PER_MEASUREMENT;
-  size_t maximum_steps_by_payload_cap = 0;
-  size_t effective_maximum_steps = 0;
+  LlmWorkUnitKind work_unit_kind = LlmWorkUnitKind::DecodeStep;
+  LlmKvWriteKind kv_write_kind = LlmKvWriteKind::None;
+  size_t weight_read_bytes_per_work_unit = 0;
+  size_t kv_read_bytes_per_work_unit = 0;
+  size_t kv_write_bytes_per_work_unit = 0;
+  size_t effective_model_payload_bytes_per_work_unit = 0;
+  size_t layout_metadata_lookup_count_per_work_unit = 0;
+  size_t layout_metadata_read_bytes_per_work_unit = 0;
+  size_t accounted_bytes_per_work_unit = 0;
+  size_t maximum_work_units_by_work_unit_cap =
+      Constants::LLM_MAX_WORK_UNITS_PER_MEASUREMENT;
+  size_t maximum_work_units_by_guardrail = 0;
+  size_t effective_maximum_work_units = 0;
 };
 
 /** Fully resolved exact work for one excluded or measured scenario task. */
@@ -371,28 +424,36 @@ struct LlmScenarioWorkPlan {
   bool valid = false;
   std::string reason_code = LlmWorkPlanReason::INVALID_SCENARIO;
   LlmScenario scenario = LlmScenario::WeightsOnly;
+  LlmWorkUnitKind work_unit_kind = LlmWorkUnitKind::DecodeStep;
+  LlmKvWriteKind kv_write_kind = LlmKvWriteKind::None;
   bool explicit_iterations = false;
   std::string model_plan_identity;
   uint64_t scenario_seed = 0;
-  size_t steps = 0;
-  size_t weight_read_bytes_per_step = 0;
-  size_t kv_read_bytes_per_step = 0;
-  size_t kv_append_write_bytes_per_step = 0;
-  size_t effective_payload_bytes_per_step = 0;
+  size_t work_units = 0;
+  size_t weight_read_bytes_per_work_unit = 0;
+  size_t kv_read_bytes_per_work_unit = 0;
+  size_t kv_write_bytes_per_work_unit = 0;
+  size_t effective_model_payload_bytes_per_work_unit = 0;
+  size_t layout_metadata_lookup_count_per_work_unit = 0;
+  size_t layout_metadata_read_bytes_per_work_unit = 0;
+  size_t accounted_bytes_per_work_unit = 0;
   size_t weight_read_bytes = 0;
   size_t kv_read_bytes = 0;
-  size_t kv_append_write_bytes = 0;
-  size_t effective_payload_bytes = 0;
-  size_t maximum_steps_by_step_cap = 0;
-  size_t maximum_steps_by_payload_cap = 0;
-  size_t effective_maximum_steps = 0;
+  size_t kv_write_bytes = 0;
+  size_t effective_model_payload_bytes = 0;
+  size_t layout_metadata_lookup_count = 0;
+  size_t layout_metadata_read_bytes = 0;
+  size_t task_accounted_bytes = 0;
+  size_t maximum_work_units_by_work_unit_cap = 0;
+  size_t maximum_work_units_by_guardrail = 0;
+  size_t effective_maximum_work_units = 0;
   std::string plan_identity;
 };
 
 /** Three scenario plans frozen together before loop zero. */
 struct LlmFrozenScenarioPlans {
   bool valid = false;
-  std::string reason_code = LlmWorkPlanReason::STEP_COUNT_ZERO;
+  std::string reason_code = LlmWorkPlanReason::WORK_UNIT_COUNT_ZERO;
   bool explicit_iterations = false;
   std::string model_plan_identity;
   std::array<LlmScenarioWorkPlan, kLlmScenarioCount> scenarios;
@@ -436,6 +497,15 @@ LlmMemoryWorkPlan build_llm_memory_work_plan(
     size_t available_memory_bytes, size_t mapping_granularity_bytes,
     size_t checksum_auxiliary_bytes, size_t orchestration_auxiliary_bytes);
 
+/** Build `llm-memory-v1-<backend>-<phase>-<layout>`. */
+std::string build_llm_methodology_version(LlmMemoryBackend backend,
+                                          LlmPhase phase,
+                                          LlmKvLayout layout);
+
+/** Serialize methodology components in the schema-v1 fixed field order. */
+std::string serialize_llm_component_identities(
+    const LlmComponentIdentities& components);
+
 /** Return the frozen 64-bit constant for a seed domain, or zero. */
 uint64_t llm_seed_domain_value(LlmSeedDomain domain);
 
@@ -447,7 +517,7 @@ uint64_t llm_seed_domain_value(LlmSeedDomain domain);
  */
 uint64_t derive_llm_domain_seed(uint64_t base_seed, LlmSeedDomain domain);
 
-/** Calculate the exact payload and hard ceilings for one scenario. */
+/** Calculate exact model payload, accounted bytes, and hard ceilings for one scenario. */
 LlmScenarioLimits calculate_llm_scenario_limits(
     const LlmGeometry& geometry, LlmScenario scenario);
 
@@ -457,7 +527,7 @@ LlmScenarioLimits calculate_llm_scenario_limits(
  * model plan; no mappings or worker state are touched.
  */
 LlmScenarioWorkPlan build_llm_scenario_work_plan(
-    const LlmMemoryWorkPlan& model_plan, LlmScenario scenario, size_t steps,
+    const LlmMemoryWorkPlan& model_plan, LlmScenario scenario, size_t work_units,
     bool explicit_iterations);
 
 /**
@@ -468,23 +538,23 @@ LlmScenarioWorkPlan build_llm_scenario_work_plan(
  */
 LlmFrozenScenarioPlans freeze_llm_scenario_work_plans(
     const LlmMemoryWorkPlan& model_plan,
-    const std::array<size_t, kLlmScenarioCount>& steps,
+    const std::array<size_t, kLlmScenarioCount>& work_units,
     bool explicit_iterations);
 
 /** Select the smallest 8 MiB-floor pilot count within scenario guardrails. */
-size_t calculate_llm_pilot_steps(const LlmScenarioLimits& limits);
+size_t calculate_llm_pilot_work_units(const LlmScenarioLimits& limits);
 
 /** Scale an excluded attempt toward 150 ms within scenario guardrails. */
-size_t calculate_llm_calibrated_steps(double attempt_duration_seconds,
-                                      size_t attempt_steps,
-                                      const LlmScenarioLimits& limits);
+size_t calculate_llm_calibrated_work_units(double attempt_duration_seconds,
+                                           size_t attempt_work_units,
+                                           const LlmScenarioLimits& limits);
 
 /** Return true for a finite duration in the inclusive 100-250 ms window. */
 bool llm_duration_in_target_window(double elapsed_seconds);
 
 /** Return a static duration-quality token without mutating a frozen task plan. */
 std::string_view classify_llm_duration_quality(
-    double elapsed_seconds, size_t steps,
+    double elapsed_seconds, size_t work_units,
     const LlmScenarioLimits& limits) noexcept;
 
 /** Build one weights/KV/mixed cyclic rotation for a count-loop index. */

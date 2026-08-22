@@ -46,7 +46,8 @@ A direct GPU command uses the same stream transport with its existing top-level 
 memory_benchmark --gpu-bandwidth --buffer-size 512 --count 3 --seed 42 --output -
 ```
 
-A direct LLM command likewise emits its top-level CPU schema 1 payload:
+A direct LLM command likewise emits its top-level schema 1 payload. In this revision the only active profile is
+CPU/decode/contiguous:
 
 ```bash
 memory_benchmark --llm-memory --weight-size-mb 64 --layers 4 \
@@ -132,7 +133,7 @@ contract version 1 first appears in software version `0.62.0`.
 | TLB | `configuration.schema_version == 4` | `tlb_analysis.status == "complete" && tlb_analysis.conclusions_valid == true` |
 | Core-to-core | `configuration.schema_version == 2` | `core_to_core_latency.status == "complete" && core_to_core_latency.measurements_complete == true` |
 | GPU | `schema_version == 1` | `status == "complete" && results_complete == true && conclusions_valid == true` |
-| LLM CPU profile | `mode == "llm_memory" && schema_version == 1` | `status == "complete" && results_complete == true && conclusions_valid == true` |
+| LLM memory profile | `mode == "llm_memory" && schema_version == 1` | Requested backend/phase/layout match, methodology is the exact derived identity, `status == "complete"`, `results_complete == true`, `conclusions_valid == true`, and every planned measurement is `measured` |
 | General CPU sweep | `configuration.sweep_schema_version == 1` | `status == "complete" && conclusions_valid == true` |
 | Core-to-core sweep | `configuration.sweep_schema_version == 1` | `status == "complete" && conclusions_valid == true` |
 
@@ -158,14 +159,19 @@ conclusions additionally require `affinity_hint_comparison_interpretable == true
 additionally requires `operation_order_balance_complete == true`; consumers of an operation also require a measured,
 non-null value and its applicable validation/quality fields.
 
-LLM schema 1 has top-level `mode: "llm_memory"`, `schema_version: 1`, `backend: "cpu"`, and methodology
-`llm-memory-v1-cpu-fixed-context-warm-layer-interleaved`. Its run statuses are `not_started`, `complete`, `partial`,
-`interrupted`, and `failed`; measurement statuses are `not_run`, `measured`, `interrupted`, `invalid`, and `failed`.
-Multiword status tokens use underscores, while multiword stable reason codes and duration-quality tokens use hyphens.
-Only a `measured` record with accepted checksum evidence has non-null elapsed/rate values and contributes to the
-matching `scenario_aggregates` entry. Unavailable metrics and unavailable checksum validity are JSON null, never
-numeric zero. Byte counts, seeds, and checksum integers are canonical decimal strings; ordinary small counts remain
-JSON numbers.
+LLM schema 1 is an unpublished generic contract. It has top-level `mode: "llm_memory"`, `schema_version: 1`, and exact
+`backend`, `phase`, `kv_layout`, and `methodology_version` selectors. Methodology is derived as
+`llm-memory-v1-<backend>-<phase>-<layout>`; the only selectable profile in this revision is
+`cpu`/`decode`/`contiguous`, whose exact methodology is `llm-memory-v1-cpu-decode-contiguous`. The schema vocabulary
+also reserves `metal`, `prefill`, and `paged`, but those profiles have no public CLI selectors or runtime activation
+yet. They must not be inferred from the presence of reserved fields.
+
+Run statuses are `not_started`, `complete`, `partial`, `interrupted`, `unsupported`, and `failed`; measurement statuses
+are `not_run`, `measured`, `interrupted`, `invalid`, and `failed`. `unsupported` is a terminal, non-acceptable result,
+not permission to substitute CPU execution. Multiword status tokens use underscores, while multiword stable reason
+codes and duration-quality tokens use hyphens. Only a `measured` record with accepted checksum evidence has non-null
+elapsed/rate values and contributes to the matching aggregate. Unavailable metrics and unavailable checksum validity
+are JSON null, never numeric zero.
 
 If a measurement or excluded runner task never receives executor evidence because the executor throws, its nested
 `execution.status` is `unavailable`, its reason remains the applicable runner-exception token, and unavailable worker
@@ -173,28 +179,66 @@ lifecycle, QoS, elapsed-time, and checksum fields are null. For a `not_run` meas
 `qos_successful_workers` and `qos_failed_workers` are also null. These are absence-of-evidence states, not zero-worker or
 successful-checksum observations.
 
-Its top-level field set is:
+The required generic top-level field set is:
 
 ```text
-software_version, timestamp, schema_version, mode, backend, methodology_version,
-status, reason_code, diagnostic, interruption_requested, results_complete,
-conclusions_valid, scenario_order_balance_complete, configuration, methodology,
-geometry, traffic_diagnostics, memory_budget, resources, seeds, model_work_plan,
-frozen_scenario_work_plans, excluded_calibration_attempts, counters,
-checkpoint_lifecycle, loop_records, measurements, scenario_aggregates,
-environment, quality_warnings, interpretation
+schema_version, mode, backend, phase, kv_layout, methodology_version,
+software, configuration, resolved_plan, backend_evidence, memory_budget,
+calibration, measurements, aggregates, status, reason_code,
+results_complete, conclusions_valid, interpretation
 ```
 
-The schema preserves exact argv and raw `configuration.output_file`, resolved configuration, methodology and geometry,
-traffic diagnostics, memory-budget and resource evidence, domain-separated seeds, model and frozen scenario work-plan
-identities, excluded calibration attempts, lifecycle counters/checkpoints, planned and realized loop order,
-status-bearing measurements, per-scenario aggregates, environment snapshots, warnings, and an interpretation block.
-Within `resources`, `json_output_peak_estimate` records `enabled`, `valid`, `reason_code`, policy
-`conservative-live-dom-plus-serialized-transport`, and canonical decimal-string `fixed_schema_bytes`,
-`input_string_bytes`, `measurement_record_bytes`, `worker_checksum_bytes`, and `total_bytes`. A non-empty file/stdout
-target reserves that conservative DOM-plus-serialization peak in the admitted orchestration auxiliary bytes;
-the estimator for an omitted/empty target is a valid disabled zero (`enabled: false` if serialized), while normal
-console-only execution emits no JSON.
+`configuration` preserves exact `argv`, the raw output target, requested/resolved inputs, and a `resolved_sources`
+object. Defaults remain evidence as `default`; they are not fabricated as explicit argv. The active profile resolves
+CPU/decode/contiguous from defaults because no backend, phase, or layout selector is public yet.
+
+`resolved_plan` owns immutable logical plan evidence:
+
+- `geometry.decode` is an object with integer `visible_context_tokens`; `geometry.prefill` is JSON null in the active
+  decode profile. Phase-specific fields are never overloaded across phases. The reserved prefill object has integer
+  `prompt_tokens`/`attention_query_tile_tokens` and decimal-string tile, prefix-visit, causal-pair, attention-pair, and
+  FMA-term counts.
+- `layout.kv_layout` is `contiguous`. Paged-only integer `kv_block_tokens`; decimal-string block, tail, table-entry, and
+  table-byte counts; permutation domain/algorithm/hash strings; and decimal-string permutation seed are null for the
+  active layout. Scenario-applicable contiguous lookup/read counts are decimal-string zero.
+- `resources` separates decimal-string `weight_logical_bytes`, `k_logical_bytes`, `v_logical_bytes`, physical K/V
+  lengths, K/V layout padding, and nullable block-table bytes.
+- `component_identities` records logical profile, KV layout, optional permutation, backend executor, resource ABI,
+  schedule, timer policy, buffer pattern, write pattern, checksum pattern, and nullable MSL revision/source SHA-256.
+  Their canonical aggregate identity uses fixed field order and length-prefixed values under
+  `llm-memory-components-v1`; CPU MSL fields and contiguous permutation fields are null.
+
+`backend_evidence` always contains both tagged branches. `cpu` is populated and `metal` is null for the active profile.
+`memory_budget` separates immutable resource geometry from allocation-time evidence and includes canonical
+decimal-string `resource_rounding_bytes`, `transient_peak_bytes`, `known_owned_peak_bytes`, and
+`admitted_budget_bytes`. `calibration` contains excluded work-resolution evidence; `aggregates` contains only accepted
+measured values. Additional diagnostic, interruption, checkpoint, loop-order, checksum, environment, warning, and
+resource-preparation evidence may be present without changing those ownership boundaries.
+
+Every measurement has stable generic work accounting:
+
+```text
+work_unit_kind, planned_work_units, completed_work_units,
+weight_read_bytes_per_work_unit, kv_read_bytes_per_work_unit,
+kv_write_bytes_per_work_unit, kv_write_kind,
+effective_model_payload_bytes_per_work_unit,
+layout_metadata_lookup_count_per_work_unit,
+layout_metadata_read_bytes_per_work_unit, accounted_bytes_per_work_unit,
+planned_effective_model_payload_bytes, completed_effective_model_payload_bytes,
+planned_layout_metadata_lookup_count, completed_layout_metadata_lookup_count,
+planned_layout_metadata_read_bytes, completed_layout_metadata_read_bytes,
+planned_task_accounted_bytes, completed_task_accounted_bytes,
+synthetic_work_unit_latency_seconds,
+synthetic_memory_work_units_per_second,
+effective_model_payload_gb_s
+```
+
+For the active decode profile, `work_unit_kind` is `decode_step`; `weights_only` uses `kv_write_kind: "none"`, while
+KV-bearing scenarios use `current_token_append`. `planned_work_units` and `completed_work_units` are integer numbers.
+All listed byte, lookup, metadata, and accounted quantities are canonical decimal strings, including applicable zero.
+The three derived metrics are finite numbers only for a successfully measured record and otherwise null. The effective
+model numerator contains versioned logical W/K/V reads and writes; timed layout metadata is reported separately and
+included in `accounted_bytes_per_work_unit`, not in `effective_model_payload_gb_s`.
 
 The traffic classification version is `llm-exact-weight-vs-kv-read-payload-v1`: it compares exact active-weight bytes
 with exact KV-read bytes only. `near_crossover` means equality, not a tolerance band and not an observed hardware
@@ -203,8 +247,9 @@ bottleneck.
 `results_complete` requires all planned scenario measurements to be terminal and measured. `conclusions_valid` also
 requires valid geometry/checksums, no checkpoint failure, and a complete cyclic position balance. A complete one-loop
 run is therefore inspectable with `results_complete: true` but has `conclusions_valid: false`. Consumers of comparative
-LLM conclusions must use the full table predicate and then check the selected scenario measurement or aggregate status,
-non-null value, and relevant quality/environment warnings.
+LLM conclusions must apply the exact selector/methodology predicate, require every planned measurement to be
+`measured`, and then check the selected scenario metric's non-null value plus relevant checksum, quality, and environment
+evidence.
 
 `quality_warnings` merges and deduplicates runner tokens `weights_only-high-cv`, `kv_only-high-cv`,
 `mixed-high-cv`, and `scenario-order-not-balanced` with final-report tokens `environment-not-nominal`,
@@ -304,19 +349,26 @@ jq -e '.schema_version == 1 and .mode == "gpu_bandwidth" and
        .conclusions_valid == true' gpu.json
 
 jq -e '.mode == "llm_memory" and .schema_version == 1 and
+       .backend == "cpu" and .phase == "decode" and
+       .kv_layout == "contiguous" and
+       .methodology_version == "llm-memory-v1-cpu-decode-contiguous" and
        .status == "complete" and .results_complete == true and
-       .conclusions_valid == true' llm_memory.json
+       .conclusions_valid == true and
+       ([.measurements[] | select(.status != "measured")] | length) == 0' llm_memory.json
 ```
 
 ## Compatibility policy
 
-- `version` and the GPU/LLM `software_version` fields identify the application release; none is a result schema version.
+- `version`, the GPU `software_version` field, and LLM `software` identity identify the application release; none is a
+  result schema version.
 - Current standard schema 3, pattern schema 3, TLB schema 4, core-to-core schema 2, GPU schema 1, and LLM schema 1 remain
   authoritative at their existing locations. The schema field is intentionally not normalized across these established
   payloads.
-- LLM schema-1 consumers must tolerate unknown additive evidence fields while continuing to validate every known field
-  they use. Removing or renaming a field, changing its type, or changing its established meaning requires a schema
-  version review/bump; `software_version` alone is not a compatibility substitute.
+- The prior LLM schema-1 producer shape was unpublished. This revision deliberately replaces its CPU/step-specific
+  vocabulary with the generic v1 contract without a compatibility reader, field alias, or schema bump. LLM schema-1
+  consumers must use the current generic fields, tolerate unknown additive evidence fields, and validate every known
+  field they consume. Future removal/rename/type/meaning changes require schema-version review; software identity alone
+  is not a compatibility substitute.
 - Bundled standard-memory examples track the current producer and read current standard schema-3 metric paths directly
   after local sanity checks. They provide no compatibility layer for released standard schema 2, unversioned
   historical standard JSON layouts, or any other explicit standard version.

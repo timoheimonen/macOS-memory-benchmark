@@ -274,18 +274,18 @@ Objective-C++ Metal backend so deterministic unit tests do not require GPU work.
 
 ### 2.6 src/llm_memory/ — Synthetic LLM decode-memory profile
 
-Standalone CPU schema-1 implementation. Pure planning and backend-independent orchestration are separated from mapping,
-ARM64 execution, environment capture, console composition, and serialization so deterministic unit tests can inject
-platform and executor seams without running hot kernels.
+Standalone generic schema-1 vocabulary with an active CPU/decode/contiguous implementation. Pure plan vocabulary and
+CPU orchestration are separated from mapping, ARM64 execution, environment capture, console composition, and
+serialization so deterministic unit tests can inject platform and executor seams without running hot kernels.
 
 | File | Purpose |
 |---|---|
 | `llm_memory.h` / `.cpp` | Separate config/status foundation, strict exact-whitelist parser, required/default worker/seed resolution, complete command boundary, memory admission/preparation, QoS/signal scope, console output, and file/stdout transport orchestration |
-| `llm_work_plan.h` / `.cpp` | Pure checked weight/KV geometry, payload/crossover math, memory-budget request, layer/sequence descriptor templates and ABI, worker ranges/reduction, seed domains, scenario limits/calibration/order, and frozen plan identities |
+| `llm_work_plan.h` / `.cpp` | Pure checked phase-applicable weight/KV geometry, model-payload/metadata/accounted math, memory-budget request, layer/sequence descriptor templates and ABI, worker ranges/reduction, seed domains, scenario limits/calibration/order, and frozen methodology/component/plan identities |
 | `llm_executor.h` / `.cpp` | Atomic full-size weight/K/V mappings, deterministic initialization/pre-touch, descriptor materialization, expected-checksum oracle, synchronized worker team, timer boundary, and ARM64 kernel adapter |
 | `llm_runner.h` / `.cpp` | Per-scenario automatic calibration or exact-work planning, frozen plans, cyclic loop order, status/counters, task-boundary interruption, aggregates, warnings, and logical checkpoints |
-| `llm_json.h` / `.cpp` | Ordered LLM schema-1 builder plus conservative output-peak estimator, with decimal-string exact integers, nullable unavailable observations, traffic diagnostics, environment evidence, and interpretation contract |
-| `llm_output.h` / `.cpp` | Human-readable exact-payload geometry, scenario headlines, interpretation limits, and evidence-backed quality warnings through centralized message helpers |
+| `llm_json.h` / `.cpp` | Ordered generic LLM schema-1 builder plus conservative output-peak estimator, with backend/phase/layout identity, resolved plan, tagged backend evidence, decimal-string exact integers, nullable non-applicability, traffic diagnostics, environment evidence, and interpretation contract |
+| `llm_output.h` / `.cpp` | Human-readable work-unit/model-payload/accounted geometry, scenario headlines, interpretation limits, and evidence-backed quality warnings through centralized message helpers |
 | `llm_environment.h` / `.mm` | Objective-C-free snapshot type plus macOS thermal-state and Low Power Mode capture through Foundation |
 
 ---

@@ -219,7 +219,7 @@ struct LlmKernelInvocation {
   const LlmLayerDescriptor* layers = nullptr;
   const LlmKvSequenceDescriptor* sequences = nullptr;
   uint64_t layer_count = 0;
-  uint64_t step_count = 0;
+  uint64_t work_unit_count = 0;
   uint64_t scenario_flags = 0;
   uint64_t scenario_seed = 0;
   LlmWorkerChecksum* output = nullptr;
@@ -293,7 +293,7 @@ struct LlmExecutorResult {
 
 /** Dedicated ARM64 implementation; @p output must be non-null. */
 extern "C" void llm_decode_memory_asm(const LlmLayerDescriptor* layers, const LlmKvSequenceDescriptor* sequences,
-                                      uint64_t layer_count, uint64_t step_count, uint64_t scenario_flags,
+                                      uint64_t layer_count, uint64_t work_unit_count, uint64_t scenario_flags,
                                       uint64_t scenario_seed, LlmWorkerChecksum* output) noexcept;
 
 /** Return the frozen assembly flag for a valid scenario, or zero. */
@@ -303,7 +303,7 @@ uint64_t llm_scenario_flags(LlmScenario scenario) noexcept;
 uint64_t llm_buffer_pattern_word(uint64_t buffer_domain_seed, uint64_t absolute_mapping_word_index) noexcept;
 
 /** Return one frozen affine K/V append word. */
-uint64_t llm_append_word(uint64_t scenario_seed, uint64_t task_local_step, uint64_t layer_index,
+uint64_t llm_append_word(uint64_t scenario_seed, uint64_t task_local_work_unit, uint64_t layer_index,
                          uint64_t batch_sequence_index, uint64_t record_word_index,
                          LlmChecksumComponent component) noexcept;
 

@@ -106,13 +106,18 @@ struct LlmTaskExecutionEvidence {
 /** One excluded warmup, pilot, duration trial, or correction record. */
 struct LlmCalibrationAttempt {
   LlmScenario scenario = LlmScenario::WeightsOnly;
+  LlmWorkUnitKind work_unit_kind = LlmWorkUnitKind::DecodeStep;
+  LlmKvWriteKind kv_write_kind = LlmKvWriteKind::None;
   std::string_view purpose = "not-run";
   bool explicit_iterations = false;
-  size_t steps = 0;
+  size_t work_units = 0;
   size_t weight_read_bytes = 0;
   size_t kv_read_bytes = 0;
-  size_t kv_append_write_bytes = 0;
-  size_t effective_payload_bytes = 0;
+  size_t kv_write_bytes = 0;
+  size_t effective_model_payload_bytes = 0;
+  size_t layout_metadata_lookup_count = 0;
+  size_t layout_metadata_read_bytes = 0;
+  size_t task_accounted_bytes = 0;
   std::string work_plan_identity;
   LlmTaskExecutionEvidence execution;
   std::string_view duration_quality = "not-run";
@@ -131,6 +136,8 @@ struct LlmMetricAggregate {
 /** Status-bearing record for one planned scenario measurement. */
 struct LlmMeasurementState {
   LlmScenario scenario = LlmScenario::WeightsOnly;
+  LlmWorkUnitKind work_unit_kind = LlmWorkUnitKind::DecodeStep;
+  LlmKvWriteKind kv_write_kind = LlmKvWriteKind::None;
   LlmMeasurementStatus status = LlmMeasurementStatus::NotRun;
   std::string_view reason_code = "not-run";
   size_t loop_index = 0;
@@ -145,21 +152,30 @@ struct LlmMeasurementState {
   bool explicit_iterations = false;
   std::string_view duration_quality = "not-run";
   size_t calibration_attempt_count = 0;
-  size_t planned_steps = 0;
-  size_t completed_steps = 0;
-  size_t weight_read_bytes_per_step = 0;
-  size_t kv_read_bytes_per_step = 0;
-  size_t kv_append_write_bytes_per_step = 0;
-  size_t effective_payload_bytes_per_step = 0;
+  size_t planned_work_units = 0;
+  size_t completed_work_units = 0;
+  size_t weight_read_bytes_per_work_unit = 0;
+  size_t kv_read_bytes_per_work_unit = 0;
+  size_t kv_write_bytes_per_work_unit = 0;
+  size_t effective_model_payload_bytes_per_work_unit = 0;
+  size_t layout_metadata_lookup_count_per_work_unit = 0;
+  size_t layout_metadata_read_bytes_per_work_unit = 0;
+  size_t accounted_bytes_per_work_unit = 0;
   size_t planned_weight_read_bytes = 0;
   size_t planned_kv_read_bytes = 0;
-  size_t planned_kv_append_write_bytes = 0;
-  size_t planned_exact_payload_bytes = 0;
-  size_t completed_exact_payload_bytes = 0;
+  size_t planned_kv_write_bytes = 0;
+  size_t planned_effective_model_payload_bytes = 0;
+  size_t completed_effective_model_payload_bytes = 0;
+  size_t planned_layout_metadata_lookup_count = 0;
+  size_t completed_layout_metadata_lookup_count = 0;
+  size_t planned_layout_metadata_read_bytes = 0;
+  size_t completed_layout_metadata_read_bytes = 0;
+  size_t planned_task_accounted_bytes = 0;
+  size_t completed_task_accounted_bytes = 0;
   std::optional<double> elapsed_seconds;
-  std::optional<double> synthetic_step_latency_seconds;
-  std::optional<double> synthetic_memory_steps_per_second;
-  std::optional<double> effective_payload_gb_s;
+  std::optional<double> synthetic_work_unit_latency_seconds;
+  std::optional<double> synthetic_memory_work_units_per_second;
+  std::optional<double> effective_model_payload_gb_s;
   std::optional<double> weight_payload_fraction;
   std::optional<double> kv_read_payload_fraction;
   std::optional<double> kv_write_payload_fraction;
@@ -180,9 +196,9 @@ struct LlmLoopRecord {
 /** Measured-only distributions and repeatability classification per scenario. */
 struct LlmScenarioAggregate {
   LlmScenario scenario = LlmScenario::WeightsOnly;
-  LlmMetricAggregate step_latency_seconds;
-  LlmMetricAggregate synthetic_memory_steps_per_second;
-  LlmMetricAggregate effective_payload_gb_s;
+  LlmMetricAggregate work_unit_latency_seconds;
+  LlmMetricAggregate synthetic_memory_work_units_per_second;
+  LlmMetricAggregate effective_model_payload_gb_s;
   std::string_view status = "unavailable";
   std::string_view stability_quality = "insufficient-samples";
 };
@@ -202,10 +218,16 @@ struct LlmRunCounters {
   size_t attempted_measurements = 0;
   size_t terminal_measurements = 0;
   size_t measured_measurements = 0;
-  size_t planned_synthetic_steps = 0;
-  size_t completed_synthetic_steps = 0;
-  size_t planned_exact_payload_bytes = 0;
-  size_t completed_exact_payload_bytes = 0;
+  size_t planned_work_units = 0;
+  size_t completed_work_units = 0;
+  size_t planned_effective_model_payload_bytes = 0;
+  size_t completed_effective_model_payload_bytes = 0;
+  size_t planned_layout_metadata_lookup_count = 0;
+  size_t completed_layout_metadata_lookup_count = 0;
+  size_t planned_layout_metadata_read_bytes = 0;
+  size_t completed_layout_metadata_read_bytes = 0;
+  size_t planned_task_accounted_bytes = 0;
+  size_t completed_task_accounted_bytes = 0;
 };
 
 /**

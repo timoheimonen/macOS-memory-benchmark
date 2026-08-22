@@ -125,6 +125,9 @@ void replace_option_value(std::vector<std::string>& arguments,
 
 TEST(LlmMemoryConfigTest, DefaultsMatchFrozenStandaloneContract) {
   const LlmMemoryConfig config;
+  EXPECT_EQ(config.backend, LlmMemoryBackend::Cpu);
+  EXPECT_EQ(config.phase, LlmPhase::Decode);
+  EXPECT_EQ(config.kv_layout, LlmKvLayout::Contiguous);
   EXPECT_EQ(config.weight_size_mb, 0u);
   EXPECT_EQ(config.layer_count, 0u);
   EXPECT_EQ(config.query_head_count, 0u);
@@ -593,7 +596,55 @@ TEST(LlmMemoryConfigTest, ParserRequiresTheOwningPrimaryMode) {
                 Messages::error_llm_memory_must_be_used_alone());
 }
 
-TEST(LlmMemoryConfigTest, StableScenarioAttentionAndStatusTokens) {
+TEST(LlmMemoryConfigTest, StableVocabularyAndStatusTokens) {
+  EXPECT_STREQ(llm_memory_backend_to_string(LlmMemoryBackend::Cpu), "cpu");
+  EXPECT_STREQ(llm_memory_backend_to_string(LlmMemoryBackend::Metal),
+               "metal");
+  EXPECT_STREQ(llm_memory_backend_to_string(
+                   static_cast<LlmMemoryBackend>(99)),
+               "unknown");
+
+  EXPECT_STREQ(llm_phase_to_string(LlmPhase::Decode), "decode");
+  EXPECT_STREQ(llm_phase_to_string(LlmPhase::Prefill), "prefill");
+  EXPECT_STREQ(llm_phase_to_string(static_cast<LlmPhase>(99)), "unknown");
+
+  EXPECT_STREQ(llm_kv_layout_to_string(LlmKvLayout::Contiguous),
+               "contiguous");
+  EXPECT_STREQ(llm_kv_layout_to_string(LlmKvLayout::Paged), "paged");
+  EXPECT_STREQ(llm_kv_layout_to_string(static_cast<LlmKvLayout>(99)),
+               "unknown");
+
+  EXPECT_EQ(llm_work_unit_kind_for_phase(LlmPhase::Decode),
+            LlmWorkUnitKind::DecodeStep);
+  EXPECT_EQ(llm_work_unit_kind_for_phase(LlmPhase::Prefill),
+            LlmWorkUnitKind::PrefillOperation);
+  EXPECT_STREQ(llm_work_unit_kind_to_string(LlmWorkUnitKind::DecodeStep),
+               "decode_step");
+  EXPECT_STREQ(
+      llm_work_unit_kind_to_string(LlmWorkUnitKind::PrefillOperation),
+      "prefill_operation");
+  EXPECT_STREQ(llm_work_unit_kind_to_string(
+                   static_cast<LlmWorkUnitKind>(99)),
+               "unknown");
+
+  EXPECT_EQ(llm_kv_write_kind_for(LlmPhase::Decode,
+                                  LlmScenario::WeightsOnly),
+            LlmKvWriteKind::None);
+  EXPECT_EQ(llm_kv_write_kind_for(LlmPhase::Decode, LlmScenario::KvOnly),
+            LlmKvWriteKind::CurrentTokenAppend);
+  EXPECT_EQ(llm_kv_write_kind_for(LlmPhase::Prefill, LlmScenario::Mixed),
+            LlmKvWriteKind::FullPromptPopulation);
+  EXPECT_STREQ(llm_kv_write_kind_to_string(LlmKvWriteKind::None), "none");
+  EXPECT_STREQ(
+      llm_kv_write_kind_to_string(LlmKvWriteKind::CurrentTokenAppend),
+      "current_token_append");
+  EXPECT_STREQ(
+      llm_kv_write_kind_to_string(LlmKvWriteKind::FullPromptPopulation),
+      "full_prompt_population");
+  EXPECT_STREQ(llm_kv_write_kind_to_string(
+                   static_cast<LlmKvWriteKind>(99)),
+               "unknown");
+
   EXPECT_STREQ(llm_scenario_to_string(LlmScenario::WeightsOnly),
                "weights_only");
   EXPECT_STREQ(llm_scenario_to_string(LlmScenario::KvOnly), "kv_only");
@@ -633,6 +684,8 @@ TEST(LlmMemoryConfigTest, StableScenarioAttentionAndStatusTokens) {
   EXPECT_STREQ(llm_run_status_to_string(LlmRunStatus::Partial), "partial");
   EXPECT_STREQ(llm_run_status_to_string(LlmRunStatus::Interrupted),
                "interrupted");
+  EXPECT_STREQ(llm_run_status_to_string(LlmRunStatus::Unsupported),
+               "unsupported");
   EXPECT_STREQ(llm_run_status_to_string(LlmRunStatus::Failed), "failed");
   EXPECT_STREQ(llm_run_status_to_string(static_cast<LlmRunStatus>(99)),
                "failed");
@@ -728,14 +781,52 @@ TEST(LlmMemoryConfigTest, ConvertsWeightMiBWithCheckedArithmetic) {
   expect_invalid(config, LlmMemoryConfigReason::WEIGHT_SIZE_BYTES_OVERFLOW);
 }
 
+TEST(LlmMemoryConfigTest,
+     RejectsJsonIntegerFieldsOutsideTheExactIeee754Range) {
+  static_assert(Constants::LLM_JSON_MAX_SAFE_INTEGER <
+                std::numeric_limits<size_t>::max());
+  constexpr size_t kUnsafeInteger =
+      Constants::LLM_JSON_MAX_SAFE_INTEGER + 1;
+  constexpr std::array<size_t LlmMemoryConfig::*, 9> kFields = {
+      &LlmMemoryConfig::weight_size_mb,
+      &LlmMemoryConfig::layer_count,
+      &LlmMemoryConfig::query_head_count,
+      &LlmMemoryConfig::kv_head_count,
+      &LlmMemoryConfig::head_dimension,
+      &LlmMemoryConfig::visible_context_tokens,
+      &LlmMemoryConfig::batch_size,
+      &LlmMemoryConfig::requested_workers,
+      &LlmMemoryConfig::available_workers,
+  };
+
+  for (size_t LlmMemoryConfig::*field : kFields) {
+    LlmMemoryConfig config = valid_config();
+    config.*field = kUnsafeInteger;
+    expect_invalid(config,
+                   LlmMemoryConfigReason::JSON_INTEGER_OUT_OF_RANGE);
+  }
+
+  LlmMemoryConfig config = valid_config();
+  config.user_specified_iterations = true;
+  config.iterations = kUnsafeInteger;
+  expect_invalid(config, LlmMemoryConfigReason::JSON_INTEGER_OUT_OF_RANGE);
+
+  config = valid_config();
+  config.loop_count =
+      Constants::LLM_JSON_MAX_SAFE_INTEGER / kLlmScenarioCount;
+  EXPECT_TRUE(validate_llm_memory_config(config).valid);
+  ++config.loop_count;
+  expect_invalid(config, LlmMemoryConfigReason::JSON_INTEGER_OUT_OF_RANGE);
+}
+
 TEST(LlmMemoryConfigTest, ResultFoundationKeepsUnavailableValuesAbsent) {
   const LlmMeasurementState measurement;
   EXPECT_EQ(measurement.status, LlmMeasurementStatus::NotRun);
   EXPECT_EQ(measurement.reason_code, "not-run");
-  EXPECT_EQ(measurement.planned_steps, 0u);
-  EXPECT_EQ(measurement.completed_steps, 0u);
+  EXPECT_EQ(measurement.planned_work_units, 0u);
+  EXPECT_EQ(measurement.completed_work_units, 0u);
   EXPECT_FALSE(measurement.elapsed_seconds.has_value());
-  EXPECT_FALSE(measurement.effective_payload_gb_s.has_value());
+  EXPECT_FALSE(measurement.effective_model_payload_gb_s.has_value());
   EXPECT_FALSE(measurement.checksum_valid);
 
   const LlmMemoryResult result;
@@ -747,5 +838,5 @@ TEST(LlmMemoryConfigTest, ResultFoundationKeepsUnavailableValuesAbsent) {
   EXPECT_FALSE(result.scenario_order_balance_complete);
   EXPECT_TRUE(result.measurements.empty());
   EXPECT_EQ(result.counters.planned_measurements, 0u);
-  EXPECT_EQ(result.counters.completed_exact_payload_bytes, 0u);
+  EXPECT_EQ(result.counters.completed_effective_model_payload_bytes, 0u);
 }

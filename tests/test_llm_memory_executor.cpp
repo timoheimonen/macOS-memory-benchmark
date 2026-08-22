@@ -137,7 +137,7 @@ std::vector<LlmWorkerChecksum> scalar_expected(const LlmMemoryWorkPlan& model, c
     expected[worker].v = initial_llm_read_checksum(LlmChecksumComponent::V);
     const LlmLayerDescriptor* layers = resources.worker_layers(worker);
     const LlmKvSequenceDescriptor* sequences = resources.worker_sequences(worker);
-    for (size_t step = 0; step < scenario.steps; ++step) {
+    for (size_t step = 0; step < scenario.work_units; ++step) {
       for (size_t layer = 0; layer < model.geometry.layer_count; ++layer) {
         const LlmLayerDescriptor& layer_descriptor = layers[layer];
         if ((llm_scenario_flags(scenario.scenario) & kLlmScenarioFlagWeight) != 0) {
@@ -519,7 +519,7 @@ TEST_F(LlmMemoryExecutorTest, FakeKernelExecutorHonorsInvocationTimingQosAndChec
     EXPECT_EQ(invocation.layers, resources.worker_layers(invocation.worker_index));
     EXPECT_EQ(invocation.sequences, resources.worker_sequences(invocation.worker_index));
     EXPECT_EQ(invocation.layer_count, plan.geometry.layer_count);
-    EXPECT_EQ(invocation.step_count, scenario.steps);
+    EXPECT_EQ(invocation.work_unit_count, scenario.work_units);
     EXPECT_EQ(invocation.scenario_flags, 3u);
     EXPECT_EQ(invocation.scenario_seed, scenario.scenario_seed);
   }

@@ -11,7 +11,7 @@ Working version `0.63.0`
 | `-T` | `--analyze-tlb` | — | Run standalone TLB analysis |
 | `-C` | `--analyze-core2core` | — | Run standalone two-thread acquire/release token-protocol handoff analysis |
 | `-G` | `--gpu-bandwidth` | — | Run standalone Metal GPU memory bandwidth |
-| `-M` | `--llm-memory` | — | Run the standalone fixed-context synthetic CPU LLM decode-memory profile |
+| `-M` | `--llm-memory` | — | Run the standalone LLM memory profile; the active profile is CPU/decode/contiguous |
 | — | `--weight-size-mb` | `<MiB>` | Required positive active weight size for LLM-memory mode |
 | — | `--layers` | `<count>` | Required positive LLM layer count |
 | — | `--query-heads` | `<count>` | Required positive query-head count; at least the KV-head count and divisible by it |
@@ -20,7 +20,7 @@ Working version `0.63.0`
 | — | `--kv-element-bytes` | `1\|2\|4` | LLM KV element width; default `2` |
 | — | `--context-tokens` | `<count>` | Required positive fixed visible context including the current synthetic token |
 | — | `--batch-size` | `<count>` | Positive LLM batch-sequence count; default `1` |
-| `-i` | `--iterations` | `<count>` | Positive exact R/W/Copy pass count or LLM scenario-step count; CPU standard maximum is `INT_MAX`, while GPU and LLM apply work-dependent ceilings. Omission enables automatic calibration in the applicable mode |
+| `-i` | `--iterations` | `<count>` | Positive exact R/W/Copy pass count or LLM scenario work-unit count; CPU standard maximum is `INT_MAX`, while GPU and LLM apply work-dependent ceilings. Omission enables automatic calibration in the applicable mode |
 | `-b` | `--buffer-size` | `<MB>` | Default `512` MB. Standard mode permits `0` only with `--only-latency`; pattern mode requires a positive value; GPU minimum is `64` MB |
 | `-r` | `--count` | `<count>` | Positive loop count; default `1` for benchmark/pattern modes and `3` for core-to-core/GPU/LLM modes |
 | — | `--seed` | `<uint64>` | Unsigned 64-bit reproducibility seed for benchmark, pattern, TLB, GPU, or LLM mode; generated once when omitted |
@@ -181,7 +181,7 @@ allocates full-size cacheable weight, K, and V mappings and runs the three schem
 | `--kv-element-bytes <1\|2\|4>` | ✅ | Default `2`; every other width is rejected |
 | `--batch-size <n>` | ✅ | Positive; default `1` |
 | `-t, --threads <n>` | ✅ | Positive requested workers; omission uses detected workers. The work plan records requested, available, and effective counts separately and reduces effective workers only when availability or executable span size requires it |
-| `-i, --iterations <n>` | ✅ | Positive exact steps per scenario; omission selects excluded per-scenario calibration toward 150 ms. Explicit values must fit the strictest one-billion-step/64 GiB exact-payload limit |
+| `-i, --iterations <n>` | ✅ | Positive exact work units per scenario; omission selects excluded per-scenario calibration toward 150 ms. Explicit values must fit the strictest one-billion-work-unit/64 GiB task-accounted-byte limit |
 | `-r, --count <n>` | ✅ | Positive cyclic loop count; default `3` |
 | `--seed <uint64>` | ✅ | Exact base seed including zero; a non-zero seed is generated once when omitted |
 | `-o, --output <target>` | ✅ | Empty disables JSON; exact `-` emits one final schema 1 document; `./-`, flag-shaped values, and every other non-empty non-sentinel value are atomic file targets. A non-empty target adds the conservative JSON output peak to memory admission |
@@ -190,8 +190,8 @@ allocates full-size cacheable weight, K, and V mappings and runs the three schem
 | Buffer/cache/latency/TLB/pattern/core-to-core/GPU modifiers | ❌ | Outside the standalone whitelist |
 | Any other primary mode | ❌ | Primary modes are mutually exclusive |
 
-The parser rejects checked weight/KV geometry that overflows or makes even one scenario step exceed the 64 GiB
-logical-payload ceiling. Before allocation, the planner separately admits page-rounded full-size weight/K/V mappings,
+The parser rejects checked weight/KV geometry that overflows or makes even one scenario work unit exceed the 64 GiB
+task-accounted-byte ceiling. Before allocation, the planner separately admits page-rounded full-size weight/K/V mappings,
 descriptors, retained planner storage, checksum storage, and orchestration storage against the current memory budget.
 
 ### Sweep Compatibility

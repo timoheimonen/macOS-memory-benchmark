@@ -124,7 +124,7 @@ bool validate_work_plan_layout(const LlmMemoryWorkPlan& plan) noexcept {
   if (!plan.valid || !plan.geometry.valid || !plan.memory_budget.valid || plan.effective_workers == 0 ||
       plan.geometry.layer_count == 0 || plan.geometry.batch_size == 0 || plan.geometry.k_mapping_bytes == 0 ||
       plan.geometry.v_mapping_bytes == 0 || plan.geometry.k_mapping_bytes != plan.geometry.v_mapping_bytes ||
-      !NumericUtils::checked_add(plan.geometry.active_weight_bytes_per_step, plan.geometry.k_mapping_bytes,
+      !NumericUtils::checked_add(plan.geometry.active_weight_bytes_per_work_unit, plan.geometry.k_mapping_bytes,
                                  weight_and_k_bytes) ||
       !NumericUtils::checked_add(weight_and_k_bytes, plan.geometry.v_mapping_bytes, expected_total_data_bytes) ||
       expected_total_data_bytes != plan.geometry.total_data_mapping_bytes ||
@@ -161,7 +161,7 @@ bool validate_work_plan_layout(const LlmMemoryWorkPlan& plan) noexcept {
     const LlmByteRange& layer_range = plan.weight_layers[layer];
     size_t layer_end = 0;
     if (layer_range.span_bytes == 0 || layer_range.offset_bytes != weight_mapping_cursor ||
-        !checked_range_end(layer_range, plan.geometry.active_weight_bytes_per_step, layer_end)) {
+        !checked_range_end(layer_range, plan.geometry.active_weight_bytes_per_work_unit, layer_end)) {
       return false;
     }
 
@@ -179,7 +179,7 @@ bool validate_work_plan_layout(const LlmMemoryWorkPlan& plan) noexcept {
         return false;
       }
       size_t worker_end = 0;
-      if (!checked_range_end(worker_layer.weight, plan.geometry.active_weight_bytes_per_step, worker_end)) {
+      if (!checked_range_end(worker_layer.weight, plan.geometry.active_weight_bytes_per_work_unit, worker_end)) {
         return false;
       }
       if (worker_layer.weight.span_bytes != 0) {
@@ -194,7 +194,7 @@ bool validate_work_plan_layout(const LlmMemoryWorkPlan& plan) noexcept {
     }
     weight_mapping_cursor = layer_end;
   }
-  if (weight_mapping_cursor != plan.geometry.active_weight_bytes_per_step) {
+  if (weight_mapping_cursor != plan.geometry.active_weight_bytes_per_work_unit) {
     return false;
   }
 
@@ -205,11 +205,13 @@ bool validate_work_plan_layout(const LlmMemoryWorkPlan& plan) noexcept {
       size_t visible_end = 0;
       size_t append_token_offset = 0;
       size_t append_offset = 0;
-      if (!NumericUtils::checked_multiply(sequence_index, plan.geometry.k_or_v_sequence_visible_bytes,
+      if (!plan.geometry.decode.has_value() ||
+          !NumericUtils::checked_multiply(sequence_index, plan.geometry.k_or_v_sequence_visible_bytes,
                                           visible_offset) ||
           !NumericUtils::checked_add(visible_offset, plan.geometry.k_or_v_sequence_visible_bytes, visible_end) ||
           visible_end > plan.geometry.k_mapping_bytes ||
-          !NumericUtils::checked_multiply(plan.geometry.visible_context_tokens - 1,
+          !NumericUtils::checked_multiply(
+              plan.geometry.decode->visible_context_tokens - 1,
                                           plan.geometry.k_or_v_record_bytes_per_layer, append_token_offset) ||
           !NumericUtils::checked_add(visible_offset, append_token_offset, append_offset)) {
         return false;
@@ -425,7 +427,7 @@ bool initialize_resources(const LlmMemoryWorkPlan& plan, LlmExecutionResources& 
     for (size_t layer = 0; layer < plan.layer_descriptors_per_worker; ++layer) {
       LlmStaticSpanReference& reference = resources.weight_references[layer_base + layer];
       const LlmByteRange& range = worker.layers[layer].weight;
-      if (!initialize_span(weight, plan.geometry.active_weight_bytes_per_step, plan.weight_buffer_seed,
+      if (!initialize_span(weight, plan.geometry.active_weight_bytes_per_work_unit, plan.weight_buffer_seed,
                            range.offset_bytes, range.span_bytes, reference) ||
           !add_initialized_span(reference, evidence.weight_bytes, evidence.non_empty_weight_spans)) {
         return false;
@@ -446,7 +448,7 @@ bool initialize_resources(const LlmMemoryWorkPlan& plan, LlmExecutionResources& 
     }
   }
 
-  if (evidence.weight_bytes != plan.geometry.active_weight_bytes_per_step ||
+  if (evidence.weight_bytes != plan.geometry.active_weight_bytes_per_work_unit ||
       evidence.k_bytes != plan.geometry.k_mapping_bytes || evidence.v_bytes != plan.geometry.v_mapping_bytes ||
       !NumericUtils::checked_add(evidence.weight_bytes, evidence.k_bytes, evidence.total_bytes) ||
       !checked_add_to(evidence.v_bytes, evidence.total_bytes) ||
@@ -467,7 +469,7 @@ bool materialized_resources_match_plan(const LlmMemoryWorkPlan& plan, const LlmE
       resources.sequence_descriptors_per_worker != plan.sequence_descriptors_per_worker ||
       resources.total_layer_descriptors != plan.total_layer_descriptors ||
       resources.total_sequence_descriptors != plan.total_sequence_descriptors || !resources.initialization.complete ||
-      resources.initialization.weight_bytes != plan.geometry.active_weight_bytes_per_step ||
+      resources.initialization.weight_bytes != plan.geometry.active_weight_bytes_per_work_unit ||
       resources.initialization.k_bytes != plan.geometry.k_mapping_bytes ||
       resources.initialization.v_bytes != plan.geometry.v_mapping_bytes) {
     return false;
@@ -520,7 +522,7 @@ bool materialized_resources_match_plan(const LlmMemoryWorkPlan& plan, const LlmE
 }
 
 bool scenario_plan_matches_model(const LlmMemoryWorkPlan& model_plan, const LlmScenarioWorkPlan& scenario_plan) {
-  if (!scenario_plan.valid || scenario_plan.steps == 0 || llm_scenario_flags(scenario_plan.scenario) == 0 ||
+  if (!scenario_plan.valid || scenario_plan.work_units == 0 || llm_scenario_flags(scenario_plan.scenario) == 0 ||
       scenario_plan.model_plan_identity != model_plan.plan_identity) {
     return false;
   }
@@ -529,17 +531,17 @@ bool scenario_plan_matches_model(const LlmMemoryWorkPlan& model_plan, const LlmS
     return false;
   }
   const LlmScenarioWorkPlan rebuilt = build_llm_scenario_work_plan(
-      model_plan, scenario_plan.scenario, scenario_plan.steps, scenario_plan.explicit_iterations);
+      model_plan, scenario_plan.scenario, scenario_plan.work_units, scenario_plan.explicit_iterations);
   return rebuilt.valid && rebuilt.plan_identity == scenario_plan.plan_identity &&
          rebuilt.weight_read_bytes == scenario_plan.weight_read_bytes &&
          rebuilt.kv_read_bytes == scenario_plan.kv_read_bytes &&
-         rebuilt.kv_append_write_bytes == scenario_plan.kv_append_write_bytes &&
-         rebuilt.effective_payload_bytes == scenario_plan.effective_payload_bytes;
+         rebuilt.kv_write_bytes == scenario_plan.kv_write_bytes &&
+         rebuilt.effective_model_payload_bytes == scenario_plan.effective_model_payload_bytes;
 }
 
-uint8_t append_byte(uint64_t scenario_seed, uint64_t task_local_step, uint64_t layer_index,
+uint8_t append_byte(uint64_t scenario_seed, uint64_t task_local_work_unit, uint64_t layer_index,
                     uint64_t batch_sequence_index, size_t record_byte_offset, LlmChecksumComponent component) noexcept {
-  const uint64_t word = llm_append_word(scenario_seed, task_local_step, layer_index, batch_sequence_index,
+  const uint64_t word = llm_append_word(scenario_seed, task_local_work_unit, layer_index, batch_sequence_index,
                                         static_cast<uint64_t>(record_byte_offset / sizeof(uint64_t)), component);
   return static_cast<uint8_t>(word >> ((record_byte_offset % sizeof(uint64_t)) * 8U));
 }
@@ -554,7 +556,7 @@ uint8_t append_byte(uint64_t scenario_seed, uint64_t task_local_step, uint64_t l
  */
 bool append_adjusted_reference(const LlmStaticSpanReference& static_reference,
                                const LlmKvSequenceRangeTemplate& sequence, uint64_t buffer_seed, uint64_t scenario_seed,
-                               uint64_t task_local_step, LlmChecksumComponent component,
+                               uint64_t task_local_work_unit, LlmChecksumComponent component,
                                LlmStaticSpanReference& adjusted) noexcept {
   adjusted = static_reference;
   const LlmByteRange& visible = component == LlmChecksumComponent::K ? sequence.k_visible : sequence.v_visible;
@@ -589,7 +591,7 @@ bool append_adjusted_reference(const LlmStaticSpanReference& static_reference,
         value = static_cast<uint8_t>(initialized_word >> (byte_index * 8U));
       } else {
         const size_t record_byte = sequence.append_record_byte_offset + local_byte - append_local_start;
-        value = append_byte(scenario_seed, task_local_step, sequence.layer_index, sequence.batch_sequence_index,
+        value = append_byte(scenario_seed, task_local_work_unit, sequence.layer_index, sequence.batch_sequence_index,
                             record_byte, component);
       }
       appended_word |= static_cast<uint64_t>(value) << (byte_index * 8U);
@@ -641,7 +643,7 @@ bool production_kernel_invoke(void*, const LlmKernelInvocation& invocation) noex
   if (invocation.output == nullptr) {
     return false;
   }
-  llm_decode_memory_asm(invocation.layers, invocation.sequences, invocation.layer_count, invocation.step_count,
+  llm_decode_memory_asm(invocation.layers, invocation.sequences, invocation.layer_count, invocation.work_unit_count,
                         invocation.scenario_flags, invocation.scenario_seed, invocation.output);
   return true;
 }
@@ -722,11 +724,14 @@ uint64_t llm_buffer_pattern_word(uint64_t buffer_domain_seed, uint64_t absolute_
   return buffer_domain_seed + kBufferPatternMultiplier * (absolute_mapping_word_index + 1);
 }
 
-uint64_t llm_append_word(uint64_t scenario_seed, uint64_t task_local_step, uint64_t layer_index,
+uint64_t llm_append_word(uint64_t scenario_seed, uint64_t task_local_work_unit, uint64_t layer_index,
                          uint64_t batch_sequence_index, uint64_t record_word_index,
                          LlmChecksumComponent component) noexcept {
-  return scenario_seed + kAppendStepMultiplier * (task_local_step + 1) + kAppendLayerMultiplier * (layer_index + 1) +
-         kAppendBatchMultiplier * (batch_sequence_index + 1) + kAppendWordMultiplier * (record_word_index + 1) +
+  return scenario_seed +
+         kAppendStepMultiplier * (task_local_work_unit + 1) +
+         kAppendLayerMultiplier * (layer_index + 1) +
+         kAppendBatchMultiplier * (batch_sequence_index + 1) +
+         kAppendWordMultiplier * (record_word_index + 1) +
          append_domain(component);
 }
 
@@ -821,7 +826,7 @@ LlmBufferAllocationResult allocate_llm_buffers(const LlmMemoryWorkPlan& plan, Ll
     }
 
     LlmBufferSet candidate;
-    candidate.weight = allocate_buffer(plan.geometry.active_weight_bytes_per_step, "LLM weight buffer");
+    candidate.weight = allocate_buffer(plan.geometry.active_weight_bytes_per_work_unit, "LLM weight buffer");
     if (candidate.weight == nullptr) {
       result.reason_code = LlmExecutorReason::WEIGHT_MAPPING_FAILED;
       return result;
@@ -958,7 +963,7 @@ LlmExpectedChecksumResult calculate_llm_expected_checksums(const LlmMemoryWorkPl
         return result;
       }
 
-      for (size_t step = 0; step < scenario_plan.steps; ++step) {
+      for (size_t step = 0; step < scenario_plan.work_units; ++step) {
         for (size_t layer = 0; layer < model_plan.geometry.layer_count; ++layer) {
           if (reads_weight && !absorb_reference(checksum.weight, weight_references[layer])) {
             result.reason_code = LlmExecutorReason::EXPECTED_CHECKSUM_OVERFLOW;
@@ -1104,7 +1109,7 @@ LlmExecutorResult execute_llm_scenario(const LlmMemoryWorkPlan& model_plan, cons
           const LlmKernelInvocation invocation{resources.worker_layers(worker_index),
                                                resources.worker_sequences(worker_index),
                                                static_cast<uint64_t>(model_plan.layer_descriptors_per_worker),
-                                               static_cast<uint64_t>(scenario_plan.steps),
+                                               static_cast<uint64_t>(scenario_plan.work_units),
                                                llm_scenario_flags(scenario_plan.scenario),
                                                scenario_plan.scenario_seed,
                                                &result.actual_checksums[worker_index],

@@ -12,7 +12,7 @@ Bandwidth is reported as **effective workload payload divided by measured time**
 | Access patterns (`--patterns`) | Payload-rate sensitivity to access order, regularity, and virtual stride | Which single cache, prefetch, translation, or scheduling mechanism caused a difference |
 | TLB analysis (`--analyze-tlb`) | Paired spread/packed latency deltas and empirical boundary estimates | Guaranteed architectural TLB sizes or direct DRAM latency |
 | Core-to-core (`--analyze-core2core`) | Effective round-trip time of a repeated two-thread acquire/release token exchange under scheduler hints | Isolated physical cache-line migration or coherence-path latency, exact physical-core placement, or a definitive topology map |
-| LLM decode-memory profile (`--llm-memory`) | Effective logical payload rate and synthetic-step latency for active-weight reads, KV-history reads, and current-token KV appends on the CPU | Transformer computation, inference tokens/s, physical DRAM traffic, GPU/ANE behavior, or framework performance |
+| LLM memory profile (`--llm-memory`) | Effective logical model-payload rate and synthetic work-unit latency. The active CPU/decode/contiguous profile reads active weights and KV history and appends the current token's KV records | Transformer computation, inference tokens/s, physical DRAM traffic, active Metal/prefill/paged behavior, GPU/ANE execution, or framework performance |
 | JSON output (`--output`) and sweeps (`--sweep`) | Auditable measurement evidence through recoverable files or one final stdout document for every result-producing direct mode and supported CPU sweep | Comparability when commands, software, hardware, or run conditions differ |
 
 ## CPU Memory and Cache Bandwidth
@@ -35,16 +35,18 @@ Automatic mode calibrates work per operation, while explicit iterations provide 
 
 CPU and GPU GB/s should not be compared as if they were the same workload: their kernels, parallelism, resource models, and clocks differ. See the [GPU Bandwidth Whitepaper](GPU_BANDWIDTH_WHITEPAPER.md) for the full timing, resource, validation, and provenance contracts.
 
-## Synthetic LLM Decode-Memory Profile
+## Synthetic LLM Memory Profile
 
-Standalone `--llm-memory` executes three CPU scenarios over one explicit, fixed-visible-context model geometry:
+Standalone `--llm-memory` uses generic backend/phase/layout/work-unit vocabulary. The only active profile is
+CPU/decode/contiguous, with exact methodology `llm-memory-v1-cpu-decode-contiguous`. It executes three scenarios over
+one explicit, fixed-visible-context model geometry:
 
-- `weights_only` reads the active-weight mapping once per synthetic step;
+- `weights_only` reads the active-weight mapping once per work unit;
 - `kv_only` writes the current token's K and V records and reads the complete visible K/V history;
 - `mixed` performs the same weight and KV work in worker-local layer order inside one synchronized timing interval.
 
 With active-weight bytes `W`, layer count `L`, KV heads `h_kv`, head dimension `d_h`, KV element bytes `s_kv`, batch
-`B`, and visible context `A`, define `K = L * 2 * h_kv * d_h * s_kv`. Per-step logical payload is `W` for
+`B`, and visible context `A`, define `K = L * 2 * h_kv * d_h * s_kv`. Per-work-unit effective model payload is `W` for
 weights-only, `B*A*K + B*K` for KV-only, and `W + B*A*K + B*K` for mixed. The versioned crossover/classification
 compares `W` with KV-read payload `B*A*K`; exact equality alone is `near_crossover`, and no class identifies a measured
 hardware bottleneck.
@@ -54,11 +56,15 @@ cacheable anonymous memory; initialization and pre-touch occur before measuremen
 batch sequence, token, head, then head dimension. MHA, GQA, and MQA are represented by the query-head/KV-head geometry,
 but physical KV payload is determined by the KV-head count.
 
-The reported decimal GB/s is exact logical payload divided by synchronized CPU elapsed time. A synthetic memory step is
-not an inference token: the mode does not run GEMM/GEMV, dequantization, RoPE, attention math, softmax, layer
-normalization, framework dispatch, model loading, GPU work, or ANE work. It also does not model prefill, growing context,
-paged/sliding-window KV, prefix sharing, speculative decoding, or compute-memory overlap. Full-size mappings reduce the
-risk of accidentally benchmarking a recycled proxy buffer, but they do not prove physical DRAM service.
+The reported decimal GB/s is exact logical effective model payload divided by synchronized CPU elapsed time. A
+synthetic memory work unit (`decode_step` here) is not an inference token: the mode does not run GEMM/GEMV,
+dequantization, RoPE, attention math, softmax, layer normalization, framework dispatch, model loading, GPU work, or ANE
+work. It also does not model prefill, growing context, paged/sliding-window KV, prefix sharing, speculative decoding, or
+compute-memory overlap. Full-size mappings reduce the risk of accidentally benchmarking a recycled proxy buffer, but
+they do not prove physical DRAM service.
+
+Schema-v1 tokens reserve Metal, prefill, and paged-KV identities, but this revision provides no public selectors or
+supported runtime paths for them. Reserved vocabulary does not imply a fallback or partial implementation.
 
 The three scenarios are independently calibrated when `--iterations` is omitted and then frozen before loop zero.
 Their order rotates across count loops; the default count of three gives each scenario one first, middle, and last
@@ -67,10 +73,11 @@ checkpoint after each terminal scenario measurement and at command terminal; exa
 logical state transitions but emits only one final schema 1 document. See the
 [LLM Memory Profile Whitepaper](LLM_MEMORY_PROFILE_WHITEPAPER.md) for formulas, timing, validation, and interpretation.
 
-Comparisons require matching CPU backend, schema/methodology, model geometry, fixed or automatic work policy, frozen
-work-plan identity, software, hardware, worker counts, and sufficiently similar thermal/power/load conditions. A
-comparative consumer must also require complete, position-balanced schema state and the selected measured/non-null
-metric; process success alone is insufficient.
+Comparisons require matching backend/phase/layout, schema/methodology and component identities, model/phase geometry,
+fixed or automatic work policy, frozen work-plan identity, software, hardware, applicable worker counts, and
+sufficiently similar thermal/power/load conditions. A comparative consumer must also require complete,
+position-balanced schema state, every planned measurement to be measured, and the selected metric to be non-null;
+process success alone is insufficient.
 
 ## Memory and Cache Latency
 

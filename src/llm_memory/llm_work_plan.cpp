@@ -43,6 +43,10 @@ bool valid_kv_element_bytes(size_t bytes) {
   return bytes == 1 || bytes == 2 || bytes == 4;
 }
 
+bool json_integer_is_safe(size_t value) {
+  return value <= Constants::LLM_JSON_MAX_SAFE_INTEGER;
+}
+
 LlmAttentionKind classify_attention(size_t query_heads, size_t kv_heads) {
   if (query_heads == kv_heads) {
     return LlmAttentionKind::Mha;
@@ -172,26 +176,51 @@ void append_identity_field(std::string& identity, const char* name,
   append_identity_field(identity, name, std::to_string(value));
 }
 
+void append_component_identity(std::string& identity, const char* name,
+                               const std::string& value) {
+  identity += '|';
+  identity += name;
+  identity += '=';
+  identity += std::to_string(value.size());
+  identity += ':';
+  identity += value;
+}
+
+void append_component_identity(
+    std::string& identity, const char* name,
+    const std::optional<std::string>& value) {
+  if (value.has_value()) {
+    append_component_identity(identity, name, *value);
+    return;
+  }
+  identity += '|';
+  identity += name;
+  identity += "=null";
+}
+
 std::string build_model_plan_identity(const LlmMemoryWorkPlan& plan) {
   const LlmGeometry& geometry = plan.geometry;
   std::string identity = Constants::LLM_WORK_PLAN_IDENTITY_VERSION;
-  append_identity_field(identity, "backend", plan.backend);
-  append_identity_field(identity, "phase", plan.phase);
+  append_identity_field(identity, "backend",
+                        llm_memory_backend_to_string(plan.backend));
+  append_identity_field(identity, "phase", llm_phase_to_string(plan.phase));
+  append_identity_field(identity, "kv_layout",
+                        llm_kv_layout_to_string(plan.kv_layout));
+  append_identity_field(identity, "work_unit_kind",
+                        llm_work_unit_kind_to_string(plan.work_unit_kind));
   append_identity_field(identity, "methodology", plan.methodology_version);
-  append_identity_field(identity, "descriptor_abi",
-                        plan.descriptor_abi_version);
-  append_identity_field(identity, "buffer_pattern",
-                        plan.buffer_pattern_version);
-  append_identity_field(identity, "worker_schedule", plan.worker_schedule);
-  append_identity_field(identity, "kv_layout", plan.kv_layout);
+  append_identity_field(identity, "component_identity_size",
+                        plan.component_identities.identity.size());
+  append_identity_field(identity, "component_identity",
+                        plan.component_identities.identity);
   append_identity_field(identity, "range_alignment",
                         Constants::LLM_RANGE_ALIGNMENT_BYTES);
-  append_identity_field(identity, "weight_passes_per_step",
-                        plan.weight_passes_per_step);
+  append_identity_field(identity, "weight_passes_per_work_unit",
+                        plan.weight_passes_per_work_unit);
   append_identity_field(identity, "kv_replay_factor",
                         plan.kv_replay_factor);
   append_identity_field(identity, "weight",
-                        geometry.active_weight_bytes_per_step);
+                        geometry.active_weight_bytes_per_work_unit);
   append_identity_field(identity, "layers", geometry.layer_count);
   append_identity_field(identity, "query_heads", geometry.query_head_count);
   append_identity_field(identity, "kv_heads", geometry.kv_head_count);
@@ -202,8 +231,8 @@ std::string build_model_plan_identity(const LlmMemoryWorkPlan& plan) {
   append_identity_field(identity, "head_dim", geometry.head_dimension);
   append_identity_field(identity, "kv_element_bytes",
                         geometry.kv_element_bytes);
-  append_identity_field(identity, "context",
-                        geometry.visible_context_tokens);
+  append_identity_field(identity, "decode_context",
+                        geometry.decode->visible_context_tokens);
   append_identity_field(identity, "batch", geometry.batch_size);
   append_identity_field(identity, "kv_vector_bytes",
                         geometry.kv_vector_bytes);
@@ -221,16 +250,16 @@ std::string build_model_plan_identity(const LlmMemoryWorkPlan& plan) {
                         geometry.v_mapping_bytes);
   append_identity_field(identity, "kv_capacity_bytes",
                         geometry.kv_capacity_bytes);
-  append_identity_field(identity, "weight_read_bytes_per_step",
-                        geometry.weight_read_bytes_per_step);
-  append_identity_field(identity, "kv_read_bytes_per_step",
-                        geometry.kv_read_bytes_per_step);
-  append_identity_field(identity, "kv_append_write_bytes_per_step",
-                        geometry.kv_append_write_bytes_per_step);
-  append_identity_field(identity, "kv_only_payload_bytes_per_step",
-                        geometry.kv_only_effective_payload_bytes_per_step);
-  append_identity_field(identity, "mixed_payload_bytes_per_step",
-                        geometry.mixed_effective_payload_bytes_per_step);
+  append_identity_field(identity, "weight_read_bytes_per_work_unit",
+                        geometry.weight_read_bytes_per_work_unit);
+  append_identity_field(identity, "kv_read_bytes_per_work_unit",
+                        geometry.kv_read_bytes_per_work_unit);
+  append_identity_field(identity, "kv_write_bytes_per_work_unit",
+                        geometry.kv_write_bytes_per_work_unit);
+  append_identity_field(identity, "kv_only_payload_bytes_per_work_unit",
+                        geometry.kv_only_effective_model_payload_bytes_per_work_unit);
+  append_identity_field(identity, "mixed_payload_bytes_per_work_unit",
+                        geometry.mixed_effective_model_payload_bytes_per_work_unit);
   append_identity_field(identity, "total_data_mapping_bytes",
                         geometry.total_data_mapping_bytes);
   append_identity_field(identity, "traffic_crossover_numerator",
@@ -272,31 +301,49 @@ std::string build_scenario_plan_identity(const LlmScenarioWorkPlan& plan) {
                         plan.model_plan_identity);
   append_identity_field(identity, "scenario",
                         llm_scenario_to_string(plan.scenario));
+  append_identity_field(identity, "work_unit_kind",
+                        llm_work_unit_kind_to_string(plan.work_unit_kind));
+  append_identity_field(identity, "kv_write_kind",
+                        llm_kv_write_kind_to_string(plan.kv_write_kind));
   append_identity_field(identity, "scenario_seed", plan.scenario_seed);
   append_identity_field(identity, "explicit",
                         plan.explicit_iterations ? 1 : 0);
-  append_identity_field(identity, "steps", plan.steps);
-  append_identity_field(identity, "weight_read_bytes_per_step",
-                        plan.weight_read_bytes_per_step);
-  append_identity_field(identity, "kv_read_bytes_per_step",
-                        plan.kv_read_bytes_per_step);
-  append_identity_field(identity, "kv_append_write_bytes_per_step",
-                        plan.kv_append_write_bytes_per_step);
-  append_identity_field(identity, "effective_payload_bytes_per_step",
-                        plan.effective_payload_bytes_per_step);
+  append_identity_field(identity, "work_units", plan.work_units);
+  append_identity_field(identity, "weight_read_bytes_per_work_unit",
+                        plan.weight_read_bytes_per_work_unit);
+  append_identity_field(identity, "kv_read_bytes_per_work_unit",
+                        plan.kv_read_bytes_per_work_unit);
+  append_identity_field(identity, "kv_write_bytes_per_work_unit",
+                        plan.kv_write_bytes_per_work_unit);
+  append_identity_field(identity, "effective_model_payload_bytes_per_work_unit",
+                        plan.effective_model_payload_bytes_per_work_unit);
+  append_identity_field(identity,
+                        "layout_metadata_lookup_count_per_work_unit",
+                        plan.layout_metadata_lookup_count_per_work_unit);
+  append_identity_field(identity,
+                        "layout_metadata_read_bytes_per_work_unit",
+                        plan.layout_metadata_read_bytes_per_work_unit);
+  append_identity_field(identity, "accounted_bytes_per_work_unit",
+                        plan.accounted_bytes_per_work_unit);
   append_identity_field(identity, "weight_read_bytes",
                         plan.weight_read_bytes);
   append_identity_field(identity, "kv_read_bytes", plan.kv_read_bytes);
-  append_identity_field(identity, "kv_append_write_bytes",
-                        plan.kv_append_write_bytes);
-  append_identity_field(identity, "effective_payload_bytes",
-                        plan.effective_payload_bytes);
-  append_identity_field(identity, "maximum_steps_by_step_cap",
-                        plan.maximum_steps_by_step_cap);
-  append_identity_field(identity, "maximum_steps_by_payload_cap",
-                        plan.maximum_steps_by_payload_cap);
-  append_identity_field(identity, "effective_maximum_steps",
-                        plan.effective_maximum_steps);
+  append_identity_field(identity, "kv_write_bytes",
+                        plan.kv_write_bytes);
+  append_identity_field(identity, "effective_model_payload_bytes",
+                        plan.effective_model_payload_bytes);
+  append_identity_field(identity, "layout_metadata_lookup_count",
+                        plan.layout_metadata_lookup_count);
+  append_identity_field(identity, "layout_metadata_read_bytes",
+                        plan.layout_metadata_read_bytes);
+  append_identity_field(identity, "task_accounted_bytes",
+                        plan.task_accounted_bytes);
+  append_identity_field(identity, "maximum_work_units_by_work_unit_cap",
+                        plan.maximum_work_units_by_work_unit_cap);
+  append_identity_field(identity, "maximum_work_units_by_guardrail",
+                        plan.maximum_work_units_by_guardrail);
+  append_identity_field(identity, "effective_maximum_work_units",
+                        plan.effective_maximum_work_units);
   return identity;
 }
 
@@ -388,6 +435,48 @@ LlmMemoryWorkPlan invalid_config_plan(const std::string& reason_code) {
 
 }  // namespace
 
+std::string build_llm_methodology_version(LlmMemoryBackend backend,
+                                          LlmPhase phase,
+                                          LlmKvLayout layout) {
+  std::string methodology = "llm-memory-v1-";
+  methodology += llm_memory_backend_to_string(backend);
+  methodology += '-';
+  methodology += llm_phase_to_string(phase);
+  methodology += '-';
+  methodology += llm_kv_layout_to_string(layout);
+  return methodology;
+}
+
+std::string serialize_llm_component_identities(
+    const LlmComponentIdentities& components) {
+  std::string identity = Constants::LLM_COMPONENT_IDENTITY_VERSION;
+  append_component_identity(identity, "logical_profile_version",
+                            components.logical_profile_version);
+  append_component_identity(identity, "kv_layout_version",
+                            components.kv_layout_version);
+  append_component_identity(identity, "permutation_version",
+                            components.permutation_version);
+  append_component_identity(identity, "backend_executor_version",
+                            components.backend_executor_version);
+  append_component_identity(identity, "resource_abi_version",
+                            components.resource_abi_version);
+  append_component_identity(identity, "schedule_version",
+                            components.schedule_version);
+  append_component_identity(identity, "timer_policy_version",
+                            components.timer_policy_version);
+  append_component_identity(identity, "buffer_pattern_version",
+                            components.buffer_pattern_version);
+  append_component_identity(identity, "write_pattern_version",
+                            components.write_pattern_version);
+  append_component_identity(identity, "checksum_pattern_version",
+                            components.checksum_pattern_version);
+  append_component_identity(identity, "msl_revision",
+                            components.msl_revision);
+  append_component_identity(identity, "msl_source_sha256",
+                            components.msl_source_sha256);
+  return identity;
+}
+
 LlmMemoryWorkPlan::LlmMemoryWorkPlan(LlmMemoryWorkPlan&& other) noexcept {
   *this = std::move(other);
 }
@@ -418,15 +507,14 @@ LlmMemoryWorkPlan& LlmMemoryWorkPlan::operator=(
   memory_budget = std::move(other.memory_budget);
   weight_layers = std::move(other.weight_layers);
   workers = std::move(other.workers);
-  descriptor_abi_version = std::move(other.descriptor_abi_version);
-  backend = std::move(other.backend);
-  phase = std::move(other.phase);
-  weight_passes_per_step = other.weight_passes_per_step;
+  backend = other.backend;
+  phase = other.phase;
+  kv_layout = other.kv_layout;
+  work_unit_kind = other.work_unit_kind;
+  weight_passes_per_work_unit = other.weight_passes_per_work_unit;
   kv_replay_factor = other.kv_replay_factor;
-  buffer_pattern_version = std::move(other.buffer_pattern_version);
   methodology_version = std::move(other.methodology_version);
-  worker_schedule = std::move(other.worker_schedule);
-  kv_layout = std::move(other.kv_layout);
+  component_identities = std::move(other.component_identities);
   plan_identity = std::move(other.plan_identity);
 
   other.valid = false;
@@ -450,13 +538,12 @@ LlmMemoryWorkPlan& LlmMemoryWorkPlan::operator=(
   other.memory_budget.request.valid = false;
   other.weight_layers.clear();
   other.workers.clear();
-  other.descriptor_abi_version.clear();
-  other.backend.clear();
-  other.phase.clear();
-  other.buffer_pattern_version.clear();
+  other.backend = LlmMemoryBackend::Cpu;
+  other.phase = LlmPhase::Decode;
+  other.kv_layout = LlmKvLayout::Contiguous;
+  other.work_unit_kind = LlmWorkUnitKind::DecodeStep;
   other.methodology_version.clear();
-  other.worker_schedule.clear();
-  other.kv_layout.clear();
+  other.component_identities = {};
   other.plan_identity.clear();
   return *this;
 }
@@ -487,15 +574,25 @@ uint64_t derive_llm_domain_seed(uint64_t base_seed, LlmSeedDomain domain) {
 
 LlmGeometry resolve_llm_geometry(const LlmGeometryRequest& request) {
   LlmGeometry geometry;
-  geometry.active_weight_bytes_per_step = request.active_weight_bytes;
+  geometry.phase = request.phase;
+  geometry.kv_layout = request.kv_layout;
+  geometry.work_unit_kind = llm_work_unit_kind_for_phase(request.phase);
+  geometry.active_weight_bytes_per_work_unit = request.active_weight_bytes;
   geometry.layer_count = request.layer_count;
   geometry.query_head_count = request.query_head_count;
   geometry.kv_head_count = request.kv_head_count;
   geometry.head_dimension = request.head_dimension;
   geometry.kv_element_bytes = request.kv_element_bytes;
-  geometry.visible_context_tokens = request.visible_context_tokens;
   geometry.batch_size = request.batch_size;
 
+  if (request.phase != LlmPhase::Decode) {
+    geometry.reason_code = LlmWorkPlanReason::PHASE_NOT_ACTIVATED;
+    return geometry;
+  }
+  if (request.kv_layout != LlmKvLayout::Contiguous) {
+    geometry.reason_code = LlmWorkPlanReason::KV_LAYOUT_NOT_ACTIVATED;
+    return geometry;
+  }
   if (request.active_weight_bytes == 0) {
     geometry.reason_code = LlmWorkPlanReason::ACTIVE_WEIGHT_BYTES_ZERO;
     return geometry;
@@ -592,17 +689,17 @@ LlmGeometry resolve_llm_geometry(const LlmGeometryRequest& request) {
     return geometry;
   }
 
-  geometry.weight_read_bytes_per_step = request.active_weight_bytes;
+  geometry.weight_read_bytes_per_work_unit = request.active_weight_bytes;
   if (!NumericUtils::checked_multiply(
           request.batch_size, geometry.kv_bytes_per_visible_token,
-          geometry.kv_append_write_bytes_per_step)) {
-    geometry.reason_code = LlmWorkPlanReason::KV_APPEND_BYTES_OVERFLOW;
+          geometry.kv_write_bytes_per_work_unit)) {
+    geometry.reason_code = LlmWorkPlanReason::KV_WRITE_BYTES_OVERFLOW;
     return geometry;
   }
   if (!NumericUtils::checked_multiply(
           request.visible_context_tokens,
-          geometry.kv_append_write_bytes_per_step,
-          geometry.kv_read_bytes_per_step)) {
+          geometry.kv_write_bytes_per_work_unit,
+          geometry.kv_read_bytes_per_work_unit)) {
     geometry.reason_code = LlmWorkPlanReason::KV_READ_BYTES_OVERFLOW;
     return geometry;
   }
@@ -613,26 +710,27 @@ LlmGeometry resolve_llm_geometry(const LlmGeometryRequest& request) {
     return geometry;
   }
   if (!NumericUtils::checked_add(
-          geometry.kv_read_bytes_per_step,
-          geometry.kv_append_write_bytes_per_step,
-          geometry.kv_only_effective_payload_bytes_per_step)) {
+          geometry.kv_read_bytes_per_work_unit,
+          geometry.kv_write_bytes_per_work_unit,
+          geometry.kv_only_effective_model_payload_bytes_per_work_unit)) {
     geometry.reason_code = LlmWorkPlanReason::KV_ONLY_PAYLOAD_OVERFLOW;
     return geometry;
   }
   if (!NumericUtils::checked_add(
-          geometry.weight_read_bytes_per_step,
-          geometry.kv_only_effective_payload_bytes_per_step,
-          geometry.mixed_effective_payload_bytes_per_step)) {
+          geometry.weight_read_bytes_per_work_unit,
+          geometry.kv_only_effective_model_payload_bytes_per_work_unit,
+          geometry.mixed_effective_model_payload_bytes_per_work_unit)) {
     geometry.reason_code = LlmWorkPlanReason::MIXED_PAYLOAD_OVERFLOW;
     return geometry;
   }
-
   geometry.traffic_crossover_numerator = request.active_weight_bytes;
   geometry.traffic_crossover_denominator =
-      geometry.kv_append_write_bytes_per_step;
+      geometry.kv_write_bytes_per_work_unit;
   geometry.traffic_crossover_context_tokens = static_cast<double>(
       static_cast<long double>(geometry.traffic_crossover_numerator) /
       static_cast<long double>(geometry.traffic_crossover_denominator));
+  geometry.decode = LlmDecodeGeometry{request.visible_context_tokens};
+  geometry.prefill.reset();
   geometry.valid = true;
   geometry.reason_code = LlmWorkPlanReason::VALID;
   return geometry;
@@ -659,7 +757,7 @@ LlmMemoryBudgetRequest build_llm_memory_budget_request(
   }
 
   request.requested_weight_mapping_bytes =
-      geometry.active_weight_bytes_per_step;
+      geometry.active_weight_bytes_per_work_unit;
   request.requested_k_mapping_bytes = geometry.k_mapping_bytes;
   request.requested_v_mapping_bytes = geometry.v_mapping_bytes;
   request.requested_data_bytes = geometry.total_data_mapping_bytes;
@@ -753,6 +851,10 @@ LlmMemoryBudget evaluate_llm_memory_budget(
 LlmMemoryWorkPlan build_llm_memory_work_plan(
     const LlmMemoryWorkPlanRequest& request) {
   LlmMemoryWorkPlan plan;
+  plan.backend = request.backend;
+  plan.phase = request.geometry.phase;
+  plan.kv_layout = request.geometry.kv_layout;
+  plan.work_unit_kind = llm_work_unit_kind_for_phase(plan.phase);
   plan.requested_workers = request.requested_workers;
   plan.available_workers = request.available_workers;
   plan.base_seed = request.base_seed;
@@ -769,9 +871,18 @@ LlmMemoryWorkPlan build_llm_memory_work_plan(
                              LlmSeedDomain::KvOnlyScenario),
       derive_llm_domain_seed(request.base_seed,
                              LlmSeedDomain::MixedScenario)};
+  if (request.backend != LlmMemoryBackend::Cpu) {
+    plan.reason_code = LlmWorkPlanReason::BACKEND_NOT_ACTIVATED;
+    return plan;
+  }
   plan.geometry = resolve_llm_geometry(request.geometry);
   if (!plan.geometry.valid) {
     plan.reason_code = plan.geometry.reason_code;
+    return plan;
+  }
+  if (!json_integer_is_safe(request.requested_workers) ||
+      !json_integer_is_safe(request.available_workers)) {
+    plan.reason_code = LlmWorkPlanReason::JSON_INTEGER_OUT_OF_RANGE;
     return plan;
   }
   if (request.requested_workers == 0) {
@@ -837,6 +948,19 @@ LlmMemoryWorkPlan build_llm_memory_work_plan(
     plan.reason_code = LlmWorkPlanReason::PLANNER_STORAGE_BYTES_OVERFLOW;
     return plan;
   }
+  if (!json_integer_is_safe(request.geometry.layer_count) ||
+      !json_integer_is_safe(request.geometry.query_head_count) ||
+      !json_integer_is_safe(request.geometry.kv_head_count) ||
+      !json_integer_is_safe(request.geometry.head_dimension) ||
+      !json_integer_is_safe(request.geometry.visible_context_tokens) ||
+      !json_integer_is_safe(request.geometry.batch_size) ||
+      !json_integer_is_safe(plan.layer_descriptors_per_worker) ||
+      !json_integer_is_safe(plan.sequence_descriptors_per_worker) ||
+      !json_integer_is_safe(plan.total_layer_descriptors) ||
+      !json_integer_is_safe(plan.total_sequence_descriptors)) {
+    plan.reason_code = LlmWorkPlanReason::JSON_INTEGER_OUT_OF_RANGE;
+    return plan;
+  }
 
   plan.memory_budget.request = build_llm_memory_budget_request(
       plan.geometry, plan.descriptor_bytes, plan.planner_storage_bytes,
@@ -889,7 +1013,7 @@ LlmMemoryWorkPlan build_llm_memory_work_plan(
             visible_offset, plan.geometry.k_or_v_sequence_visible_bytes};
         const size_t append_offset =
             visible_offset +
-            (plan.geometry.visible_context_tokens - 1) *
+            (plan.geometry.decode->visible_context_tokens - 1) *
                 plan.geometry.k_or_v_record_bytes_per_layer;
         const LlmByteRange append_record{
             append_offset, plan.geometry.k_or_v_record_bytes_per_layer};
@@ -940,13 +1064,31 @@ LlmMemoryWorkPlan build_llm_memory_work_plan(
     return plan;
   }
 
-  plan.descriptor_abi_version = Constants::LLM_DESCRIPTOR_ABI_VERSION;
-  plan.backend = Constants::LLM_BACKEND_NAME;
-  plan.phase = Constants::LLM_PHASE_NAME;
-  plan.buffer_pattern_version = Constants::LLM_BUFFER_PATTERN_VERSION;
-  plan.methodology_version = Constants::LLM_METHODOLOGY_VERSION;
-  plan.worker_schedule = Constants::LLM_WORKER_SCHEDULE;
-  plan.kv_layout = Constants::LLM_KV_LAYOUT;
+  plan.methodology_version =
+      build_llm_methodology_version(plan.backend, plan.phase, plan.kv_layout);
+  plan.component_identities.logical_profile_version =
+      Constants::LLM_LOGICAL_PROFILE_VERSION;
+  plan.component_identities.kv_layout_version =
+      Constants::LLM_CONTIGUOUS_KV_LAYOUT_VERSION;
+  plan.component_identities.permutation_version.reset();
+  plan.component_identities.backend_executor_version =
+      Constants::LLM_CPU_EXECUTOR_VERSION;
+  plan.component_identities.resource_abi_version =
+      Constants::LLM_DESCRIPTOR_ABI_VERSION;
+  plan.component_identities.schedule_version =
+      Constants::LLM_CPU_SCHEDULE_VERSION;
+  plan.component_identities.timer_policy_version =
+      Constants::LLM_CPU_TIMER_POLICY_VERSION;
+  plan.component_identities.buffer_pattern_version =
+      Constants::LLM_BUFFER_PATTERN_VERSION;
+  plan.component_identities.write_pattern_version =
+      Constants::LLM_APPEND_PATTERN_VERSION;
+  plan.component_identities.checksum_pattern_version =
+      Constants::LLM_READ_CHECKSUM_VERSION;
+  plan.component_identities.msl_revision.reset();
+  plan.component_identities.msl_source_sha256.reset();
+  plan.component_identities.identity =
+      serialize_llm_component_identities(plan.component_identities);
   plan.plan_identity = build_model_plan_identity(plan);
   plan.valid = true;
   plan.reason_code = LlmWorkPlanReason::VALID;
@@ -972,7 +1114,10 @@ LlmMemoryWorkPlan build_llm_memory_work_plan(
                       config.head_dimension,
                       config.kv_element_bytes,
                       config.visible_context_tokens,
-                      config.batch_size};
+                      config.batch_size,
+                      config.phase,
+                      config.kv_layout};
+  request.backend = config.backend;
   request.requested_workers = config.requested_workers;
   request.available_workers = available_workers;
   request.available_memory_bytes = available_memory_bytes;
@@ -995,40 +1140,53 @@ LlmScenarioLimits calculate_llm_scenario_limits(
     limits.reason_code = LlmWorkPlanReason::INVALID_SCENARIO;
     return limits;
   }
+  limits.work_unit_kind = geometry.work_unit_kind;
+  limits.kv_write_kind = llm_kv_write_kind_for(geometry.phase, scenario);
 
   switch (scenario) {
     case LlmScenario::WeightsOnly:
-      limits.weight_read_bytes_per_step =
-          geometry.weight_read_bytes_per_step;
-      limits.effective_payload_bytes_per_step =
-          geometry.weight_read_bytes_per_step;
+      limits.weight_read_bytes_per_work_unit =
+          geometry.weight_read_bytes_per_work_unit;
+      limits.effective_model_payload_bytes_per_work_unit =
+          geometry.weight_read_bytes_per_work_unit;
       break;
     case LlmScenario::KvOnly:
-      limits.kv_read_bytes_per_step = geometry.kv_read_bytes_per_step;
-      limits.kv_append_write_bytes_per_step =
-          geometry.kv_append_write_bytes_per_step;
-      limits.effective_payload_bytes_per_step =
-          geometry.kv_only_effective_payload_bytes_per_step;
+      limits.kv_read_bytes_per_work_unit = geometry.kv_read_bytes_per_work_unit;
+      limits.kv_write_bytes_per_work_unit =
+          geometry.kv_write_bytes_per_work_unit;
+      limits.effective_model_payload_bytes_per_work_unit =
+          geometry.kv_only_effective_model_payload_bytes_per_work_unit;
       break;
     case LlmScenario::Mixed:
-      limits.weight_read_bytes_per_step =
-          geometry.weight_read_bytes_per_step;
-      limits.kv_read_bytes_per_step = geometry.kv_read_bytes_per_step;
-      limits.kv_append_write_bytes_per_step =
-          geometry.kv_append_write_bytes_per_step;
-      limits.effective_payload_bytes_per_step =
-          geometry.mixed_effective_payload_bytes_per_step;
+      limits.weight_read_bytes_per_work_unit =
+          geometry.weight_read_bytes_per_work_unit;
+      limits.kv_read_bytes_per_work_unit = geometry.kv_read_bytes_per_work_unit;
+      limits.kv_write_bytes_per_work_unit =
+          geometry.kv_write_bytes_per_work_unit;
+      limits.effective_model_payload_bytes_per_work_unit =
+          geometry.mixed_effective_model_payload_bytes_per_work_unit;
       break;
   }
 
-  limits.maximum_steps_by_payload_cap =
-      Constants::LLM_MAX_EXACT_PAYLOAD_BYTES /
-      limits.effective_payload_bytes_per_step;
-  limits.effective_maximum_steps =
-      std::min(limits.maximum_steps_by_step_cap,
-               limits.maximum_steps_by_payload_cap);
-  if (limits.effective_maximum_steps == 0) {
-    limits.reason_code = LlmWorkPlanReason::PAYLOAD_CAP_BELOW_ONE_STEP;
+  // Contiguous layout performs no timed layout-metadata lookups. Keeping the
+  // zero terms explicit makes the guardrail formula layout-neutral.
+  limits.layout_metadata_lookup_count_per_work_unit = 0;
+  limits.layout_metadata_read_bytes_per_work_unit = 0;
+  if (!NumericUtils::checked_add(
+          limits.effective_model_payload_bytes_per_work_unit,
+          limits.layout_metadata_read_bytes_per_work_unit,
+          limits.accounted_bytes_per_work_unit)) {
+    limits.reason_code = LlmWorkPlanReason::TASK_ACCOUNTED_BYTES_OVERFLOW;
+    return limits;
+  }
+  limits.maximum_work_units_by_guardrail =
+      Constants::LLM_MAX_ACCOUNTED_BYTES_PER_TASK /
+      limits.accounted_bytes_per_work_unit;
+  limits.effective_maximum_work_units =
+      std::min(limits.maximum_work_units_by_work_unit_cap,
+               limits.maximum_work_units_by_guardrail);
+  if (limits.effective_maximum_work_units == 0) {
+    limits.reason_code = LlmWorkPlanReason::GUARDRAIL_BELOW_ONE_WORK_UNIT;
     return limits;
   }
   limits.valid = true;
@@ -1037,7 +1195,7 @@ LlmScenarioLimits calculate_llm_scenario_limits(
 }
 
 LlmScenarioWorkPlan build_llm_scenario_work_plan(
-    const LlmMemoryWorkPlan& model_plan, LlmScenario scenario, size_t steps,
+    const LlmMemoryWorkPlan& model_plan, LlmScenario scenario, size_t work_units,
     bool explicit_iterations) {
   LlmScenarioWorkPlan plan;
   plan.scenario = scenario;
@@ -1056,41 +1214,57 @@ LlmScenarioWorkPlan build_llm_scenario_work_plan(
     plan.reason_code = limits.reason_code;
     return plan;
   }
-  plan.maximum_steps_by_step_cap = limits.maximum_steps_by_step_cap;
-  plan.maximum_steps_by_payload_cap = limits.maximum_steps_by_payload_cap;
-  plan.effective_maximum_steps = limits.effective_maximum_steps;
-  if (steps == 0) {
-    plan.reason_code = LlmWorkPlanReason::STEP_COUNT_ZERO;
+  plan.maximum_work_units_by_work_unit_cap = limits.maximum_work_units_by_work_unit_cap;
+  plan.maximum_work_units_by_guardrail = limits.maximum_work_units_by_guardrail;
+  plan.effective_maximum_work_units = limits.effective_maximum_work_units;
+  plan.work_unit_kind = limits.work_unit_kind;
+  plan.kv_write_kind = limits.kv_write_kind;
+  if (work_units == 0) {
+    plan.reason_code = LlmWorkPlanReason::WORK_UNIT_COUNT_ZERO;
     return plan;
   }
-  if (steps > limits.maximum_steps_by_step_cap) {
-    plan.reason_code = LlmWorkPlanReason::STEP_CAP_EXCEEDED;
+  if (work_units > limits.maximum_work_units_by_work_unit_cap) {
+    plan.reason_code = LlmWorkPlanReason::WORK_UNIT_CAP_EXCEEDED;
     return plan;
   }
 
-  plan.steps = steps;
-  plan.weight_read_bytes_per_step = limits.weight_read_bytes_per_step;
-  plan.kv_read_bytes_per_step = limits.kv_read_bytes_per_step;
-  plan.kv_append_write_bytes_per_step =
-      limits.kv_append_write_bytes_per_step;
-  plan.effective_payload_bytes_per_step =
-      limits.effective_payload_bytes_per_step;
-  if (!NumericUtils::checked_multiply(plan.weight_read_bytes_per_step, steps,
+  plan.work_units = work_units;
+  plan.weight_read_bytes_per_work_unit = limits.weight_read_bytes_per_work_unit;
+  plan.kv_read_bytes_per_work_unit = limits.kv_read_bytes_per_work_unit;
+  plan.kv_write_bytes_per_work_unit =
+      limits.kv_write_bytes_per_work_unit;
+  plan.effective_model_payload_bytes_per_work_unit =
+      limits.effective_model_payload_bytes_per_work_unit;
+  plan.layout_metadata_lookup_count_per_work_unit =
+      limits.layout_metadata_lookup_count_per_work_unit;
+  plan.layout_metadata_read_bytes_per_work_unit =
+      limits.layout_metadata_read_bytes_per_work_unit;
+  plan.accounted_bytes_per_work_unit = limits.accounted_bytes_per_work_unit;
+  if (!NumericUtils::checked_multiply(plan.weight_read_bytes_per_work_unit, work_units,
                                       plan.weight_read_bytes) ||
-      !NumericUtils::checked_multiply(plan.kv_read_bytes_per_step, steps,
+      !NumericUtils::checked_multiply(plan.kv_read_bytes_per_work_unit, work_units,
                                       plan.kv_read_bytes) ||
       !NumericUtils::checked_multiply(
-          plan.kv_append_write_bytes_per_step, steps,
-          plan.kv_append_write_bytes) ||
+          plan.kv_write_bytes_per_work_unit, work_units,
+          plan.kv_write_bytes) ||
       !NumericUtils::checked_multiply(
-          plan.effective_payload_bytes_per_step, steps,
-          plan.effective_payload_bytes)) {
-    plan.reason_code = LlmWorkPlanReason::EXACT_PAYLOAD_OVERFLOW;
+          plan.effective_model_payload_bytes_per_work_unit, work_units,
+          plan.effective_model_payload_bytes) ||
+      !NumericUtils::checked_multiply(
+          plan.layout_metadata_lookup_count_per_work_unit, work_units,
+          plan.layout_metadata_lookup_count) ||
+      !NumericUtils::checked_multiply(
+          plan.layout_metadata_read_bytes_per_work_unit, work_units,
+          plan.layout_metadata_read_bytes) ||
+      !NumericUtils::checked_multiply(plan.accounted_bytes_per_work_unit,
+                                      work_units,
+                                      plan.task_accounted_bytes)) {
+    plan.reason_code = LlmWorkPlanReason::TASK_ACCOUNTED_BYTES_OVERFLOW;
     return plan;
   }
-  if (plan.effective_payload_bytes >
-      Constants::LLM_MAX_EXACT_PAYLOAD_BYTES) {
-    plan.reason_code = LlmWorkPlanReason::EXACT_PAYLOAD_CAP_EXCEEDED;
+  if (plan.task_accounted_bytes >
+      Constants::LLM_MAX_ACCOUNTED_BYTES_PER_TASK) {
+    plan.reason_code = LlmWorkPlanReason::TASK_ACCOUNTED_BYTES_CAP_EXCEEDED;
     return plan;
   }
 
@@ -1102,7 +1276,7 @@ LlmScenarioWorkPlan build_llm_scenario_work_plan(
 
 LlmFrozenScenarioPlans freeze_llm_scenario_work_plans(
     const LlmMemoryWorkPlan& model_plan,
-    const std::array<size_t, kLlmScenarioCount>& steps,
+    const std::array<size_t, kLlmScenarioCount>& work_units,
     bool explicit_iterations) {
   LlmFrozenScenarioPlans frozen;
   frozen.explicit_iterations = explicit_iterations;
@@ -1115,7 +1289,7 @@ LlmFrozenScenarioPlans freeze_llm_scenario_work_plans(
       LlmScenario::WeightsOnly, LlmScenario::KvOnly, LlmScenario::Mixed};
   for (size_t index = 0; index < kLlmScenarioCount; ++index) {
     frozen.scenarios[index] = build_llm_scenario_work_plan(
-        model_plan, kScenarios[index], steps[index], explicit_iterations);
+        model_plan, kScenarios[index], work_units[index], explicit_iterations);
     if (!frozen.scenarios[index].valid) {
       frozen.reason_code = frozen.scenarios[index].reason_code;
       frozen.scenarios = {};
@@ -1149,26 +1323,26 @@ LlmFrozenScenarioPlans freeze_llm_scenario_work_plans(
   return frozen;
 }
 
-size_t calculate_llm_pilot_steps(const LlmScenarioLimits& limits) {
+size_t calculate_llm_pilot_work_units(const LlmScenarioLimits& limits) {
   if (!limits.valid) {
     return 0;
   }
   return NumericUtils::calculate_minimum_pilot_count(
-      limits.effective_payload_bytes_per_step,
+      limits.accounted_bytes_per_work_unit,
       Constants::LLM_CALIBRATION_MIN_PILOT_BYTES,
-      limits.effective_maximum_steps);
+      limits.effective_maximum_work_units);
 }
 
-size_t calculate_llm_calibrated_steps(double attempt_duration_seconds,
-                                      size_t attempt_steps,
-                                      const LlmScenarioLimits& limits) {
+size_t calculate_llm_calibrated_work_units(double attempt_duration_seconds,
+                                           size_t attempt_work_units,
+                                           const LlmScenarioLimits& limits) {
   if (!limits.valid) {
     return 0;
   }
   return NumericUtils::calculate_duration_scaled_count(
-      attempt_duration_seconds, attempt_steps,
+      attempt_duration_seconds, attempt_work_units,
       Constants::LLM_CALIBRATION_TARGET_SECONDS, 1,
-      limits.effective_maximum_steps);
+      limits.effective_maximum_work_units);
 }
 
 bool llm_duration_in_target_window(double elapsed_seconds) {
@@ -1178,21 +1352,21 @@ bool llm_duration_in_target_window(double elapsed_seconds) {
 }
 
 std::string_view classify_llm_duration_quality(
-    double elapsed_seconds, size_t steps,
+    double elapsed_seconds, size_t work_units,
     const LlmScenarioLimits& limits) noexcept {
   if (!limits.valid || !std::isfinite(elapsed_seconds) ||
-      elapsed_seconds <= 0.0 || steps == 0 ||
-      steps > limits.effective_maximum_steps) {
+      elapsed_seconds <= 0.0 || work_units == 0 ||
+      work_units > limits.effective_maximum_work_units) {
     return "invalid-duration";
   }
   if (llm_duration_in_target_window(elapsed_seconds)) {
     return "within-target-window";
   }
-  if (steps == 1 &&
+  if (work_units == 1 &&
       elapsed_seconds > Constants::LLM_CALIBRATION_MAX_SECONDS) {
-    return "single-step-over-target";
+    return "above-target-single-work-unit";
   }
-  if (steps == limits.effective_maximum_steps &&
+  if (work_units == limits.effective_maximum_work_units &&
       elapsed_seconds < Constants::LLM_CALIBRATION_MIN_SECONDS) {
     return "guardrail-limited-below-target";
   }

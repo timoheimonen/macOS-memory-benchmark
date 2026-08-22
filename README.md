@@ -111,15 +111,18 @@ checkpoints are required; see the [Machine-Readable CLI API](documents/API.md) s
 | `--analyze-tlb` | Standalone paired spread/packed TLB analysis with adaptive measurement rounds, confidence intervals, and boundary validation. |
 | `--analyze-core2core` | Calibrated two-thread acquire/release token-protocol round-trip latency under best-effort macOS scheduler hints. |
 | `--gpu-bandwidth` | Standalone Metal GPU read/write/copy effective compute-payload bandwidth. |
-| `--llm-memory` | Standalone CPU synthetic decode-memory profile with weights-only, KV-only, and layer-interleaved mixed scenarios over full-size cacheable weight/K/V mappings. |
+| `--llm-memory` | Standalone synthetic LLM memory profile. The active schema-v1 profile is CPU/decode/contiguous, with weights-only, KV-only, and layer-interleaved mixed scenarios over full-size cacheable weight/K/V mappings. |
 | `--sweep <key=a,b>` | Cartesian parameter sweep for supported CPU, pattern, TLB, and core-to-core modes; requires `--output`. GPU schema 1 and LLM schema 1 do not support sweeps. |
 
 Primary modes are intentionally separate and accept different option sets. Use `memory_benchmark -h` or the [User Manual](documents/MANUAL.md) for defaults, valid combinations, and the complete option reference.
 
 `--llm-memory` requires explicit active weight size, layer count, query/KV head geometry, head dimension, and visible
 context. It allocates the requested weight, K, and V working sets in full, initializes and pre-touches them outside the
-timed region, and measures three versioned memory-only scenarios. It does not run Transformer mathematics or report
-inference tokens/s. Its machine-readable synthetic-step rate is named `synthetic_memory_steps_per_second`.
+timed region, and measures three versioned memory-only scenarios. The generic schema records `backend: "cpu"`,
+`phase: "decode"`, `kv_layout: "contiguous"`, `work_unit_kind: "decode_step"`, and methodology
+`llm-memory-v1-cpu-decode-contiguous`. Metal, prefill, and paged-KV profiles are reserved vocabulary but are not yet
+selectable or supported. The profile does not run Transformer mathematics or report inference tokens/s. Its
+machine-readable synthetic work-unit rate is named `synthetic_memory_work_units_per_second`.
 
 When `--iterations` is omitted, standard bandwidth, pattern, GPU operations, and the three LLM scenarios calibrate their
 work toward a bounded measurement duration. An explicit `--iterations` value selects fixed work. Standard latency
@@ -211,11 +214,12 @@ Treat benchmark values as measurements of the configured workload under the obse
 - Pattern GB/s is exact **effective kernel payload bandwidth**, not observed physical cache-bus or DRAM traffic. `strided_2mb` describes a 2 MiB virtual-address stride and does not prove superpage backing.
 - GPU GB/s is exact **effective compute-payload bandwidth** divided by Metal GPU time. Private storage is unified memory rather than separate VRAM, copy counts aggregate read plus write payload, and physical DRAM residency remains unverified.
 - CPU and GPU GB/s values are not directly comparable: the kernels, timing boundaries, parallelism, resource modes, and validation work differ.
-- LLM GB/s is exact **logical synthetic payload** divided by the synchronized CPU scenario time. The context is fixed,
+- LLM GB/s is exact **logical effective model payload** divided by the synchronized CPU scenario time. The context is fixed,
   includes the current token, and uses full-size cacheable mappings; none of those properties proves physical DRAM
   service. Weights-only and KV-only are component baselines, while mixed is one layer-interleaved workload and must not
   be split into independent weight- and KV-bandwidth claims.
-- An LLM synthetic memory step is not an inference token. The profile excludes Transformer compute, framework dispatch,
+- An LLM synthetic memory work unit (a decode step in the active profile) is not an inference token. The profile excludes
+  Transformer compute, framework dispatch,
   compute-memory overlap, GPU/ANE paths, paged attention, growing context, and model loading.
 - The LLM traffic classification version `llm-exact-weight-vs-kv-read-payload-v1` compares exact weight and KV-read
   bytes only. `near_crossover` means exact equality and is not a measured hardware-bottleneck claim.
@@ -279,8 +283,8 @@ recognizes the current console labels only and is neither JSON-schema nor histor
 - [TLB Analysis Whitepaper](documents/TLB_ANALYSIS_WHITEPAPER.md): paired analysis, boundary rules, confidence model, and JSON verification contract.
 - [Core-to-Core Whitepaper](documents/CORE_TO_CORE_WHITEPAPER.md): LDAR/STLR handoff protocol, scheduler-hint scenarios, and JSON schema.
 - [GPU Bandwidth Whitepaper](documents/GPU_BANDWIDTH_WHITEPAPER.md): Metal methodology, timing, validation, resource model, and interpretation limits.
-- [LLM Memory Profile Whitepaper](documents/LLM_MEMORY_PROFILE_WHITEPAPER.md): fixed-context traffic formulas, layout,
-  timing, checksum validation, schema, and interpretation limits.
+- [LLM Memory Profile Whitepaper](documents/LLM_MEMORY_PROFILE_WHITEPAPER.md): generic schema-v1 vocabulary plus the
+  active CPU/decode/contiguous traffic, timing, checksum, and interpretation contract.
 
 Runtime behavior and `memory_benchmark -h` are the authoritative sources when documentation differs.
 

@@ -15,7 +15,7 @@
 
 /**
  * @file llm_memory.h
- * @brief Cold-path configuration and status model for the CPU LLM memory profile
+ * @brief Backend-neutral configuration vocabulary and LLM run statuses
  */
 
 #ifndef LLM_MEMORY_H
@@ -29,7 +29,38 @@
 
 #include "core/config/constants.h"
 
-/** The three independently calibrated synthetic decode-memory scenarios. */
+/** Execution backend selected for an LLM memory profile. */
+enum class LlmMemoryBackend : uint8_t {
+  Cpu = 0,
+  Metal,
+};
+
+/** Logical LLM workload phase represented by one work unit. */
+enum class LlmPhase : uint8_t {
+  Decode = 0,
+  Prefill,
+};
+
+/** Logical-to-physical KV storage layout. */
+enum class LlmKvLayout : uint8_t {
+  Contiguous = 0,
+  Paged,
+};
+
+/** Stable unit used for iteration counts, calibration, and rates. */
+enum class LlmWorkUnitKind : uint8_t {
+  DecodeStep = 0,
+  PrefillOperation,
+};
+
+/** Logical KV write performed by one scenario work unit. */
+enum class LlmKvWriteKind : uint8_t {
+  None = 0,
+  CurrentTokenAppend,
+  FullPromptPopulation,
+};
+
+/** The three independently calibrated synthetic memory scenarios. */
 enum class LlmScenario : uint8_t {
   WeightsOnly = 0,
   KvOnly,
@@ -60,6 +91,7 @@ enum class LlmRunStatus : uint8_t {
   Complete,
   Partial,
   Interrupted,
+  Unsupported,
   Failed,
 };
 
@@ -93,10 +125,15 @@ inline constexpr const char* AUTOMATIC_ITERATIONS_MUST_BE_ZERO =
     "automatic-iterations-must-be-zero";
 inline constexpr const char* WEIGHT_SIZE_BYTES_OVERFLOW =
     "weight-size-bytes-overflow";
+inline constexpr const char* JSON_INTEGER_OUT_OF_RANGE =
+    "json-integer-out-of-range";
 }  // namespace LlmMemoryConfigReason
 
 /** Parsed and resolved standalone `--llm-memory` command configuration. */
 struct LlmMemoryConfig {
+  LlmMemoryBackend backend = LlmMemoryBackend::Cpu;
+  LlmPhase phase = LlmPhase::Decode;
+  LlmKvLayout kv_layout = LlmKvLayout::Contiguous;
   size_t weight_size_mb = 0;
   size_t layer_count = 0;
   size_t query_head_count = 0;
@@ -189,6 +226,28 @@ LlmMemoryConfigValidation validate_llm_memory_config(
 
 /** Return the stable schema token for a scenario, or `unknown`. */
 const char* llm_scenario_to_string(LlmScenario scenario);
+
+/** Return the stable schema token for an execution backend. */
+const char* llm_memory_backend_to_string(LlmMemoryBackend backend);
+
+/** Return the stable schema token for an LLM phase. */
+const char* llm_phase_to_string(LlmPhase phase);
+
+/** Return the stable schema token for a KV layout. */
+const char* llm_kv_layout_to_string(LlmKvLayout layout);
+
+/** Return the work-unit kind implied by @p phase. */
+LlmWorkUnitKind llm_work_unit_kind_for_phase(LlmPhase phase);
+
+/** Return the stable schema token for a work-unit kind. */
+const char* llm_work_unit_kind_to_string(LlmWorkUnitKind kind);
+
+/** Return the KV write kind implied by @p phase and @p scenario. */
+LlmKvWriteKind llm_kv_write_kind_for(LlmPhase phase,
+                                     LlmScenario scenario);
+
+/** Return the stable schema token for a KV write kind. */
+const char* llm_kv_write_kind_to_string(LlmKvWriteKind kind);
 
 /** Return the stable schema token for an attention classification. */
 const char* llm_attention_kind_to_string(LlmAttentionKind kind);

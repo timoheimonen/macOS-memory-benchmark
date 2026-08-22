@@ -15,7 +15,7 @@
 
 /**
  * @file llm_output.cpp
- * @brief Human-readable output for the CPU LLM memory profile
+ * @brief Human-readable output for the resolved LLM memory profile
  */
 
 #include "llm_memory/llm_output.h"
@@ -43,7 +43,7 @@ void emit_quality_warning(std::string_view token, const LlmMemoryWorkPlan& model
     std::cerr << Messages::warning_prefix()
               << Messages::warning_llm_memory_high_cv(
                      llm_scenario_to_string(LlmScenario::WeightsOnly),
-                     aggregate.effective_payload_gb_s.statistics.coefficient_of_variation_pct,
+                     aggregate.effective_model_payload_gb_s.statistics.coefficient_of_variation_pct,
                      Constants::LLM_STREAMING_CV_WARNING_PCT)
               << std::endl;
     return;
@@ -53,7 +53,7 @@ void emit_quality_warning(std::string_view token, const LlmMemoryWorkPlan& model
     std::cerr << Messages::warning_prefix()
               << Messages::warning_llm_memory_high_cv(
                      llm_scenario_to_string(LlmScenario::KvOnly),
-                     aggregate.effective_payload_gb_s.statistics.coefficient_of_variation_pct,
+                     aggregate.effective_model_payload_gb_s.statistics.coefficient_of_variation_pct,
                      Constants::LLM_STREAMING_CV_WARNING_PCT)
               << std::endl;
     return;
@@ -63,7 +63,7 @@ void emit_quality_warning(std::string_view token, const LlmMemoryWorkPlan& model
     std::cerr << Messages::warning_prefix()
               << Messages::warning_llm_memory_high_cv(
                      llm_scenario_to_string(LlmScenario::Mixed),
-                     aggregate.effective_payload_gb_s.statistics.coefficient_of_variation_pct,
+                     aggregate.effective_model_payload_gb_s.statistics.coefficient_of_variation_pct,
                      Constants::LLM_STREAMING_CV_WARNING_PCT)
               << std::endl;
     return;
@@ -87,8 +87,9 @@ void emit_quality_warning(std::string_view token, const LlmMemoryWorkPlan& model
   }
   if (token == "weight-working-set-cache-dominant") {
     std::cerr << Messages::warning_prefix()
-              << Messages::warning_llm_memory_weight_cache_dominant(model_plan.geometry.active_weight_bytes_per_step,
-                                                                    metadata.l2_data_cache_bytes)
+              << Messages::warning_llm_memory_weight_cache_dominant(
+                     model_plan.geometry.active_weight_bytes_per_work_unit,
+                     metadata.l2_data_cache_bytes)
               << std::endl;
     return;
   }
@@ -113,41 +114,73 @@ void emit_quality_warning(std::string_view token, const LlmMemoryWorkPlan& model
   }
 }
 
-void print_headline(const LlmScenarioAggregate& aggregate) {
-  if (!aggregate.step_latency_seconds.headline.has_value() || !aggregate.effective_payload_gb_s.headline.has_value()) {
+void print_headline(const LlmScenarioAggregate& aggregate,
+                    std::string_view work_unit_name,
+                    std::string_view plural_work_unit_name) {
+  if (!aggregate.work_unit_latency_seconds.headline.has_value() ||
+      !aggregate.effective_model_payload_gb_s.headline.has_value()) {
     return;
   }
 
-  const bool include_steps_per_second = aggregate.scenario == LlmScenario::Mixed;
-  if (include_steps_per_second && !aggregate.synthetic_memory_steps_per_second.headline.has_value()) {
+  const bool include_work_units_per_second = aggregate.scenario == LlmScenario::Mixed;
+  if (include_work_units_per_second &&
+      !aggregate.synthetic_memory_work_units_per_second.headline.has_value()) {
     return;
   }
-  const double steps_per_second = aggregate.synthetic_memory_steps_per_second.headline.value_or(0.0);
+  const double work_units_per_second = aggregate.synthetic_memory_work_units_per_second.headline.value_or(0.0);
   const std::string scenario_name =
       Messages::report_llm_memory_scenario_name(llm_scenario_to_string(aggregate.scenario));
   std::cout << Messages::report_llm_memory_scenario_headline(
-                   scenario_name, *aggregate.step_latency_seconds.headline * 1000.0, steps_per_second,
-                   *aggregate.effective_payload_gb_s.headline, include_steps_per_second)
+                   scenario_name, std::string(work_unit_name),
+                   std::string(plural_work_unit_name),
+                   *aggregate.work_unit_latency_seconds.headline * 1000.0,
+                   work_units_per_second,
+                   *aggregate.effective_model_payload_gb_s.headline,
+                   include_work_units_per_second)
             << std::endl;
 }
 
 }  // namespace
 
-void print_llm_memory_console_report(const LlmMemoryWorkPlan& model_plan, const LlmResultMetadata& metadata,
+void print_llm_memory_console_report(const LlmMemoryWorkPlan& model_plan,
+                                     const LlmResultMetadata& metadata,
                                      const LlmMemoryResult& result) {
-  std::cout << Messages::report_llm_memory_header() << std::endl;
-  std::cout << Messages::report_llm_memory_payload(model_plan.geometry.active_weight_bytes_per_step,
-                                                   model_plan.geometry.kv_read_bytes_per_step,
-                                                   model_plan.geometry.kv_append_write_bytes_per_step)
+  const std::string work_unit_kind =
+      llm_work_unit_kind_to_string(model_plan.work_unit_kind);
+  const std::string work_unit_name =
+      Messages::report_llm_memory_work_unit_name(work_unit_kind, false);
+  const std::string plural_work_unit_name =
+      Messages::report_llm_memory_work_unit_name(work_unit_kind, true);
+
+  std::cout << Messages::report_llm_memory_header(
+                   llm_memory_backend_to_string(model_plan.backend),
+                   llm_phase_to_string(model_plan.phase), work_unit_kind,
+                   llm_kv_layout_to_string(model_plan.kv_layout))
             << std::endl;
-  std::cout << Messages::report_llm_memory_crossover(model_plan.geometry.traffic_crossover_context_tokens) << "\n\n";
-  for (const LlmScenarioAggregate& aggregate : result.aggregates) {
-    print_headline(aggregate);
+  if (model_plan.geometry.decode.has_value()) {
+    std::cout << Messages::report_llm_memory_decode_geometry(
+                     model_plan.geometry.decode->visible_context_tokens,
+                     model_plan.geometry.traffic_crossover_context_tokens)
+              << std::endl;
   }
-  std::cout << Messages::report_llm_memory_interpretation_note() << std::endl;
+  std::cout << Messages::report_llm_memory_payload(
+                   work_unit_name,
+                   model_plan.geometry.active_weight_bytes_per_work_unit,
+                   model_plan.geometry.kv_read_bytes_per_work_unit,
+                   model_plan.geometry.kv_write_bytes_per_work_unit)
+            << "\n\n";
+  for (const LlmScenarioAggregate& aggregate : result.aggregates) {
+    print_headline(aggregate, work_unit_name, plural_work_unit_name);
+  }
+  std::cout << Messages::report_llm_memory_interpretation_note(
+                   llm_phase_to_string(model_plan.phase),
+                   llm_kv_layout_to_string(model_plan.kv_layout),
+                   work_unit_name)
+            << std::endl;
   std::cout.flush();
 
-  for (const std::string& token : collect_llm_quality_warning_tokens(model_plan, metadata, result)) {
+  for (const std::string& token :
+       collect_llm_quality_warning_tokens(model_plan, metadata, result)) {
     emit_quality_warning(token, model_plan, metadata, result);
   }
 }

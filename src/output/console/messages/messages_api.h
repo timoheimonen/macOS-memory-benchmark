@@ -238,19 +238,30 @@ std::string warning_gpu_duration_quality(const std::string& operation,
                                          const std::string& quality);
 const std::string& warning_gpu_environment_not_nominal();
 const std::string& warning_gpu_recommended_working_set_exceeded();
-const std::string& report_llm_memory_header();
-std::string report_llm_memory_payload(size_t active_weight_bytes_per_step,
-                                      size_t kv_read_bytes_per_step,
-                                      size_t kv_append_bytes_per_step);
-std::string report_llm_memory_crossover(
-    double traffic_crossover_context_tokens);
+std::string report_llm_memory_header(const std::string& backend,
+                                     const std::string& phase,
+                                     const std::string& work_unit_kind,
+                                     const std::string& kv_layout);
+std::string report_llm_memory_work_unit_name(
+    const std::string& work_unit_kind, bool plural);
+std::string report_llm_memory_payload(
+    const std::string& work_unit_name,
+    size_t active_weight_bytes_per_work_unit,
+    size_t kv_read_bytes_per_work_unit,
+    size_t kv_write_bytes_per_work_unit);
+std::string report_llm_memory_decode_geometry(
+    size_t visible_context_tokens, double traffic_crossover_context_tokens);
 std::string report_llm_memory_scenario_headline(
-    const std::string& scenario_name, double step_latency_ms,
-    double synthetic_memory_steps_per_second, double effective_payload_gb_s,
-    bool include_steps_per_second);
+    const std::string& scenario_name, const std::string& work_unit_name,
+    const std::string& plural_work_unit_name, double work_unit_latency_ms,
+    double synthetic_memory_work_units_per_second,
+    double effective_model_payload_gb_s,
+    bool include_work_units_per_second);
 std::string report_llm_memory_scenario_name(
     const std::string& scenario_token);
-const std::string& report_llm_memory_interpretation_note();
+std::string report_llm_memory_interpretation_note(
+    const std::string& phase, const std::string& kv_layout,
+    const std::string& work_unit_name);
 std::string warning_llm_memory_high_cv(const std::string& scenario_token,
                                        double cv_pct,
                                        double threshold_pct);

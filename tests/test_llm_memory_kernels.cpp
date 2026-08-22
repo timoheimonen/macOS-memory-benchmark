@@ -312,7 +312,7 @@ struct OracleWorkerRun {
 };
 
 OracleWorkerRun oracle_worker_run(const LlmLayerDescriptor* layers, size_t layer_count,
-                                  const LlmKvSequenceDescriptor* sequences, size_t steps, uint64_t scenario_flags,
+                                  const LlmKvSequenceDescriptor* sequences, size_t work_units, uint64_t scenario_flags,
                                   uint64_t scenario_seed) {
   OracleWorkerRun run;
   size_t sequence_count = 0;
@@ -334,7 +334,7 @@ OracleWorkerRun oracle_worker_run(const LlmLayerDescriptor* layers, size_t layer
     }
   }
 
-  for (size_t step = 0; step < steps; ++step) {
+  for (size_t step = 0; step < work_units; ++step) {
     for (size_t layer = 0; layer < layer_count; ++layer) {
       const LlmLayerDescriptor& layer_descriptor = layers[layer];
       if ((scenario_flags & kLlmScenarioFlagWeight) != 0) {
@@ -612,7 +612,7 @@ TEST(LlmMemoryKernelIntegrationTest, OneWorkerProductionExecutorRealAsmSmokeMatc
   ASSERT_TRUE(scenario.valid) << scenario.reason_code;
   const OracleWorkerRun independent =
       oracle_worker_run(resources.worker_layers(0), plan.layer_descriptors_per_worker, resources.worker_sequences(0),
-                        scenario.steps, kLlmScenarioFlagMixed, scenario.scenario_seed);
+                        scenario.work_units, kLlmScenarioFlagMixed, scenario.scenario_seed);
   auto timer = HighResTimer::create();
   ASSERT_TRUE(timer.has_value());
   const LlmExecutorResult result =
@@ -645,9 +645,10 @@ TEST(LlmMemoryKernelIntegrationTest, MultiWorkerProductionExecutorRealAsmCoversE
   std::vector<OracleWorkerRun> independent;
   independent.reserve(plan.effective_workers);
   for (size_t worker = 0; worker < plan.effective_workers; ++worker) {
-    independent.push_back(oracle_worker_run(resources.worker_layers(worker), plan.layer_descriptors_per_worker,
-                                            resources.worker_sequences(worker), scenario.steps, kLlmScenarioFlagMixed,
-                                            scenario.scenario_seed));
+    independent.push_back(oracle_worker_run(
+        resources.worker_layers(worker), plan.layer_descriptors_per_worker,
+        resources.worker_sequences(worker), scenario.work_units,
+        kLlmScenarioFlagMixed, scenario.scenario_seed));
   }
   auto timer = HighResTimer::create();
   ASSERT_TRUE(timer.has_value());

@@ -201,7 +201,7 @@ TEST(MessagesTest, LlmMemoryCliMessagesHaveExactOutput) {
       "Options for standalone CPU synthetic LLM decode-memory mode:\n"
       "  -M, --llm-memory       Select the fixed-context memory-only decode profile.\n"
       "      --weight-size-mb <MiB>\n"
-      "                          Required active weight bytes per synthetic step, in MiB.\n"
+      "                          Required active weight bytes per decode step, in MiB.\n"
       "      --layers <count>    Required transformer layer count.\n"
       "      --query-heads <count>\n"
       "                          Required query-head count; must be at least as large as KV heads\n"
@@ -215,12 +215,12 @@ TEST(MessagesTest, LlmMemoryCliMessagesHaveExactOutput) {
       "      --context-tokens <count>\n"
       "                          Required fixed visible context, including the current token.\n"
       "      --batch-size <count>\n"
-      "                          Batch sequences per synthetic step (default: " +
+      "                          Batch sequences per decode step (default: " +
       std::to_string(Constants::LLM_DEFAULT_BATCH_SIZE) +
       ").\n"
       "  -t, --threads <count>  Requested CPU workers; detected workers are used when omitted.\n"
       "  -i, --iterations <count>\n"
-      "                          Exact steps per scenario measurement. When omitted, each\n"
+      "                          Exact decode steps per scenario measurement. When omitted, each\n"
       "                          scenario calibrates toward 150 ms in a\n"
       "                          100-250 ms window.\n"
       "  -r, --count <count>    Cyclic weights/KV/mixed loops (default: " +
@@ -233,7 +233,7 @@ TEST(MessagesTest, LlmMemoryCliMessagesHaveExactOutput) {
       "                          An empty value disables JSON for this direct command.\n"
       "  -h, --help             Show this LLM-mode help and exit.\n"
       "This profile models CPU memory traffic only: it performs no Transformer math and\n"
-      "does not report inference tokens/s. Effective payload is not physical DRAM traffic.\n";
+      "does not report inference tokens/s. Effective model payload is not physical DRAM traffic.\n";
 
   const std::vector<MessageCase> cases = {
       {"mode isolation", Messages::error_llm_memory_must_be_used_alone(),
@@ -258,7 +258,7 @@ TEST(MessagesTest, LlmMemoryCliMessagesHaveExactOutput) {
        "(requested 5, maximum 4)"},
       {"runtime failure",
        Messages::error_llm_memory_run_failed("checksum-mismatch"),
-       "Synthetic LLM decode memory profile failed "
+       "Synthetic LLM memory profile failed "
        "(reason_code=checksum-mismatch)"},
       {"positive integer", Messages::llm_memory_reason_positive_integer(),
        "must be a positive integer"},
@@ -270,23 +270,49 @@ TEST(MessagesTest, LlmMemoryCliMessagesHaveExactOutput) {
        expected_usage},
       {"command name", Messages::llm_memory_command_name(),
        "LLM memory profile"},
-      {"report header", Messages::report_llm_memory_header(),
-       "Synthetic LLM decode memory profile (CPU, fixed context, warm/cacheable)"},
-      {"payload", Messages::report_llm_memory_payload(1024, 768, 256),
-       "  Active weight bytes / step: 1024\n"
-       "  KV read bytes / step:       768\n"
-       "  KV append bytes / step:     256"},
-      {"crossover", Messages::report_llm_memory_crossover(4.0),
+      {"report header",
+       Messages::report_llm_memory_header(
+           "cpu", "decode", "decode_step", "contiguous"),
+       "Synthetic LLM memory profile (backend=cpu, phase=decode, "
+       "work_unit=decode_step, kv_layout=contiguous, warm/cacheable)"},
+      {"decode unit",
+       Messages::report_llm_memory_work_unit_name("decode_step", false),
+       "decode step"},
+      {"decode units",
+       Messages::report_llm_memory_work_unit_name("decode_step", true),
+       "decode steps"},
+      {"prefill unit",
+       Messages::report_llm_memory_work_unit_name("prefill_operation", false),
+       "prefill operation"},
+      {"prefill units",
+       Messages::report_llm_memory_work_unit_name("prefill_operation", true),
+       "prefill operations"},
+      {"unknown unit",
+       Messages::report_llm_memory_work_unit_name("future", false),
+       "work unit"},
+      {"unknown units",
+       Messages::report_llm_memory_work_unit_name("future", true),
+       "work units"},
+      {"payload",
+       Messages::report_llm_memory_payload("decode step", 1024, 768, 256),
+       "  Active weight bytes / decode step: 1024\n"
+       "  KV read bytes / decode step:       768\n"
+       "  KV write bytes / decode step:      256"},
+      {"decode geometry", Messages::report_llm_memory_decode_geometry(8, 4.0),
+       "  Visible context tokens:     8\n"
        "  Traffic crossover:          4.00 visible context tokens"},
       {"weights headline",
        Messages::report_llm_memory_scenario_headline(
-           "Weights only", 1.25, 800.0, 100.5, false),
-       "  Weights only: 1.250 ms/step, 100.50 GB/s effective payload"},
+           "Weights only", "decode step", "decode steps", 1.25, 800.0,
+           100.5, false),
+       "  Weights only: 1.250 ms/decode step, "
+       "100.50 GB/s effective model payload"},
       {"mixed headline",
        Messages::report_llm_memory_scenario_headline(
-           "Mixed", 3.75, 266.666, 80.25, true),
-       "  Mixed:        3.750 ms/step, 266.67 synthetic memory steps/s, "
-       "80.25 GB/s effective payload"},
+           "Mixed", "decode step", "decode steps", 3.75, 266.666, 80.25,
+           true),
+       "  Mixed:        3.750 ms/decode step, 266.67 synthetic decode "
+       "steps/s, 80.25 GB/s effective model payload"},
       {"weights label",
        Messages::report_llm_memory_scenario_name("weights_only"),
        "Weights only"},
@@ -296,11 +322,13 @@ TEST(MessagesTest, LlmMemoryCliMessagesHaveExactOutput) {
        "Mixed"},
       {"unknown label", Messages::report_llm_memory_scenario_name("future"),
        "Unknown"},
-      {"interpretation", Messages::report_llm_memory_interpretation_note(),
-       "  Interpretation: each step is synthetic memory-only work, not an inference token; "
-       "effective payload is logical, not physical DRAM-counter traffic.\n"
-       "  Context/layout: the fixed visible context includes the current-token slot; KV uses "
-       "contiguous layer/batch/token/head/dimension layout.\n"
+      {"interpretation",
+       Messages::report_llm_memory_interpretation_note(
+           "decode", "contiguous", "decode step"),
+       "  Interpretation: each decode step is synthetic memory-only work, not an inference "
+       "token; effective model payload is logical, not physical DRAM-counter traffic.\n"
+       "  Phase/layout: phase=decode, kv_layout=contiguous; the visible context includes the "
+       "current-token slot; KV uses layer/batch/token/head/dimension order.\n"
        "  Crossover: logical weight/KV-read payload equality is not a proven hardware "
        "bottleneck transition.\n"
        "  Comparability: small weight or KV working sets can be cache-dominant; order imbalance, "
@@ -311,8 +339,8 @@ TEST(MessagesTest, LlmMemoryCliMessagesHaveExactOutput) {
        "LLM scenario order is not fully balanced across completed loops"},
       {"duration",
        Messages::warning_llm_memory_duration_quality(
-           "mixed", "single-step-over-target"),
-       "LLM Mixed duration quality is single-step-over-target"},
+           "mixed", "above-target-single-work-unit"),
+       "LLM Mixed duration quality is above-target-single-work-unit"},
       {"environment", Messages::warning_llm_memory_environment_not_nominal(),
        "LLM result environment is not reference-eligible (thermal state or Low Power Mode)"},
       {"main QoS",
@@ -341,7 +369,8 @@ TEST(MessagesTest, GeneralHelpAdvertisesTheLlmBoundaryExactlyOnce) {
   EXPECT_NE(usage.find("--context-tokens"), std::string::npos);
   EXPECT_NE(usage.find("memory-only interpretation"), std::string::npos);
   EXPECT_NE(usage.find("JSON uses schema 1 methodology "), std::string::npos);
-  EXPECT_NE(usage.find(Constants::LLM_METHODOLOGY_VERSION),
+  EXPECT_NE(usage.find(
+                Constants::LLM_CPU_DECODE_CONTIGUOUS_METHODOLOGY_VERSION),
             std::string::npos);
   EXPECT_NE(usage.find("checkpoints each terminal scenario"),
             std::string::npos);
