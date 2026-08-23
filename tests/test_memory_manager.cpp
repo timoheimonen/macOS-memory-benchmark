@@ -110,3 +110,20 @@ TEST_F(MemoryManagerTest, ZeroSizeFailsBeforeAnySystemCallWithExactMessage) {
   EXPECT_EQ(state.advise_calls, 0u);
   EXPECT_EQ(state.unmap_calls, 0u);
 }
+
+TEST_F(MemoryManagerTest, ReadOnlyProtectionUsesExactMappingRangeAndReportsFailure) {
+  MmapPtr buffer = allocate_buffer(4096, "protected");
+  ASSERT_NE(buffer, nullptr);
+
+  EXPECT_TRUE(protect_buffer_read_only(buffer.get(), 4096));
+  EXPECT_EQ(state.protect_calls, 1u);
+  EXPECT_EQ(state.last_protect_size, 4096u);
+  EXPECT_EQ(state.last_protect_flags, PROT_READ);
+
+  state.protect_result = -1;
+  EXPECT_FALSE(protect_buffer_read_only(buffer.get(), 4096));
+  EXPECT_EQ(state.protect_calls, 2u);
+  EXPECT_FALSE(protect_buffer_read_only(nullptr, 4096));
+  EXPECT_FALSE(protect_buffer_read_only(buffer.get(), 0));
+  EXPECT_EQ(state.protect_calls, 2u);
+}

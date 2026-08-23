@@ -4,15 +4,16 @@
 CXX = clang++
 AS = as
 
-# Keep one deployment target for production, tests, assembly, and links. Exporting
-# the value also preserves it when coverage builds override compiler/linker flags.
-export MACOSX_DEPLOYMENT_TARGET ?= 11.0
+# Keep one deployment target for production/test sources, assembly, and final
+# links. Exporting the value also preserves it when coverage builds override
+# compiler/linker flags. External static archives must not require a newer OS.
+export MACOSX_DEPLOYMENT_TARGET ?= 26.0
 
 # Source directory
 SRC_DIR = src
 
 # Google Test configuration
-GTEST_DIR = /opt/homebrew/opt/googletest
+GTEST_DIR ?= /opt/homebrew/opt/googletest
 GTEST_INCLUDE = $(GTEST_DIR)/include
 GTEST_LIB_DIR = $(GTEST_DIR)/lib
 GTEST_LIBS = -L$(GTEST_LIB_DIR) -lgtest -lgtest_main -pthread
@@ -36,7 +37,7 @@ ASFLAGS = -arch arm64
 # Linker flags (pthread is already in CXXFLAGS, but can be here too)
 LDFLAGS = -pthread
 
-# First-party frameworks used by the Objective-C++ Metal backend.
+# First-party frameworks used by the Objective-C++ platform boundaries.
 APPLE_FRAMEWORKS = -framework Metal -framework Foundation
 
 # Generate compiler dependency files next to C++ object files. Keeping this
@@ -118,7 +119,7 @@ $(TEST_DIR)/%.o: $(TEST_DIR)/%.cpp
 	@echo "Compiling test $< -> $@..."
 	$(CXX) $(TEST_CXXFLAGS) $(DEPFLAGS) -c $< -o $@
 
-# The Metal boundary is the only Objective-C++ production translation unit.
+# Objective-C++ production boundaries share the normal C++ build settings.
 %.o: %.mm
 	@echo "Compiling Objective-C++ $< -> $@..."
 	$(CXX) $(CXXFLAGS) -fobjc-arc $(DEPFLAGS) -c $< -o $@

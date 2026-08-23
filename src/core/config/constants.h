@@ -17,7 +17,6 @@
  * @file constants.h
  * @brief Central configuration constants for benchmark execution
  * @author Timo Heimonen <timo.heimonen@proton.me>
- * @date 2025
  *
  * This header defines all configuration constants used throughout the benchmark
  * suite, organized into logical categories for maintainability and clarity.
@@ -153,6 +152,132 @@ namespace Constants {
       "gpu-bandwidth-v1-private-runtime-single-cmdbuf-calibrated-balanced";
   constexpr const char* GPU_WORK_PLAN_IDENTITY_VERSION =
       "gpu-work-plan-v1";
+
+  // Standalone LLM memory profile. Calibration aliases intentionally share
+  // the established bandwidth duration policy, while work-unit and accounted-
+  // byte ceilings remain mode-owned methodology guardrails.
+  constexpr size_t LLM_DEFAULT_KV_ELEMENT_BYTES = 2;
+  constexpr size_t LLM_DEFAULT_BATCH_SIZE = 1;
+  constexpr size_t LLM_DEFAULT_LOOP_COUNT = 3;
+  constexpr size_t LLM_RANGE_ALIGNMENT_BYTES = 32;
+  constexpr double LLM_CALIBRATION_TARGET_SECONDS =
+      BANDWIDTH_CALIBRATION_TARGET_SECONDS;
+  constexpr double LLM_CALIBRATION_MIN_SECONDS =
+      BANDWIDTH_CALIBRATION_MIN_SECONDS;
+  constexpr double LLM_CALIBRATION_MAX_SECONDS =
+      BANDWIDTH_CALIBRATION_MAX_SECONDS;
+  constexpr size_t LLM_CALIBRATION_MAX_CORRECTIONS =
+      BANDWIDTH_CALIBRATION_MAX_CORRECTIONS;
+  constexpr size_t LLM_CALIBRATION_MIN_PILOT_BYTES =
+      BANDWIDTH_CALIBRATION_MIN_PILOT_BYTES;
+  constexpr size_t LLM_MAX_WORK_UNITS_PER_MEASUREMENT =
+      BANDWIDTH_CALIBRATION_MAX_PASSES;
+  constexpr size_t LLM_MAX_ACCOUNTED_BYTES_PER_TASK =
+      64ULL * 1024ULL * BYTES_PER_MB;
+  constexpr double LLM_STREAMING_CV_WARNING_PCT = 5.0;
+  constexpr int LLM_JSON_SCHEMA_VERSION = 1;
+  constexpr size_t LLM_JSON_MAX_SAFE_INTEGER = (1ULL << 53) - 1;
+  constexpr const char* LLM_JSON_MODE_NAME = "llm_memory";
+  constexpr size_t LLM_WEIGHT_PASSES_PER_WORK_UNIT = 1;
+  constexpr size_t LLM_KV_REPLAY_FACTOR = 1;
+  constexpr const char* LLM_CPU_DECODE_CONTIGUOUS_METHODOLOGY_VERSION =
+      "llm-memory-v1-cpu-decode-contiguous";
+  constexpr const char* LLM_CPU_DECODE_PAGED_METHODOLOGY_VERSION =
+      "llm-memory-v1-cpu-decode-paged";
+  constexpr const char* LLM_CPU_PREFILL_CONTIGUOUS_METHODOLOGY_VERSION =
+      "llm-memory-v1-cpu-prefill-contiguous";
+  constexpr const char* LLM_CPU_PREFILL_PAGED_METHODOLOGY_VERSION =
+      "llm-memory-v1-cpu-prefill-paged";
+  constexpr const char* LLM_WORK_PLAN_IDENTITY_VERSION =
+      "llm-memory-work-plan-v1";
+  constexpr const char* LLM_COMPONENT_IDENTITY_VERSION =
+      "llm-memory-components-v1";
+  constexpr const char* LLM_LOGICAL_PROFILE_VERSION =
+      "decode_steady_fixed_context";
+  constexpr const char* LLM_CONTIGUOUS_KV_LAYOUT_VERSION =
+      "contiguous_layer_batch_token_head_dimension";
+  constexpr const char* LLM_CPU_EXECUTOR_VERSION =
+      "llm-cpu-executor-v1-arm64-decode-contiguous";
+  constexpr const char* LLM_DESCRIPTOR_ABI_VERSION =
+      "llm-memory-descriptor-abi-v1";
+  constexpr const char* LLM_CPU_SCHEDULE_VERSION =
+      "worker-local-layer-order-no-per-layer-global-barrier";
+  constexpr const char* LLM_CPU_TIMER_POLICY_VERSION =
+      "synchronized-start-to-last-worker-completion-per-scenario-task";
+  constexpr const char* LLM_BUFFER_PATTERN_VERSION =
+      "llm-buffer-pattern-v1";
+  constexpr const char* LLM_APPEND_PATTERN_VERSION =
+      "llm-kv-append-affine64-v1";
+  constexpr const char* LLM_READ_CHECKSUM_VERSION =
+      "llm-read-checksum-v1";
+  constexpr const char* LLM_PREFILL_LOGICAL_PROFILE_VERSION =
+      "full_prompt_causal_prefix_tiled";
+  constexpr const char* LLM_PREFILL_PLANNED_EXECUTOR_VERSION =
+      "llm-prefill-generic-work-unit-runner-v1";
+  constexpr const char* LLM_PREFILL_RESOURCE_PLAN_VERSION =
+      "llm-prefill-pure-resource-plan-v1";
+  constexpr const char* LLM_PREFILL_CPU_EXECUTOR_VERSION =
+      "llm-cpu-executor-v1-arm64-prefill-contiguous";
+  constexpr const char* LLM_PREFILL_DESCRIPTOR_ABI_VERSION =
+      "llm-memory-prefill-contiguous-descriptor-abi-v1";
+  constexpr const char* LLM_PREFILL_PAGED_CPU_EXECUTOR_VERSION =
+      "llm-cpu-executor-v1-arm64-prefill-paged";
+  constexpr const char* LLM_PREFILL_PAGED_DESCRIPTOR_ABI_VERSION =
+      "llm-memory-prefill-paged-descriptor-abi-v1";
+  constexpr const char* LLM_TRAFFIC_CLASSIFICATION_VERSION =
+      "llm-exact-weight-vs-kv-read-payload-v1";
+  constexpr size_t LLM_KV_BLOCK_TABLE_ENTRY_BYTES = sizeof(uint32_t);
+  constexpr size_t LLM_KV_PREPARATION_POLL_INTERVAL_ENTRIES =
+      1024ULL * 1024ULL;
+  constexpr size_t LLM_METAL_SEGMENT_CAPACITY_BYTES =
+      256ULL * BYTES_PER_MB;
+  constexpr size_t LLM_METAL_SEGMENT_SLOTS_PER_POOL = 256;
+  constexpr size_t LLM_METAL_STATUS_BUFFER_BYTES = 4096;
+  constexpr size_t LLM_METAL_THREADS_PER_THREADGROUP_CAP = 256;
+  constexpr size_t LLM_METAL_MAX_THREADGROUPS_PER_GRID = 8192;
+  constexpr size_t LLM_METAL_MAX_OWNER_ORDINALS_PER_THREADGROUP = 65536;
+  constexpr size_t LLM_METAL_MAX_VECTOR_ITERATIONS_PER_LANE_PER_VISIT =
+      1048576;
+  constexpr size_t LLM_METAL_MAX_SERIAL_RANGE_VISITS_PER_LANE_PER_TASK =
+      1048576;
+  constexpr size_t LLM_METAL_MAX_PAGED_SEMANTIC_LOOKUPS_PER_TASK =
+      268435456;
+  constexpr size_t LLM_METAL_MAX_WORK_UNITS_PER_DISPATCH = 65536;
+  constexpr size_t LLM_METAL_VECTOR_WIDTH_BYTES = 16;
+  constexpr size_t LLM_METAL_DIAGNOSTIC_MAX_BYTES = 4096;
+  constexpr const char* LLM_METAL_ARGUMENT_BUFFER_ABI_VERSION =
+      "llm-metal-argument-buffer-tier2-v1";
+  constexpr const char* LLM_METAL_GRID_PLAN_VERSION =
+      "llm-metal-capped-grid-stride-v1";
+  constexpr const char* LLM_METAL_RESOURCE_PLAN_VERSION =
+      "llm-metal-resource-foundation-v1";
+  constexpr const char* LLM_PAGED_KV_LAYOUT_VERSION =
+      "paged-uint32-block-table-full-blocks-v1";
+  constexpr const char* LLM_KV_BLOCK_PERMUTATION_VERSION =
+      "splitmix64-fisher-yates-rejection-v1";
+  constexpr const char* LLM_KV_LAYOUT_GEOMETRY_IDENTITY_VERSION =
+      "llm-kv-layout-geometry-v1";
+  constexpr const char* LLM_KV_LAYOUT_PLAN_IDENTITY_VERSION =
+      "llm-kv-layout-plan-v1";
+  constexpr const char* LLM_PAGED_DECODE_WORKLOAD_IDENTITY_VERSION =
+      "llm-paged-decode-workload-v1";
+  constexpr const char* LLM_PAGED_CPU_EXECUTION_IDENTITY_VERSION =
+      "llm-paged-cpu-execution-v1";
+  constexpr const char* LLM_PAGED_METAL_EXECUTION_IDENTITY_VERSION =
+      "llm-paged-metal-execution-v1";
+  constexpr const char* LLM_PAGED_CPU_SCHEDULE_VERSION =
+      "decode-kv-accounted-prefix-balanced-rotating-v1";
+  constexpr const char* LLM_PAGED_CPU_EXECUTOR_VERSION =
+      "llm-cpu-executor-v1-arm64-decode-paged";
+  constexpr const char* LLM_PAGED_DESCRIPTOR_ABI_VERSION =
+      "llm-memory-paged-descriptor-abi-v1";
+  constexpr const char* LLM_PAGED_BUFFER_PATTERN_VERSION =
+      "llm-paged-physical-buffer-pattern-v1";
+  constexpr const char* LLM_PAGED_READ_CHECKSUM_VERSION =
+      "llm-paged-read-checksum-v1";
+  constexpr size_t LLM_KV_BLOCK_TABLE_HASH_CHUNK_ENTRIES = 1024;
+  constexpr const char* LLM_METAL_SEGMENT_LAYOUT_VERSION =
+      "whole-element-segments-v1";
 
   constexpr double BENCHMARK_LATENCY_TARGET_SECONDS = 0.250;
   constexpr double BENCHMARK_LATENCY_CALIBRATION_MIN_SECONDS = 0.100;

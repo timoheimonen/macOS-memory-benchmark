@@ -40,10 +40,12 @@ using MainThreadQosSetter = std::function<int()>;
 /**
  * @brief Request USER_INTERACTIVE QoS for the calling benchmark thread.
  *
- * Failure is non-fatal and emits the existing centralized warning. The result
- * remains available for console and JSON audit metadata.
+ * Failure is non-fatal. Callers may emit the existing warning immediately or
+ * defer it to a mode-specific terminal report while retaining the exact result
+ * for audit metadata.
  *
  * @param setter Optional deterministic setter used by tests.
+ * @param emit_warning Whether a failed request is reported immediately.
  * @return Requested/applied state and the platform return code.
  * @throws Any exception raised by an injected setter. The production system
  *         call path does not throw.
@@ -52,6 +54,6 @@ using MainThreadQosSetter = std::function<int()>;
  *       standard-error stream; the QoS request itself applies to each caller.
  */
 MainThreadQosResult prepare_main_thread_benchmark_qos(
-    const MainThreadQosSetter& setter = {});
+    const MainThreadQosSetter& setter = {}, bool emit_warning = true);
 
 #endif  // BENCHMARK_QOS_H

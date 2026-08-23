@@ -24,6 +24,7 @@ enum class PrimaryBenchmarkMode {
   AnalyzeTlb,
   AnalyzeCoreToCore,
   GpuBandwidth,
+  LlmMemory,
   Conflict,
 };
 

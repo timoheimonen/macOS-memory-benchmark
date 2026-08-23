@@ -93,6 +93,7 @@ using MmapPtr = std::unique_ptr<void, MmapDeleter>;
 struct MemorySystemCalls {
   void* (*map)(void*, size_t, int, int, int, off_t) = ::mmap;
   int (*advise)(void*, size_t, int) = ::madvise;
+  int (*protect)(void*, size_t, int) = ::mprotect;
   int (*unmap)(void*, size_t) = ::munmap;
 };
 
@@ -131,5 +132,17 @@ MmapPtr allocate_buffer(size_t size, const char* buffer_name = "buffer");
  * @note If madvise() fails, the buffer is still returned (non-fatal error).
  */
 MmapPtr allocate_buffer_non_cacheable(size_t size, const char* buffer_name = "buffer");
+
+/**
+ * @brief Change an mmap-backed buffer to read-only access.
+ * @param buffer Start of the page-aligned mapping.
+ * @param size Page-rounded mapping size in bytes.
+ * @return true when mprotect() succeeds; false for invalid inputs or failure.
+ *
+ * The operation is injectable through MemorySystemCalls so resource-preparation
+ * tests can verify the protection transition without changing real page
+ * permissions. The caller owns user-facing error reporting.
+ */
+bool protect_buffer_read_only(void* buffer, size_t size);
 
 #endif // MEMORY_MANAGER_H

@@ -1,6 +1,8 @@
 # Parameter Compatibility Matrix
 
-Working version `0.62.0`
+Working version `0.63.0`
+
+Runtime platform: macOS 26 or later on Apple Silicon (ARM64).
 
 ## All Flags
 
@@ -11,27 +13,42 @@ Working version `0.62.0`
 | `-T` | `--analyze-tlb` | — | Run standalone TLB analysis |
 | `-C` | `--analyze-core2core` | — | Run standalone two-thread acquire/release token-protocol handoff analysis |
 | `-G` | `--gpu-bandwidth` | — | Run standalone Metal GPU memory bandwidth |
-| `-i` | `--iterations` | `<count>` | Positive exact R/W/Copy pass count; CPU maximum is `INT_MAX`, while GPU mode applies a smaller work-dependent ceiling. Omission enables automatic calibration in benchmark, pattern, and GPU modes |
+| `-M` | `--llm-memory` | — | Run the standalone CPU/Metal synthetic LLM memory profile |
+| — | `--llm-memory-backend` | `cpu\|metal` | LLM execution backend; default `cpu`; CPU and capability-gated Metal support decode/prefill with contiguous or paged KV |
+| — | `--weight-size-mb` | `<MiB>` | Required positive active weight size for LLM-memory mode |
+| — | `--layers` | `<count>` | Required positive LLM layer count |
+| — | `--query-heads` | `<count>` | Required positive query-head count; at least the KV-head count and divisible by it |
+| — | `--kv-heads` | `<count>` | Required positive physical KV-head count |
+| — | `--head-dim` | `<count>` | Required positive K/V head-vector element count |
+| — | `--kv-element-bytes` | `1\|2\|4` | LLM KV element width; default `2` |
+| — | `--phase` | `decode\|prefill` | LLM phase; default `decode` |
+| — | `--context-tokens` | `<count>` | Required only for decode; fixed visible context including the current synthetic token |
+| — | `--prompt-tokens` | `<P>` | Required only for prefill; positive full-prompt token count |
+| — | `--attention-query-tile-tokens` | `<Q>` | Required only for prefill; query-tile size in `1..P` |
+| — | `--batch-size` | `<count>` | Positive LLM batch-sequence count; default `1` |
+| — | `--kv-layout` | `contiguous\|paged` | LLM KV layout; default `contiguous` |
+| — | `--kv-block-tokens` | `<G>` | Required only for paged KV: a positive power of two no greater than `UINT32_MAX`; may exceed the active phase length |
+| `-i` | `--iterations` | `<count>` | Positive exact R/W/Copy pass count or LLM scenario work-unit count; CPU standard maximum is `INT_MAX`, while GPU and LLM apply work-dependent ceilings. Omission enables automatic calibration in the applicable mode |
 | `-b` | `--buffer-size` | `<MB>` | Default `512` MB. Standard mode permits `0` only with `--only-latency`; pattern mode requires a positive value; GPU minimum is `64` MB |
-| `-r` | `--count` | `<count>` | Positive loop count up to `INT_MAX`; default `1` for benchmark/pattern modes and `3` for core-to-core/GPU modes |
-| — | `--seed` | `<uint64>` | Unsigned 64-bit reproducibility seed for benchmark, pattern, TLB, or GPU mode; generated once when omitted |
+| `-r` | `--count` | `<count>` | Positive loop count; default `1` for benchmark/pattern modes and `3` for core-to-core/GPU/LLM modes |
+| — | `--seed` | `<uint64>` | Unsigned 64-bit reproducibility seed for benchmark, pattern, TLB, GPU, or LLM mode; generated once when omitted |
 | `-n` | `--latency-samples` | `<count>` | Positive sample-window count up to `INT_MAX`; default `1000` in benchmark and core-to-core modes |
 | `-s` | `--latency-stride-bytes` | `<bytes>` | Positive, pointer-aligned latency-chain stride; default `256` bytes |
 | `-m` | `--latency-chain-mode` | `<mode>` | Chain policy: `auto` (default), `global-random`, `random-box`, `same-random-in-box`, or `diff-random-in-box` |
 | `-l` | `--latency-tlb-locality-kb` | `<KB>` | Latency-chain locality window; default `1024` KB. With `auto`, `0` selects global random |
 | `-D` | `--tlb-density` | `low\|medium\|high` | Standalone TLB runtime profile; default `medium` |
-| `-t` | `--threads` | `<count>` | Positive requested bandwidth worker count up to `INT_MAX`; omitted main-memory/pattern work uses detected cores, omitted cache bandwidth uses one worker, and requests above available cores are capped |
+| `-t` | `--threads` | `<count>` | Positive requested bandwidth worker count. General main-memory/pattern execution caps above detected cores; CPU LLM preserves requested, detected, and executable effective counts separately, while Metal LLM rejects this option |
 | `-k` | `--cache-size` | `<KB>` | Custom cache target: `16..1048576` KB, or `0` only with `--benchmark --only-latency` |
 | `-W` | `--only-bandwidth` | — | Run only standard benchmark bandwidth tests; requires `--benchmark` |
 | `-L` | `--only-latency` | — | Run only standard benchmark latency tests; requires `--benchmark` |
 | `-u` | `--non-cacheable` | — | Apply best-effort cache-discouraging allocation hints; does not create truly uncached memory |
-| `-o` | `--output` | `<target>` | Write JSON output. Exact `-` selects one final stdout document. An empty direct value disables JSON; an empty sweep value is missing/invalid. Every other non-empty value is a file, including `./-` and flag-shaped names such as `-G` |
+| `-o` | `--output` | `<target>` | Result target syntax. Exact `-` selects one final stdout document for result-producing modes. An empty direct value disables JSON; every other non-empty value is a file. LLM file output checkpoints each terminal scenario measurement and command terminal |
 | `-S` | `--sweep` | `<key=a,b>` | Add a Cartesian sweep parameter; repeat once per distinct key and use with `--output` |
 | `-X` | `--sweep-max-runs` | `<count>` | Positive generated-run limit; default `256`, or `16` with `--analyze-tlb`; effective only with `--sweep` |
 | `-h` | `--help` | — | Show help; the standalone `--analyze-tlb` whitelist is the exception and rejects this combination |
 
-Short and long forms are equivalent. The compatibility tables below use long forms as canonical names; the GPU table
-also repeats its exact whitelist aliases. `--seed` is the only option without a short alias. Long options require two
+Short and long forms are equivalent. The compatibility tables below use long forms as canonical names; the GPU and LLM
+tables also repeat their exact whitelist aliases. LLM model-geometry options and `--seed` have no short aliases. Long options require two
 dashes, short options are exactly one character, and short options cannot be bundled. The parser does not support
 `--option=value` syntax. Options that take one value may appear at most once, except that `--sweep` may be repeated for
 distinct parameter keys. Numeric values must be complete decimal tokens without whitespace, a leading `+`, or trailing
@@ -47,13 +64,14 @@ values `low`, `medium`, and `high`; quick/standard/exhaustive are profile descri
 
 ### Mode Flags (exactly one distinct primary mode required for benchmark execution)
 
-| | `--benchmark` | `--patterns` | `--analyze-tlb` | `--analyze-core2core` | `--gpu-bandwidth` |
-|---|---|---|---|---|---|
-| `--benchmark` | ✅ | ❌ mutually exclusive | ❌ | ❌ | ❌ |
-| `--patterns` | ❌ mutually exclusive | ✅ | ❌ | ❌ | ❌ |
-| `--analyze-tlb` | ❌ | ❌ | ✅ | ❌ | ❌ |
-| `--analyze-core2core` | ❌ | ❌ | ❌ | ✅ | ❌ |
-| `--gpu-bandwidth` | ❌ | ❌ | ❌ | ❌ | ✅ |
+| | `--benchmark` | `--patterns` | `--analyze-tlb` | `--analyze-core2core` | `--gpu-bandwidth` | `--llm-memory` |
+|---|---|---|---|---|---|---|
+| `--benchmark` | ✅ | ❌ mutually exclusive | ❌ | ❌ | ❌ | ❌ |
+| `--patterns` | ❌ mutually exclusive | ✅ | ❌ | ❌ | ❌ | ❌ |
+| `--analyze-tlb` | ❌ | ❌ | ✅ | ❌ | ❌ | ❌ |
+| `--analyze-core2core` | ❌ | ❌ | ❌ | ✅ | ❌ | ❌ |
+| `--gpu-bandwidth` | ❌ | ❌ | ❌ | ❌ | ✅ | ❌ |
+| `--llm-memory` | ❌ | ❌ | ❌ | ❌ | ❌ | ✅ |
 
 ### Modifiers with `--benchmark`
 
@@ -154,6 +172,66 @@ checkpoint cadence.
 Grid geometry is not a CLI parameter: schema 1 uses the frozen 8192-threadgroup maximum and records both that maximum and
 the resolved grid in each work plan.
 
+### Modifiers with `--llm-memory` (standalone mode)
+
+The LLM parser has an exact whitelist. The five common model options and phase-specific geometry must occur once; every
+optional value and the mode or help selector may also occur at most once. Backend defaults to CPU; Metal is selected
+with `--llm-memory-backend metal`. Both backends support decode and prefill with either KV layout, for eight active
+backend/phase/layout profiles. The four Metal profiles are capability-gated. Phase defaults to decode.
+Decode requires exactly one `--context-tokens`; prefill requires exactly one `--prompt-tokens P` and
+`--attention-query-tile-tokens Q`, with `P >= 1` and `1 <= Q <= P`. Cross-phase geometry is rejected. `--kv-layout`
+defaults to `contiguous`. Paged layout requires exactly one
+`--kv-block-tokens <G>`; contiguous layout rejects that option. `G` must be a positive power of two no greater than
+`UINT32_MAX`, and `G` may exceed the active phase length. These rules are order-independent. After checked configuration
+and memory-budget preflight, the command allocates the layout-specific resources and runs the three schema-1 scenarios.
+
+| Modifier | Compatible | Notes |
+|----------|------------|-------|
+| `--llm-memory-backend <cpu\|metal>` | ✅ | Default `cpu`. Both backends support decode/prefill with contiguous or paged KV. Metal performs no CPU fallback, reports capability absence as terminal `unsupported`, and reports runtime compiler/pipeline/resource/task failure as terminal `failed`/`invalid` evidence |
+| `--weight-size-mb <MiB>` | ✅ required | Positive active weight size; checked MiB-to-byte conversion |
+| `--layers <n>` | ✅ required | Positive layer count |
+| `--query-heads <n>` | ✅ required | Positive; must be at least and evenly divisible by KV heads |
+| `--kv-heads <n>` | ✅ required | Positive physical KV-head count |
+| `--head-dim <n>` | ✅ required | Positive K/V head-vector element count |
+| `--phase <decode\|prefill>` | ✅ | Default `decode`; selects a versioned work-unit contract |
+| `--context-tokens <n>` | ✅ decode only | Positive fixed visible context including the current synthetic token |
+| `--prompt-tokens <P>` | ✅ prefill only | Positive full-prompt length; no default |
+| `--attention-query-tile-tokens <Q>` | ✅ prefill only | Required with prefill; `1 <= Q <= P`, with no default |
+| `--kv-element-bytes <1\|2\|4>` | ✅ | Default `2`; every other width is rejected |
+| `--batch-size <n>` | ✅ | Positive; default `1` |
+| `--kv-layout <contiguous\|paged>` | ✅ | Default `contiguous`; both layouts are executable for decode and prefill on CPU and Metal |
+| `--kv-block-tokens <G>` | ✅ paged only | Required exactly once with paged; rejected with contiguous. Positive power of two, at most `UINT32_MAX`; may exceed the active phase length |
+| `-t, --threads <n>` | ✅ CPU only | Positive requested workers; omission uses detected workers. Metal rejects the option and does not perform worker detection; worker/QoS evidence is null with applicability false |
+| `-i, --iterations <n>` | ✅ | Positive exact work units per scenario; omission selects excluded per-scenario calibration toward 150 ms. CPU values fit the common work/task guardrails; Metal additionally caps one dispatch at 65,536 work units. Metal prefill caps lane-local serial range-helper visits at 1,048,576 per task, including `T*L` for paged `weights_only`; paged Metal profiles also enforce semantic-lookup, owner-ordinal, threadgroup, and per-visit vector-iteration caps |
+| `-r, --count <n>` | ✅ | Positive cyclic loop count; default `3` |
+| `--seed <uint64>` | ✅ | Exact base seed including zero; a non-zero seed is generated once when omitted |
+| `-o, --output <target>` | ✅ | Empty disables JSON; exact `-` emits one final schema 1 document; `./-`, flag-shaped values, and every other non-empty non-sentinel value are atomic file targets. A non-empty target adds the conservative JSON output peak to memory admission |
+| `-h, --help` | ✅ | Prints dedicated help before enforcing required inputs or resolving worker/seed/session/QoS state; malformed or duplicate tokens still fail |
+| `--sweep`, `--sweep-max-runs`, `--non-cacheable` | ❌ | Outside the frozen v1 whitelist |
+| Buffer/cache/latency/TLB/pattern/core-to-core/GPU modifiers | ❌ | Outside the standalone whitelist |
+| Any other primary mode | ❌ | Primary modes are mutually exclusive |
+
+The parser rejects checked weight/KV geometry that overflows or makes even one scenario work unit exceed the 64 GiB
+task-accounted-byte ceiling. For paged KV, task-accounted bytes include logical model bytes plus timed block-table lookup
+traffic, while throughput remains model bytes divided by timed seconds. Before allocation, the planner separately admits
+page-rounded full-size weight and physical K/V mappings, the block table, descriptors, retained planner/transient storage,
+checksum storage, and orchestration storage against the current memory budget. All four CPU and all four
+Metal phase/layout profiles are active. Metal uses Tier 2 argument-buffer indirection, GPU command-buffer timestamps,
+dual-mod32 checksum validation, and excluded phase-neutral `kv_write` validation. Contiguous uses exact-tail W/K/V
+segments. Metal prefill allows at most 1,048,576 serial range-helper visits per lane and rejects a larger or overflowing
+task before checksum-oracle work or GPU dispatch. Contiguous tasks count all applicable serial ranges; paged
+`weights_only` counts `T*L`, while paged KV-bearing tasks use their separately capped owner schedule. Contiguous prefill
+otherwise logically visits
+all prompt K/V records before its tiled-prefix reads; a weight-bearing scenario performs one weight pass per operation.
+Both paged Metal phases use whole-block K/V segmentation, segmented private table storage, cyclic one-threadgroup
+ownership, and terminal-block padding canaries. Decode records exact `L*B*(2*N+1)` lookup evidence. Prefill records
+exact `L*B*(N+2*M)` lookup evidence, where `M` sums the blocks reached by every query-tile prefix, and reports exact
+per-threadgroup `actual-threadgroup-cost` accounted-byte vector, minimum, maximum, and imbalance. Every Metal
+`weights_only` task reports the same cost unit for its weight-vector grid-stride schedule; contiguous KV-bearing grids
+publish no threadgroup-cost evidence. Full-prompt write samples and applicable padding canaries must validate after each
+KV-active task. This is a cyclic assignment, not a weighted balance. The command does not fall back to another backend,
+phase, or layout.
+
 ### Sweep Compatibility
 
 `--sweep` runs a Cartesian product over one or more parameter lists. It always requires a non-empty
@@ -171,11 +249,13 @@ envelopes use `configuration.sweep_schema_version: 1`; each nested result keeps 
 | `--analyze-tlb` | `latency-stride-bytes`, `latency-chain-mode`, `tlb-density` | `buffer-size`, `cache-size`, `threads`, `latency-tlb-locality-kb` |
 | `--analyze-core2core` | `count`, `latency-samples` | `buffer-size`, `cache-size`, `threads`, latency chain/locality/stride keys, `tlb-density` |
 | `--gpu-bandwidth` | none | GPU schema 1 rejects all sweep keys and `--sweep-max-runs` |
+| `--llm-memory` | none | The standalone LLM whitelist rejects all sweep keys |
 
 Additional sweep rules:
 
 - `--sweep-max-runs <n>` limits the generated Cartesian product; default is `16` with `--analyze-tlb` and `256` otherwise.
-- Outside GPU mode, `--sweep-max-runs` is accepted without `--sweep` but has no effect in that case.
+- In general CPU and core-to-core modes, `--sweep-max-runs` is accepted without `--sweep` but has no effect in that
+  case. GPU and LLM standalone parsers reject it.
 - A sweep parameter key may appear only once; duplicate keys are rejected before execution.
 - `--sweep latency-chain-mode=global-random` is invalid with `--analyze-tlb`.
 - Direct options outside `--sweep` are used as fixed values for every generated run.
@@ -197,7 +277,7 @@ Additional sweep rules:
   but it is not another completeness condition. A nested TLB `status: "error"` is retained in `runs[].result` and maps
   the attempt to failed without adding a TLB `status_reason` field.
 
-### Incompatible Modifier Combinations
+### Compatibility and Incompatibility Cases
 
 | Pair | Reason |
 |------|--------|
@@ -213,12 +293,22 @@ Additional sweep rules:
 | `--analyze-tlb` + `--help` | The standalone TLB whitelist does not include help; use `--help` without `--analyze-tlb` |
 | `--gpu-bandwidth` + any other primary mode | GPU is a standalone primary mode |
 | `--gpu-bandwidth` + any option outside `buffer-size`, `iterations`, `count`, `seed`, `output`, `help` | GPU schema 1 exact whitelist |
+| `--llm-memory` + any other primary mode | LLM-memory is a standalone primary mode |
+| `--llm-memory` + any option outside `llm-memory-backend`, its model/phase geometry, `kv-element-bytes`, `batch-size`, `kv-layout`, `kv-block-tokens`, `threads`, `iterations`, `count`, `seed`, `output`, `help` | LLM exact whitelist |
+| `--llm-memory --kv-layout paged` without exactly one valid `--kv-block-tokens` | Paged KV requires an explicit positive power-of-two block size no greater than `UINT32_MAX` |
+| `--llm-memory --kv-layout contiguous --kv-block-tokens <G>` | Block size has no meaning for contiguous KV and is rejected |
+| `--llm-memory --phase decode` with prefill geometry, or prefill with `--context-tokens` | Phase-specific geometry is not interchangeable |
+| `--llm-memory --llm-memory-backend metal --phase prefill` | Valid Metal contiguous-prefill profile when paged options are absent; requires normal `P`/`Q` geometry |
+| `--llm-memory --llm-memory-backend metal --phase prefill --kv-layout paged --kv-block-tokens <G>` | Valid Metal paged-prefill profile; requires normal `P`/`Q` geometry and explicit valid `G` |
+| `--llm-memory --llm-memory-backend metal --threads <n>` | Metal has no CPU-worker contract and rejects explicit threads |
+| `--llm-memory --phase prefill --kv-layout paged --kv-block-tokens <G>` | Valid CPU paged-prefill profile; requires the normal prefill `P`/`Q` geometry and explicit valid `G` |
+| `--llm-memory --llm-memory-backend metal --phase decode --kv-layout paged --kv-block-tokens <G>` | Valid Metal paged-decode profile; requires normal decode context and explicit valid `G` |
 | `--sweep` without `--output`, or with an empty output value | Sweep mode requires a non-empty combined JSON output target |
 | `--sweep` generated runs > `--sweep-max-runs` | Guardrail against accidental large Cartesian sweeps |
 
 ### No Mode Flag (shows help)
 
 Running with syntactically valid general modifiers but no primary mode flag (`--benchmark`, `--patterns`,
-`--analyze-tlb`, `--analyze-core2core`, or `--gpu-bandwidth`) shows help and exits without semantic validation. Parser
+`--analyze-tlb`, `--analyze-core2core`, `--gpu-bandwidth`, or `--llm-memory`) shows help and exits without semantic validation. Parser
 errors still fail before this fallback: for example, missing/malformed values and unknown options are errors, and
 `--tlb-density` is unknown unless `--analyze-tlb` selects the standalone TLB parser.

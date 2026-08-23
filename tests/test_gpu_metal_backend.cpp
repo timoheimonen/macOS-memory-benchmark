@@ -253,7 +253,7 @@ TEST_F(GpuMetalBackendIntegrationTest, InitializationAndRuntimeCompilationIntegr
   }
   EXPECT_FALSE(initialization_.compilation.compiler_identifier.empty());
   EXPECT_FALSE(initialization_.compilation.build_sdk.empty());
-  EXPECT_EQ(initialization_.compilation.deployment_target, "11.0");
+  EXPECT_EQ(initialization_.compilation.deployment_target, "26.0");
 
   const std::array<const GpuPipelineMetadata*, 5> pipelines = {&device.initialization_pipeline, &device.read_pipeline,
                                                                &device.write_pipeline, &device.copy_pipeline,

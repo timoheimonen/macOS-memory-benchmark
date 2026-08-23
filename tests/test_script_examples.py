@@ -58,14 +58,14 @@ class PlotterEntryPathTest(unittest.TestCase):
             result = plotter.load_data(CURRENT_FULL_FIXTURE, "average")
 
         self.assertEqual(result["cpu_name"], "Apple M4")
-        self.assertEqual(result["version"], "0.62.0")
-        self.assertAlmostEqual(result["bw_copy"], 54.82750326797385)
-        self.assertAlmostEqual(result["l1_lat"], 0.7860867955690964)
-        self.assertAlmostEqual(result["global_random"], 5.333158211283286)
+        self.assertEqual(result["version"], "0.63.0")
+        self.assertAlmostEqual(result["bw_copy"], 29.520028152492667)
+        self.assertAlmostEqual(result["l1_lat"], 1.1562554254729616)
+        self.assertAlmostEqual(result["global_random"], 5.622018794239533)
 
     def test_hierarchy_loader_accepts_current_full_result(self):
         with tempfile.TemporaryDirectory(prefix="script-example-plotter-") as temporary:
-            _, script = copy_script(Path(temporary), "plot_bechmark-memory-latency-hierarcy.py")
+            _, script = copy_script(Path(temporary), "plot_benchmark-memory-latency-hierarchy.py")
             plotter = load_plotter(script, "current_hierarchy_plotter")
             result = plotter.load_latency_data(CURRENT_FULL_FIXTURE, "average")
 
@@ -73,8 +73,8 @@ class PlotterEntryPathTest(unittest.TestCase):
         self.assertEqual(cpu_name, "Apple M4")
         self.assertEqual(len(categories), 4)
         self.assertEqual(len(latencies), 4)
-        self.assertAlmostEqual(locality_delta, 0.5273043967303268)
-        self.assertEqual(version, "0.62.0")
+        self.assertAlmostEqual(locality_delta, 0.6151600647670126)
+        self.assertEqual(version, "0.63.0")
 
     def test_hierarchy_loader_accepts_current_console_statistics(self):
         statistics = """\
@@ -91,7 +91,7 @@ Locality Latency Delta, Global - 16 KiB (ns):
 """
         with tempfile.TemporaryDirectory(prefix="script-example-text-") as temporary:
             root = Path(temporary)
-            _, script = copy_script(root, "plot_bechmark-memory-latency-hierarcy.py")
+            _, script = copy_script(root, "plot_benchmark-memory-latency-hierarchy.py")
             input_path = root / "Apple_M4_statistics.txt"
             input_path.write_text(statistics, encoding="utf-8")
             plotter = load_plotter(script, "current_text_hierarchy_plotter")
@@ -119,7 +119,7 @@ Locality Latency Delta, Global - 16 KiB (ns):
             loaders = (
                 ("plot_M4vsM5_benchmark_comparison.py", "wrong_schema_comparison", "load_data"),
                 (
-                    "plot_bechmark-memory-latency-hierarcy.py",
+                    "plot_benchmark-memory-latency-hierarchy.py",
                     "wrong_schema_hierarchy",
                     "load_latency_data",
                 ),
@@ -220,7 +220,7 @@ fi
 
         self.assertIn("Using jq to extract latency sample statistics", completed.stdout)
         self.assertEqual(final_output.count("TLB Locality:"), 120)
-        self.assertIn('"average": 0.696527076913686', final_output)
+        self.assertIn('"average": 0.6893617567937856', final_output)
 
     def test_latency_workflow_accepts_current_result_with_python(self):
         with tempfile.TemporaryDirectory(prefix="script-example-latency-python-") as temporary:
@@ -235,7 +235,7 @@ fi
 
         self.assertIn("Using Python to extract latency sample statistics", completed.stdout)
         self.assertEqual(final_output.count("TLB Locality:"), 120)
-        self.assertIn('"average": 0.696527076913686', final_output)
+        self.assertIn('"average": 0.6893617567937856', final_output)
 
     def test_stride_tlb_workflow_accepts_current_result(self):
         with tempfile.TemporaryDirectory(prefix="script-example-stride-tlb-") as temporary:
@@ -252,7 +252,7 @@ fi
                 rows = list(csv.DictReader(handle))
 
         self.assertEqual(len(rows), 315)
-        self.assertEqual(rows[0]["average"], "0.696527076913686")
+        self.assertEqual(rows[0]["average"], "0.6893617567937856")
         self.assertEqual(rows[0]["chain_node_count"], "64")
 
     def test_shell_workflows_do_not_extract_metrics_from_noncurrent_results(self):

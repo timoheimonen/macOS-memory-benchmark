@@ -128,3 +128,44 @@ TEST(DescriptiveStatisticsTest, NonFiniteDerivedDeviationLeavesCoefficientOfVari
   EXPECT_FALSE(statistics.coefficient_of_variation_defined);
   EXPECT_DOUBLE_EQ(statistics.coefficient_of_variation_pct, 0.0);
 }
+
+TEST(DescriptiveStatisticsTest, ReusableWorkspaceMatchesLegacyPathWithoutCapacityGrowth) {
+  const std::vector<double> values = {5.0, 1.0, 4.0, 2.0, 3.0};
+  const DescriptiveStatistics expected = calculate_descriptive_statistics(values);
+  std::vector<double> sorted_workspace;
+  std::vector<double> deviation_workspace;
+  sorted_workspace.reserve(values.size());
+  deviation_workspace.reserve(values.size());
+  const size_t sorted_capacity = sorted_workspace.capacity();
+  const size_t deviation_capacity = deviation_workspace.capacity();
+  const double* sorted_data = sorted_workspace.data();
+  const double* deviation_data = deviation_workspace.data();
+
+  const DescriptiveStatistics actual = calculate_descriptive_statistics(values, sorted_workspace, deviation_workspace);
+
+  EXPECT_EQ(actual.sample_count, expected.sample_count);
+  EXPECT_DOUBLE_EQ(actual.average, expected.average);
+  EXPECT_DOUBLE_EQ(actual.min, expected.min);
+  EXPECT_DOUBLE_EQ(actual.max, expected.max);
+  EXPECT_DOUBLE_EQ(actual.median, expected.median);
+  EXPECT_DOUBLE_EQ(actual.p90, expected.p90);
+  EXPECT_DOUBLE_EQ(actual.p95, expected.p95);
+  EXPECT_DOUBLE_EQ(actual.p99, expected.p99);
+  EXPECT_DOUBLE_EQ(actual.stddev, expected.stddev);
+  EXPECT_DOUBLE_EQ(actual.coefficient_of_variation_pct, expected.coefficient_of_variation_pct);
+  EXPECT_EQ(actual.coefficient_of_variation_defined, expected.coefficient_of_variation_defined);
+  EXPECT_DOUBLE_EQ(actual.median_absolute_deviation, expected.median_absolute_deviation);
+  EXPECT_EQ(sorted_workspace.capacity(), sorted_capacity);
+  EXPECT_EQ(deviation_workspace.capacity(), deviation_capacity);
+  EXPECT_EQ(sorted_workspace.data(), sorted_data);
+  EXPECT_EQ(deviation_workspace.data(), deviation_data);
+
+  const DescriptiveStatistics empty = calculate_descriptive_statistics({}, sorted_workspace, deviation_workspace);
+  EXPECT_EQ(empty.sample_count, 0u);
+  EXPECT_TRUE(sorted_workspace.empty());
+  EXPECT_TRUE(deviation_workspace.empty());
+  EXPECT_EQ(sorted_workspace.capacity(), sorted_capacity);
+  EXPECT_EQ(deviation_workspace.capacity(), deviation_capacity);
+  EXPECT_EQ(sorted_workspace.data(), sorted_data);
+  EXPECT_EQ(deviation_workspace.data(), deviation_data);
+}

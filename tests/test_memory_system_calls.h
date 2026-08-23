@@ -20,17 +20,22 @@ struct FakeMemorySystemCallState {
   alignas(4096) std::array<std::byte, kSlotSize * kSlotCount> storage{};
   size_t map_calls = 0;
   size_t advise_calls = 0;
+  size_t protect_calls = 0;
   size_t unmap_calls = 0;
   size_t fail_map_on_call = 0;
   int advise_result = 0;
   int advise_errno = EINVAL;
+  int protect_result = 0;
+  int protect_errno = EINVAL;
   int unmap_result = 0;
   int unmap_errno = EINVAL;
   size_t last_map_size = 0;
   size_t last_advise_size = 0;
+  size_t last_protect_size = 0;
   int last_protection = 0;
   int last_flags = 0;
   int last_advice = 0;
+  int last_protect_flags = 0;
   void* last_unmapped_pointer = nullptr;
   size_t last_unmapped_size = 0;
 };
@@ -76,12 +81,24 @@ inline int fake_memory_unmap(void* pointer, size_t size) {
   return state.unmap_result;
 }
 
+inline int fake_memory_protect(void*, size_t size, int protection) {
+  FakeMemorySystemCallState& state = *active_fake_memory_state;
+  ++state.protect_calls;
+  state.last_protect_size = size;
+  state.last_protect_flags = protection;
+  if (state.protect_result != 0) {
+    errno = state.protect_errno;
+  }
+  return state.protect_result;
+}
+
 class FakeMemorySystemCallsTest : public testing::Test {
  protected:
   void SetUp() override {
     active_fake_memory_state = &state;
     set_memory_system_calls_for_testing(
-        {fake_memory_map, fake_memory_advise, fake_memory_unmap});
+        {fake_memory_map, fake_memory_advise, fake_memory_protect,
+         fake_memory_unmap});
   }
 
   void TearDown() override {

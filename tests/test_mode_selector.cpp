@@ -21,12 +21,13 @@ struct ModeCase {
   const char* long_option;
 };
 
-constexpr std::array<ModeCase, 5> kModeCases{{
+constexpr std::array<ModeCase, 6> kModeCases{{
     {PrimaryBenchmarkMode::Standard, "-B", "--benchmark"},
     {PrimaryBenchmarkMode::Patterns, "-P", "--patterns"},
     {PrimaryBenchmarkMode::AnalyzeTlb, "-T", "--analyze-tlb"},
     {PrimaryBenchmarkMode::AnalyzeCoreToCore, "-C", "--analyze-core2core"},
     {PrimaryBenchmarkMode::GpuBandwidth, "-G", "--gpu-bandwidth"},
+    {PrimaryBenchmarkMode::LlmMemory, "-M", "--llm-memory"},
 }};
 
 PrimaryModeSelection select(const std::vector<std::string>& arguments) {
@@ -68,14 +69,17 @@ TEST(ModeSelectorTest,
 }
 
 TEST(ModeSelectorTest,
-     EveryLongPrimaryModeSpellingIsOpaqueAfterLongOutputOption) {
+     EveryLongPrimaryModeSpellingIsOpaqueAfterEitherOutputOption) {
   for (const ModeCase& mode_case : kModeCases) {
-    SCOPED_TRACE(mode_case.long_option);
-    const PrimaryModeSelection selection =
-        select({"program", "--output", mode_case.long_option});
+    for (const char* output_option : {"-o", "--output"}) {
+      SCOPED_TRACE(std::string(output_option) + " " +
+                   mode_case.long_option);
+      const PrimaryModeSelection selection =
+          select({"program", output_option, mode_case.long_option});
 
-    EXPECT_EQ(selection.mode, PrimaryBenchmarkMode::None);
-    EXPECT_TRUE(selection.selected_options.empty());
+      EXPECT_EQ(selection.mode, PrimaryBenchmarkMode::None);
+      EXPECT_TRUE(selection.selected_options.empty());
+    }
   }
 }
 
@@ -102,16 +106,49 @@ TEST(ModeSelectorTest, OutputMayAppearBeforeOrAfterTheActualSelectedMode) {
   }
 }
 
-TEST(ModeSelectorTest, DistinctModesConflictIndependentOfArgvOrder) {
-  const PrimaryModeSelection gpu_first =
-      select({"program", "--gpu-bandwidth", "--analyze-core2core"});
-  const PrimaryModeSelection core_first =
-      select({"program", "--analyze-core2core", "--gpu-bandwidth"});
+TEST(ModeSelectorTest,
+     LlmModeRemainsSelectedWhenItsOtherSpellingIsAnOpaqueOutputValue) {
+  for (const std::vector<std::string>& arguments : {
+           std::vector<std::string>{"program", "--output", "-M",
+                                    "--llm-memory"},
+           std::vector<std::string>{"program", "--llm-memory", "--output",
+                                    "-M"},
+           std::vector<std::string>{"program", "-o", "--llm-memory", "-M"},
+           std::vector<std::string>{"program", "-M", "-o",
+                                    "--llm-memory"},
+       }) {
+    SCOPED_TRACE(::testing::PrintToString(arguments));
+    const PrimaryModeSelection selection = select(arguments);
 
-  EXPECT_EQ(gpu_first.mode, PrimaryBenchmarkMode::Conflict);
-  EXPECT_EQ(core_first.mode, PrimaryBenchmarkMode::Conflict);
-  ASSERT_EQ(gpu_first.selected_options.size(), 2u);
-  ASSERT_EQ(core_first.selected_options.size(), 2u);
+    EXPECT_EQ(selection.mode, PrimaryBenchmarkMode::LlmMemory);
+    ASSERT_EQ(selection.selected_options.size(), 1u);
+    EXPECT_EQ(selection.selected_options.front(), "--llm-memory");
+  }
+}
+
+TEST(ModeSelectorTest, DistinctModesConflictIndependentOfArgvOrder) {
+  for (size_t first_index = 0; first_index < kModeCases.size();
+       ++first_index) {
+    for (size_t second_index = first_index + 1;
+         second_index < kModeCases.size(); ++second_index) {
+      const ModeCase& first = kModeCases[first_index];
+      const ModeCase& second = kModeCases[second_index];
+      for (bool reverse : {false, true}) {
+        const ModeCase& argv_first = reverse ? second : first;
+        const ModeCase& argv_second = reverse ? first : second;
+        SCOPED_TRACE(std::string(argv_first.long_option) + " " +
+                     argv_second.long_option);
+        const PrimaryModeSelection selection =
+            select({"program", argv_first.short_option,
+                    argv_second.long_option});
+
+        EXPECT_EQ(selection.mode, PrimaryBenchmarkMode::Conflict);
+        ASSERT_EQ(selection.selected_options.size(), 2u);
+        EXPECT_EQ(selection.selected_options[0], argv_first.long_option);
+        EXPECT_EQ(selection.selected_options[1], argv_second.long_option);
+      }
+    }
+  }
 }
 
 TEST(ModeSelectorTest,
@@ -134,12 +171,15 @@ TEST(ModeSelectorTest,
 }
 
 TEST(ModeSelectorTest, RepeatedOneModeRemainsOwnedByItsParser) {
-  const PrimaryModeSelection selection =
-      select({"program", "-G", "--gpu-bandwidth"});
+  for (const ModeCase& mode_case : kModeCases) {
+    SCOPED_TRACE(mode_case.long_option);
+    const PrimaryModeSelection selection =
+        select({"program", mode_case.short_option, mode_case.long_option});
 
-  EXPECT_EQ(selection.mode, PrimaryBenchmarkMode::GpuBandwidth);
-  ASSERT_EQ(selection.selected_options.size(), 1u);
-  EXPECT_EQ(selection.selected_options.front(), "--gpu-bandwidth");
+    EXPECT_EQ(selection.mode, mode_case.mode);
+    ASSERT_EQ(selection.selected_options.size(), 1u);
+    EXPECT_EQ(selection.selected_options.front(), mode_case.long_option);
+  }
 }
 
 TEST(ModeSelectorTest, OptionsWithoutPrimaryModeReturnNone) {

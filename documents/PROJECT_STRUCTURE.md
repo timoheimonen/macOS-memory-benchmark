@@ -1,7 +1,7 @@
 # Project Structure — macOS-memory-benchmark
 
-**Version:** 0.62.0
-**Platform:** ARM64 / AArch64 (Apple Silicon macOS)
+**Version:** 0.63.0
+**Platform:** ARM64 / AArch64 (Apple Silicon, macOS 26 or later)
 **License:** GNU General Public License v3.0 or later
 
 This document describes the layout of project files, organized by purpose. It is intended as a navigation aid for contributors and reviewers.
@@ -18,10 +18,11 @@ This document describes the layout of project files, organized by purpose. It is
    - [src/core/](#23-srccore--core-utilities)
    - [src/output/](#24-srcoutput---output-layer)
    - [src/gpu_bandwidth/](#25-srcgpu_bandwidth--metal-gpu-bandwidth)
-   - [src/pattern_benchmark/](#26-srcpattern_benchmark--pattern-access-benchmarks)
-   - [src/warmup/](#27-srcwarmup--pre-benchmark-warm-up)
-   - [src/utils/](#28-srcutils--shared-utilities)
-   - [src/third_party/](#29-srcthird_party--vendored-dependencies)
+   - [src/llm_memory/](#26-srcllm_memory--synthetic-llm-memory-profile)
+   - [src/pattern_benchmark/](#27-srcpattern_benchmark--pattern-access-benchmarks)
+   - [src/warmup/](#28-srcwarmup--pre-benchmark-warm-up)
+   - [src/utils/](#29-srcutils--shared-utilities)
+   - [src/third_party/](#210-srcthird_party--vendored-dependencies)
 3. [tests/ — Test suite](#3-tests--test-suite)
 4. [results/ — Benchmark result data](#4-results---benchmark-result-data)
 5. [pictures/ — Documentation images](#5-pictures--documentation-images)
@@ -36,13 +37,13 @@ This document describes the layout of project files, organized by purpose. It is
 
 | File | Purpose |
 |---|---|
-| `main.cpp` | Program entry point; performs primary-mode conflict scan, dispatches dedicated GPU/core-to-core paths, runs the general standard/pattern/TLB and sweep pipelines, and owns the general CPU output-session lifetime; the dedicated GPU and core-to-core CLIs own their sessions |
+| `main.cpp` | Program entry point; performs primary-mode conflict scan, dispatches dedicated LLM/GPU/core-to-core paths before the general parser, and runs the general standard/pattern/TLB and sweep pipelines; each standalone command boundary owns its output-session lifetime |
 
 ### Build and tooling
 
 | File | Purpose |
 |---|---|
-| `Makefile` | Primary build system; discovers C++/Objective-C++/assembly, targets macOS 11.0, compiles `.mm` with ARC, links Metal/Foundation, and produces release/test binaries |
+| `Makefile` | Primary build system; discovers C++/Objective-C++/assembly, targets sources and final links at macOS 26.0, accepts a configurable `GTEST_DIR`, compiles `.mm` with ARC, links Metal/Foundation, and produces release/test binaries |
 | `coverage.sh` | Runs isolated LLVM unit/all-test C++/Objective-C++ source coverage builds under `/tmp` without replacing normal workspace binaries |
 | `.clang-format` | Clang-Format style baseline for C++ sources |
 
@@ -70,6 +71,7 @@ This document describes the layout of project files, organized by purpose. It is
 | `documents/LATENCY_WHITEPAPER.md` | Whitepaper: cache and memory latency measurement methodology |
 | `documents/CORE_TO_CORE_WHITEPAPER.md` | Whitepaper: calibrated two-thread token-handoff methodology, audit schema, and interpretation limits |
 | `documents/GPU_BANDWIDTH_WHITEPAPER.md` | Whitepaper: Metal compute bandwidth methodology, GPU schema 1, validation, capability limits, and maintenance policy |
+| `documents/LLM_MEMORY_PROFILE_WHITEPAPER.md` | Whitepaper: CPU and capability-gated Metal decode/prefill contiguous/paged methodologies, with exact payload formulas, resources, validation, schema 1, and interpretation limits |
 | `documents/PROJECT_STRUCTURE.md` | This file |
 
 ---
@@ -77,7 +79,7 @@ This document describes the layout of project files, organized by purpose. It is
 ## 2. src/ — Source code
 
 All production C++, Objective-C++, and ARM64 assembly lives under `src/`. Headers use include paths relative to `src/`
-(e.g., `#include "core/config/config.h"`). Metal/Objective-C types are confined to one private `.mm` backend.
+(e.g., `#include "core/config/config.h"`). Metal/Objective-C types are confined to private `.mm` platform boundaries.
 
 ---
 
@@ -105,6 +107,10 @@ Hand-written AArch64 assembly implementing the hot inner loops that must not be 
 | `memory_write_strided.s` | Phase-rotating strided memory write (generic stride parameter) |
 | `memory_latency.s` | Pointer-chase latency measurement loop |
 | `core_to_core_latency.s` | Acquire/release token-exchange ping-pong loop for core-to-core protocol latency |
+| `llm_decode_memory.s` | Descriptor-driven weight/KV read and temporal current-token K/V append kernel for the synthetic LLM profile |
+| `llm_decode_memory_paged.s` | Paged-KV decode kernel with explicit timed block-table loads, paired append lookup, separate K/V scan lookups, exact tails, and versioned checksum evidence |
+| `llm_prefill_memory.s` | Contiguous-KV prefill kernel with full-prompt writes, tiled causal-prefix K/V scans, and operation-ordinal checksum evidence |
+| `llm_prefill_memory_paged.s` | Paged-KV prefill kernel with block-exclusive prompt writes, exact partial-prefix K/V scans, timed uint32 table loads, and versioned checksum evidence |
 
 ---
 
@@ -165,11 +171,11 @@ Core infrastructure for configuration, memory management, macOS system introspec
 
 | File | Purpose |
 |---|---|
-| `config.h` | `BenchmarkConfig` structure for standard, pattern, standalone TLB, and their common sweep settings; core-to-core and GPU use separate config types |
-| `constants.h` | Named constants for CPU/GPU memory limits, calibration, grid/dispatch/payload guardrails, buffer sizing, and latency access counts |
-| `version.h` | `SOFTVERSION` macro (semantic version string, currently `"0.62.0"`) |
-| `mode_selector.h` / `.cpp` | Pure primary-mode scan and conflict detection before mode-specific parsing; routes standard, pattern, TLB, core-to-core, and GPU deterministically |
-| `argument_parser.cpp` | Parses standard, pattern, and standalone TLB options into `BenchmarkConfig`; core-to-core and GPU are pre-routed to dedicated parsers |
+| `config.h` | `BenchmarkConfig` structure for standard, pattern, standalone TLB, and their common sweep settings; core-to-core, GPU, and LLM use separate config types |
+| `constants.h` | Named constants for CPU/GPU/LLM memory limits, calibration, grid/dispatch/payload guardrails, buffer sizing, and latency access counts |
+| `version.h` | `SOFTVERSION` macro (semantic version string, currently `"0.63.0"`) |
+| `mode_selector.h` / `.cpp` | Pure primary-mode scan and conflict detection before mode-specific parsing; routes standard, pattern, TLB, core-to-core, GPU, and LLM deterministically while skipping one opaque output value |
+| `argument_parser.cpp` | Parses standard, pattern, and standalone TLB options into `BenchmarkConfig`; core-to-core, GPU, and LLM are pre-routed to dedicated parsers |
 | `config_validator.cpp` | Validates the parsed configuration; emits errors for out-of-range or conflicting settings |
 | `buffer_calculator.cpp` | Derives buffer sizes for each cache/memory level from the validated configuration and detected system parameters |
 | `sweep_utils.h` / `.cpp` | Shared structural sweep parsing and overflow-safe Cartesian run counting used by standard and core-to-core sweep parsers |
@@ -229,6 +235,7 @@ All user-facing text strings are centralized here. Each `.cpp` file implements a
 | `config_messages.cpp` | Configuration echo and validation error text |
 | `core_to_core_messages.cpp` | Core-to-core mode status and result messages |
 | `gpu_bandwidth_messages.cpp` | GPU help, status, result, interpretation, warning, and validation messages |
+| `llm_memory_messages.cpp` | LLM help, validation, lifecycle, headline, interpretation, and quality-warning messages |
 | `error_messages.cpp` | Fatal error messages |
 | `info_messages.cpp` | General informational messages |
 | `pattern_messages.cpp` | Pattern benchmark descriptive labels |
@@ -243,7 +250,7 @@ All user-facing text strings are centralized here. Each `.cpp` file implements a
 |---|---|
 | `json_output_api.h` | Public standard/pattern payload builders and the shared atomic-file writer interface; this C++ API is distinct from the process contract in `API.md` |
 | `json_output.cpp` | Builds standard/pattern root payloads, adds timestamp/version metadata, and retains file-save adapters; direct command dispatch can reuse the prebuilt object through `JsonOutputSession` |
-| `json_output_session.h` / `.cpp` | Classifies raw output targets, applies mode-specific file-path policy, lazily dispatches checkpoints, routes command-scoped human stdout, and emits checked final JSON through the retained original stdout buffer; every direct mode and CPU sweep selects this transport |
+| `json_output_session.h` / `.cpp` | Classifies raw output targets, applies mode-specific file-path policy, lazily dispatches checkpoints, routes command-scoped human stdout, and emits checked final JSON through the retained original stdout buffer; result-producing direct modes and CPU sweeps use it, including the LLM file-checkpoint/final-stdout lifecycle |
 | `builder.cpp` | Builds common mode configuration metadata, including resolved chain, seed, calibration, scheduling, and worker policies |
 | `standard.cpp` | Active standard schema-3 serializer for completion state, loop measurements, and main/cache aggregates |
 | `patterns.cpp` | Serializes pattern benchmark results |
@@ -268,7 +275,35 @@ Objective-C++ Metal backend so deterministic unit tests do not require GPU work.
 
 ---
 
-### 2.6 src/pattern_benchmark/ — Pattern access benchmarks
+### 2.6 src/llm_memory/ — Synthetic LLM memory profile
+
+Standalone generic schema-1 vocabulary with eight active backend/phase/layout profiles: four CPU profiles and four
+capability-gated Metal profiles spanning decode/prefill and contiguous/paged KV. Pure logical phase planning,
+deterministic paged geometry/permutation, backend-specific execution planning/evidence, the Objective-C-free backend
+contract, CPU mapping and ARM64 execution, the Objective-C++ Metal boundary, environment capture, console composition,
+and serialization are separated so deterministic unit tests can inject platform and allocation behavior without running
+hot kernels. Capability failures remain explicit, and no unsupported Metal request falls back to CPU.
+
+| File | Purpose |
+|---|---|
+| `llm_memory.h` / `.cpp` | Separate config/status foundation, strict exact-whitelist parser, required/default worker/seed resolution, complete command boundary, backend factory ownership, peak-memory admission, QoS/signal scope, console output, and file/stdout transport orchestration |
+| `llm_kv_layout.h` / `.cpp` | Pure checked paged-KV geometry, block ownership, SplitMix64/Fisher–Yates permutation and little-endian table hash, exact physical/logical/padding/table/lookup/accounting math, and transient preparation estimates |
+| `llm_prefill.h` / `.cpp` | Checked prefill tile, causal-pair, payload, paged floor-sum lookup, token/block cost partition, versioned ownership evidence, write/checksum oracle, and semantic event-trace planning |
+| `llm_work_plan.h` / `.cpp` | Checked phase-applicable weight/KV geometry, payload/metadata/accounted math, memory budget, scenario limits, exact CPU ownership evidence, Metal segment/argument-buffer/resource/grid plans, and frozen methodology/component/plan identities |
+| `llm_backend.h` / `.cpp` | Objective-C-free synchronous backend lifecycle and task boundary, generic task identity/timing/completion/validation, tagged CPU/Metal task and command evidence, auxiliary-memory contract, stable statuses/reasons, checked evidence accessors, and backend factory |
+| `llm_cpu_backend.h` / `.cpp` | Active CPU adapter that owns the timer and prepared contiguous or paged resources, delegates allocation/execution to the executor, validates CPU worker/QoS/timer/checksum invariants, and converts executor evidence into the generic task result |
+| `llm_metal_backend.h` | Objective-C-free planning, capability, contiguous/paged resource and memory admission, cyclic block-owner grids with per-threadgroup accounting, decode/prefill parameter ABIs, timestamp/checksum mapping, diagnostics, and active-profile test seams |
+| `llm_metal_backend.mm` | Objective-C++ Metal boundary for capability probing, selected-profile runtime compilation, Tier 2 argument encoding, private/shared allocation, table upload/validation, exact-tail dispatch, paged-prefill cyclic ownership, GPU timestamps, layout-aware dual-mod32 checksum, full-prompt K/V-write and padding validation, diagnostics, and idempotent cleanup |
+| `llm_metal_kernels_source.h` | Canonical embedded MSL 2.3 source with profile-specific decode/prefill contiguous/paged parameter ABIs, common foundation entrypoints, scenario-specialized workload entrypoints, named-lane volatile paged-table publication, and phase-specific K/V-write/padding validation; exact selected source bytes are hashed at runtime |
+| `llm_executor.h` / `.cpp` | CPU-specific full-size mappings, paged-table preparation, deterministic initialization/pre-touch, phase/layout descriptor materialization, independent checksum oracles, padding canaries, synchronized worker team, timer boundary, and ARM64 adapters retained behind `LlmCpuBackend` |
+| `llm_runner.h` / `.cpp` | Backend-independent lifecycle, per-scenario automatic calibration or exact-work planning, generic task acceptance, frozen plans, cyclic loop order, status/counters, task-boundary interruption, aggregates, warnings, and logical checkpoints; resources are released before the command-terminal checkpoint |
+| `llm_json.h` / `.cpp` | Ordered generic LLM schema-1 builder plus conservative output-peak estimator, with backend/phase/layout identity, resolved Metal segmentation, capability/resource/task evidence, decimal-string exact integers, nullable non-applicability, traffic diagnostics, environment evidence, and interpretation contract |
+| `llm_output.h` / `.cpp` | Human-readable work-unit/model-payload/accounted geometry, Metal device/resource/task evidence, scenario headlines, interpretation limits, and evidence-backed quality warnings through centralized message helpers |
+| `llm_environment.h` / `.mm` | Objective-C-free snapshot type plus macOS thermal-state and Low Power Mode capture through Foundation |
+
+---
+
+### 2.7 src/pattern_benchmark/ — Pattern access benchmarks
 
 Benchmarks characterizing memory access patterns: sequential forward, sequential reverse, strided, and random. Results expose how access regularity and stride distance affect effective payload bandwidth.
 
@@ -287,7 +322,7 @@ Benchmarks characterizing memory access patterns: sequential forward, sequential
 
 ---
 
-### 2.7 src/warmup/ — Pre-benchmark warm-up
+### 2.8 src/warmup/ — Pre-benchmark warm-up
 
 Warm-up passes reduce selected cold-start effects before timing. Main-memory bandwidth warm-up is bounded, cache
 bandwidth warm-up covers the full target buffer, and latency warm-up page-touches without pre-traversing the chain.
@@ -303,7 +338,7 @@ bandwidth warm-up covers the full target buffer, and latency warm-up page-touche
 
 ---
 
-### 2.8 src/utils/ — Shared utilities
+### 2.9 src/utils/ — Shared utilities
 
 | File | Purpose |
 |---|---|
@@ -318,7 +353,7 @@ bandwidth warm-up covers the full target buffer, and latency warm-up page-touche
 
 ---
 
-### 2.9 src/third_party/ — Vendored dependencies
+### 2.10 src/third_party/ — Vendored dependencies
 
 | File | Purpose |
 |---|---|
@@ -342,6 +377,15 @@ installed. All `.cpp` files are picked up automatically by the Makefile. Tests n
 | `test_memory_utils.cpp` | `MemoryUtilsTest` | Memory helpers: pointer-chase chain construction and verification |
 | `test_memory_manager.cpp` | `MemoryManagerTest` | Injected mmap/madvise policy, failures, and exact RAII unmapping |
 | `test_numeric_utils.cpp` | `NumericUtilsTest` | Overflow-safe arithmetic, duration calibration, pilot counts, and quantization boundaries |
+| `test_llm_memory_contract.cpp` | `LlmMemoryContractTest` | Independent executable specification for all eight decode/prefill backend/layout methodology identities, payloads, paged geometry/lookup goldens, append and full-prompt writes, checksum/event-trace identities, descriptor ABI layouts, and schema acceptance; it does not exercise production LLM code |
+| `test_llm_memory_config.cpp` | `LlmMemoryConfigTest` | Config/status defaults, exact standalone decode/prefill parsing including paged prefill, phase/layout rules and stable reasons, strict decimal errors, raw output values, help isolation, worker/seed resolution, geometry/work-limit preflight, and incompatible options |
+| `test_llm_memory_work_plan.cpp` | `LlmMemoryWorkPlanTest` | Production checked decode/prefill geometry and payloads, physical/padding/table/lookup/accounted math including paged-prefill `N+2*M`, deterministic permutation/hash, CPU token/block ownership, Metal cyclic block-owner scheduling and component identities, memory budget, descriptor/range/layout invariants, worker reduction, scenario caps/calibration, and cyclic order |
+| `test_llm_memory_executor.cpp` | `LlmMemoryExecutorTest` | CPU phase/layout dispatch, atomic mapping/table-preparation failure seams, contiguous and paged decode/prefill descriptor materialization, independent checksums, padding canaries, synchronized timing, QoS, cancellation, and fake-kernel validation |
+| `test_llm_memory_runner.cpp` | `LlmMemoryRunnerTest` | Fake-backend lifecycle and generic decode/prefill task seams, lifecycle unsupported/failure handling, common identity/timing/completion/validation acceptance, exact calibration/single-unit/freeze/frozen-warmup order, cyclic measurements, status/counter/aggregate semantics, interruption, release/checkpoint precedence, auxiliary budgeting, and runner exception boundaries |
+| `test_llm_memory_json.cpp` | `LlmMemoryJsonTest` | Schema-1 identity for all eight CPU/Metal profiles, exact nullable geometry/workers, paged layout/permutation, prefill geometry, CPU ownership, Metal cyclic owner/per-threadgroup cost evidence, segmentation, capability/resource/task K/V-write/lookup/padding evidence, output-peak, status, interpretation, environment, and checkpoints |
+| `test_llm_memory_output.cpp` | `LlmMemoryOutputTest` | Exact decode/prefill, contiguous/paged, and Metal device/resource/table/task K/V-write/lookup/padding plus cyclic owner/per-threadgroup cost formatting, interpretation text, and deduplicated warnings |
+| `test_llm_memory_kernels.cpp` | `LlmMemoryKernelIntegrationTest` | Real contiguous/paged decode/prefill ARM64 descriptor/kernel scenarios, paged tails/lookups, full-prompt writes, exact partial tiled scans, checksum, padding, worker-count, and AAPCS64 coverage |
+| `test_llm_metal_backend.cpp` | `LlmMetalBackendTest`, `LlmMetalBackendIntegrationTest`, `LlmMetalBackendFailureInjectionIntegrationTest` | Pure capability, contiguous/paged segmentation, argument-buffer, decode/prefill ABIs, source-hash and prefill loop-order audit, phase-aware checksum/reason mapping, paged-prefill `N+2*M`, cyclic no-duplication ownership and per-threadgroup accounted-byte evidence, plus real-device selected-profile compilation, Tier-2 slots, private table/K/V initialization, exact-tail decode, full-prompt/tiled-prefix prefill, final-ordinal write/padding detection, interruption/failure cleanup, and idempotent release |
 | `test_buffer_manager.cpp` | `BufferManagerTest` | Pattern mapping policy, atomic allocation cleanup, initialized content, validation, and peak accounting |
 | `test_benchmark_executor.cpp` | `BenchmarkExecutorTest` | Injected phase/chain failures, continuous latency sampling, and hardware executor contracts |
 | `test_benchmark_runner.cpp` | `BenchmarkStatisticsCollectorTest`, `BenchmarkRunnerTest` | Status-bearing aggregation, schema-3 retained snapshots, checkpointing, interruption, and runner exception/failure seams |
@@ -349,7 +393,7 @@ installed. All `.cpp` files are picked up automatically by the Makefile. Tests n
 | `test_gpu_bandwidth.cpp` | `GpuBandwidthParserTest`, `GpuMemoryBudgetTest`, `GpuRunnerTest`, `GpuJsonTest` | Strict standalone parsing and raw output spelling, memory budgets, fake-backend calibration/execution/failure/interruption and file/stdout checkpoint semantics, counters, and schema-1 serialization |
 | `test_gpu_work_plan.cpp` | `GpuWorkPlanTest`, `GpuTimedAccumulatorOracleTest` | GPU constants, cyclic order, seed domains, pass/payload caps, calibration, vector/tail/grid geometry, frozen identities, and timed-accumulator oracle behavior |
 | `test_gpu_metal_backend.cpp` | `GpuMetalBackendIntegrationTest` | Real-Metal capability/runtime compile, private/shared tracked resources, read/write/copy/tail correctness, timestamps, validation, and byte readback |
-| `test_mode_selector.cpp` | `ModeSelectorTest` | Primary-mode detection, GPU aliases, and deterministic multi-mode conflicts |
+| `test_mode_selector.cpp` | `ModeSelectorTest` | All six primary modes and aliases, complete pairwise conflict order, duplicate ownership, and opaque flag-shaped output targets |
 | `test_hash_utils.cpp` | `HashUtilsTest` | CommonCrypto SHA-256 standard vectors and source-provenance helper behavior |
 | `test_analysis.cpp` | `AnalysisTest` | Injected TLB coordination, counters/status, boundary detection, validation, and paired analysis |
 | `test_json_schema.cpp` | `JsonSchemaTest` | Current standard schema-3 output structure, completion fields, and other mode schema contracts |
@@ -365,7 +409,7 @@ installed. All `.cpp` files are picked up automatically by the Makefile. Tests n
 | `test_core_to_core_messages.cpp` | `CoreToCoreMessagesTest` | Core-to-core console message strings |
 | `test_core_to_core_cli.cpp` | `CoreToCoreCliTest` | Core-to-core CLI argument parsing |
 | `test_core_to_core_runner.cpp` | `CoreToCoreRunnerTest` | Calibration, work planning, cyclic scenario order, deterministic failure seams, and real ARM64 integration paths |
-| `test_executable_cli.cpp` | `ExecutableCliIntegrationTest` | Executable-level CLI routing, current standard schema-3 direct/sweep payloads, split stdout/stderr capture, bounded child execution, sentinel artifact rules, other direct-mode JSON transport/file compatibility including unsupported GPU evidence, and pattern orchestration smoke coverage |
+| `test_executable_cli.cpp` | `ExecutableCliIntegrationTest` | Executable-level CLI routing, current standard schema-3 direct/sweep payloads, split stdout/stderr capture, bounded child execution, sentinel artifact rules, unsupported GPU evidence, bounded contiguous/paged LLM file/stdout/checkpoint contracts, and pattern orchestration smoke coverage |
 | `test_standard_kernels.cpp` | `StandardKernelIntegrationTest`, `PatternKernelIntegrationTest` | Real ARM64 standard/pattern kernel ABI, tails, boundaries, checksums, and multi-worker execution |
 | `test_statistics.cpp` | `StatisticsTest` | Standard multi-loop summary composition, mode filtering, loop/sample population separation, and rendered values |
 | `test_descriptive_statistics.cpp` | `DescriptiveStatisticsTest` | Canonical shared percentiles, deviation, CV, and MAD contracts |
@@ -406,7 +450,7 @@ Four shared helper headers support deterministic setup and output capture across
 ## 4. results/ — Benchmark result data
 
 Historical JSON, CSV, and text output from benchmark runs on specific hardware, organized by software-version
-subdirectory. The files are retained as examples and historical schema evidence; they are not current 0.62.0
+subdirectory. The files are retained as examples and historical schema evidence; they are not current 0.63.0
 methodology baselines unless explicitly identified as such. Historical standard JSON is not an input to current
 bundled standard-result consumers; separately governed TLB tooling retains its documented legacy-input policy.
 
@@ -454,7 +498,7 @@ Tracked PNG chart archive generated from benchmark result data. Several files ar
 Example shell workflows and Python/Matplotlib plotters for tracked benchmark outputs. The four standard-memory examples
 are maintained in lockstep with the current producer rather than as a compatibility library. Each of those JSON-reading
 entry points performs a small local release-version/schema-3/completion/field sanity check and then reads the current
-metric paths it needs. Version 0.62.0 therefore requires exact top-level `version: "0.62.0"`. Standard schema 2,
+metric paths it needs. Version 0.63.0 therefore requires exact top-level `version: "0.63.0"`. Standard schema 2,
 unversioned historical layouts, alternative modes, and other explicit standard versions are unsupported by those four
 examples. Separately governed mode-specific tools retain only the history policy documented in their own row below.
 
@@ -465,7 +509,7 @@ examples. Separately governed mode-specific tools retain only the history policy
 | `latency_test_script_stride_tlb.sh` | Sweeps cache size, configured locality, and latency stride; uses embedded Python 3 to read current pooled sample statistics, retains per-run JSON, and requires one complete CSV row per planned run |
 | `plot_M4vsM5_benchmark_comparison.py` | Compares effective payload bandwidth and latency from two explicitly supplied current standard schema-3 JSON files |
 | `plot_analyzetlb.py` | Plots standalone TLB locality trends, including the paired spread/packed delta in current schemas and supported legacy data |
-| `plot_bechmark-memory-latency-hierarcy.py` | Plots memory-hierarchy latency from an explicit current standard schema-3 JSON or console-text statistics input using the current producer's labels |
+| `plot_benchmark-memory-latency-hierarchy.py` | Plots memory-hierarchy latency from an explicit current standard schema-3 JSON or console-text statistics input using the current producer's labels |
 | `plot_cache_percentiles.py` | Plots a selected pooled latency statistic by cache size and configured locality from `final_output.txt` |
 | `plot_cache_percentiles_stride_tlb.py` | Plots a selected pooled latency statistic from the stride/locality sweep CSV, with optional stride and locality filters |
 

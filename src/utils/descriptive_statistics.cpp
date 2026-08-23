@@ -47,8 +47,20 @@ double linear_percentile(const std::vector<double>& sorted_values,
 
 DescriptiveStatistics calculate_descriptive_statistics(
     const std::vector<double>& values) {
+  std::vector<double> sorted_workspace;
+  std::vector<double> deviation_workspace;
+  return calculate_descriptive_statistics(
+      values, sorted_workspace, deviation_workspace);
+}
+
+DescriptiveStatistics calculate_descriptive_statistics(
+    const std::vector<double>& values,
+    std::vector<double>& sorted_workspace,
+    std::vector<double>& deviation_workspace) {
   DescriptiveStatistics statistics;
   if (values.empty()) {
+    sorted_workspace.clear();
+    deviation_workspace.clear();
     return statistics;
   }
 
@@ -60,14 +72,14 @@ DescriptiveStatistics calculate_descriptive_statistics(
   }
   statistics.average = sum / values.size();
 
-  std::vector<double> sorted_values = values;
-  std::sort(sorted_values.begin(), sorted_values.end());
-  statistics.min = sorted_values.front();
-  statistics.max = sorted_values.back();
-  statistics.median = linear_percentile(sorted_values, 0.50);
-  statistics.p90 = linear_percentile(sorted_values, 0.90);
-  statistics.p95 = linear_percentile(sorted_values, 0.95);
-  statistics.p99 = linear_percentile(sorted_values, 0.99);
+  sorted_workspace.assign(values.begin(), values.end());
+  std::sort(sorted_workspace.begin(), sorted_workspace.end());
+  statistics.min = sorted_workspace.front();
+  statistics.max = sorted_workspace.back();
+  statistics.median = linear_percentile(sorted_workspace, 0.50);
+  statistics.p90 = linear_percentile(sorted_workspace, 0.90);
+  statistics.p95 = linear_percentile(sorted_workspace, 0.95);
+  statistics.p99 = linear_percentile(sorted_workspace, 0.99);
 
   double squared_deviation_sum = 0.0;
   for (double value : values) {
@@ -86,14 +98,13 @@ DescriptiveStatistics calculate_descriptive_statistics(
     statistics.coefficient_of_variation_defined = true;
   }
 
-  std::vector<double> absolute_deviations;
-  absolute_deviations.reserve(values.size());
+  deviation_workspace.clear();
   for (double value : values) {
-    absolute_deviations.push_back(std::abs(value - statistics.median));
+    deviation_workspace.push_back(std::abs(value - statistics.median));
   }
-  std::sort(absolute_deviations.begin(), absolute_deviations.end());
+  std::sort(deviation_workspace.begin(), deviation_workspace.end());
   statistics.median_absolute_deviation =
-      linear_percentile(absolute_deviations, 0.50);
+      linear_percentile(deviation_workspace, 0.50);
 
   return statistics;
 }
