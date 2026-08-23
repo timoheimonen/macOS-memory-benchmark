@@ -161,6 +161,22 @@ inline constexpr const char* WRITE_PATTERN =
 inline constexpr const char* CHECKSUM = "llm-metal-dual-mod32-v1";
 }  // namespace LlmMetalDecodeContiguousVersion
 
+/** Versioned Phase-10 Metal decode/paged planning identities. */
+namespace LlmMetalDecodePagedVersion {
+inline constexpr const char* EXECUTOR =
+    "llm-metal-executor-v1-decode-paged";
+inline constexpr const char* SCHEDULE =
+    "llm-metal-decode-paged-block-owner-grid-stride-v1";
+inline constexpr const char* TIMER =
+    "metal-command-buffer-gpu-start-end-v1";
+inline constexpr const char* BUFFER_PATTERN =
+    "llm-paged-physical-buffer-pattern-v1";
+inline constexpr const char* WRITE_PATTERN =
+    "llm-metal-decode-paged-append-affine32-v1";
+inline constexpr const char* CHECKSUM =
+    "llm-metal-paged-dual-mod32-lookup-mix-v1";
+}  // namespace LlmMetalDecodePagedVersion
+
 namespace LlmMetalPlannerAccounting {
 inline constexpr size_t RUNTIME_IDENTITY_GROWTH_RESERVE_BYTES =
     64ULL * 1024ULL;
@@ -1069,7 +1085,8 @@ LlmMemoryWorkPlanDraft prepare_llm_memory_work_plan(
  * supplied plan is retained as terminal runtime-failure evidence while the
  * logical draft remains finalizable for output. Callers must inspect the
  * retained alternative before attempting exact execution-plan finalization.
- * A valid supplied plan must describe the draft's decode/contiguous geometry
+ * A valid supplied plan must describe the draft's activated Metal decode
+ * geometry,
  * and its `additional_owned_bytes` must contain the draft's planner storage
  * but no command auxiliary bytes yet.
  */

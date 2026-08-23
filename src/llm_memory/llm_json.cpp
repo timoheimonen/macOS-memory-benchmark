@@ -80,6 +80,34 @@ const LlmPagedCpuExecutionPlan* paged_cpu_execution_plan(const LlmMemoryWorkPlan
   return &*cpu->paged;
 }
 
+/** Return backend-neutral paged geometry without materializing a table. */
+const LlmKvLayoutPlan* paged_layout_plan(const LlmMemoryWorkPlan& plan) noexcept {
+  const LlmPagedCpuExecutionPlan* const cpu = paged_cpu_execution_plan(plan);
+  if (cpu != nullptr) {
+    return &cpu->layout;
+  }
+  const LlmMetalExecutionPlan* const metal = get_llm_metal_execution_plan(plan);
+  if (plan.kv_layout != LlmKvLayout::Paged || metal == nullptr || !metal->resources.paged_layout.has_value()) {
+    return nullptr;
+  }
+  return &*metal->resources.paged_layout;
+}
+
+/** Return the materialized permutation identity published by the selected backend. */
+const LlmKvPermutationIdentity* paged_permutation_identity(
+    const LlmMemoryWorkPlan& plan, const LlmBackendEvidence& backend_evidence) noexcept {
+  const LlmPagedCpuExecutionPlan* const cpu = paged_cpu_execution_plan(plan);
+  if (cpu != nullptr) {
+    return &cpu->permutation;
+  }
+  const LlmMetalBackendEvidence* const metal = get_llm_metal_backend_evidence(backend_evidence);
+  if (plan.backend != LlmMemoryBackend::Metal || plan.kv_layout != LlmKvLayout::Paged || metal == nullptr ||
+      !metal->resources.table_permutation.has_value()) {
+    return nullptr;
+  }
+  return &*metal->resources.table_permutation;
+}
+
 const LlmPrefillCpuExecutionPlan* prefill_cpu_execution_plan(const LlmMemoryWorkPlan& plan) noexcept {
   const LlmCpuExecutionPlan* const cpu = get_llm_cpu_execution_plan(plan);
   if (plan.phase != LlmPhase::Prefill || cpu == nullptr || !cpu->prefill.has_value()) {
@@ -332,7 +360,10 @@ bool final_identity_size_view(const LlmMemoryWorkPlan& model_plan, LlmJsonIdenti
         !add_string(resources.k_segments.reason_code) || !add_string(resources.k_segments.identity) ||
         !add_string(resources.v_segments.reason_code) || !add_string(resources.v_segments.identity) ||
         (resources.table_segments.has_value() &&
-         (!add_string(resources.table_segments->reason_code) || !add_string(resources.table_segments->identity)))) {
+         (!add_string(resources.table_segments->reason_code) || !add_string(resources.table_segments->identity))) ||
+        (resources.paged_layout.has_value() &&
+         (!add_string(resources.paged_layout->reason_code) ||
+          !add_string(resources.paged_layout->geometry_identity)))) {
       return false;
     }
   }
@@ -575,35 +606,54 @@ OrderedJson geometry_json(const LlmGeometry& geometry) {
   return output;
 }
 
-OrderedJson layout_json(const LlmMemoryWorkPlan& plan) {
-  const LlmPagedCpuExecutionPlan* const paged = paged_cpu_execution_plan(plan);
-  const bool available = paged != nullptr;
+OrderedJson layout_json(const LlmMemoryWorkPlan& plan, const LlmBackendEvidence& backend_evidence) {
+  const LlmKvLayoutPlan* const layout = paged_layout_plan(plan);
+  const LlmKvPermutationIdentity* const permutation = paged_permutation_identity(plan, backend_evidence);
+  const bool layout_available = layout != nullptr;
+  const bool permutation_available = permutation != nullptr;
+  const LlmPagedCpuExecutionPlan* const cpu = paged_cpu_execution_plan(plan);
+  std::string layout_identity;
+  if (cpu != nullptr) {
+    layout_identity = cpu->layout_identity;
+  } else if (layout_available && permutation_available) {
+    layout_identity = serialize_llm_kv_layout_identity(*layout, *permutation);
+  }
   OrderedJson output;
   output["kv_layout"] = llm_kv_layout_to_string(plan.kv_layout);
-  output["kv_block_tokens"] = number_or_null(available ? paged->layout.kv_block_tokens : 0, available);
-  output["blocks_per_sequence"] = decimal_or_null(available ? paged->layout.blocks_per_sequence : 0, available);
+  output["kv_block_tokens"] = number_or_null(layout_available ? layout->kv_block_tokens : 0, layout_available);
+  output["blocks_per_sequence"] =
+      decimal_or_null(layout_available ? layout->blocks_per_sequence : 0, layout_available);
   output["physical_blocks_per_layer"] =
-      decimal_or_null(available ? paged->layout.physical_blocks_per_layer : 0, available);
-  output["total_physical_blocks"] = decimal_or_null(available ? paged->layout.total_physical_blocks : 0, available);
-  output["block_bytes"] = decimal_or_null(available ? paged->layout.block_bytes : 0, available);
-  output["last_block_tokens"] = decimal_or_null(available ? paged->layout.last_block_tokens : 0, available);
-  output["last_block_valid_bytes"] = decimal_or_null(available ? paged->layout.last_block_valid_bytes : 0, available);
+      decimal_or_null(layout_available ? layout->physical_blocks_per_layer : 0, layout_available);
+  output["total_physical_blocks"] =
+      decimal_or_null(layout_available ? layout->total_physical_blocks : 0, layout_available);
+  output["block_bytes"] = decimal_or_null(layout_available ? layout->block_bytes : 0, layout_available);
+  output["last_block_tokens"] =
+      decimal_or_null(layout_available ? layout->last_block_tokens : 0, layout_available);
+  output["last_block_valid_bytes"] =
+      decimal_or_null(layout_available ? layout->last_block_valid_bytes : 0, layout_available);
   output["decode_append_offset_in_last_block"] = decimal_or_null(
-      available ? paged->layout.decode_append_offset_in_last_block : 0, available && plan.phase == LlmPhase::Decode);
-  output["block_table_entries"] = decimal_or_null(available ? paged->layout.block_table_entries : 0, available);
-  output["block_table_bytes"] = decimal_or_null(available ? paged->layout.memory.block_table_bytes : 0, available);
+      layout_available ? layout->decode_append_offset_in_last_block : 0,
+      layout_available && plan.phase == LlmPhase::Decode);
+  output["block_table_entries"] =
+      decimal_or_null(layout_available ? layout->block_table_entries : 0, layout_available);
+  output["block_table_bytes"] =
+      decimal_or_null(layout_available ? layout->memory.block_table_bytes : 0, layout_available);
   output["layout_geometry_identity"] =
-      available ? non_empty_or_null(paged->layout.geometry_identity) : OrderedJson(nullptr);
-  output["layout_identity"] = available ? non_empty_or_null(paged->layout_identity) : OrderedJson(nullptr);
+      layout_available ? non_empty_or_null(layout->geometry_identity) : OrderedJson(nullptr);
+  output["layout_identity"] = permutation_available ? non_empty_or_null(layout_identity) : OrderedJson(nullptr);
   output["permutation_domain_uint64_hex"] =
-      available ? non_empty_or_null(paged->permutation.domain_uint64_hex) : OrderedJson(nullptr);
+      permutation_available ? non_empty_or_null(permutation->domain_uint64_hex) : OrderedJson(nullptr);
   output["permutation_seed_uint64_decimal"] =
-      decimal_or_null(available ? paged->permutation.resolved_seed : 0, available);
+      decimal_or_null(permutation_available ? permutation->resolved_seed : 0, permutation_available);
   output["permutation_algorithm_version"] =
-      available ? non_empty_or_null(paged->permutation.algorithm_version) : OrderedJson(nullptr);
-  output["permutation_entry_count"] = decimal_or_null(available ? paged->permutation.entry_count : 0, available);
-  output["permutation_sha256"] = available ? non_empty_or_null(paged->permutation.sha256) : OrderedJson(nullptr);
-  output["permutation_identity"] = available ? non_empty_or_null(paged->permutation.identity) : OrderedJson(nullptr);
+      permutation_available ? non_empty_or_null(permutation->algorithm_version) : OrderedJson(nullptr);
+  output["permutation_entry_count"] =
+      decimal_or_null(permutation_available ? permutation->entry_count : 0, permutation_available);
+  output["permutation_sha256"] =
+      permutation_available ? non_empty_or_null(permutation->sha256) : OrderedJson(nullptr);
+  output["permutation_identity"] =
+      permutation_available ? non_empty_or_null(permutation->identity) : OrderedJson(nullptr);
   return output;
 }
 
@@ -1699,7 +1749,8 @@ OrderedJson software_json(const LlmResultMetadata& metadata) {
   return output;
 }
 
-OrderedJson resolved_plan_json(const LlmMemoryWorkPlan& plan, const LlmFrozenScenarioPlans& frozen) {
+OrderedJson resolved_plan_json(const LlmMemoryWorkPlan& plan, const LlmFrozenScenarioPlans& frozen,
+                               const LlmBackendEvidence& backend_evidence) {
   OrderedJson output;
   output["valid"] = plan.valid;
   output["reason_code"] = plan.reason_code;
@@ -1710,7 +1761,7 @@ OrderedJson resolved_plan_json(const LlmMemoryWorkPlan& plan, const LlmFrozenSce
   output["kv_layout"] = llm_kv_layout_to_string(plan.kv_layout);
   output["work_unit_kind"] = llm_work_unit_kind_to_string(plan.work_unit_kind);
   output["geometry"] = geometry_json(plan.geometry);
-  output["layout"] = layout_json(plan);
+  output["layout"] = layout_json(plan, backend_evidence);
   output["resources"] = resolved_resources_json(plan);
   output["component_identities"] = component_identities_json(plan.component_identities);
   output["methodology"] = methodology_json(plan);
@@ -2247,7 +2298,7 @@ nlohmann::ordered_json build_llm_memory_json(const LlmMemoryConfig& config, cons
   output["methodology_version"] = model_plan.methodology_version;
   output["software"] = software_json(metadata);
   output["configuration"] = configuration_json(config);
-  output["resolved_plan"] = resolved_plan_json(model_plan, result.frozen_scenario_plans);
+  output["resolved_plan"] = resolved_plan_json(model_plan, result.frozen_scenario_plans, backend_evidence);
   output["backend_evidence"] =
       backend_evidence_json(model_plan, backend_evidence, metadata.json_peak_estimate, !config.output_file.empty());
   output["memory_budget"] = memory_budget_json(

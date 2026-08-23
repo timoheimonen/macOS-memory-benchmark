@@ -139,6 +139,51 @@ LlmMemoryWorkPlan make_metal_console_plan() {
   return plan;
 }
 
+LlmMemoryWorkPlan make_metal_paged_console_plan() {
+  LlmGeometryRequest geometry_request;
+  geometry_request.active_weight_bytes = 1024;
+  geometry_request.layer_count = 2;
+  geometry_request.query_head_count = 4;
+  geometry_request.kv_head_count = 2;
+  geometry_request.head_dimension = 8;
+  geometry_request.kv_element_bytes = 2;
+  geometry_request.visible_context_tokens = 3;
+  geometry_request.batch_size = 1;
+  geometry_request.kv_block_tokens = 2;
+  geometry_request.kv_layout = LlmKvLayout::Paged;
+
+  LlmMemoryWorkPlan plan;
+  plan.valid = true;
+  plan.backend = LlmMemoryBackend::Metal;
+  plan.phase = LlmPhase::Decode;
+  plan.kv_layout = LlmKvLayout::Paged;
+  plan.work_unit_kind = LlmWorkUnitKind::DecodeStep;
+  plan.geometry = resolve_llm_geometry(geometry_request);
+
+  LlmKvLayoutRequest layout_request;
+  layout_request.sequence_tokens = geometry_request.visible_context_tokens;
+  layout_request.kv_block_tokens = geometry_request.kv_block_tokens;
+  layout_request.layer_count = geometry_request.layer_count;
+  layout_request.batch_size = geometry_request.batch_size;
+  layout_request.k_or_v_record_bytes_per_layer = plan.geometry.k_or_v_record_bytes_per_layer;
+
+  LlmMetalExecutionPlan execution;
+  execution.valid = true;
+  execution.reason_code = LlmMetalPlanReason::VALID;
+  execution.resources.valid = true;
+  execution.resources.reason_code = LlmMetalPlanReason::VALID;
+  execution.resources.weight_segments.segment_count = 1;
+  execution.resources.k_segments.segment_count = 1;
+  execution.resources.v_segments.segment_count = 1;
+  execution.resources.table_segments.emplace();
+  execution.resources.table_segments->segment_count = 1;
+  execution.resources.paged_layout = build_llm_kv_layout_plan(layout_request);
+  execution.resources.host_permutation_mapping_bytes = 4096;
+  execution.resources.argument_buffer_encoded_length = 8192;
+  plan.backend_execution_plan = std::move(execution);
+  return plan;
+}
+
 LlmMemoryWorkPlan make_paged_prefill_console_plan() {
   LlmMemoryWorkPlan plan = make_prefill_console_plan();
   plan.kv_layout = LlmKvLayout::Paged;
@@ -468,6 +513,76 @@ TEST(LlmMemoryOutputTest, MetalReportPrintsCapabilitySegmentsAndTaskValidationEv
             std::string::npos);
   EXPECT_NE(output.find("Metal timing: gpu_elapsed_seconds=0.002500000"), std::string::npos);
   EXPECT_NE(output.find("Metal validation: checksum=valid, append=valid, canary=not-applicable"), std::string::npos);
+}
+
+TEST(LlmMemoryOutputTest, MetalPagedReportPrintsTableLookupPaddingAndCanaryEvidence) {
+  const LlmMemoryWorkPlan plan = make_metal_paged_console_plan();
+  const LlmMetalExecutionPlan* const execution = get_llm_metal_execution_plan(plan);
+  ASSERT_NE(execution, nullptr);
+  ASSERT_TRUE(execution->resources.paged_layout.has_value());
+
+  LlmBackendEvidence backend;
+  backend.backend = LlmMemoryBackend::Metal;
+  LlmMetalBackendEvidence metal_backend;
+  metal_backend.capability.device_name = "Test Metal Device";
+  metal_backend.capability.argument_buffer_encoded_length = 8192;
+  metal_backend.resources.table_upload_completed = true;
+  metal_backend.resources.table_validation_completed = true;
+  metal_backend.resources.layout_padding_bytes = 128;
+  LlmKvPermutationIdentity permutation;
+  permutation.algorithm_version = "permutation-v1";
+  permutation.resolved_seed = 99;
+  permutation.entry_count = 2;
+  permutation.sha256 = "0123456789abcdef";
+  permutation.identity = "metal-paged-permutation-identity";
+  metal_backend.resources.table_permutation = permutation;
+  backend.backend_evidence = std::move(metal_backend);
+
+  LlmMemoryResult result;
+  LlmMeasurementState measurement;
+  measurement.scenario = LlmScenario::Mixed;
+  LlmMetalTaskEvidence task;
+  task.pipeline_label = "membenchmark.llm-metal.pipeline.decode-paged.mixed";
+  task.grid_plan_available = true;
+  task.grid_plan.actual_threadgroups = 2;
+  task.grid_plan.threads_per_threadgroup = 64;
+  task.grid_plan.paged_semantic_lookups = 10;
+  task.timing_evaluated = true;
+  task.timing_valid = true;
+  task.gpu_elapsed_seconds = 0.0025;
+  task.checksum_evaluated = true;
+  task.checksum_valid = true;
+  task.append_validation_evaluated = true;
+  task.append_validation_valid = true;
+  task.padding_canary_applicable = true;
+  task.padding_canary_evaluated = true;
+  task.padding_canary_valid = true;
+  measurement.execution.backend_evidence = std::move(task);
+  result.measurements.push_back(std::move(measurement));
+
+  LlmResultMetadata metadata;
+  metadata.main_thread_qos = {true, true, 0};
+  metadata.environment_start.thermal_state = "nominal";
+  metadata.environment_end = metadata.environment_start;
+
+  testing::internal::CaptureStdout();
+  testing::internal::CaptureStderr();
+  print_llm_memory_console_report(plan, backend, metadata, result);
+  const std::string errors = testing::internal::GetCapturedStderr();
+  const std::string output = testing::internal::GetCapturedStdout();
+
+  EXPECT_TRUE(errors.empty()) << errors;
+  EXPECT_NE(output.find("backend=metal, phase=decode, work_unit=decode_step, kv_layout=paged"), std::string::npos);
+  EXPECT_NE(output.find("Metal segments: weights=1, K=1, V=1"), std::string::npos);
+  EXPECT_NE(output.find("Paged KV block tokens (G): 2"), std::string::npos);
+  EXPECT_NE(output.find("K bytes (logical/physical/padding): 192/256/64"), std::string::npos);
+  EXPECT_NE(output.find("V bytes (logical/physical/padding): 192/256/64"), std::string::npos);
+  EXPECT_NE(output.find("Block table: 2 uint32 entries, 8 bytes, 4096 page-rounded bytes"), std::string::npos);
+  EXPECT_NE(output.find("Timed block-table metadata / KV-active decode step: 10 lookups, 40 bytes"),
+            std::string::npos);
+  EXPECT_NE(output.find("Accounted bytes / KV-active decode step: 552"), std::string::npos);
+  EXPECT_NE(output.find("pipeline=membenchmark.llm-metal.pipeline.decode-paged.mixed"), std::string::npos);
+  EXPECT_NE(output.find("Metal validation: checksum=valid, append=valid, canary=valid"), std::string::npos);
 }
 
 TEST(LlmMemoryOutputTest, UnsupportedMetalReportDoesNotInventResourceOrTaskEvidence) {

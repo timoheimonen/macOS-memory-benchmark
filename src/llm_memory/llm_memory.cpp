@@ -320,7 +320,8 @@ const char* validate_llm_activated_profile(
       if (config.phase != LlmPhase::Decode) {
         return LlmMemoryConfigReason::PHASE_NOT_ACTIVATED;
       }
-      if (config.kv_layout != LlmKvLayout::Contiguous) {
+      if (config.kv_layout != LlmKvLayout::Contiguous &&
+          config.kv_layout != LlmKvLayout::Paged) {
         return LlmMemoryConfigReason::KV_LAYOUT_NOT_ACTIVATED;
       }
       return nullptr;
@@ -341,11 +342,26 @@ build_runtime_metal_resource_request(
       metal == nullptr || !logical_plan.geometry.valid ||
       logical_plan.backend != LlmMemoryBackend::Metal ||
       logical_plan.phase != LlmPhase::Decode ||
-      logical_plan.kv_layout != LlmKvLayout::Contiguous) {
+      (logical_plan.kv_layout != LlmKvLayout::Contiguous &&
+       logical_plan.kv_layout != LlmKvLayout::Paged)) {
     return std::nullopt;
   }
   LlmMetalResourcePlanRequest request;
   request.geometry = logical_plan.geometry;
+  if (logical_plan.kv_layout == LlmKvLayout::Paged) {
+    if (!logical_plan.geometry.decode.has_value()) {
+      return std::nullopt;
+    }
+    request.paged_layout = build_llm_kv_layout_plan(
+        {logical_plan.geometry.decode->visible_context_tokens,
+         logical_plan.geometry.kv_block_tokens,
+         logical_plan.geometry.layer_count,
+         logical_plan.geometry.batch_size,
+         logical_plan.geometry.k_or_v_record_bytes_per_layer});
+    if (!request.paged_layout->valid) {
+      return std::nullopt;
+    }
+  }
   request.argument_buffer_encoded_length =
       metal->capability.argument_buffer_encoded_length;
   request.argument_buffer_alignment =

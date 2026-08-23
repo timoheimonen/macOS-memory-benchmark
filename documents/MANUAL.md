@@ -28,7 +28,7 @@
 - Standalone paired TLB analysis
 - Standalone core-to-core cache-line handoff latency analysis
 - Standalone Metal GPU memory read/write/copy bandwidth
-- Standalone synthetic CPU LLM decode/prefill profiling and an experimental Metal contiguous-decode preview
+- Standalone synthetic CPU LLM decode/prefill profiling and an experimental Metal decode preview with both KV layouts
 - Cartesian parameter sweeps for supported benchmark modes
 
 Target platform is **macOS on Apple Silicon**.
@@ -56,7 +56,8 @@ This manual focuses on practical usage and interpretation. For implementation de
 - For `--gpu-bandwidth`: a unified-memory Metal device supporting `MTLGPUFamilyApple7` or a compatible later family.
   Capability support is distinct from a controlled performance-validation cohort.
 - For the experimental LLM Metal preview: Apple7-or-later capability, unified memory, Tier 2 argument buffers, and
-  `maxBufferLength >= 256 MiB`. Its M4 validation gate has passed; Apple7/M1 baseline validation remains pending.
+  `maxBufferLength >= 256 MiB`. Current M4 evidence covers both contiguous and paged decode; required Apple7/M1
+  baseline validation remains pending.
 
 Install tools:
 
@@ -194,12 +195,13 @@ boundaries, parallelism, cache behavior, resource modes, and validation overhead
 ### Synthetic LLM memory payload
 
 LLM-memory schema 1 uses generic backend/phase/layout/work-unit vocabulary. This revision activates CPU/decode and
-CPU/prefill with contiguous or paged KV, and Metal/decode with contiguous KV. Prefill uses
+CPU/prefill with contiguous or paged KV, and Metal/decode with contiguous or paged KV. Prefill uses
 `work_unit_kind: "prefill_operation"`; decode uses `"decode_step"`. Metal never falls back to CPU.
 
-Metal contiguous decode is an experimental preview. Its M4 validation gate has passed, but the required Apple7/M1
-baseline validation remains pending. Runtime capability admission must not be interpreted as cross-family
-production-ready validation.
+Metal decode is an experimental preview. Current M4 evidence covers both contiguous and paged decode. Paged validation
+includes partial terminal blocks, permutation and padding rejection, all scenarios, and multi-segment K/V execution.
+Required Apple7/M1 baseline validation remains pending, so runtime capability admission must not be interpreted as
+cross-family production-ready validation.
 
 `--kv-layout` defaults to `contiguous`. Paged layout requires exactly one `--kv-block-tokens <G>` option. `G` must be
 positive, a power of two, and no greater than `UINT32_MAX`; it may be larger than the active phase's sequence length.
@@ -605,11 +607,12 @@ middle, and trailing items.
 
 - Selects the standalone CPU/Metal synthetic memory mode. Active methodologies are
   `llm-memory-v1-cpu-decode-contiguous`, `llm-memory-v1-cpu-decode-paged`,
-  `llm-memory-v1-cpu-prefill-contiguous`, `llm-memory-v1-cpu-prefill-paged`, and
-  `llm-memory-v1-metal-decode-contiguous`. It never enters the general
+  `llm-memory-v1-cpu-prefill-contiguous`, `llm-memory-v1-cpu-prefill-paged`,
+  `llm-memory-v1-metal-decode-contiguous`, and `llm-memory-v1-metal-decode-paged`. It never enters the general
   `BenchmarkConfig` parser or CPU sweep runner
-- The Metal methodology is an experimental preview. Its M4 validation gate has passed; the required Apple7/M1 baseline
-  validation remains pending, so runtime capability admission is not a cross-family production-readiness claim
+- The Metal methodology is an experimental preview. Current M4 evidence covers contiguous and paged decode; required
+  Apple7/M1 baseline validation remains pending, so runtime capability admission is not a cross-family
+  production-readiness claim
 - Requires each common model option `--weight-size-mb <MiB>`, `--layers <count>`, `--query-heads <count>`,
   `--kv-heads <count>`, and `--head-dim <count>` exactly once. Decode requires `--context-tokens <count>`; prefill
   requires `--prompt-tokens <P>` and `--attention-query-tile-tokens <Q>`. Cross-phase geometry is rejected
@@ -629,9 +632,8 @@ middle, and trailing items.
 - Requires `P >= 1` and `1 <= Q <= P` for prefill. Requires paged block size `G` to be positive, a power of two, and at
   most `UINT32_MAX`. `G > A` is valid for decode and produces one partially used physical block per batch sequence;
   unused capacity is reported rather than silently removed
-- Activates the Metal preview only for decode plus contiguous KV. Metal prefill and paged selections fail configuration
-  validation; capability failure after output-session creation produces a terminal `unsupported` JSON result and
-  non-zero exit.
+- Activates the Metal preview for decode with contiguous or paged KV. Metal prefill fails configuration validation;
+  capability failure after output-session creation produces a terminal `unsupported` JSON result and non-zero exit.
   Runtime compiler, pipeline, resource, or task failure produces terminal `failed`/`invalid` schema evidence and a
   non-zero exit. The command never substitutes CPU
 - Treats `--context-tokens` as the fixed visible context including the current synthetic token. Checked preflight
@@ -645,11 +647,13 @@ middle, and trailing items.
 - `--llm-memory --help` succeeds without required model inputs and returns before core detection, seed generation,
   output-session creation, QoS preparation, or signal masking. Unknown, duplicate, and missing-value errors are still
   diagnosed because help does not bypass the strict whitelist pass
-- Builds page-rounded, budget-admitted full-size active-weight and K/V resources. Contiguous uses the logical K/V
-  lengths. Paged uses complete physical K/V blocks plus one page-rounded uint32 block-table mapping, and admits the
-  permutation-validation transient before materializing the table. All CPU mappings are regular cacheable anonymous
-  memory; `--non-cacheable` is outside the whitelist. Deterministic initialization and pre-touch cover every requested
-  physical byte before any measured task, and the validated table is read-only during execution. Before each paged
+- Builds budget-admitted full-size active-weight and K/V resources. Contiguous uses the logical K/V lengths. Paged uses
+  complete physical K/V blocks and one uint32 block table, and admits the permutation-validation transient before
+  materializing the table. CPU uses page-rounded regular cacheable anonymous mappings and protects the validated table
+  read-only. Metal uses block-aligned private K/V segments, segmented private table storage, and a transient shared
+  staging segment; table upload and hash/readback validation precede publication. `--non-cacheable` is outside the
+  whitelist. Deterministic initialization and pre-touch cover every requested physical byte before any measured task.
+  Before each paged
   decode task, an untimed allocation-free reset restores only the mutable current-token append slots; history blocks
   and suffix-padding canaries are not rewritten. Paged prefill instead rewrites every owned prompt byte in timed work
 - Runs `weights_only`, `kv_only`, and layer-interleaved `mixed` scenarios. Omitted iterations trigger excluded,
@@ -673,11 +677,16 @@ middle, and trailing items.
   scenario-specialized workload dispatch, and one excluded post-validation command buffer. The `T` work-unit loop is
   inside the kernel. `GPUStartTime`/`GPUEndTime` are authoritative; the host wait envelope is diagnostic only. A
   versioned dual-mod32 W/K/V checksum and excluded validation of every byte in every final K/V append record must pass,
-  with no performance retry
-- The current embedded Metal source revision is `llm-metal-decode-contiguous-msl23-v1`. Runtime evidence records its
-  exact SHA-256 plus the `membenchmark.llm-metal.pipeline.decode-contiguous.weights-only`, `.kv-only`, and `.mixed`
-  workload-pipeline labels and limits. Runtime initialization also requires the selected-profile
-  `membenchmark.llm-metal.pipeline.validate-decode-contiguous-appends` pipeline
+  with no performance retry. Paged decode uses one-owner cyclic grid-stride scheduling. A named lane performs each
+  volatile uint32 table load, publishes the physical ID to its threadgroup, and crosses a required threadgroup barrier
+  before address construction. Paired append plus separate K/V scans account exactly `L * B * (2 * N + 1)` lookups per
+  KV-active work unit. Its checksum binds logical index, physical ID, visit kind, and work-unit ordinal; excluded
+  validation also checks terminal-block padding canaries
+- The current embedded Metal source revision is `llm-metal-decode-contiguous-paged-msl23-v2`; runtime evidence records
+  its exact SHA-256. Contiguous workload pipelines use `membenchmark.llm-metal.pipeline.decode-contiguous.*`; paged
+  workload pipelines use `membenchmark.llm-metal.pipeline.decode-paged.*`. Paged initialization also requires
+  `membenchmark.llm-metal.pipeline.decode-paged-layout-probe` and excluded validation uses
+  `membenchmark.llm-metal.pipeline.validate-decode-paged-appends-padding`
 - This profile is memory-only: it performs no Transformer mathematics and does not report inference tokens/s. Its
   `synthetic_memory_work_units_per_second` and `effective_model_payload_gb_s` must not be interpreted as model
   throughput or physical DRAM-counter traffic. Paged block-table reads are timed and separately accounted but are not
@@ -1037,6 +1046,12 @@ memory_benchmark --llm-memory --weight-size-mb 64 --layers 4 --query-heads 8 --k
 memory_benchmark --llm-memory --llm-memory-backend metal --weight-size-mb 64 --layers 4 \
   --query-heads 8 --kv-heads 2 --head-dim 64 --context-tokens 512 \
   --iterations 1 --count 3 --seed 42 --output llm_memory_metal.json
+
+# Standalone Metal paged decode with a partial terminal block
+memory_benchmark --llm-memory --llm-memory-backend metal --weight-size-mb 64 --layers 4 \
+  --query-heads 8 --kv-heads 2 --head-dim 64 --context-tokens 513 \
+  --kv-layout paged --kv-block-tokens 16 \
+  --iterations 1 --count 3 --seed 42 --output llm_memory_metal_paged.json
 
 # Standalone CPU decode with deterministic paged KV storage
 memory_benchmark --llm-memory --weight-size-mb 64 --layers 4 --query-heads 8 --kv-heads 2 \
@@ -1463,7 +1478,7 @@ invalid measurement is not printed as zero and remains status-bearing/null in JS
 
 ### 9) Synthetic LLM memory profile
 
-`--llm-memory` prints a separate report for CPU decode/prefill or Metal contiguous decode containing:
+`--llm-memory` prints a separate report for CPU decode/prefill or Metal decode containing:
 
 - backend, phase/work unit, KV layout, cacheable semantics, and exact active-weight/KV-read/KV-write bytes;
 - for Metal, device/capability evidence, W/K/V segment counts, exact segment capacity, Tier 2 argument-buffer length,
@@ -1872,16 +1887,20 @@ entry/byte counts, permutation domain, resolved seed, algorithm version, and low
 block reports full physical K/V lengths and their difference from logical K/V as layout padding. These are fixed-schema
 integers or canonical decimal strings according to the type rules below; they are not human-formatted sizes.
 
+Metal paged requests that terminate before table preparation retain admitted block geometry and table sizes, but use
+JSON null for the runtime permutation and combined layout identity. A complete paged result has materialized table
+evidence and therefore populates those fields.
+
 Schema 1 rules:
 
 - Canonical selectors are `backend: cpu|metal`, `phase: decode|prefill`, `kv_layout: contiguous|paged`,
   `work_unit_kind: decode_step|prefill_operation`, and
   `kv_write_kind: none|current_token_append|full_prompt_population`. All four CPU phase/layout profiles are active;
-  the experimental Metal preview activates decode/contiguous only.
+  the experimental Metal preview activates decode with contiguous or paged KV.
 - Methodology is always `llm-memory-v1-<backend>-<phase>-<layout>`. Active exact identities are
   `llm-memory-v1-cpu-decode-contiguous`, `llm-memory-v1-cpu-decode-paged`,
-  `llm-memory-v1-cpu-prefill-contiguous`, `llm-memory-v1-cpu-prefill-paged`, and
-  `llm-memory-v1-metal-decode-contiguous`.
+  `llm-memory-v1-cpu-prefill-contiguous`, `llm-memory-v1-cpu-prefill-paged`,
+  `llm-memory-v1-metal-decode-contiguous`, and `llm-memory-v1-metal-decode-paged`.
 - `backend_evidence.cpu.prefill` is null for decode. Either prefill layout populates it with `cost_unit:
   "worker-cost"`, one execution identity, descriptors per scenario/worker, and scenario-specific partition/scope
   identities, decimal-string worker costs, minimum, maximum, and max-minus-min imbalance per work unit. Paged prefill
@@ -2721,7 +2740,7 @@ Make sure you are passing `script-examples/final_output.txt` generated by the la
 - [GPU_BANDWIDTH_WHITEPAPER.md](GPU_BANDWIDTH_WHITEPAPER.md) - Metal GPU memory-bandwidth methodology, validation,
   schema 1, capability boundaries, and maintenance policy
 - [LLM_MEMORY_PROFILE_WHITEPAPER.md](LLM_MEMORY_PROFILE_WHITEPAPER.md) - synthetic CPU decode/prefill and experimental
-  Metal contiguous-decode methodology, layout, execution, schema 1, validation, and interpretation limits
+  Metal decode methodology for contiguous/paged KV, execution, schema 1, validation, and interpretation limits
 - [TECHNICAL_SPECIFICATION.md](TECHNICAL_SPECIFICATION.md) - architecture and implementation details
 - [CHANGELOG.md](../CHANGELOG.md) - release history
 

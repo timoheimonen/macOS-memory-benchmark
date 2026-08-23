@@ -123,8 +123,8 @@ GPU mode follows its own synchronous pipeline:
    console rendering, then return success/failure according to explicit run and output status.
 
 LLM-memory follows its own synchronous pipeline. CPU decode and prefill are active with contiguous or deterministic
-paged KV; Metal contiguous decode is active as an experimental preview. Its M4 validation gate has passed, while the
-required Apple7/M1 baseline validation remains pending:
+paged KV; Metal decode is active with both layouts as an experimental preview. Current M4 evidence covers contiguous
+and paged decode, while the required Apple7/M1 baseline validation remains pending:
 
 1. Scan the complete standalone whitelist, parsing supplied values and rejecting unknown, duplicate, or missing-value
    input even when help is present. Human help returns after that scan but before required/default/platform work.
@@ -132,7 +132,7 @@ required Apple7/M1 baseline validation remains pending:
    CPU-by-default, decode-by-default, contiguous-by-default or explicitly paged layout, CPU requested/detected
    workers when applicable, explicit or automatic work, and one user/generated base seed; run checked geometry and per-scenario
    work-limit preflight. Paged layout requires exactly one valid block-token size, while contiguous rejects it.
-   Metal rejects explicit workers, prefill, and paged layout.
+   Metal rejects explicit workers and prefill.
 3. Classify the raw output target and install one command-scoped `JsonOutputSession` before the runtime banner.
 4. Request best-effort main-thread QoS, enter `BenchmarkSignalMaskGuard`, and capture CPU/OS/page/cache/available-memory
    plus initial thermal/Low Power Mode evidence.
@@ -149,9 +149,9 @@ required Apple7/M1 baseline validation remains pending:
    The CPU adapter creates `HighResTimer`, atomically allocates and initializes/pre-touches the layout-specific mappings,
    materializes and validates the paged table when applicable, materializes the worker-major layout-specific descriptor
    ABI, and binds the matching production ARM64 executor. The Metal adapter probes Apple7/unified-memory/Tier-2/
-   maximum-buffer capability, compiles the common foundation, the selected decode-contiguous scenario pipelines, and
-   the selected profile's append-validation pipeline, creates exact-tail private W/K/V segments and shared
-   argument/status storage, and initializes them outside task time.
+   maximum-buffer capability, compiles the common foundation, the selected decode scenario pipelines, and the selected
+   profile's append/padding-validation pipeline. It creates private W/K/V segments, optional segmented private table
+   storage, and shared argument/status/staging storage, then initializes and validates them outside task time.
    An initialized lifecycle
    `Unsupported` result remains distinct from a runtime failure and never falls back to another backend.
 7. Resolve excluded scenario-specific calibration in canonical weights-only/KV-only/mixed order, or validate exact
@@ -192,8 +192,8 @@ Configuration state is represented by `BenchmarkConfig` (`src/core/config/config
   `LlmMemoryWorkPlan` separately records common phase-applicable geometry, exact model payload/accounted work, memory
   admission, layout metadata, domain seeds, methodology, exact component identities, and exactly one tagged
   backend-execution-plan variant. The CPU alternative owns requested/available/effective workers plus its descriptor
-  templates and storage accounting. The active Metal decode-contiguous alternative owns segment, Tier-2
-  argument-buffer, scenario pipeline/grid, resource, admission, GPU timing, and checksum/validation evidence.
+  templates and storage accounting. The active Metal decode alternative owns contiguous or paged segment, Tier-2
+  argument-buffer, scenario pipeline/grid, resource, admission, GPU timing, lookup, and checksum/validation evidence.
 - Cache behavior: auto L1/L2 or user-provided `--cache-size`.
 - Latency sampling: `latency_sample_count`.
 - Latency-chain construction mode: `latency_chain_mode` (type `LatencyChainMode`,
@@ -263,8 +263,8 @@ Configuration state is represented by `BenchmarkConfig` (`src/core/config/config
   `--kv-layout` accepts `contiguous|paged`. Paged requires exactly one `--kv-block-tokens <G>`; contiguous rejects that
   option. `G` must be a positive power of two no greater than `UINT32_MAX`, and it may exceed the phase length. The
   cross-option rules are order-independent. All four CPU phase/layout combinations are public. The experimental Metal
-  preview activates decode/contiguous only, skips CPU worker detection, rejects explicit threads, and never receives
-  fallback execution. Runtime capability admission does not complete the pending Apple7/M1 baseline validation.
+  preview activates decode with contiguous or paged KV, skips CPU worker detection, rejects explicit threads, and never
+  receives fallback execution. Runtime capability admission does not complete the pending Apple7/M1 baseline validation.
   Explicit work must fit both the common task guardrails and Metal's 65,536-work-unit dispatch cap for all three
   scenarios when Metal is selected.
 
@@ -711,10 +711,11 @@ ordered schema builder, and a Foundation-backed environment snapshot. Generic en
 `decode|prefill`, and KV layout `contiguous|paged`.
 All four CPU phase/layout combinations are active with exact methodology identities
 `llm-memory-v1-cpu-decode-contiguous`, `llm-memory-v1-cpu-decode-paged`,
-`llm-memory-v1-cpu-prefill-contiguous`, and `llm-memory-v1-cpu-prefill-paged`. Metal contiguous decode is active as the
-experimental `llm-memory-v1-metal-decode-contiguous` preview; Metal prefill and paged KV are rejected, and no Metal
-request receives fallback execution. The M4 validation gate has passed. The required Apple7/M1 baseline validation is
-pending, so Apple7-or-later capability admission is not a cross-family production-readiness claim.
+`llm-memory-v1-cpu-prefill-contiguous`, and `llm-memory-v1-cpu-prefill-paged`. Metal decode is active as the experimental
+`llm-memory-v1-metal-decode-contiguous` and `llm-memory-v1-metal-decode-paged` preview; Metal prefill is rejected, and
+no Metal request receives fallback execution. Current M4 evidence covers both decode layouts, including paged
+partial-block, permutation, padding-canary, all-scenario, and multi-segment K/V cases. Required Apple7/M1 baseline
+validation remains pending, so Apple7-or-later capability admission is not a cross-family production-readiness claim.
 
 `LlmMemoryWorkPlan` keeps logical geometry, resources, accounting, seeds, and identities common while
 `LlmBackendExecutionPlan` carries exactly one `LlmCpuExecutionPlan` or `LlmMetalExecutionPlan` tag. The CPU alternative
@@ -728,13 +729,14 @@ properties. The 1,025 resource IDs, exact segment lengths, MSL revision, and sou
 contracts; the plan does not treat `MTLArgumentEncoder.encodedLength` or resource-allocation rounding as a portable ABI
 formula. Every contiguous final segment has its exact remainder, and paged K/V blocks remain whole within a segment.
 
-For this activated profile the embedded source revision is `llm-metal-decode-contiguous-msl23-v1`. Its workload
-pipeline labels are `membenchmark.llm-metal.pipeline.decode-contiguous.weights-only`,
-`membenchmark.llm-metal.pipeline.decode-contiguous.kv-only`, and
-`membenchmark.llm-metal.pipeline.decode-contiguous.mixed`; the JSON snapshot records each pipeline's runtime thread
-execution width and maximum total threads per threadgroup. Runtime initialization also requires
-`membenchmark.llm-metal.pipeline.validate-decode-contiguous-appends`; it is a selected-profile validation pipeline, not
-one of the three workload-pipeline result identities.
+For these activated profiles the embedded source revision is `llm-metal-decode-contiguous-paged-msl23-v2`; its exact
+runtime source SHA-256 is recorded in result evidence. Contiguous workload labels use
+`membenchmark.llm-metal.pipeline.decode-contiguous.*`, while paged labels use
+`membenchmark.llm-metal.pipeline.decode-paged.*`; the JSON snapshot records each pipeline's runtime thread execution
+width and maximum total threads per threadgroup. Paged runtime initialization also requires
+`membenchmark.llm-metal.pipeline.decode-paged-layout-probe`, and excluded validation uses
+`membenchmark.llm-metal.pipeline.validate-decode-paged-appends-padding`. Validation and probe pipelines are selected-
+profile requirements, not workload-pipeline result identities.
 
 The Objective-C++ boundary requires a default Apple7-or-newer unified-memory device, Tier-2 argument buffers, and
 `maxBufferLength` of at least one canonical segment. It runtime-compiles embedded MSL 2.3 common foundation entrypoints,
@@ -742,7 +744,7 @@ the selected profile's three scenario-specialized workload pipelines, and its ap
 block-table resources use private tracked storage; argument/status resources and bounded reusable staging use shared
 tracked storage. Initialization and table upload are excluded from timing.
 
-Active Metal contiguous decode gives each warmup, calibration, and measurement task one reset command buffer, one timed
+Active Metal decode gives each warmup, calibration, and measurement task one reset command buffer, one timed
 command buffer with one explicitly serial compute encoder and one workload dispatch, and one excluded post-validation
 command buffer. The scenario pipeline loops over all `T` work units in-kernel and splits segment-boundary/vector tails
 without changing logical traffic. The command buffer's `GPUStartTime` and `GPUEndTime` are authoritative after terminal
@@ -751,6 +753,15 @@ non-increasing, or non-finite GPU timestamps fail the task. The timed status use
 `llm-metal-dual-mod32-v1` W/K/V lanes and a bounded independent CPU oracle. For a KV-bearing task, excluded
 post-validation checks every byte of every final K/V append record before the next task; checksum or append mismatch
 invalidates the measurement without retry.
+
+For paged decode, each logical layer/batch owner belongs to exactly one threadgroup under a cyclic grid-stride schedule.
+At each semantic visit one named lane loads the table through `device const volatile uint*`, publishes the physical ID
+in threadgroup memory, and executes `threadgroup_barrier(mem_flags::mem_threadgroup)` before any lane constructs a
+segment/block address. A KV-active work unit performs one paired append lookup plus `N` K-scan and `N` V-scan lookups
+per owner, for exactly `L * B * (2 * N + 1)` uint32 loads. The dual-mod32 mix binds logical table index, physical ID,
+append/K-read/V-read visit kind, and work-unit ordinal so an equal-multiplicity wrong permutation changes the expected
+checksum. Whole-block K/V segmentation leaves only terminal logical padding; excluded post-validation verifies its
+canaries. Lookup bytes and padding are separately reported and never enter effective-model-payload GB/s.
 
 Resource preparation is candidate-atomic. A checked pre-allocation admission uses requested lengths, runtime argument-
 encoder metadata, host auxiliaries, and transient staging; paged host mappings are rounded with the queried native page
@@ -1196,15 +1207,16 @@ standard identity from metric layout; schema 2 and unversioned historical standa
   `aggregates`, `status`, `reason_code`, `results_complete`, `conclusions_valid`, and `interpretation`.
 - Methodology is exactly `llm-memory-v1-<backend>-<phase>-<layout>`. Active identities are
   `llm-memory-v1-cpu-decode-contiguous`, `llm-memory-v1-cpu-decode-paged`,
-  `llm-memory-v1-cpu-prefill-contiguous`, `llm-memory-v1-cpu-prefill-paged`, and
-  `llm-memory-v1-metal-decode-contiguous`.
+  `llm-memory-v1-cpu-prefill-contiguous`, `llm-memory-v1-cpu-prefill-paged`,
+  `llm-memory-v1-metal-decode-contiguous`, and `llm-memory-v1-metal-decode-paged`.
 - `configuration` retains exact `argv` and `resolved_sources`. `resolved_plan` owns phase-applicable `geometry`,
   layout-applicable `layout`, immutable logical/physical `resources`, and exact `component_identities`.
   Exactly one of `geometry.decode` and `.prefill` is populated. Prefill records integer P/Q and decimal-string
   C/prefix-visit/causal-pair/logical-attention/FMA counts; decode-only crossover and weight/KV-read ratio fields are
-  null. Paged results populate block geometry and permutation fields; contiguous results use null for paged-only
-  values. Component identities include logical profile, KV layout, optional permutation, backend executor, resource ABI,
-  schedule, timer, buffer, write, checksum, and nullable MSL identities under the canonical
+  null. Admitted paged plans populate block geometry; runtime permutation and combined layout-identity fields remain
+  null when Metal terminates before table preparation. Complete paged results populate them. Contiguous results use
+  null for paged-only values. Component identities include logical profile, KV layout, optional permutation, backend
+  executor, resource ABI, schedule, timer, buffer, write, checksum, and nullable MSL identities under the canonical
   `llm-memory-components-v1` fixed-order serialization.
 - CPU prefill `backend_evidence.cpu.prefill` records `cost_unit: "worker-cost"`, execution/scope identities,
   descriptors per scenario/worker, and scenario-specific decimal-string worker cost, minimum, maximum, and imbalance
@@ -1370,10 +1382,12 @@ Recommended validation commands:
   `./test_runner '--gtest_filter=ModeSelectorTest.*:LlmMemoryContractTest.*:LlmMemoryConfigTest.*:LlmMemoryWorkPlanTest.*:LlmMemoryExecutorTest.*:LlmMemoryRunnerTest.*:LlmMemoryJsonTest.*:LlmMemoryOutputTest.*:MessagesTest.*'`
 - Real LLM ARM64 and bounded executable transport contracts:
   `./test_runner '--gtest_filter=*LlmMemory*Integration*:*ExecutableCliIntegration*'`
-- Experimental LLM Metal contiguous-decode preview:
+- Experimental LLM Metal decode preview for contiguous and paged KV:
   `./test_runner '--gtest_filter=*LlmMetalBackend*:*LlmMemoryRunner*:*LlmMemoryJson*:*ExecutableCli*'`; real-device
-  cases compile the selected profile and cover all scenarios, GPU timestamps, exact tails, multi-threadgroup work, and
-  a bounded run crossing the 256 MiB segment boundary. The M4 gate has passed; the Apple7/M1 baseline gate remains
+  cases compile the selected profile and cover all scenarios, GPU timestamps, exact tails or partial paged blocks,
+  permutation-sensitive lookups, padding canaries, multi-threadgroup work, and a bounded run crossing the 256 MiB
+  segment boundary. The M4 paged gate passed the exact Phase 10 filter 239/239, `make test-integration` 137/137, and
+  `make test-all` 967/967 GoogleTests plus 8/8 script examples without skips. The Apple7/M1 baseline gate remains
   pending.
 - Deterministic GPU-focused tests:
   `./test_runner --gtest_filter='GpuBandwidthParserTest.*:GpuMemoryBudgetTest.*:GpuRunnerTest.*:GpuJsonTest.*:GpuWorkPlanTest.*:GpuTimedAccumulatorOracleTest.*:ModeSelectorTest.*:HashUtilsTest.*'`
@@ -1388,7 +1402,7 @@ entry test. `jq` is not required by this gate.
 ## 23. Source Map (Primary Entry Points)
 
 - Program entry: `main.cpp`
-- LLM memory profile with active CPU backends and the experimental Metal contiguous-decode preview:
+- LLM memory profile with active CPU backends and the experimental Metal decode preview for both layouts:
   - `src/llm_memory/llm_memory.cpp`
   - `src/llm_memory/llm_work_plan.cpp`
   - `src/llm_memory/llm_kv_layout.cpp`

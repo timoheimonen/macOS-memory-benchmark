@@ -326,7 +326,8 @@ bool inputs_match(const LlmMemoryConfig& config, const LlmMemoryWorkPlan& plan) 
                 metal_plan != nullptr && config.requested_workers == 0 &&
                 config.available_workers == 0 &&
                 config.phase == LlmPhase::Decode &&
-                config.kv_layout == LlmKvLayout::Contiguous;
+                (config.kv_layout == LlmKvLayout::Contiguous ||
+                 config.kv_layout == LlmKvLayout::Paged);
   return config.backend == plan.backend && config.phase == plan.phase &&
          config.kv_layout == plan.kv_layout && geometry.phase == plan.phase &&
          geometry.kv_layout == plan.kv_layout && phase_geometry_matches &&
@@ -1727,7 +1728,8 @@ LlmRunnerAuxiliaryEstimate calculate_llm_runner_auxiliary_estimate(
          (preflight.backend == LlmMemoryBackend::Metal &&
           preflight.effective_workers == 0 &&
           config.phase == LlmPhase::Decode &&
-          config.kv_layout == LlmKvLayout::Contiguous));
+          (config.kv_layout == LlmKvLayout::Contiguous ||
+           config.kv_layout == LlmKvLayout::Paged)));
     if (!preflight.valid || config.loop_count == 0 ||
         !backend_shape_valid) {
       estimate.reason_code = LlmRunnerReason::INVALID_MODEL_WORK_PLAN;
@@ -1923,7 +1925,8 @@ LlmRunnerAuxiliaryEstimate calculate_llm_runner_auxiliary_estimate(const LlmMemo
          cpu_plan->effective_workers != 0) ||
         (model_plan.backend == LlmMemoryBackend::Metal &&
          metal_plan != nullptr && model_plan.phase == LlmPhase::Decode &&
-         model_plan.kv_layout == LlmKvLayout::Contiguous);
+         (model_plan.kv_layout == LlmKvLayout::Contiguous ||
+          model_plan.kv_layout == LlmKvLayout::Paged));
     if (!model_plan.valid || config.loop_count == 0 ||
         config.backend != model_plan.backend || !backend_plan_valid) {
       estimate.reason_code = LlmRunnerReason::INVALID_MODEL_WORK_PLAN;

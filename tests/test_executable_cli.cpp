@@ -345,15 +345,17 @@ void expect_complete_llm_checkpoint_lifecycle(const nlohmann::json& json) {
 }
 
 void expect_complete_or_unsupported_metal_result(
-    const CliResult& result, const nlohmann::json& json) {
+    const CliResult& result, const nlohmann::json& json,
+    const char* expected_kv_layout = "contiguous",
+    const char* expected_methodology =
+        "llm-memory-v1-metal-decode-contiguous") {
   ASSERT_TRUE(json.is_object());
   EXPECT_EQ(json["schema_version"], Constants::LLM_JSON_SCHEMA_VERSION);
   EXPECT_EQ(json["mode"], Constants::LLM_JSON_MODE_NAME);
   EXPECT_EQ(json["backend"], "metal");
   EXPECT_EQ(json["phase"], "decode");
-  EXPECT_EQ(json["kv_layout"], "contiguous");
-  EXPECT_EQ(json["methodology_version"],
-            "llm-memory-v1-metal-decode-contiguous");
+  EXPECT_EQ(json["kv_layout"], expected_kv_layout);
+  EXPECT_EQ(json["methodology_version"], expected_methodology);
   EXPECT_TRUE(json["backend_evidence"]["cpu"].is_null());
   ASSERT_TRUE(json["backend_evidence"]["metal"].is_object());
   EXPECT_FALSE(json["backend_evidence"]["metal"]["workers_applicable"]
@@ -642,7 +644,7 @@ TEST(ExecutableCliIntegrationTest,
 }
 
 TEST(ExecutableCliIntegrationTest,
-     LlmMetalPreflightRejectsInactiveProfilesAndThreadsBeforeOutputSessionIntegration) {
+     LlmMetalPreflightRejectsInactivePrefillAndThreadsBeforeOutputSessionIntegration) {
   struct InvalidCase {
     std::string name;
     std::vector<std::string> arguments;
@@ -658,10 +660,6 @@ TEST(ExecutableCliIntegrationTest,
                  {"--phase", "prefill", "--prompt-tokens", "5",
                   "--attention-query-tile-tokens", "2"});
 
-  std::vector<std::string> paged = bounded_llm_metal_arguments("-");
-  paged.insert(paged.end() - 2,
-               {"--kv-layout", "paged", "--kv-block-tokens", "2"});
-
   std::vector<std::string> backend_before_threads =
       bounded_llm_metal_arguments("-");
   backend_before_threads.insert(backend_before_threads.end() - 2,
@@ -674,8 +672,6 @@ TEST(ExecutableCliIntegrationTest,
   const std::vector<InvalidCase> cases = {
       {"prefill", std::move(prefill),
        LlmMemoryConfigReason::PHASE_NOT_ACTIVATED},
-      {"paged", std::move(paged),
-       LlmMemoryConfigReason::KV_LAYOUT_NOT_ACTIVATED},
       {"backend-before-threads", std::move(backend_before_threads),
        LlmMemoryConfigReason::THREADS_NOT_APPLICABLE},
       {"threads-before-backend", std::move(threads_before_backend),
@@ -706,6 +702,24 @@ TEST(ExecutableCliIntegrationTest,
   expect_process_completed(result);
   const nlohmann::json json = parse_single_stdout_json(result);
   expect_complete_or_unsupported_metal_result(result, json);
+  expect_single_runtime_banner(result);
+  expect_no_dash_transport_artifacts(result);
+}
+
+TEST(ExecutableCliIntegrationTest,
+     LlmMetalPagedStdoutIsCompleteOrOneTerminalUnsupportedDocumentIntegration) {
+  std::vector<std::string> arguments = bounded_llm_metal_arguments("-");
+  arguments.insert(arguments.end() - 2,
+                   {"--kv-layout", "paged", "--kv-block-tokens", "2"});
+  const CliResult result = run_memory_benchmark(arguments);
+
+  expect_process_completed(result);
+  const nlohmann::json json = parse_single_stdout_json(result);
+  expect_complete_or_unsupported_metal_result(
+      result, json, "paged", "llm-memory-v1-metal-decode-paged");
+  EXPECT_EQ(json["phase"], "decode");
+  EXPECT_EQ(json["kv_layout"], "paged");
+  EXPECT_EQ(json["configuration"]["kv_block_tokens"], 2U);
   expect_single_runtime_banner(result);
   expect_no_dash_transport_artifacts(result);
 }

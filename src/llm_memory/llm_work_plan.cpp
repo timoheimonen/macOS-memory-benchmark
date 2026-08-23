@@ -2111,7 +2111,10 @@ bool admit_metal_two_pass_planner_storage(
       plan.memory_budget.available_memory_bytes;
   plan.memory_budget.request = build_llm_memory_budget_request(
       plan.geometry, 0, planner_storage_bytes, 0, 0,
-      mapping_granularity_bytes);
+      mapping_granularity_bytes,
+      plan.kv_layout == LlmKvLayout::Paged
+          ? plan.geometry.block_table_bytes
+          : 0);
   plan.memory_budget = evaluate_llm_memory_budget(
       plan.memory_budget.request, available_memory_bytes);
   return plan.memory_budget.valid;
@@ -2158,17 +2161,20 @@ bool finalize_plan_identities(LlmMemoryWorkPlan& plan) {
   const bool executable_prefill =
       prefill && cpu_plan != nullptr && cpu_plan->prefill.has_value();
   if (plan.backend == LlmMemoryBackend::Metal) {
-    if (prefill || paged_layout || metal_plan == nullptr) {
+    if (prefill || metal_plan == nullptr) {
       return false;
     }
     plan.component_identities.backend_executor_version =
-        LlmMetalDecodeContiguousVersion::EXECUTOR;
+        paged_layout ? LlmMetalDecodePagedVersion::EXECUTOR
+                     : LlmMetalDecodeContiguousVersion::EXECUTOR;
     plan.component_identities.resource_abi_version =
         Constants::LLM_METAL_ARGUMENT_BUFFER_ABI_VERSION;
     plan.component_identities.schedule_version =
-        LlmMetalDecodeContiguousVersion::SCHEDULE;
+        paged_layout ? LlmMetalDecodePagedVersion::SCHEDULE
+                     : LlmMetalDecodeContiguousVersion::SCHEDULE;
     plan.component_identities.timer_policy_version =
-        LlmMetalDecodeContiguousVersion::TIMER;
+        paged_layout ? LlmMetalDecodePagedVersion::TIMER
+                     : LlmMetalDecodeContiguousVersion::TIMER;
   } else {
     plan.component_identities.backend_executor_version =
         executable_prefill
@@ -2195,17 +2201,20 @@ bool finalize_plan_identities(LlmMemoryWorkPlan& plan) {
   }
   plan.component_identities.buffer_pattern_version =
       plan.backend == LlmMemoryBackend::Metal
-          ? LlmMetalDecodeContiguousVersion::BUFFER_PATTERN
+          ? paged_layout ? LlmMetalDecodePagedVersion::BUFFER_PATTERN
+                         : LlmMetalDecodeContiguousVersion::BUFFER_PATTERN
           : paged_layout ? Constants::LLM_PAGED_BUFFER_PATTERN_VERSION
                          : Constants::LLM_BUFFER_PATTERN_VERSION;
   plan.component_identities.write_pattern_version =
       plan.backend == LlmMemoryBackend::Metal
-          ? LlmMetalDecodeContiguousVersion::WRITE_PATTERN
+          ? paged_layout ? LlmMetalDecodePagedVersion::WRITE_PATTERN
+                         : LlmMetalDecodeContiguousVersion::WRITE_PATTERN
           : prefill ? LlmPrefillVersion::WRITE_PATTERN
                     : Constants::LLM_APPEND_PATTERN_VERSION;
   plan.component_identities.checksum_pattern_version =
       plan.backend == LlmMemoryBackend::Metal
-          ? LlmMetalDecodeContiguousVersion::CHECKSUM
+          ? paged_layout ? LlmMetalDecodePagedVersion::CHECKSUM
+                         : LlmMetalDecodeContiguousVersion::CHECKSUM
           : prefill ? paged_layout ? LlmPrefillVersion::PAGED_CHECKSUM_ORACLE
                                    : LlmPrefillVersion::CHECKSUM_ORACLE
                     : paged_layout ? Constants::LLM_PAGED_READ_CHECKSUM_VERSION
@@ -2279,7 +2288,8 @@ bool build_auxiliary_preflight_view(
   const bool metal_valid = plan.backend == LlmMemoryBackend::Metal &&
                            metal_plan != nullptr &&
                            plan.phase == LlmPhase::Decode &&
-                           plan.kv_layout == LlmKvLayout::Contiguous;
+                           (plan.kv_layout == LlmKvLayout::Contiguous ||
+                            plan.kv_layout == LlmKvLayout::Paged);
   if ((!cpu_valid && !metal_valid) || !plan.memory_budget.valid ||
       plan.plan_identity.empty()) {
     return false;
@@ -2430,6 +2440,11 @@ bool build_auxiliary_preflight_view(
     if (json_valid && resources.table_segments.has_value()) {
       json_valid = add_string(resources.table_segments->reason_code) &&
                    add_string(resources.table_segments->identity);
+    }
+    if (json_valid && resources.paged_layout.has_value()) {
+      json_valid = add_string(resources.paged_layout->reason_code) &&
+                   add_string(
+                       resources.paged_layout->geometry_identity);
     }
   }
   if (json_valid && reserve_metal_runtime_growth && metal_plan != nullptr) {
@@ -3477,13 +3492,49 @@ bool metal_segment_total_matches(const LlmKvSegmentPlan& segments,
   return total == expected_bytes;
 }
 
+/** Match the retained pure paged geometry without rebuilding or allocating. */
+bool metal_paged_layout_matches(
+    const LlmGeometry& geometry,
+    const LlmKvLayoutPlan& paged) noexcept {
+  return geometry.decode.has_value() && paged.valid &&
+         paged.sequence_tokens ==
+             geometry.decode->visible_context_tokens &&
+         paged.kv_block_tokens == geometry.kv_block_tokens &&
+         paged.layer_count == geometry.layer_count &&
+         paged.batch_size == geometry.batch_size &&
+         paged.k_or_v_record_bytes_per_layer ==
+             geometry.k_or_v_record_bytes_per_layer &&
+         paged.blocks_per_sequence == geometry.kv_blocks_per_sequence &&
+         paged.physical_blocks_per_layer ==
+             geometry.physical_blocks_per_layer &&
+         paged.total_physical_blocks == geometry.total_physical_blocks &&
+         paged.block_bytes == geometry.kv_block_bytes &&
+         paged.last_block_tokens == geometry.last_block_tokens &&
+         paged.last_block_valid_bytes ==
+             geometry.last_block_valid_bytes &&
+         paged.decode_append_offset_in_last_block ==
+             geometry.decode_append_offset_in_last_block &&
+         paged.block_table_entries == geometry.block_table_entries &&
+         paged.memory.k_logical_bytes == geometry.k_logical_bytes &&
+         paged.memory.v_logical_bytes == geometry.v_logical_bytes &&
+         paged.memory.k_physical_bytes == geometry.k_mapping_bytes &&
+         paged.memory.v_physical_bytes == geometry.v_mapping_bytes &&
+         paged.memory.k_layout_padding_bytes ==
+             geometry.k_layout_padding_bytes &&
+         paged.memory.v_layout_padding_bytes ==
+             geometry.v_layout_padding_bytes &&
+         paged.memory.block_table_bytes == geometry.block_table_bytes &&
+         !paged.geometry_identity.empty();
+}
+
 bool metal_execution_plan_matches(
     const LlmMemoryWorkPlan& plan,
     const LlmMetalExecutionPlan& execution,
     size_t expected_additional_owned_bytes) noexcept {
+  const bool paged_layout = plan.kv_layout == LlmKvLayout::Paged;
   if (plan.backend != LlmMemoryBackend::Metal ||
       plan.phase != LlmPhase::Decode ||
-      plan.kv_layout != LlmKvLayout::Contiguous ||
+      (plan.kv_layout != LlmKvLayout::Contiguous && !paged_layout) ||
       !plan.geometry.valid || !plan.geometry.decode.has_value() ||
       plan.geometry.prefill.has_value() || !execution.valid ||
       execution.reason_code != LlmMetalPlanReason::VALID ||
@@ -3492,11 +3543,21 @@ bool metal_execution_plan_matches(
     return false;
   }
   const LlmMetalResourcePlan& resources = execution.resources;
+  const bool paged_resources_match =
+      paged_layout
+          ? resources.paged_layout.has_value() &&
+                resources.table_segments.has_value() &&
+                metal_paged_layout_matches(
+                    plan.geometry, *resources.paged_layout) &&
+                metal_segment_total_matches(
+                    *resources.table_segments,
+                    plan.geometry.block_table_bytes)
+          : !resources.paged_layout.has_value() &&
+                !resources.table_segments.has_value();
   return resources.valid &&
          resources.reason_code == LlmMetalPlanReason::VALID &&
          resources.identity.size() <= execution.identity.size() &&
-         !resources.paged_layout.has_value() &&
-         !resources.table_segments.has_value() &&
+         paged_resources_match &&
          resources.additional_owned_bytes ==
              expected_additional_owned_bytes &&
          resources.host_mapping_granularity_bytes ==
@@ -3542,8 +3603,12 @@ bool apply_metal_memory_budget(
       request.requested_weight_mapping_bytes;
   request.committed_k_mapping_bytes = request.requested_k_mapping_bytes;
   request.committed_v_mapping_bytes = request.requested_v_mapping_bytes;
-  request.requested_block_table_mapping_bytes = 0;
-  request.committed_block_table_mapping_bytes = 0;
+  request.requested_block_table_mapping_bytes =
+      plan.kv_layout == LlmKvLayout::Paged
+          ? plan.geometry.block_table_bytes
+          : 0;
+  request.committed_block_table_mapping_bytes =
+      request.requested_block_table_mapping_bytes;
   request.requested_data_bytes = plan.geometry.total_data_mapping_bytes;
   request.committed_data_bytes = plan.geometry.total_data_mapping_bytes;
   request.layout_transient_bytes =
@@ -3611,7 +3676,10 @@ bool finalize_nonexecutable_metal_plan(
   plan.memory_budget.request = build_llm_memory_budget_request(
       plan.geometry, 0, planner_storage_bytes,
       checksum_auxiliary_bytes, orchestration_auxiliary_bytes,
-      mapping_granularity_bytes);
+      mapping_granularity_bytes,
+      plan.kv_layout == LlmKvLayout::Paged
+          ? plan.geometry.block_table_bytes
+          : 0);
   plan.memory_budget = evaluate_llm_memory_budget(
       plan.memory_budget.request, plan.memory_budget.available_memory_bytes);
   if (!plan.memory_budget.valid) {
@@ -3692,7 +3760,8 @@ LlmMemoryWorkPlan build_llm_memory_work_plan_candidate(
       plan.reason_code = LlmWorkPlanReason::PHASE_NOT_ACTIVATED;
       return plan;
     }
-    if (plan.kv_layout != LlmKvLayout::Contiguous) {
+    if (plan.kv_layout != LlmKvLayout::Contiguous &&
+        plan.kv_layout != LlmKvLayout::Paged) {
       plan.reason_code = LlmWorkPlanReason::KV_LAYOUT_NOT_ACTIVATED;
       return plan;
     }
@@ -3748,7 +3817,10 @@ LlmMemoryWorkPlan build_llm_memory_work_plan_candidate(
         plan.geometry, 0, planner_storage_bytes,
         request.checksum_auxiliary_bytes,
         request.orchestration_auxiliary_bytes,
-        request.mapping_granularity_bytes);
+        request.mapping_granularity_bytes,
+        plan.kv_layout == LlmKvLayout::Paged
+            ? plan.geometry.block_table_bytes
+            : 0);
     plan.memory_budget = evaluate_llm_memory_budget(
         plan.memory_budget.request, request.available_memory_bytes);
     if (!plan.memory_budget.valid) {
@@ -4883,7 +4955,10 @@ bool readmit_llm_memory_work_plan(
                 plan.geometry, 0,
                 plan.memory_budget.request.planner_storage_bytes,
                 checksum_auxiliary_bytes, orchestration_auxiliary_bytes,
-                plan.memory_budget.request.mapping_granularity_bytes);
+                plan.memory_budget.request.mapping_granularity_bytes,
+                plan.kv_layout == LlmKvLayout::Paged
+                    ? plan.geometry.block_table_bytes
+                    : 0);
         plan.memory_budget = evaluate_llm_memory_budget(
             request, plan.memory_budget.available_memory_bytes);
         if (!plan.memory_budget.valid || !finalize_plan_identities(plan)) {

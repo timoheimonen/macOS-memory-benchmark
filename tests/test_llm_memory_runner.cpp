@@ -95,6 +95,17 @@ LlmMemoryConfig explicit_metal_config(size_t loop_count = 1,
   return config;
 }
 
+LlmMemoryConfig explicit_metal_paged_config(
+    size_t loop_count = 1, size_t iterations = 2) {
+  LlmMemoryConfig config =
+      explicit_metal_config(loop_count, iterations);
+  config.kv_layout = LlmKvLayout::Paged;
+  config.kv_block_tokens = 2;
+  config.user_specified_kv_layout = true;
+  config.user_specified_kv_block_tokens = true;
+  return config;
+}
+
 LlmMemoryConfig explicit_prefill_config(size_t loop_count = 2,
                                         size_t iterations = 3) {
   LlmMemoryConfig config = explicit_config(loop_count, iterations);
@@ -169,6 +180,15 @@ LlmMetalResourcePlanRequest metal_resource_request(
     size_t command_auxiliary_bytes) {
   LlmMetalResourcePlanRequest request;
   request.geometry = logical_plan.geometry;
+  if (logical_plan.kv_layout == LlmKvLayout::Paged &&
+      logical_plan.geometry.decode.has_value()) {
+    request.paged_layout = build_llm_kv_layout_plan(
+        {logical_plan.geometry.decode->visible_context_tokens,
+         logical_plan.geometry.kv_block_tokens,
+         logical_plan.geometry.layer_count,
+         logical_plan.geometry.batch_size,
+         logical_plan.geometry.k_or_v_record_bytes_per_layer});
+  }
   request.argument_buffer_encoded_length = 256;
   request.argument_buffer_alignment = 16;
   request.max_buffer_length =
@@ -770,6 +790,52 @@ TEST(LlmMemoryRunnerTest,
               "membenchmark.llm-metal.pipeline.decode-contiguous.fake");
     EXPECT_TRUE(compact.metal->checksum_valid);
   }
+}
+
+TEST(LlmMemoryRunnerTest,
+     PreinitializedPagedMetalPlanPreservesLookupAccounting) {
+  const LlmMemoryConfig config = explicit_metal_paged_config();
+  const LlmMemoryWorkPlan plan = build_metal_runner_plan(config, true);
+  ASSERT_TRUE(plan.valid) << plan.reason_code;
+  EXPECT_EQ(plan.methodology_version,
+            "llm-memory-v1-metal-decode-paged");
+  const LlmMetalExecutionPlan* const execution_plan =
+      get_llm_metal_execution_plan(plan);
+  ASSERT_NE(execution_plan, nullptr);
+  ASSERT_TRUE(execution_plan->valid) << execution_plan->reason_code;
+  ASSERT_TRUE(execution_plan->resources.paged_layout.has_value());
+  ASSERT_TRUE(execution_plan->resources.table_segments.has_value());
+  const LlmRunnerAuxiliaryEstimate auxiliary =
+      calculate_llm_runner_auxiliary_estimate(config, plan);
+  ASSERT_TRUE(auxiliary.valid) << auxiliary.reason_code;
+
+  FakeLlmBackend backend(LlmMemoryBackend::Metal);
+  ASSERT_EQ(backend.initialize(config).status,
+            LlmBackendStatus::Ready);
+  LlmMemoryResult result;
+  ASSERT_EQ(run_llm_memory_suite(config, plan, backend, result),
+            EXIT_SUCCESS);
+  EXPECT_EQ(result.status, LlmRunStatus::Complete);
+  EXPECT_TRUE(result.results_complete);
+  ASSERT_EQ(result.measurements.size(), kLlmScenarioCount);
+  size_t expected_task_lookups = 0;
+  for (const LlmMeasurementState& measurement : result.measurements) {
+    const size_t expected_per_work_unit =
+        measurement.scenario == LlmScenario::WeightsOnly ? 0 : 3;
+    EXPECT_EQ(measurement.layout_metadata_lookup_count_per_work_unit,
+              expected_per_work_unit);
+    EXPECT_EQ(measurement.layout_metadata_read_bytes_per_work_unit,
+              expected_per_work_unit * sizeof(uint32_t));
+    EXPECT_EQ(measurement.planned_layout_metadata_lookup_count,
+              expected_per_work_unit * config.iterations);
+    EXPECT_EQ(measurement.completed_layout_metadata_lookup_count,
+              expected_per_work_unit * config.iterations);
+    expected_task_lookups += expected_per_work_unit * config.iterations;
+  }
+  EXPECT_EQ(result.counters.planned_layout_metadata_lookup_count,
+            expected_task_lookups);
+  EXPECT_EQ(result.counters.completed_layout_metadata_lookup_count,
+            expected_task_lookups);
 }
 
 TEST(LlmMemoryRunnerTest,

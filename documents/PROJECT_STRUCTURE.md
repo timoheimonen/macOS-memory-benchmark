@@ -71,7 +71,7 @@ This document describes the layout of project files, organized by purpose. It is
 | `documents/LATENCY_WHITEPAPER.md` | Whitepaper: cache and memory latency measurement methodology |
 | `documents/CORE_TO_CORE_WHITEPAPER.md` | Whitepaper: calibrated two-thread token-handoff methodology, audit schema, and interpretation limits |
 | `documents/GPU_BANDWIDTH_WHITEPAPER.md` | Whitepaper: Metal compute bandwidth methodology, GPU schema 1, validation, capability limits, and maintenance policy |
-| `documents/LLM_MEMORY_PROFILE_WHITEPAPER.md` | Whitepaper: CPU decode/prefill contiguous/paged methodology and experimental Metal contiguous-decode preview, with exact payload formulas, resources, validation, schema 1, and interpretation limits |
+| `documents/LLM_MEMORY_PROFILE_WHITEPAPER.md` | Whitepaper: CPU decode/prefill contiguous/paged methodology and experimental Metal decode preview for both layouts, with exact payload formulas, resources, validation, schema 1, and interpretation limits |
 | `documents/PROJECT_STRUCTURE.md` | This file |
 
 ---
@@ -278,12 +278,12 @@ Objective-C++ Metal backend so deterministic unit tests do not require GPU work.
 ### 2.6 src/llm_memory/ — Synthetic LLM memory profile
 
 Standalone generic schema-1 vocabulary with all four CPU decode/prefill and contiguous/paged implementations plus an
-experimental Metal contiguous-decode preview. Its M4 validation gate has passed, while Apple7/M1 baseline validation
-remains pending. Pure logical phase planning, deterministic paged geometry/permutation,
-backend-specific execution planning/evidence, the Objective-C-free backend contract, CPU mapping and ARM64 execution,
-the Objective-C++ Metal boundary, environment capture, console composition, and serialization are separated so
-deterministic unit tests can inject platform and allocation behavior without running hot kernels. Metal prefill and
-paged KV remain inactive, and no unsupported Metal request falls back to CPU.
+experimental Metal decode preview for contiguous and paged KV. Current M4 evidence covers both decode layouts;
+required Apple7/M1 baseline validation remains pending. Pure logical phase planning, deterministic paged
+geometry/permutation, backend-specific execution planning/evidence, the Objective-C-free backend contract, CPU mapping
+and ARM64 execution, the Objective-C++ Metal boundary, environment capture, console composition, and serialization are
+separated so deterministic unit tests can inject platform and allocation behavior without running hot kernels. Metal
+prefill remains inactive, and no unsupported Metal request falls back to CPU.
 
 | File | Purpose |
 |---|---|
@@ -293,9 +293,9 @@ paged KV remain inactive, and no unsupported Metal request falls back to CPU.
 | `llm_work_plan.h` / `.cpp` | Checked phase-applicable weight/KV geometry, payload/metadata/accounted math, memory budget, scenario limits, exact CPU ownership evidence, Metal segment/argument-buffer/resource/grid plans, and frozen methodology/component/plan identities |
 | `llm_backend.h` / `.cpp` | Objective-C-free synchronous backend lifecycle and task boundary, generic task identity/timing/completion/validation, tagged CPU/Metal task and command evidence, auxiliary-memory contract, stable statuses/reasons, checked evidence accessors, and backend factory |
 | `llm_cpu_backend.h` / `.cpp` | Active CPU adapter that owns the timer and prepared contiguous or paged resources, delegates allocation/execution to the executor, validates CPU worker/QoS/timer/checksum invariants, and converts executor evidence into the generic task result |
-| `llm_metal_backend.h` | Objective-C-free planning, capability, resource, memory-admission, grid, timestamp/checksum mapping, diagnostics, and test-seam contract for the experimental contiguous-decode preview |
-| `llm_metal_backend.mm` | Objective-C++ Metal boundary for the experimental preview's capability probing, selected-profile runtime compilation, argument encoding, private/shared allocation, initialization, exact-tail segmented dispatch, GPU timestamps, dual-mod32 checksum, excluded append validation, diagnostics, and idempotent cleanup |
-| `llm_metal_kernels_source.h` | Canonical embedded MSL 2.3 source with versioned parameter/resource ABIs, common foundation entrypoints, three scenario-specialized contiguous-decode workload entrypoints, and exact append validation; exact selected source bytes are hashed at runtime |
+| `llm_metal_backend.h` | Objective-C-free planning, capability, contiguous/paged resource and memory admission, one-owner grid, timestamp/checksum mapping, diagnostics, and test-seam contract for the experimental decode preview |
+| `llm_metal_backend.mm` | Objective-C++ Metal boundary for the experimental preview's capability probing, selected-profile runtime compilation, Tier 2 argument encoding, private/shared allocation, table upload/validation, block-aligned or exact-tail segmented dispatch, GPU timestamps, layout-aware dual-mod32 checksum, excluded append/padding validation, diagnostics, and idempotent cleanup |
+| `llm_metal_kernels_source.h` | Canonical embedded MSL 2.3 source with versioned contiguous/paged parameter ABIs, common foundation entrypoints, scenario-specialized decode workload entrypoints, named-lane volatile paged-table publication, and exact append/padding validation; exact selected source bytes are hashed at runtime |
 | `llm_executor.h` / `.cpp` | CPU-specific full-size mappings, paged-table preparation, deterministic initialization/pre-touch, phase/layout descriptor materialization, independent checksum oracles, padding canaries, synchronized worker team, timer boundary, and ARM64 adapters retained behind `LlmCpuBackend` |
 | `llm_runner.h` / `.cpp` | Backend-independent lifecycle, per-scenario automatic calibration or exact-work planning, generic task acceptance, frozen plans, cyclic loop order, status/counters, task-boundary interruption, aggregates, warnings, and logical checkpoints; resources are released before the command-terminal checkpoint |
 | `llm_json.h` / `.cpp` | Ordered generic LLM schema-1 builder plus conservative output-peak estimator, with backend/phase/layout identity, resolved Metal segmentation, capability/resource/task evidence, decimal-string exact integers, nullable non-applicability, traffic diagnostics, environment evidence, and interpretation contract |
@@ -383,10 +383,10 @@ installed. All `.cpp` files are picked up automatically by the Makefile. Tests n
 | `test_llm_memory_work_plan.cpp` | `LlmMemoryWorkPlanTest` | Production checked decode/prefill geometry and payloads, physical/padding/table/lookup/accounted math, deterministic permutation/hash, token/block ownership, memory budget, descriptor/range/layout invariants, worker reduction, seed identities, scenario caps/calibration, and cyclic order |
 | `test_llm_memory_executor.cpp` | `LlmMemoryExecutorTest` | CPU phase/layout dispatch, atomic mapping/table-preparation failure seams, contiguous and paged decode/prefill descriptor materialization, independent checksums, padding canaries, synchronized timing, QoS, cancellation, and fake-kernel validation |
 | `test_llm_memory_runner.cpp` | `LlmMemoryRunnerTest` | Fake-backend lifecycle and generic decode/prefill task seams, lifecycle unsupported/failure handling, common identity/timing/completion/validation acceptance, exact calibration/single-unit/freeze/frozen-warmup order, cyclic measurements, status/counter/aggregate semantics, interruption, release/checkpoint precedence, auxiliary budgeting, and runner exception boundaries |
-| `test_llm_memory_json.cpp` | `LlmMemoryJsonTest` | Schema-1 CPU and Metal identity, exact nullable geometry/workers, ownership/segmentation, capability/resource/task evidence, output-peak, status, interpretation, environment, and checkpoint evidence |
-| `test_llm_memory_output.cpp` | `LlmMemoryOutputTest` | Exact decode/prefill, contiguous/paged, and Metal device/resource/task formatting, interpretation text, and deduplicated warnings |
+| `test_llm_memory_json.cpp` | `LlmMemoryJsonTest` | Schema-1 CPU and Metal identity, exact nullable geometry/workers, paged layout/permutation, ownership/segmentation, capability/resource/task lookup/padding evidence, output-peak, status, interpretation, environment, and checkpoint evidence |
+| `test_llm_memory_output.cpp` | `LlmMemoryOutputTest` | Exact decode/prefill, contiguous/paged, and Metal device/resource/table/task lookup/padding formatting, interpretation text, and deduplicated warnings |
 | `test_llm_memory_kernels.cpp` | `LlmMemoryKernelIntegrationTest` | Real contiguous/paged decode/prefill ARM64 descriptor/kernel scenarios, paged tails/lookups, full-prompt writes, exact partial tiled scans, checksum, padding, worker-count, and AAPCS64 coverage |
-| `test_llm_metal_backend.cpp` | `LlmMetalBackendTest`, `LlmMetalBackendIntegrationTest`, `LlmMetalBackendFailureInjectionIntegrationTest` | Pure capability, segmentation, argument-buffer, grid, ABI, source-hash, timestamp/checksum/reason mapping, and admission coverage plus real-device selected-profile compilation, Tier-2 slots, private initialization, exact-tail/boundary contiguous decode, all three scenarios, interruption/failure cleanup, and idempotent release |
+| `test_llm_metal_backend.cpp` | `LlmMetalBackendTest`, `LlmMetalBackendIntegrationTest`, `LlmMetalBackendFailureInjectionIntegrationTest` | Pure capability, contiguous/paged segmentation, argument-buffer, one-owner grid, ABI, source-hash, lookup-aware checksum/reason mapping, and admission coverage plus real-device selected-profile compilation, Tier-2 slots, private table/K/V initialization, exact-tail and partial-block decode, all three scenarios, wrong-table/padding detection, interruption/failure cleanup, and idempotent release |
 | `test_buffer_manager.cpp` | `BufferManagerTest` | Pattern mapping policy, atomic allocation cleanup, initialized content, validation, and peak accounting |
 | `test_benchmark_executor.cpp` | `BenchmarkExecutorTest` | Injected phase/chain failures, continuous latency sampling, and hardware executor contracts |
 | `test_benchmark_runner.cpp` | `BenchmarkStatisticsCollectorTest`, `BenchmarkRunnerTest` | Status-bearing aggregation, schema-3 retained snapshots, checkpointing, interruption, and runner exception/failure seams |

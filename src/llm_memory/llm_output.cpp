@@ -45,43 +45,75 @@ const LlmPagedCpuExecutionPlan* paged_cpu_execution_plan(const LlmMemoryWorkPlan
   return &*cpu->paged;
 }
 
-void print_paged_layout_evidence(const LlmMemoryWorkPlan& plan, std::string_view work_unit_name) {
-  const LlmPagedCpuExecutionPlan* const paged = paged_cpu_execution_plan(plan);
-  if (paged == nullptr) {
+/** Return backend-neutral paged geometry without materializing a table. */
+const LlmKvLayoutPlan* paged_layout_plan(const LlmMemoryWorkPlan& plan) noexcept {
+  const LlmPagedCpuExecutionPlan* const cpu = paged_cpu_execution_plan(plan);
+  if (cpu != nullptr) {
+    return &cpu->layout;
+  }
+  const LlmMetalExecutionPlan* const metal = get_llm_metal_execution_plan(plan);
+  if (plan.kv_layout != LlmKvLayout::Paged || metal == nullptr || !metal->resources.paged_layout.has_value()) {
+    return nullptr;
+  }
+  return &*metal->resources.paged_layout;
+}
+
+/** Return the materialized permutation identity published by the selected backend. */
+const LlmKvPermutationIdentity* paged_permutation_identity(
+    const LlmMemoryWorkPlan& plan, const LlmBackendEvidence& backend_evidence) noexcept {
+  const LlmPagedCpuExecutionPlan* const cpu = paged_cpu_execution_plan(plan);
+  if (cpu != nullptr) {
+    return &cpu->permutation;
+  }
+  const LlmMetalBackendEvidence* const metal = get_llm_metal_backend_evidence(backend_evidence);
+  if (plan.backend != LlmMemoryBackend::Metal || plan.kv_layout != LlmKvLayout::Paged || metal == nullptr ||
+      !metal->resources.table_permutation.has_value()) {
+    return nullptr;
+  }
+  return &*metal->resources.table_permutation;
+}
+
+void print_paged_layout_evidence(const LlmMemoryWorkPlan& plan, const LlmBackendEvidence& backend_evidence,
+                                 std::string_view work_unit_name) {
+  const LlmKvLayoutPlan* const layout = paged_layout_plan(plan);
+  const LlmKvPermutationIdentity* const permutation = paged_permutation_identity(plan, backend_evidence);
+  if (layout == nullptr || permutation == nullptr) {
     return;
   }
   Messages::LlmPagedLayoutReportValues values;
-  values.block_tokens = paged->layout.kv_block_tokens;
-  values.blocks_per_sequence = paged->layout.blocks_per_sequence;
-  values.physical_blocks_per_layer = paged->layout.physical_blocks_per_layer;
-  values.total_physical_blocks = paged->layout.total_physical_blocks;
-  values.block_bytes = paged->layout.block_bytes;
-  values.terminal_block_tokens = paged->layout.last_block_tokens;
-  values.terminal_valid_bytes = paged->layout.last_block_valid_bytes;
+  values.block_tokens = layout->kv_block_tokens;
+  values.blocks_per_sequence = layout->blocks_per_sequence;
+  values.physical_blocks_per_layer = layout->physical_blocks_per_layer;
+  values.total_physical_blocks = layout->total_physical_blocks;
+  values.block_bytes = layout->block_bytes;
+  values.terminal_block_tokens = layout->last_block_tokens;
+  values.terminal_valid_bytes = layout->last_block_valid_bytes;
   values.k_logical_bytes = plan.geometry.k_logical_bytes;
   values.k_physical_bytes = plan.geometry.k_mapping_bytes;
   values.k_padding_bytes = plan.geometry.k_layout_padding_bytes;
   values.v_logical_bytes = plan.geometry.v_logical_bytes;
   values.v_physical_bytes = plan.geometry.v_mapping_bytes;
   values.v_padding_bytes = plan.geometry.v_layout_padding_bytes;
-  values.block_table_entries = paged->layout.block_table_entries;
-  values.block_table_bytes = paged->block_table_logical_bytes;
-  values.block_table_page_rounded_bytes = paged->block_table_mapping_bytes;
-  values.permutation_version = paged->permutation.algorithm_version;
-  values.permutation_seed = paged->permutation.resolved_seed;
-  values.permutation_sha256 = paged->permutation.sha256;
-  values.permutation_identity = paged->permutation.identity;
-  if (plan.phase == LlmPhase::Prefill) {
-    const LlmScenarioLimits kv_only_limits = calculate_llm_scenario_limits(plan.geometry, LlmScenario::KvOnly);
-    if (kv_only_limits.valid) {
-      values.metadata_lookups_per_work_unit = kv_only_limits.layout_metadata_lookup_count_per_work_unit;
-      values.metadata_bytes_per_work_unit = kv_only_limits.layout_metadata_read_bytes_per_work_unit;
-      values.accounted_bytes_per_work_unit = kv_only_limits.accounted_bytes_per_work_unit;
-    }
-  } else {
-    values.metadata_lookups_per_work_unit = paged->ownership.total_layout_metadata_lookup_count_per_work_unit;
-    values.metadata_bytes_per_work_unit = paged->ownership.total_layout_metadata_read_bytes_per_work_unit;
-    values.accounted_bytes_per_work_unit = paged->ownership.total_accounted_bytes_per_work_unit;
+  values.block_table_entries = layout->block_table_entries;
+  const LlmPagedCpuExecutionPlan* const cpu = paged_cpu_execution_plan(plan);
+  const LlmMetalExecutionPlan* const metal = get_llm_metal_execution_plan(plan);
+  values.block_table_bytes = cpu != nullptr ? cpu->block_table_logical_bytes : layout->memory.block_table_bytes;
+  values.block_table_page_rounded_bytes =
+      cpu != nullptr ? cpu->block_table_mapping_bytes
+                     : metal != nullptr ? metal->resources.host_permutation_mapping_bytes : 0;
+  values.permutation_version = permutation->algorithm_version;
+  values.permutation_seed = permutation->resolved_seed;
+  values.permutation_sha256 = permutation->sha256;
+  values.permutation_identity = permutation->identity;
+  const LlmScenarioLimits kv_only_limits = calculate_llm_scenario_limits(plan.geometry, LlmScenario::KvOnly);
+  if (kv_only_limits.valid) {
+    values.metadata_lookups_per_work_unit = kv_only_limits.layout_metadata_lookup_count_per_work_unit;
+    values.metadata_bytes_per_work_unit = kv_only_limits.layout_metadata_read_bytes_per_work_unit;
+    values.accounted_bytes_per_work_unit = kv_only_limits.accounted_bytes_per_work_unit;
+  } else if (cpu != nullptr && plan.phase == LlmPhase::Decode) {
+    values.metadata_lookups_per_work_unit = cpu->ownership.total_layout_metadata_lookup_count_per_work_unit;
+    values.metadata_bytes_per_work_unit = cpu->ownership.total_layout_metadata_read_bytes_per_work_unit;
+    values.accounted_bytes_per_work_unit = cpu->ownership.total_accounted_bytes_per_work_unit;
   }
   values.work_unit_name = work_unit_name;
   std::cout << Messages::report_llm_memory_paged_layout(values) << '\n';
@@ -271,7 +303,7 @@ void print_llm_memory_console_report(const LlmMemoryWorkPlan& model_plan, const 
                      prefill.logical_attention_pairs, prefill.logical_attention_fma_terms)
               << std::endl;
   }
-  print_paged_layout_evidence(model_plan, work_unit_name);
+  print_paged_layout_evidence(model_plan, backend_evidence, work_unit_name);
   std::cout << Messages::report_llm_memory_payload(
                    work_unit_name, model_plan.geometry.active_weight_bytes_per_work_unit,
                    model_plan.geometry.kv_read_bytes_per_work_unit, model_plan.geometry.kv_write_bytes_per_work_unit)

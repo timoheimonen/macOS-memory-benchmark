@@ -40,6 +40,7 @@
 #include "core/system/page_size.h"
 #include "llm_memory/llm_kv_layout.h"
 #include "llm_memory/llm_metal_backend.h"
+#include "llm_memory/llm_metal_kernels_source.h"
 #include "llm_memory/llm_work_plan.h"
 
 namespace {
@@ -48,9 +49,9 @@ constexpr size_t kGiB = 1024ULL * 1024ULL * 1024ULL;
 constexpr size_t kFoundationPipelineCount = 6;
 constexpr size_t kWorkloadPipelineCount = 3;
 constexpr std::string_view kCanonicalKernelRevision =
-    "llm-metal-decode-contiguous-msl23-v1";
+    "llm-metal-decode-contiguous-paged-msl23-v2";
 constexpr std::string_view kCanonicalKernelSourceSha256 =
-    "eaa1eca03af3f9e7f41d7954f2a969a41dfc8dec6861a708afd099f54e15cb8e";
+    "6356672227f11e2a908b3d19f31ed4205ebf00c34648b74bb6d06dbe7a590c1a";
 
 LlmGeometry contiguous_geometry(size_t weight_bytes, size_t context_tokens = 1, size_t layer_count = 1,
                                 size_t batch_size = 1, size_t head_dimension = 1) {
@@ -187,6 +188,9 @@ LlmRunnerTaskContext measurement_context(LlmScenario scenario,
 }
 
 constexpr uint32_t kTestPatternMultiplier = UINT32_C(0x9e3779b9);
+constexpr uint32_t kTestPagedPatternLayerMultiplier = UINT32_C(0xa24baed5);
+constexpr uint32_t kTestPagedPatternPhysicalMultiplier = UINT32_C(0x9fb21c65);
+constexpr uint32_t kTestPagedPatternWordMultiplier = UINT32_C(0xc13fa9a9);
 constexpr uint32_t kTestAppendWorkUnitMultiplier = UINT32_C(0x85ebca6b);
 constexpr uint32_t kTestAppendLayerMultiplier = UINT32_C(0xc2b2ae35);
 constexpr uint32_t kTestAppendBatchMultiplier = UINT32_C(0x27d4eb2f);
@@ -200,6 +204,7 @@ constexpr uint32_t kTestChecksumLayerMultiplier = UINT32_C(0x27d4eb35);
 constexpr uint32_t kTestChecksumBatchMultiplier = UINT32_C(0x165667c5);
 constexpr uint32_t kTestChecksumValidMaskMultiplier = UINT32_C(0xd3a2646d);
 constexpr uint32_t kTestChecksumProfileDomain = UINT32_C(0x4d444331);
+constexpr uint32_t kTestChecksumPagedProfileDomain = UINT32_C(0x4d445031);
 constexpr uint32_t kTestChecksumScenarioHighMultiplier = UINT32_C(0xa24baed5);
 constexpr uint32_t kTestChecksumWeightDomain = UINT32_C(0x57474854);
 constexpr uint32_t kTestChecksumKeyDomain = UINT32_C(0x4b455943);
@@ -207,6 +212,12 @@ constexpr uint32_t kTestChecksumValueDomain = UINT32_C(0x56414c43);
 constexpr uint32_t kTestChecksumWeightReadVisit = UINT32_C(0x57524541);
 constexpr uint32_t kTestChecksumAppendVisit = UINT32_C(0x41505044);
 constexpr uint32_t kTestChecksumKvReadVisit = UINT32_C(0x4b565244);
+constexpr uint32_t kTestChecksumPagedLogicalMultiplier = UINT32_C(0x7f4a7c15);
+constexpr uint32_t kTestChecksumPagedPhysicalMultiplier = UINT32_C(0x94d049bb);
+constexpr uint32_t kTestChecksumPagedPairMultiplier = UINT32_C(0x369dea0f);
+constexpr uint32_t kTestChecksumPagedAppendLookupVisit = UINT32_C(0x50414c55);
+constexpr uint32_t kTestChecksumPagedKeyLookupVisit = UINT32_C(0x504b4c55);
+constexpr uint32_t kTestChecksumPagedValueLookupVisit = UINT32_C(0x50564c55);
 constexpr uint32_t kTestChecksumDomainMultiplier = UINT32_C(0x7feb352d);
 
 uint8_t word_byte(uint32_t word, size_t byte_index) {
@@ -217,6 +228,17 @@ uint32_t independent_contiguous_pattern_word(uint64_t seed,
                                              uint64_t word_index) {
   return static_cast<uint32_t>(seed) +
          kTestPatternMultiplier * static_cast<uint32_t>(word_index + 1U);
+}
+
+uint32_t independent_paged_pattern_word(uint64_t seed, size_t layer,
+                                        uint32_t physical_id,
+                                        uint64_t local_word) {
+  return static_cast<uint32_t>(seed) +
+         kTestPagedPatternLayerMultiplier *
+             static_cast<uint32_t>(layer + 1U) +
+         kTestPagedPatternPhysicalMultiplier * (physical_id + 1U) +
+         kTestPagedPatternWordMultiplier *
+             static_cast<uint32_t>(local_word + 1U);
 }
 
 uint32_t independent_decode_append_word(uint64_t scenario_seed,
@@ -250,6 +272,40 @@ uint32_t independent_checksum_domain(
          kTestChecksumValidMaskMultiplier * valid_mask;
 }
 
+uint32_t independent_paged_checksum_domain(
+    uint32_t pool_domain, uint32_t visit_domain, uint64_t scenario_seed,
+    size_t work_unit, size_t layer, size_t batch, size_t logical_table_index,
+    uint32_t physical_id, uint32_t valid_mask) {
+  const uint32_t logical = static_cast<uint32_t>(logical_table_index + 1U);
+  const uint32_t physical = physical_id + 1U;
+  return kTestChecksumPagedProfileDomain + static_cast<uint32_t>(scenario_seed) +
+         kTestChecksumScenarioHighMultiplier *
+             static_cast<uint32_t>(scenario_seed >> 32U) +
+         pool_domain + visit_domain +
+         kTestChecksumWorkUnitMultiplier *
+             static_cast<uint32_t>(work_unit + 1U) +
+         kTestChecksumLayerMultiplier * static_cast<uint32_t>(layer + 1U) +
+         kTestChecksumBatchMultiplier * static_cast<uint32_t>(batch + 1U) +
+         kTestChecksumPagedLogicalMultiplier * logical +
+         kTestChecksumPagedPhysicalMultiplier * physical +
+         kTestChecksumPagedPairMultiplier * logical * physical +
+         kTestChecksumValidMaskMultiplier * valid_mask;
+}
+
+uint32_t independent_paged_weight_domain(uint64_t scenario_seed,
+                                         size_t work_unit, size_t layer,
+                                         uint32_t valid_mask) {
+  return kTestChecksumPagedProfileDomain + static_cast<uint32_t>(scenario_seed) +
+         kTestChecksumScenarioHighMultiplier *
+             static_cast<uint32_t>(scenario_seed >> 32U) +
+         kTestChecksumWeightDomain + kTestChecksumWeightReadVisit +
+         kTestChecksumWorkUnitMultiplier *
+             static_cast<uint32_t>(work_unit + 1U) +
+         kTestChecksumLayerMultiplier * static_cast<uint32_t>(layer + 1U) +
+         kTestChecksumBatchMultiplier +
+         kTestChecksumValidMaskMultiplier * valid_mask;
+}
+
 void independent_mix_word(LlmMetalMod32Lane& checksum, uint32_t value,
                           uint64_t word_index, uint32_t domain) {
   checksum.a += value + domain;
@@ -257,6 +313,36 @@ void independent_mix_word(LlmMetalMod32Lane& checksum, uint32_t value,
                 static_cast<uint32_t>(word_index) *
                     kTestChecksumAddressMultiplier +
                 domain * kTestChecksumDomainMultiplier;
+}
+
+template <typename ByteAt, typename DomainAt>
+void independent_accumulate_masked_words(
+    LlmMetalMod32Lane& checksum, size_t range_start, size_t range_length,
+    uint64_t word_ordinal_base, ByteAt byte_at, DomainAt domain_at) {
+  if (range_length == 0) {
+    return;
+  }
+  const size_t range_end = range_start + range_length;
+  const uint64_t first_word = range_start / sizeof(uint32_t);
+  const uint64_t last_word = (range_end - 1U) / sizeof(uint32_t);
+  for (uint64_t local_word = first_word; local_word <= last_word;
+       ++local_word) {
+    uint32_t packed = 0;
+    uint32_t valid_mask = 0;
+    const uint64_t word_start = local_word * sizeof(uint32_t);
+    for (size_t byte_index = 0; byte_index < sizeof(uint32_t);
+         ++byte_index) {
+      const uint64_t local_byte = word_start + byte_index;
+      if (local_byte < range_start || local_byte >= range_end) {
+        continue;
+      }
+      valid_mask |= 1U << byte_index;
+      packed |= static_cast<uint32_t>(byte_at(local_byte))
+                << (8U * static_cast<unsigned>(byte_index));
+    }
+    independent_mix_word(checksum, packed, word_ordinal_base + local_word,
+                         domain_at(valid_mask));
+  }
 }
 
 template <typename ByteAt>
@@ -368,6 +454,179 @@ LlmMetalDualMod32Checksum independent_decode_checksum_byte_by_byte(
                         model_plan.k_buffer_seed, kTestChecksumKeyDomain);
         accumulate_pool(checksum.v, LlmMetalResourcePool::V,
                         model_plan.v_buffer_seed, kTestChecksumValueDomain);
+      }
+    }
+  }
+  return checksum;
+}
+
+LlmMetalDualMod32Checksum independent_paged_decode_checksum_byte_by_byte(
+    const LlmMemoryWorkPlan& model_plan,
+    const LlmScenarioWorkPlan& scenario_plan,
+    const std::vector<uint32_t>& table) {
+  LlmMetalDualMod32Checksum checksum;
+  const LlmMetalExecutionPlan* execution =
+      get_llm_metal_execution_plan(model_plan);
+  EXPECT_NE(execution, nullptr);
+  if (execution == nullptr || !execution->resources.paged_layout.has_value()) {
+    return checksum;
+  }
+  const LlmKvLayoutPlan& layout = *execution->resources.paged_layout;
+  EXPECT_EQ(table.size(), layout.block_table_entries);
+  if (table.size() != layout.block_table_entries) {
+    return checksum;
+  }
+  const LlmGeometry& geometry = model_plan.geometry;
+  const bool include_weight =
+      scenario_plan.scenario != LlmScenario::KvOnly;
+  const bool include_kv =
+      scenario_plan.scenario != LlmScenario::WeightsOnly;
+  const size_t words_per_block =
+      layout.block_bytes / sizeof(uint32_t) +
+      (layout.block_bytes % sizeof(uint32_t) != 0 ? 1U : 0U);
+  const size_t weight_layer_base =
+      geometry.active_weight_bytes_per_work_unit / geometry.layer_count;
+  const size_t weight_layer_remainder =
+      geometry.active_weight_bytes_per_work_unit % geometry.layer_count;
+
+  for (size_t work_unit = 0; work_unit < scenario_plan.work_units;
+       ++work_unit) {
+    if (include_weight) {
+      size_t weight_start = 0;
+      for (size_t layer = 0; layer < geometry.layer_count; ++layer) {
+        const size_t weight_bytes =
+            weight_layer_base + (layer < weight_layer_remainder ? 1U : 0U);
+        independent_accumulate_masked_words(
+            checksum.weight, weight_start, weight_bytes, 0,
+            [&](uint64_t absolute_byte) {
+              return word_byte(
+                  independent_contiguous_pattern_word(
+                      model_plan.weight_buffer_seed,
+                      absolute_byte / sizeof(uint32_t)),
+                  absolute_byte % sizeof(uint32_t));
+            },
+            [&](uint32_t valid_mask) {
+              return independent_paged_weight_domain(
+                  scenario_plan.scenario_seed, work_unit, layer, valid_mask);
+            });
+        weight_start += weight_bytes;
+      }
+    }
+    if (!include_kv) {
+      continue;
+    }
+
+    for (size_t layer = 0; layer < layout.layer_count; ++layer) {
+      for (size_t batch = 0; batch < layout.batch_size; ++batch) {
+        for (size_t logical_block = 0;
+             logical_block < layout.blocks_per_sequence; ++logical_block) {
+          const size_t logical_table_index =
+              batch * layout.blocks_per_sequence + logical_block;
+          const uint32_t physical_id = table[logical_table_index];
+          const bool terminal =
+              logical_block + 1 == layout.blocks_per_sequence;
+          const size_t valid_bytes =
+              terminal ? layout.last_block_valid_bytes : layout.block_bytes;
+          const uint64_t word_ordinal_base =
+              static_cast<uint64_t>(logical_table_index) * words_per_block;
+          const auto mix_lookup = [&](LlmMetalMod32Lane& lane,
+                                      uint32_t pool_domain,
+                                      uint32_t visit_domain) {
+            independent_mix_word(
+                lane, physical_id, logical_table_index,
+                independent_paged_checksum_domain(
+                    pool_domain, visit_domain, scenario_plan.scenario_seed,
+                    work_unit, layer, batch, logical_table_index, physical_id,
+                    0));
+          };
+          const auto append_byte = [&](uint64_t local_byte,
+                                       LlmMetalResourcePool pool) {
+            return word_byte(
+                independent_decode_append_word(
+                    scenario_plan.scenario_seed, work_unit, layer, batch,
+                    local_byte / sizeof(uint32_t), pool),
+                local_byte % sizeof(uint32_t));
+          };
+          const auto initial_byte = [&](uint64_t local_byte, uint64_t seed) {
+            return word_byte(
+                independent_paged_pattern_word(
+                    seed, layer, physical_id,
+                    local_byte / sizeof(uint32_t)),
+                local_byte % sizeof(uint32_t));
+          };
+          const auto accumulate_data = [&](LlmMetalMod32Lane& lane,
+                                           LlmMetalResourcePool pool,
+                                           uint64_t seed,
+                                           uint32_t pool_domain,
+                                           uint32_t visit_domain,
+                                           size_t range_start,
+                                           size_t range_length,
+                                           bool appended) {
+            independent_accumulate_masked_words(
+                lane, range_start, range_length, word_ordinal_base,
+                [&](uint64_t local_byte) {
+                  return appended
+                             ? append_byte(local_byte, pool)
+                             : initial_byte(local_byte, seed);
+                },
+                [&](uint32_t valid_mask) {
+                  return independent_paged_checksum_domain(
+                      pool_domain, visit_domain,
+                      scenario_plan.scenario_seed, work_unit, layer, batch,
+                      logical_table_index, physical_id, valid_mask);
+                });
+          };
+          const auto accumulate_scan = [&](LlmMetalMod32Lane& lane,
+                                           LlmMetalResourcePool pool,
+                                           uint64_t seed,
+                                           uint32_t pool_domain) {
+            independent_accumulate_masked_words(
+                lane, 0, valid_bytes, word_ordinal_base,
+                [&](uint64_t local_byte) {
+                  return terminal &&
+                                 local_byte >=
+                                     layout.decode_append_offset_in_last_block
+                             ? append_byte(local_byte, pool)
+                             : initial_byte(local_byte, seed);
+                },
+                [&](uint32_t valid_mask) {
+                  return independent_paged_checksum_domain(
+                      pool_domain, kTestChecksumKvReadVisit,
+                      scenario_plan.scenario_seed, work_unit, layer, batch,
+                      logical_table_index, physical_id, valid_mask);
+                });
+          };
+
+          if (terminal) {
+            mix_lookup(checksum.k, kTestChecksumKeyDomain,
+                       kTestChecksumPagedAppendLookupVisit);
+            mix_lookup(checksum.v, kTestChecksumValueDomain,
+                       kTestChecksumPagedAppendLookupVisit);
+            accumulate_data(
+                checksum.k, LlmMetalResourcePool::K,
+                model_plan.k_buffer_seed, kTestChecksumKeyDomain,
+                kTestChecksumAppendVisit,
+                layout.decode_append_offset_in_last_block,
+                layout.k_or_v_record_bytes_per_layer, true);
+            accumulate_data(
+                checksum.v, LlmMetalResourcePool::V,
+                model_plan.v_buffer_seed, kTestChecksumValueDomain,
+                kTestChecksumAppendVisit,
+                layout.decode_append_offset_in_last_block,
+                layout.k_or_v_record_bytes_per_layer, true);
+          }
+
+          mix_lookup(checksum.k, kTestChecksumKeyDomain,
+                     kTestChecksumPagedKeyLookupVisit);
+          accumulate_scan(checksum.k, LlmMetalResourcePool::K,
+                          model_plan.k_buffer_seed, kTestChecksumKeyDomain);
+
+          mix_lookup(checksum.v, kTestChecksumValueDomain,
+                     kTestChecksumPagedValueLookupVisit);
+          accumulate_scan(checksum.v, LlmMetalResourcePool::V,
+                          model_plan.v_buffer_seed,
+                          kTestChecksumValueDomain);
+        }
       }
     }
   }
@@ -966,6 +1225,13 @@ TEST(LlmMetalBackendTest,
             UINT32_C(0xc61ac161));
   EXPECT_EQ(llm_metal_contiguous_pattern_word(kSeed, UINT32_MAX),
             UINT32_C(0x89abcdef));
+  EXPECT_EQ(llm_metal_paged_pattern_word(kSeed, 0, 0, 0),
+            UINT32_C(0x8ce942d2));
+  EXPECT_EQ(llm_metal_paged_pattern_word(kSeed, 1, 3, 7),
+            UINT32_C(0x5708ea75));
+  EXPECT_EQ(llm_metal_paged_pattern_word(
+                kSeed, UINT32_MAX, UINT32_MAX, UINT64_MAX),
+            UINT32_C(0x89abcdef));
   EXPECT_EQ(llm_metal_decode_append_word(
                 kSeed, 2, 3, 4, 5, LlmMetalResourcePool::K),
             UINT32_C(0xbeae4546));
@@ -1022,6 +1288,85 @@ TEST(LlmMetalBackendTest,
                 weights_only_lane->b != mixed_lane->b)
         << "scenario-derived seed must domain-separate the shared weight bytes";
   }
+}
+
+TEST(LlmMetalBackendTest,
+     DecodePagedChecksumMatchesIndependentByteOracleAndDetectsEqualMultiplicitySwap) {
+  const LlmGeometry geometry = paged_geometry(33, 6, 4, 2, 2, 3);
+  ASSERT_TRUE(geometry.valid) << geometry.reason_code;
+  LlmMemoryWorkPlan model = make_metal_model_plan(
+      geometry, build_llm_metal_execution_plan(resource_request(geometry)),
+      "llm-metal-paged-independent-byte-oracle");
+  ASSERT_TRUE(model.valid) << model.reason_code;
+  const LlmMetalExecutionPlan* execution = get_llm_metal_execution_plan(model);
+  ASSERT_NE(execution, nullptr);
+  ASSERT_TRUE(execution->resources.paged_layout.has_value());
+  const LlmKvLayoutPlan& layout = *execution->resources.paged_layout;
+  ASSERT_EQ(layout.blocks_per_sequence, 2U);
+  ASSERT_EQ(layout.last_block_valid_bytes, 6U);
+  ASSERT_EQ(layout.decode_append_offset_in_last_block, 3U);
+  ASSERT_LT(layout.last_block_valid_bytes, layout.block_bytes);
+
+  const LlmKvBlockTable table = materialize_llm_kv_block_table(
+      layout, derive_llm_kv_permutation_seed(model.base_seed),
+      Constants::LLM_KV_BLOCK_TABLE_HASH_CHUNK_ENTRIES);
+  ASSERT_TRUE(table.valid) << table.reason_code;
+  const LlmMetalPagedChecksumSummary summary =
+      build_llm_metal_decode_paged_checksum_summary(
+          model, table.entries.data(), table.entries.size());
+  ASSERT_TRUE(summary.valid);
+  EXPECT_EQ(summary.all_owners.count,
+            layout.layer_count * layout.block_table_entries);
+  EXPECT_EQ(summary.terminal_owners.count,
+            layout.layer_count * layout.batch_size);
+
+  for (LlmScenario scenario : {LlmScenario::WeightsOnly,
+                               LlmScenario::KvOnly,
+                               LlmScenario::Mixed}) {
+    const LlmScenarioWorkPlan scenario_plan =
+        build_llm_scenario_work_plan(model, scenario, 2, true);
+    ASSERT_TRUE(scenario_plan.valid) << scenario_plan.reason_code;
+    const LlmMetalChecksumOracle oracle =
+        calculate_llm_metal_decode_paged_checksum(model, scenario_plan,
+                                                  summary);
+    ASSERT_TRUE(oracle.valid) << oracle.reason_code;
+    const LlmMetalDualMod32Checksum independent =
+        independent_paged_decode_checksum_byte_by_byte(
+            model, scenario_plan, table.entries);
+    SCOPED_TRACE(static_cast<int>(scenario));
+    EXPECT_TRUE(equal_llm_metal_checksum(oracle.checksum, independent))
+        << "oracle K=" << oracle.checksum.k.a << "," << oracle.checksum.k.b
+        << " V=" << oracle.checksum.v.a << "," << oracle.checksum.v.b
+        << " independent K=" << independent.k.a << "," << independent.k.b
+        << " V=" << independent.v.a << "," << independent.v.b;
+  }
+
+  std::vector<uint32_t> swapped_entries = table.entries;
+  const size_t first_nonterminal = 0;
+  const size_t second_nonterminal = layout.blocks_per_sequence;
+  ASSERT_NE(swapped_entries[first_nonterminal],
+            swapped_entries[second_nonterminal]);
+  std::swap(swapped_entries[first_nonterminal],
+            swapped_entries[second_nonterminal]);
+  EXPECT_EQ(std::accumulate(table.entries.begin(), table.entries.end(), 0U),
+            std::accumulate(swapped_entries.begin(), swapped_entries.end(),
+                            0U));
+  const LlmMetalPagedChecksumSummary swapped_summary =
+      build_llm_metal_decode_paged_checksum_summary(
+          model, swapped_entries.data(), swapped_entries.size());
+  ASSERT_TRUE(swapped_summary.valid);
+  const LlmScenarioWorkPlan kv_plan = build_llm_scenario_work_plan(
+      model, LlmScenario::KvOnly, 2, true);
+  ASSERT_TRUE(kv_plan.valid) << kv_plan.reason_code;
+  const LlmMetalChecksumOracle canonical =
+      calculate_llm_metal_decode_paged_checksum(model, kv_plan, summary);
+  const LlmMetalChecksumOracle swapped =
+      calculate_llm_metal_decode_paged_checksum(model, kv_plan,
+                                                swapped_summary);
+  ASSERT_TRUE(canonical.valid);
+  ASSERT_TRUE(swapped.valid);
+  EXPECT_FALSE(equal_llm_metal_checksum(canonical.checksum,
+                                       swapped.checksum));
 }
 
 TEST(LlmMetalBackendTest,
@@ -1247,6 +1592,151 @@ TEST(LlmMetalBackendTest,
   }
 }
 
+TEST(LlmMetalBackendTest, DecodePagedParameterCpuAbiIsExact) {
+  EXPECT_EQ(alignof(LlmMetalDecodePagedParams), 8U);
+  EXPECT_EQ(sizeof(LlmMetalDecodePagedParams), 168U);
+  const std::array<size_t, 24> offsets = {
+      offsetof(LlmMetalDecodePagedParams, weight_bytes),
+      offsetof(LlmMetalDecodePagedParams, context_tokens),
+      offsetof(LlmMetalDecodePagedParams, layer_count),
+      offsetof(LlmMetalDecodePagedParams, batch_size),
+      offsetof(LlmMetalDecodePagedParams, record_bytes),
+      offsetof(LlmMetalDecodePagedParams, work_units),
+      offsetof(LlmMetalDecodePagedParams, block_bytes),
+      offsetof(LlmMetalDecodePagedParams, last_block_valid_bytes),
+      offsetof(LlmMetalDecodePagedParams, append_offset_in_last_block),
+      offsetof(LlmMetalDecodePagedParams, blocks_per_sequence),
+      offsetof(LlmMetalDecodePagedParams, physical_blocks_per_layer),
+      offsetof(LlmMetalDecodePagedParams, blocks_per_segment),
+      offsetof(LlmMetalDecodePagedParams, table_entries_per_segment),
+      offsetof(LlmMetalDecodePagedParams, segment_capacity_bytes),
+      offsetof(LlmMetalDecodePagedParams, weight_seed),
+      offsetof(LlmMetalDecodePagedParams, k_seed),
+      offsetof(LlmMetalDecodePagedParams, v_seed),
+      offsetof(LlmMetalDecodePagedParams, scenario_seed),
+      offsetof(LlmMetalDecodePagedParams, weight_segment_count),
+      offsetof(LlmMetalDecodePagedParams, k_segment_count),
+      offsetof(LlmMetalDecodePagedParams, v_segment_count),
+      offsetof(LlmMetalDecodePagedParams, table_segment_count),
+      offsetof(LlmMetalDecodePagedParams, reserved_zero),
+      offsetof(LlmMetalDecodePagedParams, padding_zero),
+  };
+  EXPECT_EQ(offsets,
+            (std::array<size_t, 24>{0,   8,   16,  24,  32,  40,
+                                    48,  56,  64,  72,  80,  88,
+                                    96,  104, 112, 120, 128, 136,
+                                    144, 148, 152, 156, 160, 164}));
+}
+
+TEST(LlmMetalBackendTest,
+     DecodePagedParameterLayoutProbeValidatesEveryWord) {
+  LlmMetalDecodePagedParams parameters;
+  parameters.weight_bytes = UINT64_C(0x0102030405060708);
+  parameters.context_tokens = UINT64_C(0x1112131415161718);
+  parameters.layer_count = UINT64_C(0x2122232425262728);
+  parameters.batch_size = UINT64_C(0x3132333435363738);
+  parameters.record_bytes = UINT64_C(0x4142434445464748);
+  parameters.work_units = UINT64_C(0x5152535455565758);
+  parameters.block_bytes = UINT64_C(0x6162636465666768);
+  parameters.last_block_valid_bytes = UINT64_C(0x7172737475767778);
+  parameters.append_offset_in_last_block = UINT64_C(0x8182838485868788);
+  parameters.blocks_per_sequence = UINT64_C(0x9192939495969798);
+  parameters.physical_blocks_per_layer = UINT64_C(0xa1a2a3a4a5a6a7a8);
+  parameters.blocks_per_segment = UINT64_C(0xb1b2b3b4b5b6b7b8);
+  parameters.table_entries_per_segment = UINT64_C(0xc1c2c3c4c5c6c7c8);
+  parameters.segment_capacity_bytes = UINT64_C(0xd1d2d3d4d5d6d7d8);
+  parameters.weight_seed = UINT64_C(0xe1e2e3e4e5e6e7e8);
+  parameters.k_seed = UINT64_C(0xf1f2f3f4f5f6f7f8);
+  parameters.v_seed = UINT64_C(0x0101010102020202);
+  parameters.scenario_seed = UINT64_C(0x0303030304040404);
+  parameters.weight_segment_count = UINT32_C(0x11121314);
+  parameters.k_segment_count = UINT32_C(0x21222324);
+  parameters.v_segment_count = UINT32_C(0x31323334);
+  parameters.table_segment_count = UINT32_C(0x41424344);
+  parameters.reserved_zero = UINT32_C(0x51525354);
+  parameters.padding_zero = UINT32_C(0x61626364);
+
+  const std::array<uint64_t, 24> values = {
+      parameters.weight_bytes,
+      parameters.context_tokens,
+      parameters.layer_count,
+      parameters.batch_size,
+      parameters.record_bytes,
+      parameters.work_units,
+      parameters.block_bytes,
+      parameters.last_block_valid_bytes,
+      parameters.append_offset_in_last_block,
+      parameters.blocks_per_sequence,
+      parameters.physical_blocks_per_layer,
+      parameters.blocks_per_segment,
+      parameters.table_entries_per_segment,
+      parameters.segment_capacity_bytes,
+      parameters.weight_seed,
+      parameters.k_seed,
+      parameters.v_seed,
+      parameters.scenario_seed,
+      parameters.weight_segment_count,
+      parameters.k_segment_count,
+      parameters.v_segment_count,
+      parameters.table_segment_count,
+      parameters.reserved_zero,
+      parameters.padding_zero,
+  };
+  constexpr std::array<uint64_t, 24> kOffsets = {
+      0,   8,   16,  24,  32,  40,  48,  56,  64,  72,  80,  88,
+      96,  104, 112, 120, 128, 136, 144, 148, 152, 156, 160, 164,
+  };
+  LlmMetalDecodePagedLayoutProbeWords words{};
+  words[0] = 1;
+  words[1] = 168;
+  words[2] = 8;
+  words[3] = 24;
+  std::copy(kOffsets.begin(), kOffsets.end(), words.begin() + 4);
+  std::copy(values.begin(), values.end(), words.begin() + 28);
+  ASSERT_TRUE(validate_llm_metal_decode_paged_layout_probe(parameters,
+                                                            words));
+  for (size_t index = 0; index < words.size(); ++index) {
+    LlmMetalDecodePagedLayoutProbeWords corrupted = words;
+    ++corrupted[index];
+    SCOPED_TRACE(index);
+    EXPECT_FALSE(validate_llm_metal_decode_paged_layout_probe(parameters,
+                                                               corrupted));
+  }
+}
+
+TEST(LlmMetalBackendTest,
+     DecodePagedMslSourceLocksTimedLookupAndOwnerScheduleContract) {
+  const std::string_view source = LlmMetalKernelContract::kSource;
+  const auto require_source = [&](std::string_view token) {
+    EXPECT_NE(source.find(token), std::string_view::npos) << token;
+  };
+  require_source("#if (LLM_METAL_DECODE_CONTIGUOUS + LLM_METAL_DECODE_PAGED) != 1");
+  require_source("#if LLM_METAL_DECODE_CONTIGUOUS");
+  require_source("#if LLM_METAL_DECODE_PAGED");
+  require_source("device const volatile uint* named_lane_table");
+  require_source("threadgroup_barrier(mem_flags::mem_threadgroup);");
+  require_source("threadgroup uint* published_physical_id [[threadgroup(1)]]");
+  require_source("&resources.status_checksum[kLayoutMetadataLookupCountIndex], 1u");
+  require_source("layer * params.physical_blocks_per_layer + ulong(physical_id)");
+  require_source("owner += ulong(threadgroup_count)");
+  require_source("kChecksumPagedPairMultiplier * logical * physical");
+  require_source("llm_metal_validate_decode_paged_appends_padding");
+  EXPECT_EQ(source.find("atomic_ulong"), std::string_view::npos);
+
+  const size_t lookup_start = source.find("inline uint paged_timed_table_lookup");
+  const size_t lookup_end = source.find("inline void mix_paged_lookup", lookup_start);
+  ASSERT_NE(lookup_start, std::string_view::npos);
+  ASSERT_NE(lookup_end, std::string_view::npos);
+  const std::string_view lookup =
+      source.substr(lookup_start, lookup_end - lookup_start);
+  const size_t first_barrier =
+      lookup.find("threadgroup_barrier(mem_flags::mem_threadgroup);");
+  ASSERT_NE(first_barrier, std::string_view::npos);
+  EXPECT_NE(lookup.find("threadgroup_barrier(mem_flags::mem_threadgroup);",
+                        first_barrier + 1),
+            std::string_view::npos);
+}
+
 TEST(LlmMetalBackendTest, CanonicalEmbeddedMslSourceHashIsFrozenLowercaseSha256) {
   const std::string digest = canonical_llm_metal_kernel_source_sha256();
   EXPECT_EQ(digest, kCanonicalKernelSourceSha256);
@@ -1450,7 +1940,9 @@ class LlmMetalBackendIntegrationTest : public ::testing::Test {
         plan, scenario, work_units, true);
     ASSERT_TRUE(scenario_plan.valid) << scenario_plan.reason_code;
     const LlmRunnerTaskContext context = measurement_context(
-        scenario, "phase-9-real-decode-contiguous");
+        scenario, plan.kv_layout == LlmKvLayout::Paged
+                      ? "phase-10-real-decode-paged"
+                      : "phase-9-real-decode-contiguous");
     const LlmTaskExecutionResult result =
         backend_->execute_task(plan, scenario_plan, context);
     SCOPED_TRACE(static_cast<int>(scenario));
@@ -1477,10 +1969,18 @@ class LlmMetalBackendIntegrationTest : public ::testing::Test {
     const LlmMetalTaskEvidence* task = get_llm_metal_task_evidence(result);
     ASSERT_NE(task, nullptr);
     EXPECT_TRUE(task->timed_pipeline_available);
-    const std::array<std::string_view, kWorkloadPipelineCount> labels = {
-        "membenchmark.llm-metal.pipeline.decode-contiguous.weights-only",
-        "membenchmark.llm-metal.pipeline.decode-contiguous.kv-only",
-        "membenchmark.llm-metal.pipeline.decode-contiguous.mixed"};
+    const std::array<std::string_view, kWorkloadPipelineCount>
+        contiguous_labels = {
+            "membenchmark.llm-metal.pipeline.decode-contiguous.weights-only",
+            "membenchmark.llm-metal.pipeline.decode-contiguous.kv-only",
+            "membenchmark.llm-metal.pipeline.decode-contiguous.mixed"};
+    const std::array<std::string_view, kWorkloadPipelineCount> paged_labels = {
+        "membenchmark.llm-metal.pipeline.decode-paged.weights-only",
+        "membenchmark.llm-metal.pipeline.decode-paged.kv-only",
+        "membenchmark.llm-metal.pipeline.decode-paged.mixed"};
+    const auto& labels = plan.kv_layout == LlmKvLayout::Paged
+                             ? paged_labels
+                             : contiguous_labels;
     EXPECT_EQ(task->pipeline_label,
               labels[static_cast<size_t>(scenario)]);
     EXPECT_GT(task->pipeline_thread_execution_width, 0U);
@@ -1513,8 +2013,27 @@ class LlmMetalBackendIntegrationTest : public ::testing::Test {
     EXPECT_EQ(task->post_validation_command_status, "completed");
     EXPECT_TRUE(task->checksum_evaluated);
     EXPECT_TRUE(task->checksum_valid);
-    const LlmMetalChecksumOracle oracle =
-        calculate_llm_metal_decode_contiguous_checksum(plan, scenario_plan);
+    LlmMetalChecksumOracle oracle;
+    if (plan.kv_layout == LlmKvLayout::Paged) {
+      const LlmMetalExecutionPlan* execution =
+          get_llm_metal_execution_plan(plan);
+      ASSERT_NE(execution, nullptr);
+      ASSERT_TRUE(execution->resources.paged_layout.has_value());
+      const LlmKvBlockTable table = materialize_llm_kv_block_table(
+          *execution->resources.paged_layout,
+          derive_llm_kv_permutation_seed(plan.base_seed),
+          Constants::LLM_KV_BLOCK_TABLE_HASH_CHUNK_ENTRIES);
+      ASSERT_TRUE(table.valid) << table.reason_code;
+      const LlmMetalPagedChecksumSummary summary =
+          build_llm_metal_decode_paged_checksum_summary(
+              plan, table.entries.data(), table.entries.size());
+      ASSERT_TRUE(summary.valid);
+      oracle = calculate_llm_metal_decode_paged_checksum(plan, scenario_plan,
+                                                         summary);
+    } else {
+      oracle =
+          calculate_llm_metal_decode_contiguous_checksum(plan, scenario_plan);
+    }
     ASSERT_TRUE(oracle.valid) << oracle.reason_code;
     EXPECT_TRUE(equal_llm_metal_checksum(task->expected_checksum,
                                          oracle.checksum));
@@ -1523,9 +2042,12 @@ class LlmMetalBackendIntegrationTest : public ::testing::Test {
     const bool append_applicable = scenario != LlmScenario::WeightsOnly;
     EXPECT_EQ(task->append_validation_evaluated, append_applicable);
     EXPECT_TRUE(task->append_validation_valid);
-    EXPECT_FALSE(task->padding_canary_applicable);
-    EXPECT_FALSE(task->padding_canary_evaluated);
-    EXPECT_FALSE(task->padding_canary_valid);
+    const bool padding_applicable =
+        append_applicable && plan.kv_layout == LlmKvLayout::Paged &&
+        plan.geometry.last_block_valid_bytes < plan.geometry.kv_block_bytes;
+    EXPECT_EQ(task->padding_canary_applicable, padding_applicable);
+    EXPECT_EQ(task->padding_canary_evaluated, padding_applicable);
+    EXPECT_EQ(task->padding_canary_valid, padding_applicable);
     EXPECT_TRUE(task->post_validation_evaluated);
     EXPECT_TRUE(task->post_validation_valid);
   }
@@ -1691,11 +2213,21 @@ TEST_F(LlmMetalBackendIntegrationTest,
 }
 
 TEST_F(LlmMetalBackendIntegrationTest, PagedPrivateTableUploadValidationAndTier2SlotsIntegration) {
+  backend_ = create_llm_metal_backend();
+  ASSERT_NE(backend_, nullptr);
+  LlmMemoryConfig config = metal_config();
+  config.kv_layout = LlmKvLayout::Paged;
+  const LlmBackendLifecycleResult paged_initialization =
+      backend_->initialize(config);
+  ASSERT_EQ(paged_initialization.status, LlmBackendStatus::Ready)
+      << paged_initialization.reason_code << ": "
+      << metal_evidence().capability.error.description;
+
   const LlmGeometry geometry = paged_geometry(4097, 17, 4, 2, 2, 8);
   ASSERT_TRUE(geometry.valid) << geometry.reason_code;
   const LlmKvLayoutPlan layout = paged_layout_for(geometry);
   ASSERT_TRUE(layout.valid) << layout.reason_code;
-  LlmMemoryWorkPlan plan = build_device_plan(geometry, "llm-metal-phase8-paged-device-plan");
+  LlmMemoryWorkPlan plan = build_device_plan(geometry, "llm-metal-phase10-paged-device-plan");
   ASSERT_TRUE(plan.valid) << plan.reason_code;
   const LlmKvBlockTable expected_table = materialize_llm_kv_block_table(
       layout, derive_llm_kv_permutation_seed(plan.base_seed), Constants::LLM_KV_BLOCK_TABLE_HASH_CHUNK_ENTRIES);
@@ -1734,19 +2266,61 @@ TEST_F(LlmMetalBackendIntegrationTest, PagedPrivateTableUploadValidationAndTier2
   ASSERT_NE(staging, resources.resources.end());
   EXPECT_EQ(staging->storage_mode, "shared");
   EXPECT_EQ(staging->length_bytes, layout.memory.block_table_bytes);
-  EXPECT_FALSE(metal_evidence().timed_results_available);
+  EXPECT_TRUE(metal_evidence().timed_results_available);
 
-  const LlmScenarioWorkPlan scenario = build_llm_scenario_work_plan(
-      plan, LlmScenario::Mixed, 1, true);
-  ASSERT_TRUE(scenario.valid) << scenario.reason_code;
-  const LlmTaskExecutionResult result = backend_->execute_task(
-      plan, scenario,
-      measurement_context(LlmScenario::Mixed,
-                          "phase-9-paged-remains-unsupported"));
-  EXPECT_EQ(result.status, LlmTaskExecutionStatus::Unsupported);
-  EXPECT_EQ(result.reason_code, LlmBackendReason::TASK_UNSUPPORTED);
-  EXPECT_FALSE(result.timing.evaluated);
-  EXPECT_FALSE(result.validation.evaluated);
+  for (LlmScenario scenario : {LlmScenario::WeightsOnly,
+                               LlmScenario::KvOnly,
+                               LlmScenario::Mixed}) {
+    const size_t minimum_threadgroups =
+        scenario == LlmScenario::WeightsOnly ? 1U : 2U;
+    expect_complete_scenario_task(plan, scenario, 2,
+                                  minimum_threadgroups);
+  }
+}
+
+TEST_F(LlmMetalBackendIntegrationTest,
+       PagedKvPoolsCrossCanonicalSegmentBoundaryIntegration) {
+  backend_ = create_llm_metal_backend();
+  ASSERT_NE(backend_, nullptr);
+  LlmMemoryConfig config = metal_config();
+  config.kv_layout = LlmKvLayout::Paged;
+  const LlmBackendLifecycleResult paged_initialization =
+      backend_->initialize(config);
+  ASSERT_EQ(paged_initialization.status, LlmBackendStatus::Ready)
+      << paged_initialization.reason_code << ": "
+      << metal_evidence().capability.error.description;
+
+  const size_t capacity = Constants::LLM_METAL_SEGMENT_CAPACITY_BYTES;
+  const size_t record_bytes = capacity / 512U;
+  const size_t block_bytes = 2U * record_bytes;
+  const LlmGeometry geometry =
+      paged_geometry(4097, 513, 2, 1, 1, record_bytes);
+  ASSERT_TRUE(geometry.valid) << geometry.reason_code;
+  const LlmKvLayoutPlan layout = paged_layout_for(geometry);
+  ASSERT_TRUE(layout.valid) << layout.reason_code;
+  ASSERT_EQ(layout.block_bytes, block_bytes);
+  ASSERT_EQ(layout.blocks_per_sequence, 257U);
+  ASSERT_EQ(layout.last_block_valid_bytes, record_bytes);
+  ASSERT_EQ(layout.memory.k_physical_bytes, capacity + block_bytes);
+  ASSERT_EQ(layout.memory.v_physical_bytes, capacity + block_bytes);
+
+  LlmMemoryWorkPlan plan = build_device_plan(
+      geometry, "llm-metal-phase10-paged-kv-multisegment-plan");
+  ASSERT_TRUE(plan.valid) << plan.reason_code;
+  const LlmMetalExecutionPlan* execution =
+      get_llm_metal_execution_plan(plan);
+  ASSERT_NE(execution, nullptr);
+  ASSERT_TRUE(execution->valid) << execution->reason_code;
+  ASSERT_EQ(execution->resources.k_segments.segment_lengths.size(), 2U);
+  ASSERT_EQ(execution->resources.v_segments.segment_lengths.size(), 2U);
+  EXPECT_EQ(execution->resources.k_segments.segment_lengths[0], capacity);
+  EXPECT_EQ(execution->resources.k_segments.segment_lengths[1], block_bytes);
+  EXPECT_EQ(execution->resources.v_segments.segment_lengths[0], capacity);
+  EXPECT_EQ(execution->resources.v_segments.segment_lengths[1], block_bytes);
+
+  resolve_and_prepare(plan);
+  expect_complete_scenario_task(plan, LlmScenario::KvOnly, 1, 2);
+  expect_complete_scenario_task(plan, LlmScenario::Mixed, 1, 2);
 }
 
 TEST_F(LlmMetalBackendIntegrationTest, MutatedResourcePlanIsRejectedBeforeAllocationIntegration) {
@@ -1859,6 +2433,86 @@ TEST_F(LlmMetalBackendIntegrationTest, ResourceLargerThanCanonicalSegmentUsesPri
   EXPECT_EQ(metal_evidence().capability.layout_probe_resource_count, 5U);
   expect_complete_scenario_task(plan, LlmScenario::WeightsOnly, 1);
   expect_complete_scenario_task(plan, LlmScenario::Mixed, 1);
+}
+
+TEST(LlmMetalBackendFailureInjectionIntegrationTest,
+     DecodePagedPermutationAndPaddingHooksAreDetectedIntegration) {
+  struct HookCase {
+    bool wrong_permutation;
+    bool padding_mismatch;
+    std::string_view expected_reason;
+  };
+  const std::array<HookCase, 2> cases = {{
+      {true, false, LlmBackendReason::TIMED_CHECKSUM_MISMATCH},
+      {false, true, LlmBackendReason::PADDING_CANARY_MISMATCH},
+  }};
+
+  for (size_t index = 0; index < cases.size(); ++index) {
+    SCOPED_TRACE(index);
+    LlmMetalBackendTestHooks hooks;
+    hooks.force_wrong_paged_table_permutation = cases[index].wrong_permutation;
+    hooks.force_padding_canary_mismatch = cases[index].padding_mismatch;
+    std::unique_ptr<LlmBackend> backend =
+        create_llm_metal_backend_for_testing(hooks);
+    ASSERT_NE(backend, nullptr);
+    LlmMemoryConfig config = metal_config();
+    config.kv_layout = LlmKvLayout::Paged;
+    const LlmBackendLifecycleResult initialization =
+        backend->initialize(config);
+    if (initialization.status == LlmBackendStatus::Unsupported) {
+      ASSERT_TRUE(
+          is_stable_capability_unsupported_reason(initialization.reason_code));
+      GTEST_SKIP() << "LLM Metal decode-paged unsupported: "
+                   << initialization.reason_code;
+    }
+    ASSERT_EQ(initialization.status, LlmBackendStatus::Ready)
+        << initialization.reason_code;
+    const LlmMetalBackendEvidence* initialized =
+        get_llm_metal_backend_evidence(backend->evidence());
+    ASSERT_NE(initialized, nullptr);
+
+    const LlmGeometry geometry = paged_geometry(4097, 17, 4, 2, 2, 8);
+    LlmMetalResourcePlanRequest request = resource_request(geometry);
+    request.argument_buffer_encoded_length =
+        initialized->capability.argument_buffer_encoded_length;
+    request.argument_buffer_alignment =
+        initialized->capability.argument_buffer_alignment;
+    request.max_buffer_length = initialized->capability.max_buffer_length;
+    request.available_memory_bytes = 2 * kGiB;
+    request.host_mapping_granularity_bytes = get_system_page_size_bytes();
+    LlmMemoryWorkPlan plan = make_metal_model_plan(
+        geometry, build_llm_metal_execution_plan(request),
+        "llm-metal-phase10-paged-hook-" + std::to_string(index));
+    ASSERT_TRUE(plan.valid) << plan.reason_code;
+    ASSERT_EQ(backend->resolve_execution_plan(plan).status,
+              LlmBackendStatus::Ready);
+    const LlmBackendLifecycleResult prepared =
+        backend->prepare_resources(plan);
+    ASSERT_EQ(prepared.status, LlmBackendStatus::Ready)
+        << prepared.reason_code;
+
+    const LlmScenarioWorkPlan scenario = build_llm_scenario_work_plan(
+        plan, LlmScenario::Mixed, 2, true);
+    ASSERT_TRUE(scenario.valid) << scenario.reason_code;
+    const LlmTaskExecutionResult result = backend->execute_task(
+        plan, scenario,
+        measurement_context(LlmScenario::Mixed,
+                            "phase-10-paged-failure-injection"));
+    EXPECT_EQ(result.status, LlmTaskExecutionStatus::Invalid);
+    EXPECT_EQ(result.reason_code, cases[index].expected_reason);
+    EXPECT_EQ(result.completion.completed_layout_metadata_lookup_count,
+              scenario.layout_metadata_lookup_count);
+    EXPECT_EQ(result.completion.completed_layout_metadata_read_bytes,
+              scenario.layout_metadata_read_bytes);
+    const LlmMetalTaskEvidence* task = get_llm_metal_task_evidence(result);
+    ASSERT_NE(task, nullptr);
+    EXPECT_EQ(task->checksum_valid, !cases[index].wrong_permutation);
+    EXPECT_TRUE(task->append_validation_valid);
+    EXPECT_TRUE(task->padding_canary_applicable);
+    EXPECT_TRUE(task->padding_canary_evaluated);
+    EXPECT_EQ(task->padding_canary_valid, !cases[index].padding_mismatch);
+    EXPECT_EQ(task->post_validation_valid, !cases[index].padding_mismatch);
+  }
 }
 
 TEST(LlmMetalBackendFailureInjectionIntegrationTest,

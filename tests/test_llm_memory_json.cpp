@@ -192,6 +192,16 @@ LlmMemoryConfig explicit_metal_config() {
   return config;
 }
 
+LlmMemoryConfig explicit_metal_paged_config() {
+  LlmMemoryConfig config = explicit_metal_config();
+  config.kv_layout = LlmKvLayout::Paged;
+  config.kv_block_tokens = 2;
+  config.user_specified_kv_layout = true;
+  config.user_specified_kv_block_tokens = true;
+  config.argv.insert(config.argv.end() - 2, {"--kv-layout", "paged", "--kv-block-tokens", "2"});
+  return config;
+}
+
 LlmMemoryWorkPlan admitted_metal_plan(const LlmMemoryConfig& config) {
   LlmMemoryWorkPlanRequest request = plan_request(config);
   request.backend = LlmMemoryBackend::Metal;
@@ -205,6 +215,16 @@ LlmMemoryWorkPlan admitted_metal_plan(const LlmMemoryConfig& config) {
   const auto resource_request = [&](size_t additional_owned_bytes) {
     LlmMetalResourcePlanRequest metal_request;
     metal_request.geometry = draft.candidate.geometry;
+    if (draft.candidate.kv_layout == LlmKvLayout::Paged) {
+      LlmKvLayoutRequest layout_request;
+      layout_request.sequence_tokens = draft.candidate.geometry.decode->visible_context_tokens;
+      layout_request.kv_block_tokens = draft.candidate.geometry.kv_block_tokens;
+      layout_request.layer_count = draft.candidate.geometry.layer_count;
+      layout_request.batch_size = draft.candidate.geometry.batch_size;
+      layout_request.k_or_v_record_bytes_per_layer =
+          draft.candidate.geometry.k_or_v_record_bytes_per_layer;
+      metal_request.paged_layout = build_llm_kv_layout_plan(layout_request);
+    }
     metal_request.argument_buffer_encoded_length = 8192;
     metal_request.argument_buffer_alignment = 256;
     metal_request.max_buffer_length = 2 * Constants::LLM_METAL_SEGMENT_CAPACITY_BYTES;
@@ -249,10 +269,12 @@ LlmMemoryWorkPlan admitted_metal_plan(const LlmMemoryConfig& config) {
                                        orchestration_auxiliary_bytes);
 }
 
-LlmMetalTaskEvidence complete_metal_task_evidence() {
+LlmMetalTaskEvidence complete_metal_task_evidence(const LlmMemoryWorkPlan& plan) {
   LlmMetalTaskEvidence task;
   task.timed_pipeline_available = true;
-  task.pipeline_label = "membenchmark.llm-metal.pipeline.decode-contiguous.mixed";
+  task.pipeline_label = plan.kv_layout == LlmKvLayout::Paged
+                            ? "membenchmark.llm-metal.pipeline.decode-paged.mixed"
+                            : "membenchmark.llm-metal.pipeline.decode-contiguous.mixed";
   task.pipeline_thread_execution_width = 32;
   task.pipeline_max_total_threads_per_threadgroup = 1024;
   task.grid_plan_available = true;
@@ -264,6 +286,10 @@ LlmMetalTaskEvidence complete_metal_task_evidence() {
   task.grid_plan.owner_ordinals_per_threadgroup = 1;
   task.grid_plan.vector_iterations_per_lane_per_visit = 17;
   task.grid_plan.work_units = 1;
+  const LlmScenarioLimits limits = calculate_llm_scenario_limits(plan.geometry, LlmScenario::Mixed);
+  if (limits.valid) {
+    task.grid_plan.paged_semantic_lookups = limits.layout_metadata_lookup_count_per_work_unit;
+  }
   task.grid_plan.minimum_threadgroup_accounted_bytes = 1024;
   task.grid_plan.maximum_threadgroup_accounted_bytes = 2048;
   task.grid_plan.threadgroup_accounted_imbalance_bytes = 1024;
@@ -293,7 +319,9 @@ LlmMetalTaskEvidence complete_metal_task_evidence() {
   task.actual_checksum = task.expected_checksum;
   task.append_validation_evaluated = true;
   task.append_validation_valid = true;
-  task.padding_canary_applicable = false;
+  task.padding_canary_applicable = plan.kv_layout == LlmKvLayout::Paged;
+  task.padding_canary_evaluated = task.padding_canary_applicable;
+  task.padding_canary_valid = task.padding_canary_applicable;
   task.post_validation_evaluated = true;
   task.post_validation_valid = true;
   return task;
@@ -316,7 +344,8 @@ LlmBackendEvidence complete_metal_backend_evidence(const LlmMemoryWorkPlan& plan
   metal.capability.supported_families = {"apple7", "apple8"};
   metal.capability.max_buffer_length = 2 * Constants::LLM_METAL_SEGMENT_CAPACITY_BYTES;
   metal.capability.recommended_max_working_set_size = 6ULL * 1024ULL * Constants::BYTES_PER_MB;
-  metal.capability.kernel_revision = "llm-metal-decode-contiguous-msl23-v1";
+  metal.capability.kernel_revision =
+      plan.component_identities.msl_revision.value_or("llm-metal-decode-contiguous-paged-msl23-v2");
   metal.capability.kernel_source_sha256 = canonical_llm_metal_kernel_source_sha256();
   metal.capability.argument_buffer_encoded_length = 8192;
   metal.capability.argument_buffer_alignment = 256;
@@ -324,9 +353,12 @@ LlmBackendEvidence complete_metal_backend_evidence(const LlmMemoryWorkPlan& plan
   metal.capability.layout_probe_valid = true;
   metal.capability.layout_probe_resource_count = 7;
   metal.capability.foundation_pipelines = {{"membenchmark.llm-metal.foundation.fill", 32, 1024}};
-  metal.workload_pipelines = {{"membenchmark.llm-metal.pipeline.decode-contiguous.weights-only", 32, 1024},
-                              {"membenchmark.llm-metal.pipeline.decode-contiguous.kv-only", 32, 1024},
-                              {"membenchmark.llm-metal.pipeline.decode-contiguous.mixed", 32, 1024}};
+  const std::string pipeline_prefix = plan.kv_layout == LlmKvLayout::Paged
+                                          ? "membenchmark.llm-metal.pipeline.decode-paged."
+                                          : "membenchmark.llm-metal.pipeline.decode-contiguous.";
+  metal.workload_pipelines = {{pipeline_prefix + "weights-only", 32, 1024},
+                              {pipeline_prefix + "kv-only", 32, 1024},
+                              {pipeline_prefix + "mixed", 32, 1024}};
   metal.timed_results_available = true;
 
   const LlmMetalExecutionPlan* const execution = get_llm_metal_execution_plan(plan);
@@ -334,6 +366,19 @@ LlmBackendEvidence complete_metal_backend_evidence(const LlmMemoryWorkPlan& plan
     metal.resources.allocation_attempted = true;
     metal.resources.allocation_completed = true;
     metal.resources.initialization_completed = true;
+    if (execution->resources.paged_layout.has_value()) {
+      const LlmKvBlockTable table = materialize_llm_kv_block_table(
+          *execution->resources.paged_layout, derive_llm_kv_permutation_seed(plan.base_seed),
+          Constants::LLM_KV_BLOCK_TABLE_HASH_CHUNK_ENTRIES);
+      if (table.valid) {
+        metal.resources.table_upload_completed = true;
+        metal.resources.table_validation_completed = true;
+        metal.resources.table_permutation = table.permutation;
+      }
+      metal.resources.layout_padding_bytes =
+          execution->resources.paged_layout->memory.k_layout_padding_bytes +
+          execution->resources.paged_layout->memory.v_layout_padding_bytes;
+    }
     metal.resources.post_validation_completed = true;
     metal.resources.resources_published = true;
     metal.resources.persistent_resource_length_bytes = execution->resources.persistent_resource_length_bytes;
@@ -347,7 +392,7 @@ LlmBackendEvidence complete_metal_backend_evidence(const LlmMemoryWorkPlan& plan
   return backend;
 }
 
-LlmMemoryResult metal_result_with_measurement_and_calibration() {
+LlmMemoryResult metal_result_with_measurement_and_calibration(const LlmMemoryWorkPlan& plan) {
   LlmMemoryResult result;
   result.initialized = true;
   result.status = LlmRunStatus::Complete;
@@ -355,7 +400,7 @@ LlmMemoryResult metal_result_with_measurement_and_calibration() {
   result.results_complete = true;
   result.conclusions_valid = true;
 
-  LlmMetalTaskEvidence task = complete_metal_task_evidence();
+  LlmMetalTaskEvidence task = complete_metal_task_evidence(plan);
   LlmMeasurementState measurement;
   measurement.scenario = LlmScenario::Mixed;
   measurement.work_unit_kind = LlmWorkUnitKind::DecodeStep;
@@ -572,7 +617,7 @@ TEST(LlmMemoryJsonTest, MetalDocumentPublishesSegmentationBackendTaskAndCompactE
   ASSERT_EQ(metal_plan->resources.weight_segments.segment_count, 2U);
 
   const LlmBackendEvidence backend = complete_metal_backend_evidence(plan);
-  const LlmMemoryResult result = metal_result_with_measurement_and_calibration();
+  const LlmMemoryResult result = metal_result_with_measurement_and_calibration(plan);
   const LlmResultMetadata metadata = fixed_metadata(config, plan);
   const OrderedJson document = build_llm_memory_json(config, plan, backend, metadata, result);
 
@@ -662,12 +707,122 @@ TEST(LlmMemoryJsonTest, MetalDocumentPublishesSegmentationBackendTaskAndCompactE
   EXPECT_TRUE(compact["metal"]["timing"]["queue_delay_seconds"].is_null());
 }
 
+TEST(LlmMemoryJsonTest, MetalPagedDocumentPublishesLayoutTableLookupAndPaddingEvidence) {
+  const LlmMemoryConfig config = explicit_metal_paged_config();
+  const LlmMemoryWorkPlan plan = admitted_metal_plan(config);
+  ASSERT_TRUE(plan.valid) << plan.reason_code;
+  const LlmMetalExecutionPlan* const metal_plan = get_llm_metal_execution_plan(plan);
+  ASSERT_NE(metal_plan, nullptr);
+  ASSERT_TRUE(metal_plan->valid) << metal_plan->reason_code;
+  ASSERT_TRUE(metal_plan->resources.paged_layout.has_value());
+  ASSERT_TRUE(metal_plan->resources.table_segments.has_value());
+
+  const LlmBackendEvidence backend = complete_metal_backend_evidence(plan);
+  const LlmMemoryResult result = metal_result_with_measurement_and_calibration(plan);
+  const OrderedJson document =
+      build_llm_memory_json(config, plan, backend, fixed_metadata(config, plan), result);
+
+  EXPECT_EQ(document["backend"], "metal");
+  EXPECT_EQ(document["phase"], "decode");
+  EXPECT_EQ(document["kv_layout"], "paged");
+  EXPECT_EQ(document["methodology_version"], "llm-memory-v1-metal-decode-paged");
+  EXPECT_EQ(document["resolved_plan"]["component_identities"]["msl_revision"],
+            "llm-metal-decode-contiguous-paged-msl23-v2");
+  EXPECT_EQ(document["configuration"]["resolved_sources"]["kv_layout"], "explicit");
+  EXPECT_EQ(document["configuration"]["resolved_sources"]["kv_block_tokens"], "explicit");
+
+  const OrderedJson& layout = document["resolved_plan"]["layout"];
+  EXPECT_EQ(layout["kv_layout"], "paged");
+  EXPECT_EQ(layout["kv_block_tokens"], 2U);
+  EXPECT_EQ(layout["blocks_per_sequence"], "2");
+  EXPECT_EQ(layout["physical_blocks_per_layer"], "2");
+  EXPECT_EQ(layout["total_physical_blocks"], "4");
+  EXPECT_EQ(layout["block_bytes"], "64");
+  EXPECT_EQ(layout["last_block_tokens"], "1");
+  EXPECT_EQ(layout["last_block_valid_bytes"], "32");
+  EXPECT_EQ(layout["block_table_entries"], "2");
+  EXPECT_EQ(layout["block_table_bytes"], "8");
+  EXPECT_FALSE(layout["layout_geometry_identity"].is_null());
+  EXPECT_FALSE(layout["layout_identity"].is_null());
+  EXPECT_EQ(layout["permutation_entry_count"], "2");
+  ASSERT_TRUE(layout["permutation_sha256"].is_string());
+  EXPECT_EQ(layout["permutation_sha256"].get<std::string>().size(), 64U);
+  EXPECT_FALSE(layout["permutation_identity"].is_null());
+
+  const OrderedJson& resources = document["resolved_plan"]["resources"]["metal"];
+  EXPECT_EQ(resources["k_segments"]["element_bytes"], "64");
+  EXPECT_EQ(resources["k_segments"]["total_length_bytes"], "256");
+  EXPECT_EQ(resources["v_segments"]["total_length_bytes"], "256");
+  EXPECT_EQ(resources["table_segments"]["element_bytes"], "4");
+  EXPECT_EQ(resources["table_segments"]["element_count"], "2");
+  EXPECT_EQ(resources["table_segments"]["total_length_bytes"], "8");
+  EXPECT_EQ(resources["staging_buffer_length_bytes"], "8");
+
+  const OrderedJson& metal_resources = document["backend_evidence"]["metal"]["resources"];
+  EXPECT_EQ(document["backend_evidence"]["metal"]["capability"]["kernel_revision"],
+            "llm-metal-decode-contiguous-paged-msl23-v2");
+  EXPECT_EQ(document["backend_evidence"]["metal"]["capability"]["kernel_source_sha256"],
+            canonical_llm_metal_kernel_source_sha256());
+  EXPECT_TRUE(metal_resources["table_upload_completed"].get<bool>());
+  EXPECT_TRUE(metal_resources["table_validation_completed"].get<bool>());
+  EXPECT_EQ(metal_resources["layout_padding_bytes"], "128");
+  ASSERT_TRUE(metal_resources["table_permutation"].is_object());
+  EXPECT_EQ(metal_resources["table_permutation"]["sha256"], layout["permutation_sha256"]);
+  EXPECT_EQ(metal_resources["table_permutation"]["identity"], layout["permutation_identity"]);
+
+  ASSERT_EQ(document["measurements"].size(), 1U);
+  const OrderedJson& task = document["measurements"][0]["execution"]["metal"];
+  EXPECT_EQ(task["pipeline"]["label"], "membenchmark.llm-metal.pipeline.decode-paged.mixed");
+  EXPECT_EQ(task["grid"]["paged_semantic_lookups"], "10");
+  EXPECT_EQ(task["commands"]["timed_workload_dispatches"], 1U);
+  EXPECT_TRUE(task["timing"]["valid"].get<bool>());
+  EXPECT_TRUE(task["checksum"]["valid"].get<bool>());
+  EXPECT_TRUE(task["validation"]["append_valid"].get<bool>());
+  EXPECT_TRUE(task["validation"]["padding_canary_applicable"].get<bool>());
+  EXPECT_TRUE(task["validation"]["padding_canary_evaluated"].get<bool>());
+  EXPECT_TRUE(task["validation"]["padding_canary_valid"].get<bool>());
+}
+
+TEST(LlmMemoryJsonTest, UnsupportedMetalPagedDocumentKeepsPlannedGeometryButNotRuntimePermutation) {
+  const LlmMemoryConfig config = explicit_metal_paged_config();
+  const LlmMemoryWorkPlan plan = admitted_metal_plan(config);
+  ASSERT_TRUE(plan.valid) << plan.reason_code;
+
+  LlmBackendEvidence backend;
+  backend.backend = LlmMemoryBackend::Metal;
+  backend.initialization = {LlmBackendStatus::Unsupported, LlmBackendReason::APPLE7_FAMILY_REQUIRED};
+  LlmMetalBackendEvidence metal;
+  metal.capability.required_apple7_family_supported = false;
+  backend.backend_evidence = std::move(metal);
+
+  LlmMemoryResult result;
+  result.initialized = true;
+  result.status = LlmRunStatus::Unsupported;
+  result.reason_code = LlmBackendReason::APPLE7_FAMILY_REQUIRED;
+  const OrderedJson document =
+      build_llm_memory_json(config, plan, backend, fixed_metadata(config, plan), result);
+
+  EXPECT_EQ(document["status"], "unsupported");
+  const OrderedJson& layout = document["resolved_plan"]["layout"];
+  EXPECT_EQ(layout["kv_layout"], "paged");
+  EXPECT_EQ(layout["kv_block_tokens"], 2U);
+  EXPECT_EQ(layout["blocks_per_sequence"], "2");
+  EXPECT_EQ(layout["block_table_entries"], "2");
+  EXPECT_FALSE(layout["layout_geometry_identity"].is_null());
+  EXPECT_TRUE(layout["layout_identity"].is_null());
+  EXPECT_TRUE(layout["permutation_seed_uint64_decimal"].is_null());
+  EXPECT_TRUE(layout["permutation_sha256"].is_null());
+  EXPECT_TRUE(layout["permutation_identity"].is_null());
+  EXPECT_TRUE(document["backend_evidence"]["metal"]["resources"]["table_permutation"].is_null());
+  EXPECT_TRUE(document["measurements"].empty());
+}
+
 TEST(LlmMemoryJsonTest,
      MetalMemoryBudgetUsesActualValuesOnlyAfterCompleteAllocationAndRejectsCommittedOverage) {
   const LlmMemoryConfig config = explicit_metal_config();
   const LlmMemoryWorkPlan plan = admitted_metal_plan(config);
   ASSERT_TRUE(plan.valid) << plan.reason_code;
-  const LlmMemoryResult result = metal_result_with_measurement_and_calibration();
+  const LlmMemoryResult result = metal_result_with_measurement_and_calibration(plan);
   const LlmResultMetadata metadata = fixed_metadata(config, plan);
 
   LlmBackendEvidence partial_backend = complete_metal_backend_evidence(plan);

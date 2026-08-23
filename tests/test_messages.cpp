@@ -202,8 +202,9 @@ TEST(MessagesTest, LlmMemoryCliMessagesHaveExactOutput) {
       "  -M, --llm-memory       Select the memory-only LLM profile.\n"
       "      --llm-memory-backend <cpu|metal>\n"
       "                          Execution backend (default: cpu). The experimental Metal preview\n"
-      "                          accepts decode with contiguous KV only; no fallback is performed.\n"
-      "                          Its M4 validation gate passed; Apple7/M1 baseline validation is pending.\n"
+      "                          accepts decode with contiguous or paged KV; no fallback is performed.\n"
+      "                          M4 evidence covers contiguous and paged decode; required\n"
+      "                          Apple7/M1 baseline validation remains pending.\n"
       "      --phase <decode|prefill>\n"
       "                          Workload phase (default: decode). CPU supports both phases;\n"
       "                          the Metal preview accepts decode only.\n"
@@ -229,8 +230,8 @@ TEST(MessagesTest, LlmMemoryCliMessagesHaveExactOutput) {
       "                          Required only for prefill; query tile Q, 1 <= Q <= P.\n"
       "                          Rejected for decode.\n"
       "      --kv-layout <contiguous|paged>\n"
-      "                          KV storage layout (default: contiguous). CPU supports both\n"
-      "                          layouts; the Metal preview accepts contiguous only.\n"
+      "                          KV storage layout (default: contiguous). CPU supports both layouts;\n"
+      "                          the Metal preview supports both layouts for decode.\n"
       "      --kv-block-tokens <count>\n"
       "                          Required only for paged KV; must be a positive power of two\n"
       "                          no greater than UINT32_MAX; it may exceed the phase sequence length.\n"
@@ -493,14 +494,14 @@ TEST(MessagesTest, GeneralHelpAdvertisesTheLlmBoundaryExactlyOnce) {
   EXPECT_NE(
       usage.find("standalone CPU/Metal synthetic LLM memory profile"),
       std::string::npos);
-  EXPECT_NE(usage.find("experimental Metal preview accepts only"),
+  EXPECT_NE(usage.find("experimental Metal preview accepts decode"),
             std::string::npos);
   EXPECT_NE(
-      usage.find("decode with contiguous KV and never falls back to CPU"),
+      usage.find("with contiguous or paged KV and never falls back to CPU"),
       std::string::npos);
   EXPECT_NE(
       usage.find(
-          "validation gate passed; Apple7/M1 baseline validation is pending"),
+          "covers contiguous and paged decode; required Apple7/M1 baseline"),
       std::string::npos);
   EXPECT_NE(usage.find("--weight-size-mb"), std::string::npos);
   EXPECT_NE(usage.find("--query-heads"), std::string::npos);
@@ -514,6 +515,8 @@ TEST(MessagesTest, GeneralHelpAdvertisesTheLlmBoundaryExactlyOnce) {
   EXPECT_NE(usage.find(Constants::LLM_CPU_DECODE_PAGED_METHODOLOGY_VERSION),
             std::string::npos);
   EXPECT_NE(usage.find("llm-memory-v1-metal-decode-contiguous"),
+            std::string::npos);
+  EXPECT_NE(usage.find("llm-memory-v1-metal-decode-paged"),
             std::string::npos);
   EXPECT_NE(usage.find("Metal LLM-memory rejects --threads"),
             std::string::npos);

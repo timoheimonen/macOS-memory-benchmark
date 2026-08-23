@@ -380,7 +380,7 @@ TEST(LlmMemoryConfigTest,
 }
 
 TEST(LlmMemoryConfigTest,
-     ParserRejectsUnactivatedMetalProfilesWithStableOrderIndependentReasons) {
+     ParserActivatesPagedMetalDecodeAndRejectsUnactivatedPrefillProfiles) {
   LlmParserHooksScope hooks(0, 9);
   struct InvalidCase {
     std::vector<std::string> arguments;
@@ -395,7 +395,8 @@ TEST(LlmMemoryConfigTest,
       valid_prefill_arguments();
   prefill_backend_last.insert(prefill_backend_last.end(),
                               {"--llm-memory-backend", "metal"});
-  std::vector<std::string> paged_backend_first = valid_metal_arguments();
+  std::vector<std::string> paged_backend_first =
+      valid_metal_arguments();
   paged_backend_first.insert(paged_backend_first.end(),
                              {"--kv-layout", "paged",
                               "--kv-block-tokens", "4"});
@@ -413,10 +414,6 @@ TEST(LlmMemoryConfigTest,
        LlmMemoryConfigReason::PHASE_NOT_ACTIVATED},
       {prefill_backend_last,
        LlmMemoryConfigReason::PHASE_NOT_ACTIVATED},
-      {paged_backend_first,
-       LlmMemoryConfigReason::KV_LAYOUT_NOT_ACTIVATED},
-      {paged_backend_last,
-       LlmMemoryConfigReason::KV_LAYOUT_NOT_ACTIVATED},
       {prefill_paged, LlmMemoryConfigReason::PHASE_NOT_ACTIVATED},
   };
 
@@ -431,6 +428,23 @@ TEST(LlmMemoryConfigTest,
               Messages::error_prefix() +
                   Messages::error_llm_memory_config_invalid(
                       test_case.reason_code));
+    EXPECT_EQ(config.requested_workers, 0u);
+    EXPECT_EQ(config.available_workers, 0u);
+  }
+
+  for (const std::vector<std::string>* arguments :
+       {&paged_backend_first, &paged_backend_last}) {
+    SCOPED_TRACE(::testing::PrintToString(*arguments));
+    LlmMemoryConfig config;
+    const CapturedLlmParse parsed =
+        parse_llm_arguments_capturing(*arguments, config);
+    EXPECT_EQ(parsed.result, EXIT_SUCCESS);
+    EXPECT_TRUE(parsed.stdout_output.empty());
+    EXPECT_TRUE(parsed.stderr_output.empty());
+    EXPECT_EQ(config.backend, LlmMemoryBackend::Metal);
+    EXPECT_EQ(config.phase, LlmPhase::Decode);
+    EXPECT_EQ(config.kv_layout, LlmKvLayout::Paged);
+    EXPECT_EQ(config.kv_block_tokens, 4u);
     EXPECT_EQ(config.requested_workers, 0u);
     EXPECT_EQ(config.available_workers, 0u);
   }

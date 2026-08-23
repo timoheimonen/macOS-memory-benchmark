@@ -15,14 +15,15 @@
 
 /**
  * @file llm_metal_backend.h
- * @brief Pure planning, checksum, and Metal decode-contiguous contracts
+ * @brief Pure planning, checksum, and Metal decode workload contracts
  * @author Timo Heimonen <timo.heimonen@proton.me>
  * @date 2026
  *
  * The declarations in this file contain no Objective-C types. Pure planners
  * are reentrant and safe for concurrent calls with independent objects. A
  * created backend is command-owned, synchronous, and not safe for concurrent
- * calls. The public Metal workload is decode with contiguous KV storage.
+ * calls. The public Metal workloads are decode with contiguous or paged KV
+ * storage.
  */
 
 #ifndef LLM_METAL_BACKEND_H
@@ -72,6 +73,9 @@ inline constexpr size_t kLlmMetalLayoutProbeWordCount = 28;
 using LlmMetalLayoutProbeWords = std::array<uint64_t, kLlmMetalLayoutProbeWordCount>;
 inline constexpr size_t kLlmMetalDecodeLayoutProbeWordCount = 38;
 using LlmMetalDecodeLayoutProbeWords = std::array<uint64_t, kLlmMetalDecodeLayoutProbeWordCount>;
+inline constexpr size_t kLlmMetalDecodePagedLayoutProbeWordCount = 52;
+using LlmMetalDecodePagedLayoutProbeWords =
+    std::array<uint64_t, kLlmMetalDecodePagedLayoutProbeWordCount>;
 
 /** Canonical CPU mirror of the MSL decode-contiguous parameter block. */
 struct alignas(8) LlmMetalDecodeContiguousParams {
@@ -114,11 +118,106 @@ static_assert(offsetof(LlmMetalDecodeContiguousParams, k_segment_count) == 108);
 static_assert(offsetof(LlmMetalDecodeContiguousParams, v_segment_count) == 112);
 static_assert(offsetof(LlmMetalDecodeContiguousParams, reserved_zero) == 116);
 
+/** Canonical CPU mirror of the MSL decode-paged parameter block. */
+struct alignas(8) LlmMetalDecodePagedParams {
+  uint64_t weight_bytes = 0;
+  uint64_t context_tokens = 0;
+  uint64_t layer_count = 0;
+  uint64_t batch_size = 0;
+  uint64_t record_bytes = 0;
+  uint64_t work_units = 0;
+  uint64_t block_bytes = 0;
+  uint64_t last_block_valid_bytes = 0;
+  uint64_t append_offset_in_last_block = 0;
+  uint64_t blocks_per_sequence = 0;
+  uint64_t physical_blocks_per_layer = 0;
+  uint64_t blocks_per_segment = 0;
+  uint64_t table_entries_per_segment = 0;
+  uint64_t segment_capacity_bytes = 0;
+  uint64_t weight_seed = 0;
+  uint64_t k_seed = 0;
+  uint64_t v_seed = 0;
+  uint64_t scenario_seed = 0;
+  uint32_t weight_segment_count = 0;
+  uint32_t k_segment_count = 0;
+  uint32_t v_segment_count = 0;
+  uint32_t table_segment_count = 0;
+  uint32_t reserved_zero = 0;
+  uint32_t padding_zero = 0;
+};
+
+static_assert(alignof(LlmMetalDecodePagedParams) == 8);
+static_assert(sizeof(LlmMetalDecodePagedParams) == 168);
+static_assert(offsetof(LlmMetalDecodePagedParams, weight_bytes) == 0);
+static_assert(offsetof(LlmMetalDecodePagedParams, context_tokens) == 8);
+static_assert(offsetof(LlmMetalDecodePagedParams, layer_count) == 16);
+static_assert(offsetof(LlmMetalDecodePagedParams, batch_size) == 24);
+static_assert(offsetof(LlmMetalDecodePagedParams, record_bytes) == 32);
+static_assert(offsetof(LlmMetalDecodePagedParams, work_units) == 40);
+static_assert(offsetof(LlmMetalDecodePagedParams, block_bytes) == 48);
+static_assert(offsetof(LlmMetalDecodePagedParams, last_block_valid_bytes) == 56);
+static_assert(offsetof(LlmMetalDecodePagedParams, append_offset_in_last_block) == 64);
+static_assert(offsetof(LlmMetalDecodePagedParams, blocks_per_sequence) == 72);
+static_assert(offsetof(LlmMetalDecodePagedParams, physical_blocks_per_layer) == 80);
+static_assert(offsetof(LlmMetalDecodePagedParams, blocks_per_segment) == 88);
+static_assert(offsetof(LlmMetalDecodePagedParams, table_entries_per_segment) == 96);
+static_assert(offsetof(LlmMetalDecodePagedParams, segment_capacity_bytes) == 104);
+static_assert(offsetof(LlmMetalDecodePagedParams, weight_seed) == 112);
+static_assert(offsetof(LlmMetalDecodePagedParams, k_seed) == 120);
+static_assert(offsetof(LlmMetalDecodePagedParams, v_seed) == 128);
+static_assert(offsetof(LlmMetalDecodePagedParams, scenario_seed) == 136);
+static_assert(offsetof(LlmMetalDecodePagedParams, weight_segment_count) == 144);
+static_assert(offsetof(LlmMetalDecodePagedParams, k_segment_count) == 148);
+static_assert(offsetof(LlmMetalDecodePagedParams, v_segment_count) == 152);
+static_assert(offsetof(LlmMetalDecodePagedParams, table_segment_count) == 156);
+static_assert(offsetof(LlmMetalDecodePagedParams, reserved_zero) == 160);
+static_assert(offsetof(LlmMetalDecodePagedParams, padding_zero) == 164);
+
 /** Result from the bounded independent Metal checksum oracle. */
 struct LlmMetalChecksumOracle {
   bool valid = false;
   std::string_view reason_code = LlmMetalPlanReason::INVALID_GEOMETRY;
   LlmMetalDualMod32Checksum checksum;
+};
+
+/** Additive table-domain summary retained after the host table is released. */
+struct LlmMetalPagedChecksumGroupSummary {
+  size_t count = 0;
+  uint32_t layer_plus_one_sum = 0;
+  uint32_t batch_plus_one_sum = 0;
+  uint32_t logical_plus_one_sum = 0;
+  uint32_t physical_plus_one_sum = 0;
+  uint32_t logical_physical_pair_sum = 0;
+};
+
+/**
+ * Fixed-size paged checksum state built while the canonical host table exists.
+ *
+ * This summary owns no table entries. It binds the table permutation to the
+ * initial K/V scan contribution and to non-separable logical/physical lookup
+ * aggregates, allowing every later task oracle to remain allocation-free.
+ */
+struct LlmMetalPagedChecksumSummary {
+  bool valid = false;
+  uint64_t base_seed = 0;
+  uint64_t weight_seed = 0;
+  uint64_t k_seed = 0;
+  uint64_t v_seed = 0;
+  size_t layer_count = 0;
+  size_t batch_size = 0;
+  size_t record_bytes = 0;
+  size_t blocks_per_sequence = 0;
+  size_t physical_blocks_per_layer = 0;
+  size_t block_bytes = 0;
+  size_t last_block_valid_bytes = 0;
+  size_t append_offset_in_last_block = 0;
+  size_t words_per_block = 0;
+  size_t initial_scan_mix_count = 0;
+  uint32_t terminal_boundary_initial_k_value_sum = 0;
+  uint32_t terminal_boundary_initial_v_value_sum = 0;
+  LlmMetalDualMod32Checksum initial_scan_static_checksum;
+  LlmMetalPagedChecksumGroupSummary all_owners;
+  LlmMetalPagedChecksumGroupSummary terminal_owners;
 };
 
 /** Injectable capability state used by deterministic unit tests. */
@@ -180,6 +279,8 @@ struct LlmMetalBackendTestHooks {
   bool force_timed_checksum_mismatch = false;
   bool force_post_validation_command_failure = false;
   bool force_append_validation_mismatch = false;
+  bool force_wrong_paged_table_permutation = false;
+  bool force_padding_canary_mismatch = false;
   std::function<bool()> stop_requested;
 };
 
@@ -218,8 +319,18 @@ bool validate_llm_metal_layout_probe(const LlmMetalFoundationParams& parameters,
 bool validate_llm_metal_decode_layout_probe(const LlmMetalDecodeContiguousParams& parameters,
                                             const LlmMetalDecodeLayoutProbeWords& words) noexcept;
 
+/** Validate every CPU/MSL field of the decode-paged parameter ABI. */
+bool validate_llm_metal_decode_paged_layout_probe(
+    const LlmMetalDecodePagedParams& parameters,
+    const LlmMetalDecodePagedLayoutProbeWords& words) noexcept;
+
 /** Return one deterministic Metal contiguous-buffer initialization word. */
 uint32_t llm_metal_contiguous_pattern_word(uint64_t seed, uint64_t absolute_word_index) noexcept;
+
+/** Return one deterministic paged physical-block initialization word. */
+uint32_t llm_metal_paged_pattern_word(uint64_t seed, uint64_t layer_index,
+                                      uint64_t physical_block,
+                                      uint64_t block_word_index) noexcept;
 
 /** Return one deterministic decode append word in the pool-address domain. */
 uint32_t llm_metal_decode_append_word(uint64_t scenario_seed, uint64_t work_unit, uint64_t layer_index,
@@ -230,6 +341,22 @@ uint32_t llm_metal_decode_append_word(uint64_t scenario_seed, uint64_t work_unit
 LlmMetalChecksumOracle calculate_llm_metal_decode_contiguous_checksum(
     const LlmMemoryWorkPlan& model_plan, const LlmScenarioWorkPlan& scenario_plan) noexcept;
 
+/**
+ * Build the allocation-free task-oracle summary from a validated table.
+ *
+ * The caller must pass the canonical table before releasing its host mapping.
+ * The optional stop predicate is polled at bounded owner intervals.
+ */
+LlmMetalPagedChecksumSummary build_llm_metal_decode_paged_checksum_summary(
+    const LlmMemoryWorkPlan& model_plan, const uint32_t* table_entries,
+    size_t entry_count, const std::function<bool()>& stop_requested = {});
+
+/** Calculate the expected paged W/K/V checksum from the fixed-size summary. */
+LlmMetalChecksumOracle calculate_llm_metal_decode_paged_checksum(
+    const LlmMemoryWorkPlan& model_plan,
+    const LlmScenarioWorkPlan& scenario_plan,
+    const LlmMetalPagedChecksumSummary& summary) noexcept;
+
 /** Compare every lane of two Metal dual-mod32 checksums. */
 bool equal_llm_metal_checksum(const LlmMetalDualMod32Checksum& left,
                               const LlmMetalDualMod32Checksum& right) noexcept;
@@ -237,7 +364,7 @@ bool equal_llm_metal_checksum(const LlmMetalDualMod32Checksum& left,
 /** Stable label for a planned Metal resource pool. */
 const char* llm_metal_resource_pool_to_string(LlmMetalResourcePool pool) noexcept;
 
-/** Create the Metal backend for the experimental contiguous-decode preview. */
+/** Create the Metal backend for the experimental decode preview. */
 std::unique_ptr<LlmBackend> create_llm_metal_backend();
 
 /** Create the same backend with deterministic failure injection for tests. */

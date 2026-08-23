@@ -21,7 +21,7 @@
  *
  * This private header owns the exact source bytes hashed into Metal execution
  * identity. It contains the shared resource foundation and the three public
- * scenario-specialized decode-contiguous workload entrypoints.
+ * scenario-specialized decode-contiguous and decode-paged entrypoints.
  */
 
 #ifndef LLM_METAL_KERNELS_SOURCE_H
@@ -33,10 +33,11 @@
 
 namespace LlmMetalKernelContract {
 
-inline constexpr char kRevision[] = "llm-metal-decode-contiguous-msl23-v1";
+inline constexpr char kRevision[] = "llm-metal-decode-contiguous-paged-msl23-v2";
 inline constexpr char kParameterAbiRevision[] = "llm-metal-foundation-parameters-v1";
 inline constexpr char kResourceTableAbiRevision[] = "llm-metal-resource-table-v1";
 inline constexpr char kDecodeParameterAbiRevision[] = "llm-metal-decode-contiguous-parameters-v1";
+inline constexpr char kDecodePagedParameterAbiRevision[] = "llm-metal-decode-paged-parameters-v1";
 inline constexpr char kChecksumAlgorithmRevision[] = "llm-metal-dual-mod32-v1";
 
 inline constexpr char kInitializeBytesEntrypoint[] = "llm_metal_initialize_bytes";
@@ -49,6 +50,13 @@ inline constexpr char kDecodeWeightsOnlyEntrypoint[] = "llm_metal_decode_contigu
 inline constexpr char kDecodeKvOnlyEntrypoint[] = "llm_metal_decode_contiguous_kv_only";
 inline constexpr char kDecodeMixedEntrypoint[] = "llm_metal_decode_contiguous_mixed";
 inline constexpr char kValidateDecodeAppendsEntrypoint[] = "llm_metal_validate_decode_contiguous_appends";
+inline constexpr char kDecodePagedParameterLayoutProbeEntrypoint[] =
+    "llm_metal_probe_decode_paged_parameter_layout";
+inline constexpr char kDecodePagedWeightsOnlyEntrypoint[] = "llm_metal_decode_paged_weights_only";
+inline constexpr char kDecodePagedKvOnlyEntrypoint[] = "llm_metal_decode_paged_kv_only";
+inline constexpr char kDecodePagedMixedEntrypoint[] = "llm_metal_decode_paged_mixed";
+inline constexpr char kValidateDecodePagedEntrypoint[] =
+    "llm_metal_validate_decode_paged_appends_padding";
 
 // Direct-buffer indices are part of the foundation pipeline ABI.
 inline constexpr uint32_t kInitializeDestinationBufferIndex = 0U;
@@ -71,6 +79,7 @@ inline constexpr uint32_t kDecodeProbeOutputBufferIndex = 1U;
 inline constexpr uint32_t kWorkloadResourcesBufferIndex = 0U;
 inline constexpr uint32_t kWorkloadParametersBufferIndex = 1U;
 inline constexpr uint32_t kWorkloadReductionThreadgroupIndex = 0U;
+inline constexpr uint32_t kWorkloadPhysicalIdThreadgroupIndex = 1U;
 inline constexpr uint32_t kPostValidationResourcesBufferIndex = 0U;
 inline constexpr uint32_t kPostValidationParametersBufferIndex = 1U;
 
@@ -128,6 +137,35 @@ inline constexpr size_t kDecodeKeySegmentCountOffset = 108U;
 inline constexpr size_t kDecodeValueSegmentCountOffset = 112U;
 inline constexpr size_t kDecodeReservedZeroOffset = 116U;
 
+inline constexpr size_t kDecodePagedParameterAbiSize = 168U;
+inline constexpr size_t kDecodePagedParameterAbiAlignment = 8U;
+inline constexpr uint32_t kDecodePagedParameterAbiVersion = 1U;
+inline constexpr uint32_t kDecodePagedParameterFieldCount = 24U;
+inline constexpr size_t kDecodePagedWeightBytesOffset = 0U;
+inline constexpr size_t kDecodePagedContextTokensOffset = 8U;
+inline constexpr size_t kDecodePagedLayerCountOffset = 16U;
+inline constexpr size_t kDecodePagedBatchSizeOffset = 24U;
+inline constexpr size_t kDecodePagedRecordBytesOffset = 32U;
+inline constexpr size_t kDecodePagedWorkUnitsOffset = 40U;
+inline constexpr size_t kDecodePagedBlockBytesOffset = 48U;
+inline constexpr size_t kDecodePagedLastBlockValidBytesOffset = 56U;
+inline constexpr size_t kDecodePagedAppendOffsetOffset = 64U;
+inline constexpr size_t kDecodePagedBlocksPerSequenceOffset = 72U;
+inline constexpr size_t kDecodePagedPhysicalBlocksPerLayerOffset = 80U;
+inline constexpr size_t kDecodePagedBlocksPerSegmentOffset = 88U;
+inline constexpr size_t kDecodePagedTableEntriesPerSegmentOffset = 96U;
+inline constexpr size_t kDecodePagedSegmentCapacityBytesOffset = 104U;
+inline constexpr size_t kDecodePagedWeightSeedOffset = 112U;
+inline constexpr size_t kDecodePagedKeySeedOffset = 120U;
+inline constexpr size_t kDecodePagedValueSeedOffset = 128U;
+inline constexpr size_t kDecodePagedScenarioSeedOffset = 136U;
+inline constexpr size_t kDecodePagedWeightSegmentCountOffset = 144U;
+inline constexpr size_t kDecodePagedKeySegmentCountOffset = 148U;
+inline constexpr size_t kDecodePagedValueSegmentCountOffset = 152U;
+inline constexpr size_t kDecodePagedTableSegmentCountOffset = 156U;
+inline constexpr size_t kDecodePagedReservedZeroOffset = 160U;
+inline constexpr size_t kDecodePagedPaddingZeroOffset = 164U;
+
 inline constexpr uint32_t kContiguousPatternKind = 0U;
 inline constexpr uint32_t kPagedPatternKind = 1U;
 
@@ -143,6 +181,7 @@ inline constexpr uint32_t kByteValidationMismatchBit = 1U << 0U;
 inline constexpr uint32_t kTableValidationMismatchBit = 1U << 1U;
 inline constexpr uint32_t kValidationInvalidParametersBit = 1U << 2U;
 inline constexpr uint32_t kAppendValidationMismatchBit = 1U << 3U;
+inline constexpr uint32_t kPaddingCanaryMismatchBit = 1U << 4U;
 
 inline constexpr uint32_t kStatusFlagsIndex = 0U;
 inline constexpr uint32_t kWeightChecksumAIndex = 1U;
@@ -151,7 +190,8 @@ inline constexpr uint32_t kKeyChecksumAIndex = 3U;
 inline constexpr uint32_t kKeyChecksumBIndex = 4U;
 inline constexpr uint32_t kValueChecksumAIndex = 5U;
 inline constexpr uint32_t kValueChecksumBIndex = 6U;
-inline constexpr uint32_t kTimedStatusWordCount = 7U;
+inline constexpr uint32_t kLayoutMetadataLookupCountIndex = 7U;
+inline constexpr uint32_t kTimedStatusWordCount = 8U;
 inline constexpr uint32_t kReductionLaneCount = 6U;
 
 // Probe output is an array of 64-bit integer words. The first four words are
@@ -196,15 +236,21 @@ inline constexpr uint32_t kDecodeProbeFieldCountIndex = 3U;
 inline constexpr uint32_t kDecodeProbeFirstFieldOffsetIndex = 4U;
 inline constexpr uint32_t kDecodeProbeFirstFieldValueIndex = 21U;
 inline constexpr uint32_t kDecodeProbeOutputWordCount = 38U;
+inline constexpr uint32_t kDecodePagedProbeAbiVersionIndex = 0U;
+inline constexpr uint32_t kDecodePagedProbeStructSizeIndex = 1U;
+inline constexpr uint32_t kDecodePagedProbeStructAlignmentIndex = 2U;
+inline constexpr uint32_t kDecodePagedProbeFieldCountIndex = 3U;
+inline constexpr uint32_t kDecodePagedProbeFirstFieldOffsetIndex = 4U;
+inline constexpr uint32_t kDecodePagedProbeFirstFieldValueIndex = 28U;
+inline constexpr uint32_t kDecodePagedProbeOutputWordCount = 52U;
 
-// Foundation and workload pattern constants. The contiguous public profile
-// uses 32-bit affine words so its independent oracle is O(work units * L * B)
-// and never rereads a multi-GiB resource. Paged foundation data retains the
-// earlier 64-bit physical-layout pattern until that profile is activated.
+// Foundation and workload pattern constants. Both active layouts use 32-bit
+// affine words. Paged words additionally bind layer, physical block, and
+// block-local word so the fixed-size host oracle never rereads device data.
 inline constexpr uint32_t kContiguousPatternWordMultiplier = UINT32_C(0x9E3779B9);
-inline constexpr uint64_t kPagedPatternLayerMultiplier = UINT64_C(0xA24BAED4963EE407);
-inline constexpr uint64_t kPagedPatternPhysicalMultiplier = UINT64_C(0x9FB21C651E98DF25);
-inline constexpr uint64_t kPagedPatternWordMultiplier = UINT64_C(0xC13FA9A902A6328F);
+inline constexpr uint32_t kPagedPatternLayerMultiplier = UINT32_C(0xA24BAED5);
+inline constexpr uint32_t kPagedPatternPhysicalMultiplier = UINT32_C(0x9FB21C65);
+inline constexpr uint32_t kPagedPatternWordMultiplier = UINT32_C(0xC13FA9A9);
 inline constexpr uint32_t kAppendWorkUnitMultiplier = UINT32_C(0x85EBCA6B);
 inline constexpr uint32_t kAppendLayerMultiplier = UINT32_C(0xC2B2AE35);
 inline constexpr uint32_t kAppendBatchMultiplier = UINT32_C(0x27D4EB2F);
@@ -218,6 +264,7 @@ inline constexpr uint32_t kChecksumLayerMultiplier = UINT32_C(0x27D4EB35);
 inline constexpr uint32_t kChecksumBatchMultiplier = UINT32_C(0x165667C5);
 inline constexpr uint32_t kChecksumValidMaskMultiplier = UINT32_C(0xD3A2646D);
 inline constexpr uint32_t kChecksumMetalDecodeContiguousProfileDomain = UINT32_C(0x4D444331);
+inline constexpr uint32_t kChecksumMetalDecodePagedProfileDomain = UINT32_C(0x4D445031);
 inline constexpr uint32_t kChecksumScenarioHighMultiplier = UINT32_C(0xA24BAED5);
 inline constexpr uint32_t kChecksumWeightDomain = UINT32_C(0x57474854);
 inline constexpr uint32_t kChecksumKeyDomain = UINT32_C(0x4B455943);
@@ -225,6 +272,12 @@ inline constexpr uint32_t kChecksumValueDomain = UINT32_C(0x56414C43);
 inline constexpr uint32_t kChecksumWeightReadVisit = UINT32_C(0x57524541);
 inline constexpr uint32_t kChecksumAppendVisit = UINT32_C(0x41505044);
 inline constexpr uint32_t kChecksumKvReadVisit = UINT32_C(0x4B565244);
+inline constexpr uint32_t kChecksumPagedLogicalMultiplier = UINT32_C(0x7F4A7C15);
+inline constexpr uint32_t kChecksumPagedPhysicalMultiplier = UINT32_C(0x94D049BB);
+inline constexpr uint32_t kChecksumPagedPairMultiplier = UINT32_C(0x369DEA0F);
+inline constexpr uint32_t kChecksumPagedAppendLookupVisit = UINT32_C(0x50414C55);
+inline constexpr uint32_t kChecksumPagedKeyLookupVisit = UINT32_C(0x504B4C55);
+inline constexpr uint32_t kChecksumPagedValueLookupVisit = UINT32_C(0x50564C55);
 
 /**
  * Canonical MSL 2.3 bytes hashed for `msl_source_sha256`.
@@ -255,6 +308,16 @@ inline constexpr std::string_view kSource = R"MSL(
 #include <metal_stdlib>
 using namespace metal;
 
+#ifndef LLM_METAL_DECODE_CONTIGUOUS
+#define LLM_METAL_DECODE_CONTIGUOUS 0
+#endif
+#ifndef LLM_METAL_DECODE_PAGED
+#define LLM_METAL_DECODE_PAGED 0
+#endif
+#if (LLM_METAL_DECODE_CONTIGUOUS + LLM_METAL_DECODE_PAGED) != 1
+#error "exactly one LLM Metal decode profile must be selected"
+#endif
+
 constant uint kSegmentSlotCount = 256u;
 constant uint kFoundationParameterAbiVersion = 1u;
 constant uint kFoundationParameterFieldCount = 10u;
@@ -273,6 +336,7 @@ constant uint kByteValidationMismatchBit = 1u << 0u;
 constant uint kTableValidationMismatchBit = 1u << 1u;
 constant uint kValidationInvalidParametersBit = 1u << 2u;
 constant uint kAppendValidationMismatchBit = 1u << 3u;
+constant uint kPaddingCanaryMismatchBit = 1u << 4u;
 
 constant uint kStatusFlagsIndex = 0u;
 constant uint kWeightChecksumAIndex = 1u;
@@ -281,6 +345,7 @@ constant uint kKeyChecksumAIndex = 3u;
 constant uint kKeyChecksumBIndex = 4u;
 constant uint kValueChecksumAIndex = 5u;
 constant uint kValueChecksumBIndex = 6u;
+constant uint kLayoutMetadataLookupCountIndex = 7u;
 
 constant uint kContiguousPatternWordMultiplier = 0x9e3779b9u;
 constant uint kAppendWorkUnitMultiplier = 0x85ebca6bu;
@@ -296,6 +361,7 @@ constant uint kChecksumLayerMultiplier = 0x27d4eb35u;
 constant uint kChecksumBatchMultiplier = 0x165667c5u;
 constant uint kChecksumValidMaskMultiplier = 0xd3a2646du;
 constant uint kChecksumMetalDecodeContiguousProfileDomain = 0x4d444331u;
+constant uint kChecksumMetalDecodePagedProfileDomain = 0x4d445031u;
 constant uint kChecksumScenarioHighMultiplier = 0xa24baed5u;
 constant uint kChecksumWeightDomain = 0x57474854u;
 constant uint kChecksumKeyDomain = 0x4b455943u;
@@ -303,6 +369,16 @@ constant uint kChecksumValueDomain = 0x56414c43u;
 constant uint kChecksumWeightReadVisit = 0x57524541u;
 constant uint kChecksumAppendVisit = 0x41505044u;
 constant uint kChecksumKvReadVisit = 0x4b565244u;
+constant uint kChecksumPagedLogicalMultiplier = 0x7f4a7c15u;
+constant uint kChecksumPagedPhysicalMultiplier = 0x94d049bbu;
+constant uint kChecksumPagedPairMultiplier = 0x369dea0fu;
+constant uint kChecksumPagedAppendLookupVisit = 0x50414c55u;
+constant uint kChecksumPagedKeyLookupVisit = 0x504b4c55u;
+constant uint kChecksumPagedValueLookupVisit = 0x50564c55u;
+
+constant uint kPagedPatternLayerMultiplier = 0xa24baed5u;
+constant uint kPagedPatternPhysicalMultiplier = 0x9fb21c65u;
+constant uint kPagedPatternWordMultiplier = 0xc13fa9a9u;
 
 struct LlmMetalFoundationParams {
   ulong byte_count;                    // offset 0
@@ -325,6 +401,7 @@ struct LlmMetalResources {
   device atomic_uint* status_checksum [[id(1024)]];
 };
 
+#if LLM_METAL_DECODE_CONTIGUOUS
 struct LlmMetalDecodeContiguousParams {
   ulong weight_bytes;                 // offset 0
   ulong k_bytes;                      // offset 8
@@ -344,6 +421,36 @@ struct LlmMetalDecodeContiguousParams {
   uint v_segment_count;               // offset 112
   uint reserved_zero;                 // offset 116
 };
+#endif
+
+#if LLM_METAL_DECODE_PAGED
+struct LlmMetalDecodePagedParams {
+  ulong weight_bytes;                         // offset 0
+  ulong context_tokens;                       // offset 8
+  ulong layer_count;                          // offset 16
+  ulong batch_size;                           // offset 24
+  ulong record_bytes;                         // offset 32
+  ulong work_units;                           // offset 40
+  ulong block_bytes;                          // offset 48
+  ulong last_block_valid_bytes;               // offset 56
+  ulong append_offset_in_last_block;          // offset 64
+  ulong blocks_per_sequence;                  // offset 72
+  ulong physical_blocks_per_layer;            // offset 80
+  ulong blocks_per_segment;                   // offset 88
+  ulong table_entries_per_segment;            // offset 96
+  ulong segment_capacity_bytes;               // offset 104
+  ulong weight_seed;                          // offset 112
+  ulong k_seed;                               // offset 120
+  ulong v_seed;                               // offset 128
+  ulong scenario_seed;                        // offset 136
+  uint weight_segment_count;                  // offset 144
+  uint k_segment_count;                       // offset 148
+  uint v_segment_count;                       // offset 152
+  uint table_segment_count;                   // offset 156
+  uint reserved_zero;                         // offset 160
+  uint padding_zero;                          // offset 164
+};
+#endif
 
 inline uchar contiguous_pattern_byte(ulong seed, ulong absolute_byte) {
   const ulong word_index = absolute_byte / 4ul;
@@ -364,13 +471,12 @@ inline uchar paged_pattern_byte(constant LlmMetalFoundationParams& params,
       global_block / ulong(params.physical_blocks_per_layer);
   const ulong physical_block =
       global_block % ulong(params.physical_blocks_per_layer);
-  const ulong word_index = block_byte / 8ul;
-  const uint byte_index = uint(block_byte % 8ul);
-  const ulong word =
-      params.pattern_seed +
-      0xa24baed4963ee407ul * (layer + 1ul) +
-      0x9fb21c651e98df25ul * (physical_block + 1ul) +
-      0xc13fa9a902a6328ful * (word_index + 1ul);
+  const ulong word_index = block_byte / 4ul;
+  const uint byte_index = uint(block_byte % 4ul);
+  const uint word = uint(params.pattern_seed) +
+      kPagedPatternLayerMultiplier * uint(layer + 1ul) +
+      kPagedPatternPhysicalMultiplier * uint(physical_block + 1ul) +
+      kPagedPatternWordMultiplier * uint(word_index + 1ul);
   return uchar(word >> (byte_index * 8u));
 }
 
@@ -634,6 +740,36 @@ inline uint range_word_mask(ulong range_start, ulong range_end,
   return mask;
 }
 
+inline void publish_task_checksum(
+    constant LlmMetalResources& resources, uint2 weight, uint2 key,
+    uint2 value, threadgroup uint* reduction, uint thread_index,
+    uint threads_per_threadgroup) {
+  const uint base = thread_index * 6u;
+  reduction[base + 0u] = weight.x;
+  reduction[base + 1u] = weight.y;
+  reduction[base + 2u] = key.x;
+  reduction[base + 3u] = key.y;
+  reduction[base + 4u] = value.x;
+  reduction[base + 5u] = value.y;
+  threadgroup_barrier(mem_flags::mem_threadgroup);
+  if (thread_index != 0u) {
+    return;
+  }
+  uint totals[6] = {0u, 0u, 0u, 0u, 0u, 0u};
+  for (uint lane = 0u; lane < threads_per_threadgroup; ++lane) {
+    const uint lane_base = lane * 6u;
+    for (uint component = 0u; component < 6u; ++component) {
+      totals[component] += reduction[lane_base + component];
+    }
+  }
+  for (uint component = 0u; component < 6u; ++component) {
+    atomic_fetch_add_explicit(
+        &resources.status_checksum[kWeightChecksumAIndex + component],
+        totals[component], memory_order_relaxed);
+  }
+}
+
+#if LLM_METAL_DECODE_CONTIGUOUS
 inline uchar load_weight_byte(constant LlmMetalResources& resources,
                               constant LlmMetalDecodeContiguousParams& params,
                               ulong absolute_byte) {
@@ -863,7 +999,6 @@ inline void append_key_range(
   for (ulong vector_index = first_owned_vector(first_vector, global_id,
                                                 grid_size);
        vector_index < end_vector; vector_index += ulong(grid_size)) {
-    const ulong vector_start = vector_index * 16ul;
     for (uint lane = 0u; lane < 4u; ++lane) {
       const ulong word_index = vector_index * 4ul + ulong(lane);
       const ulong word_start = word_index * 4ul;
@@ -939,35 +1074,6 @@ inline bool decode_parameters_valid(
          params.work_units != 0ul && params.weight_segment_count != 0u &&
          params.k_segment_count != 0u && params.v_segment_count != 0u &&
          params.reserved_zero == 0u;
-}
-
-inline void publish_task_checksum(
-    constant LlmMetalResources& resources, uint2 weight, uint2 key,
-    uint2 value, threadgroup uint* reduction, uint thread_index,
-    uint threads_per_threadgroup) {
-  const uint base = thread_index * 6u;
-  reduction[base + 0u] = weight.x;
-  reduction[base + 1u] = weight.y;
-  reduction[base + 2u] = key.x;
-  reduction[base + 3u] = key.y;
-  reduction[base + 4u] = value.x;
-  reduction[base + 5u] = value.y;
-  threadgroup_barrier(mem_flags::mem_threadgroup);
-  if (thread_index != 0u) {
-    return;
-  }
-  uint totals[6] = {0u, 0u, 0u, 0u, 0u, 0u};
-  for (uint lane = 0u; lane < threads_per_threadgroup; ++lane) {
-    const uint lane_base = lane * 6u;
-    for (uint component = 0u; component < 6u; ++component) {
-      totals[component] += reduction[lane_base + component];
-    }
-  }
-  for (uint component = 0u; component < 6u; ++component) {
-    atomic_fetch_add_explicit(
-        &resources.status_checksum[kWeightChecksumAIndex + component],
-        totals[component], memory_order_relaxed);
-  }
 }
 
 inline void run_decode_kv(
@@ -1099,7 +1205,677 @@ kernel void llm_metal_decode_contiguous_mixed(
   publish_task_checksum(resources, weight, key, value, reduction,
                         thread_index, threads_per_threadgroup);
 }
+#endif
 
+#if LLM_METAL_DECODE_PAGED
+inline bool decode_paged_parameters_valid(
+    constant LlmMetalDecodePagedParams& params) {
+  return params.weight_bytes != 0ul && params.context_tokens != 0ul &&
+         params.layer_count != 0ul && params.batch_size != 0ul &&
+         params.record_bytes != 0ul && params.work_units != 0ul &&
+         params.block_bytes != 0ul && params.last_block_valid_bytes != 0ul &&
+         params.last_block_valid_bytes <= params.block_bytes &&
+         params.append_offset_in_last_block + params.record_bytes ==
+             params.last_block_valid_bytes &&
+         params.blocks_per_sequence != 0ul &&
+         params.physical_blocks_per_layer ==
+             params.batch_size * params.blocks_per_sequence &&
+         params.blocks_per_segment != 0ul &&
+         params.table_entries_per_segment != 0ul &&
+         params.segment_capacity_bytes != 0ul &&
+         params.weight_segment_count != 0u && params.k_segment_count != 0u &&
+         params.v_segment_count != 0u && params.table_segment_count != 0u &&
+         params.reserved_zero == 0u && params.padding_zero == 0u;
+}
+
+inline uint paged_checksum_domain(
+    uint pool_domain, uint visit_domain,
+    constant LlmMetalDecodePagedParams& params, ulong work_unit, ulong layer,
+    ulong batch, ulong logical_table_index, uint physical_id,
+    uint valid_mask) {
+  const uint logical = uint(logical_table_index + 1ul);
+  const uint physical = physical_id + 1u;
+  return kChecksumMetalDecodePagedProfileDomain + uint(params.scenario_seed) +
+         kChecksumScenarioHighMultiplier * uint(params.scenario_seed >> 32ul) +
+         pool_domain + visit_domain +
+         kChecksumWorkUnitMultiplier * uint(work_unit + 1ul) +
+         kChecksumLayerMultiplier * uint(layer + 1ul) +
+         kChecksumBatchMultiplier * uint(batch + 1ul) +
+         kChecksumPagedLogicalMultiplier * logical +
+         kChecksumPagedPhysicalMultiplier * physical +
+         kChecksumPagedPairMultiplier * logical * physical +
+         kChecksumValidMaskMultiplier * valid_mask;
+}
+
+inline uint paged_weight_checksum_domain(
+    constant LlmMetalDecodePagedParams& params, ulong work_unit, ulong layer,
+    uint valid_mask) {
+  return kChecksumMetalDecodePagedProfileDomain + uint(params.scenario_seed) +
+         kChecksumScenarioHighMultiplier * uint(params.scenario_seed >> 32ul) +
+         kChecksumWeightDomain + kChecksumWeightReadVisit +
+         kChecksumWorkUnitMultiplier * uint(work_unit + 1ul) +
+         kChecksumLayerMultiplier * uint(layer + 1ul) +
+         kChecksumBatchMultiplier +
+         kChecksumValidMaskMultiplier * valid_mask;
+}
+
+inline uint paged_timed_table_lookup(
+    constant LlmMetalResources& resources,
+    constant LlmMetalDecodePagedParams& params, ulong logical_table_index,
+    threadgroup uint* published_physical_id, uint thread_index) {
+  threadgroup_barrier(mem_flags::mem_threadgroup);
+  if (thread_index == 0u) {
+    const uint table_segment =
+        uint(logical_table_index / params.table_entries_per_segment);
+    const ulong table_entry =
+        logical_table_index % params.table_entries_per_segment;
+    device const volatile uint* named_lane_table =
+        reinterpret_cast<device const volatile uint*>(
+            resources.table_segments[table_segment]);
+    published_physical_id[0] = named_lane_table[table_entry];
+    atomic_fetch_add_explicit(
+        &resources.status_checksum[kLayoutMetadataLookupCountIndex], 1u,
+        memory_order_relaxed);
+  }
+  threadgroup_barrier(mem_flags::mem_threadgroup);
+  const uint physical_id = published_physical_id[0];
+  if (ulong(physical_id) >= params.physical_blocks_per_layer) {
+    if (thread_index == 0u) {
+      mark_validation_failure(resources.status_checksum,
+                              kValidationInvalidParametersBit);
+    }
+    return 0u;
+  }
+  return physical_id;
+}
+
+inline void mix_paged_lookup(
+    thread uint2& checksum, uint physical_id, ulong logical_table_index,
+    uint pool_domain, uint visit_domain,
+    constant LlmMetalDecodePagedParams& params, ulong work_unit, ulong layer,
+    ulong batch) {
+  const uint domain = paged_checksum_domain(
+      pool_domain, visit_domain, params, work_unit, layer, batch,
+      logical_table_index, physical_id, 0u);
+  mix_checksum_word(checksum, physical_id, logical_table_index, domain);
+}
+
+inline ulong paged_physical_block_base(
+    constant LlmMetalDecodePagedParams& params, ulong layer,
+    uint physical_id, thread uint& segment) {
+  const ulong global_block =
+      layer * params.physical_blocks_per_layer + ulong(physical_id);
+  segment = uint(global_block / params.blocks_per_segment);
+  return (global_block % params.blocks_per_segment) * params.block_bytes;
+}
+
+inline uchar load_paged_key_byte(
+    constant LlmMetalResources& resources,
+    constant LlmMetalDecodePagedParams& params, ulong layer,
+    uint physical_id, ulong block_byte) {
+  uint segment = 0u;
+  const ulong block_base =
+      paged_physical_block_base(params, layer, physical_id, segment);
+  return resources.key_segments[segment][block_base + block_byte];
+}
+
+inline uchar load_paged_value_byte(
+    constant LlmMetalResources& resources,
+    constant LlmMetalDecodePagedParams& params, ulong layer,
+    uint physical_id, ulong block_byte) {
+  uint segment = 0u;
+  const ulong block_base =
+      paged_physical_block_base(params, layer, physical_id, segment);
+  return resources.value_segments[segment][block_base + block_byte];
+}
+
+inline void store_paged_key_byte(
+    constant LlmMetalResources& resources,
+    constant LlmMetalDecodePagedParams& params, ulong layer,
+    uint physical_id, ulong block_byte, uchar value) {
+  uint segment = 0u;
+  const ulong block_base =
+      paged_physical_block_base(params, layer, physical_id, segment);
+  resources.key_segments[segment][block_base + block_byte] = value;
+}
+
+inline void store_paged_value_byte(
+    constant LlmMetalResources& resources,
+    constant LlmMetalDecodePagedParams& params, ulong layer,
+    uint physical_id, ulong block_byte, uchar value) {
+  uint segment = 0u;
+  const ulong block_base =
+      paged_physical_block_base(params, layer, physical_id, segment);
+  resources.value_segments[segment][block_base + block_byte] = value;
+}
+
+inline uint packed_paged_key_word(
+    constant LlmMetalResources& resources,
+    constant LlmMetalDecodePagedParams& params, ulong layer,
+    uint physical_id, ulong local_word, uint valid_mask) {
+  uint value = 0u;
+  const ulong word_start = local_word * 4ul;
+  for (uint byte_index = 0u; byte_index < 4u; ++byte_index) {
+    if ((valid_mask & (1u << byte_index)) != 0u) {
+      value |= uint(load_paged_key_byte(
+                   resources, params, layer, physical_id,
+                   word_start + ulong(byte_index))) <<
+               (byte_index * 8u);
+    }
+  }
+  return value;
+}
+
+inline uint packed_paged_value_word(
+    constant LlmMetalResources& resources,
+    constant LlmMetalDecodePagedParams& params, ulong layer,
+    uint physical_id, ulong local_word, uint valid_mask) {
+  uint value = 0u;
+  const ulong word_start = local_word * 4ul;
+  for (uint byte_index = 0u; byte_index < 4u; ++byte_index) {
+    if ((valid_mask & (1u << byte_index)) != 0u) {
+      value |= uint(load_paged_value_byte(
+                   resources, params, layer, physical_id,
+                   word_start + ulong(byte_index))) <<
+               (byte_index * 8u);
+    }
+  }
+  return value;
+}
+
+inline void scan_paged_key_block(
+    constant LlmMetalResources& resources,
+    constant LlmMetalDecodePagedParams& params, ulong work_unit, ulong layer,
+    ulong batch, ulong logical_table_index, uint physical_id,
+    ulong valid_bytes, uint thread_index, uint threads_per_threadgroup,
+    thread uint2& checksum) {
+  uint segment = 0u;
+  const ulong physical_base =
+      paged_physical_block_base(params, layer, physical_id, segment);
+  const ulong vector_count = valid_bytes / 16ul;
+  const ulong words_per_block =
+      params.block_bytes / 4ul + ((params.block_bytes & 3ul) != 0ul ? 1ul : 0ul);
+  for (ulong vector_index = ulong(thread_index); vector_index < vector_count;
+       vector_index += ulong(threads_per_threadgroup)) {
+    const ulong local_byte = vector_index * 16ul;
+    uint4 values;
+    if (((physical_base + local_byte) & 15ul) == 0ul) {
+      const device uint4* source = reinterpret_cast<const device uint4*>(
+          resources.key_segments[segment] + physical_base + local_byte);
+      values = *source;
+    } else {
+      values = uint4(
+          packed_paged_key_word(resources, params, layer, physical_id,
+                                vector_index * 4ul + 0ul, 0x0fu),
+          packed_paged_key_word(resources, params, layer, physical_id,
+                                vector_index * 4ul + 1ul, 0x0fu),
+          packed_paged_key_word(resources, params, layer, physical_id,
+                                vector_index * 4ul + 2ul, 0x0fu),
+          packed_paged_key_word(resources, params, layer, physical_id,
+                                vector_index * 4ul + 3ul, 0x0fu));
+    }
+    for (uint lane = 0u; lane < 4u; ++lane) {
+      const ulong local_word = vector_index * 4ul + ulong(lane);
+      const ulong word_ordinal = logical_table_index * words_per_block + local_word;
+      const uint domain = paged_checksum_domain(
+          kChecksumKeyDomain, kChecksumKvReadVisit, params, work_unit, layer,
+          batch, logical_table_index, physical_id, 0x0fu);
+      mix_checksum_word(checksum, values[lane], word_ordinal, domain);
+    }
+  }
+  const ulong first_tail_word = vector_count * 4ul;
+  const ulong word_count = valid_bytes / 4ul +
+                           ((valid_bytes & 3ul) != 0ul ? 1ul : 0ul);
+  for (ulong local_word = first_tail_word + ulong(thread_index);
+       local_word < word_count;
+       local_word += ulong(threads_per_threadgroup)) {
+    const ulong word_start = local_word * 4ul;
+    const uint mask = range_word_mask(0ul, valid_bytes, word_start);
+    const uint value = packed_paged_key_word(resources, params, layer,
+                                             physical_id, local_word, mask);
+    const uint domain = paged_checksum_domain(
+        kChecksumKeyDomain, kChecksumKvReadVisit, params, work_unit, layer,
+        batch, logical_table_index, physical_id, mask);
+    mix_checksum_word(checksum, value,
+                      logical_table_index * words_per_block + local_word,
+                      domain);
+  }
+}
+
+inline void scan_paged_value_block(
+    constant LlmMetalResources& resources,
+    constant LlmMetalDecodePagedParams& params, ulong work_unit, ulong layer,
+    ulong batch, ulong logical_table_index, uint physical_id,
+    ulong valid_bytes, uint thread_index, uint threads_per_threadgroup,
+    thread uint2& checksum) {
+  uint segment = 0u;
+  const ulong physical_base =
+      paged_physical_block_base(params, layer, physical_id, segment);
+  const ulong vector_count = valid_bytes / 16ul;
+  const ulong words_per_block =
+      params.block_bytes / 4ul + ((params.block_bytes & 3ul) != 0ul ? 1ul : 0ul);
+  for (ulong vector_index = ulong(thread_index); vector_index < vector_count;
+       vector_index += ulong(threads_per_threadgroup)) {
+    const ulong local_byte = vector_index * 16ul;
+    uint4 values;
+    if (((physical_base + local_byte) & 15ul) == 0ul) {
+      const device uint4* source = reinterpret_cast<const device uint4*>(
+          resources.value_segments[segment] + physical_base + local_byte);
+      values = *source;
+    } else {
+      values = uint4(
+          packed_paged_value_word(resources, params, layer, physical_id,
+                                  vector_index * 4ul + 0ul, 0x0fu),
+          packed_paged_value_word(resources, params, layer, physical_id,
+                                  vector_index * 4ul + 1ul, 0x0fu),
+          packed_paged_value_word(resources, params, layer, physical_id,
+                                  vector_index * 4ul + 2ul, 0x0fu),
+          packed_paged_value_word(resources, params, layer, physical_id,
+                                  vector_index * 4ul + 3ul, 0x0fu));
+    }
+    for (uint lane = 0u; lane < 4u; ++lane) {
+      const ulong local_word = vector_index * 4ul + ulong(lane);
+      const ulong word_ordinal = logical_table_index * words_per_block + local_word;
+      const uint domain = paged_checksum_domain(
+          kChecksumValueDomain, kChecksumKvReadVisit, params, work_unit,
+          layer, batch, logical_table_index, physical_id, 0x0fu);
+      mix_checksum_word(checksum, values[lane], word_ordinal, domain);
+    }
+  }
+  const ulong first_tail_word = vector_count * 4ul;
+  const ulong word_count = valid_bytes / 4ul +
+                           ((valid_bytes & 3ul) != 0ul ? 1ul : 0ul);
+  for (ulong local_word = first_tail_word + ulong(thread_index);
+       local_word < word_count;
+       local_word += ulong(threads_per_threadgroup)) {
+    const ulong word_start = local_word * 4ul;
+    const uint mask = range_word_mask(0ul, valid_bytes, word_start);
+    const uint value = packed_paged_value_word(resources, params, layer,
+                                               physical_id, local_word, mask);
+    const uint domain = paged_checksum_domain(
+        kChecksumValueDomain, kChecksumKvReadVisit, params, work_unit, layer,
+        batch, logical_table_index, physical_id, mask);
+    mix_checksum_word(checksum, value,
+                      logical_table_index * words_per_block + local_word,
+                      domain);
+  }
+}
+
+inline void append_paged_pair(
+    constant LlmMetalResources& resources,
+    constant LlmMetalDecodePagedParams& params, ulong work_unit, ulong layer,
+    ulong batch, ulong logical_table_index, uint physical_id,
+    uint thread_index, uint threads_per_threadgroup, thread uint2& key,
+    thread uint2& value) {
+  const ulong range_start = params.append_offset_in_last_block;
+  const ulong range_end = params.last_block_valid_bytes;
+  const ulong first_word = range_start / 4ul;
+  const ulong end_word = range_end / 4ul +
+                         ((range_end & 3ul) != 0ul ? 1ul : 0ul);
+  const ulong words_per_block =
+      params.block_bytes / 4ul + ((params.block_bytes & 3ul) != 0ul ? 1ul : 0ul);
+  for (ulong local_word = first_word + ulong(thread_index);
+       local_word < end_word;
+       local_word += ulong(threads_per_threadgroup)) {
+    const ulong word_start = local_word * 4ul;
+    const uint mask = range_word_mask(range_start, range_end, word_start);
+    const uint key_word = decode_append_word(
+        params.scenario_seed, work_unit, layer, batch, local_word,
+        kAppendKeyDomain);
+    const uint value_word = decode_append_word(
+        params.scenario_seed, work_unit, layer, batch, local_word,
+        kAppendValueDomain);
+    uint packed_key = 0u;
+    uint packed_value = 0u;
+    for (uint byte_index = 0u; byte_index < 4u; ++byte_index) {
+      if ((mask & (1u << byte_index)) == 0u) {
+        continue;
+      }
+      const ulong block_byte = word_start + ulong(byte_index);
+      const uchar key_byte = uchar(key_word >> (byte_index * 8u));
+      const uchar value_byte = uchar(value_word >> (byte_index * 8u));
+      store_paged_key_byte(resources, params, layer, physical_id, block_byte,
+                           key_byte);
+      store_paged_value_byte(resources, params, layer, physical_id,
+                             block_byte, value_byte);
+      packed_key |= uint(key_byte) << (byte_index * 8u);
+      packed_value |= uint(value_byte) << (byte_index * 8u);
+    }
+    const ulong word_ordinal = logical_table_index * words_per_block + local_word;
+    mix_checksum_word(
+        key, packed_key, word_ordinal,
+        paged_checksum_domain(kChecksumKeyDomain, kChecksumAppendVisit,
+                              params, work_unit, layer, batch,
+                              logical_table_index, physical_id, mask));
+    mix_checksum_word(
+        value, packed_value, word_ordinal,
+        paged_checksum_domain(kChecksumValueDomain, kChecksumAppendVisit,
+                              params, work_unit, layer, batch,
+                              logical_table_index, physical_id, mask));
+  }
+  threadgroup_barrier(mem_flags::mem_device);
+}
+
+inline uchar load_paged_weight_byte(
+    constant LlmMetalResources& resources,
+    constant LlmMetalDecodePagedParams& params, ulong absolute_byte) {
+  const uint segment = uint(absolute_byte / params.segment_capacity_bytes);
+  const ulong local_byte = absolute_byte % params.segment_capacity_bytes;
+  return resources.weight_segments[segment][local_byte];
+}
+
+inline uint packed_paged_weight_word(
+    constant LlmMetalResources& resources,
+    constant LlmMetalDecodePagedParams& params, ulong word_start,
+    ulong range_start, ulong range_end, uint mask) {
+  uint value = 0u;
+  for (uint byte_index = 0u; byte_index < 4u; ++byte_index) {
+    if ((mask & (1u << byte_index)) != 0u) {
+      value |= uint(load_paged_weight_byte(
+                   resources, params, word_start + ulong(byte_index))) <<
+               (byte_index * 8u);
+    }
+  }
+  return value;
+}
+
+inline void scan_paged_weight_range(
+    constant LlmMetalResources& resources,
+    constant LlmMetalDecodePagedParams& params, ulong range_start,
+    ulong range_length, ulong work_unit, ulong layer, uint thread_index,
+    uint thread_count, thread uint2& checksum) {
+  const ulong range_end = range_start + range_length;
+  const ulong first_vector = range_start / 16ul;
+  const ulong end_vector = range_end / 16ul +
+                           ((range_end & 15ul) != 0ul ? 1ul : 0ul);
+  for (ulong vector_index = first_owned_vector(first_vector, thread_index,
+                                                thread_count);
+       vector_index < end_vector; vector_index += ulong(thread_count)) {
+    const ulong vector_start = vector_index * 16ul;
+    if (vector_start >= range_start && vector_start + 16ul <= range_end) {
+      const uint segment =
+          uint(vector_start / params.segment_capacity_bytes);
+      const ulong local_byte =
+          vector_start % params.segment_capacity_bytes;
+      const device uint4* source = reinterpret_cast<const device uint4*>(
+          resources.weight_segments[segment] + local_byte);
+      const uint4 values = *source;
+      for (uint lane = 0u; lane < 4u; ++lane) {
+        const ulong word_index = vector_index * 4ul + ulong(lane);
+        mix_checksum_word(
+            checksum, values[lane], word_index,
+            paged_weight_checksum_domain(params, work_unit, layer, 0x0fu));
+      }
+      continue;
+    }
+    for (uint lane = 0u; lane < 4u; ++lane) {
+      const ulong word_index = vector_index * 4ul + ulong(lane);
+      const ulong word_start = word_index * 4ul;
+      const uint mask = range_word_mask(range_start, range_end, word_start);
+      if (mask != 0u) {
+        const uint value = packed_paged_weight_word(
+            resources, params, word_start, range_start, range_end, mask);
+        mix_checksum_word(
+            checksum, value, word_index,
+            paged_weight_checksum_domain(params, work_unit, layer, mask));
+      }
+    }
+  }
+}
+
+inline void run_decode_paged_kv_owners(
+    constant LlmMetalResources& resources,
+    constant LlmMetalDecodePagedParams& params,
+    threadgroup uint* published_physical_id, uint thread_index,
+    uint threads_per_threadgroup, uint threadgroup_index,
+    uint threadgroup_count, bool include_weight, thread uint2& weight,
+    thread uint2& key, thread uint2& value) {
+  const ulong owner_count = params.layer_count * params.batch_size *
+                            params.blocks_per_sequence;
+  const ulong weight_layer_base = params.weight_bytes / params.layer_count;
+  const ulong weight_layer_remainder = params.weight_bytes % params.layer_count;
+  for (ulong owner = ulong(threadgroup_index); owner < owner_count;
+       owner += ulong(threadgroup_count)) {
+    const ulong logical_block = owner % params.blocks_per_sequence;
+    const ulong sequence_ordinal = owner / params.blocks_per_sequence;
+    const ulong batch = sequence_ordinal % params.batch_size;
+    const ulong layer = sequence_ordinal / params.batch_size;
+    const ulong logical_table_index =
+        batch * params.blocks_per_sequence + logical_block;
+    const bool terminal = logical_block + 1ul == params.blocks_per_sequence;
+    const ulong valid_bytes = terminal ? params.last_block_valid_bytes
+                                       : params.block_bytes;
+    for (ulong work_unit = 0ul; work_unit < params.work_units; ++work_unit) {
+      if (include_weight && batch == 0ul && logical_block == 0ul) {
+        const ulong layer_start = layer * weight_layer_base +
+                                  min(layer, weight_layer_remainder);
+        const ulong layer_bytes = weight_layer_base +
+                                  (layer < weight_layer_remainder ? 1ul : 0ul);
+        scan_paged_weight_range(resources, params, layer_start, layer_bytes,
+                                work_unit, layer, thread_index,
+                                threads_per_threadgroup, weight);
+      }
+      if (terminal) {
+        const uint append_physical = paged_timed_table_lookup(
+            resources, params, logical_table_index, published_physical_id,
+            thread_index);
+        if (thread_index == 0u) {
+          mix_paged_lookup(key, append_physical, logical_table_index,
+                           kChecksumKeyDomain,
+                           kChecksumPagedAppendLookupVisit, params, work_unit,
+                           layer, batch);
+          mix_paged_lookup(value, append_physical, logical_table_index,
+                           kChecksumValueDomain,
+                           kChecksumPagedAppendLookupVisit, params, work_unit,
+                           layer, batch);
+        }
+        append_paged_pair(resources, params, work_unit, layer, batch,
+                          logical_table_index, append_physical, thread_index,
+                          threads_per_threadgroup, key, value);
+      }
+      const uint key_physical = paged_timed_table_lookup(
+          resources, params, logical_table_index, published_physical_id,
+          thread_index);
+      if (thread_index == 0u) {
+        mix_paged_lookup(key, key_physical, logical_table_index,
+                         kChecksumKeyDomain, kChecksumPagedKeyLookupVisit,
+                         params, work_unit, layer, batch);
+      }
+      scan_paged_key_block(resources, params, work_unit, layer, batch,
+                           logical_table_index, key_physical, valid_bytes,
+                           thread_index, threads_per_threadgroup, key);
+
+      const uint value_physical = paged_timed_table_lookup(
+          resources, params, logical_table_index, published_physical_id,
+          thread_index);
+      if (thread_index == 0u) {
+        mix_paged_lookup(value, value_physical, logical_table_index,
+                         kChecksumValueDomain, kChecksumPagedValueLookupVisit,
+                         params, work_unit, layer, batch);
+      }
+      scan_paged_value_block(resources, params, work_unit, layer, batch,
+                             logical_table_index, value_physical, valid_bytes,
+                             thread_index, threads_per_threadgroup, value);
+    }
+  }
+}
+
+kernel void llm_metal_decode_paged_weights_only(
+    constant LlmMetalResources& resources [[buffer(0)]],
+    constant LlmMetalDecodePagedParams& params [[buffer(1)]],
+    threadgroup uint* reduction [[threadgroup(0)]],
+    uint global_id [[thread_position_in_grid]],
+    uint grid_size [[threads_per_grid]],
+    uint thread_index [[thread_index_in_threadgroup]],
+    uint threads_per_threadgroup [[threads_per_threadgroup]]) {
+  if (!decode_paged_parameters_valid(params)) {
+    if (global_id == 0u) {
+      mark_validation_failure(resources.status_checksum,
+                              kValidationInvalidParametersBit);
+    }
+    return;
+  }
+  uint2 weight = uint2(0u);
+  const ulong layer_base = params.weight_bytes / params.layer_count;
+  const ulong layer_remainder = params.weight_bytes % params.layer_count;
+  for (ulong work_unit = 0ul; work_unit < params.work_units; ++work_unit) {
+    for (ulong layer = 0ul; layer < params.layer_count; ++layer) {
+      const ulong layer_start = layer * layer_base +
+                                min(layer, layer_remainder);
+      const ulong layer_bytes = layer_base +
+                                (layer < layer_remainder ? 1ul : 0ul);
+      scan_paged_weight_range(resources, params, layer_start, layer_bytes,
+                              work_unit, layer, global_id, grid_size, weight);
+    }
+  }
+  publish_task_checksum(resources, weight, uint2(0u), uint2(0u), reduction,
+                        thread_index, threads_per_threadgroup);
+}
+
+kernel void llm_metal_decode_paged_kv_only(
+    constant LlmMetalResources& resources [[buffer(0)]],
+    constant LlmMetalDecodePagedParams& params [[buffer(1)]],
+    threadgroup uint* reduction [[threadgroup(0)]],
+    threadgroup uint* published_physical_id [[threadgroup(1)]],
+    uint thread_index [[thread_index_in_threadgroup]],
+    uint threads_per_threadgroup [[threads_per_threadgroup]],
+    uint threadgroup_index [[threadgroup_position_in_grid]],
+    uint threadgroup_count [[threadgroups_per_grid]]) {
+  if (!decode_paged_parameters_valid(params)) {
+    if (threadgroup_index == 0u && thread_index == 0u) {
+      mark_validation_failure(resources.status_checksum,
+                              kValidationInvalidParametersBit);
+    }
+    return;
+  }
+  uint2 key = uint2(0u);
+  uint2 value = uint2(0u);
+  uint2 ignored_weight = uint2(0u);
+  run_decode_paged_kv_owners(
+      resources, params, published_physical_id, thread_index,
+      threads_per_threadgroup, threadgroup_index, threadgroup_count, false,
+      ignored_weight, key, value);
+  publish_task_checksum(resources, uint2(0u), key, value, reduction,
+                        thread_index, threads_per_threadgroup);
+}
+
+kernel void llm_metal_decode_paged_mixed(
+    constant LlmMetalResources& resources [[buffer(0)]],
+    constant LlmMetalDecodePagedParams& params [[buffer(1)]],
+    threadgroup uint* reduction [[threadgroup(0)]],
+    threadgroup uint* published_physical_id [[threadgroup(1)]],
+    uint thread_index [[thread_index_in_threadgroup]],
+    uint threads_per_threadgroup [[threads_per_threadgroup]],
+    uint threadgroup_index [[threadgroup_position_in_grid]],
+    uint threadgroup_count [[threadgroups_per_grid]]) {
+  if (!decode_paged_parameters_valid(params)) {
+    if (threadgroup_index == 0u && thread_index == 0u) {
+      mark_validation_failure(resources.status_checksum,
+                              kValidationInvalidParametersBit);
+    }
+    return;
+  }
+  uint2 weight = uint2(0u);
+  uint2 key = uint2(0u);
+  uint2 value = uint2(0u);
+  run_decode_paged_kv_owners(
+      resources, params, published_physical_id, thread_index,
+      threads_per_threadgroup, threadgroup_index, threadgroup_count, true,
+      weight, key, value);
+  publish_task_checksum(resources, weight, key, value, reduction,
+                        thread_index, threads_per_threadgroup);
+}
+
+inline uint paged_direct_table_lookup(
+    constant LlmMetalResources& resources,
+    constant LlmMetalDecodePagedParams& params, ulong logical_table_index) {
+  const uint table_segment =
+      uint(logical_table_index / params.table_entries_per_segment);
+  const ulong table_entry =
+      logical_table_index % params.table_entries_per_segment;
+  const device uint* table = reinterpret_cast<const device uint*>(
+      resources.table_segments[table_segment]);
+  return table[table_entry];
+}
+
+inline uchar paged_expected_data_byte(
+    constant LlmMetalDecodePagedParams& params, ulong seed, ulong layer,
+    uint physical_id, ulong block_byte) {
+  const ulong local_word = block_byte / 4ul;
+  const uint byte_index = uint(block_byte & 3ul);
+  const uint word = uint(seed) +
+                    kPagedPatternLayerMultiplier * uint(layer + 1ul) +
+                    kPagedPatternPhysicalMultiplier * (physical_id + 1u) +
+                    kPagedPatternWordMultiplier * uint(local_word + 1ul);
+  return uchar(word >> (byte_index * 8u));
+}
+
+kernel void llm_metal_validate_decode_paged_appends_padding(
+    constant LlmMetalResources& resources [[buffer(0)]],
+    constant LlmMetalDecodePagedParams& params [[buffer(1)]],
+    uint global_id [[thread_position_in_grid]],
+    uint grid_size [[threads_per_grid]]) {
+  if (!decode_paged_parameters_valid(params)) {
+    if (global_id == 0u) {
+      mark_validation_failure(resources.status_checksum,
+                              kValidationInvalidParametersBit);
+    }
+    return;
+  }
+  const ulong final_work_unit = params.work_units - 1ul;
+  const ulong sequence_count = params.layer_count * params.batch_size;
+  for (ulong sequence = 0ul; sequence < sequence_count; ++sequence) {
+    const ulong layer = sequence / params.batch_size;
+    const ulong batch = sequence % params.batch_size;
+    const ulong logical_table_index =
+        batch * params.blocks_per_sequence + params.blocks_per_sequence - 1ul;
+    const uint physical_id =
+        paged_direct_table_lookup(resources, params, logical_table_index);
+    if (ulong(physical_id) >= params.physical_blocks_per_layer) {
+      mark_validation_failure(resources.status_checksum,
+                              kValidationInvalidParametersBit);
+      continue;
+    }
+    for (ulong block_byte = params.append_offset_in_last_block +
+                            ulong(global_id);
+         block_byte < params.last_block_valid_bytes;
+         block_byte += ulong(grid_size)) {
+      const ulong local_word = block_byte / 4ul;
+      const uint byte_index = uint(block_byte & 3ul);
+      const uchar expected_key = uchar(decode_append_word(
+          params.scenario_seed, final_work_unit, layer, batch, local_word,
+          kAppendKeyDomain) >> (byte_index * 8u));
+      const uchar expected_value = uchar(decode_append_word(
+          params.scenario_seed, final_work_unit, layer, batch, local_word,
+          kAppendValueDomain) >> (byte_index * 8u));
+      if (load_paged_key_byte(resources, params, layer, physical_id,
+                              block_byte) != expected_key ||
+          load_paged_value_byte(resources, params, layer, physical_id,
+                                block_byte) != expected_value) {
+        mark_validation_failure(resources.status_checksum,
+                                kAppendValidationMismatchBit);
+      }
+    }
+    for (ulong block_byte = params.last_block_valid_bytes + ulong(global_id);
+         block_byte < params.block_bytes;
+         block_byte += ulong(grid_size)) {
+      if (load_paged_key_byte(resources, params, layer, physical_id,
+                              block_byte) !=
+              paged_expected_data_byte(params, params.k_seed, layer,
+                                       physical_id, block_byte) ||
+          load_paged_value_byte(resources, params, layer, physical_id,
+                                block_byte) !=
+              paged_expected_data_byte(params, params.v_seed, layer,
+                                       physical_id, block_byte)) {
+        mark_validation_failure(resources.status_checksum,
+                                kPaddingCanaryMismatchBit);
+      }
+    }
+  }
+}
+
+#endif  // LLM_METAL_DECODE_PAGED
+#if LLM_METAL_DECODE_CONTIGUOUS
 kernel void llm_metal_validate_decode_contiguous_appends(
     constant LlmMetalResources& resources [[buffer(0)]],
     constant LlmMetalDecodeContiguousParams& params [[buffer(1)]],
@@ -1206,6 +1982,70 @@ kernel void llm_metal_probe_decode_parameter_layout(
   output[37] = ulong(params.reserved_zero);
 }
 
+#endif  // LLM_METAL_DECODE_CONTIGUOUS
+#if LLM_METAL_DECODE_PAGED
+kernel void llm_metal_probe_decode_paged_parameter_layout(
+    constant LlmMetalDecodePagedParams& params [[buffer(0)]],
+    device ulong* output [[buffer(1)]],
+    uint global_id [[thread_position_in_grid]]) {
+  if (global_id != 0u) {
+    return;
+  }
+  output[0] = 1ul;
+  output[1] = ulong(sizeof(LlmMetalDecodePagedParams));
+  output[2] = ulong(alignof(LlmMetalDecodePagedParams));
+  output[3] = 24ul;
+  output[4] = ulong(__builtin_offsetof(LlmMetalDecodePagedParams, weight_bytes));
+  output[5] = ulong(__builtin_offsetof(LlmMetalDecodePagedParams, context_tokens));
+  output[6] = ulong(__builtin_offsetof(LlmMetalDecodePagedParams, layer_count));
+  output[7] = ulong(__builtin_offsetof(LlmMetalDecodePagedParams, batch_size));
+  output[8] = ulong(__builtin_offsetof(LlmMetalDecodePagedParams, record_bytes));
+  output[9] = ulong(__builtin_offsetof(LlmMetalDecodePagedParams, work_units));
+  output[10] = ulong(__builtin_offsetof(LlmMetalDecodePagedParams, block_bytes));
+  output[11] = ulong(__builtin_offsetof(LlmMetalDecodePagedParams, last_block_valid_bytes));
+  output[12] = ulong(__builtin_offsetof(LlmMetalDecodePagedParams, append_offset_in_last_block));
+  output[13] = ulong(__builtin_offsetof(LlmMetalDecodePagedParams, blocks_per_sequence));
+  output[14] = ulong(__builtin_offsetof(LlmMetalDecodePagedParams, physical_blocks_per_layer));
+  output[15] = ulong(__builtin_offsetof(LlmMetalDecodePagedParams, blocks_per_segment));
+  output[16] = ulong(__builtin_offsetof(LlmMetalDecodePagedParams, table_entries_per_segment));
+  output[17] = ulong(__builtin_offsetof(LlmMetalDecodePagedParams, segment_capacity_bytes));
+  output[18] = ulong(__builtin_offsetof(LlmMetalDecodePagedParams, weight_seed));
+  output[19] = ulong(__builtin_offsetof(LlmMetalDecodePagedParams, k_seed));
+  output[20] = ulong(__builtin_offsetof(LlmMetalDecodePagedParams, v_seed));
+  output[21] = ulong(__builtin_offsetof(LlmMetalDecodePagedParams, scenario_seed));
+  output[22] = ulong(__builtin_offsetof(LlmMetalDecodePagedParams, weight_segment_count));
+  output[23] = ulong(__builtin_offsetof(LlmMetalDecodePagedParams, k_segment_count));
+  output[24] = ulong(__builtin_offsetof(LlmMetalDecodePagedParams, v_segment_count));
+  output[25] = ulong(__builtin_offsetof(LlmMetalDecodePagedParams, table_segment_count));
+  output[26] = ulong(__builtin_offsetof(LlmMetalDecodePagedParams, reserved_zero));
+  output[27] = ulong(__builtin_offsetof(LlmMetalDecodePagedParams, padding_zero));
+  output[28] = params.weight_bytes;
+  output[29] = params.context_tokens;
+  output[30] = params.layer_count;
+  output[31] = params.batch_size;
+  output[32] = params.record_bytes;
+  output[33] = params.work_units;
+  output[34] = params.block_bytes;
+  output[35] = params.last_block_valid_bytes;
+  output[36] = params.append_offset_in_last_block;
+  output[37] = params.blocks_per_sequence;
+  output[38] = params.physical_blocks_per_layer;
+  output[39] = params.blocks_per_segment;
+  output[40] = params.table_entries_per_segment;
+  output[41] = params.segment_capacity_bytes;
+  output[42] = params.weight_seed;
+  output[43] = params.k_seed;
+  output[44] = params.v_seed;
+  output[45] = params.scenario_seed;
+  output[46] = ulong(params.weight_segment_count);
+  output[47] = ulong(params.k_segment_count);
+  output[48] = ulong(params.v_segment_count);
+  output[49] = ulong(params.table_segment_count);
+  output[50] = ulong(params.reserved_zero);
+  output[51] = ulong(params.padding_zero);
+}
+
+#endif  // LLM_METAL_DECODE_PAGED
 kernel void llm_metal_probe_parameter_layout(
     constant LlmMetalResources& resources [[buffer(0)]],
     constant LlmMetalFoundationParams& params [[buffer(1)]],
