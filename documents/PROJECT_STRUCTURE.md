@@ -456,6 +456,8 @@ bundled standard-result consumers; separately governed TLB tooling retains its d
 
 ```
 results/
+  0.63.0/
+    M4MacMiniVSM5MacbookAir_LLM.md  — Informal LLM CPU decode comparison
   0.53.7/
     MacMiniM4_analyzetlb.json       — TLB analysis run, Mac Mini M4
     MacMiniM4_benchmark.json        — Standard benchmark run, Mac Mini M4
@@ -469,6 +471,11 @@ results/
   old/
     *.json / *.csv / *.txt          — Pre-versioned historical results
 ```
+
+The current-version result notes include an
+[informal M4 Mac mini versus M5 MacBook Air LLM CPU decode comparison](../results/0.63.0/M4MacMiniVSM5MacbookAir_LLM.md).
+The M4 run had a Docker container active in the background, so the comparison is an illustrative result rather than a
+controlled methodology baseline.
 
 ---
 
