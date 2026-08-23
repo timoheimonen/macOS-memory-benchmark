@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.63.0] - Unreleased
+## [0.63.0] - 2026-08-23
 
 ### Added
   - **Standalone synthetic LLM memory profile**: Added `-M` / `--llm-memory` for measuring exact logical effective-model payload and synthetic work-unit latency across `weights_only`, `kv_only`, and layer-interleaved `mixed` scenarios. The mode reports synthetic decode-step or prefill-operation rates and does not run Transformer computation or claim inference `tokens/s` or TTFT.
