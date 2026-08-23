@@ -65,7 +65,7 @@ class PlotterEntryPathTest(unittest.TestCase):
 
     def test_hierarchy_loader_accepts_current_full_result(self):
         with tempfile.TemporaryDirectory(prefix="script-example-plotter-") as temporary:
-            _, script = copy_script(Path(temporary), "plot_bechmark-memory-latency-hierarcy.py")
+            _, script = copy_script(Path(temporary), "plot_benchmark-memory-latency-hierarchy.py")
             plotter = load_plotter(script, "current_hierarchy_plotter")
             result = plotter.load_latency_data(CURRENT_FULL_FIXTURE, "average")
 
@@ -91,7 +91,7 @@ Locality Latency Delta, Global - 16 KiB (ns):
 """
         with tempfile.TemporaryDirectory(prefix="script-example-text-") as temporary:
             root = Path(temporary)
-            _, script = copy_script(root, "plot_bechmark-memory-latency-hierarcy.py")
+            _, script = copy_script(root, "plot_benchmark-memory-latency-hierarchy.py")
             input_path = root / "Apple_M4_statistics.txt"
             input_path.write_text(statistics, encoding="utf-8")
             plotter = load_plotter(script, "current_text_hierarchy_plotter")
@@ -119,7 +119,7 @@ Locality Latency Delta, Global - 16 KiB (ns):
             loaders = (
                 ("plot_M4vsM5_benchmark_comparison.py", "wrong_schema_comparison", "load_data"),
                 (
-                    "plot_bechmark-memory-latency-hierarcy.py",
+                    "plot_benchmark-memory-latency-hierarchy.py",
                     "wrong_schema_hierarchy",
                     "load_latency_data",
                 ),

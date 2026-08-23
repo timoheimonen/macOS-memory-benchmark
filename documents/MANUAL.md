@@ -2563,7 +2563,7 @@ Both JSON entry paths require explicit current standard schema-3 inputs:
 ```bash
 python3 script-examples/plot_M4vsM5_benchmark_comparison.py \
   --m4-file current-m4.json --m5-file current-m5.json
-python3 script-examples/plot_bechmark-memory-latency-hierarcy.py \
+python3 script-examples/plot_benchmark-memory-latency-hierarchy.py \
   --file current-standard.json
 ```
 

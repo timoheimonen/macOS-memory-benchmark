@@ -509,7 +509,7 @@ examples. Separately governed mode-specific tools retain only the history policy
 | `latency_test_script_stride_tlb.sh` | Sweeps cache size, configured locality, and latency stride; uses embedded Python 3 to read current pooled sample statistics, retains per-run JSON, and requires one complete CSV row per planned run |
 | `plot_M4vsM5_benchmark_comparison.py` | Compares effective payload bandwidth and latency from two explicitly supplied current standard schema-3 JSON files |
 | `plot_analyzetlb.py` | Plots standalone TLB locality trends, including the paired spread/packed delta in current schemas and supported legacy data |
-| `plot_bechmark-memory-latency-hierarcy.py` | Plots memory-hierarchy latency from an explicit current standard schema-3 JSON or console-text statistics input using the current producer's labels |
+| `plot_benchmark-memory-latency-hierarchy.py` | Plots memory-hierarchy latency from an explicit current standard schema-3 JSON or console-text statistics input using the current producer's labels |
 | `plot_cache_percentiles.py` | Plots a selected pooled latency statistic by cache size and configured locality from `final_output.txt` |
 | `plot_cache_percentiles_stride_tlb.py` | Plots a selected pooled latency statistic from the stride/locality sweep CSV, with optional stride and locality filters |
 

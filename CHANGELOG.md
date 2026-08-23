@@ -17,6 +17,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
   - **Deployment baseline advances to macOS 26.0**: Production, test, assembly, and linked artifacts now share a macOS 26.0 deployment target, and source builds require an Xcode toolchain and SDK that recognize it. `GTEST_DIR` can select a compatible alternate GoogleTest installation.
 
+### Fixed
+  - **Latency hierarchy plotting script filename corrected**: Renamed `script-examples/plot_bechmark-memory-latency-hierarcy.py` to `script-examples/plot_benchmark-memory-latency-hierarchy.py` and updated the affected documentation and entry-path tests.
+
 ## [0.62.0] - 2026-08-21
 
 ### Added
