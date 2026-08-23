@@ -37,6 +37,7 @@
 #ifndef MESSAGES_MESSAGES_API_H
 #define MESSAGES_MESSAGES_API_H
 
+#include <cstddef>
 #include <cstdint>
 #include <string>
 
@@ -149,6 +150,21 @@ std::string error_gpu_run_failed(const std::string& reason_code);
 const std::string& gpu_reason_positive_integer();
 const std::string& gpu_reason_nonnegative_unsigned_long();
 const std::string& gpu_reason_loop_count_out_of_range();
+const std::string& error_llm_memory_must_be_used_alone();
+std::string error_llm_memory_missing_required_option(
+    const std::string& option);
+std::string error_llm_memory_config_invalid(
+    const std::string& reason_code);
+std::string error_llm_memory_iterations_exceed_limit(size_t requested,
+                                                     size_t maximum);
+std::string error_llm_memory_run_failed(const std::string& reason_code);
+const std::string& error_llm_paged_table_protection_failed();
+const std::string& llm_memory_reason_positive_integer();
+const std::string& llm_memory_reason_backend();
+const std::string& llm_memory_reason_kv_element_bytes();
+const std::string& llm_memory_reason_phase();
+const std::string& llm_memory_reason_kv_layout();
+const std::string& llm_memory_reason_platform_size_range();
 const std::string& error_only_flags_require_benchmark();
 const std::string& error_sweep_requires_parameter();
 std::string error_sweep_too_many_runs(size_t run_count, size_t max_runs);
@@ -204,8 +220,10 @@ std::string msg_core_to_core_scenario_progress(size_t current_loop,
 std::string msg_tlb_analysis_refinement_start(size_t point_count);
 std::string msg_tlb_analysis_validation_start(size_t point_count);
 
-// --- GPU memory-bandwidth usage and report messages ---
+// --- GPU and LLM memory-profile usage and report messages ---
 std::string gpu_usage_options(const std::string& prog_name);
+const std::string& llm_memory_command_name();
+std::string llm_memory_usage_options(const std::string& prog_name);
 std::string report_gpu_bandwidth_header(const std::string& device_name,
                                         size_t loop_count,
                                         bool median_headline);
@@ -225,6 +243,95 @@ std::string warning_gpu_duration_quality(const std::string& operation,
                                          const std::string& quality);
 const std::string& warning_gpu_environment_not_nominal();
 const std::string& warning_gpu_recommended_working_set_exceeded();
+std::string report_llm_memory_header(const std::string& backend,
+                                     const std::string& phase,
+                                     const std::string& work_unit_kind,
+                                     const std::string& kv_layout);
+std::string report_llm_memory_metal_backend(
+    const std::string& device_name, uint64_t registry_id, bool apple7,
+    bool unified, bool tier2, size_t max_buffer_length,
+    uint64_t recommended_working_set);
+std::string report_llm_memory_metal_resources(
+    size_t weight_segments, size_t k_segments, size_t v_segments,
+    size_t segment_capacity, size_t argument_encoded_length,
+    size_t committed_bytes, size_t known_peak, size_t admitted_budget);
+std::string report_llm_memory_metal_task(
+    const std::string& scenario, const std::string& pipeline,
+    size_t threadgroups, size_t threads_per_threadgroup,
+    bool timing_evaluated, bool timing_valid, double gpu_elapsed_seconds,
+    bool checksum_evaluated, bool checksum_valid, bool kv_write_applicable,
+    bool kv_write_evaluated, bool kv_write_valid, bool canary_applicable,
+    bool canary_evaluated, bool canary_valid);
+std::string report_llm_memory_metal_grid(
+    size_t owner_count, size_t owner_ordinals_per_threadgroup,
+    size_t minimum_threadgroup_accounted_bytes,
+    size_t maximum_threadgroup_accounted_bytes,
+    size_t threadgroup_accounted_imbalance_bytes);
+std::string report_llm_memory_work_unit_name(
+    const std::string& work_unit_kind, bool plural);
+std::string report_llm_memory_payload(
+    const std::string& work_unit_name,
+    size_t active_weight_bytes_per_work_unit,
+    size_t kv_read_bytes_per_work_unit,
+    size_t kv_write_bytes_per_work_unit);
+std::string report_llm_memory_decode_geometry(
+    size_t visible_context_tokens, double traffic_crossover_context_tokens);
+std::string report_llm_memory_prefill_geometry(size_t prompt_tokens, size_t attention_query_tile_tokens,
+                                               size_t tile_count, size_t attention_prefix_token_visits_per_sequence,
+                                               size_t causal_token_pairs_per_sequence, size_t logical_attention_pairs,
+                                               size_t logical_attention_fma_terms);
+struct LlmPagedLayoutReportValues {
+  size_t block_tokens = 0;
+  size_t blocks_per_sequence = 0;
+  size_t physical_blocks_per_layer = 0;
+  size_t total_physical_blocks = 0;
+  size_t block_bytes = 0;
+  size_t terminal_block_tokens = 0;
+  size_t terminal_valid_bytes = 0;
+  size_t k_logical_bytes = 0;
+  size_t k_physical_bytes = 0;
+  size_t k_padding_bytes = 0;
+  size_t v_logical_bytes = 0;
+  size_t v_physical_bytes = 0;
+  size_t v_padding_bytes = 0;
+  size_t block_table_entries = 0;
+  size_t block_table_bytes = 0;
+  size_t block_table_page_rounded_bytes = 0;
+  std::string permutation_version;
+  uint64_t permutation_seed = 0;
+  std::string permutation_sha256;
+  std::string permutation_identity;
+  size_t metadata_lookups_per_work_unit = 0;
+  size_t metadata_bytes_per_work_unit = 0;
+  size_t accounted_bytes_per_work_unit = 0;
+  std::string work_unit_name;
+};
+std::string report_llm_memory_paged_layout(
+    const LlmPagedLayoutReportValues& values);
+std::string report_llm_memory_scenario_headline(
+    const std::string& scenario_name, const std::string& work_unit_name,
+    const std::string& plural_work_unit_name, double work_unit_latency_ms,
+    double synthetic_memory_work_units_per_second,
+    double effective_model_payload_gb_s,
+    bool include_work_units_per_second);
+std::string report_llm_memory_scenario_name(
+    const std::string& scenario_token);
+std::string report_llm_memory_interpretation_note(
+    const std::string& phase, const std::string& kv_layout,
+    const std::string& work_unit_name);
+std::string warning_llm_memory_high_cv(const std::string& scenario_token,
+                                       double cv_pct,
+                                       double threshold_pct);
+const std::string& warning_llm_memory_order_not_balanced();
+std::string warning_llm_memory_duration_quality(
+    const std::string& scenario_token, const std::string& quality);
+const std::string& warning_llm_memory_environment_not_nominal();
+std::string warning_llm_memory_main_thread_qos_not_applied(int code);
+const std::string& warning_llm_memory_worker_qos_not_applied();
+std::string warning_llm_memory_weight_cache_dominant(
+    size_t working_set_bytes, size_t l2_cache_bytes);
+std::string warning_llm_memory_kv_cache_dominant(
+    size_t working_set_bytes, size_t l2_cache_bytes);
 
 // --- Core-to-Core Report Messages ---
 const std::string& report_core_to_core_header();

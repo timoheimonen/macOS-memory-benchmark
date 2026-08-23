@@ -22,12 +22,13 @@ struct ModeOption {
   const char* long_option;
 };
 
-constexpr std::array<ModeOption, 5> kModeOptions{{
+constexpr std::array<ModeOption, 6> kModeOptions{{
     {PrimaryBenchmarkMode::Standard, "-B", "--benchmark"},
     {PrimaryBenchmarkMode::Patterns, "-P", "--patterns"},
     {PrimaryBenchmarkMode::AnalyzeTlb, "-T", "--analyze-tlb"},
     {PrimaryBenchmarkMode::AnalyzeCoreToCore, "-C", "--analyze-core2core"},
     {PrimaryBenchmarkMode::GpuBandwidth, "-G", "--gpu-bandwidth"},
+    {PrimaryBenchmarkMode::LlmMemory, "-M", "--llm-memory"},
 }};
 
 }  // namespace

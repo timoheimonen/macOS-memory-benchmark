@@ -140,7 +140,7 @@ class FakeGpuBackend final : public GpuBackend {
         "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
     initialization.compilation.compiler_identifier = "fake-clang";
     initialization.compilation.build_sdk = "macosx26.0";
-    initialization.compilation.deployment_target = "11.0";
+    initialization.compilation.deployment_target = "26.0";
 
     allocation.status = GpuBackendStatus::Success;
     allocation.reason_code = "allocated";

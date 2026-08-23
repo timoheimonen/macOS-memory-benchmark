@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.63.0] - 2026-08-23
+
+### Added
+  - **Standalone synthetic LLM memory profile**: Added `-M` / `--llm-memory` for measuring exact logical effective-model payload and synthetic work-unit latency across `weights_only`, `kv_only`, and layer-interleaved `mixed` scenarios. The mode reports synthetic decode-step or prefill-operation rates and does not run Transformer computation or claim inference `tokens/s` or TTFT.
+  - **Eight versioned CPU and Metal workload profiles**: CPU and capability-gated Metal backends support fixed-context decode and full-prompt tiled-prefix prefill with contiguous or deterministic paged KV, using exact `llm-memory-v1-<backend>-<phase>-<layout>` methodology identities. Exact work planning, explicit or calibrated work, balanced scenario order, timed paged block-table lookups, seeded layouts, and post-task validation keep payload accounting auditable while excluding lookup metadata and padding from the headline numerator.
+  - **Native and capability-gated LLM execution**: CPU hot paths use AAPCS64 ARM64 assembly with synchronized worker timing, while runtime-compiled MSL 2.3 kernels use Metal GPU timestamps, exact-tail segmented private/tracked resources, and capability-based admission on unified-memory Apple7-or-later devices with Tier 2 argument buffers and `maxBufferLength` of at least 256 MiB. Unsupported capabilities and Metal failures remain explicit and never fall back to CPU.
+  - **Auditable LLM JSON schema 1**: Status-bearing results record exact geometry, logical and physical resource plans, seeds, calibration and frozen work, per-scenario completion, checksums, backend timing and provenance, capability evidence, validation, and repeatability. File output checkpoints atomically after each terminal scenario and on command termination, while exact `--output -` emits one final document.
+  - **LLM documentation and verification**: Added the dedicated LLM Memory Profile Whitepaper and synchronized the README, manual, machine API, capability and parameter references, technical specification, and CLI help. Deterministic contract coverage, ARM64 ABI/kernel integration, fake-backend tests, and capability-gated real-Metal runs verify all eight profiles, exact-tail and multi-GiB resources, interruption, stdout/file output, and cleanup semantics.
+
+### Changed
+  - **Deployment baseline advances to macOS 26.0**: Production, test, assembly, and linked artifacts now share a macOS 26.0 deployment target, and source builds require an Xcode toolchain and SDK that recognize it. `GTEST_DIR` can select a compatible alternate GoogleTest installation.
+
+### Fixed
+  - **Latency hierarchy plotting script filename corrected**: Renamed `script-examples/plot_bechmark-memory-latency-hierarcy.py` to `script-examples/plot_benchmark-memory-latency-hierarchy.py` and updated the affected documentation and entry-path tests.
+
 ## [0.62.0] - 2026-08-21
 
 ### Added

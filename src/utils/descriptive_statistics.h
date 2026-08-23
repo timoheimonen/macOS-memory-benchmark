@@ -57,4 +57,16 @@ struct DescriptiveStatistics {
 DescriptiveStatistics calculate_descriptive_statistics(
     const std::vector<double>& values);
 
+/**
+ * Calculate the same statistics while reusing caller-owned cold-path storage.
+ *
+ * Both workspaces are overwritten and may retain capacity after return. They
+ * must be distinct from @p values and from each other. Reserving each workspace
+ * to `values.size()` before the call makes the calculation allocation-free.
+ */
+DescriptiveStatistics calculate_descriptive_statistics(
+    const std::vector<double>& values,
+    std::vector<double>& sorted_workspace,
+    std::vector<double>& deviation_workspace);
+
 #endif  // DESCRIPTIVE_STATISTICS_H

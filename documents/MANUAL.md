@@ -28,6 +28,7 @@
 - Standalone paired TLB analysis
 - Standalone core-to-core cache-line handoff latency analysis
 - Standalone Metal GPU memory read/write/copy bandwidth
+- Standalone synthetic CPU and capability-gated Metal LLM decode/prefill profiling with both KV layouts
 - Cartesian parameter sweeps for supported benchmark modes
 
 Target platform is **macOS on Apple Silicon**.
@@ -40,6 +41,7 @@ This manual focuses on practical usage and interpretation. For implementation de
 - [LATENCY_WHITEPAPER.md](LATENCY_WHITEPAPER.md)
 - [CORE_TO_CORE_WHITEPAPER.md](CORE_TO_CORE_WHITEPAPER.md)
 - [GPU_BANDWIDTH_WHITEPAPER.md](GPU_BANDWIDTH_WHITEPAPER.md)
+- [LLM_MEMORY_PROFILE_WHITEPAPER.md](LLM_MEMORY_PROFILE_WHITEPAPER.md)
 
 ---
 
@@ -47,12 +49,17 @@ This manual focuses on practical usage and interpretation. For implementation de
 
 ### Prerequisites
 
-- Apple Silicon Mac
+- Apple Silicon Mac running macOS 26 or later
 - Xcode Command Line Tools
 - GoogleTest for C++ tests; Python 3 for the script-example entry test in the aggregate `make test-all` gate. `jq` is
   optional for JSON inspection and the jq-backed latency-script path.
 - For `--gpu-bandwidth`: a unified-memory Metal device supporting `MTLGPUFamilyApple7` or a compatible later family.
   Capability support is distinct from a controlled performance-validation cohort.
+- For LLM Metal: Apple7-or-later capability, unified memory, Tier 2 argument buffers, and
+  `maxBufferLength >= 256 MiB`.
+
+`GTEST_DIR` may select another GoogleTest installation. Its static archives must not require a newer macOS version than
+the benchmark build's deployment target.
 
 Install tools:
 
@@ -89,7 +96,7 @@ make coverage-all
 
 Coverage reports are written to `/tmp/membenchmark-coverage-{unit,all}/report.txt`. The denominator contains
 production C++ and Objective-C++ only and excludes tests, GoogleTest, the bundled JSON header, generated files, and
-assembly. The macOS 11.0 build links the system Metal and Foundation frameworks. GPU kernels are embedded MSL 2.3
+assembly. The macOS 26.0 build links the system Metal and Foundation frameworks. GPU kernels are embedded MSL 2.3
 source compiled at runtime; the optional offline Metal Toolchain is not required.
 
 `make test-all` requires Python 3 for its script-example entry test. It does not require `jq`.
@@ -112,6 +119,31 @@ To run the standalone GPU bandwidth suite:
 
 ```bash
 memory_benchmark --gpu-bandwidth
+```
+
+To run a bounded fixed-work synthetic LLM decode-memory profile:
+
+```bash
+memory_benchmark --llm-memory --weight-size-mb 64 --layers 4 \
+  --query-heads 8 --kv-heads 2 --head-dim 64 --context-tokens 512 \
+  --iterations 1 --count 3
+```
+
+To run the same decode geometry with 16-token physical KV blocks:
+
+```bash
+memory_benchmark --llm-memory --weight-size-mb 64 --layers 4 \
+  --query-heads 8 --kv-heads 2 --head-dim 64 --context-tokens 512 \
+  --kv-layout paged --kv-block-tokens 16 --iterations 1 --count 3 --seed 42
+```
+
+To run contiguous full-prompt prefill with 64-token query tiles:
+
+```bash
+memory_benchmark --llm-memory --weight-size-mb 64 --layers 4 \
+  --query-heads 8 --kv-heads 2 --head-dim 64 --phase prefill \
+  --prompt-tokens 512 --attention-query-tile-tokens 64 \
+  --iterations 1 --count 3
 ```
 
 If built from source, use `./memory_benchmark` instead.
@@ -161,6 +193,126 @@ preconditioning, and validation are excluded from the primary time. GPU caches a
 cannot prove physical traffic: JSON always records `dram_residency: "unverified"`. A 64 MB or larger private buffer may
 still be cache- or dispatch-dominated. CPU and GPU GB/s values are not directly comparable because their kernels, timing
 boundaries, parallelism, cache behavior, resource modes, and validation overhead differ.
+
+### Synthetic LLM memory payload
+
+LLM-memory schema 1 uses generic backend/phase/layout/work-unit vocabulary. This revision activates all eight
+backend/phase/layout profiles: CPU and Metal each support decode and prefill with contiguous or paged KV. Prefill uses
+`work_unit_kind: "prefill_operation"`; decode uses `"decode_step"`. Metal never falls back to CPU.
+
+All four active Metal profiles are governed by runtime capability checks.
+
+`--kv-layout` defaults to `contiguous`. Paged layout requires exactly one `--kv-block-tokens <G>` option. `G` must be
+positive, a power of two, and no greater than `UINT32_MAX`; it may be larger than the active phase's sequence length.
+Contiguous layout
+rejects `--kv-block-tokens`, so a block size is never silently ignored or defaulted.
+
+Each selected profile measures three memory-only scenarios for one explicitly supplied phase geometry. `weights_only`
+reads all active weights once per work unit. `kv_only` performs the phase-specific K/V writes and reads. `mixed`
+performs both kinds of work in one timed scenario. CPU uses worker-local layer order inside one synchronized worker
+interval; Metal uses its scenario-specialized grid-stride kernel inside one GPU timestamp interval. In decode, the K/V
+schedule appends the current token's K and V records and reads the complete fixed visible history. In prefill, both
+backends and layouts use the full-prompt population and tiled-prefix schedule defined separately below.
+
+For decode, let `W` be active-weight bytes per decode step, `L` the layer count, `h_kv` the KV-head count, `d_h` the
+head dimension, `s_kv` the KV element width, `B` the batch size, and `A` the fixed visible context including the
+current token. Define `R = h_kv * d_h * s_kv`, the size of one K or V token record in one layer, and:
+
+```text
+K = L * 2 * h_kv * d_h * s_kv
+KV read / decode work unit   = B * A * K
+KV append / decode work unit = B * K
+```
+
+The effective model payloads per work unit are `W`, `B*A*K + B*K`, and `W + B*A*K + B*K` for weights-only, KV-only,
+and mixed. Reported GB/s divides those exact logical W/K/V bytes by backend-authoritative time: synchronized worker time
+for CPU or `GPUStartTime`/`GPUEndTime` for Metal. The traffic crossover
+`W / (B*K)` and the
+versioned current-context classification compare weight bytes with KV-read bytes only; exact equality is
+`near_crossover`. They do not locate a measured hardware bottleneck.
+
+Contiguous K/V uses `[layer][batch][token][kv_head][head_dimension]` order and has equal logical and physical lengths.
+Paged K/V uses complete physical blocks and one shared uint32 block table. For block size `G`:
+
+```text
+N = ceil(A / G)
+physical blocks per layer = B * N
+block bytes = G * R
+last block tokens = A - (N - 1) * G
+last block valid bytes = last block tokens * R
+K logical bytes = L * B * A * R
+K physical bytes = L * B * N * block bytes
+K layout padding bytes = K physical bytes - K logical bytes
+block table entries = B * N
+block table bytes = 4 * block table entries
+```
+
+V has the same byte counts. Each batch sequence's final physical block is allocated in full. Its unused suffix is
+initialized, pre-touched, protected by a canary, and excluded from timed work and effective model payload. The table is
+a bijection over physical IDs `0 .. B*N-1`. A versioned SplitMix64/Fisher-Yates rejection shuffle derives it once from
+the command seed. Entries are four-byte uint32 values, `UINT32_MAX` is reserved as an invalid sentinel, and `B*N` may
+not exceed `UINT32_MAX`. The table's domain, resolved seed, algorithm, entry count, and little-endian SHA-256 are frozen
+for the whole command. Warmup, calibration, and every scenario/loop use the same table.
+
+Paged `weights_only` does not touch the table. For paged decode, `kv_only` and `mixed` perform one paired append lookup,
+`N` K-scan lookups, and `N` V-scan lookups for every layer/batch pair:
+
+```text
+lookups / decode work unit = L * B * (2 * N + 1)
+metadata bytes / decode work unit = 4 * lookups
+accounted bytes = effective model payload bytes + metadata bytes
+```
+
+Each lookup is an explicit uint32 load inside the timed CPU assembly or Metal MSL kernel, followed by physical-address
+calculation. Metadata bytes count toward the 64 GiB task guardrail but not the GB/s numerator. The paged checksum binds
+logical table index, loaded physical ID, append/K/V visit kind, and work-unit ordinal; physical initialization also
+depends on pool, physical ID,
+and physical offset. Post-task validation checks current-token writes and padding canaries without adding to elapsed
+time.
+
+For prefill, prompt length `P` and query-tile length `Q` are explicit. Define `C = ceil(P/Q)`, tile ends
+`e_j = min((j+1)*Q, P)`, and `S(P,Q) = sum(e_j)`. One full-prompt work unit has:
+
+```text
+KV write / prefill operation = B * P * K
+KV read / prefill operation  = B * S(P,Q) * K
+```
+
+Prefill payload is `W`, `B*(P+S(P,Q))*K`, or `W+B*(P+S(P,Q))*K` for weights-only, KV-only, or mixed. Each owner writes
+its prompt tokens in ascending order, K then V for each token, before that owner's reads; no global worker barrier is
+implied. Each increasing tile then reads the complete owned K prefix followed by the complete owned V prefix. `Q=P`
+scans one full prefix; `Q=1` gives `S=triangular(P)`. Reported causal-pair and logical attention/FMA counts are audit
+metadata, not executed compute. The timed checksum covers every tile-read visit. For a KV-bearing CPU task, excluded
+post-validation checks each owner's deterministic first/middle/last canonical-word samples, including bytes clipped to
+owner boundaries, against the final operation ordinal `T-1`. For a KV-bearing Metal prefill task, it checks
+representative/boundary byte locations per layer/batch sequence in both K and V against that ordinal; paged Metal
+additionally validates applicable terminal padding canaries. Neither path rereads every prompt record.
+
+For paged prefill, define `N = ceil(P/G)`, `m_j = ceil(e_j/G)`, and `M = sum(m_j)`. Each layer/batch pair performs `N`
+paired K/V block lookups while populating the prompt, followed by `M` K-prefix and `M` V-prefix lookups across the
+tiles:
+
+```text
+lookups / prefill work unit = L * B * (N + 2 * M)
+metadata bytes / prefill work unit = 4 * lookups
+accounted bytes = effective model payload bytes + metadata bytes
+```
+
+Partial tile prefixes visit only the exact valid bytes through `e_j`, including a partial terminal block. The timed
+checksum binds logical table index, loaded physical ID, visit kind, and operation ordinal non-separably. Paged prefill
+therefore preserves the same logical payload as contiguous prefill while reporting table-read metadata separately.
+Post-validation checks final-ordinal prompt samples and the physical pools' terminal padding canaries. On Metal, the
+row-major `L*B*N` owner ordinals use a deterministic cyclic threadgroup assignment for every work unit and semantic
+visit. The grid reports the exact per-threadgroup accounted-byte vector, minimum, maximum, and imbalance without
+claiming weighted balance; changing the threadgroup count does not duplicate lookups.
+
+CPU uses full-size ordinary cacheable mappings; Metal uses exact-tail private/tracked segments on unified memory.
+Initialization/pre-touch, same-shape warmup, calibration, JSON, expected-checksum construction, and post-validation are
+outside elapsed time; permutation preparation and worker creation are additional CPU exclusions. Full-size resources
+prevent a small proxy buffer from masquerading as a larger model, but they do not prove physical DRAM service. A
+synthetic decode step or full-prompt prefill operation is not an inference token. Prefill does not predict TTFT. The
+profile excludes Transformer math, model/framework dispatch, ANE work, GPU execution outside the defined Metal
+kernels, growing context, runtime page allocation, prefix sharing, sliding-window KV, and compute-memory overlap.
 
 ### Memory hierarchy behavior
 
@@ -307,6 +459,21 @@ middle, and trailing items.
 | `-T` | `--analyze-tlb` |
 | `-C` | `--analyze-core2core` |
 | `-G` | `--gpu-bandwidth` |
+| `-M` | `--llm-memory` |
+| — | `--llm-memory-backend` |
+| — | `--weight-size-mb` |
+| — | `--layers` |
+| — | `--query-heads` |
+| — | `--kv-heads` |
+| — | `--head-dim` |
+| — | `--kv-element-bytes` |
+| — | `--phase` |
+| — | `--context-tokens` |
+| — | `--prompt-tokens` |
+| — | `--attention-query-tile-tokens` |
+| — | `--kv-layout` |
+| — | `--kv-block-tokens` |
+| — | `--batch-size` |
 | `-b` | `--buffer-size` |
 | `-i` | `--iterations` |
 | `-r` | `--count` |
@@ -337,15 +504,19 @@ middle, and trailing items.
 
 #### `--iterations <count>`
 
-- Exact measured bandwidth pass count when explicitly supplied
+- Exact measured bandwidth pass/dispatch count, or exact LLM scenario work-unit count, when explicitly supplied
 - Positive integer
 - Not allowed with `--only-latency`
-- In `--benchmark`, `--patterns`, and `--gpu-bandwidth`, omission enables excluded operation-specific work and automatic calibration toward
-  150 ms (100–250 ms intended window, at most two corrections)
+- In `--benchmark`, `--patterns`, `--gpu-bandwidth`, and `--llm-memory`, omission enables excluded
+  operation- or scenario-specific work and automatic calibration toward 150 ms (100–250 ms intended window, at most
+  two corrections)
 - Standard calibration is target- and operation-specific and its resolved pass count is reused across `--count` loops
 - An explicit value bypasses pilot/corrections but not the operation-specific warmup
 - In GPU mode, the value is an exact full-buffer dispatch count. It must fit both the 16,384-dispatch limit and the
   64 GiB exact-payload limit; copy's 2× numerator defines the strict shared CLI ceiling
+- In LLM mode, the value is an exact decode-step or full-prompt prefill-operation count per scenario. Paged KV
+  table-read bytes are included in the 64 GiB task-accounted-byte ceiling even though they are excluded from
+  effective-model-payload GB/s
 
 #### `--count <count>`
 
@@ -354,6 +525,7 @@ middle, and trailing items.
 - Core-to-core default: `3`; this mode-specific default does not change standard or pattern execution
 - GPU-bandwidth default: `3`; its operation order rotates so one complete three-loop block gives read/write/copy one
   first, middle, and last position each
+- LLM-memory default: `3`; its planned weights-only/KV-only/mixed order rotates across one complete three-loop block
 - Positive integer
 - Use `5` to `10` for stable statistics
 
@@ -369,6 +541,11 @@ middle, and trailing items.
 - In pattern mode this is a requested count; sparse strided work may use fewer effective workers so each worker performs
   at least one genuine stride transition
 - Pattern workers request best-effort macOS QoS but are not pinned to specific cores
+- LLM-memory defaults its requested count to detected CPU workers. An explicit request remains distinct from detected
+  availability; its immutable work plan records requested, available, and effective counts, reducing effective workers
+  only when detected availability or executable span size requires it
+- Metal LLM-memory does not detect CPU workers and rejects explicit `--threads`; its worker and worker-QoS JSON fields
+  are null with applicability false
 - Latency tests remain single-threaded
 
 ### Mode selection
@@ -431,6 +608,119 @@ middle, and trailing items.
   help to stdout, perform no Metal work, and create no `-`/`-.tmp` artifact
 - Detailed methodology and GPU schema 1 contract: [GPU_BANDWIDTH_WHITEPAPER.md](GPU_BANDWIDTH_WHITEPAPER.md)
 
+#### `--llm-memory`
+
+- Selects the standalone CPU/Metal synthetic memory mode. Active methodologies are
+  `llm-memory-v1-cpu-decode-contiguous`, `llm-memory-v1-cpu-decode-paged`,
+  `llm-memory-v1-cpu-prefill-contiguous`, `llm-memory-v1-cpu-prefill-paged`,
+  `llm-memory-v1-metal-decode-contiguous`, `llm-memory-v1-metal-decode-paged`,
+  `llm-memory-v1-metal-prefill-contiguous`, and `llm-memory-v1-metal-prefill-paged`. It never enters the general
+  `BenchmarkConfig` parser or CPU sweep runner
+- The four active Metal methodologies are governed by runtime capability checks
+- Requires each common model option `--weight-size-mb <MiB>`, `--layers <count>`, `--query-heads <count>`,
+  `--kv-heads <count>`, and `--head-dim <count>` exactly once. Decode requires `--context-tokens <count>`; prefill
+  requires `--prompt-tokens <P>` and `--attention-query-tile-tokens <Q>`. Cross-phase geometry is rejected
+- Allows optional `--llm-memory-backend <cpu|metal>`, `--kv-element-bytes <1|2|4>`, `--batch-size <count>`,
+  `--phase <decode|prefill>`, `--kv-layout <contiguous|paged>`, and CPU-only `-t`/`--threads <count>`,
+  `-i`/`--iterations <count>`,
+  `-r`/`--count <count>`, `--seed <uint64>`, `-o`/`--output <target>`, and `-h`/`--help`.
+  `--kv-block-tokens <G>` is required exactly once with paged layout and rejected with contiguous layout. Every other
+  option, including all other primary modes, cache/latency modifiers, `--non-cacheable`, `--sweep`, and
+  `--sweep-max-runs`, is rejected
+- Defaults to CPU, decode, contiguous layout, two-byte KV elements, batch size one, three planned cyclic loops,
+  automatic scenario work, and one generated non-zero base seed. CPU defaults to detected workers. Metal performs no
+  worker detection and rejects explicit `--threads`. There is no default paged block size. An explicit seed may be any
+  unsigned 64-bit value, including zero
+- Parses every integer as one complete decimal token. Model counts, sizes, worker count, iterations, and loop count
+  must be positive. Query heads must be at least the KV-head count and evenly divisible by it
+- Requires `P >= 1` and `1 <= Q <= P` for prefill. Requires paged block size `G` to be positive, a power of two, and at
+  most `UINT32_MAX`. `G > A` is valid for decode and produces one partially used physical block per batch sequence;
+  unused capacity is reported rather than silently removed
+- Activates Metal for decode or prefill with contiguous or paged KV. Capability failure after
+  output-session creation produces a terminal `unsupported` JSON result and non-zero exit. Runtime compiler, pipeline,
+  resource, or task failure produces terminal `failed`/`invalid` schema evidence and a non-zero exit. The command never
+  substitutes CPU
+- Treats `--context-tokens` as the fixed visible context including the current synthetic token. Checked preflight
+  resolves weight/KV byte geometry and ensures all three scenarios can fit the one-billion-work-unit and 64 GiB
+  accounted-byte task limits; explicit iterations must fit the strictest scenario limit
+- Treats one prefill work unit as one complete prompt rewrite plus tiled causal-prefix scans for every batch sequence;
+  weights are read once per full-prompt operation, not once per token or tile. With paged KV, full-prompt writes and
+  exact partial-prefix scans perform timed uint32 table lookups
+- On CPU, preserves an explicit worker request even when it exceeds detected availability. Effective-worker reduction
+  belongs to the executable work plan and remains separately reportable
+- `--llm-memory --help` succeeds without required model inputs and returns before core detection, seed generation,
+  output-session creation, QoS preparation, or signal masking. Unknown, duplicate, and missing-value errors are still
+  diagnosed because help does not bypass the strict whitelist pass
+- Builds budget-admitted full-size active-weight and K/V resources. Contiguous uses the logical K/V lengths. Paged uses
+  complete physical K/V blocks and one uint32 block table, and admits the permutation-validation transient before
+  materializing the table. CPU uses page-rounded regular cacheable anonymous mappings and protects the validated table
+  read-only. Metal uses block-aligned private K/V segments, segmented private table storage, and a transient shared
+  staging segment; table upload and hash/readback validation precede publication. `--non-cacheable` is outside the
+  whitelist. Deterministic initialization and pre-touch cover every requested physical byte before any measured task.
+  Before each paged
+  decode task, an untimed allocation-free reset restores only the mutable current-token append slots; history blocks
+  and suffix-padding canaries are not rewritten. Paged prefill instead rewrites every owned prompt byte in timed work
+- Runs `weights_only`, `kv_only`, and layer-interleaved `mixed` scenarios. Omitted iterations trigger excluded,
+  scenario-specific calibration in that canonical order with an 8 MiB minimum pilot accounted-work floor when
+  guardrails permit, a 150 ms target, a 100–250 ms intended window, and at most two corrections. The initial pilot has
+  one same-shape warmup; later candidates add a warmup only for the first irreducible one-work-unit confirmation. After
+  all three candidates resolve, their plans freeze atomically and each frozen plan receives one canonical-order warmup
+  before loop zero. Explicit iterations freeze all three exact plans first and use the same frozen-plan warmup boundary.
+  Cyclic measured order gives all scenarios each position once when count is three
+- Uses task-boundary completion-wins interruption. A started scenario is not polled in its hot kernel; a completed and
+  checksum-valid current task stays measured, while no next task starts after the stop is observed
+- Output values retain the shared raw-target syntax: empty disables JSON, exact `-` emits one final schema 1 document,
+  and every other non-empty value is a file target, including `./-` and flag-shaped names. File output atomically
+  checkpoints each terminal scenario measurement and command terminal; stdout performs the same logical transitions
+  without intermediate serialization
+- CPU prefill uses layout-specific ARM64 executors and reports scenario-specific cost-balanced owner identities plus
+  minimum/maximum/imbalance worker-cost evidence. Paged prefill additionally reports deterministic block-exclusive
+  ownership, table/permutation identity, exact lookup metadata, and padding validation
+- Every active Metal profile uses private/tracked W/K/V segments no larger than 256 MiB, with exact final tails and a
+  Tier 2 argument buffer. Each task has one reset command buffer, one timed command buffer with one serial compute
+  encoder and one scenario-specialized workload dispatch, and one excluded post-validation command buffer. The `T`
+  work-unit loop is
+  inside the kernel. `GPUStartTime`/`GPUEndTime` are authoritative; the host wait envelope is diagnostic only. A
+  versioned profile-specific dual-mod32 W/K/V checksum and excluded phase-neutral `kv_write` validation must pass, with
+  no performance retry. Decode validates its current-token write; prefill checks representative/boundary byte locations
+  per layer/batch sequence in both K and V from the full prompt against the final operation ordinal `T - 1`. Both paged
+  phases use cyclic grid-stride scheduling that maps each layer/batch/logical-block owner to exactly one threadgroup. A
+  named lane performs each volatile uint32 table load, publishes the physical ID to its threadgroup, and crosses a
+  required threadgroup barrier before address construction. Paged decode's paired append plus separate K/V scans
+  account exactly
+  `L * B * (2 * N + 1)` lookups per KV-active work unit. The paged checksum binds logical index, physical ID, visit
+  kind, and work-unit ordinal; excluded validation also checks terminal-block padding canaries. Paged prefill instead
+  performs `N` paired prompt-write lookups and `M` separate K-prefix plus `M` V-prefix lookups per layer/batch pair,
+  giving exact
+  `L * B * (N + 2 * M)` metadata loads. Its KV-active `L * B * N` row-major owners use a deterministic cyclic threadgroup map
+  without lookup duplication. Grid evidence reports exact per-threadgroup accounted-byte minimum, maximum, imbalance,
+  and the underlying vector with `cost_unit=actual-threadgroup-cost` without claiming weighted balance. Every Metal
+  `weights_only` task uses a weight-vector grid stride and reports the same exact cost unit. Contiguous KV-bearing grids
+  publish no threadgroup-cost evidence. Partial prefix visits stop at the exact tile or prompt end, and complete status
+  requires full-prompt write validation plus applicable padding-canary validity. In contiguous
+  prefill, each lane writes its disjoint slices across all prompt K/V records before reading those slices in the tiled
+  prefixes; it scans the complete K prefix before the V prefix at every tile end. A weight-bearing scenario performs
+  one weight pass per `prefill_operation`. No
+  grid-wide barrier is implied. Contiguous prefill's lane-local serial range-helper count is
+  `T * ((weight_active ? L : 0) + (kv_active ? 2 * L * B * (P + C) : 0))`; paged `weights_only` counts `T * L`, while
+  paged KV-bearing owner kernels report zero serial range visits. The task publishes the applicable count and rejects
+  overflow or values above 1,048,576 before the CPU checksum oracle or GPU dispatch. The cap also lowers the effective
+  scenario work-unit ceiling used by explicit-work validation and automatic calibration. Methodology evidence publishes
+  the integer cap for both Metal prefill layouts and null for every other profile
+- Runtime evidence records the canonical embedded MSL revision, its exact SHA-256, and the selected profile's workload
+  and parameter-layout-probe identities. Validation pipelines are selected and compiled internally; runtime evidence
+  records their outcomes, not separate labels. Metal paged prefill additionally records executor
+  `llm-metal-executor-v1-prefill-paged`, schedule
+  `llm-metal-prefill-paged-cyclic-block-owner-grid-stride-v1`, timer
+  `metal-command-buffer-gpu-start-end-v1`, buffer pattern
+  `llm-paged-physical-buffer-pattern-v1`, write pattern `llm-metal-prefill-paged-full-prompt-affine32-v1`, and checksum
+  `llm-metal-paged-prefill-dual-mod32-lookup-address-mix-v1`
+- This profile is memory-only: it performs no Transformer mathematics and does not report inference tokens/s. Its
+  `synthetic_memory_work_units_per_second` and `effective_model_payload_gb_s` must not be interpreted as model
+  throughput or physical DRAM-counter traffic. Paged block-table reads are timed and separately accounted but are not
+  included in effective-model-payload GB/s. See
+  [LLM_MEMORY_PROFILE_WHITEPAPER.md](LLM_MEMORY_PROFILE_WHITEPAPER.md)
+
 #### `--only-bandwidth`
 
 - Runs bandwidth paths only
@@ -487,7 +777,7 @@ middle, and trailing items.
 
 #### `--seed <uint64>`
 
-- Applies to `--benchmark`, `--patterns`, `--analyze-tlb`, or `--gpu-bandwidth`
+- Applies to `--benchmark`, `--patterns`, `--analyze-tlb`, `--gpu-bandwidth`, or `--llm-memory`
 - In `--benchmark`, derives domain-separated seeds for main, L1, L2, custom, sampling, and both automatic-locality
   layouts; repeated loops rebuild equivalent logical chains and schedules
 - A standard seed reproduces workload/schedule metadata, not performance values or macOS thread placement
@@ -502,6 +792,9 @@ middle, and trailing items.
 - Standalone TLB JSON stores the resolved seed, source (`user` or `generated`), schedule policy, and each task seed
 - In GPU mode, the base seed is generated once when omitted, recorded as an exact decimal string, and used to derive
   stable domain-separated read/write/copy operation seeds. It reproduces data/work identity, not performance
+- In LLM-memory mode, one base seed is generated when omitted. The work planner derives separate weight/K/V buffer
+  seeds and weights-only/KV-only/mixed scenario seeds; the executor uses them for deterministic initialization, append
+  values, and checksum-observable scenario identity. They reproduce workload identity, not performance
 
 #### `--analyze-core2core`
 
@@ -607,27 +900,33 @@ middle, and trailing items.
 
 - An omitted output option or an empty value disables JSON output for a direct command. For a sweep, an empty value is
   a missing/invalid required output target
-- For every direct mode and the CPU modes' supported sweeps, an exact raw value of `-` selects machine-readable stdout.
-  The sentinel is classified before path normalization
+- For every result-producing direct mode and the CPU modes' supported sweeps, an exact raw value of `-` selects
+  machine-readable stdout. The sentinel is classified before path normalization
 - A supported stdout-target command emits exactly one two-space-indented UTF-8 JSON document followed by one newline
-  after orchestration reaches its terminal state. Intermediate standard, sweep, and GPU checkpoint requests are lazy
-  no-ops and do not emit documents
+  after orchestration reaches its terminal state. Intermediate standard, sweep, GPU, and LLM checkpoint requests are
+  lazy no-ops and do not emit documents
 - Post-parse human output is routed to stderr while the stdout target is active. Parse, preflight, and other pre-result
   failures leave stdout empty; `--help` remains a human-facing stdout command when that mode accepts the combination
-- Every other non-empty value is a file target, including `./-` and flag-shaped names such as `-G`. Thus
-  `--output ./-` writes an ordinary file named `-`. Relative paths write under the current working directory, and
-  parent directories are created automatically
+- For result-producing modes, every other non-empty value is a file target, including `./-` and flag-shaped names such
+  as `-G`. Thus `--output ./-` writes an ordinary file named `-`. Relative paths write under the current working
+  directory, and parent directories are created automatically. LLM-memory accepts and retains the same raw target
+  syntax in `configuration.output_file`
 - Standard and sweep file targets retain atomic intermediate checkpoints. Pattern, TLB, and core-to-core direct file
   targets each receive one final atomic write. GPU file output retains its terminal-measurement/failure checkpoints and
-  post-release replacement. Sweep and GPU command boundaries do not add a redundant outer file write. Use a real file
-  when crash-resilient intermediate checkpoints are required
-- With GPU `--output -`, every logical checkpoint transition and post-checkpoint stop observation still runs, but its
+  post-release replacement. LLM file output checkpoints after every terminal scenario measurement and once at command
+  terminal. A failed LLM checkpoint is terminal and is not retried as a final file write. Use a real file when
+  crash-resilient intermediate checkpoints are required
+- With GPU or LLM `--output -`, every logical checkpoint transition and post-checkpoint stop observation still runs, but its
   lazy payload builder is not invoked and no intermediate document is serialized. The command boundary writes one
-  terminal schema 1 document. Its `configuration.output_file` remains the raw string `"-"`, and captured `argv` is not
+  terminal schema 1 document. `configuration.output_file` remains the raw string `"-"`, and captured `argv` is not
   rewritten
 - GPU syntax/config errors, including a buffer below 64 MB, fail before result JSON is created. A backend-factory failure
   also precedes result initialization. Initialized capability, compilation, allocation, or work-plan failures remain
   auditable in the selected file or stdout target
+- LLM parser/preflight, plan, JSON-output peak-estimation, timer-creation, memory-budget, mapping, initialization, or
+  descriptor-preparation failures occur before runner-result initialization and therefore leave stdout empty. Once
+  initialized, runner, backend-task, checksum, interruption, and checkpoint states remain auditable through the selected
+  non-empty output target
 - An observable terminal stdout serialization, write, or flush failure returns failure without changing the
   already-computed measurement state; any bytes from that failed transfer must be rejected
 
@@ -648,7 +947,7 @@ middle, and trailing items.
 - `--benchmark --only-latency` supports `buffer-size`, `cache-size`, and latency chain/locality/stride keys
 - `--analyze-tlb` supports `latency-stride-bytes`, `latency-chain-mode`, and `tlb-density`
 - `--analyze-core2core` supports `count` and `latency-samples`
-- `--gpu-bandwidth` does not support `--sweep` or `--sweep-max-runs` in schema 1
+- `--gpu-bandwidth` and `--llm-memory` do not support `--sweep` or `--sweep-max-runs` in their schema-1 modes
 
 #### `--sweep-max-runs <count>`
 
@@ -762,6 +1061,54 @@ memory_benchmark --gpu-bandwidth --buffer-size 512 --count 3 --seed 42 --output 
 # Standalone GPU bandwidth, reproducible fixed work
 memory_benchmark --gpu-bandwidth --buffer-size 512 --iterations 24 --count 9 --seed 123456789 --output gpu_fixed.json
 
+# Standalone LLM memory profile, automatic scenario-specific calibration and file checkpoints
+memory_benchmark --llm-memory --weight-size-mb 4096 --layers 32 --query-heads 32 --kv-heads 8 \
+  --head-dim 128 --context-tokens 8192 --count 3 --seed 123456789 --output llm_memory.json
+
+# Standalone LLM automation: reproducible fixed work and one final schema 1 document on stdout
+memory_benchmark --llm-memory --weight-size-mb 64 --layers 4 --query-heads 8 --kv-heads 2 \
+  --head-dim 64 --context-tokens 512 --iterations 1 --count 3 --seed 42 --output - \
+  >llm_memory_stdout.json 2>llm_memory.log
+
+# Standalone Metal contiguous decode with the same three synthetic scenarios
+memory_benchmark --llm-memory --llm-memory-backend metal --weight-size-mb 64 --layers 4 \
+  --query-heads 8 --kv-heads 2 --head-dim 64 --context-tokens 512 \
+  --iterations 1 --count 3 --seed 42 --output llm_memory_metal.json
+
+# Standalone Metal paged decode with a partial terminal block
+memory_benchmark --llm-memory --llm-memory-backend metal --weight-size-mb 64 --layers 4 \
+  --query-heads 8 --kv-heads 2 --head-dim 64 --context-tokens 513 \
+  --kv-layout paged --kv-block-tokens 16 \
+  --iterations 1 --count 3 --seed 42 --output llm_memory_metal_paged.json
+
+# Standalone Metal contiguous prefill with one full-prompt write and tiled-prefix scans per operation
+memory_benchmark --llm-memory --llm-memory-backend metal --weight-size-mb 64 --layers 4 \
+  --query-heads 8 --kv-heads 2 --head-dim 64 --phase prefill --prompt-tokens 512 \
+  --attention-query-tile-tokens 64 \
+  --iterations 1 --count 3 --seed 42 --output llm_memory_metal_prefill.json
+
+# Standalone Metal paged prefill with the same logical prompt and an explicit block size
+memory_benchmark --llm-memory --llm-memory-backend metal --weight-size-mb 64 --layers 4 \
+  --query-heads 8 --kv-heads 2 --head-dim 64 --phase prefill --prompt-tokens 512 \
+  --attention-query-tile-tokens 64 --kv-layout paged --kv-block-tokens 16 \
+  --iterations 1 --count 3 --seed 42 --output llm_memory_metal_prefill_paged.json
+
+# Standalone CPU decode with deterministic paged KV storage
+memory_benchmark --llm-memory --weight-size-mb 64 --layers 4 --query-heads 8 --kv-heads 2 \
+  --head-dim 64 --context-tokens 512 --kv-layout paged --kv-block-tokens 16 \
+  --iterations 1 --count 3 --seed 42 --output llm_memory_paged.json
+
+# Standalone CPU prefill with contiguous KV and explicit prompt/tile geometry
+memory_benchmark --llm-memory --weight-size-mb 64 --layers 4 --query-heads 8 --kv-heads 2 \
+  --head-dim 64 --phase prefill --prompt-tokens 512 --attention-query-tile-tokens 64 \
+  --iterations 1 --count 3 --seed 42 --output llm_memory_prefill.json
+
+# Standalone CPU prefill with deterministic paged KV
+memory_benchmark --llm-memory --weight-size-mb 64 --layers 4 --query-heads 8 --kv-heads 2 \
+  --head-dim 64 --phase prefill --prompt-tokens 512 --attention-query-tile-tokens 64 \
+  --kv-layout paged --kv-block-tokens 16 \
+  --iterations 1 --count 3 --seed 42 --output llm_memory_prefill_paged.json
+
 # Benchmark latency sweep over 3 buffer sizes and 3 locality windows (9 runs)
 memory_benchmark --benchmark --only-latency --count 5 --sweep buffer-size=256,512,1024 --sweep latency-tlb-locality-kb=16,1024,0 --output latency_sweep.json
 
@@ -804,6 +1151,30 @@ memory_benchmark --gpu-bandwidth --threads 4
 
 # invalid: GPU mode has no schema-v1 sweep support
 memory_benchmark --gpu-bandwidth --sweep buffer-size=64,128 --output gpu_sweep.json
+
+# invalid: LLM mode accepts only its standalone whitelist
+memory_benchmark --llm-memory --weight-size-mb 64 --layers 4 --query-heads 8 --kv-heads 2 \
+  --head-dim 64 --context-tokens 512 --non-cacheable
+
+# invalid: LLM schema 1 has no sweep support
+memory_benchmark --llm-memory --weight-size-mb 64 --layers 4 --query-heads 8 --kv-heads 2 \
+  --head-dim 64 --context-tokens 512 --sweep context-tokens=512,1024 --output llm_sweep.json
+
+# invalid: paged layout requires an explicit block size
+memory_benchmark --llm-memory --weight-size-mb 64 --layers 4 --query-heads 8 --kv-heads 2 \
+  --head-dim 64 --context-tokens 512 --kv-layout paged
+
+# invalid: contiguous layout rejects a paged-only block size
+memory_benchmark --llm-memory --weight-size-mb 64 --layers 4 --query-heads 8 --kv-heads 2 \
+  --head-dim 64 --context-tokens 512 --kv-layout contiguous --kv-block-tokens 16
+
+# invalid: paged block size must be a power of two
+memory_benchmark --llm-memory --weight-size-mb 64 --layers 4 --query-heads 8 --kv-heads 2 \
+  --head-dim 64 --context-tokens 512 --kv-layout paged --kv-block-tokens 24
+
+# invalid: prefill rejects decode context and requires explicit P/Q
+memory_benchmark --llm-memory --weight-size-mb 64 --layers 4 --query-heads 8 --kv-heads 2 \
+  --head-dim 64 --phase prefill --context-tokens 512
 
 # invalid: multiple primary modes
 memory_benchmark --gpu-bandwidth --benchmark
@@ -849,6 +1220,69 @@ The example is a protocol shape, not a published 24-pass performance baseline fo
 state, Low Power Mode off, complete/valid schema state, and CV at or below 5% before calling one process stable. A new
 macOS build or GPU is a new cohort. The repository does not infer verified DRAM traffic or a minimum GB/s from these
 commands; a separate Instruments counter capture can provide audit evidence but is not the production value source.
+
+### Synthetic LLM memory characterization
+
+Supply active weights and attention geometry explicitly; the command has no built-in model preset. Start with automatic
+scenario-specific calibration and the default balanced count:
+
+```bash
+caffeinate -i -d memory_benchmark --llm-memory --weight-size-mb 4096 --layers 32 \
+  --query-heads 32 --kv-heads 8 --head-dim 128 --kv-element-bytes 2 \
+  --context-tokens 8192 --batch-size 1 --count 3 --seed 123456789 --output llm_auto.json
+```
+
+For a strict same-work cohort, select an explicit decode work-unit count that fits all three scenario limits and keep
+every model, worker, seed, software, hardware, and environment field matched:
+
+```bash
+caffeinate -i -d memory_benchmark --llm-memory --weight-size-mb 4096 --layers 32 \
+  --query-heads 32 --kv-heads 8 --head-dim 128 --kv-element-bytes 2 \
+  --context-tokens 8192 --batch-size 1 --threads 4 --iterations 1 --count 6 \
+  --seed 123456789 --output llm_fixed.json
+```
+
+For a Metal cohort, select the backend explicitly, omit `--threads`, and keep the Metal device/capability, MSL revision
+and source hash, pipeline/grid, resource segmentation, work count, and seed evidence matched:
+
+```bash
+caffeinate -i -d memory_benchmark --llm-memory --llm-memory-backend metal \
+  --weight-size-mb 4096 --layers 32 --query-heads 32 --kv-heads 8 \
+  --head-dim 128 --kv-element-bytes 2 --context-tokens 8192 --batch-size 1 \
+  --iterations 1 --count 6 --seed 123456789 --output llm_metal_fixed.json
+```
+
+Metal and CPU results are separate methodology cohorts. Do not combine their samples or compare their checksum values.
+Metal private storage is unified-memory API policy, not evidence of separate VRAM or DRAM residency.
+
+To characterize paged indirection, make the layout and block size explicit and retain the same seed:
+
+```bash
+caffeinate -i -d memory_benchmark --llm-memory --weight-size-mb 4096 --layers 32 \
+  --query-heads 32 --kv-heads 8 --head-dim 128 --kv-element-bytes 2 \
+  --context-tokens 8192 --batch-size 1 --kv-layout paged --kv-block-tokens 16 \
+  --threads 4 --iterations 1 --count 6 --seed 123456789 --output llm_paged_fixed.json
+```
+
+The 4 GiB/32-layer/8-KV-head example derives 128 KiB of combined K+V per visible token. At context 8192, KV read is
+1 GiB per decode work unit; the weight/KV-read payload crossover is 32768 visible tokens. Those are formula checks, not
+expected performance values. Inspect the three scenario headlines separately, scenario order balance, exact work-plan
+identity, checksums, CV, environment warnings, and the schema acceptance predicate before comparison. A paged cohort
+must additionally match `G`, physical block geometry, permutation identity/hash, and paged component identities. Do not
+combine contiguous and paged samples into one distribution.
+
+For prefill, select P/Q explicitly and keep them fixed within a cohort:
+
+```bash
+caffeinate -i -d memory_benchmark --llm-memory --weight-size-mb 4096 --layers 32 \
+  --query-heads 32 --kv-heads 8 --head-dim 128 --kv-element-bytes 2 \
+  --phase prefill --prompt-tokens 8192 --attention-query-tile-tokens 128 \
+  --batch-size 1 --threads 4 --iterations 1 --count 6 --seed 123456789 \
+  --output llm_prefill_fixed.json
+```
+
+Do not compare different Q values as the same workload: Q changes exact prefix-read multiplicity. A prefill latency is
+milliseconds per synthetic full-prompt operation, not TTFT.
 
 ### Pattern analysis
 
@@ -973,6 +1407,8 @@ Every successfully started direct mode and parameter sweep begins with one share
 banner before mode-specific configuration or status output. Nested runs within a sweep do not repeat it. Help and
 usage diagnostics retain the separate usage preamble; preflight failures do not emit the runtime banner.
 
+The numbered result sections below describe result-producing modes, including the standalone LLM profile.
+
 ### 1) Configuration section
 
 Shows active settings and detected hardware.
@@ -1080,6 +1516,35 @@ CV above 5%, non-nominal thermal/Low Power Mode state, incomplete three-position
 duration outside 100–250 ms are warnings. They do not cause performance-based retry or sample filtering. A missing or
 invalid measurement is not printed as zero and remains status-bearing/null in JSON.
 
+### 9) Synthetic LLM memory profile
+
+`--llm-memory` prints a separate report for CPU decode/prefill or an active Metal profile containing:
+
+- backend, phase/work unit, KV layout, cacheable semantics, and exact active-weight/KV-read/KV-write bytes;
+- for Metal, device/capability evidence, W/K/V segment counts, exact segment capacity, Tier 2 argument-buffer length,
+  actual committed/known-peak/admitted memory, pipeline/grid geometry, authoritative GPU elapsed time, checksum,
+  phase-neutral `kv_write` validation, and applicable canary status;
+- decode visible context and its two-decimal traffic crossover, or prefill P/Q/C, prefix visits, causal pairs, and
+  logical attention/FMA audit counts; decode-only crossover fields are not repurposed for prefill;
+- for paged layout, `G`, blocks per sequence, terminal valid bytes, physical K/V lengths, padding, table size,
+  permutation identity, and timed lookup/metadata counts; the report states that metadata is excluded from the GB/s
+  numerator;
+- up to one measured headline per weights-only, KV-only, and mixed scenario, with phase-specific work-unit latency and
+  effective model-payload GB/s; JSON uses the backend-neutral fields `synthetic_work_unit_latency_seconds`,
+  `synthetic_memory_work_units_per_second`, and `effective_model_payload_gb_s`, without calling any value tokens/s;
+- warnings for incomplete position balance, non-nominal environment, QoS failure, cache-dominant working sets, high
+  effective-model-payload CV, or duration outside the intended window. JSON retains the complete repeatability statistics;
+  the console prints the CV value only in a high-CV warning;
+- an interpretation reminder that the payload is logical and memory-only, not physical DRAM traffic or model inference.
+
+Paged suffix padding is capacity and validation evidence, not payload. A padding-canary or write/checksum mismatch makes
+the affected measurement invalid and does not trigger a retry.
+
+Missing, interrupted, invalid, or failed scenarios do not receive fabricated numeric console headlines; their exact
+status, reason, and null observations remain in JSON, and command failure retains its diagnostic. The corresponding JSON
+traffic classification uses version `llm-exact-weight-vs-kv-read-payload-v1`; `near_crossover` means exact equality
+between weight and KV-read payload. It is not a tolerance band or a measured bottleneck diagnosis.
+
 **Note:** Current standard schema-3 per-loop latency measurements record `chain_node_count` whether the stride was
 explicit or defaulted. Standalone TLB schema 4 records buffer-relative chain diagnostics such as
 requested/effective/actual
@@ -1091,10 +1556,11 @@ report.
 
 ## JSON Output Format
 
-Every direct mode and the CPU modes' supported sweeps can serialize their payload either to a real file or, with the exact
-raw target `--output -`, once to stdout. The stdout transport does not wrap the result or change its measurement schema;
-sweep stdout is one final envelope rather than a checkpoint stream. See [API.md](API.md) for stream handling,
-process-status checks, current schema acceptance, and the transport support matrix.
+Every result-producing direct mode and the CPU modes' supported sweeps can serialize their payload either to a real file
+or, with the exact raw target `--output -`, once to stdout. The stdout transport does not wrap the result or change its
+measurement schema; sweep stdout is one final envelope rather than a checkpoint stream. LLM file targets checkpoint
+each terminal scenario measurement and command terminal, while LLM stdout emits one final schema 1 document. See
+[API.md](API.md) for stream handling, process-status checks, current schema acceptance, and the transport support matrix.
 
 ### Standard benchmark JSON shape (schema 3)
 
@@ -1119,8 +1585,8 @@ process-status checks, current schema acceptance, and the transport support matr
   "loops": [ ... ],
   "main_memory": { ... },
   "cache": { ... },
-  "timestamp": "2026-03-09T14:57:56Z",
-  "version": "0.62.0"
+  "timestamp": "YYYY-MM-DDTHH:MM:SSZ",
+  "version": "0.63.0"
 }
 ```
 
@@ -1138,9 +1604,9 @@ Bandwidth QoS metadata includes created workers plus per-worker success/failure 
 outcome. These fields describe a best-effort scheduler hint, never hard core pinning.
 
 The bundled standard-memory examples are kept compatible with the current producer. They sanity-check the current
-standard result locally, including exact top-level `version: "0.62.0"` in this release, and read current schema-3 metric
-paths directly; they are not a compatibility library. Released standard schema 2, unversioned historical standard JSON
-layouts, and every other explicit standard version are intentionally unsupported inputs.
+standard result locally, including exact top-level `version: "0.63.0"` for the current producer, and read current
+schema-3 metric paths directly; they are not a compatibility library. Released standard schema 2, unversioned
+historical standard JSON layouts, and every other explicit standard version are intentionally unsupported inputs.
 
 ### Pattern benchmark JSON shape
 
@@ -1266,8 +1732,8 @@ arrays:
 
 ```json
 {
-  "software_version": "0.62.0",
-  "version": "0.62.0",
+  "software_version": "0.63.0",
+  "version": "0.63.0",
   "timestamp": "...",
   "schema_version": 1,
   "mode": "gpu_bandwidth",
@@ -1360,6 +1826,197 @@ records `"-"` while `--output ./-` remains an ordinary file. Initialized `unsupp
 and retain their non-zero process status. A parser/config failure or backend-factory failure before result initialization
 leaves stdout empty. An observable terminal stdout write or flush failure returns failure without rewriting the already
 computed measurement status.
+
+### LLM memory-profile JSON shape
+
+LLM file and stdout output use the same separate top-level generic schema 1. It is not a standard benchmark payload and
+must be classified by `mode` and `schema_version`, then by the exact backend/phase/layout/methodology identity. The old
+unpublished CPU/step-specific schema-v1 shape has no compatibility aliases or fallback reader; schema 1 is intentionally
+re-frozen in this generic form without a version bump.
+
+This abbreviated structural selection shows CPU/decode/contiguous. Either paged phase populates the paged-only fields;
+either prefill layout instead populates `geometry.prefill` and uses null decode/crossover/weight-to-KV-read ratio
+fields. The paged-prefill methodology is `llm-memory-v1-cpu-prefill-paged`. A real document contains complete
+calibration, measurement, checksum, loop, checkpoint, environment, warning, and interpretation evidence in addition to
+the required generic sections.
+
+```json
+{
+  "schema_version": 1,
+  "mode": "llm_memory",
+  "backend": "cpu",
+  "phase": "decode",
+  "kv_layout": "contiguous",
+  "methodology_version": "llm-memory-v1-cpu-decode-contiguous",
+  "software": {
+    "version": "0.63.0",
+    "timestamp": "..."
+  },
+  "status": "complete",
+  "reason_code": "complete",
+  "results_complete": true,
+  "conclusions_valid": true,
+  "configuration": {
+    "argv": ["memory_benchmark", "--llm-memory", "...", "--output", "-"],
+    "resolved_sources": {
+      "backend": "default",
+      "phase": "default",
+      "kv_layout": "default"
+    }
+  },
+  "resolved_plan": {
+    "geometry": {
+      "decode": {"visible_context_tokens": 512},
+      "prefill": null
+    },
+    "layout": {
+      "kv_layout": "contiguous",
+      "kv_block_tokens": null,
+      "blocks_per_sequence": null,
+      "physical_blocks_per_layer": null,
+      "last_block_tokens": null,
+      "last_block_valid_bytes": null,
+      "block_table_entries": null,
+      "block_table_bytes": null,
+      "permutation_domain_uint64_hex": null,
+      "permutation_seed_uint64_decimal": null,
+      "permutation_algorithm_version": null,
+      "permutation_sha256": null
+    },
+    "resources": {
+      "weight_logical_bytes": "67108864",
+      "k_logical_bytes": "524288",
+      "v_logical_bytes": "524288",
+      "k_physical_length_bytes": "524288",
+      "v_physical_length_bytes": "524288",
+      "k_layout_padding_bytes": "0",
+      "v_layout_padding_bytes": "0",
+      "block_table_bytes": null
+    },
+    "component_identities": {
+      "logical_profile_version": "decode_steady_fixed_context",
+      "kv_layout_version": "contiguous_layer_batch_token_head_dimension",
+      "permutation_version": null,
+      "backend_executor_version": "llm-cpu-executor-v1-arm64-decode-contiguous",
+      "resource_abi_version": "llm-memory-descriptor-abi-v1",
+      "schedule_version": "worker-local-layer-order-no-per-layer-global-barrier",
+      "timer_policy_version": "synchronized-start-to-last-worker-completion-per-scenario-task",
+      "buffer_pattern_version": "llm-buffer-pattern-v1",
+      "write_pattern_version": "llm-kv-append-affine64-v1",
+      "checksum_pattern_version": "llm-read-checksum-v1",
+      "msl_revision": null,
+      "msl_source_sha256": null
+    }
+  },
+  "backend_evidence": {
+    "cpu": {},
+    "metal": null
+  },
+  "memory_budget": {},
+  "calibration": {},
+  "measurements": [],
+  "aggregates": {},
+  "interpretation": {}
+}
+```
+
+For a paged result, `configuration.kv_layout` is `"paged"`, `configuration.kv_block_tokens` is the explicit integer
+`G`, and `resolved_sources.kv_layout` records `"explicit"`. The `resolved_plan.layout` block populates `G`,
+`blocks_per_sequence = ceil(A/G)`, `physical_blocks_per_layer = B*ceil(A/G)`, terminal-token/byte counts, uint32 table
+entry/byte counts, permutation domain, resolved seed, algorithm version, and lowercase 64-hex SHA-256. The resource
+block reports full physical K/V lengths and their difference from logical K/V as layout padding. These are fixed-schema
+integers or canonical decimal strings according to the type rules below; they are not human-formatted sizes.
+
+Metal paged requests that terminate before table preparation retain admitted block geometry and table sizes, but use
+JSON null for the runtime permutation and combined layout identity. A complete paged result has materialized table
+evidence and therefore populates those fields.
+
+Schema 1 rules:
+
+- Canonical selectors are `backend: cpu|metal`, `phase: decode|prefill`, `kv_layout: contiguous|paged`,
+  `work_unit_kind: decode_step|prefill_operation`, and
+  `kv_write_kind: none|current_token_append|full_prompt_population`. All eight backend/phase/layout profiles are active;
+  CPU and Metal each support decode and prefill with contiguous or paged KV.
+- Methodology is always `llm-memory-v1-<backend>-<phase>-<layout>`. Active exact identities are
+  `llm-memory-v1-cpu-decode-contiguous`, `llm-memory-v1-cpu-decode-paged`,
+  `llm-memory-v1-cpu-prefill-contiguous`, `llm-memory-v1-cpu-prefill-paged`,
+  `llm-memory-v1-metal-decode-contiguous`, `llm-memory-v1-metal-decode-paged`,
+  `llm-memory-v1-metal-prefill-contiguous`, and `llm-memory-v1-metal-prefill-paged`.
+- `backend_evidence.cpu.prefill` is null for decode. Either prefill layout populates it with `cost_unit:
+  "worker-cost"`, one execution identity, descriptors per scenario/worker, and scenario-specific partition/scope
+  identities, decimal-string worker costs, minimum, maximum, and max-minus-min imbalance per work unit. Paged prefill
+  also populates `backend_evidence.cpu.paged`.
+- Run statuses are `not_started`, `complete`, `partial`, `interrupted`, `unsupported`, and `failed`. Measurement statuses are
+  `not_run`, `measured`, `interrupted`, `invalid`, and `failed`. Multiword status tokens use underscores; multiword
+  reason-code and duration-quality tokens use hyphens. `unsupported` is terminal, invalid for performance acceptance,
+  and never authorizes a backend fallback.
+- `resolved_plan.geometry.decode` and `.prefill`, the layout-specific scalars, and `backend_evidence.cpu`/`.metal` use
+  JSON null when not applicable. Applicable but absent scenario traffic is numeric zero or decimal-string `"0"`
+  according to the field's fixed type; it is never the string `"not_applicable"`.
+- Metal worker and worker-QoS fields are null and the corresponding applicability booleans are false. CPU retains
+  numeric requested/available/effective worker evidence.
+- Metal task validation uses the generic `kv_write_evaluated` and `kv_write_valid` keys under
+  `measurements[].execution.metal.validation`. Decode and prefill do not publish phase-specific aliases for that contract.
+- Schema/control indexes, validated small configuration values, and planned/completed work units are integer numbers.
+  Potentially large byte, capacity, block/table/lookup, token-visit, causal-pair, and FMA-term quantities are canonical
+  decimal strings even when their value is zero. UInt64 seeds are canonical decimal strings. Unavailable elapsed,
+  rate, ratio, and statistics values are null.
+- When a backend call throws before returning evidence for a measurement or excluded task, `execution.status` is
+  `unavailable`, the reason remains the runner-exception token, and missing lifecycle/QoS/checksum fields are null. A
+  `not_run` measurement's top-level successful/failed QoS-worker counts are likewise null rather than zero.
+- `memory_budget` reports canonical decimal-string `resource_rounding_bytes`, `transient_peak_bytes`,
+  `known_owned_peak_bytes`, and `admitted_budget_bytes` separately. Immutable logical/physical resource geometry stays
+  under `resolved_plan.resources`. Paged admission covers full physical K/V blocks, the table, page rounding, and the
+  table-validation transient before materialization. The available-memory sample and its derived admitted budget are
+  runtime evidence, not resource/execution/model/frozen-plan identity inputs; identical fixed-seed work keeps its
+  identity when only that sample changes. A non-empty JSON target also reserves checked storage for all
+  variable-length component/layout identities and the prefill execution, scenario, and scope identities; its preflight
+  and finalized-plan estimates cover the same identity set.
+- `measurements[]` preserves scenario/order/status/reason, frozen-plan identity, executor/checksum evidence, and these
+  fixed generic work-accounting fields:
+
+  ```text
+  work_unit_kind, planned_work_units, completed_work_units,
+  weight_read_bytes_per_work_unit, kv_read_bytes_per_work_unit,
+  kv_write_bytes_per_work_unit, kv_write_kind,
+  effective_model_payload_bytes_per_work_unit,
+  layout_metadata_lookup_count_per_work_unit,
+  layout_metadata_read_bytes_per_work_unit, accounted_bytes_per_work_unit,
+  planned_effective_model_payload_bytes, completed_effective_model_payload_bytes,
+  planned_layout_metadata_lookup_count, completed_layout_metadata_lookup_count,
+  planned_layout_metadata_read_bytes, completed_layout_metadata_read_bytes,
+  planned_task_accounted_bytes, completed_task_accounted_bytes,
+  synthetic_work_unit_latency_seconds,
+  synthetic_memory_work_units_per_second,
+  effective_model_payload_gb_s
+  ```
+
+  Measurement checksum evidence uses phase-neutral `write_pattern_version` and `checksum_pattern_version` keys. The
+  unpublished schema has no decode-specific append/read aliases.
+
+  Contiguous records and paged `weights_only` report metadata lookup/read additions as decimal-string zero; non-weights
+  decode scenarios use `kv_write_kind: "current_token_append"`; prefill KV-bearing scenarios use
+  `"full_prompt_population"`. Paged KV-bearing decode reports `L * B * (2 * N + 1)` table lookups. Paged prefill
+  reports `L * B * (N + 2 * M)`, where `M = sum(ceil(e_j/G))`; both use four bytes per lookup. These bytes contribute to
+  `accounted_bytes_per_work_unit`, not to effective-model-payload GB/s. Derived rates are non-null only for a successful
+  measured record.
+- `aggregates` contains measured-only work-unit latency, work-unit rate, and effective model-payload GB/s values,
+  headlines, statistics, and stability quality.
+- `quality_warnings` combines runner high-CV/order tokens with evidence-backed environment, QoS, cache-dominance, and
+  per-scenario duration-quality tokens; warning presence never causes measurement filtering or retry.
+- Traffic classification tokens are `weight_payload_dominant`, `near_crossover`, and
+  `kv_read_payload_dominant`. `near_crossover` means exact equality of weight and KV-read payload, not a tolerance band.
+- The authoritative acceptance predicate requires `mode == "llm_memory"`, `schema_version == 1`, backend/phase/layout
+  equal to the requested profile, `methodology_version` equal to the exact derived identity,
+  `status == "complete"`, `results_complete == true`, `conclusions_valid == true`, and every planned measurement to be
+  `measured`. Count one can be complete but has invalid comparative conclusions because its cyclic scenario positions
+  are not balanced. Paged comparisons additionally require identical `kv_block_tokens`, physical geometry,
+  permutation identity, and component identities.
+
+LLM file output checkpoints after every terminal scenario measurement and at command terminal. Exact `--output -`
+retains those logical transitions without building intermediate payloads and emits one final document. A started task
+uses completion-wins interruption; remaining slots become interrupted/null. A real backend-task, timer, checksum, or
+checkpoint failure wins over interruption, and a failed file checkpoint is not retried.
 
 ### Core-to-core JSON shape
 
@@ -1481,8 +2138,8 @@ returns only, excludes QoS and pilot outcomes, and does not prove physical place
     }
   ],
   "execution_time_sec": 123.4,
-  "timestamp": "2026-04-29T12:00:00Z",
-  "version": "0.62.0"
+  "timestamp": "YYYY-MM-DDTHH:MM:SSZ",
+  "version": "0.63.0"
 }
 ```
 
@@ -1762,6 +2419,12 @@ memory_benchmark --benchmark --only-bandwidth --buffer-size 512 --count 5 --outp
 
 memory_benchmark --gpu-bandwidth --buffer-size 512 --count 3 --seed 42 --output - \
   >gpu_bandwidth.json 2>gpu_bandwidth.log
+
+memory_benchmark --llm-memory --weight-size-mb 64 --layers 4 \
+  --query-heads 8 --kv-heads 2 --head-dim 64 --context-tokens 512 \
+  --kv-layout paged --kv-block-tokens 16 \
+  --iterations 1 --count 3 --seed 42 --output - \
+  >llm_memory.json 2>llm_memory.log
 ```
 
 ```bash
@@ -1828,6 +2491,29 @@ jq -e 'select(.mode == "gpu_bandwidth" and .schema_version == 1 and
 
 # Inspect GPU exact payload, pass count, timing, and validation status
 jq '.measurements[] | {operation, status, value_gb_s, passes: .work_plan.passes, exact_payload_bytes: .work_plan.exact_payload_bytes, gpu_elapsed_seconds: .timed.gpu_elapsed_seconds, validation_status: .validation.validation_status}' gpu_bandwidth.json
+
+# Reject incomplete, identity-mismatched, or position-unbalanced active-profile LLM schema 1 output
+jq -e 'select(.mode == "llm_memory" and .schema_version == 1 and
+              .backend == "cpu" and .phase == "decode" and
+              .kv_layout == "paged" and
+              .methodology_version == "llm-memory-v1-cpu-decode-paged" and
+              .resolved_plan.layout.kv_block_tokens == 16 and
+              (.resolved_plan.layout.permutation_sha256 |
+               type == "string" and test("^[0-9a-f]{64}$")) and
+              .status == "complete" and .results_complete == true and
+              .conclusions_valid == true and
+              ([.measurements[] | select(.status != "measured")] | length) == 0)' llm_memory.json
+
+# Inspect scenario status, generic work accounting, work-unit latency, and effective model-payload GB/s
+jq '.measurements[] | {scenario, status, reason_code,
+                      work_unit_kind,
+                      planned_work_units,
+                      planned_task_accounted_bytes,
+                      layout_metadata_lookup_count_per_work_unit,
+                      layout_metadata_read_bytes_per_work_unit,
+                      synthetic_work_unit_latency_seconds,
+                      effective_model_payload_gb_s,
+                      checksum_valid: .checksum.checksum_valid}' llm_memory.json
 ```
 
 ---
@@ -1841,8 +2527,8 @@ python3 -m pip install matplotlib numpy
 ```
 
 The bundled standard-memory scripts are kept in lockstep with the current producer. Each performs only the local
-version, completion, and field sanity checks needed by its current schema-3 metric paths. For version 0.62.0, the check
-requires top-level `version: "0.62.0"`, standard mode/schema identity, complete/valid result state, and a string output
+version, completion, and field sanity checks needed by its current schema-3 metric paths. For version 0.63.0, the check
+requires top-level `version: "0.63.0"`, standard mode/schema identity, complete/valid result state, and a string output
 target before the selected metric path is read. These scripts are examples, not a versioned compatibility layer:
 standard schema 2, unversioned historical standard JSON, other modes, and other standard versions are unsupported. The
 separately governed `plot_analyzetlb.py` retains its own TLB-history policy. Standard-memory plotters do not accept GPU
@@ -1877,7 +2563,7 @@ Both JSON entry paths require explicit current standard schema-3 inputs:
 ```bash
 python3 script-examples/plot_M4vsM5_benchmark_comparison.py \
   --m4-file current-m4.json --m5-file current-m5.json
-python3 script-examples/plot_bechmark-memory-latency-hierarcy.py \
+python3 script-examples/plot_benchmark-memory-latency-hierarchy.py \
   --file current-standard.json
 ```
 
@@ -1964,6 +2650,16 @@ not a stability baseline for current pattern schema 3 and should not be compared
   SHA-256, resource modes, and fixed work-plan identity. Treat automatic-policy and fixed-work cohorts separately.
 - Keep GPU reference runs at nominal thermal state with Low Power Mode off and minimal competing GPU work. A separate
   counter capture is useful audit evidence, but its instrumented timing is not the production headline.
+- For LLM comparisons, require identical schema plus exact backend/phase/layout/methodology and component identities,
+  model and phase geometry, batch, requested/effective CPU workers, fixed or automatic policy, frozen work-plan
+  identity, seed, hardware, software, and environment. Paged comparisons also require identical block size, physical
+  geometry, table/permutation identity, and padding. Prefer a count divisible by three and require every planned
+  measurement to be measured plus `conclusions_valid: true` for comparative conclusions.
+- Size contiguous LLM experiments from `W + K_mapping + V_mapping`; size paged experiments from `W + K_physical +
+  V_physical + block_table`, then include the recorded transient, auxiliary, and page-rounded peak before launch. A
+  non-empty JSON target also reserves the recorded DOM/serialization peak in orchestration auxiliary bytes. Start with
+  a bounded small command to verify the pipeline, then use the intended full model geometry; do not substitute a
+  recycled small buffer for a large-model claim.
 
 ### Common pitfalls
 
@@ -1982,6 +2678,20 @@ not a stability baseline for current pattern schema 3 and should not be compared
 - **Treating GPU copy as one-way or CPU↔GPU bandwidth**: its exact numerator counts both the buffer read and write.
 - **Comparing CPU and GPU GB/s directly**: the shared unit and 2× copy convention do not align timing, kernels, cache,
   resource mode, dispatch, or validation semantics.
+- **Calling an LLM synthetic work unit a token or model throughput**: the work unit is a decode step or full-prompt
+  prefill operation, while the
+  profile omits Transformer compute, model/framework execution, ANE work, GPU work outside the defined Metal
+  kernels, and compute-memory overlap.
+- **Treating LLM crossover/classification as a hardware bottleneck**: it compares exact weight and KV-read logical
+  payload only; equality is the complete `near_crossover` rule.
+- **Adding paged table bytes to effective-model-payload GB/s**: table loads are timed and reported as metadata, but the
+  numerator remains exact logical W/K/V payload.
+- **Treating paged layout as a serving allocator**: the table is generated once and frozen; there is no runtime page
+  allocation, prefix sharing, eviction, copy-on-write, or sliding window.
+- **Splitting mixed time into independent weight and KV bandwidths**: mixed is one layer-interleaved timed workload;
+  use weights-only and KV-only as the component baselines.
+- **Assuming full-size LLM mappings prove DRAM traffic**: ordinary cacheable mappings and large working sets remain
+  cache-inclusive, and the schema exposes no physical memory-traffic counter.
 
 ---
 
@@ -2023,6 +2733,38 @@ interruption deliberately returns process success while schema conclusions remai
 may remain valid and numeric because completion wins; not-started slots are interrupted/null. Never accept a result only
 because the process exit code was zero.
 
+### LLM mode fails before producing JSON
+
+Parser/configuration errors, one-step payload-limit failures, work-plan/JSON-output-peak/memory-budget rejection, timer
+creation, and weight/K/V mapping, initialization, or descriptor-preparation failures occur before runner-result
+initialization. A stdout target is intentionally empty on these paths; use the process status and stderr reason. Check
+that all common model options and the selected phase's geometry options are present, query heads are divisible by KV
+heads, and each scenario fits the 64 GiB task-accounted-byte limit. For paged layout, also require exactly one
+positive power-of-two
+`--kv-block-tokens` value at or below `UINT32_MAX`; for contiguous layout, remove that option. Confirm that the
+page-rounded weight, physical K/V, optional table, transient, and auxiliary peak fits the reported available-memory
+policy.
+
+### LLM result is incomplete, invalid, or not comparable
+
+Check top-level backend/phase/layout/methodology, status/reason, `results_complete`, `conclusions_valid`, scenario-order
+balance, counters, every
+measurement's status/reason, checksum evidence, duration quality, QoS, and environment warnings. A started task may
+finish after an interrupt, but remaining slots are interrupted/null. Count one may complete all three scenarios yet
+remain unsuitable for balanced comparative conclusions. High CV, cache-dominant working sets, or non-nominal thermal/
+power state do not turn a measurement into zero; they remain explicit quality warnings.
+
+For paged results, also inspect the permutation identity/hash, physical K/V lengths, layout padding, table protection,
+lookup/metadata counts, phase-specific K/V-write post-validation, and padding-canary result. Decode validates the
+current-token write; prefill validates the full-prompt write against the final operation ordinal. A different block
+size or permutation is a different comparison cohort even when logical model geometry is unchanged.
+
+If an otherwise identical command fails memory admission only after a non-empty `--output` target is added, include the
+conservative JSON DOM/serialization peak in the diagnosis. It scales with planned measurement records, retained
+calibration attempts, effective worker checksum trees, and their copied scenario-plan identities. For prefill it also
+scales with the scenario-specific ownership-scope identity set, including layer/batch scopes; reduce the
+model/count/worker demand or free memory rather than treating the reserve as measured payload.
+
 ### Script cannot find benchmark binary
 
 The script first uses the repository-root `memory_benchmark` when it is executable, then tries `memory_benchmark` from
@@ -2044,6 +2786,8 @@ Make sure you are passing `script-examples/final_output.txt` generated by the la
 - [CORE_TO_CORE_WHITEPAPER.md](CORE_TO_CORE_WHITEPAPER.md) - Core-to-Core Cache-Line Handoff Latency Benchmark: methodology, assembly protocol, scheduler-hint scenarios, and JSON contract
 - [GPU_BANDWIDTH_WHITEPAPER.md](GPU_BANDWIDTH_WHITEPAPER.md) - Metal GPU memory-bandwidth methodology, validation,
   schema 1, capability boundaries, and maintenance policy
+- [LLM_MEMORY_PROFILE_WHITEPAPER.md](LLM_MEMORY_PROFILE_WHITEPAPER.md) - synthetic CPU and Metal
+  decode/prefill methodology for both layouts, execution, schema 1, validation, and interpretation limits
 - [TECHNICAL_SPECIFICATION.md](TECHNICAL_SPECIFICATION.md) - architecture and implementation details
 - [CHANGELOG.md](../CHANGELOG.md) - release history
 
@@ -2062,7 +2806,3 @@ Command help:
 ```bash
 memory_benchmark -h
 ```
-
----
-
-**Last Updated**: 2026-08-21

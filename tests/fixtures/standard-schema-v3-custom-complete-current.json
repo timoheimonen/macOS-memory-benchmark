@@ -5,7 +5,7 @@
     "bandwidth_calibration_window_min_seconds": 0.1,
     "bandwidth_work_policy": "automatic-duration-calibration",
     "benchmark_schema_version": 3,
-    "benchmark_seed": "2566173319416237132",
+    "benchmark_seed": "11492708862814734378",
     "benchmark_seed_encoding": "uint64-decimal-string",
     "benchmark_seed_source": "generated",
     "buffer_size_bytes": 0,
@@ -51,7 +51,7 @@
     "use_non_cacheable": false,
     "warmup_semantics": "steady-state-warm-memory"
   },
-  "execution_time_sec": 0.5582331666666667,
+  "execution_time_sec": 0.4943049166666667,
   "status": "complete",
   "status_reason": "",
   "planned_loops": 1,
@@ -67,37 +67,37 @@
       "completed_phases": 1,
       "measurements": {
         "custom_latency": {
-          "access_count": 348617280,
+          "access_count": 314689152,
           "automatic_calibration": true,
           "benchmark_loop_index": 0,
           "buffer_size_bytes": 16384,
           "calibration_corrections": 1,
           "chain_node_count": 64,
-          "complete_chain_cycles": 5447145,
+          "complete_chain_cycles": 4917018,
           "created_workers": 1,
           "duration_quality": "within-target-window",
           "duration_within_target": true,
           "effective_threads": 1,
-          "elapsed_seconds": 0.24536345833333334,
+          "elapsed_seconds": 0.224528375,
           "exact_payload_bytes": 0,
           "operation": "latency",
           "operation_order_position": 0,
           "passes": 0,
           "phase_order_position": 0,
-          "pilot_elapsed_seconds": 1.6666666666666665e-07,
+          "pilot_elapsed_seconds": 2.5e-07,
           "qos_failed_workers": 0,
           "qos_outcome": "main-thread-qos-applied",
           "qos_successful_workers": 1,
           "reason": "",
           "requested_threads": 1,
           "samples_ns": [
-            0.696527076913686
+            0.6893617567937856
           ],
-          "seed": "6196765447525886210",
+          "seed": "3610589815319047394",
           "seed_encoding": "uint64-decimal-string",
           "status": "measured",
           "target": "custom",
-          "value": 0.7038189797514722,
+          "value": 0.7134925801319011,
           "work_policy": "automatic-duration-calibration",
           "worker_startup_failed": false
         }
@@ -198,37 +198,37 @@
           "measured_loop_count": 1,
           "measurements": [
             {
-              "access_count": 348617280,
+              "access_count": 314689152,
               "automatic_calibration": true,
               "benchmark_loop_index": 0,
               "buffer_size_bytes": 16384,
               "calibration_corrections": 1,
               "chain_node_count": 64,
-              "complete_chain_cycles": 5447145,
+              "complete_chain_cycles": 4917018,
               "created_workers": 1,
               "duration_quality": "within-target-window",
               "duration_within_target": true,
               "effective_threads": 1,
-              "elapsed_seconds": 0.24536345833333334,
+              "elapsed_seconds": 0.224528375,
               "exact_payload_bytes": 0,
               "operation": "latency",
               "operation_order_position": 0,
               "passes": 0,
               "phase_order_position": 0,
-              "pilot_elapsed_seconds": 1.6666666666666665e-07,
+              "pilot_elapsed_seconds": 2.5e-07,
               "qos_failed_workers": 0,
               "qos_outcome": "main-thread-qos-applied",
               "qos_successful_workers": 1,
               "reason": "",
               "requested_threads": 1,
               "samples_ns": [
-                0.696527076913686
+                0.6893617567937856
               ],
-              "seed": "6196765447525886210",
+              "seed": "3610589815319047394",
               "seed_encoding": "uint64-decimal-string",
               "status": "measured",
               "target": "custom",
-              "value": 0.7038189797514722,
+              "value": 0.7134925801319011,
               "work_policy": "automatic-duration-calibration",
               "worker_startup_failed": false
             }
@@ -243,19 +243,19 @@
             ],
             "semantics": "pooled-separate-sample-window-distribution",
             "statistics": {
-              "average": 0.696527076913686,
+              "average": 0.6893617567937856,
               "coefficient_of_variation_pct": 0.0,
-              "max": 0.696527076913686,
-              "median": 0.696527076913686,
+              "max": 0.6893617567937856,
+              "median": 0.6893617567937856,
               "median_absolute_deviation": 0.0,
-              "min": 0.696527076913686,
-              "p90": 0.696527076913686,
-              "p95": 0.696527076913686,
-              "p99": 0.696527076913686,
+              "min": 0.6893617567937856,
+              "p90": 0.6893617567937856,
+              "p95": 0.6893617567937856,
+              "p99": 0.6893617567937856,
               "stddev": 0.0
             },
             "values_ns": [
-              0.696527076913686
+              0.6893617567937856
             ]
           },
           "quality": {
@@ -267,27 +267,27 @@
           },
           "requested_loop_count": 1,
           "statistics": {
-            "average": 0.7038189797514722,
+            "average": 0.7134925801319011,
             "coefficient_of_variation_pct": 0.0,
-            "max": 0.7038189797514722,
-            "median": 0.7038189797514722,
+            "max": 0.7134925801319011,
+            "median": 0.7134925801319011,
             "median_absolute_deviation": 0.0,
-            "min": 0.7038189797514722,
-            "p90": 0.7038189797514722,
-            "p95": 0.7038189797514722,
-            "p99": 0.7038189797514722,
+            "min": 0.7134925801319011,
+            "p90": 0.7134925801319011,
+            "p95": 0.7134925801319011,
+            "p99": 0.7134925801319011,
             "stddev": 0.0
           },
           "status": "measured",
           "unit": "ns",
-          "value": 0.7038189797514722,
+          "value": 0.7134925801319011,
           "values": [
-            0.7038189797514722
+            0.7134925801319011
           ]
         }
       }
     }
   },
-  "timestamp": "2026-08-21T08:14:28Z",
-  "version": "0.62.0"
+  "timestamp": "2026-08-21T16:30:33Z",
+  "version": "0.63.0"
 }

@@ -18,22 +18,25 @@
  * @file main.cpp
  * @brief Main entry point for the memory benchmark application
  *
- * This file contains the main program logic that orchestrates the execution
- * of memory benchmarks. It handles configuration parsing, mode-specific buffer
- * preparation, benchmark execution, and results output in both console and JSON formats.
+ * This file contains the main program logic that selects and dispatches memory
+ * benchmark modes. Result-producing modes handle configuration parsing,
+ * mode-specific buffer preparation, benchmark execution, and console/JSON
+ * output here. The LLM-memory path owns its dedicated production runner and
+ * schema-v1 transport behind the standalone command boundary.
  *
- * The program supports five benchmark modes:
+ * The program supports six benchmark modes:
  * - Standard benchmarks: Memory bandwidth and latency tests for different cache levels
  * - Pattern benchmarks: Access pattern-specific tests (forward, reverse, strided, random)
  * - TLB analysis: Page-native paired locality measurements and boundary analysis
  * - Core-to-core analysis: Best-effort inter-core round-trip latency measurements
  * - GPU bandwidth: Standalone Metal GPU memory read/write/copy measurements
+ * - LLM memory profile: Standalone CPU/Metal synthetic decode/prefill memory workloads with contiguous or paged KV
  *
  * Standard, pattern, TLB, and core-to-core modes also support validated parameter sweeps.
- * GPU bandwidth is intentionally standalone and does not participate in sweeps.
+ * GPU bandwidth and the LLM memory profile are intentionally standalone and do
+ * not participate in sweeps.
  *
  * @author Timo Heimonen
- * @date 2026
  */
 
 #include <cstdlib>  // Exit codes
@@ -59,6 +62,7 @@
 #include "core/signal/signal_handler.h"
 #include "core/system/benchmark_qos.h"
 #include "gpu_bandwidth/gpu_bandwidth.h"
+#include "llm_memory/llm_memory.h"
 
 namespace {
 
@@ -113,12 +117,12 @@ int build_and_write_final_json(JsonOutputSession& session,
 /**
  * @brief Main entry point for the memory benchmark application
  *
- * This function orchestrates the complete benchmark workflow:
- * 1. Parses and validates command-line arguments
- * 2. Configures system settings (QoS, cache parameters)
- * 3. Prepares benchmark buffers using mode-appropriate strategy
- * 4. Executes the requested standard, pattern, TLB, core-to-core, or GPU mode
- * 5. Outputs results to the human console and optional JSON file/stdout target
+ * This function selects a mode and parses and validates its command-line
+ * arguments. For result-producing modes, it then configures system settings,
+ * prepares any required buffers, executes the requested benchmark, and emits
+ * human and optional JSON results. The LLM-memory path performs its own
+ * preflight, full-size resource preparation, execution, console rendering,
+ * and JSON transport.
  *
  * The program supports multiple execution modes:
  * - Bandwidth-only measurements (--only-bandwidth)
@@ -127,6 +131,7 @@ int build_and_write_final_json(JsonOutputSession& session,
  * - Standalone TLB analysis (--analyze-tlb)
  * - Standalone core-to-core analysis (--analyze-core2core)
  * - Standalone GPU memory bandwidth (--gpu-bandwidth)
+ * - Standalone LLM decode/prefill memory profile (--llm-memory)
  * - Validated multi-configuration runs (--sweep)
  * - Multiple loop iterations for statistical analysis (--count)
  *
@@ -141,9 +146,9 @@ int build_and_write_final_json(JsonOutputSession& session,
  *         failure. An initialized mode may still emit inspectable terminal
  *         evidence before returning failure.
  *
- * @note Standard, pattern, TLB, sweep, and GPU entry paths make a best-effort
- *       QOS_CLASS_USER_INTERACTIVE request for the command thread. Core-to-core
- *       mode instead requests QoS independently for its worker threads.
+ * @note Standard, pattern, TLB, sweep, GPU, and LLM-memory entry paths make a
+ *       best-effort QOS_CLASS_USER_INTERACTIVE request for the command thread.
+ *       Core-to-core mode instead requests QoS independently for its workers.
  * @note All allocated buffers are automatically freed when going out of scope
  * @note Standard mode uses per-phase allocation; pattern mode owns one shared
  *       source/destination pair for the command lifetime.
@@ -165,6 +170,9 @@ int main(int argc, char *argv[]) {
                      mode_selection.selected_options[1])
               << std::endl;
     return EXIT_FAILURE;
+  }
+  if (mode_selection.mode == PrimaryBenchmarkMode::LlmMemory) {
+    return run_llm_memory_mode(argc, argv);
   }
   if (mode_selection.mode == PrimaryBenchmarkMode::GpuBandwidth) {
     return run_gpu_bandwidth_mode(argc, argv);

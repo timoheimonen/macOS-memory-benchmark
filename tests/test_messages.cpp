@@ -38,6 +38,17 @@ void expect_exact_messages(const std::vector<MessageCase>& cases) {
   }
 }
 
+void expect_capability_based_llm_metal_status(const std::string& usage) {
+  constexpr const char* forbidden_phrases[] = {
+      "Apple7/M1", "M4 evidence", "M5", "validation remains pending",
+      "baseline smoke", "cross-family", "device matrix", "experimental",
+      "preview"};
+  for (const char* phrase : forbidden_phrases) {
+    SCOPED_TRACE(phrase);
+    EXPECT_EQ(usage.find(phrase), std::string::npos);
+  }
+}
+
 }  // namespace
 
 TEST(MessagesFormattingTest, LinearHelpersHaveExactOutput) {
@@ -191,7 +202,356 @@ TEST(MessagesErrorTest, ErrorAnalyzeTlbMustBeUsedAlone) {
 
 TEST(MessagesErrorTest, ErrorSeedRequiresEverySupportedMode) {
   EXPECT_EQ(Messages::error_seed_requires_supported_mode(),
-            "--seed requires --benchmark, --patterns, --analyze-tlb, or --gpu-bandwidth");
+            "--seed requires --benchmark, --patterns, --analyze-tlb, "
+            "--gpu-bandwidth, or --llm-memory");
+}
+
+TEST(MessagesTest, LlmMemoryCliMessagesHaveExactOutput) {
+  const std::string expected_usage =
+      "Usage: memory_benchmark --llm-memory [options]\n"
+      "Options for standalone CPU/Metal synthetic LLM memory mode:\n"
+      "  -M, --llm-memory       Select the memory-only LLM profile.\n"
+      "      --llm-memory-backend <cpu|metal>\n"
+      "                          Execution backend (default: cpu). Metal accepts both phases\n"
+      "                          with contiguous or paged KV. Capability admission requires a\n"
+      "                          default unified-memory Apple7-or-later device, Tier 2 argument\n"
+      "                          buffers, and maxBufferLength >= 256 MiB. The selected MSL 2.3\n"
+      "                          source, pipelines, and layout probe must succeed. Capability\n"
+      "                          absence is unsupported; compiler, pipeline, resource, or task\n"
+      "                          failure is terminal failed/invalid; no CPU fallback is performed.\n"
+      "      --phase <decode|prefill>\n"
+      "                          Workload phase (default: decode). CPU and Metal support both phases.\n"
+      "      --weight-size-mb <MiB>\n"
+      "                          Required active weight bytes per work unit, in MiB.\n"
+      "      --layers <count>    Required transformer layer count.\n"
+      "      --query-heads <count>\n"
+      "                          Required query-head count; must be at least as large as KV heads\n"
+      "                          and divisible by them.\n"
+      "      --kv-heads <count> Required physical KV-head count.\n"
+      "      --head-dim <count> Required elements per K or V head vector.\n"
+      "      --kv-element-bytes <1|2|4>\n"
+      "                          KV element width (default: " +
+      std::to_string(Constants::LLM_DEFAULT_KV_ELEMENT_BYTES) +
+      " bytes).\n"
+      "      --context-tokens <count>\n"
+      "                          Required only for decode; fixed visible context including\n"
+      "                          the current token. Rejected for prefill.\n"
+      "      --prompt-tokens <count>\n"
+      "                          Required only for prefill; full prompt length P, P >= 1.\n"
+      "                          Rejected for decode.\n"
+      "      --attention-query-tile-tokens <count>\n"
+      "                          Required only for prefill; query tile Q, 1 <= Q <= P.\n"
+      "                          Rejected for decode.\n"
+      "      --kv-layout <contiguous|paged>\n"
+      "                          KV storage layout (default: contiguous). CPU and Metal support both layouts.\n"
+      "      --kv-block-tokens <count>\n"
+      "                          Required only for paged KV; must be a positive power of two\n"
+      "                          no greater than UINT32_MAX; it may exceed the phase sequence length.\n"
+      "                          Rejected for contiguous KV.\n"
+      "      --batch-size <count>\n"
+      "                          Batch sequences per work unit (default: " +
+      std::to_string(Constants::LLM_DEFAULT_BATCH_SIZE) +
+      ").\n"
+      "  -t, --threads <count>  Requested CPU workers; detected workers are used when omitted.\n"
+      "                          Rejected for Metal.\n"
+      "  -i, --iterations <count>\n"
+      "                          Exact work units per scenario measurement. A work unit is one\n"
+      "                          decode step or full-prompt prefill operation. When omitted, each\n"
+      "                          scenario calibrates toward 150 ms in a\n"
+      "                          100-250 ms window.\n"
+      "  -r, --count <count>    Cyclic weights/KV/mixed loops (default: " +
+      std::to_string(Constants::LLM_DEFAULT_LOOP_COUNT) +
+      ").\n"
+      "      --seed <uint64>    Reproducible base seed; generated once when omitted.\n"
+      "  -o, --output <target>  JSON schema 1 target; exact - writes one final document to\n"
+      "                          stdout and routes human output to stderr. Every other non-empty\n"
+      "                          target is a file with atomic scenario and terminal checkpoints.\n"
+      "                          An empty value disables JSON for this direct command.\n"
+      "  -h, --help             Show this LLM-mode help and exit.\n"
+      "This profile models CPU or Metal memory traffic only: it performs no Transformer math and\n"
+      "does not report inference tokens/s. Effective model payload is not physical DRAM traffic.\n";
+
+  const std::vector<MessageCase> cases = {
+      {"mode isolation", Messages::error_llm_memory_must_be_used_alone(),
+       "--llm-memory requires --weight-size-mb <MiB>, --layers <count>, "
+       "--query-heads <count>, --kv-heads <count>, --head-dim <count>, and "
+       "phase-specific token geometry; it allows only optional "
+       "--llm-memory-backend <cpu|metal>, --phase <decode|prefill>, "
+       "--context-tokens <count>, "
+       "--prompt-tokens <count>, --attention-query-tile-tokens <count>, "
+       "--kv-element-bytes <1|2|4>, --kv-layout <contiguous|paged>, "
+       "--kv-block-tokens <count>, --batch-size <count>, "
+       "-t/--threads <count>, -i/--iterations <count>, "
+       "-r/--count <count>, --seed <uint64>, -o/--output <target>, and "
+       "-h/--help (no other options allowed)"},
+      {"required option",
+       Messages::error_llm_memory_missing_required_option("--layers"),
+       "Missing required --llm-memory option: --layers"},
+      {"config reason",
+       Messages::error_llm_memory_config_invalid(
+           "query-heads-not-divisible-by-kv-heads"),
+       "Invalid --llm-memory configuration "
+       "(reason_code=query-heads-not-divisible-by-kv-heads)"},
+      {"iteration limit",
+       Messages::error_llm_memory_iterations_exceed_limit(5, 4),
+       "LLM memory iterations exceed the exact-work guardrail "
+       "(requested 5, maximum 4)"},
+      {"runtime failure",
+       Messages::error_llm_memory_run_failed("checksum-mismatch"),
+       "Synthetic LLM memory profile failed "
+       "(reason_code=checksum-mismatch)"},
+      {"paged table protection",
+       Messages::error_llm_paged_table_protection_failed(),
+       "Failed to make the paged KV block table read-only"},
+      {"positive integer", Messages::llm_memory_reason_positive_integer(),
+       "must be a positive integer"},
+      {"backend", Messages::llm_memory_reason_backend(),
+       "must be exactly cpu or metal"},
+      {"KV width", Messages::llm_memory_reason_kv_element_bytes(),
+       "must be exactly 1, 2, or 4"},
+      {"phase", Messages::llm_memory_reason_phase(),
+       "must be exactly decode or prefill"},
+      {"KV layout", Messages::llm_memory_reason_kv_layout(),
+       "must be exactly contiguous or paged"},
+      {"platform size", Messages::llm_memory_reason_platform_size_range(),
+       "out of range for a platform size"},
+      {"usage", Messages::llm_memory_usage_options("memory_benchmark"),
+       expected_usage},
+      {"command name", Messages::llm_memory_command_name(),
+       "LLM memory profile"},
+      {"report header",
+       Messages::report_llm_memory_header(
+           "cpu", "decode", "decode_step", "contiguous"),
+       "Synthetic LLM memory profile (backend=cpu, phase=decode, "
+       "work_unit=decode_step, kv_layout=contiguous, warm/cacheable)"},
+      {"Metal backend",
+       Messages::report_llm_memory_metal_backend(
+           "Fake Apple GPU", std::numeric_limits<uint64_t>::max(), true,
+           false, true, 4294967296ULL, 3221225472ULL),
+       "  Metal device: name=Fake Apple GPU, "
+       "registry_id=18446744073709551615\n"
+       "  Metal capabilities: apple7=true, unified=false, tier2=true\n"
+       "  Metal limits: max_buffer_length=4294967296 bytes, "
+       "recommended_working_set=3221225472 bytes"},
+      {"Metal resources",
+       Messages::report_llm_memory_metal_resources(
+           2, 3, 4, 268435456, 8192, 805306368, 1073741824,
+           2147483648ULL),
+       "  Metal segments: weights=2, K=3, V=4, capacity=268435456 bytes\n"
+       "  Metal argument buffer: encoded_length=8192 bytes\n"
+       "  Metal memory: committed=805306368 bytes, "
+       "known_peak=1073741824 bytes, admitted_budget=2147483648 bytes"},
+      {"Metal valid task",
+       Messages::report_llm_memory_metal_task(
+           "mixed", "llm_decode_contiguous_v1", 8, 64, true, true,
+           0.00125, true, true, true, true, true, true, true, true),
+       "  Metal task: scenario=mixed, pipeline=llm_decode_contiguous_v1, "
+       "threadgroups=8, threads_per_threadgroup=64\n"
+       "  Metal timing: gpu_elapsed_seconds=0.001250000\n"
+       "  Metal validation: checksum=valid, kv_write=valid, canary=valid"},
+      {"Metal grid",
+       Messages::report_llm_memory_metal_grid(6, 3, 1596, 1600, 4),
+       "  Metal owner grid: owner_count=6, "
+       "owner_ordinals_per_threadgroup=3, "
+       "cost_unit=actual-threadgroup-cost\n"
+       "  Metal threadgroup accounted bytes: minimum=1596, maximum=1600, "
+       "imbalance=4"},
+      {"Metal invalid task without canary",
+       Messages::report_llm_memory_metal_task(
+           "kv_only", "llm_decode_contiguous_v1", 1, 32, true, true, 0.5,
+           true, false, true, true, false, false, false, true),
+       "  Metal task: scenario=kv_only, pipeline=llm_decode_contiguous_v1, "
+       "threadgroups=1, threads_per_threadgroup=32\n"
+       "  Metal timing: gpu_elapsed_seconds=0.500000000\n"
+       "  Metal validation: checksum=invalid, kv_write=invalid, "
+       "canary=not-applicable"},
+      {"Metal weights task without KV write",
+       Messages::report_llm_memory_metal_task(
+           "weights_only", "llm_decode_contiguous_v1", 1, 32, true, true,
+           0.25, false, false, false, false, true, false, false, false),
+       "  Metal task: scenario=weights_only, "
+       "pipeline=llm_decode_contiguous_v1, threadgroups=1, "
+       "threads_per_threadgroup=32\n"
+       "  Metal timing: gpu_elapsed_seconds=0.250000000\n"
+       "  Metal validation: checksum=not-evaluated, "
+       "kv_write=not-applicable, canary=not-applicable"},
+      {"Metal invalid timing has no numeric observation",
+       Messages::report_llm_memory_metal_task(
+           "mixed", "llm_decode_contiguous_v1", 1, 32, true, false, 0.0,
+           false, false, true, false, false, false, false, false),
+       "  Metal task: scenario=mixed, pipeline=llm_decode_contiguous_v1, "
+       "threadgroups=1, threads_per_threadgroup=32\n"
+       "  Metal timing: gpu_elapsed_seconds=invalid\n"
+       "  Metal validation: checksum=not-evaluated, kv_write=not-evaluated, "
+       "canary=not-applicable"},
+      {"decode unit",
+       Messages::report_llm_memory_work_unit_name("decode_step", false),
+       "decode step"},
+      {"decode units",
+       Messages::report_llm_memory_work_unit_name("decode_step", true),
+       "decode steps"},
+      {"prefill unit",
+       Messages::report_llm_memory_work_unit_name("prefill_operation", false),
+       "prefill operation"},
+      {"prefill units",
+       Messages::report_llm_memory_work_unit_name("prefill_operation", true),
+       "prefill operations"},
+      {"unknown unit",
+       Messages::report_llm_memory_work_unit_name("future", false),
+       "work unit"},
+      {"unknown units",
+       Messages::report_llm_memory_work_unit_name("future", true),
+       "work units"},
+      {"payload",
+       Messages::report_llm_memory_payload("decode step", 1024, 768, 256),
+       "  Active weight bytes / decode step: 1024\n"
+       "  KV read bytes / decode step:       768\n"
+       "  KV write bytes / decode step:      256"},
+      {"decode geometry", Messages::report_llm_memory_decode_geometry(8, 4.0),
+       "  Visible context tokens:     8\n"
+       "  Traffic crossover:          4.00 visible context tokens"},
+      {"prefill geometry",
+       Messages::report_llm_memory_prefill_geometry(
+           5, 2, 3, 11, 15, 60, 480),
+       "  Prompt tokens (P):                 5\n"
+       "  Attention query tile tokens (Q):  2\n"
+       "  Attention query tiles (C):        3\n"
+       "  Prefix token visits / sequence:   11\n"
+       "  Causal token pairs / sequence:    15\n"
+       "  Logical attention pairs:          60\n"
+       "  Logical attention FMA terms:      480"},
+      {"paged layout",
+       Messages::report_llm_memory_paged_layout(
+           {4, 2, 2, 4, 128, 4, 128, 384, 512, 128, 384, 512, 128,
+            2, 8, 4096, "permutation-v1", 99, "0123456789abcdef",
+            "paged-permutation-identity", 20, 80, 1104, "decode step"}),
+       "  Paged KV block tokens (G): 4\n"
+       "  Blocks per sequence (N):   2\n"
+       "  Physical blocks/layer (P_b): 2\n"
+       "  Physical block geometry: total_blocks=4, block_bytes=128\n"
+       "  Terminal block: tokens=4, valid_bytes=128\n"
+       "  K bytes (logical/physical/padding): 384/512/128\n"
+       "  V bytes (logical/physical/padding): 384/512/128\n"
+       "  Block table: 2 uint32 entries, 8 bytes, 4096 page-rounded bytes\n"
+       "  Permutation: version=permutation-v1, seed=99, "
+       "sha256=0123456789abcdef\n"
+       "  Permutation identity: paged-permutation-identity\n"
+       "  Timed block-table metadata / KV-active decode step: 20 lookups, 80 bytes\n"
+       "  Accounted bytes / KV-active decode step: 1104\n"
+       "  Effective model payload excludes timed block-table metadata bytes."},
+      {"weights headline",
+       Messages::report_llm_memory_scenario_headline(
+           "Weights only", "decode step", "decode steps", 1.25, 800.0,
+           100.5, false),
+       "  Weights only: 1.250 ms/decode step, "
+       "100.50 GB/s effective model payload"},
+      {"mixed headline",
+       Messages::report_llm_memory_scenario_headline(
+           "Mixed", "decode step", "decode steps", 3.75, 266.666, 80.25,
+           true),
+       "  Mixed:        3.750 ms/decode step, 266.67 synthetic decode "
+       "steps/s, 80.25 GB/s effective model payload"},
+      {"weights label",
+       Messages::report_llm_memory_scenario_name("weights_only"),
+       "Weights only"},
+      {"KV label", Messages::report_llm_memory_scenario_name("kv_only"),
+       "KV only"},
+      {"mixed label", Messages::report_llm_memory_scenario_name("mixed"),
+       "Mixed"},
+      {"unknown label", Messages::report_llm_memory_scenario_name("future"),
+       "Unknown"},
+      {"interpretation",
+       Messages::report_llm_memory_interpretation_note(
+           "decode", "contiguous", "decode step"),
+       "  Interpretation: each decode step is synthetic memory-only work, not an inference "
+       "token; effective model payload is logical, not physical DRAM-counter traffic.\n"
+       "  Phase/layout: phase=decode, kv_layout=contiguous; the visible context includes the "
+       "current-token slot; KV uses layer/batch/token/head/dimension order.\n"
+       "  Crossover: logical weight/KV-read payload equality is not a proven hardware "
+       "bottleneck transition.\n"
+       "  Comparability: small weight or KV working sets can be cache-dominant; order imbalance, "
+       "high CV, non-nominal environment, QoS failures, or off-target duration reduce confidence."},
+      {"prefill interpretation",
+       Messages::report_llm_memory_interpretation_note("prefill", "contiguous", "prefill operation"),
+       "  Interpretation: each prefill operation is synthetic memory-only work, not an inference "
+       "token; effective model payload is logical, not physical DRAM-counter traffic.\n"
+       "  Phase/layout: phase=prefill, kv_layout=contiguous; prefill performs no Transformer "
+       "compute and does not predict TTFT; KV uses layer/batch/token/head/dimension order.\n"
+       "  Comparability: small weight or KV working sets can be cache-dominant; order imbalance, "
+       "high CV, non-nominal environment, QoS failures, or off-target duration reduce confidence."},
+      {"high CV", Messages::warning_llm_memory_high_cv("kv_only", 6.25, 5.0),
+       "LLM KV only repeatability CV 6.25% exceeds 5.00%"},
+      {"unbalanced order", Messages::warning_llm_memory_order_not_balanced(),
+       "LLM scenario order is not fully balanced across completed loops"},
+      {"duration",
+       Messages::warning_llm_memory_duration_quality(
+           "mixed", "above-target-single-work-unit"),
+       "LLM Mixed duration quality is above-target-single-work-unit"},
+      {"environment", Messages::warning_llm_memory_environment_not_nominal(),
+       "LLM result environment is not reference-eligible (thermal state or Low Power Mode)"},
+      {"main QoS",
+       Messages::warning_llm_memory_main_thread_qos_not_applied(7),
+       "LLM main-thread QoS request was not applied (code: 7)"},
+      {"worker QoS", Messages::warning_llm_memory_worker_qos_not_applied(),
+       "One or more LLM worker QoS requests were not applied"},
+      {"cache",
+       Messages::warning_llm_memory_weight_cache_dominant(1024, 4096),
+       "LLM weight working set (1024 bytes) does not exceed reported L2 cache "
+       "(4096 bytes); the result may be cache-dominant"},
+      {"KV cache", Messages::warning_llm_memory_kv_cache_dominant(2048, 4096),
+       "LLM KV working set (2048 bytes) does not exceed reported L2 cache "
+       "(4096 bytes); the result may be cache-dominant"},
+  };
+  expect_exact_messages(cases);
+  const std::string usage =
+      Messages::llm_memory_usage_options("memory_benchmark");
+  expect_capability_based_llm_metal_status(usage);
+}
+
+TEST(MessagesTest, GeneralHelpAdvertisesTheLlmBoundaryExactlyOnce) {
+  const std::string usage = Messages::usage_options("memory_benchmark");
+  EXPECT_NE(usage.find("Platform: macOS 26 or later on Apple Silicon (ARM64)."),
+            std::string::npos);
+  EXPECT_NE(usage.find("-M, --llm-memory"), std::string::npos);
+  EXPECT_EQ(usage.find("-M, --llm-memory"),
+            usage.rfind("-M, --llm-memory"));
+  EXPECT_NE(
+      usage.find("standalone CPU/Metal synthetic LLM memory profile"),
+      std::string::npos);
+  EXPECT_NE(usage.find("Both phases support contiguous"),
+            std::string::npos);
+  EXPECT_NE(
+      usage.find(
+          "or paged KV on CPU and Metal. Metal is runtime-capability-gated"),
+      std::string::npos);
+  EXPECT_NE(usage.find("and never falls back to CPU"),
+            std::string::npos);
+  expect_capability_based_llm_metal_status(usage);
+  EXPECT_NE(usage.find("--weight-size-mb"), std::string::npos);
+  EXPECT_NE(usage.find("--query-heads"), std::string::npos);
+  EXPECT_NE(usage.find("--context-tokens"), std::string::npos);
+  EXPECT_NE(usage.find("memory-only interpretation"), std::string::npos);
+  EXPECT_NE(usage.find("JSON uses schema 1 methodologies "),
+            std::string::npos);
+  EXPECT_NE(usage.find(
+                Constants::LLM_CPU_DECODE_CONTIGUOUS_METHODOLOGY_VERSION),
+            std::string::npos);
+  EXPECT_NE(usage.find(Constants::LLM_CPU_DECODE_PAGED_METHODOLOGY_VERSION),
+            std::string::npos);
+  EXPECT_NE(usage.find("llm-memory-v1-metal-decode-contiguous"),
+            std::string::npos);
+  EXPECT_NE(usage.find("llm-memory-v1-metal-decode-paged"),
+            std::string::npos);
+  EXPECT_NE(usage.find("llm-memory-v1-metal-prefill-contiguous"),
+            std::string::npos);
+  EXPECT_NE(usage.find("llm-memory-v1-metal-prefill-paged"),
+            std::string::npos);
+  EXPECT_NE(usage.find("Metal LLM-memory rejects --threads"),
+            std::string::npos);
+  EXPECT_NE(usage.find("checkpoints each terminal scenario"),
+            std::string::npos);
+  EXPECT_EQ(usage.find("execution is unavailable"), std::string::npos);
+  EXPECT_EQ(usage.find("future LLM"), std::string::npos);
 }
 
 TEST(MessagesErrorTest, GpuMessagesHaveExactMethodologyOutput) {
@@ -622,6 +982,13 @@ TEST(MessagesFormattingTest, UsageOptions) {
   EXPECT_NE(msg.find("--gpu-bandwidth"), std::string::npos);
   EXPECT_NE(msg.find(Constants::GPU_METHODOLOGY_VERSION), std::string::npos);
   EXPECT_NE(msg.find("minimum buffer size is 64 MB"), std::string::npos);
+  EXPECT_NE(msg.find("standalone CPU/Metal synthetic LLM memory profile"),
+            std::string::npos);
+  EXPECT_NE(msg.find("prefill requires --phase prefill, --prompt-tokens"), std::string::npos);
+  EXPECT_NE(msg.find("--attention-query-tile-tokens"), std::string::npos);
+  EXPECT_NE(msg.find("Both phases support contiguous"), std::string::npos);
+  EXPECT_NE(msg.find("llm-memory-v1-cpu-prefill-contiguous"), std::string::npos);
+  EXPECT_NE(msg.find(Constants::LLM_CPU_PREFILL_PAGED_METHODOLOGY_VERSION), std::string::npos);
   EXPECT_NE(msg.find("--analyze-core2core"), std::string::npos);
   EXPECT_NE(msg.find("acquire/release token-handoff"), std::string::npos);
   EXPECT_NE(msg.find("protocol, coherence, and scheduler effects"), std::string::npos);
@@ -635,13 +1002,16 @@ TEST(MessagesFormattingTest, UsageOptions) {
   EXPECT_NE(msg.find("Locality-using modes require"), std::string::npos);
   EXPECT_NE(msg.find("explicit global-random ignores"), std::string::npos);
   EXPECT_NE(msg.find("cache bandwidth uses one"), std::string::npos);
+  EXPECT_NE(msg.find("keeps an explicit request uncapped"),
+            std::string::npos);
   EXPECT_NE(msg.find("latency remains"), std::string::npos);
   EXPECT_NE(msg.find("single-threaded"), std::string::npos);
   EXPECT_NE(msg.find("--cache-size"), std::string::npos);
   EXPECT_NE(msg.find("--output <target>"), std::string::npos);
   EXPECT_NE(msg.find("Exact - writes one final JSON document to stdout"), std::string::npos);
   EXPECT_NE(msg.find("one final"), std::string::npos);
-  EXPECT_NE(msg.find("every direct mode and CPU sweep"), std::string::npos);
+  EXPECT_NE(msg.find("every result-producing direct mode and CPU sweep"),
+            std::string::npos);
   EXPECT_NE(msg.find("routes human output to stderr"), std::string::npos);
   EXPECT_NE(msg.find("an empty value disables JSON for direct commands"),
             std::string::npos);
@@ -650,7 +1020,10 @@ TEST(MessagesFormattingTest, UsageOptions) {
             std::string::npos);
   EXPECT_NE(msg.find("including ./- and names such as -G"),
             std::string::npos);
-  EXPECT_NE(msg.find("Standard and GPU files retain"), std::string::npos);
+  EXPECT_NE(msg.find("Standard, GPU, and LLM-memory files retain"),
+            std::string::npos);
+  EXPECT_NE(msg.find("LLM-memory checkpoints each terminal scenario"),
+            std::string::npos);
   EXPECT_NE(msg.find("sweep files checkpoint attempts"), std::string::npos);
   EXPECT_NE(msg.find("Requires --output <target>"), std::string::npos);
   EXPECT_NE(msg.find("-h"), std::string::npos);

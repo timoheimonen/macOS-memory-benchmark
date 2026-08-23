@@ -29,7 +29,7 @@
 #include <iostream>
 
 MainThreadQosResult prepare_main_thread_benchmark_qos(
-    const MainThreadQosSetter& setter) {
+    const MainThreadQosSetter& setter, bool emit_warning) {
   MainThreadQosResult result;
   result.requested = true;
   result.code = setter
@@ -37,7 +37,7 @@ MainThreadQosResult prepare_main_thread_benchmark_qos(
                     : pthread_set_qos_class_self_np(
                           QOS_CLASS_USER_INTERACTIVE, 0);
   result.applied = result.code == KERN_SUCCESS;
-  if (!result.applied) {
+  if (!result.applied && emit_warning) {
     std::cerr << Messages::warning_prefix()
               << Messages::warning_qos_failed(result.code) << std::endl;
   }

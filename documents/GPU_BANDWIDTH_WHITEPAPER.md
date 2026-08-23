@@ -1,6 +1,6 @@
 # Metal GPU Memory Bandwidth Whitepaper
 
-- **Software version:** 0.62.0
+- **Software version:** 0.63.0
 - **JSON schema:** 1
 - **Methodology:** `gpu-bandwidth-v1-private-runtime-single-cmdbuf-calibrated-balanced`
 - **Platform:** macOS on Apple Silicon
@@ -123,7 +123,7 @@ identity; it does not reproduce performance or macOS scheduling.
 The production/test build has one deployment target:
 
 ```text
-MACOSX_DEPLOYMENT_TARGET=11.0
+MACOSX_DEPLOYMENT_TARGET=26.0
 ```
 
 The Objective-C++ backend is auto-discovered, compiled with `-fobjc-arc`, and linked for both release and tests with:

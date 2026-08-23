@@ -46,6 +46,7 @@ void set_memory_system_calls_for_testing(const MemorySystemCalls& calls) {
   active_memory_system_calls = {
       calls.map != nullptr ? calls.map : kDefaultMemorySystemCalls.map,
       calls.advise != nullptr ? calls.advise : kDefaultMemorySystemCalls.advise,
+      calls.protect != nullptr ? calls.protect : kDefaultMemorySystemCalls.protect,
       calls.unmap != nullptr ? calls.unmap : kDefaultMemorySystemCalls.unmap};
 }
 
@@ -193,4 +194,11 @@ MmapPtr allocate_buffer_non_cacheable(size_t size, const char* buffer_name) {
   }
   
   return buffer_ptr;  // Return valid pointer on success
+}
+
+bool protect_buffer_read_only(void* buffer, size_t size) {
+  if (buffer == nullptr || buffer == MAP_FAILED || size == 0) {
+    return false;
+  }
+  return active_memory_system_calls.protect(buffer, size, PROT_READ) == 0;
 }

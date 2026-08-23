@@ -80,7 +80,7 @@ def require_current_standard_result(data: object, source: str) -> dict:
     configuration = data.get("configuration") if isinstance(data, dict) else None
     if not (
         isinstance(configuration, dict)
-        and data.get("version") == "0.62.0"
+        and data.get("version") == "0.63.0"
         and configuration.get("mode") == "benchmark"
         and type(configuration.get("benchmark_schema_version")) is int
         and configuration["benchmark_schema_version"] == 3
