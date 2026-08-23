@@ -819,7 +819,13 @@ struct LlmMetalPlannedResource {
   bool persistent = true;
 };
 
-/** Exact pre-allocation resource lengths and host/transient peak evidence. */
+/**
+ * Exact pre-allocation resource lengths and host/transient peak evidence.
+ *
+ * `identity` binds immutable resource geometry and execution inputs. The
+ * volatile available-memory sample and its derived admitted budget remain
+ * separately validated evidence and are intentionally excluded from identity.
+ */
 struct LlmMetalResourcePlan {
   bool valid = false;
   std::string reason_code = LlmMetalPlanReason::INVALID_GEOMETRY;
@@ -1177,12 +1183,12 @@ LlmMemoryWorkPlan finalize_llm_memory_work_plan(
  * The active CPU planner reduces effective workers until every standalone
  * scenario has work. Its retained vector capacities are measured after
  * allocation and the budget is re-evaluated before the plan becomes valid.
- * Invalid plans expose no executable templates. Metal decode/contiguous
- * produces a valid logical plan with an unresolved tagged execution
+ * Invalid plans expose no executable templates. Every Metal backend/phase/layout
+ * profile produces a valid logical plan with an unresolved tagged execution
  * alternative; command orchestration must attach the capability-dependent
- * runtime plan before a ready backend can execute it. Both contiguous and
- * paged CPU prefill produce executable descriptor and ownership plans; paged
- * execution retains the immutable block-table identity in the work plan.
+ * runtime plan before a ready backend can execute it. Both contiguous and paged
+ * CPU prefill produce executable descriptor and ownership plans; paged execution
+ * retains the immutable block-table identity in the work plan.
  *
  * @param request Fully resolved geometry, environment, and budget inputs.
  * @param stop_requested Optional synchronous predicate polled during paged
@@ -1195,8 +1201,19 @@ LlmMemoryWorkPlan build_llm_memory_work_plan(
 /**
  * Validate a resolved config and build its pointer-free work plan.
  *
+ * @param config Resolved command configuration; the function does not retain a
+ *        reference to it.
+ * @param available_workers Detected CPU worker capacity, or zero for Metal.
+ * @param available_memory_bytes Current logical memory-admission sample.
+ * @param mapping_granularity_bytes Host mapping/page granularity used for
+ *        checked resource rounding.
+ * @param checksum_auxiliary_bytes Retained checksum-support storage charged to
+ *        the plan's memory budget.
+ * @param orchestration_auxiliary_bytes Retained runner/output storage charged
+ *        to the plan's memory budget.
  * @param stop_requested Optional synchronous predicate polled while a paged
  *        block table is initialized, validated, and hashed.
+ * @return A reason-bearing plan. Invalid plans contain no executable templates.
  */
 LlmMemoryWorkPlan build_llm_memory_work_plan(
     const LlmMemoryConfig& config, size_t available_workers,

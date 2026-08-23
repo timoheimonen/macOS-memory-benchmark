@@ -4,15 +4,16 @@
 CXX = clang++
 AS = as
 
-# Keep one deployment target for production, tests, assembly, and links. Exporting
-# the value also preserves it when coverage builds override compiler/linker flags.
-export MACOSX_DEPLOYMENT_TARGET ?= 11.0
+# Keep one deployment target for production/test sources, assembly, and final
+# links. Exporting the value also preserves it when coverage builds override
+# compiler/linker flags. External static archives must not require a newer OS.
+export MACOSX_DEPLOYMENT_TARGET ?= 26.0
 
 # Source directory
 SRC_DIR = src
 
 # Google Test configuration
-GTEST_DIR = /opt/homebrew/opt/googletest
+GTEST_DIR ?= /opt/homebrew/opt/googletest
 GTEST_INCLUDE = $(GTEST_DIR)/include
 GTEST_LIB_DIR = $(GTEST_DIR)/lib
 GTEST_LIBS = -L$(GTEST_LIB_DIR) -lgtest -lgtest_main -pthread

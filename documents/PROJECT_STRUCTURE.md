@@ -1,7 +1,7 @@
 # Project Structure — macOS-memory-benchmark
 
 **Version:** 0.63.0
-**Platform:** ARM64 / AArch64 (Apple Silicon macOS)
+**Platform:** ARM64 / AArch64 (Apple Silicon, macOS 26 or later)
 **License:** GNU General Public License v3.0 or later
 
 This document describes the layout of project files, organized by purpose. It is intended as a navigation aid for contributors and reviewers.
@@ -43,7 +43,7 @@ This document describes the layout of project files, organized by purpose. It is
 
 | File | Purpose |
 |---|---|
-| `Makefile` | Primary build system; discovers C++/Objective-C++/assembly, targets macOS 11.0, compiles `.mm` with ARC, links Metal/Foundation, and produces release/test binaries |
+| `Makefile` | Primary build system; discovers C++/Objective-C++/assembly, targets sources and final links at macOS 26.0, accepts a configurable `GTEST_DIR`, compiles `.mm` with ARC, links Metal/Foundation, and produces release/test binaries |
 | `coverage.sh` | Runs isolated LLVM unit/all-test C++/Objective-C++ source coverage builds under `/tmp` without replacing normal workspace binaries |
 | `.clang-format` | Clang-Format style baseline for C++ sources |
 
@@ -71,7 +71,7 @@ This document describes the layout of project files, organized by purpose. It is
 | `documents/LATENCY_WHITEPAPER.md` | Whitepaper: cache and memory latency measurement methodology |
 | `documents/CORE_TO_CORE_WHITEPAPER.md` | Whitepaper: calibrated two-thread token-handoff methodology, audit schema, and interpretation limits |
 | `documents/GPU_BANDWIDTH_WHITEPAPER.md` | Whitepaper: Metal compute bandwidth methodology, GPU schema 1, validation, capability limits, and maintenance policy |
-| `documents/LLM_MEMORY_PROFILE_WHITEPAPER.md` | Whitepaper: CPU and experimental Metal decode/prefill contiguous/paged methodologies, with exact payload formulas, resources, validation, schema 1, and interpretation limits |
+| `documents/LLM_MEMORY_PROFILE_WHITEPAPER.md` | Whitepaper: CPU and capability-gated Metal decode/prefill contiguous/paged methodologies, with exact payload formulas, resources, validation, schema 1, and interpretation limits |
 | `documents/PROJECT_STRUCTURE.md` | This file |
 
 ---
@@ -278,10 +278,10 @@ Objective-C++ Metal backend so deterministic unit tests do not require GPU work.
 ### 2.6 src/llm_memory/ — Synthetic LLM memory profile
 
 Standalone generic schema-1 vocabulary with eight active backend/phase/layout profiles: four CPU profiles and four
-experimental Metal profiles spanning decode/prefill and contiguous/paged KV. Pure logical phase planning, deterministic
-paged geometry/permutation, backend-specific execution planning/evidence, the Objective-C-free backend contract, CPU
-mapping and ARM64 execution, the Objective-C++ Metal boundary, environment capture, console composition, and
-serialization are separated so deterministic unit tests can inject platform and allocation behavior without running
+capability-gated Metal profiles spanning decode/prefill and contiguous/paged KV. Pure logical phase planning,
+deterministic paged geometry/permutation, backend-specific execution planning/evidence, the Objective-C-free backend
+contract, CPU mapping and ARM64 execution, the Objective-C++ Metal boundary, environment capture, console composition,
+and serialization are separated so deterministic unit tests can inject platform and allocation behavior without running
 hot kernels. Capability failures remain explicit, and no unsupported Metal request falls back to CPU.
 
 | File | Purpose |

@@ -1,6 +1,8 @@
 # Measurement Capabilities
 
-`memory_benchmark` characterizes memory-system behavior on Apple Silicon Macs using native ARM64 CPU paths and a standalone Metal compute path. It is designed for controlled comparisons and microarchitectural investigation, not for producing one synthetic performance score.
+`memory_benchmark` characterizes memory-system behavior on Apple Silicon Macs running macOS 26 or later using native
+ARM64 CPU paths and standalone Metal compute paths. It is designed for controlled comparisons and microarchitectural
+investigation, not for producing one synthetic performance score.
 
 Bandwidth is reported as **effective workload payload divided by measured time**. It is not a hardware-counter measurement of physical DRAM or cache-bus traffic. A large working set can make a run more useful for main-memory-focused analysis, but buffer size alone does not prove where every byte was served.
 
@@ -12,7 +14,7 @@ Bandwidth is reported as **effective workload payload divided by measured time**
 | Access patterns (`--patterns`) | Payload-rate sensitivity to access order, regularity, and virtual stride | Which single cache, prefetch, translation, or scheduling mechanism caused a difference |
 | TLB analysis (`--analyze-tlb`) | Paired spread/packed latency deltas and empirical boundary estimates | Guaranteed architectural TLB sizes or direct DRAM latency |
 | Core-to-core (`--analyze-core2core`) | Effective round-trip time of a repeated two-thread acquire/release token exchange under scheduler hints | Isolated physical cache-line migration or coherence-path latency, exact physical-core placement, or a definitive topology map |
-| LLM memory profile (`--llm-memory`) | Effective logical model-payload rate and synthetic work-unit latency for CPU or experimental Metal decode/prefill with contiguous or paged KV | Transformer computation, inference tokens/s, TTFT, physical DRAM traffic, runtime page allocation, ANE execution, or framework performance |
+| LLM memory profile (`--llm-memory`) | Effective logical model-payload rate and synthetic work-unit latency for CPU or capability-gated Metal decode/prefill with contiguous or paged KV | Transformer computation, inference tokens/s, TTFT, physical DRAM traffic, runtime page allocation, ANE execution, or framework performance |
 | JSON output (`--output`) and sweeps (`--sweep`) | Auditable measurement evidence through recoverable files or one final stdout document for every result-producing direct mode and supported CPU sweep | Comparability when commands, software, hardware, or run conditions differ |
 
 ## CPU Memory and Cache Bandwidth
@@ -45,7 +47,7 @@ Metal each support decode and prefill with contiguous or paged KV. Exact methodo
 `llm-memory-v1-metal-prefill-contiguous`, and `llm-memory-v1-metal-prefill-paged`. Metal is explicitly selected with
 `--llm-memory-backend metal`, rejects `--threads`, and never receives an implicit CPU fallback.
 
-All four active Metal profiles are an experimental preview governed by runtime capability checks.
+All four active Metal profiles are governed by runtime capability checks.
 
 Each active phase executes three scenarios:
 
@@ -136,7 +138,7 @@ The reported decimal GB/s is exact logical effective model payload divided by ba
 synchronized worker time for CPU or `GPUStartTime`/`GPUEndTime` for Metal. A synthetic work unit is one `decode_step`
 or one full-prompt `prefill_operation`, not an inference token. The mode does not run GEMM/GEMV, dequantization, RoPE,
 attention math, softmax, layer normalization, framework dispatch, model loading, ANE work, or GPU execution outside the
-defined Metal preview kernels. Prefill results do not predict TTFT. The mode also does not model growing
+defined Metal kernels. Prefill results do not predict TTFT. The mode also does not model growing
 context, runtime page allocation,
 sliding-window KV, prefix sharing,
 speculative decoding, or compute-memory overlap. The active paged layout measures frozen table indirection and physical

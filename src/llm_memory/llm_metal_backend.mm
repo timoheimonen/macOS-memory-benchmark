@@ -18,8 +18,8 @@
  * @brief Metal capability, resource, decode, and prefill execution backend
  *
  * Metal and Objective-C ownership remain in this file. The backend is
- * synchronous and command-owned. It exposes experimental decode and contiguous
- * prefill paths with GPU timestamps, timed checksums, and excluded KV-write
+ * synchronous and command-owned. It exposes decode and prefill with contiguous
+ * or paged KV using GPU timestamps, timed checksums, and excluded KV-write
  * validation.
  * Every Objective-C entry boundary catches Objective-C and C++ failures, and
  * candidate resources are published only after both admissions, initialization,
@@ -2833,8 +2833,6 @@ LlmMetalExecutionPlan build_llm_metal_execution_plan(const LlmMetalResourcePlanR
     append_identity_field(plan.identity, "additional_owned_bytes", plan.additional_owned_bytes);
     append_identity_field(plan.identity, "transient_peak_bytes", plan.transient_peak_bytes);
     append_identity_field(plan.identity, "known_owned_peak_bytes", plan.known_owned_peak_bytes);
-    append_identity_field(plan.identity, "available_memory_bytes", plan.available_memory_bytes);
-    append_identity_field(plan.identity, "admitted_budget_bytes", plan.admitted_budget_bytes);
     append_identity_field(plan.identity, "planned_resource_count", plan.planned_resources.size());
     for (size_t index = 0; index < plan.planned_resources.size(); ++index) {
       const LlmMetalPlannedResource& resource = plan.planned_resources[index];

@@ -30,10 +30,12 @@ Out of scope:
 
 - Target OS: macOS.
 - Target CPU architecture: ARM64 Apple Silicon.
-- Language: C++17 with ARM64 Apple Silicon assembly kernels and one Objective-C++ Metal backend.
+- Language: C++17 with ARM64 Apple Silicon assembly kernels, two Objective-C++ Metal backends, and one Objective-C++
+  environment-capture unit.
 - Build: `Makefile` (`clang++`, `as`).
 - Test framework: GoogleTest (`test_runner`).
-- Deployment target: macOS 11.0 for production, tests, assembly, and links.
+- Deployment target: macOS 26.0 for production/test sources, assembly, and final links. External static archives must
+  not require a newer OS. This is the oldest runtime family exercised by the current repeatable release gate.
 - First-party link dependencies: `-framework Metal -framework Foundation`; no new third-party production dependency.
 - Objective-C++ sources are auto-discovered and compiled with ARC. Production/test links share one framework list, and
   coverage includes production `.mm` beside `.cpp`.
@@ -122,7 +124,7 @@ GPU mode follows its own synchronous pipeline:
    post-release replacement; stdout sessions serialize one terminal schema-1 payload at the command boundary after
    console rendering, then return success/failure according to explicit run and output status.
 
-LLM-memory follows its own synchronous pipeline. CPU and experimental Metal decode/prefill are active with contiguous
+LLM-memory follows its own synchronous pipeline. CPU and Metal decode/prefill are active with contiguous
 or deterministic paged KV:
 
 1. Scan the complete standalone whitelist, parsing supplied values and rejecting unknown, duplicate, or missing-value
@@ -263,8 +265,8 @@ Configuration state is represented by `BenchmarkConfig` (`src/core/config/config
   `--prompt-tokens P` and `--attention-query-tile-tokens Q`, requires `Q <= P`, and rejects decode context.
   `--kv-layout` accepts `contiguous|paged`. Paged requires exactly one `--kv-block-tokens <G>`; contiguous rejects that
   option. `G` must be a positive power of two no greater than `UINT32_MAX`, and it may exceed the phase length. The
-  cross-option rules are order-independent. All eight backend/phase/layout combinations are public. CPU and the
-  experimental Metal preview each support decode and prefill with contiguous or paged KV. Metal skips CPU worker
+  cross-option rules are order-independent. All eight backend/phase/layout combinations are public. CPU and Metal
+  each support decode and prefill with contiguous or paged KV. Metal skips CPU worker
   detection, rejects explicit threads, and never receives fallback execution.
   Explicit work must fit both the common task guardrails and Metal's 65,536-work-unit dispatch cap for all three
   scenarios when Metal is selected. Metal prefill additionally rejects an overflowing lane-local serial range-helper
@@ -423,7 +425,7 @@ no separate reference-reading pass. Paged preparation derives one deterministic 
 range and bijection, hashes its explicit little-endian entries, and makes the table read-only before worker-major
 layout-specific descriptors are materialized from immutable pointer-free ranges. Initialization, table preparation,
 descriptor construction/validation, canary setup, and resulting page faults precede calibration and measurement and are
-excluded from elapsed scenario time. Before each paged task, only the mutable current-token K/V append slots are
+excluded from elapsed scenario time. Before each paged decode task, only the mutable current-token K/V append slots are
 restored to the physical initialization pattern; this allocation-free reset is excluded from timing and leaves history
 blocks and suffix-padding canaries unchanged.
 
@@ -706,7 +708,7 @@ capability-supported and performance-unvalidated until runtime compilation, exac
 the appropriate controlled performance campaign are recorded. Integration tests deliberately have no minimum-GB/s
 assert.
 
-### 13.7 LLM generic plan, active CPU execution, and experimental Metal preview
+### 13.7 LLM generic plan and active CPU/Metal execution
 
 LLM mode is implemented under `src/llm_memory/` with a pure checked work planner, a pure paged-layout/permutation
 module, an Objective-C-free synchronous `LlmBackend` boundary, a status-bearing backend-independent runner, a dedicated
@@ -715,7 +717,7 @@ ordered schema builder, and a Foundation-backed environment snapshot. Generic en
 `decode|prefill`, and KV layout `contiguous|paged`.
 All eight backend/phase/layout combinations are active. The CPU identities are
 `llm-memory-v1-cpu-decode-contiguous`, `llm-memory-v1-cpu-decode-paged`,
-`llm-memory-v1-cpu-prefill-contiguous`, and `llm-memory-v1-cpu-prefill-paged`. The experimental Metal identities are
+`llm-memory-v1-cpu-prefill-contiguous`, and `llm-memory-v1-cpu-prefill-paged`. The Metal identities are
 `llm-memory-v1-metal-decode-contiguous`, `llm-memory-v1-metal-decode-paged`,
 `llm-memory-v1-metal-prefill-contiguous`, and `llm-memory-v1-metal-prefill-paged`. Capability failure remains explicit;
 no Metal request receives fallback CPU execution.
@@ -943,7 +945,9 @@ The common runner accepts a task only when status/reason, backend, phase, layout
 work-unit and KV-write kinds, scenario, frozen plan, authoritative finite positive timing, planned/completed work,
 model-payload/metadata/accounted counters, and validation all match. Comparative acceptance additionally requires the
 same `G`, paged geometry, physical/logical/padding/table resource identity, permutation identity/hash, schedule, checksum,
-and timer identities. CPU worker/QoS/timer/checksum-vector invariants remain adapter-owned.
+and timer identities. Available-memory and derived admitted-budget samples remain separately validated runtime evidence,
+not resource/execution/model/frozen-plan identity inputs. CPU worker/QoS/timer/checksum-vector invariants remain
+adapter-owned.
 
 Omitted iterations calibrate the three scenarios independently outside measurement. The exact initial pilot shape is
 warmed once; correction candidates do not receive general warmups, while the first irreducible one-work-unit candidate
@@ -1023,12 +1027,15 @@ GPU primary timing does not use `HighResTimer`: it uses completed Metal command-
 Host steady-clock submit/wait/wall values are diagnostic. Total GPU-mode host execution time uses steady clock and is
 separate from every operation denominator.
 
-LLM scenario timing uses `HighResTimer` from a synchronized all-workers-ready gate to last-worker completion. Paged
-block-table loads, address formation, model reads/writes, and timed checksum accumulation are inside. Mapping,
-initialization/pre-touch, permutation/table generation and validation, table protection, descriptor validation and
-materialization, task-local paged append-slot restoration, thread creation, QoS, same-shape warmup, calibration,
-expected-oracle work, checksum/canary post-validation, joins, aggregation, console, JSON, and checkpoints are outside.
-There is no cache flush between tasks; the timing semantics are warm, cacheable, and cache-inclusive.
+CPU LLM scenario timing uses `HighResTimer` from a synchronized all-workers-ready gate to last-worker completion. Metal
+LLM scenario timing uses the completed workload command buffer's `GPUStartTime`/`GPUEndTime`; host submit/wait values
+are diagnostic. The selected phase's model reads/writes, applicable paged table loads and address formation, and timed
+checksum accumulation are inside the backend-authoritative interval. Mapping, initialization/pre-touch,
+permutation/table generation and validation, table protection, descriptor or parameter validation/materialization,
+task-local paged-decode append-slot restoration, same-shape warmup, calibration, expected-oracle work,
+checksum/K/V-write/canary post-validation, aggregation, console, JSON, and checkpoints are outside. CPU thread
+creation, QoS and joins, plus Metal reset and post-validation command buffers, are also outside. There is no cache flush
+between tasks; the timing semantics are warm, cacheable, and cache-inclusive.
 
 ## 16. Statistics and Aggregation
 
@@ -1439,7 +1446,7 @@ Recommended validation commands:
   `./test_runner '--gtest_filter=ModeSelectorTest.*:LlmMemoryContractTest.*:LlmMemoryConfigTest.*:LlmMemoryWorkPlanTest.*:LlmMemoryExecutorTest.*:LlmMemoryRunnerTest.*:LlmMemoryJsonTest.*:LlmMemoryOutputTest.*:MessagesTest.*'`
 - Real LLM ARM64 and bounded executable transport contracts:
   `./test_runner '--gtest_filter=*LlmMemory*Integration*:*ExecutableCliIntegration*'`
-- Experimental LLM Metal decode and prefill for contiguous and paged KV:
+- LLM Metal decode and prefill for contiguous and paged KV:
   `./test_runner '--gtest_filter=*LlmMetalBackend*:*LlmMemoryRunner*:*LlmMemoryJson*:*ExecutableCli*'`; real-device
   cases compile each selected profile and cover all scenarios, GPU timestamps, exact tails or partial paged blocks,
   paged-prefill `N+2*M` lookups, cyclic block-owner threadgroups and their exact accounted-byte evidence, full-prompt
@@ -1458,7 +1465,7 @@ entry test. `jq` is not required by this gate.
 ## 23. Source Map (Primary Entry Points)
 
 - Program entry: `main.cpp`
-- LLM memory profile with all four CPU profiles and experimental Metal decode/prefill for both layouts:
+- LLM memory profile with all four CPU and all four Metal phase/layout profiles:
   - `src/llm_memory/llm_memory.cpp`
   - `src/llm_memory/llm_work_plan.cpp`
   - `src/llm_memory/llm_kv_layout.cpp`

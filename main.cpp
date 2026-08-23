@@ -30,7 +30,7 @@
  * - TLB analysis: Page-native paired locality measurements and boundary analysis
  * - Core-to-core analysis: Best-effort inter-core round-trip latency measurements
  * - GPU bandwidth: Standalone Metal GPU memory read/write/copy measurements
- * - LLM memory profile: Standalone fixed-context CPU decode-memory workload
+ * - LLM memory profile: Standalone CPU/Metal synthetic decode/prefill memory workloads with contiguous or paged KV
  *
  * Standard, pattern, TLB, and core-to-core modes also support validated parameter sweeps.
  * GPU bandwidth and the LLM memory profile are intentionally standalone and do
@@ -131,7 +131,7 @@ int build_and_write_final_json(JsonOutputSession& session,
  * - Standalone TLB analysis (--analyze-tlb)
  * - Standalone core-to-core analysis (--analyze-core2core)
  * - Standalone GPU memory bandwidth (--gpu-bandwidth)
- * - Standalone LLM decode-memory profile (--llm-memory)
+ * - Standalone LLM decode/prefill memory profile (--llm-memory)
  * - Validated multi-configuration runs (--sweep)
  * - Multiple loop iterations for statistical analysis (--count)
  *

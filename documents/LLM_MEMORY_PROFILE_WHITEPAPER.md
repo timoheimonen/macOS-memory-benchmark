@@ -2,11 +2,11 @@
 
 ## Abstract
 
-`memory_benchmark --llm-memory` is a versioned Apple Silicon synthetic memory benchmark with a generic
-backend/phase/KV-layout schema. CPU decode is active with contiguous or deterministic paged KV, and CPU prefill is
-active with contiguous or deterministic paged KV. Experimental Metal decode and prefill are also active with both
-layouts. These are eight active profiles. Every selected profile executes three scenarios derived from the same
-explicit model geometry:
+`memory_benchmark --llm-memory` is a versioned Apple Silicon synthetic memory benchmark for macOS 26 or later with a
+generic backend/phase/KV-layout schema. CPU decode is active with contiguous or deterministic paged KV, and CPU
+prefill is active with contiguous or deterministic paged KV. Capability-gated Metal decode and prefill are also active
+with both layouts. These are eight active profiles. Every selected profile executes three scenarios derived from the
+same explicit model geometry:
 
 - `weights_only`: read the active weights once;
 - `kv_only`: perform the phase-specific K/V write and reads;
@@ -36,6 +36,7 @@ The current contract is identified by:
 | Permutation version | null for contiguous; `splitmix64-fisher-yates-rejection-v1` for paged |
 | Backend executor version | phase/layout-specific CPU ARM64 or Metal scenario-pipeline identity |
 | Resource ABI | CPU descriptor identity or Metal Tier 2 argument-buffer ABI identity |
+| Metal resource-plan identity prefix | `llm-metal-resource-foundation-v1` |
 | Schedule version | CPU owner-local or Metal capped grid-stride schedule identity |
 | Timer policy | CPU synchronized worker timer or Metal GPU command-buffer timestamp policy |
 | Buffer pattern | backend/layout-specific contiguous or paged buffer-pattern identity |
@@ -58,7 +59,7 @@ block-granular ownership, and full-block suffix padding.
 
 Schema-v1 vocabulary includes `cpu|metal`, `decode|prefill`, `contiguous|paged`,
 `decode_step|prefill_operation`, and `none|current_token_append|full_prompt_population`. Contiguous and paged are public
-for both phases on both backends. The four-profile experimental Metal preview never receives hidden fallback.
+for both phases on both backends. The four Metal profiles never receive hidden fallback.
 
 The prefill implementation resolves checked tile/prefix/payload formulas, versioned atomic CPU ownership evidence,
 owner-local semantic traces, and operation-ordinal checksum oracles. CPU contiguous prefill uses token-range ownership;
@@ -72,7 +73,7 @@ It intentionally excludes:
 
 - GEMV/GEMM/FMA, dequantization, RoPE, softmax, layer normalization, activation, and scratch traffic;
 - tokenizer, model loader, framework scheduler/dispatch, kernel fusion, and compute-memory overlap;
-- MLX, llama.cpp, Core ML, ANE execution, and GPU execution outside the defined Metal preview kernels;
+- MLX, llama.cpp, Core ML, ANE execution, and GPU execution outside the defined Metal kernels;
 - chunked/prefix-reuse prefill or a context that grows during one measurement;
 - runtime KV allocation/free lists, prefix sharing, copy-on-write, eviction, sliding windows, ragged batches, block
   swapping, fragmentation simulation, or KV compression;
@@ -123,7 +124,7 @@ All other primary modes and all buffer/cache/latency/TLB/pattern/GPU,
 
 Backend defaults to `cpu`; phase defaults to `decode`. Layout defaults to `contiguous`; explicit backend/phase/layout
 and block-size sources are retained in `configuration.resolved_sources`. Decode and prefill inputs are mutually
-exclusive. All eight backend/phase/layout combinations are active. CPU and the Metal preview each accept decode and
+exclusive. All eight backend/phase/layout combinations are active. CPU and Metal each accept decode and
 prefill with contiguous or paged KV. Metal rejects explicit `--threads`, performs no CPU worker detection, and never
 falls back to another profile.
 
@@ -430,7 +431,9 @@ contains canonical decimal-string logical weight/K/V lengths, physical K/V lengt
 block-table bytes. Top-level `memory_budget` contains canonical decimal-string `resource_rounding_bytes`,
 `transient_peak_bytes`, `known_owned_peak_bytes`, and `admitted_budget_bytes`, along with any additive detailed estimate
 evidence. Active contiguous profiles have identical K/V logical and physical lengths, zero layout padding, and a null
-block-table resource.
+block-table resource. The sampled available-memory value and derived admitted budget remain runtime evidence rather
+than resource, execution, model, or frozen-plan identity inputs. Identical fixed-seed work therefore retains its
+identity when only the admission sample changes.
 
 Every active Metal profile owns private/tracked W/K/V buffers, plus shared/tracked Tier 2 argument-buffer and
 status/checksum storage.
@@ -1108,7 +1111,7 @@ Removing or renaming a field, changing its type, or changing its meaning require
 evidence may remain schema 1 only when existing consumers can safely ignore it.
 
 Runtime paged allocation/free lists, prefix sharing, sliding windows, growing context, chunked prefill, Metal execution
-outside the active preview profiles, ANE execution, model presets, quantization metadata,
+outside the active profiles, ANE execution, model presets, quantization metadata,
 multiple weight passes, or KV replay factors other than one are separate methodology features. The generic schema
 vocabulary does not activate them: each requires its own end-to-end implementation gate, exact selector-derived
 methodology and component identity, public CLI/documentation update, and compatibility review before it becomes a

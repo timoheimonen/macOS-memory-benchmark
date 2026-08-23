@@ -2,6 +2,8 @@
 
 Working version `0.63.0`
 
+Runtime platform: macOS 26 or later on Apple Silicon (ARM64).
+
 ## All Flags
 
 | Short alias | Long option | Value | Description |
@@ -12,7 +14,7 @@ Working version `0.63.0`
 | `-C` | `--analyze-core2core` | — | Run standalone two-thread acquire/release token-protocol handoff analysis |
 | `-G` | `--gpu-bandwidth` | — | Run standalone Metal GPU memory bandwidth |
 | `-M` | `--llm-memory` | — | Run the standalone CPU/Metal synthetic LLM memory profile |
-| — | `--llm-memory-backend` | `cpu\|metal` | LLM execution backend; default `cpu`; CPU and the experimental Metal preview support decode/prefill with contiguous or paged KV |
+| — | `--llm-memory-backend` | `cpu\|metal` | LLM execution backend; default `cpu`; CPU and capability-gated Metal support decode/prefill with contiguous or paged KV |
 | — | `--weight-size-mb` | `<MiB>` | Required positive active weight size for LLM-memory mode |
 | — | `--layers` | `<count>` | Required positive LLM layer count |
 | — | `--query-heads` | `<count>` | Required positive query-head count; at least the KV-head count and divisible by it |
@@ -175,7 +177,7 @@ the resolved grid in each work plan.
 The LLM parser has an exact whitelist. The five common model options and phase-specific geometry must occur once; every
 optional value and the mode or help selector may also occur at most once. Backend defaults to CPU; Metal is selected
 with `--llm-memory-backend metal`. Both backends support decode and prefill with either KV layout, for eight active
-backend/phase/layout profiles. The four Metal profiles are an experimental preview. Phase defaults to decode.
+backend/phase/layout profiles. The four Metal profiles are capability-gated. Phase defaults to decode.
 Decode requires exactly one `--context-tokens`; prefill requires exactly one `--prompt-tokens P` and
 `--attention-query-tile-tokens Q`, with `P >= 1` and `1 <= Q <= P`. Cross-phase geometry is rejected. `--kv-layout`
 defaults to `contiguous`. Paged layout requires exactly one
@@ -185,7 +187,7 @@ and memory-budget preflight, the command allocates the layout-specific resources
 
 | Modifier | Compatible | Notes |
 |----------|------------|-------|
-| `--llm-memory-backend <cpu\|metal>` | ✅ | Default `cpu`. Both backends support decode/prefill with contiguous or paged KV. The experimental Metal preview performs no CPU fallback, reports capability absence as terminal `unsupported`, and reports runtime compiler/pipeline/resource/task failure as terminal `failed`/`invalid` evidence |
+| `--llm-memory-backend <cpu\|metal>` | ✅ | Default `cpu`. Both backends support decode/prefill with contiguous or paged KV. Metal performs no CPU fallback, reports capability absence as terminal `unsupported`, and reports runtime compiler/pipeline/resource/task failure as terminal `failed`/`invalid` evidence |
 | `--weight-size-mb <MiB>` | ✅ required | Positive active weight size; checked MiB-to-byte conversion |
 | `--layers <n>` | ✅ required | Positive layer count |
 | `--query-heads <n>` | ✅ required | Positive; must be at least and evenly divisible by KV heads |
@@ -213,7 +215,7 @@ The parser rejects checked weight/KV geometry that overflows or makes even one s
 task-accounted-byte ceiling. For paged KV, task-accounted bytes include logical model bytes plus timed block-table lookup
 traffic, while throughput remains model bytes divided by timed seconds. Before allocation, the planner separately admits
 page-rounded full-size weight and physical K/V mappings, the block table, descriptors, retained planner/transient storage,
-checksum storage, and orchestration storage against the current memory budget. All four CPU and all four experimental
+checksum storage, and orchestration storage against the current memory budget. All four CPU and all four
 Metal phase/layout profiles are active. Metal uses Tier 2 argument-buffer indirection, GPU command-buffer timestamps,
 dual-mod32 checksum validation, and excluded phase-neutral `kv_write` validation. Contiguous uses exact-tail W/K/V
 segments. Metal prefill allows at most 1,048,576 serial range-helper visits per lane and rejects a larger or overflowing
@@ -296,11 +298,11 @@ Additional sweep rules:
 | `--llm-memory --kv-layout paged` without exactly one valid `--kv-block-tokens` | Paged KV requires an explicit positive power-of-two block size no greater than `UINT32_MAX` |
 | `--llm-memory --kv-layout contiguous --kv-block-tokens <G>` | Block size has no meaning for contiguous KV and is rejected |
 | `--llm-memory --phase decode` with prefill geometry, or prefill with `--context-tokens` | Phase-specific geometry is not interchangeable |
-| `--llm-memory --llm-memory-backend metal --phase prefill` | Valid experimental Metal contiguous-prefill profile when paged options are absent; requires normal `P`/`Q` geometry |
-| `--llm-memory --llm-memory-backend metal --phase prefill --kv-layout paged --kv-block-tokens <G>` | Valid experimental Metal paged-prefill profile; requires normal `P`/`Q` geometry and explicit valid `G` |
+| `--llm-memory --llm-memory-backend metal --phase prefill` | Valid Metal contiguous-prefill profile when paged options are absent; requires normal `P`/`Q` geometry |
+| `--llm-memory --llm-memory-backend metal --phase prefill --kv-layout paged --kv-block-tokens <G>` | Valid Metal paged-prefill profile; requires normal `P`/`Q` geometry and explicit valid `G` |
 | `--llm-memory --llm-memory-backend metal --threads <n>` | Metal has no CPU-worker contract and rejects explicit threads |
 | `--llm-memory --phase prefill --kv-layout paged --kv-block-tokens <G>` | Valid CPU paged-prefill profile; requires the normal prefill `P`/`Q` geometry and explicit valid `G` |
-| `--llm-memory --llm-memory-backend metal --phase decode --kv-layout paged --kv-block-tokens <G>` | Valid experimental Metal paged-decode profile; requires normal decode context and explicit valid `G` |
+| `--llm-memory --llm-memory-backend metal --phase decode --kv-layout paged --kv-block-tokens <G>` | Valid Metal paged-decode profile; requires normal decode context and explicit valid `G` |
 | `--sweep` without `--output`, or with an empty output value | Sweep mode requires a non-empty combined JSON output target |
 | `--sweep` generated runs > `--sweep-max-runs` | Guardrail against accidental large Cartesian sweeps |
 

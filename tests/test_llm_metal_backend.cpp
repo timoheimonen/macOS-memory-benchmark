@@ -1572,6 +1572,27 @@ TEST(LlmMetalBackendTest, FirstAdmissionAppliesTheHardBudgetAtTheExactKnownOwned
   EXPECT_GE(admitted.resources.admitted_budget_bytes, required);
 }
 
+TEST(LlmMetalBackendTest, ResourceIdentityExcludesVolatileAdmissionSample) {
+  const LlmGeometry geometry = contiguous_geometry(101);
+  LlmMetalResourcePlanRequest request = resource_request(geometry);
+  request.available_memory_bytes = 2 * kGiB;
+  const LlmMetalExecutionPlan first = build_llm_metal_execution_plan(request);
+  ASSERT_TRUE(first.valid) << first.reason_code;
+
+  request.available_memory_bytes = 3 * kGiB;
+  const LlmMetalExecutionPlan second = build_llm_metal_execution_plan(request);
+  ASSERT_TRUE(second.valid) << second.reason_code;
+
+  EXPECT_NE(first.resources.available_memory_bytes, second.resources.available_memory_bytes);
+  EXPECT_NE(first.resources.admitted_budget_bytes, second.resources.admitted_budget_bytes);
+  EXPECT_EQ(first.resources.known_owned_peak_bytes, second.resources.known_owned_peak_bytes);
+  EXPECT_EQ(first.resources.identity, second.resources.identity);
+  EXPECT_EQ(first.identity, second.identity);
+  EXPECT_EQ(first.resources.identity.rfind("llm-metal-resource-foundation-v1", 0), 0U);
+  EXPECT_EQ(first.resources.identity.find("available_memory_bytes"), std::string::npos);
+  EXPECT_EQ(first.resources.identity.find("admitted_budget_bytes"), std::string::npos);
+}
+
 TEST(LlmMetalBackendTest, CommittedAdmissionUsesNullableAllocatedSizeExactlyOncePerResource) {
   LlmMetalPlanningLimits limits;
   limits.segment_capacity_bytes = 100;

@@ -5,6 +5,7 @@ software launches a benchmark, separates machine-readable output from the human 
 result is safe to consume. The generated Doxygen pages document C++ internals; they are not this process API.
 
 Runtime behavior and executable integration tests are authoritative if this document and the implementation differ.
+The documented process runtime baseline is macOS 26 or later on Apple Silicon (ARM64).
 
 ## Transport support in this revision
 
@@ -55,7 +56,7 @@ memory_benchmark --llm-memory --weight-size-mb 64 --layers 4 \
   --iterations 1 --count 3 --seed 42 --output -
 ```
 
-The experimental Metal preview is selected explicitly and accepts decode or prefill with contiguous or paged KV:
+The capability-gated Metal backend is selected explicitly and accepts decode or prefill with contiguous or paged KV:
 
 ```bash
 memory_benchmark --llm-memory --llm-memory-backend metal \
@@ -98,8 +99,12 @@ memory_benchmark --llm-memory --weight-size-mb 64 --layers 4 \
 phase length is valid. Contiguous requests reject `--kv-block-tokens`. Phase defaults to decode. Decode requires
 `--context-tokens`; prefill requires `--prompt-tokens P` and `--attention-query-tile-tokens Q` with
 `1 <= Q <= P`, and the phase-specific inputs are mutually exclusive. `--llm-memory-backend` defaults to `cpu`. All
-eight backend/phase/layout combinations are active: CPU and the experimental Metal preview each accept decode and
+eight backend/phase/layout combinations are active: CPU and Metal each accept decode and
 prefill with contiguous or paged KV. Metal rejects explicit `--threads`, and no request receives a backend fallback.
+Metal capability admission requires a default unified-memory device with Apple7-or-later support, Tier 2 argument
+buffers, and `maxBufferLength >= 256 MiB`. The selected MSL 2.3 source must compile, its pipelines must be created, and
+the runtime layout probe must pass. Capability absence produces terminal `unsupported` evidence; compiler, pipeline,
+resource, or task failures produce terminal `failed`/`invalid` evidence and never authorize CPU fallback.
 
 The sentinel is classified from the raw option value before path normalization:
 
@@ -405,8 +410,11 @@ same kernel implementation.
 decimal-string `resource_rounding_bytes`, `transient_peak_bytes`, `known_owned_peak_bytes`, and
 `admitted_budget_bytes`. A paged candidate admits full physical K/V resources, the resident block table, page rounding,
 descriptor/planner/checksum/orchestration storage, and the permutation-validation transient before table
-materialization. A non-empty JSON target's orchestration reserve uses checked arithmetic for every variable-length
-component/layout identity and, for prefill, the aggregate execution identity plus all scenario and scope identities.
+materialization. The sampled available-memory value and its derived admitted budget remain runtime evidence and are
+excluded from resource, execution, model, and frozen-plan identities, so identical fixed-seed work retains its identity
+when only the admission sample changes. A non-empty JSON target's orchestration reserve uses checked arithmetic for
+every variable-length component/layout identity and, for prefill, the aggregate execution identity plus all scenario
+and scope identities.
 For Metal it also reserves a maximum-sized grid/task evidence tree for every retained measurement and excluded
 calibration attempt. The preflight and finalized-plan estimates cover the same identity set. `calibration` contains
 excluded work-resolution and post-freeze same-shape warmup evidence;

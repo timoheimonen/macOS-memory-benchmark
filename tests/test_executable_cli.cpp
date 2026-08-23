@@ -166,7 +166,7 @@ CliResult run_memory_benchmark(
     return result;
   }
 
-  action_result = posix_spawn_file_actions_addchdir_np(
+  action_result = posix_spawn_file_actions_addchdir(
       &actions, result.directory->path().c_str());
   if (action_result == 0) {
     action_result = posix_spawn_file_actions_addopen(

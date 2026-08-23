@@ -1974,6 +1974,69 @@ TEST(LlmMemoryWorkPlanTest,
 }
 
 TEST(LlmMemoryWorkPlanTest,
+     MetalFixedSeedPlanIdentityExcludesVolatileAdmissionSample) {
+  const auto build_plan = [](size_t available_memory_bytes) {
+    LlmMemoryWorkPlanRequest request =
+        metal_prefill_work_plan_request(LlmKvLayout::Paged);
+    request.available_memory_bytes = available_memory_bytes;
+    LlmMemoryWorkPlanDraft draft = prepare_llm_memory_work_plan(request);
+    if (!draft.valid) {
+      return LlmMemoryWorkPlan{};
+    }
+
+    LlmMetalResourcePlanRequest provisional_request =
+        metal_resource_request(draft.candidate);
+    provisional_request.available_memory_bytes = available_memory_bytes;
+    LlmMetalExecutionPlan provisional =
+        build_llm_metal_execution_plan(provisional_request);
+    if (!provisional.valid ||
+        !attach_llm_metal_execution_plan(draft, std::move(provisional))) {
+      return LlmMemoryWorkPlan{};
+    }
+
+    LlmMetalResourcePlanRequest exact_request =
+        metal_resource_request(draft.candidate);
+    exact_request.available_memory_bytes = available_memory_bytes;
+    LlmMetalExecutionPlan exact =
+        build_llm_metal_execution_plan(exact_request);
+    return finalize_llm_memory_work_plan(std::move(draft),
+                                         std::move(exact), 0, 0);
+  };
+
+  const LlmMemoryWorkPlan first = build_plan(16 * kGiB);
+  const LlmMemoryWorkPlan second = build_plan(24 * kGiB);
+  ASSERT_TRUE(first.valid) << first.reason_code;
+  ASSERT_TRUE(second.valid) << second.reason_code;
+  const LlmMetalExecutionPlan* const first_metal =
+      get_llm_metal_execution_plan(first);
+  const LlmMetalExecutionPlan* const second_metal =
+      get_llm_metal_execution_plan(second);
+  ASSERT_NE(first_metal, nullptr);
+  ASSERT_NE(second_metal, nullptr);
+
+  EXPECT_NE(first.memory_budget.available_memory_bytes,
+            second.memory_budget.available_memory_bytes);
+  EXPECT_NE(first_metal->resources.admitted_budget_bytes,
+            second_metal->resources.admitted_budget_bytes);
+  EXPECT_EQ(first_metal->identity, second_metal->identity);
+  EXPECT_EQ(first.plan_identity, second.plan_identity);
+
+  const LlmFrozenScenarioPlans first_frozen =
+      freeze_llm_scenario_work_plans(first, {1, 1, 1}, true);
+  const LlmFrozenScenarioPlans second_frozen =
+      freeze_llm_scenario_work_plans(second, {1, 1, 1}, true);
+  ASSERT_TRUE(first_frozen.valid) << first_frozen.reason_code;
+  ASSERT_TRUE(second_frozen.valid) << second_frozen.reason_code;
+  EXPECT_EQ(first_frozen.model_plan_identity,
+            second_frozen.model_plan_identity);
+  EXPECT_EQ(first_frozen.plan_identity, second_frozen.plan_identity);
+  for (size_t index = 0; index < first_frozen.scenarios.size(); ++index) {
+    EXPECT_EQ(first_frozen.scenarios[index].plan_identity,
+              second_frozen.scenarios[index].plan_identity);
+  }
+}
+
+TEST(LlmMemoryWorkPlanTest,
      MetalPrefillPagedFreezesExactPayloadsLookupsAndIdentities) {
   LlmMemoryWorkPlanDraft draft = prepare_llm_memory_work_plan(
       metal_prefill_work_plan_request(LlmKvLayout::Paged));

@@ -589,7 +589,7 @@ bool equal_llm_metal_checksum(const LlmMetalDualMod32Checksum& left,
 /** Stable label for a planned Metal resource pool. */
 const char* llm_metal_resource_pool_to_string(LlmMetalResourcePool pool) noexcept;
 
-/** Create the Metal backend for the experimental decode/prefill preview. */
+/** Create the capability-gated Metal backend for decode/prefill with contiguous or paged KV. */
 std::unique_ptr<LlmBackend> create_llm_metal_backend();
 
 /** Create the same backend with deterministic failure injection for tests. */

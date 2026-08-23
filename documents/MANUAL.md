@@ -28,7 +28,7 @@
 - Standalone paired TLB analysis
 - Standalone core-to-core cache-line handoff latency analysis
 - Standalone Metal GPU memory read/write/copy bandwidth
-- Standalone synthetic CPU and experimental Metal LLM decode/prefill profiling with both KV layouts
+- Standalone synthetic CPU and capability-gated Metal LLM decode/prefill profiling with both KV layouts
 - Cartesian parameter sweeps for supported benchmark modes
 
 Target platform is **macOS on Apple Silicon**.
@@ -49,14 +49,17 @@ This manual focuses on practical usage and interpretation. For implementation de
 
 ### Prerequisites
 
-- Apple Silicon Mac
+- Apple Silicon Mac running macOS 26 or later
 - Xcode Command Line Tools
 - GoogleTest for C++ tests; Python 3 for the script-example entry test in the aggregate `make test-all` gate. `jq` is
   optional for JSON inspection and the jq-backed latency-script path.
 - For `--gpu-bandwidth`: a unified-memory Metal device supporting `MTLGPUFamilyApple7` or a compatible later family.
   Capability support is distinct from a controlled performance-validation cohort.
-- For the experimental LLM Metal preview: Apple7-or-later capability, unified memory, Tier 2 argument buffers, and
+- For LLM Metal: Apple7-or-later capability, unified memory, Tier 2 argument buffers, and
   `maxBufferLength >= 256 MiB`.
+
+`GTEST_DIR` may select another GoogleTest installation. Its static archives must not require a newer macOS version than
+the benchmark build's deployment target.
 
 Install tools:
 
@@ -93,7 +96,7 @@ make coverage-all
 
 Coverage reports are written to `/tmp/membenchmark-coverage-{unit,all}/report.txt`. The denominator contains
 production C++ and Objective-C++ only and excludes tests, GoogleTest, the bundled JSON header, generated files, and
-assembly. The macOS 11.0 build links the system Metal and Foundation frameworks. GPU kernels are embedded MSL 2.3
+assembly. The macOS 26.0 build links the system Metal and Foundation frameworks. GPU kernels are embedded MSL 2.3
 source compiled at runtime; the optional offline Metal Toolchain is not required.
 
 `make test-all` requires Python 3 for its script-example entry test. It does not require `jq`.
@@ -197,7 +200,7 @@ LLM-memory schema 1 uses generic backend/phase/layout/work-unit vocabulary. This
 backend/phase/layout profiles: CPU and Metal each support decode and prefill with contiguous or paged KV. Prefill uses
 `work_unit_kind: "prefill_operation"`; decode uses `"decode_step"`. Metal never falls back to CPU.
 
-All four active Metal profiles are an experimental preview governed by runtime capability checks.
+All four active Metal profiles are governed by runtime capability checks.
 
 `--kv-layout` defaults to `contiguous`. Paged layout requires exactly one `--kv-block-tokens <G>` option. `G` must be
 positive, a power of two, and no greater than `UINT32_MAX`; it may be larger than the active phase's sequence length.
@@ -260,9 +263,10 @@ metadata bytes / decode work unit = 4 * lookups
 accounted bytes = effective model payload bytes + metadata bytes
 ```
 
-Each lookup is an explicit uint32 load inside timed assembly, followed by physical-address calculation. Metadata bytes
-count toward the 64 GiB task guardrail but not the GB/s numerator. The paged checksum binds logical table index, loaded
-physical ID, append/K/V visit kind, and work-unit ordinal; physical initialization also depends on pool, physical ID,
+Each lookup is an explicit uint32 load inside the timed CPU assembly or Metal MSL kernel, followed by physical-address
+calculation. Metadata bytes count toward the 64 GiB task guardrail but not the GB/s numerator. The paged checksum binds
+logical table index, loaded physical ID, append/K/V visit kind, and work-unit ordinal; physical initialization also
+depends on pool, physical ID,
 and physical offset. Post-task validation checks current-token writes and padding canaries without adding to elapsed
 time.
 
@@ -307,7 +311,7 @@ Initialization/pre-touch, same-shape warmup, calibration, JSON, expected-checksu
 outside elapsed time; permutation preparation and worker creation are additional CPU exclusions. Full-size resources
 prevent a small proxy buffer from masquerading as a larger model, but they do not prove physical DRAM service. A
 synthetic decode step or full-prompt prefill operation is not an inference token. Prefill does not predict TTFT. The
-profile excludes Transformer math, model/framework dispatch, ANE work, GPU execution outside the defined Metal preview
+profile excludes Transformer math, model/framework dispatch, ANE work, GPU execution outside the defined Metal
 kernels, growing context, runtime page allocation, prefix sharing, sliding-window KV, and compute-memory overlap.
 
 ### Memory hierarchy behavior
@@ -612,7 +616,7 @@ middle, and trailing items.
   `llm-memory-v1-metal-decode-contiguous`, `llm-memory-v1-metal-decode-paged`,
   `llm-memory-v1-metal-prefill-contiguous`, and `llm-memory-v1-metal-prefill-paged`. It never enters the general
   `BenchmarkConfig` parser or CPU sweep runner
-- The four active Metal methodologies are an experimental preview governed by runtime capability checks
+- The four active Metal methodologies are governed by runtime capability checks
 - Requires each common model option `--weight-size-mb <MiB>`, `--layers <count>`, `--query-heads <count>`,
   `--kv-heads <count>`, and `--head-dim <count>` exactly once. Decode requires `--context-tokens <count>`; prefill
   requires `--prompt-tokens <P>` and `--attention-query-tile-tokens <Q>`. Cross-phase geometry is rejected
@@ -632,7 +636,7 @@ middle, and trailing items.
 - Requires `P >= 1` and `1 <= Q <= P` for prefill. Requires paged block size `G` to be positive, a power of two, and at
   most `UINT32_MAX`. `G > A` is valid for decode and produces one partially used physical block per batch sequence;
   unused capacity is reported rather than silently removed
-- Activates the Metal preview for decode or prefill with contiguous or paged KV. Capability failure after
+- Activates Metal for decode or prefill with contiguous or paged KV. Capability failure after
   output-session creation produces a terminal `unsupported` JSON result and non-zero exit. Runtime compiler, pipeline,
   resource, or task failure produces terminal `failed`/`invalid` schema evidence and a non-zero exit. The command never
   substitutes CPU
@@ -1514,7 +1518,7 @@ invalid measurement is not printed as zero and remains status-bearing/null in JS
 
 ### 9) Synthetic LLM memory profile
 
-`--llm-memory` prints a separate report for CPU decode/prefill or an active experimental Metal profile containing:
+`--llm-memory` prints a separate report for CPU decode/prefill or an active Metal profile containing:
 
 - backend, phase/work unit, KV layout, cacheable semantics, and exact active-weight/KV-read/KV-write bytes;
 - for Metal, device/capability evidence, W/K/V segment counts, exact segment capacity, Tier 2 argument-buffer length,
@@ -1932,7 +1936,7 @@ Schema 1 rules:
 - Canonical selectors are `backend: cpu|metal`, `phase: decode|prefill`, `kv_layout: contiguous|paged`,
   `work_unit_kind: decode_step|prefill_operation`, and
   `kv_write_kind: none|current_token_append|full_prompt_population`. All eight backend/phase/layout profiles are active;
-  CPU and the experimental Metal preview each support decode and prefill with contiguous or paged KV.
+  CPU and Metal each support decode and prefill with contiguous or paged KV.
 - Methodology is always `llm-memory-v1-<backend>-<phase>-<layout>`. Active exact identities are
   `llm-memory-v1-cpu-decode-contiguous`, `llm-memory-v1-cpu-decode-paged`,
   `llm-memory-v1-cpu-prefill-contiguous`, `llm-memory-v1-cpu-prefill-paged`,
@@ -1963,7 +1967,9 @@ Schema 1 rules:
 - `memory_budget` reports canonical decimal-string `resource_rounding_bytes`, `transient_peak_bytes`,
   `known_owned_peak_bytes`, and `admitted_budget_bytes` separately. Immutable logical/physical resource geometry stays
   under `resolved_plan.resources`. Paged admission covers full physical K/V blocks, the table, page rounding, and the
-  table-validation transient before materialization. A non-empty JSON target also reserves checked storage for all
+  table-validation transient before materialization. The available-memory sample and its derived admitted budget are
+  runtime evidence, not resource/execution/model/frozen-plan identity inputs; identical fixed-seed work keeps its
+  identity when only that sample changes. A non-empty JSON target also reserves checked storage for all
   variable-length component/layout identities and the prefill execution, scenario, and scope identities; its preflight
   and finalized-plan estimates cover the same identity set.
 - `measurements[]` preserves scenario/order/status/reason, frozen-plan identity, executor/checksum evidence, and these
@@ -2674,7 +2680,7 @@ not a stability baseline for current pattern schema 3 and should not be compared
   resource mode, dispatch, or validation semantics.
 - **Calling an LLM synthetic work unit a token or model throughput**: the work unit is a decode step or full-prompt
   prefill operation, while the
-  profile omits Transformer compute, model/framework execution, ANE work, GPU work outside the defined Metal preview
+  profile omits Transformer compute, model/framework execution, ANE work, GPU work outside the defined Metal
   kernels, and compute-memory overlap.
 - **Treating LLM crossover/classification as a hardware bottleneck**: it compares exact weight and KV-read logical
   payload only; equality is the complete `near_crossover` rule.
@@ -2749,8 +2755,9 @@ remain unsuitable for balanced comparative conclusions. High CV, cache-dominant 
 power state do not turn a measurement into zero; they remain explicit quality warnings.
 
 For paged results, also inspect the permutation identity/hash, physical K/V lengths, layout padding, table protection,
-lookup/metadata counts, current-token post-validation, and padding-canary result. A different block size or permutation
-is a different comparison cohort even when logical model geometry is unchanged.
+lookup/metadata counts, phase-specific K/V-write post-validation, and padding-canary result. Decode validates the
+current-token write; prefill validates the full-prompt write against the final operation ordinal. A different block
+size or permutation is a different comparison cohort even when logical model geometry is unchanged.
 
 If an otherwise identical command fails memory admission only after a non-empty `--output` target is added, include the
 conservative JSON DOM/serialization peak in the diagnosis. It scales with planned measurement records, retained
@@ -2779,7 +2786,7 @@ Make sure you are passing `script-examples/final_output.txt` generated by the la
 - [CORE_TO_CORE_WHITEPAPER.md](CORE_TO_CORE_WHITEPAPER.md) - Core-to-Core Cache-Line Handoff Latency Benchmark: methodology, assembly protocol, scheduler-hint scenarios, and JSON contract
 - [GPU_BANDWIDTH_WHITEPAPER.md](GPU_BANDWIDTH_WHITEPAPER.md) - Metal GPU memory-bandwidth methodology, validation,
   schema 1, capability boundaries, and maintenance policy
-- [LLM_MEMORY_PROFILE_WHITEPAPER.md](LLM_MEMORY_PROFILE_WHITEPAPER.md) - synthetic CPU and experimental Metal
+- [LLM_MEMORY_PROFILE_WHITEPAPER.md](LLM_MEMORY_PROFILE_WHITEPAPER.md) - synthetic CPU and Metal
   decode/prefill methodology for both layouts, execution, schema 1, validation, and interpretation limits
 - [TECHNICAL_SPECIFICATION.md](TECHNICAL_SPECIFICATION.md) - architecture and implementation details
 - [CHANGELOG.md](../CHANGELOG.md) - release history

@@ -38,10 +38,11 @@ void expect_exact_messages(const std::vector<MessageCase>& cases) {
   }
 }
 
-void expect_no_model_specific_llm_metal_status(const std::string& usage) {
+void expect_capability_based_llm_metal_status(const std::string& usage) {
   constexpr const char* forbidden_phrases[] = {
       "Apple7/M1", "M4 evidence", "M5", "validation remains pending",
-      "baseline smoke", "cross-family", "device matrix"};
+      "baseline smoke", "cross-family", "device matrix", "experimental",
+      "preview"};
   for (const char* phrase : forbidden_phrases) {
     SCOPED_TRACE(phrase);
     EXPECT_EQ(usage.find(phrase), std::string::npos);
@@ -211,9 +212,13 @@ TEST(MessagesTest, LlmMemoryCliMessagesHaveExactOutput) {
       "Options for standalone CPU/Metal synthetic LLM memory mode:\n"
       "  -M, --llm-memory       Select the memory-only LLM profile.\n"
       "      --llm-memory-backend <cpu|metal>\n"
-      "                          Execution backend (default: cpu). The experimental Metal preview\n"
-      "                          accepts both phases with contiguous or paged KV;\n"
-      "                          no fallback is performed.\n"
+      "                          Execution backend (default: cpu). Metal accepts both phases\n"
+      "                          with contiguous or paged KV. Capability admission requires a\n"
+      "                          default unified-memory Apple7-or-later device, Tier 2 argument\n"
+      "                          buffers, and maxBufferLength >= 256 MiB. The selected MSL 2.3\n"
+      "                          source, pipelines, and layout probe must succeed. Capability\n"
+      "                          absence is unsupported; compiler, pipeline, resource, or task\n"
+      "                          failure is terminal failed/invalid; no CPU fallback is performed.\n"
       "      --phase <decode|prefill>\n"
       "                          Workload phase (default: decode). CPU and Metal support both phases.\n"
       "      --weight-size-mb <MiB>\n"
@@ -500,11 +505,13 @@ TEST(MessagesTest, LlmMemoryCliMessagesHaveExactOutput) {
   expect_exact_messages(cases);
   const std::string usage =
       Messages::llm_memory_usage_options("memory_benchmark");
-  expect_no_model_specific_llm_metal_status(usage);
+  expect_capability_based_llm_metal_status(usage);
 }
 
 TEST(MessagesTest, GeneralHelpAdvertisesTheLlmBoundaryExactlyOnce) {
   const std::string usage = Messages::usage_options("memory_benchmark");
+  EXPECT_NE(usage.find("Platform: macOS 26 or later on Apple Silicon (ARM64)."),
+            std::string::npos);
   EXPECT_NE(usage.find("-M, --llm-memory"), std::string::npos);
   EXPECT_EQ(usage.find("-M, --llm-memory"),
             usage.rfind("-M, --llm-memory"));
@@ -515,9 +522,11 @@ TEST(MessagesTest, GeneralHelpAdvertisesTheLlmBoundaryExactlyOnce) {
             std::string::npos);
   EXPECT_NE(
       usage.find(
-          "or paged KV on CPU and Metal. The experimental Metal preview never"),
+          "or paged KV on CPU and Metal. Metal is runtime-capability-gated"),
       std::string::npos);
-  expect_no_model_specific_llm_metal_status(usage);
+  EXPECT_NE(usage.find("and never falls back to CPU"),
+            std::string::npos);
+  expect_capability_based_llm_metal_status(usage);
   EXPECT_NE(usage.find("--weight-size-mb"), std::string::npos);
   EXPECT_NE(usage.find("--query-heads"), std::string::npos);
   EXPECT_NE(usage.find("--context-tokens"), std::string::npos);

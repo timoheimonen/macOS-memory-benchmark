@@ -142,6 +142,7 @@ std::string usage_options(const std::string& prog_name) {
   std::ostringstream oss;
   oss << "Usage: " << prog_name << " [options]\n"
       << "Long options require --; single dash is only for one-character aliases.\n"
+      << "Platform: macOS 26 or later on Apple Silicon (ARM64).\n"
       << "Options:\n"
       << "  -B, --benchmark       Run calibrated, seeded, balanced standard bandwidth/latency benchmark.\n"
       << "                        JSON uses standard schema "
@@ -161,8 +162,8 @@ std::string usage_options(const std::string& prog_name) {
       << "                        --kv-heads, and --head-dim. Decode requires --context-tokens;\n"
       << "                        prefill requires --phase prefill, --prompt-tokens, and\n"
       << "                        --attention-query-tile-tokens. Both phases support contiguous\n"
-      << "                        or paged KV on CPU and Metal. The experimental Metal preview never\n"
-      << "                        falls back to CPU. Use\n"
+      << "                        or paged KV on CPU and Metal. Metal is runtime-capability-gated\n"
+      << "                        and never falls back to CPU. Use\n"
       << "                        --llm-memory --help for exact rules and memory-only interpretation.\n"
       << "                        JSON uses schema " << Constants::LLM_JSON_SCHEMA_VERSION
       << " methodologies "
