@@ -1,0 +1,35 @@
+cff-version: 1.2.0
+message: "If you use this software in research, benchmarks, or publications, please cite it as below."
+
+title: "macOS Memory Benchmark"
+type: software
+
+authors:
+  - given-names: "Timo"
+    family-names: "Heimonen"
+    orcid: "https://orcid.org/0009-0004-0023-2407"
+
+version: "0.63.0"
+date-released: 2026-08-23
+
+repository-code: "https://github.com/timoheimonen/macOS-memory-benchmark"
+url: "https://github.com/timoheimonen/macOS-memory-benchmark"
+
+license: "GPL-3.0-or-later"
+
+keywords:
+  - Apple Silicon
+  - macOS
+  - ARM64
+  - assembly
+  - memory benchmark
+  - microbenchmark
+  - memory bandwidth
+  - memory latency
+  - cache
+  - TLB
+  - Metal
+  - unified memory
+  - LLM memory
+  - performance
+  - CLI
