@@ -212,10 +212,11 @@ TEST(MessagesTest, LlmMemoryCliMessagesHaveExactOutput) {
       "  -M, --llm-memory       Select the memory-only LLM profile.\n"
       "      --llm-memory-backend <cpu|metal>\n"
       "                          Execution backend (default: cpu). The experimental Metal preview\n"
-      "                          accepts decode with contiguous or paged KV; no fallback is performed.\n"
+      "                          accepts decode with contiguous or paged KV and contiguous prefill;\n"
+      "                          no fallback is performed.\n"
       "      --phase <decode|prefill>\n"
       "                          Workload phase (default: decode). CPU supports both phases;\n"
-      "                          the Metal preview accepts decode only.\n"
+      "                          the Metal preview accepts decode and contiguous prefill.\n"
       "      --weight-size-mb <MiB>\n"
       "                          Required active weight bytes per work unit, in MiB.\n"
       "      --layers <count>    Required transformer layer count.\n"
@@ -239,7 +240,7 @@ TEST(MessagesTest, LlmMemoryCliMessagesHaveExactOutput) {
       "                          Rejected for decode.\n"
       "      --kv-layout <contiguous|paged>\n"
       "                          KV storage layout (default: contiguous). CPU supports both layouts;\n"
-      "                          the Metal preview supports both layouts for decode.\n"
+      "                          Metal supports both for decode and contiguous for prefill.\n"
       "      --kv-block-tokens <count>\n"
       "                          Required only for paged KV; must be a positive power of two\n"
       "                          no greater than UINT32_MAX; it may exceed the phase sequence length.\n"
@@ -344,7 +345,7 @@ TEST(MessagesTest, LlmMemoryCliMessagesHaveExactOutput) {
        "  Metal task: scenario=mixed, pipeline=llm_decode_contiguous_v1, "
        "threadgroups=8, threads_per_threadgroup=64\n"
        "  Metal timing: gpu_elapsed_seconds=0.001250000\n"
-       "  Metal validation: checksum=valid, append=valid, canary=valid"},
+       "  Metal validation: checksum=valid, kv_write=valid, canary=valid"},
       {"Metal invalid task without canary",
        Messages::report_llm_memory_metal_task(
            "kv_only", "llm_decode_contiguous_v1", 1, 32, true, true, 0.5,
@@ -352,9 +353,9 @@ TEST(MessagesTest, LlmMemoryCliMessagesHaveExactOutput) {
        "  Metal task: scenario=kv_only, pipeline=llm_decode_contiguous_v1, "
        "threadgroups=1, threads_per_threadgroup=32\n"
        "  Metal timing: gpu_elapsed_seconds=0.500000000\n"
-       "  Metal validation: checksum=invalid, append=invalid, "
+       "  Metal validation: checksum=invalid, kv_write=invalid, "
        "canary=not-applicable"},
-      {"Metal weights task without append",
+      {"Metal weights task without KV write",
        Messages::report_llm_memory_metal_task(
            "weights_only", "llm_decode_contiguous_v1", 1, 32, true, true,
            0.25, false, false, false, false, true, false, false, false),
@@ -363,7 +364,7 @@ TEST(MessagesTest, LlmMemoryCliMessagesHaveExactOutput) {
        "threads_per_threadgroup=32\n"
        "  Metal timing: gpu_elapsed_seconds=0.250000000\n"
        "  Metal validation: checksum=not-evaluated, "
-       "append=not-applicable, canary=not-applicable"},
+       "kv_write=not-applicable, canary=not-applicable"},
       {"Metal invalid timing has no numeric observation",
        Messages::report_llm_memory_metal_task(
            "mixed", "llm_decode_contiguous_v1", 1, 32, true, false, 0.0,
@@ -371,7 +372,7 @@ TEST(MessagesTest, LlmMemoryCliMessagesHaveExactOutput) {
        "  Metal task: scenario=mixed, pipeline=llm_decode_contiguous_v1, "
        "threadgroups=1, threads_per_threadgroup=32\n"
        "  Metal timing: gpu_elapsed_seconds=invalid\n"
-       "  Metal validation: checksum=not-evaluated, append=not-evaluated, "
+       "  Metal validation: checksum=not-evaluated, kv_write=not-evaluated, "
        "canary=not-applicable"},
       {"decode unit",
        Messages::report_llm_memory_work_unit_name("decode_step", false),
@@ -508,7 +509,7 @@ TEST(MessagesTest, GeneralHelpAdvertisesTheLlmBoundaryExactlyOnce) {
   EXPECT_NE(usage.find("experimental Metal preview accepts decode"),
             std::string::npos);
   EXPECT_NE(
-      usage.find("with contiguous or paged KV and never falls back to CPU"),
+      usage.find("with contiguous or paged KV and contiguous prefill, and never"),
       std::string::npos);
   expect_no_model_specific_llm_metal_status(usage);
   EXPECT_NE(usage.find("--weight-size-mb"), std::string::npos);

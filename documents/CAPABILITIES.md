@@ -12,7 +12,7 @@ Bandwidth is reported as **effective workload payload divided by measured time**
 | Access patterns (`--patterns`) | Payload-rate sensitivity to access order, regularity, and virtual stride | Which single cache, prefetch, translation, or scheduling mechanism caused a difference |
 | TLB analysis (`--analyze-tlb`) | Paired spread/packed latency deltas and empirical boundary estimates | Guaranteed architectural TLB sizes or direct DRAM latency |
 | Core-to-core (`--analyze-core2core`) | Effective round-trip time of a repeated two-thread acquire/release token exchange under scheduler hints | Isolated physical cache-line migration or coherence-path latency, exact physical-core placement, or a definitive topology map |
-| LLM memory profile (`--llm-memory`) | Effective logical model-payload rate and synthetic work-unit latency for CPU decode/prefill with contiguous or paged KV and an experimental Metal decode preview with either layout | Transformer computation, inference tokens/s, TTFT, physical DRAM traffic, runtime page allocation, ANE execution, or framework performance |
+| LLM memory profile (`--llm-memory`) | Effective logical model-payload rate and synthetic work-unit latency for CPU decode/prefill with contiguous or paged KV, experimental Metal decode with either layout, and experimental Metal prefill with contiguous KV | Transformer computation, inference tokens/s, TTFT, physical DRAM traffic, runtime page allocation, ANE execution, or framework performance |
 | JSON output (`--output`) and sweeps (`--sweep`) | Auditable measurement evidence through recoverable files or one final stdout document for every result-producing direct mode and supported CPU sweep | Comparability when commands, software, hardware, or run conditions differ |
 
 ## CPU Memory and Cache Bandwidth
@@ -37,15 +37,17 @@ CPU and GPU GB/s should not be compared as if they were the same workload: their
 
 ## Synthetic LLM Memory Profile
 
-Standalone `--llm-memory` uses generic backend/phase/layout/work-unit vocabulary. Active profiles are CPU/decode with
-contiguous or paged KV, CPU/prefill with contiguous or paged KV, and Metal/decode with either layout. Exact
+Standalone `--llm-memory` uses generic backend/phase/layout/work-unit vocabulary. Seven profiles are active: CPU/decode
+with contiguous or paged KV, CPU/prefill with contiguous or paged KV, Metal/decode with either layout, and
+Metal/prefill with contiguous KV. Exact
 methodologies are
 `llm-memory-v1-cpu-decode-contiguous`, `llm-memory-v1-cpu-decode-paged`,
 `llm-memory-v1-cpu-prefill-contiguous`, `llm-memory-v1-cpu-prefill-paged`,
-`llm-memory-v1-metal-decode-contiguous`, and `llm-memory-v1-metal-decode-paged`. Metal is explicitly selected with
-`--llm-memory-backend metal`, rejects prefill and `--threads`, and never receives an implicit CPU fallback.
+`llm-memory-v1-metal-decode-contiguous`, `llm-memory-v1-metal-decode-paged`, and
+`llm-memory-v1-metal-prefill-contiguous`. Metal is explicitly selected with `--llm-memory-backend metal`, rejects
+paged prefill and `--threads`, and never receives an implicit CPU fallback.
 
-Metal decode with contiguous or paged KV is an experimental preview.
+All three active Metal profiles are an experimental preview. Metal/prefill/paged remains inactive.
 
 Each active phase executes three scenarios:
 
@@ -54,9 +56,12 @@ Each active phase executes three scenarios:
 - `mixed` performs both traffic components in one timed scenario. CPU uses worker-local layer order inside one
   synchronized worker interval; Metal uses its scenario-specialized grid-stride kernel inside one GPU timestamp interval.
 
-Metal decode specializes one pipeline for each scenario and uses one workload dispatch per task, with every requested
-work unit looped inside that kernel. `GPUStartTime`/`GPUEndTime` define authoritative elapsed time. Reset, expected
-dual-mod32 checksum construction, and append validation are excluded. Private/tracked W/K/V resources use exact-tail
+Every active Metal profile specializes one pipeline for each scenario and uses one workload dispatch per task, with
+every requested work unit looped inside that kernel. `GPUStartTime`/`GPUEndTime` define authoritative elapsed time.
+Reset, expected dual-mod32 checksum construction, and phase-neutral `kv_write` validation are excluded.
+Contiguous Metal prefill publishes its checked lane-local serial range-helper count and rejects overflow or more than
+1,048,576 visits per lane before the checksum oracle or GPU dispatch.
+Private/tracked W/K/V resources use exact-tail
 segments no larger than 256 MiB and a Tier 2 argument buffer. Paged decode additionally uses block-aligned K/V
 segments, segmented private table storage, named-lane volatile table loads with threadgroup publication/barriers, and
 excluded padding-canary validation. Runtime admission requires unified memory, Apple7-or-later
@@ -65,9 +70,11 @@ capability does not authorize CPU fallback. Runtime compiler, pipeline, resource
 failed/invalid evidence rather than changing backend. Metal results remain synthetic effective payload rates; GPU
 cache/SLC/DRAM residency is not measured.
 
-The current source identity is `llm-metal-decode-contiguous-paged-msl23-v2`; the result records its exact runtime
-SHA-256 and scenario-specific `membenchmark.llm-metal.pipeline.decode-contiguous.*` or
-`membenchmark.llm-metal.pipeline.decode-paged.*` pipeline labels and limits.
+The current source identity is `llm-metal-decode-prefill-contiguous-paged-msl23-v3`; the result records its exact
+runtime SHA-256 and scenario-specific `membenchmark.llm-metal.pipeline.decode-contiguous.*`,
+`membenchmark.llm-metal.pipeline.decode-paged.*`, or `membenchmark.llm-metal.pipeline.prefill-contiguous.*` labels and
+limits. Metal prefill also records the 136-byte, 8-byte-aligned
+`llm-metal-prefill-contiguous-parameters-v1` ABI and runtime layout-probe evidence.
 
 With active-weight bytes `W`, layer count `L`, KV heads `h_kv`, head dimension `d_h`, KV element bytes `s_kv`, batch
 `B`, and visible context `A`, define `K = L * 2 * h_kv * d_h * s_kv`. Per-work-unit effective model payload is `W` for
@@ -82,7 +89,9 @@ reads each causal prefix at tile ends `e_j = min((j+1)*Q, P)`. With `C = ceil(P/
 `W`, `B*(P+S(P,Q))*K`, or `W+B*(P+S(P,Q))*K` for weights-only, KV-only, or mixed. `Q=P` reads one full prefix and
 `Q=1` yields `S=triangular(P)`. Causal-pair and logical-FMA counts are audit metadata only; no FMA is executed.
 CPU prefill also reports scenario-specific cost-balanced partition identities and exact per-worker minimum, maximum,
-and imbalance evidence with `worker-cost` units.
+and imbalance evidence with `worker-cost` units. Contiguous Metal prefill performs the same logical full-prompt write
+and tiled-prefix visits inside one scenario-specialized dispatch. A weight-bearing scenario makes one weight pass per
+operation. Its checksum and source-hash-bound loop audit cover separate correctness properties.
 
 CPU execution allocates active weights and K/V resources at their full derived sizes in ordinary cacheable anonymous
 memory; Metal uses exact-tail private/tracked W/K/V segments on unified memory. Initialization and pre-touch occur before
@@ -111,13 +120,14 @@ pool, physical ID, and physical offset, while the timed checksum binds logical t
 semantic visit kind, and work-unit ordinal. Decode current-token writes or prefill final-ordinal prompt samples, plus
 padding canaries, are validated after each task.
 Permutation generation, initialization, expected-checksum construction, and post-validation remain outside the
-synchronized CPU timing interval.
+synchronized CPU timing interval or Metal GPU interval. Metal publishes the generic `kv_write_evaluated` and
+`kv_write_valid` validation fields for both phases.
 
 The reported decimal GB/s is exact logical effective model payload divided by backend-authoritative elapsed time:
 synchronized worker time for CPU or `GPUStartTime`/`GPUEndTime` for Metal. A synthetic work unit is one `decode_step`
 or one full-prompt `prefill_operation`, not an inference token. The mode does not run GEMM/GEMV, dequantization, RoPE,
 attention math, softmax, layer normalization, framework dispatch, model loading, ANE work, or GPU execution outside the
-defined Metal decode kernels. Prefill results do not predict TTFT. The mode also does not model growing
+defined Metal preview kernels. Prefill results do not predict TTFT. The mode also does not model growing
 context, runtime page allocation,
 sliding-window KV, prefix sharing,
 speculative decoding, or compute-memory overlap. The active paged layout measures frozen table indirection and physical

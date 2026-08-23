@@ -51,6 +51,15 @@ bool valid_kv_element_bytes(size_t bytes) {
   return bytes == 1 || bytes == 2 || bytes == 4;
 }
 
+bool is_activated_metal_profile(LlmPhase phase,
+                                LlmKvLayout kv_layout) noexcept {
+  return (phase == LlmPhase::Decode &&
+          (kv_layout == LlmKvLayout::Contiguous ||
+           kv_layout == LlmKvLayout::Paged)) ||
+         (phase == LlmPhase::Prefill &&
+          kv_layout == LlmKvLayout::Contiguous);
+}
+
 bool json_integer_is_safe(size_t value) {
   return value <= Constants::LLM_JSON_MAX_SAFE_INTEGER;
 }
@@ -328,8 +337,10 @@ std::string build_model_plan_identity(const LlmMemoryWorkPlan& plan) {
   if (geometry.prefill.has_value()) {
     append_identity_field(identity, "prefill_planner_version",
                           LlmPrefillVersion::PLANNER);
-    append_identity_field(identity, "prefill_cpu_partition_version",
-                          LlmPrefillVersion::CPU_PARTITION);
+    if (cpu_plan != nullptr) {
+      append_identity_field(identity, "prefill_cpu_partition_version",
+                            LlmPrefillVersion::CPU_PARTITION);
+    }
     append_identity_field(identity, "prefill_prompt_tokens",
                           geometry.prefill->prompt_tokens);
     append_identity_field(identity, "prefill_query_tile_tokens",
@@ -2161,20 +2172,23 @@ bool finalize_plan_identities(LlmMemoryWorkPlan& plan) {
   const bool executable_prefill =
       prefill && cpu_plan != nullptr && cpu_plan->prefill.has_value();
   if (plan.backend == LlmMemoryBackend::Metal) {
-    if (prefill || metal_plan == nullptr) {
+    if (metal_plan == nullptr || (prefill && paged_layout)) {
       return false;
     }
     plan.component_identities.backend_executor_version =
-        paged_layout ? LlmMetalDecodePagedVersion::EXECUTOR
-                     : LlmMetalDecodeContiguousVersion::EXECUTOR;
+        prefill ? LlmMetalPrefillContiguousVersion::EXECUTOR
+                : paged_layout ? LlmMetalDecodePagedVersion::EXECUTOR
+                               : LlmMetalDecodeContiguousVersion::EXECUTOR;
     plan.component_identities.resource_abi_version =
         Constants::LLM_METAL_ARGUMENT_BUFFER_ABI_VERSION;
     plan.component_identities.schedule_version =
-        paged_layout ? LlmMetalDecodePagedVersion::SCHEDULE
-                     : LlmMetalDecodeContiguousVersion::SCHEDULE;
+        prefill ? LlmMetalPrefillContiguousVersion::SCHEDULE
+                : paged_layout ? LlmMetalDecodePagedVersion::SCHEDULE
+                               : LlmMetalDecodeContiguousVersion::SCHEDULE;
     plan.component_identities.timer_policy_version =
-        paged_layout ? LlmMetalDecodePagedVersion::TIMER
-                     : LlmMetalDecodeContiguousVersion::TIMER;
+        prefill ? LlmMetalPrefillContiguousVersion::TIMER
+                : paged_layout ? LlmMetalDecodePagedVersion::TIMER
+                               : LlmMetalDecodeContiguousVersion::TIMER;
   } else {
     plan.component_identities.backend_executor_version =
         executable_prefill
@@ -2201,20 +2215,23 @@ bool finalize_plan_identities(LlmMemoryWorkPlan& plan) {
   }
   plan.component_identities.buffer_pattern_version =
       plan.backend == LlmMemoryBackend::Metal
-          ? paged_layout ? LlmMetalDecodePagedVersion::BUFFER_PATTERN
-                         : LlmMetalDecodeContiguousVersion::BUFFER_PATTERN
+          ? prefill ? LlmMetalPrefillContiguousVersion::BUFFER_PATTERN
+            : paged_layout ? LlmMetalDecodePagedVersion::BUFFER_PATTERN
+                           : LlmMetalDecodeContiguousVersion::BUFFER_PATTERN
           : paged_layout ? Constants::LLM_PAGED_BUFFER_PATTERN_VERSION
                          : Constants::LLM_BUFFER_PATTERN_VERSION;
   plan.component_identities.write_pattern_version =
       plan.backend == LlmMemoryBackend::Metal
-          ? paged_layout ? LlmMetalDecodePagedVersion::WRITE_PATTERN
-                         : LlmMetalDecodeContiguousVersion::WRITE_PATTERN
+          ? prefill ? LlmMetalPrefillContiguousVersion::WRITE_PATTERN
+            : paged_layout ? LlmMetalDecodePagedVersion::WRITE_PATTERN
+                           : LlmMetalDecodeContiguousVersion::WRITE_PATTERN
           : prefill ? LlmPrefillVersion::WRITE_PATTERN
                     : Constants::LLM_APPEND_PATTERN_VERSION;
   plan.component_identities.checksum_pattern_version =
       plan.backend == LlmMemoryBackend::Metal
-          ? paged_layout ? LlmMetalDecodePagedVersion::CHECKSUM
-                         : LlmMetalDecodeContiguousVersion::CHECKSUM
+          ? prefill ? LlmMetalPrefillContiguousVersion::CHECKSUM
+            : paged_layout ? LlmMetalDecodePagedVersion::CHECKSUM
+                           : LlmMetalDecodeContiguousVersion::CHECKSUM
           : prefill ? paged_layout ? LlmPrefillVersion::PAGED_CHECKSUM_ORACLE
                                    : LlmPrefillVersion::CHECKSUM_ORACLE
                     : paged_layout ? Constants::LLM_PAGED_READ_CHECKSUM_VERSION
@@ -2287,9 +2304,8 @@ bool build_auxiliary_preflight_view(
                          cpu_plan->effective_workers != 0;
   const bool metal_valid = plan.backend == LlmMemoryBackend::Metal &&
                            metal_plan != nullptr &&
-                           plan.phase == LlmPhase::Decode &&
-                           (plan.kv_layout == LlmKvLayout::Contiguous ||
-                            plan.kv_layout == LlmKvLayout::Paged);
+                           is_activated_metal_profile(plan.phase,
+                                                      plan.kv_layout);
   if ((!cpu_valid && !metal_valid) || !plan.memory_budget.valid ||
       plan.plan_identity.empty()) {
     return false;
@@ -2328,12 +2344,8 @@ bool build_auxiliary_preflight_view(
       LlmScenario::Mixed};
   std::array<size_t, kLlmScenarioCount> maximum_work_units{};
   for (size_t index = 0; index < kLlmScenarioCount; ++index) {
-    const LlmScenarioLimits limits =
-        calculate_llm_scenario_limits(
-            plan.geometry, kScenarios[index],
-            plan.backend == LlmMemoryBackend::Metal
-                ? Constants::LLM_METAL_MAX_WORK_UNITS_PER_DISPATCH
-                : Constants::LLM_MAX_WORK_UNITS_PER_MEASUREMENT);
+    const LlmScenarioLimits limits = calculate_llm_scenario_limits(
+        plan.geometry, kScenarios[index], plan.backend);
     if (!limits.valid) {
       plan.valid = original_valid;
       return false;
@@ -3532,11 +3544,27 @@ bool metal_execution_plan_matches(
     const LlmMetalExecutionPlan& execution,
     size_t expected_additional_owned_bytes) noexcept {
   const bool paged_layout = plan.kv_layout == LlmKvLayout::Paged;
+  const bool decode_profile = plan.phase == LlmPhase::Decode;
+  const bool prefill_profile = plan.phase == LlmPhase::Prefill;
+  const bool phase_geometry_matches =
+      decode_profile
+          ? plan.geometry.phase == LlmPhase::Decode &&
+                plan.geometry.kv_layout == plan.kv_layout &&
+                plan.geometry.work_unit_kind == LlmWorkUnitKind::DecodeStep &&
+                plan.work_unit_kind == LlmWorkUnitKind::DecodeStep &&
+                plan.geometry.decode.has_value() &&
+                !plan.geometry.prefill.has_value() &&
+                !plan.prefill_plan.has_value()
+          : prefill_profile &&
+                plan.geometry.phase == LlmPhase::Prefill &&
+                plan.geometry.kv_layout == plan.kv_layout &&
+                plan.geometry.work_unit_kind ==
+                    LlmWorkUnitKind::PrefillOperation &&
+                plan.work_unit_kind == LlmWorkUnitKind::PrefillOperation &&
+                validate_prefill_plan_noalloc(plan);
   if (plan.backend != LlmMemoryBackend::Metal ||
-      plan.phase != LlmPhase::Decode ||
-      (plan.kv_layout != LlmKvLayout::Contiguous && !paged_layout) ||
-      !plan.geometry.valid || !plan.geometry.decode.has_value() ||
-      plan.geometry.prefill.has_value() || !execution.valid ||
+      !is_activated_metal_profile(plan.phase, plan.kv_layout) ||
+      !plan.geometry.valid || !phase_geometry_matches || !execution.valid ||
       execution.reason_code != LlmMetalPlanReason::VALID ||
       execution.identity.empty() || execution.msl_revision.empty() ||
       execution.msl_source_sha256.size() != 64) {
@@ -3755,14 +3783,36 @@ LlmMemoryWorkPlan build_llm_memory_work_plan_candidate(
     plan.reason_code = plan.geometry.reason_code;
     return plan;
   }
-  if (request.backend == LlmMemoryBackend::Metal) {
-    if (plan.phase != LlmPhase::Decode) {
-      plan.reason_code = LlmWorkPlanReason::PHASE_NOT_ACTIVATED;
+  if (plan.phase == LlmPhase::Prefill) {
+    plan.prefill_plan = resolve_llm_prefill_plan(
+        {request.geometry.active_weight_bytes,
+         request.geometry.prompt_tokens,
+         request.geometry.attention_query_tile_tokens,
+         request.geometry.layer_count,
+         request.geometry.batch_size,
+         request.geometry.query_head_count,
+         request.geometry.head_dimension,
+         plan.geometry.k_or_v_record_bytes_per_layer,
+         plan.kv_layout == LlmKvLayout::Paged
+             ? request.geometry.kv_block_tokens
+             : size_t{0}});
+    if (!plan.prefill_plan->valid) {
+      plan.reason_code = plan.prefill_plan->reason_code;
       return plan;
     }
-    if (plan.kv_layout != LlmKvLayout::Contiguous &&
-        plan.kv_layout != LlmKvLayout::Paged) {
+  }
+  if (request.backend == LlmMemoryBackend::Metal) {
+    if ((plan.phase == LlmPhase::Decode &&
+         plan.kv_layout != LlmKvLayout::Contiguous &&
+         plan.kv_layout != LlmKvLayout::Paged) ||
+        (plan.phase == LlmPhase::Prefill &&
+         plan.kv_layout != LlmKvLayout::Contiguous)) {
       plan.reason_code = LlmWorkPlanReason::KV_LAYOUT_NOT_ACTIVATED;
+      return plan;
+    }
+    if (plan.phase != LlmPhase::Decode &&
+        plan.phase != LlmPhase::Prefill) {
+      plan.reason_code = LlmWorkPlanReason::PHASE_NOT_ACTIVATED;
       return plan;
     }
     if (request.requested_workers != 0 || request.available_workers != 0) {
@@ -3774,6 +3824,10 @@ LlmMemoryWorkPlan build_llm_memory_work_plan_candidate(
         !json_integer_is_safe(request.geometry.kv_head_count) ||
         !json_integer_is_safe(request.geometry.head_dimension) ||
         !json_integer_is_safe(request.geometry.visible_context_tokens) ||
+        !json_integer_is_safe(request.geometry.prompt_tokens) ||
+        !json_integer_is_safe(
+            request.geometry.attention_query_tile_tokens) ||
+        !json_integer_is_safe(request.geometry.kv_block_tokens) ||
         !json_integer_is_safe(request.geometry.batch_size)) {
       plan.reason_code = LlmWorkPlanReason::JSON_INTEGER_OUT_OF_RANGE;
       return plan;
@@ -3858,24 +3912,6 @@ LlmMemoryWorkPlan build_llm_memory_work_plan_candidate(
   cpu_plan->requested_workers = request.requested_workers;
   cpu_plan->available_workers = request.available_workers;
   const bool prefill_phase = plan.phase == LlmPhase::Prefill;
-  if (prefill_phase) {
-    plan.prefill_plan = resolve_llm_prefill_plan(
-        {request.geometry.active_weight_bytes,
-         request.geometry.prompt_tokens,
-         request.geometry.attention_query_tile_tokens,
-         request.geometry.layer_count,
-         request.geometry.batch_size,
-         request.geometry.query_head_count,
-         request.geometry.head_dimension,
-         plan.geometry.k_or_v_record_bytes_per_layer,
-         plan.kv_layout == LlmKvLayout::Paged
-             ? request.geometry.kv_block_tokens
-             : size_t{0}});
-    if (!plan.prefill_plan->valid) {
-      plan.reason_code = plan.prefill_plan->reason_code;
-      return plan;
-    }
-  }
   if (!json_integer_is_safe(request.requested_workers) ||
       !json_integer_is_safe(request.available_workers)) {
     plan.reason_code = LlmWorkPlanReason::JSON_INTEGER_OUT_OF_RANGE;
@@ -5000,6 +5036,38 @@ bool readmit_llm_memory_work_plan(
   }
 }
 
+bool calculate_llm_metal_prefill_serial_range_visits_per_work_unit(
+    const LlmGeometry& geometry, LlmScenario scenario,
+    size_t& visits) noexcept {
+  if (!geometry.valid || geometry.phase != LlmPhase::Prefill ||
+      geometry.kv_layout != LlmKvLayout::Contiguous ||
+      !geometry.prefill.has_value() || geometry.layer_count == 0 ||
+      geometry.batch_size == 0 || !valid_scenario(scenario)) {
+    return false;
+  }
+  const bool include_weight = scenario != LlmScenario::KvOnly;
+  const bool include_kv = scenario != LlmScenario::WeightsOnly;
+  size_t checked_visits = include_weight ? geometry.layer_count : 0;
+  if (include_kv) {
+    size_t prompt_and_tile_visits = 0;
+    size_t kv_visits = 0;
+    if (!NumericUtils::checked_add(geometry.prefill->prompt_tokens,
+                                   geometry.prefill->tile_count,
+                                   prompt_and_tile_visits) ||
+        !NumericUtils::checked_multiply(geometry.layer_count,
+                                        geometry.batch_size, kv_visits) ||
+        !NumericUtils::checked_multiply(kv_visits, prompt_and_tile_visits,
+                                        kv_visits) ||
+        !NumericUtils::checked_multiply(kv_visits, 2, kv_visits) ||
+        !NumericUtils::checked_add(checked_visits, kv_visits,
+                                   checked_visits)) {
+      return false;
+    }
+  }
+  visits = checked_visits;
+  return true;
+}
+
 LlmScenarioLimits calculate_llm_scenario_limits(
     const LlmGeometry& geometry, LlmScenario scenario,
     size_t work_unit_cap) {
@@ -5087,6 +5155,41 @@ LlmScenarioLimits calculate_llm_scenario_limits(
   return limits;
 }
 
+LlmScenarioLimits calculate_llm_scenario_limits(
+    const LlmGeometry& geometry, LlmScenario scenario,
+    LlmMemoryBackend backend) {
+  size_t work_unit_cap =
+      backend == LlmMemoryBackend::Metal
+          ? Constants::LLM_METAL_MAX_WORK_UNITS_PER_DISPATCH
+          : Constants::LLM_MAX_WORK_UNITS_PER_MEASUREMENT;
+  if (backend == LlmMemoryBackend::Metal && geometry.valid &&
+      geometry.phase == LlmPhase::Prefill &&
+      geometry.kv_layout == LlmKvLayout::Contiguous) {
+    size_t serial_range_visits_per_work_unit = 0;
+    if (!calculate_llm_metal_prefill_serial_range_visits_per_work_unit(
+            geometry, scenario, serial_range_visits_per_work_unit) ||
+        serial_range_visits_per_work_unit == 0) {
+      LlmScenarioLimits limits;
+      limits.scenario = scenario;
+      limits.reason_code = LlmWorkPlanReason::TASK_ACCOUNTED_BYTES_OVERFLOW;
+      return limits;
+    }
+    if (serial_range_visits_per_work_unit >
+        Constants::LLM_METAL_MAX_SERIAL_RANGE_VISITS_PER_LANE_PER_TASK) {
+      LlmScenarioLimits limits;
+      limits.scenario = scenario;
+      limits.reason_code =
+          LlmMetalPlanReason::SERIAL_RANGE_VISIT_CAP_EXCEEDED;
+      return limits;
+    }
+    work_unit_cap = std::min(
+        work_unit_cap,
+        Constants::LLM_METAL_MAX_SERIAL_RANGE_VISITS_PER_LANE_PER_TASK /
+            serial_range_visits_per_work_unit);
+  }
+  return calculate_llm_scenario_limits(geometry, scenario, work_unit_cap);
+}
+
 LlmScenarioWorkPlan build_llm_scenario_work_plan(
     const LlmMemoryWorkPlan& model_plan, LlmScenario scenario, size_t work_units,
     bool explicit_iterations) {
@@ -5101,12 +5204,8 @@ LlmScenarioWorkPlan build_llm_scenario_work_plan(
   if (valid_scenario(scenario)) {
     plan.scenario_seed = model_plan.scenario_seeds[scenario_index(scenario)];
   }
-  const LlmScenarioLimits limits =
-      calculate_llm_scenario_limits(
-          model_plan.geometry, scenario,
-          model_plan.backend == LlmMemoryBackend::Metal
-              ? Constants::LLM_METAL_MAX_WORK_UNITS_PER_DISPATCH
-              : Constants::LLM_MAX_WORK_UNITS_PER_MEASUREMENT);
+  const LlmScenarioLimits limits = calculate_llm_scenario_limits(
+      model_plan.geometry, scenario, model_plan.backend);
   if (!limits.valid) {
     plan.reason_code = limits.reason_code;
     return plan;

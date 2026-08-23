@@ -259,8 +259,8 @@ std::string report_llm_memory_metal_task(
     const std::string& scenario, const std::string& pipeline,
     size_t threadgroups, size_t threads_per_threadgroup,
     bool timing_evaluated, bool timing_valid, double gpu_elapsed_seconds,
-    bool checksum_evaluated, bool checksum_valid, bool append_applicable,
-    bool append_evaluated, bool append_valid, bool canary_applicable,
+    bool checksum_evaluated, bool checksum_valid, bool kv_write_applicable,
+    bool kv_write_evaluated, bool kv_write_valid, bool canary_applicable,
     bool canary_evaluated, bool canary_valid);
 std::string report_llm_memory_work_unit_name(
     const std::string& work_unit_kind, bool plural);

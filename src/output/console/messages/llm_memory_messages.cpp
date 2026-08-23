@@ -109,10 +109,11 @@ std::string llm_memory_usage_options(const std::string& prog_name) {
         << "  -M, --llm-memory       Select the memory-only LLM profile.\n"
         << "      --llm-memory-backend <cpu|metal>\n"
         << "                          Execution backend (default: cpu). The experimental Metal preview\n"
-        << "                          accepts decode with contiguous or paged KV; no fallback is performed.\n"
+        << "                          accepts decode with contiguous or paged KV and contiguous prefill;\n"
+        << "                          no fallback is performed.\n"
         << "      --phase <decode|prefill>\n"
         << "                          Workload phase (default: decode). CPU supports both phases;\n"
-        << "                          the Metal preview accepts decode only.\n"
+        << "                          the Metal preview accepts decode and contiguous prefill.\n"
         << "      --weight-size-mb <MiB>\n"
         << "                          Required active weight bytes per work unit, in MiB.\n"
         << "      --layers <count>    Required transformer layer count.\n"
@@ -135,7 +136,7 @@ std::string llm_memory_usage_options(const std::string& prog_name) {
         << "                          Rejected for decode.\n"
         << "      --kv-layout <contiguous|paged>\n"
         << "                          KV storage layout (default: contiguous). CPU supports both layouts;\n"
-        << "                          the Metal preview supports both layouts for decode.\n"
+        << "                          Metal supports both for decode and contiguous for prefill.\n"
         << "      --kv-block-tokens <count>\n"
         << "                          Required only for paged KV; must be a positive power of two\n"
         << "                          no greater than UINT32_MAX; it may exceed the phase sequence length.\n"
@@ -208,8 +209,8 @@ std::string report_llm_memory_metal_task(
     const std::string& scenario, const std::string& pipeline,
     size_t threadgroups, size_t threads_per_threadgroup,
     bool timing_evaluated, bool timing_valid, double gpu_elapsed_seconds,
-    bool checksum_evaluated, bool checksum_valid, bool append_applicable,
-    bool append_evaluated, bool append_valid, bool canary_applicable,
+    bool checksum_evaluated, bool checksum_valid, bool kv_write_applicable,
+    bool kv_write_evaluated, bool kv_write_valid, bool canary_applicable,
     bool canary_evaluated, bool canary_valid) {
   const auto validation_status = [](bool applicable, bool evaluated,
                                     bool valid) {
@@ -235,9 +236,9 @@ std::string report_llm_memory_metal_task(
   }
   report << "\n  Metal validation: checksum="
          << validation_status(true, checksum_evaluated, checksum_valid)
-         << ", append="
-         << validation_status(append_applicable, append_evaluated,
-                              append_valid)
+         << ", kv_write="
+         << validation_status(kv_write_applicable, kv_write_evaluated,
+                              kv_write_valid)
          << ", canary="
          << validation_status(canary_applicable, canary_evaluated,
                               canary_valid);

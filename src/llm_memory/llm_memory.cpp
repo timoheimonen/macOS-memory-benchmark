@@ -317,12 +317,16 @@ const char* validate_llm_activated_profile(
     case LlmMemoryBackend::Cpu:
       return nullptr;
     case LlmMemoryBackend::Metal:
-      if (config.phase != LlmPhase::Decode) {
-        return LlmMemoryConfigReason::PHASE_NOT_ACTIVATED;
-      }
-      if (config.kv_layout != LlmKvLayout::Contiguous &&
-          config.kv_layout != LlmKvLayout::Paged) {
+      if ((config.phase == LlmPhase::Decode &&
+           config.kv_layout != LlmKvLayout::Contiguous &&
+           config.kv_layout != LlmKvLayout::Paged) ||
+          (config.phase == LlmPhase::Prefill &&
+           config.kv_layout != LlmKvLayout::Contiguous)) {
         return LlmMemoryConfigReason::KV_LAYOUT_NOT_ACTIVATED;
+      }
+      if (config.phase != LlmPhase::Decode &&
+          config.phase != LlmPhase::Prefill) {
+        return LlmMemoryConfigReason::PHASE_NOT_ACTIVATED;
       }
       return nullptr;
   }
@@ -341,9 +345,13 @@ build_runtime_metal_resource_request(
       backend_evidence.initialization.status != LlmBackendStatus::Ready ||
       metal == nullptr || !logical_plan.geometry.valid ||
       logical_plan.backend != LlmMemoryBackend::Metal ||
-      logical_plan.phase != LlmPhase::Decode ||
-      (logical_plan.kv_layout != LlmKvLayout::Contiguous &&
-       logical_plan.kv_layout != LlmKvLayout::Paged)) {
+      (logical_plan.phase == LlmPhase::Decode &&
+       logical_plan.kv_layout != LlmKvLayout::Contiguous &&
+       logical_plan.kv_layout != LlmKvLayout::Paged) ||
+      (logical_plan.phase == LlmPhase::Prefill &&
+       logical_plan.kv_layout != LlmKvLayout::Contiguous) ||
+      (logical_plan.phase != LlmPhase::Decode &&
+       logical_plan.phase != LlmPhase::Prefill)) {
     return std::nullopt;
   }
   LlmMetalResourcePlanRequest request;
@@ -816,12 +824,8 @@ int parse_llm_memory_arguments(int argc, char* argv[],
   size_t maximum_explicit_iterations =
       std::numeric_limits<size_t>::max();
   for (LlmScenario scenario : kScenarios) {
-    const LlmScenarioLimits limits =
-        calculate_llm_scenario_limits(
-            geometry, scenario,
-            config.backend == LlmMemoryBackend::Metal
-                ? Constants::LLM_METAL_MAX_WORK_UNITS_PER_DISPATCH
-                : Constants::LLM_MAX_WORK_UNITS_PER_MEASUREMENT);
+    const LlmScenarioLimits limits = calculate_llm_scenario_limits(
+        geometry, scenario, config.backend);
     if (!limits.valid) {
       report_llm_config_failure(limits.reason_code);
       return EXIT_FAILURE;

@@ -119,6 +119,18 @@ LlmMemoryConfig explicit_prefill_config(size_t loop_count = 2,
   return config;
 }
 
+LlmMemoryConfig explicit_metal_prefill_config(
+    size_t loop_count = 1, size_t iterations = 1) {
+  LlmMemoryConfig config =
+      explicit_prefill_config(loop_count, iterations);
+  config.backend = LlmMemoryBackend::Metal;
+  config.requested_workers = 0;
+  config.available_workers = 0;
+  config.user_specified_workers = false;
+  config.user_specified_backend = true;
+  return config;
+}
+
 LlmMemoryConfig automatic_prefill_config(size_t loop_count = 1) {
   LlmMemoryConfig config = explicit_prefill_config(loop_count);
   config.iterations = 0;
@@ -411,8 +423,9 @@ class FakeLlmBackend final : public LlmBackend {
     if (backend_ == LlmMemoryBackend::Metal) {
       LlmMetalTaskEvidence metal;
       metal.timed_pipeline_available = true;
-      metal.pipeline_label =
-          "membenchmark.llm-metal.pipeline.decode-contiguous.fake";
+      metal.pipeline_label = model_plan.phase == LlmPhase::Prefill
+                                 ? "membenchmark.llm-metal.pipeline.prefill-contiguous.fake"
+                                 : "membenchmark.llm-metal.pipeline.decode-contiguous.fake";
       metal.pipeline_thread_execution_width = 32;
       metal.pipeline_max_total_threads_per_threadgroup = 256;
       metal.grid_plan_available = true;
@@ -439,8 +452,9 @@ class FakeLlmBackend final : public LlmBackend {
       metal.post_validation_command_status = "complete";
       metal.checksum_evaluated = true;
       metal.checksum_valid = true;
-      metal.append_validation_evaluated = true;
-      metal.append_validation_valid = true;
+      metal.kv_write_validation_evaluated =
+          task_plan.kv_write_kind != LlmKvWriteKind::None;
+      metal.kv_write_validation_valid = true;
       metal.post_validation_evaluated = true;
       metal.post_validation_valid = true;
       result.backend_evidence = std::move(metal);
@@ -774,7 +788,7 @@ TEST(LlmMemoryRunnerTest,
     EXPECT_TRUE(metal->grid_plan.threadgroup_accounted_bytes.empty());
     EXPECT_TRUE(metal->checksum_evaluated);
     EXPECT_TRUE(metal->checksum_valid);
-    EXPECT_TRUE(metal->append_validation_valid);
+    EXPECT_TRUE(metal->kv_write_validation_valid);
     EXPECT_TRUE(metal->post_validation_valid);
     EXPECT_EQ(measurement.requested_workers, 0u);
     EXPECT_EQ(measurement.effective_workers, 0u);
@@ -836,6 +850,128 @@ TEST(LlmMemoryRunnerTest,
             expected_task_lookups);
   EXPECT_EQ(result.counters.completed_layout_metadata_lookup_count,
             expected_task_lookups);
+}
+
+TEST(LlmMemoryRunnerTest,
+     PreinitializedMetalPrefillRunsSingleOperationTasks) {
+  const LlmMemoryConfig config = explicit_metal_prefill_config();
+  ASSERT_EQ(config.iterations, 1u);
+  const LlmMemoryWorkPlan plan = build_metal_runner_plan(config, true);
+  ASSERT_TRUE(plan.valid) << plan.reason_code;
+  EXPECT_EQ(plan.methodology_version,
+            "llm-memory-v1-metal-prefill-contiguous");
+  EXPECT_EQ(plan.phase, LlmPhase::Prefill);
+  EXPECT_EQ(plan.kv_layout, LlmKvLayout::Contiguous);
+  EXPECT_EQ(plan.work_unit_kind, LlmWorkUnitKind::PrefillOperation);
+  ASSERT_TRUE(plan.geometry.prefill.has_value());
+  EXPECT_EQ(plan.geometry.prefill->prompt_tokens, 5u);
+  EXPECT_EQ(plan.geometry.prefill->attention_query_tile_tokens, 2u);
+  const LlmMetalExecutionPlan* const execution_plan =
+      get_llm_metal_execution_plan(plan);
+  ASSERT_NE(execution_plan, nullptr);
+  ASSERT_TRUE(execution_plan->valid) << execution_plan->reason_code;
+
+  FakeLlmBackend backend(LlmMemoryBackend::Metal);
+  ASSERT_EQ(backend.initialize(config).status,
+            LlmBackendStatus::Ready);
+  LlmMemoryResult result;
+  ASSERT_EQ(run_llm_memory_suite(config, plan, backend, result),
+            EXIT_SUCCESS)
+      << result.reason_code << ": " << result.diagnostic;
+  ASSERT_TRUE(result.frozen_scenario_plans.valid);
+  ASSERT_EQ(result.measurements.size(), kLlmScenarioCount);
+  ASSERT_EQ(backend.calls.size(), 2 * kLlmScenarioCount);
+
+  for (size_t index = 0; index < kLlmScenarioCount; ++index) {
+    const LlmScenarioWorkPlan& frozen =
+        result.frozen_scenario_plans.scenarios[index];
+    EXPECT_EQ(frozen.work_units, 1u);
+    EXPECT_EQ(frozen.work_unit_kind,
+              LlmWorkUnitKind::PrefillOperation);
+    EXPECT_EQ(frozen.kv_write_kind,
+              frozen.scenario == LlmScenario::WeightsOnly
+                  ? LlmKvWriteKind::None
+                  : LlmKvWriteKind::FullPromptPopulation);
+    ASSERT_EQ(result.calibration_attempt_counts[index], 1u);
+  }
+  for (const LlmMeasurementState& measurement : result.measurements) {
+    EXPECT_EQ(measurement.planned_work_units, 1u);
+    EXPECT_EQ(measurement.completed_work_units, 1u);
+    EXPECT_EQ(measurement.work_unit_kind,
+              LlmWorkUnitKind::PrefillOperation);
+    EXPECT_EQ(measurement.kv_write_kind,
+              measurement.scenario == LlmScenario::WeightsOnly
+                  ? LlmKvWriteKind::None
+                  : LlmKvWriteKind::FullPromptPopulation);
+    const LlmMetalTaskEvidence* const metal =
+        get_llm_metal_task_evidence(measurement.execution);
+    ASSERT_NE(metal, nullptr);
+    EXPECT_EQ(
+        metal->pipeline_label,
+        "membenchmark.llm-metal.pipeline.prefill-contiguous.fake");
+    EXPECT_EQ(metal->kv_write_validation_evaluated,
+              measurement.scenario != LlmScenario::WeightsOnly);
+    EXPECT_TRUE(metal->kv_write_validation_valid);
+  }
+}
+
+TEST(LlmMemoryRunnerTest,
+     AutomaticMetalPrefillConfirmsAndFreezesIrreducibleSingleOperation) {
+  LlmMemoryConfig config = explicit_metal_prefill_config();
+  config.iterations = 0;
+  config.user_specified_iterations = false;
+  config.weight_size_mb = 8;
+  const LlmMemoryWorkPlan plan = build_metal_runner_plan(config, true);
+  ASSERT_TRUE(plan.valid) << plan.reason_code;
+  ASSERT_EQ(plan.backend, LlmMemoryBackend::Metal);
+  ASSERT_EQ(plan.phase, LlmPhase::Prefill);
+
+  FakeLlmBackend backend(LlmMemoryBackend::Metal);
+  backend.mutate = [](const LlmMemoryWorkPlan&,
+                      const LlmScenarioWorkPlan& task_plan,
+                      const LlmRunnerTaskContext& context, size_t,
+                      LlmTaskExecutionResult& result) {
+    double elapsed_seconds = result.timing.elapsed_seconds;
+    if (context.purpose == "pilot") {
+      elapsed_seconds = static_cast<double>(task_plan.work_units) * 0.300;
+    } else if (context.purpose == "single_unit_confirmation") {
+      elapsed_seconds = 0.300;
+    }
+    result.timing.elapsed_seconds = elapsed_seconds;
+    LlmMetalTaskEvidence* const metal =
+        std::get_if<LlmMetalTaskEvidence>(&result.backend_evidence);
+    ASSERT_NE(metal, nullptr);
+    metal->gpu_end_seconds = metal->gpu_start_seconds + elapsed_seconds;
+    metal->gpu_elapsed_seconds = elapsed_seconds;
+  };
+  LlmMemoryResult result;
+
+  ASSERT_EQ(run_llm_memory_suite(config, plan, backend, result),
+            EXIT_SUCCESS)
+      << result.reason_code << ": " << result.diagnostic;
+  ASSERT_TRUE(result.frozen_scenario_plans.valid);
+  for (const LlmScenarioWorkPlan& frozen :
+       result.frozen_scenario_plans.scenarios) {
+    EXPECT_EQ(frozen.work_units, 1u);
+    EXPECT_EQ(frozen.work_unit_kind,
+              LlmWorkUnitKind::PrefillOperation);
+  }
+
+  const std::vector<TaskRecord> kv = records_for_scenario(
+      backend.calls, LlmScenario::KvOnly, false);
+  const auto confirmation = std::find_if(
+      kv.begin(), kv.end(), [](const TaskRecord& record) {
+        return record.context.purpose == "single_unit_confirmation";
+      });
+  ASSERT_NE(confirmation, kv.end());
+  EXPECT_EQ(confirmation->work_units, 1u);
+  ASSERT_EQ(result.measurements.size(), kLlmScenarioCount);
+  for (const LlmMeasurementState& measurement : result.measurements) {
+    EXPECT_EQ(measurement.planned_work_units, 1u);
+    EXPECT_EQ(measurement.completed_work_units, 1u);
+    EXPECT_NE(get_llm_metal_task_evidence(measurement.execution), nullptr);
+    EXPECT_EQ(get_llm_cpu_task_evidence(measurement.execution), nullptr);
+  }
 }
 
 TEST(LlmMemoryRunnerTest,
@@ -2831,6 +2967,11 @@ TEST(LlmMemoryRunnerTest, RunnerAuxiliaryBudgetAcceptsExactBoundaryAndRejectsOne
 }
 
 TEST(LlmMemoryRunnerTest, StableTaskAndCheckpointTokensCoverUnknownValues) {
+  EXPECT_STREQ(LlmBackendReason::KV_WRITE_VALIDATION_MISMATCH,
+               "kv-write-validation-mismatch");
+  EXPECT_EQ(canonicalize_llm_result_reason_code(
+                LlmBackendReason::KV_WRITE_VALIDATION_MISMATCH),
+            LlmBackendReason::KV_WRITE_VALIDATION_MISMATCH);
   EXPECT_STREQ(llm_runner_task_kind_to_string(LlmRunnerTaskKind::Warmup), "warmup");
   EXPECT_STREQ(llm_runner_task_kind_to_string(LlmRunnerTaskKind::Calibration), "calibration");
   EXPECT_STREQ(llm_runner_task_kind_to_string(LlmRunnerTaskKind::Measurement), "measurement");

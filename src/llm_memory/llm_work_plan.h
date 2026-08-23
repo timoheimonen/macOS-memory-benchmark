@@ -177,6 +177,21 @@ inline constexpr const char* CHECKSUM =
     "llm-metal-paged-dual-mod32-lookup-mix-v1";
 }  // namespace LlmMetalDecodePagedVersion
 
+/** Versioned Phase-11 Metal prefill/contiguous planning identities. */
+namespace LlmMetalPrefillContiguousVersion {
+inline constexpr const char* EXECUTOR =
+    "llm-metal-executor-v1-prefill-contiguous";
+inline constexpr const char* SCHEDULE =
+    "llm-metal-prefill-contiguous-lane-local-vector-stripe-v1";
+inline constexpr const char* TIMER =
+    "metal-command-buffer-gpu-start-end-v1";
+inline constexpr const char* BUFFER_PATTERN =
+    "llm-metal-contiguous-affine32-v1";
+inline constexpr const char* WRITE_PATTERN =
+    "llm-metal-prefill-contiguous-full-prompt-affine32-v1";
+inline constexpr const char* CHECKSUM = "llm-metal-dual-mod32-v1";
+}  // namespace LlmMetalPrefillContiguousVersion
+
 namespace LlmMetalPlannerAccounting {
 inline constexpr size_t RUNTIME_IDENTITY_GROWTH_RESERVE_BYTES =
     64ULL * 1024ULL;
@@ -216,6 +231,10 @@ inline constexpr const char* OWNER_STRIDE_CAP_EXCEEDED =
     "owner-stride-cap-exceeded";
 inline constexpr const char* VECTOR_ITERATION_CAP_EXCEEDED =
     "vector-iteration-cap-exceeded";
+inline constexpr const char* SERIAL_RANGE_VISIT_CAP_EXCEEDED =
+    "serial-range-visit-cap-exceeded";
+inline constexpr const char* SERIAL_RANGE_VISIT_COUNT_OVERFLOW =
+    "serial-range-visit-count-overflow";
 inline constexpr const char* SEMANTIC_VISIT_CAP_EXCEEDED =
     "semantic-visit-cap-exceeded";
 inline constexpr const char* WORK_UNITS_PER_DISPATCH_CAP_EXCEEDED =
@@ -702,6 +721,8 @@ struct LlmMetalPlanningLimits {
       Constants::LLM_METAL_MAX_OWNER_ORDINALS_PER_THREADGROUP;
   size_t maximum_vector_iterations_per_lane_per_visit =
       Constants::LLM_METAL_MAX_VECTOR_ITERATIONS_PER_LANE_PER_VISIT;
+  size_t maximum_serial_range_visits_per_lane_per_task =
+      Constants::LLM_METAL_MAX_SERIAL_RANGE_VISITS_PER_LANE_PER_TASK;
   size_t maximum_paged_semantic_lookups_per_task =
       Constants::LLM_METAL_MAX_PAGED_SEMANTIC_LOOKUPS_PER_TASK;
   size_t maximum_work_units_per_dispatch =
@@ -740,6 +761,7 @@ struct LlmMetalGridRequest {
   size_t visit_bytes = 0;
   size_t work_units = 0;
   size_t paged_semantic_lookups = 0;
+  size_t serial_range_visits_per_lane = 0;
   std::vector<size_t> owner_accounted_bytes;
   LlmMetalPipelineCapabilities pipeline;
   LlmMetalPlanningLimits limits;
@@ -756,6 +778,7 @@ struct LlmMetalGridPlan {
   size_t vector_iterations_per_lane_per_visit = 0;
   size_t work_units = 0;
   size_t paged_semantic_lookups = 0;
+  size_t serial_range_visits_per_lane = 0;
   size_t minimum_threadgroup_accounted_bytes = 0;
   size_t maximum_threadgroup_accounted_bytes = 0;
   size_t threadgroup_accounted_imbalance_bytes = 0;
@@ -1199,6 +1222,16 @@ uint64_t derive_llm_domain_seed(uint64_t base_seed, LlmSeedDomain domain);
 LlmScenarioLimits calculate_llm_scenario_limits(
     const LlmGeometry& geometry, LlmScenario scenario,
     size_t work_unit_cap = Constants::LLM_MAX_WORK_UNITS_PER_MEASUREMENT);
+
+/** Resolve scenario limits including backend-specific work-unit caps. */
+LlmScenarioLimits calculate_llm_scenario_limits(
+    const LlmGeometry& geometry, LlmScenario scenario,
+    LlmMemoryBackend backend);
+
+/** Count one operation's serial range-helper visits in Metal prefill. */
+bool calculate_llm_metal_prefill_serial_range_visits_per_work_unit(
+    const LlmGeometry& geometry, LlmScenario scenario,
+    size_t& visits) noexcept;
 
 /**
  * Resolve exact component totals for one scenario task.

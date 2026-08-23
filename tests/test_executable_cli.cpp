@@ -44,6 +44,7 @@
 
 #include "core/config/constants.h"
 #include "core/config/version.h"
+#include "llm_memory/llm_backend.h"
 #include "llm_memory/llm_memory.h"
 #include "output/console/messages/messages_api.h"
 #include "third_party/nlohmann/json.hpp"
@@ -348,14 +349,23 @@ void expect_complete_or_unsupported_metal_result(
     const CliResult& result, const nlohmann::json& json,
     const char* expected_kv_layout = "contiguous",
     const char* expected_methodology =
-        "llm-memory-v1-metal-decode-contiguous") {
+        "llm-memory-v1-metal-decode-contiguous",
+    const char* expected_phase = "decode",
+    const char* expected_work_unit_kind = "decode_step") {
   ASSERT_TRUE(json.is_object());
   EXPECT_EQ(json["schema_version"], Constants::LLM_JSON_SCHEMA_VERSION);
   EXPECT_EQ(json["mode"], Constants::LLM_JSON_MODE_NAME);
   EXPECT_EQ(json["backend"], "metal");
-  EXPECT_EQ(json["phase"], "decode");
+  EXPECT_EQ(json["phase"], expected_phase);
   EXPECT_EQ(json["kv_layout"], expected_kv_layout);
   EXPECT_EQ(json["methodology_version"], expected_methodology);
+  ASSERT_TRUE(json["resolved_plan"].is_object());
+  EXPECT_EQ(json["resolved_plan"]["phase"], expected_phase);
+  EXPECT_EQ(json["resolved_plan"]["kv_layout"], expected_kv_layout);
+  EXPECT_EQ(json["resolved_plan"]["methodology_version"],
+            expected_methodology);
+  EXPECT_EQ(json["resolved_plan"]["work_unit_kind"],
+            expected_work_unit_kind);
   EXPECT_TRUE(json["backend_evidence"]["cpu"].is_null());
   ASSERT_TRUE(json["backend_evidence"]["metal"].is_object());
   EXPECT_FALSE(json["backend_evidence"]["metal"]["workers_applicable"]
@@ -368,7 +378,15 @@ void expect_complete_or_unsupported_metal_result(
     EXPECT_EQ(result.exit_code, EXIT_FAILURE) << result.output;
     EXPECT_FALSE(json["results_complete"].get<bool>());
     EXPECT_FALSE(json["conclusions_valid"].get<bool>());
-    EXPECT_FALSE(json["reason_code"].get<std::string>().empty());
+    const std::string reason_code = json["reason_code"].get<std::string>();
+    EXPECT_TRUE(
+        reason_code == LlmBackendReason::METAL_DEVICE_UNAVAILABLE ||
+        reason_code == LlmBackendReason::UNIFIED_MEMORY_REQUIRED ||
+        reason_code == LlmBackendReason::APPLE7_FAMILY_REQUIRED ||
+        reason_code == LlmBackendReason::ARGUMENT_BUFFER_TIER2_REQUIRED ||
+        reason_code == LlmBackendReason::
+                           METAL_MAX_BUFFER_LENGTH_BELOW_SEGMENT_CAPACITY)
+        << reason_code;
     EXPECT_EQ(json["backend_evidence"]["metal"]["lifecycle"]
                   ["initialization"]["status"],
               "unsupported");
@@ -417,6 +435,68 @@ void expect_complete_or_unsupported_metal_result(
     EXPECT_TRUE(task["validation"]["post_validation_valid"].get<bool>());
   }
   expect_complete_llm_checkpoint_lifecycle(json);
+}
+
+void expect_bounded_metal_prefill_result(
+    const CliResult& result, const nlohmann::json& json) {
+  expect_complete_or_unsupported_metal_result(
+      result, json, "contiguous",
+      "llm-memory-v1-metal-prefill-contiguous", "prefill",
+      "prefill_operation");
+
+  const nlohmann::json& resolved_plan = json["resolved_plan"];
+  const nlohmann::json& methodology = resolved_plan["methodology"];
+  EXPECT_EQ(methodology["methodology_version"],
+            "llm-memory-v1-metal-prefill-contiguous");
+  EXPECT_EQ(methodology["work_unit_kind"], "prefill_operation");
+  EXPECT_EQ(methodology["weight_passes_per_work_unit"], 1u);
+  EXPECT_EQ(methodology["kv_replay_factor"], 1u);
+  EXPECT_EQ(methodology["context_policy"],
+            "full-prompt-population-with-tiled-causal-prefix-scans");
+  EXPECT_EQ(methodology["write_pattern_version"],
+            "llm-metal-prefill-contiguous-full-prompt-affine32-v1");
+  EXPECT_EQ(methodology["checksum_pattern_version"],
+            "llm-metal-dual-mod32-v1");
+
+  const nlohmann::json& geometry = resolved_plan["geometry"];
+  EXPECT_TRUE(geometry["decode"].is_null());
+  ASSERT_TRUE(geometry["prefill"].is_object());
+  EXPECT_EQ(geometry["prefill"]["prompt_tokens"], 5u);
+  EXPECT_EQ(geometry["prefill"]["attention_query_tile_tokens"], 2u);
+  EXPECT_EQ(geometry["prefill"]["tile_count"], "3");
+  EXPECT_EQ(
+      geometry["prefill"]["attention_prefix_token_visits_per_sequence"],
+      "11");
+  EXPECT_EQ(geometry["weight_read_bytes_per_work_unit"], "1048576");
+  EXPECT_EQ(geometry["kv_read_bytes_per_work_unit"], "176");
+  EXPECT_EQ(geometry["kv_write_bytes_per_work_unit"], "80");
+  EXPECT_EQ(geometry["kv_only_effective_model_payload_bytes_per_work_unit"],
+            "256");
+  EXPECT_EQ(geometry["mixed_effective_model_payload_bytes_per_work_unit"],
+            "1048832");
+
+  if (json["status"] == "complete") {
+    ASSERT_EQ(json["measurements"].size(), 9u);
+    for (const nlohmann::json& measurement : json["measurements"]) {
+      const std::string scenario = measurement["scenario"];
+      const bool weights_only = scenario == "weights_only";
+      const bool kv_only = scenario == "kv_only";
+      EXPECT_EQ(measurement["work_unit_kind"], "prefill_operation");
+      EXPECT_EQ(measurement["kv_write_kind"],
+                weights_only ? "none" : "full_prompt_population");
+      EXPECT_EQ(measurement["weight_read_bytes_per_work_unit"],
+                kv_only ? "0" : "1048576");
+      EXPECT_EQ(measurement["kv_read_bytes_per_work_unit"],
+                weights_only ? "0" : "176");
+      EXPECT_EQ(measurement["kv_write_bytes_per_work_unit"],
+                weights_only ? "0" : "80");
+      EXPECT_EQ(measurement["effective_model_payload_bytes_per_work_unit"],
+                weights_only ? "1048576"
+                             : kv_only ? "256" : "1048832");
+    }
+  }
+  EXPECT_EQ(result.output.find(" tokens/s"), std::string::npos)
+      << result.output;
 }
 
 std::vector<std::string> bounded_llm_arguments(
@@ -504,6 +584,41 @@ std::vector<std::string> bounded_llm_prefill_arguments(const std::string& output
           "--batch-size",
           "1",
           "--threads",
+          "1",
+          "--iterations",
+          "1",
+          "--count",
+          std::to_string(loop_count),
+          "--seed",
+          "42",
+          "--output",
+          output_target};
+}
+
+std::vector<std::string> bounded_llm_metal_prefill_arguments(
+    const std::string& output_target, size_t loop_count = 3) {
+  return {"--llm-memory",
+          "--llm-memory-backend",
+          "metal",
+          "--weight-size-mb",
+          "1",
+          "--layers",
+          "1",
+          "--query-heads",
+          "1",
+          "--kv-heads",
+          "1",
+          "--head-dim",
+          "8",
+          "--kv-element-bytes",
+          "1",
+          "--phase",
+          "prefill",
+          "--prompt-tokens",
+          "5",
+          "--attention-query-tile-tokens",
+          "2",
+          "--batch-size",
           "1",
           "--iterations",
           "1",
@@ -644,21 +759,18 @@ TEST(ExecutableCliIntegrationTest,
 }
 
 TEST(ExecutableCliIntegrationTest,
-     LlmMetalPreflightRejectsInactivePrefillAndThreadsBeforeOutputSessionIntegration) {
+     LlmMetalPreflightRejectsPagedPrefillAndThreadsBeforeOutputSessionIntegration) {
   struct InvalidCase {
     std::string name;
     std::vector<std::string> arguments;
     const char* reason_code;
   };
 
-  std::vector<std::string> prefill = bounded_llm_metal_arguments("-");
-  const auto context =
-      std::find(prefill.begin(), prefill.end(), "--context-tokens");
-  ASSERT_NE(context, prefill.end());
-  prefill.erase(context, std::next(context, 2));
-  prefill.insert(prefill.end() - 2,
-                 {"--phase", "prefill", "--prompt-tokens", "5",
-                  "--attention-query-tile-tokens", "2"});
+  std::vector<std::string> paged_prefill =
+      bounded_llm_metal_prefill_arguments("-");
+  paged_prefill.insert(
+      paged_prefill.end() - 2,
+      {"--kv-layout", "paged", "--kv-block-tokens", "4"});
 
   std::vector<std::string> backend_before_threads =
       bounded_llm_metal_arguments("-");
@@ -670,8 +782,8 @@ TEST(ExecutableCliIntegrationTest,
                                 {"--llm-memory-backend", "metal"});
 
   const std::vector<InvalidCase> cases = {
-      {"prefill", std::move(prefill),
-       LlmMemoryConfigReason::PHASE_NOT_ACTIVATED},
+      {"paged-prefill", std::move(paged_prefill),
+       LlmMemoryConfigReason::KV_LAYOUT_NOT_ACTIVATED},
       {"backend-before-threads", std::move(backend_before_threads),
        LlmMemoryConfigReason::THREADS_NOT_APPLICABLE},
       {"threads-before-backend", std::move(threads_before_backend),
@@ -725,6 +837,18 @@ TEST(ExecutableCliIntegrationTest,
 }
 
 TEST(ExecutableCliIntegrationTest,
+     LlmMetalPrefillStdoutIsCompleteOrCapabilityUnsupportedIntegration) {
+  const CliResult result =
+      run_memory_benchmark(bounded_llm_metal_prefill_arguments("-"));
+
+  expect_process_completed(result);
+  const nlohmann::json json = parse_single_stdout_json(result);
+  expect_bounded_metal_prefill_result(result, json);
+  expect_single_runtime_banner(result);
+  expect_no_dash_transport_artifacts(result);
+}
+
+TEST(ExecutableCliIntegrationTest,
      LlmMetalFileIsAtomicCompleteOrTerminalUnsupportedDocumentIntegration) {
   const TemporaryJsonFile output("llm_metal_schema_v1");
   const CliResult result =
@@ -736,6 +860,27 @@ TEST(ExecutableCliIntegrationTest,
   const nlohmann::json json =
       nlohmann::json::parse(read_file(output.path()));
   expect_complete_or_unsupported_metal_result(result, json);
+  EXPECT_EQ(json["configuration"]["output_file"], output.path());
+  expect_single_runtime_banner(result);
+  EXPECT_EQ(count_occurrences(
+                result.stdout_output,
+                Messages::msg_results_saved_to(output.path())),
+            1u)
+      << result.output;
+}
+
+TEST(ExecutableCliIntegrationTest,
+     LlmMetalPrefillFileIsAtomicCompleteOrCapabilityUnsupportedIntegration) {
+  const TemporaryJsonFile output("llm_metal_prefill_schema_v1");
+  const CliResult result = run_memory_benchmark(
+      bounded_llm_metal_prefill_arguments(output.path()));
+
+  expect_process_completed(result);
+  ASSERT_EQ(access(output.path().c_str(), F_OK), 0) << result.output;
+  EXPECT_EQ(access((output.path() + ".tmp").c_str(), F_OK), -1);
+  const nlohmann::json json =
+      nlohmann::json::parse(read_file(output.path()));
+  expect_bounded_metal_prefill_result(result, json);
   EXPECT_EQ(json["configuration"]["output_file"], output.path());
   expect_single_runtime_banner(result);
   EXPECT_EQ(count_occurrences(

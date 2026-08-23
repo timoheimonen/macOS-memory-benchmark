@@ -139,6 +139,26 @@ LlmMemoryWorkPlan make_metal_console_plan() {
   return plan;
 }
 
+LlmMemoryWorkPlan make_metal_prefill_console_plan() {
+  LlmMemoryWorkPlan plan = make_prefill_console_plan();
+  plan.backend = LlmMemoryBackend::Metal;
+  plan.geometry.kv_read_bytes_per_work_unit = 1408;
+  plan.geometry.kv_write_bytes_per_work_unit = 640;
+  plan.geometry.kv_only_effective_model_payload_bytes_per_work_unit = 2048;
+  plan.geometry.mixed_effective_model_payload_bytes_per_work_unit = 3072;
+  LlmMetalExecutionPlan execution;
+  execution.valid = true;
+  execution.reason_code = LlmMetalPlanReason::VALID;
+  execution.resources.valid = true;
+  execution.resources.reason_code = LlmMetalPlanReason::VALID;
+  execution.resources.weight_segments.segment_count = 1;
+  execution.resources.k_segments.segment_count = 1;
+  execution.resources.v_segments.segment_count = 1;
+  execution.resources.argument_buffer_encoded_length = 8192;
+  plan.backend_execution_plan = std::move(execution);
+  return plan;
+}
+
 LlmMemoryWorkPlan make_metal_paged_console_plan() {
   LlmGeometryRequest geometry_request;
   geometry_request.active_weight_bytes = 1024;
@@ -464,8 +484,8 @@ TEST(LlmMemoryOutputTest, MetalReportPrintsCapabilitySegmentsAndTaskValidationEv
   weights_task.gpu_elapsed_seconds = 0.001;
   weights_task.checksum_evaluated = true;
   weights_task.checksum_valid = true;
-  weights_task.append_validation_evaluated = false;
-  weights_task.append_validation_valid = true;
+  weights_task.kv_write_validation_evaluated = false;
+  weights_task.kv_write_validation_valid = true;
   weights_measurement.execution.backend_evidence = std::move(weights_task);
   result.measurements.push_back(std::move(weights_measurement));
 
@@ -481,8 +501,8 @@ TEST(LlmMemoryOutputTest, MetalReportPrintsCapabilitySegmentsAndTaskValidationEv
   task.gpu_elapsed_seconds = 0.0025;
   task.checksum_evaluated = true;
   task.checksum_valid = true;
-  task.append_validation_evaluated = true;
-  task.append_validation_valid = true;
+  task.kv_write_validation_evaluated = true;
+  task.kv_write_validation_valid = true;
   measurement.execution.backend_evidence = std::move(task);
   result.measurements.push_back(std::move(measurement));
 
@@ -505,14 +525,15 @@ TEST(LlmMemoryOutputTest, MetalReportPrintsCapabilitySegmentsAndTaskValidationEv
                         "threadgroups=1, threads_per_threadgroup=32"),
             std::string::npos);
   EXPECT_NE(output.find("Metal validation: checksum=valid, "
-                        "append=not-applicable, canary=not-applicable"),
+                        "kv_write=not-applicable, canary=not-applicable"),
             std::string::npos);
   EXPECT_NE(output.find("Metal task: scenario=mixed, "
                         "pipeline=membenchmark.llm-metal.pipeline.decode-contiguous.mixed, "
                         "threadgroups=7, threads_per_threadgroup=128"),
             std::string::npos);
   EXPECT_NE(output.find("Metal timing: gpu_elapsed_seconds=0.002500000"), std::string::npos);
-  EXPECT_NE(output.find("Metal validation: checksum=valid, append=valid, canary=not-applicable"), std::string::npos);
+  EXPECT_NE(output.find("Metal validation: checksum=valid, kv_write=valid, canary=not-applicable"),
+            std::string::npos);
 }
 
 TEST(LlmMemoryOutputTest, MetalPagedReportPrintsTableLookupPaddingAndCanaryEvidence) {
@@ -552,8 +573,8 @@ TEST(LlmMemoryOutputTest, MetalPagedReportPrintsTableLookupPaddingAndCanaryEvide
   task.gpu_elapsed_seconds = 0.0025;
   task.checksum_evaluated = true;
   task.checksum_valid = true;
-  task.append_validation_evaluated = true;
-  task.append_validation_valid = true;
+  task.kv_write_validation_evaluated = true;
+  task.kv_write_validation_valid = true;
   task.padding_canary_applicable = true;
   task.padding_canary_evaluated = true;
   task.padding_canary_valid = true;
@@ -582,7 +603,65 @@ TEST(LlmMemoryOutputTest, MetalPagedReportPrintsTableLookupPaddingAndCanaryEvide
             std::string::npos);
   EXPECT_NE(output.find("Accounted bytes / KV-active decode step: 552"), std::string::npos);
   EXPECT_NE(output.find("pipeline=membenchmark.llm-metal.pipeline.decode-paged.mixed"), std::string::npos);
-  EXPECT_NE(output.find("Metal validation: checksum=valid, append=valid, canary=valid"), std::string::npos);
+  EXPECT_NE(output.find("Metal validation: checksum=valid, kv_write=valid, canary=valid"), std::string::npos);
+}
+
+TEST(LlmMemoryOutputTest,
+     MetalPrefillReportUsesKvWriteTerminologyWithoutTokenRate) {
+  const LlmMemoryWorkPlan plan = make_metal_prefill_console_plan();
+  LlmBackendEvidence backend;
+  backend.backend = LlmMemoryBackend::Metal;
+  LlmMetalBackendEvidence metal_backend;
+  metal_backend.capability.device_name = "Test Metal Device";
+  metal_backend.capability.argument_buffer_encoded_length = 8192;
+  backend.backend_evidence = std::move(metal_backend);
+
+  LlmMemoryResult result;
+  set_headline(result, LlmScenario::Mixed, 0.004, 250.0, 75.0);
+  LlmMeasurementState measurement;
+  measurement.scenario = LlmScenario::Mixed;
+  LlmMetalTaskEvidence task;
+  task.pipeline_label =
+      "membenchmark.llm-metal.pipeline.prefill-contiguous.mixed";
+  task.grid_plan_available = true;
+  task.grid_plan.actual_threadgroups = 2;
+  task.grid_plan.threads_per_threadgroup = 64;
+  task.timing_evaluated = true;
+  task.timing_valid = true;
+  task.gpu_elapsed_seconds = 0.004;
+  task.checksum_evaluated = true;
+  task.checksum_valid = true;
+  task.kv_write_validation_evaluated = true;
+  task.kv_write_validation_valid = true;
+  measurement.execution.backend_evidence = std::move(task);
+  result.measurements.push_back(std::move(measurement));
+
+  LlmResultMetadata metadata;
+  metadata.main_thread_qos = {true, true, 0};
+  metadata.environment_start.thermal_state = "nominal";
+  metadata.environment_end = metadata.environment_start;
+
+  testing::internal::CaptureStdout();
+  testing::internal::CaptureStderr();
+  print_llm_memory_console_report(plan, backend, metadata, result);
+  const std::string errors = testing::internal::GetCapturedStderr();
+  const std::string output = testing::internal::GetCapturedStdout();
+
+  EXPECT_TRUE(errors.empty()) << errors;
+  EXPECT_NE(output.find("backend=metal, phase=prefill, "
+                        "work_unit=prefill_operation, "
+                        "kv_layout=contiguous"),
+            std::string::npos);
+  EXPECT_NE(output.find(
+                "pipeline=membenchmark.llm-metal.pipeline.prefill-contiguous.mixed"),
+            std::string::npos);
+  EXPECT_NE(output.find("Metal validation: checksum=valid, "
+                        "kv_write=valid, canary=not-applicable"),
+            std::string::npos);
+  EXPECT_NE(output.find("250.00 synthetic prefill operations/s"),
+            std::string::npos);
+  EXPECT_EQ(output.find("append="), std::string::npos);
+  EXPECT_EQ(output.find("tokens/s"), std::string::npos);
 }
 
 TEST(LlmMemoryOutputTest, UnsupportedMetalReportDoesNotInventResourceOrTaskEvidence) {

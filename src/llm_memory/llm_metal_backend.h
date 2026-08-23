@@ -15,15 +15,15 @@
 
 /**
  * @file llm_metal_backend.h
- * @brief Pure planning, checksum, and Metal decode workload contracts
+ * @brief Pure planning, checksum, and Metal decode/prefill workload contracts
  * @author Timo Heimonen <timo.heimonen@proton.me>
  * @date 2026
  *
  * The declarations in this file contain no Objective-C types. Pure planners
  * are reentrant and safe for concurrent calls with independent objects. A
  * created backend is command-owned, synchronous, and not safe for concurrent
- * calls. The public Metal workloads are decode with contiguous or paged KV
- * storage.
+ * calls. Public Metal workloads are decode with contiguous or paged KV and
+ * prefill with contiguous KV storage.
  */
 
 #ifndef LLM_METAL_BACKEND_H
@@ -76,6 +76,9 @@ using LlmMetalDecodeLayoutProbeWords = std::array<uint64_t, kLlmMetalDecodeLayou
 inline constexpr size_t kLlmMetalDecodePagedLayoutProbeWordCount = 52;
 using LlmMetalDecodePagedLayoutProbeWords =
     std::array<uint64_t, kLlmMetalDecodePagedLayoutProbeWordCount>;
+inline constexpr size_t kLlmMetalPrefillLayoutProbeWordCount = 42;
+using LlmMetalPrefillLayoutProbeWords =
+    std::array<uint64_t, kLlmMetalPrefillLayoutProbeWordCount>;
 
 /** Canonical CPU mirror of the MSL decode-contiguous parameter block. */
 struct alignas(8) LlmMetalDecodeContiguousParams {
@@ -172,6 +175,56 @@ static_assert(offsetof(LlmMetalDecodePagedParams, v_segment_count) == 152);
 static_assert(offsetof(LlmMetalDecodePagedParams, table_segment_count) == 156);
 static_assert(offsetof(LlmMetalDecodePagedParams, reserved_zero) == 160);
 static_assert(offsetof(LlmMetalDecodePagedParams, padding_zero) == 164);
+
+/** Canonical CPU mirror of the MSL prefill-contiguous parameter block. */
+struct alignas(8) LlmMetalPrefillContiguousParams {
+  uint64_t weight_bytes = 0;
+  uint64_t k_bytes = 0;
+  uint64_t v_bytes = 0;
+  uint64_t segment_capacity_bytes = 0;
+  uint64_t prompt_tokens = 0;
+  uint64_t attention_query_tile_tokens = 0;
+  uint64_t tile_count = 0;
+  uint64_t layer_count = 0;
+  uint64_t batch_size = 0;
+  uint64_t record_bytes = 0;
+  uint64_t work_units = 0;
+  uint64_t weight_seed = 0;
+  uint64_t k_seed = 0;
+  uint64_t v_seed = 0;
+  uint64_t scenario_seed = 0;
+  uint32_t weight_segment_count = 0;
+  uint32_t k_segment_count = 0;
+  uint32_t v_segment_count = 0;
+  uint32_t reserved_zero = 0;
+};
+
+static_assert(alignof(LlmMetalPrefillContiguousParams) == 8);
+static_assert(sizeof(LlmMetalPrefillContiguousParams) == 136);
+static_assert(offsetof(LlmMetalPrefillContiguousParams, weight_bytes) == 0);
+static_assert(offsetof(LlmMetalPrefillContiguousParams, k_bytes) == 8);
+static_assert(offsetof(LlmMetalPrefillContiguousParams, v_bytes) == 16);
+static_assert(offsetof(LlmMetalPrefillContiguousParams,
+                       segment_capacity_bytes) == 24);
+static_assert(offsetof(LlmMetalPrefillContiguousParams, prompt_tokens) == 32);
+static_assert(offsetof(LlmMetalPrefillContiguousParams,
+                       attention_query_tile_tokens) == 40);
+static_assert(offsetof(LlmMetalPrefillContiguousParams, tile_count) == 48);
+static_assert(offsetof(LlmMetalPrefillContiguousParams, layer_count) == 56);
+static_assert(offsetof(LlmMetalPrefillContiguousParams, batch_size) == 64);
+static_assert(offsetof(LlmMetalPrefillContiguousParams, record_bytes) == 72);
+static_assert(offsetof(LlmMetalPrefillContiguousParams, work_units) == 80);
+static_assert(offsetof(LlmMetalPrefillContiguousParams, weight_seed) == 88);
+static_assert(offsetof(LlmMetalPrefillContiguousParams, k_seed) == 96);
+static_assert(offsetof(LlmMetalPrefillContiguousParams, v_seed) == 104);
+static_assert(offsetof(LlmMetalPrefillContiguousParams, scenario_seed) == 112);
+static_assert(offsetof(LlmMetalPrefillContiguousParams,
+                       weight_segment_count) == 120);
+static_assert(offsetof(LlmMetalPrefillContiguousParams, k_segment_count) ==
+              124);
+static_assert(offsetof(LlmMetalPrefillContiguousParams, v_segment_count) ==
+              128);
+static_assert(offsetof(LlmMetalPrefillContiguousParams, reserved_zero) == 132);
 
 /** Result from the bounded independent Metal checksum oracle. */
 struct LlmMetalChecksumOracle {
@@ -278,7 +331,7 @@ struct LlmMetalBackendTestHooks {
   bool force_invalid_gpu_timestamps = false;
   bool force_timed_checksum_mismatch = false;
   bool force_post_validation_command_failure = false;
-  bool force_append_validation_mismatch = false;
+  bool force_kv_write_validation_mismatch = false;
   bool force_wrong_paged_table_permutation = false;
   bool force_padding_canary_mismatch = false;
   std::function<bool()> stop_requested;
@@ -324,6 +377,11 @@ bool validate_llm_metal_decode_paged_layout_probe(
     const LlmMetalDecodePagedParams& parameters,
     const LlmMetalDecodePagedLayoutProbeWords& words) noexcept;
 
+/** Validate every CPU/MSL field of the prefill-contiguous parameter ABI. */
+bool validate_llm_metal_prefill_layout_probe(
+    const LlmMetalPrefillContiguousParams& parameters,
+    const LlmMetalPrefillLayoutProbeWords& words) noexcept;
+
 /** Return one deterministic Metal contiguous-buffer initialization word. */
 uint32_t llm_metal_contiguous_pattern_word(uint64_t seed, uint64_t absolute_word_index) noexcept;
 
@@ -337,9 +395,42 @@ uint32_t llm_metal_decode_append_word(uint64_t scenario_seed, uint64_t work_unit
                                       uint64_t batch_index, uint64_t absolute_word_index,
                                       LlmMetalResourcePool pool) noexcept;
 
+/** Return one deterministic prefill full-prompt write word. */
+uint32_t llm_metal_prefill_write_word(
+    uint64_t scenario_seed, uint64_t work_unit, uint64_t layer_index,
+    uint64_t batch_index, uint64_t absolute_word_index,
+    LlmMetalResourcePool pool) noexcept;
+
 /** Calculate expected timed W/K/V accumulators without reading resource bytes. */
 LlmMetalChecksumOracle calculate_llm_metal_decode_contiguous_checksum(
     const LlmMemoryWorkPlan& model_plan, const LlmScenarioWorkPlan& scenario_plan) noexcept;
+
+/** Calculate expected prefill W/K/V accumulators without reading resources. */
+LlmMetalChecksumOracle calculate_llm_metal_prefill_contiguous_checksum(
+    const LlmMemoryWorkPlan& model_plan,
+    const LlmScenarioWorkPlan& scenario_plan) noexcept;
+
+/**
+ * Count the serial range-helper visits performed by every prefill Metal lane.
+ *
+ * The checked count includes all work units and is used to reject a task
+ * before its independent checksum oracle or GPU dispatch can become
+ * unbounded. `visits` is set only on success.
+ */
+bool calculate_llm_metal_prefill_serial_range_visits_per_lane(
+    const LlmMemoryWorkPlan& model_plan,
+    const LlmScenarioWorkPlan& scenario_plan, size_t& visits) noexcept;
+
+/**
+ * Calculate the exact largest aligned vector span of a prefill range.
+ *
+ * The span covers the 16-byte vectors visited by the contiguous prefill
+ * weight, KV-write, and KV-read helpers, including an unaligned first vector.
+ * `span_bytes` is set only on success.
+ */
+bool calculate_llm_metal_prefill_maximum_range_vector_span_bytes(
+    const LlmGeometry& geometry, LlmScenario scenario,
+    size_t& span_bytes) noexcept;
 
 /**
  * Build the allocation-free task-oracle summary from a validated table.
@@ -364,7 +455,7 @@ bool equal_llm_metal_checksum(const LlmMetalDualMod32Checksum& left,
 /** Stable label for a planned Metal resource pool. */
 const char* llm_metal_resource_pool_to_string(LlmMetalResourcePool pool) noexcept;
 
-/** Create the Metal backend for the experimental decode preview. */
+/** Create the Metal backend for the experimental decode/prefill preview. */
 std::unique_ptr<LlmBackend> create_llm_metal_backend();
 
 /** Create the same backend with deterministic failure injection for tests. */

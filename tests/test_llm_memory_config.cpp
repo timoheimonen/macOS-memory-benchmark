@@ -380,7 +380,7 @@ TEST(LlmMemoryConfigTest,
 }
 
 TEST(LlmMemoryConfigTest,
-     ParserActivatesPagedMetalDecodeAndRejectsUnactivatedPrefillProfiles) {
+     ParserActivatesMetalDecodeLayoutsAndPrefillContiguousOnly) {
   LlmParserHooksScope hooks(0, 9);
   struct InvalidCase {
     std::vector<std::string> arguments;
@@ -405,16 +405,23 @@ TEST(LlmMemoryConfigTest,
                             {"--kv-layout", "paged",
                              "--kv-block-tokens", "4",
                              "--llm-memory-backend", "metal"});
-  std::vector<std::string> prefill_paged = prefill_backend_first;
-  prefill_paged.insert(prefill_paged.end(),
-                       {"--kv-layout", "paged", "--kv-block-tokens", "4"});
+  std::vector<std::string> prefill_paged_backend_first =
+      prefill_backend_first;
+  prefill_paged_backend_first.insert(
+      prefill_paged_backend_first.end(),
+      {"--kv-layout", "paged", "--kv-block-tokens", "4"});
+  std::vector<std::string> prefill_paged_backend_last =
+      valid_prefill_arguments();
+  prefill_paged_backend_last.insert(
+      prefill_paged_backend_last.end(),
+      {"--kv-layout", "paged", "--kv-block-tokens", "4",
+       "--llm-memory-backend", "metal"});
 
   const std::vector<InvalidCase> cases = {
-      {prefill_backend_first,
-       LlmMemoryConfigReason::PHASE_NOT_ACTIVATED},
-      {prefill_backend_last,
-       LlmMemoryConfigReason::PHASE_NOT_ACTIVATED},
-      {prefill_paged, LlmMemoryConfigReason::PHASE_NOT_ACTIVATED},
+      {prefill_paged_backend_first,
+       LlmMemoryConfigReason::KV_LAYOUT_NOT_ACTIVATED},
+      {prefill_paged_backend_last,
+       LlmMemoryConfigReason::KV_LAYOUT_NOT_ACTIVATED},
   };
 
   for (const InvalidCase& test_case : cases) {
@@ -433,7 +440,8 @@ TEST(LlmMemoryConfigTest,
   }
 
   for (const std::vector<std::string>* arguments :
-       {&paged_backend_first, &paged_backend_last}) {
+       {&paged_backend_first, &paged_backend_last,
+        &prefill_backend_first, &prefill_backend_last}) {
     SCOPED_TRACE(::testing::PrintToString(*arguments));
     LlmMemoryConfig config;
     const CapturedLlmParse parsed =
@@ -442,9 +450,17 @@ TEST(LlmMemoryConfigTest,
     EXPECT_TRUE(parsed.stdout_output.empty());
     EXPECT_TRUE(parsed.stderr_output.empty());
     EXPECT_EQ(config.backend, LlmMemoryBackend::Metal);
-    EXPECT_EQ(config.phase, LlmPhase::Decode);
-    EXPECT_EQ(config.kv_layout, LlmKvLayout::Paged);
-    EXPECT_EQ(config.kv_block_tokens, 4u);
+    const bool prefill =
+        std::find(arguments->begin(), arguments->end(), "prefill") !=
+        arguments->end();
+    EXPECT_EQ(config.phase,
+              prefill ? LlmPhase::Prefill : LlmPhase::Decode);
+    EXPECT_EQ(config.kv_layout,
+              prefill ? LlmKvLayout::Contiguous : LlmKvLayout::Paged);
+    EXPECT_EQ(config.visible_context_tokens, prefill ? 0u : 3u);
+    EXPECT_EQ(config.prompt_tokens, prefill ? 5u : 0u);
+    EXPECT_EQ(config.attention_query_tile_tokens, prefill ? 2u : 0u);
+    EXPECT_EQ(config.kv_block_tokens, prefill ? 0u : 4u);
     EXPECT_EQ(config.requested_workers, 0u);
     EXPECT_EQ(config.available_workers, 0u);
   }
@@ -460,9 +476,22 @@ TEST(LlmMemoryConfigTest,
                        {"--threads", "1"});
   threads_first.insert(threads_first.end(),
                        {"--llm-memory-backend", "metal"});
+  std::vector<std::string> prefill_backend_first =
+      valid_prefill_arguments();
+  prefill_backend_first.insert(prefill_backend_first.begin() + 2,
+                               {"--llm-memory-backend", "metal"});
+  prefill_backend_first.insert(prefill_backend_first.end(),
+                               {"--threads", "1"});
+  std::vector<std::string> prefill_threads_first =
+      valid_prefill_arguments();
+  prefill_threads_first.insert(prefill_threads_first.begin() + 2,
+                               {"--threads", "1"});
+  prefill_threads_first.insert(prefill_threads_first.end(),
+                               {"--llm-memory-backend", "metal"});
 
   for (const std::vector<std::string>& arguments :
-       {backend_first, threads_first}) {
+       {backend_first, threads_first, prefill_backend_first,
+        prefill_threads_first}) {
     SCOPED_TRACE(::testing::PrintToString(arguments));
     LlmMemoryConfig config;
     const CapturedLlmParse parsed =

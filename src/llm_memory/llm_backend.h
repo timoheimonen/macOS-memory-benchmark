@@ -94,8 +94,8 @@ inline constexpr const char* TIMED_CHECKSUM_MISMATCH =
     "timed-checksum-mismatch";
 inline constexpr const char* POST_VALIDATION_COMMAND_FAILED =
     "post-validation-command-failed";
-inline constexpr const char* APPEND_VALIDATION_MISMATCH =
-    "append-validation-mismatch";
+inline constexpr const char* KV_WRITE_VALIDATION_MISMATCH =
+    "kv-write-validation-mismatch";
 inline constexpr const char* PADDING_CANARY_MISMATCH =
     "padding-canary-mismatch";
 }  // namespace LlmBackendReason
@@ -253,8 +253,8 @@ struct LlmMetalTaskEvidence {
   bool checksum_valid = false;
   LlmMetalDualMod32Checksum expected_checksum;
   LlmMetalDualMod32Checksum actual_checksum;
-  bool append_validation_evaluated = false;
-  bool append_validation_valid = false;
+  bool kv_write_validation_evaluated = false;
+  bool kv_write_validation_valid = false;
   bool padding_canary_applicable = false;
   bool padding_canary_evaluated = false;
   bool padding_canary_valid = false;

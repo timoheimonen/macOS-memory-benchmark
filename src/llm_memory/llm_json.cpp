@@ -495,7 +495,7 @@ OrderedJson methodology_json(const LlmMemoryWorkPlan& plan) {
     exclusions.push_back("argument-buffer-encoding-and-resource-validation");
     exclusions.push_back("host-command-encoding-and-pre-gpu-queue-wait");
     exclusions.push_back("status-reset-command-buffer");
-    exclusions.push_back("excluded-append-and-canary-post-validation");
+    exclusions.push_back("excluded-kv-write-and-padding-canary-post-validation");
   } else {
     exclusions.push_back("descriptor-materialization-and-validation");
     exclusions.push_back("worker-thread-creation-and-qos");
@@ -534,6 +534,12 @@ OrderedJson methodology_json(const LlmMemoryWorkPlan& plan) {
   output["maximum_work_units_per_measurement"] =
       metal ? Constants::LLM_METAL_MAX_WORK_UNITS_PER_DISPATCH
             : Constants::LLM_MAX_WORK_UNITS_PER_MEASUREMENT;
+  output["maximum_serial_range_visits_per_lane_per_task"] =
+      metal && plan.phase == LlmPhase::Prefill &&
+              plan.kv_layout == LlmKvLayout::Contiguous
+          ? OrderedJson(
+                Constants::LLM_METAL_MAX_SERIAL_RANGE_VISITS_PER_LANE_PER_TASK)
+          : OrderedJson(nullptr);
   output["maximum_accounted_bytes_per_task"] = decimal_string(Constants::LLM_MAX_ACCOUNTED_BYTES_PER_TASK);
   output["repeatability_cv_warning_threshold_pct"] = Constants::LLM_STREAMING_CV_WARNING_PCT;
   output["calibration_excluded_from_results"] = true;
@@ -1298,6 +1304,8 @@ OrderedJson metal_grid_plan_json(const LlmMetalGridPlan& grid) {
   output["vector_iterations_per_lane_per_visit"] = decimal_string(grid.vector_iterations_per_lane_per_visit);
   output["work_units"] = grid.work_units;
   output["paged_semantic_lookups"] = decimal_string(grid.paged_semantic_lookups);
+  output["serial_range_visits_per_lane"] =
+      decimal_string(grid.serial_range_visits_per_lane);
   output["minimum_threadgroup_accounted_bytes"] = decimal_string(grid.minimum_threadgroup_accounted_bytes);
   output["maximum_threadgroup_accounted_bytes"] = decimal_string(grid.maximum_threadgroup_accounted_bytes);
   output["threadgroup_accounted_imbalance_bytes"] = decimal_string(grid.threadgroup_accounted_imbalance_bytes);
@@ -1351,9 +1359,11 @@ OrderedJson metal_task_evidence_json(const LlmMetalTaskEvidence& metal) {
   validation["post_validation_evaluated"] = metal.post_validation_evaluated;
   validation["post_validation_valid"] =
       metal.post_validation_evaluated ? OrderedJson(metal.post_validation_valid) : OrderedJson(nullptr);
-  validation["append_evaluated"] = metal.append_validation_evaluated;
-  validation["append_valid"] =
-      metal.append_validation_evaluated ? OrderedJson(metal.append_validation_valid) : OrderedJson(nullptr);
+  validation["kv_write_evaluated"] = metal.kv_write_validation_evaluated;
+  validation["kv_write_valid"] =
+      metal.kv_write_validation_evaluated
+          ? OrderedJson(metal.kv_write_validation_valid)
+          : OrderedJson(nullptr);
   validation["padding_canary_applicable"] = metal.padding_canary_applicable;
   validation["padding_canary_evaluated"] =
       metal.padding_canary_applicable ? OrderedJson(metal.padding_canary_evaluated) : OrderedJson(nullptr);

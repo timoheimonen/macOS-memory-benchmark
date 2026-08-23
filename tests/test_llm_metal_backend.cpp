@@ -49,9 +49,9 @@ constexpr size_t kGiB = 1024ULL * 1024ULL * 1024ULL;
 constexpr size_t kFoundationPipelineCount = 6;
 constexpr size_t kWorkloadPipelineCount = 3;
 constexpr std::string_view kCanonicalKernelRevision =
-    "llm-metal-decode-contiguous-paged-msl23-v2";
+    "llm-metal-decode-prefill-contiguous-paged-msl23-v3";
 constexpr std::string_view kCanonicalKernelSourceSha256 =
-    "6356672227f11e2a908b3d19f31ed4205ebf00c34648b74bb6d06dbe7a590c1a";
+    "8410c1fd1614413e209ca3db6242d411c189d0200e44af7bfdad9a02188dfec7";
 
 LlmGeometry contiguous_geometry(size_t weight_bytes, size_t context_tokens = 1, size_t layer_count = 1,
                                 size_t batch_size = 1, size_t head_dimension = 1) {
@@ -80,6 +80,24 @@ LlmGeometry paged_geometry(size_t weight_bytes, size_t context_tokens, size_t bl
   request.batch_size = batch_size;
   request.kv_block_tokens = block_tokens;
   request.kv_layout = LlmKvLayout::Paged;
+  return resolve_llm_geometry(request);
+}
+
+LlmGeometry prefill_contiguous_geometry(
+    size_t weight_bytes, size_t prompt_tokens, size_t query_tile_tokens,
+    size_t layer_count = 1, size_t batch_size = 1,
+    size_t head_dimension = 1) {
+  LlmGeometryRequest request;
+  request.active_weight_bytes = weight_bytes;
+  request.layer_count = layer_count;
+  request.query_head_count = 1;
+  request.kv_head_count = 1;
+  request.head_dimension = head_dimension;
+  request.kv_element_bytes = 1;
+  request.phase = LlmPhase::Prefill;
+  request.prompt_tokens = prompt_tokens;
+  request.attention_query_tile_tokens = query_tile_tokens;
+  request.batch_size = batch_size;
   return resolve_llm_geometry(request);
 }
 
@@ -172,6 +190,19 @@ LlmMemoryWorkPlan make_metal_model_plan(LlmGeometry geometry, LlmMetalExecutionP
                          UINT64_C(0x6162636465666768)};
   plan.plan_identity = std::move(identity);
   plan.backend_execution_plan = std::move(execution);
+  if (plan.phase == LlmPhase::Prefill && plan.geometry.prefill.has_value()) {
+    plan.prefill_plan = resolve_llm_prefill_plan(
+        {plan.geometry.active_weight_bytes_per_work_unit,
+         plan.geometry.prefill->prompt_tokens,
+         plan.geometry.prefill->attention_query_tile_tokens,
+         plan.geometry.layer_count,
+         plan.geometry.batch_size,
+         plan.geometry.query_head_count,
+         plan.geometry.head_dimension,
+         plan.geometry.k_or_v_record_bytes_per_layer,
+         0});
+    plan.valid = plan.valid && plan.prefill_plan->valid;
+  }
   return plan;
 }
 
@@ -197,6 +228,8 @@ constexpr uint32_t kTestAppendBatchMultiplier = UINT32_C(0x27d4eb2f);
 constexpr uint32_t kTestAppendWordMultiplier = UINT32_C(0x165667b1);
 constexpr uint32_t kTestAppendKeyDomain = UINT32_C(0x4b455931);
 constexpr uint32_t kTestAppendValueDomain = UINT32_C(0x56414c31);
+constexpr uint32_t kTestPrefillWriteKeyDomain = UINT32_C(0x504b5731);
+constexpr uint32_t kTestPrefillWriteValueDomain = UINT32_C(0x50565731);
 constexpr uint32_t kTestChecksumValueMultiplier = UINT32_C(0x9e3779b1);
 constexpr uint32_t kTestChecksumAddressMultiplier = UINT32_C(0x85ebca77);
 constexpr uint32_t kTestChecksumWorkUnitMultiplier = UINT32_C(0xc2b2ae3d);
@@ -205,6 +238,7 @@ constexpr uint32_t kTestChecksumBatchMultiplier = UINT32_C(0x165667c5);
 constexpr uint32_t kTestChecksumValidMaskMultiplier = UINT32_C(0xd3a2646d);
 constexpr uint32_t kTestChecksumProfileDomain = UINT32_C(0x4d444331);
 constexpr uint32_t kTestChecksumPagedProfileDomain = UINT32_C(0x4d445031);
+constexpr uint32_t kTestChecksumPrefillProfileDomain = UINT32_C(0x4d504331);
 constexpr uint32_t kTestChecksumScenarioHighMultiplier = UINT32_C(0xa24baed5);
 constexpr uint32_t kTestChecksumWeightDomain = UINT32_C(0x57474854);
 constexpr uint32_t kTestChecksumKeyDomain = UINT32_C(0x4b455943);
@@ -212,6 +246,8 @@ constexpr uint32_t kTestChecksumValueDomain = UINT32_C(0x56414c43);
 constexpr uint32_t kTestChecksumWeightReadVisit = UINT32_C(0x57524541);
 constexpr uint32_t kTestChecksumAppendVisit = UINT32_C(0x41505044);
 constexpr uint32_t kTestChecksumKvReadVisit = UINT32_C(0x4b565244);
+constexpr uint32_t kTestChecksumPrefillWriteVisit = UINT32_C(0x50575254);
+constexpr uint32_t kTestChecksumTileMultiplier = UINT32_C(0xd1b54a35);
 constexpr uint32_t kTestChecksumPagedLogicalMultiplier = UINT32_C(0x7f4a7c15);
 constexpr uint32_t kTestChecksumPagedPhysicalMultiplier = UINT32_C(0x94d049bb);
 constexpr uint32_t kTestChecksumPagedPairMultiplier = UINT32_C(0x369dea0f);
@@ -398,7 +434,7 @@ LlmMetalDualMod32Checksum independent_decode_checksum_byte_by_byte(
     for (size_t layer = 0; layer < geometry.layer_count; ++layer) {
       const size_t weight_bytes =
           weight_layer_base + (layer < weight_layer_remainder ? 1U : 0U);
-      if (include_weight) {
+      if (include_weight && weight_bytes != 0) {
         independent_accumulate_byte_range(
             checksum.weight, weight_offset, weight_bytes,
             kTestChecksumWeightDomain, kTestChecksumWeightReadVisit,
@@ -454,6 +490,161 @@ LlmMetalDualMod32Checksum independent_decode_checksum_byte_by_byte(
                         model_plan.k_buffer_seed, kTestChecksumKeyDomain);
         accumulate_pool(checksum.v, LlmMetalResourcePool::V,
                         model_plan.v_buffer_seed, kTestChecksumValueDomain);
+      }
+    }
+  }
+  return checksum;
+}
+
+uint32_t independent_prefill_write_word(
+    uint64_t scenario_seed, size_t work_unit, size_t layer, size_t batch,
+    uint64_t word_index, LlmMetalResourcePool pool) {
+  const uint32_t pool_domain =
+      pool == LlmMetalResourcePool::K ? kTestPrefillWriteKeyDomain
+                                      : kTestPrefillWriteValueDomain;
+  return static_cast<uint32_t>(scenario_seed) +
+         kTestAppendWorkUnitMultiplier *
+             static_cast<uint32_t>(work_unit + 1U) +
+         kTestAppendLayerMultiplier * static_cast<uint32_t>(layer + 1U) +
+         kTestAppendBatchMultiplier * static_cast<uint32_t>(batch + 1U) +
+         kTestAppendWordMultiplier * static_cast<uint32_t>(word_index + 1U) +
+         pool_domain;
+}
+
+uint32_t independent_prefill_checksum_domain(
+    uint32_t pool_domain, uint32_t visit_domain, uint64_t scenario_seed,
+    size_t work_unit, size_t layer, size_t batch, size_t tile_ordinal,
+    uint32_t valid_mask) {
+  return kTestChecksumPrefillProfileDomain +
+         static_cast<uint32_t>(scenario_seed) +
+         kTestChecksumScenarioHighMultiplier *
+             static_cast<uint32_t>(scenario_seed >> 32U) +
+         pool_domain + visit_domain +
+         kTestChecksumWorkUnitMultiplier *
+             static_cast<uint32_t>(work_unit + 1U) +
+         kTestChecksumLayerMultiplier * static_cast<uint32_t>(layer + 1U) +
+         kTestChecksumBatchMultiplier * static_cast<uint32_t>(batch + 1U) +
+         kTestChecksumTileMultiplier * static_cast<uint32_t>(tile_ordinal) +
+         kTestChecksumValidMaskMultiplier * valid_mask;
+}
+
+template <typename ByteAt>
+void independent_accumulate_prefill_byte_range(
+    LlmMetalMod32Lane& checksum, size_t range_start, size_t range_length,
+    uint32_t pool_domain, uint32_t visit_domain, uint64_t scenario_seed,
+    size_t work_unit, size_t layer, size_t batch, size_t tile_ordinal,
+    ByteAt byte_at) {
+  const size_t range_end = range_start + range_length;
+  const uint64_t first_word = range_start / sizeof(uint32_t);
+  const uint64_t last_word = (range_end - 1U) / sizeof(uint32_t);
+  for (uint64_t word_index = first_word; word_index <= last_word;
+       ++word_index) {
+    uint32_t packed = 0;
+    uint32_t valid_mask = 0;
+    const uint64_t word_start = word_index * sizeof(uint32_t);
+    for (size_t byte_index = 0; byte_index < sizeof(uint32_t);
+         ++byte_index) {
+      const uint64_t absolute_byte = word_start + byte_index;
+      if (absolute_byte < range_start || absolute_byte >= range_end) {
+        continue;
+      }
+      valid_mask |= 1U << byte_index;
+      packed |= static_cast<uint32_t>(byte_at(absolute_byte))
+                << (8U * static_cast<unsigned>(byte_index));
+    }
+    independent_mix_word(
+        checksum, packed, word_index,
+        independent_prefill_checksum_domain(
+            pool_domain, visit_domain, scenario_seed, work_unit, layer,
+            batch, tile_ordinal, valid_mask));
+  }
+}
+
+LlmMetalDualMod32Checksum independent_prefill_checksum_byte_by_byte(
+    const LlmMemoryWorkPlan& model_plan,
+    const LlmScenarioWorkPlan& scenario_plan) {
+  LlmMetalDualMod32Checksum checksum;
+  const LlmGeometry& geometry = model_plan.geometry;
+  const LlmPrefillGeometry& prefill = *geometry.prefill;
+  const bool include_weight =
+      scenario_plan.scenario != LlmScenario::KvOnly;
+  const bool include_kv =
+      scenario_plan.scenario != LlmScenario::WeightsOnly;
+  const size_t sequence_bytes =
+      prefill.prompt_tokens * geometry.k_or_v_record_bytes_per_layer;
+  const size_t weight_layer_base =
+      geometry.active_weight_bytes_per_work_unit / geometry.layer_count;
+  const size_t weight_layer_remainder =
+      geometry.active_weight_bytes_per_work_unit % geometry.layer_count;
+
+  for (size_t work_unit = 0; work_unit < scenario_plan.work_units;
+       ++work_unit) {
+    size_t weight_offset = 0;
+    for (size_t layer = 0; layer < geometry.layer_count; ++layer) {
+      const size_t weight_bytes =
+          weight_layer_base + (layer < weight_layer_remainder ? 1U : 0U);
+      if (include_weight && weight_bytes != 0) {
+        independent_accumulate_prefill_byte_range(
+            checksum.weight, weight_offset, weight_bytes,
+            kTestChecksumWeightDomain, kTestChecksumWeightReadVisit,
+            scenario_plan.scenario_seed, work_unit, layer, 0, 0,
+            [&](uint64_t absolute_byte) {
+              const uint32_t word = independent_contiguous_pattern_word(
+                  model_plan.weight_buffer_seed,
+                  absolute_byte / sizeof(uint32_t));
+              return word_byte(word, absolute_byte % sizeof(uint32_t));
+            });
+      }
+      weight_offset += weight_bytes;
+      if (!include_kv) {
+        continue;
+      }
+      for (size_t batch = 0; batch < geometry.batch_size; ++batch) {
+        const size_t sequence_start =
+            (layer * geometry.batch_size + batch) * sequence_bytes;
+        const auto accumulate_pool = [&](LlmMetalMod32Lane& lane,
+                                         LlmMetalResourcePool pool,
+                                         uint32_t pool_domain) {
+          const auto write_byte = [&](uint64_t absolute_byte) {
+            const uint32_t word = independent_prefill_write_word(
+                scenario_plan.scenario_seed, work_unit, layer, batch,
+                absolute_byte / sizeof(uint32_t), pool);
+            return word_byte(word, absolute_byte % sizeof(uint32_t));
+          };
+          for (size_t prompt_token = 0;
+               prompt_token < prefill.prompt_tokens; ++prompt_token) {
+            independent_accumulate_prefill_byte_range(
+                lane,
+                sequence_start +
+                    prompt_token *
+                        geometry.k_or_v_record_bytes_per_layer,
+                geometry.k_or_v_record_bytes_per_layer, pool_domain,
+                kTestChecksumPrefillWriteVisit,
+                scenario_plan.scenario_seed, work_unit, layer, batch, 0,
+                write_byte);
+          }
+          size_t remaining_tokens = prefill.prompt_tokens;
+          size_t prefix_tokens = 0;
+          size_t tile_ordinal = 0;
+          while (remaining_tokens != 0) {
+            const size_t tile_tokens = std::min(
+                prefill.attention_query_tile_tokens, remaining_tokens);
+            prefix_tokens += tile_tokens;
+            ++tile_ordinal;
+            independent_accumulate_prefill_byte_range(
+                lane, sequence_start,
+                prefix_tokens * geometry.k_or_v_record_bytes_per_layer,
+                pool_domain, kTestChecksumKvReadVisit,
+                scenario_plan.scenario_seed, work_unit, layer, batch,
+                tile_ordinal, write_byte);
+            remaining_tokens -= tile_tokens;
+          }
+          EXPECT_EQ(tile_ordinal, prefill.tile_count);
+        };
+        accumulate_pool(checksum.k, LlmMetalResourcePool::K,
+                        kTestChecksumKeyDomain);
+        accumulate_pool(checksum.v, LlmMetalResourcePool::V,
+                        kTestChecksumValueDomain);
       }
     }
   }
@@ -996,6 +1187,13 @@ TEST(LlmMetalBackendTest, RuntimeEncoderLengthAlignmentAndFirstAdmissionAreExact
   EXPECT_EQ(plan.resources.known_owned_peak_bytes, plan.resources.persistent_resource_length_bytes + 17U);
   EXPECT_EQ(plan.resources.admitted_budget_bytes,
             static_cast<size_t>(static_cast<long double>(10000) * Constants::MEMORY_LIMIT_FACTOR));
+  LlmMetalResourcePlanRequest different_serial_cap = request;
+  ++different_serial_cap.limits.maximum_serial_range_visits_per_lane_per_task;
+  const LlmMetalExecutionPlan different_serial_identity =
+      build_llm_metal_execution_plan(different_serial_cap);
+  ASSERT_TRUE(different_serial_identity.valid)
+      << different_serial_identity.reason_code;
+  EXPECT_NE(different_serial_identity.identity, plan.identity);
 
   request.argument_buffer_encoded_length = 0;
   EXPECT_EQ(build_llm_metal_execution_plan(request).reason_code, LlmMetalPlanReason::ARGUMENT_ENCODER_LENGTH_ZERO);
@@ -1121,11 +1319,13 @@ TEST(LlmMetalBackendTest, GridPlanUsesInjectedWidthAndAllBoundaryCaps) {
   request.visit_bytes = 64 * Constants::LLM_METAL_VECTOR_WIDTH_BYTES;
   request.work_units = 4;
   request.paged_semantic_lookups = 10;
+  request.serial_range_visits_per_lane = 12;
   request.pipeline = {16, 128};
   request.limits.threads_per_threadgroup_cap = 64;
   request.limits.maximum_threadgroups_per_grid = 3;
   request.limits.maximum_owner_ordinals_per_threadgroup = 2;
   request.limits.maximum_vector_iterations_per_lane_per_visit = 2;
+  request.limits.maximum_serial_range_visits_per_lane_per_task = 12;
   request.limits.maximum_work_units_per_dispatch = 4;
   request.limits.maximum_paged_semantic_lookups_per_task = 10;
 
@@ -1152,6 +1352,13 @@ TEST(LlmMetalBackendTest, GridPlanUsesInjectedWidthAndAllBoundaryCaps) {
   const LlmMetalGridPlan different_identity = build_llm_metal_grid_plan(different_cap);
   ASSERT_TRUE(different_identity.valid) << different_identity.reason_code;
   EXPECT_NE(different_identity.identity, exact.identity);
+  LlmMetalGridRequest different_serial_cap = request;
+  ++different_serial_cap.limits.maximum_serial_range_visits_per_lane_per_task;
+  const LlmMetalGridPlan different_serial_identity =
+      build_llm_metal_grid_plan(different_serial_cap);
+  ASSERT_TRUE(different_serial_identity.valid)
+      << different_serial_identity.reason_code;
+  EXPECT_NE(different_serial_identity.identity, exact.identity);
 
   request.owner_count = 7;
   EXPECT_EQ(build_llm_metal_grid_plan(request).reason_code, LlmMetalPlanReason::OWNER_STRIDE_CAP_EXCEEDED);
@@ -1164,6 +1371,10 @@ TEST(LlmMetalBackendTest, GridPlanUsesInjectedWidthAndAllBoundaryCaps) {
   --request.work_units;
   ++request.paged_semantic_lookups;
   EXPECT_EQ(build_llm_metal_grid_plan(request).reason_code, LlmMetalPlanReason::SEMANTIC_VISIT_CAP_EXCEEDED);
+  --request.paged_semantic_lookups;
+  ++request.serial_range_visits_per_lane;
+  EXPECT_EQ(build_llm_metal_grid_plan(request).reason_code,
+            LlmMetalPlanReason::SERIAL_RANGE_VISIT_CAP_EXCEEDED);
 }
 
 TEST(LlmMetalBackendTest, GridPlanReportsExactCyclicThreadgroupOwnerCostsPastGridCap) {
@@ -1238,6 +1449,18 @@ TEST(LlmMetalBackendTest,
   EXPECT_EQ(llm_metal_decode_append_word(
                 kSeed, 2, 3, 4, 5, LlmMetalResourcePool::V),
             UINT32_C(0xc9aa3846));
+  EXPECT_EQ(llm_metal_prefill_write_word(
+                kSeed, 2, 3, 4, 5, LlmMetalResourcePool::K),
+            independent_prefill_write_word(
+                kSeed, 2, 3, 4, 5, LlmMetalResourcePool::K));
+  EXPECT_EQ(llm_metal_prefill_write_word(
+                kSeed, 2, 3, 4, 5, LlmMetalResourcePool::V),
+            independent_prefill_write_word(
+                kSeed, 2, 3, 4, 5, LlmMetalResourcePool::V));
+  EXPECT_NE(llm_metal_prefill_write_word(
+                kSeed, 1, 3, 4, 5, LlmMetalResourcePool::K),
+            llm_metal_prefill_write_word(
+                kSeed, 2, 3, 4, 5, LlmMetalResourcePool::K));
 }
 
 TEST(LlmMetalBackendTest,
@@ -1288,6 +1511,175 @@ TEST(LlmMetalBackendTest,
                 weights_only_lane->b != mixed_lane->b)
         << "scenario-derived seed must domain-separate the shared weight bytes";
   }
+}
+
+TEST(LlmMetalBackendTest,
+     PrefillChecksumMatchesIndependentByteOracleAcrossTilesTailsAndScenarios) {
+  for (size_t tail_bytes : {size_t{31}, size_t{32}, size_t{33}}) {
+    for (const auto [prompt_tokens, query_tile_tokens] :
+         {std::pair<size_t, size_t>{5, 1}, {5, 5}, {5, 2}}) {
+      const LlmGeometry geometry = prefill_contiguous_geometry(
+          tail_bytes, prompt_tokens, query_tile_tokens, 2, 2, tail_bytes);
+      ASSERT_TRUE(geometry.valid) << geometry.reason_code;
+      LlmMemoryWorkPlan model = make_metal_model_plan(
+          geometry,
+          build_llm_metal_execution_plan(resource_request(geometry)),
+          "llm-metal-prefill-independent-byte-oracle-" +
+              std::to_string(tail_bytes) + "-" +
+              std::to_string(query_tile_tokens));
+      ASSERT_TRUE(model.valid) << model.reason_code;
+      ASSERT_TRUE(model.prefill_plan.has_value());
+
+      for (LlmScenario scenario : {LlmScenario::WeightsOnly,
+                                   LlmScenario::KvOnly,
+                                   LlmScenario::Mixed}) {
+        const LlmScenarioWorkPlan scenario_plan =
+            build_llm_scenario_work_plan(model, scenario, 2, true);
+        ASSERT_TRUE(scenario_plan.valid) << scenario_plan.reason_code;
+        const LlmMetalChecksumOracle oracle =
+            calculate_llm_metal_prefill_contiguous_checksum(model,
+                                                            scenario_plan);
+        ASSERT_TRUE(oracle.valid) << oracle.reason_code;
+        const LlmMetalDualMod32Checksum independent =
+            independent_prefill_checksum_byte_by_byte(model, scenario_plan);
+        SCOPED_TRACE(tail_bytes);
+        SCOPED_TRACE(query_tile_tokens);
+        SCOPED_TRACE(static_cast<int>(scenario));
+        EXPECT_TRUE(equal_llm_metal_checksum(oracle.checksum, independent));
+        if (scenario == LlmScenario::WeightsOnly) {
+          EXPECT_EQ(oracle.checksum.k.a, 0U);
+          EXPECT_EQ(oracle.checksum.k.b, 0U);
+          EXPECT_EQ(oracle.checksum.v.a, 0U);
+          EXPECT_EQ(oracle.checksum.v.b, 0U);
+        } else if (scenario == LlmScenario::KvOnly) {
+          EXPECT_EQ(oracle.checksum.weight.a, 0U);
+          EXPECT_EQ(oracle.checksum.weight.b, 0U);
+        }
+      }
+    }
+  }
+}
+
+TEST(LlmMetalBackendTest,
+     PrefillSerialRangeVisitCountIsExactAndCapsTheOracleBeforeEnumeration) {
+  const LlmGeometry geometry =
+      prefill_contiguous_geometry(33, 5, 2, 2, 2, 3);
+  ASSERT_TRUE(geometry.valid) << geometry.reason_code;
+  LlmMemoryWorkPlan model = make_metal_model_plan(
+      geometry, build_llm_metal_execution_plan(resource_request(geometry)),
+      "llm-metal-prefill-serial-range-count");
+  ASSERT_TRUE(model.valid) << model.reason_code;
+
+  for (const auto [scenario, expected] :
+       {std::pair<LlmScenario, size_t>{LlmScenario::WeightsOnly, 6},
+        {LlmScenario::KvOnly, 192}, {LlmScenario::Mixed, 198}}) {
+    const LlmScenarioWorkPlan scenario_plan =
+        build_llm_scenario_work_plan(model, scenario, 3, true);
+    ASSERT_TRUE(scenario_plan.valid) << scenario_plan.reason_code;
+    size_t visits = 999;
+    ASSERT_TRUE(calculate_llm_metal_prefill_serial_range_visits_per_lane(
+        model, scenario_plan, visits));
+    SCOPED_TRACE(static_cast<int>(scenario));
+    EXPECT_EQ(visits, expected);
+  }
+
+  size_t visits_per_work_unit = 0;
+  ASSERT_TRUE(calculate_llm_metal_prefill_serial_range_visits_per_work_unit(
+      geometry, LlmScenario::Mixed, visits_per_work_unit));
+  ASSERT_EQ(visits_per_work_unit, 66U);
+  const LlmScenarioLimits limits = calculate_llm_scenario_limits(
+      geometry, LlmScenario::Mixed, LlmMemoryBackend::Metal);
+  ASSERT_TRUE(limits.valid) << limits.reason_code;
+  EXPECT_EQ(
+      limits.maximum_work_units_by_work_unit_cap,
+      Constants::LLM_METAL_MAX_SERIAL_RANGE_VISITS_PER_LANE_PER_TASK /
+          visits_per_work_unit);
+  const LlmScenarioWorkPlan exact = build_llm_scenario_work_plan(
+      model, LlmScenario::Mixed, limits.effective_maximum_work_units, true);
+  ASSERT_TRUE(exact.valid) << exact.reason_code;
+  const LlmScenarioWorkPlan rejected = build_llm_scenario_work_plan(
+      model, LlmScenario::Mixed, limits.effective_maximum_work_units + 1,
+      true);
+  EXPECT_FALSE(rejected.valid);
+  EXPECT_EQ(rejected.reason_code, LlmWorkPlanReason::WORK_UNIT_CAP_EXCEEDED);
+
+  LlmScenarioWorkPlan over_cap_scenario = exact;
+  ++over_cap_scenario.work_units;
+  size_t visits = 0;
+  ASSERT_TRUE(calculate_llm_metal_prefill_serial_range_visits_per_lane(
+      model, over_cap_scenario, visits));
+  ASSERT_GT(
+      visits,
+      Constants::LLM_METAL_MAX_SERIAL_RANGE_VISITS_PER_LANE_PER_TASK);
+  const LlmMetalChecksumOracle oracle =
+      calculate_llm_metal_prefill_contiguous_checksum(model,
+                                                      over_cap_scenario);
+  EXPECT_FALSE(oracle.valid);
+  EXPECT_EQ(oracle.reason_code,
+            LlmMetalPlanReason::SERIAL_RANGE_VISIT_CAP_EXCEEDED);
+}
+
+TEST(LlmMetalBackendTest,
+     PrefillVectorSpanIncludesUnalignedSecondSequenceAtLaneThreshold) {
+  const LlmGeometry aligned =
+      prefill_contiguous_geometry(1, 5, 5, 1, 1, 819);
+  const LlmGeometry unaligned =
+      prefill_contiguous_geometry(1, 5, 5, 1, 2, 819);
+  ASSERT_TRUE(aligned.valid) << aligned.reason_code;
+  ASSERT_TRUE(unaligned.valid) << unaligned.reason_code;
+  ASSERT_TRUE(aligned.prefill.has_value());
+  ASSERT_EQ(aligned.prefill->prompt_tokens *
+                aligned.k_or_v_record_bytes_per_layer,
+            4095U);
+
+  size_t aligned_span_bytes = 0;
+  size_t unaligned_span_bytes = 0;
+  ASSERT_TRUE(calculate_llm_metal_prefill_maximum_range_vector_span_bytes(
+      aligned, LlmScenario::KvOnly, aligned_span_bytes));
+  ASSERT_TRUE(calculate_llm_metal_prefill_maximum_range_vector_span_bytes(
+      unaligned, LlmScenario::KvOnly, unaligned_span_bytes));
+  EXPECT_EQ(aligned_span_bytes,
+            256 * Constants::LLM_METAL_VECTOR_WIDTH_BYTES);
+  EXPECT_EQ(unaligned_span_bytes,
+            257 * Constants::LLM_METAL_VECTOR_WIDTH_BYTES);
+
+  LlmMetalGridRequest request;
+  request.owner_count = 1;
+  request.visit_bytes = unaligned_span_bytes;
+  request.work_units = 1;
+  request.pipeline = {32, 256};
+  request.limits.maximum_threadgroups_per_grid = 1;
+  request.limits.maximum_vector_iterations_per_lane_per_visit = 2;
+  const LlmMetalGridPlan exact = build_llm_metal_grid_plan(request);
+  ASSERT_TRUE(exact.valid) << exact.reason_code;
+  EXPECT_EQ(exact.threads_per_threadgroup, 256U);
+  EXPECT_EQ(exact.vector_iterations_per_lane_per_visit, 2U);
+
+  request.limits.maximum_vector_iterations_per_lane_per_visit = 1;
+  const LlmMetalGridPlan rejected = build_llm_metal_grid_plan(request);
+  EXPECT_FALSE(rejected.valid);
+  EXPECT_EQ(rejected.reason_code,
+            LlmMetalPlanReason::VECTOR_ITERATION_CAP_EXCEEDED);
+}
+
+TEST(LlmMetalBackendTest,
+     PrefillChecksumTreatsZeroLengthWeightLayersAsNoOps) {
+  const LlmGeometry geometry =
+      prefill_contiguous_geometry(1, 3, 2, 2, 1, 3);
+  ASSERT_TRUE(geometry.valid) << geometry.reason_code;
+  LlmMemoryWorkPlan model = make_metal_model_plan(
+      geometry, build_llm_metal_execution_plan(resource_request(geometry)),
+      "llm-metal-prefill-zero-length-weight-layer");
+  ASSERT_TRUE(model.valid) << model.reason_code;
+  const LlmScenarioWorkPlan scenario = build_llm_scenario_work_plan(
+      model, LlmScenario::Mixed, 1, true);
+  ASSERT_TRUE(scenario.valid) << scenario.reason_code;
+  const LlmMetalChecksumOracle oracle =
+      calculate_llm_metal_prefill_contiguous_checksum(model, scenario);
+  ASSERT_TRUE(oracle.valid) << oracle.reason_code;
+  EXPECT_TRUE(equal_llm_metal_checksum(
+      oracle.checksum,
+      independent_prefill_checksum_byte_by_byte(model, scenario)));
 }
 
 TEST(LlmMetalBackendTest,
@@ -1592,6 +1984,103 @@ TEST(LlmMetalBackendTest,
   }
 }
 
+TEST(LlmMetalBackendTest, PrefillContiguousParameterCpuAbiIsExact) {
+  EXPECT_STREQ(LlmMetalKernelContract::kPrefillParameterAbiRevision,
+               "llm-metal-prefill-contiguous-parameters-v1");
+  EXPECT_EQ(alignof(LlmMetalPrefillContiguousParams), 8U);
+  EXPECT_EQ(sizeof(LlmMetalPrefillContiguousParams), 136U);
+  const std::array<size_t, 19> offsets = {
+      offsetof(LlmMetalPrefillContiguousParams, weight_bytes),
+      offsetof(LlmMetalPrefillContiguousParams, k_bytes),
+      offsetof(LlmMetalPrefillContiguousParams, v_bytes),
+      offsetof(LlmMetalPrefillContiguousParams, segment_capacity_bytes),
+      offsetof(LlmMetalPrefillContiguousParams, prompt_tokens),
+      offsetof(LlmMetalPrefillContiguousParams,
+               attention_query_tile_tokens),
+      offsetof(LlmMetalPrefillContiguousParams, tile_count),
+      offsetof(LlmMetalPrefillContiguousParams, layer_count),
+      offsetof(LlmMetalPrefillContiguousParams, batch_size),
+      offsetof(LlmMetalPrefillContiguousParams, record_bytes),
+      offsetof(LlmMetalPrefillContiguousParams, work_units),
+      offsetof(LlmMetalPrefillContiguousParams, weight_seed),
+      offsetof(LlmMetalPrefillContiguousParams, k_seed),
+      offsetof(LlmMetalPrefillContiguousParams, v_seed),
+      offsetof(LlmMetalPrefillContiguousParams, scenario_seed),
+      offsetof(LlmMetalPrefillContiguousParams, weight_segment_count),
+      offsetof(LlmMetalPrefillContiguousParams, k_segment_count),
+      offsetof(LlmMetalPrefillContiguousParams, v_segment_count),
+      offsetof(LlmMetalPrefillContiguousParams, reserved_zero),
+  };
+  EXPECT_EQ(offsets,
+            (std::array<size_t, 19>{0,   8,   16,  24,  32,  40,  48,
+                                    56,  64,  72,  80,  88,  96,  104,
+                                    112, 120, 124, 128, 132}));
+}
+
+TEST(LlmMetalBackendTest,
+     PrefillContiguousParameterLayoutProbeValidatesEveryWord) {
+  LlmMetalPrefillContiguousParams parameters;
+  parameters.weight_bytes = UINT64_C(0x0102030405060708);
+  parameters.k_bytes = UINT64_C(0x1112131415161718);
+  parameters.v_bytes = UINT64_C(0x2122232425262728);
+  parameters.segment_capacity_bytes = UINT64_C(0x3132333435363738);
+  parameters.prompt_tokens = UINT64_C(0x4142434445464748);
+  parameters.attention_query_tile_tokens = UINT64_C(0x5152535455565758);
+  parameters.tile_count = UINT64_C(0x6162636465666768);
+  parameters.layer_count = UINT64_C(0x7172737475767778);
+  parameters.batch_size = UINT64_C(0x8182838485868788);
+  parameters.record_bytes = UINT64_C(0x9192939495969798);
+  parameters.work_units = UINT64_C(0xa1a2a3a4a5a6a7a8);
+  parameters.weight_seed = UINT64_C(0xb1b2b3b4b5b6b7b8);
+  parameters.k_seed = UINT64_C(0xc1c2c3c4c5c6c7c8);
+  parameters.v_seed = UINT64_C(0xd1d2d3d4d5d6d7d8);
+  parameters.scenario_seed = UINT64_C(0xe1e2e3e4e5e6e7e8);
+  parameters.weight_segment_count = UINT32_C(0x11121314);
+  parameters.k_segment_count = UINT32_C(0x21222324);
+  parameters.v_segment_count = UINT32_C(0x31323334);
+  parameters.reserved_zero = UINT32_C(0x41424344);
+  constexpr std::array<uint64_t, 19> kOffsets = {
+      0,  8,  16, 24, 32, 40, 48, 56, 64, 72,
+      80, 88, 96, 104, 112, 120, 124, 128, 132,
+  };
+  const std::array<uint64_t, 19> values = {
+      parameters.weight_bytes,
+      parameters.k_bytes,
+      parameters.v_bytes,
+      parameters.segment_capacity_bytes,
+      parameters.prompt_tokens,
+      parameters.attention_query_tile_tokens,
+      parameters.tile_count,
+      parameters.layer_count,
+      parameters.batch_size,
+      parameters.record_bytes,
+      parameters.work_units,
+      parameters.weight_seed,
+      parameters.k_seed,
+      parameters.v_seed,
+      parameters.scenario_seed,
+      parameters.weight_segment_count,
+      parameters.k_segment_count,
+      parameters.v_segment_count,
+      parameters.reserved_zero,
+  };
+  LlmMetalPrefillLayoutProbeWords words{};
+  words[0] = 1;
+  words[1] = 136;
+  words[2] = 8;
+  words[3] = 19;
+  std::copy(kOffsets.begin(), kOffsets.end(), words.begin() + 4);
+  std::copy(values.begin(), values.end(), words.begin() + 23);
+  ASSERT_TRUE(validate_llm_metal_prefill_layout_probe(parameters, words));
+  for (size_t index = 0; index < words.size(); ++index) {
+    LlmMetalPrefillLayoutProbeWords corrupted = words;
+    ++corrupted[index];
+    SCOPED_TRACE(index);
+    EXPECT_FALSE(
+        validate_llm_metal_prefill_layout_probe(parameters, corrupted));
+  }
+}
+
 TEST(LlmMetalBackendTest, DecodePagedParameterCpuAbiIsExact) {
   EXPECT_EQ(alignof(LlmMetalDecodePagedParams), 8U);
   EXPECT_EQ(sizeof(LlmMetalDecodePagedParams), 168U);
@@ -1710,7 +2199,8 @@ TEST(LlmMetalBackendTest,
   const auto require_source = [&](std::string_view token) {
     EXPECT_NE(source.find(token), std::string_view::npos) << token;
   };
-  require_source("#if (LLM_METAL_DECODE_CONTIGUOUS + LLM_METAL_DECODE_PAGED) != 1");
+  require_source("LLM_METAL_DECODE_PAGED + \\");
+  require_source("LLM_METAL_PREFILL_CONTIGUOUS) != 1");
   require_source("#if LLM_METAL_DECODE_CONTIGUOUS");
   require_source("#if LLM_METAL_DECODE_PAGED");
   require_source("device const volatile uint* named_lane_table");
@@ -1735,6 +2225,91 @@ TEST(LlmMetalBackendTest,
   EXPECT_NE(lookup.find("threadgroup_barrier(mem_flags::mem_threadgroup);",
                         first_barrier + 1),
             std::string_view::npos);
+}
+
+TEST(LlmMetalBackendTest,
+     PrefillContiguousMslSourceLocksFullPromptThenPerTileKThenVContract) {
+  const std::string_view source = LlmMetalKernelContract::kSource;
+  EXPECT_EQ(canonical_llm_metal_kernel_source_sha256(),
+            kCanonicalKernelSourceSha256);
+  EXPECT_NE(source.find("#if LLM_METAL_PREFILL_CONTIGUOUS"),
+            std::string_view::npos);
+  EXPECT_NE(source.find("llm_metal_prefill_contiguous_weights_only"),
+            std::string_view::npos);
+  EXPECT_NE(source.find("llm_metal_prefill_contiguous_kv_only"),
+            std::string_view::npos);
+  EXPECT_NE(source.find("llm_metal_prefill_contiguous_mixed"),
+            std::string_view::npos);
+  EXPECT_NE(source.find("llm_metal_validate_prefill_contiguous_writes"),
+            std::string_view::npos);
+
+  const size_t run_start = source.find("inline void run_prefill_kv");
+  const size_t run_end = source.find(
+      "kernel void llm_metal_prefill_contiguous_weights_only", run_start);
+  ASSERT_NE(run_start, std::string_view::npos);
+  ASSERT_NE(run_end, std::string_view::npos);
+  const std::string_view run = source.substr(run_start, run_end - run_start);
+  const size_t token_loop = run.find(
+      "for (ulong prompt_token = 0ul; prompt_token < params.prompt_tokens;");
+  const size_t write_key = run.find("write_prefill_key_range", token_loop);
+  const size_t write_value = run.find("write_prefill_value_range", write_key);
+  const size_t remaining = run.find(
+      "ulong remaining_tokens = params.prompt_tokens", write_value);
+  const size_t tile_loop = run.find("while (remaining_tokens != 0ul)",
+                                    remaining);
+  const size_t remaining_distance = run.find(
+      "min(params.attention_query_tile_tokens,", tile_loop);
+  const size_t scan_key = run.find("scan_key_range", tile_loop);
+  const size_t scan_value = run.find("scan_value_range", scan_key);
+  ASSERT_NE(token_loop, std::string_view::npos);
+  ASSERT_LT(token_loop, write_key);
+  ASSERT_LT(write_key, write_value);
+  ASSERT_LT(write_value, remaining);
+  ASSERT_LT(remaining, tile_loop);
+  ASSERT_LT(tile_loop, remaining_distance);
+  ASSERT_LT(remaining_distance, scan_key);
+  ASSERT_LT(scan_key, scan_value);
+  EXPECT_EQ(run.find("(tile_ordinal + 1ul) *"), std::string_view::npos);
+  EXPECT_EQ(run.find("threadgroup_barrier(mem_flags::mem_device)"),
+            std::string_view::npos);
+  EXPECT_NE(source.find(
+                "const ulong remainder = first_vector % ulong(grid_size)"),
+            std::string_view::npos);
+  EXPECT_NE(source.find(
+                "return first_vector + delta;"),
+            std::string_view::npos);
+
+  const LlmPrefillPlan plan = resolve_llm_prefill_plan(
+      {64, 2, 1, 1, 1, 1, 1, 4, 0});
+  ASSERT_TRUE(plan.valid) << plan.reason_code;
+  const LlmPrefillSemanticTrace trace = build_llm_prefill_semantic_trace(
+      plan, {LlmPrefillPartitionUnitKind::ContiguousToken, 0, 2, 10});
+  const std::array<LlmPrefillSemanticEvent, 10> expected = {{
+      {LlmPrefillSemanticAccess::Write, LlmPrefillKvDomain::K, 0, 2, 0, 1},
+      {LlmPrefillSemanticAccess::Write, LlmPrefillKvDomain::V, 0, 2, 0, 1},
+      {LlmPrefillSemanticAccess::Write, LlmPrefillKvDomain::K, 0, 2, 1, 1},
+      {LlmPrefillSemanticAccess::Write, LlmPrefillKvDomain::V, 0, 2, 1, 1},
+      {LlmPrefillSemanticAccess::Read, LlmPrefillKvDomain::K, 0, 1, 0, 1},
+      {LlmPrefillSemanticAccess::Read, LlmPrefillKvDomain::V, 0, 1, 0, 1},
+      {LlmPrefillSemanticAccess::Read, LlmPrefillKvDomain::K, 1, 2, 0, 1},
+      {LlmPrefillSemanticAccess::Read, LlmPrefillKvDomain::K, 1, 2, 1, 1},
+      {LlmPrefillSemanticAccess::Read, LlmPrefillKvDomain::V, 1, 2, 0, 1},
+      {LlmPrefillSemanticAccess::Read, LlmPrefillKvDomain::V, 1, 2, 1, 1},
+  }};
+  ASSERT_TRUE(trace.valid) << trace.reason_code;
+  ASSERT_EQ(trace.events.size(), expected.size());
+  for (size_t index = 0; index < expected.size(); ++index) {
+    SCOPED_TRACE(index);
+    EXPECT_EQ(trace.events[index].access, expected[index].access);
+    EXPECT_EQ(trace.events[index].domain, expected[index].domain);
+    EXPECT_EQ(trace.events[index].tile_index, expected[index].tile_index);
+    EXPECT_EQ(trace.events[index].tile_end_token,
+              expected[index].tile_end_token);
+    EXPECT_EQ(trace.events[index].logical_unit_index,
+              expected[index].logical_unit_index);
+    EXPECT_EQ(trace.events[index].visit_token_count,
+              expected[index].visit_token_count);
+  }
 }
 
 TEST(LlmMetalBackendTest, CanonicalEmbeddedMslSourceHashIsFrozenLowercaseSha256) {
@@ -1940,9 +2515,12 @@ class LlmMetalBackendIntegrationTest : public ::testing::Test {
         plan, scenario, work_units, true);
     ASSERT_TRUE(scenario_plan.valid) << scenario_plan.reason_code;
     const LlmRunnerTaskContext context = measurement_context(
-        scenario, plan.kv_layout == LlmKvLayout::Paged
-                      ? "phase-10-real-decode-paged"
-                      : "phase-9-real-decode-contiguous");
+        scenario,
+        plan.phase == LlmPhase::Prefill
+            ? "phase-11-real-prefill-contiguous"
+            : plan.kv_layout == LlmKvLayout::Paged
+                  ? "phase-10-real-decode-paged"
+                  : "phase-9-real-decode-contiguous");
     const LlmTaskExecutionResult result =
         backend_->execute_task(plan, scenario_plan, context);
     SCOPED_TRACE(static_cast<int>(scenario));
@@ -1978,7 +2556,13 @@ class LlmMetalBackendIntegrationTest : public ::testing::Test {
         "membenchmark.llm-metal.pipeline.decode-paged.weights-only",
         "membenchmark.llm-metal.pipeline.decode-paged.kv-only",
         "membenchmark.llm-metal.pipeline.decode-paged.mixed"};
-    const auto& labels = plan.kv_layout == LlmKvLayout::Paged
+    const std::array<std::string_view, kWorkloadPipelineCount> prefill_labels = {
+        "membenchmark.llm-metal.pipeline.prefill-contiguous.weights-only",
+        "membenchmark.llm-metal.pipeline.prefill-contiguous.kv-only",
+        "membenchmark.llm-metal.pipeline.prefill-contiguous.mixed"};
+    const auto& labels = plan.phase == LlmPhase::Prefill
+                             ? prefill_labels
+                         : plan.kv_layout == LlmKvLayout::Paged
                              ? paged_labels
                              : contiguous_labels;
     EXPECT_EQ(task->pipeline_label,
@@ -1990,6 +2574,16 @@ class LlmMetalBackendIntegrationTest : public ::testing::Test {
     EXPECT_GE(task->grid_plan.actual_threadgroups, minimum_threadgroups);
     EXPECT_GT(task->grid_plan.threads_per_threadgroup, 0U);
     EXPECT_EQ(task->grid_plan.work_units, work_units);
+    if (plan.phase == LlmPhase::Prefill) {
+      size_t expected_serial_range_visits = 0;
+      ASSERT_TRUE(calculate_llm_metal_prefill_serial_range_visits_per_lane(
+          plan, scenario_plan, expected_serial_range_visits));
+      EXPECT_EQ(task->grid_plan.serial_range_visits_per_lane,
+                expected_serial_range_visits);
+      EXPECT_EQ(task->grid_plan.owner_count,
+                task->grid_plan.actual_threadgroups);
+      EXPECT_EQ(task->grid_plan.owner_ordinals_per_threadgroup, 1U);
+    }
     EXPECT_TRUE(task->timing_evaluated);
     EXPECT_TRUE(task->timing_valid);
     EXPECT_GT(task->gpu_start_seconds, 0.0);
@@ -2014,7 +2608,10 @@ class LlmMetalBackendIntegrationTest : public ::testing::Test {
     EXPECT_TRUE(task->checksum_evaluated);
     EXPECT_TRUE(task->checksum_valid);
     LlmMetalChecksumOracle oracle;
-    if (plan.kv_layout == LlmKvLayout::Paged) {
+    if (plan.phase == LlmPhase::Prefill) {
+      oracle = calculate_llm_metal_prefill_contiguous_checksum(
+          plan, scenario_plan);
+    } else if (plan.kv_layout == LlmKvLayout::Paged) {
       const LlmMetalExecutionPlan* execution =
           get_llm_metal_execution_plan(plan);
       ASSERT_NE(execution, nullptr);
@@ -2040,10 +2637,11 @@ class LlmMetalBackendIntegrationTest : public ::testing::Test {
     EXPECT_TRUE(equal_llm_metal_checksum(task->expected_checksum,
                                          task->actual_checksum));
     const bool append_applicable = scenario != LlmScenario::WeightsOnly;
-    EXPECT_EQ(task->append_validation_evaluated, append_applicable);
-    EXPECT_TRUE(task->append_validation_valid);
+    EXPECT_EQ(task->kv_write_validation_evaluated, append_applicable);
+    EXPECT_TRUE(task->kv_write_validation_valid);
     const bool padding_applicable =
-        append_applicable && plan.kv_layout == LlmKvLayout::Paged &&
+        append_applicable && plan.phase == LlmPhase::Decode &&
+        plan.kv_layout == LlmKvLayout::Paged &&
         plan.geometry.last_block_valid_bytes < plan.geometry.kv_block_bytes;
     EXPECT_EQ(task->padding_canary_applicable, padding_applicable);
     EXPECT_EQ(task->padding_canary_evaluated, padding_applicable);
@@ -2210,6 +2808,121 @@ TEST_F(LlmMetalBackendIntegrationTest,
       "llm-metal-phase9-kv-multigroup-plan");
   resolve_and_prepare(plan);
   expect_complete_scenario_task(plan, LlmScenario::KvOnly, 2, 2);
+}
+
+TEST_F(LlmMetalBackendIntegrationTest,
+       PrefillContiguousQOneQPromptAndRemainderTilesIntegration) {
+  struct Case {
+    size_t query_tile_tokens;
+    size_t record_bytes;
+    size_t expected_prefix_visits;
+  };
+  constexpr std::array<Case, 3> kCases = {{{1, 31, 15},
+                                           {5, 32, 5},
+                                           {2, 33, 11}}};
+  for (const Case& test_case : kCases) {
+    backend_ = create_llm_metal_backend();
+    ASSERT_NE(backend_, nullptr);
+    LlmMemoryConfig config = metal_config();
+    config.phase = LlmPhase::Prefill;
+    const LlmBackendLifecycleResult initialization = backend_->initialize(config);
+    ASSERT_EQ(initialization.status, LlmBackendStatus::Ready)
+        << initialization.reason_code << ": "
+        << metal_evidence().capability.error.description;
+    EXPECT_EQ(metal_evidence().capability.kernel_revision,
+              kCanonicalKernelRevision);
+    EXPECT_EQ(metal_evidence().capability.kernel_source_sha256,
+              kCanonicalKernelSourceSha256);
+    ASSERT_EQ(metal_evidence().capability.foundation_pipelines.size(),
+              kFoundationPipelineCount);
+    EXPECT_NE(std::find_if(
+                  metal_evidence().capability.foundation_pipelines.begin(),
+                  metal_evidence().capability.foundation_pipelines.end(),
+                  [](const LlmMetalPipelineEvidence& pipeline) {
+                    return pipeline.label ==
+                           "membenchmark.llm-metal.pipeline.prefill-contiguous-layout-probe";
+                  }),
+              metal_evidence().capability.foundation_pipelines.end());
+
+    const LlmGeometry geometry = prefill_contiguous_geometry(
+        4097, 5, test_case.query_tile_tokens, 2, 2,
+        test_case.record_bytes);
+    ASSERT_TRUE(geometry.valid) << geometry.reason_code;
+    ASSERT_TRUE(geometry.prefill.has_value());
+    EXPECT_EQ(geometry.prefill->attention_prefix_token_visits_per_sequence,
+              test_case.expected_prefix_visits);
+    LlmMemoryWorkPlan plan = build_device_plan(
+        geometry, "llm-metal-phase11-prefill-q-" +
+                      std::to_string(test_case.query_tile_tokens));
+    resolve_and_prepare(plan);
+    EXPECT_EQ(metal_evidence().capability.layout_probe_resource_count, 4U);
+    for (LlmScenario scenario : {LlmScenario::WeightsOnly,
+                                 LlmScenario::KvOnly,
+                                 LlmScenario::Mixed}) {
+      expect_complete_scenario_task(plan, scenario, 2);
+    }
+  }
+}
+
+TEST_F(LlmMetalBackendIntegrationTest,
+       PrefillZeroLengthWeightLayersAreNoOpsIntegration) {
+  LlmMemoryConfig config = metal_config();
+  config.phase = LlmPhase::Prefill;
+  backend_ = create_llm_metal_backend();
+  ASSERT_NE(backend_, nullptr);
+  const LlmBackendLifecycleResult initialization = backend_->initialize(config);
+  ASSERT_EQ(initialization.status, LlmBackendStatus::Ready)
+      << initialization.reason_code;
+  LlmMemoryWorkPlan plan = build_device_plan(
+      prefill_contiguous_geometry(1, 3, 2, 2, 1, 3),
+      "llm-metal-phase11-prefill-zero-length-weight-layer");
+  resolve_and_prepare(plan);
+  expect_complete_scenario_task(plan, LlmScenario::Mixed, 1);
+}
+
+TEST_F(LlmMetalBackendIntegrationTest,
+       PrefillMixedUsesMultipleThreadgroupsWorkUnitsLayersBatchesAndRemainderTileIntegration) {
+  backend_ = create_llm_metal_backend();
+  ASSERT_NE(backend_, nullptr);
+  LlmMemoryConfig config = metal_config();
+  config.phase = LlmPhase::Prefill;
+  ASSERT_EQ(backend_->initialize(config).status, LlmBackendStatus::Ready);
+  const LlmGeometry geometry = prefill_contiguous_geometry(
+      2 * Constants::BYTES_PER_MB + 33, 32769, 16384, 2, 2, 33);
+  ASSERT_TRUE(geometry.valid) << geometry.reason_code;
+  ASSERT_TRUE(geometry.prefill.has_value());
+  EXPECT_EQ(geometry.prefill->tile_count, 3U);
+  LlmMemoryWorkPlan plan = build_device_plan(
+      geometry, "llm-metal-phase11-prefill-multigroup");
+  resolve_and_prepare(plan);
+  expect_complete_scenario_task(plan, LlmScenario::Mixed, 3, 2);
+}
+
+TEST_F(LlmMetalBackendIntegrationTest,
+       PrefillKvPoolCrossesCanonicalSegmentBoundaryIntegration) {
+  backend_ = create_llm_metal_backend();
+  ASSERT_NE(backend_, nullptr);
+  LlmMemoryConfig config = metal_config();
+  config.phase = LlmPhase::Prefill;
+  ASSERT_EQ(backend_->initialize(config).status, LlmBackendStatus::Ready);
+  const size_t record_bytes =
+      Constants::LLM_METAL_SEGMENT_CAPACITY_BYTES / 2 + 1;
+  const LlmGeometry geometry =
+      prefill_contiguous_geometry(33, 2, 2, 1, 1, record_bytes);
+  ASSERT_TRUE(geometry.valid) << geometry.reason_code;
+  LlmMemoryWorkPlan plan = build_device_plan(
+      geometry, "llm-metal-phase11-prefill-kv-segment-boundary", 4 * kGiB);
+  const LlmMetalExecutionPlan* execution =
+      get_llm_metal_execution_plan(plan);
+  ASSERT_NE(execution, nullptr);
+  ASSERT_TRUE(execution->valid) << execution->reason_code;
+  EXPECT_EQ(execution->resources.k_segments.segment_lengths,
+            (std::vector<size_t>{
+                Constants::LLM_METAL_SEGMENT_CAPACITY_BYTES, 2}));
+  EXPECT_EQ(execution->resources.v_segments.segment_lengths,
+            execution->resources.k_segments.segment_lengths);
+  resolve_and_prepare(plan);
+  expect_complete_scenario_task(plan, LlmScenario::KvOnly, 1, 2);
 }
 
 TEST_F(LlmMetalBackendIntegrationTest, PagedPrivateTableUploadValidationAndTier2SlotsIntegration) {
@@ -2507,7 +3220,7 @@ TEST(LlmMetalBackendFailureInjectionIntegrationTest,
     const LlmMetalTaskEvidence* task = get_llm_metal_task_evidence(result);
     ASSERT_NE(task, nullptr);
     EXPECT_EQ(task->checksum_valid, !cases[index].wrong_permutation);
-    EXPECT_TRUE(task->append_validation_valid);
+    EXPECT_TRUE(task->kv_write_validation_valid);
     EXPECT_TRUE(task->padding_canary_applicable);
     EXPECT_TRUE(task->padding_canary_evaluated);
     EXPECT_EQ(task->padding_canary_valid, !cases[index].padding_mismatch);
@@ -2530,7 +3243,7 @@ TEST(LlmMetalBackendFailureInjectionIntegrationTest,
       {2, LlmTaskExecutionStatus::Failed,
        LlmBackendReason::POST_VALIDATION_COMMAND_FAILED},
       {3, LlmTaskExecutionStatus::Invalid,
-       LlmBackendReason::APPEND_VALIDATION_MISMATCH},
+       LlmBackendReason::KV_WRITE_VALIDATION_MISMATCH},
       {4, LlmTaskExecutionStatus::Failed,
        LlmBackendReason::TIMED_COMMAND_BUFFER_ERROR},
   }};
@@ -2541,7 +3254,7 @@ TEST(LlmMetalBackendFailureInjectionIntegrationTest,
     hooks.force_invalid_gpu_timestamps = test_case.index == 0;
     hooks.force_timed_checksum_mismatch = test_case.index == 1;
     hooks.force_post_validation_command_failure = test_case.index == 2;
-    hooks.force_append_validation_mismatch = test_case.index == 3;
+    hooks.force_kv_write_validation_mismatch = test_case.index == 3;
     hooks.force_timed_command_failure = test_case.index == 4;
     std::unique_ptr<LlmBackend> backend =
         create_llm_metal_backend_for_testing(hooks);
@@ -2613,9 +3326,9 @@ TEST(LlmMetalBackendFailureInjectionIntegrationTest,
                   : (test_case.index == 2 ? "error" : "completed"));
     EXPECT_EQ(task->post_validation_evaluated,
               test_case.index != 2 && test_case.index != 4);
-    EXPECT_EQ(task->append_validation_evaluated,
+    EXPECT_EQ(task->kv_write_validation_evaluated,
               test_case.index != 2 && test_case.index != 4);
-    EXPECT_EQ(task->append_validation_valid,
+    EXPECT_EQ(task->kv_write_validation_valid,
               test_case.index != 2 && test_case.index != 3 &&
                   test_case.index != 4);
     EXPECT_EQ(task->post_validation_valid,

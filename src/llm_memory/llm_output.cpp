@@ -172,7 +172,8 @@ void print_metal_task_evidence(const LlmMemoryWorkPlan& plan, const LlmMemoryRes
                      metal->timing_valid, metal->gpu_elapsed_seconds,
                      metal->checksum_evaluated,
                      metal->checksum_valid, measurement.scenario != LlmScenario::WeightsOnly,
-                     metal->append_validation_evaluated, metal->append_validation_valid,
+                     metal->kv_write_validation_evaluated,
+                     metal->kv_write_validation_valid,
                      metal->padding_canary_applicable, metal->padding_canary_evaluated, metal->padding_canary_valid)
               << '\n';
     printed[index] = true;

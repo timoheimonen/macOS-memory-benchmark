@@ -44,6 +44,16 @@ constexpr size_t kLlmMetalTaskChecksumAlgorithmCapacity = 64;
 constexpr size_t kLlmMetalTaskCommandStatusCapacity = 32;
 constexpr size_t kLlmMetalTaskGridIdentityCapacity =
     4096 + Constants::LLM_METAL_MAX_THREADGROUPS_PER_GRID * 64;
+
+bool is_activated_metal_profile(LlmPhase phase,
+                                LlmKvLayout kv_layout) noexcept {
+  return (phase == LlmPhase::Decode &&
+          (kv_layout == LlmKvLayout::Contiguous ||
+           kv_layout == LlmKvLayout::Paged)) ||
+         (phase == LlmPhase::Prefill &&
+          kv_layout == LlmKvLayout::Contiguous);
+}
+
 constexpr std::string_view kLlmExecutorReasons[] = {
     LlmExecutorReason::VALID,
     LlmExecutorReason::INVALID_WORK_PLAN,
@@ -127,7 +137,7 @@ constexpr std::string_view kLlmBackendReasons[] = {
     LlmBackendReason::INVALID_GPU_TIMESTAMPS,
     LlmBackendReason::TIMED_CHECKSUM_MISMATCH,
     LlmBackendReason::POST_VALIDATION_COMMAND_FAILED,
-    LlmBackendReason::APPEND_VALIDATION_MISMATCH,
+    LlmBackendReason::KV_WRITE_VALIDATION_MISMATCH,
     LlmBackendReason::PADDING_CANARY_MISMATCH,
 };
 constexpr std::string_view kLlmWorkPlanReasons[] = {
@@ -208,6 +218,8 @@ constexpr std::string_view kLlmMetalPlanReasons[] = {
     LlmMetalPlanReason::OWNER_COUNT_OVERFLOW,
     LlmMetalPlanReason::OWNER_STRIDE_CAP_EXCEEDED,
     LlmMetalPlanReason::VECTOR_ITERATION_CAP_EXCEEDED,
+    LlmMetalPlanReason::SERIAL_RANGE_VISIT_CAP_EXCEEDED,
+    LlmMetalPlanReason::SERIAL_RANGE_VISIT_COUNT_OVERFLOW,
     LlmMetalPlanReason::SEMANTIC_VISIT_CAP_EXCEEDED,
     LlmMetalPlanReason::WORK_UNITS_PER_DISPATCH_CAP_EXCEEDED,
     LlmMetalPlanReason::PLANNER_ALLOCATION_FAILED,
@@ -325,9 +337,8 @@ bool inputs_match(const LlmMemoryConfig& config, const LlmMemoryWorkPlan& plan) 
           : config.backend == LlmMemoryBackend::Metal &&
                 metal_plan != nullptr && config.requested_workers == 0 &&
                 config.available_workers == 0 &&
-                config.phase == LlmPhase::Decode &&
-                (config.kv_layout == LlmKvLayout::Contiguous ||
-                 config.kv_layout == LlmKvLayout::Paged);
+                is_activated_metal_profile(config.phase,
+                                           config.kv_layout);
   return config.backend == plan.backend && config.phase == plan.phase &&
          config.kv_layout == plan.kv_layout && geometry.phase == plan.phase &&
          geometry.kv_layout == plan.kv_layout && phase_geometry_matches &&
@@ -814,10 +825,7 @@ bool calculate_calibration_identity_capacities(const LlmMemoryConfig& config, co
                                                std::array<size_t, kLlmScenarioCount>& capacities) {
   for (size_t index = 0; index < kLlmScenarioCount; ++index) {
     const LlmScenarioLimits limits = calculate_llm_scenario_limits(
-        model_plan.geometry, kLlmScenarios[index],
-        model_plan.backend == LlmMemoryBackend::Metal
-            ? Constants::LLM_METAL_MAX_WORK_UNITS_PER_DISPATCH
-            : Constants::LLM_MAX_WORK_UNITS_PER_MEASUREMENT);
+        model_plan.geometry, kLlmScenarios[index], model_plan.backend);
     if (!limits.valid) {
       return false;
     }
@@ -1145,9 +1153,7 @@ ExcludedTaskOutcome execute_excluded_task(const LlmMemoryWorkPlan& model_plan, c
             execution.timing.elapsed_seconds, task_plan.work_units,
             calculate_llm_scenario_limits(
                 model_plan.geometry, task_plan.scenario,
-                model_plan.backend == LlmMemoryBackend::Metal
-                    ? Constants::LLM_METAL_MAX_WORK_UNITS_PER_DISPATCH
-                    : Constants::LLM_MAX_WORK_UNITS_PER_MEASUREMENT));
+                model_plan.backend));
     attempt.terminal = true;
     attempt.valid = execution_is_accepted(execution, model_plan, task_plan,
                                           context);
@@ -1219,10 +1225,7 @@ CalibrationOutcome calibrate_scenario(const LlmMemoryWorkPlan& model_plan,
                                       const LlmRunnerHooks& hooks,
                                       size_t& frozen_work_units) {
   const LlmScenarioLimits limits = calculate_llm_scenario_limits(
-      model_plan.geometry, scenario,
-      model_plan.backend == LlmMemoryBackend::Metal
-          ? Constants::LLM_METAL_MAX_WORK_UNITS_PER_DISPATCH
-          : Constants::LLM_MAX_WORK_UNITS_PER_MEASUREMENT);
+      model_plan.geometry, scenario, model_plan.backend);
   if (!limits.valid) {
     result.status = LlmRunStatus::Failed;
     result.reason_code = limits.reason_code;
@@ -1491,9 +1494,7 @@ void populate_measurement(LlmMeasurementState& measurement,
           task_plan.work_units,
           calculate_llm_scenario_limits(
               model_plan.geometry, task_plan.scenario,
-              model_plan.backend == LlmMemoryBackend::Metal
-                  ? Constants::LLM_METAL_MAX_WORK_UNITS_PER_DISPATCH
-                  : Constants::LLM_MAX_WORK_UNITS_PER_MEASUREMENT));
+              model_plan.backend));
   if (!accepted) {
     measurement.reason_code = failure_reason;
     measurement.execution.status = execution.status;
@@ -1727,9 +1728,8 @@ LlmRunnerAuxiliaryEstimate calculate_llm_runner_auxiliary_estimate(
           preflight.effective_workers != 0) ||
          (preflight.backend == LlmMemoryBackend::Metal &&
           preflight.effective_workers == 0 &&
-          config.phase == LlmPhase::Decode &&
-          (config.kv_layout == LlmKvLayout::Contiguous ||
-           config.kv_layout == LlmKvLayout::Paged)));
+          is_activated_metal_profile(config.phase,
+                                     config.kv_layout)));
     if (!preflight.valid || config.loop_count == 0 ||
         !backend_shape_valid) {
       estimate.reason_code = LlmRunnerReason::INVALID_MODEL_WORK_PLAN;
@@ -1924,9 +1924,9 @@ LlmRunnerAuxiliaryEstimate calculate_llm_runner_auxiliary_estimate(const LlmMemo
         (model_plan.backend == LlmMemoryBackend::Cpu && cpu_plan != nullptr &&
          cpu_plan->effective_workers != 0) ||
         (model_plan.backend == LlmMemoryBackend::Metal &&
-         metal_plan != nullptr && model_plan.phase == LlmPhase::Decode &&
-         (model_plan.kv_layout == LlmKvLayout::Contiguous ||
-          model_plan.kv_layout == LlmKvLayout::Paged));
+         metal_plan != nullptr &&
+         is_activated_metal_profile(model_plan.phase,
+                                    model_plan.kv_layout));
     if (!model_plan.valid || config.loop_count == 0 ||
         config.backend != model_plan.backend || !backend_plan_valid) {
       estimate.reason_code = LlmRunnerReason::INVALID_MODEL_WORK_PLAN;
@@ -1973,10 +1973,7 @@ LlmRunnerAuxiliaryEstimate calculate_llm_runner_auxiliary_estimate(const LlmMemo
     size_t maximum_active_identity = 0;
     for (size_t index = 0; index < kLlmScenarioCount; ++index) {
       const LlmScenarioLimits limits = calculate_llm_scenario_limits(
-          model_plan.geometry, kLlmScenarios[index],
-          model_plan.backend == LlmMemoryBackend::Metal
-              ? Constants::LLM_METAL_MAX_WORK_UNITS_PER_DISPATCH
-              : Constants::LLM_MAX_WORK_UNITS_PER_MEASUREMENT);
+          model_plan.geometry, kLlmScenarios[index], model_plan.backend);
       maximum_work_units[index] = limits.effective_maximum_work_units;
       maximum_active_identity = std::max(maximum_active_identity, identity_capacities[index]);
       size_t identity_with_null = 0;
