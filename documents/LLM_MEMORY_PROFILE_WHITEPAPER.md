@@ -58,10 +58,6 @@ block-granular ownership, and full-block suffix padding.
 Schema-v1 vocabulary includes `cpu|metal`, `decode|prefill`, `contiguous|paged`,
 `decode_step|prefill_operation`, and `none|current_token_append|full_prompt_population`. Contiguous and paged are public
 for both CPU phases and for Metal decode. The experimental Metal preview never receives hidden fallback.
-Current M4 evidence covers both contiguous and paged decode. Paged validation includes partial terminal blocks,
-permutation and padding rejection, all scenarios, and multi-segment K/V execution. Required Apple7/M1 baseline
-validation remains pending. Apple7-or-later runtime capability admission therefore does not establish cross-family
-production-ready validation.
 
 The prefill implementation resolves checked tile/prefix/payload formulas, versioned atomic CPU ownership evidence,
 owner-local semantic traces, and operation-ordinal checksum oracles. Contiguous prefill uses token-range ownership;
@@ -1041,13 +1037,6 @@ Correctness gates cover:
   precedence;
 - schema identity, decimal exact integers, status/null rules, classification, interpretation, file/stdout transport, and
   executable CLI behavior.
-
-The M4 paged real-device gate passed its exact Phase 10 filter 239/239, `make test-integration` 137/137, and
-`make test-all` 967/967 GoogleTests plus 8/8 script examples without skips. It covered partial terminal blocks,
-permutation-sensitive lookup rejection, padding-canary rejection, all three scenarios, and K/V execution across the
-256 MiB segment boundary in a greater-than-256 MiB multi-segment run. The required bounded Apple7/M1 baseline
-validation remains pending, so an Apple7-or-later capability pass is not evidence that the full public hardware
-baseline is complete.
 
 For a performance comparison, keep the exact command/model geometry, layout, paged `G`/physical geometry/table and
 permutation identity when applicable, explicit-versus-automatic policy, frozen plan, seed, worker counts,

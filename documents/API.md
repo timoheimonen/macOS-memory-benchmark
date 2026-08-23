@@ -64,10 +64,6 @@ memory_benchmark --llm-memory --llm-memory-backend metal \
   --kv-layout paged --kv-block-tokens 16 --seed 42 --output -
 ```
 
-Current M4 validation evidence covers both contiguous and paged decode, including paged partial-block, permutation,
-padding-canary, all-scenario, and multi-segment K/V cases. Required Apple7/M1 baseline validation remains pending.
-Runtime capability admission is therefore not a cross-family production-readiness claim.
-
 A prefill request supplies full-prompt and query-tile geometry instead of decode context:
 
 ```bash

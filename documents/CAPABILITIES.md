@@ -45,10 +45,7 @@ methodologies are
 `llm-memory-v1-metal-decode-contiguous`, and `llm-memory-v1-metal-decode-paged`. Metal is explicitly selected with
 `--llm-memory-backend metal`, rejects prefill and `--threads`, and never receives an implicit CPU fallback.
 
-Metal decode is an experimental preview. Current M4 evidence covers both contiguous and paged decode, including
-partial-block, permutation, padding-canary, all-scenario, and multi-segment K/V paged cases. Required Apple7/M1
-baseline validation remains pending. Passing the Apple7-or-later runtime capability checks therefore does not
-establish cross-family production-ready validation.
+Metal decode with contiguous or paged KV is an experimental preview.
 
 Each active phase executes three scenarios:
 

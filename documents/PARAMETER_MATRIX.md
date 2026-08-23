@@ -174,8 +174,7 @@ the resolved grid in each work plan.
 
 The LLM parser has an exact whitelist. The five common model options and phase-specific geometry must occur once; every
 optional value and the mode or help selector may also occur at most once. Backend defaults to CPU; Metal is selected
-with `--llm-memory-backend metal` and activates the experimental decode preview for both KV layouts. Current M4 evidence
-covers both contiguous and paged decode; required Apple7/M1 baseline validation remains pending. Phase defaults to
+with `--llm-memory-backend metal` and activates the experimental decode preview for both KV layouts. Phase defaults to
 decode.
 Decode requires exactly one `--context-tokens`; prefill requires exactly one `--prompt-tokens P` and
 `--attention-query-tile-tokens Q`, with `P >= 1` and `1 <= Q <= P`. Cross-phase geometry is rejected. `--kv-layout`
@@ -186,7 +185,7 @@ and memory-budget preflight, the command allocates the layout-specific resources
 
 | Modifier | Compatible | Notes |
 |----------|------------|-------|
-| `--llm-memory-backend <cpu\|metal>` | ✅ | Default `cpu`. The experimental Metal preview activates decode with contiguous or paged KV, performs no CPU fallback, reports capability absence as terminal `unsupported`, and reports runtime compiler/pipeline/resource/task failure as terminal `failed`/`invalid` evidence. M4 validation covers both layouts; Apple7/M1 baseline validation is pending |
+| `--llm-memory-backend <cpu\|metal>` | ✅ | Default `cpu`. The experimental Metal preview activates decode with contiguous or paged KV, performs no CPU fallback, reports capability absence as terminal `unsupported`, and reports runtime compiler/pipeline/resource/task failure as terminal `failed`/`invalid` evidence |
 | `--weight-size-mb <MiB>` | ✅ required | Positive active weight size; checked MiB-to-byte conversion |
 | `--layers <n>` | ✅ required | Positive layer count |
 | `--query-heads <n>` | ✅ required | Positive; must be at least and evenly divisible by KV heads |

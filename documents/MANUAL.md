@@ -56,8 +56,7 @@ This manual focuses on practical usage and interpretation. For implementation de
 - For `--gpu-bandwidth`: a unified-memory Metal device supporting `MTLGPUFamilyApple7` or a compatible later family.
   Capability support is distinct from a controlled performance-validation cohort.
 - For the experimental LLM Metal preview: Apple7-or-later capability, unified memory, Tier 2 argument buffers, and
-  `maxBufferLength >= 256 MiB`. Current M4 evidence covers both contiguous and paged decode; required Apple7/M1
-  baseline validation remains pending.
+  `maxBufferLength >= 256 MiB`.
 
 Install tools:
 
@@ -198,10 +197,7 @@ LLM-memory schema 1 uses generic backend/phase/layout/work-unit vocabulary. This
 CPU/prefill with contiguous or paged KV, and Metal/decode with contiguous or paged KV. Prefill uses
 `work_unit_kind: "prefill_operation"`; decode uses `"decode_step"`. Metal never falls back to CPU.
 
-Metal decode is an experimental preview. Current M4 evidence covers both contiguous and paged decode. Paged validation
-includes partial terminal blocks, permutation and padding rejection, all scenarios, and multi-segment K/V execution.
-Required Apple7/M1 baseline validation remains pending, so runtime capability admission must not be interpreted as
-cross-family production-ready validation.
+Metal decode with contiguous or paged KV is an experimental preview.
 
 `--kv-layout` defaults to `contiguous`. Paged layout requires exactly one `--kv-block-tokens <G>` option. `G` must be
 positive, a power of two, and no greater than `UINT32_MAX`; it may be larger than the active phase's sequence length.
@@ -610,9 +606,7 @@ middle, and trailing items.
   `llm-memory-v1-cpu-prefill-contiguous`, `llm-memory-v1-cpu-prefill-paged`,
   `llm-memory-v1-metal-decode-contiguous`, and `llm-memory-v1-metal-decode-paged`. It never enters the general
   `BenchmarkConfig` parser or CPU sweep runner
-- The Metal methodology is an experimental preview. Current M4 evidence covers contiguous and paged decode; required
-  Apple7/M1 baseline validation remains pending, so runtime capability admission is not a cross-family
-  production-readiness claim
+- The Metal decode methodologies are an experimental preview for contiguous and paged KV
 - Requires each common model option `--weight-size-mb <MiB>`, `--layers <count>`, `--query-heads <count>`,
   `--kv-heads <count>`, and `--head-dim <count>` exactly once. Decode requires `--context-tokens <count>`; prefill
   requires `--prompt-tokens <P>` and `--attention-query-tile-tokens <Q>`. Cross-phase geometry is rejected

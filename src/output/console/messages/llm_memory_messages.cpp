@@ -110,8 +110,6 @@ std::string llm_memory_usage_options(const std::string& prog_name) {
         << "      --llm-memory-backend <cpu|metal>\n"
         << "                          Execution backend (default: cpu). The experimental Metal preview\n"
         << "                          accepts decode with contiguous or paged KV; no fallback is performed.\n"
-        << "                          M4 evidence covers contiguous and paged decode; required\n"
-        << "                          Apple7/M1 baseline validation remains pending.\n"
         << "      --phase <decode|prefill>\n"
         << "                          Workload phase (default: decode). CPU supports both phases;\n"
         << "                          the Metal preview accepts decode only.\n"

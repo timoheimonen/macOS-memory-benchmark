@@ -38,6 +38,16 @@ void expect_exact_messages(const std::vector<MessageCase>& cases) {
   }
 }
 
+void expect_no_model_specific_llm_metal_status(const std::string& usage) {
+  constexpr const char* forbidden_phrases[] = {
+      "Apple7/M1", "M4 evidence", "M5", "validation remains pending",
+      "baseline smoke", "cross-family", "device matrix"};
+  for (const char* phrase : forbidden_phrases) {
+    SCOPED_TRACE(phrase);
+    EXPECT_EQ(usage.find(phrase), std::string::npos);
+  }
+}
+
 }  // namespace
 
 TEST(MessagesFormattingTest, LinearHelpersHaveExactOutput) {
@@ -203,8 +213,6 @@ TEST(MessagesTest, LlmMemoryCliMessagesHaveExactOutput) {
       "      --llm-memory-backend <cpu|metal>\n"
       "                          Execution backend (default: cpu). The experimental Metal preview\n"
       "                          accepts decode with contiguous or paged KV; no fallback is performed.\n"
-      "                          M4 evidence covers contiguous and paged decode; required\n"
-      "                          Apple7/M1 baseline validation remains pending.\n"
       "      --phase <decode|prefill>\n"
       "                          Workload phase (default: decode). CPU supports both phases;\n"
       "                          the Metal preview accepts decode only.\n"
@@ -484,6 +492,9 @@ TEST(MessagesTest, LlmMemoryCliMessagesHaveExactOutput) {
        "(4096 bytes); the result may be cache-dominant"},
   };
   expect_exact_messages(cases);
+  const std::string usage =
+      Messages::llm_memory_usage_options("memory_benchmark");
+  expect_no_model_specific_llm_metal_status(usage);
 }
 
 TEST(MessagesTest, GeneralHelpAdvertisesTheLlmBoundaryExactlyOnce) {
@@ -499,10 +510,7 @@ TEST(MessagesTest, GeneralHelpAdvertisesTheLlmBoundaryExactlyOnce) {
   EXPECT_NE(
       usage.find("with contiguous or paged KV and never falls back to CPU"),
       std::string::npos);
-  EXPECT_NE(
-      usage.find(
-          "covers contiguous and paged decode; required Apple7/M1 baseline"),
-      std::string::npos);
+  expect_no_model_specific_llm_metal_status(usage);
   EXPECT_NE(usage.find("--weight-size-mb"), std::string::npos);
   EXPECT_NE(usage.find("--query-heads"), std::string::npos);
   EXPECT_NE(usage.find("--context-tokens"), std::string::npos);

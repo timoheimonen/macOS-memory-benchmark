@@ -162,9 +162,7 @@ std::string usage_options(const std::string& prog_name) {
       << "                        prefill requires --phase prefill, --prompt-tokens, and\n"
       << "                        --attention-query-tile-tokens. Both phases support contiguous\n"
       << "                        or paged KV on CPU. The experimental Metal preview accepts decode\n"
-      << "                        with contiguous or paged KV and never falls back to CPU. M4 evidence\n"
-      << "                        covers contiguous and paged decode; required Apple7/M1 baseline\n"
-      << "                        validation remains pending. Use\n"
+      << "                        with contiguous or paged KV and never falls back to CPU. Use\n"
       << "                        --llm-memory --help for exact rules and memory-only interpretation.\n"
       << "                        JSON uses schema " << Constants::LLM_JSON_SCHEMA_VERSION
       << " methodologies "

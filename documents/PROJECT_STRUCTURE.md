@@ -278,8 +278,7 @@ Objective-C++ Metal backend so deterministic unit tests do not require GPU work.
 ### 2.6 src/llm_memory/ — Synthetic LLM memory profile
 
 Standalone generic schema-1 vocabulary with all four CPU decode/prefill and contiguous/paged implementations plus an
-experimental Metal decode preview for contiguous and paged KV. Current M4 evidence covers both decode layouts;
-required Apple7/M1 baseline validation remains pending. Pure logical phase planning, deterministic paged
+experimental Metal decode preview for contiguous and paged KV. Pure logical phase planning, deterministic paged
 geometry/permutation, backend-specific execution planning/evidence, the Objective-C-free backend contract, CPU mapping
 and ARM64 execution, the Objective-C++ Metal boundary, environment capture, console composition, and serialization are
 separated so deterministic unit tests can inject platform and allocation behavior without running hot kernels. Metal

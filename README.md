@@ -39,11 +39,7 @@ See [Measurement Capabilities](documents/CAPABILITIES.md) for the full measureme
 
 The build targets macOS 11.0 and links the system Metal and Foundation frameworks. GPU kernels are embedded MSL 2.3
 source compiled at runtime, so the optional offline Metal Toolchain is not required. Passing a Metal capability check
-admits the runtime contract; it does not by itself establish a validated hardware baseline. Current M4 evidence covers
-both contiguous and paged decode. The Phase 10 paged gate passed its exact 239/239 filter, 137/137 integration tests,
-and 967/967 aggregate GoogleTests plus 8/8 script examples without skips; it covered partial terminal blocks,
-permutation and padding rejection, all scenarios, and a greater-than-256 MiB K/V multi-segment run. Required Apple7/M1
-baseline validation remains pending.
+admits the runtime contract; it does not by itself establish a validated hardware baseline.
 
 ## Install
 
@@ -100,8 +96,7 @@ memory_benchmark --llm-memory --llm-memory-backend metal \
 ```
 
 Metal LLM-memory is an experimental preview. It uses GPU command-buffer timestamps, accepts no `--threads` option, and
-never falls back to CPU. Current M4 evidence covers both contiguous and paged decode; required Apple7/M1 baseline
-validation remains pending.
+never falls back to CPU.
 
 Run bounded paged decode on Metal with a reproducible block-table permutation:
 
@@ -177,10 +172,9 @@ and tiled causal-prefix scans; it never falls back to contiguous KV.
 The experimental Metal preview accepts `--phase decode` with `--kv-layout contiguous` or `paged`; Metal prefill and
 explicit `--threads` are rejected before execution. Runtime admission requires Apple7-or-later family capability,
 unified memory, Tier 2 argument buffers, a maximum buffer length of at least 256 MiB, and runtime MSL 2.3 compilation.
-Current M4 evidence covers both contiguous and paged decode. Required Apple7/M1 baseline validation remains pending,
-so capability admission must not be read as cross-family production-ready validation. Capability failure produces a
-terminal unsupported result and a non-zero exit. Runtime compiler, pipeline, resource, or task failure remains a
-terminal failed/invalid schema result with a non-zero exit; execution is never redirected to CPU.
+Capability failure produces a terminal unsupported result and a non-zero exit. Runtime compiler, pipeline, resource,
+or task failure remains a terminal failed/invalid schema result with a non-zero exit; execution is never redirected to
+CPU.
 
 The generic schema records the selected backend, phase/layout, `work_unit_kind: "decode_step"` or
 `"prefill_operation"`, and methodology `llm-memory-v1-<backend>-<phase>-<layout>`. Metal decode uses one workload

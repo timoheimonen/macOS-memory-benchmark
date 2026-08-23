@@ -123,8 +123,7 @@ GPU mode follows its own synchronous pipeline:
    console rendering, then return success/failure according to explicit run and output status.
 
 LLM-memory follows its own synchronous pipeline. CPU decode and prefill are active with contiguous or deterministic
-paged KV; Metal decode is active with both layouts as an experimental preview. Current M4 evidence covers contiguous
-and paged decode, while the required Apple7/M1 baseline validation remains pending:
+paged KV; Metal decode is active with both layouts as an experimental preview:
 
 1. Scan the complete standalone whitelist, parsing supplied values and rejecting unknown, duplicate, or missing-value
    input even when help is present. Human help returns after that scan but before required/default/platform work.
@@ -264,7 +263,7 @@ Configuration state is represented by `BenchmarkConfig` (`src/core/config/config
   option. `G` must be a positive power of two no greater than `UINT32_MAX`, and it may exceed the phase length. The
   cross-option rules are order-independent. All four CPU phase/layout combinations are public. The experimental Metal
   preview activates decode with contiguous or paged KV, skips CPU worker detection, rejects explicit threads, and never
-  receives fallback execution. Runtime capability admission does not complete the pending Apple7/M1 baseline validation.
+  receives fallback execution.
   Explicit work must fit both the common task guardrails and Metal's 65,536-work-unit dispatch cap for all three
   scenarios when Metal is selected.
 
@@ -713,9 +712,7 @@ All four CPU phase/layout combinations are active with exact methodology identit
 `llm-memory-v1-cpu-decode-contiguous`, `llm-memory-v1-cpu-decode-paged`,
 `llm-memory-v1-cpu-prefill-contiguous`, and `llm-memory-v1-cpu-prefill-paged`. Metal decode is active as the experimental
 `llm-memory-v1-metal-decode-contiguous` and `llm-memory-v1-metal-decode-paged` preview; Metal prefill is rejected, and
-no Metal request receives fallback execution. Current M4 evidence covers both decode layouts, including paged
-partial-block, permutation, padding-canary, all-scenario, and multi-segment K/V cases. Required Apple7/M1 baseline
-validation remains pending, so Apple7-or-later capability admission is not a cross-family production-readiness claim.
+no Metal request receives fallback execution.
 
 `LlmMemoryWorkPlan` keeps logical geometry, resources, accounting, seeds, and identities common while
 `LlmBackendExecutionPlan` carries exactly one `LlmCpuExecutionPlan` or `LlmMetalExecutionPlan` tag. The CPU alternative
@@ -1386,9 +1383,7 @@ Recommended validation commands:
   `./test_runner '--gtest_filter=*LlmMetalBackend*:*LlmMemoryRunner*:*LlmMemoryJson*:*ExecutableCli*'`; real-device
   cases compile the selected profile and cover all scenarios, GPU timestamps, exact tails or partial paged blocks,
   permutation-sensitive lookups, padding canaries, multi-threadgroup work, and a bounded run crossing the 256 MiB
-  segment boundary. The M4 paged gate passed the exact Phase 10 filter 239/239, `make test-integration` 137/137, and
-  `make test-all` 967/967 GoogleTests plus 8/8 script examples without skips. The Apple7/M1 baseline gate remains
-  pending.
+  segment boundary.
 - Deterministic GPU-focused tests:
   `./test_runner --gtest_filter='GpuBandwidthParserTest.*:GpuMemoryBudgetTest.*:GpuRunnerTest.*:GpuJsonTest.*:GpuWorkPlanTest.*:GpuTimedAccumulatorOracleTest.*:ModeSelectorTest.*:HashUtilsTest.*'`
 - Real Metal contract: `./test_runner '--gtest_filter=GpuMetalBackendIntegrationTest.*'`; unsupported hardware may skip
