@@ -20,9 +20,8 @@
  * @date 2026
  *
  * This private header owns the exact source bytes hashed into Metal execution
- * identity. It contains the shared resource foundation and the three public
- * scenario-specialized decode-contiguous, decode-paged, and
- * prefill-contiguous entrypoints.
+ * identity. It contains the shared resource foundation and four public
+ * scenario-specialized decode/prefill and contiguous/paged profiles.
  */
 
 #ifndef LLM_METAL_KERNELS_SOURCE_H
@@ -35,13 +34,15 @@
 namespace LlmMetalKernelContract {
 
 inline constexpr char kRevision[] =
-    "llm-metal-decode-prefill-contiguous-paged-msl23-v3";
+    "llm-metal-decode-prefill-contiguous-paged-msl23-v5";
 inline constexpr char kParameterAbiRevision[] = "llm-metal-foundation-parameters-v1";
 inline constexpr char kResourceTableAbiRevision[] = "llm-metal-resource-table-v1";
 inline constexpr char kDecodeParameterAbiRevision[] = "llm-metal-decode-contiguous-parameters-v1";
 inline constexpr char kDecodePagedParameterAbiRevision[] = "llm-metal-decode-paged-parameters-v1";
 inline constexpr char kPrefillParameterAbiRevision[] =
     "llm-metal-prefill-contiguous-parameters-v1";
+inline constexpr char kPrefillPagedParameterAbiRevision[] =
+    "llm-metal-prefill-paged-parameters-v1";
 inline constexpr char kChecksumAlgorithmRevision[] = "llm-metal-dual-mod32-v1";
 
 inline constexpr char kInitializeBytesEntrypoint[] = "llm_metal_initialize_bytes";
@@ -71,6 +72,16 @@ inline constexpr char kPrefillMixedEntrypoint[] =
     "llm_metal_prefill_contiguous_mixed";
 inline constexpr char kValidatePrefillWritesEntrypoint[] =
     "llm_metal_validate_prefill_contiguous_writes";
+inline constexpr char kPrefillPagedParameterLayoutProbeEntrypoint[] =
+    "llm_metal_probe_prefill_paged_parameter_layout";
+inline constexpr char kPrefillPagedWeightsOnlyEntrypoint[] =
+    "llm_metal_prefill_paged_weights_only";
+inline constexpr char kPrefillPagedKvOnlyEntrypoint[] =
+    "llm_metal_prefill_paged_kv_only";
+inline constexpr char kPrefillPagedMixedEntrypoint[] =
+    "llm_metal_prefill_paged_mixed";
+inline constexpr char kValidatePrefillPagedEntrypoint[] =
+    "llm_metal_validate_prefill_paged_writes_padding";
 
 // Direct-buffer indices are part of the foundation pipeline ABI.
 inline constexpr uint32_t kInitializeDestinationBufferIndex = 0U;
@@ -204,6 +215,37 @@ inline constexpr size_t kPrefillKeySegmentCountOffset = 124U;
 inline constexpr size_t kPrefillValueSegmentCountOffset = 128U;
 inline constexpr size_t kPrefillReservedZeroOffset = 132U;
 
+inline constexpr size_t kPrefillPagedParameterAbiSize = 184U;
+inline constexpr size_t kPrefillPagedParameterAbiAlignment = 8U;
+inline constexpr uint32_t kPrefillPagedParameterAbiVersion = 1U;
+inline constexpr uint32_t kPrefillPagedParameterFieldCount = 26U;
+inline constexpr size_t kPrefillPagedWeightBytesOffset = 0U;
+inline constexpr size_t kPrefillPagedPromptTokensOffset = 8U;
+inline constexpr size_t kPrefillPagedQueryTileTokensOffset = 16U;
+inline constexpr size_t kPrefillPagedTileCountOffset = 24U;
+inline constexpr size_t kPrefillPagedLayerCountOffset = 32U;
+inline constexpr size_t kPrefillPagedBatchSizeOffset = 40U;
+inline constexpr size_t kPrefillPagedRecordBytesOffset = 48U;
+inline constexpr size_t kPrefillPagedWorkUnitsOffset = 56U;
+inline constexpr size_t kPrefillPagedBlockTokensOffset = 64U;
+inline constexpr size_t kPrefillPagedBlockBytesOffset = 72U;
+inline constexpr size_t kPrefillPagedLastBlockValidBytesOffset = 80U;
+inline constexpr size_t kPrefillPagedBlocksPerSequenceOffset = 88U;
+inline constexpr size_t kPrefillPagedPhysicalBlocksPerLayerOffset = 96U;
+inline constexpr size_t kPrefillPagedBlocksPerSegmentOffset = 104U;
+inline constexpr size_t kPrefillPagedTableEntriesPerSegmentOffset = 112U;
+inline constexpr size_t kPrefillPagedSegmentCapacityBytesOffset = 120U;
+inline constexpr size_t kPrefillPagedWeightSeedOffset = 128U;
+inline constexpr size_t kPrefillPagedKeySeedOffset = 136U;
+inline constexpr size_t kPrefillPagedValueSeedOffset = 144U;
+inline constexpr size_t kPrefillPagedScenarioSeedOffset = 152U;
+inline constexpr size_t kPrefillPagedWeightSegmentCountOffset = 160U;
+inline constexpr size_t kPrefillPagedKeySegmentCountOffset = 164U;
+inline constexpr size_t kPrefillPagedValueSegmentCountOffset = 168U;
+inline constexpr size_t kPrefillPagedTableSegmentCountOffset = 172U;
+inline constexpr size_t kPrefillPagedReservedZeroOffset = 176U;
+inline constexpr size_t kPrefillPagedPaddingZeroOffset = 180U;
+
 inline constexpr uint32_t kContiguousPatternKind = 0U;
 inline constexpr uint32_t kPagedPatternKind = 1U;
 
@@ -288,6 +330,13 @@ inline constexpr uint32_t kPrefillProbeFieldCountIndex = 3U;
 inline constexpr uint32_t kPrefillProbeFirstFieldOffsetIndex = 4U;
 inline constexpr uint32_t kPrefillProbeFirstFieldValueIndex = 23U;
 inline constexpr uint32_t kPrefillProbeOutputWordCount = 42U;
+inline constexpr uint32_t kPrefillPagedProbeAbiVersionIndex = 0U;
+inline constexpr uint32_t kPrefillPagedProbeStructSizeIndex = 1U;
+inline constexpr uint32_t kPrefillPagedProbeStructAlignmentIndex = 2U;
+inline constexpr uint32_t kPrefillPagedProbeFieldCountIndex = 3U;
+inline constexpr uint32_t kPrefillPagedProbeFirstFieldOffsetIndex = 4U;
+inline constexpr uint32_t kPrefillPagedProbeFirstFieldValueIndex = 30U;
+inline constexpr uint32_t kPrefillPagedProbeOutputWordCount = 56U;
 
 // Foundation and workload pattern constants. Both active layouts use 32-bit
 // affine words. Paged words additionally bind layer, physical block, and
@@ -314,6 +363,8 @@ inline constexpr uint32_t kChecksumMetalDecodeContiguousProfileDomain = UINT32_C
 inline constexpr uint32_t kChecksumMetalDecodePagedProfileDomain = UINT32_C(0x4D445031);
 inline constexpr uint32_t kChecksumMetalPrefillContiguousProfileDomain =
     UINT32_C(0x4D504331);
+inline constexpr uint32_t kChecksumMetalPrefillPagedProfileDomain =
+    UINT32_C(0x4D505031);
 inline constexpr uint32_t kChecksumScenarioHighMultiplier = UINT32_C(0xA24BAED5);
 inline constexpr uint32_t kChecksumWeightDomain = UINT32_C(0x57474854);
 inline constexpr uint32_t kChecksumKeyDomain = UINT32_C(0x4B455943);
@@ -326,9 +377,33 @@ inline constexpr uint32_t kChecksumTileMultiplier = UINT32_C(0xD1B54A35);
 inline constexpr uint32_t kChecksumPagedLogicalMultiplier = UINT32_C(0x7F4A7C15);
 inline constexpr uint32_t kChecksumPagedPhysicalMultiplier = UINT32_C(0x94D049BB);
 inline constexpr uint32_t kChecksumPagedPairMultiplier = UINT32_C(0x369DEA0F);
+inline constexpr uint32_t kChecksumPagedGlobalBlockLowMultiplier =
+    UINT32_C(0xDB4F0B91);
+inline constexpr uint32_t kChecksumPagedGlobalBlockHighMultiplier =
+    UINT32_C(0xBBE05633);
+inline constexpr uint32_t kChecksumPagedSegmentMultiplier =
+    UINT32_C(0xA0F2EC75);
+inline constexpr uint32_t kChecksumPagedLocalBaseLowMultiplier =
+    UINT32_C(0x89E18285);
+inline constexpr uint32_t kChecksumPagedLocalBaseHighMultiplier =
+    UINT32_C(0xC6D1D6C9);
+inline constexpr uint32_t kChecksumPagedAbsoluteBaseLowMultiplier =
+    UINT32_C(0xB492B66F);
+inline constexpr uint32_t kChecksumPagedAbsoluteBaseHighMultiplier =
+    UINT32_C(0x9AE16A3B);
+inline constexpr uint32_t kChecksumPagedAddressBindingDomain =
+    UINT32_C(0x41444452);
+inline constexpr uint32_t kChecksumPagedAddressPairMultiplier =
+    UINT32_C(0xD6E8FEB9);
 inline constexpr uint32_t kChecksumPagedAppendLookupVisit = UINT32_C(0x50414C55);
 inline constexpr uint32_t kChecksumPagedKeyLookupVisit = UINT32_C(0x504B4C55);
 inline constexpr uint32_t kChecksumPagedValueLookupVisit = UINT32_C(0x50564C55);
+inline constexpr uint32_t kChecksumPagedPrefillWriteLookupVisit =
+    UINT32_C(0x5050574C);
+inline constexpr uint32_t kChecksumPagedPrefillKeyLookupVisit =
+    UINT32_C(0x50504B4C);
+inline constexpr uint32_t kChecksumPagedPrefillValueLookupVisit =
+    UINT32_C(0x5050564C);
 
 /**
  * Canonical MSL 2.3 bytes hashed for `msl_source_sha256`.
@@ -368,8 +443,11 @@ using namespace metal;
 #ifndef LLM_METAL_PREFILL_CONTIGUOUS
 #define LLM_METAL_PREFILL_CONTIGUOUS 0
 #endif
+#ifndef LLM_METAL_PREFILL_PAGED
+#define LLM_METAL_PREFILL_PAGED 0
+#endif
 #if (LLM_METAL_DECODE_CONTIGUOUS + LLM_METAL_DECODE_PAGED + \
-     LLM_METAL_PREFILL_CONTIGUOUS) != 1
+     LLM_METAL_PREFILL_CONTIGUOUS + LLM_METAL_PREFILL_PAGED) != 1
 #error "exactly one LLM Metal profile must be selected"
 #endif
 
@@ -420,6 +498,7 @@ constant uint kChecksumValidMaskMultiplier = 0xd3a2646du;
 constant uint kChecksumMetalDecodeContiguousProfileDomain = 0x4d444331u;
 constant uint kChecksumMetalDecodePagedProfileDomain = 0x4d445031u;
 constant uint kChecksumMetalPrefillContiguousProfileDomain = 0x4d504331u;
+constant uint kChecksumMetalPrefillPagedProfileDomain = 0x4d505031u;
 constant uint kChecksumScenarioHighMultiplier = 0xa24baed5u;
 constant uint kChecksumWeightDomain = 0x57474854u;
 constant uint kChecksumKeyDomain = 0x4b455943u;
@@ -432,9 +511,21 @@ constant uint kChecksumTileMultiplier = 0xd1b54a35u;
 constant uint kChecksumPagedLogicalMultiplier = 0x7f4a7c15u;
 constant uint kChecksumPagedPhysicalMultiplier = 0x94d049bbu;
 constant uint kChecksumPagedPairMultiplier = 0x369dea0fu;
+constant uint kChecksumPagedGlobalBlockLowMultiplier = 0xdb4f0b91u;
+constant uint kChecksumPagedGlobalBlockHighMultiplier = 0xbbe05633u;
+constant uint kChecksumPagedSegmentMultiplier = 0xa0f2ec75u;
+constant uint kChecksumPagedLocalBaseLowMultiplier = 0x89e18285u;
+constant uint kChecksumPagedLocalBaseHighMultiplier = 0xc6d1d6c9u;
+constant uint kChecksumPagedAbsoluteBaseLowMultiplier = 0xb492b66fu;
+constant uint kChecksumPagedAbsoluteBaseHighMultiplier = 0x9ae16a3bu;
+constant uint kChecksumPagedAddressBindingDomain = 0x41444452u;
+constant uint kChecksumPagedAddressPairMultiplier = 0xd6e8feb9u;
 constant uint kChecksumPagedAppendLookupVisit = 0x50414c55u;
 constant uint kChecksumPagedKeyLookupVisit = 0x504b4c55u;
 constant uint kChecksumPagedValueLookupVisit = 0x50564c55u;
+constant uint kChecksumPagedPrefillWriteLookupVisit = 0x5050574cu;
+constant uint kChecksumPagedPrefillKeyLookupVisit = 0x50504b4cu;
+constant uint kChecksumPagedPrefillValueLookupVisit = 0x5050564cu;
 
 constant uint kPagedPatternLayerMultiplier = 0xa24baed5u;
 constant uint kPagedPatternPhysicalMultiplier = 0x9fb21c65u;
@@ -533,6 +624,37 @@ struct LlmMetalDecodePagedParams {
   uint table_segment_count;                   // offset 156
   uint reserved_zero;                         // offset 160
   uint padding_zero;                          // offset 164
+};
+#endif
+
+#if LLM_METAL_PREFILL_PAGED
+struct LlmMetalPrefillPagedParams {
+  ulong weight_bytes;                         // offset 0
+  ulong prompt_tokens;                        // offset 8
+  ulong attention_query_tile_tokens;          // offset 16
+  ulong tile_count;                           // offset 24
+  ulong layer_count;                          // offset 32
+  ulong batch_size;                           // offset 40
+  ulong record_bytes;                         // offset 48
+  ulong work_units;                           // offset 56
+  ulong block_tokens;                         // offset 64
+  ulong block_bytes;                          // offset 72
+  ulong last_block_valid_bytes;               // offset 80
+  ulong blocks_per_sequence;                  // offset 88
+  ulong physical_blocks_per_layer;            // offset 96
+  ulong blocks_per_segment;                   // offset 104
+  ulong table_entries_per_segment;            // offset 112
+  ulong segment_capacity_bytes;               // offset 120
+  ulong weight_seed;                          // offset 128
+  ulong k_seed;                               // offset 136
+  ulong v_seed;                               // offset 144
+  ulong scenario_seed;                        // offset 152
+  uint weight_segment_count;                  // offset 160
+  uint k_segment_count;                       // offset 164
+  uint v_segment_count;                       // offset 168
+  uint table_segment_count;                   // offset 172
+  uint reserved_zero;                         // offset 176
+  uint padding_zero;                          // offset 180
 };
 #endif
 
@@ -2217,7 +2339,18 @@ kernel void llm_metal_validate_decode_paged_appends_padding(
   }
   const ulong final_work_unit = params.work_units - 1ul;
   const ulong sequence_count = params.layer_count * params.batch_size;
-  for (ulong sequence = 0ul; sequence < sequence_count; ++sequence) {
+  const ulong append_bytes =
+      params.last_block_valid_bytes - params.append_offset_in_last_block;
+  const ulong append_chunks_per_sequence =
+      append_bytes / 16ul + ((append_bytes & 15ul) != 0ul ? 1ul : 0ul);
+  const ulong append_chunk_count =
+      sequence_count * append_chunks_per_sequence;
+  for (ulong append_chunk = ulong(global_id);
+       append_chunk < append_chunk_count;
+       append_chunk += ulong(grid_size)) {
+    const ulong sequence = append_chunk / append_chunks_per_sequence;
+    const ulong sequence_append_chunk =
+        append_chunk % append_chunks_per_sequence;
     const ulong layer = sequence / params.batch_size;
     const ulong batch = sequence % params.batch_size;
     const ulong logical_table_index =
@@ -2229,10 +2362,12 @@ kernel void llm_metal_validate_decode_paged_appends_padding(
                               kValidationInvalidParametersBit);
       continue;
     }
-    for (ulong block_byte = params.append_offset_in_last_block +
-                            ulong(global_id);
-         block_byte < params.last_block_valid_bytes;
-         block_byte += ulong(grid_size)) {
+    const ulong first_append_byte =
+        params.append_offset_in_last_block + sequence_append_chunk * 16ul;
+    const ulong end_append_byte =
+        min(params.last_block_valid_bytes, first_append_byte + 16ul);
+    for (ulong block_byte = first_append_byte;
+         block_byte < end_append_byte; ++block_byte) {
       const ulong local_word = block_byte / 4ul;
       const uint byte_index = uint(block_byte & 3ul);
       const uchar expected_key = uchar(decode_append_word(
@@ -2249,9 +2384,38 @@ kernel void llm_metal_validate_decode_paged_appends_padding(
                                 kKvWriteValidationMismatchBit);
       }
     }
-    for (ulong block_byte = params.last_block_valid_bytes + ulong(global_id);
-         block_byte < params.block_bytes;
-         block_byte += ulong(grid_size)) {
+  }
+
+  const ulong padding_bytes =
+      params.block_bytes - params.last_block_valid_bytes;
+  const ulong padding_chunks_per_sequence =
+      padding_bytes / 16ul + ((padding_bytes & 15ul) != 0ul ? 1ul : 0ul);
+  const ulong padding_chunk_count =
+      sequence_count * padding_chunks_per_sequence;
+  for (ulong padding_chunk = ulong(global_id);
+       padding_chunk < padding_chunk_count;
+       padding_chunk += ulong(grid_size)) {
+    const ulong sequence =
+        padding_chunk / padding_chunks_per_sequence;
+    const ulong sequence_padding_chunk =
+        padding_chunk % padding_chunks_per_sequence;
+    const ulong layer = sequence / params.batch_size;
+    const ulong batch = sequence % params.batch_size;
+    const ulong logical_table_index =
+        batch * params.blocks_per_sequence + params.blocks_per_sequence - 1ul;
+    const uint physical_id =
+        paged_direct_table_lookup(resources, params, logical_table_index);
+    if (ulong(physical_id) >= params.physical_blocks_per_layer) {
+      mark_validation_failure(resources.status_checksum,
+                              kValidationInvalidParametersBit);
+      continue;
+    }
+    const ulong first_padding_byte =
+        params.last_block_valid_bytes + sequence_padding_chunk * 16ul;
+    const ulong end_padding_byte =
+        min(params.block_bytes, first_padding_byte + 16ul);
+    for (ulong block_byte = first_padding_byte;
+         block_byte < end_padding_byte; ++block_byte) {
       if (load_paged_key_byte(resources, params, layer, physical_id,
                               block_byte) !=
               paged_expected_data_byte(params, params.k_seed, layer,
@@ -2268,6 +2432,1050 @@ kernel void llm_metal_validate_decode_paged_appends_padding(
 }
 
 #endif  // LLM_METAL_DECODE_PAGED
+#if LLM_METAL_PREFILL_PAGED
+inline bool prefill_paged_parameters_valid(
+    constant LlmMetalPrefillPagedParams& params) {
+  if (params.prompt_tokens == 0ul ||
+      params.attention_query_tile_tokens == 0ul ||
+      params.attention_query_tile_tokens > params.prompt_tokens ||
+      params.block_tokens == 0ul) {
+    return false;
+  }
+  const ulong expected_tiles =
+      params.prompt_tokens / params.attention_query_tile_tokens +
+      ((params.prompt_tokens % params.attention_query_tile_tokens) != 0ul
+           ? 1ul
+           : 0ul);
+  const ulong expected_blocks =
+      params.prompt_tokens / params.block_tokens +
+      ((params.prompt_tokens % params.block_tokens) != 0ul ? 1ul : 0ul);
+  const ulong last_block_tokens =
+      params.prompt_tokens - (expected_blocks - 1ul) * params.block_tokens;
+  return params.weight_bytes != 0ul && params.tile_count == expected_tiles &&
+         params.layer_count != 0ul && params.batch_size != 0ul &&
+         params.record_bytes != 0ul && params.work_units != 0ul &&
+         params.block_bytes == params.block_tokens * params.record_bytes &&
+         params.last_block_valid_bytes ==
+             last_block_tokens * params.record_bytes &&
+         params.last_block_valid_bytes != 0ul &&
+         params.last_block_valid_bytes <= params.block_bytes &&
+         params.blocks_per_sequence == expected_blocks &&
+         params.physical_blocks_per_layer ==
+             params.batch_size * params.blocks_per_sequence &&
+         params.blocks_per_segment != 0ul &&
+         params.table_entries_per_segment != 0ul &&
+         params.segment_capacity_bytes != 0ul &&
+         params.weight_segment_count != 0u &&
+         params.k_segment_count != 0u && params.v_segment_count != 0u &&
+         params.table_segment_count != 0u && params.reserved_zero == 0u &&
+         params.padding_zero == 0u;
+}
+
+inline uint prefill_paged_write_word(ulong scenario_seed, ulong work_unit,
+                                     ulong layer, ulong batch,
+                                     ulong logical_word_index,
+                                     uint pool_domain) {
+  return uint(scenario_seed) +
+         kAppendWorkUnitMultiplier * uint(work_unit + 1ul) +
+         kAppendLayerMultiplier * uint(layer + 1ul) +
+         kAppendBatchMultiplier * uint(batch + 1ul) +
+         kAppendWordMultiplier * uint(logical_word_index + 1ul) +
+         pool_domain;
+}
+
+inline uint prefill_paged_data_checksum_domain(
+    uint pool_domain, uint visit_domain,
+    constant LlmMetalPrefillPagedParams& params, ulong work_unit,
+    ulong layer, ulong batch, ulong tile_ordinal, uint valid_mask) {
+  return kChecksumMetalPrefillPagedProfileDomain +
+         uint(params.scenario_seed) +
+         kChecksumScenarioHighMultiplier *
+             uint(params.scenario_seed >> 32ul) +
+         pool_domain + visit_domain +
+         kChecksumWorkUnitMultiplier * uint(work_unit + 1ul) +
+         kChecksumLayerMultiplier * uint(layer + 1ul) +
+         kChecksumBatchMultiplier * uint(batch + 1ul) +
+         kChecksumTileMultiplier * uint(tile_ordinal) +
+         kChecksumValidMaskMultiplier * valid_mask;
+}
+
+inline uint prefill_paged_lookup_checksum_domain(
+    uint pool_domain, uint visit_domain,
+    constant LlmMetalPrefillPagedParams& params, ulong work_unit,
+    ulong layer, ulong batch, ulong tile_ordinal,
+    ulong logical_table_index, uint physical_id,
+    uint physical_address_token) {
+  const uint logical = uint(logical_table_index + 1ul);
+  const uint physical = physical_id + 1u;
+  return kChecksumMetalPrefillPagedProfileDomain +
+         uint(params.scenario_seed) +
+         kChecksumScenarioHighMultiplier *
+             uint(params.scenario_seed >> 32ul) +
+         pool_domain + visit_domain +
+         kChecksumWorkUnitMultiplier * uint(work_unit + 1ul) +
+         kChecksumLayerMultiplier * uint(layer + 1ul) +
+         kChecksumBatchMultiplier * uint(batch + 1ul) +
+         kChecksumTileMultiplier * uint(tile_ordinal) +
+         kChecksumPagedLogicalMultiplier * logical +
+         kChecksumPagedPhysicalMultiplier * physical +
+         kChecksumPagedPairMultiplier * logical * physical +
+         physical_address_token +
+         kChecksumPagedAddressPairMultiplier * logical *
+             physical_address_token;
+}
+
+inline uint prefill_paged_physical_address_token(
+    ulong global_block, uint segment, ulong segment_local_block_base,
+    ulong absolute_block_base) {
+  return kChecksumPagedAddressBindingDomain +
+         kChecksumPagedGlobalBlockLowMultiplier * uint(global_block) +
+         kChecksumPagedGlobalBlockHighMultiplier *
+             uint(global_block >> 32ul) +
+         kChecksumPagedSegmentMultiplier * segment +
+         kChecksumPagedLocalBaseLowMultiplier *
+             uint(segment_local_block_base) +
+         kChecksumPagedLocalBaseHighMultiplier *
+             uint(segment_local_block_base >> 32ul) +
+         kChecksumPagedAbsoluteBaseLowMultiplier *
+             uint(absolute_block_base) +
+         kChecksumPagedAbsoluteBaseHighMultiplier *
+             uint(absolute_block_base >> 32ul);
+}
+
+inline uint prefill_paged_weight_checksum_domain(
+    constant LlmMetalPrefillPagedParams& params, ulong work_unit,
+    ulong layer, uint valid_mask) {
+  return prefill_paged_data_checksum_domain(
+      kChecksumWeightDomain, kChecksumWeightReadVisit, params, work_unit,
+      layer, 0ul, 0ul, valid_mask);
+}
+
+inline uint prefill_paged_timed_table_lookup(
+    constant LlmMetalResources& resources,
+    constant LlmMetalPrefillPagedParams& params,
+    ulong logical_table_index, threadgroup uint* published_physical_id,
+    uint thread_index) {
+  threadgroup_barrier(mem_flags::mem_threadgroup);
+  if (thread_index == 0u) {
+    const uint table_segment =
+        uint(logical_table_index / params.table_entries_per_segment);
+    const ulong table_entry =
+        logical_table_index % params.table_entries_per_segment;
+    device const volatile uint* named_lane_table =
+        reinterpret_cast<device const volatile uint*>(
+            resources.table_segments[table_segment]);
+    published_physical_id[0] = named_lane_table[table_entry];
+    atomic_fetch_add_explicit(
+        &resources.status_checksum[kLayoutMetadataLookupCountIndex], 1u,
+        memory_order_relaxed);
+  }
+  threadgroup_barrier(mem_flags::mem_threadgroup);
+  const uint physical_id = published_physical_id[0];
+  if (ulong(physical_id) >= params.physical_blocks_per_layer) {
+    if (thread_index == 0u) {
+      mark_validation_failure(resources.status_checksum,
+                              kValidationInvalidParametersBit);
+    }
+    return 0u;
+  }
+  return physical_id;
+}
+
+inline ulong prefill_paged_global_block(
+    constant LlmMetalPrefillPagedParams& params, ulong layer,
+    uint physical_id) {
+  return layer * params.physical_blocks_per_layer + ulong(physical_id);
+}
+
+inline ulong prefill_paged_physical_block_base(
+    constant LlmMetalPrefillPagedParams& params, ulong layer,
+    uint physical_id, thread uint& segment) {
+  const ulong global_block =
+      prefill_paged_global_block(params, layer, physical_id);
+  segment = uint(global_block / params.blocks_per_segment);
+  return (global_block % params.blocks_per_segment) * params.block_bytes;
+}
+
+inline void mix_prefill_paged_lookup(
+    thread uint2& checksum, uint physical_id, ulong logical_table_index,
+    uint pool_domain, uint visit_domain,
+    constant LlmMetalPrefillPagedParams& params, ulong work_unit,
+    ulong layer, ulong batch, ulong tile_ordinal) {
+  const ulong global_block =
+      prefill_paged_global_block(params, layer, physical_id);
+  uint segment = 0u;
+  const ulong segment_local_block_base =
+      prefill_paged_physical_block_base(params, layer, physical_id,
+                                        segment);
+  const ulong absolute_block_base = global_block * params.block_bytes;
+  const uint physical_address_token =
+      prefill_paged_physical_address_token(
+          global_block, segment, segment_local_block_base,
+          absolute_block_base);
+  const uint domain = prefill_paged_lookup_checksum_domain(
+      pool_domain, visit_domain, params, work_unit, layer, batch,
+      tile_ordinal, logical_table_index, physical_id,
+      physical_address_token);
+  mix_checksum_word(checksum, physical_id, logical_table_index, domain);
+}
+
+inline ulong prefill_paged_logical_sequence_start(
+    constant LlmMetalPrefillPagedParams& params, ulong layer,
+    ulong batch) {
+  return (layer * params.batch_size + batch) * params.prompt_tokens *
+         params.record_bytes;
+}
+
+inline uchar load_prefill_paged_key_byte(
+    constant LlmMetalResources& resources,
+    constant LlmMetalPrefillPagedParams& params, ulong layer,
+    uint physical_id, ulong block_byte) {
+  uint segment = 0u;
+  const ulong block_base =
+      prefill_paged_physical_block_base(params, layer, physical_id, segment);
+  return resources.key_segments[segment][block_base + block_byte];
+}
+
+inline uchar load_prefill_paged_value_byte(
+    constant LlmMetalResources& resources,
+    constant LlmMetalPrefillPagedParams& params, ulong layer,
+    uint physical_id, ulong block_byte) {
+  uint segment = 0u;
+  const ulong block_base =
+      prefill_paged_physical_block_base(params, layer, physical_id, segment);
+  return resources.value_segments[segment][block_base + block_byte];
+}
+
+inline void store_prefill_paged_key_byte(
+    constant LlmMetalResources& resources,
+    constant LlmMetalPrefillPagedParams& params, ulong layer,
+    uint physical_id, ulong block_byte, uchar value) {
+  uint segment = 0u;
+  const ulong block_base =
+      prefill_paged_physical_block_base(params, layer, physical_id, segment);
+  resources.key_segments[segment][block_base + block_byte] = value;
+}
+
+inline void store_prefill_paged_value_byte(
+    constant LlmMetalResources& resources,
+    constant LlmMetalPrefillPagedParams& params, ulong layer,
+    uint physical_id, ulong block_byte, uchar value) {
+  uint segment = 0u;
+  const ulong block_base =
+      prefill_paged_physical_block_base(params, layer, physical_id, segment);
+  resources.value_segments[segment][block_base + block_byte] = value;
+}
+
+inline uint packed_prefill_paged_key_word(
+    constant LlmMetalResources& resources,
+    constant LlmMetalPrefillPagedParams& params, ulong layer,
+    uint physical_id, ulong logical_range_start, ulong logical_word_start,
+    uint valid_mask) {
+  uint value = 0u;
+  for (uint byte_index = 0u; byte_index < 4u; ++byte_index) {
+    if ((valid_mask & (1u << byte_index)) != 0u) {
+      const ulong logical_byte = logical_word_start + ulong(byte_index);
+      const ulong block_byte = logical_byte - logical_range_start;
+      value |= uint(load_prefill_paged_key_byte(
+                   resources, params, layer, physical_id, block_byte)) <<
+               (byte_index * 8u);
+    }
+  }
+  return value;
+}
+
+inline uint packed_prefill_paged_value_word(
+    constant LlmMetalResources& resources,
+    constant LlmMetalPrefillPagedParams& params, ulong layer,
+    uint physical_id, ulong logical_range_start, ulong logical_word_start,
+    uint valid_mask) {
+  uint value = 0u;
+  for (uint byte_index = 0u; byte_index < 4u; ++byte_index) {
+    if ((valid_mask & (1u << byte_index)) != 0u) {
+      const ulong logical_byte = logical_word_start + ulong(byte_index);
+      const ulong block_byte = logical_byte - logical_range_start;
+      value |= uint(load_prefill_paged_value_byte(
+                   resources, params, layer, physical_id, block_byte)) <<
+               (byte_index * 8u);
+    }
+  }
+  return value;
+}
+
+inline void write_prefill_paged_block_pair(
+    constant LlmMetalResources& resources,
+    constant LlmMetalPrefillPagedParams& params, ulong work_unit,
+    ulong layer, ulong batch, ulong logical_block, uint physical_id,
+    ulong valid_bytes, uint thread_index, uint threads_per_threadgroup,
+    thread uint2& key, thread uint2& value) {
+  const ulong logical_range_start =
+      prefill_paged_logical_sequence_start(params, layer, batch) +
+      logical_block * params.block_bytes;
+  const ulong logical_range_end = logical_range_start + valid_bytes;
+  const ulong first_vector = logical_range_start / 16ul;
+  const ulong end_vector = logical_range_end / 16ul +
+                           ((logical_range_end & 15ul) != 0ul ? 1ul : 0ul);
+  for (ulong vector_index = first_owned_vector(
+           first_vector, thread_index, threads_per_threadgroup);
+       vector_index < end_vector;
+       vector_index += ulong(threads_per_threadgroup)) {
+    const ulong vector_start = vector_index * 16ul;
+    const bool full_vector = vector_start >= logical_range_start &&
+                             vector_start + 16ul <= logical_range_end;
+    uint4 key_values = uint4(0u);
+    uint4 value_values = uint4(0u);
+    for (uint lane = 0u; lane < 4u; ++lane) {
+      const ulong logical_word = vector_index * 4ul + ulong(lane);
+      const ulong logical_word_start = logical_word * 4ul;
+      const uint mask = full_vector
+                            ? 0x0fu
+                            : range_word_mask(logical_range_start,
+                                              logical_range_end,
+                                              logical_word_start);
+      if (mask == 0u) {
+        continue;
+      }
+      const uint key_word = prefill_paged_write_word(
+          params.scenario_seed, work_unit, layer, batch, logical_word,
+          kPrefillWriteKeyDomain);
+      const uint value_word = prefill_paged_write_word(
+          params.scenario_seed, work_unit, layer, batch, logical_word,
+          kPrefillWriteValueDomain);
+      uint packed_key = 0u;
+      uint packed_value = 0u;
+      for (uint byte_index = 0u; byte_index < 4u; ++byte_index) {
+        if ((mask & (1u << byte_index)) == 0u) {
+          continue;
+        }
+        const ulong logical_byte = logical_word_start + ulong(byte_index);
+        const ulong block_byte = logical_byte - logical_range_start;
+        const uchar key_byte = uchar(key_word >> (byte_index * 8u));
+        const uchar value_byte = uchar(value_word >> (byte_index * 8u));
+        if (!full_vector) {
+          store_prefill_paged_key_byte(resources, params, layer, physical_id,
+                                       block_byte, key_byte);
+          store_prefill_paged_value_byte(resources, params, layer,
+                                         physical_id, block_byte,
+                                         value_byte);
+        }
+        packed_key |= uint(key_byte) << (byte_index * 8u);
+        packed_value |= uint(value_byte) << (byte_index * 8u);
+      }
+      key_values[lane] = packed_key;
+      value_values[lane] = packed_value;
+      mix_checksum_word(
+          key, packed_key, logical_word,
+          prefill_paged_data_checksum_domain(
+              kChecksumKeyDomain, kChecksumPrefillWriteVisit, params,
+              work_unit, layer, batch, 0ul, mask));
+      mix_checksum_word(
+          value, packed_value, logical_word,
+          prefill_paged_data_checksum_domain(
+              kChecksumValueDomain, kChecksumPrefillWriteVisit, params,
+              work_unit, layer, batch, 0ul, mask));
+    }
+    if (full_vector) {
+      const ulong block_byte = vector_start - logical_range_start;
+      uint segment = 0u;
+      const ulong physical_base = prefill_paged_physical_block_base(
+          params, layer, physical_id, segment);
+      if (((physical_base + block_byte) & 15ul) == 0ul) {
+        device uint4* key_destination = reinterpret_cast<device uint4*>(
+            resources.key_segments[segment] + physical_base + block_byte);
+        device uint4* value_destination = reinterpret_cast<device uint4*>(
+            resources.value_segments[segment] + physical_base + block_byte);
+        *key_destination = key_values;
+        *value_destination = value_values;
+      } else {
+        for (uint lane = 0u; lane < 4u; ++lane) {
+          for (uint byte_index = 0u; byte_index < 4u; ++byte_index) {
+            const ulong byte_offset =
+                block_byte + ulong(lane * 4u + byte_index);
+            store_prefill_paged_key_byte(
+                resources, params, layer, physical_id, byte_offset,
+                uchar(key_values[lane] >> (byte_index * 8u)));
+            store_prefill_paged_value_byte(
+                resources, params, layer, physical_id, byte_offset,
+                uchar(value_values[lane] >> (byte_index * 8u)));
+          }
+        }
+      }
+    }
+  }
+}
+
+inline void scan_prefill_paged_key_block(
+    constant LlmMetalResources& resources,
+    constant LlmMetalPrefillPagedParams& params, ulong work_unit,
+    ulong layer, ulong batch, ulong tile_ordinal, ulong logical_block,
+    uint physical_id, ulong visit_bytes, uint thread_index,
+    uint threads_per_threadgroup, thread uint2& checksum) {
+  const ulong logical_range_start =
+      prefill_paged_logical_sequence_start(params, layer, batch) +
+      logical_block * params.block_bytes;
+  const ulong logical_range_end = logical_range_start + visit_bytes;
+  const ulong first_vector = logical_range_start / 16ul;
+  const ulong end_vector = logical_range_end / 16ul +
+                           ((logical_range_end & 15ul) != 0ul ? 1ul : 0ul);
+  for (ulong vector_index = first_owned_vector(
+           first_vector, thread_index, threads_per_threadgroup);
+       vector_index < end_vector;
+       vector_index += ulong(threads_per_threadgroup)) {
+    const ulong vector_start = vector_index * 16ul;
+    const bool full_vector = vector_start >= logical_range_start &&
+                             vector_start + 16ul <= logical_range_end;
+    uint4 values = uint4(0u);
+    if (full_vector) {
+      const ulong block_byte = vector_start - logical_range_start;
+      uint segment = 0u;
+      const ulong physical_base = prefill_paged_physical_block_base(
+          params, layer, physical_id, segment);
+      if (((physical_base + block_byte) & 15ul) == 0ul) {
+        const device uint4* source = reinterpret_cast<const device uint4*>(
+            resources.key_segments[segment] + physical_base + block_byte);
+        values = *source;
+      } else {
+        for (uint lane = 0u; lane < 4u; ++lane) {
+          values[lane] = packed_prefill_paged_key_word(
+              resources, params, layer, physical_id, logical_range_start,
+              vector_start + ulong(lane) * 4ul, 0x0fu);
+        }
+      }
+    }
+    for (uint lane = 0u; lane < 4u; ++lane) {
+      const ulong logical_word = vector_index * 4ul + ulong(lane);
+      const ulong logical_word_start = logical_word * 4ul;
+      const uint mask = full_vector
+                            ? 0x0fu
+                            : range_word_mask(logical_range_start,
+                                              logical_range_end,
+                                              logical_word_start);
+      if (mask == 0u) {
+        continue;
+      }
+      const uint packed =
+          full_vector
+              ? values[lane]
+              : packed_prefill_paged_key_word(
+                    resources, params, layer, physical_id,
+                    logical_range_start, logical_word_start, mask);
+      mix_checksum_word(
+          checksum, packed, logical_word,
+          prefill_paged_data_checksum_domain(
+              kChecksumKeyDomain, kChecksumKvReadVisit, params, work_unit,
+              layer, batch, tile_ordinal, mask));
+    }
+  }
+}
+
+inline void scan_prefill_paged_value_block(
+    constant LlmMetalResources& resources,
+    constant LlmMetalPrefillPagedParams& params, ulong work_unit,
+    ulong layer, ulong batch, ulong tile_ordinal, ulong logical_block,
+    uint physical_id, ulong visit_bytes, uint thread_index,
+    uint threads_per_threadgroup, thread uint2& checksum) {
+  const ulong logical_range_start =
+      prefill_paged_logical_sequence_start(params, layer, batch) +
+      logical_block * params.block_bytes;
+  const ulong logical_range_end = logical_range_start + visit_bytes;
+  const ulong first_vector = logical_range_start / 16ul;
+  const ulong end_vector = logical_range_end / 16ul +
+                           ((logical_range_end & 15ul) != 0ul ? 1ul : 0ul);
+  for (ulong vector_index = first_owned_vector(
+           first_vector, thread_index, threads_per_threadgroup);
+       vector_index < end_vector;
+       vector_index += ulong(threads_per_threadgroup)) {
+    const ulong vector_start = vector_index * 16ul;
+    const bool full_vector = vector_start >= logical_range_start &&
+                             vector_start + 16ul <= logical_range_end;
+    uint4 values = uint4(0u);
+    if (full_vector) {
+      const ulong block_byte = vector_start - logical_range_start;
+      uint segment = 0u;
+      const ulong physical_base = prefill_paged_physical_block_base(
+          params, layer, physical_id, segment);
+      if (((physical_base + block_byte) & 15ul) == 0ul) {
+        const device uint4* source = reinterpret_cast<const device uint4*>(
+            resources.value_segments[segment] + physical_base + block_byte);
+        values = *source;
+      } else {
+        for (uint lane = 0u; lane < 4u; ++lane) {
+          values[lane] = packed_prefill_paged_value_word(
+              resources, params, layer, physical_id, logical_range_start,
+              vector_start + ulong(lane) * 4ul, 0x0fu);
+        }
+      }
+    }
+    for (uint lane = 0u; lane < 4u; ++lane) {
+      const ulong logical_word = vector_index * 4ul + ulong(lane);
+      const ulong logical_word_start = logical_word * 4ul;
+      const uint mask = full_vector
+                            ? 0x0fu
+                            : range_word_mask(logical_range_start,
+                                              logical_range_end,
+                                              logical_word_start);
+      if (mask == 0u) {
+        continue;
+      }
+      const uint packed =
+          full_vector
+              ? values[lane]
+              : packed_prefill_paged_value_word(
+                    resources, params, layer, physical_id,
+                    logical_range_start, logical_word_start, mask);
+      mix_checksum_word(
+          checksum, packed, logical_word,
+          prefill_paged_data_checksum_domain(
+              kChecksumValueDomain, kChecksumKvReadVisit, params,
+              work_unit, layer, batch, tile_ordinal, mask));
+    }
+  }
+}
+
+inline uchar load_prefill_paged_weight_byte(
+    constant LlmMetalResources& resources,
+    constant LlmMetalPrefillPagedParams& params, ulong absolute_byte) {
+  const uint segment = uint(absolute_byte / params.segment_capacity_bytes);
+  const ulong local_byte = absolute_byte % params.segment_capacity_bytes;
+  return resources.weight_segments[segment][local_byte];
+}
+
+inline uint packed_prefill_paged_weight_word(
+    constant LlmMetalResources& resources,
+    constant LlmMetalPrefillPagedParams& params, ulong word_start,
+    uint mask) {
+  uint value = 0u;
+  for (uint byte_index = 0u; byte_index < 4u; ++byte_index) {
+    if ((mask & (1u << byte_index)) != 0u) {
+      value |= uint(load_prefill_paged_weight_byte(
+                   resources, params, word_start + ulong(byte_index))) <<
+               (byte_index * 8u);
+    }
+  }
+  return value;
+}
+
+inline void scan_prefill_paged_weight_range(
+    constant LlmMetalResources& resources,
+    constant LlmMetalPrefillPagedParams& params, ulong range_start,
+    ulong range_length, ulong work_unit, ulong layer, uint lane_index,
+    uint lane_count, thread uint2& checksum) {
+  const ulong range_end = range_start + range_length;
+  const ulong first_vector = range_start / 16ul;
+  const ulong end_vector = range_end / 16ul +
+                           ((range_end & 15ul) != 0ul ? 1ul : 0ul);
+  for (ulong vector_index = first_owned_vector(first_vector, lane_index,
+                                                lane_count);
+       vector_index < end_vector; vector_index += ulong(lane_count)) {
+    const ulong vector_start = vector_index * 16ul;
+    if (vector_start >= range_start && vector_start + 16ul <= range_end) {
+      const uint segment =
+          uint(vector_start / params.segment_capacity_bytes);
+      const ulong local_byte =
+          vector_start % params.segment_capacity_bytes;
+      const device uint4* source = reinterpret_cast<const device uint4*>(
+          resources.weight_segments[segment] + local_byte);
+      const uint4 values = *source;
+      for (uint lane = 0u; lane < 4u; ++lane) {
+        const ulong word_index = vector_index * 4ul + ulong(lane);
+        mix_checksum_word(
+            checksum, values[lane], word_index,
+            prefill_paged_weight_checksum_domain(params, work_unit, layer,
+                                                  0x0fu));
+      }
+      continue;
+    }
+    for (uint lane = 0u; lane < 4u; ++lane) {
+      const ulong word_index = vector_index * 4ul + ulong(lane);
+      const ulong word_start = word_index * 4ul;
+      const uint mask = range_word_mask(range_start, range_end, word_start);
+      if (mask != 0u) {
+        const uint packed = packed_prefill_paged_weight_word(
+            resources, params, word_start, mask);
+        mix_checksum_word(
+            checksum, packed, word_index,
+            prefill_paged_weight_checksum_domain(params, work_unit, layer,
+                                                  mask));
+      }
+    }
+  }
+}
+
+inline void run_prefill_paged_kv_owner_rows(
+    constant LlmMetalResources& resources,
+    constant LlmMetalPrefillPagedParams& params,
+    threadgroup uint* published_physical_id, uint thread_index,
+    uint threads_per_threadgroup, uint threadgroup_index,
+    uint threadgroup_count, bool include_weight, thread uint2& weight,
+    thread uint2& key, thread uint2& value) {
+  const ulong owner_count = params.layer_count * params.batch_size *
+                            params.blocks_per_sequence;
+  const ulong weight_layer_base = params.weight_bytes / params.layer_count;
+  const ulong weight_layer_remainder =
+      params.weight_bytes % params.layer_count;
+  for (ulong work_unit = 0ul; work_unit < params.work_units; ++work_unit) {
+    ulong first_owner = ulong(threadgroup_index);
+    while (first_owner < owner_count) {
+      const ulong row = first_owner / params.blocks_per_sequence;
+      const ulong logical_block_first =
+          first_owner % params.blocks_per_sequence;
+      const ulong batch = row % params.batch_size;
+      const ulong layer = row / params.batch_size;
+      const ulong logical_table_row = batch * params.blocks_per_sequence;
+
+      if (include_weight && batch == 0ul && logical_block_first == 0ul) {
+        const ulong layer_start = layer * weight_layer_base +
+                                  min(layer, weight_layer_remainder);
+        const ulong layer_bytes =
+            weight_layer_base +
+            (layer < weight_layer_remainder ? 1ul : 0ul);
+        scan_prefill_paged_weight_range(
+            resources, params, layer_start, layer_bytes, work_unit, layer,
+            thread_index, threads_per_threadgroup, weight);
+      }
+
+      // Row write phase: every owned K/V block is populated before any read.
+      for (ulong logical_block = logical_block_first;
+           logical_block < params.blocks_per_sequence;
+           logical_block += ulong(threadgroup_count)) {
+        const ulong logical_table_index =
+            logical_table_row + logical_block;
+        const uint physical_id = prefill_paged_timed_table_lookup(
+            resources, params, logical_table_index, published_physical_id,
+            thread_index);
+        if (thread_index == 0u) {
+          mix_prefill_paged_lookup(
+              key, physical_id, logical_table_index, kChecksumKeyDomain,
+              kChecksumPagedPrefillWriteLookupVisit, params, work_unit,
+              layer, batch, 0ul);
+          mix_prefill_paged_lookup(
+              value, physical_id, logical_table_index,
+              kChecksumValueDomain,
+              kChecksumPagedPrefillWriteLookupVisit, params, work_unit,
+              layer, batch, 0ul);
+        }
+        const ulong valid_bytes =
+            logical_block + 1ul == params.blocks_per_sequence
+                ? params.last_block_valid_bytes
+                : params.block_bytes;
+        write_prefill_paged_block_pair(
+            resources, params, work_unit, layer, batch, logical_block,
+            physical_id, valid_bytes, thread_index,
+            threads_per_threadgroup, key, value);
+      }
+
+      // Conservatively publish all same-row writes before tiled read phases.
+      threadgroup_barrier(mem_flags::mem_device);
+
+      ulong remaining_tokens = params.prompt_tokens;
+      ulong prefix_tokens = 0ul;
+      ulong tile_ordinal = 0ul;
+      while (remaining_tokens != 0ul) {
+        const ulong tile_tokens =
+            min(params.attention_query_tile_tokens, remaining_tokens);
+        prefix_tokens += tile_tokens;
+        ++tile_ordinal;
+
+        // Each K visit performs its own semantic table lookup.
+        for (ulong logical_block = logical_block_first;
+             logical_block < params.blocks_per_sequence;
+             logical_block += ulong(threadgroup_count)) {
+          const ulong block_start_token =
+              logical_block * params.block_tokens;
+          if (block_start_token >= prefix_tokens) {
+            break;
+          }
+          const ulong visit_tokens =
+              min(params.block_tokens, prefix_tokens - block_start_token);
+          const ulong visit_bytes = visit_tokens * params.record_bytes;
+          const ulong logical_table_index =
+              logical_table_row + logical_block;
+          const uint physical_id = prefill_paged_timed_table_lookup(
+              resources, params, logical_table_index,
+              published_physical_id, thread_index);
+          if (thread_index == 0u) {
+            mix_prefill_paged_lookup(
+                key, physical_id, logical_table_index, kChecksumKeyDomain,
+                kChecksumPagedPrefillKeyLookupVisit, params, work_unit,
+                layer, batch, tile_ordinal);
+          }
+          scan_prefill_paged_key_block(
+              resources, params, work_unit, layer, batch, tile_ordinal,
+              logical_block, physical_id, visit_bytes, thread_index,
+              threads_per_threadgroup, key);
+        }
+
+        // The same row prefix is revisited for V after all of its K blocks.
+        for (ulong logical_block = logical_block_first;
+             logical_block < params.blocks_per_sequence;
+             logical_block += ulong(threadgroup_count)) {
+          const ulong block_start_token =
+              logical_block * params.block_tokens;
+          if (block_start_token >= prefix_tokens) {
+            break;
+          }
+          const ulong visit_tokens =
+              min(params.block_tokens, prefix_tokens - block_start_token);
+          const ulong visit_bytes = visit_tokens * params.record_bytes;
+          const ulong logical_table_index =
+              logical_table_row + logical_block;
+          const uint physical_id = prefill_paged_timed_table_lookup(
+              resources, params, logical_table_index,
+              published_physical_id, thread_index);
+          if (thread_index == 0u) {
+            mix_prefill_paged_lookup(
+                value, physical_id, logical_table_index,
+                kChecksumValueDomain,
+                kChecksumPagedPrefillValueLookupVisit, params, work_unit,
+                layer, batch, tile_ordinal);
+          }
+          scan_prefill_paged_value_block(
+              resources, params, work_unit, layer, batch, tile_ordinal,
+              logical_block, physical_id, visit_bytes, thread_index,
+              threads_per_threadgroup, value);
+        }
+        remaining_tokens -= tile_tokens;
+      }
+
+      const ulong remaining_blocks =
+          params.blocks_per_sequence - logical_block_first;
+      const ulong owner_steps =
+          remaining_blocks / ulong(threadgroup_count) +
+          ((remaining_blocks % ulong(threadgroup_count)) != 0ul ? 1ul
+                                                                : 0ul);
+      first_owner += owner_steps * ulong(threadgroup_count);
+    }
+  }
+}
+
+kernel void llm_metal_prefill_paged_weights_only(
+    constant LlmMetalResources& resources [[buffer(0)]],
+    constant LlmMetalPrefillPagedParams& params [[buffer(1)]],
+    threadgroup uint* reduction [[threadgroup(0)]],
+    uint global_id [[thread_position_in_grid]],
+    uint grid_size [[threads_per_grid]],
+    uint thread_index [[thread_index_in_threadgroup]],
+    uint threads_per_threadgroup [[threads_per_threadgroup]]) {
+  if (!prefill_paged_parameters_valid(params)) {
+    if (global_id == 0u) {
+      mark_validation_failure(resources.status_checksum,
+                              kValidationInvalidParametersBit);
+    }
+    return;
+  }
+  uint2 weight = uint2(0u);
+  const ulong layer_base = params.weight_bytes / params.layer_count;
+  const ulong layer_remainder = params.weight_bytes % params.layer_count;
+  for (ulong work_unit = 0ul; work_unit < params.work_units; ++work_unit) {
+    for (ulong layer = 0ul; layer < params.layer_count; ++layer) {
+      const ulong layer_start = layer * layer_base +
+                                min(layer, layer_remainder);
+      const ulong layer_bytes =
+          layer_base + (layer < layer_remainder ? 1ul : 0ul);
+      scan_prefill_paged_weight_range(
+          resources, params, layer_start, layer_bytes, work_unit, layer,
+          global_id, grid_size, weight);
+    }
+  }
+  publish_task_checksum(resources, weight, uint2(0u), uint2(0u), reduction,
+                        thread_index, threads_per_threadgroup);
+}
+
+kernel void llm_metal_prefill_paged_kv_only(
+    constant LlmMetalResources& resources [[buffer(0)]],
+    constant LlmMetalPrefillPagedParams& params [[buffer(1)]],
+    threadgroup uint* reduction [[threadgroup(0)]],
+    threadgroup uint* published_physical_id [[threadgroup(1)]],
+    uint thread_index [[thread_index_in_threadgroup]],
+    uint threads_per_threadgroup [[threads_per_threadgroup]],
+    uint threadgroup_index [[threadgroup_position_in_grid]],
+    uint threadgroup_count [[threadgroups_per_grid]]) {
+  if (!prefill_paged_parameters_valid(params)) {
+    if (threadgroup_index == 0u && thread_index == 0u) {
+      mark_validation_failure(resources.status_checksum,
+                              kValidationInvalidParametersBit);
+    }
+    return;
+  }
+  uint2 key = uint2(0u);
+  uint2 value = uint2(0u);
+  uint2 ignored_weight = uint2(0u);
+  run_prefill_paged_kv_owner_rows(
+      resources, params, published_physical_id, thread_index,
+      threads_per_threadgroup, threadgroup_index, threadgroup_count, false,
+      ignored_weight, key, value);
+  publish_task_checksum(resources, uint2(0u), key, value, reduction,
+                        thread_index, threads_per_threadgroup);
+}
+
+kernel void llm_metal_prefill_paged_mixed(
+    constant LlmMetalResources& resources [[buffer(0)]],
+    constant LlmMetalPrefillPagedParams& params [[buffer(1)]],
+    threadgroup uint* reduction [[threadgroup(0)]],
+    threadgroup uint* published_physical_id [[threadgroup(1)]],
+    uint thread_index [[thread_index_in_threadgroup]],
+    uint threads_per_threadgroup [[threads_per_threadgroup]],
+    uint threadgroup_index [[threadgroup_position_in_grid]],
+    uint threadgroup_count [[threadgroups_per_grid]]) {
+  if (!prefill_paged_parameters_valid(params)) {
+    if (threadgroup_index == 0u && thread_index == 0u) {
+      mark_validation_failure(resources.status_checksum,
+                              kValidationInvalidParametersBit);
+    }
+    return;
+  }
+  uint2 weight = uint2(0u);
+  uint2 key = uint2(0u);
+  uint2 value = uint2(0u);
+  run_prefill_paged_kv_owner_rows(
+      resources, params, published_physical_id, thread_index,
+      threads_per_threadgroup, threadgroup_index, threadgroup_count, true,
+      weight, key, value);
+  publish_task_checksum(resources, weight, key, value, reduction,
+                        thread_index, threads_per_threadgroup);
+}
+
+inline uint prefill_paged_direct_table_lookup(
+    constant LlmMetalResources& resources,
+    constant LlmMetalPrefillPagedParams& params,
+    ulong logical_table_index) {
+  const uint table_segment =
+      uint(logical_table_index / params.table_entries_per_segment);
+  const ulong table_entry =
+      logical_table_index % params.table_entries_per_segment;
+  const device uint* table = reinterpret_cast<const device uint*>(
+      resources.table_segments[table_segment]);
+  return table[table_entry];
+}
+
+inline uchar prefill_paged_expected_padding_byte(
+    ulong seed, ulong layer, uint physical_id, ulong block_byte) {
+  const ulong local_word = block_byte / 4ul;
+  const uint byte_index = uint(block_byte & 3ul);
+  const uint word = uint(seed) +
+                    kPagedPatternLayerMultiplier * uint(layer + 1ul) +
+                    kPagedPatternPhysicalMultiplier * (physical_id + 1u) +
+                    kPagedPatternWordMultiplier * uint(local_word + 1ul);
+  return uchar(word >> (byte_index * 8u));
+}
+
+kernel void llm_metal_validate_prefill_paged_writes_padding(
+    constant LlmMetalResources& resources [[buffer(0)]],
+    constant LlmMetalPrefillPagedParams& params [[buffer(1)]],
+    uint global_id [[thread_position_in_grid]],
+    uint grid_size [[threads_per_grid]]) {
+  if (!prefill_paged_parameters_valid(params)) {
+    if (global_id == 0u) {
+      mark_validation_failure(resources.status_checksum,
+                              kValidationInvalidParametersBit);
+    }
+    return;
+  }
+  const ulong samples_per_block = 6ul;
+  const ulong sequence_count = params.layer_count * params.batch_size;
+  const ulong sample_count = sequence_count * params.blocks_per_sequence *
+                             samples_per_block;
+  const ulong final_work_unit = params.work_units - 1ul;
+  for (ulong sample = ulong(global_id); sample < sample_count;
+       sample += ulong(grid_size)) {
+    const ulong block_sample = sample / samples_per_block;
+    const ulong sample_in_block = sample % samples_per_block;
+    const ulong sequence = block_sample / params.blocks_per_sequence;
+    const ulong logical_block =
+        block_sample % params.blocks_per_sequence;
+    const ulong layer = sequence / params.batch_size;
+    const ulong batch = sequence % params.batch_size;
+    const ulong logical_table_index =
+        batch * params.blocks_per_sequence + logical_block;
+    const uint physical_id = prefill_paged_direct_table_lookup(
+        resources, params, logical_table_index);
+    if (ulong(physical_id) >= params.physical_blocks_per_layer) {
+      mark_validation_failure(resources.status_checksum,
+                              kValidationInvalidParametersBit);
+      continue;
+    }
+    const ulong valid_bytes =
+        logical_block + 1ul == params.blocks_per_sequence
+            ? params.last_block_valid_bytes
+            : params.block_bytes;
+    ulong block_byte = 0ul;
+    switch (sample_in_block) {
+      case 0ul:
+        block_byte = 0ul;
+        break;
+      case 1ul:
+        block_byte = min(3ul, valid_bytes - 1ul);
+        break;
+      case 2ul:
+        block_byte = (valid_bytes - 1ul) / 2ul;
+        break;
+      case 3ul:
+        block_byte = valid_bytes / 2ul;
+        break;
+      case 4ul:
+        block_byte = valid_bytes > 4ul ? valid_bytes - 4ul : 0ul;
+        break;
+      default:
+        block_byte = valid_bytes - 1ul;
+        break;
+    }
+    const ulong logical_byte =
+        prefill_paged_logical_sequence_start(params, layer, batch) +
+        logical_block * params.block_bytes + block_byte;
+    const ulong logical_word = logical_byte / 4ul;
+    const uint byte_index = uint(logical_byte & 3ul);
+    const uchar expected_key = uchar(prefill_paged_write_word(
+        params.scenario_seed, final_work_unit, layer, batch, logical_word,
+        kPrefillWriteKeyDomain) >> (byte_index * 8u));
+    const uchar expected_value = uchar(prefill_paged_write_word(
+        params.scenario_seed, final_work_unit, layer, batch, logical_word,
+        kPrefillWriteValueDomain) >> (byte_index * 8u));
+    if (load_prefill_paged_key_byte(resources, params, layer, physical_id,
+                                    block_byte) != expected_key ||
+        load_prefill_paged_value_byte(resources, params, layer, physical_id,
+                                      block_byte) != expected_value) {
+      mark_validation_failure(resources.status_checksum,
+                              kKvWriteValidationMismatchBit);
+    }
+  }
+
+  const ulong padding_bytes =
+      params.block_bytes - params.last_block_valid_bytes;
+  const ulong padding_chunks_per_sequence =
+      padding_bytes / 16ul + ((padding_bytes & 15ul) != 0ul ? 1ul : 0ul);
+  const ulong padding_chunk_count =
+      sequence_count * padding_chunks_per_sequence;
+  for (ulong padding_chunk = ulong(global_id);
+       padding_chunk < padding_chunk_count;
+       padding_chunk += ulong(grid_size)) {
+    const ulong sequence =
+        padding_chunk / padding_chunks_per_sequence;
+    const ulong sequence_padding_chunk =
+        padding_chunk % padding_chunks_per_sequence;
+    const ulong layer = sequence / params.batch_size;
+    const ulong batch = sequence % params.batch_size;
+    const ulong logical_table_index =
+        batch * params.blocks_per_sequence +
+        params.blocks_per_sequence - 1ul;
+    const uint physical_id = prefill_paged_direct_table_lookup(
+        resources, params, logical_table_index);
+    if (ulong(physical_id) >= params.physical_blocks_per_layer) {
+      mark_validation_failure(resources.status_checksum,
+                              kValidationInvalidParametersBit);
+      continue;
+    }
+    const ulong first_padding_byte =
+        params.last_block_valid_bytes + sequence_padding_chunk * 16ul;
+    const ulong end_padding_byte =
+        min(params.block_bytes, first_padding_byte + 16ul);
+    for (ulong block_byte = first_padding_byte;
+         block_byte < end_padding_byte; ++block_byte) {
+      if (load_prefill_paged_key_byte(resources, params, layer, physical_id,
+                                      block_byte) !=
+              prefill_paged_expected_padding_byte(
+                  params.k_seed, layer, physical_id, block_byte) ||
+          load_prefill_paged_value_byte(resources, params, layer,
+                                        physical_id, block_byte) !=
+              prefill_paged_expected_padding_byte(
+                  params.v_seed, layer, physical_id, block_byte)) {
+        mark_validation_failure(resources.status_checksum,
+                                kPaddingCanaryMismatchBit);
+      }
+    }
+  }
+}
+
+kernel void llm_metal_probe_prefill_paged_parameter_layout(
+    constant LlmMetalPrefillPagedParams& params [[buffer(0)]],
+    device ulong* output [[buffer(1)]],
+    uint global_id [[thread_position_in_grid]]) {
+  if (global_id != 0u) {
+    return;
+  }
+  output[0] = 1ul;
+  output[1] = ulong(sizeof(LlmMetalPrefillPagedParams));
+  output[2] = ulong(alignof(LlmMetalPrefillPagedParams));
+  output[3] = 26ul;
+  output[4] = ulong(__builtin_offsetof(
+      LlmMetalPrefillPagedParams, weight_bytes));
+  output[5] = ulong(__builtin_offsetof(
+      LlmMetalPrefillPagedParams, prompt_tokens));
+  output[6] = ulong(__builtin_offsetof(
+      LlmMetalPrefillPagedParams, attention_query_tile_tokens));
+  output[7] = ulong(__builtin_offsetof(
+      LlmMetalPrefillPagedParams, tile_count));
+  output[8] = ulong(__builtin_offsetof(
+      LlmMetalPrefillPagedParams, layer_count));
+  output[9] = ulong(__builtin_offsetof(
+      LlmMetalPrefillPagedParams, batch_size));
+  output[10] = ulong(__builtin_offsetof(
+      LlmMetalPrefillPagedParams, record_bytes));
+  output[11] = ulong(__builtin_offsetof(
+      LlmMetalPrefillPagedParams, work_units));
+  output[12] = ulong(__builtin_offsetof(
+      LlmMetalPrefillPagedParams, block_tokens));
+  output[13] = ulong(__builtin_offsetof(
+      LlmMetalPrefillPagedParams, block_bytes));
+  output[14] = ulong(__builtin_offsetof(
+      LlmMetalPrefillPagedParams, last_block_valid_bytes));
+  output[15] = ulong(__builtin_offsetof(
+      LlmMetalPrefillPagedParams, blocks_per_sequence));
+  output[16] = ulong(__builtin_offsetof(
+      LlmMetalPrefillPagedParams, physical_blocks_per_layer));
+  output[17] = ulong(__builtin_offsetof(
+      LlmMetalPrefillPagedParams, blocks_per_segment));
+  output[18] = ulong(__builtin_offsetof(
+      LlmMetalPrefillPagedParams, table_entries_per_segment));
+  output[19] = ulong(__builtin_offsetof(
+      LlmMetalPrefillPagedParams, segment_capacity_bytes));
+  output[20] = ulong(__builtin_offsetof(
+      LlmMetalPrefillPagedParams, weight_seed));
+  output[21] = ulong(__builtin_offsetof(
+      LlmMetalPrefillPagedParams, k_seed));
+  output[22] = ulong(__builtin_offsetof(
+      LlmMetalPrefillPagedParams, v_seed));
+  output[23] = ulong(__builtin_offsetof(
+      LlmMetalPrefillPagedParams, scenario_seed));
+  output[24] = ulong(__builtin_offsetof(
+      LlmMetalPrefillPagedParams, weight_segment_count));
+  output[25] = ulong(__builtin_offsetof(
+      LlmMetalPrefillPagedParams, k_segment_count));
+  output[26] = ulong(__builtin_offsetof(
+      LlmMetalPrefillPagedParams, v_segment_count));
+  output[27] = ulong(__builtin_offsetof(
+      LlmMetalPrefillPagedParams, table_segment_count));
+  output[28] = ulong(__builtin_offsetof(
+      LlmMetalPrefillPagedParams, reserved_zero));
+  output[29] = ulong(__builtin_offsetof(
+      LlmMetalPrefillPagedParams, padding_zero));
+  output[30] = params.weight_bytes;
+  output[31] = params.prompt_tokens;
+  output[32] = params.attention_query_tile_tokens;
+  output[33] = params.tile_count;
+  output[34] = params.layer_count;
+  output[35] = params.batch_size;
+  output[36] = params.record_bytes;
+  output[37] = params.work_units;
+  output[38] = params.block_tokens;
+  output[39] = params.block_bytes;
+  output[40] = params.last_block_valid_bytes;
+  output[41] = params.blocks_per_sequence;
+  output[42] = params.physical_blocks_per_layer;
+  output[43] = params.blocks_per_segment;
+  output[44] = params.table_entries_per_segment;
+  output[45] = params.segment_capacity_bytes;
+  output[46] = params.weight_seed;
+  output[47] = params.k_seed;
+  output[48] = params.v_seed;
+  output[49] = params.scenario_seed;
+  output[50] = ulong(params.weight_segment_count);
+  output[51] = ulong(params.k_segment_count);
+  output[52] = ulong(params.v_segment_count);
+  output[53] = ulong(params.table_segment_count);
+  output[54] = ulong(params.reserved_zero);
+  output[55] = ulong(params.padding_zero);
+}
+#endif  // LLM_METAL_PREFILL_PAGED
 #if LLM_METAL_PREFILL_CONTIGUOUS
 kernel void llm_metal_validate_prefill_contiguous_writes(
     constant LlmMetalResources& resources [[buffer(0)]],

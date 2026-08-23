@@ -262,6 +262,11 @@ std::string report_llm_memory_metal_task(
     bool checksum_evaluated, bool checksum_valid, bool kv_write_applicable,
     bool kv_write_evaluated, bool kv_write_valid, bool canary_applicable,
     bool canary_evaluated, bool canary_valid);
+std::string report_llm_memory_metal_grid(
+    size_t owner_count, size_t owner_ordinals_per_threadgroup,
+    size_t minimum_threadgroup_accounted_bytes,
+    size_t maximum_threadgroup_accounted_bytes,
+    size_t threadgroup_accounted_imbalance_bytes);
 std::string report_llm_memory_work_unit_name(
     const std::string& work_unit_kind, bool plural);
 std::string report_llm_memory_payload(

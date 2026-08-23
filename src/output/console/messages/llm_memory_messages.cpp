@@ -109,11 +109,10 @@ std::string llm_memory_usage_options(const std::string& prog_name) {
         << "  -M, --llm-memory       Select the memory-only LLM profile.\n"
         << "      --llm-memory-backend <cpu|metal>\n"
         << "                          Execution backend (default: cpu). The experimental Metal preview\n"
-        << "                          accepts decode with contiguous or paged KV and contiguous prefill;\n"
+        << "                          accepts both phases with contiguous or paged KV;\n"
         << "                          no fallback is performed.\n"
         << "      --phase <decode|prefill>\n"
-        << "                          Workload phase (default: decode). CPU supports both phases;\n"
-        << "                          the Metal preview accepts decode and contiguous prefill.\n"
+        << "                          Workload phase (default: decode). CPU and Metal support both phases.\n"
         << "      --weight-size-mb <MiB>\n"
         << "                          Required active weight bytes per work unit, in MiB.\n"
         << "      --layers <count>    Required transformer layer count.\n"
@@ -135,8 +134,7 @@ std::string llm_memory_usage_options(const std::string& prog_name) {
         << "                          Required only for prefill; query tile Q, 1 <= Q <= P.\n"
         << "                          Rejected for decode.\n"
         << "      --kv-layout <contiguous|paged>\n"
-        << "                          KV storage layout (default: contiguous). CPU supports both layouts;\n"
-        << "                          Metal supports both for decode and contiguous for prefill.\n"
+        << "                          KV storage layout (default: contiguous). CPU and Metal support both layouts.\n"
         << "      --kv-block-tokens <count>\n"
         << "                          Required only for paged KV; must be a positive power of two\n"
         << "                          no greater than UINT32_MAX; it may exceed the phase sequence length.\n"
@@ -242,6 +240,23 @@ std::string report_llm_memory_metal_task(
          << ", canary="
          << validation_status(canary_applicable, canary_evaluated,
                               canary_valid);
+  return report.str();
+}
+
+std::string report_llm_memory_metal_grid(
+    size_t owner_count, size_t owner_ordinals_per_threadgroup,
+    size_t minimum_threadgroup_accounted_bytes,
+    size_t maximum_threadgroup_accounted_bytes,
+    size_t threadgroup_accounted_imbalance_bytes) {
+  std::ostringstream report;
+  report << "  Metal owner grid: owner_count=" << owner_count
+         << ", owner_ordinals_per_threadgroup="
+         << owner_ordinals_per_threadgroup
+         << ", cost_unit=actual-threadgroup-cost\n"
+         << "  Metal threadgroup accounted bytes: minimum="
+         << minimum_threadgroup_accounted_bytes
+         << ", maximum=" << maximum_threadgroup_accounted_bytes
+         << ", imbalance=" << threadgroup_accounted_imbalance_bytes;
   return report.str();
 }
 

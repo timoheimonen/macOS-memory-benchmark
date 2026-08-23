@@ -139,9 +139,7 @@ inline constexpr const char* KV_BLOCK_TOKENS_NOT_POWER_OF_TWO =
     "kv-block-tokens-not-power-of-two";
 inline constexpr const char* KV_BLOCK_TOKENS_EXCEEDS_UINT32 =
     "kv-block-tokens-exceeds-uint32";
-inline constexpr const char* PHASE_NOT_ACTIVATED = "phase-not-activated";
-inline constexpr const char* KV_LAYOUT_NOT_ACTIVATED =
-    "kv-layout-not-activated";
+inline constexpr const char* INVALID_KV_LAYOUT = "invalid-kv-layout";
 inline constexpr const char* BATCH_SIZE_REQUIRED = "batch-size-required";
 inline constexpr const char* THREADS_NOT_APPLICABLE =
     "threads-not-applicable";

@@ -4,9 +4,9 @@
 
 `memory_benchmark --llm-memory` is a versioned Apple Silicon synthetic memory benchmark with a generic
 backend/phase/KV-layout schema. CPU decode is active with contiguous or deterministic paged KV, and CPU prefill is
-active with contiguous or deterministic paged KV. Experimental Metal decode is active with both layouts, and
-experimental Metal prefill is active with contiguous KV. These are seven active profiles; Metal prefill with paged KV
-remains inactive. Every selected profile executes three scenarios derived from the same explicit model geometry:
+active with contiguous or deterministic paged KV. Experimental Metal decode and prefill are also active with both
+layouts. These are eight active profiles. Every selected profile executes three scenarios derived from the same
+explicit model geometry:
 
 - `weights_only`: read the active weights once;
 - `kv_only`: perform the phase-specific K/V write and reads;
@@ -40,7 +40,7 @@ The current contract is identified by:
 | Timer policy | CPU synchronized worker timer or Metal GPU command-buffer timestamp policy |
 | Buffer pattern | backend/layout-specific contiguous or paged buffer-pattern identity |
 | Write pattern | backend/phase-specific append or full-prompt affine identity |
-| Checksum pattern | Backend/phase/layout-specific checksum identity; Metal task evidence uses `llm-metal-dual-mod32-v1` |
+| Checksum pattern | Backend/phase/layout-specific checksum identity; Metal uses profile-specific dual-mod32 variants |
 | MSL revision/source SHA-256 | null / null for CPU; exact selected runtime source identity for Metal |
 | Traffic classification | `llm-exact-weight-vs-kv-read-payload-v1` |
 
@@ -58,15 +58,15 @@ block-granular ownership, and full-block suffix padding.
 
 Schema-v1 vocabulary includes `cpu|metal`, `decode|prefill`, `contiguous|paged`,
 `decode_step|prefill_operation`, and `none|current_token_append|full_prompt_population`. Contiguous and paged are public
-for both CPU phases and for Metal decode; contiguous is also public for Metal prefill. The experimental Metal preview
-never receives hidden fallback.
+for both phases on both backends. The four-profile experimental Metal preview never receives hidden fallback.
 
 The prefill implementation resolves checked tile/prefix/payload formulas, versioned atomic CPU ownership evidence,
 owner-local semantic traces, and operation-ordinal checksum oracles. CPU contiguous prefill uses token-range ownership;
 paged prefill uses block-exclusive weighted ownership plus a read-only uint32 table, deterministic permutation,
-full physical K/V pools, a dedicated descriptor ABI, and a separate ARM64 executor. Metal contiguous prefill uses
+full physical K/V pools, a dedicated descriptor ABI, and a separate ARM64 executor. Metal prefill uses
 scenario-specialized MSL pipelines, one in-kernel weight pass per operation when weights are active, full-prompt K/V
-writes, and tiled-prefix K-then-V scans.
+writes, and tiled-prefix K-then-V scans. Its paged profile additionally uses exact `N + 2*M` lookup accounting,
+cyclic one-threadgroup block ownership, segmented table/K/V addressing, and terminal-padding validation.
 
 It intentionally excludes:
 
@@ -90,7 +90,7 @@ The standalone primary mode is `-M` / `--llm-memory`. Its exact whitelist is:
 
 ```text
 --llm-memory-backend <cpu|metal>
-                            default cpu; Metal accepts decode with either layout and contiguous prefill
+                            default cpu; both backends accept both phases and layouts
 --weight-size-mb <MiB>      required
 --layers <count>            required
 --query-heads <count>       required
@@ -123,9 +123,9 @@ All other primary modes and all buffer/cache/latency/TLB/pattern/GPU,
 
 Backend defaults to `cpu`; phase defaults to `decode`. Layout defaults to `contiguous`; explicit backend/phase/layout
 and block-size sources are retained in `configuration.resolved_sources`. Decode and prefill inputs are mutually
-exclusive. All four CPU phase/layout combinations are active. The Metal preview accepts decode with contiguous or
-paged KV and prefill with contiguous KV. Metal prefill with paged KV remains inactive. Metal rejects explicit
-`--threads`, performs no CPU worker detection, and never falls back to another profile.
+exclusive. All eight backend/phase/layout combinations are active. CPU and the Metal preview each accept decode and
+prefill with contiguous or paged KV. Metal rejects explicit `--threads`, performs no CPU worker detection, and never
+falls back to another profile.
 
 Output targets follow the shared process contract:
 
@@ -442,20 +442,14 @@ available. Runtime admission requires Apple7-or-later capability, unified memory
 `maxBufferLength >= 256 MiB`, and successful MSL 2.3 compilation of the common foundation pipelines, the selected
 profile's three scenario pipelines, and its layout-specific validation/probe pipelines.
 
-The activated embedded source revision is `llm-metal-decode-prefill-contiguous-paged-msl23-v3`. Runtime evidence binds
-its exact source SHA-256. Decode scenario labels use `membenchmark.llm-metal.pipeline.decode-contiguous.*` or
-`membenchmark.llm-metal.pipeline.decode-paged.*`; prefill uses
-`membenchmark.llm-metal.pipeline.prefill-contiguous.weights-only`,
-`membenchmark.llm-metal.pipeline.prefill-contiguous.kv-only`, and
-`membenchmark.llm-metal.pipeline.prefill-contiguous.mixed`. Metal prefill uses the 136-byte, 8-byte-aligned
-`llm-metal-prefill-contiguous-parameters-v1` ABI. Its runtime probe entrypoint is
-`llm_metal_probe_prefill_parameter_layout`, published as
-`membenchmark.llm-metal.pipeline.prefill-contiguous-layout-probe`; its workload entrypoints are
-`llm_metal_prefill_contiguous_weights_only`, `llm_metal_prefill_contiguous_kv_only`, and
-`llm_metal_prefill_contiguous_mixed`; excluded validation uses `llm_metal_validate_prefill_contiguous_writes` under
-`membenchmark.llm-metal.pipeline.validate-prefill-contiguous-writes`. The paged decode layout probe is
-`membenchmark.llm-metal.pipeline.decode-paged-layout-probe`, and excluded validation uses
-`membenchmark.llm-metal.pipeline.validate-decode-paged-writes-padding`.
+Runtime evidence binds the canonical embedded MSL revision and its exact source SHA-256 without duplicating either
+value in this document. Every selected profile records its scenario-pipeline, parameter-ABI, and layout-probe
+identities. Validation pipelines are selected and compiled internally; evidence records their outcomes rather than a
+separate pipeline label. Metal paged prefill records executor `llm-metal-executor-v1-prefill-paged`, schedule
+`llm-metal-prefill-paged-cyclic-block-owner-grid-stride-v1`, timer
+`metal-command-buffer-gpu-start-end-v1`, buffer pattern
+`llm-paged-physical-buffer-pattern-v1`, write pattern `llm-metal-prefill-paged-full-prompt-affine32-v1`, and checksum
+`llm-metal-paged-prefill-dual-mod32-lookup-address-mix-v1`.
 
 Contiguous K and V use `[layer][batch_sequence][token][kv_head][head_dimension]`. Paged K and V use
 `[layer][physical_block][token_in_block][kv_head][head_dimension]`; their block table contains no pointers. The visible
@@ -525,13 +519,14 @@ boundaries. Each thread reads the disjoint slice it wrote for current-token appe
 barrier is introduced. Grid width derives from the selected pipeline's runtime `threadExecutionWidth` and
 `maxTotalThreadsPerThreadgroup`, not from an SoC-specific constant.
 
-Metal paged decode preserves the three semantic visits above and assigns each layer/batch owner to exactly one
-threadgroup under a cyclic grid-stride schedule. At every visit one named lane loads the table through
+Metal paged decode preserves the three semantic visits above and assigns each layer/batch/logical-block owner to
+exactly one threadgroup under a cyclic grid-stride schedule. At every visit one named lane loads the table through
 `device const volatile uint*`, publishes the physical ID in threadgroup memory, and executes
 `threadgroup_barrier(mem_flags::mem_threadgroup)` before address construction. The append lookup is shared by its paired
-K/V writes; K and V scans issue separate lookups, giving exactly `L * B * (2 * N + 1)` lookup evidence for each
-KV-active work unit independent of threadgroup count. Segment/block/address selection depends on the loaded physical
-ID. The timed checksum non-separably mixes logical table index, physical ID, append/K-read/V-read kind, and work-unit
+K/V writes. Each block owner issues its separate K and V scan lookups, giving exactly `L * B * (2 * N + 1)` lookup
+evidence for each KV-active work unit independent of threadgroup count. Segment/block/address selection depends on the
+loaded physical ID. The timed checksum non-separably mixes logical table index, physical ID, append/K-read/V-read kind,
+and work-unit
 ordinal, so swapping equal-multiplicity non-tail IDs is detectable. Excluded post-validation checks both append bytes
 and terminal-block padding canaries.
 
@@ -549,11 +544,23 @@ V prefix. No grid-wide barrier is required because a lane reads only the bytes i
 `T` operations and uses exact vector prefixes, scalar tails, and segment-boundary splits. The commutative dual-mod32
 checksum proves contents and multiplicity; a separate audit ties this loop nesting to the exact MSL source hash.
 
-Paged prefill uses the same logical order with whole-block assignments. For each operation/layer/batch owner it first
-loads each owned logical block's physical ID and populates all valid prompt K/V bytes in that block. It then visits tiles
+CPU paged prefill uses the same logical order with weighted whole-block assignments. For each operation/layer/batch
+owner it first loads each owned logical block's physical ID and populates all valid prompt K/V bytes in that block. It
+then visits tiles
 in increasing order, independently loading and scanning each owned K block fragment intersecting the exact causal
 prefix, followed by the corresponding V fragments. A terminal fragment stops at the tile end or prompt end and never
 touches suffix padding. Mixed reads the applicable layer weight shard before the paged-prefill block work.
+
+Metal paged prefill retains that order but assigns row-major `(layer,batch,logical_block)` owner ordinals to
+threadgroups with a deterministic cyclic grid stride rather than CPU weighted repartitioning. One named lane performs
+each volatile uint32 table load and publishes the physical ID before the owner threadgroup addresses the block. Prompt
+population contributes `N` paired lookups and the tiled scans contribute `M` K-prefix plus `M` V-prefix lookups per
+layer/batch pair, so each KV-active operation has exactly `L * B * (N + 2 * M)` loads independent of grid size. The
+source-hash-bound event-trace audit freezes full-prompt population before tile-ordered K-then-V reads. Grid evidence
+reports exact per-threadgroup accounted-byte vectors and their minimum, maximum, and imbalance without claiming
+weighted balance. Every Metal `weights_only` grid reports the same exact weight-vector grid-stride cost evidence;
+contiguous KV-bearing grids leave threadgroup-cost evidence unavailable. Excluded validation checks final-ordinal
+full-prompt samples and applicable suffix-padding canaries.
 
 ## Initialization, K/V write patterns, and checksums
 
@@ -668,9 +675,11 @@ oracle computes the cold-path expected value without calling the assembly helper
 Post-validation checks the logical decode current-token K/V append or prefill final-ordinal samples at their resolved
 physical locations and every last-block padding canary.
 
-CPU prefill uses its versioned full-prompt affine64 write pattern; Metal prefill uses the versioned
-`llm-metal-prefill-contiguous-full-prompt-affine32-v1` pattern. Every K/V word binds scenario seed, operation ordinal,
-layer, batch, logical token, record-word index, and K/V domain. Timed checksum agreement proves the expected contents
+CPU prefill uses its versioned full-prompt affine64 write pattern. Metal contiguous prefill uses
+`llm-metal-prefill-contiguous-full-prompt-affine32-v1`, while Metal paged prefill uses
+`llm-metal-prefill-paged-full-prompt-affine32-v1` with checksum
+`llm-metal-paged-prefill-dual-mod32-lookup-address-mix-v1`. Every K/V word binds scenario seed, operation ordinal, layer,
+batch, logical token, record-word index, and K/V domain. Timed checksum agreement proves the expected contents
 and visit multiplicity across all T operations, including every tile-read visit; it does not by itself prove event
 order. CPU source/disassembly audit and the Metal entrypoint/source-hash audit establish the locked order: one
 weight pass per operation when weights are active, complete prompt population for KV-bearing scenarios, then for every
@@ -685,13 +694,14 @@ padding canaries, or prefill final-ordinal representative/boundary samples), com
 kernel status, and a finite positive elapsed time permit `measured` status. A mismatch is terminal invalid evidence and
 is not retried. Checksum and fold traffic is validation evidence, not part of the logical payload numerator.
 
-Metal checksum uses `llm-metal-dual-mod32-v1`, with separate W/K/V lanes, 32-bit modulo arithmetic, domain separation
-for backend/phase/layout/scenario/layer/batch/work-unit/logical offset, and commutative threadgroup reduction. Its
-independent bounded CPU oracle derives the expected accumulator without rereading multi-GiB resources or calling the
+Metal checksum uses profile-specific dual-mod32 identities, with separate W/K/V lanes, 32-bit modulo arithmetic,
+domain separation for backend/phase/layout/scenario/layer/batch/work-unit/logical offset, and commutative threadgroup
+reduction. Its independent bounded CPU oracle derives the expected accumulator without rereading multi-GiB resources or calling the
 production kernel helper. For each KV-bearing Metal task, excluded phase-neutral `kv_write` validation checks the
 applicable write before accepting the task. Decode validates its current-token K/V record. Prefill validates
 representative and boundary byte samples from the full-prompt population against the final operation ordinal `T-1`;
-it does not reread every prompt record. A timed checksum or K/V-write mismatch invalidates the current task and prevents the
+the paged profile also checks applicable suffix-padding canaries. It does not reread every prompt record. A timed
+checksum, K/V-write, or applicable padding mismatch invalidates the current task and prevents the
 next task; there is no retry and no numeric comparison with the CPU checksum algorithm.
 
 ## Timing boundary and backend lifecycle
@@ -763,9 +773,10 @@ planned_task_accounted_bytes = planned_work_units * accounted_bytes_per_work_uni
 completed_task_accounted_bytes = completed_work_units * accounted_bytes_per_work_unit
 ```
 
-Contiguous Metal prefill also checks the exact lane-local serial range-helper count
-`T * ((weight_active ? L : 0) + (kv_active ? 2 * L * B * (P + C) : 0))`. It publishes the count in grid evidence and
-the 1,048,576 cap in methodology evidence. Scenario planning divides the cap by the exact per-operation count, so
+Contiguous Metal prefill checks the exact lane-local serial range-helper count
+`T * ((weight_active ? L : 0) + (kv_active ? 2 * L * B * (P + C) : 0))`; paged `weights_only` checks `T * L`, while
+paged KV-bearing owner kernels report zero serial range visits. Metal prefill publishes the applicable count in grid
+evidence and the 1,048,576 cap in methodology evidence. Scenario planning divides the cap by the exact per-operation count, so
 explicit work and automatic calibration remain within it; runtime overflow and cap checks still run before the bounded
 CPU oracle or GPU dispatch.
 
@@ -909,7 +920,10 @@ prefill has both objects. Metal profiles use `cpu: null` and populate `metal` wi
 lifecycle status/reasons; device/family/unified/Tier-2/compiler/MSL/source/pipeline evidence; argument-buffer layout
 probe; actual resource options, lengths, optional allocated sizes, and memory totals. Paged Metal evidence additionally
 publishes whole-entry table segments, upload/readback validation, materialized permutation identity, combined K/V
-padding, exact grid lookup count, and K/V-write/padding-canary validity. Runtime unsupported/failure diagnostics remain
+padding, exact grid lookup count, owner/threadgroup geometry, per-threadgroup `actual-threadgroup-cost` accounted-byte
+vector and minimum/maximum/imbalance, and K/V-write/padding-canary validity. Every Metal `weights_only` task publishes
+the same cost unit for its weight-vector grid-stride schedule; contiguous KV-bearing grids publish null cost summary
+fields and an empty vector. Runtime unsupported/failure diagnostics remain
 bounded and separate from stable reason codes.
 `memory_budget` separates allocation-time evidence into required
 canonical decimal-string `resource_rounding_bytes`, `transient_peak_bytes`, `known_owned_peak_bytes`, and
@@ -992,9 +1006,8 @@ conclusions_valid == true
 every planned measurement has status == "measured"
 ```
 
-For active commands the requested values are CPU decode or prefill with contiguous or paged KV, Metal decode with
-contiguous or paged KV, or Metal prefill with contiguous KV. Metal prefill with paged KV remains inactive. Paged
-acceptance and comparison must additionally match `G`, `N`, tail geometry, logical/physical/padding/table resources,
+For active commands the requested values are CPU or Metal decode/prefill with contiguous or paged KV. Paged acceptance
+and comparison must additionally match `G`, `N`, tail geometry, logical/physical/padding/table resources,
 permutation
 version/domain/resolved seed/hash, lookup/accounted bytes, worker schedule, descriptor/executor, timer, and checksum
 identities. `unsupported`, `partial`, `interrupted`, `invalid`, and `failed` evidence is never accepted as performance.
@@ -1070,6 +1083,9 @@ Correctness gates cover:
 - Metal contiguous-prefill parameter ABI/layout probe, Q=1/Q=P/remainder tiles, multiple operations/layers/batches,
   exact payload and vector tails, final-ordinal K/V-write validation, and source-hash-bound full-write → tile-K →
   tile-V loop-order audit;
+- Metal paged-prefill `N + 2*M` lookup accounting, cyclic owner-ordinal scheduling, partial terminal visits,
+  per-threadgroup accounted-cost evidence, multi-segment table/K/V addressing, final-ordinal full-prompt write and
+  padding-canary validation, wrong-table detection, and source-hash-bound loop-order audit;
 - synchronized worker timing, startup cancellation, QoS evidence, timer/error containment, and AAPCS64 preservation;
 - scenario-specific calibration, frozen plans, cyclic balance, aggregate population, interruption, and checkpoint
   precedence;
@@ -1091,8 +1107,8 @@ interruption/checkpoint lifecycle, or meaning of a reported field requires metho
 Removing or renaming a field, changing its type, or changing its meaning requires a schema-version bump. Additive
 evidence may remain schema 1 only when existing consumers can safely ignore it.
 
-Runtime paged allocation/free lists, prefix sharing, sliding windows, growing context, chunked prefill, Metal paged
-prefill, Metal execution outside the active preview profiles, ANE execution, model presets, quantization metadata,
+Runtime paged allocation/free lists, prefix sharing, sliding windows, growing context, chunked prefill, Metal execution
+outside the active preview profiles, ANE execution, model presets, quantization metadata,
 multiple weight passes, or KV replay factors other than one are separate methodology features. The generic schema
 vocabulary does not activate them: each requires its own end-to-end implementation gate, exact selector-derived
 methodology and component identity, public CLI/documentation update, and compatibility review before it becomes a

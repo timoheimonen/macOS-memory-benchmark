@@ -47,11 +47,9 @@ constexpr size_t kLlmMetalTaskGridIdentityCapacity =
 
 bool is_activated_metal_profile(LlmPhase phase,
                                 LlmKvLayout kv_layout) noexcept {
-  return (phase == LlmPhase::Decode &&
-          (kv_layout == LlmKvLayout::Contiguous ||
-           kv_layout == LlmKvLayout::Paged)) ||
-         (phase == LlmPhase::Prefill &&
-          kv_layout == LlmKvLayout::Contiguous);
+  return (phase == LlmPhase::Decode || phase == LlmPhase::Prefill) &&
+         (kv_layout == LlmKvLayout::Contiguous ||
+          kv_layout == LlmKvLayout::Paged);
 }
 
 constexpr std::string_view kLlmExecutorReasons[] = {
@@ -103,7 +101,7 @@ constexpr std::string_view kLlmBackendReasons[] = {
     LlmBackendReason::VALID,
     LlmBackendReason::NOT_INITIALIZED,
     LlmBackendReason::BACKEND_MISMATCH,
-    LlmBackendReason::BACKEND_NOT_ACTIVATED,
+    LlmBackendReason::INVALID_BACKEND,
     LlmBackendReason::BACKEND_INITIALIZATION_FAILED,
     LlmBackendReason::TIMER_UNAVAILABLE,
     LlmBackendReason::EXECUTION_PLAN_MISMATCH,
@@ -189,10 +187,10 @@ constexpr std::string_view kLlmWorkPlanReasons[] = {
     LlmWorkPlanReason::BLOCK_TABLE_PROTECTION_FAILED,
     LlmWorkPlanReason::INVALID_SCENARIO,
     LlmWorkPlanReason::INVALID_MODEL_WORK_PLAN,
-    LlmWorkPlanReason::BACKEND_NOT_ACTIVATED,
+    LlmWorkPlanReason::INVALID_BACKEND,
     LlmWorkPlanReason::METAL_WORKERS_NOT_APPLICABLE,
-    LlmWorkPlanReason::PHASE_NOT_ACTIVATED,
-    LlmWorkPlanReason::KV_LAYOUT_NOT_ACTIVATED,
+    LlmWorkPlanReason::INVALID_PHASE,
+    LlmWorkPlanReason::INVALID_KV_LAYOUT,
     LlmWorkPlanReason::JSON_INTEGER_OUT_OF_RANGE,
     LlmWorkPlanReason::GUARDRAIL_BELOW_ONE_WORK_UNIT,
     LlmWorkPlanReason::WORK_UNIT_COUNT_ZERO,

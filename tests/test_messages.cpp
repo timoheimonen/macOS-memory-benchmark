@@ -212,11 +212,10 @@ TEST(MessagesTest, LlmMemoryCliMessagesHaveExactOutput) {
       "  -M, --llm-memory       Select the memory-only LLM profile.\n"
       "      --llm-memory-backend <cpu|metal>\n"
       "                          Execution backend (default: cpu). The experimental Metal preview\n"
-      "                          accepts decode with contiguous or paged KV and contiguous prefill;\n"
+      "                          accepts both phases with contiguous or paged KV;\n"
       "                          no fallback is performed.\n"
       "      --phase <decode|prefill>\n"
-      "                          Workload phase (default: decode). CPU supports both phases;\n"
-      "                          the Metal preview accepts decode and contiguous prefill.\n"
+      "                          Workload phase (default: decode). CPU and Metal support both phases.\n"
       "      --weight-size-mb <MiB>\n"
       "                          Required active weight bytes per work unit, in MiB.\n"
       "      --layers <count>    Required transformer layer count.\n"
@@ -239,8 +238,7 @@ TEST(MessagesTest, LlmMemoryCliMessagesHaveExactOutput) {
       "                          Required only for prefill; query tile Q, 1 <= Q <= P.\n"
       "                          Rejected for decode.\n"
       "      --kv-layout <contiguous|paged>\n"
-      "                          KV storage layout (default: contiguous). CPU supports both layouts;\n"
-      "                          Metal supports both for decode and contiguous for prefill.\n"
+      "                          KV storage layout (default: contiguous). CPU and Metal support both layouts.\n"
       "      --kv-block-tokens <count>\n"
       "                          Required only for paged KV; must be a positive power of two\n"
       "                          no greater than UINT32_MAX; it may exceed the phase sequence length.\n"
@@ -346,6 +344,13 @@ TEST(MessagesTest, LlmMemoryCliMessagesHaveExactOutput) {
        "threadgroups=8, threads_per_threadgroup=64\n"
        "  Metal timing: gpu_elapsed_seconds=0.001250000\n"
        "  Metal validation: checksum=valid, kv_write=valid, canary=valid"},
+      {"Metal grid",
+       Messages::report_llm_memory_metal_grid(6, 3, 1596, 1600, 4),
+       "  Metal owner grid: owner_count=6, "
+       "owner_ordinals_per_threadgroup=3, "
+       "cost_unit=actual-threadgroup-cost\n"
+       "  Metal threadgroup accounted bytes: minimum=1596, maximum=1600, "
+       "imbalance=4"},
       {"Metal invalid task without canary",
        Messages::report_llm_memory_metal_task(
            "kv_only", "llm_decode_contiguous_v1", 1, 32, true, true, 0.5,
@@ -506,10 +511,11 @@ TEST(MessagesTest, GeneralHelpAdvertisesTheLlmBoundaryExactlyOnce) {
   EXPECT_NE(
       usage.find("standalone CPU/Metal synthetic LLM memory profile"),
       std::string::npos);
-  EXPECT_NE(usage.find("experimental Metal preview accepts decode"),
+  EXPECT_NE(usage.find("Both phases support contiguous"),
             std::string::npos);
   EXPECT_NE(
-      usage.find("with contiguous or paged KV and contiguous prefill, and never"),
+      usage.find(
+          "or paged KV on CPU and Metal. The experimental Metal preview never"),
       std::string::npos);
   expect_no_model_specific_llm_metal_status(usage);
   EXPECT_NE(usage.find("--weight-size-mb"), std::string::npos);
@@ -526,6 +532,10 @@ TEST(MessagesTest, GeneralHelpAdvertisesTheLlmBoundaryExactlyOnce) {
   EXPECT_NE(usage.find("llm-memory-v1-metal-decode-contiguous"),
             std::string::npos);
   EXPECT_NE(usage.find("llm-memory-v1-metal-decode-paged"),
+            std::string::npos);
+  EXPECT_NE(usage.find("llm-memory-v1-metal-prefill-contiguous"),
+            std::string::npos);
+  EXPECT_NE(usage.find("llm-memory-v1-metal-prefill-paged"),
             std::string::npos);
   EXPECT_NE(usage.find("Metal LLM-memory rejects --threads"),
             std::string::npos);

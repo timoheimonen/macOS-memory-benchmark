@@ -126,13 +126,11 @@ inline constexpr const char* BLOCK_TABLE_PROTECTION_FAILED =
 inline constexpr const char* INVALID_SCENARIO = "invalid-scenario";
 inline constexpr const char* INVALID_MODEL_WORK_PLAN =
     "invalid-model-work-plan";
-inline constexpr const char* BACKEND_NOT_ACTIVATED =
-    "backend-not-activated";
+inline constexpr const char* INVALID_BACKEND = "invalid-backend";
 inline constexpr const char* METAL_WORKERS_NOT_APPLICABLE =
     "metal-workers-not-applicable";
-inline constexpr const char* PHASE_NOT_ACTIVATED = "phase-not-activated";
-inline constexpr const char* KV_LAYOUT_NOT_ACTIVATED =
-    "kv-layout-not-activated";
+inline constexpr const char* INVALID_PHASE = "invalid-phase";
+inline constexpr const char* INVALID_KV_LAYOUT = "invalid-kv-layout";
 inline constexpr const char* JSON_INTEGER_OUT_OF_RANGE =
     "json-integer-out-of-range";
 inline constexpr const char* GUARDRAIL_BELOW_ONE_WORK_UNIT =
@@ -191,6 +189,22 @@ inline constexpr const char* WRITE_PATTERN =
     "llm-metal-prefill-contiguous-full-prompt-affine32-v1";
 inline constexpr const char* CHECKSUM = "llm-metal-dual-mod32-v1";
 }  // namespace LlmMetalPrefillContiguousVersion
+
+/** Versioned Phase-12 Metal prefill/paged planning identities. */
+namespace LlmMetalPrefillPagedVersion {
+inline constexpr const char* EXECUTOR =
+    "llm-metal-executor-v1-prefill-paged";
+inline constexpr const char* SCHEDULE =
+    "llm-metal-prefill-paged-cyclic-block-owner-grid-stride-v1";
+inline constexpr const char* TIMER =
+    "metal-command-buffer-gpu-start-end-v1";
+inline constexpr const char* BUFFER_PATTERN =
+    "llm-paged-physical-buffer-pattern-v1";
+inline constexpr const char* WRITE_PATTERN =
+    "llm-metal-prefill-paged-full-prompt-affine32-v1";
+inline constexpr const char* CHECKSUM =
+    "llm-metal-paged-prefill-dual-mod32-lookup-address-mix-v1";
+}  // namespace LlmMetalPrefillPagedVersion
 
 namespace LlmMetalPlannerAccounting {
 inline constexpr size_t RUNTIME_IDENTITY_GROWTH_RESERVE_BYTES =

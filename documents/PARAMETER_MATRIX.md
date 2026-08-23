@@ -12,7 +12,7 @@ Working version `0.63.0`
 | `-C` | `--analyze-core2core` | — | Run standalone two-thread acquire/release token-protocol handoff analysis |
 | `-G` | `--gpu-bandwidth` | — | Run standalone Metal GPU memory bandwidth |
 | `-M` | `--llm-memory` | — | Run the standalone CPU/Metal synthetic LLM memory profile |
-| — | `--llm-memory-backend` | `cpu\|metal` | LLM execution backend; default `cpu`; the experimental Metal preview activates decode with contiguous or paged KV and prefill with contiguous KV |
+| — | `--llm-memory-backend` | `cpu\|metal` | LLM execution backend; default `cpu`; CPU and the experimental Metal preview support decode/prefill with contiguous or paged KV |
 | — | `--weight-size-mb` | `<MiB>` | Required positive active weight size for LLM-memory mode |
 | — | `--layers` | `<count>` | Required positive LLM layer count |
 | — | `--query-heads` | `<count>` | Required positive query-head count; at least the KV-head count and divisible by it |
@@ -174,8 +174,8 @@ the resolved grid in each work plan.
 
 The LLM parser has an exact whitelist. The five common model options and phase-specific geometry must occur once; every
 optional value and the mode or help selector may also occur at most once. Backend defaults to CPU; Metal is selected
-with `--llm-memory-backend metal` and activates the experimental decode preview for both KV layouts plus prefill with
-contiguous KV. Phase defaults to decode. Metal prefill with paged KV remains inactive.
+with `--llm-memory-backend metal`. Both backends support decode and prefill with either KV layout, for eight active
+backend/phase/layout profiles. The four Metal profiles are an experimental preview. Phase defaults to decode.
 Decode requires exactly one `--context-tokens`; prefill requires exactly one `--prompt-tokens P` and
 `--attention-query-tile-tokens Q`, with `P >= 1` and `1 <= Q <= P`. Cross-phase geometry is rejected. `--kv-layout`
 defaults to `contiguous`. Paged layout requires exactly one
@@ -185,7 +185,7 @@ and memory-budget preflight, the command allocates the layout-specific resources
 
 | Modifier | Compatible | Notes |
 |----------|------------|-------|
-| `--llm-memory-backend <cpu\|metal>` | ✅ | Default `cpu`. The experimental Metal preview activates decode with contiguous or paged KV and prefill with contiguous KV, performs no CPU fallback, reports capability absence as terminal `unsupported`, and reports runtime compiler/pipeline/resource/task failure as terminal `failed`/`invalid` evidence |
+| `--llm-memory-backend <cpu\|metal>` | ✅ | Default `cpu`. Both backends support decode/prefill with contiguous or paged KV. The experimental Metal preview performs no CPU fallback, reports capability absence as terminal `unsupported`, and reports runtime compiler/pipeline/resource/task failure as terminal `failed`/`invalid` evidence |
 | `--weight-size-mb <MiB>` | ✅ required | Positive active weight size; checked MiB-to-byte conversion |
 | `--layers <n>` | ✅ required | Positive layer count |
 | `--query-heads <n>` | ✅ required | Positive; must be at least and evenly divisible by KV heads |
@@ -197,10 +197,10 @@ and memory-budget preflight, the command allocates the layout-specific resources
 | `--attention-query-tile-tokens <Q>` | ✅ prefill only | Required with prefill; `1 <= Q <= P`, with no default |
 | `--kv-element-bytes <1\|2\|4>` | ✅ | Default `2`; every other width is rejected |
 | `--batch-size <n>` | ✅ | Positive; default `1` |
-| `--kv-layout <contiguous\|paged>` | ✅ | Default `contiguous`; both layouts are executable for decode and prefill on CPU and for decode on Metal, while Metal prefill accepts contiguous only |
+| `--kv-layout <contiguous\|paged>` | ✅ | Default `contiguous`; both layouts are executable for decode and prefill on CPU and Metal |
 | `--kv-block-tokens <G>` | ✅ paged only | Required exactly once with paged; rejected with contiguous. Positive power of two, at most `UINT32_MAX`; may exceed the active phase length |
 | `-t, --threads <n>` | ✅ CPU only | Positive requested workers; omission uses detected workers. Metal rejects the option and does not perform worker detection; worker/QoS evidence is null with applicability false |
-| `-i, --iterations <n>` | ✅ | Positive exact work units per scenario; omission selects excluded per-scenario calibration toward 150 ms. CPU values fit the common work/task guardrails; Metal additionally caps one dispatch at 65,536 work units, and contiguous Metal prefill caps the lane-local serial range-helper count at 1,048,576 per task |
+| `-i, --iterations <n>` | ✅ | Positive exact work units per scenario; omission selects excluded per-scenario calibration toward 150 ms. CPU values fit the common work/task guardrails; Metal additionally caps one dispatch at 65,536 work units. Metal prefill caps lane-local serial range-helper visits at 1,048,576 per task, including `T*L` for paged `weights_only`; paged Metal profiles also enforce semantic-lookup, owner-ordinal, threadgroup, and per-visit vector-iteration caps |
 | `-r, --count <n>` | ✅ | Positive cyclic loop count; default `3` |
 | `--seed <uint64>` | ✅ | Exact base seed including zero; a non-zero seed is generated once when omitted |
 | `-o, --output <target>` | ✅ | Empty disables JSON; exact `-` emits one final schema 1 document; `./-`, flag-shaped values, and every other non-empty non-sentinel value are atomic file targets. A non-empty target adds the conservative JSON output peak to memory admission |
@@ -213,17 +213,22 @@ The parser rejects checked weight/KV geometry that overflows or makes even one s
 task-accounted-byte ceiling. For paged KV, task-accounted bytes include logical model bytes plus timed block-table lookup
 traffic, while throughput remains model bytes divided by timed seconds. Before allocation, the planner separately admits
 page-rounded full-size weight and physical K/V mappings, the block table, descriptors, retained planner/transient storage,
-checksum storage, and orchestration storage against the current memory budget. CPU/prefill/contiguous is active;
-CPU/prefill/paged is also active with full physical K/V blocks, a read-only table, timed lookup accounting, and
-padding validation. The experimental Metal preview is active for decode with both layouts and prefill with contiguous
-KV. It uses Tier 2 argument-buffer indirection, GPU command-buffer timestamps, dual-mod32 checksum validation, and
-excluded phase-neutral `kv_write` validation. Contiguous uses exact-tail W/K/V segments. Metal prefill allows at most
-1,048,576 serial range-helper visits per lane and rejects a larger or overflowing task before checksum-oracle work or
-GPU dispatch. It otherwise logically visits
+checksum storage, and orchestration storage against the current memory budget. All four CPU and all four experimental
+Metal phase/layout profiles are active. Metal uses Tier 2 argument-buffer indirection, GPU command-buffer timestamps,
+dual-mod32 checksum validation, and excluded phase-neutral `kv_write` validation. Contiguous uses exact-tail W/K/V
+segments. Metal prefill allows at most 1,048,576 serial range-helper visits per lane and rejects a larger or overflowing
+task before checksum-oracle work or GPU dispatch. Contiguous tasks count all applicable serial ranges; paged
+`weights_only` counts `T*L`, while paged KV-bearing tasks use their separately capped owner schedule. Contiguous prefill
+otherwise logically visits
 all prompt K/V records before its tiled-prefix reads; a weight-bearing scenario performs one weight pass per operation.
-Paged decode uses
-whole-block K/V segmentation, segmented private table storage, exact `L*B*(2*N+1)` lookup evidence, and terminal-block
-padding canaries. The command does not fall back to another backend, phase, or layout.
+Both paged Metal phases use whole-block K/V segmentation, segmented private table storage, cyclic one-threadgroup
+ownership, and terminal-block padding canaries. Decode records exact `L*B*(2*N+1)` lookup evidence. Prefill records
+exact `L*B*(N+2*M)` lookup evidence, where `M` sums the blocks reached by every query-tile prefix, and reports exact
+per-threadgroup `actual-threadgroup-cost` accounted-byte vector, minimum, maximum, and imbalance. Every Metal
+`weights_only` task reports the same cost unit for its weight-vector grid-stride schedule; contiguous KV-bearing grids
+publish no threadgroup-cost evidence. Full-prompt write samples and applicable padding canaries must validate after each
+KV-active task. This is a cyclic assignment, not a weighted balance. The command does not fall back to another backend,
+phase, or layout.
 
 ### Sweep Compatibility
 
@@ -292,7 +297,7 @@ Additional sweep rules:
 | `--llm-memory --kv-layout contiguous --kv-block-tokens <G>` | Block size has no meaning for contiguous KV and is rejected |
 | `--llm-memory --phase decode` with prefill geometry, or prefill with `--context-tokens` | Phase-specific geometry is not interchangeable |
 | `--llm-memory --llm-memory-backend metal --phase prefill` | Valid experimental Metal contiguous-prefill profile when paged options are absent; requires normal `P`/`Q` geometry |
-| `--llm-memory --llm-memory-backend metal --phase prefill --kv-layout paged --kv-block-tokens <G>` | Metal paged prefill remains inactive and is rejected with stable reason `kv-layout-not-activated` |
+| `--llm-memory --llm-memory-backend metal --phase prefill --kv-layout paged --kv-block-tokens <G>` | Valid experimental Metal paged-prefill profile; requires normal `P`/`Q` geometry and explicit valid `G` |
 | `--llm-memory --llm-memory-backend metal --threads <n>` | Metal has no CPU-worker contract and rejects explicit threads |
 | `--llm-memory --phase prefill --kv-layout paged --kv-block-tokens <G>` | Valid CPU paged-prefill profile; requires the normal prefill `P`/`Q` geometry and explicit valid `G` |
 | `--llm-memory --llm-memory-backend metal --phase decode --kv-layout paged --kv-block-tokens <G>` | Valid experimental Metal paged-decode profile; requires normal decode context and explicit valid `G` |

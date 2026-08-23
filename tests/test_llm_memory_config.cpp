@@ -380,89 +380,102 @@ TEST(LlmMemoryConfigTest,
 }
 
 TEST(LlmMemoryConfigTest,
-     ParserActivatesMetalDecodeLayoutsAndPrefillContiguousOnly) {
-  LlmParserHooksScope hooks(0, 9);
-  struct InvalidCase {
+     ParserActivatesExplicitBackendPhaseLayoutCompatibilityMatrix) {
+  LlmParserHooksScope hooks(8, 9);
+  struct CompatibilityCase {
+    const char* name;
+    LlmMemoryBackend backend;
+    LlmPhase phase;
+    LlmKvLayout kv_layout;
     std::vector<std::string> arguments;
-    std::string reason_code;
   };
 
-  std::vector<std::string> prefill_backend_first =
-      valid_prefill_arguments();
-  prefill_backend_first.insert(prefill_backend_first.begin() + 2,
-                               {"--llm-memory-backend", "metal"});
-  std::vector<std::string> prefill_backend_last =
-      valid_prefill_arguments();
-  prefill_backend_last.insert(prefill_backend_last.end(),
-                              {"--llm-memory-backend", "metal"});
-  std::vector<std::string> paged_backend_first =
-      valid_metal_arguments();
-  paged_backend_first.insert(paged_backend_first.end(),
-                             {"--kv-layout", "paged",
-                              "--kv-block-tokens", "4"});
-  std::vector<std::string> paged_backend_last = valid_llm_arguments();
-  paged_backend_last.insert(paged_backend_last.end(),
-                            {"--kv-layout", "paged",
-                             "--kv-block-tokens", "4",
-                             "--llm-memory-backend", "metal"});
-  std::vector<std::string> prefill_paged_backend_first =
-      prefill_backend_first;
-  prefill_paged_backend_first.insert(
-      prefill_paged_backend_first.end(),
-      {"--kv-layout", "paged", "--kv-block-tokens", "4"});
-  std::vector<std::string> prefill_paged_backend_last =
-      valid_prefill_arguments();
-  prefill_paged_backend_last.insert(
-      prefill_paged_backend_last.end(),
-      {"--kv-layout", "paged", "--kv-block-tokens", "4",
-       "--llm-memory-backend", "metal"});
-
-  const std::vector<InvalidCase> cases = {
-      {prefill_paged_backend_first,
-       LlmMemoryConfigReason::KV_LAYOUT_NOT_ACTIVATED},
-      {prefill_paged_backend_last,
-       LlmMemoryConfigReason::KV_LAYOUT_NOT_ACTIVATED},
+  const auto explicit_arguments = [](LlmMemoryBackend backend,
+                                     LlmPhase phase,
+                                     LlmKvLayout kv_layout) {
+    std::vector<std::string> arguments =
+        phase == LlmPhase::Prefill ? valid_prefill_arguments()
+                                   : valid_llm_arguments();
+    arguments.insert(arguments.begin() + 2,
+                     {"--llm-memory-backend",
+                      backend == LlmMemoryBackend::Metal ? "metal" : "cpu"});
+    if (phase == LlmPhase::Decode) {
+      arguments.insert(arguments.end(), {"--phase", "decode"});
+    }
+    arguments.insert(arguments.end(),
+                     {"--kv-layout",
+                      kv_layout == LlmKvLayout::Paged ? "paged"
+                                                      : "contiguous"});
+    if (kv_layout == LlmKvLayout::Paged) {
+      arguments.insert(arguments.end(), {"--kv-block-tokens", "4"});
+    }
+    return arguments;
   };
 
-  for (const InvalidCase& test_case : cases) {
-    SCOPED_TRACE(::testing::PrintToString(test_case.arguments));
+  const std::vector<CompatibilityCase> cases = {
+      {"cpu/decode/contiguous", LlmMemoryBackend::Cpu, LlmPhase::Decode,
+       LlmKvLayout::Contiguous,
+       explicit_arguments(LlmMemoryBackend::Cpu, LlmPhase::Decode,
+                          LlmKvLayout::Contiguous)},
+      {"cpu/decode/paged", LlmMemoryBackend::Cpu, LlmPhase::Decode,
+       LlmKvLayout::Paged,
+       explicit_arguments(LlmMemoryBackend::Cpu, LlmPhase::Decode,
+                          LlmKvLayout::Paged)},
+      {"cpu/prefill/contiguous", LlmMemoryBackend::Cpu, LlmPhase::Prefill,
+       LlmKvLayout::Contiguous,
+       explicit_arguments(LlmMemoryBackend::Cpu, LlmPhase::Prefill,
+                          LlmKvLayout::Contiguous)},
+      {"cpu/prefill/paged", LlmMemoryBackend::Cpu, LlmPhase::Prefill,
+       LlmKvLayout::Paged,
+       explicit_arguments(LlmMemoryBackend::Cpu, LlmPhase::Prefill,
+                          LlmKvLayout::Paged)},
+      {"metal/decode/contiguous", LlmMemoryBackend::Metal,
+       LlmPhase::Decode, LlmKvLayout::Contiguous,
+       explicit_arguments(LlmMemoryBackend::Metal, LlmPhase::Decode,
+                          LlmKvLayout::Contiguous)},
+      {"metal/decode/paged", LlmMemoryBackend::Metal, LlmPhase::Decode,
+       LlmKvLayout::Paged,
+       explicit_arguments(LlmMemoryBackend::Metal, LlmPhase::Decode,
+                          LlmKvLayout::Paged)},
+      {"metal/prefill/contiguous", LlmMemoryBackend::Metal,
+       LlmPhase::Prefill, LlmKvLayout::Contiguous,
+       explicit_arguments(LlmMemoryBackend::Metal, LlmPhase::Prefill,
+                          LlmKvLayout::Contiguous)},
+      {"metal/prefill/paged", LlmMemoryBackend::Metal, LlmPhase::Prefill,
+       LlmKvLayout::Paged,
+       explicit_arguments(LlmMemoryBackend::Metal, LlmPhase::Prefill,
+                          LlmKvLayout::Paged)},
+  };
+
+  for (const CompatibilityCase& test_case : cases) {
+    SCOPED_TRACE(test_case.name);
     LlmMemoryConfig config;
     const CapturedLlmParse parsed =
         parse_llm_arguments_capturing(test_case.arguments, config);
-    EXPECT_EQ(parsed.result, EXIT_FAILURE);
-    EXPECT_TRUE(parsed.stdout_output.empty());
-    EXPECT_EQ(first_output_line(parsed.stderr_output),
-              Messages::error_prefix() +
-                  Messages::error_llm_memory_config_invalid(
-                      test_case.reason_code));
-    EXPECT_EQ(config.requested_workers, 0u);
-    EXPECT_EQ(config.available_workers, 0u);
-  }
-
-  for (const std::vector<std::string>* arguments :
-       {&paged_backend_first, &paged_backend_last,
-        &prefill_backend_first, &prefill_backend_last}) {
-    SCOPED_TRACE(::testing::PrintToString(*arguments));
-    LlmMemoryConfig config;
-    const CapturedLlmParse parsed =
-        parse_llm_arguments_capturing(*arguments, config);
-    EXPECT_EQ(parsed.result, EXIT_SUCCESS);
+    EXPECT_EQ(parsed.result, EXIT_SUCCESS) << parsed.stderr_output;
     EXPECT_TRUE(parsed.stdout_output.empty());
     EXPECT_TRUE(parsed.stderr_output.empty());
-    EXPECT_EQ(config.backend, LlmMemoryBackend::Metal);
-    const bool prefill =
-        std::find(arguments->begin(), arguments->end(), "prefill") !=
-        arguments->end();
-    EXPECT_EQ(config.phase,
-              prefill ? LlmPhase::Prefill : LlmPhase::Decode);
-    EXPECT_EQ(config.kv_layout,
-              prefill ? LlmKvLayout::Contiguous : LlmKvLayout::Paged);
-    EXPECT_EQ(config.visible_context_tokens, prefill ? 0u : 3u);
-    EXPECT_EQ(config.prompt_tokens, prefill ? 5u : 0u);
-    EXPECT_EQ(config.attention_query_tile_tokens, prefill ? 2u : 0u);
-    EXPECT_EQ(config.kv_block_tokens, prefill ? 0u : 4u);
-    EXPECT_EQ(config.requested_workers, 0u);
-    EXPECT_EQ(config.available_workers, 0u);
+    EXPECT_EQ(config.backend, test_case.backend);
+    EXPECT_EQ(config.phase, test_case.phase);
+    EXPECT_EQ(config.kv_layout, test_case.kv_layout);
+    EXPECT_EQ(config.visible_context_tokens,
+              test_case.phase == LlmPhase::Decode ? 3u : 0u);
+    EXPECT_EQ(config.prompt_tokens,
+              test_case.phase == LlmPhase::Prefill ? 5u : 0u);
+    EXPECT_EQ(config.attention_query_tile_tokens,
+              test_case.phase == LlmPhase::Prefill ? 2u : 0u);
+    EXPECT_EQ(config.kv_block_tokens,
+              test_case.kv_layout == LlmKvLayout::Paged ? 4u : 0u);
+    EXPECT_EQ(config.requested_workers,
+              test_case.backend == LlmMemoryBackend::Cpu ? 8u : 0u);
+    EXPECT_EQ(config.available_workers,
+              test_case.backend == LlmMemoryBackend::Cpu ? 8u : 0u);
+    EXPECT_TRUE(config.user_specified_backend);
+    EXPECT_TRUE(config.user_specified_phase);
+    EXPECT_TRUE(config.user_specified_kv_layout);
+    EXPECT_EQ(config.user_specified_kv_block_tokens,
+              test_case.kv_layout == LlmKvLayout::Paged);
+    EXPECT_EQ(config.argv, test_case.arguments);
   }
 }
 

@@ -321,12 +321,13 @@ const char* validate_llm_activated_profile(
            config.kv_layout != LlmKvLayout::Contiguous &&
            config.kv_layout != LlmKvLayout::Paged) ||
           (config.phase == LlmPhase::Prefill &&
-           config.kv_layout != LlmKvLayout::Contiguous)) {
-        return LlmMemoryConfigReason::KV_LAYOUT_NOT_ACTIVATED;
+           config.kv_layout != LlmKvLayout::Contiguous &&
+           config.kv_layout != LlmKvLayout::Paged)) {
+        return LlmMemoryConfigReason::INVALID_KV_LAYOUT;
       }
       if (config.phase != LlmPhase::Decode &&
           config.phase != LlmPhase::Prefill) {
-        return LlmMemoryConfigReason::PHASE_NOT_ACTIVATED;
+        return LlmMemoryConfigReason::INVALID_PHASE;
       }
       return nullptr;
   }
@@ -349,7 +350,8 @@ build_runtime_metal_resource_request(
        logical_plan.kv_layout != LlmKvLayout::Contiguous &&
        logical_plan.kv_layout != LlmKvLayout::Paged) ||
       (logical_plan.phase == LlmPhase::Prefill &&
-       logical_plan.kv_layout != LlmKvLayout::Contiguous) ||
+       logical_plan.kv_layout != LlmKvLayout::Contiguous &&
+       logical_plan.kv_layout != LlmKvLayout::Paged) ||
       (logical_plan.phase != LlmPhase::Decode &&
        logical_plan.phase != LlmPhase::Prefill)) {
     return std::nullopt;
@@ -357,11 +359,19 @@ build_runtime_metal_resource_request(
   LlmMetalResourcePlanRequest request;
   request.geometry = logical_plan.geometry;
   if (logical_plan.kv_layout == LlmKvLayout::Paged) {
-    if (!logical_plan.geometry.decode.has_value()) {
+    const size_t sequence_tokens =
+        logical_plan.phase == LlmPhase::Prefill
+            ? logical_plan.geometry.prefill.has_value()
+                  ? logical_plan.geometry.prefill->prompt_tokens
+                  : 0
+            : logical_plan.geometry.decode.has_value()
+                  ? logical_plan.geometry.decode->visible_context_tokens
+                  : 0;
+    if (sequence_tokens == 0) {
       return std::nullopt;
     }
     request.paged_layout = build_llm_kv_layout_plan(
-        {logical_plan.geometry.decode->visible_context_tokens,
+        {sequence_tokens,
          logical_plan.geometry.kv_block_tokens,
          logical_plan.geometry.layer_count,
          logical_plan.geometry.batch_size,
@@ -926,7 +936,7 @@ int run_llm_memory_mode(int argc, char* argv[]) {
     if (!backend) {
       std::cerr << Messages::error_prefix()
                 << Messages::error_llm_memory_run_failed(
-                       LlmBackendReason::BACKEND_NOT_ACTIVATED)
+                       LlmBackendReason::INVALID_BACKEND)
                 << std::endl;
       return EXIT_FAILURE;
     }

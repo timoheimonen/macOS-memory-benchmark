@@ -176,6 +176,16 @@ void print_metal_task_evidence(const LlmMemoryWorkPlan& plan, const LlmMemoryRes
                      metal->kv_write_validation_valid,
                      metal->padding_canary_applicable, metal->padding_canary_evaluated, metal->padding_canary_valid)
               << '\n';
+    if (metal->grid_plan_available &&
+        !metal->grid_plan.threadgroup_accounted_bytes.empty()) {
+      std::cout << Messages::report_llm_memory_metal_grid(
+                       metal->grid_plan.owner_count,
+                       metal->grid_plan.owner_ordinals_per_threadgroup,
+                       metal->grid_plan.minimum_threadgroup_accounted_bytes,
+                       metal->grid_plan.maximum_threadgroup_accounted_bytes,
+                       metal->grid_plan.threadgroup_accounted_imbalance_bytes)
+                << '\n';
+    }
     printed[index] = true;
   }
 }

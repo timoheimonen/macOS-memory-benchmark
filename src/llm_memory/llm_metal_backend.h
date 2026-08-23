@@ -22,8 +22,8 @@
  * The declarations in this file contain no Objective-C types. Pure planners
  * are reentrant and safe for concurrent calls with independent objects. A
  * created backend is command-owned, synchronous, and not safe for concurrent
- * calls. Public Metal workloads are decode with contiguous or paged KV and
- * prefill with contiguous KV storage.
+ * calls. Public Metal workloads are decode and prefill with contiguous or
+ * paged KV storage.
  */
 
 #ifndef LLM_METAL_BACKEND_H
@@ -79,6 +79,9 @@ using LlmMetalDecodePagedLayoutProbeWords =
 inline constexpr size_t kLlmMetalPrefillLayoutProbeWordCount = 42;
 using LlmMetalPrefillLayoutProbeWords =
     std::array<uint64_t, kLlmMetalPrefillLayoutProbeWordCount>;
+inline constexpr size_t kLlmMetalPrefillPagedLayoutProbeWordCount = 56;
+using LlmMetalPrefillPagedLayoutProbeWords =
+    std::array<uint64_t, kLlmMetalPrefillPagedLayoutProbeWordCount>;
 
 /** Canonical CPU mirror of the MSL decode-contiguous parameter block. */
 struct alignas(8) LlmMetalDecodeContiguousParams {
@@ -226,6 +229,74 @@ static_assert(offsetof(LlmMetalPrefillContiguousParams, v_segment_count) ==
               128);
 static_assert(offsetof(LlmMetalPrefillContiguousParams, reserved_zero) == 132);
 
+/** Canonical CPU mirror of the MSL prefill-paged parameter block. */
+struct alignas(8) LlmMetalPrefillPagedParams {
+  uint64_t weight_bytes = 0;
+  uint64_t prompt_tokens = 0;
+  uint64_t attention_query_tile_tokens = 0;
+  uint64_t tile_count = 0;
+  uint64_t layer_count = 0;
+  uint64_t batch_size = 0;
+  uint64_t record_bytes = 0;
+  uint64_t work_units = 0;
+  uint64_t block_tokens = 0;
+  uint64_t block_bytes = 0;
+  uint64_t last_block_valid_bytes = 0;
+  uint64_t blocks_per_sequence = 0;
+  uint64_t physical_blocks_per_layer = 0;
+  uint64_t blocks_per_segment = 0;
+  uint64_t table_entries_per_segment = 0;
+  uint64_t segment_capacity_bytes = 0;
+  uint64_t weight_seed = 0;
+  uint64_t k_seed = 0;
+  uint64_t v_seed = 0;
+  uint64_t scenario_seed = 0;
+  uint32_t weight_segment_count = 0;
+  uint32_t k_segment_count = 0;
+  uint32_t v_segment_count = 0;
+  uint32_t table_segment_count = 0;
+  uint32_t reserved_zero = 0;
+  uint32_t padding_zero = 0;
+};
+
+static_assert(alignof(LlmMetalPrefillPagedParams) == 8);
+static_assert(sizeof(LlmMetalPrefillPagedParams) == 184);
+static_assert(offsetof(LlmMetalPrefillPagedParams, weight_bytes) == 0);
+static_assert(offsetof(LlmMetalPrefillPagedParams, prompt_tokens) == 8);
+static_assert(offsetof(LlmMetalPrefillPagedParams,
+                       attention_query_tile_tokens) == 16);
+static_assert(offsetof(LlmMetalPrefillPagedParams, tile_count) == 24);
+static_assert(offsetof(LlmMetalPrefillPagedParams, layer_count) == 32);
+static_assert(offsetof(LlmMetalPrefillPagedParams, batch_size) == 40);
+static_assert(offsetof(LlmMetalPrefillPagedParams, record_bytes) == 48);
+static_assert(offsetof(LlmMetalPrefillPagedParams, work_units) == 56);
+static_assert(offsetof(LlmMetalPrefillPagedParams, block_tokens) == 64);
+static_assert(offsetof(LlmMetalPrefillPagedParams, block_bytes) == 72);
+static_assert(offsetof(LlmMetalPrefillPagedParams,
+                       last_block_valid_bytes) == 80);
+static_assert(offsetof(LlmMetalPrefillPagedParams,
+                       blocks_per_sequence) == 88);
+static_assert(offsetof(LlmMetalPrefillPagedParams,
+                       physical_blocks_per_layer) == 96);
+static_assert(offsetof(LlmMetalPrefillPagedParams,
+                       blocks_per_segment) == 104);
+static_assert(offsetof(LlmMetalPrefillPagedParams,
+                       table_entries_per_segment) == 112);
+static_assert(offsetof(LlmMetalPrefillPagedParams,
+                       segment_capacity_bytes) == 120);
+static_assert(offsetof(LlmMetalPrefillPagedParams, weight_seed) == 128);
+static_assert(offsetof(LlmMetalPrefillPagedParams, k_seed) == 136);
+static_assert(offsetof(LlmMetalPrefillPagedParams, v_seed) == 144);
+static_assert(offsetof(LlmMetalPrefillPagedParams, scenario_seed) == 152);
+static_assert(offsetof(LlmMetalPrefillPagedParams,
+                       weight_segment_count) == 160);
+static_assert(offsetof(LlmMetalPrefillPagedParams, k_segment_count) == 164);
+static_assert(offsetof(LlmMetalPrefillPagedParams, v_segment_count) == 168);
+static_assert(offsetof(LlmMetalPrefillPagedParams,
+                       table_segment_count) == 172);
+static_assert(offsetof(LlmMetalPrefillPagedParams, reserved_zero) == 176);
+static_assert(offsetof(LlmMetalPrefillPagedParams, padding_zero) == 180);
+
 /** Result from the bounded independent Metal checksum oracle. */
 struct LlmMetalChecksumOracle {
   bool valid = false;
@@ -241,6 +312,8 @@ struct LlmMetalPagedChecksumGroupSummary {
   uint32_t logical_plus_one_sum = 0;
   uint32_t physical_plus_one_sum = 0;
   uint32_t logical_physical_pair_sum = 0;
+  uint32_t physical_address_token_sum = 0;
+  uint32_t logical_physical_address_pair_sum = 0;
 };
 
 /**
@@ -271,6 +344,39 @@ struct LlmMetalPagedChecksumSummary {
   LlmMetalDualMod32Checksum initial_scan_static_checksum;
   LlmMetalPagedChecksumGroupSummary all_owners;
   LlmMetalPagedChecksumGroupSummary terminal_owners;
+};
+
+/**
+ * Fixed-size prefill-paged checksum state retained after table upload.
+ *
+ * Data-word checksums use logical contiguous-pool addresses and therefore do
+ * not require a retained table. The two additive groups bind the canonical
+ * permutation and its independently resolved physical segment/block address
+ * to the paired-write lookups and to every tiled K/V read lookup;
+ * `read_tile_ordinal_sum` preserves the prefill tile domain without owning a
+ * per-tile or per-entry allocation.
+ */
+struct LlmMetalPrefillPagedChecksumSummary {
+  bool valid = false;
+  uint64_t base_seed = 0;
+  uint64_t weight_seed = 0;
+  uint64_t k_seed = 0;
+  uint64_t v_seed = 0;
+  size_t prompt_tokens = 0;
+  size_t attention_query_tile_tokens = 0;
+  size_t tile_count = 0;
+  size_t layer_count = 0;
+  size_t batch_size = 0;
+  size_t record_bytes = 0;
+  size_t block_tokens = 0;
+  size_t blocks_per_sequence = 0;
+  size_t physical_blocks_per_layer = 0;
+  size_t block_bytes = 0;
+  size_t blocks_per_segment = 0;
+  size_t last_block_valid_bytes = 0;
+  LlmMetalPagedChecksumGroupSummary write_lookups;
+  LlmMetalPagedChecksumGroupSummary read_lookups;
+  uint32_t read_tile_ordinal_sum = 0;
 };
 
 /** Injectable capability state used by deterministic unit tests. */
@@ -333,6 +439,7 @@ struct LlmMetalBackendTestHooks {
   bool force_post_validation_command_failure = false;
   bool force_kv_write_validation_mismatch = false;
   bool force_wrong_paged_table_permutation = false;
+  /** Corrupt one real terminal padding byte before GPU post-validation. */
   bool force_padding_canary_mismatch = false;
   std::function<bool()> stop_requested;
 };
@@ -347,6 +454,16 @@ LlmMetalArgumentBufferPlan build_llm_metal_argument_buffer_plan(
 
 /** Resolve a capped grid-stride dispatch from injected pipeline properties. */
 LlmMetalGridPlan build_llm_metal_grid_plan(const LlmMetalGridRequest& request);
+
+/**
+ * Resolve a weight-vector grid and attach exact actual-threadgroup costs.
+ *
+ * Every accounted byte is assigned through the same absolute 16-byte vector
+ * modulo-grid ownership used by the Metal kernels. The returned vector sums
+ * to `weight_bytes * request.work_units`, including an exact final tail.
+ */
+LlmMetalGridPlan build_llm_metal_weight_grid_plan(
+    const LlmMetalGridRequest& request, size_t weight_bytes);
 
 /**
  * Build exact W/K/V/table/argument/status/staging lengths and first admission.
@@ -381,6 +498,11 @@ bool validate_llm_metal_decode_paged_layout_probe(
 bool validate_llm_metal_prefill_layout_probe(
     const LlmMetalPrefillContiguousParams& parameters,
     const LlmMetalPrefillLayoutProbeWords& words) noexcept;
+
+/** Validate every CPU/MSL field of the prefill-paged parameter ABI. */
+bool validate_llm_metal_prefill_paged_layout_probe(
+    const LlmMetalPrefillPagedParams& parameters,
+    const LlmMetalPrefillPagedLayoutProbeWords& words) noexcept;
 
 /** Return one deterministic Metal contiguous-buffer initialization word. */
 uint32_t llm_metal_contiguous_pattern_word(uint64_t seed, uint64_t absolute_word_index) noexcept;
@@ -424,9 +546,9 @@ bool calculate_llm_metal_prefill_serial_range_visits_per_lane(
 /**
  * Calculate the exact largest aligned vector span of a prefill range.
  *
- * The span covers the 16-byte vectors visited by the contiguous prefill
- * weight, KV-write, and KV-read helpers, including an unaligned first vector.
- * `span_bytes` is set only on success.
+ * The span covers the 16-byte vectors visited by the selected contiguous or
+ * paged prefill weight, KV-write, and KV-read helpers, including unaligned
+ * layer, sequence, and block starts. `span_bytes` is set only on success.
  */
 bool calculate_llm_metal_prefill_maximum_range_vector_span_bytes(
     const LlmGeometry& geometry, LlmScenario scenario,
@@ -447,6 +569,18 @@ LlmMetalChecksumOracle calculate_llm_metal_decode_paged_checksum(
     const LlmMemoryWorkPlan& model_plan,
     const LlmScenarioWorkPlan& scenario_plan,
     const LlmMetalPagedChecksumSummary& summary) noexcept;
+
+/** Build the fixed-size prefill-paged oracle summary before table release. */
+LlmMetalPrefillPagedChecksumSummary
+build_llm_metal_prefill_paged_checksum_summary(
+    const LlmMemoryWorkPlan& model_plan, const uint32_t* table_entries,
+    size_t entry_count, const std::function<bool()>& stop_requested = {});
+
+/** Calculate the expected prefill-paged W/K/V checksum from the summary. */
+LlmMetalChecksumOracle calculate_llm_metal_prefill_paged_checksum(
+    const LlmMemoryWorkPlan& model_plan,
+    const LlmScenarioWorkPlan& scenario_plan,
+    const LlmMetalPrefillPagedChecksumSummary& summary) noexcept;
 
 /** Compare every lane of two Metal dual-mod32 checksums. */
 bool equal_llm_metal_checksum(const LlmMetalDualMod32Checksum& left,

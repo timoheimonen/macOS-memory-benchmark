@@ -21,7 +21,7 @@ It is designed for controlled microarchitectural investigation rather than a sin
 - **Core-to-core analysis:** calibrated acquire/release token-exchange measurements under scheduler-hint scenarios.
 - **Metal GPU bandwidth:** standalone read/write/copy compute kernels with GPU timestamps and validation metadata.
 - **Synthetic LLM memory profile:** CPU measurements of fixed-context decode and full-prompt prefill with contiguous or
-  deterministic paged KV, plus experimental Metal decode with either layout and full-prompt prefill with contiguous KV.
+  deterministic paged KV, plus experimental Metal decode and full-prompt prefill with either layout.
 - **Reproducible experiments:** explicit seeds, repeated loops, built-in Cartesian parameter sweeps, recoverable JSON
   file checkpoints, and final machine-readable stdout for every result-producing direct mode and CPU sweep.
 
@@ -107,6 +107,16 @@ memory_benchmark --llm-memory --llm-memory-backend metal \
   --attention-query-tile-tokens 64 --iterations 1 --count 3
 ```
 
+Select deterministic paged KV for the same Metal prefill workload:
+
+```bash
+memory_benchmark --llm-memory --llm-memory-backend metal \
+  --weight-size-mb 64 --layers 4 --query-heads 8 --kv-heads 2 \
+  --head-dim 64 --phase prefill --prompt-tokens 512 \
+  --attention-query-tile-tokens 64 --kv-layout paged \
+  --kv-block-tokens 16 --iterations 1 --count 3 --seed 42
+```
+
 Run bounded paged decode on Metal with a reproducible block-table permutation:
 
 ```bash
@@ -160,7 +170,7 @@ checkpoints are required; see the [Machine-Readable CLI API](documents/API.md) s
 | `--analyze-tlb` | Standalone paired spread/packed TLB analysis with adaptive measurement rounds, confidence intervals, and boundary validation. |
 | `--analyze-core2core` | Calibrated two-thread acquire/release token-protocol round-trip latency under best-effort macOS scheduler hints. |
 | `--gpu-bandwidth` | Standalone Metal GPU read/write/copy effective compute-payload bandwidth. |
-| `--llm-memory` | Standalone synthetic LLM memory profile: CPU decode/prefill with contiguous or paged KV, experimental Metal decode with either layout, or experimental Metal prefill with contiguous KV. |
+| `--llm-memory` | Standalone synthetic LLM memory profile: CPU or experimental Metal decode/prefill with contiguous or paged KV. |
 | `--sweep <key=a,b>` | Cartesian parameter sweep for supported CPU, pattern, TLB, and core-to-core modes; requires `--output`. GPU schema 1 and LLM schema 1 do not support sweeps. |
 
 Primary modes are intentionally separate and accept different option sets. Use `memory_benchmark -h` or the [User Manual](documents/MANUAL.md) for defaults, valid combinations, and the complete option reference.
@@ -177,10 +187,10 @@ blocks, their suffix padding, and one seeded uint32 block table. Initialization,
 and validation remain outside the timed region. Paged prefill performs timed table lookups for full-prompt population
 and tiled causal-prefix scans; it never falls back to contiguous KV.
 
-`--llm-memory-backend` accepts `cpu` or `metal` and defaults to `cpu`. CPU supports all four phase/layout combinations.
-The experimental Metal preview accepts decode with contiguous or paged KV and prefill with contiguous KV. Metal
-prefill with paged KV remains inactive, and explicit `--threads` is rejected before execution. Runtime admission
-requires Apple7-or-later family capability,
+`--llm-memory-backend` accepts `cpu` or `metal` and defaults to `cpu`. All eight backend/phase/layout profiles are
+active: both backends support decode and prefill with contiguous or paged KV. The four Metal profiles remain an
+experimental preview, and explicit `--threads` is rejected before execution. Runtime admission requires
+Apple7-or-later family capability,
 unified memory, Tier 2 argument buffers, a maximum buffer length of at least 256 MiB, and runtime MSL 2.3 compilation.
 Capability failure produces a terminal unsupported result and a non-zero exit. Runtime compiler, pipeline, resource,
 or task failure remains a terminal failed/invalid schema result with a non-zero exit; execution is never redirected to
@@ -190,25 +200,36 @@ The generic schema records the selected backend, phase/layout, `work_unit_kind: 
 `"prefill_operation"`, and methodology `llm-memory-v1-<backend>-<phase>-<layout>`. Every active Metal profile uses one
 workload dispatch per task with the work-unit loop inside the kernel. `GPUStartTime`/`GPUEndTime` provide authoritative
 elapsed time; a versioned dual-mod32 checksum and excluded `kv_write` validation guard correctness. W/K/V buffers are
-split into exact-tail segments of at most 256 MiB, so segment padding is not counted as payload. Metal paged decode
-additionally uses block-aligned K/V segments and segmented private block-table storage. A named lane loads each volatile
-uint32 table entry and publishes it to its threadgroup before a mandatory threadgroup barrier. Paired append and
-independent K/V scans account exactly `L * B * (2 * N + 1)` four-byte table lookups per KV-active decode step; lookup
-bytes and tail padding remain outside the effective-model-payload numerator. Metal prefill contiguous writes all `P`
-K/V records and reads the prefix ending at each tile boundary; weight-bearing scenarios read weights once per
-`prefill_operation`. With
-`C = ceil(P/Q)`, its prefix count is `S(P,Q) = sum(min((j+1)*Q, P), j=0..C-1)`. Excluded validation checks the
-phase-specific K/V write destinations and, when applicable, table identity and K/V padding canaries. The profile does
-not run Transformer mathematics or report inference tokens/s. Contiguous Metal prefill also bounds the exact
-lane-local serial range-helper count to 1,048,576 per task and rejects a larger task before dispatch. Its
-machine-readable synthetic work-unit rate is named
-`synthetic_memory_work_units_per_second`.
+split into exact-tail segments of at most 256 MiB, so segment padding is not counted as payload. Both paged Metal
+profiles use block-aligned K/V segments and segmented private block-table storage. A named lane loads each volatile
+uint32 table entry and publishes it to its threadgroup before a mandatory threadgroup barrier. Decode accounts one
+paired append lookup plus separate K/V scans: with `N = ceil(A/G)`, this is exactly
+`L * B * (2 * N + 1)` four-byte lookups per KV-active work unit. For paged prefill, `N = ceil(P/G)`,
+`e_j = min((j+1)*Q, P)`, and `M = sum(ceil(e_j/G))`; full-prompt population plus the separate K/V prefix scans account
+exactly `L * B * (N + 2 * M)` lookups. A deterministic cyclic owner-ordinal schedule assigns every
+layer/batch/logical-block owner to one threadgroup without duplicating lookups and reports exact per-threadgroup
+accounted-byte vector, minimum, maximum, and imbalance. It is an auditable cyclic map, not weighted balancing. Lookup
+bytes and suffix padding remain outside the effective-model-payload numerator. Every Metal `weights_only` grid also
+publishes exact vector-grid-stride threadgroup costs; contiguous KV-bearing grids leave cost evidence unavailable.
 
-The current embedded source revision is `llm-metal-decode-prefill-contiguous-paged-msl23-v3`. Result evidence preserves
-that revision, the exact runtime source SHA-256, and the selected scenario pipeline labels ending in
-`pipeline.decode-contiguous.*`, `pipeline.decode-paged.*`, or `pipeline.prefill-contiguous.*`. The prefill profile also
-reports its 136-byte `llm-metal-prefill-contiguous-parameters-v1` ABI and runtime layout-probe evidence. Compare Metal
-runs only when these identities and the resolved grid/resource plan match.
+Metal prefill writes all `P` K/V records before reading the prefix ending at each tile boundary; weight-bearing
+scenarios read weights once per `prefill_operation`. With `C = ceil(P/Q)`, its prefix count is
+`S(P,Q) = sum(min((j+1)*Q, P), j=0..C-1)`. Partial paged visits stop at the exact tile or prompt end. Preparation
+validates the block-table identity. Excluded post-task validation checks final-operation full-prompt write samples and,
+for paged KV, terminal padding canaries. The profile does not run Transformer mathematics or report inference tokens/s.
+Metal prefill also bounds lane-local serial range-helper work to 1,048,576 visits per task and rejects a larger task
+before dispatch. Contiguous KV-bearing tasks publish the full weight/K/V count; paged `weights_only` publishes `T * L`,
+while paged KV-bearing owner kernels publish zero serial range visits and use the separate semantic-lookup cap.
+Its machine-readable synthetic work-unit rate is named `synthetic_memory_work_units_per_second`.
+
+Result evidence preserves the canonical embedded MSL source revision, its exact runtime SHA-256, and the selected
+scenario-pipeline and parameter-layout-probe identities. Metal paged prefill additionally records executor
+`llm-metal-executor-v1-prefill-paged`, schedule
+`llm-metal-prefill-paged-cyclic-block-owner-grid-stride-v1`, timer
+`metal-command-buffer-gpu-start-end-v1`, buffer pattern
+`llm-paged-physical-buffer-pattern-v1`, write pattern `llm-metal-prefill-paged-full-prompt-affine32-v1`, and checksum
+`llm-metal-paged-prefill-dual-mod32-lookup-address-mix-v1`. Compare Metal runs only when these identities and the resolved
+grid/resource plan match.
 
 When `--iterations` is omitted, standard bandwidth, pattern, GPU operations, and the three LLM scenarios calibrate their
 work toward a bounded measurement duration. An explicit `--iterations` value selects fixed work. Standard latency
@@ -316,7 +337,7 @@ Treat benchmark values as measurements of the configured workload under the obse
 - CPU and GPU GB/s values are not directly comparable: the kernels, timing boundaries, parallelism, resource modes, and validation work differ.
 - LLM GB/s is exact **logical effective model payload** divided by backend-authoritative scenario time: synchronized
   worker time for CPU or `GPUStartTime`/`GPUEndTime` for the experimental Metal preview. Decode uses a fixed context that
-  includes the current token; CPU and contiguous Metal prefill rewrite a complete prompt then scan tiled causal
+  includes the current token; CPU and Metal prefill rewrite a complete prompt then scan tiled causal
   prefixes. The logical prefill schedule writes tokens in ascending order, K then V for each token, before tiled reads.
   CPU owners and Metal lanes read only their written byte ranges, with complete K ranges before V ranges per tile.
   CPU profiles use full-size ordinary cacheable mappings; Metal uses exact-tail private/tracked segments on unified

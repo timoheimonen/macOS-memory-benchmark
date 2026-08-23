@@ -131,6 +131,17 @@ LlmMemoryConfig explicit_metal_prefill_config(
   return config;
 }
 
+LlmMemoryConfig explicit_metal_paged_prefill_config(
+    size_t loop_count = 1, size_t iterations = 1) {
+  LlmMemoryConfig config =
+      explicit_metal_prefill_config(loop_count, iterations);
+  config.kv_layout = LlmKvLayout::Paged;
+  config.kv_block_tokens = 2;
+  config.user_specified_kv_layout = true;
+  config.user_specified_kv_block_tokens = true;
+  return config;
+}
+
 LlmMemoryConfig automatic_prefill_config(size_t loop_count = 1) {
   LlmMemoryConfig config = explicit_prefill_config(loop_count);
   config.iterations = 0;
@@ -192,10 +203,17 @@ LlmMetalResourcePlanRequest metal_resource_request(
     size_t command_auxiliary_bytes) {
   LlmMetalResourcePlanRequest request;
   request.geometry = logical_plan.geometry;
-  if (logical_plan.kv_layout == LlmKvLayout::Paged &&
-      logical_plan.geometry.decode.has_value()) {
+  if (logical_plan.kv_layout == LlmKvLayout::Paged) {
+    const size_t sequence_tokens =
+        logical_plan.phase == LlmPhase::Prefill
+            ? logical_plan.geometry.prefill.has_value()
+                  ? logical_plan.geometry.prefill->prompt_tokens
+                  : 0
+            : logical_plan.geometry.decode.has_value()
+                  ? logical_plan.geometry.decode->visible_context_tokens
+                  : 0;
     request.paged_layout = build_llm_kv_layout_plan(
-        {logical_plan.geometry.decode->visible_context_tokens,
+        {sequence_tokens,
          logical_plan.geometry.kv_block_tokens,
          logical_plan.geometry.layer_count,
          logical_plan.geometry.batch_size,
@@ -423,9 +441,15 @@ class FakeLlmBackend final : public LlmBackend {
     if (backend_ == LlmMemoryBackend::Metal) {
       LlmMetalTaskEvidence metal;
       metal.timed_pipeline_available = true;
-      metal.pipeline_label = model_plan.phase == LlmPhase::Prefill
-                                 ? "membenchmark.llm-metal.pipeline.prefill-contiguous.fake"
-                                 : "membenchmark.llm-metal.pipeline.decode-contiguous.fake";
+      metal.pipeline_label =
+          model_plan.phase == LlmPhase::Prefill &&
+                  model_plan.kv_layout == LlmKvLayout::Paged
+              ? "membenchmark.llm-metal.pipeline.prefill-paged.fake"
+          : model_plan.phase == LlmPhase::Prefill
+              ? "membenchmark.llm-metal.pipeline.prefill-contiguous.fake"
+          : model_plan.kv_layout == LlmKvLayout::Paged
+              ? "membenchmark.llm-metal.pipeline.decode-paged.fake"
+              : "membenchmark.llm-metal.pipeline.decode-contiguous.fake";
       metal.pipeline_thread_execution_width = 32;
       metal.pipeline_max_total_threads_per_threadgroup = 256;
       metal.grid_plan_available = true;
@@ -433,6 +457,16 @@ class FakeLlmBackend final : public LlmBackend {
       metal.grid_plan.reason_code = LlmMetalPlanReason::VALID;
       metal.grid_plan.threads_per_threadgroup = 256;
       metal.grid_plan.actual_threadgroups = 1;
+      metal.grid_plan.work_units = task_plan.work_units;
+      metal.grid_plan.paged_semantic_lookups =
+          task_plan.layout_metadata_lookup_count;
+      if (model_plan.phase == LlmPhase::Prefill &&
+          (model_plan.kv_layout == LlmKvLayout::Contiguous ||
+           task_plan.scenario == LlmScenario::WeightsOnly)) {
+        EXPECT_TRUE(calculate_llm_metal_prefill_serial_range_visits_per_lane(
+            model_plan, task_plan,
+            metal.grid_plan.serial_range_visits_per_lane));
+      }
       metal.grid_plan.identity = "fake-metal-grid-v1";
       metal.timing_evaluated = true;
       metal.timing_valid = true;
@@ -452,6 +486,8 @@ class FakeLlmBackend final : public LlmBackend {
       metal.post_validation_command_status = "complete";
       metal.checksum_evaluated = true;
       metal.checksum_valid = true;
+      metal.checksum_algorithm_version =
+          model_plan.component_identities.checksum_pattern_version;
       metal.kv_write_validation_evaluated =
           task_plan.kv_write_kind != LlmKvWriteKind::None;
       metal.kv_write_validation_valid = true;
@@ -913,6 +949,73 @@ TEST(LlmMemoryRunnerTest,
               measurement.scenario != LlmScenario::WeightsOnly);
     EXPECT_TRUE(metal->kv_write_validation_valid);
   }
+}
+
+TEST(LlmMemoryRunnerTest,
+     PreinitializedMetalPagedPrefillPreservesFullPromptLookupEvidence) {
+  const LlmMemoryConfig config = explicit_metal_paged_prefill_config();
+  const LlmMemoryWorkPlan plan = build_metal_runner_plan(config, true);
+  ASSERT_TRUE(plan.valid) << plan.reason_code;
+  EXPECT_EQ(plan.methodology_version,
+            "llm-memory-v1-metal-prefill-paged");
+  EXPECT_EQ(plan.phase, LlmPhase::Prefill);
+  EXPECT_EQ(plan.kv_layout, LlmKvLayout::Paged);
+  ASSERT_TRUE(plan.prefill_plan.has_value());
+  EXPECT_EQ(plan.prefill_plan->layout_metadata_lookups_per_layer_sequence,
+            15U);
+  const LlmMetalExecutionPlan* const execution_plan =
+      get_llm_metal_execution_plan(plan);
+  ASSERT_NE(execution_plan, nullptr);
+  ASSERT_TRUE(execution_plan->valid) << execution_plan->reason_code;
+  ASSERT_TRUE(execution_plan->resources.paged_layout.has_value());
+  ASSERT_TRUE(execution_plan->resources.table_segments.has_value());
+
+  FakeLlmBackend backend(LlmMemoryBackend::Metal);
+  ASSERT_EQ(backend.initialize(config).status,
+            LlmBackendStatus::Ready);
+  LlmMemoryResult result;
+  ASSERT_EQ(run_llm_memory_suite(config, plan, backend, result),
+            EXIT_SUCCESS)
+      << result.reason_code << ": " << result.diagnostic;
+  ASSERT_TRUE(result.frozen_scenario_plans.valid);
+  ASSERT_EQ(result.measurements.size(), kLlmScenarioCount);
+
+  size_t expected_total_lookups = 0;
+  for (const LlmMeasurementState& measurement : result.measurements) {
+    const bool weights_only =
+        measurement.scenario == LlmScenario::WeightsOnly;
+    const size_t expected_lookups = weights_only ? 0 : 15;
+    EXPECT_EQ(measurement.work_unit_kind,
+              LlmWorkUnitKind::PrefillOperation);
+    EXPECT_EQ(measurement.kv_write_kind,
+              weights_only ? LlmKvWriteKind::None
+                           : LlmKvWriteKind::FullPromptPopulation);
+    EXPECT_EQ(measurement.layout_metadata_lookup_count_per_work_unit,
+              expected_lookups);
+    EXPECT_EQ(measurement.layout_metadata_read_bytes_per_work_unit,
+              expected_lookups * sizeof(uint32_t));
+    EXPECT_EQ(measurement.completed_layout_metadata_lookup_count,
+              expected_lookups);
+    expected_total_lookups += expected_lookups;
+
+    const LlmMetalTaskEvidence* const metal =
+        get_llm_metal_task_evidence(measurement.execution);
+    ASSERT_NE(metal, nullptr);
+    EXPECT_EQ(metal->pipeline_label,
+              "membenchmark.llm-metal.pipeline.prefill-paged.fake");
+    EXPECT_EQ(metal->checksum_algorithm_version,
+              LlmMetalPrefillPagedVersion::CHECKSUM);
+    EXPECT_EQ(metal->grid_plan.paged_semantic_lookups,
+              expected_lookups);
+    EXPECT_EQ(metal->grid_plan.serial_range_visits_per_lane,
+              weights_only ? 1U : 0U);
+    EXPECT_EQ(metal->kv_write_validation_evaluated, !weights_only);
+    EXPECT_TRUE(metal->kv_write_validation_valid);
+  }
+  EXPECT_EQ(result.counters.planned_layout_metadata_lookup_count,
+            expected_total_lookups);
+  EXPECT_EQ(result.counters.completed_layout_metadata_lookup_count,
+            expected_total_lookups);
 }
 
 TEST(LlmMemoryRunnerTest,

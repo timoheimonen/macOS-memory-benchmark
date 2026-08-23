@@ -535,8 +535,7 @@ OrderedJson methodology_json(const LlmMemoryWorkPlan& plan) {
       metal ? Constants::LLM_METAL_MAX_WORK_UNITS_PER_DISPATCH
             : Constants::LLM_MAX_WORK_UNITS_PER_MEASUREMENT;
   output["maximum_serial_range_visits_per_lane_per_task"] =
-      metal && plan.phase == LlmPhase::Prefill &&
-              plan.kv_layout == LlmKvLayout::Contiguous
+      metal && plan.phase == LlmPhase::Prefill
           ? OrderedJson(
                 Constants::LLM_METAL_MAX_SERIAL_RANGE_VISITS_PER_LANE_PER_TASK)
           : OrderedJson(nullptr);
@@ -1290,6 +1289,7 @@ OrderedJson metal_dual_mod32_checksum_json(const LlmMetalDualMod32Checksum& chec
 }
 
 OrderedJson metal_grid_plan_json(const LlmMetalGridPlan& grid) {
+  const bool cost_available = !grid.threadgroup_accounted_bytes.empty();
   OrderedJson threadgroup_costs = OrderedJson::array();
   for (size_t value : grid.threadgroup_accounted_bytes) {
     threadgroup_costs.push_back(decimal_string(value));
@@ -1306,9 +1306,24 @@ OrderedJson metal_grid_plan_json(const LlmMetalGridPlan& grid) {
   output["paged_semantic_lookups"] = decimal_string(grid.paged_semantic_lookups);
   output["serial_range_visits_per_lane"] =
       decimal_string(grid.serial_range_visits_per_lane);
-  output["minimum_threadgroup_accounted_bytes"] = decimal_string(grid.minimum_threadgroup_accounted_bytes);
-  output["maximum_threadgroup_accounted_bytes"] = decimal_string(grid.maximum_threadgroup_accounted_bytes);
-  output["threadgroup_accounted_imbalance_bytes"] = decimal_string(grid.threadgroup_accounted_imbalance_bytes);
+  output["cost_unit"] = cost_available
+                            ? OrderedJson("actual-threadgroup-cost")
+                            : OrderedJson(nullptr);
+  output["minimum_threadgroup_accounted_bytes"] =
+      cost_available
+          ? OrderedJson(decimal_string(
+                grid.minimum_threadgroup_accounted_bytes))
+          : OrderedJson(nullptr);
+  output["maximum_threadgroup_accounted_bytes"] =
+      cost_available
+          ? OrderedJson(decimal_string(
+                grid.maximum_threadgroup_accounted_bytes))
+          : OrderedJson(nullptr);
+  output["threadgroup_accounted_imbalance_bytes"] =
+      cost_available
+          ? OrderedJson(decimal_string(
+                grid.threadgroup_accounted_imbalance_bytes))
+          : OrderedJson(nullptr);
   output["threadgroup_accounted_bytes"] = std::move(threadgroup_costs);
   output["identity"] = non_empty_or_null(grid.identity);
   return output;

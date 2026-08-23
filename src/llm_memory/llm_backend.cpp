@@ -28,7 +28,7 @@ LlmBackendAuxiliaryEstimate LlmBackend::calculate_auxiliary_estimate(
   LlmBackendAuxiliaryEstimate estimate;
   if (kind() != LlmMemoryBackend::Cpu ||
       preflight.backend != LlmMemoryBackend::Cpu) {
-    estimate.reason_code = LlmBackendReason::BACKEND_NOT_ACTIVATED;
+    estimate.reason_code = LlmBackendReason::INVALID_BACKEND;
     return estimate;
   }
   const LlmExecutorAuxiliaryEstimate cpu =
