@@ -180,67 +180,16 @@ checkpoints are required; see the [Machine-Readable CLI API](documents/API.md) s
 
 Primary modes are intentionally separate and accept different option sets. Use `memory_benchmark -h` or the [User Manual](documents/MANUAL.md) for defaults, valid combinations, and the complete option reference.
 
-`--llm-memory` requires explicit active weight size, layer count, query/KV head geometry, and head dimension. Phase
-defaults to `decode`, which requires `--context-tokens`. `--phase prefill` instead requires `--prompt-tokens P` and
-`--attention-query-tile-tokens Q`, with `P >= 1` and `1 <= Q <= P`, and rejects `--context-tokens`. `--kv-layout`
-defaults to `contiguous`. Selecting `paged` requires exactly one
-`--kv-block-tokens <G>` value; `G` must be positive, a power of two, and no greater than `UINT32_MAX`.
-`--kv-block-tokens` is rejected with `contiguous`, while `G` may exceed the active phase's sequence length. The command
-allocates and
-initializes the requested weight and logical KV contents in full. Paged runs additionally allocate full physical K/V
-blocks, their suffix padding, and one seeded uint32 block table. Initialization, pre-touch, permutation generation,
-and validation remain outside the timed region. Paged prefill performs timed table lookups for full-prompt population
-and tiled causal-prefix scans; it never falls back to contiguous KV.
+LLM-memory requires explicit model and phase geometry. CPU and capability-gated Metal backends support decode and
+prefill with contiguous or deterministic paged KV; Metal rejects explicit `--threads` and never falls back to CPU.
+See the [User Manual](documents/MANUAL.md#--llm-memory) for the complete option matrix, defaults, validation rules, and
+workflows. The [LLM Memory Profile Whitepaper](documents/LLM_MEMORY_PROFILE_WHITEPAPER.md) defines the exact payload
+formulas, timed boundaries, paged lookup accounting, validation, schema evidence, and comparison protocol.
 
-`--llm-memory-backend` accepts `cpu` or `metal` and defaults to `cpu`. All eight backend/phase/layout profiles are
-active: both backends support decode and prefill with contiguous or paged KV. The four Metal profiles are
-capability-gated, and explicit `--threads` is rejected before execution. Runtime admission requires
-Apple7-or-later family capability,
-unified memory, Tier 2 argument buffers, a maximum buffer length of at least 256 MiB, and runtime MSL 2.3 compilation.
-Capability failure produces a terminal unsupported result and a non-zero exit. Runtime compiler, pipeline, resource,
-or task failure remains a terminal failed/invalid schema result with a non-zero exit; execution is never redirected to
-CPU.
-
-The generic schema records the selected backend, phase/layout, `work_unit_kind: "decode_step"` or
-`"prefill_operation"`, and methodology `llm-memory-v1-<backend>-<phase>-<layout>`. Every active Metal profile uses one
-workload dispatch per task with the work-unit loop inside the kernel. `GPUStartTime`/`GPUEndTime` provide authoritative
-elapsed time; a versioned dual-mod32 checksum and excluded `kv_write` validation guard correctness. W/K/V buffers are
-split into exact-tail segments of at most 256 MiB, so segment padding is not counted as payload. Both paged Metal
-profiles use block-aligned K/V segments and segmented private block-table storage. A named lane loads each volatile
-uint32 table entry and publishes it to its threadgroup before a mandatory threadgroup barrier. Decode accounts one
-paired append lookup plus separate K/V scans: with `N = ceil(A/G)`, this is exactly
-`L * B * (2 * N + 1)` four-byte lookups per KV-active work unit. For paged prefill, `N = ceil(P/G)`,
-`e_j = min((j+1)*Q, P)`, and `M = sum(ceil(e_j/G))`; full-prompt population plus the separate K/V prefix scans account
-exactly `L * B * (N + 2 * M)` lookups. A deterministic cyclic owner-ordinal schedule assigns every
-layer/batch/logical-block owner to one threadgroup without duplicating lookups and reports exact per-threadgroup
-accounted-byte vector, minimum, maximum, and imbalance. It is an auditable cyclic map, not weighted balancing. Lookup
-bytes and suffix padding remain outside the effective-model-payload numerator. Every Metal `weights_only` grid also
-publishes exact vector-grid-stride threadgroup costs; contiguous KV-bearing grids leave cost evidence unavailable.
-
-Metal prefill writes all `P` K/V records before reading the prefix ending at each tile boundary; weight-bearing
-scenarios read weights once per `prefill_operation`. With `C = ceil(P/Q)`, its prefix count is
-`S(P,Q) = sum(min((j+1)*Q, P), j=0..C-1)`. Partial paged visits stop at the exact tile or prompt end. Preparation
-validates the block-table identity. Excluded post-task validation checks final-operation full-prompt write samples and,
-for paged KV, terminal padding canaries. The profile does not run Transformer mathematics or report inference tokens/s.
-Metal prefill also bounds lane-local serial range-helper work to 1,048,576 visits per task and rejects a larger task
-before dispatch. Contiguous KV-bearing tasks publish the full weight/K/V count; paged `weights_only` publishes `T * L`,
-while paged KV-bearing owner kernels publish zero serial range visits and use the separate semantic-lookup cap.
-Its machine-readable synthetic work-unit rate is named `synthetic_memory_work_units_per_second`.
-
-Result evidence preserves the canonical embedded MSL source revision, its exact runtime SHA-256, and the selected
-scenario-pipeline and parameter-layout-probe identities. Metal paged prefill additionally records executor
-`llm-metal-executor-v1-prefill-paged`, schedule
-`llm-metal-prefill-paged-cyclic-block-owner-grid-stride-v1`, timer
-`metal-command-buffer-gpu-start-end-v1`, buffer pattern
-`llm-paged-physical-buffer-pattern-v1`, write pattern `llm-metal-prefill-paged-full-prompt-affine32-v1`, and checksum
-`llm-metal-paged-prefill-dual-mod32-lookup-address-mix-v1`. Compare Metal runs only when these identities and the resolved
-grid/resource plan match.
-
-When `--iterations` is omitted, standard bandwidth, pattern, GPU operations, and the three LLM scenarios calibrate their
-work toward a bounded measurement duration. An explicit `--iterations` value selects fixed work. Standard latency
-headlines always come from a continuous dependent pointer-chase pass. A separate sample pass runs by default with 1,000
-windows; `--latency-samples` controls that positive window count, and the sampled distribution does not define or weight
-the headline.
+When `--iterations` is omitted, bandwidth, pattern, GPU, and LLM workloads calibrate toward bounded measurement
+durations; an explicit value selects fixed work. Standard latency headlines use a separate continuous pointer-chase
+pass and are not derived from the sampled latency distribution. See the [User Manual](documents/MANUAL.md) for the
+per-mode calibration and sampling details.
 
 ## Representative Workflows
 
