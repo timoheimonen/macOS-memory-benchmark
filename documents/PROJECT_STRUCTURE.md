@@ -457,7 +457,10 @@ bundled standard-result consumers; separately governed TLB tooling retains its d
 ```
 results/
   0.63.0/
+    AppleM5_LLM_working_set_scaling.md  — Apple M5 CPU decode working-set comparison note
     M4MacMiniVSM5MacbookAir_LLM.md  — Informal LLM CPU decode comparison
+    apple_m5_cpu_decode_contiguous_weights_256mib_context_32768.json  — Current LLM schema-1 sample
+    apple_m5_cpu_decode_contiguous_weights_1024mib_context_131072.json  — Current LLM schema-1 sample
   0.53.7/
     MacMiniM4_analyzetlb.json       — TLB analysis run, Mac Mini M4
     MacMiniM4_benchmark.json        — Standard benchmark run, Mac Mini M4
@@ -473,7 +476,10 @@ results/
 ```
 
 The current-version result notes include an
+[Apple M5 CPU decode working-set comparison](../results/0.63.0/AppleM5_LLM_working_set_scaling.md) with links to its
+complete schema-1 JSON records, and an
 [informal M4 Mac mini versus M5 MacBook Air LLM CPU decode comparison](../results/0.63.0/M4MacMiniVSM5MacbookAir_LLM.md).
+The Apple M5 pair illustrates scaling between two model geometries.
 The M4 run had a Docker container active in the background, so the comparison is an illustrative result rather than a
 controlled methodology baseline.
 

@@ -305,6 +305,8 @@ Treat benchmark values as measurements of the configured workload under the obse
   prefix sharing, sliding-window KV, growing context, and model loading.
 - The LLM traffic classification version `llm-exact-weight-vs-kv-read-payload-v1` compares exact weight and KV-read
   bytes only. `near_crossover` means exact equality and is not a measured hardware-bottleneck claim.
+- The repository includes two current [Apple M5 CPU-decode working-set samples](results/0.63.0/AppleM5_LLM_working_set_scaling.md)
+  with links to their complete JSON records. They illustrate scaling across 384 MiB and 1,536 MiB data mappings.
 - TLB-locality controls pointer-chain construction, not hardware TLB residency. Standard locality comparisons combine cache, locality, and translation effects; use `--analyze-tlb` for controlled translation-boundary conclusions.
 - Core-to-core results are scheduler-influenced acquire/release token-protocol measurements. They do not directly observe
   physical cache-line migration or isolate coherence-fabric latency, and macOS user space cannot guarantee physical core
@@ -367,6 +369,8 @@ recognizes the current console labels only and is neither JSON-schema nor histor
 - [GPU Bandwidth Whitepaper](documents/GPU_BANDWIDTH_WHITEPAPER.md): Metal methodology, timing, validation, resource model, and interpretation limits.
 - [LLM Memory Profile Whitepaper](documents/LLM_MEMORY_PROFILE_WHITEPAPER.md): generic schema-v1 vocabulary plus the
   active CPU and Metal decode/prefill traffic, timing, checksum, and interpretation contracts.
+- [Apple M5 LLM CPU-decode working-set samples](results/0.63.0/AppleM5_LLM_working_set_scaling.md): two complete
+  current-version JSON runs and their observed working-set scaling.
 
 Runtime behavior and `memory_benchmark -h` are the authoritative sources when documentation differs.
 
