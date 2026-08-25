@@ -1,53 +1,62 @@
 # Apple M5 MacBook Air: LLM CPU Decode Working-Set Samples
 
-These two `memory_benchmark` 0.63.0 runs are complete schema-1 examples for the CPU decode path with contiguous KV.
-They use the same Apple M5 MacBook Air, backend, methodology, layer/head geometry, detected 10-worker policy, automatic
-calibration, six-loop balanced scenario order, and seed. The weight size and context length both scale by four.
+These two `memory_benchmark` 0.63.0 runs provide a side-by-side view of CPU decode with contiguous KV on an Apple M5
+MacBook Air. The second configuration scales both the weight mapping and context length by four, increasing the total
+data mapping from 384 MiB to 1,536 MiB.
 
 ## Result files
 
 - [256 MiB weights, 32,768-token context](apple_m5_cpu_decode_contiguous_weights_256mib_context_32768.json)
 - [1,024 MiB weights, 131,072-token context](apple_m5_cpu_decode_contiguous_weights_1024mib_context_131072.json)
 
-Both runs report `status: "complete"`, `results_complete: true`, `conclusions_valid: true`, nominal start/end thermal
-state, Low Power Mode disabled, successful requested QoS, and no quality warnings.
+## Test setup
 
-The JSON files record these invocations before they were given their neutral archival names:
+Both runs use the same backend, methodology, layer and head geometry, detected 10-worker policy, automatic calibration,
+six-loop balanced scenario order, and seed. Equivalent command lines for collecting the same workload configurations
+are:
 
 ```bash
 memory_benchmark --llm-memory --weight-size-mb 256 --layers 8 \
   --query-heads 8 --kv-heads 2 --head-dim 64 --context-tokens 32768 \
-  --count 6 --seed 42 --output /tmp/output.json
+  --count 6 --seed 42 \
+  --output results/0.63.0/apple_m5_cpu_decode_contiguous_weights_256mib_context_32768.json
 
 memory_benchmark --llm-memory --weight-size-mb 1024 --layers 8 \
   --query-heads 8 --kv-heads 2 --head-dim 64 --context-tokens 131072 \
-  --count 6 --seed 42 --output /tmp/output.json
+  --count 6 --seed 42 \
+  --output results/0.63.0/apple_m5_cpu_decode_contiguous_weights_1024mib_context_131072.json
 ```
 
-## Configuration and headline results
+## Working sets
 
-The values below are median effective logical model-payload bandwidth.
+| Configuration | 32,768-token sample | 131,072-token sample |
+|---|---:|---:|
+| Weight mapping | 256 MiB | 1,024 MiB |
+| K + V mapping | 128 MiB | 512 MiB |
+| Total data mapping | 384 MiB | 1,536 MiB |
 
-| Configuration or scenario | 32,768-token sample | 131,072-token sample | Larger versus smaller |
-|---|---:|---:|---:|
-| Weight mapping | 256 MiB | 1,024 MiB | 4x |
-| K + V mapping | 128 MiB | 512 MiB | 4x |
-| Total data mapping | 384 MiB | 1,536 MiB | 4x |
-| Weights-only bandwidth | 138.26 GB/s | 139.01 GB/s | +0.5% |
-| KV-only bandwidth | 145.41 GB/s | 136.35 GB/s | -6.2% |
-| Mixed bandwidth | 136.19 GB/s | 138.05 GB/s | +1.4% |
+## Effective model-payload bandwidth
 
-All six-loop scenario distributions are marked stable. Their coefficients of variation range from 0.70% to 1.11%
-for the smaller sample and from 1.44% to 2.33% for the larger sample.
+All values are in GB/s. P50 is the benchmark headline, average is the arithmetic mean of the six measured loops, and
+maximum is the highest value observed in those loops.
 
-## Scope
+| Scenario | 384 MiB P50 | 384 MiB average | 384 MiB maximum | 1,536 MiB P50 | 1,536 MiB average | 1,536 MiB maximum |
+|---|---:|---:|---:|---:|---:|---:|
+| Weights only | 138.26 | 138.52 | 140.80 | 139.01 | 138.02 | 139.60 |
+| KV only | 145.41 | 145.07 | 146.59 | 136.35 | 136.80 | 140.72 |
+| Mixed | 136.19 | 136.07 | 137.03 | 138.05 | 137.79 | 140.30 |
 
-This pair is useful as a current-version audit example and an empirical working-set scaling observation:
+The KV-only scenario shows the clearest difference between the two working sets: the 384 MiB sample averages
+145.07 GB/s and reaches 146.59 GB/s, compared with 136.80 GB/s and 140.72 GB/s for the 1,536 MiB sample. These values
+are the most relevant part of the pair when considering a possible SLC contribution. Weights-only averages remain
+close, while the larger mixed workload records the higher average and maximum.
 
-- Weight size and context differ, so the frozen work plans and model geometry are not identical. The runs must not be
-  pooled as one performance distribution.
-- The two sizes were captured as separate commands rather than an interleaved size sequence. Alternating sizes across
-  repeated rounds would provide stronger evidence for a causal working-set comparison.
+## Run quality and comparison scope
 
-The nearly unchanged weights-only and mixed headline bandwidth, together with the 6.2% lower KV-only result at the
-larger working set, describes the observed scaling across these two configurations.
+Both runs report `status: "complete"`, `results_complete: true`, and `conclusions_valid: true`. Start and end thermal
+states are nominal, Low Power Mode is disabled, requested QoS is applied successfully, and neither run reports quality
+warnings. All scenario distributions are marked stable: coefficients of variation range from 0.70% to 1.11% for the
+384 MiB sample and from 1.44% to 2.33% for the 1,536 MiB sample.
+
+Weight size and context length differ between the samples, so each has its own model geometry and frozen work plan.
+They form a working-set scaling comparison rather than one pooled performance distribution.
