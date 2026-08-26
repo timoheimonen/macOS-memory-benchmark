@@ -1,6 +1,6 @@
 # macOS Memory Benchmark
 
-![Platform](https://img.shields.io/badge/platform-Apple%20Silicon-000000?logo=apple) ![CLI](https://img.shields.io/badge/CLI-Tool-00A8CC?logo=terminal) ![License](https://img.shields.io/badge/license-GPL--3.0--or--later-blue) ![Assembly](https://img.shields.io/badge/Assembly-ARM64-6E4C13) ![C++](https://img.shields.io/badge/C++-00599C?logo=cplusplus&logoColor=white)
+![Platform](https://img.shields.io/badge/platform-Apple%20Silicon-000000?logo=apple) ![CLI](https://img.shields.io/badge/CLI-Tool-00A8CC?logo=terminal) ![License](https://img.shields.io/badge/license-GPL--3.0--or--later-blue) ![Assembly](https://img.shields.io/badge/Assembly-ARM64-6E4C13) ![C++](https://img.shields.io/badge/C++-00599C?logo=cplusplus&logoColor=white) [![Development tests](https://github.com/timoheimonen/macOS-memory-benchmark/actions/workflows/pr-tests.yml/badge.svg?branch=development&event=push)](https://github.com/timoheimonen/macOS-memory-benchmark/actions/workflows/pr-tests.yml)
 
 `memory_benchmark` is a low-level command-line tool for measuring CPU and Metal GPU memory bandwidth, synthetic LLM
 decode and prefill memory traffic, cache and main-memory latency, access-pattern performance, TLB behavior, and
