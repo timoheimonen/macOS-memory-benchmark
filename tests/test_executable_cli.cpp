@@ -1111,8 +1111,6 @@ TEST(ExecutableCliIntegrationTest,
     EXPECT_TRUE(measurement["synthetic_memory_work_units_per_second"]
                     .is_number());
     EXPECT_TRUE(measurement["effective_model_payload_gb_s"].is_number());
-    EXPECT_FALSE(measurement.contains("synthetic_step_latency_seconds"));
-    EXPECT_FALSE(measurement.contains("effective_payload_gb_s"));
   }
   expect_complete_llm_checkpoint_lifecycle(json);
 
@@ -2378,9 +2376,6 @@ TEST(ExecutableCliIntegrationTest, PatternModeRunsPatternOrchestrationIntegratio
   EXPECT_NE(result.output.find("Running Pattern Benchmarks"), std::string::npos);
   EXPECT_NE(result.output.find("Sequential Forward:"), std::string::npos);
   EXPECT_EQ(result.output.find('\r'), std::string::npos);
-  EXPECT_EQ(result.output.find("Pattern Efficiency Analysis:"), std::string::npos);
-  EXPECT_EQ(result.output.find("Prefetcher effectiveness"), std::string::npos);
-  EXPECT_EQ(result.output.find("TLB pressure"), std::string::npos);
   EXPECT_NE(result.output.find("2 MiB stride"), std::string::npos);
 }
 

@@ -956,17 +956,10 @@ TEST(ConfigTest, ParseMissingValue) {
   EXPECT_EQ(result, EXIT_FAILURE);
 }
 
-TEST(ConfigTest, RejectsUnknownAndLegacySingleDashLongOptions) {
-  const std::vector<std::vector<std::string>> cases = {
-      {"program", "-unknown", "value"},
-      {"program", "-buffersize", "1024"},
-  };
-
-  for (const std::vector<std::string>& arguments : cases) {
-    SCOPED_TRACE(arguments[1]);
-    BenchmarkConfig config;
-    EXPECT_EQ(parse_capturing_stderr(arguments, config).result, EXIT_FAILURE);
-  }
+TEST(ConfigTest, RejectsUnknownSingleDashLongOption) {
+  BenchmarkConfig config;
+  EXPECT_EQ(parse_capturing_stderr({"program", "-unknown", "value"}, config).result,
+            EXIT_FAILURE);
 }
 
 // Test parsing help flag

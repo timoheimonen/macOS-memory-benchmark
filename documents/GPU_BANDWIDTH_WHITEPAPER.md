@@ -1,6 +1,6 @@
 # Metal GPU Memory Bandwidth Whitepaper
 
-- **Software version:** 0.63.0
+- **Software version:** release provenance; not a compatibility selector
 - **JSON schema:** 1
 - **Methodology:** `gpu-bandwidth-v1-private-runtime-single-cmdbuf-calibrated-balanced`
 - **Platform:** macOS on Apple Silicon
@@ -455,7 +455,7 @@ already-computed measurement state.
 ## 14. GPU JSON Schema 1
 
 The top-level discriminator is independent of current standard schema 3. Released standard schema 2 is historical and
-unsupported by the bundled standard-memory examples, which track the current producer:
+unsupported by the bundled standard-memory examples, which accept compatible standard schema-3 producer releases:
 
 ```json
 {

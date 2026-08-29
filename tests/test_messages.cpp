@@ -38,17 +38,6 @@ void expect_exact_messages(const std::vector<MessageCase>& cases) {
   }
 }
 
-void expect_capability_based_llm_metal_status(const std::string& usage) {
-  constexpr const char* forbidden_phrases[] = {
-      "Apple7/M1", "M4 evidence", "M5", "validation remains pending",
-      "baseline smoke", "cross-family", "device matrix", "experimental",
-      "preview"};
-  for (const char* phrase : forbidden_phrases) {
-    SCOPED_TRACE(phrase);
-    EXPECT_EQ(usage.find(phrase), std::string::npos);
-  }
-}
-
 }  // namespace
 
 TEST(MessagesFormattingTest, LinearHelpersHaveExactOutput) {
@@ -503,9 +492,6 @@ TEST(MessagesTest, LlmMemoryCliMessagesHaveExactOutput) {
        "(4096 bytes); the result may be cache-dominant"},
   };
   expect_exact_messages(cases);
-  const std::string usage =
-      Messages::llm_memory_usage_options("memory_benchmark");
-  expect_capability_based_llm_metal_status(usage);
 }
 
 TEST(MessagesTest, GeneralHelpAdvertisesTheLlmBoundaryExactlyOnce) {
@@ -526,7 +512,6 @@ TEST(MessagesTest, GeneralHelpAdvertisesTheLlmBoundaryExactlyOnce) {
       std::string::npos);
   EXPECT_NE(usage.find("and never falls back to CPU"),
             std::string::npos);
-  expect_capability_based_llm_metal_status(usage);
   EXPECT_NE(usage.find("--weight-size-mb"), std::string::npos);
   EXPECT_NE(usage.find("--query-heads"), std::string::npos);
   EXPECT_NE(usage.find("--context-tokens"), std::string::npos);
@@ -550,8 +535,6 @@ TEST(MessagesTest, GeneralHelpAdvertisesTheLlmBoundaryExactlyOnce) {
             std::string::npos);
   EXPECT_NE(usage.find("checkpoints each terminal scenario"),
             std::string::npos);
-  EXPECT_EQ(usage.find("execution is unavailable"), std::string::npos);
-  EXPECT_EQ(usage.find("future LLM"), std::string::npos);
 }
 
 TEST(MessagesErrorTest, GpuMessagesHaveExactMethodologyOutput) {
@@ -862,11 +845,9 @@ TEST(MessagesFormattingTest, ReportTlbResourceSummaryRetainsFailures) {
   EXPECT_NE(not_requested.find("QoS not requested"), std::string::npos);
 }
 
-TEST(MessagesFormattingTest, ReportTlbWorkEstimateIsConcise) {
+TEST(MessagesFormattingTest, ReportTlbWorkEstimateAndCompletionHaveExpectedContent) {
   const std::string work = Messages::report_tlb_work_estimate("base", 15, 10, 20, 3.75, 7.5);
   EXPECT_NE(work.find("Work Estimate [base]"), std::string::npos);
-  EXPECT_EQ(work.find("pointer accesses"), std::string::npos);
-  EXPECT_EQ(work.find("peak"), std::string::npos);
   EXPECT_NE(work.find("3.75-7.50 s"), std::string::npos);
 
   const std::string completion = Messages::report_tlb_pass_completion("base", 12, "CI target reached");

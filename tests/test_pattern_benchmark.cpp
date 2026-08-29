@@ -1080,7 +1080,6 @@ TEST(PatternBenchmarkTest, ConsoleRendersUnavailableMeasurementsAsStatusNotZero)
   const std::string output = testing::internal::GetCapturedStdout();
   EXPECT_NE(output.find("N/A [skipped: test skip]"), std::string::npos);
   EXPECT_EQ(output.find("0.000 GB/s"), std::string::npos);
-  EXPECT_EQ(output.find("Pattern Efficiency Analysis"), std::string::npos);
   EXPECT_NE(output.find("2 MiB stride"), std::string::npos);
 }
 

@@ -2,7 +2,8 @@
 
 ## 1. Purpose
 
-This document specifies how `macOS-memory-benchmark` implements standalone TLB analysis mode (`--analyze-tlb`) in version `0.63.0`.
+This document specifies how the current `macOS-memory-benchmark` implementation provides standalone TLB analysis mode
+(`--analyze-tlb`).
 
 The goal is to provide a reproducible, implementation-accurate description of:
 
@@ -518,8 +519,9 @@ it is not an additional completeness condition.
 
 ## 10. Current Schema Worked Example (Deterministic Exporter Fixture)
 
-The regression test `JsonSchemaTest.TlbAnalysisExporterIncludesModeAndCoreCounts` generates a current-version payload with
-the production serializer. Its deliberately synthetic inputs make this a contract example, not an Apple hardware claim:
+The regression test `JsonSchemaTest.TlbAnalysisExporterIncludesModeAndCoreCounts` generates a current-schema payload
+with the production serializer. Its deliberately synthetic inputs make this a contract example, not an Apple hardware
+claim:
 
 ```json
 {
@@ -564,7 +566,7 @@ the production serializer. Its deliberately synthetic inputs make this a contrac
       "active_cache_line_footprint_bytes": 2097152
     }
   },
-  "version": "0.63.0"
+  "version": "<software-version>"
 }
 ```
 
