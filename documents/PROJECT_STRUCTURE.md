@@ -1,6 +1,5 @@
 # Project Structure — macOS-memory-benchmark
 
-**Version:** 0.63.0
 **Platform:** ARM64 / AArch64 (Apple Silicon, macOS 26 or later)
 **License:** GNU General Public License v3.0 or later
 
@@ -173,7 +172,7 @@ Core infrastructure for configuration, memory management, macOS system introspec
 |---|---|
 | `config.h` | `BenchmarkConfig` structure for standard, pattern, standalone TLB, and their common sweep settings; core-to-core, GPU, and LLM use separate config types |
 | `constants.h` | Named constants for CPU/GPU/LLM memory limits, calibration, grid/dispatch/payload guardrails, buffer sizing, and latency access counts |
-| `version.h` | `SOFTVERSION` macro (semantic version string, currently `"0.63.0"`) |
+| `version.h` | `SOFTVERSION` macro containing the semantic software-release provenance string |
 | `mode_selector.h` / `.cpp` | Pure primary-mode scan and conflict detection before mode-specific parsing; routes standard, pattern, TLB, core-to-core, GPU, and LLM deterministically while skipping one opaque output value |
 | `argument_parser.cpp` | Parses standard, pattern, and standalone TLB options into `BenchmarkConfig`; core-to-core, GPU, and LLM are pre-routed to dedicated parsers |
 | `config_validator.cpp` | Validates the parsed configuration; emits errors for out-of-range or conflicting settings |
@@ -397,7 +396,7 @@ installed. All `.cpp` files are picked up automatically by the Makefile. Tests n
 | `test_hash_utils.cpp` | `HashUtilsTest` | CommonCrypto SHA-256 standard vectors and source-provenance helper behavior |
 | `test_analysis.cpp` | `AnalysisTest` | Injected TLB coordination, counters/status, boundary detection, validation, and paired analysis |
 | `test_json_schema.cpp` | `JsonSchemaTest` | Current standard schema-3 output structure, completion fields, and other mode schema contracts |
-| `test_script_examples.py` | Python script-example entry test | Current schema-3 JSON entry paths, local sanity checks, and metric extraction for the bundled standard-memory examples, including the optional jq-backed shell path when jq is installed |
+| `test_script_examples.py` | Python script-example entry test | Compatible standard schema-3/methodology inputs, provenance-version handling, completion and field-shape checks, and metric extraction for the bundled standard-memory examples, including the optional jq-backed shell path when jq is installed |
 | `test_json_output_session.cpp` | `JsonOutputTargetTest`, `JsonOutputSessionTest` | Exact sentinel/path classification, lazy checkpoint dispatch, atomic-file parity, stdout routing/restoration, and stream failure containment |
 | `test_json_utils.cpp` | `JsonUtilsTest`, `JsonFileWriterTest` | JSON parse/statistics and atomic writer success/failure contracts |
 | `test_output_printer.cpp` | `OutputPrinterTest`, `OutputPrinterCustomCacheUnitsTest` | Status-aware partial output, mode/cache composition, and custom-cache size-unit boundaries |
@@ -450,17 +449,17 @@ Four shared helper headers support deterministic setup and output capture across
 ## 4. results/ — Benchmark result data
 
 Historical JSON, CSV, and text output from benchmark runs on specific hardware, organized by software-version
-subdirectory. The files are retained as examples and historical schema evidence; they are not current 0.63.0
-methodology baselines unless explicitly identified as such. Historical standard JSON is not an input to current
-bundled standard-result consumers; separately governed TLB tooling retains its documented legacy-input policy.
+subdirectory. The files are retained as examples and historical schema evidence; they are not baselines for the current
+methodology unless explicitly identified as such. Historical standard JSON is not an input to current bundled
+standard-result consumers; separately governed TLB tooling retains its documented legacy-input policy.
 
 ```
 results/
   0.63.0/
     AppleM5_LLM_working_set_scaling.md  — Apple M5 CPU decode working-set comparison note
     M4MacMiniVSM5MacbookAir_LLM.md  — Informal LLM CPU decode comparison
-    apple_m5_cpu_decode_contiguous_weights_256mib_context_32768.json  — Current LLM schema-1 sample
-    apple_m5_cpu_decode_contiguous_weights_1024mib_context_131072.json  — Current LLM schema-1 sample
+    apple_m5_cpu_decode_contiguous_weights_256mib_context_32768.json  — Recorded LLM schema-1 sample
+    apple_m5_cpu_decode_contiguous_weights_1024mib_context_131072.json  — Recorded LLM schema-1 sample
   0.53.7/
     MacMiniM4_analyzetlb.json       — TLB analysis run, Mac Mini M4
     MacMiniM4_benchmark.json        — Standard benchmark run, Mac Mini M4
@@ -475,7 +474,7 @@ results/
     *.json / *.csv / *.txt          — Pre-versioned historical results
 ```
 
-The current-version result notes include an
+The 0.63.0 result notes include an
 [Apple M5 CPU decode working-set comparison](../results/0.63.0/AppleM5_LLM_working_set_scaling.md) with links to its
 complete schema-1 JSON records, and an
 [informal M4 Mac mini versus M5 MacBook Air LLM CPU decode comparison](../results/0.63.0/M4MacMiniVSM5MacbookAir_LLM.md).
@@ -509,11 +508,12 @@ Tracked PNG chart archive generated from benchmark result data. Several files ar
 ## 6. script-examples/ — Run and plotting helpers
 
 Example shell workflows and Python/Matplotlib plotters for tracked benchmark outputs. The four standard-memory examples
-are maintained in lockstep with the current producer rather than as a compatibility library. Each of those JSON-reading
-entry points performs a small local release-version/schema-3/completion/field sanity check and then reads the current
-metric paths it needs. Version 0.63.0 therefore requires exact top-level `version: "0.63.0"`. Standard schema 2,
-unversioned historical layouts, alternative modes, and other explicit standard versions are unsupported by those four
-examples. Separately governed mode-specific tools retain only the history policy documented in their own row below.
+accept compatible producer releases rather than requiring an exact software version. Each JSON-reading entry point
+checks for a non-empty provenance version, standard mode, schema 3, methodology
+`benchmark-v2-calibrated-seeded-balanced`, completion state, and the shapes of the fields it consumes before reading
+those metric paths. Standard schema 2, unversioned historical layouts, alternative modes, and other methodology
+identities are not translated by those four examples. Separately governed mode-specific tools retain only the history
+policy documented in their own row below.
 
 | File | Purpose |
 |---|---|

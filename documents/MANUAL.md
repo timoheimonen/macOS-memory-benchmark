@@ -967,7 +967,7 @@ middle, and trailing items.
   `attempted_runs` counts stored entries, while `completed_runs` counts only mode-specific nested results that are
   genuinely complete. Current standard schema 3 requires nested `configuration.mode: "benchmark"`,
   `status: "complete"`, `results_complete: true`, and `conclusions_valid: true`, plus a string
-  `configuration.output_file`. Nested standard schema 2 and every other standard version are unsupported. Pattern
+  `configuration.output_file`. Nested standard schema 2 and every other standard schema version are unsupported. Pattern
   requires nested `status: "complete"` with `results_complete: true`; TLB requires nested
   `tlb_analysis.status: "complete"` with
   `tlb_analysis.conclusions_valid: true`. Partial, interrupted, and failed nested results never increment it. TLB's
@@ -1586,7 +1586,7 @@ each terminal scenario measurement and command terminal, while LLM stdout emits 
   "main_memory": { ... },
   "cache": { ... },
   "timestamp": "YYYY-MM-DDTHH:MM:SSZ",
-  "version": "0.63.0"
+  "version": "<software-version>"
 }
 ```
 
@@ -1603,10 +1603,11 @@ emits one final snapshot. Schema 3 also requires boolean `conclusions_valid`, wh
 Bandwidth QoS metadata includes created workers plus per-worker success/failure counts; latency carries the main-thread
 outcome. These fields describe a best-effort scheduler hint, never hard core pinning.
 
-The bundled standard-memory examples are kept compatible with the current producer. They sanity-check the current
-standard result locally, including exact top-level `version: "0.63.0"` for the current producer, and read current
-schema-3 metric paths directly; they are not a compatibility library. Released standard schema 2, unversioned
-historical standard JSON layouts, and every other explicit standard version are intentionally unsupported inputs.
+The bundled standard-memory examples accept compatible producer releases. They require standard mode, schema 3,
+methodology `benchmark-v2-calibrated-seeded-balanced`, complete/valid result state, and the expected types for the
+fields they consume before reading schema-3 metric paths directly. They retain a non-empty top-level `version` string
+as provenance without requiring a particular software release. Released standard schema 2, unversioned historical
+standard JSON layouts, and other methodology identities are unsupported inputs and are not translated.
 
 ### Pattern benchmark JSON shape
 
@@ -1682,7 +1683,7 @@ historical standard JSON layouts, and every other explicit standard version are 
     }
   },
   "timestamp": "...",
-  "version": "..."
+  "version": "<software-version>"
 }
 ```
 
@@ -1732,8 +1733,8 @@ arrays:
 
 ```json
 {
-  "software_version": "0.63.0",
-  "version": "0.63.0",
+  "software_version": "<software-version>",
+  "version": "<software-version>",
   "timestamp": "...",
   "schema_version": 1,
   "mode": "gpu_bandwidth",
@@ -1849,7 +1850,7 @@ the required generic sections.
   "kv_layout": "contiguous",
   "methodology_version": "llm-memory-v1-cpu-decode-contiguous",
   "software": {
-    "version": "0.63.0",
+    "version": "<software-version>",
     "timestamp": "..."
   },
   "status": "complete",
@@ -2139,7 +2140,7 @@ returns only, excludes QoS and pilot outcomes, and does not prove physical place
   ],
   "execution_time_sec": 123.4,
   "timestamp": "YYYY-MM-DDTHH:MM:SSZ",
-  "version": "0.63.0"
+  "version": "<software-version>"
 }
 ```
 
@@ -2526,11 +2527,11 @@ Plotting requires Python 3 and `matplotlib`; the M4/M5 comparison script additio
 python3 -m pip install matplotlib numpy
 ```
 
-The bundled standard-memory scripts are kept in lockstep with the current producer. Each performs only the local
-version, completion, and field sanity checks needed by its current schema-3 metric paths. For version 0.63.0, the check
-requires top-level `version: "0.63.0"`, standard mode/schema identity, complete/valid result state, and a string output
-target before the selected metric path is read. These scripts are examples, not a versioned compatibility layer:
-standard schema 2, unversioned historical standard JSON, other modes, and other standard versions are unsupported. The
+The bundled standard-memory scripts accept outputs from compatible software releases. Before reading a selected metric
+path, each requires a non-empty top-level `version` string as provenance, standard mode, schema 3, methodology
+`benchmark-v2-calibrated-seeded-balanced`, complete/valid result state, a string output target, and the expected types
+for the fields it consumes. Exact software-version equality is not a compatibility condition. These scripts do not
+translate standard schema 2, unversioned historical standard JSON, other modes, or other methodology identities. The
 separately governed `plot_analyzetlb.py` retains its own TLB-history policy. Standard-memory plotters do not accept GPU
 schema 1.
 
@@ -2627,8 +2628,8 @@ The repository's historical `results/0.53.7/MacMiniM4_benchmark.json` sample rep
 - Main memory copy: ~106 GB/s
 
 Under heavy concurrent load, expect lower throughput and higher variance than this historical sample. It is an empirical
-0.53.7 result, not a guaranteed current-version baseline. Historical pattern files from earlier methodology versions are
-not a stability baseline for current pattern schema 3 and should not be compared numerically with
+0.53.7 result, not a guaranteed current-methodology baseline. Historical pattern files from earlier methodology
+versions are not a stability baseline for current pattern schema 3 and should not be compared numerically with
 `pattern-v2-phase-calibrated-seeded` results without accounting for the methodology change.
 
 ---
@@ -2793,7 +2794,7 @@ Make sure you are passing `script-examples/final_output.txt` generated by the la
 
 Repository sample result files:
 
-Current 0.63.0 LLM schema-1 examples:
+Recorded 0.63.0 LLM schema-1 examples:
 
 - [Apple M5 CPU-decode working-set comparison note](../results/0.63.0/AppleM5_LLM_working_set_scaling.md)
 - [Apple M5, 256 MiB weights and 32,768-token context](../results/0.63.0/apple_m5_cpu_decode_contiguous_weights_256mib_context_32768.json)

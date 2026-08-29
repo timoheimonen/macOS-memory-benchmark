@@ -1,6 +1,6 @@
 # Parameter Compatibility Matrix
 
-Working version `0.63.0`
+Applies to the current repository implementation.
 
 Runtime platform: macOS 26 or later on Apple Silicon (ARM64).
 
@@ -268,7 +268,7 @@ Additional sweep rules:
   array but stop further execution and do not increment `completed_runs`. A current standard schema-3 attempt is
   complete only with nested `configuration.mode: "benchmark"`, `status: "complete"`, `results_complete: true`,
   `conclusions_valid: true`, and a string `configuration.output_file`. Nested standard schema 2 and every other
-  standard version are unsupported. A pattern attempt requires nested
+  standard schema version are unsupported. A pattern attempt requires nested
   `status: "complete"` and `results_complete: true`; TLB requires nested `tlb_analysis.status: "complete"` and
   `tlb_analysis.conclusions_valid: true`; core-to-core requires nested `core_to_core_latency.status: "complete"` and
   `measurements_complete: true`. The authoritative schema-1 sweep acceptance predicate is exactly

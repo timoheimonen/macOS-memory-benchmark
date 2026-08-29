@@ -1,8 +1,9 @@
 # Machine-Readable Command-Line API
 
-This document defines the supported process-level integration contract for `memory_benchmark` 0.63.0. It describes how
-software launches a benchmark, separates machine-readable output from the human transcript, and decides whether a JSON
-result is safe to consume. The generated Doxygen pages document C++ internals; they are not this process API.
+This document defines the supported process-level integration contract for the current `memory_benchmark`
+implementation. It describes how software launches a benchmark, separates machine-readable output from the human
+transcript, and decides whether a JSON result is safe to consume. The generated Doxygen pages document C++ internals;
+they are not this process API.
 
 Runtime behavior and executable integration tests are authoritative if this document and the implementation differ.
 The documented process runtime baseline is macOS 26 or later on Apple Silicon (ARM64).
@@ -199,7 +200,7 @@ predicate.
 Each `runs[].result` in a sweep retains its nested mode's own schema-version field and completeness contract. Nested
 standard classification recognizes only current schema 3 with `configuration.mode == "benchmark"` plus typed
 `results_complete`, `conclusions_valid`, and `configuration.output_file` fields; standard schema 2 and every other
-standard version are unsupported. Complete, partial, interrupted, and failed current schema-3 evidence remains
+standard schema version are unsupported. Complete, partial, interrupted, and failed current schema-3 evidence remains
 classifiable and retained rather than being discarded by the complete-result consumer boundary. A non-zero nested
 execution that initialized a result remains in the envelope: its attempt is failed, but the payload is not replaced by
 a generic diagnostic. In particular, nested TLB `tlb_analysis.status == "error"` maps to a failed sweep attempt without
@@ -557,12 +558,12 @@ persistence and nested file writes are disabled. Schema 3 requires boolean `resu
 the producer makes `conclusions_valid` true exactly when `results_complete` is true, while consumers must still check
 the explicit status and both booleans shown in the table.
 
-The bundled standard-memory example scripts are maintained in lockstep with the current producer. Each script performs
-only the local version, completion, and field sanity checks needed before reading its current schema-3 metric paths. For
-the current producer that includes exact top-level `version == "0.63.0"` in addition to the standard identity and
-completeness fields above. The examples are not a versioned compatibility library. Released standard schema 2,
-unversioned historical standard JSON layouts, and every other explicit standard version are unsupported inputs and are
-not routed through a metric-shape fallback.
+The bundled standard-memory example scripts accept compatible producer releases. Before reading their standard
+schema-3 metric paths, they require `configuration.mode == "benchmark"`, schema 3, methodology
+`benchmark-v2-calibrated-seeded-balanced`, the completion fields above, and the expected types for every consumed
+field. They retain a non-empty top-level `version` string as release provenance, but exact software-version equality is
+not an acceptance condition. The examples do not translate released standard schema 2, unversioned historical
+standard JSON layouts, or other methodology identities through a metric-shape fallback.
 
 Graceful interruption or runtime failure after a representable result state has been initialized emits the available
 partial, interrupted, error, or failed JSON snapshot. The execution status and payload are independent: a non-zero status
@@ -610,6 +611,7 @@ memory_benchmark --benchmark --only-bandwidth --buffer-size 512 --count 5 --seed
   >benchmark.json 2>benchmark.log
 jq -e '.configuration.mode == "benchmark" and
        .configuration.benchmark_schema_version == 3 and
+       .configuration.methodology_version == "benchmark-v2-calibrated-seeded-balanced" and
        (.configuration.output_file | type) == "string" and
        .status == "complete" and .results_complete == true and
        .conclusions_valid == true' benchmark.json
@@ -667,7 +669,8 @@ jq -e '.mode == "llm_memory" and .schema_version == 1 and
 ## Compatibility policy
 
 - `version`, the GPU `software_version` field, and LLM `software` identity identify the application release; none is a
-  result schema version.
+  result schema version or compatibility selector. Consumers may retain and display this provenance independently of
+  schema and methodology acceptance.
 - Current standard schema 3, pattern schema 3, TLB schema 4, core-to-core schema 2, GPU schema 1, and LLM schema 1 remain
   authoritative at their existing locations. The schema field is intentionally not normalized across these established
   payloads.
@@ -676,9 +679,10 @@ jq -e '.mode == "llm_memory" and .schema_version == 1 and
   consumers must use the current generic fields, tolerate unknown additive evidence fields, and validate every known
   field they consume. Future removal/rename/type/meaning changes require schema-version review; software identity alone
   is not a compatibility substitute.
-- Bundled standard-memory examples track the current producer and read current standard schema-3 metric paths directly
-  after local sanity checks. They provide no compatibility layer for released standard schema 2, unversioned
-  historical standard JSON layouts, or any other explicit standard version.
+- Bundled standard-memory examples accept compatible software releases only when standard mode, schema 3, the exact
+  methodology identity, completion state, and consumed field shapes match. They retain software-version provenance but
+  provide no translation layer for released standard schema 2, unversioned historical standard JSON layouts, or other
+  methodology identities.
 - Both general and core-to-core sweep envelopes use `configuration.sweep_schema_version == 1`; nested results keep their
   independent mode schema versions.
 - Additive optional fields may remain within a schema version only when old consumers can safely ignore them.

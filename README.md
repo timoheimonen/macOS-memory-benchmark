@@ -305,7 +305,8 @@ Treat benchmark values as measurements of the configured workload under the obse
   prefix sharing, sliding-window KV, growing context, and model loading.
 - The LLM traffic classification version `llm-exact-weight-vs-kv-read-payload-v1` compares exact weight and KV-read
   bytes only. `near_crossover` means exact equality and is not a measured hardware-bottleneck claim.
-- The repository includes two current [Apple M5 CPU-decode working-set samples](results/0.63.0/AppleM5_LLM_working_set_scaling.md)
+- The repository includes two
+  [Apple M5 CPU-decode working-set samples recorded with 0.63.0](results/0.63.0/AppleM5_LLM_working_set_scaling.md)
   with links to their complete JSON records. They illustrate scaling across 384 MiB and 1,536 MiB data mappings.
 - TLB-locality controls pointer-chain construction, not hardware TLB residency. Standard locality comparisons combine cache, locality, and translation effects; use `--analyze-tlb` for controlled translation-boundary conclusions.
 - Core-to-core results are scheduler-influenced acquire/release token-protocol measurements. They do not directly observe
@@ -315,9 +316,10 @@ Treat benchmark values as measurements of the configured workload under the obse
 JSON output records completion and nullable measurement state instead of using zero for unavailable results. Current
 standard schema 3 requires `configuration.mode: "benchmark"`, a string `configuration.output_file` that preserves the
 raw output target, plus boolean `results_complete` and `conclusions_valid` fields. The bundled standard-memory examples
-track the current producer, require its exact top-level `version` (currently `0.63.0`), sanity-check the current
-result locally, and read current schema-3 paths directly. They do not provide compatibility for released standard
-schema 2, unversioned historical standard JSON layouts, or any other explicit standard version.
+accept compatible producer releases by checking the standard mode, schema 3, the exact
+`benchmark-v2-calibrated-seeded-balanced` methodology, completion state, and the shape of the fields they consume.
+They retain the top-level `version` as provenance but do not require a particular software release. They do not
+translate released standard schema 2, unversioned historical standard JSON layouts, or other methodology identities.
 Consumers making conclusions should reject incomplete or interrupted runs according to the mode-specific status fields.
 Every result-producing direct command or CPU sweep using `--output -` reserves stdout for one final JSON document and
 routes its post-parse human transcript to stderr; file output is atomic. LLM file output checkpoints after each terminal
@@ -340,11 +342,11 @@ python3 script-examples/plot_cache_percentiles.py \
 
 The sweep script prefers the repository's local `./memory_benchmark`, then falls back to `memory_benchmark` from
 `PATH`; set `BENCHMARK_CMD=/path/to/memory_benchmark` to override either choice. Whichever producer is selected must
-emit complete current standard schema 3. The sweep helpers return a non-zero status if a planned run fails or does not
-produce a complete, parseable result.
+emit a complete compatible standard schema-3 result with the expected methodology. The sweep helpers return a non-zero
+status if a planned run fails or does not produce a complete, parseable result.
 
-The two standard-result plotters require explicit current inputs; archived 0.53.x standard JSON is retained as
-historical evidence and is not a valid current input:
+The two standard-result plotters require explicit compatible inputs; archived 0.53.x standard JSON is retained as
+historical evidence and is not a compatible input:
 
 ```bash
 python3 script-examples/plot_M4vsM5_benchmark_comparison.py \
@@ -370,7 +372,7 @@ recognizes the current console labels only and is neither JSON-schema nor histor
 - [LLM Memory Profile Whitepaper](documents/LLM_MEMORY_PROFILE_WHITEPAPER.md): generic schema-v1 vocabulary plus the
   active CPU and Metal decode/prefill traffic, timing, checksum, and interpretation contracts.
 - [Apple M5 LLM CPU-decode working-set samples](results/0.63.0/AppleM5_LLM_working_set_scaling.md): two complete
-  current-version JSON runs and their observed working-set scaling.
+  0.63.0 JSON runs and their observed working-set scaling.
 
 Runtime behavior and `memory_benchmark -h` are the authoritative sources when documentation differs.
 

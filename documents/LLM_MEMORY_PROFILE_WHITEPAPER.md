@@ -22,7 +22,7 @@ The current contract is identified by:
 
 | Property | Value |
 |---|---|
-| Software version | `0.63.0` |
+| Software version | Release provenance; not a schema or methodology selector |
 | Mode | `llm_memory` |
 | Backend | `cpu` or `metal` |
 | JSON schema | `1` |

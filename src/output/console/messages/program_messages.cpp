@@ -141,7 +141,6 @@ std::string usage_header(const std::string& version) {
 std::string usage_options(const std::string& prog_name) {
   std::ostringstream oss;
   oss << "Usage: " << prog_name << " [options]\n"
-      << "Long options require --; single dash is only for one-character aliases.\n"
       << "Platform: macOS 26 or later on Apple Silicon (ARM64).\n"
       << "Options:\n"
       << "  -B, --benchmark       Run calibrated, seeded, balanced standard bandwidth/latency benchmark.\n"

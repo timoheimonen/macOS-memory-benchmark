@@ -2,7 +2,7 @@
 
 ## 1. Scope and Status
 
-This document specifies the current implementation in this repository (version `0.63.0`) for `memory_benchmark` on macOS Apple Silicon.
+This document specifies the current `memory_benchmark` implementation in this repository for macOS Apple Silicon.
 
 It is intentionally implementation-driven and reflects real behavior in code paths under `main.cpp`, `src/core`,
 `src/benchmark`, `src/pattern_benchmark`, `src/gpu_bandwidth`, `src/llm_memory`, `src/output`, and `src/asm`.
@@ -691,8 +691,8 @@ reference cohort: the completed 0.61.0 automatic and fixed-work populations esta
 for their exact hardware, OS, compiler, kernel, and methodology identity. The frozen pre-remediation validation identity uses
 `gpu-linear-word-mod32-tg-reduce-v2`, the frozen 8192-threadgroup cap, canonical MSL SHA-256
 `b9a242d2b959c9c11f6f130a52afd66f111d6761be2193beec1f051baa094296`, and the exact executable identity retained
-with the local validation record. The current canonical source SHA-256 retained unchanged in 0.63.0 (introduced in
-0.61.2) is
+with the local validation record. The canonical source SHA-256 introduced in 0.61.2 and retained by the current
+implementation is
 `21def2d75d3545dba31aa4897ea57ec2fd0e4481cd86ce21725338ab0f322ac5` after removing three unread shared-parameter
 fields; runtime Metal integration revalidates compilation and correctness, while the performance population remains
 tied to the frozen pre-remediation identity. Automatic read/write/copy
@@ -1143,7 +1143,7 @@ measurement schema. [API.md](API.md) is the process-integration contract and sup
   logical cadence but defers serialization until the terminal envelope. `completed_runs` requires current standard
   schema 3 to have nested `configuration.mode: "benchmark"`, `status: "complete"`, `results_complete: true`,
   `conclusions_valid: true`, and a string `configuration.output_file`. Nested standard schema 2 and every other
-  standard version are unsupported. Pattern requires nested
+  standard schema version are unsupported. Pattern requires nested
   `status: "complete"` and `results_complete: true` for pattern; `tlb_analysis.status: "complete"` and
   `tlb_analysis.conclusions_valid: true` for TLB; or
   `core_to_core_latency.status: "complete"` and `measurements_complete: true` for core-to-core. Partial, interrupted,
@@ -1162,10 +1162,11 @@ classifying the failure.
 
 Command completeness for current standard schema 3 requires `configuration.mode == "benchmark"`,
 `status == "complete" && results_complete == true && conclusions_valid == true`, with string
-`configuration.output_file`. Bundled standard-memory examples track this current schema-3 producer, perform local
-sanity checks (including exact top-level `version == "0.63.0"` for the current producer), and read the metric paths they
-need directly. They do not support released standard schema 2, unversioned historical standard JSON layouts, or any
-other explicit standard version. Pattern requires
+`configuration.output_file`. Bundled standard-memory examples accept compatible producer releases when
+`configuration.methodology_version == "benchmark-v2-calibrated-seeded-balanced"`, the command is complete, and each
+consumed field has the expected shape. They retain a non-empty top-level `version` string as provenance without
+requiring exact software-version equality. They do not translate released standard schema 2, unversioned historical
+standard JSON layouts, or other methodology identities. Pattern requires
 `status == "complete" && results_complete == true`. TLB requires
 `tlb_analysis.status == "complete" && tlb_analysis.conclusions_valid == true`; core-to-core requires
 `core_to_core_latency.status == "complete" && core_to_core_latency.measurements_complete == true`. Metric consumers must
@@ -1196,8 +1197,9 @@ In addition to standard fields (buffer size, iterations, loop count, thread coun
 - Calibration targets/windows and phase/operation schedule policies.
 
 Schema 3 makes `configuration.output_file` and top-level `conclusions_valid` mandatory without changing the standard
-methodology version. Bundled standard-memory examples identify the current producer explicitly rather than inferring
-standard identity from metric layout; schema 2 and unversioned historical standard JSON are unsupported inputs.
+methodology version. Bundled standard-memory examples identify compatible input from the standard mode, schema,
+methodology, completion fields, and consumed field shapes rather than inferring identity from metric layout or requiring
+an exact software version; schema 2 and unversioned historical standard JSON are unsupported inputs.
 
 ### 18.2 Main-memory latency keys
 
