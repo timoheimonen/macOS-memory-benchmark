@@ -415,6 +415,7 @@ LlmTaskExecutionEvidence compact_execution(
         cpu->expected_checksums.size() == cpu->requested_workers &&
         cpu->actual_checksums.size() == cpu->requested_workers;
     evidence.cpu_evidence_available = true;
+    evidence.cpu_cold_checks = cpu->cold_checks;
     evidence.requested_workers = cpu->requested_workers;
     evidence.created_workers = cpu->created_workers;
     evidence.completed_workers = cpu->completed_workers;
@@ -1442,6 +1443,7 @@ void retain_task_evidence(LlmTaskExecutionResult& retained,
   destination.post_validation_evaluated =
       input.post_validation_evaluated;
   destination.post_validation_valid = input.post_validation_valid;
+  destination.cold_checks = input.cold_checks;
   destination.kv_write_validation_applicable = input.kv_write_validation_applicable;
   destination.kv_write_validation_evaluated = input.kv_write_validation_evaluated;
   destination.kv_write_validation_valid = input.kv_write_validation_valid;

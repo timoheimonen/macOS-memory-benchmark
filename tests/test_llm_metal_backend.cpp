@@ -4370,6 +4370,10 @@ TEST(LlmMetalBackendFailureInjectionIntegrationTest,
     EXPECT_TRUE(task->padding_canary_evaluated);
     EXPECT_EQ(task->padding_canary_valid, !cases[index].padding_mismatch);
     EXPECT_EQ(task->post_validation_valid, !cases[index].padding_mismatch);
+    EXPECT_TRUE(task->cold_checks[0].valid);
+    EXPECT_TRUE(task->cold_checks[1].valid);
+    EXPECT_TRUE(task->cold_checks[2].evaluated);
+    EXPECT_EQ(task->cold_checks[2].valid, !cases[index].padding_mismatch);
   }
 }
 
@@ -4456,6 +4460,10 @@ TEST(LlmMetalBackendFailureInjectionIntegrationTest,
     EXPECT_TRUE(task->padding_canary_evaluated);
     EXPECT_EQ(task->padding_canary_valid, !cases[index].padding_mismatch);
     EXPECT_EQ(task->post_validation_valid, !cases[index].padding_mismatch);
+    EXPECT_TRUE(task->cold_checks[0].valid);
+    EXPECT_TRUE(task->cold_checks[1].valid);
+    EXPECT_TRUE(task->cold_checks[2].evaluated);
+    EXPECT_EQ(task->cold_checks[2].valid, !cases[index].padding_mismatch);
   }
 }
 
@@ -4538,6 +4546,11 @@ TEST(LlmMetalBackendFailureInjectionIntegrationTest,
     const LlmMetalTaskEvidence* task = get_llm_metal_task_evidence(result);
     ASSERT_NE(task, nullptr);
     EXPECT_TRUE(task->timed_pipeline_available);
+    EXPECT_TRUE(task->cold_checks[0].applicable);
+    EXPECT_TRUE(task->cold_checks[1].applicable);
+    EXPECT_EQ(task->cold_checks[0].evaluated, test_case.index != 2 && test_case.index != 4);
+    // Host acceptance injection is not an observed shader-bit mismatch.
+    EXPECT_EQ(task->cold_checks[1].valid, test_case.index != 2 && test_case.index != 4);
     EXPECT_EQ(task->timing_evaluated, test_case.index != 4);
     EXPECT_EQ(task->timing_valid,
               test_case.index != 0 && test_case.index != 4);
@@ -4711,3 +4724,47 @@ TEST(LlmMetalBackendFailureInjectionIntegrationTest,
 }
 
 }  // namespace
+
+TEST(LlmMetalBackendTest, ColdReadbackIndependentVerdicts) {
+  for (bool completed : {false, true}) {
+    for (unsigned combination = 0; combination < 8; ++combination) {
+      const uint32_t flags = ((combination & 1) ? LlmMetalKernelContract::kValidationInvalidParametersBit : 0) |
+          ((combination & 2) ? LlmMetalKernelContract::kKvWriteValidationMismatchBit : 0) |
+          ((combination & 4) ? LlmMetalKernelContract::kPaddingCanaryMismatchBit : 0);
+      const auto checks = interpret_llm_metal_cold_checks(LlmPhase::Prefill, true, true, completed, flags);
+      EXPECT_EQ(checks[0].evaluated, completed);
+      EXPECT_EQ(checks[0].valid, completed && !(combination & 1));
+      for (size_t slot = 1; slot < 3; ++slot) {
+        const bool mismatch = (combination & (1U << slot)) != 0;
+        EXPECT_EQ(checks[slot].evaluated, completed && (mismatch || !(combination & 1)));
+        EXPECT_EQ(checks[slot].valid, completed && !mismatch && !(combination & 1));
+      }
+      const auto none = interpret_llm_metal_cold_checks(LlmPhase::Decode, false, true, completed, flags);
+      for (const auto& check : none) EXPECT_FALSE(check.applicable);
+      const auto contiguous = interpret_llm_metal_cold_checks(LlmPhase::Decode, true, false, completed, flags);
+      EXPECT_FALSE(contiguous[2].applicable);
+      EXPECT_EQ(contiguous[1].kind, LlmColdCheckKind::KvAppendFinal);
+      EXPECT_EQ(checks[1].kind, LlmColdCheckKind::KvPrefillFinalSamples);
+    }
+  }
+}
+
+TEST(LlmMetalBackendTest, PendingColdChecksPreserveAllApplicabilityCombinations) {
+  for (auto phase : {LlmPhase::Decode, LlmPhase::Prefill}) {
+    for (bool writes : {false, true}) {
+      for (bool padding : {false, true}) {
+        const auto checks = interpret_llm_metal_cold_checks(phase, writes, padding, false, 0);
+        EXPECT_EQ(checks[0].applicable, writes);
+        EXPECT_EQ(checks[1].applicable, writes);
+        EXPECT_EQ(checks[2].applicable, writes && padding);
+        EXPECT_EQ(checks[1].kind, phase == LlmPhase::Decode ? LlmColdCheckKind::KvAppendFinal
+                                                         : LlmColdCheckKind::KvPrefillFinalSamples);
+        for (const auto& check : checks) {
+          EXPECT_FALSE(check.evaluated);
+          EXPECT_FALSE(check.valid);
+          EXPECT_EQ(check.reason_code, "not-evaluated");
+        }
+      }
+    }
+  }
+}

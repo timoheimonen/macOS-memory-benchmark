@@ -224,6 +224,7 @@ struct LlmMetalDualMod32Checksum {
 
 /** Complete per-task Metal timing, dispatch, checksum, and validation evidence. */
 struct LlmMetalTaskEvidence {
+  LlmColdChecks cold_checks;
   bool timed_pipeline_available = false;
   std::string pipeline_label;
   size_t pipeline_thread_execution_width = 0;

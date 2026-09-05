@@ -21,6 +21,7 @@
 #ifndef LLM_EXECUTOR_H
 #define LLM_EXECUTOR_H
 
+#include "llm_memory/llm_validation.h"
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -339,6 +340,7 @@ struct LlmExecutorResult {
   bool checksum_valid = false;
   bool post_validation_evaluated = false;
   bool post_validation_valid = false;
+  LlmColdChecks cold_checks;  ///< Independent observations from the existing cold walk.
   bool kv_write_validation_applicable = false;  ///< KV-writing scenario; independent of pipeline completion.
   bool kv_write_validation_evaluated = false;  ///< Phase/layout write check ran after stop and join.
   bool kv_write_validation_valid = false;  ///< Combined phase/layout final-state result, including paged padding.

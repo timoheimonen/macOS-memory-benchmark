@@ -2393,6 +2393,11 @@ TEST_F(LlmMemoryExecutorTest, ContiguousDecodeAppendCorruptionIntegration) {
                 EXPECT_FALSE(result.valid);
                 EXPECT_TRUE(result.post_validation_evaluated);
                 EXPECT_FALSE(result.post_validation_valid);
+                EXPECT_TRUE(result.cold_checks[0].evaluated);
+                EXPECT_TRUE(result.cold_checks[0].valid);
+                EXPECT_TRUE(result.cold_checks[1].evaluated);
+                EXPECT_FALSE(result.cold_checks[1].valid);
+                EXPECT_FALSE(result.cold_checks[2].applicable);
                 EXPECT_TRUE(result.kv_write_validation_applicable);
                 EXPECT_TRUE(result.kv_write_validation_evaluated);
                 EXPECT_FALSE(result.kv_write_validation_valid);
@@ -2420,11 +2425,100 @@ TEST_F(LlmMemoryExecutorTest, CpuProfilesWriteValidationControlsIntegration) {
         ASSERT_TRUE(timer.has_value());
         const auto result = execute_llm_scenario(plan, task, resources, *timer);
         EXPECT_TRUE(result.valid) << result.reason_code;
+        for (const auto& check : result.cold_checks) {
+          EXPECT_EQ(check.evaluated, check.applicable);
+          EXPECT_EQ(check.valid, check.applicable);
+        }
+        EXPECT_EQ(result.cold_checks[1].applicable, scenario != LlmScenario::WeightsOnly ||
+            (plan.kv_layout == LlmKvLayout::Paged && plan.phase == LlmPhase::Decode));
         const bool writes = scenario != LlmScenario::WeightsOnly;
         EXPECT_EQ(result.kv_write_validation_applicable, writes);
         EXPECT_EQ(result.kv_write_validation_evaluated, writes);
         EXPECT_EQ(result.kv_write_validation_valid, writes);
       }
+    }
+  }
+}
+
+// Single-worker real-kernel wrapper targets canonical rows after the kernel completes.
+TEST_F(LlmMemoryExecutorTest, PagedColdCheckCompletionIntegration) {
+  struct Mutation { uint8_t* byte; };
+  const auto mutate = +[](void* opaque, const LlmKernelInvocation& invocation) {
+    const auto kernel = production_llm_kernel_adapter();
+    if (!kernel.invoke(kernel.context, invocation)) return false;
+    *static_cast<Mutation*>(opaque)->byte ^= 0x80;
+    return true;
+  };
+  for (bool prefill : {false, true}) {
+    for (bool final_row : {false, true}) {
+      for (bool padding : {false, true}) {
+        for (auto scenario : {LlmScenario::KvOnly, LlmScenario::WeightsOnly}) {
+        if (prefill && !padding && scenario == LlmScenario::WeightsOnly) continue;
+        // Prior case resources have left scope; recycle the bounded fake mapping arena.
+        state = {};
+        const auto plan = build_executor_ready_plan(prefill ? paged_prefill_geometry() : paged_geometry(5, 4), 1);
+        ASSERT_TRUE(plan.valid);
+        LlmExecutionResources resources;
+        ASSERT_TRUE(prepare_llm_execution_resources(plan, resources).valid);
+        const auto& layout = get_llm_cpu_execution_plan(plan)->paged->layout;
+        const size_t layer = final_row ? layout.layer_count - 1 : 0;
+        const size_t batch = final_row ? layout.batch_size - 1 : 0;
+        const size_t logical_block = padding || !prefill ? layout.blocks_per_sequence - 1 : 0;
+        const size_t physical = resources.block_table[batch * layout.blocks_per_sequence + logical_block];
+        const size_t offset = (layer * layout.physical_blocks_per_layer + physical) * layout.block_bytes +
+            (padding ? layout.last_block_valid_bytes : prefill ? 0 : layout.decode_append_offset_in_last_block);
+        Mutation mutation{static_cast<uint8_t*>(resources.buffers.k.get()) + offset};
+        const auto task = build_llm_scenario_work_plan(plan, scenario, 1, true);
+        auto timer = HighResTimer::create();
+        ASSERT_TRUE(timer.has_value());
+        const auto result = execute_llm_scenario(plan, task, resources, *timer, {mutate, &mutation});
+        EXPECT_FALSE(result.valid);
+        EXPECT_TRUE(result.checksum_valid);
+        const size_t failed = padding ? 2 : 1;
+        EXPECT_TRUE(result.cold_checks[failed].evaluated);
+        EXPECT_FALSE(result.cold_checks[failed].valid);
+        if (padding) {
+          EXPECT_EQ(result.cold_checks[0].evaluated, final_row);
+          EXPECT_EQ(result.cold_checks[1].evaluated, final_row && (!prefill || scenario != LlmScenario::WeightsOnly));
+          EXPECT_EQ(result.cold_checks[0].valid, final_row);
+          EXPECT_EQ(result.cold_checks[1].valid, final_row && (!prefill || scenario != LlmScenario::WeightsOnly));
+        } else {
+          EXPECT_FALSE(result.cold_checks[2].evaluated);
+          EXPECT_EQ(result.cold_checks[0].evaluated, !prefill && final_row);
+        }
+        }
+      }
+    }
+  }
+}
+
+TEST_F(LlmMemoryExecutorTest, ColdApplicabilitySurvivesResourceFailure) {
+  ScopedExecutorTimer timer_calls;
+  size_t kernel_calls = 0;
+  const auto count_kernel = +[](void* context, const LlmKernelInvocation&) {
+    ++*static_cast<size_t*>(context);
+    return false;
+  };
+  for (const auto& geometry : {LlmGeometryRequest{257, 2, 1, 1, 33, 1, 5, 3},
+                                paged_geometry(5, 4), paged_geometry(4, 4),
+                                prefill_geometry(), paged_prefill_geometry()}) {
+    const auto plan = build_executor_ready_plan(geometry, 1);
+    ASSERT_TRUE(plan.valid);
+    for (auto scenario : {LlmScenario::WeightsOnly, LlmScenario::KvOnly}) {
+      const auto task = build_llm_scenario_work_plan(plan, scenario, 1, true);
+      LlmExecutionResources absent;
+      auto timer = HighResTimer::create();
+      ASSERT_TRUE(timer.has_value());
+      const auto result = execute_llm_scenario(plan, task, absent, *timer, {count_kernel, &kernel_calls});
+      EXPECT_EQ(kernel_calls, 0u);
+      EXPECT_EQ(result.reason_code, LlmExecutorReason::INVALID_RESOURCES);
+      const bool paged = plan.kv_layout == LlmKvLayout::Paged;
+      const bool prefill = plan.phase == LlmPhase::Prefill;
+      EXPECT_EQ(result.cold_checks[0].applicable, paged || prefill || scenario != LlmScenario::WeightsOnly);
+      EXPECT_EQ(result.cold_checks[1].applicable, scenario != LlmScenario::WeightsOnly || (paged && !prefill));
+      EXPECT_EQ(result.cold_checks[2].applicable,
+                paged && plan.geometry.last_block_valid_bytes < plan.geometry.kv_block_bytes);
+      for (const auto& check : result.cold_checks) EXPECT_FALSE(check.evaluated);
     }
   }
 }

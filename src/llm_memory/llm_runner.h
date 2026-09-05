@@ -64,6 +64,7 @@ enum class LlmCheckpointKind : uint8_t {
 
 /** Compact excluded-task evidence without retained per-worker vectors. */
 struct LlmTaskExecutionEvidence {
+  LlmColdChecks cpu_cold_checks;  ///< Compact CPU copy; Metal owns its own array.
   bool available = false;  ///< Complete generic task evidence was retained.
   bool valid = false;
   std::string_view reason_code = LlmRunnerReason::NOT_STARTED;

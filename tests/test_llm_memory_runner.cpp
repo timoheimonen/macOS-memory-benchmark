@@ -2675,6 +2675,10 @@ TEST(LlmMemoryRunnerTest, CalibrationFailureRetainsAttemptAndFinalizesMeasuremen
                        size_t, LlmTaskExecutionResult& execution) {
     if (context.purpose == "pilot") {
       fail_execution(execution);
+      LlmCpuTaskEvidence cold;
+      cold.executor.cold_checks = make_llm_cold_checks(true, LlmColdCheckKind::KvAppendFinal, true, true);
+      resolve_llm_cold_check(cold.executor.cold_checks, 2, false, LlmExecutorReason::PAGED_POST_VALIDATION_FAILED);
+      execution.backend_evidence = std::move(cold);
     }
   };
   std::vector<CheckpointRecord> checkpoints;
@@ -2687,6 +2691,13 @@ TEST(LlmMemoryRunnerTest, CalibrationFailureRetainsAttemptAndFinalizesMeasuremen
   EXPECT_FALSE(result.calibration_attempts[0][1].valid);
   EXPECT_EQ(result.calibration_attempts[0][1].reason_code,
             LlmBackendReason::RESOURCES_NOT_PREPARED);
+  const auto& checks = result.calibration_attempts[0][1].execution.cpu_cold_checks;
+  EXPECT_TRUE(checks[0].applicable);
+  EXPECT_FALSE(checks[0].evaluated);
+  EXPECT_FALSE(checks[1].evaluated);
+  EXPECT_TRUE(checks[2].evaluated);
+  EXPECT_FALSE(checks[2].valid);
+  EXPECT_EQ(checks[2].reason_code, LlmExecutorReason::PAGED_POST_VALIDATION_FAILED);
   EXPECT_EQ(result.counters.attempted_measurements, 0u);
   EXPECT_EQ(result.counters.terminal_measurements, 6u);
   for (const LlmMeasurementState& measurement : result.measurements) {
@@ -3126,6 +3137,9 @@ TEST(LlmMemoryRunnerTest,
     evidence.executor.kv_write_validation_applicable = true;
     evidence.executor.kv_write_validation_evaluated = true;
     evidence.executor.kv_write_validation_valid = false;
+    evidence.executor.cold_checks = make_llm_cold_checks(true, LlmColdCheckKind::KvAppendFinal, true, false);
+    resolve_llm_cold_check(evidence.executor.cold_checks, 0, true);
+    resolve_llm_cold_check(evidence.executor.cold_checks, 1, false, LlmExecutorReason::DECODE_POST_VALIDATION_FAILED);
     execution.backend_evidence = std::move(evidence);
   };
   LlmMemoryResult result;
@@ -3153,4 +3167,8 @@ TEST(LlmMemoryRunnerTest,
   EXPECT_TRUE(retained->executor.kv_write_validation_applicable);
   EXPECT_TRUE(retained->executor.kv_write_validation_evaluated);
   EXPECT_FALSE(retained->executor.kv_write_validation_valid);
+  EXPECT_TRUE(retained->executor.cold_checks[0].valid);
+  EXPECT_TRUE(retained->executor.cold_checks[1].evaluated);
+  EXPECT_FALSE(retained->executor.cold_checks[1].valid);
+  EXPECT_EQ(retained->executor.cold_checks[1].reason_code, LlmExecutorReason::DECODE_POST_VALIDATION_FAILED);
 }
