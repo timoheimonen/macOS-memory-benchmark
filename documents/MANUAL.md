@@ -275,9 +275,20 @@ against the final task-local ordinal `T-1`, after timer stop and all worker join
 `decode-post-validation-failed`: the invalid attempt is retained with null rates and excluded from
 aggregates. The timed workload and checksum algorithm are unchanged. KV-write evidence applies only
 to KV-bearing scenarios; paged/prefill evidence retains the combined final-state check and its existing
-padding/sampling limits. CPU paged weights-only unexpected-write/padding protection remains active.
+padding/sampling limits. CPU paged decode weights-only checks its append slots and padding; CPU paged prefill weights-only checks padding,
+not valid prompt contents.
 See the [CPU final-state evidence contract](API.md#result-schemas-and-completion) for field and null semantics.
 
+
+Treat a matching LLM checksum as a bounded consistency check. All four CPU weight paths have demonstrated
+within-span parity collisions, and the shared Metal helper has two affine lanes that depend on the same content sum.
+The Metal helper test is not a full-backend acceptance test. Separate final-state checks can reject a task whose
+checksum still matches; such a task keeps null rates and stays outside aggregates. Prefill checks selected final-state
+locations, not every prompt byte. CPU paged decode weights-only checks append slots and padding, while paged prefill weights-only checks padding only. Metal
+weights-only does not perform those KV checks. Source hashes and generated event lists describe a build, not a GPU
+runtime trace. Consult the [profile fault matrix](LLM_MEMORY_PROFILE_WHITEPAPER.md#checksum-fault-model-and-evidence-limits)
+for detected mutations, conditional coverage, and blind spots; use the [API contract](API.md#result-schemas-and-completion)
+for status/null/acceptance rules.
 
 For prefill, prompt length `P` and query-tile length `Q` are explicit. Define `C = ceil(P/Q)`, tile ends
 `e_j = min((j+1)*Q, P)`, and `S(P,Q) = sum(e_j)`. One full-prompt work unit has:
@@ -291,7 +302,8 @@ Prefill payload is `W`, `B*(P+S(P,Q))*K`, or `W+B*(P+S(P,Q))*K` for weights-only
 its prompt tokens in ascending order, K then V for each token, before that owner's reads; no global worker barrier is
 implied. Each increasing tile then reads the complete owned K prefix followed by the complete owned V prefix. `Q=P`
 scans one full prefix; `Q=1` gives `S=triangular(P)`. Reported causal-pair and logical attention/FMA counts are audit
-metadata, not executed compute. The timed checksum covers every tile-read visit. For a KV-bearing CPU task, excluded
+metadata, not executed compute. The intended checksum accumulation includes each tile-read visit; equality alone
+does not establish every executed visit. For a KV-bearing CPU task, excluded
 post-validation checks each owner's deterministic first/middle/last canonical-word samples, including bytes clipped to
 owner boundaries, against the final operation ordinal `T-1`. For a KV-bearing Metal prefill task, it checks
 representative/boundary byte locations per layer/batch sequence in both K and V against that ordinal; paged Metal
@@ -705,8 +717,8 @@ middle, and trailing items.
   without lookup duplication. Grid evidence reports exact per-threadgroup accounted-byte minimum, maximum, imbalance,
   and the underlying vector with `cost_unit=actual-threadgroup-cost` without claiming weighted balance. Every Metal
   `weights_only` task uses a weight-vector grid stride and reports the same exact cost unit. Contiguous KV-bearing grids
-  publish no threadgroup-cost evidence. Partial prefix visits stop at the exact tile or prompt end, and complete status
-  requires full-prompt write validation plus applicable padding-canary validity. In contiguous
+  publish no threadgroup-cost evidence. Partial prefix visits stop at the exact tile or prompt end. KV-bearing tasks
+  require final-operation representative/boundary prompt-write sample validation plus applicable padding-canary validity. In contiguous
   prefill, each lane writes its disjoint slices across all prompt K/V records before reading those slices in the tiled
   prefixes; it scans the complete K prefix before the V prefix at every tile end. A weight-bearing scenario performs
   one weight pass per `prefill_operation`. No
@@ -2765,8 +2777,10 @@ remain unsuitable for balanced comparative conclusions. High CV, cache-dominant 
 power state do not turn a measurement into zero; they remain explicit quality warnings.
 
 For paged results, also inspect the permutation identity/hash, physical K/V lengths, layout padding, table protection,
-lookup/metadata counts, phase-specific K/V-write post-validation, and padding-canary result. Decode validates the
-current-token write; prefill validates the full-prompt write against the final operation ordinal. A different block
+lookup/metadata counts, phase-specific K/V-write post-validation, and padding-canary result. For KV-bearing tasks,
+decode validates the current-token write; prefill checks representative canonical-word/boundary samples against the
+final operation ordinal, rather than all prompt contents. CPU paged decode weights-only checks append slots and padding,
+CPU paged prefill weights-only checks padding only, and Metal weights-only performs neither KV-write nor padding checks. A different block
 size or permutation is a different comparison cohort even when logical model geometry is unchanged.
 
 If an otherwise identical command fails memory admission only after a non-empty `--output` target is added, include the

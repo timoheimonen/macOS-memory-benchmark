@@ -238,6 +238,18 @@ worker lifecycle, QoS, elapsed-time, and checksum fields are null. For a `not_ru
 `qos_successful_workers` and `qos_failed_workers` are also null. These are absence-of-evidence states, not zero-worker or
 successful-checksum observations.
 
+Checksum validity describes agreement with the versioned accumulator, not an exhaustive proof of all contents,
+addresses, or visit multiplicities. A post-validation failure can retain `checksum_valid: true`; the attempt remains
+invalid, its rates are null, and it does not enter aggregates. Missing checksum evidence remains null rather than false
+or successful. CPU paged decode weights-only checks append slots and padding; CPU paged prefill weights-only checks padding only.
+Metal weights-only
+reports KV-write unevaluated and padding inapplicable, so no successful KV-write observation may be inferred from its
+combined lifecycle result. Prefill validation remains sampled on both backends. Programmed byte/lookup counts and
+plan-derived completion do not measure physical DRAM traffic. Source hashes, ABI goldens, and generated semantic
+lists qualify a specific implementation rather than adding runtime observations to the JSON. See the
+[profile fault matrix and exact collision limits](LLM_MEMORY_PROFILE_WHITEPAPER.md#checksum-fault-model-and-evidence-limits).
+These limits do not change schema 1, the checksum identities, or the completion/acceptance predicate below.
+
 The required generic top-level field set is:
 
 ```text
@@ -330,8 +342,8 @@ The Metal paged kernel assigns each layer/batch/logical-block owner to exactly o
 grid-stride schedule. A named lane loads each `device const volatile uint` table entry, publishes the physical ID in
 threadgroup memory, and executes a `mem_threadgroup` barrier before address construction. The timed checksum
 non-separably binds logical table index, physical ID, append/K-read/V-read visit kind, and work-unit ordinal;
-equal-multiplicity table permutations are
-therefore distinguishable. These four-byte lookups and physical suffix padding are reported evidence, not effective
+the maintained real-device tests distinguish selected equal-multiplicity non-tail two-entry swaps, not all
+possible table permutations. These four-byte lookups and physical suffix padding are reported evidence, not effective
 model payload.
 
 
@@ -352,8 +364,9 @@ valid serialize as null. When applicable but unevaluated, evaluated is false and
 acceptance requires evaluated and valid to be true. All three are null without available CPU evidence.
 For paged and prefill profiles, the valid field reports the existing combined phase/layout final-state
 check, including any applicable padding check; it is not an independent append-only verdict. Prefill
-retains its documented sampling limits. `weights_only` does not claim KV-write validation; the existing
-CPU paged unexpected-KV-write and padding protections still run in the combined pipeline.
+retains its documented sampling limits. `weights_only` does not claim KV-write validation. Its combined CPU paged
+pipeline checks append slots and padding for decode, but only structure and padding for prefill; prefill weights-only
+does not check unexpected writes to valid prompt contents.
 
 For prefill, let `P` be prompt length, `Q` query-tile length, and `K = L*2*R`. With
 `C = ceil(P/Q)`, tile ends `e_j = min((j+1)*Q, P)`, and `S(P,Q) = sum(e_j)`, one `prefill_operation` has:
@@ -369,8 +382,8 @@ mixed_payload = W + B * (P + S(P,Q)) * K
 
 Each operation writes owner-local prompt tokens in ascending order, K then V for each token. Those writes precede that
 owner's reads; no global worker barrier is implied. Each tile reads its complete owned K prefix before its complete
-owned V prefix. The operation ordinal is bound into write/checksum evidence, and the timed checksum covers every
-tile-read visit. For a KV-bearing CPU task, excluded post-validation checks each owner's deterministic
+owned V prefix. The operation ordinal is bound into write/checksum evidence, and the intended checksum accumulation includes each
+tile-read visit; equality alone does not establish every executed visit. For a KV-bearing CPU task, excluded post-validation checks each owner's deterministic
 first/middle/last canonical-word samples, including bytes clipped to owner boundaries, against the final operation
 ordinal `T-1`. For a KV-bearing Metal prefill task, it checks representative and boundary byte locations per
 layer/batch sequence in both K and V against that ordinal; paged Metal additionally validates applicable terminal
@@ -516,8 +529,8 @@ the weight-vector grid-stride schedule and reports zero metadata work. The same 
 published for every Metal `weights_only` task. Contiguous KV-bearing grids retain the grid geometry but publish null
 cost unit/minimum/maximum/imbalance fields and an empty cost vector. The cyclic KV schedule is deliberately not
 described as weighted-balanced.
-Partial prefix visits stop at the exact tile or prompt end, and complete status requires full-prompt write validation
-plus applicable suffix-padding validation.
+Partial prefix visits stop at the exact tile or prompt end. KV-bearing prefill tasks require final-operation
+representative/boundary sample validation of the prompt writes, plus applicable suffix-padding validation.
 
 Paged `weights_only` performs no block-table access and reports zero layout-metadata work. For decode `kv_only` and
 `mixed`, each layer/batch pair performs one paired K/V append lookup, `N` K-scan lookups, and `N` V-scan lookups per
@@ -551,7 +564,8 @@ Metal prefill with contiguous KV uses the same logical prefill traffic contract 
 `P` K/V records, and each lane scans only its own written slices of the complete K prefix followed by the complete V
 prefix at each tile end. No grid-wide barrier is implied. All `T` operations execute inside the single timed workload
 dispatch. The commutative checksum binds scenario, layer, batch, byte domain, and work-unit ordinal; the
-source-hash-bound entrypoint audit separately locks the write-before-tiled-read loop nesting.
+source-hash-bound entrypoint audit separately checks the build’s write-before-tiled-read loop nesting, rather than
+recording a runtime GPU trace.
 
 The traffic classification version is `llm-exact-weight-vs-kv-read-payload-v1`: it compares exact active-weight bytes
 with exact KV-read bytes only. `near_crossover` means equality, not a tolerance band and not an observed hardware

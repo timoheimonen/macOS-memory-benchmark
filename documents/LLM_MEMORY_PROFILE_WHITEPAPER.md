@@ -62,7 +62,7 @@ Schema-v1 vocabulary includes `cpu|metal`, `decode|prefill`, `contiguous|paged`,
 for both phases on both backends. The four Metal profiles never receive hidden fallback.
 
 The prefill implementation resolves checked tile/prefix/payload formulas, versioned atomic CPU ownership evidence,
-owner-local semantic traces, and operation-ordinal checksum oracles. CPU contiguous prefill uses token-range ownership;
+generated owner-local semantic event lists, and operation-ordinal checksum oracles. CPU contiguous prefill uses token-range ownership;
 paged prefill uses block-exclusive weighted ownership plus a read-only uint32 table, deterministic permutation,
 full physical K/V pools, a dedicated descriptor ABI, and a separate ARM64 executor. Metal prefill uses
 scenario-specialized MSL pipelines, one in-kernel weight pass per operation when weights are active, full-prompt K/V
@@ -529,9 +529,8 @@ exactly one threadgroup under a cyclic grid-stride schedule. At every visit one 
 K/V writes. Each block owner issues its separate K and V scan lookups, giving exactly `L * B * (2 * N + 1)` lookup
 evidence for each KV-active work unit independent of threadgroup count. Segment/block/address selection depends on the
 loaded physical ID. The timed checksum non-separably mixes logical table index, physical ID, append/K-read/V-read kind,
-and work-unit
-ordinal, so swapping equal-multiplicity non-tail IDs is detectable. Excluded post-validation checks both append bytes
-and terminal-block padding canaries.
+and work-unit ordinal; the selected equal-multiplicity non-tail ID swaps in the mutation tests are detectable.
+For KV-bearing Metal tasks, excluded post-validation checks both append bytes and terminal-block padding canaries.
 
 For contiguous prefill KV work, every operation/layer/batch owner first writes all of its token ranges in increasing
 logical order. It then visits query tiles in increasing order; for each tile it scans every owned range intersecting the
@@ -545,7 +544,8 @@ bytes, not one pass per prompt token or query tile. In KV-bearing entrypoints ea
 across every prompt K/V record before reading those slices, then scans each tile's complete K prefix before its complete
 V prefix. No grid-wide barrier is required because a lane reads only the bytes it wrote. The dispatch loops over all
 `T` operations and uses exact vector prefixes, scalar tails, and segment-boundary splits. The commutative dual-mod32
-checksum proves contents and multiplicity; a separate audit ties this loop nesting to the exact MSL source hash.
+checksum supplies a bounded consistency witness, with the collision limits described below. A separate source-bound
+audit checks this loop nesting for the recorded MSL build; it is not a trace collected from GPU execution.
 
 CPU paged prefill uses the same logical order with weighted whole-block assignments. For each operation/layer/batch
 owner it first loads each owned logical block's physical ID and populates all valid prompt K/V bytes in that block. It
@@ -559,7 +559,8 @@ threadgroups with a deterministic cyclic grid stride rather than CPU weighted re
 each volatile uint32 table load and publishes the physical ID before the owner threadgroup addresses the block. Prompt
 population contributes `N` paired lookups and the tiled scans contribute `M` K-prefix plus `M` V-prefix lookups per
 layer/batch pair, so each KV-active operation has exactly `L * B * (N + 2 * M)` loads independent of grid size. The
-source-hash-bound event-trace audit freezes full-prompt population before tile-ordered K-then-V reads. Grid evidence
+source-hash-bound semantic event enumeration checks full-prompt population before tile-ordered K-then-V reads
+in the described implementation, rather than recording those events from GPU execution. Grid evidence
 reports exact per-threadgroup accounted-byte vectors and their minimum, maximum, and imbalance without claiming
 weighted balance. Every Metal `weights_only` grid reports the same exact weight-vector grid-stride cost evidence;
 contiguous KV-bearing grids leave threadgroup-cost evidence unavailable. Excluded validation checks final-ordinal
@@ -615,7 +616,7 @@ The task-local step restarts at zero for every warmup, calibration, and measurem
 uses the canonical record byte offset; every partial fragment writes only the corresponding little-endian bytes without
 widening its bounds.
 
-Every read contributes to an observable `llm-read-checksum-v1` state. For each worker, weight, K, and V components each
+The intended read path accumulates each read into an observable `llm-read-checksum-v1` state. For each worker, weight, K, and V components each
 contain two 64-bit states plus exact bytes read and span count. Cold-path code independently derives the expected values
 from frozen descriptors, initialization references, append formula, scenario, and step count. After the timer stops, it
 compares every worker/component tuple and folds expected and actual results in stable worker/weight/K/V order.
@@ -672,8 +673,9 @@ This checksum is workload-liveness and bounds evidence, not a cryptographic inte
 
 Paged execution uses the separate `llm-paged-read-checksum-v1` contract. Its timed accumulator binds each semantic visit
 to the logical table index, loaded physical ID, visit kind (paired write/append, K scan, or V scan), and work-unit ordinal in one
-non-separable mix. Summing physical IDs alone is prohibited because every permutation has the same ID sum. A test that
-swaps two non-tail blocks with equal read multiplicity must therefore produce a mismatch. An independent bounded scalar
+non-separable mix. Summing physical IDs alone is prohibited because every permutation has the same ID sum. The maintained tests
+show a mismatch for selected two-entry non-tail swaps with equal read multiplicity; this is not a guarantee for all
+possible table mutations or modulo-arithmetic collisions. An independent bounded scalar
 oracle computes the cold-path expected value without calling the assembly helper or rereading a multi-GiB pool.
 Post-validation checks the logical decode current-token K/V append or prefill final-ordinal samples at their resolved
 physical locations and every last-block padding canary.
@@ -682,9 +684,9 @@ CPU prefill uses its versioned full-prompt affine64 write pattern. Metal contigu
 `llm-metal-prefill-contiguous-full-prompt-affine32-v1`, while Metal paged prefill uses
 `llm-metal-prefill-paged-full-prompt-affine32-v1` with checksum
 `llm-metal-paged-prefill-dual-mod32-lookup-address-mix-v1`. Every K/V word binds scenario seed, operation ordinal, layer,
-batch, logical token, record-word index, and K/V domain. Timed checksum agreement proves the expected contents
-and visit multiplicity across all T operations, including every tile-read visit; it does not by itself prove event
-order. CPU source/disassembly audit and the Metal entrypoint/source-hash audit establish the locked order: one
+batch, logical token, record-word index, and K/V domain. Timed checksum agreement checks the expected accumulator
+across T operations, including planned tile-read contributions. It does not establish every executed load, content value, visit multiplicity, or event order.
+CPU source/disassembly and Metal entrypoint/source-hash audits qualify the implementation of the specified order: one
 weight pass per operation when weights are active, complete prompt population for KV-bearing scenarios, then for every
 increasing tile the complete K prefix followed by the complete V prefix. In paged prefill, population and
 prefix fragments additionally bind the table index and loaded physical ID and stop at exact partial-block boundaries.
@@ -697,7 +699,8 @@ against the final task-local ordinal `T-1`, after timer stop and all worker join
 `decode-post-validation-failed`: the invalid attempt is retained with null rates and excluded from
 aggregates. The timed workload and checksum algorithm are unchanged. KV-write evidence applies only
 to KV-bearing scenarios; paged/prefill evidence retains the combined final-state check and its existing
-padding/sampling limits. CPU paged weights-only unexpected-write/padding protection remains active.
+padding/sampling limits. CPU paged decode weights-only checks its append slots and padding; CPU paged prefill weights-only checks padding,
+not valid prompt contents.
 See the [CPU final-state evidence contract](API.md#result-schemas-and-completion) for field and null semantics.
 
 
@@ -715,6 +718,81 @@ representative and boundary byte samples from the full-prompt population against
 the paged profile also checks applicable suffix-padding canaries. It does not reread every prompt record. A timed
 checksum, K/V-write, or applicable padding mismatch invalidates the current task and prevents the
 next task; there is no retry and no numeric comparison with the CPU checksum algorithm.
+
+## Checksum fault model and evidence limits
+
+Three kinds of evidence have different owners: the immutable work plan describes intended geometry, payload, and
+visits; a task records runtime checksum, timing, lifecycle, and post-validation observations; kernel qualification
+checks a particular build using independent oracles, ABI/layout goldens, source/disassembly, and real-device tests.
+A source hash or generated semantic event list is a build/semantic change guard, not a GPU execution trace. Exact-byte
+and lookup counters are programmed observations or plan-derived completion quantities, not physical DRAM counters.
+Checksum equality is necessary for acceptance, but is not an exhaustive content or address proof.
+
+The following matrix covers CPU/Metal × decode/prefill × contiguous/paged. **O** means an observed, specifically
+bounded test case; **E** means detection is conditional on the checksum/validator and has no corresponding injected
+kernel-fault proof here; **S** identifies a known blind spot. **—** is inapplicable. Multiple marks distinguish a
+selected detected mutation from other undetected mutations in the same broad class. They are not coverage percentages.
+
+| Fault | CPU decode contiguous | CPU decode paged | CPU prefill contiguous | CPU prefill paged | Metal decode contiguous | Metal decode paged | Metal prefill contiguous | Metal prefill paged |
+|---|---|---|---|---|---|---|---|---|
+| Skipped/duplicated read or wrong work-unit count | O W; E other reads | O W; E KV | O W; E KV | O W; E KV | E | E | E | E |
+| Wrong address or equal-valued substitution | S equal value | O T; S other substitutions | S equal value | O T; S other substitutions | S equal value | O T; S other substitutions | S equal value | O T; S other substitutions |
+| CPU within-span 32-byte swap or same-parity +1/−1 | S W | S W | S W | S W | — | — | — | — |
+| Metal content permutation or cancellation with the same visits | — | — | — | — | S H | S H | S H | S H |
+| Wrong paged table ID / lookup | — | O T; E skipped lookup | — | O T; E skipped lookup | — | O T; E skipped lookup | — | O T; E skipped lookup |
+| Wrong K/V append or prefill final state | O A | O A | O P; S unsampled post-checksum writes | O P; S unsampled post-checksum writes | E A | E A | E P; S unsampled post-checksum writes | E P; S unsampled post-checksum writes |
+| Padding or other extra write | E outside checked append | O C; E elsewhere | E outside samples | O C; E elsewhere | E outside checked append | O C; E elsewhere | E outside samples | O C; E elsewhere |
+
+- **W — shared CPU weight span only.** In all four real ASM entrypoints, the 64-byte word vector
+  `11,23,37,43,59,67,79,83` retains its checksum after swapping its two 32-byte halves or adding one to word zero and
+  subtracting one from word two, at T=1 and T=2. Both mutations preserve the even/odd word sums. A one-bit change is
+  detected. Separate invocations against the original independent 64-byte × T=2 oracle detect a 32-byte range removal,
+  a duplicated 32-byte range, and T=1/T=3. These are selected descriptor/work-count mutations, not tests of every
+  possible skipped machine load. They do not establish a whole KV/backend acceptance collision. CPU prefill KV uses
+  logical-word parity sums with its own visit/lookup rules; the weight-span test does not replace that separate oracle.
+- **H — actual Metal shared helper, not full-backend acceptance.** The test adds a small test-only entrypoint to the
+  unchanged embedded MSL and calls `mix_checksum_word` on four words. For fixed visits, modulo 2^32:
+  `a=sum(value)+sum(domain)` and
+  `b=0x9e3779b1*sum(value)+0x85ebca77*sum(word_index)+0x7feb352d*sum(domain)`.
+  Thus both lanes depend on the same content sum; they are not an independent 64-bit content proof. The original
+  `11,23,37,43`, its reversal, and `12,22,37,43` each produce `(49596,3847175070)` for domains `12345+17*i`.
+  The one-bit control `10,23,37,43` produces `(49595,1192739309)`. This shared-helper result applies to its use by
+  all four profiles with the same visit/domain contributions; additional lookup, write, and lifecycle checks can
+  still reject a complete task. Content terms and separately added address terms do not establish arbitrary
+  content-to-address binding.
+- **T — selected real table mutations.** CPU decode/prefill tests swap two table IDs while preserving ID multiplicity
+  and using identical initial physical block contents. The actual ASM K/V checksums differ from the independent
+  correct-table oracle even when byte/span counts match. Metal decode/prefill tests swap equal-read-multiplicity
+  nonterminal IDs after generating the canonical expected summary and before uploading the actual GPU table.
+  The real workload dispatch returns a checksum mismatch. This does not prove detection of every table permutation,
+  lookup omission, or modulo collision.
+- **A/P — append versus sampled prefill state.** CPU contiguous decode checks all bytes of both final append records,
+  across layers/batches after timer stop and worker joins. Its K/V first/last-byte corruptions retain a valid timed
+  checksum but fail post-validation. CPU paged decode also has real append-corruption coverage. CPU prefill tests
+  corrupt checked canonical-word/boundary samples after the real kernel; Metal prefill checks representative/boundary
+  locations per layer/batch sequence. Neither prefill validator scans every prompt record or every intermediate
+  operation. A mutation confined to unsampled prompt bytes after the timed checksum has been collected is a known blind spot
+  of the cold sampler on both backends; it cannot change that already collected checksum. Metal's forced `kv_write` result test is an acceptance hook, not an actual shader write-corruption test;
+  hence E rather than O for that fault in the matrix.
+- **C — bounded canaries.** CPU paged decode/prefill tests alter real final-state/padding memory after the kernel.
+  Metal paged tests use a real blit write into K padding before post-validation. CPU paged decode weights-only checks its append slots and padding. CPU paged prefill weights-only checks
+  structure and padding only, not unexpected writes to valid prompt contents. Metal weights-only does not
+  evaluate KV-write or padding validation. Tail/guard-page, layout, and ABI tests additionally qualify the intended
+  implementation; none is an all-memory post-execution scan.
+
+The maintained examples are in [CPU kernel tests](../tests/test_llm_memory_kernels.cpp), notably
+`AllCpuWeightSpansExposeBoundedParityCollisions`, `AllCpuWeightSpansDetectBoundedReadAndWorkUnitMutations`,
+`PagedWrongSameMultiplicityBlockTableDoesNotMatchOracle`, and
+`PagedPrefillWrongSameMultiplicityBlockTableDoesNotMatchOracle`; in
+[CPU executor tests](../tests/test_llm_memory_executor.cpp) for append/prefill/padding corruptions; and in
+[Metal helper tests](../tests/test_llm_metal_checksum.mm) for
+`SharedAffineLanesExposeBoundedContentCollisions`. The
+[Metal backend tests](../tests/test_llm_metal_backend.cpp) contain
+`DecodePagedPermutationAndPaddingHooksAreDetectedIntegration` and
+`PrefillPagedPermutationAndPaddingHooksAreDetectedIntegration`. Their real table/blit mutations differ from
+`force_timed_checksum_mismatch` (host readback altered after execution) and `force_kv_write_validation_mismatch`
+(forced validation boolean), which test result handling. Pure independent checksum-oracle goldens test arithmetic;
+they are not GPU execution evidence. Algorithms and their existing identities remain unchanged by this fault model.
 
 ## Timing boundary and backend lifecycle
 
@@ -1096,7 +1174,7 @@ Correctness gates cover:
   exact payload and vector tails, final-ordinal K/V-write validation, and source-hash-bound full-write → tile-K →
   tile-V loop-order audit;
 - Metal paged-prefill `N + 2*M` lookup accounting, cyclic owner-ordinal scheduling, partial terminal visits,
-  per-threadgroup accounted-cost evidence, multi-segment table/K/V addressing, final-ordinal full-prompt write and
+  per-threadgroup accounted-cost evidence, multi-segment table/K/V addressing, final-ordinal representative/boundary prompt-write samples and
   padding-canary validation, wrong-table detection, and source-hash-bound loop-order audit;
 - synchronized worker timing, startup cancellation, QoS evidence, timer/error containment, and AAPCS64 preservation;
 - scenario-specific calibration, frozen plans, cyclic balance, aggregate population, interruption, and checkpoint
