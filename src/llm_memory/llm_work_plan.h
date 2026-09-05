@@ -496,9 +496,9 @@ struct LlmPrefillGeometry {
   size_t attention_query_tile_tokens = 0;
   size_t tile_count = 0;
   size_t attention_prefix_token_visits_per_sequence = 0;
-  size_t causal_token_pairs_per_sequence = 0;
-  size_t logical_attention_pairs = 0;
-  size_t logical_attention_fma_terms = 0;
+  std::optional<size_t> causal_token_pairs_per_sequence;
+  std::optional<size_t> logical_attention_pairs;
+  std::optional<size_t> logical_attention_fma_terms;
   size_t paged_prefix_block_visits_per_sequence = 0;
 };
 
@@ -955,6 +955,7 @@ struct LlmAuxiliaryPreflightView {
   size_t metal_persistent_resource_count = 0;
   size_t metal_resolved_execution_plan_backing_bytes = 0;
   size_t metal_resolved_plan_identity_backing_bytes = 0;
+  size_t canonical_expected_scratch_bytes = 0;  ///< Paged Metal temporary table plus validation/hash scratch.
   size_t model_plan_identity_bytes = 0;
   std::array<size_t, kLlmScenarioCount>
       maximum_scenario_plan_identity_bytes{};
@@ -1226,7 +1227,7 @@ bool readmit_llm_memory_work_plan(
     LlmMemoryWorkPlan& plan, size_t checksum_auxiliary_bytes,
     size_t orchestration_auxiliary_bytes) noexcept;
 
-/** Build `llm-memory-v1-<backend>-<phase>-<layout>`. */
+/** Build `llm-memory-v2-<backend>-<phase>-<layout>`. */
 std::string build_llm_methodology_version(LlmMemoryBackend backend,
                                           LlmPhase phase,
                                           LlmKvLayout layout);

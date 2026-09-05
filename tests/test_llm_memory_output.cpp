@@ -422,9 +422,23 @@ class FakeLlmBackend final : public LlmBackend {
     return evidence_.preparation;
   }
 
+  LlmExpectedChecksumResult expected_cpu_checksum(const LlmMemoryWorkPlan& model_plan,
+                                                 const LlmScenarioWorkPlan&) const noexcept override {
+    LlmExpectedChecksumResult expected;
+    expected.valid = true;
+    expected.reason_code = LlmExecutorReason::VALID;
+    expected.workers.resize(cpu_execution_plan(model_plan).effective_workers);
+    expected.run_checksum = {11, 22};
+    return expected;
+  }
+
   LlmTaskExecutionResult execute_task(const LlmMemoryWorkPlan& model_plan, const LlmScenarioWorkPlan& scenario_plan,
                                       const LlmRunnerTaskContext& context) override {
     auto execution = successful_fake_execution(model_plan);
+    execution.cold_checks = required_llm_cold_checks(model_plan, scenario_plan.scenario);
+    for (size_t slot = 0; slot < execution.cold_checks.size(); ++slot) {
+      resolve_llm_cold_check(execution.cold_checks, slot, true);
+    }
     execution.kv_write_validation_applicable = scenario_plan.scenario != LlmScenario::WeightsOnly;
     execution.kv_write_validation_evaluated = execution.kv_write_validation_applicable;
     execution.kv_write_validation_valid = execution.kv_write_validation_applicable;
@@ -535,6 +549,7 @@ TEST(LlmMemoryOutputTest, MetalReportPrintsCapabilitySegmentsAndTaskValidationEv
   weights_task.timing_evaluated = true;
   weights_task.timing_valid = true;
   weights_task.gpu_elapsed_seconds = 0.001;
+  weights_measurement.execution.timing = {true, true, 0.001};
   weights_task.checksum_evaluated = true;
   weights_task.checksum_valid = true;
   weights_task.kv_write_validation_evaluated = false;
@@ -552,6 +567,7 @@ TEST(LlmMemoryOutputTest, MetalReportPrintsCapabilitySegmentsAndTaskValidationEv
   task.timing_evaluated = true;
   task.timing_valid = true;
   task.gpu_elapsed_seconds = 0.0025;
+  measurement.execution.timing = {true, true, 0.0025};
   task.checksum_evaluated = true;
   task.checksum_valid = true;
   task.kv_write_validation_evaluated = true;
@@ -624,7 +640,7 @@ TEST(LlmMemoryOutputTest, MetalPagedReportPrintsTableLookupPaddingAndCanaryEvide
   task.grid_plan.paged_semantic_lookups = 10;
   task.timing_evaluated = true;
   task.timing_valid = true;
-  task.gpu_elapsed_seconds = 0.0025;
+  measurement.execution.timing = {true, true, 0.0025};
   task.checksum_evaluated = true;
   task.checksum_valid = true;
   task.kv_write_validation_evaluated = true;
@@ -682,7 +698,7 @@ TEST(LlmMemoryOutputTest,
   task.grid_plan.threads_per_threadgroup = 64;
   task.timing_evaluated = true;
   task.timing_valid = true;
-  task.gpu_elapsed_seconds = 0.004;
+  measurement.execution.timing = {true, true, 0.004};
   task.checksum_evaluated = true;
   task.checksum_valid = true;
   task.kv_write_validation_evaluated = true;
@@ -752,8 +768,6 @@ TEST(LlmMemoryOutputTest,
   set_headline(result, LlmScenario::Mixed, 0.004, 250.0, 75.0);
   LlmMeasurementState measurement;
   measurement.scenario = LlmScenario::Mixed;
-  measurement.work_unit_kind = LlmWorkUnitKind::PrefillOperation;
-  measurement.kv_write_kind = LlmKvWriteKind::FullPromptPopulation;
   LlmMetalTaskEvidence task;
   task.pipeline_label =
       "membenchmark.llm-metal.pipeline.prefill-paged.mixed";
@@ -769,7 +783,7 @@ TEST(LlmMemoryOutputTest,
   task.grid_plan.threadgroup_accounted_bytes = {1596, 1596};
   task.timing_evaluated = true;
   task.timing_valid = true;
-  task.gpu_elapsed_seconds = 0.004;
+  measurement.execution.timing = {true, true, 0.004};
   task.checksum_evaluated = true;
   task.checksum_valid = true;
   task.kv_write_validation_evaluated = true;
@@ -1015,7 +1029,9 @@ TEST(LlmMemoryOutputTest, EmitsDeduplicatedWarningsInContractOrder) {
   LlmMeasurementState mixed;
   mixed.scenario = LlmScenario::Mixed;
   mixed.status = LlmMeasurementStatus::Measured;
-  mixed.qos_failed_workers = 1;
+  LlmCpuRetainedEvidence cpu;
+  cpu.executor.qos_failed_workers = 1;
+  mixed.execution.backend_evidence = cpu;
   mixed.duration_quality = "above-target-single-work-unit";
   result.measurements.push_back(mixed);
   result.measurements.push_back(mixed);

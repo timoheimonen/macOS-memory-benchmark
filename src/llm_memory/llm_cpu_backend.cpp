@@ -128,6 +128,13 @@ class LlmCpuBackend final : public LlmBackend {
     return evidence_.preparation;
   }
 
+  LlmExpectedChecksumResult expected_cpu_checksum(const LlmMemoryWorkPlan& model_plan,
+                                                  const LlmScenarioWorkPlan& scenario_plan) const noexcept override {
+    if (!resources_prepared_ || !plan_resolved_ || model_plan.backend != LlmMemoryBackend::Cpu ||
+        resolved_plan_identity_ != model_plan.plan_identity) return LlmExpectedChecksumResult{};
+    return calculate_llm_expected_checksums(model_plan, scenario_plan, resources_);
+  }
+
   LlmTaskExecutionResult execute_task(const LlmMemoryWorkPlan& model_plan, const LlmScenarioWorkPlan& scenario_plan,
                                       const LlmRunnerTaskContext& context) override {
     if (!resources_prepared_ || !timer_.has_value() || resolved_plan_identity_ != model_plan.plan_identity) {

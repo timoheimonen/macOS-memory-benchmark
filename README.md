@@ -176,7 +176,7 @@ checkpoints are required; see the [Machine-Readable CLI API](documents/API.md) s
 | `--analyze-core2core` | Calibrated two-thread acquire/release token-protocol round-trip latency under best-effort macOS scheduler hints. |
 | `--gpu-bandwidth` | Standalone Metal GPU read/write/copy effective compute-payload bandwidth. |
 | `--llm-memory` | Standalone synthetic LLM memory profile: CPU or Metal decode/prefill with contiguous or paged KV. |
-| `--sweep <key=a,b>` | Cartesian parameter sweep for supported CPU, pattern, TLB, and core-to-core modes; requires `--output`. GPU schema 1 and LLM schema 1 do not support sweeps. |
+| `--sweep <key=a,b>` | Cartesian parameter sweep for supported CPU, pattern, TLB, and core-to-core modes; requires `--output`. GPU schema 1 and LLM schema 2 do not support sweeps. |
 
 Primary modes are intentionally separate and accept different option sets. Use `memory_benchmark -h` or the [User Manual](documents/MANUAL.md) for defaults, valid combinations, and the complete option reference.
 
@@ -243,7 +243,7 @@ memory_benchmark --gpu-bandwidth --buffer-size 512 --count 3 --seed 42 --output 
   >gpu_bandwidth.json 2>gpu_bandwidth.log
 ```
 
-Reproducible fixed-work LLM memory profile with atomic scenario and command-terminal file checkpoints:
+Reproducible fixed-work LLM memory profile with bounded completed-loop and command-terminal atomic file snapshots:
 
 ```bash
 caffeinate -i -d memory_benchmark --llm-memory --weight-size-mb 4096 --layers 32 \
@@ -265,7 +265,7 @@ For prefill, replace the decode context with explicit prompt/tile geometry:
 
 Add `--kv-layout paged --kv-block-tokens 16` to combine that prefill geometry with deterministic paged KV.
 
-The same schema 1 payload can be captured once from final-only stdout:
+The same LLM schema 2 payload can be captured once from final-only stdout:
 
 ```bash
 memory_benchmark --llm-memory --weight-size-mb 64 --layers 4 \
@@ -322,9 +322,11 @@ They retain the top-level `version` as provenance but do not require a particula
 translate released standard schema 2, unversioned historical standard JSON layouts, or other methodology identities.
 Consumers making conclusions should reject incomplete or interrupted runs according to the mode-specific status fields.
 Every result-producing direct command or CPU sweep using `--output -` reserves stdout for one final JSON document and
-routes its post-parse human transcript to stderr; file output is atomic. LLM file output checkpoints after each terminal
-scenario measurement and at command terminal, while its stdout checkpoints remain logical lazy transitions followed by
-one final document. Exact process acceptance rules are in the
+routes its post-parse human transcript to stderr; file output is atomic. LLM files receive a progress snapshot every
+`K=max(1,ceil(count/8))` completed loops plus a terminal snapshot: at most eight progress writes, with up to `3K`
+completed attempts potentially missing after abrupt termination. Stdout emits one final document. A correct complete
+one-loop LLM run can have `run_accepted: true` while position balance is incomplete and quality is insufficient for a
+comparison. Inspect sample count, observed CV, duration and environment separately. Exact process acceptance rules are in the
 [Machine-Readable CLI API](documents/API.md), with schema and checkpoint details in the
 [User Manual](documents/MANUAL.md), [Technical Specification](documents/TECHNICAL_SPECIFICATION.md), and mode
 whitepapers.

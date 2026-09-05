@@ -10,6 +10,7 @@
  * @brief Centralized synthetic LLM memory-profile CLI text
  */
 
+#include <optional>
 #include "output/console/messages/messages_api.h"
 
 #include <iomanip>
@@ -156,9 +157,10 @@ std::string llm_memory_usage_options(const std::string& prog_name) {
         << "  -r, --count <count>    Cyclic weights/KV/mixed loops (default: " << Constants::LLM_DEFAULT_LOOP_COUNT
         << ").\n"
         << "      --seed <uint64>    Reproducible base seed; generated once when omitted.\n"
-        << "  -o, --output <target>  JSON schema 1 target; exact - writes one final document to\n"
+        << "  -o, --output <target>  JSON schema 2 target; exact - writes one final document to\n"
         << "                          stdout and routes human output to stderr. Every other non-empty\n"
-        << "                          target is a file with atomic scenario and terminal checkpoints.\n"
+        << "                          target is a file with bounded loop and terminal atomic snapshots.\n"
+        << "                          K=max(1,ceil(count/8)); abrupt loss bound: 3K completed attempts.\n"
         << "                          An empty value disables JSON for this direct command.\n"
         << "  -h, --help             Show this LLM-mode help and exit.\n"
         << "This profile models CPU or Metal memory traffic only: it performs no Transformer math and\n"
@@ -302,16 +304,16 @@ std::string report_llm_memory_decode_geometry(
 
 std::string report_llm_memory_prefill_geometry(size_t prompt_tokens, size_t attention_query_tile_tokens,
                                                size_t tile_count, size_t attention_prefix_token_visits_per_sequence,
-                                               size_t causal_token_pairs_per_sequence, size_t logical_attention_pairs,
-                                               size_t logical_attention_fma_terms) {
+                                               std::optional<size_t> causal_token_pairs_per_sequence, std::optional<size_t> logical_attention_pairs,
+                                               std::optional<size_t> logical_attention_fma_terms) {
   std::ostringstream report;
   report << "  Prompt tokens (P):                 " << prompt_tokens << "\n"
          << "  Attention query tile tokens (Q):  " << attention_query_tile_tokens << "\n"
          << "  Attention query tiles (C):        " << tile_count << "\n"
          << "  Prefix token visits / sequence:   " << attention_prefix_token_visits_per_sequence << "\n"
-         << "  Causal token pairs / sequence:    " << causal_token_pairs_per_sequence << "\n"
-         << "  Logical attention pairs:          " << logical_attention_pairs << "\n"
-         << "  Logical attention FMA terms:      " << logical_attention_fma_terms;
+         << "  Causal token pairs / sequence:    " << (causal_token_pairs_per_sequence ? std::to_string(*causal_token_pairs_per_sequence) : "unavailable (arithmetic-overflow)") << "\n"
+         << "  Logical attention pairs:          " << (logical_attention_pairs ? std::to_string(*logical_attention_pairs) : "unavailable (arithmetic-overflow)") << "\n"
+         << "  Logical attention FMA terms:      " << (logical_attention_fma_terms ? std::to_string(*logical_attention_fma_terms) : "unavailable (arithmetic-overflow)");
   return report.str();
 }
 
@@ -368,6 +370,15 @@ std::string report_llm_memory_scenario_headline(
   }
   report << std::setprecision(2) << effective_model_payload_gb_s
          << " GB/s effective model payload";
+  return report.str();
+}
+
+std::string report_llm_memory_distribution(size_t count, double median, double minimum, double maximum,
+                                           double cv_pct, double mad) {
+  std::ostringstream report;
+  report << "    n=" << count << std::fixed << std::setprecision(2)
+         << ", median=" << median << " GB/s, min=" << minimum << ", max=" << maximum
+         << ", CV=" << cv_pct << "%, MAD=" << mad << " GB/s";
   return report.str();
 }
 

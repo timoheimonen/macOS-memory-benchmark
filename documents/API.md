@@ -25,7 +25,7 @@ transport. GPU schema 1 remains a direct-only mode and does not support sweeps.
 | Direct `--gpu-bandwidth` | Yes | Yes |
 | Direct `--llm-memory` | Yes | Yes |
 
-GPU schema 1 and LLM schema 1 are direct-only modes and do not support sweeps.
+GPU schema 1 and LLM schema 2 are direct-only modes and do not support sweeps.
 
 ## Invocation and stream contract
 
@@ -48,7 +48,7 @@ A direct GPU command uses the same stream transport with its existing top-level 
 memory_benchmark --gpu-bandwidth --buffer-size 512 --count 3 --seed 42 --output -
 ```
 
-A direct LLM command likewise emits its top-level schema 1 payload. CPU decode and prefill each support contiguous or
+A direct LLM command likewise emits its top-level schema 2 payload. CPU decode and prefill each support contiguous or
 paged KV:
 
 ```bash
@@ -133,8 +133,8 @@ Some runtime setup failures also occur before a schema-valid payload exists. The
 TLB setup, memory-budget, or allocation failures before analysis-state initialization, a GPU backend-factory failure,
 and LLM logical preflight or JSON-output peak-estimation failure before runner-result initialization therefore produce
 stderr plus a non-zero status and leave stdout empty. After the LLM runner has initialized a representable result, a
-selected Metal backend that fails its runtime capability check emits one terminal schema-1 `unsupported` document;
-runtime compiler, pipeline, resource, or task failures emit a terminal schema-1 `failed` run with failed or invalid
+selected Metal backend that fails its runtime capability check emits one terminal schema-2 `unsupported` document;
+runtime compiler, pipeline, resource, or task failures emit a terminal schema-2 `failed` run with failed or invalid
 measurement evidence as applicable. All return non-zero, and none is retried on CPU. Once a mode has initialized a
 representable result, graceful interruption or a normal runtime failure emits the available partial, interrupted,
 error, failed, or unsupported payload. Core-to-core measurement failures, TLB measurement errors, GPU
@@ -158,21 +158,38 @@ Real file targets retain their existing persistence behavior:
 - parameter sweeps atomically checkpoint their combined envelope after each attempted run and also checkpoint a terminal
   zero-attempt envelope when the run plan is empty or interruption is observed before a run;
 - GPU mode retains its mode-specific terminal-measurement and failure checkpoints;
-- LLM mode atomically checkpoints after every terminal scenario measurement and once at command terminal;
+- LLM mode atomically snapshots bounded completed-loop progress and command terminal as specified below;
 - a temporary `<target>.tmp` file is replaced atomically, and a failed replacement preserves the preceding destination
   when possible.
 
-Stdout is final-only. Intermediate standard, sweep, GPU, and LLM checkpoint requests are successful lazy no-ops: their
+Stdout is final-only. Intermediate standard, sweep and GPU checkpoint requests are successful lazy no-ops: their
 payload builders are not invoked, while all logical state changes, stop observations, counters, cleanup, and final result
-construction still occur. In particular, GPU and LLM perform the same checkpoint-boundary stop reads as file output.
+construction still occur. LLM skips intermediate snapshot preparation on stdout but preserves task-boundary stop observations.
 The command serializes one terminal snapshot after orchestration finishes. Stdout is not JSON Lines and never contains
 a sequence of checkpoint documents.
 
-File-output ownership is mode-aware. Standard and sweep file producers retain their existing checkpoints, GPU retains
-its terminal-measurement, failure, and post-release replacement cadence, and LLM owns its scenario-terminal plus
-command-terminal cadence. A failed LLM checkpoint is terminal and is not retried at a final file-write boundary; the
-last successfully replaced destination remains the recoverable evidence when possible. The stdout command boundary
-alone emits the retained final document.
+For LLM, let `N=planned_loops` and `K=max(1,ceil(N/8))`, calculated without addition overflow. File targets
+write progress after every Kth fully completed loop, at most eight times, and one command-terminal snapshot on
+success, graceful interruption or representable failure. The current unmerged cadence gives at most 4/7/9 normal
+snapshots for N=3/12/48. One late command exception after successful terminal persistence may write one corrective
+failure snapshot; a failed checkpoint is terminal and never retried or followed by a disguised final write.
+
+An abrupt exit can lose up to `3K` truly completed measurement attempts after the last successful snapshot, including
+while its replacement is in progress. Unstarted tail placeholders do not count toward this bound. Before the first
+successful snapshot there may be no file. Graceful SIGINT retains the finished prefix and an interrupted/null tail
+when terminal persistence succeeds; SIGKILL or a crash does not promise terminal output. Atomic rename does not imply
+power-loss durability. Stop checks remain at each existing task/terminal boundary even when a snapshot is skipped.
+Stdout builds one final DOM; disabled output builds none.
+
+`checkpoint_lifecycle` publishes `checkpoint_failed`, `prior_file_writer_attempts`, `prior_successful_file_writes`,
+`observation_point: "before-current-snapshot-preparation"`, `current_request` (`progress`, `terminal`, or
+`late-command-error-correction`), `current_persistence_success: null`, `snapshot_interval_loops`,
+`checkpoint_policy: "bounded-loop-snapshots"`, `file_checkpoint_failure_is_terminal_and_not_retried: true`, and
+`stdout_intermediate_checkpoints_are_lazy: true`. The prior counts observe writer entry and successful return before
+this snapshot, not the current write's eventual success. Builder failure is not writer entry; stdout/disabled no-ops
+are not file writes. For a successful N=3 file command the terminal document normally reports three prior successes,
+not four self-inclusive successes. No extra write is made just to count itself. A retained prior snapshot cannot attest
+to a future write/cleanup failure; final collection must retain actual process outcome and terminal context.
 
 Use a real file target when crash-resilient intermediate checkpoints are required.
 
@@ -188,7 +205,7 @@ contract version 1 first appears in software version `0.62.0`.
 | TLB | `configuration.schema_version == 4` | `tlb_analysis.status == "complete" && tlb_analysis.conclusions_valid == true` |
 | Core-to-core | `configuration.schema_version == 2` | `core_to_core_latency.status == "complete" && core_to_core_latency.measurements_complete == true` |
 | GPU | `schema_version == 1` | `status == "complete" && results_complete == true && conclusions_valid == true` |
-| LLM memory profile | `mode == "llm_memory" && schema_version == 1` | Requested backend/phase/layout match, methodology is the exact derived identity, `status == "complete"`, `results_complete == true`, `conclusions_valid == true`, and every planned measurement is `measured` |
+| LLM memory profile | `mode == "llm_memory" && schema_version == 2` | Requested backend/phase/layout match, methodology and run-policy match the exact identities, `status == "complete"`, `results_complete == true`, `run_accepted == true`, and every planned measurement is `measured` |
 | General CPU sweep | `configuration.sweep_schema_version == 1` | `status == "complete" && conclusions_valid == true` |
 | Core-to-core sweep | `configuration.sweep_schema_version == 1` | `status == "complete" && conclusions_valid == true` |
 
@@ -214,16 +231,16 @@ conclusions additionally require `affinity_hint_comparison_interpretable == true
 additionally requires `operation_order_balance_complete == true`; consumers of an operation also require a measured,
 non-null value and its applicable validation/quality fields.
 
-LLM schema 1 is an unpublished generic contract. It has top-level `mode: "llm_memory"`, `schema_version: 1`, and exact
+LLM schema 2 replaces the unpublished schema-1 contract without compatibility aliases or a fallback reader. It has top-level `mode: "llm_memory"`, `schema_version: 2`, and exact
 `backend`, `phase`, `kv_layout`, and `methodology_version` selectors. Methodology is derived as
-`llm-memory-v1-<backend>-<phase>-<layout>`. This revision activates `cpu`/`decode`/`contiguous`,
+`llm-memory-v2-<backend>-<phase>-<layout>`. This revision activates `cpu`/`decode`/`contiguous`,
 `cpu`/`decode`/`paged`, `cpu`/`prefill`/`contiguous`, and `cpu`/`prefill`/`paged`, with exact methodologies
-`llm-memory-v1-cpu-decode-contiguous`, `llm-memory-v1-cpu-decode-paged`,
-`llm-memory-v1-cpu-prefill-contiguous`, and `llm-memory-v1-cpu-prefill-paged`. It also activates
+`llm-memory-v2-cpu-decode-contiguous`, `llm-memory-v2-cpu-decode-paged`,
+`llm-memory-v2-cpu-prefill-contiguous`, and `llm-memory-v2-cpu-prefill-paged`. It also activates
 `metal`/`decode`/`contiguous`, `metal`/`decode`/`paged`, `metal`/`prefill`/`contiguous`, and
-`metal`/`prefill`/`paged`, with methodologies `llm-memory-v1-metal-decode-contiguous`,
-`llm-memory-v1-metal-decode-paged`, `llm-memory-v1-metal-prefill-contiguous`, and
-`llm-memory-v1-metal-prefill-paged`. No selection is silently replaced by another backend, phase, or layout.
+`metal`/`prefill`/`paged`, with methodologies `llm-memory-v2-metal-decode-contiguous`,
+`llm-memory-v2-metal-decode-paged`, `llm-memory-v2-metal-prefill-contiguous`, and
+`llm-memory-v2-metal-prefill-paged`. No selection is silently replaced by another backend, phase, or layout.
 
 Run statuses are `not_started`, `complete`, `partial`, `interrupted`, `unsupported`, and `failed`; measurement statuses
 are `not_run`, `measured`, `interrupted`, `invalid`, and `failed`. `unsupported` is a terminal, non-acceptable result,
@@ -243,12 +260,12 @@ addresses, or visit multiplicities. A post-validation failure can retain `checks
 invalid, its rates are null, and it does not enter aggregates. Missing checksum evidence remains null rather than false
 or successful. CPU paged decode weights-only checks append slots and padding; CPU paged prefill weights-only checks padding only.
 Metal weights-only
-reports KV-write unevaluated and padding inapplicable, so no successful KV-write observation may be inferred from its
+reports KV-write and padding inapplicable, so no successful KV-write observation may be inferred from its
 combined lifecycle result. Prefill validation remains sampled on both backends. Programmed byte/lookup counts and
 plan-derived completion do not measure physical DRAM traffic. Source hashes, ABI goldens, and generated semantic
 lists qualify a specific implementation rather than adding runtime observations to the JSON. See the
 [profile fault matrix and exact collision limits](LLM_MEMORY_PROFILE_WHITEPAPER.md#checksum-fault-model-and-evidence-limits).
-These limits do not change schema 1, the checksum identities, or the completion/acceptance predicate below.
+Independent named checks retain these existing detection limits and checksum identities.
 
 The required generic top-level field set is:
 
@@ -256,7 +273,9 @@ The required generic top-level field set is:
 schema_version, mode, backend, phase, kv_layout, methodology_version,
 software, configuration, resolved_plan, backend_evidence, memory_budget,
 calibration, measurements, aggregates, status, reason_code,
-results_complete, conclusions_valid, interpretation
+results_complete, run_accepted, interpretation, diagnostic, interruption_requested,
+scenario_order_balance_complete, seeds, counters, checkpoint_lifecycle, loop_records,
+environment, quality_warnings, build_manifest
 ```
 
 `configuration` preserves exact `argv`, the raw output target, requested/resolved inputs, and a `resolved_sources`
@@ -275,8 +294,8 @@ requested/available/effective worker contract.
 
 - Exactly one of `geometry.decode` and `geometry.prefill` is an object. Phase-specific fields are never overloaded.
   Decode has integer `visible_context_tokens`. Prefill has integer
-  `prompt_tokens`/`attention_query_tile_tokens` and decimal-string tile, prefix-visit, causal-pair, attention-pair, and
-  FMA-term counts. Decode-only crossover numerator, denominator, and context, current visible context, weight/KV-read
+  `prompt_tokens`/`attention_query_tile_tokens` and decimal-string tile and prefix-visit counts. Theoretical
+  causal-pair, attention-pair and FMA-term values instead belong to `model_context.prefill`. Decode-only crossover numerator, denominator, and context, current visible context, weight/KV-read
   ratio, and `current_context_classification` are null for prefill. `classification_version` and
   `classification_is_payload_only` remain populated because they describe the schema field's semantics.
 - `layout.kv_layout` is the selected `contiguous` or `paged` token. Contiguous results use null for paged-only fields
@@ -355,18 +374,22 @@ stops the timer and all workers join. Failure is `decode-post-validation-failed`
 invalid attempt with null rates and excluded from aggregate populations. The timed payload and
 checksum algorithm are unchanged. A matching runtime checksum does not replace this final-state check.
 
-In LLM schema 1, CPU `measurements[].execution.post_validation_evaluated` retains its existing
-meaning: the phase/layout final-state validation pipeline was reached, including a no-op path when
-no write check applies. `post_validation_valid` is that combined pipeline result. Additive CPU fields
-`kv_write_validation_applicable`, `kv_write_validation_evaluated`, and `kv_write_validation_valid`
-distinguish a KV-writing scenario from `weights_only`. When applicability is false, evaluated and
-valid serialize as null. When applicable but unevaluated, evaluated is false and valid is null;
-acceptance requires evaluated and valid to be true. All three are null without available CPU evidence.
-For paged and prefill profiles, the valid field reports the existing combined phase/layout final-state
-check, including any applicable padding check; it is not an independent append-only verdict. Prefill
-retains its documented sampling limits. `weights_only` does not claim KV-write validation. Its combined CPU paged
-pipeline checks append slots and padding for decode, but only structure and padding for prefill; prefill weights-only
-does not check unexpected writes to valid prompt contents.
+Both measurements and excluded calibration attempts publish cold checks at `execution.validation.checks[]`.
+Each entry contains exactly `kind`, `applicable`, `evaluated`, `valid`, and `reason_code`. The three slots are structure,
+the scenario's write/unchanged check, and padding. The five kind tokens are `post-validation-structure`,
+`kv-append-final`, `kv-prefill-final-samples`, `kv-append-unchanged`, and `kv-padding-canary`.
+Structure describes existing checked prerequisites, not an exhaustive plan proof.
+
+- Inapplicable: `applicable=false`, `evaluated=null`, `valid=null`, reason `not-applicable`.
+- Applicable but unresolved: `evaluated=false`, `valid=null`; missing observed evidence cannot pass.
+- Evaluated: `evaluated=true`, `valid` is a boolean. An observed mismatch stays false even if another check is unresolved.
+
+KV-bearing decode checks final append state; prefill checks final-ordinal samples, retaining its sampling limits.
+CPU paged decode weights-only checks unchanged append slots and applicable padding; CPU paged prefill weights-only
+checks structure and applicable padding, not unexpected changes to valid prompt contents. Metal weights-only checks
+neither writes nor padding. Padding applies only where terminal suffix padding exists. CPU contiguous decode
+weights-only has no applicable structure/write/padding check. CPU prefill retains its structural prerequisite check.
+The separate checksum verdict may remain true when a cold check fails.
 
 For prefill, let `P` be prompt length, `Q` query-tile length, and `K = L*2*R`. With
 `C = ceil(P/Q)`, tile ends `e_j = min((j+1)*Q, P)`, and `S(P,Q) = sum(e_j)`, one `prefill_operation` has:
@@ -424,10 +447,9 @@ publishes whole-uint32 table segmentation. `backend_evidence.metal.resources` re
 validation, the same permutation identity, and combined K/V layout padding. Each task grid reports
 `paged_semantic_lookups` and `serial_range_visits_per_lane`; task validation reports the phase-neutral K/V-write result
 and applicable padding-canary evaluation. A complete KV-active task requires the expected lookup count, valid checksum,
-valid K/V-write validation and, when terminal padding exists, an evaluated-valid padding canary. Under
-`measurements[].execution.metal.validation`, the generic fields are `kv_write_evaluated` and `kv_write_valid`; they apply
-to decode current-token writes and prefill full-prompt writes without changing meaning by phase. Human-readable Metal
-task output renders the same contract as `kv_write=valid|invalid|not-evaluated|not-applicable`.
+valid K/V-write validation and, when terminal padding exists, an evaluated-valid padding canary. The runtime checks are published at
+`measurements[].execution.validation.checks` and the corresponding calibration execution path. Human-readable Metal
+task output summarizes the write result as `kv_write=valid|invalid|not-evaluated|not-applicable`.
 
 The canonical embedded MSL revision and its exact SHA-256 are computed from the selected runtime source and reported
 rather than duplicated here. Every profile publishes its selected scenario-pipeline and parameter-layout-probe
@@ -466,43 +488,50 @@ pair, and ends with the frozen-plan warmup. Successful explicit preparation has 
 records only its frozen-plan warmup. A failed or interrupted preparation retains only the attempts reached before its
 terminal boundary.
 
-Every measurement has stable generic work accounting:
+Canonical work and runtime observations have separate owners:
 
-```text
-work_unit_kind, planned_work_units, completed_work_units,
-weight_read_bytes_per_work_unit, kv_read_bytes_per_work_unit,
-kv_write_bytes_per_work_unit, kv_write_kind,
-effective_model_payload_bytes_per_work_unit,
-layout_metadata_lookup_count_per_work_unit,
-layout_metadata_read_bytes_per_work_unit, accounted_bytes_per_work_unit,
-planned_effective_model_payload_bytes, completed_effective_model_payload_bytes,
-planned_layout_metadata_lookup_count, completed_layout_metadata_lookup_count,
-planned_layout_metadata_read_bytes, completed_layout_metadata_read_bytes,
-planned_task_accounted_bytes, completed_task_accounted_bytes,
-synthetic_work_unit_latency_seconds,
-synthetic_memory_work_units_per_second,
-effective_model_payload_gb_s
-```
+- `resolved_plan.plan_identity`, `geometry`, `layout`, `resources`, `component_identities` and `model_work_plan`
+  describe the model once. The root methodology selector is not repeated in nested objects.
+- `resolved_plan.scenario_plans[]` contains unique scenario/T/explicit plans, including calibration shapes. Plans sort
+  by scenario (`weights_only`, `kv_only`, `mixed`), increasing `work_units`, then `explicit_iterations`
+  (`false` before `true`). Each has `model_ref: "resolved_plan"`, exact `plan_identity`, scenario seed, work kind,
+  work policy, limits, per-work-unit and total payload/lookup/accounted quantities.
+- `resolved_plan.frozen_plan_refs` has the three scenario keys, with a zero-based plan-array index or null when unresolved.
+  Measurements and `calibration.attempts.<scenario>[]` use `plan_ref` into that same document. Unknown/out-of-range or
+  wrong-scenario references are rejected. Internal insertion handles stay stable, but public indices can change between
+  snapshots as calibration plans arrive; never join references across documents.
+- `measurements[].measurement_id` is its zero-based position in the scheduled measurement array. A measurement retains
+  scenario, loop/order, attempted/status/reason, authoritative duration, completed work and mutable runtime evidence.
+  `completed_work_units` is an integer. `completed_effective_model_payload_bytes`, `completed_layout_metadata_lookup_count`,
+  `completed_layout_metadata_read_bytes` and `completed_task_accounted_bytes` are decimal strings. CPU accepted completion
+  has `completion_derivation: "accepted-plan-derived"`; this is not a hardware work counter.
+- Work kind (`decode_step` or `prefill_operation`), `work_units`, `kv_write_kind`
+  (`none`, `current_token_append`, `full_prompt_population`), per-work-unit quantities and planned totals belong to the
+  referenced plan. Its total names are `effective_model_payload_bytes`, `layout_metadata_lookup_count`,
+  `layout_metadata_read_bytes` and `task_accounted_bytes`, without a `planned_` prefix. Measurement workers, QoS,
+  calibration attempt indexes, working-set description and mixed payload fractions remain derived metadata.
 
-Decode uses `work_unit_kind: "decode_step"` and `kv_write_kind: "current_token_append"` for KV-bearing scenarios.
-Prefill uses `work_unit_kind: "prefill_operation"` and `kv_write_kind: "full_prompt_population"`.
-`weights_only` uses `kv_write_kind: "none"` in both phases. `planned_work_units` and `completed_work_units` are
-integers.
-All listed byte, lookup, metadata, and accounted quantities are canonical decimal strings, including applicable zero.
-The three derived metrics are finite numbers only for a successfully measured record and otherwise null. The effective
-model numerator contains versioned logical W/K/V reads and writes; timed layout metadata is reported separately and
-included in `accounted_bytes_per_work_unit`, not in `effective_model_payload_gb_s`.
-Measurement checksum evidence uses the phase-neutral keys `write_pattern_version` and `checksum_pattern_version`;
-schema 1 does not publish decode-specific `append_pattern_version` or `read_checksum_version` aliases. Metal uses
-profile-specific dual-mod32 checksums with separate W/K/V lanes. Its measurement execution evidence records the
-selected pipeline, threadgroup/grid geometry, raw `GPUStartTime` and `GPUEndTime`, authoritative GPU elapsed time,
-the host submit/wait
-envelope, command/encoder/dispatch counts and statuses, timed checksum comparison, and excluded phase-neutral K/V-write
-validation. Decode validates its current-token write. Prefill checks representative/boundary byte locations per
-layer/batch sequence in both K and V from the full-prompt population against the final work-unit ordinal `T - 1`;
-paged prefill also requires applicable terminal-padding canaries to remain valid.
-Queue delay is null unless it is measured in the same clock domain. CPU and Metal checksum values are backend-specific
-and are never compared numerically.
+Each canonical plan has an `expected_checksum` object with exactly `status`, `reason_code`,
+`expected_worker_checksums`, and `expected_run_checksum`. Status `available` means the cold expectation was
+reconstructed once for that plan; it is not an observed runtime pass. Status `unavailable` makes both expected fields
+null and retains the reason. CPU available worker arrays have increasing `worker_index` and exactly effective-workers
+entries; each has `weight`, `k`, `v` objects with decimal-string `state_a_uint64_decimal`, `state_b_uint64_decimal`,
+`exact_bytes_read`, and `span_count_uint64_decimal`. Zero-work domains retain actual algorithm initial values.
+CPU run checksum has the two state fields. Metal expected workers are null; its run object has `weight`, `k`, `v`,
+each with `a_uint32_decimal` and `b_uint32_decimal`. CPU and Metal checksums are never compared numerically.
+
+Measurement `checksum` contains exactly `status`, `reason_code`, `checksum_valid`, `actual_worker_checksums`, and
+`actual_run_checksum`. Unevaluated checksum has null validity and both actual fields null; evaluated invalid retains
+actuals and false validity. Calibration keeps the compact actual-run-only counterpart at
+`calibration.attempts.<scenario>[].execution.checksum`, with no actual-worker vector. All expectations resolve through
+that record's plan reference. Algorithm identity comes from canonical `component_identities.checksum_pattern_version`.
+
+The one accepted `elapsed_seconds` and completed work/payload derive `synthetic_work_unit_latency_seconds`,
+`synthetic_memory_work_units_per_second`, and `effective_model_payload_gb_s`. Invalid/excluded measurements have null
+rates and accepted elapsed; any observed time is retained as `execution.timing.diagnostic_elapsed_seconds`. Metal retains
+raw GPU start/end, host submit/wait envelope, nullable same-clock queue delay, pipeline/grid and command/encoder/dispatch
+observations. Queue delay is null unless measured in the same clock domain. Effective payload includes logical W/K/V
+bytes; timed table metadata stays outside that numerator.
 
 Each Metal task uses one reset command buffer, one timed command buffer with one explicitly serial compute encoder and
 one workload dispatch, and one excluded post-validation command buffer. The task's `T` work units loop inside the
@@ -571,14 +600,27 @@ The traffic classification version is `llm-exact-weight-vs-kv-read-payload-v1`: 
 with exact KV-read bytes only. `near_crossover` means equality, not a tolerance band and not an observed hardware
 bottleneck.
 
-`results_complete` requires all planned scenario measurements to be terminal and measured. `conclusions_valid` also
-requires valid geometry/checksums, no checkpoint failure, and a complete cyclic position balance. A complete one-loop
-run is therefore inspectable with `results_complete: true` but has `conclusions_valid: false`. Consumers of comparative
-LLM conclusions must apply the exact selector/methodology predicate, require every planned measurement to be
-`measured`, and then check the selected scenario metric's non-null value plus relevant checksum, quality, and environment
-evidence. Comparisons also require identical phase geometry and, for paged results, identical `kv_block_tokens`,
-permutation identity, physical-resource geometry, and component identities. Contiguous and paged measurements are not
-members of the same comparison cohort merely because their logical model geometry matches.
+`results_complete` means all planned measurements are terminal and measured. `run_accepted` additionally requires
+complete run status, required accepted timing/checksum/cold-check and backend completion/lifecycle evidence, and no
+known checkpoint or command failure. It is independent of position balance, sample count, CV, duration and environment.
+A correct count-one run can have both booleans true and `scenario_order_balance_complete: false`. A late command error
+can leave the measured population complete while run status is failed and `run_accepted` is false. Consumers retain
+process exit status as well as the snapshot; an older preserved file cannot report a later failure.
+
+Each `aggregates.scenarios.<scenario>.accepted_measurement_ids` defines one population shared by all three metrics.
+Excluded calibration never enters it. Derive each rate before applying the shared linear percentile interpolation;
+for even n, median(work/duration) generally differs from work/median(duration). Exact median/MAD/percentiles are
+prepared only at snapshots or terminal, with reusable workspaces; adding or printing a raw measurement does not sort
+all earlier samples. Statistics retain average, min/max, median, P90/P95/P99, sample stddev, CV percent and MAD.
+Empty populations have null statistics/headlines; n=1 has stddev=0 and positive-mean CV=0, while classification remains
+`insufficient-samples`. `observed_cv_classification` is `insufficient-samples` for n<3, `undefined` for undefined CV,
+`above-threshold` for payload CV strictly greater than `cv_warning_threshold_pct` (5), otherwise `below-threshold`.
+Equality is below-threshold. These describe observed samples, not reproducibility guarantees; percentiles are not
+confidence levels. Default LLM console output shows n, median, min/max, CV and MAD, without tail percentiles.
+
+A comparison may impose stricter quality criteria, but those are separate policy and do not delete or retry noisy
+measurements. Match phase/model geometry and, for paged results, block size, permutation, physical-resource geometry
+and component identities. Contiguous and paged results are distinct cohorts even with identical logical geometry.
 
 `quality_warnings` merges and deduplicates runner tokens `weights_only-high-cv`, `kv_only-high-cv`,
 `mixed-high-cv`, and `scenario-order-not-balanced` with final-report tokens `environment-not-nominal`,
@@ -605,6 +647,56 @@ partial, interrupted, error, or failed JSON snapshot. The execution status and p
 must not cause a caller to discard evidence without parsing it. Exit status zero is used for human help, complete
 execution, and established graceful-interruption paths; it alone does not prove that JSON conclusions are complete.
 
+## LLM schema-1 to schema-2 field map
+
+This table describes the intentional cutover, not an automatic reader. Unlisted supported geometry, resource,
+seed, runtime and interpretation fields retain their meaning. Schema/version checks must precede field consumption.
+
+| Schema 1 path or behavior | Schema 2 owner or behavior |
+|---|---|
+| `schema_version: 1`, `llm-memory-v1-*` selectors | `schema_version: 2`, the eight exact v2 selectors above |
+| `conclusions_valid` | `run_accepted`; correctness is independent of balance/quality |
+| `resolved_plan.methodology_version`, `resolved_plan.model_work_plan.methodology_version`, `resolved_plan.methodology.methodology_version` | root `methodology_version` |
+| methodology component-version copies | `resolved_plan.component_identities` only; `run_policy_version` is `llm-run-policy-bounded-loop-snapshots-v1` |
+| `resolved_plan.model_work_plan.plan_identity` | `resolved_plan.plan_identity` |
+| `resolved_plan.model_work_plan.component_identity` | `resolved_plan.component_identities.identity` |
+| `backend_evidence.cpu.resources.model_plan_identity` | `model_ref: "resolved_plan"` when resolved, otherwise null |
+| `resolved_plan.frozen_scenario_work_plans` wrapper and `scenarios[]` | `resolved_plan.scenario_plans[]` plus `resolved_plan.frozen_plan_refs` |
+| frozen wrapper/scenario `model_plan_identity` | canonical scenario `model_ref: "resolved_plan"`; wrapper removed |
+| `measurements[].frozen_plan_index`, `frozen_work_plan_identity`, execution model/scenario identity copies | measurement `plan_ref`; canonical plan carries its exact identity and `model_ref` |
+| `measurements[].scenario_seed_uint64_decimal`, `explicit_iterations`, `work_policy`, `work_unit_kind`, `kv_write_kind`, `*_bytes_per_work_unit`, `planned_*` | referenced canonical plan, with `work_units` and total names without `planned_` |
+| implicit measurement array position | explicit `measurement_id`, still the zero-based schedule index |
+| `measurements[].checksum.expected_*`, `execution.metal.checksum` | referenced plan's `expected_checksum`; runtime actuals remain in measurement `checksum` |
+| `calibration.attempts.<scenario>[].work_plan_identity`, planned payload and execution expected run checksum | `calibration.attempts.<scenario>[].plan_ref`; compact runtime actual stays under `execution.checksum` |
+| runtime checksum algorithm/write-version copies | canonical component checksum/write versions |
+| `execution.post_validation_evaluated/valid`, CPU `kv_write_validation_*`, Metal `execution.metal.validation` | measurement/calibration `execution.validation.checks[]` independent observations |
+| duplicate accepted elapsed values and retained metric sample vectors | authoritative measurement elapsed/work/payload; derived metrics and shared `accepted_measurement_ids` |
+| `aggregates.scenarios.<scenario>.stability_quality` | `observed_cv_classification` plus explicit threshold and sample counts |
+| `checkpoint_lifecycle.logical_checkpoint_attempts`, `successful_logical_checkpoints`, terminal checkpoint flags | prior actual writer attempts/successes at the named observation point; current persistence unresolved |
+| `geometry.prefill` causal-pair, logical-attention-pair and FMA context | nullable `resolved_plan.model_context.prefill` scalars with individual `*_reason_code` |
+| no build reservation | always-present `build_manifest` object; unavailable fields remain null |
+
+`model_context.prefill` is null for decode. For prefill its exact children are
+`causal_token_pairs_per_sequence`, `logical_attention_pairs`, `logical_attention_fma_terms` and each one's
+`<name>_reason_code`. Available values are decimal strings with reason `valid`; theoretical arithmetic overflow gives
+null with `arithmetic-overflow`. Available values retain numeric exact-identity encoding; unavailable identity fields
+use `unavailable:arithmetic-overflow`. Actual byte/prefix/lookup/allocation overflows still reject the workload.
+`h_q` (`--query-heads`) controls theoretical attention context; query tile `Q` (`--attention-query-tile-tokens`)
+controls executed prefix-read geometry. No Transformer or FMA computation is performed.
+
+`build_manifest` has `manifest_version: 1`, `status: "unavailable"`,
+`reason_code: "build-provenance-not-provided"`, and null `binary_sha256`, `git_commit`, `git_dirty`, `compiler`,
+`compile_flags`, `link_flags`, `target_arch`, `sdk`, and `min_os`. This revision reserves the contract and does not
+supply build attestation. Optional `execution.timing.cpu_raw` is not emitted here; absence cannot be promoted to
+raw-tick verification. Software identity and MSL-source provenance alone are not independent build/runtime proof.
+
+All byte, lookup, seed and checksum values follow canonical unsigned decimal-string encoding (`0` or
+`[1-9][0-9]*`); Metal lanes retain uint32 bounds. Indexes, work units and validated small inputs remain bounded JSON
+integers below 2^53, never booleans or coerced strings. Null separates unavailable/inapplicable from known zero.
+Canonical plan/expected vector capacities, transient expected reconstruction, accepted-ID maps, exact-stat workspaces,
+DOM and stdout serialized strings are charged together at their simultaneous peak; bounded snapshot count does not
+reduce the single-snapshot peak allowance.
+
 ## Consumer acceptance procedure
 
 A caller accepts a benchmark conclusion only after all of the following checks succeed:
@@ -618,7 +710,9 @@ A caller accepts a benchmark conclusion only after all of the following checks s
 5. Check the supported mode and schema-version field.
 6. Require the expected successful process status before accepting conclusions.
 7. Apply the mode-specific command-completeness predicate above.
-8. Apply the selected metric's status, non-null, and quality predicates.
+8. Apply the selected metric's mode-specific status, non-null, and quality predicates described above.
+   For LLM, balance, observed CV, duration quality, and environment are separate comparison-quality context;
+   they do not add correctness predicates to `run_accepted`.
 
 Do not wait for process exit before reading sequential pipe captures. If either stdout or stderr fills its pipe buffer,
 the child can block before exit and the parent's wait can deadlock.
@@ -678,42 +772,61 @@ jq -e '.schema_version == 1 and .mode == "gpu_bandwidth" and
        .status == "complete" and .results_complete == true and
        .conclusions_valid == true' gpu.json
 
-jq -e '.mode == "llm_memory" and .schema_version == 1 and
-       .backend == "cpu" and .phase == "decode" and
-       .kv_layout == "paged" and
-       .methodology_version == "llm-memory-v1-cpu-decode-paged" and
+jq -e '. as $root | .mode == "llm_memory" and .schema_version == 2 and
+       .backend == "cpu" and .phase == "decode" and .kv_layout == "paged" and
+       .methodology_version == "llm-memory-v2-cpu-decode-paged" and
        .resolved_plan.layout.kv_block_tokens == 16 and
        (.resolved_plan.layout.permutation_sha256 |
         type == "string" and test("^[0-9a-f]{64}$")) and
-       .status == "complete" and .results_complete == true and
-       .conclusions_valid == true and
-       ([.measurements[] | select(.status != "measured")] | length) == 0' llm_memory.json
+       .resolved_plan.component_identities.run_policy_version ==
+         "llm-run-policy-bounded-loop-snapshots-v1" and
+       .status == "complete" and .results_complete == true and .run_accepted == true and
+       (.resolved_plan.scenario_plans | type) == "array" and
+       (.measurements | type) == "array" and
+       .counters.planned_measurements > 0 and
+       (.measurements | length) == .counters.planned_measurements and
+       all(.measurements[];
+           .status == "measured" and (.plan_ref | type) == "number" and
+           .plan_ref >= 0 and .plan_ref == (.plan_ref | floor) and
+           .plan_ref < ($root.resolved_plan.scenario_plans | length) and
+           $root.resolved_plan.scenario_plans[.plan_ref].scenario == .scenario)' llm_memory.json
 
-jq -e '.mode == "llm_memory" and .schema_version == 1 and
-       .backend == "cpu" and .phase == "prefill" and
-       .kv_layout == "contiguous" and
-       .methodology_version == "llm-memory-v1-cpu-prefill-contiguous" and
+jq -e '. as $root | .mode == "llm_memory" and .schema_version == 2 and
+       .backend == "cpu" and .phase == "prefill" and .kv_layout == "contiguous" and
+       .methodology_version == "llm-memory-v2-cpu-prefill-contiguous" and
        .resolved_plan.geometry.decode == null and
        .resolved_plan.geometry.prefill.prompt_tokens == 512 and
        .resolved_plan.geometry.prefill.attention_query_tile_tokens == 64 and
-       .status == "complete" and .results_complete == true and
-       .conclusions_valid == true and
-       ([.measurements[] | select(.status != "measured")] | length) == 0' llm_prefill.json
+       .resolved_plan.component_identities.run_policy_version ==
+         "llm-run-policy-bounded-loop-snapshots-v1" and
+       .status == "complete" and .results_complete == true and .run_accepted == true and
+       (.resolved_plan.scenario_plans | type) == "array" and
+       (.measurements | type) == "array" and
+       .counters.planned_measurements > 0 and
+       (.measurements | length) == .counters.planned_measurements and
+       all(.measurements[];
+           .status == "measured" and (.plan_ref | type) == "number" and
+           .plan_ref >= 0 and .plan_ref == (.plan_ref | floor) and
+           .plan_ref < ($root.resolved_plan.scenario_plans | length) and
+           $root.resolved_plan.scenario_plans[.plan_ref].scenario == .scenario)' llm_prefill.json
 ```
+
+The two LLM examples consume the producer's acceptance and validate same-document plan joins; they do not independently
+re-execute checksum/timing or attest to the build. Supply your requested geometry and cohort checks in addition to the
+shown block-size or prompt/tile requirements. A noisy or one-loop correct result passes; comparison-quality policy is
+separate. Require the successful producer process outcome before applying `jq -e`.
 
 ## Compatibility policy
 
 - `version`, the GPU `software_version` field, and LLM `software` identity identify the application release; none is a
   result schema version or compatibility selector. Consumers may retain and display this provenance independently of
   schema and methodology acceptance.
-- Current standard schema 3, pattern schema 3, TLB schema 4, core-to-core schema 2, GPU schema 1, and LLM schema 1 remain
+- Current standard schema 3, pattern schema 3, TLB schema 4, core-to-core schema 2, GPU schema 1, and LLM schema 2 remain
   authoritative at their existing locations. The schema field is intentionally not normalized across these established
   payloads.
-- The prior LLM schema-1 producer shape was unpublished. This revision deliberately replaces its CPU/step-specific
-  vocabulary with the generic v1 contract without a compatibility reader, field alias, or schema bump. LLM schema-1
-  consumers must use the current generic fields, tolerate unknown additive evidence fields, and validate every known
-  field they consume. Future removal/rename/type/meaning changes require schema-version review; software identity alone
-  is not a compatibility substitute.
+- LLM schema 2 deliberately replaces the unpublished schema-1 shape and changes methodology selectors. The concrete
+  field map describes relocation and changed acceptance; no automatic v1 reader, alias or migration layer is provided.
+  Future removal/rename/type/meaning changes require schema-version review.
 - Bundled standard-memory examples accept compatible software releases only when standard mode, schema 3, the exact
   methodology identity, completion state, and consumed field shapes match. They retain software-version provenance but
   provide no translation layer for released standard schema 2, unversioned historical standard JSON layouts, or other

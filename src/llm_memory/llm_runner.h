@@ -62,6 +62,47 @@ enum class LlmCheckpointKind : uint8_t {
   CommandTerminal,
 };
 
+/** Stable insertion handle; public snapshot indices are a separate sorted map. */
+using LlmPlanHandle = size_t;
+
+/** Once-per-plan expected witness; no runtime-valid assertion is implied. */
+struct LlmCanonicalExpectedChecksum {
+  bool available = false;
+  std::string reason_code = "not-evaluated";
+  std::vector<LlmWorkerChecksum> cpu_workers;
+  LlmRunChecksum cpu_run{0, 0};
+  LlmMetalDualMod32Checksum metal_run;
+};
+
+/** Unique scenario/T/explicit content with its sole retained expected witness. */
+struct LlmCanonicalScenarioPlan {
+  LlmScenarioWorkPlan plan;
+  LlmCanonicalExpectedChecksum expected;
+};
+
+struct LlmCpuRetainedEvidence {
+  LlmCpuRuntimeEvidence executor;
+};
+
+/** Runtime-only retained result: no copied task identity or expected checksum. */
+struct LlmRetainedExecution {
+  LlmTaskExecutionStatus status = LlmTaskExecutionStatus::NotStarted;
+  std::string reason_code = LlmBackendReason::NOT_INITIALIZED;
+  LlmAuthoritativeTiming timing;
+  LlmCompletedWork completion;
+  LlmTaskValidation validation;
+  std::variant<std::monostate, LlmCpuRetainedEvidence, LlmMetalRuntimeEvidence> backend_evidence;
+};
+
+/** Read-only runtime variant access; returned pointers borrow the result. */
+inline const LlmCpuRuntimeEvidence* get_llm_cpu_task_evidence(const LlmRetainedExecution& execution) noexcept {
+  const auto* cpu = std::get_if<LlmCpuRetainedEvidence>(&execution.backend_evidence);
+  return cpu ? &cpu->executor : nullptr;
+}
+inline const LlmMetalRuntimeEvidence* get_llm_metal_task_evidence(const LlmRetainedExecution& execution) noexcept {
+  return std::get_if<LlmMetalRuntimeEvidence>(&execution.backend_evidence);
+}
+
 /** Compact excluded-task evidence without retained per-worker vectors. */
 struct LlmTaskExecutionEvidence {
   LlmColdChecks cpu_cold_checks;  ///< Compact CPU copy; Metal owns its own array.
@@ -72,7 +113,7 @@ struct LlmTaskExecutionEvidence {
   double elapsed_seconds = 0.0;
   bool timing_evaluated = false;
   bool timing_valid = false;
-  LlmTaskCompletion completion;
+  LlmCompletedWork completion;
   bool validation_evaluated = false;
   bool validation_valid = false;
   bool cpu_evidence_available = false;
@@ -87,28 +128,16 @@ struct LlmTaskExecutionEvidence {
   bool timer_stopped = false;
   bool checksum_evaluated = false;  ///< CPU checksum detail, when applicable.
   bool checksum_valid = false;
-  LlmRunChecksum expected_run_checksum{0, 0};
   LlmRunChecksum actual_run_checksum{0, 0};
   bool metal_evidence_available = false;
-  std::optional<LlmMetalTaskEvidence> metal;
+  std::optional<LlmMetalRuntimeEvidence> metal;
 };
 
 /** One excluded warmup, pilot, duration trial, or correction record. */
 struct LlmCalibrationAttempt {
+  LlmPlanHandle plan_handle = kLlmNoTaskIndex;
   LlmScenario scenario = LlmScenario::WeightsOnly;
-  LlmWorkUnitKind work_unit_kind = LlmWorkUnitKind::DecodeStep;
-  LlmKvWriteKind kv_write_kind = LlmKvWriteKind::None;
   std::string_view purpose = "not-run";
-  bool explicit_iterations = false;
-  size_t work_units = 0;
-  size_t weight_read_bytes = 0;
-  size_t kv_read_bytes = 0;
-  size_t kv_write_bytes = 0;
-  size_t effective_model_payload_bytes = 0;
-  size_t layout_metadata_lookup_count = 0;
-  size_t layout_metadata_read_bytes = 0;
-  size_t task_accounted_bytes = 0;
-  std::string work_plan_identity;
   LlmTaskExecutionEvidence execution;
   std::string_view duration_quality = "not-run";
   bool terminal = false;
@@ -118,61 +147,31 @@ struct LlmCalibrationAttempt {
 
 /** Raw values, shared descriptive statistics, and one headline metric. */
 struct LlmMetricAggregate {
-  std::vector<double> values;
   DescriptiveStatistics statistics;
   std::optional<double> headline;
 };
 
 /** Status-bearing record for one planned scenario measurement. */
 struct LlmMeasurementState {
+  LlmPlanHandle plan_handle = kLlmNoTaskIndex;
   LlmScenario scenario = LlmScenario::WeightsOnly;
-  LlmWorkUnitKind work_unit_kind = LlmWorkUnitKind::DecodeStep;
-  LlmKvWriteKind kv_write_kind = LlmKvWriteKind::None;
   LlmMeasurementStatus status = LlmMeasurementStatus::NotRun;
   std::string_view reason_code = "not-run";
   size_t loop_index = 0;
   size_t order_position = 0;
   bool attempted = false;
-  bool execution_evidence_available = false;  ///< Complete generic task evidence was retained.
-  size_t requested_workers = 0;
-  size_t effective_workers = 0;
-  size_t qos_successful_workers = 0;
-  size_t qos_failed_workers = 0;
-  size_t frozen_plan_index = kLlmNoTaskIndex;
-  bool explicit_iterations = false;
+  bool execution_evidence_available = false;
   std::string_view duration_quality = "not-run";
-  size_t calibration_attempt_count = 0;
-  size_t planned_work_units = 0;
-  size_t completed_work_units = 0;
-  size_t weight_read_bytes_per_work_unit = 0;
-  size_t kv_read_bytes_per_work_unit = 0;
-  size_t kv_write_bytes_per_work_unit = 0;
-  size_t effective_model_payload_bytes_per_work_unit = 0;
-  size_t layout_metadata_lookup_count_per_work_unit = 0;
-  size_t layout_metadata_read_bytes_per_work_unit = 0;
-  size_t accounted_bytes_per_work_unit = 0;
-  size_t planned_weight_read_bytes = 0;
-  size_t planned_kv_read_bytes = 0;
-  size_t planned_kv_write_bytes = 0;
-  size_t planned_effective_model_payload_bytes = 0;
-  size_t completed_effective_model_payload_bytes = 0;
-  size_t planned_layout_metadata_lookup_count = 0;
-  size_t completed_layout_metadata_lookup_count = 0;
-  size_t planned_layout_metadata_read_bytes = 0;
-  size_t completed_layout_metadata_read_bytes = 0;
-  size_t planned_task_accounted_bytes = 0;
-  size_t completed_task_accounted_bytes = 0;
-  std::optional<double> elapsed_seconds;
-  std::optional<double> synthetic_work_unit_latency_seconds;
-  std::optional<double> synthetic_memory_work_units_per_second;
-  std::optional<double> effective_model_payload_gb_s;
-  std::optional<double> weight_payload_fraction;
-  std::optional<double> kv_read_payload_fraction;
-  std::optional<double> kv_write_payload_fraction;
-  size_t working_set_bytes = 0;
-  bool checksum_valid = false;
-  LlmTaskExecutionResult execution;
+  LlmRetainedExecution execution;
 };
+
+/** On-demand rates all derived from the same accepted duration/work/payload. */
+struct LlmDerivedMetrics {
+  std::optional<double> latency_seconds;
+  std::optional<double> work_units_per_second;
+  std::optional<double> payload_gb_s;
+};
+LlmDerivedMetrics derive_llm_measurement_metrics(const LlmMeasurementState& measurement) noexcept;
 
 /** Planned and realized scenario order for one count-loop. */
 struct LlmLoopRecord {
@@ -190,11 +189,13 @@ struct LlmScenarioAggregate {
   LlmMetricAggregate synthetic_memory_work_units_per_second;
   LlmMetricAggregate effective_model_payload_gb_s;
   std::string_view status = "unavailable";
-  std::string_view stability_quality = "insufficient-samples";
+  std::string_view observed_cv_classification = "insufficient-samples";
+  std::vector<size_t> accepted_measurement_ids;
 };
 
 /** Reused sorted and deviation storage for allocation-free statistics updates. */
 struct LlmStatisticsWorkspace {
+  std::vector<double> extracted_values;
   std::vector<double> sorted_values;
   std::vector<double> absolute_deviations;
 };
@@ -257,16 +258,27 @@ struct LlmMemoryResult {
   std::string diagnostic;
   bool interruption_requested = false;
   bool results_complete = false;
-  bool conclusions_valid = false;
+  bool run_accepted = false;
   bool scenario_order_balance_complete = false;
   bool checkpoint_failed = false;
   bool terminal_checkpoint_attempted = false;
   bool terminal_checkpoint_completed = false;
+  size_t prior_file_writer_attempts = 0;
+  size_t prior_successful_file_writes = 0;
+  std::string_view snapshot_request = "none";
   size_t logical_checkpoint_attempts = 0;
   size_t successful_logical_checkpoints = 0;
   LlmRunCounters counters;
   LlmRunnerAuxiliaryEstimate runner_auxiliary;
-  LlmFrozenScenarioPlans frozen_scenario_plans;
+  // Append-only canonical storage: entries become immutable after registration.
+  std::vector<LlmCanonicalScenarioPlan> scenario_plans;
+  std::array<LlmPlanHandle, kLlmScenarioCount> frozen_plan_handles{
+      kLlmNoTaskIndex, kLlmNoTaskIndex, kLlmNoTaskIndex};
+  std::vector<LlmPlanHandle> snapshot_plan_order;
+  std::vector<size_t> snapshot_plan_refs;
+  size_t snapshot_preparation_attempts = 0;
+  size_t exact_statistics_passes = 0;
+  size_t snapshot_interval_loops = 1;
   std::array<std::vector<LlmCalibrationAttempt>, kLlmScenarioCount> calibration_attempts;
   std::array<size_t, kLlmScenarioCount> calibration_attempt_counts{};
   std::vector<LlmLoopRecord> loops;
@@ -276,9 +288,27 @@ struct LlmMemoryResult {
   std::vector<std::string_view> quality_warnings;
 };
 
+/** Insert/reuse exact scenario content. Contradictory keys throw before publication.
+ * Handles survive vector growth; no pointer may be held across insertion.
+ * Registered entries must not be mutated or erased. The result has one writer;
+ * readers may inspect it only while that writer is idle. */
+LlmPlanHandle register_llm_scenario_plan(LlmMemoryResult& result,
+    const LlmMemoryWorkPlan& model, const LlmScenarioWorkPlan& plan, LlmBackend& backend);
+const LlmCanonicalScenarioPlan* find_llm_scenario_plan(const LlmMemoryResult& result,
+    LlmPlanHandle handle) noexcept;
+/** Applicability from admitted phase/layout/scenario, before execution exists. */
+LlmColdChecks required_llm_cold_checks(const LlmMemoryWorkPlan& model, LlmScenario scenario) noexcept;
+/** Build one consistent sorted reference map and exact accepted-ID statistics.
+ * Requires immutable registered content and exclusive access to the result.
+ * Rejects unknown or scenario-contradictory references with std::invalid_argument;
+ * allocation failures propagate to the owning checkpoint boundary. */
+void prepare_llm_result_snapshot(LlmMemoryResult& result);
+
 /** Deterministic stop and logical-checkpoint seams. */
 struct LlmRunnerHooks {
+  bool progress_snapshots = true;  ///< False for stdout/disabled transports; terminal statistics still finalize.
   std::function<bool()> stop_requested;
+  std::function<std::pair<size_t, size_t>()> observe_file_writes;
   std::function<int(const LlmMemoryResult&, LlmCheckpointKind)> checkpoint;
 };
 

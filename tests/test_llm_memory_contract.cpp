@@ -102,26 +102,6 @@ enum class ContractMeasurementStatus {
   Failed,
 };
 
-enum class SchemaValueKind {
-  Integer,
-  IntegerOrNull,
-  DecimalString,
-  DecimalStringOrNull,
-  Boolean,
-  String,
-  StringOrNull,
-  FiniteNumberOrNull,
-  Object,
-  ObjectOrNull,
-  Array,
-};
-
-struct SchemaFieldContract {
-  std::string_view section;
-  std::string_view name;
-  SchemaValueKind kind;
-};
-
 struct PrefillPayloadContract {
   std::vector<uint64_t> tile_ends;
   uint64_t attention_prefix_token_visits = 0;
@@ -226,15 +206,6 @@ struct RunChecksum {
   uint64_t state_b = kRunInitialB;
 };
 
-struct PreExpansionDecodeIdentity {
-  std::string_view mode;
-  std::string_view backend;
-  int schema_version;
-  std::string_view methodology;
-  std::string_view descriptor_abi;
-  std::string_view append_identity;
-  std::string_view checksum_identity;
-};
 
 struct GenericResultIdentity {
   std::string_view mode;
@@ -248,7 +219,7 @@ struct GenericResultIdentity {
   std::string_view methodology_version;
   std::string_view status;
   bool results_complete;
-  bool conclusions_valid;
+  bool run_accepted;
   bool all_planned_measurements_measured;
 };
 
@@ -379,38 +350,10 @@ std::string_view contract_token(ContractMeasurementStatus status) {
   return {};
 }
 
-std::string_view schema_kind_token(SchemaValueKind kind) {
-  switch (kind) {
-    case SchemaValueKind::Integer:
-      return "integer";
-    case SchemaValueKind::IntegerOrNull:
-      return "integer_or_null";
-    case SchemaValueKind::DecimalString:
-      return "decimal_string";
-    case SchemaValueKind::DecimalStringOrNull:
-      return "decimal_string_or_null";
-    case SchemaValueKind::Boolean:
-      return "boolean";
-    case SchemaValueKind::String:
-      return "string";
-    case SchemaValueKind::StringOrNull:
-      return "string_or_null";
-    case SchemaValueKind::FiniteNumberOrNull:
-      return "finite_number_or_null";
-    case SchemaValueKind::Object:
-      return "object";
-    case SchemaValueKind::ObjectOrNull:
-      return "object_or_null";
-    case SchemaValueKind::Array:
-      return "array";
-  }
-  return {};
-}
-
 std::string methodology_token(ContractBackend backend,
                               ContractPhase phase,
                               ContractKvLayout layout) {
-  return "llm-memory-v1-" + std::string(contract_token(backend)) + "-" +
+  return "llm-memory-v2-" + std::string(contract_token(backend)) + "-" +
          std::string(contract_token(phase)) + "-" +
          std::string(contract_token(layout));
 }
@@ -864,204 +807,6 @@ std::string serialize_component_identity(
   return identity;
 }
 
-std::vector<SchemaFieldContract> minimum_generic_schema_v1_vocabulary() {
-  return {
-      {"top_level", "schema_version", SchemaValueKind::Integer},
-      {"top_level", "mode", SchemaValueKind::String},
-      {"top_level", "backend", SchemaValueKind::String},
-      {"top_level", "phase", SchemaValueKind::String},
-      {"top_level", "kv_layout", SchemaValueKind::String},
-      {"top_level", "methodology_version", SchemaValueKind::String},
-      {"top_level", "software", SchemaValueKind::Object},
-      {"top_level", "configuration", SchemaValueKind::Object},
-      {"top_level", "resolved_plan", SchemaValueKind::Object},
-      {"top_level", "backend_evidence", SchemaValueKind::Object},
-      {"top_level", "memory_budget", SchemaValueKind::Object},
-      {"top_level", "calibration", SchemaValueKind::Object},
-      {"top_level", "measurements", SchemaValueKind::Array},
-      {"top_level", "aggregates", SchemaValueKind::Object},
-      {"top_level", "status", SchemaValueKind::String},
-      {"top_level", "reason_code", SchemaValueKind::String},
-      {"top_level", "results_complete", SchemaValueKind::Boolean},
-      {"top_level", "conclusions_valid", SchemaValueKind::Boolean},
-      {"top_level", "interpretation", SchemaValueKind::Object},
-
-      {"configuration", "argv", SchemaValueKind::Array},
-      {"configuration", "resolved_sources", SchemaValueKind::Object},
-
-      {"resolved_plan", "geometry", SchemaValueKind::Object},
-      {"resolved_plan", "layout", SchemaValueKind::Object},
-      {"resolved_plan", "resources", SchemaValueKind::Object},
-      {"resolved_plan", "component_identities", SchemaValueKind::Object},
-      {"resolved_plan.geometry", "decode", SchemaValueKind::ObjectOrNull},
-      {"resolved_plan.geometry", "prefill", SchemaValueKind::ObjectOrNull},
-
-      {"resolved_plan.geometry.decode", "visible_context_tokens",
-       SchemaValueKind::Integer},
-      {"resolved_plan.geometry.prefill", "prompt_tokens",
-       SchemaValueKind::Integer},
-      {"resolved_plan.geometry.prefill", "attention_query_tile_tokens",
-       SchemaValueKind::Integer},
-      {"resolved_plan.geometry.prefill", "tile_count",
-       SchemaValueKind::DecimalString},
-      {"resolved_plan.geometry.prefill",
-       "attention_prefix_token_visits_per_sequence",
-       SchemaValueKind::DecimalString},
-      {"resolved_plan.geometry.prefill", "causal_token_pairs_per_sequence",
-       SchemaValueKind::DecimalString},
-      {"resolved_plan.geometry.prefill", "logical_attention_pairs",
-       SchemaValueKind::DecimalString},
-      {"resolved_plan.geometry.prefill", "logical_attention_fma_terms",
-       SchemaValueKind::DecimalString},
-
-      {"resolved_plan.layout", "kv_layout", SchemaValueKind::String},
-      {"resolved_plan.layout", "kv_block_tokens",
-       SchemaValueKind::IntegerOrNull},
-      {"resolved_plan.layout", "blocks_per_sequence",
-       SchemaValueKind::DecimalStringOrNull},
-      {"resolved_plan.layout", "physical_blocks_per_layer",
-       SchemaValueKind::DecimalStringOrNull},
-      {"resolved_plan.layout", "last_block_tokens",
-       SchemaValueKind::DecimalStringOrNull},
-      {"resolved_plan.layout", "last_block_valid_bytes",
-       SchemaValueKind::DecimalStringOrNull},
-      {"resolved_plan.layout", "block_table_entries",
-       SchemaValueKind::DecimalStringOrNull},
-      {"resolved_plan.layout", "block_table_bytes",
-       SchemaValueKind::DecimalStringOrNull},
-      {"resolved_plan.layout", "permutation_domain_uint64_hex",
-       SchemaValueKind::StringOrNull},
-      {"resolved_plan.layout", "permutation_seed_uint64_decimal",
-       SchemaValueKind::DecimalStringOrNull},
-      {"resolved_plan.layout", "permutation_algorithm_version",
-       SchemaValueKind::StringOrNull},
-      {"resolved_plan.layout", "permutation_sha256",
-       SchemaValueKind::StringOrNull},
-
-      {"resolved_plan.resources", "weight_logical_bytes",
-       SchemaValueKind::DecimalString},
-      {"resolved_plan.resources", "k_logical_bytes",
-       SchemaValueKind::DecimalString},
-      {"resolved_plan.resources", "v_logical_bytes",
-       SchemaValueKind::DecimalString},
-      {"resolved_plan.resources", "k_physical_length_bytes",
-       SchemaValueKind::DecimalString},
-      {"resolved_plan.resources", "v_physical_length_bytes",
-       SchemaValueKind::DecimalString},
-      {"resolved_plan.resources", "k_layout_padding_bytes",
-       SchemaValueKind::DecimalString},
-      {"resolved_plan.resources", "v_layout_padding_bytes",
-       SchemaValueKind::DecimalString},
-      {"resolved_plan.resources", "block_table_bytes",
-       SchemaValueKind::DecimalStringOrNull},
-
-      {"memory_budget", "resource_rounding_bytes",
-       SchemaValueKind::DecimalString},
-      {"memory_budget", "transient_peak_bytes",
-       SchemaValueKind::DecimalString},
-      {"memory_budget", "known_owned_peak_bytes",
-       SchemaValueKind::DecimalString},
-      {"memory_budget", "admitted_budget_bytes",
-       SchemaValueKind::DecimalString},
-
-      {"resolved_plan.component_identities", "logical_profile_version",
-       SchemaValueKind::String},
-      {"resolved_plan.component_identities", "kv_layout_version",
-       SchemaValueKind::String},
-      {"resolved_plan.component_identities", "permutation_version",
-       SchemaValueKind::StringOrNull},
-      {"resolved_plan.component_identities", "backend_executor_version",
-       SchemaValueKind::String},
-      {"resolved_plan.component_identities", "resource_abi_version",
-       SchemaValueKind::String},
-      {"resolved_plan.component_identities", "schedule_version",
-       SchemaValueKind::String},
-      {"resolved_plan.component_identities", "timer_policy_version",
-       SchemaValueKind::String},
-      {"resolved_plan.component_identities", "buffer_pattern_version",
-       SchemaValueKind::String},
-      {"resolved_plan.component_identities", "write_pattern_version",
-       SchemaValueKind::String},
-      {"resolved_plan.component_identities", "checksum_pattern_version",
-       SchemaValueKind::String},
-      {"resolved_plan.component_identities", "msl_revision",
-       SchemaValueKind::StringOrNull},
-      {"resolved_plan.component_identities", "msl_source_sha256",
-       SchemaValueKind::StringOrNull},
-
-      {"measurements.*", "work_unit_kind", SchemaValueKind::String},
-      {"measurements.*", "planned_work_units", SchemaValueKind::Integer},
-      {"measurements.*", "completed_work_units",
-       SchemaValueKind::Integer},
-      {"measurements.*", "weight_read_bytes_per_work_unit",
-       SchemaValueKind::DecimalString},
-      {"measurements.*", "kv_read_bytes_per_work_unit",
-       SchemaValueKind::DecimalString},
-      {"measurements.*", "kv_write_bytes_per_work_unit",
-       SchemaValueKind::DecimalString},
-      {"measurements.*", "kv_write_kind", SchemaValueKind::String},
-      {"measurements.*", "effective_model_payload_bytes_per_work_unit",
-       SchemaValueKind::DecimalString},
-      {"measurements.*", "layout_metadata_lookup_count_per_work_unit",
-       SchemaValueKind::DecimalString},
-      {"measurements.*", "layout_metadata_read_bytes_per_work_unit",
-       SchemaValueKind::DecimalString},
-      {"measurements.*", "accounted_bytes_per_work_unit",
-       SchemaValueKind::DecimalString},
-      {"measurements.*", "planned_effective_model_payload_bytes",
-       SchemaValueKind::DecimalString},
-      {"measurements.*", "completed_effective_model_payload_bytes",
-       SchemaValueKind::DecimalString},
-      {"measurements.*", "planned_layout_metadata_lookup_count",
-       SchemaValueKind::DecimalString},
-      {"measurements.*", "completed_layout_metadata_lookup_count",
-       SchemaValueKind::DecimalString},
-      {"measurements.*", "planned_layout_metadata_read_bytes",
-       SchemaValueKind::DecimalString},
-      {"measurements.*", "completed_layout_metadata_read_bytes",
-       SchemaValueKind::DecimalString},
-      {"measurements.*", "planned_task_accounted_bytes",
-       SchemaValueKind::DecimalString},
-      {"measurements.*", "completed_task_accounted_bytes",
-       SchemaValueKind::DecimalString},
-      {"measurements.*", "synthetic_work_unit_latency_seconds",
-       SchemaValueKind::FiniteNumberOrNull},
-      {"measurements.*", "synthetic_memory_work_units_per_second",
-       SchemaValueKind::FiniteNumberOrNull},
-      {"measurements.*", "effective_model_payload_gb_s",
-       SchemaValueKind::FiniteNumberOrNull},
-
-      {"backend_evidence", "cpu", SchemaValueKind::ObjectOrNull},
-      {"backend_evidence", "metal", SchemaValueKind::ObjectOrNull},
-  };
-}
-
-std::string serialize_schema_vocabulary(
-    const std::vector<SchemaFieldContract>& vocabulary) {
-  std::string result = "llm-memory-schema-v1";
-  for (const SchemaFieldContract& field : vocabulary) {
-    result += '|';
-    result += field.section;
-    result += '.';
-    result += field.name;
-    result += ':';
-    result += schema_kind_token(field.kind);
-  }
-  return result;
-}
-
-const SchemaFieldContract* find_schema_field(
-    const std::vector<SchemaFieldContract>& vocabulary,
-    std::string_view section,
-    std::string_view name) {
-  const auto found = std::find_if(
-      vocabulary.begin(), vocabulary.end(),
-      [section, name](const SchemaFieldContract& field) {
-        return field.section == section && field.name == name;
-      });
-  return found == vocabulary.end() ? nullptr : &*found;
-}
-
 uint64_t rotate_left(uint64_t value, unsigned int shift) {
   return (value << shift) | (value >> (64 - shift));
 }
@@ -1204,26 +949,6 @@ struct alignas(16) KvSequenceDescriptorAbiV1 {
   uint64_t append_record_byte_offset;
 };
 
-bool matches_pre_expansion_decode_identity(
-    const PreExpansionDecodeIdentity& identity) {
-  return identity.mode == "llm_memory" && identity.backend == "cpu" &&
-         identity.schema_version == 1 &&
-         identity.methodology ==
-             "llm-memory-v1-cpu-fixed-context-warm-layer-interleaved" &&
-         identity.descriptor_abi == "llm-memory-descriptor-abi-v1" &&
-         identity.append_identity == "llm-kv-append-affine64-v1" &&
-         identity.checksum_identity == "llm-read-checksum-v1";
-}
-
-bool accepted_pre_expansion_completion(std::string_view mode,
-                                       int schema_version,
-                                       std::string_view status,
-                                       bool results_complete,
-                                       bool conclusions_valid) {
-  return mode == "llm_memory" && schema_version == 1 &&
-         status == "complete" && results_complete && conclusions_valid;
-}
-
 bool accepted_generic_result(const GenericResultIdentity& identity) {
   const bool backend_is_known =
       identity.backend == "cpu" || identity.backend == "metal";
@@ -1232,16 +957,16 @@ bool accepted_generic_result(const GenericResultIdentity& identity) {
   const bool layout_is_known = identity.kv_layout == "contiguous" ||
                                identity.kv_layout == "paged";
   const std::string expected_methodology =
-      "llm-memory-v1-" + std::string(identity.backend) + "-" +
+      "llm-memory-v2-" + std::string(identity.backend) + "-" +
       std::string(identity.phase) + "-" + std::string(identity.kv_layout);
-  return identity.mode == "llm_memory" && identity.schema_version == 1 &&
+  return identity.mode == "llm_memory" && identity.schema_version == 2 &&
          backend_is_known && phase_is_known && layout_is_known &&
          identity.backend == identity.requested_backend &&
          identity.phase == identity.requested_phase &&
          identity.kv_layout == identity.requested_kv_layout &&
          identity.methodology_version == expected_methodology &&
          identity.status == "complete" && identity.results_complete &&
-         identity.conclusions_valid &&
+         identity.run_accepted &&
          identity.all_planned_measurements_measured;
 }
 
@@ -1450,67 +1175,17 @@ TEST(LlmMemoryContractTest, DescriptorAbiLayoutGolden) {
       offsetof(KvSequenceDescriptorAbiV1, append_record_byte_offset), 72u);
 }
 
-TEST(LlmMemoryContractTest,
-     PreExpansionDecodeIdentityAndCompletionRemainRegressionGoldens) {
-  const PreExpansionDecodeIdentity frozen = {
-      "llm_memory",
-      "cpu",
-      1,
-      "llm-memory-v1-cpu-fixed-context-warm-layer-interleaved",
-      "llm-memory-descriptor-abi-v1",
-      "llm-kv-append-affine64-v1",
-      "llm-read-checksum-v1",
-  };
-  EXPECT_TRUE(matches_pre_expansion_decode_identity(frozen));
-
-  PreExpansionDecodeIdentity candidate = frozen;
-  candidate.mode = "benchmark";
-  EXPECT_FALSE(matches_pre_expansion_decode_identity(candidate));
-  candidate = frozen;
-  candidate.backend = "gpu";
-  EXPECT_FALSE(matches_pre_expansion_decode_identity(candidate));
-  candidate = frozen;
-  candidate.schema_version = 2;
-  EXPECT_FALSE(matches_pre_expansion_decode_identity(candidate));
-  candidate = frozen;
-  candidate.methodology = "llm-memory-v2";
-  EXPECT_FALSE(matches_pre_expansion_decode_identity(candidate));
-  candidate = frozen;
-  candidate.descriptor_abi = "llm-memory-descriptor-abi-v2";
-  EXPECT_FALSE(matches_pre_expansion_decode_identity(candidate));
-  candidate = frozen;
-  candidate.append_identity = "llm-kv-append-affine64-v2";
-  EXPECT_FALSE(matches_pre_expansion_decode_identity(candidate));
-  candidate = frozen;
-  candidate.checksum_identity = "llm-read-checksum-v2";
-  EXPECT_FALSE(matches_pre_expansion_decode_identity(candidate));
-
-  EXPECT_TRUE(accepted_pre_expansion_completion(
-      "llm_memory", 1, "complete", true, true));
-  EXPECT_FALSE(
-      accepted_pre_expansion_completion("benchmark", 1, "complete", true,
-                                        true));
-  EXPECT_FALSE(accepted_pre_expansion_completion(
-      "llm_memory", 2, "complete", true, true));
-  EXPECT_FALSE(accepted_pre_expansion_completion(
-      "llm_memory", 1, "partial", true, true));
-  EXPECT_FALSE(accepted_pre_expansion_completion(
-      "llm_memory", 1, "complete", false, true));
-  EXPECT_FALSE(accepted_pre_expansion_completion(
-      "llm_memory", 1, "complete", true, false));
-}
-
-TEST(LlmMemoryContractTest, GenericV1AcceptancePredicateIsExact) {
+TEST(LlmMemoryContractTest, GenericV2AcceptancePredicateIsExact) {
   const GenericResultIdentity accepted = {
       "llm_memory",
-      1,
+      2,
       "metal",
       "metal",
       "prefill",
       "prefill",
       "paged",
       "paged",
-      "llm-memory-v1-metal-prefill-paged",
+      "llm-memory-v2-metal-prefill-paged",
       "complete",
       true,
       true,
@@ -1522,7 +1197,7 @@ TEST(LlmMemoryContractTest, GenericV1AcceptancePredicateIsExact) {
   candidate.mode = "benchmark";
   EXPECT_FALSE(accepted_generic_result(candidate));
   candidate = accepted;
-  candidate.schema_version = 2;
+  candidate.schema_version = 1;
   EXPECT_FALSE(accepted_generic_result(candidate));
   candidate = accepted;
   candidate.backend = "cpu";
@@ -1536,21 +1211,21 @@ TEST(LlmMemoryContractTest, GenericV1AcceptancePredicateIsExact) {
   candidate = accepted;
   candidate.requested_backend = "gpu";
   candidate.backend = "gpu";
-  candidate.methodology_version = "llm-memory-v1-gpu-prefill-paged";
+  candidate.methodology_version = "llm-memory-v2-gpu-prefill-paged";
   EXPECT_FALSE(accepted_generic_result(candidate));
   candidate = accepted;
   candidate.requested_phase = "train";
   candidate.phase = "train";
-  candidate.methodology_version = "llm-memory-v1-metal-train-paged";
+  candidate.methodology_version = "llm-memory-v2-metal-train-paged";
   EXPECT_FALSE(accepted_generic_result(candidate));
   candidate = accepted;
   candidate.requested_kv_layout = "sparse";
   candidate.kv_layout = "sparse";
-  candidate.methodology_version = "llm-memory-v1-metal-prefill-sparse";
+  candidate.methodology_version = "llm-memory-v2-metal-prefill-sparse";
   EXPECT_FALSE(accepted_generic_result(candidate));
   candidate = accepted;
   candidate.methodology_version =
-      "llm-memory-v1-cpu-fixed-context-warm-layer-interleaved";
+      "llm-memory-v2-cpu-fixed-context-warm-layer-interleaved";
   EXPECT_FALSE(accepted_generic_result(candidate));
   candidate = accepted;
   candidate.status = "partial";
@@ -1559,7 +1234,7 @@ TEST(LlmMemoryContractTest, GenericV1AcceptancePredicateIsExact) {
   candidate.results_complete = false;
   EXPECT_FALSE(accepted_generic_result(candidate));
   candidate = accepted;
-  candidate.conclusions_valid = false;
+  candidate.run_accepted = false;
   EXPECT_FALSE(accepted_generic_result(candidate));
   candidate = accepted;
   candidate.all_planned_measurements_measured = false;
@@ -1656,14 +1331,14 @@ TEST(LlmMemoryContractTest,
   const std::array<ContractKvLayout, 2> layouts = {
       ContractKvLayout::Contiguous, ContractKvLayout::Paged};
   const std::array<std::string_view, 8> expected_methodologies = {
-      "llm-memory-v1-cpu-decode-contiguous",
-      "llm-memory-v1-cpu-decode-paged",
-      "llm-memory-v1-cpu-prefill-contiguous",
-      "llm-memory-v1-cpu-prefill-paged",
-      "llm-memory-v1-metal-decode-contiguous",
-      "llm-memory-v1-metal-decode-paged",
-      "llm-memory-v1-metal-prefill-contiguous",
-      "llm-memory-v1-metal-prefill-paged",
+      "llm-memory-v2-cpu-decode-contiguous",
+      "llm-memory-v2-cpu-decode-paged",
+      "llm-memory-v2-cpu-prefill-contiguous",
+      "llm-memory-v2-cpu-prefill-paged",
+      "llm-memory-v2-metal-decode-contiguous",
+      "llm-memory-v2-metal-decode-paged",
+      "llm-memory-v2-metal-prefill-contiguous",
+      "llm-memory-v2-metal-prefill-paged",
   };
   size_t methodology_index = 0;
   for (ContractBackend backend : backends) {
@@ -2204,159 +1879,6 @@ TEST(LlmMemoryContractTest,
   ASSERT_NE(msl_suffix, std::string::npos);
   EXPECT_EQ(cpu_identity.substr(msl_suffix),
             "|msl_revision=null|msl_source_sha256=null");
-}
-
-TEST(LlmMemoryContractTest,
-     MinimumGenericSchemaV1FieldVocabularyAndTypesAreFrozen) {
-  const std::vector<SchemaFieldContract> vocabulary =
-      minimum_generic_schema_v1_vocabulary();
-  ASSERT_EQ(vocabulary.size(), 95u);
-
-  const auto names_in_section =
-      [&vocabulary](std::string_view section) {
-        std::vector<std::string_view> names;
-        for (const SchemaFieldContract& field : vocabulary) {
-          if (field.section == section) {
-            names.push_back(field.name);
-          }
-        }
-        return names;
-      };
-  EXPECT_EQ(
-      names_in_section("top_level"),
-      (std::vector<std::string_view>{
-          "schema_version", "mode", "backend", "phase", "kv_layout",
-          "methodology_version", "software", "configuration",
-          "resolved_plan", "backend_evidence", "memory_budget",
-          "calibration", "measurements", "aggregates", "status",
-          "reason_code", "results_complete", "conclusions_valid",
-          "interpretation"}));
-  EXPECT_EQ(names_in_section("configuration"),
-            (std::vector<std::string_view>{"argv", "resolved_sources"}));
-  EXPECT_EQ(names_in_section("resolved_plan"),
-            (std::vector<std::string_view>{
-                "geometry", "layout", "resources",
-                "component_identities"}));
-  EXPECT_EQ(names_in_section("resolved_plan.geometry"),
-            (std::vector<std::string_view>{"decode", "prefill"}));
-  EXPECT_EQ(names_in_section("resolved_plan.geometry.decode"),
-            (std::vector<std::string_view>{"visible_context_tokens"}));
-  EXPECT_EQ(
-      names_in_section("resolved_plan.geometry.prefill"),
-      (std::vector<std::string_view>{
-          "prompt_tokens", "attention_query_tile_tokens", "tile_count",
-          "attention_prefix_token_visits_per_sequence",
-          "causal_token_pairs_per_sequence", "logical_attention_pairs",
-          "logical_attention_fma_terms"}));
-  EXPECT_EQ(
-      names_in_section("resolved_plan.layout"),
-      (std::vector<std::string_view>{
-          "kv_layout", "kv_block_tokens", "blocks_per_sequence",
-          "physical_blocks_per_layer", "last_block_tokens",
-          "last_block_valid_bytes", "block_table_entries",
-          "block_table_bytes", "permutation_domain_uint64_hex",
-          "permutation_seed_uint64_decimal",
-          "permutation_algorithm_version", "permutation_sha256"}));
-  EXPECT_EQ(
-      names_in_section("resolved_plan.resources"),
-      (std::vector<std::string_view>{
-          "weight_logical_bytes", "k_logical_bytes", "v_logical_bytes",
-          "k_physical_length_bytes", "v_physical_length_bytes",
-          "k_layout_padding_bytes", "v_layout_padding_bytes",
-          "block_table_bytes"}));
-  EXPECT_EQ(names_in_section("memory_budget"),
-            (std::vector<std::string_view>{
-                "resource_rounding_bytes", "transient_peak_bytes",
-                "known_owned_peak_bytes", "admitted_budget_bytes"}));
-  EXPECT_EQ(
-      names_in_section("resolved_plan.component_identities"),
-      (std::vector<std::string_view>{
-          "logical_profile_version", "kv_layout_version",
-          "permutation_version", "backend_executor_version",
-          "resource_abi_version", "schedule_version",
-          "timer_policy_version", "buffer_pattern_version",
-          "write_pattern_version", "checksum_pattern_version",
-          "msl_revision", "msl_source_sha256"}));
-  EXPECT_EQ(
-      names_in_section("measurements.*"),
-      (std::vector<std::string_view>{
-          "work_unit_kind", "planned_work_units", "completed_work_units",
-          "weight_read_bytes_per_work_unit",
-          "kv_read_bytes_per_work_unit", "kv_write_bytes_per_work_unit",
-          "kv_write_kind", "effective_model_payload_bytes_per_work_unit",
-          "layout_metadata_lookup_count_per_work_unit",
-          "layout_metadata_read_bytes_per_work_unit",
-          "accounted_bytes_per_work_unit",
-          "planned_effective_model_payload_bytes",
-          "completed_effective_model_payload_bytes",
-          "planned_layout_metadata_lookup_count",
-          "completed_layout_metadata_lookup_count",
-          "planned_layout_metadata_read_bytes",
-          "completed_layout_metadata_read_bytes",
-          "planned_task_accounted_bytes", "completed_task_accounted_bytes",
-          "synthetic_work_unit_latency_seconds",
-          "synthetic_memory_work_units_per_second",
-          "effective_model_payload_gb_s"}));
-  EXPECT_EQ(names_in_section("backend_evidence"),
-            (std::vector<std::string_view>{"cpu", "metal"}));
-
-  for (size_t left = 0; left < vocabulary.size(); ++left) {
-    for (size_t right = left + 1; right < vocabulary.size(); ++right) {
-      EXPECT_FALSE(vocabulary[left].section == vocabulary[right].section &&
-                   vocabulary[left].name == vocabulary[right].name);
-    }
-  }
-
-  ASSERT_NE(find_schema_field(vocabulary, "resolved_plan.geometry.prefill",
-                              "prompt_tokens"),
-            nullptr);
-  EXPECT_EQ(find_schema_field(vocabulary, "resolved_plan.geometry.prefill",
-                              "prompt_tokens")
-                ->kind,
-            SchemaValueKind::Integer);
-  EXPECT_EQ(find_schema_field(vocabulary, "resolved_plan.geometry.prefill",
-                              "attention_prefix_token_visits_per_sequence")
-                ->kind,
-            SchemaValueKind::DecimalString);
-  EXPECT_EQ(find_schema_field(vocabulary, "resolved_plan.layout",
-                              "kv_block_tokens")
-                ->kind,
-            SchemaValueKind::IntegerOrNull);
-  EXPECT_EQ(find_schema_field(vocabulary, "resolved_plan.layout",
-                              "permutation_seed_uint64_decimal")
-                ->kind,
-            SchemaValueKind::DecimalStringOrNull);
-  EXPECT_EQ(find_schema_field(vocabulary, "measurements.*",
-                              "layout_metadata_lookup_count_per_work_unit")
-                ->kind,
-            SchemaValueKind::DecimalString);
-  EXPECT_EQ(find_schema_field(vocabulary, "measurements.*",
-                              "effective_model_payload_gb_s")
-                ->kind,
-            SchemaValueKind::FiniteNumberOrNull);
-  EXPECT_EQ(find_schema_field(vocabulary, "backend_evidence", "cpu")
-                ->kind,
-            SchemaValueKind::ObjectOrNull);
-  EXPECT_EQ(find_schema_field(vocabulary, "memory_budget",
-                              "known_owned_peak_bytes")
-                ->kind,
-            SchemaValueKind::DecimalString);
-  EXPECT_EQ(find_schema_field(vocabulary, "memory_budget",
-                              "resource_rounding_bytes")
-                ->kind,
-            SchemaValueKind::DecimalString);
-  EXPECT_EQ(find_schema_field(vocabulary, "top_level", "reason_code")
-                ->kind,
-            SchemaValueKind::String);
-  EXPECT_EQ(find_schema_field(vocabulary, "top_level",
-                              "conclusions_valid")
-                ->kind,
-            SchemaValueKind::Boolean);
-
-  const std::string serialized = serialize_schema_vocabulary(vocabulary);
-  EXPECT_EQ(serialized.substr(0, 20), "llm-memory-schema-v1");
-  EXPECT_EQ(sha256_text(serialized),
-            "77fbcf8e13b7399cff685c41854d5d93e36b18cb4103cb490cf52e52829b2442");
 }
 
 TEST(LlmMemoryContractTest,

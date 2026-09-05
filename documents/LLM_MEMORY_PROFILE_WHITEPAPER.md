@@ -25,10 +25,10 @@ The current contract is identified by:
 | Software version | Release provenance; not a schema or methodology selector |
 | Mode | `llm_memory` |
 | Backend | `cpu` or `metal` |
-| JSON schema | `1` |
+| JSON schema | `2` |
 | Phase selector | `decode` or `prefill` |
 | Work unit | `decode_step` or `prefill_operation` |
-| Methodology | `llm-memory-v1-<backend>-<phase>-<layout>` |
+| Methodology | `llm-memory-v2-<backend>-<phase>-<layout>` |
 | Model/scenario plan identity prefix | `llm-memory-work-plan-v1` |
 | Component identity prefix | `llm-memory-components-v1` |
 | Logical profile version | phase-specific decode or prefill profile identity |
@@ -43,6 +43,7 @@ The current contract is identified by:
 | Write pattern | backend/phase-specific append or full-prompt affine identity |
 | Checksum pattern | Backend/phase/layout-specific checksum identity; Metal uses profile-specific dual-mod32 variants |
 | MSL revision/source SHA-256 | null / null for CPU; exact selected runtime source identity for Metal |
+| Run policy | `llm-run-policy-bounded-loop-snapshots-v1` |
 | Traffic classification | `llm-exact-weight-vs-kv-read-payload-v1` |
 
 Component identities use a fixed-order, length-prefixed canonical serialization beginning with
@@ -131,11 +132,11 @@ falls back to another profile.
 Output targets follow the shared process contract:
 
 - omitted or empty output means console only;
-- exact `--output -` reserves stdout for one final schema 1 document and routes the post-parse human transcript to
+- exact `--output -` reserves stdout for one final schema 2 document and routes the post-parse human transcript to
   stderr;
 - every other non-empty raw token is a file, including `./-` and flag-shaped names;
-- file output uses atomic `<target>.tmp` replacement after each terminal scenario measurement and at command terminal;
-- stdout performs the same logical checkpoint and stop transitions without intermediate serialization.
+- file output uses atomic `<target>.tmp` replacement every `K=max(1,ceil(count/8))` completed loops plus command terminal;
+- stdout preserves task-boundary stop observations but performs no intermediate snapshot preparation or serialization.
 
 Parser/logical-preflight or JSON-output peak-estimation failure before runner-result initialization leaves stdout empty.
 A Metal runtime capability failure after output-session creation emits terminal `unsupported` JSON when enabled and
@@ -249,7 +250,11 @@ mixed = W + B * (P + S(P,Q)) * K
 
 The weight pass occurs once per full prompt, not once per token or tile. Audit metadata separately records
 `causal_token_pairs_per_sequence = triangular(P)`, `logical_attention_pairs = L*B*h_q*triangular(P)`, and
-`logical_attention_fma_terms = logical_attention_pairs*d_h`. These values are not payload and no FMA is executed.
+`logical_attention_fma_terms = logical_attention_pairs*d_h`. These values are not payload and no FMA is executed. Schema 2 places them in `resolved_plan.model_context.prefill`,
+with an individual `*_reason_code`: available decimal string/`valid`, or null/`arithmetic-overflow`. Theoretical overflow
+does not reject otherwise representable byte work; byte/prefix/lookup/allocation overflow still rejects it. Available
+identity values retain their numeric encoding; unavailable values use `unavailable:arithmetic-overflow`. Query heads
+`h_q` affect theoretical context, whereas query tile `Q` changes actual prefix-read traffic.
 
 ### Paged physical geometry, table, and lookup traffic
 
@@ -386,7 +391,7 @@ The exact logical weight/KV-read crossover is:
 traffic_crossover_context_tokens = W / (B * K)
 ```
 
-Schema 1 preserves the numerator and denominator as exact decimal strings plus a floating estimate. For the vector
+Schema 2 preserves the numerator and denominator as exact decimal strings plus a floating estimate. For the vector
 above, the ratio is `4294967296 / 131072`, exactly 32768 visible tokens.
 
 The current-context classification is versioned as `llm-exact-weight-vs-kv-read-payload-v1`:
@@ -421,8 +426,8 @@ A non-empty file or stdout JSON target also reserves a conservative peak for one
 transport text before final memory admission. The estimate covers fixed schema storage, captured input strings, every
 planned measurement record, and both expected and actual worker-checksum trees. The input-string term also includes
 the frozen model-plan, methodology, component/layout identities, and applicable prefill aggregate, scenario, execution,
-and scope identities. Frozen identities are charged once. Scenario-plan identities scale with the maximum retained
-calibration attempts and planned measurement loops. Each variable-length addition is checked, and preliminary and finalized-plan
+and scope identities. Frozen identities are charged once. Canonical scenario-plan identities scale with the bounded maximum retained calibration shapes plus frozen plans,
+independently of measured loop count. Actual measurement records/checksums still scale with planned loops. Each variable-length addition is checked, and preliminary and finalized-plan
 estimates use the same canonical identity-size formula. Omitted or empty output adds no serialization reserve; normal
 console-only execution does not serialize a schema document.
 
@@ -579,7 +584,7 @@ Before every paged decode task, the executor restores only the mutable current-t
 initialization pattern. This allocation-free reset is outside the timed interval; it does not rewrite history blocks or
 suffix-padding canaries. Paged prefill instead rewrites every owned prompt byte during each timed operation.
 The planner uses shared SplitMix64 derivation with frozen domains to derive separate weight/K/V buffer seeds,
-permutation seed, and scenario seeds from one base seed; schema 1 stores exact seeds as decimal strings.
+permutation seed, and scenario seeds from one base seed; schema 2 stores exact seeds as decimal strings.
 
 The initialization pattern treats each mapping as a zero-based stream of little-endian 64-bit words. For mapping word
 index `i` and that mapping's domain-separated buffer seed:
@@ -698,8 +703,8 @@ CPU contiguous-decode checks every byte of both K/V append records for all layer
 against the final task-local ordinal `T-1`, after timer stop and all worker joins. A mismatch yields
 `decode-post-validation-failed`: the invalid attempt is retained with null rates and excluded from
 aggregates. The timed workload and checksum algorithm are unchanged. KV-write evidence applies only
-to KV-bearing scenarios; paged/prefill evidence retains the combined final-state check and its existing
-padding/sampling limits. CPU paged decode weights-only checks its append slots and padding; CPU paged prefill weights-only checks padding,
+to KV-bearing scenarios; schema 2 retains independent write, structure and applicable padding verdicts with the
+existing sampling limits. No new memory scan or stronger fault-coverage claim follows from naming these checks. CPU paged decode weights-only checks its append slots and padding; CPU paged prefill weights-only checks padding,
 not valid prompt contents.
 See the [CPU final-state evidence contract](API.md#result-schemas-and-completion) for field and null semantics.
 
@@ -881,15 +886,22 @@ Measured duration-quality values are `within-target-window`, `above-target-singl
 `not-run`. Every measured non-window value produces the corresponding `<scenario>-duration-<quality>` warning.
 
 The base order is `weights_only`, `kv_only`, `mixed`; loop `i` rotates it by `i mod 3`. A complete block of three loops
-gives every scenario one first, middle, and last position. Count need not be divisible by three, but comparative
-conclusions require exact position balance.
+gives every scenario one first, middle, and last position. Count need not be divisible by three. Balance is reported independently; a comparison policy may require it, but
+producer correctness acceptance does not.
 
-Only checksum-valid `measured` records enter aggregates. Each scenario stores work-unit latency,
-`synthetic_memory_work_units_per_second`, and `effective_model_payload_gb_s` values. One value is its own headline;
-multiple values use median P50. Statistics include average, median, P90/P95/P99, sample standard deviation, CV, MAD,
-minimum, and maximum. Fewer than three measurements is `insufficient-samples`; the effective-model-payload-GB/s CV
-above 5% selects `noisy` and the
-scenario's diagnostic high-CV warning. Values are not removed, winsorized, or retried because of performance.
+Only `measured` records with accepted required timing, checksum and cold-check evidence enter aggregates.
+One retained authoritative duration/work/payload sample feeds all three metrics through one
+`accepted_measurement_ids` population. Each rate is derived before statistics: median(work/duration) need not equal
+work/median(duration). Exact statistics use the existing shared linear interpolation and sample standard deviation
+helper only at snapshots/terminal, with reusable extraction/sort/MAD workspaces. Raw sample console output does not
+sort earlier samples. One sample is its own headline; otherwise the headline is median P50.
+
+JSON retains average, median, P90/P95/P99, sample stddev, CV, MAD, min/max. Empty populations have null statistics;
+n=1 has stddev=0 and positive-mean CV=0. `observed_cv_classification` is `insufficient-samples` for n<3, `undefined`
+for undefined CV, `above-threshold` for payload CV strictly greater than 5%, otherwise `below-threshold`. Equality is
+below-threshold; `cv_warning_threshold_pct` states the bound. These describe observed samples, not confidence levels
+or reproducibility guarantees. Default console uses n/median/min/max/CV/MAD. Quality does not remove, winsorize or retry
+samples and does not change correctness acceptance.
 
 Mixed payload fractions are exact byte fractions for weight read, KV read, and KV append write. The single mixed elapsed
 time is not used to publish separate independent weight and KV bandwidths.
@@ -926,194 +938,133 @@ measurement remains measured even if the signal arrived during it. Once stop is 
 remaining slots become interrupted/null. A real backend-task, timer, checksum, or checkpoint failure remains
 authoritative over a simultaneous interruption.
 
-The runner offers one logical checkpoint after every terminal scenario measurement and a distinct command-terminal
-checkpoint. File targets serialize each with atomic replacement. Stdout targets preserve the same state transitions and
-stop observations but build no intermediate payload and emit exactly one final document. A failed file checkpoint ends
-the run, marks checkpoint failure, and is not retried at command terminal.
+Files receive a snapshot after every Kth fully completed loop, where `K=max(1,ceil(N/8))` for N planned loops.
+The overflow-safe calculation is `max(1,N/8 + (N%8 != 0))`. At most eight progress snapshots and one terminal snapshot
+are written (normal maxima 4/7/9 for N=3/12/48). A successful terminal may be followed by one corrective failure
+snapshot for a late command exception. Failed persistence is terminal and never retried at the final-write boundary.
 
-`results_complete` means every planned scenario measurement is measured. `scenario_order_balance_complete` requires
-the complete realized position matrix to be balanced. `conclusions_valid` requires complete status/results, balanced
-order, and no checkpoint failure. A count-one command can therefore finish every planned task and retain valid numeric
-measurements while correctly reporting `conclusions_valid: false`.
+At abrupt termination, at most `3K` truly completed attempts may be missing after the last successful snapshot,
+including while its replacement is in progress. Unstarted tail placeholders do not count. Before the first snapshot
+there may be no file; SIGKILL/crash cannot promise terminal output. Graceful SIGINT retains the completed prefix and
+interrupted tail if terminal persistence succeeds. Atomic rename does not imply power-loss durability. Task-boundary
+stop observations remain active even when snapshots are skipped. Stdout builds one terminal DOM, disabled output none.
 
-## JSON schema 1
+`checkpoint_lifecycle` distinguishes actual writer entry/return from snapshot construction and logical task transitions.
+`prior_file_writer_attempts` and `prior_successful_file_writes` have observation point
+`before-current-snapshot-preparation`. `current_request` is `progress`, `terminal` or `late-command-error-correction`;
+`current_persistence_success` is null, never predicted. Builder failure is not writer entry; stdout/disabled no-ops
+are not persistent successes. No extra snapshot is written to count itself. An older preserved file cannot encode
+future write/cleanup failure, so final collection retains actual process outcome and terminal context.
 
-The old schema-1 producer shape was unpublished. The generic vocabulary below replaces its CPU/decode/step-specific
-field names without compatibility aliases, a fallback reader, or a schema-version increment.
+`results_complete` describes the fully measured planned population. `run_accepted` requires complete run status,
+accepted required timing/checksum/cold-check/backend lifecycle and completion evidence, and no known command or
+checkpoint error. Balance, count, CV, duration and environment are independent quality context. Count one can be
+correct and accepted while position balance is false and sample classification is insufficient. A late command error
+may preserve `results_complete: true` while status is failed and `run_accepted: false`.
 
-The required top-level schema keys are:
+## JSON schema 2
+
+Schema 2 deliberately replaces the unpublished schema-1 shape and adopts v2 methodology selectors. There is no
+compatibility alias or fallback reader. The normative [API field map](API.md#llm-schema-1-to-schema-2-field-map)
+lists each relocation and changed predicate.
+
+The exact active methodology selectors are:
+
+- `llm-memory-v2-cpu-decode-contiguous`, `llm-memory-v2-cpu-decode-paged`;
+- `llm-memory-v2-cpu-prefill-contiguous`, `llm-memory-v2-cpu-prefill-paged`;
+- `llm-memory-v2-metal-decode-contiguous`, `llm-memory-v2-metal-decode-paged`;
+- `llm-memory-v2-metal-prefill-contiguous`, `llm-memory-v2-metal-prefill-paged`.
+
+The required top-level fields are:
 
 ```text
 schema_version, mode, backend, phase, kv_layout, methodology_version,
 software, configuration, resolved_plan, backend_evidence, memory_budget,
 calibration, measurements, aggregates, status, reason_code,
-results_complete, conclusions_valid, interpretation
+results_complete, run_accepted, interpretation, diagnostic, interruption_requested,
+scenario_order_balance_complete, seeds, counters, checkpoint_lifecycle, loop_records,
+environment, quality_warnings, build_manifest
 ```
 
-Top-level `backend`, `phase`, and `kv_layout` are canonical selectors. `methodology_version` is derived exactly as
-`llm-memory-v1-<backend>-<phase>-<layout>`. `configuration` preserves exact argv plus `resolved_sources`; a default is
-recorded as `default`, not as fabricated argv. Additional diagnostic, interruption, checkpoint, loop-order, checksum,
-environment, warning, and traffic-classification evidence may be present.
+`configuration` preserves exact argv/output target and resolved/default input sources. Omitted iterations means
+automatic calibration; file output still needs a target. Omitted/empty output is disabled, with no automatic filename.
 
-`resolved_plan` has four required ownership groups:
+`resolved_plan` owns `plan_identity`, logical `geometry`, `model_context`, `layout`, `resources`,
+`component_identities`, `methodology`, `model_work_plan`, `scenario_plans`, and `frozen_plan_refs`.
+Exactly one geometry phase object is populated. Decode uses integer visible-context tokens; prefill has integer P/Q
+and decimal-string tile/prefix visits. Decode-only crossover and classification values are null for prefill.
+`model_context.prefill` contains nullable theoretical quantities as described above; it is null for decode.
 
-```text
-resolved_plan.geometry
-resolved_plan.layout
-resolved_plan.resources
-resolved_plan.component_identities
-```
+Paged layout retains integer block size, decimal block/tail/table geometry and materialized permutation domain,
+seed, version and hash. Before Metal table preparation, admitted geometry survives with null runtime permutation.
+Resources retain exact logical/physical K/V, suffix padding, table and Metal segment/argument-buffer geometry.
+Component identity retains fixed-order length-prefixed logical/layout/permutation/backend/ABI/schedule/timer/
+buffer/write/checksum/MSL fields under `llm-memory-components-v1`; CPU MSL and contiguous permutation fields are null.
+The separately published `run_policy_version` is `llm-run-policy-bounded-loop-snapshots-v1`.
 
-`geometry.decode` and `geometry.prefill` are object-or-null. Active decode populates integer
-`decode.visible_context_tokens` and uses null prefill; active prefill does the reverse and never reuses context fields.
-Its object has integer `prompt_tokens` and
-`attention_query_tile_tokens` plus decimal-string `tile_count`,
-`attention_prefix_token_visits_per_sequence`, `causal_token_pairs_per_sequence`, `logical_attention_pairs`, and
-`logical_attention_fma_terms`. Decode-only crossover numerator/denominator/context, weight/KV-read ratio, and
-context-classification fields are null for prefill.
-`layout.kv_layout` is a string. Paged populates integer `kv_block_tokens`; decimal-string
-`blocks_per_sequence`, `physical_blocks_per_layer`, `last_block_tokens`, `last_block_valid_bytes`,
-`block_table_entries`, and `block_table_bytes`; plus `permutation_domain_uint64_hex`,
-`permutation_seed_uint64_decimal`, `permutation_algorithm_version`, and `permutation_sha256`. These paged-only fields
-are null for contiguous.
-`resources` stores canonical decimal-string `weight_logical_bytes`, `k_logical_bytes`, `v_logical_bytes`,
-`k_physical_length_bytes`, `v_physical_length_bytes`, `k_layout_padding_bytes`, and `v_layout_padding_bytes`;
-`block_table_bytes` is decimal-string-or-null.
+Canonical `scenario_plans[]` stores unique scenario/T/explicit content once, including excluded calibration shapes,
+ordered by weights/KV/mixed, increasing T, then false/true explicit policy. Each retains exact identity, scenario seed,
+`model_ref: "resolved_plan"`, work kind, work units, limits and all planned byte/lookup quantities. `frozen_plan_refs`
+has the three scenario keys and integer index or unresolved null. Measurement and calibration `plan_ref` refer to the
+same document's array; public indexes may change between snapshots while internal insertion handles remain stable.
+Unknown/out-of-range and wrong-scenario references reject publication. Canonical content is immutable after registration.
 
-`component_identities` contains, in canonical fixed order:
+A measurement retains `measurement_id` (its scheduled array index), scenario/loop/order, status/reason, authoritative
+accepted `elapsed_seconds`, completed work/payload/metadata/accounted bytes and actual runtime evidence.
+Work kind, `work_units`, per-work-unit bytes and planned totals are read through `plan_ref`. Canonical total names are
+`effective_model_payload_bytes`, `layout_metadata_lookup_count`, `layout_metadata_read_bytes`, `task_accounted_bytes`;
+measurement totals keep `completed_`. CPU `completion_derivation: "accepted-plan-derived"` is not a hardware counter.
+Derived workers/QoS, calibration indexes, working-set and mixed fractions remain available. Invalid attempts retain
+observed diagnostic time and actual checksum evidence while accepted elapsed/rates are null.
 
-```text
-logical_profile_version
-kv_layout_version
-permutation_version
-backend_executor_version
-resource_abi_version
-schedule_version
-timer_policy_version
-buffer_pattern_version
-write_pattern_version
-checksum_pattern_version
-msl_revision
-msl_source_sha256
-```
+Expected checksum lives once at `scenario_plans[].expected_checksum`, with exactly status/reason,
+`expected_worker_checksums`, `expected_run_checksum`. Available means the canonical cold expectation was reconstructed,
+not that execution passed; unavailable makes both expected fields null. CPU worker expectations are ordered by worker
+and include W/K/V component state, exact bytes and span count; CPU run checksum has state A/B. Metal expected workers
+are null; its run object contains W/K/V dual-mod32 pairs. Measurement checksum contains status/reason/validity and
+actual worker/run witnesses. Calibration retains compact actual-run-only evidence at `execution.checksum`, with
+expectations resolved via its plan reference; no actual-worker array is invented. Algorithm versions have one owner in
+canonical components, and CPU/Metal numerical witnesses are not cross-backend comparisons.
 
-Always-applicable values are strings. `permutation_version` is null for contiguous; MSL fields are null for CPU. The
-serialized identity begins `llm-memory-components-v1` and appends every field in that order as `|key=<length>:<value>`
-or `|key=null`.
+Named checks under measurement/calibration `execution.validation.checks[]` preserve the independently completed
+structure, applicable phase/scenario write/unchanged and padding observations. Their kind tokens are
+`post-validation-structure`, `kv-append-final`, `kv-prefill-final-samples`, `kv-append-unchanged`, `kv-padding-canary`.
+CPU paged decode weights-only checks unchanged append and applicable padding; CPU paged prefill weights-only checks
+structure/padding, not valid prompt content. Metal weights-only has no write/padding check. Inapplicable evaluated/valid are null;
+applicable unresolved valid is null; observed mismatch remains false. Checksum agreement may coexist with failed cold
+validation and cannot override it. The [fault matrix](#checksum-fault-model-and-evidence-limits) retains its scope:
+new names add no collision resistance, unsampled-byte coverage or runtime trace.
 
-`backend_evidence` contains both `cpu` and `metal` object-or-null branches. Exactly the selected backend is populated;
-CPU profiles have a CPU object and `metal: null`. Within the CPU object, `prefill` is null for decode and
-populated for either prefill layout. The prefill evidence fixes `cost_unit: "worker-cost"`, execution and scope identities,
-descriptors per scenario/worker, decimal-string worker cost vectors, and scenario-specific decimal-string minimum,
-maximum, and max-minus-min imbalance per work unit. Its `paged` sibling is populated for either paged phase, so paged
-prefill has both objects. Metal profiles use `cpu: null` and populate `metal` with worker/QoS applicability false;
-lifecycle status/reasons; device/family/unified/Tier-2/compiler/MSL/source/pipeline evidence; argument-buffer layout
-probe; actual resource options, lengths, optional allocated sizes, and memory totals. Paged Metal evidence additionally
-publishes whole-entry table segments, upload/readback validation, materialized permutation identity, combined K/V
-padding, exact grid lookup count, owner/threadgroup geometry, per-threadgroup `actual-threadgroup-cost` accounted-byte
-vector and minimum/maximum/imbalance, and K/V-write/padding-canary validity. Every Metal `weights_only` task publishes
-the same cost unit for its weight-vector grid-stride schedule; contiguous KV-bearing grids publish null cost summary
-fields and an empty vector. Runtime unsupported/failure diagnostics remain
-bounded and separate from stable reason codes.
-`memory_budget` separates allocation-time evidence into required
-canonical decimal-string `resource_rounding_bytes`, `transient_peak_bytes`, `known_owned_peak_bytes`, and
-`admitted_budget_bytes`. `calibration` owns excluded work-resolution attempts. `aggregates` contains measured-only
-scenario values.
+`backend_evidence` retains tagged CPU/Metal branches, lifecycle, capability, resources and bounded error diagnostics.
+CPU prefill preserves execution/scope identities and exact worker-cost vectors; paged prefill also has paged evidence.
+Metal has null workers and preserves MSL/layout-probe/pipeline, actual resource options/lengths, grid/owner costs,
+GPU raw start/end, host envelope, command/encoder/dispatch observations and nullable same-clock queue delay.
+`memory_budget` separates immutable geometry from rounded/committed/transient/known-owned/admitted runtime evidence.
+Canonical plan/expected vector capacities, calibration, accepted-ID maps, exact-stat scratch and DOM/serialized-string
+simultaneous peak are admitted together; paged Metal canonical expectations also reserve table/validation/hash scratch.
+The available-memory sample is excluded from immutable identities. Snapshot count reduction does not reduce peak size.
 
-Every measurement exposes this stable backend-neutral accounting vocabulary:
+Indexes, bounded small inputs and work units are JSON integers below 2^53, never booleans. Bytes, lookups, visits,
+seeds and checksums are canonical unsigned decimal strings (`0` or `[1-9][0-9]*`), with the relevant uint64/uint32 bounds.
+Known zero is not null. Unavailable/inapplicable values retain null plus applicability/status/reason semantics.
 
-```text
-work_unit_kind
-planned_work_units
-completed_work_units
-weight_read_bytes_per_work_unit
-kv_read_bytes_per_work_unit
-kv_write_bytes_per_work_unit
-kv_write_kind
-effective_model_payload_bytes_per_work_unit
-layout_metadata_lookup_count_per_work_unit
-layout_metadata_read_bytes_per_work_unit
-accounted_bytes_per_work_unit
-planned_effective_model_payload_bytes
-completed_effective_model_payload_bytes
-planned_layout_metadata_lookup_count
-completed_layout_metadata_lookup_count
-planned_layout_metadata_read_bytes
-completed_layout_metadata_read_bytes
-planned_task_accounted_bytes
-completed_task_accounted_bytes
-synthetic_work_unit_latency_seconds
-synthetic_memory_work_units_per_second
-effective_model_payload_gb_s
-```
+`build_manifest` reserves `manifest_version: 1`, `status: "unavailable"`,
+`reason_code: "build-provenance-not-provided"`, and null `binary_sha256`, `git_commit`, `git_dirty`, `compiler`,
+`compile_flags`, `link_flags`, `target_arch`, `sdk`, `min_os`. Optional CPU raw-tick evidence is not emitted in this
+revision. Neither this reservation nor software/MSL version identity is independent build attestation.
 
-Measurement checksum evidence uses generic `write_pattern_version` and `checksum_pattern_version` keys; it does not
-reuse decode-specific append terminology for prefill. Metal measurement evidence additionally publishes pipeline/grid,
-raw GPU start/end and authoritative elapsed, host envelope and nullable same-clock queue delay,
-command-buffer/encoder/dispatch counts, dual-mod32 W/K/V expected/actual values, and excluded phase-neutral
-`kv_write_evaluated`/`kv_write_valid` state. The console renders the same contract as `kv_write=<status>`.
+Consumer acceptance requires successful process outcome, exact mode/schema2/backend/phase/layout/v2 methodology,
+`run_policy_version: "llm-run-policy-bounded-loop-snapshots-v1"`, complete status, `results_complete: true`,
+`run_accepted: true`, every planned measurement measured, valid same-document references, and a non-null selected
+metric. This consumes producer acceptance; it is not an independent re-execution of the checksum, timing or build proof.
+A comparison policy separately checks matched geometry, physical layout/permutation, seeds, exact work, backend/device,
+component/MSL/pipeline/timer identity and environment. Position balance and CV can inform that policy but never redefine
+correctness or justify performance-based sample filtering.
 
-Decode uses `decode_step` and KV-bearing `current_token_append`; prefill uses `prefill_operation` and KV-bearing
-`full_prompt_population`. `weights_only` uses `kv_write_kind: "none"` in both phases. Planned/completed work units are
-integer numbers. All listed byte, lookup, metadata, and accounted fields are canonical decimal strings even when the
-applicable value is zero. Derived elapsed/rate/statistic
-values are finite JSON numbers only for successful measured evidence and otherwise null.
-
-The field type never changes by backend, phase, layout, scenario, or magnitude. Schema/control indexes and validated
-small inputs such as worker count and visible-context tokens are JSON integers bounded to the exact IEEE-754 integer
-range. Potentially large bytes, capacities, block/table/lookup counts, token visits, causal pairs, FMA terms, seeds, and
-checksums are canonical decimal strings. A non-applicable object or scalar is null; an applicable count of zero is
-number `0` or decimal string `"0"` according to the field's fixed type. The string `"not_applicable"` is never used.
-
-The complete document additionally retains:
-
-- exact raw argv/output plus requested/default configuration;
-- methodology/component identities, fixed policies, geometry, MHA/GQA/MQA metadata, and exact traffic/crossover inputs;
-- requested, page-rounded committed, transient, known-owned, allowed, and available memory evidence;
-- full mapping/init/descriptor or Metal segment/argument-buffer evidence and backend-applicable worker fields;
-- base, buffer-domain, and scenario-domain seeds;
-- immutable model and per-scenario work-plan identities, limits, exact work units, model payload, metadata, and accounted
-  totals;
-- excluded warmup/pilot/trial/correction attempts;
-- planned/attempted/completed loop, measurement, work-unit, payload, and checkpoint counters;
-- planned/realized cyclic order, every status-bearing measurement, checksum evidence, and measured-only aggregates;
-- CPU/OS/cache/page/QoS plus start/end thermal, Low Power Mode, and physical-memory snapshots;
-- quality-warning tokens and the non-inference/non-DRAM interpretation boundary.
-
-The authoritative consumer acceptance predicate is exactly:
-
-```text
-mode == "llm_memory"
-schema_version == 1
-backend == requested_backend
-phase == requested_phase
-kv_layout == requested_kv_layout
-methodology_version ==
-  "llm-memory-v1-" + backend + "-" + phase + "-" + kv_layout
-status == "complete"
-results_complete == true
-conclusions_valid == true
-every planned measurement has status == "measured"
-```
-
-For active commands the requested values are CPU or Metal decode/prefill with contiguous or paged KV. Paged acceptance
-and comparison must additionally match `G`, `N`, tail geometry, logical/physical/padding/table resources,
-permutation
-version/domain/resolved seed/hash, lookup/accounted bytes, worker schedule, descriptor/executor, timer, and checksum
-identities. `unsupported`, `partial`, `interrupted`, `invalid`, and `failed` evidence is never accepted as performance.
-Metal comparison additionally requires matching device capability, MSL revision/source hash, pipeline/grid identity,
-exact segment geometry, and timer/checksum contracts. CPU and Metal samples are never pooled and their checksums are
-not numerically comparable.
-After the predicate, a consumer must still require the selected scenario metric's non-null value plus checksum and
-quality conditions relevant to its conclusion. Process exit success alone is insufficient because graceful
-interruption is an established success-return path.
-
-The `interpretation` object always preserves the generic boundary: the workload is synthetic and memory-only;
-effective GB/s is exact logical W/K/V payload divided by authoritative elapsed time, not measured physical DRAM
-traffic; timed paged-table metadata is excluded from that numerator; prefill profiles do not perform Transformer compute
-or predict TTFT; private Metal storage on unified memory is not separate VRAM; cache/SLC/DRAM residency is unmeasured;
-and results with differing backend, phase, layout, phase geometry, paged geometry, methodology, or component identity
-must not be pooled as one performance distribution.
+The `interpretation` object preserves the memory-only boundary: effective GB/s is logical W/K/V divided by authoritative
+elapsed time, not physical DRAM; timed table metadata is excluded; prefill does no Transformer math and predicts no TTFT;
+private Metal memory is not separate VRAM; cache/SLC/DRAM residency is unmeasured. Distinct backend/phase/layout/model/
+component cohorts must not be pooled as one distribution.
 
 ## Console contract and quality warnings
 
@@ -1122,8 +1073,8 @@ weight/KV-read/KV-write bytes, and up to one measured headline per scenario. Dec
 prefill prints P/Q/C, prefix visits, causal pairs, and logical attention/FMA audit counts. It uses phase-specific labels
 such as `ms/decode step` or `ms/prefill operation`; JSON remains backend-neutral with
 `synthetic_work_unit_latency_seconds`, `synthetic_memory_work_units_per_second`, and
-`effective_model_payload_gb_s`. Metal task output uses `kv_write=valid|invalid|not-evaluated|not-applicable`, matching
-the generic JSON validation fields rather than a decode-only append label. The report never uses bare `tokens/s` and
+`effective_model_payload_gb_s`. Metal task output uses `kv_write=valid|invalid|not-evaluated|not-applicable`, summarizing
+the phase-specific named JSON checks. The report never uses bare `tokens/s` and
 states that effective model payload is not a physical DRAM counter. A scenario without a headline does not receive a
 fabricated numeric console value; its status, reason, and null observations remain in JSON.
 
@@ -1195,7 +1146,7 @@ Any change to traffic formulas, context semantics, buffer sizing/layout, tempora
 output-serialization peak admission, timing boundary, checksum observability, calibration/frozen-plan rules,
 interruption/checkpoint lifecycle, or meaning of a reported field requires methodology and schema compatibility review.
 Removing or renaming a field, changing its type, or changing its meaning requires a schema-version bump. Additive
-evidence may remain schema 1 only when existing consumers can safely ignore it.
+evidence may remain schema 2 only when existing consumers can safely ignore it.
 
 Runtime paged allocation/free lists, prefix sharing, sliding windows, growing context, chunked prefill, Metal execution
 outside the active profiles, ANE execution, model presets, quantization metadata,

@@ -207,10 +207,8 @@ void initialize_llm_setup_failure_result(
   for (size_t index = 0; index < kScenarios.size(); ++index) {
     result.aggregates[index].scenario = kScenarios[index];
   }
-  result.logical_checkpoint_attempts = 1;
-  result.successful_logical_checkpoints = 1;
+  result.snapshot_request = "terminal";
   result.terminal_checkpoint_attempted = true;
-  result.terminal_checkpoint_completed = true;
 }
 
 int write_llm_setup_failure_final(
@@ -221,6 +219,7 @@ int write_llm_setup_failure_final(
     LlmMemoryResult& result) noexcept {
   try {
     initialize_llm_setup_failure_result(config, reason_code, result);
+    if (output_session.kind() == JsonOutputKind::Disabled) return EXIT_SUCCESS;
     metadata.environment_end = capture_llm_host_environment();
     return output_session.write_final(
         build_llm_memory_json(config, model_plan, backend_evidence, metadata,
@@ -244,11 +243,17 @@ int write_llm_post_run_exception_final(
     const LlmBackendEvidence& backend_evidence,
     LlmResultMetadata& metadata, LlmMemoryResult& result) noexcept {
   try {
+    if (result.checkpoint_failed || (output_session.kind() == JsonOutputKind::File &&
+        !result.terminal_checkpoint_completed)) return EXIT_FAILURE;
+    result.prior_file_writer_attempts = output_session.file_writer_attempts();
+    result.prior_successful_file_writes = output_session.successful_file_writes();
+    result.snapshot_request = "late-command-error-correction";
+    result.terminal_checkpoint_completed = false;
     result.status = LlmRunStatus::Failed;
     result.reason_code = LlmRunnerReason::RUNNER_EXCEPTION;
-    result.results_complete = false;
-    result.conclusions_valid = false;
+    result.run_accepted = false;
     result.diagnostic.clear();
+    if (output_session.kind() == JsonOutputKind::Disabled) return EXIT_SUCCESS;
     metadata.environment_end = capture_llm_host_environment();
     return output_session.write_final(
         build_llm_memory_json(config, model_plan, backend_evidence, metadata,
@@ -1098,6 +1103,10 @@ int run_llm_memory_mode(int argc, char* argv[]) {
     }
 
     LlmRunnerHooks hooks;
+    hooks.progress_snapshots = output_session->persists_checkpoints();
+    hooks.observe_file_writes = [&]() {
+      return std::make_pair(output_session->file_writer_attempts(), output_session->successful_file_writes());
+    };
     hooks.checkpoint = [&](const LlmMemoryResult& snapshot, LlmCheckpointKind kind) {
       static_cast<void>(kind);
       return output_session->checkpoint([&]() {

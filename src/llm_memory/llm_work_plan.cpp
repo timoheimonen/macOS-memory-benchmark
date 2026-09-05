@@ -226,6 +226,12 @@ void append_component_identity(
   identity += "=null";
 }
 
+/** Preserve numeric encoding; null theoretical context has an explicit reason token. */
+void append_identity_field(std::string& identity, const char* name, const std::optional<size_t>& value) {
+  if (value) append_identity_field(identity, name, *value);
+  else append_identity_field(identity, name, std::string("unavailable:arithmetic-overflow"));
+}
+
 /** Match a retained pipe-delimited identity without constructing strings. */
 class IdentityMatcher {
  public:
@@ -244,6 +250,10 @@ class IdentityMatcher {
 
   bool field(std::string_view name, std::string_view value) noexcept {
     return literal("|") && literal(name) && literal("=") && literal(value);
+  }
+
+  bool integer_field(std::string_view name, const std::optional<size_t>& value) noexcept {
+    return value ? integer_field(name, *value) : field(name, "unavailable:arithmetic-overflow");
   }
 
   template <typename Integer>
@@ -1220,10 +1230,12 @@ bool validate_prefill_plan_noalloc(
   size_t tile_count = full_tiles;
   size_t full_tile_triangular = 0;
   size_t prefix_visits = 0;
-  size_t causal_pairs = 0;
+  const auto context = calculate_llm_prefill_model_context(prefill.prompt_tokens,
+      prefill.layer_count, prefill.batch_size, prefill.query_head_count, prefill.head_dimension);
+  const auto causal_pairs = context.causal_token_pairs_per_sequence;
+  const auto logical_attention_pairs = context.logical_attention_pairs;
+  const auto logical_attention_fma_terms = context.logical_attention_fma_terms;
   size_t layer_batch_count = 0;
-  size_t logical_attention_pairs = 0;
-  size_t logical_attention_fma_terms = 0;
   size_t kv_record_bytes = 0;
   size_t kv_bytes_per_token = 0;
   size_t logical_records = 0;
@@ -1249,20 +1261,7 @@ bool validate_prefill_plan_noalloc(
       (final_tile != 0 &&
        !NumericUtils::checked_add(prefix_visits, prefill.prompt_tokens,
                                   prefix_visits)) ||
-      !checked_llm_prefill_triangular(prefill.prompt_tokens,
-                                      causal_pairs) ||
-      !NumericUtils::checked_multiply(prefill.layer_count,
-                                      prefill.batch_size,
-                                      layer_batch_count) ||
-      !NumericUtils::checked_multiply(layer_batch_count,
-                                      prefill.query_head_count,
-                                      logical_attention_pairs) ||
-      !NumericUtils::checked_multiply(logical_attention_pairs,
-                                      causal_pairs,
-                                      logical_attention_pairs) ||
-      !NumericUtils::checked_multiply(logical_attention_pairs,
-                                      prefill.head_dimension,
-                                      logical_attention_fma_terms) ||
+      !NumericUtils::checked_multiply(prefill.layer_count, prefill.batch_size, layer_batch_count) ||
       !NumericUtils::checked_multiply(
           prefill.k_or_v_record_bytes_per_layer, 2, kv_record_bytes) ||
       !NumericUtils::checked_multiply(prefill.layer_count,
@@ -2319,6 +2318,13 @@ bool build_auxiliary_preflight_view(
   plan.valid = true;
   view.backend = plan.backend;
   view.kv_layout = plan.kv_layout;
+  if (metal_plan && metal_plan->resources.paged_layout) {
+    if (!NumericUtils::checked_add(metal_plan->resources.paged_layout->memory.transient_peak_bytes,
+                                   Constants::LLM_CANONICAL_PAGED_EXPECTED_FIXED_SCRATCH_BYTES, view.canonical_expected_scratch_bytes)) {
+      plan.valid = original_valid;
+      return false;
+    }
+  }
   if (cpu_plan != nullptr) {
     view.effective_workers = cpu_plan->effective_workers;
     view.total_layer_descriptors = cpu_plan->total_layer_descriptors;
@@ -2507,6 +2513,7 @@ bool auxiliary_preflight_views_match(
   const bool fixed_match =
       lhs.valid && rhs.valid && lhs.backend == rhs.backend &&
       lhs.kv_layout == rhs.kv_layout &&
+      lhs.canonical_expected_scratch_bytes == rhs.canonical_expected_scratch_bytes &&
       lhs.effective_workers == rhs.effective_workers &&
       lhs.total_layer_descriptors == rhs.total_layer_descriptors &&
       lhs.total_sequence_descriptors == rhs.total_sequence_descriptors &&
@@ -2944,7 +2951,7 @@ bool validate_llm_prefill_cpu_execution_evidence(
 std::string build_llm_methodology_version(LlmMemoryBackend backend,
                                           LlmPhase phase,
                                           LlmKvLayout layout) {
-  std::string methodology = "llm-memory-v1-";
+  std::string methodology = "llm-memory-v2-";
   methodology += llm_memory_backend_to_string(backend);
   methodology += '-';
   methodology += llm_phase_to_string(phase);

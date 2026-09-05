@@ -182,13 +182,17 @@ struct LlmAuthoritativeTiming {
 };
 
 /** Exact planned and completed logical work reported by one task. */
-struct LlmTaskCompletion {
-  size_t planned_work_units = 0;
+struct LlmCompletedWork {
   size_t completed_work_units = 0;
   size_t completed_effective_model_payload_bytes = 0;
   size_t completed_layout_metadata_lookup_count = 0;
   size_t completed_layout_metadata_read_bytes = 0;
   size_t completed_task_accounted_bytes = 0;
+};
+
+/** Transient completion assertion checked against the canonical plan. */
+struct LlmTaskCompletion : LlmCompletedWork {
+  size_t planned_work_units = 0;
 };
 
 /** Backend-independent post-validation outcome. */
@@ -223,7 +227,7 @@ struct LlmMetalDualMod32Checksum {
 };
 
 /** Complete per-task Metal timing, dispatch, checksum, and validation evidence. */
-struct LlmMetalTaskEvidence {
+struct LlmMetalRuntimeEvidence {
   LlmColdChecks cold_checks;
   bool timed_pipeline_available = false;
   std::string pipeline_label;
@@ -235,7 +239,6 @@ struct LlmMetalTaskEvidence {
   bool timing_valid = false;
   double gpu_start_seconds = 0.0;
   double gpu_end_seconds = 0.0;
-  double gpu_elapsed_seconds = 0.0;
   bool host_timing_evaluated = false;
   double host_submit_to_completion_seconds = 0.0;
   double host_wait_seconds = 0.0;
@@ -249,10 +252,8 @@ struct LlmMetalTaskEvidence {
   std::string reset_command_status = "not-run";
   std::string timed_command_status = "not-run";
   std::string post_validation_command_status = "not-run";
-  std::string checksum_algorithm_version = "llm-metal-dual-mod32-v1";
   bool checksum_evaluated = false;
   bool checksum_valid = false;
-  LlmMetalDualMod32Checksum expected_checksum;
   LlmMetalDualMod32Checksum actual_checksum;
   bool kv_write_validation_evaluated = false;
   bool kv_write_validation_valid = false;
@@ -262,6 +263,13 @@ struct LlmMetalTaskEvidence {
   bool post_validation_evaluated = false;
   bool post_validation_valid = false;
   LlmMetalErrorDiagnostic error;
+};
+
+/** Transient backend result; canonical retention owns its expectation separately. */
+struct LlmMetalTaskEvidence : LlmMetalRuntimeEvidence {
+  double gpu_elapsed_seconds = 0.0;
+  std::string checksum_algorithm_version = "llm-metal-dual-mod32-v1";
+  LlmMetalDualMod32Checksum expected_checksum;
 };
 
 using LlmTaggedTaskEvidence = std::variant<std::monostate, LlmCpuTaskEvidence, LlmMetalTaskEvidence>;
@@ -409,6 +417,14 @@ class LlmBackend {
   virtual LlmBackendLifecycleResult initialize(const LlmMemoryConfig& config) = 0;
   virtual LlmBackendLifecycleResult resolve_execution_plan(const LlmMemoryWorkPlan& model_plan) = 0;
   virtual LlmBackendLifecycleResult prepare_resources(const LlmMemoryWorkPlan& model_plan) = 0;
+  /** Reconstruct CPU expectation for one new canonical plan using prepared,
+   * matching resources. Read-only and synchronous; returned vectors transfer
+   * ownership to the caller. Default is explicitly unavailable. No reset or
+   * execution is performed, and the caller invokes this only once per plan. */
+  virtual LlmExpectedChecksumResult expected_cpu_checksum(const LlmMemoryWorkPlan&,
+                                                          const LlmScenarioWorkPlan&) const noexcept {
+    return LlmExpectedChecksumResult{};
+  }
   virtual LlmTaskExecutionResult execute_task(const LlmMemoryWorkPlan& model_plan,
                                               const LlmScenarioWorkPlan& scenario_plan,
                                               const LlmRunnerTaskContext& context) = 0;

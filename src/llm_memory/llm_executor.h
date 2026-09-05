@@ -322,11 +322,10 @@ struct LlmExpectedChecksumResult {
   LlmRunChecksum run_checksum{0, 0};
 };
 
-/** One synchronized task result; checksum vectors are worker-index ordered. */
-struct LlmExecutorResult {
+/** Actual CPU runtime observations; no canonical checksum expectations. */
+struct LlmCpuRuntimeEvidence {
   bool valid = false;
   std::string reason_code = LlmExecutorReason::INVALID_RESOURCES;
-  double elapsed_seconds = 0.0;
   size_t requested_workers = 0;
   size_t created_workers = 0;
   size_t completed_workers = 0;
@@ -344,10 +343,16 @@ struct LlmExecutorResult {
   bool kv_write_validation_applicable = false;  ///< KV-writing scenario; independent of pipeline completion.
   bool kv_write_validation_evaluated = false;  ///< Phase/layout write check ran after stop and join.
   bool kv_write_validation_valid = false;  ///< Combined phase/layout final-state result, including paged padding.
-  std::vector<LlmWorkerChecksum> expected_checksums;
   std::vector<LlmWorkerChecksum> actual_checksums;
-  LlmRunChecksum expected_run_checksum{0, 0};
   LlmRunChecksum actual_run_checksum{0, 0};
+};
+
+/** Transient synchronized executor result. Expected data is consumed by validation
+ * and never retained once per measurement. */
+struct LlmExecutorResult : LlmCpuRuntimeEvidence {
+  double elapsed_seconds = 0.0;
+  std::vector<LlmWorkerChecksum> expected_checksums;
+  LlmRunChecksum expected_run_checksum{0, 0};
 };
 
 /** Dedicated ARM64 implementation; @p output must be non-null. */

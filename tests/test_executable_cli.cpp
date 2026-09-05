@@ -336,25 +336,69 @@ nlohmann::json parse_single_stdout_json(const CliResult& result) {
   return nlohmann::json::parse(text);
 }
 
+const nlohmann::json& canonical_llm_plan(const nlohmann::json& document, const nlohmann::json& measurement) {
+  return document.at("resolved_plan").at("scenario_plans").at(measurement.at("plan_ref").get<size_t>());
+}
+
+void expect_complete_llm_named_checks(const nlohmann::json& document, const nlohmann::json& measurement) {
+  const bool cpu = document.at("backend") == "cpu";
+  const bool prefill = document.at("phase") == "prefill";
+  const bool paged = document.at("kv_layout") == "paged";
+  const bool writes = measurement.at("scenario") != "weights_only";
+  const bool padding = paged &&
+      document.at("resolved_plan").at("resources").at("k_layout_padding_bytes") != "0";
+  const std::array<const char*, 3> kinds = {
+      "post-validation-structure",
+      prefill ? "kv-prefill-final-samples" : cpu && !writes ? "kv-append-unchanged" : "kv-append-final",
+      "kv-padding-canary"};
+  const std::array<bool, 3> applicability = {
+      cpu ? paged || prefill || writes : writes,
+      writes || (cpu && paged && !prefill), padding && (cpu || writes)};
+  const auto& checks = measurement.at("execution").at("validation").at("checks");
+  ASSERT_TRUE(checks.is_array());
+  ASSERT_EQ(checks.size(), kinds.size());
+  for (size_t index = 0; index < kinds.size(); ++index) {
+    SCOPED_TRACE(kinds[index]);
+    const auto& check = checks.at(index);
+    EXPECT_EQ(check.at("kind"), kinds[index]);
+    EXPECT_EQ(check.at("applicable"), applicability[index]);
+    if (applicability[index]) {
+      EXPECT_EQ(check.at("evaluated"), true);
+      EXPECT_EQ(check.at("valid"), true);
+      EXPECT_EQ(check.at("reason_code"), "valid");
+    } else {
+      EXPECT_TRUE(check.at("evaluated").is_null());
+      EXPECT_TRUE(check.at("valid").is_null());
+      EXPECT_EQ(check.at("reason_code"), "not-applicable");
+    }
+  }
+}
+
 void expect_complete_llm_checkpoint_lifecycle(const nlohmann::json& json) {
   ASSERT_TRUE(json.contains("checkpoint_lifecycle"));
-  const nlohmann::json& lifecycle = json["checkpoint_lifecycle"];
+  const auto& lifecycle = json["checkpoint_lifecycle"];
   EXPECT_FALSE(lifecycle["checkpoint_failed"].get<bool>());
-  EXPECT_EQ(lifecycle["logical_checkpoint_attempts"], 10u);
-  EXPECT_EQ(lifecycle["successful_logical_checkpoints"], 10u);
-  EXPECT_TRUE(lifecycle["terminal_checkpoint_attempted"].get<bool>());
-  EXPECT_TRUE(lifecycle["terminal_checkpoint_completed"].get<bool>());
+  const size_t count = json["configuration"]["loop_count"].get<size_t>();
+  const size_t interval = std::max(size_t{1}, count / 8 + (count % 8 != 0));
+  const bool file = json["configuration"]["output_file"] != "-";
+  EXPECT_EQ(lifecycle["prior_file_writer_attempts"], file ? count / interval : 0);
+  EXPECT_EQ(lifecycle["prior_successful_file_writes"], file ? count / interval : 0);
+  EXPECT_EQ(lifecycle["observation_point"], "before-current-snapshot-preparation");
+  EXPECT_EQ(lifecycle["current_request"], "terminal");
+  EXPECT_EQ(lifecycle["snapshot_interval_loops"], interval);
+  EXPECT_EQ(lifecycle["checkpoint_policy"], "bounded-loop-snapshots");
+  EXPECT_TRUE(lifecycle["current_persistence_success"].is_null());
 }
 
 void expect_complete_or_unsupported_metal_result(
     const CliResult& result, const nlohmann::json& json,
     const char* expected_kv_layout = "contiguous",
     const char* expected_methodology =
-        "llm-memory-v1-metal-decode-contiguous",
+        "llm-memory-v2-metal-decode-contiguous",
     const char* expected_phase = "decode",
     const char* expected_work_unit_kind = "decode_step") {
   ASSERT_TRUE(json.is_object());
-  EXPECT_EQ(json["schema_version"], Constants::LLM_JSON_SCHEMA_VERSION);
+  EXPECT_EQ(json["schema_version"], 2);
   EXPECT_EQ(json["mode"], Constants::LLM_JSON_MODE_NAME);
   EXPECT_EQ(json["backend"], "metal");
   EXPECT_EQ(json["phase"], expected_phase);
@@ -363,8 +407,6 @@ void expect_complete_or_unsupported_metal_result(
   ASSERT_TRUE(json["resolved_plan"].is_object());
   EXPECT_EQ(json["resolved_plan"]["phase"], expected_phase);
   EXPECT_EQ(json["resolved_plan"]["kv_layout"], expected_kv_layout);
-  EXPECT_EQ(json["resolved_plan"]["methodology_version"],
-            expected_methodology);
   EXPECT_EQ(json["resolved_plan"]["work_unit_kind"],
             expected_work_unit_kind);
   EXPECT_TRUE(json["backend_evidence"]["cpu"].is_null());
@@ -378,7 +420,7 @@ void expect_complete_or_unsupported_metal_result(
   if (status == "unsupported") {
     EXPECT_EQ(result.exit_code, EXIT_FAILURE) << result.output;
     EXPECT_FALSE(json["results_complete"].get<bool>());
-    EXPECT_FALSE(json["conclusions_valid"].get<bool>());
+    EXPECT_FALSE(json["run_accepted"].get<bool>());
     const std::string reason_code = json["reason_code"].get<std::string>();
     EXPECT_TRUE(
         reason_code == LlmBackendReason::METAL_DEVICE_UNAVAILABLE ||
@@ -394,22 +436,16 @@ void expect_complete_or_unsupported_metal_result(
     EXPECT_EQ(json["backend_evidence"]["metal"]["lifecycle"]
                   ["initialization"]["reason_code"],
               json["reason_code"]);
-    EXPECT_EQ(json["checkpoint_lifecycle"]["logical_checkpoint_attempts"],
-              1u);
-    EXPECT_EQ(json["checkpoint_lifecycle"]
-                  ["successful_logical_checkpoints"],
-              1u);
-    EXPECT_TRUE(json["checkpoint_lifecycle"]["terminal_checkpoint_attempted"]
-                    .get<bool>());
-    EXPECT_TRUE(json["checkpoint_lifecycle"]["terminal_checkpoint_completed"]
-                    .get<bool>());
+    EXPECT_EQ(json["checkpoint_lifecycle"]["prior_file_writer_attempts"], 0u);
+    EXPECT_EQ(json["checkpoint_lifecycle"]["prior_successful_file_writes"], 0u);
+    EXPECT_TRUE(json["checkpoint_lifecycle"]["current_persistence_success"].is_null());
     return;
   }
 
   ASSERT_EQ(status, "complete") << json.dump(2);
   EXPECT_EQ(result.exit_code, EXIT_SUCCESS) << result.output;
   EXPECT_TRUE(json["results_complete"].get<bool>());
-  EXPECT_TRUE(json["conclusions_valid"].get<bool>());
+  EXPECT_TRUE(json["run_accepted"].get<bool>());
   EXPECT_EQ(json["reason_code"], "complete");
   EXPECT_EQ(json["backend_evidence"]["metal"]["lifecycle"]
                 ["initialization"]["status"],
@@ -430,10 +466,15 @@ void expect_complete_or_unsupported_metal_result(
     EXPECT_EQ(task["commands"]["timed_workload_dispatches"], 1u);
     EXPECT_TRUE(task["timing"]["gpu_start_seconds"].is_number());
     EXPECT_TRUE(task["timing"]["gpu_end_seconds"].is_number());
-    EXPECT_TRUE(task["timing"]["gpu_elapsed_seconds"].is_number());
+    EXPECT_TRUE(measurement["elapsed_seconds"].is_number());
     EXPECT_TRUE(task["timing"]["queue_delay_seconds"].is_null());
-    EXPECT_TRUE(task["checksum"]["valid"].get<bool>());
-    EXPECT_TRUE(task["validation"]["post_validation_valid"].get<bool>());
+    EXPECT_TRUE(measurement["checksum"]["checksum_valid"].get<bool>());
+    const auto& canonical = canonical_llm_plan(json, measurement);
+    EXPECT_EQ(canonical["scenario"], measurement["scenario"]);
+    EXPECT_EQ(canonical["expected_checksum"]["status"], "available");
+    EXPECT_EQ(canonical["expected_checksum"]["expected_run_checksum"],
+              measurement["checksum"]["actual_run_checksum"]);
+    expect_complete_llm_named_checks(json, measurement);
   }
   expect_complete_llm_checkpoint_lifecycle(json);
 }
@@ -442,7 +483,7 @@ void expect_bounded_metal_prefill_result(
     const CliResult& result, const nlohmann::json& json,
     const char* expected_kv_layout = "contiguous",
     const char* expected_methodology =
-        "llm-memory-v1-metal-prefill-contiguous",
+        "llm-memory-v2-metal-prefill-contiguous",
     const char* expected_write_pattern =
         "llm-metal-prefill-contiguous-full-prompt-affine32-v1",
     const char* expected_checksum_pattern =
@@ -453,14 +494,14 @@ void expect_bounded_metal_prefill_result(
 
   const nlohmann::json& resolved_plan = json["resolved_plan"];
   const nlohmann::json& methodology = resolved_plan["methodology"];
-  EXPECT_EQ(methodology["methodology_version"], expected_methodology);
+  EXPECT_EQ(json["methodology_version"], expected_methodology);
   EXPECT_EQ(methodology["work_unit_kind"], "prefill_operation");
   EXPECT_EQ(methodology["weight_passes_per_work_unit"], 1u);
   EXPECT_EQ(methodology["kv_replay_factor"], 1u);
   EXPECT_EQ(methodology["context_policy"],
             "full-prompt-population-with-tiled-causal-prefix-scans");
-  EXPECT_EQ(methodology["write_pattern_version"], expected_write_pattern);
-  EXPECT_EQ(methodology["checksum_pattern_version"],
+  EXPECT_EQ(resolved_plan["component_identities"]["write_pattern_version"], expected_write_pattern);
+  EXPECT_EQ(resolved_plan["component_identities"]["checksum_pattern_version"],
             expected_checksum_pattern);
 
   const nlohmann::json& geometry = resolved_plan["geometry"];
@@ -506,20 +547,20 @@ void expect_bounded_metal_prefill_result(
       const std::string scenario = measurement["scenario"];
       const bool weights_only = scenario == "weights_only";
       const bool kv_only = scenario == "kv_only";
-      EXPECT_EQ(measurement["work_unit_kind"], "prefill_operation");
-      EXPECT_EQ(measurement["kv_write_kind"],
+      EXPECT_EQ(canonical_llm_plan(json, measurement)["work_unit_kind"], "prefill_operation");
+      EXPECT_EQ(canonical_llm_plan(json, measurement)["kv_write_kind"],
                 weights_only ? "none" : "full_prompt_population");
-      EXPECT_EQ(measurement["weight_read_bytes_per_work_unit"],
+      EXPECT_EQ(canonical_llm_plan(json, measurement)["weight_read_bytes_per_work_unit"],
                 kv_only ? "0" : "1048576");
-      EXPECT_EQ(measurement["kv_read_bytes_per_work_unit"],
+      EXPECT_EQ(canonical_llm_plan(json, measurement)["kv_read_bytes_per_work_unit"],
                 weights_only ? "0" : "176");
-      EXPECT_EQ(measurement["kv_write_bytes_per_work_unit"],
+      EXPECT_EQ(canonical_llm_plan(json, measurement)["kv_write_bytes_per_work_unit"],
                 weights_only ? "0" : "80");
-      EXPECT_EQ(measurement["effective_model_payload_bytes_per_work_unit"],
+      EXPECT_EQ(canonical_llm_plan(json, measurement)["effective_model_payload_bytes_per_work_unit"],
                 weights_only ? "1048576"
                              : kv_only ? "256" : "1048832");
       const nlohmann::json& task = measurement["execution"]["metal"];
-      EXPECT_EQ(task["checksum"]["algorithm_version"],
+      EXPECT_EQ(resolved_plan["component_identities"]["checksum_pattern_version"],
                 expected_checksum_pattern);
       const bool exact_grid_cost =
           weights_only ||
@@ -541,11 +582,11 @@ void expect_bounded_metal_prefill_result(
             task["grid"]["threadgroup_accounted_bytes"].empty());
       }
       if (std::string_view(expected_kv_layout) == "paged") {
-        EXPECT_EQ(measurement["layout_metadata_lookup_count_per_work_unit"],
+        EXPECT_EQ(canonical_llm_plan(json, measurement)["layout_metadata_lookup_count_per_work_unit"],
                   weights_only ? "0" : "10");
-        EXPECT_EQ(measurement["layout_metadata_read_bytes_per_work_unit"],
+        EXPECT_EQ(canonical_llm_plan(json, measurement)["layout_metadata_read_bytes_per_work_unit"],
                   weights_only ? "0" : "40");
-        EXPECT_EQ(measurement["accounted_bytes_per_work_unit"],
+        EXPECT_EQ(canonical_llm_plan(json, measurement)["accounted_bytes_per_work_unit"],
                   weights_only ? "1048576"
                                : kv_only ? "296" : "1048872");
         EXPECT_EQ(task["grid"]["serial_range_visits_per_lane"],
@@ -801,7 +842,7 @@ TEST(ExecutableCliIntegrationTest,
     EXPECT_NE(result.stdout_output.find(
                   "Usage: ./memory_benchmark --llm-memory [options]"),
               std::string::npos);
-    EXPECT_NE(result.stdout_output.find("schema 1"), std::string::npos);
+    EXPECT_NE(result.stdout_output.find("schema 2"), std::string::npos);
     EXPECT_TRUE(result.stderr_output.empty()) << result.stderr_output;
     EXPECT_FALSE(nlohmann::json::accept(result.stdout_output));
     expect_no_dash_transport_artifacts(result);
@@ -887,7 +928,7 @@ TEST(ExecutableCliIntegrationTest,
   expect_process_completed(result);
   const nlohmann::json json = parse_single_stdout_json(result);
   expect_complete_or_unsupported_metal_result(
-      result, json, "paged", "llm-memory-v1-metal-decode-paged");
+      result, json, "paged", "llm-memory-v2-metal-decode-paged");
   EXPECT_EQ(json["phase"], "decode");
   EXPECT_EQ(json["kv_layout"], "paged");
   EXPECT_EQ(json["configuration"]["kv_block_tokens"], 2U);
@@ -915,7 +956,7 @@ TEST(ExecutableCliIntegrationTest,
   expect_process_completed(result);
   const nlohmann::json json = parse_single_stdout_json(result);
   expect_bounded_metal_prefill_result(
-      result, json, "paged", "llm-memory-v1-metal-prefill-paged",
+      result, json, "paged", "llm-memory-v2-metal-prefill-paged",
       "llm-metal-prefill-paged-full-prompt-affine32-v1",
       "llm-metal-paged-prefill-dual-mod32-lookup-address-mix-v1");
   expect_single_runtime_banner(result);
@@ -955,7 +996,7 @@ TEST(ExecutableCliIntegrationTest,
   const nlohmann::json json =
       nlohmann::json::parse(read_file(output.path()));
   expect_bounded_metal_prefill_result(
-      result, json, "paged", "llm-memory-v1-metal-prefill-paged",
+      result, json, "paged", "llm-memory-v2-metal-prefill-paged",
       "llm-metal-prefill-paged-full-prompt-affine32-v1",
       "llm-metal-paged-prefill-dual-mod32-lookup-address-mix-v1");
   EXPECT_EQ(json["configuration"]["output_file"], output.path());
@@ -967,7 +1008,7 @@ TEST(ExecutableCliIntegrationTest,
       << result.output;
 }
 
-TEST(ExecutableCliIntegrationTest, LlmPrefillPagedWritesCompleteSchemaV1Integration) {
+TEST(ExecutableCliIntegrationTest, LlmPrefillPagedWritesCompleteSchemaV2Integration) {
   std::vector<std::string> arguments = bounded_llm_prefill_arguments("-");
   arguments.insert(arguments.end() - 2, {"--kv-layout", "paged", "--kv-block-tokens", "4"});
 
@@ -977,7 +1018,7 @@ TEST(ExecutableCliIntegrationTest, LlmPrefillPagedWritesCompleteSchemaV1Integrat
   ASSERT_EQ(result.exit_code, EXIT_SUCCESS) << result.stderr_output;
   const nlohmann::json json = parse_single_stdout_json(result);
   ASSERT_TRUE(json.is_object()) << result.stdout_output;
-  EXPECT_EQ(json["schema_version"], Constants::LLM_JSON_SCHEMA_VERSION);
+  EXPECT_EQ(json["schema_version"], 2);
   EXPECT_EQ(json["mode"], Constants::LLM_JSON_MODE_NAME);
   EXPECT_EQ(json["backend"], "cpu");
   EXPECT_EQ(json["phase"], "prefill");
@@ -985,7 +1026,7 @@ TEST(ExecutableCliIntegrationTest, LlmPrefillPagedWritesCompleteSchemaV1Integrat
   EXPECT_EQ(json["methodology_version"], Constants::LLM_CPU_PREFILL_PAGED_METHODOLOGY_VERSION);
   EXPECT_EQ(json["status"], "complete");
   EXPECT_TRUE(json["results_complete"].get<bool>());
-  EXPECT_TRUE(json["conclusions_valid"].get<bool>());
+  EXPECT_TRUE(json["run_accepted"].get<bool>());
   EXPECT_EQ(json["configuration"]["kv_block_tokens"], 4u);
   EXPECT_EQ(json["configuration"]["resolved_sources"]["phase"], "explicit");
   EXPECT_EQ(json["configuration"]["resolved_sources"]["kv_layout"], "explicit");
@@ -996,6 +1037,11 @@ TEST(ExecutableCliIntegrationTest, LlmPrefillPagedWritesCompleteSchemaV1Integrat
   EXPECT_EQ(json["resolved_plan"]["layout"]["kv_block_tokens"], 4u);
   EXPECT_TRUE(json["backend_evidence"]["cpu"]["prefill"].is_object());
   EXPECT_TRUE(json["backend_evidence"]["cpu"]["paged"].is_object());
+  ASSERT_EQ(json["measurements"].size(), 9u);
+  for (const auto& measurement : json["measurements"]) {
+    EXPECT_EQ(measurement["status"], "measured");
+    expect_complete_llm_named_checks(json, measurement);
+  }
   expect_complete_llm_checkpoint_lifecycle(json);
   expect_single_runtime_banner(result);
   expect_no_dash_transport_artifacts(result);
@@ -1061,7 +1107,7 @@ TEST(ExecutableCliIntegrationTest,
 }
 
 TEST(ExecutableCliIntegrationTest,
-     LlmWritesSingleCompleteSchemaV1DocumentToStdoutIntegration) {
+     LlmWritesSingleCompleteSchemaV2DocumentToStdoutIntegration) {
   const CliResult result = run_memory_benchmark(bounded_llm_arguments("-"));
 
   expect_process_completed(result);
@@ -1070,7 +1116,7 @@ TEST(ExecutableCliIntegrationTest,
   ASSERT_TRUE(json.is_object()) << result.stdout_output;
   EXPECT_EQ(json["software"]["version"], SOFTVERSION);
   EXPECT_TRUE(json["software"]["timestamp"].is_string());
-  EXPECT_EQ(json["schema_version"], Constants::LLM_JSON_SCHEMA_VERSION);
+  EXPECT_EQ(json["schema_version"], 2);
   EXPECT_EQ(json["mode"], Constants::LLM_JSON_MODE_NAME);
   EXPECT_EQ(json["backend"], "cpu");
   EXPECT_EQ(json["phase"], "decode");
@@ -1079,7 +1125,7 @@ TEST(ExecutableCliIntegrationTest,
             Constants::LLM_CPU_DECODE_CONTIGUOUS_METHODOLOGY_VERSION);
   EXPECT_EQ(json["status"], "complete");
   EXPECT_TRUE(json["results_complete"].get<bool>());
-  EXPECT_TRUE(json["conclusions_valid"].get<bool>());
+  EXPECT_TRUE(json["run_accepted"].get<bool>());
   EXPECT_TRUE(json["scenario_order_balance_complete"].get<bool>());
   EXPECT_EQ(json["configuration"]["output_file"], "-");
   EXPECT_EQ(json["configuration"]["base_seed_uint64_decimal"], "42");
@@ -1102,9 +1148,10 @@ TEST(ExecutableCliIntegrationTest,
   ASSERT_EQ(json["measurements"].size(), 9u);
   for (const nlohmann::json& measurement : json["measurements"]) {
     EXPECT_EQ(measurement["status"], "measured");
-    EXPECT_EQ(measurement["work_unit_kind"], "decode_step");
-    EXPECT_EQ(measurement["planned_work_units"], 1u);
+    EXPECT_EQ(canonical_llm_plan(json, measurement)["work_unit_kind"], "decode_step");
+    EXPECT_EQ(canonical_llm_plan(json, measurement)["work_units"], 1u);
     EXPECT_EQ(measurement["completed_work_units"], 1u);
+    expect_complete_llm_named_checks(json, measurement);
     EXPECT_TRUE(measurement["checksum"]["checksum_valid"].get<bool>());
     EXPECT_TRUE(
         measurement["synthetic_work_unit_latency_seconds"].is_number());
@@ -1127,23 +1174,23 @@ TEST(ExecutableCliIntegrationTest,
   expect_no_dash_transport_artifacts(result);
 }
 
-TEST(ExecutableCliIntegrationTest, LlmPrefillWritesExactCompleteContiguousSchemaV1Integration) {
+TEST(ExecutableCliIntegrationTest, LlmPrefillWritesExactCompleteContiguousSchemaV2Integration) {
   const CliResult result = run_memory_benchmark(bounded_llm_prefill_arguments("-"));
 
   expect_process_completed(result);
   ASSERT_EQ(result.exit_code, EXIT_SUCCESS) << result.stderr_output;
   const nlohmann::json json = parse_single_stdout_json(result);
   ASSERT_TRUE(json.is_object()) << result.stdout_output;
-  EXPECT_EQ(json["schema_version"], Constants::LLM_JSON_SCHEMA_VERSION);
+  EXPECT_EQ(json["schema_version"], 2);
   EXPECT_EQ(json["mode"], Constants::LLM_JSON_MODE_NAME);
   EXPECT_EQ(json["backend"], "cpu");
   EXPECT_EQ(json["phase"], "prefill");
   EXPECT_EQ(json["kv_layout"], "contiguous");
-  EXPECT_EQ(json["methodology_version"], "llm-memory-v1-cpu-prefill-contiguous");
+  EXPECT_EQ(json["methodology_version"], "llm-memory-v2-cpu-prefill-contiguous");
   EXPECT_EQ(json["status"], "complete");
   EXPECT_EQ(json["reason_code"], "complete");
   EXPECT_TRUE(json["results_complete"].get<bool>());
-  EXPECT_TRUE(json["conclusions_valid"].get<bool>());
+  EXPECT_TRUE(json["run_accepted"].get<bool>());
   EXPECT_TRUE(json["scenario_order_balance_complete"].get<bool>());
 
   const nlohmann::json& configuration = json["configuration"];
@@ -1170,9 +1217,9 @@ TEST(ExecutableCliIntegrationTest, LlmPrefillWritesExactCompleteContiguousSchema
   EXPECT_EQ(geometry["prefill"]["attention_query_tile_tokens"], 2u);
   EXPECT_EQ(geometry["prefill"]["tile_count"], "3");
   EXPECT_EQ(geometry["prefill"]["attention_prefix_token_visits_per_sequence"], "11");
-  EXPECT_EQ(geometry["prefill"]["causal_token_pairs_per_sequence"], "15");
-  EXPECT_EQ(geometry["prefill"]["logical_attention_pairs"], "15");
-  EXPECT_EQ(geometry["prefill"]["logical_attention_fma_terms"], "120");
+  EXPECT_EQ(resolved_plan["model_context"]["prefill"]["causal_token_pairs_per_sequence"], "15");
+  EXPECT_EQ(resolved_plan["model_context"]["prefill"]["logical_attention_pairs"], "15");
+  EXPECT_EQ(resolved_plan["model_context"]["prefill"]["logical_attention_fma_terms"], "120");
   EXPECT_EQ(geometry["k_or_v_sequence_visible_bytes"], "40");
   EXPECT_EQ(geometry["k_mapping_bytes"], "40");
   EXPECT_EQ(geometry["v_mapping_bytes"], "40");
@@ -1218,7 +1265,7 @@ TEST(ExecutableCliIntegrationTest, LlmPrefillWritesExactCompleteContiguousSchema
   }
   EXPECT_TRUE(json["backend_evidence"]["cpu"]["paged"].is_null());
 
-  const nlohmann::json& scenarios = resolved_plan["frozen_scenario_work_plans"]["scenarios"];
+  const nlohmann::json& scenarios = resolved_plan["scenario_plans"];
   ASSERT_EQ(scenarios.size(), 3u);
   EXPECT_EQ(scenarios[0]["scenario"], "weights_only");
   EXPECT_EQ(scenarios[0]["work_unit_kind"], "prefill_operation");
@@ -1253,25 +1300,22 @@ TEST(ExecutableCliIntegrationTest, LlmPrefillWritesExactCompleteContiguousSchema
   for (const nlohmann::json& measurement : json["measurements"]) {
     EXPECT_EQ(measurement["status"], "measured");
     EXPECT_EQ(measurement["reason_code"], "measured");
-    EXPECT_EQ(measurement["work_unit_kind"], "prefill_operation");
-    EXPECT_EQ(measurement["planned_work_units"], 1u);
+    EXPECT_EQ(canonical_llm_plan(json, measurement)["work_unit_kind"], "prefill_operation");
+    EXPECT_EQ(canonical_llm_plan(json, measurement)["work_units"], 1u);
     EXPECT_EQ(measurement["completed_work_units"], 1u);
     EXPECT_TRUE(measurement["working_set"]["fixed_visible_context_tokens"].is_null());
     EXPECT_TRUE(measurement["working_set"]["current_token_slot_included"].is_null());
     EXPECT_EQ(measurement["execution"]["status"], "valid");
-    EXPECT_TRUE(measurement["execution"]["post_validation_evaluated"].get<bool>());
-    EXPECT_TRUE(measurement["execution"]["post_validation_valid"].get<bool>());
+    expect_complete_llm_named_checks(json, measurement);
     const nlohmann::json& checksum = measurement["checksum"];
     EXPECT_EQ(checksum["status"], "valid");
     EXPECT_TRUE(checksum["checksum_valid"].get<bool>());
-    EXPECT_EQ(checksum["write_pattern_version"], "llm-prefill-kv-affine64-v1");
-    EXPECT_EQ(checksum["checksum_pattern_version"], "llm-prefill-affine64-parity-sum-v1");
-    EXPECT_FALSE(checksum.contains("append_pattern_version"));
-    EXPECT_FALSE(checksum.contains("read_checksum_version"));
-    EXPECT_EQ(checksum["expected_worker_checksums"], checksum["actual_worker_checksums"]);
-    EXPECT_EQ(checksum["expected_run_checksum"], checksum["actual_run_checksum"]);
-    ASSERT_EQ(checksum["expected_worker_checksums"].size(), 1u);
-    const nlohmann::json& worker = checksum["expected_worker_checksums"][0];
+    EXPECT_EQ(resolved_plan["component_identities"]["write_pattern_version"], "llm-prefill-kv-affine64-v1");
+    EXPECT_EQ(resolved_plan["component_identities"]["checksum_pattern_version"], "llm-prefill-affine64-parity-sum-v1");
+    EXPECT_EQ(canonical_llm_plan(json, measurement)["expected_checksum"]["expected_worker_checksums"], checksum["actual_worker_checksums"]);
+    EXPECT_EQ(canonical_llm_plan(json, measurement)["expected_checksum"]["expected_run_checksum"], checksum["actual_run_checksum"]);
+    ASSERT_EQ(canonical_llm_plan(json, measurement)["expected_checksum"]["expected_worker_checksums"].size(), 1u);
+    const nlohmann::json& worker = canonical_llm_plan(json, measurement)["expected_checksum"]["expected_worker_checksums"][0];
     const std::string scenario = measurement["scenario"];
     EXPECT_EQ(worker["weight"]["exact_bytes_read"], scenario == "kv_only" ? "0" : "1048576");
     EXPECT_EQ(worker["k"]["exact_bytes_read"], scenario == "weights_only" ? "0" : "88");
@@ -1294,8 +1338,8 @@ TEST(ExecutableCliIntegrationTest, LlmPrefillWritesExactCompleteContiguousSchema
 }
 
 TEST(ExecutableCliIntegrationTest,
-     LlmWritesCheckpointedCompleteSchemaV1FileIntegration) {
-  const TemporaryJsonFile output("llm_schema_v1");
+     LlmWritesCheckpointedCompleteSchemaV2FileIntegration) {
+  const TemporaryJsonFile output("llm_schema_v2");
   const CliResult result =
       run_memory_benchmark(bounded_llm_arguments(output.path()));
 
@@ -1306,15 +1350,14 @@ TEST(ExecutableCliIntegrationTest,
   EXPECT_EQ(access((output.path() + ".tmp").c_str(), F_OK), -1);
   const nlohmann::json json =
       nlohmann::json::parse(read_file(output.path()));
-  EXPECT_EQ(json["schema_version"], Constants::LLM_JSON_SCHEMA_VERSION);
+  EXPECT_EQ(json["schema_version"], 2);
   EXPECT_EQ(json["mode"], Constants::LLM_JSON_MODE_NAME);
   EXPECT_EQ(json["status"], "complete");
   EXPECT_TRUE(json["results_complete"].get<bool>());
-  EXPECT_TRUE(json["conclusions_valid"].get<bool>());
+  EXPECT_TRUE(json["run_accepted"].get<bool>());
   EXPECT_EQ(json["configuration"]["output_file"], output.path());
-  EXPECT_EQ(json["resolved_plan"]["model_work_plan"]["plan_identity"],
-            json["resolved_plan"]["frozen_scenario_work_plans"]
-                ["model_plan_identity"]);
+  EXPECT_FALSE(json["resolved_plan"]["plan_identity"].get<std::string>().empty());
+  for (const auto& plan : json["resolved_plan"]["scenario_plans"]) EXPECT_EQ(plan["model_ref"], "resolved_plan");
   expect_complete_llm_checkpoint_lifecycle(json);
   EXPECT_EQ(count_occurrences(
                 result.stdout_output,
@@ -1444,7 +1487,7 @@ TEST(ExecutableCliIntegrationTest,
   EXPECT_TRUE(components["msl_source_sha256"].is_null());
 
   const nlohmann::json& scenarios =
-      resolved_plan["frozen_scenario_work_plans"]["scenarios"];
+      resolved_plan["scenario_plans"];
   ASSERT_EQ(scenarios.size(), 3u);
   EXPECT_EQ(scenarios[0]["scenario"], "weights_only");
   EXPECT_EQ(scenarios[0]["work_unit_kind"], "decode_step");
@@ -1490,12 +1533,12 @@ TEST(ExecutableCliIntegrationTest,
   EXPECT_EQ(first["seeds"], second["seeds"]);
   EXPECT_EQ(first["resolved_plan"]["model_work_plan"],
             second["resolved_plan"]["model_work_plan"]);
-  EXPECT_EQ(first["resolved_plan"]["frozen_scenario_work_plans"],
-            second["resolved_plan"]["frozen_scenario_work_plans"]);
+  EXPECT_EQ(first["resolved_plan"]["scenario_plans"],
+            second["resolved_plan"]["scenario_plans"]);
   ASSERT_EQ(first["measurements"].size(), second["measurements"].size());
   for (size_t index = 0; index < first["measurements"].size(); ++index) {
-    EXPECT_EQ(first["measurements"][index]["frozen_work_plan_identity"],
-              second["measurements"][index]["frozen_work_plan_identity"]);
+    EXPECT_EQ(first["measurements"][index]["plan_ref"],
+              second["measurements"][index]["plan_ref"]);
     EXPECT_EQ(first["measurements"][index]["checksum"],
               second["measurements"][index]["checksum"]);
   }
@@ -1517,10 +1560,7 @@ TEST(ExecutableCliIntegrationTest,
   EXPECT_TRUE(document["results_complete"].get<bool>());
   ASSERT_EQ(document["measurements"].size(), 9u);
   for (const nlohmann::json& measurement : document["measurements"]) {
-    EXPECT_TRUE(
-        measurement["execution"]["post_validation_evaluated"].get<bool>());
-    EXPECT_TRUE(
-        measurement["execution"]["post_validation_valid"].get<bool>());
+    expect_complete_llm_named_checks(document, measurement);
   }
 }
 
@@ -1544,7 +1584,7 @@ TEST(ExecutableCliIntegrationTest,
     EXPECT_EQ(json["mode"], Constants::LLM_JSON_MODE_NAME);
     EXPECT_EQ(json["status"], "complete");
     EXPECT_TRUE(json["results_complete"].get<bool>());
-    EXPECT_FALSE(json["conclusions_valid"].get<bool>());
+    EXPECT_TRUE(json["run_accepted"].get<bool>());
     EXPECT_FALSE(json["scenario_order_balance_complete"].get<bool>());
   }
 }
