@@ -2522,3 +2522,52 @@ TEST_F(LlmMemoryExecutorTest, ColdApplicabilitySurvivesResourceFailure) {
     }
   }
 }
+
+TEST_F(LlmMemoryExecutorTest, EachTaskRevalidatesBorrowedPlansAndMaterializedResources) {
+  ScopedExecutorTimer timer_calls;
+  auto timer = HighResTimer::create();
+  ASSERT_TRUE(timer.has_value());
+  size_t kernel_calls = 0;
+  const auto count_kernel = +[](void* context, const LlmKernelInvocation&) {
+    ++*static_cast<size_t*>(context);
+    return false;
+  };
+  for (const auto& geometry : {LlmGeometryRequest{257, 2, 1, 1, 33, 1, 5, 3},
+                              paged_geometry(5, 4), prefill_geometry(), paged_prefill_geometry()}) {
+    auto plan = build_executor_ready_plan(geometry, 1);
+    ASSERT_TRUE(plan.valid);
+    LlmExecutionResources resources;
+    ASSERT_TRUE(prepare_llm_execution_resources(plan, resources).valid);
+    auto task = build_llm_scenario_work_plan(plan, LlmScenario::WeightsOnly, 1, true);
+    ASSERT_TRUE(calculate_llm_expected_checksums(plan, task, resources).valid);
+    const auto reject = [&](const char* reason) {
+      EXPECT_EQ(calculate_llm_expected_checksums(plan, task, resources).reason_code, reason);
+      const auto result = execute_llm_scenario(plan, task, resources, *timer, {count_kernel, &kernel_calls});
+      EXPECT_FALSE(result.valid);
+      EXPECT_EQ(result.reason_code, reason);
+      EXPECT_FALSE(result.timer_started);
+      EXPECT_EQ(result.created_workers, 0u);
+      EXPECT_EQ(kernel_calls, 0u);
+    };
+    // The retained identity is deliberately unchanged in each mutation.
+    ++plan.geometry.v_mapping_bytes;
+    reject(LlmExecutorReason::INVALID_RESOURCES);
+    --plan.geometry.v_mapping_bytes;
+    ASSERT_TRUE(calculate_llm_expected_checksums(plan, task, resources).valid);
+    ++task.weight_read_bytes;
+    reject(LlmExecutorReason::SCENARIO_PLAN_MISMATCH);
+    --task.weight_read_bytes;
+    ASSERT_TRUE(calculate_llm_expected_checksums(plan, task, resources).valid);
+    --resources.worker_count;
+    reject(LlmExecutorReason::INVALID_RESOURCES);
+    ++resources.worker_count;
+    ASSERT_TRUE(calculate_llm_expected_checksums(plan, task, resources).valid);
+    if (plan.phase == LlmPhase::Decode && plan.kv_layout == LlmKvLayout::Contiguous) {
+      const auto pointer = resources.layer_descriptors[0].weight_ptr;
+      resources.layer_descriptors[0].weight_ptr = pointer + 1;
+      reject(LlmExecutorReason::INVALID_RESOURCES);
+      resources.layer_descriptors[0].weight_ptr = pointer;
+      ASSERT_TRUE(calculate_llm_expected_checksums(plan, task, resources).valid);
+    }
+  }
+}

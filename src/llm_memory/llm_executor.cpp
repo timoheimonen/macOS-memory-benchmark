@@ -2414,9 +2414,7 @@ LlmExpectedChecksumResult calculate_prefill_expected_checksums(
   const LlmCpuExecutionPlan* const cpu_plan =
       get_llm_cpu_execution_plan(model_plan);
   if (cpu_plan == nullptr || !cpu_plan->prefill.has_value() ||
-      !model_plan.geometry.prefill.has_value() ||
-      !materialized_resources_match_plan(model_plan, resources) ||
-      !scenario_plan_matches_model(model_plan, scenario_plan)) {
+      !model_plan.geometry.prefill.has_value()) {
     result.reason_code = LlmExecutorReason::INVALID_RESOURCES;
     return result;
   }
@@ -2609,9 +2607,7 @@ LlmExpectedChecksumResult calculate_paged_prefill_expected_checksums(
       get_llm_cpu_execution_plan(model_plan);
   if (cpu_plan == nullptr || !cpu_plan->prefill.has_value() ||
       !cpu_plan->paged.has_value() ||
-      !model_plan.geometry.prefill.has_value() ||
-      !materialized_resources_match_plan(model_plan, resources) ||
-      !scenario_plan_matches_model(model_plan, scenario_plan)) {
+      !model_plan.geometry.prefill.has_value()) {
     result.reason_code = LlmExecutorReason::INVALID_RESOURCES;
     return result;
   }
@@ -2853,9 +2849,7 @@ LlmExpectedChecksumResult calculate_paged_expected_checksums(
   LlmExpectedChecksumResult result;
   const LlmCpuExecutionPlan* const cpu_plan =
       get_llm_cpu_execution_plan(model_plan);
-  if (cpu_plan == nullptr || !cpu_plan->paged.has_value() ||
-      !materialized_resources_match_plan(model_plan, resources) ||
-      !scenario_plan_matches_model(model_plan, scenario_plan)) {
+  if (cpu_plan == nullptr || !cpu_plan->paged.has_value()) {
     result.reason_code = LlmExecutorReason::INVALID_RESOURCES;
     return result;
   }
@@ -3997,22 +3991,20 @@ LlmResourcePreparationResult prepare_llm_execution_resources(const LlmMemoryWork
   }
 }
 
-LlmExpectedChecksumResult calculate_llm_expected_checksums(const LlmMemoryWorkPlan& model_plan,
+namespace {
+
+/**
+ * Compute the oracle immediately after the caller validated this task's plan
+ * and materialized resources. No callback or mutation may intervene. This
+ * private boundary retains no validation verdict across public calls or tasks.
+ */
+LlmExpectedChecksumResult calculate_validated_expected_checksums(const LlmMemoryWorkPlan& model_plan,
                                                            const LlmScenarioWorkPlan& scenario_plan,
                                                            const LlmExecutionResources& resources) noexcept {
   LlmExpectedChecksumResult result;
   try {
     const LlmCpuExecutionPlan* const cpu_plan =
         get_llm_cpu_execution_plan(model_plan);
-    if (cpu_plan == nullptr ||
-        !materialized_resources_match_plan(model_plan, resources)) {
-      result.reason_code = LlmExecutorReason::INVALID_RESOURCES;
-      return result;
-    }
-    if (!scenario_plan_matches_model(model_plan, scenario_plan)) {
-      result.reason_code = LlmExecutorReason::SCENARIO_PLAN_MISMATCH;
-      return result;
-    }
     if (model_plan.phase == LlmPhase::Prefill &&
         model_plan.kv_layout == LlmKvLayout::Paged) {
       return calculate_paged_prefill_expected_checksums(
@@ -4119,6 +4111,30 @@ LlmExpectedChecksumResult calculate_llm_expected_checksums(const LlmMemoryWorkPl
   }
 }
 
+}  // namespace
+
+LlmExpectedChecksumResult calculate_llm_expected_checksums(const LlmMemoryWorkPlan& model_plan,
+                                                           const LlmScenarioWorkPlan& scenario_plan,
+                                                           const LlmExecutionResources& resources) noexcept {
+  LlmExpectedChecksumResult result;
+  try {
+    if (!materialized_resources_match_plan(model_plan, resources)) {
+      result.reason_code = LlmExecutorReason::INVALID_RESOURCES;
+      return result;
+    }
+    if (!scenario_plan_matches_model(model_plan, scenario_plan)) {
+      result.reason_code = LlmExecutorReason::SCENARIO_PLAN_MISMATCH;
+      return result;
+    }
+    return calculate_validated_expected_checksums(model_plan, scenario_plan, resources);
+  } catch (const std::bad_alloc&) {
+    result.reason_code = LlmExecutorReason::EXPECTED_CHECKSUM_ALLOCATION_FAILED;
+  } catch (...) {
+    result.reason_code = LlmExecutorReason::INVALID_SCENARIO_PLAN;
+  }
+  return result;
+}
+
 LlmKernelAdapter production_llm_kernel_adapter() noexcept { return {production_kernel_invoke, nullptr}; }
 
 LlmExecutorResult execute_llm_scenario(const LlmMemoryWorkPlan& model_plan, const LlmScenarioWorkPlan& scenario_plan,
@@ -4155,7 +4171,7 @@ LlmExecutorResult execute_llm_scenario(const LlmMemoryWorkPlan& model_plan, cons
       return result;
     }
 
-    LlmExpectedChecksumResult expected = calculate_llm_expected_checksums(model_plan, scenario_plan, resources);
+    LlmExpectedChecksumResult expected = calculate_validated_expected_checksums(model_plan, scenario_plan, resources);
     if (!expected.valid) {
       result.reason_code = expected.reason_code;
       return result;

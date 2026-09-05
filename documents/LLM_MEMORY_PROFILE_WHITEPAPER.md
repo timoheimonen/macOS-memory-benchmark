@@ -811,6 +811,12 @@ A CPU scenario task follows this boundary:
 6. stop the timer at last-worker completion;
 7. join workers and validate/fold checksums outside the elapsed interval.
 
+Each executor task validates its borrowed plan and materialized resources before oracle generation. The private
+oracle calculation consumes that same checked input synchronously, without an intervening callback or mutation;
+it does not repeat the descriptor walk. A separate public oracle call validates its own inputs. No validation verdict
+is retained across tasks: plan identities alone do not make caller-owned structures immutable. Mutable K/V reset and
+all applicable post-execution checks still run for each task.
+
 Paged table loads, ID-dependent address formation, model reads/writes, and timed checksum accumulation are inside the
 primary elapsed interval. Thread creation, QoS calls, allocation, initialization/pre-touch, permutation generation,
 table validation/hash/protection, preparation page faults, descriptor validation, expected-oracle generation,
