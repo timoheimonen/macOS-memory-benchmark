@@ -1814,7 +1814,7 @@ TEST_F(LlmMemoryExecutorTest,
 }
 
 TEST_F(LlmMemoryExecutorTest,
-       PagedProductionDispatchPassesAllScenariosAndExactByteTails) {
+       PagedProductionDispatchPassesAllScenariosAndExactByteTailsIntegration) {
   for (size_t tail_bytes : {31u, 32u, 33u}) {
     SCOPED_TRACE(::testing::Message() << "tail bytes " << tail_bytes);
     const LlmMemoryWorkPlan plan = build_executor_ready_plan(
@@ -1884,7 +1884,7 @@ TEST_F(LlmMemoryExecutorTest,
 }
 
 TEST_F(LlmMemoryExecutorTest,
-       PagedAppendAndPaddingCorruptionFailExcludedPostValidation) {
+       PagedAppendAndPaddingCorruptionFailExcludedPostValidationIntegration) {
   for (PagedCorruption corruption : {PagedCorruption::Append,
                                      PagedCorruption::Padding}) {
     SCOPED_TRACE(corruption == PagedCorruption::Append ? "append"
@@ -1920,7 +1920,7 @@ TEST_F(LlmMemoryExecutorTest,
 }
 
 TEST_F(LlmMemoryExecutorTest,
-       PagedWeightsOnlyRejectsUnexpectedValidKvWrite) {
+       PagedWeightsOnlyRejectsUnexpectedValidKvWriteIntegration) {
   const LlmMemoryWorkPlan plan =
       build_executor_ready_plan(paged_geometry(5, 4), 1);
   ASSERT_TRUE(plan.valid) << plan.reason_code;

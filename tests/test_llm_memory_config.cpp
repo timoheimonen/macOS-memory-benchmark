@@ -1538,7 +1538,7 @@ TEST(LlmMemoryConfigTest, ConvertsWeightMiBWithCheckedArithmetic) {
 }
 
 TEST(LlmMemoryConfigTest,
-     TimerSetupFailureKeepsStdoutEmptyAndPreservesLegacyDiagnosticBoundary) {
+     TimerSetupFailureKeepsStdoutEmptyAndPreservesLegacyDiagnosticBoundaryIntegration) {
   std::vector<std::string> arguments = valid_llm_arguments();
   arguments.insert(arguments.end(), {"--iterations", "1", "--count", "1",
                                      "--output", "-"});
