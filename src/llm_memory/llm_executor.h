@@ -45,6 +45,7 @@ inline constexpr const char* OUTPUT_NOT_EMPTY = "output-not-empty";
 inline constexpr const char* WEIGHT_MAPPING_FAILED = "weight-mapping-failed";
 inline constexpr const char* K_MAPPING_FAILED = "k-mapping-failed";
 inline constexpr const char* V_MAPPING_FAILED = "v-mapping-failed";
+inline constexpr const char* DECODE_POST_VALIDATION_FAILED = "decode-post-validation-failed";
 inline constexpr const char* PAGED_POST_VALIDATION_FAILED =
     "paged-post-validation-failed";
 inline constexpr const char* PREFILL_POST_VALIDATION_FAILED =
@@ -338,6 +339,9 @@ struct LlmExecutorResult {
   bool checksum_valid = false;
   bool post_validation_evaluated = false;
   bool post_validation_valid = false;
+  bool kv_write_validation_applicable = false;  ///< KV-writing scenario; independent of pipeline completion.
+  bool kv_write_validation_evaluated = false;  ///< Phase/layout write check ran after stop and join.
+  bool kv_write_validation_valid = false;  ///< Combined phase/layout final-state result, including paged padding.
   std::vector<LlmWorkerChecksum> expected_checksums;
   std::vector<LlmWorkerChecksum> actual_checksums;
   LlmRunChecksum expected_run_checksum{0, 0};

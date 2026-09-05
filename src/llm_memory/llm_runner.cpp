@@ -62,6 +62,7 @@ constexpr std::string_view kLlmExecutorReasons[] = {
     LlmExecutorReason::WEIGHT_MAPPING_FAILED,
     LlmExecutorReason::K_MAPPING_FAILED,
     LlmExecutorReason::V_MAPPING_FAILED,
+    LlmExecutorReason::DECODE_POST_VALIDATION_FAILED,
     LlmExecutorReason::PAGED_POST_VALIDATION_FAILED,
     LlmExecutorReason::PREFILL_POST_VALIDATION_FAILED,
     LlmExecutorReason::DESCRIPTOR_ALLOCATION_FAILED,
@@ -1441,6 +1442,9 @@ void retain_task_evidence(LlmTaskExecutionResult& retained,
   destination.post_validation_evaluated =
       input.post_validation_evaluated;
   destination.post_validation_valid = input.post_validation_valid;
+  destination.kv_write_validation_applicable = input.kv_write_validation_applicable;
+  destination.kv_write_validation_evaluated = input.kv_write_validation_evaluated;
+  destination.kv_write_validation_valid = input.kv_write_validation_valid;
   destination.expected_run_checksum = input.expected_run_checksum;
   destination.actual_run_checksum = input.actual_run_checksum;
   const LlmCpuExecutionPlan* cpu_plan =

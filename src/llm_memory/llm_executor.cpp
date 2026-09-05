@@ -3013,6 +3013,41 @@ LlmExpectedChecksumResult calculate_paged_expected_checksums(
   return result;
 }
 
+/**
+ * Validate every contiguous decode append byte against the cold affine oracle.
+ * Called only after descriptor admission, timer stop, and worker joins; mapping
+ * ownership remains live and no worker can modify the checked records. Admission
+ * proves nonzero visible-token/record counts and checked layer/batch/sequence
+ * products, with each complete append record inside both K and V mappings.
+ */
+bool validate_decode_post_execution(const LlmMemoryWorkPlan& model_plan,
+                                    const LlmScenarioWorkPlan& scenario_plan,
+                                    const LlmExecutionResources& resources) noexcept {
+  const auto& geometry = model_plan.geometry;
+  if (!geometry.decode.has_value() || scenario_plan.work_units == 0 || !resources.buffers.complete()) {
+    return false;
+  }
+  const auto* k = static_cast<const uint8_t*>(resources.buffers.k.get());
+  const auto* v = static_cast<const uint8_t*>(resources.buffers.v.get());
+  const size_t record_bytes = geometry.k_or_v_record_bytes_per_layer;
+  for (size_t layer = 0; layer < geometry.layer_count; ++layer) {
+    for (size_t batch = 0; batch < geometry.batch_size; ++batch) {
+      const size_t row = layer * geometry.batch_size + batch;
+      const size_t offset = row * geometry.k_or_v_sequence_visible_bytes +
+                            (geometry.decode->visible_context_tokens - 1) * record_bytes;
+      for (size_t byte = 0; byte < record_bytes; ++byte) {
+        if (k[offset + byte] != append_byte(scenario_plan.scenario_seed, scenario_plan.work_units - 1,
+                                           layer, batch, byte, LlmChecksumComponent::K) ||
+            v[offset + byte] != append_byte(scenario_plan.scenario_seed, scenario_plan.work_units - 1,
+                                           layer, batch, byte, LlmChecksumComponent::V)) {
+          return false;
+        }
+      }
+    }
+  }
+  return true;
+}
+
 bool validate_paged_post_execution(
     const LlmMemoryWorkPlan& model_plan,
     const LlmScenarioWorkPlan& scenario_plan,
@@ -4067,6 +4102,8 @@ LlmExecutorResult execute_llm_scenario(const LlmMemoryWorkPlan& model_plan, cons
                                        const LlmExecutionResources& resources, HighResTimer& timer,
                                        LlmKernelAdapter kernel, const LlmExecutorTestControl* test_control) noexcept {
   LlmExecutorResult result;
+  result.kv_write_validation_applicable =
+      (llm_scenario_flags(scenario_plan.scenario) & kLlmScenarioFlagKv) != 0;
   const LlmCpuExecutionPlan* const cpu_plan =
       get_llm_cpu_execution_plan(model_plan);
   result.requested_workers =
@@ -4300,9 +4337,13 @@ LlmExecutorResult execute_llm_scenario(const LlmMemoryWorkPlan& model_plan, cons
         : model_plan.phase == LlmPhase::Prefill
             ? validate_prefill_post_execution(model_plan, scenario_plan,
                                                resources)
-        : model_plan.kv_layout != LlmKvLayout::Paged ||
-              validate_paged_post_execution(model_plan, scenario_plan,
-                                             resources);
+        : model_plan.kv_layout == LlmKvLayout::Paged
+            ? validate_paged_post_execution(model_plan, scenario_plan, resources)
+            : !result.kv_write_validation_applicable ||
+                  validate_decode_post_execution(model_plan, scenario_plan, resources);
+    result.kv_write_validation_evaluated = result.kv_write_validation_applicable;
+    result.kv_write_validation_valid =
+        result.kv_write_validation_evaluated && result.post_validation_valid;
     if (!result.checksum_valid) {
       result.reason_code = LlmExecutorReason::CHECKSUM_MISMATCH;
       return result;
@@ -4311,7 +4352,9 @@ LlmExecutorResult execute_llm_scenario(const LlmMemoryWorkPlan& model_plan, cons
       result.reason_code =
           model_plan.phase == LlmPhase::Prefill
               ? LlmExecutorReason::PREFILL_POST_VALIDATION_FAILED
-              : LlmExecutorReason::PAGED_POST_VALIDATION_FAILED;
+              : model_plan.kv_layout == LlmKvLayout::Paged
+                    ? LlmExecutorReason::PAGED_POST_VALIDATION_FAILED
+                    : LlmExecutorReason::DECODE_POST_VALIDATION_FAILED;
       return result;
     }
 

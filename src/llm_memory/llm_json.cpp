@@ -1620,6 +1620,14 @@ OrderedJson measurement_execution_json(const LlmMeasurementState& measurement) {
       cpu_available ? OrderedJson(cpu->post_validation_evaluated) : OrderedJson(nullptr);
   output["post_validation_valid"] =
       cpu_available && cpu->post_validation_evaluated ? OrderedJson(cpu->post_validation_valid) : OrderedJson(nullptr);
+  output["kv_write_validation_applicable"] =
+      cpu_available ? OrderedJson(cpu->kv_write_validation_applicable) : OrderedJson(nullptr);
+  output["kv_write_validation_evaluated"] =
+      cpu_available && cpu->kv_write_validation_applicable
+          ? OrderedJson(cpu->kv_write_validation_evaluated) : OrderedJson(nullptr);
+  output["kv_write_validation_valid"] =
+      cpu_available && cpu->kv_write_validation_applicable && cpu->kv_write_validation_evaluated
+          ? OrderedJson(cpu->kv_write_validation_valid) : OrderedJson(nullptr);
   if (metal != nullptr) {
     output["metal"] = metal_task_evidence_json(*metal);
   }

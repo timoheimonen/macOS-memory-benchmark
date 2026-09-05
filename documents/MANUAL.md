@@ -270,6 +270,15 @@ depends on pool, physical ID,
 and physical offset. Post-task validation checks current-token writes and padding canaries without adding to elapsed
 time.
 
+CPU contiguous-decode checks every byte of both K/V append records for all layers and batches
+against the final task-local ordinal `T-1`, after timer stop and all worker joins. A mismatch yields
+`decode-post-validation-failed`: the invalid attempt is retained with null rates and excluded from
+aggregates. The timed workload and checksum algorithm are unchanged. KV-write evidence applies only
+to KV-bearing scenarios; paged/prefill evidence retains the combined final-state check and its existing
+padding/sampling limits. CPU paged weights-only unexpected-write/padding protection remains active.
+See the [CPU final-state evidence contract](API.md#result-schemas-and-completion) for field and null semantics.
+
+
 For prefill, prompt length `P` and query-tile length `Q` are explicit. Define `C = ceil(P/Q)`, tile ends
 `e_j = min((j+1)*Q, P)`, and `S(P,Q) = sum(e_j)`. One full-prompt work unit has:
 

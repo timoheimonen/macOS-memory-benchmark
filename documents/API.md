@@ -334,6 +334,27 @@ equal-multiplicity table permutations are
 therefore distinguishable. These four-byte lookups and physical suffix padding are reported evidence, not effective
 model payload.
 
+
+CPU final-state validation evidence:
+
+CPU contiguous-decode checks every byte of both K and V append records for every layer and batch
+against the cold affine oracle at final task-local work-unit ordinal `T - 1`, after the last worker
+stops the timer and all workers join. Failure is `decode-post-validation-failed`, retained as an
+invalid attempt with null rates and excluded from aggregate populations. The timed payload and
+checksum algorithm are unchanged. A matching runtime checksum does not replace this final-state check.
+
+In LLM schema 1, CPU `measurements[].execution.post_validation_evaluated` retains its existing
+meaning: the phase/layout final-state validation pipeline was reached, including a no-op path when
+no write check applies. `post_validation_valid` is that combined pipeline result. Additive CPU fields
+`kv_write_validation_applicable`, `kv_write_validation_evaluated`, and `kv_write_validation_valid`
+distinguish a KV-writing scenario from `weights_only`. When applicability is false, evaluated and
+valid serialize as null. When applicable but unevaluated, evaluated is false and valid is null;
+acceptance requires evaluated and valid to be true. All three are null without available CPU evidence.
+For paged and prefill profiles, the valid field reports the existing combined phase/layout final-state
+check, including any applicable padding check; it is not an independent append-only verdict. Prefill
+retains its documented sampling limits. `weights_only` does not claim KV-write validation; the existing
+CPU paged unexpected-KV-write and padding protections still run in the combined pipeline.
+
 For prefill, let `P` be prompt length, `Q` query-tile length, and `K = L*2*R`. With
 `C = ceil(P/Q)`, tile ends `e_j = min((j+1)*Q, P)`, and `S(P,Q) = sum(e_j)`, one `prefill_operation` has:
 

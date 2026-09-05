@@ -424,7 +424,11 @@ class FakeLlmBackend final : public LlmBackend {
 
   LlmTaskExecutionResult execute_task(const LlmMemoryWorkPlan& model_plan, const LlmScenarioWorkPlan& scenario_plan,
                                       const LlmRunnerTaskContext& context) override {
-    return adapt_llm_cpu_executor_result(model_plan, scenario_plan, context, successful_fake_execution(model_plan));
+    auto execution = successful_fake_execution(model_plan);
+    execution.kv_write_validation_applicable = scenario_plan.scenario != LlmScenario::WeightsOnly;
+    execution.kv_write_validation_evaluated = execution.kv_write_validation_applicable;
+    execution.kv_write_validation_valid = execution.kv_write_validation_applicable;
+    return adapt_llm_cpu_executor_result(model_plan, scenario_plan, context, std::move(execution));
   }
 
   const LlmBackendEvidence& evidence() const noexcept override { return evidence_; }

@@ -677,6 +677,9 @@ class FakeLlmBackend final : public LlmBackend {
                                       const LlmRunnerTaskContext& context) override {
     LlmExecutorResult execution =
         executor_ ? executor_(model_plan, scenario_plan, context) : successful_execution(model_plan);
+    execution.kv_write_validation_applicable = scenario_plan.scenario != LlmScenario::WeightsOnly;
+    execution.kv_write_validation_evaluated = execution.kv_write_validation_applicable && execution.post_validation_evaluated;
+    execution.kv_write_validation_valid = execution.kv_write_validation_evaluated && execution.post_validation_valid;
     return adapt_llm_cpu_executor_result(model_plan, scenario_plan, context, std::move(execution));
   }
 
@@ -809,6 +812,9 @@ TEST(LlmMemoryJsonTest, MetalDocumentPublishesSegmentationBackendTaskAndCompactE
   EXPECT_TRUE(document["measurements"][0]["qos_failed_workers"].is_null());
   const OrderedJson& execution = document["measurements"][0]["execution"];
   EXPECT_TRUE(execution["requested_workers"].is_null());
+  EXPECT_TRUE(execution["kv_write_validation_applicable"].is_null());
+  EXPECT_TRUE(execution["kv_write_validation_evaluated"].is_null());
+  EXPECT_TRUE(execution["kv_write_validation_valid"].is_null());
   EXPECT_TRUE(execution["qos_successful_workers"].is_null());
   EXPECT_DOUBLE_EQ(execution["elapsed_seconds"].get<double>(), 0.0025);
   const OrderedJson& task = execution["metal"];
@@ -1774,7 +1780,8 @@ TEST(LlmMemoryJsonTest, CompleteDocumentHasExactTopLevelIdentityAndAuditableNest
       document["measurements"][0]["execution"],
       {"status", "reason_code", "valid", "elapsed_seconds", "requested_workers", "created_workers", "completed_workers",
        "qos_successful_workers", "qos_failed_workers", "worker_startup_failed", "kernel_succeeded", "timer_started",
-       "timer_stopped", "post_validation_evaluated", "post_validation_valid"});
+       "timer_stopped", "post_validation_evaluated", "post_validation_valid",
+       "kv_write_validation_applicable", "kv_write_validation_evaluated", "kv_write_validation_valid"});
   expect_exact_keys(document["measurements"][0]["checksum"],
                     {"status", "reason_code", "initialization_pattern_version", "write_pattern_version",
                      "checksum_pattern_version", "checksum_valid", "expected_worker_checksums",
@@ -2647,6 +2654,9 @@ TEST(LlmMemoryJsonTest, InterruptedRunnerSerializesUnavailableMetricsExecutionQo
   EXPECT_TRUE(serialized["execution"]["valid"].is_null());
   EXPECT_TRUE(serialized["execution"]["post_validation_evaluated"].is_null());
   EXPECT_TRUE(serialized["execution"]["post_validation_valid"].is_null());
+  EXPECT_TRUE(serialized["execution"]["kv_write_validation_applicable"].is_null());
+  EXPECT_TRUE(serialized["execution"]["kv_write_validation_evaluated"].is_null());
+  EXPECT_TRUE(serialized["execution"]["kv_write_validation_valid"].is_null());
   EXPECT_EQ(serialized["checksum"]["status"], "not_evaluated");
   EXPECT_EQ(serialized["checksum"]["reason_code"], LlmRunnerReason::INTERRUPTION_BEFORE_TASK);
   EXPECT_TRUE(serialized["checksum"]["checksum_valid"].is_null());
@@ -2689,6 +2699,9 @@ TEST(LlmMemoryJsonTest, ExecutorExceptionUsesRunnerReasonAndNullUnavailableExecu
   EXPECT_TRUE(measurement["execution"]["kernel_succeeded"].is_null());
   EXPECT_TRUE(measurement["execution"]["post_validation_evaluated"].is_null());
   EXPECT_TRUE(measurement["execution"]["post_validation_valid"].is_null());
+  EXPECT_TRUE(measurement["execution"]["kv_write_validation_applicable"].is_null());
+  EXPECT_TRUE(measurement["execution"]["kv_write_validation_evaluated"].is_null());
+  EXPECT_TRUE(measurement["execution"]["kv_write_validation_valid"].is_null());
   EXPECT_EQ(measurement["checksum"]["status"], "not_evaluated");
   EXPECT_EQ(measurement["checksum"]["reason_code"], LlmRunnerReason::RUNNER_EXCEPTION);
   EXPECT_TRUE(measurement["checksum"]["checksum_valid"].is_null());
@@ -3033,4 +3046,61 @@ TEST(LlmMemoryJsonTest, LoopRecordsExposeOnlyRealizedPrefixAndAllMeasurementInde
   EXPECT_EQ(loop["realized_order"][0], "weights_only");
   EXPECT_EQ(loop["measurement_indexes"].size(), kLlmScenarioCount);
   EXPECT_EQ(loop["measurement_indexes"], (OrderedJson::array({0, 1, 2})));
+}
+
+TEST(LlmMemoryJsonTest, DecodeWriteValidationFailureRetainsInvalidAttemptAndPopulation) {
+  const auto config = explicit_config(1);
+  const auto plan = admitted_plan(config);
+  ASSERT_TRUE(plan.valid);
+  FakeLlmBackend backend([](const LlmMemoryWorkPlan& model, const LlmScenarioWorkPlan& scenario,
+                            const LlmRunnerTaskContext& context) {
+    auto execution = successful_execution(model);
+    if (context.kind == LlmRunnerTaskKind::Measurement && scenario.scenario == LlmScenario::KvOnly) {
+      execution.valid = false;
+      execution.reason_code = LlmExecutorReason::DECODE_POST_VALIDATION_FAILED;
+      execution.post_validation_valid = false;
+    }
+    return execution;
+  });
+  LlmMemoryResult result;
+  ASSERT_EQ(run_llm_memory_suite(config, plan, backend, result), EXIT_FAILURE);
+  const auto document = build_llm_memory_json(config, plan, preparation_for(plan), fixed_metadata(config, plan), result);
+  const auto& weights = document["measurements"][0];
+  EXPECT_FALSE(weights["execution"]["kv_write_validation_applicable"]);
+  EXPECT_TRUE(weights["execution"]["kv_write_validation_evaluated"].is_null());
+  EXPECT_TRUE(weights["execution"]["kv_write_validation_valid"].is_null());
+  const auto& measurement = document["measurements"][1];
+  EXPECT_EQ(measurement["status"], "invalid");
+  EXPECT_EQ(measurement["reason_code"], LlmExecutorReason::DECODE_POST_VALIDATION_FAILED);
+  EXPECT_TRUE(measurement["execution"]["kv_write_validation_applicable"]);
+  EXPECT_TRUE(measurement["execution"]["kv_write_validation_evaluated"]);
+  EXPECT_FALSE(measurement["execution"]["kv_write_validation_valid"]);
+  EXPECT_TRUE(measurement["checksum"]["checksum_valid"]);
+  EXPECT_TRUE(measurement["synthetic_memory_work_units_per_second"].is_null());
+  EXPECT_TRUE(measurement["effective_model_payload_gb_s"].is_null());
+  EXPECT_EQ(document["aggregates"]["scenarios"]["kv_only"]["effective_model_payload_gb_s"]["sample_count"], 0u);
+}
+
+TEST(LlmMemoryJsonTest, RequiredCpuWriteValidationNotRunIsFailedWithNullVerdict) {
+  const auto config = explicit_config(1);
+  const auto plan = admitted_plan(config);
+  ASSERT_TRUE(plan.valid);
+  FakeLlmBackend backend([](const LlmMemoryWorkPlan& model, const LlmScenarioWorkPlan& scenario,
+                            const LlmRunnerTaskContext& context) {
+    auto execution = successful_execution(model);
+    if (context.kind == LlmRunnerTaskKind::Measurement && scenario.scenario == LlmScenario::KvOnly) {
+      execution.post_validation_evaluated = false;
+    }
+    return execution;
+  });
+  LlmMemoryResult result;
+  ASSERT_EQ(run_llm_memory_suite(config, plan, backend, result), EXIT_FAILURE);
+  const auto document = build_llm_memory_json(config, plan, preparation_for(plan), fixed_metadata(config, plan), result);
+  const auto& measurement = document["measurements"][1];
+  EXPECT_EQ(measurement["status"], "failed");
+  EXPECT_TRUE(measurement["execution"]["kv_write_validation_applicable"]);
+  EXPECT_FALSE(measurement["execution"]["kv_write_validation_evaluated"]);
+  EXPECT_TRUE(measurement["execution"]["kv_write_validation_valid"].is_null());
+  EXPECT_TRUE(measurement["synthetic_memory_work_units_per_second"].is_null());
+  EXPECT_TRUE(measurement["effective_model_payload_gb_s"].is_null());
 }

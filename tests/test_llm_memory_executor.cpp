@@ -480,9 +480,60 @@ bool fake_kernel(void* opaque, const LlmKernelInvocation& invocation) {
   if (static_cast<int>(invocation.worker_index) == context.fail_worker) {
     return false;
   }
+  // Materialize the admitted decode append independently; this fake never calls ASM.
+  if (invocation.phase == LlmPhase::Decode && invocation.kv_layout == LlmKvLayout::Contiguous &&
+      (invocation.scenario_flags & kLlmScenarioFlagKv) != 0) {
+    for (size_t layer = 0; layer < invocation.layer_count; ++layer) {
+      const auto& descriptor = invocation.layers[layer];
+      for (size_t local = 0; local < descriptor.sequence_count; ++local) {
+        const auto& sequence = invocation.sequences[descriptor.first_sequence_index + local];
+        for (bool is_k : {true, false}) {
+          auto* bytes = is_k ? sequence.k_append_ptr : sequence.v_append_ptr;
+          const size_t count = is_k ? sequence.k_append_bytes : sequence.v_append_bytes;
+          for (size_t byte = 0; byte < count; ++byte) {
+            const size_t canonical = sequence.append_record_byte_offset + byte;
+            const uint64_t word = scalar_append_word(invocation.scenario_seed, invocation.work_unit_count - 1,
+                descriptor.layer_index, sequence.batch_sequence_index, canonical / 8,
+                is_k ? LlmChecksumComponent::K : LlmChecksumComponent::V);
+            bytes[byte] = static_cast<uint8_t>(word >> (8 * (canonical % 8)));
+          }
+        }
+      }
+    }
+  }
   *invocation.output = (*context.expected)[invocation.worker_index];
   if (static_cast<int>(invocation.worker_index) == context.corrupt_worker) {
     ++invocation.output->k.state_b;
+  }
+  return true;
+}
+
+struct DecodeCorruptionContext {
+  uint8_t* target = nullptr;
+  std::atomic<bool> changed{false};
+};
+
+bool decode_corrupting_kernel(void* opaque, const LlmKernelInvocation& invocation) {
+  auto& context = *static_cast<DecodeCorruptionContext*>(opaque);
+  if (!production_llm_kernel_adapter().invoke(nullptr, invocation)) return false;
+  if (context.target == nullptr) return true;
+  for (size_t layer = 0; layer < invocation.layer_count; ++layer) {
+    const auto& descriptor = invocation.layers[layer];
+    for (size_t local = 0; local < descriptor.sequence_count; ++local) {
+      const auto& sequence = invocation.sequences[descriptor.first_sequence_index + local];
+      for (size_t byte = 0; byte < sequence.k_append_bytes; ++byte) {
+        if (sequence.k_append_ptr + byte == context.target) {
+          *context.target ^= 1;
+          context.changed.store(true);
+        }
+      }
+      for (size_t byte = 0; byte < sequence.v_append_bytes; ++byte) {
+        if (sequence.v_append_ptr + byte == context.target) {
+          *context.target ^= 1;
+          context.changed.store(true);
+        }
+      }
+    }
   }
   return true;
 }
@@ -2228,6 +2279,9 @@ TEST_F(LlmMemoryExecutorTest, CpuAdapterOwnsCpuLifecycleAcceptanceAndPreservesTa
     execution.checksum_valid = true;
     execution.post_validation_evaluated = true;
     execution.post_validation_valid = true;
+    execution.kv_write_validation_applicable = true;
+    execution.kv_write_validation_evaluated = true;
+    execution.kv_write_validation_valid = true;
     execution.expected_checksums.resize(cpu_plan.effective_workers);
     execution.actual_checksums = execution.expected_checksums;
     execution.expected_run_checksum = {11, 22};
@@ -2264,6 +2318,19 @@ TEST_F(LlmMemoryExecutorTest, CpuAdapterOwnsCpuLifecycleAcceptanceAndPreservesTa
   EXPECT_EQ(retained->expected_checksums.size(), cpu_plan.effective_workers);
   EXPECT_EQ(retained->actual_checksums.size(), cpu_plan.effective_workers);
 
+  LlmExecutorResult missing_write = successful_cpu_evidence();
+  missing_write.kv_write_validation_evaluated = false;
+  result = adapt_llm_cpu_executor_result(plan, scenario, context, std::move(missing_write));
+  EXPECT_EQ(result.status, LlmTaskExecutionStatus::Failed);
+  EXPECT_FALSE(result.validation.evaluated);
+  EXPECT_EQ(result.completion.completed_work_units, 0u);
+
+  LlmExecutorResult not_applicable = successful_cpu_evidence();
+  not_applicable.kv_write_validation_applicable = false;
+  result = adapt_llm_cpu_executor_result(plan, scenario, context, std::move(not_applicable));
+  EXPECT_EQ(result.status, LlmTaskExecutionStatus::Failed);
+  EXPECT_FALSE(result.validation.evaluated);
+
   LlmExecutorResult malformed = successful_cpu_evidence();
   malformed.actual_checksums.pop_back();
   result = adapt_llm_cpu_executor_result(plan, scenario, context,
@@ -2293,4 +2360,71 @@ TEST_F(LlmMemoryExecutorTest, CpuAdapterOwnsCpuLifecycleAcceptanceAndPreservesTa
   EXPECT_EQ(result.reason_code, LlmExecutorReason::INVALID_ELAPSED_TIME);
   EXPECT_TRUE(result.timing.evaluated);
   EXPECT_FALSE(result.timing.valid);
+}
+
+TEST_F(LlmMemoryExecutorTest, ContiguousDecodeAppendCorruptionIntegration) {
+  for (size_t record_bytes : {1u, 7u, 8u, 9u, 33u}) {
+    const auto plan = build_executor_ready_plan({257, 2, 1, 1, record_bytes, 1, 5, 3}, 3);
+    ASSERT_TRUE(plan.valid) << plan.reason_code;
+    LlmExecutionResources resources;
+    ASSERT_TRUE(prepare_llm_execution_resources(plan, resources).valid);
+    for (auto scenario : {LlmScenario::KvOnly, LlmScenario::Mixed}) {
+      for (size_t work : {1u, 3u}) {
+        const auto task = build_llm_scenario_work_plan(plan, scenario, work, true);
+        ASSERT_TRUE(task.valid);
+        for (size_t layer = 0; layer < 2; ++layer) {
+          for (size_t batch = 0; batch < 3; ++batch) {
+            for (bool is_k : {true, false}) {
+              for (size_t byte : {size_t(0), record_bytes - 1}) {
+                SCOPED_TRACE(::testing::Message() << record_bytes << "/" << work << "/" << layer
+                             << "/" << batch << "/" << is_k << "/" << byte);
+                auto* base = static_cast<uint8_t*>(is_k ? resources.buffers.k.get() : resources.buffers.v.get());
+                DecodeCorruptionContext context;
+                context.target = base + (layer * 3 + batch) * plan.geometry.k_or_v_sequence_visible_bytes +
+                                 4 * record_bytes + byte;
+                auto timer = HighResTimer::create();
+                ASSERT_TRUE(timer.has_value());
+                const auto result = execute_llm_scenario(plan, task, resources, *timer,
+                                                         {decode_corrupting_kernel, &context});
+                EXPECT_TRUE(context.changed.load());
+                EXPECT_TRUE(result.checksum_valid);
+                EXPECT_TRUE(result.timer_stopped);
+                EXPECT_EQ(result.completed_workers, result.requested_workers);
+                EXPECT_FALSE(result.valid);
+                EXPECT_TRUE(result.post_validation_evaluated);
+                EXPECT_FALSE(result.post_validation_valid);
+                EXPECT_TRUE(result.kv_write_validation_applicable);
+                EXPECT_TRUE(result.kv_write_validation_evaluated);
+                EXPECT_FALSE(result.kv_write_validation_valid);
+                EXPECT_EQ(result.reason_code, LlmExecutorReason::DECODE_POST_VALIDATION_FAILED);
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+TEST_F(LlmMemoryExecutorTest, CpuProfilesWriteValidationControlsIntegration) {
+  for (const auto& geometry : {LlmGeometryRequest{257, 2, 1, 1, 33, 1, 5, 3},
+                                paged_geometry(5, 4), prefill_geometry(), paged_prefill_geometry()}) {
+    const auto plan = build_executor_ready_plan(geometry, 3);
+    ASSERT_TRUE(plan.valid) << plan.reason_code;
+    LlmExecutionResources resources;
+    ASSERT_TRUE(prepare_llm_execution_resources(plan, resources).valid);
+    for (auto scenario : {LlmScenario::WeightsOnly, LlmScenario::KvOnly, LlmScenario::Mixed}) {
+      for (size_t work : {1u, 3u}) {
+        const auto task = build_llm_scenario_work_plan(plan, scenario, work, true);
+        auto timer = HighResTimer::create();
+        ASSERT_TRUE(timer.has_value());
+        const auto result = execute_llm_scenario(plan, task, resources, *timer);
+        EXPECT_TRUE(result.valid) << result.reason_code;
+        const bool writes = scenario != LlmScenario::WeightsOnly;
+        EXPECT_EQ(result.kv_write_validation_applicable, writes);
+        EXPECT_EQ(result.kv_write_validation_evaluated, writes);
+        EXPECT_EQ(result.kv_write_validation_valid, writes);
+      }
+    }
+  }
 }

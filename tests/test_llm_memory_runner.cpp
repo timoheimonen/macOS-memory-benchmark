@@ -3085,3 +3085,72 @@ TEST(LlmMemoryRunnerTest, StableTaskAndCheckpointTokensCoverUnknownValues) {
 }
 
 }  // namespace
+
+TEST(LlmMemoryRunnerTest,
+     DecodePostValidationFailureCanonicalizesExactlyThroughRunnerFailure) {
+  std::string owned_reason =
+      LlmExecutorReason::DECODE_POST_VALIDATION_FAILED;
+  const std::string_view canonical =
+      canonicalize_llm_result_reason_code(owned_reason);
+  std::fill(owned_reason.begin(), owned_reason.end(), 'x');
+  EXPECT_EQ(canonical, LlmExecutorReason::DECODE_POST_VALIDATION_FAILED);
+  EXPECT_NE(canonical, LlmRunnerReason::RUNNER_UNKNOWN_EXCEPTION);
+  EXPECT_EQ(
+      canonical.data(),
+      canonicalize_llm_result_reason_code(
+          LlmExecutorReason::DECODE_POST_VALIDATION_FAILED)
+          .data());
+
+  LlmMemoryConfig config = explicit_config(1);
+  const LlmMemoryWorkPlan plan = build_runner_admitted_plan(config);
+  ASSERT_TRUE(plan.valid) << plan.reason_code;
+  FakeLlmBackend executor;
+  executor.mutate = [](const LlmMemoryWorkPlan&,
+                       const LlmScenarioWorkPlan&,
+                       const LlmRunnerTaskContext& context, size_t,
+                       LlmTaskExecutionResult& execution) {
+    if (context.kind != LlmRunnerTaskKind::Measurement || context.scenario != LlmScenario::KvOnly) {
+      return;
+    }
+    execution.status = LlmTaskExecutionStatus::Invalid;
+    execution.reason_code =
+        std::string(LlmExecutorReason::DECODE_POST_VALIDATION_FAILED);
+    execution.validation.evaluated = true;
+    execution.validation.valid = false;
+    LlmCpuTaskEvidence evidence;
+    evidence.executor.valid = false;
+    evidence.executor.reason_code =
+        std::string(LlmExecutorReason::DECODE_POST_VALIDATION_FAILED);
+    evidence.executor.post_validation_evaluated = true;
+    evidence.executor.post_validation_valid = false;
+    evidence.executor.kv_write_validation_applicable = true;
+    evidence.executor.kv_write_validation_evaluated = true;
+    evidence.executor.kv_write_validation_valid = false;
+    execution.backend_evidence = std::move(evidence);
+  };
+  LlmMemoryResult result;
+
+  EXPECT_EQ(run_llm_memory_suite(config, plan, executor, result),
+            EXIT_FAILURE);
+  EXPECT_EQ(result.status, LlmRunStatus::Failed);
+  EXPECT_EQ(result.reason_code,
+            LlmExecutorReason::DECODE_POST_VALIDATION_FAILED);
+  EXPECT_NE(result.reason_code, LlmRunnerReason::RUNNER_UNKNOWN_EXCEPTION);
+  ASSERT_FALSE(result.measurements.empty());
+  const LlmMeasurementState& measurement = result.measurements[1];
+  EXPECT_EQ(measurement.status, LlmMeasurementStatus::Invalid);
+  EXPECT_EQ(measurement.reason_code,
+            LlmExecutorReason::DECODE_POST_VALIDATION_FAILED);
+  EXPECT_EQ(measurement.execution.reason_code,
+            LlmExecutorReason::DECODE_POST_VALIDATION_FAILED);
+  const auto* retained =
+      std::get_if<LlmCpuTaskEvidence>(&measurement.execution.backend_evidence);
+  ASSERT_NE(retained, nullptr);
+  EXPECT_EQ(retained->executor.reason_code,
+            LlmExecutorReason::DECODE_POST_VALIDATION_FAILED);
+  EXPECT_TRUE(retained->executor.post_validation_evaluated);
+  EXPECT_FALSE(retained->executor.post_validation_valid);
+  EXPECT_TRUE(retained->executor.kv_write_validation_applicable);
+  EXPECT_TRUE(retained->executor.kv_write_validation_evaluated);
+  EXPECT_FALSE(retained->executor.kv_write_validation_valid);
+}
