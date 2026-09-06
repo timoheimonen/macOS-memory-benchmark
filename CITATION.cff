@@ -1,7 +1,7 @@
 cff-version: 1.2.0
 message: "If you use this software in research, benchmarks, or publications, please cite it as below."
 
-title: "macOS Memory Benchmark"
+title: "macOS-memory-benchmark"
 type: software
 
 authors:

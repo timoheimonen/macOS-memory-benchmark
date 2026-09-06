@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.64.0] - Unreleased
+## [0.64.0] - 2026-09-06
 
 ### Added
   - **Independent LLM artifact verifier**: Added `script-examples/verify_llm_result.py` for all eight current CPU/Metal decode/prefill and contiguous/paged profiles. Independent Python arithmetic checks geometry, work, checksums, timing, rates, accepted sample populations, and statistics. Optional `--binary` checks the executable file's SHA-256, and `--require-raw-timing` requires original CPU timing evidence. Verdicts distinguish consistent accepted results, inconsistent or unaccepted results, and unsupported evidence or resource limits. Added `make test-llm-verifier` to the aggregate `make test-all` gate.
