@@ -33,7 +33,7 @@
 #include "core/memory/memory_manager.h"
 #include "llm_memory/llm_work_plan.h"
 
-struct HighResTimer;
+#include "core/timing/timer.h"
 
 /** Stable machine-readable reasons returned by the LLM executor boundary. */
 namespace LlmExecutorReason {
@@ -350,6 +350,7 @@ struct LlmCpuRuntimeEvidence {
 /** Transient synchronized executor result. Expected data is consumed by validation
  * and never retained once per measurement. */
 struct LlmExecutorResult : LlmCpuRuntimeEvidence {
+  std::optional<MachTimingSnapshot> cpu_raw;
   double elapsed_seconds = 0.0;
   std::vector<LlmWorkerChecksum> expected_checksums;
   LlmRunChecksum expected_run_checksum{0, 0};

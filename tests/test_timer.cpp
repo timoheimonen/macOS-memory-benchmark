@@ -130,3 +130,40 @@ TEST_F(HighResTimerTest, UnsignedTickSubtractionPreservesWraparound) {
   timer->start();
   EXPECT_DOUBLE_EQ(timer->stop_ns(), 10.0);
 }
+
+TEST_F(HighResTimerTest, SnapshotRetainsOriginalBoundariesWithoutExtraClockReads) {
+  state.numer = 125;
+  state.denom = 3;
+  set_ticks({100, 103, 200, 200});
+  auto timer = HighResTimer::create();
+  ASSERT_TRUE(timer);
+  EXPECT_FALSE(timer->last_snapshot);
+  timer->start();
+  EXPECT_FALSE(timer->last_snapshot);
+  EXPECT_DOUBLE_EQ(timer->stop(), 125.0 / 1e9);
+  ASSERT_TRUE(timer->last_snapshot);
+  EXPECT_EQ(timer->last_snapshot->start_ticks, 100u);
+  EXPECT_EQ(timer->last_snapshot->stop_ticks, 103u);
+  EXPECT_EQ(timer->last_snapshot->delta_ticks, 3u);
+  EXPECT_EQ(timer->last_snapshot->numer, 125u);
+  EXPECT_EQ(timer->last_snapshot->denom, 3u);
+  EXPECT_EQ(state.next_tick, 2u);
+  timer->start();
+  EXPECT_FALSE(timer->last_snapshot);
+  EXPECT_DOUBLE_EQ(timer->stop_ns(), 0.0);
+  EXPECT_EQ(timer->last_snapshot->delta_ticks, 0u);
+  EXPECT_EQ(state.next_tick, 4u);
+}
+
+TEST_F(HighResTimerTest, SnapshotWrapAndLargeConversionAvoidIntegerOverflow) {
+  state.numer = std::numeric_limits<uint32_t>::max();
+  state.denom = 1;
+  set_ticks({10, 9});
+  auto timer = HighResTimer::create();
+  ASSERT_TRUE(timer);
+  timer->start();
+  const double ns = timer->stop_ns();
+  ASSERT_TRUE(timer->last_snapshot);
+  EXPECT_EQ(timer->last_snapshot->delta_ticks, std::numeric_limits<uint64_t>::max());
+  EXPECT_DOUBLE_EQ(ns, static_cast<double>(std::numeric_limits<uint64_t>::max()) * state.numer);
+}

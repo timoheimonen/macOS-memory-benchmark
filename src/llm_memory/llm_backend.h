@@ -179,6 +179,7 @@ struct LlmAuthoritativeTiming {
   bool evaluated = false;
   bool valid = false;
   double elapsed_seconds = 0.0;
+  std::optional<MachTimingSnapshot> cpu_raw;
 };
 
 /** Exact planned and completed logical work reported by one task. */

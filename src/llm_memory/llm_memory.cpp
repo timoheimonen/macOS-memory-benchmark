@@ -18,6 +18,7 @@
  * @brief Standalone parsing, command boundary, validation, and status tokens
  */
 
+#include "../../.build-provenance.h"
 #include "llm_memory/llm_memory.h"
 
 #include <algorithm>
@@ -922,6 +923,13 @@ int run_llm_memory_mode(int argc, char* argv[]) {
   bool post_run_exception = false;
   try {
     print_runtime_banner();
+    metadata.build_manifest = nlohmann::ordered_json::parse(LLM_BUILD_MANIFEST_JSON);
+    const std::string binary_hash = capture_llm_binary_sha256();
+    if (!binary_hash.empty()) metadata.build_manifest["binary_sha256"] = binary_hash;
+    else {
+      metadata.build_manifest["status"] = "partial";
+      metadata.build_manifest["reason_code"] = "binary-hash-unavailable";
+    }
     metadata.timestamp = build_utc_timestamp();
     metadata.main_thread_qos = prepare_main_thread_benchmark_qos(MainThreadQosSetter{}, false);
     BenchmarkSignalMaskGuard signal_guard;

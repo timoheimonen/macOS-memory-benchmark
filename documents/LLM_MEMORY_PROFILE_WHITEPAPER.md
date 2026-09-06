@@ -1189,3 +1189,9 @@ multiple weight passes, or KV replay factors other than one are separate methodo
 vocabulary does not activate them: each requires its own end-to-end implementation gate, exact selector-derived
 methodology and component identity, public CLI/documentation update, and compatibility review before it becomes a
 supported profile.
+
+CPU LLM results retain the original Mach tick boundaries and timebase for duration reconstruction.
+The build embeds compiler, flags, SDK/deployment target and Git provenance; the command hashes the
+executable once before tasks. These fields bind available artifacts and do not constitute signed
+execution attestation. See the [LLM process contract](API.md) for availability and numeric rules.
+Python 3 is required to generate build provenance.

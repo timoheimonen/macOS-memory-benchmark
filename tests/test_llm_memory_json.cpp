@@ -3108,3 +3108,25 @@ TEST(LlmMemoryJsonTest, AllEightProfilesPublishExactSchemaTwoSelectorsAndNamedKi
     }
   }
 }
+
+TEST(LlmMemoryJsonTest, OriginalCpuTimingAndCommandManifestSurviveProjection) {
+  const auto config = explicit_config(1);
+  const auto plan = admitted_plan(config);
+  auto result = complete_result(config, plan);
+  auto metadata = fixed_metadata(config, plan);
+  metadata.build_manifest["binary_sha256"] = std::string(64, 'a');
+  metadata.build_manifest["status"] = "partial";
+  const MachTimingSnapshot raw{100, 103, 3, 125, 3};
+  result.measurements[0].execution.timing.cpu_raw = raw;
+  result.calibration_attempts[0][0].execution.cpu_raw = raw;
+  const auto doc = build_llm_memory_json(config, plan, preparation_for(plan), metadata, result);
+  EXPECT_EQ(doc["build_manifest"], metadata.build_manifest);
+  const auto& captured = doc["measurements"][0]["execution"]["timing"]["cpu_raw"];
+  EXPECT_EQ(captured["start_ticks"], "100");
+  EXPECT_EQ(captured["stop_ticks"], "103");
+  EXPECT_EQ(captured["delta_ticks"], "3");
+  EXPECT_EQ(captured["timebase_numer"], 125);
+  EXPECT_EQ(captured["timebase_denom"], 3);
+  EXPECT_EQ(doc["calibration"]["attempts"]["weights_only"][0]["execution"]["timing"]["cpu_raw"], captured);
+  EXPECT_TRUE(doc["measurements"][1]["execution"]["timing"]["cpu_raw"].is_null());
+}

@@ -696,11 +696,29 @@ use `unavailable:arithmetic-overflow`. Actual byte/prefix/lookup/allocation over
 `h_q` (`--query-heads`) controls theoretical attention context; query tile `Q` (`--attention-query-tile-tokens`)
 controls executed prefix-read geometry. No Transformer or FMA computation is performed.
 
-`build_manifest` has `manifest_version: 1`, `status: "unavailable"`,
-`reason_code: "build-provenance-not-provided"`, and null `binary_sha256`, `git_commit`, `git_dirty`, `compiler`,
-`compile_flags`, `link_flags`, `target_arch`, `sdk`, and `min_os`. This revision reserves the contract and does not
-supply build attestation. Optional `execution.timing.cpu_raw` is not emitted here; absence cannot be promoted to
-raw-tick verification. Software identity and MSL-source provenance alone are not independent build/runtime proof.
+`build_manifest` version 1 records build-time `git_commit` and `git_dirty`, compiler version,
+`compile_flags` (`cxxflags`, `test_cxxflags`, `asflags`), effective link flags including frameworks,
+compiler target triple (`target_arch`), SDK version and `min_os`. Make regenerates the embedded manifest
+when those inputs change and invalidates the object graph. Python 3 is required for this build step.
+A source archive without Git metadata records null Git fields and status `partial` with
+`build-fields-unavailable`; it never consults the run directory's Git state. The software version remains
+separate provenance. A caller supplying no manifest retains the explicit `unavailable` reservation.
+The command streams `binary_sha256` once before tasks, from the executable path. Read failure leaves
+null with status `partial` and `binary-hash-unavailable`. This is a file binding, not signed attestation
+of executed machine code; replacement of the executable during capture is outside the claim.
+
+CPU measurement `execution.timing.cpu_raw` and excluded-attempt `execution.timing.cpu_raw` contain
+`start_ticks`, `stop_ticks`, `delta_ticks` as uint64 decimal strings and `timebase_numer` and
+`timebase_denom` as uint32 JSON integers. Null means no captured snapshot; older schema-2 artifacts may
+omit this optional field. The shared timer captures the original boundaries with one clock read each,
+then computes `delta=(stop-start) mod 2^64` (at most one wrap assumed) and
+`elapsed_seconds=(double(delta)*double(numer)/double(denom))/1e9`. Floating multiplication avoids
+integer overflow. Zero delta or numerator produces zero and cannot admit an LLM measurement; a zero
+denominator rejects timer creation, or defensively returns zero if externally corrupted afterwards.
+A new start clears the prior snapshot. Invalid measurements keep diagnostic elapsed and any original
+raw snapshot; they retain null headline/rate fields. Metal has null CPU raw evidence and retains its
+GPU timestamps. CPU `completion_derivation=accepted-plan-derived` refers to accepted planned work;
+the kernel's exact-byte checksum counter is programmed evidence, not measured hardware traffic.
 
 All byte, lookup, seed and checksum values follow canonical unsigned decimal-string encoding (`0` or
 `[1-9][0-9]*`); Metal lanes retain uint32 bounds. Indexes, work units and validated small inputs remain bounded JSON

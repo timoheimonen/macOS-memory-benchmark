@@ -199,6 +199,7 @@ LlmTaskExecutionResult adapt_llm_cpu_executor_result(const LlmMemoryWorkPlan& mo
       executor_result.post_validation_evaluated && write_evidence_complete;
   result.timing.evaluated = executor_result.timer_started && executor_result.timer_stopped;
   result.timing.elapsed_seconds = executor_result.elapsed_seconds;
+  result.timing.cpu_raw = executor_result.cpu_raw;
   result.timing.valid = result.timing.evaluated && std::isfinite(executor_result.elapsed_seconds) &&
                         executor_result.elapsed_seconds > 0.0;
   result.validation.evaluated = checksum_evidence_complete;

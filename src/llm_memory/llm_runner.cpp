@@ -526,6 +526,7 @@ LlmTaskExecutionEvidence compact_execution(
   evidence.valid = execution.status == LlmTaskExecutionStatus::Complete;
   evidence.reason_code = canonicalize_llm_result_reason_code(execution.reason_code);
   evidence.elapsed_seconds = execution.timing.elapsed_seconds;
+  evidence.cpu_raw = execution.timing.cpu_raw;
   evidence.timing_evaluated = execution.timing.evaluated;
   evidence.timing_valid = execution.timing.valid;
   evidence.completion = execution.completion;

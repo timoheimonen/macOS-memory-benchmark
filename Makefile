@@ -71,6 +71,19 @@ TARGET = memory_benchmark
 # Default target: build the executable
 all: $(TARGET)
 
+# Recompute provenance before considering objects. A changed source revision,
+# dirty state or build flags invalidates every object, avoiding mixed manifests.
+export PROVENANCE_CXX = $(CXX)
+export PROVENANCE_CXXFLAGS = $(CXXFLAGS)
+export PROVENANCE_TEST_CXXFLAGS = $(TEST_CXXFLAGS)
+export PROVENANCE_ASFLAGS = $(ASFLAGS)
+export PROVENANCE_LDFLAGS = $(LDFLAGS) $(APPLE_FRAMEWORKS)
+.build-provenance.h: FORCE
+	python3 build-support/generate_provenance.py $@
+
+.PHONY: FORCE
+FORCE:
+
 # Rule for linking the executable from object files
 $(TARGET): $(OBJ_FILES)
 	@echo "Linking $(TARGET)..."
@@ -99,7 +112,7 @@ TEST_LIB_OBJS := $(filter-out main.o, $(OBJ_FILES))
 # Recompile once after a Makefile change so an existing pre-dependency-file
 # workspace cannot keep stale objects. Subsequent header changes are tracked by
 # the generated .d files.
-$(OBJ_FILES) $(TEST_OBJS): Makefile
+$(OBJ_FILES) $(TEST_OBJS): Makefile .build-provenance.h
 
 # Rule for compiling test files (must come before generic %.o rule)
 $(TEST_DIR)/%.o: $(TEST_DIR)/%.cpp

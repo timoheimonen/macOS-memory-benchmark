@@ -4350,6 +4350,7 @@ LlmExecutorResult execute_llm_scenario(const LlmMemoryWorkPlan& model_plan, cons
     result.completed_workers = completed_workers.load(std::memory_order_relaxed);
     result.qos_successful_workers = qos_successful_workers.load(std::memory_order_relaxed);
     result.qos_failed_workers = qos_failed_workers.load(std::memory_order_relaxed);
+    if (timer_stop_succeeded) result.cpu_raw = timer.last_snapshot;
     result.elapsed_seconds = measured_duration;
     result.timer_stopped = timer_stop_succeeded;
 

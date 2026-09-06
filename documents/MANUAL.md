@@ -2887,3 +2887,9 @@ Command help:
 ```bash
 memory_benchmark -h
 ```
+
+CPU LLM results retain the original Mach tick boundaries and timebase for duration reconstruction.
+The build embeds compiler, flags, SDK/deployment target and Git provenance; the command hashes the
+executable once before tasks. These fields bind available artifacts and do not constitute signed
+execution attestation. See the [LLM process contract](API.md) for availability and numeric rules.
+Python 3 is required to generate build provenance.

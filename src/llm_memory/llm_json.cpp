@@ -1394,6 +1394,13 @@ OrderedJson cold_checks_json(const LlmColdChecks& expected, const LlmColdChecks*
   return output;
 }
 
+OrderedJson cpu_raw_json(const std::optional<MachTimingSnapshot>& raw) {
+  if (!raw) return nullptr;
+  return OrderedJson{{"start_ticks", decimal_string(raw->start_ticks)},
+      {"stop_ticks", decimal_string(raw->stop_ticks)}, {"delta_ticks", decimal_string(raw->delta_ticks)},
+      {"timebase_numer", raw->numer}, {"timebase_denom", raw->denom}};
+}
+
 OrderedJson compact_execution_json(const LlmTaskExecutionEvidence& execution, std::string_view fallback_reason_code,
                                    std::string_view /*checksum_algorithm_version*/) {
   const bool available = execution.available;
@@ -1416,6 +1423,7 @@ OrderedJson compact_execution_json(const LlmTaskExecutionEvidence& execution, st
   output["valid"] = available ? OrderedJson(execution.valid) : OrderedJson(nullptr);
   output["elapsed_seconds"] = positive_finite_or_null(
       execution.elapsed_seconds, available && execution.timing_evaluated && execution.timing_valid);
+  output["timing"]["cpu_raw"] = cpu_raw_json(execution.cpu_raw);
   const bool cpu_available = available && execution.cpu_evidence_available;
   output["requested_workers"] = number_or_null(execution.requested_workers, cpu_available);
   output["created_workers"] = number_or_null(execution.created_workers, cpu_available);
@@ -1581,6 +1589,7 @@ OrderedJson measurement_execution_json(const LlmMeasurementState& measurement) {
       {"valid", available && execution.timing.evaluated ? OrderedJson(execution.timing.valid) : OrderedJson(nullptr)},
       {"diagnostic_elapsed_seconds", measurement.status != LlmMeasurementStatus::Measured &&
           available && execution.timing.evaluated ? finite_or_null(execution.timing.elapsed_seconds) : OrderedJson(nullptr)}};
+  output["timing"]["cpu_raw"] = cpu_raw_json(execution.timing.cpu_raw);
   const bool cpu_available = available && cpu != nullptr;
   output["requested_workers"] = number_or_null(cpu_available ? cpu->requested_workers : 0, cpu_available);
   output["created_workers"] = number_or_null(cpu_available ? cpu->created_workers : 0, cpu_available);
@@ -2292,10 +2301,7 @@ nlohmann::ordered_json build_llm_memory_json(const LlmMemoryConfig& config, cons
   output["kv_layout"] = llm_kv_layout_to_string(model_plan.kv_layout);
   output["methodology_version"] = model_plan.methodology_version;
   output["software"] = software_json(metadata);
-  output["build_manifest"] = OrderedJson{{"manifest_version", 1}, {"status", "unavailable"},
-      {"reason_code", "build-provenance-not-provided"}, {"binary_sha256", nullptr}, {"git_commit", nullptr},
-      {"git_dirty", nullptr}, {"compiler", nullptr}, {"compile_flags", nullptr}, {"link_flags", nullptr}, {"target_arch", nullptr},
-      {"sdk", nullptr}, {"min_os", nullptr}};
+  output["build_manifest"] = metadata.build_manifest;
   output["configuration"] = configuration_json(config);
   output["resolved_plan"] = resolved_plan_json(model_plan, result, backend_evidence);
   output["backend_evidence"] =

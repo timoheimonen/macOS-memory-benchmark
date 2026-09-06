@@ -133,6 +133,7 @@ std::optional<HighResTimer> HighResTimer::create() {
 // timestamp read and the measured region, introducing run-to-run jitter.
 void HighResTimer::start() {
   asm volatile("dsb ish\n\tisb" ::: "memory");
+  last_snapshot.reset();
   start_ticks = active_timer_system_calls.absolute_time();
 }
 
@@ -147,6 +148,7 @@ double HighResTimer::stop() {
   uint64_t end = active_timer_system_calls.absolute_time();
   // Calculate elapsed ticks. Unsigned arithmetic automatically handles wrap-around.
   uint64_t elapsed_ticks = end - start_ticks;
+  last_snapshot = MachTimingSnapshot{start_ticks, end, elapsed_ticks, timebase_info.numer, timebase_info.denom};
   // Convert ticks to nanoseconds using the timebase info.
   // Defensive check: ensure denom is not zero (should never happen after constructor validation)
   if (timebase_info.denom == 0) {
@@ -173,6 +175,7 @@ double HighResTimer::stop_ns() {
   uint64_t end = active_timer_system_calls.absolute_time();
   // Calculate elapsed ticks. Unsigned arithmetic automatically handles wrap-around.
   uint64_t elapsed_ticks = end - start_ticks;
+  last_snapshot = MachTimingSnapshot{start_ticks, end, elapsed_ticks, timebase_info.numer, timebase_info.denom};
   // Convert ticks to nanoseconds and return.
   // Defensive check: ensure denom is not zero (should never happen after constructor validation)
   if (timebase_info.denom == 0) {
