@@ -607,6 +607,13 @@ A correct count-one run can have both booleans true and `scenario_order_balance_
 can leave the measured population complete while run status is failed and `run_accepted` is false. Consumers retain
 process exit status as well as the snapshot; an older preserved file cannot report a later failure.
 
+`scenario_order_balance_complete` describes positions only: all planned rows must be measured, each loop complete, and
+each scenario's first/middle/last counts equal and nonzero. Loop `i` rotates `weights_only`/`kv_only`/`mixed` by `i
+mod 3`, independently of seed. This does not balance directed predecessor pairs, including loop and repeated-block
+boundaries. Partial final blocks retain their realized order. Canonical frozen-plan warmups run once before loop zero,
+not immediately before each measured scenario; backend task-local preparation and validation remain outside the
+primary timer.
+
 Each `aggregates.scenarios.<scenario>.accepted_measurement_ids` defines one population shared by all three metrics.
 Excluded calibration never enters it. Derive each rate before applying the shared linear percentile interpolation;
 for even n, median(work/duration) generally differs from work/median(duration). Exact median/MAD/percentiles are
@@ -621,6 +628,11 @@ confidence levels. Default LLM console output shows n, median, min/max, CV and M
 A comparison may impose stricter quality criteria, but those are separate policy and do not delete or retry noisy
 measurements. Match phase/model geometry and, for paged results, block size, permutation, physical-resource geometry
 and component identities. Contiguous and paged results are distinct cohorts even with identical logical geometry.
+Match backend/profile, frozen work, seeds, full component identities and run policy, including conditioning and
+output/checkpoint cadence. Inspect accepted n, CV, duration and environment separately from acceptance.
+`environment.start`/`end` thermal-state and Low Power Mode values are instantaneous OS observations, not continuous
+temperature, cache-residency or CPU-affinity evidence; unavailable is not nominal. Accepted artifacts alone do not
+establish a machine or methodology performance difference.
 
 `quality_warnings` merges and deduplicates runner tokens `weights_only-high-cv`, `kv_only-high-cv`,
 `mixed-high-cv`, and `scenario-order-not-balanced` with final-report tokens `environment-not-nominal`,

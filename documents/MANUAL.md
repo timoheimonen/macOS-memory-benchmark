@@ -690,7 +690,11 @@ middle, and trailing items.
   one same-shape warmup; later candidates add a warmup only for the first irreducible one-work-unit confirmation. After
   all three candidates resolve, their plans freeze atomically and each frozen plan receives one canonical-order warmup
   before loop zero. Explicit iterations freeze all three exact plans first and use the same frozen-plan warmup boundary.
-  Cyclic measured order gives all scenarios each position once when count is three
+  The measured WKM/KMW/MWK rotation balances first/middle/last positions per complete three-loop block, independently
+  of seed. It does not balance directed predecessor pairs across loop/block boundaries. A partial final block keeps its
+  actual order. There is no runner-level same-scenario conditioning immediately before each measurement; backend
+  preparation and validation still occur outside its primary time. Changing conditioning or the six-permutation block
+  order would change comparison policy and requires a versioned methodology/run-policy decision.
 - Uses task-boundary completion-wins interruption. A started scenario is not polled in its hot kernel; a completed and
   checksum-valid current task stays measured, while no next task starts after the stop is observed
 - Output values retain the shared raw-target syntax: empty disables JSON, exact `-` emits one final LLM schema 2 document,
@@ -2041,6 +2045,12 @@ Schema 2 ownership and interpretation:
 - `run_accepted` requires complete status, every planned measurement measured, accepted required runtime evidence and
   no known command/checkpoint error. `results_complete` only describes that measured population. Correct count one can
   be accepted while balance is false. Quality, CV, duration and environment remain separate comparison criteria.
+  Compare the same backend/profile, phase geometry, layout/permutation, frozen work, seed, component identities and
+  run policy, including conditioning and file/stdout checkpoint cadence. Inspect accepted sample count and repeat
+  alternating process comparisons; artifact acceptance alone does not establish a machine or methodology speed
+  difference. Thermal-state/Low Power Mode start/end snapshots are instantaneous OS observations, not continuous
+  temperatures, cache residency or guaranteed CPU affinity. Nominal endpoints cannot exclude intervening changes;
+  unavailable observations remain missing evidence.
 - One `accepted_measurement_ids` population feeds all three metrics. Derive each rate before statistics; exact median,
   MAD and linearly interpolated P90/P95/P99 are prepared at snapshots/terminal. Empty populations are null; n=1 stddev
   and positive-mean CV are zero. Classification is `insufficient-samples` for n<3, `undefined` for undefined CV,

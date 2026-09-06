@@ -892,8 +892,26 @@ Measured duration-quality values are `within-target-window`, `above-target-singl
 `not-run`. Every measured non-window value produces the corresponding `<scenario>-duration-<quality>` warning.
 
 The base order is `weights_only`, `kv_only`, `mixed`; loop `i` rotates it by `i mod 3`. A complete block of three loops
-gives every scenario one first, middle, and last position. Count need not be divisible by three. Balance is reported independently; a comparison policy may require it, but
-producer correctness acceptance does not.
+gives every scenario one first, middle, and last position. This is **position balance**, not directed predecessor-pair
+balance. With W=weights_only, K=kv_only and M=mixed, the finite three-loop stream is `WKM KMW MWK`.
+Including loop boundaries, its transition counts are W→K=2, K→M=2, M→W=2, M→K=1, W→M=1, K→W=0.
+Repeating the block adds K→W at its boundary. Count need not be divisible by three; a partial final block retains its
+actual positions and transitions. `scenario_order_balance_complete` checks complete measured loops and equal nonzero
+first/middle/last counts per scenario, without asserting carryover balance. A comparison policy may require position
+balance, but producer correctness acceptance does not. The order depends on loop index, not the resolved seed.
+
+The canonical W/K/M frozen-plan warmups occur once before loop zero. There is no runner-level same-scenario warmup
+immediately before every measurement. Backend task-local reset, precondition, expected-witness construction and
+post-validation still apply as documented above; they can affect the state seen by the next kernel. The initial warmup
+prefix ends in M before measured W. Measured-order records do not enumerate those excluded tasks, calibration, or
+host/output work. File checkpoints and stdout can produce different intertask gaps even with the same measured order.
+
+Using all six permutations balances within-loop directed pairs, but the order of those loops and repeated-block
+boundaries still matters. For example, `WKM WMK KWM KMW MWK MKW` adds M→W, K→K, M→K, W→M and K→M once each
+at its five loop boundaries, plus W→W when the block repeats. It does not balance the whole execution stream.
+Per-measurement conditioning would also add a same-scenario predecessor and change the prepared-state phenomenon;
+it requires an explicit run-policy/methodology review rather than treating a higher rate as equivalent work under the
+current preparation policy. The production default remains three cyclic loops and canonical initial frozen warmups.
 
 Only `measured` records with accepted required timing, checksum and cold-check evidence enter aggregates.
 One retained authoritative duration/work/payload sample feeds all three metrics through one
@@ -1142,7 +1160,18 @@ Correctness gates cover:
 For a performance comparison, keep the exact command/model geometry, layout, paged `G`/physical geometry/table and
 permutation identity when applicable, explicit-versus-automatic policy, frozen plan, seed, worker counts,
 software/methodology, hardware, macOS, power/thermal state, and background load matched. Prefer a count divisible by
-three, inspect CV and warnings, and retain both stdout/file payload and stderr transcript. A separate
+three, inspect each scenario's accepted n, CV, duration quality and warnings, and retain both stdout/file payload and
+stderr transcript. Match the complete component identities and run policy, including ordering, conditioning and output
+transport/checkpoint cadence. Freeze scenario-specific work across an A/B pair; separately calibrated work can differ.
+Compare independent, alternating process pairs in repeated series; a single accepted artifact or lower median is not
+sufficient evidence of a machine or methodology performance difference. If hardware or methodology is the experimental
+variable, label that contrast and keep its populations separate instead of claiming matched-cohort reproducibility.
+
+The `environment.start` and `environment.end` thermal-state and Low Power Mode fields are instantaneous operating-system
+observations. They are not continuous temperature monitoring, cache-residency evidence, or guaranteed CPU affinity;
+equal nominal endpoints do not exclude an intervening state change. Unavailable observations are missing evidence.
+Intertask host gaps include orchestration and optional output work and are distinct from authoritative CPU/GPU task
+times. Added excluded conditioning costs wall time even when the following measured kernel gets faster. A separate
 real inference-engine run can be useful correlation evidence, but it is not part of this benchmark's correctness or
 acceptance predicate.
 

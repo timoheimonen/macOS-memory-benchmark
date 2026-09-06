@@ -819,6 +819,52 @@ TEST(LlmMemoryRunnerTest,
   }
 }
 
+TEST(LlmMemoryRunnerTest, PositionBalanceRetainsDirectedCarryoverAndPartialBlocks) {
+  // Independent finite schedule: includes loop boundaries and the repeated three-loop block.
+  constexpr std::array<size_t, 21> expected = {
+      0, 1, 2, 1, 2, 0, 2, 0, 1, 0, 1, 2, 1, 2, 0, 2, 0, 1, 0, 1, 2};
+  for (size_t count : {1u, 2u, 3u, 4u, 6u, 7u}) {
+    SCOPED_TRACE(count);
+    const LlmMemoryConfig config = explicit_config(count);
+    const LlmMemoryWorkPlan plan = build_runner_admitted_plan(config);
+    ASSERT_TRUE(plan.valid) << plan.reason_code;
+    FakeLlmBackend backend;
+    LlmMemoryResult result;
+    ASSERT_EQ(run_llm_memory_suite(config, plan, backend, result), EXIT_SUCCESS);
+    EXPECT_TRUE(result.run_accepted);
+    EXPECT_EQ(result.scenario_order_balance_complete, count % 3 == 0);
+    ASSERT_EQ(backend.calls.size(), 3 + 3 * count);
+    std::array<std::array<size_t, 3>, 3> transitions{};
+    for (size_t index = 0; index < 3; ++index) {
+      EXPECT_EQ(backend.calls[index].context.kind, LlmRunnerTaskKind::Warmup);
+      EXPECT_EQ(backend.calls[index].context.scenario, static_cast<LlmScenario>(index));
+      EXPECT_EQ(backend.calls[index].work_units, config.iterations);
+    }
+    for (size_t index = 0; index < count * 3; ++index) {
+      const TaskRecord& task = backend.calls[index + 3];
+      EXPECT_EQ(task.context.kind, LlmRunnerTaskKind::Measurement);
+      EXPECT_EQ(task.context.scenario, static_cast<LlmScenario>(expected[index]));
+      EXPECT_EQ(task.context.loop_index, index / 3);
+      EXPECT_EQ(task.context.order_position, index % 3);
+      EXPECT_EQ(task.work_units, config.iterations);
+      if (index != 0) {
+        const size_t predecessor = static_cast<size_t>(backend.calls[index + 2].context.scenario);
+        const size_t current = static_cast<size_t>(task.context.scenario);
+        ASSERT_LT(predecessor, 3u);
+        ASSERT_LT(current, 3u);
+        ++transitions[predecessor][current];
+      }
+    }
+    if (count == 3) {
+      // W->K=2, K->M=2, M->W=2; reverse directions occur only at loop boundaries.
+      EXPECT_EQ(transitions, (std::array<std::array<size_t, 3>, 3>{{{0, 2, 1}, {0, 0, 2}, {2, 1, 0}}}));
+    }
+    if (count == 6) {
+      EXPECT_EQ(transitions, (std::array<std::array<size_t, 3>, 3>{{{0, 4, 2}, {1, 0, 4}, {4, 2, 0}}}));
+    }
+  }
+}
+
 TEST(LlmMemoryRunnerTest, CompleteSingleLoopIsAcceptedWithSeparateBalanceAndSampleQuality) {
   const LlmMemoryConfig config = explicit_config(1);
   const LlmMemoryWorkPlan plan = build_runner_admitted_plan(config);
